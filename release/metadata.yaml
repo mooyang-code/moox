@@ -1,0 +1,268 @@
+
+t_project:
+  - c_proj_id: 1
+    c_proj_name: "加密货币量化数据"
+    c_remark: "币安、OKX等加密货币交易所的数据"
+
+t_dataset:
+  - c_dataset_id: 101
+    c_dataset_name: "币安-K线数据"
+    c_proj_id: 1
+    c_data_type: 2
+    c_freqs: "1H+1D"
+    c_check_rules: ""
+    c_comment: "该数据集仅存储币安各种周期的K线数据（c_data_type=2为时序类数据）"
+  - c_dataset_id: 102
+    c_dataset_name: "币安-币基本面数据"
+    c_proj_id: 1
+    c_data_type: 1
+    c_freqs: ""
+    c_check_rules: ""
+    c_comment: "该数据集仅存储币安币基本面数据（c_data_type=1为静态基础数据）"
+
+t_field:
+  - c_field_id: 80101
+    c_field_name: "交易标的ID"
+    c_interface_name: "symbol"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2 # 字段不与dataset绑定，只与项目绑定
+    c_desc: "交易对名 例如BTCUSDT 全大写字母"
+    c_is_required: 1
+    c_is_unique: 1
+    c_is_meta: 1
+    c_field_primary_format: 1
+    c_field_secondary_format: 3
+    c_validation_rule: '{"min_length": 3, "max_length": 10, "pattern": "^[A-Z0-9]+$"}'
+    c_write_example: "BTCUSDT"
+    c_remark: "交易对名，全大写字母"
+
+  - c_field_id: 80102
+    c_field_name: "下架时间"
+    c_interface_name: "unshelve_time"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2
+    c_desc: "币种的下架时间"
+    c_is_required: 1
+    c_is_unique: 0
+    c_is_meta: 0
+    c_field_primary_format: 1
+    c_field_secondary_format: 7
+    c_validation_rule: '{"format": "YYYY-MM-DD HH:mm:ss"}'
+    c_write_example: "2024-03-21 10:00:00"
+    c_remark: "币种的下架时间，若没有下架则填2099-01-01 00:00:00"
+
+  - c_field_id: 80002
+    c_field_name: "K线开始时间"
+    c_interface_name: "candle_begin_time"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2
+    c_desc: "K线周期开始时间"
+    c_is_required: 1
+    c_is_unique: 0
+    c_is_meta: 0
+    c_field_primary_format: 1
+    c_field_secondary_format: 7
+    c_validation_rule: '{"format": "YYYY-MM-DD HH:mm:ss"}'
+    c_write_example: "2024-03-21 10:00:00"
+    c_remark: "K线周期的起始时间点"
+
+  - c_field_id: 80003
+    c_field_name: "开盘价"
+    c_interface_name: "open"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2
+    c_desc: "K线周期开盘价格"
+    c_is_required: 1
+    c_is_unique: 0
+    c_is_meta: 0
+    c_field_primary_format: 1
+    c_field_secondary_format: 2
+    c_validation_rule: '{"min": 0, "decimal_places": 8}'
+    c_write_example: "42789.50"
+    c_remark: "K线周期的开盘价格"
+
+  - c_field_id: 80004
+    c_field_name: "最高价"
+    c_interface_name: "high"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2
+    c_desc: "K线周期最高价格"
+    c_is_required: 1
+    c_is_unique: 0
+    c_is_meta: 0
+    c_field_primary_format: 1
+    c_field_secondary_format: 2
+    c_validation_rule: '{"min": 0, "decimal_places": 8}'
+    c_write_example: "42890.25"
+    c_remark: "K线周期内的最高价格"
+
+  - c_field_id: 80005
+    c_field_name: "最低价"
+    c_interface_name: "low"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2
+    c_desc: "K线周期最低价格"
+    c_is_required: 1
+    c_is_unique: 0
+    c_is_meta: 0
+    c_field_primary_format: 1
+    c_field_secondary_format: 2
+    c_validation_rule: '{"min": 0, "decimal_places": 8}'
+    c_write_example: "42680.75"
+    c_remark: "K线周期内的最低价格"
+
+  - c_field_id: 80006
+    c_field_name: "收盘价"
+    c_interface_name: "close"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2
+    c_desc: "K线周期收盘价格"
+    c_is_required: 1
+    c_is_unique: 0
+    c_is_meta: 0
+    c_field_primary_format: 1
+    c_field_secondary_format: 2
+    c_validation_rule: '{"min": 0, "decimal_places": 8}'
+    c_write_example: "42750.50"
+    c_remark: "K线周期的收盘价格"
+    
+  - c_field_id: 80007
+    c_field_name: "成交量"
+    c_interface_name: "volume"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2
+    c_desc: "K线周期成交量"
+    c_is_required: 1
+    c_is_unique: 0
+    c_is_meta: 0
+    c_field_primary_format: 1
+    c_field_secondary_format: 2
+    c_validation_rule: '{"min": 0, "decimal_places": 8}'
+    c_write_example: "156.78912345"
+    c_remark: "K线周期内的基础资产成交量"
+
+  - c_field_id: 80008
+    c_field_name: "成交额"
+    c_interface_name: "quote_volume"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2
+    c_desc: "K线周期成交额"
+    c_is_required: 1
+    c_is_unique: 0
+    c_is_meta: 0
+    c_field_primary_format: 1
+    c_field_secondary_format: 2
+    c_validation_rule: '{"min": 0, "decimal_places": 8}'
+    c_write_example: "6700123.45"
+    c_remark: "K线周期内的计价资产成交量"
+
+  - c_field_id: 80009
+    c_field_name: "成交笔数"
+    c_interface_name: "trade_num"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2
+    c_desc: "K线周期成交笔数"
+    c_is_required: 1
+    c_is_unique: 0
+    c_is_meta: 0
+    c_field_primary_format: 1
+    c_field_secondary_format: 1
+    c_validation_rule: '{"min": 0}'
+    c_write_example: "3456"
+    c_remark: "K线周期内的成交总笔数"
+
+  - c_field_id: 80010
+    c_field_name: "主动买入成交量"
+    c_interface_name: "taker_buy_base_asset_volume"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2
+    c_desc: "K线周期主动买入的基础资产成交量"
+    c_is_required: 1
+    c_is_unique: 0
+    c_is_meta: 0
+    c_field_primary_format: 1
+    c_field_secondary_format: 2
+    c_validation_rule: '{"min": 0, "decimal_places": 8}'
+    c_write_example: "89.12345678"
+    c_remark: "K线周期内主动买入的基础资产成交量"
+
+  - c_field_id: 80011
+    c_field_name: "主动买入成交额"
+    c_interface_name: "taker_buy_quote_asset_volume"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2
+    c_desc: "K线周期主动买入的计价资产成交量"
+    c_is_required: 1
+    c_is_unique: 0
+    c_is_meta: 0
+    c_field_primary_format: 1
+    c_field_secondary_format: 2
+    c_validation_rule: '{"min": 0, "decimal_places": 8}'
+    c_write_example: "3800123.45"
+    c_remark: "K线周期内主动买入的计价资产成交量"
+    
+  - c_field_id: 80012
+    c_field_name: "K线结束时间"
+    c_interface_name: "candle_end_time"
+    c_proj_id: 1
+    c_dataset_ids: "101"
+    c_data_category: 2
+    c_desc: "K线周期结束时间"
+    c_is_required: 1
+    c_is_unique: 0
+    c_is_meta: 0
+    c_field_primary_format: 1
+    c_field_secondary_format: 7
+    c_validation_rule: '{"format": "YYYY-MM-DD HH:mm:ss"}'
+    c_write_example: "2024-03-21 10:59:59"
+    c_remark: "K线周期的结束时间点"
+
+t_object_route:
+  - c_dataset_id: 101
+    c_object_id: "*"
+    c_entity_id: 1
+  - c_dataset_id: 102
+    c_object_id: "*"
+    c_entity_id: 1
+
+t_field_route:
+  - c_entity_id: 1
+    c_data_category: 1
+    c_device_id: 5
+  - c_entity_id: 1
+    c_data_category: 2
+    c_device_id: 5 # 可以测试一下使用DuckDB存储时序数据
+
+t_storage_entity:
+  - c_entity_id: 1
+    c_entity_srv_conn: "ip://0.0.0.0:18103"
+
+t_storage_device:
+  - c_device_id: 1
+    c_device_name: "SQLite(一般用于存储静态数据)"
+    c_device_type: 1
+    c_conn_info: "localhost"
+  - c_device_id: 2
+    c_device_name: "DuckDB(可用于存储时序数据-有Schama)"
+    c_device_type: 2
+    c_conn_info: "localhost"
+  - c_device_id: 3
+    c_device_name: "bleve(可用于存储时序数据-无Schama)"
+    c_device_type: 3
+    c_conn_info: "../data/bleve" # bleve路径
+  - c_device_id: 5
+    c_device_name: "CSV"
+    c_device_type: 5
+    c_conn_info: "../data/csv" # csv路径
