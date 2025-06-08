@@ -40,7 +40,7 @@
           <a-image default-scale height="220" :src="otherImage" />
         </a-grid-item>
         <a-grid-item>
-          <div class="title-size-2">✨Hello 朋友们✨</div>
+          <div class="title-size-2">✨Hello 量化探索者们✨</div>
           <div class="type-row" v-for="item in list.introduce" :key="item.label">
             <div class="text-ellipsis">{{ item.label }}</div>
           </div>
@@ -56,26 +56,24 @@ import otherImage from "@/assets/img/other-image.jpg";
 
 const list = reactive({
   aboutMe: [
-    { label: "🐦我用语雀", value: ["知识管理", "记录生活"], theme: "green" },
-    { label: "💫个性性格", value: ["天秤座", "INFJ-T"], theme: "blue" },
+    { label: "💫个性性格", value: ["射手座", "INFJ-T", "长期主义者"], theme: "blue" },
     { label: "💼职业工作", value: ["互联网", "后端架构师"], theme: "orangered" },
-    { label: "🏠现居城市", value: ["深圳"], theme: "magenta" },
-    { label: "💙兴趣爱好", value: ["读书", "音乐", "狗狗🐕"], theme: "purple" }
+    { label: "💙兴趣爱好", value: ["看代码", "看美女👩🏻"], theme: "green" },
+    { label: "🏷其他标签", value: ["web3小韭菜", "港股资深韭菜", "伪价投"], theme: "purple" }
   ],
   callMe: [
     { label: "📧邮箱", value: "702080167@qq.com", link: false },
     { label: "📠微信", value: "Maxwell-2025", link: false }
   ],
   other: [
-    { label: "🧭公众号", value: "" },
-    { label: "🌟公众号二维码", value: "" }
+    { label: "🌟个人主页", value: "" }
   ],
   introduce: [
-    { label: "👋欢迎来到Moo的project，记录思考成长，一起进步" },
-    { label: "🔖长期主义者一枚，持续学习拓展思维及方法论" },
-    { label: "🤔行业瞬息万变，时刻关注行业最新资讯" },
-    { label: "🤝职场相处沟通都需要技巧，持续记录学习职场二三事" },
-    { label: "🌈人生多彩，除了工作还有很大的世界供我们探索，Let's go!" }
+    { label: "👋欢迎来到我的量化交易工作台，从数据到策略的完整实验室" },
+    { label: "📊项目化管理交易策略，数据采集、因子构建、回测验证一站式流程" },
+    { label: "💡实时监控策略表现，定时任务自动化执行，让系统为你工作" },
+    { label: "🎯版本化管理因子和策略，每次优化都有迹可循，持续迭代进步" },
+    { label: "🚀小而精的个人量化系统，专注策略研发和风险控制，Let's build & trade!" }
   ]
 });
 

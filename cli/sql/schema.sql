@@ -1,6 +1,7 @@
 -- ************ 创建项目定义表 ************
 CREATE TABLE t_project (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_user_id INTEGER NOT NULL DEFAULT 0, -- 关联的用户ID
     c_proj_id INTEGER NOT NULL DEFAULT 0,
     c_proj_name TEXT NOT NULL DEFAULT '',
     c_remark TEXT,

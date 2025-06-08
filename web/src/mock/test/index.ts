@@ -7,7 +7,7 @@ export default [
     method: "get",
     timeout: 300,
     response: () => {
-      return resultSuccess("SnowAdmin开源免费，Welcome!");
+      return resultSuccess("Moox，Welcome!");
     }
   },
   {

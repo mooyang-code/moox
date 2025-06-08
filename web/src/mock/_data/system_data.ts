@@ -33,7 +33,7 @@ export const divisionData = [
           {
             id: "1000101",
             parentId: "10001",
-            name: "SnowAdmin开发组",
+            name: "开发组",
             leader: "小汤",
             phone: "",
             email: "",
