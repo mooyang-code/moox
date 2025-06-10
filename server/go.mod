@@ -14,6 +14,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
 	google.golang.org/protobuf v1.36.6
+	gopkg.in/yaml.v2 v2.4.0
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.30.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1

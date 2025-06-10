@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"log"
+
 	"github.com/mooyang-code/moox/server/internal/service/admin/config"
 	"github.com/mooyang-code/moox/server/internal/service/admin/logic"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
@@ -17,7 +19,7 @@ func NewAdminService(cfg *config.Config) (AdminService, error) {
 	// 初始化配置
 	imp, err := logic.InitAdminServiceImpl(cfg)
 	if err != nil {
-		return nil, err
+		log.Fatalf("%+v", err)
 	}
 	return imp, nil
 }

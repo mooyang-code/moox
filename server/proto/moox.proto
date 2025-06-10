@@ -4,7 +4,7 @@ package trpc.moox.server;
 option go_package = "github.com/mooyang-code/moox/server/proto";
 
 // 通用错误码
-enum EnumErrorCode {
+enum EnumMooxErrorCode {
   SUCCESS = 0;
   INVALID_PARAM = 1;
   NO_AUTH = 3;
@@ -14,7 +14,7 @@ enum EnumErrorCode {
 }
 
 // 认证信息
-message AuthInfo {
+message AppInfo {
   string app_id = 1;
   string app_key = 2;
 }
@@ -58,7 +58,7 @@ message UserInfo {
 
 // 用户注册请求
 message RegisterReq {
-  AuthInfo auth_info = 1;
+  AppInfo app_info = 1;
   string username = 2;          // 用户名
   string password = 3;          // 明文密码（服务端会进行哈希处理）
   string nickname = 4;          // 昵称（可选）
@@ -67,7 +67,7 @@ message RegisterReq {
 
 // 用户注册响应
 message RegisterRsp {
-  EnumErrorCode code = 1;       // 错误码
+  EnumMooxErrorCode code = 1;       // 错误码
   string message = 2;           // 消息
   string user_id = 3;           // 新创建的用户ID
   UserInfo user_info = 4;       // 用户信息
@@ -75,13 +75,13 @@ message RegisterRsp {
 
 // 获取登录盐值请求
 message GetLoginSaltReq {
-  AuthInfo auth_info = 1;
+  AppInfo app_info = 1;
   string username = 2;          // 用户名/邮箱/手机号
 }
 
 // 获取登录盐值响应
 message GetLoginSaltRsp {
-  EnumErrorCode code = 1;  // 错误码
+  EnumMooxErrorCode code = 1;  // 错误码
   string message = 2;                          // 消息
   string salt = 3;                             // 随机盐值
   int64 timestamp = 4;                         // 服务器时间戳
@@ -90,7 +90,7 @@ message GetLoginSaltRsp {
 
 // 用户名密码登录请求（安全版本）
 message LoginReq {
-  AuthInfo auth_info = 1;
+  AppInfo app_info = 1;
   string username = 2;          // 用户名/邮箱/手机号
   string password_hash = 3;     // 密码哈希值：SHA256(password + salt + timestamp)
   string salt = 4;              // 从GetLoginSalt获取的盐值
@@ -102,7 +102,7 @@ message LoginReq {
 
 // 登录成功响应
 message LoginRsp {
-  EnumErrorCode code = 1;  // 错误码
+  EnumMooxErrorCode code = 1;  // 错误码
   string message = 2;                          // 消息
   string access_token = 3;                     // 访问令牌
   int64 expires_in = 4;                        // 过期时间（秒）
@@ -111,13 +111,13 @@ message LoginRsp {
 
 // 获取密码修改盐值请求
 message GetChangePasswordSaltReq {
-  AuthInfo auth_info = 1;
+  AppInfo app_info = 1;
   string access_token = 2;      // 访问令牌
 }
 
 // 获取密码修改盐值响应
 message GetChangePasswordSaltRsp {
-  EnumErrorCode code = 1;  // 错误码
+  EnumMooxErrorCode code = 1;  // 错误码
   string message = 2;                          // 消息
   string salt = 3;                             // 随机盐值
   int64 timestamp = 4;                         // 服务器时间戳
@@ -126,7 +126,7 @@ message GetChangePasswordSaltRsp {
 
 // 修改密码请求（安全版本）
 message ChangePasswordReq {
-  AuthInfo auth_info = 1;
+  AppInfo app_info = 1;
   string access_token = 2;      // 访问令牌
   string old_password_hash = 3; // 旧密码哈希值：SHA256(old_password + salt + timestamp)
   string new_password_hash = 4; // 新密码哈希值：SHA256(new_password + salt + timestamp)
@@ -136,27 +136,27 @@ message ChangePasswordReq {
 
 // 修改密码响应
 message ChangePasswordRsp {
-  EnumErrorCode code = 1;  // 错误码
+  EnumMooxErrorCode code = 1;  // 错误码
   string message = 2;                          // 消息
 }
 
 // 获取用户信息请求
 message GetUserInfoReq {
-  AuthInfo auth_info = 1;
+  AppInfo app_info = 1;
   string access_token = 2;      // 访问令牌
   string user_id = 3;           // 用户ID（可选，管理员查询他人信息时使用）
 }
 
 // 获取用户信息响应
 message GetUserInfoRsp {
-  EnumErrorCode code = 1;  // 错误码
+  EnumMooxErrorCode code = 1;  // 错误码
   string message = 2;                          // 消息
   UserInfo user_info = 3;                      // 用户信息
 }
 
 // 更新用户信息请求
 message UpdateUserInfoReq {
-  AuthInfo auth_info = 1;
+  AppInfo app_info = 1;
   string access_token = 2;      // 访问令牌
   string nick = 3;              // 昵称
   string email = 4;             // 邮箱
@@ -165,7 +165,7 @@ message UpdateUserInfoReq {
 
 // 更新用户信息响应
 message UpdateUserInfoRsp {
-  EnumErrorCode code = 1;  // 错误码
+  EnumMooxErrorCode code = 1;  // 错误码
   string message = 2;                          // 消息
   UserInfo user_info = 3;                      // 更新后的用户信息
 }

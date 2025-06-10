@@ -16,6 +16,11 @@ type MessageConfig struct {
 	MaxWaitTime int    `yaml:"max_wait_time"` // 最大等待时间(毫秒)
 }
 
+// MooxConfig moox服务配置
+type MooxConfig struct {
+	AuthTarget string `yaml:"auth_target"` // 认证服务地址
+}
+
 // Config 元数据服务配置
 type Config struct {
 	MetadataDatabase struct {
@@ -26,6 +31,8 @@ type Config struct {
 		Target string `yaml:"target"`
 	} `yaml:"storage"`
 
+	Moox *MooxConfig `yaml:"moox"` // moox服务配置
+
 	Message *MessageConfig `yaml:"message"` // 消息服务配置
 }
 
@@ -34,7 +41,7 @@ func LoadConfig() (*Config, error) {
 	var config Config
 
 	// 读取配置文件
-	configPath := "tool.yaml"
+	configPath := "config/cli.yaml"
 	yamlFile, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("读取配置文件失败: %+v", err)

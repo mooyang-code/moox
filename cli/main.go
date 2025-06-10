@@ -1,5 +1,5 @@
 /*
-Copyright © 2025 Moo
+Copyright © 2025 Moox Team
 */
 package main
 

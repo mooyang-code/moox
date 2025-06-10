@@ -17,7 +17,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	// 1. 验证盐值和时间戳
 	if !s.validateLoginSalt(ctx, req.Username, req.Salt, req.Timestamp) {
 		return &pb.LoginRsp{
-			Code:    pb.EnumErrorCode_INVALID_PARAM,
+			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
 			Message: "盐值或时间戳无效",
 		}, nil
 	}
@@ -25,7 +25,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	// 2. 检查登录尝试次数
 	if s.isUserLocked(ctx, req.Username, req.ClientIp) {
 		return &pb.LoginRsp{
-			Code:    pb.EnumErrorCode_NO_AUTH,
+			Code:    pb.EnumMooxErrorCode_NO_AUTH,
 			Message: "账户已被锁定，请稍后再试",
 		}, nil
 	}
@@ -35,7 +35,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	if err != nil {
 		s.recordLoginAttempt(ctx, req.Username, req.ClientIp, false)
 		return &pb.LoginRsp{
-			Code:    pb.EnumErrorCode_NO_AUTH,
+			Code:    pb.EnumMooxErrorCode_NO_AUTH,
 			Message: "用户名或密码错误",
 		}, nil
 	}
@@ -44,7 +44,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	if !util.ValidateEncryptedPassword(user.PasswordHash, req.Salt, req.Timestamp, req.PasswordHash) {
 		s.recordLoginAttempt(ctx, req.Username, req.ClientIp, false)
 		return &pb.LoginRsp{
-			Code:    pb.EnumErrorCode_NO_AUTH,
+			Code:    pb.EnumMooxErrorCode_NO_AUTH,
 			Message: "用户名或密码错误",
 		}, nil
 	}
@@ -69,7 +69,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	if err != nil {
 		log.ErrorContextf(ctx, "生成JWT令牌失败: %v", err)
 		return &pb.LoginRsp{
-			Code:    pb.EnumErrorCode_INNER_ERR,
+			Code:    pb.EnumMooxErrorCode_INNER_ERR,
 			Message: "登录失败",
 		}, nil
 	}
@@ -89,7 +89,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	}
 
 	return &pb.LoginRsp{
-		Code:        pb.EnumErrorCode_SUCCESS,
+		Code:        pb.EnumMooxErrorCode_SUCCESS,
 		Message:     "登录成功",
 		AccessToken: accessToken,
 		ExpiresIn:   int64(s.cfg.JWT.AccessExpired.Seconds()),
@@ -112,7 +112,7 @@ func (s *AuthServiceImpl) GetLoginSalt(ctx context.Context, req *pb.GetLoginSalt
 			// 如果现有盐值还有足够时间，直接返回
 			log.InfoContextf(ctx, "返回现有有效盐值 for username: %s, 剩余时间: %v", req.Username, remainingTime)
 			return &pb.GetLoginSaltRsp{
-				Code:      pb.EnumErrorCode_SUCCESS,
+				Code:      pb.EnumMooxErrorCode_SUCCESS,
 				Message:   "获取盐值成功",
 				Salt:      existingSalt.Salt,
 				Timestamp: existingSalt.Timestamp,
@@ -139,14 +139,14 @@ func (s *AuthServiceImpl) GetLoginSalt(ctx context.Context, req *pb.GetLoginSalt
 	if err != nil {
 		log.ErrorContextf(ctx, "存储登录盐值失败: %v", err)
 		return &pb.GetLoginSaltRsp{
-			Code:    pb.EnumErrorCode_INNER_ERR,
+			Code:    pb.EnumMooxErrorCode_INNER_ERR,
 			Message: "获取登录盐值失败",
 		}, nil
 	}
 
 	log.InfoContextf(ctx, "生成新盐值 for username: %s", req.Username)
 	return &pb.GetLoginSaltRsp{
-		Code:      pb.EnumErrorCode_SUCCESS,
+		Code:      pb.EnumMooxErrorCode_SUCCESS,
 		Message:   "获取盐值成功",
 		Salt:      salt,
 		Timestamp: timestamp,

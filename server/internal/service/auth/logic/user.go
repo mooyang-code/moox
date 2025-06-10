@@ -16,14 +16,14 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 	// 1. 验证输入参数
 	if req.Username == "" {
 		return &pb.RegisterRsp{
-			Code:    pb.EnumErrorCode_INVALID_PARAM,
+			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
 			Message: "用户名不能为空",
 		}, nil
 	}
 
 	if req.Password == "" {
 		return &pb.RegisterRsp{
-			Code:    pb.EnumErrorCode_INVALID_PARAM,
+			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
 			Message: "密码不能为空",
 		}, nil
 	}
@@ -32,7 +32,7 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 	existingUser, err := s.userDAO.GetUserByUsername(ctx, req.Username)
 	if err == nil && existingUser != nil {
 		return &pb.RegisterRsp{
-			Code:    pb.EnumErrorCode_INVALID_PARAM,
+			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
 			Message: "用户名已存在",
 		}, nil
 	}
@@ -64,7 +64,7 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 	if err != nil {
 		log.ErrorContextf(ctx, "创建用户失败: %v", err)
 		return &pb.RegisterRsp{
-			Code:    pb.EnumErrorCode_INNER_ERR,
+			Code:    pb.EnumMooxErrorCode_INNER_ERR,
 			Message: "用户注册失败",
 		}, nil
 	}
@@ -88,7 +88,7 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 
 	log.InfoContextf(ctx, "用户注册成功: %s", userID)
 	return &pb.RegisterRsp{
-		Code:     pb.EnumErrorCode_SUCCESS,
+		Code:     pb.EnumMooxErrorCode_SUCCESS,
 		Message:  "用户注册成功",
 		UserId:   userID,
 		UserInfo: userInfo,
@@ -101,7 +101,7 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 	claims, err := util.ParseJWT(req.AccessToken, s.cfg.JWT.SecretKey)
 	if err != nil {
 		return &pb.GetUserInfoRsp{
-			Code:    pb.EnumErrorCode_NO_AUTH,
+			Code:    pb.EnumMooxErrorCode_NO_AUTH,
 			Message: "访问令牌无效",
 		}, nil
 	}
@@ -112,7 +112,7 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 		// 检查权限：只有管理员可以查询其他用户信息
 		if claims.Role < int32(pb.UserRole_ADMIN) {
 			return &pb.GetUserInfoRsp{
-				Code:    pb.EnumErrorCode_NO_PERMISSION,
+				Code:    pb.EnumMooxErrorCode_NO_PERMISSION,
 				Message: "权限不足",
 			}, nil
 		}
@@ -123,7 +123,7 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 	user, err := s.userDAO.GetUserByID(ctx, targetUserID)
 	if err != nil {
 		return &pb.GetUserInfoRsp{
-			Code:    pb.EnumErrorCode_FIELD_INFO_NOT_EXIST,
+			Code:    pb.EnumMooxErrorCode_FIELD_INFO_NOT_EXIST,
 			Message: "用户不存在",
 		}, nil
 	}
@@ -146,7 +146,7 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 	}
 
 	return &pb.GetUserInfoRsp{
-		Code:     pb.EnumErrorCode_SUCCESS,
+		Code:     pb.EnumMooxErrorCode_SUCCESS,
 		Message:  "获取用户信息成功",
 		UserInfo: userInfo,
 	}, nil
@@ -158,7 +158,7 @@ func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUser
 	claims, err := util.ParseJWT(req.AccessToken, s.cfg.JWT.SecretKey)
 	if err != nil {
 		return &pb.UpdateUserInfoRsp{
-			Code:    pb.EnumErrorCode_NO_AUTH,
+			Code:    pb.EnumMooxErrorCode_NO_AUTH,
 			Message: "访问令牌无效",
 		}, nil
 	}
@@ -167,7 +167,7 @@ func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUser
 	user, err := s.userDAO.GetUserByID(ctx, claims.UserID)
 	if err != nil {
 		return &pb.UpdateUserInfoRsp{
-			Code:    pb.EnumErrorCode_FIELD_INFO_NOT_EXIST,
+			Code:    pb.EnumMooxErrorCode_FIELD_INFO_NOT_EXIST,
 			Message: "用户不存在",
 		}, nil
 	}
@@ -189,7 +189,7 @@ func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUser
 		if err != nil {
 			log.ErrorContextf(ctx, "更新用户信息失败: %v", err)
 			return &pb.UpdateUserInfoRsp{
-				Code:    pb.EnumErrorCode_INNER_ERR,
+				Code:    pb.EnumMooxErrorCode_INNER_ERR,
 				Message: "更新用户信息失败",
 			}, nil
 		}
@@ -216,7 +216,7 @@ func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUser
 	}
 
 	return &pb.UpdateUserInfoRsp{
-		Code:     pb.EnumErrorCode_SUCCESS,
+		Code:     pb.EnumMooxErrorCode_SUCCESS,
 		Message:  "更新用户信息成功",
 		UserInfo: userInfo,
 	}, nil

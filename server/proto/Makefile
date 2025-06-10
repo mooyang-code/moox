@@ -2,7 +2,7 @@
 
 # 定义路径变量
 XDATA_PROTO_DIR := ../../../xData-mini/storage/proto
-LOCAL_PROTO_DIR := ./common
+LOCAL_PROTO_DIR := ./
 OUTPUT_DIR := ./gen
 
 # 本地协议文件列表（在当前目录下的proto文件）
@@ -80,30 +80,28 @@ generate-synced:
 	@mkdir -p $(OUTPUT_DIR)
 ifdef SYNC_ALL_PROTO
 	@echo "Generating code for ALL synced proto files..."
-	@for proto_file in $(LOCAL_PROTO_DIR)/*.proto; do \
-		if [ -f "$$proto_file" ]; then \
-			base_name=$$(basename "$$proto_file"); \
-			echo "🔨 Processing synced $$base_name..."; \
+	@for proto_file in *.proto; do \
+		if [ -f "$$proto_file" ] && [ "$$proto_file" != "moox.proto" ]; then \
+			echo "🔨 Processing synced $$proto_file..."; \
 			trpc-open create \
 				-p "$$proto_file" \
 				--rpconly \
 				--nogomod \
 				--mock=false \
 				-o $(OUTPUT_DIR) || { \
-				echo "❌ Error: trpc-open failed for $$base_name"; \
+				echo "❌ Error: trpc-open failed for $$proto_file"; \
 				exit 1; \
 			}; \
-			echo "✅ Generated code for synced $$base_name"; \
+			echo "✅ Generated code for synced $$proto_file"; \
 		fi \
 	done
 else
 	@echo "Generating code for configured synced proto files..."
 	@for file in $(SYNC_PROTO_FILES); do \
-		proto_path="$(LOCAL_PROTO_DIR)/$$file"; \
-		if [ -f "$$proto_path" ]; then \
+		if [ -f "$$file" ]; then \
 			echo "🔨 Processing synced $$file..."; \
 			trpc-open create \
-				-p "$$proto_path" \
+				-p "$$file" \
 				--rpconly \
 				--nogomod \
 				--mock=false \
@@ -130,29 +128,24 @@ generate-single:
 		echo "❌ Usage: make generate-single PROTO=filename.proto"; \
 		exit 1; \
 	fi
-	@proto_path=""; \
-	if [ -f "$(PROTO)" ]; then \
-		proto_path="$(PROTO)"; \
+	@if [ -f "$(PROTO)" ]; then \
 		echo "🔨 Found $(PROTO) in current directory"; \
-	elif [ -f "$(LOCAL_PROTO_DIR)/$(PROTO)" ]; then \
-		proto_path="$(LOCAL_PROTO_DIR)/$(PROTO)"; \
-		echo "🔨 Found $(PROTO) in synced directory"; \
+		echo "🔨 Generating code for $(PROTO)..."; \
+		mkdir -p $(OUTPUT_DIR); \
+		trpc-open create \
+			-p "$(PROTO)" \
+			--rpconly \
+			--nogomod \
+			--mock=false \
+			-o $(OUTPUT_DIR) || { \
+			echo "❌ Error: trpc-open failed for $(PROTO)"; \
+			exit 1; \
+		}; \
+		echo "✅ Generated code for $(PROTO)"; \
 	else \
-		echo "❌ Error: $(PROTO) not found in current directory or $(LOCAL_PROTO_DIR)"; \
+		echo "❌ Error: $(PROTO) not found in current directory"; \
 		exit 1; \
-	fi; \
-	echo "🔨 Generating code for $(PROTO)..."; \
-	mkdir -p $(OUTPUT_DIR); \
-	trpc-open create \
-		-p "$$proto_path" \
-		--rpconly \
-		--nogomod \
-		--mock=false \
-		-o $(OUTPUT_DIR) || { \
-		echo "❌ Error: trpc-open failed for $(PROTO)"; \
-		exit 1; \
-	}; \
-	echo "✅ Generated code for $(PROTO)"
+	fi
 
 # 列出可用的协议文件
 .PHONY: list-available-proto
@@ -181,32 +174,30 @@ sync-all-proto:
 		echo "❌ Error: xData-mini proto directory not found at $(XDATA_PROTO_DIR)"; \
 		exit 1; \
 	fi
-	@mkdir -p $(LOCAL_PROTO_DIR)
-	@cp $(XDATA_PROTO_DIR)/*.proto $(LOCAL_PROTO_DIR)/ 2>/dev/null && \
+	@cp $(XDATA_PROTO_DIR)/*.proto ./ 2>/dev/null && \
 		echo "✅ All proto files synced successfully!" || \
 		echo "⚠️  No proto files found to sync"
 	@echo "Synced files:"
-	@ls -la $(LOCAL_PROTO_DIR)/*.proto 2>/dev/null | awk '{print "  " $$9}' || echo "  (none)"
+	@ls -la *.proto 2>/dev/null | awk '{print "  " $$9}' || echo "  (none)"
 
 # 同步所有协议文件并生成代码
 .PHONY: sync-all-and-generate
 sync-all-and-generate: sync-all-proto
 	@echo "🔨 Generating code for all synced proto files..."
 	@mkdir -p $(OUTPUT_DIR)
-	@for proto_file in $(LOCAL_PROTO_DIR)/*.proto; do \
+	@for proto_file in *.proto; do \
 		if [ -f "$$proto_file" ]; then \
-			base_name=$$(basename "$$proto_file"); \
-			echo "🔨 Processing $$base_name..."; \
+			echo "🔨 Processing $$proto_file..."; \
 			trpc-open create \
 				-p "$$proto_file" \
 				--rpconly \
 				--nogomod \
 				--mock=false \
 				-o $(OUTPUT_DIR) || { \
-				echo "❌ Error: trpc-open failed for $$base_name"; \
+				echo "❌ Error: trpc-open failed for $$proto_file"; \
 				exit 1; \
 			}; \
-			echo "✅ Generated code for $$base_name"; \
+			echo "✅ Generated code for $$proto_file"; \
 		fi \
 	done
 	@echo "✅ All protobuf code generated successfully!"
@@ -222,8 +213,8 @@ check-proto:
 	@need_update=false; \
 	echo "Checking configured files:"; \
 	for file in $(SYNC_PROTO_FILES); do \
-		if [ -f "$(XDATA_PROTO_DIR)/$$file" ] && [ -f "$(LOCAL_PROTO_DIR)/$$file" ]; then \
-			if ! cmp -s "$(XDATA_PROTO_DIR)/$$file" "$(LOCAL_PROTO_DIR)/$$file"; then \
+		if [ -f "$(XDATA_PROTO_DIR)/$$file" ] && [ -f "$$file" ]; then \
+			if ! cmp -s "$(XDATA_PROTO_DIR)/$$file" "$$file"; then \
 				echo "  ⚠️  $$file is out of date"; \
 				need_update=true; \
 			else \
@@ -262,7 +253,7 @@ status:
 	@echo "📊 Proto Build Status"
 	@echo "====================="
 	@echo "Source directory: $(XDATA_PROTO_DIR)"
-	@echo "Synced directory: $(LOCAL_PROTO_DIR)"
+	@echo "Working directory: $(LOCAL_PROTO_DIR)"
 	@echo "Output directory: $(OUTPUT_DIR)"
 	@echo ""
 	@echo "📋 Local proto files:"
@@ -276,19 +267,15 @@ status:
 	@echo ""
 	@echo "📋 Synced proto files:"
 	@for file in $(SYNC_PROTO_FILES); do \
-		if [ -f "$(LOCAL_PROTO_DIR)/$$file" ]; then \
+		if [ -f "$$file" ]; then \
 			echo "  ✅ $$file (synced)"; \
 		else \
 			echo "  ❌ $$file (not synced)"; \
 		fi \
 	done
 	@echo ""
-	@if [ -d "$(LOCAL_PROTO_DIR)" ]; then \
-		echo "📁 All synced proto files:"; \
-		ls -la $(LOCAL_PROTO_DIR)/*.proto 2>/dev/null | awk '{print "  " $$9 " (" $$5 " bytes)"}' || echo "  (none)"; \
-	else \
-		echo "📁 No synced proto files found"; \
-	fi
+	@echo "📁 All proto files in current directory:"
+	@ls -la *.proto 2>/dev/null | awk '{print "  " $$9 " (" $$5 " bytes)"}' || echo "  (none)"
 	@echo ""
 	@if [ -d "$(OUTPUT_DIR)" ]; then \
 		echo "🔨 Generated files:"; \
@@ -325,7 +312,7 @@ help:
 	@echo "  sync-all-and-generate  - Sync all proto files and generate code"
 	@echo "  generate-single        - Generate code for single proto file"
 	@echo "                           Usage: make generate-single PROTO=filename.proto"
-	@echo "                           (searches current dir first, then synced dir)"
+	@echo "                           (searches in current directory)"
 	@echo "  list-available-proto   - List available proto files"
 	@echo "  check-proto            - Check if proto files need update"
 	@echo "  check-env              - Check environment and dependencies"

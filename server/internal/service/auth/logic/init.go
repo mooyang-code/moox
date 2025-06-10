@@ -50,7 +50,7 @@ func (s *AuthServiceImpl) initDB() (*gorm.DB, error) {
 	// 使用SQLite数据库
 	dsn := s.cfg.Database.DBName
 	if dsn == "" {
-		dsn = "auth.db"
+		dsn = "../data/auth.db"
 	}
 
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
@@ -67,7 +67,7 @@ func (s *AuthServiceImpl) initCache() (*dao.CacheDB, error) {
 	// 使用BadgerDB作为缓存
 	cacheDir := s.cfg.Cache.DataDir
 	if cacheDir == "" {
-		cacheDir = "./cache"
+		cacheDir = "../data/cache"
 	}
 
 	cache, err := dao.NewCacheDB(cacheDir)

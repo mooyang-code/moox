@@ -16,7 +16,7 @@ func (s *AuthServiceImpl) GetChangePasswordSalt(ctx context.Context, req *pb.Get
 	claims, err := util.ParseJWT(req.AccessToken, s.cfg.JWT.SecretKey)
 	if err != nil {
 		return &pb.GetChangePasswordSaltRsp{
-			Code:    pb.EnumErrorCode_NO_AUTH,
+			Code:    pb.EnumMooxErrorCode_NO_AUTH,
 			Message: "访问令牌无效",
 		}, nil
 	}
@@ -38,13 +38,13 @@ func (s *AuthServiceImpl) GetChangePasswordSalt(ctx context.Context, req *pb.Get
 	if err != nil {
 		log.ErrorContextf(ctx, "存储修改密码盐值失败: %v", err)
 		return &pb.GetChangePasswordSaltRsp{
-			Code:    pb.EnumErrorCode_INNER_ERR,
+			Code:    pb.EnumMooxErrorCode_INNER_ERR,
 			Message: "获取盐值失败",
 		}, nil
 	}
 
 	return &pb.GetChangePasswordSaltRsp{
-		Code:      pb.EnumErrorCode_SUCCESS,
+		Code:      pb.EnumMooxErrorCode_SUCCESS,
 		Message:   "获取盐值成功",
 		Salt:      salt,
 		Timestamp: timestamp,
@@ -58,7 +58,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	claims, err := util.ParseJWT(req.AccessToken, s.cfg.JWT.SecretKey)
 	if err != nil {
 		return &pb.ChangePasswordRsp{
-			Code:    pb.EnumErrorCode_NO_AUTH,
+			Code:    pb.EnumMooxErrorCode_NO_AUTH,
 			Message: "访问令牌无效",
 		}, nil
 	}
@@ -66,7 +66,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	// 验证盐值和时间戳
 	if !s.validateChangePasswordSalt(ctx, claims.UserID, req.Salt, req.Timestamp) {
 		return &pb.ChangePasswordRsp{
-			Code:    pb.EnumErrorCode_INVALID_PARAM,
+			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
 			Message: "盐值或时间戳无效",
 		}, nil
 	}
@@ -75,7 +75,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	user, err := s.userDAO.GetUserByID(ctx, claims.UserID)
 	if err != nil {
 		return &pb.ChangePasswordRsp{
-			Code:    pb.EnumErrorCode_NO_AUTH,
+			Code:    pb.EnumMooxErrorCode_NO_AUTH,
 			Message: "用户不存在",
 		}, nil
 	}
@@ -83,7 +83,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	// 验证旧密码
 	if !util.ValidateEncryptedPassword(user.PasswordHash, req.Salt, req.Timestamp, req.OldPasswordHash) {
 		return &pb.ChangePasswordRsp{
-			Code:    pb.EnumErrorCode_NO_AUTH,
+			Code:    pb.EnumMooxErrorCode_NO_AUTH,
 			Message: "旧密码错误",
 		}, nil
 	}
@@ -93,7 +93,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	if err != nil {
 		log.ErrorContextf(ctx, "解密新密码失败: %v", err)
 		return &pb.ChangePasswordRsp{
-			Code:    pb.EnumErrorCode_INVALID_PARAM,
+			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
 			Message: "新密码格式错误",
 		}, nil
 	}
@@ -107,7 +107,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	if err != nil {
 		log.ErrorContextf(ctx, "更新密码失败: %v", err)
 		return &pb.ChangePasswordRsp{
-			Code:    pb.EnumErrorCode_INNER_ERR,
+			Code:    pb.EnumMooxErrorCode_INNER_ERR,
 			Message: "修改密码失败",
 		}, nil
 	}
@@ -116,7 +116,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	s.recordUserAction(ctx, user.UserID, model.ActionChangePassword, "", "密码修改成功", "", "", "success")
 
 	return &pb.ChangePasswordRsp{
-		Code:    pb.EnumErrorCode_SUCCESS,
+		Code:    pb.EnumMooxErrorCode_SUCCESS,
 		Message: "密码修改成功",
 	}, nil
 }

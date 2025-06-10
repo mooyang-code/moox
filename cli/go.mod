@@ -9,6 +9,7 @@ require (
 	github.com/mooyang-code/xData-mini/storage/proto v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats.go v1.43.0
 	github.com/spf13/cobra v1.9.1
+	golang.org/x/term v0.31.0
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-go v1.0.3

@@ -1,0 +1,53 @@
+global: #全局配置
+  namespace: Development            #环境类型，分正式production和非正式development两种类型
+  env_name: test                    #环境名称，非正式环境下多环境的名称
+
+server:
+  filter:
+    - validation
+    - cors
+  timeout: 5000
+  service:
+    - name: trpc.moox.server.AuthAPI
+      #ip: 0.0.0.0
+      port: 18200
+      network: tcp
+      protocol: trpc
+    - name: trpc.moox.server.AuthAPIhttp
+      #ip: 0.0.0.0
+      port: 18201
+      network: tcp  # 网络监听类型，tcp 或 udp
+      protocol: http  # 应用层协议 
+      timeout: 1000  # 请求最长处理时间，单位毫秒
+      
+client:
+  filter:
+    - validation
+  service:
+    - name: trpc.storage.metadata.MetaAdmin
+      port: 18100
+      network: unix # 注意：若是多机分布式部署，此处应改为tcp
+      protocol: trpc
+      timeout: 1000
+
+plugins:
+  auth:
+    cors:
+      apply_to_all_path:
+        - insecure_allow_all
+    validation:
+      enable_error_log: true
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  log:
+    default: 
+      - writer: file                              #本地文件日志
+        level: info                              #本地文件滚动日志的级别
+        writer_config:                            #本地文件输出具体配置
+          log_path: ../log                        #本地文件日志路径
+          filename: trpc.log                      #本地文件日志文件名
+          roll_type: size                         #文件滚动类型,size为按大小滚动
+          max_age: 7                              #最大日志保留天数
+          max_size: 10                            #本地文件滚动日志的大小 单位 MB
+          max_backups: 10                         #最大日志文件数
+          compress:  false                        #日志文件是否压缩

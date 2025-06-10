@@ -26,12 +26,10 @@ func InitAdminServiceImpl(cfg *config.Config) (*AdminServiceImpl, error) {
 			User:     cfg.Database.User,
 			Password: cfg.Database.Password,
 			DBName:   cfg.Database.DBName,
-			SSLMode:  cfg.Database.SSLMode,
 		},
 		Cache: authconfig.CacheConfig{
-			DataDir:  cfg.Cache.DataDir,
-			Password: cfg.Cache.Password,
-			DB:       cfg.Cache.DB,
+			DataDir: cfg.Cache.DataDir,
+			DB:      cfg.Cache.DB,
 		},
 		JWT: authconfig.JWTConfig{
 			SecretKey:     cfg.JWT.SecretKey,
