@@ -58,8 +58,9 @@ var registerCmd = &cobra.Command{
 			return
 		}
 
-		// 如果命令行没有指定密码，交互式输入
+		// 如果命令行没有指定密码，交互式输入（支持二次确认）
 		if password == "" {
+			// 第一次输入密码
 			fmt.Print("请输入密码: ")
 			passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
 			if err != nil {
@@ -68,11 +69,29 @@ var registerCmd = &cobra.Command{
 			}
 			password = string(passwordBytes)
 			fmt.Println() // 换行
-		}
 
-		if password == "" {
-			fmt.Println("密码不能为空")
-			return
+			if password == "" {
+				fmt.Println("密码不能为空")
+				return
+			}
+
+			// 第二次输入密码确认
+			fmt.Print("请再次输入密码: ")
+			confirmPasswordBytes, err := term.ReadPassword(int(syscall.Stdin))
+			if err != nil {
+				fmt.Printf("\n读取密码失败: %v\n", err)
+				return
+			}
+			confirmPassword := string(confirmPasswordBytes)
+			fmt.Println() // 换行
+
+			// 验证两次密码是否一致
+			if password != confirmPassword {
+				fmt.Println("两次输入的密码不一致，请重新运行命令")
+				return
+			}
+
+			fmt.Println("密码确认成功")
 		}
 
 		// 可选的昵称
@@ -136,7 +155,7 @@ func init() {
 
 	// 添加可选的命令行参数
 	registerCmd.Flags().StringVar(&username, "username", "", "用户名")
-	registerCmd.Flags().StringVar(&password, "password", "", "密码")
+	registerCmd.Flags().StringVar(&password, "password", "", "密码 (不推荐通过命令行参数设置)")
 	registerCmd.Flags().StringVar(&nickname, "nickname", "", "昵称 (可选)")
 	registerCmd.Flags().StringVar(&email, "email", "", "邮箱 (可选)")
 }

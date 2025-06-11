@@ -6,7 +6,7 @@
 all: deps check build
 
 # 变量定义
-APP_NAME=moox
+APP_NAME=moox-cli
 VERSION ?= dev
 BUILD_DIR=../release
 SCRIPT_DIR=$(shell pwd)
