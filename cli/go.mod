@@ -4,9 +4,12 @@ go 1.24.0
 
 replace github.com/mooyang-code/xData-mini/storage/proto => ../../xData-mini/storage/proto/gen
 
+replace github.com/mooyang-code/moox/server/proto/gen => ../server/proto/gen
+
 require (
 	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/mooyang-code/xData-mini/storage/proto v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/server/proto/gen v0.0.0
 	github.com/nats-io/nats.go v1.43.0
 	github.com/spf13/cobra v1.9.1
 	golang.org/x/term v0.31.0

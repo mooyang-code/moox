@@ -84,7 +84,6 @@ CREATE TABLE t_user_actions (
 -- 用户表索引
 CREATE INDEX idx_users_username ON t_users(c_username);
 CREATE INDEX idx_users_email ON t_users(c_email);
-CREATE INDEX idx_users_phone ON t_users(c_phone);
 CREATE INDEX idx_users_status ON t_users(c_status);
 CREATE INDEX idx_users_role ON t_users(c_role);
 CREATE INDEX idx_users_last_login ON t_users(c_last_login_at);
@@ -106,4 +105,17 @@ CREATE INDEX idx_login_history_result ON t_login_history(c_login_result);
 CREATE INDEX idx_user_actions_user_id ON t_user_actions(c_user_id);
 CREATE INDEX idx_user_actions_action ON t_user_actions(c_action);
 CREATE INDEX idx_user_actions_time ON t_user_actions(c_ctime);
+
+-- ************ 创建触发器，自动更新修改时间 ************
+-- 用户表触发器 - 更新时间
+CREATE TRIGGER update_users_mtime AFTER UPDATE ON t_users
+BEGIN
+    UPDATE t_users SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;
+
+-- 活跃令牌表触发器 - 更新时间
+CREATE TRIGGER update_tokens_mtime AFTER UPDATE ON t_active_tokens
+BEGIN
+    UPDATE t_active_tokens SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;
 

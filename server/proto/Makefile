@@ -10,9 +10,7 @@ LOCAL_PROTO_FILES := \
 	moox.proto
 
 # 需要同步的协议文件列表（从xData-mini同步的协议文件）
-SYNC_PROTO_FILES := \
-	common.proto \
-	metadata.proto
+SYNC_PROTO_FILES := ""
 
 # 或者如果你想同步所有 .proto 文件，使用这个变量
 # SYNC_ALL_PROTO := true

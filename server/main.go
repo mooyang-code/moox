@@ -24,7 +24,7 @@ func main() {
 	if e != nil {
 		log.Fatal(e)
 	}
-	pb.RegisterAdminAPIService(s, authImp)
+	pb.RegisterAuthAPIService(s, authImp)
 
 	// 启动trpc服务器
 	if err := s.Serve(); err != nil {

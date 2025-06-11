@@ -142,9 +142,23 @@ if [ ! -z "\$RUNNING_PIDS" ]; then
     fi
 fi
 
+# 数据库初始化
+echo "检查数据库状态..."
+cd ./bin
+if [ ! -f "../data/auth.db" ]; then
+    echo "数据库不存在，正在初始化..."
+    if [ -f "../sql/schema.sql" ]; then
+        cd ../data && sqlite3 auth.db < ../sql/schema.sql && echo "数据库初始化完成"
+        cd ../bin
+    else
+        echo "警告: SQL schema文件不存在，跳过数据库初始化"
+    fi
+else
+    echo "数据库已存在，跳过初始化"
+fi
+
 # 启动服务
 echo "启动 \$APP_NAME..."
-cd ./bin
 nohup ./\$APP_NAME -conf=../config/trpc_go.yaml > ../log/app.log 2>&1 &
 echo \$! > "../\$PID_FILE"
 echo "#服务已启动 (PID: \$(cat ../\$PID_FILE))"

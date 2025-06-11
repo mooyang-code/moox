@@ -41,7 +41,7 @@ func LoadConfig() (*Config, error) {
 	var config Config
 
 	// 读取配置文件
-	configPath := "config/cli.yaml"
+	configPath := "../config/cli.yaml"
 	yamlFile, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("读取配置文件失败: %+v", err)

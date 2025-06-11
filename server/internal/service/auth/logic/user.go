@@ -11,7 +11,7 @@ import (
 
 // Register 用户注册
 func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*pb.RegisterRsp, error) {
-	log.InfoContextf(ctx, "Register called for username: %s", req.Username)
+	log.InfoContextf(ctx, "#Register called for username: %s", req.Username)
 
 	// 1. 验证输入参数
 	if req.Username == "" {
@@ -20,7 +20,6 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 			Message: "用户名不能为空",
 		}, nil
 	}
-
 	if req.Password == "" {
 		return &pb.RegisterRsp{
 			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
@@ -58,7 +57,6 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 	if user.Nickname == "" {
 		user.Nickname = req.Username
 	}
-
 	// 5. 保存到数据库
 	err = s.userDAO.CreateUser(ctx, user)
 	if err != nil {
@@ -73,6 +71,11 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 	s.recordUserAction(ctx, userID, model.ActionRegister, "", "用户注册成功", "", "", "success")
 
 	// 7. 构造返回的用户信息
+	var lastLoginAt int64
+	if user.LastLoginAt != nil {
+		lastLoginAt = user.LastLoginAt.Unix()
+	}
+
 	userInfo := &pb.UserInfo{
 		UserId:      user.UserID,
 		Username:    user.Username,
@@ -82,7 +85,7 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 		Status:      pb.UserStatus(user.Status),
 		Role:        pb.UserRole(user.Role),
 		CreatedAt:   user.CreatedAt.Unix(),
-		LastLoginAt: user.LastLoginAt.Unix(),
+		LastLoginAt: lastLoginAt,
 		LastLoginIp: user.LastLoginIP,
 	}
 
@@ -132,6 +135,11 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 	s.recordUserAction(ctx, claims.UserID, model.ActionGetUserInfo, targetUserID, "获取用户信息", "", "", "success")
 
 	// 构造用户信息
+	var lastLoginAt int64
+	if user.LastLoginAt != nil {
+		lastLoginAt = user.LastLoginAt.Unix()
+	}
+
 	userInfo := &pb.UserInfo{
 		UserId:      user.UserID,
 		Username:    user.Username,
@@ -141,7 +149,7 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 		Status:      pb.UserStatus(user.Status),
 		Role:        pb.UserRole(user.Role),
 		CreatedAt:   user.CreatedAt.Unix(),
-		LastLoginAt: user.LastLoginAt.Unix(),
+		LastLoginAt: lastLoginAt,
 		LastLoginIp: user.LastLoginIP,
 	}
 
@@ -202,6 +210,11 @@ func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUser
 	s.recordUserAction(ctx, user.UserID, model.ActionUpdateProfile, "", "更新用户信息", "", "", "success")
 
 	// 构造用户信息
+	var lastLoginAt int64
+	if user.LastLoginAt != nil {
+		lastLoginAt = user.LastLoginAt.Unix()
+	}
+
 	userInfo := &pb.UserInfo{
 		UserId:      user.UserID,
 		Username:    user.Username,
@@ -211,7 +224,7 @@ func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUser
 		Status:      pb.UserStatus(user.Status),
 		Role:        pb.UserRole(user.Role),
 		CreatedAt:   user.CreatedAt.Unix(),
-		LastLoginAt: user.LastLoginAt.Unix(),
+		LastLoginAt: lastLoginAt,
 		LastLoginIp: user.LastLoginIP,
 	}
 

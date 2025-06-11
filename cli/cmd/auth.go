@@ -112,7 +112,7 @@ var registerCmd = &cobra.Command{
 		// 处理响应
 		if rsp.Code == 0 { // SUCCESS = 0
 			fmt.Printf("注册成功！\n")
-			fmt.Printf("用户ID: %s\n", rsp.UserID)
+			fmt.Printf("用户ID: %s\n", rsp.UserId)
 			if rsp.UserInfo != nil {
 				fmt.Printf("用户名: %s\n", rsp.UserInfo.Username)
 				if rsp.UserInfo.Nickname != "" {

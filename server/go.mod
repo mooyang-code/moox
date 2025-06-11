@@ -13,13 +13,12 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/google/uuid v1.6.0
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
-	google.golang.org/protobuf v1.36.6
+	github.com/mooyang-code/moox/server/proto/gen v0.0.0
 	gopkg.in/yaml.v2 v2.4.0
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.30.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.3
-	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1
 )
 
 require (
@@ -60,9 +59,11 @@ require (
 	go.uber.org/multierr v1.6.0 // indirect
 	go.uber.org/zap v1.24.0 // indirect
 	golang.org/x/net v0.38.0 // indirect
-	golang.org/x/sync v0.12.0 // indirect
-	golang.org/x/sys v0.31.0 // indirect
-	golang.org/x/text v0.23.0 // indirect
+	golang.org/x/sync v0.13.0 // indirect
+	golang.org/x/sys v0.32.0 // indirect
+	golang.org/x/text v0.24.0 // indirect
+	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
+	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
