@@ -3,7 +3,7 @@
     <div class="login_form_box">
       <a-form :rules="rules" :model="form" layout="vertical" @submit="onSubmit">
         <a-form-item field="username" :hide-asterisk="true">
-          <a-input v-model="form.username" allow-clear placeholder="请输入账号：admin/common">
+          <a-input v-model="form.username" allow-clear placeholder="请输入账号">
             <template #prefix>
               <icon-user />
             </template>
@@ -29,7 +29,9 @@
           </div>
         </a-form-item>
         <a-form-item>
-          <a-button long type="primary" html-type="submit">登录</a-button>
+          <a-button long type="primary" html-type="submit" :loading="loginLoading">
+            {{ loginLoading ? '登录中...' : '登录' }}
+          </a-button>
         </a-form-item>
       </a-form>
     </div>
@@ -43,15 +45,20 @@ import { useUserInfoStore } from "@/store/modules/user-info";
 import { loginAPI } from "@/api/modules/user/index";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { useSystemStore } from "@/store/modules/system";
+import { Message } from "@arco-design/web-vue";
+
 let userStores = useUserInfoStore();
 const routeStore = useRoutesConfigStore();
 const router = useRouter();
+
+// 移除写死的账号密码，提高安全性
 const form = ref({
-  username: "admin",
-  password: "123456",
-  verifyCode: null,
+  username: "",
+  password: "",
+  verifyCode: "",
   remember: false
 });
+
 const rules = ref({
   username: [
     {
@@ -64,25 +71,14 @@ const rules = ref({
       required: true,
       message: "请输入密码"
     }
-  ],
-  verifyCode: [
-    {
-      required: true,
-      message: "请输入验证码"
-    },
-    {
-      validator: (value: string, cb: any) => {
-        if (value !== verifyCode.value) {
-          cb("请输入正确的验证码");
-        } else {
-          cb();
-        }
-      }
-    }
   ]
 });
+
 const verifyCode = ref("");
 const verifyCodeChange = (code: string) => (verifyCode.value = code);
+
+// 添加登录状态
+const loginLoading = ref(false);
 
 // 提交表单
 const onSubmit = async ({ errors }: any) => {
@@ -92,21 +88,71 @@ const onSubmit = async ({ errors }: any) => {
 
 // 登录
 const onLogin = async () => {
-  // 登录
-  let res = await loginAPI(form.value);
-  // 存储token
-  await userStores.setToken(res.data.token);
-  // 加载用户信息
-  await userStores.setAccount();
-  // 加载路由信息
-  await routeStore.initSetRouter();
+  if (loginLoading.value) return;
+  
+  try {
+    loginLoading.value = true;
+    
+    // 检查必填字段
+    if (!form.value.username.trim()) {
+      Message.error("请输入账号");
+      return;
+    }
+    if (!form.value.password.trim()) {
+      Message.error("请输入密码");
+      return;
+    }
+    
+    console.log('🚀 开始登录...', { username: form.value.username });
+    
+    // 使用新的安全登录方法（不传递验证码）
+    let res = await loginAPI({
+      username: form.value.username,
+      password: form.value.password,
+      verifyCode: form.value.verifyCode // 保持接口兼容，但后端会忽略
+    });
+    
+    console.log('✅ 登录响应:', res);
+    
+    // 存储token - 修复响应格式
+    await userStores.setToken(res.access_token);
+    // 加载用户信息
+    await userStores.setAccount();
+    // 加载路由信息
+    await routeStore.initSetRouter();
 
-  arcoMessage("success", "登录成功");
-  // 跳转首页
-  router.replace("/home");
-  // 设置字典
-  useSystemStore().setDictData();
+    Message.success("登录成功");
+    // 跳转首页
+    router.replace("/home");
+    // 设置字典
+    useSystemStore().setDictData();
+    
+    // 如果选择了记住密码，保存用户名（不保存密码）
+    if (form.value.remember) {
+      localStorage.setItem('remembered_username', form.value.username);
+    } else {
+      localStorage.removeItem('remembered_username');
+    }
+    
+  } catch (error: any) {
+    console.error('❌ 登录失败:', error);
+    Message.error(error.message || "登录失败，请检查账号密码");
+    
+    // 登录失败时刷新验证码
+    verifyCodeChange("");
+  } finally {
+    loginLoading.value = false;
+  }
 };
+
+// 页面加载时恢复记住的用户名
+onMounted(() => {
+  const rememberedUsername = localStorage.getItem('remembered_username');
+  if (rememberedUsername) {
+    form.value.username = rememberedUsername;
+    form.value.remember = true;
+  }
+});
 </script>
 
 <style lang="scss" scoped>

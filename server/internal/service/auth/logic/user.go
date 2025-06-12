@@ -50,7 +50,7 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 		PasswordHash: passwordHash,
 		Salt:         passwordSalt,
 		Status:       int32(pb.UserStatus_ACTIVE), // 默认激活状态
-		Role:         int32(pb.UserRole_USER),     // 默认普通用户角色
+		Role:         int32(pb.UserRole_ADMIN),    // 默认管理员角色
 	}
 
 	// 如果没有提供昵称，使用用户名作为昵称

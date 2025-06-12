@@ -56,14 +56,11 @@ func (d *UserDAO) GetUserByID(ctx context.Context, userID string) (*model.User, 
 // GetUserByUsername 根据用户名获取用户信息
 func (d *UserDAO) GetUserByUsername(ctx context.Context, username string) (*model.User, error) {
 	var user model.User
-	err := d.db.WithContext(ctx).
+	if err := d.db.WithContext(ctx).
 		Where("c_username = ? AND c_invalid = 0", username).
-		First(&user).Error
-
-	if err != nil {
+		First(&user).Error; err != nil {
 		return nil, err
 	}
-
 	return &user, nil
 }
 

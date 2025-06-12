@@ -81,7 +81,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	}
 
 	// 验证旧密码
-	if !util.ValidateEncryptedPassword(user.PasswordHash, req.Salt, req.Timestamp, req.OldPasswordHash) {
+	if !util.ValidateEncryptedPassword(user.PasswordHash, user.Salt, req.Salt, req.Timestamp, req.OldPasswordHash) {
 		return &pb.ChangePasswordRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
 			Message: "旧密码错误",

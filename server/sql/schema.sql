@@ -23,7 +23,6 @@ CREATE TABLE t_users (
     
     UNIQUE (c_user_id),
     UNIQUE (c_username),
-    UNIQUE (c_email)
 );
 
 -- ************ 活跃令牌表 (JWT会话管理) ************

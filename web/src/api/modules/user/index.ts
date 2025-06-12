@@ -1,11 +1,24 @@
 import axios from "@/api";
+import { secureLoginManager } from "@/utils/crypto";
 
-// 登录
-export const loginAPI = (data: any) => {
+// 安全登录（新版本）
+export const loginAPI = async (data: { username: string; password: string; verifyCode: string }) => {
+  // 使用安全登录管理器进行登录
+  return await secureLoginManager.login(data.username, data.password, data.verifyCode);
+};
+
+// 获取登录盐值
+export const getLoginSaltAPI = (data: { username: string }) => {
   return axios({
-    url: "/mock/login",
+    url: "/trpc.moox.server.AuthAPI/GetLoginSalt",
     method: "post",
-    data
+    data: {
+      app_info: {
+        app_id: "moox_frontend",
+        app_key: "2521e0d21b6be0347b72bca93904a0dd"
+      },
+      username: data.username
+    }
   });
 };
 

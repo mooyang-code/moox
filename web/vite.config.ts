@@ -68,6 +68,10 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_APP_BASE_URL,
           changeOrigin: true,
           rewrite: path => path.replace(/^\/api/, "")
+        },
+        "/trpc.moox.server": {
+          target: "http://localhost:18201",
+          changeOrigin: true
         }
       }
     }

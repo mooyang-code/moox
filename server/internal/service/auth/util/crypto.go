@@ -12,6 +12,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // GenerateSalt 生成随机盐值
@@ -108,18 +109,20 @@ func AESDecrypt(ciphertext string, key []byte) (string, error) {
 }
 
 // ValidateEncryptedPassword 验证客户端提交的加密密码
-func ValidateEncryptedPassword(storedPasswordHash, salt string, timestamp int64, encryptedPassword string) bool {
-	// 派生解密密钥
-	key := DeriveEncryptionKey(salt, timestamp)
+func ValidateEncryptedPassword(storedPasswordHash, userStoredSalt, dynamicSalt string, timestamp int64, encryptedPassword string) bool {
+	// 1. 使用动态盐值和时间戳派生解密密钥
+	key := DeriveEncryptionKey(dynamicSalt, timestamp)
 
-	// 解密得到原始密码
+	// 2. 解密得到原始密码
 	password, err := AESDecrypt(encryptedPassword, key)
 	if err != nil {
+		log.Errorf("密码解密失败: %v", err)
 		return false
 	}
+	log.Infof("解密得到的密码: %s", password)
 
-	// 验证密码哈希
-	return VerifyPasswordHash(password, salt, storedPasswordHash)
+	// 3. 使用用户存储的盐值验证密码哈希
+	return VerifyPasswordHash(password, userStoredSalt, storedPasswordHash)
 }
 
 // DecryptPassword 解密客户端发送的密码

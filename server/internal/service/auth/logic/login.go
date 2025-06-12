@@ -12,7 +12,7 @@ import (
 
 // Login 用户登录
 func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, error) {
-	log.InfoContextf(ctx, "Login called for username: %s", req.Username)
+	log.InfoContextf(ctx, "***** Login username: %s; req: %+v *****", req.Username, req)
 
 	// 1. 验证盐值和时间戳
 	if !s.validateLoginSalt(ctx, req.Username, req.Salt, req.Timestamp) {
@@ -36,12 +36,13 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 		s.recordLoginAttempt(ctx, req.Username, req.ClientIp, false)
 		return &pb.LoginRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
-			Message: "用户名或密码错误",
+			Message: "用户名或密码错误(NO User)",
 		}, nil
 	}
+	log.InfoContextf(ctx, "user Info:%+v", user)
 
 	// 4. 验证密码哈希
-	if !util.ValidateEncryptedPassword(user.PasswordHash, req.Salt, req.Timestamp, req.PasswordHash) {
+	if !util.ValidateEncryptedPassword(user.PasswordHash, user.Salt, req.Salt, req.Timestamp, req.PasswordHash) {
 		s.recordLoginAttempt(ctx, req.Username, req.ClientIp, false)
 		return &pb.LoginRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
@@ -99,7 +100,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 
 // GetLoginSalt 获取登录盐值（前端在请求Login接口前调用本接口）
 func (s *AuthServiceImpl) GetLoginSalt(ctx context.Context, req *pb.GetLoginSaltReq) (*pb.GetLoginSaltRsp, error) {
-	log.InfoContextf(ctx, "GetLoginSalt called for username: %s", req.Username)
+	log.InfoContextf(ctx, "**** GetLoginSalt called for username: %s ****", req.Username)
 
 	// 先尝试获取现有的有效盐值
 	existingSalt, err := s.userDAO.GetLoginSalt(ctx, req.Username)
@@ -144,7 +145,8 @@ func (s *AuthServiceImpl) GetLoginSalt(ctx context.Context, req *pb.GetLoginSalt
 		}, nil
 	}
 
-	log.InfoContextf(ctx, "生成新盐值 for username: %s", req.Username)
+	log.InfoContextf(ctx, "生成新盐值 for username: %s; loginSalt: %+v; SaltExpired:%d",
+		req.Username, loginSalt, int64(s.cfg.Security.SaltExpired.Seconds()))
 	return &pb.GetLoginSaltRsp{
 		Code:      pb.EnumMooxErrorCode_SUCCESS,
 		Message:   "获取盐值成功",
