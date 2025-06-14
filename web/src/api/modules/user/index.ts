@@ -22,10 +22,18 @@ export const getLoginSaltAPI = (data: { username: string }) => {
   });
 };
 
-// 获取用户信息
-export const getUserInfoAPI = () => {
+// 获取用户信息 - 调用真实后台接口
+export const getUserInfoAPI = (accessToken: string) => {
   return axios({
-    url: "/mock/user/getUserInfo",
-    method: "get"
+    url: "/trpc.moox.server.AuthAPI/GetUserInfo",
+    method: "post",
+    data: {
+      app_info: {
+        app_id: "moox_frontend",
+        app_key: "2521e0d21b6be0347b72bca93904a0dd"
+      },
+      access_token: accessToken,
+      user_id: "" // 空字符串表示获取当前用户信息
+    }
   });
 };

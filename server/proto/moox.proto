@@ -144,7 +144,7 @@ message ChangePasswordRsp {
 message GetUserInfoReq {
   AppInfo app_info = 1;
   string access_token = 2;      // 访问令牌
-  string user_id = 3;           // 用户ID（可选，管理员查询他人信息时使用）
+  string user_id = 3;           // 用户ID
 }
 
 // 获取用户信息响应

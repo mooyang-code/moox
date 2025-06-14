@@ -37,6 +37,11 @@ service.interceptors.response.use(
       return Promise.reject(response.data);
     }
     let res = response.data;
+    
+    // 适配真实后台API的响应格式
+    // 真实后台API成功状态码为0，mock API成功状态码为200
+    const isSuccess = res.code === 0 || res.code === 200;
+    
     if (res.code == 401) {
       Message.error("登录状态已过期");
       router.push("/login");
@@ -44,11 +49,12 @@ service.interceptors.response.use(
     } else if (res.code == 404) {
       Message.error("请求连接超时");
       return Promise.reject(res);
-    } else if (res.code != 200) {
-      Message.error(res.message);
+    } else if (!isSuccess) {
+      // 如果不是成功状态码（0或200），才当作错误处理
+      Message.error(res.message || "请求失败");
       return Promise.reject(res);
     } else {
-      // 返回数据
+      // 返回数据 - 成功情况（code为0或200）
       return Promise.resolve(res);
     }
   },

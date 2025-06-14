@@ -209,7 +209,7 @@ export const systemMenu = [
       affix: false,
       link: "",
       iframe: false,
-      roles: ["admin"],
+      roles: ["admin", "common"],
       svgIcon: "functions",
       sort: 3,
       type: 1
@@ -230,7 +230,7 @@ export const systemMenu = [
       affix: false,
       link: "",
       iframe: false,
-      roles: ["admin"],
+      roles: ["admin", "common"],
       icon: "icon-menu",
       sort: 1,
       type: 1
@@ -250,7 +250,7 @@ export const systemMenu = [
           affix: false,
           link: "",
           iframe: false,
-          roles: ["admin"],
+          roles: ["admin", "common"],
           icon: "icon-menu",
           sort: 1,
           type: 2
@@ -271,7 +271,7 @@ export const systemMenu = [
           affix: false,
           link: "",
           iframe: false,
-          roles: ["admin"],
+          roles: ["admin", "common"],
           icon: "icon-menu",
           sort: 2,
           type: 2
@@ -292,7 +292,7 @@ export const systemMenu = [
           affix: false,
           link: "",
           iframe: false,
-          roles: ["admin"],
+          roles: ["admin", "common"],
           icon: "icon-menu",
           sort: 3,
           type: 2
@@ -313,7 +313,7 @@ export const systemMenu = [
           affix: false,
           link: "",
           iframe: false,
-          roles: ["admin"],
+          roles: ["admin", "common"],
           icon: "icon-menu",
           sort: 4,
           type: 2

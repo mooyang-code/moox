@@ -105,25 +105,42 @@ const onLogin = async () => {
     
     console.log('🚀 开始登录...', { username: form.value.username });
     
-    // 使用新的安全登录方法（不传递验证码）
+    // 使用新的安全登录方法
     let res = await loginAPI({
       username: form.value.username,
       password: form.value.password,
-      verifyCode: form.value.verifyCode // 保持接口兼容，但后端会忽略
+      verifyCode: form.value.verifyCode
     });
     
     console.log('✅ 登录响应:', res);
     
-    // 存储token - 修复响应格式
+    // 检查登录是否成功
+    if (res.code !== 0) {
+      throw new Error(res.message || "登录失败");
+    }
+    
+    // 存储token - 适配真实后台响应格式
+    if (!res.access_token) {
+      throw new Error("登录响应中缺少访问令牌");
+    }
+    
+    console.log('🔐 设置访问令牌:', res.access_token.substring(0, 20) + "...");
     await userStores.setToken(res.access_token);
+    
+    console.log('👤 开始获取用户信息...');
     // 加载用户信息
     await userStores.setAccount();
+    
+    console.log('🗂️ 开始初始化路由...');
     // 加载路由信息
     await routeStore.initSetRouter();
 
     Message.success("登录成功");
+    
+    console.log('🏠 跳转到首页...');
     // 跳转首页
     router.replace("/home");
+    
     // 设置字典
     useSystemStore().setDictData();
     
@@ -136,7 +153,18 @@ const onLogin = async () => {
     
   } catch (error: any) {
     console.error('❌ 登录失败:', error);
-    Message.error(error.message || "登录失败，请检查账号密码");
+    
+    // 清理可能设置的无效token
+    await userStores.setToken("");
+    
+    let errorMessage = "登录失败";
+    if (error.message) {
+      errorMessage = error.message;
+    } else if (error.response) {
+      errorMessage = `网络错误: ${error.response.status}`;
+    }
+    
+    Message.error(errorMessage);
     
     // 登录失败时刷新验证码
     verifyCodeChange("");
