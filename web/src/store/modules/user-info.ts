@@ -117,12 +117,20 @@ const userInfoStore = () => {
     } catch (error: any) {
       console.error("setAccount: 获取用户信息失败", error);
       
-      // 如果获取失败，清空用户信息
+      // 如果获取失败，清空用户信息和token，避免死循环
       account.value = {
         user: {},
         roles: [],
         permissions: []
       };
+      
+      // 关键修复：清除无效的token，避免路由守卫死循环
+      if (error.code === 3 || error.message?.includes('访问令牌无效')) {
+        console.log("setAccount: 检测到token无效，清除token避免死循环");
+        token.value = "";
+        // 同时清除localStorage中的持久化数据
+        localStorage.removeItem('user-info');
+      }
       
       throw error;
     }

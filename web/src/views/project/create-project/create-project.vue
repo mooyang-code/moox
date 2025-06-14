@@ -105,70 +105,76 @@
                     <a-row :gutter="16">
                       <a-col :span="12">
                         <a-radio value="1">
+                          <span>文本类型</span>
+                          <a-tooltip content="纯文本格式">
+                            <icon-question-circle style="margin-left: 4px" />
+                          </a-tooltip>
+                        </a-radio>
+                        <a-radio value="2">
                           <span>布尔类型</span>
                           <a-tooltip content="格式: true/false">
                             <icon-question-circle style="margin-left: 4px" />
                           </a-tooltip>
                         </a-radio>
-                        <a-radio value="2">
+                        <a-radio value="3">
                           <span>日期</span>
                           <a-tooltip content="格式: 2021-02-03">
                             <icon-question-circle style="margin-left: 4px" />
                           </a-tooltip>
                         </a-radio>
-                        <a-radio value="3">
+                        <a-radio value="4">
                           <span>日期范围</span>
                           <a-tooltip content="格式: 2021-02-03 ~ 2022-03-02">
                             <icon-question-circle style="margin-left: 4px" />
                           </a-tooltip>
                         </a-radio>
-                        <a-radio value="4">
+                        <a-radio value="5">
                           <span>日期时间</span>
                           <a-tooltip content="格式: 2021-02-03 08:00:00">
                             <icon-question-circle style="margin-left: 4px" />
                           </a-tooltip>
                         </a-radio>
-                        <a-radio value="5">
-                          <span>日期时间范围</span>
-                          <a-tooltip content="格式: 2021-02-03 08:00:00 ~ 2022-03-02 09:00:00">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
                         <a-radio value="6">
-                          <span>秒级时间戳</span>
-                          <a-tooltip content="格式: 1661411887">
+                          <span>日期时间范围</span>
+                          <a-tooltip content="格式: 2021-02-03 08:00:00 ~ 2022-03-02 09:00:01">
                             <icon-question-circle style="margin-left: 4px" />
                           </a-tooltip>
                         </a-radio>
                       </a-col>
                       <a-col :span="12">
                         <a-radio value="7">
+                          <span>秒级时间戳</span>
+                          <a-tooltip content="格式: 1661411887">
+                            <icon-question-circle style="margin-left: 4px" />
+                          </a-tooltip>
+                        </a-radio>
+                        <a-radio value="8">
                           <span>ISO8601日期</span>
                           <a-tooltip content="格式: 2025-04-12T20:36:00+08:00">
                             <icon-question-circle style="margin-left: 4px" />
                           </a-tooltip>
                         </a-radio>
-                        <a-radio value="8">
-                          <span>链接</span>
-                          <a-tooltip content="格式: http://example.com">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
                         <a-radio value="9">
-                          <span>JSON值</span>
-                          <a-tooltip content="格式: {&quot;key&quot;: &quot;value&quot;}">
+                          <span>链接</span>
+                          <a-tooltip content="格式: http://puui.qpic.cn/emuczz1543346158">
                             <icon-question-circle style="margin-left: 4px" />
                           </a-tooltip>
                         </a-radio>
                         <a-radio value="10">
-                          <span>选项值ID</span>
-                          <a-tooltip content="格式: 1+2+3">
+                          <span>JSON</span>
+                          <a-tooltip content="JSON格式数据">
                             <icon-question-circle style="margin-left: 4px" />
                           </a-tooltip>
                         </a-radio>
                         <a-radio value="11">
-                          <span>选项值翻译</span>
-                          <a-tooltip content="格式: 选项1+选项2+选项3">
+                          <span>选项值ID</span>
+                          <a-tooltip content="选项值的ID标识">
+                            <icon-question-circle style="margin-left: 4px" />
+                          </a-tooltip>
+                        </a-radio>
+                        <a-radio value="12">
+                          <span>选项值中文文案</span>
+                          <a-tooltip content="选项值的中文显示文案">
                             <icon-question-circle style="margin-left: 4px" />
                           </a-tooltip>
                         </a-radio>
@@ -250,7 +256,7 @@ const submitProjectData = async () => {
 
     console.log('提交项目数据:', projectData);
     
-    const response = await api.post('/trpc.storage.metadata.MetaAdmin/CreateProject', projectData);
+    const response = await api.post('/CreateProject', projectData);
     console.log('API响应:', response);
     
     // 现在 response.data 直接是精简后的协议数据

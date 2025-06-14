@@ -60,16 +60,31 @@ router.beforeEach(async (to: any, _: any, next: any) => {
     // 判断账号信息是否获取，先获取账号信息和路由信息，添加路由后再跳转(页面刷新时触发)
     // 解决刷新页面404的问题
     if (isEmptyObject(account.value.user)) {
-      // 获取账号信息
-      await store.setAccount();
-      // 获取路由信息
-      await routeStore.initSetRouter();
-      // 判断是否是动态路由
-      const { isDynamicRoute } = useRoutingMethod();
-      if (isDynamicRoute(to.path)) {
-        next({ name: to.name, params: to.params });
-      } else {
-        next({ path: to.path, query: to.query });
+      try {
+        // 获取账号信息
+        await store.setAccount();
+        // 获取路由信息
+        await routeStore.initSetRouter();
+        // 判断是否是动态路由
+        const { isDynamicRoute } = useRoutingMethod();
+        if (isDynamicRoute(to.path)) {
+          next({ name: to.name, params: to.params });
+        } else {
+          next({ path: to.path, query: to.query });
+        }
+      } catch (error: any) {
+        console.error("路由守卫: 获取用户信息失败", error);
+        // 如果获取用户信息失败，清除token并跳转到登录页
+        if (error.code === 3 || error.message?.includes('访问令牌无效') || error.message?.includes('请重新登录')) {
+          console.log("路由守卫: 检测到认证失败，跳转登录页");
+          // 确保token已被清除
+          await store.logOut();
+          next('/login');
+        } else {
+          // 其他错误，也跳转到登录页
+          console.log("路由守卫: 用户信息获取异常，跳转登录页");
+          next('/login');
+        }
       }
     } else {
       // 获取外链路由的处理函数

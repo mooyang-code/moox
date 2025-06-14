@@ -194,6 +194,8 @@ service AuthAPI {
   rpc UpdateUserInfo(UpdateUserInfoReq) returns (UpdateUserInfoRsp);
 }
 
+
+
 // 管理台相关接口
 service AdminAPI {
 }

@@ -42,8 +42,10 @@ service.interceptors.response.use(
     // 真实后台API成功状态码为0，mock API成功状态码为200
     const isSuccess = res.code === 0 || res.code === 200;
     
-    if (res.code == 401) {
+    if (res.code == 3) {
       Message.error("登录状态已过期");
+      // 清除本地存储，避免死循环
+      localStorage.removeItem("user-info");
       router.push("/login");
       return Promise.reject(res);
     } else if (res.code == 404) {
@@ -59,8 +61,12 @@ service.interceptors.response.use(
     }
   },
   function (error: any) {
-    localStorage.removeItem("user-info");
-    router.push("/login");
+    console.error("API请求失败:", error);
+    // 只在认证相关错误时清除用户信息，其他网络错误不应该清除
+    if (error.response?.status === 401 || error.response?.data?.code === 3) {
+      localStorage.removeItem("user-info");
+      router.push("/login");
+    }
     return Promise.reject(error);
   }
 );

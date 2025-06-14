@@ -1,0 +1,120 @@
+### 路径转发网关服务测试接口
+
+# 基础URL
+@baseURL = http://localhost:18202
+
+### 1. 健康检查
+GET {{baseURL}}/gateway/health
+
+### 2. 获取项目列表（路径转发模式）
+POST {{baseURL}}/gateway/storage/ListProjects
+Content-Type: application/json
+X-App-Id: test123
+X-App-Key: test123
+X-Trace-Id: trace-12345
+X-Access-Token: optional_access_token
+
+{}
+
+### 3. 创建项目（路径转发模式）
+POST {{baseURL}}/gateway/storage/CreateProject
+Content-Type: application/json
+X-App-Id: test123
+X-App-Key: test123
+X-Trace-Id: trace-67890
+X-Access-Token: user_access_token
+
+{
+  "proj_name": "新项目",
+  "remark": "这是一个新项目",
+  "dataset": {
+    "dataset_name": "主数据集",
+    "data_type": 102,
+    "time_series_period": "1D",
+    "validation_rule": "",
+    "remark": "主要数据集"
+  },
+  "fields": [
+    {
+      "field_name": "名称",
+      "interface_name": "name",
+      "desc": "项目名称字段",
+      "is_required": true,
+      "is_unique": false,
+      "is_metadata": false,
+      "validation_rule": "",
+      "write_example": "示例项目",
+      "remark": "项目名称",
+      "field_primary_format": 1,
+      "field_secondary_format": 0
+    }
+  ]
+}
+
+### 4. 测试其他存储服务接口
+POST {{baseURL}}/gateway/storage/GetData
+Content-Type: application/json
+X-App-Id: test123
+X-App-Key: test123
+X-Trace-Id: trace-get-data
+
+{
+  "project_id": 1,
+  "dataset_id": 101,
+  "object_id": "BTCUSDT",
+  "freq": "1H"
+}
+
+### 5. 测试认证服务接口
+POST {{baseURL}}/gateway/auth/Login
+Content-Type: application/json
+X-App-Id: test123
+X-App-Key: test123
+X-Trace-Id: trace-auth-login
+
+{
+  "username": "testuser",
+  "password_hash": "hashed_password",
+  "device_id": "device123"
+}
+
+### 6. 测试缺少必要头部信息
+POST {{baseURL}}/gateway/storage/ListProjects
+Content-Type: application/json
+
+{}
+
+### 7. 测试缺少App-Key
+POST {{baseURL}}/gateway/storage/ListProjects
+Content-Type: application/json
+X-App-Id: test123
+
+{}
+
+### 8. 测试未知服务
+POST {{baseURL}}/gateway/unknown_service/SomeMethod
+Content-Type: application/json
+X-App-Id: test123
+X-App-Key: test123
+X-Trace-Id: trace-unknown
+
+{}
+
+### 9. 测试GET请求
+GET {{baseURL}}/gateway/storage/ListProjects?project_id=1
+X-App-Id: test123
+X-App-Key: test123
+X-Trace-Id: trace-get-request
+
+### 10. 测试带复杂参数的请求
+POST {{baseURL}}/gateway/storage/UpdateProject
+Content-Type: application/json
+X-App-Id: test123
+X-App-Key: test123
+X-Trace-Id: trace-update-project
+X-Client-Ip: 192.168.1.100
+
+{
+  "proj_id": 1,
+  "remark": "更新后的项目备注信息"
+} 

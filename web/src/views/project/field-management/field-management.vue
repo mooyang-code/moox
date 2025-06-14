@@ -170,6 +170,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import { IconPlus, IconEdit, IconDelete, IconSearch, IconRefresh } from '@arco-design/web-vue/es/icon';
 import { listProjects, type Project } from '@/api/project';
+import { FIELD_SECONDARY_FORMAT_OPTIONS, getFieldSecondaryFormatName } from '@/typings/field-format';
 
 const route = useRoute();
 const router = useRouter();
@@ -233,16 +234,7 @@ const primaryTypes = ref([
 ]);
 
 // 次要类型选项
-const secondaryTypes = ref([
-  { value: "1", name: "布尔类型" },
-  { value: "2", name: "日期" },
-  { value: "3", name: "日期范围" },
-  { value: "4", name: "日期时间" },
-  { value: "5", name: "日期时间范围" },
-  { value: "6", name: "时间" },
-  { value: "7", name: "URL" },
-  { value: "8", name: "邮箱" }
-]);
+const secondaryTypes = ref(FIELD_SECONDARY_FORMAT_OPTIONS);
 
 // 是否必填选项
 const requiredOptions = ref([
@@ -313,7 +305,7 @@ const getFieldList = async () => {
         primaryFormat: "1",
         primaryFormatText: "字符串",
         secondaryFormat: "1",
-        secondaryFormatText: "布尔类型",
+        secondaryFormatText: "文本类型",
         isRequired: true,
         isUnique: true,
         isMetadata: false,
@@ -329,7 +321,7 @@ const getFieldList = async () => {
         fieldDescription: "用户的年龄信息",
         primaryFormat: "2",
         primaryFormatText: "整型",
-        secondaryFormat: "1",
+        secondaryFormat: "2",
         secondaryFormatText: "布尔类型",
         isRequired: false,
         isUnique: false,
@@ -346,7 +338,7 @@ const getFieldList = async () => {
         fieldDescription: "记录创建的时间戳",
         primaryFormat: "4",
         primaryFormatText: "时间类型",
-        secondaryFormat: "4",
+        secondaryFormat: "5",
         secondaryFormatText: "日期时间",
         isRequired: true,
         isUnique: false,

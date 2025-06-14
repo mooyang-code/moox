@@ -29,7 +29,7 @@ export interface ListProjectsResponse {
 // 获取项目列表
 export const listProjects = async (): Promise<Project[]> => {
   try {
-    const response = await api.post('/trpc.storage.metadata.MetaAdmin/ListProjects', {
+    const response = await api.post('/ListProjects', {
       auth_info: AUTH_INFO
     });
     

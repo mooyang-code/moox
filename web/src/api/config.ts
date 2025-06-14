@@ -15,7 +15,7 @@ const getCurrentHost = () => {
 
 // 创建axios实例
 export const api = axios.create({
-  baseURL: `http://${getCurrentHost()}:18105`,
+  baseURL: `http://${getCurrentHost()}:18202/gateway/metadata`,
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
@@ -24,10 +24,46 @@ export const api = axios.create({
   }
 });
 
+// 请求拦截器 - 动态添加X-Access-Token
+api.interceptors.request.use(
+  (config) => {
+    // 从localStorage获取token（兼容原有存储方式）
+    try {
+      const userInfo = localStorage.getItem('user-info');
+      if (userInfo) {
+        const { token } = JSON.parse(userInfo);
+        if (token) {
+          config.headers['X-Access-Token'] = token;
+          console.log('设置X-Access-Token:', token.substring(0, 20) + '...');
+        } else {
+          console.warn('localStorage中没有找到token');
+        }
+      } else {
+        console.warn('localStorage中没有找到user-info');
+      }
+    } catch (error) {
+      console.error('解析localStorage中的用户信息失败:', error);
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
 // 响应拦截器
 api.interceptors.response.use(
   (response) => {
     const { data } = response;
+    
+    // 检查业务级token失效错误
+    if (data && (data.code === 3 || data.code === 401)) {
+      // 清除token并跳转登录页
+      localStorage.removeItem('user-info');
+      console.log('Token失效，清除localStorage并跳转登录页');
+      window.location.href = '/login';
+      return Promise.reject(new Error(data.message || 'Token失效'));
+    }
     
     // 检查是否为旧协议格式（有 ret_info 字段）
     if (data?.ret_info) {
@@ -41,6 +77,13 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
+    // 处理HTTP状态码401
+    if (error.response?.status === 401) {
+      localStorage.removeItem('user-info');
+      console.log('HTTP 401错误，清除localStorage并跳转登录页');
+      window.location.href = '/login';
+    }
+    
     // 保持原有错误处理逻辑
     return Promise.reject(error.response?.data?.ret_info || error);
   }

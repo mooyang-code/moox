@@ -1,0 +1,46 @@
+# 网关服务配置
+gateway:
+  # 网关服务端口
+  port: 18202
+  
+  # 超时配置（毫秒）
+  timeout: 5000
+  
+  # 是否开启调试模式
+  debug: true
+  
+  # 不需要鉴权的接口列表
+  no_auth_methods:
+    - "/trpc.moox.server.AuthAPI/Register"
+    - "/trpc.moox.server.AuthAPI/GetLoginSalt"
+    - "/trpc.moox.server.AuthAPI/Login"
+    - "/trpc.moox.gateway.stdhttp/health"
+  
+  # 服务配置映射
+  services:
+    # 存储服务配置
+    storage:
+      address: "127.0.0.1:18106"
+      path: "trpc.storage.access.Access"
+    
+    # 认证服务配置
+    auth:
+      address: "127.0.0.1:18201"
+      path: "trpc.moox.server.AuthAPI"
+    
+    # 元数据服务配置
+    metadata:
+      address: "127.0.0.1:18105"
+      path: "trpc.storage.metadata.MetaAdmin"
+    
+    # 管理服务配置
+    admin:
+      address: "127.0.0.1:18203"
+      path: "trpc.moox.server.AdminAPI"
+
+# 限流配置
+rate_limit:
+  # 每分钟请求次数限制
+  requests_per_minute: 100
+  # 突发请求限制
+  burst: 10

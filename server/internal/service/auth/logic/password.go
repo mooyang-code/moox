@@ -12,12 +12,12 @@ import (
 
 // GetChangePasswordSalt 获取修改密码盐值
 func (s *AuthServiceImpl) GetChangePasswordSalt(ctx context.Context, req *pb.GetChangePasswordSaltReq) (*pb.GetChangePasswordSaltRsp, error) {
-	// 验证访问令牌
-	claims, err := util.ParseJWT(req.AccessToken, s.cfg.JWT.SecretKey)
+	// 从上下文获取用户信息（网关中间件已验证）
+	currentUserID, _, _, err := util.GetUserInfoFromContext(ctx)
 	if err != nil {
 		return &pb.GetChangePasswordSaltRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
-			Message: "访问令牌无效",
+			Message: "用户身份验证失败",
 		}, nil
 	}
 
@@ -27,14 +27,14 @@ func (s *AuthServiceImpl) GetChangePasswordSalt(ctx context.Context, req *pb.Get
 
 	// 创建盐值对象
 	changePwdSalt := model.ChangePasswordSalt{
-		UserID:    claims.UserID,
+		UserID:    currentUserID,
 		Salt:      salt,
 		Timestamp: timestamp,
 		ExpiresAt: time.Now().Add(s.cfg.Security.SaltExpired),
 	}
 
 	// 存储到缓存
-	err = s.userDAO.SetChangePasswordSalt(ctx, claims.UserID, changePwdSalt)
+	err = s.userDAO.SetChangePasswordSalt(ctx, currentUserID, changePwdSalt)
 	if err != nil {
 		log.ErrorContextf(ctx, "存储修改密码盐值失败: %v", err)
 		return &pb.GetChangePasswordSaltRsp{
@@ -54,17 +54,17 @@ func (s *AuthServiceImpl) GetChangePasswordSalt(ctx context.Context, req *pb.Get
 
 // ChangePassword 修改密码
 func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePasswordReq) (*pb.ChangePasswordRsp, error) {
-	// 验证访问令牌
-	claims, err := util.ParseJWT(req.AccessToken, s.cfg.JWT.SecretKey)
+	// 从上下文获取用户信息（网关中间件已验证）
+	currentUserID, _, _, err := util.GetUserInfoFromContext(ctx)
 	if err != nil {
 		return &pb.ChangePasswordRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
-			Message: "访问令牌无效",
+			Message: "用户身份验证失败",
 		}, nil
 	}
 
 	// 验证盐值和时间戳
-	if !s.validateChangePasswordSalt(ctx, claims.UserID, req.Salt, req.Timestamp) {
+	if !s.validateChangePasswordSalt(ctx, currentUserID, req.Salt, req.Timestamp) {
 		return &pb.ChangePasswordRsp{
 			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
 			Message: "盐值或时间戳无效",
@@ -72,7 +72,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	}
 
 	// 查询用户信息
-	user, err := s.userDAO.GetUserByID(ctx, claims.UserID)
+	user, err := s.userDAO.GetUserByID(ctx, currentUserID)
 	if err != nil {
 		return &pb.ChangePasswordRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,

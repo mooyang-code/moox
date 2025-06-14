@@ -161,13 +161,12 @@ func GenerateJWT(userID, username string, role int32, secretKey string, expiredD
 
 // ParseJWT 解析JWT令牌
 func ParseJWT(tokenString, secretKey string) (*JWTClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return []byte(secretKey), nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +174,5 @@ func ParseJWT(tokenString, secretKey string) (*JWTClaims, error) {
 	if claims, ok := token.Claims.(*JWTClaims); ok && token.Valid {
 		return claims, nil
 	}
-
 	return nil, fmt.Errorf("invalid token")
 }

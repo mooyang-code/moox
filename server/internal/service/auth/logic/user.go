@@ -100,20 +100,21 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 
 // GetUserInfo 获取用户信息
 func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoReq) (*pb.GetUserInfoRsp, error) {
-	// 验证访问令牌
-	claims, err := util.ParseJWT(req.AccessToken, s.cfg.JWT.SecretKey)
+	log.InfoContextf(ctx, "# GetUserInfo enter:%+v", req)
+	// 从上下文获取用户信息（网关中间件已验证）
+	currentUserID, _, role, err := util.GetUserInfoFromContext(ctx)
 	if err != nil {
 		return &pb.GetUserInfoRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
-			Message: "访问令牌无效",
+			Message: "用户身份验证失败",
 		}, nil
 	}
 
 	// 确定要查询的用户ID
-	targetUserID := claims.UserID
+	targetUserID := currentUserID
 	if req.UserId != "" {
 		// 检查权限：只有管理员可以查询其他用户信息
-		if claims.Role < int32(pb.UserRole_ADMIN) {
+		if role < int32(pb.UserRole_ADMIN) {
 			return &pb.GetUserInfoRsp{
 				Code:    pb.EnumMooxErrorCode_NO_PERMISSION,
 				Message: "权限不足",
@@ -132,7 +133,7 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 	}
 
 	// 记录操作日志
-	s.recordUserAction(ctx, claims.UserID, model.ActionGetUserInfo, targetUserID, "获取用户信息", "", "", "success")
+	s.recordUserAction(ctx, currentUserID, model.ActionGetUserInfo, targetUserID, "获取用户信息", "", "", "success")
 
 	// 构造用户信息
 	var lastLoginAt int64
@@ -162,17 +163,17 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 
 // UpdateUserInfo 更新用户信息
 func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUserInfoReq) (*pb.UpdateUserInfoRsp, error) {
-	// 验证访问令牌
-	claims, err := util.ParseJWT(req.AccessToken, s.cfg.JWT.SecretKey)
+	// 从上下文获取用户信息（网关中间件已验证）
+	currentUserID, _, _, err := util.GetUserInfoFromContext(ctx)
 	if err != nil {
 		return &pb.UpdateUserInfoRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
-			Message: "访问令牌无效",
+			Message: "用户身份验证失败",
 		}, nil
 	}
 
 	// 查询用户信息
-	user, err := s.userDAO.GetUserByID(ctx, claims.UserID)
+	user, err := s.userDAO.GetUserByID(ctx, currentUserID)
 	if err != nil {
 		return &pb.UpdateUserInfoRsp{
 			Code:    pb.EnumMooxErrorCode_FIELD_INFO_NOT_EXIST,
@@ -203,7 +204,7 @@ func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUser
 		}
 
 		// 重新查询更新后的用户信息
-		user, _ = s.userDAO.GetUserByID(ctx, claims.UserID)
+		user, _ = s.userDAO.GetUserByID(ctx, currentUserID)
 	}
 
 	// 记录操作日志
