@@ -18,7 +18,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	if !s.validateLoginSalt(ctx, req.Username, req.Salt, req.Timestamp) {
 		return &pb.LoginRsp{
 			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
-			Message: "盐值或时间戳无效",
+			Message: "盐值或时间戳无效，请刷新页面重新登录",
 		}, nil
 	}
 
@@ -36,7 +36,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 		s.recordLoginAttempt(ctx, req.Username, req.ClientIp, false)
 		return &pb.LoginRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
-			Message: "用户名或密码错误(NO User)",
+			Message: "用户名或密码错误。",
 		}, nil
 	}
 	log.InfoContextf(ctx, "user Info:%+v", user)

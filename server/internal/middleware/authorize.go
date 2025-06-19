@@ -2,13 +2,15 @@ package middleware
 
 import (
 	"context"
-	"strings"
 	"sync"
 
 	gatewayConfig "github.com/mooyang-code/moox/server/internal/config"
 	authConfig "github.com/mooyang-code/moox/server/internal/service/auth/config"
+	"github.com/mooyang-code/moox/server/internal/service/auth/model"
 	"github.com/mooyang-code/moox/server/internal/service/auth/util"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/filter"
 	thttp "trpc.group/trpc-go/trpc-go/http"
@@ -107,6 +109,7 @@ func Authorize() filter.ServerFilter {
 	return func(ctx context.Context, req interface{}, next filter.ServerHandleFunc) (interface{}, error) {
 		ctxMsg := trpc.Message(ctx)
 		rpcName := ctxMsg.ServerRPCName()
+		// TODO : 频控
 
 		// 检查是否需要鉴权
 		if isNoAuthMethod(rpcName) {
@@ -134,14 +137,17 @@ func Authorize() filter.ServerFilter {
 			return createAuthFailResponse(), nil
 		}
 
-		// 将用户信息保存到上下文中（底层接口需要这些信息）
-		ctx = context.WithValue(ctx, "user_id", claims.UserID)
-		ctx = context.WithValue(ctx, "username", claims.Username)
-		ctx = context.WithValue(ctx, "user_role", claims.Role)
+		// 同时将用户信息保存到上下文中（底层接口需要这些信息）
+		ctx = context.WithValue(ctx, model.HeaderUserID, claims.UserID)
+		ctx = context.WithValue(ctx, model.HeaderUsername, claims.Username)
+		ctx = context.WithValue(ctx, model.HeaderUserRole, claims.Role)
+
+		span := trace.SpanFromContext(ctx) // span,用于未来全链路定位问题
+		span.SetAttributes(attribute.String(model.HeaderUserID, claims.UserID))
 		log.InfoContextf(ctx, "接口 [%s] 鉴权通过", rpcName)
 
 		// 继续执行下一个处理器
-		rsp, err := next(ctx, req)
+		rsp, err := next(context.WithValue(ctx, model.HeaderUserID, claims.UserID), req)
 		if err != nil {
 			log.ErrorContextf(ctx, "接口 [%s] 执行失败: %v", rpcName, err)
 		}
@@ -149,37 +155,26 @@ func Authorize() filter.ServerFilter {
 	}
 }
 
+// getTokenFromHeader 从指定的HTTP头获取token
+func getTokenFromHeader(header *thttp.Header, headerName string) string {
+	if headers, ok := header.Request.Header[headerName]; ok && len(headers) > 0 {
+		if token := headers[0]; token != "" {
+			return token
+		}
+	}
+	return ""
+}
+
 // getAccessTokenFromRequest 从请求中获取访问令牌
-// 优先级：1. 请求体中的access_token字段 2. Authorization头 3. X-Access-Token头
+// 按优先级循环尝试不同的HTTP头
 func getAccessTokenFromRequest(ctx context.Context, header *thttp.Header, req interface{}) string {
-	// 1. 尝试从请求体中获取access_token字段
-	if tokenReq, ok := req.(accessTokenProvider); ok {
-		if token := tokenReq.GetAccessToken(); token != "" {
-			log.DebugContextf(ctx, "从请求体获取到访问令牌")
+	headerNames := []string{"Authorization", "X-Access-Token"}
+	for _, headerName := range headerNames {
+		if token := getTokenFromHeader(header, headerName); token != "" {
+			log.DebugContextf(ctx, "从%s头获取到访问令牌", headerName)
 			return token
 		}
 	}
-
-	// 2. 尝试从Authorization头获取 (Bearer token格式)
-	if authHeaders, ok := header.Request.Header["Authorization"]; ok && len(authHeaders) > 0 {
-		authHeader := authHeaders[0]
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			token := strings.TrimPrefix(authHeader, "Bearer ")
-			if token != "" {
-				log.DebugContextf(ctx, "从Authorization头获取到访问令牌")
-				return token
-			}
-		}
-	}
-
-	// 3. 尝试从X-Access-Token头获取
-	if tokenHeaders, ok := header.Request.Header["X-Access-Token"]; ok && len(tokenHeaders) > 0 {
-		if token := tokenHeaders[0]; token != "" {
-			log.DebugContextf(ctx, "从X-Access-Token头获取到访问令牌")
-			return token
-		}
-	}
-
 	return ""
 }
 

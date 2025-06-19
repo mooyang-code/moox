@@ -24,20 +24,20 @@
             
             <div class="card-content">
               <h3 class="card-title">{{ dataset.dataset_name }}</h3>
-              <p class="card-subtitle">{{ dataset.remark || '无备注' }}</p>
+              <p class="card-subtitle">{{ dataset.comment || '无备注' }}</p>
               
               <div class="dataset-info">
                 <div class="info-item">
                   <span class="info-label">数据类型:</span>
                   <span class="info-value">{{ dataset.data_type === 1 ? '静态数据' : '时序数据' }}</span>
                 </div>
-                <div class="info-item" v-if="dataset.data_type === 2">
+                <div class="info-item" v-if="dataset.data_type === 2 && dataset.freqs">
                   <span class="info-label">时序周期:</span>
-                  <span class="info-value">{{ dataset.time_series_period }}</span>
+                  <span class="info-value">{{ dataset.freqs }}</span>
                 </div>
-                <div class="info-item" v-if="dataset.validation_rule">
+                <div class="info-item" v-if="dataset.check_rules">
                   <span class="info-label">校验规则:</span>
-                  <span class="info-value">{{ dataset.validation_rule }}</span>
+                  <span class="info-value">{{ dataset.check_rules }}</span>
                 </div>
               </div>
             </div>
@@ -127,25 +127,28 @@
         </a-form-item>
 
         <a-form-item 
-          field="time_series_period" 
+          field="freqs" 
           label="时序周期"
           v-if="datasetForm.data_type === 2"
           :rules="[{ required: true, message: '时序数据需要设置时序周期' }]"
         >
-          <a-select v-model="datasetForm.time_series_period" placeholder="请选择时序周期" allow-clear>
-            <a-option value="daily">每日</a-option>
-            <a-option value="weekly">每周</a-option>
-            <a-option value="monthly">每月</a-option>
-            <a-option value="quarterly">每季度</a-option>
-            <a-option value="yearly">每年</a-option>
-          </a-select>
+          <a-input 
+            v-model="datasetForm.freqs" 
+            placeholder="请输入时序周期，如：1m+5m+1H+1D" 
+            allow-clear 
+          />
+          <template #extra>
+            <div style="font-size: 12px; color: #8c8c8c;">
+              多个周期用+分割，例如：1m+5m+1H+1D（1分钟+5分钟+1小时+1天）
+            </div>
+          </template>
         </a-form-item>
 
         <a-form-item 
-          field="validation_rule" 
+          field="check_rules" 
           label="数据校验规则"
         >
-          <a-select v-model="datasetForm.validation_rule" placeholder="请选择校验规则" allow-clear>
+          <a-select v-model="datasetForm.check_rules" placeholder="请选择校验规则" allow-clear>
             <a-option value="required">必填校验</a-option>
             <a-option value="numeric">数值校验</a-option>
             <a-option value="email">邮箱校验</a-option>
@@ -155,33 +158,11 @@
         </a-form-item>
 
         <a-form-item 
-          field="file_format" 
-          label="支持文件格式"
-        >
-          <a-checkbox-group v-model="datasetForm.file_format">
-            <a-checkbox value="csv">CSV</a-checkbox>
-            <a-checkbox value="json">JSON</a-checkbox>
-            <a-checkbox value="xlsx">Excel</a-checkbox>
-            <a-checkbox value="xml">XML</a-checkbox>
-          </a-checkbox-group>
-        </a-form-item>
-
-        <a-form-item 
-          field="is_public" 
-          label="公开状态"
-        >
-          <a-switch v-model="datasetForm.is_public" />
-          <span style="margin-left: 12px; color: #8c8c8c; font-size: 14px;">
-            {{ datasetForm.is_public ? '公开' : '私有' }}
-          </span>
-        </a-form-item>
-
-        <a-form-item 
-          field="remark" 
+          field="comment" 
           label="备注说明"
         >
           <a-textarea 
-            v-model="datasetForm.remark" 
+            v-model="datasetForm.comment" 
             placeholder="请输入数据集备注说明" 
             :max-length="200"
             show-word-limit
@@ -196,8 +177,9 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, reactive } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Message } from '@arco-design/web-vue';
+import { Message, Modal } from '@arco-design/web-vue';
 import { listProjects, type Project } from '@/api/project';
+import { createDataset, updateDataset, deleteDataset } from '@/api/dataset';
 import { 
   IconPlus, 
   IconEye, 
@@ -222,11 +204,9 @@ const currentEditDataset = ref<any>(null);
 const datasetForm = reactive({
   dataset_name: '',
   data_type: 1,
-  time_series_period: '',
-  validation_rule: '',
-  file_format: [],
-  is_public: false,
-  remark: ''
+  freqs: '', // 时序周期，对应后端的freqs字段
+  check_rules: '', // 校验规则，对应后端的check_rules字段
+  comment: '' // 备注，对应后端的comment字段
 });
 
 // 获取当前项目
@@ -269,18 +249,37 @@ const handleEdit = (dataset: any) => {
   Object.assign(datasetForm, {
     dataset_name: dataset.dataset_name || '',
     data_type: dataset.data_type || 1,
-    time_series_period: dataset.time_series_period || '',
-    validation_rule: dataset.validation_rule || '',
-    file_format: dataset.file_format || [],
-    is_public: dataset.is_public || false,
-    remark: dataset.remark || ''
+    freqs: dataset.freqs || '',
+    check_rules: dataset.check_rules || '',
+    comment: dataset.comment || ''
   });
   
   addDatasetModalVisible.value = true;
 };
 
 const handleDelete = (dataset: any) => {
-  Message.warning(`删除数据集: ${dataset.dataset_name}`);
+  Modal.warning({
+    title: '确认删除',
+    content: `确定要删除数据集"${dataset.dataset_name}"吗？删除后将无法恢复。`,
+    hideCancel: false,
+    onOk: async () => {
+      try {
+        const deleteParams = {
+          proj_id: Number(route.params.projectId),
+          dataset_id: dataset.dataset_id
+        };
+        
+        await deleteDataset(deleteParams);
+        Message.success('数据集删除成功！');
+        
+        // 重新获取项目列表以刷新数据
+        await fetchProjects();
+      } catch (error) {
+        console.error('删除数据集失败:', error);
+        Message.error('删除数据集失败');
+      }
+    }
+  });
 };
 
 // 重置表单
@@ -288,11 +287,9 @@ const resetDatasetForm = () => {
   Object.assign(datasetForm, {
     dataset_name: '',
     data_type: 1,
-    time_series_period: '',
-    validation_rule: '',
-    file_format: [],
-    is_public: false,
-    remark: ''
+    freqs: '',
+    check_rules: '',
+    comment: ''
   });
 };
 
@@ -306,14 +303,28 @@ const handleSubmitDataset = async () => {
     
     if (isEditMode.value && currentEditDataset.value) {
       // 编辑模式 - 更新数据集
-      console.log('更新数据集:', {
-        id: currentEditDataset.value.dataset_id,
-        ...datasetForm
-      });
+      const updateParams = {
+        proj_id: Number(route.params.projectId),
+        dataset_id: currentEditDataset.value.dataset_id,
+        dataset_name: datasetForm.dataset_name,
+        check_rules: datasetForm.check_rules,
+        comment: datasetForm.comment
+      };
+      
+      await updateDataset(updateParams);
       Message.success('数据集更新成功！');
     } else {
       // 添加模式 - 创建数据集
-      console.log('创建数据集:', datasetForm);
+      const createParams = {
+        proj_id: Number(route.params.projectId),
+        dataset_name: datasetForm.dataset_name,
+        data_type: datasetForm.data_type,
+        freqs: datasetForm.freqs,
+        check_rules: datasetForm.check_rules,
+        comment: datasetForm.comment
+      };
+      
+      await createDataset(createParams);
       Message.success('数据集创建成功！');
     }
     

@@ -3,28 +3,34 @@ package util
 import (
 	"context"
 	"fmt"
+	"strconv"
+
+	"github.com/mooyang-code/moox/server/internal/service/auth/model"
+	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
-// GetUserInfoFromContext 从上下文中获取用户信息
-func GetUserInfoFromContext(ctx context.Context) (userID string, username string, role int32, err error) {
-	userIDVal := ctx.Value("user_id")
-	if userIDVal == nil {
-		return "", "", 0, fmt.Errorf("用户ID未在上下文中找到")
-	}
-	userID, ok := userIDVal.(string)
-	if !ok || userID == "" {
-		return "", "", 0, fmt.Errorf("无效的用户ID")
+// GetUserInfoFromHeader 从HTTP header中获取用户信息
+func GetUserInfoFromHeader(ctx context.Context) (userID string, username string, role int32, err error) {
+	header := thttp.Head(ctx)
+	if header == nil {
+		return "", "", 0, fmt.Errorf("获取HTTP头失败")
 	}
 
-	usernameVal := ctx.Value("username")
-	if usernameVal != nil {
-		username, _ = usernameVal.(string)
+	// 获取用户ID
+	userID = header.Request.Header.Get(model.HeaderUserID)
+	if userID == "" {
+		return "", "", 0, fmt.Errorf("用户ID未在header中找到")
 	}
 
-	roleVal := ctx.Value("user_role")
-	if roleVal != nil {
-		role, _ = roleVal.(int32)
-	}
+	// 获取用户名
+	username = header.Request.Header.Get(model.HeaderUsername)
 
+	// 获取用户角色
+	roleStr := header.Request.Header.Get(model.HeaderUserRole)
+	if roleStr != "" {
+		if roleInt, parseErr := strconv.ParseInt(roleStr, 10, 32); parseErr == nil {
+			role = int32(roleInt)
+		}
+	}
 	return userID, username, role, nil
 }

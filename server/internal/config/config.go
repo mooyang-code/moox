@@ -25,7 +25,7 @@ type GatewayConfig struct {
 
 // ServiceDetail 服务详细配置
 type ServiceDetail struct {
-	Address string `yaml:"address"` // 服务地址
+	Address string `yaml:"address"` // 服务地址(可废弃。当前使用thttp，从trpc_go.yaml中读配置)
 	Path    string `yaml:"path"`    // 服务路径
 }
 

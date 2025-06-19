@@ -69,6 +69,10 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           rewrite: path => path.replace(/^\/api/, "")
         },
+        "/gateway": {
+          target: "http://localhost:18202",
+          changeOrigin: true
+        },
         "/trpc.moox.server": {
           target: "http://localhost:18201",
           changeOrigin: true

@@ -15,7 +15,7 @@ const getCurrentHost = () => {
 
 // 创建axios实例
 export const api = axios.create({
-  baseURL: `http://${getCurrentHost()}:18202/gateway/metadata`,
+  baseURL: `http://${getCurrentHost()}:18202/gateway`,
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json',

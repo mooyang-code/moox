@@ -101,12 +101,13 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 // GetUserInfo 获取用户信息
 func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoReq) (*pb.GetUserInfoRsp, error) {
 	log.InfoContextf(ctx, "# GetUserInfo enter:%+v", req)
-	// 从上下文获取用户信息（网关中间件已验证）
-	currentUserID, _, role, err := util.GetUserInfoFromContext(ctx)
+
+	// 从HTTP header获取用户信息（网关中间件已验证）
+	currentUserID, _, role, err := util.GetUserInfoFromHeader(ctx)
 	if err != nil {
 		return &pb.GetUserInfoRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
-			Message: "用户身份验证失败",
+			Message: "用户身份验证失败." + err.Error(),
 		}, nil
 	}
 
@@ -163,12 +164,12 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 
 // UpdateUserInfo 更新用户信息
 func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUserInfoReq) (*pb.UpdateUserInfoRsp, error) {
-	// 从上下文获取用户信息（网关中间件已验证）
-	currentUserID, _, _, err := util.GetUserInfoFromContext(ctx)
+	// 从HTTP header获取用户信息（网关中间件已验证）
+	currentUserID, _, _, err := util.GetUserInfoFromHeader(ctx)
 	if err != nil {
 		return &pb.UpdateUserInfoRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
-			Message: "用户身份验证失败",
+			Message: "用户身份验证失败:" + err.Error(),
 		}, nil
 	}
 

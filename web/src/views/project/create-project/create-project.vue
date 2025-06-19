@@ -256,7 +256,7 @@ const submitProjectData = async () => {
 
     console.log('提交项目数据:', projectData);
     
-    const response = await api.post('/CreateProject', projectData);
+    const response = await api.post('/metadata/CreateProject', projectData);
     console.log('API响应:', response);
     
     // 现在 response.data 直接是精简后的协议数据

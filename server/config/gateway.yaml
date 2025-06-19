@@ -11,10 +11,9 @@ gateway:
   
   # 不需要鉴权的接口列表
   no_auth_methods:
-    - "/trpc.moox.server.AuthAPI/Register"
-    - "/trpc.moox.server.AuthAPI/GetLoginSalt"
-    - "/trpc.moox.server.AuthAPI/Login"
-    - "/trpc.moox.gateway.stdhttp/health"
+    - "/gateway/auth/Register"
+    - "/gateway/auth/GetLoginSalt"
+    - "/gateway/auth/Login"
   
   # 服务配置映射
   services:

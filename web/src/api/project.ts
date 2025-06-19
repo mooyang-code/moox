@@ -5,9 +5,9 @@ export interface Dataset {
   dataset_id: number;
   dataset_name: string;
   data_type: number;
-  time_series_period: string;
-  validation_rule: string;
-  remark: string;
+  freqs: string; // 时序周期
+  check_rules: string; // 校验规则
+  comment: string; // 备注
 }
 
 export interface Project {
@@ -29,7 +29,7 @@ export interface ListProjectsResponse {
 // 获取项目列表
 export const listProjects = async (): Promise<Project[]> => {
   try {
-    const response = await api.post('/ListProjects', {
+    const response = await api.post('/metadata/ListProjects', {
       auth_info: AUTH_INFO
     });
     

@@ -12,8 +12,8 @@ import (
 
 // GetChangePasswordSalt 获取修改密码盐值
 func (s *AuthServiceImpl) GetChangePasswordSalt(ctx context.Context, req *pb.GetChangePasswordSaltReq) (*pb.GetChangePasswordSaltRsp, error) {
-	// 从上下文获取用户信息（网关中间件已验证）
-	currentUserID, _, _, err := util.GetUserInfoFromContext(ctx)
+	// 从HTTP header获取用户信息（网关中间件已验证）
+	currentUserID, _, _, err := util.GetUserInfoFromHeader(ctx)
 	if err != nil {
 		return &pb.GetChangePasswordSaltRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
@@ -54,8 +54,8 @@ func (s *AuthServiceImpl) GetChangePasswordSalt(ctx context.Context, req *pb.Get
 
 // ChangePassword 修改密码
 func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePasswordReq) (*pb.ChangePasswordRsp, error) {
-	// 从上下文获取用户信息（网关中间件已验证）
-	currentUserID, _, _, err := util.GetUserInfoFromContext(ctx)
+	// 从HTTP header获取用户信息（网关中间件已验证）
+	currentUserID, _, _, err := util.GetUserInfoFromHeader(ctx)
 	if err != nil {
 		return &pb.ChangePasswordRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
@@ -67,7 +67,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	if !s.validateChangePasswordSalt(ctx, currentUserID, req.Salt, req.Timestamp) {
 		return &pb.ChangePasswordRsp{
 			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
-			Message: "盐值或时间戳无效",
+			Message: "盐值或时间戳无效，请刷新页面重新登录！",
 		}, nil
 	}
 

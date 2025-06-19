@@ -10,7 +10,7 @@ export const loginAPI = async (data: { username: string; password: string; verif
 // 获取登录盐值
 export const getLoginSaltAPI = (data: { username: string }) => {
   return axios({
-    url: "/trpc.moox.server.AuthAPI/GetLoginSalt",
+    url: "/gateway/auth/GetLoginSalt",
     method: "post",
     data: {
       app_info: {
@@ -25,7 +25,7 @@ export const getLoginSaltAPI = (data: { username: string }) => {
 // 获取用户信息 - 调用真实后台接口
 export const getUserInfoAPI = (accessToken: string) => {
   return axios({
-    url: "/trpc.moox.server.AuthAPI/GetUserInfo",
+    url: "/gateway/auth/GetUserInfo",
     method: "post",
     data: {
       app_info: {

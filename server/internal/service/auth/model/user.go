@@ -156,3 +156,10 @@ const (
 	ActionUpdateProfile  = "update_profile"
 	ActionGetUserInfo    = "get_user_info"
 )
+
+// HTTP Header 常量
+const (
+	HeaderUserID   = "X-User-ID"
+	HeaderUsername = "X-User-Name"
+	HeaderUserRole = "X-User-Role"
+)

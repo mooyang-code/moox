@@ -37,6 +37,30 @@ client:
       network: unix # 注意：若是多机分布式部署，此处应改为tcp
       protocol: trpc
       timeout: 1000
+    - name: storage
+      network: tcp
+      protocol: http
+      target: ip://127.0.0.1:18106
+      timeout: 1000 #请求最长处理时间 
+      disable_servicerouter: true
+    - name: auth
+      network: tcp
+      protocol: http
+      target: ip://127.0.0.1:18201
+      timeout: 1000 #请求最长处理时间 
+      disable_servicerouter: true
+    - name: metadata
+      network: tcp
+      protocol: http
+      target: ip://127.0.0.1:18105
+      timeout: 1000 #请求最长处理时间 
+      disable_servicerouter: true
+    - name: admin
+      network: tcp
+      protocol: http
+      target: ip://127.0.0.1:18203
+      timeout: 1000 #请求最长处理时间 
+      disable_servicerouter: true
 
 plugins:
   auth:

@@ -142,7 +142,7 @@ export function generateDeviceId(): string {
     private async _fetchSalt(username: string): Promise<any> {
       console.log('🌐 请求新的登录盐值...', { username });
       
-      const response = await fetch(`http://${window.location.hostname}:18201/trpc.moox.server.AuthAPI/GetLoginSalt`, {
+      const response = await fetch(`/gateway/auth/GetLoginSalt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -205,7 +205,7 @@ export function generateDeviceId(): string {
         });
   
         // 4. 发送登录请求
-        const response = await fetch(`http://${window.location.hostname}:18201/trpc.moox.server.AuthAPI/Login`, {
+        const response = await fetch(`/gateway/auth/Login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(loginRequest)
