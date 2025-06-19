@@ -5,9 +5,9 @@ export interface Dataset {
   dataset_id: number;
   dataset_name: string;
   data_type: number;
-  freqs: string; // 时序周期
-  check_rules: string; // 校验规则
-  comment: string; // 备注
+  time_series_period: string; // 时序周期，对应后端的time_series_period
+  validation_rule: string; // 校验规则，对应后端的validation_rule
+  remark: string; // 备注，对应后端的remark
 }
 
 export interface Project {

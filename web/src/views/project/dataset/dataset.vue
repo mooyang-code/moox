@@ -19,25 +19,25 @@
             hoverable
           >
             <template #title>
-              <div class="card-header">{{ dataset.dataset_id }}</div>
+              <div class="card-header">数据集ID: {{ dataset.dataset_id }}</div>
             </template>
             
             <div class="card-content">
               <h3 class="card-title">{{ dataset.dataset_name }}</h3>
-              <p class="card-subtitle">{{ dataset.comment || '无备注' }}</p>
+              <p class="card-subtitle">{{ dataset.remark || '无备注' }}</p>
               
               <div class="dataset-info">
                 <div class="info-item">
                   <span class="info-label">数据类型:</span>
                   <span class="info-value">{{ dataset.data_type === 1 ? '静态数据' : '时序数据' }}</span>
                 </div>
-                <div class="info-item" v-if="dataset.data_type === 2 && dataset.freqs">
+                <div class="info-item" v-if="dataset.data_type === 2 && dataset.time_series_period">
                   <span class="info-label">时序周期:</span>
-                  <span class="info-value">{{ dataset.freqs }}</span>
+                  <span class="info-value">{{ dataset.time_series_period }}</span>
                 </div>
-                <div class="info-item" v-if="dataset.check_rules">
+                <div class="info-item" v-if="dataset.validation_rule">
                   <span class="info-label">校验规则:</span>
-                  <span class="info-value">{{ dataset.check_rules }}</span>
+                  <span class="info-value">{{ dataset.validation_rule }}</span>
                 </div>
               </div>
             </div>
@@ -118,28 +118,33 @@
         <a-form-item 
           field="data_type" 
           label="数据类型"
-          :rules="[{ required: true, message: '请选择数据类型' }]"
+          :rules="isEditMode ? [] : [{ required: true, message: '请选择数据类型' }]"
         >
-          <a-radio-group v-model="datasetForm.data_type">
+          <a-radio-group v-model="datasetForm.data_type" :disabled="isEditMode">
             <a-radio :value="1">静态数据</a-radio>
             <a-radio :value="2">时序数据</a-radio>
           </a-radio-group>
+          <div v-if="isEditMode" style="font-size: 12px; color: #8c8c8c; margin-top: 4px;">
+            编辑模式下数据类型不可修改
+          </div>
         </a-form-item>
 
         <a-form-item 
           field="freqs" 
           label="时序周期"
           v-if="datasetForm.data_type === 2"
-          :rules="[{ required: true, message: '时序数据需要设置时序周期' }]"
+          :rules="isEditMode ? [] : [{ required: true, message: '时序数据需要设置时序周期' }]"
         >
           <a-input 
             v-model="datasetForm.freqs" 
             placeholder="请输入时序周期，如：1m+5m+1H+1D" 
             allow-clear 
+            :disabled="isEditMode"
           />
           <template #extra>
             <div style="font-size: 12px; color: #8c8c8c;">
-              多个周期用+分割，例如：1m+5m+1H+1D（1分钟+5分钟+1小时+1天）
+              <span v-if="!isEditMode">多个周期用+分割，例如：1m+5m+1H+1D（1分钟+5分钟+1小时+1天）</span>
+              <span v-else>编辑模式下时序周期不可修改</span>
             </div>
           </template>
         </a-form-item>
@@ -245,13 +250,13 @@ const handleEdit = (dataset: any) => {
   isEditMode.value = true;
   currentEditDataset.value = dataset;
   
-  // 预填充表单数据
+  // 预填充表单数据，需要将后端字段映射到表单字段
   Object.assign(datasetForm, {
     dataset_name: dataset.dataset_name || '',
     data_type: dataset.data_type || 1,
-    freqs: dataset.freqs || '',
-    check_rules: dataset.check_rules || '',
-    comment: dataset.comment || ''
+    freqs: dataset.time_series_period || '', // 后端字段time_series_period映射到表单freqs
+    check_rules: dataset.validation_rule || '', // 后端字段validation_rule映射到表单check_rules
+    comment: dataset.remark || '' // 后端字段remark映射到表单comment
   });
   
   addDatasetModalVisible.value = true;
@@ -362,9 +367,9 @@ onMounted(() => {
 
 .cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 20px;
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
 }
 
@@ -374,7 +379,7 @@ onMounted(() => {
   background-color: #fafafa;
   transition: all 0.3s ease;
   cursor: pointer;
-  height: 200px;
+  height: 240px;
   box-sizing: border-box;
 }
 
@@ -411,10 +416,10 @@ onMounted(() => {
   background-color: white;
   border: 1px solid #e8e8e8;
   transition: all 0.3s ease;
-  height: 200px;
+  height: 240px;
   display: flex;
   flex-direction: column;
-  padding: 12px 16px;
+  padding: 20px 18px 14px 18px;
   box-sizing: border-box;
 }
 
@@ -423,21 +428,36 @@ onMounted(() => {
   border-color: #1890ff;
 }
 
+/* 确保卡片标题区域有足够空间 */
+.dataset-card :deep(.arco-card-header) {
+  padding: 6px 0 8px 0 !important;
+  border-bottom: none !important;
+}
+
+.dataset-card :deep(.arco-card-body) {
+  padding: 0 !important;
+}
+
 .card-header {
   font-size: 12px;
   color: #8c8c8c;
   font-weight: normal;
-  margin-bottom: 6px;
-  padding-bottom: 2px;
+  margin-bottom: 8px;
+  padding: 2px 0 6px 0;
+  line-height: 1.5;
+  border-bottom: 1px solid #d9d9d9;
 }
 
 .card-content {
-  padding: 0;
+  padding: 0 20px;
   flex: 1;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   overflow: hidden;
   min-height: 0;
+  max-width: calc(100% - 40px);
+  margin: 0 auto;
 }
 
 .card-title {
@@ -449,10 +469,15 @@ onMounted(() => {
 }
 
 .card-subtitle {
-  font-size: 14px;
+  font-size: 13px;
   color: #8c8c8c;
-  margin: 0 0 12px 0;
-  line-height: 1.3;
+  margin: 0 0 10px 0;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dataset-info {
@@ -466,7 +491,7 @@ onMounted(() => {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
     
     &:last-child {
       margin-bottom: 0;
@@ -491,10 +516,13 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 0 0 0;
-  border-top: 1px solid #f0f0f0;
+  padding: 8px 20px 0 20px;
+  border-top: 1px solid #d9d9d9;
   margin-top: auto;
   flex-shrink: 0;
+  max-width: calc(100% - 40px);
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .card-actions .arco-btn {
