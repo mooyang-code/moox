@@ -13,7 +13,7 @@ import (
 // GetChangePasswordSalt 获取修改密码盐值
 func (s *AuthServiceImpl) GetChangePasswordSalt(ctx context.Context, req *pb.GetChangePasswordSaltReq) (*pb.GetChangePasswordSaltRsp, error) {
 	// 从HTTP header获取用户信息（网关中间件已验证）
-	currentUserID, _, _, err := util.GetUserInfoFromHeader(ctx)
+	currentUserID, _, _, err := util.GetUserInfoFromCtx(ctx)
 	if err != nil {
 		return &pb.GetChangePasswordSaltRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
@@ -55,7 +55,7 @@ func (s *AuthServiceImpl) GetChangePasswordSalt(ctx context.Context, req *pb.Get
 // ChangePassword 修改密码
 func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePasswordReq) (*pb.ChangePasswordRsp, error) {
 	// 从HTTP header获取用户信息（网关中间件已验证）
-	currentUserID, _, _, err := util.GetUserInfoFromHeader(ctx)
+	currentUserID, _, _, err := util.GetUserInfoFromCtx(ctx)
 	if err != nil {
 		return &pb.ChangePasswordRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,

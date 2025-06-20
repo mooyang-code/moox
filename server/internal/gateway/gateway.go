@@ -11,7 +11,6 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/mooyang-code/moox/server/internal/config"
-	"github.com/mooyang-code/moox/server/internal/service/auth/model"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 	thttp "trpc.group/trpc-go/trpc-go/http"
@@ -348,28 +347,6 @@ func (h *HTTPServiceHandler) buildRequestHeaders(ctx context.Context, headers ma
 	// 添加配置中的请求头
 	for key, value := range h.config.Headers {
 		reqHead.AddHeader(key, value)
-	}
-
-	// 从context中获取用户信息并添加到请求头
-	userID := ctx.Value(model.HeaderUserID)
-	if userID != nil {
-		reqHead.AddHeader(model.HeaderUserID, userID.(string))
-	}
-	username := ctx.Value(model.HeaderUsername)
-	if username != nil {
-		reqHead.AddHeader(model.HeaderUsername, username.(string))
-	}
-	userRole := ctx.Value(model.HeaderUserRole)
-	if userRole != nil {
-		reqHead.AddHeader(model.HeaderUserRole, fmt.Sprintf("%d", userRole.(int32)))
-	}
-
-	// 记录用户信息日
-	log.InfoContextf(ctx, "userID: %s, username: %s", userID, username)
-
-	// 添加追踪ID
-	if traceID := headers["trace_id"]; traceID != "" {
-		reqHead.AddHeader("X-Trace-ID", traceID)
 	}
 	return reqHead
 }

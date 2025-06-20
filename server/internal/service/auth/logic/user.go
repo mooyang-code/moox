@@ -70,31 +70,12 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 	// 6. 记录操作日志
 	s.recordUserAction(ctx, userID, model.ActionRegister, "", "用户注册成功", "", "", "success")
 
-	// 7. 构造返回的用户信息
-	var lastLoginAt int64
-	if user.LastLoginAt != nil {
-		lastLoginAt = user.LastLoginAt.Unix()
-	}
-
-	userInfo := &pb.UserInfo{
-		UserId:      user.UserID,
-		Username:    user.Username,
-		Nickname:    user.Nickname,
-		Email:       user.Email,
-		Avatar:      user.Avatar,
-		Status:      pb.UserStatus(user.Status),
-		Role:        pb.UserRole(user.Role),
-		CreatedAt:   user.CreatedAt.Unix(),
-		LastLoginAt: lastLoginAt,
-		LastLoginIp: user.LastLoginIP,
-	}
-
 	log.InfoContextf(ctx, "用户注册成功: %s", userID)
 	return &pb.RegisterRsp{
 		Code:     pb.EnumMooxErrorCode_SUCCESS,
 		Message:  "用户注册成功",
 		UserId:   userID,
-		UserInfo: userInfo,
+		UserInfo: util.BuildSafeUserInfo(user), // 构造返回的用户信息（安全转义）
 	}, nil
 }
 
@@ -103,7 +84,7 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 	log.InfoContextf(ctx, "# GetUserInfo enter:%+v", req)
 
 	// 从HTTP header获取用户信息（网关中间件已验证）
-	currentUserID, _, role, err := util.GetUserInfoFromHeader(ctx)
+	currentUserID, _, role, err := util.GetUserInfoFromCtx(ctx)
 	if err != nil {
 		return &pb.GetUserInfoRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
@@ -136,24 +117,8 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 	// 记录操作日志
 	s.recordUserAction(ctx, currentUserID, model.ActionGetUserInfo, targetUserID, "获取用户信息", "", "", "success")
 
-	// 构造用户信息
-	var lastLoginAt int64
-	if user.LastLoginAt != nil {
-		lastLoginAt = user.LastLoginAt.Unix()
-	}
-
-	userInfo := &pb.UserInfo{
-		UserId:      user.UserID,
-		Username:    user.Username,
-		Nickname:    user.Nickname,
-		Email:       user.Email,
-		Avatar:      user.Avatar,
-		Status:      pb.UserStatus(user.Status),
-		Role:        pb.UserRole(user.Role),
-		CreatedAt:   user.CreatedAt.Unix(),
-		LastLoginAt: lastLoginAt,
-		LastLoginIp: user.LastLoginIP,
-	}
+	// 构造用户信息（安全转义）
+	userInfo := util.BuildSafeUserInfo(user)
 
 	return &pb.GetUserInfoRsp{
 		Code:     pb.EnumMooxErrorCode_SUCCESS,
@@ -165,7 +130,7 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 // UpdateUserInfo 更新用户信息
 func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUserInfoReq) (*pb.UpdateUserInfoRsp, error) {
 	// 从HTTP header获取用户信息（网关中间件已验证）
-	currentUserID, _, _, err := util.GetUserInfoFromHeader(ctx)
+	currentUserID, _, _, err := util.GetUserInfoFromCtx(ctx)
 	if err != nil {
 		return &pb.UpdateUserInfoRsp{
 			Code:    pb.EnumMooxErrorCode_NO_AUTH,
@@ -211,28 +176,9 @@ func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUser
 	// 记录操作日志
 	s.recordUserAction(ctx, user.UserID, model.ActionUpdateProfile, "", "更新用户信息", "", "", "success")
 
-	// 构造用户信息
-	var lastLoginAt int64
-	if user.LastLoginAt != nil {
-		lastLoginAt = user.LastLoginAt.Unix()
-	}
-
-	userInfo := &pb.UserInfo{
-		UserId:      user.UserID,
-		Username:    user.Username,
-		Nickname:    user.Nickname,
-		Email:       user.Email,
-		Avatar:      user.Avatar,
-		Status:      pb.UserStatus(user.Status),
-		Role:        pb.UserRole(user.Role),
-		CreatedAt:   user.CreatedAt.Unix(),
-		LastLoginAt: lastLoginAt,
-		LastLoginIp: user.LastLoginIP,
-	}
-
 	return &pb.UpdateUserInfoRsp{
 		Code:     pb.EnumMooxErrorCode_SUCCESS,
 		Message:  "更新用户信息成功",
-		UserInfo: userInfo,
+		UserInfo: util.BuildSafeUserInfo(user), // 构造用户信息（安全转义）
 	}, nil
 }

@@ -157,9 +157,10 @@ const (
 	ActionGetUserInfo    = "get_user_info"
 )
 
-// HTTP Header 常量
+// 上下文元数据键常量
 const (
-	HeaderUserID   = "X-User-ID"
-	HeaderUsername = "X-User-Name"
-	HeaderUserRole = "X-User-Role"
+	CtxUserID   = "X-User-ID"
+	CtxUsername = "X-User-Name"
+	CtxUserRole = "X-User-Role"
+	CtxTraceID  = "X-Trace-ID"
 )

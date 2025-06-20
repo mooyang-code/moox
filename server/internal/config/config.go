@@ -31,8 +31,18 @@ type ServiceDetail struct {
 
 // RateLimitConfig 限流配置
 type RateLimitConfig struct {
-	RequestsPerMinute int `yaml:"requests_per_minute"` // 每分钟请求次数限制
-	Burst             int `yaml:"burst"`               // 突发请求限制
+	// 全局默认限流配置
+	DefaultQPS   int `yaml:"default_qps"`   // 默认QPS限制
+	DefaultBurst int `yaml:"default_burst"` // 默认突发流量
+
+	// 按接口配置限流
+	MethodLimits map[string]MethodLimit `yaml:"method_limits"`
+}
+
+// MethodLimit 接口级别限流配置
+type MethodLimit struct {
+	QPS   int `yaml:"qps"`
+	Burst int `yaml:"burst"`
 }
 
 // ServiceConfig 服务配置

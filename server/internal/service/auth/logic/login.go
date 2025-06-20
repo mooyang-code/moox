@@ -2,6 +2,7 @@ package logic
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/mooyang-code/moox/server/internal/service/auth/model"
@@ -13,6 +14,14 @@ import (
 // Login 用户登录
 func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, error) {
 	log.InfoContextf(ctx, "***** Login username: %s; req: %+v *****", req.Username, req)
+
+	// 0. 验证用户名和密码格式
+	if err := s.validateCredentialFormat(req.Username, req.PasswordHash); err != nil {
+		return &pb.LoginRsp{
+			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
+			Message: err.Error(),
+		}, nil
+	}
 
 	// 1. 验证盐值和时间戳
 	if !s.validateLoginSalt(ctx, req.Username, req.Salt, req.Timestamp) {
@@ -75,19 +84,8 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 		}, nil
 	}
 
-	// 构造用户信息
-	userInfo := &pb.UserInfo{
-		UserId:      user.UserID,
-		Username:    user.Username,
-		Nickname:    user.Nickname,
-		Email:       user.Email,
-		Avatar:      user.Avatar,
-		Status:      pb.UserStatus(user.Status),
-		Role:        pb.UserRole(user.Role),
-		CreatedAt:   user.CreatedAt.Unix(),
-		LastLoginAt: user.LastLoginAt.Unix(),
-		LastLoginIp: user.LastLoginIP,
-	}
+	// 构造用户信息（安全转义）
+	userInfo := util.BuildSafeUserInfo(user)
 
 	return &pb.LoginRsp{
 		Code:        pb.EnumMooxErrorCode_SUCCESS,
@@ -154,4 +152,24 @@ func (s *AuthServiceImpl) GetLoginSalt(ctx context.Context, req *pb.GetLoginSalt
 		Timestamp: timestamp,
 		ExpiresIn: int64(s.cfg.Security.SaltExpired.Seconds()),
 	}, nil
+}
+
+// validateCredentialFormat 验证用户名和密码格式
+func (s *AuthServiceImpl) validateCredentialFormat(username, passwordHash string) error {
+	// 验证用户名格式
+	if err := util.ValidateStringFormat(username, "用户名"); err != nil {
+		return err
+	}
+
+	// 验证密码哈希格式（这里验证的是客户端传来的密码哈希）
+	// 密码哈希通常是固定长度的十六进制字符串，但为了安全起见，也做基本格式检查
+	if passwordHash == "" {
+		return fmt.Errorf("密码不能为空")
+	}
+
+	// 密码哈希长度检查（通常SHA256哈希是64个字符）
+	if len(passwordHash) < 32 || len(passwordHash) > 128 {
+		return fmt.Errorf("密码格式无效")
+	}
+	return nil
 }

@@ -19,13 +19,14 @@ server:
       network: tcp  # 网络监听类型，tcp 或 udp
       protocol: http  # 应用层协议 
       timeout: 1000  # 请求最长处理时间，单位毫秒
-    - name: trpc.moox.gateway.stdhttp # Moox http网关接口
+    - name: trpc.moox.gateway.stdhttp ######## Moox http网关接口 ########
       #ip: 0.0.0.0
       port: 18202
       network: tcp  # 网络监听类型，tcp 或 udp
       protocol: http  # 应用层协议 
       timeout: 5000  # 请求最长处理时间，单位毫秒
       filter:
+        - ratelimit
         - authorize
       
 client:
@@ -74,7 +75,7 @@ plugins:
   log:
     default: 
       - writer: file                              #本地文件日志
-        level: info                              #本地文件滚动日志的级别
+        level: info                               #本地文件滚动日志的级别
         writer_config:                            #本地文件输出具体配置
           log_path: ../log                        #本地文件日志路径
           filename: trpc.log                      #本地文件日志文件名

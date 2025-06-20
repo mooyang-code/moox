@@ -1,15 +1,15 @@
 <template>
   <div>
     <div class="login_form_box">
-      <a-form :rules="rules" :model="form" layout="vertical" @submit="onSubmit">
-        <a-form-item field="username" :hide-asterisk="true">
+      <a-form ref="formRef" :rules="rules" :model="form" layout="vertical" @submit="onSubmit">
+        <a-form-item field="username" :hide-asterisk="true" validate-trigger="input">
           <a-input v-model="form.username" allow-clear placeholder="请输入账号">
             <template #prefix>
               <icon-user />
             </template>
           </a-input>
         </a-form-item>
-        <a-form-item field="password" :hide-asterisk="true">
+        <a-form-item field="password" :hide-asterisk="true" validate-trigger="input">
           <a-input-password v-model="form.password" allow-clear placeholder="请输入密码">
             <template #prefix>
               <icon-lock />
@@ -51,6 +51,9 @@ let userStores = useUserInfoStore();
 const routeStore = useRoutesConfigStore();
 const router = useRouter();
 
+// 表单引用
+const formRef = ref();
+
 // 移除写死的账号密码，提高安全性
 const form = ref({
   username: "",
@@ -59,17 +62,83 @@ const form = ref({
   remember: false
 });
 
+// 验证字符串格式的函数（类似后端的validateStringFormat）
+const validateStringFormat = (value: string, fieldName: string): Promise<boolean> => {
+  return new Promise((resolve, reject) => {
+    // 检查长度
+    if (value.length < 1 || value.length > 20) {
+      reject(`${fieldName}长度必须在1-20个字符之间`);
+      return;
+    }
+
+    // 检查字符类型（仅支持大小写字母和数字）
+    const regex = /^[a-zA-Z0-9]+$/;
+    if (!regex.test(value)) {
+      reject(`${fieldName}只能包含大小写字母和数字`);
+      return;
+    }
+
+    resolve(true);
+  });
+};
+
 const rules = ref({
   username: [
     {
       required: true,
       message: "请输入账号"
+    },
+    {
+      validator: (value: string, callback: (error?: string) => void) => {
+        if (!value || value.trim().length === 0) {
+          callback();
+          return;
+        }
+        
+        // 检查长度
+        if (value.length < 1 || value.length > 20) {
+          callback("账号长度必须在1-20个字符之间");
+          return;
+        }
+
+        // 检查字符类型（仅支持大小写字母和数字）
+        const regex = /^[a-zA-Z0-9]+$/;
+        if (!regex.test(value)) {
+          callback("账号只能包含大小写字母和数字");
+          return;
+        }
+
+        callback();
+      }
     }
   ],
   password: [
     {
       required: true,
       message: "请输入密码"
+    },
+    {
+      validator: (value: string, callback: (error?: string) => void) => {
+        if (!value || value.trim().length === 0) {
+          callback();
+          return;
+        }
+        
+        // 检查长度
+        if (value.length < 1 || value.length > 20) {
+          callback("密码长度必须在1-20个字符之间");
+          return;
+        }
+
+        // 检查字符类型（仅支持大小写字母和数字）
+        const regex = /^[a-zA-Z0-9]+$/;
+        if (!regex.test(value)) {
+          callback("密码只能包含大小写字母和数字");
+          return;
+        }
+
+        callback();
+      }
     }
   ]
 });
@@ -81,8 +150,21 @@ const verifyCodeChange = (code: string) => (verifyCode.value = code);
 const loginLoading = ref(false);
 
 // 提交表单
-const onSubmit = async ({ errors }: any) => {
-  if (errors) return;
+const onSubmit = async ({ errors, values }: any) => {
+  console.log('📝 表单提交验证:', { errors, values });
+  
+  if (errors) {
+    console.log('❌ 表单验证失败:', errors);
+    Message.error("请修正表单中的错误后重试");
+    return;
+  }
+  
+  // 额外的安全检查
+  if (!values.username || !values.password) {
+    Message.error("请填写完整的登录信息");
+    return;
+  }
+  
   onLogin();
 };
 
@@ -93,6 +175,14 @@ const onLogin = async () => {
   try {
     loginLoading.value = true;
     
+    // 首先进行表单验证
+    const validateResult = await formRef.value?.validate();
+    if (validateResult) {
+      console.log('❌ 表单验证失败:', validateResult);
+      Message.error("请修正输入格式错误");
+      return;
+    }
+    
     // 检查必填字段
     if (!form.value.username.trim()) {
       Message.error("请输入账号");
@@ -100,6 +190,15 @@ const onLogin = async () => {
     }
     if (!form.value.password.trim()) {
       Message.error("请输入密码");
+      return;
+    }
+    
+    // 执行字符串格式验证
+    try {
+      await validateStringFormat(form.value.username, "账号");
+      await validateStringFormat(form.value.password, "密码");
+    } catch (error: any) {
+      Message.error(error);
       return;
     }
     

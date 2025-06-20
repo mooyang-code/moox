@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	gatewayConfig "github.com/mooyang-code/moox/server/internal/config"
@@ -9,8 +10,6 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/auth/model"
 	"github.com/mooyang-code/moox/server/internal/service/auth/util"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/filter"
 	thttp "trpc.group/trpc-go/trpc-go/http"
@@ -68,10 +67,10 @@ func loadNoAuthMethods() {
 		log.Errorf("加载网关配置失败: %v", err)
 		// 使用默认配置
 		noAuthMethodsMap = map[string]bool{
-			"/trpc.moox.server.AuthAPI/Register":     true,
-			"/trpc.moox.server.AuthAPI/GetLoginSalt": true,
-			"/trpc.moox.server.AuthAPI/Login":        true,
-			"/trpc.moox.gateway.stdhttp/health":      true,
+			"/gateway/auth/Register":            true,
+			"/gateway/auth/GetLoginSalt":        true,
+			"/gateway/auth/Login":               true,
+			"/trpc.moox.gateway.stdhttp/health": true,
 		}
 		return
 	}
@@ -138,16 +137,16 @@ func Authorize() filter.ServerFilter {
 		}
 
 		// 同时将用户信息保存到上下文中（底层接口需要这些信息）
-		ctx = context.WithValue(ctx, model.HeaderUserID, claims.UserID)
-		ctx = context.WithValue(ctx, model.HeaderUsername, claims.Username)
-		ctx = context.WithValue(ctx, model.HeaderUserRole, claims.Role)
+		trpc.SetMetaData(ctx, model.CtxUserID, []byte(claims.UserID))
+		trpc.SetMetaData(ctx, model.CtxUsername, []byte(claims.Username))
+		trpc.SetMetaData(ctx, model.CtxUserRole, []byte(fmt.Sprintf("%d", claims.Role)))
 
-		span := trace.SpanFromContext(ctx) // span,用于未来全链路定位问题
-		span.SetAttributes(attribute.String(model.HeaderUserID, claims.UserID))
-		log.InfoContextf(ctx, "接口 [%s] 鉴权通过", rpcName)
+		traceID := getTokenFromHeader(header, model.CtxTraceID)
+		trpc.SetMetaData(ctx, model.CtxTraceID, []byte(traceID))
+		log.InfoContextf(ctx, "接口 [%s] 鉴权通过，用户ID: %s, TraceID: %s", rpcName, claims.UserID, traceID)
 
 		// 继续执行下一个处理器
-		rsp, err := next(context.WithValue(ctx, model.HeaderUserID, claims.UserID), req)
+		rsp, err := next(context.WithValue(ctx, model.CtxUserID, claims.UserID), req)
 		if err != nil {
 			log.ErrorContextf(ctx, "接口 [%s] 执行失败: %v", rpcName, err)
 		}

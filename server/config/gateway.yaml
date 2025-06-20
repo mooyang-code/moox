@@ -39,7 +39,21 @@ gateway:
 
 # 限流配置
 rate_limit:
-  # 每分钟请求次数限制
-  requests_per_minute: 100
-  # 突发请求限制
-  burst: 10
+  # 默认限流配置
+  default_qps: 20      # 默认QPS限制
+  default_burst: 50    # 默认突发流量
+  
+  # 按接口配置限流
+  method_limits:
+    "/gateway/auth/Login":
+      qps: 1
+      burst: 2
+    "/gateway/auth/Register":
+      qps: 1
+      burst: 1
+    "/gateway/auth/GetLoginSalt":
+      qps: 2
+      burst: 5
+    "/gateway/auth/GetUserInfo":
+      qps: 2
+      burst: 5
