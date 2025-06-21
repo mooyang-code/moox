@@ -8,7 +8,7 @@ import (
 	gatewayConfig "github.com/mooyang-code/moox/server/internal/config"
 	authConfig "github.com/mooyang-code/moox/server/internal/service/auth/config"
 	"github.com/mooyang-code/moox/server/internal/service/auth/model"
-	"github.com/mooyang-code/moox/server/internal/service/auth/util"
+	"github.com/mooyang-code/moox/server/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/filter"
@@ -178,7 +178,7 @@ func getAccessTokenFromRequest(ctx context.Context, header *thttp.Header, req in
 }
 
 // validateAccessToken 验证访问令牌并返回用户信息
-func validateAccessToken(ctx context.Context, accessToken string) (*util.JWTClaims, bool) {
+func validateAccessToken(ctx context.Context, accessToken string) (*utils.JWTClaims, bool) {
 	// 获取JWT密钥（带缓存）
 	secretKey := getJWTSecretKey(ctx)
 	if secretKey == "" {
@@ -187,7 +187,7 @@ func validateAccessToken(ctx context.Context, accessToken string) (*util.JWTClai
 	}
 
 	// 验证JWT令牌
-	claims, err := util.ParseJWT(accessToken, secretKey)
+	claims, err := utils.ParseJWT(accessToken, secretKey)
 	if err != nil {
 		log.ErrorContextf(ctx, "JWT令牌验证失败: %v", err)
 		return nil, false
@@ -198,9 +198,11 @@ func validateAccessToken(ctx context.Context, accessToken string) (*util.JWTClai
 
 // createAuthFailResponse 创建鉴权失败响应
 func createAuthFailResponse() interface{} {
-	return &pb.GetUserInfoRsp{
-		Code:    pb.EnumMooxErrorCode_NO_AUTH,
-		Message: "访问令牌无效，请退出重新登录(gateway)",
+	return &pb.MiddlewareRsp{
+		RetInfo: &pb.RetInfo{
+			Code: pb.EnumMooxErrorCode_NO_AUTH,
+			Msg:  "访问令牌无效，请退出重新登录(gateway)",
+		},
 	}
 }
 

@@ -65,10 +65,20 @@ const userInfoStore = () => {
       
       console.log("setAccount: 后台响应:", response);
       
-      // 适配真实后台接口响应格式 - 使用response.data访问实际数据
+      // 使用新的ret_info协议格式
       const data = response.data || response;
       
-      if (data && data.code === 0 && data.user_info) {
+      // 添加安全检查
+      if (!data) {
+        throw new Error('获取用户信息失败：响应数据为空');
+      }
+      
+      if (!data.ret_info) {
+        throw new Error('获取用户信息失败：响应格式错误，缺少ret_info字段');
+      }
+      
+      // 检查ret_info
+      if (data.ret_info.code === 0 && data.user_info) {
         const userInfo = data.user_info;
         
         console.log("setAccount: 用户信息:", userInfo);
@@ -105,10 +115,10 @@ const userInfoStore = () => {
         
         console.log("setAccount: 用户信息设置成功", account.value);
       } else {
-        const errorMessage = data?.message || "获取用户信息失败：响应格式错误";
+        const errorMessage = data.ret_info.msg || "获取用户信息失败：响应格式错误";
         console.error("setAccount: API响应错误", {
-          code: data?.code,
-          message: data?.message,
+          code: data.ret_info.code,
+          message: data.ret_info.msg,
           hasUserInfo: !!data?.user_info,
           response: response
         });
@@ -125,7 +135,7 @@ const userInfoStore = () => {
       };
       
       // 关键修复：清除无效的token，避免路由守卫死循环
-      if (error.code === 3 || error.message?.includes('访问令牌无效')) {
+      if (error.ret_info?.code === 3 || error.message?.includes('访问令牌无效')) {
         console.log("setAccount: 检测到token无效，清除token避免死循环");
         token.value = "";
         // 同时清除localStorage中的持久化数据

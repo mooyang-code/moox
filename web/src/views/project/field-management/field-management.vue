@@ -171,9 +171,28 @@ import { Message } from '@arco-design/web-vue';
 import { IconPlus, IconEdit, IconDelete, IconSearch, IconRefresh } from '@arco-design/web-vue/es/icon';
 import { listProjects, type Project } from '@/api/project';
 import { FIELD_SECONDARY_FORMAT_OPTIONS, getFieldSecondaryFormatName } from '@/typings/field-format';
+import { 
+  searchFields, 
+  createField, 
+  updateField, 
+  deleteField,
+  type FieldDetailInfo,
+  type SearchFieldReq,
+  type CreateFieldReq,
+  type UpdateFieldReq,
+  type AuthInfo
+} from '@/api/field';
 
 const route = useRoute();
 const router = useRouter();
+
+// 获取认证信息
+const getAuthInfo = (): AuthInfo => {
+  return {
+    app_id: 'moox_frontend',
+    app_key: '2521e0d21b6be0347b72bca93904a0dd'
+  };
+};
 
 // 项目列表
 const projects = ref<Project[]>([]);
@@ -194,7 +213,7 @@ const fetchProjects = async () => {
   }
 };
 
-// 字段类型定义
+// 字段类型定义，映射后台API返回的字段
 interface FieldRecord {
   id: number;
   fieldName: string;
@@ -289,94 +308,75 @@ const onPageChange = (current: number) => {
   getFieldList();
 };
 
+// 将后台API字段转换为前端显示字段
+const convertApiFieldToRecord = (apiField: FieldDetailInfo): FieldRecord => {
+  return {
+    id: apiField.field_id,
+    fieldName: apiField.field_name,
+    fieldNameEn: apiField.interface_name,
+    fieldDescription: apiField.desc,
+    primaryFormat: String(apiField.field_format_type.field_primary_format),
+    primaryFormatText: getTypeText(String(apiField.field_format_type.field_primary_format), primaryTypes.value),
+    secondaryFormat: String(apiField.field_format_type.field_secondary_format),
+    secondaryFormatText: getFieldSecondaryFormatName(apiField.field_format_type.field_secondary_format),
+    isRequired: apiField.is_required,
+    isUnique: apiField.is_unique,
+    isMetadata: !!apiField.parent_field_id, // 假设有父字段ID的为元数据字段
+    fieldValidationRules: apiField.validation_rule ? JSON.stringify(apiField.validation_rule) : '',
+    writeExample: apiField.write_example || '',
+    remark: apiField.remark || '',
+    createTime: apiField.ctime || ''
+  };
+};
+
 // 获取字段列表
 const getFieldList = async () => {
+  if (!currentProject.value) {
+    return;
+  }
+  
   loading.value = true;
   try {
-    // TODO: 调用接口获取数据，这里使用模拟数据
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    const mockData: FieldRecord[] = [
-      {
-        id: 1,
-        fieldName: "用户名称",
-        fieldNameEn: "username", 
-        fieldDescription: "用户的登录名称",
-        primaryFormat: "1",
-        primaryFormatText: "字符串",
-        secondaryFormat: "1",
-        secondaryFormatText: "文本类型",
-        isRequired: true,
-        isUnique: true,
-        isMetadata: false,
-        fieldValidationRules: '{"minLength": 3, "maxLength": 20}',
-        writeExample: "john_doe",
-        remark: "用户唯一标识",
-        createTime: "2025-03-20 10:00:00"
-      },
-      {
-        id: 2,
-        fieldName: "用户年龄",
-        fieldNameEn: "age",
-        fieldDescription: "用户的年龄信息",
-        primaryFormat: "2",
-        primaryFormatText: "整型",
-        secondaryFormat: "2",
-        secondaryFormatText: "布尔类型",
-        isRequired: false,
-        isUnique: false,
-        isMetadata: false,
-        fieldValidationRules: '{"min": 0, "max": 150}',
-        writeExample: "25",
-        remark: "用户年龄",
-        createTime: "2025-03-20 11:00:00"
-      },
-      {
-        id: 3,
-        fieldName: "创建时间",
-        fieldNameEn: "created_at",
-        fieldDescription: "记录创建的时间戳",
-        primaryFormat: "4",
-        primaryFormatText: "时间类型",
-        secondaryFormat: "5",
-        secondaryFormatText: "日期时间",
-        isRequired: true,
-        isUnique: false,
-        isMetadata: true,
-        fieldValidationRules: '{"format": "YYYY-MM-DD HH:mm:ss"}',
-        writeExample: "2025-03-20 10:00:00",
-        remark: "系统自动生成",
-        createTime: "2025-03-20 12:00:00"
+    const searchParams: SearchFieldReq = {
+      auth_info: getAuthInfo(),
+      proj_id: Number(currentProject.value.id),
+      field_name: form.value.fieldName || undefined,
+      interface_name: form.value.fieldNameEn || undefined,
+      page_info: {
+        page_idx: pagination.value.current,
+        size: pagination.value.pageSize
       }
-    ];
-    
-    // 应用搜索条件
-    let filteredData = mockData;
-    if (form.value.fieldName) {
-      filteredData = filteredData.filter(item => 
-        item.fieldName.includes(form.value.fieldName)
-      );
-    }
-    if (form.value.fieldNameEn) {
-      filteredData = filteredData.filter(item => 
-        item.fieldNameEn.includes(form.value.fieldNameEn)
-      );
-    }
+    };
+
+    // 添加主要类型筛选
     if (form.value.primaryFormat) {
-      filteredData = filteredData.filter(item => 
+      // 这里可能需要根据具体需求调整，proto中没有直接的primaryFormat搜索条件
+    }
+
+    const response = await searchFields(searchParams);
+    
+    // 转换API数据为前端展示格式
+    fieldList.value = response.field_detail_infos.map(convertApiFieldToRecord);
+    
+    // 根据前端筛选条件再次过滤（如果后台API不支持某些筛选条件）
+    if (form.value.primaryFormat) {
+      fieldList.value = fieldList.value.filter(item => 
         item.primaryFormat === form.value.primaryFormat
       );
     }
     if (form.value.required !== null) {
-      filteredData = filteredData.filter(item => 
+      fieldList.value = fieldList.value.filter(item => 
         item.isRequired === form.value.required
       );
     }
     
-    fieldList.value = filteredData;
-    pagination.value.total = filteredData.length;
+    // 更新分页信息
+    pagination.value.current = response.cur_page;
+    pagination.value.total = response.total_num;
+    
   } catch (error) {
-    Message.error('获取数据失败');
+    console.error('获取字段列表失败:', error);
+    Message.error('获取字段列表失败');
   } finally {
     loading.value = false;
   }
@@ -415,9 +415,13 @@ const onAdd = () => {
   title.value = "新增字段";
 };
 
+// 当前正在编辑的字段ID
+const currentEditingFieldId = ref<number | null>(null);
+
 // 修改字段
 const onUpdate = (record: FieldRecord) => {
   title.value = "修改字段";
+  currentEditingFieldId.value = record.id;
   addForm.value = {
     fieldName: record.fieldName,
     fieldNameEn: record.fieldNameEn,
@@ -439,14 +443,73 @@ const handleOk = async () => {
   const state = await formRef.value.validate();
   if (state) return;
   
-  Message.success("操作成功");
-  open.value = false;
-  getFieldList();
+  if (!currentProject.value) {
+    Message.error('项目信息不存在');
+    return;
+  }
+  
+  try {
+    if (title.value === "新增字段") {
+      // 新增字段
+      const createParams: CreateFieldReq = {
+        auth_info: getAuthInfo(),
+        field_detail_info: {
+          proj_id: Number(currentProject.value.id),
+          field_name: addForm.value.fieldName,
+          field_type: 1, // 默认为基础字段
+          interface_name: addForm.value.fieldNameEn,
+          desc: addForm.value.fieldDescription,
+          is_required: addForm.value.isRequired,
+          is_unique: addForm.value.isUnique,
+          field_format_type: {
+            field_primary_format: Number(addForm.value.primaryFormat),
+            field_secondary_format: Number(addForm.value.secondaryFormat)
+          },
+          validation_rule: addForm.value.fieldValidationRules ? JSON.parse(addForm.value.fieldValidationRules) : undefined,
+          write_example: addForm.value.writeExample,
+          remark: addForm.value.remark
+        }
+      };
+      
+      await createField(createParams);
+      Message.success("新增字段成功");
+    } else {
+      // 修改字段
+      if (!currentEditingFieldId.value) {
+        Message.error('找不到要修改的字段');
+        return;
+      }
+      
+      const updateParams: UpdateFieldReq = {
+        auth_info: getAuthInfo(),
+        proj_id: Number(currentProject.value.id),
+        field_id: currentEditingFieldId.value,
+        field_update_info: {
+          desc: addForm.value.fieldDescription,
+          is_required: addForm.value.isRequired,
+          is_unique: addForm.value.isUnique,
+          validation_rule: addForm.value.fieldValidationRules ? JSON.parse(addForm.value.fieldValidationRules) : undefined,
+          write_example: addForm.value.writeExample,
+          remark: addForm.value.remark
+        }
+      };
+      
+      await updateField(updateParams);
+      Message.success("修改字段成功");
+    }
+    
+    open.value = false;
+    getFieldList();
+  } catch (error) {
+    console.error('操作失败:', error);
+    Message.error('操作失败');
+  }
 };
 
 // 关闭对话框
 const afterClose = () => {
   formRef.value.resetFields();
+  currentEditingFieldId.value = null;
   addForm.value = {
     fieldName: "",
     fieldNameEn: "",
@@ -463,22 +526,55 @@ const afterClose = () => {
 };
 
 // 删除字段
-const handleDelete = (record: FieldRecord) => {
-  console.log('删除字段', record);
-  Message.success("删除成功");
-  getFieldList();
+const handleDelete = async (record: FieldRecord) => {
+  if (!currentProject.value) {
+    Message.error('项目信息不存在');
+    return;
+  }
+  
+  try {
+    await deleteField({
+      auth_info: getAuthInfo(),
+      proj_id: Number(currentProject.value.id),
+      field_id: record.id
+    });
+    Message.success("删除成功");
+    getFieldList();
+  } catch (error) {
+    console.error('删除字段失败:', error);
+    Message.error("删除失败");
+  }
 };
 
 // 批量删除
-const batchDelete = () => {
+const batchDelete = async () => {
   if (selectedKeys.value.length === 0) {
     Message.warning('请选择要删除的字段');
     return;
   }
-  console.log('批量删除字段', selectedKeys.value);
-  Message.success("批量删除成功");
-  selectedKeys.value = [];
-  getFieldList();
+  
+  if (!currentProject.value) {
+    Message.error('项目信息不存在');
+    return;
+  }
+  
+  try {
+    // 批量删除需要依次调用删除接口
+    for (const fieldId of selectedKeys.value) {
+      await deleteField({
+        auth_info: getAuthInfo(),
+        proj_id: Number(currentProject.value.id),
+        field_id: fieldId
+      });
+    }
+    
+    Message.success("批量删除成功");
+    selectedKeys.value = [];
+    getFieldList();
+  } catch (error) {
+    console.error('批量删除字段失败:', error);
+    Message.error("批量删除失败");
+  }
 };
 
 onMounted(async () => {

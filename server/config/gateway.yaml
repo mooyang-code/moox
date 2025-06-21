@@ -19,22 +19,20 @@ gateway:
   services:
     # 存储服务配置
     storage:
-      address: "127.0.0.1:18106"
       path: "trpc.storage.access.Access"
     
     # 认证服务配置
     auth:
-      address: "127.0.0.1:18201"
       path: "trpc.moox.server.AuthAPI"
     
     # 元数据服务配置
     metadata:
-      address: "127.0.0.1:18105"
       path: "trpc.storage.metadata.MetaAdmin"
+    field:
+      path: "trpc.storage.metadata.MetaField"
     
     # 管理服务配置
     admin:
-      address: "127.0.0.1:18203"
       path: "trpc.moox.server.AdminAPI"
 
 # 限流配置

@@ -147,8 +147,10 @@ func RateLimit() filter.ServerFilter {
 
 // createRateLimitResponse 创建流量限制响应
 func createRateLimitResponse() interface{} {
-	return &pb.GetUserInfoRsp{
-		Code:    pb.EnumMooxErrorCode_INNER_ERR,
-		Message: "请求过于频繁，请稍后再试",
+	return &pb.MiddlewareRsp{
+		RetInfo: &pb.RetInfo{
+			Code: pb.EnumMooxErrorCode_RATE_LIMIT_EXCEEDED,
+			Msg:  "请求过于频繁，请稍后再试",
+		},
 	}
 }

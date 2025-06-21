@@ -213,9 +213,9 @@ const onLogin = async () => {
     
     console.log('✅ 登录响应:', res);
     
-    // 检查登录是否成功
-    if (res.code !== 0) {
-      throw new Error(res.message || "登录失败");
+    // 检查登录是否成功 - 使用新的ret_info协议格式
+    if (res.ret_info.code !== 0) {
+      throw new Error(res.ret_info.msg || "登录失败");
     }
     
     // 存储token - 适配真实后台响应格式
@@ -240,9 +240,6 @@ const onLogin = async () => {
     // 跳转首页
     router.replace("/home");
     
-    // 设置字典
-    useSystemStore().setDictData();
-    
     // 如果选择了记住密码，保存用户名（不保存密码）
     if (form.value.remember) {
       localStorage.setItem('remembered_username', form.value.username);
@@ -256,14 +253,14 @@ const onLogin = async () => {
     // 清理可能设置的无效token
     await userStores.setToken("");
     
-    let errorMessage = "登录失败";
+    let loginErrorMessage = "登录失败";
     if (error.message) {
-      errorMessage = error.message;
+      loginErrorMessage = error.message;
     } else if (error.response) {
-      errorMessage = `网络错误: ${error.response.status}`;
+      loginErrorMessage = `网络错误: ${error.response.status}`;
     }
     
-    Message.error(errorMessage);
+    Message.error(loginErrorMessage);
     
     // 登录失败时刷新验证码
     verifyCodeChange("");

@@ -19,19 +19,19 @@ import (
 
 // AuthAPIService defines service.
 type AuthAPIService interface {
-	// Register 用户注册
+	// Register Register 用户注册
 	Register(ctx context.Context, req *RegisterReq) (*RegisterRsp, error)
-	// GetLoginSalt 获取登录盐值（第一步）
+	// GetLoginSalt GetLoginSalt 获取登录盐值（第一步）
 	GetLoginSalt(ctx context.Context, req *GetLoginSaltReq) (*GetLoginSaltRsp, error)
-	// Login 用户名密码登录（第二步）
+	// Login Login 用户名密码登录（第二步）
 	Login(ctx context.Context, req *LoginReq) (*LoginRsp, error)
-	// GetChangePasswordSalt 获取密码修改盐值（第一步）
+	// GetChangePasswordSalt GetChangePasswordSalt 获取密码修改盐值（第一步）
 	GetChangePasswordSalt(ctx context.Context, req *GetChangePasswordSaltReq) (*GetChangePasswordSaltRsp, error)
-	// ChangePassword 修改密码（第二步）
+	// ChangePassword ChangePassword 修改密码（第二步）
 	ChangePassword(ctx context.Context, req *ChangePasswordReq) (*ChangePasswordRsp, error)
-	// GetUserInfo 获取用户信息
+	// GetUserInfo GetUserInfo 获取用户信息
 	GetUserInfo(ctx context.Context, req *GetUserInfoReq) (*GetUserInfoRsp, error)
-	// UpdateUserInfo 更新用户信息
+	// UpdateUserInfo UpdateUserInfo 更新用户信息
 	UpdateUserInfo(ctx context.Context, req *UpdateUserInfoReq) (*UpdateUserInfoRsp, error)
 }
 
@@ -226,37 +226,37 @@ func RegisterAdminAPIService(s server.Service, svr AdminAPIService) {
 
 type UnimplementedAuthAPI struct{}
 
-// Register 用户注册
+// Register Register 用户注册
 func (s *UnimplementedAuthAPI) Register(ctx context.Context, req *RegisterReq) (*RegisterRsp, error) {
 	return nil, errors.New("rpc Register of service AuthAPI is not implemented")
 }
 
-// GetLoginSalt 获取登录盐值（第一步）
+// GetLoginSalt GetLoginSalt 获取登录盐值（第一步）
 func (s *UnimplementedAuthAPI) GetLoginSalt(ctx context.Context, req *GetLoginSaltReq) (*GetLoginSaltRsp, error) {
 	return nil, errors.New("rpc GetLoginSalt of service AuthAPI is not implemented")
 }
 
-// Login 用户名密码登录（第二步）
+// Login Login 用户名密码登录（第二步）
 func (s *UnimplementedAuthAPI) Login(ctx context.Context, req *LoginReq) (*LoginRsp, error) {
 	return nil, errors.New("rpc Login of service AuthAPI is not implemented")
 }
 
-// GetChangePasswordSalt 获取密码修改盐值（第一步）
+// GetChangePasswordSalt GetChangePasswordSalt 获取密码修改盐值（第一步）
 func (s *UnimplementedAuthAPI) GetChangePasswordSalt(ctx context.Context, req *GetChangePasswordSaltReq) (*GetChangePasswordSaltRsp, error) {
 	return nil, errors.New("rpc GetChangePasswordSalt of service AuthAPI is not implemented")
 }
 
-// ChangePassword 修改密码（第二步）
+// ChangePassword ChangePassword 修改密码（第二步）
 func (s *UnimplementedAuthAPI) ChangePassword(ctx context.Context, req *ChangePasswordReq) (*ChangePasswordRsp, error) {
 	return nil, errors.New("rpc ChangePassword of service AuthAPI is not implemented")
 }
 
-// GetUserInfo 获取用户信息
+// GetUserInfo GetUserInfo 获取用户信息
 func (s *UnimplementedAuthAPI) GetUserInfo(ctx context.Context, req *GetUserInfoReq) (*GetUserInfoRsp, error) {
 	return nil, errors.New("rpc GetUserInfo of service AuthAPI is not implemented")
 }
 
-// UpdateUserInfo 更新用户信息
+// UpdateUserInfo UpdateUserInfo 更新用户信息
 func (s *UnimplementedAuthAPI) UpdateUserInfo(ctx context.Context, req *UpdateUserInfoReq) (*UpdateUserInfoRsp, error) {
 	return nil, errors.New("rpc UpdateUserInfo of service AuthAPI is not implemented")
 }
@@ -271,19 +271,19 @@ type UnimplementedAdminAPI struct{}
 
 // AuthAPIClientProxy defines service client proxy
 type AuthAPIClientProxy interface {
-	// Register 用户注册
+	// Register Register 用户注册
 	Register(ctx context.Context, req *RegisterReq, opts ...client.Option) (rsp *RegisterRsp, err error)
-	// GetLoginSalt 获取登录盐值（第一步）
+	// GetLoginSalt GetLoginSalt 获取登录盐值（第一步）
 	GetLoginSalt(ctx context.Context, req *GetLoginSaltReq, opts ...client.Option) (rsp *GetLoginSaltRsp, err error)
-	// Login 用户名密码登录（第二步）
+	// Login Login 用户名密码登录（第二步）
 	Login(ctx context.Context, req *LoginReq, opts ...client.Option) (rsp *LoginRsp, err error)
-	// GetChangePasswordSalt 获取密码修改盐值（第一步）
+	// GetChangePasswordSalt GetChangePasswordSalt 获取密码修改盐值（第一步）
 	GetChangePasswordSalt(ctx context.Context, req *GetChangePasswordSaltReq, opts ...client.Option) (rsp *GetChangePasswordSaltRsp, err error)
-	// ChangePassword 修改密码（第二步）
+	// ChangePassword ChangePassword 修改密码（第二步）
 	ChangePassword(ctx context.Context, req *ChangePasswordReq, opts ...client.Option) (rsp *ChangePasswordRsp, err error)
-	// GetUserInfo 获取用户信息
+	// GetUserInfo GetUserInfo 获取用户信息
 	GetUserInfo(ctx context.Context, req *GetUserInfoReq, opts ...client.Option) (rsp *GetUserInfoRsp, err error)
-	// UpdateUserInfo 更新用户信息
+	// UpdateUserInfo UpdateUserInfo 更新用户信息
 	UpdateUserInfo(ctx context.Context, req *UpdateUserInfoReq, opts ...client.Option) (rsp *UpdateUserInfoRsp, err error)
 }
 

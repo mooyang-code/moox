@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/mooyang-code/moox/server/internal/service/auth/model"
-	"github.com/mooyang-code/moox/server/internal/service/auth/util"
+	"github.com/mooyang-code/moox/server/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -16,14 +16,18 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 	// 1. 验证输入参数
 	if req.Username == "" {
 		return &pb.RegisterRsp{
-			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
-			Message: "用户名不能为空",
+			RetInfo: &pb.RetInfo{
+				Code: pb.EnumMooxErrorCode_INVALID_PARAM,
+				Msg:  "用户名不能为空",
+			},
 		}, nil
 	}
 	if req.Password == "" {
 		return &pb.RegisterRsp{
-			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
-			Message: "密码不能为空",
+			RetInfo: &pb.RetInfo{
+				Code: pb.EnumMooxErrorCode_INVALID_PARAM,
+				Msg:  "密码不能为空",
+			},
 		}, nil
 	}
 
@@ -31,15 +35,17 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 	existingUser, err := s.userDAO.GetUserByUsername(ctx, req.Username)
 	if err == nil && existingUser != nil {
 		return &pb.RegisterRsp{
-			Code:    pb.EnumMooxErrorCode_INVALID_PARAM,
-			Message: "用户名已存在",
+			RetInfo: &pb.RetInfo{
+				Code: pb.EnumMooxErrorCode_INVALID_PARAM,
+				Msg:  "用户名已存在",
+			},
 		}, nil
 	}
 
 	// 3. 生成用户ID和密码盐值
-	userID := util.GenerateUserID()
-	passwordSalt := util.GenerateSalt()
-	passwordHash := util.HashPassword(req.Password, passwordSalt)
+	userID := utils.GenerateUserID()
+	passwordSalt := utils.GenerateSalt()
+	passwordHash := utils.HashPassword(req.Password, passwordSalt)
 
 	// 4. 创建用户对象
 	user := &model.User{
@@ -62,8 +68,10 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 	if err != nil {
 		log.ErrorContextf(ctx, "创建用户失败: %v", err)
 		return &pb.RegisterRsp{
-			Code:    pb.EnumMooxErrorCode_INNER_ERR,
-			Message: "用户注册失败",
+			RetInfo: &pb.RetInfo{
+				Code: pb.EnumMooxErrorCode_INNER_ERR,
+				Msg:  "用户注册失败",
+			},
 		}, nil
 	}
 
@@ -72,10 +80,12 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 
 	log.InfoContextf(ctx, "用户注册成功: %s", userID)
 	return &pb.RegisterRsp{
-		Code:     pb.EnumMooxErrorCode_SUCCESS,
-		Message:  "用户注册成功",
+		RetInfo: &pb.RetInfo{
+			Code: pb.EnumMooxErrorCode_SUCCESS,
+			Msg:  "用户注册成功",
+		},
 		UserId:   userID,
-		UserInfo: util.BuildSafeUserInfo(user), // 构造返回的用户信息（安全转义）
+		UserInfo: utils.BuildSafeUserInfo(user), // 构造返回的用户信息（安全转义）
 	}, nil
 }
 
@@ -84,11 +94,13 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 	log.InfoContextf(ctx, "# GetUserInfo enter:%+v", req)
 
 	// 从HTTP header获取用户信息（网关中间件已验证）
-	currentUserID, _, role, err := util.GetUserInfoFromCtx(ctx)
+	currentUserID, _, role, err := utils.GetUserInfoFromCtx(ctx)
 	if err != nil {
 		return &pb.GetUserInfoRsp{
-			Code:    pb.EnumMooxErrorCode_NO_AUTH,
-			Message: "用户身份验证失败." + err.Error(),
+			RetInfo: &pb.RetInfo{
+				Code: pb.EnumMooxErrorCode_NO_AUTH,
+				Msg:  "用户身份验证失败." + err.Error(),
+			},
 		}, nil
 	}
 
@@ -98,8 +110,10 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 		// 检查权限：只有管理员可以查询其他用户信息
 		if role < int32(pb.UserRole_ADMIN) {
 			return &pb.GetUserInfoRsp{
-				Code:    pb.EnumMooxErrorCode_NO_PERMISSION,
-				Message: "权限不足",
+				RetInfo: &pb.RetInfo{
+					Code: pb.EnumMooxErrorCode_NO_PERMISSION,
+					Msg:  "权限不足",
+				},
 			}, nil
 		}
 		targetUserID = req.UserId
@@ -109,8 +123,10 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 	user, err := s.userDAO.GetUserByID(ctx, targetUserID)
 	if err != nil {
 		return &pb.GetUserInfoRsp{
-			Code:    pb.EnumMooxErrorCode_FIELD_INFO_NOT_EXIST,
-			Message: "用户不存在",
+			RetInfo: &pb.RetInfo{
+				Code: pb.EnumMooxErrorCode_FIELD_INFO_NOT_EXIST,
+				Msg:  "用户不存在",
+			},
 		}, nil
 	}
 
@@ -118,11 +134,13 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 	s.recordUserAction(ctx, currentUserID, model.ActionGetUserInfo, targetUserID, "获取用户信息", "", "", "success")
 
 	// 构造用户信息（安全转义）
-	userInfo := util.BuildSafeUserInfo(user)
+	userInfo := utils.BuildSafeUserInfo(user)
 
 	return &pb.GetUserInfoRsp{
-		Code:     pb.EnumMooxErrorCode_SUCCESS,
-		Message:  "获取用户信息成功",
+		RetInfo: &pb.RetInfo{
+			Code: pb.EnumMooxErrorCode_SUCCESS,
+			Msg:  "获取用户信息成功",
+		},
 		UserInfo: userInfo,
 	}, nil
 }
@@ -130,11 +148,13 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 // UpdateUserInfo 更新用户信息
 func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUserInfoReq) (*pb.UpdateUserInfoRsp, error) {
 	// 从HTTP header获取用户信息（网关中间件已验证）
-	currentUserID, _, _, err := util.GetUserInfoFromCtx(ctx)
+	currentUserID, _, _, err := utils.GetUserInfoFromCtx(ctx)
 	if err != nil {
 		return &pb.UpdateUserInfoRsp{
-			Code:    pb.EnumMooxErrorCode_NO_AUTH,
-			Message: "用户身份验证失败:" + err.Error(),
+			RetInfo: &pb.RetInfo{
+				Code: pb.EnumMooxErrorCode_NO_AUTH,
+				Msg:  "用户身份验证失败:" + err.Error(),
+			},
 		}, nil
 	}
 
@@ -142,8 +162,10 @@ func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUser
 	user, err := s.userDAO.GetUserByID(ctx, currentUserID)
 	if err != nil {
 		return &pb.UpdateUserInfoRsp{
-			Code:    pb.EnumMooxErrorCode_FIELD_INFO_NOT_EXIST,
-			Message: "用户不存在",
+			RetInfo: &pb.RetInfo{
+				Code: pb.EnumMooxErrorCode_FIELD_INFO_NOT_EXIST,
+				Msg:  "用户不存在",
+			},
 		}, nil
 	}
 
@@ -164,8 +186,10 @@ func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUser
 		if err != nil {
 			log.ErrorContextf(ctx, "更新用户信息失败: %v", err)
 			return &pb.UpdateUserInfoRsp{
-				Code:    pb.EnumMooxErrorCode_INNER_ERR,
-				Message: "更新用户信息失败",
+				RetInfo: &pb.RetInfo{
+					Code: pb.EnumMooxErrorCode_INNER_ERR,
+					Msg:  "更新用户信息失败",
+				},
 			}, nil
 		}
 
@@ -177,8 +201,10 @@ func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUser
 	s.recordUserAction(ctx, user.UserID, model.ActionUpdateProfile, "", "更新用户信息", "", "", "success")
 
 	return &pb.UpdateUserInfoRsp{
-		Code:     pb.EnumMooxErrorCode_SUCCESS,
-		Message:  "更新用户信息成功",
-		UserInfo: util.BuildSafeUserInfo(user), // 构造用户信息（安全转义）
+		RetInfo: &pb.RetInfo{
+			Code: pb.EnumMooxErrorCode_SUCCESS,
+			Msg:  "更新用户信息成功",
+		},
+		UserInfo: utils.BuildSafeUserInfo(user), // 构造用户信息（安全转义）
 	}, nil
 }

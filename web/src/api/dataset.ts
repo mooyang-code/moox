@@ -23,9 +23,15 @@ export interface DeleteDatasetRequest {
   dataset_id: number;
 }
 
-export interface DatasetResponse {
+// 返回信息类型定义
+export interface RetInfo {
   code: number;
-  message: string;
+  msg: string;
+}
+
+// 数据集响应类型定义
+export interface DatasetResponse {
+  ret_info: RetInfo;
   dataset_id?: number;
 }
 
@@ -43,7 +49,23 @@ export const createDataset = async (params: CreateDatasetRequest): Promise<Datas
     });
 
     console.log('创建数据集响应:', response.data);
-    return response.data;
+    const data = response?.data;
+    
+    // 添加安全检查
+    if (!data) {
+      throw new Error('创建数据集失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('创建数据集失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    // 检查ret_info.code是否为0（成功）
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '创建数据集失败');
+    }
+    
+    return data;
   } catch (error: any) {
     console.error('创建数据集失败:', error);
     throw new Error(error?.message || '创建数据集失败');
@@ -64,7 +86,23 @@ export const updateDataset = async (params: UpdateDatasetRequest): Promise<Datas
     });
 
     console.log('更新数据集响应:', response.data);
-    return response.data;
+    const data = response?.data;
+    
+    // 添加安全检查
+    if (!data) {
+      throw new Error('更新数据集失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('更新数据集失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    // 检查ret_info.code是否为0（成功）
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '更新数据集失败');
+    }
+    
+    return data;
   } catch (error: any) {
     console.error('更新数据集失败:', error);
     throw new Error(error?.message || '更新数据集失败');
@@ -85,7 +123,23 @@ export const deleteDataset = async (params: DeleteDatasetRequest): Promise<Datas
     });
 
     console.log('删除数据集响应:', response.data);
-    return response.data;
+    const data = response?.data;
+    
+    // 添加安全检查
+    if (!data) {
+      throw new Error('删除数据集失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('删除数据集失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    // 检查ret_info.code是否为0（成功）
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '删除数据集失败');
+    }
+    
+    return data;
   } catch (error: any) {
     console.error('删除数据集失败:', error);
     throw new Error(error?.message || '删除数据集失败');

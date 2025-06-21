@@ -155,8 +155,19 @@ export function generateDeviceId(): string {
       });
       
       const data = await response.json();
-      if (data.code !== 0) {
-        throw new Error(data.message || '获取盐值失败');
+      
+      // 添加安全检查
+      if (!data) {
+        throw new Error('获取盐值失败：响应数据为空');
+      }
+      
+      if (!data.ret_info) {
+        throw new Error('获取盐值失败：响应格式错误，缺少ret_info字段');
+      }
+      
+      // 使用新的ret_info协议格式
+      if (data.ret_info.code !== 0) {
+        throw new Error(data.ret_info.msg || '获取盐值失败');
       }
       
       return data;
@@ -213,10 +224,20 @@ export function generateDeviceId(): string {
   
         const result = await response.json();
         
-        if (result.code !== 0) {
-          throw new Error(result.message || '登录失败');
+        // 添加安全检查
+        if (!result) {
+          throw new Error('登录失败：响应数据为空');
         }
-  
+        
+        if (!result.ret_info) {
+          throw new Error('登录失败：响应格式错误，缺少ret_info字段');
+        }
+        
+        // 使用新的ret_info协议格式
+        if (result.ret_info.code !== 0) {
+          throw new Error(result.ret_info.msg || '登录失败');
+        }
+        
         console.log('✅ 安全登录成功');
         return result;
         

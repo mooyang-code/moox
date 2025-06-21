@@ -38,32 +38,37 @@ service.interceptors.response.use(
     }
     let res = response.data;
     
-    // 适配真实后台API的响应格式
-    // 真实后台API成功状态码为0，mock API成功状态码为200
-    const isSuccess = res.code === 0 || res.code === 200;
-    
-    if (res.code == 3) {
-      Message.error("登录状态已过期");
-      // 清除本地存储，避免死循环
-      localStorage.removeItem("user-info");
-      router.push("/login");
-      return Promise.reject(res);
-    } else if (res.code == 404) {
-      Message.error("请求连接超时");
-      return Promise.reject(res);
-    } else if (!isSuccess) {
-      // 如果不是成功状态码（0或200），才当作错误处理
-      Message.error(res.message || "请求失败");
-      return Promise.reject(res);
-    } else {
-      // 返回数据 - 成功情况（code为0或200）
-      return Promise.resolve(res);
+    // 新协议格式：检查ret_info字段
+    if (res.ret_info) {
+      // 处理新的ret_info协议格式
+      if (res.ret_info.code == 3) {
+        Message.error("登录状态已过期");
+        // 清除本地存储，避免死循环
+        localStorage.removeItem("user-info");
+        router.push("/login");
+        return Promise.reject(res);
+      } else if (res.ret_info.code == 404) {
+        Message.error("请求连接超时");
+        return Promise.reject(res);
+      } else if (res.ret_info.code !== 0) {
+        // 如果不是成功状态码（0），才当作错误处理
+        Message.error(res.ret_info.msg || "请求失败");
+        return Promise.reject(res);
+      } else {
+        // 返回数据 - 成功情况（ret_info.code为0）
+        return Promise.resolve(res);
+      }
     }
+    
+    // 如果没有ret_info字段，说明响应格式不正确
+    console.warn('响应格式不正确，缺少ret_info字段:', res);
+    Message.error("响应格式错误");
+    return Promise.reject(res);
   },
   function (error: any) {
     console.error("API请求失败:", error);
     // 只在认证相关错误时清除用户信息，其他网络错误不应该清除
-    if (error.response?.status === 401 || error.response?.data?.code === 3) {
+    if (error.response?.status === 401 || error.response?.data?.ret_info?.code === 3) {
       localStorage.removeItem("user-info");
       router.push("/login");
     }

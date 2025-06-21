@@ -56,24 +56,23 @@ api.interceptors.response.use(
   (response) => {
     const { data } = response;
     
-    // 检查业务级token失效错误
-    if (data && (data.code === 3 || data.code === 401)) {
-      // 清除token并跳转登录页
-      localStorage.removeItem('user-info');
-      console.log('Token失效，清除localStorage并跳转登录页');
-      window.location.href = '/login';
-      return Promise.reject(new Error(data.message || 'Token失效'));
-    }
-    
-    // 检查是否为旧协议格式（有 ret_info 字段）
+    // 新协议格式：所有接口返回信息都在ret_info字段中
     if (data?.ret_info) {
-      if (data.ret_info.code === 0) {
-        return data;
+      // 检查业务级token失效错误
+      if (data.ret_info.code === 3 || data.ret_info.code === 401) {
+        // 清除token并跳转登录页
+        localStorage.removeItem('user-info');
+        console.log('Token失效，清除localStorage并跳转登录页');
+        window.location.href = '/login';
+        return Promise.reject(new Error(data.ret_info.msg || 'Token失效'));
       }
-      return Promise.reject(data.ret_info);
+      
+      // 返回完整的data，让各个API自己处理ret_info
+      return response;
     }
     
-    // 新协议格式：已经简化，直接返回
+    // 如果没有ret_info字段，说明响应格式不正确
+    console.warn('响应格式不正确，缺少ret_info字段:', data);
     return response;
   },
   (error) => {
@@ -84,7 +83,6 @@ api.interceptors.response.use(
       window.location.href = '/login';
     }
     
-    // 保持原有错误处理逻辑
     return Promise.reject(error.response?.data?.ret_info || error);
   }
 ); 

@@ -22,7 +22,7 @@ internal/service/
 │   │   └── helper.go       # 辅助方法
 │   ├── model/              # 数据模型
 │   │   └── user.go         # 用户模型定义
-│   ├── util/               # 工具函数
+│   ├── utils/               # 工具函数
 │   │   └── crypto.go       # 加密工具
 │   └── interface.go        # 服务接口定义
 ├── admin/                  # 管理员服务

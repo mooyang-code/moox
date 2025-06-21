@@ -11,12 +11,26 @@ enum EnumMooxErrorCode {
   INNER_ERR = 17;
   NO_PERMISSION = 6;
   FIELD_INFO_NOT_EXIST = 7;
+  RATE_LIMIT_EXCEEDED = 8;  // 频控限制
 }
 
 // 认证信息
 message AppInfo {
   string app_id = 1;
   string app_key = 2;
+}
+
+// 返回信息
+message RetInfo {
+  // 错误码
+  EnumMooxErrorCode code = 1;
+  // 错误信息
+  string msg = 2;
+}
+
+// 中间件的响应
+message MiddlewareRsp {
+  RetInfo ret_info = 1;
 }
 
 // 登录类型枚举
@@ -67,10 +81,9 @@ message RegisterReq {
 
 // 用户注册响应
 message RegisterRsp {
-  EnumMooxErrorCode code = 1;       // 错误码
-  string message = 2;           // 消息
-  string user_id = 3;           // 新创建的用户ID
-  UserInfo user_info = 4;       // 用户信息
+  RetInfo ret_info = 1;
+  string user_id = 2;           // 新创建的用户ID
+  UserInfo user_info = 3;       // 用户信息
 }
 
 // 获取登录盐值请求
@@ -81,11 +94,10 @@ message GetLoginSaltReq {
 
 // 获取登录盐值响应
 message GetLoginSaltRsp {
-  EnumMooxErrorCode code = 1;  // 错误码
-  string message = 2;                          // 消息
-  string salt = 3;                             // 随机盐值
-  int64 timestamp = 4;                         // 服务器时间戳
-  int64 expires_in = 5;                        // 盐值过期时间（秒）
+  RetInfo ret_info = 1;
+  string salt = 2;                             // 随机盐值
+  int64 timestamp = 3;                         // 服务器时间戳
+  int64 expires_in = 4;                        // 盐值过期时间（秒）
 }
 
 // 用户名密码登录请求（安全版本）
@@ -102,11 +114,10 @@ message LoginReq {
 
 // 登录成功响应
 message LoginRsp {
-  EnumMooxErrorCode code = 1;  // 错误码
-  string message = 2;                          // 消息
-  string access_token = 3;                     // 访问令牌
-  int64 expires_in = 4;                        // 过期时间（秒）
-  UserInfo user_info = 5;                      // 用户信息
+  RetInfo ret_info = 1;
+  string access_token = 2;                     // 访问令牌
+  int64 expires_in = 3;                        // 过期时间（秒）
+  UserInfo user_info = 4;                      // 用户信息
 }
 
 // 获取密码修改盐值请求
@@ -117,11 +128,10 @@ message GetChangePasswordSaltReq {
 
 // 获取密码修改盐值响应
 message GetChangePasswordSaltRsp {
-  EnumMooxErrorCode code = 1;  // 错误码
-  string message = 2;                          // 消息
-  string salt = 3;                             // 随机盐值
-  int64 timestamp = 4;                         // 服务器时间戳
-  int64 expires_in = 5;                        // 盐值过期时间（秒）
+  RetInfo ret_info = 1;
+  string salt = 2;                             // 随机盐值
+  int64 timestamp = 3;                         // 服务器时间戳
+  int64 expires_in = 4;                        // 盐值过期时间（秒）
 }
 
 // 修改密码请求（安全版本）
@@ -136,8 +146,7 @@ message ChangePasswordReq {
 
 // 修改密码响应
 message ChangePasswordRsp {
-  EnumMooxErrorCode code = 1;  // 错误码
-  string message = 2;                          // 消息
+  RetInfo ret_info = 1;
 }
 
 // 获取用户信息请求
@@ -149,9 +158,8 @@ message GetUserInfoReq {
 
 // 获取用户信息响应
 message GetUserInfoRsp {
-  EnumMooxErrorCode code = 1;  // 错误码
-  string message = 2;                          // 消息
-  UserInfo user_info = 3;                      // 用户信息
+  RetInfo ret_info = 1;
+  UserInfo user_info = 2;      // 用户信息
 }
 
 // 更新用户信息请求
@@ -165,36 +173,42 @@ message UpdateUserInfoReq {
 
 // 更新用户信息响应
 message UpdateUserInfoRsp {
-  EnumMooxErrorCode code = 1;  // 错误码
-  string message = 2;                          // 消息
-  UserInfo user_info = 3;                      // 更新后的用户信息
+  RetInfo ret_info = 1;
+  UserInfo user_info = 2;      // 更新后的用户信息
 }
 
 // 用户认证和管理服务
 service AuthAPI {
-  // 用户注册
+  // ================================================================================
+  // 用户注册接口
+  
+  // Register 用户注册
   rpc Register(RegisterReq) returns (RegisterRsp);
   
-  // 获取登录盐值（第一步）
-  rpc GetLoginSalt(GetLoginSaltReq) returns (GetLoginSaltRsp);
+  // ================================================================================
+  // 用户登录接口
   
-  // 用户名密码登录（第二步）
+  // GetLoginSalt 获取登录盐值（第一步）
+  rpc GetLoginSalt(GetLoginSaltReq) returns (GetLoginSaltRsp);
+  // Login 用户名密码登录（第二步）
   rpc Login(LoginReq) returns (LoginRsp);
   
-  // 获取密码修改盐值（第一步）
-  rpc GetChangePasswordSalt(GetChangePasswordSaltReq) returns (GetChangePasswordSaltRsp);
+  // ================================================================================
+  // 密码管理接口
   
-  // 修改密码（第二步）
+  // GetChangePasswordSalt 获取密码修改盐值（第一步）
+  rpc GetChangePasswordSalt(GetChangePasswordSaltReq) returns (GetChangePasswordSaltRsp);
+  // ChangePassword 修改密码（第二步）
   rpc ChangePassword(ChangePasswordReq) returns (ChangePasswordRsp);
   
-  // 获取用户信息
-  rpc GetUserInfo(GetUserInfoReq) returns (GetUserInfoRsp);
+  // ================================================================================
+  // 用户信息管理接口
   
-  // 更新用户信息
+  // GetUserInfo 获取用户信息
+  rpc GetUserInfo(GetUserInfoReq) returns (GetUserInfoRsp);
+  // UpdateUserInfo 更新用户信息
   rpc UpdateUserInfo(UpdateUserInfoReq) returns (UpdateUserInfoRsp);
 }
-
-
 
 // 管理台相关接口
 service AdminAPI {

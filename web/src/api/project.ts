@@ -19,10 +19,15 @@ export interface Project {
   datasets: Dataset[];
 }
 
+// 返回信息类型定义
+export interface RetInfo {
+  code: number;
+  msg: string;
+}
+
 // ListProjects响应类型定义
 export interface ListProjectsResponse {
-  code: number;
-  message: string;
+  ret_info: RetInfo;
   projects: Project[];
 }
 
@@ -35,13 +40,21 @@ export const listProjects = async (): Promise<Project[]> => {
     
     console.log('ListProjects API响应:', response);
     
-    // 现在 response.data 直接是精简后的协议数据
-    const data = response.data as ListProjectsResponse;
+    const data = response?.data as ListProjectsResponse;
     console.log('协议数据:', data);
     
-    // 检查协议级别的错误（非0表示错误）
-    if (data.code !== 0) {
-      throw new Error(data.message || '获取项目列表失败');
+    // 添加安全检查
+    if (!data) {
+      throw new Error('获取项目列表失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('获取项目列表失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    // 检查ret_info.code是否为0（成功）
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '获取项目列表失败');
     }
     
     return data.projects || [];
@@ -50,8 +63,8 @@ export const listProjects = async (): Promise<Project[]> => {
     
     let errorMessage = '获取项目列表失败';
     
-    if (error.response?.data?.message) {
-      errorMessage = error.response.data.message;
+    if (error.response?.data?.ret_info?.msg) {
+      errorMessage = error.response.data.ret_info.msg;
     } else if (error.message) {
       errorMessage = error.message;
     }
