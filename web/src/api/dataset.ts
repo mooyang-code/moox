@@ -1,5 +1,18 @@
 import { api, AUTH_INFO } from './config';
 
+// 数据集类型定义
+export interface Dataset {
+  dataset_id: number;
+  dataset_name: string;
+  proj_id: number;
+  data_type: number; // 1: 静态数据, 2: 时序数据
+  freqs: string; // 时序周期
+  check_rules: string; // 校验规则
+  comment: string; // 备注
+  invalid: number; // 删除标记
+  create_time: string; // 创建时间
+}
+
 // 数据集接口相关类型定义
 export interface CreateDatasetRequest {
   proj_id: number;

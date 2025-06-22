@@ -220,8 +220,10 @@ const currentStep = ref(1);
 const createdProjectId = ref('');
 
 interface CreateProjectResponseData {
-  code: number;
-  message: string;
+  ret_info: {
+    code: number;
+    msg: string;
+  };
   proj_id: number;
 }
 
@@ -243,9 +245,9 @@ const submitProjectData = async () => {
         field_name: form.value.fieldNameCn,
         interface_name: form.value.fieldNameEn,
         desc: form.value.fieldDescription,
-        is_required: form.value.isRequired,
-        is_unique: form.value.isUnique,
-        is_metadata: form.value.isMetadata,
+        required_flag: form.value.isRequired ? 1 : -1,
+        unique_flag: form.value.isUnique ? 1 : -1,
+        metadata_flag: form.value.isMetadata ? 1 : -1,
         validation_rule: form.value.fieldValidationRules,
         write_example: form.value.writeExample,
         remark: form.value.fieldRemark,
@@ -264,8 +266,8 @@ const submitProjectData = async () => {
     console.log('协议数据:', data);
     
     // 检查协议级别的错误（非0表示错误）
-    if (data.code !== 0) {
-      throw new Error(data.message || '项目创建失败');
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '项目创建失败');
     }
     
     // 检查是否有项目ID
@@ -275,7 +277,7 @@ const submitProjectData = async () => {
     
     createdProjectId.value = data.proj_id.toString();
     Message.success({
-      content: data.message || '项目创建成功',
+      content: data.ret_info.msg || '项目创建成功',
       duration: 3000
     });
     return true;
@@ -286,9 +288,9 @@ const submitProjectData = async () => {
     
     if (!error) {
       errorMessage = '未知错误：API调用返回undefined';
-    } else if (error.response?.data?.message) {
+    } else if (error.response?.data?.ret_info?.msg) {
       // HTTP错误响应，使用协议中的消息
-      errorMessage = error.response.data.message;
+      errorMessage = error.response.data.ret_info.msg;
     } else if (error.message) {
       errorMessage = error.message;
     } else if (typeof error === 'string') {

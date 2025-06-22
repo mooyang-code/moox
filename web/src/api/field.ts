@@ -15,8 +15,9 @@ export interface FieldDetailInfo {
   field_type: number;
   interface_name: string;  // 字段英文名
   desc: string;  // 字段描述
-  is_required: boolean;
-  is_unique: boolean;
+  required_flag: number;  // 必填标记（-1非必填；1必填）
+  unique_flag: number;    // 唯一约束标记（-1否；1是）
+  metadata_flag: number;  // 元数据字段标记（-1否；1是）
   parent_field_id: number;
   field_format_type: FieldFormatType;
   value_lib_id: number;
@@ -70,16 +71,22 @@ export interface CreateFieldReq {
   operator?: string;
   field_detail_info: {
     proj_id: number;
+    dataset_ids?: number[];  // repeated int32 in proto
     field_name: string;
     field_type: number;
     interface_name: string;
     desc: string;
-    is_required: boolean;
-    is_unique: boolean;
+    required_flag: number;   // 必填标记（-1非必填；1必填）
+    unique_flag: number;     // 唯一约束标记（-1否；1是）
+    metadata_flag?: number;  // 元数据字段标记（-1否；1是）
+    parent_field_id?: number;  // 父字段ID
     field_format_type: FieldFormatType;
+    value_lib_id?: number;  // 属性值库ID
     validation_rule?: any;
     write_example?: string;
     remark?: string;
+    // 注意：创建时不需要传递以下字段（后端会自动生成）
+    // field_id, ctime, mtime, invalid
   };
 }
 
@@ -90,10 +97,10 @@ export interface UpdateFieldReq {
   field_id: number;
   field_update_info: {
     dataset_ids?: number[];
-    field_type?: number;
+    field_name?: string;  // 字段中文名
     desc?: string;
-    is_required?: boolean;
-    is_unique?: boolean;
+    required_flag?: number;   // 必填标记（-1非必填；1必填）
+    unique_flag?: number;     // 唯一约束标记（-1否；1是）
     value_lib_id?: number;
     validation_rule?: any;
     write_example?: string;
@@ -105,6 +112,37 @@ export interface UpdateFieldReq {
 export interface DeleteFieldReq {
   auth_info: AuthInfo;
   proj_id: number;
+  field_id: number;
+}
+
+// UpsertField 请求参数
+export interface UpsertFieldReq {
+  auth_info: AuthInfo;
+  proj_id: number;
+  interface_name: string;  // 字段英文名（项目维度下唯一）
+  operator: string;        // 操作人
+  field_detail_info: {
+    proj_id: number;
+    dataset_ids: number[];
+    field_name: string;
+    field_type: number;
+    interface_name: string;
+    desc: string;
+    required_flag: number;   // 必填标记（-1非必填；1必填）
+    unique_flag: number;     // 唯一约束标记（-1否；1是）
+    metadata_flag?: number;  // 元数据字段标记（-1否；1是）
+    parent_field_id?: number;
+    field_format_type: FieldFormatType;
+    value_lib_id?: number;
+    validation_rule?: any;
+    write_example?: string;
+    remark?: string;
+  };
+}
+
+// UpsertField 响应
+export interface UpsertFieldRsp {
+  ret_info: RetInfo;
   field_id: number;
 }
 
@@ -136,7 +174,7 @@ export const searchFields = async (params: SearchFieldReq): Promise<SearchFieldR
 /**
  * 创建字段
  */
-export const createField = async (params: CreateFieldReq): Promise<{ field_id: number }> => {
+export const createField = async (params: CreateFieldReq): Promise<{ ret_info: RetInfo; field_id: number }> => {
   const response = await service.post('/gateway/field/CreateField', params);
   // 注意：由于响应拦截器的处理，service直接返回数据而不是response对象
   const data = response as any;
@@ -150,11 +188,7 @@ export const createField = async (params: CreateFieldReq): Promise<{ field_id: n
     throw new Error('创建字段失败：响应格式错误，缺少ret_info字段');
   }
   
-  // 检查ret_info.code是否为0（成功）
-  if (data.ret_info.code !== 0) {
-    throw new Error(data.ret_info.msg || '创建字段失败');
-  }
-  
+  // 直接返回数据，让调用方根据ret_info.code判断成功与否
   return data;
 };
 
@@ -184,7 +218,7 @@ export const updateField = async (params: UpdateFieldReq): Promise<void> => {
 /**
  * 删除字段
  */
-export const deleteField = async (params: DeleteFieldReq): Promise<void> => {
+export const deleteField = async (params: DeleteFieldReq): Promise<{ ret_info: RetInfo }> => {
   const response = await service.post('/gateway/field/DeleteField', params);
   // 注意：由于响应拦截器的处理，service直接返回数据而不是response对象
   const data = response as any;
@@ -198,10 +232,8 @@ export const deleteField = async (params: DeleteFieldReq): Promise<void> => {
     throw new Error('删除字段失败：响应格式错误，缺少ret_info字段');
   }
   
-  // 检查ret_info.code是否为0（成功）
-  if (data.ret_info.code !== 0) {
-    throw new Error(data.ret_info.msg || '删除字段失败');
-  }
+  // 直接返回数据，让调用方根据ret_info.code判断成功与否
+  return data;
 };
 
 /**
@@ -234,5 +266,26 @@ export const getField = async (params: {
     throw new Error(data.ret_info.msg || '获取字段详情失败');
   }
   
+  return data;
+};
+
+/**
+ * UpsertField 创建或更新字段
+ */
+export const upsertField = async (params: UpsertFieldReq): Promise<UpsertFieldRsp> => {
+  const response = await service.post('/gateway/field/UpsertField', params);
+  // 注意：由于响应拦截器的处理，service直接返回数据而不是response对象
+  const data = response as any;
+  
+  // 添加data的null检查
+  if (!data) {
+    throw new Error('UpsertField失败：响应数据为空');
+  }
+  
+  if (!data.ret_info) {
+    throw new Error('UpsertField失败：响应格式错误，缺少ret_info字段');
+  }
+  
+  // 直接返回数据，让调用方根据ret_info.code判断成功与否
   return data;
 }; 
