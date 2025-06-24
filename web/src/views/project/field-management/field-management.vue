@@ -202,9 +202,9 @@
       <div>
         <div style="margin-bottom: 20px;">
           <h4 style="margin-bottom: 10px;">字段配置导入</h4>
-          <div style="display: flex; gap: 20px; align-items: stretch;">
+          <div style="display: flex; gap: 20px; align-items: flex-start;">
             <!-- 导入说明 -->
-            <div style="flex: 0 0 450px;">
+            <div style="flex: 0 0 520px;">
               <a-alert type="info" style="padding: 12px 16px;">
                 <div style="line-height: 1.4;">在配置项中，interface_name 的值将决定数据操作的类型（新增或修改）。</div>
                 <div style="margin-top: 6px; line-height: 1.4;">
@@ -215,8 +215,8 @@
             </div>
             
             <!-- 文件上传区域 -->
-            <div style="flex: 1; display: flex; justify-content: center; align-items: center;">
-              <div style="width: 300px;">
+            <div style="flex: 1; display: flex; justify-content: flex-end;">
+              <div style="width: 240px;">
                 <a-upload
                   ref="uploadRef"
                   :custom-request="handleUpload"
@@ -224,6 +224,7 @@
                   :limit="1"
                   accept=".yaml,.yml"
                   :before-upload="beforeUpload"
+                  class="right-align-upload"
                 >
                   <template #upload-button>
                     <div style="
@@ -237,6 +238,7 @@
                       display: flex;
                       flex-direction: column;
                       justify-content: center;
+                      width: 100%;
                     ">
                       <div>
                         <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="currentColor" class="arco-icon arco-icon-upload" stroke-width="4" stroke-linecap="butt" stroke-linejoin="miter" style="font-size: 32px; color: #999; margin-bottom: 8px; width: 32px; height: 32px;">
@@ -256,14 +258,26 @@
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
             <h4 style="margin: 0;">导入格式参考</h4>
-            <a-button size="small" type="primary" status="success" @click="copyYamlContent">
-              <template #icon>
-                <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="currentColor" stroke-width="4" stroke-linecap="butt" stroke-linejoin="miter" style="width: 14px; height: 14px;">
-                  <path d="M13 12.4v-4.8c0-1.773 1.14-3.2 2.55-3.2h16.9c1.41 0 2.55 1.427 2.55 3.2v4.8M13 12.4h22M13 12.4v26.8c0 1.773 1.14 3.2 2.55 3.2h16.9c1.41 0 2.55-1.427 2.55-3.2V12.4M21 20.4h6m-6 8h6"/>
-                </svg>
-              </template>
-              <span>点我复制</span>
-            </a-button>
+            <a-space>
+              <a-button size="small" type="outline" @click="showFieldFormatTable">
+                <template #icon>
+                  <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="currentColor" stroke-width="4" stroke-linecap="butt" stroke-linejoin="miter" style="width: 14px; height: 14px;">
+                    <path d="M24 44c11.046 0 20-8.954 20-20S35.046 4 24 4 4 12.954 4 24s8.954 20 20 20Z"/>
+                    <path d="M24 28.625v-6.25"/>
+                    <path d="M24 15.125V15"/>
+                  </svg>
+                </template>
+                <span>字段格式说明</span>
+              </a-button>
+              <a-button size="small" type="primary" status="success" @click="copyYamlContent">
+                <template #icon>
+                  <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="currentColor" stroke-width="4" stroke-linecap="butt" stroke-linejoin="miter" style="width: 14px; height: 14px;">
+                    <path d="M13 12.4v-4.8c0-1.773 1.14-3.2 2.55-3.2h16.9c1.41 0 2.55 1.427 2.55 3.2v4.8M13 12.4h22M13 12.4v26.8c0 1.773 1.14 3.2 2.55 3.2h16.9c1.41 0 2.55-1.427 2.55-3.2V12.4M21 20.4h6m-6 8h6"/>
+                  </svg>
+                </template>
+                <span>点我复制</span>
+              </a-button>
+            </a-space>
           </div>
           <codemirror
             v-model="yamlCode"
@@ -344,6 +358,73 @@
           <div style="font-size: 14px; color: #666;">
             本次导入共处理 {{ importResult.successList.length + importResult.failList.length }} 个字段，
             成功 {{ importResult.successList.length }} 个，失败 {{ importResult.failList.length }} 个
+          </div>
+        </div>
+      </div>
+    </a-modal>
+
+    <!-- 字段格式说明对话框 -->
+    <a-modal
+      v-model:visible="fieldFormatModalOpen"
+      @close="afterFieldFormatClose"
+      width="1000px"
+      :footer="false"
+    >
+      <template #title>字段格式枚举值释义表</template>
+      <div>
+        <!-- 字段主要格式说明 -->
+        <div style="margin-bottom: 20px;">
+          <h4 style="margin-bottom: 10px; color: #1890ff;">字段主要格式 (field_primary_format)</h4>
+          <a-table
+            :data="primaryFormatTableData"
+            :bordered="{ cell: true }"
+            :pagination="false"
+            size="small"
+          >
+            <template #columns>
+              <a-table-column title="枚举值" data-index="value" :width="80" align="center">
+                <template #cell="{ record }">
+                  <a-tag color="blue" size="small">{{ record.value }}</a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="类型名称" data-index="name" :width="150"></a-table-column>
+              <a-table-column title="英文名称" data-index="englishName" :width="150"></a-table-column>
+              <a-table-column title="说明" data-index="description"></a-table-column>
+            </template>
+          </a-table>
+        </div>
+
+        <!-- 字段次要格式说明 -->
+        <div>
+          <h4 style="margin-bottom: 10px; color: #52c41a;">字段次要格式 (field_secondary_format)</h4>
+          <a-table
+            :data="secondaryFormatTableData"
+            :bordered="{ cell: true }"
+            :pagination="false"
+            size="small"
+          >
+            <template #columns>
+              <a-table-column title="枚举值" data-index="value" :width="80" align="center">
+                <template #cell="{ record }">
+                  <a-tag color="green" size="small">{{ record.value }}</a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="类型名称" data-index="name" :width="150"></a-table-column>
+              <a-table-column title="英文名称" data-index="englishName" :width="150"></a-table-column>
+              <a-table-column title="格式示例" data-index="formatExample" :width="200"></a-table-column>
+              <a-table-column title="说明" data-index="description"></a-table-column>
+            </template>
+          </a-table>
+        </div>
+
+        <!-- 使用说明 -->
+        <div style="margin-top: 20px; padding: 12px; background-color: #f5f5f5; border-radius: 4px;">
+          <h4 style="margin-bottom: 8px; color: #666;">使用说明</h4>
+          <div style="font-size: 14px; color: #666; line-height: 1.6;">
+            <div>• <strong>字段主要格式</strong>：定义字段的基本数据类型，如字符串、整型、时间等</div>
+            <div>• <strong>字段次要格式</strong>：用于约束字段值的具体格式，如日期格式、布尔值格式等</div>
+            <div>• 在YAML配置中，使用 <code>field_primary_format</code> 和 <code>field_secondary_format</code> 来指定字段格式</div>
+            <div>• 不同的主要格式对应不同的次要格式选项，请根据实际需求选择合适的组合</div>
           </div>
         </div>
       </div>
@@ -1218,7 +1299,7 @@ const handleImportOk = async () => {
           importResult.value.failList.push({
             interface_name: fieldConfig.interface_name,
             field_name: fieldConfig.field_name,
-            error_message: 'dataset_ids格式错误，必须为数组格式'
+            error_message: 'dataset_ids格式错误，必须为数组格式如: [100, 101]'
           });
           continue;
         }
@@ -1547,10 +1628,171 @@ watch(() => addForm.value.relatedDatasets, (newVal) => {
   }
 }, { deep: true });
 
+// 字段格式说明相关
+const fieldFormatModalOpen = ref<boolean>(false);
+
+const afterFieldFormatClose = () => {
+  fieldFormatModalOpen.value = false;
+};
+
+const showFieldFormatTable = () => {
+  fieldFormatModalOpen.value = true;
+};
+
+// 字段主要格式表格数据
+const primaryFormatTableData = ref([
+  {
+    value: 1,
+    name: "字符串",
+    englishName: "STRING",
+    description: "用于存储文本数据，如姓名、标识符等"
+  },
+  {
+    value: 2,
+    name: "整型",
+    englishName: "INTEGER",
+    description: "用于存储整数数据，如数量、ID等"
+  },
+  {
+    value: 3,
+    name: "双精度浮点数",
+    englishName: "DOUBLE",
+    description: "用于存储小数数据，如价格、比率等"
+  },
+  {
+    value: 4,
+    name: "时间类型",
+    englishName: "TIME",
+    description: "用于存储时间相关数据，如日期、时间戳等"
+  },
+  {
+    value: 5,
+    name: "选项类型",
+    englishName: "OPTION",
+    description: "用于存储预定义选项值，关联选项值库"
+  },
+  {
+    value: 6,
+    name: "Set类型",
+    englishName: "SET",
+    description: "用于存储字符串集合，无重复值"
+  },
+  {
+    value: 7,
+    name: "Map类型k-v",
+    englishName: "MAP_KV",
+    description: "用于存储键值对数据"
+  },
+  {
+    value: 8,
+    name: "Map类型k-list",
+    englishName: "MAP_KLIST",
+    description: "用于存储键对应列表值的数据"
+  }
+]);
+
+// 字段次要格式表格数据
+const secondaryFormatTableData = ref([
+  {
+    value: 1,
+    name: "普通文本类型",
+    englishName: "TEXT",
+    formatExample: "任意文本内容",
+    description: "普通的文本字符串，无特殊格式约束"
+  },
+  {
+    value: 2,
+    name: "布尔类型",
+    englishName: "BOOLEAN",
+    formatExample: "true/false",
+    description: "布尔值，只能为true或false"
+  },
+  {
+    value: 3,
+    name: "日期",
+    englishName: "DATE",
+    formatExample: "2021-02-03",
+    description: "日期格式，YYYY-MM-DD"
+  },
+  {
+    value: 4,
+    name: "日期范围",
+    englishName: "DATE_RANGE",
+    formatExample: "2021-02-03 ~ 2022-03-02",
+    description: "两个日期之间的范围"
+  },
+  {
+    value: 5,
+    name: "日期时间",
+    englishName: "DATE_TIME",
+    formatExample: "2021-02-03 08:00:00",
+    description: "日期时间格式，YYYY-MM-DD HH:mm:ss"
+  },
+  {
+    value: 6,
+    name: "日期时间范围",
+    englishName: "DATE_TIME_RANGE",
+    formatExample: "2021-02-03 08:00:00 ~ 2022-03-02 09:00:01",
+    description: "两个日期时间之间的范围"
+  },
+  {
+    value: 7,
+    name: "秒级时间戳",
+    englishName: "TIMESTAMP",
+    formatExample: "1661411887",
+    description: "Unix时间戳，精确到秒"
+  },
+  {
+    value: 8,
+    name: "ISO8601格式日期",
+    englishName: "DATE_ISO8601",
+    formatExample: "2025-04-12T20:36:00+08:00",
+    description: "ISO8601标准格式的日期时间"
+  },
+  {
+    value: 9,
+    name: "链接",
+    englishName: "URI",
+    formatExample: "http://puui.qpic.cn/emuczz1543346158",
+    description: "URL链接格式"
+  },
+  {
+    value: 10,
+    name: "JSON",
+    englishName: "JSON",
+    formatExample: '{"key": "value"}',
+    description: "JSON格式的字符串"
+  },
+  {
+    value: 11,
+    name: "选项值ID",
+    englishName: "OPTION_VALUE",
+    formatExample: "1",
+    description: "选项值库中对应选项的ID"
+  },
+  {
+    value: 12,
+    name: "选项值中文文案",
+    englishName: "OPTION_NAME",
+    formatExample: "交易所A",
+    description: "选项值库中对应选项的显示名称"
+  }
+]);
+
 onMounted(async () => {
   await fetchProjects();
   getFieldList();
 });
 </script>
 
-<style lang="scss" scoped></style> 
+<style lang="scss" scoped>
+.right-align-upload {
+  :deep(.arco-upload-wrapper.arco-upload-wrapper-type-text) {
+    width: 100% !important;
+  }
+  
+  :deep(.arco-upload-list) {
+    width: 100% !important;
+  }
+}
+</style> 
