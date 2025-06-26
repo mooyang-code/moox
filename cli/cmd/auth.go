@@ -129,7 +129,7 @@ var registerCmd = &cobra.Command{
 		}
 
 		// 处理响应
-		if rsp.Code == 0 { // SUCCESS = 0
+		if rsp.RetInfo != nil && rsp.RetInfo.Code == 0 { // SUCCESS = 0
 			fmt.Printf("注册成功！\n")
 			fmt.Printf("用户ID: %s\n", rsp.UserId)
 			if rsp.UserInfo != nil {
@@ -144,7 +144,13 @@ var registerCmd = &cobra.Command{
 				fmt.Printf("角色: %v\n", rsp.UserInfo.Role)
 			}
 		} else {
-			fmt.Printf("注册失败: %s (错误码: %v)\n", rsp.Message, rsp.Code)
+			errorMsg := "未知错误"
+			errorCode := int32(-1)
+			if rsp.RetInfo != nil {
+				errorMsg = rsp.RetInfo.Msg
+				errorCode = int32(rsp.RetInfo.Code)
+			}
+			fmt.Printf("注册失败: %s (错误码: %v)\n", errorMsg, errorCode)
 		}
 	},
 }
