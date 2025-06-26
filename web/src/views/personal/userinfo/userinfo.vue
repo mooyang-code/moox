@@ -58,7 +58,7 @@ const list = reactive({
   aboutMe: [
     { label: "💫个性性格", value: ["射手座", "INFJ-T", "长期主义者"], theme: "blue" },
     { label: "💼职业工作", value: ["互联网", "后端架构师"], theme: "orangered" },
-    { label: "💙兴趣爱好", value: ["看代码", "看美女👩🏻"], theme: "green" },
+    { label: "💙兴趣爱好", value: ["吃饭", "睡觉", "看美女👩🏻"], theme: "green" },
     { label: "🏷其他标签", value: ["web3小韭菜", "港股资深韭菜", "伪价投"], theme: "purple" }
   ],
   callMe: [

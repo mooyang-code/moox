@@ -1,0 +1,864 @@
+import { api, AUTH_INFO } from './config';
+
+// ================================================================================
+// 存储实体相关类型定义
+
+export interface StorageEntity {
+  entity_id: number;
+  entity_alias: string;
+  entity_srv_conn: string;
+  ctime: string;
+  mtime: string;
+  invalid: number;
+}
+
+export interface ListStorageEntitiesResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+  entities: StorageEntity[];
+}
+
+// ================================================================================
+// 存储设备相关类型定义
+
+export interface StorageDevice {
+  device_id: number;
+  device_name: string;
+  device_type: number;
+  conn_info: string;
+  ctime: string;
+  mtime: string;
+  invalid: number;
+}
+
+export interface ListStorageDevicesResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+  devices: StorageDevice[];
+}
+
+// ================================================================================
+// 数据对象路由相关类型定义
+
+export interface ObjectRoute {
+  id: number;
+  dataset_id: number;
+  object_id: string;
+  entity_id: number;
+  ctime: string;
+  mtime: string;
+  invalid: number;
+}
+
+export interface ListObjectRoutesRequest {
+  dataset_id?: number;
+  entity_id?: number;
+  page_info?: {
+    page_no: number;
+    page_size: number;
+  };
+}
+
+export interface ListObjectRoutesResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+  routes: ObjectRoute[];
+}
+
+// ================================================================================
+// 数据字段路由相关类型定义
+
+export interface FieldRoute {
+  id: number;
+  entity_id: number;
+  field_id: number;
+  data_category: number;
+  device_id: number;
+  ctime: string;
+  mtime: string;
+  invalid: number;
+}
+
+export interface ListFieldRoutesRequest {
+  entity_id?: number;
+  field_id?: number;
+  data_category?: number;
+  device_id?: number;
+  page_info?: {
+    page_no: number;
+    page_size: number;
+  };
+}
+
+export interface ListFieldRoutesResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+  routes: FieldRoute[];
+}
+
+// ================================================================================
+// API接口函数
+
+// 获取存储实体列表
+export const listStorageEntities = async (): Promise<ListStorageEntitiesResponse> => {
+  try {
+    console.log('获取存储实体列表');
+    
+    const response = await api.post('/metadata/ListStorageEntities', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      }
+    });
+
+    console.log('存储实体列表响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('获取存储实体列表失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('获取存储实体列表失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '获取存储实体列表失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('获取存储实体列表失败:', error);
+    throw new Error(error?.message || '获取存储实体列表失败');
+  }
+};
+
+// 获取存储设备列表
+export const listStorageDevices = async (): Promise<ListStorageDevicesResponse> => {
+  try {
+    console.log('获取存储设备列表');
+    
+    const response = await api.post('/metadata/ListStorageDevices', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      }
+    });
+
+    console.log('存储设备列表响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('获取存储设备列表失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('获取存储设备列表失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '获取存储设备列表失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('获取存储设备列表失败:', error);
+    throw new Error(error?.message || '获取存储设备列表失败');
+  }
+};
+
+// 获取数据对象路由列表
+export const listObjectRoutes = async (params?: ListObjectRoutesRequest): Promise<ListObjectRoutesResponse> => {
+  try {
+    console.log('获取数据对象路由列表', params);
+    
+    const requestData: any = {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      }
+    };
+    
+    // 添加搜索参数
+    if (params?.dataset_id) {
+      requestData.dataset_id = params.dataset_id;
+    }
+    if (params?.entity_id) {
+      requestData.entity_id = params.entity_id;
+    }
+    if (params?.page_info) {
+      requestData.page_info = params.page_info;
+    }
+    
+    const response = await api.post('/metadata/ListObjectRoutes', requestData);
+
+    console.log('数据对象路由列表响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('获取数据对象路由列表失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('获取数据对象路由列表失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '获取数据对象路由列表失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('获取数据对象路由列表失败:', error);
+    throw new Error(error?.message || '获取数据对象路由列表失败');
+  }
+};
+
+// 获取数据字段路由列表
+export const listFieldRoutes = async (params?: ListFieldRoutesRequest): Promise<ListFieldRoutesResponse> => {
+  try {
+    console.log('获取数据字段路由列表', params);
+    
+    const requestData: any = {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      }
+    };
+    
+    // 添加搜索参数
+    if (params?.entity_id) {
+      requestData.entity_id = params.entity_id;
+    }
+    if (params?.field_id) {
+      requestData.field_id = params.field_id;
+    }
+    if (params?.data_category) {
+      requestData.data_category = params.data_category;
+    }
+    if (params?.device_id) {
+      requestData.device_id = params.device_id;
+    }
+    if (params?.page_info) {
+      requestData.page_info = params.page_info;
+    }
+    
+    const response = await api.post('/metadata/ListFieldRoutes', requestData);
+
+    console.log('数据字段路由列表响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('获取数据字段路由列表失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('获取数据字段路由列表失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '获取数据字段路由列表失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('获取数据字段路由列表失败:', error);
+    throw new Error(error?.message || '获取数据字段路由列表失败');
+  }
+};
+
+// ================================================================================
+// 创建、更新、删除存储实体相关接口
+
+export interface CreateStorageEntityRequest {
+  entity_alias: string;
+  entity_srv_conn: string;
+}
+
+export interface CreateStorageEntityResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+  entity_id?: number;
+}
+
+export interface UpdateStorageEntityRequest {
+  entity_id: number;
+  entity_alias: string;
+  entity_srv_conn: string;
+}
+
+export interface UpdateStorageEntityResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+}
+
+export interface DeleteStorageEntityRequest {
+  entity_id: number;
+}
+
+export interface DeleteStorageEntityResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+}
+
+// 创建存储实体
+export const createStorageEntity = async (params: CreateStorageEntityRequest): Promise<CreateStorageEntityResponse> => {
+  try {
+    console.log('创建存储实体', params);
+    
+    const response = await api.post('/metadata/CreateStorageEntity', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      },
+      ...params
+    });
+
+    console.log('创建存储实体响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('创建存储实体失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('创建存储实体失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '创建存储实体失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('创建存储实体失败:', error);
+    throw new Error(error?.message || '创建存储实体失败');
+  }
+};
+
+// 更新存储实体
+export const updateStorageEntity = async (params: UpdateStorageEntityRequest): Promise<UpdateStorageEntityResponse> => {
+  try {
+    console.log('更新存储实体', params);
+    
+    const response = await api.post('/metadata/UpdateStorageEntity', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      },
+      ...params
+    });
+
+    console.log('更新存储实体响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('更新存储实体失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('更新存储实体失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '更新存储实体失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('更新存储实体失败:', error);
+    throw new Error(error?.message || '更新存储实体失败');
+  }
+};
+
+// 删除存储实体
+export const deleteStorageEntity = async (params: DeleteStorageEntityRequest): Promise<DeleteStorageEntityResponse> => {
+  try {
+    console.log('删除存储实体', params);
+    
+    const response = await api.post('/metadata/DeleteStorageEntity', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      },
+      ...params
+    });
+
+    console.log('删除存储实体响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('删除存储实体失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('删除存储实体失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '删除存储实体失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('删除存储实体失败:', error);
+    throw new Error(error?.message || '删除存储实体失败');
+  }
+};
+
+// ================================================================================
+// 创建、更新、删除存储设备相关接口
+
+export interface CreateStorageDeviceRequest {
+  device_name: string;
+  device_type: number;
+  conn_info: string;
+}
+
+export interface CreateStorageDeviceResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+  device_id?: number;
+}
+
+export interface UpdateStorageDeviceRequest {
+  device_id: number;
+  device_name: string;
+  device_type: number;
+  conn_info: string;
+}
+
+export interface UpdateStorageDeviceResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+}
+
+export interface DeleteStorageDeviceRequest {
+  device_id: number;
+}
+
+export interface DeleteStorageDeviceResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+}
+
+// 创建存储设备
+export const createStorageDevice = async (params: CreateStorageDeviceRequest): Promise<CreateStorageDeviceResponse> => {
+  try {
+    console.log('创建存储设备', params);
+    
+    const response = await api.post('/metadata/CreateStorageDevice', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      },
+      ...params
+    });
+
+    console.log('创建存储设备响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('创建存储设备失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('创建存储设备失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '创建存储设备失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('创建存储设备失败:', error);
+    throw new Error(error?.message || '创建存储设备失败');
+  }
+};
+
+// 更新存储设备
+export const updateStorageDevice = async (params: UpdateStorageDeviceRequest): Promise<UpdateStorageDeviceResponse> => {
+  try {
+    console.log('更新存储设备', params);
+    
+    const response = await api.post('/metadata/UpdateStorageDevice', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      },
+      ...params
+    });
+
+    console.log('更新存储设备响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('更新存储设备失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('更新存储设备失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '更新存储设备失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('更新存储设备失败:', error);
+    throw new Error(error?.message || '更新存储设备失败');
+  }
+};
+
+// 删除存储设备
+export const deleteStorageDevice = async (params: DeleteStorageDeviceRequest): Promise<DeleteStorageDeviceResponse> => {
+  try {
+    console.log('删除存储设备', params);
+    
+    const response = await api.post('/metadata/DeleteStorageDevice', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      },
+      ...params
+    });
+
+    console.log('删除存储设备响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('删除存储设备失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('删除存储设备失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '删除存储设备失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('删除存储设备失败:', error);
+    throw new Error(error?.message || '删除存储设备失败');
+  }
+};
+
+// ================================================================================
+// 创建、更新、删除数据对象路由相关接口
+
+export interface CreateObjectRouteRequest {
+  dataset_id: number;
+  object_id: string;
+  entity_id: number;
+}
+
+export interface CreateObjectRouteResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+  route_id?: number;
+}
+
+export interface UpdateObjectRouteRequest {
+  id: number;
+  dataset_id: number;
+  object_id: string;
+  entity_id: number;
+}
+
+export interface UpdateObjectRouteResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+}
+
+export interface DeleteObjectRouteRequest {
+  id: number;
+}
+
+export interface DeleteObjectRouteResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+}
+
+// 创建数据对象路由
+export const createObjectRoute = async (params: CreateObjectRouteRequest): Promise<CreateObjectRouteResponse> => {
+  try {
+    console.log('创建数据对象路由', params);
+    
+    const response = await api.post('/metadata/CreateObjectRoute', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      },
+      ...params
+    });
+
+    console.log('创建数据对象路由响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('创建数据对象路由失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('创建数据对象路由失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '创建数据对象路由失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('创建数据对象路由失败:', error);
+    throw new Error(error?.message || '创建数据对象路由失败');
+  }
+};
+
+// 更新数据对象路由
+export const updateObjectRoute = async (params: UpdateObjectRouteRequest): Promise<UpdateObjectRouteResponse> => {
+  try {
+    console.log('更新数据对象路由', params);
+    
+    const response = await api.post('/metadata/UpdateObjectRoute', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      },
+      ...params
+    });
+
+    console.log('更新数据对象路由响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('更新数据对象路由失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('更新数据对象路由失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '更新数据对象路由失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('更新数据对象路由失败:', error);
+    throw new Error(error?.message || '更新数据对象路由失败');
+  }
+};
+
+// 删除数据对象路由
+export const deleteObjectRoute = async (params: DeleteObjectRouteRequest): Promise<DeleteObjectRouteResponse> => {
+  try {
+    console.log('删除数据对象路由', params);
+    
+    const response = await api.post('/metadata/DeleteObjectRoute', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      },
+      ...params
+    });
+
+    console.log('删除数据对象路由响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('删除数据对象路由失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('删除数据对象路由失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '删除数据对象路由失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('删除数据对象路由失败:', error);
+    throw new Error(error?.message || '删除数据对象路由失败');
+  }
+};
+
+// ================================================================================
+// 创建、更新、删除数据字段路由相关接口
+
+export interface CreateFieldRouteRequest {
+  entity_id: number;
+  field_id: number;
+  data_category: number;
+  device_id: number;
+}
+
+export interface CreateFieldRouteResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+  route_id?: number;
+}
+
+export interface UpdateFieldRouteRequest {
+  id: number;
+  entity_id: number;
+  field_id: number;
+  data_category: number;
+  device_id: number;
+}
+
+export interface UpdateFieldRouteResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+}
+
+export interface DeleteFieldRouteRequest {
+  id: number;
+}
+
+export interface DeleteFieldRouteResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+}
+
+// 创建数据字段路由
+export const createFieldRoute = async (params: CreateFieldRouteRequest): Promise<CreateFieldRouteResponse> => {
+  try {
+    console.log('创建数据字段路由', params);
+    
+    const response = await api.post('/metadata/CreateFieldRoute', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      },
+      ...params
+    });
+
+    console.log('创建数据字段路由响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('创建数据字段路由失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('创建数据字段路由失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '创建数据字段路由失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('创建数据字段路由失败:', error);
+    throw new Error(error?.message || '创建数据字段路由失败');
+  }
+};
+
+// 更新数据字段路由
+export const updateFieldRoute = async (params: UpdateFieldRouteRequest): Promise<UpdateFieldRouteResponse> => {
+  try {
+    console.log('更新数据字段路由', params);
+    
+    const response = await api.post('/metadata/UpdateFieldRoute', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      },
+      ...params
+    });
+
+    console.log('更新数据字段路由响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('更新数据字段路由失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('更新数据字段路由失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '更新数据字段路由失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('更新数据字段路由失败:', error);
+    throw new Error(error?.message || '更新数据字段路由失败');
+  }
+};
+
+// 删除数据字段路由
+export const deleteFieldRoute = async (params: DeleteFieldRouteRequest): Promise<DeleteFieldRouteResponse> => {
+  try {
+    console.log('删除数据字段路由', params);
+    
+    const response = await api.post('/metadata/DeleteFieldRoute', {
+      auth_info: {
+        app_id: AUTH_INFO.app_id,
+        app_key: AUTH_INFO.app_key
+      },
+      ...params
+    });
+
+    console.log('删除数据字段路由响应:', response.data);
+    const data = response?.data;
+    
+    if (!data) {
+      throw new Error('删除数据字段路由失败：响应数据为空');
+    }
+    
+    if (!data.ret_info) {
+      throw new Error('删除数据字段路由失败：响应格式错误，缺少ret_info字段');
+    }
+    
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || '删除数据字段路由失败');
+    }
+    
+    return data;
+  } catch (error: any) {
+    console.error('删除数据字段路由失败:', error);
+    throw new Error(error?.message || '删除数据字段路由失败');
+  }
+}; 

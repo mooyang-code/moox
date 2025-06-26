@@ -25,14 +25,14 @@
                 </template>
               </a-table-column>
               <a-table-column title="连接信息" data-index="conn_info" />
-              <a-table-column title="状态" data-index="status">
+              <a-table-column title="状态" data-index="invalid">
                 <template #cell="{ record }">
-                  <a-tag :color="record.status ? 'green' : 'red'">
-                    {{ record.status ? '启用' : '禁用' }}
+                  <a-tag :color="record.invalid === 1 ? 'red' : 'green'">
+                    {{ record.invalid === 1 ? '已删除' : '正常' }}
                   </a-tag>
                 </template>
               </a-table-column>
-              <a-table-column title="更新时间" data-index="updateTime" />
+              <a-table-column title="更新时间" data-index="mtime" />
               <a-table-column title="操作" align="center">
                 <template #cell="{ record }">
                   <a-space>
@@ -40,11 +40,7 @@
                       <template #icon><icon-edit /></template>
                       编辑
                     </a-button>
-                    <a-button type="text" size="small" @click="onToggleStatus(record)">
-                      <template #icon><icon-swap /></template>
-                      {{ record.status ? '禁用' : '启用' }}
-                    </a-button>
-                    <a-button type="text" status="danger" size="small" @click="onDelete(record)">
+                    <a-button type="text" status="danger" size="small" @click="onDelete(record)" v-if="record.invalid !== 1">
                       <template #icon><icon-delete /></template>
                       删除
                     </a-button>
@@ -60,9 +56,6 @@
     <!-- 新增/编辑弹窗 -->
     <a-modal v-model:visible="modalVisible" :title="modalTitle" @ok="handleOk" @cancel="handleCancel">
       <a-form ref="formRef" :model="formData" :rules="rules" auto-label-width>
-        <a-form-item field="device_id" label="设备ID">
-          <a-input-number v-model="formData.device_id" placeholder="请输入设备ID" :min="1" />
-        </a-form-item>
         <a-form-item field="device_name" label="设备名称">
           <a-input v-model="formData.device_name" placeholder="请输入设备名称" />
         </a-form-item>
@@ -77,54 +70,72 @@
         <a-form-item field="conn_info" label="连接信息">
           <a-input v-model="formData.conn_info" placeholder="请输入连接信息" />
         </a-form-item>
-        <a-form-item field="status" label="状态">
-          <a-switch v-model="formData.status" checked-text="启用" unchecked-text="禁用" />
-        </a-form-item>
       </a-form>
     </a-modal>
   </div>
 </template>
 
 <script lang="ts" setup>
-import { ref, onMounted } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import { IconPlus, IconEdit, IconDelete, IconSwap } from '@arco-design/web-vue/es/icon';
+import { ref, computed, watch } from 'vue';
+import { Message, Modal } from '@arco-design/web-vue';
+import { IconPlus, IconEdit, IconDelete } from '@arco-design/web-vue/es/icon';
+import type { StorageDevice } from '@/api/storage-config';
+import { 
+  createStorageDevice, 
+  updateStorageDevice, 
+  deleteStorageDevice 
+} from '@/api/storage-config';
 
-// 定义数据类型
-interface StorageDevice {
-  id?: number;
-  device_id: number;
+// Props定义
+interface Props {
+  devices: StorageDevice[];
+  loading: boolean;
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  devices: () => [],
+  loading: false
+});
+
+// Emits定义
+const emits = defineEmits<{
+  refresh: [];
+}>();
+
+// 定义表单数据类型
+interface DeviceFormData {
+  device_id?: number;
   device_name: string;
   device_type: number;
   conn_info: string;
-  status: boolean;
-  updateTime?: string;
 }
 
-// 表格数据
-const tableData = ref<StorageDevice[]>([]);
-const loading = ref(false);
+// 表格数据 - 基于props计算
+const tableData = computed(() => props.devices);
+
 const pagination = ref({
   total: 0,
   current: 1,
   pageSize: 10,
 });
 
+// 监听devices变化，更新分页总数
+watch(() => props.devices, (newDevices) => {
+  pagination.value.total = newDevices.length;
+}, { immediate: true });
+
 // 弹窗相关
 const modalVisible = ref(false);
 const modalTitle = ref('新增存储设备');
 const formRef = ref();
-const formData = ref<StorageDevice>({
-  device_id: 1,
+const formData = ref<DeviceFormData>({
   device_name: '',
   device_type: 1,
   conn_info: '',
-  status: true,
 });
 
 // 表单验证规则
 const rules = {
-  device_id: [{ required: true, message: '请输入设备ID' }],
   device_name: [{ required: true, message: '请输入设备名称' }],
   device_type: [{ required: true, message: '请选择设备类型' }],
   conn_info: [{ required: true, message: '请输入连接信息' }],
@@ -152,55 +163,18 @@ const getDeviceTypeColor = (type: number) => {
   return colorMap[type] || 'gray';
 };
 
-// 获取数据
-const fetchData = async () => {
-  loading.value = true;
-  try {
-    // TODO: 调用接口获取数据
-    // 模拟数据
-    tableData.value = [
-      {
-        id: 1,
-        device_id: 1,
-        device_name: 'SQLite(一般用于存储静态数据)',
-        device_type: 1,
-        conn_info: 'localhost',
-        status: true,
-        updateTime: '2025-03-20 10:00:00',
-      },
-      {
-        id: 2,
-        device_id: 2,
-        device_name: 'DuckDB',
-        device_type: 2,
-        conn_info: 'localhost',
-        status: true,
-        updateTime: '2025-03-20 10:00:00',
-      },
-    ];
-    pagination.value.total = 2;
-  } catch {
-    Message.error('获取数据失败');
-  } finally {
-    loading.value = false;
-  }
-};
-
 // 页码改变
 const onPageChange = (current: number) => {
   pagination.value.current = current;
-  fetchData();
 };
 
 // 新增
 const onAdd = () => {
   modalTitle.value = '新增存储设备';
   formData.value = {
-    device_id: 1,
     device_name: '',
     device_type: 1,
     conn_info: '',
-    status: true,
   };
   modalVisible.value = true;
 };
@@ -208,32 +182,66 @@ const onAdd = () => {
 // 编辑
 const onEdit = (record: StorageDevice) => {
   modalTitle.value = '编辑存储设备';
-  formData.value = { ...record };
+  formData.value = {
+    device_id: record.device_id,
+    device_name: record.device_name,
+    device_type: record.device_type,
+    conn_info: record.conn_info,
+  };
   modalVisible.value = true;
 };
 
-// 切换状态
-const onToggleStatus = (record: StorageDevice) => {
-  // TODO: 实现状态切换
-  Message.info(`${record.status ? '禁用' : '启用'}存储设备 ${record.device_name}`);
-};
-
 // 删除
-const onDelete = (_record: StorageDevice) => {
-  // TODO: 实现删除功能
-  Message.info(`删除存储设备 ${_record.device_name}`);
+const onDelete = async (record: StorageDevice) => {
+  Modal.confirm({
+    title: '确认删除',
+    content: `确定要删除存储设备 "${record.device_name}" 吗？此操作不可恢复。`,
+    okText: '确定删除',
+    cancelText: '取消',
+    async onOk() {
+      try {
+        await deleteStorageDevice({ device_id: record.device_id });
+        Message.success(`删除存储设备 ${record.device_name} 成功`);
+        // 删除后刷新数据
+        emits('refresh');
+      } catch (error: any) {
+        console.error('删除存储设备失败:', error);
+        Message.error(error.message || '删除存储设备失败');
+      }
+    }
+  });
 };
 
 // 确认保存
 const handleOk = async () => {
   try {
     await formRef.value?.validate();
-    // TODO: 调用保存接口
-    Message.success('保存成功');
+    
+    if (formData.value.device_id) {
+      // 编辑模式 - 调用更新接口
+      await updateStorageDevice({
+        device_id: formData.value.device_id,
+        device_name: formData.value.device_name,
+        device_type: formData.value.device_type,
+        conn_info: formData.value.conn_info,
+      });
+      Message.success('更新存储设备成功');
+    } else {
+      // 新增模式 - 调用创建接口
+      await createStorageDevice({
+        device_name: formData.value.device_name,
+        device_type: formData.value.device_type,
+        conn_info: formData.value.conn_info,
+      });
+      Message.success('创建存储设备成功');
+    }
+    
     modalVisible.value = false;
-    fetchData();
-  } catch {
-    // 表单验证失败
+    // 保存后刷新数据
+    emits('refresh');
+  } catch (error: any) {
+    console.error('保存存储设备失败:', error);
+    Message.error(error.message || '保存存储设备失败');
   }
 };
 
@@ -241,10 +249,6 @@ const handleOk = async () => {
 const handleCancel = () => {
   modalVisible.value = false;
 };
-
-onMounted(() => {
-  fetchData();
-});
 </script>
 
 <style lang="scss" scoped>
