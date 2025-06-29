@@ -151,10 +151,10 @@ const onMenuItem = (key: string) => {
   // 处理数据管理菜单项（直接使用路由name）
   if (key === 'data-overview' || key === 'data-sync' || key === 'data-object-list' || key === 'data-data-list') {
     console.log('处理数据管理菜单项:', key);
-    
+
     const projectId = getCurrentProjectId();
     console.log('获取到的项目ID:', projectId);
-    
+
     if (projectId) {
       let targetPath: string;
       if (key === 'data-overview') {
@@ -166,7 +166,7 @@ const onMenuItem = (key: string) => {
       } else {
         targetPath = `/data-management/${projectId}/data-list`;
       }
-      
+
       console.log('跳转数据管理页面:', targetPath);
       router.push(targetPath);
       return;
@@ -176,6 +176,26 @@ const onMenuItem = (key: string) => {
       Message.warning('请先在顶部下拉框中选择一个项目');
       return;
     }
+  }
+
+  // 处理容器管理菜单项（直接使用路由name）
+  if (key === 'ssh-terminal' || key === 'file-management' || key === 'resource-monitor' || key === 'service-status') {
+    console.log('处理容器管理菜单项:', key);
+
+    let targetPath: string;
+    if (key === 'ssh-terminal') {
+      targetPath = '/container-management/ssh-terminal';
+    } else if (key === 'file-management') {
+      targetPath = '/container-management/file-management';
+    } else if (key === 'resource-monitor') {
+      targetPath = '/container-management/resource-monitor';
+    } else {
+      targetPath = '/container-management/service-status';
+    }
+
+    console.log('跳转容器管理页面:', targetPath);
+    router.push(targetPath);
+    return;
   }
   
   // 原有的路由处理逻辑

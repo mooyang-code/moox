@@ -67,11 +67,44 @@ service.interceptors.response.use(
   },
   function (error: any) {
     console.error("API请求失败:", error);
+
+    // 处理网络连接错误
+    if (error.code === 'ECONNREFUSED' || error.message?.includes('ECONNREFUSED')) {
+      Message.error("网络异常:请确认moox后端服务部署正常");
+      return Promise.reject(error);
+    }
+
+    // 处理其他网络错误
+    if (error.code === 'ETIMEDOUT' || error.message?.includes('timeout')) {
+      Message.error("请求超时，请检查网络连接");
+      return Promise.reject(error);
+    }
+
+    if (error.code === 'ENOTFOUND' || error.message?.includes('ENOTFOUND')) {
+      Message.error("网络异常:无法连接到服务器");
+      return Promise.reject(error);
+    }
+
+    // 处理没有响应的情况（网络完全断开）
+    if (!error.response) {
+      Message.error("网络异常:请确认moox后端服务部署正常");
+      return Promise.reject(error);
+    }
+
     // 只在认证相关错误时清除用户信息，其他网络错误不应该清除
     if (error.response?.status === 401 || error.response?.data?.ret_info?.code === 3) {
       localStorage.removeItem("user-info");
       router.push("/login");
+    } else if (error.response?.status >= 500) {
+      // 处理服务器内部错误
+      Message.error("服务器内部错误，请确认moox后端服务是否正常");
+    } else if (error.response?.status === 404) {
+      Message.error("请求的资源不存在");
+    } else if (error.response?.status >= 400) {
+      // 处理其他客户端错误
+      Message.error(error.response?.data?.message || "请求失败");
     }
+
     return Promise.reject(error);
   }
 );

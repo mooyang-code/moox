@@ -1,27 +1,22 @@
-# Moox Server 主Makefile
-# 所有构建命令都转发到scripts目录
 
-.PHONY: help proto build build-cmd build-all clean dev run stop install deps check lint test
-.PHONY: init-db drop-db migrate-db cmd-help clean-db dev-db
+.PHONY: clean all
 
-# 默认目标
-all: 
-	@cd scripts && $(MAKE) all
+all: linux-amd64 linux-arm64 macos-amd64 windows-amd64
 
-# 转发所有命令到scripts目录
-help proto build build-cmd build-all clean dev run stop install deps check lint test:
-	@cd scripts && $(MAKE) $@
+linux-amd64:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o WebSSH-linux-amd64
 
-# 转发数据库管理命令到scripts目录
-init-db drop-db migrate-db cmd-help clean-db dev-db:
-	@cd scripts && $(MAKE) $@
+linux-arm64:
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o WebSSH-linux-arm64
 
-# 带版本参数的构建
-build-version:
-	@cd scripts && $(MAKE) build VERSION=$(VERSION)
+macos-amd64:
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o WebSSH-macos-amd64
 
-build-all-version:
-	@cd scripts && $(MAKE) build-all VERSION=$(VERSION)
+windows-amd64:
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o WebSSH-windows-amd64.exe
 
-install-version:
-	@cd scripts && $(MAKE) install VERSION=$(VERSION) 
+WebSSH:
+	go build -o WebSSH
+
+clean:
+	rm -f WebSSH-linux-amd64 WebSSH-linux-arm64 WebSSH-macos-amd64 WebSSH-windows-amd64.exe

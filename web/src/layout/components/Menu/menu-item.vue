@@ -27,9 +27,21 @@
           <MenuItemIcon :svg-icon="item.meta.svgIcon" :icon="item.meta.icon" />
         </template>
         <template #title>{{ $t(`menu.${item.meta.title}`) }}</template>
-        
+
         <!-- 渲染动态数据管理菜单 -->
         <DataMenu />
+      </a-sub-menu>
+    </template>
+    <!-- 容器管理菜单特殊处理 -->
+    <template v-else-if="item.name === 'container-management'">
+      <a-sub-menu>
+        <template #icon v-if="item.meta.svgIcon || item.meta.icon">
+          <MenuItemIcon :svg-icon="item.meta.svgIcon" :icon="item.meta.icon" />
+        </template>
+        <template #title>{{ $t(`menu.${item.meta.title}`) }}</template>
+
+        <!-- 渲染容器管理菜单 -->
+        <ContainerMenu />
       </a-sub-menu>
     </template>
     <!-- 其他菜单项保持原有逻辑 -->
@@ -56,6 +68,7 @@ import MenuItem from "@/layout/components/Menu/menu-item.vue";
 import MenuItemIcon from "@/layout/components/Menu/menu-item-icon.vue";
 import ProjectMenu from "@/layout/components/Menu/project-menu.vue";
 import DataMenu from "@/layout/components/Menu/data-menu.vue";
+import ContainerMenu from "@/layout/components/Menu/container-menu.vue";
 import { useMenuMethod } from "@/hooks/useMenuMethod";
 import { useRouter } from 'vue-router';
 

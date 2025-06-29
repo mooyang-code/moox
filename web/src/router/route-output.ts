@@ -32,8 +32,8 @@ export const currentlyRoute = (current: any) => {
     store.setTabs(routeList.value[0]);
   }
 
-  // 定义静态路由名称列表（项目管理和数据管理的三级菜单）
-  const staticRouteNames = ['dataset', 'field-management', 'storage-config', 'data-overview', 'data-sync', 'data-object-list', 'data-data-list'];
+  // 定义静态路由名称列表（项目管理、数据管理和容器管理的三级菜单）
+  const staticRouteNames = ['dataset', 'field-management', 'storage-config', 'data-overview', 'data-sync', 'data-object-list', 'data-data-list', 'ssh-terminal', 'file-management', 'resource-monitor', 'service-status'];
   
   // 跳转路由是有权限的，从有权限路由中匹配
   const { hasRoute } = useRoutingMethod();

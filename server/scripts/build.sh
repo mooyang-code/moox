@@ -39,7 +39,7 @@ RELEASE_DIR="$PROJECT_ROOT/release"
 APP_NAME="moox-server"
 BUILD_DIR="$RELEASE_DIR"
 
-print_info "脚本目录: $SCRIPT_DIR"  
+print_info "脚本目录: $SCRIPT_DIR"
 print_info "项目根目录: $PROJECT_ROOT"
 print_info "构建目录: $BUILD_DIR"
 
@@ -79,10 +79,18 @@ print_info "拷贝配置文件..."
 if [ -d "config" ]; then
     cp config/*.yaml "$BUILD_DIR/config/" 2>/dev/null || true
     if [ $? -eq 0 ]; then
-        print_success "配置文件拷贝成功"
+        print_success "配置文件拷贝到config目录成功"
         ls -la "$BUILD_DIR/config/"
     else
         print_warning "没有找到YAML配置文件"
+    fi
+
+    # 特别拷贝 trpc_go.yaml 到 bin 目录
+    if [ -f "config/trpc_go.yaml" ]; then
+        cp config/trpc_go.yaml "$BUILD_DIR/bin/"
+        print_success "trpc_go.yaml 拷贝到bin目录成功"
+    else
+        print_warning "没有找到 trpc_go.yaml 文件"
     fi
 else
     print_warning "config目录不存在"
@@ -107,7 +115,7 @@ if [ -f "\$PID_FILE" ]; then
     if ps -p "\$OLD_PID" > /dev/null 2>&1; then
         echo "发现运行中的服务 (PID: \$OLD_PID)，正在停止..."
         kill "\$OLD_PID"
-        
+
         # 等待进程结束
         for i in {1..10}; do
             if ! ps -p "\$OLD_PID" > /dev/null 2>&1; then
@@ -116,7 +124,7 @@ if [ -f "\$PID_FILE" ]; then
             fi
             sleep 1
         done
-        
+
         # 如果还在运行，强制杀死
         if ps -p "\$OLD_PID" > /dev/null 2>&1; then
             echo "强制停止旧进程..."
@@ -133,7 +141,7 @@ if [ ! -z "\$RUNNING_PIDS" ]; then
     echo "正在停止这些进程..."
     echo "\$RUNNING_PIDS" | xargs kill 2>/dev/null || true
     sleep 2
-    
+
     # 强制杀死仍在运行的进程
     STILL_RUNNING=\$(pgrep -f "\$APP_NAME" 2>/dev/null || true)
     if [ ! -z "\$STILL_RUNNING" ]; then
@@ -159,7 +167,7 @@ fi
 
 # 启动服务
 echo "启动 \$APP_NAME..."
-nohup ./\$APP_NAME -conf=../config/trpc_go.yaml > ../log/app.log 2>&1 &
+nohup ./\$APP_NAME > ../log/app.log 2>&1 &
 echo \$! > "../\$PID_FILE"
 echo "#服务已启动 (PID: \$(cat ../\$PID_FILE))"
 echo "#日志文件: log/app.log"
@@ -184,7 +192,7 @@ PID=\$(cat "\$PID_FILE")
 if ps -p "\$PID" > /dev/null 2>&1; then
     echo "停止服务 (PID: \$PID)..."
     kill "\$PID"
-    
+
     # 等待进程结束
     for i in {1..10}; do
         if ! ps -p "\$PID" > /dev/null 2>&1; then
@@ -194,7 +202,7 @@ if ps -p "\$PID" > /dev/null 2>&1; then
         fi
         sleep 1
     done
-    
+
     # 强制杀死进程
     echo "强制停止服务..."
     kill -9 "\$PID"
@@ -217,7 +225,7 @@ cat > "$BUILD_DIR/README.md" << EOF
 
 ## 构建信息
 - 版本: $VERSION
-- 构建时间: $BUILD_TIME  
+- 构建时间: $BUILD_TIME
 - Git提交: $GIT_COMMIT
 
 ## 目录结构
@@ -240,7 +248,7 @@ release/
 
 ### 直接运行
 \`\`\`bash
-./bin/$APP_NAME -conf=./config/trpc_go.yaml
+cd bin && ./$APP_NAME
 \`\`\`
 
 ### 使用启动脚本（推荐）
@@ -248,7 +256,7 @@ release/
 # 启动服务
 ./start.sh
 
-# 停止服务  
+# 停止服务
 ./stop.sh
 \`\`\`
 
@@ -264,7 +272,7 @@ release/
 # SQLite（如果使用SQLite）
 cd data && sqlite3 auth.db < ../../sql/schema.sql
 
-# PostgreSQL（如果使用PostgreSQL）  
+# PostgreSQL（如果使用PostgreSQL）
 psql -d your_database -f ../sql/schema.sql
 \`\`\`
 
@@ -273,7 +281,7 @@ psql -d your_database -f ../sql/schema.sql
 \`\`\`bash
 export DB_HOST="your-db-host"
 export DB_USER="your-db-user"
-export DB_PASSWORD="your-secure-password"  
+export DB_PASSWORD="your-secure-password"
 export DB_NAME="moox_auth_prod"
 export JWT_SECRET_KEY="your-super-secure-jwt-key"
 \`\`\`

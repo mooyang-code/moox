@@ -1,3 +1,4 @@
+
 -- ============ Moox 认证系统数据库表设计 ============
 
 -- ************ 用户表 ************
@@ -22,7 +23,7 @@ CREATE TABLE t_users (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,               -- 修改时间
     
     UNIQUE (c_user_id),
-    UNIQUE (c_username),
+    UNIQUE (c_username)
 );
 
 -- ************ 活跃令牌表 (JWT会话管理) ************
