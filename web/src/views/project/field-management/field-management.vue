@@ -6,8 +6,11 @@
           <a-space wrap>
             <a-input v-model="form.fieldName" placeholder="请输入字段中文名" allow-clear />
             <a-input v-model="form.fieldNameEn" placeholder="请输入字段英文名" allow-clear />
-            <a-select placeholder="字段主要类型" v-model="form.primaryFormat" style="width: 150px" allow-clear>
-              <a-option v-for="item in primaryTypes" :key="item.value" :value="item.value">{{ item.name }}</a-option>
+            <a-select placeholder="字段类型" v-model="form.dataCategory" style="width: 150px" allow-clear>
+              <a-option v-for="item in dataCategoryOptions" :key="item.value" :value="item.value">{{ item.name }}</a-option>
+            </a-select>
+            <a-select placeholder="关联数据集" v-model="form.relatedDataset" style="width: 180px" allow-clear>
+              <a-option v-for="item in datasetList" :key="item.dataset_id" :value="item.dataset_id">{{ item.dataset_name }}</a-option>
             </a-select>
             <a-select placeholder="是否必填" v-model="form.required" style="width: 120px" allow-clear>
               <a-option v-for="item in requiredOptions" :key="item.value" :value="item.value">{{ item.name }}</a-option>
@@ -49,18 +52,26 @@
             :bordered="{ cell: true }"
             :loading="loading"
             :scroll="{ x: '100%', y: '100%', minWidth: 1200 }"
-            :pagination="pagination"
+            :pagination="paginationConfig"
             :row-selection="{ type: 'checkbox', showCheckedAll: true }"
             :selected-keys="selectedKeys"
             @select="select"
             @select-all="selectAll"
             @page-change="onPageChange"
+            @page-size-change="onPageSizeChange"
           >
             <template #columns>
               <a-table-column title="字段ID" data-index="id" :width="80"></a-table-column>
               <a-table-column title="字段中文名" data-index="fieldName" :width="120"></a-table-column>
               <a-table-column title="字段英文名" data-index="fieldNameEn" :width="120"></a-table-column>
-              <a-table-column title="字段主要类型" data-index="primaryFormatText" :width="120"></a-table-column>
+              <a-table-column title="字段类型" :width="120" align="center">
+                <template #cell="{ record }">
+                  <a-tag bordered size="small" color="blue" v-if="record.dataCategory === 1">静态数据字段</a-tag>
+                  <a-tag bordered size="small" color="green" v-else-if="record.dataCategory === 2">时序数据字段</a-tag>
+                  <a-tag bordered size="small" color="gray" v-else>未知类型</a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="字段格式" data-index="fieldFormatText" :width="150"></a-table-column>
               <a-table-column title="是否必填" :width="100" align="center">
                 <template #cell="{ record }">
                   <a-tag bordered size="small" color="red" v-if="record.isRequired">必填</a-tag>
@@ -80,7 +91,6 @@
                 </template>
               </a-table-column>
               <a-table-column title="关联数据集" data-index="relatedDatasets" :ellipsis="true" :tooltip="true" :width="150"></a-table-column>
-              <a-table-column title="创建时间" data-index="createTime" :width="180"></a-table-column>
               <a-table-column title="操作" :width="200" align="center" :fixed="'right'">
                 <template #cell="{ record }">
                   <a-space>
@@ -163,7 +173,13 @@
             </a-switch>
           </a-form-item>
           <a-form-item field="fieldValidationRules" label="数据校验规则" validate-trigger="blur">
-            <a-textarea v-model="addForm.fieldValidationRules" placeholder="请输入JSON格式的数据校验规则（选填）" allow-clear />
+            <a-textarea
+              v-model="addForm.fieldValidationRules"
+              placeholder="请输入JSON格式的数据校验规则（选填），如：{&quot;string_rule&quot;:{&quot;min_length&quot;:3,&quot;max_length&quot;:20,&quot;pattern&quot;:&quot;^[A-Z]+$&quot;}}"
+              allow-clear
+              :auto-size="{ minRows: 3, maxRows: 8 }"
+              style="font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 13px;"
+            />
           </a-form-item>
           <a-form-item field="writeExample" label="写入示例" validate-trigger="blur">
             <a-input v-model="addForm.writeExample" placeholder="请输入写入示例（选填）" allow-clear />
@@ -498,6 +514,8 @@ interface FieldRecord {
   primaryFormatText: string;
   secondaryFormat: string;
   secondaryFormatText: string;
+  fieldFormatText: string; // 字段格式（主要类型+次要类型组合）
+  dataCategory: number; // 字段数据类型（1静态，2时序）
   isRequired: boolean;
   isUnique: boolean;
   isMetadata: boolean;
@@ -513,7 +531,8 @@ interface FieldRecord {
 const form = ref({
   fieldName: "",
   fieldNameEn: "",
-  primaryFormat: "",
+  dataCategory: null as number | null,
+  relatedDataset: null as number | null,
   required: null as boolean | null
 });
 
@@ -532,6 +551,12 @@ const primaryTypes = ref([
 // 次要类型选项
 const secondaryTypes = ref(FIELD_SECONDARY_FORMAT_OPTIONS);
 
+// 数据类型选项
+const dataCategoryOptions = ref([
+  { value: 1, name: "静态数据字段" },
+  { value: 2, name: "时序数据字段" }
+]);
+
 // 是否必填选项
 const requiredOptions = ref([
   { value: true, name: "必填" },
@@ -544,6 +569,8 @@ const getTypeText = (value: string, types: any[]) => {
   return type ? type.name : '';
 };
 
+
+
 // 搜索和重置
 const search = () => {
   pagination.value.current = 1;
@@ -554,7 +581,8 @@ const reset = () => {
   form.value = {
     fieldName: "",
     fieldNameEn: "",
-    primaryFormat: "",
+    dataCategory: null,
+    relatedDataset: null,
     required: null
   };
   getFieldList();
@@ -564,10 +592,23 @@ const reset = () => {
 const loading = ref(false);
 const pagination = ref({
   current: 1,
-  pageSize: 10,
+  pageSize: 15,
   total: 0,
-  showPageSize: true
+  showPageSize: true,
+  pageSizeOptions: [10, 15, 20, 50, 100]
 });
+
+// 分页配置，用于表格组件
+const paginationConfig = computed(() => ({
+  ...pagination.value,
+  showTotal: true,
+  showJumper: true,
+  showPageSize: true,
+  pageSizeOptions: [10, 15, 20, 50, 100],
+  pageSizeProps: {
+    style: { minWidth: '120px' } // 增加分页选择框宽度
+  }
+}));
 const selectedKeys = ref<number[]>([]);
 const fieldList = ref<FieldRecord[]>([]);
 
@@ -582,6 +623,13 @@ const selectAll = (state: boolean) => {
 // 页码改变
 const onPageChange = (current: number) => {
   pagination.value.current = current;
+  getFieldList();
+};
+
+// 每页条目数改变
+const onPageSizeChange = (pageSize: number) => {
+  pagination.value.pageSize = pageSize;
+  pagination.value.current = 1; // 重置到第一页
   getFieldList();
 };
 
@@ -608,16 +656,22 @@ const getDatasetNames = (datasetIds: number[]): string => {
 const convertApiFieldToRecord = (apiField: FieldDetailInfo): FieldRecord => {
   // dataset_ids已经是number[]类型，直接使用
   const datasetIds = apiField.dataset_ids || [];
-  
+
+  const primaryFormatText = getTypeText(String(apiField.field_format_type.field_primary_format), primaryTypes.value);
+  const secondaryFormatText = getFieldSecondaryFormatName(apiField.field_format_type.field_secondary_format);
+  const fieldFormatText = `${primaryFormatText} - ${secondaryFormatText}`;
+
   return {
     id: apiField.field_id,
     fieldName: apiField.field_name,
     fieldNameEn: apiField.interface_name,
     fieldDescription: apiField.desc,
     primaryFormat: String(apiField.field_format_type.field_primary_format),
-    primaryFormatText: getTypeText(String(apiField.field_format_type.field_primary_format), primaryTypes.value),
+    primaryFormatText: primaryFormatText,
     secondaryFormat: String(apiField.field_format_type.field_secondary_format),
-    secondaryFormatText: getFieldSecondaryFormatName(apiField.field_format_type.field_secondary_format),
+    secondaryFormatText: secondaryFormatText,
+    fieldFormatText: fieldFormatText,
+    dataCategory: apiField.data_category || 1, // 字段数据类型，默认为静态数据
     isRequired: apiField.required_flag === 1, // 1表示必填，-1表示非必填
     isUnique: apiField.unique_flag === 1, // 1表示唯一，-1表示非唯一
     isMetadata: apiField.metadata_flag === 1, // 1表示元数据，-1表示普通字段
@@ -649,31 +703,45 @@ const getFieldList = async () => {
       }
     };
 
-    // 添加主要类型筛选
-    if (form.value.primaryFormat) {
-      // 这里可能需要根据具体需求调整，proto中没有直接的primaryFormat搜索条件
-    }
-
     const response = await searchFields(searchParams);
-    
+
     // 转换API数据为前端展示格式
     fieldList.value = response.field_detail_infos.map(convertApiFieldToRecord);
-    
-    // 根据前端筛选条件再次过滤（如果后台API不支持某些筛选条件）
-    if (form.value.primaryFormat) {
-      fieldList.value = fieldList.value.filter(item => 
-        item.primaryFormat === form.value.primaryFormat
+
+    // 根据前端筛选条件进行过滤（如果后台API不支持某些筛选条件）
+    let filteredList = fieldList.value;
+
+    // 按数据类型筛选
+    if (form.value.dataCategory !== null) {
+      filteredList = filteredList.filter(item =>
+        item.dataCategory === form.value.dataCategory
       );
     }
+
+    // 按关联数据集筛选
+    if (form.value.relatedDataset !== null) {
+      filteredList = filteredList.filter(item =>
+        item.datasetIds.includes(form.value.relatedDataset!)
+      );
+    }
+
+    // 按是否必填筛选
     if (form.value.required !== null) {
-      fieldList.value = fieldList.value.filter(item => 
+      filteredList = filteredList.filter(item =>
         item.isRequired === form.value.required
       );
     }
-    
+
+    fieldList.value = filteredList;
+
     // 更新分页信息
     pagination.value.current = response.cur_page;
-    pagination.value.total = response.total_num;
+    // 如果有前端筛选，使用筛选后的数量，否则使用后台返回的总数
+    pagination.value.total = (form.value.dataCategory !== null ||
+                             form.value.relatedDataset !== null ||
+                             form.value.required !== null)
+                             ? filteredList.length
+                             : response.total_num;
     
   } catch (error) {
     console.error('获取字段列表失败:', error);
@@ -738,12 +806,13 @@ const yamlCode = ref(`fields:
     field_name: "交易标的ID"   # 字段中文显示名称
     dataset_ids: [100,101]    # 关联的数据集ID列表，指定该字段在哪些数据集下生效（具体数据集ID请参考数据集列表）
     desc: "交易对标识符，如BTCUSDT，使用全大写字母格式" # 字段功能描述
+    field_type: 1             # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1          # 必填标记（-1非必填；1必填）
     unique_flag: 1            # 唯一约束标记（-1否；1是）
     metadata_flag: 1          # 元数据字段标记（-1否；1是）
     field_primary_format: 1   # 字段主要数据类型：1=字符串，2=整型，3=双精度浮点数，4=时间类型，5=选项类型，6=Set类型，7=Map类型k-v，8=Map类型k-list
     field_secondary_format: 3 # 字段次要数据类型，用于进一步限定数据格式
-    validation_rule: '{"min_length": 3, "max_length": 10, "pattern": "^[A-Z0-9]+$"}' # 字符串类型校验规则
+    validation_rule: '{"string_rule":{"min_length":3,"max_length":10,"pattern":"^[A-Z0-9]+$"}}' # 字符串类型校验规则（下划线格式）
     write_example: "BTCUSDT"  # 数据写入时的标准示例
     remark: "交易对标识符，必须使用全大写字母和数字组合" # 补充说明和注意事项
 
@@ -751,6 +820,7 @@ const yamlCode = ref(`fields:
     field_name: "K线开始时间"   # 字段中文显示名称
     dataset_ids: [100,101]    # 关联的数据集ID列表，指定该字段在哪些数据集下生效（具体数据集ID请参考数据集列表）
     desc: "K线图表周期的起始时间戳" # 字段功能描述
+    field_type: 2             # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1          # 必填标记（-1非必填；1必填）
     unique_flag: -1           # 唯一约束标记（-1否；1是）
     metadata_flag: -1         # 元数据字段标记（-1否；1是）
@@ -764,6 +834,7 @@ const yamlCode = ref(`fields:
     field_name: "开盘价"
     dataset_ids: [100,101]
     desc: "K线周期开盘价格"
+    field_type: 2             # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1
     unique_flag: -1
     metadata_flag: -1
@@ -777,6 +848,7 @@ const yamlCode = ref(`fields:
     field_name: "成交量"
     dataset_ids: [100,101]
     desc: "K线周期成交量"
+    field_type: 2             # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1
     unique_flag: -1
     metadata_flag: -1
@@ -790,6 +862,7 @@ const yamlCode = ref(`fields:
     field_name: "交易所类型"
     dataset_ids: [100,101]
     desc: "交易所类型选项"
+    field_type: 1             # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1
     unique_flag: -1
     metadata_flag: -1
@@ -1118,35 +1191,42 @@ const afterImportResultClose = () => {
 };
 
 // 解析validation_rule字符串为ValidationRule对象
+// 只支持标准下划线格式: {"string_rule":{"min_length":3,"max_length":20}}
 const parseValidationRule = (validationRuleStr: string, fieldPrimaryFormat: number): any => {
   if (!validationRuleStr) {
     return undefined;
   }
-  
+
   try {
     const ruleObj = typeof validationRuleStr === 'string' ? JSON.parse(validationRuleStr) : validationRuleStr;
-    
-    // 根据字段一级格式构建相应的ValidationRule
+
+    // 检查是否已经是标准下划线格式
+    if (ruleObj.string_rule || ruleObj.integer_rule || ruleObj.double_rule || ruleObj.option_rule) {
+      // 已经是标准格式，直接返回
+      return ruleObj;
+    }
+
+    // 根据字段一级格式构建相应的ValidationRule（使用下划线格式）
     switch (fieldPrimaryFormat) {
       case 1: // STRING - 字符串类型
         return {
           string_rule: {
-            min_length: ruleObj.min_length || ruleObj.minLength,
-            max_length: ruleObj.max_length || ruleObj.maxLength,
+            min_length: ruleObj.min_length,
+            max_length: ruleObj.max_length,
             length: ruleObj.length,
             const: ruleObj.const,
             pattern: ruleObj.pattern,
             prefix: ruleObj.prefix,
             suffix: ruleObj.suffix,
             contains: ruleObj.contains,
-            not_contains: ruleObj.not_contains || ruleObj.notContains,
+            not_contains: ruleObj.not_contains,
             in: ruleObj.in,
-            not_in: ruleObj.not_in || ruleObj.notIn,
-            not_pattern: ruleObj.not_pattern || ruleObj.notPattern,
+            not_in: ruleObj.not_in,
+            not_pattern: ruleObj.not_pattern,
             format: ruleObj.format
           }
         };
-      
+
       case 2: // INTEGER - 整型
         return {
           integer_rule: {
@@ -1158,10 +1238,10 @@ const parseValidationRule = (validationRuleStr: string, fieldPrimaryFormat: numb
             gt: ruleObj.gt,
             gte: ruleObj.gte,
             in: ruleObj.in,
-            not_in: ruleObj.not_in || ruleObj.notIn
+            not_in: ruleObj.not_in
           }
         };
-      
+
       case 3: // DOUBLE - 双精度浮点数
         return {
           double_rule: {
@@ -1173,31 +1253,31 @@ const parseValidationRule = (validationRuleStr: string, fieldPrimaryFormat: numb
             gt: ruleObj.gt,
             gte: ruleObj.gte,
             in: ruleObj.in,
-            not_in: ruleObj.not_in || ruleObj.notIn
+            not_in: ruleObj.not_in
           }
         };
-      
+
       case 4: // TIME - 时间类型，使用字符串规则
         return {
           string_rule: {
             format: ruleObj.format,
             pattern: ruleObj.pattern,
-            min_length: ruleObj.min_length || ruleObj.minLength,
-            max_length: ruleObj.max_length || ruleObj.maxLength
+            min_length: ruleObj.min_length,
+            max_length: ruleObj.max_length
           }
         };
-      
+
       case 5: // OPTION - 选项类型
         return {
           option_rule: {
-            lib_id: ruleObj.lib_id || ruleObj.libId
+            lib_id: ruleObj.lib_id
           }
         };
-      
+
       default:
         // 对于其他类型，尝试智能判断
-        if (ruleObj.lib_id || ruleObj.libId) {
-          return { option_rule: { lib_id: ruleObj.lib_id || ruleObj.libId } };
+        if (ruleObj.lib_id) {
+          return { option_rule: { lib_id: ruleObj.lib_id } };
         } else if (typeof ruleObj.min === 'number' && Number.isInteger(ruleObj.min)) {
           return { integer_rule: ruleObj };
         } else if (typeof ruleObj.min === 'number') {
@@ -1318,6 +1398,21 @@ const handleImportOk = async () => {
         // 解析validation_rule
         const validationRule = parseValidationRule(fieldConfig.validation_rule, fieldPrimaryFormat);
         
+        // 处理字段类型：从配置中读取，如果没有则默认为1（静态数据字段）
+        let fieldType = 1; // 默认为静态数据字段
+        if (fieldConfig.field_type !== undefined && fieldConfig.field_type !== null) {
+          fieldType = Number(fieldConfig.field_type);
+          // 验证字段类型的有效性（1=静态数据字段，2=时序数据字段）
+          if (fieldType !== 1 && fieldType !== 2) {
+            importResult.value.failList.push({
+              interface_name: fieldConfig.interface_name || '未知字段',
+              field_name: fieldConfig.field_name || '未知字段名',
+              error_message: `字段类型无效：field_type=${fieldType}，有效值为1（静态数据字段）或2（时序数据字段）`
+            });
+            continue;
+          }
+        }
+
         // 构建UpsertField请求参数
         const upsertParams: UpsertFieldReq = {
           auth_info: getAuthInfo(),
@@ -1328,7 +1423,7 @@ const handleImportOk = async () => {
           proj_id: Number(currentProject.value.id),
           dataset_ids: fieldConfig.dataset_ids,
           field_name: fieldConfig.field_name,
-          field_type: 1, // 默认为基础字段
+          field_type: fieldType, // 使用从配置中读取的字段类型
           interface_name: fieldConfig.interface_name,
           desc: fieldConfig.desc || '',
           required_flag: fieldConfig.required_flag || (fieldConfig.is_required ? 1 : -1), // 1必填，-1非必填
@@ -1790,9 +1885,22 @@ onMounted(async () => {
   :deep(.arco-upload-wrapper.arco-upload-wrapper-type-text) {
     width: 100% !important;
   }
-  
+
   :deep(.arco-upload-list) {
     width: 100% !important;
   }
 }
-</style> 
+
+// 优化分页组件样式
+:deep(.arco-pagination-size-selector) {
+  .arco-select {
+    min-width: 120px !important;
+  }
+}
+
+:deep(.arco-pagination) {
+  .arco-pagination-item-jumper {
+    margin-left: 16px;
+  }
+}
+</style>

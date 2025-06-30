@@ -2,24 +2,34 @@
   <div class="moox-inner">
     <!-- 搜索区域 -->
     <a-space wrap>
-      <a-select v-model="form.entity_id" placeholder="请选择存储实体" allow-clear style="width: 200px" :loading="entityLoading">
-        <a-option 
-          v-for="entity in entityOptions" 
-          :key="entity.entity_id" 
-          :value="entity.entity_id"
-        >
-          {{ entity.entity_alias }} ({{ entity.entity_id }})
-        </a-option>
-      </a-select>
-      <a-input v-model="form.field_id" placeholder="请输入字段ID" allow-clear style="width: 150px" />
       <a-select placeholder="请选择数据类型" v-model="form.data_category" style="width: 150px" allow-clear>
+        <a-option value="999999999">全部</a-option>
         <a-option value="1">静态字段</a-option>
         <a-option value="2">时序字段</a-option>
       </a-select>
+      <a-select
+        v-model="form.field_id"
+        placeholder="请选择字段"
+        allow-clear
+        allow-search
+        :filter-option="false"
+        @search="handleFieldSearch"
+        style="width: 200px"
+        :loading="fieldLoading"
+      >
+        <a-option value="999999999">全部</a-option>
+        <a-option
+          v-for="field in filteredFieldOptions"
+          :key="field.field_id"
+          :value="field.field_id"
+        >
+          {{ field.field_name }} ({{ field.field_id }})
+        </a-option>
+      </a-select>
       <a-select v-model="form.device_id" placeholder="请选择存储设备" allow-clear style="width: 200px" :loading="deviceLoading">
-        <a-option 
-          v-for="device in deviceOptions" 
-          :key="device.device_id" 
+        <a-option
+          v-for="device in deviceOptions"
+          :key="device.device_id"
           :value="device.device_id"
         >
           {{ device.device_name }} ({{ device.device_id }})
@@ -65,12 +75,11 @@
         <a-table-column title="序号" :width="64">
           <template #cell="cell">{{ cell.rowIndex + 1 }}</template>
         </a-table-column>
-        <a-table-column title="存储实体" data-index="entity_id">
+        <a-table-column title="字段ID" data-index="field_id">
           <template #cell="{ record }">
-            {{ getEntityName(record.entity_id) }}
+            {{ getFieldName(record.field_id) }}
           </template>
         </a-table-column>
-        <a-table-column title="字段ID" data-index="field_id"></a-table-column>
         <a-table-column title="数据类型" data-index="data_category">
           <template #cell="{ record }">
             <a-tag :color="getDataCategoryColor(record.data_category)">
@@ -114,31 +123,38 @@
       <template #title>{{ modalTitle }}</template>
       <div>
         <a-form ref="formRef" auto-label-width :rules="rules" :model="formData">
-          <a-form-item field="entity_id" label="存储实体" validate-trigger="blur">
-            <a-select v-model="formData.entity_id" placeholder="请选择存储实体" allow-clear :loading="entityLoading">
-              <a-option 
-                v-for="entity in entityOptions" 
-                :key="entity.entity_id" 
-                :value="entity.entity_id"
-              >
-                {{ entity.entity_alias }} ({{ entity.entity_id }})
-              </a-option>
-            </a-select>
-          </a-form-item>
-          <a-form-item field="field_id" label="字段ID" validate-trigger="blur">
-            <a-input v-model="formData.field_id" placeholder="请输入字段ID" allow-clear />
-          </a-form-item>
           <a-form-item field="data_category" label="数据类型" validate-trigger="blur">
             <a-select v-model="formData.data_category" placeholder="请选择数据类型">
+              <a-option :value="999999999">全部</a-option>
               <a-option :value="1">静态字段</a-option>
               <a-option :value="2">时序字段</a-option>
             </a-select>
           </a-form-item>
+          <a-form-item field="field_id" label="字段ID" validate-trigger="blur">
+            <a-select
+              v-model="formData.field_id"
+              placeholder="请选择字段"
+              allow-clear
+              allow-search
+              :filter-option="false"
+              @search="handleModalFieldSearch"
+              :loading="fieldLoading"
+            >
+              <a-option :value="999999999">全部</a-option>
+              <a-option
+                v-for="field in filteredModalFieldOptions"
+                :key="field.field_id"
+                :value="field.field_id"
+              >
+                {{ field.field_name }} ({{ field.field_id }})
+              </a-option>
+            </a-select>
+          </a-form-item>
           <a-form-item field="device_id" label="存储设备" validate-trigger="blur">
             <a-select v-model="formData.device_id" placeholder="请选择存储设备" allow-clear :loading="deviceLoading">
-              <a-option 
-                v-for="device in deviceOptions" 
-                :key="device.device_id" 
+              <a-option
+                v-for="device in deviceOptions"
+                :key="device.device_id"
                 :value="device.device_id"
               >
                 {{ device.device_name }} ({{ device.device_id }})
@@ -153,16 +169,17 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
+import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import { IconSearch, IconRefresh, IconPlus, IconEdit, IconDelete } from '@arco-design/web-vue/es/icon';
-import type { FieldRoute, StorageEntity, StorageDevice } from '@/api/storage-config';
-import { 
-  createFieldRoute, 
-  updateFieldRoute, 
+import type { FieldRoute, StorageDevice } from '@/api/storage-config';
+import {
+  createFieldRoute,
+  updateFieldRoute,
   deleteFieldRoute,
-  listStorageEntities,
   listStorageDevices
 } from '@/api/storage-config';
+import { searchFields, type FieldDetailInfo, type AuthInfo } from '@/api/field';
 
 // Props定义
 interface Props {
@@ -177,13 +194,12 @@ const props = withDefaults(defineProps<Props>(), {
 
 // Emits定义
 const emits = defineEmits<{
-  refresh: [searchParams?: { entity_id?: number; field_id?: number; data_category?: number; device_id?: number }];
+  refresh: [searchParams?: { field_id?: number; data_category?: number; device_id?: number }];
 }>();
 
 // 定义表单数据类型
 interface RouteFormData {
   id?: number;
-  entity_id: number;
   field_id: string | number;
   data_category: number;
   device_id: number;
@@ -191,7 +207,6 @@ interface RouteFormData {
 
 // 搜索表单
 const form = ref({
-  entity_id: undefined as any,
   field_id: '',
   data_category: '',
   device_id: undefined as any,
@@ -216,15 +231,57 @@ const modalVisible = ref(false);
 const modalTitle = ref('新增字段路由配置');
 const formRef = ref();
 const formData = ref<RouteFormData>({
-  entity_id: undefined as any,
   field_id: '',
   data_category: 1,
   device_id: undefined as any,
 });
 
-// 存储实体选项
-const entityOptions = ref<StorageEntity[]>([]);
-const entityLoading = ref(false);
+// 路由信息
+const route = useRoute();
+
+// 获取当前项目ID
+const currentProjectId = computed(() => {
+  const projectId = route.params.projectId;
+  return projectId ? Number(projectId) : null;
+});
+
+// 认证信息
+const AUTH_INFO: AuthInfo = {
+  app_id: 'moox_backend_service',
+  app_key: 'moox_backend_service_key'
+};
+
+// 字段选项
+const fieldOptions = ref<FieldDetailInfo[]>([]);
+const fieldLoading = ref(false);
+
+// 搜索区域的字段过滤
+const searchFieldKeyword = ref('');
+const filteredFieldOptions = computed(() => {
+  if (!searchFieldKeyword.value) {
+    return fieldOptions.value;
+  }
+  const keyword = searchFieldKeyword.value.toLowerCase();
+  return fieldOptions.value.filter(field =>
+    field.field_name.toLowerCase().includes(keyword) ||
+    field.interface_name.toLowerCase().includes(keyword) ||
+    field.field_id.toString().includes(keyword)
+  );
+});
+
+// 模态框的字段过滤
+const modalFieldKeyword = ref('');
+const filteredModalFieldOptions = computed(() => {
+  if (!modalFieldKeyword.value) {
+    return fieldOptions.value;
+  }
+  const keyword = modalFieldKeyword.value.toLowerCase();
+  return fieldOptions.value.filter(field =>
+    field.field_name.toLowerCase().includes(keyword) ||
+    field.interface_name.toLowerCase().includes(keyword) ||
+    field.field_id.toString().includes(keyword)
+  );
+});
 
 // 存储设备选项
 const deviceOptions = ref<StorageDevice[]>([]);
@@ -232,7 +289,6 @@ const deviceLoading = ref(false);
 
 // 表单验证规则
 const rules = {
-  entity_id: [{ required: true, message: '请选择存储实体' }],
   field_id: [{ required: true, message: '请输入字段ID' }],
   data_category: [{ required: true, message: '请选择数据类型' }],
   device_id: [{ required: true, message: '请选择存储设备' }],
@@ -241,6 +297,7 @@ const rules = {
 // 获取数据类型名称
 const getDataCategoryName = (category: number) => {
   const categoryMap: Record<number, string> = {
+    999999999: '全部',
     1: '静态字段',
     2: '时序字段',
   };
@@ -250,16 +307,20 @@ const getDataCategoryName = (category: number) => {
 // 获取数据类型颜色
 const getDataCategoryColor = (category: number) => {
   const colorMap: Record<number, string> = {
+    999999999: 'orange',
     1: 'blue',
     2: 'green',
   };
   return colorMap[category] || 'gray';
 };
 
-// 获取存储实体名称的映射函数
-const getEntityName = (entityId: number): string => {
-  const entity = entityOptions.value.find(e => e.entity_id === entityId);
-  return entity ? `${entity.entity_alias} (${entityId})` : `存储实体 (${entityId})`;
+// 获取字段名称的映射函数
+const getFieldName = (fieldId: number): string => {
+  if (fieldId === 999999999) {
+    return '全部';
+  }
+  const field = fieldOptions.value.find(f => f.field_id === fieldId);
+  return field ? `${field.field_name} (${fieldId})` : `字段 (${fieldId})`;
 };
 
 // 获取存储设备名称的映射函数
@@ -268,19 +329,42 @@ const getDeviceName = (deviceId: number): string => {
   return device ? `${device.device_name} (${deviceId})` : `存储设备 (${deviceId})`;
 };
 
-// 获取存储实体列表
-const loadEntityOptions = async () => {
+// 字段搜索处理函数
+const handleFieldSearch = (value: string) => {
+  searchFieldKeyword.value = value;
+};
+
+// 模态框字段搜索处理函数
+const handleModalFieldSearch = (value: string) => {
+  modalFieldKeyword.value = value;
+};
+
+// 获取字段列表
+const loadFieldOptions = async () => {
+  if (!currentProjectId.value) {
+    console.warn('当前项目ID为空，无法获取字段列表');
+    return;
+  }
+
   try {
-    entityLoading.value = true;
-    const response = await listStorageEntities();
-    entityOptions.value = response.entities || [];
-    console.log('存储实体列表加载成功:', entityOptions.value);
+    fieldLoading.value = true;
+    const response = await searchFields({
+      auth_info: AUTH_INFO,
+      proj_id: currentProjectId.value,
+      page_info: {
+        page_idx: 1,
+        size: 200 // 获取足够多的字段
+      }
+    });
+
+    fieldOptions.value = response.field_detail_infos || [];
+    console.log('字段列表加载成功:', fieldOptions.value);
   } catch (error: any) {
-    console.error('获取存储实体列表失败:', error);
-    Message.error(error.message || '获取存储实体列表失败');
-    entityOptions.value = [];
+    console.error('获取字段列表失败:', error);
+    Message.error(error.message || '获取字段列表失败');
+    fieldOptions.value = [];
   } finally {
-    entityLoading.value = false;
+    fieldLoading.value = false;
   }
 };
 
@@ -302,8 +386,8 @@ const loadDeviceOptions = async () => {
 
 // 初始化加载映射数据
 const initMappingData = async () => {
-  await Promise.all([
-    loadEntityOptions(),
+  await Promise.allSettled([
+    loadFieldOptions(),
     loadDeviceOptions()
   ]);
 };
@@ -311,15 +395,12 @@ const initMappingData = async () => {
 // 搜索
 const search = () => {
   pagination.value.current = 1;
-  // 构建搜索参数，只传递有值的参数
-  const searchParams: { entity_id?: number; field_id?: number; data_category?: number; device_id?: number } = {};
-  if (form.value.entity_id) {
-    searchParams.entity_id = form.value.entity_id;
-  }
-  if (form.value.field_id) {
+  // 构建搜索参数，只传递有值的参数，999999999表示全部，不传递该参数
+  const searchParams: { field_id?: number; data_category?: number; device_id?: number } = {};
+  if (form.value.field_id && form.value.field_id !== 999999999) {
     searchParams.field_id = Number(form.value.field_id);
   }
-  if (form.value.data_category) {
+  if (form.value.data_category && form.value.data_category !== 999999999) {
     searchParams.data_category = Number(form.value.data_category);
   }
   if (form.value.device_id) {
@@ -331,7 +412,6 @@ const search = () => {
 // 重置
 const reset = () => {
   form.value = {
-    entity_id: undefined as any,
     field_id: '',
     data_category: '',
     device_id: undefined as any,
@@ -362,16 +442,18 @@ const selectAll = (checked: boolean) => {
 const onAdd = async () => {
   modalTitle.value = '新增字段路由配置';
   formData.value = {
-    entity_id: undefined as any,
     field_id: '',
     data_category: 1,
     device_id: undefined as any,
   };
   modalVisible.value = true;
-  
+
+  // 重置搜索关键词
+  modalFieldKeyword.value = '';
+
   // 加载下拉框数据
-  await Promise.all([
-    loadEntityOptions(),
+  await Promise.allSettled([
+    loadFieldOptions(),
     loadDeviceOptions()
   ]);
 };
@@ -381,16 +463,18 @@ const onUpdate = async (record: FieldRoute) => {
   modalTitle.value = '编辑字段路由配置';
   formData.value = {
     id: record.id,
-    entity_id: record.entity_id,
     field_id: record.field_id,
     data_category: record.data_category,
     device_id: record.device_id,
   };
   modalVisible.value = true;
-  
+
+  // 重置搜索关键词
+  modalFieldKeyword.value = '';
+
   // 加载下拉框数据
-  await Promise.all([
-    loadEntityOptions(),
+  await Promise.allSettled([
+    loadFieldOptions(),
     loadDeviceOptions()
   ]);
 };
@@ -423,28 +507,30 @@ const batchDelete = () => {
 const handleOk = async () => {
   try {
     await formRef.value?.validate();
-    
+
+    // 处理字段ID和数据类型，将999999999保持原样传递
+    const fieldId = Number(formData.value.field_id);
+    const dataCategory = formData.value.data_category;
+
     if (formData.value.id) {
       // 编辑模式 - 调用更新接口
       await updateFieldRoute({
         id: formData.value.id,
-        entity_id: formData.value.entity_id,
-        field_id: Number(formData.value.field_id),
-        data_category: formData.value.data_category,
+        field_id: fieldId,
+        data_category: dataCategory,
         device_id: formData.value.device_id,
       });
       Message.success('更新字段路由配置成功');
     } else {
       // 新增模式 - 调用创建接口
       await createFieldRoute({
-        entity_id: formData.value.entity_id,
-        field_id: Number(formData.value.field_id),
-        data_category: formData.value.data_category,
+        field_id: fieldId,
+        data_category: dataCategory,
         device_id: formData.value.device_id,
       });
       Message.success('创建字段路由配置成功');
     }
-    
+
     modalVisible.value = false;
     emits('refresh');
   } catch (error: any) {
@@ -456,6 +542,8 @@ const handleOk = async () => {
 // 关闭弹窗
 const afterClose = () => {
   modalVisible.value = false;
+  // 重置搜索关键词
+  modalFieldKeyword.value = '';
 };
 
 // 组件挂载时初始化映射数据

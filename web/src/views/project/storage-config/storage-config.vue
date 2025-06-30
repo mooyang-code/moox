@@ -32,7 +32,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import StorageEntityConfig from './components/storage-entity-config.vue';
 import StorageDeviceConfig from './components/storage-device-config.vue';
@@ -192,6 +192,31 @@ const loadAllData = async () => {
     loading.value = false;
   }
 };
+
+// 监听tab切换，为每个tab切换时重新加载对应数据
+watch(activeTab, (newTab, oldTab) => {
+  // 避免初始化时触发
+  if (oldTab === undefined) return;
+
+  switch (newTab) {
+    case 'storage-entity':
+      console.log('切换到存储实体配置tab，重新加载数据');
+      loadStorageEntities();
+      break;
+    case 'storage-device':
+      console.log('切换到存储设备配置tab，重新加载数据');
+      loadStorageDevices();
+      break;
+    case 'object-route':
+      console.log('切换到数据对象-路由配置tab，重新加载数据');
+      loadObjectRoutes();
+      break;
+    case 'field-route':
+      console.log('切换到数据字段-路由配置tab，重新加载数据');
+      loadFieldRoutes();
+      break;
+  }
+});
 
 onMounted(() => {
   // 初始化加载数据

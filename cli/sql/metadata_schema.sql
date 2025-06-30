@@ -124,14 +124,13 @@ END;
 -- ************ 创建字段路由表 ************
 CREATE TABLE t_field_route (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 自增ID
-    c_entity_id INTEGER NOT NULL, -- 存储实体ID
-    c_field_id INTEGER NOT NULL DEFAULT 0, -- 字段ID
-    c_data_category INTEGER NOT NULL DEFAULT 0, -- 字段所属数据类型（1静态字段，2时序字段；与pb.EnumDataTypeCategory一致）若c_field_id有值则以c_field_id为准。c_data_category有值，则表示该类型的所有字段。
+    c_field_id INTEGER NOT NULL DEFAULT 0, -- 字段ID（使用999999999表示所有字段）
+    c_data_category INTEGER NOT NULL DEFAULT 0, -- 字段所属数据类型（1静态字段，2时序字段；使用999999999表示所有数据类型）
     c_device_id INTEGER NOT NULL DEFAULT 0, -- 字段的存储设备ID
     c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 修改时间
-    UNIQUE (c_field_id, c_entity_id, c_data_category)
+    UNIQUE (c_field_id, c_data_category)
 );
 
 -- 创建普通索引
@@ -175,6 +174,7 @@ CREATE TABLE t_storage_device (
     c_device_name TEXT NOT NULL DEFAULT '0', -- 存储设备名
     c_device_type INTEGER NOT NULL DEFAULT 0, -- 存储设备类型（DuckDB、MySQL等，pb.EnumDeviceType中定义）
     c_conn_info TEXT NOT NULL DEFAULT '', -- 存储连接信息（存储设备的访问地址，可以是本地设备，也可以是远程设备。格式dsn://writeuser:passwdxxxx@tcp(127.0.0.1:23925)/d_meta?charset=utf8mb4
+    c_schema_required INTEGER NOT NULL DEFAULT 1, -- 是否需要schema初始化（-1否，1是）
     c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 修改时间

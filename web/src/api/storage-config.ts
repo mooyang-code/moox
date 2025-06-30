@@ -27,6 +27,7 @@ export interface StorageDevice {
   device_id: number;
   device_name: string;
   device_type: number;
+  schema_required: number;
   conn_info: string;
   ctime: string;
   mtime: string;
@@ -76,9 +77,8 @@ export interface ListObjectRoutesResponse {
 
 export interface FieldRoute {
   id: number;
-  entity_id: number;
-  field_id: number;
-  data_category: number;
+  field_id: number; // 字段ID，使用999999999表示所有字段
+  data_category: number; // 数据类型，1静态字段，2时序字段，使用999999999表示所有数据类型
   device_id: number;
   ctime: string;
   mtime: string;
@@ -86,15 +86,20 @@ export interface FieldRoute {
 }
 
 export interface ListFieldRoutesRequest {
-  entity_id?: number;
-  field_id?: number;
-  data_category?: number;
+  field_id?: number; // 字段ID过滤条件，使用999999999表示所有字段
+  data_category?: number; // 数据类型过滤条件，使用999999999表示所有数据类型
   device_id?: number;
   page_info?: {
     page_no: number;
     page_size: number;
   };
 }
+
+// 字段路由常量
+export const FIELD_ROUTE_CONSTANTS = {
+  ALL_FIELDS_MARKER: 999999999, // 表示所有字段
+  ALL_DATA_CATEGORY_MARKER: 999999999, // 表示所有数据类型
+} as const;
 
 export interface ListFieldRoutesResponse {
   ret_info: {
@@ -426,6 +431,7 @@ export const deleteStorageEntity = async (params: DeleteStorageEntityRequest): P
 export interface CreateStorageDeviceRequest {
   device_name: string;
   device_type: number;
+  schema_required: number;
   conn_info: string;
 }
 
@@ -441,6 +447,7 @@ export interface UpdateStorageDeviceRequest {
   device_id: number;
   device_name: string;
   device_type: number;
+  schema_required: number;
   conn_info: string;
 }
 
@@ -718,7 +725,6 @@ export const deleteObjectRoute = async (params: DeleteObjectRouteRequest): Promi
 // 创建、更新、删除数据字段路由相关接口
 
 export interface CreateFieldRouteRequest {
-  entity_id: number;
   field_id: number;
   data_category: number;
   device_id: number;
@@ -734,7 +740,6 @@ export interface CreateFieldRouteResponse {
 
 export interface UpdateFieldRouteRequest {
   id: number;
-  entity_id: number;
   field_id: number;
   data_category: number;
   device_id: number;
