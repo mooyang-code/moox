@@ -28,6 +28,18 @@ initVChartArcoTheme();
 
 const app = createApp(App);
 
+// 全局错误处理
+app.config.errorHandler = (err, instance, info) => {
+  console.error('全局错误捕获:', err);
+  console.error('错误实例:', instance);
+  console.error('错误信息:', info);
+
+  // 如果是resetFields相关错误，给出更友好的提示
+  if (err.message && err.message.includes('resetFields')) {
+    console.warn('表单重置方法调用失败，这通常是因为组件还未完全挂载');
+  }
+};
+
 // app.use(plugin, options)
 // 其中 plugin 表示要传递的插件对象， options 参数是可选的，表示选项配置
 // https://cn.vuejs.org/api/application.html#app-use

@@ -6,6 +6,7 @@ import { currentlyRoute } from "@/router/route-output";
 import { storeToRefs } from "pinia";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
+import { useLoadingStore } from "@/store/modules/loading";
 import { useRoutingMethod } from "@/hooks/useRoutingMethod";
 import { isEmptyObject } from "@/utils/index";
 /**
@@ -39,7 +40,11 @@ const router = createRouter({
 router.beforeEach(async (to: any, _: any, next: any) => {
   NProgress.start(); // 开启进度条
   const store = useUserInfoStore(pinia);
+  const loadingStore = useLoadingStore(pinia);
   const { token, account } = storeToRefs(store);
+
+  // 显示路由加载状态
+  loadingStore.showRouteLoading();
   // console.log("去", to, "来自", from);
   // next()内部加了path等于跳转指定路由会再次触发router.beforeEach，内部无参数等于放行，不会触发router.beforeEach
   if (to.path === "/login" && !token.value) {
@@ -68,9 +73,9 @@ router.beforeEach(async (to: any, _: any, next: any) => {
         // 判断是否是动态路由
         const { isDynamicRoute } = useRoutingMethod();
         if (isDynamicRoute(to.path)) {
-          next({ name: to.name, params: to.params });
+          next({ name: to.name, params: to.params, replace: true });
         } else {
-          next({ path: to.path, query: to.query });
+          next({ path: to.path, query: to.query, replace: true });
         }
       } catch (error: any) {
         console.error("路由守卫: 获取用户信息失败", error);
@@ -87,6 +92,24 @@ router.beforeEach(async (to: any, _: any, next: any) => {
         }
       }
     } else {
+      // 检查路由是否存在，如果不存在则重新初始化路由
+      if (!router.hasRoute(to.name as string) && to.name !== 'not-found') {
+        try {
+          console.log("路由不存在，重新初始化路由:", to.name);
+          await routeStore.initSetRouter();
+          // 使用setTimeout确保路由已经添加完成
+          setTimeout(() => {
+            next({ ...to, replace: true });
+          }, 100);
+          return;
+        } catch (error) {
+          console.error("路由重新初始化失败:", error);
+          // 如果路由初始化失败，跳转到首页
+          next('/home');
+          return;
+        }
+      }
+
       // 获取外链路由的处理函数
       // 所有的路由正常放行，只不过额外判断是否是外链，如果是，则打开新窗口跳转外链
       // 外链的页面依旧正常打开，只不过不会参与缓存与tabs显示，符合路由跳转的直觉
@@ -104,12 +127,16 @@ router.beforeEach(async (to: any, _: any, next: any) => {
 // 路由跳转错误
 router.onError((error: any) => {
   NProgress.done();
+  const loadingStore = useLoadingStore(pinia);
+  loadingStore.hideRouteLoading();
   console.warn("路由错误", error.message);
 });
 
 // 路由加载后
 router.afterEach(() => {
   NProgress.done();
+  const loadingStore = useLoadingStore(pinia);
+  loadingStore.hideRouteLoading();
 });
 
 export default router;

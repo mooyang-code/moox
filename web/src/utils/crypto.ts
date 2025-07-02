@@ -176,7 +176,7 @@ export function generateDeviceId(): string {
     /**
      * 安全登录
      */
-    async login(username: string, password: string, _verifyCode?: string): Promise<any> {
+    async login(username: string, password: string): Promise<any> {
       console.log('🚀 开始安全登录流程...', { username });
       
       try {

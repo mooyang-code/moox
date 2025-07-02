@@ -2,10 +2,25 @@
   <a-watermark :content="watermark" v-bind="watermarkConfig">
     <a-layout-content class="layout-main-content">
       <Tabs v-if="isTabs" />
-      <router-view v-slot="{ Component, route }">
+      <!-- 全局路由加载状态 -->
+      <div v-if="loadingStore.routeLoading" class="global-loading-container">
+        <a-spin size="large" tip="页面切换中..." />
+      </div>
+
+      <!-- 路由内容 -->
+      <router-view v-else v-slot="{ Component, route }">
         <MainTransition>
           <keep-alive :include="cacheRoutes">
-            <component :is="Component" :key="route.name" v-if="refreshPage" />
+            <Suspense>
+              <template #default>
+                <component :is="Component" :key="route.name" v-if="refreshPage" />
+              </template>
+              <template #fallback>
+                <div class="loading-container">
+                  <a-spin size="large" tip="页面加载中..." />
+                </div>
+              </template>
+            </Suspense>
           </keep-alive>
         </MainTransition>
       </router-view>
@@ -15,13 +30,16 @@
 
 <script setup lang="ts">
 import Tabs from "@/layout/components/Tabs/index.vue";
+import MainTransition from "@/components/main-transition/index.vue";
 import { storeToRefs } from "pinia";
 import { useThemeConfig } from "@/store/modules/theme-config";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
+import { useLoadingStore } from "@/store/modules/loading";
 const themeStore = useThemeConfig();
 let { refreshPage, isTabs, watermark, watermarkStyle, watermarkRotate, watermarkGap } = storeToRefs(themeStore);
 const routerStore = useRoutesConfigStore();
 const { cacheRoutes } = storeToRefs(routerStore);
+const loadingStore = useLoadingStore();
 // 水印配置
 const watermarkConfig = computed(() => {
   return {
@@ -41,6 +59,20 @@ watch(watermarkConfig, newv => {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+.loading-container,
+.global-loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 200px;
+  width: 100%;
+}
+
+.global-loading-container {
+  height: 100%;
+  min-height: 400px;
 }
 
 // 修改左侧滚动条宽度-主要针对main窗口内的滚动条

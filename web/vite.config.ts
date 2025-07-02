@@ -32,7 +32,9 @@ export default defineConfig(({ mode }) => {
     },
     // 依赖预加载 https://cn.vitejs.dev/config/dep-optimization-options.html#dep-optimization-options
     optimizeDeps: {
-      include
+      include,
+      // 强制预构建链接的包
+      force: true
     },
     build: {
       outDir: "dist", // 指定打包路径，默认为项目根目录下的dist目录

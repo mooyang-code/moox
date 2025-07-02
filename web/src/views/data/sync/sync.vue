@@ -1,6 +1,7 @@
 <template>
-  <div class="moox-page">
-    <div class="moox-inner">
+  <PageWrapper :loading="pageLoading" @retry="handleRetry">
+    <div class="moox-page">
+      <div class="moox-inner">
       <a-card title="数据同步配置" style="margin-bottom: 24px">
         <template #extra>
           <a-space>
@@ -232,8 +233,9 @@
           </a-form-item>
         </a-form>
       </a-modal>
+      </div>
     </div>
-  </div>
+  </PageWrapper>
 </template>
 
 <script setup lang="ts">
@@ -241,8 +243,12 @@ import { useRoute } from 'vue-router';
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { listProjects, type Project } from '@/api/project';
 import { Message } from '@arco-design/web-vue';
+import PageWrapper from '@/components/page-wrapper/index.vue';
 
 const route = useRoute();
+
+// 页面加载状态
+const pageLoading = ref(false);
 
 // 获取当前项目ID
 const currentProjectId = computed(() => {
@@ -444,18 +450,23 @@ const getStatusText = (status: number) => {
 // 加载项目数据
 const loadProjectData = async () => {
   console.log('数据同步 - 加载项目数据，当前项目ID:', currentProjectId.value);
-  
+
   try {
+    pageLoading.value = true;
     projectList.value = await listProjects();
-    
+
     // 设置搜索表单的默认项目ID为当前项目
     searchForm.projectId = currentProjectId.value;
-    
+
     // TODO: 根据项目ID加载该项目的同步配置
     // 这里可以调用API获取特定项目的同步配置
-    
-  } catch (error) {
+    console.log('项目列表加载成功:', projectList.value);
+  } catch (error: any) {
     console.error('加载项目数据失败:', error);
+    Message.error(error.message || '加载项目数据失败');
+    throw error; // 重新抛出错误，让PageWrapper捕获
+  } finally {
+    pageLoading.value = false;
   }
 };
 
@@ -590,6 +601,11 @@ const resetSyncForm = () => {
     password: '',
     description: ''
   });
+};
+
+// 重试处理
+const handleRetry = () => {
+  loadProjectData();
 };
 
 onMounted(() => {

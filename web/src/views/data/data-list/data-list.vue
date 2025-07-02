@@ -1,6 +1,7 @@
 <template>
-  <div class="moox-fill">
-    <div class="moox-fill-inner container">
+  <PageWrapper :loading="pageLoading" @retry="handleRetry">
+    <div class="moox-fill">
+      <div class="moox-fill-inner container">
       <!-- 左侧对象树形列表 -->
       <div class="left-box">
         <a-input v-model="objectSearchKeyword" placeholder="请输入对象名称" allow-clear>
@@ -216,12 +217,14 @@
         </a-form-item>
       </a-form>
     </a-modal>
-  </div>
+    </div>
+  </PageWrapper>
 </template>
 
 <script setup lang="ts">
 import { Message } from '@arco-design/web-vue';
 import { useRoute } from 'vue-router';
+import PageWrapper from '@/components/page-wrapper/index.vue';
 
 interface ObjectNode {
   key: string;
@@ -245,6 +248,9 @@ interface DataRecord {
 }
 
 const route = useRoute();
+
+// 页面加载状态
+const pageLoading = ref(false);
 
 // 获取当前项目ID
 const projectId = computed(() => route.params.projectId as string);
@@ -584,6 +590,14 @@ const resetDataForm = () => {
     dataSize: '',
     remark: ''
   });
+};
+
+// 重试处理
+const handleRetry = () => {
+  // 重新初始化页面数据
+  setTimeout(() => {
+    objectTreeRef.value?.expandAll();
+  }, 100);
 };
 
 onMounted(() => {
