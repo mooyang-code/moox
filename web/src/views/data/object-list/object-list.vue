@@ -204,7 +204,7 @@ import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import { IconSearch, IconRefresh, IconUp, IconDown, IconPlus, IconDelete, IconEdit, IconEye } from '@arco-design/web-vue/es/icon';
-import { queryObjectAPI, upsertObjectAPI, fetchObjectAPI, type ObjectRow, type FieldValue, type UpdateObjectRow, type UpdateField } from "@/api/modules/data/index";
+import { queryObjectAPI, upsertObjectAPI, fetchObjectAPI, deleteObjectAPI, type ObjectRow, type FieldValue, type UpdateObjectRow, type UpdateField } from "@/api/modules/data/index";
 import { listProjects, type Project, type Dataset } from '@/api/project';
 import { searchFields, type SearchFieldReq, type FieldDetailInfo } from '@/api/field';
 import { FormData, RowSelection, Pagination } from "./config";
@@ -662,25 +662,11 @@ const deleteObject = async (record: ObjectRow) => {
   try {
     loading.value = true;
 
-    // 通过设置unshelve_time为当前时间来实现软删除
-    const updateRows: UpdateObjectRow[] = [{
-      object_id: record.object_id,
-      fields: {
-        unshelve_time: {
-          field_key: 'unshelve_time',
-          field_type: 1, // STRING类型
-          update_type: 1, // SET_UPDATE
-          simple_value: {
-            str: formatDateTime()
-          }
-        }
-      }
-    }];
-
-    const response = await upsertObjectAPI({
-      project_id: currentProjectId.value,
+    // 调用DeleteObject接口进行真正的删除
+    const response = await deleteObjectAPI({
+      project_id: currentProjectId.value!,
       dataset_id: Number(activeTab.value),
-      object_rows: updateRows
+      object_ids: [record.object_id]
     });
 
     if (response.ret_info.code === 0) {
@@ -689,11 +675,11 @@ const deleteObject = async (record: ObjectRow) => {
       allData.value = []; // 清空缓存，强制重新获取
       getObjectList();
     } else {
-      throw new Error(response.ret_info.msg || '删除失败');
+      throw new Error(response.ret_info.msg || '删除失败，请联系moox backend service管理员');
     }
   } catch (error: any) {
     console.error('删除对象失败:', error);
-    Message.error(error.message || '删除对象失败');
+    Message.error(error.message || '删除对象失败，请联系moox backend service管理员');
   } finally {
     loading.value = false;
   }
@@ -722,25 +708,11 @@ const batchDelete = async () => {
   try {
     loading.value = true;
 
-    // 构建批量删除请求
-    const updateRows: UpdateObjectRow[] = selectedKeys.value.map(objectId => ({
-      object_id: objectId,
-      fields: {
-        unshelve_time: {
-          field_key: 'unshelve_time',
-          field_type: 1, // STRING类型
-          update_type: 1, // SET_UPDATE
-          simple_value: {
-            str: formatDateTime()
-          }
-        }
-      }
-    }));
-
-    const response = await upsertObjectAPI({
-      project_id: currentProjectId.value,
+    // 调用DeleteObject接口进行批量删除
+    const response = await deleteObjectAPI({
+      project_id: currentProjectId.value!,
       dataset_id: Number(activeTab.value),
-      object_rows: updateRows
+      object_ids: selectedKeys.value
     });
 
     if (response.ret_info.code === 0) {
@@ -750,11 +722,11 @@ const batchDelete = async () => {
       allData.value = []; // 清空缓存，强制重新获取
       getObjectList();
     } else {
-      throw new Error(response.ret_info.msg || '批量删除失败');
+      throw new Error(response.ret_info.msg || '批量删除失败，请联系moox backend service管理员');
     }
   } catch (error: any) {
     console.error('批量删除失败:', error);
-    Message.error(error.message || '批量删除失败');
+    Message.error(error.message || '批量删除失败，请联系moox backend service管理员');
   } finally {
     loading.value = false;
   }

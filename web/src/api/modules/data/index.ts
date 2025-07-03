@@ -113,6 +113,18 @@ export interface FetchObjectRsp {
   failed_fields?: Record<string, any>;
 }
 
+// DeleteObject相关接口
+export interface DeleteObjectReq {
+  auth_info: AuthInfo;
+  project_id: number;
+  dataset_id: number;
+  object_ids: string[];  // 要删除的数据对象ID列表（必填，精确删除指定对象）
+}
+
+export interface DeleteObjectRsp {
+  ret_info: RetInfo;
+}
+
 // 认证信息配置
 const AUTH_INFO: AuthInfo = {
   app_id: 'moox_frontend',
@@ -215,6 +227,42 @@ export const fetchObjectAPI = async (params: {
   } catch (error: any) {
     console.error('FetchObject API调用失败:', error);
     throw new Error(error.message || 'FetchObject接口调用失败');
+  }
+};
+
+// DeleteObject接口 - 删除数据对象
+export const deleteObjectAPI = async (params: {
+  project_id: number;
+  dataset_id: number;
+  object_ids: string[];
+}): Promise<DeleteObjectRsp> => {
+  try {
+    // 验证必须提供object_ids
+    if (!params.object_ids || params.object_ids.length === 0) {
+      throw new Error('删除操作失败：必须提供要删除的对象ID列表');
+    }
+
+    const requestData: DeleteObjectReq = {
+      auth_info: AUTH_INFO,
+      ...params
+    };
+
+    const response = await api.post('/storage/DeleteObject', requestData);
+    const data = response.data;
+
+    if (!data) {
+      throw new Error('DeleteObject接口调用失败：响应数据为空');
+    }
+
+    if (!data.ret_info) {
+      console.error('DeleteObject响应缺少ret_info字段:', data);
+      throw new Error('DeleteObject接口调用失败：响应格式错误，缺少ret_info字段');
+    }
+
+    return data as DeleteObjectRsp;
+  } catch (error: any) {
+    console.error('DeleteObject API调用失败:', error);
+    throw new Error(error.message || 'DeleteObject接口调用失败');
   }
 };
 
