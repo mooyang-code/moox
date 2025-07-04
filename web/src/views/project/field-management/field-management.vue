@@ -5,7 +5,10 @@
         <div class="moox-inner">
           <a-space wrap>
             <a-input v-model="form.fieldName" placeholder="请输入字段中文名" allow-clear />
-            <a-input v-model="form.fieldNameEn" placeholder="请输入字段英文名" allow-clear />
+            <a-input v-model="form.fieldNameEn" placeholder="请输入字段英文名" allow-clear @input="validateSearchFieldNameEn" />
+            <div v-if="searchFieldNameEnValidationMessage" style="font-size: 12px; color: #ff7d00; margin-top: 4px;">
+              {{ searchFieldNameEnValidationMessage }}
+            </div>
             <a-select placeholder="字段类型" v-model="form.dataCategory" style="width: 150px" allow-clear>
               <a-option v-for="item in dataCategoryOptions" :key="item.value" :value="item.value">{{ item.name }}</a-option>
             </a-select>
@@ -133,6 +136,11 @@
             <a-input v-model="addForm.fieldNameEn" placeholder="请输入字段英文名" allow-clear :disabled="title === '修改字段'" />
             <template v-if="title === '修改字段'">
               <div style="font-size: 12px; color: #999; margin-top: 4px;">注：字段英文名创建后不可修改</div>
+            </template>
+            <template v-else>
+              <div v-if="fieldNameEnValidationMessage" style="font-size: 12px; color: #ff7d00; margin-top: 4px;">
+                {{ fieldNameEnValidationMessage }}
+              </div>
             </template>
           </a-form-item>
           <a-form-item field="fieldDescription" label="字段描述" validate-trigger="blur">
@@ -592,7 +600,7 @@ const reset = () => {
 const loading = ref(false);
 const pagination = ref({
   current: 1,
-  pageSize: 15,
+  pageSize: 10,
   total: 0,
   showPageSize: true,
   pageSizeOptions: [10, 15, 20, 50, 100]
@@ -671,7 +679,7 @@ const convertApiFieldToRecord = (apiField: FieldDetailInfo): FieldRecord => {
     secondaryFormat: String(apiField.field_format_type.field_secondary_format),
     secondaryFormatText: secondaryFormatText,
     fieldFormatText: fieldFormatText,
-    dataCategory: apiField.data_category || 1, // 字段数据类型，默认为静态数据
+    dataCategory: apiField.field_type || 1, // 字段数据类型，默认为静态数据
     isRequired: apiField.required_flag === 1, // 1表示必填，-1表示非必填
     isUnique: apiField.unique_flag === 1, // 1表示唯一，-1表示非唯一
     isMetadata: apiField.metadata_flag === 1, // 1表示元数据，-1表示普通字段
@@ -874,6 +882,40 @@ const yamlCode = ref(`fields:
 
 const extensions = [yaml(), oneDark];
 
+// 字段英文名校验相关
+const fieldNameEnValidationMessage = ref('');
+const searchFieldNameEnValidationMessage = ref('');
+
+// 字段英文名校验函数
+const validateFieldNameEn = (value: string): string => {
+  if (!value) return '';
+
+  // 校验规则：全小写字母，允许下划线，可以有数字但数字只能在末尾
+  const pattern = /^[a-z_]*[0-9]*$/;
+
+  if (!pattern.test(value)) {
+    return '建议使用全小写字母和下划线，数字只能在末尾';
+  }
+
+  // 检查是否有数字在中间
+  const hasNumberInMiddle = /[0-9].*[a-z_]/.test(value);
+  if (hasNumberInMiddle) {
+    return '建议数字只放在末尾';
+  }
+
+  return '';
+};
+
+// 监听新增/编辑表单中的字段英文名变化
+watch(() => addForm.value.fieldNameEn, (newValue) => {
+  fieldNameEnValidationMessage.value = validateFieldNameEn(newValue);
+});
+
+// 搜索表单字段英文名校验
+const validateSearchFieldNameEn = () => {
+  searchFieldNameEnValidationMessage.value = validateFieldNameEn(form.value.fieldNameEn);
+};
+
 // 动态验证规则
 const rules = computed(() => {
   const baseRules = {
@@ -1029,15 +1071,31 @@ const handleOk = async () => {
         auth_info: getAuthInfo(),
         proj_id: Number(currentProject.value.id),
         field_id: currentEditingFieldId.value,
+        operator: 'system',
         field_update_info: {
+          proj_id: Number(currentProject.value.id),
           dataset_ids: updateDatasetIds,
-          field_name: addForm.value.fieldName,  // 允许修改字段中文名
+          field_id: currentEditingFieldId.value,
+          field_name: addForm.value.fieldName,
+          field_type: addForm.value.fieldType || 1, // 默认为基础字段
+          interface_name: addForm.value.interfaceName,
           desc: addForm.value.fieldDescription,
-          required_flag: addForm.value.isRequired ? 1 : -1, // 1必填，-1非必填
-          unique_flag: addForm.value.isUnique ? 1 : -1, // 1唯一，-1非唯一
+          required_flag: addForm.value.isRequired ? 1 : -1,
+          unique_flag: addForm.value.isUnique ? 1 : -1,
+          metadata_flag: addForm.value.isMetadata ? 1 : -1,
+          parent_field_id: addForm.value.parentFieldId || 0,
+          level_info: [],
+          field_format_type: {
+            field_primary_format: addForm.value.fieldMainType || 1,
+            field_secondary_format: addForm.value.fieldSecondaryType || 1
+          },
+          value_lib_id: addForm.value.valueLibId || 0,
           validation_rule: addForm.value.fieldValidationRules ? JSON.parse(addForm.value.fieldValidationRules) : undefined,
           write_example: addForm.value.writeExample,
-          remark: addForm.value.remark
+          remark: addForm.value.remark,
+          ctime: '',
+          mtime: '',
+          invalid: -1
         }
       };
       

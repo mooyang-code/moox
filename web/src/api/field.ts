@@ -95,17 +95,8 @@ export interface UpdateFieldReq {
   auth_info: AuthInfo;
   proj_id: number;
   field_id: number;
-  field_update_info: {
-    dataset_ids?: number[];
-    field_name?: string;  // 字段中文名
-    desc?: string;
-    required_flag?: number;   // 必填标记（-1非必填；1必填）
-    unique_flag?: number;     // 唯一约束标记（-1否；1是）
-    value_lib_id?: number;
-    validation_rule?: any;
-    write_example?: string;
-    remark?: string;
-  };
+  operator?: string;
+  field_update_info: FieldDetailInfo;
 }
 
 // 删除字段请求参数

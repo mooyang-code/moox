@@ -60,6 +60,9 @@
                 </a-form-item>
                 <a-form-item field="fieldNameEn" label="字段英文名">
                   <a-input v-model="form.fieldNameEn" placeholder="请输入字段英文名" />
+                  <div v-if="fieldNameEnValidationMessage" style="font-size: 12px; color: #ff7d00; margin-top: 4px;">
+                    {{ fieldNameEnValidationMessage }}
+                  </div>
                 </a-form-item>
                 <a-form-item field="fieldDescription" label="字段描述">
                   <a-input v-model="form.fieldDescription" placeholder="请输入字段描述" />
@@ -392,6 +395,34 @@ const rules = ref({
 });
 
 const formRef = ref();
+
+// 字段英文名校验相关
+const fieldNameEnValidationMessage = ref('');
+
+// 字段英文名校验函数
+const validateFieldNameEn = (value: string): string => {
+  if (!value) return '';
+
+  // 校验规则：全小写字母，允许下划线，可以有数字但数字只能在末尾
+  const pattern = /^[a-z_]*[0-9]*$/;
+
+  if (!pattern.test(value)) {
+    return '建议使用全小写字母和下划线，数字只能在末尾';
+  }
+
+  // 检查是否有数字在中间
+  const hasNumberInMiddle = /[0-9].*[a-z_]/.test(value);
+  if (hasNumberInMiddle) {
+    return '建议数字只放在末尾';
+  }
+
+  return '';
+};
+
+// 监听字段英文名变化
+watch(() => form.value.fieldNameEn, (newValue) => {
+  fieldNameEnValidationMessage.value = validateFieldNameEn(newValue);
+});
 
 const onLastStep = () => {
   if (currentStep.value == 1) return;
