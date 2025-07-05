@@ -52,6 +52,7 @@ export interface FieldValue {
 
 export interface ObjectRow {
   object_id: string;
+  object_name?: string; // 对象名称，可选
   fields: Record<string, FieldValue>;
 }
 
@@ -296,4 +297,111 @@ export const getDataListByProjectAPI = (projectId: string) => {
     url: `/mock/data/project/${projectId}/data-list`,
     method: "get"
   });
+};
+
+// SearchData相关接口类型定义（基于access.proto）
+export interface DataKey {
+  project_id: number;
+  dataset_id: number;
+  object_id: string;
+  freq?: string; // 时序频率，可选
+}
+
+export interface TimeRange {
+  start: string; // 格式: "YYYY-MM-DD HH:MM:SS"
+  end?: string;   // 格式: "YYYY-MM-DD HH:MM:SS"
+  periods?: number; // 周期数
+}
+
+export interface SortInfo {
+  field_name: string;
+  sort_type: number; // 1=升序, 2=降序
+}
+
+export interface Cond {
+  field_name: string;
+  op: number;        // 操作符
+  value: any;        // 条件值
+  map_key?: string;  // map字段的key
+}
+
+export interface CondGroup {
+  conds: Cond[];
+  logical: number;   // 条件间关系
+}
+
+export interface SearchOptions {
+  cond_groups?: CondGroup[];  // 请求条件组
+  logical?: number;           // 条件组关系
+  expr_cond?: string;         // 表达式请求条件
+  sort?: SortInfo[];          // 排序信息
+  includes?: string[];        // 返回字段
+  max_num?: number;          // 搜索结果的最大数量（默认10000）
+}
+
+export interface SearchDataReq {
+  auth_info: AuthInfo;
+  data_key: DataKey;
+  time_range?: TimeRange;
+  row_id?: string;        // 行ID，用于静态数据查询
+  options?: SearchOptions;
+  page_info?: PageInfo;
+}
+
+export interface FieldValue {
+  field_key: string;
+  field_type: number;
+  simple_value?: SimpleValue;
+  map_value?: MapContainer;
+}
+
+export interface DataRow {
+  times?: string;     // 时序数据的时刻值
+  row_id: string;     // 数据行ID
+  fields: Record<string, FieldValue>; // 字段值列表
+}
+
+export interface SearchDataRsp {
+  ret_info: RetInfo;
+  total: number;
+  data_rows: DataRow[];
+  failed_fields?: Record<string, any>;
+}
+
+// SearchData接口 - 搜索数据
+export const searchDataAPI = async (params: {
+  data_key: DataKey;
+  time_range?: TimeRange;
+  row_id?: string;
+  options?: SearchOptions;
+  page_info?: PageInfo;
+}): Promise<SearchDataRsp> => {
+  try {
+    const requestData: SearchDataReq = {
+      auth_info: AUTH_INFO,
+      ...params
+    };
+
+    const response = await api.post('/storage/SearchData', requestData);
+    const data = response.data;
+
+    if (!data) {
+      throw new Error('SearchData接口调用失败：响应数据为空');
+    }
+
+    if (!data.ret_info) {
+      console.error('SearchData响应缺少ret_info字段:', data);
+      throw new Error('SearchData接口调用失败：响应格式错误，缺少ret_info字段');
+    }
+
+    // 检查ret_info.code是否为0（成功）
+    if (data.ret_info.code !== 0) {
+      throw new Error(data.ret_info.msg || 'SearchData接口调用失败');
+    }
+
+    return data as SearchDataRsp;
+  } catch (error: any) {
+    console.error('SearchData API调用失败:', error);
+    throw new Error(error.message || 'SearchData接口调用失败');
+  }
 };
