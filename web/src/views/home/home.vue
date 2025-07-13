@@ -218,7 +218,7 @@
   </div>
 </template>
 
-<script setup lang="ts">
+<script setup lang="ts" name="Home">
 import { ref, onMounted, computed, watch, nextTick, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Message } from '@arco-design/web-vue';

@@ -106,6 +106,12 @@ export const staticRoutes = [
         meta: { title: "数据同步" }
       },
       {
+        path: "/project/create-project",
+        name: "create-project",
+        component: () => import("@/views/project/create-project/create-project.vue"),
+        meta: { title: "新建项目", keepAlive: false }
+      },
+      {
         path: "/container-management/container-list",
         name: "container-list",
         component: () => import("@/views/container/container-list/container-list.vue"),

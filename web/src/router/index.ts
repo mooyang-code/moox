@@ -37,14 +37,36 @@ const router = createRouter({
  * 全局routeTree不能持久化缓存
  * 页面刷新会导致addRoute动态添加的路由失效，需要重新初始化路由
  */
-router.beforeEach(async (to: any, _: any, next: any) => {
+router.beforeEach(async (to: any, from: any, next: any) => {
   NProgress.start(); // 开启进度条
   const store = useUserInfoStore(pinia);
   const loadingStore = useLoadingStore(pinia);
+  const routeStore = useRoutesConfigStore(pinia);
   const { token, account } = storeToRefs(store);
 
   // 显示路由加载状态
   loadingStore.showRouteLoading();
+
+  // 如果从新建项目页面切换到其他页面，清理该组件的缓存
+  if (from.name === 'create-project' && to.name !== 'create-project') {
+    routeStore.removeRouteName('CreateProject');
+    console.log('清理新建项目组件缓存');
+    
+    // 强制清理可能残留的DOM元素
+    setTimeout(() => {
+      const elementsToRemove = document.querySelectorAll('[data-v-152e326b]');
+      elementsToRemove.forEach(element => {
+        console.log('强制清理残留DOM元素:', element);
+        element.remove();
+      });
+    }, 100);
+  }
+  
+  // 如果从步骤表单页面切换到其他页面，清理该组件的缓存
+  if (from.name === 'step-form' && to.name !== 'step-form') {
+    routeStore.removeRouteName('StepForm');
+    console.log('清理步骤表单组件缓存');
+  }
   // console.log("去", to, "来自", from);
   // next()内部加了path等于跳转指定路由会再次触发router.beforeEach，内部无参数等于放行，不会触发router.beforeEach
   if (to.path === "/login" && !token.value) {

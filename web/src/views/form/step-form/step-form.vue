@@ -1,7 +1,7 @@
 <template>
   <div class="moox-page">
     <a-spin :loading="loading" style="display: block">
-      <div class="moox-inner container">
+      <div class="moox-inner container step-form-container">
         <a-row justify="center">
           <a-col :xs="22" :sm="18" :md="16" :lg="16" :xl="12" :xxl="12">
             <a-steps :current="currentStep" line-less>
@@ -92,7 +92,9 @@
   </div>
 </template>
 
-<script setup lang="ts">
+<script setup lang="ts" name="StepForm">
+import { ref, onBeforeUnmount } from 'vue';
+
 const loading = ref(false);
 const currentStep = ref(1);
 const form = ref({
@@ -182,10 +184,18 @@ const onLastStep = () => {
   if (currentStep.value == 1) return;
   currentStep.value -= 1;
 };
+
+// 组件卸载前清理状态
+onBeforeUnmount(() => {
+  console.log('步骤表单组件即将卸载，清理状态');
+  // 重置表单状态
+  currentStep.value = 1;
+  loading.value = false;
+});
 </script>
 
 <style lang="scss" scoped>
-.container {
+.container, .step-form-container {
   padding: 60px 0;
 }
 .margin-top {

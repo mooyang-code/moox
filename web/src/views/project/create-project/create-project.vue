@@ -1,7 +1,7 @@
 <template>
   <div class="moox-page">
     <a-spin :loading="loading" style="display: block">
-      <div class="moox-inner container">
+      <div class="moox-inner container create-project-container">
         <a-row justify="center">
           <a-col :xs="22" :sm="18" :md="16" :lg="16" :xl="12" :xxl="12">
             <a-steps :current="currentStep" line-less>
@@ -214,7 +214,8 @@
   </div>
 </template>
 
-<script setup lang="ts">
+<script setup lang="ts" name="CreateProject">
+import { ref, onBeforeUnmount } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { api, AUTH_INFO } from '@/api/config';
 
@@ -428,10 +429,19 @@ const onLastStep = () => {
   if (currentStep.value == 1) return;
   currentStep.value -= 1;
 };
+
+// 组件卸载前清理状态
+onBeforeUnmount(() => {
+  console.log('新建项目组件即将卸载，清理状态');
+  // 重置表单状态
+  currentStep.value = 1;
+  loading.value = false;
+  createdProjectId.value = '';
+});
 </script>
 
 <style lang="scss" scoped>
-.container {
+.container, .create-project-container {
   padding: 60px 0;
 }
 .margin-top {
