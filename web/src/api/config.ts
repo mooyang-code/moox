@@ -16,6 +16,7 @@ const getCurrentHost = () => {
 // 创建axios实例
 export const api = axios.create({
   baseURL: `http://${getCurrentHost()}:18202/gateway`,
+  timeout: 10000, // 10秒超时
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
