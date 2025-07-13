@@ -44,7 +44,7 @@ export interface MapContainer {
 
 export interface FieldValue {
   field_key: string;
-  field_type: number;
+  field_category: number;
   simple_value?: SimpleValue;
   map_value?: MapContainer;
   option_mapping?: Record<number, string>;
@@ -71,7 +71,7 @@ export interface QueryObjectRsp {
 // UpsertObject相关接口
 export interface UpdateField {
   field_key: string;
-  field_type: number;
+  field_category: number;
   update_type: number; // 1=SET_UPDATE, 2=DEL_UPDATE, 3=APPEND_UPDATE
   simple_value: SimpleValue;
   map_value?: any;
@@ -350,7 +350,7 @@ export interface SearchDataReq {
 
 export interface FieldValue {
   field_key: string;
-  field_type: number;
+  field_category: number;
   simple_value?: SimpleValue;
   map_value?: MapContainer;
 }

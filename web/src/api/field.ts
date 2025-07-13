@@ -12,7 +12,7 @@ export interface FieldDetailInfo {
   dataset_ids: number[];
   field_id: number;
   field_name: string;
-  field_type: number;
+  field_category: number;
   interface_name: string;  // 字段英文名
   desc: string;  // 字段描述
   required_flag: number;  // 必填标记（-1非必填；1必填）
@@ -42,7 +42,7 @@ export interface SearchFieldReq {
   dataset_id?: number;
   field_name?: string;
   interface_name?: string;
-  field_type?: number;
+  field_category?: number;
   field_ids?: number[];
   page_info?: {
     page_idx: number;  // 页数(从1开始计数)
@@ -73,7 +73,7 @@ export interface CreateFieldReq {
     proj_id: number;
     dataset_ids?: number[];  // repeated int32 in proto
     field_name: string;
-    field_type: number;
+    field_category: number;
     interface_name: string;
     desc: string;
     required_flag: number;   // 必填标记（-1非必填；1必填）
@@ -116,7 +116,7 @@ export interface UpsertFieldReq {
     proj_id: number;
     dataset_ids: number[];
     field_name: string;
-    field_type: number;
+    field_category: number;
     interface_name: string;
     desc: string;
     required_flag: number;   // 必填标记（-1非必填；1必填）

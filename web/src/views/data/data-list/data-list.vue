@@ -158,7 +158,7 @@
           <template #columns>
             <a-table-column title="字段名" data-index="field_name" :width="150"></a-table-column>
             <a-table-column title="字段值" data-index="field_value" :ellipsis="true" :tooltip="true"></a-table-column>
-            <a-table-column title="字段类型" data-index="field_type" :width="100" align="center"></a-table-column>
+                          <a-table-column title="字段类型" data-index="field_category" :width="100" align="center"></a-table-column>
           </template>
         </a-table>
       </div>
@@ -288,7 +288,7 @@ const fieldDataList = computed(() => {
     return {
       field_name: fieldInfo?.field_name || fieldKey,
       field_value: formatFieldValue(fieldValue),
-      field_type: getFieldTypeName(fieldValue.field_type)
+                  field_category: getFieldTypeName(fieldValue.field_category)
     };
   });
 });

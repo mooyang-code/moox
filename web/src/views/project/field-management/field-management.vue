@@ -679,7 +679,7 @@ const convertApiFieldToRecord = (apiField: FieldDetailInfo): FieldRecord => {
     secondaryFormat: String(apiField.field_format_type.field_secondary_format),
     secondaryFormatText: secondaryFormatText,
     fieldFormatText: fieldFormatText,
-    dataCategory: apiField.field_type || 1, // 字段数据类型，默认为静态数据
+    dataCategory: apiField.field_category || 1, // 字段数据类型，默认为静态数据
     isRequired: apiField.required_flag === 1, // 1表示必填，-1表示非必填
     isUnique: apiField.unique_flag === 1, // 1表示唯一，-1表示非唯一
     isMetadata: apiField.metadata_flag === 1, // 1表示元数据，-1表示普通字段
@@ -814,7 +814,7 @@ const yamlCode = ref(`fields:
     field_name: "交易标的ID"   # 字段中文显示名称
     dataset_ids: [100,101]    # 关联的数据集ID列表，指定该字段在哪些数据集下生效（具体数据集ID请参考数据集列表）
     desc: "交易对标识符，如BTCUSDT，使用全大写字母格式" # 字段功能描述
-    field_type: 1             # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
+    field_category: 1         # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1          # 必填标记（-1非必填；1必填）
     unique_flag: 1            # 唯一约束标记（-1否；1是）
     metadata_flag: 1          # 元数据字段标记（-1否；1是）
@@ -828,7 +828,7 @@ const yamlCode = ref(`fields:
     field_name: "K线开始时间"   # 字段中文显示名称
     dataset_ids: [100,101]    # 关联的数据集ID列表，指定该字段在哪些数据集下生效（具体数据集ID请参考数据集列表）
     desc: "K线图表周期的起始时间戳" # 字段功能描述
-    field_type: 2             # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
+    field_category: 2         # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1          # 必填标记（-1非必填；1必填）
     unique_flag: -1           # 唯一约束标记（-1否；1是）
     metadata_flag: -1         # 元数据字段标记（-1否；1是）
@@ -842,7 +842,7 @@ const yamlCode = ref(`fields:
     field_name: "开盘价"
     dataset_ids: [100,101]
     desc: "K线周期开盘价格"
-    field_type: 2             # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
+    field_category: 2         # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1
     unique_flag: -1
     metadata_flag: -1
@@ -856,7 +856,7 @@ const yamlCode = ref(`fields:
     field_name: "成交量"
     dataset_ids: [100,101]
     desc: "K线周期成交量"
-    field_type: 2             # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
+    field_category: 2         # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1
     unique_flag: -1
     metadata_flag: -1
@@ -870,7 +870,7 @@ const yamlCode = ref(`fields:
     field_name: "交易所类型"
     dataset_ids: [100,101]
     desc: "交易所类型选项"
-    field_type: 1             # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
+    field_category: 1         # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1
     unique_flag: -1
     metadata_flag: -1
@@ -1032,7 +1032,7 @@ const handleOk = async () => {
           proj_id: Number(currentProject.value.id),
           dataset_ids: datasetIds,
           field_name: addForm.value.fieldName,
-          field_type: 1, // 默认为基础字段
+          field_category: 1, // 默认为基础字段
           interface_name: addForm.value.fieldNameEn,
           desc: addForm.value.fieldDescription,
           required_flag: addForm.value.isRequired ? 1 : -1, // 1必填，-1非必填
@@ -1458,14 +1458,14 @@ const handleImportOk = async () => {
         
         // 处理字段类型：从配置中读取，如果没有则默认为1（静态数据字段）
         let fieldType = 1; // 默认为静态数据字段
-        if (fieldConfig.field_type !== undefined && fieldConfig.field_type !== null) {
-          fieldType = Number(fieldConfig.field_type);
+        if (fieldConfig.field_category !== undefined && fieldConfig.field_category !== null) {
+          fieldType = Number(fieldConfig.field_category);
           // 验证字段类型的有效性（1=静态数据字段，2=时序数据字段）
           if (fieldType !== 1 && fieldType !== 2) {
             importResult.value.failList.push({
               interface_name: fieldConfig.interface_name || '未知字段',
               field_name: fieldConfig.field_name || '未知字段名',
-              error_message: `字段类型无效：field_type=${fieldType}，有效值为1（静态数据字段）或2（时序数据字段）`
+              error_message: `字段类型无效：field_category=${fieldType}，有效值为1（静态数据字段）或2（时序数据字段）`
             });
             continue;
           }
@@ -1481,7 +1481,7 @@ const handleImportOk = async () => {
           proj_id: Number(currentProject.value.id),
           dataset_ids: fieldConfig.dataset_ids,
           field_name: fieldConfig.field_name,
-          field_type: fieldType, // 使用从配置中读取的字段类型
+          field_category: fieldType, // 使用从配置中读取的字段类型
           interface_name: fieldConfig.interface_name,
           desc: fieldConfig.desc || '',
           required_flag: fieldConfig.required_flag || (fieldConfig.is_required ? 1 : -1), // 1必填，-1非必填

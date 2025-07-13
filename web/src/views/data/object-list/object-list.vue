@@ -753,7 +753,7 @@ const saveObject = async () => {
       if (value !== undefined && value !== '') {
         fields[fieldKey] = {
           field_key: fieldKey,
-          field_type: 1, // STRING类型
+                      field_category: 1, // STRING类型
           update_type: 1, // SET_UPDATE
           simple_value: {
             str: String(value)
