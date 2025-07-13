@@ -59,7 +59,7 @@
     </a-row>
 
     <a-table
-      row-key="id"
+      row-key="route_id"
       :data="tableData"
       :bordered="{ cell: true }"
       :loading="loading"
@@ -199,7 +199,7 @@ const emits = defineEmits<{
 
 // 定义表单数据类型
 interface RouteFormData {
-  id?: number;
+  route_id?: number;
   field_id: string | number;
   data_category: number;
   device_id: number;
@@ -397,10 +397,10 @@ const search = () => {
   pagination.value.current = 1;
   // 构建搜索参数，只传递有值的参数，999999999表示全部，不传递该参数
   const searchParams: { field_id?: number; data_category?: number; device_id?: number } = {};
-  if (form.value.field_id && form.value.field_id !== 999999999) {
+  if (form.value.field_id && form.value.field_id !== '' && Number(form.value.field_id) !== 999999999) {
     searchParams.field_id = Number(form.value.field_id);
   }
-  if (form.value.data_category && form.value.data_category !== 999999999) {
+  if (form.value.data_category && form.value.data_category !== '' && Number(form.value.data_category) !== 999999999) {
     searchParams.data_category = Number(form.value.data_category);
   }
   if (form.value.device_id) {
@@ -432,7 +432,7 @@ const select = (rowKeys: number[]) => {
 
 const selectAll = (checked: boolean) => {
   if (checked) {
-    selectedKeys.value = tableData.value.map(item => item.id!);
+    selectedKeys.value = tableData.value.map(item => item.route_id!);
   } else {
     selectedKeys.value = [];
   }
@@ -462,7 +462,7 @@ const onAdd = async () => {
 const onUpdate = async (record: FieldRoute) => {
   modalTitle.value = '编辑字段路由配置';
   formData.value = {
-    id: record.id,
+    route_id: record.route_id,
     field_id: record.field_id,
     data_category: record.data_category,
     device_id: record.device_id,
@@ -482,7 +482,7 @@ const onUpdate = async (record: FieldRoute) => {
 // 删除
 const onDelete = async (record: FieldRoute) => {
   try {
-    await deleteFieldRoute({ id: record.id });
+    await deleteFieldRoute({ route_id: record.route_id });
     Message.success('删除字段路由配置成功');
     emits('refresh');
   } catch (error: any) {
@@ -512,10 +512,10 @@ const handleOk = async () => {
     const fieldId = Number(formData.value.field_id);
     const dataCategory = formData.value.data_category;
 
-    if (formData.value.id) {
+    if (formData.value.route_id) {
       // 编辑模式 - 调用更新接口
       await updateFieldRoute({
-        id: formData.value.id,
+        route_id: formData.value.route_id,
         field_id: fieldId,
         data_category: dataCategory,
         device_id: formData.value.device_id,

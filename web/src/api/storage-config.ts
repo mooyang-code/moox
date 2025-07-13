@@ -46,7 +46,7 @@ export interface ListStorageDevicesResponse {
 // 数据对象路由相关类型定义
 
 export interface ObjectRoute {
-  id: number;
+  route_id: number;
   dataset_id: number;
   object_id: string;
   entity_id: number;
@@ -76,7 +76,7 @@ export interface ListObjectRoutesResponse {
 // 数据字段路由相关类型定义
 
 export interface FieldRoute {
-  id: number;
+  route_id: number;
   field_id: number; // 字段ID，使用999999999表示所有字段
   data_category: number; // 数据类型，1静态字段，2时序字段，使用999999999表示所有数据类型
   device_id: number;
@@ -240,9 +240,6 @@ export const listFieldRoutes = async (params?: ListFieldRoutesRequest): Promise<
     };
     
     // 添加搜索参数
-    if (params?.entity_id) {
-      requestData.entity_id = params.entity_id;
-    }
     if (params?.field_id) {
       requestData.field_id = params.field_id;
     }
@@ -299,7 +296,6 @@ export interface CreateStorageEntityResponse {
 export interface UpdateStorageEntityRequest {
   entity_id: number;
   entity_alias: string;
-  entity_srv_conn: string;
 }
 
 export interface UpdateStorageEntityResponse {
@@ -365,7 +361,8 @@ export const updateStorageEntity = async (params: UpdateStorageEntityRequest): P
         app_id: AUTH_INFO.app_id,
         app_key: AUTH_INFO.app_key
       },
-      ...params
+      entity_id: params.entity_id,
+      entity_alias: params.entity_alias
     });
 
     console.log('更新存储实体响应:', response.data);
@@ -446,9 +443,6 @@ export interface CreateStorageDeviceResponse {
 export interface UpdateStorageDeviceRequest {
   device_id: number;
   device_name: string;
-  device_type: number;
-  schema_required: number;
-  conn_info: string;
 }
 
 export interface UpdateStorageDeviceResponse {
@@ -514,7 +508,8 @@ export const updateStorageDevice = async (params: UpdateStorageDeviceRequest): P
         app_id: AUTH_INFO.app_id,
         app_key: AUTH_INFO.app_key
       },
-      ...params
+      device_id: params.device_id,
+      device_name: params.device_name
     });
 
     console.log('更新存储设备响应:', response.data);
@@ -592,7 +587,7 @@ export interface CreateObjectRouteResponse {
 }
 
 export interface UpdateObjectRouteRequest {
-  id: number;
+  route_id: number;
   dataset_id: number;
   object_id: string;
   entity_id: number;
@@ -606,7 +601,7 @@ export interface UpdateObjectRouteResponse {
 }
 
 export interface DeleteObjectRouteRequest {
-  id: number;
+  route_id: number;
 }
 
 export interface DeleteObjectRouteResponse {
@@ -661,7 +656,10 @@ export const updateObjectRoute = async (params: UpdateObjectRouteRequest): Promi
         app_id: AUTH_INFO.app_id,
         app_key: AUTH_INFO.app_key
       },
-      ...params
+      route_id: params.route_id,
+      dataset_id: params.dataset_id,
+      object_id: params.object_id,
+      entity_id: params.entity_id
     });
 
     console.log('更新数据对象路由响应:', response.data);
@@ -696,7 +694,7 @@ export const deleteObjectRoute = async (params: DeleteObjectRouteRequest): Promi
         app_id: AUTH_INFO.app_id,
         app_key: AUTH_INFO.app_key
       },
-      ...params
+      route_id: params.route_id
     });
 
     console.log('删除数据对象路由响应:', response.data);
@@ -739,7 +737,7 @@ export interface CreateFieldRouteResponse {
 }
 
 export interface UpdateFieldRouteRequest {
-  id: number;
+  route_id: number;
   field_id: number;
   data_category: number;
   device_id: number;
@@ -753,7 +751,7 @@ export interface UpdateFieldRouteResponse {
 }
 
 export interface DeleteFieldRouteRequest {
-  id: number;
+  route_id: number;
 }
 
 export interface DeleteFieldRouteResponse {
@@ -808,7 +806,10 @@ export const updateFieldRoute = async (params: UpdateFieldRouteRequest): Promise
         app_id: AUTH_INFO.app_id,
         app_key: AUTH_INFO.app_key
       },
-      ...params
+      route_id: params.route_id,
+      field_id: params.field_id,
+      data_category: params.data_category,
+      device_id: params.device_id
     });
 
     console.log('更新数据字段路由响应:', response.data);
@@ -843,7 +844,7 @@ export const deleteFieldRoute = async (params: DeleteFieldRouteRequest): Promise
         app_id: AUTH_INFO.app_id,
         app_key: AUTH_INFO.app_key
       },
-      ...params
+      route_id: params.route_id
     });
 
     console.log('删除数据字段路由响应:', response.data);

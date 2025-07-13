@@ -45,7 +45,7 @@
     </a-row>
 
     <a-table
-      row-key="id"
+      row-key="route_id"
       :data="tableData"
       :bordered="{ cell: true }"
       :loading="loading"
@@ -166,7 +166,7 @@ const emits = defineEmits<{
 
 // 定义表单数据类型
 interface RouteFormData {
-  id?: number;
+  route_id?: number;
   dataset_id: number;
   object_id: string;
   entity_id: number;
@@ -308,7 +308,7 @@ const select = (rowKeys: number[]) => {
 
 const selectAll = (checked: boolean) => {
   if (checked) {
-    selectedKeys.value = tableData.value.map(item => item.id!);
+    selectedKeys.value = tableData.value.map(item => item.route_id!);
   } else {
     selectedKeys.value = [];
   }
@@ -335,7 +335,7 @@ const onAdd = async () => {
 const onUpdate = async (record: ObjectRoute) => {
   modalTitle.value = '编辑对象路由配置';
   formData.value = {
-    id: record.id,
+    route_id: record.route_id,
     dataset_id: record.dataset_id,
     object_id: record.object_id,
     entity_id: record.entity_id,
@@ -352,7 +352,7 @@ const onUpdate = async (record: ObjectRoute) => {
 // 删除
 const onDelete = async (record: ObjectRoute) => {
   try {
-    await deleteObjectRoute({ id: record.id });
+    await deleteObjectRoute({ route_id: record.route_id });
     Message.success('删除对象路由配置成功');
     emits('refresh');
   } catch (error: any) {
@@ -378,10 +378,10 @@ const handleOk = async () => {
   try {
     await formRef.value?.validate();
     
-    if (formData.value.id) {
+    if (formData.value.route_id) {
       // 编辑模式 - 调用更新接口
       await updateObjectRoute({
-        id: formData.value.id,
+        route_id: formData.value.route_id,
         dataset_id: formData.value.dataset_id,
         object_id: formData.value.object_id,
         entity_id: formData.value.entity_id,

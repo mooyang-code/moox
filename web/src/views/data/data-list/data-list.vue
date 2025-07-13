@@ -53,7 +53,6 @@
                 <a-space wrap align="center" style="width: 100%; justify-content: space-between; margin-bottom: 1px;">
                   <!-- 左侧搜索组件 -->
                   <a-space wrap>
-                    <a-input v-model="searchForm.keyword" placeholder="请输入数据内容" allow-clear />
                     <a-range-picker v-model="searchForm.dateRange" show-time format="YYYY-MM-DD HH:mm" allow-clear />
                     <a-button type="primary" @click="handleSearch">
                       <template #icon><icon-search /></template>
@@ -204,7 +203,6 @@ const dataModalVisible = ref(false);
 
 // 搜索表单
 const searchForm = reactive({
-  keyword: '',
   dateRange: [] as string[]
 });
 
@@ -575,7 +573,6 @@ const handleSearch = async () => {
 };
 
 const handleReset = () => {
-  searchForm.keyword = '';
   searchForm.dateRange = [];
   pagination.value.current = 1;
   loadDataList();

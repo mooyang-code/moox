@@ -66,14 +66,14 @@
           <a-input v-model="formData.device_name" placeholder="请输入设备名称" />
         </a-form-item>
         <a-form-item field="device_type" label="设备类型">
-          <a-select v-model="formData.device_type" placeholder="请选择设备类型" @change="onDeviceTypeChange">
+          <a-select v-model="formData.device_type" placeholder="请选择设备类型" @change="onDeviceTypeChange" :disabled="!!formData.device_id">
             <a-option v-for="option in DEVICE_TYPE_OPTIONS" :key="option.value" :value="option.value">
               {{ option.label }}
             </a-option>
           </a-select>
         </a-form-item>
         <a-form-item field="schema_required" label="是否Schema">
-          <a-select v-model="formData.schema_required" placeholder="请选择是否需要Schema">
+          <a-select v-model="formData.schema_required" placeholder="请选择是否需要Schema" :disabled="!!formData.device_id">
             <a-option v-for="option in SCHEMA_REQUIRED_OPTIONS" :key="option.value" :value="option.value">
               {{ option.label }}
             </a-option>
@@ -85,7 +85,7 @@
           </template>
         </a-form-item>
         <a-form-item field="conn_info" label="连接信息">
-          <a-input v-model="formData.conn_info" placeholder="请输入连接信息" />
+          <a-input v-model="formData.conn_info" placeholder="请输入连接信息" :disabled="!!formData.device_id" />
         </a-form-item>
       </a-form>
     </a-modal>
@@ -237,9 +237,6 @@ const handleOk = async () => {
       await updateStorageDevice({
         device_id: formData.value.device_id,
         device_name: formData.value.device_name,
-        device_type: formData.value.device_type,
-        schema_required: formData.value.schema_required,
-        conn_info: formData.value.conn_info,
       });
       Message.success('更新存储设备成功');
     } else {
