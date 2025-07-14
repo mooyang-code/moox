@@ -6,7 +6,7 @@ import { Message } from "@arco-design/web-vue";
 const MOCK_FLAG = import.meta.env.VITE_APP_OPEN_MOCK === "true";
 // 创建axios实例
 const service = axios.create({
-  baseURL: MOCK_FLAG ? "" : "/api"
+  baseURL: ""
 });
 // 请求拦截器
 service.interceptors.request.use(

@@ -66,18 +66,15 @@ export default defineConfig(({ mode }) => {
       open: false,
       // 为开发服务器配置自定义代理规则-用于开发时的代理
       proxy: {
-        "/api": {
-          target: env.VITE_APP_BASE_URL,
-          changeOrigin: true,
-          rewrite: path => path.replace(/^\/api/, "")
-        },
         "/gateway": {
           target: "http://localhost:18202",
-          changeOrigin: true
+          changeOrigin: true,
+          secure: false
         },
         "/trpc.moox.server": {
-          target: "http://localhost:18201",
-          changeOrigin: true
+          target: "http://localhost:18201", 
+          changeOrigin: true,
+          secure: false
         }
       }
     }
