@@ -64,7 +64,8 @@ api.interceptors.response.use(
         // 清除token并跳转登录页
         localStorage.removeItem('user-info');
         console.log('Token失效，清除localStorage并跳转登录页');
-        window.location.href = '/login';
+        // 使用window.location.replace避免在浏览器历史中留下记录
+        window.location.replace('/login');
         return Promise.reject(new Error(data.ret_info.msg || 'Token失效'));
       }
       
@@ -81,7 +82,8 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('user-info');
       console.log('HTTP 401错误，清除localStorage并跳转登录页');
-      window.location.href = '/login';
+      // 使用window.location.replace避免在浏览器历史中留下记录
+      window.location.replace('/login');
     }
     
     return Promise.reject(error.response?.data?.ret_info || error);

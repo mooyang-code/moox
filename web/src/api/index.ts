@@ -45,7 +45,8 @@ service.interceptors.response.use(
         Message.error("登录状态已过期");
         // 清除本地存储，避免死循环
         localStorage.removeItem("user-info");
-        router.push("/login");
+        // 使用replace避免在浏览器历史中留下记录，防止用户返回到错误页面
+        router.replace("/login");
         return Promise.reject(res);
       } else if (res.ret_info.code == 404) {
         Message.error("请求连接超时");
@@ -94,7 +95,8 @@ service.interceptors.response.use(
     // 只在认证相关错误时清除用户信息，其他网络错误不应该清除
     if (error.response?.status === 401 || error.response?.data?.ret_info?.code === 3) {
       localStorage.removeItem("user-info");
-      router.push("/login");
+      // 使用replace避免在浏览器历史中留下记录，防止用户返回到错误页面
+      router.replace("/login");
     } else if (error.response?.status >= 500) {
       // 处理服务器内部错误
       Message.error("服务器内部错误，请确认moox后端服务是否正常");

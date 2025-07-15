@@ -114,29 +114,16 @@ else
     print_warning "config目录不存在"
 fi
 
-# 创建示例配置文件
-print_info "创建示例配置文件..."
-cat > "$BUILD_DIR/config/cli-example.yaml" << 'EOF'
-# Moox CLI 配置文件示例
-
-# 元数据数据库配置
-metadata_database:
-  storage_device: "sqlite:./data/metadata.db"
-
-# 存储服务配置
-storage:
-  target: "127.0.0.1:18102"
-
-# Moox认证服务配置  
-moox:
-  auth_target: "127.0.0.1:18200"
-
-# 消息服务配置
-message:
-  server: "nats:localhost:4222"
-  consumer: "MY_CONSUMER"
-  subject: "storage.datadetail.change"
-EOF
+# 额外拷贝配置文件到bin目录（与二进制文件同级）
+print_info "拷贝配置文件到bin目录..."
+if [ -f "config/cli-example.yaml" ]; then
+    cp config/cli-example.yaml "$BUILD_DIR/bin/cli-example.yaml"
+    print_success "cli-example.yaml 已拷贝到 bin 目录"
+fi
+if [ -f "config/cli.yaml" ]; then
+    cp config/cli.yaml "$BUILD_DIR/bin/cli.yaml"
+    print_success "cli.yaml 已拷贝到 bin 目录"
+fi
 
 # 创建使用脚本
 print_info "创建使用脚本..."

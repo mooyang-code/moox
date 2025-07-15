@@ -127,22 +127,29 @@ const userInfoStore = () => {
     } catch (error: any) {
       console.error("setAccount: 获取用户信息失败", error);
       
-      // 如果获取失败，清空用户信息和token，避免死循环
+      // 清空用户信息，避免死循环
       account.value = {
         user: {},
         roles: [],
         permissions: []
       };
       
-      // 关键修复：清除无效的token，避免路由守卫死循环
-      if (error.ret_info?.code === 3 || error.message?.includes('访问令牌无效')) {
-        console.log("setAccount: 检测到token无效，清除token避免死循环");
-        token.value = "";
-        // 同时清除localStorage中的持久化数据
+      // 关键修复：获取用户信息失败时，完全清除token状态，避免路由守卫死循环
+      console.log("setAccount: 获取用户信息失败，清除所有token和用户数据，避免死循环");
+      token.value = "";
+      
+      // 同时清除localStorage中的持久化数据
+      try {
         localStorage.removeItem('user-info');
+        console.log("setAccount: 已清除localStorage中的用户信息");
+      } catch (storageError) {
+        console.error("setAccount: 清除localStorage失败", storageError);
       }
       
-      throw error;
+      // 抛出一个特殊的错误标识，让路由守卫知道需要跳转登录页
+      const authError = new Error("获取用户信息失败，请重新登录");
+      authError.name = "AuthenticationError";
+      throw authError;
     }
   }
   

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v2"
 )
@@ -36,21 +37,52 @@ type Config struct {
 	Message *MessageConfig `yaml:"message"` // 消息服务配置
 }
 
+// getConfigPaths 获取可能的配置文件路径列表
+func getConfigPaths() []string {
+	paths := []string{
+		// 当前目录
+		"./config/cli.yaml",
+		"./cli.yaml",
+		// 相对路径（用于构建后的二进制）
+		"../config/cli.yaml",
+		// 系统配置目录
+		"/etc/moox/cli.yaml",
+		// 用户家目录
+		filepath.Join(os.Getenv("HOME"), ".moox", "cli.yaml"),
+	}
+
+	// 添加环境变量指定的配置文件
+	if configPath := os.Getenv("MOOX_CONFIG"); configPath != "" {
+		paths = append([]string{configPath}, paths...)
+	}
+
+	return paths
+}
+
 // LoadConfig 加载配置文件
 func LoadConfig() (*Config, error) {
 	var config Config
+	var lastErr error
 
-	// 读取配置文件
-	configPath := "../config/cli.yaml"
-	yamlFile, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("读取配置文件失败: %+v", err)
+	// 尝试从多个可能的路径加载配置文件
+	for _, configPath := range getConfigPaths() {
+		yamlFile, err := os.ReadFile(configPath)
+		if err != nil {
+			lastErr = err
+			continue // 尝试下一个路径
+		}
+
+		// 解析YAML到Config结构
+		if err := yaml.Unmarshal(yamlFile, &config); err != nil {
+			lastErr = fmt.Errorf("解析YAML失败 (%s): %v", configPath, err)
+			continue
+		}
+
+		// 成功加载配置
+		fmt.Printf("\033[32m✅ 成功加载配置文件: %s\033[0m\n", configPath)
+		return &config, nil
 	}
 
-	// 解析YAML到Config结构
-	if err := yaml.Unmarshal(yamlFile, &config); err != nil {
-		return nil, fmt.Errorf("解析YAML失败: %+v", err)
-	}
-
-	return &config, nil
+	// 所有路径都失败了
+	return nil, fmt.Errorf("\033[91m⚠️  警告：加载配置失败: 无法找到配置文件，尝试的路径: %v，最后的错误: %v\033[0m", getConfigPaths(), lastErr)
 }

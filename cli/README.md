@@ -1,128 +1,411 @@
 # Moox CLI 工具
 
-## 简介
+[![Go Version](https://img.shields.io/badge/Go-1.21+-blue.svg)](https://golang.org)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/mooyang-code/moox)
 
-Moox CLI 是一个多功能的命令行工具，支持数据库操作、存储服务和用户认证等功能。
+## 🎯 简介
 
-## 功能特性
+Moox CLI 是一个功能强大、稳定可靠的命令行工具，为 Moox 一站式量化管理平台提供完整的客户端功能。经过精心设计的架构确保了出色的用户体验和高度的容错性。
 
-- **认证功能**: 用户注册、登录等操作
-- **数据库操作**: 创建表、插入数据、查看数据等
-- **存储服务**: 读写存储服务数据
-- **消息队列**: 消息队列相关操作
+## ✨ 功能特性
 
-## 安装和构建
+- 🔐 **用户认证**: 安全的用户注册、登录，支持交互式密码输入
+- 🗄️ **数据库操作**: 创建表、插入数据、查看数据等完整数据库管理
+- 📦 **存储服务**: 高性能的数据读写操作
+- 📨 **消息队列**: 实时消息处理和队列管理
+- 🌍 **国际化支持**: 完整的中文界面和命令别名
+- 🛡️ **容错性强**: 智能错误处理，永不崩溃
+- ⚙️ **灵活配置**: 多路径配置文件支持，环境变量配置
+
+## 🚀 快速开始
+
+### 安装和构建
 
 ```bash
 # 克隆项目
 git clone https://github.com/mooyang-code/moox.git
 cd moox/cli
 
-# 构建
-go build -o moox .
+# 构建当前平台
+go build -o moox-cli .
+
+# 跨平台构建（可选）
+cd scripts
+./build.sh v1.0.0
 ```
 
-## 配置
+### 首次使用
 
-确保 `config/cli.yaml` 文件包含正确的服务配置：
+```bash
+# 查看版本信息
+./moox-cli --version
+
+# 查看帮助信息
+./moox-cli --help
+
+# 查看认证功能
+./moox-cli auth --help
+```
+
+## ⚙️ 配置管理
+
+### 配置文件位置
+
+Moox CLI 支持从多个位置自动加载配置文件（按优先级排序）：
+
+1. 🌍 环境变量: `MOOX_CONFIG=/path/to/config.yaml`
+2. 📁 当前目录: `./config/cli.yaml`
+3. 📁 当前目录: `./cli.yaml`
+4. 📁 上级目录: `../config/cli.yaml`
+5. 🏠 用户目录: `~/.moox/cli.yaml`
+6. 🖥️ 系统目录: `/etc/moox/cli.yaml`
+
+### 配置文件示例
+
+创建 `config/cli.yaml`：
 
 ```yaml
-moox: 
-  auth_target: "127.0.0.1:18200"  # 认证服务地址
+# Moox 认证服务配置
+moox:
+  auth_target: "127.0.0.1:18200"    # 认证服务地址
 
-storage: 
-  target: "127.0.0.1:18102"       # 存储服务地址
+# 元数据数据库配置
+metadata_database:
+  storage_device: "sqlite:./data/metadata.db"
 
-# 其他配置...
+# 存储服务配置
+storage:
+  target: "127.0.0.1:18102"         # 存储服务地址
+
+# 消息服务配置
+message:
+  server: "nats:localhost:4222"     # NATS服务器地址
+  consumer: "MY_CONSUMER"           # 消费者名称
+  subject: "storage.datadetail.change"  # 订阅主题
+  max_wait_time: 5000               # 最大等待时间(毫秒)
 ```
 
-## 用户认证功能
+### 环境变量配置
 
-### 用户注册
-
-#### 交互式注册
 ```bash
-./moox auth register
+# 指定自定义配置文件
+export MOOX_CONFIG="/path/to/custom/config.yaml"
+
+# 运行CLI
+./moox-cli auth register
 ```
 
-程序会提示您输入：
-- 用户名（必填）
-- 密码（必填，输入时不显示）
-- 昵称（可选）
-- 邮箱（可选）
+## 🔐 用户认证功能
 
-#### 命令行参数注册
+### 交互式用户注册
+
+最推荐的注册方式，提供友好的交互界面：
+
 ```bash
-./moox auth register --username myuser --password mypass --nickname "我的昵称" --email my@example.com
+./moox-cli auth register
 ```
 
-#### 参数说明
-- `--username`: 用户名（必填）
-- `--password`: 密码（必填）
-- `--nickname`: 昵称（可选）
-- `--email`: 邮箱（可选）
+执行效果：
+```
+🚀 欢迎使用 Moox 用户注册功能！
+📡 认证服务地址: 127.0.0.1:18200
 
-#### 中文别名支持
+👤 请输入用户名: myuser
+🔒 请输入密码: ********
+🔒 请再次输入密码: ********
+✅ 密码确认成功
+😊 请输入昵称 (可选, 直接回车跳过): 我的昵称
+📧 请输入邮箱 (可选, 直接回车跳过): my@example.com
+
+🔄 正在注册用户 'myuser'...
+🎉 注册成功！
+👤 用户ID: 123e4567-e89b-12d3-a456-426614174000
+📛 用户名: myuser
+😊 昵称: 我的昵称
+📧 邮箱: my@example.com
+✅ 状态: 1
+🔰 角色: 1
+```
+
+### 命令行参数注册
+
+适合脚本化场景：
+
 ```bash
-./moox 认证 注册 --username myuser --password mypass
+# 基本注册
+./moox-cli auth register --username myuser --nickname "我的昵称"
+
+# 完整参数注册（不推荐在命令行中传递密码）
+./moox-cli auth register \
+  --username myuser \
+  --nickname "我的昵称" \
+  --email "my@example.com"
 ```
 
-### 示例输出
+### 中文命令支持
 
-成功注册时的输出：
-```
-正在注册用户 'myuser'...
-注册成功！
-用户ID: 123e4567-e89b-12d3-a456-426614174000
-用户名: myuser
-昵称: 我的昵称
-邮箱: my@example.com
-状态: 1
-角色: 1
-```
+支持完整的中文命令别名：
 
-失败时的输出：
-```
-注册失败: 用户名已存在 (错误码: 1)
-```
-
-## 其他功能
-
-### 查看帮助
 ```bash
-./moox --help           # 查看所有命令
-./moox auth --help      # 查看认证相关命令
-./moox auth register --help  # 查看注册命令帮助
+# 中文命令
+./moox-cli 认证 注册
+
+# 查看中文帮助
+./moox-cli 认证 --help
 ```
 
-### 数据库操作
+### 参数说明
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `--username` | string | ✅ | 用户名，3-20个字符 |
+| `--password` | string | ✅ | 密码，建议交互式输入 |
+| `--nickname` | string | ❌ | 用户昵称，可选 |
+| `--email` | string | ❌ | 邮箱地址，可选 |
+
+## 🗄️ 数据库操作
+
 ```bash
-./moox db --help
+# 查看数据库操作帮助
+./moox-cli db --help
+
+# 创建元数据表
+./moox-cli db --meta-schema schema.sql
+
+# 创建数据表
+./moox-cli db --create-table mytable
+
+# 插入数据
+./moox-cli db --insert-data data.json
+
+# 查看表结构
+./moox-cli db --show-schema mytable
+
+# 查看表数据
+./moox-cli db --show-data mytable
 ```
 
-### 存储服务操作
+## 📦 存储服务
+
 ```bash
-./moox storage --help
+# 查看存储操作帮助
+./moox-cli storage --help
+
+# 存储服务相关操作
+# （具体命令请参考帮助信息）
 ```
 
-## 技术实现
+## 📨 消息队列
 
-- **认证客户端**: 使用HTTP客户端直接调用认证服务API，避免protobuf冲突
-- **配置管理**: 支持YAML格式配置文件
-- **交互式界面**: 支持安全的密码输入（不回显）
-- **国际化**: 支持中文命令别名
+```bash
+# 消费消息队列
+./moox-cli msg consume
 
-## 错误处理
+# 查看消息队列帮助
+./moox-cli message --help
+```
 
-常见错误及解决方法：
+## 🔧 故障排除
 
-1. **连接错误**: 确保认证服务正在运行且地址配置正确
-2. **配置错误**: 检查 `config/cli.yaml` 文件是否存在且格式正确
-3. **权限错误**: 确保有执行权限：`chmod +x moox`
+### 常见问题解决
 
-## 开发说明
+#### ❌ 配置文件找不到
 
-- 认证服务协议定义在 `../server/proto/moox.proto`
-- 配置结构定义在 `internal/config/config.go`
-- 认证客户端实现在 `internal/auth/auth.go`
-- 命令定义在 `cmd/auth.go`
+**错误信息：**
+```
+警告：加载配置失败: 无法找到配置文件
+```
+
+**解决方案：**
+1. 创建配置文件：`mkdir -p config && cp config/cli-example.yaml config/cli.yaml`
+2. 使用环境变量：`export MOOX_CONFIG=/path/to/config.yaml`
+3. 检查文件权限：`chmod 644 config/cli.yaml`
+
+#### ❌ 认证服务连接失败
+
+**错误信息：**
+```
+❌ 错误：未配置认证服务地址
+```
+
+**解决方案：**
+1. 检查配置文件中的 `moox.auth_target` 设置
+2. 确保认证服务正在运行：`curl http://127.0.0.1:18200/health`
+3. 检查网络连接和防火墙设置
+
+#### ❌ 权限不足
+
+**错误信息：**
+```
+permission denied: ./moox-cli
+```
+
+**解决方案：**
+```bash
+chmod +x moox-cli
+```
+
+#### ❌ Go版本不兼容
+
+**错误信息：**
+```
+go: module requires Go 1.21
+```
+
+**解决方案：**
+```bash
+# 检查Go版本
+go version
+
+# 升级Go（如果需要）
+# 请访问 https://golang.org/dl/
+```
+
+### 调试模式
+
+启用详细日志输出：
+
+```bash
+# 设置调试环境变量
+export MOOX_DEBUG=true
+
+# 运行命令
+./moox-cli auth register --username debuguser
+```
+
+## 🏗️ 技术架构
+
+### 核心组件
+
+- **🎯 命令路由**: 基于 Cobra 框架的现代CLI架构
+- **⚙️ 配置管理**: 支持多格式、多路径的灵活配置系统
+- **🔐 认证客户端**: 安全的 tRPC 客户端，支持超时和重试
+- **🗄️ 数据库抽象**: 支持多种数据库驱动的统一接口
+- **📨 消息处理**: 基于 NATS 的高性能消息队列客户端
+- **🛡️ 错误处理**: 完善的错误恢复和用户友好的错误提示
+
+### 项目结构
+
+```
+cli/
+├── cmd/                    # 命令定义
+│   ├── root.go            # 根命令和全局配置
+│   ├── auth.go            # 认证相关命令
+│   ├── database.go        # 数据库操作命令
+│   └── message.go         # 消息队列命令
+├── internal/              # 内部包
+│   ├── config/            # 配置管理
+│   ├── auth/              # 认证客户端
+│   ├── database/          # 数据库操作
+│   └── message/           # 消息处理
+├── config/                # 配置文件
+│   ├── cli.yaml          # 当前配置
+│   └── cli-example.yaml  # 示例配置
+├── scripts/               # 构建脚本
+└── README.md             # 说明文档
+```
+
+### 依赖项
+
+```go
+// 核心依赖
+github.com/spf13/cobra         // CLI框架
+gopkg.in/yaml.v2              // YAML配置解析
+golang.org/x/term             // 终端控制
+trpc.group/trpc-go/trpc-go    // tRPC客户端
+
+// 数据库驱动
+github.com/mattn/go-sqlite3   // SQLite支持
+
+// 消息队列
+github.com/nats-io/nats.go    // NATS客户端
+```
+
+## 🚢 部署指南
+
+### 开发环境
+
+```bash
+# 直接运行
+cd cli
+go run . auth register
+
+# 或构建后运行
+go build -o moox-cli .
+./moox-cli auth register
+```
+
+### 生产环境
+
+```bash
+# 使用构建脚本
+cd scripts
+./build.sh v1.0.0
+
+# 系统安装
+cd ../release
+sudo ./install.sh
+
+# 全局使用
+moox-cli auth register
+```
+
+### Docker部署
+
+```dockerfile
+FROM golang:1.21-alpine AS builder
+WORKDIR /app
+COPY . .
+RUN go build -o moox-cli .
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates
+WORKDIR /root/
+COPY --from=builder /app/moox-cli .
+COPY --from=builder /app/config ./config
+CMD ["./moox-cli"]
+```
+
+## 📈 最佳实践
+
+### 安全建议
+
+1. **🔒 密码安全**: 始终使用交互式密码输入，避免在命令行中传递密码
+2. **📁 配置安全**: 设置适当的配置文件权限 (`chmod 600 config/cli.yaml`)
+3. **🌐 网络安全**: 在生产环境中使用HTTPS和适当的认证
+
+### 性能优化
+
+1. **⚡ 连接复用**: 客户端自动处理连接池和复用
+2. **🎯 超时设置**: 合理设置请求超时时间
+3. **📊 监控**: 使用调试模式监控性能
+
+### 开发建议
+
+1. **📝 配置管理**: 使用环境变量区分开发、测试、生产环境
+2. **🧪 测试**: 编写完整的单元测试和集成测试
+3. **📚 文档**: 保持README和代码注释的更新
+
+## 🤝 贡献指南
+
+1. Fork 项目
+2. 创建功能分支 (`git checkout -b feature/amazing-feature`)
+3. 提交更改 (`git commit -m 'Add some amazing feature'`)
+4. 推送到分支 (`git push origin feature/amazing-feature`)
+5. 开启 Pull Request
+
+## 📄 许可证
+
+本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+
+## 📞 支持
+
+- 📧 邮箱: support@moox.com
+- 🐛 问题反馈: [GitHub Issues](https://github.com/mooyang-code/moox/issues)
+- 📖 文档: [项目Wiki](https://github.com/mooyang-code/moox/wiki)
+- 💬 讨论: [GitHub Discussions](https://github.com/mooyang-code/moox/discussions)
+
+---
+
+**Moox CLI** - 让量化投资决策更智能 🚀📊

@@ -22,8 +22,8 @@ help:
 	@echo "  check       - 代码检查(lint + vet)"
 	@echo "  lint        - 运行golangci-lint"
 	@echo "  test        - 运行测试"
-	@echo "  build       - 构建当前平台二进制程序 (默认版本: dev)"
-	@echo "  cross-build - 跨平台构建所有目标平台"
+	@echo "  build       - 构建当前平台二进制程序 (默认版本: dev, 包含配置文件)"
+	@echo "  cross-build - 跨平台构建所有目标平台 (包含配置文件)"
 	@echo "  clean       - 清理构建文件"
 	@echo "  dev         - 开发模式运行"
 	@echo "  run         - 在构建目录运行CLI工具"
@@ -71,7 +71,14 @@ build:
 	CGO_ENABLED=1 go build \
 		-ldflags "-X 'main.Version=$(VERSION)' -X 'main.BuildTime=$$(date '+%Y-%m-%d %H:%M:%S')' -X 'main.GitCommit=$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)'" \
 		-o release/bin/$(APP_NAME) .
+	@echo "拷贝配置文件..."
+	cd .. && \
+	cp config/cli-example.yaml release/bin/cli-example.yaml && \
+	if [ -f "config/cli.yaml" ]; then \
+		cp config/cli.yaml release/bin/cli.yaml; \
+	fi
 	@echo "构建完成: $(BUILD_DIR)/bin/$(APP_NAME)"
+	@echo "配置文件已拷贝到: $(BUILD_DIR)/bin/"
 
 # 跨平台构建
 cross-build:

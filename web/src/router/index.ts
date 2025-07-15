@@ -76,7 +76,14 @@ router.beforeEach(async (to: any, from: any, next: any) => {
     // 2、没有token，直接重定向到登录页
     next("/login");
   } else if (to.path === "/login" && token.value) {
-    // 3、去登录页，有token，直接重定向到home页
+    // 3、去登录页，有token，检查token是否有效
+    // 如果用户信息为空，说明token可能无效，允许进入登录页
+    if (isEmptyObject(account.value.user)) {
+      console.log("路由守卫: 虽然有token但用户信息为空，允许进入登录页");
+      next();
+      return;
+    }
+    // 有token且有用户信息，直接重定向到home页
     next("/home");
     // 项目内的跳转，处理跳转路由高亮
     currentlyRoute(to);
@@ -101,17 +108,14 @@ router.beforeEach(async (to: any, from: any, next: any) => {
         }
       } catch (error: any) {
         console.error("路由守卫: 获取用户信息失败", error);
-        // 如果获取用户信息失败，清除token并跳转到登录页
-        if (error.code === 3 || error.message?.includes('访问令牌无效') || error.message?.includes('请重新登录')) {
-          console.log("路由守卫: 检测到认证失败，跳转登录页");
-          // 确保token已被清除
-          await store.logOut();
-          next('/login');
-        } else {
-          // 其他错误，也跳转到登录页
-          console.log("路由守卫: 用户信息获取异常，跳转登录页");
-          next('/login');
-        }
+        
+        // 确保完全清除用户状态，避免死循环
+        await store.logOut();
+        
+        // 直接跳转到登录页，不做任何其他检查
+        console.log("路由守卫: 用户认证失败，强制跳转登录页");
+        next('/login');
+        return;
       }
     } else {
       // 检查路由是否存在，如果不存在则重新初始化路由
