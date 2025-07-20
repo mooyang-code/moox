@@ -19,6 +19,18 @@ server:
       network: tcp  # 网络监听类型，tcp 或 udp
       protocol: http  # 应用层协议 
       timeout: 1000  # 请求最长处理时间，单位毫秒
+    - name: trpc.moox.api.stdhttp
+      #ip: 0.0.0.0
+      port: 18204
+      network: tcp  # 网络监听类型，tcp 或 udp
+      protocol: http  # 应用层协议
+      timeout: 1000  # 请求最长处理时间，单位毫秒
+    - name: trpc.dnsproxy.timer
+      port: 8001                                             #服务监听端口 可使用占位符 ${port}
+      network: "*/10 * * * * *?scheduler=dnsproxySchedule&startAtOnce=1&params="     #网络监听类型  tcp udp
+      protocol: timer                                        #应用层协议 trpc http
+      timeout: 5000                                          #请求最长处理时间 单位 毫秒
+
     - name: trpc.moox.gateway.stdhttp ######## Moox http网关接口 ########
       #ip: 0.0.0.0
       port: 18202

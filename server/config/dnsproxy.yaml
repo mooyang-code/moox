@@ -1,0 +1,121 @@
+# DNS代理服务配置文件
+# 使用说明:
+# 1. 配置需要定时解析的域名列表
+# 2. 设置缓存过期时间和清理间隔
+# 3. 配置DNS服务器列表
+# 4. 调整超时和延迟检测参数
+
+# DNS代理配置
+dnsproxy:
+  # 需要定时解析的域名列表
+  domains:
+    - stream.binance.com
+    - api.binance.com
+
+  # 缓存配置
+  cache:
+    ttl_minutes: 10        # 缓存过期时间（分钟）
+    cleanup_interval: 5    # 缓存清理间隔（分钟），0表示使用TTL的一半
+
+  # DNS服务器配置
+  dns_servers:
+    - name: "Google DNS Primary"
+      address: "8.8.8.8:53"
+      enabled: true
+    - name: "Google DNS Secondary"
+      address: "8.8.4.4:53"
+      enabled: true
+    - name: "Cloudflare DNS Primary"
+      address: "1.1.1.1:53"
+      enabled: true
+    - name: "Cloudflare DNS Secondary"
+      address: "1.0.0.1:53"
+      enabled: true
+    - name: "OpenDNS Primary"
+      address: "208.67.222.222:53"
+      enabled: true
+    - name: "OpenDNS Secondary"
+      address: "208.67.220.220:53"
+      enabled: false
+    - name: "114 DNS Primary"
+      address: "114.114.114.114:53"
+      enabled: true
+    - name: "114 DNS Secondary"
+      address: "114.114.115.115:53"
+      enabled: false
+    - name: "阿里DNS Primary"
+      address: "223.5.5.5:53"
+      enabled: true
+    - name: "阿里DNS Secondary"
+      address: "223.6.6.6:53"
+      enabled: false
+
+  # 超时配置
+  timeouts:
+    dns_query_seconds: 5      # DNS查询超时时间（秒）
+    latency_test_seconds: 3   # 延迟测试超时时间（秒）
+    concurrent_limit: 5       # 并发连接限制
+
+  # 延迟检测配置
+  latency:
+    test_port: "80"           # 主要测试端口
+    test_ports:               # 多个测试端口（优先使用）
+      - "80"                  # HTTP
+      - "443"                 # HTTPS
+      - "22"                  # SSH
+    retry_count: 2            # 重试次数
+    retry_delay: 100          # 重试延迟（毫秒）
+
+# 配置说明:
+# 
+# 域名列表 (domains):
+# - 这些域名会被定时任务自动解析并缓存
+# - 建议添加常用的、访问频率高的域名
+# - 支持子域名和国际化域名
+#
+# 缓存配置 (cache):
+# - ttl_minutes: 缓存过期时间，建议5-30分钟
+# - cleanup_interval: 清理间隔，0表示自动设置为TTL的一半
+#
+# DNS服务器 (dns_servers):
+# - 支持多个DNS服务器，提高解析成功率
+# - enabled: false 可以临时禁用某个服务器
+# - 建议启用3-5个不同的DNS服务器
+# - 地址格式: IP:端口，标准DNS端口为53
+#
+# 超时配置 (timeouts):
+# - dns_query_seconds: DNS查询超时，建议3-10秒
+# - latency_test_seconds: 延迟测试超时，建议1-5秒
+# - concurrent_limit: 并发连接数，建议3-10个
+#
+# 延迟检测 (latency):
+# - test_port: 单个测试端口（向后兼容）
+# - test_ports: 多个测试端口，会依次尝试
+# - retry_count: 失败重试次数，建议1-3次
+# - retry_delay: 重试间隔，建议50-500毫秒
+#
+# 性能建议:
+# 1. 域名数量控制在10-50个
+# 2. 缓存TTL根据业务需求调整
+# 3. DNS服务器选择地理位置较近的
+# 4. 并发限制避免过高导致网络拥塞
+# 5. 延迟测试端口选择常用端口
+#
+# 安全建议:
+# 1. 使用可信的DNS服务器
+# 2. 定期检查DNS服务器的可用性
+# 3. 监控异常的解析结果
+# 4. 避免解析恶意域名
+#
+# 故障排除:
+# 1. 检查DNS服务器地址是否正确
+# 2. 确认网络连接正常
+# 3. 查看日志中的错误信息
+# 4. 尝试减少并发连接数
+# 5. 增加超时时间
+#
+# 快速开始:
+# 1. 复制此文件并重命名
+# 2. 修改域名列表
+# 3. 调整缓存TTL
+# 4. 启动服务即可使用
