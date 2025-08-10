@@ -100,7 +100,31 @@
                       <template #cell="{ rowIndex }">{{ (pagination.current - 1) * pagination.pageSize + rowIndex + 1 }}</template>
                     </a-table-column>
                     <a-table-column title="行ID" data-index="row_id" :width="120"></a-table-column>
-                    <a-table-column v-if="currentObject && isTimeSeriesData" title="时间" data-index="times" :width="180"></a-table-column>
+                    <a-table-column v-if="currentObject && isTimeSeriesData" data-index="times" :width="180">
+                      <template #title>
+                        <div style="display: flex; align-items: center; gap: 4px;">
+                          <span>时间</span>
+                          <div style="display: flex; flex-direction: column; gap: 1px;">
+                            <icon-caret-up
+                              :style="{
+                                fontSize: '10px',
+                                cursor: 'pointer',
+                                color: timeSortType === 0 ? '#1890ff' : '#d9d9d9'
+                              }"
+                              @click="handleTimeSort(0)"
+                            />
+                            <icon-caret-down
+                              :style="{
+                                fontSize: '10px',
+                                cursor: 'pointer',
+                                color: timeSortType === 1 ? '#1890ff' : '#d9d9d9'
+                              }"
+                              @click="handleTimeSort(1)"
+                            />
+                          </div>
+                        </div>
+                      </template>
+                    </a-table-column>
                     <!-- 动态字段列 - 只显示数据列表字段(metadata_flag!=1)且在数据中实际存在的字段 -->
                     <a-table-column
                       v-for="field in actualDisplayFields"
@@ -169,7 +193,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { Message } from '@arco-design/web-vue';
-import { IconSearch, IconRefresh, IconInfoCircle, IconEye } from '@arco-design/web-vue/es/icon';
+import { IconSearch, IconRefresh, IconInfoCircle, IconEye, IconCaretUp, IconCaretDown } from '@arco-design/web-vue/es/icon';
 import { useRoute } from 'vue-router';
 import { listProjects, type Project, type Dataset } from '@/api/project';
 import { queryObjectAPI, searchDataAPI, type ObjectRow, type DataRow, type DataKey, type FieldValue } from '@/api/modules/data';
@@ -205,6 +229,9 @@ const dataModalVisible = ref(false);
 const searchForm = reactive({
   dateRange: [] as string[]
 });
+
+// 时间排序状态
+const timeSortType = ref<number | null>(1); // 0=升序, 1=降序(默认), null=无排序
 
 // 分页
 const pagination = ref({
@@ -482,7 +509,8 @@ const loadDataList = async () => {
 
     console.log('SearchData API 选项（不限制字段）:', options);
 
-    console.log('SearchData API 请求参数:', {
+    // 构建请求参数
+    const requestParams: any = {
       data_key: dataKey,
       time_range: timeRange,
       options: options,
@@ -490,17 +518,16 @@ const loadDataList = async () => {
         page_idx: pagination.value.current,
         size: pagination.value.pageSize
       }
-    });
+    };
 
-    const response = await searchDataAPI({
-      data_key: dataKey,
-      time_range: timeRange,
-      options: options,
-      page_info: {
-        page_idx: pagination.value.current,
-        size: pagination.value.pageSize
-      }
-    });
+    // 如果是时序数据，添加time_sort参数（默认倒序）
+    if (isTimeSeriesData.value) {
+      requestParams.time_sort = timeSortType.value;
+    }
+
+    console.log('SearchData API 请求参数:', requestParams);
+
+    const response = await searchDataAPI(requestParams);
 
     console.log('SearchData API 响应:', response);
 
@@ -574,6 +601,7 @@ const handleSearch = async () => {
 
 const handleReset = () => {
   searchForm.dateRange = [];
+  timeSortType.value = 1; // 重置为默认倒序
   pagination.value.current = 1;
   loadDataList();
 };
@@ -581,6 +609,14 @@ const handleReset = () => {
 const handleView = (record: DataRow) => {
   currentDataRow.value = record;
   dataModalVisible.value = true;
+};
+
+// 时间排序处理
+const handleTimeSort = async (sortType: number) => {
+  console.log('时间排序:', sortType === 0 ? '升序' : '降序');
+  timeSortType.value = sortType;
+  pagination.value.current = 1; // 重置页码
+  await loadDataList();
 };
 
 // 分页事件处理

@@ -1,4 +1,4 @@
-// Package api DNS代理服务（最好是中文注释！）
+// Package api DNS代理服务
 package api
 
 import (

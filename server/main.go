@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/gin-gonic/gin"
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
 	"github.com/mooyang-code/moox/server/internal/gateway"
@@ -19,8 +20,6 @@ import (
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
-
-	"github.com/gin-gonic/gin"
 )
 
 // startWebSSHService 启动WebSSH服务
@@ -96,7 +95,6 @@ func startWebSSHService() {
 	address := fmt.Sprintf("%s:%s", sshConfig.DefaultConfig.Address, sshConfig.DefaultConfig.Port)
 	_, certErr := os.Open(sshConfig.DefaultConfig.CertFile)
 	_, keyErr := os.Open(sshConfig.DefaultConfig.KeyFile)
-
 	log.Infof("Starting MooX WebSSH Service，address: %+v", address)
 
 	// 如果证书和私钥文件存在,就使用https协议,否则使用http协议
@@ -148,13 +146,7 @@ func main() {
 
 	// 注册定时器
 	timer.RegisterScheduler("dnsproxySchedule", &timer.DefaultScheduler{})
-	for _, sInfo := range trpc.GlobalConfig().Server.Service {
-		if sInfo.Protocol == "timer" {
-			log.Infof("@timer-Service:%s", sInfo.Name)
-			// 注册本地定时器服务(所有定时服务统一这里注册。可以根据服务名分类注册入口)
-			timer.RegisterHandlerService(s.Service(sInfo.Name), apisvr.DnsproxySchedule)
-		}
-	}
+	timer.RegisterHandlerService(s.Service("trpc.dnsproxy.timer"), apisvr.DnsproxySchedule)
 
 	// 启动trpc服务器
 	log.Info("启动trpc服务器...")

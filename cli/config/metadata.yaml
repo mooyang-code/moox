@@ -247,7 +247,7 @@ t_field_route:
 
 t_storage_entity:
   - c_entity_id: 1
-    c_entity_srv_conn: "ip://0.0.0.0:18103"
+    c_entity_srv_conn: "ip://0.0.0.0:18101"
 
 t_storage_device:
   - c_device_id: 1
@@ -261,8 +261,8 @@ t_storage_device:
   - c_device_id: 3
     c_device_name: "bleve(可用于存储时序数据-无Schama)"
     c_device_type: 3
-    c_conn_info: "../data/bleve" # bleve路径
+    c_conn_info: "../database/bleve" # bleve路径
   - c_device_id: 5
     c_device_name: "CSV"
     c_device_type: 5
-    c_conn_info: "../data/csv" # csv路径
+    c_conn_info: "../database/csv" # csv路径

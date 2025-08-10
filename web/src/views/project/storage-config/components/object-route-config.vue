@@ -389,7 +389,12 @@ const handleOk = async () => {
       Message.success('更新对象路由配置成功');
     } else {
       // 新增模式 - 调用创建接口
+      if (!currentProjectId.value) {
+        Message.error('当前项目ID为空，无法创建对象路由配置');
+        return;
+      }
       await createObjectRoute({
+        project_id: currentProjectId.value,
         dataset_id: formData.value.dataset_id,
         object_id: formData.value.object_id,
         entity_id: formData.value.entity_id,

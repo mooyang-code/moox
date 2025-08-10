@@ -53,7 +53,7 @@
           <a-input v-model="formData.entity_alias" placeholder="请输入存储实体别名" />
         </a-form-item>
         <a-form-item field="entity_srv_conn" label="存储服务连接信息">
-          <a-input v-model="formData.entity_srv_conn" placeholder="例如：ip://0.0.0.0:18103" :disabled="!!formData.entity_id" />
+          <a-input v-model="formData.entity_srv_conn" placeholder="例如：ip://0.0.0.0:18101" :disabled="!!formData.entity_id" />
         </a-form-item>
       </a-form>
     </a-modal>

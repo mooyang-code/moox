@@ -56,6 +56,7 @@ export interface ObjectRoute {
 }
 
 export interface ListObjectRoutesRequest {
+  project_id: number;
   dataset_id?: number;
   entity_id?: number;
   page_info?: {
@@ -86,6 +87,7 @@ export interface FieldRoute {
 }
 
 export interface ListFieldRoutesRequest {
+  project_id: number;
   field_id?: number; // 字段ID过滤条件，使用999999999表示所有字段
   data_category?: number; // 数据类型过滤条件，使用999999999表示所有数据类型
   device_id?: number;
@@ -181,17 +183,18 @@ export const listStorageDevices = async (): Promise<ListStorageDevicesResponse> 
 };
 
 // 获取数据对象路由列表
-export const listObjectRoutes = async (params?: ListObjectRoutesRequest): Promise<ListObjectRoutesResponse> => {
+export const listObjectRoutes = async (params: ListObjectRoutesRequest): Promise<ListObjectRoutesResponse> => {
   try {
     console.log('获取数据对象路由列表', params);
-    
+
     const requestData: any = {
       auth_info: {
         app_id: AUTH_INFO.app_id,
         app_key: AUTH_INFO.app_key
-      }
+      },
+      project_id: params.project_id
     };
-    
+
     // 添加搜索参数
     if (params?.dataset_id) {
       requestData.dataset_id = params.dataset_id;
@@ -228,17 +231,18 @@ export const listObjectRoutes = async (params?: ListObjectRoutesRequest): Promis
 };
 
 // 获取数据字段路由列表
-export const listFieldRoutes = async (params?: ListFieldRoutesRequest): Promise<ListFieldRoutesResponse> => {
+export const listFieldRoutes = async (params: ListFieldRoutesRequest): Promise<ListFieldRoutesResponse> => {
   try {
     console.log('获取数据字段路由列表', params);
-    
+
     const requestData: any = {
       auth_info: {
         app_id: AUTH_INFO.app_id,
         app_key: AUTH_INFO.app_key
-      }
+      },
+      project_id: params.project_id
     };
-    
+
     // 添加搜索参数
     if (params?.field_id) {
       requestData.field_id = params.field_id;
@@ -573,6 +577,7 @@ export const deleteStorageDevice = async (params: DeleteStorageDeviceRequest): P
 // 创建、更新、删除数据对象路由相关接口
 
 export interface CreateObjectRouteRequest {
+  project_id: number;
   dataset_id: number;
   object_id: string;
   entity_id: number;
@@ -723,6 +728,7 @@ export const deleteObjectRoute = async (params: DeleteObjectRouteRequest): Promi
 // 创建、更新、删除数据字段路由相关接口
 
 export interface CreateFieldRouteRequest {
+  project_id: number;
   field_id: number;
   data_category: number;
   device_id: number;

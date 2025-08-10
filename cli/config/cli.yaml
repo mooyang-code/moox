@@ -1,11 +1,11 @@
 metadata_database: 
-  storage_device: "sqlite:/Users/mooyang/Documents/go/src/github.com/mooyang-code/xData-mini/storage/release-macos/data/sqlite/metadata.db"
+  storage_device: "sqlite:/Users/mooyang/Documents/go/src/github.com/mooyang-code/xData-mini/storage/release/data/sqlite/metadata.db"
 
 storage: 
-  target: "127.0.0.1:18102"
+  target: "127.0.0.1:18201"
 
 moox: 
-  auth_target: "127.0.0.1:18200"
+  auth_target: "127.0.0.1:20001"
 
 message:
   server: nats:localhost:4222   # NATS服务器地址

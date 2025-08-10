@@ -343,6 +343,7 @@ export interface SearchDataReq {
   auth_info: AuthInfo;
   data_key: DataKey;
   time_range?: TimeRange;
+  time_sort?: number;     // 时序排序类型：0=升序，1=降序
   row_id?: string;        // 行ID，用于静态数据查询
   options?: SearchOptions;
   page_info?: PageInfo;
@@ -372,6 +373,7 @@ export interface SearchDataRsp {
 export const searchDataAPI = async (params: {
   data_key: DataKey;
   time_range?: TimeRange;
+  time_sort?: number;
   row_id?: string;
   options?: SearchOptions;
   page_info?: PageInfo;

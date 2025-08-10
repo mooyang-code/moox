@@ -122,7 +122,6 @@ func (hr *HTTPRouter) setupRoutes(s *server.Server) {
 
 	// 健康检查接口
 	router.HandleFunc("/gateway/health", hr.handleHealthCheck).Methods("GET")
-
 	thttp.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.stdhttp"), router)
 }
 
@@ -250,7 +249,6 @@ func (h *HTTPRequestHandler) extractGatewayHeaders(r *http.Request) map[string]s
 	if headers["client_ip"] == "" {
 		headers["client_ip"] = h.getClientIP(r)
 	}
-
 	return headers
 }
 

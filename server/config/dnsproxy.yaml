@@ -9,7 +9,6 @@
 dnsproxy:
   # 需要定时解析的域名列表
   domains:
-    - stream.binance.com
     - api.binance.com
 
   # 缓存配置

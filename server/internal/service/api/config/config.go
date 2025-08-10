@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// Config DNS代理服务配置
+// Config 服务配置
 type Config struct {
 	DNSProxy DNSProxyConfig `yaml:"dnsproxy"` // DNS代理配置
 }
@@ -53,58 +53,64 @@ type LatencyConfig struct {
 
 // LoadConfig 加载配置文件
 func LoadConfig() (*Config, error) {
-	// 读取配置文件
-	configPath := "../config/dnsproxy.yaml"
-	yamlFile, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("读取DNS代理配置文件失败: %+v", err)
+	var config Config
+
+	// 尝试加载DNS代理配置
+	dnsConfigPath := "../config/dnsproxy.yaml"
+	if yamlFile, err := os.ReadFile(dnsConfigPath); err == nil {
+		var dnsConfig struct {
+			DNSProxy DNSProxyConfig `yaml:"dnsproxy"`
+		}
+		if err := yaml.Unmarshal(yamlFile, &dnsConfig); err == nil {
+			config.DNSProxy = dnsConfig.DNSProxy
+		}
 	}
 
-	// 解析YAML到Config结构
-	var config Config
-	if err := yaml.Unmarshal(yamlFile, &config); err != nil {
-		return nil, fmt.Errorf("解析DNS代理YAML配置失败: %+v", err)
+	// 如果都没有找到，尝试加载统一配置文件
+	unifiedConfigPath := "../config/service.yaml"
+	if yamlFile, err := os.ReadFile(unifiedConfigPath); err == nil {
+		if err := yaml.Unmarshal(yamlFile, &config); err != nil {
+			return nil, fmt.Errorf("解析统一配置文件失败: %+v", err)
+		}
 	}
 
 	// 验证配置
 	if err := validateConfig(&config); err != nil {
-		return nil, fmt.Errorf("DNS代理配置验证失败: %+v", err)
+		return nil, fmt.Errorf("配置验证失败: %+v", err)
 	}
 	return &config, nil
 }
 
 // validateConfig 验证配置的有效性
 func validateConfig(config *Config) error {
-	// 验证域名列表
-	if len(config.DNSProxy.Domains) == 0 {
-		return fmt.Errorf("域名列表不能为空")
-	}
-
-	// 验证DNS服务器
-	enabledServers := 0
-	for _, server := range config.DNSProxy.DNSServers {
-		if server.Enabled {
-			enabledServers++
-			if server.Address == "" {
-				return fmt.Errorf("DNS服务器地址不能为空: %s", server.Name)
+	// 验证DNS代理配置（如果有配置的话）
+	if len(config.DNSProxy.Domains) > 0 {
+		// 验证DNS服务器
+		enabledServers := 0
+		for _, server := range config.DNSProxy.DNSServers {
+			if server.Enabled {
+				enabledServers++
+				if server.Address == "" {
+					return fmt.Errorf("DNS服务器地址不能为空: %s", server.Name)
+				}
 			}
 		}
-	}
-	if enabledServers == 0 {
-		return fmt.Errorf("至少需要启用一个DNS服务器")
-	}
+		if enabledServers == 0 {
+			return fmt.Errorf("至少需要启用一个DNS服务器")
+		}
 
-	// 验证缓存配置
-	if config.DNSProxy.Cache.TTLMinutes <= 0 {
-		return fmt.Errorf("缓存TTL必须大于0")
-	}
+		// 验证缓存配置
+		if config.DNSProxy.Cache.TTLMinutes <= 0 {
+			return fmt.Errorf("缓存TTL必须大于0")
+		}
 
-	// 验证超时配置
-	if config.DNSProxy.Timeouts.DNSQuerySeconds <= 0 {
-		return fmt.Errorf("DNS查询超时时间必须大于0")
-	}
-	if config.DNSProxy.Timeouts.LatencyTestSeconds <= 0 {
-		return fmt.Errorf("延迟测试超时时间必须大于0")
+		// 验证超时配置
+		if config.DNSProxy.Timeouts.DNSQuerySeconds <= 0 {
+			return fmt.Errorf("DNS查询超时时间必须大于0")
+		}
+		if config.DNSProxy.Timeouts.LatencyTestSeconds <= 0 {
+			return fmt.Errorf("延迟测试超时时间必须大于0")
+		}
 	}
 	return nil
 }

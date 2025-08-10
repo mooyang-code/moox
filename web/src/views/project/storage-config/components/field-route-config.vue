@@ -523,7 +523,12 @@ const handleOk = async () => {
       Message.success('更新字段路由配置成功');
     } else {
       // 新增模式 - 调用创建接口
+      if (!currentProjectId.value) {
+        Message.error('当前项目ID为空，无法创建字段路由配置');
+        return;
+      }
       await createFieldRoute({
+        project_id: currentProjectId.value,
         field_id: fieldId,
         data_category: dataCategory,
         device_id: formData.value.device_id,

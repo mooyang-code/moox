@@ -67,12 +67,12 @@ export default defineConfig(({ mode }) => {
       // 为开发服务器配置自定义代理规则-用于开发时的代理
       proxy: {
         "/gateway": {
-          target: "http://localhost:18202",
+          target: "http://localhost:20103",
           changeOrigin: true,
           secure: false
         },
         "/trpc.moox.server": {
-          target: "http://localhost:18201", 
+          target: "http://localhost:20102", 
           changeOrigin: true,
           secure: false
         }

@@ -32,7 +32,8 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, onMounted, watch } from 'vue';
+import { ref, onMounted, watch, computed } from 'vue';
+import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import StorageEntityConfig from './components/storage-entity-config.vue';
 import StorageDeviceConfig from './components/storage-device-config.vue';
@@ -50,6 +51,15 @@ import {
   type ObjectRoute,
   type FieldRoute
 } from '@/api/storage-config';
+
+// 路由信息
+const route = useRoute();
+
+// 获取当前项目ID
+const currentProjectId = computed(() => {
+  const projectId = route.params.projectId;
+  return projectId ? Number(projectId) : null;
+});
 
 // Tab配置
 const type = ref("rounded");
@@ -131,11 +141,20 @@ const loadStorageDevices = async () => {
 
 // 加载数据对象路由列表
 const loadObjectRoutes = async (searchParams?: { dataset_id?: number; entity_id?: number }) => {
+  if (!currentProjectId.value) {
+    console.warn('当前项目ID为空，无法获取数据对象路由列表');
+    return;
+  }
+
   try {
     loading.value = true;
-    const response = await listObjectRoutes(searchParams);
+    const requestParams = {
+      project_id: currentProjectId.value,
+      ...searchParams
+    };
+    const response = await listObjectRoutes(requestParams);
     objectRoutes.value = response.routes || [];
-    
+
     // 更新总览数据
     overviewData.value[2].value = objectRoutes.value.length.toString();
     console.log('数据对象路由列表加载成功:', objectRoutes.value);
@@ -150,11 +169,20 @@ const loadObjectRoutes = async (searchParams?: { dataset_id?: number; entity_id?
 
 // 加载数据字段路由列表
 const loadFieldRoutes = async (searchParams?: { entity_id?: number; field_id?: number; data_category?: number; device_id?: number }) => {
+  if (!currentProjectId.value) {
+    console.warn('当前项目ID为空，无法获取数据字段路由列表');
+    return;
+  }
+
   try {
     loading.value = true;
-    const response = await listFieldRoutes(searchParams);
+    const requestParams = {
+      project_id: currentProjectId.value,
+      ...searchParams
+    };
+    const response = await listFieldRoutes(requestParams);
     fieldRoutes.value = response.routes || [];
-    
+
     // 更新总览数据
     overviewData.value[3].value = fieldRoutes.value.length.toString();
     console.log('数据字段路由列表加载成功:', fieldRoutes.value);
