@@ -1,25 +1,28 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
 
-	"github.com/gin-gonic/gin"
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
 	"github.com/mooyang-code/moox/server/internal/gateway"
 	_ "github.com/mooyang-code/moox/server/internal/middleware"
 	"github.com/mooyang-code/moox/server/internal/service"
-	apisvr "github.com/mooyang-code/moox/server/internal/service/api"
+	apisvr "github.com/mooyang-code/moox/server/internal/service/apirouter"
 	authsvr "github.com/mooyang-code/moox/server/internal/service/auth"
 	authcfg "github.com/mooyang-code/moox/server/internal/service/auth/config"
+	collectorsvr "github.com/mooyang-code/moox/server/internal/service/collector"
 	sshConfig "github.com/mooyang-code/moox/server/internal/service/ssh/app/config"
 	sshService "github.com/mooyang-code/moox/server/internal/service/ssh/app/service"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
+
+	"github.com/gin-gonic/gin"
 )
 
 // startWebSSHService 启动WebSSH服务
@@ -130,19 +133,39 @@ func main() {
 	}
 	pb.RegisterAuthAPIService(s, authImp)
 
+	// 先注册API路由，这样采集器处理器才能找到路由
+	log.Info("正在注册API路由...")
+	apisvr.RegisterStandardHTTPHandlers(s)
+	
+	// 初始化采集器服务
+	log.Info("正在初始化采集器服务...")
+	collectorImp, err := collectorsvr.InitCollectorServiceImpl("")
+	if err != nil {
+		log.Fatalf("初始化采集器服务失败: %v", err)
+	}
+	collectorImp.RegisterCollectorHandlers()
+	// 注册HTTP路由（文件上传等）
+	collectorImp.RegisterHTTPRoutes(apisvr.GetHTTPMux())
+	// 启动异步服务（包括队列消费者）
+	ctx := context.Background()
+	collectorImp.Start(ctx)
+	log.Info("采集器服务初始化完成")
+
 	// 初始化网关服务（包括服务处理器和HTTP路由）
 	log.Info("正在初始化网关服务...")
 	gateway.InitGatewayServices(s)
 	log.Info("网关服务初始化完成")
+	
+	// 注册采集器网关（必须在网关服务初始化之后）
+	log.Info("正在注册采集器网关...")
+	collectorImp.RegisterCollectorGateway("http://localhost:20101")  // API服务在20101端口
+	log.Info("采集器网关注册完成")
 
 	// 启动WebSSH服务（在独立的goroutine中运行）
 	go func() {
 		log.Info("正在启动WebSSH服务...")
 		startWebSSHService()
 	}()
-
-	// 启动API服务
-	apisvr.RegisterStandardHTTPHandlers(s)
 
 	// 注册定时器
 	timer.RegisterScheduler("dnsproxySchedule", &timer.DefaultScheduler{})

@@ -2,10 +2,15 @@
   <div class="moox-inner">
     <!-- 搜索区域 -->
     <a-space wrap>
-      <a-select placeholder="请选择数据类型" v-model="form.data_category" style="width: 150px" allow-clear>
-        <a-option value="999999999">全部</a-option>
-        <a-option value="1">静态字段</a-option>
-        <a-option value="2">时序字段</a-option>
+      <a-select placeholder="请选择数据集" v-model="form.dataset_id" style="width: 150px" allow-clear>
+        <a-option value="0">全部</a-option>
+        <a-option
+          v-for="dataset in datasetOptions"
+          :key="dataset.dataset_id"
+          :value="dataset.dataset_id"
+        >
+          {{ dataset.dataset_name }}
+        </a-option>
       </a-select>
       <a-select
         v-model="form.field_id"
@@ -75,26 +80,26 @@
         <a-table-column title="序号" :width="64">
           <template #cell="cell">{{ cell.rowIndex + 1 }}</template>
         </a-table-column>
+        <a-table-column title="数据集" data-index="dataset_id">
+          <template #cell="{ record }">
+            {{ getDatasetName(record.dataset_id) }}
+          </template>
+        </a-table-column>
         <a-table-column title="字段ID" data-index="field_id">
           <template #cell="{ record }">
             {{ getFieldName(record.field_id) }}
           </template>
         </a-table-column>
-        <a-table-column title="数据类型" data-index="data_category">
-          <template #cell="{ record }">
-            <a-tag :color="getDataCategoryColor(record.data_category)">
-              {{ getDataCategoryName(record.data_category) }}
-            </a-tag>
-          </template>
-        </a-table-column>
         <a-table-column title="存储设备" data-index="device_id">
           <template #cell="{ record }">
-            {{ getDeviceName(record.device_id) }}
+            <a-tag :color="getDeviceColor(record.device_id)">
+              {{ getDeviceName(record.device_id) }}
+            </a-tag>
           </template>
         </a-table-column>
         <a-table-column title="状态" :width="100" align="center">
           <template #cell="{ record }">
-            <a-tag bordered size="small" color="arcoblue" v-if="record.invalid !== 1">正常</a-tag>
+            <a-tag bordered size="small" color="arcoblue" v-if="record.invalid === 0">正常</a-tag>
             <a-tag bordered size="small" color="red" v-else>已删除</a-tag>
           </template>
         </a-table-column>
@@ -106,7 +111,7 @@
                 <template #icon><icon-edit /></template>
                 <span>修改</span>
               </a-button>
-              <a-popconfirm type="warning" content="确定删除该配置吗?" @ok="onDelete(record)" v-if="record.invalid !== 1">
+              <a-popconfirm type="warning" content="确定删除该配置吗?" @ok="onDelete(record)" v-if="record.invalid === 0">
                 <a-button type="primary" status="danger" size="mini">
                   <template #icon><icon-delete /></template>
                   <span>删除</span>
@@ -123,11 +128,15 @@
       <template #title>{{ modalTitle }}</template>
       <div>
         <a-form ref="formRef" auto-label-width :rules="rules" :model="formData">
-          <a-form-item field="data_category" label="数据类型" validate-trigger="blur">
-            <a-select v-model="formData.data_category" placeholder="请选择数据类型">
-              <a-option :value="999999999">全部</a-option>
-              <a-option :value="1">静态字段</a-option>
-              <a-option :value="2">时序字段</a-option>
+          <a-form-item field="dataset_id" label="数据集" validate-trigger="blur">
+            <a-select v-model="formData.dataset_id" placeholder="请选择数据集">
+              <a-option
+                v-for="dataset in datasetOptions"
+                :key="dataset.dataset_id"
+                :value="dataset.dataset_id"
+              >
+                {{ dataset.dataset_name }}
+              </a-option>
             </a-select>
           </a-form-item>
           <a-form-item field="field_id" label="字段ID" validate-trigger="blur">
@@ -180,6 +189,8 @@ import {
   listStorageDevices
 } from '@/api/storage-config';
 import { searchFields, type FieldDetailInfo, type AuthInfo } from '@/api/field';
+import { listProjects, type Project, type Dataset } from '@/api/project';
+import { getDeviceTypeColor, getDeviceTypeName } from '@/constants/storage-device';
 
 // Props定义
 interface Props {
@@ -194,21 +205,21 @@ const props = withDefaults(defineProps<Props>(), {
 
 // Emits定义
 const emits = defineEmits<{
-  refresh: [searchParams?: { field_id?: number; data_category?: number; device_id?: number }];
+  refresh: [searchParams?: { field_id?: number; dataset_id?: number; device_id?: number }];
 }>();
 
 // 定义表单数据类型
 interface RouteFormData {
   route_id?: number;
   field_id: string | number;
-  data_category: number;
+  dataset_id: number;
   device_id: number;
 }
 
 // 搜索表单
 const form = ref({
   field_id: '',
-  data_category: '',
+  dataset_id: '',
   device_id: undefined as any,
 });
 
@@ -232,7 +243,7 @@ const modalTitle = ref('新增字段路由配置');
 const formRef = ref();
 const formData = ref<RouteFormData>({
   field_id: '',
-  data_category: 1,
+  dataset_id: undefined as any,
   device_id: undefined as any,
 });
 
@@ -254,6 +265,10 @@ const AUTH_INFO: AuthInfo = {
 // 字段选项
 const fieldOptions = ref<FieldDetailInfo[]>([]);
 const fieldLoading = ref(false);
+
+// 数据集选项
+const datasetOptions = ref<Dataset[]>([]);
+const datasetLoading = ref(false);
 
 // 搜索区域的字段过滤
 const searchFieldKeyword = ref('');
@@ -290,28 +305,17 @@ const deviceLoading = ref(false);
 // 表单验证规则
 const rules = {
   field_id: [{ required: true, message: '请输入字段ID' }],
-  data_category: [{ required: true, message: '请选择数据类型' }],
+  dataset_id: [{ required: true, message: '请选择数据集' }],
   device_id: [{ required: true, message: '请选择存储设备' }],
 };
 
-// 获取数据类型名称
-const getDataCategoryName = (category: number) => {
-  const categoryMap: Record<number, string> = {
-    999999999: '全部',
-    1: '静态字段',
-    2: '时序字段',
-  };
-  return categoryMap[category] || '未知';
-};
-
-// 获取数据类型颜色
-const getDataCategoryColor = (category: number) => {
-  const colorMap: Record<number, string> = {
-    999999999: 'orange',
-    1: 'blue',
-    2: 'green',
-  };
-  return colorMap[category] || 'gray';
+// 获取数据集名称
+const getDatasetName = (datasetId: number): string => {
+  if (datasetId === 0) {
+    return '全部';
+  }
+  const dataset = datasetOptions.value.find(d => d.dataset_id === datasetId);
+  return dataset ? `${dataset.dataset_name} (${datasetId})` : `数据集 (${datasetId})`;
 };
 
 // 获取字段名称的映射函数
@@ -327,6 +331,12 @@ const getFieldName = (fieldId: number): string => {
 const getDeviceName = (deviceId: number): string => {
   const device = deviceOptions.value.find(d => d.device_id === deviceId);
   return device ? `${device.device_name} (${deviceId})` : `存储设备 (${deviceId})`;
+};
+
+// 获取存储设备颜色的映射函数
+const getDeviceColor = (deviceId: number): string => {
+  const device = deviceOptions.value.find(d => d.device_id === deviceId);
+  return device ? getDeviceTypeColor(device.device_type) : 'gray';
 };
 
 // 字段搜索处理函数
@@ -384,10 +394,39 @@ const loadDeviceOptions = async () => {
   }
 };
 
+// 获取数据集列表
+const loadDatasetOptions = async () => {
+  if (!currentProjectId.value) {
+    console.warn('当前项目ID为空，无法获取数据集列表');
+    return;
+  }
+  
+  try {
+    datasetLoading.value = true;
+    const projects = await listProjects();
+    const currentProject = projects.find(p => p.id === currentProjectId.value);
+    
+    if (currentProject && currentProject.datasets) {
+      datasetOptions.value = currentProject.datasets;
+      console.log('数据集列表加载成功:', datasetOptions.value);
+    } else {
+      datasetOptions.value = [];
+      console.warn('当前项目无数据集或项目不存在');
+    }
+  } catch (error: any) {
+    console.error('获取数据集列表失败:', error);
+    Message.error(error.message || '获取数据集列表失败');
+    datasetOptions.value = [];
+  } finally {
+    datasetLoading.value = false;
+  }
+};
+
 // 初始化加载映射数据
 const initMappingData = async () => {
   await Promise.allSettled([
     loadFieldOptions(),
+    loadDatasetOptions(),
     loadDeviceOptions()
   ]);
 };
@@ -395,13 +434,13 @@ const initMappingData = async () => {
 // 搜索
 const search = () => {
   pagination.value.current = 1;
-  // 构建搜索参数，只传递有值的参数，999999999表示全部，不传递该参数
-  const searchParams: { field_id?: number; data_category?: number; device_id?: number } = {};
+  // 构建搜索参数，只传递有值的参数，999999999表示全部字段，0表示全部数据集
+  const searchParams: { field_id?: number; dataset_id?: number; device_id?: number } = {};
   if (form.value.field_id && form.value.field_id !== '' && Number(form.value.field_id) !== 999999999) {
     searchParams.field_id = Number(form.value.field_id);
   }
-  if (form.value.data_category && form.value.data_category !== '' && Number(form.value.data_category) !== 999999999) {
-    searchParams.data_category = Number(form.value.data_category);
+  if (form.value.dataset_id && form.value.dataset_id !== '' && Number(form.value.dataset_id) !== 0) {
+    searchParams.dataset_id = Number(form.value.dataset_id);
   }
   if (form.value.device_id) {
     searchParams.device_id = form.value.device_id;
@@ -413,7 +452,7 @@ const search = () => {
 const reset = () => {
   form.value = {
     field_id: '',
-    data_category: '',
+    dataset_id: '',
     device_id: undefined as any,
   };
   // 重置时不传递搜索参数，获取全部数据
@@ -443,7 +482,7 @@ const onAdd = async () => {
   modalTitle.value = '新增字段路由配置';
   formData.value = {
     field_id: '',
-    data_category: 1,
+    dataset_id: undefined as any,
     device_id: undefined as any,
   };
   modalVisible.value = true;
@@ -454,6 +493,7 @@ const onAdd = async () => {
   // 加载下拉框数据
   await Promise.allSettled([
     loadFieldOptions(),
+    loadDatasetOptions(),
     loadDeviceOptions()
   ]);
 };
@@ -464,7 +504,7 @@ const onUpdate = async (record: FieldRoute) => {
   formData.value = {
     route_id: record.route_id,
     field_id: record.field_id,
-    data_category: record.data_category,
+    dataset_id: record.dataset_id,
     device_id: record.device_id,
   };
   modalVisible.value = true;
@@ -475,6 +515,7 @@ const onUpdate = async (record: FieldRoute) => {
   // 加载下拉框数据
   await Promise.allSettled([
     loadFieldOptions(),
+    loadDatasetOptions(),
     loadDeviceOptions()
   ]);
 };
@@ -508,16 +549,16 @@ const handleOk = async () => {
   try {
     await formRef.value?.validate();
 
-    // 处理字段ID和数据类型，将999999999保持原样传递
+    // 处理字段ID和数据集ID，将999999999保持原样传递
     const fieldId = Number(formData.value.field_id);
-    const dataCategory = formData.value.data_category;
+    const datasetId = formData.value.dataset_id;
 
     if (formData.value.route_id) {
       // 编辑模式 - 调用更新接口
       await updateFieldRoute({
         route_id: formData.value.route_id,
         field_id: fieldId,
-        data_category: dataCategory,
+        dataset_id: datasetId,
         device_id: formData.value.device_id,
       });
       Message.success('更新字段路由配置成功');
@@ -530,7 +571,7 @@ const handleOk = async () => {
       await createFieldRoute({
         project_id: currentProjectId.value,
         field_id: fieldId,
-        data_category: dataCategory,
+        dataset_id: datasetId,
         device_id: formData.value.device_id,
       });
       Message.success('创建字段路由配置成功');

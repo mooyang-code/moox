@@ -73,8 +73,14 @@ api.interceptors.response.use(
       return response;
     }
     
-    // 如果没有ret_info字段，说明响应格式不正确
-    console.warn('响应格式不正确，缺少ret_info字段:', data);
+    // 兼容新格式：直接返回 code 和 data 的格式
+    if (data?.code === 200 || data?.code === 0) {
+      // 新格式的响应，直接返回
+      return response;
+    }
+    
+    // 如果既没有ret_info也不是新格式，说明响应格式不正确
+    console.warn('响应格式不正确:', data);
     return response;
   },
   (error) => {

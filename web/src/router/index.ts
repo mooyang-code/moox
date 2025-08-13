@@ -62,10 +62,10 @@ router.beforeEach(async (to: any, from: any, next: any) => {
     }, 100);
   }
   
-  // 如果从步骤表单页面切换到其他页面，清理该组件的缓存
+  // 如果从任务管理页面切换到其他页面，清理该组件的缓存
   if (from.name === 'step-form' && to.name !== 'step-form') {
     routeStore.removeRouteName('StepForm');
-    console.log('清理步骤表单组件缓存');
+    console.log('清理任务管理组件缓存');
   }
   // console.log("去", to, "来自", from);
   // next()内部加了path等于跳转指定路由会再次触发router.beforeEach，内部无参数等于放行，不会触发router.beforeEach

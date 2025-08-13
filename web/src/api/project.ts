@@ -58,17 +58,22 @@ export const listProjects = async (): Promise<Project[]> => {
     }
     
     return data.projects || [];
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('ListProjects Error:', error);
-    
+
     let errorMessage = '获取项目列表失败';
-    
-    if (error.response?.data?.ret_info?.msg) {
-      errorMessage = error.response.data.ret_info.msg;
-    } else if (error.message) {
+
+    if (error && typeof error === 'object') {
+      const errorObj = error as any;
+      if (errorObj.response?.data?.ret_info?.msg) {
+        errorMessage = errorObj.response.data.ret_info.msg;
+      } else if (errorObj.message) {
+        errorMessage = errorObj.message;
+      }
+    } else if (error instanceof Error) {
       errorMessage = error.message;
     }
-    
+
     throw new Error(errorMessage);
   }
 }; 

@@ -5,7 +5,7 @@ fields:
     desc: "币种的下架时间"
     required_flag: 1
     unique_flag: -1
-    metadata_flag: 1
+    table_type: 1
     field_category: 1  # 基础字段（静态数据字段）
     field_primary_format: 1  # 字符串类型
     field_secondary_format: 5  # 日期时间格式
@@ -19,7 +19,7 @@ fields:
     desc: "交易对名称，例如BTC-USDT，全大写字母"
     required_flag: 1
     unique_flag: -1
-    metadata_flag: -1
+    table_type: 2
     field_category: 2  # 时序数据中的字段
     field_primary_format: 1  # 字符串类型
     field_secondary_format: 1  # 文本格式
@@ -33,7 +33,7 @@ fields:
     desc: "K线周期开始时间"
     required_flag: 1
     unique_flag: -1
-    metadata_flag: -1
+    table_type: 2
     field_category: 2  # 时序字段
     field_primary_format: 1  # 字符串类型
     field_secondary_format: 5  # 日期时间格式
@@ -173,7 +173,7 @@ fields:
     desc: "K线周期结束时间"
     required_flag: 1
     unique_flag: -1
-    metadata_flag: -1
+    table_type: 2
     field_category: 2  # 时序字段
     field_primary_format: 1  # 字符串类型
     field_secondary_format: 5  # 日期时间格式

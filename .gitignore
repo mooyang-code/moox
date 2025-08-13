@@ -11,6 +11,10 @@
 # Test binary, built with `go test -c`
 *.test
 
+
+.claude/
+log/
+data/
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*
@@ -27,8 +31,11 @@ go.work.sum
 # env file
 .env
 
+server/.claude/
 
 release/
+
+*.log
 
 # Editor/IDE
 # .idea/

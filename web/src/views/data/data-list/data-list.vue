@@ -12,149 +12,171 @@
           <a-empty description="暂无数据集" />
         </div>
 
-        <a-tabs v-else :type="type" :size="size" v-model:active-key="activeTab">
-          <a-tab-pane
-            v-for="dataset in datasets"
-            :key="dataset.dataset_id.toString()"
-            :title="dataset.dataset_name"
+        <!-- 数据集和时序周期tab在同一行 -->
+        <div v-else class="combined-tabs-container">
+          <a-tabs :type="type" :size="size" v-model:active-key="activeTab" class="dataset-tabs">
+            <a-tab-pane
+              v-for="dataset in datasets"
+              :key="dataset.dataset_id.toString()"
+              :title="dataset.dataset_name"
+            >
+            </a-tab-pane>
+          </a-tabs>
+
+          <!-- 时序周期tab与数据集tab并列 -->
+          <a-tabs
+            v-if="currentDatasetFreqs.length > 0"
+            :type="'line'"
+            :size="size"
+            v-model:active-key="activeFreqTab"
+            class="freq-tabs"
           >
-            <!-- 数据列表内容区域 -->
-            <div class="data-list-content">
-              <!-- 左侧对象树形列表 -->
-              <div class="left-box">
-                <a-input v-model="objectSearchKeyword" placeholder="请输入对象名称" allow-clear>
-                  <template #prefix>
-                    <icon-search />
-                  </template>
-                </a-input>
-                <div class="tree-box">
-                  <div v-if="loading" class="tree-loading">
-                    <a-spin :size="24" tip="加载中..." />
-                  </div>
-                  <div v-else-if="filteredObjectTree.length === 0" class="tree-empty">
-                    <a-empty description="暂无数据对象" size="small" />
-                  </div>
-                  <a-tree
-                    v-else
-                    ref="objectTreeRef"
-                    :data="filteredObjectTree"
-                    :field-names="objectFieldNames"
-                    :selected-keys="selectedObjectKeys"
-                    show-line
-                    @select="onSelectObject"
-                  >
-                  </a-tree>
+            <a-tab-pane
+              v-for="freq in currentDatasetFreqs"
+              :key="freq"
+              :title="freq"
+            >
+            </a-tab-pane>
+          </a-tabs>
+        </div>
+
+        <!-- 数据列表内容区域 -->
+        <div v-if="datasets.length > 0" class="tab-content-area">
+          <div class="data-list-content">
+            <!-- 左侧对象树形列表 -->
+            <div class="left-box">
+              <a-input v-model="objectSearchKeyword" placeholder="请输入对象名称" allow-clear>
+                <template #prefix>
+                  <icon-search />
+                </template>
+              </a-input>
+              <div class="tree-box">
+                <div v-if="loading" class="tree-loading">
+                  <a-spin :size="24" tip="加载中..." />
                 </div>
-              </div>
-
-              <!-- 右侧数据列表 -->
-              <div class="right-box">
-                <!-- 搜索区域 -->
-                <a-space wrap align="center" style="width: 100%; justify-content: space-between; margin-bottom: 1px;">
-                  <!-- 左侧搜索组件 -->
-                  <a-space wrap>
-                    <a-range-picker v-model="searchForm.dateRange" show-time format="YYYY-MM-DD HH:mm" allow-clear />
-                    <a-button type="primary" @click="handleSearch">
-                      <template #icon><icon-search /></template>
-                      <span>查询</span>
-                    </a-button>
-                    <a-button @click="handleReset">
-                      <template #icon><icon-refresh /></template>
-                      <span>重置</span>
-                    </a-button>
-                  </a-space>
-
-                  <!-- 右侧当前选中对象信息 -->
-                  <a-alert v-if="currentObject" type="info" show-icon class="compact-alert">
-                    <template #icon><icon-info-circle /></template>
-                    当前查看对象：<strong>{{ currentObject.object_id }}</strong>
-                    <span v-if="currentObject.object_name">（{{ currentObject.object_name }}）</span>
-                  </a-alert>
-                </a-space>
-
-                <!-- 数据列表表格容器 -->
-                <div class="table-box">
-                  <!-- 数据列表表格 -->
-                  <a-table
-                  row-key="row_id"
-                  :data="dataList"
-                  :bordered="{ cell: true }"
-                  :loading="loading"
-                  :scroll="{ x: '120%' }"
-                  :pagination="{
-                    current: pagination.current,
-                    pageSize: pagination.pageSize,
-                    total: pagination.total,
-                    showTotal: true,
-                    showPageSize: true,
-                    showJumper: true,
-                    hideOnSinglePage: false,
-                    pageSizeOptions: [10, 20, 50, 100]
-                  }"
-                  size="small"
-                  @page-change="onPageChange"
-                  @page-size-change="onPageSizeChange"
+                <div v-else-if="filteredObjectTree.length === 0" class="tree-empty">
+                  <a-empty description="暂无数据对象" size="small" />
+                </div>
+                <a-tree
+                  v-else
+                  ref="objectTreeRef"
+                  :data="filteredObjectTree"
+                  :field-names="objectFieldNames"
+                  :selected-keys="selectedObjectKeys"
+                  show-line
+                  @select="onSelectObject"
                 >
-                  <template #columns>
-                    <a-table-column title="序号" :width="64" align="center">
-                      <template #cell="{ rowIndex }">{{ (pagination.current - 1) * pagination.pageSize + rowIndex + 1 }}</template>
-                    </a-table-column>
-                    <a-table-column title="行ID" data-index="row_id" :width="120"></a-table-column>
-                    <a-table-column v-if="currentObject && isTimeSeriesData" data-index="times" :width="180">
-                      <template #title>
-                        <div style="display: flex; align-items: center; gap: 4px;">
-                          <span>时间</span>
-                          <div style="display: flex; flex-direction: column; gap: 1px;">
-                            <icon-caret-up
-                              :style="{
-                                fontSize: '10px',
-                                cursor: 'pointer',
-                                color: timeSortType === 0 ? '#1890ff' : '#d9d9d9'
-                              }"
-                              @click="handleTimeSort(0)"
-                            />
-                            <icon-caret-down
-                              :style="{
-                                fontSize: '10px',
-                                cursor: 'pointer',
-                                color: timeSortType === 1 ? '#1890ff' : '#d9d9d9'
-                              }"
-                              @click="handleTimeSort(1)"
-                            />
-                          </div>
-                        </div>
-                      </template>
-                    </a-table-column>
-                    <!-- 动态字段列 - 只显示数据列表字段(metadata_flag!=1)且在数据中实际存在的字段 -->
-                    <a-table-column
-                      v-for="field in actualDisplayFields"
-                      :key="field.interface_name"
-                      :title="field.field_name || field.interface_name"
-                      :width="150"
-                      :ellipsis="true"
-                      :tooltip="true"
-                    >
-                      <template #cell="{ record }">
-                        {{ formatFieldValue(record.fields[field.interface_name]) }}
-                      </template>
-                    </a-table-column>
-                    <a-table-column title="操作" :width="120" align="center" :fixed="'right'">
-                      <template #cell="{ record }">
-                        <a-space>
-                          <a-button type="primary" size="mini" @click="handleView(record)">
-                            <template #icon><icon-eye /></template>
-                            <span>查看</span>
-                          </a-button>
-                        </a-space>
-                      </template>
-                    </a-table-column>
-                  </template>
-                  </a-table>
-                </div>
+                </a-tree>
               </div>
             </div>
-          </a-tab-pane>
-        </a-tabs>
+
+            <!-- 右侧数据列表 -->
+            <div class="right-box">
+              <!-- 搜索区域 -->
+              <a-space wrap align="center" style="width: 100%; justify-content: space-between; margin-bottom: 1px;">
+                <!-- 左侧搜索组件 -->
+                <a-space wrap>
+                  <a-range-picker v-model="searchForm.dateRange" show-time format="YYYY-MM-DD HH:mm" allow-clear />
+                  <a-button type="primary" @click="handleSearch">
+                    <template #icon><icon-search /></template>
+                    <span>查询</span>
+                  </a-button>
+                  <a-button @click="handleReset">
+                    <template #icon><icon-refresh /></template>
+                    <span>重置</span>
+                  </a-button>
+                </a-space>
+
+                <!-- 右侧当前选中对象信息 -->
+                <a-alert v-if="currentObject" type="info" show-icon class="compact-alert">
+                  <template #icon><icon-info-circle /></template>
+                  当前查看对象：<strong>{{ currentObject.object_id }}</strong>
+                  <span v-if="currentObject.object_name">（{{ currentObject.object_name }}）</span>
+                </a-alert>
+              </a-space>
+
+              <!-- 数据列表表格容器 -->
+              <div class="table-box">
+                <!-- 数据列表表格 -->
+                <a-table
+                row-key="row_id"
+                :data="dataList"
+                :bordered="{ cell: true }"
+                :loading="loading"
+                :scroll="{ x: '120%' }"
+                :pagination="{
+                  current: pagination.current,
+                  pageSize: pagination.pageSize,
+                  total: pagination.total,
+                  showTotal: true,
+                  showPageSize: true,
+                  showJumper: true,
+                  hideOnSinglePage: false,
+                  pageSizeOptions: [15, 25, 50, 100]
+                }"
+                size="small"
+                @page-change="onPageChange"
+                @page-size-change="onPageSizeChange"
+              >
+                <template #columns>
+                  <a-table-column title="序号" :width="64" align="center">
+                    <template #cell="{ rowIndex }">{{ (pagination.current - 1) * pagination.pageSize + rowIndex + 1 }}</template>
+                  </a-table-column>
+                  <a-table-column title="行ID" data-index="row_id" :width="120"></a-table-column>
+                  <a-table-column v-if="currentObject && isTimeSeriesData" data-index="times" :width="180">
+                    <template #title>
+                      <div style="display: flex; align-items: center; gap: 4px;">
+                        <span>时间</span>
+                        <div style="display: flex; flex-direction: column; gap: 1px;">
+                          <icon-caret-up
+                            :style="{
+                              fontSize: '10px',
+                              cursor: 'pointer',
+                              color: timeSortType === 0 ? '#1890ff' : '#d9d9d9'
+                            }"
+                            @click="handleTimeSort(0)"
+                          />
+                          <icon-caret-down
+                            :style="{
+                              fontSize: '10px',
+                              cursor: 'pointer',
+                              color: timeSortType === 1 ? '#1890ff' : '#d9d9d9'
+                            }"
+                            @click="handleTimeSort(1)"
+                          />
+                        </div>
+                      </div>
+                    </template>
+                  </a-table-column>
+                  <!-- 动态字段列 - 只显示数据列表字段(table_type!=1)且在数据中实际存在的字段 -->
+                  <a-table-column
+                    v-for="field in actualDisplayFields"
+                    :key="field.interface_name"
+                    :title="field.field_name || field.interface_name"
+                    :width="150"
+                    :ellipsis="true"
+                    :tooltip="true"
+                  >
+                    <template #cell="{ record }">
+                      {{ formatFieldValue(record.fields[field.interface_name]) }}
+                    </template>
+                  </a-table-column>
+                  <a-table-column title="操作" :width="120" align="center" :fixed="'right'">
+                    <template #cell="{ record }">
+                      <a-space>
+                        <a-button type="primary" size="mini" @click="handleView(record)">
+                          <template #icon><icon-eye /></template>
+                          <span>查看</span>
+                        </a-button>
+                      </a-space>
+                    </template>
+                  </a-table-column>
+                </template>
+                </a-table>
+              </div>
+            </div>
+          </div>
+        </div>
       </a-card>
     </div>
 
@@ -182,7 +204,6 @@
           <template #columns>
             <a-table-column title="字段名" data-index="field_name" :width="150"></a-table-column>
             <a-table-column title="字段值" data-index="field_value" :ellipsis="true" :tooltip="true"></a-table-column>
-                          <a-table-column title="字段类型" data-index="field_category" :width="100" align="center"></a-table-column>
           </template>
         </a-table>
       </div>
@@ -208,6 +229,10 @@ const type = ref('rounded');
 const size = ref('medium');
 const activeTab = ref<string>('');
 const datasets = ref<Dataset[]>([]);
+
+// 时序周期相关
+const activeFreqTab = ref<string>('');
+const currentDatasetFreqs = ref<string[]>([]);
 
 // 数据状态
 const loading = ref(false);
@@ -238,7 +263,7 @@ const pagination = ref({
   showPageSize: true,
   showTotal: true,
   current: 1,
-  pageSize: 10,
+  pageSize: 15,
   total: 0
 });
 
@@ -250,7 +275,7 @@ const paginationConfig = computed(() => {
     showJumper: true,
     showPageSize: true,
     hideOnSinglePage: false, // 强制显示分页，即使只有一页
-    pageSizeOptions: [10, 20, 50, 100],
+    pageSizeOptions: [15, 25, 50, 100],
     pageSizeProps: {
       style: { minWidth: '120px' }
     }
@@ -310,17 +335,48 @@ const actualDisplayFields = computed(() => {
 const fieldDataList = computed(() => {
   if (!currentDataRow.value?.fields) return [];
 
-  return Object.entries(currentDataRow.value.fields).map(([fieldKey, fieldValue]) => {
-    const fieldInfo = displayFields.value.find(f => f.interface_name === fieldKey);
-    return {
-      field_name: fieldInfo?.field_name || fieldKey,
-      field_value: formatFieldValue(fieldValue),
-                  field_category: getFieldTypeName(fieldValue.field_category)
-    };
-  });
+  // 按照外面列表页的字段顺序显示，只显示在当前数据行中存在的字段
+  return actualDisplayFields.value
+    .filter(field => currentDataRow.value?.fields?.[field.interface_name])
+    .map(field => {
+      const fieldValue = currentDataRow.value.fields[field.interface_name];
+      return {
+        field_name: field.field_name || field.interface_name,
+        field_value: formatFieldValue(fieldValue)
+      };
+    });
 });
 
 // 方法
+// 解析时序周期字符串，返回时序周期数组
+const parseFrequencies = (timeSeriesPeriod: string): string[] => {
+  if (!timeSeriesPeriod || timeSeriesPeriod === '0') {
+    return [];
+  }
+
+  // 按+分割时序周期字符串
+  return timeSeriesPeriod.split('+').map(freq => freq.trim()).filter(freq => freq);
+};
+
+// 更新当前数据集的时序周期列表
+const updateCurrentDatasetFreqs = () => {
+  const currentDataset = datasets.value.find(d => d.dataset_id.toString() === activeTab.value);
+  if (currentDataset && currentDataset.time_series_period) {
+    const freqs = parseFrequencies(currentDataset.time_series_period);
+    currentDatasetFreqs.value = freqs;
+
+    // 设置默认选中第一个时序周期
+    if (freqs.length > 0 && !activeFreqTab.value) {
+      activeFreqTab.value = freqs[0];
+    }
+
+    console.log('当前数据集时序周期:', freqs);
+  } else {
+    currentDatasetFreqs.value = [];
+    activeFreqTab.value = '';
+  }
+};
+
 const loadDatasets = async () => {
   try {
     pageLoading.value = true;
@@ -339,6 +395,9 @@ const loadDatasets = async () => {
       if (datasets.value.length > 0) {
         activeTab.value = datasets.value[0].dataset_id.toString();
         console.log('设置默认tab:', activeTab.value);
+
+        // 更新当前数据集的时序周期
+        updateCurrentDatasetFreqs();
       }
     } else {
       console.warn('未找到项目或项目没有数据集');
@@ -418,7 +477,7 @@ const loadObjectList = async () => {
 
 const loadDatasetFields = async (datasetId: number) => {
   try {
-    // 获取全部字段列表，然后过滤出属于本数据集且metadata_flag!=1的字段
+    // 获取全部字段列表，然后过滤出属于本数据集且table_type!=1的字段
     const response = await searchFields({
       auth_info: {
         app_id: "moox_frontend",
@@ -433,12 +492,12 @@ const loadDatasetFields = async (datasetId: number) => {
     });
 
     if (response.field_detail_infos) {
-      // 过滤出属于当前数据集且metadata_flag!=1的字段（数据列表字段）
+      // 过滤出属于当前数据集且table_type!=1的字段（数据列表字段）
       const dataListFields = response.field_detail_infos.filter((field: FieldDetailInfo) => {
         // 检查字段是否属于当前数据集
         const belongsToDataset = field.dataset_ids && field.dataset_ids.includes(datasetId);
-        // 检查是否为数据列表字段（metadata_flag != 1）
-        const isDataListField = field.metadata_flag !== 1;
+        // 检查是否为数据列表字段（table_type != 1）
+        const isDataListField = field.table_type !== 1;
 
         return belongsToDataset && isDataListField;
       });
@@ -447,7 +506,7 @@ const loadDatasetFields = async (datasetId: number) => {
       console.log('获取到数据列表字段信息:', displayFields.value);
       console.log('数据集ID:', datasetId, '过滤后的字段数量:', dataListFields.length);
       console.log('字段interface_name列表:', displayFields.value.map(f => f.interface_name));
-      console.log('字段metadata_flag列表:', displayFields.value.map(f => ({ name: f.interface_name, metadata_flag: f.metadata_flag })));
+      console.log('字段table_type列表:', displayFields.value.map(f => ({ name: f.interface_name, table_type: f.table_type })));
     } else {
       console.warn('响应中没有字段信息');
       displayFields.value = [];
@@ -487,7 +546,7 @@ const loadDataList = async () => {
       project_id: currentProjectId.value,
       dataset_id: currentDatasetId,
       object_id: currentObject.value.object_id,
-      freq: currentDataset.time_series_period || '' // 添加时序周期参数
+      freq: activeFreqTab.value || '' // 使用选中的时序周期
     };
 
     console.log('构建DataKey:', dataKey);
@@ -556,9 +615,10 @@ const loadDataList = async () => {
       console.warn('响应中没有数据行');
       dataList.value = [];
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('获取数据列表失败:', error);
-    Message.error(error.message || '获取数据列表失败');
+    const errorMessage = error instanceof Error ? error.message : '获取数据列表失败';
+    Message.error(errorMessage);
     dataList.value = [];
   } finally {
     loading.value = false;
@@ -652,16 +712,7 @@ const formatFieldValue = (fieldValue: FieldValue | undefined): string => {
   return '';
 };
 
-const getFieldTypeName = (fieldType: number): string => {
-  const typeNames: Record<number, string> = {
-    1: '字符串',
-    2: '整数',
-    3: '浮点数',
-    4: '时间',
-    5: '映射'
-  };
-  return typeNames[fieldType] || '未知';
-};
+
 
 // 监听tab切换，重新加载对应数据集的数据
 watch(activeTab, async (newTab, oldTab) => {
@@ -675,6 +726,10 @@ watch(activeTab, async (newTab, oldTab) => {
   pagination.value.current = 1;
   objectList.value = [];
   selectedObjectKeys.value = [];
+  activeFreqTab.value = ''; // 重置时序周期选择
+
+  // 更新当前数据集的时序周期
+  updateCurrentDatasetFreqs();
 
   // 加载当前数据集的字段信息和对象列表
   if (newTab) {
@@ -690,6 +745,32 @@ watch(activeTab, async (newTab, oldTab) => {
   }
 });
 
+// 监听时序周期tab切换，重新加载数据
+watch(activeFreqTab, async (newFreq, oldFreq) => {
+  if (oldFreq === undefined) return; // 避免初始化时触发
+
+  console.log(`切换到时序周期 ${newFreq}，重新加载数据`);
+
+  // 如果有选中的对象，重新加载数据
+  if (currentObject.value) {
+    pagination.value.current = 1; // 重置页码
+    await loadDataList();
+  }
+});
+
+// 监听时间范围变化，自动触发搜索
+watch(() => searchForm.dateRange, async (newDateRange, oldDateRange) => {
+  // 避免初始化时触发
+  if (oldDateRange === undefined) return;
+  
+  // 只有在有选中对象的情况下才自动搜索
+  if (currentObject.value) {
+    console.log('时间范围变化，自动触发搜索:', newDateRange);
+    pagination.value.current = 1; // 重置页码
+    await loadDataList();
+  }
+}, { deep: true });
+
 // 初始化
 onMounted(async () => {
   console.log('数据列表页面初始化，项目ID:', currentProjectId.value);
@@ -698,8 +779,8 @@ onMounted(async () => {
   if (!currentProjectId.value || isNaN(currentProjectId.value)) {
     console.warn('项目ID无效，使用测试数据');
     datasets.value = [
-      { dataset_id: 1, dataset_name: '测试数据集1', data_type: 1, time_series_period: '', validation_rule: '', remark: '' },
-      { dataset_id: 2, dataset_name: '测试数据集2', data_type: 2, time_series_period: '', validation_rule: '', remark: '' }
+      { dataset_id: 1, dataset_name: '合约数据', data_type: 2, time_series_period: '1H+5m', validation_rule: '', remark: '' },
+      { dataset_id: 2, dataset_name: '行情数据', data_type: 2, time_series_period: '1m+5m+15m', validation_rule: '', remark: '' }
     ];
     activeTab.value = '1';
     pageLoading.value = false;
@@ -714,6 +795,9 @@ onMounted(async () => {
       const firstDatasetId = datasets.value[0].dataset_id;
       console.log('加载第一个数据集:', firstDatasetId);
 
+      // 更新当前数据集的时序周期
+      updateCurrentDatasetFreqs();
+
       // 并行加载字段信息和对象列表
       await Promise.all([
         loadDatasetFields(firstDatasetId),
@@ -727,7 +811,7 @@ onMounted(async () => {
     Message.error('页面初始化失败，请刷新重试');
     // 出错时也显示测试数据
     datasets.value = [
-      { dataset_id: 1, dataset_name: '测试数据集1', data_type: 1, time_series_period: '', validation_rule: '', remark: '' }
+      { dataset_id: 1, dataset_name: '合约数据', data_type: 2, time_series_period: '1H+5m', validation_rule: '', remark: '' }
     ];
     activeTab.value = '1';
     pageLoading.value = false;
@@ -798,6 +882,77 @@ onMounted(async () => {
       border-radius: 4px;
     }
   }
+}
+
+// 数据集和时序周期tab并列容器样式
+.combined-tabs-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  margin-bottom: 16px;
+}
+
+// 数据集tab样式
+.dataset-tabs {
+  flex: 0 0 auto;
+
+  :deep(.arco-tabs-nav) {
+    margin-bottom: 0 !important;
+  }
+
+  :deep(.arco-tabs-content) {
+    display: none !important; // 隐藏内容区域，因为内容在外部
+  }
+}
+
+// 时序周期tab样式
+.freq-tabs {
+  flex: 0 0 auto;
+  margin-left: 16px;
+
+  :deep(.arco-tabs-nav) {
+    margin-bottom: 0 !important;
+  }
+
+  :deep(.arco-tabs-content) {
+    display: none !important; // 隐藏内容区域，因为内容在外部
+  }
+
+  :deep(.arco-tabs-tab) {
+    padding: 4px 8px !important; // 减小内边距，让背景色块更小
+    margin-right: 6px !important;
+    font-size: 11px !important; // 减小字体
+    font-weight: 400 !important;
+    border-radius: 4px !important; // 小圆角
+    background-color: transparent !important;
+    border: 1px solid #e8e8e8 !important;
+    color: #666 !important;
+    min-height: auto !important;
+    line-height: 1.2 !important;
+
+    &.arco-tabs-tab-active {
+      background-color: #722ed1 !important; // 使用紫色背景
+      color: white !important;
+      border-color: #722ed1 !important;
+      font-weight: 500 !important;
+    }
+
+    &:hover:not(.arco-tabs-tab-active) {
+      background-color: #f9f0ff !important; // 浅紫色悬停
+      color: #722ed1 !important;
+      border-color: #d3adf7 !important;
+    }
+  }
+
+  :deep(.arco-tabs-tab-title) {
+    font-size: 11px !important; // 确保标题字体也变小
+    line-height: 1.2 !important;
+  }
+}
+
+// tab内容区域样式
+.tab-content-area {
+  margin-top: 0;
 }
 
 // Tab样式自定义 - 使用更高权重的选择器

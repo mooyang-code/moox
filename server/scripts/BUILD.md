@@ -162,7 +162,7 @@ cp config/auth-production.yaml config/auth-current.yaml
 
 ```bash
 # SQLite（默认）
-sqlite3 data/auth.db < sql/schema.sql
+sqlite3 data/moox.db < sql/schema.sql
 
 # PostgreSQL（如果配置了）
 psql -d your_database -f sql/schema.sql

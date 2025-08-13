@@ -19,6 +19,12 @@ func InitGatewayServices(s *server.Server) {
 	// 动态注册配置文件中的所有服务
 	serviceIDs := cfg.GetAllServiceIDs()
 	for _, serviceID := range serviceIDs {
+		// 跳过collector服务，它将使用自定义的处理器
+		if serviceID == "collector" {
+			log.Infof("跳过collector服务的HTTPServiceHandler注册，将使用自定义处理器")
+			continue
+		}
+		
 		serviceConfig, err := cfg.GetServiceConfigByID(serviceID)
 		if err != nil {
 			log.Fatalf("获取服务配置失败: %v", err)

@@ -129,22 +129,31 @@
           </div>
         </a-form-item>
 
-        <a-form-item 
-          field="freqs" 
+        <a-form-item
+          field="freqs"
           label="时序周期"
           v-if="datasetForm.data_type === 2"
-          :rules="isEditMode ? [] : [{ required: true, message: '时序数据需要设置时序周期' }]"
+          :rules="[
+            { required: true, message: '时序数据需要设置时序周期' },
+            { validator: validateFreqs }
+          ]"
         >
-          <a-input 
-            v-model="datasetForm.freqs" 
-            placeholder="请输入时序周期，如：1m+5m+1H+1D" 
-            allow-clear 
-            :disabled="isEditMode"
+          <a-input
+            v-model="datasetForm.freqs"
+            placeholder="请输入时序周期，如：0（无固定周期）或 1m+5m+1H+1D"
+            allow-clear
+            @blur="handleFreqsBlur"
           />
           <template #extra>
             <div style="font-size: 12px; color: #8c8c8c;">
-              <span v-if="!isEditMode">多个周期用+分割，例如：1m+5m+1H+1D（1分钟+5分钟+1小时+1天）</span>
-              <span v-else>编辑模式下时序周期不可修改</span>
+              <div v-if="freqsValidationMessage" :style="{ color: freqsValidationResult?.isValid ? '#52c41a' : '#ff4d4f', marginBottom: '4px' }">
+                {{ freqsValidationMessage }}
+              </div>
+              <div>输入 <span style="color: #1890ff;">0</span> 表示无固定周期；多个周期用+分割，例如：1m+5m+1H+1D（1分钟+5分钟+1小时+1天）</div>
+              <div style="margin-top: 4px;">
+                <span>支持的单位：</span>
+                <span style="color: #1890ff;">s(秒) m(分钟) H(小时) D(天) W(周) M(月) Y(年)</span>
+              </div>
             </div>
           </template>
         </a-form-item>
@@ -185,11 +194,12 @@ import { useRoute, useRouter } from 'vue-router';
 import { Message, Modal } from '@arco-design/web-vue';
 import { listProjects, type Project } from '@/api/project';
 import { createDataset, updateDataset, deleteDataset } from '@/api/dataset';
-import { 
-  IconPlus, 
-  IconEye, 
-  IconEdit, 
-  IconDelete 
+import { validateTimeSeriesFreqs, type TimeSeriesValidationResult } from '@/utils/timeSeriesValidator';
+import {
+  IconPlus,
+  IconEye,
+  IconEdit,
+  IconDelete
 } from '@arco-design/web-vue/es/icon';
 
 const route = useRoute();
@@ -214,11 +224,48 @@ const datasetForm = reactive({
   comment: '' // 备注，对应后端的comment字段
 });
 
+// 时序周期验证相关
+const freqsValidationResult = ref<TimeSeriesValidationResult | null>(null);
+const freqsValidationMessage = ref<string>('');
+
 // 获取当前项目
 const currentProject = computed(() => {
   const projectId = Number(route.params.projectId);
   return projects.value.find(p => Number(p.id) === projectId);
 });
+
+// 时序周期验证函数
+const validateFreqs = (value: string, callback: (error?: string) => void) => {
+  if (!value && datasetForm.data_type === 2) {
+    callback('时序数据需要设置时序周期');
+    return;
+  }
+
+  if (value && datasetForm.data_type === 2) {
+    const result = validateTimeSeriesFreqs(value);
+    freqsValidationResult.value = result;
+    freqsValidationMessage.value = result.message;
+
+    if (!result.isValid) {
+      callback(result.message);
+      return;
+    }
+  }
+
+  callback();
+};
+
+// 时序周期输入框失焦时验证
+const handleFreqsBlur = () => {
+  if (datasetForm.freqs && datasetForm.data_type === 2) {
+    const result = validateTimeSeriesFreqs(datasetForm.freqs);
+    freqsValidationResult.value = result;
+    freqsValidationMessage.value = result.message;
+  } else {
+    freqsValidationResult.value = null;
+    freqsValidationMessage.value = '';
+  }
+};
 
 // 获取项目列表
 const fetchProjects = async () => {
@@ -296,6 +343,10 @@ const resetDatasetForm = () => {
     check_rules: '',
     comment: ''
   });
+
+  // 清除验证状态
+  freqsValidationResult.value = null;
+  freqsValidationMessage.value = '';
 };
 
 // 提交数据集表单
@@ -312,10 +363,11 @@ const handleSubmitDataset = async () => {
         proj_id: Number(route.params.projectId),
         dataset_id: currentEditDataset.value.dataset_id,
         dataset_name: datasetForm.dataset_name,
+        freqs: datasetForm.freqs, // 现在允许修改时序周期
         check_rules: datasetForm.check_rules,
         comment: datasetForm.comment
       };
-      
+
       await updateDataset(updateParams);
       Message.success('数据集更新成功！');
     } else {

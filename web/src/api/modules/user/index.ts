@@ -40,7 +40,7 @@ export const getLoginSaltAPI = async (data: { username: string }) => {
     }
     
     return result;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('获取登录盐值失败:', error);
     throw error;
   }
@@ -80,7 +80,7 @@ export const getUserInfoAPI = async (accessToken: string) => {
     }
     
     return result;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('获取用户信息失败:', error);
     throw error;
   }

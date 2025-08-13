@@ -12,12 +12,12 @@ export interface FieldDetailInfo {
   dataset_ids: number[];
   field_id: number;
   field_name: string;
-  field_category: number;
+
   interface_name: string;  // 字段英文名
   desc: string;  // 字段描述
   required_flag: number;  // 必填标记（-1非必填；1必填）
   unique_flag: number;    // 唯一约束标记（-1否；1是）
-  metadata_flag: number;  // 元数据字段标记（-1否；1是）
+  table_type: number;     // 字段所属表类型（1=数据对象表，2=数据表）
   parent_field_id: number;
   field_format_type: FieldFormatType;
   value_lib_id: number;
@@ -42,7 +42,7 @@ export interface SearchFieldReq {
   dataset_id?: number;
   field_name?: string;
   interface_name?: string;
-  field_category?: number;
+  table_type?: number;     // 字段所属表类型（1=数据对象表，2=数据表）
   field_ids?: number[];
   page_info?: {
     page_idx: number;  // 页数(从1开始计数)
@@ -73,12 +73,12 @@ export interface CreateFieldReq {
     proj_id: number;
     dataset_ids?: number[];  // repeated int32 in proto
     field_name: string;
-    field_category: number;
+
     interface_name: string;
     desc: string;
     required_flag: number;   // 必填标记（-1非必填；1必填）
     unique_flag: number;     // 唯一约束标记（-1否；1是）
-    metadata_flag?: number;  // 元数据字段标记（-1否；1是）
+    table_type?: number;     // 字段所属表类型（1=数据对象表，2=数据表）
     parent_field_id?: number;  // 父字段ID
     field_format_type: FieldFormatType;
     value_lib_id?: number;  // 属性值库ID
@@ -116,12 +116,12 @@ export interface UpsertFieldReq {
     proj_id: number;
     dataset_ids: number[];
     field_name: string;
-    field_category: number;
+
     interface_name: string;
     desc: string;
     required_flag: number;   // 必填标记（-1非必填；1必填）
     unique_flag: number;     // 唯一约束标记（-1否；1是）
-    metadata_flag?: number;  // 元数据字段标记（-1否；1是）
+    table_type?: number;     // 字段所属表类型（1=数据对象表，2=数据表）
     parent_field_id?: number;
     field_format_type: FieldFormatType;
     value_lib_id?: number;

@@ -225,7 +225,8 @@ const refreshContainers = async () => {
     }
   } catch (error) {
     console.error('刷新容器列表错误:', error);
-    Message.error('刷新失败: ' + error.message);
+    const errorMessage = error instanceof Error ? error.message : '刷新失败';
+    Message.error('刷新失败: ' + errorMessage);
     // 如果API调用失败，使用模拟数据
     containers.value = [
       {

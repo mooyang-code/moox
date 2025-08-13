@@ -46,6 +46,7 @@ import { loginAPI } from "@/api/modules/user/index";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { useSystemStore } from "@/store/modules/system";
 import { Message } from "@arco-design/web-vue";
+import { getErrorMessage } from "@/utils/error-handler";
 
 let userStores = useUserInfoStore();
 const routeStore = useRoutesConfigStore();
@@ -247,21 +248,15 @@ const onLogin = async () => {
       localStorage.removeItem('remembered_username');
     }
     
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('❌ 登录失败:', error);
-    
+
     // 清理可能设置的无效token
     await userStores.setToken("");
-    
-    let loginErrorMessage = "登录失败";
-    if (error.message) {
-      loginErrorMessage = error.message;
-    } else if (error.response) {
-      loginErrorMessage = `网络错误: ${error.response.status}`;
-    }
-    
+
+    const loginErrorMessage = getErrorMessage(error, "登录失败");
     Message.error(loginErrorMessage);
-    
+
     // 登录失败时刷新验证码
     verifyCodeChange("");
   } finally {

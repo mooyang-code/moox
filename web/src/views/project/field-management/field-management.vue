@@ -4,17 +4,25 @@
       <template v-if="currentProject">
         <div class="moox-inner">
           <a-space wrap>
+            <a-select 
+              placeholder="字段所属表类型" 
+              v-model="form.tableTypes" 
+              style="width: 240px" 
+              multiple
+              allow-clear
+              :max-tag-count="2"
+              :tag-close-icon="true"
+            >
+              <a-option v-for="item in tableTypeOptions" :key="item.value" :value="item.value">{{ item.name }}</a-option>
+            </a-select>
+            <a-select placeholder="关联数据集" v-model="form.relatedDataset" style="width: 180px" allow-clear>
+              <a-option v-for="item in datasetList" :key="item.dataset_id" :value="item.dataset_id">{{ item.dataset_name }}</a-option>
+            </a-select>
             <a-input v-model="form.fieldName" placeholder="请输入字段中文名" allow-clear />
             <a-input v-model="form.fieldNameEn" placeholder="请输入字段英文名" allow-clear @input="validateSearchFieldNameEn" />
             <div v-if="searchFieldNameEnValidationMessage" style="font-size: 12px; color: #ff7d00; margin-top: 4px;">
               {{ searchFieldNameEnValidationMessage }}
             </div>
-            <a-select placeholder="字段类型" v-model="form.dataCategory" style="width: 150px" allow-clear>
-              <a-option v-for="item in dataCategoryOptions" :key="item.value" :value="item.value">{{ item.name }}</a-option>
-            </a-select>
-            <a-select placeholder="关联数据集" v-model="form.relatedDataset" style="width: 180px" allow-clear>
-              <a-option v-for="item in datasetList" :key="item.dataset_id" :value="item.dataset_id">{{ item.dataset_name }}</a-option>
-            </a-select>
             <a-select placeholder="是否必填" v-model="form.required" style="width: 120px" allow-clear>
               <a-option v-for="item in requiredOptions" :key="item.value" :value="item.value">{{ item.name }}</a-option>
             </a-select>
@@ -67,13 +75,7 @@
               <a-table-column title="字段ID" data-index="id" :width="80"></a-table-column>
               <a-table-column title="字段中文名" data-index="fieldName" :width="120"></a-table-column>
               <a-table-column title="字段英文名" data-index="fieldNameEn" :width="120"></a-table-column>
-              <a-table-column title="字段类型" :width="120" align="center">
-                <template #cell="{ record }">
-                  <a-tag bordered size="small" color="blue" v-if="record.dataCategory === 1">静态数据字段</a-tag>
-                  <a-tag bordered size="small" color="green" v-else-if="record.dataCategory === 2">时序数据字段</a-tag>
-                  <a-tag bordered size="small" color="gray" v-else>未知类型</a-tag>
-                </template>
-              </a-table-column>
+
               <a-table-column title="字段格式" data-index="fieldFormatText" :width="150"></a-table-column>
               <a-table-column title="是否必填" :width="100" align="center">
                 <template #cell="{ record }">
@@ -87,10 +89,10 @@
                   <a-tag bordered size="small" color="gray" v-else>非唯一</a-tag>
                 </template>
               </a-table-column>
-              <a-table-column title="是否为元数据" :width="110" align="center">
+              <a-table-column title="字段所属表类型" :width="130" align="center">
                 <template #cell="{ record }">
-                  <a-tag bordered size="small" color="purple" v-if="record.isMetadata">元数据</a-tag>
-                  <a-tag bordered size="small" color="gray" v-else>普通字段</a-tag>
+                  <a-tag bordered size="small" color="purple" v-if="record.isMetadata">数据对象表</a-tag>
+                  <a-tag bordered size="small" color="gray" v-else>数据表</a-tag>
                 </template>
               </a-table-column>
               <a-table-column title="关联数据集" data-index="relatedDatasets" :ellipsis="true" :tooltip="true" :width="150"></a-table-column>
@@ -174,10 +176,10 @@
               <template #unchecked> 非唯一 </template>
             </a-switch>
           </a-form-item>
-          <a-form-item field="isMetadata" label="是否为元数据字段" validate-trigger="blur">
+          <a-form-item field="isMetadata" label="字段所属表类型" validate-trigger="blur">
             <a-switch type="round" :checked-value="true" :unchecked-value="false" v-model="addForm.isMetadata">
-              <template #checked> 元数据 </template>
-              <template #unchecked> 普通字段 </template>
+              <template #checked> 数据对象表 </template>
+              <template #unchecked> 数据表 </template>
             </a-switch>
           </a-form-item>
           <a-form-item field="fieldValidationRules" label="数据校验规则" validate-trigger="blur">
@@ -523,7 +525,7 @@ interface FieldRecord {
   secondaryFormat: string;
   secondaryFormatText: string;
   fieldFormatText: string; // 字段格式（主要类型+次要类型组合）
-  dataCategory: number; // 字段数据类型（1静态，2时序）
+
   isRequired: boolean;
   isUnique: boolean;
   isMetadata: boolean;
@@ -539,7 +541,7 @@ interface FieldRecord {
 const form = ref({
   fieldName: "",
   fieldNameEn: "",
-  dataCategory: null as number | null,
+  tableTypes: [1, 2] as number[], // 字段所属表类型，默认选中数据对象表和数据表
   relatedDataset: null as number | null,
   required: null as boolean | null
 });
@@ -559,10 +561,10 @@ const primaryTypes = ref([
 // 次要类型选项
 const secondaryTypes = ref(FIELD_SECONDARY_FORMAT_OPTIONS);
 
-// 数据类型选项
-const dataCategoryOptions = ref([
-  { value: 1, name: "静态数据字段" },
-  { value: 2, name: "时序数据字段" }
+// 表类型选项
+const tableTypeOptions = ref([
+  { value: 1, name: "数据对象表" },
+  { value: 2, name: "数据表" }
 ]);
 
 // 是否必填选项
@@ -589,7 +591,7 @@ const reset = () => {
   form.value = {
     fieldName: "",
     fieldNameEn: "",
-    dataCategory: null,
+    tableTypes: [1, 2], // 重置时恢复默认值：数据对象表和数据表
     relatedDataset: null,
     required: null
   };
@@ -679,10 +681,10 @@ const convertApiFieldToRecord = (apiField: FieldDetailInfo): FieldRecord => {
     secondaryFormat: String(apiField.field_format_type.field_secondary_format),
     secondaryFormatText: secondaryFormatText,
     fieldFormatText: fieldFormatText,
-    dataCategory: apiField.field_category || 1, // 字段数据类型，默认为静态数据
+
     isRequired: apiField.required_flag === 1, // 1表示必填，-1表示非必填
     isUnique: apiField.unique_flag === 1, // 1表示唯一，-1表示非唯一
-    isMetadata: apiField.metadata_flag === 1, // 1表示元数据，-1表示普通字段
+    isMetadata: apiField.table_type === 1, // 1表示数据对象表，2表示数据表
     fieldValidationRules: apiField.validation_rule ? JSON.stringify(apiField.validation_rule) : '',
     writeExample: apiField.write_example || '',
     remark: apiField.remark || '',
@@ -719,11 +721,12 @@ const getFieldList = async () => {
     // 根据前端筛选条件进行过滤（如果后台API不支持某些筛选条件）
     let filteredList = fieldList.value;
 
-    // 按数据类型筛选
-    if (form.value.dataCategory !== null) {
-      filteredList = filteredList.filter(item =>
-        item.dataCategory === form.value.dataCategory
-      );
+    // 按字段所属表类型筛选
+    if (form.value.tableTypes && form.value.tableTypes.length > 0) {
+      filteredList = filteredList.filter(item => {
+        const itemTableType = item.isMetadata ? 1 : 2; // 1=数据对象表，2=数据表
+        return form.value.tableTypes.includes(itemTableType);
+      });
     }
 
     // 按关联数据集筛选
@@ -745,9 +748,9 @@ const getFieldList = async () => {
     // 更新分页信息
     pagination.value.current = response.cur_page;
     // 如果有前端筛选，使用筛选后的数量，否则使用后台返回的总数
-    pagination.value.total = (form.value.dataCategory !== null ||
-                             form.value.relatedDataset !== null ||
-                             form.value.required !== null)
+    pagination.value.total = (form.value.tableTypes && form.value.tableTypes.length > 0 && form.value.tableTypes.length < 2) ||
+                             (form.value.relatedDataset !== null) ||
+                             (form.value.required !== null)
                              ? filteredList.length
                              : response.total_num;
     
@@ -814,10 +817,9 @@ const yamlCode = ref(`fields:
     field_name: "交易标的ID"   # 字段中文显示名称
     dataset_ids: [100,101]    # 关联的数据集ID列表，指定该字段在哪些数据集下生效（具体数据集ID请参考数据集列表）
     desc: "交易对标识符，如BTCUSDT，使用全大写字母格式" # 字段功能描述
-    field_category: 1         # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1          # 必填标记（-1非必填；1必填）
     unique_flag: 1            # 唯一约束标记（-1否；1是）
-    metadata_flag: 1          # 元数据字段标记（-1否；1是）
+    table_type: 1             # 字段所属表类型（1=数据对象表，2=数据表）
     field_primary_format: 1   # 字段主要数据类型：1=字符串，2=整型，3=双精度浮点数，4=时间类型，5=选项类型，6=Set类型，7=Map类型k-v，8=Map类型k-list
     field_secondary_format: 3 # 字段次要数据类型，用于进一步限定数据格式
     validation_rule: '{"string_rule":{"min_length":3,"max_length":10,"pattern":"^[A-Z0-9]+$"}}' # 字符串类型校验规则（下划线格式）
@@ -828,10 +830,10 @@ const yamlCode = ref(`fields:
     field_name: "K线开始时间"   # 字段中文显示名称
     dataset_ids: [100,101]    # 关联的数据集ID列表，指定该字段在哪些数据集下生效（具体数据集ID请参考数据集列表）
     desc: "K线图表周期的起始时间戳" # 字段功能描述
-    field_category: 2         # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
+
     required_flag: 1          # 必填标记（-1非必填；1必填）
     unique_flag: -1           # 唯一约束标记（-1否；1是）
-    metadata_flag: -1         # 元数据字段标记（-1否；1是）
+    table_type: 2             # 字段所属表类型（1=数据对象表，2=数据表）
     field_primary_format: 4   # 字段主要数据类型：4=时间类型
     field_secondary_format: 7 # 字段次要数据类型，用于进一步限定数据格式
     validation_rule: '{"format": "YYYY-MM-DD HH:mm:ss", "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$"}' # 时间类型校验规则
@@ -842,10 +844,9 @@ const yamlCode = ref(`fields:
     field_name: "开盘价"
     dataset_ids: [100,101]
     desc: "K线周期开盘价格"
-    field_category: 2         # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1
     unique_flag: -1
-    metadata_flag: -1
+    table_type: 2             # 字段所属表类型（1=数据对象表，2=数据表）
     field_primary_format: 3   # 字段主要数据类型：3=双精度浮点数
     field_secondary_format: 2
     validation_rule: '{"min": 0, "max": 999999999}'  # 浮点数类型校验规则
@@ -856,10 +857,9 @@ const yamlCode = ref(`fields:
     field_name: "成交量"
     dataset_ids: [100,101]
     desc: "K线周期成交量"
-    field_category: 2         # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1
     unique_flag: -1
-    metadata_flag: -1
+    table_type: 2             # 字段所属表类型（1=数据对象表，2=数据表）
     field_primary_format: 2   # 字段主要数据类型：2=整型
     field_secondary_format: 1
     validation_rule: '{"min": 0, "max": 999999999999}'  # 整型校验规则
@@ -870,10 +870,9 @@ const yamlCode = ref(`fields:
     field_name: "交易所类型"
     dataset_ids: [100,101]
     desc: "交易所类型选项"
-    field_category: 1         # 字段数据类型分类（1=静态数据字段；2=时序数据字段）
     required_flag: 1
     unique_flag: -1
-    metadata_flag: -1
+    table_type: 2             # 字段所属表类型（1=数据对象表，2=数据表）
     field_primary_format: 5   # 字段主要数据类型：5=选项类型
     field_secondary_format: 11
     validation_rule: '{"lib_id": 1}'  # 选项类型校验规则，需要提供值库ID
@@ -1032,12 +1031,12 @@ const handleOk = async () => {
           proj_id: Number(currentProject.value.id),
           dataset_ids: datasetIds,
           field_name: addForm.value.fieldName,
-          field_category: 1, // 默认为基础字段
+
           interface_name: addForm.value.fieldNameEn,
           desc: addForm.value.fieldDescription,
           required_flag: addForm.value.isRequired ? 1 : -1, // 1必填，-1非必填
           unique_flag: addForm.value.isUnique ? 1 : -1, // 1唯一，-1非唯一
-          metadata_flag: addForm.value.isMetadata ? 1 : -1, // 1元数据，-1普通字段
+          table_type: addForm.value.isMetadata ? 1 : 2, // 1数据对象表，2数据表
           field_format_type: {
             field_primary_format: Number(addForm.value.primaryFormat),
             field_secondary_format: Number(addForm.value.secondaryFormat)
@@ -1077,17 +1076,16 @@ const handleOk = async () => {
           dataset_ids: updateDatasetIds,
           field_id: currentEditingFieldId.value,
           field_name: addForm.value.fieldName,
-          field_type: addForm.value.fieldType || 1, // 默认为基础字段
           interface_name: addForm.value.interfaceName,
           desc: addForm.value.fieldDescription,
           required_flag: addForm.value.isRequired ? 1 : -1,
           unique_flag: addForm.value.isUnique ? 1 : -1,
-          metadata_flag: addForm.value.isMetadata ? 1 : -1,
+          table_type: addForm.value.isMetadata ? 1 : 2,
           parent_field_id: addForm.value.parentFieldId || 0,
           level_info: [],
           field_format_type: {
-            field_primary_format: addForm.value.fieldMainType || 1,
-            field_secondary_format: addForm.value.fieldSecondaryType || 1
+            field_primary_format: Number(addForm.value.primaryFormat),
+            field_secondary_format: Number(addForm.value.secondaryFormat)
           },
           value_lib_id: addForm.value.valueLibId || 0,
           validation_rule: addForm.value.fieldValidationRules ? JSON.parse(addForm.value.fieldValidationRules) : undefined,
@@ -1095,7 +1093,7 @@ const handleOk = async () => {
           remark: addForm.value.remark,
           ctime: '',
           mtime: '',
-          invalid: -1
+          invalid: 0
         }
       };
       
@@ -1456,20 +1454,8 @@ const handleImportOk = async () => {
         // 解析validation_rule
         const validationRule = parseValidationRule(fieldConfig.validation_rule, fieldPrimaryFormat);
         
-        // 处理字段类型：从配置中读取，如果没有则默认为1（静态数据字段）
-        let fieldType = 1; // 默认为静态数据字段
-        if (fieldConfig.field_category !== undefined && fieldConfig.field_category !== null) {
-          fieldType = Number(fieldConfig.field_category);
-          // 验证字段类型的有效性（1=静态数据字段，2=时序数据字段）
-          if (fieldType !== 1 && fieldType !== 2) {
-            importResult.value.failList.push({
-              interface_name: fieldConfig.interface_name || '未知字段',
-              field_name: fieldConfig.field_name || '未知字段名',
-              error_message: `字段类型无效：field_category=${fieldType}，有效值为1（静态数据字段）或2（时序数据字段）`
-            });
-            continue;
-          }
-        }
+        // 字段类型固定为1（基础字段类型）
+        let fieldType = 1;
 
         // 构建UpsertField请求参数
         const upsertParams: UpsertFieldReq = {
@@ -1481,12 +1467,12 @@ const handleImportOk = async () => {
           proj_id: Number(currentProject.value.id),
           dataset_ids: fieldConfig.dataset_ids,
           field_name: fieldConfig.field_name,
-          field_category: fieldType, // 使用从配置中读取的字段类型
+
           interface_name: fieldConfig.interface_name,
           desc: fieldConfig.desc || '',
           required_flag: fieldConfig.required_flag || (fieldConfig.is_required ? 1 : -1), // 1必填，-1非必填
           unique_flag: fieldConfig.unique_flag || (fieldConfig.is_unique ? 1 : -1), // 1唯一，-1非唯一
-          metadata_flag: fieldConfig.metadata_flag || (fieldConfig.is_meta ? 1 : -1), // 1元数据，-1普通字段
+          table_type: fieldConfig.table_type || (fieldConfig.is_meta ? 1 : 2), // 1数据对象表，2数据表
           field_format_type: {
             field_primary_format: fieldPrimaryFormat,
             field_secondary_format: Number(fieldConfig.field_secondary_format) || 1
@@ -1712,12 +1698,12 @@ const validateYamlFormat = (content: string): { isValid: boolean; errorMessage?:
     // 检查是否包含必要的字段
     const requiredFields = [
       'interface_name',
-      'field_name', 
+      'field_name',
       'dataset_ids',
       'desc',
       'required_flag',
       'unique_flag',
-      'metadata_flag',
+      'table_type',
       'field_primary_format',
       'field_secondary_format'
     ];
@@ -1959,6 +1945,27 @@ onMounted(async () => {
 :deep(.arco-pagination) {
   .arco-pagination-item-jumper {
     margin-left: 16px;
+  }
+}
+
+// 多选框样式优化 - 确保与其他输入框高度一致
+:deep(.arco-select-multiple) {
+  .arco-select-view {
+    min-height: 32px !important;
+    max-height: 32px !important;
+  }
+  
+  .arco-select-view-value {
+    flex-wrap: nowrap !important;
+    overflow: hidden;
+  }
+  
+  .arco-tag {
+    margin: 1px 4px 1px 0 !important;
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 </style>

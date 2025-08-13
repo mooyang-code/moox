@@ -7,7 +7,6 @@
             <a-steps :current="currentStep" line-less>
               <a-step description="创建项目">基本信息</a-step>
               <a-step description="创建数据集">数据集</a-step>
-              <a-step description="设置数据主键字段">主键配置</a-step>
               <a-step description="创建成功">完成创建</a-step>
             </a-steps>
           </a-col>
@@ -42,8 +41,32 @@
                     <a-option value="2">时序数据</a-option>
                   </a-select>
                 </a-form-item>
-                <a-form-item v-if="form.dataType === '2'" field="timePeriod" label="时序周期">
-                  <a-input v-model="form.timePeriod" placeholder="请输入时序周期" />
+                <a-form-item
+                  v-if="form.dataType === '2'"
+                  field="timePeriod"
+                  label="时序周期"
+                  :rules="[
+                    { required: true, message: '时序数据需要设置时序周期' },
+                    { validator: validateTimePeriod }
+                  ]"
+                >
+                  <a-input
+                    v-model="form.timePeriod"
+                    placeholder="请输入时序周期，如：0（无固定周期）或 1m+5m+1H+1D"
+                    @blur="handleTimePeriodBlur"
+                  />
+                  <template #extra>
+                    <div style="font-size: 12px; color: #8c8c8c;">
+                      <div v-if="timePeriodValidationMessage" :style="{ color: timePeriodValidationResult?.isValid ? '#52c41a' : '#ff4d4f', marginBottom: '4px' }">
+                        {{ timePeriodValidationMessage }}
+                      </div>
+                      <div>输入 <span style="color: #1890ff;">0</span> 表示无固定周期；多个周期用+分割，例如：1m+5m+1H+1D（1分钟+5分钟+1小时+1天）</div>
+                      <div style="margin-top: 4px;">
+                        <span>支持的单位：</span>
+                        <span style="color: #1890ff;">s(秒) m(分钟) H(小时) D(天) W(周) M(月) Y(年)</span>
+                      </div>
+                    </div>
+                  </template>
                 </a-form-item>
                 <a-form-item field="validationRules" label="数据校验规则">
                   <a-textarea v-model="form.validationRules" placeholder="请输入JSON格式的数据校验规则（选填）" />
@@ -53,142 +76,8 @@
                 </a-form-item>
               </div>
 
-              <!-- 步骤3：主键配置 -->
+              <!-- 步骤3：完成创建 -->
               <div v-if="currentStep == 3">
-                <a-form-item field="fieldNameCn" label="字段中文名">
-                  <a-input v-model="form.fieldNameCn" placeholder="请输入字段中文名" />
-                </a-form-item>
-                <a-form-item field="fieldNameEn" label="字段英文名">
-                  <a-input v-model="form.fieldNameEn" placeholder="请输入字段英文名" />
-                  <div v-if="fieldNameEnValidationMessage" style="font-size: 12px; color: #ff7d00; margin-top: 4px;">
-                    {{ fieldNameEnValidationMessage }}
-                  </div>
-                </a-form-item>
-                <a-form-item field="fieldDescription" label="字段描述">
-                  <a-input v-model="form.fieldDescription" placeholder="请输入字段描述" />
-                </a-form-item>
-                <a-form-item field="isRequired" label="是否必填">
-                  <a-switch v-model="form.isRequired" />
-                </a-form-item>
-                <a-form-item field="isUnique" label="值是否唯一">
-                  <a-switch v-model="form.isUnique" />
-                </a-form-item>
-                <a-form-item field="isMetadata" label="是否为元数据字段">
-                  <a-switch v-model="form.isMetadata" />
-                </a-form-item>
-                <a-form-item field="fieldValidationRules" label="数据校验规则">
-                  <a-textarea v-model="form.fieldValidationRules" placeholder="请输入JSON格式的数据校验规则（选填）" />
-                </a-form-item>
-                <a-form-item field="writeExample" label="写入示例">
-                  <a-input v-model="form.writeExample" placeholder="请输入写入示例（选填）" />
-                </a-form-item>
-                <a-form-item field="fieldRemark" label="备注">
-                  <a-input v-model="form.fieldRemark" placeholder="请输入备注" />
-                </a-form-item>
-                <a-form-item field="primaryFormat" label="字段主要类型">
-                  <a-radio-group v-model="form.primaryFormat">
-                    <a-row :gutter="16">
-                      <a-col :span="12">
-                        <a-radio value="1">字符串</a-radio>
-                        <a-radio value="2">整型</a-radio>
-                        <a-radio value="3">双精度浮点数</a-radio>
-                        <a-radio value="4">时间类型</a-radio>
-                      </a-col>
-                      <a-col :span="12">
-                        <a-radio value="5">整型向量</a-radio>
-                        <a-radio value="6">Set类型</a-radio>
-                        <a-radio value="7">Map类型k-v</a-radio>
-                        <a-radio value="8">Map类型k-list</a-radio>
-                      </a-col>
-                    </a-row>
-                  </a-radio-group>
-                </a-form-item>
-                <a-form-item field="secondaryFormat" label="字段次要类型">
-                  <a-radio-group v-model="form.secondaryFormat">
-                    <a-row :gutter="16">
-                      <a-col :span="12">
-                        <a-radio value="1">
-                          <span>文本类型</span>
-                          <a-tooltip content="纯文本格式">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
-                        <a-radio value="2">
-                          <span>布尔类型</span>
-                          <a-tooltip content="格式: true/false">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
-                        <a-radio value="3">
-                          <span>日期</span>
-                          <a-tooltip content="格式: 2021-02-03">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
-                        <a-radio value="4">
-                          <span>日期范围</span>
-                          <a-tooltip content="格式: 2021-02-03 ~ 2022-03-02">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
-                        <a-radio value="5">
-                          <span>日期时间</span>
-                          <a-tooltip content="格式: 2021-02-03 08:00:00">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
-                        <a-radio value="6">
-                          <span>日期时间范围</span>
-                          <a-tooltip content="格式: 2021-02-03 08:00:00 ~ 2022-03-02 09:00:01">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
-                      </a-col>
-                      <a-col :span="12">
-                        <a-radio value="7">
-                          <span>秒级时间戳</span>
-                          <a-tooltip content="格式: 1661411887">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
-                        <a-radio value="8">
-                          <span>ISO8601日期</span>
-                          <a-tooltip content="格式: 2025-04-12T20:36:00+08:00">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
-                        <a-radio value="9">
-                          <span>链接</span>
-                          <a-tooltip content="格式: http://puui.qpic.cn/emuczz1543346158">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
-                        <a-radio value="10">
-                          <span>JSON</span>
-                          <a-tooltip content="JSON格式数据">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
-                        <a-radio value="11">
-                          <span>选项值ID</span>
-                          <a-tooltip content="选项值的ID标识">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
-                        <a-radio value="12">
-                          <span>选项值中文文案</span>
-                          <a-tooltip content="选项值的中文显示文案">
-                            <icon-question-circle style="margin-left: 4px" />
-                          </a-tooltip>
-                        </a-radio>
-                      </a-col>
-                    </a-row>
-                  </a-radio-group>
-                </a-form-item>
-              </div>
-
-              <!-- 步骤4：完成创建 -->
-              <div v-if="currentStep == 4">
                 <a-result status="success" title="提交成功">
                   <template #subtitle>项目创建成功</template>
                   <template #extra>
@@ -200,7 +89,7 @@
                 </a-result>
               </div>
 
-              <a-form-item v-if="currentStep != 4">
+              <a-form-item v-if="currentStep != 3">
                 <a-space>
                   <a-button @click="onLastStep" v-if="currentStep != 1">上一步</a-button>
                   <a-button html-type="submit" type="primary">下一步</a-button>
@@ -217,11 +106,19 @@
 <script setup lang="ts" name="CreateProject">
 import { ref, onBeforeUnmount } from 'vue';
 import { Message } from '@arco-design/web-vue';
+import { useRouter } from 'vue-router';
 import { api, AUTH_INFO } from '@/api/config';
+import { validateTimeSeriesFreqs, type TimeSeriesValidationResult } from '@/utils/timeSeriesValidator';
+
+const router = useRouter();
 
 const loading = ref(false);
 const currentStep = ref(1);
 const createdProjectId = ref('');
+
+// 时序周期验证相关
+const timePeriodValidationResult = ref<TimeSeriesValidationResult | null>(null);
+const timePeriodValidationMessage = ref<string>('');
 
 interface CreateProjectResponseData {
   ret_info: {
@@ -244,20 +141,7 @@ const submitProjectData = async () => {
         time_series_period: form.value.timePeriod,
         validation_rule: form.value.validationRules,
         remark: form.value.datasetRemark
-      },
-      fields: [{
-        field_name: form.value.fieldNameCn,
-        interface_name: form.value.fieldNameEn,
-        desc: form.value.fieldDescription,
-        required_flag: form.value.isRequired ? 1 : -1,
-        unique_flag: form.value.isUnique ? 1 : -1,
-        metadata_flag: form.value.isMetadata ? 1 : -1,
-        validation_rule: form.value.fieldValidationRules,
-        write_example: form.value.writeExample,
-        remark: form.value.fieldRemark,
-        field_primary_format: parseInt(form.value.primaryFormat),
-        field_secondary_format: parseInt(form.value.secondaryFormat)
-      }]
+      }
     };
 
     console.log('提交项目数据:', projectData);
@@ -285,27 +169,65 @@ const submitProjectData = async () => {
       duration: 3000
     });
     return true;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('API Error:', error);
-    
+
     let errorMessage = '项目创建失败';
-    
+
     if (!error) {
       errorMessage = '未知错误：API调用返回undefined';
-    } else if (error.response?.data?.ret_info?.msg) {
-      // HTTP错误响应，使用协议中的消息
-      errorMessage = error.response.data.ret_info.msg;
-    } else if (error.message) {
-      errorMessage = error.message;
+    } else if (error && typeof error === 'object') {
+      const errorObj = error as any;
+      if (errorObj.response?.data?.ret_info?.msg) {
+        // HTTP错误响应，使用协议中的消息
+        errorMessage = errorObj.response.data.ret_info.msg;
+      } else if (errorObj.message) {
+        errorMessage = errorObj.message;
+      }
     } else if (typeof error === 'string') {
       errorMessage = error;
+    } else if (error instanceof Error) {
+      errorMessage = error.message;
     }
-    
+
     Message.error({
       content: errorMessage,
       duration: 3000
     });
     return false;
+  }
+};
+
+// 时序周期验证函数
+const validateTimePeriod = (value: string, callback: (error?: string) => void) => {
+  if (!value && form.value.dataType === '2') {
+    callback('时序数据需要设置时序周期');
+    return;
+  }
+
+  if (value && form.value.dataType === '2') {
+    const result = validateTimeSeriesFreqs(value);
+    timePeriodValidationResult.value = result;
+    timePeriodValidationMessage.value = result.message;
+
+    if (!result.isValid) {
+      callback(result.message);
+      return;
+    }
+  }
+
+  callback();
+};
+
+// 时序周期输入框失焦时验证
+const handleTimePeriodBlur = () => {
+  if (form.value.timePeriod && form.value.dataType === '2') {
+    const result = validateTimeSeriesFreqs(form.value.timePeriod);
+    timePeriodValidationResult.value = result;
+    timePeriodValidationMessage.value = result.message;
+  } else {
+    timePeriodValidationResult.value = null;
+    timePeriodValidationMessage.value = '';
   }
 };
 
@@ -323,23 +245,24 @@ const handleSubmit = async ({ errors }: ArcoDesign.ArcoSubmit) => {
     return;
   }
   
-  if (currentStep.value == 4) return;
-  
-  // 验证时序周期
-  if (currentStep.value == 2 && form.value.dataType === "2" && !form.value.timePeriod) {
-    Message.error({
-      content: '请输入时序周期',
-      duration: 3000
-    });
-    return;
-  }
-  
-  if (currentStep.value == 3) {
+  if (currentStep.value == 3) return;
+
+  if (currentStep.value == 2) {
     loading.value = true;
     try {
       const success = await submitProjectData();
       if (success) {
         currentStep.value += 1;
+        // 项目创建成功后，显示提示并跳转到数据集页面引导用户创建数据集
+        setTimeout(() => {
+          Message.success({
+            content: '项目创建成功，正在跳转到数据集页面...',
+            duration: 2000
+          });
+          setTimeout(() => {
+            router.push(`/project/${createdProjectId.value}/dataset`);
+          }, 2000);
+        }, 1000);
       }
     } finally {
       loading.value = false;
@@ -353,77 +276,28 @@ const form = ref({
   // 步骤1：基本信息
   projectName: "",
   projectRemark: "",
-  
+
   // 步骤2：数据集
   datasetName: "",
   dataType: "",
   timePeriod: "",
   validationRules: "",
-  datasetRemark: "",
-  
-  // 步骤3：主键配置
-  fieldNameCn: "",
-  fieldNameEn: "",
-  fieldDescription: "",
-  isRequired: false,
-  isUnique: false,
-  isMetadata: false,
-  fieldValidationRules: "",
-  writeExample: "",
-  fieldRemark: "",
-  primaryFormat: "",
-  secondaryFormat: ""
+  datasetRemark: ""
 });
 
 const rules = ref({
   // 步骤1：基本信息
   projectName: [{ required: true, message: "请输入项目名" }],
   projectRemark: [{ required: true, message: "请输入备注" }],
-  
+
   // 步骤2：数据集
   datasetName: [{ required: true, message: "请输入数据集名" }],
   dataType: [{ required: true, message: "请选择数据类型" }],
   timePeriod: [{ required: true, message: "请输入时序周期", trigger: "blur" }],
-  datasetRemark: [{ required: true, message: "请输入备注" }],
-  
-  // 步骤3：主键配置
-  fieldNameCn: [{ required: true, message: "请输入字段中文名" }],
-  fieldNameEn: [{ required: true, message: "请输入字段英文名" }],
-  fieldDescription: [{ required: true, message: "请输入字段描述" }],
-  fieldRemark: [{ required: true, message: "请输入备注" }],
-  primaryFormat: [{ required: true, message: "请选择字段主要类型" }],
-  secondaryFormat: [{ required: true, message: "请选择字段次要类型" }]
+  datasetRemark: [{ required: true, message: "请输入备注" }]
 });
 
 const formRef = ref();
-
-// 字段英文名校验相关
-const fieldNameEnValidationMessage = ref('');
-
-// 字段英文名校验函数
-const validateFieldNameEn = (value: string): string => {
-  if (!value) return '';
-
-  // 校验规则：全小写字母，允许下划线，可以有数字但数字只能在末尾
-  const pattern = /^[a-z_]*[0-9]*$/;
-
-  if (!pattern.test(value)) {
-    return '建议使用全小写字母和下划线，数字只能在末尾';
-  }
-
-  // 检查是否有数字在中间
-  const hasNumberInMiddle = /[0-9].*[a-z_]/.test(value);
-  if (hasNumberInMiddle) {
-    return '建议数字只放在末尾';
-  }
-
-  return '';
-};
-
-// 监听字段英文名变化
-watch(() => form.value.fieldNameEn, (newValue) => {
-  fieldNameEnValidationMessage.value = validateFieldNameEn(newValue);
-});
 
 const onLastStep = () => {
   if (currentStep.value == 1) return;

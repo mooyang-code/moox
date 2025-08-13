@@ -241,7 +241,7 @@ export function generateDeviceId(): string {
         console.log('✅ 安全登录成功');
         return result;
         
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('❌ 安全登录失败:', error);
         throw error;
       }

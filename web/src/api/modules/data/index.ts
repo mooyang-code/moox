@@ -225,9 +225,10 @@ export const fetchObjectAPI = async (params: {
     }
 
     return data as FetchObjectRsp;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('FetchObject API调用失败:', error);
-    throw new Error(error.message || 'FetchObject接口调用失败');
+    const errorMessage = error instanceof Error ? error.message : 'FetchObject接口调用失败';
+    throw new Error(errorMessage);
   }
 };
 

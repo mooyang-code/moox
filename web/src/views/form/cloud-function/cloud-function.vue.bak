@@ -1,0 +1,2402 @@
+<template>
+  <div class="moox-page">
+    <a-spin :loading="loading">
+      <div class="moox-inner">
+        <a-space wrap>
+          <a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear>
+            <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
+              {{ account.account_name }} ({{ getProviderName(account.provider) }})
+            </a-option>
+          </a-select>
+          <a-input v-model="form.namespace" placeholder="请输入命名空间" allow-clear />
+          <a-select placeholder="地区" v-model="form.region" style="width: 180px" allow-clear>
+            <a-option value="ap-bangkok">亚太东南（曼谷）</a-option>
+            <a-option value="ap-beijing">华北地区（北京）</a-option>
+            <a-option value="ap-chengdu">西南地区（成都）</a-option>
+            <a-option value="ap-chongqing">西南地区（重庆）</a-option>
+            <a-option value="ap-guangzhou">华南地区（广州）</a-option>
+            <a-option value="ap-hongkong">港澳台地区（中国香港）</a-option>
+            <a-option value="ap-jakarta">亚太东南（雅加达）</a-option>
+            <a-option value="ap-nanjing">华东地区（南京）</a-option>
+            <a-option value="ap-seoul">亚太东北（首尔）</a-option>
+            <a-option value="ap-shanghai">华东地区（上海）</a-option>
+            <a-option value="ap-shanghai-fsi">华东地区（上海金融）</a-option>
+            <a-option value="ap-shenzhen-fsi">华南地区（深圳金融）</a-option>
+            <a-option value="ap-singapore">亚太东南（新加坡）</a-option>
+            <a-option value="ap-tokyo">亚太东北（东京）</a-option>
+            <a-option value="eu-frankfurt">欧洲地区（法兰克福）</a-option>
+            <a-option value="na-ashburn">美国东部（弗吉尼亚）</a-option>
+            <a-option value="na-siliconvalley">美国西部（硅谷）</a-option>
+            <a-option value="sa-saopaulo">南美地区（圣保罗）</a-option>
+          </a-select>
+          <a-select placeholder="节点类型" v-model="form.nodeType" style="width: 120px" allow-clear>
+            <a-option value="scf">云函数</a-option>
+            <a-option value="server">服务器</a-option>
+          </a-select>
+          <a-select placeholder="节点状态" v-model="form.status" style="width: 120px" allow-clear>
+            <a-option value="1">在线</a-option>
+            <a-option value="0">离线</a-option>
+            <a-option value="2">维护中</a-option>
+            <a-option value="3">过载</a-option>
+          </a-select>
+          <a-button type="primary" @click="search">
+            <template #icon><icon-search /></template>
+            <span>查询</span>
+          </a-button>
+          <a-button @click="reset">
+            <template #icon><icon-refresh /></template>
+            <span>重置</span>
+          </a-button>
+        </a-space>
+
+        <a-row>
+          <a-space wrap>
+            <a-button type="primary" @click="onAdd">
+              <template #icon><icon-plus /></template>
+              <span>新增</span>
+            </a-button>
+            <a-button type="primary" status="success" @click="onBatchAdd">
+              <template #icon><icon-plus-circle /></template>
+              <span>批量新增</span>
+            </a-button>
+            <a-button type="primary" status="warning" @click="batchDeploy">
+              <template #icon><icon-upload /></template>
+              <span>批量部署</span>
+            </a-button>
+            <a-button type="primary" status="danger" @click="batchDelete">
+              <template #icon><icon-delete /></template>
+              <span>批量删除</span>
+            </a-button>
+            <a-button type="outline" @click="onCloudAccountManage">
+              <template #icon><icon-settings /></template>
+              <span>云账户管理</span>
+            </a-button>
+          </a-space>
+        </a-row>
+
+        <!-- 选择状态提示 -->
+        <a-alert
+          v-if="selectedKeys.length > 0"
+          type="info"
+          style="margin: 16px 0;"
+          :closable="true"
+          @close="selectedKeys = []"
+        >
+          <template #title>
+            已选择 {{ selectedKeys.length }} 个节点
+          </template>
+          <div style="font-size: 12px; color: #86909c;">
+            提示：批量操作只会对当前选中的节点生效。切换页面时会保留其他页的选择状态。
+          </div>
+        </a-alert>
+
+        <a-table
+          row-key="node_id"
+          :data="functionList"
+          :bordered="{ cell: true }"
+          :loading="loading"
+          :scroll="{ x: 1320, y: '100%' }"
+          :pagination="paginationConfig"
+          :row-selection="{ type: 'checkbox', showCheckedAll: true }"
+          :selected-keys="selectedKeys"
+          @select="select"
+          @select-all="selectAll"
+          @page-change="onPageChange"
+          @page-size-change="onPageSizeChange"
+        >
+          <template #columns>
+            <a-table-column title="节点ID" data-index="node_id" :width="120">
+              <template #cell="{ record }">
+                <a-link @click="onViewNodeDetail(record)">{{ record.node_id }}</a-link>
+              </template>
+            </a-table-column>
+            <a-table-column title="云账户ID" data-index="cloud_account_id" :width="120"></a-table-column>
+            <a-table-column title="命名空间" data-index="namespace" :width="120"></a-table-column>
+            <a-table-column title="节点类型" data-index="node_type" :width="100">
+              <template #cell="{ record }">
+                <a-tag bordered size="small" :color="record.node_type === 'scf' ? 'blue' : 'orange'">
+                  {{ record.node_type === 'scf' ? '云函数' : '服务器' }}
+                </a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="地区" data-index="region" :width="150">
+              <template #cell="{ record }">
+                {{ getRegionName(record.region) }}
+              </template>
+            </a-table-column>
+            <a-table-column title="IP地址" data-index="ip_address" :width="120"></a-table-column>
+            <a-table-column title="支持的采集器" data-index="supported_collectors" :width="160">
+              <template #cell="{ record }">
+                <div v-if="record.supported_collectors">
+                  <a-tag v-for="item in parseJSON(record.supported_collectors)" :key="item" 
+                    bordered size="small" style="margin: 2px">{{ item }}</a-tag>
+                </div>
+              </template>
+            </a-table-column>
+            <a-table-column title="状态" :width="100" align="center">
+              <template #cell="{ record }">
+                <a-tag bordered size="small" 
+                  :color="getStatusColor(record.status)">
+                  {{ getStatusText(record.status) }}
+                </a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="操作" :width="240" align="center" fixed="right">
+              <template #cell="{ record }">
+                <a-space>
+                  <a-button v-if="record.node_type === 'scf'" type="primary" size="mini" @click="onDeploy(record)">
+                    <template #icon><icon-upload /></template>
+                    <span>部署</span>
+                  </a-button>
+                  <a-button type="primary" size="mini" @click="onUpdate(record)">
+                    <template #icon><icon-edit /></template>
+                    <span>修改</span>
+                  </a-button>
+                  <a-popconfirm type="warning" content="确定删除该节点吗?">
+                    <a-button type="primary" status="danger" size="mini" @click="handleDelete(record)">
+                      <template #icon><icon-delete /></template>
+                      <span>删除</span>
+                    </a-button>
+                  </a-popconfirm>
+                </a-space>
+              </template>
+            </a-table-column>
+          </template>
+        </a-table>
+      </div>
+    </a-spin>
+
+    <a-modal v-model:visible="open" @close="afterClose" @ok="handleOk" @cancel="afterClose" width="800px">
+      <template #title> {{ title }} </template>
+      <div>
+        <a-form ref="formRef" auto-label-width :rules="rules" :model="addForm" :layout="'vertical'">
+          <a-row :gutter="16">
+            <a-col :span="12">
+              <a-form-item field="cloud_account_id" label="云账户" validate-trigger="blur">
+                <a-select v-model="addForm.cloud_account_id" placeholder="请选择云账户">
+                  <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
+                    {{ account.account_name }} ({{ getProviderName(account.provider) }})
+                  </a-option>
+                </a-select>
+              </a-form-item>
+            </a-col>
+            <a-col :span="12">
+              <a-form-item field="node_type" label="节点类型" validate-trigger="blur">
+                <a-select v-model="addForm.node_type" placeholder="请选择节点类型">
+                  <a-option value="scf">云函数</a-option>
+                  <a-option value="server">服务器</a-option>
+                </a-select>
+              </a-form-item>
+            </a-col>
+          </a-row>
+          <a-row :gutter="16">
+            <a-col :span="12">
+              <a-form-item field="region" label="部署地区" validate-trigger="blur">
+                <a-select v-model="addForm.region" placeholder="请选择部署地区" allow-clear>
+                  <a-option value="ap-bangkok">亚太东南（曼谷）</a-option>
+                  <a-option value="ap-beijing">华北地区（北京）</a-option>
+                  <a-option value="ap-chengdu">西南地区（成都）</a-option>
+                  <a-option value="ap-chongqing">西南地区（重庆）</a-option>
+                  <a-option value="ap-guangzhou">华南地区（广州）</a-option>
+                  <a-option value="ap-hongkong">港澳台地区（中国香港）</a-option>
+                  <a-option value="ap-jakarta">亚太东南（雅加达）</a-option>
+                  <a-option value="ap-nanjing">华东地区（南京）</a-option>
+                  <a-option value="ap-seoul">亚太东北（首尔）</a-option>
+                  <a-option value="ap-shanghai">华东地区（上海）</a-option>
+                  <a-option value="ap-shanghai-fsi">华东地区（上海金融）</a-option>
+                  <a-option value="ap-shenzhen-fsi">华南地区（深圳金融）</a-option>
+                  <a-option value="ap-singapore">亚太东南（新加坡）</a-option>
+                  <a-option value="ap-tokyo">亚太东北（东京）</a-option>
+                  <a-option value="eu-frankfurt">欧洲地区（法兰克福）</a-option>
+                  <a-option value="na-ashburn">美国东部（弗吉尼亚）</a-option>
+                  <a-option value="na-siliconvalley">美国西部（硅谷）</a-option>
+                  <a-option value="sa-saopaulo">南美地区（圣保罗）</a-option>
+                </a-select>
+              </a-form-item>
+            </a-col>
+          </a-row>
+          <a-row :gutter="16">
+            <a-col :span="12">
+              <a-form-item field="ip_address" label="IP地址">
+                <a-input v-model="addForm.ip_address" placeholder="请输入IP地址（可选）" allow-clear />
+              </a-form-item>
+            </a-col>
+          </a-row>
+          <a-row :gutter="16">
+            <a-col :span="12">
+              <a-form-item field="status" label="状态">
+                <a-select v-model="addForm.status" placeholder="请选择状态">
+                  <a-option value="0">离线</a-option>
+                  <a-option value="1">在线</a-option>
+                  <a-option value="2">维护中</a-option>
+                  <a-option value="3">过载</a-option>
+                </a-select>
+              </a-form-item>
+            </a-col>
+          </a-row>
+          <a-form-item field="supported_collectors" label="支持的采集器类型">
+            <a-select v-model="supportedCollectorsList" placeholder="请选择支持的采集器" multiple>
+              <a-option value="kline">K线数据</a-option>
+              <a-option value="ticker">Ticker数据</a-option>
+              <a-option value="orderbook">订单簿数据</a-option>
+              <a-option value="trade">交易数据</a-option>
+              <a-option value="news">新闻数据</a-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item field="capacity" label="节点能力配置（JSON格式）">
+            <a-textarea v-model="addForm.capacity" placeholder='{"cpu": 2, "memory": 512, "max_tasks": 10}' 
+              :rows="3" />
+          </a-form-item>
+          <a-form-item field="metadata" label="元数据（JSON格式）">
+            <a-textarea v-model="addForm.metadata" placeholder="请输入元数据（JSON格式）" :rows="3" />
+          </a-form-item>
+        </a-form>
+      </div>
+    </a-modal>
+
+    <!-- 节点详情弹窗 -->
+    <a-modal v-model:visible="nodeDetailVisible" :footer="false" width="800px">
+      <template #title>节点详情信息</template>
+      <a-descriptions :column="2" bordered>
+        <a-descriptions-item label="节点ID">{{ nodeDetail.node_id }}</a-descriptions-item>
+        <a-descriptions-item label="云账户ID">{{ nodeDetail.cloud_account_id }}</a-descriptions-item>
+        <a-descriptions-item label="命名空间">{{ nodeDetail.namespace }}</a-descriptions-item>
+        <a-descriptions-item label="节点类型">
+          <a-tag bordered size="small" :color="nodeDetail.node_type === 'scf' ? 'blue' : 'orange'">
+            {{ nodeDetail.node_type === 'scf' ? '云函数' : '服务器' }}
+          </a-tag>
+        </a-descriptions-item>
+        <a-descriptions-item label="地区">{{ getRegionName(nodeDetail.region || '') }}</a-descriptions-item>
+        <a-descriptions-item label="IP地址">{{ nodeDetail.ip_address }}</a-descriptions-item>
+        <a-descriptions-item label="状态">
+          <a-tag bordered size="small" :color="getStatusColor(nodeDetail.status)">
+            {{ getStatusText(nodeDetail.status) }}
+          </a-tag>
+        </a-descriptions-item>
+        <a-descriptions-item label="创建时间">{{ nodeDetail.create_time }}</a-descriptions-item>
+        <a-descriptions-item label="更新时间">{{ nodeDetail.update_time }}</a-descriptions-item>
+      </a-descriptions>
+      
+      <a-divider />
+      
+      <a-descriptions :column="1" bordered>
+        <a-descriptions-item label="支持的采集器">
+          <a-space wrap>
+            <a-tag v-for="item in parseJSON(nodeDetail.supported_collectors)" :key="item" 
+              bordered size="small">{{ item }}</a-tag>
+          </a-space>
+        </a-descriptions-item>
+        <a-descriptions-item label="当前负载">
+          <pre>{{ formatJSON(nodeDetail.current_load) }}</pre>
+        </a-descriptions-item>
+        <a-descriptions-item label="节点能力">
+          <pre>{{ formatJSON(nodeDetail.capacity) }}</pre>
+        </a-descriptions-item>
+        <a-descriptions-item label="元数据">
+          <pre>{{ formatJSON(nodeDetail.metadata) }}</pre>
+        </a-descriptions-item>
+      </a-descriptions>
+    </a-modal>
+
+    <!-- 云账户管理弹窗 -->
+    <a-modal v-model:visible="cloudAccountVisible" width="900px" :footer="false">
+      <template #title>云账户管理</template>
+      <div>
+        <a-space wrap style="margin-bottom: 16px">
+          <a-button type="primary" size="small" @click="onAddCloudAccount">
+            <template #icon><icon-plus /></template>
+            <span>新增云账户</span>
+          </a-button>
+        </a-space>
+        
+        <a-table 
+          :data="cloudAccountList"
+          :loading="cloudAccountLoading"
+          :pagination="false"
+          row-key="account_id"
+        >
+          <template #columns>
+            <a-table-column title="账户ID" data-index="account_id" :width="100"></a-table-column>
+            <a-table-column title="账户名称" data-index="account_name" :width="120"></a-table-column>
+            <a-table-column title="云厂商" data-index="provider" :width="80">
+              <template #cell="{ record }">
+                <a-tag bordered size="small">
+                  {{ getProviderName(record.provider) }}
+                </a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="密钥ID" data-index="secret_id" :width="100"></a-table-column>
+            <a-table-column title="密钥" data-index="secret_key" :width="150">
+              <template #cell="{ record }">
+                <span style="font-family: monospace">{{ record.secret_key }}</span>
+              </template>
+            </a-table-column>
+            <a-table-column title="创建时间" data-index="create_time" :width="160"></a-table-column>
+            <a-table-column title="操作" :width="100" align="center" fixed="right">
+              <template #cell="{ record }">
+                <a-space>
+                  <a-button type="primary" size="mini" @click="onEditCloudAccount(record)">
+                    <template #icon><icon-edit /></template>
+                  </a-button>
+                  <a-popconfirm 
+                    type="warning" 
+                    content="确定删除该云账户吗？删除后相关云函数将无法使用。"
+                    @ok="handleDeleteCloudAccount(record)"
+                  >
+                    <a-button type="primary" status="danger" size="mini">
+                      <template #icon><icon-delete /></template>
+                    </a-button>
+                  </a-popconfirm>
+                </a-space>
+              </template>
+            </a-table-column>
+          </template>
+        </a-table>
+      </div>
+    </a-modal>
+
+    <!-- 云账户编辑弹窗 -->
+    <a-modal 
+      v-model:visible="cloudAccountEditVisible" 
+      :title="cloudAccountEditTitle"
+      width="600px"
+      @ok="handleCloudAccountSubmit"
+      @cancel="cloudAccountEditVisible = false"
+    >
+      <a-form ref="cloudAccountFormRef" :model="cloudAccountForm" :rules="cloudAccountRules" layout="vertical">
+        <a-form-item field="account_id" label="云账户ID" validate-trigger="blur">
+          <a-input 
+            v-model="cloudAccountForm.account_id" 
+            placeholder="请输入云厂商分配的账户ID" 
+            :disabled="cloudAccountEditTitle === '编辑云账户'"
+          />
+          <template #extra>
+            <div style="color: #86909c; font-size: 12px; margin-top: 4px">
+              {{ getAccountIdHelpText() }}
+            </div>
+          </template>
+        </a-form-item>
+        <a-form-item field="account_name" label="账户名称" validate-trigger="blur">
+          <a-input v-model="cloudAccountForm.account_name" placeholder="请输入账户名称" />
+        </a-form-item>
+        <a-form-item field="provider" label="云厂商">
+          <a-select v-model="cloudAccountForm.provider" placeholder="请选择云厂商">
+            <a-option value="tencent">腾讯云</a-option>
+            <a-option value="aliyun">阿里云</a-option>
+            <a-option value="aws">AWS</a-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item field="secret_id" label="密钥ID (SecretId/AccessKeyId)" validate-trigger="blur">
+          <a-input v-model="cloudAccountForm.secret_id" placeholder="请输入密钥ID" />
+        </a-form-item>
+        <a-form-item field="secret_key" label="密钥 (SecretKey/AccessKeySecret)" validate-trigger="blur">
+          <a-input-password 
+            v-model="cloudAccountForm.secret_key" 
+            placeholder="请输入密钥"
+            :invisible-button="false"
+          />
+          <template #extra>
+            <div style="color: #86909c; font-size: 12px; margin-top: 4px">
+              提示：密钥将加密存储，更新时如不修改请留空
+            </div>
+          </template>
+        </a-form-item>
+        <a-form-item field="extra_config" label="额外配置 (JSON格式，可选)">
+          <a-textarea 
+            v-model="cloudAccountForm.extra_config" 
+            placeholder='{"region": "ap-guangzhou"}'
+            :rows="3"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <!-- 云函数部署弹窗 -->
+    <a-modal 
+      v-model:visible="deployVisible" 
+      title="部署云函数"
+      width="600px"
+      @ok="handleDeploySubmit"
+      @cancel="deployVisible = false"
+    >
+      <a-form ref="deployFormRef" :model="deployForm" :rules="deployRules" layout="vertical">
+        <a-form-item label="节点信息">
+          <a-descriptions :column="2" bordered size="small">
+            <a-descriptions-item label="节点ID">{{ deployForm.node_id }}</a-descriptions-item>
+            <a-descriptions-item label="命名空间">{{ deployForm.namespace }}</a-descriptions-item>
+            <a-descriptions-item label="地区">{{ getRegionName(deployForm.region) }}</a-descriptions-item>
+            <a-descriptions-item label="云账户">{{ deployForm.cloud_account_id }}</a-descriptions-item>
+          </a-descriptions>
+        </a-form-item>
+        
+        <a-form-item field="zip_file" label="函数代码包" validate-trigger="change">
+          <a-upload
+            :auto-upload="false"
+            :limit="1"
+            accept=".zip"
+            @change="handleFileChange"
+            :file-list="fileList"
+          >
+            <template #upload-button>
+              <a-button type="primary">
+                <template #icon><icon-upload /></template>
+                选择ZIP文件
+              </a-button>
+            </template>
+          </a-upload>
+          <template #extra>
+            <div style="color: #86909c; font-size: 12px; margin-top: 4px">
+              请上传云函数代码的ZIP压缩包，文件大小不超过100MB
+            </div>
+          </template>
+        </a-form-item>
+        
+        <a-form-item label="部署说明">
+          <a-textarea 
+            v-model="deployForm.description" 
+            placeholder="请输入本次部署的说明（可选）"
+            :rows="3"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <!-- 批量部署弹窗 -->
+    <a-modal
+      v-model:visible="batchDeployVisible"
+      title="批量部署云函数"
+      width="700px"
+      :ok-text="batchDeployProgress.show && !batchDeployProgress.isProcessing ? '关闭' : '开始部署'"
+      :cancel-button-props="{ style: { display: batchDeployProgress.show ? 'none' : 'inline-block' } }"
+      :ok-loading="batchDeployProgress.isProcessing"
+      :closable="!batchDeployProgress.isProcessing"
+      :mask-closable="!batchDeployProgress.isProcessing"
+      :escape-to-close="!batchDeployProgress.isProcessing"
+      @before-ok="handleBatchDeployBeforeOk"
+      @cancel="batchDeployVisible = false"
+    >
+      <a-form ref="batchDeployFormRef" :model="batchDeployForm" :rules="batchDeployRules" layout="vertical">
+        <a-form-item label="选中的节点">
+          <a-table
+            :data="selectedNodesForDeploy"
+            :pagination="false"
+            :scroll="{ y: 200 }"
+            size="small"
+          >
+            <template #columns>
+              <a-table-column title="节点ID" data-index="node_id" :width="180"></a-table-column>
+              <a-table-column title="命名空间" data-index="namespace" :width="120"></a-table-column>
+              <a-table-column title="地区" data-index="region" :width="150">
+                <template #cell="{ record }">
+                  {{ getRegionName(record.region) }}
+                </template>
+              </a-table-column>
+              <a-table-column title="状态" :width="80" align="center">
+                <template #cell="{ record }">
+                  <a-tag bordered size="small" :color="getStatusColor(record.status)">
+                    {{ getStatusText(record.status) }}
+                  </a-tag>
+                </template>
+              </a-table-column>
+            </template>
+          </a-table>
+        </a-form-item>
+
+        <a-form-item field="zip_file" label="函数代码包" validate-trigger="change">
+          <a-upload
+            :file-list="batchFileList"
+            :auto-upload="false"
+            :limit="1"
+            accept=".zip"
+            @change="handleBatchFileChange"
+            :show-file-list="true"
+          >
+            <template #upload-button>
+              <a-button type="primary" v-if="batchFileList.length === 0">
+                <template #icon><icon-upload /></template>
+                选择ZIP文件
+              </a-button>
+            </template>
+          </a-upload>
+          <template #extra>
+            <div style="color: #86909c; font-size: 12px; margin-top: 4px">
+              请上传云函数代码的ZIP压缩包，文件大小不超过100MB。该文件将部署到所有选中的节点。
+            </div>
+            <div v-if="batchDeployForm.zip_file" style="color: #165dff; font-size: 12px; margin-top: 4px">
+              ✓ 已选择文件：{{ batchDeployForm.zip_file.name }} ({{ (batchDeployForm.zip_file.size / 1024).toFixed(2) }}KB)
+            </div>
+          </template>
+        </a-form-item>
+        
+
+
+
+
+        <div v-if="batchDeployProgress.show" style="margin-top: 16px; padding: 16px; background-color: #f5f7fa; border-radius: 4px;">
+          <div style="margin-bottom: 12px; font-weight: 500; font-size: 16px; color: #1d2129;">
+            部署进度：{{ batchDeployProgress.current }} / {{ batchDeployProgress.total }}
+          </div>
+          <!-- 自定义进度条 -->
+          <div style="margin-bottom: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span style="font-size: 14px; color: #1d2129;">进度</span>
+              <span style="font-size: 14px; color: #1d2129; font-weight: 500;">{{ deployProgressPercent }}%</span>
+            </div>
+            <div style="width: 100%; height: 12px; background-color: #f2f3f5; border-radius: 6px; overflow: hidden;">
+              <div
+                style="height: 100%; background-color: #165dff; border-radius: 6px; transition: width 0.3s ease;"
+                :style="{ width: deployProgressPercent + '%' }"
+              ></div>
+            </div>
+          </div>
+          <div v-if="batchDeployProgress.isProcessing" style="margin-top: 12px; color: #4e5969; font-size: 14px;">
+            <icon-loading spin style="margin-right: 4px;" />
+            正在部署到第 {{ batchDeployProgress.current + 1 }} 个节点...
+          </div>
+        </div>
+        
+        <!-- 批量部署结果显示 -->
+        <div v-if="batchDeployProgress.show && !batchDeployProgress.isProcessing" style="margin-top: 16px;">
+          <div style="display: flex; align-items: center; margin-bottom: 16px; font-size: 18px; font-weight: 600;">
+            <IconCheckCircle v-if="batchDeployProgress.errors.length === 0" style="color: #00b42a; margin-right: 8px; font-size: 20px;" />
+            <IconExclamationCircle v-else style="color: #ff7d00; margin-right: 8px; font-size: 20px;" />
+            <span>批量部署结果</span>
+            <span style="margin-left: 12px; color: #00b42a; font-size: 16px;">成功: {{ batchDeployProgress.success.length }}</span>
+            <span v-if="batchDeployProgress.errors.length > 0" style="margin-left: 12px; color: #f53f3f; font-size: 16px;">失败: {{ batchDeployProgress.errors.length }}</span>
+          </div>
+
+          <!-- 成功部署的节点 -->
+          <div v-if="batchDeployProgress.success.length > 0" style="margin-bottom: 16px;">
+            <div style="display: flex; align-items: center; margin-bottom: 12px;">
+              <IconCheck style="color: #00b42a; margin-right: 6px;" />
+              <span style="font-weight: 500; color: #00b42a;">部署成功的节点 ({{ batchDeployProgress.success.length }})</span>
+            </div>
+            <div style="background-color: #f6ffed; border: 1px solid #b7eb8f; border-radius: 6px; padding: 16px; max-height: 200px; overflow-y: auto;">
+              <div v-for="node in batchDeployProgress.success" :key="node.node_id"
+                style="margin-bottom: 8px; padding: 8px 12px; background-color: #fff; border-radius: 4px; border-left: 3px solid #52c41a;">
+                <div style="font-weight: 500; color: #262626;">{{ node.node_id }}</div>
+                <div v-if="node.namespace" style="font-size: 12px; color: #8c8c8c; margin-top: 2px;">命名空间: {{ node.namespace }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 失败的节点 -->
+          <div v-if="batchDeployProgress.errors.length > 0">
+            <div style="display: flex; align-items: center; margin-bottom: 12px;">
+              <IconClose style="color: #f53f3f; margin-right: 6px;" />
+              <span style="font-weight: 500; color: #f53f3f;">部署失败的节点 ({{ batchDeployProgress.errors.length }})</span>
+            </div>
+            <div style="background-color: #fff2f0; border: 1px solid #ffccc7; border-radius: 6px; padding: 16px; max-height: 200px; overflow-y: auto;">
+              <div v-for="error in batchDeployProgress.errors" :key="error.node_id"
+                style="margin-bottom: 8px; padding: 8px 12px; background-color: #fff; border-radius: 4px; border-left: 3px solid #ff4d4f;">
+                <div style="font-weight: 500; color: #262626;">{{ error.node_id }}</div>
+                <div style="font-size: 12px; color: #f53f3f; margin-top: 2px;">{{ error.message }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top: 16px; padding: 12px; background-color: #f5f7fa; border-radius: 4px; text-align: center; color: #4e5969; font-size: 14px;">
+            本次共处理 {{ batchDeployProgress.total }} 个节点，成功 {{ batchDeployProgress.success.length }} 个，失败 {{ batchDeployProgress.errors.length }} 个
+          </div>
+        </div>
+      </a-form>
+    </a-modal>
+
+    <!-- 批量新增弹窗 -->
+    <a-modal
+      v-model:visible="batchAddVisible"
+      title="批量新增云函数"
+      width="700px"
+      :ok-text="batchAddProgress.show && !batchAddProgress.isProcessing ? '关闭' : '开始创建'"
+      :cancel-button-props="{ style: { display: batchAddProgress.show ? 'none' : 'inline-block' } }"
+      :ok-loading="batchAddProgress.isProcessing"
+      :closable="!batchAddProgress.isProcessing"
+      :mask-closable="!batchAddProgress.isProcessing"
+      :escape-to-close="!batchAddProgress.isProcessing"
+      @before-ok="handleBatchAddBeforeOk"
+      @cancel="batchAddVisible = false"
+    >
+      <a-form ref="batchAddFormRef" :model="batchAddForm" :rules="batchAddRules" layout="vertical">
+        <a-row :gutter="16">
+          <a-col :span="12">
+            <a-form-item field="cloud_account_id" label="云账户" validate-trigger="blur" required>
+              <a-select v-model="batchAddForm.cloud_account_id" placeholder="请选择云账户">
+                <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
+                  {{ account.account_name }} ({{ getProviderName(account.provider) }})
+                </a-option>
+              </a-select>
+            </a-form-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-item field="region" label="部署地区" validate-trigger="blur" required>
+              <a-select v-model="batchAddForm.region" placeholder="请选择部署地区">
+                <a-option value="ap-bangkok">亚太东南（曼谷）</a-option>
+                <a-option value="ap-beijing">华北地区（北京）</a-option>
+                <a-option value="ap-chengdu">西南地区（成都）</a-option>
+                <a-option value="ap-chongqing">西南地区（重庆）</a-option>
+                <a-option value="ap-guangzhou">华南地区（广州）</a-option>
+                <a-option value="ap-hongkong">港澳台地区（中国香港）</a-option>
+                <a-option value="ap-jakarta">亚太东南（雅加达）</a-option>
+                <a-option value="ap-nanjing">华东地区（南京）</a-option>
+                <a-option value="ap-seoul">亚太东北（首尔）</a-option>
+                <a-option value="ap-shanghai">华东地区（上海）</a-option>
+                <a-option value="ap-shanghai-fsi">华东地区（上海金融）</a-option>
+                <a-option value="ap-shenzhen-fsi">华南地区（深圳金融）</a-option>
+                <a-option value="ap-singapore">亚太东南（新加坡）</a-option>
+                <a-option value="ap-tokyo">亚太东北（东京）</a-option>
+                <a-option value="eu-frankfurt">欧洲地区（法兰克福）</a-option>
+                <a-option value="na-ashburn">美国东部（弗吉尼亚）</a-option>
+                <a-option value="na-siliconvalley">美国西部（硅谷）</a-option>
+                <a-option value="sa-saopaulo">南美地区（圣保罗）</a-option>
+              </a-select>
+            </a-form-item>
+          </a-col>
+        </a-row>
+        
+        <a-row :gutter="16">
+          <a-col :span="12">
+            <a-form-item field="node_type" label="节点类型" validate-trigger="blur" required>
+              <a-select v-model="batchAddForm.node_type" placeholder="请选择节点类型">
+                <a-option value="scf">云函数</a-option>
+                <a-option value="server">服务器</a-option>
+              </a-select>
+            </a-form-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-item field="count" label="创建数量" validate-trigger="blur">
+              <a-input-number 
+                v-model="batchAddForm.count" 
+                placeholder="请输入创建数量"
+                :min="1"
+                :max="50"
+                style="width: 100%"
+              />
+              <template #extra>
+                <div style="color: #86909c; font-size: 12px; margin-top: 4px">
+                  每个地区每个命名空间最多支持50个云函数，系统将自动分配到不同的命名空间
+                </div>
+              </template>
+            </a-form-item>
+          </a-col>
+        </a-row>
+
+        <a-form-item field="supported_collectors" label="支持的采集器类型">
+          <a-select v-model="batchAddForm.supported_collectors" placeholder="请选择支持的采集器" multiple>
+            <a-option value="kline">K线数据</a-option>
+            <a-option value="ticker">Ticker数据</a-option>
+            <a-option value="orderbook">订单簿数据</a-option>
+            <a-option value="trade">交易数据</a-option>
+            <a-option value="news">新闻数据</a-option>
+          </a-select>
+        </a-form-item>
+
+        <a-alert type="info" style="margin-bottom: 16px">
+          <template #title>批量创建说明</template>
+          <ul style="margin: 8px 0; padding-left: 20px">
+            <li>系统将自动生成节点ID和分配命名空间</li>
+            <li>每个命名空间最多支持50个函数，超过将自动分配到新的命名空间</li>
+            <li>每个地区最多支持5个命名空间（总计250个函数）</li>
+            <li>创建过程为串行执行，请耐心等待</li>
+          </ul>
+        </a-alert>
+
+        <div v-if="batchAddProgress.show" style="margin-top: 16px; padding: 16px; background-color: #f5f7fa; border-radius: 4px;">
+          <div style="margin-bottom: 12px; font-weight: 500; font-size: 16px; color: #1d2129;">
+            创建进度：{{ batchAddProgress.current }} / {{ batchAddProgress.total }}
+          </div>
+          <!-- 自定义进度条 -->
+          <div style="margin-bottom: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span style="font-size: 14px; color: #1d2129;">进度</span>
+              <span style="font-size: 14px; color: #1d2129; font-weight: 500;">{{ addProgressPercent }}%</span>
+            </div>
+            <div style="width: 100%; height: 12px; background-color: #f2f3f5; border-radius: 6px; overflow: hidden;">
+              <div
+                style="height: 100%; background-color: #00b42a; border-radius: 6px; transition: width 0.3s ease;"
+                :style="{ width: addProgressPercent + '%' }"
+              ></div>
+            </div>
+          </div>
+          <div v-if="batchAddProgress.isProcessing" style="margin-top: 12px; color: #4e5969; font-size: 14px;">
+            <icon-loading spin style="margin-right: 4px;" />
+            <span v-if="batchAddProgress.current === 0 || (batchAddProgress.success.length === 0 && batchAddProgress.errors.length === 0)">
+              正在准备创建节点...
+            </span>
+            <span v-else>
+              正在创建第 {{ batchAddProgress.current + 1 }} 个节点...
+            </span>
+          </div>
+        </div>
+        
+        <a-alert v-if="batchAddProgress.show && !batchAddProgress.isProcessing" :type="batchAddProgress.type" style="margin-top: 16px">
+          <template #title>
+            创建完成：成功 {{ batchAddProgress.success.length }} 个，失败 {{ batchAddProgress.errors.length }} 个
+          </template>
+          <a-collapse v-if="batchAddProgress.success.length > 0 || batchAddProgress.errors.length > 0" 
+            :default-active-key="batchAddProgress.errors.length > 0 ? ['errors'] : []"
+            style="margin-top: 8px"
+          >
+            <a-collapse-item v-if="batchAddProgress.success.length > 0" key="success">
+              <template #header>
+                <span style="color: green">成功创建的节点 ({{ batchAddProgress.success.length }})</span>
+              </template>
+              <div v-for="node in batchAddProgress.success" :key="node.node_id" style="color: green; font-size: 12px; line-height: 1.5">
+                {{ node.node_id }} ({{ node.namespace }})
+              </div>
+            </a-collapse-item>
+            <a-collapse-item v-if="batchAddProgress.errors.length > 0" key="errors">
+              <template #header>
+                <span style="color: red">失败信息 ({{ batchAddProgress.errors.length }})</span>
+              </template>
+              <div v-for="error in batchAddProgress.errors" :key="error.index" style="color: red; font-size: 12px; line-height: 1.5">
+                第{{ error.index + 1 }}个: {{ error.message }}
+              </div>
+            </a-collapse-item>
+          </a-collapse>
+        </a-alert>
+      </a-form>
+      
+    </a-modal>
+
+    <!-- 批量删除弹窗 -->
+    <a-modal
+      v-model:visible="batchDeleteVisible"
+      title="批量删除云函数"
+      width="700px"
+      :ok-text="batchDeleteProgress.show && !batchDeleteProgress.isProcessing ? '关闭' : '确定删除'"
+      :cancel-button-props="{ style: { display: batchDeleteProgress.show ? 'none' : 'inline-block' } }"
+      :ok-loading="batchDeleteProgress.isProcessing"
+      :ok-button-props="{ status: batchDeleteProgress.show ? 'normal' : 'danger' }"
+      :closable="!batchDeleteProgress.isProcessing"
+      :mask-closable="!batchDeleteProgress.isProcessing"
+      :escape-to-close="!batchDeleteProgress.isProcessing"
+      @before-ok="handleBatchDeleteBeforeOk"
+      @cancel="batchDeleteVisible = false"
+    >
+      <div v-if="!batchDeleteProgress.show">
+        <a-alert type="warning" style="margin-bottom: 16px">
+          <template #title>删除警告</template>
+          <div>您即将删除 <strong>{{ selectedKeys.length }}</strong> 个节点，删除后将无法恢复。</div>
+          <div style="margin-top: 8px;">删除节点同时会删除对应的云函数资源，请谨慎操作。</div>
+        </a-alert>
+        
+        <div style="margin-bottom: 8px; font-weight: 500;">即将删除的节点列表：</div>
+        <div style="max-height: 300px; overflow-y: auto; border: 1px solid #e8e8e8; border-radius: 4px; padding: 8px;">
+          <a-table 
+            :data="selectedNodesForDelete" 
+            :show-header="false"
+            :pagination="false"
+            size="small"
+          >
+            <template #columns>
+              <a-table-column>
+                <template #cell="{ record }">
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                      <div style="font-weight: 500;">{{ record.node_id }}</div>
+                      <div style="font-size: 12px; color: #86909c;">
+                        {{ getRegionName(record.region) }} | {{ record.node_type === 'scf' ? '云函数' : '服务器' }}
+                      </div>
+                    </div>
+                    <a-tag size="small" :color="record.status === 1 ? 'green' : 'gray'">
+                      {{ record.status === 1 ? '在线' : '离线' }}
+                    </a-tag>
+                  </div>
+                </template>
+              </a-table-column>
+            </template>
+          </a-table>
+        </div>
+      </div>
+      
+      <div v-else>
+        <div style="padding: 16px; background-color: #f5f7fa; border-radius: 4px;">
+          <div style="margin-bottom: 12px; font-weight: 500; font-size: 16px; color: #1d2129;">
+            删除进度：{{ batchDeleteProgress.current }} / {{ batchDeleteProgress.total }}
+          </div>
+          <!-- 自定义进度条 -->
+          <div style="margin-bottom: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span style="font-size: 14px; color: #1d2129;">进度</span>
+              <span style="font-size: 14px; color: #1d2129; font-weight: 500;">{{ deleteProgressPercent }}%</span>
+            </div>
+            <div style="width: 100%; height: 12px; background-color: #f2f3f5; border-radius: 6px; overflow: hidden;">
+              <div
+                style="height: 100%; background-color: #f53f3f; border-radius: 6px; transition: width 0.3s ease;"
+                :style="{ width: deleteProgressPercent + '%' }"
+              ></div>
+            </div>
+          </div>
+          <div v-if="batchDeleteProgress.isProcessing" style="margin-top: 12px; color: #4e5969; font-size: 14px;">
+            <icon-loading spin style="margin-right: 4px;" />
+            正在删除第 {{ batchDeleteProgress.current + 1 }} 个节点...
+          </div>
+        </div>
+        
+        <a-alert v-if="!batchDeleteProgress.isProcessing" :type="batchDeleteProgress.type" style="margin-top: 16px">
+          <template #title>
+            删除完成：成功 {{ batchDeleteProgress.success.length }} 个，失败 {{ batchDeleteProgress.errors.length }} 个
+          </template>
+          <a-collapse v-if="batchDeleteProgress.success.length > 0 || batchDeleteProgress.errors.length > 0" 
+            :default-active-key="batchDeleteProgress.errors.length > 0 ? ['errors'] : []"
+            style="margin-top: 8px"
+          >
+            <a-collapse-item v-if="batchDeleteProgress.success.length > 0" key="success">
+              <template #header>
+                <span style="color: green">成功删除的节点 ({{ batchDeleteProgress.success.length }})</span>
+              </template>
+              <div v-for="node in batchDeleteProgress.success" :key="node.node_id" style="color: green; font-size: 12px; line-height: 1.5">
+                {{ node.node_id }}
+              </div>
+            </a-collapse-item>
+            <a-collapse-item v-if="batchDeleteProgress.errors.length > 0" key="errors">
+              <template #header>
+                <span style="color: red">删除失败的节点 ({{ batchDeleteProgress.errors.length }})</span>
+              </template>
+              <div v-for="error in batchDeleteProgress.errors" :key="error.node_id" style="color: red; font-size: 12px; line-height: 1.5; margin-bottom: 4px;">
+                <strong>{{ error.node_id }}:</strong> {{ error.message }}
+              </div>
+            </a-collapse-item>
+          </a-collapse>
+        </a-alert>
+      </div>
+    </a-modal>
+
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, computed, onMounted, nextTick } from 'vue';
+import { Message, Modal } from '@arco-design/web-vue';
+import {
+  IconCheckCircle,
+  IconExclamationCircle,
+  IconCheck,
+  IconClose
+} from '@arco-design/web-vue/es/icon';
+import service from '@/api/index';
+import { 
+  getCloudAccountList, 
+  createCloudAccount, 
+  updateCloudAccount, 
+  deleteCloudAccount,
+  type CloudAccount 
+} from '@/api/cloud-account';
+
+interface CloudFunction {
+  node_id: string;
+  cloud_account_id: string;
+  namespace: string;
+  node_type: string;
+  region: string;
+  ip_address: string;
+  supported_collectors: string;
+  capacity: string;
+  current_load: string;
+  status: string;
+  last_heartbeat: string;
+  metadata: string;
+}
+
+const loading = ref(false);
+const allFunctionList = ref<CloudFunction[]>([]); // 存储所有数据
+const functionList = ref<CloudFunction[]>([]); // 存储当前页数据
+const selectedKeys = ref<string[]>([]);
+const open = ref(false);
+const title = ref('新增节点');
+const formRef = ref();
+const supportedCollectorsList = ref<string[]>([]);
+const nodeDetailVisible = ref(false);
+const nodeDetail = ref<Partial<CloudFunction>>({});
+
+// 云账户管理相关
+const cloudAccountVisible = ref(false);
+const cloudAccountList = ref<CloudAccount[]>([]);
+const cloudAccountOptions = ref<CloudAccount[]>([]);
+const cloudAccountLoading = ref(false);
+const cloudAccountEditVisible = ref(false);
+const cloudAccountEditTitle = ref('新增云账户');
+const cloudAccountFormRef = ref();
+const cloudAccountForm = ref<Partial<CloudAccount>>({
+  account_id: '',
+  account_name: '',
+  provider: 'tencent',
+  secret_id: '',
+  secret_key: '',
+  extra_config: '{}'
+});
+const cloudAccountRules = {
+  account_id: [{ required: true, message: '请输入云账户ID' }],
+  account_name: [{ required: true, message: '请输入账户名称' }],
+  provider: [{ required: true, message: '请选择云厂商' }],
+  secret_id: [{ required: true, message: '请输入密钥ID' }],
+  secret_key: [
+    { 
+      required: true, 
+      message: '请输入密钥',
+      validator: (value: string | undefined, callback: (error?: string) => void) => {
+        if (cloudAccountEditTitle.value === '新增云账户' && !value) {
+          callback('请输入密钥');
+        } else {
+          callback();
+        }
+      }
+    }
+  ]
+};
+
+// 云函数部署相关
+const deployVisible = ref(false);
+const deployFormRef = ref();
+const deployForm = ref({
+  node_id: '',
+  namespace: '',
+  region: '',
+  cloud_account_id: '',
+  zip_file: null as File | null,
+  description: ''
+});
+const deployRules = {
+  zip_file: [
+    { 
+      required: true, 
+      message: '请选择要部署的ZIP文件',
+      validator: (value: any, callback: (error?: string) => void) => {
+        if (!deployForm.value.zip_file) {
+          callback('请选择要部署的ZIP文件');
+        } else {
+          callback();
+        }
+      }
+    }
+  ]
+};
+const fileList = ref<any[]>([]);
+
+// 批量部署相关
+const batchDeployVisible = ref(false);
+const batchDeployFormRef = ref();
+const batchDeployForm = ref({
+  zip_file: null as File | null,
+  description: ''
+});
+const batchDeployRules = {
+  zip_file: [
+    {
+      required: true,
+      message: '请选择要部署的ZIP文件',
+      validator: (value: any, callback: (error?: string) => void) => {
+        if (!batchDeployForm.value.zip_file) {
+          callback('请选择要部署的ZIP文件');
+        } else {
+          callback();
+        }
+      }
+    }
+  ]
+};
+const batchFileList = ref<any[]>([]);
+const selectedNodesForDeploy = ref<CloudFunction[]>([]);
+const batchDeployProgress = reactive({
+  show: false,
+  type: 'info' as 'info' | 'success' | 'warning' | 'error',
+  current: 0,
+  total: 0,
+  isProcessing: false,
+  progressStatus: 'normal' as 'normal' | 'success' | 'danger' | 'warning',
+  success: [] as Array<{ node_id: string }>,
+  errors: [] as Array<{ node_id: string; message: string }>
+});
+
+// 计算进度百分比
+const deployProgressPercent = computed(() => {
+  if (batchDeployProgress.total <= 0) return 0;
+  const percent = Math.floor((batchDeployProgress.current / batchDeployProgress.total) * 100);
+  console.log(`计算进度百分比: ${batchDeployProgress.current}/${batchDeployProgress.total} = ${percent}%`);
+  return Math.min(100, Math.max(0, percent));
+});
+
+
+
+// 批量删除相关
+const batchDeleteVisible = ref(false);
+const batchDeleteProgress = reactive({
+  show: false,
+  type: 'info' as 'info' | 'success' | 'warning' | 'error',
+  current: 0,
+  total: 0,
+  isProcessing: false,
+  progressStatus: 'normal' as 'normal' | 'success' | 'danger' | 'warning',
+  success: [] as Array<{ node_id: string }>,
+  errors: [] as Array<{ node_id: string; message: string }>
+});
+
+// 计算删除进度百分比
+const deleteProgressPercent = computed(() => {
+  if (batchDeleteProgress.total <= 0) return 0;
+  const percent = Math.floor((batchDeleteProgress.current / batchDeleteProgress.total) * 100);
+  console.log(`计算删除进度百分比: ${batchDeleteProgress.current}/${batchDeleteProgress.total} = ${percent}%`);
+  return Math.min(100, Math.max(0, percent));
+});
+const selectedNodesForDelete = computed(() => {
+  return allFunctionList.value.filter(item => selectedKeys.value.includes(item.node_id));
+});
+
+// 前端分页处理函数
+const updateCurrentPageData = () => {
+  const startIndex = (pagination.value.current - 1) * pagination.value.pageSize;
+  const endIndex = startIndex + pagination.value.pageSize;
+  functionList.value = allFunctionList.value.slice(startIndex, endIndex);
+  console.log(`前端分页: 第${pagination.value.current}页，显示第${startIndex + 1}-${Math.min(endIndex, allFunctionList.value.length)}条，共${allFunctionList.value.length}条`);
+};
+
+// 批量新增相关
+const batchAddVisible = ref(false);
+const batchAddFormRef = ref();
+const batchAddForm = ref({
+  cloud_account_id: '',
+  region: 'ap-guangzhou',
+  node_type: 'scf',
+  count: 1,
+  supported_collectors: ['kline'] as string[]
+});
+const batchAddRules = {
+  cloud_account_id: [{ required: true, message: '请选择云账户' }],
+  region: [{ required: true, message: '请选择部署地区' }],
+  node_type: [{ required: true, message: '请选择节点类型' }],
+  count: [
+    { required: true, message: '请输入创建数量' },
+    { type: 'number', min: 1, max: 50, message: '创建数量必须在1-50之间' }
+  ]
+};
+const batchAddProgress = reactive({
+  show: false,
+  type: 'info' as 'info' | 'success' | 'warning' | 'error',
+  current: 0,
+  total: 0,
+  success: [] as Array<{ node_id: string; namespace: string }>,
+  errors: [] as Array<{ index: number; message: string }>,
+  isProcessing: false,
+  progressStatus: 'normal' as 'normal' | 'success' | 'danger'
+});
+
+// 计算新增进度百分比
+const addProgressPercent = computed(() => {
+  if (batchAddProgress.total <= 0) return 0;
+  const percent = Math.floor((batchAddProgress.current / batchAddProgress.total) * 100);
+  console.log(`计算新增进度百分比: ${batchAddProgress.current}/${batchAddProgress.total} = ${percent}%`);
+  return Math.min(100, Math.max(0, percent));
+});
+
+const form = ref({
+  cloudAccountId: '',
+  namespace: '',
+  region: null,
+  nodeType: null,
+  status: null
+});
+
+const pagination = ref({
+  current: 1,
+  pageSize: 10,
+  total: 0,
+  showTotal: true,
+  showPageSize: true
+});
+
+const paginationConfig = computed(() => ({
+  ...pagination.value,
+  onChange: (current: number) => {
+    pagination.value.current = current;
+    getFunctionList();
+  },
+  onPageSizeChange: (pageSize: number) => {
+    pagination.value.pageSize = pageSize;
+    pagination.value.current = 1;
+    getFunctionList();
+  }
+}));
+
+const addForm = ref({
+  cloud_account_id: '',
+  node_type: 'scf',
+  region: 'ap-guangzhou',
+  ip_address: '',
+  supported_collectors: '["kline"]',
+  capacity: '{}',
+  current_load: '{}',
+  metadata: '{}',
+  status: '1'
+});
+
+const rules = {
+  cloud_account_id: [{ required: true, message: '请选择云账户' }],
+  node_type: [{ required: true, message: '请选择节点类型' }],
+  region: [{ required: true, message: '请选择部署地区' }]
+};
+
+const parseJSON = (str: string) => {
+  try {
+    return JSON.parse(str || '{}');
+  } catch {
+    return {};
+  }
+};
+
+const getStatusColor = (status: string | number) => {
+  const colors: { [key: string]: string } = {
+    '0': 'red',
+    '1': 'green',
+    '2': 'orange',
+    '3': 'red'
+  };
+  return colors[String(status)] || 'gray';
+};
+
+const getStatusText = (status: string | number) => {
+  const texts: { [key: string]: string } = {
+    '0': '离线',
+    '1': '在线',
+    '2': '维护中',
+    '3': '过载'
+  };
+  return texts[String(status)] || '未知';
+};
+
+const select = (list: string[]) => {
+  selectedKeys.value = list;
+};
+
+const selectAll = (state: boolean) => {
+  if (state) {
+    // 只选择当前页的数据
+    const currentPageNodeIds = functionList.value.map(el => el.node_id);
+    // 合并当前选中的其他页数据和当前页数据
+    const otherPagesSelected = selectedKeys.value.filter(key => !currentPageNodeIds.includes(key));
+    selectedKeys.value = [...otherPagesSelected, ...currentPageNodeIds];
+    console.log(`全选当前页: 当前页${currentPageNodeIds.length}个节点，其他页${otherPagesSelected.length}个节点，总计${selectedKeys.value.length}个节点`);
+  } else {
+    // 取消选择当前页的数据，但保留其他页的选择
+    const currentPageNodeIds = functionList.value.map(el => el.node_id);
+    selectedKeys.value = selectedKeys.value.filter(key => !currentPageNodeIds.includes(key));
+    console.log(`取消选择当前页: 剩余${selectedKeys.value.length}个其他页节点`);
+  }
+};
+
+const onPageChange = (current: number) => {
+  pagination.value.current = current;
+  updateCurrentPageData(); // 使用前端分页
+  console.log(`切换到第${current}页，当前选中${selectedKeys.value.length}个节点`);
+};
+
+const onPageSizeChange = (pageSize: number) => {
+  pagination.value.pageSize = pageSize;
+  pagination.value.current = 1;
+  updateCurrentPageData(); // 使用前端分页
+};
+
+const search = () => {
+  pagination.value.current = 1;
+  getFunctionList();
+};
+
+const reset = () => {
+  form.value = {
+    cloudAccountId: '',
+    namespace: '',
+    region: null,
+    nodeType: null,
+    status: null
+  };
+  getFunctionList();
+};
+
+const getFunctionList = async () => {
+  loading.value = true;
+  try {
+    const params: any = {};
+
+    if (form.value.cloudAccountId) {
+      params.cloud_account_id = form.value.cloudAccountId;
+    }
+    if (form.value.namespace) {
+      params.namespace = form.value.namespace;
+    }
+    if (form.value.region) {
+      params.region = form.value.region;
+    }
+    if (form.value.nodeType) {
+      params.node_type = form.value.nodeType;
+    }
+    if (form.value.status !== null) {
+      params.status = form.value.status;
+    }
+
+    const response = await service.post('/gateway/collector/ListNodes', params, {
+      headers: {
+        'app_id': 'moox_frontend',
+        'app_key': '2521e0d21b6be0347b72bca93904a0dd'
+      }
+    });
+
+    // 处理后端返回的数据
+    if (response.code === 200) {
+      allFunctionList.value = response.data || [];
+      pagination.value.total = allFunctionList.value.length;
+
+      // 重置到第一页并更新当前页数据
+      pagination.value.current = 1;
+      updateCurrentPageData();
+
+      console.log(`获取到${allFunctionList.value.length}条数据，当前显示第${pagination.value.current}页`);
+    } else {
+      Message.error(response.message || '获取节点列表失败');
+    }
+  } catch (error) {
+    console.error('获取云函数列表失败:', error);
+    Message.error('获取云函数列表失败');
+  } finally {
+    loading.value = false;
+  }
+};
+
+const onAdd = () => {
+  title.value = '新增节点';
+  addForm.value = {
+    cloud_account_id: '',
+    node_type: 'scf',
+    region: 'ap-guangzhou',
+    ip_address: '',
+    supported_collectors: '["kline"]',
+    capacity: '{}',
+    current_load: '{}',
+    metadata: '{}',
+    status: '1'
+  };
+  supportedCollectorsList.value = ['kline'];
+  open.value = true;
+};
+
+const onUpdate = (record: CloudFunction) => {
+  title.value = '修改节点';
+  addForm.value = { ...record };
+  
+  // 解析 supported_collectors
+  try {
+    supportedCollectorsList.value = JSON.parse(record.supported_collectors || '[]');
+  } catch {
+    supportedCollectorsList.value = [];
+  }
+  
+  open.value = true;
+};
+
+const afterClose = () => {
+  formRef.value?.clearValidate();
+  open.value = false;
+};
+
+const handleOk = async () => {
+  const valid = await formRef.value?.validate();
+  if (!valid) {
+    try {
+      // 将选中的采集器类型转换为JSON字符串
+      addForm.value.supported_collectors = JSON.stringify(supportedCollectorsList.value);
+      
+      // 验证JSON格式
+      JSON.parse(addForm.value.capacity || '{}');
+      JSON.parse(addForm.value.metadata || '{}');
+      
+      // 确保 status 是字符串
+      const requestData = {
+        ...addForm.value,
+        status: String(addForm.value.status)
+      };
+      
+      const endpoint = title.value === '新增节点' ? '/gateway/collector/RegisterNode' : '/gateway/collector/UpdateNode';
+      const response = await service.post(endpoint, requestData, {
+        headers: {
+          'app_id': 'moox_frontend',
+          'app_key': '2521e0d21b6be0347b72bca93904a0dd'
+        }
+      });
+
+      if (response.code === 200) {
+        Message.success(title.value + '成功');
+        if (title.value === '新增节点' && response.data) {
+          const result = Array.isArray(response.data) ? response.data[0] : response.data;
+          if (result.node_id && result.namespace) {
+            Message.info(`分配的节点ID: ${result.node_id}, 命名空间: ${result.namespace}`);
+          }
+        }
+        open.value = false;
+        getFunctionList();
+      } else {
+        Message.error(response.message || title.value + '失败');
+      }
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        Message.error('JSON格式错误，请检查输入');
+      } else {
+        console.error(title.value + '失败:', error);
+        Message.error(title.value + '失败');
+      }
+    }
+  }
+};
+
+const handleDelete = async (record: CloudFunction) => {
+  try {
+    const response = await service.post('/gateway/collector/DeleteNode', { node_id: record.node_id }, {
+      headers: {
+        'app_id': 'moox_frontend',
+        'app_key': '2521e0d21b6be0347b72bca93904a0dd'
+      }
+    });
+
+    if (response.code === 200) {
+      Message.success('删除成功');
+      getFunctionList();
+    } else {
+      Message.error(response.message || '删除失败');
+    }
+  } catch (error) {
+    console.error('删除失败:', error);
+    Message.error('删除失败');
+  }
+};
+
+const batchDelete = () => {
+  if (selectedKeys.value.length === 0) {
+    Message.warning('请选择要删除的节点');
+    return;
+  }
+  
+  // 重置进度
+  batchDeleteProgress.value = {
+    show: false,
+    type: 'info',
+    current: 0,
+    total: selectedKeys.value.length,
+    isProcessing: false,
+    progressStatus: 'normal',
+    success: [],
+    errors: []
+  };
+  
+  // 显示确认弹窗
+  batchDeleteVisible.value = true;
+};
+
+// 处理批量删除弹窗的确定按钮 - before-ok事件
+const handleBatchDeleteBeforeOk = async (done: (closed: boolean) => void) => {
+  console.log('批量删除弹窗确定按钮被点击');
+  console.log('当前删除进度状态:', {
+    show: batchDeleteProgress.show,
+    isProcessing: batchDeleteProgress.isProcessing
+  });
+
+  // 如果已经显示进度并且处理完成，则关闭弹窗
+  if (batchDeleteProgress.show && !batchDeleteProgress.isProcessing) {
+    console.log('关闭删除弹窗');
+    closeBatchDeleteModal();
+    done(true); // 允许关闭
+  } else {
+    // 否则执行删除操作
+    console.log('执行删除操作');
+    // 阻止默认的关闭行为
+    done(false); // 阻止关闭
+    await executeBatchDelete();
+  }
+};
+
+// 关闭批量删除弹窗
+const closeBatchDeleteModal = () => {
+  batchDeleteVisible.value = false;
+  // 清空选中项
+  selectedKeys.value = [];
+  // 重置进度
+  batchDeleteProgress.show = false;
+  batchDeleteProgress.type = 'info';
+  batchDeleteProgress.current = 0;
+  batchDeleteProgress.total = 0;
+  batchDeleteProgress.isProcessing = false;
+  batchDeleteProgress.progressStatus = 'normal';
+  batchDeleteProgress.success = [];
+  batchDeleteProgress.errors = [];
+};
+
+// 执行批量删除
+const executeBatchDelete = async () => {
+  console.log('开始批量删除，选中节点数量:', selectedKeys.value.length);
+
+  // 显示进度
+  batchDeleteProgress.show = true;
+  batchDeleteProgress.type = 'info';
+  batchDeleteProgress.current = 0;
+  batchDeleteProgress.total = selectedKeys.value.length;
+  batchDeleteProgress.isProcessing = true;
+  batchDeleteProgress.progressStatus = 'normal';
+  batchDeleteProgress.success = [];
+  batchDeleteProgress.errors = [];
+
+  console.log('删除进度条状态已设置:', batchDeleteProgress);
+
+  // 强制更新视图
+  await nextTick();
+
+  // 添加小延迟确保UI更新
+  await new Promise(resolve => setTimeout(resolve, 100));
+  
+  // 串行删除节点
+  for (let i = 0; i < selectedKeys.value.length; i++) {
+    const nodeId = selectedKeys.value[i];
+
+    try {
+      const response = await service.post('/gateway/collector/DeleteNode', { node_id: nodeId }, {
+        headers: {
+          'app_id': 'moox_frontend',
+          'app_key': '2521e0d21b6be0347b72bca93904a0dd'
+        }
+      });
+
+      if (response.code === 200) {
+        batchDeleteProgress.success.push({ node_id: nodeId });
+      } else {
+        batchDeleteProgress.errors.push({
+          node_id: nodeId,
+          message: response.message || '删除失败'
+        });
+      }
+    } catch (error) {
+      console.error(`删除节点 ${nodeId} 失败:`, error);
+      batchDeleteProgress.errors.push({
+        node_id: nodeId,
+        message: '网络错误或服务异常'
+      });
+    }
+
+    // 更新进度
+    batchDeleteProgress.current = i + 1;
+    console.log(`完成第 ${i + 1} 个删除请求，进度: ${batchDeleteProgress.current}/${batchDeleteProgress.total}`);
+
+    // 强制UI更新
+    await nextTick();
+
+    // 更新进度类型
+    if (batchDeleteProgress.errors.length > 0) {
+      batchDeleteProgress.type = 'warning';
+      batchDeleteProgress.progressStatus = 'danger';
+    }
+
+    // 添加延迟，让用户看到进度变化
+    console.log(`等待延迟，当前删除进度: ${batchDeleteProgress.current}/${batchDeleteProgress.total}`);
+    if (i < selectedKeys.value.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 500)); // 500ms让用户能看到进度变化
+    } else {
+      // 最后一个请求完成后也等待一下
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    console.log(`延迟结束，继续下一个删除请求`);
+
+    // 在延迟前再次强制更新
+    await nextTick();
+  }
+  
+  // 设置最终进度
+  batchDeleteProgress.current = selectedKeys.value.length;
+  batchDeleteProgress.isProcessing = false;
+
+  console.log('删除完成，等待3秒后显示结果...');
+
+  // 等待3秒让用户看到进度条完成
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  if (batchDeleteProgress.errors.length === 0) {
+    batchDeleteProgress.type = 'success';
+    batchDeleteProgress.progressStatus = 'success';
+    Message.success(`成功删除 ${batchDeleteProgress.success.length} 个节点`);
+  } else {
+    batchDeleteProgress.type = 'error';
+    const successCount = batchDeleteProgress.success.length;
+    Message.warning(`删除完成：成功 ${successCount} 个，失败 ${batchDeleteProgress.errors.length} 个`);
+  }
+
+  console.log('显示删除结果完成，等待2秒后可以关闭弹窗');
+
+  // 再等待2秒让用户看到结果
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  console.log('现在可以关闭删除弹窗了');
+
+  // 刷新列表
+  setTimeout(() => {
+    getFunctionList();
+  }, 1000);
+};
+
+
+const formatJSON = (str: string) => {
+  try {
+    return JSON.stringify(JSON.parse(str || '{}'), null, 2);
+  } catch {
+    return str || '-';
+  }
+};
+
+const onViewNodeDetail = (record: CloudFunction) => {
+  nodeDetail.value = record;
+  nodeDetailVisible.value = true;
+};
+
+// 云账户管理
+const onCloudAccountManage = () => {
+  cloudAccountVisible.value = true;
+  getCloudAccounts();
+};
+
+const getCloudAccounts = async () => {
+  cloudAccountLoading.value = true;
+  try {
+    cloudAccountList.value = await getCloudAccountList();
+    cloudAccountOptions.value = cloudAccountList.value;
+  } catch (error) {
+    console.error('获取云账户列表失败:', error);
+    Message.error('获取云账户列表失败');
+  } finally {
+    cloudAccountLoading.value = false;
+  }
+};
+
+const onAddCloudAccount = () => {
+  cloudAccountEditTitle.value = '新增云账户';
+  cloudAccountForm.value = {
+    account_id: '',
+    account_name: '',
+    provider: 'tencent',
+    secret_id: '',
+    secret_key: '',
+    extra_config: '{}'
+  };
+  cloudAccountEditVisible.value = true;
+};
+
+const onEditCloudAccount = (record: CloudAccount) => {
+  cloudAccountEditTitle.value = '编辑云账户';
+  cloudAccountForm.value = {
+    ...record,
+    secret_key: '' // 编辑时不显示原密钥
+  };
+  cloudAccountEditVisible.value = true;
+};
+
+const handleCloudAccountSubmit = async () => {
+  const valid = await cloudAccountFormRef.value?.validate();
+  if (!valid) {
+    try {
+      // 验证额外配置的JSON格式
+      if (cloudAccountForm.value.extra_config) {
+        JSON.parse(cloudAccountForm.value.extra_config);
+      }
+      
+      if (cloudAccountEditTitle.value === '新增云账户') {
+        await createCloudAccount(cloudAccountForm.value as CloudAccount);
+        Message.success('创建云账户成功');
+      } else {
+        // 编辑时，如果密钥为空，则不更新密钥
+        const updateData = { ...cloudAccountForm.value };
+        if (!updateData.secret_key) {
+          delete updateData.secret_key;
+        }
+        await updateCloudAccount(updateData as CloudAccount);
+        Message.success('更新云账户成功');
+      }
+      
+      cloudAccountEditVisible.value = false;
+      getCloudAccounts();
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        Message.error('额外配置必须是有效的JSON格式');
+      } else {
+        console.error('操作失败:', error);
+        Message.error(cloudAccountEditTitle.value + '失败');
+      }
+    }
+  }
+};
+
+const handleDeleteCloudAccount = async (record: CloudAccount) => {
+  try {
+    await deleteCloudAccount(record.account_id);
+    Message.success('删除云账户成功');
+    getCloudAccounts();
+  } catch (error) {
+    console.error('删除云账户失败:', error);
+    Message.error('删除云账户失败');
+  }
+};
+
+const getProviderName = (provider: string) => {
+  const providerMap: { [key: string]: string } = {
+    'tencent': '腾讯云',
+    'aliyun': '阿里云',
+    'aws': 'AWS'
+  };
+  return providerMap[provider] || provider;
+};
+
+const getAccountIdHelpText = () => {
+  const helpTextMap: { [key: string]: string } = {
+    'tencent': '腾讯云主账号ID，可在账号信息页面查看',
+    'aliyun': '阿里云主账号ID，可在账号管理页面查看',
+    'aws': 'AWS 账户ID，12位数字'
+  };
+  return helpTextMap[cloudAccountForm.value.provider || 'tencent'] || '请输入云厂商分配的账户ID';
+};
+
+const getRegionName = (region: string) => {
+  const regionMap: { [key: string]: string } = {
+    'ap-bangkok': '亚太东南（曼谷）',
+    'ap-beijing': '华北地区（北京）',
+    'ap-chengdu': '西南地区（成都）',
+    'ap-chongqing': '西南地区（重庆）',
+    'ap-guangzhou': '华南地区（广州）',
+    'ap-hongkong': '港澳台地区（中国香港）',
+    'ap-jakarta': '亚太东南（雅加达）',
+    'ap-nanjing': '华东地区（南京）',
+    'ap-seoul': '亚太东北（首尔）',
+    'ap-shanghai': '华东地区（上海）',
+    'ap-shanghai-fsi': '华东地区（上海金融）',
+    'ap-shenzhen-fsi': '华南地区（深圳金融）',
+    'ap-singapore': '亚太东南（新加坡）',
+    'ap-tokyo': '亚太东北（东京）',
+    'eu-frankfurt': '欧洲地区（法兰克福）',
+    'na-ashburn': '美国东部（弗吉尼亚）',
+    'na-siliconvalley': '美国西部（硅谷）',
+    'sa-saopaulo': '南美地区（圣保罗）'
+  };
+  return regionMap[region] || region;
+};
+
+// 云函数部署相关方法
+const onDeploy = (record: CloudFunction) => {
+  deployForm.value = {
+    node_id: record.node_id,
+    namespace: record.namespace,
+    region: record.region,
+    cloud_account_id: record.cloud_account_id,
+    zip_file: null,
+    description: ''
+  };
+  fileList.value = [];
+  deployVisible.value = true;
+};
+
+const handleFileChange = (fileItem: any, fileList: any[]) => {
+  if (fileList.length > 0) {
+    const file = fileList[0];
+    if (file.file) {
+      // 检查文件大小（100MB限制）
+      if (file.file.size > 100 * 1024 * 1024) {
+        Message.error('文件大小不能超过100MB');
+        fileList.splice(0, 1);
+        return;
+      }
+      deployForm.value.zip_file = file.file;
+    }
+  } else {
+    deployForm.value.zip_file = null;
+  }
+};
+
+const handleDeploySubmit = async () => {
+  const valid = await deployFormRef.value?.validate();
+  if (!valid) {
+    if (!deployForm.value.zip_file) {
+      Message.error('请选择要部署的ZIP文件');
+      return;
+    }
+
+    try {
+      // 将文件转换为base64
+      const fileToBase64 = (file: File): Promise<string> => {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.readAsDataURL(file);
+          reader.onload = () => {
+            // 移除 data:application/zip;base64, 前缀
+            const base64 = (reader.result as string).split(',')[1];
+            resolve(base64);
+          };
+          reader.onerror = error => reject(error);
+        });
+      };
+      
+      const zipFileBase64 = await fileToBase64(deployForm.value.zip_file);
+      
+      // 使用网关接口
+      const response = await service.post('/gateway/collector/UploadFunction', {
+        node_id: deployForm.value.node_id,
+        zip_file_base64: zipFileBase64,
+        file_name: deployForm.value.zip_file.name
+      }, {
+        headers: {
+          'app_id': 'moox_frontend',
+          'app_key': '2521e0d21b6be0347b72bca93904a0dd'
+        }
+      });
+
+      if (response.code === 200) {
+        Message.success('云函数部署任务已提交，正在后台处理中');
+        deployVisible.value = false;
+        
+        // 显示部署信息
+        if (response.data) {
+          const info = `节点: ${response.data.node_id}\n文件: ${response.data.file_name} (${(response.data.file_size / 1024).toFixed(2)}KB)`;
+          Modal.info({
+            title: '部署任务已提交',
+            content: info,
+            okText: '确定'
+          });
+        }
+      } else {
+        Message.error(response.message || '部署失败');
+      }
+    } catch (error) {
+      console.error('部署云函数失败:', error);
+      Message.error('部署云函数失败，请稍后重试');
+    }
+  }
+};
+
+// 批量部署相关方法
+const batchDeploy = () => {
+  if (selectedKeys.value.length === 0) {
+    Message.warning('请选择要部署的节点');
+    return;
+  }
+  
+  // 筛选出云函数类型的节点
+  selectedNodesForDeploy.value = allFunctionList.value.filter(node =>
+    selectedKeys.value.includes(node.node_id) && node.node_type === 'scf'
+  );
+  
+  if (selectedNodesForDeploy.value.length === 0) {
+    Message.warning('所选节点中没有云函数类型的节点');
+    return;
+  }
+  
+  // 重置表单和进度
+  batchDeployForm.value = {
+    zip_file: null,
+    description: ''
+  };
+  batchFileList.value = [];
+  batchDeployProgress.value = {
+    show: false,
+    type: 'info',
+    current: 0,
+    total: 0,
+    isProcessing: false,
+    progressStatus: 'normal',
+    success: [],
+    errors: []
+  };
+  
+  // 清除表单验证状态
+  nextTick(() => {
+    batchDeployFormRef.value?.clearValidate();
+  });
+  
+  batchDeployVisible.value = true;
+};
+
+const handleBatchFileChange = (fileItem: any, fileList: any) => {
+  console.log('批量部署文件变化:', { fileItem, fileList });
+  console.log('fileItem 结构:', fileItem);
+  console.log('fileList 结构:', fileList);
+
+  // 根据控制台输出分析：
+  // fileItem 是数组: Proxy(Array) {0: Proxy(Object)}
+  // fileList 是对象: Proxy(Object) {uid: '...', file: File, name: '...', ...}
+
+  // 先处理 fileItem 数组
+  if (Array.isArray(fileItem)) {
+    batchFileList.value = fileItem;
+    console.log('设置 batchFileList.value =', fileItem);
+
+    if (fileItem.length > 0) {
+      const file = fileItem[0];
+      console.log('从 fileItem 数组中取出的文件对象:', file);
+
+      // 尝试不同的文件对象结构
+      let actualFile = null;
+      if (file.file) {
+        actualFile = file.file;
+      } else if (file.originFile) {
+        actualFile = file.originFile;
+      } else if (file instanceof File) {
+        actualFile = file;
+      }
+
+      console.log('从 fileItem 中提取的实际文件对象:', actualFile);
+
+      if (actualFile) {
+        // 检查文件大小（100MB限制）
+        if (actualFile.size > 100 * 1024 * 1024) {
+          Message.error('文件大小不能超过100MB');
+          batchFileList.value = [];
+          batchDeployForm.value.zip_file = null;
+          return;
+        }
+        batchDeployForm.value.zip_file = actualFile;
+        console.log('批量部署文件已设置:', batchDeployForm.value.zip_file?.name);
+        // 手动触发表单验证
+        nextTick(() => {
+          batchDeployFormRef.value?.validateField('zip_file');
+        });
+        return;
+      }
+    }
+  }
+
+  // 如果 fileItem 处理失败，尝试处理 fileList
+  if (fileList && fileList.file) {
+    console.log('尝试从 fileList 中提取文件:', fileList.file);
+    batchFileList.value = [fileList];
+
+    // 检查文件大小（100MB限制）
+    if (fileList.file.size > 100 * 1024 * 1024) {
+      Message.error('文件大小不能超过100MB');
+      batchFileList.value = [];
+      batchDeployForm.value.zip_file = null;
+      return;
+    }
+
+    batchDeployForm.value.zip_file = fileList.file;
+    console.log('从 fileList 设置批量部署文件:', batchDeployForm.value.zip_file?.name);
+    // 手动触发表单验证
+    nextTick(() => {
+      batchDeployFormRef.value?.validateField('zip_file');
+    });
+  } else {
+    batchDeployForm.value.zip_file = null;
+    batchFileList.value = [];
+    console.log('批量部署文件已清空');
+  }
+};
+
+// 处理批量部署弹窗的确定按钮 - before-ok事件
+const handleBatchDeployBeforeOk = async (done: (closed: boolean) => void) => {
+  console.log('批量部署弹窗确定按钮被点击');
+  console.log('当前进度状态:', {
+    show: batchDeployProgress.show,
+    isProcessing: batchDeployProgress.isProcessing
+  });
+
+  // 如果已经显示进度并且处理完成，则关闭弹窗
+  if (batchDeployProgress.show && !batchDeployProgress.isProcessing) {
+    console.log('关闭弹窗');
+    closeBatchDeployModal();
+    done(true); // 允许关闭
+  } else {
+    // 否则执行部署操作
+    console.log('执行部署操作');
+    // 阻止默认的关闭行为
+    done(false); // 阻止关闭
+    await handleBatchDeploySubmit();
+  }
+};
+
+// 关闭批量部署弹窗
+const closeBatchDeployModal = () => {
+  batchDeployVisible.value = false;
+  // 清空选中项和文件
+  selectedKeys.value = [];
+  batchFileList.value = [];
+  batchDeployForm.value = {
+    zip_file: null,
+    description: ''
+  };
+  // 重置进度
+  batchDeployProgress.show = false;
+  batchDeployProgress.type = 'info';
+  batchDeployProgress.current = 0;
+  batchDeployProgress.total = 0;
+  batchDeployProgress.isProcessing = false;
+  batchDeployProgress.progressStatus = 'normal';
+  batchDeployProgress.success = [];
+  batchDeployProgress.errors = [];
+};
+
+const handleBatchDeploySubmit = async () => {
+  console.log('开始批量部署提交...');
+  console.log('当前选中的节点数量:', selectedNodesForDeploy.value.length);
+  console.log('当前文件:', batchDeployForm.value.zip_file?.name);
+  console.log('batchDeployForm.value:', batchDeployForm.value);
+
+  // 直接检查是否选择了文件
+  if (!batchDeployForm.value.zip_file) {
+    console.log('文件检查失败: 没有选择文件');
+    Message.error('请选择要部署的ZIP文件');
+    return;
+  }
+
+  console.log('文件检查成功，开始显示进度条...');
+
+  // 显示进度
+  console.log('设置进度条状态...');
+  batchDeployProgress.show = true;
+  batchDeployProgress.type = 'info';
+  batchDeployProgress.current = 0;
+  batchDeployProgress.total = selectedNodesForDeploy.value.length;
+  batchDeployProgress.isProcessing = true;
+  batchDeployProgress.progressStatus = 'normal';
+  batchDeployProgress.success = [];
+  batchDeployProgress.errors = [];
+  console.log('进度条状态已设置:', batchDeployProgress);
+
+  // 强制更新视图
+  console.log('强制更新视图...');
+  await nextTick();
+  console.log('视图更新完成');
+
+  // 添加小延迟确保UI更新
+  console.log('等待UI更新...');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  console.log('UI更新等待完成');
+
+  // 不使用假进度条，在实际请求中更新进度
+  console.log('开始实际部署，进度将在每个请求完成后更新...');
+  
+  // 先将文件转换为base64
+  console.log('开始文件转换...');
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => {
+        // 移除 data:application/zip;base64, 前缀
+        const base64 = (reader.result as string).split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = error => reject(error);
+    });
+  };
+
+  let zipFileBase64: string;
+  try {
+    console.log('转换文件为base64...');
+    zipFileBase64 = await fileToBase64(batchDeployForm.value.zip_file);
+    console.log('文件转换成功，base64长度:', zipFileBase64.length);
+  } catch (error) {
+    console.error('文件转换失败:', error);
+    Message.error('文件转换失败');
+    batchDeployProgress.isProcessing = false;
+    return;
+  }
+  
+  // 串行部署到每个节点
+  for (let i = 0; i < selectedNodesForDeploy.value.length; i++) {
+    const node = selectedNodesForDeploy.value[i];
+    
+    try {
+      // 使用网关接口
+      const response = await service.post('/gateway/collector/UploadFunction', {
+        node_id: node.node_id,
+        zip_file_base64: zipFileBase64,
+        file_name: batchDeployForm.value.zip_file.name
+      }, {
+        headers: {
+          'app_id': 'moox_frontend',
+          'app_key': '2521e0d21b6be0347b72bca93904a0dd'
+        }
+      });
+
+      if (response.code === 200) {
+        batchDeployProgress.success.push({
+          node_id: node.node_id,
+          namespace: node.namespace,
+          region: node.region
+        });
+      } else {
+        batchDeployProgress.errors.push({
+          node_id: node.node_id,
+          message: response.message || '部署失败'
+        });
+      }
+    } catch (error) {
+      console.error(`部署到节点 ${node.node_id} 失败:`, error);
+      batchDeployProgress.errors.push({
+        node_id: node.node_id,
+        message: '网络错误或服务异常'
+      });
+    }
+
+    // 更新进度
+    batchDeployProgress.current = i + 1;
+    console.log(`完成第 ${i + 1} 个请求，进度: ${batchDeployProgress.current}/${batchDeployProgress.total}`);
+
+    // 强制UI更新
+    await nextTick();
+
+    // 更新进度类型
+    if (batchDeployProgress.errors.length > 0) {
+      batchDeployProgress.type = 'warning';
+      batchDeployProgress.progressStatus = 'danger';
+    }
+
+    // 添加延迟，让用户看到进度变化
+    console.log(`等待延迟，当前进度: ${batchDeployProgress.current}/${batchDeployProgress.total}`);
+    if (i < selectedNodesForDeploy.value.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 1000)); // 增加到1秒让用户能清楚看到进度变化
+    } else {
+      // 最后一个请求完成后也等待一下
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    console.log(`延迟结束，继续下一个请求`);
+
+    // 在延迟前再次强制更新
+    await nextTick();
+  }
+  
+  // 设置最终进度
+  batchDeployProgress.current = selectedNodesForDeploy.value.length;
+  batchDeployProgress.isProcessing = false;
+
+  console.log('部署完成，等待3秒后显示结果...');
+
+  // 等待3秒让用户看到进度条完成
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  if (batchDeployProgress.errors.length === 0) {
+    batchDeployProgress.type = 'success';
+    batchDeployProgress.progressStatus = 'success';
+    Message.success(`成功部署到所有 ${batchDeployProgress.success.length} 个节点，更新任务已加入队列`);
+  } else {
+    batchDeployProgress.type = 'error';
+    const successCount = batchDeployProgress.success.length;
+    Message.warning(`部署完成：成功 ${successCount} 个，失败 ${batchDeployProgress.errors.length} 个`);
+  }
+
+  console.log('显示结果完成，等待2秒后可以关闭弹窗');
+
+  // 再等待2秒让用户看到结果
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  console.log('现在可以关闭弹窗了');
+
+  // 刷新列表
+  setTimeout(() => {
+    getFunctionList();
+  }, 1000);
+};
+
+// 关闭批量新增弹窗
+const closeBatchAddModal = () => {
+  batchAddVisible.value = false;
+  // 重置进度
+  batchAddProgress.show = false;
+  batchAddProgress.type = 'info';
+  batchAddProgress.current = 0;
+  batchAddProgress.total = 0;
+  batchAddProgress.success = [];
+  batchAddProgress.errors = [];
+  batchAddProgress.isProcessing = false;
+  batchAddProgress.progressStatus = 'normal';
+};
+
+// 处理批量新增弹窗的确定按钮 - before-ok事件
+const handleBatchAddBeforeOk = async (done: (closed: boolean) => void) => {
+  console.log('批量新增弹窗确定按钮被点击');
+  console.log('当前新增进度状态:', {
+    show: batchAddProgress.show,
+    isProcessing: batchAddProgress.isProcessing
+  });
+
+  // 如果已经显示进度并且处理完成，则关闭弹窗
+  if (batchAddProgress.show && !batchAddProgress.isProcessing) {
+    console.log('关闭新增弹窗');
+    closeBatchAddModal();
+    done(true); // 允许关闭
+  } else {
+    // 否则执行提交操作
+    console.log('执行新增操作');
+    // 阻止默认的关闭行为
+    done(false); // 阻止关闭
+    await handleBatchAddSubmit();
+  }
+};
+
+// 批量新增相关方法
+const onBatchAdd = () => {
+  // 重置表单
+  batchAddForm.value = {
+    cloud_account_id: '',
+    region: 'ap-guangzhou',
+    node_type: 'scf',
+    count: 1,
+    supported_collectors: ['kline']
+  };
+  batchAddProgress.value = {
+    show: false,
+    type: 'info',
+    current: 0,
+    total: 0,
+    success: [],
+    errors: [],
+    isProcessing: false,
+    progressStatus: 'normal'
+  };
+  batchAddVisible.value = true;
+};
+
+const handleBatchAddSubmit = async () => {
+  // 先检查云账户是否选择
+  if (!batchAddForm.value.cloud_account_id) {
+    Message.error('请选择云账户！云账户为必填项');
+    return;
+  }
+  
+  const valid = await batchAddFormRef.value?.validate();
+  if (!valid) {
+    // 直接执行批量创建
+    await executeBatchAdd();
+  }
+};
+
+// 通用的假进度条函数
+const createFakeProgress = (total: number, progressRef: any) => {
+  let fakeProgress = 0;
+
+  // 根据数量计算进度速度
+  // 数量越多，进度越慢
+  const calculateInterval = () => {
+    if (total <= 5) return 200;      // 5个以内，200ms更新一次
+    if (total <= 10) return 300;     // 10个以内，300ms更新一次
+    if (total <= 20) return 400;     // 20个以内，400ms更新一次
+    if (total <= 50) return 500;     // 50个以内，500ms更新一次
+    return 600;                       // 超过50个，600ms更新一次
+  };
+
+  const calculateIncrement = () => {
+    if (total <= 5) return 0.15;     // 每次增加15%
+    if (total <= 10) return 0.10;    // 每次增加10%
+    if (total <= 20) return 0.08;    // 每次增加8%
+    if (total <= 50) return 0.05;    // 每次增加5%
+    return 0.03;                      // 每次增加3%
+  };
+
+  const interval = calculateInterval();
+  const incrementRate = calculateIncrement();
+
+  return setInterval(() => {
+    // 假进度最多到90%
+    if (fakeProgress < 0.9) {
+      fakeProgress = Math.min(fakeProgress + incrementRate, 0.9);
+      progressRef.value.current = Math.floor(fakeProgress * total);
+    }
+  }, interval);
+};
+
+// 批量部署专用的假进度条函数 - 根据实际请求速度
+const createBatchDeployFakeProgress = (total: number, progressRef: any) => {
+  console.log('创建假进度条，总数:', total, '每个请求间隔300ms');
+  let currentIndex = 0;
+
+  return setInterval(() => {
+    if (currentIndex < total) {
+      currentIndex++;
+      progressRef.current = Math.min(currentIndex, total); // 确保不超过总数
+      console.log('假进度条更新:', currentIndex, '/', total, '百分比:', Math.floor((currentIndex / total) * 100) + '%');
+    }
+  }, 300); // 每300ms更新一次，对应一个请求
+};
+
+const executeBatchAdd = async () => {
+  console.log('开始批量新增，创建数量:', batchAddForm.value.count);
+
+  // 显示进度
+  batchAddProgress.show = true;
+  batchAddProgress.type = 'info';
+  batchAddProgress.current = 0;
+  batchAddProgress.total = batchAddForm.value.count;
+  batchAddProgress.success = [];
+  batchAddProgress.errors = [];
+  batchAddProgress.isProcessing = true;
+  batchAddProgress.progressStatus = 'normal';
+
+  console.log('新增进度条状态已设置:', batchAddProgress);
+
+  // 强制更新视图
+  await nextTick();
+
+  // 添加小延迟确保UI更新
+  await new Promise(resolve => setTimeout(resolve, 100));
+  
+  // 准备基础数据
+  const baseData = {
+    cloud_account_id: batchAddForm.value.cloud_account_id,
+    node_type: batchAddForm.value.node_type,
+    region: batchAddForm.value.region,
+    supported_collectors: JSON.stringify(batchAddForm.value.supported_collectors || ['kline']),
+    capacity: '{}',
+    current_load: '{}',
+    metadata: '{}',
+    status: '1'
+  };
+
+  // 串行创建节点
+  for (let i = 0; i < batchAddForm.value.count; i++) {
+    // 生成唯一的节点ID
+    const nodeId = `DataCollector-${Date.now()}-${i}`;
+    const namespace = `${batchAddForm.value.region}-01`;
+    
+    const nodeData = {
+      ...baseData,
+      node_id: nodeId,
+      namespace: namespace,
+      version: '1.0.0',
+      collector_version: '1.0.0',
+      function_name: `scf-${nodeId}`,
+      runtime: 'Go1',
+      description: batchAddForm.value.description || `批量创建的云函数节点 ${i + 1}`
+    };
+    
+    try {
+      const response = await service.post('/gateway/collector/RegisterNode', nodeData, {
+        headers: {
+          'app_id': 'moox_frontend',
+          'app_key': '2521e0d21b6be0347b72bca93904a0dd'
+        }
+      });
+      
+      if (response.code === 200) {
+        const result = Array.isArray(response.data) ? response.data[0] : response.data;
+        if (result.node_id && result.namespace) {
+          batchAddProgress.success.push({
+            node_id: result.node_id,
+            namespace: result.namespace
+          });
+        }
+      } else {
+        batchAddProgress.errors.push({
+          index: i,
+          message: response.message || '创建失败'
+        });
+      }
+    } catch (error) {
+      console.error(`创建第 ${i + 1} 个节点失败:`, error);
+      batchAddProgress.errors.push({
+        index: i,
+        message: '网络错误或服务异常'
+      });
+    }
+
+    // 更新进度
+    batchAddProgress.current = i + 1;
+    console.log(`完成第 ${i + 1} 个创建请求，进度: ${batchAddProgress.current}/${batchAddProgress.total}`);
+
+    // 强制UI更新
+    await nextTick();
+
+    // 更新进度类型
+    if (batchAddProgress.errors.length > 0) {
+      batchAddProgress.type = 'warning';
+      batchAddProgress.progressStatus = 'danger';
+    }
+
+    // 添加延迟，让用户看到进度变化
+    console.log(`等待延迟，当前新增进度: ${batchAddProgress.current}/${batchAddProgress.total}`);
+    if (i < batchAddForm.value.count - 1) {
+      await new Promise(resolve => setTimeout(resolve, 500)); // 500ms让用户能看到进度变化
+    } else {
+      // 最后一个请求完成后也等待一下
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    console.log(`延迟结束，继续下一个创建请求`);
+
+    // 在延迟前再次强制更新
+    await nextTick();
+
+  }
+
+  // 设置最终进度
+  batchAddProgress.current = batchAddForm.value.count;
+  batchAddProgress.isProcessing = false;
+
+  console.log('新增完成，等待3秒后显示结果...');
+
+  // 等待3秒让用户看到进度条完成
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  if (batchAddProgress.errors.length === 0) {
+    batchAddProgress.type = 'success';
+    batchAddProgress.progressStatus = 'success';
+    Message.success(`成功创建 ${batchAddForm.value.count} 个节点`);
+  } else {
+    batchAddProgress.type = 'error';
+    const successCount = batchAddProgress.success.length;
+    Message.warning(`创建完成：成功 ${successCount} 个，失败 ${batchAddProgress.errors.length} 个`);
+  }
+
+  console.log('显示新增结果完成，等待2秒后可以关闭弹窗');
+
+  // 再等待2秒让用户看到结果
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  console.log('现在可以关闭新增弹窗了');
+
+  // 刷新列表
+  setTimeout(() => {
+    getFunctionList();
+  }, 1000);
+};
+
+// 检查是否有云账户
+const checkCloudAccounts = async () => {
+  try {
+    const accounts = await getCloudAccountList();
+    cloudAccountOptions.value = accounts;
+    if (!accounts || accounts.length === 0) {
+      Modal.warning({
+        title: '提示',
+        content: '当前系统中还没有配置云账户，请先配置云账户后再使用云函数功能。',
+        okText: '去配置',
+        onOk: () => {
+          onCloudAccountManage();
+        }
+      });
+    }
+  } catch (error) {
+    console.error('检查云账户失败:', error);
+  }
+};
+
+onMounted(() => {
+  getFunctionList();
+  checkCloudAccounts();
+});
+</script>
+
+<style scoped>
+.moox-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: #fff;
+  border-radius: 4px;
+  padding: 16px;
+  margin: 16px;
+  overflow: auto;
+}
+
+.moox-inner {
+  flex: 1;
+  overflow: auto;
+}
+
+.moox-inner > *:not(:last-child) {
+  margin-bottom: 16px;
+}
+</style>

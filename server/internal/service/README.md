@@ -94,7 +94,7 @@ require (
 # 认证服务配置
 auth:
   database:
-    db_name: "auth.db"
+    db_name: "moox.db"
   
   cache:
     data_dir: "./cache"

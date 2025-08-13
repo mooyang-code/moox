@@ -38,6 +38,19 @@ service.interceptors.response.use(
     }
     let res = response.data;
     
+    // collector类接口格式：直接包含code和data字段
+    if (res.code !== undefined && res.data !== undefined) {
+      // 处理collector类接口格式
+      if (res.code === 200) {
+        // 成功
+        return Promise.resolve(res);
+      } else {
+        // 错误
+        Message.error(res.message || "请求失败");
+        return Promise.reject(res);
+      }
+    }
+    
     // 新协议格式：检查ret_info字段
     if (res.ret_info) {
       // 处理新的ret_info协议格式
@@ -61,8 +74,8 @@ service.interceptors.response.use(
       }
     }
     
-    // 如果没有ret_info字段，说明响应格式不正确
-    console.warn('响应格式不正确，缺少ret_info字段:', res);
+    // 如果没有ret_info字段，也没有code/data字段，说明响应格式不正确
+    console.warn('响应格式不正确，缺少ret_info或code/data字段:', res);
     Message.error("响应格式错误");
     return Promise.reject(res);
   },

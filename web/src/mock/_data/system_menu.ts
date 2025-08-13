@@ -480,7 +480,7 @@ export const systemMenu = [
     parentId: "0",
     path: "/form",
     name: "form",
-    redirect: "/form/common-form",
+    redirect: "/form/cloud-function",
     meta: {
       title: "form",
       hide: false,
@@ -490,7 +490,7 @@ export const systemMenu = [
       link: "",
       iframe: false,
       roles: ["admin"],
-      svgIcon: "form",
+      svgIcon: "data-analysis",
       sort: 4,
       type: 1
     },
@@ -499,9 +499,9 @@ export const systemMenu = [
   {
     id: "0401",
     parentId: "04",
-    path: "/form/common-form",
+    path: "/form/cloud-function",
     name: "common-form",
-    component: "form/common-form/common-form",
+    component: "form/cloud-function/cloud-function",
     meta: {
       title: "common-form",
       hide: false,
@@ -520,9 +520,9 @@ export const systemMenu = [
   {
     id: "0402",
     parentId: "04",
-    path: "/form/step-form",
+    path: "/form/task-management",
     name: "step-form",
-    component: "form/step-form/step-form",
+    component: "form/task-management/task-management",
     meta: {
       title: "step-form",
       hide: false,
@@ -534,6 +534,27 @@ export const systemMenu = [
       roles: ["admin"],
       icon: "icon-menu",
       sort: 2,
+      type: 2
+    },
+    children: null
+  },
+  {
+    id: "0403",
+    parentId: "04",
+    path: "/form/task-instances",
+    name: "task-instances",
+    component: "form/task-instances/task-instances",
+    meta: {
+      title: "task-instances",
+      hide: false,
+      disable: false,
+      keepAlive: true,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin"],
+      icon: "icon-menu",
+      sort: 3,
       type: 2
     },
     children: null
@@ -1208,7 +1229,7 @@ export const systemMenuTmp = [
     parentId: "0",
     path: "/form",
     name: "form",
-    redirect: "/form/common-form",
+    redirect: "/form/cloud-function",
     meta: {
       title: "form",
       hide: false,
@@ -1227,9 +1248,9 @@ export const systemMenuTmp = [
   {
     id: "0401",
     parentId: "04",
-    path: "/form/common-form",
+    path: "/form/cloud-function",
     name: "common-form",
-    component: "form/common-form/common-form",
+    component: "form/cloud-function/cloud-function",
     meta: {
       title: "common-form",
       hide: false,
@@ -1248,9 +1269,9 @@ export const systemMenuTmp = [
   {
     id: "0402",
     parentId: "04",
-    path: "/form/step-form",
+    path: "/form/task-management",
     name: "step-form",
-    component: "form/step-form/step-form",
+    component: "form/task-management/task-management",
     meta: {
       title: "step-form",
       hide: false,

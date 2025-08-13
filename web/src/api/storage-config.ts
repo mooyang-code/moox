@@ -27,7 +27,6 @@ export interface StorageDevice {
   device_id: number;
   device_name: string;
   device_type: number;
-  schema_required: number;
   conn_info: string;
   ctime: string;
   mtime: string;
@@ -79,7 +78,7 @@ export interface ListObjectRoutesResponse {
 export interface FieldRoute {
   route_id: number;
   field_id: number; // 字段ID，使用999999999表示所有字段
-  data_category: number; // 数据类型，1静态字段，2时序字段，使用999999999表示所有数据类型
+  dataset_id: number; // 数据集ID，为0表示该项目下所有的数据集
   device_id: number;
   ctime: string;
   mtime: string;
@@ -89,7 +88,7 @@ export interface FieldRoute {
 export interface ListFieldRoutesRequest {
   project_id: number;
   field_id?: number; // 字段ID过滤条件，使用999999999表示所有字段
-  data_category?: number; // 数据类型过滤条件，使用999999999表示所有数据类型
+  dataset_id?: number; // 数据集ID过滤条件，为0表示该项目下所有的数据集
   device_id?: number;
   page_info?: {
     page_no: number;
@@ -100,7 +99,7 @@ export interface ListFieldRoutesRequest {
 // 字段路由常量
 export const FIELD_ROUTE_CONSTANTS = {
   ALL_FIELDS_MARKER: 999999999, // 表示所有字段
-  ALL_DATA_CATEGORY_MARKER: 999999999, // 表示所有数据类型
+  ALL_DATASETS_MARKER: 0, // 表示所有数据集
 } as const;
 
 export interface ListFieldRoutesResponse {
@@ -432,7 +431,6 @@ export const deleteStorageEntity = async (params: DeleteStorageEntityRequest): P
 export interface CreateStorageDeviceRequest {
   device_name: string;
   device_type: number;
-  schema_required: number;
   conn_info: string;
 }
 

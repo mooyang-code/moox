@@ -153,10 +153,10 @@ fi
 # 数据库初始化
 echo "检查数据库状态..."
 cd ./bin
-if [ ! -f "../data/auth.db" ]; then
+if [ ! -f "../data/moox.db" ]; then
     echo "数据库不存在，正在初始化..."
     if [ -f "../sql/schema.sql" ]; then
-        cd ../data && sqlite3 auth.db < ../sql/schema.sql && echo "数据库初始化完成"
+        cd ../data && sqlite3 moox.db < ../sql/schema.sql && echo "数据库初始化完成"
         cd ../bin
     else
         echo "警告: SQL schema文件不存在，跳过数据库初始化"
@@ -270,7 +270,7 @@ cd bin && ./$APP_NAME
 首次部署时，需要手动初始化数据库，SQL脚本位于项目的sql目录：
 \`\`\`bash
 # SQLite（如果使用SQLite）
-cd data && sqlite3 auth.db < ../../sql/schema.sql
+cd data && sqlite3 moox.db < ../../sql/schema.sql
 
 # PostgreSQL（如果使用PostgreSQL）
 psql -d your_database -f ../sql/schema.sql

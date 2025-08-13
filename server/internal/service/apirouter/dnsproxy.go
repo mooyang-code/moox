@@ -1,5 +1,5 @@
 // Package api DNS代理服务
-package api
+package apirouter
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/server/internal/service/api/config"
+	"github.com/mooyang-code/moox/server/internal/service/apirouter/config"
 	"github.com/patrickmn/go-cache"
 	"trpc.group/trpc-go/trpc-go/log"
 )

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/server/internal/service/api"
+	"github.com/mooyang-code/moox/server/internal/service/apirouter"
 )
 
 func TestDNSProxyBasic(t *testing.T) {

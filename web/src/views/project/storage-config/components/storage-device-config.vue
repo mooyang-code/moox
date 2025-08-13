@@ -10,7 +10,7 @@
             </a-button>
           </template>
           <a-alert style="width: 100%" type="info" class="content" :show-icon="false">
-            <div>存储设备是具体的数据存储介质，支持SQLite、DuckDB、Bleve、CSV四种类型。</div>
+            <div>存储设备是具体的数据存储介质，支持DuckDB、Bleve、CSV三种类型。</div>
             <div>配置项包括：设备ID、设备名称、设备类型、Schema需求、连接信息等。</div>
           </a-alert>
           <a-table :data="tableData" :loading="loading" :pagination="pagination" @page-change="onPageChange">
@@ -24,17 +24,12 @@
                   </a-tag>
                 </template>
               </a-table-column>
-              <a-table-column title="是否Schema" :width="120" align="center">
-                <template #cell="{ record }">
-                  <a-tag bordered size="small" color="green" v-if="record.schema_required === 1">需要Schema</a-tag>
-                  <a-tag bordered size="small" color="gray" v-else>无需Schema</a-tag>
-                </template>
-              </a-table-column>
+
               <a-table-column title="连接信息" data-index="conn_info" />
               <a-table-column title="状态" data-index="invalid">
                 <template #cell="{ record }">
-                  <a-tag :color="record.invalid === 1 ? 'red' : 'green'">
-                    {{ record.invalid === 1 ? '已删除' : '正常' }}
+                  <a-tag :color="record.invalid !== 0 ? 'red' : 'green'">
+                    {{ record.invalid !== 0 ? '已删除' : '正常' }}
                   </a-tag>
                 </template>
               </a-table-column>
@@ -46,7 +41,7 @@
                       <template #icon><icon-edit /></template>
                       编辑
                     </a-button>
-                    <a-button type="text" status="danger" size="small" @click="onDelete(record)" v-if="record.invalid !== 1">
+                    <a-button type="text" status="danger" size="small" @click="onDelete(record)" v-if="record.invalid === 0">
                       <template #icon><icon-delete /></template>
                       删除
                     </a-button>
@@ -72,20 +67,18 @@
             </a-option>
           </a-select>
         </a-form-item>
-        <a-form-item field="schema_required" label="是否Schema">
-          <a-select v-model="formData.schema_required" placeholder="请选择是否需要Schema" :disabled="!!formData.device_id">
-            <a-option v-for="option in SCHEMA_REQUIRED_OPTIONS" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </a-option>
-          </a-select>
+
+        <a-form-item field="conn_info" label="连接信息">
+          <a-input 
+            v-model="formData.conn_info" 
+            placeholder="请输入连接信息，如：localhost 或 ../database 或 /opt/app/data" 
+            :disabled="!!formData.device_id" 
+          />
           <template #help>
             <div style="font-size: 12px; color: #999;">
-              SQLite、DuckDB、CSV需要Schema初始化；Bleve无需Schema
+              建议填写localhost（本地连接）或相对/绝对路径，如：../database 或 /opt/app/data
             </div>
           </template>
-        </a-form-item>
-        <a-form-item field="conn_info" label="连接信息">
-          <a-input v-model="formData.conn_info" placeholder="请输入连接信息" :disabled="!!formData.device_id" />
         </a-form-item>
       </a-form>
     </a-modal>
@@ -104,10 +97,8 @@ import {
 } from '@/api/storage-config';
 import {
   DEVICE_TYPE_OPTIONS,
-  SCHEMA_REQUIRED_OPTIONS,
   getDeviceTypeName,
-  getDeviceTypeColor,
-  getDeviceSchemaRequired
+  getDeviceTypeColor
 } from '@/constants/storage-device';
 
 // Props定义
@@ -131,7 +122,6 @@ interface DeviceFormData {
   device_id?: number;
   device_name: string;
   device_type: number;
-  schema_required: number;
   conn_info: string;
 }
 
@@ -155,8 +145,7 @@ const modalTitle = ref('新增存储设备');
 const formRef = ref();
 const formData = ref<DeviceFormData>({
   device_name: '',
-  device_type: 1,
-  schema_required: 1, // 默认需要Schema
+  device_type: 2, // 默认为DuckDB
   conn_info: '',
 });
 
@@ -164,7 +153,6 @@ const formData = ref<DeviceFormData>({
 const rules = {
   device_name: [{ required: true, message: '请输入设备名称' }],
   device_type: [{ required: true, message: '请选择设备类型' }],
-  schema_required: [{ required: true, message: '请选择是否需要Schema' }],
   conn_info: [{ required: true, message: '请输入连接信息' }],
 };
 
@@ -175,10 +163,9 @@ const onPageChange = (current: number) => {
   pagination.value.current = current;
 };
 
-// 设备类型变化时自动设置Schema需求
-const onDeviceTypeChange = (deviceType: number) => {
-  // 根据设备类型自动设置Schema需求
-  formData.value.schema_required = getDeviceSchemaRequired(deviceType);
+// 设备类型变化处理
+const onDeviceTypeChange = () => {
+  // 设备类型变化处理逻辑
 };
 
 // 新增
@@ -186,8 +173,7 @@ const onAdd = () => {
   modalTitle.value = '新增存储设备';
   formData.value = {
     device_name: '',
-    device_type: 1, // 默认SQLite
-    schema_required: 1, // 默认需要Schema
+    device_type: 2, // 默认DuckDB
     conn_info: '',
   };
   modalVisible.value = true;
@@ -200,7 +186,6 @@ const onEdit = (record: StorageDevice) => {
     device_id: record.device_id,
     device_name: record.device_name,
     device_type: record.device_type,
-    schema_required: record.schema_required !== undefined ? record.schema_required : 1, // 保持原值，如果未定义则默认为1
     conn_info: record.conn_info,
   };
   modalVisible.value = true;
@@ -244,7 +229,6 @@ const handleOk = async () => {
       await createStorageDevice({
         device_name: formData.value.device_name,
         device_type: formData.value.device_type,
-        schema_required: formData.value.schema_required,
         conn_info: formData.value.conn_info,
       });
       Message.success('创建存储设备成功');
@@ -253,9 +237,10 @@ const handleOk = async () => {
     modalVisible.value = false;
     // 保存后刷新数据
     emits('refresh');
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('保存存储设备失败:', error);
-    Message.error(error.message || '保存存储设备失败');
+    const errorMessage = error instanceof Error ? error.message : '保存存储设备失败';
+    Message.error(errorMessage);
   }
 };
 

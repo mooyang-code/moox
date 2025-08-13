@@ -1,0 +1,289 @@
+// Package provider 提供云服务商的包装器实现
+//
+// tencent_wrapper.go 的作用：
+// 1. 解决循环依赖问题
+//    - provider 包定义通用接口
+//    - providers/tencent 包实现具体功能
+//    - 如果 providers/tencent 直接实现 provider.CloudProvider 接口，
+//      会造成循环依赖（providers/tencent → provider → providers/tencent）
+//    - 通过在 provider 包中创建 wrapper，避免了循环依赖
+//
+// 2. 类型转换和适配
+//    - 将通用的 CloudConfig 转换为腾讯云特定的 tencent.Config
+//    - 将通用接口的请求/响应类型转换为腾讯云内部的类型
+//    - 例如：CreateFunctionRequest → tencent.CreateFunctionRequest
+//
+// 3. 工厂模式注册
+//    - wrapper 在 init 函数中自动注册到工厂
+//    - 上层代码可以通过工厂模式动态创建不同云厂商的实例
+//    - 使用方只需要知道 ProviderType，不需要知道具体实现
+//
+// 4. 隔离实现细节
+//    - 上层代码只依赖 CloudProvider 接口，不需要知道腾讯云的具体实现
+//    - 腾讯云的具体实现被隔离在 providers/tencent 包中
+//    - wrapper 作为桥梁连接接口定义和具体实现
+//
+// 5. 统一的错误处理和日志
+//    - wrapper 层可以添加统一的错误处理、日志记录等横切关注点
+//    - 不需要修改具体的实现即可增强功能
+//
+// 这种设计遵循了依赖倒置原则：高层模块不应该依赖低层模块，两者都应该依赖抽象。
+package provider
+
+import (
+	"context"
+
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider/providers/tencent"
+)
+
+// TencentCloudProvider 腾讯云Provider包装器
+type TencentCloudProvider struct {
+	provider *tencent.Provider
+}
+
+// init 注册腾讯云Provider
+func init() {
+	RegisterProvider(ProviderTencent, NewTencentCloudProvider)
+}
+
+// NewTencentCloudProvider 创建腾讯云Provider
+func NewTencentCloudProvider(config *CloudConfig) (CloudProvider, error) {
+	// 转换配置
+	tencentConfig := &tencent.Config{
+		SecretID:    config.SecretID,
+		SecretKey:   config.SecretKey,
+		Region:      config.GetString("region"),
+		ExtraConfig: config.ExtraConfig,
+	}
+
+	// 创建Provider
+	provider, err := tencent.NewProvider(tencentConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return &TencentCloudProvider{
+		provider: provider,
+	}, nil
+}
+
+// CreateFunction 创建云函数
+func (p *TencentCloudProvider) CreateFunction(ctx context.Context, req *CreateFunctionRequest) (*FunctionInfo, error) {
+	// 转换请求
+	tencentReq := &tencent.CreateFunctionRequest{
+		FunctionName: req.FunctionName,
+		Runtime:      req.Runtime,
+		Namespace:    req.Namespace,
+		Description:  req.Description,
+		ZipFile:      req.ZipFile,
+		MemorySize:   req.MemorySize,
+		Timeout:      req.Timeout,
+		Environment:  req.Environment,
+	}
+
+	// 调用Provider方法
+	tencentResp, err := p.provider.CreateFunction(ctx, tencentReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// 转换响应
+	return &FunctionInfo{
+		FunctionName: tencentResp.FunctionName,
+		FunctionID:   tencentResp.FunctionID,
+		Runtime:      tencentResp.Runtime,
+		Namespace:    tencentResp.Namespace,
+		Description:  tencentResp.Description,
+		Status:       tencentResp.Status,
+		StatusDesc:   tencentResp.StatusDesc,
+		CreateTime:   tencentResp.CreateTime,
+		UpdateTime:   tencentResp.UpdateTime,
+		MemorySize:   tencentResp.MemorySize,
+		Timeout:      tencentResp.Timeout,
+		Environment:  tencentResp.Environment,
+	}, nil
+}
+
+// UpdateFunction 更新云函数
+func (p *TencentCloudProvider) UpdateFunction(ctx context.Context, req *UpdateFunctionRequest) error {
+	// 转换请求
+	tencentReq := &tencent.UpdateFunctionRequest{
+		FunctionName: req.FunctionName,
+		Namespace:    req.Namespace,
+		ZipFile:      req.ZipFile,
+		Description:  req.Description,
+		MemorySize:   req.MemorySize,
+		Timeout:      req.Timeout,
+		Environment:  req.Environment,
+	}
+
+	return p.provider.UpdateFunction(ctx, tencentReq)
+}
+
+// DeleteFunction 删除云函数
+func (p *TencentCloudProvider) DeleteFunction(ctx context.Context, functionName, namespace string) error {
+	return p.provider.DeleteFunction(ctx, functionName, namespace)
+}
+
+// GetFunction 获取云函数详情
+func (p *TencentCloudProvider) GetFunction(ctx context.Context, functionName, namespace string) (*FunctionInfo, error) {
+	resp, err := p.provider.GetFunction(ctx, functionName, namespace)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, nil
+	}
+
+	// 转换响应
+	return &FunctionInfo{
+		FunctionName: resp.FunctionName,
+		FunctionID:   resp.FunctionID,
+		Runtime:      resp.Runtime,
+		Namespace:    resp.Namespace,
+		Description:  resp.Description,
+		Status:       resp.Status,
+		StatusDesc:   resp.StatusDesc,
+		CreateTime:   resp.CreateTime,
+		UpdateTime:   resp.UpdateTime,
+		MemorySize:   resp.MemorySize,
+		Timeout:      resp.Timeout,
+		Environment:  resp.Environment,
+	}, nil
+}
+
+// ListFunctions 列出云函数
+func (p *TencentCloudProvider) ListFunctions(ctx context.Context, namespace string) ([]*FunctionInfo, error) {
+	functions, err := p.provider.ListFunctions(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	// 转换响应
+	var result []*FunctionInfo
+	for _, fn := range functions {
+		result = append(result, &FunctionInfo{
+			FunctionName: fn.FunctionName,
+			FunctionID:   fn.FunctionID,
+			Runtime:      fn.Runtime,
+			Namespace:    fn.Namespace,
+			Description:  fn.Description,
+			Status:       fn.Status,
+			StatusDesc:   fn.StatusDesc,
+			CreateTime:   fn.CreateTime,
+			UpdateTime:   fn.UpdateTime,
+			MemorySize:   fn.MemorySize,
+			Timeout:      fn.Timeout,
+			Environment:  fn.Environment,
+		})
+	}
+
+	return result, nil
+}
+
+// CreateNamespace 创建命名空间
+func (p *TencentCloudProvider) CreateNamespace(ctx context.Context, namespace, description string) error {
+	return p.provider.CreateNamespace(ctx, namespace, description)
+}
+
+// DeleteNamespace 删除命名空间
+func (p *TencentCloudProvider) DeleteNamespace(ctx context.Context, namespace string) error {
+	return p.provider.DeleteNamespace(ctx, namespace)
+}
+
+// ListNamespaces 列出命名空间
+func (p *TencentCloudProvider) ListNamespaces(ctx context.Context) ([]*NamespaceInfo, error) {
+	namespaces, err := p.provider.ListNamespaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// 转换响应
+	var result []*NamespaceInfo
+	for _, ns := range namespaces {
+		result = append(result, &NamespaceInfo{
+			Name:        ns.Name,
+			Description: ns.Description,
+			CreateTime:  ns.CreateTime,
+			UpdateTime:  ns.UpdateTime,
+		})
+	}
+
+	return result, nil
+}
+
+// CreateTrigger 创建触发器
+func (p *TencentCloudProvider) CreateTrigger(ctx context.Context, req *CreateTriggerRequest) error {
+	// 转换请求
+	tencentReq := &tencent.CreateTriggerRequest{
+		FunctionName: req.FunctionName,
+		TriggerName:  req.TriggerName,
+		TriggerType:  req.TriggerType,
+		TriggerDesc:  req.TriggerDesc,
+		Namespace:    req.Namespace,
+		Enable:       req.Enable,
+		Description:  req.Description,
+	}
+
+	return p.provider.CreateTrigger(ctx, tencentReq)
+}
+
+// DeleteTrigger 删除触发器
+func (p *TencentCloudProvider) DeleteTrigger(ctx context.Context, functionName, triggerName, namespace string) error {
+	return p.provider.DeleteTrigger(ctx, functionName, triggerName, namespace)
+}
+
+// ListTriggers 列出触发器
+func (p *TencentCloudProvider) ListTriggers(ctx context.Context, functionName, namespace string) ([]*TriggerInfo, error) {
+	triggers, err := p.provider.ListTriggers(ctx, functionName, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	// 转换响应
+	var result []*TriggerInfo
+	for _, tr := range triggers {
+		result = append(result, &TriggerInfo{
+			TriggerName: tr.TriggerName,
+			TriggerType: tr.TriggerType,
+			TriggerDesc: tr.TriggerDesc,
+			Enable:      tr.Enable,
+			CreateTime:  tr.CreateTime,
+			UpdateTime:  tr.UpdateTime,
+		})
+	}
+
+	return result, nil
+}
+
+// InvokeFunction 调用云函数
+func (p *TencentCloudProvider) InvokeFunction(ctx context.Context, req *InvokeFunctionRequest) (*InvokeFunctionResponse, error) {
+	// 转换请求
+	tencentReq := &tencent.InvokeFunctionRequest{
+		FunctionName: req.FunctionName,
+		Namespace:    req.Namespace,
+		Qualifier:    req.Qualifier,
+		EventData:    req.EventData,
+		InvokeType:   req.InvokeType,
+		Headers:      req.Headers,
+	}
+
+	// 调用Provider方法
+	tencentResp, err := p.provider.InvokeFunction(ctx, tencentReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// 转换响应
+	return &InvokeFunctionResponse{
+		RequestID:    tencentResp.RequestID,
+		Result:       tencentResp.Result,
+		Duration:     tencentResp.Duration,
+		BillDuration: tencentResp.BillDuration,
+		MemoryUsage:  tencentResp.MemoryUsage,
+		StatusCode:   tencentResp.StatusCode,
+		ErrorMessage: tencentResp.ErrorMessage,
+		ErrorType:    tencentResp.ErrorType,
+		ReturnResult: tencentResp.ReturnResult,
+	}, nil
+}

@@ -8,7 +8,7 @@ import (
 
 func main() {
 	var (
-		dbPath     = flag.String("db", "../data/auth.db", "数据库文件路径")
+		dbPath     = flag.String("db", "../data/moox.db", "数据库文件路径")
 		sqlDir     = flag.String("sql", "../sql", "SQL文件目录")
 		schemaFile = flag.String("schema", "schema.sql", "SQL schema 文件名")
 		init       = flag.Bool("init", false, "初始化数据库")

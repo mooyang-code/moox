@@ -21,12 +21,15 @@ func ReadSQLFromFile(filePath string) ([]string, error) {
 	// 处理不同的换行符
 	sqlText = strings.ReplaceAll(sqlText, "\r\n", "\n")
 
-	// 分割SQL语句（按分号分割）
+	// 分割SQL语句（按分号分割，但要考虑复合语句如触发器）
 	var statements []string
 	scanner := bufio.NewScanner(strings.NewReader(sqlText))
 	scanner.Split(bufio.ScanLines)
 
 	var currentStatement strings.Builder
+	inTrigger := false
+	beginCount := 0
+	
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		// 跳过整行注释和空行
@@ -44,13 +47,37 @@ func ReadSQLFromFile(filePath string) ([]string, error) {
 			continue
 		}
 
+		// 检测是否进入触发器或存储过程
+		lineUpper := strings.ToUpper(line)
+		if strings.Contains(lineUpper, "CREATE TRIGGER") || strings.Contains(lineUpper, "CREATE PROCEDURE") {
+			inTrigger = true
+		}
+		
+		// 计算BEGIN和END的嵌套层数
+		if strings.Contains(lineUpper, "BEGIN") {
+			beginCount++
+		}
+		if strings.Contains(lineUpper, "END;") {
+			beginCount--
+		}
+
 		currentStatement.WriteString(line + " ")
+		
+		// 判断语句是否结束
 		if strings.HasSuffix(line, ";") {
+			// 如果在触发器/存储过程中，只有在BEGIN/END平衡且遇到END;时才结束
+			if inTrigger && beginCount > 0 {
+				continue // 继续读取，还在复合语句内
+			}
+			
+			// 语句结束
 			stmt := strings.TrimSpace(currentStatement.String())
 			if stmt != "" && stmt != ";" {
 				statements = append(statements, stmt)
 			}
 			currentStatement.Reset()
+			inTrigger = false
+			beginCount = 0
 		}
 	}
 

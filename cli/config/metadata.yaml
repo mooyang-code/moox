@@ -30,7 +30,7 @@ t_field:
     c_desc: "交易对名 例如BTCUSDT 全大写字母"
     c_is_required: 1
     c_is_unique: 1
-    c_is_meta: 1
+    c_table_type: 1
     c_field_primary_format: 1
     c_field_secondary_format: 3
     c_validation_rule: '{"min_length": 3, "max_length": 10, "pattern": "^[A-Z0-9]+$"}'
@@ -46,7 +46,7 @@ t_field:
     c_desc: "币种的下架时间"
     c_is_required: 1
     c_is_unique: 0
-    c_is_meta: 0
+    c_table_type: 2
     c_field_primary_format: 1
     c_field_secondary_format: 7
     c_validation_rule: '{"format": "YYYY-MM-DD HH:mm:ss"}'
@@ -62,7 +62,7 @@ t_field:
     c_desc: "K线周期开始时间"
     c_is_required: 1
     c_is_unique: 0
-    c_is_meta: 0
+    c_table_type: 2
     c_field_primary_format: 1
     c_field_secondary_format: 7
     c_validation_rule: '{"format": "YYYY-MM-DD HH:mm:ss"}'
@@ -78,7 +78,7 @@ t_field:
     c_desc: "K线周期开盘价格"
     c_is_required: 1
     c_is_unique: 0
-    c_is_meta: 0
+    c_table_type: 2
     c_field_primary_format: 1
     c_field_secondary_format: 2
     c_validation_rule: '{"min": 0, "decimal_places": 8}'

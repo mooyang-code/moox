@@ -37,7 +37,6 @@ export interface FieldDetailInfo {
   field_id: number;
   field_name: string;
   field_name_en: string;
-  field_type: number;
   data_category: number;
 }
 

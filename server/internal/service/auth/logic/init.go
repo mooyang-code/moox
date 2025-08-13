@@ -50,7 +50,7 @@ func (s *AuthServiceImpl) initDB() (*gorm.DB, error) {
 	// 使用SQLite数据库
 	dsn := s.cfg.Database.DBName
 	if dsn == "" {
-		dsn = "../data/auth.db"
+		dsn = "../data/moox.db"
 	}
 
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})

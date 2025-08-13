@@ -1,0 +1,70 @@
+package model
+
+import (
+	"time"
+)
+
+// 节点状态常量
+const (
+	NodeStatusOffline     = 0 // 离线
+	NodeStatusOnline      = 1 // 在线
+	NodeStatusMaintenance = 2 // 维护中
+)
+
+// 节点类型常量
+const (
+	NodeTypeSCF    = "scf"    // 云函数节点
+	NodeTypeServer = "server" // 服务器节点
+)
+
+// Invalid常量
+const (
+	InvalidNo  = 0 // 有效
+	InvalidYes = 1 // 无效
+)
+
+// SCFNodeTableName 表名常量
+const SCFNodeTableName = "t_cloud_nodes"
+
+// SCFNode SCF（云函数）节点信息
+type SCFNode struct {
+	// ID 自增主键
+	ID int `gorm:"primaryKey;column:c_id;autoIncrement" json:"id"`
+	// NodeID 节点唯一标识
+	NodeID string `gorm:"column:c_node_id;uniqueIndex:idx_node_id;size:100;not null;default:''" json:"node_id"`
+	// CloudAccountID 云账户ID
+	CloudAccountID string `gorm:"column:c_cloud_account_id;size:100;not null;default:''" json:"cloud_account_id"`
+	// Namespace 命名空间
+	Namespace string `gorm:"column:c_namespace;size:200;not null;default:''" json:"namespace"`
+	// NodeType 节点类型（scf=云函数，server=服务器）
+	NodeType string `gorm:"column:c_node_type;size:50;not null;default:'scf'" json:"node_type"`
+	// Region 部署地区
+	Region string `gorm:"column:c_region;size:50;not null;default:''" json:"region"`
+	// IPAddress IP地址
+	IPAddress string `gorm:"column:c_ip_address;size:50;not null;default:''" json:"ip_address"`
+	// Version 采集器版本
+	Version string `gorm:"column:c_version;size:50;not null;default:''" json:"version"`
+	// SupportedCollectors 支持的采集器类型（JSON数组）
+	SupportedCollectors string `gorm:"column:c_supported_collectors;type:text;not null;default:'[]'" json:"supported_collectors"`
+	// Capacity 节点能力（JSON：{cpu:2,memory:512,max_tasks:10}）
+	Capacity string `gorm:"column:c_capacity;type:text;not null;default:'{}'" json:"capacity"`
+	// CurrentLoad 当前负载（JSON：{cpu_usage:20,memory_usage:30,running_tasks:3}）
+	CurrentLoad string `gorm:"column:c_current_load;type:text;not null;default:'{}'" json:"current_load"`
+	// Status 节点状态（0=离线，1=在线，2=维护中，3=过载）
+	Status int `gorm:"column:c_status;index:idx_status;not null;default:0" json:"status"`
+	// LastHeartbeat 最后心跳时间
+	LastHeartbeat *time.Time `gorm:"column:c_last_heartbeat;type:datetime" json:"last_heartbeat"`
+	// Metadata 节点额外信息（JSON格式）
+	Metadata string `gorm:"column:c_metadata;type:text;not null;default:'{}'" json:"metadata"`
+	// Invalid 删除标记
+	Invalid int `gorm:"column:c_invalid;not null;default:0" json:"invalid"`
+	// CreateTime 创建时间
+	CreateTime time.Time `gorm:"column:c_ctime;type:datetime;default:CURRENT_TIMESTAMP" json:"create_time"`
+	// ModifyTime 修改时间
+	ModifyTime time.Time `gorm:"column:c_mtime;type:datetime;default:CURRENT_TIMESTAMP" json:"modify_time"`
+}
+
+// TableName 指定表名
+func (n *SCFNode) TableName() string {
+	return "t_cloud_nodes"
+}

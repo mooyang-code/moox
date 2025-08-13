@@ -17,22 +17,21 @@ require (
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
 	github.com/mooyang-code/moox/server/proto/gen v0.0.0-20250626155508-b6cf71b7b8d0
 	github.com/patrickmn/go-cache v2.1.0+incompatible
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.1.26
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf v1.1.0
 	golang.org/x/time v0.12.0
 	gopkg.in/yaml.v2 v2.2.7
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.30.0
-	trpc.group/trpc-go/trpc-database/localcache v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.3
 )
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
-	github.com/RussellLuo/timingwheel v0.0.0-20191022104228-f534fd34a762 // indirect
 	github.com/andybalholm/brotli v1.0.4 // indirect
 	github.com/bytedance/sonic v1.11.6 // indirect
 	github.com/bytedance/sonic/loader v0.1.1 // indirect
-	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.4 // indirect
 	github.com/cloudwego/iasm v0.2.0 // indirect
@@ -63,7 +62,6 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/mooyang-code/xData-mini/storage/proto/gen v0.0.0
 	github.com/panjf2000/ants/v2 v2.4.6 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
 	github.com/pkg/errors v0.9.1 // indirect

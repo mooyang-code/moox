@@ -27,6 +27,7 @@ export interface UpdateDatasetRequest {
   proj_id: number;
   dataset_id: number;
   dataset_name?: string;
+  freqs?: string; // 时序周期，如 "1m+5m+1H+1D"
   check_rules?: string;
   comment?: string;
 }

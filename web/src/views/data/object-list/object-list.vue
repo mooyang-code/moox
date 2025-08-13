@@ -373,7 +373,7 @@ const loadDatasets = async () => {
   }
 };
 
-// 加载数据集字段信息（获取关联本数据集且标记了metadata_flag=1的字段）
+// 加载数据集字段信息（获取关联本数据集且标记了table_type=1的字段）
 const loadDatasetFields = async (datasetId: number) => {
   if (!currentProjectId.value) return;
 
@@ -390,9 +390,9 @@ const loadDatasetFields = async (datasetId: number) => {
 
     const response = await searchFields(searchParams);
 
-    // 过滤metadata_flag=1的字段
+    // 过滤table_type=1的字段（数据对象表字段）
     const metadataFields = response.field_detail_infos.filter((field: FieldDetailInfo) =>
-      field.metadata_flag === 1
+      field.table_type === 1
     );
 
     // 存储该数据集的字段信息
@@ -789,9 +789,10 @@ const saveObject = async () => {
     } else {
       throw new Error(response.ret_info.msg || '保存失败');
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('保存对象失败:', error);
-    Message.error(error.message || '保存对象失败');
+    const errorMessage = error instanceof Error ? error.message : '保存对象失败';
+    Message.error(errorMessage);
   } finally {
     loading.value = false;
   }
