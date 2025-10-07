@@ -2,10 +2,10 @@ package api
 
 import (
 	"net/http"
-	
+
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
-	
+
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/queue"
 )
@@ -25,7 +25,7 @@ func RegisterCloudNodeRoutes(router *gin.RouterGroup, db *gorm.DB) {
 		nodeGroup.PUT("/update_load", nodeHandler.UpdateNodeLoad)
 		nodeGroup.PUT("/update_function", nodeHandler.UpdateNodeFunction)
 	}
-	
+
 	// 云账户路由
 	accountHandler := NewCloudAccountHandler(db)
 	accountGroup := router.Group("/cloud_account")
@@ -44,7 +44,7 @@ func RegisterCloudNodeHTTPRoutes(mux *http.ServeMux, db *gorm.DB, queueManager *
 	scfNodeService := logic.NewSCFNodeServiceWithQueue(db, queueManager)
 	fileUploadHandler := NewFileUploadHandler(scfNodeService)
 	mux.HandleFunc("/api/v1/cloud-function/upload", fileUploadHandler.HandleFunctionUpload)
-	
+
 	// 云函数调用路由
 	cloudFunctionInvokeService := NewCloudFunctionInvokeService(db)
 	cloudFunctionInvokeService.RegisterCloudFunctionInvokeRoutes(mux)

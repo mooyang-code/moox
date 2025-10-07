@@ -210,6 +210,70 @@ service AuthAPI {
   rpc UpdateUserInfo(UpdateUserInfoReq) returns (UpdateUserInfoRsp);
 }
 
+// ================================================================================
+// 云节点心跳相关消息定义
+
+// 运行中任务信息
+message RunningTaskInfo {
+  string task_id = 1;           // 任务ID
+  string collector_type = 2;    // 采集器类型
+  string source = 3;            // 数据源
+  int64 start_time = 4;         // 开始时间戳
+  int64 last_exec_time = 5;     // 最后执行时间戳
+  int64 exec_count = 6;         // 执行次数
+  int64 error_count = 7;        // 错误次数
+}
+
+// 心跳上报请求
+message HeartbeatReq {
+  AppInfo app_info = 1;
+  string node_id = 2;                          // 节点ID
+  int64 timestamp = 3;                         // 时间戳
+  string status = 4;                           // 节点状态: running/idle
+  repeated RunningTaskInfo running_tasks = 5;  // 运行中的任务列表
+}
+
+// 心跳上报响应
+message HeartbeatRsp {
+  RetInfo ret_info = 1;
+  bool success = 2;                            // 是否成功
+  int64 timestamp = 3;                         // 服务器时间戳
+}
+
+// 获取节点状态请求
+message GetNodeStatusReq {
+  AppInfo app_info = 1;
+  string access_token = 2;                     // 访问令牌
+  repeated string node_ids = 3;                // 节点ID列表（为空则获取所有）
+}
+
+// 节点状态信息
+message NodeStatusInfo {
+  string node_id = 1;                          // 节点ID
+  int32 status = 2;                            // 状态: 1=在线, 0=离线
+  int64 last_heartbeat = 3;                    // 最后心跳时间戳
+  int32 running_task_count = 4;                // 运行中任务数量
+  repeated RunningTaskInfo running_tasks = 5;  // 运行中的任务列表
+}
+
+// 获取节点状态响应
+message GetNodeStatusRsp {
+  RetInfo ret_info = 1;
+  repeated NodeStatusInfo nodes = 2;           // 节点状态列表
+}
+
+// 云节点服务
+service CloudNodeAPI {
+  // ================================================================================
+  // 心跳管理接口
+  
+  // Heartbeat 节点心跳上报
+  rpc Heartbeat(HeartbeatReq) returns (HeartbeatRsp);
+  
+  // GetNodeStatus 获取节点状态
+  rpc GetNodeStatus(GetNodeStatusReq) returns (GetNodeStatusRsp);
+}
+
 // 管理台相关接口
 service AdminAPI {
 }

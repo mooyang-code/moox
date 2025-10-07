@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	_ "github.com/mattn/go-sqlite3" // SQLite 驱动
+	_ "modernc.org/sqlite" // SQLite 驱动 (纯Go实现，无需CGO)
 )
 
 // SQLiteDriver 是 SQLite 的具体实现

@@ -7,7 +7,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/auth/dao"
 	"trpc.group/trpc-go/trpc-go/log"
 
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 

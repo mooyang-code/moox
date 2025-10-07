@@ -150,14 +150,20 @@ if [ ! -z "\$RUNNING_PIDS" ]; then
     fi
 fi
 
+# 进入bin目录
+cd ./bin
+
+# 确保必要的目录存在
+echo "确保必要的目录存在..."
+mkdir -p ../data
+mkdir -p ../log
+
 # 数据库初始化
 echo "检查数据库状态..."
-cd ./bin
 if [ ! -f "../data/moox.db" ]; then
     echo "数据库不存在，正在初始化..."
     if [ -f "../sql/schema.sql" ]; then
-        cd ../data && sqlite3 moox.db < ../sql/schema.sql && echo "数据库初始化完成"
-        cd ../bin
+        sqlite3 ../data/moox.db < ../sql/schema.sql && echo "数据库初始化完成"
     else
         echo "警告: SQL schema文件不存在，跳过数据库初始化"
     fi

@@ -15,6 +15,7 @@ import (
 	authsvr "github.com/mooyang-code/moox/server/internal/service/auth"
 	authcfg "github.com/mooyang-code/moox/server/internal/service/auth/config"
 	collectorsvr "github.com/mooyang-code/moox/server/internal/service/collector"
+	nodeservice "github.com/mooyang-code/moox/server/internal/service/nodeservice"
 	sshConfig "github.com/mooyang-code/moox/server/internal/service/ssh/app/config"
 	sshService "github.com/mooyang-code/moox/server/internal/service/ssh/app/service"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
@@ -150,6 +151,17 @@ func main() {
 	ctx := context.Background()
 	collectorImp.Start(ctx)
 	log.Info("采集器服务初始化完成")
+	
+	// 注册云节点服务
+	log.Info("正在注册云节点服务...")
+	heartbeatManager := collectorImp.GetHeartbeatManager()
+	if heartbeatManager != nil {
+		cloudNodeService := nodeservice.NewCloudNodeService(heartbeatManager)
+		pb.RegisterCloudNodeAPIService(s, cloudNodeService)
+		log.Info("云节点服务注册完成")
+	} else {
+		log.Warn("心跳管理器未初始化，跳过云节点服务注册")
+	}
 
 	// 初始化网关服务（包括服务处理器和HTTP路由）
 	log.Info("正在初始化网关服务...")

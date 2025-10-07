@@ -305,3 +305,46 @@ CREATE TRIGGER update_async_tasks_mtime AFTER UPDATE ON t_async_tasks BEGIN UPDA
 DROP TRIGGER IF EXISTS update_async_task_details_mtime;
 CREATE TRIGGER update_async_task_details_mtime AFTER UPDATE ON t_async_task_details BEGIN UPDATE t_async_task_details SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
+-- ************ 节点心跳表 ************
+CREATE TABLE t_node_heartbeat (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
+    c_node_id TEXT NOT NULL,                                   -- 节点ID
+    c_last_heartbeat DATETIME NOT NULL,                        -- 最后心跳时间
+    c_task_version INTEGER DEFAULT 0,                          -- 任务版本号
+    c_task_hash TEXT DEFAULT '',                               -- 任务哈希值
+    c_status INTEGER DEFAULT 1,                                -- 节点状态: 1=正常,0=离线
+    c_metrics TEXT,                                             -- 节点指标信息（JSON）
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 更新时间
+    
+    UNIQUE (c_node_id)
+);
+
+-- 节点心跳表索引
+CREATE INDEX idx_node_heartbeat_time ON t_node_heartbeat(c_last_heartbeat);
+CREATE INDEX idx_node_heartbeat_status ON t_node_heartbeat(c_status);
+
+-- ************ 节点任务快照表 ************
+CREATE TABLE t_node_task_snapshot (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
+    c_node_id TEXT NOT NULL,                                   -- 节点ID
+    c_task_id TEXT NOT NULL,                                   -- 任务ID
+    c_task_status TEXT DEFAULT '',                             -- 任务状态
+    c_task_updated_at DATETIME,                                -- 任务更新时间
+    c_sync_time DATETIME NOT NULL,                             -- 同步时间
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 更新时间
+);
+
+-- 节点任务快照表索引
+CREATE INDEX idx_node_task_snapshot_node_task ON t_node_task_snapshot(c_node_id, c_task_id);
+CREATE INDEX idx_node_task_snapshot_sync_time ON t_node_task_snapshot(c_sync_time);
+
+-- 节点心跳表更新触发器
+DROP TRIGGER IF EXISTS update_node_heartbeat_mtime;
+CREATE TRIGGER update_node_heartbeat_mtime AFTER UPDATE ON t_node_heartbeat BEGIN UPDATE t_node_heartbeat SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+
+-- 节点任务快照表更新触发器
+DROP TRIGGER IF EXISTS update_node_task_snapshot_mtime;
+CREATE TRIGGER update_node_task_snapshot_mtime AFTER UPDATE ON t_node_task_snapshot BEGIN UPDATE t_node_task_snapshot SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+

@@ -204,6 +204,73 @@ func RegisterAuthAPIService(s server.Service, svr AuthAPIService) {
 	}
 }
 
+// CloudNodeAPIService defines service.
+type CloudNodeAPIService interface {
+	// Heartbeat Heartbeat 节点心跳上报
+	Heartbeat(ctx context.Context, req *HeartbeatReq) (*HeartbeatRsp, error)
+	// GetNodeStatus GetNodeStatus 获取节点状态
+	GetNodeStatus(ctx context.Context, req *GetNodeStatusReq) (*GetNodeStatusRsp, error)
+}
+
+func CloudNodeAPIService_Heartbeat_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &HeartbeatReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CloudNodeAPIService).Heartbeat(ctx, reqbody.(*HeartbeatReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CloudNodeAPIService_GetNodeStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetNodeStatusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CloudNodeAPIService).GetNodeStatus(ctx, reqbody.(*GetNodeStatusReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// CloudNodeAPIServer_ServiceDesc descriptor for server.RegisterService.
+var CloudNodeAPIServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.server.CloudNodeAPI",
+	HandlerType: ((*CloudNodeAPIService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.server.CloudNodeAPI/Heartbeat",
+			Func: CloudNodeAPIService_Heartbeat_Handler,
+		},
+		{
+			Name: "/trpc.moox.server.CloudNodeAPI/GetNodeStatus",
+			Func: CloudNodeAPIService_GetNodeStatus_Handler,
+		},
+	},
+}
+
+// RegisterCloudNodeAPIService registers service.
+func RegisterCloudNodeAPIService(s server.Service, svr CloudNodeAPIService) {
+	if err := s.Register(&CloudNodeAPIServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("CloudNodeAPI register error:%v", err))
+	}
+}
+
 // AdminAPIService defines service.
 type AdminAPIService interface {
 }
@@ -259,6 +326,18 @@ func (s *UnimplementedAuthAPI) GetUserInfo(ctx context.Context, req *GetUserInfo
 // UpdateUserInfo UpdateUserInfo 更新用户信息
 func (s *UnimplementedAuthAPI) UpdateUserInfo(ctx context.Context, req *UpdateUserInfoReq) (*UpdateUserInfoRsp, error) {
 	return nil, errors.New("rpc UpdateUserInfo of service AuthAPI is not implemented")
+}
+
+type UnimplementedCloudNodeAPI struct{}
+
+// Heartbeat Heartbeat 节点心跳上报
+func (s *UnimplementedCloudNodeAPI) Heartbeat(ctx context.Context, req *HeartbeatReq) (*HeartbeatRsp, error) {
+	return nil, errors.New("rpc Heartbeat of service CloudNodeAPI is not implemented")
+}
+
+// GetNodeStatus GetNodeStatus 获取节点状态
+func (s *UnimplementedCloudNodeAPI) GetNodeStatus(ctx context.Context, req *GetNodeStatusReq) (*GetNodeStatusRsp, error) {
+	return nil, errors.New("rpc GetNodeStatus of service CloudNodeAPI is not implemented")
 }
 
 type UnimplementedAdminAPI struct{}
@@ -430,6 +509,63 @@ func (c *AuthAPIClientProxyImpl) UpdateUserInfo(ctx context.Context, req *Update
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpdateUserInfoRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// CloudNodeAPIClientProxy defines service client proxy
+type CloudNodeAPIClientProxy interface {
+	// Heartbeat Heartbeat 节点心跳上报
+	Heartbeat(ctx context.Context, req *HeartbeatReq, opts ...client.Option) (rsp *HeartbeatRsp, err error)
+	// GetNodeStatus GetNodeStatus 获取节点状态
+	GetNodeStatus(ctx context.Context, req *GetNodeStatusReq, opts ...client.Option) (rsp *GetNodeStatusRsp, err error)
+}
+
+type CloudNodeAPIClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewCloudNodeAPIClientProxy = func(opts ...client.Option) CloudNodeAPIClientProxy {
+	return &CloudNodeAPIClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *CloudNodeAPIClientProxyImpl) Heartbeat(ctx context.Context, req *HeartbeatReq, opts ...client.Option) (*HeartbeatRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.server.CloudNodeAPI/Heartbeat")
+	msg.WithCalleeServiceName(CloudNodeAPIServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("server")
+	msg.WithCalleeService("CloudNodeAPI")
+	msg.WithCalleeMethod("Heartbeat")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &HeartbeatRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CloudNodeAPIClientProxyImpl) GetNodeStatus(ctx context.Context, req *GetNodeStatusReq, opts ...client.Option) (*GetNodeStatusRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.server.CloudNodeAPI/GetNodeStatus")
+	msg.WithCalleeServiceName(CloudNodeAPIServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("server")
+	msg.WithCalleeService("CloudNodeAPI")
+	msg.WithCalleeMethod("GetNodeStatus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetNodeStatusRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
