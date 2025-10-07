@@ -42,7 +42,7 @@ func (driver *SQLiteDriver) ensureConnected() error {
 
 	// 连接数据库
 	var err error
-	driver.db, err = sql.Open("sqlite3", driver.connectionString)
+	driver.db, err = sql.Open("sqlite", driver.connectionString)
 	if err != nil {
 		return err
 	}

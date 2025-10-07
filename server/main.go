@@ -124,6 +124,12 @@ func main() {
 		log.Fatalf("LoadConfig err[%v]", err)
 	}
 
+	// 启动WebSSH服务（在独立的goroutine中运行）
+	go func() {
+		log.Info("正在启动WebSSH服务...")
+		startWebSSHService()
+	}()
+
 	// 创建trpc服务器
 	s := trpc.NewServer()
 
@@ -137,7 +143,7 @@ func main() {
 	// 先注册API路由，这样采集器处理器才能找到路由
 	log.Info("正在注册API路由...")
 	apisvr.RegisterStandardHTTPHandlers(s)
-	
+
 	// 初始化采集器服务
 	log.Info("正在初始化采集器服务...")
 	collectorImp, err := collectorsvr.InitCollectorServiceImpl("")
@@ -151,7 +157,7 @@ func main() {
 	ctx := context.Background()
 	collectorImp.Start(ctx)
 	log.Info("采集器服务初始化完成")
-	
+
 	// 注册云节点服务
 	log.Info("正在注册云节点服务...")
 	heartbeatManager := collectorImp.GetHeartbeatManager()
@@ -167,17 +173,11 @@ func main() {
 	log.Info("正在初始化网关服务...")
 	gateway.InitGatewayServices(s)
 	log.Info("网关服务初始化完成")
-	
+
 	// 注册采集器网关（必须在网关服务初始化之后）
 	log.Info("正在注册采集器网关...")
-	collectorImp.RegisterCollectorGateway("http://localhost:20101")  // API服务在20101端口
+	collectorImp.RegisterCollectorGateway("http://localhost:20101") // API服务在20101端口
 	log.Info("采集器网关注册完成")
-
-	// 启动WebSSH服务（在独立的goroutine中运行）
-	go func() {
-		log.Info("正在启动WebSSH服务...")
-		startWebSSHService()
-	}()
 
 	// 注册定时器
 	timer.RegisterScheduler("dnsproxySchedule", &timer.DefaultScheduler{})

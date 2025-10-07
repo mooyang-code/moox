@@ -2,6 +2,8 @@ package logic
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/mooyang-code/moox/server/internal/service/auth/config"
 	"github.com/mooyang-code/moox/server/internal/service/auth/dao"
@@ -50,7 +52,13 @@ func (s *AuthServiceImpl) initDB() (*gorm.DB, error) {
 	// 使用SQLite数据库
 	dsn := s.cfg.Database.DBName
 	if dsn == "" {
-		dsn = "../data/moox.db"
+		dsn = "./data/moox.db"
+	}
+
+	// 确保目录存在
+	dir := filepath.Dir(dsn)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
@@ -67,7 +75,7 @@ func (s *AuthServiceImpl) initCache() (*dao.CacheDB, error) {
 	// 使用BadgerDB作为缓存
 	cacheDir := s.cfg.Cache.DataDir
 	if cacheDir == "" {
-		cacheDir = "../data/cache"
+		cacheDir = "./data/cache"
 	}
 
 	cache, err := dao.NewCacheDB(cacheDir)

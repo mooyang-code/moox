@@ -11,11 +11,11 @@ database:
   port: 0                     # SQLite不需要port
   user: ""                    # SQLite不需要用户名
   password: ""                # SQLite不需要密码
-  dbname: "../data/moox.db"    # SQLite数据库文件路径
+  dbname: "./data/moox.db"    # SQLite数据库文件路径
 
 # 缓存配置（BadgerDB）
 cache:
-  data_dir: "../data/badger"   # BadgerDB数据存储目录
+  data_dir: "./data/badger"   # BadgerDB数据存储目录
   db: 0                       # 数据库编号（预留字段）
 
 # JWT配置

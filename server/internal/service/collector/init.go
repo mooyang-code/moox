@@ -3,6 +3,8 @@ package collector
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"net/http"
 
@@ -58,7 +60,13 @@ func InitCollectorServiceImpl(dbPath string) (*CollectorServiceImpl, error) {
 // initDB 初始化数据库连接
 func (s *CollectorServiceImpl) initDB(dbPath string) (*gorm.DB, error) {
 	if dbPath == "" {
-		dbPath = "../data/moox.db"
+		dbPath = "./data/moox.db"
+	}
+
+	// 确保目录存在
+	dir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})

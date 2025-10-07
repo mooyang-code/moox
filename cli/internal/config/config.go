@@ -43,8 +43,10 @@ func getConfigPaths() []string {
 		// 当前目录
 		"./config/cli.yaml",
 		"./cli.yaml",
-		// 相对路径（用于构建后的二进制）
+		// 上级目录
 		"../config/cli.yaml",
+		// 相对路径（用于构建后的二进制）
+		"./config/cli.yaml",
 		// 系统配置目录
 		"/etc/moox/cli.yaml",
 		// 用户家目录

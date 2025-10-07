@@ -8,7 +8,7 @@
 #    - 环境变量: MOOX_CONFIG
 #    - 当前目录: ./config/cli.yaml
 #    - 当前目录: ./cli.yaml  
-#    - 上级目录: ../config/cli.yaml
+#    - 上级目录: ./config/cli.yaml
 #    - 用户目录: ~/.moox/cli.yaml
 #    - 系统目录: /etc/moox/cli.yaml
 

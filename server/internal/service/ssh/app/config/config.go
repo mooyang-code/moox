@@ -1,7 +1,6 @@
 package config
 
 import (
-	"flag"
 	"github.com/mooyang-code/moox/server/internal/service/ssh/app/utils"
 	"github.com/mooyang-code/moox/server/internal/service/ssh/toml"
 	"log/slog"
@@ -65,15 +64,6 @@ func init() {
 		}
 	}()
 
-	var dir string
-	flag.StringVar(&dir, "WorkDir", "", "自定义工作目录")
-	flag.Parse()
-	if dir != "" {
-		WorkDir = path.Join(dir, confPath)
-		confFileFullPath = path.Join(WorkDir, confFileName)
-		DefaultConfig.CertFile = path.Join(WorkDir, "cert.pem")
-		DefaultConfig.KeyFile = path.Join(WorkDir, "key.key")
-	}
 	slog.Info("use-config-file", "path", confFileFullPath)
 
 	info, err := os.Stat(WorkDir)

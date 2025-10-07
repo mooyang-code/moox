@@ -1,4 +1,4 @@
-# Moox Server Makefile
+# Moox CLI Makefile
 
 .PHONY: help build build-linux build-darwin build-windows build-all clean deps lint test install release
 
@@ -6,14 +6,14 @@
 all: deps build
 
 # Variables
-APP_NAME=moox-server
+APP_NAME=moox-cli
 VERSION ?= dev
 BUILD_TIME=$(shell date +"%Y-%m-%d_%H:%M:%S")
 GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DIR=./bin
 RELEASE_DIR=./release
-CMD_DIR=./cmd
 CONFIG_DIR=./config
+SQL_DIR=./sql
 
 # Build flags
 LDFLAGS=-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)
@@ -26,7 +26,7 @@ ARCHITECTURES=amd64 arm64
 
 # Help
 help:
-	@echo "🛠️  Moox Server 构建工具"
+	@echo "🛠️  Moox CLI 构建工具"
 	@echo ""
 	@echo "📦 构建目标:"
 	@echo "  build         - 构建当前平台二进制文件"
@@ -84,7 +84,7 @@ build-linux:
 	@echo "📦 正在构建 Linux 平台二进制文件..."
 	@mkdir -p $(RELEASE_DIR)/linux/bin
 	@mkdir -p $(RELEASE_DIR)/linux/config
-	@mkdir -p $(RELEASE_DIR)/linux/log
+	@mkdir -p $(RELEASE_DIR)/linux/sql
 	@mkdir -p $(RELEASE_DIR)/linux/data
 	@for arch in $(ARCHITECTURES); do \
 		echo "  平台: Linux"; \
@@ -97,7 +97,7 @@ build-linux:
 		fi; \
 	done
 	@cp -r $(CONFIG_DIR)/* $(RELEASE_DIR)/linux/config/ 2>/dev/null || true
-	@$(MAKE) create-unix-scripts PLATFORM_DIR=$(RELEASE_DIR)/linux
+	@cp -r $(SQL_DIR)/* $(RELEASE_DIR)/linux/sql/ 2>/dev/null || true
 	@echo "✅ Linux 构建成功"
 
 # Build for macOS
@@ -105,7 +105,7 @@ build-darwin:
 	@echo "📦 正在构建 macOS 平台二进制文件..."
 	@mkdir -p $(RELEASE_DIR)/darwin/bin
 	@mkdir -p $(RELEASE_DIR)/darwin/config
-	@mkdir -p $(RELEASE_DIR)/darwin/log
+	@mkdir -p $(RELEASE_DIR)/darwin/sql
 	@mkdir -p $(RELEASE_DIR)/darwin/data
 	@for arch in $(ARCHITECTURES); do \
 		echo "  平台: Darwin"; \
@@ -118,7 +118,7 @@ build-darwin:
 		fi; \
 	done
 	@cp -r $(CONFIG_DIR)/* $(RELEASE_DIR)/darwin/config/ 2>/dev/null || true
-	@$(MAKE) create-unix-scripts PLATFORM_DIR=$(RELEASE_DIR)/darwin
+	@cp -r $(SQL_DIR)/* $(RELEASE_DIR)/darwin/sql/ 2>/dev/null || true
 	@echo "✅ macOS 构建成功"
 
 # Build for macOS (alias for build-darwin)
@@ -129,7 +129,7 @@ build-windows:
 	@echo "📦 正在构建 Windows 平台二进制文件..."
 	@mkdir -p $(RELEASE_DIR)/windows/bin
 	@mkdir -p $(RELEASE_DIR)/windows/config
-	@mkdir -p $(RELEASE_DIR)/windows/log
+	@mkdir -p $(RELEASE_DIR)/windows/sql
 	@mkdir -p $(RELEASE_DIR)/windows/data
 	@for arch in $(ARCHITECTURES); do \
 		echo "  平台: Windows"; \
@@ -142,7 +142,7 @@ build-windows:
 		fi; \
 	done
 	@cp -r $(CONFIG_DIR)/* $(RELEASE_DIR)/windows/config/ 2>/dev/null || true
-	@$(MAKE) create-windows-scripts PLATFORM_DIR=$(RELEASE_DIR)/windows
+	@cp -r $(SQL_DIR)/* $(RELEASE_DIR)/windows/sql/ 2>/dev/null || true
 	@echo "✅ Windows 构建成功"
 
 # Build for all platforms
@@ -158,89 +158,6 @@ release: build-all
 	@echo "📦 创建发布包..."
 	@echo "📁 发布目录: $(RELEASE_DIR)"
 	@ls -la $(RELEASE_DIR)/
-
-# Create Unix scripts (Linux/macOS)
-create-unix-scripts:
-	@echo "#!/bin/bash" > $(PLATFORM_DIR)/start.sh
-	@echo "" >> $(PLATFORM_DIR)/start.sh
-	@echo "APP_NAME=\"moox-server\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "PID_FILE=\"./\$$APP_NAME.pid\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "SCRIPT_DIR=\$$(cd \"\$$(dirname \"\$$0\")\" && pwd)" >> $(PLATFORM_DIR)/start.sh
-	@echo "" >> $(PLATFORM_DIR)/start.sh
-	@echo "echo \"检查已存在的进程...\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "" >> $(PLATFORM_DIR)/start.sh
-	@echo "# 先检查是否有同名进程在运行" >> $(PLATFORM_DIR)/start.sh
-	@echo "EXISTING_PIDS=\$$(pgrep -f \"bin/\$$APP_NAME\")" >> $(PLATFORM_DIR)/start.sh
-	@echo "if [ -n \"\$$EXISTING_PIDS\" ]; then" >> $(PLATFORM_DIR)/start.sh
-	@echo "    echo \"发现运行中的 \$$APP_NAME 进程: \$$EXISTING_PIDS\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "    echo \"正在停止这些进程...\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "    kill \$$EXISTING_PIDS 2>/dev/null" >> $(PLATFORM_DIR)/start.sh
-	@echo "    sleep 2" >> $(PLATFORM_DIR)/start.sh
-	@echo "    # 如果进程仍然存在，强制终止" >> $(PLATFORM_DIR)/start.sh
-	@echo "    if pgrep -f \"bin/\$$APP_NAME\" > /dev/null; then" >> $(PLATFORM_DIR)/start.sh
-	@echo "        echo \"强制终止进程...\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "        pkill -9 -f \"bin/\$$APP_NAME\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "    fi" >> $(PLATFORM_DIR)/start.sh
-	@echo "fi" >> $(PLATFORM_DIR)/start.sh
-	@echo "" >> $(PLATFORM_DIR)/start.sh
-	@echo "# 再检查 PID 文件" >> $(PLATFORM_DIR)/start.sh
-	@echo "if [ -f \"\$$PID_FILE\" ]; then" >> $(PLATFORM_DIR)/start.sh
-	@echo "    OLD_PID=\$$(cat \"\$$PID_FILE\")" >> $(PLATFORM_DIR)/start.sh
-	@echo "    if ps -p \"\$$OLD_PID\" > /dev/null 2>&1; then" >> $(PLATFORM_DIR)/start.sh
-	@echo "        echo \"发现 PID 文件中的进程 (PID: \$$OLD_PID)，正在停止...\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "        kill \"\$$OLD_PID\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "        sleep 2" >> $(PLATFORM_DIR)/start.sh
-	@echo "    fi" >> $(PLATFORM_DIR)/start.sh
-	@echo "    rm -f \"\$$PID_FILE\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "fi" >> $(PLATFORM_DIR)/start.sh
-	@echo "" >> $(PLATFORM_DIR)/start.sh
-	@echo "cd \"\$$SCRIPT_DIR\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "" >> $(PLATFORM_DIR)/start.sh
-	@echo "# 确保log目录存在" >> $(PLATFORM_DIR)/start.sh
-	@echo "mkdir -p log" >> $(PLATFORM_DIR)/start.sh
-	@echo "" >> $(PLATFORM_DIR)/start.sh
-	@echo "echo \"启动 \$$APP_NAME...\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "nohup ./bin/\$$APP_NAME -conf=./config/trpc_go.yaml > ./log/app.log 2>&1 &" >> $(PLATFORM_DIR)/start.sh
-	@echo "echo \$$! > \"\$$PID_FILE\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "echo \"服务已启动 (PID: \$$(cat \$$PID_FILE))\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "echo \"日志文件: log/app.log\"" >> $(PLATFORM_DIR)/start.sh
-	@echo "#!/bin/bash" > $(PLATFORM_DIR)/stop.sh
-	@echo "" >> $(PLATFORM_DIR)/stop.sh
-	@echo "APP_NAME=\"moox-server\"" >> $(PLATFORM_DIR)/stop.sh
-	@echo "PID_FILE=\"./\$$APP_NAME.pid\"" >> $(PLATFORM_DIR)/stop.sh
-	@echo "" >> $(PLATFORM_DIR)/stop.sh
-	@echo "if [ ! -f \"\$$PID_FILE\" ]; then" >> $(PLATFORM_DIR)/stop.sh
-	@echo "    echo \"PID文件不存在，服务可能没有运行\"" >> $(PLATFORM_DIR)/stop.sh
-	@echo "    exit 1" >> $(PLATFORM_DIR)/stop.sh
-	@echo "fi" >> $(PLATFORM_DIR)/stop.sh
-	@echo "" >> $(PLATFORM_DIR)/stop.sh
-	@echo "PID=\$$(cat \"\$$PID_FILE\")" >> $(PLATFORM_DIR)/stop.sh
-	@echo "if ps -p \"\$$PID\" > /dev/null 2>&1; then" >> $(PLATFORM_DIR)/stop.sh
-	@echo "    echo \"停止服务 (PID: \$$PID)...\"" >> $(PLATFORM_DIR)/stop.sh
-	@echo "    kill \"\$$PID\"" >> $(PLATFORM_DIR)/stop.sh
-	@echo "    sleep 2" >> $(PLATFORM_DIR)/stop.sh
-	@echo "    if ps -p \"\$$PID\" > /dev/null 2>&1; then" >> $(PLATFORM_DIR)/stop.sh
-	@echo "        echo \"强制停止服务...\"" >> $(PLATFORM_DIR)/stop.sh
-	@echo "        kill -9 \"\$$PID\"" >> $(PLATFORM_DIR)/stop.sh
-	@echo "    fi" >> $(PLATFORM_DIR)/stop.sh
-	@echo "    rm -f \"\$$PID_FILE\"" >> $(PLATFORM_DIR)/stop.sh
-	@echo "    echo \"服务已停止\"" >> $(PLATFORM_DIR)/stop.sh
-	@echo "else" >> $(PLATFORM_DIR)/stop.sh
-	@echo "    echo \"服务没有运行\"" >> $(PLATFORM_DIR)/stop.sh
-	@echo "    rm -f \"\$$PID_FILE\"" >> $(PLATFORM_DIR)/stop.sh
-	@echo "fi" >> $(PLATFORM_DIR)/stop.sh
-	@chmod +x $(PLATFORM_DIR)/start.sh
-	@chmod +x $(PLATFORM_DIR)/stop.sh
-
-# Create Windows scripts
-create-windows-scripts:
-	@echo '@echo off' > $(PLATFORM_DIR)/start.bat
-	@echo 'cd bin' >> $(PLATFORM_DIR)/start.bat
-	@echo 'start moox-server.exe' >> $(PLATFORM_DIR)/start.bat
-	@echo 'echo Service started' >> $(PLATFORM_DIR)/start.bat
-	@echo '@echo off' > $(PLATFORM_DIR)/stop.bat
-	@echo 'taskkill /F /IM moox-server.exe' >> $(PLATFORM_DIR)/stop.bat
-	@echo 'echo Service stopped' >> $(PLATFORM_DIR)/stop.bat
 
 # Deploy to remote server
 deploy:

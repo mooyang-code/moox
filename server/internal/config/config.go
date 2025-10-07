@@ -56,7 +56,7 @@ type ServiceConfig struct {
 // LoadConfig 加载配置文件
 func LoadConfig() (*Config, error) {
 	// 读取配置文件
-	configPath := "../config/gateway.yaml"
+	configPath := "./config/gateway.yaml"
 	yamlFile, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("读取配置文件失败: %+v", err)

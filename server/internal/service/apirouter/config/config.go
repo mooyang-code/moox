@@ -56,7 +56,7 @@ func LoadConfig() (*Config, error) {
 	var config Config
 
 	// 尝试加载DNS代理配置
-	dnsConfigPath := "../config/dnsproxy.yaml"
+	dnsConfigPath := "./config/dnsproxy.yaml"
 	if yamlFile, err := os.ReadFile(dnsConfigPath); err == nil {
 		var dnsConfig struct {
 			DNSProxy DNSProxyConfig `yaml:"dnsproxy"`
@@ -67,7 +67,7 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// 如果都没有找到，尝试加载统一配置文件
-	unifiedConfigPath := "../config/service.yaml"
+	unifiedConfigPath := "./config/service.yaml"
 	if yamlFile, err := os.ReadFile(unifiedConfigPath); err == nil {
 		if err := yaml.Unmarshal(yamlFile, &config); err != nil {
 			return nil, fmt.Errorf("解析统一配置文件失败: %+v", err)
