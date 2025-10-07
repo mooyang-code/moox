@@ -1,5 +1,5 @@
 metadata_database: 
-  storage_device: "sqlite:/Users/mooyang/Documents/go/src/github.com/mooyang-code/xData-mini/storage/release/data/sqlite/metadata.db"
+  storage_device: "sqlite:./data/moox.db"
 
 storage: 
   target: "127.0.0.1:18201"

@@ -7,6 +7,7 @@ replace github.com/mooyang-code/xData-mini/storage/proto => ../../xData-mini/sto
 replace github.com/mooyang-code/moox/server/proto/gen => ../server/proto/gen
 
 require (
+	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/mooyang-code/moox/server/proto/gen v0.0.0
 	github.com/mooyang-code/xData-mini/storage/proto v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats.go v1.43.0

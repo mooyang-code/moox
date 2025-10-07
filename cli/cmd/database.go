@@ -99,6 +99,7 @@ func init() {
 	dbCmd.Flags().StringVar(&insertDataFile, "insert-data", "", "向表中插入数据（仅支持 YAML 文件）")
 	dbCmd.Flags().StringVar(&showSchemaTable, "show-schema", "", "查看表结构")
 	dbCmd.Flags().StringVar(&showDataTable, "show-data", "", "查看表的最近数据")
+
 }
 
 // 颜色常量定义
@@ -180,7 +181,7 @@ func initDatabase(dbPath, schemaFile string) error {
 		return fmt.Errorf("连接数据库失败: %v", err)
 	}
 	defer db.Close()
-	
+
 	// 测试连接
 	if err := db.Ping(); err != nil {
 		return fmt.Errorf("数据库连接测试失败: %v", err)
@@ -234,12 +235,3 @@ func executeSQLStatements(db *sql.DB, statements []string) error {
 	return nil
 }
 
-// eg:
-// ./moox-cli db --init
-// ./moox-cli db --init --schema=./path/to/schema.sql
-// ./moox-cli db --drop
-// ./moox-cli db --create-table=t_field
-// ./moox-cli db --meta-schema=schema.sql
-// ./moox-cli db --insert-data=metadata.yaml
-// ./moox-cli db --show-schema=t_dataset
-// ./moox-cli db --show-data=t_field

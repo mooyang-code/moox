@@ -13,7 +13,7 @@ GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DIR=./bin
 RELEASE_DIR=./release
 CONFIG_DIR=./config
-SQL_DIR=./sql
+SCHEMA_DIR=./schema
 
 # Build flags
 LDFLAGS=-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)
@@ -84,7 +84,7 @@ build-linux:
 	@echo "📦 正在构建 Linux 平台二进制文件..."
 	@mkdir -p $(RELEASE_DIR)/linux/bin
 	@mkdir -p $(RELEASE_DIR)/linux/config
-	@mkdir -p $(RELEASE_DIR)/linux/sql
+	@mkdir -p $(RELEASE_DIR)/linux/schema
 	@mkdir -p $(RELEASE_DIR)/linux/data
 	@for arch in $(ARCHITECTURES); do \
 		echo "  平台: Linux"; \
@@ -97,7 +97,7 @@ build-linux:
 		fi; \
 	done
 	@cp -r $(CONFIG_DIR)/* $(RELEASE_DIR)/linux/config/ 2>/dev/null || true
-	@cp -r $(SQL_DIR)/* $(RELEASE_DIR)/linux/sql/ 2>/dev/null || true
+	@cp -r $(SCHEMA_DIR)/* $(RELEASE_DIR)/linux/schema/ 2>/dev/null || true
 	@echo "✅ Linux 构建成功"
 
 # Build for macOS
@@ -105,7 +105,7 @@ build-darwin:
 	@echo "📦 正在构建 macOS 平台二进制文件..."
 	@mkdir -p $(RELEASE_DIR)/darwin/bin
 	@mkdir -p $(RELEASE_DIR)/darwin/config
-	@mkdir -p $(RELEASE_DIR)/darwin/sql
+	@mkdir -p $(RELEASE_DIR)/darwin/schema
 	@mkdir -p $(RELEASE_DIR)/darwin/data
 	@for arch in $(ARCHITECTURES); do \
 		echo "  平台: Darwin"; \
@@ -118,7 +118,7 @@ build-darwin:
 		fi; \
 	done
 	@cp -r $(CONFIG_DIR)/* $(RELEASE_DIR)/darwin/config/ 2>/dev/null || true
-	@cp -r $(SQL_DIR)/* $(RELEASE_DIR)/darwin/sql/ 2>/dev/null || true
+	@cp -r $(SCHEMA_DIR)/* $(RELEASE_DIR)/darwin/schema/ 2>/dev/null || true
 	@echo "✅ macOS 构建成功"
 
 # Build for macOS (alias for build-darwin)
@@ -129,7 +129,7 @@ build-windows:
 	@echo "📦 正在构建 Windows 平台二进制文件..."
 	@mkdir -p $(RELEASE_DIR)/windows/bin
 	@mkdir -p $(RELEASE_DIR)/windows/config
-	@mkdir -p $(RELEASE_DIR)/windows/sql
+	@mkdir -p $(RELEASE_DIR)/windows/schema
 	@mkdir -p $(RELEASE_DIR)/windows/data
 	@for arch in $(ARCHITECTURES); do \
 		echo "  平台: Windows"; \
@@ -142,7 +142,7 @@ build-windows:
 		fi; \
 	done
 	@cp -r $(CONFIG_DIR)/* $(RELEASE_DIR)/windows/config/ 2>/dev/null || true
-	@cp -r $(SQL_DIR)/* $(RELEASE_DIR)/windows/sql/ 2>/dev/null || true
+	@cp -r $(SCHEMA_DIR)/* $(RELEASE_DIR)/windows/schema/ 2>/dev/null || true
 	@echo "✅ Windows 构建成功"
 
 # Build for all platforms
