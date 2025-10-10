@@ -203,9 +203,9 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
-import { IconSearch, IconRefresh, IconUp, IconDown, IconPlus, IconDelete, IconEdit, IconEye } from '@arco-design/web-vue/es/icon';
-import { queryObjectAPI, upsertObjectAPI, fetchObjectAPI, deleteObjectAPI, type ObjectRow, type FieldValue, type UpdateObjectRow, type UpdateField } from "@/api/modules/data/index";
-import { listProjects, type Project, type Dataset } from '@/api/project';
+import { IconSearch, IconRefresh, IconUp, IconDown, IconPlus, IconDelete } from '@arco-design/web-vue/es/icon';
+import { queryObjectAPI, upsertObjectAPI, deleteObjectAPI, type ObjectRow, type FieldValue, type UpdateObjectRow, type UpdateField } from "@/api/modules/data/index";
+import { listProjects, type Dataset } from '@/api/project';
 import { searchFields, type SearchFieldReq, type FieldDetailInfo } from '@/api/field';
 import { FormData, RowSelection, Pagination } from "./config";
 
@@ -421,14 +421,14 @@ const getFieldDisplayName = (fieldKey: string): string => {
 };
 
 // 格式化时间为 YYYY-MM-DD HH:mm:ss 格式
-const formatDateTime = (date: Date = new Date()): string => {
-  return date.getFullYear() + '-' +
-    String(date.getMonth() + 1).padStart(2, '0') + '-' +
-    String(date.getDate()).padStart(2, '0') + ' ' +
-    String(date.getHours()).padStart(2, '0') + ':' +
-    String(date.getMinutes()).padStart(2, '0') + ':' +
-    String(date.getSeconds()).padStart(2, '0');
-};
+// const formatDateTime = (date: Date = new Date()): string => {
+//   return date.getFullYear() + '-' +
+//     String(date.getMonth() + 1).padStart(2, '0') + '-' +
+//     String(date.getDate()).padStart(2, '0') + ' ' +
+//     String(date.getHours()).padStart(2, '0') + ':' +
+//     String(date.getMinutes()).padStart(2, '0') + ':' +
+//     String(date.getSeconds()).padStart(2, '0');
+// };
 
 // 获取字段输入框的占位符文本
 const getFieldPlaceholder = (fieldKey: string): string => {
@@ -466,7 +466,7 @@ const getAllFieldKeys = (): string[] => {
 // 初始化搜索表单字段
 const initSearchForm = () => {
   // 保留objectId，重置其他字段
-  const newForm: Record<string, string> = { objectId: formData.form.objectId || "" };
+  const newForm: { objectId: string; [key: string]: string } = { objectId: formData.form.objectId || "" };
 
   // 为每个字段添加搜索框
   searchFieldKeys.value.forEach(fieldKey => {
@@ -623,7 +623,7 @@ const search = () => {
 // 重置函数
 const reset = () => {
   // 手动重置表单数据（不依赖Arco Design的resetFields方法）
-  const newForm: Record<string, string> = { objectId: "" };
+  const newForm: { objectId: string; [key: string]: string } = { objectId: "" };
   searchFieldKeys.value.forEach(fieldKey => {
     newForm[fieldKey] = "";
   });
@@ -634,7 +634,7 @@ const reset = () => {
 };
 
 // 兼容旧的重置函数名
-const onReset = reset;
+// const onReset = reset;
 
 // 操作方法
 const viewDetail = (record: ObjectRow) => {
@@ -770,7 +770,7 @@ const saveObject = async () => {
     }];
 
     const response = await upsertObjectAPI({
-      project_id: currentProjectId.value,
+      project_id: currentProjectId.value!,
       dataset_id: Number(activeTab.value),
       object_rows: updateRows
     });

@@ -38,18 +38,7 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: "dist", // 指定打包路径，默认为项目根目录下的dist目录
-      // minify: "esbuild", // esbuild打包更快但是不能去除console.log，terser打包慢但能去除console.log
-      minify: "terser", // Vite 2.6.x 以上需要配置 minify："terser"，terserOptions才能生效，terser可以去除 console.log
-      terserOptions: {
-        compress: {
-          keep_infinity: true, // 防止 Infinity 被压缩成 1/0，这可能会导致 Chrome 上的性能问题
-          drop_console: true, // 生产环境去除 console
-          drop_debugger: true // 生产环境去除 debugger
-        },
-        format: {
-          comments: false // 删除注释
-        }
-      },
+      minify: "esbuild", // Use esbuild to avoid the rollup error
       assetsInlineLimit: 50 * 1024, // 打包内联阈值100kb
       chunkSizeWarningLimit: 50000, // 规定触发警告的 chunk 大小, 这里设置阈值为50kb, 消除打包大小超过500kb警告
       // 静态资源打包到dist下的不同目录,将文件类型css、js、jpg等文件分开存储
@@ -57,7 +46,13 @@ export default defineConfig(({ mode }) => {
         output: {
           chunkFileNames: "static/js/[name]-[hash].js",
           entryFileNames: "static/js/[name]-[hash].js",
-          assetFileNames: "static/[ext]/[name]-[hash].[ext]"
+          assetFileNames: "static/[ext]/[name]-[hash].[ext]",
+          // Prevent circular dependencies
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              return 'vendor';
+            }
+          }
         }
       }
     },

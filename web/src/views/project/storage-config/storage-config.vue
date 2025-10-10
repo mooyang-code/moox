@@ -168,7 +168,7 @@ const loadObjectRoutes = async (searchParams?: { dataset_id?: number; entity_id?
 };
 
 // 加载数据字段路由列表
-const loadFieldRoutes = async (searchParams?: { entity_id?: number; field_id?: number; data_category?: number; device_id?: number }) => {
+const loadFieldRoutes = async (searchParams?: { entity_id?: number; field_id?: number; data_category?: string; device_id?: number }) => {
   if (!currentProjectId.value) {
     console.warn('当前项目ID为空，无法获取数据字段路由列表');
     return;

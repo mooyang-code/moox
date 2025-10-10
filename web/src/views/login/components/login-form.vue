@@ -44,7 +44,6 @@ import { useRouter } from "vue-router";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { loginAPI } from "@/api/modules/user/index";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
-import { useSystemStore } from "@/store/modules/system";
 import { Message } from "@arco-design/web-vue";
 import { getErrorMessage } from "@/utils/error-handler";
 

@@ -55,7 +55,7 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 	}
 
 	// 调用API创建函数
-	response, err := p.scfClient.CreateFunctionWithContext(ctx, request)
+	response, err := p.scfClient.CreateFunction(request)
 	if err != nil {
 		// 检查是否是函数已存在的错误
 		if strings.Contains(err.Error(), "ResourceInUse.Function") {
@@ -111,7 +111,7 @@ func (p *Provider) UpdateFunction(ctx context.Context, req *UpdateFunctionReques
 			}
 		}
 
-		_, err := p.scfClient.UpdateFunctionConfigurationWithContext(ctx, configRequest)
+		_, err := p.scfClient.UpdateFunctionConfiguration(configRequest)
 		if err != nil {
 			return fmt.Errorf("failed to update function configuration: %w", err)
 		}
@@ -124,7 +124,7 @@ func (p *Provider) UpdateFunction(ctx context.Context, req *UpdateFunctionReques
 		codeRequest.Namespace = common.StringPtr(req.Namespace)
 		codeRequest.ZipFile = common.StringPtr(req.ZipFile)
 
-		_, err := p.scfClient.UpdateFunctionCodeWithContext(ctx, codeRequest)
+		_, err := p.scfClient.UpdateFunctionCode(codeRequest)
 		if err != nil {
 			return fmt.Errorf("failed to update function code: %w", err)
 		}
@@ -142,7 +142,7 @@ func (p *Provider) DeleteFunction(ctx context.Context, functionName, namespace s
 	request.FunctionName = common.StringPtr(functionName)
 	request.Namespace = common.StringPtr(namespace)
 
-	_, err := p.scfClient.DeleteFunctionWithContext(ctx, request)
+	_, err := p.scfClient.DeleteFunction(request)
 	if err != nil {
 		return fmt.Errorf("failed to delete function: %w", err)
 	}
@@ -157,7 +157,7 @@ func (p *Provider) GetFunction(ctx context.Context, functionName, namespace stri
 	request.FunctionName = common.StringPtr(functionName)
 	request.Namespace = common.StringPtr(namespace)
 
-	response, err := p.scfClient.GetFunctionWithContext(ctx, request)
+	response, err := p.scfClient.GetFunction(request)
 	if err != nil {
 		if strings.Contains(err.Error(), "ResourceNotFound.Function") {
 			return nil, nil
@@ -210,7 +210,7 @@ func (p *Provider) ListFunctions(ctx context.Context, namespace string) ([]*Func
 		request.Offset = common.Int64Ptr(offset)
 		request.Limit = common.Int64Ptr(limit)
 
-		response, err := p.scfClient.ListFunctionsWithContext(ctx, request)
+		response, err := p.scfClient.ListFunctions(request)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list functions: %w", err)
 		}
@@ -256,7 +256,7 @@ func (p *Provider) CreateNamespace(ctx context.Context, namespace, description s
 	request.Namespace = common.StringPtr(namespace)
 	request.Description = common.StringPtr(description)
 
-	_, err := p.scfClient.CreateNamespaceWithContext(ctx, request)
+	_, err := p.scfClient.CreateNamespace(request)
 	if err != nil {
 		// 检查是否是命名空间已存在的错误
 		if strings.Contains(err.Error(), "ResourceInUse.Namespace") {
@@ -277,7 +277,7 @@ func (p *Provider) DeleteNamespace(ctx context.Context, namespace string) error 
 	request := scf.NewDeleteNamespaceRequest()
 	request.Namespace = common.StringPtr(namespace)
 
-	_, err := p.scfClient.DeleteNamespaceWithContext(ctx, request)
+	_, err := p.scfClient.DeleteNamespace(request)
 	if err != nil {
 		return fmt.Errorf("failed to delete namespace: %w", err)
 	}
@@ -297,7 +297,7 @@ func (p *Provider) ListNamespaces(ctx context.Context) ([]*NamespaceInfo, error)
 		request.Offset = common.Int64Ptr(offset)
 		request.Limit = common.Int64Ptr(limit)
 
-		response, err := p.scfClient.ListNamespacesWithContext(ctx, request)
+		response, err := p.scfClient.ListNamespaces(request)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list namespaces: %w", err)
 		}
@@ -348,7 +348,7 @@ func (p *Provider) CreateTrigger(ctx context.Context, req *CreateTriggerRequest)
 		request.Description = common.StringPtr(req.Description)
 	}
 
-	_, err := p.scfClient.CreateTriggerWithContext(ctx, request)
+	_, err := p.scfClient.CreateTrigger(request)
 	if err != nil {
 		// 检查是否是触发器已存在的错误
 		if strings.Contains(err.Error(), "相同的触发器已经存在") || strings.Contains(err.Error(), "InvalidParameterValue") {
@@ -372,7 +372,7 @@ func (p *Provider) DeleteTrigger(ctx context.Context, functionName, triggerName,
 	request.Type = common.StringPtr("timer") // TODO: 需要先查询触发器类型
 	request.Namespace = common.StringPtr(namespace)
 
-	_, err := p.scfClient.DeleteTriggerWithContext(ctx, request)
+	_, err := p.scfClient.DeleteTrigger(request)
 	if err != nil {
 		return fmt.Errorf("failed to delete trigger: %w", err)
 	}
@@ -388,7 +388,7 @@ func (p *Provider) ListTriggers(ctx context.Context, functionName, namespace str
 	request.FunctionName = common.StringPtr(functionName)
 	request.Namespace = common.StringPtr(namespace)
 
-	response, err := p.scfClient.GetFunctionWithContext(ctx, request)
+	response, err := p.scfClient.GetFunction(request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get function for triggers: %w", err)
 	}
@@ -512,7 +512,7 @@ func (p *Provider) InvokeFunction(ctx context.Context, req *InvokeFunctionReques
 	}
 
 	// 调用函数
-	response, err := p.scfClient.InvokeWithContext(ctx, request)
+	response, err := p.scfClient.Invoke(request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to invoke function: %w", err)
 	}

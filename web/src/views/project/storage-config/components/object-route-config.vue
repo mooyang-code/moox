@@ -146,7 +146,7 @@ import {
   deleteObjectRoute,
   listStorageEntities
 } from '@/api/storage-config';
-import { listProjects, type Project, type Dataset } from '@/api/project';
+import { listProjects, type Dataset } from '@/api/project';
 
 // Props定义
 interface Props {

@@ -1,43 +1,45 @@
 import { defineStore } from 'pinia';
+import { ref, readonly } from 'vue';
 
-interface LoadingState {
-  routeLoading: boolean;
-  pageLoading: boolean;
-}
 
-export const useLoadingStore = defineStore('loading', {
-  state: (): LoadingState => ({
-    routeLoading: false,
-    pageLoading: false
-  }),
+export const useLoadingStore = defineStore('loading', () => {
+  // State
+  const routeLoading = ref(false);
+  const pageLoading = ref(false);
 
-  actions: {
-    setRouteLoading(loading: boolean) {
-      this.routeLoading = loading;
-    },
+  // Actions
+  const setRouteLoading = (loading: boolean) => {
+    routeLoading.value = loading;
+  };
 
-    setPageLoading(loading: boolean) {
-      this.pageLoading = loading;
-    },
+  const setPageLoading = (loading: boolean) => {
+    pageLoading.value = loading;
+  };
 
-    // 显示路由加载
-    showRouteLoading() {
-      this.routeLoading = true;
-    },
+  const showRouteLoading = () => {
+    routeLoading.value = true;
+  };
 
-    // 隐藏路由加载
-    hideRouteLoading() {
-      this.routeLoading = false;
-    },
+  const hideRouteLoading = () => {
+    routeLoading.value = false;
+  };
 
-    // 显示页面加载
-    showPageLoading() {
-      this.pageLoading = true;
-    },
+  const showPageLoading = () => {
+    pageLoading.value = true;
+  };
 
-    // 隐藏页面加载
-    hidePageLoading() {
-      this.pageLoading = false;
-    }
-  }
+  const hidePageLoading = () => {
+    pageLoading.value = false;
+  };
+
+  return {
+    routeLoading: readonly(routeLoading),
+    pageLoading: readonly(pageLoading),
+    setRouteLoading,
+    setPageLoading,
+    showRouteLoading,
+    hideRouteLoading,
+    showPageLoading,
+    hidePageLoading
+  };
 });

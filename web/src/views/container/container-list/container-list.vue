@@ -123,8 +123,20 @@ let attachAddon: AttachAddon | null = null;
 let websocket: WebSocket | null = null;
 let sessionId = '';
 
+// 容器数据接口定义
+interface Container {
+  id: string;
+  name: string;
+  image: string;
+  status: string;
+  cpu: string;
+  memory: string;
+  network: string;
+  created: string;
+}
+
 // 容器数据
-const containers = ref([]);
+const containers = ref<Container[]>([]);
 
 // 表格列配置
 const columns = [

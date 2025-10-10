@@ -293,6 +293,11 @@ if ~/bin/$PROJECT_NAME --help > /dev/null 2>&1; then
 else
     echo "⚠️  警告：无法运行 $PROJECT_NAME --help"
 fi
+
+# 启动服务
+echo ""
+echo "启动服务..."
+cd ~/moox/server && ./start.sh
 EOF
     
     if [ $? -eq 0 ]; then

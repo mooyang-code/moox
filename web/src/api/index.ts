@@ -2,8 +2,6 @@ import axios from "axios";
 import router from "@/router";
 import { Message } from "@arco-design/web-vue";
 
-// 是否开启本地mock
-const MOCK_FLAG = import.meta.env.VITE_APP_OPEN_MOCK === "true";
 // 创建axios实例
 const service = axios.create({
   baseURL: ""

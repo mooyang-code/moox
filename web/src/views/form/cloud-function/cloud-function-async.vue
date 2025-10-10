@@ -206,10 +206,9 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
-import { useRouter } from 'vue-router';
 import { Message, Modal } from '@arco-design/web-vue';
 import { api } from '@/api/config';
-import { AsyncTaskManager, TaskStatus, asyncTaskManager } from '@/utils/async-task';
+import { AsyncTaskManager, asyncTaskManager } from '@/utils/async-task';
 import type { TaskStatusResponse } from '@/utils/async-task';
 
 // 接口定义
@@ -303,24 +302,24 @@ const handleTaskRestore = (taskId: string, status: TaskStatusResponse) => {
   
   // 继续轮询任务状态
   asyncTaskManager.startPolling(taskId, {
-    onProgress: (data) => {
-      currentTaskStatus.value = data;
+    onProgress: (_data) => {
+      currentTaskStatus.value = _data;
     },
-    onSuccess: (data) => {
-      handleTaskComplete(data);
+    onSuccess: (_data) => {
+      handleTaskComplete(_data);
     },
-    onFailed: (data) => {
-      handleTaskComplete(data);
+    onFailed: (_data) => {
+      handleTaskComplete(_data);
     },
-    onPartialSuccess: (data) => {
-      handleTaskComplete(data);
+    onPartialSuccess: (_data) => {
+      handleTaskComplete(_data);
     },
     showLoading: false
   });
 };
 
 // 任务完成处理
-const handleTaskComplete = (data: TaskStatusResponse) => {
+const handleTaskComplete = (_data: TaskStatusResponse) => {
   taskPolling.value = false;
   
   // 刷新数据
@@ -375,7 +374,7 @@ const executeBatchAdd = async () => {
 
   try {
     // 创建异步任务
-    const taskId = await asyncTaskManager.createAndExecuteTask('BATCH_CREATE_NODE', {
+    const taskId = await asyncTaskManager.createAsyncTask('BATCH_CREATE_NODE', {
       nodes
     });
 
@@ -383,17 +382,17 @@ const executeBatchAdd = async () => {
     
     // 开始轮询任务状态
     asyncTaskManager.startPolling(taskId, {
-      onProgress: (data) => {
-        currentTaskStatus.value = data;
+      onProgress: (_data) => {
+        currentTaskStatus.value = _data;
       },
-      onSuccess: (data) => {
-        handleTaskComplete(data);
+      onSuccess: (_data) => {
+        handleTaskComplete(_data);
       },
-      onFailed: (data) => {
-        handleTaskComplete(data);
+      onFailed: (_data) => {
+        handleTaskComplete(_data);
       },
-      onPartialSuccess: (data) => {
-        handleTaskComplete(data);
+      onPartialSuccess: (_data) => {
+        handleTaskComplete(_data);
       }
     });
     
@@ -435,7 +434,7 @@ const executeBatchDelete = async () => {
 
   try {
     // 创建异步任务
-    const taskId = await asyncTaskManager.createAndExecuteTask('BATCH_DELETE_NODE', {
+    const taskId = await asyncTaskManager.createAsyncTask('BATCH_DELETE_NODE', {
       nodes
     });
 
@@ -443,17 +442,17 @@ const executeBatchDelete = async () => {
     
     // 开始轮询任务状态
     asyncTaskManager.startPolling(taskId, {
-      onProgress: (data) => {
-        currentTaskStatus.value = data;
+      onProgress: (_data) => {
+        currentTaskStatus.value = _data;
       },
-      onSuccess: (data) => {
-        handleTaskComplete(data);
+      onSuccess: (_data) => {
+        handleTaskComplete(_data);
       },
-      onFailed: (data) => {
-        handleTaskComplete(data);
+      onFailed: (_data) => {
+        handleTaskComplete(_data);
       },
-      onPartialSuccess: (data) => {
-        handleTaskComplete(data);
+      onPartialSuccess: (_data) => {
+        handleTaskComplete(_data);
       }
     });
     
@@ -593,7 +592,7 @@ const reset = () => {
 };
 
 // 选择处理
-const select = (rowKeys: string[], rowKey: string, record: CloudFunction) => {
+const select = (_rowKeys: string[], rowKey: string, _record: CloudFunction) => {
   const index = selectedKeys.value.indexOf(rowKey);
   if (index > -1) {
     selectedKeys.value.splice(index, 1);
@@ -621,7 +620,7 @@ const onAdd = () => {
   Message.info('新增功能开发中...');
 };
 
-const onEdit = (record: CloudFunction) => {
+const onEdit = (_record: CloudFunction) => {
   Message.info('编辑功能开发中...');
 };
 
@@ -642,11 +641,11 @@ const onDelete = async (record: CloudFunction) => {
   }
 };
 
-const onDeploy = (record: CloudFunction) => {
+const onDeploy = (_record: CloudFunction) => {
   Message.info('部署功能开发中...');
 };
 
-const onViewNodeDetail = (record: CloudFunction) => {
+const onViewNodeDetail = (_record: CloudFunction) => {
   Message.info('查看详情功能开发中...');
 };
 

@@ -7,7 +7,7 @@ import { createSvgIconsPlugin } from "vite-plugin-svg-icons";
 import AutoImport from "unplugin-auto-import/vite";
 import { ArcoResolver } from "unplugin-vue-components/resolvers";
 import Components from "unplugin-vue-components/vite";
-import { viteMockServe } from "vite-plugin-mock";
+// import { viteMockServe } from "vite-plugin-mock";
 import eslintPlugin from "vite-plugin-eslint";
 /**
  * 创建 vite 插件
@@ -15,10 +15,11 @@ import eslintPlugin from "vite-plugin-eslint";
  */
 export const createVitePlugins = (viteEnv: ViteEnv): (PluginOption | PluginOption[])[] => {
   const env = viteEnv;
-  return [
+  const plugins = [
     vue(),
     // esLint 报错信息显示在浏览器界面上
-    eslintPlugin(),
+    // Temporarily disable eslint plugin during build to avoid rollup error
+    process.env.NODE_ENV === 'production' ? null : eslintPlugin(),
     vitePluginForArco({
       style: "css"
     }),
@@ -80,4 +81,6 @@ export const createVitePlugins = (viteEnv: ViteEnv): (PluginOption | PluginOptio
     //     `
     // })
   ];
+  
+  return plugins.filter(Boolean) as (PluginOption | PluginOption[])[];
 };

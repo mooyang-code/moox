@@ -868,7 +868,7 @@ const reset = () => {
 };
 
 // 选择处理
-const select = (rowKeys: string[], rowKey: string) => {
+const select = (_rowKeys: string[], rowKey: string) => {
   const index = selectedKeys.value.indexOf(rowKey);
   if (index > -1) {
     selectedKeys.value.splice(index, 1);
@@ -893,7 +893,7 @@ const selectAll = (checked: boolean) => {
 
 // 单个操作（保留原有实现）
 
-const onEdit = () => {
+const onEdit = (_record: CloudFunction) => {
   Message.info('编辑功能开发中...');
 };
 
@@ -936,11 +936,11 @@ const onDelete = async (record: CloudFunction) => {
   }
 };
 
-const onDeploy = () => {
+const onDeploy = (_record: CloudFunction) => {
   Message.info('部署功能开发中...');
 };
 
-const onViewNodeDetail = () => {
+const onViewNodeDetail = (_record: CloudFunction) => {
   Message.info('查看详情功能开发中...');
 };
 

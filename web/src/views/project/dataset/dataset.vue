@@ -280,7 +280,7 @@ const fetchProjects = async () => {
   }
 };
 
-const viewDetail = (dataset: any) => {
+const viewDetail = (_dataset: any) => {
   // 跳转到数据集详情页（如有需要）
   // router.push({ path: `/project/${currentProject.value.name}/dataset/${dataset.dataset_id}`, query: { projectId: currentProject.value.id } });
   Message.info('详情功能开发中');

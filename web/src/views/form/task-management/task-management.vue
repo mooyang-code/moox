@@ -261,7 +261,7 @@
         <a-descriptions-item label="数据集ID">{{ detailData.dataset_id }}</a-descriptions-item>
         <a-descriptions-item label="采集器类型">{{ detailData.collector_type }}</a-descriptions-item>
         <a-descriptions-item label="数据源">{{ detailData.source_name }}</a-descriptions-item>
-        <a-descriptions-item label="分配类型">{{ getAssignmentText(detailData.assignment_type) }}</a-descriptions-item>
+        <a-descriptions-item label="分配类型">{{ getAssignmentText(detailData.assignment_type || '') }}</a-descriptions-item>
         <a-descriptions-item label="负载均衡策略">{{ detailData.load_balance_strategy }}</a-descriptions-item>
         <a-descriptions-item label="优先级">{{ detailData.priority }}</a-descriptions-item>
         <a-descriptions-item label="启用状态">
@@ -287,16 +287,16 @@
         </a-descriptions-item>
         <a-descriptions-item label="对象匹配模式">{{ detailData.object_pattern || '-' }}</a-descriptions-item>
         <a-descriptions-item label="目标对象">
-          <pre>{{ formatJSON(detailData.target_objects) }}</pre>
+          <pre>{{ formatJSON(detailData.target_objects || '') }}</pre>
         </a-descriptions-item>
         <a-descriptions-item label="强制指定对象">
-          <pre>{{ formatJSON(detailData.force_objects) }}</pre>
+          <pre>{{ formatJSON(detailData.force_objects || '') }}</pre>
         </a-descriptions-item>
         <a-descriptions-item label="采集参数">
-          <pre>{{ formatJSON(detailData.collect_params) }}</pre>
+          <pre>{{ formatJSON(detailData.collect_params || '') }}</pre>
         </a-descriptions-item>
         <a-descriptions-item label="调度配置">
-          <pre>{{ formatJSON(detailData.schedule_config) }}</pre>
+          <pre>{{ formatJSON(detailData.schedule_config || '') }}</pre>
         </a-descriptions-item>
         <a-descriptions-item label="最后分发结果">
           {{ detailData.last_dispatch_result || '-' }}
@@ -513,11 +513,12 @@ const getTaskList = async () => {
       }
     });
 
-    if (response.code === 200) {
-      taskList.value = response.data || [];
-      pagination.value.total = response.data ? response.data.length : 0;
+    const data = response as any;
+    if (data.code === 200) {
+      taskList.value = data.data || [];
+      pagination.value.total = data.data ? data.data.length : 0;
     } else {
-      Message.error(response.message || '获取任务列表失败');
+      Message.error(data.message || '获取任务列表失败');
     }
   } catch (error) {
     console.error('获取任务列表失败:', error);
@@ -535,8 +536,9 @@ const getNodeList = async () => {
         'app_key': '2521e0d21b6be0347b72bca93904a0dd'
       }
     });
-    if (response.code === 200) {
-      nodeOptions.value = response.data || [];
+    const data = response as any;
+    if (data.code === 200) {
+      nodeOptions.value = data.data || [];
     }
   } catch (error) {
     console.error('获取节点列表失败:', error);
@@ -548,7 +550,7 @@ const onAdd = () => {
   addForm.value = {
     task_id: '',
     project_id: selectedProjectId.value || '',
-    dataset_id: null,
+    dataset_id: '',
     task_type: 'data_collect',
     collector_type: '',
     source_name: '',
@@ -570,7 +572,7 @@ const onAdd = () => {
 
 const onUpdate = (record: TaskConfig) => {
   title.value = '修改任务';
-  addForm.value = { ...record };
+  addForm.value = { ...record, priority: String(record.priority) };
   
   // 解析 assigned_nodes
   try {
@@ -628,12 +630,13 @@ const handleOk = async () => {
         }
       });
 
-      if (response.code === 200) {
+      const data = response as any;
+      if (data.code === 200) {
         Message.success(title.value + '成功');
         open.value = false;
         getTaskList();
       } else {
-        Message.error(response.message || title.value + '失败');
+        Message.error(data.message || title.value + '失败');
       }
     } catch (error) {
       if (error instanceof SyntaxError) {
@@ -655,11 +658,12 @@ const handleDelete = async (record: TaskConfig) => {
       }
     });
 
-    if (response.code === 200) {
+    const data = response as any;
+    if (data.code === 200) {
       Message.success('删除成功');
       getTaskList();
     } else {
-      Message.error(response.message || '删除失败');
+      Message.error(data.message || '删除失败');
     }
   } catch (error) {
     console.error('删除失败:', error);
@@ -697,11 +701,12 @@ const handleEnableChange = async (record: TaskConfig, value: boolean) => {
       }
     });
 
-    if (response.code === 200) {
+    const data = response as any;
+    if (data.code === 200) {
       Message.success('状态更新成功');
       getTaskList();
     } else {
-      Message.error(response.message || '状态更新失败');
+      Message.error(data.message || '状态更新失败');
     }
   } catch (error) {
     console.error('状态更新失败:', error);
@@ -729,12 +734,13 @@ const handleBatchUpdateEnabled = async () => {
       }
     });
 
-    if (response.code === 200) {
+    const data = response as any;
+    if (data.code === 200) {
       Message.success('批量更新成功');
       batchEnableVisible.value = false;
       getTaskList();
     } else {
-      Message.error(response.message || '批量更新失败');
+      Message.error(data.message || '批量更新失败');
     }
   } catch (error) {
     console.error('批量更新失败:', error);

@@ -135,8 +135,15 @@ const containers = ref([
   { id: 'container-003', name: 'moox-redis-1' }
 ]);
 
+// 终端行接口定义
+interface TerminalLine {
+  type: string;
+  content?: string;
+  prompt?: string;
+}
+
 // 终端输出
-const terminalLines = ref([
+const terminalLines = ref<TerminalLine[]>([
   { type: 'output', content: '欢迎使用 MooX 容器终端' },
   { type: 'output', content: '请选择容器并连接以开始使用' }
 ]);

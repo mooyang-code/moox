@@ -115,8 +115,8 @@
         <a-descriptions-item label="数据集ID">{{ detailData.dataset_id }}</a-descriptions-item>
         <a-descriptions-item label="执行节点">{{ detailData.node_id }}</a-descriptions-item>
         <a-descriptions-item label="执行状态">
-          <a-tag :color="getStatusColor(detailData.status)">
-            {{ getStatusText(detailData.status) }}
+          <a-tag :color="getStatusColor(detailData.status || 0)">
+            {{ getStatusText(detailData.status || 0) }}
           </a-tag>
         </a-descriptions-item>
         <a-descriptions-item label="开始时间">{{ detailData.start_time }}</a-descriptions-item>
@@ -129,13 +129,13 @@
       
       <a-descriptions :column="1" bordered>
         <a-descriptions-item label="目标对象列表">
-          <pre>{{ formatJSON(detailData.target_objects) }}</pre>
+          <pre>{{ formatJSON(detailData.target_objects || '') }}</pre>
         </a-descriptions-item>
         <a-descriptions-item label="执行参数">
-          <pre>{{ formatJSON(detailData.execution_params) }}</pre>
+          <pre>{{ formatJSON(detailData.execution_params || '') }}</pre>
         </a-descriptions-item>
         <a-descriptions-item label="执行结果">
-          <pre>{{ formatJSON(detailData.result) }}</pre>
+          <pre>{{ formatJSON(detailData.result || '') }}</pre>
         </a-descriptions-item>
       </a-descriptions>
     </a-modal>
@@ -336,11 +336,12 @@ const getInstanceList = async () => {
       }
     });
 
-    if (response.code === 200) {
-      instanceList.value = response.data || [];
-      pagination.value.total = response.data ? response.data.length : 0;
+    const data = response as any;
+    if (data.code === 200) {
+      instanceList.value = data.data || [];
+      pagination.value.total = data.data ? data.data.length : 0;
     } else {
-      Message.error(response.message || '获取任务实例列表失败');
+      Message.error(data.message || '获取任务实例列表失败');
     }
   } catch (error) {
     console.error('获取任务实例列表失败:', error);
@@ -372,10 +373,11 @@ const fetchLogs = async () => {
       }
     });
 
-    if (response.code === 200) {
-      logContent.value = response.data || '暂无日志';
+    const data = response as any;
+    if (data.code === 200) {
+      logContent.value = data.data || '暂无日志';
     } else {
-      Message.error(response.message || '获取日志失败');
+      Message.error(data.message || '获取日志失败');
     }
   } catch (error) {
     console.error('获取日志失败:', error);
@@ -398,11 +400,12 @@ const handleRetry = async (record: TaskInstance) => {
       }
     });
 
-    if (response.code === 200) {
+    const data = response as any;
+    if (data.code === 200) {
       Message.success('重试成功');
       getInstanceList();
     } else {
-      Message.error(response.message || '重试失败');
+      Message.error(data.message || '重试失败');
     }
   } catch (error) {
     console.error('重试失败:', error);
@@ -421,11 +424,12 @@ const handleCancel = async (record: TaskInstance) => {
       }
     });
 
-    if (response.code === 200) {
+    const data = response as any;
+    if (data.code === 200) {
       Message.success('取消成功');
       getInstanceList();
     } else {
-      Message.error(response.message || '取消失败');
+      Message.error(data.message || '取消失败');
     }
   } catch (error) {
     console.error('取消失败:', error);

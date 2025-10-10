@@ -398,7 +398,7 @@ const refreshServices = async () => {
 };
 
 // 启动服务
-const startService = (container: any, service: any) => {
+const startService = (_container: any, service: any) => {
   Modal.confirm({
     title: '确认启动',
     content: `确定要启动服务 ${service.name} 吗？`,
@@ -411,7 +411,7 @@ const startService = (container: any, service: any) => {
 };
 
 // 停止服务
-const stopService = (container: any, service: any) => {
+const stopService = (_container: any, service: any) => {
   Modal.confirm({
     title: '确认停止',
     content: `确定要停止服务 ${service.name} 吗？`,
@@ -424,7 +424,7 @@ const stopService = (container: any, service: any) => {
 };
 
 // 重启服务
-const restartService = (container: any, service: any) => {
+const restartService = (_container: any, service: any) => {
   Modal.confirm({
     title: '确认重启',
     content: `确定要重启服务 ${service.name} 吗？`,
@@ -435,7 +435,7 @@ const restartService = (container: any, service: any) => {
 };
 
 // 查看服务日志
-const viewServiceLogs = (container: any, service: any) => {
+const viewServiceLogs = (_container: any, service: any) => {
   Message.info(`查看服务 ${service.name} 的日志`);
 };
 

@@ -219,8 +219,7 @@
 </template>
 
 <script setup lang="ts" name="Home">
-import { ref, onMounted, computed, watch, nextTick, onUnmounted } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { ref, onMounted, watch, nextTick, onUnmounted } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import VChart from '@visactor/vchart';
 import { useProjectStore } from '@/store/modules/project';
@@ -230,8 +229,6 @@ import TargetBox from "@/views/home/components/target-box.vue";
 import Finance from "@/views/home/components/finance.vue";
 import DataBox from "@/views/home/components/data-box.vue";
 
-const route = useRoute();
-const router = useRouter();
 
 // 使用项目状态管理
 const projectStore = useProjectStore();

@@ -189,8 +189,8 @@ import {
   listStorageDevices
 } from '@/api/storage-config';
 import { searchFields, type FieldDetailInfo, type AuthInfo } from '@/api/field';
-import { listProjects, type Project, type Dataset } from '@/api/project';
-import { getDeviceTypeColor, getDeviceTypeName } from '@/constants/storage-device';
+import { listProjects, type Dataset } from '@/api/project';
+import { getDeviceTypeColor } from '@/constants/storage-device';
 
 // Props定义
 interface Props {

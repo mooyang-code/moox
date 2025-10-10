@@ -49,7 +49,7 @@ help:
 	@echo "  make build-linux VERSION=v1.0.0  - 构建Linux版本"
 	@echo "  make build-all VERSION=v1.0.0    - 构建所有平台版本"
 	@echo "  make release VERSION=v1.0.0      - 创建发布包"
-	@echo "  make deploy SERVER=user@host     - 自动检测平台并部署"
+	@echo "  make deploy SERVER=user@host [platform] - 部署到远程服务器，可选平台参数"
 
 # Install dependencies
 deps:
@@ -246,10 +246,30 @@ create-windows-scripts:
 deploy:
 	@if [ -z "$(SERVER)" ]; then \
 		echo "❌ 请指定服务器地址"; \
-		echo "使用方法: make deploy SERVER=user@host [PLATFORM=linux|darwin]"; \
+		echo "使用方法: make deploy SERVER=user@host [platform]"; \
+		echo "          平台参数可选: linux|darwin"; \
+		echo "示例:"; \
+		echo "  make deploy SERVER=ubuntu@43.132.204.177         # 自动检测平台"; \
+		echo "  make deploy SERVER=ubuntu@43.132.204.177 linux   # 指定Linux平台"; \
 		exit 1; \
 	fi
-	@./scripts/deploy.sh $(SERVER) $(PLATFORM)
+	@if [ ! -f "./scripts/deploy.sh" ]; then \
+		echo "❌ 部署脚本 ./scripts/deploy.sh 不存在"; \
+		exit 1; \
+	fi
+	@if [ -n "$(filter linux darwin,$(word 2,$(MAKECMDGOALS)))" ]; then \
+		echo "📦 使用指定平台: $(word 2,$(MAKECMDGOALS))"; \
+		./scripts/deploy.sh $(SERVER) $(word 2,$(MAKECMDGOALS)); \
+	else \
+		echo "📦 自动检测平台"; \
+		./scripts/deploy.sh $(SERVER); \
+	fi
+
+# 支持平台参数作为目标
+linux:
+	@:
+darwin:
+	@:
 
 # Clean build artifacts
 clean:

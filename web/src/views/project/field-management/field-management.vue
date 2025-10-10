@@ -1076,18 +1076,17 @@ const handleOk = async () => {
           dataset_ids: updateDatasetIds,
           field_id: currentEditingFieldId.value,
           field_name: addForm.value.fieldName,
-          interface_name: addForm.value.interfaceName,
+          interface_name: addForm.value.fieldNameEn,
           desc: addForm.value.fieldDescription,
           required_flag: addForm.value.isRequired ? 1 : -1,
           unique_flag: addForm.value.isUnique ? 1 : -1,
           table_type: addForm.value.isMetadata ? 1 : 2,
-          parent_field_id: addForm.value.parentFieldId || 0,
-          level_info: [],
+          parent_field_id: 0,
           field_format_type: {
             field_primary_format: Number(addForm.value.primaryFormat),
             field_secondary_format: Number(addForm.value.secondaryFormat)
           },
-          value_lib_id: addForm.value.valueLibId || 0,
+          value_lib_id: 0,
           validation_rule: addForm.value.fieldValidationRules ? JSON.parse(addForm.value.fieldValidationRules) : undefined,
           write_example: addForm.value.writeExample,
           remark: addForm.value.remark,
@@ -1455,7 +1454,7 @@ const handleImportOk = async () => {
         const validationRule = parseValidationRule(fieldConfig.validation_rule, fieldPrimaryFormat);
         
         // 字段类型固定为1（基础字段类型）
-        let fieldType = 1;
+        // let fieldType = 1;
 
         // 构建UpsertField请求参数
         const upsertParams: UpsertFieldReq = {

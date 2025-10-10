@@ -90,6 +90,7 @@ export interface ListFieldRoutesRequest {
   field_id?: number; // 字段ID过滤条件，使用999999999表示所有字段
   dataset_id?: number; // 数据集ID过滤条件，为0表示该项目下所有的数据集
   device_id?: number;
+  data_category?: string; // 数据类别过滤条件
   page_info?: {
     page_no: number;
     page_size: number;
@@ -728,7 +729,7 @@ export const deleteObjectRoute = async (params: DeleteObjectRouteRequest): Promi
 export interface CreateFieldRouteRequest {
   project_id: number;
   field_id: number;
-  data_category: number;
+  dataset_id?: number;
   device_id: number;
 }
 
@@ -743,7 +744,7 @@ export interface CreateFieldRouteResponse {
 export interface UpdateFieldRouteRequest {
   route_id: number;
   field_id: number;
-  data_category: number;
+  dataset_id?: number;
   device_id: number;
 }
 
@@ -812,7 +813,6 @@ export const updateFieldRoute = async (params: UpdateFieldRouteRequest): Promise
       },
       route_id: params.route_id,
       field_id: params.field_id,
-      data_category: params.data_category,
       device_id: params.device_id
     });
 

@@ -216,7 +216,7 @@ import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { IconSearch, IconRefresh, IconInfoCircle, IconEye, IconCaretUp, IconCaretDown } from '@arco-design/web-vue/es/icon';
 import { useRoute } from 'vue-router';
-import { listProjects, type Project, type Dataset } from '@/api/project';
+import { listProjects, type Dataset } from '@/api/project';
 import { queryObjectAPI, searchDataAPI, type ObjectRow, type DataRow, type DataKey, type FieldValue } from '@/api/modules/data';
 import { searchFields, type FieldDetailInfo } from '@/api/field';
 
@@ -268,22 +268,22 @@ const pagination = ref({
 });
 
 // 分页配置，用于表格组件
-const paginationConfig = computed(() => {
-  const config = {
-    ...pagination.value,
-    showTotal: true,
-    showJumper: true,
-    showPageSize: true,
-    hideOnSinglePage: false, // 强制显示分页，即使只有一页
-    pageSizeOptions: [15, 25, 50, 100],
-    pageSizeProps: {
-      style: { minWidth: '120px' }
-    }
-  };
-
-  console.log('分页配置:', config);
-  return config;
-});
+// const paginationConfig = computed(() => {
+//   const config = {
+//     ...pagination.value,
+//     showTotal: true,
+//     showJumper: true,
+//     showPageSize: true,
+//     hideOnSinglePage: false, // 强制显示分页，即使只有一页
+//     pageSizeOptions: [15, 25, 50, 100],
+//     pageSizeProps: {
+//       style: { minWidth: '120px' }
+//     }
+//   };
+//
+//   console.log('分页配置:', config);
+//   return config;
+// });
 
 // 字段信息
 const displayFields = ref<FieldDetailInfo[]>([]);
@@ -339,7 +339,7 @@ const fieldDataList = computed(() => {
   return actualDisplayFields.value
     .filter(field => currentDataRow.value?.fields?.[field.interface_name])
     .map(field => {
-      const fieldValue = currentDataRow.value.fields[field.interface_name];
+      const fieldValue = currentDataRow.value!.fields[field.interface_name];
       return {
         field_name: field.field_name || field.interface_name,
         field_value: formatFieldValue(fieldValue)

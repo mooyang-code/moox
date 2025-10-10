@@ -4,7 +4,7 @@ import { secureLoginManager } from "@/utils/crypto";
 // 安全登录（新版本）
 export const loginAPI = async (data: { username: string; password: string; verifyCode: string }) => {
   // 使用安全登录管理器进行登录
-  return await secureLoginManager.login(data.username, data.password, data.verifyCode);
+  return await secureLoginManager.login(data.username, data.password);
 };
 
 // 获取登录盐值

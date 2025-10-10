@@ -83,27 +83,27 @@ func (w *NodeCreationWorker) handleMessage(ctx context.Context, msg queue.NodeCr
 	// 1. 验证输入
 	if err := w.validateMessage(&msg); err != nil {
 		log.ErrorContextf(ctx, "[NodeCreationWorker-%d] %v", workerID, err)
-		w.handleTaskError(ctx, msg.TaskID, msg.ItemID, err.Error())
+		w.handleTaskError(ctx, msg.TaskID, msg.ItemID, "validateMessage-"+err.Error())
 		return
 	}
 
 	// 2. 准备云服务
 	cloudProvider, err := w.prepareCloudProvider(ctx, msg.CloudAccountID, msg.Region, workerID)
 	if err != nil {
-		w.handleTaskError(ctx, msg.TaskID, msg.ItemID, err.Error())
+		w.handleTaskError(ctx, msg.TaskID, msg.ItemID, "prepareCloudProvider-"+err.Error())
 		return
 	}
 
 	// 3. 创建云资源（命名空间和函数）
 	functionInfo, err := w.createCloudResources(ctx, cloudProvider, &msg, workerID)
 	if err != nil {
-		w.handleTaskError(ctx, msg.TaskID, msg.ItemID, err.Error())
+		w.handleTaskError(ctx, msg.TaskID, msg.ItemID, "createCloudResources-"+err.Error())
 		return
 	}
 
 	// 4. 保存节点到数据库
 	if err := w.saveNodeToDB(ctx, &msg, functionInfo, workerID); err != nil {
-		w.handleTaskError(ctx, msg.TaskID, msg.ItemID, err.Error())
+		w.handleTaskError(ctx, msg.TaskID, msg.ItemID, "saveNodeToDB-"+err.Error())
 		return
 	}
 

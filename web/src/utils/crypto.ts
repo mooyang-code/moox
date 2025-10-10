@@ -1,7 +1,9 @@
 /**
  * 安全加密工具模块
- * 使用 Web Crypto API 实现 AES-GCM 加密，与后端兼容
+ * 优先使用 Web Crypto API，HTTP 环境下降级为 node-forge
  */
+import CryptoJS from 'crypto-js';
+import forge from 'node-forge';
 
 /**
  * 生成设备指纹
@@ -35,15 +37,40 @@ export function generateDeviceId(): string {
   }
   
   /**
+   * 检查 Web Crypto API 是否可用
+   */
+  function isWebCryptoAvailable(): boolean {
+    return typeof crypto !== 'undefined' && 
+           typeof crypto.subtle !== 'undefined' && 
+           typeof crypto.getRandomValues !== 'undefined';
+  }
+
+  /**
+   * 从盐值和时间戳派生加密密钥材料
+   */
+  async function deriveKeyMaterial(salt: string, timestamp: number): Promise<ArrayBuffer | string> {
+    const keyMaterial = salt + timestamp.toString();
+    
+    if (isWebCryptoAvailable()) {
+      // Web Crypto API 方式
+      const encoder = new TextEncoder();
+      const data = encoder.encode(keyMaterial);
+      return await crypto.subtle.digest('SHA-256', data);
+    } else {
+      // CryptoJS 降级方式
+      return CryptoJS.SHA256(keyMaterial).toString();
+    }
+  }
+
+  /**
    * 从盐值和时间戳派生加密密钥
    */
   async function deriveEncryptionKey(salt: string, timestamp: number): Promise<CryptoKey> {
-    const keyMaterial = salt + timestamp.toString();
-    const encoder = new TextEncoder();
-    const data = encoder.encode(keyMaterial);
-    
-    // 使用 SHA-256 生成密钥材料
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    if (!isWebCryptoAvailable()) {
+      throw new Error('Web Crypto API 不可用，请确保在 HTTPS 环境下运行');
+    }
+
+    const hashBuffer = await deriveKeyMaterial(salt, timestamp) as ArrayBuffer;
     
     // 导入为 AES-GCM 密钥
     return await crypto.subtle.importKey(
@@ -55,6 +82,69 @@ export function generateDeviceId(): string {
     );
   }
   
+
+  /**
+   * node-forge 降级加密实现（真正的 AES-GCM）
+   */
+  function encryptPasswordWithForge(password: string, salt: string, timestamp: number): string {
+    console.log('🔧 node-forge AES-GCM 加密');
+    console.log('🔧 加密参数:', { 
+      salt, 
+      timestamp, 
+      password: password.substring(0, 3) + '***',
+      passwordLength: password.length 
+    });
+    
+    try {
+      // 1. 密钥派生：与 Go 后端完全一致
+      const keyMaterial = salt + timestamp.toString();
+      console.log('🔑 密钥材料:', keyMaterial);
+      
+      // 2. SHA256 生成 32 字节密钥
+      const md = forge.md.sha256.create();
+      md.update(keyMaterial);
+      const keyBytes = md.digest().getBytes();
+      console.log('🔑 密钥长度:', keyBytes.length, '字节');
+      
+      // 3. 生成 12 字节随机 IV（GCM 标准）
+      const iv = forge.random.getBytesSync(12);
+      console.log('🎲 IV 长度:', iv.length, '字节');
+      
+      // 4. 创建 AES-GCM 加密器
+      const cipher = forge.cipher.createCipher('AES-GCM', keyBytes);
+      cipher.start({
+        iv: iv,
+        tagLength: 128 // 16 字节认证标签
+      });
+      
+      // 5. 加密数据
+      cipher.update(forge.util.createBuffer(password));
+      cipher.finish();
+      
+      const encrypted = cipher.output.getBytes();
+      const tag = cipher.mode.tag.getBytes();
+      
+      console.log('🔒 密文长度:', encrypted.length, '字节');
+      console.log('🏷️ 认证标签长度:', tag.length, '字节');
+      
+      // 6. 按照 Go AES-GCM 格式组合：iv + ciphertext + tag
+      const combined = iv + encrypted + tag;
+      console.log('📦 组合数据长度:', combined.length, '字节');
+      console.log('📦 格式: iv(12) + ciphertext + tag(16)');
+      
+      // 7. Base64 编码
+      const result = forge.util.encode64(combined);
+      console.log('📦 最终 Base64 长度:', result.length);
+      console.log('📦 Base64 预览:', result.substring(0, 40) + '...');
+      
+      return result;
+      
+    } catch (error) {
+      console.error('❌ node-forge 加密失败:', error);
+      throw new Error('AES-GCM 加密失败: ' + error);
+    }
+  }
+
   /**
    * 使用 AES-GCM 加密密码（与后端兼容）
    */
@@ -62,37 +152,51 @@ export function generateDeviceId(): string {
     try {
       console.log('🔐 开始AES-GCM加密...', { salt, timestamp });
       
-      const key = await deriveEncryptionKey(salt, timestamp);
-      const encoder = new TextEncoder();
-      const data = encoder.encode(password);
-      
-      // 生成随机 IV（12字节用于 GCM）
-      const iv = crypto.getRandomValues(new Uint8Array(12));
-      
-      // 使用 AES-GCM 加密
-      const encrypted = await crypto.subtle.encrypt(
-        {
-          name: 'AES-GCM',
-          iv: iv
-        },
-        key,
-        data
-      );
-      
-      // 组合 IV + 密文
-      const combined = new Uint8Array(iv.length + encrypted.byteLength);
-      combined.set(iv);
-      combined.set(new Uint8Array(encrypted), iv.length);
-      
-      // Base64 编码
-      const result = btoa(String.fromCharCode(...combined));
-      console.log('✅ AES-GCM加密成功', { 
-        passwordLength: password.length,
-        encryptedLength: result.length,
-        encrypted: result 
-      });
-      
-      return result;
+      if (isWebCryptoAvailable()) {
+        // 使用 Web Crypto API
+        const key = await deriveEncryptionKey(salt, timestamp);
+        const encoder = new TextEncoder();
+        const data = encoder.encode(password);
+        
+        // 生成随机 IV（12字节用于 GCM）
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        
+        // 使用 AES-GCM 加密
+        const encrypted = await crypto.subtle.encrypt(
+          {
+            name: 'AES-GCM',
+            iv: iv
+          },
+          key,
+          data
+        );
+        
+        // 组合 IV + 密文
+        const combined = new Uint8Array(iv.length + encrypted.byteLength);
+        combined.set(iv);
+        combined.set(new Uint8Array(encrypted), iv.length);
+        
+        // Base64 编码
+        const result = btoa(String.fromCharCode(...combined));
+        console.log('✅ Web Crypto API 加密成功', { 
+          passwordLength: password.length,
+          encryptedLength: result.length,
+          encrypted: result 
+        });
+        
+        return result;
+      } else {
+        // 降级使用 node-forge (真正的 AES-GCM)
+        console.log('🔄 降级使用 node-forge AES-GCM 加密...');
+        const result = encryptPasswordWithForge(password, salt, timestamp);
+        console.log('✅ node-forge AES-GCM 加密成功', { 
+          passwordLength: password.length,
+          encryptedLength: result.length,
+          encrypted: result 
+        });
+        
+        return result;
+      }
     } catch (error) {
       console.error('❌ AES-GCM加密失败:', error);
       throw new Error('密码加密失败');

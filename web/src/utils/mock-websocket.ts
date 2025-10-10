@@ -4,10 +4,9 @@
  */
 
 export class MockWebSocket {
-  private url: string;
-  private readyState: number = WebSocket.CONNECTING;
+  private _url: string;
+  private _readyState: number = WebSocket.CONNECTING;
   private listeners: { [key: string]: Function[] } = {};
-  private sessionId: string;
   private currentPath: string = '/root';
   private commandHistory: string[] = [];
 
@@ -18,20 +17,14 @@ export class MockWebSocket {
   static readonly CLOSED = 3;
 
   constructor(url: string) {
-    this.url = url;
-    this.sessionId = this.extractSessionId(url);
+    this._url = url;
     
     // 模拟连接延迟
     setTimeout(() => {
-      this.readyState = WebSocket.OPEN;
+      this._readyState = WebSocket.OPEN;
       this.dispatchEvent('open', {});
       this.sendWelcomeMessage();
     }, 500);
-  }
-
-  private extractSessionId(url: string): string {
-    const match = url.match(/session_id=([^&]+)/);
-    return match ? match[1] : 'mock_session';
   }
 
   private sendWelcomeMessage() {
@@ -217,16 +210,16 @@ export class MockWebSocket {
 
   // 模拟WebSocket的close方法
   close() {
-    this.readyState = WebSocket.CLOSING;
+    this._readyState = WebSocket.CLOSING;
     setTimeout(() => {
-      this.readyState = WebSocket.CLOSED;
+      this._readyState = WebSocket.CLOSED;
       this.dispatchEvent('close', {});
     }, 100);
   }
 
   // WebSocket属性
-  get url() { return this.url; }
-  get readyState() { return this.readyState; }
+  get url() { return this._url; }
+  get readyState() { return this._readyState; }
 
   // 事件处理器属性
   onopen: ((event: Event) => void) | null = null;
