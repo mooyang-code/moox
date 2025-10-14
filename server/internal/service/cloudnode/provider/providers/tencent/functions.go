@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"encoding/json"
+
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 	scf "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf/v20180416"
 )
@@ -24,7 +25,10 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 
 	// 设置代码
 	request.Code = &scf.Code{
-		ZipFile: common.StringPtr(req.ZipFile),
+		//ZipFile: common.StringPtr(req.ZipFile),
+		CosBucketName:   common.StringPtr("moox-scf-1255382561"),
+		CosObjectName:   common.StringPtr("/collector-scf.zip"),
+		CosBucketRegion: common.StringPtr("ap-guangzhou"),
 	}
 
 	// 设置内存和超时
@@ -61,7 +65,7 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 		if strings.Contains(err.Error(), "ResourceInUse.Function") {
 			return nil, fmt.Errorf("function already exists: %s", req.FunctionName)
 		}
-		return nil, fmt.Errorf("failed to create function: %w", err)
+		return nil, fmt.Errorf("failed to create function: %w, Timeout: %d", err, *request.Timeout)
 	}
 
 	p.logInfo(ctx, "Function created successfully, RequestId: %s", *response.Response.RequestId)

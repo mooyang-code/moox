@@ -225,8 +225,8 @@ func (w *NodeCreationWorker) ensureFunction(ctx context.Context, cloudProvider p
 		ZipFile:      zipBase64,
 		Runtime:      "Go1",
 		Description:  fmt.Sprintf("由moox为节点 %s 创建", msg.NodeID),
-		MemorySize:   128,
-		Timeout:      60,
+		MemorySize:   1024, // 运行内存MB
+		Timeout:      240,  // 创建超时秒
 		Environment: map[string]string{
 			"NODE_ID": msg.NodeID,
 			"REGION":  msg.Region,
@@ -240,7 +240,7 @@ func (w *NodeCreationWorker) ensureFunction(ctx context.Context, cloudProvider p
 			log.InfoContextf(ctx, "[NodeCreationWorker-%d] 函数 %s 已存在，获取现有函数信息", workerID, msg.FunctionName)
 			return w.getExistingFunction(ctx, cloudProvider, msg.FunctionName, msg.Namespace, workerID)
 		}
-		log.ErrorContextf(ctx, "[NodeCreationWorker-%d] 创建云函数失败: %v", workerID, err)
+		log.ErrorContextf(ctx, "[NodeCreationWorker-%d] 创建云函数失败: %v;", workerID, err)
 		return nil, fmt.Errorf("创建云函数失败: %w", err)
 	}
 

@@ -45,6 +45,7 @@ func NewProvider(config *Config) (*Provider, error) {
 	// 配置客户端
 	cpf := profile.NewClientProfile()
 	cpf.HttpProfile.Endpoint = "scf.tencentcloudapi.com"
+	cpf.HttpProfile.ReqTimeout = 240
 
 	// 创建SCF客户端
 	client, err := scf.NewClient(credential, region, cpf)
@@ -60,7 +61,6 @@ func NewProvider(config *Config) (*Provider, error) {
 		extraConfig: config.ExtraConfig,
 	}, nil
 }
-
 
 // logInfo 记录信息日志
 func (p *Provider) logInfo(ctx context.Context, format string, args ...interface{}) {
