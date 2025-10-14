@@ -118,7 +118,7 @@
           :data="functionList"
           :bordered="{ cell: true }"
           :loading="loading"
-          :scroll="{ x: 1320, y: '100%' }"
+          :scroll="{ x: '100%', y: '100%', minWidth: 1200 }"
           :pagination="paginationConfig"
           :row-selection="taskPolling ? undefined : { type: 'checkbox', showCheckedAll: true }"
           :selected-keys="selectedKeys"
@@ -133,7 +133,6 @@
                 <a-link @click="onViewNodeDetail(record)">{{ record.node_id }}</a-link>
               </template>
             </a-table-column>
-            <a-table-column title="云账户ID" data-index="cloud_account_id" :width="120"></a-table-column>
             <a-table-column title="命名空间" data-index="namespace" :width="120"></a-table-column>
             <a-table-column title="节点类型" data-index="node_type" :width="100">
               <template #cell="{ record }">
@@ -313,6 +312,75 @@
       v-model="cloudAccountManageVisible" 
       @refresh="loadCloudAccounts"
     />
+
+    <!-- 节点详情弹窗 -->
+    <a-modal
+      v-model:visible="nodeDetailVisible"
+      title="云函数节点详情"
+      :width="800"
+      :footer="false"
+      :mask-closable="true"
+    >
+      <div v-if="selectedNodeDetail">
+        <a-descriptions
+          :column="2"
+          bordered
+          :label-style="{ fontWeight: 'bold', width: '140px' }"
+        >
+          <a-descriptions-item label="节点ID">
+            {{ selectedNodeDetail.node_id }}
+          </a-descriptions-item>
+          <a-descriptions-item label="云账户ID">
+            {{ selectedNodeDetail.cloud_account_id }}
+          </a-descriptions-item>
+          <a-descriptions-item label="命名空间">
+            {{ selectedNodeDetail.namespace || '-' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="节点类型">
+            <a-tag bordered size="small" :color="selectedNodeDetail.node_type === 'scf' ? 'blue' : 'orange'">
+              {{ selectedNodeDetail.node_type === 'scf' ? '云函数' : '服务器' }}
+            </a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="地区">
+            {{ getRegionName(selectedNodeDetail.region) }}
+          </a-descriptions-item>
+          <a-descriptions-item label="IP地址">
+            {{ selectedNodeDetail.ip_address || '-' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="版本">
+            {{ selectedNodeDetail.version || '-' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="容量">
+            {{ selectedNodeDetail.capacity || '-' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="当前负载">
+            {{ selectedNodeDetail.current_load || '-' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="状态">
+            <a-tag bordered size="small" :color="getStatusColor(selectedNodeDetail.status)">
+              {{ getStatusText(selectedNodeDetail.status) }}
+            </a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="支持的采集器" :span="2">
+            <div v-if="selectedNodeDetail.supported_collectors">
+              <a-tag v-for="item in parseJSON(selectedNodeDetail.supported_collectors)" :key="item" 
+                bordered size="small" style="margin: 2px">{{ item }}</a-tag>
+            </div>
+            <span v-else>-</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="元数据" :span="2">
+            <div v-if="selectedNodeDetail.metadata" style="max-height: 200px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; background: #f6f8fa; padding: 8px; border-radius: 4px;">{{ formatMetadata(selectedNodeDetail.metadata) }}</div>
+            <span v-else>-</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="创建时间">
+            {{ formatDateTime(selectedNodeDetail.created_at) }}
+          </a-descriptions-item>
+          <a-descriptions-item label="更新时间">
+            {{ formatDateTime(selectedNodeDetail.updated_at) }}
+          </a-descriptions-item>
+        </a-descriptions>
+      </div>
+    </a-modal>
 
   </div>
 </template>
@@ -834,6 +902,32 @@ const parseJSON = (str: string) => {
   }
 };
 
+const formatDateTime = (dateTime: string) => {
+  if (!dateTime) return '-';
+  try {
+    return new Date(dateTime).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  } catch {
+    return dateTime;
+  }
+};
+
+const formatMetadata = (metadata: string) => {
+  if (!metadata) return '-';
+  try {
+    const parsed = JSON.parse(metadata);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return metadata;
+  }
+};
+
 // 分页相关
 const updateCurrentPageData = () => {
   const startIndex = (pagination.value.current - 1) * pagination.value.pageSize;
@@ -940,8 +1034,9 @@ const onDeploy = (_record: CloudFunction) => {
   Message.info('部署功能开发中...');
 };
 
-const onViewNodeDetail = (_record: CloudFunction) => {
-  Message.info('查看详情功能开发中...');
+const onViewNodeDetail = (record: CloudFunction) => {
+  selectedNodeDetail.value = record;
+  nodeDetailVisible.value = true;
 };
 
 // 云账户管理
@@ -950,6 +1045,10 @@ const cloudAccountManageVisible = ref(false);
 const onCloudAccountManage = () => {
   cloudAccountManageVisible.value = true;
 };
+
+// 节点详情
+const nodeDetailVisible = ref(false);
+const selectedNodeDetail = ref<CloudFunction | null>(null);
 
 // 自定义上传处理器
 const customUploadHandler = (option: any) => {
