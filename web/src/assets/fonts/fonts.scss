@@ -1,6 +1,16 @@
+// 移除大字体文件，使用系统字体替代
+// @font-face {
+//   font-family: "AliFangYuanTi"; /*字体名-自定义*/
+//   src: url("./AlimamaFangYuanTiVF-Thin.ttf"); /* 字体路径 */
+//   font-weight: normal;
+//   font-style: normal;
+// }
+
+// 使用系统字体和网络字体的fallback方案
 @font-face {
-  font-family: "AliFangYuanTi"; /*字体名-自定义*/
-  src: url("./AlimamaFangYuanTiVF-Thin.ttf"); /* 字体路径 */
+  font-family: "AliFangYuanTi";
+  font-display: swap; /* 优化字体加载 */
+  src: local("PingFang SC"), local("Microsoft YaHei"), local("SimHei"), sans-serif;
   font-weight: normal;
   font-style: normal;
 }
