@@ -6,12 +6,17 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	cloudAccountModel "github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	"github.com/mooyang-code/moox/server/internal/service/packagemgr/model"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // FunctionPackageService 云函数代码包服务
@@ -30,15 +35,44 @@ func NewFunctionPackageService(db *gorm.DB, cosProvider provider.CloudProviderWi
 	}
 }
 
+// getCOSConfigFromAccount 从云账户获取COS配置
+func (s *FunctionPackageService) getCOSConfigFromAccount(ctx context.Context, accountID string) (*cloudAccountModel.CloudAccount, bool, error) {
+	var account cloudAccountModel.CloudAccount
+	err := s.db.Where("c_account_id = ? AND c_invalid = 0", accountID).First(&account).Error
+	if err != nil {
+		return nil, false, fmt.Errorf("云账户不存在: %w", err)
+	}
+
+	// 检查COS配置是否完整
+	hasCOSConfig := account.COSRegion != "" && account.COSBucket != ""
+	return &account, hasCOSConfig, nil
+}
+
+// saveToLocalFile 保存文件到本地/tmp目录
+func (s *FunctionPackageService) saveToLocalFile(content []byte, filename string) (string, error) {
+	tmpDir := "/tmp/moox/packages"
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return "", fmt.Errorf("创建临时目录失败: %w", err)
+	}
+
+	filePath := filepath.Join(tmpDir, filename)
+	if err := ioutil.WriteFile(filePath, content, 0644); err != nil {
+		return "", fmt.Errorf("写入文件失败: %w", err)
+	}
+
+	return filePath, nil
+}
+
 // UploadPackageRequest 上传代码包请求
 type UploadPackageRequest struct {
-	PackageName string `json:"package_name" binding:"required"`
-	Version     string `json:"version" binding:"required"`
-	Description string `json:"description"`
-	Runtime     string `json:"runtime" binding:"required"`
-	PackageType string `json:"package_type" binding:"required"`
-	FileContent string `json:"file_content" binding:"required"` // base64编码的zip文件内容
-	CreatedBy   string `json:"-"`                               // 从JWT中获取
+	PackageName    string `json:"package_name" binding:"required"`
+	Version        string `json:"version" binding:"required"`
+	Description    string `json:"description"`
+	Runtime        string `json:"runtime" binding:"required"`
+	PackageType    string `json:"package_type" binding:"required"`
+	FileContent    string `json:"file_content" binding:"required"` // base64编码的zip文件内容
+	CloudAccountID string `json:"cloud_account_id"`                // 云账户ID，可选，用于COS配置
+	CreatedBy      string `json:"-"`                               // 从JWT中获取
 }
 
 // UploadPackageResponse 上传代码包响应
@@ -50,16 +84,23 @@ type UploadPackageResponse struct {
 	COSURL      string `json:"cos_url"`
 }
 
+// StorageConfig 存储配置
+type StorageConfig struct {
+	UseCOS bool
+	Bucket string
+	Path   string
+}
+
 // generateCOSPath 生成COS文件路径
 func (s *FunctionPackageService) generateCOSPath(packageType, packageName, version string) string {
 	timestamp := time.Now().Unix()
 	filename := fmt.Sprintf("%s-%s-%d.zip", packageName, version, timestamp)
-	
+
 	// 数据采集器类型：直接在data_collector下按版本存储
 	if packageType == model.PackageTypeDataCollector {
 		return fmt.Sprintf("packages/%s/%s/%s", packageType, version, filename)
 	}
-	
+
 	// 因子计算器类型：在factor_calculator下按具体因子名称和版本存储
 	return fmt.Sprintf("packages/%s/%s/%s/%s", packageType, packageName, version, filename)
 }
@@ -72,88 +113,52 @@ func (s *FunctionPackageService) calculateMD5(content []byte) string {
 
 // UploadPackage 上传代码包
 func (s *FunctionPackageService) UploadPackage(ctx context.Context, req *UploadPackageRequest) (*UploadPackageResponse, error) {
-	// 1. 验证输入参数
-	if err := s.validateUploadRequest(req); err != nil {
-		return nil, fmt.Errorf("参数验证失败: %w", err)
-	}
+	log.InfoContextf(ctx, "[UploadPackage] 开始上传代码包, 包名: %s, 版本: %s, 类型: %s", req.PackageName, req.Version, req.PackageType)
 
-	// 2. 检查版本是否已存在
-	exists, err := s.checkVersionExists(req.PackageName, req.Version)
+	// 1. 验证和预处理
+	fileContent, fileMD5, err := s.validateAndPreprocess(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("检查版本失败: %w", err)
-	}
-	if exists {
-		return nil, fmt.Errorf("代码包 %s 版本 %s 已存在", req.PackageName, req.Version)
+		log.ErrorContextf(ctx, "[UploadPackage] 验证和预处理失败: %v", err)
+		return nil, err
 	}
 
-	// 3. 解码base64文件内容
-	fileContent, err := base64.StdEncoding.DecodeString(req.FileContent)
+	// 2. 确定存储策略
+	storageConfig, err := s.determineStorageStrategy(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("文件内容解码失败: %w", err)
+		log.ErrorContextf(ctx, "[UploadPackage] 确定存储策略失败: %v", err)
+		return nil, err
 	}
+	log.InfoContextf(ctx, "[UploadPackage] 存储策略: useCOS=%t, bucket=%s", storageConfig.UseCOS, storageConfig.Bucket)
 
-	// 4. 计算文件MD5
-	fileMD5 := s.calculateMD5(fileContent)
-
-	// 5. 生成COS路径
-	cosPath := s.generateCOSPath(req.PackageType, req.PackageName, req.Version)
-
-	// 6. 创建数据库记录（上传中状态）
-	pkg := &model.FunctionPackage{
-		PackageName:      req.PackageName,
-		Version:          req.Version,
-		Description:      req.Description,
-		Runtime:          req.Runtime,
-		PackageType:      req.PackageType,
-		OriginalFilename: fmt.Sprintf("%s-%s.zip", req.PackageName, req.Version),
-		FileSize:         int64(len(fileContent)),
-		FileMD5:          fileMD5,
-		COSBucket:        s.cosBucket,
-		COSPath:          cosPath,
-		Status:           model.PackageStatusUploading,
-		UploadProgress:   0,
-		CreatedBy:        req.CreatedBy,
-		Invalid:          0,
-		CTime:            time.Now(),
-		MTime:            time.Now(),
-	}
-
-	if err := s.db.Create(pkg).Error; err != nil {
-		return nil, fmt.Errorf("创建数据库记录失败: %w", err)
-	}
-
-	// 7. 同步上传到COS
-	uploadReq := &provider.UploadCOSRequest{
-		Bucket:      s.cosBucket,
-		Key:         cosPath,
-		Content:     fileContent,
-		ContentType: "application/zip",
-	}
-
-	cosResp, err := s.cosProvider.UploadCOS(ctx, uploadReq)
+	// 3. 创建数据库记录
+	pkg, err := s.createPackageRecord(ctx, req, fileContent, fileMD5, storageConfig)
 	if err != nil {
-		// 上传失败，更新数据库状态
-		s.updatePackageStatus(pkg.ID, model.PackageStatusFailed, 0, fmt.Sprintf("COS上传失败: %v", err))
-		return nil, fmt.Errorf("COS上传失败: %w", err)
+		log.ErrorContextf(ctx, "[UploadPackage] 创建数据库记录失败: %v", err)
+		return nil, err
 	}
+	log.InfoContextf(ctx, "[UploadPackage] 数据库记录创建成功, ID: %d", pkg.ID)
 
-	// 8. 上传成功，更新数据库状态
-	err = s.updatePackageStatus(pkg.ID, model.PackageStatusAvailable, 100, "")
+	// 4. 执行文件存储
+	cosURL, err := s.executeFileStorage(ctx, pkg, fileContent, storageConfig)
 	if err != nil {
-		return nil, fmt.Errorf("更新状态失败: %w", err)
+		log.ErrorContextf(ctx, "[UploadPackage] 文件存储失败: %v", err)
+		return nil, err
 	}
 
-	// 9. 更新COS URL
-	if cosResp.Location != "" {
-		s.db.Model(pkg).Update("c_cos_url", cosResp.Location)
+	// 5. 完成上传并更新状态
+	err = s.finalizeUpload(ctx, pkg, cosURL)
+	if err != nil {
+		log.ErrorContextf(ctx, "[UploadPackage] 完成上传失败: %v", err)
+		return nil, err
 	}
 
+	log.InfoContextf(ctx, "[UploadPackage] 上传完成, 包名: %s, 版本: %s, URL: %s", req.PackageName, req.Version, cosURL)
 	return &UploadPackageResponse{
 		ID:          pkg.ID,
 		PackageName: pkg.PackageName,
 		Version:     pkg.Version,
 		Status:      model.PackageStatusAvailable,
-		COSURL:      cosResp.Location,
+		COSURL:      cosURL,
 	}, nil
 }
 
@@ -177,7 +182,7 @@ func (s *FunctionPackageService) validateUploadRequest(req *UploadPackageRequest
 		model.RuntimeNodejs14,
 		model.RuntimeNodejs16,
 	}
-	
+
 	valid := false
 	for _, runtime := range validRuntimes {
 		if req.Runtime == runtime {
@@ -208,7 +213,7 @@ func (s *FunctionPackageService) checkVersionExists(packageName, version string)
 	err := s.db.Model(&model.FunctionPackage{}).
 		Where("c_package_name = ? AND c_version = ? AND c_invalid = 0", packageName, version).
 		Count(&count).Error
-	
+
 	return count > 0, err
 }
 
@@ -219,11 +224,11 @@ func (s *FunctionPackageService) updatePackageStatus(id int64, status, progress 
 		"c_upload_progress": progress,
 		"c_mtime":           time.Now(),
 	}
-	
+
 	if errorMsg != "" {
 		updates["c_error_message"] = errorMsg
 	}
-	
+
 	return s.db.Model(&model.FunctionPackage{}).
 		Where("c_id = ?", id).
 		Updates(updates).Error
@@ -241,7 +246,7 @@ type PackageListRequest struct {
 
 // PackageListResponse 代码包列表响应
 type PackageListResponse struct {
-	Total int64                    `json:"total"`
+	Total int64                `json:"total"`
 	Items []*PackageListItemVO `json:"items"`
 }
 
@@ -266,7 +271,7 @@ type PackageListItemVO struct {
 func (s *FunctionPackageService) GetPackageList(ctx context.Context, req *PackageListRequest) (*PackageListResponse, error) {
 	// 构建查询条件
 	query := s.db.Model(&model.FunctionPackage{}).Where("c_invalid = 0")
-	
+
 	if req.PackageName != "" {
 		query = query.Where("c_package_name LIKE ?", "%"+req.PackageName+"%")
 	}
@@ -346,16 +351,217 @@ func (s *FunctionPackageService) GetPackageDownloadURL(ctx context.Context, id i
 	if err != nil {
 		return "", err
 	}
-	
+
 	if pkg.Status != model.PackageStatusAvailable {
 		return "", fmt.Errorf("代码包状态不可用，当前状态: %s", model.GetStatusDisplayName(pkg.Status))
 	}
-	
-	// 生成24小时有效的预签名URL
+
+	// 检查是否为本地存储
+	if pkg.COSBucket == "local" {
+		// 本地存储直接返回文件路径，前端需要通过API下载
+		return fmt.Sprintf("/api/v1/function-packages/%d/download-local", pkg.ID), nil
+	}
+
+	// COS存储生成预签名URL
 	url, err := s.cosProvider.GetCOSObjectURL(ctx, pkg.COSBucket, pkg.COSPath, 24*time.Hour)
 	if err != nil {
 		return "", fmt.Errorf("生成下载链接失败: %w", err)
 	}
-	
+
 	return url, nil
+}
+
+// DownloadLocalPackage 下载本地存储的代码包
+func (s *FunctionPackageService) DownloadLocalPackage(ctx context.Context, id int64) ([]byte, string, error) {
+	pkg, err := s.GetPackageDetail(ctx, id)
+	if err != nil {
+		return nil, "", err
+	}
+
+	if pkg.Status != model.PackageStatusAvailable {
+		return nil, "", fmt.Errorf("代码包状态不可用，当前状态: %s", model.GetStatusDisplayName(pkg.Status))
+	}
+
+	if pkg.COSBucket != "local" {
+		return nil, "", fmt.Errorf("该代码包不是本地存储")
+	}
+
+	// 读取本地文件
+	content, err := ioutil.ReadFile(pkg.COSPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("读取本地文件失败: %w", err)
+	}
+
+	return content, pkg.OriginalFilename, nil
+}
+
+// validateAndPreprocess 验证和预处理上传请求
+func (s *FunctionPackageService) validateAndPreprocess(ctx context.Context, req *UploadPackageRequest) ([]byte, string, error) {
+	log.InfoContextf(ctx, "[validateAndPreprocess] 开始验证参数")
+	
+	// 验证输入参数
+	if err := s.validateUploadRequest(req); err != nil {
+		return nil, "", fmt.Errorf("参数验证失败: %w", err)
+	}
+
+	// 检查版本是否已存在
+	exists, err := s.checkVersionExists(req.PackageName, req.Version)
+	if err != nil {
+		return nil, "", fmt.Errorf("检查版本失败: %w", err)
+	}
+	if exists {
+		return nil, "", fmt.Errorf("代码包 %s 版本 %s 已存在", req.PackageName, req.Version)
+	}
+
+	// 解码base64文件内容
+	fileContent, err := base64.StdEncoding.DecodeString(req.FileContent)
+	if err != nil {
+		return nil, "", fmt.Errorf("文件内容解码失败: %w", err)
+	}
+
+	// 计算文件MD5
+	fileMD5 := s.calculateMD5(fileContent)
+	
+	log.InfoContextf(ctx, "[validateAndPreprocess] 验证完成, 文件大小: %d bytes, MD5: %s", len(fileContent), fileMD5)
+	return fileContent, fileMD5, nil
+}
+
+// determineStorageStrategy 确定存储策略
+func (s *FunctionPackageService) determineStorageStrategy(ctx context.Context, req *UploadPackageRequest) (*StorageConfig, error) {
+	log.InfoContextf(ctx, "[determineStorageStrategy] 开始确定存储策略, 云账户ID: %s", req.CloudAccountID)
+	
+	config := &StorageConfig{}
+
+	if req.CloudAccountID != "" {
+		// 从云账户获取COS配置
+		account, hasCOSConfig, err := s.getCOSConfigFromAccount(ctx, req.CloudAccountID)
+		if err != nil {
+			log.WarnContextf(ctx, "[determineStorageStrategy] 获取云账户配置失败: %v, 降级到本地存储", err)
+		} else if hasCOSConfig {
+			config.UseCOS = true
+			config.Bucket = account.COSBucket
+			config.Path = s.generateCOSPath(req.PackageType, req.PackageName, req.Version)
+			log.InfoContextf(ctx, "[determineStorageStrategy] 使用COS存储, bucket: %s, path: %s", config.Bucket, config.Path)
+			return config, nil
+		}
+	}
+
+	// 降级到本地存储
+	config.UseCOS = false
+	config.Bucket = "local"
+	config.Path = fmt.Sprintf("%s-%s-%d.zip", req.PackageName, req.Version, time.Now().Unix())
+	log.InfoContextf(ctx, "[determineStorageStrategy] 使用本地存储, path: %s", config.Path)
+	
+	return config, nil
+}
+
+// createPackageRecord 创建数据库记录
+func (s *FunctionPackageService) createPackageRecord(ctx context.Context, req *UploadPackageRequest, fileContent []byte, fileMD5 string, storageConfig *StorageConfig) (*model.FunctionPackage, error) {
+	log.InfoContextf(ctx, "[createPackageRecord] 开始创建数据库记录")
+	
+	pkg := &model.FunctionPackage{
+		PackageName:      req.PackageName,
+		Version:          req.Version,
+		Description:      req.Description,
+		Runtime:          req.Runtime,
+		PackageType:      req.PackageType,
+		OriginalFilename: fmt.Sprintf("%s-%s.zip", req.PackageName, req.Version),
+		FileSize:         int64(len(fileContent)),
+		FileMD5:          fileMD5,
+		COSBucket:        storageConfig.Bucket,
+		COSPath:          storageConfig.Path,
+		Status:           model.PackageStatusUploading,
+		UploadProgress:   0,
+		CreatedBy:        req.CreatedBy,
+		Invalid:          0,
+		CTime:            time.Now(),
+		MTime:            time.Now(),
+	}
+
+	if err := s.db.Create(pkg).Error; err != nil {
+		return nil, fmt.Errorf("创建数据库记录失败: %w", err)
+	}
+
+	log.InfoContextf(ctx, "[createPackageRecord] 数据库记录创建成功, ID: %d", pkg.ID)
+	return pkg, nil
+}
+
+// executeFileStorage 执行文件存储
+func (s *FunctionPackageService) executeFileStorage(ctx context.Context, pkg *model.FunctionPackage, fileContent []byte, storageConfig *StorageConfig) (string, error) {
+	log.InfoContextf(ctx, "[executeFileStorage] 开始执行文件存储, useCOS: %t", storageConfig.UseCOS)
+	
+	if storageConfig.UseCOS {
+		return s.uploadToCOS(ctx, pkg, fileContent, storageConfig)
+	} else {
+		return s.saveToLocal(ctx, pkg, fileContent, storageConfig)
+	}
+}
+
+// uploadToCOS 上传到COS
+func (s *FunctionPackageService) uploadToCOS(ctx context.Context, pkg *model.FunctionPackage, fileContent []byte, storageConfig *StorageConfig) (string, error) {
+	log.InfoContextf(ctx, "[uploadToCOS] 开始上传到COS, bucket: %s, path: %s", storageConfig.Bucket, storageConfig.Path)
+	
+	uploadReq := &provider.UploadCOSRequest{
+		Bucket:      storageConfig.Bucket,
+		Key:         storageConfig.Path,
+		Content:     fileContent,
+		ContentType: "application/zip",
+	}
+
+	cosResp, err := s.cosProvider.UploadCOS(ctx, uploadReq)
+	if err != nil {
+		log.WarnContextf(ctx, "[uploadToCOS] COS上传失败: %v, 降级到本地存储", err)
+		// COS上传失败，降级到本地存储
+		localPath, localErr := s.saveToLocalFile(fileContent, storageConfig.Path)
+		if localErr != nil {
+			s.updatePackageStatus(pkg.ID, model.PackageStatusFailed, 0, fmt.Sprintf("COS上传失败且本地存储失败: %v", localErr))
+			return "", fmt.Errorf("存储失败: %w", localErr)
+		}
+
+		// 更新数据库记录为本地存储
+		s.db.Model(pkg).Updates(map[string]interface{}{
+			"c_cos_bucket": "local",
+			"c_cos_path":   localPath,
+		})
+		log.InfoContextf(ctx, "[uploadToCOS] 降级到本地存储成功, path: %s", localPath)
+		return localPath, nil
+	}
+
+	log.InfoContextf(ctx, "[uploadToCOS] COS上传成功, location: %s", cosResp.Location)
+	return cosResp.Location, nil
+}
+
+// saveToLocal 保存到本地
+func (s *FunctionPackageService) saveToLocal(ctx context.Context, pkg *model.FunctionPackage, fileContent []byte, storageConfig *StorageConfig) (string, error) {
+	log.InfoContextf(ctx, "[saveToLocal] 开始保存到本地, path: %s", storageConfig.Path)
+	
+	localPath, err := s.saveToLocalFile(fileContent, storageConfig.Path)
+	if err != nil {
+		s.updatePackageStatus(pkg.ID, model.PackageStatusFailed, 0, fmt.Sprintf("本地存储失败: %v", err))
+		return "", fmt.Errorf("本地存储失败: %w", err)
+	}
+
+	// 更新数据库记录
+	s.db.Model(pkg).Update("c_cos_path", localPath)
+	log.InfoContextf(ctx, "[saveToLocal] 本地存储成功, path: %s", localPath)
+	return localPath, nil
+}
+
+// finalizeUpload 完成上传并更新状态
+func (s *FunctionPackageService) finalizeUpload(ctx context.Context, pkg *model.FunctionPackage, cosURL string) error {
+	log.InfoContextf(ctx, "[finalizeUpload] 开始完成上传, ID: %d", pkg.ID)
+	
+	// 更新数据库状态
+	err := s.updatePackageStatus(pkg.ID, model.PackageStatusAvailable, 100, "")
+	if err != nil {
+		return fmt.Errorf("更新状态失败: %w", err)
+	}
+
+	// 更新访问URL
+	if cosURL != "" {
+		s.db.Model(pkg).Update("c_cos_url", cosURL)
+	}
+
+	log.InfoContextf(ctx, "[finalizeUpload] 上传完成, ID: %d, URL: %s", pkg.ID, cosURL)
+	return nil
 }

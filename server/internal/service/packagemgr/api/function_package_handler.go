@@ -39,13 +39,8 @@ func (h *FunctionPackageHandler) UploadPackage(c *gin.Context) {
 		return
 	}
 
-	// 从JWT中获取用户信息
-	userID, exists := c.Get("user_id")
-	if !exists {
-		ErrorResponse(c, http.StatusUnauthorized, "用户信息获取失败", nil)
-		return
-	}
-	req.CreatedBy = userID.(string)
+	// 设置创建者为固定值
+	req.CreatedBy = "moox"
 
 	resp, err := h.packageService.UploadPackage(c.Request.Context(), &req)
 	if err != nil {
@@ -238,4 +233,38 @@ func (h *FunctionPackageHandler) GetPackageOptions(c *gin.Context) {
 	}
 
 	SuccessResponse(c, "查询成功", options)
+}
+
+// DownloadLocalPackage 下载本地存储的代码包
+// @Summary 下载本地存储的云函数代码包
+// @Description 下载存储在本地的云函数代码包文件
+// @Tags 云函数代码包
+// @Accept json
+// @Produce octet-stream
+// @Param id path int true "代码包ID"
+// @Success 200 {file} binary
+// @Failure 400 {object} APIResponse
+// @Failure 500 {object} APIResponse
+// @Router /api/v1/function-packages/{id}/download-local [get]
+func (h *FunctionPackageHandler) DownloadLocalPackage(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		ErrorResponse(c, http.StatusBadRequest, "无效的ID参数", err)
+		return
+	}
+
+	content, filename, err := h.packageService.DownloadLocalPackage(c.Request.Context(), id)
+	if err != nil {
+		ErrorResponse(c, http.StatusInternalServerError, "下载失败", err)
+		return
+	}
+
+	// 设置响应头
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
+	c.Header("Content-Length", fmt.Sprintf("%d", len(content)))
+
+	// 返回文件内容
+	c.Data(http.StatusOK, "application/zip", content)
 }

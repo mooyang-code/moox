@@ -16,7 +16,6 @@ func (p *Provider) UploadCOS(ctx context.Context, req *UploadCOSRequest) (*Uploa
 	if p.cosClient == nil {
 		return nil, fmt.Errorf("COS client is not initialized, please check COSBucket and COSAppID configuration")
 	}
-
 	if req.Bucket == "" || req.Key == "" || len(req.Content) == 0 {
 		return nil, fmt.Errorf("bucket, key and content are required")
 	}
@@ -51,7 +50,6 @@ func (p *Provider) UploadCOS(ctx context.Context, req *UploadCOSRequest) (*Uploa
 			p.logError(ctx, "retry upload to COS #%d, because got err: %s", n, err)
 		}),
 	)
-
 	if err != nil {
 		p.logError(ctx, "upload to COS failed after retries, err: %v", err)
 		return nil, fmt.Errorf("upload to COS failed: %w", err)
@@ -71,7 +69,6 @@ func (p *Provider) UploadCOS(ctx context.Context, req *UploadCOSRequest) (*Uploa
 	}
 
 	p.logInfo(ctx, "successfully uploaded file to COS, key: %s, location: %s, etag: %s", req.Key, location, etag)
-
 	return &UploadCOSResponse{
 		Location: location,
 		ETag:     etag,

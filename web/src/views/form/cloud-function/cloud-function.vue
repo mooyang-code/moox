@@ -67,6 +67,10 @@
               <template #icon><icon-settings /></template>
               <span>云账户管理</span>
             </a-button>
+            <a-button type="outline" @click="onFunctionPackageManage">
+              <template #icon><icon-code /></template>
+              <span>云函数版本</span>
+            </a-button>
           </a-space>
         </a-row>
 
@@ -313,6 +317,12 @@
       @refresh="loadCloudAccounts"
     />
 
+    <!-- 云函数版本管理弹窗 -->
+    <FunctionPackageManage 
+      v-model="functionPackageManageVisible" 
+      @refresh="loadData"
+    />
+
     <!-- 节点详情弹窗 -->
     <a-modal
       v-model:visible="nodeDetailVisible"
@@ -392,6 +402,7 @@ import { api } from '@/api/config';
 import { AsyncTaskManager, asyncTaskManager } from '@/utils/async-task';
 import type { TaskStatusResponse } from '@/utils/async-task';
 import CloudAccountManage from '../cloud-account/cloud-account-manage.vue';
+import FunctionPackageManage from './function-package-manage.vue';
 
 // 接口定义
 interface CloudFunction {
@@ -1064,6 +1075,13 @@ const cloudAccountManageVisible = ref(false);
 
 const onCloudAccountManage = () => {
   cloudAccountManageVisible.value = true;
+};
+
+// 云函数版本管理
+const functionPackageManageVisible = ref(false);
+
+const onFunctionPackageManage = () => {
+  functionPackageManageVisible.value = true;
 };
 
 // 节点详情

@@ -76,8 +76,12 @@ test:
 build:
 	@echo "📦 正在构建 $(APP_NAME) (当前平台)..."
 	@mkdir -p $(BUILD_DIR)
-	$(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(APP_NAME) .
-	@echo "✅ 构建完成: $(BUILD_DIR)/$(APP_NAME)"
+	@if $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(APP_NAME) .; then \
+		echo "✅ 构建完成: $(BUILD_DIR)/$(APP_NAME)"; \
+	else \
+		echo "❌ 构建失败"; \
+		exit 1; \
+	fi
 
 # Build for Linux
 build-linux:
@@ -86,16 +90,25 @@ build-linux:
 	@mkdir -p $(RELEASE_DIR)/linux/config
 	@mkdir -p $(RELEASE_DIR)/linux/log
 	@mkdir -p $(RELEASE_DIR)/linux/data
-	@for arch in $(ARCHITECTURES); do \
+	@BUILD_FAILED=false; \
+	for arch in $(ARCHITECTURES); do \
 		echo "  平台: Linux"; \
 		echo "  架构: $$arch"; \
 		echo "  CGO: 已禁用"; \
-		GOOS=linux GOARCH=$$arch $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" \
-			-o $(RELEASE_DIR)/linux/bin/$(APP_NAME)-$$arch .; \
-		if [ "$$arch" = "amd64" ]; then \
-			cp $(RELEASE_DIR)/linux/bin/$(APP_NAME)-$$arch $(RELEASE_DIR)/linux/bin/$(APP_NAME); \
+		if ! GOOS=linux GOARCH=$$arch $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" \
+			-o $(RELEASE_DIR)/linux/bin/$(APP_NAME)-$$arch .; then \
+			echo "❌ Linux $$arch 构建失败"; \
+			BUILD_FAILED=true; \
+		else \
+			if [ "$$arch" = "amd64" ]; then \
+				cp $(RELEASE_DIR)/linux/bin/$(APP_NAME)-$$arch $(RELEASE_DIR)/linux/bin/$(APP_NAME); \
+			fi; \
 		fi; \
-	done
+	done; \
+	if [ "$$BUILD_FAILED" = "true" ]; then \
+		echo "❌ Linux 构建失败"; \
+		exit 1; \
+	fi
 	@cp -r $(CONFIG_DIR)/* $(RELEASE_DIR)/linux/config/ 2>/dev/null || true
 	@$(MAKE) create-unix-scripts PLATFORM_DIR=$(RELEASE_DIR)/linux
 	@echo "✅ Linux 构建成功"
@@ -107,16 +120,25 @@ build-darwin:
 	@mkdir -p $(RELEASE_DIR)/darwin/config
 	@mkdir -p $(RELEASE_DIR)/darwin/log
 	@mkdir -p $(RELEASE_DIR)/darwin/data
-	@for arch in $(ARCHITECTURES); do \
+	@BUILD_FAILED=false; \
+	for arch in $(ARCHITECTURES); do \
 		echo "  平台: Darwin"; \
 		echo "  架构: $$arch"; \
 		echo "  CGO: 已禁用"; \
-		GOOS=darwin GOARCH=$$arch $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" \
-			-o $(RELEASE_DIR)/darwin/bin/$(APP_NAME)-$$arch .; \
-		if [ "$$arch" = "amd64" ]; then \
-			cp $(RELEASE_DIR)/darwin/bin/$(APP_NAME)-$$arch $(RELEASE_DIR)/darwin/bin/$(APP_NAME); \
+		if ! GOOS=darwin GOARCH=$$arch $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" \
+			-o $(RELEASE_DIR)/darwin/bin/$(APP_NAME)-$$arch .; then \
+			echo "❌ macOS $$arch 构建失败"; \
+			BUILD_FAILED=true; \
+		else \
+			if [ "$$arch" = "amd64" ]; then \
+				cp $(RELEASE_DIR)/darwin/bin/$(APP_NAME)-$$arch $(RELEASE_DIR)/darwin/bin/$(APP_NAME); \
+			fi; \
 		fi; \
-	done
+	done; \
+	if [ "$$BUILD_FAILED" = "true" ]; then \
+		echo "❌ macOS 构建失败"; \
+		exit 1; \
+	fi
 	@cp -r $(CONFIG_DIR)/* $(RELEASE_DIR)/darwin/config/ 2>/dev/null || true
 	@$(MAKE) create-unix-scripts PLATFORM_DIR=$(RELEASE_DIR)/darwin
 	@echo "✅ macOS 构建成功"
@@ -131,16 +153,25 @@ build-windows:
 	@mkdir -p $(RELEASE_DIR)/windows/config
 	@mkdir -p $(RELEASE_DIR)/windows/log
 	@mkdir -p $(RELEASE_DIR)/windows/data
-	@for arch in $(ARCHITECTURES); do \
+	@BUILD_FAILED=false; \
+	for arch in $(ARCHITECTURES); do \
 		echo "  平台: Windows"; \
 		echo "  架构: $$arch"; \
 		echo "  CGO: 已禁用"; \
-		GOOS=windows GOARCH=$$arch $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" \
-			-o $(RELEASE_DIR)/windows/bin/$(APP_NAME)-$$arch.exe .; \
-		if [ "$$arch" = "amd64" ]; then \
-			cp $(RELEASE_DIR)/windows/bin/$(APP_NAME)-$$arch.exe $(RELEASE_DIR)/windows/bin/$(APP_NAME).exe; \
+		if ! GOOS=windows GOARCH=$$arch $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" \
+			-o $(RELEASE_DIR)/windows/bin/$(APP_NAME)-$$arch.exe .; then \
+			echo "❌ Windows $$arch 构建失败"; \
+			BUILD_FAILED=true; \
+		else \
+			if [ "$$arch" = "amd64" ]; then \
+				cp $(RELEASE_DIR)/windows/bin/$(APP_NAME)-$$arch.exe $(RELEASE_DIR)/windows/bin/$(APP_NAME).exe; \
+			fi; \
 		fi; \
-	done
+	done; \
+	if [ "$$BUILD_FAILED" = "true" ]; then \
+		echo "❌ Windows 构建失败"; \
+		exit 1; \
+	fi
 	@cp -r $(CONFIG_DIR)/* $(RELEASE_DIR)/windows/config/ 2>/dev/null || true
 	@$(MAKE) create-windows-scripts PLATFORM_DIR=$(RELEASE_DIR)/windows
 	@echo "✅ Windows 构建成功"

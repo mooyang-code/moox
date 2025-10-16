@@ -124,6 +124,9 @@ CREATE TABLE IF NOT EXISTS t_cloud_accounts (
     c_provider TEXT NOT NULL, -- 云厂商（tencent/aliyun/aws）
     c_secret_id TEXT NOT NULL, -- 密钥ID
     c_secret_key TEXT NOT NULL, -- 密钥（加密存储）
+    c_app_id TEXT NOT NULL DEFAULT '', -- 应用ID
+    c_cos_region TEXT NOT NULL DEFAULT '', -- COS区域
+    c_cos_bucket TEXT NOT NULL DEFAULT '', -- COS桶名
     c_extra_config TEXT NOT NULL DEFAULT '{}', -- 额外配置（JSON格式，如region等）
     c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间

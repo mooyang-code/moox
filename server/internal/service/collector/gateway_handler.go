@@ -8,11 +8,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"time"
 	
 	asynctaskapi "github.com/mooyang-code/moox/server/internal/service/asynctask/api"
 	cloudnodeapi "github.com/mooyang-code/moox/server/internal/service/cloudnode/api"
-	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	collectorapi "github.com/mooyang-code/moox/server/internal/service/collector/api"
 	packagemgrapi "github.com/mooyang-code/moox/server/internal/service/packagemgr/api"
 
@@ -50,14 +50,14 @@ func NewGatewayHandler(collectorImpl *CollectorServiceImpl) *GatewayHandler {
 		// 注册云节点路由
 		cloudnodeapi.RegisterCloudNodeRoutes(api, collectorImpl.GetDB())
 
-		// 注册包管理路由（需要云提供商和存储桶信息）
-		cloudProvider := collectorImpl.GetCloudProvider()
-		if cloudProvider != nil {
-			// 类型断言为支持COS的云提供商
-			if cosProvider, ok := cloudProvider.(provider.CloudProviderWithCOS); ok {
+		// 注册包管理路由（支持多COS客户端）
+		cosProviders := collectorImpl.GetAllCOSProviders()
+		if len(cosProviders) > 0 {
+			// 使用默认COS提供商注册路由（保持兼容性）
+			defaultCOSProvider := collectorImpl.GetCOSProvider("")
+			if defaultCOSProvider != nil {
 				cosBucket := "moox-packages" // 从配置中获取
-				// 类型断言成功，可以注册包管理路由
-				packagemgrapi.RegisterPackageManagerRoutes(api, collectorImpl.GetDB(), cosProvider, cosBucket)
+				packagemgrapi.RegisterPackageManagerRoutes(api, collectorImpl.GetDB(), defaultCOSProvider, cosBucket)
 			}
 		}
 	}
@@ -128,17 +128,17 @@ func (h *GatewayHandler) parseMethodToRoute(method string, body []byte) (*RouteI
 		route.HTTPMethod = "POST"
 		route.Body = body
 	case "GetPackageList":
-		route.Path = "/api/function-packages"
-		route.HTTPMethod = "GET"
+		return h.buildMultiQueryRoute("/api/function-packages", body)
 	case "GetPackageDetail":
 		return h.buildDetailRoute("/api/function-packages", "GET", body)
 	case "DeletePackage":
 		return h.buildDetailRoute("/api/function-packages", "DELETE", body)
 	case "GetPackageDownloadURL":
-		return h.buildDetailRouteWithSuffix("/api/function-packages", "GET", body, "download")
+		return h.buildDetailRouteWithSuffix("/api/function-packages", "GET", body, "download-url")
+	case "DownloadLocalPackage":
+		return h.buildDetailRouteWithSuffix("/api/function-packages", "GET", body, "download-local")
 	case "GetPackageOptions":
-		route.Path = "/api/function-packages/options"
-		route.HTTPMethod = "GET"
+		return h.buildMultiQueryRoute("/api/function-packages/options", body)
 
 	// Async Task methods
 	case "AsyncTaskCreate":
@@ -368,6 +368,34 @@ func (h *GatewayHandler) buildQueryRoute(basePath string, body []byte, paramName
 		if err := json.Unmarshal(body, &params); err == nil {
 			if value, ok := params[paramName].(string); ok {
 				route.Path = fmt.Sprintf("%s?%s=%s", basePath, paramName, value)
+			}
+		}
+	}
+	return route, nil
+}
+
+// buildMultiQueryRoute 构建多参数查询路由
+func (h *GatewayHandler) buildMultiQueryRoute(basePath string, body []byte) (*RouteInfo, error) {
+	route := &RouteInfo{
+		Path:       basePath,
+		HTTPMethod: "GET",
+	}
+
+	if len(body) > 0 {
+		var params map[string]interface{}
+		if err := json.Unmarshal(body, &params); err == nil {
+			queryParams := make([]string, 0)
+			for key, value := range params {
+				if value != nil {
+					// 过滤掉空字符串，但保留数字0和false等有效值
+					if str, ok := value.(string); ok && str == "" {
+						continue
+					}
+					queryParams = append(queryParams, fmt.Sprintf("%s=%v", key, value))
+				}
+			}
+			if len(queryParams) > 0 {
+				route.Path = fmt.Sprintf("%s?%s", basePath, strings.Join(queryParams, "&"))
 			}
 		}
 	}

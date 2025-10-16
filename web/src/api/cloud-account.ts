@@ -8,6 +8,9 @@ export interface CloudAccount {
   provider: string;
   secret_id: string;
   secret_key: string;
+  app_id: string;
+  cos_region: string;
+  cos_bucket: string;
   extra_config: string;
   invalid?: number;
   create_time?: string;

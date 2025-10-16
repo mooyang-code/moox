@@ -24,6 +24,7 @@ func RegisterPackageManagerRoutes(router *gin.RouterGroup, db *gorm.DB, cosProvi
 		packageGroup.GET("/:id", packageHandler.GetPackageDetail)
 		packageGroup.DELETE("/:id", packageHandler.DeletePackage)
 		packageGroup.GET("/:id/download-url", packageHandler.GetPackageDownloadURL)
+		packageGroup.GET("/:id/download-local", packageHandler.DownloadLocalPackage)
 		packageGroup.GET("/options", packageHandler.GetPackageOptions)
 	}
 

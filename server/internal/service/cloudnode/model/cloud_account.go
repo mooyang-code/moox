@@ -19,6 +19,12 @@ type CloudAccount struct {
 	SecretID string `gorm:"column:c_secret_id;size:200;not null" json:"secret_id"`
 	// SecretKey 密钥（加密存储）
 	SecretKey string `gorm:"column:c_secret_key;type:text;not null" json:"secret_key"`
+	// AppID 应用ID
+	AppID string `gorm:"column:c_app_id;size:200;not null;default:''" json:"app_id"`
+	// COSRegion COS区域
+	COSRegion string `gorm:"column:c_cos_region;size:100;not null;default:''" json:"cos_region"`
+	// COSBucket COS桶名
+	COSBucket string `gorm:"column:c_cos_bucket;size:200;not null;default:''" json:"cos_bucket"`
 	// ExtraConfig 额外配置（JSON格式，如region等）
 	ExtraConfig string `gorm:"column:c_extra_config;type:text;not null;default:'{}'" json:"extra_config"`
 	// Invalid 删除标记

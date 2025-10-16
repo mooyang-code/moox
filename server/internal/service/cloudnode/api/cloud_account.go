@@ -178,6 +178,9 @@ func (h *CloudAccountHandler) parseCloudAccount(params map[string]string) *model
 		Provider:     params["provider"],
 		SecretID:     params["secret_id"],
 		SecretKey:    params["secret_key"],
+		AppID:        params["app_id"],
+		COSRegion:    params["cos_region"],
+		COSBucket:    params["cos_bucket"],
 		ExtraConfig:  params["extra_config"],
 	}
 

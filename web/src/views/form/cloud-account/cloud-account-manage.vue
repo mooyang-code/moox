@@ -50,6 +50,21 @@
               </a-space>
             </template>
           </a-table-column>
+          <a-table-column title="应用ID" data-index="app_id" :width="150">
+            <template #cell="{ record }">
+              <span>{{ record.app_id || '-' }}</span>
+            </template>
+          </a-table-column>
+          <a-table-column title="COS区域" data-index="cos_region" :width="150">
+            <template #cell="{ record }">
+              <span>{{ record.cos_region || '-' }}</span>
+            </template>
+          </a-table-column>
+          <a-table-column title="COS桶名" data-index="cos_bucket" :width="200">
+            <template #cell="{ record }">
+              <span>{{ record.cos_bucket || '-' }}</span>
+            </template>
+          </a-table-column>
           <a-table-column title="创建时间" data-index="created_at" :width="180">
             <template #cell="{ record }">
               {{ formatTime(record.created_at || record.create_time) }}
@@ -120,6 +135,18 @@
           </template>
         </a-form-item>
         
+        <a-form-item field="app_id" label="应用ID">
+          <a-input v-model="form.app_id" placeholder="请输入应用ID（可选）" />
+        </a-form-item>
+        
+        <a-form-item field="cos_region" label="COS区域">
+          <a-input v-model="form.cos_region" placeholder="请输入COS区域（可选），如：ap-guangzhou" />
+        </a-form-item>
+        
+        <a-form-item field="cos_bucket" label="COS桶名">
+          <a-input v-model="form.cos_bucket" placeholder="请输入COS桶名（可选）" />
+        </a-form-item>
+        
         <a-form-item field="extra_config" label="额外配置（可选）">
           <a-textarea 
             v-model="form.extra_config" 
@@ -169,6 +196,9 @@ const defaultForm = {
   provider: 'tencent',
   secret_id: '',
   secret_key: '',
+  app_id: '',
+  cos_region: '',
+  cos_bucket: '',
   extra_config: ''
 };
 
@@ -245,6 +275,9 @@ const onEdit = (record: CloudAccount) => {
     provider: record.provider,
     secret_id: record.secret_id,
     secret_key: '', // 编辑时密钥留空
+    app_id: record.app_id || '',
+    cos_region: record.cos_region || '',
+    cos_bucket: record.cos_bucket || '',
     extra_config: record.extra_config || ''
   });
   formVisible.value = true;
@@ -299,6 +332,9 @@ const handleFormOk = async () => {
         account_name: form.account_name,
         provider: form.provider,
         secret_id: form.secret_id,
+        app_id: form.app_id,
+        cos_region: form.cos_region,
+        cos_bucket: form.cos_bucket,
         extra_config: form.extra_config || '{}'
       };
       
@@ -315,6 +351,9 @@ const handleFormOk = async () => {
         provider: form.provider,
         secret_id: form.secret_id,
         secret_key: form.secret_key,
+        app_id: form.app_id,
+        cos_region: form.cos_region,
+        cos_bucket: form.cos_bucket,
         extra_config: form.extra_config || '{}'
       });
     }

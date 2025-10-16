@@ -10,6 +10,8 @@ import (
 	asynctasklogic "github.com/mooyang-code/moox/server/internal/service/asynctask/logic"
 	cloudnodeapi "github.com/mooyang-code/moox/server/internal/service/cloudnode/api"
 	cloudnodelogic "github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
+	cloudaccountlogic "github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
+	cloudaccountmodel "github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	cloudnodequeue "github.com/mooyang-code/moox/server/internal/service/cloudnode/queue"
 	"github.com/mooyang-code/moox/server/internal/service/collector/logic"
@@ -26,7 +28,8 @@ type CollectorServiceImpl struct {
 	db               *gorm.DB
 	serviceManager   *ServiceManager
 	httpMux          *http.ServeMux
-	cloudProvider    provider.CloudProvider
+	cloudProvider    provider.CloudProvider // 默认云提供商（保持兼容性）
+	cosProviders     map[string]provider.CloudProviderWithCOS // accountID -> COS提供商
 	queueManager     *cloudnodequeue.QueueManager
 	heartbeatManager *nodeheartbeat.Manager
 	asyncTaskService asynctasklogic.AsyncTaskService
@@ -34,7 +37,9 @@ type CollectorServiceImpl struct {
 
 // InitCollectorServiceImpl 初始化采集器服务实现
 func InitCollectorServiceImpl(dbPath string) (*CollectorServiceImpl, error) {
-	impl := &CollectorServiceImpl{}
+	impl := &CollectorServiceImpl{
+		cosProviders: make(map[string]provider.CloudProviderWithCOS),
+	}
 
 	// 初始化数据库连接
 	db, err := impl.initDB(dbPath)
@@ -55,6 +60,9 @@ func InitCollectorServiceImpl(dbPath string) (*CollectorServiceImpl, error) {
 
 	// 初始化服务管理器
 	impl.serviceManager = NewServiceManager(db, impl.queueManager)
+
+	// 初始化云提供商
+	impl.initCloudProviders()
 
 	return impl, nil
 }
@@ -78,6 +86,88 @@ func (s *CollectorServiceImpl) initDB(dbPath string) (*gorm.DB, error) {
 
 	log.Infof("初始化SQLite数据库连接: %s", dbPath)
 	return db, nil
+}
+
+// initCloudProviders 初始化云提供商
+func (s *CollectorServiceImpl) initCloudProviders() {
+	ctx := context.Background()
+	
+	// 创建云账户服务
+	cloudAccountService := cloudaccountlogic.NewCloudAccountService(s.db)
+	
+	// 获取腾讯云账户列表（支持COS的）
+	tencentAccounts, err := cloudAccountService.ListAccountsByProvider(ctx, cloudaccountmodel.CloudProviderTencent)
+	if err != nil {
+		log.Warnf("[Collector Service] 获取腾讯云账户失败: %v，将跳过云提供商初始化", err)
+		return
+	}
+	
+	if len(tencentAccounts) == 0 {
+		log.Warn("[Collector Service] 未找到腾讯云账户配置，将跳过云提供商初始化")
+		return
+	}
+	
+	var defaultProvider provider.CloudProvider
+	cosProviderCount := 0
+	
+	// 遍历所有腾讯云账户，为每个有COS配置的账户创建COS客户端
+	for _, account := range tencentAccounts {
+		// 获取不脱敏的账户信息
+		fullAccount, err := cloudAccountService.GetAccountWithoutMask(ctx, account.AccountID)
+		if err != nil {
+			log.Warnf("[Collector Service] 获取云账户(%s)详情失败: %v，跳过该账户", account.AccountID, err)
+			continue
+		}
+		
+		// 检查是否有COS配置
+		if fullAccount.COSBucket == "" {
+			log.Warnf("[Collector Service] 云账户(%s)未配置COS桶，跳过该账户", fullAccount.AccountName)
+			continue
+		}
+		
+		// 构建额外配置
+		extraConfig := fmt.Sprintf(`{"region":"%s","cos_bucket":"%s","cos_app_id":"%s"}`, 
+			fullAccount.COSRegion, fullAccount.COSBucket, fullAccount.AppID)
+		
+		// 创建云配置
+		cloudConfig, err := provider.NewCloudConfig(
+			provider.ProviderTencent, 
+			fullAccount.SecretID, 
+			fullAccount.SecretKey, 
+			extraConfig,
+		)
+		if err != nil {
+			log.Warnf("[Collector Service] 创建云配置失败(%s): %v，跳过该账户", fullAccount.AccountName, err)
+			continue
+		}
+		
+		// 创建支持COS的腾讯云提供商
+		cosProvider, err := provider.NewTencentCloudProviderWithCOS(cloudConfig)
+		if err != nil {
+			log.Warnf("[Collector Service] 创建COS提供商失败(%s): %v，跳过该账户", fullAccount.AccountName, err)
+			continue
+		}
+		
+		// 将COS提供商加入到map中
+		s.cosProviders[fullAccount.AccountID] = cosProvider
+		cosProviderCount++
+		
+		// 如果是第一个成功的账户，设置为默认云提供商（保持兼容性）
+		if defaultProvider == nil {
+			defaultProvider = cosProvider
+			s.SetCloudProvider(cosProvider)
+		}
+		
+		log.Infof("[Collector Service] COS提供商初始化完成，账户: %s (COS桶: %s)", 
+			fullAccount.AccountName, fullAccount.COSBucket)
+	}
+	
+	if cosProviderCount == 0 {
+		log.Warn("[Collector Service] 未找到有效的COS配置，将跳过云提供商初始化")
+		return
+	}
+	
+	log.Infof("[Collector Service] 云提供商初始化完成，共初始化 %d 个COS客户端", cosProviderCount)
 }
 
 // GetDB 获取数据库连接
@@ -184,4 +274,21 @@ func (s *CollectorServiceImpl) GetCloudProvider() provider.CloudProvider {
 // GetAsyncTaskService 获取异步任务服务
 func (s *CollectorServiceImpl) GetAsyncTaskService() asynctasklogic.AsyncTaskService {
 	return s.asyncTaskService
+}
+
+// GetCOSProvider 根据账户ID获取COS提供商
+func (s *CollectorServiceImpl) GetCOSProvider(accountID string) provider.CloudProviderWithCOS {
+	if accountID == "" {
+		// 如果没有指定账户ID，返回默认云提供商（如果支持COS）
+		if cosProvider, ok := s.cloudProvider.(provider.CloudProviderWithCOS); ok {
+			return cosProvider
+		}
+		return nil
+	}
+	return s.cosProviders[accountID]
+}
+
+// GetAllCOSProviders 获取所有COS提供商
+func (s *CollectorServiceImpl) GetAllCOSProviders() map[string]provider.CloudProviderWithCOS {
+	return s.cosProviders
 }
