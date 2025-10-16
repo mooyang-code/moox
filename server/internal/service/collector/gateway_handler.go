@@ -7,317 +7,502 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strings"
+	"net/http/httptest"
 	"time"
+	
+	asynctaskapi "github.com/mooyang-code/moox/server/internal/service/asynctask/api"
+	cloudnodeapi "github.com/mooyang-code/moox/server/internal/service/cloudnode/api"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
+	collectorapi "github.com/mooyang-code/moox/server/internal/service/collector/api"
+	packagemgrapi "github.com/mooyang-code/moox/server/internal/service/packagemgr/api"
 
+	"github.com/gin-gonic/gin"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// GatewayHandler handles gateway requests for collector service
+// GatewayHandler 处理API请求的网关处理器
 type GatewayHandler struct {
+	engine     *gin.Engine
+	serviceID  string
 	httpClient *http.Client
-	baseURL    string
+	authBaseURL string
 }
 
-// NewGatewayHandler creates a new gateway handler
-func NewGatewayHandler(baseURL string) *GatewayHandler {
+// NewGatewayHandler 创建网关处理器
+func NewGatewayHandler(collectorImpl *CollectorServiceImpl) *GatewayHandler {
+	gin.SetMode(gin.ReleaseMode)
+	engine := gin.New()
+
+	// 添加中间件
+	engine.Use(gin.Recovery())
+
+	// API路由组
+	api := engine.Group("/api")
+
+	// 注册采集器相关的gin路由
+	if collectorImpl != nil {
+		// 注册异步任务路由（使用带有执行器的服务实例）
+		asynctaskapi.RegisterAsyncTaskRoutesWithService(api, collectorImpl.GetAsyncTaskService())
+
+		// 注册采集器路由
+		collectorapi.RegisterCollectorRoutes(api, collectorImpl.GetDB())
+
+		// 注册云节点路由
+		cloudnodeapi.RegisterCloudNodeRoutes(api, collectorImpl.GetDB())
+
+		// 注册包管理路由（需要云提供商和存储桶信息）
+		cloudProvider := collectorImpl.GetCloudProvider()
+		if cloudProvider != nil {
+			// 类型断言为支持COS的云提供商
+			if cosProvider, ok := cloudProvider.(provider.CloudProviderWithCOS); ok {
+				cosBucket := "moox-packages" // 从配置中获取
+				// 类型断言成功，可以注册包管理路由
+				packagemgrapi.RegisterPackageManagerRoutes(api, collectorImpl.GetDB(), cosProvider, cosBucket)
+			}
+		}
+	}
+
+	// 创建HTTP客户端用于认证服务转发
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
 	return &GatewayHandler{
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-		baseURL: baseURL,
+		engine:      engine,
+		serviceID:   "collector",
+		httpClient:  httpClient,
+		authBaseURL: "http://127.0.0.1:20102", // 认证服务HTTP端口
 	}
 }
 
-// ServiceID returns the service ID for registration
+// ServiceID 实现ServiceHandler接口
 func (h *GatewayHandler) ServiceID() string {
-	return "collector"
+	return h.serviceID
 }
 
-// ForwardRequest forwards gateway requests to internal API endpoints
-func (h *GatewayHandler) ForwardRequest(ctx context.Context, method string, headers map[string]string, body []byte) ([]byte, error) {
-	log.InfoContextf(ctx, "[Collector Gateway] ForwardRequest called - method: %s, headers: %+v, body: %s", method, headers, string(body))
+// RouteInfo 路由信息结构
+type RouteInfo struct {
+	Path       string
+	HTTPMethod string
+	Body       []byte
+}
 
-	// Map gateway methods to internal API endpoints and HTTP methods
-	var internalPath string
-	var httpMethod string
-	var requestBody []byte
+// ForwardRequest 实现ServiceHandler接口，转发请求到内部引擎
+func (h *GatewayHandler) ForwardRequest(ctx context.Context, method string, headers map[string]string, body []byte) ([]byte, error) {
+	log.InfoContextf(ctx, "[Gateway] ForwardRequest called - method: %s, headers: %+v, body: %s", method, headers, string(body))
+
+	// 特殊处理认证方法，通过HTTP转发到认证服务
+	if authResp, isAuthMethod, err := h.handleAuthMethodByHTTP(ctx, method, headers, body); isAuthMethod {
+		if err != nil {
+			return nil, err
+		}
+		return authResp, nil
+	}
+
+	// 解析方法并获取路由信息
+	routeInfo, err := h.parseMethodToRoute(method, body)
+	if err != nil {
+		return nil, err
+	}
+
+	log.InfoContextf(ctx, "[Gateway] Forwarding to engine: %s %s with body: %s", routeInfo.HTTPMethod, routeInfo.Path, string(routeInfo.Body))
+
+	// 创建并执行HTTP请求
+	req, err := h.createHTTPRequest(routeInfo, headers)
+	if err != nil {
+		return nil, err
+	}
+
+	// 执行请求并处理响应
+	return h.executeRequest(ctx, req)
+}
+
+// parseMethodToRoute 解析方法名并返回路由信息
+func (h *GatewayHandler) parseMethodToRoute(method string, body []byte) (*RouteInfo, error) {
+	route := &RouteInfo{}
 
 	switch method {
-	// Async task methods
+	// Function Package Management methods
+	case "UploadPackage":
+		route.Path = "/api/function-packages/upload"
+		route.HTTPMethod = "POST"
+		route.Body = body
+	case "GetPackageList":
+		route.Path = "/api/function-packages"
+		route.HTTPMethod = "GET"
+	case "GetPackageDetail":
+		return h.buildDetailRoute("/api/function-packages", "GET", body)
+	case "DeletePackage":
+		return h.buildDetailRoute("/api/function-packages", "DELETE", body)
+	case "GetPackageDownloadURL":
+		return h.buildDetailRouteWithSuffix("/api/function-packages", "GET", body, "download")
+	case "GetPackageOptions":
+		route.Path = "/api/function-packages/options"
+		route.HTTPMethod = "GET"
+
+	// Async Task methods
 	case "AsyncTaskCreate":
-		internalPath = "/moox-api/async_task/create"
-		httpMethod = "POST"
-		requestBody = body
+		route.Path = "/api/async-task/create"
+		route.HTTPMethod = "POST"
+		route.Body = body
 	case "AsyncTaskQuery":
-		internalPath = "/moox-api/async_task/query"
-		httpMethod = "GET"
-		requestBody = nil
-		// Extract task_id from body and add to URL as query parameter
-		if len(body) > 0 {
-			var params map[string]interface{}
-			if err := json.Unmarshal(body, &params); err == nil {
-				if taskID, ok := params["task_id"].(string); ok {
-					internalPath = fmt.Sprintf("%s?task_id=%s", internalPath, url.QueryEscape(taskID))
-				}
-			}
-		}
+		return h.buildQueryRoute("/api/async-task/query", body, "task_id")
+	case "GetTaskDetail":
+		return h.buildDetailRouteWithParam("/api/async-task", "GET", body, "task_id")
+	case "CancelTask":
+		return h.buildDetailRouteWithParamAndSuffix("/api/async-task", "POST", body, "task_id", "cancel")
+	case "GetTaskDetails":
+		return h.buildDetailRouteWithParamAndSuffix("/api/async-task", "GET", body, "task_id", "details")
 
-	// Node management methods
-	case "ListNodes", "GetNodeList":
-		internalPath = "/moox-api/t_cloud_nodes"
-		httpMethod = "GET"
-	case "GetNode":
-		internalPath = "/moox-api/t_cloud_nodes"
-		httpMethod = "GET"
-		// Note: node_id parameter should be passed via query string
-	case "RegisterNode":
-		internalPath = "/moox-api/t_cloud_nodes"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("register", body)
-	case "UpdateNode":
-		internalPath = "/moox-api/t_cloud_nodes"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("update", body)
-	case "DeleteNode":
-		internalPath = "/moox-api/t_cloud_nodes"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("delete", body)
-	case "NodeHeartbeat":
-		internalPath = "/moox-api/t_cloud_nodes"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("heartbeat", body)
-	case "UpdateNodeLoad":
-		internalPath = "/moox-api/t_cloud_nodes"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("update_load", body)
-
-	// Task configuration methods
-	case "ListTaskConfigs":
-		internalPath = "/moox-api/t_collector_task_config"
-		httpMethod = "GET"
-	case "GetTaskConfig":
-		internalPath = "/moox-api/t_collector_task_config"
-		httpMethod = "GET"
+	// Collector Task Config methods
+	case "GetTaskConfigList", "ListTaskConfigs":
+		route.Path = "/api/task-config/list"
+		route.HTTPMethod = "GET"
+	case "GetTaskConfigDetail":
+		return h.buildDetailRoute("/api/task-config", "GET", body)
 	case "CreateTaskConfig":
-		internalPath = "/moox-api/t_collector_task_config"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("create", body)
+		route.Path = "/api/task-config/create"
+		route.HTTPMethod = "POST"
+		route.Body = body
 	case "UpdateTaskConfig":
-		internalPath = "/moox-api/t_collector_task_config"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("update", body)
+		return h.buildUpdateRoute("/api/task-config", body)
 	case "DeleteTaskConfig":
-		internalPath = "/moox-api/t_collector_task_config"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("delete", body)
+		return h.buildDetailRoute("/api/task-config", "DELETE", body)
 	case "BatchUpdateTaskConfigEnabled":
-		internalPath = "/moox-api/t_collector_task_config"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("batch_update_enabled", body)
-	case "UpdateDispatchResult":
-		internalPath = "/moox-api/t_collector_task_config"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("update_dispatch_result", body)
+		route.Path = "/api/task-config/batch-update-enabled"
+		route.HTTPMethod = "POST"
+		route.Body = body
 
-	// Task instance methods
-	case "ListTaskInstances":
-		internalPath = "/moox-api/t_collector_task_instances"
-		httpMethod = "GET"
-	case "GetTaskInstance":
-		internalPath = "/moox-api/t_collector_task_instances"
-		httpMethod = "GET"
+	// Task Instance methods
+	case "GetTaskInstanceList", "ListTaskInstances":
+		route.Path = "/api/task-instance/list"
+		route.HTTPMethod = "GET"
+	case "GetTaskInstanceDetail":
+		return h.buildDetailRoute("/api/task-instance", "GET", body)
 	case "CreateTaskInstance":
-		internalPath = "/moox-api/t_collector_task_instances"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("create", body)
-	case "RetryTaskInstance":
-		internalPath = "/moox-api/t_collector_task_instances"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("retry", body)
-	case "CancelTaskInstance":
-		internalPath = "/moox-api/t_collector_task_instances"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("cancel", body)
-	case "GetTaskInstanceLogs":
-		internalPath = "/moox-api/t_collector_task_instances"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("get_logs", body)
-	case "BatchCreateTaskInstances":
-		internalPath = "/moox-api/t_collector_task_instances"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("batch_create", body)
+		route.Path = "/api/task-instance/create"
+		route.HTTPMethod = "POST"
+		route.Body = body
+	case "UpdateTaskInstance":
+		return h.buildUpdateRoute("/api/task-instance", body)
+	case "DeleteTaskInstance":
+		return h.buildDetailRoute("/api/task-instance", "DELETE", body)
 	case "StartTaskInstance":
-		internalPath = "/moox-api/t_collector_task_instances"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("start", body)
-	case "CompleteTaskInstance":
-		internalPath = "/moox-api/t_collector_task_instances"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("complete", body)
-	case "UpdateTaskInstanceStatus":
-		internalPath = "/moox-api/t_collector_task_instances"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("update_status", body)
-	case "CleanupOldInstances":
-		internalPath = "/moox-api/t_collector_task_instances"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("cleanup", body)
+		return h.buildDetailRouteWithSuffix("/api/task-instance", "POST", body, "start")
+	case "StopTaskInstance":
+		return h.buildDetailRouteWithSuffix("/api/task-instance", "POST", body, "stop")
+	case "GetTaskInstanceLogs":
+		return h.buildDetailRouteWithSuffix("/api/task-instance", "POST", body, "logs")
+	case "RetryTaskInstance":
+		return h.buildDetailRouteWithSuffix("/api/task-instance", "POST", body, "retry")
+	case "CancelTaskInstance":
+		return h.buildDetailRouteWithSuffix("/api/task-instance", "POST", body, "cancel")
 
-	// Cloud account methods
-	case "ListCloudAccounts":
-		internalPath = "/moox-api/t_cloud_accounts"
-		httpMethod = "GET"
-	case "GetCloudAccount":
-		internalPath = "/moox-api/t_cloud_accounts"
-		httpMethod = "GET"
+	// Node Tasks methods
+	case "GetNodeTasksList":
+		route.Path = "/api/node-tasks/list"
+		route.HTTPMethod = "GET"
+	case "GetNodeTasksDetail":
+		return h.buildDetailRoute("/api/node-tasks", "GET", body)
+	case "CreateNodeTasks":
+		route.Path = "/api/node-tasks/create"
+		route.HTTPMethod = "POST"
+		route.Body = body
+	case "UpdateNodeTasks":
+		return h.buildUpdateRoute("/api/node-tasks", body)
+	case "DeleteNodeTasks":
+		return h.buildDetailRoute("/api/node-tasks", "DELETE", body)
+
+	// Cloud Node methods
+	case "GetSCFNodeList", "GetNodeList", "ListNodes":
+		route.Path = "/api/cloud_node/list"
+		route.HTTPMethod = "GET"
+	case "GetSCFNodeDetail", "GetNodeDetail":
+		route.Path = "/api/cloud_node/detail"
+		route.HTTPMethod = "GET"
+	case "CreateSCFNode", "RegisterNode":
+		route.Path = "/api/cloud_node/register"
+		route.HTTPMethod = "POST"
+		route.Body = body
+	case "UpdateSCFNode", "UpdateNode":
+		route.Path = "/api/cloud_node/update"
+		route.HTTPMethod = "PUT"
+		route.Body = body
+	case "DeleteSCFNode", "RemoveNode", "DeleteNode":
+		route.Path = "/api/cloud_node/remove"
+		route.HTTPMethod = "DELETE"
+		route.Body = body
+	case "Heartbeat":
+		route.Path = "/api/cloud_node/heartbeat"
+		route.HTTPMethod = "POST"
+		route.Body = body
+	case "UpdateNodeLoad":
+		route.Path = "/api/cloud_node/update_load"
+		route.HTTPMethod = "PUT"
+		route.Body = body
+	case "UpdateNodeFunction":
+		route.Path = "/api/cloud_node/update_function"
+		route.HTTPMethod = "PUT"
+		route.Body = body
+	case "BatchCreateSCFNodes":
+		route.Path = "/api/scf-nodes/batch-create"
+		route.HTTPMethod = "POST"
+		route.Body = body
+	case "BatchDeleteSCFNodes":
+		route.Path = "/api/scf-nodes/batch-delete"
+		route.HTTPMethod = "POST"
+		route.Body = body
+	case "BatchDeploySCFNodes":
+		route.Path = "/api/scf-nodes/batch-deploy"
+		route.HTTPMethod = "POST"
+		route.Body = body
+
+	// Cloud Account methods
+	case "GetCloudAccountList", "ListCloudAccounts", "ListAccounts":
+		route.Path = "/api/cloud_account/list"
+		route.HTTPMethod = "GET"
+	case "GetCloudAccountDetail":
+		route.Path = "/api/cloud_account/detail"
+		route.HTTPMethod = "GET"
 	case "CreateCloudAccount":
-		internalPath = "/moox-api/t_cloud_accounts"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("create", body)
+		route.Path = "/api/cloud_account/create"
+		route.HTTPMethod = "POST"
+		route.Body = body
 	case "UpdateCloudAccount":
-		internalPath = "/moox-api/t_cloud_accounts"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("update", body)
+		route.Path = "/api/cloud_account/update"
+		route.HTTPMethod = "PUT"
+		route.Body = body
 	case "DeleteCloudAccount":
-		internalPath = "/moox-api/t_cloud_accounts"
-		httpMethod = "POST"
-		requestBody = h.wrapAction("delete", body)
-	case "ListCloudAccountsByProvider":
-		internalPath = "/moox-api/t_cloud_accounts"
-		httpMethod = "GET"
-
-	case "UploadFunction":
-		internalPath = "/moox-api/cloud_node/upload_function"
-		httpMethod = "POST"
-		requestBody = body
+		route.Path = "/api/cloud_account/delete"
+		route.HTTPMethod = "DELETE"
+		route.Body = body
 
 	default:
 		return nil, fmt.Errorf("unsupported method: %s", method)
 	}
+	return route, nil
+}
 
-	// Build the complete URL
-	fullURL := h.baseURL + internalPath
+// buildDetailRoute 构建带ID的详情路由
+func (h *GatewayHandler) buildDetailRoute(basePath, httpMethod string, body []byte) (*RouteInfo, error) {
+	route := &RouteInfo{
+		Path:       basePath,
+		HTTPMethod: httpMethod,
+	}
 
-	// For GET requests, convert body params to query params
-	// Skip if query params are already in the path (e.g. AsyncTaskQuery)
-	if httpMethod == "GET" && len(body) > 0 && !strings.Contains(internalPath, "?") {
+	if len(body) > 0 {
 		var params map[string]interface{}
 		if err := json.Unmarshal(body, &params); err == nil {
-			query := url.Values{}
-			for key, value := range params {
-				query.Set(key, fmt.Sprintf("%v", value))
-			}
-			if len(query) > 0 {
-				fullURL += "?" + query.Encode()
+			if id, ok := params["id"]; ok {
+				route.Path = fmt.Sprintf("%s/%v", basePath, id)
 			}
 		}
 	}
+	return route, nil
+}
 
-	log.InfoContextf(ctx, "[Collector Gateway] Forwarding to: %s %s with body: %s", httpMethod, fullURL, string(requestBody))
+// buildDetailRouteWithSuffix 构建带ID和后缀的路由
+func (h *GatewayHandler) buildDetailRouteWithSuffix(basePath, httpMethod string, body []byte, suffix string) (*RouteInfo, error) {
+	route := &RouteInfo{
+		Path:       basePath,
+		HTTPMethod: httpMethod,
+		Body:       body,
+	}
 
-	// Create HTTP request
+	if len(body) > 0 {
+		var params map[string]interface{}
+		if err := json.Unmarshal(body, &params); err == nil {
+			if id, ok := params["id"]; ok {
+				route.Path = fmt.Sprintf("%s/%v/%s", basePath, id, suffix)
+			}
+		}
+	}
+	return route, nil
+}
+
+// buildDetailRouteWithParam 构建带参数名的详情路由
+func (h *GatewayHandler) buildDetailRouteWithParam(basePath, httpMethod string, body []byte, paramName string) (*RouteInfo, error) {
+	route := &RouteInfo{
+		Path:       basePath,
+		HTTPMethod: httpMethod,
+	}
+
+	if len(body) > 0 {
+		var params map[string]interface{}
+		if err := json.Unmarshal(body, &params); err == nil {
+			if id, ok := params[paramName]; ok {
+				route.Path = fmt.Sprintf("%s/%v", basePath, id)
+			}
+		}
+	}
+	return route, nil
+}
+
+// buildDetailRouteWithParamAndSuffix 构建带参数名和后缀的路由
+func (h *GatewayHandler) buildDetailRouteWithParamAndSuffix(basePath, httpMethod string, body []byte, paramName, suffix string) (*RouteInfo, error) {
+	route := &RouteInfo{
+		Path:       basePath,
+		HTTPMethod: httpMethod,
+	}
+
+	if len(body) > 0 {
+		var params map[string]interface{}
+		if err := json.Unmarshal(body, &params); err == nil {
+			if id, ok := params[paramName]; ok {
+				route.Path = fmt.Sprintf("%s/%v/%s", basePath, id, suffix)
+			}
+		}
+	}
+	return route, nil
+}
+
+// buildQueryRoute 构建查询参数路由
+func (h *GatewayHandler) buildQueryRoute(basePath string, body []byte, paramName string) (*RouteInfo, error) {
+	route := &RouteInfo{
+		Path:       basePath,
+		HTTPMethod: "GET",
+	}
+
+	if len(body) > 0 {
+		var params map[string]interface{}
+		if err := json.Unmarshal(body, &params); err == nil {
+			if value, ok := params[paramName].(string); ok {
+				route.Path = fmt.Sprintf("%s?%s=%s", basePath, paramName, value)
+			}
+		}
+	}
+	return route, nil
+}
+
+// buildUpdateRoute 构建更新路由
+func (h *GatewayHandler) buildUpdateRoute(basePath string, body []byte) (*RouteInfo, error) {
+	route := &RouteInfo{
+		Path:       basePath,
+		HTTPMethod: "PUT",
+		Body:       body,
+	}
+
+	if len(body) > 0 {
+		var params map[string]interface{}
+		if err := json.Unmarshal(body, &params); err == nil {
+			if id, ok := params["id"]; ok {
+				route.Path = fmt.Sprintf("%s/%v", basePath, id)
+			}
+		}
+	}
+	return route, nil
+}
+
+// createHTTPRequest 创建HTTP请求
+func (h *GatewayHandler) createHTTPRequest(routeInfo *RouteInfo, headers map[string]string) (*http.Request, error) {
 	var req *http.Request
 	var err error
-	if requestBody != nil {
-		req, err = http.NewRequest(httpMethod, fullURL, bytes.NewReader(requestBody))
+
+	if routeInfo.Body != nil {
+		req, err = http.NewRequest(routeInfo.HTTPMethod, routeInfo.Path, bytes.NewReader(routeInfo.Body))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
 	} else {
-		req, err = http.NewRequest(httpMethod, fullURL, nil)
+		req, err = http.NewRequest(routeInfo.HTTPMethod, routeInfo.Path, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 	}
 
-	// Add headers
+	// 添加请求头
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	return req, nil
+}
+
+// executeRequest 执行请求并处理响应
+func (h *GatewayHandler) executeRequest(ctx context.Context, req *http.Request) ([]byte, error) {
+	// 创建响应记录器
+	recorder := httptest.NewRecorder()
+
+	// 使用引擎处理请求
+	h.engine.ServeHTTP(recorder, req)
+
+	// 读取响应
+	respBody := recorder.Body.Bytes()
+	statusCode := recorder.Code
+
+	log.InfoContextf(ctx, "[Gateway] Response status: %d, body: %s", statusCode, string(respBody))
+
+	// 检查状态码
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("request failed with status %d: %s", statusCode, string(respBody))
+	}
+
+	// 处理空响应体
+	if len(respBody) == 0 {
+		log.ErrorContextf(ctx, "[Gateway] Empty response body received")
+		emptyResp := map[string]interface{}{
+			"code": 500,
+			"data": []interface{}{},
+			"msg":  "Empty response from API",
+		}
+		return json.Marshal(emptyResp)
+	}
+	return respBody, nil
+}
+
+// handleAuthMethodByHTTP 通过HTTP转发处理认证方法
+func (h *GatewayHandler) handleAuthMethodByHTTP(ctx context.Context, method string, headers map[string]string, body []byte) ([]byte, bool, error) {
+	// 检查是否为认证方法
+	var authPath string
+	switch method {
+	case "GetLoginSalt":
+		authPath = "/auth/GetLoginSalt"
+	case "Login":
+		authPath = "/auth/Login"
+	case "Register":
+		authPath = "/auth/Register"
+	case "GetUserInfo":
+		authPath = "/auth/GetUserInfo"
+	default:
+		return nil, false, nil // 不是认证方法
+	}
+
+	// 构建完整的认证服务URL
+	fullURL := h.authBaseURL + authPath
+	log.InfoContextf(ctx, "[Gateway] Forwarding auth request to: %s with body: %s", fullURL, string(body))
+
+	// 创建HTTP请求
+	req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, true, fmt.Errorf("创建HTTP请求失败: %w", err)
+	}
+
+	// 设置请求头
+	req.Header.Set("Content-Type", "application/json")
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
 
-	// Execute request
+	// 执行HTTP请求
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
+		return nil, true, fmt.Errorf("HTTP请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Read response
+	// 读取响应
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, true, fmt.Errorf("读取响应失败: %w", err)
 	}
 
-	log.InfoContextf(ctx, "[Collector Gateway] Response status: %d, body: %s", resp.StatusCode, string(respBody))
+	log.InfoContextf(ctx, "[Gateway] Auth response status: %d, body: %s", resp.StatusCode, string(respBody))
 
-	// Check status code
+	// 检查状态码
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(respBody))
+		return nil, true, fmt.Errorf("认证服务请求失败，状态码: %d, 响应: %s", resp.StatusCode, string(respBody))
 	}
 
-	// Handle empty response body
-	if len(respBody) == 0 {
-		log.ErrorContextf(ctx, "[Collector Gateway] Empty response body received")
-		emptyResp := map[string]interface{}{
-			"code": 500,
-			"data": []interface{}{},
-			"msg":  "Empty response from internal API",
-		}
-		return json.Marshal(emptyResp)
-	}
-
-	var apiResponse map[string]interface{}
-	if err := json.Unmarshal(respBody, &apiResponse); err != nil {
-		log.ErrorContextf(ctx, "[Collector Gateway] Failed to unmarshal response: %v, body: %s", err, string(respBody))
-		// If we can't unmarshal, return as-is
-		return respBody, nil
-	}
-
-	// Transform field names from uppercase to lowercase
-	transformedResponse := make(map[string]interface{})
-	if code, ok := apiResponse["Code"]; ok {
-		transformedResponse["code"] = code
-	}
-	if data, ok := apiResponse["Data"]; ok {
-		transformedResponse["data"] = data
-	}
-	if msg, ok := apiResponse["Msg"]; ok {
-		transformedResponse["msg"] = msg
-	}
-	// Also check lowercase variants in case the API returns mixed case
-	if code, ok := apiResponse["code"]; ok {
-		transformedResponse["code"] = code
-	}
-	if data, ok := apiResponse["data"]; ok {
-		transformedResponse["data"] = data
-	}
-	if msg, ok := apiResponse["msg"]; ok {
-		transformedResponse["msg"] = msg
-	}
-
-	// Marshal the transformed response
-	transformedBody, err := json.Marshal(transformedResponse)
-	if err != nil {
-		return respBody, nil
-	}
-	return transformedBody, nil
+	return respBody, true, nil
 }
 
-// wrapAction wraps request body with action parameter
-func (h *GatewayHandler) wrapAction(action string, body []byte) []byte {
-	var params map[string]interface{}
-	if len(body) > 0 {
-		json.Unmarshal(body, &params)
-	}
-
-	if params == nil {
-		params = make(map[string]interface{})
-	}
-
-	params["_action"] = action
-	wrapped, _ := json.Marshal(params)
-	return wrapped
-}

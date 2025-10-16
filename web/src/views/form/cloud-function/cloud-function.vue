@@ -802,13 +802,23 @@ const loadData = async () => {
     
     // 兼容两种响应格式
     if (response.data?.code === 200 && response.data?.data) {
-      // 新格式
-      allFunctionList.value = response.data.data || [];
+      // 新格式：处理数组格式的响应
+      let data = response.data.data;
+      if (Array.isArray(data)) {
+        allFunctionList.value = data;
+      } else {
+        allFunctionList.value = [data].filter(Boolean);
+      }
       pagination.value.total = allFunctionList.value.length;
       updateCurrentPageData();
     } else if (response.data?.ret_info?.code === 0) {
       // 旧格式
-      allFunctionList.value = response.data.ret_info.data || [];
+      let data = response.data.ret_info.data;
+      if (Array.isArray(data)) {
+        allFunctionList.value = data;
+      } else {
+        allFunctionList.value = [data].filter(Boolean);
+      }
       pagination.value.total = allFunctionList.value.length;
       updateCurrentPageData();
     }
@@ -827,11 +837,21 @@ const loadCloudAccounts = async () => {
     
     // 兼容两种响应格式
     if (response.data?.code === 200 && response.data?.data) {
-      // 新格式：直接返回 code 和 data
-      cloudAccountOptions.value = response.data.data || [];
+      // 新格式：处理数组格式的响应
+      let data = response.data.data;
+      if (Array.isArray(data)) {
+        cloudAccountOptions.value = data;
+      } else {
+        cloudAccountOptions.value = [data].filter(Boolean);
+      }
     } else if (response.data?.ret_info?.code === 0) {
       // 旧格式：ret_info 包装
-      cloudAccountOptions.value = response.data.ret_info.data || [];
+      let data = response.data.ret_info.data;
+      if (Array.isArray(data)) {
+        cloudAccountOptions.value = data;
+      } else {
+        cloudAccountOptions.value = [data].filter(Boolean);
+      }
     } else {
       Message.error('加载云账户失败');
     }

@@ -11,7 +11,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/gateway"
 	_ "github.com/mooyang-code/moox/server/internal/middleware"
 	"github.com/mooyang-code/moox/server/internal/service"
-	apisvr "github.com/mooyang-code/moox/server/internal/service/apirouter"
+	dnsproxy "github.com/mooyang-code/moox/server/internal/service/dnsproxy"
 	authsvr "github.com/mooyang-code/moox/server/internal/service/auth"
 	authcfg "github.com/mooyang-code/moox/server/internal/service/auth/config"
 	collectorsvr "github.com/mooyang-code/moox/server/internal/service/collector"
@@ -25,6 +25,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
 
 // startWebSSHService 启动WebSSH服务
 func startWebSSHService() {
@@ -124,6 +125,14 @@ func main() {
 		log.Fatalf("LoadConfig err[%v]", err)
 	}
 
+	// 初始化采集器服务（在启动WebSSH服务之前）
+	log.Info("正在初始化采集器服务...")
+	collectorImp, err := collectorsvr.InitCollectorServiceImpl("")
+	if err != nil {
+		log.Fatalf("初始化采集器服务失败: %v", err)
+	}
+
+
 	// 启动WebSSH服务（在独立的goroutine中运行）
 	go func() {
 		log.Info("正在启动WebSSH服务...")
@@ -140,19 +149,9 @@ func main() {
 	}
 	pb.RegisterAuthAPIService(s, authImp)
 
-	// 先注册API路由，这样采集器处理器才能找到路由
-	log.Info("正在注册API路由...")
-	apisvr.RegisterStandardHTTPHandlers(s)
-
-	// 初始化采集器服务
-	log.Info("正在初始化采集器服务...")
-	collectorImp, err := collectorsvr.InitCollectorServiceImpl("")
-	if err != nil {
-		log.Fatalf("初始化采集器服务失败: %v", err)
-	}
+	// 注册采集器处理器
+	log.Info("正在注册采集器处理器...")
 	collectorImp.RegisterCollectorHandlers()
-	// 注册HTTP路由（文件上传等）
-	collectorImp.RegisterHTTPRoutes(apisvr.GetHTTPMux())
 	// 启动异步服务（包括队列消费者）
 	ctx := context.Background()
 	collectorImp.Start(ctx)
@@ -181,7 +180,7 @@ func main() {
 
 	// 注册定时器
 	timer.RegisterScheduler("dnsproxySchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.dnsproxy.timer"), apisvr.DnsproxySchedule)
+	timer.RegisterHandlerService(s.Service("trpc.dnsproxy.timer"), dnsproxy.DnsproxySchedule)
 
 	// 启动trpc服务器
 	log.Info("启动trpc服务器...")

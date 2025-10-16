@@ -3,11 +3,11 @@ package api
 import (
 	"net/http"
 
-	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
-
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/queue"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // RegisterCloudNodeRoutes 注册云节点相关路由

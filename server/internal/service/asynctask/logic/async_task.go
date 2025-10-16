@@ -19,8 +19,16 @@ type AsyncTaskService interface {
 	GetTaskStatus(ctx context.Context, taskID string) (*model.AsyncTask, error)
 	// GetTask 获取任务详情
 	GetTask(ctx context.Context, taskID string) (*model.AsyncTask, error)
-	// GetTaskDetails 获取任务详情列表
-	GetTaskDetails(ctx context.Context, taskID string, status int) ([]*model.AsyncTaskDetail, error)
+	// GetTaskDetails 获取任务详情列表（支持所有详情）
+	GetTaskDetails(ctx context.Context, taskID string) ([]*model.AsyncTaskDetail, error)
+	// GetTaskDetailsByStatus 根据状态获取任务详情列表
+	GetTaskDetailsByStatus(ctx context.Context, taskID string, status int) ([]*model.AsyncTaskDetail, error)
+	// GetTaskDetailsSummary 获取任务详情统计
+	GetTaskDetailsSummary(ctx context.Context, taskID string) (*TaskDetailsSummary, error)
+	// GetFailedTaskDetails 获取失败的任务详情
+	GetFailedTaskDetails(ctx context.Context, taskID string) ([]*model.AsyncTaskDetail, error)
+	// CancelTask 取消任务
+	CancelTask(ctx context.Context, taskID string) error
 	// UpdateTaskProgress 更新任务进度
 	UpdateTaskProgress(ctx context.Context, taskID string, successCount, failedCount int) error
 	// UpdateTaskStatus 更新任务状态
@@ -33,6 +41,12 @@ type AsyncTaskService interface {
 	BatchCreateTaskDetails(ctx context.Context, taskID string, items []TaskItem) error
 	// RegisterExecutor 注册任务执行器
 	RegisterExecutor(taskType string, executor TaskExecutor)
+}
+
+// TaskDetailsSummary 任务详情统计
+type TaskDetailsSummary struct {
+	SuccessCount int
+	FailedCount  int
 }
 
 // TaskItem 任务项
@@ -131,12 +145,42 @@ func (s *asyncTaskServiceImpl) GetTask(ctx context.Context, taskID string) (*mod
 	return s.GetTaskStatus(ctx, taskID)
 }
 
-// GetTaskDetails 获取任务详情列表
-func (s *asyncTaskServiceImpl) GetTaskDetails(ctx context.Context, taskID string, status int) ([]*model.AsyncTaskDetail, error) {
-	if status > 0 {
-		return s.taskDetailDAO.GetTaskDetailsByStatus(ctx, taskID, status)
-	}
+// GetTaskDetails 获取任务详情列表（支持所有详情）
+func (s *asyncTaskServiceImpl) GetTaskDetails(ctx context.Context, taskID string) ([]*model.AsyncTaskDetail, error) {
 	return s.taskDetailDAO.GetTaskDetails(ctx, taskID)
+}
+
+// GetTaskDetailsByStatus 根据状态获取任务详情列表
+func (s *asyncTaskServiceImpl) GetTaskDetailsByStatus(ctx context.Context, taskID string, status int) ([]*model.AsyncTaskDetail, error) {
+	return s.taskDetailDAO.GetTaskDetailsByStatus(ctx, taskID, status)
+}
+
+// GetTaskDetailsSummary 获取任务详情统计
+func (s *asyncTaskServiceImpl) GetTaskDetailsSummary(ctx context.Context, taskID string) (*TaskDetailsSummary, error) {
+	successCount, err := s.taskDetailDAO.CountTaskDetailsByStatus(ctx, taskID, model.TaskDetailStatusSuccess)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count success details: %w", err)
+	}
+
+	failedCount, err := s.taskDetailDAO.CountTaskDetailsByStatus(ctx, taskID, model.TaskDetailStatusFailed)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count failed details: %w", err)
+	}
+
+	return &TaskDetailsSummary{
+		SuccessCount: int(successCount),
+		FailedCount:  int(failedCount),
+	}, nil
+}
+
+// GetFailedTaskDetails 获取失败的任务详情
+func (s *asyncTaskServiceImpl) GetFailedTaskDetails(ctx context.Context, taskID string) ([]*model.AsyncTaskDetail, error) {
+	return s.taskDetailDAO.GetTaskDetailsByStatus(ctx, taskID, model.TaskDetailStatusFailed)
+}
+
+// CancelTask 取消任务
+func (s *asyncTaskServiceImpl) CancelTask(ctx context.Context, taskID string) error {
+	return s.UpdateTaskStatus(ctx, taskID, model.TaskStatusCancelled, "Task cancelled by user")
 }
 
 // UpdateTaskStatus 更新任务状态
@@ -144,7 +188,6 @@ func (s *asyncTaskServiceImpl) UpdateTaskStatus(ctx context.Context, taskID stri
 	if err := s.taskDAO.UpdateTaskStatus(ctx, taskID, status, errorMessage); err != nil {
 		return fmt.Errorf("failed to update task status: %w", err)
 	}
-
 	return nil
 }
 

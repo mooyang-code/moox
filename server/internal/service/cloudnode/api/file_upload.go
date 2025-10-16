@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mooyang-code/moox/server/internal/common"
 	cloudnodelogic "github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -98,14 +99,14 @@ func (h *FileUploadHandler) HandleFunctionUpload(w http.ResponseWriter, r *http.
 	log.InfoContextf(ctx, "Successfully enqueued function update for node %s with base64 file", req.NodeID)
 
 	// 返回成功响应
-	response := &APIResponse{
-		Code: 200,
-		Data: map[string]interface{}{
-			"message":   "Function update enqueued successfully",
+	response := &common.UnifiedAPIResponse{
+		Code:    200,
+		Message: "Function update enqueued successfully",
+		Data: []any{map[string]interface{}{
 			"node_id":   req.NodeID,
 			"file_name": fileName,
 			"file_size": len(zipData),
-		},
+		}},
 	}
 	writeJSONResponse(w, http.StatusOK, response)
 }
@@ -122,12 +123,10 @@ func writeJSONResponse(w http.ResponseWriter, statusCode int, data interface{}) 
 
 // writeErrorResponse 写入错误响应
 func writeErrorResponse(w http.ResponseWriter, statusCode int, err error) {
-	response := struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	}{
+	response := &common.UnifiedAPIResponse{
 		Code:    statusCode,
 		Message: err.Error(),
+		Data:    []any{},
 	}
 	writeJSONResponse(w, statusCode, response)
 }

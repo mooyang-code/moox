@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_accounts (
     UNIQUE (c_account_id, c_invalid)
 );
 
--- ************ 创建云函数数据采集器节点信息表 (增强版) ************
+-- ************ 创建云函数数据采集器节点信息表 ************
 DROP TABLE IF EXISTS t_cloud_nodes;
 CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
@@ -347,4 +347,92 @@ CREATE TRIGGER update_node_heartbeat_mtime AFTER UPDATE ON t_node_heartbeat BEGI
 -- 节点任务快照表更新触发器
 DROP TRIGGER IF EXISTS update_node_task_snapshot_mtime;
 CREATE TRIGGER update_node_task_snapshot_mtime AFTER UPDATE ON t_node_task_snapshot BEGIN UPDATE t_node_task_snapshot SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+
+-- ============ 云函数代码包管理系统表设计 ============
+
+-- ************ 云函数代码包表 ************
+CREATE TABLE IF NOT EXISTS t_function_packages (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,               -- 主键ID
+    c_package_name TEXT NOT NULL,                                  -- 代码包名称
+    c_version TEXT NOT NULL,                                       -- 版本号
+    c_description TEXT DEFAULT '',                                 -- 版本描述
+    c_runtime TEXT NOT NULL,                                       -- 运行时环境(Go1, Python3.7等)
+    c_package_type TEXT NOT NULL DEFAULT 'data_collector',         -- 函数包类型: data_collector=数据采集类型, factor_calculator=因子计算类型
+    
+    -- 文件信息
+    c_original_filename TEXT NOT NULL,                             -- 原始文件名
+    c_file_size INTEGER NOT NULL,                                  -- 文件大小(字节)
+    c_file_md5 TEXT NOT NULL,                                      -- 文件MD5校验
+    
+    -- COS存储信息
+    c_cos_bucket TEXT NOT NULL,                                    -- COS桶名
+    c_cos_path TEXT NOT NULL,                                      -- COS文件路径
+    c_cos_url TEXT DEFAULT '',                                     -- COS访问URL
+    
+    -- 状态管理
+    c_status INTEGER NOT NULL DEFAULT 0,                           -- 状态: 0=上传中, 1=可用, 2=已删除, 3=上传失败
+    c_upload_progress INTEGER DEFAULT 0,                           -- 上传进度(0-100)
+    c_error_message TEXT DEFAULT '',                               -- 错误信息
+    
+    -- 使用统计
+    c_last_deploy_time DATETIME,                                   -- 最后部署时间
+    
+    -- 审计字段
+    c_created_by TEXT NOT NULL,                                    -- 创建者
+    c_invalid INTEGER NOT NULL DEFAULT 0,                          -- 删除标记
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                    -- 创建时间
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,                    -- 修改时间
+    
+    UNIQUE (c_package_name, c_version, c_invalid)
+);
+
+-- ************ 云函数部署记录表 ************
+CREATE TABLE IF NOT EXISTS t_function_deployments (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,               -- 主键ID
+    c_package_id INTEGER NOT NULL,                                 -- 代码包ID
+    c_cloud_account_id INTEGER NOT NULL,                           -- 云账户ID
+    c_function_name TEXT NOT NULL,                                 -- 函数名
+    c_namespace TEXT DEFAULT 'default',                            -- 命名空间
+    
+    -- 部署配置
+    c_environment TEXT DEFAULT '{}',                               -- 环境变量(JSON格式)
+    
+    -- 部署状态
+    c_deploy_status INTEGER DEFAULT 0,                             -- 部署状态: 0=进行中, 1=成功, 2=失败
+    c_deploy_message TEXT DEFAULT '',                              -- 部署结果信息
+    
+    c_invalid INTEGER NOT NULL DEFAULT 0,                          -- 删除标记
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                    -- 创建时间
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,                    -- 修改时间
+    
+    FOREIGN KEY (c_package_id) REFERENCES t_function_packages(c_id),
+    FOREIGN KEY (c_cloud_account_id) REFERENCES t_cloud_accounts(c_id)
+);
+
+-- ************ 创建云函数代码包相关索引 ************
+-- 代码包表索引
+CREATE INDEX IF NOT EXISTS idx_function_packages_name_version ON t_function_packages(c_package_name, c_version);
+CREATE INDEX IF NOT EXISTS idx_function_packages_status ON t_function_packages(c_status);
+CREATE INDEX IF NOT EXISTS idx_function_packages_runtime ON t_function_packages(c_runtime);
+CREATE INDEX IF NOT EXISTS idx_function_packages_package_type ON t_function_packages(c_package_type);
+CREATE INDEX IF NOT EXISTS idx_function_packages_created_by ON t_function_packages(c_created_by);
+CREATE INDEX IF NOT EXISTS idx_function_packages_ctime ON t_function_packages(c_ctime);
+CREATE INDEX IF NOT EXISTS idx_function_packages_invalid ON t_function_packages(c_invalid);
+
+-- 部署记录表索引
+CREATE INDEX IF NOT EXISTS idx_function_deployments_package_id ON t_function_deployments(c_package_id);
+CREATE INDEX IF NOT EXISTS idx_function_deployments_account_id ON t_function_deployments(c_cloud_account_id);
+CREATE INDEX IF NOT EXISTS idx_function_deployments_deploy_status ON t_function_deployments(c_deploy_status);
+CREATE INDEX IF NOT EXISTS idx_function_deployments_function_name ON t_function_deployments(c_function_name);
+CREATE INDEX IF NOT EXISTS idx_function_deployments_ctime ON t_function_deployments(c_ctime);
+CREATE INDEX IF NOT EXISTS idx_function_deployments_invalid ON t_function_deployments(c_invalid);
+
+-- ************ 创建云函数代码包相关触发器 ************
+-- 代码包表更新触发器
+DROP TRIGGER IF EXISTS update_function_packages_mtime;
+CREATE TRIGGER update_function_packages_mtime AFTER UPDATE ON t_function_packages BEGIN UPDATE t_function_packages SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+
+-- 部署记录表更新触发器
+DROP TRIGGER IF EXISTS update_function_deployments_mtime;
+CREATE TRIGGER update_function_deployments_mtime AFTER UPDATE ON t_function_deployments BEGIN UPDATE t_function_deployments SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 

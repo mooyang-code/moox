@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"strings"
 	"time"
 
@@ -172,10 +173,21 @@ func (w *NodeCreationWorker) createCloudResources(ctx context.Context, cloudProv
 		return nil, err
 	}
 
-	// 2. 读取并准备函数代码
-	zipBase64, err := w.prepareZipFile(ctx, msg.ZipFilePath, workerID)
-	if err != nil {
-		return nil, err
+	// 2. 读取并准备函数代码（如果本地ZIP文件存在）
+	var zipBase64 string
+	if msg.ZipFilePath != "" {
+		// 检查文件是否存在
+		if _, err := os.Stat(msg.ZipFilePath); err == nil {
+			zipBase64, err = w.prepareZipFile(ctx, msg.ZipFilePath, workerID)
+			if err != nil {
+				log.WarnContextf(ctx, "[NodeCreationWorker-%d] 读取本地ZIP文件失败，将使用COS默认代码: %v", workerID, err)
+				zipBase64 = ""
+			}
+		} else {
+			log.InfoContextf(ctx, "[NodeCreationWorker-%d] 本地ZIP文件不存在: %s，将使用COS默认代码", workerID, msg.ZipFilePath)
+		}
+	} else {
+		log.InfoContextf(ctx, "[NodeCreationWorker-%d] 未配置ZIP文件路径，将使用COS默认代码", workerID)
 	}
 
 	// 3. 创建或获取云函数

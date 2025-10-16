@@ -501,23 +501,23 @@ onMounted(() => {
 
 <style scoped>
 .moox-page {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  background-color: #fff;
-  border-radius: 4px;
   padding: 16px;
-  margin: 16px;
-  overflow: auto;
+  height: 100%;
 }
 
 .moox-inner {
-  flex: 1;
-  overflow: auto;
+  height: 100%;
+  background: #fff;
+  padding: 16px;
+  border-radius: 4px;
 }
 
-.moox-inner > *:not(:last-child) {
-  margin-bottom: 16px;
+.moox-inner .a-row {
+  margin-top: 16px;
+}
+
+.moox-inner .a-table {
+  margin-top: 16px;
 }
 
 pre {

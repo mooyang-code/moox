@@ -4,8 +4,8 @@
 
 ## API 端点
 
-所有API通过统一的moox-api接口访问：
-- 基础URL: `/moox-api/{interfaceid}`
+所有API通过统一的api接口访问：
+- 基础URL: `/api/{interfaceid}`
 
 ### 1. 采集器节点管理 (t_cloud_nodes)
 
@@ -13,7 +13,7 @@
 
 #### 获取节点列表
 ```
-GET /moox-api/t_cloud_nodes
+GET /api/t_cloud_nodes
 ```
 
 响应示例：
@@ -40,12 +40,12 @@ GET /moox-api/t_cloud_nodes
 
 #### 获取单个节点
 ```
-GET /moox-api/t_cloud_nodes?node_id=node-001
+GET /api/t_cloud_nodes?node_id=node-001
 ```
 
 #### 注册新节点
 ```
-POST /moox-api/t_cloud_nodes
+POST /api/t_cloud_nodes
 Content-Type: application/json
 
 {
@@ -61,7 +61,7 @@ Content-Type: application/json
 
 #### 更新节点信息
 ```
-POST /moox-api/t_cloud_nodes
+POST /api/t_cloud_nodes
 Content-Type: application/json
 
 {
@@ -78,7 +78,7 @@ Content-Type: application/json
 
 #### 删除节点
 ```
-POST /moox-api/t_cloud_nodes
+POST /api/t_cloud_nodes
 Content-Type: application/json
 
 {
@@ -89,7 +89,7 @@ Content-Type: application/json
 
 #### 更新心跳
 ```
-POST /moox-api/t_cloud_nodes
+POST /api/t_cloud_nodes
 Content-Type: application/json
 
 {
@@ -104,22 +104,22 @@ Content-Type: application/json
 
 #### 获取节点配置列表
 ```
-GET /moox-api/t_node_collectors_conf?node_id=node-001
+GET /api/t_node_collectors_conf?node_id=node-001
 ```
 
 #### 获取启用的配置
 ```
-GET /moox-api/t_node_collectors_conf?node_id=node-001&enabled=true
+GET /api/t_node_collectors_conf?node_id=node-001&enabled=true
 ```
 
 #### 获取单个配置
 ```
-GET /moox-api/t_node_collectors_conf?id=1
+GET /api/t_node_collectors_conf?id=1
 ```
 
 #### 创建配置
 ```
-POST /moox-api/t_node_collectors_conf
+POST /api/t_node_collectors_conf
 Content-Type: application/json
 
 {
@@ -139,7 +139,7 @@ Content-Type: application/json
 
 #### 更新配置
 ```
-POST /moox-api/t_node_collectors_conf
+POST /api/t_node_collectors_conf
 Content-Type: application/json
 
 {
@@ -160,7 +160,7 @@ Content-Type: application/json
 
 #### 删除配置
 ```
-POST /moox-api/t_node_collectors_conf
+POST /api/t_node_collectors_conf
 Content-Type: application/json
 
 {

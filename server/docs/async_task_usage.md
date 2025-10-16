@@ -8,7 +8,7 @@
 
 ### 1. 执行异步任务
 
-**请求地址**: `POST /moox-api/async_task/execute`
+**请求地址**: `POST /api/async_task/execute`
 
 **请求示例**:
 ```json
@@ -52,7 +52,7 @@
 
 ### 2. 查询任务状态
 
-**请求地址**: `GET /moox-api/async_task/query?task_id=550e8400-e29b-41d4-a716-446655440000`
+**请求地址**: `GET /api/async_task/query?task_id=550e8400-e29b-41d4-a716-446655440000`
 
 **响应示例**:
 ```json
@@ -105,7 +105,7 @@ url.searchParams.set('task_id', taskId);
 window.history.pushState({}, '', url);
 
 // 执行批量操作
-const response = await fetch('/moox-api/async_task/execute', {
+const response = await fetch('/api/async_task/execute', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -117,7 +117,7 @@ const response = await fetch('/moox-api/async_task/execute', {
 
 // 轮询任务状态
 const pollTaskStatus = async () => {
-    const status = await fetch(`/moox-api/async_task/query?task_id=${taskId}`);
+    const status = await fetch(`/api/async_task/query?task_id=${taskId}`);
     const data = await status.json();
     
     if (data.data.task_status === 1) {

@@ -3,24 +3,22 @@ package collector
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 
-	"net/http"
-
-	asynctaskapi "github.com/mooyang-code/moox/server/internal/service/asynctask/api"
 	asynctasklogic "github.com/mooyang-code/moox/server/internal/service/asynctask/logic"
 	cloudnodeapi "github.com/mooyang-code/moox/server/internal/service/cloudnode/api"
 	cloudnodelogic "github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	cloudnodequeue "github.com/mooyang-code/moox/server/internal/service/cloudnode/queue"
-	nodeheartbeat "github.com/mooyang-code/moox/server/internal/service/nodeservice/heartbeat"
-	"github.com/mooyang-code/moox/server/internal/service/collector/api"
 	"github.com/mooyang-code/moox/server/internal/service/collector/logic"
-	"trpc.group/trpc-go/trpc-go/log"
+	nodeheartbeat "github.com/mooyang-code/moox/server/internal/service/nodeservice/heartbeat"
+	packagemgrlogic "github.com/mooyang-code/moox/server/internal/service/packagemgr/logic"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // CollectorServiceImpl 采集器服务实现
@@ -31,6 +29,7 @@ type CollectorServiceImpl struct {
 	cloudProvider    provider.CloudProvider
 	queueManager     *cloudnodequeue.QueueManager
 	heartbeatManager *nodeheartbeat.Manager
+	asyncTaskService asynctasklogic.AsyncTaskService
 }
 
 // InitCollectorServiceImpl 初始化采集器服务实现
@@ -50,6 +49,9 @@ func InitCollectorServiceImpl(dbPath string) (*CollectorServiceImpl, error) {
 	// 初始化心跳管理器
 	// TODO: 需要配置实际的moox服务URL
 	impl.heartbeatManager = nodeheartbeat.NewManager(db, "http://localhost:8080")
+
+	// 初始化异步任务服务
+	impl.asyncTaskService = asynctasklogic.NewAsyncTaskService(db)
 
 	// 初始化服务管理器
 	impl.serviceManager = NewServiceManager(db, impl.queueManager)
@@ -83,31 +85,51 @@ func (s *CollectorServiceImpl) GetDB() *gorm.DB {
 	return s.db
 }
 
-// RegisterCollectorHandlers 注册采集器处理器（http API接口）
+// RegisterCollectorHandlers 注册采集器处理器（注册执行器）
 func (s *CollectorServiceImpl) RegisterCollectorHandlers() {
-	// 采集器专用处理器
-	taskConfigHandler := api.NewCollectorTaskConfigHandler(s.db)
-	taskInstanceHandler := api.NewCollectorTaskInstanceHandler(s.db)
+	// 注册异步任务执行器（BATCH_CREATE_NODE, BATCH_DELETE_NODE, BATCH_DEPLOY_NODE）
+	// 使用共享的异步任务服务实例
+	asyncTaskService := s.asyncTaskService
 
-	// 注册到API系统
-	RegisterHandler(taskConfigHandler)
-	RegisterHandler(taskInstanceHandler)
-
-	// 注册CloudNode相关的处理器
-	// 节点管理处理器（使用带队列管理器的服务）
+	// 注册任务执行器
+	// 创建云节点服务（带队列管理器）
 	scfNodeService := cloudnodelogic.NewSCFNodeServiceWithQueue(s.db, s.queueManager)
-	nodeHandler := cloudnodeapi.NewSCFNodeHandlerWithService(scfNodeService)
-	RegisterCloudNodeHandler(nodeHandler)
 
-	// 云账户管理处理器
-	accountHandler := cloudnodeapi.NewCloudAccountSchemaHandler(s.db)
-	RegisterCloudNodeHandler(accountHandler)
+	// 创建批量创建节点执行器
+	batchCreateNodeExecutor := logic.NewBatchCreateNodeExecutor(s.db, scfNodeService, asyncTaskService)
+	// 注册执行器到异步任务服务
+	asyncTaskService.RegisterExecutor(batchCreateNodeExecutor.GetTaskType(), batchCreateNodeExecutor)
+
+	// 创建批量删除节点执行器
+	batchDeleteNodeExecutor := logic.NewBatchDeleteNodeExecutor(s.db, scfNodeService, asyncTaskService)
+	// 注册执行器到异步任务服务
+	asyncTaskService.RegisterExecutor(batchDeleteNodeExecutor.GetTaskType(), batchDeleteNodeExecutor)
+
+	// 创建包管理服务（用于批量部署）
+	var packageService *packagemgrlogic.FunctionPackageService
+	if s.cloudProvider != nil {
+		if cosProvider, ok := s.cloudProvider.(provider.CloudProviderWithCOS); ok {
+			cosBucket := "moox-packages" // 从配置中获取
+			packageService = packagemgrlogic.NewFunctionPackageService(s.db, cosProvider, cosBucket)
+		} else {
+			log.Warn("[Collector Service] CloudProvider 不支持COS功能，跳过包管理服务初始化")
+		}
+	} else {
+		log.Warn("[Collector Service] CloudProvider 未设置，跳过包管理服务初始化")
+	}
+
+	// 创建批量部署节点执行器
+	batchDeployNodeExecutor := logic.NewBatchDeployNodeExecutor(s.db, scfNodeService, asyncTaskService, packageService)
+	// 注册执行器到异步任务服务
+	asyncTaskService.RegisterExecutor(batchDeployNodeExecutor.GetTaskType(), batchDeployNodeExecutor)
+
+	log.Info("[Collector Service] 采集器处理器注册完成，已注册任务执行器：BATCH_CREATE_NODE, BATCH_DELETE_NODE, BATCH_DEPLOY_NODE")
 }
 
 // RegisterCollectorGateway 注册采集器网关（注册到网关接口）
 func (s *CollectorServiceImpl) RegisterCollectorGateway(baseURL string) {
 	// 注册网关处理器到全局网关系统
-	gatewayHandler := NewGatewayHandler(baseURL)
+	gatewayHandler := NewGatewayHandler(s)
 	RegisterGatewayHandler(gatewayHandler)
 }
 
@@ -143,39 +165,23 @@ func (s *CollectorServiceImpl) SetCloudProvider(p provider.CloudProvider) {
 
 // RegisterHTTPRoutes 注册HTTP路由（用于文件上传等特殊接口）
 func (s *CollectorServiceImpl) RegisterHTTPRoutes(mux *http.ServeMux) {
-	// 注册异步任务服务路由
-	asyncTaskService := asynctasklogic.NewAsyncTaskService(s.db)
-
-	// 注册任务执行器
-	// 创建云节点服务（带队列管理器）
-	scfNodeService := cloudnodelogic.NewSCFNodeServiceWithQueue(s.db, s.queueManager)
-
-	// 创建批量创建节点执行器
-	batchCreateNodeExecutor := logic.NewBatchCreateNodeExecutor(s.db, scfNodeService, asyncTaskService)
-	// 注册执行器到异步任务服务
-	asyncTaskService.RegisterExecutor(batchCreateNodeExecutor.GetTaskType(), batchCreateNodeExecutor)
-
-	// 创建批量删除节点执行器
-	batchDeleteNodeExecutor := logic.NewBatchDeleteNodeExecutor(s.db, scfNodeService, asyncTaskService)
-	// 注册执行器到异步任务服务
-	asyncTaskService.RegisterExecutor(batchDeleteNodeExecutor.GetTaskType(), batchDeleteNodeExecutor)
-
-	// 创建批量部署节点执行器
-	batchDeployNodeExecutor := logic.NewBatchDeployNodeExecutor(s.db, scfNodeService, asyncTaskService)
-	// 注册执行器到异步任务服务
-	asyncTaskService.RegisterExecutor(batchDeployNodeExecutor.GetTaskType(), batchDeployNodeExecutor)
-
-	// 使用服务实例初始化处理器
-	asyncTaskHandlerWithService := asynctaskapi.NewAsyncTaskHandlerWithService(asyncTaskService)
-	asyncTaskHandlerWithService.RegisterRoutes(mux)
-
 	// 注册云节点HTTP路由（文件上传、云函数调用等）
 	cloudnodeapi.RegisterCloudNodeHTTPRoutes(mux, s.db, s.queueManager)
 
-	log.Info("[Collector Service] HTTP路由注册完成，已注册任务执行器：BATCH_CREATE_NODE, BATCH_DELETE_NODE, BATCH_DEPLOY_NODE")
+	log.Info("[Collector Service] HTTP路由注册完成")
 }
 
 // GetHeartbeatManager 获取心跳管理器
 func (s *CollectorServiceImpl) GetHeartbeatManager() *nodeheartbeat.Manager {
 	return s.heartbeatManager
+}
+
+// GetCloudProvider 获取云提供商
+func (s *CollectorServiceImpl) GetCloudProvider() provider.CloudProvider {
+	return s.cloudProvider
+}
+
+// GetAsyncTaskService 获取异步任务服务
+func (s *CollectorServiceImpl) GetAsyncTaskService() asynctasklogic.AsyncTaskService {
+	return s.asyncTaskService
 }

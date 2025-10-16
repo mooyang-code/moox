@@ -6,11 +6,13 @@ import (
 
 // 任务状态常量
 const (
+	TaskStatusPending    = 0 // 待处理
 	TaskStatusProcessing = 1 // 处理中
 	TaskStatusRunning    = 1 // 运行中（与处理中相同）
 	TaskStatusSuccess    = 2 // 成功
 	TaskStatusFailed     = 3 // 失败
 	TaskStatusPartial    = 4 // 部分成功
+	TaskStatusCancelled  = 5 // 已取消
 )
 
 // 任务类型常量

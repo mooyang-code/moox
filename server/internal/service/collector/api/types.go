@@ -2,13 +2,12 @@ package api
 
 import (
 	"context"
+
+	"github.com/mooyang-code/moox/server/internal/common"
 )
 
-// APIResponse 接口统一的返回信息（兼容wuji返回格式）
-type APIResponse struct {
-	Code int         `json:"code"`
-	Data interface{} `json:"data"`
-}
+// APIResponse 使用统一的响应格式
+type APIResponse = common.UnifiedAPIResponse
 
 // SchemaHandler 数据表读写接口
 type SchemaHandler interface {
@@ -16,3 +15,7 @@ type SchemaHandler interface {
 	GetHandle(ctx context.Context, params map[string]string) (*APIResponse, error)
 	PostHandle(ctx context.Context, params map[string]string) (*APIResponse, error)
 }
+
+// 使用统一的响应函数
+var SuccessResponse = common.SuccessResponse
+var ErrorResponse = common.ErrorResponse

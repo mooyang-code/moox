@@ -193,9 +193,21 @@ const loadAccountList = async () => {
     const response = await getCloudAccountList();
     // 兼容两种响应格式
     if (response?.code === 200 && response?.data) {
-      accountList.value = response.data || [];
+      // 处理数组格式的响应：response.data 可能是数组
+      let data = response.data;
+      if (Array.isArray(data)) {
+        accountList.value = data;
+      } else {
+        accountList.value = [data].filter(Boolean);
+      }
     } else if (response?.ret_info?.code === 0) {
-      accountList.value = response.ret_info.data || [];
+      // 处理数组格式的响应：response.ret_info.data 可能是数组
+      let data = response.ret_info.data;
+      if (Array.isArray(data)) {
+        accountList.value = data;
+      } else {
+        accountList.value = [data].filter(Boolean);
+      }
     } else {
       accountList.value = [];
     }

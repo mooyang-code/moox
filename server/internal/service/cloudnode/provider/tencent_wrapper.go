@@ -32,8 +32,10 @@ package provider
 
 import (
 	"context"
+	"io"
+	"time"
 
-	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider/providers/tencent"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider/tencent"
 )
 
 // TencentCloudProvider 腾讯云Provider包装器
@@ -46,6 +48,29 @@ func init() {
 	RegisterProvider(ProviderTencent, NewTencentCloudProvider)
 }
 
+// NewTencentCloudProviderWithCOS 创建带COS功能的腾讯云Provider
+func NewTencentCloudProviderWithCOS(config *CloudConfig) (CloudProviderWithCOS, error) {
+	// 转换配置
+	tencentConfig := &tencent.Config{
+		SecretID:    config.SecretID,
+		SecretKey:   config.SecretKey,
+		Region:      config.GetString("region"),
+		COSBucket:   config.GetString("cos_bucket"),
+		COSAppID:    config.GetString("cos_app_id"),
+		ExtraConfig: config.ExtraConfig,
+	}
+
+	// 创建Provider
+	provider, err := tencent.NewProvider(tencentConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return &TencentCloudProvider{
+		provider: provider,
+	}, nil
+}
+
 // NewTencentCloudProvider 创建腾讯云Provider
 func NewTencentCloudProvider(config *CloudConfig) (CloudProvider, error) {
 	// 转换配置
@@ -53,6 +78,8 @@ func NewTencentCloudProvider(config *CloudConfig) (CloudProvider, error) {
 		SecretID:    config.SecretID,
 		SecretKey:   config.SecretKey,
 		Region:      config.GetString("region"),
+		COSBucket:   config.GetString("cos_bucket"),
+		COSAppID:    config.GetString("cos_app_id"),
 		ExtraConfig: config.ExtraConfig,
 	}
 
@@ -286,4 +313,54 @@ func (p *TencentCloudProvider) InvokeFunction(ctx context.Context, req *InvokeFu
 		ErrorType:    tencentResp.ErrorType,
 		ReturnResult: tencentResp.ReturnResult,
 	}, nil
+}
+
+// 实现COS接口
+
+// UploadCOS 上传文件到COS
+func (p *TencentCloudProvider) UploadCOS(ctx context.Context, req *UploadCOSRequest) (*UploadCOSResponse, error) {
+	// 转换请求
+	tencentReq := &tencent.UploadCOSRequest{
+		Bucket:      req.Bucket,
+		Key:         req.Key,
+		Content:     req.Content,
+		ContentType: req.ContentType,
+	}
+
+	// 调用Provider方法
+	tencentResp, err := p.provider.UploadCOS(ctx, tencentReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// 转换响应
+	return &UploadCOSResponse{
+		Location: tencentResp.Location,
+		ETag:     tencentResp.ETag,
+	}, nil
+}
+
+// UploadCOSWithReader 使用Reader上传文件到COS
+func (p *TencentCloudProvider) UploadCOSWithReader(ctx context.Context, bucket, key string, reader io.Reader, contentType string) (*UploadCOSResponse, error) {
+	// 调用Provider方法
+	tencentResp, err := p.provider.UploadCOSWithReader(ctx, bucket, key, reader, contentType)
+	if err != nil {
+		return nil, err
+	}
+
+	// 转换响应
+	return &UploadCOSResponse{
+		Location: tencentResp.Location,
+		ETag:     tencentResp.ETag,
+	}, nil
+}
+
+// DeleteCOSObject 删除COS中的对象
+func (p *TencentCloudProvider) DeleteCOSObject(ctx context.Context, bucket, key string) error {
+	return p.provider.DeleteCOSObject(ctx, bucket, key)
+}
+
+// GetCOSObjectURL 获取COS对象的访问URL
+func (p *TencentCloudProvider) GetCOSObjectURL(ctx context.Context, bucket, key string, expire time.Duration) (string, error) {
+	return p.provider.GetCOSObjectURL(ctx, bucket, key, expire)
 }

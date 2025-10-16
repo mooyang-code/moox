@@ -15,6 +15,7 @@ type CollectorTaskInstanceDAO interface {
 	CreateTaskInstance(ctx context.Context, instance *model.CollectorTaskInstance) error
 	GetTaskInstance(ctx context.Context, instanceID string) (*model.CollectorTaskInstance, error)
 	UpdateTaskInstance(ctx context.Context, instance *model.CollectorTaskInstance) error
+	DeleteTaskInstance(ctx context.Context, instanceID string) error
 
 	// 查询操作
 	GetTaskInstancesByNode(ctx context.Context, nodeID string, status []int) ([]*model.CollectorTaskInstance, error)
@@ -91,6 +92,22 @@ func (d *collectorTaskInstanceDaoImpl) UpdateTaskInstance(ctx context.Context, i
 
 	if result.Error != nil {
 		return fmt.Errorf("failed to update task instance: %w", result.Error)
+	}
+
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("task instance not found")
+	}
+	return nil
+}
+
+// DeleteTaskInstance 删除任务实例
+func (d *collectorTaskInstanceDaoImpl) DeleteTaskInstance(ctx context.Context, instanceID string) error {
+	result := d.db.WithContext(ctx).
+		Where("c_instance_id = ?", instanceID).
+		Delete(&model.CollectorTaskInstance{})
+
+	if result.Error != nil {
+		return fmt.Errorf("failed to delete task instance: %w", result.Error)
 	}
 
 	if result.RowsAffected == 0 {

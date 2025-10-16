@@ -99,7 +99,12 @@ export class AsyncTaskManager {
       }
       
       // 从后台响应中获取task_id
-      this.taskId = response.data?.data?.task_id || response.data?.ret_info?.data?.task_id;
+      // 处理数组格式的响应：response.data.data 可能是数组
+      let taskData = response.data?.data || response.data?.ret_info?.data;
+      if (Array.isArray(taskData) && taskData.length > 0) {
+        taskData = taskData[0]; // 取数组第一个元素
+      }
+      this.taskId = taskData?.task_id;
       if (!this.taskId) {
         throw new Error('服务器未返回task_id');
       }
@@ -130,7 +135,11 @@ export class AsyncTaskManager {
       }
       
       // 返回数据也要兼容两种格式
-      const taskData = response.data?.data || response.data?.ret_info?.data;
+      // 处理数组格式的响应：response.data.data 可能是数组
+      let taskData = response.data?.data || response.data?.ret_info?.data;
+      if (Array.isArray(taskData) && taskData.length > 0) {
+        taskData = taskData[0]; // 取数组第一个元素
+      }
       return taskData;
     } catch (error: any) {
       Message.error(error.message || '查询任务状态失败');

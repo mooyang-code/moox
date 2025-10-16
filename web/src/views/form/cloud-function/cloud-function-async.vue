@@ -474,7 +474,13 @@ const loadData = async () => {
     });
     
     if (response.data?.ret_info?.code === 0) {
-      allFunctionList.value = response.data.ret_info.data || [];
+      // 处理数组格式的响应：response.data.ret_info.data 可能是数组
+      let data = response.data.ret_info.data;
+      if (Array.isArray(data)) {
+        allFunctionList.value = data;
+      } else {
+        allFunctionList.value = [data].filter(Boolean);
+      }
       pagination.value.total = allFunctionList.value.length;
       updateCurrentPageData();
     }
@@ -491,7 +497,13 @@ const loadCloudAccounts = async () => {
   try {
     const response = await api.post('/gateway/collector/ListCloudAccounts', {});
     if (response.data?.ret_info?.code === 0) {
-      cloudAccountOptions.value = response.data.ret_info.data || [];
+      // 处理数组格式的响应：response.data.ret_info.data 可能是数组
+      let data = response.data.ret_info.data;
+      if (Array.isArray(data)) {
+        cloudAccountOptions.value = data;
+      } else {
+        cloudAccountOptions.value = [data].filter(Boolean);
+      }
     }
   } catch (error) {
     console.error('加载云账户失败:', error);

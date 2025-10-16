@@ -19,6 +19,9 @@ type CollectorTaskInstanceService interface {
 	CreateTaskInstance(ctx context.Context, instance *model.CollectorTaskInstance) error
 	BatchCreateTaskInstances(ctx context.Context, taskID string, nodeAssignments map[string][]string) error
 	GetTaskInstance(ctx context.Context, instanceID string) (*model.CollectorTaskInstance, error)
+	GetTaskInstanceList(ctx context.Context, nodeID string, limit, offset int) ([]*model.CollectorTaskInstance, error)
+	UpdateTaskInstance(ctx context.Context, instanceID string, instance *model.CollectorTaskInstance) error
+	RemoveTaskInstance(ctx context.Context, instanceID string) error
 	
 	// 查询功能
 	GetTaskInstancesByNode(ctx context.Context, nodeID string, status []int) ([]*model.CollectorTaskInstance, error)
@@ -29,6 +32,8 @@ type CollectorTaskInstanceService interface {
 	
 	// 状态管理
 	StartInstance(ctx context.Context, instanceID string) error
+	StartTaskInstance(ctx context.Context, instanceID string) error
+	StopTaskInstance(ctx context.Context, instanceID string) error
 	CompleteInstance(ctx context.Context, instanceID string, success bool, result string) error
 	UpdateInstanceStatus(ctx context.Context, instanceID string, status int, result string) error
 	
@@ -568,5 +573,111 @@ func (s *collectorTaskInstanceServiceImpl) mergeInstanceParams(instance *model.C
 	}
 	
 	instance.ExecutionParams = string(mergedJSON)
+	return nil
+}
+
+// GetTaskInstanceList 获取任务实例列表
+func (s *collectorTaskInstanceServiceImpl) GetTaskInstanceList(ctx context.Context, nodeID string, limit, offset int) ([]*model.CollectorTaskInstance, error) {
+	if limit <= 0 {
+		limit = 50 // 默认50条
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	
+	// 如果指定了nodeID，获取该节点的实例
+	if nodeID != "" {
+		return s.instanceDAO.GetTaskInstancesByNode(ctx, nodeID, nil)
+	}
+	
+	// 否则获取所有实例
+	return s.instanceDAO.GetRecentInstances(ctx, 24) // 获取最近24小时的实例
+}
+
+// UpdateTaskInstance 更新任务实例
+func (s *collectorTaskInstanceServiceImpl) UpdateTaskInstance(ctx context.Context, instanceID string, instance *model.CollectorTaskInstance) error {
+	if instanceID == "" {
+		return fmt.Errorf("instance ID is required")
+	}
+	if instance == nil {
+		return fmt.Errorf("instance is required")
+	}
+	
+	// 检查实例是否存在
+	existing, err := s.instanceDAO.GetTaskInstance(ctx, instanceID)
+	if err != nil {
+		return fmt.Errorf("failed to get existing instance: %w", err)
+	}
+	if existing == nil {
+		return fmt.Errorf("instance not found")
+	}
+	
+	// 更新实例
+	instance.InstanceID = instanceID
+	if err := s.instanceDAO.UpdateTaskInstance(ctx, instance); err != nil {
+		return fmt.Errorf("failed to update task instance: %w", err)
+	}
+	
+	return nil
+}
+
+// RemoveTaskInstance 删除任务实例
+func (s *collectorTaskInstanceServiceImpl) RemoveTaskInstance(ctx context.Context, instanceID string) error {
+	if instanceID == "" {
+		return fmt.Errorf("instance ID is required")
+	}
+	
+	// 检查实例是否存在
+	existing, err := s.instanceDAO.GetTaskInstance(ctx, instanceID)
+	if err != nil {
+		return fmt.Errorf("failed to get existing instance: %w", err)
+	}
+	if existing == nil {
+		return fmt.Errorf("instance not found")
+	}
+	
+	// 检查实例状态，正在运行的实例不能删除
+	if existing.Status == model.TaskInstanceStatusRunning {
+		return fmt.Errorf("cannot remove running instance")
+	}
+	
+	// 删除实例
+	if err := s.instanceDAO.DeleteTaskInstance(ctx, instanceID); err != nil {
+		return fmt.Errorf("failed to remove task instance: %w", err)
+	}
+	
+	return nil
+}
+
+// StartTaskInstance 启动任务实例（与StartInstance相同）
+func (s *collectorTaskInstanceServiceImpl) StartTaskInstance(ctx context.Context, instanceID string) error {
+	return s.StartInstance(ctx, instanceID)
+}
+
+// StopTaskInstance 停止任务实例
+func (s *collectorTaskInstanceServiceImpl) StopTaskInstance(ctx context.Context, instanceID string) error {
+	if instanceID == "" {
+		return fmt.Errorf("instance ID is required")
+	}
+	
+	// 获取实例
+	instance, err := s.instanceDAO.GetTaskInstance(ctx, instanceID)
+	if err != nil {
+		return fmt.Errorf("failed to get instance: %w", err)
+	}
+	if instance == nil {
+		return fmt.Errorf("instance not found")
+	}
+	
+	// 检查实例状态
+	if instance.Status != model.TaskInstanceStatusRunning {
+		return fmt.Errorf("instance is not running")
+	}
+	
+	// 更新状态为已停止
+	if err := s.instanceDAO.UpdateInstanceStatus(ctx, instanceID, model.TaskInstanceStatusStopped, "Task stopped by user"); err != nil {
+		return fmt.Errorf("failed to stop task instance: %w", err)
+	}
+	
 	return nil
 }

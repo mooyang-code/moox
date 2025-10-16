@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"io"
+	"time"
 )
 
 // CloudProvider 云厂商接口
@@ -139,3 +141,38 @@ const (
 	InvokeTypeSync  = "RequestResponse" // 同步调用
 	InvokeTypeAsync = "Event"           // 异步调用
 )
+
+// COSProvider COS对象存储接口
+type COSProvider interface {
+	// UploadCOS 上传文件到COS
+	UploadCOS(ctx context.Context, req *UploadCOSRequest) (*UploadCOSResponse, error)
+	
+	// UploadCOSWithReader 使用Reader上传文件到COS
+	UploadCOSWithReader(ctx context.Context, bucket, key string, reader io.Reader, contentType string) (*UploadCOSResponse, error)
+	
+	// DeleteCOSObject 删除COS中的对象
+	DeleteCOSObject(ctx context.Context, bucket, key string) error
+	
+	// GetCOSObjectURL 获取COS对象的访问URL
+	GetCOSObjectURL(ctx context.Context, bucket, key string, expire time.Duration) (string, error)
+}
+
+// UploadCOSRequest COS文件上传请求
+type UploadCOSRequest struct {
+	Bucket       string // COS桶名
+	Key          string // 文件在COS中的路径
+	Content      []byte // 文件内容
+	ContentType  string // 文件类型，可选
+}
+
+// UploadCOSResponse COS文件上传响应
+type UploadCOSResponse struct {
+	Location string // 上传后的文件访问URL
+	ETag     string // 文件的ETag
+}
+
+// CloudProviderWithCOS 同时支持云函数和COS的Provider接口
+type CloudProviderWithCOS interface {
+	CloudProvider
+	COSProvider
+}

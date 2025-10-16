@@ -40,6 +40,7 @@ const (
 	TaskInstanceStatusFailed   = 3 // 失败
 	TaskInstanceStatusTimeout  = 4 // 超时
 	TaskInstanceStatusCanceled = 5 // 已取消
+	TaskInstanceStatusStopped  = 6 // 已停止
 )
 
 // TableNames 表名常量
