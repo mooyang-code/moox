@@ -37,7 +37,7 @@
           </div>
         </a-grid-item>
         <a-grid-item>
-          <a-image default-scale height="220" :src="otherImage" />
+          <a-image default-scale height="220" :src="myImage" />
         </a-grid-item>
         <a-grid-item>
           <div class="title-size-2">✨Hello 量化探索者们✨</div>
@@ -52,7 +52,6 @@
 
 <script setup lang="ts">
 import myImage from "@/assets/img/my-image.jpg";
-import otherImage from "@/assets/img/other-image.jpg";
 
 const list = reactive({
   aboutMe: [

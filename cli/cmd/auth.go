@@ -41,22 +41,22 @@ var registerCmd = &cobra.Command{
 		}
 
 		// 检查认证服务配置
-		if AppConfig.Moox == nil {
-			fmt.Println("❌ 错误：未找到 Moox 服务配置")
+		if AppConfig.MooX == nil {
+			fmt.Println("❌ 错误：未找到 MooX 服务配置")
 			fmt.Println("💡 请在配置文件中添加 moox.auth_target 配置项")
 			showConfigExample()
 			return
 		}
 
-		if AppConfig.Moox.AuthTarget == "" {
+		if AppConfig.MooX.AuthTarget == "" {
 			fmt.Println("❌ 错误：未配置认证服务地址")
 			fmt.Println("💡 请在配置文件中设置 moox.auth_target，例如: 127.0.0.1:18200")
 			showConfigExample()
 			return
 		}
 
-		fmt.Println("🚀 欢迎使用 Moox 用户注册功能！")
-		fmt.Printf("📡 认证服务地址: %s\n\n", AppConfig.Moox.AuthTarget)
+		fmt.Println("🚀 欢迎使用 MooX 用户注册功能！")
+		fmt.Printf("📡 认证服务地址: %s\n\n", AppConfig.MooX.AuthTarget)
 
 		// 交互式收集用户信息
 		if err := collectUserInfo(); err != nil {

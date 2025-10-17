@@ -1,6 +1,6 @@
-# Moox Server
+# MooX Server
 
-Moox Server 是一个基于 tRPC-Go 框架的服务端应用，提供认证、API网关、数据采集等功能。
+MooX Server 是一个基于 tRPC-Go 框架的服务端应用，提供认证、API网关、数据采集等功能。
 
 ## 构建说明
 
@@ -158,7 +158,7 @@ tail -f log/app.log
 主要配置文件：`config/trpc_go.yaml`
 
 服务端口说明：
-- 20103: Moox HTTP 网关接口
+- 20103: MooX HTTP 网关接口
 - 20102: 认证服务 HTTP 接口
 - 20001: 认证服务 tRPC 接口
 - 20101: API 服务接口

@@ -1,6 +1,6 @@
-# Moox Web Host
+# MooX Web Host
 
-这是 Moox 项目的 Web 静态文件服务器，使用 Go 和 statik 将前端构建产物嵌入到单个二进制文件中。
+这是 MooX 项目的 Web 静态文件服务器，使用 Go 和 statik 将前端构建产物嵌入到单个二进制文件中。
 
 ## 项目结构
 

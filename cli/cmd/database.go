@@ -116,7 +116,7 @@ const (
 
 // handleDatabaseInitDrop 处理数据库初始化和删除操作
 func handleDatabaseInitDrop() {
-	fmt.Printf("%s=== Moox 数据库管理工具 ===%s\n\n", ColorCyan, ColorReset)
+	fmt.Printf("%s=== MooX 数据库管理工具 ===%s\n\n", ColorCyan, ColorReset)
 
 	// 删除数据库操作
 	if dropDB {
@@ -234,4 +234,3 @@ func executeSQLStatements(db *sql.DB, statements []string) error {
 
 	return nil
 }
-

@@ -8,7 +8,7 @@ server:
     - cors
   timeout: 5000
   service:
-      ######## Moox http网关接口 ########
+      ######## MooX http网关接口 ########
     - name: trpc.moox.gateway.stdhttp
       #ip: 0.0.0.0
       port: 20103

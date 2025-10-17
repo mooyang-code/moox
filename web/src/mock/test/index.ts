@@ -7,7 +7,7 @@ export default [
     method: "get",
     timeout: 300,
     response: () => {
-      return resultSuccess("Moox，Welcome!");
+      return resultSuccess("MooX，Welcome!");
     }
   },
   {

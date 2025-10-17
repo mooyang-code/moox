@@ -1,4 +1,4 @@
-# Moox CLI Makefile
+# MooX CLI Makefile
 
 .PHONY: help build clean dev run install uninstall deps check lint test cross-build
 
@@ -14,7 +14,7 @@ PROJECT_ROOT=$(shell cd .. && pwd)
 
 # 帮助信息
 help:
-	@echo "Moox CLI 构建工具"
+	@echo "MooX CLI 构建工具"
 	@echo ""
 	@echo "可用目标:"
 	@echo "  help        - 显示此帮助信息"

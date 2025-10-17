@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Moox CLI 构建脚本
+# MooX CLI 构建脚本
 # 使用方法: ./build.sh [版本号]
 
 set -e  # 遇到错误立即退出
@@ -27,7 +27,7 @@ VERSION=${1:-"dev"}
 BUILD_TIME=$(date +"%Y-%m-%d %H:%M:%S")
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
-print_info "开始构建 Moox CLI..."
+print_info "开始构建 MooX CLI..."
 print_info "版本: $VERSION"
 print_info "构建时间: $BUILD_TIME"
 print_info "Git提交: $GIT_COMMIT"
@@ -132,7 +132,7 @@ print_info "创建使用脚本..."
 cat > "$BUILD_DIR/install.sh" << EOF
 #!/bin/bash
 
-# Moox CLI 安装脚本
+# MooX CLI 安装脚本
 
 APP_NAME="$APP_NAME"
 INSTALL_DIR="/usr/local/bin"
@@ -181,7 +181,7 @@ EOF
 cat > "$BUILD_DIR/uninstall.sh" << EOF
 #!/bin/bash
 
-# Moox CLI 卸载脚本
+# MooX CLI 卸载脚本
 
 APP_NAME="$APP_NAME"
 INSTALL_DIR="/usr/local/bin"
@@ -224,11 +224,11 @@ chmod +x "$BUILD_DIR/bin/$APP_NAME"
 # 创建README文件
 print_info "创建使用说明..."
 cat > "$BUILD_DIR/README.md" << EOF
-# Moox CLI $VERSION
+# MooX CLI $VERSION
 
 ## 简介
 
-Moox CLI 是一个多功能的命令行工具，支持数据库操作、存储服务和用户认证等功能。
+MooX CLI 是一个多功能的命令行工具，支持数据库操作、存储服务和用户认证等功能。
 
 ## 安装
 

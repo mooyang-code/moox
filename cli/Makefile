@@ -1,4 +1,4 @@
-# Moox CLI Makefile
+# MooX CLI Makefile
 
 .PHONY: help build build-linux build-darwin build-windows build-all clean deps lint test install release
 
@@ -26,7 +26,7 @@ ARCHITECTURES=amd64 arm64
 
 # Help
 help:
-	@echo "🛠️  Moox CLI 构建工具"
+	@echo "🛠️  MooX CLI 构建工具"
 	@echo ""
 	@echo "📦 构建目标:"
 	@echo "  build         - 构建当前平台二进制文件"

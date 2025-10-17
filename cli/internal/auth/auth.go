@@ -27,7 +27,7 @@ func (a *AuthOperator) RegisterUser(ctx context.Context, username, password, nic
 	if a.cfg == nil {
 		return nil, fmt.Errorf("认证服务配置不存在")
 	}
-	target := a.cfg.Moox.AuthTarget
+	target := a.cfg.MooX.AuthTarget
 	if target == "" {
 		return nil, fmt.Errorf("认证服务地址未配置")
 	}

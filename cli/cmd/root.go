@@ -127,7 +127,7 @@ func calculateDisplayWidth(content string) int {
 // showLogo 显示MOOX的ASCII艺术LOGO
 func showLogo() {
 	// 定义标题行
-	titleLine := "╭─ Moox CLI ─────────────────────────────────────────────────────────╮"
+	titleLine := "╭─ MooX CLI ─────────────────────────────────────────────────────────╮"
 
 	// 动态计算内容区域宽度（标题行宽度减去左右边框字符）
 	width := calculateDisplayWidth(titleLine) - 2
@@ -210,8 +210,8 @@ func loadGlobalConfig() {
 		fmt.Println("\033[93m💡 将使用默认配置，某些功能可能无法正常工作\033[0m")
 		// 创建默认配置，避免panic
 		AppConfig = &config.Config{}
-		if AppConfig.Moox == nil {
-			AppConfig.Moox = &config.MooxConfig{}
+		if AppConfig.MooX == nil {
+			AppConfig.MooX = &config.MooxConfig{}
 		}
 	}
 }

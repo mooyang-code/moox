@@ -32,7 +32,7 @@ type Config struct {
 		Target string `yaml:"target"`
 	} `yaml:"storage"`
 
-	Moox *MooxConfig `yaml:"moox"` // moox服务配置
+	MooX *MooxConfig `yaml:"moox"` // moox服务配置
 
 	Message *MessageConfig `yaml:"message"` // 消息服务配置
 }

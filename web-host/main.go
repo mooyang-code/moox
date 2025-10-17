@@ -28,22 +28,42 @@ func (w gzipResponseWriter) Write(b []byte) (int, error) {
 
 // 优化的静态文件处理器，支持缓存和gzip压缩
 func optimizedStaticHandler(statikFS http.FileSystem, w http.ResponseWriter, r *http.Request) {
+	// 记录请求路径用于调试
+	log.Printf("静态文件请求: %s", r.URL.Path)
+
+	// 确定实际请求的文件路径
+	actualPath := r.URL.Path
+
+	// 对于根路径，使用 index.html
+	if actualPath == "/" {
+		actualPath = "/index.html"
+	}
+
 	// 打开文件
-	file, err := statikFS.Open(r.URL.Path)
+	file, err := statikFS.Open(actualPath)
 	if err != nil {
-		// 如果文件不存在，尝试index.html (SPA路由)
-		if r.URL.Path != "/" {
-			file, err = statikFS.Open("/index.html")
-			if err != nil {
-				http.NotFound(w, r)
-				return
-			}
-		} else {
+		// 对于静态资源（JS/CSS等），如果找不到就返回404
+		// 只有HTML请求才回退到index.html (SPA路由)
+		if isStaticAsset(actualPath) {
+			log.Printf("静态资源未找到: %s", actualPath)
 			http.NotFound(w, r)
 			return
 		}
+
+		// SPA路由：所有非静态资源路径都返回index.html
+		file, err = statikFS.Open("/index.html")
+		if err != nil {
+			log.Printf("index.html未找到: %s", err)
+			http.NotFound(w, r)
+			return
+		}
+		// 对于SPA路由，使用index.html的路径
+		actualPath = "/index.html"
 	}
 	defer file.Close()
+
+	// 设置正确的Content-Type（基于实际文件路径）
+	setContentType(w, actualPath)
 
 	// 获取文件信息
 	stat, err := file.Stat()
@@ -52,28 +72,51 @@ func optimizedStaticHandler(statikFS http.FileSystem, w http.ResponseWriter, r *
 		return
 	}
 
+
 	// 生成ETag
 	etag := generateETag(stat.Name(), stat.ModTime(), stat.Size())
-	
+
 	// 设置缓存头
-	setCacheHeaders(w, r.URL.Path, etag)
-	
+	setCacheHeaders(w, actualPath, etag)
+
 	// 检查客户端缓存
 	if checkClientCache(r, etag, stat.ModTime()) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
+	// 读取文件内容到内存（因为statik文件系统可能不支持Seek）
+	// 对于小文件这是可接受的
+	content, err := io.ReadAll(file)
+	if err != nil {
+		log.Printf("读取文件失败: %s - %v", r.URL.Path, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// 设置Content-Length
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
+
 	// 检查是否支持gzip压缩
-	if shouldCompress(r, r.URL.Path) {
+	if shouldCompress(r, actualPath) {
 		w.Header().Set("Content-Encoding", "gzip")
+		// 对于gzip压缩，需要删除Content-Length
+		w.Header().Del("Content-Length")
+
 		gz := gzip.NewWriter(w)
 		defer gz.Close()
-		
-		gzipWriter := gzipResponseWriter{Writer: gz, ResponseWriter: w}
-		http.ServeContent(gzipWriter, r, stat.Name(), stat.ModTime(), file)
+
+		// 写入压缩内容
+		if _, err := gz.Write(content); err != nil {
+			log.Printf("压缩写入失败: %s - %v", r.URL.Path, err)
+			return
+		}
 	} else {
-		http.ServeContent(w, r, stat.Name(), stat.ModTime(), file)
+		// 直接写入内容
+		if _, err := w.Write(content); err != nil {
+			log.Printf("写入响应失败: %s - %v", r.URL.Path, err)
+			return
+		}
 	}
 }
 
@@ -134,7 +177,7 @@ func shouldCompress(r *http.Request, path string) bool {
 	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 		return false
 	}
-	
+
 	// 检查文件类型是否适合压缩
 	compressibleTypes := []string{".html", ".css", ".js", ".json", ".xml", ".svg", ".txt"}
 	for _, ext := range compressibleTypes {
@@ -142,8 +185,42 @@ func shouldCompress(r *http.Request, path string) bool {
 			return true
 		}
 	}
-	
+
 	return false
+}
+
+// 设置正确的Content-Type
+func setContentType(w http.ResponseWriter, path string) {
+	contentTypes := map[string]string{
+		".html": "text/html; charset=utf-8",
+		".css":  "text/css; charset=utf-8",
+		".js":   "application/javascript; charset=utf-8",
+		".mjs":  "application/javascript; charset=utf-8",
+		".json": "application/json; charset=utf-8",
+		".png":  "image/png",
+		".jpg":  "image/jpeg",
+		".jpeg": "image/jpeg",
+		".gif":  "image/gif",
+		".svg":  "image/svg+xml",
+		".ico":  "image/x-icon",
+		".woff": "font/woff",
+		".woff2": "font/woff2",
+		".ttf":  "font/ttf",
+		".eot":  "application/vnd.ms-fontobject",
+		".xml":  "application/xml; charset=utf-8",
+		".txt":  "text/plain; charset=utf-8",
+	}
+
+	// 根据文件扩展名设置Content-Type
+	for ext, contentType := range contentTypes {
+		if strings.HasSuffix(path, ext) {
+			w.Header().Set("Content-Type", contentType)
+			return
+		}
+	}
+
+	// 默认Content-Type
+	w.Header().Set("Content-Type", "application/octet-stream")
 }
 
 func main() {
