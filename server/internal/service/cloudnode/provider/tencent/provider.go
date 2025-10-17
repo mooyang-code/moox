@@ -62,7 +62,7 @@ func NewProvider(config *Config) (*Provider, error) {
 	// 创建COS客户端（如果提供了COS配置）
 	var cosClient *cos.Client
 	if config.COSBucket != "" && config.COSAppID != "" {
-		bucketURL, _ := url.Parse(fmt.Sprintf("https://%s-%s.cos.%s.myqcloud.com", config.COSBucket, config.COSAppID, region))
+		bucketURL, _ := url.Parse(fmt.Sprintf("https://%s.cos.%s.myqcloud.com", config.COSBucket, region))
 		baseURL := &cos.BaseURL{BucketURL: bucketURL}
 		cosClient = cos.NewClient(baseURL, &http.Client{
 			Transport: &cos.AuthorizationTransport{

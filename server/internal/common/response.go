@@ -14,6 +14,7 @@ type UnifiedAPIResponse struct {
 	Code    int    `json:"code"`    // 状态码（200表示成功）
 	Message string `json:"message"` // 返回消息
 	Data    []any  `json:"data"`    // 数据数组（wuji格式要求）
+	Total   *int64 `json:"total,omitempty"` // 总数（分页列表时使用）
 }
 
 // SuccessResponse 成功响应
@@ -156,6 +157,17 @@ func PaginatedResponse(c *gin.Context, message string, items interface{}, total 
 		"has_more":  int64(page*pageSize) < total,
 	}
 	SuccessResponse(c, message, data)
+}
+
+// PaginatedListResponse 分页列表响应（新格式：total在外层，items直接作为data数组）
+func PaginatedListResponse(c *gin.Context, message string, items interface{}, total int64) {
+	response := &UnifiedAPIResponse{
+		Code:    200,
+		Message: message,
+		Data:    convertToArray(items),
+		Total:   &total,
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // ListResponse 列表响应（将列表项直接作为data数组）

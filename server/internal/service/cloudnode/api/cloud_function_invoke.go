@@ -18,7 +18,7 @@ import (
 type CloudFunctionInvokeService struct {
 	db            *gorm.DB
 	nodeDAO       dao.SCFNodeDAO
-	provider provider.CloudProvider
+	provider provider.Client
 }
 
 // NewCloudFunctionInvokeService 创建云函数调用服务
@@ -31,7 +31,7 @@ func NewCloudFunctionInvokeService(db *gorm.DB) *CloudFunctionInvokeService {
 }
 
 // SetCloudProvider 设置云提供商
-func (s *CloudFunctionInvokeService) SetCloudProvider(provider provider.CloudProvider) {
+func (s *CloudFunctionInvokeService) SetCloudProvider(provider provider.Client) {
 	s.provider = provider
 }
 

@@ -21,19 +21,16 @@ func NewNodeTasksHandler(db *gorm.DB) *NodeTasksHandler {
 
 // GetNodeTasksList 获取节点任务列表
 func (h *NodeTasksHandler) GetNodeTasksList(c *gin.Context) {
-	// 获取查询参数
-	nodeID := c.Query("node_id")
-	status := c.Query("status")
-
 	// 这里可以实现具体的查询逻辑
 	// 暂时返回空数据，待后续实现具体的service层
-	data := map[string]interface{}{
-		"node_id": nodeID,
-		"status":  status,
-		"tasks":   []interface{}{},
-	}
-
-	SuccessResponse(c, "查询成功", data)
+	// TODO: 添加具体的查询逻辑，使用 c.Query("node_id") 和 c.Query("status") 参数
+	tasks := []interface{}{}
+	
+	// 计算总数
+	total := int64(len(tasks))
+	
+	// 使用新的分页列表响应格式
+	PaginatedListResponse(c, "查询成功", tasks, total)
 }
 
 // GetNodeTasksDetail 获取节点任务详情

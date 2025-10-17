@@ -34,7 +34,11 @@ func (h *CollectorTaskConfigHandler) GetTaskConfigList(c *gin.Context) {
 		return
 	}
 
-	SuccessResponse(c, "查询成功", configs)
+	// 计算总数
+	total := int64(len(configs))
+	
+	// 使用新的分页列表响应格式
+	PaginatedListResponse(c, "查询成功", configs, total)
 }
 
 // GetTaskConfigDetail 获取任务配置详情

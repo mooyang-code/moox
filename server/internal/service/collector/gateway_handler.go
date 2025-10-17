@@ -57,7 +57,7 @@ func NewGatewayHandler(collectorImpl *CollectorServiceImpl) *GatewayHandler {
 			defaultCOSProvider := collectorImpl.GetCOSProvider("")
 			if defaultCOSProvider != nil {
 				cosBucket := "moox-packages" // 从配置中获取
-				packagemgrapi.RegisterPackageManagerRoutes(api, collectorImpl.GetDB(), defaultCOSProvider, cosBucket)
+				packagemgrapi.RegisterPackageManagerRoutes(api, collectorImpl.GetDB(), defaultCOSProvider, cosBucket, collectorImpl.GetAsyncTaskService())
 			}
 		}
 	}
@@ -139,6 +139,8 @@ func (h *GatewayHandler) parseMethodToRoute(method string, body []byte) (*RouteI
 		return h.buildDetailRouteWithSuffix("/api/function-packages", "GET", body, "download-local")
 	case "GetPackageOptions":
 		return h.buildMultiQueryRoute("/api/function-packages/options", body)
+	case "GetUploadTaskStatus":
+		return h.buildUploadTaskStatusRoute("/api/function-packages/upload-task", body)
 
 	// Async Task methods
 	case "AsyncTaskCreate":
@@ -415,6 +417,24 @@ func (h *GatewayHandler) buildUpdateRoute(basePath string, body []byte) (*RouteI
 		if err := json.Unmarshal(body, &params); err == nil {
 			if id, ok := params["id"]; ok {
 				route.Path = fmt.Sprintf("%s/%v", basePath, id)
+			}
+		}
+	}
+	return route, nil
+}
+
+// buildUploadTaskStatusRoute 构建上传任务状态查询路由
+func (h *GatewayHandler) buildUploadTaskStatusRoute(basePath string, body []byte) (*RouteInfo, error) {
+	route := &RouteInfo{
+		Path:       basePath,
+		HTTPMethod: "GET",
+	}
+
+	if len(body) > 0 {
+		var params map[string]interface{}
+		if err := json.Unmarshal(body, &params); err == nil {
+			if taskId, ok := params["task_id"].(string); ok && taskId != "" {
+				route.Path = fmt.Sprintf("%s/%s/status", basePath, taskId)
 			}
 		}
 	}

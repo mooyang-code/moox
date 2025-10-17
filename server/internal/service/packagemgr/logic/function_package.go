@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -12,6 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	asyncTaskLogic "github.com/mooyang-code/moox/server/internal/service/asynctask/logic"
+	asyncTaskModel "github.com/mooyang-code/moox/server/internal/service/asynctask/model"
 	cloudAccountModel "github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	"github.com/mooyang-code/moox/server/internal/service/packagemgr/model"
@@ -19,20 +23,65 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+// 定义业务错误类型
+var (
+	ErrValidationFailed = errors.New("validation failed")
+	ErrVersionExists    = errors.New("version exists")
+	ErrResourceNotFound = errors.New("resource not found")
+)
+
+// BusinessError 业务错误类型
+type BusinessError struct {
+	Type    error
+	Message string
+}
+
+func (e *BusinessError) Error() string {
+	return e.Message
+}
+
+func (e *BusinessError) Is(target error) bool {
+	return e.Type == target
+}
+
+// NewValidationError 创建验证错误
+func NewValidationError(message string) *BusinessError {
+	return &BusinessError{Type: ErrValidationFailed, Message: message}
+}
+
+// NewVersionExistsError 创建版本已存在错误
+func NewVersionExistsError(packageName, version string) *BusinessError {
+	return &BusinessError{
+		Type:    ErrVersionExists,
+		Message: fmt.Sprintf("代码包 %s 版本 %s 已存在", packageName, version),
+	}
+}
+
+// NewResourceNotFoundError 创建资源未找到错误
+func NewResourceNotFoundError(message string) *BusinessError {
+	return &BusinessError{Type: ErrResourceNotFound, Message: message}
+}
+
 // FunctionPackageService 云函数代码包服务
 type FunctionPackageService struct {
 	db          *gorm.DB
-	cosProvider provider.CloudProviderWithCOS
+	cosProvider provider.ClientWithCOS
 	cosBucket   string
+	taskService asyncTaskLogic.AsyncTaskService // 异步任务服务接口
 }
 
 // NewFunctionPackageService 创建云函数代码包服务
-func NewFunctionPackageService(db *gorm.DB, cosProvider provider.CloudProviderWithCOS, cosBucket string) *FunctionPackageService {
+func NewFunctionPackageService(db *gorm.DB, cosProvider provider.ClientWithCOS, cosBucket string) *FunctionPackageService {
 	return &FunctionPackageService{
 		db:          db,
 		cosProvider: cosProvider,
 		cosBucket:   cosBucket,
 	}
+}
+
+// SetAsyncTaskService 设置异步任务服务
+func (s *FunctionPackageService) SetAsyncTaskService(taskService asyncTaskLogic.AsyncTaskService) {
+	s.taskService = taskService
 }
 
 // getCOSConfigFromAccount 从云账户获取COS配置
@@ -51,11 +100,14 @@ func (s *FunctionPackageService) getCOSConfigFromAccount(ctx context.Context, ac
 // saveToLocalFile 保存文件到本地/tmp目录
 func (s *FunctionPackageService) saveToLocalFile(content []byte, filename string) (string, error) {
 	tmpDir := "/tmp/moox/packages"
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		return "", fmt.Errorf("创建临时目录失败: %w", err)
+	filePath := filepath.Join(tmpDir, filename)
+	
+	// 确保文件的父目录存在
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("创建目录失败: %w", err)
 	}
 
-	filePath := filepath.Join(tmpDir, filename)
 	if err := ioutil.WriteFile(filePath, content, 0644); err != nil {
 		return "", fmt.Errorf("写入文件失败: %w", err)
 	}
@@ -75,14 +127,6 @@ type UploadPackageRequest struct {
 	CreatedBy      string `json:"-"`                               // 从JWT中获取
 }
 
-// UploadPackageResponse 上传代码包响应
-type UploadPackageResponse struct {
-	ID          int64  `json:"id"`
-	PackageName string `json:"package_name"`
-	Version     string `json:"version"`
-	Status      int    `json:"status"`
-	COSURL      string `json:"cos_url"`
-}
 
 // StorageConfig 存储配置
 type StorageConfig struct {
@@ -111,56 +155,6 @@ func (s *FunctionPackageService) calculateMD5(content []byte) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// UploadPackage 上传代码包
-func (s *FunctionPackageService) UploadPackage(ctx context.Context, req *UploadPackageRequest) (*UploadPackageResponse, error) {
-	log.InfoContextf(ctx, "[UploadPackage] 开始上传代码包, 包名: %s, 版本: %s, 类型: %s", req.PackageName, req.Version, req.PackageType)
-
-	// 1. 验证和预处理
-	fileContent, fileMD5, err := s.validateAndPreprocess(ctx, req)
-	if err != nil {
-		log.ErrorContextf(ctx, "[UploadPackage] 验证和预处理失败: %v", err)
-		return nil, err
-	}
-
-	// 2. 确定存储策略
-	storageConfig, err := s.determineStorageStrategy(ctx, req)
-	if err != nil {
-		log.ErrorContextf(ctx, "[UploadPackage] 确定存储策略失败: %v", err)
-		return nil, err
-	}
-	log.InfoContextf(ctx, "[UploadPackage] 存储策略: useCOS=%t, bucket=%s", storageConfig.UseCOS, storageConfig.Bucket)
-
-	// 3. 创建数据库记录
-	pkg, err := s.createPackageRecord(ctx, req, fileContent, fileMD5, storageConfig)
-	if err != nil {
-		log.ErrorContextf(ctx, "[UploadPackage] 创建数据库记录失败: %v", err)
-		return nil, err
-	}
-	log.InfoContextf(ctx, "[UploadPackage] 数据库记录创建成功, ID: %d", pkg.ID)
-
-	// 4. 执行文件存储
-	cosURL, err := s.executeFileStorage(ctx, pkg, fileContent, storageConfig)
-	if err != nil {
-		log.ErrorContextf(ctx, "[UploadPackage] 文件存储失败: %v", err)
-		return nil, err
-	}
-
-	// 5. 完成上传并更新状态
-	err = s.finalizeUpload(ctx, pkg, cosURL)
-	if err != nil {
-		log.ErrorContextf(ctx, "[UploadPackage] 完成上传失败: %v", err)
-		return nil, err
-	}
-
-	log.InfoContextf(ctx, "[UploadPackage] 上传完成, 包名: %s, 版本: %s, URL: %s", req.PackageName, req.Version, cosURL)
-	return &UploadPackageResponse{
-		ID:          pkg.ID,
-		PackageName: pkg.PackageName,
-		Version:     pkg.Version,
-		Status:      model.PackageStatusAvailable,
-		COSURL:      cosURL,
-	}, nil
-}
 
 // validateUploadRequest 验证上传请求参数
 func (s *FunctionPackageService) validateUploadRequest(req *UploadPackageRequest) error {
@@ -398,7 +392,7 @@ func (s *FunctionPackageService) DownloadLocalPackage(ctx context.Context, id in
 // validateAndPreprocess 验证和预处理上传请求
 func (s *FunctionPackageService) validateAndPreprocess(ctx context.Context, req *UploadPackageRequest) ([]byte, string, error) {
 	log.InfoContextf(ctx, "[validateAndPreprocess] 开始验证参数")
-	
+
 	// 验证输入参数
 	if err := s.validateUploadRequest(req); err != nil {
 		return nil, "", fmt.Errorf("参数验证失败: %w", err)
@@ -410,7 +404,7 @@ func (s *FunctionPackageService) validateAndPreprocess(ctx context.Context, req 
 		return nil, "", fmt.Errorf("检查版本失败: %w", err)
 	}
 	if exists {
-		return nil, "", fmt.Errorf("代码包 %s 版本 %s 已存在", req.PackageName, req.Version)
+		return nil, "", NewVersionExistsError(req.PackageName, req.Version)
 	}
 
 	// 解码base64文件内容
@@ -421,7 +415,7 @@ func (s *FunctionPackageService) validateAndPreprocess(ctx context.Context, req 
 
 	// 计算文件MD5
 	fileMD5 := s.calculateMD5(fileContent)
-	
+
 	log.InfoContextf(ctx, "[validateAndPreprocess] 验证完成, 文件大小: %d bytes, MD5: %s", len(fileContent), fileMD5)
 	return fileContent, fileMD5, nil
 }
@@ -429,7 +423,7 @@ func (s *FunctionPackageService) validateAndPreprocess(ctx context.Context, req 
 // determineStorageStrategy 确定存储策略
 func (s *FunctionPackageService) determineStorageStrategy(ctx context.Context, req *UploadPackageRequest) (*StorageConfig, error) {
 	log.InfoContextf(ctx, "[determineStorageStrategy] 开始确定存储策略, 云账户ID: %s", req.CloudAccountID)
-	
+
 	config := &StorageConfig{}
 
 	if req.CloudAccountID != "" {
@@ -451,14 +445,13 @@ func (s *FunctionPackageService) determineStorageStrategy(ctx context.Context, r
 	config.Bucket = "local"
 	config.Path = fmt.Sprintf("%s-%s-%d.zip", req.PackageName, req.Version, time.Now().Unix())
 	log.InfoContextf(ctx, "[determineStorageStrategy] 使用本地存储, path: %s", config.Path)
-	
 	return config, nil
 }
 
 // createPackageRecord 创建数据库记录
 func (s *FunctionPackageService) createPackageRecord(ctx context.Context, req *UploadPackageRequest, fileContent []byte, fileMD5 string, storageConfig *StorageConfig) (*model.FunctionPackage, error) {
 	log.InfoContextf(ctx, "[createPackageRecord] 开始创建数据库记录")
-	
+
 	pkg := &model.FunctionPackage{
 		PackageName:      req.PackageName,
 		Version:          req.Version,
@@ -489,7 +482,7 @@ func (s *FunctionPackageService) createPackageRecord(ctx context.Context, req *U
 // executeFileStorage 执行文件存储
 func (s *FunctionPackageService) executeFileStorage(ctx context.Context, pkg *model.FunctionPackage, fileContent []byte, storageConfig *StorageConfig) (string, error) {
 	log.InfoContextf(ctx, "[executeFileStorage] 开始执行文件存储, useCOS: %t", storageConfig.UseCOS)
-	
+
 	if storageConfig.UseCOS {
 		return s.uploadToCOS(ctx, pkg, fileContent, storageConfig)
 	} else {
@@ -500,7 +493,7 @@ func (s *FunctionPackageService) executeFileStorage(ctx context.Context, pkg *mo
 // uploadToCOS 上传到COS
 func (s *FunctionPackageService) uploadToCOS(ctx context.Context, pkg *model.FunctionPackage, fileContent []byte, storageConfig *StorageConfig) (string, error) {
 	log.InfoContextf(ctx, "[uploadToCOS] 开始上传到COS, bucket: %s, path: %s", storageConfig.Bucket, storageConfig.Path)
-	
+
 	uploadReq := &provider.UploadCOSRequest{
 		Bucket:      storageConfig.Bucket,
 		Key:         storageConfig.Path,
@@ -534,7 +527,7 @@ func (s *FunctionPackageService) uploadToCOS(ctx context.Context, pkg *model.Fun
 // saveToLocal 保存到本地
 func (s *FunctionPackageService) saveToLocal(ctx context.Context, pkg *model.FunctionPackage, fileContent []byte, storageConfig *StorageConfig) (string, error) {
 	log.InfoContextf(ctx, "[saveToLocal] 开始保存到本地, path: %s", storageConfig.Path)
-	
+
 	localPath, err := s.saveToLocalFile(fileContent, storageConfig.Path)
 	if err != nil {
 		s.updatePackageStatus(pkg.ID, model.PackageStatusFailed, 0, fmt.Sprintf("本地存储失败: %v", err))
@@ -550,7 +543,7 @@ func (s *FunctionPackageService) saveToLocal(ctx context.Context, pkg *model.Fun
 // finalizeUpload 完成上传并更新状态
 func (s *FunctionPackageService) finalizeUpload(ctx context.Context, pkg *model.FunctionPackage, cosURL string) error {
 	log.InfoContextf(ctx, "[finalizeUpload] 开始完成上传, ID: %d", pkg.ID)
-	
+
 	// 更新数据库状态
 	err := s.updatePackageStatus(pkg.ID, model.PackageStatusAvailable, 100, "")
 	if err != nil {
@@ -564,4 +557,169 @@ func (s *FunctionPackageService) finalizeUpload(ctx context.Context, pkg *model.
 
 	log.InfoContextf(ctx, "[finalizeUpload] 上传完成, ID: %d, URL: %s", pkg.ID, cosURL)
 	return nil
+}
+
+// UploadPackageAsync 异步上传代码包
+func (s *FunctionPackageService) UploadPackageAsync(ctx context.Context, req *UploadPackageRequest) (*UploadPackageAsyncResponse, error) {
+	log.InfoContextf(ctx, "[UploadPackageAsync] 开始异步上传代码包, 包名: %s, 版本: %s, 类型: %s",
+		req.PackageName, req.Version, req.PackageType)
+
+	// 1. 验证和预处理
+	fileContent, fileMD5, err := s.validateAndPreprocess(ctx, req)
+	if err != nil {
+		log.ErrorContextf(ctx, "[UploadPackageAsync] 验证和预处理失败: %v", err)
+		return nil, err
+	}
+
+	// 2. 确定存储策略
+	storageConfig, err := s.determineStorageStrategy(ctx, req)
+	if err != nil {
+		log.ErrorContextf(ctx, "[UploadPackageAsync] 确定存储策略失败: %v", err)
+		return nil, err
+	}
+
+	// 3. 保存文件到本地临时目录
+	localPath, err := s.saveToLocalFile(fileContent, storageConfig.Path)
+	if err != nil {
+		log.ErrorContextf(ctx, "[UploadPackageAsync] 保存本地文件失败: %v", err)
+		return nil, err
+	}
+
+	// 4. 创建数据库记录（初始状态为上传中）
+	pkg, err := s.createPackageRecord(ctx, req, fileContent, fileMD5, storageConfig)
+	if err != nil {
+		log.ErrorContextf(ctx, "[UploadPackageAsync] 创建数据库记录失败: %v", err)
+		return nil, err
+	}
+
+	// 5. 如果是本地存储，直接完成上传
+	if !storageConfig.UseCOS {
+		err = s.finalizeUpload(ctx, pkg, localPath)
+		if err != nil {
+			log.ErrorContextf(ctx, "[UploadPackageAsync] 完成本地上传失败: %v", err)
+			return nil, err
+		}
+
+		return &UploadPackageAsyncResponse{
+			TaskID:      "", // 本地存储不需要任务ID
+			PackageID:   pkg.ID,
+			PackageName: pkg.PackageName,
+			Version:     pkg.Version,
+			Status:      model.PackageStatusAvailable,
+			IsAsync:     false,
+		}, nil
+	}
+
+	// 6. 对于COS存储，创建异步任务
+	if s.taskService == nil {
+		log.ErrorContextf(ctx, "[UploadPackageAsync] 异步任务服务未配置")
+		return nil, fmt.Errorf("异步任务服务未配置")
+	}
+
+	// 生成任务ID
+	taskID := uuid.New().String()
+
+	// 创建异步任务请求
+	taskReq := map[string]interface{}{
+		"package_id":       pkg.ID,
+		"cloud_account_id": req.CloudAccountID,
+		"cos_bucket":       storageConfig.Bucket,
+		"cos_path":         storageConfig.Path,
+		"local_file_path":  localPath,
+	}
+
+	// 创建并执行异步任务
+	err = s.taskService.CreateAndExecuteTask(ctx, taskID, asyncTaskModel.TaskTypeUploadPackageToCOS, 1, taskReq)
+	if err != nil {
+		log.ErrorContextf(ctx, "[UploadPackageAsync] 创建异步任务失败: %v", err)
+		return nil, fmt.Errorf("创建异步任务失败: %w", err)
+	}
+
+	log.InfoContextf(ctx, "[UploadPackageAsync] 异步上传任务创建成功, 包名: %s, 版本: %s, 任务ID: %s", req.PackageName, req.Version, taskID)
+	return &UploadPackageAsyncResponse{
+		TaskID:      taskID,
+		PackageID:   pkg.ID,
+		PackageName: pkg.PackageName,
+		Version:     pkg.Version,
+		Status:      model.PackageStatusUploading,
+		IsAsync:     true,
+	}, nil
+}
+
+// UploadPackageAsyncResponse 异步上传代码包响应
+type UploadPackageAsyncResponse struct {
+	TaskID      string `json:"task_id"`      // 任务ID
+	PackageID   int64  `json:"package_id"`   // 包ID
+	PackageName string `json:"package_name"` // 包名
+	Version     string `json:"version"`      // 版本
+	Status      int    `json:"status"`       // 状态
+	IsAsync     bool   `json:"is_async"`     // 是否异步处理
+}
+
+// GetUploadTaskStatus 获取上传任务状态
+func (s *FunctionPackageService) GetUploadTaskStatus(ctx context.Context, taskID string) (*UploadTaskStatusResponse, error) {
+	if s.taskService == nil {
+		return nil, fmt.Errorf("异步任务服务未配置")
+	}
+
+	task, err := s.taskService.GetTaskStatus(ctx, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("获取任务状态失败: %w", err)
+	}
+
+	// 根据任务状态映射到字符串状态
+	var status string
+	var isComplete bool
+	var message string
+
+	switch task.TaskStatus {
+	case asyncTaskModel.TaskStatusPending:
+		status = "pending"
+		message = "任务等待处理"
+		isComplete = false
+	case asyncTaskModel.TaskStatusProcessing:
+		status = "processing"
+		message = "正在上传到COS"
+		isComplete = false
+	case asyncTaskModel.TaskStatusSuccess:
+		status = "success"
+		message = "上传成功"
+		isComplete = true
+	case asyncTaskModel.TaskStatusFailed:
+		status = "failed"
+		message = task.ErrorMessage
+		if message == "" {
+			message = "上传失败"
+		}
+		isComplete = true
+	case asyncTaskModel.TaskStatusPartial:
+		status = "partial"
+		message = "部分成功"
+		isComplete = true
+	case asyncTaskModel.TaskStatusCancelled:
+		status = "cancelled"
+		message = "任务已取消"
+		isComplete = true
+	default:
+		status = "unknown"
+		message = "未知状态"
+		isComplete = false
+	}
+
+	return &UploadTaskStatusResponse{
+		TaskID:     taskID,
+		Status:     status,
+		Progress:   task.GetProgress(),
+		Message:    message,
+		IsComplete: isComplete,
+	}, nil
+}
+
+// UploadTaskStatusResponse 上传任务状态响应
+type UploadTaskStatusResponse struct {
+	TaskID     string `json:"task_id"`     // 任务ID
+	Status     string `json:"status"`      // 状态: pending, processing, success, failed
+	Progress   int    `json:"progress"`    // 进度百分比
+	Message    string `json:"message"`     // 状态消息
+	IsComplete bool   `json:"is_complete"` // 是否完成
 }

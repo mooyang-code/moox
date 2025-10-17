@@ -54,7 +54,26 @@ export interface PackageOption {
   package_type: string;
 }
 
-// 上传云函数代码包
+// 异步上传响应
+export interface UploadPackageAsyncResponse {
+  task_id: string;
+  package_id: number;
+  package_name: string;
+  version: string;
+  status: number;
+  is_async: boolean;
+}
+
+// 上传任务状态响应
+export interface UploadTaskStatusResponse {
+  task_id: string;
+  status: string; // pending, processing, success, failed
+  progress: number;
+  message: string;
+  is_complete: boolean;
+}
+
+// 上传云函数代码包（异步）
 export const uploadFunctionPackage = async (data: UploadPackageRequest) => {
   const response = await api.post('/collector/UploadPackage', data);
   return response;
@@ -88,6 +107,12 @@ export const getFunctionPackageDownloadURL = async (id: number): Promise<any> =>
 export const getFunctionPackageOptions = async (packageType?: string): Promise<any> => {
   const params = packageType ? { package_type: packageType } : {};
   const response = await api.post('/collector/GetPackageOptions', params);
+  return response.data;
+};
+
+// 获取上传任务状态
+export const getUploadTaskStatus = async (taskId: string): Promise<any> => {
+  const response = await api.post('/collector/GetUploadTaskStatus', { task_id: taskId });
   return response.data;
 };
 

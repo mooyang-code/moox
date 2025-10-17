@@ -214,7 +214,7 @@ func (w *NodeDeploymentWorker) validateMessage(msg *queue.NodeDeploymentMessage)
 }
 
 // prepareCloudService 准备云服务
-func (w *NodeDeploymentWorker) prepareCloudService(ctx context.Context, cloudAccountID, region string) (provider.CloudProvider, error) {
+func (w *NodeDeploymentWorker) prepareCloudService(ctx context.Context, cloudAccountID, region string) (provider.Client, error) {
 	cloudAccount, err := w.cloudAccountService.GetAccountWithoutMask(ctx, cloudAccountID)
 	if err != nil {
 		return nil, fmt.Errorf("获取云账户信息失败: %w", err)

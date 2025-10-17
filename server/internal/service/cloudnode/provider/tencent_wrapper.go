@@ -4,7 +4,7 @@
 // 1. 解决循环依赖问题
 //    - provider 包定义通用接口
 //    - providers/tencent 包实现具体功能
-//    - 如果 providers/tencent 直接实现 provider.CloudProvider 接口，
+//    - 如果 providers/tencent 直接实现 provider.Client 接口，
 //      会造成循环依赖（providers/tencent → provider → providers/tencent）
 //    - 通过在 provider 包中创建 wrapper，避免了循环依赖
 //
@@ -49,7 +49,7 @@ func init() {
 }
 
 // NewTencentCloudProviderWithCOS 创建带COS功能的腾讯云Provider
-func NewTencentCloudProviderWithCOS(config *CloudConfig) (CloudProviderWithCOS, error) {
+func NewTencentCloudProviderWithCOS(config *CloudConfig) (ClientWithCOS, error) {
 	// 转换配置
 	tencentConfig := &tencent.Config{
 		SecretID:    config.SecretID,
@@ -72,7 +72,7 @@ func NewTencentCloudProviderWithCOS(config *CloudConfig) (CloudProviderWithCOS, 
 }
 
 // NewTencentCloudProvider 创建腾讯云Provider
-func NewTencentCloudProvider(config *CloudConfig) (CloudProvider, error) {
+func NewTencentCloudProvider(config *CloudConfig) (Client, error) {
 	// 转换配置
 	tencentConfig := &tencent.Config{
 		SecretID:    config.SecretID,

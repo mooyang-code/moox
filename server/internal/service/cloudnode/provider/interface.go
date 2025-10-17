@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// CloudProvider 云厂商接口
-type CloudProvider interface {
+// Client 云厂商客户端接口
+type Client interface {
 	// 云函数管理
 	CreateFunction(ctx context.Context, req *CreateFunctionRequest) (*FunctionInfo, error)
 	UpdateFunction(ctx context.Context, req *UpdateFunctionRequest) error
@@ -142,8 +142,8 @@ const (
 	InvokeTypeAsync = "Event"           // 异步调用
 )
 
-// COSProvider COS对象存储接口
-type COSProvider interface {
+// COS COS对象存储接口
+type COS interface {
 	// UploadCOS 上传文件到COS
 	UploadCOS(ctx context.Context, req *UploadCOSRequest) (*UploadCOSResponse, error)
 	
@@ -171,8 +171,8 @@ type UploadCOSResponse struct {
 	ETag     string // 文件的ETag
 }
 
-// CloudProviderWithCOS 同时支持云函数和COS的Provider接口
-type CloudProviderWithCOS interface {
-	CloudProvider
-	COSProvider
+// ClientWithCOS 同时支持云函数和COS的客户端接口
+type ClientWithCOS interface {
+	Client
+	COS
 }

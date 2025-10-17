@@ -185,6 +185,7 @@ const emit = defineEmits<{
 const visible = ref(props.modelValue);
 const loading = ref(false);
 const accountList = ref<CloudAccount[]>([]);
+const total = ref(0);
 const formVisible = ref(false);
 const isEdit = ref(false);
 const formRef = ref();
@@ -221,25 +222,14 @@ const loadAccountList = async () => {
   loading.value = true;
   try {
     const response = await getCloudAccountList();
-    // 兼容两种响应格式
+    console.log('云账户列表API响应:', response);
+    
     if (response?.code === 200 && response?.data) {
-      // 处理数组格式的响应：response.data 可能是数组
-      let data = response.data;
-      if (Array.isArray(data)) {
-        accountList.value = data;
-      } else {
-        accountList.value = [data].filter(Boolean);
-      }
-    } else if (response?.ret_info?.code === 0) {
-      // 处理数组格式的响应：response.ret_info.data 可能是数组
-      let data = response.ret_info.data;
-      if (Array.isArray(data)) {
-        accountList.value = data;
-      } else {
-        accountList.value = [data].filter(Boolean);
-      }
+      accountList.value = response.data || [];
+      total.value = response.total || 0;
     } else {
       accountList.value = [];
+      total.value = 0;
     }
   } catch (error) {
     console.error('加载云账户列表失败:', error);

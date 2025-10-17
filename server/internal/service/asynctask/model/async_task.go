@@ -17,10 +17,11 @@ const (
 
 // 任务类型常量
 const (
-	TaskTypeBatchCreateNode = "BATCH_CREATE_NODE" // 批量创建节点
-	TaskTypeBatchUpdateNode = "BATCH_UPDATE_NODE" // 批量更新节点
-	TaskTypeBatchDeleteNode = "BATCH_DELETE_NODE" // 批量删除节点
-	TaskTypeBatchDeployNode = "BATCH_DEPLOY_NODE" // 批量部署节点
+	TaskTypeBatchCreateNode    = "BATCH_CREATE_NODE"    // 批量创建节点
+	TaskTypeBatchUpdateNode    = "BATCH_UPDATE_NODE"    // 批量更新节点
+	TaskTypeBatchDeleteNode    = "BATCH_DELETE_NODE"    // 批量删除节点
+	TaskTypeBatchDeployNode    = "BATCH_DEPLOY_NODE"    // 批量部署节点
+	TaskTypeUploadPackageToCOS = "UPLOAD_PACKAGE_TO_COS" // 上传代码包到COS
 )
 
 // AsyncTask 异步任务表
@@ -86,6 +87,8 @@ func (t *AsyncTask) GetTaskTypeText() string {
 		return "批量删除节点"
 	case TaskTypeBatchDeployNode:
 		return "批量部署节点"
+	case TaskTypeUploadPackageToCOS:
+		return "上传代码包到COS"
 	default:
 		return "未知任务类型"
 	}

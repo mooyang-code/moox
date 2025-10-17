@@ -135,7 +135,7 @@ func (w *NodeCreationWorker) validateMessage(msg *queue.NodeCreationMessage) err
 }
 
 // prepareCloudProvider 准备云服务提供商实例
-func (w *NodeCreationWorker) prepareCloudProvider(ctx context.Context, cloudAccountID, region string, workerID int) (provider.CloudProvider, error) {
+func (w *NodeCreationWorker) prepareCloudProvider(ctx context.Context, cloudAccountID, region string, workerID int) (provider.Client, error) {
 	// 获取云账户（内部使用不脱敏）
 	account, err := w.cloudAccountService.GetAccountWithoutMask(ctx, cloudAccountID)
 	if err != nil {
@@ -167,7 +167,7 @@ func (w *NodeCreationWorker) prepareCloudProvider(ctx context.Context, cloudAcco
 }
 
 // createCloudResources 创建云资源（命名空间和函数）
-func (w *NodeCreationWorker) createCloudResources(ctx context.Context, cloudProvider provider.CloudProvider, msg *queue.NodeCreationMessage, workerID int) (*provider.FunctionInfo, error) {
+func (w *NodeCreationWorker) createCloudResources(ctx context.Context, cloudProvider provider.Client, msg *queue.NodeCreationMessage, workerID int) (*provider.FunctionInfo, error) {
 	// 1. 创建或确认命名空间
 	if err := w.ensureNamespace(ctx, cloudProvider, msg.Namespace, msg.NodeID, workerID); err != nil {
 		return nil, err
@@ -201,7 +201,7 @@ func (w *NodeCreationWorker) createCloudResources(ctx context.Context, cloudProv
 }
 
 // ensureNamespace 确保命名空间存在
-func (w *NodeCreationWorker) ensureNamespace(ctx context.Context, cloudProvider provider.CloudProvider, namespace, nodeID string, workerID int) error {
+func (w *NodeCreationWorker) ensureNamespace(ctx context.Context, cloudProvider provider.Client, namespace, nodeID string, workerID int) error {
 	log.InfoContextf(ctx, "[NodeCreationWorker-%d] 正在创建命名空间: %s", workerID, namespace)
 	err := cloudProvider.CreateNamespace(ctx, namespace, fmt.Sprintf("moox节点 %s 的命名空间", nodeID))
 	if err != nil {
@@ -228,7 +228,7 @@ func (w *NodeCreationWorker) prepareZipFile(ctx context.Context, zipFilePath str
 }
 
 // ensureFunction 确保云函数存在
-func (w *NodeCreationWorker) ensureFunction(ctx context.Context, cloudProvider provider.CloudProvider, msg *queue.NodeCreationMessage, zipBase64 string, workerID int) (*provider.FunctionInfo, error) {
+func (w *NodeCreationWorker) ensureFunction(ctx context.Context, cloudProvider provider.Client, msg *queue.NodeCreationMessage, zipBase64 string, workerID int) (*provider.FunctionInfo, error) {
 	log.InfoContextf(ctx, "[NodeCreationWorker-%d] 正在创建云函数: %s", workerID, msg.FunctionName)
 
 	req := &provider.CreateFunctionRequest{
@@ -262,7 +262,7 @@ func (w *NodeCreationWorker) ensureFunction(ctx context.Context, cloudProvider p
 }
 
 // getExistingFunction 获取已存在的函数信息
-func (w *NodeCreationWorker) getExistingFunction(ctx context.Context, cloudProvider provider.CloudProvider, functionName, namespace string, workerID int) (*provider.FunctionInfo, error) {
+func (w *NodeCreationWorker) getExistingFunction(ctx context.Context, cloudProvider provider.Client, functionName, namespace string, workerID int) (*provider.FunctionInfo, error) {
 	functionInfo, err := cloudProvider.GetFunction(ctx, functionName, namespace)
 	if err != nil {
 		log.ErrorContextf(ctx, "[NodeCreationWorker-%d] 获取已存在的函数失败: %v", workerID, err)
@@ -319,7 +319,7 @@ func (w *NodeCreationWorker) handleTaskSuccess(ctx context.Context, taskID, item
 }
 
 // waitForFunctionReady 等待函数变为活跃状态
-func (w *NodeCreationWorker) waitForFunctionReady(ctx context.Context, cloudProvider provider.CloudProvider, functionName, namespace string, workerID int) {
+func (w *NodeCreationWorker) waitForFunctionReady(ctx context.Context, cloudProvider provider.Client, functionName, namespace string, workerID int) {
 	log.InfoContextf(ctx, "[NodeCreationWorker-%d] 等待函数 %s 就绪...", workerID, functionName)
 
 	maxWaitTime := 5 * time.Minute

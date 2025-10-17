@@ -79,7 +79,7 @@ func ExampleCOSUsage() {
 }
 
 // ExampleCompressAndUpload 演示压缩文件夹并上传（参考实现风格）
-func ExampleCompressAndUpload(provider CloudProviderWithCOS, localFolderPath, zipFileName, cosKey string) error {
+func ExampleCompressAndUpload(provider ClientWithCOS, localFolderPath, zipFileName, cosKey string) error {
 	ctx := context.Background()
 
 	// 1. 假设已有zipFolder函数压缩文件夹
@@ -106,7 +106,7 @@ func ExampleCompressAndUpload(provider CloudProviderWithCOS, localFolderPath, zi
 }
 
 // ExampleWithRetry 演示带重试机制的上传（类似参考实现）
-func ExampleWithRetry(provider CloudProviderWithCOS, content []byte, cosKey string) error {
+func ExampleWithRetry(provider ClientWithCOS, content []byte, cosKey string) error {
 	ctx := context.Background()
 
 	// 类似参考实现中的retry.Do模式

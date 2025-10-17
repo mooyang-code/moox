@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -42,13 +43,83 @@ func (h *FunctionPackageHandler) UploadPackage(c *gin.Context) {
 	// 设置创建者为固定值
 	req.CreatedBy = "moox"
 
-	resp, err := h.packageService.UploadPackage(c.Request.Context(), &req)
+	resp, err := h.packageService.UploadPackageAsync(c.Request.Context(), &req)
 	if err != nil {
 		ErrorResponse(c, http.StatusInternalServerError, "上传失败", err)
 		return
 	}
 
 	SuccessResponse(c, "上传成功", resp)
+}
+
+// UploadPackageAsync 异步上传代码包
+// @Summary 异步上传云函数代码包
+// @Description 异步上传云函数代码包到COS并记录到数据库
+// @Tags 云函数代码包
+// @Accept json
+// @Produce json
+// @Param request body logic.UploadPackageRequest true "上传请求"
+// @Success 200 {object} APIResponse{data=logic.UploadPackageAsyncResponse}
+// @Failure 400 {object} APIResponse
+// @Failure 500 {object} APIResponse
+// @Router /api/v1/function-packages/upload-async [post]
+func (h *FunctionPackageHandler) UploadPackageAsync(c *gin.Context) {
+	var req logic.UploadPackageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		ErrorResponse(c, http.StatusBadRequest, "参数绑定失败", err)
+		return
+	}
+
+	// 设置创建者为固定值
+	req.CreatedBy = "moox"
+
+	resp, err := h.packageService.UploadPackageAsync(c.Request.Context(), &req)
+	if err != nil {
+		// 根据错误类型返回不同的HTTP状态码
+		if businessErr, ok := err.(*logic.BusinessError); ok {
+			switch {
+			case errors.Is(businessErr, logic.ErrValidationFailed):
+				ErrorResponse(c, http.StatusBadRequest, "参数验证失败", err)
+			case errors.Is(businessErr, logic.ErrVersionExists):
+				ErrorResponse(c, http.StatusConflict, "版本冲突，请修改版本号重试", err)
+			case errors.Is(businessErr, logic.ErrResourceNotFound):
+				ErrorResponse(c, http.StatusNotFound, "资源未找到", err)
+			default:
+				ErrorResponse(c, http.StatusBadRequest, "请求失败", err)
+			}
+		} else {
+			ErrorResponse(c, http.StatusInternalServerError, "异步上传失败", err)
+		}
+		return
+	}
+	SuccessResponse(c, "异步上传任务创建成功", resp)
+}
+
+// GetUploadTaskStatus 获取上传任务状态
+// @Summary 获取上传任务状态
+// @Description 获取异步上传任务的执行状态
+// @Tags 云函数代码包
+// @Accept json
+// @Produce json
+// @Param task_id path string true "任务ID"
+// @Success 200 {object} APIResponse{data=logic.UploadTaskStatusResponse}
+// @Failure 400 {object} APIResponse
+// @Failure 500 {object} APIResponse
+// @Router /api/v1/function-packages/upload-task/{task_id}/status [get]
+func (h *FunctionPackageHandler) GetUploadTaskStatus(c *gin.Context) {
+	taskID := c.Param("task_id")
+	if taskID == "" {
+		ErrorResponse(c, http.StatusBadRequest, "任务ID不能为空", nil)
+		return
+	}
+
+	resp, err := h.packageService.GetUploadTaskStatus(c.Request.Context(), taskID)
+	if err != nil {
+		ErrorResponse(c, http.StatusInternalServerError, "获取任务状态失败", err)
+		return
+	}
+
+	SuccessResponse(c, "获取任务状态成功", resp)
 }
 
 // GetPackageList 获取代码包列表
@@ -91,7 +162,8 @@ func (h *FunctionPackageHandler) GetPackageList(c *gin.Context) {
 		return
 	}
 
-	SuccessResponse(c, "查询成功", resp)
+	// 使用新的分页列表响应格式：total在外层，items直接作为data数组
+	PaginatedListResponse(c, "查询成功", resp.Items, resp.Total)
 }
 
 // GetPackageDetail 获取代码包详情
@@ -194,7 +266,7 @@ func (h *FunctionPackageHandler) GetPackageDownloadURL(c *gin.Context) {
 // @Router /api/v1/function-packages/options [get]
 func (h *FunctionPackageHandler) GetPackageOptions(c *gin.Context) {
 	packageType := c.Query("package_type")
-	
+
 	// 构建查询条件
 	req := &logic.PackageListRequest{
 		Page:        1,
@@ -216,14 +288,14 @@ func (h *FunctionPackageHandler) GetPackageOptions(c *gin.Context) {
 		if item.PackageType == "data_collector" {
 			displayName = "数据采集器"
 		}
-		
+
 		options[i] = PackageOptionVO{
-			ID:          item.ID,
-			Label:       fmt.Sprintf("[%s] %s %s (%s) - %s", 
-				item.PackageTypeLabel, 
-				displayName, 
-				item.Version, 
-				item.Runtime, 
+			ID: item.ID,
+			Label: fmt.Sprintf("[%s] %s %s (%s) - %s",
+				item.PackageTypeLabel,
+				displayName,
+				item.Version,
+				item.Runtime,
 				item.CreatedAt.Format("2006-01-02")),
 			PackageName: item.PackageName,
 			Version:     item.Version,

@@ -92,6 +92,26 @@ api.interceptors.response.use(
       window.location.replace('/login');
     }
     
-    return Promise.reject(error.response?.data?.ret_info || error);
+    // 详细的错误信息调试
+    console.log('HTTP错误响应:', error.response?.data);
+    console.log('错误状态码:', error.response?.status);
+    console.log('完整错误对象:', error);
+    
+    // 特殊处理：如果错误信息是字符串且包含JSON，尝试解析
+    if (typeof error.response?.data === 'string' && error.response.data.includes('{"code":')) {
+      try {
+        const jsonMatch = error.response.data.match(/\{[^}]+\}/);
+        if (jsonMatch) {
+          const parsedData = JSON.parse(jsonMatch[0]);
+          // 用解析后的数据替换原始数据
+          error.response.data = parsedData;
+          console.log('解析后的错误数据:', parsedData);
+        }
+      } catch (parseError) {
+        console.warn('解析响应数据失败:', parseError);
+      }
+    }
+    
+    return Promise.reject(error);
   }
 ); 

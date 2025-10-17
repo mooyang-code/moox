@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mooyang-code/moox/server/internal/common"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"gorm.io/gorm"
@@ -202,10 +203,15 @@ func (h *CloudAccountHandler) GetCloudAccountList(c *gin.Context) {
 	}
 	
 	if err != nil {
-		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
+		common.ErrorResponse(c, 500, "查询云账户列表失败", err)
 		return
 	}
-	c.JSON(200, gin.H{"code": 200, "data": accounts})
+	
+	// 计算总数
+	total := int64(len(accounts))
+	
+	// 使用新的分页列表响应格式
+	common.PaginatedListResponse(c, "查询成功", accounts, total)
 }
 
 // GetCloudAccountDetail 获取云账户详情

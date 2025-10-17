@@ -64,6 +64,24 @@
           上传代码包
         </a-button>
       </a-row>
+
+      <!-- 上传状态提示 -->
+      <a-row v-if="isPolling" style="margin-bottom: 16px;">
+        <a-alert type="info" :closable="false" style="width: 100%;">
+          <template #icon><icon-loading class="spinning-icon" /></template>
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div>
+              <div style="font-weight: 500; margin-bottom: 4px;">{{ uploadMessage }}</div>
+              <div style="color: #86909c; font-size: 12px;">
+                任务ID: {{ currentTaskId }}
+              </div>
+            </div>
+            <div style="margin-left: 16px;">
+              <a-spin :size="20" :loading="true" />
+            </div>
+          </div>
+        </a-alert>
+      </a-row>
       
       <a-table
         row-key="id"
@@ -174,7 +192,7 @@
           </a-select>
           <template #extra>
             <span style="color: #86909c; font-size: 12px;">
-              选择云账户将使用COS存储，不选择将存储到本地/tmp目录
+              选择云账户将使用COS存储，不选择将存储到本地/tmp目录。所有上传都为异步处理。
             </span>
           </template>
         </a-form-item>
@@ -233,11 +251,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, reactive, computed } from 'vue';
+import { ref, watch, reactive, computed, onUnmounted } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { 
   getFunctionPackageList, 
-  uploadFunctionPackage, 
+  uploadFunctionPackage,
   deleteFunctionPackage,
   getFunctionPackageDownloadURL,
   downloadLocalPackage,
@@ -248,6 +266,7 @@ import {
   type PackageListRequest
 } from '@/api/function-package';
 import { getCloudAccountList, type CloudAccount } from '@/api/cloud-account';
+import { asyncTaskManager } from '@/utils/async-task';
 
 // Props
 const props = defineProps<{
@@ -260,6 +279,7 @@ const emit = defineEmits<{
   'refresh': [];
 }>();
 
+
 // 响应式数据
 const visible = ref(props.modelValue);
 const loading = ref(false);
@@ -270,6 +290,12 @@ const uploading = ref(false);
 const uploadFormRef = ref();
 const uploadRef = ref();
 const fileList = ref<any[]>([]);
+
+// 异步任务状态
+const currentTaskId = ref<string>('');
+const isPolling = ref(false);
+const uploadMessage = ref('');
+const pollingTimer = ref<number | null>(null);
 
 // 搜索表单
 const searchForm = reactive<PackageListRequest>({
@@ -321,16 +347,22 @@ const loadPackageList = async () => {
   loading.value = true;
   try {
     const response = await getFunctionPackageList(searchForm);
+    console.log('代码包列表API响应:', response);
+    
     if (response?.code === 200 && response?.data) {
-      packageList.value = response.data.items || [];
-      total.value = response.data.total || 0;
+      console.log('解析后的列表数据:', response);
+      packageList.value = response.data || [];
+      total.value = response.total || 0;
     } else {
       packageList.value = [];
       total.value = 0;
     }
   } catch (error) {
     console.error('加载代码包列表失败:', error);
-    Message.error('加载代码包列表失败');
+    Message.error({
+      content: '加载代码包列表失败',
+      duration: 5000
+    });
   } finally {
     loading.value = false;
   }
@@ -340,20 +372,10 @@ const loadPackageList = async () => {
 const loadCloudAccounts = async () => {
   try {
     const response = await getCloudAccountList();
+    console.log('云账户选项API响应:', response);
+    
     if (response?.code === 200 && response?.data) {
-      let data = response.data;
-      if (Array.isArray(data)) {
-        cloudAccountOptions.value = data;
-      } else {
-        cloudAccountOptions.value = [data].filter(Boolean);
-      }
-    } else if (response?.ret_info?.code === 0) {
-      let data = response.ret_info.data;
-      if (Array.isArray(data)) {
-        cloudAccountOptions.value = data;
-      } else {
-        cloudAccountOptions.value = [data].filter(Boolean);
-      }
+      cloudAccountOptions.value = response.data || [];
     } else {
       cloudAccountOptions.value = [];
     }
@@ -411,7 +433,10 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
   if (fileItem && fileItem.file) {
     // 检查文件类型
     if (!fileItem.file.name.toLowerCase().endsWith('.zip')) {
-      Message.error('只支持ZIP格式的文件');
+      Message.error({
+        content: '只支持ZIP格式的文件',
+        duration: 5000
+      });
       fileList.value = [];
       uploadForm.file_content = '';
       return;
@@ -420,7 +445,10 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
     // 检查文件大小（100MB限制）
     const maxSize = 100 * 1024 * 1024;
     if (fileItem.file.size > maxSize) {
-      Message.error('文件大小不能超过100MB');
+      Message.error({
+        content: '文件大小不能超过100MB',
+        duration: 5000
+      });
       fileList.value = [];
       uploadForm.file_content = '';
       return;
@@ -435,7 +463,10 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
       }
     };
     reader.onerror = () => {
-      Message.error('文件读取失败');
+      Message.error({
+        content: '文件读取失败',
+        duration: 5000
+      });
       fileList.value = [];
       uploadForm.file_content = '';
     };
@@ -542,27 +573,205 @@ const handleUploadOk = async () => {
   // 自定义验证
   const validationErrors = validateUploadForm();
   if (validationErrors.length > 0) {
-    Message.error(validationErrors[0]); // 显示第一个错误
+    Message.error({
+      content: validationErrors[0],
+      duration: 5000 // 显示第一个错误，停留5秒
+    });
     return; // 有验证错误，不继续执行
   }
 
   uploading.value = true;
+  
   try {
-    const response = await uploadFunctionPackage(uploadForm);
-    if (response?.data?.code === 200) {
-      Message.success('上传成功');
-      uploadVisible.value = false; // 只有成功时才关闭弹窗
-      await loadPackageList();
-      emit('refresh');
-    } else {
-      throw new Error(response?.data?.message || '上传失败');
-    }
+    await handleUpload();
   } catch (error: any) {
     console.error('上传代码包失败:', error);
-    Message.error(error?.message || '上传代码包失败');
+    Message.error({
+      content: error?.message || '上传代码包失败',
+      duration: 5000 // 错误消息显示5秒
+    });
     // 出错时不关闭弹窗，让用户可以修改后重新提交
   } finally {
     uploading.value = false;
+  }
+};
+
+// 统一上传处理（异步）
+const handleUpload = async () => {
+  try {
+    const response = await uploadFunctionPackage(uploadForm);
+    console.log('上传API响应:', response);
+    
+    if (response?.data?.code === 200) {
+      // 后端返回的data是数组格式，取第一个元素
+      const responseData = response.data.data;
+      const uploadResult = Array.isArray(responseData) ? responseData[0] : responseData;
+      console.log('解析后的上传结果:', uploadResult);
+      console.log('is_async:', uploadResult.is_async, 'task_id:', uploadResult.task_id);
+      
+      if (uploadResult.is_async && uploadResult.task_id) {
+        // 异步上传，开始轮询
+        console.log('收到异步上传响应:', uploadResult);
+        currentTaskId.value = uploadResult.task_id;
+        uploadMessage.value = '上传任务已创建，正在后台处理...';
+        
+        
+        // 不要立即显示成功消息，等待轮询结果
+        uploadVisible.value = false; // 关闭上传弹窗
+        
+        // 开始轮询任务状态
+        startTaskPolling(uploadResult.task_id);
+      } else {
+        // 本地存储直接完成
+        Message.success('上传成功');
+        uploadVisible.value = false;
+        // 刷新代码包列表
+        await loadPackageList();
+        emit('refresh');
+      }
+    } else {
+      // 处理业务错误
+      const errorMessage = response?.data?.message || '上传失败';
+      throw new Error(errorMessage);
+    }
+  } catch (error: any) {
+    console.error('上传请求失败:', error);
+    console.error('错误对象详情:', {
+      message: error?.message,
+      response: error?.response,
+      responseData: error?.response?.data
+    });
+    
+    // 从不同的错误结构中提取错误消息
+    let errorMessage = '上传失败';
+    
+    // 1. 先检查axios错误消息中是否包含JSON响应
+    if (error?.message && typeof error.message === 'string' && error.message.includes('{"code":')) {
+      try {
+        // 从axios错误消息中提取JSON部分
+        const jsonMatch = error.message.match(/\{[^}]+\}/);
+        if (jsonMatch) {
+          const errorData = JSON.parse(jsonMatch[0]);
+          if (errorData.message) {
+            errorMessage = errorData.message;
+          }
+        }
+      } catch (parseError) {
+        console.warn('解析错误消息JSON失败:', parseError);
+      }
+    }
+    
+    // 2. 检查response.data中的错误信息
+    if (error?.response?.data) {
+      const errorData = error.response.data;
+      if (errorData.message) {
+        errorMessage = errorData.message;
+      } else if (errorData.ret_info?.msg) {
+        errorMessage = errorData.ret_info.msg;
+      } else if (errorData.error) {
+        errorMessage = errorData.error;
+      }
+    }
+    
+    // 3. 如果还是默认消息，尝试从其他地方提取
+    if (errorMessage === '上传失败' && error?.message) {
+      // 检查错误消息是否包含有用信息
+      if (error.message.includes('版本冲突') || 
+          error.message.includes('conflict') ||
+          error.message.includes('exists')) {
+        errorMessage = error.message;
+      }
+    }
+    
+    console.log('提取的错误消息:', errorMessage);
+    throw new Error(errorMessage);
+  }
+};
+
+// 开始任务轮询 - 使用统一的AsyncTaskManager
+const startTaskPolling = (taskId: string) => {
+  isPolling.value = true;
+  currentTaskId.value = taskId;
+  
+  console.log('开始轮询上传任务:', taskId);
+  console.log('AsyncTaskManager实例:', asyncTaskManager);
+  
+  try {
+    // 使用 AsyncTaskManager 进行轮询，与云函数创建保持一致
+    asyncTaskManager.startPolling(taskId, {
+      onProgress: (data: any) => {
+        console.log('Package upload progress:', data);
+        uploadMessage.value = data.message || '正在处理上传任务，请勿关闭本页面...';
+      },
+      onSuccess: (data: any) => {
+        console.log('Upload task success:', data);
+        handleTaskComplete(data, 'success');
+      },
+      onFailed: (data: any) => {
+        console.log('Upload task failed:', data);
+        handleTaskComplete(data, 'failed');
+      },
+      onPartialSuccess: (data: any) => {
+        console.log('Upload task partial success:', data);
+        handleTaskComplete(data, 'partial_success');
+      },
+      showLoading: false,
+      interval: 2000
+    });
+    console.log('AsyncTaskManager.startPolling 调用成功');
+  } catch (error) {
+    console.error('AsyncTaskManager.startPolling 调用失败:', error);
+  }
+};
+
+// 任务完成处理
+const handleTaskComplete = async (data: any, result: string) => {
+  console.log('任务完成:', { data, result });
+  
+  stopTaskPolling();
+  
+  if (result === 'success') {
+    Message.success('上传成功！');
+    // 刷新代码包列表
+    await loadPackageList();
+    emit('refresh');
+  } else if (result === 'failed') {
+    // 提取错误消息
+    let errorMessage = '上传失败';
+    if (data?.message) {
+      errorMessage = data.message;
+    } else if (data?.error_message) {
+      errorMessage = data.error_message;
+    }
+    Message.error({
+      content: errorMessage,
+      duration: 5000 // 错误消息显示5秒
+    });
+    // 失败后也刷新列表，显示失败状态
+    await loadPackageList();
+  } else if (result === 'partial_success') {
+    Message.warning('部分上传成功，请查看详情');
+    // 刷新代码包列表
+    await loadPackageList();
+    emit('refresh');
+  }
+};
+
+// 停止任务轮询
+const stopTaskPolling = () => {
+  isPolling.value = false;
+  
+  // 停止AsyncTaskManager轮询
+  asyncTaskManager.stopPolling();
+  
+  // 清除任务ID
+  currentTaskId.value = '';
+  
+  
+  // 清除备用定时器（如果有的话）
+  if (pollingTimer.value) {
+    clearInterval(pollingTimer.value);
+    pollingTimer.value = null;
   }
 };
 
@@ -585,7 +794,10 @@ const onDownload = async (record: FunctionPackage) => {
     }
   } catch (error) {
     console.error('下载失败:', error);
-    Message.error('下载失败');
+    Message.error({
+      content: '下载失败',
+      duration: 5000
+    });
   }
 };
 
@@ -595,6 +807,7 @@ const onDelete = async (record: FunctionPackage) => {
     const response = await deleteFunctionPackage(record.id);
     if (response?.data?.code === 200) {
       Message.success('删除成功');
+      // 刷新代码包列表
       await loadPackageList();
       emit('refresh');
     } else {
@@ -602,7 +815,10 @@ const onDelete = async (record: FunctionPackage) => {
     }
   } catch (error) {
     console.error('删除代码包失败:', error);
-    Message.error('删除代码包失败');
+    Message.error({
+      content: '删除代码包失败',
+      duration: 5000
+    });
   }
 };
 
@@ -631,12 +847,12 @@ const getPackageTypeColor = (packageType: string) => {
 
 const getStatusColor = (status: number) => {
   const colorMap: Record<number, string> = {
-    0: 'processing', // 上传中
-    1: 'success',    // 可用
-    2: 'default',    // 已删除
-    3: 'danger'      // 上传失败
+    0: 'blue',       // 上传中 - 蓝色
+    1: 'green',      // 可用 - 绿色
+    2: 'gray',       // 已删除 - 灰色
+    3: 'red'         // 上传失败 - 红色
   };
-  return colorMap[status] || 'default';
+  return colorMap[status] || 'gray';
 };
 
 const formatFileSize = (size: number) => {
@@ -657,6 +873,12 @@ const formatTime = (time: string | undefined) => {
     second: '2-digit'
   });
 };
+
+
+// 组件卸载时清理轮询
+onUnmounted(() => {
+  stopTaskPolling();
+});
 </script>
 
 <style scoped>
@@ -676,5 +898,16 @@ const formatTime = (time: string | undefined) => {
 
 .upload-area:hover {
   border-color: #165dff;
+}
+
+/* 加载动画 */
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.spinning-icon {
+  animation: spin 1s linear infinite;
+  display: inline-block;
 }
 </style>

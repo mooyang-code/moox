@@ -23,7 +23,7 @@ type Manager struct {
 	timeoutDuration time.Duration
 	nodeDAO         dao.SCFNodeDAO
 	heartbeatDAO    dao.NodeHeartbeatDAO
-	provider        provider.CloudProvider
+	provider        provider.Client
 	mooxServiceURL  string
 }
 
@@ -40,7 +40,7 @@ func NewManager(db *gorm.DB, mooxServiceURL string) *Manager {
 }
 
 // SetCloudProvider 设置云服务提供商
-func (m *Manager) SetCloudProvider(provider provider.CloudProvider) {
+func (m *Manager) SetCloudProvider(provider provider.Client) {
 	m.provider = provider
 }
 

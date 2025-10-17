@@ -41,7 +41,7 @@ type CollectorTaskConfigService interface {
 type collectorTaskConfigServiceImpl struct {
 	taskConfigDAO dao.CollectorTaskConfigDAO
 	nodeDAO       cloudnodedao.SCFNodeDAO
-	cloudProvider provider.CloudProvider
+	cloudProvider provider.Client
 }
 
 // NewCollectorTaskConfigService 创建采集任务配置服务实例
@@ -54,7 +54,7 @@ func NewCollectorTaskConfigService(db *gorm.DB) CollectorTaskConfigService {
 }
 
 // NewCollectorTaskConfigServiceWithProvider 创建带云提供商的采集任务配置服务实例
-func NewCollectorTaskConfigServiceWithProvider(db *gorm.DB, provider provider.CloudProvider) CollectorTaskConfigService {
+func NewCollectorTaskConfigServiceWithProvider(db *gorm.DB, provider provider.Client) CollectorTaskConfigService {
 	return &collectorTaskConfigServiceImpl{
 		taskConfigDAO: dao.NewCollectorTaskConfigDAO(db),
 		nodeDAO:       cloudnodedao.NewSCFNodeDAO(db),

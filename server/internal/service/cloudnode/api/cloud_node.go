@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mooyang-code/moox/server/internal/common"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"gorm.io/gorm"
@@ -286,10 +287,15 @@ func (h *CloudNodeHandler) GetNodeList(c *gin.Context) {
 	ctx := c.Request.Context()
 	nodes, err := h.service.GetNodeList(ctx)
 	if err != nil {
-		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
+		common.ErrorResponse(c, 500, "查询云节点列表失败", err)
 		return
 	}
-	c.JSON(200, gin.H{"code": 200, "data": nodes})
+	
+	// 计算总数
+	total := int64(len(nodes))
+	
+	// 使用新的分页列表响应格式
+	common.PaginatedListResponse(c, "查询成功", nodes, total)
 }
 
 // GetNodeDetail 获取节点详情

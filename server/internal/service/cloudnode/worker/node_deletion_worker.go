@@ -149,7 +149,7 @@ func (w *NodeDeletionWorker) validateMessage(msg *queue.NodeDeletionMessage) err
 }
 
 // prepareCloudProvider 准备云服务提供商实例
-func (w *NodeDeletionWorker) prepareCloudProvider(ctx context.Context, cloudAccountID, region string, workerID int) (provider.CloudProvider, error) {
+func (w *NodeDeletionWorker) prepareCloudProvider(ctx context.Context, cloudAccountID, region string, workerID int) (provider.Client, error) {
 	// 获取云账户（内部使用不脱敏）
 	account, err := w.cloudAccountService.GetAccountWithoutMask(ctx, cloudAccountID)
 	if err != nil {
@@ -181,7 +181,7 @@ func (w *NodeDeletionWorker) prepareCloudProvider(ctx context.Context, cloudAcco
 }
 
 // deleteCloudFunction 删除云函数
-func (w *NodeDeletionWorker) deleteCloudFunction(ctx context.Context, cloudProvider provider.CloudProvider, msg *queue.NodeDeletionMessage, workerID int) error {
+func (w *NodeDeletionWorker) deleteCloudFunction(ctx context.Context, cloudProvider provider.Client, msg *queue.NodeDeletionMessage, workerID int) error {
 	log.InfoContextf(ctx, "[NodeDeletionWorker-%d] 正在删除云函数: %s (namespace: %s)", workerID, msg.FunctionName, msg.Namespace)
 
 	err := cloudProvider.DeleteFunction(ctx, msg.FunctionName, msg.Namespace)
