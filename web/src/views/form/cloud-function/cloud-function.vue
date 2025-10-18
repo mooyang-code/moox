@@ -151,6 +151,11 @@
               </template>
             </a-table-column>
             <a-table-column title="IP地址" data-index="ip_address" :width="120"></a-table-column>
+            <a-table-column title="代码包ID" data-index="package_id" :width="100">
+              <template #cell="{ record }">
+                {{ record.package_id || '-' }}
+              </template>
+            </a-table-column>
             <a-table-column title="支持的采集器" data-index="supported_collectors" :width="160">
               <template #cell="{ record }">
                 <div v-if="record.supported_collectors">
@@ -244,6 +249,14 @@
           </a-select>
         </a-form-item>
         
+        <a-form-item field="packageId" label="云函数版本" required>
+          <a-select v-model="batchAddForm.packageId" placeholder="请选择云函数版本" style="width: 100%">
+            <a-option v-for="pkg in availablePackagesForCreation" :key="pkg.id" :value="pkg.id">
+              {{ pkg.package_name }} - {{ pkg.version }} ({{ pkg.runtime }})
+            </a-option>
+          </a-select>
+        </a-form-item>
+        
         <a-form-item field="nodeCount" label="节点数量" required>
           <a-input-number 
             v-model="batchAddForm.nodeCount" 
@@ -273,35 +286,54 @@
     <a-modal
       v-model:visible="batchDeployVisible"
       title="批量部署云函数"
-      :width="600"
+      :width="800"
       :mask-closable="false"
       @cancel="handleBatchDeployCancel"
       @ok="handleBatchDeployOk"
     >
       <a-form :model="batchDeployForm" layout="vertical">
-        <a-form-item label="部署文件" required>
-          <a-upload
-            :custom-request="customUploadHandler"
-            :show-file-list="false"
-            accept=".zip"
+        <a-form-item label="选择云函数版本" required>
+          <a-table
+            row-key="id"
+            :data="availablePackages"
+            :loading="packagesLoading"
+            :pagination="packagesPagination"
+            :scroll="{ y: 300 }"
+            :row-selection="{ type: 'radio', showCheckedAll: false }"
+            :selected-keys="batchDeployForm.selectedPackageId ? [batchDeployForm.selectedPackageId] : []"
+            @select="onSelectPackage"
+            @page-change="onPackagePageChange"
+            size="small"
           >
-            <a-button type="outline" :loading="deployFileLoading">
-              <template #icon><icon-upload /></template>
-              {{ deployFileLoading ? '读取中...' : '选择部署包' }}
-            </a-button>
-          </a-upload>
-          <div v-if="batchDeployForm.fileName" class="file-info" style="margin-top: 8px; color: #86909c;">
-            <icon-file /> 已选择文件：{{ batchDeployForm.fileName }}
-          </div>
-          <a-typography-text type="secondary" style="font-size: 12px; display: block; margin-top: 8px;">
-            请上传 .zip 格式的部署包文件
-          </a-typography-text>
+            <template #columns>
+              <a-table-column title="代码包名称" data-index="package_name" :width="140"></a-table-column>
+              <a-table-column title="版本" data-index="version" :width="100"></a-table-column>
+              <a-table-column title="类型" data-index="package_type_label" :width="120">
+                <template #cell="{ record }">
+                  <a-tag :color="getPackageTypeColor(record.package_type)" size="small">
+                    {{ record.package_type_label }}
+                  </a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="运行时" data-index="runtime" :width="100"></a-table-column>
+              <a-table-column title="文件大小" data-index="file_size" :width="100">
+                <template #cell="{ record }">
+                  {{ formatFileSize(record.file_size) }}
+                </template>
+              </a-table-column>
+              <a-table-column title="创建时间" data-index="created_at" :width="150">
+                <template #cell="{ record }">
+                  {{ formatTime(record.created_at) }}
+                </template>
+              </a-table-column>
+            </template>
+          </a-table>
         </a-form-item>
         
         <a-form-item>
           <a-alert type="info">
-            <div>将为以下 {{ selectedKeys.length }} 个节点部署相同的函数包：</div>
-            <div style="margin-top: 8px; max-height: 200px; overflow-y: auto;">
+            <div>将为以下 {{ selectedKeys.length }} 个节点部署选中的函数版本：</div>
+            <div style="margin-top: 8px; max-height: 120px; overflow-y: auto;">
               <a-tag v-for="nodeId in selectedKeys" :key="nodeId" style="margin: 4px;">
                 {{ nodeId }}
               </a-tag>
@@ -399,6 +431,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, h } from 'vue';
 import { Message, Modal } from '@arco-design/web-vue';
 import { api } from '@/api/config';
+import { getFunctionPackageList } from '@/api/function-package';
 import { AsyncTaskManager, asyncTaskManager } from '@/utils/async-task';
 import type { TaskStatusResponse } from '@/utils/async-task';
 import CloudAccountManage from '../cloud-account/cloud-account-manage.vue';
@@ -459,6 +492,7 @@ const batchAddVisible = ref(false);
 const batchAddForm = reactive({
   cloudAccountId: '',
   region: 'ap-guangzhou',
+  packageId: '', // 云函数版本ID
   nodeCount: 5,
   namespace: '',
   supportedCollectors: ['kline'] // 默认支持kline
@@ -466,11 +500,22 @@ const batchAddForm = reactive({
 
 // 批量部署相关
 const batchDeployVisible = ref(false);
-const deployFileLoading = ref(false);
+const packagesLoading = ref(false);
+const availablePackages = ref<any[]>([]);
+const availablePackagesForCreation = ref<any[]>([]); // 批量创建时的代码包选项
 const batchDeployForm = reactive({
-  fileName: '',
-  fileBase64: '',
+  selectedPackageId: '', // 选中的代码包ID
   deployConfig: {} // 可选的部署配置
+});
+
+// 代码包分页配置
+const packagesPagination = ref({
+  current: 1,
+  pageSize: 10,
+  total: 0,
+  showTotal: true,
+  showJumper: true,
+  showPageSize: false
 });
 
 // 分页配置
@@ -636,9 +681,13 @@ const onBatchAdd = async () => {
   // 重置表单
   batchAddForm.cloudAccountId = cloudAccountOptions.value[0]?.account_id || '';
   batchAddForm.region = 'ap-guangzhou';
+  batchAddForm.packageId = '';
   batchAddForm.nodeCount = 5;
   batchAddForm.namespace = '';
   batchAddForm.supportedCollectors = ['kline'];
+  
+  // 加载可用的代码包列表
+  await loadAvailablePackagesForCreation();
   
   // 显示批量新增弹窗
   batchAddVisible.value = true;
@@ -658,6 +707,10 @@ const handleBatchAddOk = async () => {
   }
   if (!batchAddForm.region) {
     Message.warning('请选择地区');
+    return;
+  }
+  if (!batchAddForm.packageId) {
+    Message.warning('请选择云函数版本');
     return;
   }
   if (!batchAddForm.nodeCount || batchAddForm.nodeCount < 1) {
@@ -680,6 +733,7 @@ const executeBatchAdd = async () => {
     namespace: batchAddForm.namespace || undefined,
     node_type: 'scf',
     region: batchAddForm.region,
+    package_id: parseInt(batchAddForm.packageId), // 添加代码包ID
     version: '1.0.0',
     supported_collectors: JSON.stringify(batchAddForm.supportedCollectors),
     capacity: '100',
@@ -724,20 +778,93 @@ const executeBatchAdd = async () => {
 };
 
 // 批量部署
-const batchDeploy = () => {
+const batchDeploy = async () => {
   if (selectedKeys.value.length === 0) {
     Message.warning('请选择要部署的节点');
     return;
   }
   
-  // 重置表单
-  batchDeployForm.fileName = '';
-  batchDeployForm.fileBase64 = '';
+  // 重置表单和分页
+  batchDeployForm.selectedPackageId = '';
   batchDeployForm.deployConfig = {};
-  deployFileLoading.value = false;
+  packagesPagination.value.current = 1;
   
   // 显示批量部署弹窗
   batchDeployVisible.value = true;
+  
+  // 加载可用的代码包列表
+  await loadAvailablePackages(1);
+};
+
+// 加载可用的代码包列表
+const loadAvailablePackages = async (page: number = 1) => {
+  packagesLoading.value = true;
+  try {
+    const response = await getFunctionPackageList({
+      page: page,
+      page_size: packagesPagination.value.pageSize,
+      status: 1 // 只获取可用状态的代码包
+    });
+    
+    if (response?.code === 200 && response?.data) {
+      // 按时间倒序排列
+      availablePackages.value = (response.data || []).sort((a: any, b: any) => {
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
+      
+      // 更新分页信息
+      packagesPagination.value.current = page;
+      packagesPagination.value.total = response.total || response.data.length;
+    } else {
+      availablePackages.value = [];
+      packagesPagination.value.total = 0;
+    }
+  } catch (error) {
+    console.error('加载代码包列表失败:', error);
+    Message.error('加载代码包列表失败');
+    availablePackages.value = [];
+    packagesPagination.value.total = 0;
+  } finally {
+    packagesLoading.value = false;
+  }
+};
+
+// 加载批量创建时的代码包列表
+const loadAvailablePackagesForCreation = async () => {
+  try {
+    const response = await getFunctionPackageList({
+      page: 1,
+      page_size: 100, // 获取较多数据
+      status: 1 // 只获取可用状态的代码包
+    });
+    
+    if (response?.code === 200 && response?.data) {
+      // 按时间倒序排列
+      availablePackagesForCreation.value = (response.data || []).sort((a: any, b: any) => {
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
+    } else {
+      availablePackagesForCreation.value = [];
+    }
+  } catch (error) {
+    console.error('加载代码包列表失败:', error);
+    Message.error('加载代码包列表失败');
+    availablePackagesForCreation.value = [];
+  }
+};
+
+// 选择代码包
+const onSelectPackage = (rowKeys: string[]) => {
+  if (rowKeys.length > 0) {
+    batchDeployForm.selectedPackageId = rowKeys[0];
+  } else {
+    batchDeployForm.selectedPackageId = '';
+  }
+};
+
+// 代码包分页处理
+const onPackagePageChange = (page: number) => {
+  loadAvailablePackages(page);
 };
 
 // 批量删除
@@ -933,6 +1060,33 @@ const parseJSON = (str: string) => {
   }
 };
 
+const getPackageTypeColor = (packageType: string) => {
+  const colorMap: Record<string, string> = {
+    'data_collector': 'blue',
+    'factor_calculator': 'green'
+  };
+  return colorMap[packageType] || 'gray';
+};
+
+const formatFileSize = (size: number) => {
+  if (size < 1024) return size + 'B';
+  if (size < 1024 * 1024) return (size / 1024).toFixed(1) + 'KB';
+  if (size < 1024 * 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + 'MB';
+  return (size / (1024 * 1024 * 1024)).toFixed(1) + 'GB';
+};
+
+const formatTime = (time: string | undefined) => {
+  if (!time) return '-';
+  return new Date(time).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+};
+
 const formatDateTime = (dateTime: string) => {
   if (!dateTime) return '-';
   try {
@@ -1088,83 +1242,23 @@ const onFunctionPackageManage = () => {
 const nodeDetailVisible = ref(false);
 const selectedNodeDetail = ref<CloudFunction | null>(null);
 
-// 自定义上传处理器
-const customUploadHandler = (option: any) => {
-  const { fileItem } = option;
-  const file = fileItem.file;
-  
-  if (!file) {
-    Message.error('文件不存在');
-    option.onError();
-    return;
-  }
-  
-  // 文件大小限制检查 (300MB)
-  const maxSize = 300 * 1024 * 1024;
-  if (file.size > maxSize) {
-    Message.error('文件大小不能超过 300MB');
-    option.onError();
-    return;
-  }
-  
-  // 先设置文件名，让用户看到已选择文件
-  batchDeployForm.fileName = file.name;
-  deployFileLoading.value = true;
-  
-  // 使用 FileReader 读取文件并转换为 base64
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    try {
-      const result = e.target?.result as string;
-      // 移除 data:application/zip;base64, 前缀，只保留 base64 字符串
-      const base64String = result.split(',')[1];
-      batchDeployForm.fileBase64 = base64String;
-      deployFileLoading.value = false;
-      Message.success(`已选择文件: ${file.name}`);
-      option.onSuccess();
-    } catch (error) {
-      console.error('文件读取失败:', error);
-      Message.error('文件读取失败');
-      batchDeployForm.fileName = '';
-      batchDeployForm.fileBase64 = '';
-      deployFileLoading.value = false;
-      option.onError();
-    }
-  };
-  
-  reader.onerror = () => {
-    Message.error('文件读取失败');
-    batchDeployForm.fileName = '';
-    batchDeployForm.fileBase64 = '';
-    deployFileLoading.value = false;
-    option.onError();
-  };
-  
-  reader.readAsDataURL(file);
-  
-  return {
-    abort: () => {
-      reader.abort();
-      console.log('上传中止');
-    }
-  };
-};
 
 // 批量部署弹窗取消
 const handleBatchDeployCancel = () => {
   batchDeployVisible.value = false;
-  // 清理表单
-  batchDeployForm.fileName = '';
-  batchDeployForm.fileBase64 = '';
+  // 清理表单和分页
+  batchDeployForm.selectedPackageId = '';
   batchDeployForm.deployConfig = {};
-  deployFileLoading.value = false;
+  availablePackages.value = [];
+  packagesPagination.value.current = 1;
+  packagesPagination.value.total = 0;
 };
 
 // 批量部署弹窗确认
 const handleBatchDeployOk = async () => {
   // 表单验证
-  if (!batchDeployForm.fileBase64 || !batchDeployForm.fileName) {
-    Message.warning('请选择部署文件');
+  if (!batchDeployForm.selectedPackageId) {
+    Message.warning('请选择要部署的云函数版本');
     return;
   }
   
@@ -1182,8 +1276,7 @@ const executeBatchDeploy = async () => {
     const deployData = {
       nodes: selectedKeys.value.map(nodeId => ({
         node_id: nodeId,
-        zip_file_base64: batchDeployForm.fileBase64,
-        file_name: batchDeployForm.fileName
+        package_id: batchDeployForm.selectedPackageId
       }))
     };
     
@@ -1218,8 +1311,7 @@ const executeBatchDeploy = async () => {
     });
     
     // 清理表单
-    batchDeployForm.fileName = '';
-    batchDeployForm.fileBase64 = '';
+    batchDeployForm.selectedPackageId = '';
     batchDeployForm.deployConfig = {};
     
   } catch (error: any) {

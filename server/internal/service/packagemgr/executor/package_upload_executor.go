@@ -18,6 +18,9 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+// Platform 云平台类型别名，避免 provider.Provider 的啰嗦写法
+type Platform = provider.Provider
+
 // PackageUploadRequest 代码包上传任务请求
 type PackageUploadRequest struct {
 	PackageID      int64  `json:"package_id"`       // 包ID
@@ -35,7 +38,8 @@ type PackageUploadExecutor struct {
 }
 
 // NewPackageUploadExecutor 创建代码包上传执行器
-func NewPackageUploadExecutor(db *gorm.DB, cosProvider provider.ClientWithCOS, taskService asyncTaskLogic.AsyncTaskService) *PackageUploadExecutor {
+func NewPackageUploadExecutor(db *gorm.DB,
+	cosProvider provider.ClientWithCOS, taskService asyncTaskLogic.AsyncTaskService) *PackageUploadExecutor {
 	return &PackageUploadExecutor{
 		db:          db,
 		cosProvider: cosProvider,
@@ -108,8 +112,9 @@ func (e *PackageUploadExecutor) Execute(ctx context.Context, task *asyncTaskMode
 		return e.failTask(ctx, task.TaskID, fmt.Sprintf("上传到COS失败: %v", err))
 	}
 
-	// 更新包状态和URL
-	if err := e.updatePackageStatus(ctx, req.PackageID, packageModel.PackageStatusAvailable, cosURL); err != nil {
+	// 更新包状态和URL，包括云账户ID和COS地区信息
+	if err := e.updatePackageStatus(ctx, req.PackageID, packageModel.PackageStatusAvailable,
+		cosURL, req.CloudAccountID, account.COSRegion); err != nil {
 		log.ErrorContextf(ctx, "[PackageUploadExecutor] 更新包状态失败: %v", err)
 		// 这里不返回错误，因为上传已经成功了
 	}
@@ -194,26 +199,26 @@ func (e *PackageUploadExecutor) createCOSProvider(account *cloudAccountModel.Clo
 	}
 
 	// 根据account的provider字段确定provider类型
-	var providerType provider.ProviderType
+	var platformType Platform
 	switch account.Provider {
 	case "tencent":
-		providerType = provider.ProviderTencent
+		platformType = provider.Tencent
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", account.Provider)
 	}
 
 	// 构建包含COS配置的ExtraConfig
-	extraConfig := fmt.Sprintf(`{"region":"%s","cos_bucket":"%s","cos_app_id":"%s"}`, 
+	extraConfig := fmt.Sprintf(`{"region":"%s","cos_bucket":"%s","cos_app_id":"%s"}`,
 		account.COSRegion, account.COSBucket, account.AppID)
 
-	// 创建云厂商配置
-	config, err := provider.NewCloudConfig(providerType, account.SecretID, account.SecretKey, extraConfig)
+	// 创建云平台配置
+	config, err := provider.NewConfig(platformType, account.SecretID, account.SecretKey, extraConfig)
 	if err != nil {
 		return nil, fmt.Errorf("创建云厂商配置失败: %w", err)
 	}
 
 	// 创建支持COS的provider实例
-	cloudProvider, err := provider.NewTencentCloudProviderWithCOS(config)
+	cloudProvider, err := provider.NewTencentWrapperWithCOS(config)
 	if err != nil {
 		return nil, fmt.Errorf("创建COS provider失败: %w", err)
 	}
@@ -222,27 +227,22 @@ func (e *PackageUploadExecutor) createCOSProvider(account *cloudAccountModel.Clo
 }
 
 // updatePackageStatus 更新包状态
-func (e *PackageUploadExecutor) updatePackageStatus(ctx context.Context, packageID int64, status int, cosURL string) error {
+func (e *PackageUploadExecutor) updatePackageStatus(ctx context.Context,
+	packageID int64, status int, cosURL, cloudAccountID, cosRegion string) error {
 	updates := map[string]interface{}{
-		"c_status":          status,
-		"c_upload_progress": 100,
-		"c_mtime":           time.Now(),
+		"c_status":           status,
+		"c_upload_progress":  100,
+		"c_cloud_account_id": cloudAccountID,
+		"c_cos_region":       cosRegion,
+		"c_mtime":            time.Now(),
 	}
 
 	if cosURL != "" {
 		updates["c_cos_url"] = cosURL
-		updates["c_cos_bucket"] = e.extractBucketFromURL(cosURL)
 	}
-
 	return e.db.Model(&packageModel.FunctionPackage{}).
 		Where("c_id = ?", packageID).
 		Updates(updates).Error
-}
-
-// extractBucketFromURL 从COS URL中提取bucket名称
-func (e *PackageUploadExecutor) extractBucketFromURL(url string) string {
-	// 简化实现，实际需要根据COS URL格式解析
-	return ""
 }
 
 // failTask 标记任务失败

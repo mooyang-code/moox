@@ -16,9 +16,11 @@ import (
 	"github.com/google/uuid"
 	asyncTaskLogic "github.com/mooyang-code/moox/server/internal/service/asynctask/logic"
 	asyncTaskModel "github.com/mooyang-code/moox/server/internal/service/asynctask/model"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/constants"
 	cloudAccountModel "github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	"github.com/mooyang-code/moox/server/internal/service/packagemgr/model"
+
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -99,9 +101,8 @@ func (s *FunctionPackageService) getCOSConfigFromAccount(ctx context.Context, ac
 
 // saveToLocalFile 保存文件到本地/tmp目录
 func (s *FunctionPackageService) saveToLocalFile(content []byte, filename string) (string, error) {
-	tmpDir := "/tmp/moox/packages"
-	filePath := filepath.Join(tmpDir, filename)
-	
+	filePath := constants.GetPackageStorageFilePath(filename)
+
 	// 确保文件的父目录存在
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -126,7 +127,6 @@ type UploadPackageRequest struct {
 	CloudAccountID string `json:"cloud_account_id"`                // 云账户ID，可选，用于COS配置
 	CreatedBy      string `json:"-"`                               // 从JWT中获取
 }
-
 
 // StorageConfig 存储配置
 type StorageConfig struct {
@@ -154,7 +154,6 @@ func (s *FunctionPackageService) calculateMD5(content []byte) string {
 	hash := md5.Sum(content)
 	return hex.EncodeToString(hash[:])
 }
-
 
 // validateUploadRequest 验证上传请求参数
 func (s *FunctionPackageService) validateUploadRequest(req *UploadPackageRequest) error {
@@ -254,11 +253,52 @@ type PackageListItemVO struct {
 	PackageType      string     `json:"package_type"`
 	PackageTypeLabel string     `json:"package_type_label"`
 	FileSize         int64      `json:"file_size"`
+	FileMD5          string     `json:"file_md5"`
+	CloudAccountID   string     `json:"cloud_account_id"`
+	COSRegion        string     `json:"cos_region"`
 	Status           int        `json:"status"`
 	StatusLabel      string     `json:"status_label"`
 	LastDeployTime   *time.Time `json:"last_deploy_time"`
 	CreatedBy        string     `json:"created_by"`
 	CreatedAt        time.Time  `json:"created_at"`
+}
+
+// PackageDetail 代码包详情视图对象，包含完整的字段信息
+type PackageDetail struct {
+	ID               int64  `json:"id"`
+	PackageName      string `json:"package_name"`
+	Version          string `json:"version"`
+	Description      string `json:"description"`
+	Runtime          string `json:"runtime"`
+	PackageType      string `json:"package_type"`
+	PackageTypeLabel string `json:"package_type_label"`
+
+	// 文件信息
+	OriginalFilename string `json:"original_filename"`
+	FileSize         int64  `json:"file_size"`
+	FileMD5          string `json:"file_md5"`
+
+	// COS存储信息
+	CloudAccountID string `json:"cloud_account_id"`
+	COSRegion      string `json:"cos_region"`
+	COSBucket      string `json:"cos_bucket"`
+	COSPath        string `json:"cos_path"`
+	COSURL         string `json:"cos_url"`
+
+	// 状态管理
+	Status         int    `json:"status"`
+	StatusLabel    string `json:"status_label"`
+	UploadProgress int    `json:"upload_progress"`
+	ErrorMessage   string `json:"error_message"`
+
+	// 使用统计
+	LastDeployTime *time.Time `json:"last_deploy_time"`
+
+	// 审计字段
+	CreatedBy string    `json:"created_by"`
+	Invalid   int       `json:"invalid"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // GetPackageList 获取代码包列表
@@ -304,6 +344,9 @@ func (s *FunctionPackageService) GetPackageList(ctx context.Context, req *Packag
 			PackageType:      pkg.PackageType,
 			PackageTypeLabel: model.GetPackageTypeDisplayName(pkg.PackageType),
 			FileSize:         pkg.FileSize,
+			FileMD5:          pkg.FileMD5,
+			CloudAccountID:   pkg.CloudAccountID,
+			COSRegion:        pkg.COSRegion,
 			Status:           pkg.Status,
 			StatusLabel:      model.GetStatusDisplayName(pkg.Status),
 			LastDeployTime:   pkg.LastDeployTime,
@@ -319,7 +362,56 @@ func (s *FunctionPackageService) GetPackageList(ctx context.Context, req *Packag
 }
 
 // GetPackageDetail 获取代码包详情
-func (s *FunctionPackageService) GetPackageDetail(ctx context.Context, id int64) (*model.FunctionPackage, error) {
+func (s *FunctionPackageService) GetPackageDetail(ctx context.Context, id int64) (*PackageDetail, error) {
+	var pkg model.FunctionPackage
+	err := s.db.Where("c_id = ? AND c_invalid = 0", id).First(&pkg).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询代码包详情失败: %w", err)
+	}
+
+	// 转换为详情VO，包含所有字段和显示标签
+	detail := &PackageDetail{
+		ID:               pkg.ID,
+		PackageName:      pkg.PackageName,
+		Version:          pkg.Version,
+		Description:      pkg.Description,
+		Runtime:          pkg.Runtime,
+		PackageType:      pkg.PackageType,
+		PackageTypeLabel: model.GetPackageTypeDisplayName(pkg.PackageType),
+
+		// 文件信息
+		OriginalFilename: pkg.OriginalFilename,
+		FileSize:         pkg.FileSize,
+		FileMD5:          pkg.FileMD5,
+
+		// COS存储信息
+		CloudAccountID: pkg.CloudAccountID,
+		COSRegion:      pkg.COSRegion,
+		COSBucket:      pkg.COSBucket,
+		COSPath:        pkg.COSPath,
+		COSURL:         pkg.COSURL,
+
+		// 状态管理
+		Status:         pkg.Status,
+		StatusLabel:    model.GetStatusDisplayName(pkg.Status),
+		UploadProgress: pkg.UploadProgress,
+		ErrorMessage:   pkg.ErrorMessage,
+
+		// 使用统计
+		LastDeployTime: pkg.LastDeployTime,
+
+		// 审计字段
+		CreatedBy: pkg.CreatedBy,
+		Invalid:   pkg.Invalid,
+		CreatedAt: pkg.CTime,
+		UpdatedAt: pkg.MTime,
+	}
+
+	return detail, nil
+}
+
+// GetPackageDetailModel 获取代码包详情（原始模型，用于内部调用）
+func (s *FunctionPackageService) GetPackageDetailModel(ctx context.Context, id int64) (*model.FunctionPackage, error) {
 	var pkg model.FunctionPackage
 	err := s.db.Where("c_id = ? AND c_invalid = 0", id).First(&pkg).Error
 	if err != nil {
@@ -341,7 +433,7 @@ func (s *FunctionPackageService) DeletePackage(ctx context.Context, id int64) er
 
 // GetPackageDownloadURL 获取代码包下载URL
 func (s *FunctionPackageService) GetPackageDownloadURL(ctx context.Context, id int64) (string, error) {
-	pkg, err := s.GetPackageDetail(ctx, id)
+	pkg, err := s.GetPackageDetailModel(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -367,7 +459,7 @@ func (s *FunctionPackageService) GetPackageDownloadURL(ctx context.Context, id i
 
 // DownloadLocalPackage 下载本地存储的代码包
 func (s *FunctionPackageService) DownloadLocalPackage(ctx context.Context, id int64) ([]byte, string, error) {
-	pkg, err := s.GetPackageDetail(ctx, id)
+	pkg, err := s.GetPackageDetailModel(ctx, id)
 	if err != nil {
 		return nil, "", err
 	}
@@ -449,7 +541,8 @@ func (s *FunctionPackageService) determineStorageStrategy(ctx context.Context, r
 }
 
 // createPackageRecord 创建数据库记录
-func (s *FunctionPackageService) createPackageRecord(ctx context.Context, req *UploadPackageRequest, fileContent []byte, fileMD5 string, storageConfig *StorageConfig) (*model.FunctionPackage, error) {
+func (s *FunctionPackageService) createPackageRecord(ctx context.Context,
+	req *UploadPackageRequest, fileContent []byte, fileMD5 string, storageConfig *StorageConfig) (*model.FunctionPackage, error) {
 	log.InfoContextf(ctx, "[createPackageRecord] 开始创建数据库记录")
 
 	pkg := &model.FunctionPackage{
@@ -477,17 +570,6 @@ func (s *FunctionPackageService) createPackageRecord(ctx context.Context, req *U
 
 	log.InfoContextf(ctx, "[createPackageRecord] 数据库记录创建成功, ID: %d", pkg.ID)
 	return pkg, nil
-}
-
-// executeFileStorage 执行文件存储
-func (s *FunctionPackageService) executeFileStorage(ctx context.Context, pkg *model.FunctionPackage, fileContent []byte, storageConfig *StorageConfig) (string, error) {
-	log.InfoContextf(ctx, "[executeFileStorage] 开始执行文件存储, useCOS: %t", storageConfig.UseCOS)
-
-	if storageConfig.UseCOS {
-		return s.uploadToCOS(ctx, pkg, fileContent, storageConfig)
-	} else {
-		return s.saveToLocal(ctx, pkg, fileContent, storageConfig)
-	}
 }
 
 // uploadToCOS 上传到COS
@@ -525,7 +607,8 @@ func (s *FunctionPackageService) uploadToCOS(ctx context.Context, pkg *model.Fun
 }
 
 // saveToLocal 保存到本地
-func (s *FunctionPackageService) saveToLocal(ctx context.Context, pkg *model.FunctionPackage, fileContent []byte, storageConfig *StorageConfig) (string, error) {
+func (s *FunctionPackageService) saveToLocal(ctx context.Context,
+	pkg *model.FunctionPackage, fileContent []byte, storageConfig *StorageConfig) (string, error) {
 	log.InfoContextf(ctx, "[saveToLocal] 开始保存到本地, path: %s", storageConfig.Path)
 
 	localPath, err := s.saveToLocalFile(fileContent, storageConfig.Path)

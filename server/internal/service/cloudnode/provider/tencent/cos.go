@@ -84,7 +84,6 @@ func (p *Provider) UploadCOSWithReader(ctx context.Context, bucket, key string, 
 	if bucket == "" || key == "" || reader == nil {
 		return nil, fmt.Errorf("bucket, key and reader are required")
 	}
-
 	p.logInfo(ctx, "uploading file to COS with reader, bucket: %s, key: %s", bucket, key)
 
 	var response *cos.Response
@@ -136,7 +135,6 @@ func (p *Provider) UploadCOSWithReader(ctx context.Context, bucket, key string, 
 	}
 
 	p.logInfo(ctx, "successfully uploaded file to COS with reader, key: %s, location: %s, etag: %s", key, location, etag)
-
 	return &UploadCOSResponse{
 		Location: location,
 		ETag:     etag,

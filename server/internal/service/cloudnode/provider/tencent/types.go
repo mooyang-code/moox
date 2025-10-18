@@ -9,6 +9,9 @@ type CreateFunctionRequest struct {
 	Namespace    string
 	Description  string
 	ZipFile      string
+	COSBucket    string // COS桶名，优先使用COS部署
+	COSPath      string // COS对象路径，优先使用COS部署
+	COSRegion    string // COS区域，COS部署时必需
 	Handler      string
 	MemorySize   int64
 	Timeout      int64
@@ -20,6 +23,9 @@ type UpdateFunctionRequest struct {
 	FunctionName string
 	Namespace    string
 	ZipFile      string
+	COSBucket    string // COS桶名，用于COS方式更新
+	COSPath      string // COS对象路径，用于COS方式更新
+	COSRegion    string // COS区域，COS更新时必需
 	Description  *string
 	Handler      *string
 	MemorySize   *int64

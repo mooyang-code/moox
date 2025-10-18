@@ -28,6 +28,7 @@ type SCFNodeService interface {
 	UpdateNodeLoad(ctx context.Context, nodeID string, currentLoad string) error
 	UpdateNodeFunction(ctx context.Context, nodeID string, zipFilePath string) error
 	DeployToNode(ctx context.Context, nodeID string, zipFileBase64 string, fileName string, taskID string) error
+	DeployToNodeWithPackage(ctx context.Context, nodeID string, packageID int64, taskID string) error
 }
 
 type scfNodeServiceImpl struct {
@@ -101,6 +102,9 @@ func (s *scfNodeServiceImpl) CreateNode(ctx context.Context, node *model.SCFNode
 	if node.Region == "" {
 		return nil, fmt.Errorf("region is required")
 	}
+	if node.PackageID == nil || *node.PackageID <= 0 {
+		return nil, fmt.Errorf("package id is required and must be greater than 0")
+	}
 
 	// 生成NodeID
 	nodeID, err := s.generateNodeID(ctx, node.Region)
@@ -135,20 +139,6 @@ func (s *scfNodeServiceImpl) CreateNode(ctx context.Context, node *model.SCFNode
 	}
 	if node.SupportedCollectors == "" {
 		node.SupportedCollectors = "[]"
-	}
-
-	if err := s.validateJSONField(node.Capacity, "capacity"); err != nil {
-		return nil, err
-	}
-	if node.Capacity == "" {
-		node.Capacity = "{}"
-	}
-
-	if err := s.validateJSONField(node.CurrentLoad, "current_load"); err != nil {
-		return nil, err
-	}
-	if node.CurrentLoad == "" {
-		node.CurrentLoad = "{}"
 	}
 
 	if err := s.validateJSONField(node.Metadata, "metadata"); err != nil {
@@ -507,13 +497,70 @@ func (s *scfNodeServiceImpl) DeployToNode(ctx context.Context, nodeID string, zi
 			ItemID:         nodeID,
 			EnqueueTime:    time.Now(),
 		}
-		
+
 		err := s.queueManager.EnqueueNodeDeployment(deploymentMessage)
 		if err != nil {
 			return fmt.Errorf("failed to enqueue node deployment: %w", err)
 		}
-		log.InfoContextf(ctx, "Successfully enqueued deployment for node %s, taskID: %s, file: %s", 
+		log.InfoContextf(ctx, "Successfully enqueued deployment for node %s, taskID: %s, file: %s",
 			node.NodeID, taskID, fileName)
+	} else {
+		return fmt.Errorf("queue manager not available")
+	}
+
+	return nil
+}
+
+// DeployToNodeWithPackage 使用包ID部署云函数到节点
+func (s *scfNodeServiceImpl) DeployToNodeWithPackage(ctx context.Context, nodeID string, packageID int64, taskID string) error {
+	if nodeID == "" {
+		return fmt.Errorf("node ID is required")
+	}
+	if packageID <= 0 {
+		return fmt.Errorf("package ID is required and must be positive")
+	}
+
+	// 获取节点信息
+	node, err := s.nodeDAO.GetSCFNode(ctx, nodeID)
+	if err != nil {
+		return fmt.Errorf("failed to get node: %w", err)
+	}
+	if node == nil {
+		return fmt.Errorf("node not found: %s", nodeID)
+	}
+
+	// 只有SCF节点才能部署云函数
+	if node.NodeType != model.NodeTypeSCF {
+		return fmt.Errorf("only SCF nodes can deploy functions")
+	}
+
+	// 检查节点状态
+	if node.Status != model.NodeStatusOnline {
+		log.WarnContextf(ctx, "Node %s is not online (status: %d), deployment may fail", nodeID, node.Status)
+	}
+
+	// 如果有队列管理器，则将部署任务加入队列
+	if s.queueManager != nil {
+		// 创建部署消息（使用包ID方式）
+		deploymentMessage := &queue.NodeDeploymentMessage{
+			NodeID:         nodeID,
+			CloudAccountID: node.CloudAccountID,
+			Region:         node.Region,
+			Namespace:      node.Namespace,
+			PackageID:      packageID,         // 使用包ID
+			ZipFileBase64:  "",               // 不需要zip文件
+			FileName:       "",               // 文件名由worker根据包信息生成
+			TaskID:         taskID,
+			ItemID:         nodeID,
+			EnqueueTime:    time.Now(),
+		}
+
+		err := s.queueManager.EnqueueNodeDeployment(deploymentMessage)
+		if err != nil {
+			return fmt.Errorf("failed to enqueue node deployment: %w", err)
+		}
+		log.InfoContextf(ctx, "Successfully enqueued deployment for node %s, taskID: %s, packageID: %d",
+			node.NodeID, taskID, packageID)
 	} else {
 		return fmt.Errorf("queue manager not available")
 	}

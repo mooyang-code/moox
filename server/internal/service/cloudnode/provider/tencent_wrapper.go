@@ -2,30 +2,30 @@
 //
 // tencent_wrapper.go 的作用：
 // 1. 解决循环依赖问题
-//    - provider 包定义通用接口
-//    - providers/tencent 包实现具体功能
-//    - 如果 providers/tencent 直接实现 provider.Client 接口，
-//      会造成循环依赖（providers/tencent → provider → providers/tencent）
-//    - 通过在 provider 包中创建 wrapper，避免了循环依赖
+//   - provider 包定义通用接口
+//   - providers/tencent 包实现具体功能
+//   - 如果 providers/tencent 直接实现 provider.Client 接口，
+//     会造成循环依赖（providers/tencent → provider → providers/tencent）
+//   - 通过在 provider 包中创建 wrapper，避免了循环依赖
 //
 // 2. 类型转换和适配
-//    - 将通用的 CloudConfig 转换为腾讯云特定的 tencent.Config
-//    - 将通用接口的请求/响应类型转换为腾讯云内部的类型
-//    - 例如：CreateFunctionRequest → tencent.CreateFunctionRequest
+//   - 将通用的 CloudConfig 转换为腾讯云特定的 tencent.Config
+//   - 将通用接口的请求/响应类型转换为腾讯云内部的类型
+//   - 例如：CreateFunctionRequest → tencent.CreateFunctionRequest
 //
 // 3. 工厂模式注册
-//    - wrapper 在 init 函数中自动注册到工厂
-//    - 上层代码可以通过工厂模式动态创建不同云厂商的实例
-//    - 使用方只需要知道 ProviderType，不需要知道具体实现
+//   - wrapper 在 init 函数中自动注册到工厂
+//   - 上层代码可以通过工厂模式动态创建不同云厂商的实例
+//   - 使用方只需要知道 ProviderType，不需要知道具体实现
 //
 // 4. 隔离实现细节
-//    - 上层代码只依赖 CloudProvider 接口，不需要知道腾讯云的具体实现
-//    - 腾讯云的具体实现被隔离在 providers/tencent 包中
-//    - wrapper 作为桥梁连接接口定义和具体实现
+//   - 上层代码只依赖 CloudProvider 接口，不需要知道腾讯云的具体实现
+//   - 腾讯云的具体实现被隔离在 providers/tencent 包中
+//   - wrapper 作为桥梁连接接口定义和具体实现
 //
 // 5. 统一的错误处理和日志
-//    - wrapper 层可以添加统一的错误处理、日志记录等横切关注点
-//    - 不需要修改具体的实现即可增强功能
+//   - wrapper 层可以添加统一的错误处理、日志记录等横切关注点
+//   - 不需要修改具体的实现即可增强功能
 //
 // 这种设计遵循了依赖倒置原则：高层模块不应该依赖低层模块，两者都应该依赖抽象。
 package provider
@@ -38,18 +38,18 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider/tencent"
 )
 
-// TencentCloudProvider 腾讯云Provider包装器
-type TencentCloudProvider struct {
+// TencentWrapper 腾讯云Provider包装器
+type TencentWrapper struct {
 	provider *tencent.Provider
 }
 
 // init 注册腾讯云Provider
 func init() {
-	RegisterProvider(ProviderTencent, NewTencentCloudProvider)
+	RegisterProvider(Tencent, NewTencentWrapper)
 }
 
-// NewTencentCloudProviderWithCOS 创建带COS功能的腾讯云Provider
-func NewTencentCloudProviderWithCOS(config *CloudConfig) (ClientWithCOS, error) {
+// NewTencentWrapperWithCOS 创建带COS功能的腾讯云Provider
+func NewTencentWrapperWithCOS(config *Config) (ClientWithCOS, error) {
 	// 转换配置
 	tencentConfig := &tencent.Config{
 		SecretID:    config.SecretID,
@@ -66,13 +66,13 @@ func NewTencentCloudProviderWithCOS(config *CloudConfig) (ClientWithCOS, error) 
 		return nil, err
 	}
 
-	return &TencentCloudProvider{
+	return &TencentWrapper{
 		provider: provider,
 	}, nil
 }
 
-// NewTencentCloudProvider 创建腾讯云Provider
-func NewTencentCloudProvider(config *CloudConfig) (Client, error) {
+// NewTencentWrapper 创建腾讯云Provider
+func NewTencentWrapper(config *Config) (Client, error) {
 	// 转换配置
 	tencentConfig := &tencent.Config{
 		SecretID:    config.SecretID,
@@ -89,13 +89,13 @@ func NewTencentCloudProvider(config *CloudConfig) (Client, error) {
 		return nil, err
 	}
 
-	return &TencentCloudProvider{
+	return &TencentWrapper{
 		provider: provider,
 	}, nil
 }
 
 // CreateFunction 创建云函数
-func (p *TencentCloudProvider) CreateFunction(ctx context.Context, req *CreateFunctionRequest) (*FunctionInfo, error) {
+func (p *TencentWrapper) CreateFunction(ctx context.Context, req *CreateFunctionRequest) (*FunctionInfo, error) {
 	// 转换请求
 	tencentReq := &tencent.CreateFunctionRequest{
 		FunctionName: req.FunctionName,
@@ -103,6 +103,9 @@ func (p *TencentCloudProvider) CreateFunction(ctx context.Context, req *CreateFu
 		Namespace:    req.Namespace,
 		Description:  req.Description,
 		ZipFile:      req.ZipFile,
+		COSBucket:    req.COSBucket,
+		COSPath:      req.COSPath,
+		COSRegion:    req.COSRegion,
 		MemorySize:   req.MemorySize,
 		Timeout:      req.Timeout,
 		Environment:  req.Environment,
@@ -132,12 +135,15 @@ func (p *TencentCloudProvider) CreateFunction(ctx context.Context, req *CreateFu
 }
 
 // UpdateFunction 更新云函数
-func (p *TencentCloudProvider) UpdateFunction(ctx context.Context, req *UpdateFunctionRequest) error {
+func (p *TencentWrapper) UpdateFunction(ctx context.Context, req *UpdateFunctionRequest) error {
 	// 转换请求
 	tencentReq := &tencent.UpdateFunctionRequest{
 		FunctionName: req.FunctionName,
 		Namespace:    req.Namespace,
 		ZipFile:      req.ZipFile,
+		COSBucket:    req.COSBucket,
+		COSPath:      req.COSPath,
+		COSRegion:    req.COSRegion,
 		Description:  req.Description,
 		MemorySize:   req.MemorySize,
 		Timeout:      req.Timeout,
@@ -148,12 +154,12 @@ func (p *TencentCloudProvider) UpdateFunction(ctx context.Context, req *UpdateFu
 }
 
 // DeleteFunction 删除云函数
-func (p *TencentCloudProvider) DeleteFunction(ctx context.Context, functionName, namespace string) error {
+func (p *TencentWrapper) DeleteFunction(ctx context.Context, functionName, namespace string) error {
 	return p.provider.DeleteFunction(ctx, functionName, namespace)
 }
 
 // GetFunction 获取云函数详情
-func (p *TencentCloudProvider) GetFunction(ctx context.Context, functionName, namespace string) (*FunctionInfo, error) {
+func (p *TencentWrapper) GetFunction(ctx context.Context, functionName, namespace string) (*FunctionInfo, error) {
 	resp, err := p.provider.GetFunction(ctx, functionName, namespace)
 	if err != nil {
 		return nil, err
@@ -180,7 +186,7 @@ func (p *TencentCloudProvider) GetFunction(ctx context.Context, functionName, na
 }
 
 // ListFunctions 列出云函数
-func (p *TencentCloudProvider) ListFunctions(ctx context.Context, namespace string) ([]*FunctionInfo, error) {
+func (p *TencentWrapper) ListFunctions(ctx context.Context, namespace string) ([]*FunctionInfo, error) {
 	functions, err := p.provider.ListFunctions(ctx, namespace)
 	if err != nil {
 		return nil, err
@@ -209,17 +215,17 @@ func (p *TencentCloudProvider) ListFunctions(ctx context.Context, namespace stri
 }
 
 // CreateNamespace 创建命名空间
-func (p *TencentCloudProvider) CreateNamespace(ctx context.Context, namespace, description string) error {
+func (p *TencentWrapper) CreateNamespace(ctx context.Context, namespace, description string) error {
 	return p.provider.CreateNamespace(ctx, namespace, description)
 }
 
 // DeleteNamespace 删除命名空间
-func (p *TencentCloudProvider) DeleteNamespace(ctx context.Context, namespace string) error {
+func (p *TencentWrapper) DeleteNamespace(ctx context.Context, namespace string) error {
 	return p.provider.DeleteNamespace(ctx, namespace)
 }
 
 // ListNamespaces 列出命名空间
-func (p *TencentCloudProvider) ListNamespaces(ctx context.Context) ([]*NamespaceInfo, error) {
+func (p *TencentWrapper) ListNamespaces(ctx context.Context) ([]*NamespaceInfo, error) {
 	namespaces, err := p.provider.ListNamespaces(ctx)
 	if err != nil {
 		return nil, err
@@ -240,7 +246,7 @@ func (p *TencentCloudProvider) ListNamespaces(ctx context.Context) ([]*Namespace
 }
 
 // CreateTrigger 创建触发器
-func (p *TencentCloudProvider) CreateTrigger(ctx context.Context, req *CreateTriggerRequest) error {
+func (p *TencentWrapper) CreateTrigger(ctx context.Context, req *CreateTriggerRequest) error {
 	// 转换请求
 	tencentReq := &tencent.CreateTriggerRequest{
 		FunctionName: req.FunctionName,
@@ -256,12 +262,12 @@ func (p *TencentCloudProvider) CreateTrigger(ctx context.Context, req *CreateTri
 }
 
 // DeleteTrigger 删除触发器
-func (p *TencentCloudProvider) DeleteTrigger(ctx context.Context, functionName, triggerName, namespace string) error {
+func (p *TencentWrapper) DeleteTrigger(ctx context.Context, functionName, triggerName, namespace string) error {
 	return p.provider.DeleteTrigger(ctx, functionName, triggerName, namespace)
 }
 
 // ListTriggers 列出触发器
-func (p *TencentCloudProvider) ListTriggers(ctx context.Context, functionName, namespace string) ([]*TriggerInfo, error) {
+func (p *TencentWrapper) ListTriggers(ctx context.Context, functionName, namespace string) ([]*TriggerInfo, error) {
 	triggers, err := p.provider.ListTriggers(ctx, functionName, namespace)
 	if err != nil {
 		return nil, err
@@ -284,7 +290,7 @@ func (p *TencentCloudProvider) ListTriggers(ctx context.Context, functionName, n
 }
 
 // InvokeFunction 调用云函数
-func (p *TencentCloudProvider) InvokeFunction(ctx context.Context, req *InvokeFunctionRequest) (*InvokeFunctionResponse, error) {
+func (p *TencentWrapper) InvokeFunction(ctx context.Context, req *InvokeFunctionRequest) (*InvokeFunctionResponse, error) {
 	// 转换请求
 	tencentReq := &tencent.InvokeFunctionRequest{
 		FunctionName: req.FunctionName,
@@ -318,7 +324,7 @@ func (p *TencentCloudProvider) InvokeFunction(ctx context.Context, req *InvokeFu
 // 实现COS接口
 
 // UploadCOS 上传文件到COS
-func (p *TencentCloudProvider) UploadCOS(ctx context.Context, req *UploadCOSRequest) (*UploadCOSResponse, error) {
+func (p *TencentWrapper) UploadCOS(ctx context.Context, req *UploadCOSRequest) (*UploadCOSResponse, error) {
 	// 转换请求
 	tencentReq := &tencent.UploadCOSRequest{
 		Bucket:      req.Bucket,
@@ -341,7 +347,8 @@ func (p *TencentCloudProvider) UploadCOS(ctx context.Context, req *UploadCOSRequ
 }
 
 // UploadCOSWithReader 使用Reader上传文件到COS
-func (p *TencentCloudProvider) UploadCOSWithReader(ctx context.Context, bucket, key string, reader io.Reader, contentType string) (*UploadCOSResponse, error) {
+func (p *TencentWrapper) UploadCOSWithReader(ctx context.Context,
+	bucket, key string, reader io.Reader, contentType string) (*UploadCOSResponse, error) {
 	// 调用Provider方法
 	tencentResp, err := p.provider.UploadCOSWithReader(ctx, bucket, key, reader, contentType)
 	if err != nil {
@@ -356,11 +363,11 @@ func (p *TencentCloudProvider) UploadCOSWithReader(ctx context.Context, bucket, 
 }
 
 // DeleteCOSObject 删除COS中的对象
-func (p *TencentCloudProvider) DeleteCOSObject(ctx context.Context, bucket, key string) error {
+func (p *TencentWrapper) DeleteCOSObject(ctx context.Context, bucket, key string) error {
 	return p.provider.DeleteCOSObject(ctx, bucket, key)
 }
 
 // GetCOSObjectURL 获取COS对象的访问URL
-func (p *TencentCloudProvider) GetCOSObjectURL(ctx context.Context, bucket, key string, expire time.Duration) (string, error) {
+func (p *TencentWrapper) GetCOSObjectURL(ctx context.Context, bucket, key string, expire time.Duration) (string, error) {
 	return p.provider.GetCOSObjectURL(ctx, bucket, key, expire)
 }

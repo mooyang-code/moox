@@ -59,8 +59,8 @@ func InitCollectorServiceImpl(dbPath string) (*CollectorServiceImpl, error) {
 	// 初始化异步任务服务
 	impl.asyncTaskService = asynctasklogic.NewAsyncTaskService(db)
 
-	// 初始化服务管理器
-	impl.serviceManager = NewServiceManager(db, impl.queueManager)
+	// 初始化服务管理器（暂时传入nil作为cosProvider，稍后会设置）
+	impl.serviceManager = NewServiceManager(db, impl.queueManager, nil)
 
 	// 初始化云提供商
 	impl.initCloudProviders()
@@ -130,9 +130,9 @@ func (s *CollectorServiceImpl) initCloudProviders() {
 		extraConfig := fmt.Sprintf(`{"region":"%s","cos_bucket":"%s","cos_app_id":"%s"}`,
 			fullAccount.COSRegion, fullAccount.COSBucket, fullAccount.AppID)
 
-		// 创建云配置
-		cloudConfig, err := provider.NewCloudConfig(
-			provider.ProviderTencent,
+		// 创建云平台配置
+		cloudConfig, err := provider.NewConfig(
+			provider.Tencent,
 			fullAccount.SecretID,
 			fullAccount.SecretKey,
 			extraConfig,
@@ -143,7 +143,7 @@ func (s *CollectorServiceImpl) initCloudProviders() {
 		}
 
 		// 创建支持COS的腾讯云提供商
-		cosProvider, err := provider.NewTencentCloudProviderWithCOS(cloudConfig)
+		cosProvider, err := provider.NewTencentWrapperWithCOS(cloudConfig)
 		if err != nil {
 			log.Warnf("[Collector Service] 创建COS提供商失败(%s): %v，跳过该账户", fullAccount.AccountName, err)
 			continue
@@ -157,6 +157,10 @@ func (s *CollectorServiceImpl) initCloudProviders() {
 		if defaultProvider == nil {
 			defaultProvider = cosProvider
 			s.SetCloudProvider(cosProvider)
+			// 设置服务管理器的COS提供商
+			if s.serviceManager != nil {
+				s.serviceManager.SetCOSProvider(cosProvider)
+			}
 		}
 
 		log.Infof("[Collector Service] COS提供商初始化完成，账户: %s (COS桶: %s)",

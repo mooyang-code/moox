@@ -140,11 +140,11 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
     c_node_id TEXT NOT NULL, -- 节点唯一标识（如：scf-collector-01）
     c_cloud_account_id TEXT NOT NULL DEFAULT '', -- 云账户ID
+    c_package_id INTEGER DEFAULT NULL, -- 代码包ID，记录该节点当前部署的代码包
     c_namespace TEXT NOT NULL DEFAULT '', -- 命名空间
     c_node_type TEXT NOT NULL DEFAULT 'scf', -- 节点类型（scf=云函数，server=服务器）
     c_region TEXT NOT NULL DEFAULT '', -- 部署地区（如：ap-guangzhou）
     c_ip_address TEXT NOT NULL DEFAULT '', -- IP地址
-    c_version TEXT NOT NULL DEFAULT '', -- 采集器版本
     c_supported_collectors TEXT NOT NULL DEFAULT '[]', -- 支持的采集器类型（JSON数组）
     c_capacity TEXT NOT NULL DEFAULT '{}', -- 节点能力（JSON：{cpu:2,memory:512,max_tasks:10}）
     c_current_load TEXT NOT NULL DEFAULT '{}', -- 当前负载（JSON：{cpu_usage:20,memory_usage:30,running_tasks:3}）
@@ -155,7 +155,8 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 修改时间
-    UNIQUE (c_node_id)
+    UNIQUE (c_node_id),
+    FOREIGN KEY (c_package_id) REFERENCES t_function_packages(c_id)
 );
 
 -- ************ 创建采集任务配置表（替代原t_node_collectors_conf） ************
@@ -368,6 +369,8 @@ CREATE TABLE IF NOT EXISTS t_function_packages (
     c_file_md5 TEXT NOT NULL,                                      -- 文件MD5校验
     
     -- COS存储信息
+    c_cloud_account_id TEXT DEFAULT '',                            -- 云账户ID，记录使用哪个账户上传的COS
+    c_cos_region TEXT DEFAULT '',                                  -- COS地区，记录代码包上传到COS的哪个地区
     c_cos_bucket TEXT NOT NULL,                                    -- COS桶名
     c_cos_path TEXT NOT NULL,                                      -- COS文件路径
     c_cos_url TEXT DEFAULT '',                                     -- COS访问URL

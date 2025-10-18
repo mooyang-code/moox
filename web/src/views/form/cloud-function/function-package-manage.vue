@@ -93,7 +93,13 @@
         @page-size-change="handlePageSizeChange"
       >
         <template #columns>
-          <a-table-column title="代码包名称" data-index="package_name" :width="180"></a-table-column>
+          <a-table-column title="代码包名称" data-index="package_name" :width="180">
+            <template #cell="{ record }">
+              <a-button type="text" style="padding: 0; height: auto; color: #165dff;" @click="onShowDetail(record)">
+                {{ record.package_name }}
+              </a-button>
+            </template>
+          </a-table-column>
           <a-table-column title="版本" data-index="version" :width="120"></a-table-column>
           <a-table-column title="类型" data-index="package_type_label" :width="150">
             <template #cell="{ record }">
@@ -122,7 +128,23 @@
               </a-tooltip>
             </template>
           </a-table-column>
-          <a-table-column title="创建者" data-index="created_by" :width="120"></a-table-column>
+          <a-table-column title="云账户" data-index="cloud_account_id" :width="120">
+            <template #cell="{ record }">
+              {{ record.cloud_account_id || '-' }}
+            </template>
+          </a-table-column>
+          <a-table-column title="COS地区" data-index="cos_region" :width="120">
+            <template #cell="{ record }">
+              {{ record.cos_region || '-' }}
+            </template>
+          </a-table-column>
+          <a-table-column title="文件MD5" data-index="file_md5" :width="180">
+            <template #cell="{ record }">
+              <a-tooltip :content="record.file_md5" position="top">
+                <span>{{ record.file_md5 ? (record.file_md5.length > 16 ? record.file_md5.substring(0, 16) + '...' : record.file_md5) : '-' }}</span>
+              </a-tooltip>
+            </template>
+          </a-table-column>
           <a-table-column title="创建时间" data-index="created_at" :width="180">
             <template #cell="{ record }">
               {{ formatTime(record.created_at) }}
@@ -247,6 +269,89 @@
         </a-space>
       </template>
     </a-modal>
+    
+    <!-- 代码包详情弹窗 -->
+    <a-modal
+      v-model:visible="detailVisible"
+      title="代码包详情"
+      :width="800"
+      :mask-closable="false"
+      :footer="false"
+      @cancel="handleDetailCancel"
+    >
+      <div v-if="packageDetail" class="package-detail">
+        <!-- 基本信息 -->
+        <a-descriptions title="基本信息" :column="2" bordered size="medium" style="margin-bottom: 16px;">
+          <a-descriptions-item label="代码包名称">{{ packageDetail.package_name }}</a-descriptions-item>
+          <a-descriptions-item label="版本">{{ packageDetail.version }}</a-descriptions-item>
+          <a-descriptions-item label="类型">
+            <a-tag :color="getPackageTypeColor(packageDetail.package_type)">
+              {{ packageDetail.package_type_label }}
+            </a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="运行时环境">{{ packageDetail.runtime }}</a-descriptions-item>
+          <a-descriptions-item label="文件大小">{{ formatFileSize(packageDetail.file_size) }}</a-descriptions-item>
+          <a-descriptions-item label="状态">
+            <a-tag :color="getStatusColor(packageDetail.status)">
+              {{ packageDetail.status_label }}
+            </a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="文件MD5" :span="2">
+            <a-typography-text copyable>{{ packageDetail.file_md5 || '-' }}</a-typography-text>
+          </a-descriptions-item>
+          <a-descriptions-item label="描述" :span="2">
+            {{ packageDetail.description || '-' }}
+          </a-descriptions-item>
+        </a-descriptions>
+        
+        <!-- 存储信息 -->
+        <a-descriptions title="存储信息" :column="2" bordered size="medium" style="margin-bottom: 16px;">
+          <a-descriptions-item label="云账户">
+            {{ packageDetail.cloud_account_id || '本地存储' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="存储类型">
+            <a-tag :color="packageDetail.cos_bucket === 'local' ? 'orange' : 'blue'">
+              {{ packageDetail.cos_bucket === 'local' ? '本地存储' : 'COS存储' }}
+            </a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="COS地区">
+            {{ packageDetail.cos_region || '-' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="COS桶">
+            {{ packageDetail.cos_bucket === 'local' ? '-' : (packageDetail.cos_bucket || '-') }}
+          </a-descriptions-item>
+          <a-descriptions-item label="存储路径" :span="2">
+            <a-typography-text copyable v-if="packageDetail.cos_path">
+              {{ packageDetail.cos_path }}
+            </a-typography-text>
+            <span v-else>-</span>
+          </a-descriptions-item>
+        </a-descriptions>
+        
+        <!-- 时间信息 -->
+        <a-descriptions title="时间信息" :column="2" bordered size="medium">
+          <a-descriptions-item label="创建者">{{ packageDetail.created_by }}</a-descriptions-item>
+          <a-descriptions-item label="创建时间">{{ formatTime(packageDetail.created_at) }}</a-descriptions-item>
+          <a-descriptions-item label="最后部署时间" :span="2">
+            {{ packageDetail.last_deploy_time ? formatTime(packageDetail.last_deploy_time) : '-' }}
+          </a-descriptions-item>
+        </a-descriptions>
+        
+        <div style="margin-top: 16px; text-align: right;">
+          <a-space>
+            <a-button @click="handleDetailCancel">关闭</a-button>
+            <a-button type="primary" @click="onDownload(packageDetail)" :disabled="packageDetail.status !== 1">
+              <template #icon><icon-download /></template>
+              下载
+            </a-button>
+          </a-space>
+        </div>
+      </div>
+      <div v-else style="text-align: center; padding: 40px;">
+        <a-spin :loading="true" />
+        <div style="margin-top: 16px;">加载中...</div>
+      </div>
+    </a-modal>
   </a-modal>
 </template>
 
@@ -255,6 +360,7 @@ import { ref, watch, reactive, computed, onUnmounted } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { 
   getFunctionPackageList, 
+  getFunctionPackageDetail,
   uploadFunctionPackage,
   deleteFunctionPackage,
   getFunctionPackageDownloadURL,
@@ -290,6 +396,10 @@ const uploading = ref(false);
 const uploadFormRef = ref();
 const uploadRef = ref();
 const fileList = ref<any[]>([]);
+
+// 详情弹窗
+const detailVisible = ref(false);
+const packageDetail = ref<FunctionPackage | null>(null);
 
 // 异步任务状态
 const currentTaskId = ref<string>('');
@@ -825,6 +935,36 @@ const onDelete = async (record: FunctionPackage) => {
 // 关闭弹窗
 const handleCancel = () => {
   visible.value = false;
+};
+
+// 显示代码包详情
+const onShowDetail = async (record: FunctionPackage) => {
+  packageDetail.value = null;
+  detailVisible.value = true;
+  
+  try {
+    const response = await getFunctionPackageDetail(record.id);
+    console.log('代码包详情API响应:', response);
+    
+    if (response?.code === 200 && response?.data && response.data.length > 0) {
+      packageDetail.value = response.data[0]; // 取数组第一个元素
+    } else {
+      throw new Error('获取详情失败');
+    }
+  } catch (error) {
+    console.error('获取代码包详情失败:', error);
+    Message.error({
+      content: '获取代码包详情失败',
+      duration: 5000
+    });
+    detailVisible.value = false;
+  }
+};
+
+// 关闭详情弹窗
+const handleDetailCancel = () => {
+  detailVisible.value = false;
+  packageDetail.value = null;
 };
 
 // 工具函数

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/constants"
 	"gopkg.in/yaml.v2"
 )
 
@@ -51,7 +52,7 @@ func GetCloudFunctionConfig() *CloudFunctionConfig {
 			// 如果加载失败，返回默认配置
 			return &CloudFunctionConfig{
 				CloudFunction: CloudFunctionSettings{
-					ZipFilePath:       "/tmp/collector-scf.zip",
+					ZipFilePath:       constants.GetDefaultZipFilePath(),
 					DefaultTimeout:    30,
 					DefaultMemorySize: 128,
 					DefaultEnvVars: map[string]string{

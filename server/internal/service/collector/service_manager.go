@@ -8,6 +8,8 @@ import (
 	cloudnodelogic "github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	cloudnodequeue "github.com/mooyang-code/moox/server/internal/service/cloudnode/queue"
 	cloudnodeworker "github.com/mooyang-code/moox/server/internal/service/cloudnode/worker"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
+	packagemgrlogic "github.com/mooyang-code/moox/server/internal/service/packagemgr/logic"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -16,6 +18,7 @@ import (
 type ServiceManager struct {
 	db                   *gorm.DB
 	queueManager         *cloudnodequeue.QueueManager
+	cosProvider          provider.ClientWithCOS
 	asyncTaskWorker      *asynctaskworker.BaseWorker
 	nodeCreationWorker   *cloudnodeworker.NodeCreationWorker
 	nodeDeletionWorker   *cloudnodeworker.NodeDeletionWorker
@@ -23,11 +26,17 @@ type ServiceManager struct {
 }
 
 // NewServiceManager creates a new service manager
-func NewServiceManager(db *gorm.DB, queueManager *cloudnodequeue.QueueManager) *ServiceManager {
+func NewServiceManager(db *gorm.DB, queueManager *cloudnodequeue.QueueManager, cosProvider provider.ClientWithCOS) *ServiceManager {
 	return &ServiceManager{
 		db:           db,
 		queueManager: queueManager,
+		cosProvider:  cosProvider,
 	}
+}
+
+// SetCOSProvider sets the COS provider for the service manager
+func (m *ServiceManager) SetCOSProvider(cosProvider provider.ClientWithCOS) {
+	m.cosProvider = cosProvider
 }
 
 // Start starts all services
@@ -45,8 +54,18 @@ func (m *ServiceManager) Start(ctx context.Context) {
 		cloudAccountService := cloudnodelogic.NewCloudAccountService(m.db)
 		asyncTaskService := asynctasklogic.NewAsyncTaskService(m.db)
 		
+		// 创建包管理服务
+		var packageService cloudnodeworker.PackageService
+		if m.cosProvider != nil {
+			cosBucket := "moox-packages" // 应该从配置中获取
+			functionPackageService := packagemgrlogic.NewFunctionPackageService(m.db, m.cosProvider, cosBucket)
+			packageService = cloudnodeworker.NewPackageServiceAdapter(functionPackageService)
+		} else {
+			log.Warn("[ServiceManager] COS provider 未设置，将使用nil作为包管理服务")
+		}
+		
 		// 创建并启动节点创建worker
-		m.nodeCreationWorker = cloudnodeworker.NewNodeCreationWorker(m.db, m.queueManager, cloudAccountService, asyncTaskService)
+		m.nodeCreationWorker = cloudnodeworker.NewNodeCreationWorker(m.db, m.queueManager, cloudAccountService, packageService, asyncTaskService)
 		m.nodeCreationWorker.Start(ctx)
 		log.InfoContext(ctx, "[ServiceManager] Node creation worker started")
 		
@@ -59,7 +78,7 @@ func (m *ServiceManager) Start(ctx context.Context) {
 		
 		// 创建并启动节点部署worker
 		log.InfoContext(ctx, "[ServiceManager] Creating node deployment worker...")
-		m.nodeDeploymentWorker = cloudnodeworker.NewNodeDeploymentWorker(m.db, m.queueManager, cloudAccountService, asyncTaskService)
+		m.nodeDeploymentWorker = cloudnodeworker.NewNodeDeploymentWorker(m.db, m.queueManager, cloudAccountService, packageService, asyncTaskService)
 		log.InfoContext(ctx, "[ServiceManager] Starting node deployment worker...")
 		m.nodeDeploymentWorker.Start(ctx)
 		log.InfoContext(ctx, "[ServiceManager] Node deployment worker started")

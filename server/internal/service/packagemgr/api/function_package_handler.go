@@ -22,35 +22,6 @@ func NewFunctionPackageHandler(packageService *logic.FunctionPackageService) *Fu
 	}
 }
 
-// UploadPackage 上传代码包
-// @Summary 上传云函数代码包
-// @Description 上传云函数代码包到COS并记录到数据库
-// @Tags 云函数代码包
-// @Accept json
-// @Produce json
-// @Param request body logic.UploadPackageRequest true "上传请求"
-// @Success 200 {object} APIResponse{data=logic.UploadPackageResponse}
-// @Failure 400 {object} APIResponse
-// @Failure 500 {object} APIResponse
-// @Router /api/v1/function-packages/upload [post]
-func (h *FunctionPackageHandler) UploadPackage(c *gin.Context) {
-	var req logic.UploadPackageRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		ErrorResponse(c, http.StatusBadRequest, "参数绑定失败", err)
-		return
-	}
-
-	// 设置创建者为固定值
-	req.CreatedBy = "moox"
-
-	resp, err := h.packageService.UploadPackageAsync(c.Request.Context(), &req)
-	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "上传失败", err)
-		return
-	}
-
-	SuccessResponse(c, "上传成功", resp)
-}
 
 // UploadPackageAsync 异步上传代码包
 // @Summary 异步上传云函数代码包
@@ -168,12 +139,12 @@ func (h *FunctionPackageHandler) GetPackageList(c *gin.Context) {
 
 // GetPackageDetail 获取代码包详情
 // @Summary 获取云函数代码包详情
-// @Description 根据ID获取云函数代码包详细信息
+// @Description 根据ID获取云函数代码包详细信息，包含所有字段和显示标签，返回数组格式
 // @Tags 云函数代码包
 // @Accept json
 // @Produce json
 // @Param id path int true "代码包ID"
-// @Success 200 {object} APIResponse{data=model.FunctionPackage}
+// @Success 200 {object} APIResponse{data=[]logic.PackageDetail}
 // @Failure 400 {object} APIResponse
 // @Failure 404 {object} APIResponse
 // @Failure 500 {object} APIResponse
@@ -192,7 +163,8 @@ func (h *FunctionPackageHandler) GetPackageDetail(c *gin.Context) {
 		return
 	}
 
-	SuccessResponse(c, "查询成功", pkg)
+	// 按照moox统一格式，data返回数组格式
+	SuccessResponse(c, "查询成功", []*logic.PackageDetail{pkg})
 }
 
 // DeletePackage 删除代码包

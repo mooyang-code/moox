@@ -24,7 +24,7 @@ type NodeCreateItem struct {
 	NodeType            string `json:"node_type"`
 	Region              string `json:"region"`
 	IPAddress           string `json:"ip_address"`
-	Version             string `json:"version"`
+	PackageID           int64  `json:"package_id"`           // 代码包ID
 	SupportedCollectors string `json:"supported_collectors"`
 	Capacity            string `json:"capacity"`
 	Metadata            string `json:"metadata"`
@@ -98,12 +98,18 @@ func (e *BatchCreateNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 		e.asyncTaskService.UpdateTaskDetailStatus(ctx, task.TaskID, itemID, asynctaskmodel.TaskDetailStatusProcessing, "")
 
 		// 准备节点数据
+		var packageID *int
+		if nodeData.PackageID > 0 {
+			packageIDInt := int(nodeData.PackageID)
+			packageID = &packageIDInt
+		}
+		
 		node := &cloudnodemodel.SCFNode{
 			CloudAccountID:      nodeData.CloudAccountID,
+			PackageID:           packageID,
 			NodeType:            nodeData.NodeType,
 			Region:              nodeData.Region,
 			IPAddress:           nodeData.IPAddress,
-			Version:             nodeData.Version,
 			SupportedCollectors: nodeData.SupportedCollectors,
 			Capacity:            nodeData.Capacity,
 			Metadata:            nodeData.Metadata,

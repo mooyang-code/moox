@@ -34,6 +34,8 @@ type SCFNode struct {
 	NodeID string `gorm:"column:c_node_id;uniqueIndex:idx_node_id;size:100;not null;default:''" json:"node_id"`
 	// CloudAccountID 云账户ID
 	CloudAccountID string `gorm:"column:c_cloud_account_id;size:100;not null;default:''" json:"cloud_account_id"`
+	// PackageID 代码包ID，记录该节点当前部署的代码包
+	PackageID *int `gorm:"column:c_package_id" json:"package_id"`
 	// Namespace 命名空间
 	Namespace string `gorm:"column:c_namespace;size:200;not null;default:''" json:"namespace"`
 	// NodeType 节点类型（scf=云函数，server=服务器）
@@ -42,8 +44,6 @@ type SCFNode struct {
 	Region string `gorm:"column:c_region;size:50;not null;default:''" json:"region"`
 	// IPAddress IP地址
 	IPAddress string `gorm:"column:c_ip_address;size:50;not null;default:''" json:"ip_address"`
-	// Version 采集器版本
-	Version string `gorm:"column:c_version;size:50;not null;default:''" json:"version"`
 	// SupportedCollectors 支持的采集器类型（JSON数组）
 	SupportedCollectors string `gorm:"column:c_supported_collectors;type:text;not null;default:'[]'" json:"supported_collectors"`
 	// Capacity 节点能力（JSON：{cpu:2,memory:512,max_tasks:10}）

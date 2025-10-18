@@ -19,9 +19,11 @@ type FunctionPackage struct {
 	FileMD5          string `gorm:"column:c_file_md5;not null" json:"file_md5"`
 	
 	// COS存储信息
-	COSBucket string `gorm:"column:c_cos_bucket;not null" json:"cos_bucket"`
-	COSPath   string `gorm:"column:c_cos_path;not null" json:"cos_path"`
-	COSURL    string `gorm:"column:c_cos_url;default:''" json:"cos_url"`
+	CloudAccountID string `gorm:"column:c_cloud_account_id;default:''" json:"cloud_account_id"`
+	COSRegion      string `gorm:"column:c_cos_region;default:''" json:"cos_region"`
+	COSBucket      string `gorm:"column:c_cos_bucket;not null" json:"cos_bucket"`
+	COSPath        string `gorm:"column:c_cos_path;not null" json:"cos_path"`
+	COSURL         string `gorm:"column:c_cos_url;default:''" json:"cos_url"`
 	
 	// 状态管理
 	Status         int    `gorm:"column:c_status;not null;default:0" json:"status"`
@@ -43,30 +45,6 @@ func (FunctionPackage) TableName() string {
 	return "t_function_packages"
 }
 
-// FunctionDeployment 云函数部署记录模型
-type FunctionDeployment struct {
-	ID              int64     `gorm:"column:c_id;primaryKey;autoIncrement" json:"id"`
-	PackageID       int64     `gorm:"column:c_package_id;not null" json:"package_id"`
-	CloudAccountID  int64     `gorm:"column:c_cloud_account_id;not null" json:"cloud_account_id"`
-	FunctionName    string    `gorm:"column:c_function_name;not null" json:"function_name"`
-	Namespace       string    `gorm:"column:c_namespace;default:'default'" json:"namespace"`
-	
-	// 部署配置
-	Environment string `gorm:"column:c_environment;default:'{}'" json:"environment"`
-	
-	// 部署状态
-	DeployStatus  int    `gorm:"column:c_deploy_status;default:0" json:"deploy_status"`
-	DeployMessage string `gorm:"column:c_deploy_message;default:''" json:"deploy_message"`
-	
-	Invalid int       `gorm:"column:c_invalid;not null;default:0" json:"invalid"`
-	CTime   time.Time `gorm:"column:c_ctime;default:CURRENT_TIMESTAMP" json:"created_at"`
-	MTime   time.Time `gorm:"column:c_mtime;default:CURRENT_TIMESTAMP" json:"updated_at"`
-}
-
-// TableName 指定表名
-func (FunctionDeployment) TableName() string {
-	return "t_function_deployments"
-}
 
 // 状态常量
 const (
@@ -76,10 +54,6 @@ const (
 	PackageStatusDeleted   = 2 // 已删除
 	PackageStatusFailed    = 3 // 上传失败
 	
-	// 部署状态
-	DeployStatusInProgress = 0 // 进行中
-	DeployStatusSuccess    = 1 // 成功
-	DeployStatusFailed     = 2 // 失败
 )
 
 // 函数包类型常量
@@ -125,16 +99,3 @@ func GetStatusDisplayName(status int) string {
 	}
 }
 
-// GetDeployStatusDisplayName 获取部署状态显示名称
-func GetDeployStatusDisplayName(status int) string {
-	switch status {
-	case DeployStatusInProgress:
-		return "进行中"
-	case DeployStatusSuccess:
-		return "成功"
-	case DeployStatusFailed:
-		return "失败"
-	default:
-		return "未知状态"
-	}
-}

@@ -24,15 +24,18 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 
 	// 设置代码
 	request.Code = &scf.Code{}
-	
-	// 优先使用ZipFile，如果没有则使用COS
-	if req.ZipFile != "" {
+
+	// 优先使用COS部署，如果COS信息完整
+	if req.COSBucket != "" && req.COSPath != "" && req.COSRegion != "" {
+		request.Code.CosBucketName = common.StringPtr(req.COSBucket)
+		request.Code.CosObjectName = common.StringPtr(req.COSPath)
+		request.Code.CosBucketRegion = common.StringPtr(req.COSRegion)
+	} else if req.ZipFile != "" {
+		// 使用ZipFile本地上传
 		request.Code.ZipFile = common.StringPtr(req.ZipFile)
 	} else {
-		// 使用COS存储的默认云函数代码
-		request.Code.CosBucketName = common.StringPtr("moox-scf-1255382561")
-		request.Code.CosObjectName = common.StringPtr("/collector-scf.zip")
-		request.Code.CosBucketRegion = common.StringPtr("ap-guangzhou")
+		// 参数不完整，无法创建函数
+		return nil, fmt.Errorf("函数代码参数不完整：需要提供COS信息(COSBucket、COSPath、COSRegion)或ZipFile")
 	}
 
 	// 设置内存和超时
@@ -126,11 +129,22 @@ func (p *Provider) UpdateFunction(ctx context.Context, req *UpdateFunctionReques
 	}
 
 	// 更新函数代码
-	if req.ZipFile != "" {
+	if req.ZipFile != "" || (req.COSBucket != "" && req.COSPath != "" && req.COSRegion != "") {
 		codeRequest := scf.NewUpdateFunctionCodeRequest()
 		codeRequest.FunctionName = common.StringPtr(req.FunctionName)
 		codeRequest.Namespace = common.StringPtr(req.Namespace)
-		codeRequest.ZipFile = common.StringPtr(req.ZipFile)
+
+		// 优先使用COS方式更新
+		if req.COSBucket != "" && req.COSPath != "" && req.COSRegion != "" {
+			codeRequest.CosBucketName = common.StringPtr(req.COSBucket)
+			codeRequest.CosObjectName = common.StringPtr(req.COSPath)
+			codeRequest.CosBucketRegion = common.StringPtr(req.COSRegion)
+			p.logInfo(ctx, "Updating function code via COS: bucket=%s, path=%s, region=%s",
+				req.COSBucket, req.COSPath, req.COSRegion)
+		} else if req.ZipFile != "" {
+			codeRequest.ZipFile = common.StringPtr(req.ZipFile)
+			p.logInfo(ctx, "Updating function code via ZipFile")
+		}
 
 		_, err := p.scfClient.UpdateFunctionCode(codeRequest)
 		if err != nil {
@@ -564,6 +578,5 @@ func (p *Provider) InvokeFunction(ctx context.Context, req *InvokeFunctionReques
 
 	p.logInfo(ctx, "Function invoked successfully, RequestId: %s, StatusCode: %d",
 		result.RequestID, result.StatusCode)
-
 	return result, nil
 }

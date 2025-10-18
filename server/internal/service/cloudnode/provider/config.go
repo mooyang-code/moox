@@ -5,26 +5,26 @@ import (
 	"fmt"
 )
 
-// ProviderType 云厂商类型
-type ProviderType string
+// Provider 云平台类型
+type Provider string
 
 const (
-	ProviderTencent ProviderType = "tencent" // 腾讯云
-	ProviderAliyun  ProviderType = "aliyun"  // 阿里云
-	ProviderAWS     ProviderType = "aws"     // AWS
+	Tencent Provider = "tencent" // 腾讯云
+	Aliyun  Provider = "aliyun"  // 阿里云
+	AWS     Provider = "aws"     // AWS
 )
 
-// CloudConfig 云厂商配置
-type CloudConfig struct {
-	Provider    ProviderType           // 云厂商类型
+// Config 云平台配置
+type Config struct {
+	Provider    Provider               // 云平台类型
 	SecretID    string                 // 密钥ID
 	SecretKey   string                 // 密钥
 	ExtraConfig map[string]interface{} // 额外配置（如region、endpoint等）
 }
 
-// NewCloudConfig 创建云厂商配置
-func NewCloudConfig(provider ProviderType, secretID, secretKey string, extraConfig string) (*CloudConfig, error) {
-	config := &CloudConfig{
+// NewConfig 创建云平台配置
+func NewConfig(provider Provider, secretID, secretKey string, extraConfig string) (*Config, error) {
+	config := &Config{
 		Provider:  provider,
 		SecretID:  secretID,
 		SecretKey: secretKey,
@@ -45,7 +45,7 @@ func NewCloudConfig(provider ProviderType, secretID, secretKey string, extraConf
 }
 
 // GetString 从额外配置中获取字符串值
-func (c *CloudConfig) GetString(key string) string {
+func (c *Config) GetString(key string) string {
 	if val, ok := c.ExtraConfig[key]; ok {
 		if str, ok := val.(string); ok {
 			return str
@@ -55,7 +55,7 @@ func (c *CloudConfig) GetString(key string) string {
 }
 
 // GetInt 从额外配置中获取整数值
-func (c *CloudConfig) GetInt(key string) int {
+func (c *Config) GetInt(key string) int {
 	if val, ok := c.ExtraConfig[key]; ok {
 		switch v := val.(type) {
 		case int:
@@ -68,7 +68,7 @@ func (c *CloudConfig) GetInt(key string) int {
 }
 
 // GetBool 从额外配置中获取布尔值
-func (c *CloudConfig) GetBool(key string) bool {
+func (c *Config) GetBool(key string) bool {
 	if val, ok := c.ExtraConfig[key]; ok {
 		if b, ok := val.(bool); ok {
 			return b

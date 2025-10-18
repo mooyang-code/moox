@@ -9,17 +9,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/constants"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/queue"
+	packagemgrmodel "github.com/mooyang-code/moox/server/internal/service/packagemgr/model"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
+
+// Platform 云平台类型别名，避免 provider.Provider 的啰嗦写法
+type Platform = provider.Provider
 
 // NodeCreationWorker 处理异步云函数创建的工作器
 type NodeCreationWorker struct {
 	queueManager        *queue.QueueManager
 	cloudAccountService CloudAccountService
+	packageService      PackageService
 	asyncTaskService    AsyncTaskService
 	nodeDAO             dao.SCFNodeDAO
 	db                  *gorm.DB
@@ -27,10 +33,11 @@ type NodeCreationWorker struct {
 }
 
 // NewNodeCreationWorker 创建新的节点创建工作器
-func NewNodeCreationWorker(db *gorm.DB, queueManager *queue.QueueManager, cloudAccountService CloudAccountService, asyncTaskService AsyncTaskService) *NodeCreationWorker {
+func NewNodeCreationWorker(db *gorm.DB, queueManager *queue.QueueManager, cloudAccountService CloudAccountService, packageService PackageService, asyncTaskService AsyncTaskService) *NodeCreationWorker {
 	return &NodeCreationWorker{
 		queueManager:        queueManager,
 		cloudAccountService: cloudAccountService,
+		packageService:      packageService,
 		asyncTaskService:    asyncTaskService,
 		nodeDAO:             dao.NewSCFNodeDAO(db),
 		db:                  db,
@@ -146,9 +153,9 @@ func (w *NodeCreationWorker) prepareCloudProvider(ctx context.Context, cloudAcco
 	log.InfoContextf(ctx, "[NodeCreationWorker-%d] 使用云账户: ID=%s, Provider=%s",
 		workerID, account.AccountID, account.Provider)
 
-	// 创建云厂商配置
-	config := &provider.CloudConfig{
-		Provider:  provider.ProviderType(account.Provider),
+	// 创建云平台配置
+	config := &provider.Config{
+		Provider:  Platform(account.Provider),
 		SecretID:  account.SecretID,
 		SecretKey: account.SecretKey,
 		ExtraConfig: map[string]interface{}{
@@ -156,46 +163,32 @@ func (w *NodeCreationWorker) prepareCloudProvider(ctx context.Context, cloudAcco
 		},
 	}
 
-	// 获取云厂商实例
-	cloudProvider, err := provider.NewCloudProvider(config)
+	// 获取云平台实例
+	cloudProvider, err := provider.New(config)
 	if err != nil {
-		log.ErrorContextf(ctx, "[NodeCreationWorker-%d] 获取云厂商实例失败: %v", workerID, err)
-		return nil, fmt.Errorf("获取云厂商实例失败: %w", err)
+		log.ErrorContextf(ctx, "[NodeCreationWorker-%d] 获取云平台实例失败: %v", workerID, err)
+		return nil, fmt.Errorf("获取云平台实例失败: %w", err)
 	}
 
 	return cloudProvider, nil
 }
 
 // createCloudResources 创建云资源（命名空间和函数）
-func (w *NodeCreationWorker) createCloudResources(ctx context.Context, cloudProvider provider.Client, msg *queue.NodeCreationMessage, workerID int) (*provider.FunctionInfo, error) {
+func (w *NodeCreationWorker) createCloudResources(ctx context.Context, cloudProvider provider.Client,
+	msg *queue.NodeCreationMessage, workerID int) (*provider.FunctionInfo, error) {
 	// 1. 创建或确认命名空间
 	if err := w.ensureNamespace(ctx, cloudProvider, msg.Namespace, msg.NodeID, workerID); err != nil {
 		return nil, err
 	}
 
 	// 2. 读取并准备函数代码（如果本地ZIP文件存在）
-	var zipBase64 string
-	if msg.ZipFilePath != "" {
-		// 检查文件是否存在
-		if _, err := os.Stat(msg.ZipFilePath); err == nil {
-			zipBase64, err = w.prepareZipFile(ctx, msg.ZipFilePath, workerID)
-			if err != nil {
-				log.WarnContextf(ctx, "[NodeCreationWorker-%d] 读取本地ZIP文件失败，将使用COS默认代码: %v", workerID, err)
-				zipBase64 = ""
-			}
-		} else {
-			log.InfoContextf(ctx, "[NodeCreationWorker-%d] 本地ZIP文件不存在: %s，将使用COS默认代码", workerID, msg.ZipFilePath)
-		}
-	} else {
-		log.InfoContextf(ctx, "[NodeCreationWorker-%d] 未配置ZIP文件路径，将使用COS默认代码", workerID)
-	}
+	zipBase64 := w.prepareLocalZipFile(ctx, msg.ZipFilePath, workerID)
 
 	// 3. 创建或获取云函数
 	functionInfo, err := w.ensureFunction(ctx, cloudProvider, msg, zipBase64, workerID)
 	if err != nil {
 		return nil, err
 	}
-
 	log.InfoContextf(ctx, "[NodeCreationWorker-%d] 成功完成云函数设置: %+v", workerID, functionInfo)
 	return functionInfo, nil
 }
@@ -227,16 +220,50 @@ func (w *NodeCreationWorker) prepareZipFile(ctx context.Context, zipFilePath str
 	return base64.StdEncoding.EncodeToString(zipData), nil
 }
 
+// prepareLocalZipFile 准备本地ZIP文件
+func (w *NodeCreationWorker) prepareLocalZipFile(ctx context.Context, zipFilePath string, workerID int) string {
+	// 如果没有配置ZIP文件路径，直接返回空字符串
+	if zipFilePath == "" {
+		log.InfoContextf(ctx, "[NodeCreationWorker-%d] 未配置ZIP文件路径，将使用COS默认代码", workerID)
+		return ""
+	}
+
+	// 如果文件不存在，直接返回空字符串
+	if _, err := os.Stat(zipFilePath); err != nil {
+		log.InfoContextf(ctx, "[NodeCreationWorker-%d] 本地ZIP文件不存在: %s，将使用COS默认代码", workerID, zipFilePath)
+		return ""
+	}
+
+	// 文件存在，尝试读取
+	zipBase64, err := w.prepareZipFile(ctx, zipFilePath, workerID)
+	if err != nil {
+		log.WarnContextf(ctx, "[NodeCreationWorker-%d] 读取本地ZIP文件失败，将使用COS默认代码: %v", workerID, err)
+		return ""
+	}
+	return zipBase64
+}
+
 // ensureFunction 确保云函数存在
-func (w *NodeCreationWorker) ensureFunction(ctx context.Context, cloudProvider provider.Client, msg *queue.NodeCreationMessage, zipBase64 string, workerID int) (*provider.FunctionInfo, error) {
+func (w *NodeCreationWorker) ensureFunction(ctx context.Context, cloudProvider provider.Client,
+	msg *queue.NodeCreationMessage, zipBase64 string, workerID int) (*provider.FunctionInfo, error) {
 	log.InfoContextf(ctx, "[NodeCreationWorker-%d] 正在创建云函数: %s", workerID, msg.FunctionName)
+
+	// 根据PackageID获取COS信息或使用本地ZIP文件
+	cosInfo, err := w.prepareFunctionCode(ctx, msg.PackageID, zipBase64, workerID)
+	if err != nil {
+		log.ErrorContextf(ctx, "[NodeCreationWorker-%d] 准备函数代码失败: %v", workerID, err)
+		return nil, fmt.Errorf("准备函数代码失败: %w", err)
+	}
 
 	req := &provider.CreateFunctionRequest{
 		FunctionName: msg.FunctionName,
 		Namespace:    msg.Namespace,
-		ZipFile:      zipBase64,
-		Runtime:      "Go1",
+		Runtime:      cosInfo.Runtime,
 		Description:  fmt.Sprintf("由moox为节点 %s 创建", msg.NodeID),
+		ZipFile:      cosInfo.ZipFile,
+		COSBucket:    cosInfo.COSBucket,
+		COSPath:      cosInfo.COSPath,
+		COSRegion:    cosInfo.COSRegion,
 		MemorySize:   1024, // 运行内存MB
 		Timeout:      240,  // 创建超时秒
 		Environment: map[string]string{
@@ -361,4 +388,96 @@ func (w *NodeCreationWorker) waitForFunctionReady(ctx context.Context, cloudProv
 		log.InfoContextf(ctx, "[NodeCreationWorker-%d] 函数状态: %s，等待中...", workerID, functionInfo.Status)
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// PackageService 包管理服务接口
+type PackageService interface {
+	GetPackageByID(ctx context.Context, packageID int64) (*packagemgrmodel.FunctionPackage, error)
+}
+
+// PackageServiceAdapter 包管理服务适配器 - 将FunctionPackageService适配为PackageService接口
+type PackageServiceAdapter struct {
+	functionPackageService interface {
+		GetPackageDetailModel(ctx context.Context, id int64) (*packagemgrmodel.FunctionPackage, error)
+	}
+}
+
+// NewPackageServiceAdapter 创建包管理服务适配器
+func NewPackageServiceAdapter(functionPackageService interface {
+	GetPackageDetailModel(ctx context.Context, id int64) (*packagemgrmodel.FunctionPackage, error)
+}) PackageService {
+	return &PackageServiceAdapter{
+		functionPackageService: functionPackageService,
+	}
+}
+
+// GetPackageByID 根据ID获取代码包信息
+func (a *PackageServiceAdapter) GetPackageByID(ctx context.Context, packageID int64) (*packagemgrmodel.FunctionPackage, error) {
+	return a.functionPackageService.GetPackageDetailModel(ctx, packageID)
+}
+
+// FunctionCodeInfo 函数代码信息
+type FunctionCodeInfo struct {
+	ZipFile   string // base64编码的ZIP文件（用于本地上传）
+	COSBucket string // COS桶名（用于COS部署）
+	COSPath   string // COS路径（用于COS部署）
+	COSRegion string // COS区域（用于COS部署）
+	Runtime   string // 运行时环境
+}
+
+// prepareFunctionCode 根据PackageID准备函数代码
+func (w *NodeCreationWorker) prepareFunctionCode(ctx context.Context, packageID int64, fallbackZipBase64 string, workerID int) (*FunctionCodeInfo, error) {
+	if packageID <= 0 {
+		return nil, fmt.Errorf("代码包ID是必需的，不能为空或小于等于0")
+	}
+
+	// 获取代码包信息
+	pkg, err := w.packageService.GetPackageByID(ctx, packageID)
+	if err != nil {
+		return nil, fmt.Errorf("获取代码包信息失败: %w", err)
+	}
+
+	if pkg.Status != packagemgrmodel.PackageStatusAvailable {
+		return nil, fmt.Errorf("代码包状态不可用: %d", pkg.Status)
+	}
+
+	// 判断是否为COS存储（COSBucket不是"local"且有完整的COS信息）
+	if pkg.COSBucket != "local" && pkg.CloudAccountID != "" && pkg.COSBucket != "" && pkg.COSPath != "" && pkg.COSRegion != "" {
+		log.InfoContextf(ctx, "[NodeCreationWorker-%d] 使用COS部署: bucket=%s, path=%s, region=%s, runtime=%s",
+			workerID, pkg.COSBucket, pkg.COSPath, pkg.COSRegion, pkg.Runtime)
+		return &FunctionCodeInfo{
+			COSBucket: pkg.COSBucket,
+			COSPath:   pkg.COSPath,
+			COSRegion: pkg.COSRegion,
+			Runtime:   pkg.Runtime,
+		}, nil
+	}
+
+	// 使用本地存储（COSBucket标记为"local"）
+	if pkg.COSBucket == "local" {
+		localPath := constants.GetPackageFilePath(pkg.ID, pkg.OriginalFilename)
+
+		// 检查本地文件是否存在
+		if _, err := os.Stat(localPath); err == nil {
+			log.InfoContextf(ctx, "[NodeCreationWorker-%d] 使用本地存储文件: %s, runtime=%s", workerID, localPath, pkg.Runtime)
+			zipBase64, err := w.prepareZipFile(ctx, localPath, workerID)
+			if err != nil {
+				return nil, fmt.Errorf("读取本地代码包文件失败: %w", err)
+			}
+			return &FunctionCodeInfo{
+				ZipFile: zipBase64,
+				Runtime: pkg.Runtime,
+			}, nil
+		}
+
+		// 本地文件不存在，使用fallback ZIP文件
+		log.WarnContextf(ctx, "[NodeCreationWorker-%d] 本地文件不存在: %s，使用fallback ZIP文件", workerID, localPath)
+		return &FunctionCodeInfo{
+			ZipFile: fallbackZipBase64,
+			Runtime: pkg.Runtime,
+		}, nil
+	}
+
+	// 如果既不是COS存储也不是本地存储，返回错误
+	return nil, fmt.Errorf("代码包存储配置无效：COSBucket=%s, CloudAccountID=%s", pkg.COSBucket, pkg.CloudAccountID)
 }

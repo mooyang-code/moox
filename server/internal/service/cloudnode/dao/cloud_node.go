@@ -86,7 +86,6 @@ func (d *scfNodeDaoImpl) UpdateSCFNode(ctx context.Context, node *model.SCFNode)
 			"c_node_type":           node.NodeType,
 			"c_region":              node.Region,
 			"c_ip_address":          node.IPAddress,
-			"c_version":             node.Version,
 			"c_supported_collectors": node.SupportedCollectors,
 			"c_capacity":            node.Capacity,
 			"c_current_load":        node.CurrentLoad,

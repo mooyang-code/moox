@@ -36,6 +36,9 @@ type CreateFunctionRequest struct {
 	Namespace    string            // 命名空间
 	Description  string            // 函数描述
 	ZipFile      string            // 代码包（base64编码）
+	COSBucket    string            // COS桶名，优先使用COS部署
+	COSPath      string            // COS对象路径，优先使用COS部署
+	COSRegion    string            // COS区域，COS部署时必需
 	MemorySize   int64             // 内存大小（MB）
 	Timeout      int64             // 超时时间（秒）
 	Environment  map[string]string // 环境变量
@@ -46,6 +49,9 @@ type UpdateFunctionRequest struct {
 	FunctionName string            // 函数名称
 	Namespace    string            // 命名空间
 	ZipFile      string            // 代码包（base64编码）
+	COSBucket    string            // COS桶名，用于COS方式更新
+	COSPath      string            // COS对象路径，用于COS方式更新
+	COSRegion    string            // COS区域，COS更新时必需
 	Description  *string           // 函数描述
 	MemorySize   *int64            // 内存大小（MB）
 	Timeout      *int64            // 超时时间（秒）

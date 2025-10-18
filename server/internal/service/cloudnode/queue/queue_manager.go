@@ -54,9 +54,15 @@ func (m *QueueManager) GetFunctionUpdateQueue() *FunctionUpdateQueue {
 
 // EnqueueNodeCreation 将节点创建消息加入队列（统一带任务ID，可为空）
 func (m *QueueManager) EnqueueNodeCreation(node *model.SCFNode, taskID, itemID string) error {
+	var packageID int64
+	if node.PackageID != nil {
+		packageID = int64(*node.PackageID)
+	}
+	
 	msg := NodeCreationMessage{
 		NodeID:         node.NodeID,
 		CloudAccountID: node.CloudAccountID,
+		PackageID:      packageID,
 		Namespace:      node.Namespace,
 		Region:         node.Region,
 		NodeType:       node.NodeType,

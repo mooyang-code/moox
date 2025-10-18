@@ -160,9 +160,9 @@ func (w *NodeDeletionWorker) prepareCloudProvider(ctx context.Context, cloudAcco
 	log.InfoContextf(ctx, "[NodeDeletionWorker-%d] 使用云账户: ID=%s, Provider=%s",
 		workerID, account.AccountID, account.Provider)
 
-	// 创建云厂商配置
-	config := &provider.CloudConfig{
-		Provider:  provider.ProviderType(account.Provider),
+	// 创建云平台配置
+	config := &provider.Config{
+		Provider:  provider.Provider(account.Provider),
 		SecretID:  account.SecretID,
 		SecretKey: account.SecretKey,
 		ExtraConfig: map[string]interface{}{
@@ -170,11 +170,11 @@ func (w *NodeDeletionWorker) prepareCloudProvider(ctx context.Context, cloudAcco
 		},
 	}
 
-	// 获取云厂商实例
-	cloudProvider, err := provider.NewCloudProvider(config)
+	// 获取云平台实例
+	cloudProvider, err := provider.New(config)
 	if err != nil {
-		log.ErrorContextf(ctx, "[NodeDeletionWorker-%d] 获取云厂商实例失败: %v", workerID, err)
-		return nil, fmt.Errorf("获取云厂商实例失败: %w", err)
+		log.ErrorContextf(ctx, "[NodeDeletionWorker-%d] 获取云平台实例失败: %v", workerID, err)
+		return nil, fmt.Errorf("获取云平台实例失败: %w", err)
 	}
 
 	return cloudProvider, nil

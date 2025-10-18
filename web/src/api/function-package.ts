@@ -9,12 +9,33 @@ export interface FunctionPackage {
   runtime: string;
   package_type: string;
   package_type_label: string;
+  
+  // 文件信息
+  original_filename?: string;
   file_size: number;
+  file_md5: string;
+  
+  // COS存储信息
+  cloud_account_id: string;
+  cos_region: string;
+  cos_bucket: string;
+  cos_path: string;
+  cos_url?: string;
+  
+  // 状态管理
   status: number;
   status_label: string;
+  upload_progress?: number;
+  error_message?: string;
+  
+  // 使用统计
   last_deploy_time?: string;
+  
+  // 审计字段
   created_by: string;
+  invalid?: number;
   created_at: string;
+  updated_at?: string;
 }
 
 // 上传代码包请求

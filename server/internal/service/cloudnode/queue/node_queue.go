@@ -19,6 +19,7 @@ var (
 type NodeCreationMessage struct {
 	NodeID         string           `json:"node_id"`
 	CloudAccountID string           `json:"cloud_account_id"`
+	PackageID      int64            `json:"package_id"`      // 代码包ID
 	Namespace      string           `json:"namespace"`
 	Region         string           `json:"region"`
 	NodeType       string           `json:"node_type"`
@@ -59,6 +60,7 @@ type NodeDeploymentMessage struct {
 	CloudAccountID string    `json:"cloud_account_id"`
 	Namespace      string    `json:"namespace"`
 	Region         string    `json:"region"`
+	PackageID      int64     `json:"package_id,omitempty"`     // 代码包ID，优先使用
 	ZipFileBase64  string    `json:"zip_file_base64"`
 	FileName       string    `json:"file_name"`
 	TaskID         string    `json:"task_id,omitempty"` // 关联的异步任务ID

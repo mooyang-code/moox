@@ -5,13 +5,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
+	"io/ioutil"
+	"os"
 
 	asynctasklogic "github.com/mooyang-code/moox/server/internal/service/asynctask/logic"
 	asynctaskmodel "github.com/mooyang-code/moox/server/internal/service/asynctask/model"
 	cloudnodelogic "github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/constants"
 	packagemgrlogic "github.com/mooyang-code/moox/server/internal/service/packagemgr/logic"
+	packagemgrmodel "github.com/mooyang-code/moox/server/internal/service/packagemgr/model"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -25,6 +27,15 @@ type NodeDeployInfo struct {
 // BatchDeployNodeRequest 批量部署节点请求
 type BatchDeployNodeRequest struct {
 	Nodes []NodeDeployInfo `json:"nodes"` // 节点部署信息列表
+}
+
+// FunctionCodeInfo 函数代码信息
+type FunctionCodeInfo struct {
+	ZipFile   string // base64编码的ZIP文件（用于本地上传）
+	COSBucket string // COS桶名（用于COS部署）
+	COSPath   string // COS路径（用于COS部署）
+	COSRegion string // COS区域（用于COS部署）
+	Runtime   string // 运行时环境
 }
 
 // BatchDeployNodeExecutor 批量部署节点执行器
@@ -125,7 +136,7 @@ func (e *BatchDeployNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 		}
 
 		// 从包管理系统获取代码包信息
-		pkg, err := e.packageService.GetPackageDetail(ctx, node.PackageID)
+		pkg, err := e.packageService.GetPackageDetailModel(ctx, node.PackageID)
 		if err != nil {
 			failedToEnqueueCount++
 			errorMsg := fmt.Sprintf("获取代码包信息失败: %v", err)
@@ -136,27 +147,23 @@ func (e *BatchDeployNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 			continue
 		}
 
-		// 生成下载URL获取文件内容
-		downloadURL, err := e.packageService.GetPackageDownloadURL(ctx, node.PackageID)
+		// 根据PackageID准备函数代码
+		codeInfo, err := e.prepareFunctionCode(ctx, pkg)
 		if err != nil {
 			failedToEnqueueCount++
-			errorMsg := fmt.Sprintf("生成下载链接失败: %v", err)
-			log.ErrorContextf(ctx, "Failed to get download URL for package %d: %v", node.PackageID, err)
+			errorMsg := fmt.Sprintf("准备函数代码失败: %v", err)
+			log.ErrorContextf(ctx, "Failed to prepare function code for %s: %v", node.NodeID, err)
 			
 			e.asyncTaskService.UpdateTaskDetailStatus(ctx, task.TaskID, node.NodeID,
 				asynctaskmodel.TaskDetailStatusFailed, errorMsg)
 			continue
 		}
 
-		// 构造文件名
-		fileName := fmt.Sprintf("%s-%s.zip", pkg.PackageName, pkg.Version)
-
-		// 从COS下载文件并转换为base64
-		zipFileBase64, err := e.downloadFileAsBase64(ctx, downloadURL)
-		if err != nil {
+		// 验证代码信息是否完整
+		if codeInfo.ZipFile == "" && (codeInfo.COSBucket == "" || codeInfo.COSPath == "") {
 			failedToEnqueueCount++
-			errorMsg := fmt.Sprintf("下载代码包文件失败: %v", err)
-			log.ErrorContextf(ctx, "Failed to download package file for %s: %v", node.NodeID, err)
+			errorMsg := "函数代码信息不完整"
+			log.ErrorContextf(ctx, "Function code info incomplete for %s", node.NodeID)
 			
 			e.asyncTaskService.UpdateTaskDetailStatus(ctx, task.TaskID, node.NodeID,
 				asynctaskmodel.TaskDetailStatusFailed, errorMsg)
@@ -164,7 +171,7 @@ func (e *BatchDeployNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 		}
 
 		// 将节点部署任务加入队列（实际部署将由Worker异步执行）
-		err = e.scfNodeService.DeployToNode(ctx, node.NodeID, zipFileBase64, fileName, task.TaskID)
+		err = e.scfNodeService.DeployToNodeWithPackage(ctx, node.NodeID, node.PackageID, task.TaskID)
 		if err != nil {
 			failedToEnqueueCount++
 			errorMsg := fmt.Sprintf("将节点加入部署队列失败: %v", err)
@@ -177,6 +184,10 @@ func (e *BatchDeployNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 			enqueuedCount++
 			log.InfoContextf(ctx, "Successfully enqueued node %s for deployment; taskID:%s, package:%s-%s", 
 				node.NodeID, task.TaskID, pkg.PackageName, pkg.Version)
+			
+			// 更新节点记录中的package_id字段
+			e.updateNodePackageID(ctx, node.NodeID, node.PackageID)
+			
 			// 注意：这里不再立即更新为成功状态，保持处理中状态
 			// 实际的成功/失败状态将由NodeDeploymentWorker在部署完成后更新
 		}
@@ -204,34 +215,68 @@ func (e *BatchDeployNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 	return nil
 }
 
-// downloadFileAsBase64 从URL下载文件并转换为base64编码
-func (e *BatchDeployNodeExecutor) downloadFileAsBase64(ctx context.Context, url string) (string, error) {
-	// 创建HTTP请求
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// updateNodePackageID 更新节点记录中的package_id字段
+func (e *BatchDeployNodeExecutor) updateNodePackageID(ctx context.Context, nodeID string, packageID int64) {
+	// 更新节点记录中的package_id
+	err := e.db.Table("t_cloud_nodes").
+		Where("c_node_id = ?", nodeID).
+		Update("c_package_id", packageID).Error
 	if err != nil {
-		return "", fmt.Errorf("创建下载请求失败: %w", err)
+		log.ErrorContextf(ctx, "Failed to update package_id for node %s: %v", nodeID, err)
+	} else {
+		log.InfoContextf(ctx, "Updated package_id %d for node %s", packageID, nodeID)
+	}
+}
+
+// prepareFunctionCode 根据PackageID准备函数代码
+func (e *BatchDeployNodeExecutor) prepareFunctionCode(ctx context.Context, pkg *packagemgrmodel.FunctionPackage) (*FunctionCodeInfo, error) {
+	if pkg.Status != packagemgrmodel.PackageStatusAvailable {
+		return nil, fmt.Errorf("代码包状态不可用: %d", pkg.Status)
 	}
 
-	// 发送请求
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	// 判断是否为COS存储（COSBucket不是"local"且有完整的COS信息）
+	if pkg.COSBucket != "local" && pkg.CloudAccountID != "" && pkg.COSBucket != "" && pkg.COSPath != "" && pkg.COSRegion != "" {
+		log.InfoContextf(ctx, "[BatchDeployExecutor] 使用COS部署: bucket=%s, path=%s, region=%s, runtime=%s",
+			pkg.COSBucket, pkg.COSPath, pkg.COSRegion, pkg.Runtime)
+		return &FunctionCodeInfo{
+			COSBucket: pkg.COSBucket,
+			COSPath:   pkg.COSPath,
+			COSRegion: pkg.COSRegion,
+			Runtime:   pkg.Runtime,
+		}, nil
+	}
+
+	// 使用本地存储（COSBucket标记为"local"）
+	if pkg.COSBucket == "local" {
+		localPath := constants.GetPackageFilePath(pkg.ID, pkg.OriginalFilename)
+
+		// 检查本地文件是否存在
+		if _, err := os.Stat(localPath); err == nil {
+			log.InfoContextf(ctx, "[BatchDeployExecutor] 使用本地存储文件: %s, runtime=%s", localPath, pkg.Runtime)
+			zipBase64, err := e.prepareZipFile(ctx, localPath)
+			if err != nil {
+				return nil, fmt.Errorf("读取本地代码包文件失败: %w", err)
+			}
+			return &FunctionCodeInfo{
+				ZipFile: zipBase64,
+				Runtime: pkg.Runtime,
+			}, nil
+		}
+
+		// 本地文件不存在
+		return nil, fmt.Errorf("本地文件不存在: %s", localPath)
+	}
+
+	// 如果既不是COS存储也不是本地存储，返回错误
+	return nil, fmt.Errorf("代码包存储配置无效：COSBucket=%s, CloudAccountID=%s", pkg.COSBucket, pkg.CloudAccountID)
+}
+
+// prepareZipFile 读取并编码ZIP文件
+func (e *BatchDeployNodeExecutor) prepareZipFile(ctx context.Context, zipFilePath string) (string, error) {
+	zipData, err := ioutil.ReadFile(zipFilePath)
 	if err != nil {
-		return "", fmt.Errorf("下载文件失败: %w", err)
+		log.ErrorContextf(ctx, "[BatchDeployExecutor] 读取zip文件失败: %v", err)
+		return "", fmt.Errorf("读取zip文件失败: %w", err)
 	}
-	defer resp.Body.Close()
-
-	// 检查响应状态
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("下载文件失败，状态码: %d", resp.StatusCode)
-	}
-
-	// 读取文件内容
-	fileContent, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("读取文件内容失败: %w", err)
-	}
-
-	// 转换为base64
-	base64Content := base64.StdEncoding.EncodeToString(fileContent)
-	return base64Content, nil
+	return base64.StdEncoding.EncodeToString(zipData), nil
 }
