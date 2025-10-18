@@ -8,12 +8,13 @@ import (
 	"io/ioutil"
 	"os"
 
-	asynctasklogic "github.com/mooyang-code/moox/server/internal/service/asynctask/logic"
+	asynctask "github.com/mooyang-code/moox/server/internal/service/asynctask"
 	asynctaskmodel "github.com/mooyang-code/moox/server/internal/service/asynctask/model"
-	cloudnodelogic "github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/constants"
+	cloudnodelogic "github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	packagemgrlogic "github.com/mooyang-code/moox/server/internal/service/packagemgr/logic"
 	packagemgrmodel "github.com/mooyang-code/moox/server/internal/service/packagemgr/model"
+
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -40,14 +41,14 @@ type FunctionCodeInfo struct {
 
 // BatchDeployNodeExecutor 批量部署节点执行器
 type BatchDeployNodeExecutor struct {
-	scfNodeService     cloudnodelogic.SCFNodeService
-	asyncTaskService   asynctasklogic.AsyncTaskService
-	packageService     *packagemgrlogic.FunctionPackageService
-	db                 *gorm.DB
+	scfNodeService   cloudnodelogic.SCFNodeService
+	asyncTaskService asynctask.Service
+	packageService   *packagemgrlogic.FunctionPackageService
+	db               *gorm.DB
 }
 
 // NewBatchDeployNodeExecutor 创建批量部署节点执行器
-func NewBatchDeployNodeExecutor(db *gorm.DB, scfNodeService cloudnodelogic.SCFNodeService, asyncTaskService asynctasklogic.AsyncTaskService, packageService *packagemgrlogic.FunctionPackageService) *BatchDeployNodeExecutor {
+func NewBatchDeployNodeExecutor(db *gorm.DB, scfNodeService cloudnodelogic.SCFNodeService, asyncTaskService asynctask.Service, packageService *packagemgrlogic.FunctionPackageService) *BatchDeployNodeExecutor {
 	return &BatchDeployNodeExecutor{
 		scfNodeService:   scfNodeService,
 		asyncTaskService: asyncTaskService,
@@ -64,7 +65,7 @@ func (e *BatchDeployNodeExecutor) GetTaskType() string {
 // ValidateRequest 验证任务请求
 func (e *BatchDeployNodeExecutor) ValidateRequest(taskData string) error {
 	log.Infof("BatchDeployNodeExecutor.ValidateRequest - taskData: %s", taskData)
-	
+
 	var request BatchDeployNodeRequest
 	if err := json.Unmarshal([]byte(taskData), &request); err != nil {
 		log.Errorf("Failed to unmarshal request: %v, taskData: %s", err, taskData)
@@ -72,7 +73,7 @@ func (e *BatchDeployNodeExecutor) ValidateRequest(taskData string) error {
 	}
 
 	log.Infof("Parsed request - nodes count: %d", len(request.Nodes))
-	
+
 	if len(request.Nodes) == 0 {
 		return fmt.Errorf("no nodes to deploy")
 	}
@@ -102,10 +103,10 @@ func (e *BatchDeployNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 		return fmt.Errorf(errorMsg)
 	}
 
-	// 创建任务详情  
-	var taskItems []asynctasklogic.TaskItem
+	// 创建任务详情
+	var taskItems []asynctask.TaskItem
 	for _, node := range request.Nodes {
-		taskItems = append(taskItems, asynctasklogic.TaskItem{
+		taskItems = append(taskItems, asynctask.TaskItem{
 			ItemID:   node.NodeID,
 			ItemName: fmt.Sprintf("Deploy Package %d to Node %s", node.PackageID, node.NodeID),
 		})
@@ -129,7 +130,7 @@ func (e *BatchDeployNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 			failedToEnqueueCount++
 			errorMsg := "包管理服务未初始化，CloudProvider未设置或不支持COS功能"
 			log.ErrorContextf(ctx, "Package service not available for node %s", node.NodeID)
-			
+
 			e.asyncTaskService.UpdateTaskDetailStatus(ctx, task.TaskID, node.NodeID,
 				asynctaskmodel.TaskDetailStatusFailed, errorMsg)
 			continue
@@ -141,7 +142,7 @@ func (e *BatchDeployNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 			failedToEnqueueCount++
 			errorMsg := fmt.Sprintf("获取代码包信息失败: %v", err)
 			log.ErrorContextf(ctx, "Failed to get package %d for node %s: %v", node.PackageID, node.NodeID, err)
-			
+
 			e.asyncTaskService.UpdateTaskDetailStatus(ctx, task.TaskID, node.NodeID,
 				asynctaskmodel.TaskDetailStatusFailed, errorMsg)
 			continue
@@ -153,7 +154,7 @@ func (e *BatchDeployNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 			failedToEnqueueCount++
 			errorMsg := fmt.Sprintf("准备函数代码失败: %v", err)
 			log.ErrorContextf(ctx, "Failed to prepare function code for %s: %v", node.NodeID, err)
-			
+
 			e.asyncTaskService.UpdateTaskDetailStatus(ctx, task.TaskID, node.NodeID,
 				asynctaskmodel.TaskDetailStatusFailed, errorMsg)
 			continue
@@ -164,7 +165,7 @@ func (e *BatchDeployNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 			failedToEnqueueCount++
 			errorMsg := "函数代码信息不完整"
 			log.ErrorContextf(ctx, "Function code info incomplete for %s", node.NodeID)
-			
+
 			e.asyncTaskService.UpdateTaskDetailStatus(ctx, task.TaskID, node.NodeID,
 				asynctaskmodel.TaskDetailStatusFailed, errorMsg)
 			continue
@@ -182,12 +183,12 @@ func (e *BatchDeployNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 				asynctaskmodel.TaskDetailStatusFailed, errorMsg)
 		} else {
 			enqueuedCount++
-			log.InfoContextf(ctx, "Successfully enqueued node %s for deployment; taskID:%s, package:%s-%s", 
+			log.InfoContextf(ctx, "Successfully enqueued node %s for deployment; taskID:%s, package:%s-%s",
 				node.NodeID, task.TaskID, pkg.PackageName, pkg.Version)
-			
+
 			// 更新节点记录中的package_id字段
 			e.updateNodePackageID(ctx, node.NodeID, node.PackageID)
-			
+
 			// 注意：这里不再立即更新为成功状态，保持处理中状态
 			// 实际的成功/失败状态将由NodeDeploymentWorker在部署完成后更新
 		}

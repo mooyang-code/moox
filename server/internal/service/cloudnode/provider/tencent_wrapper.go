@@ -46,6 +46,7 @@ type TencentWrapper struct {
 // init 注册腾讯云Provider
 func init() {
 	RegisterProvider(Tencent, NewTencentWrapper)
+	RegisterCOSProvider(Tencent, NewTencentWrapperWithCOS)
 }
 
 // NewTencentWrapperWithCOS 创建带COS功能的腾讯云Provider
@@ -370,4 +371,9 @@ func (p *TencentWrapper) DeleteCOSObject(ctx context.Context, bucket, key string
 // GetCOSObjectURL 获取COS对象的访问URL
 func (p *TencentWrapper) GetCOSObjectURL(ctx context.Context, bucket, key string, expire time.Duration) (string, error) {
 	return p.provider.GetCOSObjectURL(ctx, bucket, key, expire)
+}
+
+// DownloadCOSToFile 从COS下载文件到本地路径
+func (p *TencentWrapper) DownloadCOSToFile(ctx context.Context, key string, localPath string) error {
+	return p.provider.DownloadCOSToFile(ctx, key, localPath)
 }

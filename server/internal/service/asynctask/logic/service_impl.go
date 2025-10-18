@@ -5,75 +5,33 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/mooyang-code/moox/server/internal/service/asynctask"
 	"github.com/mooyang-code/moox/server/internal/service/asynctask/dao"
 	"github.com/mooyang-code/moox/server/internal/service/asynctask/model"
+
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// AsyncTaskService 异步任务服务接口
-type AsyncTaskService interface {
-	// CreateAndExecuteTask 创建并执行任务
-	CreateAndExecuteTask(ctx context.Context, taskID, taskType string, totalCount int, requestParams interface{}) error
-	// GetTaskStatus 查询任务状态
-	GetTaskStatus(ctx context.Context, taskID string) (*model.AsyncTask, error)
-	// GetTask 获取任务详情
-	GetTask(ctx context.Context, taskID string) (*model.AsyncTask, error)
-	// GetTaskDetails 获取任务详情列表（支持所有详情）
-	GetTaskDetails(ctx context.Context, taskID string) ([]*model.AsyncTaskDetail, error)
-	// GetTaskDetailsByStatus 根据状态获取任务详情列表
-	GetTaskDetailsByStatus(ctx context.Context, taskID string, status int) ([]*model.AsyncTaskDetail, error)
-	// GetTaskDetailsSummary 获取任务详情统计
-	GetTaskDetailsSummary(ctx context.Context, taskID string) (*TaskDetailsSummary, error)
-	// GetFailedTaskDetails 获取失败的任务详情
-	GetFailedTaskDetails(ctx context.Context, taskID string) ([]*model.AsyncTaskDetail, error)
-	// CancelTask 取消任务
-	CancelTask(ctx context.Context, taskID string) error
-	// UpdateTaskProgress 更新任务进度
-	UpdateTaskProgress(ctx context.Context, taskID string, successCount, failedCount int) error
-	// UpdateTaskStatus 更新任务状态
-	UpdateTaskStatus(ctx context.Context, taskID string, status int, errorMessage string) error
-	// CompleteTask 完成任务
-	CompleteTask(ctx context.Context, taskID string, status int, resultData interface{}, errorMessage string) error
-	// UpdateTaskDetailStatus 更新任务详情状态
-	UpdateTaskDetailStatus(ctx context.Context, taskID, itemID string, status int, errorMessage string) error
-	// BatchCreateTaskDetails 批量创建任务详情
-	BatchCreateTaskDetails(ctx context.Context, taskID string, items []TaskItem) error
-	// RegisterExecutor 注册任务执行器
-	RegisterExecutor(taskType string, executor TaskExecutor)
-}
-
-// TaskDetailsSummary 任务详情统计
-type TaskDetailsSummary struct {
-	SuccessCount int
-	FailedCount  int
-}
-
-// TaskItem 任务项
-type TaskItem struct {
-	ItemID   string
-	ItemName string
-}
-
 type asyncTaskServiceImpl struct {
 	taskDAO       dao.AsyncTaskDAO
 	taskDetailDAO dao.AsyncTaskDetailDAO
-	executors     map[string]TaskExecutor
+	executors     map[string]asynctask.TaskExecutor
 	db            *gorm.DB
 }
 
-// NewAsyncTaskService 创建新的异步任务服务实例
-func NewAsyncTaskService(db *gorm.DB) AsyncTaskService {
+// NewService 创建新的异步任务服务实例
+func NewService(db *gorm.DB) asynctask.Service {
 	return &asyncTaskServiceImpl{
 		taskDAO:       dao.NewAsyncTaskDAO(db),
 		taskDetailDAO: dao.NewAsyncTaskDetailDAO(db),
-		executors:     make(map[string]TaskExecutor),
+		executors:     make(map[string]asynctask.TaskExecutor),
 		db:            db,
 	}
 }
 
 // RegisterExecutor 注册任务执行器
-func (s *asyncTaskServiceImpl) RegisterExecutor(taskType string, executor TaskExecutor) {
+func (s *asyncTaskServiceImpl) RegisterExecutor(taskType string, executor asynctask.TaskExecutor) {
 	s.executors[taskType] = executor
 }
 
@@ -156,7 +114,7 @@ func (s *asyncTaskServiceImpl) GetTaskDetailsByStatus(ctx context.Context, taskI
 }
 
 // GetTaskDetailsSummary 获取任务详情统计
-func (s *asyncTaskServiceImpl) GetTaskDetailsSummary(ctx context.Context, taskID string) (*TaskDetailsSummary, error) {
+func (s *asyncTaskServiceImpl) GetTaskDetailsSummary(ctx context.Context, taskID string) (*asynctask.TaskDetailsSummary, error) {
 	successCount, err := s.taskDetailDAO.CountTaskDetailsByStatus(ctx, taskID, model.TaskDetailStatusSuccess)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count success details: %w", err)
@@ -167,7 +125,7 @@ func (s *asyncTaskServiceImpl) GetTaskDetailsSummary(ctx context.Context, taskID
 		return nil, fmt.Errorf("failed to count failed details: %w", err)
 	}
 
-	return &TaskDetailsSummary{
+	return &asynctask.TaskDetailsSummary{
 		SuccessCount: int(successCount),
 		FailedCount:  int(failedCount),
 	}, nil
@@ -269,7 +227,7 @@ func (s *asyncTaskServiceImpl) UpdateTaskDetailStatus(ctx context.Context, taskI
 }
 
 // BatchCreateTaskDetails 批量创建任务详情
-func (s *asyncTaskServiceImpl) BatchCreateTaskDetails(ctx context.Context, taskID string, items []TaskItem) error {
+func (s *asyncTaskServiceImpl) BatchCreateTaskDetails(ctx context.Context, taskID string, items []asynctask.TaskItem) error {
 	if len(items) == 0 {
 		return nil
 	}

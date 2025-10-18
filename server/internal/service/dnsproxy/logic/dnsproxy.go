@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/server/internal/service/dnsproxy/config"
+
 	"github.com/patrickmn/go-cache"
 	"trpc.group/trpc-go/trpc-go/log"
 )

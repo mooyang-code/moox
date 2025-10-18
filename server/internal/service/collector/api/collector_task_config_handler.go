@@ -3,9 +3,11 @@ package api
 import (
 	"net/http"
 
-	"github.com/gin-gonic/gin"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	"github.com/mooyang-code/moox/server/internal/service/collector/logic"
 	"github.com/mooyang-code/moox/server/internal/service/collector/model"
+
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -15,9 +17,9 @@ type CollectorTaskConfigHandler struct {
 }
 
 // NewCollectorTaskConfigHandler 创建采集任务配置处理器
-func NewCollectorTaskConfigHandler(db *gorm.DB) *CollectorTaskConfigHandler {
+func NewCollectorTaskConfigHandler(db *gorm.DB, getCloudProvider func(string) provider.Client) *CollectorTaskConfigHandler {
 	return &CollectorTaskConfigHandler{
-		service: logic.NewCollectorTaskConfigService(db),
+		service: logic.NewCollectorTaskConfigService(db, getCloudProvider),
 	}
 }
 
@@ -36,7 +38,7 @@ func (h *CollectorTaskConfigHandler) GetTaskConfigList(c *gin.Context) {
 
 	// 计算总数
 	total := int64(len(configs))
-	
+
 	// 使用新的分页列表响应格式
 	PaginatedListResponse(c, "查询成功", configs, total)
 }

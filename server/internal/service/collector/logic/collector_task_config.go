@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	"github.com/mooyang-code/moox/server/internal/service/collector/dao"
 	"github.com/mooyang-code/moox/server/internal/service/collector/model"
+
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -39,26 +40,18 @@ type CollectorTaskConfigService interface {
 }
 
 type collectorTaskConfigServiceImpl struct {
-	taskConfigDAO dao.CollectorTaskConfigDAO
-	nodeDAO       cloudnodedao.SCFNodeDAO
-	cloudProvider provider.Client
+	taskConfigDAO    dao.CollectorTaskConfigDAO
+	nodeDAO          cloudnodedao.SCFNodeDAO
+	getCloudProvider func(accountID string) provider.Client // 根据账户ID获取云客户端
 }
 
 // NewCollectorTaskConfigService 创建采集任务配置服务实例
-func NewCollectorTaskConfigService(db *gorm.DB) CollectorTaskConfigService {
+// getCloudProvider: 根据账户ID获取对应的云客户端的回调函数
+func NewCollectorTaskConfigService(db *gorm.DB, getCloudProvider func(string) provider.Client) CollectorTaskConfigService {
 	return &collectorTaskConfigServiceImpl{
-		taskConfigDAO: dao.NewCollectorTaskConfigDAO(db),
-		nodeDAO:       cloudnodedao.NewSCFNodeDAO(db),
-		cloudProvider: nil, // 暂时设置为nil，后续可以通过SetCloudProvider方法设置
-	}
-}
-
-// NewCollectorTaskConfigServiceWithProvider 创建带云提供商的采集任务配置服务实例
-func NewCollectorTaskConfigServiceWithProvider(db *gorm.DB, provider provider.Client) CollectorTaskConfigService {
-	return &collectorTaskConfigServiceImpl{
-		taskConfigDAO: dao.NewCollectorTaskConfigDAO(db),
-		nodeDAO:       cloudnodedao.NewSCFNodeDAO(db),
-		cloudProvider: provider,
+		taskConfigDAO:    dao.NewCollectorTaskConfigDAO(db),
+		nodeDAO:          cloudnodedao.NewSCFNodeDAO(db),
+		getCloudProvider: getCloudProvider,
 	}
 }
 
@@ -455,12 +448,13 @@ func (s *collectorTaskConfigServiceImpl) SyncTaskConfigToNode(ctx context.Contex
 		return fmt.Errorf("node not found: %s", nodeID)
 	}
 
-	// 检查云提供商是否配置
-	if s.cloudProvider == nil {
-		return fmt.Errorf("cloud provider not configured")
+	// 根据节点的云账户ID获取对应的云客户端
+	cloudProvider := s.getCloudProvider(node.CloudAccountID)
+	if cloudProvider == nil {
+		return fmt.Errorf("cloud provider not found for account: %s", node.CloudAccountID)
 	}
 
-	log.InfoContextf(ctx, "Syncing task config %s to node %s", taskID, nodeID)
+	log.InfoContextf(ctx, "Syncing task config %s to node %s (account: %s)", taskID, nodeID, node.CloudAccountID)
 
 	// 构建导入事件
 	event := &TaskConfigImportEvent{
@@ -476,7 +470,7 @@ func (s *collectorTaskConfigServiceImpl) SyncTaskConfigToNode(ctx context.Contex
 		InvokeType:   provider.InvokeTypeSync, // 同步调用
 	}
 
-	resp, err := s.cloudProvider.InvokeFunction(ctx, invokeReq)
+	resp, err := cloudProvider.InvokeFunction(ctx, invokeReq)
 	if err != nil {
 		return fmt.Errorf("failed to invoke cloud function: %w", err)
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"time"
 
@@ -16,14 +15,14 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/queue"
 	packagemgrmodel "github.com/mooyang-code/moox/server/internal/service/packagemgr/model"
-	
+
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // NodeDeploymentWorker 处理异步云函数部署的工作器
 type NodeDeploymentWorker struct {
-	queueManager        *queue.QueueManager
+	queueManager        *queue.Manager
 	cloudAccountService CloudAccountService
 	packageService      PackageService
 	asyncTaskService    AsyncTaskService
@@ -33,7 +32,8 @@ type NodeDeploymentWorker struct {
 }
 
 // NewNodeDeploymentWorker 创建新的节点部署工作器
-func NewNodeDeploymentWorker(db *gorm.DB, queueManager *queue.QueueManager, cloudAccountService CloudAccountService, packageService PackageService, asyncTaskService AsyncTaskService) *NodeDeploymentWorker {
+func NewNodeDeploymentWorker(db *gorm.DB, queueManager *queue.Manager, cloudAccountService CloudAccountService,
+	packageService PackageService, asyncTaskService AsyncTaskService) *NodeDeploymentWorker {
 	return &NodeDeploymentWorker{
 		queueManager:        queueManager,
 		cloudAccountService: cloudAccountService,
@@ -166,7 +166,7 @@ func (w *NodeDeploymentWorker) prepareCloudService(ctx context.Context, cloudAcc
 
 	// 创建云平台配置
 	config := &provider.Config{
-		Provider:  provider.Provider(cloudAccount.Provider),
+		Provider:  provider.CloudPlatform(cloudAccount.Provider),
 		SecretID:  cloudAccount.SecretID,
 		SecretKey: cloudAccount.SecretKey,
 		ExtraConfig: map[string]interface{}{
@@ -259,7 +259,7 @@ func (w *NodeDeploymentWorker) prepareFunctionCode(ctx context.Context, packageI
 
 // prepareZipFile 读取并编码ZIP文件
 func (w *NodeDeploymentWorker) prepareZipFile(ctx context.Context, zipFilePath string, workerID int) (string, error) {
-	zipData, err := ioutil.ReadFile(zipFilePath)
+	zipData, err := os.ReadFile(zipFilePath)
 	if err != nil {
 		log.ErrorContextf(ctx, "[NodeDeploymentWorker-%d] 读取zip文件失败: %v", workerID, err)
 		return "", fmt.Errorf("读取zip文件失败: %w", err)
@@ -268,7 +268,8 @@ func (w *NodeDeploymentWorker) prepareZipFile(ctx context.Context, zipFilePath s
 }
 
 // validateAndGetNode 验证并获取节点信息
-func (w *NodeDeploymentWorker) validateAndGetNode(ctx context.Context, msg *queue.NodeDeploymentMessage, workerID int) (*model.SCFNode, error) {
+func (w *NodeDeploymentWorker) validateAndGetNode(ctx context.Context,
+	msg *queue.NodeDeploymentMessage, workerID int) (*model.SCFNode, error) {
 	// 获取节点信息
 	node, err := w.nodeDAO.GetSCFNode(ctx, msg.NodeID)
 	if err != nil {
@@ -290,7 +291,8 @@ func (w *NodeDeploymentWorker) validateAndGetNode(ctx context.Context, msg *queu
 }
 
 // buildUpdateRequest 构建函数更新请求
-func (w *NodeDeploymentWorker) buildUpdateRequest(ctx context.Context, node *model.SCFNode, codeInfo *FunctionCodeInfo, workerID int) (*provider.UpdateFunctionRequest, error) {
+func (w *NodeDeploymentWorker) buildUpdateRequest(ctx context.Context,
+	node *model.SCFNode, codeInfo *FunctionCodeInfo, workerID int) (*provider.UpdateFunctionRequest, error) {
 	updateReq := &provider.UpdateFunctionRequest{
 		FunctionName: node.NodeID,
 		Namespace:    node.Namespace,
@@ -315,7 +317,8 @@ func (w *NodeDeploymentWorker) buildUpdateRequest(ctx context.Context, node *mod
 }
 
 // deployFunction 执行云函数部署
-func (w *NodeDeploymentWorker) deployFunction(ctx context.Context, cloudProvider provider.Client, node *model.SCFNode, codeInfo *FunctionCodeInfo, workerID int) error {
+func (w *NodeDeploymentWorker) deployFunction(ctx context.Context,
+	cloudProvider provider.Client, node *model.SCFNode, codeInfo *FunctionCodeInfo, workerID int) error {
 	log.InfoContextf(ctx, "[NodeDeploymentWorker-%d] 开始更新云函数代码: FunctionName=%s, Namespace=%s",
 		workerID, node.NodeID, node.Namespace)
 
@@ -336,7 +339,8 @@ func (w *NodeDeploymentWorker) deployFunction(ctx context.Context, cloudProvider
 }
 
 // updateNodeMetadata 更新节点元数据
-func (w *NodeDeploymentWorker) updateNodeMetadata(ctx context.Context, node *model.SCFNode, msg *queue.NodeDeploymentMessage, workerID int) error {
+func (w *NodeDeploymentWorker) updateNodeMetadata(ctx context.Context,
+	node *model.SCFNode, msg *queue.NodeDeploymentMessage, workerID int) error {
 	now := time.Now()
 	node.ModifyTime = now
 

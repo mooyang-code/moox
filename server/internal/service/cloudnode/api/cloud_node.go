@@ -9,7 +9,10 @@ import (
 	"github.com/mooyang-code/moox/server/internal/common"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
+	packagemgrDao "github.com/mooyang-code/moox/server/internal/service/packagemgr/dao"
+
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // SCFNodeHandler SCF节点处理器
@@ -19,7 +22,8 @@ type SCFNodeHandler struct {
 
 // CloudNodeHandler 云节点处理器（用于路由注册）
 type CloudNodeHandler struct {
-	service logic.SCFNodeService
+	service    logic.SCFNodeService
+	packageDAO packagemgrDao.FunctionPackageDAO
 }
 
 // NewSCFNodeHandler 创建SCF节点处理器
@@ -32,7 +36,8 @@ func NewSCFNodeHandler(db *gorm.DB) SchemaHandler {
 // NewCloudNodeHandler 创建云节点处理器（别名）
 func NewCloudNodeHandler(db *gorm.DB) *CloudNodeHandler {
 	return &CloudNodeHandler{
-		service: logic.NewSCFNodeService(db),
+		service:    logic.NewSCFNodeService(db),
+		packageDAO: packagemgrDao.NewFunctionPackageDAO(db),
 	}
 }
 
@@ -59,20 +64,20 @@ func (h *SCFNodeHandler) GetHandle(ctx context.Context, params map[string]string
 				Data: []interface{}{},
 			}, fmt.Errorf("failed to get node: %w", err)
 		}
-		
+
 		if node == nil {
 			return &APIResponse{
 				Code: 404,
 				Data: []interface{}{},
 			}, nil
 		}
-		
+
 		return &APIResponse{
 			Code: 200,
 			Data: []interface{}{node},
 		}, nil
 	}
-	
+
 	// 支持按节点类型查询
 	if nodeType, ok := params["node_type"]; ok && nodeType != "" {
 		nodes, err := h.service.GetNodesByType(ctx, nodeType)
@@ -82,18 +87,18 @@ func (h *SCFNodeHandler) GetHandle(ctx context.Context, params map[string]string
 				Data: []interface{}{},
 			}, fmt.Errorf("failed to get nodes by type: %w", err)
 		}
-		
+
 		data := make([]interface{}, 0, len(nodes))
 		for _, node := range nodes {
 			data = append(data, node)
 		}
-		
+
 		return &APIResponse{
 			Code: 200,
 			Data: data,
 		}, nil
 	}
-	
+
 	// 支持查询在线节点
 	if status, ok := params["status"]; ok && status == "online" {
 		nodes, err := h.service.GetOnlineNodes(ctx)
@@ -103,18 +108,18 @@ func (h *SCFNodeHandler) GetHandle(ctx context.Context, params map[string]string
 				Data: []interface{}{},
 			}, fmt.Errorf("failed to get online nodes: %w", err)
 		}
-		
+
 		data := make([]interface{}, 0, len(nodes))
 		for _, node := range nodes {
 			data = append(data, node)
 		}
-		
+
 		return &APIResponse{
 			Code: 200,
 			Data: data,
 		}, nil
 	}
-	
+
 	// 获取所有节点列表
 	nodes, err := h.service.GetNodeList(ctx)
 	if err != nil {
@@ -123,13 +128,13 @@ func (h *SCFNodeHandler) GetHandle(ctx context.Context, params map[string]string
 			Data: []interface{}{},
 		}, fmt.Errorf("failed to get node list: %w", err)
 	}
-	
+
 	// 转换为接口切片
 	data := make([]interface{}, 0, len(nodes))
 	for _, node := range nodes {
 		data = append(data, node)
 	}
-	
+
 	return &APIResponse{
 		Code: 200,
 		Data: data,
@@ -139,7 +144,7 @@ func (h *SCFNodeHandler) GetHandle(ctx context.Context, params map[string]string
 // PostHandle 处理POST请求
 func (h *SCFNodeHandler) PostHandle(ctx context.Context, params map[string]string) (*APIResponse, error) {
 	action := params["_action"]
-	
+
 	switch action {
 	case "register":
 		// 注册新节点
@@ -153,14 +158,14 @@ func (h *SCFNodeHandler) PostHandle(ctx context.Context, params map[string]strin
 			CurrentLoad:         params["current_load"],
 			Metadata:            params["metadata"],
 		}
-		
+
 		if statusStr, ok := params["status"]; ok {
 			status, err := strconv.Atoi(statusStr)
 			if err == nil {
 				node.Status = status
 			}
 		}
-		
+
 		// 调用服务层注册节点，返回生成的节点信息
 		registeredNode, err := h.service.CreateNode(ctx, node, "", "")
 		if err != nil {
@@ -169,12 +174,12 @@ func (h *SCFNodeHandler) PostHandle(ctx context.Context, params map[string]strin
 				Data: []interface{}{},
 			}, fmt.Errorf("failed to register node: %w", err)
 		}
-		
+
 		return &APIResponse{
 			Code: 200,
 			Data: []interface{}{registeredNode},
 		}, nil
-		
+
 	case "update":
 		// 更新节点信息
 		node := &model.SCFNode{
@@ -189,26 +194,26 @@ func (h *SCFNodeHandler) PostHandle(ctx context.Context, params map[string]strin
 			CurrentLoad:         params["current_load"],
 			Metadata:            params["metadata"],
 		}
-		
+
 		if statusStr, ok := params["status"]; ok {
 			status, err := strconv.Atoi(statusStr)
 			if err == nil {
 				node.Status = status
 			}
 		}
-		
+
 		if err := h.service.UpdateNode(ctx, node); err != nil {
 			return &APIResponse{
 				Code: 500,
 				Data: []interface{}{},
 			}, fmt.Errorf("failed to update node: %w", err)
 		}
-		
+
 		return &APIResponse{
 			Code: 200,
 			Data: []interface{}{"success"},
 		}, nil
-		
+
 	case "delete":
 		// 删除节点
 		nodeID := params["node_id"]
@@ -218,12 +223,12 @@ func (h *SCFNodeHandler) PostHandle(ctx context.Context, params map[string]strin
 				Data: []interface{}{},
 			}, fmt.Errorf("failed to delete node: %w", err)
 		}
-		
+
 		return &APIResponse{
 			Code: 200,
 			Data: []interface{}{"success"},
 		}, nil
-		
+
 	case "heartbeat":
 		// 更新心跳
 		nodeID := params["node_id"]
@@ -234,12 +239,12 @@ func (h *SCFNodeHandler) PostHandle(ctx context.Context, params map[string]strin
 				Data: []interface{}{},
 			}, fmt.Errorf("failed to update heartbeat: %w", err)
 		}
-		
+
 		return &APIResponse{
 			Code: 200,
 			Data: []interface{}{"success"},
 		}, nil
-		
+
 	case "update_load":
 		// 更新负载信息
 		nodeID := params["node_id"]
@@ -250,12 +255,12 @@ func (h *SCFNodeHandler) PostHandle(ctx context.Context, params map[string]strin
 				Data: []interface{}{},
 			}, fmt.Errorf("failed to update node load: %w", err)
 		}
-		
+
 		return &APIResponse{
 			Code: 200,
 			Data: []interface{}{"success"},
 		}, nil
-		
+
 	case "update_function":
 		// 更新云函数（用于非文件上传方式，例如通过文件路径）
 		nodeID := params["node_id"]
@@ -266,18 +271,24 @@ func (h *SCFNodeHandler) PostHandle(ctx context.Context, params map[string]strin
 				Data: []interface{}{},
 			}, fmt.Errorf("failed to update function: %w", err)
 		}
-		
+
 		return &APIResponse{
 			Code: 200,
 			Data: []interface{}{"success"},
 		}, nil
-		
+
 	default:
 		return &APIResponse{
 			Code: 400,
 			Data: []interface{}{},
 		}, fmt.Errorf("invalid action: %s", action)
 	}
+}
+
+// CloudNodeVO 云节点视图对象，添加代码包版本信息
+type CloudNodeVO struct {
+	*model.SCFNode
+	PackageVersion string `json:"package_version"` // 代码包版本：包名-版本号
 }
 
 // GetNodeList 获取节点列表
@@ -288,12 +299,34 @@ func (h *CloudNodeHandler) GetNodeList(c *gin.Context) {
 		common.ErrorResponse(c, 500, "查询云节点列表失败", err)
 		return
 	}
-	
+
+	// 转换为VO，添加代码包版本信息
+	nodeVOs := make([]*CloudNodeVO, len(nodes))
+	for i, node := range nodes {
+		vo := &CloudNodeVO{
+			SCFNode:        node,
+			PackageVersion: "-", // 默认值
+		}
+
+		// 如果有代码包ID，查询代码包详情
+		if node.PackageID != nil && *node.PackageID > 0 {
+			pkg, err := h.packageDAO.GetByID(ctx, int64(*node.PackageID))
+			if err != nil {
+				log.WarnContextf(ctx, "查询代码包详情失败，package_id=%d, error=%v", *node.PackageID, err)
+			} else if pkg != nil {
+				// 组合包名和版本号
+				vo.PackageVersion = fmt.Sprintf("%s-%s", pkg.PackageName, pkg.Version)
+			}
+		}
+
+		nodeVOs[i] = vo
+	}
+
 	// 计算总数
-	total := int64(len(nodes))
-	
+	total := int64(len(nodeVOs))
+
 	// 使用新的分页列表响应格式
-	common.PaginatedListResponse(c, "查询成功", nodes, total)
+	common.PaginatedListResponse(c, "查询成功", nodeVOs, total)
 }
 
 // GetNodeDetail 获取节点详情
@@ -304,7 +337,7 @@ func (h *CloudNodeHandler) GetNodeDetail(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "message": "node_id is required"})
 		return
 	}
-	
+
 	node, err := h.service.GetNode(ctx, nodeID)
 	if err != nil {
 		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
@@ -321,7 +354,7 @@ func (h *CloudNodeHandler) RegisterNode(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	
+
 	registeredNode, err := h.service.CreateNode(ctx, &node, "", "")
 	if err != nil {
 		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
@@ -338,7 +371,7 @@ func (h *CloudNodeHandler) UpdateNode(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	
+
 	if err := h.service.UpdateNode(ctx, &node); err != nil {
 		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
 		return
@@ -354,7 +387,7 @@ func (h *CloudNodeHandler) RemoveNode(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "message": "node_id is required"})
 		return
 	}
-	
+
 	if err := h.service.RemoveNode(ctx, nodeID, "", ""); err != nil {
 		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
 		return
@@ -373,7 +406,7 @@ func (h *CloudNodeHandler) Heartbeat(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	
+
 	if err := h.service.Heartbeat(ctx, req.NodeID, req.CurrentLoad); err != nil {
 		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
 		return
@@ -392,7 +425,7 @@ func (h *CloudNodeHandler) UpdateNodeLoad(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	
+
 	if err := h.service.UpdateNodeLoad(ctx, req.NodeID, req.CurrentLoad); err != nil {
 		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
 		return
@@ -411,7 +444,7 @@ func (h *CloudNodeHandler) UpdateNodeFunction(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	
+
 	if err := h.service.UpdateNodeFunction(ctx, req.NodeID, req.ZipFilePath); err != nil {
 		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
 		return

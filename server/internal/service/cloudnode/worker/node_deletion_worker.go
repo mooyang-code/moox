@@ -10,13 +10,14 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/queue"
+
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // NodeDeletionWorker 处理异步云函数删除的工作器
 type NodeDeletionWorker struct {
-	queueManager        *queue.QueueManager
+	queueManager        *queue.Manager
 	cloudAccountService CloudAccountService
 	asyncTaskService    AsyncTaskService
 	nodeDAO             dao.SCFNodeDAO
@@ -25,7 +26,7 @@ type NodeDeletionWorker struct {
 }
 
 // NewNodeDeletionWorker 创建新的节点删除工作器
-func NewNodeDeletionWorker(db *gorm.DB, queueManager *queue.QueueManager, cloudAccountService CloudAccountService, asyncTaskService AsyncTaskService) *NodeDeletionWorker {
+func NewNodeDeletionWorker(db *gorm.DB, queueManager *queue.Manager, cloudAccountService CloudAccountService, asyncTaskService AsyncTaskService) *NodeDeletionWorker {
 	return &NodeDeletionWorker{
 		queueManager:        queueManager,
 		cloudAccountService: cloudAccountService,
@@ -162,7 +163,7 @@ func (w *NodeDeletionWorker) prepareCloudProvider(ctx context.Context, cloudAcco
 
 	// 创建云平台配置
 	config := &provider.Config{
-		Provider:  provider.Provider(account.Provider),
+		Provider:  provider.CloudPlatform(account.Provider),
 		SecretID:  account.SecretID,
 		SecretKey: account.SecretKey,
 		ExtraConfig: map[string]interface{}{

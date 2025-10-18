@@ -10,22 +10,23 @@ import (
 
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
+
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // CloudFunctionInvokeService 云函数调用服务
 type CloudFunctionInvokeService struct {
-	db            *gorm.DB
-	nodeDAO       dao.SCFNodeDAO
+	db       *gorm.DB
+	nodeDAO  dao.SCFNodeDAO
 	provider provider.Client
 }
 
 // NewCloudFunctionInvokeService 创建云函数调用服务
 func NewCloudFunctionInvokeService(db *gorm.DB) *CloudFunctionInvokeService {
 	return &CloudFunctionInvokeService{
-		db:            db,
-		nodeDAO:       dao.NewSCFNodeDAO(db),
+		db:       db,
+		nodeDAO:  dao.NewSCFNodeDAO(db),
 		provider: nil, // 需要通过SetCloudProvider设置
 	}
 }
@@ -37,12 +38,12 @@ func (s *CloudFunctionInvokeService) SetCloudProvider(provider provider.Client) 
 
 // InvokeFunctionRequest 调用云函数的请求结构
 type InvokeFunctionRequest struct {
-	NodeID     string                 `json:"node_id"`     // 节点ID（必填）
-	FunctionName string               `json:"function_name"` // 函数名称（可选，如果不提供则使用NodeID）
-	Namespace  string                 `json:"namespace"`   // 命名空间（可选，如果不提供则使用节点的命名空间）
-	EventData  interface{}            `json:"event_data"`  // 事件数据
-	InvokeType string                 `json:"invoke_type"` // 调用类型：sync/async，默认sync
-	Qualifier  string                 `json:"qualifier"`   // 版本号或别名
+	NodeID       string      `json:"node_id"`       // 节点ID（必填）
+	FunctionName string      `json:"function_name"` // 函数名称（可选，如果不提供则使用NodeID）
+	Namespace    string      `json:"namespace"`     // 命名空间（可选，如果不提供则使用节点的命名空间）
+	EventData    interface{} `json:"event_data"`    // 事件数据
+	InvokeType   string      `json:"invoke_type"`   // 调用类型：sync/async，默认sync
+	Qualifier    string      `json:"qualifier"`     // 版本号或别名
 }
 
 // InvokeFunctionResponse 调用云函数的响应结构
@@ -60,7 +61,7 @@ type InvokeFunctionResponse struct {
 func (s *CloudFunctionInvokeService) RegisterCloudFunctionInvokeRoutes(mux *http.ServeMux) {
 	// POST /api/v1/cloud-function/invoke - 调用云函数
 	mux.HandleFunc("/api/v1/cloud-function/invoke", s.handleInvokeFunction)
-	
+
 	log.Info("[CloudFunctionInvoke] 云函数调用路由注册完成")
 }
 
@@ -113,7 +114,7 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 	}
 
 	var functionName, namespace string
-	
+
 	// 如果提供了NodeID，从数据库获取节点信息
 	if req.NodeID != "" {
 		node, err := s.nodeDAO.GetSCFNode(ctx, req.NodeID)
@@ -123,12 +124,12 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 		if node == nil {
 			return nil, fmt.Errorf("node not found: %s", req.NodeID)
 		}
-		
+
 		// 使用节点的信息作为默认值
 		functionName = node.NodeID // 假设NodeID就是函数名
 		namespace = node.Namespace
 	}
-	
+
 	// 如果请求中明确指定了函数名和命名空间，则覆盖默认值
 	if req.FunctionName != "" {
 		functionName = req.FunctionName
@@ -136,18 +137,18 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 	if req.Namespace != "" {
 		namespace = req.Namespace
 	}
-	
+
 	// 确保有函数名
 	if functionName == "" {
 		return nil, fmt.Errorf("function name cannot be determined")
 	}
-	
+
 	// 设置默认调用类型
 	invokeType := req.InvokeType
 	if invokeType == "" || (invokeType != "sync" && invokeType != "async") {
 		invokeType = "sync"
 	}
-	
+
 	// 转换调用类型
 	var cloudInvokeType string
 	if invokeType == "sync" {
@@ -155,9 +156,9 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 	} else {
 		cloudInvokeType = provider.InvokeTypeAsync
 	}
-	
+
 	log.InfoContextf(ctx, "Invoking cloud function: %s in namespace: %s", functionName, namespace)
-	
+
 	// 构建调用请求
 	invokeReq := &provider.InvokeFunctionRequest{
 		FunctionName: functionName,
@@ -166,19 +167,19 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 		EventData:    req.EventData,
 		InvokeType:   cloudInvokeType,
 	}
-	
+
 	// 记录开始时间
 	startTime := time.Now()
-	
+
 	// 调用云函数
 	cloudResp, err := s.provider.InvokeFunction(ctx, invokeReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to invoke cloud function: %w", err)
 	}
-	
+
 	// 计算执行时间
 	executionTime := time.Since(startTime).Milliseconds()
-	
+
 	// 构建响应
 	resp := &InvokeFunctionResponse{
 		Code:         0,
@@ -188,7 +189,7 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 		BillDuration: cloudResp.BillDuration,
 		MemoryUsage:  cloudResp.MemoryUsage,
 	}
-	
+
 	// 处理错误情况
 	if cloudResp.StatusCode != 0 && cloudResp.StatusCode != 200 {
 		resp.Code = cloudResp.StatusCode
@@ -197,7 +198,7 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 			resp.Message = fmt.Sprintf("%s: %s", cloudResp.ErrorType, cloudResp.ErrorMessage)
 		}
 	}
-	
+
 	// 处理返回结果
 	if cloudResp.Result != "" {
 		// 尝试将结果解析为JSON
@@ -209,10 +210,10 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 			resp.Result = resultData
 		}
 	}
-	
+
 	log.InfoContextf(ctx, "Cloud function invoked successfully - RequestID: %s, Duration: %dms, ExecutionTime: %dms",
 		resp.RequestID, resp.Duration, executionTime)
-	
+
 	return resp, nil
 }
 
@@ -220,7 +221,7 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 func writeInvokeJSONResponse(w http.ResponseWriter, statusCode int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	
+
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		log.Errorf("Failed to write JSON response: %v", err)
 	}

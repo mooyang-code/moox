@@ -7,6 +7,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/auth/model"
 	"github.com/mooyang-code/moox/server/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
+
 	"trpc.group/trpc-go/trpc-go/log"
 )
 

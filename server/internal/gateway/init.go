@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"github.com/mooyang-code/moox/server/internal/config"
+
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -24,7 +25,7 @@ func InitGatewayServices(s *server.Server) {
 			log.Infof("跳过collector服务的HTTPServiceHandler注册，将使用自定义处理器")
 			continue
 		}
-		
+
 		serviceConfig, err := cfg.GetServiceConfigByID(serviceID)
 		if err != nil {
 			log.Fatalf("获取服务配置失败: %v", err)

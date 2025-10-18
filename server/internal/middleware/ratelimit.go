@@ -7,11 +7,11 @@ import (
 	gatewayConfig "github.com/mooyang-code/moox/server/internal/config"
 	"github.com/mooyang-code/moox/server/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
+
+	"golang.org/x/time/rate"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/filter"
 	"trpc.group/trpc-go/trpc-go/log"
-
-	"golang.org/x/time/rate"
 )
 
 // RateLimitManager 流量控制管理器

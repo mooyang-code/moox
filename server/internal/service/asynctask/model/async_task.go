@@ -17,10 +17,10 @@ const (
 
 // 任务类型常量
 const (
-	TaskTypeBatchCreateNode    = "BATCH_CREATE_NODE"    // 批量创建节点
-	TaskTypeBatchUpdateNode    = "BATCH_UPDATE_NODE"    // 批量更新节点
-	TaskTypeBatchDeleteNode    = "BATCH_DELETE_NODE"    // 批量删除节点
-	TaskTypeBatchDeployNode    = "BATCH_DEPLOY_NODE"    // 批量部署节点
+	TaskTypeBatchCreateNode    = "BATCH_CREATE_NODE"     // 批量创建节点
+	TaskTypeBatchUpdateNode    = "BATCH_UPDATE_NODE"     // 批量更新节点
+	TaskTypeBatchDeleteNode    = "BATCH_DELETE_NODE"     // 批量删除节点
+	TaskTypeBatchDeployNode    = "BATCH_DEPLOY_NODE"     // 批量部署节点
 	TaskTypeUploadPackageToCOS = "UPLOAD_PACKAGE_TO_COS" // 上传代码包到COS
 )
 
@@ -42,7 +42,7 @@ type AsyncTask struct {
 }
 
 // TableName 指定表名
-func (AsyncTask) TableName() string {
+func (t *AsyncTask) TableName() string {
 	return "t_async_tasks"
 }
 

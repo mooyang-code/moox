@@ -5,25 +5,25 @@ import (
 	"fmt"
 )
 
-// Provider 云平台类型
-type Provider string
+// CloudPlatform 云平台类型
+type CloudPlatform string
 
 const (
-	Tencent Provider = "tencent" // 腾讯云
-	Aliyun  Provider = "aliyun"  // 阿里云
-	AWS     Provider = "aws"     // AWS
+	Tencent CloudPlatform = "tencent" // 腾讯云
+	Aliyun  CloudPlatform = "aliyun"  // 阿里云
+	AWS     CloudPlatform = "aws"     // AWS
 )
 
 // Config 云平台配置
 type Config struct {
-	Provider    Provider               // 云平台类型
+	Provider    CloudPlatform          // 云平台类型
 	SecretID    string                 // 密钥ID
 	SecretKey   string                 // 密钥
 	ExtraConfig map[string]interface{} // 额外配置（如region、endpoint等）
 }
 
 // NewConfig 创建云平台配置
-func NewConfig(provider Provider, secretID, secretKey string, extraConfig string) (*Config, error) {
+func NewConfig(provider CloudPlatform, secretID, secretKey string, extraConfig string) (*Config, error) {
 	config := &Config{
 		Provider:  provider,
 		SecretID:  secretID,

@@ -1,0 +1,251 @@
+// Package config 提供统一的配置管理
+package config
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// AppConfig 应用配置（总配置）
+type AppConfig struct {
+	Server   ServerConfig   `yaml:"server"`
+	Database DatabaseConfig `yaml:"database"`
+	Storage  StorageConfig  `yaml:"storage"`
+	Auth     AuthConfig     `yaml:"auth"`
+	Worker   WorkerConfig   `yaml:"worker"`
+	Log      LogConfig      `yaml:"log"`
+}
+
+// ServerConfig 服务器配置
+type ServerConfig struct {
+	Host        string `yaml:"host"`
+	Port        int    `yaml:"port"`
+	Environment string `yaml:"environment"` // development, production
+	MooxURL     string `yaml:"moox_url"`    // Moox服务地址
+}
+
+// DatabaseConfig 数据库配置
+type DatabaseConfig struct {
+	Type            string        `yaml:"type"`               // sqlite, mysql, postgres
+	Path            string        `yaml:"path"`               // SQLite文件路径
+	Host            string        `yaml:"host"`               // 数据库主机
+	Port            int           `yaml:"port"`               // 数据库端口
+	User            string        `yaml:"user"`               // 用户名
+	Password        string        `yaml:"password"`           // 密码
+	DBName          string        `yaml:"dbname"`             // 数据库名
+	MaxIdleConns    int           `yaml:"max_idle_conns"`     // 最大空闲连接数
+	MaxOpenConns    int           `yaml:"max_open_conns"`     // 最大打开连接数
+	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"`  // 连接最大生命周期
+	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"` // 连接最大空闲时间
+}
+
+// StorageConfig 存储配置
+type StorageConfig struct {
+	COSBucket   string `yaml:"cos_bucket"`   // COS桶名
+	COSRegion   string `yaml:"cos_region"`   // COS区域
+	LocalPath   string `yaml:"local_path"`   // 本地存储路径
+	CacheSize   int    `yaml:"cache_size"`   // 缓存大小（文件数量）
+	CacheExpiry int    `yaml:"cache_expiry"` // 缓存过期时间（分钟）
+}
+
+// AuthConfig 认证配置
+type AuthConfig struct {
+	JWTSecret        string        `yaml:"jwt_secret"`
+	JWTExpiry        time.Duration `yaml:"jwt_expiry"`         // Token过期时间
+	MaxLoginAttempts int           `yaml:"max_login_attempts"` // 最大登录尝试次数
+	LockDuration     time.Duration `yaml:"lock_duration"`      // 锁定时长
+}
+
+// WorkerConfig Worker配置
+type WorkerConfig struct {
+	AsyncTaskWorkerCount      int `yaml:"async_task_worker_count"`      // 异步任务Worker数量
+	NodeCreationWorkerCount   int `yaml:"node_creation_worker_count"`   // 节点创建Worker数量
+	NodeDeletionWorkerCount   int `yaml:"node_deletion_worker_count"`   // 节点删除Worker数量
+	NodeDeploymentWorkerCount int `yaml:"node_deployment_worker_count"` // 节点部署Worker数量
+}
+
+// LogConfig 日志配置
+type LogConfig struct {
+	Level      string `yaml:"level"`       // debug, info, warn, error
+	OutputPath string `yaml:"output_path"` // 日志输出路径
+	MaxSize    int    `yaml:"max_size"`    // 单文件最大大小（MB）
+	MaxBackups int    `yaml:"max_backups"` // 最多保留文件数
+	MaxAge     int    `yaml:"max_age"`     // 最多保留天数
+}
+
+// DefaultConfig 返回默认配置
+func DefaultConfig() *AppConfig {
+	return &AppConfig{
+		Server: ServerConfig{
+			Host:        "0.0.0.0",
+			Port:        8080,
+			Environment: "development",
+			MooxURL:     "http://localhost:8080",
+		},
+		Database: DatabaseConfig{
+			Type:            "sqlite",
+			Path:            "./data/moox.db",
+			MaxIdleConns:    10,
+			MaxOpenConns:    100,
+			ConnMaxLifetime: time.Hour,
+			ConnMaxIdleTime: 10 * time.Minute,
+		},
+		Storage: StorageConfig{
+			COSBucket:   "moox-packages",
+			COSRegion:   "ap-guangzhou",
+			LocalPath:   "./data/packages",
+			CacheSize:   100,
+			CacheExpiry: 30,
+		},
+		Auth: AuthConfig{
+			JWTExpiry:        24 * time.Hour,
+			MaxLoginAttempts: 5,
+			LockDuration:     15 * time.Minute,
+		},
+		Worker: WorkerConfig{
+			AsyncTaskWorkerCount:      3,
+			NodeCreationWorkerCount:   3,
+			NodeDeletionWorkerCount:   3,
+			NodeDeploymentWorkerCount: 3,
+		},
+		Log: LogConfig{
+			Level:      "info",
+			OutputPath: "./log/moox.log",
+			MaxSize:    100,
+			MaxBackups: 10,
+			MaxAge:     30,
+		},
+	}
+}
+
+// Load 从文件加载配置
+func Load(configPath string) (*AppConfig, error) {
+	// 1. 加载默认配置
+	cfg := DefaultConfig()
+
+	// 2. 如果配置文件存在，从文件加载
+	if configPath != "" {
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("failed to read config file: %w", err)
+			}
+			// 文件不存在，使用默认配置
+		} else {
+			if err := yaml.Unmarshal(data, cfg); err != nil {
+				return nil, fmt.Errorf("failed to parse config file: %w", err)
+			}
+		}
+	}
+
+	// 3. 从环境变量覆盖
+	cfg.applyEnv()
+
+	// 4. 验证配置
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// applyEnv 从环境变量覆盖配置
+func (c *AppConfig) applyEnv() {
+	// Server
+	if v := os.Getenv("SERVER_HOST"); v != "" {
+		c.Server.Host = v
+	}
+	if v := os.Getenv("SERVER_PORT"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Server.Port)
+	}
+	if v := os.Getenv("ENVIRONMENT"); v != "" {
+		c.Server.Environment = v
+	}
+	if v := os.Getenv("MOOX_URL"); v != "" {
+		c.Server.MooxURL = v
+	}
+
+	// Database
+	if v := os.Getenv("DB_PATH"); v != "" {
+		c.Database.Path = v
+	}
+	if v := os.Getenv("DB_HOST"); v != "" {
+		c.Database.Host = v
+	}
+	if v := os.Getenv("DB_PORT"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Database.Port)
+	}
+	if v := os.Getenv("DB_USER"); v != "" {
+		c.Database.User = v
+	}
+	if v := os.Getenv("DB_PASSWORD"); v != "" {
+		c.Database.Password = v
+	}
+	if v := os.Getenv("DB_NAME"); v != "" {
+		c.Database.DBName = v
+	}
+
+	// Storage
+	if v := os.Getenv("COS_BUCKET"); v != "" {
+		c.Storage.COSBucket = v
+	}
+	if v := os.Getenv("COS_REGION"); v != "" {
+		c.Storage.COSRegion = v
+	}
+	if v := os.Getenv("LOCAL_STORAGE_PATH"); v != "" {
+		c.Storage.LocalPath = v
+	}
+
+	// Auth
+	if v := os.Getenv("JWT_SECRET"); v != "" {
+		c.Auth.JWTSecret = v
+	}
+}
+
+// Validate 验证配置
+func (c *AppConfig) Validate() error {
+	// 验证必填项
+	if c.Server.Port <= 0 || c.Server.Port > 65535 {
+		return fmt.Errorf("invalid server port: %d", c.Server.Port)
+	}
+
+	if c.Database.Type == "sqlite" {
+		if c.Database.Path == "" {
+			return fmt.Errorf("database path is required for SQLite")
+		}
+		// 确保目录存在
+		dir := filepath.Dir(c.Database.Path)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create database directory: %w", err)
+		}
+	}
+
+	// 确保存储目录存在
+	if err := os.MkdirAll(c.Storage.LocalPath, 0755); err != nil {
+		return fmt.Errorf("failed to create storage directory: %w", err)
+	}
+
+	// 确保日志目录存在
+	if c.Log.OutputPath != "" {
+		dir := filepath.Dir(c.Log.OutputPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create log directory: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// IsDevelopment 是否开发环境
+func (c *AppConfig) IsDevelopment() bool {
+	return c.Server.Environment == "development"
+}
+
+// IsProduction 是否生产环境
+func (c *AppConfig) IsProduction() bool {
+	return c.Server.Environment == "production"
+}

@@ -39,7 +39,7 @@ func RegisterCloudNodeRoutes(router *gin.RouterGroup, db *gorm.DB) {
 }
 
 // RegisterCloudNodeHTTPRoutes 注册需要特殊处理的HTTP路由
-func RegisterCloudNodeHTTPRoutes(mux *http.ServeMux, db *gorm.DB, queueManager *queue.QueueManager) {
+func RegisterCloudNodeHTTPRoutes(mux *http.ServeMux, db *gorm.DB, queueManager *queue.Manager) {
 	// 文件上传路由
 	scfNodeService := logic.NewSCFNodeServiceWithQueue(db, queueManager)
 	fileUploadHandler := NewFileUploadHandler(scfNodeService)

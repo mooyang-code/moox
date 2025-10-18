@@ -31,6 +31,12 @@ server:
       port: 20001
       network: tcp
       protocol: trpc
+      ######## 接收心跳服务 ########
+    - name: trpc.moox.server.CloudNodeAPI
+      #ip: 0.0.0.0
+      port: 20002
+      network: tcp
+      protocol: trpc
 
       ######## API服务 ########
     - name: trpc.moox.api.stdhttp

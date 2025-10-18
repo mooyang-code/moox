@@ -6,33 +6,33 @@ import (
 
 // FunctionPackage 云函数代码包模型
 type FunctionPackage struct {
-	ID               int64     `gorm:"column:c_id;primaryKey;autoIncrement" json:"id"`
-	PackageName      string    `gorm:"column:c_package_name;not null" json:"package_name"`
-	Version          string    `gorm:"column:c_version;not null" json:"version"`
-	Description      string    `gorm:"column:c_description;default:''" json:"description"`
-	Runtime          string    `gorm:"column:c_runtime;not null" json:"runtime"`
-	PackageType      string    `gorm:"column:c_package_type;not null;default:'data_collector'" json:"package_type"`
-	
+	ID          int64  `gorm:"column:c_id;primaryKey;autoIncrement" json:"id"`
+	PackageName string `gorm:"column:c_package_name;not null" json:"package_name"`
+	Version     string `gorm:"column:c_version;not null" json:"version"`
+	Description string `gorm:"column:c_description;default:''" json:"description"`
+	Runtime     string `gorm:"column:c_runtime;not null" json:"runtime"`
+	PackageType string `gorm:"column:c_package_type;not null;default:'data_collector'" json:"package_type"`
+
 	// 文件信息
 	OriginalFilename string `gorm:"column:c_original_filename;not null" json:"original_filename"`
 	FileSize         int64  `gorm:"column:c_file_size;not null" json:"file_size"`
 	FileMD5          string `gorm:"column:c_file_md5;not null" json:"file_md5"`
-	
+
 	// COS存储信息
 	CloudAccountID string `gorm:"column:c_cloud_account_id;default:''" json:"cloud_account_id"`
 	COSRegion      string `gorm:"column:c_cos_region;default:''" json:"cos_region"`
 	COSBucket      string `gorm:"column:c_cos_bucket;not null" json:"cos_bucket"`
 	COSPath        string `gorm:"column:c_cos_path;not null" json:"cos_path"`
 	COSURL         string `gorm:"column:c_cos_url;default:''" json:"cos_url"`
-	
+
 	// 状态管理
 	Status         int    `gorm:"column:c_status;not null;default:0" json:"status"`
 	UploadProgress int    `gorm:"column:c_upload_progress;default:0" json:"upload_progress"`
 	ErrorMessage   string `gorm:"column:c_error_message;default:''" json:"error_message"`
-	
+
 	// 使用统计
 	LastDeployTime *time.Time `gorm:"column:c_last_deploy_time" json:"last_deploy_time"`
-	
+
 	// 审计字段
 	CreatedBy string    `gorm:"column:c_created_by;not null" json:"created_by"`
 	Invalid   int       `gorm:"column:c_invalid;not null;default:0" json:"invalid"`
@@ -41,10 +41,9 @@ type FunctionPackage struct {
 }
 
 // TableName 指定表名
-func (FunctionPackage) TableName() string {
+func (f *FunctionPackage) TableName() string {
 	return "t_function_packages"
 }
-
 
 // 状态常量
 const (
@@ -53,7 +52,7 @@ const (
 	PackageStatusAvailable = 1 // 可用
 	PackageStatusDeleted   = 2 // 已删除
 	PackageStatusFailed    = 3 // 上传失败
-	
+
 )
 
 // 函数包类型常量
@@ -64,11 +63,11 @@ const (
 
 // 运行时环境常量
 const (
-	RuntimeGo1        = "Go1"
-	RuntimePython37   = "Python3.7"
-	RuntimePython39   = "Python3.9"
-	RuntimeNodejs14   = "Nodejs14.18"
-	RuntimeNodejs16   = "Nodejs16.13"
+	RuntimeGo1      = "Go1"
+	RuntimePython37 = "Python3.7"
+	RuntimePython39 = "Python3.9"
+	RuntimeNodejs14 = "Nodejs14.18"
+	RuntimeNodejs16 = "Nodejs16.13"
 )
 
 // GetPackageTypeDisplayName 获取函数包类型显示名称
@@ -98,4 +97,3 @@ func GetStatusDisplayName(status int) string {
 		return "未知状态"
 	}
 }
-

@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"time"
 
-	asyncTaskLogic "github.com/mooyang-code/moox/server/internal/service/asynctask/logic"
+	asyncTaskLogic "github.com/mooyang-code/moox/server/internal/service/asynctask"
 	asyncTaskModel "github.com/mooyang-code/moox/server/internal/service/asynctask/model"
 	cloudAccountModel "github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
@@ -18,8 +17,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Platform 云平台类型别名，避免 provider.Provider 的啰嗦写法
-type Platform = provider.Provider
+// Platform 云平台类型别名，避免 provider.CloudPlatform 的啰嗦写法
+type Platform = provider.CloudPlatform
 
 // PackageUploadRequest 代码包上传任务请求
 type PackageUploadRequest struct {
@@ -30,19 +29,16 @@ type PackageUploadRequest struct {
 	LocalFilePath  string `json:"local_file_path"`  // 本地文件路径
 }
 
-// PackageUploadExecutor 代码包上传执行器
+// PackageUploadExecutor 代码包上传执行器（支持多云账户，COS客户端在执行时根据账户ID动态创建）
 type PackageUploadExecutor struct {
 	db          *gorm.DB
-	cosProvider provider.ClientWithCOS
-	taskService asyncTaskLogic.AsyncTaskService
+	taskService asyncTaskLogic.Service
 }
 
-// NewPackageUploadExecutor 创建代码包上传执行器
-func NewPackageUploadExecutor(db *gorm.DB,
-	cosProvider provider.ClientWithCOS, taskService asyncTaskLogic.AsyncTaskService) *PackageUploadExecutor {
+// NewPackageUploadExecutor 创建代码包上传执行器（COS客户端不再需要预先传入，在执行时根据账户ID动态创建）
+func NewPackageUploadExecutor(db *gorm.DB, taskService asyncTaskLogic.Service) *PackageUploadExecutor {
 	return &PackageUploadExecutor{
 		db:          db,
-		cosProvider: cosProvider,
 		taskService: taskService,
 	}
 }
@@ -127,7 +123,7 @@ func (e *PackageUploadExecutor) Execute(ctx context.Context, task *asyncTaskMode
 }
 
 // getPackage 获取包信息
-func (e *PackageUploadExecutor) getPackage(ctx context.Context, packageID int64) (*packageModel.FunctionPackage, error) {
+func (e *PackageUploadExecutor) getPackage(_ context.Context, packageID int64) (*packageModel.FunctionPackage, error) {
 	var pkg packageModel.FunctionPackage
 	err := e.db.Where("c_id = ? AND c_invalid = 0", packageID).First(&pkg).Error
 	if err != nil {
@@ -137,7 +133,7 @@ func (e *PackageUploadExecutor) getPackage(ctx context.Context, packageID int64)
 }
 
 // getCloudAccount 获取云账户配置
-func (e *PackageUploadExecutor) getCloudAccount(ctx context.Context, accountID string) (*cloudAccountModel.CloudAccount, error) {
+func (e *PackageUploadExecutor) getCloudAccount(_ context.Context, accountID string) (*cloudAccountModel.CloudAccount, error) {
 	var account cloudAccountModel.CloudAccount
 	err := e.db.Where("c_account_id = ? AND c_invalid = 0", accountID).First(&account).Error
 	if err != nil {
@@ -154,7 +150,7 @@ func (e *PackageUploadExecutor) readLocalFile(filePath string) ([]byte, error) {
 	}
 
 	// 读取文件内容
-	content, err := ioutil.ReadFile(filePath)
+	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
 	}
@@ -198,13 +194,10 @@ func (e *PackageUploadExecutor) createCOSProvider(account *cloudAccountModel.Clo
 		return nil, fmt.Errorf("COS region配置为空")
 	}
 
-	// 根据account的provider字段确定provider类型
-	var platformType Platform
-	switch account.Provider {
-	case "tencent":
-		platformType = provider.Tencent
-	default:
-		return nil, fmt.Errorf("unsupported provider: %s", account.Provider)
+	// 使用统一的类型转换函数
+	platformType, err := provider.ParseCloudPlatform(account.Provider)
+	if err != nil {
+		return nil, fmt.Errorf("不支持的云平台类型: %w", err)
 	}
 
 	// 构建包含COS配置的ExtraConfig
@@ -217,8 +210,8 @@ func (e *PackageUploadExecutor) createCOSProvider(account *cloudAccountModel.Clo
 		return nil, fmt.Errorf("创建云厂商配置失败: %w", err)
 	}
 
-	// 创建支持COS的provider实例
-	cloudProvider, err := provider.NewTencentWrapperWithCOS(config)
+	// 使用工厂方法创建支持COS的provider实例
+	cloudProvider, err := provider.NewWithCOS(config)
 	if err != nil {
 		return nil, fmt.Errorf("创建COS provider失败: %w", err)
 	}

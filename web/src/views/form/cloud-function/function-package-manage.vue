@@ -1,7 +1,7 @@
 <template>
   <a-modal
     v-model:visible="visible"
-    title="云函数版本管理"
+    title="代码包版本管理"
     :width="1200"
     :mask-closable="false"
     :footer="false"
@@ -59,10 +59,12 @@
       </a-row>
 
       <a-row style="margin-bottom: 16px;">
-        <a-button type="primary" @click="onAdd">
-          <template #icon><icon-plus /></template>
-          上传代码包
-        </a-button>
+        <a-space>
+          <a-button type="primary" @click="onAdd">
+            <template #icon><icon-plus /></template>
+            上传代码包
+          </a-button>
+        </a-space>
       </a-row>
 
       <!-- 上传状态提示 -->
@@ -153,9 +155,21 @@
           <a-table-column title="操作" :width="180" align="center" fixed="right">
             <template #cell="{ record }">
               <a-space>
-                <a-button type="primary" size="mini" status="success" @click="onDownload(record)" :disabled="record.status !== 1">
-                  <template #icon><icon-download /></template>
-                  下载
+                <a-button 
+                  type="primary"
+                  size="mini" 
+                  status="success"
+                  @click="onDownload(record)" 
+                  :disabled="record.status !== 1"
+                  :loading="downloadProgress[record.id] !== undefined && downloadProgress[record.id] < 100"
+                >
+                  <template #icon>
+                    <icon-download />
+                  </template>
+                  <span v-if="downloadProgress[record.id] !== undefined && downloadProgress[record.id] < 100">
+                    下载中...
+                  </span>
+                  <span v-else>下载</span>
                 </a-button>
                 <a-popconfirm
                   content="确定要删除该代码包吗？删除后无法恢复。"
@@ -340,9 +354,20 @@
         <div style="margin-top: 16px; text-align: right;">
           <a-space>
             <a-button @click="handleDetailCancel">关闭</a-button>
-            <a-button type="primary" @click="onDownload(packageDetail)" :disabled="packageDetail.status !== 1">
-              <template #icon><icon-download /></template>
-              下载
+            <a-button 
+              type="primary"
+              status="success"
+              @click="onDownload(packageDetail)" 
+              :disabled="packageDetail.status !== 1"
+              :loading="downloadProgress[packageDetail.id] !== undefined && downloadProgress[packageDetail.id] < 100"
+            >
+              <template #icon>
+                <icon-download />
+              </template>
+              <span v-if="downloadProgress[packageDetail.id] !== undefined && downloadProgress[packageDetail.id] < 100">
+                下载中...
+              </span>
+              <span v-else>下载</span>
             </a-button>
           </a-space>
         </div>
@@ -363,8 +388,7 @@ import {
   getFunctionPackageDetail,
   uploadFunctionPackage,
   deleteFunctionPackage,
-  getFunctionPackageDownloadURL,
-  downloadLocalPackage,
+  downloadPackageByURL,
   RUNTIME_OPTIONS,
   PACKAGE_TYPE_OPTIONS,
   STATUS_OPTIONS,
@@ -885,27 +909,37 @@ const stopTaskPolling = () => {
   }
 };
 
-// 下载
+// 下载进度状态（简化版）
+const downloadProgress = ref<{[key: number]: number}>({});
+
+
+// 下载（新的URL下载方式）
 const onDownload = async (record: FunctionPackage) => {
   try {
-    const response = await getFunctionPackageDownloadURL(record.id);
-    if (response?.code === 200 && response?.data?.download_url) {
-      const url = response.data.download_url;
-      
-      // 检查是否为本地存储
-      if (url.includes('/download-local')) {
-        downloadLocalPackage(record.id);
-      } else {
-        // COS存储，直接打开链接
-        window.open(url, '_blank');
-      }
-    } else {
-      throw new Error('获取下载链接失败');
+    // 如果已经在下载中，则忽略
+    if (downloadProgress.value[record.id] !== undefined) {
+      return;
     }
+    
+    console.log(`开始下载代码包: ${record.package_name} v${record.version}`);
+    
+    // 显示下载状态
+    downloadProgress.value[record.id] = 0;
+    
+    // 使用新的URL下载方式
+    await downloadPackageByURL(record.id);
+    
+    // 清理进度状态
+    delete downloadProgress.value[record.id];
+    
   } catch (error) {
     console.error('下载失败:', error);
+    // 清除状态
+    delete downloadProgress.value[record.id];
+    
+    const errorMessage = error instanceof Error ? error.message : '未知错误';
     Message.error({
-      content: '下载失败',
+      content: `下载失败: ${errorMessage}`,
       duration: 5000
     });
   }

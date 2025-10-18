@@ -1,4 +1,4 @@
-package collector
+package gateway
 
 import (
 	"bytes"
@@ -10,10 +10,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"time"
-	
+
 	asynctaskapi "github.com/mooyang-code/moox/server/internal/service/asynctask/api"
 	cloudnodeapi "github.com/mooyang-code/moox/server/internal/service/cloudnode/api"
 	collectorapi "github.com/mooyang-code/moox/server/internal/service/collector/api"
+	"github.com/mooyang-code/moox/server/internal/service/collector/core"
 	packagemgrapi "github.com/mooyang-code/moox/server/internal/service/packagemgr/api"
 
 	"github.com/gin-gonic/gin"
@@ -22,14 +23,14 @@ import (
 
 // GatewayHandler 处理API请求的网关处理器
 type GatewayHandler struct {
-	engine     *gin.Engine
-	serviceID  string
-	httpClient *http.Client
+	engine      *gin.Engine
+	serviceID   string
+	httpClient  *http.Client
 	authBaseURL string
 }
 
 // NewGatewayHandler 创建网关处理器
-func NewGatewayHandler(collectorImpl *CollectorServiceImpl) *GatewayHandler {
+func NewGatewayHandler(collectorImpl *core.CollectorServiceImpl) *GatewayHandler {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 
@@ -44,22 +45,15 @@ func NewGatewayHandler(collectorImpl *CollectorServiceImpl) *GatewayHandler {
 		// 注册异步任务路由（使用带有执行器的服务实例）
 		asynctaskapi.RegisterAsyncTaskRoutesWithService(api, collectorImpl.GetAsyncTaskService())
 
-		// 注册采集器路由
-		collectorapi.RegisterCollectorRoutes(api, collectorImpl.GetDB())
+		// 注册采集器路由（支持多云账户）
+		collectorapi.RegisterCollectorRoutes(api, collectorImpl.GetDB(), collectorImpl.GetCloudProviderByAccount)
 
 		// 注册云节点路由
 		cloudnodeapi.RegisterCloudNodeRoutes(api, collectorImpl.GetDB())
 
-		// 注册包管理路由（支持多COS客户端）
-		cosProviders := collectorImpl.GetAllCOSProviders()
-		if len(cosProviders) > 0 {
-			// 使用默认COS提供商注册路由（保持兼容性）
-			defaultCOSProvider := collectorImpl.GetCOSProvider("")
-			if defaultCOSProvider != nil {
-				cosBucket := "moox-packages" // 从配置中获取
-				packagemgrapi.RegisterPackageManagerRoutes(api, collectorImpl.GetDB(), defaultCOSProvider, cosBucket, collectorImpl.GetAsyncTaskService())
-			}
-		}
+		// 注册包管理路由
+		packagemgrapi.RegisterPackageManagerRoutes(api, collectorImpl.GetDB(), collectorImpl.GetAsyncTaskService())
+		log.Info("[Gateway] 包管理路由注册成功")
 	}
 
 	// 创建HTTP客户端用于认证服务转发
@@ -135,8 +129,6 @@ func (h *GatewayHandler) parseMethodToRoute(method string, body []byte) (*RouteI
 		return h.buildDetailRoute("/api/function-packages", "DELETE", body)
 	case "GetPackageDownloadURL":
 		return h.buildDetailRouteWithSuffix("/api/function-packages", "GET", body, "download-url")
-	case "DownloadLocalPackage":
-		return h.buildDetailRouteWithSuffix("/api/function-packages", "GET", body, "download-local")
 	case "GetPackageOptions":
 		return h.buildMultiQueryRoute("/api/function-packages/options", body)
 	case "GetUploadTaskStatus":
@@ -308,7 +300,13 @@ func (h *GatewayHandler) buildDetailRouteWithSuffix(basePath, httpMethod string,
 	route := &RouteInfo{
 		Path:       basePath,
 		HTTPMethod: httpMethod,
-		Body:       body,
+	}
+
+	// 对于GET请求，不需要body
+	if httpMethod == "GET" {
+		route.Body = nil
+	} else {
+		route.Body = body
 	}
 
 	if len(body) > 0 {
@@ -459,9 +457,21 @@ func (h *GatewayHandler) createHTTPRequest(routeInfo *RouteInfo, headers map[str
 		}
 	}
 
-	// 添加请求头
+	// 添加请求头（规范化header key）
 	for key, value := range headers {
-		req.Header.Set(key, value)
+		// 将网关传来的key转换为标准HTTP header格式
+		switch key {
+		case "access_token":
+			req.Header.Set("X-Access-Token", value)
+		case "trace_id":
+			req.Header.Set("X-Trace-Id", value)
+		case "client_ip":
+			req.Header.Set("X-Client-Ip", value)
+		case "user_agent":
+			req.Header.Set("User-Agent", value)
+		default:
+			req.Header.Set(key, value)
+		}
 	}
 	return req, nil
 }
@@ -478,7 +488,13 @@ func (h *GatewayHandler) executeRequest(ctx context.Context, req *http.Request) 
 	respBody := recorder.Body.Bytes()
 	statusCode := recorder.Code
 
-	log.InfoContextf(ctx, "[Gateway] Response status: %d, body: %s", statusCode, string(respBody))
+	// 检查是否是二进制文件响应（通过Content-Type判断）
+	contentType := recorder.Header().Get("Content-Type")
+	if contentType == "application/zip" || contentType == "application/octet-stream" {
+		log.InfoContextf(ctx, "[Gateway] Response status: %d, binary file content length: %d bytes", statusCode, len(respBody))
+	} else {
+		log.InfoContextf(ctx, "[Gateway] Response status: %d, body: %s", statusCode, string(respBody))
+	}
 
 	// 检查状态码
 	if statusCode != http.StatusOK {
@@ -553,4 +569,3 @@ func (h *GatewayHandler) handleAuthMethodByHTTP(ctx context.Context, method stri
 
 	return respBody, true, nil
 }
-

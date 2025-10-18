@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/server/internal/common"
 	cloudnodelogic "github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
+
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -29,9 +29,9 @@ func NewFileUploadHandler(scfNodeService cloudnodelogic.SCFNodeService) *FileUpl
 
 // FunctionUploadRequest 函数上传请求结构
 type FunctionUploadRequest struct {
-	NodeID      string `json:"node_id"`
+	NodeID        string `json:"node_id"`
 	ZipFileBase64 string `json:"zip_file_base64"`
-	FileName    string `json:"file_name"`
+	FileName      string `json:"file_name"`
 }
 
 // HandleFunctionUpload 处理云函数代码上传（支持base64格式）
@@ -78,7 +78,7 @@ func (h *FileUploadHandler) HandleFunctionUpload(w http.ResponseWriter, r *http.
 	tempFilePath := filepath.Join(tempDir, fmt.Sprintf("scf_upload_%s_%d_%s", req.NodeID, timestamp, fileName))
 
 	// 写入临时文件
-	if err := ioutil.WriteFile(tempFilePath, zipData, 0644); err != nil {
+	if err := os.WriteFile(tempFilePath, zipData, 0644); err != nil {
 		writeErrorResponse(w, 500, fmt.Errorf("failed to write temp file: %w", err))
 		return
 	}
@@ -115,7 +115,7 @@ func (h *FileUploadHandler) HandleFunctionUpload(w http.ResponseWriter, r *http.
 func writeJSONResponse(w http.ResponseWriter, statusCode int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	
+
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		log.Errorf("Failed to write JSON response: %v", err)
 	}

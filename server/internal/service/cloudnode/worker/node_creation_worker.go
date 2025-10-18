@@ -4,26 +4,28 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strings"
 	"time"
 
+	asynctaskmodel "github.com/mooyang-code/moox/server/internal/service/asynctask/model"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/constants"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
+	cloudnodemodel "github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/queue"
 	packagemgrmodel "github.com/mooyang-code/moox/server/internal/service/packagemgr/model"
+
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Platform 云平台类型别名，避免 provider.Provider 的啰嗦写法
-type Platform = provider.Provider
+// Platform 云平台类型别名，避免 provider.CloudPlatform 的啰嗦写法
+type Platform = provider.CloudPlatform
 
 // NodeCreationWorker 处理异步云函数创建的工作器
 type NodeCreationWorker struct {
-	queueManager        *queue.QueueManager
+	queueManager        *queue.Manager
 	cloudAccountService CloudAccountService
 	packageService      PackageService
 	asyncTaskService    AsyncTaskService
@@ -33,7 +35,7 @@ type NodeCreationWorker struct {
 }
 
 // NewNodeCreationWorker 创建新的节点创建工作器
-func NewNodeCreationWorker(db *gorm.DB, queueManager *queue.QueueManager, cloudAccountService CloudAccountService, packageService PackageService, asyncTaskService AsyncTaskService) *NodeCreationWorker {
+func NewNodeCreationWorker(db *gorm.DB, queueManager *queue.Manager, cloudAccountService CloudAccountService, packageService PackageService, asyncTaskService AsyncTaskService) *NodeCreationWorker {
 	return &NodeCreationWorker{
 		queueManager:        queueManager,
 		cloudAccountService: cloudAccountService,
@@ -212,7 +214,7 @@ func (w *NodeCreationWorker) ensureNamespace(ctx context.Context, cloudProvider 
 
 // prepareZipFile 读取并编码ZIP文件
 func (w *NodeCreationWorker) prepareZipFile(ctx context.Context, zipFilePath string, workerID int) (string, error) {
-	zipData, err := ioutil.ReadFile(zipFilePath)
+	zipData, err := os.ReadFile(zipFilePath)
 	if err != nil {
 		log.ErrorContextf(ctx, "[NodeCreationWorker-%d] 读取zip文件失败: %v", workerID, err)
 		return "", fmt.Errorf("读取zip文件失败: %w", err)
@@ -309,7 +311,7 @@ func (w *NodeCreationWorker) saveNodeToDB(ctx context.Context, msg *queue.NodeCr
 	msg.NodeData.Metadata = metadata
 
 	// 更新节点状态为在线
-	msg.NodeData.Status = 1 // 1 = NodeStatusOnline
+	msg.NodeData.Status = cloudnodemodel.NodeStatusOnline
 
 	// 创建节点记录
 	err := w.nodeDAO.CreateSCFNode(ctx, msg.NodeData)
@@ -327,7 +329,7 @@ func (w *NodeCreationWorker) handleTaskError(ctx context.Context, taskID, itemID
 	log.ErrorContextf(ctx, "handleTaskError: taskID=%s, itemID=%s, errorMsg=%s ", taskID, itemID, errorMsg)
 	// 如果有任务ID，更新任务状态
 	if taskID != "" && itemID != "" {
-		err := w.asyncTaskService.UpdateTaskDetailStatus(ctx, taskID, itemID, 4, errorMsg) // 4 = TaskDetailStatusFailed
+		err := w.asyncTaskService.UpdateTaskDetailStatus(ctx, taskID, itemID, asynctaskmodel.TaskDetailStatusFailed, errorMsg)
 		if err != nil {
 			log.ErrorContextf(ctx, "[NodeCreationWorker] 更新任务详情状态失败: %v", err)
 		}
@@ -338,7 +340,7 @@ func (w *NodeCreationWorker) handleTaskError(ctx context.Context, taskID, itemID
 func (w *NodeCreationWorker) handleTaskSuccess(ctx context.Context, taskID, itemID string) {
 	// 如果有任务ID，更新任务状态
 	if taskID != "" && itemID != "" {
-		err := w.asyncTaskService.UpdateTaskDetailStatus(ctx, taskID, itemID, 3, "") // 3 = TaskDetailStatusSuccess
+		err := w.asyncTaskService.UpdateTaskDetailStatus(ctx, taskID, itemID, asynctaskmodel.TaskDetailStatusSuccess, "")
 		if err != nil {
 			log.ErrorContextf(ctx, "[NodeCreationWorker] 更新任务详情状态失败: %v", err)
 		}

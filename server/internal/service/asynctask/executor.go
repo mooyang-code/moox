@@ -1,7 +1,8 @@
-package logic
+package asynctask
 
 import (
 	"context"
+
 	"github.com/mooyang-code/moox/server/internal/service/asynctask/model"
 )
 
@@ -9,10 +10,10 @@ import (
 type TaskExecutor interface {
 	// GetTaskType 返回执行器支持的任务类型
 	GetTaskType() string
-	
+
 	// Execute 执行任务
 	Execute(ctx context.Context, task *model.AsyncTask) error
-	
+
 	// ValidateRequest 验证任务请求
 	ValidateRequest(taskData string) error
 }

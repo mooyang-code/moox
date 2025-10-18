@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gin-gonic/gin"
 	"github.com/mooyang-code/moox/server/internal/common"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
+
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -174,15 +175,15 @@ func (h *CloudAccountHandler) PostHandle(ctx context.Context, params map[string]
 // parseCloudAccount 解析云账户参数
 func (h *CloudAccountHandler) parseCloudAccount(params map[string]string) *model.CloudAccount {
 	account := &model.CloudAccount{
-		AccountID:    params["account_id"],
-		AccountName:  params["account_name"],
-		Provider:     params["provider"],
-		SecretID:     params["secret_id"],
-		SecretKey:    params["secret_key"],
-		AppID:        params["app_id"],
-		COSRegion:    params["cos_region"],
-		COSBucket:    params["cos_bucket"],
-		ExtraConfig:  params["extra_config"],
+		AccountID:   params["account_id"],
+		AccountName: params["account_name"],
+		Provider:    params["provider"],
+		SecretID:    params["secret_id"],
+		SecretKey:   params["secret_key"],
+		AppID:       params["app_id"],
+		COSRegion:   params["cos_region"],
+		COSBucket:   params["cos_bucket"],
+		ExtraConfig: params["extra_config"],
 	}
 
 	return account
@@ -192,24 +193,24 @@ func (h *CloudAccountHandler) parseCloudAccount(params map[string]string) *model
 func (h *CloudAccountHandler) GetCloudAccountList(c *gin.Context) {
 	ctx := c.Request.Context()
 	provider := c.Query("provider")
-	
+
 	var accounts []*model.CloudAccount
 	var err error
-	
+
 	if provider != "" {
 		accounts, err = h.service.ListAccountsByProvider(ctx, provider)
 	} else {
 		accounts, err = h.service.ListAccounts(ctx)
 	}
-	
+
 	if err != nil {
 		common.ErrorResponse(c, 500, "查询云账户列表失败", err)
 		return
 	}
-	
+
 	// 计算总数
 	total := int64(len(accounts))
-	
+
 	// 使用新的分页列表响应格式
 	common.PaginatedListResponse(c, "查询成功", accounts, total)
 }
@@ -222,7 +223,7 @@ func (h *CloudAccountHandler) GetCloudAccountDetail(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "message": "account_id is required"})
 		return
 	}
-	
+
 	account, err := h.service.GetAccount(ctx, accountID)
 	if err != nil {
 		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
@@ -239,7 +240,7 @@ func (h *CloudAccountHandler) CreateCloudAccount(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	
+
 	if err := h.service.CreateAccount(ctx, &account); err != nil {
 		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
 		return
@@ -255,7 +256,7 @@ func (h *CloudAccountHandler) UpdateCloudAccount(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	
+
 	if err := h.service.UpdateAccount(ctx, &account); err != nil {
 		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
 		return
@@ -271,7 +272,7 @@ func (h *CloudAccountHandler) DeleteCloudAccount(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "message": "account_id is required"})
 		return
 	}
-	
+
 	if err := h.service.DeleteAccount(ctx, accountID); err != nil {
 		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
 		return

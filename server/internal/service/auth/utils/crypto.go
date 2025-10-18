@@ -8,9 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -132,47 +130,4 @@ func DecryptPassword(encryptedPassword, salt string, timestamp int64) (string, e
 
 	// 解密得到原始密码
 	return AESDecrypt(encryptedPassword, key)
-}
-
-// JWTClaims JWT声明
-type JWTClaims struct {
-	UserID   string `json:"user_id"`
-	Username string `json:"username"`
-	Role     int32  `json:"role"`
-	jwt.RegisteredClaims
-}
-
-// GenerateJWT 生成JWT令牌
-func GenerateJWT(userID, username string, role int32, secretKey string, expiredDuration time.Duration) (string, error) {
-	claims := JWTClaims{
-		UserID:   userID,
-		Username: username,
-		Role:     role,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiredDuration)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			NotBefore: jwt.NewNumericDate(time.Now()),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(secretKey))
-}
-
-// ParseJWT 解析JWT令牌
-func ParseJWT(tokenString, secretKey string) (*JWTClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (any, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return []byte(secretKey), nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	if claims, ok := token.Claims.(*JWTClaims); ok && token.Valid {
-		return claims, nil
-	}
-	return nil, fmt.Errorf("invalid token")
 }

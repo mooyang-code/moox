@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	asynctasklogic "github.com/mooyang-code/moox/server/internal/service/asynctask/logic"
+	asynctask "github.com/mooyang-code/moox/server/internal/service/asynctask"
 	asynctaskmodel "github.com/mooyang-code/moox/server/internal/service/asynctask/model"
 	cloudnodelogic "github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
+
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -20,12 +21,12 @@ type BatchDeleteNodeRequest struct {
 // BatchDeleteNodeExecutor 批量删除节点执行器
 type BatchDeleteNodeExecutor struct {
 	scfNodeService   cloudnodelogic.SCFNodeService
-	asyncTaskService asynctasklogic.AsyncTaskService
+	asyncTaskService asynctask.Service
 	db               *gorm.DB
 }
 
 // NewBatchDeleteNodeExecutor 创建批量删除节点执行器
-func NewBatchDeleteNodeExecutor(db *gorm.DB, scfNodeService cloudnodelogic.SCFNodeService, asyncTaskService asynctasklogic.AsyncTaskService) *BatchDeleteNodeExecutor {
+func NewBatchDeleteNodeExecutor(db *gorm.DB, scfNodeService cloudnodelogic.SCFNodeService, asyncTaskService asynctask.Service) *BatchDeleteNodeExecutor {
 	return &BatchDeleteNodeExecutor{
 		scfNodeService:   scfNodeService,
 		asyncTaskService: asyncTaskService,
@@ -65,9 +66,9 @@ func (e *BatchDeleteNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 	}
 
 	// 创建任务详情
-	var taskItems []asynctasklogic.TaskItem
+	var taskItems []asynctask.TaskItem
 	for _, nodeID := range request.Nodes {
-		taskItems = append(taskItems, asynctasklogic.TaskItem{
+		taskItems = append(taskItems, asynctask.TaskItem{
 			ItemID:   nodeID,
 			ItemName: fmt.Sprintf("Node %s", nodeID),
 		})

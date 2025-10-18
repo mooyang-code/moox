@@ -161,6 +161,9 @@ type COS interface {
 	
 	// GetCOSObjectURL 获取COS对象的访问URL
 	GetCOSObjectURL(ctx context.Context, bucket, key string, expire time.Duration) (string, error)
+	
+	// DownloadCOSToFile 从COS下载文件到本地路径
+	DownloadCOSToFile(ctx context.Context, key string, localPath string) error
 }
 
 // UploadCOSRequest COS文件上传请求

@@ -7,41 +7,38 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
-	"trpc.group/trpc-go/trpc-go/log"
 
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Manager 心跳管理器
 type Manager struct {
-	db              *gorm.DB
-	NodeStates      sync.Map // 导出以供service访问
-	checkInterval   time.Duration
-	timeoutDuration time.Duration
-	nodeDAO         dao.SCFNodeDAO
-	heartbeatDAO    dao.NodeHeartbeatDAO
-	provider        provider.Client
-	mooxServiceURL  string
+	db               *gorm.DB
+	NodeStates       sync.Map // 导出以供service访问
+	checkInterval    time.Duration
+	timeoutDuration  time.Duration
+	nodeService      logic.SCFNodeService
+	heartbeatService logic.HeartbeatService
+	getCloudProvider func(accountID string) provider.Client // 根据账户ID获取云客户端
+	mooxServiceURL   string
 }
 
 // NewManager 创建心跳管理器
-func NewManager(db *gorm.DB, mooxServiceURL string) *Manager {
+// getCloudProvider: 根据账户ID获取对应的云客户端的回调函数
+func NewManager(db *gorm.DB, nodeService logic.SCFNodeService, heartbeatService logic.HeartbeatService, mooxServiceURL string, getCloudProvider func(string) provider.Client) *Manager {
 	return &Manager{
-		db:              db,
-		checkInterval:   5 * time.Second,
-		timeoutDuration: 11 * time.Second,
-		nodeDAO:         dao.NewSCFNodeDAO(db),
-		heartbeatDAO:    dao.NewNodeHeartbeatDAO(db),
-		mooxServiceURL:  mooxServiceURL,
+		db:               db,
+		checkInterval:    5 * time.Second,
+		timeoutDuration:  11 * time.Second,
+		nodeService:      nodeService,
+		heartbeatService: heartbeatService,
+		getCloudProvider: getCloudProvider,
+		mooxServiceURL:   mooxServiceURL,
 	}
-}
-
-// SetCloudProvider 设置云服务提供商
-func (m *Manager) SetCloudProvider(provider provider.Client) {
-	m.provider = provider
 }
 
 // Start 启动心跳管理器
@@ -69,7 +66,7 @@ func (m *Manager) HandleHeartbeat(ctx context.Context, data HeartbeatData) (*Hea
 	m.NodeStates.Store(data.NodeID, state)
 
 	// 异步更新数据库
-	go m.updateNodeHeartbeatDB(ctx, data)
+	go m.updateNodeHeartbeat(ctx, data)
 
 	// 构建响应
 	resp := &HeartbeatResponse{
@@ -85,24 +82,24 @@ func (m *Manager) initializeNewNodes(ctx context.Context) {
 	// 等待一段时间，让服务完全启动
 	time.Sleep(5 * time.Second)
 
-	// 获取所有已部署的节点
-	nodes, err := m.nodeDAO.GetSCFNodeList(ctx)
+	// 使用 nodeService 获取所有已部署的节点
+	nodes, err := m.nodeService.GetNodeList(ctx)
 	if err != nil {
 		log.ErrorContextf(ctx, "[heartbeat.Manager] Failed to list nodes: %v", err)
 		return
 	}
 
-	// 检查并初始化未心跳的节点
+	// 检查离线的节点
 	for _, node := range nodes {
-		if node.Status != model.NodeStatusOffline && node.Status != model.NodeStatusOnline {
-			// 检查节点是否已经有心跳
-			if _, exists := m.NodeStates.Load(node.NodeID); !exists {
-				log.InfoContextf(ctx, "[heartbeat.Manager] Initializing newly deployed node: %s", node.NodeID)
-				// 发送初始化请求
-				if err := m.sendProbe(ctx, node.NodeID); err != nil {
-					log.ErrorContextf(ctx, "[heartbeat.Manager] Failed to initialize node %s: %v", node.NodeID, err)
-				}
-			}
+		// 跳过已经在线的节点
+		if node.Status == model.NodeStatusOnline {
+			continue
+		}
+
+		// 发送心跳探测请求
+		log.InfoContextf(ctx, "[heartbeat.Manager] Initializing  node: %s", node.NodeID)
+		if err := m.sendProbe(ctx, node.NodeID); err != nil {
+			log.ErrorContextf(ctx, "[heartbeat.Manager] Failed to initialize node %s: %v", node.NodeID, err)
 		}
 	}
 }
@@ -141,8 +138,8 @@ func (m *Manager) checkNodes(ctx context.Context) {
 			state.Status = NodeStatusOffline
 			m.NodeStates.Store(nodeID, state)
 
-			// 更新数据库状态
-			m.heartbeatDAO.UpdateNodeStatus(ctx, nodeID, int(NodeStatusOffline))
+			// 使用心跳服务更新数据库状态
+			m.heartbeatService.UpdateNodeStatus(ctx, nodeID, int(NodeStatusOffline))
 
 			// 异步处理节点离线
 			go m.handleNodeOffline(ctx, nodeID)
@@ -178,23 +175,29 @@ func (m *Manager) handleNodeOffline(ctx context.Context, nodeID string) {
 
 		// 节点无法探活，标记节点需要重新部署
 		log.ErrorContextf(ctx, "[heartbeat.Manager] Node %s probe failed, may need redeployment", nodeID)
-		m.nodeDAO.UpdateNodeStatus(ctx, nodeID, model.NodeStatusOffline)
+		// 使用 nodeService 更新节点状态
+		if node, err := m.nodeService.GetNode(ctx, nodeID); err == nil && node != nil {
+			node.Status = model.NodeStatusOffline
+			m.nodeService.UpdateNode(ctx, node)
+		}
 	}
 }
 
 // sendProbe 发送探测请求（初始化请求）
 func (m *Manager) sendProbe(ctx context.Context, nodeID string) error {
-	if m.provider == nil {
-		return fmt.Errorf("cloud provider not configured")
-	}
-
-	// 获取节点信息
-	node, err := m.nodeDAO.GetSCFNode(ctx, nodeID)
+	// 使用 nodeService 获取节点信息
+	node, err := m.nodeService.GetNode(ctx, nodeID)
 	if err != nil {
 		return fmt.Errorf("failed to get node info: %w", err)
 	}
 	if node == nil {
 		return fmt.Errorf("node not found")
+	}
+
+	// 根据节点的云账户ID获取对应的云客户端
+	cloudProvider := m.getCloudProvider(node.CloudAccountID)
+	if cloudProvider == nil {
+		return fmt.Errorf("cloud provider not found for account: %s", node.CloudAccountID)
 	}
 
 	// 构建初始化请求
@@ -213,10 +216,9 @@ func (m *Manager) sendProbe(ctx context.Context, nodeID string) error {
 		},
 		InvokeType: provider.InvokeTypeSync,
 	}
+	log.InfoContextf(ctx, "[heartbeat.Manager] Sending init probe to node %s (account: %s)", nodeID, node.CloudAccountID)
 
-	log.InfoContextf(ctx, "[heartbeat.Manager] Sending init probe to node %s", nodeID)
-
-	resp, err := m.provider.InvokeFunction(ctx, invokeReq)
+	resp, err := cloudProvider.InvokeFunction(ctx, invokeReq)
 	if err != nil {
 		return fmt.Errorf("invoke probe failed: %w", err)
 	}
@@ -226,12 +228,11 @@ func (m *Manager) sendProbe(ctx context.Context, nodeID string) error {
 		log.InfoContextf(ctx, "[heartbeat.Manager] Node %s initialization successful", nodeID)
 		return nil
 	}
-
 	return fmt.Errorf("probe returned status %d: %s", resp.StatusCode, resp.ErrorMessage)
 }
 
-// updateNodeHeartbeatDB 更新节点心跳到数据库
-func (m *Manager) updateNodeHeartbeatDB(ctx context.Context, data HeartbeatData) {
+// updateNodeHeartbeat 更新节点心跳
+func (m *Manager) updateNodeHeartbeat(ctx context.Context, data HeartbeatData) {
 	// 构建任务摘要
 	taskSummary := map[string]interface{}{
 		"count": len(data.RunningTasks),
@@ -247,7 +248,8 @@ func (m *Manager) updateNodeHeartbeatDB(ctx context.Context, data HeartbeatData)
 		Metrics:       string(metricsJSON),
 	}
 
-	if err := m.heartbeatDAO.UpdateHeartbeat(ctx, heartbeat); err != nil {
+	// 使用心跳服务更新心跳记录
+	if err := m.heartbeatService.UpdateHeartbeat(ctx, heartbeat); err != nil {
 		log.ErrorContextf(ctx, "[heartbeat.Manager] Failed to update heartbeat for node %s: %v",
 			data.NodeID, err)
 	}

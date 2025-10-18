@@ -5,8 +5,9 @@ import (
 	"errors"
 	"sync"
 	"time"
-	
+
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
+
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -17,18 +18,18 @@ var (
 
 // NodeCreationMessage 表示异步节点创建的消息
 type NodeCreationMessage struct {
-	NodeID         string           `json:"node_id"`
-	CloudAccountID string           `json:"cloud_account_id"`
-	PackageID      int64            `json:"package_id"`      // 代码包ID
-	Namespace      string           `json:"namespace"`
-	Region         string           `json:"region"`
-	NodeType       string           `json:"node_type"`
-	FunctionName   string           `json:"function_name"`
-	ZipFilePath    string           `json:"zip_file_path"`
-	TaskID         string           `json:"task_id"`
-	ItemID         string           `json:"item_id"`
-	NodeData       *model.SCFNode   `json:"node_data"`
-	CreatedAt      time.Time        `json:"created_at"`
+	NodeID         string         `json:"node_id"`
+	CloudAccountID string         `json:"cloud_account_id"`
+	PackageID      int64          `json:"package_id"` // 代码包ID
+	Namespace      string         `json:"namespace"`
+	Region         string         `json:"region"`
+	NodeType       string         `json:"node_type"`
+	FunctionName   string         `json:"function_name"`
+	ZipFilePath    string         `json:"zip_file_path"`
+	TaskID         string         `json:"task_id"`
+	ItemID         string         `json:"item_id"`
+	NodeData       *model.SCFNode `json:"node_data"`
+	CreatedAt      time.Time      `json:"created_at"`
 }
 
 // NodeDeletionMessage 表示异步节点删除的消息
@@ -38,8 +39,8 @@ type NodeDeletionMessage struct {
 	Namespace      string    `json:"namespace"`
 	Region         string    `json:"region"`
 	FunctionName   string    `json:"function_name"`
-	TaskID         string    `json:"task_id,omitempty"`         // 关联的异步任务ID
-	ItemID         string    `json:"item_id,omitempty"`         // 任务中的项目ID
+	TaskID         string    `json:"task_id,omitempty"` // 关联的异步任务ID
+	ItemID         string    `json:"item_id,omitempty"` // 任务中的项目ID
 	CreatedAt      time.Time `json:"created_at"`
 }
 
@@ -60,7 +61,7 @@ type NodeDeploymentMessage struct {
 	CloudAccountID string    `json:"cloud_account_id"`
 	Namespace      string    `json:"namespace"`
 	Region         string    `json:"region"`
-	PackageID      int64     `json:"package_id,omitempty"`     // 代码包ID，优先使用
+	PackageID      int64     `json:"package_id,omitempty"` // 代码包ID，优先使用
 	ZipFileBase64  string    `json:"zip_file_base64"`
 	FileName       string    `json:"file_name"`
 	TaskID         string    `json:"task_id,omitempty"` // 关联的异步任务ID
@@ -115,13 +116,13 @@ func (q *NodeCreationQueue) Dequeue(ctx context.Context) (NodeCreationMessage, e
 		// 通道为空，检查内存队列
 		q.mu.Lock()
 		defer q.mu.Unlock()
-		
+
 		if len(q.messages) > 0 {
 			msg := q.messages[0]
 			q.messages = q.messages[1:]
 			return msg, nil
 		}
-		
+
 		// 没有可用的消息
 		return NodeCreationMessage{}, ErrQueueEmpty
 	}

@@ -6,8 +6,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gin-gonic/gin"
 	"github.com/mooyang-code/moox/server/internal/service/packagemgr/logic"
+
+	"github.com/gin-gonic/gin"
 )
 
 // FunctionPackageHandler 云函数代码包处理器
@@ -21,7 +22,6 @@ func NewFunctionPackageHandler(packageService *logic.FunctionPackageService) *Fu
 		packageService: packageService,
 	}
 }
-
 
 // UploadPackageAsync 异步上传代码包
 // @Summary 异步上传云函数代码包
@@ -195,37 +195,6 @@ func (h *FunctionPackageHandler) DeletePackage(c *gin.Context) {
 	SuccessResponse(c, "删除成功", nil)
 }
 
-// GetPackageDownloadURL 获取代码包下载链接
-// @Summary 获取云函数代码包下载链接
-// @Description 生成云函数代码包的临时下载链接
-// @Tags 云函数代码包
-// @Accept json
-// @Produce json
-// @Param id path int true "代码包ID"
-// @Success 200 {object} APIResponse{data=map[string]string}
-// @Failure 400 {object} APIResponse
-// @Failure 500 {object} APIResponse
-// @Router /api/v1/function-packages/{id}/download-url [get]
-func (h *FunctionPackageHandler) GetPackageDownloadURL(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		ErrorResponse(c, http.StatusBadRequest, "无效的ID参数", err)
-		return
-	}
-
-	url, err := h.packageService.GetPackageDownloadURL(c.Request.Context(), id)
-	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "生成下载链接失败", err)
-		return
-	}
-
-	SuccessResponse(c, "生成下载链接成功", map[string]string{
-		"download_url": url,
-		"expires_in":   "24小时",
-	})
-}
-
 // GetPackageOptions 获取代码包选项（用于下拉选择）
 // @Summary 获取代码包选项
 // @Description 获取可用的代码包选项，用于批量部署时的下拉选择
@@ -279,18 +248,18 @@ func (h *FunctionPackageHandler) GetPackageOptions(c *gin.Context) {
 	SuccessResponse(c, "查询成功", options)
 }
 
-// DownloadLocalPackage 下载本地存储的代码包
-// @Summary 下载本地存储的云函数代码包
-// @Description 下载存储在本地的云函数代码包文件
+// GetPackageDownloadURL 获取代码包下载URL
+// @Summary 获取云函数代码包下载URL
+// @Description 获取代码包的直接下载URL，用于浏览器直接下载
 // @Tags 云函数代码包
 // @Accept json
-// @Produce octet-stream
+// @Produce json
 // @Param id path int true "代码包ID"
-// @Success 200 {file} binary
+// @Success 200 {object} APIResponse{data=logic.PackageDownloadURL}
 // @Failure 400 {object} APIResponse
 // @Failure 500 {object} APIResponse
-// @Router /api/v1/function-packages/{id}/download-local [get]
-func (h *FunctionPackageHandler) DownloadLocalPackage(c *gin.Context) {
+// @Router /api/v1/function-packages/{id}/download-url [get]
+func (h *FunctionPackageHandler) GetPackageDownloadURL(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -298,17 +267,10 @@ func (h *FunctionPackageHandler) DownloadLocalPackage(c *gin.Context) {
 		return
 	}
 
-	content, filename, err := h.packageService.DownloadLocalPackage(c.Request.Context(), id)
+	result, err := h.packageService.GetPackageDownloadURL(c.Request.Context(), id)
 	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "下载失败", err)
+		ErrorResponse(c, http.StatusInternalServerError, "获取下载URL失败", err)
 		return
 	}
-
-	// 设置响应头
-	c.Header("Content-Type", "application/zip")
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
-	c.Header("Content-Length", fmt.Sprintf("%d", len(content)))
-
-	// 返回文件内容
-	c.Data(http.StatusOK, "application/zip", content)
+	SuccessResponse(c, "获取下载URL成功", result)
 }

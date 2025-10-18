@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/server/internal/service/collector/model"
+
 	"gorm.io/gorm"
 )
 
@@ -79,15 +80,15 @@ func (d *collectorTaskInstanceDaoImpl) UpdateTaskInstance(ctx context.Context, i
 		Model(&model.CollectorTaskInstance{}).
 		Where("c_instance_id = ?", instance.InstanceID).
 		Updates(map[string]interface{}{
-			"c_target_objects":    instance.TargetObjects,
-			"c_execution_params":  instance.ExecutionParams,
-			"c_status":            instance.Status,
-			"c_start_time":        instance.StartTime,
-			"c_end_time":          instance.EndTime,
-			"c_result":            instance.Result,
-			"c_project_id":        instance.ProjectID,
-			"c_dataset_id":        instance.DatasetID,
-			"c_mtime":             instance.ModifyTime,
+			"c_target_objects":   instance.TargetObjects,
+			"c_execution_params": instance.ExecutionParams,
+			"c_status":           instance.Status,
+			"c_start_time":       instance.StartTime,
+			"c_end_time":         instance.EndTime,
+			"c_result":           instance.Result,
+			"c_project_id":       instance.ProjectID,
+			"c_dataset_id":       instance.DatasetID,
+			"c_mtime":            instance.ModifyTime,
 		})
 
 	if result.Error != nil {

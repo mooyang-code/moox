@@ -1,5 +1,6 @@
 import { api } from '@/api/config';
 
+
 // 云函数代码包接口定义
 export interface FunctionPackage {
   id: number;
@@ -118,11 +119,13 @@ export const deleteFunctionPackage = async (id: number) => {
   return response;
 };
 
-// 获取云函数代码包下载链接
-export const getFunctionPackageDownloadURL = async (id: number): Promise<any> => {
+
+// 获取代码包下载URL（新方法）
+export const getPackageDownloadURL = async (id: number): Promise<any> => {
   const response = await api.post('/collector/GetPackageDownloadURL', { id });
   return response.data;
 };
+
 
 // 获取代码包选项（用于下拉选择）
 export const getFunctionPackageOptions = async (packageType?: string): Promise<any> => {
@@ -137,13 +140,54 @@ export const getUploadTaskStatus = async (taskId: string): Promise<any> => {
   return response.data;
 };
 
-// 下载本地存储的代码包
-export const downloadLocalPackage = (id: number) => {
-  // 对于本地下载，需要直接使用API路径而不是网关路径
-  const host = window.location.hostname;
-  const port = 20103; // 后端服务端口
-  window.open(`http://${host}:${port}/api/function-packages/${id}/download-local`, '_blank');
+// 简单的URL下载（新的推荐方式）
+export const downloadPackageByURL = async (id: number): Promise<void> => {
+  try {
+    console.log(`开始获取代码包 ${id} 的下载URL...`);
+    
+    // 1. 获取下载URL
+    const response = await getPackageDownloadURL(id);
+    
+    if (response?.code !== 200 || !response?.data?.[0]) {
+      throw new Error('获取下载URL失败');
+    }
+    
+    const downloadInfo = response.data[0];
+    const { download_url, filename } = downloadInfo;
+    
+    console.log(`获取到下载URL: ${download_url}, 文件名: ${filename}`);
+    
+    // 2. 构建完整的下载URL
+    // 从浏览器当前URL中提取IP（冒号之前的部分）
+    const currentURL = window.location.href;
+    const urlObj = new URL(currentURL);
+    const hostname = urlObj.hostname; // 获取IP地址部分
+    
+    // 构建文件服务器URL（端口18080）
+    const fullDownloadURL = `http://${hostname}:18080${download_url}`;
+    
+    console.log(`构建的完整下载URL: ${fullDownloadURL}`);
+    
+    // 3. 创建隐藏的下载链接
+    const link = document.createElement('a');
+    link.href = fullDownloadURL;
+    link.download = filename;
+    link.style.display = 'none';
+    
+    // 4. 触发下载
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    console.log(`✓ 下载已触发: ${filename}`);
+    
+  } catch (error) {
+    console.error('URL下载失败:', error);
+    throw error;
+  }
 };
+
+
 
 // 运行时环境选项
 export const RUNTIME_OPTIONS = [

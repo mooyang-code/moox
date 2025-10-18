@@ -4,7 +4,7 @@ package provider
 
 // ConfigInterface 配置接口，供provider实现使用
 type ConfigInterface interface {
-	GetProvider() Provider
+	GetProvider() CloudPlatform
 	GetSecretID() string
 	GetSecretKey() string
 	GetExtraConfig() map[string]interface{}
@@ -17,7 +17,7 @@ type ConfigInterface interface {
 var _ ConfigInterface = (*Config)(nil)
 
 // GetProvider 获取云平台类型
-func (c *Config) GetProvider() Provider {
+func (c *Config) GetProvider() CloudPlatform {
 	return c.Provider
 }
 

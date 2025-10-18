@@ -183,3 +183,43 @@ func (p *Provider) GetCOSObjectURL(ctx context.Context, bucket, key string, expi
 	p.logInfo(ctx, "generated presigned URL for COS object, key: %s, url: %s", key, presignedURL.String())
 	return presignedURL.String(), nil
 }
+
+// DownloadCOSToFile 从COS下载文件到本地路径
+func (p *Provider) DownloadCOSToFile(ctx context.Context, key string, localPath string) error {
+	if p.cosClient == nil {
+		return fmt.Errorf("COS client is not initialized, please check COSBucket and COSAppID configuration")
+	}
+
+	if key == "" || localPath == "" {
+		return fmt.Errorf("key and localPath are required")
+	}
+
+	p.logInfo(ctx, "downloading file from COS to local, key: %s, localPath: %s", key, localPath)
+
+	var err error
+	// 使用重试机制下载文件
+	err = retry.Do(
+		func() error {
+			// 使用GetToFile方法下载文件到本地
+			_, err = p.cosClient.Object.GetToFile(ctx, key, localPath, nil)
+			if err != nil {
+				p.logError(ctx, "failed to download file from COS, err: %v, key: %s, localPath: %s", err, key, localPath)
+				return err
+			}
+			return nil
+		},
+		retry.Attempts(3),          // 重试3次
+		retry.Delay(2*time.Second), // 每次重试间隔2秒
+		retry.LastErrorOnly(true),  // 仅返回最后一次错误
+		retry.OnRetry(func(n uint, err error) { // 每次重试的回调
+			p.logError(ctx, "retry download from COS #%d, because got err: %s", n, err)
+		}),
+	)
+
+	if err != nil {
+		p.logError(ctx, "download from COS failed after retries, err: %v", err)
+		return fmt.Errorf("download from COS failed: %w", err)
+	}
+	p.logInfo(ctx, "successfully downloaded file from COS, key: %s, localPath: %s", key, localPath)
+	return nil
+}

@@ -27,7 +27,7 @@ type User struct {
 }
 
 // TableName 表名
-func (User) TableName() string {
+func (u *User) TableName() string {
 	return "t_users"
 }
 
@@ -50,7 +50,7 @@ type ActiveToken struct {
 }
 
 // TableName 表名
-func (ActiveToken) TableName() string {
+func (t *ActiveToken) TableName() string {
 	return "t_active_tokens"
 }
 
@@ -71,7 +71,7 @@ type LoginHistory struct {
 }
 
 // TableName 表名
-func (LoginHistory) TableName() string {
+func (h *LoginHistory) TableName() string {
 	return "t_login_history"
 }
 
@@ -89,7 +89,7 @@ type UserAction struct {
 }
 
 // TableName 表名
-func (UserAction) TableName() string {
+func (a *UserAction) TableName() string {
 	return "t_user_actions"
 }
 

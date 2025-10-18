@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	asynctasklogic "github.com/mooyang-code/moox/server/internal/service/asynctask/logic"
+	asynctask "github.com/mooyang-code/moox/server/internal/service/asynctask"
 	asynctaskmodel "github.com/mooyang-code/moox/server/internal/service/asynctask/model"
 	cloudnodelogic "github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
 	cloudnodemodel "github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
+
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -24,7 +25,7 @@ type NodeCreateItem struct {
 	NodeType            string `json:"node_type"`
 	Region              string `json:"region"`
 	IPAddress           string `json:"ip_address"`
-	PackageID           int64  `json:"package_id"`           // 代码包ID
+	PackageID           int64  `json:"package_id"` // 代码包ID
 	SupportedCollectors string `json:"supported_collectors"`
 	Capacity            string `json:"capacity"`
 	Metadata            string `json:"metadata"`
@@ -33,12 +34,12 @@ type NodeCreateItem struct {
 // BatchCreateNodeExecutor 批量创建节点执行器
 type BatchCreateNodeExecutor struct {
 	scfNodeService   cloudnodelogic.SCFNodeService
-	asyncTaskService asynctasklogic.AsyncTaskService
+	asyncTaskService asynctask.Service
 	db               *gorm.DB
 }
 
 // NewBatchCreateNodeExecutor 创建批量创建节点执行器
-func NewBatchCreateNodeExecutor(db *gorm.DB, scfNodeService cloudnodelogic.SCFNodeService, asyncTaskService asynctasklogic.AsyncTaskService) *BatchCreateNodeExecutor {
+func NewBatchCreateNodeExecutor(db *gorm.DB, scfNodeService cloudnodelogic.SCFNodeService, asyncTaskService asynctask.Service) *BatchCreateNodeExecutor {
 	return &BatchCreateNodeExecutor{
 		scfNodeService:   scfNodeService,
 		asyncTaskService: asyncTaskService,
@@ -75,10 +76,10 @@ func (e *BatchCreateNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 	log.InfoContextf(ctx, "BatchCreateNodeExecutor Execute : total nodes=%d; TaskID=%s", len(request.Nodes), task.TaskID)
 
 	// 批量创建任务详情记录
-	taskItems := make([]asynctasklogic.TaskItem, len(request.Nodes))
+	taskItems := make([]asynctask.TaskItem, len(request.Nodes))
 	for i := range request.Nodes {
 		itemID := fmt.Sprintf("node_%d", i+1)
-		taskItems[i] = asynctasklogic.TaskItem{
+		taskItems[i] = asynctask.TaskItem{
 			ItemID:   itemID,
 			ItemName: fmt.Sprintf("Node %d", i+1),
 		}
@@ -103,7 +104,7 @@ func (e *BatchCreateNodeExecutor) Execute(ctx context.Context, task *asynctaskmo
 			packageIDInt := int(nodeData.PackageID)
 			packageID = &packageIDInt
 		}
-		
+
 		node := &cloudnodemodel.SCFNode{
 			CloudAccountID:      nodeData.CloudAccountID,
 			PackageID:           packageID,

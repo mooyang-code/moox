@@ -2,14 +2,15 @@ package queue
 
 import (
 	"time"
-	
+
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
+
 	"gorm.io/gorm"
 )
 
-// QueueManager 管理所有队列
-type QueueManager struct {
+// Manager 管理所有队列
+type Manager struct {
 	nodeCreationQueue   *NodeCreationQueue
 	nodeDeletionQueue   *NodeDeletionQueue
 	functionUpdateQueue *FunctionUpdateQueue
@@ -18,8 +19,8 @@ type QueueManager struct {
 	cfConfig            *config.CloudFunctionConfig
 }
 
-// NewQueueManager 创建新的队列管理器
-func NewQueueManager(db *gorm.DB) *QueueManager {
+// NewManager 创建新的队列管理器
+func NewManager(db *gorm.DB) *Manager {
 	// 加载云函数配置
 	cfConfig, err := config.LoadCloudFunctionConfig()
 	if err != nil {
@@ -27,7 +28,7 @@ func NewQueueManager(db *gorm.DB) *QueueManager {
 		cfConfig = config.GetCloudFunctionConfig()
 	}
 
-	return &QueueManager{
+	return &Manager{
 		nodeCreationQueue:   NewNodeCreationQueue(100),   // 缓冲区大小为100
 		nodeDeletionQueue:   NewNodeDeletionQueue(100),   // 缓冲区大小为100
 		functionUpdateQueue: NewFunctionUpdateQueue(100), // 缓冲区大小为100
@@ -38,27 +39,27 @@ func NewQueueManager(db *gorm.DB) *QueueManager {
 }
 
 // GetNodeCreationQueue 返回节点创建队列
-func (m *QueueManager) GetNodeCreationQueue() *NodeCreationQueue {
+func (m *Manager) GetNodeCreationQueue() *NodeCreationQueue {
 	return m.nodeCreationQueue
 }
 
 // GetNodeDeletionQueue 返回节点删除队列
-func (m *QueueManager) GetNodeDeletionQueue() *NodeDeletionQueue {
+func (m *Manager) GetNodeDeletionQueue() *NodeDeletionQueue {
 	return m.nodeDeletionQueue
 }
 
 // GetFunctionUpdateQueue 返回函数更新队列
-func (m *QueueManager) GetFunctionUpdateQueue() *FunctionUpdateQueue {
+func (m *Manager) GetFunctionUpdateQueue() *FunctionUpdateQueue {
 	return m.functionUpdateQueue
 }
 
 // EnqueueNodeCreation 将节点创建消息加入队列（统一带任务ID，可为空）
-func (m *QueueManager) EnqueueNodeCreation(node *model.SCFNode, taskID, itemID string) error {
+func (m *Manager) EnqueueNodeCreation(node *model.SCFNode, taskID, itemID string) error {
 	var packageID int64
 	if node.PackageID != nil {
 		packageID = int64(*node.PackageID)
 	}
-	
+
 	msg := NodeCreationMessage{
 		NodeID:         node.NodeID,
 		CloudAccountID: node.CloudAccountID,
@@ -78,7 +79,7 @@ func (m *QueueManager) EnqueueNodeCreation(node *model.SCFNode, taskID, itemID s
 }
 
 // EnqueueNodeDeletion 将节点删除消息加入队列
-func (m *QueueManager) EnqueueNodeDeletion(node *model.SCFNode, taskID, itemID string) error {
+func (m *Manager) EnqueueNodeDeletion(node *model.SCFNode, taskID, itemID string) error {
 	msg := NodeDeletionMessage{
 		NodeID:         node.NodeID,
 		CloudAccountID: node.CloudAccountID,
@@ -94,7 +95,7 @@ func (m *QueueManager) EnqueueNodeDeletion(node *model.SCFNode, taskID, itemID s
 }
 
 // EnqueueFunctionUpdate 将函数更新消息加入队列
-func (m *QueueManager) EnqueueFunctionUpdate(node *model.SCFNode, zipFilePath string) error {
+func (m *Manager) EnqueueFunctionUpdate(node *model.SCFNode, zipFilePath string) error {
 	msg := FunctionUpdateMessage{
 		NodeID:         node.NodeID,
 		CloudAccountID: node.CloudAccountID,
@@ -109,22 +110,22 @@ func (m *QueueManager) EnqueueFunctionUpdate(node *model.SCFNode, zipFilePath st
 }
 
 // GetNodeDeploymentQueue 返回节点部署队列
-func (m *QueueManager) GetNodeDeploymentQueue() *NodeDeploymentQueue {
+func (m *Manager) GetNodeDeploymentQueue() *NodeDeploymentQueue {
 	return m.nodeDeploymentQueue
 }
 
 // GetCloudFunctionConfig 返回云函数配置
-func (m *QueueManager) GetCloudFunctionConfig() *config.CloudFunctionConfig {
+func (m *Manager) GetCloudFunctionConfig() *config.CloudFunctionConfig {
 	return m.cfConfig
 }
 
 // EnqueueNodeDeployment 将节点部署消息加入队列
-func (m *QueueManager) EnqueueNodeDeployment(msg *NodeDeploymentMessage) error {
+func (m *Manager) EnqueueNodeDeployment(msg *NodeDeploymentMessage) error {
 	return m.nodeDeploymentQueue.Enqueue(*msg)
 }
 
 // Close 关闭所有队列
-func (m *QueueManager) Close() {
+func (m *Manager) Close() {
 	m.nodeCreationQueue.Close()
 	m.nodeDeletionQueue.Close()
 	m.functionUpdateQueue.Close()

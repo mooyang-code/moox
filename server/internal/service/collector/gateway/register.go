@@ -1,7 +1,8 @@
-package collector
+package gateway
 
 import (
 	"github.com/mooyang-code/moox/server/internal/gateway"
+
 	"trpc.group/trpc-go/trpc-go/log"
 )
 

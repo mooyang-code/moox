@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/server/internal/service/collector/model"
+
 	"gorm.io/gorm"
 )
 

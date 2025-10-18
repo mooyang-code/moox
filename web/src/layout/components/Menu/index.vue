@@ -26,6 +26,7 @@ import { useThemeConfig } from "@/store/modules/theme-config";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { useRoutingMethod } from "@/hooks/useRoutingMethod";
 import { ref, computed, onMounted, watch } from "vue";
+import { useRouter, useRoute } from "vue-router";
 import { Message } from '@arco-design/web-vue';
 import { listProjects, type Project } from '@/api/project';
 

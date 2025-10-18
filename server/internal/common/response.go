@@ -6,14 +6,15 @@ import (
 	"reflect"
 
 	"github.com/gin-gonic/gin"
-	"trpc.group/trpc-go/trpc-go/log"
+	"github.com/mooyang-code/moox/server/internal/errors"
+	"github.com/mooyang-code/moox/server/internal/logger"
 )
 
 // UnifiedAPIResponse 统一的API响应格式 - 兼容wuji格式并支持标准API（wuji即为apicache）
 type UnifiedAPIResponse struct {
-	Code    int    `json:"code"`    // 状态码（200表示成功）
-	Message string `json:"message"` // 返回消息
-	Data    []any  `json:"data"`    // 数据数组（wuji格式要求）
+	Code    int    `json:"code"`            // 状态码（200表示成功）
+	Message string `json:"message"`         // 返回消息
+	Data    []any  `json:"data"`            // 数据数组（wuji格式要求）
 	Total   *int64 `json:"total,omitempty"` // 总数（分页列表时使用）
 }
 
@@ -27,7 +28,8 @@ func SuccessResponse(c *gin.Context, message string, data interface{}) {
 	c.JSON(http.StatusOK, response)
 }
 
-// ErrorResponse 错误响应
+// ErrorResponse 错误响应 (已弃用，使用 HandleError 替代)
+// Deprecated: 使用 errors.HandleError 或 HandleAppError 替代
 func ErrorResponse(c *gin.Context, statusCode int, message string, err error) {
 	response := &UnifiedAPIResponse{
 		Code:    statusCode,
@@ -35,9 +37,9 @@ func ErrorResponse(c *gin.Context, statusCode int, message string, err error) {
 		Data:    []any{},
 	}
 
-	// 在开发模式下包含错误详情
+	// 记录错误
 	if err != nil {
-		log.Errorf("API Error: %s - %v", message, err)
+		logger.Errorf(c.Request.Context(), "API Error: %s - %v", message, err)
 		if gin.Mode() == gin.DebugMode {
 			response.Data = []any{map[string]string{
 				"error": err.Error(),
@@ -46,6 +48,47 @@ func ErrorResponse(c *gin.Context, statusCode int, message string, err error) {
 	}
 
 	c.JSON(statusCode, response)
+}
+
+// HandleAppError 处理AppError并返回统一格式的响应
+func HandleAppError(c *gin.Context, err error) {
+	if err == nil {
+		return
+	}
+
+	var appErr *errors.AppError
+	if e, ok := err.(*errors.AppError); ok {
+		appErr = e
+		// 记录错误日志
+		if appErr.HTTPStatus >= 500 {
+			logger.Errorf(c.Request.Context(), "Server error: %v", appErr)
+		} else {
+			logger.Warnf(c.Request.Context(), "Client error: %v", appErr)
+		}
+
+		// 构建响应
+		response := &UnifiedAPIResponse{
+			Code:    appErr.HTTPStatus,
+			Message: appErr.Message,
+			Data:    []any{},
+		}
+
+		// 开发模式下包含详细信息
+		if gin.Mode() == gin.DebugMode && appErr.Details != nil && len(appErr.Details) > 0 {
+			response.Data = []any{appErr.Details}
+		}
+
+		c.JSON(appErr.HTTPStatus, response)
+		return
+	}
+
+	// 未知错误
+	logger.Errorf(c.Request.Context(), "Unknown error: %v", err)
+	c.JSON(http.StatusInternalServerError, &UnifiedAPIResponse{
+		Code:    http.StatusInternalServerError,
+		Message: "Internal server error",
+		Data:    []any{},
+	})
 }
 
 // convertToArray 将任意数据转换为数组格式
@@ -70,9 +113,7 @@ func convertToArray(data interface{}) []any {
 			return nil
 		}
 		result := make([]any, len(arr))
-		for i, v := range arr {
-			result[i] = v
-		}
+		copy(result, arr)
 		return result
 	}
 
@@ -134,12 +175,12 @@ func convertSliceToArray(data interface{}) []any {
 	if v.Kind() != reflect.Slice {
 		return []any{data}
 	}
-	
+
 	// 如果是空切片，返回nil而不是空数组
 	if v.Len() == 0 {
 		return nil
 	}
-	
+
 	result := make([]any, v.Len())
 	for i := 0; i < v.Len(); i++ {
 		result[i] = v.Index(i).Interface()

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
+
 	"gorm.io/gorm"
 )
 
@@ -81,18 +82,18 @@ func (d *scfNodeDaoImpl) UpdateSCFNode(ctx context.Context, node *model.SCFNode)
 		Model(&model.SCFNode{}).
 		Where("c_node_id = ? AND c_invalid = ?", node.NodeID, 0).
 		Updates(map[string]interface{}{
-			"c_cloud_account_id":    node.CloudAccountID,
-			"c_namespace":           node.Namespace,
-			"c_node_type":           node.NodeType,
-			"c_region":              node.Region,
-			"c_ip_address":          node.IPAddress,
+			"c_cloud_account_id":     node.CloudAccountID,
+			"c_namespace":            node.Namespace,
+			"c_node_type":            node.NodeType,
+			"c_region":               node.Region,
+			"c_ip_address":           node.IPAddress,
 			"c_supported_collectors": node.SupportedCollectors,
-			"c_capacity":            node.Capacity,
-			"c_current_load":        node.CurrentLoad,
-			"c_status":              node.Status,
-			"c_last_heartbeat":      node.LastHeartbeat,
-			"c_metadata":            node.Metadata,
-			"c_mtime":               node.ModifyTime,
+			"c_capacity":             node.Capacity,
+			"c_current_load":         node.CurrentLoad,
+			"c_status":               node.Status,
+			"c_last_heartbeat":       node.LastHeartbeat,
+			"c_metadata":             node.Metadata,
+			"c_mtime":                node.ModifyTime,
 		})
 
 	if result.Error != nil {
@@ -131,11 +132,11 @@ func (d *scfNodeDaoImpl) UpdateNodeHeartbeat(ctx context.Context, nodeID string,
 		"c_status":         model.NodeStatusOnline,
 		"c_mtime":          now,
 	}
-	
+
 	if currentLoad != "" {
 		updates["c_current_load"] = currentLoad
 	}
-	
+
 	result := d.db.WithContext(ctx).
 		Model(&model.SCFNode{}).
 		Where("c_node_id = ? AND c_invalid = ?", nodeID, 0).
@@ -214,7 +215,7 @@ func (d *scfNodeDaoImpl) GetNamespaceStats(ctx context.Context, region string) (
 	}
 
 	var stats []NamespaceCount
-	
+
 	// 查询每个命名空间的节点数量
 	// 注意：这里假设每个节点代表一个云函数
 	result := d.db.WithContext(ctx).

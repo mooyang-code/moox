@@ -1,4 +1,4 @@
-package nodeservice
+package api
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 
 	"github.com/mooyang-code/moox/server/internal/service/nodeservice/heartbeat"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
+
 	"trpc.group/trpc-go/trpc-go/log"
 )
 

@@ -24,7 +24,7 @@ type AsyncTaskDetail struct {
 }
 
 // TableName 指定表名
-func (AsyncTaskDetail) TableName() string {
+func (d *AsyncTaskDetail) TableName() string {
 	return "t_async_task_details"
 }
 

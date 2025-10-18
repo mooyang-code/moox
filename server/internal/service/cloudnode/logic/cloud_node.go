@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/queue"
+
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -33,7 +34,7 @@ type SCFNodeService interface {
 
 type scfNodeServiceImpl struct {
 	nodeDAO      dao.SCFNodeDAO
-	queueManager *queue.QueueManager
+	queueManager *queue.Manager
 }
 
 // NewSCFNodeService 创建新的SCF节点服务实例
@@ -45,7 +46,7 @@ func NewSCFNodeService(db *gorm.DB) SCFNodeService {
 }
 
 // NewSCFNodeServiceWithQueue 创建新的SCF节点服务实例（带队列管理器）
-func NewSCFNodeServiceWithQueue(db *gorm.DB, queueManager *queue.QueueManager) SCFNodeService {
+func NewSCFNodeServiceWithQueue(db *gorm.DB, queueManager *queue.Manager) SCFNodeService {
 	return &scfNodeServiceImpl{
 		nodeDAO:      dao.NewSCFNodeDAO(db),
 		queueManager: queueManager,
@@ -61,8 +62,8 @@ func (s *scfNodeServiceImpl) GetNodeList(ctx context.Context) ([]*model.SCFNode,
 	// 检查心跳超时的节点并更新状态
 	for _, node := range nodes {
 		if node.Status == model.NodeStatusOnline && node.LastHeartbeat != nil {
-			// 如果超过5分钟没有心跳，认为节点离线
-			if time.Since(*node.LastHeartbeat) > 5*time.Minute {
+			// 如果超过1分钟没有心跳，认为节点离线
+			if time.Since(*node.LastHeartbeat) > 1*time.Minute {
 				node.Status = model.NodeStatusOffline
 			}
 		}
@@ -547,9 +548,9 @@ func (s *scfNodeServiceImpl) DeployToNodeWithPackage(ctx context.Context, nodeID
 			CloudAccountID: node.CloudAccountID,
 			Region:         node.Region,
 			Namespace:      node.Namespace,
-			PackageID:      packageID,         // 使用包ID
-			ZipFileBase64:  "",               // 不需要zip文件
-			FileName:       "",               // 文件名由worker根据包信息生成
+			PackageID:      packageID, // 使用包ID
+			ZipFileBase64:  "",        // 不需要zip文件
+			FileName:       "",        // 文件名由worker根据包信息生成
 			TaskID:         taskID,
 			ItemID:         nodeID,
 			EnqueueTime:    time.Now(),

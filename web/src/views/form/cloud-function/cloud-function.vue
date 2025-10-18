@@ -69,7 +69,7 @@
             </a-button>
             <a-button type="outline" @click="onFunctionPackageManage">
               <template #icon><icon-code /></template>
-              <span>云函数版本</span>
+              <span>代码包版本</span>
             </a-button>
           </a-space>
         </a-row>
@@ -151,9 +151,16 @@
               </template>
             </a-table-column>
             <a-table-column title="IP地址" data-index="ip_address" :width="120"></a-table-column>
-            <a-table-column title="代码包ID" data-index="package_id" :width="100">
+            <a-table-column title="代码包版本" data-index="package_version" :width="150">
               <template #cell="{ record }">
-                {{ record.package_id || '-' }}
+                <a-link 
+                  v-if="record.package_version && record.package_version !== '-'" 
+                  @click="onShowPackageDetail(record)"
+                  style="cursor: pointer;"
+                >
+                  {{ record.package_version }}
+                </a-link>
+                <span v-else>-</span>
               </template>
             </a-table-column>
             <a-table-column title="支持的采集器" data-index="supported_collectors" :width="160">
@@ -172,16 +179,12 @@
                 </a-tag>
               </template>
             </a-table-column>
-            <a-table-column title="操作" :width="240" align="center" fixed="right">
+            <a-table-column title="操作" :width="200" align="center" fixed="right">
               <template #cell="{ record }">
                 <a-space>
                   <a-button v-if="record.node_type === 'scf'" type="primary" size="mini" @click="onDeploy(record)" :disabled="taskPolling">
                     <template #icon><icon-upload /></template>
                     <span>部署</span>
-                  </a-button>
-                  <a-button type="primary" size="mini" status="success" @click="onEdit(record)" :disabled="taskPolling">
-                    <template #icon><icon-edit /></template>
-                    <span>编辑</span>
                   </a-button>
                   <a-popconfirm
                     content="确定要删除该节点吗？删除后将无法恢复。"
@@ -249,8 +252,8 @@
           </a-select>
         </a-form-item>
         
-        <a-form-item field="packageId" label="云函数版本" required>
-          <a-select v-model="batchAddForm.packageId" placeholder="请选择云函数版本" style="width: 100%">
+        <a-form-item field="packageId" label="代码包版本" required>
+          <a-select v-model="batchAddForm.packageId" placeholder="请选择代码包版本" style="width: 100%">
             <a-option v-for="pkg in availablePackagesForCreation" :key="pkg.id" :value="pkg.id">
               {{ pkg.package_name }} - {{ pkg.version }} ({{ pkg.runtime }})
             </a-option>
@@ -292,7 +295,7 @@
       @ok="handleBatchDeployOk"
     >
       <a-form :model="batchDeployForm" layout="vertical">
-        <a-form-item label="选择云函数版本" required>
+        <a-form-item label="选择代码包版本" required>
           <a-table
             row-key="id"
             :data="availablePackages"
@@ -343,13 +346,71 @@
       </a-form>
     </a-modal>
 
+    <!-- 单节点部署弹窗 -->
+    <a-modal
+      v-model:visible="singleDeployVisible"
+      title="部署云函数代码包"
+      :width="800"
+      :mask-closable="false"
+      @cancel="handleSingleDeployCancel"
+      @ok="handleSingleDeployOk"
+    >
+      <a-form :model="singleDeployForm" layout="vertical">
+        <a-form-item label="节点信息">
+          <a-alert type="info" style="margin-bottom: 8px;">
+            <div><strong>节点ID：</strong>{{ singleDeployForm.nodeId }}</div>
+            <div><strong>命名空间：</strong>{{ singleDeployForm.namespace }}</div>
+            <div><strong>地区：</strong>{{ singleDeployForm.region }}</div>
+          </a-alert>
+        </a-form-item>
+        
+        <a-form-item label="选择代码包版本" required>
+          <a-table
+            row-key="id"
+            :data="singleDeployPackages"
+            :loading="singleDeployPackagesLoading"
+            :pagination="singleDeployPackagesPagination"
+            :scroll="{ y: 300 }"
+            :row-selection="{ type: 'radio', showCheckedAll: false }"
+            :selected-keys="singleDeployForm.selectedPackageId ? [singleDeployForm.selectedPackageId] : []"
+            @select="onSelectSingleDeployPackage"
+            @page-change="onSingleDeployPackagePageChange"
+            size="small"
+          >
+            <template #columns>
+              <a-table-column title="代码包名称" data-index="package_name" :width="140"></a-table-column>
+              <a-table-column title="版本" data-index="version" :width="100"></a-table-column>
+              <a-table-column title="类型" data-index="package_type_label" :width="120">
+                <template #cell="{ record }">
+                  <a-tag :color="getPackageTypeColor(record.package_type)" size="small">
+                    {{ record.package_type_label }}
+                  </a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="运行时" data-index="runtime" :width="100"></a-table-column>
+              <a-table-column title="文件大小" data-index="file_size" :width="100">
+                <template #cell="{ record }">
+                  {{ formatFileSize(record.file_size) }}
+                </template>
+              </a-table-column>
+              <a-table-column title="创建时间" data-index="created_at" :width="150">
+                <template #cell="{ record }">
+                  {{ formatTime(record.created_at) }}
+                </template>
+              </a-table-column>
+            </template>
+          </a-table>
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
     <!-- 云账户管理弹窗 -->
     <CloudAccountManage 
       v-model="cloudAccountManageVisible" 
       @refresh="loadCloudAccounts"
     />
 
-    <!-- 云函数版本管理弹窗 -->
+    <!-- 代码包版本管理弹窗 -->
     <FunctionPackageManage 
       v-model="functionPackageManageVisible" 
       @refresh="loadData"
@@ -424,6 +485,85 @@
       </div>
     </a-modal>
 
+    <!-- 代码包详情弹窗 -->
+    <a-modal
+      v-model:visible="packageDetailVisible"
+      title="代码包详情"
+      :width="800"
+      :mask-closable="false"
+      :footer="false"
+      @cancel="handlePackageDetailCancel"
+    >
+      <div v-if="packageDetail" class="package-detail">
+        <!-- 基本信息 -->
+        <a-descriptions title="基本信息" :column="2" bordered size="medium" style="margin-bottom: 16px;">
+          <a-descriptions-item label="代码包名称">{{ packageDetail.package_name }}</a-descriptions-item>
+          <a-descriptions-item label="版本">{{ packageDetail.version }}</a-descriptions-item>
+          <a-descriptions-item label="类型">
+            <a-tag :color="getPackageTypeColor(packageDetail.package_type)">
+              {{ packageDetail.package_type_label }}
+            </a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="运行时环境">{{ packageDetail.runtime }}</a-descriptions-item>
+          <a-descriptions-item label="文件大小">{{ formatFileSize(packageDetail.file_size) }}</a-descriptions-item>
+          <a-descriptions-item label="状态">
+            <a-tag :color="getPackageStatusColor(packageDetail.status)">
+              {{ packageDetail.status_label }}
+            </a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="文件MD5" :span="2">
+            <a-typography-text copyable>{{ packageDetail.file_md5 || '-' }}</a-typography-text>
+          </a-descriptions-item>
+          <a-descriptions-item label="描述" :span="2">
+            {{ packageDetail.description || '-' }}
+          </a-descriptions-item>
+        </a-descriptions>
+        
+        <!-- 存储信息 -->
+        <a-descriptions title="存储信息" :column="2" bordered size="medium" style="margin-bottom: 16px;">
+          <a-descriptions-item label="云账户ID">{{ packageDetail.cloud_account_id }}</a-descriptions-item>
+          <a-descriptions-item label="COS区域">{{ packageDetail.cos_region }}</a-descriptions-item>
+          <a-descriptions-item label="COS Bucket">{{ packageDetail.cos_bucket }}</a-descriptions-item>
+          <a-descriptions-item label="COS路径">{{ packageDetail.cos_path }}</a-descriptions-item>
+          <a-descriptions-item label="原始文件名" :span="2">{{ packageDetail.original_filename || '-' }}</a-descriptions-item>
+        </a-descriptions>
+        
+        <!-- 审计信息 -->
+        <a-descriptions title="审计信息" :column="2" bordered size="medium" style="margin-bottom: 16px;">
+          <a-descriptions-item label="创建者">{{ packageDetail.created_by }}</a-descriptions-item>
+          <a-descriptions-item label="创建时间">{{ formatDateTime(packageDetail.created_at) }}</a-descriptions-item>
+          <a-descriptions-item label="最后部署时间" :span="2">
+            {{ packageDetail.last_deploy_time ? formatDateTime(packageDetail.last_deploy_time) : '-' }}
+          </a-descriptions-item>
+        </a-descriptions>
+        
+        <div style="margin-top: 16px; text-align: right;">
+          <a-space>
+            <a-button @click="handlePackageDetailCancel">关闭</a-button>
+            <a-button 
+              type="primary"
+              status="success"
+              @click="onDownloadPackage(packageDetail)" 
+              :disabled="packageDetail.status !== 1"
+              :loading="downloadProgress[packageDetail.id] !== undefined && downloadProgress[packageDetail.id] < 100"
+            >
+              <template #icon>
+                <icon-download />
+              </template>
+              <span v-if="downloadProgress[packageDetail.id] !== undefined && downloadProgress[packageDetail.id] < 100">
+                下载中...
+              </span>
+              <span v-else>下载</span>
+            </a-button>
+          </a-space>
+        </div>
+      </div>
+      <div v-else style="text-align: center; padding: 40px;">
+        <a-spin :loading="true" />
+        <div style="margin-top: 16px;">加载中...</div>
+      </div>
+    </a-modal>
+
   </div>
 </template>
 
@@ -431,7 +571,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, h } from 'vue';
 import { Message, Modal } from '@arco-design/web-vue';
 import { api } from '@/api/config';
-import { getFunctionPackageList } from '@/api/function-package';
+import { getFunctionPackageList, getFunctionPackageDetail, downloadPackageByURL, type FunctionPackage } from '@/api/function-package';
 import { AsyncTaskManager, asyncTaskManager } from '@/utils/async-task';
 import type { TaskStatusResponse } from '@/utils/async-task';
 import CloudAccountManage from '../cloud-account/cloud-account-manage.vue';
@@ -446,6 +586,8 @@ interface CloudFunction {
   region: string;
   ip_address: string;
   version: string;
+  package_id?: number; // 代码包ID
+  package_version?: string; // 代码包版本（包名-版本号）
   supported_collectors: string;
   capacity: string;
   current_load: string;
@@ -492,7 +634,7 @@ const batchAddVisible = ref(false);
 const batchAddForm = reactive({
   cloudAccountId: '',
   region: 'ap-guangzhou',
-  packageId: '', // 云函数版本ID
+  packageId: '', // 代码包版本ID
   nodeCount: 5,
   namespace: '',
   supportedCollectors: ['kline'] // 默认支持kline
@@ -510,6 +652,26 @@ const batchDeployForm = reactive({
 
 // 代码包分页配置
 const packagesPagination = ref({
+  current: 1,
+  pageSize: 10,
+  total: 0,
+  showTotal: true,
+  showJumper: true,
+  showPageSize: false
+});
+
+// 单节点部署相关
+const singleDeployVisible = ref(false);
+const singleDeployPackagesLoading = ref(false);
+const singleDeployPackages = ref<any[]>([]);
+const singleDeployForm = reactive({
+  nodeId: '',
+  namespace: '',
+  region: '',
+  selectedPackageId: ''
+});
+
+const singleDeployPackagesPagination = ref({
   current: 1,
   pageSize: 10,
   total: 0,
@@ -710,7 +872,7 @@ const handleBatchAddOk = async () => {
     return;
   }
   if (!batchAddForm.packageId) {
-    Message.warning('请选择云函数版本');
+    Message.warning('请选择代码包版本');
     return;
   }
   if (!batchAddForm.nodeCount || batchAddForm.nodeCount < 1) {
@@ -1068,6 +1230,16 @@ const getPackageTypeColor = (packageType: string) => {
   return colorMap[packageType] || 'gray';
 };
 
+const getPackageStatusColor = (status: number) => {
+  const colorMap: Record<number, string> = {
+    0: 'blue',       // 上传中 - 蓝色
+    1: 'green',      // 可用 - 绿色
+    2: 'gray',       // 已删除 - 灰色
+    3: 'red'         // 上传失败 - 红色
+  };
+  return colorMap[status] || 'gray';
+};
+
 const formatFileSize = (size: number) => {
   if (size < 1024) return size + 'B';
   if (size < 1024 * 1024) return (size / 1024).toFixed(1) + 'KB';
@@ -1172,10 +1344,6 @@ const selectAll = (checked: boolean) => {
 
 // 单个操作（保留原有实现）
 
-const onEdit = (_record: CloudFunction) => {
-  Message.info('编辑功能开发中...');
-};
-
 const onDelete = async (record: CloudFunction) => {
   try {
     // 创建单个删除的异步任务
@@ -1215,8 +1383,18 @@ const onDelete = async (record: CloudFunction) => {
   }
 };
 
-const onDeploy = (_record: CloudFunction) => {
-  Message.info('部署功能开发中...');
+const onDeploy = async (record: CloudFunction) => {
+  // 填充表单
+  singleDeployForm.nodeId = record.node_id;
+  singleDeployForm.namespace = record.namespace;
+  singleDeployForm.region = getRegionName(record.region);
+  singleDeployForm.selectedPackageId = '';
+  
+  // 打开弹窗
+  singleDeployVisible.value = true;
+  
+  // 加载代码包列表
+  await loadSingleDeployPackages();
 };
 
 const onViewNodeDetail = (record: CloudFunction) => {
@@ -1231,7 +1409,7 @@ const onCloudAccountManage = () => {
   cloudAccountManageVisible.value = true;
 };
 
-// 云函数版本管理
+// 代码包版本管理
 const functionPackageManageVisible = ref(false);
 
 const onFunctionPackageManage = () => {
@@ -1242,6 +1420,85 @@ const onFunctionPackageManage = () => {
 const nodeDetailVisible = ref(false);
 const selectedNodeDetail = ref<CloudFunction | null>(null);
 
+// 代码包详情
+const packageDetailVisible = ref(false);
+const packageDetail = ref<FunctionPackage | null>(null);
+const downloadProgress = ref<Record<number, number>>({});
+
+// 显示代码包详情
+const onShowPackageDetail = async (record: CloudFunction) => {
+  // 如果没有package_id，则不显示
+  if (!record.package_id) {
+    Message.warning('该节点未关联代码包');
+    return;
+  }
+  
+  packageDetail.value = null;
+  packageDetailVisible.value = true;
+  
+  try {
+    const response = await getFunctionPackageDetail(record.package_id);
+    console.log('代码包详情API响应:', response);
+    
+    if (response?.code === 200 && response?.data && response.data.length > 0) {
+      packageDetail.value = response.data[0]; // 取数组第一个元素
+    } else {
+      throw new Error('获取详情失败');
+    }
+  } catch (error) {
+    console.error('获取代码包详情失败:', error);
+    Message.error({
+      content: '获取代码包详情失败',
+      duration: 5000
+    });
+    packageDetailVisible.value = false;
+  }
+};
+
+// 关闭代码包详情弹窗
+const handlePackageDetailCancel = () => {
+  packageDetailVisible.value = false;
+  packageDetail.value = null;
+};
+
+// 下载代码包
+const onDownloadPackage = async (pkg: FunctionPackage) => {
+  if (pkg.status !== 1) {
+    Message.warning('只能下载可用状态的代码包');
+    return;
+  }
+  
+  try {
+    downloadProgress.value[pkg.id] = 0;
+    
+    Message.info({
+      content: '开始下载代码包...',
+      duration: 2000
+    });
+    
+    await downloadPackageByURL(pkg.id);
+    
+    downloadProgress.value[pkg.id] = 100;
+    
+    Message.success({
+      content: '代码包下载成功',
+      duration: 3000
+    });
+    
+    // 3秒后清除进度
+    setTimeout(() => {
+      delete downloadProgress.value[pkg.id];
+    }, 3000);
+    
+  } catch (error) {
+    console.error('下载代码包失败:', error);
+    delete downloadProgress.value[pkg.id];
+    Message.error({
+      content: '代码包下载失败',
+      duration: 5000
+    });
+  }
+};
 
 // 批量部署弹窗取消
 const handleBatchDeployCancel = () => {
@@ -1258,7 +1515,7 @@ const handleBatchDeployCancel = () => {
 const handleBatchDeployOk = async () => {
   // 表单验证
   if (!batchDeployForm.selectedPackageId) {
-    Message.warning('请选择要部署的云函数版本');
+    Message.warning('请选择要部署的代码包版本');
     return;
   }
   
@@ -1317,6 +1574,101 @@ const executeBatchDeploy = async () => {
   } catch (error: any) {
     console.error('创建批量部署任务失败:', error);
     Message.error('创建批量部署任务失败: ' + (error?.message || '未知错误'));
+  }
+};
+
+// 单节点部署相关函数
+const loadSingleDeployPackages = async () => {
+  try {
+    singleDeployPackagesLoading.value = true;
+    
+    const response = await getFunctionPackageList({
+      page: singleDeployPackagesPagination.value.current,
+      page_size: singleDeployPackagesPagination.value.pageSize,
+      status: 1 // 只获取可用状态的包
+    });
+    
+    if (response?.code === 200 && response?.data) {
+      singleDeployPackages.value = response.data || [];
+      singleDeployPackagesPagination.value.total = response.total || 0;
+    }
+  } catch (error) {
+    console.error('获取代码包列表失败:', error);
+    Message.error('获取代码包列表失败');
+  } finally {
+    singleDeployPackagesLoading.value = false;
+  }
+};
+
+const onSelectSingleDeployPackage = (rowKeys: string[]) => {
+  if (rowKeys.length > 0) {
+    singleDeployForm.selectedPackageId = rowKeys[0];
+  } else {
+    singleDeployForm.selectedPackageId = '';
+  }
+};
+
+const onSingleDeployPackagePageChange = (page: number) => {
+  singleDeployPackagesPagination.value.current = page;
+  loadSingleDeployPackages();
+};
+
+const handleSingleDeployCancel = () => {
+  singleDeployVisible.value = false;
+  singleDeployForm.selectedPackageId = '';
+  singleDeployPackages.value = [];
+  singleDeployPackagesPagination.value.current = 1;
+  singleDeployPackagesPagination.value.total = 0;
+};
+
+const handleSingleDeployOk = async () => {
+  // 表单验证
+  if (!singleDeployForm.selectedPackageId) {
+    Message.warning('请选择要部署的代码包版本');
+    return;
+  }
+  
+  // 关闭弹窗
+  singleDeployVisible.value = false;
+  
+  try {
+    // 构建单节点部署请求数据
+    const deployData = {
+      nodes: [{
+        node_id: singleDeployForm.nodeId,
+        package_id: singleDeployForm.selectedPackageId
+      }]
+    };
+    
+    // 创建异步任务
+    const taskId = await asyncTaskManager.createAsyncTask('BATCH_DEPLOY_NODE', deployData);
+    
+    taskPolling.value = true;
+    
+    // 开始轮询任务状态
+    asyncTaskManager.startPolling(taskId, {
+      onProgress: (data) => {
+        currentTaskStatus.value = data;
+      },
+      onSuccess: (data) => {
+        handleTaskComplete(data);
+        Message.success('部署完成');
+      },
+      onFailed: (data) => {
+        handleTaskComplete(data);
+      },
+      onPartialSuccess: (data) => {
+        handleTaskComplete(data);
+      },
+      showLoading: false
+    });
+    
+    // 清理表单
+    singleDeployForm.selectedPackageId = '';
+    
+  } catch (error: any) {
+    console.error('创建部署任务失败:', error);
+    Message.error('创建部署任务失败: ' + (error?.message || '未知错误'));
   }
 };
 

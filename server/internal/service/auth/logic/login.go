@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/auth/model"
 	"github.com/mooyang-code/moox/server/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
+
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -78,8 +79,8 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	// 记录登录历史
 	s.recordLoginHistory(ctx, user, req, model.LoginResultSuccess, "")
 
-	// 生成JWT令牌
-	accessToken, err := utils.GenerateJWT(
+	// 生成API访问令牌
+	accessToken, err := utils.GenerateAccessToken(
 		user.UserID,
 		user.Username,
 		user.Role,
