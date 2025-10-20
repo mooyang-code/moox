@@ -9,11 +9,12 @@ import (
 
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 	scf "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf/v20180416"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // CreateFunction 创建云函数
 func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionRequest) (*FunctionInfo, error) {
-	p.logInfo(ctx, "Creating function: %s in namespace: %s", req.FunctionName, req.Namespace)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Creating function: %s in namespace: %s", req.FunctionName, req.Namespace)
 
 	// 构建请求
 	request := scf.NewCreateFunctionRequest()
@@ -75,7 +76,7 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 		return nil, fmt.Errorf("failed to create function: %w, Timeout: %d", err, *request.Timeout)
 	}
 
-	p.logInfo(ctx, "Function created successfully, RequestId: %s", *response.Response.RequestId)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Function created successfully, RequestId: %s", *response.Response.RequestId)
 
 	// 等待函数就绪
 	if err := p.waitForFunctionReady(ctx, req.FunctionName, req.Namespace); err != nil {
@@ -88,45 +89,7 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 
 // UpdateFunction 更新云函数
 func (p *Provider) UpdateFunction(ctx context.Context, req *UpdateFunctionRequest) error {
-	p.logInfo(ctx, "Updating function: %s in namespace: %s", req.FunctionName, req.Namespace)
-
-	// 更新函数配置
-	if req.Description != nil || req.MemorySize != nil || req.Timeout != nil || len(req.Environment) > 0 {
-		configRequest := scf.NewUpdateFunctionConfigurationRequest()
-		configRequest.FunctionName = common.StringPtr(req.FunctionName)
-		configRequest.Namespace = common.StringPtr(req.Namespace)
-
-		if req.Description != nil {
-			configRequest.Description = req.Description
-		}
-		// Handler field is not supported in UpdateFunctionConfiguration
-		// It needs to be updated via UpdateFunctionCode if needed
-		if req.MemorySize != nil {
-			configRequest.MemorySize = req.MemorySize
-		}
-		if req.Timeout != nil {
-			configRequest.Timeout = req.Timeout
-		}
-
-		// 设置环境变量
-		if len(req.Environment) > 0 {
-			var variables []*scf.Variable
-			for key, value := range req.Environment {
-				variables = append(variables, &scf.Variable{
-					Key:   common.StringPtr(key),
-					Value: common.StringPtr(value),
-				})
-			}
-			configRequest.Environment = &scf.Environment{
-				Variables: variables,
-			}
-		}
-
-		_, err := p.scfClient.UpdateFunctionConfiguration(configRequest)
-		if err != nil {
-			return fmt.Errorf("failed to update function configuration: %w", err)
-		}
-	}
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Updating function: %s in namespace: %s", req.FunctionName, req.Namespace)
 
 	// 更新函数代码
 	if req.ZipFile != "" || (req.COSBucket != "" && req.COSPath != "" && req.COSRegion != "") {
@@ -139,26 +102,26 @@ func (p *Provider) UpdateFunction(ctx context.Context, req *UpdateFunctionReques
 			codeRequest.CosBucketName = common.StringPtr(req.COSBucket)
 			codeRequest.CosObjectName = common.StringPtr(req.COSPath)
 			codeRequest.CosBucketRegion = common.StringPtr(req.COSRegion)
-			p.logInfo(ctx, "Updating function code via COS: bucket=%s, path=%s, region=%s",
-				req.COSBucket, req.COSPath, req.COSRegion)
+			log.InfoContextf(ctx, "[CloudNode-Tencent] Updating function code via COS: bucket=%s, path=%s, region=%s, function=%s",
+				req.COSBucket, req.COSPath, req.COSRegion, req.FunctionName)
 		} else if req.ZipFile != "" {
 			codeRequest.ZipFile = common.StringPtr(req.ZipFile)
-			p.logInfo(ctx, "Updating function code via ZipFile")
+			log.InfoContextf(ctx, "[CloudNode-Tencent] Updating function code via ZipFile: %s, function=%s", req.ZipFile, req.FunctionName)
 		}
 
 		_, err := p.scfClient.UpdateFunctionCode(codeRequest)
 		if err != nil {
-			return fmt.Errorf("failed to update function code: %w", err)
+			return fmt.Errorf("failed to update function code: %s, %w", req.FunctionName, err)
 		}
 	}
 
-	p.logInfo(ctx, "Function updated successfully")
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Function updated successfully: %s", req.FunctionName)
 	return nil
 }
 
 // DeleteFunction 删除云函数
 func (p *Provider) DeleteFunction(ctx context.Context, functionName, namespace string) error {
-	p.logInfo(ctx, "Deleting function: %s in namespace: %s", functionName, namespace)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Deleting function: %s in namespace: %s", functionName, namespace)
 
 	request := scf.NewDeleteFunctionRequest()
 	request.FunctionName = common.StringPtr(functionName)
@@ -169,7 +132,7 @@ func (p *Provider) DeleteFunction(ctx context.Context, functionName, namespace s
 		return fmt.Errorf("failed to delete function: %w", err)
 	}
 
-	p.logInfo(ctx, "Function deleted successfully")
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Function deleted successfully")
 	return nil
 }
 
@@ -272,7 +235,7 @@ func (p *Provider) ListFunctions(ctx context.Context, namespace string) ([]*Func
 
 // CreateNamespace 创建命名空间
 func (p *Provider) CreateNamespace(ctx context.Context, namespace, description string) error {
-	p.logInfo(ctx, "Creating namespace: %s", namespace)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Creating namespace: %s", namespace)
 
 	request := scf.NewCreateNamespaceRequest()
 	request.Namespace = common.StringPtr(namespace)
@@ -282,19 +245,19 @@ func (p *Provider) CreateNamespace(ctx context.Context, namespace, description s
 	if err != nil {
 		// 检查是否是命名空间已存在的错误
 		if strings.Contains(err.Error(), "ResourceInUse.Namespace") {
-			p.logInfo(ctx, "Namespace already exists: %s", namespace)
+			log.InfoContextf(ctx, "[CloudNode-Tencent] Namespace already exists: %s", namespace)
 			return nil
 		}
 		return fmt.Errorf("failed to create namespace: %w", err)
 	}
 
-	p.logInfo(ctx, "Namespace created successfully")
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Namespace created successfully")
 	return nil
 }
 
 // DeleteNamespace 删除命名空间
 func (p *Provider) DeleteNamespace(ctx context.Context, namespace string) error {
-	p.logInfo(ctx, "Deleting namespace: %s", namespace)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Deleting namespace: %s", namespace)
 
 	request := scf.NewDeleteNamespaceRequest()
 	request.Namespace = common.StringPtr(namespace)
@@ -304,7 +267,7 @@ func (p *Provider) DeleteNamespace(ctx context.Context, namespace string) error 
 		return fmt.Errorf("failed to delete namespace: %w", err)
 	}
 
-	p.logInfo(ctx, "Namespace deleted successfully")
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Namespace deleted successfully")
 	return nil
 }
 
@@ -351,7 +314,7 @@ func (p *Provider) ListNamespaces(ctx context.Context) ([]*NamespaceInfo, error)
 
 // CreateTrigger 创建触发器
 func (p *Provider) CreateTrigger(ctx context.Context, req *CreateTriggerRequest) error {
-	p.logInfo(ctx, "Creating trigger: %s for function: %s", req.TriggerName, req.FunctionName)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Creating trigger: %s for function: %s", req.TriggerName, req.FunctionName)
 
 	request := scf.NewCreateTriggerRequest()
 	request.FunctionName = common.StringPtr(req.FunctionName)
@@ -374,19 +337,19 @@ func (p *Provider) CreateTrigger(ctx context.Context, req *CreateTriggerRequest)
 	if err != nil {
 		// 检查是否是触发器已存在的错误
 		if strings.Contains(err.Error(), "相同的触发器已经存在") || strings.Contains(err.Error(), "InvalidParameterValue") {
-			p.logInfo(ctx, "Trigger already exists: %s", req.TriggerName)
+			log.InfoContextf(ctx, "[CloudNode-Tencent] Trigger already exists: %s", req.TriggerName)
 			return nil
 		}
 		return fmt.Errorf("failed to create trigger: %w", err)
 	}
 
-	p.logInfo(ctx, "Trigger created successfully")
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Trigger created successfully")
 	return nil
 }
 
 // DeleteTrigger 删除触发器
 func (p *Provider) DeleteTrigger(ctx context.Context, functionName, triggerName, namespace string) error {
-	p.logInfo(ctx, "Deleting trigger: %s for function: %s", triggerName, functionName)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Deleting trigger: %s for function: %s", triggerName, functionName)
 
 	request := scf.NewDeleteTriggerRequest()
 	request.FunctionName = common.StringPtr(functionName)
@@ -399,7 +362,7 @@ func (p *Provider) DeleteTrigger(ctx context.Context, functionName, triggerName,
 		return fmt.Errorf("failed to delete trigger: %w", err)
 	}
 
-	p.logInfo(ctx, "Trigger deleted successfully")
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Trigger deleted successfully")
 	return nil
 }
 
@@ -435,7 +398,7 @@ func (p *Provider) ListTriggers(ctx context.Context, functionName, namespace str
 
 // waitForFunctionReady 等待函数就绪
 func (p *Provider) waitForFunctionReady(ctx context.Context, functionName, namespace string) error {
-	p.logInfo(ctx, "Waiting for function %s to be ready...", functionName)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Waiting for function %s to be ready...", functionName)
 
 	maxWaitTime := 5 * time.Minute
 	startTime := time.Now()
@@ -456,21 +419,21 @@ func (p *Provider) waitForFunctionReady(ctx context.Context, functionName, names
 		// 获取函数状态
 		info, err := p.GetFunction(ctx, functionName, namespace)
 		if err != nil {
-			p.logError(ctx, "Failed to get function status: %v, retrying...", err)
+			log.ErrorContextf(ctx, "[CloudNode-Tencent] Failed to get function status: %v, retrying...", err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
 
 		if info == nil {
-			p.logError(ctx, "Function not found, retrying...")
+			log.ErrorContextf(ctx, "[CloudNode-Tencent] Function not found, retrying...")
 			time.Sleep(2 * time.Second)
 			continue
 		}
 
 		// 检查函数状态
-		p.logInfo(ctx, "Function status: %s", info.Status)
+		log.InfoContextf(ctx, "[CloudNode-Tencent] Function status: %s", info.Status)
 		if info.Status == FunctionStatusActive {
-			p.logInfo(ctx, "Function %s is ready!", functionName)
+			log.InfoContextf(ctx, "[CloudNode-Tencent] Function %s is ready!", functionName)
 			return nil
 		}
 
@@ -501,7 +464,7 @@ func getInt64(i *int64) int64 {
 
 // InvokeFunction 调用云函数
 func (p *Provider) InvokeFunction(ctx context.Context, req *InvokeFunctionRequest) (*InvokeFunctionResponse, error) {
-	p.logInfo(ctx, "Invoking function: %s in namespace: %s", req.FunctionName, req.Namespace)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Invoking function: %s in namespace: %s", req.FunctionName, req.Namespace)
 
 	// 构建请求
 	request := scf.NewInvokeRequest()
@@ -576,7 +539,6 @@ func (p *Provider) InvokeFunction(ctx context.Context, req *InvokeFunctionReques
 		}
 	}
 
-	p.logInfo(ctx, "Function invoked successfully, RequestId: %s, StatusCode: %d",
-		result.RequestID, result.StatusCode)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Function invoked successfully, result: %+v", result)
 	return result, nil
 }

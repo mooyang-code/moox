@@ -22,16 +22,16 @@ var upgrader = websocket.Upgrader{
 
 // ContainerInfo 容器信息结构体
 type ContainerInfo struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Image    string `json:"image"`
-	Status   string `json:"status"`
-	CPU      string `json:"cpu"`
-	Memory   string `json:"memory"`
-	Network  string `json:"network"`
-	Created  string `json:"created"`
-	Ports    string `json:"ports"`
-	Command  string `json:"command"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Image   string `json:"image"`
+	Status  string `json:"status"`
+	CPU     string `json:"cpu"`
+	Memory  string `json:"memory"`
+	Network string `json:"network"`
+	Created string `json:"created"`
+	Ports   string `json:"ports"`
+	Command string `json:"command"`
 }
 
 // DockerStatsInfo Docker stats信息
@@ -400,7 +400,7 @@ func ContainerSSHConn(c *gin.Context) {
 
 	// 创建容器exec会话
 	execCmd := exec.Command("docker", "exec", "-it", containerID, "/bin/bash")
-	
+
 	// 这里需要实现类似ssh_conn.go中的逻辑
 	// 将docker exec的输入输出与WebSocket连接
 	handleContainerExec(conn, execCmd, width, height)
@@ -411,15 +411,15 @@ func handleContainerExec(conn *websocket.Conn, cmd *exec.Cmd, width, height int)
 	// 这里需要实现具体的容器exec处理逻辑
 	// 类似于ssh_conn.go中的处理方式
 	// 由于篇幅限制，这里提供基本框架
-	
+
 	// 1. 设置PTY
 	// 2. 启动命令
 	// 3. 处理WebSocket消息
 	// 4. 转发输入输出
-	
+
 	// 发送欢迎消息
 	welcomeMsg := fmt.Sprintf("欢迎连接到容器终端\r\n")
 	conn.WriteMessage(websocket.TextMessage, []byte(welcomeMsg))
-	
+
 	// 这里需要实现完整的终端处理逻辑
 }

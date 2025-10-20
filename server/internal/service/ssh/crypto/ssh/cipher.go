@@ -13,10 +13,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/server/internal/service/ssh/crypto/chacha20"
-	"github.com/mooyang-code/moox/server/internal/service/ssh/crypto/internal/poly1305"
 	"hash"
 	"io"
+
+	"github.com/mooyang-code/moox/server/internal/service/ssh/crypto/chacha20"
+	"github.com/mooyang-code/moox/server/internal/service/ssh/crypto/internal/poly1305"
 )
 
 const (

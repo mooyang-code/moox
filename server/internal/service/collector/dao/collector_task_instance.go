@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,26 +13,54 @@ import (
 
 // CollectorTaskInstanceDAO 采集任务实例数据访问对象接口
 type CollectorTaskInstanceDAO interface {
-	// 基础CRUD操作
+	// ========== 基础CRUD操作 ==========
+	
+	// CreateTaskInstance 创建任务实例
 	CreateTaskInstance(ctx context.Context, instance *model.CollectorTaskInstance) error
+	
+	// GetTaskInstance 获取任务实例
 	GetTaskInstance(ctx context.Context, instanceID string) (*model.CollectorTaskInstance, error)
+	
+	// UpdateTaskInstance 更新任务实例
 	UpdateTaskInstance(ctx context.Context, instance *model.CollectorTaskInstance) error
+	
+	// DeleteTaskInstance 删除任务实例
 	DeleteTaskInstance(ctx context.Context, instanceID string) error
-
-	// 查询操作
+	
+	// ========== 查询操作 ==========
+	
+	// GetTaskInstancesByNode 根据节点获取任务实例
 	GetTaskInstancesByNode(ctx context.Context, nodeID string, status []int) ([]*model.CollectorTaskInstance, error)
+	
+	// GetTaskInstancesByTask 根据任务获取实例列表
 	GetTaskInstancesByTask(ctx context.Context, taskID string, limit int) ([]*model.CollectorTaskInstance, error)
+	
+	// GetPendingInstances 获取待执行的实例
 	GetPendingInstances(ctx context.Context, nodeID string) ([]*model.CollectorTaskInstance, error)
+	
+	// GetRunningInstances 获取正在执行的实例
 	GetRunningInstances(ctx context.Context, nodeID string) ([]*model.CollectorTaskInstance, error)
+	
+	// GetRecentInstances 获取最近的任务实例
 	GetRecentInstances(ctx context.Context, hours int) ([]*model.CollectorTaskInstance, error)
-
-	// 状态更新
+	
+	// ========== 状态更新 ==========
+	
+	// UpdateInstanceStatus 更新实例状态
 	UpdateInstanceStatus(ctx context.Context, instanceID string, status int, result string) error
+	
+	// StartInstance 开始执行实例
 	StartInstance(ctx context.Context, instanceID string) error
+	
+	// CompleteInstance 完成实例执行
 	CompleteInstance(ctx context.Context, instanceID string, success bool, result string) error
-
-	// 批量操作
+	
+	// ========== 批量操作 ==========
+	
+	// BatchCreateInstances 批量创建实例
 	BatchCreateInstances(ctx context.Context, instances []*model.CollectorTaskInstance) error
+	
+	// CleanupOldInstances 清理旧的实例记录
 	CleanupOldInstances(ctx context.Context, days int) error
 }
 
@@ -64,7 +93,7 @@ func (d *collectorTaskInstanceDaoImpl) GetTaskInstance(ctx context.Context, inst
 		First(&instance)
 
 	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get task instance: %w", result.Error)

@@ -37,7 +37,8 @@ func (s *Server) fileDownloadHandler() gin.HandlerFunc {
 		// 安全检查：确保文件路径在允许的目录内
 		cleanPath := filepath.Clean(fullPath)
 		if !strings.HasPrefix(cleanPath, filepath.Clean(s.config.PackageDir)) {
-			log.Errorf("[FileServer] 检测到路径遍历尝试: %s (IP: %s, User: %s)", fullPath, clientIP, userID)
+			log.ErrorContextf(c.Request.Context(), "[FileServer] 检测到路径遍历尝试: %s (IP: %s, User: %s)",
+				fullPath, clientIP, userID)
 			s.respondWithError(c, http.StatusForbidden, "非法文件访问", "ILLEGAL_ACCESS")
 			return
 		}
@@ -45,25 +46,28 @@ func (s *Server) fileDownloadHandler() gin.HandlerFunc {
 		// 检查文件是否存在
 		fileInfo, err := os.Stat(cleanPath)
 		if os.IsNotExist(err) {
-			log.Errorf("[FileServer] 文件不存在: %s (User: %s, IP: %s)", cleanPath, userID, clientIP)
+			log.ErrorContextf(c.Request.Context(), "[FileServer] 文件不存在: %s (User: %s, IP: %s)",
+				cleanPath, userID, clientIP)
 			s.respondWithError(c, http.StatusNotFound, "文件不存在", "FILE_NOT_FOUND")
 			return
 		}
 		if err != nil {
-			log.Errorf("[FileServer] 文件访问错误: %v (Path: %s, User: %s, IP: %s)", err, cleanPath, userID, clientIP)
+			log.ErrorContextf(c.Request.Context(), "[FileServer] 文件访问错误: %v (Path: %s, User: %s, IP: %s)",
+				err, cleanPath, userID, clientIP)
 			s.respondWithError(c, http.StatusInternalServerError, "文件访问失败", "FILE_ACCESS_ERROR")
 			return
 		}
 
 		// 检查是否为目录（不允许下载目录）
 		if fileInfo.IsDir() {
-			log.Warnf("[FileServer] 尝试下载目录: %s (User: %s, IP: %s)", cleanPath, userID, clientIP)
+			log.WarnContextf(c.Request.Context(), "[FileServer] 尝试下载目录: %s (User: %s, IP: %s)",
+				cleanPath, userID, clientIP)
 			s.respondWithError(c, http.StatusForbidden, "不允许下载目录", "DIRECTORY_NOT_ALLOWED")
 			return
 		}
 
 		// 记录详细的下载日志
-		log.Infof("[FileServer] 文件下载开始 - 用户: %s, 文件: %s, 大小: %d bytes, IP: %s, 访问时间: %v",
+		log.InfoContextf(c.Request.Context(), "[FileServer] 文件下载开始 - 用户: %s, 文件: %s, 大小: %d bytes, IP: %s, 访问时间: %v",
 			userID, validatedFilepath, fileInfo.Size(), clientIP, accessTime)
 
 		// 设置安全响应头
@@ -80,6 +84,7 @@ func (s *Server) fileDownloadHandler() gin.HandlerFunc {
 		c.File(cleanPath)
 
 		// 记录下载完成日志
-		log.Infof("[FileServer] 文件下载完成 - 用户: %s, 文件: %s, IP: %s", userID, validatedFilepath, clientIP)
+		log.InfoContextf(c.Request.Context(), "[FileServer] 文件下载完成 - 用户: %s, 文件: %s, IP: %s",
+			userID, validatedFilepath, clientIP)
 	}
 }

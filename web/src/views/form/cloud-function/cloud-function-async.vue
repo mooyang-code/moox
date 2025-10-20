@@ -360,23 +360,24 @@ const onBatchAdd = () => {
 
 // 执行批量新增
 const executeBatchAdd = async () => {
-  // 准备批量新增的数据
-  const nodes = Array(5).fill(null).map((_, index) => ({
-    cloud_account_id: cloudAccountOptions.value[0].account_id,
-    node_type: 'scf',
-    region: 'ap-guangzhou',
-    ip_address: `10.0.0.${index + 1}`,
-    version: '1.0.0',
-    supported_collectors: JSON.stringify(['metrics', 'logs']),
-    capacity: '100',
-    metadata: JSON.stringify({ env: 'prod', index })
+  // 准备多个独立任务的数据
+  const tasks = Array(5).fill(null).map((_, index) => ({
+    taskType: 'CREATE_NODE',
+    requestParams: {
+      cloud_account_id: cloudAccountOptions.value[0].account_id,
+      node_type: 'scf',
+      region: 'ap-guangzhou',
+      ip_address: `10.0.0.${index + 1}`,
+      version: '1.0.0',
+      supported_collectors: JSON.stringify(['metrics', 'logs']),
+      capacity: '100',
+      metadata: JSON.stringify({ env: 'prod', index })
+    }
   }));
 
   try {
-    // 创建异步任务
-    const taskId = await asyncTaskManager.createAsyncTask('BATCH_CREATE_NODE', {
-      nodes
-    });
+    // 创建多个独立任务的异步任务
+    const taskId = await asyncTaskManager.createMultipleAsyncTasks(tasks);
 
     taskPolling.value = true;
     
@@ -430,13 +431,17 @@ const batchDelete = () => {
 
 // 执行批量删除
 const executeBatchDelete = async () => {
-  const nodes = selectedKeys.value.map(nodeId => ({ node_id: nodeId }));
+  // 准备多个独立任务的数据
+  const tasks = selectedKeys.value.map(nodeId => ({
+    taskType: 'DELETE_NODE',
+    requestParams: {
+      node_id: nodeId
+    }
+  }));
 
   try {
-    // 创建异步任务
-    const taskId = await asyncTaskManager.createAsyncTask('BATCH_DELETE_NODE', {
-      nodes
-    });
+    // 创建多个独立任务的异步任务
+    const taskId = await asyncTaskManager.createMultipleAsyncTasks(tasks);
 
     taskPolling.value = true;
     
@@ -465,7 +470,7 @@ const executeBatchDelete = async () => {
 const loadData = async () => {
   loading.value = true;
   try {
-    const response = await api.post('/gateway/collector/GetNodeList', {
+    const response = await api.post('/gateway/cloudnode/GetNodeList', {
       cloud_account_id: form.cloudAccountId,
       namespace: form.namespace,
       region: form.region,
@@ -495,7 +500,7 @@ const loadData = async () => {
 // 加载云账户列表
 const loadCloudAccounts = async () => {
   try {
-    const response = await api.post('/gateway/collector/ListCloudAccounts', {});
+    const response = await api.post('/gateway/cloudnode/ListCloudAccounts', {});
     if (response.data?.ret_info?.code === 0) {
       // 处理数组格式的响应：response.data.ret_info.data 可能是数组
       let data = response.data.ret_info.data;
@@ -513,9 +518,9 @@ const loadCloudAccounts = async () => {
 // 工具函数
 const getTaskTypeText = (taskType: string) => {
   const typeMap: Record<string, string> = {
-    'BATCH_CREATE_NODE': '批量创建节点',
+    'CREATE_NODE': '批量创建节点',
     'BATCH_UPDATE_NODE': '批量更新节点',
-    'BATCH_DELETE_NODE': '批量删除节点'
+    'DELETE_NODE': '批量删除节点'
   };
   return typeMap[taskType] || taskType;
 };
@@ -638,7 +643,7 @@ const onEdit = (_record: CloudFunction) => {
 
 const onDelete = async (record: CloudFunction) => {
   try {
-    const response = await api.post('/gateway/collector/DeleteNode', {
+    const response = await api.post('/gateway/cloudnode/DeleteNode', {
       node_id: record.node_id
     });
     

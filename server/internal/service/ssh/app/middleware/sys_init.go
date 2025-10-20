@@ -1,8 +1,8 @@
 package middleware
 
 import (
-	"github.com/mooyang-code/moox/server/internal/service/ssh/app/config"
 	"github.com/gin-gonic/gin"
+	"github.com/mooyang-code/moox/server/internal/service/ssh/app/config"
 )
 
 func SysInit() gin.HandlerFunc {

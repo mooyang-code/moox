@@ -2,50 +2,113 @@ package asynctask
 
 import (
 	"context"
-
-	"github.com/mooyang-code/moox/server/internal/service/asynctask/model"
+	"fmt"
+	"sync"
 )
 
-// Service 异步任务服务接口
+// 全局变量：任务执行器注册表
+var (
+	executorsMu  sync.RWMutex
+	executorsMap = make(map[string]Executor) // key为executor.Type()
+)
+
+// Service 异步任务服务接口（Job-Task模型）
 type Service interface {
-	// CreateAndExecuteTask 创建并执行任务
-	CreateAndExecuteTask(ctx context.Context, taskID, taskType string, totalCount int, requestParams interface{}) error
-	// GetTaskStatus 查询任务状态
-	GetTaskStatus(ctx context.Context, taskID string) (*model.AsyncTask, error)
-	// GetTask 获取任务详情
-	GetTask(ctx context.Context, taskID string) (*model.AsyncTask, error)
-	// GetTaskDetails 获取任务详情列表（支持所有详情）
-	GetTaskDetails(ctx context.Context, taskID string) ([]*model.AsyncTaskDetail, error)
-	// GetTaskDetailsByStatus 根据状态获取任务详情列表
-	GetTaskDetailsByStatus(ctx context.Context, taskID string, status int) ([]*model.AsyncTaskDetail, error)
-	// GetTaskDetailsSummary 获取任务详情统计
-	GetTaskDetailsSummary(ctx context.Context, taskID string) (*TaskDetailsSummary, error)
-	// GetFailedTaskDetails 获取失败的任务详情
-	GetFailedTaskDetails(ctx context.Context, taskID string) ([]*model.AsyncTaskDetail, error)
-	// CancelTask 取消任务
-	CancelTask(ctx context.Context, taskID string) error
-	// UpdateTaskProgress 更新任务进度
-	UpdateTaskProgress(ctx context.Context, taskID string, successCount, failedCount int) error
-	// UpdateTaskStatus 更新任务状态
-	UpdateTaskStatus(ctx context.Context, taskID string, status int, errorMessage string) error
-	// CompleteTask 完成任务
-	CompleteTask(ctx context.Context, taskID string, status int, resultData interface{}, errorMessage string) error
-	// UpdateTaskDetailStatus 更新任务详情状态
-	UpdateTaskDetailStatus(ctx context.Context, taskID, itemID string, status int, errorMessage string) error
-	// BatchCreateTaskDetails 批量创建任务详情
-	BatchCreateTaskDetails(ctx context.Context, taskID string, items []TaskItem) error
-	// RegisterExecutor 注册任务执行器
-	RegisterExecutor(taskType string, executor TaskExecutor)
+	// ========== 任务管理 ==========
+
+	// AsyncJobCreate 创建异步Job（可包含N个Task）
+	AsyncJobCreate(ctx context.Context, tasks []TaskRequest) (string, error)
+
+	// AsyncJobQuery 查询Job状态和Task详情
+	AsyncJobQuery(ctx context.Context, jobID string) (*JobQueryResult, error)
+
+	// ========== 工作进程管理 ==========
+
+	// StartWorker 启动任务消费者（Worker）
+	StartWorker(ctx context.Context, workerCount int) error
 }
 
-// TaskDetailsSummary 任务详情统计
-type TaskDetailsSummary struct {
-	SuccessCount int
-	FailedCount  int
+// Executor 定义任务执行器接口
+type Executor interface {
+	// Name 返回执行器外显名称（用于UI显示）
+	Name() string
+	// Type 返回执行器类型（用于任务匹配）
+	Type() string
+	// Execute 执行任务处理
+	Execute(ctx context.Context, taskID string, requestParams string) (resultData string, err error)
 }
 
-// TaskItem 任务项
-type TaskItem struct {
-	ItemID   string
-	ItemName string
+// ========== 任务执行器注册表全局函数 ==========
+
+// RegisterExecutor 注册任务执行器
+func RegisterExecutor(executor Executor) error {
+	if executor == nil {
+		return fmt.Errorf("executor cannot be nil")
+	}
+
+	taskType := executor.Type()
+	if taskType == "" {
+		return fmt.Errorf("executor type cannot be empty")
+	}
+
+	if executor.Name() == "" {
+		return fmt.Errorf("executor name cannot be empty")
+	}
+
+	executorsMu.Lock()
+	defer executorsMu.Unlock()
+
+	executorsMap[taskType] = executor
+	return nil
+}
+
+// GetExecutor 获取任务执行器
+func GetExecutor(taskType string) (Executor, bool) {
+	executorsMu.RLock()
+	defer executorsMu.RUnlock()
+
+	executor, exists := executorsMap[taskType]
+	return executor, exists
+}
+
+// HasExecutor 检查是否注册了指定类型的执行器
+func HasExecutor(taskType string) bool {
+	executorsMu.RLock()
+	defer executorsMu.RUnlock()
+
+	_, exists := executorsMap[taskType]
+	return exists
+}
+
+// GetDisplayName 获取任务类型的显示名称
+func GetDisplayName(taskType string) string {
+	executorsMu.RLock()
+	defer executorsMu.RUnlock()
+
+	if executor, exists := executorsMap[taskType]; exists {
+		return executor.Name()
+	}
+	return ""
+}
+
+// ListExecutors 列出所有执行器
+func ListExecutors() map[string]Executor {
+	executorsMu.RLock()
+	defer executorsMu.RUnlock()
+
+	result := make(map[string]Executor)
+	for taskType, executor := range executorsMap {
+		result[taskType] = executor
+	}
+	return result
+}
+
+// ExecuteTask 执行指定类型的任务
+func ExecuteTask(ctx context.Context, taskType, taskID, requestParams string) (string, error) {
+	executor, exists := GetExecutor(taskType)
+	if !exists {
+		return "", fmt.Errorf("no executor registered for task type: %s", taskType)
+	}
+
+	return executor.Execute(ctx, taskID, requestParams)
 }

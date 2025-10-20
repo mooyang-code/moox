@@ -157,16 +157,16 @@
               <a-space>
                 <a-button 
                   type="primary"
-                  size="mini" 
+                  size="mini"
                   status="success"
-                  @click="onDownload(record)" 
+                  @click="onDownload(record)"
                   :disabled="record.status !== 1"
-                  :loading="downloadProgress[record.id] !== undefined && downloadProgress[record.id] < 100"
+                  :loading="downloadProgress[record.package_id] !== undefined && downloadProgress[record.package_id] < 100"
                 >
                   <template #icon>
                     <icon-download />
                   </template>
-                  <span v-if="downloadProgress[record.id] !== undefined && downloadProgress[record.id] < 100">
+                  <span v-if="downloadProgress[record.package_id] !== undefined && downloadProgress[record.package_id] < 100">
                     下载中...
                   </span>
                   <span v-else>下载</span>
@@ -208,8 +208,19 @@
         </a-form-item>
         
         
-        <a-form-item field="version" label="版本号" required>
-          <a-input v-model="uploadForm.version" placeholder="请输入版本号，如：v1.0.0" />
+        <a-form-item 
+          field="version" 
+          label="版本号" 
+          required
+          :status="versionValidationStatus"
+          :feedback="versionFeedback"
+        >
+          <a-input 
+            v-model="uploadForm.version" 
+            placeholder="请输入版本号，如：v1.0.0" 
+            @blur="checkVersionExists"
+            @input="onVersionInput"
+          />
         </a-form-item>
         
         <a-form-item field="runtime" label="运行时环境" required>
@@ -357,14 +368,14 @@
             <a-button 
               type="primary"
               status="success"
-              @click="onDownload(packageDetail)" 
+              @click="onDownload(packageDetail)"
               :disabled="packageDetail.status !== 1"
-              :loading="downloadProgress[packageDetail.id] !== undefined && downloadProgress[packageDetail.id] < 100"
+              :loading="downloadProgress[packageDetail.package_id] !== undefined && downloadProgress[packageDetail.package_id] < 100"
             >
               <template #icon>
                 <icon-download />
               </template>
-              <span v-if="downloadProgress[packageDetail.id] !== undefined && downloadProgress[packageDetail.id] < 100">
+              <span v-if="downloadProgress[packageDetail.package_id] !== undefined && downloadProgress[packageDetail.package_id] < 100">
                 下载中...
               </span>
               <span v-else>下载</span>
@@ -425,6 +436,11 @@ const fileList = ref<any[]>([]);
 const detailVisible = ref(false);
 const packageDetail = ref<FunctionPackage | null>(null);
 
+// 版本验证状态
+const versionValidationStatus = ref<'error' | 'warning' | 'success' | undefined>(undefined);
+const versionFeedback = ref<string>('');
+const isCheckingVersion = ref(false);
+
 // 异步任务状态
 const currentTaskId = ref<string>('');
 const isPolling = ref(false);
@@ -464,11 +480,27 @@ const defaultUploadForm = {
 const uploadForm = reactive({ ...defaultUploadForm });
 
 // 监听属性变化
-watch(() => props.modelValue, (newVal) => {
+watch(() => props.modelValue, async (newVal) => {
   visible.value = newVal;
   if (newVal) {
     loadPackageList();
     loadCloudAccounts();
+    
+    // 检查并恢复未完成的上传任务
+    try {
+      await asyncTaskManager.checkAndRestoreTask(async (taskData: any) => {
+        if (taskData.task_type === 'UPLOAD_FILE_TO_COS') {
+          console.log('恢复文件上传任务:', taskData.job_id);
+          currentTaskId.value = taskData.job_id;
+          uploadMessage.value = '检测到未完成的上传任务，正在恢复...';
+          startTaskPolling(taskData.job_id);
+          return true; // 表示成功处理了任务恢复
+        }
+        return false; // 不是我们处理的任务类型
+      });
+    } catch (error) {
+      console.warn('任务恢复失败:', error);
+    }
   }
 });
 
@@ -548,6 +580,9 @@ const handlePageSizeChange = (pageSize: number) => {
 const onAdd = () => {
   Object.assign(uploadForm, { ...defaultUploadForm });
   fileList.value = [];
+  // 清除版本验证状态
+  versionValidationStatus.value = undefined;
+  versionFeedback.value = '';
   uploadVisible.value = true;
 };
 
@@ -559,6 +594,77 @@ const onPackageTypeChange = (value: string) => {
     'factor_calculator': 'factor_calculator'
   };
   uploadForm.package_name = packageTypeNameMap[value] || value;
+  
+  // 包类型变化时重新检查版本
+  if (uploadForm.version) {
+    checkVersionExists();
+  }
+};
+
+// 版本输入变化处理
+const onVersionInput = () => {
+  // 输入时清除验证状态，等待用户完成输入
+  versionValidationStatus.value = undefined;
+  versionFeedback.value = '';
+};
+
+// 检查版本是否已存在
+const checkVersionExists = async () => {
+  if (!uploadForm.version || !uploadForm.package_name || isCheckingVersion.value) {
+    return;
+  }
+
+  // 去除首尾空格
+  uploadForm.version = uploadForm.version.trim();
+  
+  if (!uploadForm.version) {
+    versionValidationStatus.value = undefined;
+    versionFeedback.value = '';
+    return;
+  }
+
+  isCheckingVersion.value = true;
+  versionValidationStatus.value = undefined;
+  versionFeedback.value = '正在检查版本...';
+
+  try {
+    // 使用现有的列表查询API检查版本是否存在
+    const response = await getFunctionPackageList({
+      package_name: uploadForm.package_name,
+      page: 1,
+      page_size: 1000 // 获取所有匹配的包
+    });
+
+    if (response?.code === 200 && response?.data) {
+      const existingPackages = response.data || [];
+      
+      // 检查是否有相同版本的包（排除已删除的）
+      const duplicatePackage = existingPackages.find((pkg: FunctionPackage) => 
+        pkg.version === uploadForm.version && 
+        pkg.package_name === uploadForm.package_name &&
+        pkg.status !== 2 // 排除已删除状态
+      );
+
+      if (duplicatePackage) {
+        versionValidationStatus.value = 'error';
+        versionFeedback.value = `版本 ${uploadForm.version} 已存在，请使用其他版本号`;
+      } else {
+        versionValidationStatus.value = 'success';
+        versionFeedback.value = '版本号可用';
+      }
+    } else {
+      // 查询失败，不显示错误，允许用户继续
+      versionValidationStatus.value = undefined;
+      versionFeedback.value = '';
+    }
+  } catch (error) {
+    console.error('检查版本失败:', error);
+    // 查询失败，不显示错误，允许用户继续
+    versionValidationStatus.value = undefined;
+    versionFeedback.value = '';
+  } finally {
+    isCheckingVersion.value = false;
+  }
 };
 
 // 文件上传处理
@@ -613,6 +719,9 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
 
 // 上传取消
 const handleUploadCancel = () => {
+  // 清除版本验证状态
+  versionValidationStatus.value = undefined;
+  versionFeedback.value = '';
   uploadVisible.value = false;
 };
 
@@ -698,6 +807,28 @@ const validateUploadForm = () => {
 
 // 上传确认
 const handleUploadOk = async () => {
+  // 检查版本是否重复
+  if (versionValidationStatus.value === 'error') {
+    Message.error({
+      content: versionFeedback.value || '版本已存在，请修改版本号',
+      duration: 5000
+    });
+    return;
+  }
+
+  // 如果还没有检查过版本，先检查一下
+  if (uploadForm.version && !versionValidationStatus.value) {
+    await checkVersionExists();
+    // 检查后如果发现重复，阻止提交
+    if (versionValidationStatus.value === 'error') {
+      Message.error({
+        content: versionFeedback.value || '版本已存在，请修改版本号',
+        duration: 5000
+      });
+      return;
+    }
+  }
+
   // 表单验证
   const errors = await uploadFormRef.value?.validate();
   if (errors) {
@@ -730,95 +861,54 @@ const handleUploadOk = async () => {
   }
 };
 
-// 统一上传处理（异步）
+// 统一上传处理（使用异步任务）
 const handleUpload = async () => {
   try {
     const response = await uploadFunctionPackage(uploadForm);
-    console.log('上传API响应:', response);
+    console.log('异步任务创建响应:', response);
     
     if (response?.data?.code === 200) {
       // 后端返回的data是数组格式，取第一个元素
       const responseData = response.data.data;
       const uploadResult = Array.isArray(responseData) ? responseData[0] : responseData;
-      console.log('解析后的上传结果:', uploadResult);
-      console.log('is_async:', uploadResult.is_async, 'task_id:', uploadResult.task_id);
+      console.log('解析后的任务创建结果:', uploadResult);
       
-      if (uploadResult.is_async && uploadResult.task_id) {
-        // 异步上传，开始轮询
-        console.log('收到异步上传响应:', uploadResult);
-        currentTaskId.value = uploadResult.task_id;
-        uploadMessage.value = '上传任务已创建，正在后台处理...';
+      // 新的异步任务模式：直接获取job_id
+      const jobId = uploadResult.job_id;
+      if (jobId) {
+        console.log('收到异步任务创建响应，JobID:', jobId);
+        currentTaskId.value = jobId;
+        uploadMessage.value = '文件上传任务已创建，正在后台处理...';
         
-        
-        // 不要立即显示成功消息，等待轮询结果
-        uploadVisible.value = false; // 关闭上传弹窗
-        
-        // 开始轮询任务状态
-        startTaskPolling(uploadResult.task_id);
-      } else {
-        // 本地存储直接完成
-        Message.success('上传成功');
+        // 关闭上传弹窗
         uploadVisible.value = false;
-        // 刷新代码包列表
-        await loadPackageList();
-        emit('refresh');
+        
+        // 使用统一的异步任务管理器开始轮询
+        startTaskPolling(jobId);
+      } else {
+        throw new Error('服务器未返回任务ID');
       }
     } else {
       // 处理业务错误
-      const errorMessage = response?.data?.message || '上传失败';
+      const errorMessage = response?.data?.message || '创建上传任务失败';
       throw new Error(errorMessage);
     }
   } catch (error: any) {
-    console.error('上传请求失败:', error);
-    console.error('错误对象详情:', {
-      message: error?.message,
-      response: error?.response,
-      responseData: error?.response?.data
-    });
+    console.error('创建上传任务失败:', error);
     
-    // 从不同的错误结构中提取错误消息
-    let errorMessage = '上传失败';
+    // 简化错误消息提取（统一的异步任务接口应该有标准化的错误格式）
+    let errorMessage = '创建上传任务失败';
     
-    // 1. 先检查axios错误消息中是否包含JSON响应
-    if (error?.message && typeof error.message === 'string' && error.message.includes('{"code":')) {
-      try {
-        // 从axios错误消息中提取JSON部分
-        const jsonMatch = error.message.match(/\{[^}]+\}/);
-        if (jsonMatch) {
-          const errorData = JSON.parse(jsonMatch[0]);
-          if (errorData.message) {
-            errorMessage = errorData.message;
-          }
-        }
-      } catch (parseError) {
-        console.warn('解析错误消息JSON失败:', parseError);
-      }
+    // 检查response.data中的错误信息
+    if (error?.response?.data?.message) {
+      errorMessage = error.response.data.message;
+    } else if (error?.message) {
+      errorMessage = error.message;
     }
     
-    // 2. 检查response.data中的错误信息
-    if (error?.response?.data) {
-      const errorData = error.response.data;
-      if (errorData.message) {
-        errorMessage = errorData.message;
-      } else if (errorData.ret_info?.msg) {
-        errorMessage = errorData.ret_info.msg;
-      } else if (errorData.error) {
-        errorMessage = errorData.error;
-      }
-    }
-    
-    // 3. 如果还是默认消息，尝试从其他地方提取
-    if (errorMessage === '上传失败' && error?.message) {
-      // 检查错误消息是否包含有用信息
-      if (error.message.includes('版本冲突') || 
-          error.message.includes('conflict') ||
-          error.message.includes('exists')) {
-        errorMessage = error.message;
-      }
-    }
-    
-    console.log('提取的错误消息:', errorMessage);
-    throw new Error(errorMessage);
+    console.log('错误消息:', errorMessage);
+    Message.error(errorMessage);
+    uploading.value = false;
   }
 };
 
@@ -910,33 +1000,33 @@ const stopTaskPolling = () => {
 };
 
 // 下载进度状态（简化版）
-const downloadProgress = ref<{[key: number]: number}>({});
+const downloadProgress = ref<{[key: string]: number}>({});
 
 
 // 下载（新的URL下载方式）
 const onDownload = async (record: FunctionPackage) => {
   try {
     // 如果已经在下载中，则忽略
-    if (downloadProgress.value[record.id] !== undefined) {
+    if (downloadProgress.value[record.package_id] !== undefined) {
       return;
     }
-    
+
     console.log(`开始下载代码包: ${record.package_name} v${record.version}`);
-    
+
     // 显示下载状态
-    downloadProgress.value[record.id] = 0;
-    
+    downloadProgress.value[record.package_id] = 0;
+
     // 使用新的URL下载方式
-    await downloadPackageByURL(record.id);
-    
+    await downloadPackageByURL(record.package_id);
+
     // 清理进度状态
-    delete downloadProgress.value[record.id];
-    
+    delete downloadProgress.value[record.package_id];
+
   } catch (error) {
     console.error('下载失败:', error);
     // 清除状态
-    delete downloadProgress.value[record.id];
-    
+    delete downloadProgress.value[record.package_id];
+
     const errorMessage = error instanceof Error ? error.message : '未知错误';
     Message.error({
       content: `下载失败: ${errorMessage}`,
@@ -948,7 +1038,7 @@ const onDownload = async (record: FunctionPackage) => {
 // 删除
 const onDelete = async (record: FunctionPackage) => {
   try {
-    const response = await deleteFunctionPackage(record.id);
+    const response = await deleteFunctionPackage(record.package_id);
     if (response?.data?.code === 200) {
       Message.success('删除成功');
       // 刷新代码包列表
@@ -975,9 +1065,9 @@ const handleCancel = () => {
 const onShowDetail = async (record: FunctionPackage) => {
   packageDetail.value = null;
   detailVisible.value = true;
-  
+
   try {
-    const response = await getFunctionPackageDetail(record.id);
+    const response = await getFunctionPackageDetail(record.package_id);
     console.log('代码包详情API响应:', response);
     
     if (response?.code === 200 && response?.data && response.data.length > 0) {
@@ -1072,6 +1162,30 @@ onUnmounted(() => {
 
 .upload-area:hover {
   border-color: #165dff;
+}
+
+/* 版本验证样式 */
+:deep(.arco-form-item-status-error .arco-input-wrapper) {
+  border-color: #f53f3f;
+  box-shadow: 0 0 0 2px rgba(245, 63, 63, 0.1);
+}
+
+:deep(.arco-form-item-status-success .arco-input-wrapper) {
+  border-color: #00b42a;
+  box-shadow: 0 0 0 2px rgba(0, 180, 42, 0.1);
+}
+
+:deep(.arco-form-item-feedback) {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+:deep(.arco-form-item-status-error .arco-form-item-feedback) {
+  color: #f53f3f;
+}
+
+:deep(.arco-form-item-status-success .arco-form-item-feedback) {
+  color: #00b42a;
 }
 
 /* 加载动画 */

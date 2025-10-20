@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -25,6 +26,22 @@ func NewCacheDB(dataDir string) (*CacheDB, error) {
 	db, err := badger.Open(opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open badger db: %w", err)
+	}
+
+	cdb := &CacheDB{
+		db: db,
+	}
+
+	// 启动垃圾回收
+	go cdb.runGC()
+
+	return cdb, nil
+}
+
+// NewCacheDBFromBadger 从现有 BadgerDB 实例创建 CacheDB（用于与 database.Manager 集成）
+func NewCacheDBFromBadger(db *badger.DB) (*CacheDB, error) {
+	if db == nil {
+		return nil, fmt.Errorf("badger db is nil")
 	}
 
 	cdb := &CacheDB{
@@ -66,7 +83,7 @@ func (c *CacheDB) Get(ctx context.Context, key string) (string, error) {
 			return nil
 		})
 	})
-	if err == badger.ErrKeyNotFound {
+	if errors.Is(err, badger.ErrKeyNotFound) {
 		return "", ErrKeyNotFound
 	}
 	return value, err
@@ -90,7 +107,7 @@ func (c *CacheDB) Exists(ctx context.Context, key string) (bool, error) {
 		_, err := txn.Get([]byte(key))
 		return err
 	})
-	if err == badger.ErrKeyNotFound {
+	if errors.Is(err, badger.ErrKeyNotFound) {
 		return false, nil
 	}
 	if err != nil {
@@ -146,7 +163,7 @@ func (c *CacheDB) TTL(ctx context.Context, key string) (time.Duration, error) {
 		return nil
 	})
 
-	if err == badger.ErrKeyNotFound {
+	if errors.Is(err, badger.ErrKeyNotFound) {
 		return -2, nil // 键不存在
 	}
 	return ttl, err
@@ -163,7 +180,7 @@ func (c *CacheDB) Lock(ctx context.Context, key string, ttl time.Duration) bool 
 		if err == nil {
 			return fmt.Errorf("lock already exists")
 		}
-		if err != badger.ErrKeyNotFound {
+		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return err
 		}
 
@@ -232,7 +249,7 @@ func (c *CacheDB) BatchGet(ctx context.Context, keys []string) (map[string]strin
 	err := c.db.View(func(txn *badger.Txn) error {
 		for _, key := range keys {
 			item, err := txn.Get([]byte(key))
-			if err == badger.ErrKeyNotFound {
+			if errors.Is(err, badger.ErrKeyNotFound) {
 				continue
 			}
 			if err != nil {
@@ -272,7 +289,7 @@ func (c *CacheDB) Incr(ctx context.Context, key string) (int64, error) {
 			if err != nil {
 				return err
 			}
-		} else if err != badger.ErrKeyNotFound {
+		} else if !errors.Is(err, badger.ErrKeyNotFound) {
 			return err
 		}
 
@@ -293,7 +310,7 @@ func (c *CacheDB) runGC() {
 		err := c.db.RunValueLogGC(0.7)
 		if err != nil {
 			// 这是正常的，当没有需要回收的数据时会返回错误
-			log.Debugf("GC completed: %v", err)
+			log.Debugf("[Auth] GC completed: %v", err)
 		}
 	}
 }

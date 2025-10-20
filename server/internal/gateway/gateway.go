@@ -254,14 +254,36 @@ func (h *HTTPRequestHandler) extractGatewayHeaders(r *http.Request) map[string]s
 }
 
 // getClientIP 获取客户端IP
+// 优先级：X-Real-IP > X-Forwarded-For（第一个IP）> RemoteAddr
 func (h *HTTPRequestHandler) getClientIP(r *http.Request) string {
-	if xForwardedFor := r.Header.Get("X-Forwarded-For"); xForwardedFor != "" {
-		return xForwardedFor
-	}
+	// 1. 优先使用X-Real-IP（通常由Nginx等反向代理设置，表示真实客户端IP）
 	if xRealIP := r.Header.Get("X-Real-IP"); xRealIP != "" {
 		return xRealIP
 	}
-	return r.RemoteAddr
+
+	// 2. 使用X-Forwarded-For的第一个IP（客户端IP，后面是代理链）
+	if xForwardedFor := r.Header.Get("X-Forwarded-For"); xForwardedFor != "" {
+		// X-Forwarded-For 格式: client, proxy1, proxy2
+		// 我们只取第一个IP（真实客户端）
+		for idx := 0; idx < len(xForwardedFor); idx++ {
+			if xForwardedFor[idx] == ',' {
+				return xForwardedFor[:idx]
+			}
+		}
+		return xForwardedFor
+	}
+
+	// 3. 如果没有代理头，使用RemoteAddr（可能包含端口号，需要去除）
+	remoteAddr := r.RemoteAddr
+	// 去除端口号
+	if idx := len(remoteAddr) - 1; idx >= 0 {
+		for ; idx >= 0; idx-- {
+			if remoteAddr[idx] == ':' {
+				return remoteAddr[:idx]
+			}
+		}
+	}
+	return remoteAddr
 }
 
 // writeResponse 写入响应
@@ -346,6 +368,20 @@ func (h *HTTPServiceHandler) buildRequestHeaders(ctx context.Context, headers ma
 	// 添加配置中的请求头
 	for key, value := range h.config.Headers {
 		reqHead.AddHeader(key, value)
+	}
+
+	// 传递网关层提取的元数据到底层服务
+	if clientIP, ok := headers["client_ip"]; ok && clientIP != "" {
+		reqHead.AddHeader("X-Client-Ip", clientIP)
+	}
+	if traceID, ok := headers["trace_id"]; ok && traceID != "" {
+		reqHead.AddHeader("X-Trace-Id", traceID)
+	}
+	if userAgent, ok := headers["user_agent"]; ok && userAgent != "" {
+		reqHead.AddHeader("User-Agent", userAgent)
+	}
+	if accessToken, ok := headers["access_token"]; ok && accessToken != "" {
+		reqHead.AddHeader("X-Access-Token", accessToken)
 	}
 	return reqHead
 }

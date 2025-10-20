@@ -41,3 +41,8 @@ log:
   max_backups: 10
   max_age: 30               # 天
 
+security:
+  # 数据加密密钥（32字节，用于 AES-256）
+  # 生产环境必须设置环境变量 MOOX_ENCRYPTION_KEY
+  # 开发环境可以使用默认值（不安全，仅用于测试）
+  encryption_key: moox-cloud-secret-key-32bytes

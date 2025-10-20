@@ -1,25 +1,22 @@
 package api
 
 import (
-	"net/http"
-
-	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
-	"github.com/mooyang-code/moox/server/internal/service/collector/logic"
+	apperrors "github.com/mooyang-code/moox/server/internal/errors"
+	collectorimpl "github.com/mooyang-code/moox/server/internal/service/collector/impl"
 	"github.com/mooyang-code/moox/server/internal/service/collector/model"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 // CollectorTaskConfigHandler 采集任务配置处理器
 type CollectorTaskConfigHandler struct {
-	service logic.CollectorTaskConfigService
+	service collectorimpl.TaskConfigService
 }
 
 // NewCollectorTaskConfigHandler 创建采集任务配置处理器
-func NewCollectorTaskConfigHandler(db *gorm.DB, getCloudProvider func(string) provider.Client) *CollectorTaskConfigHandler {
+func NewCollectorTaskConfigHandler(service collectorimpl.TaskConfigService) *CollectorTaskConfigHandler {
 	return &CollectorTaskConfigHandler{
-		service: logic.NewCollectorTaskConfigService(db, getCloudProvider),
+		service: service,
 	}
 }
 
@@ -32,7 +29,7 @@ func (h *CollectorTaskConfigHandler) GetTaskConfigList(c *gin.Context) {
 	// 调用service层获取数据
 	configs, err := h.service.GetTaskConfigList(c.Request.Context(), projectID, datasetID)
 	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "查询失败", err)
+		HandleAppError(c, apperrors.Internal("查询失败", err))
 		return
 	}
 
@@ -47,49 +44,49 @@ func (h *CollectorTaskConfigHandler) GetTaskConfigList(c *gin.Context) {
 func (h *CollectorTaskConfigHandler) GetTaskConfigDetail(c *gin.Context) {
 	taskID := c.Param("id")
 	if taskID == "" {
-		ErrorResponse(c, http.StatusBadRequest, "ID参数不能为空", nil)
+		HandleAppError(c, apperrors.InvalidParam("request", "ID参数不能为空"))
 		return
 	}
 
 	// 调用service层获取数据
 	config, err := h.service.GetTaskConfig(c.Request.Context(), taskID)
 	if err != nil {
-		ErrorResponse(c, http.StatusNotFound, "任务配置不存在", err)
+		HandleAppError(c, apperrors.NotFound("任务配置"))
 		return
 	}
 
-	SuccessResponse(c, "查询成功", config)
+	SuccessResponse(c, "查询成功", []interface{}{config})
 }
 
 // CreateTaskConfig 创建任务配置
 func (h *CollectorTaskConfigHandler) CreateTaskConfig(c *gin.Context) {
 	var config model.CollectorTaskConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
-		ErrorResponse(c, http.StatusBadRequest, "参数绑定失败", err)
+		HandleAppError(c, apperrors.InvalidParam("request", "参数绑定失败"))
 		return
 	}
 
 	// 调用service层创建数据
 	err := h.service.CreateTaskConfig(c.Request.Context(), &config)
 	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "创建失败", err)
+		HandleAppError(c, apperrors.Internal("创建失败", err))
 		return
 	}
 
-	SuccessResponse(c, "创建成功", config)
+	SuccessResponse(c, "创建成功", []interface{}{config})
 }
 
 // UpdateTaskConfig 更新任务配置
 func (h *CollectorTaskConfigHandler) UpdateTaskConfig(c *gin.Context) {
 	taskID := c.Param("id")
 	if taskID == "" {
-		ErrorResponse(c, http.StatusBadRequest, "ID参数不能为空", nil)
+		HandleAppError(c, apperrors.InvalidParam("request", "ID参数不能为空"))
 		return
 	}
 
 	var config model.CollectorTaskConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
-		ErrorResponse(c, http.StatusBadRequest, "参数绑定失败", err)
+		HandleAppError(c, apperrors.InvalidParam("request", "参数绑定失败"))
 		return
 	}
 
@@ -99,27 +96,27 @@ func (h *CollectorTaskConfigHandler) UpdateTaskConfig(c *gin.Context) {
 	// 调用service层更新数据
 	err := h.service.UpdateTaskConfig(c.Request.Context(), &config)
 	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "更新失败", err)
+		HandleAppError(c, apperrors.Internal("更新失败", err))
 		return
 	}
 
-	SuccessResponse(c, "更新成功", config)
+	SuccessResponse(c, "更新成功", []interface{}{config})
 }
 
 // DeleteTaskConfig 删除任务配置
 func (h *CollectorTaskConfigHandler) DeleteTaskConfig(c *gin.Context) {
 	taskID := c.Param("id")
 	if taskID == "" {
-		ErrorResponse(c, http.StatusBadRequest, "ID参数不能为空", nil)
+		HandleAppError(c, apperrors.InvalidParam("request", "ID参数不能为空"))
 		return
 	}
 
 	// 调用service层删除数据
 	err := h.service.RemoveTaskConfig(c.Request.Context(), taskID)
 	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "删除失败", err)
+		HandleAppError(c, apperrors.Internal("删除失败", err))
 		return
 	}
 
-	SuccessResponse(c, "删除成功", nil)
+	SuccessResponse(c, "删除成功", []interface{}{})
 }

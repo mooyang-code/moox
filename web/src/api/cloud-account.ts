@@ -19,19 +19,19 @@ export interface CloudAccount {
 
 // 获取云账户列表
 export const getCloudAccountList = async (): Promise<any> => {
-  const response = await api.post('/collector/ListCloudAccounts', {});
+  const response = await api.post('/cloudnode/ListCloudAccounts', {});
   return response.data;
 };
 
 // 创建云账户
 export const createCloudAccount = async (account: Omit<CloudAccount, 'id' | 'create_time' | 'modify_time' | 'invalid'>) => {
-  const response = await api.post('/collector/CreateCloudAccount', account);
+  const response = await api.post('/cloudnode/CreateCloudAccount', account);
   return response;
 };
 
 // 更新云账户
 export const updateCloudAccount = async (account_id: string, account: Partial<CloudAccount>) => {
-  const response = await api.post('/collector/UpdateCloudAccount', {
+  const response = await api.post('/cloudnode/UpdateCloudAccount', {
     account_id,
     ...account
   });
@@ -40,7 +40,7 @@ export const updateCloudAccount = async (account_id: string, account: Partial<Cl
 
 // 删除云账户
 export const deleteCloudAccount = async (accountId: string) => {
-  const response = await api.post('/collector/DeleteCloudAccount', {
+  const response = await api.post('/cloudnode/DeleteCloudAccount', {
     account_id: accountId
   });
   return response;
@@ -48,7 +48,7 @@ export const deleteCloudAccount = async (accountId: string) => {
 
 // 获取云账户详情
 export const getCloudAccountDetail = async (accountId: string): Promise<any> => {
-  const response = await api.post('/collector/GetCloudAccount', {
+  const response = await api.post('/cloudnode/GetCloudAccount', {
     account_id: accountId
   });
   return response.data;
@@ -56,7 +56,7 @@ export const getCloudAccountDetail = async (accountId: string): Promise<any> => 
 
 // 根据云厂商获取账户列表
 export const getCloudAccountsByProvider = async (provider: string): Promise<any> => {
-  const response = await api.post('/collector/ListCloudAccountsByProvider', {
+  const response = await api.post('/cloudnode/ListCloudAccountsByProvider', {
     provider: provider
   });
   return response.data;

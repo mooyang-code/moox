@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => {
   // 获取跟路径对应的文件
   const env: any = loadEnv(mode, root);
   return {
+    base: mode === 'production' ? './' : '/',
     plugins: createVitePlugins(env),
     resolve: {
       alias: {

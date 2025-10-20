@@ -1,14 +1,15 @@
 package service
 
 import (
-	"github.com/mooyang-code/moox/server/internal/service/ssh/app/config"
+	"log/slog"
+
 	"github.com/gin-gonic/gin"
+	"github.com/mooyang-code/moox/server/internal/service/ssh/app/config"
 	"github.com/mooyang-code/moox/server/internal/service/ssh/gorm"
 	"github.com/mooyang-code/moox/server/internal/service/ssh/gorm/driver/mysql"
 	"github.com/mooyang-code/moox/server/internal/service/ssh/gorm/driver/pgsql"
 	_ "github.com/mooyang-code/moox/server/internal/service/ssh/mysql"
 	_ "github.com/mooyang-code/moox/server/internal/service/ssh/pgsql"
-	"log/slog"
 )
 
 type DbConnConf struct {

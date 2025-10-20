@@ -254,7 +254,7 @@
         
         <a-form-item field="packageId" label="代码包版本" required>
           <a-select v-model="batchAddForm.packageId" placeholder="请选择代码包版本" style="width: 100%">
-            <a-option v-for="pkg in availablePackagesForCreation" :key="pkg.id" :value="pkg.id">
+            <a-option v-for="pkg in availablePackagesForCreation" :key="pkg.package_id" :value="pkg.package_id">
               {{ pkg.package_name }} - {{ pkg.version }} ({{ pkg.runtime }})
             </a-option>
           </a-select>
@@ -297,7 +297,7 @@
       <a-form :model="batchDeployForm" layout="vertical">
         <a-form-item label="选择代码包版本" required>
           <a-table
-            row-key="id"
+            row-key="package_id"
             :data="availablePackages"
             :loading="packagesLoading"
             :pagination="packagesPagination"
@@ -366,7 +366,7 @@
         
         <a-form-item label="选择代码包版本" required>
           <a-table
-            row-key="id"
+            row-key="package_id"
             :data="singleDeployPackages"
             :loading="singleDeployPackagesLoading"
             :pagination="singleDeployPackagesPagination"
@@ -586,7 +586,7 @@ interface CloudFunction {
   region: string;
   ip_address: string;
   version: string;
-  package_id?: number; // 代码包ID
+  package_id?: string;
   package_version?: string; // 代码包版本（包名-版本号）
   supported_collectors: string;
   capacity: string;
@@ -614,6 +614,7 @@ interface CloudAccount {
 const loading = ref(false);
 const taskPolling = ref(false);
 const currentTaskStatus = ref<TaskStatusResponse | null>(null);
+const taskCompleteHandled = ref(false); // 防止重复处理任务完成
 
 const form = reactive({
   cloudAccountId: '',
@@ -724,6 +725,7 @@ const handleTaskRestore = (taskId: string, status: TaskStatusResponse) => {
   } else {
     // 任务还在处理中，继续轮询
     taskPolling.value = true;
+    taskCompleteHandled.value = false; // 重置任务完成处理标志
     currentTaskStatus.value = status;
     
     asyncTaskManager.startPolling(taskId, {
@@ -753,6 +755,16 @@ const handleTaskRestore = (taskId: string, status: TaskStatusResponse) => {
 
 // 任务完成处理
 const handleTaskComplete = async (data: TaskStatusResponse) => {
+  console.log('handleTaskComplete called with data:', data);
+  console.log('Task status:', data.task_status, 'Failed count:', data.failed_count);
+  
+  // 防止重复处理
+  if (taskCompleteHandled.value) {
+    console.log('Task completion already handled, skipping...');
+    return;
+  }
+  taskCompleteHandled.value = true;
+  
   // 先更新状态为完成状态，让用户看到100%的进度
   currentTaskStatus.value = data;
   
@@ -773,10 +785,12 @@ const handleTaskComplete = async (data: TaskStatusResponse) => {
   
   // 延迟显示结果弹窗，让用户先看到完成的进度
   setTimeout(() => {
+    console.log('Showing result modal, failed_count:', data.failed_count);
     // 检查是否有失败项（通过failed_count判断）
     if (data.failed_count > 0) {
     // 有失败项，使用 Modal.error 显示失败详情
     const failedItems = data.failed_items || [];
+    console.log('Failed items:', failedItems);
     
     // 创建 Vue 渲染函数
     const content = () => h('div', { style: { maxHeight: '400px', overflowY: 'auto' } }, [
@@ -889,26 +903,28 @@ const handleBatchAddOk = async () => {
 
 // 执行批量新增
 const executeBatchAdd = async () => {
-  // 准备批量新增的数据
-  const nodes = Array(batchAddForm.nodeCount).fill(null).map((_, index) => ({
-    cloud_account_id: batchAddForm.cloudAccountId,
-    namespace: batchAddForm.namespace || undefined,
-    node_type: 'scf',
-    region: batchAddForm.region,
-    package_id: parseInt(batchAddForm.packageId), // 添加代码包ID
-    version: '1.0.0',
-    supported_collectors: JSON.stringify(batchAddForm.supportedCollectors),
-    capacity: '100',
-    metadata: JSON.stringify({ env: 'prod', index })
+  // 准备多个独立任务的数据
+  const tasks = Array(batchAddForm.nodeCount).fill(null).map((_, index) => ({
+    taskType: 'CREATE_NODE',
+    requestParams: {
+      cloud_account_id: batchAddForm.cloudAccountId,
+      namespace: batchAddForm.namespace || undefined,
+      node_type: 'scf',
+      region: batchAddForm.region,
+      package_id: batchAddForm.packageId,
+      version: '1.0.0',
+      supported_collectors: JSON.stringify(batchAddForm.supportedCollectors),
+      capacity: '100',
+      metadata: JSON.stringify({ env: 'prod', index })
+    }
   }));
 
   try {
-    // 创建异步任务
-    const taskId = await asyncTaskManager.createAsyncTask('BATCH_CREATE_NODE', {
-      nodes
-    });
+    // 创建多个独立任务的异步任务
+    const taskId = await asyncTaskManager.createMultipleAsyncTasks(tasks);
 
     taskPolling.value = true;
+    taskCompleteHandled.value = false; // 重置任务完成处理标志
     
     // 开始轮询任务状态
     asyncTaskManager.startPolling(taskId, {
@@ -1048,16 +1064,20 @@ const batchDelete = () => {
 
 // 执行批量删除
 const executeBatchDelete = async () => {
-  // 后端期望的是字符串数组，不是对象数组
-  const nodes = selectedKeys.value;
+  // 准备多个独立任务的数据
+  const tasks = selectedKeys.value.map(nodeId => ({
+    taskType: 'DELETE_NODE',
+    requestParams: {
+      node_id: nodeId
+    }
+  }));
 
   try {
-    // 创建异步任务
-    const taskId = await asyncTaskManager.createAsyncTask('BATCH_DELETE_NODE', {
-      nodes
-    });
+    // 创建多个独立任务的异步任务
+    const taskId = await asyncTaskManager.createMultipleAsyncTasks(tasks);
 
     taskPolling.value = true;
+    taskCompleteHandled.value = false; // 重置任务完成处理标志
     
     // 开始轮询任务状态
     asyncTaskManager.startPolling(taskId, {
@@ -1092,7 +1112,7 @@ const executeBatchDelete = async () => {
 const loadData = async () => {
   loading.value = true;
   try {
-    const response = await api.post('/collector/GetNodeList', {
+    const response = await api.post('/cloudnode/GetNodeList', {
       cloud_account_id: form.cloudAccountId,
       namespace: form.namespace,
       region: form.region,
@@ -1133,7 +1153,7 @@ const loadData = async () => {
 // 加载云账户列表
 const loadCloudAccounts = async () => {
   try {
-    const response = await api.post('/collector/ListCloudAccounts', {});
+    const response = await api.post('/cloudnode/ListCloudAccounts', {});
     
     // 兼容两种响应格式
     if (response.data?.code === 200 && response.data?.data) {
@@ -1153,7 +1173,7 @@ const loadCloudAccounts = async () => {
         cloudAccountOptions.value = [data].filter(Boolean);
       }
     } else {
-      Message.error('加载云账户失败');
+      Message.error('加载云账户失败，请点击"云账户管理按钮"，新增云账户');
     }
   } catch (error) {
     console.error('加载云账户失败:', error);
@@ -1164,10 +1184,10 @@ const loadCloudAccounts = async () => {
 // 工具函数
 const getTaskTypeText = (taskType: string) => {
   const typeMap: Record<string, string> = {
-    'BATCH_CREATE_NODE': '批量创建节点',
+    'CREATE_NODE': '批量创建节点',
     'BATCH_UPDATE_NODE': '批量更新节点',
-    'BATCH_DELETE_NODE': '批量删除节点',
-    'BATCH_DEPLOY_NODE': '批量部署节点'
+    'DELETE_NODE': '批量删除节点',
+    'DEPLOY_NODE': '批量部署节点'
   };
   return typeMap[taskType] || taskType;
 };
@@ -1347,13 +1367,12 @@ const selectAll = (checked: boolean) => {
 const onDelete = async (record: CloudFunction) => {
   try {
     // 创建单个删除的异步任务
-    const requestData = {
-      nodes: [record.node_id]
-    };
-    
-    const taskId = await asyncTaskManager.createAsyncTask('BATCH_DELETE_NODE', requestData);
+    const taskId = await asyncTaskManager.createAsyncTask('DELETE_NODE', {
+      node_id: record.node_id
+    });
 
     taskPolling.value = true;
+    taskCompleteHandled.value = false; // 重置任务完成处理标志
     
     // 开始轮询任务状态
     asyncTaskManager.startPolling(taskId, {
@@ -1423,7 +1442,7 @@ const selectedNodeDetail = ref<CloudFunction | null>(null);
 // 代码包详情
 const packageDetailVisible = ref(false);
 const packageDetail = ref<FunctionPackage | null>(null);
-const downloadProgress = ref<Record<number, number>>({});
+const downloadProgress = ref<Record<string, number>>({});
 
 // 显示代码包详情
 const onShowPackageDetail = async (record: CloudFunction) => {
@@ -1469,30 +1488,30 @@ const onDownloadPackage = async (pkg: FunctionPackage) => {
   }
   
   try {
-    downloadProgress.value[pkg.id] = 0;
-    
+    downloadProgress.value[pkg.package_id] = 0;
+
     Message.info({
       content: '开始下载代码包...',
       duration: 2000
     });
-    
-    await downloadPackageByURL(pkg.id);
-    
-    downloadProgress.value[pkg.id] = 100;
-    
+
+    await downloadPackageByURL(pkg.package_id);
+
+    downloadProgress.value[pkg.package_id] = 100;
+
     Message.success({
       content: '代码包下载成功',
       duration: 3000
     });
-    
+
     // 3秒后清除进度
     setTimeout(() => {
-      delete downloadProgress.value[pkg.id];
+      delete downloadProgress.value[pkg.package_id];
     }, 3000);
     
   } catch (error) {
     console.error('下载代码包失败:', error);
-    delete downloadProgress.value[pkg.id];
+    delete downloadProgress.value[pkg.package_id];
     Message.error({
       content: '代码包下载失败',
       duration: 5000
@@ -1529,18 +1548,20 @@ const handleBatchDeployOk = async () => {
 // 执行批量部署
 const executeBatchDeploy = async () => {
   try {
-    // 构建批量部署请求数据
-    const deployData = {
-      nodes: selectedKeys.value.map(nodeId => ({
+    // 准备多个独立任务的数据
+    const tasks = selectedKeys.value.map(nodeId => ({
+      taskType: 'DEPLOY_NODE',
+      requestParams: {
         node_id: nodeId,
         package_id: batchDeployForm.selectedPackageId
-      }))
-    };
+      }
+    }));
     
-    // 创建异步任务
-    const taskId = await asyncTaskManager.createAsyncTask('BATCH_DEPLOY_NODE', deployData);
+    // 创建多个独立任务的异步任务
+    const taskId = await asyncTaskManager.createMultipleAsyncTasks(tasks);
     
     taskPolling.value = true;
+    taskCompleteHandled.value = false; // 重置任务完成处理标志
     
     // 开始轮询任务状态
     asyncTaskManager.startPolling(taskId, {
@@ -1556,7 +1577,6 @@ const executeBatchDeploy = async () => {
       },
       onSuccess: (data) => {
         handleTaskComplete(data);
-        Message.success('批量部署完成');
       },
       onFailed: (data) => {
         handleTaskComplete(data);
@@ -1632,18 +1652,14 @@ const handleSingleDeployOk = async () => {
   singleDeployVisible.value = false;
   
   try {
-    // 构建单节点部署请求数据
-    const deployData = {
-      nodes: [{
-        node_id: singleDeployForm.nodeId,
-        package_id: singleDeployForm.selectedPackageId
-      }]
-    };
-    
-    // 创建异步任务
-    const taskId = await asyncTaskManager.createAsyncTask('BATCH_DEPLOY_NODE', deployData);
+    // 创建单个部署的异步任务
+    const taskId = await asyncTaskManager.createAsyncTask('DEPLOY_NODE', {
+      node_id: singleDeployForm.nodeId,
+      package_id: singleDeployForm.selectedPackageId
+    });
     
     taskPolling.value = true;
+    taskCompleteHandled.value = false; // 重置任务完成处理标志
     
     // 开始轮询任务状态
     asyncTaskManager.startPolling(taskId, {
@@ -1652,7 +1668,6 @@ const handleSingleDeployOk = async () => {
       },
       onSuccess: (data) => {
         handleTaskComplete(data);
-        Message.success('部署完成');
       },
       onFailed: (data) => {
         handleTaskComplete(data);

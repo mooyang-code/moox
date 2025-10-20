@@ -5,34 +5,20 @@ import (
 	"fmt"
 
 	"github.com/mooyang-code/moox/server/internal/common"
-	"github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
+	"github.com/mooyang-code/moox/server/internal/errors"
+	cloudnodemgr "github.com/mooyang-code/moox/server/internal/service/cloudnode"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 // CloudAccountHandler 云账户管理处理器
 type CloudAccountHandler struct {
-	service logic.CloudAccountService
+	service cloudnodemgr.Service
 }
 
-// NewCloudAccountHandler 创建云账户管理处理器（用于路由注册）
-func NewCloudAccountHandler(db *gorm.DB) *CloudAccountHandler {
-	return &CloudAccountHandler{
-		service: logic.NewCloudAccountService(db),
-	}
-}
-
-// NewCloudAccountSchemaHandler 创建云账户管理处理器（用于Schema系统）
-func NewCloudAccountSchemaHandler(db *gorm.DB) SchemaHandler {
-	return &CloudAccountHandler{
-		service: logic.NewCloudAccountService(db),
-	}
-}
-
-// NewCloudAccountHandlerWithService 使用已有的服务创建云账户管理处理器
-func NewCloudAccountHandlerWithService(service logic.CloudAccountService) SchemaHandler {
+// NewCloudAccountHandler 使用已有的服务创建云账户管理处理器
+func NewCloudAccountHandler(service cloudnodemgr.Service) *CloudAccountHandler {
 	return &CloudAccountHandler{
 		service: service,
 	}
@@ -117,20 +103,24 @@ func (h *CloudAccountHandler) PostHandle(ctx context.Context, params map[string]
 	switch action {
 	case "create":
 		// 创建云账户
-		account := h.parseCloudAccount(params)
+		accountDTO := h.parseCloudAccount(params)
 
-		if err := h.service.CreateAccount(ctx, account); err != nil {
+		if err := h.service.CreateAccount(ctx, accountDTO); err != nil {
 			return &APIResponse{
 				Code: 500,
 				Data: []interface{}{},
 			}, fmt.Errorf("failed to create cloud account: %w", err)
 		}
 
-		// 脱敏处理后返回
-		account.MaskSecretKey()
+		// 脱敏处理（DTO中已经不包含敏感信息）
+		accountDTO.SecretKey = "****"
+		if len(accountDTO.SecretID) > 4 {
+			accountDTO.SecretID = accountDTO.SecretID[:4] + "****"
+		}
+
 		return &APIResponse{
 			Code: 200,
-			Data: []interface{}{account},
+			Data: []interface{}{accountDTO},
 		}, nil
 
 	case "update":
@@ -172,9 +162,9 @@ func (h *CloudAccountHandler) PostHandle(ctx context.Context, params map[string]
 	}
 }
 
-// parseCloudAccount 解析云账户参数
-func (h *CloudAccountHandler) parseCloudAccount(params map[string]string) *model.CloudAccount {
-	account := &model.CloudAccount{
+// parseCloudAccount 解析云账户参数（返回DTO）
+func (h *CloudAccountHandler) parseCloudAccount(params map[string]string) *cloudnodemgr.CloudAccountDTO {
+	account := &cloudnodemgr.CloudAccountDTO{
 		AccountID:   params["account_id"],
 		AccountName: params["account_name"],
 		Provider:    params["provider"],
@@ -194,7 +184,7 @@ func (h *CloudAccountHandler) GetCloudAccountList(c *gin.Context) {
 	ctx := c.Request.Context()
 	provider := c.Query("provider")
 
-	var accounts []*model.CloudAccount
+	var accounts []*cloudnodemgr.CloudAccountDTO
 	var err error
 
 	if provider != "" {
@@ -204,7 +194,7 @@ func (h *CloudAccountHandler) GetCloudAccountList(c *gin.Context) {
 	}
 
 	if err != nil {
-		common.ErrorResponse(c, 500, "查询云账户列表失败", err)
+		common.HandleAppError(c, errors.Internal("查询云账户列表失败", err))
 		return
 	}
 
@@ -235,7 +225,7 @@ func (h *CloudAccountHandler) GetCloudAccountDetail(c *gin.Context) {
 // CreateCloudAccount 创建云账户
 func (h *CloudAccountHandler) CreateCloudAccount(c *gin.Context) {
 	ctx := c.Request.Context()
-	var account model.CloudAccount
+	var account cloudnodemgr.CloudAccountDTO
 	if err := c.ShouldBindJSON(&account); err != nil {
 		c.JSON(400, gin.H{"code": 400, "message": err.Error()})
 		return
@@ -251,7 +241,7 @@ func (h *CloudAccountHandler) CreateCloudAccount(c *gin.Context) {
 // UpdateCloudAccount 更新云账户
 func (h *CloudAccountHandler) UpdateCloudAccount(c *gin.Context) {
 	ctx := c.Request.Context()
-	var account model.CloudAccount
+	var account cloudnodemgr.CloudAccountDTO
 	if err := c.ShouldBindJSON(&account); err != nil {
 		c.JSON(400, gin.H{"code": 400, "message": err.Error()})
 		return

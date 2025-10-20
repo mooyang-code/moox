@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+
 	"github.com/mooyang-code/moox/server/internal/service/ssh/app/config"
 	"github.com/mooyang-code/moox/server/internal/service/ssh/app/utils"
 	"github.com/mooyang-code/moox/server/internal/service/ssh/gorm"

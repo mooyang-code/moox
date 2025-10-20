@@ -1,7 +1,6 @@
 package tencent
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,7 +9,6 @@ import (
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
 	scf "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf/v20180416"
 	"github.com/tencentyun/cos-go-sdk-v5"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Provider 腾讯云Provider实现
@@ -80,14 +78,4 @@ func NewProvider(config *Config) (*Provider, error) {
 		region:      region,
 		extraConfig: config.ExtraConfig,
 	}, nil
-}
-
-// logInfo 记录信息日志
-func (p *Provider) logInfo(ctx context.Context, format string, args ...interface{}) {
-	log.InfoContextf(ctx, "[TencentProvider] "+format, args...)
-}
-
-// logError 记录错误日志
-func (p *Provider) logError(ctx context.Context, format string, args ...interface{}) {
-	log.ErrorContextf(ctx, "[TencentProvider] "+format, args...)
 }

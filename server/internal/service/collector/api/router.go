@@ -2,17 +2,17 @@ package api
 
 import (
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
+	collectormgr "github.com/mooyang-code/moox/server/internal/service/collector/manager"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // RegisterCollectorRoutes 注册采集器相关路由
-// getCloudProvider: 根据账户ID获取对应的云客户端的回调函数
-func RegisterCollectorRoutes(router *gin.RouterGroup, db *gorm.DB, getCloudProvider func(string) provider.Client) {
+func RegisterCollectorRoutes(router *gin.RouterGroup, serviceFactory *collectormgr.ServiceFactory, getCloudProvider func(string) provider.Client) {
 	// 采集任务配置路由
-	taskConfigHandler := NewCollectorTaskConfigHandler(db, getCloudProvider)
+	taskConfigService := serviceFactory.CreateTaskConfigService(getCloudProvider)
+	taskConfigHandler := NewCollectorTaskConfigHandler(taskConfigService)
 	taskConfigGroup := router.Group("/task-config")
 	{
 		taskConfigGroup.GET("/list", taskConfigHandler.GetTaskConfigList)
@@ -23,7 +23,8 @@ func RegisterCollectorRoutes(router *gin.RouterGroup, db *gorm.DB, getCloudProvi
 	}
 
 	// 采集任务实例路由
-	taskInstanceHandler := NewCollectorTaskInstanceHandler(db)
+	taskInstanceService := serviceFactory.CreateTaskInstanceService()
+	taskInstanceHandler := NewCollectorTaskInstanceHandler(taskInstanceService)
 	taskInstanceGroup := router.Group("/task-instance")
 	{
 		taskInstanceGroup.GET("/list", taskInstanceHandler.GetTaskInstanceList)
@@ -36,7 +37,7 @@ func RegisterCollectorRoutes(router *gin.RouterGroup, db *gorm.DB, getCloudProvi
 	}
 
 	// 节点任务路由
-	nodeTasksHandler := NewNodeTasksHandler(db)
+	nodeTasksHandler := NewNodeTasksHandler()
 	nodeTasksGroup := router.Group("/node-tasks")
 	{
 		nodeTasksGroup.GET("/list", nodeTasksHandler.GetNodeTasksList)

@@ -2,7 +2,6 @@
 package errors
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 )
@@ -32,9 +31,15 @@ const (
 	CodeNodeNotFound      Code = "NODE_NOT_FOUND"
 	CodeTaskNotFound      Code = "TASK_NOT_FOUND"
 	CodeTaskFailed        Code = "TASK_FAILED"
+	CodeTaskCancelled     Code = "TASK_CANCELLED"
 	CodePackageNotFound   Code = "PACKAGE_NOT_FOUND"
 	CodeAccountNotFound   Code = "ACCOUNT_NOT_FOUND"
 	CodeInvalidConfig     Code = "INVALID_CONFIG"
+	CodeProviderNotFound  Code = "PROVIDER_NOT_FOUND"
+	CodeInvalidFormat     Code = "INVALID_FORMAT"
+	CodeMethodNotAllowed  Code = "METHOD_NOT_ALLOWED"
+	CodeFileNotFound      Code = "FILE_NOT_FOUND"
+	CodeUploadFailed      Code = "UPLOAD_FAILED"
 )
 
 // AppError 应用错误
@@ -68,40 +73,6 @@ func (e *AppError) WithDetail(key, value string) *AppError {
 	return e
 }
 
-// New 创建新错误
-func New(code Code, message string) *AppError {
-	return &AppError{
-		Code:       code,
-		Message:    message,
-		HTTPStatus: getHTTPStatus(code),
-	}
-}
-
-// Wrap 包装错误
-func Wrap(err error, code Code, message string) *AppError {
-	if err == nil {
-		return nil
-	}
-
-	// 如果已经是AppError，保留原始错误链
-	var appErr *AppError
-	if errors.As(err, &appErr) {
-		return &AppError{
-			Code:       code,
-			Message:    message,
-			HTTPStatus: getHTTPStatus(code),
-			Err:        err,
-		}
-	}
-
-	return &AppError{
-		Code:       code,
-		Message:    message,
-		HTTPStatus: getHTTPStatus(code),
-		Err:        err,
-	}
-}
-
 // 常用错误构造函数
 
 // NotFound 资源未找到
@@ -126,30 +97,6 @@ func InvalidParam(field string, reason string) *AppError {
 	}
 }
 
-// Unauthorized 未授权
-func Unauthorized(message string) *AppError {
-	if message == "" {
-		message = "unauthorized"
-	}
-	return &AppError{
-		Code:       CodeUnauthorized,
-		Message:    message,
-		HTTPStatus: http.StatusUnauthorized,
-	}
-}
-
-// Forbidden 禁止访问
-func Forbidden(message string) *AppError {
-	if message == "" {
-		message = "forbidden"
-	}
-	return &AppError{
-		Code:       CodeForbidden,
-		Message:    message,
-		HTTPStatus: http.StatusForbidden,
-	}
-}
-
 // Internal 内部错误
 func Internal(message string, err error) *AppError {
 	return &AppError{
@@ -158,44 +105,4 @@ func Internal(message string, err error) *AppError {
 		HTTPStatus: http.StatusInternalServerError,
 		Err:        err,
 	}
-}
-
-// Conflict 冲突错误
-func Conflict(message string) *AppError {
-	return &AppError{
-		Code:       CodeConflict,
-		Message:    message,
-		HTTPStatus: http.StatusConflict,
-	}
-}
-
-// getHTTPStatus 根据错误码获取HTTP状态码
-func getHTTPStatus(code Code) int {
-	switch code {
-	case CodeSuccess:
-		return http.StatusOK
-	case CodeInvalidParam:
-		return http.StatusBadRequest
-	case CodeUnauthorized, CodePasswordIncorrect:
-		return http.StatusUnauthorized
-	case CodeForbidden:
-		return http.StatusForbidden
-	case CodeNotFound, CodeUserNotFound, CodeNodeNotFound, CodeTaskNotFound, CodePackageNotFound, CodeAccountNotFound:
-		return http.StatusNotFound
-	case CodeConflict, CodeVersionExists:
-		return http.StatusConflict
-	case CodeTimeout:
-		return http.StatusRequestTimeout
-	default:
-		return http.StatusInternalServerError
-	}
-}
-
-// Is 判断错误类型
-func Is(err error, code Code) bool {
-	var appErr *AppError
-	if errors.As(err, &appErr) {
-		return appErr.Code == code
-	}
-	return false
 }

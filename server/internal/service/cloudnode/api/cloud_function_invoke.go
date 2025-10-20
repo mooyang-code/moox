@@ -8,25 +8,23 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
+	cloudnodemgr "github.com/mooyang-code/moox/server/internal/service/cloudnode"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 
-	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // CloudFunctionInvokeService 云函数调用服务
 type CloudFunctionInvokeService struct {
-	db       *gorm.DB
-	nodeDAO  dao.SCFNodeDAO
+	service  cloudnodemgr.Service
 	provider provider.Client
 }
 
 // NewCloudFunctionInvokeService 创建云函数调用服务
-func NewCloudFunctionInvokeService(db *gorm.DB) *CloudFunctionInvokeService {
+func NewCloudFunctionInvokeService(service cloudnodemgr.Service) *CloudFunctionInvokeService {
 	return &CloudFunctionInvokeService{
-		db:       db,
-		nodeDAO:  dao.NewSCFNodeDAO(db),
+		service:  service,
 		provider: nil, // 需要通过SetCloudProvider设置
 	}
 }
@@ -59,51 +57,52 @@ type InvokeFunctionResponse struct {
 
 // RegisterCloudFunctionInvokeRoutes 注册云函数调用相关的HTTP路由
 func (s *CloudFunctionInvokeService) RegisterCloudFunctionInvokeRoutes(mux *http.ServeMux) {
+	ctx := trpc.BackgroundContext()
 	// POST /api/v1/cloud-function/invoke - 调用云函数
 	mux.HandleFunc("/api/v1/cloud-function/invoke", s.handleInvokeFunction)
 
-	log.Info("[CloudFunctionInvoke] 云函数调用路由注册完成")
+	log.InfoContext(ctx, "[CloudFunctionInvoke] 云函数调用路由注册完成")
 }
 
 // handleInvokeFunction 处理调用云函数的请求
 func (s *CloudFunctionInvokeService) handleInvokeFunction(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
 	if r.Method != http.MethodPost {
-		writeInvokeJSONError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		writeInvokeJSONError(ctx, w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-
-	ctx := r.Context()
 
 	// 解析请求体
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeInvokeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request body: %v", err))
+		writeInvokeJSONError(ctx, w, http.StatusBadRequest, fmt.Sprintf("Failed to read request body: %v", err))
 		return
 	}
 	defer r.Body.Close()
 
 	var req InvokeFunctionRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeInvokeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Failed to parse request: %v", err))
+		writeInvokeJSONError(ctx, w, http.StatusBadRequest, fmt.Sprintf("Failed to parse request: %v", err))
 		return
 	}
 
 	// 验证必填字段
 	if req.NodeID == "" && req.FunctionName == "" {
-		writeInvokeJSONError(w, http.StatusBadRequest, "Either node_id or function_name is required")
+		writeInvokeJSONError(ctx, w, http.StatusBadRequest, "Either node_id or function_name is required")
 		return
 	}
 
 	// 调用云函数
 	resp, err := s.invokeCloudFunction(ctx, &req)
 	if err != nil {
-		log.ErrorContextf(ctx, "Failed to invoke cloud function: %v", err)
-		writeInvokeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to invoke cloud function: %v", err))
+		log.ErrorContextf(ctx, "[CloudNode] Failed to invoke cloud function: %v", err)
+		writeInvokeJSONError(ctx, w, http.StatusInternalServerError, fmt.Sprintf("Failed to invoke cloud function: %v", err))
 		return
 	}
 
 	// 返回响应
-	writeInvokeJSONResponse(w, http.StatusOK, resp)
+	writeInvokeJSONResponse(ctx, w, http.StatusOK, resp)
 }
 
 // invokeCloudFunction 调用云函数的核心逻辑
@@ -115,9 +114,9 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 
 	var functionName, namespace string
 
-	// 如果提供了NodeID，从数据库获取节点信息
+	// 如果提供了NodeID，从服务获取节点信息
 	if req.NodeID != "" {
-		node, err := s.nodeDAO.GetSCFNode(ctx, req.NodeID)
+		node, err := s.service.GetCloudNode(ctx, req.NodeID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get node: %w", err)
 		}
@@ -152,12 +151,11 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 	// 转换调用类型
 	var cloudInvokeType string
 	if invokeType == "sync" {
-		cloudInvokeType = provider.InvokeTypeSync
+		cloudInvokeType = cloudnodemgr.InvokeTypeSync
 	} else {
-		cloudInvokeType = provider.InvokeTypeAsync
+		cloudInvokeType = cloudnodemgr.InvokeTypeAsync
 	}
-
-	log.InfoContextf(ctx, "Invoking cloud function: %s in namespace: %s", functionName, namespace)
+	log.InfoContextf(ctx, "[CloudNode] Invoking cloud function: %s in namespace: %s", functionName, namespace)
 
 	// 构建调用请求
 	invokeReq := &provider.InvokeFunctionRequest{
@@ -211,27 +209,26 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 		}
 	}
 
-	log.InfoContextf(ctx, "Cloud function invoked successfully - RequestID: %s, Duration: %dms, ExecutionTime: %dms",
+	log.InfoContextf(ctx, "[CloudNode] Cloud function invoked successfully - RequestID: %s, Duration: %dms, ExecutionTime: %dms",
 		resp.RequestID, resp.Duration, executionTime)
-
 	return resp, nil
 }
 
 // writeInvokeJSONResponse 写入JSON响应
-func writeInvokeJSONResponse(w http.ResponseWriter, statusCode int, data interface{}) {
+func writeInvokeJSONResponse(ctx context.Context, w http.ResponseWriter, statusCode int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Errorf("Failed to write JSON response: %v", err)
+		log.ErrorContextf(ctx, "[CloudNode] Failed to write JSON response: %v", err)
 	}
 }
 
 // writeInvokeJSONError 写入JSON错误响应
-func writeInvokeJSONError(w http.ResponseWriter, statusCode int, message string) {
+func writeInvokeJSONError(ctx context.Context, w http.ResponseWriter, statusCode int, message string) {
 	resp := InvokeFunctionResponse{
 		Code:    statusCode,
 		Message: message,
 	}
-	writeInvokeJSONResponse(w, statusCode, resp)
+	writeInvokeJSONResponse(ctx, w, statusCode, resp)
 }

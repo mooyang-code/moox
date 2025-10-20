@@ -1,9 +1,9 @@
 package service
 
 import (
+	"github.com/gin-gonic/gin"
 	"github.com/mooyang-code/moox/server/internal/service/ssh/app/config"
 	"github.com/mooyang-code/moox/server/internal/service/ssh/app/model"
-	"github.com/gin-gonic/gin"
 )
 
 func GetRunConf(c *gin.Context) {

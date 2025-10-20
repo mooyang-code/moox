@@ -1,0 +1,43 @@
+server:
+  enable: true
+  type: nats
+  host: 127.0.0.1
+  port: 4222
+  store_dir: /tmp/msghub
+
+publishers:
+  - name: order-publisher
+    type: nats
+    server_url: nats://127.0.0.1:4222
+    stream_name: orders
+    stream_subjects:
+      - order.created
+      - order.updated
+      - order.deleted
+
+  - name: user-publisher
+    type: nats
+    server_url: nats://127.0.0.1:4222
+    stream_name: users
+    stream_subjects:
+      - user.created
+      - user.updated
+
+consumers:
+  - name: order-consumer
+    type: nats
+    server_url: nats://127.0.0.1:4222
+    stream_name: orders
+    subject: order.created
+    consumer_name: order-processor
+    max_in_flight: 100
+    ack_wait: 30
+
+  - name: user-consumer
+    type: nats
+    server_url: nats://127.0.0.1:4222
+    stream_name: users
+    subject: user.*
+    consumer_name: user-processor
+    max_in_flight: 50
+    ack_wait: 20

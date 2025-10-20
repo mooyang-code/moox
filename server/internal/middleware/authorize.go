@@ -19,10 +19,9 @@ import (
 
 // 全局配置缓存
 var (
-	globalAuthConfig    *authConfig.Config
-	globalGatewayConfig *gatewayConfig.Config
-	noAuthMethodsMap    map[string]bool
-	configMutex         sync.RWMutex
+	globalAuthConfig *authConfig.Config
+	noAuthMethodsMap map[string]bool
+	configMutex      sync.RWMutex
 )
 
 // getJWTSecretKey 获取JWT密钥（带缓存）
@@ -76,7 +75,6 @@ func loadNoAuthMethods() {
 		return
 	}
 
-	globalGatewayConfig = cfg
 	noAuthMethodsMap = make(map[string]bool)
 	for _, method := range cfg.Gateway.NoAuthMethods {
 		noAuthMethodsMap[method] = true
@@ -205,9 +203,4 @@ func createAuthFailResponse() interface{} {
 			Msg:  "访问令牌无效，请退出重新登录(gateway)",
 		},
 	}
-}
-
-// accessTokenProvider 定义获取访问令牌的接口
-type accessTokenProvider interface {
-	GetAccessToken() string
 }

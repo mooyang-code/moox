@@ -79,6 +79,8 @@ build-frontend:
 		echo "❌ 前端目录 $(WEB_DIR) 不存在"; \
 		exit 1; \
 	fi
+	@echo "📦 正在安装前端依赖..."
+	@cd $(WEB_DIR) && pnpm install
 	@cd $(WEB_DIR) && npm run build:prod
 	@echo "📦 正在生成 statik 文件..."
 	@if command -v statik >/dev/null 2>&1; then \

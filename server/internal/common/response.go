@@ -2,12 +2,14 @@
 package common
 
 import (
+	"errors"
 	"net/http"
 	"reflect"
 
+	apperrors "github.com/mooyang-code/moox/server/internal/errors"
+
 	"github.com/gin-gonic/gin"
-	"github.com/mooyang-code/moox/server/internal/errors"
-	"github.com/mooyang-code/moox/server/internal/logger"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // UnifiedAPIResponse 统一的API响应格式 - 兼容wuji格式并支持标准API（wuji即为apicache）
@@ -28,42 +30,19 @@ func SuccessResponse(c *gin.Context, message string, data interface{}) {
 	c.JSON(http.StatusOK, response)
 }
 
-// ErrorResponse 错误响应 (已弃用，使用 HandleError 替代)
-// Deprecated: 使用 errors.HandleError 或 HandleAppError 替代
-func ErrorResponse(c *gin.Context, statusCode int, message string, err error) {
-	response := &UnifiedAPIResponse{
-		Code:    statusCode,
-		Message: message,
-		Data:    []any{},
-	}
-
-	// 记录错误
-	if err != nil {
-		logger.Errorf(c.Request.Context(), "API Error: %s - %v", message, err)
-		if gin.Mode() == gin.DebugMode {
-			response.Data = []any{map[string]string{
-				"error": err.Error(),
-			}}
-		}
-	}
-
-	c.JSON(statusCode, response)
-}
-
 // HandleAppError 处理AppError并返回统一格式的响应
 func HandleAppError(c *gin.Context, err error) {
 	if err == nil {
 		return
 	}
 
-	var appErr *errors.AppError
-	if e, ok := err.(*errors.AppError); ok {
-		appErr = e
+	var appErr *apperrors.AppError
+	if errors.As(err, &appErr) {
 		// 记录错误日志
 		if appErr.HTTPStatus >= 500 {
-			logger.Errorf(c.Request.Context(), "Server error: %v", appErr)
+			log.ErrorContextf(c.Request.Context(), "Server error: %v", appErr)
 		} else {
-			logger.Warnf(c.Request.Context(), "Client error: %v", appErr)
+			log.WarnContextf(c.Request.Context(), "Client error: %v", appErr)
 		}
 
 		// 构建响应
@@ -83,7 +62,7 @@ func HandleAppError(c *gin.Context, err error) {
 	}
 
 	// 未知错误
-	logger.Errorf(c.Request.Context(), "Unknown error: %v", err)
+	log.ErrorContextf(c.Request.Context(), "Unknown error: %v", err)
 	c.JSON(http.StatusInternalServerError, &UnifiedAPIResponse{
 		Code:    http.StatusInternalServerError,
 		Message: "Internal server error",
@@ -188,18 +167,6 @@ func convertSliceToArray(data interface{}) []any {
 	return result
 }
 
-// PaginatedResponse 分页响应
-func PaginatedResponse(c *gin.Context, message string, items interface{}, total int64, page, pageSize int) {
-	data := map[string]interface{}{
-		"items":     items,
-		"total":     total,
-		"page":      page,
-		"page_size": pageSize,
-		"has_more":  int64(page*pageSize) < total,
-	}
-	SuccessResponse(c, message, data)
-}
-
 // PaginatedListResponse 分页列表响应（新格式：total在外层，items直接作为data数组）
 func PaginatedListResponse(c *gin.Context, message string, items interface{}, total int64) {
 	response := &UnifiedAPIResponse{
@@ -209,9 +176,4 @@ func PaginatedListResponse(c *gin.Context, message string, items interface{}, to
 		Total:   &total,
 	}
 	c.JSON(http.StatusOK, response)
-}
-
-// ListResponse 列表响应（将列表项直接作为data数组）
-func ListResponse(c *gin.Context, message string, items interface{}) {
-	SuccessResponse(c, message, items)
 }

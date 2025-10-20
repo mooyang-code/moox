@@ -37,8 +37,11 @@ type MemoryTaskQueue struct {
 
 // NewMemoryTaskQueue 创建内存任务队列
 func NewMemoryTaskQueue(bufferSize int) *MemoryTaskQueue {
+	if bufferSize <= 0 {
+		bufferSize = 1000
+	}
 	return &MemoryTaskQueue{
-		messages: make([]TaskMessage, 0),
+		messages: []TaskMessage{},
 		ch:       make(chan TaskMessage, bufferSize),
 	}
 }
@@ -74,21 +77,16 @@ func (q *MemoryTaskQueue) Dequeue(ctx context.Context) (TaskMessage, error) {
 		// 通道为空，检查内存队列
 		q.mu.Lock()
 		defer q.mu.Unlock()
-		
+
 		if len(q.messages) > 0 {
 			msg := q.messages[0]
 			q.messages = q.messages[1:]
 			return msg, nil
 		}
-		
+
 		// 没有可用的消息
 		return TaskMessage{}, ErrQueueEmpty
 	}
-}
-
-// Channel 返回用于消费消息的通道
-func (q *MemoryTaskQueue) Channel() <-chan TaskMessage {
-	return q.ch
 }
 
 // Close 关闭队列

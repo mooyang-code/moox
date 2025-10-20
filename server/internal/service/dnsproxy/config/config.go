@@ -206,9 +206,9 @@ func GetDefaultConfig() *Config {
 				{Address: "1.1.1.1", Enabled: true},
 			},
 			Timeouts: TimeoutConfig{
-				DNSQuerySeconds:     5,
-				LatencyTestSeconds:  3,
-				ConcurrentLimit:     5,
+				DNSQuerySeconds:    5,
+				LatencyTestSeconds: 3,
+				ConcurrentLimit:    5,
 			},
 			Latency: LatencyConfig{
 				TestPort:   "80",

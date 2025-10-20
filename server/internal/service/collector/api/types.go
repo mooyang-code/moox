@@ -18,5 +18,5 @@ type SchemaHandler interface {
 
 // 使用统一的响应函数
 var SuccessResponse = common.SuccessResponse
-var ErrorResponse = common.ErrorResponse
+var HandleAppError = common.HandleAppError
 var PaginatedListResponse = common.PaginatedListResponse

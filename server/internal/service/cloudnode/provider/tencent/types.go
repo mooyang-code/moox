@@ -91,23 +91,23 @@ type InvokeFunctionRequest struct {
 
 // InvokeFunctionResponse 调用函数响应
 type InvokeFunctionResponse struct {
-	RequestID      string
-	Result         string
-	Duration       int64
-	BillDuration   int64
-	MemoryUsage    int64
-	StatusCode     int
-	ErrorMessage   string
-	ErrorType      string
-	ReturnResult   string
+	RequestID    string
+	Result       string
+	Duration     int64
+	BillDuration int64
+	MemoryUsage  int64
+	StatusCode   int
+	ErrorMessage string
+	ErrorType    string
+	ReturnResult string
 }
 
 // UploadCOSRequest COS文件上传请求
 type UploadCOSRequest struct {
-	Bucket       string // COS桶名
-	Key          string // 文件在COS中的路径
-	Content      []byte // 文件内容
-	ContentType  string // 文件类型，可选
+	Bucket      string // COS桶名
+	Key         string // 文件在COS中的路径
+	Content     []byte // 文件内容
+	ContentType string // 文件类型，可选
 }
 
 // UploadCOSResponse COS文件上传响应

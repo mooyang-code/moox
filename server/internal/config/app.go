@@ -5,9 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
+)
+
+// 全局配置实例
+var (
+	globalConfig *AppConfig
+	configMutex  sync.RWMutex
 )
 
 // AppConfig 应用配置（总配置）
@@ -18,6 +25,7 @@ type AppConfig struct {
 	Auth     AuthConfig     `yaml:"auth"`
 	Worker   WorkerConfig   `yaml:"worker"`
 	Log      LogConfig      `yaml:"log"`
+	Security SecurityConfig `yaml:"security"`
 }
 
 // ServerConfig 服务器配置
@@ -77,6 +85,11 @@ type LogConfig struct {
 	MaxAge     int    `yaml:"max_age"`     // 最多保留天数
 }
 
+// SecurityConfig 安全配置
+type SecurityConfig struct {
+	EncryptionKey string `yaml:"encryption_key"` // 数据加密密钥（32字节）
+}
+
 // DefaultConfig 返回默认配置
 func DefaultConfig() *AppConfig {
 	return &AppConfig{
@@ -118,6 +131,9 @@ func DefaultConfig() *AppConfig {
 			MaxSize:    100,
 			MaxBackups: 10,
 			MaxAge:     30,
+		},
+		Security: SecurityConfig{
+			EncryptionKey: "moox-cloud-secret-key-32bytes", // 默认密钥（仅用于开发环境）
 		},
 	}
 }
@@ -204,6 +220,11 @@ func (c *AppConfig) applyEnv() {
 	if v := os.Getenv("JWT_SECRET"); v != "" {
 		c.Auth.JWTSecret = v
 	}
+
+	// Security
+	if v := os.Getenv("MOOX_ENCRYPTION_KEY"); v != "" {
+		c.Security.EncryptionKey = v
+	}
 }
 
 // Validate 验证配置
@@ -248,4 +269,29 @@ func (c *AppConfig) IsDevelopment() bool {
 // IsProduction 是否生产环境
 func (c *AppConfig) IsProduction() bool {
 	return c.Server.Environment == "production"
+}
+
+// SetGlobalConfig 设置全局配置（由 bootstrap 在启动时调用）
+func SetGlobalConfig(cfg *AppConfig) {
+	configMutex.Lock()
+	defer configMutex.Unlock()
+	globalConfig = cfg
+}
+
+// GetGlobalConfig 获取全局配置
+func GetGlobalConfig() *AppConfig {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return globalConfig
+}
+
+// GetEncryptionKey 获取加密密钥
+// 这是一个便捷方法，用于快速获取加密密钥
+func GetEncryptionKey() string {
+	cfg := GetGlobalConfig()
+	if cfg == nil || cfg.Security.EncryptionKey == "" {
+		// 如果配置未初始化，返回默认值
+		return "moox-cloud-secret-key-32bytes"
+	}
+	return cfg.Security.EncryptionKey
 }

@@ -1,24 +1,22 @@
 package api
 
 import (
-	"net/http"
-
-	"github.com/mooyang-code/moox/server/internal/service/collector/logic"
+	apperrors "github.com/mooyang-code/moox/server/internal/errors"
+	collectorimpl "github.com/mooyang-code/moox/server/internal/service/collector/impl"
 	"github.com/mooyang-code/moox/server/internal/service/collector/model"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 // CollectorTaskInstanceHandler 采集任务实例处理器
 type CollectorTaskInstanceHandler struct {
-	service logic.CollectorTaskInstanceService
+	service collectorimpl.TaskInstanceService
 }
 
 // NewCollectorTaskInstanceHandler 创建采集任务实例处理器
-func NewCollectorTaskInstanceHandler(db *gorm.DB) *CollectorTaskInstanceHandler {
+func NewCollectorTaskInstanceHandler(service collectorimpl.TaskInstanceService) *CollectorTaskInstanceHandler {
 	return &CollectorTaskInstanceHandler{
-		service: logic.NewCollectorTaskInstanceService(db),
+		service: service,
 	}
 }
 
@@ -34,7 +32,7 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 	// 调用service层获取数据
 	instances, err := h.service.GetTaskInstanceList(c.Request.Context(), nodeID, limit, offset)
 	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "查询失败", err)
+		HandleAppError(c, apperrors.Internal("查询失败", err))
 		return
 	}
 
@@ -49,49 +47,49 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 func (h *CollectorTaskInstanceHandler) GetTaskInstanceDetail(c *gin.Context) {
 	instanceID := c.Param("id")
 	if instanceID == "" {
-		ErrorResponse(c, http.StatusBadRequest, "ID参数不能为空", nil)
+		HandleAppError(c, apperrors.InvalidParam("request", "ID参数不能为空"))
 		return
 	}
 
 	// 调用service层获取数据
 	instance, err := h.service.GetTaskInstance(c.Request.Context(), instanceID)
 	if err != nil {
-		ErrorResponse(c, http.StatusNotFound, "任务实例不存在", err)
+		HandleAppError(c, apperrors.NotFound("任务实例"))
 		return
 	}
 
-	SuccessResponse(c, "查询成功", instance)
+	SuccessResponse(c, "查询成功", []interface{}{instance})
 }
 
 // CreateTaskInstance 创建任务实例
 func (h *CollectorTaskInstanceHandler) CreateTaskInstance(c *gin.Context) {
 	var instance model.CollectorTaskInstance
 	if err := c.ShouldBindJSON(&instance); err != nil {
-		ErrorResponse(c, http.StatusBadRequest, "参数绑定失败", err)
+		HandleAppError(c, apperrors.InvalidParam("request", "参数绑定失败"))
 		return
 	}
 
 	// 调用service层创建数据
 	err := h.service.CreateTaskInstance(c.Request.Context(), &instance)
 	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "创建失败", err)
+		HandleAppError(c, apperrors.Internal("创建失败", err))
 		return
 	}
 
-	SuccessResponse(c, "创建成功", instance)
+	SuccessResponse(c, "创建成功", []interface{}{instance})
 }
 
 // UpdateTaskInstance 更新任务实例
 func (h *CollectorTaskInstanceHandler) UpdateTaskInstance(c *gin.Context) {
 	instanceID := c.Param("id")
 	if instanceID == "" {
-		ErrorResponse(c, http.StatusBadRequest, "ID参数不能为空", nil)
+		HandleAppError(c, apperrors.InvalidParam("request", "ID参数不能为空"))
 		return
 	}
 
 	var instance model.CollectorTaskInstance
 	if err := c.ShouldBindJSON(&instance); err != nil {
-		ErrorResponse(c, http.StatusBadRequest, "参数绑定失败", err)
+		HandleAppError(c, apperrors.InvalidParam("request", "参数绑定失败"))
 		return
 	}
 
@@ -101,63 +99,63 @@ func (h *CollectorTaskInstanceHandler) UpdateTaskInstance(c *gin.Context) {
 	// 调用service层更新数据
 	err := h.service.UpdateTaskInstance(c.Request.Context(), instanceID, &instance)
 	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "更新失败", err)
+		HandleAppError(c, apperrors.Internal("更新失败", err))
 		return
 	}
 
-	SuccessResponse(c, "更新成功", instance)
+	SuccessResponse(c, "更新成功", []interface{}{instance})
 }
 
 // DeleteTaskInstance 删除任务实例
 func (h *CollectorTaskInstanceHandler) DeleteTaskInstance(c *gin.Context) {
 	instanceID := c.Param("id")
 	if instanceID == "" {
-		ErrorResponse(c, http.StatusBadRequest, "ID参数不能为空", nil)
+		HandleAppError(c, apperrors.InvalidParam("request", "ID参数不能为空"))
 		return
 	}
 
 	// 调用service层删除数据
 	err := h.service.RemoveTaskInstance(c.Request.Context(), instanceID)
 	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "删除失败", err)
+		HandleAppError(c, apperrors.Internal("删除失败", err))
 		return
 	}
 
-	SuccessResponse(c, "删除成功", nil)
+	SuccessResponse(c, "删除成功", []interface{}{})
 }
 
 // StartTaskInstance 启动任务实例
 func (h *CollectorTaskInstanceHandler) StartTaskInstance(c *gin.Context) {
 	instanceID := c.Param("id")
 	if instanceID == "" {
-		ErrorResponse(c, http.StatusBadRequest, "ID参数不能为空", nil)
+		HandleAppError(c, apperrors.InvalidParam("request", "ID参数不能为空"))
 		return
 	}
 
 	// 调用service层启动任务
 	err := h.service.StartTaskInstance(c.Request.Context(), instanceID)
 	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "启动失败", err)
+		HandleAppError(c, apperrors.Internal("启动失败", err))
 		return
 	}
 
-	SuccessResponse(c, "启动成功", nil)
+	SuccessResponse(c, "启动成功", []interface{}{})
 }
 
 // StopTaskInstance 停止任务实例
 func (h *CollectorTaskInstanceHandler) StopTaskInstance(c *gin.Context) {
 	instanceID := c.Param("id")
 	if instanceID == "" {
-		ErrorResponse(c, http.StatusBadRequest, "ID参数不能为空", nil)
+		HandleAppError(c, apperrors.InvalidParam("request", "ID参数不能为空"))
 		return
 	}
 
 	// 调用service层停止任务
 	err := h.service.StopTaskInstance(c.Request.Context(), instanceID)
 	if err != nil {
-		ErrorResponse(c, http.StatusInternalServerError, "停止失败", err)
+		HandleAppError(c, apperrors.Internal("停止失败", err))
 		return
 	}
 
-	SuccessResponse(c, "停止成功", nil)
+	SuccessResponse(c, "停止成功", []interface{}{})
 }

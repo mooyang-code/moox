@@ -3,7 +3,6 @@ package service
 import (
 	"errors"
 	"fmt"
-	"github.com/gin-gonic/gin"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,6 +10,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 func getSshConn(sessionId string) (*SshConn, error) {

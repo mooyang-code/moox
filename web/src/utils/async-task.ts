@@ -36,7 +36,6 @@ export interface TaskStatusResponse {
 // 异步任务管理器
 export class AsyncTaskManager {
   private pollingInterval: number | null = null;
-  private taskId: string | null = null;
   private loadingInstance: any = null;
 
   /**
@@ -86,33 +85,79 @@ export class AsyncTaskManager {
    */
   async createAsyncTask(taskType: string, requestParams: any): Promise<string> {
     try {
-      // 调用异步任务创建接口 - 让后台分配task_id
-      const response = await api.post('/collector/AsyncTaskCreate', {
-        task_type: taskType,
-        request_params: requestParams
+      // 调用新的异步任务创建接口 - 使用Job-Task模型
+      const response = await api.post('/asynctask/CreateAsyncJob', {
+        tasks: [{
+          task_type: taskType,
+          request_params: requestParams
+        }]
       });
       
-      // 兼容两种响应格式
-      if (response.data?.code !== 200 && response.data?.ret_info?.code !== 200) {
-        const errorMsg = response.data?.message || response.data?.ret_info?.msg || '创建任务失败';
+      // 检查响应状态
+      if (response.data?.code !== 200) {
+        const errorMsg = response.data?.message || '创建任务失败';
         throw new Error(errorMsg);
       }
       
-      // 从后台响应中获取task_id
+      // 从后台响应中获取job_id
       // 处理数组格式的响应：response.data.data 可能是数组
-      let taskData = response.data?.data || response.data?.ret_info?.data;
-      if (Array.isArray(taskData) && taskData.length > 0) {
-        taskData = taskData[0]; // 取数组第一个元素
+      let jobData = response.data?.data;
+      if (Array.isArray(jobData) && jobData.length > 0) {
+        jobData = jobData[0]; // 取数组第一个元素
       }
-      this.taskId = taskData?.task_id;
-      if (!this.taskId) {
-        throw new Error('服务器未返回task_id');
+      
+      // 新接口返回的是job_id，我们需要将其作为task_id使用（保持前端兼容性）
+      const jobId = jobData?.job_id;
+      if (!jobId) {
+        throw new Error('服务器未返回job_id');
       }
       
       // 设置到URL
-      AsyncTaskManager.setTaskIdToUrl(this.taskId);
+      AsyncTaskManager.setTaskIdToUrl(jobId);
       
-      return this.taskId;
+      return jobId;
+    } catch (error: any) {
+      Message.error(error.message || '创建任务失败');
+      throw error;
+    }
+  }
+
+  /**
+   * 创建多个独立任务的异步任务
+   */
+  async createMultipleAsyncTasks(tasks: Array<{taskType: string, requestParams: any}>): Promise<string> {
+    try {
+      // 调用新的异步任务创建接口 - 使用Job-Task模型
+      const response = await api.post('/asynctask/CreateAsyncJob', {
+        tasks: tasks.map(task => ({
+          task_type: task.taskType,
+          request_params: task.requestParams
+        }))
+      });
+      
+      // 检查响应状态
+      if (response.data?.code !== 200) {
+        const errorMsg = response.data?.message || '创建任务失败';
+        throw new Error(errorMsg);
+      }
+      
+      // 从后台响应中获取job_id
+      // 处理数组格式的响应：response.data.data 可能是数组
+      let jobData = response.data?.data;
+      if (Array.isArray(jobData) && jobData.length > 0) {
+        jobData = jobData[0]; // 取数组第一个元素
+      }
+      
+      // 新接口返回的是job_id，我们需要将其作为task_id使用（保持前端兼容性）
+      const jobId = jobData?.job_id;
+      if (!jobId) {
+        throw new Error('服务器未返回job_id');
+      }
+      
+      // 设置到URL
+      AsyncTaskManager.setTaskIdToUrl(jobId);
+      
+      return jobId;
     } catch (error: any) {
       Message.error(error.message || '创建任务失败');
       throw error;
@@ -124,27 +169,94 @@ export class AsyncTaskManager {
    */
   async queryTaskStatus(taskId: string): Promise<TaskStatusResponse> {
     try {
-      const response = await api.post('/collector/AsyncTaskQuery', {
-        task_id: taskId
+      // 调用新的异步任务查询接口 - 使用Job-Task模型
+      const response = await api.post('/asynctask/QueryAsyncJob', {
+        job_id: taskId
       });
       
-      // 兼容两种响应格式
-      if (response.data?.code !== 200 && response.data?.ret_info?.code !== 200) {
-        const errorMsg = response.data?.message || response.data?.ret_info?.msg || '查询任务状态失败';
+      // 检查响应状态
+      if (response.data?.code !== 200) {
+        const errorMsg = response.data?.message || '查询任务状态失败';
         throw new Error(errorMsg);
       }
       
-      // 返回数据也要兼容两种格式
+      // 从后台响应中获取任务数据
       // 处理数组格式的响应：response.data.data 可能是数组
-      let taskData = response.data?.data || response.data?.ret_info?.data;
-      if (Array.isArray(taskData) && taskData.length > 0) {
-        taskData = taskData[0]; // 取数组第一个元素
+      let jobData = response.data?.data;
+      if (Array.isArray(jobData) && jobData.length > 0) {
+        jobData = jobData[0]; // 取数组第一个元素
       }
-      return taskData;
+
+      // 将Job数据转换为TaskStatusResponse格式（保持前端兼容性）
+      const taskStatus: TaskStatusResponse = {
+        task_id: jobData?.job_id || taskId,
+        task_type: jobData?.tasks?.[0]?.task_type || 'UNKNOWN',
+        task_status: this.mapJobStatusToTaskStatus(jobData?.job_status),
+        total_count: jobData?.total_task_cnt || 0,
+        success_count: jobData?.success_task_cnt || 0,
+        failed_count: jobData?.failed_task_cnt || 0,
+        progress: jobData?.progress || 0,
+        error_message: jobData?.tasks?.[0]?.error_message,
+        created_at: jobData?.created_at || new Date().toISOString(),
+        completed_time: jobData?.updated_at,
+        failed_items: this.extractFailedItems(jobData?.tasks)
+      };
+
+      console.log('queryTaskStatus: jobData:', jobData);
+      console.log('queryTaskStatus: taskStatus:', taskStatus);
+
+      // 不抛出错误，让调用方处理失败状态
+      return taskStatus;
     } catch (error: any) {
       Message.error(error.message || '查询任务状态失败');
       throw error;
     }
+  }
+
+  /**
+   * 将Job状态映射为Task状态
+   */
+  private mapJobStatusToTaskStatus(jobStatus: number): TaskStatus {
+    // 根据后台Job状态映射到前端Task状态
+    // 后台状态: 0-待处理, 1-处理中, 2-成功, 3-失败, 4-部分成功
+    switch (jobStatus) {
+      case 0: // 待处理
+        return TaskStatus.PROCESSING; // 前端显示为处理中
+      case 1: // 处理中
+        return TaskStatus.PROCESSING;
+      case 2: // 成功
+        return TaskStatus.SUCCESS;
+      case 3: // 失败
+        return TaskStatus.FAILED;
+      case 4: // 部分成功
+        return TaskStatus.PARTIAL;
+      default:
+        return TaskStatus.PROCESSING;
+    }
+  }
+
+  /**
+   * 从任务列表中提取失败项
+   */
+  private extractFailedItems(tasks: any[]): TaskDetailItem[] {
+    if (!tasks || !Array.isArray(tasks)) {
+      console.log('extractFailedItems: tasks is not array or empty');
+      return [];
+    }
+    
+    console.log('extractFailedItems: processing tasks:', tasks);
+    const failedTasks = tasks.filter(task => task.task_status === 3); // 失败状态
+    console.log('extractFailedItems: failed tasks:', failedTasks);
+    
+    const result = failedTasks.map(task => ({
+      item_id: task.task_id,
+      item_name: task.task_type,
+      status: task.task_status,
+      error_message: task.error_message
+    }));
+    
+    console.log('extractFailedItems: result:', result);
+    return result;
   }
 
   /**
@@ -169,8 +281,6 @@ export class AsyncTaskManager {
       interval = 2000,
       showLoading = true
     } = options;
-
-    this.taskId = taskId;
 
     // 显示loading
     if (showLoading) {

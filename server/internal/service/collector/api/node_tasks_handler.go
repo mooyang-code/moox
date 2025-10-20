@@ -1,22 +1,19 @@
 package api
 
 import (
-	"net/http"
+	apperrors "github.com/mooyang-code/moox/server/internal/errors"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 // NodeTasksHandler 节点任务处理器
 type NodeTasksHandler struct {
-	db *gorm.DB
+	// TODO: 待实现具体的service依赖
 }
 
 // NewNodeTasksHandler 创建节点任务处理器
-func NewNodeTasksHandler(db *gorm.DB) *NodeTasksHandler {
-	return &NodeTasksHandler{
-		db: db,
-	}
+func NewNodeTasksHandler() *NodeTasksHandler {
+	return &NodeTasksHandler{}
 }
 
 // GetNodeTasksList 获取节点任务列表
@@ -25,10 +22,10 @@ func (h *NodeTasksHandler) GetNodeTasksList(c *gin.Context) {
 	// 暂时返回空数据，待后续实现具体的service层
 	// TODO: 添加具体的查询逻辑，使用 c.Query("node_id") 和 c.Query("status") 参数
 	tasks := []interface{}{}
-	
+
 	// 计算总数
 	total := int64(len(tasks))
-	
+
 	// 使用新的分页列表响应格式
 	PaginatedListResponse(c, "查询成功", tasks, total)
 }
@@ -37,7 +34,7 @@ func (h *NodeTasksHandler) GetNodeTasksList(c *gin.Context) {
 func (h *NodeTasksHandler) GetNodeTasksDetail(c *gin.Context) {
 	taskID := c.Param("id")
 	if taskID == "" {
-		ErrorResponse(c, http.StatusBadRequest, "ID参数不能为空", nil)
+		HandleAppError(c, apperrors.InvalidParam("request", "ID参数不能为空"))
 		return
 	}
 
@@ -47,49 +44,49 @@ func (h *NodeTasksHandler) GetNodeTasksDetail(c *gin.Context) {
 		"details": map[string]interface{}{},
 	}
 
-	SuccessResponse(c, "查询成功", data)
+	SuccessResponse(c, "查询成功", []interface{}{data})
 }
 
 // CreateNodeTasks 创建节点任务
 func (h *NodeTasksHandler) CreateNodeTasks(c *gin.Context) {
 	var taskData map[string]interface{}
 	if err := c.ShouldBindJSON(&taskData); err != nil {
-		ErrorResponse(c, http.StatusBadRequest, "参数绑定失败", err)
+		HandleAppError(c, apperrors.InvalidParam("request", "参数绑定失败"))
 		return
 	}
 
 	// 这里可以实现具体的创建逻辑
-	SuccessResponse(c, "创建成功", taskData)
+	SuccessResponse(c, "创建成功", []interface{}{taskData})
 }
 
 // UpdateNodeTasks 更新节点任务
 func (h *NodeTasksHandler) UpdateNodeTasks(c *gin.Context) {
 	taskID := c.Param("id")
 	if taskID == "" {
-		ErrorResponse(c, http.StatusBadRequest, "ID参数不能为空", nil)
+		HandleAppError(c, apperrors.InvalidParam("request", "ID参数不能为空"))
 		return
 	}
 
 	var taskData map[string]interface{}
 	if err := c.ShouldBindJSON(&taskData); err != nil {
-		ErrorResponse(c, http.StatusBadRequest, "参数绑定失败", err)
+		HandleAppError(c, apperrors.InvalidParam("request", "参数绑定失败"))
 		return
 	}
 
 	taskData["task_id"] = taskID
 
 	// 这里可以实现具体的更新逻辑
-	SuccessResponse(c, "更新成功", taskData)
+	SuccessResponse(c, "更新成功", []interface{}{taskData})
 }
 
 // DeleteNodeTasks 删除节点任务
 func (h *NodeTasksHandler) DeleteNodeTasks(c *gin.Context) {
 	taskID := c.Param("id")
 	if taskID == "" {
-		ErrorResponse(c, http.StatusBadRequest, "ID参数不能为空", nil)
+		HandleAppError(c, apperrors.InvalidParam("request", "ID参数不能为空"))
 		return
 	}
 
 	// 这里可以实现具体的删除逻辑
-	SuccessResponse(c, "删除成功", nil)
+	SuccessResponse(c, "删除成功", []interface{}{})
 }

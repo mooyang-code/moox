@@ -1,10 +1,11 @@
 package service
 
 import (
-	"github.com/mooyang-code/moox/server/internal/service/ssh/app/config"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/mooyang-code/moox/server/internal/service/ssh/app/config"
 )
 
 // OnlineClients 存储的客户端信息

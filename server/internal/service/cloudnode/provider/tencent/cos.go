@@ -9,6 +9,7 @@ import (
 
 	"github.com/avast/retry-go"
 	"github.com/tencentyun/cos-go-sdk-v5"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // UploadCOS 上传文件到腾讯云COS
@@ -19,7 +20,7 @@ func (p *Provider) UploadCOS(ctx context.Context, req *UploadCOSRequest) (*Uploa
 	if req.Bucket == "" || req.Key == "" || len(req.Content) == 0 {
 		return nil, fmt.Errorf("bucket, key and content are required")
 	}
-	p.logInfo(ctx, "uploading file to COS, bucket: %s, key: %s, content size: %d", req.Bucket, req.Key, len(req.Content))
+	log.InfoContextf(ctx, "[CloudNode-Tencent] uploading file to COS, bucket: %s, key: %s, content size: %d", req.Bucket, req.Key, len(req.Content))
 
 	var response *cos.Response
 	var err error
@@ -38,7 +39,7 @@ func (p *Provider) UploadCOS(ctx context.Context, req *UploadCOSRequest) (*Uploa
 			// 执行上传
 			response, err = p.cosClient.Object.Put(ctx, req.Key, strings.NewReader(string(req.Content)), opt)
 			if err != nil {
-				p.logError(ctx, "failed to upload file to COS, err: %v, key: %s, content size: %d", err, req.Key, len(req.Content))
+				log.ErrorContextf(ctx, "[CloudNode-Tencent] failed to upload file to COS, err: %v, key: %s, content size: %d", err, req.Key, len(req.Content))
 				return err
 			}
 			return nil
@@ -47,11 +48,11 @@ func (p *Provider) UploadCOS(ctx context.Context, req *UploadCOSRequest) (*Uploa
 		retry.Delay(2*time.Second), // 每次重试间隔2秒
 		retry.LastErrorOnly(true),  // 仅返回最后一次错误
 		retry.OnRetry(func(n uint, err error) { // 每次重试的回调
-			p.logError(ctx, "retry upload to COS #%d, because got err: %s", n, err)
+			log.ErrorContextf(ctx, "[CloudNode-Tencent] retry upload to COS #%d, because got err: %s", n, err)
 		}),
 	)
 	if err != nil {
-		p.logError(ctx, "upload to COS failed after retries, err: %v", err)
+		log.ErrorContextf(ctx, "[CloudNode-Tencent] upload to COS failed after retries, err: %v", err)
 		return nil, fmt.Errorf("upload to COS failed: %w", err)
 	}
 
@@ -68,7 +69,7 @@ func (p *Provider) UploadCOS(ctx context.Context, req *UploadCOSRequest) (*Uploa
 		}
 	}
 
-	p.logInfo(ctx, "successfully uploaded file to COS, key: %s, location: %s, etag: %s", req.Key, location, etag)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] successfully uploaded file to COS, key: %s, location: %s, etag: %s", req.Key, location, etag)
 	return &UploadCOSResponse{
 		Location: location,
 		ETag:     etag,
@@ -84,7 +85,7 @@ func (p *Provider) UploadCOSWithReader(ctx context.Context, bucket, key string, 
 	if bucket == "" || key == "" || reader == nil {
 		return nil, fmt.Errorf("bucket, key and reader are required")
 	}
-	p.logInfo(ctx, "uploading file to COS with reader, bucket: %s, key: %s", bucket, key)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] uploading file to COS with reader, bucket: %s, key: %s", bucket, key)
 
 	var response *cos.Response
 	var err error
@@ -103,7 +104,7 @@ func (p *Provider) UploadCOSWithReader(ctx context.Context, bucket, key string, 
 			// 执行上传
 			response, err = p.cosClient.Object.Put(ctx, key, reader, opt)
 			if err != nil {
-				p.logError(ctx, "failed to upload file to COS with reader, err: %v, key: %s", err, key)
+				log.ErrorContextf(ctx, "[CloudNode-Tencent] failed to upload file to COS with reader, err: %v, key: %s", err, key)
 				return err
 			}
 			return nil
@@ -112,12 +113,12 @@ func (p *Provider) UploadCOSWithReader(ctx context.Context, bucket, key string, 
 		retry.Delay(2*time.Second), // 每次重试间隔2秒
 		retry.LastErrorOnly(true),  // 仅返回最后一次错误
 		retry.OnRetry(func(n uint, err error) { // 每次重试的回调
-			p.logError(ctx, "retry upload to COS with reader #%d, because got err: %s", n, err)
+			log.ErrorContextf(ctx, "[CloudNode-Tencent] retry upload to COS with reader #%d, because got err: %s", n, err)
 		}),
 	)
 
 	if err != nil {
-		p.logError(ctx, "upload to COS with reader failed after retries, err: %v", err)
+		log.ErrorContextf(ctx, "[CloudNode-Tencent] upload to COS with reader failed after retries, err: %v", err)
 		return nil, fmt.Errorf("upload to COS failed: %w", err)
 	}
 
@@ -134,7 +135,7 @@ func (p *Provider) UploadCOSWithReader(ctx context.Context, bucket, key string, 
 		}
 	}
 
-	p.logInfo(ctx, "successfully uploaded file to COS with reader, key: %s, location: %s, etag: %s", key, location, etag)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] successfully uploaded file to COS with reader, key: %s, location: %s, etag: %s", key, location, etag)
 	return &UploadCOSResponse{
 		Location: location,
 		ETag:     etag,
@@ -151,15 +152,15 @@ func (p *Provider) DeleteCOSObject(ctx context.Context, bucket, key string) erro
 		return fmt.Errorf("bucket and key are required")
 	}
 
-	p.logInfo(ctx, "deleting object from COS, bucket: %s, key: %s", bucket, key)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] deleting object from COS, bucket: %s, key: %s", bucket, key)
 
 	_, err := p.cosClient.Object.Delete(ctx, key)
 	if err != nil {
-		p.logError(ctx, "failed to delete object from COS, err: %v, key: %s", err, key)
+		log.ErrorContextf(ctx, "[CloudNode-Tencent] failed to delete object from COS, err: %v, key: %s", err, key)
 		return fmt.Errorf("delete COS object failed: %w", err)
 	}
 
-	p.logInfo(ctx, "successfully deleted object from COS, key: %s", key)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] successfully deleted object from COS, key: %s", key)
 	return nil
 }
 
@@ -176,11 +177,11 @@ func (p *Provider) GetCOSObjectURL(ctx context.Context, bucket, key string, expi
 	// 生成预签名URL
 	presignedURL, err := p.cosClient.Object.GetPresignedURL(ctx, "GET", key, "", "", expire, nil)
 	if err != nil {
-		p.logError(ctx, "failed to get presigned URL for COS object, err: %v, key: %s", err, key)
+		log.ErrorContextf(ctx, "[CloudNode-Tencent] failed to get presigned URL for COS object, err: %v, key: %s", err, key)
 		return "", fmt.Errorf("get COS object URL failed: %w", err)
 	}
 
-	p.logInfo(ctx, "generated presigned URL for COS object, key: %s, url: %s", key, presignedURL.String())
+	log.InfoContextf(ctx, "[CloudNode-Tencent] generated presigned URL for COS object, key: %s, url: %s", key, presignedURL.String())
 	return presignedURL.String(), nil
 }
 
@@ -194,7 +195,7 @@ func (p *Provider) DownloadCOSToFile(ctx context.Context, key string, localPath 
 		return fmt.Errorf("key and localPath are required")
 	}
 
-	p.logInfo(ctx, "downloading file from COS to local, key: %s, localPath: %s", key, localPath)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] downloading file from COS to local, key: %s, localPath: %s", key, localPath)
 
 	var err error
 	// 使用重试机制下载文件
@@ -203,7 +204,7 @@ func (p *Provider) DownloadCOSToFile(ctx context.Context, key string, localPath 
 			// 使用GetToFile方法下载文件到本地
 			_, err = p.cosClient.Object.GetToFile(ctx, key, localPath, nil)
 			if err != nil {
-				p.logError(ctx, "failed to download file from COS, err: %v, key: %s, localPath: %s", err, key, localPath)
+				log.ErrorContextf(ctx, "[CloudNode-Tencent] failed to download file from COS, err: %v, key: %s, localPath: %s", err, key, localPath)
 				return err
 			}
 			return nil
@@ -212,14 +213,14 @@ func (p *Provider) DownloadCOSToFile(ctx context.Context, key string, localPath 
 		retry.Delay(2*time.Second), // 每次重试间隔2秒
 		retry.LastErrorOnly(true),  // 仅返回最后一次错误
 		retry.OnRetry(func(n uint, err error) { // 每次重试的回调
-			p.logError(ctx, "retry download from COS #%d, because got err: %s", n, err)
+			log.ErrorContextf(ctx, "[CloudNode-Tencent] retry download from COS #%d, because got err: %s", n, err)
 		}),
 	)
 
 	if err != nil {
-		p.logError(ctx, "download from COS failed after retries, err: %v", err)
+		log.ErrorContextf(ctx, "[CloudNode-Tencent] download from COS failed after retries, err: %v", err)
 		return fmt.Errorf("download from COS failed: %w", err)
 	}
-	p.logInfo(ctx, "successfully downloaded file from COS, key: %s, localPath: %s", key, localPath)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] successfully downloaded file from COS, key: %s, localPath: %s", key, localPath)
 	return nil
 }

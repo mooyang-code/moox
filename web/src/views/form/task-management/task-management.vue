@@ -530,7 +530,7 @@ const getTaskList = async () => {
 
 const getNodeList = async () => {
   try {
-    const response = await service.post('/gateway/collector/ListNodes', {}, {
+    const response = await service.post('/gateway/cloudnode/ListNodes', {}, {
       headers: {
         'app_id': 'moox_frontend',
         'app_key': '2521e0d21b6be0347b72bca93904a0dd'

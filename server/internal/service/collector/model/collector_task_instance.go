@@ -2,7 +2,7 @@ package model
 
 import (
 	"time"
-	
+
 	cloudnodemodel "github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 )
 
@@ -36,10 +36,10 @@ type CollectorTaskInstance struct {
 	CreateTime time.Time `gorm:"column:c_ctime;type:datetime;default:CURRENT_TIMESTAMP;index:idx_status_time,idx_create_time" json:"create_time"`
 	// ModifyTime 修改时间
 	ModifyTime time.Time `gorm:"column:c_mtime;type:datetime;default:CURRENT_TIMESTAMP" json:"modify_time"`
-	
+
 	// 外键关联（GORM不自动创建外键，需要手动执行SQL）
-	Task CollectorTaskConfig `gorm:"foreignKey:TaskID;references:TaskID" json:"-"`
-	Node cloudnodemodel.SCFNode `gorm:"foreignKey:NodeID;references:NodeID" json:"-"`
+	Task CollectorTaskConfig    `gorm:"foreignKey:TaskID;references:TaskID" json:"-"`
+	Node cloudnodemodel.CloudNode `gorm:"foreignKey:NodeID;references:NodeID" json:"-"`
 }
 
 // TableName 指定表名

@@ -427,6 +427,17 @@ func (d *UserDAO) GetUsersByRole(ctx context.Context, role int32, limit, offset 
 // ===== 初始化方法 =====
 
 // AutoMigrate 自动迁移表结构
+//
+// 作用：根据 Go struct 定义自动创建或更新数据库表结构
+//
+// 功能：
+//   - 首次运行：如果表不存在，自动创建表
+//   - 字段新增：如果 struct 新增字段，自动添加列到表中
+//   - 字段修改：如果字段类型改变，尝试修改列类型
+//   - 索引创建：根据 struct tag 自动创建索引
+//   - 安全保护：不会删除表中已存在但 struct 中不存在的列
+//
+// 注意：这不是数据迁移，而是表结构（schema）的自动管理
 func (d *UserDAO) AutoMigrate() error {
 	return d.db.AutoMigrate(
 		&model.User{},

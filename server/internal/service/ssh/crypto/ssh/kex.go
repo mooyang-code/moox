@@ -13,9 +13,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/server/internal/service/ssh/crypto/curve25519"
 	"io"
 	"math/big"
+
+	"github.com/mooyang-code/moox/server/internal/service/ssh/crypto/curve25519"
 )
 
 const (

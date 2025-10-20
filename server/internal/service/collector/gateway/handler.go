@@ -11,17 +11,15 @@ import (
 	"strings"
 	"time"
 
-	asynctaskapi "github.com/mooyang-code/moox/server/internal/service/asynctask/api"
-	cloudnodeapi "github.com/mooyang-code/moox/server/internal/service/cloudnode/api"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	collectorapi "github.com/mooyang-code/moox/server/internal/service/collector/api"
-	"github.com/mooyang-code/moox/server/internal/service/collector/core"
-	packagemgrapi "github.com/mooyang-code/moox/server/internal/service/packagemgr/api"
+	collectormgr "github.com/mooyang-code/moox/server/internal/service/collector/manager"
 
 	"github.com/gin-gonic/gin"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// GatewayHandler 处理API请求的网关处理器
+// GatewayHandler 处理API请求的网关处理器（仅处理采集器自身业务）
 type GatewayHandler struct {
 	engine      *gin.Engine
 	serviceID   string
@@ -30,7 +28,7 @@ type GatewayHandler struct {
 }
 
 // NewGatewayHandler 创建网关处理器
-func NewGatewayHandler(collectorImpl *core.CollectorServiceImpl) *GatewayHandler {
+func NewGatewayHandler(collectorFactory *collectormgr.ServiceFactory, getCloudProvider func(string) provider.Client) *GatewayHandler {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 
@@ -40,21 +38,9 @@ func NewGatewayHandler(collectorImpl *core.CollectorServiceImpl) *GatewayHandler
 	// API路由组
 	api := engine.Group("/api")
 
-	// 注册采集器相关的gin路由
-	if collectorImpl != nil {
-		// 注册异步任务路由（使用带有执行器的服务实例）
-		asynctaskapi.RegisterAsyncTaskRoutesWithService(api, collectorImpl.GetAsyncTaskService())
-
-		// 注册采集器路由（支持多云账户）
-		collectorapi.RegisterCollectorRoutes(api, collectorImpl.GetDB(), collectorImpl.GetCloudProviderByAccount)
-
-		// 注册云节点路由
-		cloudnodeapi.RegisterCloudNodeRoutes(api, collectorImpl.GetDB())
-
-		// 注册包管理路由
-		packagemgrapi.RegisterPackageManagerRoutes(api, collectorImpl.GetDB(), collectorImpl.GetAsyncTaskService())
-		log.Info("[Gateway] 包管理路由注册成功")
-	}
+	// 注册采集器路由（支持多云账户）
+	collectorapi.RegisterCollectorRoutes(api, collectorFactory, getCloudProvider)
+	log.Info("[Collector Gateway] 采集器路由注册成功")
 
 	// 创建HTTP客户端用于认证服务转发
 	httpClient := &http.Client{
@@ -83,7 +69,7 @@ type RouteInfo struct {
 
 // ForwardRequest 实现ServiceHandler接口，转发请求到内部引擎
 func (h *GatewayHandler) ForwardRequest(ctx context.Context, method string, headers map[string]string, body []byte) ([]byte, error) {
-	log.InfoContextf(ctx, "[Gateway] ForwardRequest called - method: %s, headers: %+v, body: %s", method, headers, string(body))
+	log.InfoContextf(ctx, "[Collector Gateway] ForwardRequest called - method: %s, headers: %+v, body: %s", method, headers, string(body))
 
 	// 特殊处理认证方法，通过HTTP转发到认证服务
 	if authResp, isAuthMethod, err := h.handleAuthMethodByHTTP(ctx, method, headers, body); isAuthMethod {
@@ -99,7 +85,7 @@ func (h *GatewayHandler) ForwardRequest(ctx context.Context, method string, head
 		return nil, err
 	}
 
-	log.InfoContextf(ctx, "[Gateway] Forwarding to engine: %s %s with body: %s", routeInfo.HTTPMethod, routeInfo.Path, string(routeInfo.Body))
+	log.InfoContextf(ctx, "[Collector Gateway] Forwarding to engine: %s %s with body: %s", routeInfo.HTTPMethod, routeInfo.Path, string(routeInfo.Body))
 
 	// 创建并执行HTTP请求
 	req, err := h.createHTTPRequest(routeInfo, headers)
@@ -111,43 +97,11 @@ func (h *GatewayHandler) ForwardRequest(ctx context.Context, method string, head
 	return h.executeRequest(ctx, req)
 }
 
-// parseMethodToRoute 解析方法名并返回路由信息
+// parseMethodToRoute 解析方法名并返回路由信息（仅包含采集器相关的路由）
 func (h *GatewayHandler) parseMethodToRoute(method string, body []byte) (*RouteInfo, error) {
 	route := &RouteInfo{}
 
 	switch method {
-	// Function Package Management methods
-	case "UploadPackage":
-		route.Path = "/api/function-packages/upload"
-		route.HTTPMethod = "POST"
-		route.Body = body
-	case "GetPackageList":
-		return h.buildMultiQueryRoute("/api/function-packages", body)
-	case "GetPackageDetail":
-		return h.buildDetailRoute("/api/function-packages", "GET", body)
-	case "DeletePackage":
-		return h.buildDetailRoute("/api/function-packages", "DELETE", body)
-	case "GetPackageDownloadURL":
-		return h.buildDetailRouteWithSuffix("/api/function-packages", "GET", body, "download-url")
-	case "GetPackageOptions":
-		return h.buildMultiQueryRoute("/api/function-packages/options", body)
-	case "GetUploadTaskStatus":
-		return h.buildUploadTaskStatusRoute("/api/function-packages/upload-task", body)
-
-	// Async Task methods
-	case "AsyncTaskCreate":
-		route.Path = "/api/async-task/create"
-		route.HTTPMethod = "POST"
-		route.Body = body
-	case "AsyncTaskQuery":
-		return h.buildQueryRoute("/api/async-task/query", body, "task_id")
-	case "GetTaskDetail":
-		return h.buildDetailRouteWithParam("/api/async-task", "GET", body, "task_id")
-	case "CancelTask":
-		return h.buildDetailRouteWithParamAndSuffix("/api/async-task", "POST", body, "task_id", "cancel")
-	case "GetTaskDetails":
-		return h.buildDetailRouteWithParamAndSuffix("/api/async-task", "GET", body, "task_id", "details")
-
 	// Collector Task Config methods
 	case "GetTaskConfigList", "ListTaskConfigs":
 		route.Path = "/api/task-config/list"
@@ -207,70 +161,6 @@ func (h *GatewayHandler) parseMethodToRoute(method string, body []byte) (*RouteI
 	case "DeleteNodeTasks":
 		return h.buildDetailRoute("/api/node-tasks", "DELETE", body)
 
-	// Cloud Node methods
-	case "GetSCFNodeList", "GetNodeList", "ListNodes":
-		route.Path = "/api/cloud_node/list"
-		route.HTTPMethod = "GET"
-	case "GetSCFNodeDetail", "GetNodeDetail":
-		route.Path = "/api/cloud_node/detail"
-		route.HTTPMethod = "GET"
-	case "CreateSCFNode", "RegisterNode":
-		route.Path = "/api/cloud_node/register"
-		route.HTTPMethod = "POST"
-		route.Body = body
-	case "UpdateSCFNode", "UpdateNode":
-		route.Path = "/api/cloud_node/update"
-		route.HTTPMethod = "PUT"
-		route.Body = body
-	case "DeleteSCFNode", "RemoveNode", "DeleteNode":
-		route.Path = "/api/cloud_node/remove"
-		route.HTTPMethod = "DELETE"
-		route.Body = body
-	case "Heartbeat":
-		route.Path = "/api/cloud_node/heartbeat"
-		route.HTTPMethod = "POST"
-		route.Body = body
-	case "UpdateNodeLoad":
-		route.Path = "/api/cloud_node/update_load"
-		route.HTTPMethod = "PUT"
-		route.Body = body
-	case "UpdateNodeFunction":
-		route.Path = "/api/cloud_node/update_function"
-		route.HTTPMethod = "PUT"
-		route.Body = body
-	case "BatchCreateSCFNodes":
-		route.Path = "/api/scf-nodes/batch-create"
-		route.HTTPMethod = "POST"
-		route.Body = body
-	case "BatchDeleteSCFNodes":
-		route.Path = "/api/scf-nodes/batch-delete"
-		route.HTTPMethod = "POST"
-		route.Body = body
-	case "BatchDeploySCFNodes":
-		route.Path = "/api/scf-nodes/batch-deploy"
-		route.HTTPMethod = "POST"
-		route.Body = body
-
-	// Cloud Account methods
-	case "GetCloudAccountList", "ListCloudAccounts", "ListAccounts":
-		route.Path = "/api/cloud_account/list"
-		route.HTTPMethod = "GET"
-	case "GetCloudAccountDetail":
-		route.Path = "/api/cloud_account/detail"
-		route.HTTPMethod = "GET"
-	case "CreateCloudAccount":
-		route.Path = "/api/cloud_account/create"
-		route.HTTPMethod = "POST"
-		route.Body = body
-	case "UpdateCloudAccount":
-		route.Path = "/api/cloud_account/update"
-		route.HTTPMethod = "PUT"
-		route.Body = body
-	case "DeleteCloudAccount":
-		route.Path = "/api/cloud_account/delete"
-		route.HTTPMethod = "DELETE"
-		route.Body = body
-
 	default:
 		return nil, fmt.Errorf("unsupported method: %s", method)
 	}
@@ -320,60 +210,6 @@ func (h *GatewayHandler) buildDetailRouteWithSuffix(basePath, httpMethod string,
 	return route, nil
 }
 
-// buildDetailRouteWithParam 构建带参数名的详情路由
-func (h *GatewayHandler) buildDetailRouteWithParam(basePath, httpMethod string, body []byte, paramName string) (*RouteInfo, error) {
-	route := &RouteInfo{
-		Path:       basePath,
-		HTTPMethod: httpMethod,
-	}
-
-	if len(body) > 0 {
-		var params map[string]interface{}
-		if err := json.Unmarshal(body, &params); err == nil {
-			if id, ok := params[paramName]; ok {
-				route.Path = fmt.Sprintf("%s/%v", basePath, id)
-			}
-		}
-	}
-	return route, nil
-}
-
-// buildDetailRouteWithParamAndSuffix 构建带参数名和后缀的路由
-func (h *GatewayHandler) buildDetailRouteWithParamAndSuffix(basePath, httpMethod string, body []byte, paramName, suffix string) (*RouteInfo, error) {
-	route := &RouteInfo{
-		Path:       basePath,
-		HTTPMethod: httpMethod,
-	}
-
-	if len(body) > 0 {
-		var params map[string]interface{}
-		if err := json.Unmarshal(body, &params); err == nil {
-			if id, ok := params[paramName]; ok {
-				route.Path = fmt.Sprintf("%s/%v/%s", basePath, id, suffix)
-			}
-		}
-	}
-	return route, nil
-}
-
-// buildQueryRoute 构建查询参数路由
-func (h *GatewayHandler) buildQueryRoute(basePath string, body []byte, paramName string) (*RouteInfo, error) {
-	route := &RouteInfo{
-		Path:       basePath,
-		HTTPMethod: "GET",
-	}
-
-	if len(body) > 0 {
-		var params map[string]interface{}
-		if err := json.Unmarshal(body, &params); err == nil {
-			if value, ok := params[paramName].(string); ok {
-				route.Path = fmt.Sprintf("%s?%s=%s", basePath, paramName, value)
-			}
-		}
-	}
-	return route, nil
-}
-
 // buildMultiQueryRoute 构建多参数查询路由
 func (h *GatewayHandler) buildMultiQueryRoute(basePath string, body []byte) (*RouteInfo, error) {
 	route := &RouteInfo{
@@ -384,7 +220,7 @@ func (h *GatewayHandler) buildMultiQueryRoute(basePath string, body []byte) (*Ro
 	if len(body) > 0 {
 		var params map[string]interface{}
 		if err := json.Unmarshal(body, &params); err == nil {
-			queryParams := make([]string, 0)
+			var queryParams []string
 			for key, value := range params {
 				if value != nil {
 					// 过滤掉空字符串，但保留数字0和false等有效值
@@ -415,24 +251,6 @@ func (h *GatewayHandler) buildUpdateRoute(basePath string, body []byte) (*RouteI
 		if err := json.Unmarshal(body, &params); err == nil {
 			if id, ok := params["id"]; ok {
 				route.Path = fmt.Sprintf("%s/%v", basePath, id)
-			}
-		}
-	}
-	return route, nil
-}
-
-// buildUploadTaskStatusRoute 构建上传任务状态查询路由
-func (h *GatewayHandler) buildUploadTaskStatusRoute(basePath string, body []byte) (*RouteInfo, error) {
-	route := &RouteInfo{
-		Path:       basePath,
-		HTTPMethod: "GET",
-	}
-
-	if len(body) > 0 {
-		var params map[string]interface{}
-		if err := json.Unmarshal(body, &params); err == nil {
-			if taskId, ok := params["task_id"].(string); ok && taskId != "" {
-				route.Path = fmt.Sprintf("%s/%s/status", basePath, taskId)
 			}
 		}
 	}
@@ -488,13 +306,7 @@ func (h *GatewayHandler) executeRequest(ctx context.Context, req *http.Request) 
 	respBody := recorder.Body.Bytes()
 	statusCode := recorder.Code
 
-	// 检查是否是二进制文件响应（通过Content-Type判断）
-	contentType := recorder.Header().Get("Content-Type")
-	if contentType == "application/zip" || contentType == "application/octet-stream" {
-		log.InfoContextf(ctx, "[Gateway] Response status: %d, binary file content length: %d bytes", statusCode, len(respBody))
-	} else {
-		log.InfoContextf(ctx, "[Gateway] Response status: %d, body: %s", statusCode, string(respBody))
-	}
+	log.InfoContextf(ctx, "[Collector Gateway] Response status: %d, body: %s", statusCode, string(respBody))
 
 	// 检查状态码
 	if statusCode != http.StatusOK {
@@ -503,7 +315,7 @@ func (h *GatewayHandler) executeRequest(ctx context.Context, req *http.Request) 
 
 	// 处理空响应体
 	if len(respBody) == 0 {
-		log.ErrorContextf(ctx, "[Gateway] Empty response body received")
+		log.ErrorContextf(ctx, "[Collector Gateway] Empty response body received")
 		emptyResp := map[string]interface{}{
 			"code": 500,
 			"data": []interface{}{},
@@ -533,7 +345,7 @@ func (h *GatewayHandler) handleAuthMethodByHTTP(ctx context.Context, method stri
 
 	// 构建完整的认证服务URL
 	fullURL := h.authBaseURL + authPath
-	log.InfoContextf(ctx, "[Gateway] Forwarding auth request to: %s with body: %s", fullURL, string(body))
+	log.InfoContextf(ctx, "[Collector Gateway] Forwarding auth request to: %s with body: %s", fullURL, string(body))
 
 	// 创建HTTP请求
 	req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewReader(body))
@@ -560,7 +372,7 @@ func (h *GatewayHandler) handleAuthMethodByHTTP(ctx context.Context, method stri
 		return nil, true, fmt.Errorf("读取响应失败: %w", err)
 	}
 
-	log.InfoContextf(ctx, "[Gateway] Auth response status: %d, body: %s", resp.StatusCode, string(respBody))
+	log.InfoContextf(ctx, "[Collector Gateway] Auth response status: %d, body: %s", resp.StatusCode, string(respBody))
 
 	// 检查状态码
 	if resp.StatusCode != http.StatusOK {

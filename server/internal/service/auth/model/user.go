@@ -150,8 +150,6 @@ const (
 // 操作类型枚举
 const (
 	ActionRegister       = "register"
-	ActionLogin          = "login"
-	ActionLogout         = "logout"
 	ActionChangePassword = "change_password"
 	ActionUpdateProfile  = "update_profile"
 	ActionGetUserInfo    = "get_user_info"

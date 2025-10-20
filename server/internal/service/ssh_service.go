@@ -33,8 +33,6 @@ func (s *SSHService) RegisterRoutes(router *gin.Engine) {
 	s.registerSSHStatusRoutes(router)
 }
 
-
-
 // registerSSHConfigRoutes 注册SSH配置管理路由
 func (s *SSHService) registerSSHConfigRoutes(router *gin.Engine) {
 	// API路由组（移除认证中间件）

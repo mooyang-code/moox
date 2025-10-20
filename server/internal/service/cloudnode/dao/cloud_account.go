@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,16 +13,25 @@ import (
 
 // CloudAccountDAO 云账户数据访问对象接口
 type CloudAccountDAO interface {
+	// ========== 账户管理 ==========
+
 	// CreateCloudAccount 创建云账户
 	CreateCloudAccount(ctx context.Context, account *model.CloudAccount) error
+
 	// UpdateCloudAccount 更新云账户
 	UpdateCloudAccount(ctx context.Context, account *model.CloudAccount) error
+
 	// DeleteCloudAccount 删除云账户（软删除）
 	DeleteCloudAccount(ctx context.Context, accountID string) error
+
+	// ========== 账户查询 ==========
+
 	// GetCloudAccount 获取单个云账户
 	GetCloudAccount(ctx context.Context, accountID string) (*model.CloudAccount, error)
-	// GetCloudAccountList 获取云账户列表
+
+	// GetCloudAccountList 获取所有云账户列表
 	GetCloudAccountList(ctx context.Context) ([]*model.CloudAccount, error)
+
 	// GetCloudAccountsByProvider 根据提供商获取账户列表
 	GetCloudAccountsByProvider(ctx context.Context, provider string) ([]*model.CloudAccount, error)
 }
@@ -109,7 +119,7 @@ func (d *cloudAccountDAOImpl) GetCloudAccount(ctx context.Context, accountID str
 		First(&account)
 
 	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get cloud account: %w", result.Error)

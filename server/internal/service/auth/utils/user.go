@@ -33,12 +33,6 @@ func extractUserID(c *gin.Context) string {
 		return userID
 	}
 
-	// 2. 尝试从X-Access-Token header获取（前端兼容性）
-	if userID := extractFromAccessToken(c); userID != "" {
-		log.InfoContextf(c.Request.Context(), "[Auth] 从X-Access-Token header提取到用户ID: %s", userID)
-		return userID
-	}
-
 	// 3. 尝试从X-User-ID header获取
 	if userID := c.GetHeader("X-User-ID"); userID != "" {
 		log.InfoContextf(c.Request.Context(), "[Auth] 从X-User-ID header提取到用户ID: %s", userID)
@@ -94,25 +88,6 @@ func extractFromAuthorizationHeader(c *gin.Context) string {
 		return token
 	}
 
-	return ""
-}
-
-// extractFromAccessToken 从X-Access-Token header中提取用户ID
-func extractFromAccessToken(c *gin.Context) string {
-	accessToken := c.GetHeader("X-Access-Token")
-	if accessToken == "" {
-		return ""
-	}
-
-	// 尝试解析API访问token（不验证token类型，只提取user_id）
-	claims, err := ParseToken(accessToken, DefaultJWTConfig.SecretKey)
-	if err == nil && claims != nil {
-		log.InfoContextf(c.Request.Context(), "[Auth] 成功解析X-Access-Token: user_id=%s, token_type=%s",
-			claims.UserID, claims.TokenType)
-		return claims.UserID
-	}
-
-	log.WarnContextf(c.Request.Context(), "[Auth] X-Access-Token解析失败: %v, token=%s", err, truncateToken(accessToken))
 	return ""
 }
 

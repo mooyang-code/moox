@@ -1,12 +1,13 @@
 package config
 
 import (
-	"github.com/mooyang-code/moox/server/internal/service/ssh/app/utils"
-	"github.com/mooyang-code/moox/server/internal/service/ssh/toml"
 	"log/slog"
 	"os"
 	"path"
 	"time"
+
+	"github.com/mooyang-code/moox/server/internal/service/ssh/app/utils"
+	"github.com/mooyang-code/moox/server/internal/service/ssh/toml"
 )
 
 type AppConfig struct {

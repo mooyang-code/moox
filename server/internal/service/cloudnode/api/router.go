@@ -1,33 +1,35 @@
 package api
 
 import (
-	"net/http"
-
-	"github.com/mooyang-code/moox/server/internal/service/cloudnode/logic"
-	"github.com/mooyang-code/moox/server/internal/service/cloudnode/queue"
-
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
+
+	"github.com/mooyang-code/moox/server/internal/service/asynctask"
+	authutils "github.com/mooyang-code/moox/server/internal/service/auth/utils"
+	cloudnodemgr "github.com/mooyang-code/moox/server/internal/service/cloudnode"
 )
 
-// RegisterCloudNodeRoutes 注册云节点相关路由
-func RegisterCloudNodeRoutes(router *gin.RouterGroup, db *gorm.DB) {
+// RegisterCloudNodeRoutes 注册云节点相关路由（包括代码包管理）
+func RegisterCloudNodeRoutes(router *gin.RouterGroup, service cloudnodemgr.Service, asyncService asynctask.Service) {
 	// 云节点路由
-	nodeHandler := NewCloudNodeHandler(db)
+	nodeHandler := NewCloudNodeHandlerWithService(service)
 	nodeGroup := router.Group("/cloud_node")
 	{
 		nodeGroup.GET("/list", nodeHandler.GetNodeList)
 		nodeGroup.GET("/detail", nodeHandler.GetNodeDetail)
-		nodeGroup.POST("/register", nodeHandler.RegisterNode)
 		nodeGroup.PUT("/update", nodeHandler.UpdateNode)
-		nodeGroup.DELETE("/remove", nodeHandler.RemoveNode)
-		nodeGroup.POST("/heartbeat", nodeHandler.Heartbeat)
-		nodeGroup.PUT("/update_load", nodeHandler.UpdateNodeLoad)
-		nodeGroup.PUT("/update_function", nodeHandler.UpdateNodeFunction)
+	}
+
+	// 批量操作路由
+	batchHandler := NewBatchOperationHandler(asyncService)
+	batchGroup := router.Group("/cloud_node/batch")
+	{
+		batchGroup.POST("/create", batchHandler.BatchCreateNodes)
+		batchGroup.POST("/delete", batchHandler.BatchDeleteNodes)
+		batchGroup.POST("/deploy", batchHandler.BatchDeployNodes)
 	}
 
 	// 云账户路由
-	accountHandler := NewCloudAccountHandler(db)
+	accountHandler := NewCloudAccountHandler(service)
 	accountGroup := router.Group("/cloud_account")
 	{
 		accountGroup.GET("/list", accountHandler.GetCloudAccountList)
@@ -38,14 +40,52 @@ func RegisterCloudNodeRoutes(router *gin.RouterGroup, db *gorm.DB) {
 	}
 }
 
-// RegisterCloudNodeHTTPRoutes 注册需要特殊处理的HTTP路由
-func RegisterCloudNodeHTTPRoutes(mux *http.ServeMux, db *gorm.DB, queueManager *queue.Manager) {
-	// 文件上传路由
-	scfNodeService := logic.NewSCFNodeServiceWithQueue(db, queueManager)
-	fileUploadHandler := NewFileUploadHandler(scfNodeService)
-	mux.HandleFunc("/api/v1/cloud-function/upload", fileUploadHandler.HandleFunctionUpload)
+// RegisterPackageManagerRoutes 注册包管理相关路由
+func RegisterPackageManagerRoutes(router *gin.RouterGroup, service cloudnodemgr.Service) {
+	// 创建包管理处理器
+	packageHandler := NewFunctionPackageHandler(service)
 
-	// 云函数调用路由
-	cloudFunctionInvokeService := NewCloudFunctionInvokeService(db)
-	cloudFunctionInvokeService.RegisterCloudFunctionInvokeRoutes(mux)
+	// 注册包管理路由组
+	packageGroup := router.Group("/function-packages")
+	packageGroup.Use(authutils.ExtractUserMiddleware()) // 提取用户信息中间件
+	{
+		packageGroup.GET("", packageHandler.GetPackageList)
+		packageGroup.GET("/:package_id", packageHandler.GetPackageDetail)
+		packageGroup.DELETE("/:package_id", packageHandler.DeletePackage)
+		packageGroup.GET("/:package_id/download-url", packageHandler.GetPackageDownloadURL)
+		packageGroup.GET("/options", packageHandler.GetPackageOptions)
+		packageGroup.POST("/upload", packageHandler.UploadPackage) // 添加文件上传路由
+	}
+}
+
+// RegisterHeartbeatRoutes 注册心跳服务的HTTP路由
+func RegisterHeartbeatRoutes(r *gin.RouterGroup, heartbeatService cloudnodemgr.HeartbeatService) {
+	// 创建处理器
+	heartbeatHandler := NewHeartbeatHandler(heartbeatService)
+	nodeHandler := NewNodeHandler(heartbeatService)
+	probeHandler := NewProbeHandler(heartbeatService)
+
+	// 心跳管理路由组
+	heartbeatGroup := r.Group("/heartbeat")
+	{
+		// 心跳上报
+		heartbeatGroup.POST("/report", heartbeatHandler.ReportHeartbeat)
+		heartbeatGroup.POST("/batch-report", heartbeatHandler.BatchReportHeartbeat)
+
+		// 节点管理
+		nodeGroup := heartbeatGroup.Group("/nodes")
+		{
+			nodeGroup.POST("/register", nodeHandler.RegisterNode)
+			nodeGroup.GET("", nodeHandler.ListNodes)
+			nodeGroup.GET("/:node_id/:node_type", nodeHandler.GetNode)
+			nodeGroup.PUT("/:node_id/:node_type/config", nodeHandler.UpdateNodeConfig)
+			nodeGroup.DELETE("/:node_id/:node_type", nodeHandler.UnregisterNode)
+		}
+
+		// 探测管理
+		probeGroup := heartbeatGroup.Group("/probe")
+		{
+			probeGroup.POST("/:node_id/:node_type", probeHandler.ProbeNode)
+		}
+	}
 }

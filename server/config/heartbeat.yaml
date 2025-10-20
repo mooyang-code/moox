@@ -1,0 +1,15 @@
+# 心跳服务配置文件
+
+# 探测器配置
+prober:
+  enabled: true           # 是否启用探测器
+  scan_interval: 30s      # 扫描间隔，定时探测所有启用探测的节点
+  max_concurrent: 50      # 最大并发探测数
+
+# 告警配置
+alert:
+  enabled: true                      # 是否启用告警
+  timeout_alert_level: "warning"     # 超时告警级别
+  offline_alert_level: "error"       # 离线告警级别
+  abnormal_alert_level: "warning"    # 异常告警级别
+  probe_failed_threshold: 3          # 探测失败N次后触发告警

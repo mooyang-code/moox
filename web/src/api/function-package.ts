@@ -4,6 +4,7 @@ import { api } from '@/api/config';
 // 云函数代码包接口定义
 export interface FunctionPackage {
   id: number;
+  package_id: string; 
   package_name: string;
   version: string;
   description: string;
@@ -69,6 +70,7 @@ export interface PackageListResponse {
 // 代码包选项
 export interface PackageOption {
   id: number;
+  package_id: string; 
   label: string;
   package_name: string;
   version: string;
@@ -76,53 +78,49 @@ export interface PackageOption {
   package_type: string;
 }
 
-// 异步上传响应
+// 异步上传响应（使用统一的异步任务响应格式）
 export interface UploadPackageAsyncResponse {
-  task_id: string;
-  package_id: number;
+  job_id: string;
   package_name: string;
   version: string;
   status: number;
-  is_async: boolean;
-}
-
-// 上传任务状态响应
-export interface UploadTaskStatusResponse {
-  task_id: string;
-  status: string; // pending, processing, success, failed
-  progress: number;
   message: string;
-  is_complete: boolean;
 }
 
-// 上传云函数代码包（异步）
+// 上传云函数代码包（通过异步任务）
 export const uploadFunctionPackage = async (data: UploadPackageRequest) => {
-  const response = await api.post('/collector/UploadPackage', data);
+  // 使用统一的异步任务创建接口
+  const response = await api.post('/asynctask/CreateAsyncJob', {
+    tasks: [{
+      task_type: 'UPLOAD_FILE_TO_COS',
+      request_params: data
+    }]
+  });
   return response;
 };
 
 // 获取云函数代码包列表
 export const getFunctionPackageList = async (params: PackageListRequest = {}): Promise<any> => {
-  const response = await api.post('/collector/GetPackageList', params);
+  const response = await api.post('/cloudnode/GetPackageList', params);
   return response.data;
 };
 
 // 获取云函数代码包详情
-export const getFunctionPackageDetail = async (id: number): Promise<any> => {
-  const response = await api.post('/collector/GetPackageDetail', { id });
+export const getFunctionPackageDetail = async (packageId: string): Promise<any> => {
+  const response = await api.post('/cloudnode/GetPackageDetail', { package_id: packageId });
   return response.data;
 };
 
 // 删除云函数代码包
-export const deleteFunctionPackage = async (id: number) => {
-  const response = await api.post('/collector/DeletePackage', { id });
+export const deleteFunctionPackage = async (packageId: string) => {
+  const response = await api.post('/cloudnode/DeletePackage', { package_id: packageId });
   return response;
 };
 
 
 // 获取代码包下载URL（新方法）
-export const getPackageDownloadURL = async (id: number): Promise<any> => {
-  const response = await api.post('/collector/GetPackageDownloadURL', { id });
+export const getPackageDownloadURL = async (packageId: string): Promise<any> => {
+  const response = await api.post('/cloudnode/GetPackageDownloadURL', { package_id: packageId });
   return response.data;
 };
 
@@ -130,57 +128,52 @@ export const getPackageDownloadURL = async (id: number): Promise<any> => {
 // 获取代码包选项（用于下拉选择）
 export const getFunctionPackageOptions = async (packageType?: string): Promise<any> => {
   const params = packageType ? { package_type: packageType } : {};
-  const response = await api.post('/collector/GetPackageOptions', params);
+  const response = await api.post('/cloudnode/GetPackageOptions', params);
   return response.data;
 };
 
-// 获取上传任务状态
-export const getUploadTaskStatus = async (taskId: string): Promise<any> => {
-  const response = await api.post('/collector/GetUploadTaskStatus', { task_id: taskId });
-  return response.data;
-};
 
 // 简单的URL下载（新的推荐方式）
-export const downloadPackageByURL = async (id: number): Promise<void> => {
+export const downloadPackageByURL = async (packageId: string): Promise<void> => {
   try {
-    console.log(`开始获取代码包 ${id} 的下载URL...`);
-    
+    console.log(`开始获取代码包 ${packageId} 的下载URL...`);
+
     // 1. 获取下载URL
-    const response = await getPackageDownloadURL(id);
-    
+    const response = await getPackageDownloadURL(packageId);
+
     if (response?.code !== 200 || !response?.data?.[0]) {
       throw new Error('获取下载URL失败');
     }
-    
+
     const downloadInfo = response.data[0];
     const { download_url, filename } = downloadInfo;
-    
+
     console.log(`获取到下载URL: ${download_url}, 文件名: ${filename}`);
-    
+
     // 2. 构建完整的下载URL
-    // 从浏览器当前URL中提取IP（冒号之前的部分）
     const currentURL = window.location.href;
     const urlObj = new URL(currentURL);
-    const hostname = urlObj.hostname; // 获取IP地址部分
-    
-    // 构建文件服务器URL（端口18080）
+    const hostname = urlObj.hostname;
     const fullDownloadURL = `http://${hostname}:18080${download_url}`;
-    
+
     console.log(`构建的完整下载URL: ${fullDownloadURL}`);
-    
-    // 3. 创建隐藏的下载链接
+
+    // 3. 使用隐藏的 <a> 标签触发下载（在当前页面弹出下载框）
+    // 后端已设置 Content-Disposition: attachment，浏览器会自动下载而不是导航
     const link = document.createElement('a');
     link.href = fullDownloadURL;
-    link.download = filename;
     link.style.display = 'none';
-    
-    // 4. 触发下载
+
     document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
-    
+
+    // 延迟移除，确保下载已触发
+    setTimeout(() => {
+      document.body.removeChild(link);
+    }, 100);
+
     console.log(`✓ 下载已触发: ${filename}`);
-    
+
   } catch (error) {
     console.error('URL下载失败:', error);
     throw error;

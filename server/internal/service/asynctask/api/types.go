@@ -2,10 +2,18 @@ package api
 
 import (
 	"github.com/mooyang-code/moox/server/internal/common"
+	"github.com/mooyang-code/moox/server/internal/service/asynctask"
 )
 
-// 使用统一的响应格式
 type AsyncTaskResponse = common.UnifiedAPIResponse
+
+// 重新导出types包中的类型
+
+type TaskRequest = asynctask.TaskRequest
+type JobQueryResult = asynctask.JobQueryResult
+type TaskQueryResult = asynctask.TaskQueryResult
+
+// ========== API专用类型 ==========
 
 // AsyncTaskStatusResponse 任务状态响应
 type AsyncTaskStatusResponse struct {
@@ -29,7 +37,3 @@ type AsyncTaskDetailItem struct {
 	Status       int    `json:"status"`
 	ErrorMessage string `json:"error_message,omitempty"`
 }
-
-// 使用统一的响应函数
-var SuccessResponse = common.SuccessResponse
-var ErrorResponse = common.ErrorResponse

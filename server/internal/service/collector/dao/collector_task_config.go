@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,21 +13,43 @@ import (
 
 // CollectorTaskConfigDAO 采集任务配置数据访问对象接口
 type CollectorTaskConfigDAO interface {
-	// 基础CRUD操作
+	// ========== 基础CRUD操作 ==========
+	
+	// GetTaskConfigList 获取任务配置列表
 	GetTaskConfigList(ctx context.Context, projectID, datasetID string) ([]*model.CollectorTaskConfig, error)
+	
+	// GetTaskConfig 获取单个任务配置
 	GetTaskConfig(ctx context.Context, taskID string) (*model.CollectorTaskConfig, error)
+	
+	// CreateTaskConfig 创建任务配置
 	CreateTaskConfig(ctx context.Context, config *model.CollectorTaskConfig) error
+	
+	// UpdateTaskConfig 更新任务配置
 	UpdateTaskConfig(ctx context.Context, config *model.CollectorTaskConfig) error
+	
+	// DeleteTaskConfig 删除任务配置
 	DeleteTaskConfig(ctx context.Context, taskID string) error
-
-	// 查询操作
+	
+	// ========== 查询操作 ==========
+	
+	// GetEnabledTaskConfigs 获取所有启用的任务配置
 	GetEnabledTaskConfigs(ctx context.Context) ([]*model.CollectorTaskConfig, error)
+	
+	// GetTaskConfigsByType 根据类型获取任务配置
 	GetTaskConfigsByType(ctx context.Context, taskType string) ([]*model.CollectorTaskConfig, error)
+	
+	// GetTaskConfigsByNode 根据节点获取任务配置
 	GetTaskConfigsByNode(ctx context.Context, nodeID string) ([]*model.CollectorTaskConfig, error)
+	
+	// GetTaskConfigsByCollectorType 根据采集器类型获取任务配置
 	GetTaskConfigsByCollectorType(ctx context.Context, collectorType string) ([]*model.CollectorTaskConfig, error)
-
-	// 批量操作
+	
+	// ========== 批量操作 ==========
+	
+	// BatchUpdateEnabled 批量更新启用状态
 	BatchUpdateEnabled(ctx context.Context, taskIDs []string, enabled string) error
+	
+	// UpdateDispatchResult 更新分发结果
 	UpdateDispatchResult(ctx context.Context, taskID string, result string) error
 }
 
@@ -65,7 +88,7 @@ func (d *collectorTaskConfigDaoImpl) GetTaskConfig(ctx context.Context, taskID s
 		First(&config)
 
 	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get task config: %w", result.Error)

@@ -9,6 +9,9 @@ import (
 
 // setupRoutes 设置路由
 func (s *Server) setupRoutes() {
+	// 添加CORS中间件（放在最前面，确保所有请求都支持跨域）
+	s.engine.Use(s.corsMiddleware())
+
 	// 添加安全中间件
 	s.engine.Use(s.securityMiddleware())
 
@@ -23,5 +26,5 @@ func (s *Server) setupRoutes() {
 
 	// 文件下载服务 - 添加JWT验证中间件
 	s.engine.GET("/files/*filepath", s.jwtAuthMiddleware(), s.fileDownloadHandler())
-	log.Infof("文件服务器设置完成，包目录: %s", s.config.PackageDir)
+	log.Infof("[FileServer] 文件服务器设置完成，包目录: %s", s.config.PackageDir)
 }

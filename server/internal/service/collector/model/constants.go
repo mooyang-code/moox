@@ -2,10 +2,8 @@ package model
 
 const (
 	// NodeStatus 节点状态
-	NodeStatusOffline     = 0 // 离线
-	NodeStatusOnline      = 1 // 在线
-	NodeStatusMaintenance = 2 // 维护中
-	NodeStatusOverload    = 3 // 过载
+	NodeStatusOffline = 0 // 离线
+	NodeStatusOnline  = 1 // 在线
 
 	// EnabledStatus 启用状态（字符串类型）
 	EnabledTrue  = "true"  // 启用
@@ -41,11 +39,4 @@ const (
 	TaskInstanceStatusTimeout  = 4 // 超时
 	TaskInstanceStatusCanceled = 5 // 已取消
 	TaskInstanceStatusStopped  = 6 // 已停止
-)
-
-// TableNames 表名常量
-const (
-	SCFNodeTableName           = "t_cloud_nodes"
-	CollectorTaskConfigTable   = "t_collector_task_config"
-	CollectorTaskInstanceTable = "t_collector_task_instances"
 )
