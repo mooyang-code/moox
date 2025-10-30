@@ -3,7 +3,9 @@ package bootstrap
 import (
 	"context"
 
+	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/server/internal/config"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode"
 
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -41,6 +43,14 @@ func Initialize(ctx context.Context) (*server.Server, error) {
 		log.ErrorContextf(ctx, "注册TRPC服务失败: %v", err)
 		return nil, err
 	}
+
+	// 5. 注册定时器
+	// 节点心跳探测定时器（仅探测异常超时节点）
+	timer.RegisterScheduler("healthProbeSchedule", &timer.DefaultScheduler{})
+	timer.RegisterHandlerService(s.Service("trpc.healthProbe.timer"), cloudnode.HealthProbeSchedule)
+	// 节点心跳探测定时器（保活所有节点）
+	timer.RegisterScheduler("keepaliveSchedule", &timer.DefaultScheduler{})
+	timer.RegisterHandlerService(s.Service("trpc.keepalive.timer"), cloudnode.KeepaliveSchedule)
 
 	log.InfoContextf(ctx, "应用初始化完成")
 	return s, nil

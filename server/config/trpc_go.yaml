@@ -1,6 +1,6 @@
 global: #全局配置
-  namespace: Development            #环境类型，分正式production和非正式development两种类型
-  env_name: test                    #环境名称，非正式环境下多环境的名称
+  namespace: Production            #环境类型，分正式production和非正式development两种类型
+  env_name: dev                    #环境名称，非正式环境下多环境的名称
 
 server:
   filter:
@@ -31,12 +31,6 @@ server:
       port: 20001
       network: tcp
       protocol: trpc
-      ######## 接收心跳服务 ########
-    - name: trpc.moox.server.CloudNodeAPI
-      #ip: 0.0.0.0
-      port: 20002
-      network: tcp
-      protocol: trpc
 
       ######## API服务 ########
     - name: trpc.moox.api.stdhttp
@@ -49,7 +43,18 @@ server:
       ######## DNS代理定时任务 ########
     - name: trpc.dnsproxy.timer
       port: 8001
-      network: "*/10 * * * * *?scheduler=dnsproxySchedule&startAtOnce=1&params="
+      network: "*/60 * * * * *?scheduler=dnsproxySchedule&startAtOnce=1&params="
+      protocol: timer
+      timeout: 5000
+      ######## 健康检测定时任务 ########
+    - name: trpc.healthProbe.timer
+      port: 8002
+      network: "*/10 * * * * *?scheduler=healthProbeSchedule&startAtOnce=1&params="
+      protocol: timer
+      timeout: 5000  #请求最长处理时间 单位 毫秒
+    - name: trpc.keepalive.timer
+      port: 8002
+      network: "*/90 * * * * *?scheduler=keepaliveSchedule&startAtOnce=1&params="
       protocol: timer
       timeout: 5000  #请求最长处理时间 单位 毫秒
 
@@ -134,3 +139,4 @@ plugins:
           max_size: 10                            #本地文件滚动日志的大小 单位 MB
           max_backups: 10                         #最大日志文件数
           compress:  false                        #日志文件是否压缩
+      

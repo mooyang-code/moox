@@ -1,11 +1,11 @@
 package api
 
 import (
-	"github.com/gin-gonic/gin"
-
-	cloudnode "github.com/mooyang-code/moox/server/internal/service/cloudnode"
-	"github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
 	"github.com/mooyang-code/moox/server/internal/errors"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
+
+	"github.com/gin-gonic/gin"
 )
 
 // HeartbeatHandler 心跳接口处理器
@@ -89,6 +89,5 @@ func (h *HeartbeatHandler) BatchReportHeartbeat(c *gin.Context) {
 		HandleAppError(c, errors.Internal("batch report heartbeat failed", err))
 		return
 	}
-
 	SuccessResponse(c, "batch heartbeat reported successfully", nil)
 }

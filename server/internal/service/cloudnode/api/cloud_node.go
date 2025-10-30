@@ -215,7 +215,7 @@ func (h *CloudNodeHandler) GetNodeList(c *gin.Context) {
 		return
 	}
 
-	// 添加代码包版本信息到每个节点
+	// 添加代码包版本信息和节点状态到每个节点
 	for _, node := range resp.Items {
 		node.PackageVersion = "-" // 默认值
 
@@ -228,6 +228,14 @@ func (h *CloudNodeHandler) GetNodeList(c *gin.Context) {
 				// 组合包名和版本号
 				node.PackageVersion = fmt.Sprintf("%s-%s", pkg.PackageName, pkg.Version)
 			}
+		}
+
+		// 查询节点状态
+		nodeStatus, err := h.service.GetNodeStatus(ctx, node.NodeID)
+		if err != nil {
+			log.WarnContextf(ctx, "[CloudNode] 查询节点状态失败，node_id=%s, error=%v", node.NodeID, err)
+		} else if nodeStatus != nil {
+			node.Status = nodeStatus
 		}
 	}
 

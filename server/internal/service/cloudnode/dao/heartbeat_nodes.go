@@ -2,12 +2,15 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"fmt"
-
-	"gorm.io/gorm"
+	"time"
 
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
+	"trpc.group/trpc-go/trpc-go/log"
+
+	"gorm.io/gorm"
 )
 
 // HeartbeatDAO 心跳记录数据访问对象接口
@@ -15,11 +18,8 @@ type HeartbeatDAO interface {
 	// Create 创建记录
 	Create(ctx context.Context, record *types.HeartbeatNode) error
 
-	// GetByID 根据ID获取记录
-	GetByID(ctx context.Context, id int64) (*types.HeartbeatNode, error)
-
-	// GetByNode 根据节点ID和类型获取记录
-	GetByNode(ctx context.Context, nodeID, nodeType string) (*types.HeartbeatNode, error)
+	// GetNodeByID 根据节点ID获取记录
+	GetNodeByID(ctx context.Context, nodeID string) (*types.HeartbeatNode, error)
 
 	// Update 更新记录
 	Update(ctx context.Context, record *types.HeartbeatNode) error
@@ -30,8 +30,8 @@ type HeartbeatDAO interface {
 	// List 列出记录
 	List(ctx context.Context, filter *types.NodeFilter) ([]*types.HeartbeatNode, int64, error)
 
-	// GetByStatus 根据状态获取记录
-	GetByStatus(ctx context.Context, status types.NodeStatus) ([]*types.HeartbeatNode, error)
+	// GetTimeoutNodes 获取超时节点
+	GetTimeoutNodes(ctx context.Context) ([]*types.HeartbeatNode, error)
 
 	// BatchUpdate 批量更新记录
 	BatchUpdate(ctx context.Context, records []*types.HeartbeatNode) error
@@ -45,15 +45,17 @@ type heartbeatRecordDAO struct {
 	db *gorm.DB
 }
 
-// NewHeartbeatRecordDAO 创建心跳记录DAO
-func NewHeartbeatRecordDAO(db *gorm.DB) HeartbeatDAO {
-	return &heartbeatRecordDAO{db: db}
+// NewHeartbeatNodeDAO 创建心跳记录DAO
+func NewHeartbeatNodeDAO(db *gorm.DB) HeartbeatDAO {
+	return &heartbeatRecordDAO{
+		db: db,
+	}
 }
 
 // Create 创建记录
 func (d *heartbeatRecordDAO) Create(ctx context.Context, record *types.HeartbeatNode) error {
 	modelRecord := &model.HeartbeatNode{}
-	modelRecord.FromTypesRecord(record)
+	modelRecord.FromDTO(record)
 
 	if err := d.db.WithContext(ctx).Create(modelRecord).Error; err != nil {
 		return fmt.Errorf("create heartbeat record failed: %w", err)
@@ -71,42 +73,39 @@ func (d *heartbeatRecordDAO) GetByID(ctx context.Context, id int64) (*types.Hear
 	if err := d.db.WithContext(ctx).
 		Where("c_id = ? AND c_invalid = 0", id).
 		First(&modelRecord).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("get heartbeat record by id failed: %w", err)
 	}
-
-	return modelRecord.ToTypesRecord(), nil
+	return modelRecord.ToDTO(), nil
 }
 
-// GetByNode 根据节点ID和类型获取记录
-func (d *heartbeatRecordDAO) GetByNode(ctx context.Context, nodeID, nodeType string) (*types.HeartbeatNode, error) {
+// GetNodeByID 根据节点ID获取记录
+func (d *heartbeatRecordDAO) GetNodeByID(ctx context.Context, nodeID string) (*types.HeartbeatNode, error) {
 	var modelRecord model.HeartbeatNode
 
 	if err := d.db.WithContext(ctx).
-		Where("c_node_id = ? AND c_node_type = ? AND c_invalid = 0", nodeID, nodeType).
+		Where("c_node_id = ? AND c_invalid = 0", nodeID).
 		First(&modelRecord).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("get heartbeat record by node failed: %w", err)
+		return nil, fmt.Errorf("get heartbeat record by node id failed: %w", err)
 	}
-
-	return modelRecord.ToTypesRecord(), nil
+	return modelRecord.ToDTO(), nil
 }
 
 // Update 更新记录
 func (d *heartbeatRecordDAO) Update(ctx context.Context, record *types.HeartbeatNode) error {
 	modelRecord := &model.HeartbeatNode{}
-	modelRecord.FromTypesRecord(record)
+	modelRecord.FromDTO(record)
 
 	if err := d.db.WithContext(ctx).
 		Where("c_id = ? AND c_invalid = 0", record.ID).
 		Updates(modelRecord).Error; err != nil {
 		return fmt.Errorf("update heartbeat record failed: %w", err)
 	}
-
 	return nil
 }
 
@@ -118,7 +117,6 @@ func (d *heartbeatRecordDAO) Delete(ctx context.Context, id int64) error {
 		Update("c_invalid", 1).Error; err != nil {
 		return fmt.Errorf("delete heartbeat record failed: %w", err)
 	}
-
 	return nil
 }
 
@@ -161,31 +159,93 @@ func (d *heartbeatRecordDAO) List(ctx context.Context, filter *types.NodeFilter)
 		return nil, 0, fmt.Errorf("list heartbeat records failed: %w", err)
 	}
 
-	// 转换为types记录
-	records := make([]*types.HeartbeatNode, len(modelRecords))
-	for i, modelRecord := range modelRecords {
-		records[i] = modelRecord.ToTypesRecord()
-	}
+	// 对于List方法，我们需要额外获取节点配置信息
+	// 为简化起见，先获取所有记录，然后再查询节点配置
+	now := time.Time{}
+	var records []*types.HeartbeatNode
+	for _, modelRecord := range modelRecords {
+		record := modelRecord.ToDTO()
 
+		// 计算基于心跳时间的实时状态
+		if now.IsZero() {
+			now = time.Now()
+		}
+		record.Status = d.calculateNodeStatus(record, now)
+
+		// 如果指定了状态过滤，则只包含匹配的记录
+		if filter.Status != nil && record.Status != *filter.Status {
+			continue
+		}
+		records = append(records, record)
+	}
 	return records, total, nil
 }
 
-// GetByStatus 根据状态获取记录
-func (d *heartbeatRecordDAO) GetByStatus(ctx context.Context, status types.NodeStatus) ([]*types.HeartbeatNode, error) {
-	var modelRecords []model.HeartbeatNode
+// GetTimeoutNodes 获取超时节点
+func (d *heartbeatRecordDAO) GetTimeoutNodes(ctx context.Context) ([]*types.HeartbeatNode, error) {
+	// 获取默认超时阈值
+	defaultTimeout := 30 // 默认30秒超时
 
+	// 使用较小值作为超时判断阈值（更严格的超时检测）
+	minTimeoutThreshold := d.getMinTimeoutThreshold()
+	timeoutThreshold := min(minTimeoutThreshold, defaultTimeout)
+	log.InfoContextf(ctx, "GetTimeoutNodes timeoutThreshold:%d", timeoutThreshold)
+
+	// 直接查询心跳记录，筛选超时节点（没有心跳记录或超过更严格的时间阈值）
+	var results []model.HeartbeatNode
+
+	// 使用指定的格式计算超时时间
+	timeoutTime := time.Now().Add(-time.Duration(timeoutThreshold) * time.Second).Format("2006-01-02 15:04:05.000000000+07:00")
 	if err := d.db.WithContext(ctx).
-		Where("c_status = ? AND c_invalid = 0", status).
-		Find(&modelRecords).Error; err != nil {
-		return nil, fmt.Errorf("get heartbeat records by status failed: %w", err)
+		Where("c_last_heartbeat < ?", timeoutTime).
+		Find(&results).Error; err != nil {
+		log.ErrorContextf(ctx, "GetTimeoutNodes query failed: %v", err)
+		return nil, fmt.Errorf("get timeout heartbeat records failed: %w", err)
 	}
 
-	records := make([]*types.HeartbeatNode, len(modelRecords))
-	for i, modelRecord := range modelRecords {
-		records[i] = modelRecord.ToTypesRecord()
+	// 转换为types记录并设置状态
+	var records []*types.HeartbeatNode
+	for _, result := range results {
+		record := result.ToDTO()
+		record.Status = types.NodeStatusTimeout
+		records = append(records, record)
 	}
-
 	return records, nil
+}
+
+// getMinTimeoutThreshold 获取所有节点中配置的最小超时阈值
+func (d *heartbeatRecordDAO) getMinTimeoutThreshold() int {
+	type result struct {
+		TimeoutThreshold int
+	}
+
+	var results []result
+	// 查询所有节点的超时阈值配置
+	err := d.db.Model(&model.CloudNode{}).
+		Where("c_invalid = 0 AND c_timeout_threshold > 0").
+		Pluck("c_timeout_threshold", &results).Error
+
+	if err != nil || len(results) == 0 {
+		// 如果没有配置或查询失败，返回默认值
+		return 30 // 默认30秒超时
+	}
+
+	// 找出最小值
+	minTimeout := results[0].TimeoutThreshold
+	for _, r := range results {
+		if r.TimeoutThreshold < minTimeout {
+			minTimeout = r.TimeoutThreshold
+		}
+	}
+	return minTimeout
+}
+
+// min 辅助函数，返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // BatchUpdate 批量更新记录
@@ -197,7 +257,7 @@ func (d *heartbeatRecordDAO) BatchUpdate(ctx context.Context, records []*types.H
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, record := range records {
 			modelRecord := &model.HeartbeatNode{}
-			modelRecord.FromTypesRecord(record)
+			modelRecord.FromDTO(record)
 
 			if err := tx.Where("c_id = ? AND c_invalid = 0", record.ID).
 				Updates(modelRecord).Error; err != nil {
@@ -222,10 +282,6 @@ func (d *heartbeatRecordDAO) applyNodeFilter(query *gorm.DB, filter *types.NodeF
 		query = query.Where("c_source_service = ?", *filter.SourceService)
 	}
 
-	if filter.Status != nil {
-		query = query.Where("c_status = ?", *filter.Status)
-	}
-
 	if filter.ProbeEnabled != nil {
 		query = query.Where("c_probe_enabled = ?", *filter.ProbeEnabled)
 	}
@@ -234,19 +290,60 @@ func (d *heartbeatRecordDAO) applyNodeFilter(query *gorm.DB, filter *types.NodeF
 		keyword := "%" + filter.Keyword + "%"
 		query = query.Where("c_node_id LIKE ? OR c_source_service LIKE ?", keyword, keyword)
 	}
-
 	return query
 }
 
-// GetNodeStatus 根据节点ID获取节点状态
-func (d *heartbeatRecordDAO) GetNodeStatus(ctx context.Context, nodeID string) (*types.NodeStatus, error) {
-	var record model.HeartbeatNode
+// calculateNodeStatus 基于最后心跳时间计算节点状态
+func (d *heartbeatRecordDAO) calculateNodeStatus(record *types.HeartbeatNode, now time.Time) types.NodeStatus {
+	// 如果没有心跳记录，认为是离线
+	if record.LastHeartbeat == nil {
+		return types.NodeStatusOffline
+	}
 
+	// 智能获取超时阈值：优先使用节点配置，其次使用默认配置
+	timeoutThreshold := d.getTimeoutThresholdForNode(record.NodeID)
+
+	// 计算距离最后心跳的时间
+	timeSinceLastHeartbeat := now.Sub(*record.LastHeartbeat)
+
+	// 如果超过阈值，认为是超时（离线）
+	if timeSinceLastHeartbeat > time.Duration(timeoutThreshold)*time.Second {
+		return types.NodeStatusOffline
+	}
+
+	// 否则认为是在线
+	return types.NodeStatusOnline
+}
+
+// getTimeoutThresholdForNode 获取节点的超时阈值
+func (d *heartbeatRecordDAO) getTimeoutThresholdForNode(nodeID string) int {
+	// 查询节点的配置
+	var nodeConfig struct {
+		TimeoutThreshold int `gorm:"column:c_timeout_threshold"`
+	}
+
+	err := d.db.WithContext(context.Background()).
+		Table("t_cloud_nodes").
+		Select("c_timeout_threshold").
+		Where("c_node_id = ? AND c_invalid = 0", nodeID).
+		First(&nodeConfig).Error
+
+	if err == nil && nodeConfig.TimeoutThreshold > 0 {
+		return nodeConfig.TimeoutThreshold
+	}
+
+	// 如果没有配置或配置为0，使用默认配置
+	return 30 // 默认30秒超时
+}
+
+// GetNodeStatus 根据节点ID获取节点状态（基于最后心跳时间判断）
+func (d *heartbeatRecordDAO) GetNodeStatus(ctx context.Context, nodeID string) (*types.NodeStatus, error) {
+	// 获取心跳记录
+	var record model.HeartbeatNode
 	if err := d.db.WithContext(ctx).
-		Select("c_status").
 		Where("c_node_id = ? AND c_invalid = 0", nodeID).
 		First(&record).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			// 如果心跳表中没有记录，则认为状态为离线
 			offline := types.NodeStatusOffline
 			return &offline, nil
@@ -254,5 +351,8 @@ func (d *heartbeatRecordDAO) GetNodeStatus(ctx context.Context, nodeID string) (
 		return nil, fmt.Errorf("get node status failed: %w", err)
 	}
 
-	return &record.Status, nil
+	// 基于最后心跳时间计算状态
+	typesRecord := record.ToDTO()
+	status := d.calculateNodeStatus(typesRecord, time.Now())
+	return &status, nil
 }

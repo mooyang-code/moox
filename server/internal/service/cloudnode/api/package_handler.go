@@ -164,7 +164,7 @@ func (h *FunctionPackageHandler) GetPackageOptions(c *gin.Context) {
 				displayName,
 				item.Version,
 				item.Runtime,
-				item.CreatedAt.Format("2006-01-02")),
+				item.CreateTime.Format("2006-01-02")),
 			PackageName: item.PackageName,
 			Version:     item.Version,
 			Runtime:     item.Runtime,
@@ -219,10 +219,10 @@ func (h *FunctionPackageHandler) UploadPackage(c *gin.Context) {
 		return
 	}
 
-	// 从JWT中获取用户信息
-	if userID, exists := c.Get("user_id"); exists {
-		req.CreatedBy = fmt.Sprintf("%v", userID)
-	}
+	// 从JWT中获取用户信息（不再使用）
+	// if userID, exists := c.Get("user_id"); exists {
+	//     req.CreatedBy = fmt.Sprintf("%v", userID)
+	// }
 
 	resp, err := h.service.UploadPackage(c.Request.Context(), &req)
 	if err != nil {

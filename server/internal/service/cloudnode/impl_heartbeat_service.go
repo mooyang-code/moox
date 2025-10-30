@@ -10,7 +10,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// ========== 心跳上报 ==========
+// ========== 接收心跳上报请求 ==========
 
 // ReportHeartbeat 上报心跳
 func (s *ServiceImpl) ReportHeartbeat(ctx context.Context, req *types.ReportHeartbeatRequest) error {
@@ -40,8 +40,9 @@ func (s *ServiceImpl) BatchReportHeartbeat(ctx context.Context, req *types.Batch
 
 // handleHeartbeat 处理心跳上报
 func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHeartbeatRequest) error {
+	log.InfoContextf(ctx, "handleHeartbeat Enter")
 	// 1. 查询或创建节点记录
-	record, err := s.heartbeatDAO.GetByNode(ctx, req.NodeID, req.NodeType)
+	record, err := s.heartbeatDAO.GetNodeByID(ctx, req.NodeID)
 	if err != nil {
 		return fmt.Errorf("query node record failed: %w", err)
 	}
@@ -68,17 +69,20 @@ func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHear
 		record.FirstHeartbeat = &now
 	}
 
-	// 更新状态为在线
-	record.Status = types.NodeStatusOnline
-
 	// 更新源服务
 	if req.SourceService != "" {
 		record.SourceService = req.SourceService
 	}
 
-	// 更新元数据
+	// 更新元数据 - 智能合并，避免覆盖现有数据
 	if req.Metadata != nil {
-		record.Metadata = req.Metadata
+		if record.Metadata == nil {
+			record.Metadata = make(map[string]interface{})
+		}
+		// 将请求中的metadata元素合并到现有metadata中
+		for key, value := range req.Metadata {
+			record.Metadata[key] = value
+		}
 	}
 
 	// 4. 保存到数据库
@@ -108,7 +112,6 @@ func (s *ServiceImpl) handleBatchHeartbeat(ctx context.Context, req *types.Batch
 				heartbeat.NodeID, heartbeat.NodeType, err)
 		}
 	}
-
 	return nil
 }
 
@@ -123,17 +126,13 @@ func (s *ServiceImpl) createNewRecord(req *types.ReportHeartbeatRequest) *types.
 		NodeID:              req.NodeID,
 		NodeType:            req.NodeType,
 		SourceService:       req.SourceService,
-		Status:              types.NodeStatusOnline,
 		FirstHeartbeat:      &now,
 		LastHeartbeat:       &now,
-		HeartbeatInterval:   10, // 默认10秒
-		TimeoutThreshold:    30, // 默认30秒超时
 		ConsecutiveTimeouts: 0,
 		TotalTimeouts:       0,
 		TotalHeartbeats:     1,
 		Metadata:            req.Metadata,
-		ProbeEnabled:        true,
-		LastProbeResult:     false,
+		LastProbeResult:     "",
 	}
 	return record
 }
@@ -151,7 +150,7 @@ func (s *ServiceImpl) RegisterHeartbeatNode(ctx context.Context, req *types.Regi
 	}
 
 	// 检查节点是否已存在
-	existing, err := s.heartbeatDAO.GetByNode(ctx, req.NodeID, req.NodeType)
+	existing, err := s.heartbeatDAO.GetNodeByID(ctx, req.NodeID)
 	if err != nil {
 		return nil, fmt.Errorf("check existing node failed: %w", err)
 	}
@@ -160,32 +159,18 @@ func (s *ServiceImpl) RegisterHeartbeatNode(ctx context.Context, req *types.Regi
 		return nil, fmt.Errorf("node %s:%s already exists", req.NodeID, req.NodeType)
 	}
 
-	// 创建新节点记录
+	// 创建新节点记录（移除已删除的字段）
 	record := &types.HeartbeatNode{
-		NodeID:            req.NodeID,
-		NodeType:          req.NodeType,
-		SourceService:     req.SourceService,
-		Status:            types.NodeStatusOffline, // 初始状态为离线
-		HeartbeatInterval: req.HeartbeatInterval,
-		TimeoutThreshold:  req.TimeoutThreshold,
-		ProbeEnabled:      req.ProbeEnabled,
-		ProbeURL:          req.ProbeURL,
-		Metadata:          req.Metadata,
-	}
-
-	// 设置默认值
-	if record.HeartbeatInterval <= 0 {
-		record.HeartbeatInterval = 10
-	}
-	if record.TimeoutThreshold <= 0 {
-		record.TimeoutThreshold = 30
+		NodeID:        req.NodeID,
+		NodeType:      req.NodeType,
+		SourceService: req.SourceService,
+		Metadata:      req.Metadata,
 	}
 
 	// 保存到数据库
 	if err := s.heartbeatDAO.Create(ctx, record); err != nil {
 		return nil, fmt.Errorf("create node record failed: %w", err)
 	}
-
 	return record, nil
 }
 
@@ -196,7 +181,7 @@ func (s *ServiceImpl) UnregisterHeartbeatNode(ctx context.Context, nodeID, nodeT
 	}
 
 	// 查找节点记录
-	record, err := s.heartbeatDAO.GetByNode(ctx, nodeID, nodeType)
+	record, err := s.heartbeatDAO.GetNodeByID(ctx, nodeID)
 	if err != nil {
 		return fmt.Errorf("get node record failed: %w", err)
 	}
@@ -209,7 +194,6 @@ func (s *ServiceImpl) UnregisterHeartbeatNode(ctx context.Context, nodeID, nodeT
 	if err := s.heartbeatDAO.Delete(ctx, record.ID); err != nil {
 		return fmt.Errorf("delete node record failed: %w", err)
 	}
-
 	return nil
 }
 
@@ -220,12 +204,21 @@ func (s *ServiceImpl) GetHeartbeatNode(ctx context.Context, nodeID, nodeType str
 	}
 
 	// 直接从数据库获取
-	record, err := s.heartbeatDAO.GetByNode(ctx, nodeID, nodeType)
+	record, err := s.heartbeatDAO.GetNodeByID(ctx, nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("get node record failed: %w", err)
 	}
 
 	return record, nil
+}
+
+// GetNodeStatus 获取节点状态
+func (s *ServiceImpl) GetNodeStatus(ctx context.Context, nodeID string) (*types.NodeStatus, error) {
+	if nodeID == "" {
+		return nil, fmt.Errorf("node_id is required")
+	}
+
+	return s.heartbeatDAO.GetNodeStatus(ctx, nodeID)
 }
 
 // ListHeartbeatNodes 列出心跳节点
@@ -244,7 +237,7 @@ func (s *ServiceImpl) UpdateHeartbeatNodeConfig(ctx context.Context, req *types.
 	}
 
 	// 获取节点记录
-	record, err := s.heartbeatDAO.GetByNode(ctx, req.NodeID, req.NodeType)
+	record, err := s.heartbeatDAO.GetNodeByID(ctx, req.NodeID)
 	if err != nil {
 		return fmt.Errorf("get node record failed: %w", err)
 	}
@@ -253,25 +246,13 @@ func (s *ServiceImpl) UpdateHeartbeatNodeConfig(ctx context.Context, req *types.
 		return fmt.Errorf("node %s:%s not found", req.NodeID, req.NodeType)
 	}
 
-	// 更新配置
-	if req.HeartbeatInterval != nil {
-		record.HeartbeatInterval = *req.HeartbeatInterval
-	}
-	if req.TimeoutThreshold != nil {
-		record.TimeoutThreshold = *req.TimeoutThreshold
-	}
-	if req.ProbeEnabled != nil {
-		record.ProbeEnabled = *req.ProbeEnabled
-	}
-	if req.ProbeURL != nil {
-		record.ProbeURL = *req.ProbeURL
-	}
+	// 更新配置（移除已删除的字段）
+	// Note: HeartbeatInterval, TimeoutThreshold, ProbeEnabled, ProbeURL 字段已被移除
 
 	// 保存更新
 	if err := s.heartbeatDAO.Update(ctx, record); err != nil {
 		return fmt.Errorf("update node config failed: %w", err)
 	}
-
 	return nil
 }
 
@@ -282,7 +263,6 @@ func (s *ServiceImpl) ProbeHeartbeatNode(ctx context.Context, nodeID, nodeType, 
 	if nodeID == "" || nodeType == "" {
 		return nil, fmt.Errorf("node_id and node_type are required")
 	}
-
 	if action == "" {
 		action = "health" // 默认健康检查动作
 	}
@@ -297,27 +277,8 @@ func (s *ServiceImpl) ProbeHeartbeatNode(ctx context.Context, nodeID, nodeType, 
 		return nil, fmt.Errorf("node %s:%s not found", nodeID, nodeType)
 	}
 
-	return s.heartbeatProber.ProbeHeartbeatNode(ctx, record, action)
+	return globalProberInstance.ProbeHeartbeatNode(ctx, record, action)
 }
 
 // ========== 服务控制 ==========
 
-// StartHeartbeatService 启动心跳服务
-func (s *ServiceImpl) StartHeartbeatService(ctx context.Context) error {
-	// 启动探测器（prober 内部会检查是否已经运行）
-	if err := s.heartbeatProber.Start(); err != nil {
-		return fmt.Errorf("start prober failed: %w", err)
-	}
-
-	return nil
-}
-
-// StopHeartbeatService 停止心跳服务
-func (s *ServiceImpl) StopHeartbeatService(ctx context.Context) error {
-	// 停止探测器（prober 内部会检查是否已经运行）
-	if err := s.heartbeatProber.Stop(); err != nil {
-		log.ErrorContextf(ctx, "[heartbeat] stop prober failed: %v", err)
-	}
-
-	return nil
-}

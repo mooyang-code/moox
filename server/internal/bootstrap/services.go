@@ -5,6 +5,7 @@ import (
 
 	"github.com/mooyang-code/moox/server/internal/service/asynctask"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode"
+	cloudnodeconfig "github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 	collectormgr "github.com/mooyang-code/moox/server/internal/service/collector/manager"
 	"github.com/mooyang-code/moox/server/internal/service/database"
 	"github.com/mooyang-code/moox/server/internal/service/fileserver"
@@ -21,7 +22,6 @@ type Services struct {
 	// 各模块服务
 	AsyncTaskService asynctask.Service
 	CloudNodeService cloudnode.Service
-	HeartbeatService cloudnode.HeartbeatService
 
 	// Collector服务工厂（仅用于collector自己的API）
 	CollectorFactory *collectormgr.ServiceFactory
@@ -85,19 +85,18 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	log.Info("[Bootstrap] 正在创建云节点服务...")
 	cloudNodeService := cloudnode.NewService(dbManager, asyncTaskService)
 
-	// 心跳服务已集成到云节点服务中，直接使用相同的实例
-	heartbeatService := cloudNodeService.(cloudnode.HeartbeatService)
+	// 初始化心跳探测器（全局单例，供定时器使用）注意：必须在 NewService 之后调用，因为 NewService 会注册全局探测器
+	log.Info("[Bootstrap] 正在初始化心跳探测器...")
+	cloudnode.InitProberInstance(dbManager, loadProberConfig(cfg))
 
 	// 创建Collector服务工厂（仅用于collector自己的API路由）
 	collectorFactory := collectormgr.NewServiceFactory(dbManager)
 
 	log.Info("[Bootstrap] 核心服务创建完成")
-
 	return &Services{
 		DBManager:        dbManager,
 		AsyncTaskService: asyncTaskService,
 		CloudNodeService: cloudNodeService,
-		HeartbeatService: heartbeatService,
 		CollectorFactory: collectorFactory,
 	}, nil
 }
@@ -110,7 +109,7 @@ func registerAsyncExecutors(services *Services) error {
 	err := cloudnode.RegisterExecutors(
 		services.DBManager,
 		services.CloudNodeService,
-		services.HeartbeatService,
+		services.CloudNodeService,
 	)
 	if err != nil {
 		return err
@@ -124,15 +123,7 @@ func registerAsyncExecutors(services *Services) error {
 func startBackgroundWorkers(ctx context.Context, services *Services, workerCount int) error {
 	log.Info("[Bootstrap] 正在启动后台服务...")
 
-	// 1. 启动心跳服务（包含prober）
-	log.Info("[Bootstrap] 正在启动心跳服务...")
-	if err := services.HeartbeatService.StartHeartbeatService(ctx); err != nil {
-		log.Errorf("[Bootstrap] 启动心跳服务失败: %v", err)
-		return err
-	}
-	log.Info("[Bootstrap] 心跳服务已启动（包含探测器）")
-
-	// 2. 启动异步任务 Worker
+	// 1. 启动异步任务 Worker
 	log.Info("[Bootstrap] 正在启动异步任务 Worker...")
 	if err := services.AsyncTaskService.StartWorker(ctx, workerCount); err != nil {
 		log.Errorf("[Bootstrap] 启动异步任务 Worker失败: %v", err)
@@ -140,14 +131,23 @@ func startBackgroundWorkers(ctx context.Context, services *Services, workerCount
 	}
 	log.Infof("[Bootstrap] 异步任务 Worker已启动 (count=%d)", workerCount)
 
-	// 3. 启动文件下载服务（在独立的goroutine中运行）
+	// 2. 启动文件下载服务（在独立的goroutine中运行）
 	log.Info("[Bootstrap] 正在启动文件下载服务...")
 	fileserver.StartFileDownloadService()
 
-	// 4. 启动WebSSH服务（在独立的goroutine中运行）
+	// 3. 启动WebSSH服务（在独立的goroutine中运行）
 	log.Info("[Bootstrap] 正在启动WebSSH服务...")
 	sshapp.StartWebSSHService()
 
+	// 4. CloudNode服务已通过网关方式启动，无需独立HTTP服务
+
 	log.Info("[Bootstrap] 所有后台服务已启动")
 	return nil
+}
+
+// loadProberConfig 加载探测器配置
+func loadProberConfig(cfg *Config) *cloudnodeconfig.ProberConfig {
+	// 从心跳配置文件加载
+	heartbeatCfg := cloudnodeconfig.LoadConfig()
+	return &heartbeatCfg.Prober
 }

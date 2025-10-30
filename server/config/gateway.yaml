@@ -14,6 +14,7 @@ gateway:
     - "/gateway/auth/Register"
     - "/gateway/auth/GetLoginSalt"
     - "/gateway/auth/Login"
+    - "/gateway/cloudnode/ReportHeartbeat"
   
   # 服务配置映射
   services:
@@ -34,6 +35,10 @@ gateway:
     # 管理服务配置
     admin:
       path: "trpc.moox.server.AdminAPI"
+
+    # 云节点服务配置（包含心跳服务）
+    cloudnode:
+      path: "trpc.moox.server.CloudNodeAPI"
 
     collector:
       path: "trpc.moox.api.stdhttp"

@@ -34,13 +34,16 @@ func NewCloudNodeGatewayHandler(
 	// 添加中间件
 	engine.Use(gin.Recovery())
 
-	// API路由组
-	api := engine.Group("/api")
+	// API路由组（包含版本号）
+	api := engine.Group("/api/v1")
 
 	// 注册云节点路由（包括云账户和代码包管理路由）
 	cloudnodeapi.RegisterCloudNodeRoutes(api, service, asyncTaskService)
 	cloudnodeapi.RegisterPackageManagerRoutes(api, service)
-	log.Info("[CloudNode Gateway] 云节点、云账户和代码包管理路由注册成功")
+
+	// 注册心跳服务路由
+	cloudnodeapi.RegisterHeartbeatRoutes(api, service)
+	log.Info("[CloudNode Gateway] 云节点、云账户、代码包管理和心跳服务路由注册成功")
 
 	return &CloudNodeGatewayHandler{
 		engine:    engine,
@@ -89,107 +92,181 @@ func (h *CloudNodeGatewayHandler) parseMethodToRoute(method string, body []byte)
 	switch method {
 	// Cloud Node methods
 	case "GetCloudNodeList", "GetNodeList", "ListNodes":
-		route.Path = "/api/cloud_node/list"
+		route.Path = "/api/v1/cloud_node/list"
 		route.HTTPMethod = "GET"
 	case "GetCloudNodeDetail", "GetNodeDetail":
-		route.Path = "/api/cloud_node/detail"
+		route.Path = "/api/v1/cloud_node/detail"
 		route.HTTPMethod = "GET"
 	case "CreateCloudNode", "RegisterNode":
-		route.Path = "/api/cloud_node/register"
+		route.Path = "/api/v1/cloud_node/register"
 		route.HTTPMethod = "POST"
 		route.Body = body
 	case "UpdateCloudNode", "UpdateNode":
-		route.Path = "/api/cloud_node/update"
+		route.Path = "/api/v1/cloud_node/update"
 		route.HTTPMethod = "PUT"
 		route.Body = body
 	case "DeleteCloudNode", "RemoveNode", "DeleteNode":
-		route.Path = "/api/cloud_node/remove"
+		route.Path = "/api/v1/cloud_node/remove"
 		route.HTTPMethod = "DELETE"
 		route.Body = body
-	case "Heartbeat":
-		route.Path = "/api/cloud_node/heartbeat"
+	case "Heartbeat", "ReportHeartbeat":
+		route.Path = "/api/v1/heartbeat/report"
+		route.HTTPMethod = "POST"
+		route.Body = body
+	case "BatchReportHeartbeat":
+		route.Path = "/api/v1/heartbeat/batch-report"
 		route.HTTPMethod = "POST"
 		route.Body = body
 	case "UpdateNodeFunction":
-		route.Path = "/api/cloud_node/update_function"
+		route.Path = "/api/v1/cloud_node/update_function"
 		route.HTTPMethod = "PUT"
 		route.Body = body
+
+	// Heartbeat Node management methods
+	case "HeartbeatRegisterNode":
+		route.Path = "/api/v1/heartbeat/nodes/register"
+		route.HTTPMethod = "POST"
+		route.Body = body
+	case "HeartbeatListNodes":
+		route.Path = "/api/v1/heartbeat/nodes"
+		route.HTTPMethod = "GET"
+	case "HeartbeatGetNode":
+		route.Path = "/api/v1/heartbeat/nodes"
+		route.HTTPMethod = "GET"
+		// Need to extract node_id and node_type from body and add to path
+		if len(body) > 0 {
+			var params map[string]interface{}
+			if err := json.Unmarshal(body, &params); err == nil {
+				if nodeID, ok := params["node_id"].(string); ok && nodeID != "" {
+					if nodeType, ok := params["node_type"].(string); ok && nodeType != "" {
+						route.Path = fmt.Sprintf("/api/v1/heartbeat/nodes/%s/%s", nodeID, nodeType)
+					}
+				}
+			}
+		}
+	case "HeartbeatUpdateNodeConfig":
+		route.Path = "/api/v1/heartbeat/nodes"
+		route.HTTPMethod = "PUT"
+		// Need to extract node_id and node_type from body and add to path
+		if len(body) > 0 {
+			var params map[string]interface{}
+			if err := json.Unmarshal(body, &params); err == nil {
+				if nodeID, ok := params["node_id"].(string); ok && nodeID != "" {
+					if nodeType, ok := params["node_type"].(string); ok && nodeType != "" {
+						route.Path = fmt.Sprintf("/api/v1/heartbeat/nodes/%s/%s/config", nodeID, nodeType)
+					}
+				}
+			}
+		}
+		route.Body = body
+	case "HeartbeatUnregisterNode":
+		route.Path = "/api/v1/heartbeat/nodes"
+		route.HTTPMethod = "DELETE"
+		// Need to extract node_id and node_type from body and add to path
+		if len(body) > 0 {
+			var params map[string]interface{}
+			if err := json.Unmarshal(body, &params); err == nil {
+				if nodeID, ok := params["node_id"].(string); ok && nodeID != "" {
+					if nodeType, ok := params["node_type"].(string); ok && nodeType != "" {
+						route.Path = fmt.Sprintf("/api/v1/heartbeat/nodes/%s/%s", nodeID, nodeType)
+					}
+				}
+			}
+		}
+		route.Body = body
+
+	// Probe methods
+	case "ProbeNode":
+		route.Path = "/api/v1/heartbeat/probe"
+		route.HTTPMethod = "POST"
+		// Need to extract node_id and node_type from body and add to path
+		if len(body) > 0 {
+			var params map[string]interface{}
+			if err := json.Unmarshal(body, &params); err == nil {
+				if nodeID, ok := params["node_id"].(string); ok && nodeID != "" {
+					if nodeType, ok := params["node_type"].(string); ok && nodeType != "" {
+						route.Path = fmt.Sprintf("/api/v1/heartbeat/probe/%s/%s", nodeID, nodeType)
+					}
+				}
+			}
+		}
+		route.Body = body
 	case "BatchCreateCloudNodes":
-		route.Path = "/api/cloud_node/batch/create"
+		route.Path = "/api/v1/cloud_node/batch/create"
 		route.HTTPMethod = "POST"
 		route.Body = body
 	case "BatchDeleteCloudNodes":
-		route.Path = "/api/cloud_node/batch/delete"
+		route.Path = "/api/v1/cloud_node/batch/delete"
 		route.HTTPMethod = "POST"
 		route.Body = body
 	case "BatchDeploySCFNodes":
-		route.Path = "/api/cloud_node/batch/deploy"
+		route.Path = "/api/v1/cloud_node/batch/deploy"
 		route.HTTPMethod = "POST"
 		route.Body = body
 
 	// Cloud Account methods
 	case "GetCloudAccountList", "ListCloudAccounts", "ListAccounts":
-		route.Path = "/api/cloud_account/list"
+		route.Path = "/api/v1/cloud_account/list"
 		route.HTTPMethod = "GET"
 	case "GetCloudAccountDetail":
-		route.Path = "/api/cloud_account/detail"
+		route.Path = "/api/v1/cloud_account/detail"
 		route.HTTPMethod = "GET"
 	case "CreateCloudAccount":
-		route.Path = "/api/cloud_account/create"
+		route.Path = "/api/v1/cloud_account/create"
 		route.HTTPMethod = "POST"
 		route.Body = body
 	case "UpdateCloudAccount":
-		route.Path = "/api/cloud_account/update"
+		route.Path = "/api/v1/cloud_account/update"
 		route.HTTPMethod = "PUT"
 		route.Body = body
 	case "DeleteCloudAccount":
-		route.Path = "/api/cloud_account/delete"
+		route.Path = "/api/v1/cloud_account/delete"
 		route.HTTPMethod = "DELETE"
 		route.Body = body
 
 	// Function Package methods (previously packagemgr)
 	case "GetPackageList":
-		return h.buildMultiQueryRoute("/api/function-packages", body)
+		return h.buildMultiQueryRoute("/api/v1/function-packages", body)
 	case "GetPackageDetail":
-		route.Path = "/api/function-packages"
+		route.Path = "/api/v1/function-packages"
 		route.HTTPMethod = "GET"
 		// Need to extract package_id from body and add to path
 		if len(body) > 0 {
 			var params map[string]interface{}
 			if err := json.Unmarshal(body, &params); err == nil {
 				if packageID, ok := params["package_id"].(string); ok && packageID != "" {
-					route.Path = fmt.Sprintf("/api/function-packages/%s", packageID)
+					route.Path = fmt.Sprintf("/api/v1/function-packages/%s", packageID)
 				}
 			}
 		}
 	case "DeletePackage":
-		route.Path = "/api/function-packages"
+		route.Path = "/api/v1/function-packages"
 		route.HTTPMethod = "DELETE"
 		// Need to extract package_id from body and add to path
 		if len(body) > 0 {
 			var params map[string]interface{}
 			if err := json.Unmarshal(body, &params); err == nil {
 				if packageID, ok := params["package_id"].(string); ok && packageID != "" {
-					route.Path = fmt.Sprintf("/api/function-packages/%s", packageID)
+					route.Path = fmt.Sprintf("/api/v1/function-packages/%s", packageID)
 				}
 			}
 		}
 	case "GetPackageDownloadURL":
-		route.Path = "/api/function-packages"
+		route.Path = "/api/v1/function-packages"
 		route.HTTPMethod = "GET"
 		// Need to extract package_id from body and add to path
 		if len(body) > 0 {
 			var params map[string]interface{}
 			if err := json.Unmarshal(body, &params); err == nil {
 				if packageID, ok := params["package_id"].(string); ok && packageID != "" {
-					route.Path = fmt.Sprintf("/api/function-packages/%s/download-url", packageID)
+					route.Path = fmt.Sprintf("/api/v1/function-packages/%s/download-url", packageID)
 				}
 			}
 		}
 	case "GetPackageOptions":
-		return h.buildMultiQueryRoute("/api/function-packages/options", body)
+		return h.buildMultiQueryRoute("/api/v1/function-packages/options", body)
 	case "UploadPackage":
-		route.Path = "/api/function-packages/upload"
+		route.Path = "/api/v1/function-packages/upload"
 		route.HTTPMethod = "POST"
 		route.Body = body
 

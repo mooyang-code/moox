@@ -23,7 +23,7 @@ func GetInternalIP() string {
 }
 
 // GetPublicIP 获取本机公网IP地址
-func GetPublicIP(ctx context.Context) string {
+func GetPublicIP() string {
 	// 创建HTTP客户端，设置超时
 	client := &http.Client{
 		Timeout: 5 * time.Second,
@@ -54,6 +54,7 @@ func GetPublicIP(ctx context.Context) string {
 		},
 	}
 
+	ctx := context.Background()
 	for _, service := range services {
 		req, err := http.NewRequestWithContext(ctx, "GET", service.url, nil)
 		if err != nil {

@@ -50,6 +50,14 @@ type CloudNode struct {
 	SupportedCollectors string `gorm:"column:c_supported_collectors;type:text;not null;default:'[]'" json:"supported_collectors"`
 	// Metadata 节点额外信息（JSON格式）
 	Metadata string `gorm:"column:c_metadata;type:text;not null;default:'{}'" json:"metadata"`
+	// TimeoutThreshold 超时阈值（秒），0表示使用全局默认值
+	TimeoutThreshold int `gorm:"column:c_timeout_threshold;default:0" json:"timeout_threshold"`
+	// HeartbeatInterval 心跳间隔（秒），0表示使用全局默认值
+	HeartbeatInterval int `gorm:"column:c_heartbeat_interval;default:10" json:"heartbeat_interval"`
+	// ProbeEnabled 是否启用探测
+	ProbeEnabled bool `gorm:"column:c_probe_enabled;default:true" json:"probe_enabled"`
+	// ProbeURL 探测URL
+	ProbeURL string `gorm:"column:c_probe_url;default:''" json:"probe_url"`
 	// Invalid 删除标记
 	Invalid int `gorm:"column:c_invalid;not null;default:0" json:"invalid"`
 	// CreateTime 创建时间

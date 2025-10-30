@@ -21,7 +21,7 @@ type ProbeLog struct {
 	RequestDetails  map[string]interface{} `json:"request_details" gorm:"column:c_request_details;type:text"`
 	ResponseDetails map[string]interface{} `json:"response_details" gorm:"column:c_response_details;type:text"`
 	Invalid         int                    `json:"-" gorm:"column:c_invalid"`
-	CreatedAt       time.Time              `json:"created_at" gorm:"column:c_ctime;autoCreateTime"`
+	CreateTime      time.Time              `json:"created_time" gorm:"column:c_ctime;autoCreateTime"`
 }
 
 func (ProbeLog) TableName() string {
@@ -30,13 +30,16 @@ func (ProbeLog) TableName() string {
 
 // ProbeResult 探测结果
 type ProbeResult struct {
-	ProbeID      string                 `json:"probe_id"`
-	Success      bool                   `json:"success"`
-	StatusCode   int                    `json:"status_code"`
-	ResponseTime int                    `json:"response_time"`
-	ErrorMessage string                 `json:"error_message"`
-	Details      map[string]interface{} `json:"details"`
-	ProbeTime    time.Time              `json:"probe_time"`
+	ProbeID         string `json:"probe_id"`
+	CostTime        int    `json:"cost_time"` // 探测耗时（毫秒）
+	ErrorMessage    string `json:"error_message"`
+	RequestID       string `json:"request_id"`
+	NodeID          string `json:"node_id"`
+	State           string `json:"state"`
+	RemoteTimestamp string `json:"remote_timestamp"` // 远端上报的时间戳
+	OSName          string `json:"os"`
+	FunctionVersion string `json:"function_version"`
+	ProbeTime       int64  `json:"probe_time"` // 本地探测时间戳（毫秒）
 }
 
 // ProbeLogFilter 探测日志过滤器

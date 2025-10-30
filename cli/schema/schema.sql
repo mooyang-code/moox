@@ -106,10 +106,12 @@ CREATE INDEX idx_user_actions_time ON t_user_actions(c_ctime);
 
 -- ************ 创建触发器，自动更新修改时间 ************
 -- 用户表触发器 - 更新时间
-CREATE TRIGGER update_users_mtime AFTER UPDATE ON t_users BEGIN UPDATE t_users SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_users_mtime AFTER UPDATE ON t_users BEGIN 
+    UPDATE t_users SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 活跃令牌表触发器 - 更新时间
-CREATE TRIGGER update_tokens_mtime AFTER UPDATE ON t_active_tokens BEGIN UPDATE t_active_tokens SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_tokens_mtime AFTER UPDATE ON t_active_tokens BEGIN 
+    UPDATE t_active_tokens SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 
 -- ============ 云函数数据采集器系统表设计 ============
@@ -142,8 +144,11 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_region TEXT NOT NULL DEFAULT '', -- 部署地区（如：ap-guangzhou）
     c_ip_address TEXT NOT NULL DEFAULT '', -- IP地址
     c_supported_collectors TEXT NOT NULL DEFAULT '[]', -- 支持的采集器类型（JSON数组）
-    c_enabled TEXT NOT NULL DEFAULT 'true', -- 是否启用（字符串类型）
     c_metadata TEXT NOT NULL DEFAULT '{}', -- 节点额外信息（JSON格式）
+    c_timeout_threshold INTEGER DEFAULT 35, -- 超时阈值（秒），0表示使用全局默认值
+    c_heartbeat_interval INTEGER DEFAULT 10, -- 心跳间隔（秒），0表示使用全局默认值
+    c_probe_enabled BOOLEAN DEFAULT true, -- 是否启用探测
+    c_probe_url TEXT DEFAULT '', -- 探测URL
     c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 修改时间
@@ -201,6 +206,8 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_start_time DATETIME, -- 开始时间
     c_end_time DATETIME, -- 结束时间
     c_result TEXT NOT NULL DEFAULT '{}', -- 执行结果（JSON格式）
+
+    c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP -- 修改时间
 );
@@ -209,7 +216,6 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
 -- 节点表索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_node_id ON t_cloud_nodes(c_node_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_type ON t_cloud_nodes(c_node_type);
-CREATE INDEX IF NOT EXISTS idx_nodes_enabled ON t_cloud_nodes(c_enabled);
 
 -- 任务配置表索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_task_config_task_id ON t_collector_task_config(c_task_id);
@@ -236,19 +242,23 @@ CREATE INDEX IF NOT EXISTS idx_cloud_accounts_invalid ON t_cloud_accounts(c_inva
 -- ************ 创建云函数采集器相关触发器 ************
 -- 云账户表更新触发器
 DROP TRIGGER IF EXISTS update_cloud_accounts_mtime;
-CREATE TRIGGER update_cloud_accounts_mtime AFTER UPDATE ON t_cloud_accounts BEGIN UPDATE t_cloud_accounts SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_cloud_accounts_mtime AFTER UPDATE ON t_cloud_accounts BEGIN 
+    UPDATE t_cloud_accounts SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 节点表更新触发器
 DROP TRIGGER IF EXISTS update_scf_collector_nodes_mtime;
-CREATE TRIGGER update_scf_collector_nodes_mtime AFTER UPDATE ON t_cloud_nodes BEGIN UPDATE t_cloud_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_scf_collector_nodes_mtime AFTER UPDATE ON t_cloud_nodes BEGIN 
+    UPDATE t_cloud_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 任务配置表更新触发器
 DROP TRIGGER IF EXISTS update_task_config_mtime;
-CREATE TRIGGER update_task_config_mtime AFTER UPDATE ON t_collector_task_config BEGIN UPDATE t_collector_task_config SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_task_config_mtime AFTER UPDATE ON t_collector_task_config BEGIN 
+    UPDATE t_collector_task_config SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 任务实例表更新触发器
 DROP TRIGGER IF EXISTS update_task_instances_mtime;
-CREATE TRIGGER update_task_instances_mtime AFTER UPDATE ON t_collector_task_instances BEGIN UPDATE t_collector_task_instances SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_task_instances_mtime AFTER UPDATE ON t_collector_task_instances BEGIN 
+    UPDATE t_collector_task_instances SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ============ 异步任务管理表设计 (Job-Task 模型) ============
 
@@ -295,11 +305,13 @@ CREATE INDEX idx_async_job_tasks_ctime ON t_async_job_tasks(c_ctime);
 -- ************ 创建异步任务相关触发器 ************
 -- 异步任务Job表更新触发器
 DROP TRIGGER IF EXISTS update_async_jobs_mtime;
-CREATE TRIGGER update_async_jobs_mtime AFTER UPDATE ON t_async_jobs BEGIN UPDATE t_async_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_async_jobs_mtime AFTER UPDATE ON t_async_jobs BEGIN 
+    UPDATE t_async_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 异步任务Task表更新触发器
 DROP TRIGGER IF EXISTS update_async_job_tasks_mtime;
-CREATE TRIGGER update_async_job_tasks_mtime AFTER UPDATE ON t_async_job_tasks BEGIN UPDATE t_async_job_tasks SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_async_job_tasks_mtime AFTER UPDATE ON t_async_job_tasks BEGIN 
+    UPDATE t_async_job_tasks SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ************ 节点心跳表 ************
 CREATE TABLE t_node_heartbeat (
@@ -337,11 +349,13 @@ CREATE INDEX idx_node_task_snapshot_sync_time ON t_node_task_snapshot(c_sync_tim
 
 -- 节点心跳表更新触发器
 DROP TRIGGER IF EXISTS update_node_heartbeat_mtime;
-CREATE TRIGGER update_node_heartbeat_mtime AFTER UPDATE ON t_node_heartbeat BEGIN UPDATE t_node_heartbeat SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_node_heartbeat_mtime AFTER UPDATE ON t_node_heartbeat BEGIN 
+    UPDATE t_node_heartbeat SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 节点任务快照表更新触发器
 DROP TRIGGER IF EXISTS update_node_task_snapshot_mtime;
-CREATE TRIGGER update_node_task_snapshot_mtime AFTER UPDATE ON t_node_task_snapshot BEGIN UPDATE t_node_task_snapshot SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_node_task_snapshot_mtime AFTER UPDATE ON t_node_task_snapshot BEGIN 
+    UPDATE t_node_task_snapshot SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ============ 心跳服务表设计 ============
 
@@ -351,15 +365,10 @@ CREATE TABLE IF NOT EXISTS t_heartbeat_nodes (
     c_node_id TEXT NOT NULL,                                   -- 节点ID
     c_node_type TEXT NOT NULL,                                 -- 节点类型
     c_source_service TEXT DEFAULT '',                          -- 来源服务
-    c_status INTEGER DEFAULT 0,                                -- 节点状态（0=离线，1=在线，2=超时，3=异常）
 
     -- 时间信息
     c_last_heartbeat DATETIME,                                 -- 最后心跳时间
     c_first_heartbeat DATETIME,                                -- 首次心跳时间
-    
-    -- 心跳配置
-    c_heartbeat_interval INTEGER DEFAULT 10,                   -- 心跳间隔（秒）
-    c_timeout_threshold INTEGER DEFAULT 30,                    -- 超时阈值（秒）
     
     -- 统计数据
     c_consecutive_timeouts INTEGER DEFAULT 0,                  -- 连续超时次数
@@ -370,11 +379,8 @@ CREATE TABLE IF NOT EXISTS t_heartbeat_nodes (
     c_metadata TEXT DEFAULT '{}',                              -- 元数据（JSON格式）
     
     -- 探测配置
-    c_probe_enabled BOOLEAN DEFAULT true,                      -- 是否启用探测
-    c_probe_url TEXT DEFAULT '',                               -- 探测URL
-    c_probe_strategy TEXT DEFAULT 'default',                   -- 探测策略
     c_last_probe_time DATETIME,                                -- 最后探测时间
-    c_last_probe_result BOOLEAN DEFAULT false,                 -- 最后探测结果
+    c_last_probe_result TEXT DEFAULT '',                       -- 最后探测结果
     
     -- 审计字段
     c_invalid INTEGER NOT NULL DEFAULT 0,                      -- 删除标记
@@ -382,21 +388,18 @@ CREATE TABLE IF NOT EXISTS t_heartbeat_nodes (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 更新时间
 );
 
-
-
 -- ************ 创建心跳服务相关索引 ************
 -- 心跳节点表索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_heartbeat_nodes_node_id ON t_heartbeat_nodes(c_node_id);
 CREATE INDEX IF NOT EXISTS idx_heartbeat_nodes_node_type ON t_heartbeat_nodes(c_node_type);
-CREATE INDEX IF NOT EXISTS idx_heartbeat_nodes_status ON t_heartbeat_nodes(c_status);
 CREATE INDEX IF NOT EXISTS idx_heartbeat_nodes_last_heartbeat ON t_heartbeat_nodes(c_last_heartbeat);
 CREATE INDEX IF NOT EXISTS idx_heartbeat_nodes_source_service ON t_heartbeat_nodes(c_source_service);
-CREATE INDEX IF NOT EXISTS idx_heartbeat_nodes_probe_enabled ON t_heartbeat_nodes(c_probe_enabled);
 
 -- ************ 创建心跳服务相关触发器 ************
 -- 心跳节点表更新触发器
 DROP TRIGGER IF EXISTS update_heartbeat_nodes_mtime;
-CREATE TRIGGER update_heartbeat_nodes_mtime AFTER UPDATE ON t_heartbeat_nodes BEGIN UPDATE t_heartbeat_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_heartbeat_nodes_mtime AFTER UPDATE ON t_heartbeat_nodes BEGIN 
+    UPDATE t_heartbeat_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ============ 云函数代码包管理系统表设计 ============
 
@@ -431,7 +434,6 @@ CREATE TABLE IF NOT EXISTS t_function_packages (
     c_last_deploy_time DATETIME,                                   -- 最后部署时间
 
     -- 审计字段
-    c_created_by TEXT NOT NULL,                                    -- 创建者
     c_invalid INTEGER NOT NULL DEFAULT 0,                          -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                    -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                     -- 修改时间
@@ -467,7 +469,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_function_packages_name_version_invalid ON 
 CREATE INDEX IF NOT EXISTS idx_function_packages_status ON t_function_packages(c_status);
 CREATE INDEX IF NOT EXISTS idx_function_packages_runtime ON t_function_packages(c_runtime);
 CREATE INDEX IF NOT EXISTS idx_function_packages_package_type ON t_function_packages(c_package_type);
-CREATE INDEX IF NOT EXISTS idx_function_packages_created_by ON t_function_packages(c_created_by);
 CREATE INDEX IF NOT EXISTS idx_function_packages_ctime ON t_function_packages(c_ctime);
 CREATE INDEX IF NOT EXISTS idx_function_packages_invalid ON t_function_packages(c_invalid);
 
@@ -482,9 +483,11 @@ CREATE INDEX IF NOT EXISTS idx_function_deployments_invalid ON t_function_deploy
 -- ************ 创建云函数代码包相关触发器 ************
 -- 代码包表更新触发器
 DROP TRIGGER IF EXISTS update_function_packages_mtime;
-CREATE TRIGGER update_function_packages_mtime AFTER UPDATE ON t_function_packages BEGIN UPDATE t_function_packages SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_function_packages_mtime AFTER UPDATE ON t_function_packages BEGIN 
+    UPDATE t_function_packages SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 部署记录表更新触发器
 DROP TRIGGER IF EXISTS update_function_deployments_mtime;
-CREATE TRIGGER update_function_deployments_mtime AFTER UPDATE ON t_function_deployments BEGIN UPDATE t_function_deployments SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER update_function_deployments_mtime AFTER UPDATE ON t_function_deployments BEGIN 
+    UPDATE t_function_deployments SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 

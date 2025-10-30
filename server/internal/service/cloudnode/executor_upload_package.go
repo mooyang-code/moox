@@ -53,7 +53,6 @@ type UploadPackageExecutorRequest struct {
 	PackageType    string `json:"package_type"`
 	CloudAccountID string `json:"cloud_account_id"`
 	FileContent    string `json:"file_content"` // base64编码的文件内容
-	CreatedBy      string `json:"created_by"`
 }
 
 // UploadPackageExecutorResponse 代码包上传执行器响应
@@ -162,7 +161,6 @@ func (e *UploadPackageExecutor) preparePackageData(req *UploadPackageExecutorReq
 		FileMD5:          fileMD5,
 		CloudAccountID:   req.CloudAccountID,
 		Status:           model.PackageStatusUploading,
-		CreatedBy:        req.CreatedBy,
 	}
 	return packageData, cosPath, nil
 }

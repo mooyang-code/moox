@@ -179,9 +179,13 @@
                 </a-tag>
               </template>
             </a-table-column>
-            <a-table-column title="操作" :width="200" align="center" fixed="right">
+            <a-table-column title="操作" :width="250" align="center" fixed="right">
               <template #cell="{ record }">
                 <a-space>
+                  <a-button type="outline" size="mini" @click="onEdit(record)" :disabled="taskPolling">
+                    <template #icon><icon-edit /></template>
+                    <span>编辑</span>
+                  </a-button>
                   <a-button v-if="record.node_type === 'scf'" type="primary" size="mini" @click="onDeploy(record)" :disabled="taskPolling">
                     <template #icon><icon-upload /></template>
                     <span>部署</span>
@@ -281,6 +285,42 @@
             <a-option value="logs">日志数据</a-option>
             <a-option value="traces">链路数据</a-option>
           </a-select>
+        </a-form-item>
+
+        <!-- 心跳配置 -->
+        <a-divider orientation="left">心跳配置</a-divider>
+        
+        <a-form-item field="timeoutThreshold" label="超时阈值（秒）">
+          <a-input-number 
+            v-model="batchAddForm.timeoutThreshold" 
+            :min="0" 
+            :max="3600" 
+            placeholder="0表示使用全局默认值"
+            style="width: 100%"
+          />
+          <template #help>
+            <div style="font-size: 12px; color: #86909c;">设置为0时将使用全局默认值（通常为30秒）</div>
+          </template>
+        </a-form-item>
+        
+        <a-form-item field="heartbeatInterval" label="心跳间隔（秒）">
+          <a-input-number 
+            v-model="batchAddForm.heartbeatInterval" 
+            :min="0" 
+            :max="300" 
+            placeholder="0表示使用全局默认值"
+            style="width: 100%"
+          />
+          <template #help>
+            <div style="font-size: 12px; color: #86909c;">设置为0时将使用全局默认值（通常为10秒）</div>
+          </template>
+        </a-form-item>
+        
+        <a-form-item field="probeEnabled" label="启用探测">
+          <a-switch v-model="batchAddForm.probeEnabled" />
+          <template #help>
+            <div style="font-size: 12px; color: #86909c;">是否启用节点健康检查探测</div>
+          </template>
         </a-form-item>
       </a-form>
     </a-modal>
@@ -464,6 +504,19 @@
               {{ getStatusText(selectedNodeDetail.status) }}
             </a-tag>
           </a-descriptions-item>
+          <a-descriptions-item label="超时阈值">
+            {{ selectedNodeDetail.timeout_threshold || 0 }}秒
+            <span v-if="selectedNodeDetail.timeout_threshold === 0" style="color: #86909c;">（使用全局默认值）</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="心跳间隔">
+            {{ selectedNodeDetail.heartbeat_interval || 0 }}秒
+            <span v-if="selectedNodeDetail.heartbeat_interval === 0" style="color: #86909c;">（使用全局默认值）</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="启用探测">
+            <a-tag bordered size="small" :color="selectedNodeDetail.probe_enabled ? 'green' : 'red'">
+              {{ selectedNodeDetail.probe_enabled ? '是' : '否' }}
+            </a-tag>
+          </a-descriptions-item>
           <a-descriptions-item label="支持的采集器" :span="2">
             <div v-if="selectedNodeDetail.supported_collectors">
               <a-tag v-for="item in parseJSON(selectedNodeDetail.supported_collectors)" :key="item" 
@@ -564,6 +617,71 @@
       </div>
     </a-modal>
 
+    <!-- 节点编辑弹窗 -->
+    <a-modal
+      v-model:visible="editNodeVisible"
+      title="编辑云函数节点"
+      :width="600"
+      :mask-closable="false"
+      @cancel="handleEditNodeCancel"
+      @ok="handleEditNodeOk"
+    >
+      <a-form :model="editNodeForm" layout="vertical">
+        <a-form-item label="节点信息">
+          <a-alert type="info" style="margin-bottom: 8px;">
+            <div><strong>节点ID：</strong>{{ editNodeForm.nodeId }}</div>
+            <div><strong>命名空间：</strong>{{ editNodeForm.namespace }}</div>
+            <div><strong>地区：</strong>{{ editNodeForm.region }}</div>
+          </a-alert>
+        </a-form-item>
+
+        <!-- 心跳配置 -->
+        <a-divider orientation="left">心跳配置</a-divider>
+        
+        <a-form-item field="timeoutThreshold" label="超时阈值（秒）">
+          <a-input-number 
+            v-model="editNodeForm.timeoutThreshold" 
+            :min="0" 
+            :max="3600" 
+            placeholder="0表示使用全局默认值"
+            style="width: 100%"
+          />
+          <template #help>
+            <div style="font-size: 12px; color: #86909c;">设置为0时将使用全局默认值（通常为30秒）</div>
+          </template>
+        </a-form-item>
+        
+        <a-form-item field="heartbeatInterval" label="心跳间隔（秒）">
+          <a-input-number 
+            v-model="editNodeForm.heartbeatInterval" 
+            :min="0" 
+            :max="300" 
+            placeholder="0表示使用全局默认值"
+            style="width: 100%"
+          />
+          <template #help>
+            <div style="font-size: 12px; color: #86909c;">设置为0时将使用全局默认值（通常为10秒）</div>
+          </template>
+        </a-form-item>
+        
+        <a-form-item field="probeEnabled" label="启用探测">
+          <a-switch v-model="editNodeForm.probeEnabled" />
+          <template #help>
+            <div style="font-size: 12px; color: #86909c;">是否启用节点健康检查探测</div>
+          </template>
+        </a-form-item>
+
+        <a-form-item field="supportedCollectors" label="支持的采集器">
+          <a-select v-model="editNodeForm.supportedCollectors" placeholder="请选择支持的采集器" style="width: 100%" multiple>
+            <a-option value="kline">K线数据</a-option>
+            <a-option value="metrics">指标数据</a-option>
+            <a-option value="logs">日志数据</a-option>
+            <a-option value="traces">链路数据</a-option>
+          </a-select>
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
   </div>
 </template>
 
@@ -594,6 +712,11 @@ interface CloudFunction {
   metadata: string;
   status: number;
   enabled: number;
+  // 新增心跳配置字段
+  timeout_threshold: number;    // 超时阈值（秒），0表示使用全局默认值
+  heartbeat_interval: number;   // 心跳间隔（秒），0表示使用全局默认值
+  probe_enabled: boolean;       // 是否启用探测
+  probe_url?: string;           // 探测URL
   created_at: string;
   updated_at: string;
 }
@@ -638,7 +761,11 @@ const batchAddForm = reactive({
   packageId: '', // 代码包版本ID
   nodeCount: 5,
   namespace: '',
-  supportedCollectors: ['kline'] // 默认支持kline
+  supportedCollectors: ['kline'], // 默认支持kline
+  // 新增心跳配置字段
+  timeoutThreshold: 0,    // 超时阈值（秒），0表示使用全局默认值
+  heartbeatInterval: 0,   // 心跳间隔（秒），0表示使用全局默认值
+  probeEnabled: true      // 是否启用探测，默认启用
 });
 
 // 批量部署相关
@@ -861,6 +988,9 @@ const onBatchAdd = async () => {
   batchAddForm.nodeCount = 5;
   batchAddForm.namespace = '';
   batchAddForm.supportedCollectors = ['kline'];
+  batchAddForm.timeoutThreshold = 0;
+  batchAddForm.heartbeatInterval = 0;
+  batchAddForm.probeEnabled = true;
   
   // 加载可用的代码包列表
   await loadAvailablePackagesForCreation();
@@ -915,7 +1045,11 @@ const executeBatchAdd = async () => {
       version: '1.0.0',
       supported_collectors: JSON.stringify(batchAddForm.supportedCollectors),
       capacity: '100',
-      metadata: JSON.stringify({ env: 'prod', index })
+      metadata: JSON.stringify({ env: 'prod', index }),
+      // 新增心跳配置字段
+      timeout_threshold: batchAddForm.timeoutThreshold,
+      heartbeat_interval: batchAddForm.heartbeatInterval,
+      probe_enabled: batchAddForm.probeEnabled
     }
   }));
 
@@ -1444,6 +1578,18 @@ const packageDetailVisible = ref(false);
 const packageDetail = ref<FunctionPackage | null>(null);
 const downloadProgress = ref<Record<string, number>>({});
 
+// 节点编辑
+const editNodeVisible = ref(false);
+const editNodeForm = reactive({
+  nodeId: '',
+  namespace: '',
+  region: '',
+  timeoutThreshold: 0,
+  heartbeatInterval: 0,
+  probeEnabled: true,
+  supportedCollectors: [] as string[]
+});
+
 // 显示代码包详情
 const onShowPackageDetail = async (record: CloudFunction) => {
   // 如果没有package_id，则不显示
@@ -1684,6 +1830,61 @@ const handleSingleDeployOk = async () => {
   } catch (error: any) {
     console.error('创建部署任务失败:', error);
     Message.error('创建部署任务失败: ' + (error?.message || '未知错误'));
+  }
+};
+
+// 编辑节点
+const onEdit = (record: CloudFunction) => {
+  // 填充表单
+  editNodeForm.nodeId = record.node_id;
+  editNodeForm.namespace = record.namespace;
+  editNodeForm.region = getRegionName(record.region);
+  editNodeForm.timeoutThreshold = record.timeout_threshold || 0;
+  editNodeForm.heartbeatInterval = record.heartbeat_interval || 0;
+  editNodeForm.probeEnabled = record.probe_enabled;
+  editNodeForm.supportedCollectors = parseJSON(record.supported_collectors);
+  
+  // 打开弹窗
+  editNodeVisible.value = true;
+};
+
+// 取消编辑
+const handleEditNodeCancel = () => {
+  editNodeVisible.value = false;
+  // 重置表单
+  editNodeForm.nodeId = '';
+  editNodeForm.namespace = '';
+  editNodeForm.region = '';
+  editNodeForm.timeoutThreshold = 0;
+  editNodeForm.heartbeatInterval = 0;
+  editNodeForm.probeEnabled = true;
+  editNodeForm.supportedCollectors = [];
+};
+
+// 确认编辑
+const handleEditNodeOk = async () => {
+  try {
+    // 调用更新API
+    const response = await api.post('/cloudnode/UpdateNode', {
+      node_id: editNodeForm.nodeId,
+      timeout_threshold: editNodeForm.timeoutThreshold,
+      heartbeat_interval: editNodeForm.heartbeatInterval,
+      probe_enabled: editNodeForm.probeEnabled,
+      supported_collectors: JSON.stringify(editNodeForm.supportedCollectors)
+    });
+    
+    if (response.data?.code === 200 || response.data?.ret_info?.code === 0) {
+      Message.success('节点配置更新成功');
+      editNodeVisible.value = false;
+      handleEditNodeCancel();
+      // 刷新数据
+      await loadData();
+    } else {
+      throw new Error(response.data?.message || response.data?.ret_info?.message || '更新失败');
+    }
+  } catch (error: any) {
+    console.error('更新节点配置失败:', error);
+    Message.error('更新节点配置失败: ' + (error?.message || '未知错误'));
   }
 };
 

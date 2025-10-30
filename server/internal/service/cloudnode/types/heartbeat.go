@@ -23,19 +23,14 @@ const (
 // HeartbeatNode 心跳记录
 type HeartbeatNode struct {
 	// 基本信息
-	ID            int64      `json:"id" gorm:"column:c_id;primaryKey"`              // 记录ID
-	NodeID        string     `json:"node_id" gorm:"column:c_node_id"`               // 节点ID（如云函数名称）
-	NodeType      string     `json:"node_type" gorm:"column:c_node_type"`           // 节点类型（scf/server/container）
-	SourceService string     `json:"source_service" gorm:"column:c_source_service"` // 来源服务
-	Status        NodeStatus `json:"status" gorm:"column:c_status"`                 // 节点状态（0离线/1在线/2超时/3异常）
+	ID            int64  `json:"id" gorm:"column:c_id;primaryKey"`              // 记录ID
+	NodeID        string `json:"node_id" gorm:"column:c_node_id"`               // 节点ID（如云函数名称）
+	NodeType      string `json:"node_type" gorm:"column:c_node_type"`           // 节点类型（scf/server/container）
+	SourceService string `json:"source_service" gorm:"column:c_source_service"` // 来源服务
 
 	// 时间信息
 	LastHeartbeat  *time.Time `json:"last_heartbeat" gorm:"column:c_last_heartbeat"`   // 最后心跳时间
 	FirstHeartbeat *time.Time `json:"first_heartbeat" gorm:"column:c_first_heartbeat"` // 首次心跳时间
-
-	// 心跳配置
-	HeartbeatInterval int `json:"heartbeat_interval" gorm:"column:c_heartbeat_interval"` // 心跳间隔（秒）
-	TimeoutThreshold  int `json:"timeout_threshold" gorm:"column:c_timeout_threshold"`   // 超时阈值（秒）
 
 	// 统计数据
 	ConsecutiveTimeouts int `json:"consecutive_timeouts" gorm:"column:c_consecutive_timeouts"` // 连续超时次数
@@ -45,16 +40,16 @@ type HeartbeatNode struct {
 	// 扩展数据
 	Metadata map[string]interface{} `json:"metadata" gorm:"column:c_metadata;type:text"` // 元数据（JSON格式，存储扩展信息）
 
-	// 探测配置
-	ProbeEnabled    bool       `json:"probe_enabled" gorm:"column:c_probe_enabled"`         // 是否启用探测
-	ProbeURL        string     `json:"probe_url" gorm:"column:c_probe_url"`                 // 探测URL
+	// 探测配置（从节点表获取配置，心跳表保存结果）
 	LastProbeTime   *time.Time `json:"last_probe_time" gorm:"column:c_last_probe_time"`     // 最后探测时间
-	LastProbeResult bool       `json:"last_probe_result" gorm:"column:c_last_probe_result"` // 最后探测结果
+	LastProbeResult string     `json:"last_probe_result" gorm:"column:c_last_probe_result"` // 最后探测结果
+
+	// 状态信息（临时字段，用于接口返回）
+	Status NodeStatus `json:"status,omitempty"`
 
 	// 审计字段
-	Invalid   int       `json:"-" gorm:"column:c_invalid"`        // 删除标记（0有效/1已删除）
-	CreatedAt time.Time `json:"created_at" gorm:"column:c_ctime"` // 创建时间
-	UpdatedAt time.Time `json:"updated_at" gorm:"column:c_mtime"` // 更新时间
+	CreateTime time.Time `json:"created_time" gorm:"column:c_ctime"` // 创建时间
+	ModifyTime time.Time `json:"updated_time" gorm:"column:c_mtime"` // 更新时间
 }
 
 func (HeartbeatNode) TableName() string {

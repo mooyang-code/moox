@@ -1,10 +1,10 @@
 package api
 
 import (
-	"github.com/gin-gonic/gin"
-
-	cloudnode "github.com/mooyang-code/moox/server/internal/service/cloudnode"
 	"github.com/mooyang-code/moox/server/internal/errors"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode"
+
+	"github.com/gin-gonic/gin"
 )
 
 // ProbeHandler 探测接口处理器
@@ -45,8 +45,5 @@ func (h *ProbeHandler) ProbeNode(c *gin.Context) {
 		HandleAppError(c, errors.Internal("failed to probe node", err))
 		return
 	}
-
 	SuccessResponse(c, "probe completed", result)
 }
-
-

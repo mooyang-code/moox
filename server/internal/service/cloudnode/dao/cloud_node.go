@@ -53,15 +53,6 @@ type CloudNodeDAO interface {
 	// DeleteCloudNode 删除云节点
 	DeleteCloudNode(ctx context.Context, nodeID string) error
 
-	// ========== 节点状态更新 ==========
-
-	// UpdateNodeHeartbeat 更新节点心跳
-	UpdateNodeHeartbeat(ctx context.Context, nodeID string, currentLoad string) error
-
-
-	// UpdateNodeMetadata 更新节点元数据
-	UpdateNodeMetadata(ctx context.Context, nodeID string, metadata string) error
-
 	// UpdateNodePackageID 更新节点代码包ID
 	UpdateNodePackageID(ctx context.Context, nodeID string, packageID string) error
 }
@@ -161,6 +152,10 @@ func (d *cloudNodeDaoImpl) UpdateCloudNode(ctx context.Context, node *model.Clou
 			"c_ip_address":           node.IPAddress,
 			"c_supported_collectors": node.SupportedCollectors,
 			"c_metadata":             node.Metadata,
+			"c_timeout_threshold":    node.TimeoutThreshold,
+			"c_heartbeat_interval":   node.HeartbeatInterval,
+			"c_probe_enabled":        node.ProbeEnabled,
+			"c_probe_url":            node.ProbeURL,
 			"c_mtime":                node.ModifyTime,
 		})
 
@@ -193,29 +188,6 @@ func (d *cloudNodeDaoImpl) DeleteCloudNode(ctx context.Context, nodeID string) e
 	return nil
 }
 
-func (d *cloudNodeDaoImpl) UpdateNodeHeartbeat(ctx context.Context, nodeID string, currentLoad string) error {
-	now := time.Now()
-	updates := map[string]interface{}{
-		"c_last_heartbeat": now,
-		"c_status":         model.NodeStatusOnline,
-		"c_mtime":          now,
-	}
-
-	if currentLoad != "" {
-		updates["c_current_load"] = currentLoad
-	}
-
-	result := d.db.WithContext(ctx).
-		Model(&model.CloudNode{}).
-		Where("c_node_id = ? AND c_invalid = ?", nodeID, 0).
-		Updates(updates)
-
-	if result.Error != nil {
-		return fmt.Errorf("failed to update node heartbeat: %w", result.Error)
-	}
-	return nil
-}
-
 // GetCloudNodesByType 根据节点类型获取节点列表
 func (d *cloudNodeDaoImpl) GetCloudNodesByType(ctx context.Context, nodeType string) ([]*model.CloudNode, error) {
 	var nodes []*model.CloudNode
@@ -243,7 +215,6 @@ func (d *cloudNodeDaoImpl) GetOnlineNodes(ctx context.Context) ([]*model.CloudNo
 	}
 	return nodes, nil
 }
-
 
 // GetCloudNodesByRegion 根据地区获取节点列表
 func (d *cloudNodeDaoImpl) GetCloudNodesByRegion(ctx context.Context, region string) ([]*model.CloudNode, error) {
@@ -289,24 +260,6 @@ func (d *cloudNodeDaoImpl) GetNamespaceStats(ctx context.Context, region string)
 
 	return statsMap, nil
 }
-
-// UpdateNodeMetadata 更新节点元数据
-func (d *cloudNodeDaoImpl) UpdateNodeMetadata(ctx context.Context, nodeID string, metadata string) error {
-	now := time.Now()
-	result := d.db.WithContext(ctx).
-		Model(&model.CloudNode{}).
-		Where("c_node_id = ? AND c_invalid = ?", nodeID, 0).
-		Updates(map[string]interface{}{
-			"c_metadata": metadata,
-			"c_mtime":    now,
-		})
-
-	if result.Error != nil {
-		return fmt.Errorf("failed to update node metadata: %w", result.Error)
-	}
-	return nil
-}
-
 
 // UpdateNodePackageID 更新节点的代码包ID
 func (d *cloudNodeDaoImpl) UpdateNodePackageID(ctx context.Context, nodeID string, packageID string) error {

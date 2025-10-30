@@ -149,6 +149,9 @@ type HeartbeatService interface {
 	// GetHeartbeatNode 获取节点心跳信息
 	GetHeartbeatNode(ctx context.Context, nodeID, nodeType string) (*types.HeartbeatNode, error)
 
+	// GetNodeStatus 获取节点状态
+	GetNodeStatus(ctx context.Context, nodeID string) (*types.NodeStatus, error)
+
 	// ListHeartbeatNodes 列出心跳节点
 	ListHeartbeatNodes(ctx context.Context, filter *types.NodeFilter) ([]*types.HeartbeatNode, int64, error)
 
@@ -159,32 +162,29 @@ type HeartbeatService interface {
 
 	// ProbeHeartbeatNode 手动探测心跳节点
 	ProbeHeartbeatNode(ctx context.Context, nodeID, nodeType, action string) (*types.ProbeResult, error)
-
-	// ========== 服务控制 ==========
-
-	// StartHeartbeatService 启动心跳服务
-	StartHeartbeatService(ctx context.Context) error
-
-	// StopHeartbeatService 停止心跳服务
-	StopHeartbeatService(ctx context.Context) error
 }
 
 // CloudNodeDTO 云节点数据传输对象（统一用于输入输出）
 type CloudNodeDTO struct {
-	ID                  int       `json:"id"`
-	NodeID              string    `json:"node_id"`
-	CloudAccountID      string    `json:"cloud_account_id"`
-	PackageID           string    `json:"package_id"`
-	PackageVersion      string    `json:"package_version,omitempty"`
-	Namespace           string    `json:"namespace"`
-	NodeType            string    `json:"node_type"`
-	Region              string    `json:"region"`
-	IPAddress           string    `json:"ip_address"`
-	SupportedCollectors string    `json:"supported_collectors"`
-	Metadata            string    `json:"metadata"`
-	Invalid             int       `json:"invalid"`
-	CreateTime          time.Time `json:"create_time"`
-	ModifyTime          time.Time `json:"modify_time"`
+	ID                  int               `json:"id"`
+	NodeID              string            `json:"node_id"`
+	CloudAccountID      string            `json:"cloud_account_id"`
+	PackageID           string            `json:"package_id"`
+	PackageVersion      string            `json:"package_version,omitempty"`
+	Namespace           string            `json:"namespace"`
+	NodeType            string            `json:"node_type"`
+	Region              string            `json:"region"`
+	IPAddress           string            `json:"ip_address"`
+	SupportedCollectors string            `json:"supported_collectors"`
+	Metadata            string            `json:"metadata"`
+	TimeoutThreshold    int               `json:"timeout_threshold"`  // 超时阈值（秒），0表示使用全局默认值
+	HeartbeatInterval   int               `json:"heartbeat_interval"` // 心跳间隔（秒），0表示使用全局默认值
+	ProbeEnabled        bool              `json:"probe_enabled"`      // 是否启用探测
+	ProbeURL            string            `json:"probe_url"`          // 探测URL
+	Status              *types.NodeStatus `json:"status,omitempty"`   // 节点状态
+	Invalid             int               `json:"invalid"`
+	CreateTime          time.Time         `json:"create_time"`
+	ModifyTime          time.Time         `json:"modify_time"`
 }
 
 // CloudAccountDTO 云账户数据传输对象（统一用于输入输出）
@@ -213,7 +213,6 @@ type UploadPackageRequest struct {
 	PackageType    string `json:"package_type" binding:"required"`
 	FileContent    string `json:"file_content" binding:"required"` // base64编码的zip文件内容
 	CloudAccountID string `json:"cloud_account_id"`                // 云账户ID，可选，用于COS配置
-	CreatedBy      string `json:"-"`                               // 从JWT中获取
 }
 
 // PackageListRequest 代码包列表请求
@@ -248,8 +247,7 @@ type PackageListItem struct {
 	Status           int        `json:"status"`
 	StatusLabel      string     `json:"status_label"`
 	LastDeployTime   *time.Time `json:"last_deploy_time"`
-	CreatedBy        string     `json:"created_by"`
-	CreatedAt        time.Time  `json:"created_at"`
+	CreateTime       time.Time  `json:"created_time"`
 }
 
 // PackageDetail 代码包详情视图对象
@@ -285,10 +283,9 @@ type PackageDetail struct {
 	LastDeployTime *time.Time `json:"last_deploy_time"`
 
 	// 审计字段
-	CreatedBy string    `json:"created_by"`
-	Invalid   int       `json:"invalid"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Invalid    int       `json:"invalid"`
+	CreateTime time.Time `json:"created_time"`
+	ModifyTime time.Time `json:"updated_time"`
 }
 
 // PackageDownloadURL 代码包下载URL
@@ -322,10 +319,10 @@ type NodeListRequest struct {
 
 // NodeListResponse 节点列表响应
 type NodeListResponse struct {
-	Total int64            `json:"total"`
-	Items []*CloudNodeDTO  `json:"items"`
-	Page  int              `json:"page"`
-	Size  int              `json:"size"`
+	Total int64           `json:"total"`
+	Items []*CloudNodeDTO `json:"items"`
+	Page  int             `json:"page"`
+	Size  int             `json:"size"`
 }
 
 // RegisterExecutors 注册 cloudnode 模块的所有异步任务执行器
@@ -398,10 +395,12 @@ type ProbeRequest struct {
 
 // ProbeResponse 探测响应
 type ProbeResponse struct {
-	Success      bool
-	StatusCode   int
-	ResponseTime int64
-	Details      map[string]interface{}
+	NodeID          string `json:"node_id"`
+	State           string `json:"state"`
+	Timestamp       string `json:"timestamp"`
+	OSName          string `json:"os"`
+	FunctionVersion string `json:"function_version"`
+	RequestID       string `json:"request_id"`
 }
 
 // FunctionInvoker 函数调用接口（用于探测云函数）
@@ -475,12 +474,4 @@ func ListProbers() map[string]Prober {
 		result[name] = prober
 	}
 	return result
-}
-
-// UnregisterProber 注销探测器
-func UnregisterProber(name string) {
-	probersMu.Lock()
-	defer probersMu.Unlock()
-
-	delete(probersMap, name)
 }

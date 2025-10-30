@@ -1,8 +1,8 @@
 package manager
 
 import (
-	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	cloudnodedao "github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 	collectordao "github.com/mooyang-code/moox/server/internal/service/collector/dao"
 	collectorlogic "github.com/mooyang-code/moox/server/internal/service/collector/impl"
 	"github.com/mooyang-code/moox/server/internal/service/database"
@@ -43,7 +43,7 @@ func (f *ServiceFactory) CreateCloudNodeDAO() cloudnodedao.CloudNodeDAO {
 
 // CreateHeartbeatDAO 创建心跳DAO
 func (f *ServiceFactory) CreateHeartbeatDAO() cloudnodedao.HeartbeatDAO {
-	return cloudnodedao.NewHeartbeatRecordDAO(f.dbManager.GetDB())
+	return cloudnodedao.NewHeartbeatNodeDAO(f.dbManager.GetDB())
 }
 
 // CreateTaskInstanceService 创建采集任务实例服务

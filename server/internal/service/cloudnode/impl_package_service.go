@@ -50,8 +50,7 @@ func (s *ServiceImpl) GetPackageList(ctx context.Context, req *PackageListReques
 			Status:           pkg.Status,
 			StatusLabel:      model.GetStatusDisplayName(pkg.Status),
 			LastDeployTime:   pkg.LastDeployTime,
-			CreatedBy:        pkg.CreatedBy,
-			CreatedAt:        pkg.CTime,
+			CreateTime:       pkg.CreateTime,
 		}
 	}
 
@@ -105,10 +104,9 @@ func (s *ServiceImpl) ConvertToPackageDetail(pkg *model.FunctionPackage) *Packag
 		LastDeployTime: pkg.LastDeployTime,
 
 		// 审计字段
-		CreatedBy: pkg.CreatedBy,
-		Invalid:   pkg.Invalid,
-		CreatedAt: pkg.CTime,
-		UpdatedAt: pkg.MTime,
+		Invalid:    pkg.Invalid,
+		CreateTime: pkg.CreateTime,
+		ModifyTime: pkg.ModifyTime,
 	}
 }
 
@@ -131,7 +129,6 @@ func (s *ServiceImpl) UploadPackage(ctx context.Context, req *UploadPackageReque
 		PackageType:    req.PackageType,
 		CloudAccountID: req.CloudAccountID,
 		FileContent:    req.FileContent,
-		CreatedBy:      req.CreatedBy,
 	}
 
 	// 将请求参数序列化为JSON

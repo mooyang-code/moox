@@ -37,10 +37,9 @@ type FunctionPackage struct {
 	LastDeployTime *time.Time `gorm:"column:c_last_deploy_time" json:"last_deploy_time"`
 
 	// 审计字段
-	CreatedBy string    `gorm:"column:c_created_by;not null" json:"created_by"`
-	Invalid   int       `gorm:"column:c_invalid;not null;default:0" json:"invalid"`
-	CTime     time.Time `gorm:"column:c_ctime;default:CURRENT_TIMESTAMP" json:"created_at"`
-	MTime     time.Time `gorm:"column:c_mtime;default:CURRENT_TIMESTAMP" json:"updated_at"`
+	Invalid     int       `gorm:"column:c_invalid;not null;default:0" json:"invalid"`
+	CreateTime  time.Time `gorm:"column:c_ctime;default:CURRENT_TIMESTAMP" json:"created_at"`
+	ModifyTime  time.Time `gorm:"column:c_mtime;default:CURRENT_TIMESTAMP" json:"updated_at"`
 }
 
 // TableName 指定表名
