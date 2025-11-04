@@ -361,12 +361,6 @@ func RegisterExecutors(dbManager *database.Manager, cloudNodeService Service, he
 	return nil
 }
 
-// NewHeartbeatService 创建心跳服务实例
-// 注意：现在心跳服务直接作为 ServiceImpl 的一部分实现，不再需要单独创建
-func NewHeartbeatService(dbManager *database.Manager, asyncTask asynctask.Service) HeartbeatService {
-	return NewService(dbManager, asyncTask)
-}
-
 // ========== 探测器相关实现 ==========
 
 // 全局变量：探测器注册表

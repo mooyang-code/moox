@@ -5,9 +5,11 @@ import (
 
 	"github.com/mooyang-code/moox/server/internal/service/asynctask"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode"
-	cloudnodeconfig "github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
-	collectormgr "github.com/mooyang-code/moox/server/internal/service/collector/manager"
+	cloudnodedao "github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
+	"github.com/mooyang-code/moox/server/internal/service/collector"
+	collectordao "github.com/mooyang-code/moox/server/internal/service/collector/dao"
 	"github.com/mooyang-code/moox/server/internal/service/database"
+	"github.com/mooyang-code/moox/server/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/server/internal/service/fileserver"
 	sshapp "github.com/mooyang-code/moox/server/internal/service/ssh/app"
 
@@ -23,8 +25,9 @@ type Services struct {
 	AsyncTaskService asynctask.Service
 	CloudNodeService cloudnode.Service
 
-	// Collector服务工厂（仅用于collector自己的API）
-	CollectorFactory *collectormgr.ServiceFactory
+	// Collector服务实例
+	TaskRuleService     collector.TaskRuleService
+	TaskInstanceService collector.TaskInstanceService
 }
 
 // StartBackgroundServices 启动所有后台服务
@@ -83,21 +86,34 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 
 	// 创建云节点服务（已集成心跳服务）
 	log.Info("[Bootstrap] 正在创建云节点服务...")
-	cloudNodeService := cloudnode.NewService(dbManager, asyncTaskService)
+	cloudNodeService := cloudnode.NewService(dbManager, asyncTaskService, cfg.CloudNode)
 
 	// 初始化心跳探测器（全局单例，供定时器使用）注意：必须在 NewService 之后调用，因为 NewService 会注册全局探测器
 	log.Info("[Bootstrap] 正在初始化心跳探测器...")
-	cloudnode.InitProberInstance(dbManager, loadProberConfig(cfg))
+	cloudnode.InitProberInstance(dbManager, cfg.CloudNode)
 
-	// 创建Collector服务工厂（仅用于collector自己的API路由）
-	collectorFactory := collectormgr.NewServiceFactory(dbManager)
+	// 创建Collector服务实例
+	// 创建所需的DAO
+	taskRulesDAO := collectordao.NewCollectorTaskRulesDAO(dbManager.GetDB())
+	instanceDAO := collectordao.NewCollectorTaskInstanceDAO(dbManager.GetDB())
+	nodeDAO := cloudnodedao.NewCloudNodeDAO(dbManager.GetDB())
+	heartbeatDAO := cloudnodedao.NewHeartbeatNodeDAO(dbManager.GetDB())
+	
+	// 创建服务实例
+	taskRuleService := collector.NewTaskRulesServiceImpl(taskRulesDAO, nodeDAO)
+	taskInstanceService := collector.NewTaskInstanceServiceImpl(instanceDAO, taskRulesDAO, nodeDAO, heartbeatDAO)
+
+	// 初始化DNSProxy实例（全局单例，供定时器使用）
+	log.Info("[Bootstrap] 正在初始化DNSProxy实例...")
+	dnsproxy.InitDNSProxyInstance()
 
 	log.Info("[Bootstrap] 核心服务创建完成")
 	return &Services{
-		DBManager:        dbManager,
-		AsyncTaskService: asyncTaskService,
-		CloudNodeService: cloudNodeService,
-		CollectorFactory: collectorFactory,
+		DBManager:         dbManager,
+		AsyncTaskService:  asyncTaskService,
+		CloudNodeService:  cloudNodeService,
+		TaskRuleService:   taskRuleService,
+		TaskInstanceService: taskInstanceService,
 	}, nil
 }
 
@@ -143,11 +159,4 @@ func startBackgroundWorkers(ctx context.Context, services *Services, workerCount
 
 	log.Info("[Bootstrap] 所有后台服务已启动")
 	return nil
-}
-
-// loadProberConfig 加载探测器配置
-func loadProberConfig(cfg *Config) *cloudnodeconfig.ProberConfig {
-	// 从心跳配置文件加载
-	heartbeatCfg := cloudnodeconfig.LoadConfig()
-	return &heartbeatCfg.Prober
 }

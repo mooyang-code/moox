@@ -2,19 +2,18 @@ package api
 
 import (
 	apperrors "github.com/mooyang-code/moox/server/internal/errors"
-	collectorimpl "github.com/mooyang-code/moox/server/internal/service/collector/impl"
-	"github.com/mooyang-code/moox/server/internal/service/collector/model"
+	"github.com/mooyang-code/moox/server/internal/service/collector"
 
 	"github.com/gin-gonic/gin"
 )
 
 // CollectorTaskInstanceHandler 采集任务实例处理器
 type CollectorTaskInstanceHandler struct {
-	service collectorimpl.TaskInstanceService
+	service collector.TaskInstanceService
 }
 
 // NewCollectorTaskInstanceHandler 创建采集任务实例处理器
-func NewCollectorTaskInstanceHandler(service collectorimpl.TaskInstanceService) *CollectorTaskInstanceHandler {
+func NewCollectorTaskInstanceHandler(service collector.TaskInstanceService) *CollectorTaskInstanceHandler {
 	return &CollectorTaskInstanceHandler{
 		service: service,
 	}
@@ -63,7 +62,7 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceDetail(c *gin.Context) {
 
 // CreateTaskInstance 创建任务实例
 func (h *CollectorTaskInstanceHandler) CreateTaskInstance(c *gin.Context) {
-	var instance model.CollectorTaskInstance
+	var instance collector.TaskInstanceDTO
 	if err := c.ShouldBindJSON(&instance); err != nil {
 		HandleAppError(c, apperrors.InvalidParam("request", "参数绑定失败"))
 		return
@@ -87,14 +86,11 @@ func (h *CollectorTaskInstanceHandler) UpdateTaskInstance(c *gin.Context) {
 		return
 	}
 
-	var instance model.CollectorTaskInstance
+	var instance collector.TaskInstanceDTO
 	if err := c.ShouldBindJSON(&instance); err != nil {
 		HandleAppError(c, apperrors.InvalidParam("request", "参数绑定失败"))
 		return
 	}
-
-	// 设置ID
-	instance.InstanceID = instanceID
 
 	// 调用service层更新数据
 	err := h.service.UpdateTaskInstance(c.Request.Context(), instanceID, &instance)
@@ -133,7 +129,7 @@ func (h *CollectorTaskInstanceHandler) StartTaskInstance(c *gin.Context) {
 	}
 
 	// 调用service层启动任务
-	err := h.service.StartTaskInstance(c.Request.Context(), instanceID)
+	err := h.service.StartInstance(c.Request.Context(), instanceID)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("启动失败", err))
 		return
@@ -151,7 +147,7 @@ func (h *CollectorTaskInstanceHandler) StopTaskInstance(c *gin.Context) {
 	}
 
 	// 调用service层停止任务
-	err := h.service.StopTaskInstance(c.Request.Context(), instanceID)
+	err := h.service.CompleteInstance(c.Request.Context(), instanceID, false, "手动停止")
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("停止失败", err))
 		return

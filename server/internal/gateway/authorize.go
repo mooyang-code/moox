@@ -1,12 +1,9 @@
-package middleware
+package gateway
 
 import (
 	"context"
 	"fmt"
-	"sync"
 
-	gatewayConfig "github.com/mooyang-code/moox/server/internal/config"
-	authConfig "github.com/mooyang-code/moox/server/internal/service/auth/config"
 	"github.com/mooyang-code/moox/server/internal/service/auth/model"
 	"github.com/mooyang-code/moox/server/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
@@ -17,89 +14,9 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// 全局配置缓存
-var (
-	globalAuthConfig *authConfig.Config
-	noAuthMethodsMap map[string]bool
-	configMutex      sync.RWMutex
-)
-
-// getJWTSecretKey 获取JWT密钥（带缓存）
-func getJWTSecretKey(ctx context.Context) string {
-	configMutex.RLock()
-	if globalAuthConfig != nil {
-		secretKey := globalAuthConfig.JWT.SecretKey
-		configMutex.RUnlock()
-		return secretKey
-	}
-	configMutex.RUnlock()
-
-	// 双重检查锁定模式
-	configMutex.Lock()
-	defer configMutex.Unlock()
-
-	if globalAuthConfig != nil {
-		return globalAuthConfig.JWT.SecretKey
-	}
-
-	// 加载配置
-	cfg, err := authConfig.LoadConfig()
-	if err != nil {
-		log.ErrorContextf(ctx, "加载JWT配置失败: %v", err)
-		return ""
-	}
-
-	globalAuthConfig = cfg
-	return cfg.JWT.SecretKey
-}
-
-// isNoAuthMethod 检查是否为不需要鉴权的接口
-func isNoAuthMethod(rpcName string) bool {
-	configMutex.RLock()
-	defer configMutex.RUnlock()
-	return noAuthMethodsMap[rpcName]
-}
-
-// loadNoAuthMethods 加载不需要鉴权的接口列表
-func loadNoAuthMethods() {
-	cfg, err := gatewayConfig.LoadConfig()
-	if err != nil {
-		log.Errorf("加载网关配置失败: %v", err)
-		// 使用默认配置
-		noAuthMethodsMap = map[string]bool{
-			"/gateway/auth/Register":            true,
-			"/gateway/auth/GetLoginSalt":        true,
-			"/gateway/auth/Login":               true,
-			"/trpc.moox.gateway.stdhttp/health": true,
-		}
-		return
-	}
-
-	noAuthMethodsMap = make(map[string]bool)
-	for _, method := range cfg.Gateway.NoAuthMethods {
-		noAuthMethodsMap[method] = true
-	}
-
-	log.Infof("加载不需要鉴权的接口列表: %v", cfg.Gateway.NoAuthMethods)
-}
-
 func init() {
-	// 注册中间件
+	// 注册 trpc 中间件
 	filter.Register("authorize", Authorize(), nil)
-
-	// 初始化认证配置
-	cfg, err := authConfig.LoadConfig()
-	if err != nil {
-		log.Errorf("初始化认证配置失败: %v", err)
-	} else {
-		configMutex.Lock()
-		globalAuthConfig = cfg
-		configMutex.Unlock()
-		log.Infof("认证配置初始化成功")
-	}
-
-	// 加载不需要鉴权的接口列表
-	loadNoAuthMethods()
 }
 
 // Authorize 从 HTTP header 中获取访问令牌进行鉴权
@@ -110,8 +27,8 @@ func Authorize() filter.ServerFilter {
 		// TODO : 频控
 
 		// 检查是否需要鉴权
-		if isNoAuthMethod(rpcName) {
-			log.InfoContextf(ctx, "接口 [%s] 无需鉴权，直接通过", rpcName)
+		if ShouldSkipAuth(rpcName) {
+			log.InfoContextf(ctx, "接口 [%s] 跳过鉴权", rpcName)
 			return next(ctx, req)
 		}
 
@@ -153,6 +70,31 @@ func Authorize() filter.ServerFilter {
 	}
 }
 
+// ShouldSkipAuth 检查是否应该跳过鉴权
+func ShouldSkipAuth(rpcName string) bool {
+	cfg := GetConfig()
+	if cfg == nil {
+		return false
+	}
+
+	for _, method := range cfg.Gateway.NoAuthMethods {
+		if method == rpcName {
+			return true
+		}
+	}
+	return false
+}
+
+// getJWTSecretKey 获取JWT密钥（从网关配置）
+func getJWTSecretKey() string {
+	cfg := GetConfig()
+	if cfg == nil {
+		log.Error("网关配置未初始化")
+		return ""
+	}
+	return cfg.JWT.SecretKey
+}
+
 // getTokenFromHeader 从指定的HTTP头获取token
 func getTokenFromHeader(header *thttp.Header, headerName string) string {
 	if headers, ok := header.Request.Header[headerName]; ok && len(headers) > 0 {
@@ -179,7 +121,7 @@ func getAccessTokenFromRequest(ctx context.Context, header *thttp.Header, req in
 // validateAccessToken 验证访问令牌并返回用户信息
 func validateAccessToken(ctx context.Context, accessToken string) (*utils.UnifiedClaims, bool) {
 	// 获取JWT密钥（带缓存）
-	secretKey := getJWTSecretKey(ctx)
+	secretKey := getJWTSecretKey()
 	if secretKey == "" {
 		log.ErrorContext(ctx, "JWT密钥为空")
 		return nil, false

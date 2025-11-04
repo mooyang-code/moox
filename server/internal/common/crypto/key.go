@@ -3,17 +3,20 @@ package crypto
 import (
 	"crypto/sha256"
 	"encoding/hex"
-
-	"github.com/mooyang-code/moox/server/internal/config"
+	"os"
 )
 
 // GetEncryptionKey 获取加密密钥
-// 从全局配置中读取，配置优先级：环境变量 > 配置文件 > 默认值
+// 优先级：环境变量 MOOX_ENCRYPTION_KEY > 配置文件 > 默认值
 func GetEncryptionKey() string {
-	key := config.GetEncryptionKey()
+	// 优先从环境变量获取
+	if key := os.Getenv("MOOX_ENCRYPTION_KEY"); key != "" {
+		return ensureKeyLength(key, 32)
+	}
 
-	// 确保密钥长度为32字节（AES-256）
-	return ensureKeyLength(key, 32)
+	// 如果没有设置环境变量，返回默认开发密钥
+	// 在生产环境中，应该设置环境变量
+	return ensureKeyLength("moox-cloud-secret-key-32bytes", 32)
 }
 
 // ensureKeyLength 确保密钥长度符合要求

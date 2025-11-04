@@ -19,21 +19,12 @@ var (
 
 // AppConfig 应用配置（总配置）
 type AppConfig struct {
-	Server   ServerConfig   `yaml:"server"`
 	Database DatabaseConfig `yaml:"database"`
 	Storage  StorageConfig  `yaml:"storage"`
 	Auth     AuthConfig     `yaml:"auth"`
 	Worker   WorkerConfig   `yaml:"worker"`
 	Log      LogConfig      `yaml:"log"`
 	Security SecurityConfig `yaml:"security"`
-}
-
-// ServerConfig 服务器配置
-type ServerConfig struct {
-	Host        string `yaml:"host"`
-	Port        int    `yaml:"port"`
-	Environment string `yaml:"environment"` // development, production
-	MooxURL     string `yaml:"moox_url"`    // Moox服务地址
 }
 
 // DatabaseConfig 数据库配置
@@ -93,12 +84,6 @@ type SecurityConfig struct {
 // DefaultConfig 返回默认配置
 func DefaultConfig() *AppConfig {
 	return &AppConfig{
-		Server: ServerConfig{
-			Host:        "0.0.0.0",
-			Port:        8080,
-			Environment: "development",
-			MooxURL:     "http://localhost:8080",
-		},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/moox.db",
@@ -171,20 +156,6 @@ func Load(configPath string) (*AppConfig, error) {
 
 // applyEnv 从环境变量覆盖配置
 func (c *AppConfig) applyEnv() {
-	// Server
-	if v := os.Getenv("SERVER_HOST"); v != "" {
-		c.Server.Host = v
-	}
-	if v := os.Getenv("SERVER_PORT"); v != "" {
-		fmt.Sscanf(v, "%d", &c.Server.Port)
-	}
-	if v := os.Getenv("ENVIRONMENT"); v != "" {
-		c.Server.Environment = v
-	}
-	if v := os.Getenv("MOOX_URL"); v != "" {
-		c.Server.MooxURL = v
-	}
-
 	// Database
 	if v := os.Getenv("DB_PATH"); v != "" {
 		c.Database.Path = v
@@ -230,9 +201,6 @@ func (c *AppConfig) applyEnv() {
 // Validate 验证配置
 func (c *AppConfig) Validate() error {
 	// 验证必填项
-	if c.Server.Port <= 0 || c.Server.Port > 65535 {
-		return fmt.Errorf("invalid server port: %d", c.Server.Port)
-	}
 
 	if c.Database.Type == "sqlite" {
 		if c.Database.Path == "" {
@@ -259,16 +227,6 @@ func (c *AppConfig) Validate() error {
 	}
 
 	return nil
-}
-
-// IsDevelopment 是否开发环境
-func (c *AppConfig) IsDevelopment() bool {
-	return c.Server.Environment == "development"
-}
-
-// IsProduction 是否生产环境
-func (c *AppConfig) IsProduction() bool {
-	return c.Server.Environment == "production"
 }
 
 // SetGlobalConfig 设置全局配置（由 bootstrap 在启动时调用）

@@ -31,11 +31,8 @@ func (s *ServiceImpl) init() {
 }
 
 // NewService 创建云节点服务实例
-func NewService(dbManager *database.Manager, asyncTask asynctask.Service) Service {
+func NewService(dbManager *database.Manager, asyncTask asynctask.Service, cfg *config.Config) Service {
 	db := dbManager.GetDB()
-
-	// 加载服务配置
-	cfg := config.LoadConfig()
 
 	serviceImpl := &ServiceImpl{
 		config:       cfg,

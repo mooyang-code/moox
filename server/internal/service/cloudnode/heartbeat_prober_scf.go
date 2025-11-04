@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/server/internal/common"
+	"github.com/mooyang-code/moox/server/internal/config"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
 )
@@ -22,11 +23,13 @@ type CloudFunctionEvent struct {
 
 // ProbeEventData 探测事件数据结构（专用于buildEventData返回值）
 type ProbeEventData struct {
-	Action    string            `json:"action"`
-	Data      ProbeEventDetails `json:"data"`
-	Timestamp string            `json:"timestamp"`
-	RequestID string            `json:"request_id"`
-	Source    string            `json:"source"`
+	Action     string            `json:"action"`
+	Data       ProbeEventDetails `json:"data"`
+	Timestamp  string            `json:"timestamp"`
+	RequestID  string            `json:"request_id"`
+	Source     string            `json:"source"`
+	ServerIP   string            `json:"server_ip"`
+	ServerPort int               `json:"server_port"`
 }
 
 // ProbeEventDetails 探测事件数据详情
@@ -35,8 +38,6 @@ type ProbeEventDetails struct {
 	PublicIP   string `json:"public_ip"`
 	ProberType string `json:"prober_type"`
 	ProbeTime  string `json:"probe_time"`
-	ServerIP   string `json:"server_ip"`
-	ServerPort int    `json:"server_port"`
 }
 
 // SCFHeartbeatProber 云函数心跳探测器
@@ -109,16 +110,17 @@ func (a *SCFHeartbeatProber) buildEventData(action string) *ProbeEventData {
 	internalIP := common.GetInternalIP()
 	PublicIP := common.GetPublicIP()
 	return &ProbeEventData{
-		Action:    action,
-		Timestamp: timestamp,
-		RequestID: requestID,
-		Source:    "heartbeat_probe",
+		Action:     action,
+		Timestamp:  timestamp,
+		RequestID:  requestID,
+		Source:     "heartbeat_probe",
+		ServerIP:   PublicIP,
+		ServerPort: config.GetGatewayPort(),
 		Data: ProbeEventDetails{
 			InternalIP: internalIP,
 			PublicIP:   PublicIP,
 			ProberType: a.Name(),
 			ProbeTime:  timestamp,
-			ServerIP:   internalIP,
 		},
 	}
 }

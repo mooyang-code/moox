@@ -19,7 +19,6 @@ require (
 	github.com/mooyang-code/moox/server/proto/gen v0.0.0-20250626155508-b6cf71b7b8d0
 	github.com/nats-io/nats-server/v2 v2.12.1
 	github.com/nats-io/nats.go v1.47.0
-	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/rs/xid v1.6.0
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.1.26
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf v1.1.0
@@ -28,6 +27,7 @@ require (
 	gopkg.in/yaml.v2 v2.2.7
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.30.0
+	trpc.group/trpc-go/trpc-database/localcache v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.3
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
@@ -35,10 +35,12 @@ require (
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
+	github.com/RussellLuo/timingwheel v0.0.0-20191022104228-f534fd34a762 // indirect
 	github.com/andybalholm/brotli v1.0.4 // indirect
 	github.com/antithesishq/antithesis-sdk-go v0.4.3-default-no-op // indirect
 	github.com/bytedance/sonic v1.11.6 // indirect
 	github.com/bytedance/sonic/loader v0.1.1 // indirect
+	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
 	github.com/cloudwego/base64x v0.1.4 // indirect

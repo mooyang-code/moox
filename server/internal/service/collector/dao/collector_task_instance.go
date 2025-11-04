@@ -32,8 +32,11 @@ type CollectorTaskInstanceDAO interface {
 	// GetTaskInstancesByNode 根据节点获取任务实例
 	GetTaskInstancesByNode(ctx context.Context, nodeID string, status []int) ([]*model.CollectorTaskInstance, error)
 	
-	// GetTaskInstancesByTask 根据任务获取实例列表
-	GetTaskInstancesByTask(ctx context.Context, taskID string, limit int) ([]*model.CollectorTaskInstance, error)
+	// GetTaskInstancesByRule 根据规则获取实例列表
+	GetTaskInstancesByRule(ctx context.Context, ruleID string, limit int) ([]*model.CollectorTaskInstance, error)
+	
+	// GetTaskInstancesByNodeAndStatus 根据节点和状态获取实例
+	GetTaskInstancesByNodeAndStatus(ctx context.Context, nodeID string, status []int) ([]*model.CollectorTaskInstance, error)
 	
 	// GetPendingInstances 获取待执行的实例
 	GetPendingInstances(ctx context.Context, nodeID string) ([]*model.CollectorTaskInstance, error)
@@ -43,6 +46,9 @@ type CollectorTaskInstanceDAO interface {
 	
 	// GetRecentInstances 获取最近的任务实例
 	GetRecentInstances(ctx context.Context, hours int) ([]*model.CollectorTaskInstance, error)
+	
+	// GetTaskInstancesByStatus 根据状态获取任务实例
+	GetTaskInstancesByStatus(ctx context.Context, status []int) ([]*model.CollectorTaskInstance, error)
 	
 	// ========== 状态更新 ==========
 	
@@ -60,8 +66,14 @@ type CollectorTaskInstanceDAO interface {
 	// BatchCreateInstances 批量创建实例
 	BatchCreateInstances(ctx context.Context, instances []*model.CollectorTaskInstance) error
 	
+	// BatchUpdateStatus 批量更新实例状态
+	BatchUpdateStatus(ctx context.Context, instanceIDs []string, status int, result string) error
+	
 	// CleanupOldInstances 清理旧的实例记录
 	CleanupOldInstances(ctx context.Context, days int) error
+	
+	// GetInstanceStatistics 获取实例统计信息
+	GetInstanceStatistics(ctx context.Context, ruleID string) (map[string]interface{}, error)
 }
 
 type collectorTaskInstanceDaoImpl struct {
@@ -107,17 +119,16 @@ func (d *collectorTaskInstanceDaoImpl) UpdateTaskInstance(ctx context.Context, i
 
 	result := d.db.WithContext(ctx).
 		Model(&model.CollectorTaskInstance{}).
-		Where("c_instance_id = ?", instance.InstanceID).
+		Where("c_instance_id = ?", instance.TaskID).
 		Updates(map[string]interface{}{
-			"c_target_objects":   instance.TargetObjects,
-			"c_execution_params": instance.ExecutionParams,
-			"c_status":           instance.Status,
-			"c_start_time":       instance.StartTime,
-			"c_end_time":         instance.EndTime,
-			"c_result":           instance.Result,
-			"c_project_id":       instance.ProjectID,
-			"c_dataset_id":       instance.DatasetID,
-			"c_mtime":            instance.ModifyTime,
+			"c_rule_id":       instance.RuleID,
+			"c_node_id":       instance.NodeID,
+			"c_task_params":   instance.TaskParams,
+			"c_status":        instance.Status,
+			"c_start_time":    instance.StartTime,
+			"c_end_time":      instance.EndTime,
+			"c_result":        instance.Result,
+			"c_mtime":         instance.ModifyTime,
 		})
 
 	if result.Error != nil {
@@ -162,11 +173,11 @@ func (d *collectorTaskInstanceDaoImpl) GetTaskInstancesByNode(ctx context.Contex
 	return instances, nil
 }
 
-// GetTaskInstancesByTask 获取任务的实例历史
-func (d *collectorTaskInstanceDaoImpl) GetTaskInstancesByTask(ctx context.Context, taskID string, limit int) ([]*model.CollectorTaskInstance, error) {
+// GetTaskInstancesByRule 根据规则获取实例列表
+func (d *collectorTaskInstanceDaoImpl) GetTaskInstancesByRule(ctx context.Context, ruleID string, limit int) ([]*model.CollectorTaskInstance, error) {
 	var instances []*model.CollectorTaskInstance
 	query := d.db.WithContext(ctx).
-		Where("c_task_id = ?", taskID).
+		Where("c_rule_id = ?", ruleID).
 		Order("c_ctime DESC")
 
 	if limit > 0 {
@@ -175,7 +186,23 @@ func (d *collectorTaskInstanceDaoImpl) GetTaskInstancesByTask(ctx context.Contex
 
 	result := query.Find(&instances)
 	if result.Error != nil {
-		return nil, fmt.Errorf("failed to get task instances by task: %w", result.Error)
+		return nil, fmt.Errorf("failed to get task instances by rule: %w", result.Error)
+	}
+	return instances, nil
+}
+
+// GetTaskInstancesByNodeAndStatus 根据节点和状态获取实例
+func (d *collectorTaskInstanceDaoImpl) GetTaskInstancesByNodeAndStatus(ctx context.Context, nodeID string, status []int) ([]*model.CollectorTaskInstance, error) {
+	var instances []*model.CollectorTaskInstance
+	query := d.db.WithContext(ctx).Where("c_node_id = ?", nodeID)
+
+	if len(status) > 0 {
+		query = query.Where("c_status IN ?", status)
+	}
+
+	result := query.Order("c_ctime DESC").Find(&instances)
+	if result.Error != nil {
+		return nil, fmt.Errorf("failed to get task instances by node and status: %w", result.Error)
 	}
 	return instances, nil
 }
@@ -183,7 +210,7 @@ func (d *collectorTaskInstanceDaoImpl) GetTaskInstancesByTask(ctx context.Contex
 // GetPendingInstances 获取待执行的实例
 func (d *collectorTaskInstanceDaoImpl) GetPendingInstances(ctx context.Context, nodeID string) ([]*model.CollectorTaskInstance, error) {
 	var instances []*model.CollectorTaskInstance
-	query := d.db.WithContext(ctx).Where("c_status = ?", model.TaskInstanceStatusPending)
+	query := d.db.WithContext(ctx).Where("c_status = ?", 0) // 0 = 待执行
 
 	if nodeID != "" {
 		query = query.Where("c_node_id = ?", nodeID)
@@ -199,7 +226,7 @@ func (d *collectorTaskInstanceDaoImpl) GetPendingInstances(ctx context.Context, 
 // GetRunningInstances 获取正在执行的实例
 func (d *collectorTaskInstanceDaoImpl) GetRunningInstances(ctx context.Context, nodeID string) ([]*model.CollectorTaskInstance, error) {
 	var instances []*model.CollectorTaskInstance
-	query := d.db.WithContext(ctx).Where("c_status = ?", model.TaskInstanceStatusRunning)
+	query := d.db.WithContext(ctx).Where("c_status = ?", 1) // 1 = 执行中
 
 	if nodeID != "" {
 		query = query.Where("c_node_id = ?", nodeID)
@@ -224,6 +251,22 @@ func (d *collectorTaskInstanceDaoImpl) GetRecentInstances(ctx context.Context, h
 
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get recent instances: %w", result.Error)
+	}
+	return instances, nil
+}
+
+// GetTaskInstancesByStatus 根据状态获取任务实例
+func (d *collectorTaskInstanceDaoImpl) GetTaskInstancesByStatus(ctx context.Context, status []int) ([]*model.CollectorTaskInstance, error) {
+	var instances []*model.CollectorTaskInstance
+	query := d.db.WithContext(ctx)
+
+	if len(status) > 0 {
+		query = query.Where("c_status IN ?", status)
+	}
+
+	result := query.Order("c_ctime DESC").Find(&instances)
+	if result.Error != nil {
+		return nil, fmt.Errorf("failed to get task instances by status: %w", result.Error)
 	}
 	return instances, nil
 }
@@ -259,9 +302,9 @@ func (d *collectorTaskInstanceDaoImpl) StartInstance(ctx context.Context, instan
 	now := time.Now()
 	result := d.db.WithContext(ctx).
 		Model(&model.CollectorTaskInstance{}).
-		Where("c_instance_id = ? AND c_status = ?", instanceID, model.TaskInstanceStatusPending).
+		Where("c_instance_id = ? AND c_status = ?", instanceID, 0).
 		Updates(map[string]interface{}{
-			"c_status":     model.TaskInstanceStatusRunning,
+			"c_status":     1, // 执行中
 			"c_start_time": now,
 			"c_mtime":      now,
 		})
@@ -279,9 +322,9 @@ func (d *collectorTaskInstanceDaoImpl) StartInstance(ctx context.Context, instan
 // CompleteInstance 完成实例执行
 func (d *collectorTaskInstanceDaoImpl) CompleteInstance(ctx context.Context, instanceID string, success bool, result string) error {
 	now := time.Now()
-	status := model.TaskInstanceStatusSuccess
+	status := 2 // 成功
 	if !success {
-		status = model.TaskInstanceStatusFailed
+		status = 3 // 失败
 	}
 
 	updates := map[string]interface{}{
@@ -293,7 +336,7 @@ func (d *collectorTaskInstanceDaoImpl) CompleteInstance(ctx context.Context, ins
 
 	dbResult := d.db.WithContext(ctx).
 		Model(&model.CollectorTaskInstance{}).
-		Where("c_instance_id = ? AND c_status = ?", instanceID, model.TaskInstanceStatusRunning).
+		Where("c_instance_id = ? AND c_status = ?", instanceID, 1).
 		Updates(updates)
 
 	if dbResult.Error != nil {
@@ -325,17 +368,76 @@ func (d *collectorTaskInstanceDaoImpl) BatchCreateInstances(ctx context.Context,
 	return nil
 }
 
+// BatchUpdateStatus 批量更新实例状态
+func (d *collectorTaskInstanceDaoImpl) BatchUpdateStatus(ctx context.Context, instanceIDs []string, status int, result string) error {
+	if len(instanceIDs) == 0 {
+		return nil
+	}
+
+	updates := map[string]interface{}{
+		"c_status": status,
+		"c_mtime":  time.Now(),
+	}
+
+	if result != "" {
+		updates["c_result"] = result
+	}
+
+	dbResult := d.db.WithContext(ctx).
+		Model(&model.CollectorTaskInstance{}).
+		Where("c_instance_id IN ?", instanceIDs).
+		Updates(updates)
+
+	if dbResult.Error != nil {
+		return fmt.Errorf("failed to batch update instance status: %w", dbResult.Error)
+	}
+	return nil
+}
+
 // CleanupOldInstances 清理旧的实例记录
 func (d *collectorTaskInstanceDaoImpl) CleanupOldInstances(ctx context.Context, days int) error {
 	cutoffTime := time.Now().AddDate(0, 0, -days)
 
 	result := d.db.WithContext(ctx).
-		Where("c_ctime < ? AND c_status IN ?", cutoffTime,
-			[]int{model.TaskInstanceStatusSuccess, model.TaskInstanceStatusFailed, model.TaskInstanceStatusTimeout}).
+		Where("c_ctime < ? AND c_status IN ?", cutoffTime, []int{2, 3, 4}). // 成功、失败、超时
 		Delete(&model.CollectorTaskInstance{})
 
 	if result.Error != nil {
 		return fmt.Errorf("failed to cleanup old instances: %w", result.Error)
 	}
 	return nil
+}
+
+// GetInstanceStatistics 获取实例统计信息
+func (d *collectorTaskInstanceDaoImpl) GetInstanceStatistics(ctx context.Context, ruleID string) (map[string]interface{}, error) {
+	query := d.db.WithContext(ctx)
+	
+	if ruleID != "" {
+		query = query.Where("c_rule_id = ?", ruleID)
+	}
+
+	// 统计各状态数量
+	var totalCount, pendingCount, runningCount, successCount, failedCount int64
+	
+	query.Model(&model.CollectorTaskInstance{}).Count(&totalCount)
+	query.Where("c_status = ?", 0).Count(&pendingCount)  // 待执行
+	query.Where("c_status = ?", 1).Count(&runningCount)  // 执行中
+	query.Where("c_status = ?", 2).Count(&successCount)  // 成功
+	query.Where("c_status = ?", 3).Count(&failedCount)   // 失败
+
+	statistics := map[string]interface{}{
+		"total_count":   totalCount,
+		"pending_count": pendingCount,
+		"running_count": runningCount,
+		"success_count": successCount,
+		"failed_count":  failedCount,
+		"success_rate":  0.0,
+	}
+
+	// 计算成功率
+	if totalCount > 0 {
+		statistics["success_rate"] = float64(successCount) / float64(totalCount) * 100
+	}
+
+	return statistics, nil
 }

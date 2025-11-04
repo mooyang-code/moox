@@ -1,17 +1,41 @@
-package config
+package gateway
 
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v2"
 )
 
+// 全局配置变量(网关层 由于有权限插件 限流插件，无法依赖注入，故需要有全局配置)
+var (
+	gatewayConfig *Config
+	configMutex   sync.RWMutex
+)
+
 // Config 网关服务配置
 type Config struct {
+	JWT       JWTConfig       `yaml:"jwt"`        // JWT配置
+	Security  SecurityConfig  `yaml:"security"`   // 安全配置
 	Gateway   GatewayConfig   `yaml:"gateway"`    // 网关配置
 	RateLimit RateLimitConfig `yaml:"rate_limit"` // 限流配置
+}
+
+// JWTConfig JWT配置
+type JWTConfig struct {
+	SecretKey      string        `yaml:"secret_key"`      // JWT密钥
+	AccessExpired  time.Duration `yaml:"access_expired"`  // 访问令牌过期时间
+	RefreshExpired time.Duration `yaml:"refresh_expired"` // 刷新令牌过期时间
+}
+
+// SecurityConfig 安全配置
+type SecurityConfig struct {
+	EncryptionKey   string        `yaml:"encryption_key"`    // 数据加密密钥
+	SaltExpired     time.Duration `yaml:"salt_expired"`      // 登录盐值过期时间
+	MaxLoginAttempt int           `yaml:"max_login_attempt"` // 最大登录尝试次数
+	LockDuration    time.Duration `yaml:"lock_duration"`     // 账户锁定时间
 }
 
 // GatewayConfig 网关配置
@@ -51,6 +75,20 @@ type ServiceConfig struct {
 	ServicePath string
 	Headers     map[string]string
 	Timeout     time.Duration
+}
+
+// SetConfig 设置网关配置（依赖注入）
+func SetConfig(cfg *Config) {
+	configMutex.Lock()
+	defer configMutex.Unlock()
+	gatewayConfig = cfg
+}
+
+// GetConfig 获取网关配置
+func GetConfig() *Config {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return gatewayConfig
 }
 
 // LoadConfig 加载配置文件

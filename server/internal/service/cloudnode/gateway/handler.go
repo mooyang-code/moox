@@ -109,7 +109,7 @@ func (h *CloudNodeGatewayHandler) parseMethodToRoute(method string, body []byte)
 		route.Path = "/api/v1/cloud_node/remove"
 		route.HTTPMethod = "DELETE"
 		route.Body = body
-	case "Heartbeat", "ReportHeartbeat":
+	case "Heartbeat", "ReportHeartbeat", "ReportHeartbeatInner":
 		route.Path = "/api/v1/heartbeat/report"
 		route.HTTPMethod = "POST"
 		route.Body = body

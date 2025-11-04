@@ -1,18 +1,16 @@
 package gateway
 
 import (
-	"github.com/mooyang-code/moox/server/internal/config"
-
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
 // InitGatewayServices 初始化网关服务处理器和路由
 func InitGatewayServices(s *server.Server) {
-	// 加载配置文件
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		log.Fatalf("加载网关配置失败: %v", err)
+	// 从依赖注入获取配置
+	cfg := GetConfig()
+	if cfg == nil {
+		log.Fatalf("网关配置未初始化")
 	}
 
 	gateway := GetGatewayHandleInstance()
@@ -20,9 +18,9 @@ func InitGatewayServices(s *server.Server) {
 	// 动态注册配置文件中的所有服务
 	serviceIDs := cfg.GetAllServiceIDs()
 	for _, serviceID := range serviceIDs {
-		// 跳过collector服务，它将使用自定义的处理器
-		if serviceID == "collector" {
-			log.Infof("跳过collector服务的HTTPServiceHandler注册，将使用自定义处理器")
+		// 跳过collector和cloudnode服务，它们将使用自定义的处理器
+		if serviceID == "collector" || serviceID == "cloudnode" {
+			log.Infof("跳过%s服务的HTTPServiceHandler注册，将使用自定义处理器", serviceID)
 			continue
 		}
 

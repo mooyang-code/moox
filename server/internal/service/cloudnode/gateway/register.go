@@ -9,10 +9,7 @@ import (
 )
 
 // RegisterCloudNodeGateway 注册云节点网关（包含云账户和代码包管理功能）
-func RegisterCloudNodeGateway(
-	service cloudnodemgr.Service,
-	asyncTaskService asynctask.Service,
-) {
+func RegisterCloudNodeGateway(service cloudnodemgr.Service, asyncTaskService asynctask.Service) {
 	log.Info("[CloudNode Gateway] 正在注册云节点网关...")
 	handler := NewCloudNodeGatewayHandler(service, asyncTaskService)
 

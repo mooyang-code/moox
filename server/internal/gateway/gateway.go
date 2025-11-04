@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/server/internal/config"
-
 	"github.com/gorilla/mux"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -119,7 +117,10 @@ func (hr *HTTPRouter) setupRoutes(s *server.Server) {
 	router := mux.NewRouter()
 
 	// 注册网关转发路由: /gateway/{service}/{method}
-	router.HandleFunc("/gateway/{service}/{method}", hr.handleGatewayRequest).Methods("GET", "POST", "PUT", "DELETE")
+	router.HandleFunc(
+		"/gateway/{service}/{method}",
+		hr.handleGatewayRequest).
+		Methods("GET", "POST", "PUT", "DELETE")
 
 	// 健康检查接口
 	router.HandleFunc("/gateway/health", hr.handleHealthCheck).Methods("GET")
@@ -308,11 +309,11 @@ func (h *HTTPRequestHandler) writeResponse(w http.ResponseWriter, respBody []byt
 // HTTPServiceHandler HTTP服务转发处理器
 type HTTPServiceHandler struct {
 	serviceID string
-	config    config.ServiceConfig
+	config    ServiceConfig
 }
 
 // NewHTTPServiceHandler 创建HTTP服务处理器
-func NewHTTPServiceHandler(serviceID string, serviceConfig config.ServiceConfig) *HTTPServiceHandler {
+func NewHTTPServiceHandler(serviceID string, serviceConfig ServiceConfig) *HTTPServiceHandler {
 	return &HTTPServiceHandler{
 		serviceID: serviceID,
 		config:    serviceConfig,

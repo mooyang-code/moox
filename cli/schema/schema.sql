@@ -156,83 +156,11 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     FOREIGN KEY (c_package_id) REFERENCES t_function_packages(c_package_id)
 );
 
--- ************ 创建采集任务配置表（替代原t_node_collectors_conf） ************
-CREATE TABLE IF NOT EXISTS t_collector_task_config (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
-    c_task_id TEXT NOT NULL, -- 任务唯一标识
-    c_project_id TEXT NOT NULL, -- 项目ID（关联到项目表）
-    c_dataset_id TEXT NOT NULL, -- 数据集ID（关联到数据集表）
-    c_task_type TEXT NOT NULL, -- 任务类型（object_list=对象列表采集，data_collect=数据采集）
-    c_collector_type TEXT NOT NULL, -- 采集器类型（kline/ticker/orderbook/trade/news等）
-    c_source_name TEXT NOT NULL DEFAULT '', -- 数据源名称（binance/okx等）
-    
-    -- 任务分配配置
-    c_assignment_type TEXT NOT NULL DEFAULT 'auto', -- 分配类型（auto=自动分配，fixed=固定节点，pattern=通配符匹配）
-    c_assigned_nodes TEXT NOT NULL DEFAULT '[]', -- 指定节点列表（JSON数组，fixed类型时使用）
-    c_node_pattern TEXT NOT NULL DEFAULT '', -- 节点匹配模式（pattern类型时使用，如：scf-collector-*）
-    c_load_balance_strategy TEXT NOT NULL DEFAULT 'round_robin', -- 负载均衡策略（round_robin/least_load/random）
-    
-    -- 采集目标配置
-    c_target_objects TEXT NOT NULL DEFAULT '[]', -- 目标对象列表（JSON数组，如交易对列表）
-    c_object_pattern TEXT NOT NULL DEFAULT '', -- 对象匹配模式（支持通配符，如：*USDT）
-    c_force_objects TEXT NOT NULL DEFAULT '{}', -- 强制指定对象（JSON：{node_id:[objects]}）
-    
-    -- 采集参数配置
-    c_collect_params TEXT NOT NULL DEFAULT '{}', -- 采集参数（JSON：{intervals:["1m","5m"],depth:20}）
-    c_schedule_config TEXT NOT NULL DEFAULT '{}', -- 调度配置（JSON：{cron:"*/5 * * * *",retry:3,timeout:300}）
-    
-    -- 任务状态
-    c_enabled TEXT NOT NULL DEFAULT 'true', -- 是否启用（"true"=启用，"false"=禁用）
-    c_priority INTEGER NOT NULL DEFAULT 0, -- 优先级（数值越大优先级越高）
-    c_last_dispatch_time DATETIME, -- 最后分发时间
-    c_last_dispatch_result TEXT NOT NULL DEFAULT '', -- 最后分发结果
-    
-    c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP -- 修改时间
-);
-
--- ************ 创建采集任务实例表（记录实际分配的任务） ************
-CREATE TABLE IF NOT EXISTS t_collector_task_instances (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
-    c_instance_id TEXT NOT NULL, -- 实例唯一标识
-    c_task_id TEXT NOT NULL, -- 任务ID（关联配置表）
-    c_project_id TEXT NOT NULL, -- 项目ID（关联到项目表）
-    c_dataset_id TEXT NOT NULL, -- 数据集ID（关联到数据集表）
-    c_node_id TEXT NOT NULL, -- 执行节点ID
-    c_target_objects TEXT NOT NULL DEFAULT '[]', -- 分配的对象列表（JSON数组）
-    c_execution_params TEXT NOT NULL DEFAULT '{}', -- 执行参数（合并后的最终参数）
-    c_status INTEGER NOT NULL DEFAULT 0, -- 状态（0=待执行，1=执行中，2=成功，3=失败，4=超时，5=已取消）
-    c_start_time DATETIME, -- 开始时间
-    c_end_time DATETIME, -- 结束时间
-    c_result TEXT NOT NULL DEFAULT '{}', -- 执行结果（JSON格式）
-
-    c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP -- 修改时间
-);
 
 -- ************ 创建云函数采集器相关索引 ************
 -- 节点表索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_node_id ON t_cloud_nodes(c_node_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_type ON t_cloud_nodes(c_node_type);
-
--- 任务配置表索引
-CREATE UNIQUE INDEX IF NOT EXISTS idx_task_config_task_id ON t_collector_task_config(c_task_id);
-CREATE INDEX IF NOT EXISTS idx_task_config_project_dataset ON t_collector_task_config(c_project_id, c_dataset_id);
-CREATE INDEX IF NOT EXISTS idx_task_config_task_type ON t_collector_task_config(c_task_type);
-CREATE INDEX IF NOT EXISTS idx_task_config_collector_type ON t_collector_task_config(c_collector_type);
-CREATE INDEX IF NOT EXISTS idx_task_config_source ON t_collector_task_config(c_source_name);
-CREATE INDEX IF NOT EXISTS idx_task_config_assignment ON t_collector_task_config(c_assignment_type);
-CREATE INDEX IF NOT EXISTS idx_task_config_enabled_priority ON t_collector_task_config(c_enabled, c_priority);
-
--- 任务实例表索引
-CREATE UNIQUE INDEX IF NOT EXISTS idx_task_instances_instance_id ON t_collector_task_instances(c_instance_id);
-CREATE INDEX IF NOT EXISTS idx_task_instances_task_node ON t_collector_task_instances(c_task_id, c_node_id);
-CREATE INDEX IF NOT EXISTS idx_task_instances_status_time ON t_collector_task_instances(c_status, c_ctime);
-CREATE INDEX IF NOT EXISTS idx_task_instances_node_status ON t_collector_task_instances(c_node_id, c_status);
-CREATE INDEX IF NOT EXISTS idx_task_instances_create_time ON t_collector_task_instances(c_ctime DESC);
-CREATE INDEX IF NOT EXISTS idx_task_instances_project_dataset ON t_collector_task_instances(c_project_id, c_dataset_id);
 
 -- ************ 创建云账户相关索引 ************
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_accounts_account_id_invalid ON t_cloud_accounts(c_account_id, c_invalid);
@@ -249,16 +177,6 @@ CREATE TRIGGER update_cloud_accounts_mtime AFTER UPDATE ON t_cloud_accounts BEGI
 DROP TRIGGER IF EXISTS update_scf_collector_nodes_mtime;
 CREATE TRIGGER update_scf_collector_nodes_mtime AFTER UPDATE ON t_cloud_nodes BEGIN 
     UPDATE t_cloud_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
-
--- 任务配置表更新触发器
-DROP TRIGGER IF EXISTS update_task_config_mtime;
-CREATE TRIGGER update_task_config_mtime AFTER UPDATE ON t_collector_task_config BEGIN 
-    UPDATE t_collector_task_config SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
-
--- 任务实例表更新触发器
-DROP TRIGGER IF EXISTS update_task_instances_mtime;
-CREATE TRIGGER update_task_instances_mtime AFTER UPDATE ON t_collector_task_instances BEGIN 
-    UPDATE t_collector_task_instances SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ============ 异步任务管理表设计 (Job-Task 模型) ============
 
@@ -357,6 +275,75 @@ DROP TRIGGER IF EXISTS update_node_task_snapshot_mtime;
 CREATE TRIGGER update_node_task_snapshot_mtime AFTER UPDATE ON t_node_task_snapshot BEGIN 
     UPDATE t_node_task_snapshot SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
+-- ============ 采集器任务规则系统表设计 ============
+
+-- ************ 采集任务规则表 ************
+CREATE TABLE IF NOT EXISTS t_collector_task_rules (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
+    c_rule_id TEXT NOT NULL, -- 规则唯一标识
+    c_data_type TEXT NOT NULL, -- 数据类型（kline/ticker/orderbook/trade/news/list等）
+    c_data_source TEXT NOT NULL DEFAULT '', -- 数据源名称（binance/okx等）
+    c_collect_params TEXT NOT NULL DEFAULT '{}', -- 采集参数（JSON：{intervals:["1m","5m"],depth:20, objects:["BTC-USDT","ETH-USDT"]}）
+    
+    -- 任务分配配置
+    c_assignment_type TEXT NOT NULL DEFAULT 'auto', -- 分配类型（auto=自动分配，fixed=固定节点，pattern=通配符匹配）
+    c_assigned_nodes TEXT NOT NULL DEFAULT '[]', -- 指定节点列表（JSON数组，fixed类型时使用）
+    c_node_pattern TEXT NOT NULL DEFAULT '', -- 节点匹配模式（pattern类型时使用，如：scf-collector-*）
+    
+    -- 任务状态
+    c_enabled TEXT NOT NULL DEFAULT 'true', -- 是否启用（"true"=启用，"false"=禁用）
+    
+    c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP -- 修改时间
+);
+
+-- ************ 采集任务实例表 ************
+CREATE TABLE IF NOT EXISTS t_collector_task_instances (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
+    c_task_id TEXT NOT NULL, -- 任务唯一标识
+    c_rule_id TEXT NOT NULL, -- 规则ID（关联规则表）
+    c_node_id TEXT NOT NULL, -- 执行节点ID
+    c_task_params TEXT NOT NULL DEFAULT '{}', -- 任务执行参数（JSON格式）
+    
+    -- 任务状态
+    c_status INTEGER NOT NULL DEFAULT 0, -- 状态（0=待执行，1=执行中，2=成功，3=部分失败，4=失败）
+    c_start_time DATETIME, -- 开始时间
+    c_end_time DATETIME, -- 结束时间
+    c_result TEXT NOT NULL DEFAULT '{}', -- 执行结果（JSON格式）
+    
+    c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP -- 修改时间
+);
+
+-- ************ 创建采集任务规则相关索引 ************
+-- 任务规则表索引
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_task_rules_rule_id ON t_collector_task_rules(c_rule_id);
+CREATE INDEX IF NOT EXISTS idx_collector_task_rules_data_type ON t_collector_task_rules(c_data_type);
+CREATE INDEX IF NOT EXISTS idx_collector_task_rules_data_source ON t_collector_task_rules(c_data_source);
+CREATE INDEX IF NOT EXISTS idx_collector_task_rules_assignment_type ON t_collector_task_rules(c_assignment_type);
+CREATE INDEX IF NOT EXISTS idx_collector_task_rules_enabled ON t_collector_task_rules(c_enabled);
+
+-- 任务实例表索引
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_task_instances_task_id ON t_collector_task_instances(c_task_id);
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_rule_id ON t_collector_task_instances(c_rule_id);
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_task_node ON t_collector_task_instances(c_task_id, c_node_id);
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_node_status ON t_collector_task_instances(c_node_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_status ON t_collector_task_instances(c_status);
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_create_time ON t_collector_task_instances(c_ctime DESC);
+
+-- ************ 创建采集任务规则相关触发器 ************
+-- 任务规则表更新触发器
+DROP TRIGGER IF EXISTS update_collector_task_rules_mtime;
+CREATE TRIGGER update_collector_task_rules_mtime AFTER UPDATE ON t_collector_task_rules BEGIN 
+    UPDATE t_collector_task_rules SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+
+-- 任务实例表更新触发器
+DROP TRIGGER IF EXISTS update_collector_task_instances_mtime;
+CREATE TRIGGER update_collector_task_instances_mtime AFTER UPDATE ON t_collector_task_instances BEGIN 
+    UPDATE t_collector_task_instances SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+
 -- ============ 心跳服务表设计 ============
 
 -- ************ 心跳节点主表 ************
@@ -439,29 +426,6 @@ CREATE TABLE IF NOT EXISTS t_function_packages (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                     -- 修改时间
 );
 
--- ************ 云函数部署记录表 ************
-CREATE TABLE IF NOT EXISTS t_function_deployments (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,               -- 主键ID
-    c_package_id TEXT NOT NULL,                                    -- 代码包ID(11位随机字符串)
-    c_cloud_account_id TEXT NOT NULL,                              -- 云账户ID
-    c_function_name TEXT NOT NULL,                                 -- 函数名
-    c_namespace TEXT DEFAULT 'default',                            -- 命名空间
-
-    -- 部署配置
-    c_environment TEXT DEFAULT '{}',                               -- 环境变量(JSON格式)
-
-    -- 部署状态
-    c_deploy_status INTEGER DEFAULT 0,                             -- 部署状态: 0=进行中, 1=成功, 2=失败
-    c_deploy_message TEXT DEFAULT '',                              -- 部署结果信息
-
-    c_invalid INTEGER NOT NULL DEFAULT 0,                          -- 删除标记
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                    -- 创建时间
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,                    -- 修改时间
-
-    FOREIGN KEY (c_package_id) REFERENCES t_function_packages(c_package_id),
-    FOREIGN KEY (c_cloud_account_id) REFERENCES t_cloud_accounts(c_account_id)
-);
-
 -- ************ 创建云函数代码包相关索引 ************
 -- 代码包表索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_function_packages_package_id ON t_function_packages(c_package_id);
@@ -472,22 +436,10 @@ CREATE INDEX IF NOT EXISTS idx_function_packages_package_type ON t_function_pack
 CREATE INDEX IF NOT EXISTS idx_function_packages_ctime ON t_function_packages(c_ctime);
 CREATE INDEX IF NOT EXISTS idx_function_packages_invalid ON t_function_packages(c_invalid);
 
--- 部署记录表索引
-CREATE INDEX IF NOT EXISTS idx_function_deployments_package_id ON t_function_deployments(c_package_id);
-CREATE INDEX IF NOT EXISTS idx_function_deployments_account_id ON t_function_deployments(c_cloud_account_id);
-CREATE INDEX IF NOT EXISTS idx_function_deployments_deploy_status ON t_function_deployments(c_deploy_status);
-CREATE INDEX IF NOT EXISTS idx_function_deployments_function_name ON t_function_deployments(c_function_name);
-CREATE INDEX IF NOT EXISTS idx_function_deployments_ctime ON t_function_deployments(c_ctime);
-CREATE INDEX IF NOT EXISTS idx_function_deployments_invalid ON t_function_deployments(c_invalid);
-
 -- ************ 创建云函数代码包相关触发器 ************
 -- 代码包表更新触发器
 DROP TRIGGER IF EXISTS update_function_packages_mtime;
 CREATE TRIGGER update_function_packages_mtime AFTER UPDATE ON t_function_packages BEGIN 
     UPDATE t_function_packages SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
--- 部署记录表更新触发器
-DROP TRIGGER IF EXISTS update_function_deployments_mtime;
-CREATE TRIGGER update_function_deployments_mtime AFTER UPDATE ON t_function_deployments BEGIN 
-    UPDATE t_function_deployments SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 

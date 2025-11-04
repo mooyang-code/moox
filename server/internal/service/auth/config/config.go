@@ -40,15 +40,16 @@ type JWTConfig struct {
 
 // SecurityConfig 安全配置
 type SecurityConfig struct {
-	SaltExpired     time.Duration `yaml:"salt_expired"`      // 盐值过期时间
+	EncryptionKey   string        `yaml:"encryption_key"`   // 数据加密密钥
+	SaltExpired     time.Duration `yaml:"salt_expired"`     // 盐值过期时间
 	MaxLoginAttempt int           `yaml:"max_login_attempt"` // 最大登录尝试次数
 	LockDuration    time.Duration `yaml:"lock_duration"`     // 账户锁定时间
 }
 
 // LoadConfig 加载配置文件
 func LoadConfig() (*Config, error) {
-	// 读取配置文件
-	configPath := "./config/auth.yaml"
+	// 读取配置文件（认证服务配置已合并到gateway.yaml）
+	configPath := "./config/gateway.yaml"
 	yamlFile, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("读取配置文件失败: %+v", err)

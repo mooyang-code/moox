@@ -43,7 +43,7 @@ server:
       ######## DNS代理定时任务 ########
     - name: trpc.dnsproxy.timer
       port: 8001
-      network: "*/60 * * * * *?scheduler=dnsproxySchedule&startAtOnce=1&params="
+      network: "*/15 * * * * *?scheduler=dnsproxySchedule&startAtOnce=1&params="
       protocol: timer
       timeout: 5000
       ######## 健康检测定时任务 ########

@@ -12,7 +12,7 @@
 *.test
 
 
-.claude/
+**/.claude/
 log/
 data/
 # Code coverage profiles and other test artifacts
@@ -37,7 +37,7 @@ release/
 
 *.log
 
-trpc_go.yaml
+**/trpc_go.yaml
 
 # Editor/IDE
 # .idea/

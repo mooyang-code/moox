@@ -32,7 +32,7 @@ type HeartbeatProber struct {
 }
 
 // InitProberInstance 初始化全局探测器实例（供 bootstrap 调用）
-func InitProberInstance(dbManager *database.Manager, cfg *config.ProberConfig) {
+func InitProberInstance(dbManager *database.Manager, cloudNodeCfg *config.Config) {
 	proberInstanceOnce.Do(func() {
 		log.Info("[HeartbeatProber] Initializing global prober instance...")
 
@@ -40,7 +40,7 @@ func InitProberInstance(dbManager *database.Manager, cfg *config.ProberConfig) {
 		heartbeatDAO := dao.NewHeartbeatNodeDAO(dbManager.GetDB())
 
 		// 创建探测器实例
-		globalProberInstance = NewProber(heartbeatDAO, cfg)
+		globalProberInstance = NewProber(heartbeatDAO, &cloudNodeCfg.Prober)
 
 		// 将全局注册表中的探测器注册到 prober 实例
 		// 注意：RegisterDefaultProbers 需要在外部调用，确保探测器已注册

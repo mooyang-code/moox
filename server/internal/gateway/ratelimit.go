@@ -1,10 +1,9 @@
-package middleware
+package gateway
 
 import (
 	"context"
 	"sync"
 
-	gatewayConfig "github.com/mooyang-code/moox/server/internal/config"
 	"github.com/mooyang-code/moox/server/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
 
@@ -14,25 +13,21 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// RateLimitManager 流量控制管理器
-type RateLimitManager struct {
-	config *gatewayConfig.RateLimitConfig
-
-	// 全局限流器
-	globalLimiter *rate.Limiter
-
-	// 接口级别限流器
-	methodLimiters map[string]*rate.Limiter
-}
-
 // 全局流量控制管理器
 var (
 	rateLimitManager *RateLimitManager
 	rateLimitOnce    sync.Once
 )
 
+// RateLimitManager 流量控制管理器
+type RateLimitManager struct {
+	config         *RateLimitConfig
+	globalLimiter  *rate.Limiter            // 全局限流器
+	methodLimiters map[string]*rate.Limiter // 接口级别限流器
+}
+
 func init() {
-	// 注册流量控制中间件
+	// 注册流量控制 trpc 中间件
 	filter.Register("ratelimit", RateLimit(), nil)
 	log.Infof("流量控制中间件注册成功")
 }
@@ -47,11 +42,11 @@ func getRateLimitManager() *RateLimitManager {
 }
 
 // getDefaultRateLimitConfig 获取默认流量控制配置
-func getDefaultRateLimitConfig() *gatewayConfig.RateLimitConfig {
-	return &gatewayConfig.RateLimitConfig{
+func getDefaultRateLimitConfig() *RateLimitConfig {
+	return &RateLimitConfig{
 		DefaultQPS:   10,
 		DefaultBurst: 20,
-		MethodLimits: map[string]gatewayConfig.MethodLimit{
+		MethodLimits: map[string]MethodLimit{
 			"/gateway/auth/Login":        {QPS: 1, Burst: 2},  // 登录接口限制更严格
 			"/gateway/auth/Register":     {QPS: 2, Burst: 4},  // 注册接口限制更严格
 			"/gateway/auth/GetLoginSalt": {QPS: 2, Burst: 4},  // 获取盐值接口
@@ -61,11 +56,11 @@ func getDefaultRateLimitConfig() *gatewayConfig.RateLimitConfig {
 }
 
 // loadRateLimitConfig 加载流量控制配置
-func loadRateLimitConfig() *gatewayConfig.RateLimitConfig {
-	cfg, err := gatewayConfig.LoadConfig()
-	if err != nil {
-		log.Errorf("加载网关配置失败: %v", err)
-		// 使用默认配置
+func loadRateLimitConfig() *RateLimitConfig {
+	// 从gateway配置获取
+	cfg := GetConfig()
+	if cfg == nil {
+		log.Warn("网关配置未初始化，使用默认配置")
 		return getDefaultRateLimitConfig()
 	}
 
@@ -90,7 +85,7 @@ func loadRateLimitConfig() *gatewayConfig.RateLimitConfig {
 }
 
 // newRateLimitManager 创建流量控制管理器
-func newRateLimitManager(config *gatewayConfig.RateLimitConfig) *RateLimitManager {
+func newRateLimitManager(config *RateLimitConfig) *RateLimitManager {
 	manager := &RateLimitManager{
 		config:         config,
 		globalLimiter:  rate.NewLimiter(rate.Limit(config.DefaultQPS), config.DefaultBurst),
