@@ -23,7 +23,7 @@ type CollectorGatewayHandler struct {
 }
 
 // NewGatewayHandler 创建采集器网关处理器
-func NewGatewayHandler(taskRuleService collector.TaskRuleService, taskInstanceService collector.TaskInstanceService) *CollectorGatewayHandler {
+func NewGatewayHandler(taskRuleService collector.TaskRuleService, taskInstanceService collector.TaskInstanceService, dataTypeConfigService collector.DataTypeConfigService) *CollectorGatewayHandler {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 
@@ -33,9 +33,9 @@ func NewGatewayHandler(taskRuleService collector.TaskRuleService, taskInstanceSe
 	// API路由组（包含版本号）
 	api := engine.Group("/api/v1")
 
-	// 注册采集器路由（任务规则和任务实例）
-	collectorapi.RegisterCollectorRoutes(api, taskRuleService, taskInstanceService)
-	log.Info("[Collector Gateway] 采集器任务规则和任务实例路由注册成功")
+	// 注册采集器路由（任务规则、任务实例和数据类型配置）
+	collectorapi.RegisterCollectorRoutes(api, taskRuleService, taskInstanceService, dataTypeConfigService)
+	log.Info("[Collector Gateway] 采集器任务规则、任务实例和数据类型配置路由注册成功")
 
 	return &CollectorGatewayHandler{
 		engine:    engine,
@@ -92,7 +92,14 @@ func (h *CollectorGatewayHandler) parseMethodToRoute(method string, body []byte)
 		if len(body) > 0 {
 			var params map[string]interface{}
 			if err := json.Unmarshal(body, &params); err == nil {
-				if ruleID, ok := params["id"].(string); ok && ruleID != "" {
+				// Support both "id" and "rule_id" field names for backward compatibility
+				var ruleID string
+				if id, ok := params["id"].(string); ok && id != "" {
+					ruleID = id
+				} else if ruleIDField, ok := params["rule_id"].(string); ok && ruleIDField != "" {
+					ruleID = ruleIDField
+				}
+				if ruleID != "" {
 					route.Path = fmt.Sprintf("/api/v1/task-rule/%s", ruleID)
 				}
 			}
@@ -109,19 +116,33 @@ func (h *CollectorGatewayHandler) parseMethodToRoute(method string, body []byte)
 		if len(body) > 0 {
 			var params map[string]interface{}
 			if err := json.Unmarshal(body, &params); err == nil {
-				if ruleID, ok := params["id"].(string); ok && ruleID != "" {
+				// Support both "id" and "rule_id" field names for backward compatibility
+				var ruleID string
+				if id, ok := params["id"].(string); ok && id != "" {
+					ruleID = id
+				} else if ruleIDField, ok := params["rule_id"].(string); ok && ruleIDField != "" {
+					ruleID = ruleIDField
+				}
+				if ruleID != "" {
 					route.Path = fmt.Sprintf("/api/v1/task-rule/%s", ruleID)
 				}
 			}
 		}
-	case "DeleteTaskRule", "RemoveTaskRule":
+	case "DisableTaskRule":
 		route.Path = "/api/v1/task-rule"
 		route.HTTPMethod = "DELETE"
 		// Need to extract rule_id from body and add to path
 		if len(body) > 0 {
 			var params map[string]interface{}
 			if err := json.Unmarshal(body, &params); err == nil {
-				if ruleID, ok := params["id"].(string); ok && ruleID != "" {
+				// Support both "id" and "rule_id" field names for backward compatibility
+				var ruleID string
+				if id, ok := params["id"].(string); ok && id != "" {
+					ruleID = id
+				} else if ruleIDField, ok := params["rule_id"].(string); ok && ruleIDField != "" {
+					ruleID = ruleIDField
+				}
+				if ruleID != "" {
 					route.Path = fmt.Sprintf("/api/v1/task-rule/%s", ruleID)
 				}
 			}
@@ -194,6 +215,23 @@ func (h *CollectorGatewayHandler) parseMethodToRoute(method string, body []byte)
 			if err := json.Unmarshal(body, &params); err == nil {
 				if instanceID, ok := params["id"].(string); ok && instanceID != "" {
 					route.Path = fmt.Sprintf("/api/v1/task-instance/%s/stop", instanceID)
+				}
+			}
+		}
+
+	// Data Type Config methods (数据类型配置)
+	// 用于前端动态表单生成，根据数据类型获取参数字段配置
+	case "GetDataTypeConfigs", "ListDataTypeConfigs":
+		return h.buildMultiQueryRoute("/api/v1/data-type-config/list", body)
+	case "GetDataTypeConfigWithFields":
+		route.Path = "/api/v1/data-type-config"
+		route.HTTPMethod = "GET"
+		// Need to extract data_type from body and add to path
+		if len(body) > 0 {
+			var params map[string]interface{}
+			if err := json.Unmarshal(body, &params); err == nil {
+				if dataType, ok := params["data_type"].(string); ok && dataType != "" {
+					route.Path = fmt.Sprintf("/api/v1/data-type-config/%s", dataType)
 				}
 			}
 		}

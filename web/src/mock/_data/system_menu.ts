@@ -520,9 +520,9 @@ export const systemMenu = [
   {
     id: "0402",
     parentId: "04",
-    path: "/form/task-management",
+    path: "/form/collector-rules",
     name: "step-form",
-    component: "form/task-management/task-management",
+    component: "form/collector-rules/collector-rules",
     meta: {
       title: "step-form",
       hide: false,
@@ -1269,9 +1269,9 @@ export const systemMenuTmp = [
   {
     id: "0402",
     parentId: "04",
-    path: "/form/task-management",
+    path: "/form/collector-rules",
     name: "step-form",
-    component: "form/task-management/task-management",
+    component: "form/collector-rules/collector-rules",
     meta: {
       title: "step-form",
       hide: false,

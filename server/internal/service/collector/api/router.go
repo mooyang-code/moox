@@ -8,7 +8,7 @@ import (
 )
 
 // RegisterCollectorRoutes 注册采集器相关路由
-func RegisterCollectorRoutes(router *gin.RouterGroup, taskRuleService collector.TaskRuleService, taskInstanceService collector.TaskInstanceService) {
+func RegisterCollectorRoutes(router *gin.RouterGroup, taskRuleService collector.TaskRuleService, taskInstanceService collector.TaskInstanceService, dataTypeConfigService collector.DataTypeConfigService) {
 	// 采集任务规则路由
 	taskRuleHandler := NewCollectorTaskRuleHandler(taskRuleService)
 	taskRuleGroup := router.Group("/task-rule")
@@ -33,5 +33,13 @@ func RegisterCollectorRoutes(router *gin.RouterGroup, taskRuleService collector.
 		taskInstanceGroup.POST("/:id/stop", taskInstanceHandler.StopTaskInstance)
 	}
 
-	log.Info("[Collector] 采集器任务规则和任务实例路由注册完成")
+	// 采集器数据类型配置路由
+	dataTypeConfigHandler := NewCollectorDataTypeConfigHandler(dataTypeConfigService)
+	dataTypeConfigGroup := router.Group("/data-type-config")
+	{
+		dataTypeConfigGroup.GET("/list", dataTypeConfigHandler.GetDataTypeConfigs)
+		dataTypeConfigGroup.GET("/:data_type", dataTypeConfigHandler.GetDataTypeConfigWithFields)
+	}
+
+	log.Info("[Collector] 采集器任务规则、任务实例和数据类型配置路由注册完成")
 }

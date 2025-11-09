@@ -9,6 +9,11 @@ import (
 // APIResponse 使用统一的响应格式
 type APIResponse = common.UnifiedAPIResponse
 
+// CreateTaskRuleResponse 创建任务规则响应
+type CreateTaskRuleResponse struct {
+	RuleID string `json:"rule_id"`
+}
+
 // SchemaHandler 数据表读写接口
 type SchemaHandler interface {
 	SchemaID() string

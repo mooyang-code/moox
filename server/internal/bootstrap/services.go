@@ -26,8 +26,9 @@ type Services struct {
 	CloudNodeService cloudnode.Service
 
 	// Collector服务实例
-	TaskRuleService     collector.TaskRuleService
-	TaskInstanceService collector.TaskInstanceService
+	TaskRuleService       collector.TaskRuleService
+	TaskInstanceService   collector.TaskInstanceService
+	DataTypeConfigService collector.DataTypeConfigService
 }
 
 // StartBackgroundServices 启动所有后台服务
@@ -76,7 +77,7 @@ func initializeDatabase(dbPath string) (*database.Manager, error) {
 	return dbManager, nil
 }
 
-// createCoreServices 创建核心服务（只创建实例，不启动）
+// createCoreServices 创建核心服务
 func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, error) {
 	log.Info("[Bootstrap] 正在创建核心服务...")
 
@@ -96,12 +97,15 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	// 创建所需的DAO
 	taskRulesDAO := collectordao.NewCollectorTaskRulesDAO(dbManager.GetDB())
 	instanceDAO := collectordao.NewCollectorTaskInstanceDAO(dbManager.GetDB())
+	dataTypeConfigDAO := collectordao.NewCollectorDataTypeConfigsDAO(dbManager.GetDB())
+	fieldConfigDAO := collectordao.NewCollectorFieldConfigsDAO(dbManager.GetDB())
 	nodeDAO := cloudnodedao.NewCloudNodeDAO(dbManager.GetDB())
 	heartbeatDAO := cloudnodedao.NewHeartbeatNodeDAO(dbManager.GetDB())
-	
+
 	// 创建服务实例
 	taskRuleService := collector.NewTaskRulesServiceImpl(taskRulesDAO, nodeDAO)
 	taskInstanceService := collector.NewTaskInstanceServiceImpl(instanceDAO, taskRulesDAO, nodeDAO, heartbeatDAO)
+	dataTypeConfigService := collector.NewDataTypeConfigServiceImpl(dataTypeConfigDAO, fieldConfigDAO, dbManager.GetDB())
 
 	// 初始化DNSProxy实例（全局单例，供定时器使用）
 	log.Info("[Bootstrap] 正在初始化DNSProxy实例...")
@@ -109,11 +113,12 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 
 	log.Info("[Bootstrap] 核心服务创建完成")
 	return &Services{
-		DBManager:         dbManager,
-		AsyncTaskService:  asyncTaskService,
-		CloudNodeService:  cloudNodeService,
-		TaskRuleService:   taskRuleService,
-		TaskInstanceService: taskInstanceService,
+		DBManager:             dbManager,
+		AsyncTaskService:      asyncTaskService,
+		CloudNodeService:      cloudNodeService,
+		TaskRuleService:       taskRuleService,
+		TaskInstanceService:   taskInstanceService,
+		DataTypeConfigService: dataTypeConfigService,
 	}, nil
 }
 

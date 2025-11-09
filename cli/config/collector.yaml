@@ -1,0 +1,314 @@
+# 采集器数据类型配置和参数字段配置测试数据
+# 用于动态表单生成和参数模板配置
+
+t_collector_data_type_configs:
+  - c_id: 1
+    c_data_type: "kline"
+    c_type_name: "K线数据"
+    c_type_desc: "股票、期货等金融产品的K线数据采集配置，支持不同时间周期"
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 1
+    c_version: 1
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 2
+    c_data_type: "ticker"
+    c_type_name: "逐笔数据"
+    c_type_desc: "实时逐笔交易数据采集配置，提供高频交易数据"
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 2
+    c_version: 1
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 3
+    c_data_type: "orderbook"
+    c_type_name: "订单簿数据"
+    c_type_desc: "买卖盘深度数据采集配置，展示市场深度和价格层次"
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}]}'
+    c_sort_order: 3
+    c_version: 1
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 4
+    c_data_type: "trade"
+    c_type_name: "交易数据"
+    c_type_desc: "交易汇总数据采集配置，统计数据时间段内的交易情况"
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 4
+    c_version: 1
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 5
+    c_data_type: "news"
+    c_type_name: "新闻数据"
+    c_type_desc: "新闻资讯数据采集配置，收集和分析相关新闻信息"
+    c_data_source_options: '{"options": [{"value": "cryptonews", "label": "CryptoNews"}, {"value": "coindesk", "label": "CoinDesk"}, {"value": "cointelegraph", "label": "Cointelegraph"}, {"value": "decrypt", "label": "Decrypt"}, {"value": "theblock", "label": "The Block"}, {"value": "messari", "label": "Messari"}, {"value": "glassnode", "label": "Glassnode"}, {"value": "intoblock", "label": "IntoTheBlock"}]}'
+    c_sort_order: 5
+    c_version: 1
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+
+t_collector_field_configs:
+  # K线数据字段配置 (data_type: kline)
+  - c_id: 1
+    c_data_type: "kline"
+    c_field_key: "symbol"
+    c_field_name: "交易标的"
+    c_field_type: "text"
+    c_is_required: 1
+    c_default_value: "BTCUSDT"
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 1
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 2
+    c_data_type: "kline"
+    c_field_key: "intervals"
+    c_field_name: "时间周期"
+    c_field_type: "multi-select"
+    c_is_required: 1
+    c_default_value: '["1m","5m","1h"]'
+    c_field_options: '{"options": ["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d","3d","1w","1M"]}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 2
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 4
+    c_data_type: "kline"
+    c_field_key: "start_time"
+    c_field_name: "开始时间"
+    c_field_type: "datetime"
+    c_is_required: 0
+    c_default_value: ""
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 4
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 5
+    c_data_type: "kline"
+    c_field_key: "end_time"
+    c_field_name: "结束时间"
+    c_field_type: "datetime"
+    c_is_required: 0
+    c_default_value: ""
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 5
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+
+  # 逐笔数据字段配置 (data_type: ticker)
+  - c_id: 6
+    c_data_type: "ticker"
+    c_field_key: "symbol"
+    c_field_name: "交易标的"
+    c_field_type: "text"
+    c_is_required: 1
+    c_default_value: "BTCUSDT"
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 1
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 7
+    c_data_type: "ticker"
+    c_field_key: "limit"
+    c_field_name: "数量限制"
+    c_field_type: "number"
+    c_is_required: 0
+    c_default_value: "100"
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 2
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 8
+    c_data_type: "ticker"
+    c_field_key: "filter_0_volume"
+    c_field_name: "最小成交额"
+    c_field_type: "number"
+    c_is_required: 0
+    c_default_value: "0"
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 3
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+
+  # 订单簿数据字段配置 (data_type: orderbook)
+  - c_id: 9
+    c_data_type: "orderbook"
+    c_field_key: "symbol"
+    c_field_name: "交易标的"
+    c_field_type: "text"
+    c_is_required: 1
+    c_default_value: "BTCUSDT"
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}]}'
+    c_sort_order: 1
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 10
+    c_data_type: "orderbook"
+    c_field_key: "limit"
+    c_field_name: "档位数量"
+    c_field_type: "number"
+    c_is_required: 0
+    c_default_value: "100"
+    c_field_options: '{"min": 1, "max": 5000}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}]}'
+    c_sort_order: 2
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 11
+    c_data_type: "orderbook"
+    c_field_key: "depth"
+    c_field_name: "深度类型"
+    c_field_type: "select"
+    c_is_required: 0
+    c_default_value: "step0"
+    c_field_options: '{"options": [{"value": "step0", "label": "无深度合并"}, {"value": "step1", "label": "轻微深度合并"}, {"value": "step2", "label": "标准深度合并"}]}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}]}'
+    c_sort_order: 3
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+
+  # 交易数据字段配置 (data_type: trade)
+  - c_id: 12
+    c_data_type: "trade"
+    c_field_key: "symbol"
+    c_field_name: "交易标的"
+    c_field_type: "text"
+    c_is_required: 1
+    c_default_value: "BTCUSDT"
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 1
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 13
+    c_data_type: "trade"
+    c_field_key: "limit"
+    c_field_name: "数量限制"
+    c_field_type: "number"
+    c_is_required: 0
+    c_default_value: "100"
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 2
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 14
+    c_data_type: "trade"
+    c_field_key: "start_time"
+    c_field_name: "开始时间"
+    c_field_type: "datetime"
+    c_is_required: 0
+    c_default_value: ""
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 3
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 15
+    c_data_type: "trade"
+    c_field_key: "end_time"
+    c_field_name: "结束时间"
+    c_field_type: "datetime"
+    c_is_required: 0
+    c_default_value: ""
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 4
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+
+  # 新闻数据字段配置 (data_type: news)
+  - c_id: 16
+    c_data_type: "news"
+    c_field_key: "category"
+    c_field_name: "新闻分类"
+    c_field_type: "select"
+    c_is_required: 0
+    c_default_value: "general"
+    c_field_options: '{"options": [{"value": "general", "label": "综合"}, {"value": "crypto", "label": "加密货币"}, {"value": "finance", "label": "金融"}, {"value": "technology", "label": "科技"}]}'
+    c_data_source_options: '{"options": [{"value": "cryptonews", "label": "CryptoNews"}, {"value": "coindesk", "label": "CoinDesk"}, {"value": "cointelegraph", "label": "Cointelegraph"}, {"value": "decrypt", "label": "Decrypt"}, {"value": "theblock", "label": "The Block"}, {"value": "messari", "label": "Messari"}, {"value": "glassnode", "label": "Glassnode"}, {"value": "intoblock", "label": "IntoTheBlock"}]}'
+    c_sort_order: 1
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 17
+    c_data_type: "news"
+    c_field_key: "language"
+    c_field_name: "语言"
+    c_field_type: "select"
+    c_is_required: 0
+    c_default_value: "zh-CN"
+    c_field_options: '{"options": [{"value": "zh-CN", "label": "中文"}, {"value": "en-US", "label": "英文"}, {"value": "ja-JP", "label": "日文"}]}'
+    c_data_source_options: '{"options": [{"value": "cryptonews", "label": "CryptoNews"}, {"value": "coindesk", "label": "CoinDesk"}, {"value": "cointelegraph", "label": "Cointelegraph"}, {"value": "decrypt", "label": "Decrypt"}, {"value": "theblock", "label": "The Block"}, {"value": "messari", "label": "Messari"}, {"value": "glassnode", "label": "Glassnode"}, {"value": "intoblock", "label": "IntoTheBlock"}]}'
+    c_sort_order: 2
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 18
+    c_data_type: "news"
+    c_field_key: "limit"
+    c_field_name: "数量限制"
+    c_field_type: "number"
+    c_is_required: 0
+    c_default_value: "50"
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "cryptonews", "label": "CryptoNews"}, {"value": "coindesk", "label": "CoinDesk"}, {"value": "cointelegraph", "label": "Cointelegraph"}, {"value": "decrypt", "label": "Decrypt"}, {"value": "theblock", "label": "The Block"}, {"value": "messari", "label": "Messari"}, {"value": "glassnode", "label": "Glassnode"}, {"value": "intoblock", "label": "IntoTheBlock"}]}'
+    c_sort_order: 3
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+  - c_id: 19
+    c_data_type: "news"
+    c_field_key: "keywords"
+    c_field_name: "关键词"
+    c_field_type: "text"
+    c_is_required: 0
+    c_default_value: ""
+    c_field_options: '{}'
+    c_data_source_options: '{"options": [{"value": "cryptonews", "label": "CryptoNews"}, {"value": "coindesk", "label": "CoinDesk"}, {"value": "cointelegraph", "label": "Cointelegraph"}, {"value": "decrypt", "label": "Decrypt"}, {"value": "theblock", "label": "The Block"}, {"value": "messari", "label": "Messari"}, {"value": "glassnode", "label": "Glassnode"}, {"value": "intoblock", "label": "IntoTheBlock"}]}'
+    c_sort_order: 4
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"
+
+  # 额外扩展字段配置
+  - c_id: 20
+    c_data_type: "kline"
+    c_field_key: "data_source"
+    c_field_name: "数据源"
+    c_field_type: "select"
+    c_is_required: 1
+    c_default_value: "binance"
+    c_field_options: '{"options": [{"value": "binance", "label": "币安"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币"}]}'
+    c_data_source_options: '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}'
+    c_sort_order: 6
+    c_invalid: 0
+    c_ctime: "2024-01-01 00:00:00"
+    c_mtime: "2024-01-01 00:00:00"

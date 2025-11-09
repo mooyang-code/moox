@@ -249,9 +249,3 @@ func init() {
 	storageCmd.Flags().StringVar(&rowID, "row-id", "", "指定行ID")
 	storageCmd.Flags().Uint32Var(&maxLimit, "max-limit", 1000, "最大返回行数")
 }
-
-// eg:
-// ./moox storage --interface=set --project-id=1 --dataset-id=101 --object-id=BTCUSDT --freq=1H
-// ./moox storage --interface=get --project-id=1 --dataset-id=101 --object-id=BTCUSDT --freq=1H
-// ./moox storage --interface=search --project-id=1 --dataset-id=101 --object-id=BTCUSDT --freq=1H --start-time="2024-05-01 00:00:00" --end-time="2024-05-02 00:00:00"
-// ./moox storage --interface=search --project-id=1 --dataset-id=101 --object-id=BTCUSDT --freq=1H --data-path=dry-run

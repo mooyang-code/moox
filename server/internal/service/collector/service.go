@@ -9,24 +9,69 @@ import (
 type Service interface {
 	TaskRuleService
 	TaskInstanceService
+	DataTypeConfigService
+}
+
+// DataTypeConfigService 数据类型配置服务接口
+type DataTypeConfigService interface {
+	// GetDataTypeConfigs 获取所有数据类型配置
+	GetDataTypeConfigs(ctx context.Context) ([]*DataTypeConfigDTO, error)
+
+	// GetDataTypeConfigWithFields 获取数据类型配置及字段信息
+	GetDataTypeConfigWithFields(ctx context.Context, dataType string) (*DataTypeConfigDetailDTO, error)
+}
+
+// DataTypeConfigDTO 数据类型配置数据传输对象
+type DataTypeConfigDTO struct {
+	ID                 int       `json:"id"`
+	DataType           string    `json:"data_type"`
+	TypeName           string    `json:"type_name"`
+	TypeDesc           string    `json:"type_desc"`
+	DataSourceOptions  string    `json:"data_source_options"`
+	SortOrder          int       `json:"sort_order"`
+	Version            int       `json:"version"`
+	CreateTime         time.Time `json:"create_time"`
+	ModifyTime         time.Time `json:"modify_time"`
+}
+
+// DataTypeConfigDetailDTO 数据类型配置详情传输对象
+type DataTypeConfigDetailDTO struct {
+	Config *DataTypeConfigDTO    `json:"config"`
+	Fields []*FieldConfigDTO     `json:"fields"`
+}
+
+// FieldConfigDTO 字段配置数据传输对象
+type FieldConfigDTO struct {
+	ID               int       `json:"id"`
+	DataType         string    `json:"data_type"`
+	FieldKey         string    `json:"field_key"`
+	FieldName        string    `json:"field_name"`
+	FieldType        string    `json:"field_type"`
+	IsRequired       bool      `json:"is_required"`
+	DefaultValue     string    `json:"default_value"`
+	FieldOptions     string    `json:"field_options"`
+	DataSourceOptions string    `json:"data_source_options"`
+	SortOrder        int       `json:"sort_order"`
+	CreateTime       time.Time `json:"create_time"`
+	ModifyTime       time.Time `json:"modify_time"`
 }
 
 // TaskRuleService 任务规则服务接口
 type TaskRuleService interface {
 	// GetTaskRuleList 获取任务规则列表
-	GetTaskRuleList(ctx context.Context, dataType, dataSource string) ([]*TaskRuleDTO, error)
+	GetTaskRuleList(ctx context.Context, dataType, dataSource, enabled string) ([]*TaskRuleDTO, error)
 
 	// GetTaskRule 获取单个任务规则
 	GetTaskRule(ctx context.Context, ruleID string) (*TaskRuleDTO, error)
 
-	// CreateTaskRule 创建任务规则
-	CreateTaskRule(ctx context.Context, config *TaskRuleDTO) error
+	// CreateTaskRule 创建任务规则，返回生成的RuleID
+	CreateTaskRule(ctx context.Context, rule *TaskRuleDTO) (string, error)
 
 	// UpdateTaskRule 更新任务规则
-	UpdateTaskRule(ctx context.Context, config *TaskRuleDTO) error
+	UpdateTaskRule(ctx context.Context, rule *TaskRuleDTO) error
 
-	// RemoveTaskRule 删除任务规则
-	RemoveTaskRule(ctx context.Context, ruleID string) error
+	// DisableTaskRule 关闭任务规则（设置为禁用）
+	DisableTaskRule(ctx context.Context, ruleID string) error
 }
 
 // TaskInstanceService 任务实例服务接口
@@ -55,17 +100,18 @@ type TaskInstanceService interface {
 
 // TaskRuleDTO 任务规则数据传输对象
 type TaskRuleDTO struct {
-	ID             int
-	RuleID         string
-	DataType       string
-	DataSource     string
-	CollectParams  string
-	AssignmentType string
-	AssignedNodes  string
-	NodePattern    string
-	Enabled        string
-	CreateTime     time.Time
-	ModifyTime     time.Time
+	ID             int    `json:"id"`
+	RuleID         string `json:"rule_id"`
+	DataType       string `json:"data_type"`
+	DataSource     string `json:"data_source"`
+	CollectParams  string `json:"collect_params"`
+	AssignmentType string `json:"assignment_type"`
+	AssignedNodes  string `json:"assigned_nodes"`
+	NodePattern    string `json:"node_pattern"`
+	Enabled        string `json:"enabled"`
+	Creator        string `json:"creator"`
+	CreateTime     time.Time `json:"create_time"`
+	ModifyTime     time.Time `json:"modify_time"`
 }
 
 // TaskInstanceDTO 任务实例数据传输对象

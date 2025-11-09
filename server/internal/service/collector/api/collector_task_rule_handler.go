@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	apperrors "github.com/mooyang-code/moox/server/internal/errors"
 	"github.com/mooyang-code/moox/server/internal/service/collector"
 
@@ -24,9 +25,10 @@ func (h *CollectorTaskRuleHandler) GetTaskRuleList(c *gin.Context) {
 	// 获取查询参数
 	dataType := c.Query("data_type")
 	dataSource := c.Query("data_source")
+	enabled := c.Query("enabled")
 
 	// 调用service层获取数据
-	configs, err := h.service.GetTaskRuleList(c.Request.Context(), dataType, dataSource)
+	configs, err := h.service.GetTaskRuleList(c.Request.Context(), dataType, dataSource, enabled)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("查询失败", err))
 		return
@@ -65,14 +67,22 @@ func (h *CollectorTaskRuleHandler) CreateTaskRule(c *gin.Context) {
 		return
 	}
 
-	// 调用service层创建数据
-	err := h.service.CreateTaskRule(c.Request.Context(), &config)
+	// 清理可能的换行符和空白字符
+	config.CollectParams = cleanJSONString(config.CollectParams)
+	config.AssignedNodes = cleanJSONString(config.AssignedNodes)
+
+	// 调用service层创建数据，获取生成的RuleID
+	ruleID, err := h.service.CreateTaskRule(c.Request.Context(), &config)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("创建失败", err))
 		return
 	}
 
-	SuccessResponse(c, "创建成功", []interface{}{config})
+	// 返回生成的RuleID，包装在对象中
+	response := CreateTaskRuleResponse{
+		RuleID: ruleID,
+	}
+	SuccessResponse(c, "创建成功", response)
 }
 
 // UpdateTaskRule 更新任务规则
@@ -89,6 +99,10 @@ func (h *CollectorTaskRuleHandler) UpdateTaskRule(c *gin.Context) {
 		return
 	}
 
+	// 清理可能的换行符和空白字符
+	config.CollectParams = cleanJSONString(config.CollectParams)
+	config.AssignedNodes = cleanJSONString(config.AssignedNodes)
+
 	// 设置RuleID
 	config.RuleID = ruleID
 
@@ -102,7 +116,7 @@ func (h *CollectorTaskRuleHandler) UpdateTaskRule(c *gin.Context) {
 	SuccessResponse(c, "更新成功", []interface{}{config})
 }
 
-// DeleteTaskRule 删除任务规则
+// DeleteTaskRule 关闭任务规则（设置为禁用）
 func (h *CollectorTaskRuleHandler) DeleteTaskRule(c *gin.Context) {
 	ruleID := c.Param("id")
 	if ruleID == "" {
@@ -110,12 +124,26 @@ func (h *CollectorTaskRuleHandler) DeleteTaskRule(c *gin.Context) {
 		return
 	}
 
-	// 调用service层删除数据
-	err := h.service.RemoveTaskRule(c.Request.Context(), ruleID)
+	// 调用service层关闭任务规则
+	err := h.service.DisableTaskRule(c.Request.Context(), ruleID)
 	if err != nil {
-		HandleAppError(c, apperrors.Internal("删除失败", err))
+		HandleAppError(c, apperrors.Internal("关闭任务规则失败", err))
 		return
 	}
 
-	SuccessResponse(c, "删除成功", []interface{}{})
+	SuccessResponse(c, "关闭成功", []interface{}{})
+}
+
+// cleanJSONString 清理JSON字符串中的换行符和空白字符
+func cleanJSONString(jsonStr string) string {
+	if jsonStr == "" {
+		return jsonStr
+	}
+	// 去除所有换行符、制表符和回车符
+	cleaned := strings.ReplaceAll(jsonStr, "\n", "")
+	cleaned = strings.ReplaceAll(cleaned, "\r", "")
+	cleaned = strings.ReplaceAll(cleaned, "\t", "")
+	// 去除首尾空白字符
+	cleaned = strings.TrimSpace(cleaned)
+	return cleaned
 }

@@ -52,7 +52,7 @@ export default {
     ["service-status"]: "运行状态",
     ["form"]: "数据采集器",
     ["common-form"]: "云函数",
-    ["step-form"]: "任务管理",
+    ["step-form"]: "采集规则",
     ["task-instances"]: "任务实例",
     ["multilevel"]: "多级菜单",
     ["second-1"]: "二级菜单-1",

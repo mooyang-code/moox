@@ -8,11 +8,11 @@ import (
 )
 
 // RegisterCollectorGateway 注册采集器网关
-func RegisterCollectorGateway(taskRuleService collector.TaskRuleService, taskInstanceService collector.TaskInstanceService) {
+func RegisterCollectorGateway(taskRuleService collector.TaskRuleService, taskInstanceService collector.TaskInstanceService, dataTypeConfigService collector.DataTypeConfigService) {
 	log.Info("[Collector Gateway] 正在注册采集器网关...")
 	
 	// 创建网关处理器
-	handler := NewGatewayHandler(taskRuleService, taskInstanceService)
+	handler := NewGatewayHandler(taskRuleService, taskInstanceService, dataTypeConfigService)
 	
 	// 注册到全局网关系统
 	gw := gateway.GetGatewayHandleInstance()

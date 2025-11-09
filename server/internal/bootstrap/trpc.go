@@ -41,6 +41,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	collectorgateway.RegisterCollectorGateway(
 		services.TaskRuleService,
 		services.TaskInstanceService,
+		services.DataTypeConfigService,
 	)
 	log.Info("TRPC 服务注册完成")
 	return nil

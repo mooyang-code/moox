@@ -6,6 +6,7 @@ toolchain go1.24.1
 
 require (
 	github.com/avast/retry-go v3.0.0+incompatible
+	github.com/bwmarrin/snowflake v0.3.0
 	github.com/dgraph-io/badger/v4 v4.7.0
 	github.com/gin-gonic/gin v1.10.0
 	github.com/glebarez/sqlite v1.11.0
