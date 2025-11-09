@@ -113,10 +113,6 @@ func (h *CloudNodeGatewayHandler) parseMethodToRoute(method string, body []byte)
 		route.Path = "/api/v1/heartbeat/report"
 		route.HTTPMethod = "POST"
 		route.Body = body
-	case "BatchReportHeartbeat":
-		route.Path = "/api/v1/heartbeat/batch-report"
-		route.HTTPMethod = "POST"
-		route.Body = body
 	case "UpdateNodeFunction":
 		route.Path = "/api/v1/cloud_node/update_function"
 		route.HTTPMethod = "PUT"

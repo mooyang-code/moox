@@ -133,10 +133,7 @@ type HeartbeatService interface {
 	// ========== 心跳上报 ==========
 
 	// ReportHeartbeat 上报心跳
-	ReportHeartbeat(ctx context.Context, req *types.ReportHeartbeatRequest) error
-
-	// BatchReportHeartbeat 批量上报心跳
-	BatchReportHeartbeat(ctx context.Context, req *types.BatchReportHeartbeatRequest) error
+	ReportHeartbeat(ctx context.Context, req *types.ReportHeartbeatRequest) (*types.ReportHeartbeatResponse, error)
 
 	// ========== 节点管理 ==========
 

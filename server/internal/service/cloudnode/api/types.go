@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/mooyang-code/moox/server/internal/common"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
 )
 
 // APIResponse 使用统一的响应格式
@@ -38,6 +39,9 @@ var PaginatedListResponse = common.PaginatedListResponse
 // HeartbeatAPIResponse 心跳API响应（使用统一响应格式）
 type HeartbeatAPIResponse = common.UnifiedAPIResponse
 
+// ReportHeartbeatResponse 心跳上报响应（用于API文档）
+type ReportHeartbeatResponse = types.ReportHeartbeatResponse
+
 // HeartbeatReportRequest HTTP心跳上报请求
 type HeartbeatReportRequest struct {
 	NodeID        string                 `json:"node_id" binding:"required"`
@@ -46,11 +50,6 @@ type HeartbeatReportRequest struct {
 	Status        int                    `json:"status"`
 	Message       string                 `json:"message,omitempty"`
 	Metadata      map[string]interface{} `json:"metadata,omitempty"`
-}
-
-// BatchHeartbeatReportRequest HTTP批量心跳上报请求
-type BatchHeartbeatReportRequest struct {
-	Heartbeats []HeartbeatReportRequest `json:"heartbeats" binding:"required"`
 }
 
 // NodeRegisterRequest HTTP节点注册请求

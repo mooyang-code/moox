@@ -23,9 +23,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 
-	// 1.1 配置已通过 LoadConfigs 自动保存到全局变量中
-	log.InfoContextf(ctx, "全局配置已设置")
-
 	// 2. 启动后台服务
 	services, err := StartBackgroundServices(ctx, cfg)
 	if err != nil {
@@ -39,7 +36,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 
-	// 5. 注册定时器
+	// 4. 注册定时器
 	// 节点心跳探测定时器（仅探测异常超时节点）
 	timer.RegisterScheduler("healthProbeSchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service("trpc.healthProbe.timer"), cloudnode.HealthProbeSchedule)

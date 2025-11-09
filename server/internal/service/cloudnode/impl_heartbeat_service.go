@@ -12,39 +12,25 @@ import (
 
 // ========== 接收心跳上报请求 ==========
 
-// ReportHeartbeat 上报心跳
-func (s *ServiceImpl) ReportHeartbeat(ctx context.Context, req *types.ReportHeartbeatRequest) error {
+// ReportHeartbeat 客户端上报心跳
+func (s *ServiceImpl) ReportHeartbeat(ctx context.Context, req *types.ReportHeartbeatRequest) (*types.ReportHeartbeatResponse, error) {
 	if req == nil {
-		return fmt.Errorf("request is nil")
+		return nil, fmt.Errorf("request is nil")
 	}
 
 	if req.NodeID == "" || req.NodeType == "" {
-		return fmt.Errorf("node_id and node_type are required")
+		return nil, fmt.Errorf("node_id and node_type are required")
 	}
-
 	return s.handleHeartbeat(ctx, req)
 }
 
-// BatchReportHeartbeat 批量上报心跳
-func (s *ServiceImpl) BatchReportHeartbeat(ctx context.Context, req *types.BatchReportHeartbeatRequest) error {
-	if req == nil {
-		return fmt.Errorf("request is nil")
-	}
-
-	if len(req.Heartbeats) == 0 {
-		return fmt.Errorf("heartbeats list is empty")
-	}
-
-	return s.handleBatchHeartbeat(ctx, req)
-}
-
 // handleHeartbeat 处理心跳上报
-func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHeartbeatRequest) error {
+func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHeartbeatRequest) (*types.ReportHeartbeatResponse, error) {
 	log.InfoContextf(ctx, "handleHeartbeat Enter")
 	// 1. 查询或创建节点记录
 	record, err := s.heartbeatDAO.GetNodeByID(ctx, req.NodeID)
 	if err != nil {
-		return fmt.Errorf("query node record failed: %w", err)
+		return nil, fmt.Errorf("query node record failed: %w", err)
 	}
 
 	var isNew bool
@@ -88,31 +74,27 @@ func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHear
 	// 4. 保存到数据库
 	if isNew {
 		if err := s.heartbeatDAO.Create(ctx, record); err != nil {
-			return fmt.Errorf("create heartbeat record failed: %w", err)
+			return nil, fmt.Errorf("create heartbeat record failed: %w", err)
 		}
 	} else {
 		if err := s.heartbeatDAO.Update(ctx, record); err != nil {
-			return fmt.Errorf("update heartbeat record failed: %w", err)
+			return nil, fmt.Errorf("update heartbeat record failed: %w", err)
 		}
 	}
-	return nil
-}
 
-// handleBatchHeartbeat 处理批量心跳上报
-func (s *ServiceImpl) handleBatchHeartbeat(ctx context.Context, req *types.BatchReportHeartbeatRequest) error {
-	if len(req.Heartbeats) == 0 {
-		return nil
+	// 5. 获取包版本信息
+	packageVersion, err := s.getLatestPackageVersion(ctx, req.NodeID)
+	if err != nil {
+		log.WarnContextf(ctx, "获取包版本信息失败: %v", err)
+		// 版本信息获取失败不影响心跳上报，返回空版本
+		packageVersion = ""
 	}
 
-	// 串行处理批量心跳，避免并发问题
-	for _, heartbeat := range req.Heartbeats {
-		if err := s.handleHeartbeat(ctx, &heartbeat); err != nil {
-			// 记录错误但继续处理其他心跳
-			log.ErrorContextf(ctx, "[heartbeat] handle heartbeat failed for node %s:%s, error: %v",
-				heartbeat.NodeID, heartbeat.NodeType, err)
-		}
+	// 6. 返回包含版本信息的响应
+	response := &types.ReportHeartbeatResponse{
+		PackageVersion: packageVersion,
 	}
-	return nil
+	return response, nil
 }
 
 // createNewRecord 创建新的心跳记录
@@ -280,5 +262,29 @@ func (s *ServiceImpl) ProbeHeartbeatNode(ctx context.Context, nodeID, nodeType, 
 	return globalProberInstance.ProbeHeartbeatNode(ctx, record, action)
 }
 
-// ========== 服务控制 ==========
+// ========== 版本信息查询 ==========
 
+// getLatestPackageVersion 获取节点最新包版本信息
+func (s *ServiceImpl) getLatestPackageVersion(ctx context.Context, nodeID string) (string, error) {
+	// 从 nodeDAO 中获取包ID
+	node, err := s.nodeDAO.GetCloudNode(ctx, nodeID)
+	if err != nil {
+		log.ErrorContextf(ctx, "获取节点信息失败: %v", err)
+		return "", err
+	}
+	if node == nil || node.PackageID == "" {
+		// 节点不存在或没有包ID，返回空版本
+		return "", nil
+	}
+
+	// 从 packageDAO 中获取包版本信息
+	pkg, err := s.packageDAO.GetByID(ctx, node.PackageID)
+	if err != nil {
+		log.ErrorContextf(ctx, "获取包信息失败: %v", err)
+		return "", err
+	}
+	if pkg == nil {
+		return "", nil
+	}
+	return pkg.Version, nil
+}

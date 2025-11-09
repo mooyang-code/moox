@@ -70,7 +70,6 @@ func RegisterHeartbeatRoutes(r *gin.RouterGroup, heartbeatService cloudnodemgr.H
 	{
 		// 心跳上报
 		heartbeatGroup.POST("/report", heartbeatHandler.ReportHeartbeat)
-		heartbeatGroup.POST("/batch-report", heartbeatHandler.BatchReportHeartbeat)
 
 		// 节点管理
 		nodeGroup := heartbeatGroup.Group("/nodes")

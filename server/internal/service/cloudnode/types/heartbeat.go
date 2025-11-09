@@ -66,9 +66,9 @@ type ReportHeartbeatRequest struct {
 	Metadata      map[string]interface{} `json:"metadata"`
 }
 
-// BatchReportHeartbeatRequest 批量上报心跳请求
-type BatchReportHeartbeatRequest struct {
-	Heartbeats []ReportHeartbeatRequest `json:"heartbeats" binding:"required"`
+// ReportHeartbeatResponse 心跳上报响应
+type ReportHeartbeatResponse struct {
+	PackageVersion string `json:"package_version"` // 包版本信息
 }
 
 // RegisterNodeRequest 注册节点请求
