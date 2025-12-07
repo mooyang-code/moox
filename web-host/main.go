@@ -253,8 +253,8 @@ func main() {
 	})
 
 	// 启动服务器
-	log.Println("服务器启动在 http://localhost:9527")
+	log.Println("服务器启动在 http://localhost:19527")
 	log.Println("静态文件服务: /")
 	log.Println("API代理转发: /gateway/* -> http://localhost:20103/gateway/*")
-	log.Fatal(http.ListenAndServe(":9527", nil))
+	log.Fatal(http.ListenAndServe(":19527", nil))
 }

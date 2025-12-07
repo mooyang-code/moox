@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_node_type TEXT NOT NULL DEFAULT 'scf', -- 节点类型（scf=云函数，server=服务器）
     c_region TEXT NOT NULL DEFAULT '', -- 部署地区（如：ap-guangzhou）
     c_ip_address TEXT NOT NULL DEFAULT '', -- IP地址
-    c_supported_collectors TEXT NOT NULL DEFAULT '[]', -- 支持的采集器类型（JSON数组）
+    c_supported_collectors TEXT NOT NULL DEFAULT '[]', -- 支持的采集器类型（JSON数组:["kline"]）
     c_metadata TEXT NOT NULL DEFAULT '{}', -- 节点额外信息（JSON格式）
     c_timeout_threshold INTEGER DEFAULT 35, -- 超时阈值（秒），0表示使用全局默认值
     c_heartbeat_interval INTEGER DEFAULT 10, -- 心跳间隔（秒），0表示使用全局默认值
@@ -231,24 +231,6 @@ DROP TRIGGER IF EXISTS update_async_job_tasks_mtime;
 CREATE TRIGGER update_async_job_tasks_mtime AFTER UPDATE ON t_async_job_tasks BEGIN 
     UPDATE t_async_job_tasks SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
--- ************ 节点心跳表 ************
-CREATE TABLE t_node_heartbeat (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
-    c_node_id TEXT NOT NULL,                                   -- 节点ID
-    c_last_heartbeat DATETIME NOT NULL,                        -- 最后心跳时间
-    c_task_version INTEGER DEFAULT 0,                          -- 任务版本号
-    c_task_hash TEXT DEFAULT '',                               -- 任务哈希值
-    c_status INTEGER DEFAULT 1,                                -- 节点状态: 1=正常,0=离线
-    c_metrics TEXT,                                             -- 节点指标信息（JSON）
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 更新时间
-);
-
--- 节点心跳表索引
-CREATE UNIQUE INDEX idx_node_heartbeat_node_id ON t_node_heartbeat(c_node_id);
-CREATE INDEX idx_node_heartbeat_time ON t_node_heartbeat(c_last_heartbeat);
-CREATE INDEX idx_node_heartbeat_status ON t_node_heartbeat(c_status);
-
 -- ************ 节点任务快照表 ************
 CREATE TABLE t_node_task_snapshot (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
@@ -264,11 +246,6 @@ CREATE TABLE t_node_task_snapshot (
 -- 节点任务快照表索引
 CREATE INDEX idx_node_task_snapshot_node_task ON t_node_task_snapshot(c_node_id, c_task_id);
 CREATE INDEX idx_node_task_snapshot_sync_time ON t_node_task_snapshot(c_sync_time);
-
--- 节点心跳表更新触发器
-DROP TRIGGER IF EXISTS update_node_heartbeat_mtime;
-CREATE TRIGGER update_node_heartbeat_mtime AFTER UPDATE ON t_node_heartbeat BEGIN 
-    UPDATE t_node_heartbeat SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 节点任务快照表更新触发器
 DROP TRIGGER IF EXISTS update_node_task_snapshot_mtime;
@@ -303,15 +280,16 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_task_id TEXT NOT NULL, -- 任务唯一标识
     c_rule_id TEXT NOT NULL, -- 规则ID（关联规则表）
     c_node_id TEXT NOT NULL, -- 执行节点ID
-    c_task_params TEXT NOT NULL DEFAULT '{}', -- 任务执行参数（JSON格式）
-    
+    c_symbol TEXT NOT NULL DEFAULT '', -- 标的符号（交易对，如：BTC-USDT，空字符串表示不按标的拆分）
+    c_task_params TEXT NOT NULL DEFAULT '{}', -- 任务执行参数（JSON格式:{"symbol":"BTCUSDT","intervals":["1m","5m","1h"],"limit":100}）
+
     -- 任务状态
     c_status INTEGER NOT NULL DEFAULT 0, -- 状态（0=待执行，1=执行中，2=成功，3=部分失败，4=失败）
     c_start_time DATETIME, -- 开始时间
     c_end_time DATETIME, -- 结束时间
     c_result TEXT NOT NULL DEFAULT '{}', -- 执行结果（JSON格式）
-    
-    c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
+
+    c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记（软删除：0=有效，1=已删除）
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP -- 修改时间
 );
@@ -327,9 +305,11 @@ CREATE INDEX IF NOT EXISTS idx_collector_task_rules_enabled ON t_collector_task_
 -- 任务实例表索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_task_instances_task_id ON t_collector_task_instances(c_task_id);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_rule_id ON t_collector_task_instances(c_rule_id);
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_rule_node_symbol ON t_collector_task_instances(c_rule_id, c_node_id, c_symbol); -- 用于增量同步的唯一性判断
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_task_node ON t_collector_task_instances(c_task_id, c_node_id);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_node_status ON t_collector_task_instances(c_node_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_status ON t_collector_task_instances(c_status);
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_invalid ON t_collector_task_instances(c_invalid); -- 用于过滤软删除记录
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_create_time ON t_collector_task_instances(c_ctime DESC);
 
 -- ************ 创建采集任务规则相关触发器 ************

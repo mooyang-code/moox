@@ -6,8 +6,8 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/asynctask"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode"
 	cloudnodedao "github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
-	"github.com/mooyang-code/moox/server/internal/service/collector"
-	collectordao "github.com/mooyang-code/moox/server/internal/service/collector/dao"
+	"github.com/mooyang-code/moox/server/internal/service/collectmgr"
+	collectordao "github.com/mooyang-code/moox/server/internal/service/collectmgr/dao"
 	"github.com/mooyang-code/moox/server/internal/service/database"
 	"github.com/mooyang-code/moox/server/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/server/internal/service/fileserver"
@@ -26,9 +26,9 @@ type Services struct {
 	CloudNodeService cloudnode.Service
 
 	// Collector服务实例
-	TaskRuleService       collector.TaskRuleService
-	TaskInstanceService   collector.TaskInstanceService
-	DataTypeConfigService collector.DataTypeConfigService
+	TaskRuleService       collectmgr.TaskRuleService
+	TaskInstanceService   collectmgr.TaskInstanceService
+	DataTypeConfigService collectmgr.DataTypeConfigService
 }
 
 // StartBackgroundServices 启动所有后台服务
@@ -93,6 +93,10 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	log.Info("[Bootstrap] 正在初始化心跳探测器...")
 	cloudnode.InitProberInstance(dbManager, cfg.CloudNode)
 
+	// 初始化任务规划器（全局单例，供定时器使用）
+	log.Info("[Bootstrap] 正在初始化任务规划器...")
+	collectmgr.InitTaskPlannerInstance(dbManager)
+
 	// 创建Collector服务实例
 	// 创建所需的DAO
 	taskRulesDAO := collectordao.NewCollectorTaskRulesDAO(dbManager.GetDB())
@@ -102,10 +106,13 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	nodeDAO := cloudnodedao.NewCloudNodeDAO(dbManager.GetDB())
 	heartbeatDAO := cloudnodedao.NewHeartbeatNodeDAO(dbManager.GetDB())
 
+	// 获取任务规划器实例
+	taskPlanner := collectmgr.GetTaskPlannerInstance()
+
 	// 创建服务实例
-	taskRuleService := collector.NewTaskRulesServiceImpl(taskRulesDAO, nodeDAO)
-	taskInstanceService := collector.NewTaskInstanceServiceImpl(instanceDAO, taskRulesDAO, nodeDAO, heartbeatDAO)
-	dataTypeConfigService := collector.NewDataTypeConfigServiceImpl(dataTypeConfigDAO, fieldConfigDAO, dbManager.GetDB())
+	taskRuleService := collectmgr.NewTaskRulesServiceImpl(taskRulesDAO, nodeDAO, taskPlanner)
+	taskInstanceService := collectmgr.NewTaskInstanceServiceImpl(instanceDAO, taskRulesDAO, nodeDAO, heartbeatDAO)
+	dataTypeConfigService := collectmgr.NewDataTypeConfigServiceImpl(dataTypeConfigDAO, fieldConfigDAO, dbManager.GetDB())
 
 	// 初始化DNSProxy实例（全局单例，供定时器使用）
 	log.Info("[Bootstrap] 正在初始化DNSProxy实例...")

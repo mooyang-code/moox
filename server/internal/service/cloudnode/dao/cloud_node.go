@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
@@ -41,6 +42,19 @@ type CloudNodeDAO interface {
 
 	// GetNamespaceStats 获取命名空间统计信息
 	GetNamespaceStats(ctx context.Context, region string) (map[string]int, error)
+
+	// ========== 任务分配相关查询 ==========
+
+	// GetNodesBySupportedCollector 获取支持指定采集器类型的节点
+	// 查询条件：c_supported_collectors 包含指定的 collectorType
+	GetNodesBySupportedCollector(ctx context.Context, collectorType string) ([]*model.CloudNode, error)
+
+	// GetNodesByPattern 根据节点ID通配符匹配获取节点
+	// pattern 中的 * 会被转换为 SQL LIKE 的 %
+	GetNodesByPattern(ctx context.Context, pattern string) ([]*model.CloudNode, error)
+
+	// GetNodesByIDs 根据节点ID列表获取节点
+	GetNodesByIDs(ctx context.Context, nodeIDs []string) ([]*model.CloudNode, error)
 
 	// ========== 节点管理 ==========
 
@@ -276,4 +290,63 @@ func (d *cloudNodeDaoImpl) UpdateNodePackageID(ctx context.Context, nodeID strin
 		return fmt.Errorf("failed to update node package_id: %w", result.Error)
 	}
 	return nil
+}
+
+// GetNodesBySupportedCollector 获取支持指定采集器类型的节点
+// 查询条件：c_supported_collectors 包含指定的 collectorType（JSON数组格式）
+func (d *cloudNodeDaoImpl) GetNodesBySupportedCollector(ctx context.Context, collectorType string) ([]*model.CloudNode, error) {
+	var nodes []*model.CloudNode
+	// c_supported_collectors 是 JSON 数组格式，如：["kline", "ticker"]
+	// 使用 LIKE 查询包含指定类型的节点
+	pattern := fmt.Sprintf("%%\"%s\"%%", collectorType)
+	result := d.db.WithContext(ctx).
+		Where("c_supported_collectors LIKE ? AND c_invalid = ?", pattern, 0).
+		Order("c_mtime DESC").
+		Find(&nodes)
+
+	if result.Error != nil {
+		return nil, fmt.Errorf("failed to get nodes by supported collector: %w", result.Error)
+	}
+	return nodes, nil
+}
+
+// GetNodesByPattern 根据节点ID通配符匹配获取节点
+// pattern 中的 * 会被转换为 SQL LIKE 的 %
+func (d *cloudNodeDaoImpl) GetNodesByPattern(ctx context.Context, pattern string) ([]*model.CloudNode, error) {
+	var nodes []*model.CloudNode
+	// 将通配符 * 转换为 SQL LIKE 的 %
+	sqlPattern := pattern
+	// 如果 pattern 不包含 % 或 *，则不做转换（精确匹配）
+	// 如果包含 *，则转换为 %
+	if pattern != "" {
+		sqlPattern = strings.ReplaceAll(pattern, "*", "%")
+	}
+
+	result := d.db.WithContext(ctx).
+		Where("c_node_id LIKE ? AND c_invalid = ?", sqlPattern, 0).
+		Order("c_mtime DESC").
+		Find(&nodes)
+
+	if result.Error != nil {
+		return nil, fmt.Errorf("failed to get nodes by pattern: %w", result.Error)
+	}
+	return nodes, nil
+}
+
+// GetNodesByIDs 根据节点ID列表获取节点
+func (d *cloudNodeDaoImpl) GetNodesByIDs(ctx context.Context, nodeIDs []string) ([]*model.CloudNode, error) {
+	if len(nodeIDs) == 0 {
+		return []*model.CloudNode{}, nil
+	}
+
+	var nodes []*model.CloudNode
+	result := d.db.WithContext(ctx).
+		Where("c_node_id IN ? AND c_invalid = ?", nodeIDs, 0).
+		Order("c_mtime DESC").
+		Find(&nodes)
+
+	if result.Error != nil {
+		return nil, fmt.Errorf("failed to get nodes by IDs: %w", result.Error)
+	}
+	return nodes, nil
 }

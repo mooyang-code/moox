@@ -5,7 +5,7 @@ import (
 	asynctaskgateway "github.com/mooyang-code/moox/server/internal/service/asynctask/gateway"
 	authsvr "github.com/mooyang-code/moox/server/internal/service/auth"
 	cloudnodegateway "github.com/mooyang-code/moox/server/internal/service/cloudnode/gateway"
-	collectorgateway "github.com/mooyang-code/moox/server/internal/service/collector/gateway"
+	collectorgateway "github.com/mooyang-code/moox/server/internal/service/collectmgr/gateway"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
 
 	"trpc.group/trpc-go/trpc-go/log"
