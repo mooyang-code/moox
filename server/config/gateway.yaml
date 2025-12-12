@@ -46,7 +46,7 @@ gateway:
     - "/gateway/auth/GetLoginSalt"
     - "/gateway/auth/Login"
     - "/gateway/cloudnode/ReportHeartbeatInner"
-    - "/gateway/collector/GetTaskInstanceListInner"
+    - "/gateway/collectmgr/GetTaskInstanceListInner"
 
   # 服务配置映射【仅trpc服务才配置】
   services:

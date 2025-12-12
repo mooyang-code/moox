@@ -7,6 +7,7 @@ import (
 	cloudnodemodel "github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/dto"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/model"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // KlineDistributor K线分配器
@@ -25,23 +26,32 @@ func (d *KlineDistributor) GetDataType() string {
 }
 
 // GetTargetObjects 获取目标对象列表（交易对）
+// 支持通配符匹配:
+//   - "*" 表示全部对象
+//   - "BTC-*" 匹配所有以 BTC- 开头的交易对
+//   - "*-USDT" 匹配所有以 -USDT 结尾的交易对
 func (d *KlineDistributor) GetTargetObjects(ctx context.Context, rule *dto.TaskRuleDTO) ([]string, error) {
-	// 1. 从规则参数解析 objects
+	// 1. 从规则参数解析 objects（可能包含通配符）
 	params, err := d.base.ParseCollectParams(rule.CollectParams)
 	if err != nil {
 		return nil, err
 	}
-	objectsFromRule := params.Objects
 
-	// 2. 从 SymbolProvider 获取动态标的（可选）
-	objectsFromProvider, err := d.base.GetSymbolProvider().GetSymbols(ctx, rule.DataSource)
+	// 2. 从 SymbolProvider 获取所有可用标的
+	allSymbols, err := d.base.GetSymbolProvider().GetSymbols(ctx, rule.DataSource)
 	if err != nil {
-		// 获取失败不影响，使用规则中的对象
-		objectsFromProvider = []string{}
+		allSymbols = []string{}
+	}
+	log.InfoContextf(ctx, "DataSource:%+v; params.Objects:%+v; allSymbols : %+v",
+		rule.DataSource, params.Objects, allSymbols)
+
+	// 3. 如果规则没有指定 objects，返回所有可用标的
+	if len(params.Objects) == 0 {
+		return allSymbols, nil
 	}
 
-	// 3. 合并去重
-	return MergeUnique(objectsFromRule, objectsFromProvider), nil
+	// 4. 解析通配符模式，返回匹配的对象
+	return ResolveObjectPatterns(params.Objects, allSymbols), nil
 }
 
 // BuildTaskParams 为指定对象构建任务参数
@@ -52,10 +62,10 @@ func (d *KlineDistributor) BuildTaskParams(ctx context.Context, rule *dto.TaskRu
 	}
 
 	taskParams := TaskParams{
+		DataType:   rule.DataType,
+		DataSource: rule.DataSource,
 		Symbol:     object,
 		Intervals:  params.Intervals,
-		Limit:      params.Limit,
-		DataSource: rule.DataSource,
 	}
 
 	data, err := json.Marshal(taskParams)

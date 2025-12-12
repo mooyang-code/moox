@@ -39,9 +39,10 @@ func (d *NewsDistributor) BuildTaskParams(ctx context.Context, rule *dto.TaskRul
 	}
 
 	taskParams := TaskParams{
+		DataType:   rule.DataType,
+		DataSource: rule.DataSource,
 		Sources:    params.Sources,
 		Keywords:   params.Keywords,
-		DataSource: rule.DataSource,
 	}
 
 	data, err := json.Marshal(taskParams)

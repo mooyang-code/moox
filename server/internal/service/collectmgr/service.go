@@ -84,8 +84,16 @@ type TaskInstanceService interface {
 	// GetTaskInstance 获取任务实例
 	GetTaskInstance(ctx context.Context, instanceID string) (*TaskInstanceDTO, error)
 
-	// GetTaskInstanceList 获取任务实例列表
+	// GetTaskInstanceList 获取任务实例列表（旧接口，保留兼容）
 	GetTaskInstanceList(ctx context.Context, nodeID string, limit, offset int) ([]*TaskInstanceDTO, error)
+
+	// ListTaskInstances 分页查询任务实例
+	// nodeID: 可选，按节点筛选
+	// ruleID: 可选，按规则筛选
+	// page: 页码（从1开始）
+	// size: 每页数量
+	// 返回: 实例列表、总数、错误
+	ListTaskInstances(ctx context.Context, nodeID, ruleID string, page, size int) ([]*TaskInstanceDTO, int64, error)
 
 	// UpdateTaskInstance 更新任务实例
 	UpdateTaskInstance(ctx context.Context, instanceID string, instance *TaskInstanceDTO) error

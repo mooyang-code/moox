@@ -49,7 +49,17 @@ type CollectorTaskInstanceDAO interface {
 	
 	// GetTaskInstancesByStatus 根据状态获取任务实例
 	GetTaskInstancesByStatus(ctx context.Context, status []int) ([]*model.CollectorTaskInstance, error)
-	
+
+	// ========== 分页查询 ==========
+
+	// ListInstancesWithPagination 分页查询任务实例
+	// nodeID: 可选，按节点筛选
+	// ruleID: 可选，按规则筛选
+	// page: 页码（从1开始）
+	// size: 每页数量
+	// 返回: 实例列表、总数、错误
+	ListInstancesWithPagination(ctx context.Context, nodeID, ruleID string, page, size int) ([]*model.CollectorTaskInstance, int64, error)
+
 	// ========== 状态更新 ==========
 	
 	// UpdateInstanceStatus 更新实例状态
@@ -536,4 +546,44 @@ func (d *collectorTaskInstanceDaoImpl) BatchInvalidate(ctx context.Context, task
 		return fmt.Errorf("failed to batch invalidate instances: %w", result.Error)
 	}
 	return nil
+}
+
+// ListInstancesWithPagination 分页查询任务实例
+func (d *collectorTaskInstanceDaoImpl) ListInstancesWithPagination(ctx context.Context, nodeID, ruleID string, page, size int) ([]*model.CollectorTaskInstance, int64, error) {
+	// 参数校验
+	if page < 1 {
+		page = 1
+	}
+	if size <= 0 {
+		size = 10
+	}
+	if size > 100 {
+		size = 100
+	}
+
+	var instances []*model.CollectorTaskInstance
+	var total int64
+
+	// 构建查询条件
+	query := d.db.WithContext(ctx).Model(&model.CollectorTaskInstance{}).Where("c_invalid = ?", 0)
+
+	if nodeID != "" {
+		query = query.Where("c_node_id = ?", nodeID)
+	}
+	if ruleID != "" {
+		query = query.Where("c_rule_id = ?", ruleID)
+	}
+
+	// 查询总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("failed to count instances: %w", err)
+	}
+
+	// 分页查询
+	offset := (page - 1) * size
+	if err := query.Order("c_ctime DESC").Offset(offset).Limit(size).Find(&instances).Error; err != nil {
+		return nil, 0, fmt.Errorf("failed to list instances: %w", err)
+	}
+
+	return instances, total, nil
 }

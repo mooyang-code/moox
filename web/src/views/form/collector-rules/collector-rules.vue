@@ -62,7 +62,7 @@
             </a-table-column>
             <a-table-column title="数据类型" data-index="data_type" :width="120"></a-table-column>
             <a-table-column title="数据源" data-index="data_source" :width="120"></a-table-column>
-            <a-table-column title="分配类型" data-index="assignment_type" :width="100">
+            <a-table-column title="云节点匹配规则" data-index="assignment_type" :width="120">
               <template #cell="{ record }">
                 <a-tag bordered size="small" :color="getAssignmentColor(record.assignment_type)">
                   {{ getAssignmentText(record.assignment_type) }}
@@ -82,16 +82,16 @@
             <a-table-column title="操作" :width="180" align="center" :fixed="'right'">
               <template #cell="{ record }">
                 <a-space>
-                  <a-button 
-                    :type="record.enabled === 'true' ? 'primary' : 'outline'"
-                    :status="record.enabled === 'true' ? 'success' : 'normal'"
-                    size="mini" 
+                  <a-button
+                    :type="record.enabled === 'true' ? 'outline' : 'primary'"
+                    :status="record.enabled === 'true' ? 'warning' : 'success'"
+                    size="mini"
                     @click="handleEnableChange(record, record.enabled !== 'true')">
                     <template #icon>
-                      <icon-check-circle v-if="record.enabled === 'true'" />
-                      <icon-close-circle v-else />
+                      <icon-close-circle v-if="record.enabled === 'true'" />
+                      <icon-check-circle v-else />
                     </template>
-                    <span>{{ record.enabled === 'true' ? '启用' : '禁用' }}</span>
+                    <span>{{ record.enabled === 'true' ? '禁用' : '启用' }}</span>
                   </a-button>
                   <a-button type="primary" size="mini" @click="onUpdate(record)">
                     <template #icon><icon-edit /></template>
@@ -106,10 +106,10 @@
     </a-spin>
 
     <!-- 新增/修改模态框 -->
-    <a-modal v-model:visible="open" @close="afterClose" @ok="handleOk" @cancel="afterClose" width="900px">
+    <a-modal v-model:visible="open" @close="afterClose" @cancel="afterClose" width="900px" :ok-loading="submitLoading" @before-ok="handleOk">
       <template #title> {{ title }} </template>
       <div>
-        <a-form ref="formRef" auto-label-width :rules="Object.assign({}, rules, getDynamicRules())" :model="addForm" :layout="'vertical'">
+        <a-form ref="formRef" auto-label-width :rules="rules" :model="addForm" :layout="'vertical'">
           <a-row :gutter="16">
             <a-col v-if="title === '修改采集规则'" :span="12">
               <a-form-item field="rule_id" label="规则ID" validate-trigger="blur">
@@ -152,8 +152,8 @@
           
           <a-row :gutter="16">
             <a-col :span="12">
-              <a-form-item field="assignment_type" label="分配类型">
-                <a-select v-model="addForm.assignment_type" placeholder="请选择分配类型" @change="onAssignmentTypeChange">
+              <a-form-item field="assignment_type" label="云节点匹配规则">
+                <a-select v-model="addForm.assignment_type" placeholder="请选择云节点匹配规则" @change="onAssignmentTypeChange">
                   <a-option value="auto">自动分配</a-option>
                   <a-option value="fixed">固定节点</a-option>
                   <a-option value="pattern">模式匹配</a-option>
@@ -173,84 +173,79 @@
           <a-form-item v-if="addForm.assignment_type === 'pattern'" field="node_pattern" label="节点匹配模式">
             <a-input v-model="addForm.node_pattern" placeholder="如：scf-collector-*" allow-clear />
           </a-form-item>
+        </a-form>
 
-          <a-divider>采集参数配置</a-divider>
-          
-          <template v-if="currentFieldConfigs.length > 0">
-            <a-form-item 
-              v-for="field in currentFieldConfigs" 
-              :key="field.id"
-              :field="field.field_key"
-              :label="field.field_name"
-              :validate-trigger="['blur', 'change']"
-              :rules="field.is_required ? [{ required: true, message: `请输入${field.field_name}` }] : []">
-              
-              <!-- 文本输入框 -->
-              <a-input 
-                v-if="field.field_type === 'text'"
-                v-model="dynamicFormData[field.field_key]"
-                :placeholder="`请输入${field.field_name}`"
-                allow-clear />
-              
-              <!-- 数字输入框 -->
-              <a-input-number 
-                v-else-if="field.field_type === 'number'"
-                v-model="dynamicFormData[field.field_key]"
-                :placeholder="`请输入${field.field_name}`"
-                :min="JSON.parse(field.field_options || '{}').min || -Infinity"
-                :max="JSON.parse(field.field_options || '{}').max || Infinity"
-                allow-clear />
-              
-              <!-- 单选下拉框 -->
-              <a-select 
-                v-else-if="field.field_type === 'select'"
-                v-model="dynamicFormData[field.field_key]"
-                :placeholder="`请选择${field.field_name}`"
-                allow-clear>
-                <a-option 
-                  v-for="option in JSON.parse(field.field_options || '{}').options || []"
-                  :key="option.value || option"
-                  :value="option.value || option">
-                  {{ option.label || option }}
-                </a-option>
-              </a-select>
-              
-              <!-- 多选下拉框 -->
-              <a-select 
-                v-else-if="field.field_type === 'multi-select'"
-                v-model="dynamicFormData[field.field_key]"
-                :placeholder="`请选择${field.field_name}`"
-                multiple
-                allow-clear>
-                <a-option 
-                  v-for="option in JSON.parse(field.field_options || '{}').options || []"
-                  :key="option.value || option"
-                  :value="option.value || option">
-                  {{ getOptionLabel(option) }}
-                </a-option>
-              </a-select>
-              
-              <!-- 日期时间选择器 -->
-              <a-date-picker 
-                v-else-if="field.field_type === 'datetime'"
-                v-model="dynamicFormData[field.field_key]"
-                :placeholder="`请选择${field.field_name}`"
-                show-time
-                style="width: 100%" />
-              
-              <!-- 默认文本输入 -->
-              <a-input 
-                v-else
-                v-model="dynamicFormData[field.field_key]"
-                :placeholder="`请输入${field.field_name}`"
-                allow-clear />
-            </a-form-item>
-          </template>
-          
-          <template v-else>
-            <a-alert type="info" message="请先选择数据类型以配置采集参数" />
-          </template>
+        <!-- 采集参数配置 - 完全独立于表单 -->
+        <a-divider>采集参数配置</a-divider>
 
+        <template v-if="addForm.data_type">
+          <!-- 标的列表输入 (objects) -->
+          <div v-if="hasField('objects')" class="custom-form-item">
+            <div class="custom-form-label">交易标的</div>
+            <div class="objects-input-wrapper">
+              <a-checkbox
+                v-model="objectsSelectAll"
+                @change="onObjectsSelectAllChange">
+                全部标的
+              </a-checkbox>
+              <a-input-tag
+                v-show="!objectsSelectAll"
+                v-model="objectsValue"
+                placeholder="输入标的后按回车添加，如 BTC-USDT 或 BTC-*"
+                allow-clear
+                :style="{ marginTop: '8px' }" />
+              <div v-show="objectsSelectAll" class="select-all-hint">
+                已选择全部标的，将采集所有可用交易对数据
+              </div>
+            </div>
+            <div class="custom-form-extra">支持通配符：* 匹配任意字符，如 BTC-* 匹配所有BTC交易对（注意：输入后按回车键才会生效！）</div>
+          </div>
+
+          <!-- K线周期选择 (intervals) -->
+          <div v-if="hasField('intervals')" class="custom-form-item">
+            <div class="custom-form-label">时间周期</div>
+            <a-checkbox-group
+              v-model="intervalsValue"
+              :options="INTERVAL_OPTIONS">
+            </a-checkbox-group>
+          </div>
+
+          <!-- 订单簿深度 (depth) -->
+          <div v-if="hasField('depth')" class="custom-form-item">
+            <div class="custom-form-label">订单簿深度</div>
+            <a-input-number
+              v-model="depthValue"
+              placeholder="请输入订单簿深度"
+              :min="1"
+              :max="1000"
+              :style="{ width: '200px' }" />
+          </div>
+
+          <!-- 新闻来源 (sources) -->
+          <div v-if="hasField('sources')" class="custom-form-item">
+            <div class="custom-form-label">新闻来源</div>
+            <a-input-tag
+              v-model="sourcesValue"
+              placeholder="输入新闻来源后按回车添加"
+              allow-clear />
+          </div>
+
+          <!-- 关键词 (keywords) -->
+          <div v-if="hasField('keywords')" class="custom-form-item">
+            <div class="custom-form-label">关键词</div>
+            <a-input-tag
+              v-model="keywordsValue"
+              placeholder="输入关键词后按回车添加"
+              allow-clear />
+          </div>
+        </template>
+
+        <template v-else>
+          <a-alert type="info">请先选择数据类型以配置采集参数</a-alert>
+        </template>
+
+        <!-- 其他表单字段 -->
+        <a-form auto-label-width :layout="'vertical'" style="margin-top: 16px;">
           <a-form-item label="创建人">
             <a-input v-model="addForm.creator" readonly />
           </a-form-item>
@@ -272,7 +267,7 @@
         <a-descriptions-item label="规则ID">{{ detailData.rule_id }}</a-descriptions-item>
         <a-descriptions-item label="数据类型">{{ detailData.data_type }}</a-descriptions-item>
         <a-descriptions-item label="数据源">{{ detailData.data_source }}</a-descriptions-item>
-        <a-descriptions-item label="分配类型">{{ getAssignmentText(detailData.assignment_type || '') }}</a-descriptions-item>
+        <a-descriptions-item label="云节点匹配规则">{{ getAssignmentText(detailData.assignment_type || '') }}</a-descriptions-item>
         <a-descriptions-item label="启用状态">
           <a-tag :color="detailData.enabled === 'true' ? 'green' : 'red'">
             {{ detailData.enabled === 'true' ? '启用' : '禁用' }}
@@ -345,7 +340,7 @@ interface FieldConfig {
   field_key: string;
   field_name: string;
   field_type: string;
-  is_required: boolean;
+  required_flag: number;
   default_value: string;
   field_options: string;
   data_source_options: string;
@@ -360,6 +355,7 @@ interface FieldConfig {
 // }
 
 const loading = ref(false);
+const submitLoading = ref(false);
 const taskList = ref<TaskConfig[]>([]);
 const selectedKeys = ref<string[]>([]);
 const open = ref(false);
@@ -369,15 +365,41 @@ const detailVisible = ref(false);
 const detailData = ref<Partial<TaskConfig>>({});
 const nodeOptions = ref<any[]>([]);
 const assignedNodesList = ref<string[]>([]);
+const activeDataType = ref(''); // 用于跟踪当前激活的数据类型，防止重复初始化
 
 // 数据类型配置相关数据
 const dataTypeConfigs = ref<DataTypeConfig[]>([]);
 const currentFieldConfigs = ref<FieldConfig[]>([]);
-const dynamicFormData = ref<{ [key: string]: any }>({});
+
+// 动态字段使用独立的 ref，避免相互干扰
+const objectsValue = ref<string[]>([]);
+const intervalsValue = ref<string[]>([]);
+const depthValue = ref<number | undefined>(undefined);
+const sourcesValue = ref<string[]>([]);
+const keywordsValue = ref<string[]>([]);
 
 // 数据源相关数据
 const dataSourceOptions = ref<{ label: string; value: string }[]>([]);
 const loadingDataSources = ref(false);
+
+// 标的"全部"选项状态
+const objectsSelectAll = ref(false);
+
+// CollectParams 中定义的有效字段（根据数据类型动态过滤）
+const COLLECT_PARAMS_FIELDS: { [dataType: string]: string[] } = {
+  // K线数据：标的、周期
+  'kline': ['objects', 'intervals'],
+  // 逐笔交易：标的
+  'trade': ['objects'],
+  // 行情数据：标的
+  'ticker': ['objects'],
+  // 订单簿：标的、深度
+  'orderbook': ['objects', 'depth'],
+  // 新闻资讯：来源、关键词
+  'news': ['sources', 'keywords'],
+  // 默认：所有字段
+  'default': ['objects', 'intervals', 'depth', 'sources', 'keywords']
+};
 
 // Get project store
 const projectStore = useProjectStore();
@@ -433,28 +455,41 @@ const rules = {
   data_source: [{ required: true, message: '请选择数据源' }]
 };
 
-// 获取动态表单验证规则
-const getDynamicRules = () => {
-  const dynamicRules: { [key: string]: any[] } = {};
-  
-  currentFieldConfigs.value.forEach(field => {
-    if (field.is_required) {
-      dynamicRules[field.field_key] = [
-        { required: true, message: `请输入${field.field_name}` }
-      ];
-    }
-  });
-  
-  return dynamicRules;
+// 处理"全部标的"复选框变化
+const onObjectsSelectAllChange = (checked: boolean | (string | number | boolean)[]) => {
+  const isChecked = Array.isArray(checked) ? checked.length > 0 : checked;
+  if (isChecked) {
+    // 选择全部时，设置为 ["*"]
+    objectsValue.value = ['*'];
+  } else {
+    // 取消选择全部时，清空列表
+    objectsValue.value = [];
+  }
 };
 
-// 获取选项标签
-const getOptionLabel = (option: any) => {
-  if (typeof option === 'object' && option !== null) {
-    return option.label || option.value || '';
-  }
-  return option;
+// 检查当前数据类型是否需要某个字段
+const hasField = (fieldKey: string) => {
+  const dataType = addForm.value.data_type?.toLowerCase() || '';
+  const allowedFields = COLLECT_PARAMS_FIELDS[dataType] || COLLECT_PARAMS_FIELDS['default'];
+  return allowedFields.includes(fieldKey);
 };
+
+// K线周期选项（常量，避免每次渲染重新创建）
+const INTERVAL_OPTIONS = [
+  { label: '1分钟', value: '1m' },
+  { label: '3分钟', value: '3m' },
+  { label: '5分钟', value: '5m' },
+  { label: '15分钟', value: '15m' },
+  { label: '30分钟', value: '30m' },
+  { label: '1小时', value: '1h' },
+  { label: '2小时', value: '2h' },
+  { label: '4小时', value: '4h' },
+  { label: '6小时', value: '6h' },
+  { label: '12小时', value: '12h' },
+  { label: '1天', value: '1d' },
+  { label: '1周', value: '1w' },
+  { label: '1月', value: '1M' }
+];
 
 const getAssignmentColor = (type: string) => {
   const colors: { [key: string]: string } = {
@@ -627,7 +662,7 @@ const getTaskList = async () => {
     if (form.value.dataSource) params.data_source = form.value.dataSource;
     if (form.value.enabled !== null) params.enabled = form.value.enabled ? 'true' : 'false';
 
-    const response = await service.post('/gateway/collector/ListTaskRules', params, {
+    const response = await service.post('/gateway/collectmgr/ListTaskRules', params, {
       headers: {
         'app_id': 'moox_frontend',
         'app_key': '2521e0d21b6be0347b72bca93904a0dd'
@@ -669,7 +704,7 @@ const getNodeList = async () => {
 // 获取数据类型配置
 const getDataTypeConfigs = async () => {
   try {
-    const response = await service.post('/gateway/collector/ListDataTypeConfigs', {}, {
+    const response = await service.post('/gateway/collectmgr/ListDataTypeConfigs', {}, {
       headers: {
         'app_id': 'moox_frontend',
         'app_key': '2521e0d21b6be0347b72bca93904a0dd'
@@ -695,7 +730,7 @@ const getFieldConfigs = async (dataType: string) => {
   }
 
   try {
-    const response = await service.post('/gateway/collector/GetDataTypeConfigWithFields', { data_type: dataType }, {
+    const response = await service.post('/gateway/collectmgr/GetDataTypeConfigWithFields', { data_type: dataType }, {
       headers: {
         'app_id': 'moox_frontend',
         'app_key': '2521e0d21b6be0347b72bca93904a0dd'
@@ -706,8 +741,7 @@ const getFieldConfigs = async (dataType: string) => {
       const detail = data.data && data.data.length > 0 ? data.data[0] : null;
       if (detail) {
         currentFieldConfigs.value = detail.fields || [];
-        // 初始化动态表单数据
-        initializeDynamicFormData(detail.fields || []);
+        // 注意：不在这里调用 initializeDynamicFormData，由调用方控制初始化
         // 加载数据源选项，优先使用数据类型配置中的数据源选项
         if (detail.config?.data_source_options) {
           loadDataSourceOptions(detail.config.data_source_options);
@@ -733,39 +767,62 @@ const getFieldConfigs = async (dataType: string) => {
   }
 };
 
-// 初始化动态表单数据
-const initializeDynamicFormData = (fields: FieldConfig[]) => {
-  dynamicFormData.value = {};
-  fields.forEach(field => {
-    let defaultValue: any = field.default_value;
-    
-    // 尝试解析JSON格式的默认值
-    if (defaultValue) {
-      try {
-        defaultValue = JSON.parse(defaultValue);
-        // 如果是多选类型，确保默认值是数组
-        if (field.field_type === 'multi-select' && !Array.isArray(defaultValue)) {
-          defaultValue = [];
-        }
-      } catch {
-        // 如果解析失败，保持原值（对于非多选类型）
-        if (field.field_type === 'multi-select') {
-          defaultValue = [];
-        }
-      }
-    } else {
-      // 如果没有默认值，根据字段类型设置合适的默认值
-      if (field.field_type === 'multi-select') {
-        defaultValue = [];
-      } else if (field.field_type === 'number') {
-        defaultValue = undefined;
-      } else {
-        defaultValue = '';
-      }
+// 初始化动态表单数据（使用独立的 ref 变量）
+const initializeDynamicFormData = (existingParams?: { [key: string]: any }) => {
+  objectsSelectAll.value = false;
+
+  // 解析并设置 objects
+  if (existingParams?.objects !== undefined) {
+    const objVal = existingParams.objects;
+    objectsValue.value = Array.isArray(objVal) ? objVal : (objVal ? [objVal] : []);
+    // 检查是否为全部标的
+    if (objectsValue.value.length === 1 && objectsValue.value[0] === '*') {
+      objectsSelectAll.value = true;
     }
-    
-    dynamicFormData.value[field.field_key] = defaultValue;
-  });
+  } else {
+    objectsValue.value = [];
+  }
+
+  // 解析并设置 intervals
+  if (existingParams?.intervals !== undefined) {
+    const intVal = existingParams.intervals;
+    intervalsValue.value = Array.isArray(intVal) ? intVal : (intVal ? [intVal] : []);
+  } else {
+    intervalsValue.value = [];
+  }
+
+  // 解析并设置 depth
+  if (existingParams?.depth !== undefined) {
+    depthValue.value = typeof existingParams.depth === 'number' ? existingParams.depth : undefined;
+  } else {
+    depthValue.value = undefined;
+  }
+
+  // 解析并设置 sources
+  if (existingParams?.sources !== undefined) {
+    const srcVal = existingParams.sources;
+    sourcesValue.value = Array.isArray(srcVal) ? srcVal : (srcVal ? [srcVal] : []);
+  } else {
+    sourcesValue.value = [];
+  }
+
+  // 解析并设置 keywords
+  if (existingParams?.keywords !== undefined) {
+    const kwVal = existingParams.keywords;
+    keywordsValue.value = Array.isArray(kwVal) ? kwVal : (kwVal ? [kwVal] : []);
+  } else {
+    keywordsValue.value = [];
+  }
+};
+
+// 重置所有动态字段
+const resetDynamicFields = () => {
+  objectsValue.value = [];
+  intervalsValue.value = [];
+  depthValue.value = undefined;
+  sourcesValue.value = [];
+  keywordsValue.value = [];
+  objectsSelectAll.value = false;
 };
 
 const onAdd = () => {
@@ -783,17 +840,18 @@ const onAdd = () => {
     creator: account.value.user.userName || ''
   };
   assignedNodesList.value = [];
-  // 重置动态表单数据
   currentFieldConfigs.value = [];
-  dynamicFormData.value = {};
+  resetDynamicFields();
   dataSourceOptions.value = [];
+  activeDataType.value = '';
   open.value = true;
 };
 
 const onUpdate = (record: TaskConfig) => {
   title.value = '修改采集规则';
   addForm.value = { ...record };
-  
+  activeDataType.value = record.data_type;
+
   // 解析 assigned_nodes
   try {
     assignedNodesList.value = JSON.parse(record.assigned_nodes || '[]');
@@ -801,37 +859,50 @@ const onUpdate = (record: TaskConfig) => {
     assignedNodesList.value = [];
   }
 
+  // 解析现有的采集参数
+  let existingParams: { [key: string]: any } = {};
+  try {
+    existingParams = JSON.parse(record.collect_params || '{}');
+  } catch (error) {
+    console.error('解析现有采集参数失败:', error);
+  }
+
+  // 使用现有参数初始化动态表单
+  initializeDynamicFormData(existingParams);
+
   // 如果有数据类型，加载对应的字段配置
   if (record.data_type) {
     getFieldConfigs(record.data_type).then(() => {
-      // 加载现有的采集参数到动态表单
-      try {
-        const existingParams = JSON.parse(record.collect_params || '{}');
-        Object.assign(dynamicFormData.value, existingParams);
-      } catch (error) {
-        console.error('解析现有采集参数失败:', error);
-      }
       // 设置数据源值
       if (record.data_source) {
         addForm.value.data_source = record.data_source;
       }
     });
   }
-  
+
   open.value = true;
 };
 
 // 数据类型变化处理
 const onDataTypeChange = (value: string) => {
+  // 如果数据类型没有实际变化，不执行任何操作
+  if (value === activeDataType.value) {
+    return;
+  }
+  activeDataType.value = value;
+
   addForm.value.data_type = value;
   // 重置数据源选择
   addForm.value.data_source = '';
-  
+  // 重置全部标的选项
+  objectsSelectAll.value = false;
+
   if (value) {
+    // 注意：切换数据类型时不重置已填写的字段值，只加载字段配置
     getFieldConfigs(value);
   } else {
     currentFieldConfigs.value = [];
-    dynamicFormData.value = {};
+    resetDynamicFields();
     dataSourceOptions.value = [];
   }
 };
@@ -909,38 +980,65 @@ const afterClose = () => {
   open.value = false;
 };
 
-const handleOk = async () => {
+// 获取动态字段值的辅助函数
+const getDynamicFieldValue = (fieldKey: string): any => {
+  switch (fieldKey) {
+    case 'objects': return objectsValue.value;
+    case 'intervals': return intervalsValue.value;
+    case 'depth': return depthValue.value;
+    case 'sources': return sourcesValue.value;
+    case 'keywords': return keywordsValue.value;
+    default: return undefined;
+  }
+};
+
+const handleOk = async (): Promise<boolean> => {
   try {
     // 验证表单数据
     if (!addForm.value.data_type) {
       Message.error('请选择数据类型');
-      return;
+      return false;
     }
-    
+
     if (!addForm.value.data_source) {
       Message.error('请选择数据源');
-      return;
+      return false;
     }
-    
-    // 验证动态表单字段
-    if (currentFieldConfigs.value.length > 0) {
-      for (const field of currentFieldConfigs.value) {
-        const value = dynamicFormData.value[field.field_key];
-        if (field.is_required && (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0))) {
-          Message.error(`请输入${field.field_name}`);
-          return;
-        }
-      }
+
+    // 验证交易标的（当数据类型需要 objects 字段时）
+    if (hasField('objects') && (!objectsValue.value || objectsValue.value.length === 0)) {
+      Message.error('请输入交易标的');
+      return false;
     }
-    
-    // 处理分配类型数据
+
+    // 处理云节点匹配规则数据
     if (addForm.value.assignment_type === 'fixed') {
       addForm.value.assigned_nodes = JSON.stringify(assignedNodesList.value || []);
     }
-    
-    // 处理采集参数
-    addForm.value.collect_params = JSON.stringify(dynamicFormData.value || {});
-    
+
+    // 处理采集参数 - 只提取当前数据类型允许的字段
+    const dataType = addForm.value.data_type?.toLowerCase() || '';
+    const allowedFields = COLLECT_PARAMS_FIELDS[dataType] || COLLECT_PARAMS_FIELDS['default'];
+    const filteredParams: { [key: string]: any } = {
+      // 添加数据类型信息
+      data_type: addForm.value.data_type,
+      data_source: addForm.value.data_source
+    };
+    for (const field of allowedFields) {
+      const value = getDynamicFieldValue(field);
+      if (value !== undefined && value !== null) {
+        // 数组字段：如果不是空数组才添加
+        if (Array.isArray(value)) {
+          if (value.length > 0) {
+            filteredParams[field] = value;
+          }
+        } else {
+          filteredParams[field] = value;
+        }
+      }
+    }
+    addForm.value.collect_params = JSON.stringify(filteredParams);
+
     // 准备请求数据
     const requestData: any = {
       project_id: addForm.value.project_id || selectedProjectId.value || '',
@@ -953,14 +1051,15 @@ const handleOk = async () => {
       enabled: addForm.value.enabled || 'true',
       creator: addForm.value.creator || account.value.user?.userName || ''
     };
-    
+
     // 如果是修改操作，添加rule_id
     if (title.value.includes('修改') && addForm.value.rule_id) {
       requestData.rule_id = addForm.value.rule_id;
     }
-    
-    const endpoint = title.value.includes('新建') ? '/gateway/collector/CreateTaskRule' : '/gateway/collector/UpdateTaskRule';
-    
+
+    const endpoint = title.value.includes('新建') ? '/gateway/collectmgr/CreateTaskRule' : '/gateway/collectmgr/UpdateTaskRule';
+
+    submitLoading.value = true;
     // 发送请求
     const response = await service.post(endpoint, requestData, {
       headers: {
@@ -970,7 +1069,7 @@ const handleOk = async () => {
     });
 
     const data = response as any;
-    
+
     if (data.code === 200) {
       if (title.value.includes('新建')) {
         const ruleId = data.data && data.data.rule_id ? data.data.rule_id : '未知';
@@ -978,10 +1077,11 @@ const handleOk = async () => {
       } else {
         Message.success('更新成功');
       }
-      open.value = false;
       getTaskList();
+      return true;
     } else {
       Message.error(data.message || (title.value.includes('新建') ? '创建失败' : '更新失败'));
+      return false;
     }
   } catch (error) {
     if (error && typeof error === 'object' && (error as any).message) {
@@ -991,6 +1091,9 @@ const handleOk = async () => {
     } else {
       Message.error(title.value.includes('新建') ? '创建失败，请检查网络连接' : '更新失败，请检查网络连接');
     }
+    return false;
+  } finally {
+    submitLoading.value = false;
   }
 };
 
@@ -998,7 +1101,7 @@ const handleOk = async () => {
 
 const handleEnableChange = async (record: TaskConfig, value: boolean) => {
   try {
-    const response = await service.post('/gateway/collector/UpdateTaskRule', { 
+    const response = await service.post('/gateway/collectmgr/UpdateTaskRule', { 
       ...record,
       enabled: value ? 'true' : 'false'
     }, {
@@ -1077,5 +1180,49 @@ pre {
   border-radius: 4px;
   max-height: 200px;
   overflow: auto;
+}
+
+.objects-input-wrapper {
+  width: 100%;
+}
+
+.select-all-hint {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #f0f9eb;
+  border: 1px solid #c6e7c6;
+  border-radius: 4px;
+  color: #67c23a;
+  font-size: 13px;
+}
+
+.custom-form-item {
+  margin-bottom: 20px;
+}
+
+.custom-form-label {
+  margin-bottom: 8px;
+  color: var(--color-text-2);
+  font-size: 14px;
+}
+
+.custom-form-extra {
+  margin-top: 4px;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+:deep(.arco-checkbox-group) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+:deep(.arco-checkbox-group .arco-checkbox) {
+  margin-right: 0;
+}
+
+:deep(.arco-input-tag) {
+  min-height: 32px;
 }
 </style>

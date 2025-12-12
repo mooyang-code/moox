@@ -1,6 +1,8 @@
 package api
 
 import (
+	"strconv"
+
 	apperrors "github.com/mooyang-code/moox/server/internal/errors"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr"
 
@@ -19,26 +21,35 @@ func NewCollectorTaskInstanceHandler(service collectmgr.TaskInstanceService) *Co
 	}
 }
 
-// GetTaskInstanceList 获取任务实例列表
+// GetTaskInstanceList 获取任务实例列表（支持分页）
 func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 	// 获取查询参数
 	nodeID := c.Query("node_id")
+	ruleID := c.Query("rule_id")
 
-	// 暂时获取所有数据，后续可以添加分页参数支持
-	limit := 1000 // 设置一个较大的限制
-	offset := 0   // 默认偏移
+	// 解析分页参数
+	page := 1
+	size := 10
 
-	// 调用service层获取数据
-	instances, err := h.service.GetTaskInstanceList(c.Request.Context(), nodeID, limit, offset)
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+	if sizeStr := c.Query("size"); sizeStr != "" {
+		if s, err := strconv.Atoi(sizeStr); err == nil && s > 0 {
+			size = s
+		}
+	}
+
+	// 调用 service 层分页查询
+	instances, total, err := h.service.ListTaskInstances(c.Request.Context(), nodeID, ruleID, page, size)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("查询失败", err))
 		return
 	}
 
-	// 计算总数
-	total := int64(len(instances))
-
-	// 使用新的分页列表响应格式
+	// 使用分页列表响应格式
 	PaginatedListResponse(c, "查询成功", instances, total)
 }
 

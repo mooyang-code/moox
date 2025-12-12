@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime/debug"
 	"strings"
 
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr"
@@ -15,6 +16,27 @@ import (
 	"github.com/gin-gonic/gin"
 	"trpc.group/trpc-go/trpc-go/log"
 )
+
+// customRecovery 自定义 Recovery 中间件，返回 JSON 格式错误响应
+func customRecovery() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		defer func() {
+			if err := recover(); err != nil {
+				// 记录详细的 panic 信息
+				stack := string(debug.Stack())
+				log.Errorf("[CollectMgr Gateway] Panic recovered: %v\nStack: %s", err, stack)
+
+				// 返回 JSON 格式的错误响应
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": fmt.Sprintf("Internal server error: %v", err),
+					"data":    []interface{}{},
+				})
+			}
+		}()
+		c.Next()
+	}
+}
 
 // CollectorGatewayHandler 采集器网关处理器
 type CollectorGatewayHandler struct {
@@ -27,19 +49,19 @@ func NewGatewayHandler(taskRuleService collectmgr.TaskRuleService, taskInstanceS
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 
-	// 添加中间件
-	engine.Use(gin.Recovery())
+	// 添加自定义 Recovery 中间件，返回 JSON 格式错误响应
+	engine.Use(customRecovery())
 
 	// API路由组（包含版本号）
 	api := engine.Group("/api/v1")
 
 	// 注册采集器路由（任务规则、任务实例和数据类型配置）
 	collectorapi.RegisterCollectorRoutes(api, taskRuleService, taskInstanceService, dataTypeConfigService)
-	log.Info("[Collector Gateway] 采集器任务规则、任务实例和数据类型配置路由注册成功")
+	log.Info("[CollectMgr Gateway] 采集管理模块路由注册成功")
 
 	return &CollectorGatewayHandler{
 		engine:    engine,
-		serviceID: "collector",
+		serviceID: "collectmgr",
 	}
 }
 
@@ -57,7 +79,7 @@ type RouteInfo struct {
 
 // ForwardRequest 实现ServiceHandler接口，转发请求到内部引擎
 func (h *CollectorGatewayHandler) ForwardRequest(ctx context.Context, method string, headers map[string]string, body []byte) ([]byte, error) {
-	log.InfoContextf(ctx, "[Collector Gateway] ForwardRequest called - method: %s, headers: %+v, body: %s", method, headers, string(body))
+	log.InfoContextf(ctx, "[CollectMgr Gateway] ForwardRequest called - method: %s, headers: %+v, body: %s", method, headers, string(body))
 
 	// 解析方法并获取路由信息
 	routeInfo, err := h.parseMethodToRoute(method, body)
@@ -65,7 +87,7 @@ func (h *CollectorGatewayHandler) ForwardRequest(ctx context.Context, method str
 		return nil, err
 	}
 
-	log.InfoContextf(ctx, "[Collector Gateway] Forwarding to engine: %s %s with body: %s", routeInfo.HTTPMethod, routeInfo.Path, string(routeInfo.Body))
+	log.InfoContextf(ctx, "[CollectMgr Gateway] Forwarding to engine: %s %s with body: %s", routeInfo.HTTPMethod, routeInfo.Path, string(routeInfo.Body))
 
 	// 创建并执行HTTP请求
 	req, err := h.createHTTPRequest(routeInfo, headers)
@@ -249,23 +271,29 @@ func (h *CollectorGatewayHandler) buildMultiQueryRoute(basePath string, body []b
 		HTTPMethod: "GET",
 	}
 
-	if len(body) > 0 {
-		var params map[string]interface{}
-		if err := json.Unmarshal(body, &params); err == nil {
-			var queryParams []string
-			for key, value := range params {
-				if value != nil {
-					// 过滤掉空字符串，但保留数字0和false等有效值
-					if str, ok := value.(string); ok && str == "" {
-						continue
-					}
-					queryParams = append(queryParams, fmt.Sprintf("%s=%v", key, value))
-				}
-			}
-			if len(queryParams) > 0 {
-				route.Path = fmt.Sprintf("%s?%s", basePath, strings.Join(queryParams, "&"))
-			}
+	if len(body) == 0 {
+		return route, nil
+	}
+
+	var params map[string]interface{}
+	if err := json.Unmarshal(body, &params); err != nil {
+		return route, nil
+	}
+
+	var queryParams []string
+	for key, value := range params {
+		if value == nil {
+			continue
 		}
+		// 过滤掉空字符串，但保留数字0和false等有效值
+		if str, ok := value.(string); ok && str == "" {
+			continue
+		}
+		queryParams = append(queryParams, fmt.Sprintf("%s=%v", key, value))
+	}
+
+	if len(queryParams) > 0 {
+		route.Path = fmt.Sprintf("%s?%s", basePath, strings.Join(queryParams, "&"))
 	}
 	return route, nil
 }
@@ -319,7 +347,7 @@ func (h *CollectorGatewayHandler) executeRequest(ctx context.Context, req *http.
 	respBody := recorder.Body.Bytes()
 	statusCode := recorder.Code
 
-	log.InfoContextf(ctx, "[Collector Gateway] Response status: %d, body: %s", statusCode, string(respBody))
+	log.InfoContextf(ctx, "[CollectMgr Gateway] Response status: %d, body: %s", statusCode, string(respBody))
 
 	// 检查状态码
 	if statusCode != http.StatusOK {
@@ -328,7 +356,7 @@ func (h *CollectorGatewayHandler) executeRequest(ctx context.Context, req *http.
 
 	// 处理空响应体
 	if len(respBody) == 0 {
-		log.ErrorContextf(ctx, "[Collector Gateway] Empty response body received")
+		log.ErrorContextf(ctx, "[CollectMgr Gateway] Empty response body received")
 		emptyResp := map[string]interface{}{
 			"code": 500,
 			"data": []interface{}{},

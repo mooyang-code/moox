@@ -49,6 +49,20 @@ func (s *TaskPlannerServiceImpl) SyncRuleInstances(ctx context.Context, ruleID s
 
 	result := &SyncResult{RuleID: ruleID}
 
+	// 检查依赖是否初始化
+	if s.taskRulesDAO == nil {
+		log.ErrorContextf(ctx, "[TaskPlanner] taskRulesDAO is nil")
+		return result, fmt.Errorf("taskRulesDAO is not initialized")
+	}
+	if s.instanceDAO == nil {
+		log.ErrorContextf(ctx, "[TaskPlanner] instanceDAO is nil")
+		return result, fmt.Errorf("instanceDAO is not initialized")
+	}
+	if s.registry == nil {
+		log.ErrorContextf(ctx, "[TaskPlanner] registry is nil")
+		return result, fmt.Errorf("distributor registry is not initialized")
+	}
+
 	// 1. 获取规则详情
 	ruleModel, err := s.taskRulesDAO.GetTaskRule(ctx, ruleID)
 	if err != nil {
@@ -113,6 +127,7 @@ func (s *TaskPlannerServiceImpl) SyncRuleInstances(ctx context.Context, ruleID s
 }
 
 // computeInstances 计算应有的实例列表
+// 分配策略：将标的集合均匀分配到节点集合，每个标的只分配到一个节点
 func (s *TaskPlannerServiceImpl) computeInstances(ctx context.Context, rule *dto.TaskRuleDTO, dist distributor.TaskDistributor) ([]*model.CollectorTaskInstance, error) {
 	var instances []*model.CollectorTaskInstance
 
@@ -137,26 +152,32 @@ func (s *TaskPlannerServiceImpl) computeInstances(ctx context.Context, rule *dto
 		objects = []string{""}
 	}
 
-	// 为每个 node × object 组合生成实例
-	for _, node := range nodes {
-		for _, object := range objects {
-			// 构建任务参数
-			params, err := dist.BuildTaskParams(ctx, rule, object)
-			if err != nil {
-				log.WarnContextf(ctx, "[TaskPlanner] Failed to build task params for %s/%s: %v", node.NodeID, object, err)
-				continue
-			}
+	nodeCount := len(nodes)
+	log.InfoContextf(ctx, "[TaskPlanner] Distributing %d objects to %d nodes for rule %s",
+		len(objects), nodeCount, rule.RuleID)
 
-			instance := &model.CollectorTaskInstance{
-				RuleID:     rule.RuleID,
-				NodeID:     node.NodeID,
-				Symbol:     object,
-				TaskParams: params,
-				Status:     model.InstanceStatusPending,
-				Invalid:    model.InvalidNo,
-			}
-			instances = append(instances, instance)
+	// 将标的均匀分配到节点：每个标的只分配到一个节点
+	// 使用取模方式实现轮询分配
+	for i, object := range objects {
+		// 选择节点：轮询分配
+		node := nodes[i%nodeCount]
+
+		// 构建任务参数
+		params, err := dist.BuildTaskParams(ctx, rule, object)
+		if err != nil {
+			log.WarnContextf(ctx, "[TaskPlanner] Failed to build task params for %s/%s: %v", node.NodeID, object, err)
+			continue
 		}
+
+		instance := &model.CollectorTaskInstance{
+			RuleID:     rule.RuleID,
+			NodeID:     node.NodeID,
+			Symbol:     object,
+			TaskParams: params,
+			Status:     model.InstanceStatusPending,
+			Invalid:    model.InvalidNo,
+		}
+		instances = append(instances, instance)
 	}
 
 	return instances, nil

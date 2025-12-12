@@ -61,11 +61,13 @@ func (s *TaskInstanceServiceImpl) GetTaskInstance(ctx context.Context, instanceI
 		TaskID:     instance.TaskID,
 		RuleID:     instance.RuleID,
 		NodeID:     instance.NodeID,
+		Symbol:     instance.Symbol,
 		TaskParams: instance.TaskParams,
 		Status:     instance.Status,
 		StartTime:  instance.StartTime,
 		EndTime:    instance.EndTime,
 		Result:     instance.Result,
+		Invalid:    instance.Invalid,
 		CreateTime: instance.CreateTime,
 		ModifyTime: instance.ModifyTime,
 	}, nil
@@ -147,11 +149,13 @@ func (s *TaskInstanceServiceImpl) GetTaskInstancesByNode(ctx context.Context, no
 			TaskID:     instance.TaskID,
 			RuleID:     instance.RuleID,
 			NodeID:     instance.NodeID,
+			Symbol:     instance.Symbol,
 			TaskParams: instance.TaskParams,
 			Status:     instance.Status,
 			StartTime:  instance.StartTime,
 			EndTime:    instance.EndTime,
 			Result:     instance.Result,
+			Invalid:    instance.Invalid,
 			CreateTime: instance.CreateTime,
 			ModifyTime: instance.ModifyTime,
 		}
@@ -177,15 +181,46 @@ func (s *TaskInstanceServiceImpl) GetRecentInstances(ctx context.Context, hours 
 			TaskID:     instance.TaskID,
 			RuleID:     instance.RuleID,
 			NodeID:     instance.NodeID,
+			Symbol:     instance.Symbol,
 			TaskParams: instance.TaskParams,
 			Status:     instance.Status,
 			StartTime:  instance.StartTime,
 			EndTime:    instance.EndTime,
 			Result:     instance.Result,
+			Invalid:    instance.Invalid,
 			CreateTime: instance.CreateTime,
 			ModifyTime: instance.ModifyTime,
 		}
 		result = append(result, dto)
 	}
 	return result, nil
+}
+
+// ListTaskInstances 分页查询任务实例
+func (s *TaskInstanceServiceImpl) ListTaskInstances(ctx context.Context, nodeID, ruleID string, page, size int) ([]*TaskInstanceDTO, int64, error) {
+	instances, total, err := s.instanceDAO.ListInstancesWithPagination(ctx, nodeID, ruleID, page, size)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list task instances: %w", err)
+	}
+
+	var result []*TaskInstanceDTO
+	for _, instance := range instances {
+		dto := &TaskInstanceDTO{
+			ID:         instance.ID,
+			TaskID:     instance.TaskID,
+			RuleID:     instance.RuleID,
+			NodeID:     instance.NodeID,
+			Symbol:     instance.Symbol,
+			TaskParams: instance.TaskParams,
+			Status:     instance.Status,
+			StartTime:  instance.StartTime,
+			EndTime:    instance.EndTime,
+			Result:     instance.Result,
+			Invalid:    instance.Invalid,
+			CreateTime: instance.CreateTime,
+			ModifyTime: instance.ModifyTime,
+		}
+		result = append(result, dto)
+	}
+	return result, total, nil
 }
