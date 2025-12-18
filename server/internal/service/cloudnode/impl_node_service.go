@@ -196,17 +196,11 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 		log.WarnContextf(ctx, "[CloudNode] Runtime not specified in codeConfig, using default: %s", runtime)
 	}
 
-	// 构建描述信息，包含版本号
-	description := "MooX Created"
-	if codeConfig.Version != "" {
-		description = fmt.Sprintf("MooX Created - %s", codeConfig.Version)
-	}
-
 	req := &provider.CreateFunctionRequest{
 		FunctionName: nodeModel.NodeID,
 		Runtime:      runtime,
 		Namespace:    nodeModel.Namespace,
-		Description:  description,
+		Description:  "MooX Created",
 		MemorySize:   128, // 默认128MB
 		Timeout:      30,  // 默认30秒
 		Environment:  map[string]string{},

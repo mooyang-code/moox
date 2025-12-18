@@ -14,17 +14,19 @@ import (
 
 // CollectParams 采集参数（从 JSON 解析）
 type CollectParams struct {
-	Objects   []string `json:"objects"`   // 标的列表 ["BTC-USDT", "ETH-USDT"]
-	Intervals []string `json:"intervals"` // K线周期 ["1m", "5m", "1h"]
-	Depth     int      `json:"depth"`     // 订单簿深度
-	Sources   []string `json:"sources"`   // 新闻来源
-	Keywords  []string `json:"keywords"`  // 关键词
+	InstType  string   `json:"inst_type"`  // 产品类型: SPOT-现货, SWAP-永续合约, FUTURES-交割合约
+	Objects   []string `json:"objects"`    // 标的列表 ["BTC-USDT", "ETH-USDT"]
+	Intervals []string `json:"intervals"`  // K线周期 ["1m", "5m", "1h"]
+	Depth     int      `json:"depth"`      // 订单簿深度
+	Sources   []string `json:"sources"`    // 新闻来源
+	Keywords  []string `json:"keywords"`   // 关键词
 }
 
 // TaskParams 任务执行参数
 type TaskParams struct {
 	DataType   string   `json:"data_type,omitempty"`   // 数据类型
 	DataSource string   `json:"data_source,omitempty"` // 数据源
+	InstType   string   `json:"inst_type,omitempty"`   // 产品类型: SPOT-现货, SWAP-永续合约, FUTURES-交割合约
 	Symbol     string   `json:"symbol,omitempty"`      // 标的
 	Intervals  []string `json:"intervals,omitempty"`   // K线周期
 	Depth      int      `json:"depth,omitempty"`       // 订单簿深度

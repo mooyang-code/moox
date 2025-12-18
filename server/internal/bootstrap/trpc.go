@@ -6,6 +6,7 @@ import (
 	authsvr "github.com/mooyang-code/moox/server/internal/service/auth"
 	cloudnodegateway "github.com/mooyang-code/moox/server/internal/service/cloudnode/gateway"
 	collectorgateway "github.com/mooyang-code/moox/server/internal/service/collectmgr/gateway"
+	dnsproxygateway "github.com/mooyang-code/moox/server/internal/service/dnsproxy/gateway"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -43,6 +44,10 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		services.TaskInstanceService,
 		services.DataTypeConfigService,
 	)
+
+	// 3.4 注册DNS代理网关
+	dnsproxygateway.RegisterDNSProxyGateway()
+
 	log.Info("TRPC 服务注册完成")
 	return nil
 }

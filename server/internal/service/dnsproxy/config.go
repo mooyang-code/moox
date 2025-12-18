@@ -44,7 +44,7 @@ type DNSServerConfig struct {
 
 // TimeoutConfig 超时配置
 type TimeoutConfig struct {
-	DNSQuerySeconds int `yaml:"dns_query_seconds"`  // DNS查询超时时间（秒）
+	DNSQuerySeconds int `yaml:"dns_query_seconds"` // DNS查询超时时间（秒）
 	PingTestSeconds int `yaml:"ping_test_seconds"` // Ping测试超时时间（秒）
 	ConcurrentLimit int `yaml:"concurrent_limit"`  // 并发连接限制
 }
@@ -109,7 +109,8 @@ func validateConfig(config *Config) error {
 				if server.Address != "localhost" && server.Address != "127.0.0.1" {
 					// 简单的IP格式验证（非localhost情况下）
 					if net.ParseIP(server.Address) == nil {
-						return fmt.Errorf("invalid DNS server address format: %s (server: %s)", server.Address, server.Name)
+						return fmt.Errorf("invalid DNS server address format: %s (server: %s)",
+							server.Address, server.Name)
 					}
 				}
 			}

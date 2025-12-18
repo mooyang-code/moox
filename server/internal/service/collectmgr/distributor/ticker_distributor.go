@@ -53,9 +53,21 @@ func (d *TickerDistributor) GetTargetObjects(ctx context.Context, rule *dto.Task
 
 // BuildTaskParams 为指定对象构建任务参数
 func (d *TickerDistributor) BuildTaskParams(ctx context.Context, rule *dto.TaskRuleDTO, object string) (string, error) {
+	params, err := d.base.ParseCollectParams(rule.CollectParams)
+	if err != nil {
+		return "{}", err
+	}
+
+	// 默认产品类型为现货
+	instType := params.InstType
+	if instType == "" {
+		instType = "SPOT"
+	}
+
 	taskParams := TaskParams{
 		DataType:   rule.DataType,
 		DataSource: rule.DataSource,
+		InstType:   instType,
 		Symbol:     object,
 	}
 

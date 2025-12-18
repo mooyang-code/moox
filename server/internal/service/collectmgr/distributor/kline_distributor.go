@@ -61,9 +61,16 @@ func (d *KlineDistributor) BuildTaskParams(ctx context.Context, rule *dto.TaskRu
 		return "{}", err
 	}
 
+	// 默认产品类型为现货
+	instType := params.InstType
+	if instType == "" {
+		instType = "SPOT"
+	}
+
 	taskParams := TaskParams{
 		DataType:   rule.DataType,
 		DataSource: rule.DataSource,
+		InstType:   instType,
 		Symbol:     object,
 		Intervals:  params.Intervals,
 	}

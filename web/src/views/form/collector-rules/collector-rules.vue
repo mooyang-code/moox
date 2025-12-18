@@ -179,6 +179,17 @@
         <a-divider>采集参数配置</a-divider>
 
         <template v-if="addForm.data_type">
+          <!-- 产品类型选择 (inst_type) - 仅K线、逐笔交易、行情、订单簿显示 -->
+          <div v-if="hasField('inst_type')" class="custom-form-item">
+            <div class="custom-form-label">产品类型</div>
+            <a-radio-group v-model="instTypeValue" type="button">
+              <a-radio value="SPOT">现货</a-radio>
+              <a-radio value="SWAP">永续合约</a-radio>
+              <a-radio value="FUTURES">交割合约</a-radio>
+            </a-radio-group>
+            <div class="custom-form-extra">选择采集的产品类型：现货交易对或合约交易对</div>
+          </div>
+
           <!-- 标的列表输入 (objects) -->
           <div v-if="hasField('objects')" class="custom-form-item">
             <div class="custom-form-label">交易标的</div>
@@ -372,6 +383,7 @@ const dataTypeConfigs = ref<DataTypeConfig[]>([]);
 const currentFieldConfigs = ref<FieldConfig[]>([]);
 
 // 动态字段使用独立的 ref，避免相互干扰
+const instTypeValue = ref<string>('SPOT'); // 产品类型：SPOT-现货, SWAP-永续合约, FUTURES-交割合约
 const objectsValue = ref<string[]>([]);
 const intervalsValue = ref<string[]>([]);
 const depthValue = ref<number | undefined>(undefined);
@@ -387,18 +399,18 @@ const objectsSelectAll = ref(false);
 
 // CollectParams 中定义的有效字段（根据数据类型动态过滤）
 const COLLECT_PARAMS_FIELDS: { [dataType: string]: string[] } = {
-  // K线数据：标的、周期
-  'kline': ['objects', 'intervals'],
-  // 逐笔交易：标的
-  'trade': ['objects'],
-  // 行情数据：标的
-  'ticker': ['objects'],
-  // 订单簿：标的、深度
-  'orderbook': ['objects', 'depth'],
-  // 新闻资讯：来源、关键词
+  // K线数据：产品类型、标的、周期
+  'kline': ['inst_type', 'objects', 'intervals'],
+  // 逐笔交易：产品类型、标的
+  'trade': ['inst_type', 'objects'],
+  // 行情数据：产品类型、标的
+  'ticker': ['inst_type', 'objects'],
+  // 订单簿：产品类型、标的、深度
+  'orderbook': ['inst_type', 'objects', 'depth'],
+  // 新闻资讯：来源、关键词（不需要产品类型）
   'news': ['sources', 'keywords'],
   // 默认：所有字段
-  'default': ['objects', 'intervals', 'depth', 'sources', 'keywords']
+  'default': ['inst_type', 'objects', 'intervals', 'depth', 'sources', 'keywords']
 };
 
 // Get project store
@@ -771,6 +783,13 @@ const getFieldConfigs = async (dataType: string) => {
 const initializeDynamicFormData = (existingParams?: { [key: string]: any }) => {
   objectsSelectAll.value = false;
 
+  // 解析并设置 inst_type（产品类型）
+  if (existingParams?.inst_type !== undefined) {
+    instTypeValue.value = existingParams.inst_type || 'SPOT';
+  } else {
+    instTypeValue.value = 'SPOT';
+  }
+
   // 解析并设置 objects
   if (existingParams?.objects !== undefined) {
     const objVal = existingParams.objects;
@@ -817,6 +836,7 @@ const initializeDynamicFormData = (existingParams?: { [key: string]: any }) => {
 
 // 重置所有动态字段
 const resetDynamicFields = () => {
+  instTypeValue.value = 'SPOT';
   objectsValue.value = [];
   intervalsValue.value = [];
   depthValue.value = undefined;
@@ -983,6 +1003,7 @@ const afterClose = () => {
 // 获取动态字段值的辅助函数
 const getDynamicFieldValue = (fieldKey: string): any => {
   switch (fieldKey) {
+    case 'inst_type': return instTypeValue.value;
     case 'objects': return objectsValue.value;
     case 'intervals': return intervalsValue.value;
     case 'depth': return depthValue.value;

@@ -211,14 +211,50 @@ func (h *HTTPRequestHandler) parseRequestParams(r *http.Request) (serviceID, met
 	return serviceID, method, nil
 }
 
-// readRequestBody 读取请求体
+// readRequestBody 读取请求体，同时合并 URL query 参数
+// 优先级：body 中的参数 > URL query 参数
 func (h *HTTPRequestHandler) readRequestBody(r *http.Request) ([]byte, error) {
+	// 读取 body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取请求体失败: %v", err)
 	}
 	defer r.Body.Close()
-	return body, nil
+
+	// 解析 URL query 参数
+	queryParams := r.URL.Query()
+	if len(queryParams) == 0 {
+		return body, nil
+	}
+
+	// 将 query 参数转为 map
+	queryMap := make(map[string]interface{})
+	for key, values := range queryParams {
+		if len(values) == 1 {
+			queryMap[key] = values[0]
+		} else {
+			queryMap[key] = values
+		}
+	}
+
+	// 如果 body 为空，直接使用 query 参数
+	if len(body) == 0 {
+		return json.Marshal(queryMap)
+	}
+
+	// 如果 body 不为空，尝试合并
+	var bodyMap map[string]interface{}
+	if err := json.Unmarshal(body, &bodyMap); err != nil {
+		// body 不是有效 JSON，直接返回 body
+		return body, nil
+	}
+
+	// 合并：body 参数优先（覆盖 query 参数）
+	for key, value := range bodyMap {
+		queryMap[key] = value
+	}
+
+	return json.Marshal(queryMap)
 }
 
 // extractGatewayHeaders 提取网关相关的HTTP头部信息
