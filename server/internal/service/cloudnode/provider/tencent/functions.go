@@ -14,7 +14,10 @@ import (
 
 // CreateFunction 创建云函数
 func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionRequest) (*FunctionInfo, error) {
-	log.InfoContextf(ctx, "[CloudNode-Tencent] Creating function: %s in namespace: %s", req.FunctionName, req.Namespace)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Creating function: %s in namespace: %s, region: %s", req.FunctionName, req.Namespace, req.Region)
+
+	// 获取指定地区的客户端
+	client := p.GetSCFClient(req.Region)
 
 	// 构建请求
 	request := scf.NewCreateFunctionRequest()
@@ -67,11 +70,15 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 	}
 
 	// 调用API创建函数
-	response, err := p.scfClient.CreateFunction(request)
+	response, err := client.CreateFunction(request)
 	if err != nil {
 		// 检查是否是函数已存在的错误
-		if strings.Contains(err.Error(), "ResourceInUse.Function") {
-			return nil, fmt.Errorf("function already exists: %s", req.FunctionName)
+		// 腾讯云可能返回 ResourceInUse.Function 或 ResourceInUse 或包含"已存在"字样
+		if strings.Contains(err.Error(), "ResourceInUse") || 
+		   strings.Contains(err.Error(), "已存在") {
+			log.InfoContextf(ctx, "[CloudNode-Tencent] Function already exists: %s, retrieving info...", req.FunctionName)
+			// 函数已存在，直接获取函数详情返回
+			return p.GetFunction(ctx, req.FunctionName, req.Namespace, req.Region)
 		}
 		return nil, fmt.Errorf("failed to create function: %w, Timeout: %d", err, *request.Timeout)
 	}
@@ -79,17 +86,20 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 	log.InfoContextf(ctx, "[CloudNode-Tencent] Function created successfully, RequestId: %s", *response.Response.RequestId)
 
 	// 等待函数就绪
-	if err := p.waitForFunctionReady(ctx, req.FunctionName, req.Namespace); err != nil {
+	if err := p.waitForFunctionReady(ctx, req.FunctionName, req.Namespace, req.Region); err != nil {
 		return nil, fmt.Errorf("function created but not ready: %w", err)
 	}
 
 	// 获取函数详情
-	return p.GetFunction(ctx, req.FunctionName, req.Namespace)
+	return p.GetFunction(ctx, req.FunctionName, req.Namespace, req.Region)
 }
 
 // UpdateFunction 更新云函数
 func (p *Provider) UpdateFunction(ctx context.Context, req *UpdateFunctionRequest) error {
-	log.InfoContextf(ctx, "[CloudNode-Tencent] Updating function: %s in namespace: %s", req.FunctionName, req.Namespace)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Updating function: %s in namespace: %s, region: %s", req.FunctionName, req.Namespace, req.Region)
+
+	// 获取指定地区的客户端
+	client := p.GetSCFClient(req.Region)
 
 	// 更新函数代码
 	if req.ZipFile != "" || (req.COSBucket != "" && req.COSPath != "" && req.COSRegion != "") {
@@ -109,7 +119,7 @@ func (p *Provider) UpdateFunction(ctx context.Context, req *UpdateFunctionReques
 			log.InfoContextf(ctx, "[CloudNode-Tencent] Updating function code via ZipFile: %s, function=%s", req.ZipFile, req.FunctionName)
 		}
 
-		_, err := p.scfClient.UpdateFunctionCode(codeRequest)
+		_, err := client.UpdateFunctionCode(codeRequest)
 		if err != nil {
 			return fmt.Errorf("failed to update function code: %s, %w", req.FunctionName, err)
 		}
@@ -120,14 +130,17 @@ func (p *Provider) UpdateFunction(ctx context.Context, req *UpdateFunctionReques
 }
 
 // DeleteFunction 删除云函数
-func (p *Provider) DeleteFunction(ctx context.Context, functionName, namespace string) error {
-	log.InfoContextf(ctx, "[CloudNode-Tencent] Deleting function: %s in namespace: %s", functionName, namespace)
+func (p *Provider) DeleteFunction(ctx context.Context, functionName, namespace, region string) error {
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Deleting function: %s in namespace: %s, region: %s", functionName, namespace, region)
+
+	// 获取指定地区的客户端
+	client := p.GetSCFClient(region)
 
 	request := scf.NewDeleteFunctionRequest()
 	request.FunctionName = common.StringPtr(functionName)
 	request.Namespace = common.StringPtr(namespace)
 
-	_, err := p.scfClient.DeleteFunction(request)
+	_, err := client.DeleteFunction(request)
 	if err != nil {
 		return fmt.Errorf("failed to delete function: %w", err)
 	}
@@ -137,12 +150,15 @@ func (p *Provider) DeleteFunction(ctx context.Context, functionName, namespace s
 }
 
 // GetFunction 获取云函数详情
-func (p *Provider) GetFunction(ctx context.Context, functionName, namespace string) (*FunctionInfo, error) {
+func (p *Provider) GetFunction(ctx context.Context, functionName, namespace, region string) (*FunctionInfo, error) {
+	// 获取指定地区的客户端
+	client := p.GetSCFClient(region)
+
 	request := scf.NewGetFunctionRequest()
 	request.FunctionName = common.StringPtr(functionName)
 	request.Namespace = common.StringPtr(namespace)
 
-	response, err := p.scfClient.GetFunction(request)
+	response, err := client.GetFunction(request)
 	if err != nil {
 		if strings.Contains(err.Error(), "ResourceNotFound.Function") {
 			return nil, nil
@@ -184,7 +200,10 @@ func (p *Provider) GetFunction(ctx context.Context, functionName, namespace stri
 }
 
 // ListFunctions 列出云函数
-func (p *Provider) ListFunctions(ctx context.Context, namespace string) ([]*FunctionInfo, error) {
+func (p *Provider) ListFunctions(ctx context.Context, namespace, region string) ([]*FunctionInfo, error) {
+	// 获取指定地区的客户端
+	client := p.GetSCFClient(region)
+
 	var functions []*FunctionInfo
 	var offset int64 = 0
 	limit := int64(100)
@@ -195,7 +214,7 @@ func (p *Provider) ListFunctions(ctx context.Context, namespace string) ([]*Func
 		request.Offset = common.Int64Ptr(offset)
 		request.Limit = common.Int64Ptr(limit)
 
-		response, err := p.scfClient.ListFunctions(request)
+		response, err := client.ListFunctions(request)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list functions: %w", err)
 		}
@@ -234,17 +253,22 @@ func (p *Provider) ListFunctions(ctx context.Context, namespace string) ([]*Func
 }
 
 // CreateNamespace 创建命名空间
-func (p *Provider) CreateNamespace(ctx context.Context, namespace, description string) error {
-	log.InfoContextf(ctx, "[CloudNode-Tencent] Creating namespace: %s", namespace)
+func (p *Provider) CreateNamespace(ctx context.Context, namespace, description, region string) error {
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Creating namespace: %s, region: %s", namespace, region)
+
+	// 获取指定地区的客户端
+	client := p.GetSCFClient(region)
 
 	request := scf.NewCreateNamespaceRequest()
 	request.Namespace = common.StringPtr(namespace)
 	request.Description = common.StringPtr(description)
 
-	_, err := p.scfClient.CreateNamespace(request)
+	_, err := client.CreateNamespace(request)
 	if err != nil {
 		// 检查是否是命名空间已存在的错误
-		if strings.Contains(err.Error(), "ResourceInUse.Namespace") {
+		// 腾讯云可能返回 ResourceInUse.Namespace 或 ResourceInUse 或包含"已存在"字样
+		if strings.Contains(err.Error(), "ResourceInUse") || 
+		   strings.Contains(err.Error(), "已存在") {
 			log.InfoContextf(ctx, "[CloudNode-Tencent] Namespace already exists: %s", namespace)
 			return nil
 		}
@@ -256,13 +280,16 @@ func (p *Provider) CreateNamespace(ctx context.Context, namespace, description s
 }
 
 // DeleteNamespace 删除命名空间
-func (p *Provider) DeleteNamespace(ctx context.Context, namespace string) error {
-	log.InfoContextf(ctx, "[CloudNode-Tencent] Deleting namespace: %s", namespace)
+func (p *Provider) DeleteNamespace(ctx context.Context, namespace, region string) error {
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Deleting namespace: %s, region: %s", namespace, region)
+
+	// 获取指定地区的客户端
+	client := p.GetSCFClient(region)
 
 	request := scf.NewDeleteNamespaceRequest()
 	request.Namespace = common.StringPtr(namespace)
 
-	_, err := p.scfClient.DeleteNamespace(request)
+	_, err := client.DeleteNamespace(request)
 	if err != nil {
 		return fmt.Errorf("failed to delete namespace: %w", err)
 	}
@@ -272,7 +299,10 @@ func (p *Provider) DeleteNamespace(ctx context.Context, namespace string) error 
 }
 
 // ListNamespaces 列出命名空间
-func (p *Provider) ListNamespaces(ctx context.Context) ([]*NamespaceInfo, error) {
+func (p *Provider) ListNamespaces(ctx context.Context, region string) ([]*NamespaceInfo, error) {
+	// 获取指定地区的客户端
+	client := p.GetSCFClient(region)
+
 	var namespaces []*NamespaceInfo
 	var offset int64 = 0
 	limit := int64(100)
@@ -282,7 +312,7 @@ func (p *Provider) ListNamespaces(ctx context.Context) ([]*NamespaceInfo, error)
 		request.Offset = common.Int64Ptr(offset)
 		request.Limit = common.Int64Ptr(limit)
 
-		response, err := p.scfClient.ListNamespaces(request)
+		response, err := client.ListNamespaces(request)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list namespaces: %w", err)
 		}
@@ -314,7 +344,10 @@ func (p *Provider) ListNamespaces(ctx context.Context) ([]*NamespaceInfo, error)
 
 // CreateTrigger 创建触发器
 func (p *Provider) CreateTrigger(ctx context.Context, req *CreateTriggerRequest) error {
-	log.InfoContextf(ctx, "[CloudNode-Tencent] Creating trigger: %s for function: %s", req.TriggerName, req.FunctionName)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Creating trigger: %s for function: %s, region: %s", req.TriggerName, req.FunctionName, req.Region)
+
+	// 获取指定地区的客户端
+	client := p.GetSCFClient(req.Region)
 
 	request := scf.NewCreateTriggerRequest()
 	request.FunctionName = common.StringPtr(req.FunctionName)
@@ -333,7 +366,7 @@ func (p *Provider) CreateTrigger(ctx context.Context, req *CreateTriggerRequest)
 		request.Description = common.StringPtr(req.Description)
 	}
 
-	_, err := p.scfClient.CreateTrigger(request)
+	_, err := client.CreateTrigger(request)
 	if err != nil {
 		// 检查是否是触发器已存在的错误
 		if strings.Contains(err.Error(), "相同的触发器已经存在") || strings.Contains(err.Error(), "InvalidParameterValue") {
@@ -348,8 +381,11 @@ func (p *Provider) CreateTrigger(ctx context.Context, req *CreateTriggerRequest)
 }
 
 // DeleteTrigger 删除触发器
-func (p *Provider) DeleteTrigger(ctx context.Context, functionName, triggerName, namespace string) error {
-	log.InfoContextf(ctx, "[CloudNode-Tencent] Deleting trigger: %s for function: %s", triggerName, functionName)
+func (p *Provider) DeleteTrigger(ctx context.Context, functionName, triggerName, namespace, region string) error {
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Deleting trigger: %s for function: %s, region: %s", triggerName, functionName, region)
+
+	// 获取指定地区的客户端
+	client := p.GetSCFClient(region)
 
 	request := scf.NewDeleteTriggerRequest()
 	request.FunctionName = common.StringPtr(functionName)
@@ -357,7 +393,7 @@ func (p *Provider) DeleteTrigger(ctx context.Context, functionName, triggerName,
 	request.Type = common.StringPtr("timer") // TODO: 需要先查询触发器类型
 	request.Namespace = common.StringPtr(namespace)
 
-	_, err := p.scfClient.DeleteTrigger(request)
+	_, err := client.DeleteTrigger(request)
 	if err != nil {
 		return fmt.Errorf("failed to delete trigger: %w", err)
 	}
@@ -367,13 +403,16 @@ func (p *Provider) DeleteTrigger(ctx context.Context, functionName, triggerName,
 }
 
 // ListTriggers 列出触发器
-func (p *Provider) ListTriggers(ctx context.Context, functionName, namespace string) ([]*TriggerInfo, error) {
+func (p *Provider) ListTriggers(ctx context.Context, functionName, namespace, region string) ([]*TriggerInfo, error) {
+	// 获取指定地区的客户端
+	client := p.GetSCFClient(region)
+
 	// 腾讯云SDK暂不支持直接列出触发器，需要通过获取函数详情来获取
 	request := scf.NewGetFunctionRequest()
 	request.FunctionName = common.StringPtr(functionName)
 	request.Namespace = common.StringPtr(namespace)
 
-	response, err := p.scfClient.GetFunction(request)
+	response, err := client.GetFunction(request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get function for triggers: %w", err)
 	}
@@ -397,7 +436,7 @@ func (p *Provider) ListTriggers(ctx context.Context, functionName, namespace str
 }
 
 // waitForFunctionReady 等待函数就绪
-func (p *Provider) waitForFunctionReady(ctx context.Context, functionName, namespace string) error {
+func (p *Provider) waitForFunctionReady(ctx context.Context, functionName, namespace, region string) error {
 	log.InfoContextf(ctx, "[CloudNode-Tencent] Waiting for function %s to be ready...", functionName)
 
 	maxWaitTime := 5 * time.Minute
@@ -417,7 +456,7 @@ func (p *Provider) waitForFunctionReady(ctx context.Context, functionName, names
 		}
 
 		// 获取函数状态
-		info, err := p.GetFunction(ctx, functionName, namespace)
+		info, err := p.GetFunction(ctx, functionName, namespace, region)
 		if err != nil {
 			log.ErrorContextf(ctx, "[CloudNode-Tencent] Failed to get function status: %v, retrying...", err)
 			time.Sleep(2 * time.Second)
@@ -464,7 +503,10 @@ func getInt64(i *int64) int64 {
 
 // InvokeFunction 调用云函数
 func (p *Provider) InvokeFunction(ctx context.Context, req *InvokeFunctionRequest) (*InvokeFunctionResponse, error) {
-	log.InfoContextf(ctx, "[CloudNode-Tencent] Invoking function: %s in namespace: %s", req.FunctionName, req.Namespace)
+	log.InfoContextf(ctx, "[CloudNode-Tencent] Invoking function: %s in namespace: %s, region: %s", req.FunctionName, req.Namespace, req.Region)
+
+	// 获取指定地区的客户端
+	client := p.GetSCFClient(req.Region)
 
 	// 构建请求
 	request := scf.NewInvokeRequest()
@@ -497,7 +539,7 @@ func (p *Provider) InvokeFunction(ctx context.Context, req *InvokeFunctionReques
 	}
 
 	// 调用函数
-	response, err := p.scfClient.Invoke(request)
+	response, err := client.Invoke(request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to invoke function: %w", err)
 	}

@@ -78,6 +78,7 @@ func NewTencentWrapper(config *provider.Config) (provider.Client, error) {
 func (p *TencentWrapper) CreateFunction(ctx context.Context, req *provider.CreateFunctionRequest) (*provider.FunctionInfo, error) {
 	// 转换请求
 	tencentReq := &CreateFunctionRequest{
+		Region:       req.Region,
 		FunctionName: req.FunctionName,
 		Runtime:      req.Runtime,
 		Namespace:    req.Namespace,
@@ -118,6 +119,7 @@ func (p *TencentWrapper) CreateFunction(ctx context.Context, req *provider.Creat
 func (p *TencentWrapper) UpdateFunction(ctx context.Context, req *provider.UpdateFunctionRequest) error {
 	// 转换请求
 	tencentReq := &UpdateFunctionRequest{
+		Region:       req.Region,
 		FunctionName: req.FunctionName,
 		Namespace:    req.Namespace,
 		ZipFile:      req.ZipFile,
@@ -134,13 +136,13 @@ func (p *TencentWrapper) UpdateFunction(ctx context.Context, req *provider.Updat
 }
 
 // DeleteFunction 删除云函数
-func (p *TencentWrapper) DeleteFunction(ctx context.Context, functionName, namespace string) error {
-	return p.provider.DeleteFunction(ctx, functionName, namespace)
+func (p *TencentWrapper) DeleteFunction(ctx context.Context, functionName, namespace, region string) error {
+	return p.provider.DeleteFunction(ctx, functionName, namespace, region)
 }
 
 // GetFunction 获取云函数详情
-func (p *TencentWrapper) GetFunction(ctx context.Context, functionName, namespace string) (*provider.FunctionInfo, error) {
-	resp, err := p.provider.GetFunction(ctx, functionName, namespace)
+func (p *TencentWrapper) GetFunction(ctx context.Context, functionName, namespace, region string) (*provider.FunctionInfo, error) {
+	resp, err := p.provider.GetFunction(ctx, functionName, namespace, region)
 	if err != nil {
 		return nil, err
 	}
@@ -166,8 +168,8 @@ func (p *TencentWrapper) GetFunction(ctx context.Context, functionName, namespac
 }
 
 // ListFunctions 列出云函数
-func (p *TencentWrapper) ListFunctions(ctx context.Context, namespace string) ([]*provider.FunctionInfo, error) {
-	functions, err := p.provider.ListFunctions(ctx, namespace)
+func (p *TencentWrapper) ListFunctions(ctx context.Context, namespace, region string) ([]*provider.FunctionInfo, error) {
+	functions, err := p.provider.ListFunctions(ctx, namespace, region)
 	if err != nil {
 		return nil, err
 	}
@@ -195,18 +197,18 @@ func (p *TencentWrapper) ListFunctions(ctx context.Context, namespace string) ([
 }
 
 // CreateNamespace 创建命名空间
-func (p *TencentWrapper) CreateNamespace(ctx context.Context, namespace, description string) error {
-	return p.provider.CreateNamespace(ctx, namespace, description)
+func (p *TencentWrapper) CreateNamespace(ctx context.Context, namespace, description, region string) error {
+	return p.provider.CreateNamespace(ctx, namespace, description, region)
 }
 
 // DeleteNamespace 删除命名空间
-func (p *TencentWrapper) DeleteNamespace(ctx context.Context, namespace string) error {
-	return p.provider.DeleteNamespace(ctx, namespace)
+func (p *TencentWrapper) DeleteNamespace(ctx context.Context, namespace, region string) error {
+	return p.provider.DeleteNamespace(ctx, namespace, region)
 }
 
 // ListNamespaces 列出命名空间
-func (p *TencentWrapper) ListNamespaces(ctx context.Context) ([]*provider.NamespaceInfo, error) {
-	namespaces, err := p.provider.ListNamespaces(ctx)
+func (p *TencentWrapper) ListNamespaces(ctx context.Context, region string) ([]*provider.NamespaceInfo, error) {
+	namespaces, err := p.provider.ListNamespaces(ctx, region)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +231,7 @@ func (p *TencentWrapper) ListNamespaces(ctx context.Context) ([]*provider.Namesp
 func (p *TencentWrapper) CreateTrigger(ctx context.Context, req *provider.CreateTriggerRequest) error {
 	// 转换请求
 	tencentReq := &CreateTriggerRequest{
+		Region:       req.Region,
 		FunctionName: req.FunctionName,
 		TriggerName:  req.TriggerName,
 		TriggerType:  req.TriggerType,
@@ -242,13 +245,13 @@ func (p *TencentWrapper) CreateTrigger(ctx context.Context, req *provider.Create
 }
 
 // DeleteTrigger 删除触发器
-func (p *TencentWrapper) DeleteTrigger(ctx context.Context, functionName, triggerName, namespace string) error {
-	return p.provider.DeleteTrigger(ctx, functionName, triggerName, namespace)
+func (p *TencentWrapper) DeleteTrigger(ctx context.Context, functionName, triggerName, namespace, region string) error {
+	return p.provider.DeleteTrigger(ctx, functionName, triggerName, namespace, region)
 }
 
 // ListTriggers 列出触发器
-func (p *TencentWrapper) ListTriggers(ctx context.Context, functionName, namespace string) ([]*provider.TriggerInfo, error) {
-	triggers, err := p.provider.ListTriggers(ctx, functionName, namespace)
+func (p *TencentWrapper) ListTriggers(ctx context.Context, functionName, namespace, region string) ([]*provider.TriggerInfo, error) {
+	triggers, err := p.provider.ListTriggers(ctx, functionName, namespace, region)
 	if err != nil {
 		return nil, err
 	}
@@ -273,6 +276,7 @@ func (p *TencentWrapper) ListTriggers(ctx context.Context, functionName, namespa
 func (p *TencentWrapper) InvokeFunction(ctx context.Context, req *provider.InvokeFunctionRequest) (*provider.InvokeFunctionResponse, error) {
 	// 转换请求
 	tencentReq := &InvokeFunctionRequest{
+		Region:       req.Region,
 		FunctionName: req.FunctionName,
 		Namespace:    req.Namespace,
 		Qualifier:    req.Qualifier,

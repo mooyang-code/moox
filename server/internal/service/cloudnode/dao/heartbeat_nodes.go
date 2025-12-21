@@ -197,7 +197,7 @@ func (d *heartbeatRecordDAO) GetTimeoutNodes(ctx context.Context) ([]*types.Hear
 	// 使用指定的格式计算超时时间
 	timeoutTime := time.Now().Add(-time.Duration(timeoutThreshold) * time.Second).Format("2006-01-02 15:04:05.000000000+07:00")
 	if err := d.db.WithContext(ctx).
-		Where("c_last_heartbeat < ?", timeoutTime).
+		Where("c_last_heartbeat < ? AND c_invalid = 0", timeoutTime).
 		Find(&results).Error; err != nil {
 		log.ErrorContextf(ctx, "GetTimeoutNodes query failed: %v", err)
 		return nil, fmt.Errorf("get timeout heartbeat records failed: %w", err)

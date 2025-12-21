@@ -53,39 +53,41 @@ func InitProberInstance(dbManager *database.Manager, cloudNodeCfg *config.Config
 
 // HealthProbeSchedule trpc定时器[入口函数] - 定时健康探测（仅探测超时节点）
 func HealthProbeSchedule(ctx context.Context, params string) error {
-	log.InfoContextf(ctx, "[HeartbeatProber] Starting health probe schedule, params: %s", params)
+	ctxClone := trpc.CloneContext(ctx)
+	log.InfoContextf(ctxClone, "[HeartbeatProber] Starting health probe schedule, params: %s", params)
 
 	if globalProberInstance == nil {
 		err := fmt.Errorf("prober instance not initialized")
-		log.ErrorContextf(ctx, "[HeartbeatProber] %v", err)
+		log.ErrorContextf(ctxClone, "[HeartbeatProber] %v", err)
 		return err
 	}
 
 	// 执行探测超时节点
-	if err := globalProberInstance.probeTimeoutNodes(ctx); err != nil {
-		log.ErrorContextf(ctx, "[HeartbeatProber] Health probe failed: %v", err)
+	if err := globalProberInstance.probeTimeoutNodes(ctxClone); err != nil {
+		log.ErrorContextf(ctxClone, "[HeartbeatProber] Health probe failed: %v", err)
 		return err
 	}
-	log.InfoContext(ctx, "[HeartbeatProber] Health probe schedule completed")
+	log.InfoContext(ctxClone, "[HeartbeatProber] Health probe schedule completed")
 	return nil
 }
 
-// KeepaliveSchedule trpc定时器[入口函数] - 定时探测所有节点（保活）
+// KeepaliveSchedule trpc定时器[入口函数] - 定时探测所有节点（用于保活）
 func KeepaliveSchedule(ctx context.Context, params string) error {
-	log.InfoContextf(ctx, "[KeepaliveSchedule] Starting all nodes probe schedule, params: %s", params)
+	ctxClone := trpc.CloneContext(ctx)
+	log.InfoContextf(ctxClone, "[KeepaliveSchedule] Starting all nodes probe schedule, params: %s", params)
 
 	if globalProberInstance == nil {
 		err := fmt.Errorf("prober instance not initialized")
-		log.ErrorContextf(ctx, "[KeepaliveSchedule] %v", err)
+		log.ErrorContextf(ctxClone, "[KeepaliveSchedule] %v", err)
 		return err
 	}
 
 	// 执行探测所有节点
-	if err := globalProberInstance.probeAllNodes(ctx); err != nil {
-		log.ErrorContextf(ctx, "[KeepaliveSchedule] All nodes probe failed: %v", err)
+	if err := globalProberInstance.probeAllNodes(ctxClone); err != nil {
+		log.ErrorContextf(ctxClone, "[KeepaliveSchedule] All nodes probe failed: %v", err)
 		return err
 	}
-	log.InfoContext(ctx, "[KeepaliveSchedule] All nodes probe schedule completed")
+	log.InfoContext(ctxClone, "[KeepaliveSchedule] All nodes probe schedule completed")
 	return nil
 }
 
@@ -288,8 +290,7 @@ func (p *HeartbeatProber) ProbeHeartbeatNode(ctx context.Context, record *types.
 
 	// 4. 更新心跳节点表信息
 	if updateErr := p.updateHeartbeatNodeFromProbe(ctx, record.NodeID, record.NodeType, probeResult, result); updateErr != nil {
-		log.WarnContextf(ctx, "[heartbeat] failed to update heartbeat node %s after probe: %v", record.NodeID, updateErr)
-		// 不返回错误，因为探测已经成功
+		log.ErrorContextf(ctx, "[heartbeat] failed to update heartbeat node %s after probe: %v", record.NodeID, updateErr)
 	}
 	return probeResult, nil
 }
@@ -331,7 +332,7 @@ func (p *HeartbeatProber) updateHeartbeatNodeFromProbe(ctx context.Context, node
 	// 1. 获取现有心跳记录
 	nodeRecord, err := p.heartbeatDAO.GetNodeByID(ctx, nodeID)
 	if err != nil {
-		return fmt.Errorf("get node record failed: %w", err)
+		return fmt.Errorf("get node record failed:%s %w", nodeID, err)
 	}
 
 	// 如果记录不存在，创建新的记录

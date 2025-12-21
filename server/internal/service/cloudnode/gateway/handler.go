@@ -220,6 +220,10 @@ func (h *CloudNodeGatewayHandler) parseMethodToRoute(method string, body []byte)
 		route.HTTPMethod = "DELETE"
 		route.Body = body
 
+	// Cloud Region methods
+	case "GetCloudRegionList", "ListCloudRegions", "ListRegions":
+		return h.buildMultiQueryRoute("/api/v1/cloud_region/list", body)
+
 	// Function Package methods (previously packagemgr)
 	case "GetPackageList":
 		return h.buildMultiQueryRoute("/api/v1/function-packages", body)

@@ -10,6 +10,7 @@ dnsproxy:
   # 需要定时解析的域名列表
   domains:
     - api.binance.com
+    - fapi.binance.com
 
   # 缓存配置
   cache:

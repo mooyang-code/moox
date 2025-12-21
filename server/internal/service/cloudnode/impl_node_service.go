@@ -197,6 +197,7 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 	}
 
 	req := &provider.CreateFunctionRequest{
+		Region:       nodeModel.Region,
 		FunctionName: nodeModel.NodeID,
 		Runtime:      runtime,
 		Namespace:    nodeModel.Namespace,
@@ -218,6 +219,11 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 		req.ZipFile = codeConfig.ZipFileBase64
 		log.InfoContextf(ctx, "[CloudNode] Creating function with ZipFile: base64_length=%d, runtime=%s",
 			len(codeConfig.ZipFileBase64), runtime)
+	}
+
+	// 在创建云函数前，先确保命名空间存在
+	if err := s.ensureNamespaceExists(ctx, client, nodeModel.Namespace, nodeModel.Region); err != nil {
+		return nil, fmt.Errorf("failed to ensure namespace exists: %w", err)
 	}
 
 	var funcInfo *provider.FunctionInfo
@@ -295,7 +301,7 @@ func (s *ServiceImpl) DeleteNode(ctx context.Context, nodeID string) error {
 
 	// 调用云厂商API删除云函数（带重试机制）
 	deleteErr := common.RetryOperation(ctx, func() error {
-		return client.DeleteFunction(ctx, node.NodeID, node.Namespace)
+		return client.DeleteFunction(ctx, node.NodeID, node.Namespace, node.Region)
 	}, fmt.Sprintf("DeleteFunction(%s)", node.NodeID))
 
 	if deleteErr != nil {
@@ -480,4 +486,30 @@ func (s *ServiceImpl) InvokeFunction(ctx context.Context, nodeID string, eventDa
 		ErrorType:    resp.ErrorType,
 		ReturnResult: resp.ReturnResult,
 	}, nil
+}
+
+// ensureNamespaceExists 确保命名空间存在，如果不存在则创建
+func (s *ServiceImpl) ensureNamespaceExists(ctx context.Context, client provider.Client, namespace, region string) error {
+	// 列出所有命名空间
+	namespaces, err := client.ListNamespaces(ctx, region)
+	if err != nil {
+		return fmt.Errorf("failed to list namespaces: %w", err)
+	}
+
+	// 检查命名空间是否存在
+	for _, ns := range namespaces {
+		if ns.Name == namespace {
+			log.InfoContextf(ctx, "[CloudNode] Namespace %s already exists", namespace)
+			return nil
+		}
+	}
+
+	// 命名空间不存在，创建它
+	log.InfoContextf(ctx, "[CloudNode] Namespace %s does not exist, creating it...", namespace)
+	if err := client.CreateNamespace(ctx, namespace, "MooX Auto Created", region); err != nil {
+		return fmt.Errorf("failed to create namespace %s: %w", namespace, err)
+	}
+
+	log.InfoContextf(ctx, "[CloudNode] Successfully created namespace: %s", namespace)
+	return nil
 }

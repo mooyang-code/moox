@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/config"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // CloudFunctionEvent 云函数事件结构（与接收方data-collector中的CloudFunctionEvent格式一致）
@@ -82,14 +83,16 @@ func (a *SCFHeartbeatProber) Probe(ctx context.Context, req *ProbeRequest) (*Pro
 	}
 
 	// 调用云函数
-	invokeResp, err := cloudClient.InvokeFunction(ctx, &provider.InvokeFunctionRequest{
+	invokeReq := provider.InvokeFunctionRequest{
 		FunctionName: req.NodeID,
 		Namespace:    node.Namespace,
 		EventData:    a.buildEventData(req.Action),
-	})
+	}
+	invokeResp, err := cloudClient.InvokeFunction(ctx, &invokeReq)
 	if err != nil {
 		return nil, fmt.Errorf("invoke function %s failed: %w", req.NodeID, err)
 	}
+	log.DebugContext(ctx, "InvokeFunction: %+v; EventData: %+v", invokeReq, invokeReq.EventData)
 
 	// 统一解析响应
 	return a.parseProbeResponse(invokeResp), nil

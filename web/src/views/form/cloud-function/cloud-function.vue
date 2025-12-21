@@ -10,24 +10,9 @@
           </a-select>
           <a-input v-model="form.namespace" placeholder="请输入命名空间" allow-clear />
           <a-select placeholder="地区" v-model="form.region" style="width: 180px" allow-clear>
-            <a-option value="ap-bangkok">亚太东南（曼谷）</a-option>
-            <a-option value="ap-beijing">华北地区（北京）</a-option>
-            <a-option value="ap-chengdu">西南地区（成都）</a-option>
-            <a-option value="ap-chongqing">西南地区（重庆）</a-option>
-            <a-option value="ap-guangzhou">华南地区（广州）</a-option>
-            <a-option value="ap-hongkong">港澳台地区（中国香港）</a-option>
-            <a-option value="ap-jakarta">亚太东南（雅加达）</a-option>
-            <a-option value="ap-nanjing">华东地区（南京）</a-option>
-            <a-option value="ap-seoul">亚太东北（首尔）</a-option>
-            <a-option value="ap-shanghai">华东地区（上海）</a-option>
-            <a-option value="ap-shanghai-fsi">华东地区（上海金融）</a-option>
-            <a-option value="ap-shenzhen-fsi">华南地区（深圳金融）</a-option>
-            <a-option value="ap-singapore">亚太东南（新加坡）</a-option>
-            <a-option value="ap-tokyo">亚太东北（东京）</a-option>
-            <a-option value="eu-frankfurt">欧洲地区（法兰克福）</a-option>
-            <a-option value="na-ashburn">美国东部（弗吉尼亚）</a-option>
-            <a-option value="na-siliconvalley">美国西部（硅谷）</a-option>
-            <a-option value="sa-saopaulo">南美地区（圣保罗）</a-option>
+            <a-option v-for="region in regionOptions" :key="region.code" :value="region.code">
+              {{ region.name }}
+            </a-option>
           </a-select>
           <a-select placeholder="节点类型" v-model="form.nodeType" style="width: 120px" allow-clear>
             <a-option value="scf">云函数</a-option>
@@ -235,24 +220,9 @@
         
         <a-form-item field="region" label="地区" required>
           <a-select v-model="batchAddForm.region" placeholder="请选择地区" style="width: 100%">
-            <a-option value="ap-bangkok">亚太东南（曼谷）</a-option>
-            <a-option value="ap-beijing">华北地区（北京）</a-option>
-            <a-option value="ap-chengdu">西南地区（成都）</a-option>
-            <a-option value="ap-chongqing">西南地区（重庆）</a-option>
-            <a-option value="ap-guangzhou">华南地区（广州）</a-option>
-            <a-option value="ap-hongkong">港澳台地区（中国香港）</a-option>
-            <a-option value="ap-jakarta">亚太东南（雅加达）</a-option>
-            <a-option value="ap-nanjing">华东地区（南京）</a-option>
-            <a-option value="ap-seoul">亚太东北（首尔）</a-option>
-            <a-option value="ap-shanghai">华东地区（上海）</a-option>
-            <a-option value="ap-shanghai-fsi">华东地区（上海金融）</a-option>
-            <a-option value="ap-shenzhen-fsi">华南地区（深圳金融）</a-option>
-            <a-option value="ap-singapore">亚太东南（新加坡）</a-option>
-            <a-option value="ap-tokyo">亚太东北（东京）</a-option>
-            <a-option value="eu-frankfurt">欧洲地区（法兰克福）</a-option>
-            <a-option value="na-ashburn">美国东部（弗吉尼亚）</a-option>
-            <a-option value="na-siliconvalley">美国西部（硅谷）</a-option>
-            <a-option value="sa-saopaulo">南美地区（圣保罗）</a-option>
+            <a-option v-for="region in regionOptions" :key="region.code" :value="region.code">
+              {{ region.name }}
+            </a-option>
           </a-select>
         </a-form-item>
         
@@ -747,11 +717,18 @@ const form = reactive({
   status: ''
 });
 
+// 接口定义 - 地区信息
+interface RegionInfo {
+  code: string;
+  name: string;
+}
+
 // 数据列表
 const functionList = ref<CloudFunction[]>([]);
 const allFunctionList = ref<CloudFunction[]>([]);
 const selectedKeys = ref<string[]>([]);
 const cloudAccountOptions = ref<CloudAccount[]>([]);
+const regionOptions = ref<RegionInfo[]>([]); // 地区选项
 
 // 批量新增相关
 const batchAddVisible = ref(false);
@@ -833,6 +810,7 @@ const paginationConfig = computed(() => ({
 onMounted(async () => {
   await loadData();
   await loadCloudAccounts();
+  await loadRegions(); // 加载地区列表
   
   // 检查并恢复任务状态
   await asyncTaskManager.checkAndRestoreTask(handleTaskRestore);
@@ -1315,6 +1293,32 @@ const loadCloudAccounts = async () => {
   }
 };
 
+// 加载地区列表
+const loadRegions = async () => {
+  try {
+    const response = await api.post('/cloudnode/ListCloudRegions', {
+      provider: 'tencent' // 目前只支持腾讯云
+    });
+    
+    if (response.data?.code === 200 && response.data?.data) {
+      let data = response.data.data;
+      if (Array.isArray(data)) {
+        regionOptions.value = data;
+      } else {
+        regionOptions.value = [data].filter(Boolean);
+      }
+    } else {
+      console.error('加载地区列表失败:', response);
+      // 失败时使用空数组
+      regionOptions.value = [];
+    }
+  } catch (error) {
+    console.error('加载地区列表失败:', error);
+    // 失败时使用空数组
+    regionOptions.value = [];
+  }
+};
+
 // 工具函数
 const getTaskTypeText = (taskType: string) => {
   const typeMap: Record<string, string> = {
@@ -1336,16 +1340,9 @@ const getProviderName = (provider: string) => {
 };
 
 const getRegionName = (region: string) => {
-  const regionMap: Record<string, string> = {
-    'ap-bangkok': '亚太东南（曼谷）',
-    'ap-beijing': '华北地区（北京）',
-    'ap-chengdu': '西南地区（成都）',
-    'ap-chongqing': '西南地区（重庆）',
-    'ap-guangzhou': '华南地区（广州）',
-    'ap-hongkong': '港澳台地区（中国香港）',
-    // ... 其他地区映射
-  };
-  return regionMap[region] || region;
+  // 从动态加载的地区列表中查找
+  const regionInfo = regionOptions.value.find(r => r.code === region);
+  return regionInfo ? regionInfo.name : region;
 };
 
 const getStatusColor = (status: number) => {

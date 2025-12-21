@@ -38,6 +38,13 @@ func RegisterCloudNodeRoutes(router *gin.RouterGroup, service cloudnodemgr.Servi
 		accountGroup.PUT("/update", accountHandler.UpdateCloudAccount)
 		accountGroup.DELETE("/delete", accountHandler.DeleteCloudAccount)
 	}
+
+	// 云地区路由
+	regionHandler := NewCloudRegionHandler()
+	regionGroup := router.Group("/cloud_region")
+	{
+		regionGroup.GET("/list", regionHandler.GetRegionList)
+	}
 }
 
 // RegisterPackageManagerRoutes 注册包管理相关路由

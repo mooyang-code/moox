@@ -4,6 +4,7 @@ package tencent
 
 // CreateFunctionRequest 创建函数请求
 type CreateFunctionRequest struct {
+	Region       string
 	FunctionName string
 	Runtime      string
 	Namespace    string
@@ -20,6 +21,7 @@ type CreateFunctionRequest struct {
 
 // UpdateFunctionRequest 更新函数请求
 type UpdateFunctionRequest struct {
+	Region       string
 	FunctionName string
 	Namespace    string
 	ZipFile      string
@@ -60,6 +62,7 @@ type NamespaceInfo struct {
 
 // CreateTriggerRequest 创建触发器请求
 type CreateTriggerRequest struct {
+	Region       string
 	FunctionName string
 	TriggerName  string
 	TriggerType  string
@@ -81,6 +84,7 @@ type TriggerInfo struct {
 
 // InvokeFunctionRequest 调用函数请求
 type InvokeFunctionRequest struct {
+	Region       string
 	FunctionName string
 	Namespace    string
 	Qualifier    string

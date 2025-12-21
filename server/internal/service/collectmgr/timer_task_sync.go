@@ -9,6 +9,7 @@ import (
 	collectordao "github.com/mooyang-code/moox/server/internal/service/collectmgr/dao"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/distributor"
 	"github.com/mooyang-code/moox/server/internal/service/database"
+	"trpc.group/trpc-go/trpc-go"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -49,22 +50,23 @@ func GetTaskPlannerInstance() TaskPlannerService {
 
 // TaskSyncSchedule TRPC定时器[入口函数] - 定时同步所有启用的规则
 func TaskSyncSchedule(ctx context.Context, params string) error {
-	log.InfoContextf(ctx, "[TaskPlanner] Starting task sync schedule, params: %s", params)
+	ctxClone := trpc.CloneContext(ctx)
+	log.InfoContextf(ctxClone, "[TaskPlanner] Starting task sync schedule, params: %s", params)
 
 	if globalTaskPlannerInstance == nil {
 		err := fmt.Errorf("task planner instance not initialized")
-		log.ErrorContextf(ctx, "[TaskPlanner] %v", err)
+		log.ErrorContextf(ctxClone, "[TaskPlanner] %v", err)
 		return err
 	}
 
 	// 执行同步所有启用的规则
-	result, err := globalTaskPlannerInstance.SyncAllEnabledRules(ctx)
+	result, err := globalTaskPlannerInstance.SyncAllEnabledRules(ctxClone)
 	if err != nil {
-		log.ErrorContextf(ctx, "[TaskPlanner] Task sync failed: %v", err)
+		log.ErrorContextf(ctxClone, "[TaskPlanner] Task sync failed: %v", err)
 		return err
 	}
 
-	log.InfoContextf(ctx, "[TaskPlanner] Task sync schedule completed: "+
+	log.InfoContextf(ctxClone, "[TaskPlanner] Task sync schedule completed: "+
 		"total=%d, synced=%d, failed=%d, created=%d, updated=%d, deleted=%d",
 		result.TotalRules, result.SyncedRules, result.FailedRules,
 		result.TotalCreated, result.TotalUpdated, result.TotalDeleted)

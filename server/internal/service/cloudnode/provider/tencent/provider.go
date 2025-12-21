@@ -15,7 +15,7 @@ import (
 type Provider struct {
 	secretID    string
 	secretKey   string
-	scfClient   *scf.Client
+	scfClients  map[string]*scf.Client // key为region，支持多地区
 	cosClient   *cos.Client
 	region      string
 	extraConfig map[string]interface{}
@@ -46,21 +46,34 @@ func NewProvider(config *Config) (*Provider, error) {
 	// 创建凭证
 	credential := common.NewCredential(config.SecretID, config.SecretKey)
 
-	// 配置客户端
-	cpf := profile.NewClientProfile()
-	cpf.HttpProfile.Endpoint = "scf.tencentcloudapi.com"
-	cpf.HttpProfile.ReqTimeout = 240
-
-	// 创建SCF客户端
-	client, err := scf.NewClient(credential, region, cpf)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create scf client: %w", err)
+	// 定义所有腾讯云地区
+	regions := []string{
+		"ap-bangkok", "ap-beijing", "ap-chengdu", "ap-chongqing",
+		"ap-guangzhou", "ap-hongkong", "ap-jakarta", "ap-nanjing",
+		"ap-seoul", "ap-shanghai", "ap-shanghai-fsi", "ap-shenzhen-fsi",
+		"ap-singapore", "ap-tokyo", "eu-frankfurt", "na-ashburn",
+		"na-siliconvalley", "sa-saopaulo",
 	}
 
-	// 创建COS客户端（如果提供了COS配置）
+	// 为每个地区创建 SCF 客户端
+	scfClients := make(map[string]*scf.Client)
+	for _, r := range regions {
+		cpf := profile.NewClientProfile()
+		cpf.HttpProfile.Endpoint = "scf.tencentcloudapi.com"
+		cpf.HttpProfile.ReqTimeout = 240
+
+		client, err := scf.NewClient(credential, r, cpf)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create scf client for region %s: %w", r, err)
+		}
+		scfClients[r] = client
+	}
+
+	// 创建COS客户端（如果提供了COS配置），只创建一个默认广州
 	var cosClient *cos.Client
 	if config.COSBucket != "" && config.COSAppID != "" {
-		bucketURL, _ := url.Parse(fmt.Sprintf("https://%s.cos.%s.myqcloud.com", config.COSBucket, region))
+		cosRegion := DefaultRegion // 默认广州
+		bucketURL, _ := url.Parse(fmt.Sprintf("https://%s.cos.%s.myqcloud.com", config.COSBucket, cosRegion))
 		baseURL := &cos.BaseURL{BucketURL: bucketURL}
 		cosClient = cos.NewClient(baseURL, &http.Client{
 			Transport: &cos.AuthorizationTransport{
@@ -73,9 +86,21 @@ func NewProvider(config *Config) (*Provider, error) {
 	return &Provider{
 		secretID:    config.SecretID,
 		secretKey:   config.SecretKey,
-		scfClient:   client,
+		scfClients:  scfClients,
 		cosClient:   cosClient,
 		region:      region,
 		extraConfig: config.ExtraConfig,
 	}, nil
+}
+
+// GetSCFClient 获取指定地区的 SCF 客户端
+func (p *Provider) GetSCFClient(region string) *scf.Client {
+	if region == "" {
+		region = p.region
+	}
+	if client, ok := p.scfClients[region]; ok {
+		return client
+	}
+	// 降级到默认地区
+	return p.scfClients[p.region]
 }

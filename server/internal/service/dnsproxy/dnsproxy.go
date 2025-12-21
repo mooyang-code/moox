@@ -21,10 +21,10 @@ var (
 
 // DNSProxy DNS代理服务
 type DNSProxy struct {
-	dnsServers    []string
-	dnsTimeout    time.Duration
-	pingTimeout   time.Duration
-	pingPort      int
+	dnsServers  []string
+	dnsTimeout  time.Duration
+	pingTimeout time.Duration
+	pingPort    int
 }
 
 // IPInfo 存储IP地址及其延迟信息
@@ -71,18 +71,19 @@ func NewDNSProxy() *DNSProxy {
 
 // HandleSchedule trpc定时器[入口函数] - 定时解析配置的域名并缓存结果
 func HandleSchedule(ctx context.Context, params string) error {
-	log.InfoContextf(ctx, "[DNSProxy] Starting DNS proxy schedule, params: %s", params)
+	ctxClone := trpc.CloneContext(ctx)
+	log.InfoContextf(ctxClone, "[DNSProxy] Starting DNS proxy schedule, params: %s", params)
 
 	if globalDNSInstance == nil {
 		err := fmt.Errorf("DNS proxy instance not initialized")
-		log.ErrorContext(ctx, "[DNSProxy] "+err.Error())
+		log.ErrorContext(ctxClone, "[DNSProxy] "+err.Error())
 		return err
 	}
 
 	// 获取配置的域名列表
 	domains := getScheduledDomains()
 	if len(domains) == 0 {
-		log.InfoContextf(ctx, "[DNSProxy] No domains configured for scheduled resolution")
+		log.InfoContextf(ctxClone, "[DNSProxy] No domains configured for scheduled resolution")
 		return nil
 	}
 
@@ -91,7 +92,7 @@ func HandleSchedule(ctx context.Context, params string) error {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 100 // 默认最大并发数
 	}
-	return resolveDomainsBatch(ctx, domains, maxConcurrent)
+	return resolveDomainsBatch(ctxClone, domains, maxConcurrent)
 }
 
 // resolveDomain 解析域名并返回IP列表（按延迟排序）

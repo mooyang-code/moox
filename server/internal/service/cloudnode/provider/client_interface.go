@@ -19,24 +19,24 @@ type Client interface {
 	UpdateFunction(ctx context.Context, req *UpdateFunctionRequest) error
 
 	// DeleteFunction 删除云函数
-	DeleteFunction(ctx context.Context, functionName, namespace string) error
+	DeleteFunction(ctx context.Context, functionName, namespace, region string) error
 
 	// GetFunction 获取云函数详情
-	GetFunction(ctx context.Context, functionName, namespace string) (*FunctionInfo, error)
+	GetFunction(ctx context.Context, functionName, namespace, region string) (*FunctionInfo, error)
 
 	// ListFunctions 列出指定命名空间下的云函数
-	ListFunctions(ctx context.Context, namespace string) ([]*FunctionInfo, error)
+	ListFunctions(ctx context.Context, namespace, region string) ([]*FunctionInfo, error)
 
 	// ========== 命名空间管理 ==========
 
 	// CreateNamespace 创建命名空间
-	CreateNamespace(ctx context.Context, namespace, description string) error
+	CreateNamespace(ctx context.Context, namespace, description, region string) error
 
 	// DeleteNamespace 删除命名空间
-	DeleteNamespace(ctx context.Context, namespace string) error
+	DeleteNamespace(ctx context.Context, namespace, region string) error
 
 	// ListNamespaces 列出所有命名空间
-	ListNamespaces(ctx context.Context) ([]*NamespaceInfo, error)
+	ListNamespaces(ctx context.Context, region string) ([]*NamespaceInfo, error)
 
 	// ========== 触发器管理 ==========
 
@@ -44,10 +44,10 @@ type Client interface {
 	CreateTrigger(ctx context.Context, req *CreateTriggerRequest) error
 
 	// DeleteTrigger 删除触发器
-	DeleteTrigger(ctx context.Context, functionName, triggerName, namespace string) error
+	DeleteTrigger(ctx context.Context, functionName, triggerName, namespace, region string) error
 
 	// ListTriggers 列出指定云函数的触发器
-	ListTriggers(ctx context.Context, functionName, namespace string) ([]*TriggerInfo, error)
+	ListTriggers(ctx context.Context, functionName, namespace, region string) ([]*TriggerInfo, error)
 
 	// ========== 云函数调用 ==========
 
@@ -88,6 +88,7 @@ func NewClient(config *Config) (Client, error) {
 
 // CreateFunctionRequest 创建函数请求
 type CreateFunctionRequest struct {
+	Region       string            // 地区
 	FunctionName string            // 函数名称
 	Runtime      string            // 运行时环境
 	Namespace    string            // 命名空间
@@ -103,6 +104,7 @@ type CreateFunctionRequest struct {
 
 // UpdateFunctionRequest 更新函数请求
 type UpdateFunctionRequest struct {
+	Region       string            // 地区
 	FunctionName string            // 函数名称
 	Namespace    string            // 命名空间
 	ZipFile      string            // 代码包（base64编码）
@@ -141,6 +143,7 @@ type NamespaceInfo struct {
 
 // CreateTriggerRequest 创建触发器请求
 type CreateTriggerRequest struct {
+	Region       string // 地区
 	FunctionName string // 函数名称
 	TriggerName  string // 触发器名称
 	TriggerType  string // 触发器类型：timer, cos, apigw, ckafka, cmq
@@ -162,6 +165,7 @@ type TriggerInfo struct {
 
 // InvokeFunctionRequest 调用函数请求
 type InvokeFunctionRequest struct {
+	Region       string            // 地区
 	FunctionName string            // 函数名称
 	Namespace    string            // 命名空间
 	Qualifier    string            // 版本号或别名
