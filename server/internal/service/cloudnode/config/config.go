@@ -12,6 +12,21 @@ type Config struct {
 	Prober        ProberConfig        `yaml:"prober"`
 	Heartbeat     HeartbeatConfig     `yaml:"heartbeat"`
 	CloudFunction CloudFunctionConfig `yaml:"cloudfunction"`
+	CloudRegions  CloudRegionsConfig  `yaml:"cloud_regions"`
+}
+
+// RegionInfo 地区信息
+type RegionInfo struct {
+	Code string `yaml:"code" json:"code"`
+	Name string `yaml:"name" json:"name"`
+}
+
+// CloudRegionsConfig 云厂商地区配置
+type CloudRegionsConfig struct {
+	Tencent []RegionInfo `yaml:"tencent"`
+	// 未来可扩展其他云厂商
+	// Aliyun []RegionInfo `yaml:"aliyun"`
+	// AWS    []RegionInfo `yaml:"aws"`
 }
 
 // ProberConfig 探测器配置
@@ -115,4 +130,13 @@ func (c *Config) Validate() error {
 func (c *Config) String() string {
 	data, _ := yaml.Marshal(c)
 	return string(data)
+}
+
+// GetTencentRegionCodes 获取腾讯云地区代码列表
+func (c *Config) GetTencentRegionCodes() []string {
+	codes := make([]string, 0, len(c.CloudRegions.Tencent))
+	for _, r := range c.CloudRegions.Tencent {
+		codes = append(codes, r.Code)
+	}
+	return codes
 }

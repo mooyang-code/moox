@@ -86,6 +86,7 @@ func (a *SCFHeartbeatProber) Probe(ctx context.Context, req *ProbeRequest) (*Pro
 	invokeReq := provider.InvokeFunctionRequest{
 		FunctionName: req.NodeID,
 		Namespace:    node.Namespace,
+		Region:       node.Region,
 		EventData:    a.buildEventData(req.Action),
 	}
 	invokeResp, err := cloudClient.InvokeFunction(ctx, &invokeReq)

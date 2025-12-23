@@ -422,6 +422,7 @@ func (s *ServiceImpl) DeployNode(ctx context.Context, nodeID string, codeConfig 
 	req := &provider.UpdateFunctionRequest{
 		FunctionName: node.NodeID,
 		Namespace:    node.Namespace,
+		Region:       node.Region,
 		Description:  description,
 	}
 
@@ -470,6 +471,7 @@ func (s *ServiceImpl) InvokeFunction(ctx context.Context, nodeID string, eventDa
 	resp, err := cloudProvider.InvokeFunction(ctx, &provider.InvokeFunctionRequest{
 		FunctionName: node.NodeID,
 		Namespace:    node.Namespace,
+		Region:       node.Region,
 		EventData:    eventData,
 		InvokeType:   InvokeTypeSync,
 	})

@@ -123,6 +123,11 @@
               </a-tag>
             </template>
           </a-table-column>
+          <a-table-column title="创建时间" data-index="created_time" :width="180">
+            <template #cell="{ record }">
+              {{ formatTime(record.created_time) }}
+            </template>
+          </a-table-column>
           <a-table-column title="描述" data-index="description" :width="200">
             <template #cell="{ record }">
               <a-tooltip :content="record.description" position="top">
@@ -145,11 +150,6 @@
               <a-tooltip :content="record.file_md5" position="top">
                 <span>{{ record.file_md5 ? (record.file_md5.length > 16 ? record.file_md5.substring(0, 16) + '...' : record.file_md5) : '-' }}</span>
               </a-tooltip>
-            </template>
-          </a-table-column>
-          <a-table-column title="创建时间" data-index="created_at" :width="180">
-            <template #cell="{ record }">
-              {{ formatTime(record.created_at) }}
             </template>
           </a-table-column>
           <a-table-column title="操作" :width="180" align="center" fixed="right">
@@ -208,19 +208,24 @@
         </a-form-item>
         
         
-        <a-form-item 
-          field="version" 
-          label="版本号" 
+        <a-form-item
+          field="version"
+          label="版本号"
           required
           :status="versionValidationStatus"
           :feedback="versionFeedback"
         >
-          <a-input 
-            v-model="uploadForm.version" 
-            placeholder="请输入版本号，如：v1.0.0" 
-            @blur="checkVersionExists"
-            @input="onVersionInput"
+          <a-input
+            v-model="uploadForm.version"
+            placeholder="将从上传的文件名中自动解析"
+            readonly
+            disabled
           />
+          <template #extra>
+            <span style="color: #86909c; font-size: 12px;">
+              版本号将从上传的文件名中自动解析（格式：xxx-v1.0.45.zip）
+            </span>
+          </template>
         </a-form-item>
         
         <a-form-item field="runtime" label="运行时环境" required>
@@ -601,13 +606,6 @@ const onPackageTypeChange = (value: string) => {
   }
 };
 
-// 版本输入变化处理
-const onVersionInput = () => {
-  // 输入时清除验证状态，等待用户完成输入
-  versionValidationStatus.value = undefined;
-  versionFeedback.value = '';
-};
-
 // 检查版本是否已存在
 const checkVersionExists = async () => {
   if (!uploadForm.version || !uploadForm.package_name || isCheckingVersion.value) {
@@ -671,17 +669,44 @@ const checkVersionExists = async () => {
 const onFileChange = (fileItemList: any[], fileItem: any) => {
   fileList.value = fileItemList;
   if (fileItem && fileItem.file) {
+    const fileName = fileItem.file.name;
+
     // 检查文件类型
-    if (!fileItem.file.name.toLowerCase().endsWith('.zip')) {
+    if (!fileName.toLowerCase().endsWith('.zip')) {
       Message.error({
         content: '只支持ZIP格式的文件',
         duration: 5000
       });
       fileList.value = [];
       uploadForm.file_content = '';
+      uploadForm.version = '';
+      versionValidationStatus.value = undefined;
+      versionFeedback.value = '';
       return;
     }
-    
+
+    // 从文件名解析版本号（格式：xxx-v1.0.45.zip）
+    const versionMatch = fileName.match(/-v(\d+\.\d+\.\d+)\.zip$/i);
+    if (!versionMatch) {
+      Message.error({
+        content: '文件名格式不正确，应为：xxx-v1.0.45.zip（例如：collector-scf-v1.0.45.zip）',
+        duration: 5000
+      });
+      fileList.value = [];
+      uploadForm.file_content = '';
+      uploadForm.version = '';
+      versionValidationStatus.value = 'error';
+      versionFeedback.value = '文件名格式不符合要求';
+      return;
+    }
+
+    // 提取版本号（包含 v 前缀）
+    const version = 'v' + versionMatch[1];
+    uploadForm.version = version;
+
+    // 解析成功后自动检查版本是否存在
+    checkVersionExists();
+
     // 检查文件大小（100MB限制）
     const maxSize = 100 * 1024 * 1024;
     if (fileItem.file.size > maxSize) {
@@ -691,9 +716,12 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
       });
       fileList.value = [];
       uploadForm.file_content = '';
+      uploadForm.version = '';
+      versionValidationStatus.value = undefined;
+      versionFeedback.value = '';
       return;
     }
-    
+
     // 将文件转换为base64
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -709,11 +737,17 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
       });
       fileList.value = [];
       uploadForm.file_content = '';
+      uploadForm.version = '';
+      versionValidationStatus.value = undefined;
+      versionFeedback.value = '';
     };
     reader.readAsDataURL(fileItem.file);
   } else {
     // 文件被移除
     uploadForm.file_content = '';
+    uploadForm.version = '';
+    versionValidationStatus.value = undefined;
+    versionFeedback.value = '';
   }
 };
 

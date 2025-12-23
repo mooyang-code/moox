@@ -22,5 +22,5 @@ const (
 const (
 	DefaultMemorySize = 128
 	DefaultTimeout    = 30
-	DefaultRegion     = "ap-guangzhou"
+	DefaultCOSRegion  = "ap-guangzhou"
 )

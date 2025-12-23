@@ -112,7 +112,7 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 		return nil, fmt.Errorf("cloud provider not configured")
 	}
 
-	var functionName, namespace string
+	var functionName, namespace, region string
 
 	// 如果提供了NodeID，从服务获取节点信息
 	if req.NodeID != "" {
@@ -127,6 +127,7 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 		// 使用节点的信息作为默认值
 		functionName = node.NodeID // 假设NodeID就是函数名
 		namespace = node.Namespace
+		region = node.Region
 	}
 
 	// 如果请求中明确指定了函数名和命名空间，则覆盖默认值
@@ -161,6 +162,7 @@ func (s *CloudFunctionInvokeService) invokeCloudFunction(ctx context.Context, re
 	invokeReq := &provider.InvokeFunctionRequest{
 		FunctionName: functionName,
 		Namespace:    namespace,
+		Region:       region,
 		Qualifier:    req.Qualifier,
 		EventData:    req.EventData,
 		InvokeType:   cloudInvokeType,

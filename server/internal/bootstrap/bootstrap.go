@@ -5,7 +5,6 @@ import (
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode"
-	"github.com/mooyang-code/moox/server/internal/service/collectmgr"
 	"github.com/mooyang-code/moox/server/internal/service/dnsproxy"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -47,9 +46,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	// DNS探测定时器
 	timer.RegisterScheduler("dnsproxySchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service("trpc.dnsproxy.timer"), dnsproxy.HandleSchedule)
-	// 任务规则同步定时器
-	timer.RegisterScheduler("taskSyncSchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.taskSync.timer"), collectmgr.TaskSyncSchedule)
 
 	log.InfoContextf(ctx, "应用初始化完成")
 	return s, nil

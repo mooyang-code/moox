@@ -12,7 +12,7 @@
 - 增量更新（只处理变化的实例）
 - 禁用后再启用重新生成
 - 策略模式（不同数据类型实现不同分配策略）
-- 混合触发（用户操作立即生效 + 定时任务兜底）
+- 用户操作立即生效（客户端通过 API 轮询获取任务）
 
 ### 1.3 目录重命名
 
@@ -28,7 +28,7 @@ collector → collectmgr
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                               │
 │  ┌─────────────┐   ┌─────────────┐                                          │
-│  │ 用户操作规则 │   │  定时任务   │                      ← 触发层              │
+│  │ 用户操作规则 │   │ 客户端轮询   │                      ← 触发层              │
 │  └──────┬──────┘   └──────┬──────┘                                          │
 │         │                 │                                                  │
 │         └────────┬────────┘                                                  │
@@ -119,7 +119,7 @@ type TaskPlannerService interface {
     // 用于：用户禁用规则时调用
     InvalidateRuleInstances(ctx context.Context, ruleID string) error
 
-    // SyncAllEnabledRules 同步所有启用的规则（定时任务调用）
+    // SyncAllEnabledRules 同步所有启用的规则（供客户端 API 调用）
     SyncAllEnabledRules(ctx context.Context) (*BatchSyncResult, error)
 }
 
@@ -520,7 +520,7 @@ func (s *TaskRulesServiceImpl) CreateTaskRule(ctx, rule) (string, error) {
     if rule.Enabled == "true" {
         if _, err := s.taskPlanner.SyncRuleInstances(ctx, ruleID); err != nil {
             log.Warnf("sync instances failed: %v", err)
-            // 不影响规则创建，定时任务会兜底
+            // 不影响规则创建，客户端下次轮询会重新同步
         }
     }
 
@@ -564,74 +564,12 @@ func (s *TaskRulesServiceImpl) DisableTaskRule(ctx, ruleID) error {
 }
 ```
 
-### 7.2 定时任务触发
+### 7.2 客户端轮询调用
 
-**新建文件:** `collectmgr/timer_task_sync.go`
-
-```go
-package collectmgr
-
-import (
-    "context"
-    "sync"
-
-    "trpc.group/trpc-go/trpc-go/log"
-)
-
-var (
-    globalTaskSyncInstance *TaskSyncScheduler
-    taskSyncOnce           sync.Once
-)
-
-// TaskSyncScheduler 任务同步调度器
-type TaskSyncScheduler struct {
-    taskPlanner TaskPlannerService
-}
-
-// InitTaskSyncInstance 初始化全局实例（供 bootstrap 调用）
-func InitTaskSyncInstance(taskPlanner TaskPlannerService) {
-    taskSyncOnce.Do(func() {
-        log.Info("[TaskSync] Initializing global task sync instance...")
-        globalTaskSyncInstance = &TaskSyncScheduler{
-            taskPlanner: taskPlanner,
-        }
-        log.Info("[TaskSync] Global task sync instance initialized")
-    })
-}
-
-// TaskSyncSchedule trpc定时器[入口函数] - 定时同步任务实例
-func TaskSyncSchedule(ctx context.Context, params string) error {
-    log.InfoContextf(ctx, "[TaskSync] Starting task sync schedule, params: %s", params)
-
-    if globalTaskSyncInstance == nil {
-        err := fmt.Errorf("task sync instance not initialized")
-        log.ErrorContextf(ctx, "[TaskSync] %v", err)
-        return err
-    }
-
-    result, err := globalTaskSyncInstance.taskPlanner.SyncAllEnabledRules(ctx)
-    if err != nil {
-        log.ErrorContextf(ctx, "[TaskSync] sync failed: %v", err)
-        return err
-    }
-
-    log.InfoContextf(ctx, "[TaskSync] completed: total=%d, synced=%d, created=%d, updated=%d, deleted=%d",
-        result.TotalRules, result.SyncedRules,
-        result.TotalCreated, result.TotalUpdated, result.TotalDeleted)
-
-    return nil
-}
-```
-
-**修改文件:** `bootstrap/bootstrap.go`
-
-```go
-// 在 Initialize 函数中添加
-
-// 5. 注册采集任务同步定时器
-timer.RegisterScheduler("taskSyncSchedule", &timer.DefaultScheduler{})
-timer.RegisterHandlerService(s.Service("trpc.taskSync.timer"), collectmgr.TaskSyncSchedule)
-```
+**说明：**
+- 服务端不再使用定时器定时同步任务
+- 客户端（另一个项目）通过 API 轮询调用 `SyncAllEnabledRules` 接口获取任务
+- TaskPlannerService 的功能保留，供 API 层调用
 
 ---
 
@@ -745,8 +683,7 @@ internal/service/collectmgr/
 ├── impl_task_rules.go                      # 修改：集成 TaskPlanner
 ├── impl_task_instance.go
 ├── impl_data_type_config.go
-├── impl_task_planner.go                    # 【重写】任务规划器实现
-└── timer_task_sync.go                      # 【新建】定时任务
+└── impl_task_planner.go                    # 【重写】任务规划器实现
 ```
 
 ---
@@ -766,7 +703,6 @@ internal/service/collectmgr/
 | collectmgr/distributor/orderbook_distributor.go | OrderBook分配器      |
 | collectmgr/distributor/trade_distributor.go     | Trade分配器          |
 | collectmgr/distributor/news_distributor.go      | 新闻分配器             |
-| collectmgr/timer_task_sync.go                   | 定时同步任务            |
 
 ### 11.2 修改文件（8个）
 
@@ -780,7 +716,6 @@ internal/service/collectmgr/
 | collectmgr/impl_task_planner.go             | 重写：实现任务规划器核心逻辑                          |
 | collectmgr/impl_task_rules.go               | 集成 TaskPlanner，在 CRUD 时触发同步              |
 | cloudnode/dao/cloud_node.go                 | 添加节点查询方法（3个）                             |
-| bootstrap/bootstrap.go                      | 注册定时任务                                  |
 
 ### 11.3 目录重命名
 
@@ -819,15 +754,10 @@ internal/service/collectmgr/
 - **Step 18:** 重写 `impl_task_planner.go`（核心同步逻辑）
 - **Step 19:** 修改 `impl_task_rules.go`（集成规划器）
 
-### 阶段五：定时任务
-- **Step 20:** 创建 `timer_task_sync.go`
-- **Step 21:** 修改 `bootstrap/bootstrap.go`（注册定时任务）
-- **Step 22:** 配置 `trpc_go.yaml`（添加定时器配置）
-
-### 阶段六：测试验证
-- **Step 23:** 编译验证
-- **Step 24:** 单元测试
-- **Step 25:** 集成测试
+### 阶段五：测试验证
+- **Step 20:** 编译验证
+- **Step 21:** 单元测试
+- **Step 22:** 集成测试
 
 ---
 

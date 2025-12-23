@@ -37,6 +37,7 @@ export interface FunctionPackage {
   created_by: string;
   invalid?: number;
   created_at: string;
+  created_time?: string; // 从后端返回的创建时间
   updated_at?: string;
 }
 

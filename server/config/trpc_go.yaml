@@ -57,12 +57,7 @@ server:
       network: "*/90 * * * * *?scheduler=keepaliveSchedule&startAtOnce=1&params="
       protocol: timer
       timeout: 30000  #请求最长处理时间 单位 毫秒
-      ######## 采集任务同步定时任务 ########
-    - name: trpc.taskSync.timer
-      port: 8004
-      network: "0 */5 * * * *?scheduler=taskSyncSchedule&startAtOnce=1&params="  # 每5分钟执行一次，启动时立即执行
-      protocol: timer
-      timeout: 30000  #请求最长处理时间 单位 毫秒（30秒，因为同步可能耗时较长）
+
 
 client:
   filter:

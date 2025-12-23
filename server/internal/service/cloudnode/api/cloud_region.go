@@ -3,6 +3,7 @@ package api
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/mooyang-code/moox/server/internal/common"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 )
 
 // RegionInfo 地区信息
@@ -49,27 +50,16 @@ func getRegionsByProvider(provider string) []RegionInfo {
 	}
 }
 
-// getTencentRegions 获取腾讯云地区列表
+// getTencentRegions 获取腾讯云地区列表（从配置文件读取）
 func getTencentRegions() []RegionInfo {
-	return []RegionInfo{
-		{Code: "ap-bangkok", Name: "亚太东南（曼谷）"},
-		{Code: "ap-beijing", Name: "华北地区（北京）"},
-		{Code: "ap-chengdu", Name: "西南地区（成都）"},
-		{Code: "ap-chongqing", Name: "西南地区（重庆）"},
-		{Code: "ap-guangzhou", Name: "华南地区（广州）"},
-		{Code: "ap-hongkong", Name: "港澳台地区（中国香港）"},
-		{Code: "ap-jakarta", Name: "亚太东南（雅加达）"},
-		{Code: "ap-nanjing", Name: "华东地区（南京）"},
-		{Code: "ap-seoul", Name: "亚太东北（首尔）"},
-		{Code: "ap-shanghai", Name: "华东地区（上海）"},
-		{Code: "ap-shanghai-fsi", Name: "华东地区（上海金融）"},
-		{Code: "ap-shenzhen-fsi", Name: "华南地区（深圳金融）"},
-		{Code: "ap-singapore", Name: "亚太东南（新加坡）"},
-		{Code: "ap-tokyo", Name: "亚太东北（东京）"},
-		{Code: "eu-frankfurt", Name: "欧洲地区（法兰克福）"},
-		{Code: "na-ashburn", Name: "美国东部（弗吉尼亚）"},
-		{Code: "na-siliconvalley", Name: "美国西部（硅谷）"},
-		{Code: "sa-saopaulo", Name: "南美地区（圣保罗）"},
+	cfg := config.LoadConfig()
+	regions := make([]RegionInfo, 0, len(cfg.CloudRegions.Tencent))
+	for _, r := range cfg.CloudRegions.Tencent {
+		regions = append(regions, RegionInfo{
+			Code: r.Code,
+			Name: r.Name,
+		})
 	}
+	return regions
 }
 

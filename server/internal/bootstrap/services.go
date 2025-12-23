@@ -8,6 +8,7 @@ import (
 	cloudnodedao "github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr"
 	collectordao "github.com/mooyang-code/moox/server/internal/service/collectmgr/dao"
+	collectmgr_distributor "github.com/mooyang-code/moox/server/internal/service/collectmgr/distributor"
 	"github.com/mooyang-code/moox/server/internal/service/database"
 	"github.com/mooyang-code/moox/server/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/server/internal/service/fileserver"
@@ -93,10 +94,6 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	log.Info("[Bootstrap] 正在初始化心跳探测器...")
 	cloudnode.InitProberInstance(dbManager, cfg.CloudNode)
 
-	// 初始化任务规划器（全局单例，供定时器使用）
-	log.Info("[Bootstrap] 正在初始化任务规划器...")
-	collectmgr.InitTaskPlannerInstance(dbManager)
-
 	// 创建Collector服务实例
 	// 创建所需的DAO
 	taskRulesDAO := collectordao.NewCollectorTaskRulesDAO(dbManager.GetDB())
@@ -106,8 +103,10 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	nodeDAO := cloudnodedao.NewCloudNodeDAO(dbManager.GetDB())
 	heartbeatDAO := cloudnodedao.NewHeartbeatNodeDAO(dbManager.GetDB())
 
-	// 获取任务规划器实例
-	taskPlanner := collectmgr.GetTaskPlannerInstance()
+	// 创建任务规划器实例（不再需要全局单例，因为改为客户端轮询）
+	log.Info("[Bootstrap] 正在创建任务规划器...")
+	registry := collectmgr_distributor.NewDistributorRegistry(nodeDAO, nil)
+	taskPlanner := collectmgr.NewTaskPlannerServiceImpl(taskRulesDAO, instanceDAO, registry)
 
 	// 创建服务实例
 	taskRuleService := collectmgr.NewTaskRulesServiceImpl(taskRulesDAO, nodeDAO, taskPlanner)

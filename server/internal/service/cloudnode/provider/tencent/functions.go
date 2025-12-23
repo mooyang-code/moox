@@ -18,6 +18,9 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 
 	// 获取指定地区的客户端
 	client := p.GetSCFClient(req.Region)
+	if client == nil {
+		return nil, fmt.Errorf("failed to get SCF client for region: %s", req.Region)
+	}
 
 	// 构建请求
 	request := scf.NewCreateFunctionRequest()
@@ -100,6 +103,9 @@ func (p *Provider) UpdateFunction(ctx context.Context, req *UpdateFunctionReques
 
 	// 获取指定地区的客户端
 	client := p.GetSCFClient(req.Region)
+	if client == nil {
+		return fmt.Errorf("failed to get SCF client for region: %s", req.Region)
+	}
 
 	// 更新函数代码
 	if req.ZipFile != "" || (req.COSBucket != "" && req.COSPath != "" && req.COSRegion != "") {
@@ -135,6 +141,9 @@ func (p *Provider) DeleteFunction(ctx context.Context, functionName, namespace, 
 
 	// 获取指定地区的客户端
 	client := p.GetSCFClient(region)
+	if client == nil {
+		return fmt.Errorf("failed to get SCF client for region: %s", region)
+	}
 
 	request := scf.NewDeleteFunctionRequest()
 	request.FunctionName = common.StringPtr(functionName)
@@ -153,6 +162,9 @@ func (p *Provider) DeleteFunction(ctx context.Context, functionName, namespace, 
 func (p *Provider) GetFunction(ctx context.Context, functionName, namespace, region string) (*FunctionInfo, error) {
 	// 获取指定地区的客户端
 	client := p.GetSCFClient(region)
+	if client == nil {
+		return nil, fmt.Errorf("failed to get SCF client for region: %s", region)
+	}
 
 	request := scf.NewGetFunctionRequest()
 	request.FunctionName = common.StringPtr(functionName)
@@ -203,6 +215,9 @@ func (p *Provider) GetFunction(ctx context.Context, functionName, namespace, reg
 func (p *Provider) ListFunctions(ctx context.Context, namespace, region string) ([]*FunctionInfo, error) {
 	// 获取指定地区的客户端
 	client := p.GetSCFClient(region)
+	if client == nil {
+		return nil, fmt.Errorf("failed to get SCF client for region: %s", region)
+	}
 
 	var functions []*FunctionInfo
 	var offset int64 = 0
@@ -258,6 +273,9 @@ func (p *Provider) CreateNamespace(ctx context.Context, namespace, description, 
 
 	// 获取指定地区的客户端
 	client := p.GetSCFClient(region)
+	if client == nil {
+		return fmt.Errorf("failed to get SCF client for region: %s", region)
+	}
 
 	request := scf.NewCreateNamespaceRequest()
 	request.Namespace = common.StringPtr(namespace)
@@ -285,6 +303,9 @@ func (p *Provider) DeleteNamespace(ctx context.Context, namespace, region string
 
 	// 获取指定地区的客户端
 	client := p.GetSCFClient(region)
+	if client == nil {
+		return fmt.Errorf("failed to get SCF client for region: %s", region)
+	}
 
 	request := scf.NewDeleteNamespaceRequest()
 	request.Namespace = common.StringPtr(namespace)
@@ -302,6 +323,9 @@ func (p *Provider) DeleteNamespace(ctx context.Context, namespace, region string
 func (p *Provider) ListNamespaces(ctx context.Context, region string) ([]*NamespaceInfo, error) {
 	// 获取指定地区的客户端
 	client := p.GetSCFClient(region)
+	if client == nil {
+		return nil, fmt.Errorf("failed to get SCF client for region: %s", region)
+	}
 
 	var namespaces []*NamespaceInfo
 	var offset int64 = 0
@@ -348,6 +372,9 @@ func (p *Provider) CreateTrigger(ctx context.Context, req *CreateTriggerRequest)
 
 	// 获取指定地区的客户端
 	client := p.GetSCFClient(req.Region)
+	if client == nil {
+		return fmt.Errorf("failed to get SCF client for region: %s", req.Region)
+	}
 
 	request := scf.NewCreateTriggerRequest()
 	request.FunctionName = common.StringPtr(req.FunctionName)
@@ -386,6 +413,9 @@ func (p *Provider) DeleteTrigger(ctx context.Context, functionName, triggerName,
 
 	// 获取指定地区的客户端
 	client := p.GetSCFClient(region)
+	if client == nil {
+		return fmt.Errorf("failed to get SCF client for region: %s", region)
+	}
 
 	request := scf.NewDeleteTriggerRequest()
 	request.FunctionName = common.StringPtr(functionName)
@@ -406,6 +436,9 @@ func (p *Provider) DeleteTrigger(ctx context.Context, functionName, triggerName,
 func (p *Provider) ListTriggers(ctx context.Context, functionName, namespace, region string) ([]*TriggerInfo, error) {
 	// 获取指定地区的客户端
 	client := p.GetSCFClient(region)
+	if client == nil {
+		return nil, fmt.Errorf("failed to get SCF client for region: %s", region)
+	}
 
 	// 腾讯云SDK暂不支持直接列出触发器，需要通过获取函数详情来获取
 	request := scf.NewGetFunctionRequest()
@@ -507,6 +540,9 @@ func (p *Provider) InvokeFunction(ctx context.Context, req *InvokeFunctionReques
 
 	// 获取指定地区的客户端
 	client := p.GetSCFClient(req.Region)
+	if client == nil {
+		return nil, fmt.Errorf("failed to get SCF client for region: %s", req.Region)
+	}
 
 	// 构建请求
 	request := scf.NewInvokeRequest()
