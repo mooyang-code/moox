@@ -30,6 +30,7 @@ type Services struct {
 	TaskRuleService       collectmgr.TaskRuleService
 	TaskInstanceService   collectmgr.TaskInstanceService
 	DataTypeConfigService collectmgr.DataTypeConfigService
+	TaskPlannerService    collectmgr.TaskPlannerService
 }
 
 // StartBackgroundServices 启动所有后台服务
@@ -125,6 +126,7 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 		TaskRuleService:       taskRuleService,
 		TaskInstanceService:   taskInstanceService,
 		DataTypeConfigService: dataTypeConfigService,
+		TaskPlannerService:    taskPlanner,
 	}, nil
 }
 
@@ -141,6 +143,12 @@ func registerAsyncExecutors(services *Services) error {
 	if err != nil {
 		return err
 	}
+
+	// 注册Job完成处理器
+	log.Info("[Bootstrap] 正在注册Job完成处理器...")
+	nodeOperationHandler := cloudnode.NewNodeOperationCompletionHandler(services.TaskPlannerService)
+	services.AsyncTaskService.(*asynctask.AsyncTaskServiceImpl).RegisterCompletionHandler(nodeOperationHandler)
+	log.Info("[Bootstrap] Job完成处理器注册完成")
 
 	log.Info("[Bootstrap] 异步任务处理器注册完成")
 	return nil

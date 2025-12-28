@@ -8,7 +8,7 @@ import (
 )
 
 // RegisterCollectorRoutes 注册采集器相关路由
-func RegisterCollectorRoutes(router *gin.RouterGroup, taskRuleService collectmgr.TaskRuleService, taskInstanceService collectmgr.TaskInstanceService, dataTypeConfigService collectmgr.DataTypeConfigService) {
+func RegisterCollectorRoutes(router *gin.RouterGroup, taskRuleService collectmgr.TaskRuleService, taskInstanceService collectmgr.TaskInstanceService, dataTypeConfigService collectmgr.DataTypeConfigService, taskPlannerService collectmgr.TaskPlannerService) {
 	// 采集任务规则路由
 	taskRuleHandler := NewCollectorTaskRuleHandler(taskRuleService)
 	taskRuleGroup := router.Group("/task-rule")
@@ -31,6 +31,7 @@ func RegisterCollectorRoutes(router *gin.RouterGroup, taskRuleService collectmgr
 		taskInstanceGroup.DELETE("/:id", taskInstanceHandler.DeleteTaskInstance)
 		taskInstanceGroup.POST("/:id/start", taskInstanceHandler.StartTaskInstance)
 		taskInstanceGroup.POST("/:id/stop", taskInstanceHandler.StopTaskInstance)
+		taskInstanceGroup.POST("/:id/report-status", taskInstanceHandler.ReportTaskStatus)
 	}
 
 	// 采集器数据类型配置路由
@@ -41,5 +42,12 @@ func RegisterCollectorRoutes(router *gin.RouterGroup, taskRuleService collectmgr
 		dataTypeConfigGroup.GET("/:data_type", dataTypeConfigHandler.GetDataTypeConfigWithFields)
 	}
 
-	log.Info("[Collector] 采集器任务规则、任务实例和数据类型配置路由注册完成")
+	// 任务规划器路由（手动触发重算）
+	taskPlannerHandler := NewTaskPlannerHandler(taskPlannerService)
+	taskPlannerGroup := router.Group("/task-planner")
+	{
+		taskPlannerGroup.POST("/sync-all", taskPlannerHandler.SyncAllEnabledRules)
+	}
+
+	log.Info("[Collector] 采集器任务规则、任务实例、数据类型配置和任务规划器路由注册完成")
 }

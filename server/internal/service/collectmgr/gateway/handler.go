@@ -45,7 +45,7 @@ type CollectorGatewayHandler struct {
 }
 
 // NewGatewayHandler 创建采集器网关处理器
-func NewGatewayHandler(taskRuleService collectmgr.TaskRuleService, taskInstanceService collectmgr.TaskInstanceService, dataTypeConfigService collectmgr.DataTypeConfigService) *CollectorGatewayHandler {
+func NewGatewayHandler(taskRuleService collectmgr.TaskRuleService, taskInstanceService collectmgr.TaskInstanceService, dataTypeConfigService collectmgr.DataTypeConfigService, taskPlannerService collectmgr.TaskPlannerService) *CollectorGatewayHandler {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 
@@ -55,8 +55,8 @@ func NewGatewayHandler(taskRuleService collectmgr.TaskRuleService, taskInstanceS
 	// API路由组（包含版本号）
 	api := engine.Group("/api/v1")
 
-	// 注册采集器路由（任务规则、任务实例和数据类型配置）
-	collectorapi.RegisterCollectorRoutes(api, taskRuleService, taskInstanceService, dataTypeConfigService)
+	// 注册采集器路由（任务规则、任务实例、数据类型配置和任务规划器）
+	collectorapi.RegisterCollectorRoutes(api, taskRuleService, taskInstanceService, dataTypeConfigService, taskPlannerService)
 	log.Info("[CollectMgr Gateway] 采集管理模块路由注册成功")
 
 	return &CollectorGatewayHandler{
@@ -237,6 +237,19 @@ func (h *CollectorGatewayHandler) parseMethodToRoute(method string, body []byte)
 			if err := json.Unmarshal(body, &params); err == nil {
 				if instanceID, ok := params["id"].(string); ok && instanceID != "" {
 					route.Path = fmt.Sprintf("/api/v1/task-instance/%s/stop", instanceID)
+				}
+			}
+		}
+	case "ReportTaskStatus":
+		route.Path = "/api/v1/task-instance"
+		route.HTTPMethod = "POST"
+		route.Body = body
+		// Need to extract instance_id from body and add to path
+		if len(body) > 0 {
+			var params map[string]interface{}
+			if err := json.Unmarshal(body, &params); err == nil {
+				if instanceID, ok := params["id"].(string); ok && instanceID != "" {
+					route.Path = fmt.Sprintf("/api/v1/task-instance/%s/report-status", instanceID)
 				}
 			}
 		}

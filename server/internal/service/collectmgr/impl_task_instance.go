@@ -135,6 +135,15 @@ func (s *TaskInstanceServiceImpl) CompleteInstance(ctx context.Context, instance
 	return s.instanceDAO.CompleteInstance(ctx, instanceID, success, result)
 }
 
+// ReportTaskStatus 上报任务状态（客户端上报用）
+func (s *TaskInstanceServiceImpl) ReportTaskStatus(ctx context.Context, instanceID string, status int, result string) error {
+	if instanceID == "" {
+		return fmt.Errorf("instance ID is required")
+	}
+
+	return s.instanceDAO.ReportInstanceStatus(ctx, instanceID, status, result)
+}
+
 // 辅助方法
 func (s *TaskInstanceServiceImpl) GetTaskInstancesByNode(ctx context.Context, nodeID string, status []int) ([]*TaskInstanceDTO, error) {
 	instances, err := s.instanceDAO.GetTaskInstancesByNode(ctx, nodeID, status)
@@ -201,6 +210,47 @@ func (s *TaskInstanceServiceImpl) ListTaskInstances(ctx context.Context, nodeID,
 	instances, total, err := s.instanceDAO.ListInstancesWithPagination(ctx, nodeID, ruleID, page, size)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to list task instances: %w", err)
+	}
+
+	var result []*TaskInstanceDTO
+	for _, instance := range instances {
+		dto := &TaskInstanceDTO{
+			ID:         instance.ID,
+			TaskID:     instance.TaskID,
+			RuleID:     instance.RuleID,
+			NodeID:     instance.NodeID,
+			Symbol:     instance.Symbol,
+			TaskParams: instance.TaskParams,
+			Status:     instance.Status,
+			StartTime:  instance.StartTime,
+			EndTime:    instance.EndTime,
+			Result:     instance.Result,
+			Invalid:    instance.Invalid,
+			CreateTime: instance.CreateTime,
+			ModifyTime: instance.ModifyTime,
+		}
+		result = append(result, dto)
+	}
+	return result, total, nil
+}
+
+// ListTaskInstancesWithFilter 带筛选条件的分页查询任务实例
+func (s *TaskInstanceServiceImpl) ListTaskInstancesWithFilter(ctx context.Context, filter *TaskInstanceFilterDTO) ([]*TaskInstanceDTO, int64, error) {
+	// 转换DTO为DAO过滤器
+	daoFilter := &collectordao.InstanceFilter{
+		TaskID:   filter.TaskID,
+		RuleID:   filter.RuleID,
+		NodeID:   filter.NodeID,
+		Symbol:   filter.Symbol,
+		Status:   filter.Status,
+		Invalid:  filter.Invalid,
+		Page:     filter.Page,
+		PageSize: filter.PageSize,
+	}
+
+	instances, total, err := s.instanceDAO.ListInstancesWithFilter(ctx, daoFilter)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list task instances with filter: %w", err)
 	}
 
 	var result []*TaskInstanceDTO

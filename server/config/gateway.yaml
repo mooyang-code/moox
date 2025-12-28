@@ -47,6 +47,7 @@ gateway:
     - "/gateway/auth/Login"
     - "/gateway/cloudnode/ReportHeartbeatInner"
     - "/gateway/collectmgr/GetTaskInstanceListInner"
+    - "/gateway/collectmgr/ReportTaskStatus"
     - "/gateway/dnsproxy/GetDNSRecordList"
     - "/gateway/dnsproxy/GetDNSRecordDetail"
 

@@ -95,6 +95,9 @@ type TaskInstanceService interface {
 	// 返回: 实例列表、总数、错误
 	ListTaskInstances(ctx context.Context, nodeID, ruleID string, page, size int) ([]*TaskInstanceDTO, int64, error)
 
+	// ListTaskInstancesWithFilter 带筛选条件的分页查询任务实例
+	ListTaskInstancesWithFilter(ctx context.Context, filter *TaskInstanceFilterDTO) ([]*TaskInstanceDTO, int64, error)
+
 	// UpdateTaskInstance 更新任务实例
 	UpdateTaskInstance(ctx context.Context, instanceID string, instance *TaskInstanceDTO) error
 
@@ -106,6 +109,10 @@ type TaskInstanceService interface {
 
 	// CompleteInstance 完成实例执行
 	CompleteInstance(ctx context.Context, instanceID string, success bool, result string) error
+
+	// ReportTaskStatus 上报任务状态（客户端上报用）
+	// 更新 c_status、c_end_time、c_result，无状态前置条件限制
+	ReportTaskStatus(ctx context.Context, instanceID string, status int, result string) error
 }
 
 // TaskInstanceDTO 任务实例数据传输对象
@@ -123,6 +130,18 @@ type TaskInstanceDTO struct {
 	Invalid    int // 新增：删除标记
 	CreateTime time.Time
 	ModifyTime time.Time
+}
+
+// TaskInstanceFilterDTO 任务实例筛选条件
+type TaskInstanceFilterDTO struct {
+	TaskID   string // 任务ID
+	RuleID   string // 规则ID
+	NodeID   string // 节点ID
+	Symbol   string // 交易标的
+	Status   *int   // 状态（使用指针以区分0值和未设置）
+	Invalid  *int   // 是否有效（使用指针以区分0值和未设置）
+	Page     int    // 页码（从1开始）
+	PageSize int    // 每页数量
 }
 
 // TaskPlannerService 任务规划器服务接口

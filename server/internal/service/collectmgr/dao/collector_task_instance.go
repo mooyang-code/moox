@@ -60,6 +60,9 @@ type CollectorTaskInstanceDAO interface {
 	// 返回: 实例列表、总数、错误
 	ListInstancesWithPagination(ctx context.Context, nodeID, ruleID string, page, size int) ([]*model.CollectorTaskInstance, int64, error)
 
+	// ListInstancesWithFilter 带筛选条件的分页查询任务实例
+	ListInstancesWithFilter(ctx context.Context, filter *InstanceFilter) ([]*model.CollectorTaskInstance, int64, error)
+
 	// ========== 状态更新 ==========
 	
 	// UpdateInstanceStatus 更新实例状态
@@ -70,6 +73,10 @@ type CollectorTaskInstanceDAO interface {
 	
 	// CompleteInstance 完成实例执行
 	CompleteInstance(ctx context.Context, instanceID string, success bool, result string) error
+
+	// ReportInstanceStatus 上报实例状态（客户端上报用，无状态前置条件限制）
+	// 更新 c_status、c_end_time、c_result
+	ReportInstanceStatus(ctx context.Context, instanceID string, status int, result string) error
 	
 	// ========== 批量操作 ==========
 
@@ -106,6 +113,18 @@ type CollectorTaskInstanceDAO interface {
 type InstanceParamUpdate struct {
 	TaskID     string // 任务ID
 	TaskParams string // 新的任务参数
+}
+
+// InstanceFilter 任务实例筛选条件
+type InstanceFilter struct {
+	TaskID   string  // 任务ID
+	RuleID   string  // 规则ID
+	NodeID   string  // 节点ID
+	Symbol   string  // 交易标的
+	Status   *int    // 状态（使用指针以区分0值和未设置）
+	Invalid  *int    // 是否有效（使用指针以区分0值和未设置）
+	Page     int     // 页码（从1开始）
+	PageSize int     // 每页数量
 }
 
 type collectorTaskInstanceDaoImpl struct {
@@ -381,6 +400,34 @@ func (d *collectorTaskInstanceDaoImpl) CompleteInstance(ctx context.Context, ins
 	return nil
 }
 
+// ReportInstanceStatus 上报实例状态（客户端上报用，无状态前置条件限制）
+func (d *collectorTaskInstanceDaoImpl) ReportInstanceStatus(ctx context.Context, instanceID string, status int, result string) error {
+	now := time.Now()
+	updates := map[string]interface{}{
+		"c_status":   status,
+		"c_end_time": now,
+		"c_mtime":    now,
+	}
+
+	if result != "" {
+		updates["c_result"] = result
+	}
+
+	dbResult := d.db.WithContext(ctx).
+		Model(&model.CollectorTaskInstance{}).
+		Where("c_task_id = ?", instanceID).
+		Updates(updates)
+
+	if dbResult.Error != nil {
+		return fmt.Errorf("failed to report instance status: %w", dbResult.Error)
+	}
+
+	if dbResult.RowsAffected == 0 {
+		return fmt.Errorf("instance not found")
+	}
+	return nil
+}
+
 // BatchCreateInstances 批量创建实例
 func (d *collectorTaskInstanceDaoImpl) BatchCreateInstances(ctx context.Context, instances []*model.CollectorTaskInstance) error {
 	if len(instances) == 0 {
@@ -582,6 +629,65 @@ func (d *collectorTaskInstanceDaoImpl) ListInstancesWithPagination(ctx context.C
 	// 分页查询
 	offset := (page - 1) * size
 	if err := query.Order("c_ctime DESC").Offset(offset).Limit(size).Find(&instances).Error; err != nil {
+		return nil, 0, fmt.Errorf("failed to list instances: %w", err)
+	}
+
+	return instances, total, nil
+}
+
+// ListInstancesWithFilter 带筛选条件的分页查询任务实例
+func (d *collectorTaskInstanceDaoImpl) ListInstancesWithFilter(ctx context.Context, filter *InstanceFilter) ([]*model.CollectorTaskInstance, int64, error) {
+	// 参数校验
+	if filter == nil {
+		filter = &InstanceFilter{}
+	}
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.PageSize <= 0 {
+		filter.PageSize = 10
+	}
+	if filter.PageSize > 100 {
+		filter.PageSize = 100
+	}
+
+	var instances []*model.CollectorTaskInstance
+	var total int64
+
+	// 构建查询条件
+	query := d.db.WithContext(ctx).Model(&model.CollectorTaskInstance{})
+
+	// 如果没有指定invalid，默认只查询有效的记录
+	if filter.Invalid != nil {
+		query = query.Where("c_invalid = ?", *filter.Invalid)
+	} else {
+		query = query.Where("c_invalid = ?", 0)
+	}
+
+	if filter.TaskID != "" {
+		query = query.Where("c_task_id LIKE ?", "%"+filter.TaskID+"%")
+	}
+	if filter.RuleID != "" {
+		query = query.Where("c_rule_id LIKE ?", "%"+filter.RuleID+"%")
+	}
+	if filter.NodeID != "" {
+		query = query.Where("c_node_id LIKE ?", "%"+filter.NodeID+"%")
+	}
+	if filter.Symbol != "" {
+		query = query.Where("c_symbol LIKE ?", "%"+filter.Symbol+"%")
+	}
+	if filter.Status != nil {
+		query = query.Where("c_status = ?", *filter.Status)
+	}
+
+	// 查询总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("failed to count instances: %w", err)
+	}
+
+	// 分页查询
+	offset := (filter.Page - 1) * filter.PageSize
+	if err := query.Order("c_ctime DESC").Offset(offset).Limit(filter.PageSize).Find(&instances).Error; err != nil {
 		return nil, 0, fmt.Errorf("failed to list instances: %w", err)
 	}
 

@@ -21,11 +21,13 @@ func NewCollectorTaskInstanceHandler(service collectmgr.TaskInstanceService) *Co
 	}
 }
 
-// GetTaskInstanceList 获取任务实例列表（支持分页）
+// GetTaskInstanceList 获取任务实例列表（支持分页和筛选）
 func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 	// 获取查询参数
-	nodeID := c.Query("node_id")
+	taskID := c.Query("task_id")
 	ruleID := c.Query("rule_id")
+	nodeID := c.Query("node_id")
+	symbol := c.Query("symbol")
 
 	// 解析分页参数
 	page := 1
@@ -42,8 +44,36 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 		}
 	}
 
+	// 解析状态参数
+	var status *int
+	if statusStr := c.Query("status"); statusStr != "" {
+		if s, err := strconv.Atoi(statusStr); err == nil {
+			status = &s
+		}
+	}
+
+	// 解析invalid参数
+	var invalid *int
+	if invalidStr := c.Query("invalid"); invalidStr != "" {
+		if inv, err := strconv.Atoi(invalidStr); err == nil {
+			invalid = &inv
+		}
+	}
+
+	// 构建筛选器
+	filter := &collectmgr.TaskInstanceFilterDTO{
+		TaskID:   taskID,
+		RuleID:   ruleID,
+		NodeID:   nodeID,
+		Symbol:   symbol,
+		Status:   status,
+		Invalid:  invalid,
+		Page:     page,
+		PageSize: size,
+	}
+
 	// 调用 service 层分页查询
-	instances, total, err := h.service.ListTaskInstances(c.Request.Context(), nodeID, ruleID, page, size)
+	instances, total, err := h.service.ListTaskInstancesWithFilter(c.Request.Context(), filter)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("查询失败", err))
 		return
@@ -165,4 +195,34 @@ func (h *CollectorTaskInstanceHandler) StopTaskInstance(c *gin.Context) {
 	}
 
 	SuccessResponse(c, "停止成功", []interface{}{})
+}
+
+// ReportTaskStatusRequest 上报任务状态请求
+type ReportTaskStatusRequest struct {
+	Status int    `json:"status" binding:"required"` // 状态码（0=待执行，1=执行中，2=成功，3=部分失败，4=失败）
+	Result string `json:"result"`                    // 执行结果（可选）
+}
+
+// ReportTaskStatus 上报任务状态（客户端上报用）
+func (h *CollectorTaskInstanceHandler) ReportTaskStatus(c *gin.Context) {
+	instanceID := c.Param("id")
+	if instanceID == "" {
+		HandleAppError(c, apperrors.InvalidParam("request", "ID参数不能为空"))
+		return
+	}
+
+	var req ReportTaskStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		HandleAppError(c, apperrors.InvalidParam("request", "参数绑定失败"))
+		return
+	}
+
+	// 调用service层上报状态
+	err := h.service.ReportTaskStatus(c.Request.Context(), instanceID, req.Status, req.Result)
+	if err != nil {
+		HandleAppError(c, apperrors.Internal("状态上报失败", err))
+		return
+	}
+
+	SuccessResponse(c, "状态上报成功", []interface{}{})
 }

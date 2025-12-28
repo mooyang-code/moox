@@ -26,6 +26,12 @@ type Service interface {
 
 	// StartWorker 启动任务消费者（Worker）
 	StartWorker(ctx context.Context, workerCount int) error
+
+	// ========== Job完成后处理 ==========
+
+	// RegisterCompletionHandler 注册Job完成处理器
+	// 处理器会在Job完成时被异步调用
+	RegisterCompletionHandler(handler JobCompletionHandler)
 }
 
 // Executor 定义任务执行器接口

@@ -43,6 +43,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		services.TaskRuleService,
 		services.TaskInstanceService,
 		services.DataTypeConfigService,
+		services.TaskPlannerService,
 	)
 
 	// 3.4 注册DNS代理网关

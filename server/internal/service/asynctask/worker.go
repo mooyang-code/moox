@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/asynctask/model"
 	"github.com/mooyang-code/moox/server/internal/service/asynctask/queue"
 
+	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -124,5 +125,72 @@ func (s *AsyncTaskServiceImpl) completeTask(ctx context.Context, task *model.Asy
 
 	if err != nil {
 		log.ErrorContextf(ctx, "[AsyncTask] Failed to increment job counter for %s: %v", task.JobID, err)
+	}
+
+	// 3. 检查Job是否完成，触发后处理
+	s.tryTriggerJobCompletion(ctx, task)
+}
+
+// tryTriggerJobCompletion 尝试触发Job完成后处理
+func (s *AsyncTaskServiceImpl) tryTriggerJobCompletion(ctx context.Context, task *model.AsyncJobTask) {
+	// 查询Job状态
+	job, err := s.jobDAO.GetAsyncJob(ctx, task.JobID)
+	if err != nil {
+		log.ErrorContextf(ctx, "[AsyncTask] Failed to get job %s: %v", task.JobID, err)
+		return
+	}
+	if job == nil {
+		log.ErrorContextf(ctx, "[AsyncTask] Job %s not found", task.JobID)
+		return
+	}
+
+	// 检查Job是否完成
+	if !job.IsCompleted() {
+		return
+	}
+
+	// CAS操作：只有第一个Worker能成功
+	_, alreadyProcessed := s.processedJobs.LoadOrStore(task.JobID, true)
+	if alreadyProcessed {
+		log.InfoContextf(ctx, "[AsyncTask] Job %s already processed", task.JobID)
+		return
+	}
+
+	log.InfoContextf(ctx, "[AsyncTask] Job %s completed, triggering post-processing", task.JobID)
+	// 异步触发后处理（避免阻塞Worker）
+	// 使用框架的上下文拷贝，保留trace信息
+	go s.handleJobCompletion(trpc.CloneContext(ctx), job, task)
+}
+
+// handleJobCompletion 处理Job完成事件
+func (s *AsyncTaskServiceImpl) handleJobCompletion(ctx context.Context, job *model.AsyncJob, task *model.AsyncJobTask) {
+	// 延迟清理Map（避免内存泄漏）
+	defer func() {
+		time.AfterFunc(24*time.Hour, func() {
+			s.processedJobs.Delete(job.JobID)
+		})
+	}()
+
+	log.InfoContextf(ctx, "[AsyncTask] Handling job completion: JobID=%s, TaskType=%s", job.JobID, task.TaskType)
+
+	// 调用注册的Handler
+	s.handlersMu.RLock()
+	handlers := s.completionHandlers
+	s.handlersMu.RUnlock()
+
+	if len(handlers) == 0 {
+		log.InfoContextf(ctx, "[AsyncTask] No completion handlers registered")
+		return
+	}
+
+	for _, handler := range handlers {
+		if !handler.CanHandle(task.TaskType) {
+			continue
+		}
+
+		log.InfoContextf(ctx, "[AsyncTask] Calling completion handler for job %s", job.JobID)
+		if err := handler.OnJobCompleted(ctx, job, task); err != nil {
+			log.ErrorContextf(ctx, "[AsyncTask] Handler failed for job %s: %v", job.JobID, err)
+		}
 	}
 }

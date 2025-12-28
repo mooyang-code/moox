@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/server/internal/service/asynctask/dao"
@@ -34,6 +35,11 @@ type AsyncTaskServiceImpl struct {
 	jobDAO    dao.AsyncJobDAO
 	taskDAO   dao.AsyncJobTaskDAO
 	taskQueue queue.TaskQueue
+
+	// Job完成后处理相关
+	completionHandlers []JobCompletionHandler
+	handlersMu         sync.RWMutex
+	processedJobs      sync.Map // jobID -> bool，记录已触发后处理的Job
 }
 
 // newServiceImpl 创建异步任务服务实例
@@ -148,4 +154,13 @@ func (s *AsyncTaskServiceImpl) AsyncJobQuery(ctx context.Context, jobID string) 
 	log.InfoContextf(ctx, "[AsyncTask] AsyncJobQuery completed: JobID=%s, Status=%d, Progress=%d%%",
 		jobID, result.JobStatus, result.Progress)
 	return result, nil
+}
+
+// RegisterCompletionHandler 注册Job完成处理器
+// 该处理器会在Job完成时被异步调用
+func (s *AsyncTaskServiceImpl) RegisterCompletionHandler(handler JobCompletionHandler) {
+	s.handlersMu.Lock()
+	defer s.handlersMu.Unlock()
+	s.completionHandlers = append(s.completionHandlers, handler)
+	log.Infof("[AsyncTask] Registered completion handler")
 }

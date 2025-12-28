@@ -11,9 +11,8 @@
             <a-option :value="0">待执行</a-option>
             <a-option :value="1">执行中</a-option>
             <a-option :value="2">成功</a-option>
-            <a-option :value="3">失败</a-option>
-            <a-option :value="4">超时</a-option>
-            <a-option :value="5">已取消</a-option>
+            <a-option :value="3">部分失败</a-option>
+            <a-option :value="4">失败</a-option>
           </a-select>
           <a-select placeholder="是否有效" v-model="form.invalid" style="width: 120px" allow-clear>
             <a-option :value="0">有效</a-option>
@@ -34,10 +33,6 @@
             <a-button type="primary" @click="refreshList">
               <template #icon><icon-sync /></template>
               <span>刷新</span>
-            </a-button>
-            <a-button type="primary" status="warning" @click="batchRetry">
-              <template #icon><icon-redo /></template>
-              <span>批量重试</span>
             </a-button>
             <a-button type="primary" status="danger" @click="batchInvalidate">
               <template #icon><icon-close-circle /></template>
@@ -127,21 +122,12 @@
                 {{ formatDateTime(record.CreateTime) }}
               </template>
             </a-table-column>
-            <a-table-column title="操作" :width="180" align="center" fixed="right">
+            <a-table-column title="操作" :width="150" align="center" fixed="right">
               <template #cell="{ record }">
                 <a-space>
                   <a-button type="primary" size="mini" @click="onViewDetails(record)">
                     <template #icon><icon-eye /></template>
                     详情
-                  </a-button>
-                  <a-button
-                    v-if="canRetry(record)"
-                    type="primary"
-                    status="warning"
-                    size="mini"
-                    @click="handleRetry(record)">
-                    <template #icon><icon-redo /></template>
-                    重试
                   </a-button>
                   <a-button
                     v-if="record.Invalid === 0"
@@ -269,9 +255,8 @@ const getStatusColor = (status: number) => {
     0: 'gray',    // 待执行
     1: 'blue',    // 执行中
     2: 'green',   // 成功
-    3: 'red',     // 失败
-    4: 'orange',  // 超时
-    5: 'orangered' // 已取消
+    3: 'orange',  // 部分失败
+    4: 'red'      // 失败
   };
   return colors[status] || 'gray';
 };
@@ -281,9 +266,8 @@ const getStatusText = (status: number) => {
     0: '待执行',
     1: '执行中',
     2: '成功',
-    3: '失败',
-    4: '超时',
-    5: '已取消'
+    3: '部分失败',
+    4: '失败'
   };
   return texts[status] || '未知';
 };
@@ -319,10 +303,6 @@ const formatDateTime = (dateTime: string | null | undefined) => {
   } catch {
     return '-';
   }
-};
-
-const canRetry = (record: TaskInstance) => {
-  return record.Status === 3 || record.Status === 4; // 失败或超时
 };
 
 const select = (list: string[]) => {
@@ -412,36 +392,6 @@ const onViewDetails = (record: TaskInstance) => {
   detailVisible.value = true;
 };
 
-const handleRetry = async (record: TaskInstance) => {
-  Modal.confirm({
-    title: '重试确认',
-    content: `确定要重试任务 ${record.TaskID} 吗？`,
-    onOk: async () => {
-      try {
-        const response = await service.post('/gateway/collectmgr/RetryTaskInstance', {
-          task_id: record.TaskID
-        }, {
-          headers: {
-            'app_id': 'moox_frontend',
-            'app_key': '2521e0d21b6be0347b72bca93904a0dd'
-          }
-        });
-
-        const data = response as any;
-        if (data.code === 200) {
-          Message.success('重试成功');
-          getInstanceList();
-        } else {
-          Message.error(data.message || '重试失败');
-        }
-      } catch (error) {
-        console.error('重试失败:', error);
-        Message.error('重试失败');
-      }
-    }
-  });
-};
-
 const handleInvalidate = async (record: TaskInstance) => {
   Modal.confirm({
     title: '作废确认',
@@ -468,45 +418,6 @@ const handleInvalidate = async (record: TaskInstance) => {
         console.error('作废失败:', error);
         Message.error('作废失败');
       }
-    }
-  });
-};
-
-const batchRetry = () => {
-  if (selectedKeys.value.length === 0) {
-    Message.warning('请选择要重试的任务实例');
-    return;
-  }
-
-  const retryableInstances = instanceList.value.filter(
-    instance => selectedKeys.value.includes(instance.TaskID) && canRetry(instance)
-  );
-
-  if (retryableInstances.length === 0) {
-    Message.warning('所选任务实例都不能重试（仅失败或超时的任务可重试）');
-    return;
-  }
-
-  Modal.confirm({
-    title: '批量重试确认',
-    content: `确定要重试选中的 ${retryableInstances.length} 个失败任务吗？`,
-    onOk: async () => {
-      for (const instance of retryableInstances) {
-        try {
-          await service.post('/gateway/collectmgr/RetryTaskInstance', {
-            task_id: instance.TaskID
-          }, {
-            headers: {
-              'app_id': 'moox_frontend',
-              'app_key': '2521e0d21b6be0347b72bca93904a0dd'
-            }
-          });
-        } catch (error) {
-          console.error(`重试任务 ${instance.TaskID} 失败:`, error);
-        }
-      }
-      Message.success('批量重试完成');
-      getInstanceList();
     }
   });
 };
