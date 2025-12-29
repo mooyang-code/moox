@@ -21,6 +21,12 @@ type NodeListQuery struct {
 	Keyword  string // 关键字搜索
 }
 
+// NodeStatusFilter 节点状态过滤参数
+// 用于任务分配时过滤节点状态
+type NodeStatusFilter struct {
+	Status *int // 节点状态，nil 表示不过滤
+}
+
 // CloudNodeDAO 节点数据访问对象接口
 type CloudNodeDAO interface {
 	// ========== 节点查询 ==========
@@ -47,14 +53,17 @@ type CloudNodeDAO interface {
 
 	// GetNodesBySupportedCollector 获取支持指定采集器类型的节点
 	// 查询条件：c_supported_collectors 包含指定的 collectorType
-	GetNodesBySupportedCollector(ctx context.Context, collectorType string) ([]*model.CloudNode, error)
+	// filter: 可选，传入则按状态过滤；不传或为nil则不过滤状态
+	GetNodesBySupportedCollector(ctx context.Context, collectorType string, filter *NodeStatusFilter) ([]*model.CloudNode, error)
 
 	// GetNodesByPattern 根据节点ID通配符匹配获取节点
 	// pattern 中的 * 会被转换为 SQL LIKE 的 %
-	GetNodesByPattern(ctx context.Context, pattern string) ([]*model.CloudNode, error)
+	// filter: 可选，传入则按状态过滤；不传或为nil则不过滤状态
+	GetNodesByPattern(ctx context.Context, pattern string, filter *NodeStatusFilter) ([]*model.CloudNode, error)
 
 	// GetNodesByIDs 根据节点ID列表获取节点
-	GetNodesByIDs(ctx context.Context, nodeIDs []string) ([]*model.CloudNode, error)
+	// filter: 可选，传入则按状态过滤；不传或为nil则不过滤状态
+	GetNodesByIDs(ctx context.Context, nodeIDs []string, filter *NodeStatusFilter) ([]*model.CloudNode, error)
 
 	// ========== 节点管理 ==========
 
@@ -294,15 +303,22 @@ func (d *cloudNodeDaoImpl) UpdateNodePackageID(ctx context.Context, nodeID strin
 
 // GetNodesBySupportedCollector 获取支持指定采集器类型的节点
 // 查询条件：c_supported_collectors 包含指定的 collectorType（JSON数组格式）
-func (d *cloudNodeDaoImpl) GetNodesBySupportedCollector(ctx context.Context, collectorType string) ([]*model.CloudNode, error) {
+// filter: 可选，传入则按状态过滤；不传或为nil则不过滤状态
+func (d *cloudNodeDaoImpl) GetNodesBySupportedCollector(ctx context.Context, collectorType string, filter *NodeStatusFilter) ([]*model.CloudNode, error) {
 	var nodes []*model.CloudNode
 	// c_supported_collectors 是 JSON 数组格式，如：["kline", "ticker"]
 	// 使用 LIKE 查询包含指定类型的节点
 	pattern := fmt.Sprintf("%%\"%s\"%%", collectorType)
-	result := d.db.WithContext(ctx).
-		Where("c_supported_collectors LIKE ? AND c_invalid = ?", pattern, 0).
-		Order("c_mtime DESC").
-		Find(&nodes)
+	
+	query := d.db.WithContext(ctx).
+		Where("c_supported_collectors LIKE ? AND c_invalid = ?", pattern, 0)
+	
+	// 如果传入了状态过滤参数，则增加状态条件
+	if filter != nil && filter.Status != nil {
+		query = query.Where("c_status = ?", *filter.Status)
+	}
+	
+	result := query.Order("c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get nodes by supported collector: %w", result.Error)
@@ -312,7 +328,8 @@ func (d *cloudNodeDaoImpl) GetNodesBySupportedCollector(ctx context.Context, col
 
 // GetNodesByPattern 根据节点ID通配符匹配获取节点
 // pattern 中的 * 会被转换为 SQL LIKE 的 %
-func (d *cloudNodeDaoImpl) GetNodesByPattern(ctx context.Context, pattern string) ([]*model.CloudNode, error) {
+// filter: 可选，传入则按状态过滤；不传或为nil则不过滤状态
+func (d *cloudNodeDaoImpl) GetNodesByPattern(ctx context.Context, pattern string, filter *NodeStatusFilter) ([]*model.CloudNode, error) {
 	var nodes []*model.CloudNode
 	// 将通配符 * 转换为 SQL LIKE 的 %
 	sqlPattern := pattern
@@ -322,10 +339,15 @@ func (d *cloudNodeDaoImpl) GetNodesByPattern(ctx context.Context, pattern string
 		sqlPattern = strings.ReplaceAll(pattern, "*", "%")
 	}
 
-	result := d.db.WithContext(ctx).
-		Where("c_node_id LIKE ? AND c_invalid = ?", sqlPattern, 0).
-		Order("c_mtime DESC").
-		Find(&nodes)
+	query := d.db.WithContext(ctx).
+		Where("c_node_id LIKE ? AND c_invalid = ?", sqlPattern, 0)
+	
+	// 如果传入了状态过滤参数，则增加状态条件
+	if filter != nil && filter.Status != nil {
+		query = query.Where("c_status = ?", *filter.Status)
+	}
+	
+	result := query.Order("c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get nodes by pattern: %w", result.Error)
@@ -334,16 +356,22 @@ func (d *cloudNodeDaoImpl) GetNodesByPattern(ctx context.Context, pattern string
 }
 
 // GetNodesByIDs 根据节点ID列表获取节点
-func (d *cloudNodeDaoImpl) GetNodesByIDs(ctx context.Context, nodeIDs []string) ([]*model.CloudNode, error) {
+// filter: 可选，传入则按状态过滤；不传或为nil则不过滤状态
+func (d *cloudNodeDaoImpl) GetNodesByIDs(ctx context.Context, nodeIDs []string, filter *NodeStatusFilter) ([]*model.CloudNode, error) {
 	if len(nodeIDs) == 0 {
 		return []*model.CloudNode{}, nil
 	}
 
 	var nodes []*model.CloudNode
-	result := d.db.WithContext(ctx).
-		Where("c_node_id IN ? AND c_invalid = ?", nodeIDs, 0).
-		Order("c_mtime DESC").
-		Find(&nodes)
+	query := d.db.WithContext(ctx).
+		Where("c_node_id IN ? AND c_invalid = ?", nodeIDs, 0)
+	
+	// 如果传入了状态过滤参数，则增加状态条件
+	if filter != nil && filter.Status != nil {
+		query = query.Where("c_status = ?", *filter.Status)
+	}
+	
+	result := query.Order("c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get nodes by IDs: %w", result.Error)

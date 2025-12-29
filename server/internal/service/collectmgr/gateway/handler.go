@@ -79,7 +79,7 @@ type RouteInfo struct {
 
 // ForwardRequest 实现ServiceHandler接口，转发请求到内部引擎
 func (h *CollectorGatewayHandler) ForwardRequest(ctx context.Context, method string, headers map[string]string, body []byte) ([]byte, error) {
-	log.InfoContextf(ctx, "[CollectMgr Gateway] ForwardRequest called - method: %s, headers: %+v, body: %s", method, headers, string(body))
+	log.DebugContextf(ctx, "[CollectMgr Gateway] ForwardRequest called - method: %s, headers: %+v, body: %s", method, headers, string(body))
 
 	// 解析方法并获取路由信息
 	routeInfo, err := h.parseMethodToRoute(method, body)
@@ -87,7 +87,7 @@ func (h *CollectorGatewayHandler) ForwardRequest(ctx context.Context, method str
 		return nil, err
 	}
 
-	log.InfoContextf(ctx, "[CollectMgr Gateway] Forwarding to engine: %s %s with body: %s", routeInfo.HTTPMethod, routeInfo.Path, string(routeInfo.Body))
+	log.DebugContextf(ctx, "[CollectMgr Gateway] Forwarding to engine: %s %s with body: %s", routeInfo.HTTPMethod, routeInfo.Path, string(routeInfo.Body))
 
 	// 创建并执行HTTP请求
 	req, err := h.createHTTPRequest(routeInfo, headers)
@@ -360,7 +360,7 @@ func (h *CollectorGatewayHandler) executeRequest(ctx context.Context, req *http.
 	respBody := recorder.Body.Bytes()
 	statusCode := recorder.Code
 
-	log.InfoContextf(ctx, "[CollectMgr Gateway] Response status: %d, body: %s", statusCode, string(respBody))
+	log.DebugContextf(ctx, "[CollectMgr Gateway] Response status: %d", statusCode)
 
 	// 检查状态码
 	if statusCode != http.StatusOK {

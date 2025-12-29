@@ -134,10 +134,9 @@ plugins:
         level: info                               #本地文件滚动日志的级别
         writer_config:                            #本地文件输出具体配置
           log_path: ./log                        #本地文件日志路径
-          filename: trpc.log                      #本地文件日志文件名
+          filename: trpc.log            #本地文件日志文件名
           roll_type: size                         #文件滚动类型,size为按大小滚动
           max_age: 7                              #最大日志保留天数
           max_size: 10                            #本地文件滚动日志的大小 单位 MB
           max_backups: 10                         #最大日志文件数
           compress:  false                        #日志文件是否压缩
-      

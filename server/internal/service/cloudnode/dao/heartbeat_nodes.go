@@ -189,7 +189,7 @@ func (d *heartbeatRecordDAO) GetTimeoutNodes(ctx context.Context) ([]*types.Hear
 	// 使用较小值作为超时判断阈值（更严格的超时检测）
 	minTimeoutThreshold := d.getMinTimeoutThreshold()
 	timeoutThreshold := min(minTimeoutThreshold, defaultTimeout)
-	log.InfoContextf(ctx, "GetTimeoutNodes timeoutThreshold:%d", timeoutThreshold)
+	log.DebugContextf(ctx, "GetTimeoutNodes timeoutThreshold:%d", timeoutThreshold)
 
 	// 直接查询心跳记录，筛选超时节点（没有心跳记录或超过更严格的时间阈值）
 	var results []model.HeartbeatNode

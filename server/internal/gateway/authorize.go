@@ -26,11 +26,11 @@ func Authorize() filter.ServerFilter {
 		rpcName := ctxMsg.ServerRPCName()
 		// TODO : 频控
 
-		// 检查是否需要鉴权
-		if ShouldSkipAuth(rpcName) {
-			log.InfoContextf(ctx, "接口 [%s] 跳过鉴权", rpcName)
-			return next(ctx, req)
-		}
+	// 检查是否需要鉴权
+	if ShouldSkipAuth(rpcName) {
+		log.DebugContextf(ctx, "接口 [%s] 跳过鉴权", rpcName)
+		return next(ctx, req)
+	}
 
 		header := thttp.Head(ctx)
 		if header == nil {

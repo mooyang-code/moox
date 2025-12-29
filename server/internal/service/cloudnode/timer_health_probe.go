@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
+	"github.com/mooyang-code/moox/server/internal/service/collectmgr"
 	"github.com/mooyang-code/moox/server/internal/service/database"
 
 	"github.com/google/uuid"
@@ -24,23 +25,26 @@ var (
 
 // HeartbeatProber 主动探测器（重命名避免与接口冲突）
 type HeartbeatProber struct {
-	config       *config.ProberConfig // 探测器配置
-	heartbeatDAO dao.HeartbeatDAO
+	config             *config.ProberConfig          // 探测器配置
+	heartbeatDAO       dao.HeartbeatDAO              // 心跳DAO
+	nodeDAO            dao.CloudNodeDAO              // 云节点DAO（用于标记节点删除）
+	taskPlannerService collectmgr.TaskPlannerService // 任务规划器服务（用于触发任务重算）
 
 	probers map[string]Prober // 已注册的探测器
 	mu      sync.RWMutex      // 保护 probers 的读写锁
 }
 
 // InitProberInstance 初始化全局探测器实例（供 bootstrap 调用）
-func InitProberInstance(dbManager *database.Manager, cloudNodeCfg *config.Config) {
+func InitProberInstance(dbManager *database.Manager, cloudNodeCfg *config.Config, taskPlannerService collectmgr.TaskPlannerService) {
 	proberInstanceOnce.Do(func() {
 		log.Info("[HeartbeatProber] Initializing global prober instance...")
 
-		// 创建 heartbeatDAO
+		// 创建 DAO
 		heartbeatDAO := dao.NewHeartbeatNodeDAO(dbManager.GetDB())
+		nodeDAO := dao.NewCloudNodeDAO(dbManager.GetDB())
 
 		// 创建探测器实例
-		globalProberInstance = NewProber(heartbeatDAO, &cloudNodeCfg.Prober)
+		globalProberInstance = NewProber(heartbeatDAO, nodeDAO, &cloudNodeCfg.Prober, taskPlannerService)
 
 		// 将全局注册表中的探测器注册到 prober 实例
 		// 注意：RegisterDefaultProbers 需要在外部调用，确保探测器已注册
@@ -54,7 +58,7 @@ func InitProberInstance(dbManager *database.Manager, cloudNodeCfg *config.Config
 // HealthProbeSchedule trpc定时器[入口函数] - 定时健康探测（仅探测超时节点）
 func HealthProbeSchedule(ctx context.Context, params string) error {
 	ctxClone := trpc.CloneContext(ctx)
-	log.InfoContextf(ctxClone, "[HeartbeatProber] Starting health probe schedule, params: %s", params)
+	log.DebugContextf(ctxClone, "[HeartbeatProber] Starting health probe schedule, params: %s", params)
 
 	if globalProberInstance == nil {
 		err := fmt.Errorf("prober instance not initialized")
@@ -67,7 +71,7 @@ func HealthProbeSchedule(ctx context.Context, params string) error {
 		log.ErrorContextf(ctxClone, "[HeartbeatProber] Health probe failed: %v", err)
 		return err
 	}
-	log.InfoContext(ctxClone, "[HeartbeatProber] Health probe schedule completed")
+	log.DebugContext(ctxClone, "[HeartbeatProber] Health probe schedule completed")
 	return nil
 }
 
@@ -92,7 +96,7 @@ func KeepaliveSchedule(ctx context.Context, params string) error {
 }
 
 // NewProber 创建主动探测器
-func NewProber(heartbeatDAO dao.HeartbeatDAO, cfg *config.ProberConfig) *HeartbeatProber {
+func NewProber(heartbeatDAO dao.HeartbeatDAO, nodeDAO dao.CloudNodeDAO, cfg *config.ProberConfig, taskPlannerService collectmgr.TaskPlannerService) *HeartbeatProber {
 	// 设置默认配置
 	if cfg == nil {
 		cfg = &config.ProberConfig{
@@ -101,9 +105,11 @@ func NewProber(heartbeatDAO dao.HeartbeatDAO, cfg *config.ProberConfig) *Heartbe
 	}
 
 	return &HeartbeatProber{
-		heartbeatDAO: heartbeatDAO,
-		config:       cfg,
-		probers:      make(map[string]Prober),
+		heartbeatDAO:       heartbeatDAO,
+		nodeDAO:            nodeDAO,
+		config:             cfg,
+		taskPlannerService: taskPlannerService,
+		probers:            make(map[string]Prober),
 	}
 }
 
@@ -125,12 +131,48 @@ func (p *HeartbeatProber) probeTimeoutNodes(ctx context.Context) error {
 		return nil
 	}
 
+	log.InfoContextf(ctx, "[HeartbeatProber] Found %d timeout nodes to probe", len(timeoutRecords))
+
 	// 2. 使用内置分批并发的probeBatch方法
 	maxConcurrent := p.config.MaxConcurrent
 	if maxConcurrent <= 0 {
 		maxConcurrent = 100 // 默认最大并发数100
 	}
-	return p.probeBatch(ctx, timeoutRecords, maxConcurrent)
+
+	// 3. 记录需要探测的节点ID
+	nodeIDsToCheck := make([]string, 0, len(timeoutRecords))
+	for _, record := range timeoutRecords {
+		nodeIDsToCheck = append(nodeIDsToCheck, record.NodeID)
+	}
+
+	// 4. 执行探测
+	if err := p.probeBatch(ctx, timeoutRecords, maxConcurrent); err != nil {
+		log.ErrorContextf(ctx, "[HeartbeatProber] Probe batch failed: %v", err)
+	}
+
+	// 5. 探测完成后，检查是否有节点被标记为删除
+	deletedCount := 0
+	for _, nodeID := range nodeIDsToCheck {
+		node, err := p.nodeDAO.GetCloudNode(ctx, nodeID)
+		if err != nil {
+			log.WarnContextf(ctx, "[HeartbeatProber] Failed to get node %s: %v", nodeID, err)
+			continue
+		}
+		if node != nil && node.Invalid == 1 {
+			deletedCount++
+			log.InfoContextf(ctx, "[HeartbeatProber] Node %s is marked as deleted", nodeID)
+		}
+	}
+
+	// 6. 只有在有节点被标记为删除时，才触发任务重算
+	if deletedCount > 0 {
+		log.InfoContextf(ctx, "[HeartbeatProber] %d nodes marked as deleted, triggering task recalculation", deletedCount)
+		go p.triggerTaskRecalculation(trpc.CloneContext(ctx))
+	} else {
+		log.InfoContextf(ctx, "[HeartbeatProber] No nodes were marked as deleted, skipping task recalculation")
+	}
+
+	return nil
 }
 
 // probeAllNodes 探测所有注册的心跳节点
@@ -288,10 +330,20 @@ func (p *HeartbeatProber) ProbeHeartbeatNode(ctx context.Context, record *types.
 		log.ErrorContextf(ctx, "[heartbeat] probe failed for node %s: %v", record.NodeID, err)
 	}
 
-	// 4. 更新心跳节点表信息
-	if updateErr := p.updateHeartbeatNodeFromProbe(ctx, record.NodeID, record.NodeType, probeResult, result); updateErr != nil {
+	// 4. 更新心跳节点表信息，并检查是否需要标记节点为删除
+	needsDelete, updateErr := p.updateHeartbeatNodeFromProbe(ctx, record.NodeID, record.NodeType, probeResult, result)
+	if updateErr != nil {
 		log.ErrorContextf(ctx, "[heartbeat] failed to update heartbeat node %s after probe: %v", record.NodeID, updateErr)
 	}
+
+	// 5. 如果节点需要标记为删除（连续超时 >= 2），更新云节点表
+	if needsDelete {
+		log.WarnContextf(ctx, "[HeartbeatProber] Node %s has consecutive timeouts >= 2, marking as deleted", record.NodeID)
+		if err := p.markNodeAsDeleted(ctx, record.NodeID); err != nil {
+			log.ErrorContextf(ctx, "[HeartbeatProber] Failed to mark node %s as deleted: %v", record.NodeID, err)
+		}
+	}
+
 	return probeResult, nil
 }
 
@@ -326,13 +378,54 @@ func (p *HeartbeatProber) getProber(nodeType string) Prober {
 	return nil
 }
 
+// markNodeAsDeleted 标记节点为删除状态
+func (p *HeartbeatProber) markNodeAsDeleted(ctx context.Context, nodeID string) error {
+	// 获取节点信息
+	node, err := p.nodeDAO.GetCloudNode(ctx, nodeID)
+	if err != nil {
+		return fmt.Errorf("failed to get node: %w", err)
+	}
+	if node == nil {
+		return fmt.Errorf("node not found: %s", nodeID)
+	}
+
+	// 标记为删除
+	node.Invalid = 1
+	if err := p.nodeDAO.UpdateCloudNode(ctx, node); err != nil {
+		return fmt.Errorf("failed to mark node as deleted: %w", err)
+	}
+
+	log.InfoContextf(ctx, "[HeartbeatProber] Node %s marked as deleted", nodeID)
+	return nil
+}
+
+// triggerTaskRecalculation 触发任务重算
+// 当检测到节点状态变化（变为离线/异常）时，触发全局任务重新分配
+func (p *HeartbeatProber) triggerTaskRecalculation(ctx context.Context) {
+	if p.taskPlannerService == nil {
+		log.WarnContext(ctx, "[HeartbeatProber] taskPlannerService is nil, skip task recalculation")
+		return
+	}
+
+	log.InfoContext(ctx, "[HeartbeatProber] Starting task recalculation...")
+	result, err := p.taskPlannerService.SyncAllEnabledRules(ctx)
+	if err != nil {
+		log.ErrorContextf(ctx, "[HeartbeatProber] Task recalculation failed: %v", err)
+		return
+	}
+
+	log.InfoContextf(ctx, "[HeartbeatProber] Task recalculation completed: synced=%d, created=%d, updated=%d, deleted=%d",
+		result.SyncedRules, result.TotalCreated, result.TotalUpdated, result.TotalDeleted)
+}
+
 // updateHeartbeatNodeFromProbe 从探测结果更新心跳节点信息
+// 返回值：(needsDelete, error) - needsDelete 表示是否需要标记节点为删除
 func (p *HeartbeatProber) updateHeartbeatNodeFromProbe(ctx context.Context, nodeID, nodeType string,
-	probeResult *types.ProbeResult, probeResponse *ProbeResponse) error {
+	probeResult *types.ProbeResult, probeResponse *ProbeResponse) (bool, error) {
 	// 1. 获取现有心跳记录
 	nodeRecord, err := p.heartbeatDAO.GetNodeByID(ctx, nodeID)
 	if err != nil {
-		return fmt.Errorf("get node record failed:%s %w", nodeID, err)
+		return false, fmt.Errorf("get node record failed:%s %w", nodeID, err)
 	}
 
 	// 如果记录不存在，创建新的记录
@@ -346,12 +439,25 @@ func (p *HeartbeatProber) updateHeartbeatNodeFromProbe(ctx context.Context, node
 	// 2. 更新探测相关字段
 	now := time.Now()
 	probeResultBool := probeResult.ErrorMessage == ""
+	needsDelete := false
 
 	nodeRecord.LastProbeTime = &now
 	if probeResultBool {
 		nodeRecord.LastProbeResult = "success"
+		// 探测成功，重置连续超时次数
+		nodeRecord.ConsecutiveTimeouts = 0
 	} else {
 		nodeRecord.LastProbeResult = "failed"
+		// 探测失败，增加连续超时次数和总超时次数
+		nodeRecord.ConsecutiveTimeouts++
+		nodeRecord.TotalTimeouts++
+		log.WarnContextf(ctx, "[HeartbeatProber] Node %s probe failed, consecutive timeouts: %d",
+			nodeID, nodeRecord.ConsecutiveTimeouts)
+
+		// 如果连续超时次数 >= 2，标记需要删除
+		if nodeRecord.ConsecutiveTimeouts >= 2 {
+			needsDelete = true
+		}
 	}
 
 	// 4. 更新扩展元数据
@@ -379,7 +485,7 @@ func (p *HeartbeatProber) updateHeartbeatNodeFromProbe(ctx context.Context, node
 	// 5. 更新记录
 	if nodeRecord.ID > 0 {
 		// 更新现有记录
-		return p.heartbeatDAO.Update(ctx, nodeRecord)
+		return needsDelete, p.heartbeatDAO.Update(ctx, nodeRecord)
 	} else {
 		// 创建新记录
 		// 设置初始统计数据
@@ -387,6 +493,6 @@ func (p *HeartbeatProber) updateHeartbeatNodeFromProbe(ctx context.Context, node
 		nodeRecord.TotalHeartbeats = 1
 		nodeRecord.ConsecutiveTimeouts = 0
 		nodeRecord.TotalTimeouts = 0
-		return p.heartbeatDAO.Create(ctx, nodeRecord)
+		return false, p.heartbeatDAO.Create(ctx, nodeRecord)
 	}
 }

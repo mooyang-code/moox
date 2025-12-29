@@ -26,7 +26,7 @@ func (s *ServiceImpl) ReportHeartbeat(ctx context.Context, req *types.ReportHear
 
 // handleHeartbeat 处理心跳上报
 func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHeartbeatRequest) (*types.ReportHeartbeatResponse, error) {
-	log.InfoContextf(ctx, "handleHeartbeat Enter")
+	log.DebugContextf(ctx, "handleHeartbeat Enter")
 	// 1. 查询或创建节点记录
 	record, err := s.heartbeatDAO.GetNodeByID(ctx, req.NodeID)
 	if err != nil {

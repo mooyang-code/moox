@@ -14,6 +14,13 @@ type Service interface {
 	DataTypeConfigService
 }
 
+// CloudFunctionInvoker 云函数调用接口（用于解决循环依赖）
+// 该接口由 cloudnode.Service 实现
+type CloudFunctionInvoker interface {
+	// InvokeFunction 调用云函数
+	InvokeFunction(ctx context.Context, nodeID string, eventData interface{}) (interface{}, error)
+}
+
 // DataTypeConfigService 数据类型配置服务接口
 type DataTypeConfigService interface {
 	// GetDataTypeConfigs 获取所有数据类型配置
@@ -25,37 +32,37 @@ type DataTypeConfigService interface {
 
 // DataTypeConfigDTO 数据类型配置数据传输对象
 type DataTypeConfigDTO struct {
-	ID                 int       `json:"id"`
-	DataType           string    `json:"data_type"`
-	TypeName           string    `json:"type_name"`
-	TypeDesc           string    `json:"type_desc"`
-	DataSourceOptions  string    `json:"data_source_options"`
-	SortOrder          int       `json:"sort_order"`
-	Version            int       `json:"version"`
-	CreateTime         time.Time `json:"create_time"`
-	ModifyTime         time.Time `json:"modify_time"`
+	ID                int       `json:"id"`
+	DataType          string    `json:"data_type"`
+	TypeName          string    `json:"type_name"`
+	TypeDesc          string    `json:"type_desc"`
+	DataSourceOptions string    `json:"data_source_options"`
+	SortOrder         int       `json:"sort_order"`
+	Version           int       `json:"version"`
+	CreateTime        time.Time `json:"create_time"`
+	ModifyTime        time.Time `json:"modify_time"`
 }
 
 // DataTypeConfigDetailDTO 数据类型配置详情传输对象
 type DataTypeConfigDetailDTO struct {
-	Config *DataTypeConfigDTO    `json:"config"`
-	Fields []*FieldConfigDTO     `json:"fields"`
+	Config *DataTypeConfigDTO `json:"config"`
+	Fields []*FieldConfigDTO  `json:"fields"`
 }
 
 // FieldConfigDTO 字段配置数据传输对象
 type FieldConfigDTO struct {
-	ID               int       `json:"id"`
-	DataType         string    `json:"data_type"`
-	FieldKey         string    `json:"field_key"`
-	FieldName        string    `json:"field_name"`
-	FieldType        string    `json:"field_type"`
-	IsRequired       bool      `json:"is_required"`
-	DefaultValue     string    `json:"default_value"`
-	FieldOptions     string    `json:"field_options"`
+	ID                int       `json:"id"`
+	DataType          string    `json:"data_type"`
+	FieldKey          string    `json:"field_key"`
+	FieldName         string    `json:"field_name"`
+	FieldType         string    `json:"field_type"`
+	IsRequired        bool      `json:"is_required"`
+	DefaultValue      string    `json:"default_value"`
+	FieldOptions      string    `json:"field_options"`
 	DataSourceOptions string    `json:"data_source_options"`
-	SortOrder        int       `json:"sort_order"`
-	CreateTime       time.Time `json:"create_time"`
-	ModifyTime       time.Time `json:"modify_time"`
+	SortOrder         int       `json:"sort_order"`
+	CreateTime        time.Time `json:"create_time"`
+	ModifyTime        time.Time `json:"modify_time"`
 }
 
 // TaskRuleService 任务规则服务接口
@@ -157,4 +164,3 @@ type TaskPlannerService interface {
 	// SyncAllEnabledRules 同步所有启用的规则（定时任务调用）
 	SyncAllEnabledRules(ctx context.Context) (*BatchSyncResult, error)
 }
-

@@ -17,6 +17,17 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+// cloudFunctionInvokerAdapter 适配器，将 cloudnode.Service 适配为 collectmgr.CloudFunctionInvoker
+// 用于解决接口返回类型不匹配的问题
+type cloudFunctionInvokerAdapter struct {
+	service cloudnode.Service
+}
+
+// InvokeFunction 实现 collectmgr.CloudFunctionInvoker 接口
+func (a *cloudFunctionInvokerAdapter) InvokeFunction(ctx context.Context, nodeID string, eventData interface{}) (interface{}, error) {
+	return a.service.InvokeFunction(ctx, nodeID, eventData)
+}
+
 // Services 应用服务集合
 type Services struct {
 	// 数据库管理器（共享基础模块）
@@ -91,10 +102,6 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	log.Info("[Bootstrap] 正在创建云节点服务...")
 	cloudNodeService := cloudnode.NewService(dbManager, asyncTaskService, cfg.CloudNode)
 
-	// 初始化心跳探测器（全局单例，供定时器使用）注意：必须在 NewService 之后调用，因为 NewService 会注册全局探测器
-	log.Info("[Bootstrap] 正在初始化心跳探测器...")
-	cloudnode.InitProberInstance(dbManager, cfg.CloudNode)
-
 	// 创建Collector服务实例
 	// 创建所需的DAO
 	taskRulesDAO := collectordao.NewCollectorTaskRulesDAO(dbManager.GetDB())
@@ -109,10 +116,22 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	registry := collectmgr_distributor.NewDistributorRegistry(nodeDAO, nil)
 	taskPlanner := collectmgr.NewTaskPlannerServiceImpl(taskRulesDAO, instanceDAO, registry)
 
+	// 初始化心跳探测器（全局单例，供定时器使用）注意：必须在 NewService 之后调用，因为 NewService 会注册全局探测器
+	// 需要传入 taskPlannerService，以便在节点异常时触发任务重算
+	log.Info("[Bootstrap] 正在初始化心跳探测器...")
+	cloudnode.InitProberInstance(dbManager, cfg.CloudNode, taskPlanner)
+
 	// 创建服务实例
 	taskRuleService := collectmgr.NewTaskRulesServiceImpl(taskRulesDAO, nodeDAO, taskPlanner)
 	taskInstanceService := collectmgr.NewTaskInstanceServiceImpl(instanceDAO, taskRulesDAO, nodeDAO, heartbeatDAO)
 	dataTypeConfigService := collectmgr.NewDataTypeConfigServiceImpl(dataTypeConfigDAO, fieldConfigDAO, dbManager.GetDB())
+
+	// 注入 CloudNodeService 依赖到 TaskInstanceService（解决循环依赖）
+	// 创建适配器以匹配接口签名
+	if impl, ok := taskInstanceService.(*collectmgr.TaskInstanceServiceImpl); ok {
+		invoker := &cloudFunctionInvokerAdapter{service: cloudNodeService}
+		impl.SetCloudNodeService(invoker)
+	}
 
 	// 初始化DNSProxy实例（全局单例，供定时器使用）
 	log.Info("[Bootstrap] 正在初始化DNSProxy实例...")

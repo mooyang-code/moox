@@ -50,14 +50,19 @@ func NewBaseDistributor(nodeDAO cloudnodedao.CloudNodeDAO, symbolProvider Symbol
 }
 
 // GetMatchingNodes 通用的节点匹配逻辑（三种分配策略）
+// 任务分配时，只选择在线节点
 func (b *BaseDistributor) GetMatchingNodes(ctx context.Context, rule *dto.TaskRuleDTO, dataType string) ([]*cloudnodemodel.CloudNode, error) {
+	// 构建状态过滤：仅选择在线节点
+	onlineStatus := cloudnodemodel.NodeStatusOnline
+	filter := &cloudnodedao.NodeStatusFilter{Status: &onlineStatus}
+
 	switch rule.AssignmentType {
 	case model.AssignmentTypeAuto:
-		// 自动分配：查找所有支持该数据类型的有效节点
-		return b.nodeDAO.GetNodesBySupportedCollector(ctx, dataType)
+		// 自动分配：查找所有支持该数据类型的在线节点
+		return b.nodeDAO.GetNodesBySupportedCollector(ctx, dataType, filter)
 
 	case model.AssignmentTypeFixed:
-		// 固定分配：解析 JSON 数组，查询指定节点
+		// 固定分配：解析 JSON 数组，查询指定的在线节点
 		var nodeIDs []string
 		if err := json.Unmarshal([]byte(rule.AssignedNodes), &nodeIDs); err != nil {
 			// 如果解析失败，尝试作为逗号分隔的字符串处理
@@ -69,15 +74,15 @@ func (b *BaseDistributor) GetMatchingNodes(ctx context.Context, rule *dto.TaskRu
 		if len(nodeIDs) == 0 {
 			return []*cloudnodemodel.CloudNode{}, nil
 		}
-		return b.nodeDAO.GetNodesByIDs(ctx, nodeIDs)
+		return b.nodeDAO.GetNodesByIDs(ctx, nodeIDs, filter)
 
 	case model.AssignmentTypePattern:
-		// 通配符匹配：将 * 转换为 SQL LIKE 的 %
-		return b.nodeDAO.GetNodesByPattern(ctx, rule.NodePattern)
+		// 通配符匹配：将 * 转换为 SQL LIKE 的 %，仅选择在线节点
+		return b.nodeDAO.GetNodesByPattern(ctx, rule.NodePattern, filter)
 
 	default:
 		// 默认使用自动分配
-		return b.nodeDAO.GetNodesBySupportedCollector(ctx, dataType)
+		return b.nodeDAO.GetNodesBySupportedCollector(ctx, dataType, filter)
 	}
 }
 
