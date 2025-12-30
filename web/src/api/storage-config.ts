@@ -9,7 +9,7 @@ export interface StorageEntity {
   entity_srv_conn: string;
   ctime: string;
   mtime: string;
-  invalid: number;
+  enabled: string; // 是否启用（"true"=启用；"false"=禁用）
 }
 
 export interface ListStorageEntitiesResponse {
@@ -30,7 +30,7 @@ export interface StorageDevice {
   conn_info: string;
   ctime: string;
   mtime: string;
-  invalid: number;
+  enabled: string; // 是否启用（"true"=启用；"false"=禁用）
 }
 
 export interface ListStorageDevicesResponse {
@@ -51,7 +51,7 @@ export interface ObjectRoute {
   entity_id: number;
   ctime: string;
   mtime: string;
-  invalid: number;
+  enabled: string; // 是否启用（"true"=启用；"false"=禁用）
 }
 
 export interface ListObjectRoutesRequest {
@@ -82,7 +82,7 @@ export interface FieldRoute {
   device_id: number;
   ctime: string;
   mtime: string;
-  invalid: number;
+  enabled: string; // 是否启用（"true"=启用；"false"=禁用）
 }
 
 export interface ListFieldRoutesRequest {

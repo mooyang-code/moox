@@ -662,6 +662,16 @@ const getDatasetNames = (datasetIds: number[]): string => {
   return names.join(', ');
 };
 
+const toBoolText = (value: unknown, defaultValue: 'true' | 'false' = 'false'): 'true' | 'false' => {
+  if (value === true || value === 'true' || value === 1 || value === '1') {
+    return 'true';
+  }
+  if (value === false || value === 'false' || value === 0 || value === '0' || value === -1 || value === '-1') {
+    return 'false';
+  }
+  return defaultValue;
+};
+
 // 将后台API字段转换为前端显示字段
 const convertApiFieldToRecord = (apiField: FieldDetailInfo): FieldRecord => {
   // dataset_ids已经是number[]类型，直接使用
@@ -682,8 +692,8 @@ const convertApiFieldToRecord = (apiField: FieldDetailInfo): FieldRecord => {
     secondaryFormatText: secondaryFormatText,
     fieldFormatText: fieldFormatText,
 
-    isRequired: apiField.required_flag === 1, // 1表示必填，-1表示非必填
-    isUnique: apiField.unique_flag === 1, // 1表示唯一，-1表示非唯一
+    isRequired: toBoolText(apiField.required) === 'true',
+    isUnique: toBoolText(apiField.unique) === 'true',
     isMetadata: apiField.table_type === 1, // 1表示数据对象表，2表示数据表
     fieldValidationRules: apiField.validation_rule ? JSON.stringify(apiField.validation_rule) : '',
     writeExample: apiField.write_example || '',
@@ -817,8 +827,8 @@ const yamlCode = ref(`fields:
     field_name: "交易标的ID"   # 字段中文显示名称
     dataset_ids: [100,101]    # 关联的数据集ID列表，指定该字段在哪些数据集下生效（具体数据集ID请参考数据集列表）
     desc: "交易对标识符，如BTCUSDT，使用全大写字母格式" # 字段功能描述
-    required_flag: 1          # 必填标记（-1非必填；1必填）
-    unique_flag: 1            # 唯一约束标记（-1否；1是）
+    required: true            # 是否必填（true=必填；false=非必填）
+    unique: true              # 是否唯一（true=是；false=否）
     table_type: 1             # 字段所属表类型（1=数据对象表，2=数据表）
     field_primary_format: 1   # 字段主要数据类型：1=字符串，2=整型，3=双精度浮点数，4=时间类型，5=选项类型，6=Set类型，7=Map类型k-v，8=Map类型k-list
     field_secondary_format: 3 # 字段次要数据类型，用于进一步限定数据格式
@@ -831,8 +841,8 @@ const yamlCode = ref(`fields:
     dataset_ids: [100,101]    # 关联的数据集ID列表，指定该字段在哪些数据集下生效（具体数据集ID请参考数据集列表）
     desc: "K线图表周期的起始时间戳" # 字段功能描述
 
-    required_flag: 1          # 必填标记（-1非必填；1必填）
-    unique_flag: -1           # 唯一约束标记（-1否；1是）
+    required: true            # 是否必填（true=必填；false=非必填）
+    unique: false             # 是否唯一（true=是；false=否）
     table_type: 2             # 字段所属表类型（1=数据对象表，2=数据表）
     field_primary_format: 4   # 字段主要数据类型：4=时间类型
     field_secondary_format: 7 # 字段次要数据类型，用于进一步限定数据格式
@@ -844,8 +854,8 @@ const yamlCode = ref(`fields:
     field_name: "开盘价"
     dataset_ids: [100,101]
     desc: "K线周期开盘价格"
-    required_flag: 1
-    unique_flag: -1
+    required: true
+    unique: false
     table_type: 2             # 字段所属表类型（1=数据对象表，2=数据表）
     field_primary_format: 3   # 字段主要数据类型：3=双精度浮点数
     field_secondary_format: 2
@@ -857,8 +867,8 @@ const yamlCode = ref(`fields:
     field_name: "成交量"
     dataset_ids: [100,101]
     desc: "K线周期成交量"
-    required_flag: 1
-    unique_flag: -1
+    required: true
+    unique: false
     table_type: 2             # 字段所属表类型（1=数据对象表，2=数据表）
     field_primary_format: 2   # 字段主要数据类型：2=整型
     field_secondary_format: 1
@@ -870,8 +880,8 @@ const yamlCode = ref(`fields:
     field_name: "交易所类型"
     dataset_ids: [100,101]
     desc: "交易所类型选项"
-    required_flag: 1
-    unique_flag: -1
+    required: true
+    unique: false
     table_type: 2             # 字段所属表类型（1=数据对象表，2=数据表）
     field_primary_format: 5   # 字段主要数据类型：5=选项类型
     field_secondary_format: 11
@@ -1034,8 +1044,8 @@ const handleOk = async () => {
 
           interface_name: addForm.value.fieldNameEn,
           desc: addForm.value.fieldDescription,
-          required_flag: addForm.value.isRequired ? 1 : -1, // 1必填，-1非必填
-          unique_flag: addForm.value.isUnique ? 1 : -1, // 1唯一，-1非唯一
+          required: addForm.value.isRequired ? 'true' : 'false',
+          unique: addForm.value.isUnique ? 'true' : 'false',
           table_type: addForm.value.isMetadata ? 1 : 2, // 1数据对象表，2数据表
           field_format_type: {
             field_primary_format: Number(addForm.value.primaryFormat),
@@ -1043,7 +1053,8 @@ const handleOk = async () => {
           },
           validation_rule: addForm.value.fieldValidationRules ? JSON.parse(addForm.value.fieldValidationRules) : undefined,
           write_example: addForm.value.writeExample,
-          remark: addForm.value.remark
+          remark: addForm.value.remark,
+          enabled: 'true'
         }
       };
       
@@ -1078,8 +1089,8 @@ const handleOk = async () => {
           field_name: addForm.value.fieldName,
           interface_name: addForm.value.fieldNameEn,
           desc: addForm.value.fieldDescription,
-          required_flag: addForm.value.isRequired ? 1 : -1,
-          unique_flag: addForm.value.isUnique ? 1 : -1,
+          required: addForm.value.isRequired ? 'true' : 'false',
+          unique: addForm.value.isUnique ? 'true' : 'false',
           table_type: addForm.value.isMetadata ? 1 : 2,
           parent_field_id: 0,
           field_format_type: {
@@ -1092,7 +1103,7 @@ const handleOk = async () => {
           remark: addForm.value.remark,
           ctime: '',
           mtime: '',
-          invalid: 0
+          enabled: 'true'
         }
       };
       
@@ -1452,9 +1463,12 @@ const handleImportOk = async () => {
         
         // 解析validation_rule
         const validationRule = parseValidationRule(fieldConfig.validation_rule, fieldPrimaryFormat);
-        
+
         // 字段类型固定为1（基础字段类型）
         // let fieldType = 1;
+
+        const requiredValue = fieldConfig.required ?? fieldConfig.required_flag ?? fieldConfig.is_required;
+        const uniqueValue = fieldConfig.unique ?? fieldConfig.unique_flag ?? fieldConfig.is_unique;
 
         // 构建UpsertField请求参数
         const upsertParams: UpsertFieldReq = {
@@ -1469,8 +1483,8 @@ const handleImportOk = async () => {
 
           interface_name: fieldConfig.interface_name,
           desc: fieldConfig.desc || '',
-          required_flag: fieldConfig.required_flag || (fieldConfig.is_required ? 1 : -1), // 1必填，-1非必填
-          unique_flag: fieldConfig.unique_flag || (fieldConfig.is_unique ? 1 : -1), // 1唯一，-1非唯一
+          required: toBoolText(requiredValue, 'false'),
+          unique: toBoolText(uniqueValue, 'false'),
           table_type: fieldConfig.table_type || (fieldConfig.is_meta ? 1 : 2), // 1数据对象表，2数据表
           field_format_type: {
             field_primary_format: fieldPrimaryFormat,
@@ -1478,7 +1492,8 @@ const handleImportOk = async () => {
           },
           validation_rule: validationRule,
           write_example: fieldConfig.write_example || '',
-          remark: fieldConfig.remark || ''
+          remark: fieldConfig.remark || '',
+          enabled: 'true'
         }
         };
         
@@ -1700,8 +1715,6 @@ const validateYamlFormat = (content: string): { isValid: boolean; errorMessage?:
       'field_name',
       'dataset_ids',
       'desc',
-      'required_flag',
-      'unique_flag',
       'table_type',
       'field_primary_format',
       'field_secondary_format'
@@ -1712,6 +1725,16 @@ const validateYamlFormat = (content: string): { isValid: boolean; errorMessage?:
       if (!contentStr.includes(field)) {
         return { isValid: false, errorMessage: `YAML文件缺少必要字段: ${field}` };
       }
+    }
+
+    const hasRequired = contentStr.includes('required:') || contentStr.includes('required_flag');
+    if (!hasRequired) {
+      return { isValid: false, errorMessage: 'YAML文件缺少必要字段: required' };
+    }
+
+    const hasUnique = contentStr.includes('unique:') || contentStr.includes('unique_flag');
+    if (!hasUnique) {
+      return { isValid: false, errorMessage: 'YAML文件缺少必要字段: unique' };
     }
     
     // 检查是否包含字段项目（以 "- interface_name:" 开头的行）

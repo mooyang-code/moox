@@ -480,13 +480,18 @@ CREATE TRIGGER update_collector_field_configs_mtime AFTER UPDATE ON t_collector_
 -- ************ 采集器数据类型配置初始数据 ************
 -- 插入数据类型配置
 INSERT OR IGNORE INTO t_collector_data_type_configs (c_data_type, c_type_name, c_type_desc, c_data_source_options, c_sort_order) VALUES
-('kline', 'K线数据', '股票、期货等金融产品的K线数据采集配置', '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}', 1),
-('ticker', '逐笔数据', '实时逐笔交易数据采集配置', '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}', 2),
-('orderbook', '订单簿数据', '买卖盘深度数据采集配置', '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}]}', 3),
-('trade', '交易数据', '交易汇总数据采集配置', '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}', 4),
-('news', '新闻数据', '新闻资讯数据采集配置', '{"options": [{"value": "cryptonews", "label": "CryptoNews"}, {"value": "coindesk", "label": "CoinDesk"}, {"value": "cointelegraph", "label": "Cointelegraph"}, {"value": "decrypt", "label": "Decrypt"}, {"value": "theblock", "label": "The Block"}, {"value": "messari", "label": "Messari"}, {"value": "glassnode", "label": "Glassnode"}, {"value": "intoblock", "label": "IntoTheBlock"}]}', 5);
+('symbol', '标的数据', '交易所标的列表同步配置', '{"options": [{"value": "okx", "label": "OKX"}, {"value": "binance", "label": "币安 (Binance)"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}]}', 1),
+('kline', 'K线数据', '股票、期货等金融产品的K线数据采集配置', '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}', 2),
+('ticker', '逐笔数据', '实时逐笔交易数据采集配置', '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}', 3),
+('orderbook', '订单簿数据', '买卖盘深度数据采集配置', '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}]}', 4),
+('trade', '交易数据', '交易汇总数据采集配置', '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}', 5),
+('news', '新闻数据', '新闻资讯数据采集配置', '{"options": [{"value": "cryptonews", "label": "CryptoNews"}, {"value": "coindesk", "label": "CoinDesk"}, {"value": "cointelegraph", "label": "Cointelegraph"}, {"value": "decrypt", "label": "Decrypt"}, {"value": "theblock", "label": "The Block"}, {"value": "messari", "label": "Messari"}, {"value": "glassnode", "label": "Glassnode"}, {"value": "intoblock", "label": "IntoTheBlock"}]}', 6);
 
 -- ************ 采集器参数字段配置初始数据 ************
+-- 标的数据字段配置
+INSERT OR IGNORE INTO t_collector_field_configs (c_data_type, c_field_key, c_field_name, c_field_type, c_is_required, c_default_value, c_field_options, c_data_source_options, c_sort_order) VALUES
+('symbol', 'inst_types', '产品类型', 'multi-select', 1, '["SPOT"]', '{"options": [{"value": "SPOT", "label": "现货"}, {"value": "SWAP", "label": "永续合约"}, {"value": "FUTURES", "label": "交割合约"}, {"value": "OPTION", "label": "期权"}]}', '{"options": [{"value": "okx", "label": "OKX"}, {"value": "binance", "label": "币安 (Binance)"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}]}', 1);
+
 -- K线数据字段配置
 INSERT OR IGNORE INTO t_collector_field_configs (c_data_type, c_field_key, c_field_name, c_field_type, c_is_required, c_default_value, c_field_options, c_data_source_options, c_sort_order) VALUES
 ('kline', 'symbol', '交易标的', 'text', 1, 'BTCUSDT', '{}', '{"options": [{"value": "binance", "label": "币安 (Binance)"}, {"value": "okx", "label": "OKX"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}, {"value": "bitfinex", "label": "Bitfinex"}, {"value": "coinbase", "label": "Coinbase"}]}', 1),
@@ -518,4 +523,54 @@ INSERT OR IGNORE INTO t_collector_field_configs (c_data_type, c_field_key, c_fie
 ('news', 'language', '语言', 'select', 0, 'zh-CN', '{"options": [{"value": "zh-CN", "label": "中文"}, {"value": "en-US", "label": "英文"}, {"value": "ja-JP", "label": "日文"}]}', '{"options": [{"value": "cryptonews", "label": "CryptoNews"}, {"value": "coindesk", "label": "CoinDesk"}, {"value": "cointelegraph", "label": "Cointelegraph"}, {"value": "decrypt", "label": "Decrypt"}, {"value": "theblock", "label": "The Block"}, {"value": "messari", "label": "Messari"}, {"value": "glassnode", "label": "Glassnode"}, {"value": "intoblock", "label": "IntoTheBlock"}]}', 2),
 ('news', 'limit', '数量限制', 'number', 0, '50', '{}', '{"options": [{"value": "cryptonews", "label": "CryptoNews"}, {"value": "coindesk", "label": "CoinDesk"}, {"value": "cointelegraph", "label": "Cointelegraph"}, {"value": "decrypt", "label": "Decrypt"}, {"value": "theblock", "label": "The Block"}, {"value": "messari", "label": "Messari"}, {"value": "glassnode", "label": "Glassnode"}, {"value": "intoblock", "label": "IntoTheBlock"}]}', 3),
 ('news', 'keywords', '关键词', 'text', 0, '', '{}', '{"options": [{"value": "cryptonews", "label": "CryptoNews"}, {"value": "coindesk", "label": "CoinDesk"}, {"value": "cointelegraph", "label": "Cointelegraph"}, {"value": "decrypt", "label": "Decrypt"}, {"value": "theblock", "label": "The Block"}, {"value": "messari", "label": "Messari"}, {"value": "glassnode", "label": "Glassnode"}, {"value": "intoblock", "label": "IntoTheBlock"}]}', 4);
+
+-- ============ 交易所标的数据表设计 ============
+
+-- ************ 交易所标的表 ************
+CREATE TABLE IF NOT EXISTS t_exchange_symbols (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,       -- 主键ID
+    c_exchange TEXT NOT NULL,                              -- 交易所名称（binance/okx/huobi等）
+    c_inst_type TEXT NOT NULL,                             -- 产品类型（SPOT/SWAP/FUTURES等）
+    c_symbol TEXT NOT NULL,                                -- 标的符号（BTC-USDT）
+    c_base_currency TEXT NOT NULL,                         -- 基础货币（BTC）
+    c_quote_currency TEXT NOT NULL,                        -- 计价货币（USDT）
+    c_status TEXT NOT NULL DEFAULT 'active',               -- 状态（active=活跃，inactive=停用，delisted=退市）
+
+    -- 交易规则
+    c_min_qty TEXT NOT NULL DEFAULT '',                    -- 最小交易数量
+    c_max_qty TEXT NOT NULL DEFAULT '',                    -- 最大交易数量
+    c_tick_size TEXT NOT NULL DEFAULT '',                  -- 价格最小变动单位
+    c_lot_size TEXT NOT NULL DEFAULT '',                   -- 数量最小变动单位
+
+    -- 扩展信息
+    c_metadata TEXT NOT NULL DEFAULT '{}',                 -- 扩展元数据（JSON格式）
+
+    -- 同步信息
+    c_sync_time INTEGER NOT NULL,                          -- 同步时间戳（毫秒）
+
+    -- 审计字段
+    c_invalid INTEGER NOT NULL DEFAULT 0,                  -- 删除标记
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,            -- 创建时间
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP             -- 修改时间
+);
+
+-- ************ 创建交易所标的相关索引 ************
+-- 唯一索引：交易所+产品类型+标的
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_symbols_unique ON t_exchange_symbols(c_exchange, c_inst_type, c_symbol, c_invalid);
+
+-- 查询索引
+CREATE INDEX IF NOT EXISTS idx_exchange_symbols_exchange ON t_exchange_symbols(c_exchange);
+CREATE INDEX IF NOT EXISTS idx_exchange_symbols_inst_type ON t_exchange_symbols(c_inst_type);
+CREATE INDEX IF NOT EXISTS idx_exchange_symbols_status ON t_exchange_symbols(c_status);
+CREATE INDEX IF NOT EXISTS idx_exchange_symbols_sync_time ON t_exchange_symbols(c_sync_time);
+CREATE INDEX IF NOT EXISTS idx_exchange_symbols_invalid ON t_exchange_symbols(c_invalid);
+
+-- 联合查询索引
+CREATE INDEX IF NOT EXISTS idx_exchange_symbols_exchange_inst ON t_exchange_symbols(c_exchange, c_inst_type, c_status, c_invalid);
+
+-- ************ 创建交易所标的相关触发器 ************
+-- 标的表更新触发器
+DROP TRIGGER IF EXISTS update_exchange_symbols_mtime;
+CREATE TRIGGER update_exchange_symbols_mtime AFTER UPDATE ON t_exchange_symbols BEGIN
+    UPDATE t_exchange_symbols SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 

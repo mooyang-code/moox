@@ -53,7 +53,7 @@ func getRegionsByProvider(provider string) []RegionInfo {
 // getTencentRegions 获取腾讯云地区列表（从配置文件读取）
 func getTencentRegions() []RegionInfo {
 	cfg := config.LoadConfig()
-	regions := make([]RegionInfo, 0, len(cfg.CloudRegions.Tencent))
+	var regions []RegionInfo
 	for _, r := range cfg.CloudRegions.Tencent {
 		regions = append(regions, RegionInfo{
 			Code: r.Code,

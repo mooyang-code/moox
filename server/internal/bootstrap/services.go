@@ -8,7 +8,7 @@ import (
 	cloudnodedao "github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr"
 	collectordao "github.com/mooyang-code/moox/server/internal/service/collectmgr/dao"
-	collectmgr_distributor "github.com/mooyang-code/moox/server/internal/service/collectmgr/distributor"
+	collectmgr_planner "github.com/mooyang-code/moox/server/internal/service/collectmgr/planner"
 	"github.com/mooyang-code/moox/server/internal/service/database"
 	"github.com/mooyang-code/moox/server/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/server/internal/service/fileserver"
@@ -113,7 +113,7 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 
 	// 创建任务规划器实例（不再需要全局单例，因为改为客户端轮询）
 	log.Info("[Bootstrap] 正在创建任务规划器...")
-	registry := collectmgr_distributor.NewDistributorRegistry(nodeDAO, nil)
+	registry := collectmgr_planner.NewPlannerRegistry(nodeDAO, nil)
 	taskPlanner := collectmgr.NewTaskPlannerServiceImpl(taskRulesDAO, instanceDAO, registry)
 
 	// 初始化心跳探测器（全局单例，供定时器使用）注意：必须在 NewService 之后调用，因为 NewService 会注册全局探测器

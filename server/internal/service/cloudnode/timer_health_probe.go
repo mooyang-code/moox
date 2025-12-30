@@ -140,7 +140,7 @@ func (p *HeartbeatProber) probeTimeoutNodes(ctx context.Context) error {
 	}
 
 	// 3. 记录需要探测的节点ID
-	nodeIDsToCheck := make([]string, 0, len(timeoutRecords))
+	var nodeIDsToCheck []string
 	for _, record := range timeoutRecords {
 		nodeIDsToCheck = append(nodeIDsToCheck, record.NodeID)
 	}

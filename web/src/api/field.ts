@@ -15,8 +15,8 @@ export interface FieldDetailInfo {
 
   interface_name: string;  // 字段英文名
   desc: string;  // 字段描述
-  required_flag: number;  // 必填标记（-1非必填；1必填）
-  unique_flag: number;    // 唯一约束标记（-1否；1是）
+  required: string;  // 是否必填（"true"=必填；"false"=非必填）
+  unique: string;    // 是否唯一（"true"=是；"false"=否）
   table_type: number;     // 字段所属表类型（1=数据对象表，2=数据表）
   parent_field_id: number;
   field_format_type: FieldFormatType;
@@ -26,7 +26,7 @@ export interface FieldDetailInfo {
   remark: string;
   ctime: string;
   mtime: string;
-  invalid: number;
+  enabled: string; // 是否启用（"true"=启用；"false"=禁用）
 }
 
 // 认证信息
@@ -76,8 +76,8 @@ export interface CreateFieldReq {
 
     interface_name: string;
     desc: string;
-    required_flag: number;   // 必填标记（-1非必填；1必填）
-    unique_flag: number;     // 唯一约束标记（-1否；1是）
+    required: string;   // 是否必填（"true"=必填；"false"=非必填）
+    unique: string;     // 是否唯一（"true"=是；"false"=否）
     table_type?: number;     // 字段所属表类型（1=数据对象表，2=数据表）
     parent_field_id?: number;  // 父字段ID
     field_format_type: FieldFormatType;
@@ -85,8 +85,9 @@ export interface CreateFieldReq {
     validation_rule?: any;
     write_example?: string;
     remark?: string;
+    enabled?: string; // 是否启用（"true"=启用；"false"=禁用）
     // 注意：创建时不需要传递以下字段（后端会自动生成）
-    // field_id, ctime, mtime, invalid
+    // field_id, ctime, mtime, enabled
   };
 }
 
@@ -119,8 +120,8 @@ export interface UpsertFieldReq {
 
     interface_name: string;
     desc: string;
-    required_flag: number;   // 必填标记（-1非必填；1必填）
-    unique_flag: number;     // 唯一约束标记（-1否；1是）
+    required: string;   // 是否必填（"true"=必填；"false"=非必填）
+    unique: string;     // 是否唯一（"true"=是；"false"=否）
     table_type?: number;     // 字段所属表类型（1=数据对象表，2=数据表）
     parent_field_id?: number;
     field_format_type: FieldFormatType;
@@ -128,6 +129,7 @@ export interface UpsertFieldReq {
     validation_rule?: any;
     write_example?: string;
     remark?: string;
+    enabled?: string; // 是否启用（"true"=启用；"false"=禁用）
   };
 }
 

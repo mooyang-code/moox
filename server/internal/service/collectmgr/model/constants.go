@@ -8,6 +8,7 @@ const (
 	DataTypeTrade     = "trade"     // 交易数据
 	DataTypeNews      = "news"      // 新闻数据
 	DataTypeList      = "list"      // 列表数据
+	DataTypeSymbol    = "symbol"    // 标的数据
 )
 
 // 分配类型常量

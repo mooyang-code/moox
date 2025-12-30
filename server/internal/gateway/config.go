@@ -167,7 +167,7 @@ func (c *Config) GetServiceConfig(serviceID string, serviceAddr string) ServiceC
 
 // GetAllServiceIDs 获取所有已配置的服务ID列表
 func (c *Config) GetAllServiceIDs() []string {
-	serviceIDs := make([]string, 0, len(c.Gateway.Services))
+	var serviceIDs []string
 	for serviceID := range c.Gateway.Services {
 		serviceIDs = append(serviceIDs, serviceID)
 	}

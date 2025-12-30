@@ -3,15 +3,13 @@ package collectmgr
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"time"
 
+	"github.com/mooyang-code/moox/server/internal/common"
 	cloudnodedao "github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	collectordao "github.com/mooyang-code/moox/server/internal/service/collectmgr/dao"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/dto"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/model"
 
-	"github.com/bwmarrin/snowflake"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -19,7 +17,6 @@ type TaskRulesServiceImpl struct {
 	taskRulesDAO collectordao.CollectorTaskRulesDAO
 	nodeDAO      cloudnodedao.CloudNodeDAO
 	taskPlanner  TaskPlannerService
-	snowflake    *snowflake.Node
 }
 
 func NewTaskRulesServiceImpl(
@@ -27,19 +24,10 @@ func NewTaskRulesServiceImpl(
 	nodeDAO cloudnodedao.CloudNodeDAO,
 	taskPlanner TaskPlannerService,
 ) TaskRuleService {
-
-	// 创建snowflake节点（使用时间戳作为节点ID）
-	node, err := snowflake.NewNode(time.Now().Unix() % 1024)
-	if err != nil {
-		// 如果创建失败，使用默认值1
-		node, _ = snowflake.NewNode(1)
-	}
-
 	return &TaskRulesServiceImpl{
 		taskRulesDAO: taskRulesDAO,
 		nodeDAO:      nodeDAO,
 		taskPlanner:  taskPlanner,
-		snowflake:    node,
 	}
 }
 
@@ -100,9 +88,8 @@ func (s *TaskRulesServiceImpl) GetTaskRule(ctx context.Context, ruleID string) (
 }
 
 func (s *TaskRulesServiceImpl) CreateTaskRule(ctx context.Context, rule *dto.TaskRuleDTO) (string, error) {
-	// 生成snowflake ID
-	sfID := s.snowflake.Generate()
-	ruleID := strconv.FormatInt(sfID.Int64(), 10)
+	// 生成10位随机字符串作为RuleID
+	ruleID := common.GenerateID(10)
 	rule.RuleID = ruleID
 
 	modelRule := &model.CollectorTaskRules{

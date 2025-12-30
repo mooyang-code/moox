@@ -44,7 +44,7 @@ func GetServerConstructor(serverType msghub.ServerType) (CreateMessageServer, er
 // ListServerTypes 列出所有已注册的服务器类型
 func ListServerTypes() []msghub.ServerType {
 	initServerRegistry()
-	types := make([]msghub.ServerType, 0, len(serverRegistry.registry))
+	var types []msghub.ServerType
 	for t := range serverRegistry.registry {
 		types = append(types, t)
 	}

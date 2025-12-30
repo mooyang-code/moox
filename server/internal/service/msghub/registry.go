@@ -70,7 +70,7 @@ func (r *publisherRegistry) List() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	names := make([]string, 0, len(r.publishers))
+	var names []string
 	for name := range r.publishers {
 		names = append(names, name)
 	}
@@ -156,7 +156,7 @@ func (r *consumerRegistry) List() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	names := make([]string, 0, len(r.consumers))
+	var names []string
 	for name := range r.consumers {
 		names = append(names, name)
 	}

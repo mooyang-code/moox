@@ -343,9 +343,9 @@ func (s *ServiceImpl) generateNodeID(ctx context.Context, region string) (string
 	// 根据是否已有Master节点决定节点类型
 	var nodeID string
 	if !hasMaster {
-		nodeID = fmt.Sprintf("DataCollector-Master-%d-%s", timestamp, randomStr)
+		nodeID = fmt.Sprintf("%s-DataCollector-Master-%d", randomStr, timestamp)
 	} else {
-		nodeID = fmt.Sprintf("DataCollector-General-%d-%s", timestamp, randomStr)
+		nodeID = fmt.Sprintf("%s-DataCollector-General-%d", randomStr, timestamp)
 	}
 	return nodeID, nil
 }

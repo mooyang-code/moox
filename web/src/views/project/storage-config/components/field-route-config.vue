@@ -99,8 +99,8 @@
         </a-table-column>
         <a-table-column title="状态" :width="100" align="center">
           <template #cell="{ record }">
-            <a-tag bordered size="small" color="arcoblue" v-if="record.invalid === 0">正常</a-tag>
-            <a-tag bordered size="small" color="red" v-else>已删除</a-tag>
+            <a-tag bordered size="small" color="arcoblue" v-if="record.enabled === 'true'">启用</a-tag>
+            <a-tag bordered size="small" color="red" v-else>禁用</a-tag>
           </template>
         </a-table-column>
         <a-table-column title="创建时间" data-index="ctime" :width="180"></a-table-column>
@@ -111,7 +111,7 @@
                 <template #icon><icon-edit /></template>
                 <span>修改</span>
               </a-button>
-              <a-popconfirm type="warning" content="确定删除该配置吗?" @ok="onDelete(record)" v-if="record.invalid === 0">
+              <a-popconfirm type="warning" content="确定删除该配置吗?" @ok="onDelete(record)" v-if="record.enabled === 'true'">
                 <a-button type="primary" status="danger" size="mini">
                   <template #icon><icon-delete /></template>
                   <span>删除</span>

@@ -44,7 +44,7 @@ func GetPublisherConstructor(publisherType msghub.PublisherType) (CreatePublishe
 // ListPublisherTypes 列出所有已注册的发布器类型
 func ListPublisherTypes() []msghub.PublisherType {
 	initPublisherRegistry()
-	types := make([]msghub.PublisherType, 0, len(publisherRegistry.registry))
+	var types []msghub.PublisherType
 	for t := range publisherRegistry.registry {
 		types = append(types, t)
 	}

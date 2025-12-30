@@ -66,7 +66,7 @@ func (h *CloudNodeHandler) GetHandle(ctx context.Context, params map[string]stri
 			}, fmt.Errorf("failed to get nodes by type: %w", err)
 		}
 
-		data := make([]interface{}, 0, len(nodes))
+		var data []interface{}
 		for _, node := range nodes {
 			data = append(data, node)
 		}
@@ -87,7 +87,7 @@ func (h *CloudNodeHandler) GetHandle(ctx context.Context, params map[string]stri
 			}, fmt.Errorf("failed to get online nodes: %w", err)
 		}
 
-		data := make([]interface{}, 0, len(nodes))
+		var data []interface{}
 		for _, node := range nodes {
 			data = append(data, node)
 		}

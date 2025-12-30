@@ -134,7 +134,7 @@ func (c *Config) String() string {
 
 // GetTencentRegionCodes 获取腾讯云地区代码列表
 func (c *Config) GetTencentRegionCodes() []string {
-	codes := make([]string, 0, len(c.CloudRegions.Tencent))
+	var codes []string
 	for _, r := range c.CloudRegions.Tencent {
 		codes = append(codes, r.Code)
 	}

@@ -9,7 +9,7 @@ export interface Dataset {
   freqs: string; // 时序周期
   check_rules: string; // 校验规则
   comment: string; // 备注
-  invalid: number; // 删除标记
+  enabled: string; // 是否启用（"true"=启用；"false"=禁用）
   create_time: string; // 创建时间
 }
 

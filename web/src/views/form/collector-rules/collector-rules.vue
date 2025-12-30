@@ -190,6 +190,18 @@
             <div class="custom-form-extra">选择采集的产品类型：现货交易对或合约交易对</div>
           </div>
 
+          <!-- 产品类型多选 (inst_types) - 仅标的数据显示 -->
+          <div v-if="hasField('inst_types')" class="custom-form-item">
+            <div class="custom-form-label">产品类型</div>
+            <a-checkbox-group v-model="instTypesValue">
+              <a-checkbox value="SPOT">现货</a-checkbox>
+              <a-checkbox value="SWAP">永续合约</a-checkbox>
+              <a-checkbox value="FUTURES">交割合约</a-checkbox>
+              <a-checkbox value="OPTION">期权</a-checkbox>
+            </a-checkbox-group>
+            <div class="custom-form-extra">选择要同步的产品类型，可多选</div>
+          </div>
+
           <!-- 标的列表输入 (objects) -->
           <div v-if="hasField('objects')" class="custom-form-item">
             <div class="custom-form-label">交易标的</div>
@@ -384,6 +396,7 @@ const currentFieldConfigs = ref<FieldConfig[]>([]);
 
 // 动态字段使用独立的 ref，避免相互干扰
 const instTypeValue = ref<string>('SPOT'); // 产品类型：SPOT-现货, SWAP-永续合约, FUTURES-交割合约
+const instTypesValue = ref<string[]>(['SPOT']); // 产品类型多选：用于标的数据任务
 const objectsValue = ref<string[]>([]);
 const intervalsValue = ref<string[]>([]);
 const depthValue = ref<number | undefined>(undefined);
@@ -399,6 +412,8 @@ const objectsSelectAll = ref(false);
 
 // CollectParams 中定义的有效字段（根据数据类型动态过滤）
 const COLLECT_PARAMS_FIELDS: { [dataType: string]: string[] } = {
+  // 标的数据：产品类型（多选）
+  'symbol': ['inst_types'],
   // K线数据：产品类型、标的、周期
   'kline': ['inst_type', 'objects', 'intervals'],
   // 逐笔交易：产品类型、标的
@@ -790,6 +805,14 @@ const initializeDynamicFormData = (existingParams?: { [key: string]: any }) => {
     instTypeValue.value = 'SPOT';
   }
 
+  // 解析并设置 inst_types（产品类型多选，用于标的数据）
+  if (existingParams?.inst_types !== undefined) {
+    const instTypesVal = existingParams.inst_types;
+    instTypesValue.value = Array.isArray(instTypesVal) ? instTypesVal : (instTypesVal ? [instTypesVal] : ['SPOT']);
+  } else {
+    instTypesValue.value = ['SPOT'];
+  }
+
   // 解析并设置 objects
   if (existingParams?.objects !== undefined) {
     const objVal = existingParams.objects;
@@ -837,6 +860,7 @@ const initializeDynamicFormData = (existingParams?: { [key: string]: any }) => {
 // 重置所有动态字段
 const resetDynamicFields = () => {
   instTypeValue.value = 'SPOT';
+  instTypesValue.value = ['SPOT'];
   objectsValue.value = [];
   intervalsValue.value = [];
   depthValue.value = undefined;
@@ -1004,6 +1028,7 @@ const afterClose = () => {
 const getDynamicFieldValue = (fieldKey: string): any => {
   switch (fieldKey) {
     case 'inst_type': return instTypeValue.value;
+    case 'inst_types': return instTypesValue.value;
     case 'objects': return objectsValue.value;
     case 'intervals': return intervalsValue.value;
     case 'depth': return depthValue.value;

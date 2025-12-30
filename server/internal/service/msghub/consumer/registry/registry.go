@@ -44,7 +44,7 @@ func GetConsumerConstructor(consumerType msghub.ConsumerType) (CreateConsumer, e
 // ListConsumerTypes 列出所有已注册的消费者类型
 func ListConsumerTypes() []msghub.ConsumerType {
 	initConsumerRegistry()
-	types := make([]msghub.ConsumerType, 0, len(consumerRegistry.registry))
+	var types []msghub.ConsumerType
 	for t := range consumerRegistry.registry {
 		types = append(types, t)
 	}

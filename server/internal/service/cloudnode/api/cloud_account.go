@@ -64,7 +64,7 @@ func (h *CloudAccountHandler) GetHandle(ctx context.Context, params map[string]s
 			}, fmt.Errorf("failed to list cloud accounts by provider: %w", err)
 		}
 
-		data := make([]interface{}, 0, len(accounts))
+		var data []interface{}
 		for _, account := range accounts {
 			data = append(data, account)
 		}
@@ -85,7 +85,7 @@ func (h *CloudAccountHandler) GetHandle(ctx context.Context, params map[string]s
 	}
 
 	// 转换为接口切片
-	data := make([]interface{}, 0, len(accounts))
+	var data []interface{}
 	for _, account := range accounts {
 		data = append(data, account)
 	}

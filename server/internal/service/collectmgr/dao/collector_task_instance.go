@@ -624,7 +624,7 @@ func (d *collectorTaskInstanceDaoImpl) FindAllSuccessNodesByRule(ctx context.Con
 	}
 
 	// 提取节点ID列表
-	nodeIDs := make([]string, 0, len(instances))
+	var nodeIDs []string
 	for _, instance := range instances {
 		if instance.NodeID != "" {
 			nodeIDs = append(nodeIDs, instance.NodeID)

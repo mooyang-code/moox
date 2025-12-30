@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/dao"
-	"github.com/mooyang-code/moox/server/internal/service/collectmgr/distributor"
+	"github.com/mooyang-code/moox/server/internal/service/collectmgr/planner"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/dto"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/model"
 
@@ -19,7 +19,7 @@ import (
 type TaskPlannerServiceImpl struct {
 	taskRulesDAO dao.CollectorTaskRulesDAO
 	instanceDAO  dao.CollectorTaskInstanceDAO
-	registry     *distributor.DistributorRegistry
+	registry     *planner.PlannerRegistry
 	snowflake    *snowflake.Node
 }
 
@@ -27,7 +27,7 @@ type TaskPlannerServiceImpl struct {
 func NewTaskPlannerServiceImpl(
 	taskRulesDAO dao.CollectorTaskRulesDAO,
 	instanceDAO dao.CollectorTaskInstanceDAO,
-	registry *distributor.DistributorRegistry,
+	registry *planner.PlannerRegistry,
 ) TaskPlannerService {
 	// 创建 snowflake 节点
 	node, err := snowflake.NewNode(time.Now().Unix() % 1024)
@@ -60,7 +60,7 @@ func (s *TaskPlannerServiceImpl) SyncRuleInstances(ctx context.Context, ruleID s
 	}
 	if s.registry == nil {
 		log.ErrorContextf(ctx, "[TaskPlanner] registry is nil")
-		return result, fmt.Errorf("distributor registry is not initialized")
+		return result, fmt.Errorf("planner registry is not initialized")
 	}
 
 	// 1. 获取规则详情
@@ -99,7 +99,7 @@ func (s *TaskPlannerServiceImpl) SyncRuleInstances(ctx context.Context, ruleID s
 	if dist == nil {
 		dist = s.registry.GetOrDefault(rule.DataType)
 		if dist == nil {
-			return nil, fmt.Errorf("distributor not found for data type: %s", rule.DataType)
+			return nil, fmt.Errorf("planner not found for data type: %s", rule.DataType)
 		}
 	}
 
@@ -128,7 +128,7 @@ func (s *TaskPlannerServiceImpl) SyncRuleInstances(ctx context.Context, ruleID s
 
 // computeInstances 计算应有的实例列表
 // 分配策略：将标的集合均匀分配到节点集合，每个标的只分配到一个节点
-func (s *TaskPlannerServiceImpl) computeInstances(ctx context.Context, rule *dto.TaskRuleDTO, dist distributor.TaskDistributor) ([]*model.CollectorTaskInstance, error) {
+func (s *TaskPlannerServiceImpl) computeInstances(ctx context.Context, rule *dto.TaskRuleDTO, dist planner.TaskPlanner) ([]*model.CollectorTaskInstance, error) {
 	var instances []*model.CollectorTaskInstance
 
 	// 获取匹配的节点

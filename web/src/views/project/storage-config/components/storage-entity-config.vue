@@ -18,10 +18,10 @@
               <a-table-column title="存储实体ID" data-index="entity_id" />
               <a-table-column title="存储实体别名" data-index="entity_alias" />
               <a-table-column title="存储服务连接信息" data-index="entity_srv_conn" />
-              <a-table-column title="状态" data-index="invalid">
+              <a-table-column title="状态" data-index="enabled">
                 <template #cell="{ record }">
-                  <a-tag :color="record.invalid !== 0 ? 'red' : 'green'">
-                    {{ record.invalid !== 0 ? '已删除' : '正常' }}
+                  <a-tag :color="record.enabled === 'true' ? 'green' : 'red'">
+                    {{ record.enabled === 'true' ? '启用' : '禁用' }}
                   </a-tag>
                 </template>
               </a-table-column>
@@ -33,7 +33,7 @@
                       <template #icon><icon-edit /></template>
                       编辑
                     </a-button>
-                    <a-button type="text" status="danger" size="small" @click="onDelete(record)" v-if="record.invalid === 0">
+                    <a-button type="text" status="danger" size="small" @click="onDelete(record)" v-if="record.enabled === 'true'">
                       <template #icon><icon-delete /></template>
                       删除
                     </a-button>
