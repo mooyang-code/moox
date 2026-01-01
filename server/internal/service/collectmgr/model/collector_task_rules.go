@@ -17,12 +17,14 @@ type CollectorTaskRules struct {
 	// CollectParams 采集参数（JSON：{intervals:["1m","5m"],depth:20, objects:["BTC-USDT","ETH-USDT"]}）
 	CollectParams string `gorm:"column:c_collect_params;type:text;not null;default:'{}'" json:"collect_params"`
 
-	// AssignmentType 分配类型（auto=自动分配，fixed=固定节点，pattern=通配符匹配）
+	// AssignmentType 分配类型（auto=自动分配，fixed=固定节点，pattern=通配符匹配，tag=标签匹配）
 	AssignmentType string `gorm:"column:c_assignment_type;type:text;not null;default:'auto'" json:"assignment_type"`
 	// AssignedNodes 指定节点列表（JSON数组，fixed类型时使用）
 	AssignedNodes string `gorm:"column:c_assigned_nodes;type:text;not null;default:'[]'" json:"assigned_nodes"`
 	// NodePattern 节点匹配模式（pattern类型时使用，如：scf-collector-*）
 	NodePattern string `gorm:"column:c_node_pattern;not null;default:''" json:"node_pattern"`
+	// NodeTags 节点标签列表（JSON数组，tag类型时使用，如：["国内","海外"]）
+	NodeTags string `gorm:"column:c_node_tags;type:text;not null;default:'[]'" json:"node_tags"`
 
 	// Enabled 是否启用（"true"=启用，"false"=禁用）
 	Enabled string `gorm:"column:c_enabled;index:idx_enabled_priority;not null;default:'true'" json:"enabled"`

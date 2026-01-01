@@ -114,15 +114,14 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	// 创建任务规划器实例（不再需要全局单例，因为改为客户端轮询）
 	log.Info("[Bootstrap] 正在创建任务规划器...")
 	registry := collectmgr_planner.NewPlannerRegistry(nodeDAO, nil)
-	taskPlanner := collectmgr.NewTaskPlannerServiceImpl(taskRulesDAO, instanceDAO, registry)
+	taskPlanner := collectmgr.NewTaskPlannerServiceImpl(taskRulesDAO, instanceDAO, registry, nodeDAO)
 
 	// 初始化心跳探测器（全局单例，供定时器使用）注意：必须在 NewService 之后调用，因为 NewService 会注册全局探测器
-	// 需要传入 taskPlannerService，以便在节点异常时触发任务重算
 	log.Info("[Bootstrap] 正在初始化心跳探测器...")
-	cloudnode.InitProberInstance(dbManager, cfg.CloudNode, taskPlanner)
+	cloudnode.InitProberInstance(dbManager, cfg.CloudNode)
 
 	// 创建服务实例
-	taskRuleService := collectmgr.NewTaskRulesServiceImpl(taskRulesDAO, nodeDAO, taskPlanner)
+	taskRuleService := collectmgr.NewTaskRulesServiceImpl(taskRulesDAO, nodeDAO)
 	taskInstanceService := collectmgr.NewTaskInstanceServiceImpl(instanceDAO, taskRulesDAO, nodeDAO, heartbeatDAO)
 	dataTypeConfigService := collectmgr.NewDataTypeConfigServiceImpl(dataTypeConfigDAO, fieldConfigDAO, dbManager.GetDB())
 
@@ -138,7 +137,7 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	dnsproxy.InitDNSProxyInstance()
 
 	log.Info("[Bootstrap] 核心服务创建完成")
-	return &Services{
+	services := &Services{
 		DBManager:             dbManager,
 		AsyncTaskService:      asyncTaskService,
 		CloudNodeService:      cloudNodeService,
@@ -146,7 +145,13 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 		TaskInstanceService:   taskInstanceService,
 		DataTypeConfigService: dataTypeConfigService,
 		TaskPlannerService:    taskPlanner,
-	}, nil
+	}
+
+	// 初始化 TaskPlanner 全局实例（供定时器使用）
+	log.Info("[Bootstrap] 正在初始化 TaskPlanner 全局实例...")
+	collectmgr.InitTaskPlannerInstance(taskPlanner)
+
+	return services, nil
 }
 
 // registerAsyncExecutors 注册所有模块的异步任务处理器
@@ -162,12 +167,6 @@ func registerAsyncExecutors(services *Services) error {
 	if err != nil {
 		return err
 	}
-
-	// 注册Job完成处理器
-	log.Info("[Bootstrap] 正在注册Job完成处理器...")
-	nodeOperationHandler := cloudnode.NewNodeOperationCompletionHandler(services.TaskPlannerService)
-	services.AsyncTaskService.(*asynctask.AsyncTaskServiceImpl).RegisterCompletionHandler(nodeOperationHandler)
-	log.Info("[Bootstrap] Job完成处理器注册完成")
 
 	log.Info("[Bootstrap] 异步任务处理器注册完成")
 	return nil

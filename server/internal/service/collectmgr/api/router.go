@@ -47,7 +47,7 @@ func RegisterCollectorRoutes(router *gin.RouterGroup, taskRuleService collectmgr
 	taskPlannerHandler := NewTaskPlannerHandler(taskPlannerService)
 	taskPlannerGroup := router.Group("/task-planner")
 	{
-		taskPlannerGroup.POST("/sync-all", taskPlannerHandler.SyncAllEnabledRules)
+		taskPlannerGroup.POST("/recalculate-all", taskPlannerHandler.RecalculateAllTaskInstances)
 	}
 
 	log.Info("[Collector] 采集器任务规则、任务实例、数据类型配置和任务规划器路由注册完成")

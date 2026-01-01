@@ -9,25 +9,20 @@ import (
 	collectordao "github.com/mooyang-code/moox/server/internal/service/collectmgr/dao"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/dto"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/model"
-
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type TaskRulesServiceImpl struct {
 	taskRulesDAO collectordao.CollectorTaskRulesDAO
 	nodeDAO      cloudnodedao.CloudNodeDAO
-	taskPlanner  TaskPlannerService
 }
 
 func NewTaskRulesServiceImpl(
 	taskRulesDAO collectordao.CollectorTaskRulesDAO,
 	nodeDAO cloudnodedao.CloudNodeDAO,
-	taskPlanner TaskPlannerService,
 ) TaskRuleService {
 	return &TaskRulesServiceImpl{
 		taskRulesDAO: taskRulesDAO,
 		nodeDAO:      nodeDAO,
-		taskPlanner:  taskPlanner,
 	}
 }
 
@@ -48,6 +43,7 @@ func (s *TaskRulesServiceImpl) GetTaskRuleList(ctx context.Context, dataType, da
 			AssignmentType: rule.AssignmentType,
 			AssignedNodes:  rule.AssignedNodes,
 			NodePattern:    rule.NodePattern,
+			NodeTags:       rule.NodeTags,
 			Enabled:        rule.Enabled,
 			Creator:        rule.Creator,
 			CreateTime:     rule.CreateTime,
@@ -80,6 +76,7 @@ func (s *TaskRulesServiceImpl) GetTaskRule(ctx context.Context, ruleID string) (
 		AssignmentType: rule.AssignmentType,
 		AssignedNodes:  rule.AssignedNodes,
 		NodePattern:    rule.NodePattern,
+		NodeTags:       rule.NodeTags,
 		Enabled:        rule.Enabled,
 		Creator:        rule.Creator,
 		CreateTime:     rule.CreateTime,
@@ -100,6 +97,7 @@ func (s *TaskRulesServiceImpl) CreateTaskRule(ctx context.Context, rule *dto.Tas
 		AssignmentType: rule.AssignmentType,
 		AssignedNodes:  rule.AssignedNodes,
 		NodePattern:    rule.NodePattern,
+		NodeTags:       rule.NodeTags,
 		Enabled:        rule.Enabled,
 		Creator:        rule.Creator,
 	}
@@ -108,27 +106,12 @@ func (s *TaskRulesServiceImpl) CreateTaskRule(ctx context.Context, rule *dto.Tas
 		return "", err
 	}
 
-	// 如果规则启用，立即同步任务实例
-	if rule.Enabled == model.EnabledTrue {
-		log.InfoContextf(ctx, "[TaskRules] Rule %s created and enabled, syncing instances", ruleID)
-		if _, err := s.taskPlanner.SyncRuleInstances(ctx, ruleID); err != nil {
-			log.ErrorContextf(ctx, "[TaskRules] Failed to sync instances for rule %s: %v", ruleID, err)
-			// 不影响规则创建，只记录错误
-		}
-	}
-
 	return ruleID, nil
 }
 
 func (s *TaskRulesServiceImpl) UpdateTaskRule(ctx context.Context, rule *dto.TaskRuleDTO) error {
 	if rule.RuleID == "" {
 		return fmt.Errorf("rule ID is required for update")
-	}
-
-	// 获取旧规则以检查状态变化
-	oldRule, err := s.taskRulesDAO.GetTaskRule(ctx, rule.RuleID)
-	if err != nil {
-		return fmt.Errorf("failed to get old rule: %w", err)
 	}
 
 	modelRule := &model.CollectorTaskRules{
@@ -140,29 +123,13 @@ func (s *TaskRulesServiceImpl) UpdateTaskRule(ctx context.Context, rule *dto.Tas
 		AssignmentType: rule.AssignmentType,
 		AssignedNodes:  rule.AssignedNodes,
 		NodePattern:    rule.NodePattern,
+		NodeTags:       rule.NodeTags,
 		Enabled:        rule.Enabled,
 		Creator:        rule.Creator,
 	}
 
 	if err := s.taskRulesDAO.UpdateTaskRule(ctx, modelRule); err != nil {
 		return err
-	}
-
-	// 根据启用状态变化同步实例
-	if rule.Enabled == model.EnabledTrue {
-		// 规则启用，同步实例（创建或更新）
-		log.InfoContextf(ctx, "[TaskRules] Rule %s updated and enabled, syncing instances", rule.RuleID)
-		if _, err := s.taskPlanner.SyncRuleInstances(ctx, rule.RuleID); err != nil {
-			log.ErrorContextf(ctx, "[TaskRules] Failed to sync instances for rule %s: %v", rule.RuleID, err)
-			// 不影响规则更新，只记录错误
-		}
-	} else if oldRule.Enabled == model.EnabledTrue && rule.Enabled == model.EnabledFalse {
-		// 规则从启用变为禁用，使实例失效
-		log.InfoContextf(ctx, "[TaskRules] Rule %s disabled, invalidating instances", rule.RuleID)
-		if err := s.taskPlanner.InvalidateRuleInstances(ctx, rule.RuleID); err != nil {
-			log.ErrorContextf(ctx, "[TaskRules] Failed to invalidate instances for rule %s: %v", rule.RuleID, err)
-			// 不影响规则更新，只记录错误
-		}
 	}
 
 	return nil
@@ -175,13 +142,6 @@ func (s *TaskRulesServiceImpl) DisableTaskRule(ctx context.Context, ruleID strin
 
 	if err := s.taskRulesDAO.DisableTaskRule(ctx, ruleID); err != nil {
 		return err
-	}
-
-	// 禁用规则后，使所有实例失效
-	log.InfoContextf(ctx, "[TaskRules] Rule %s disabled, invalidating instances", ruleID)
-	if err := s.taskPlanner.InvalidateRuleInstances(ctx, ruleID); err != nil {
-		log.ErrorContextf(ctx, "[TaskRules] Failed to invalidate instances for rule %s: %v", ruleID, err)
-		// 不影响规则禁用，只记录错误
 	}
 
 	return nil

@@ -231,11 +231,20 @@ func (d *cloudNodeDaoImpl) GetCloudNodesByType(ctx context.Context, nodeType str
 }
 
 // GetOnlineNodes 获取所有在线节点
+// 基于心跳表的最后心跳时间判断节点是否在线
 func (d *cloudNodeDaoImpl) GetOnlineNodes(ctx context.Context) ([]*model.CloudNode, error) {
 	var nodes []*model.CloudNode
+
+	// 使用 JOIN 查询，基于心跳表判断在线状态
+	// 判断逻辑：当前时间 - 最后心跳时间 < 超时阈值（默认35秒）
+	// 注意：c_timeout_threshold = 0 表示使用默认值，需要用 CASE WHEN 处理
 	result := d.db.WithContext(ctx).
-		Where("c_status = ? AND c_invalid = ?", model.NodeStatusOnline, 0).
-		Order("c_mtime DESC").
+		Table("t_cloud_nodes cn").
+		Select("cn.*").
+		Joins("INNER JOIN t_heartbeat_nodes hn ON cn.c_node_id = hn.c_node_id").
+		Where("cn.c_invalid = ? AND hn.c_invalid = ?", 0, 0).
+		Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN 35 ELSE cn.c_timeout_threshold END").
+		Order("cn.c_mtime DESC").
 		Find(&nodes)
 
 	if result.Error != nil {
@@ -314,15 +323,19 @@ func (d *cloudNodeDaoImpl) GetNodesBySupportedCollector(ctx context.Context, col
 	// c_supported_collectors 是 JSON 数组格式，如：["kline", "ticker"]
 	// 使用 LIKE 查询包含指定类型的节点
 	pattern := fmt.Sprintf("%%\"%s\"%%", collectorType)
-	
-	query := d.db.WithContext(ctx).
-		Where("c_supported_collectors LIKE ? AND c_invalid = ?", pattern, 0)
-	
-	// 如果传入了状态过滤参数，则增加状态条件
+
+	query := d.db.WithContext(ctx).Table("t_cloud_nodes cn")
+
+	// 如果需要按在线状态过滤，则 JOIN 心跳表
 	if filter != nil && filter.Status != nil {
-		query = query.Where("c_status = ?", *filter.Status)
+		query = query.Select("cn.*").
+			Joins("INNER JOIN t_heartbeat_nodes hn ON cn.c_node_id = hn.c_node_id").
+			Where("cn.c_supported_collectors LIKE ? AND cn.c_invalid = ? AND hn.c_invalid = ?", pattern, 0, 0).
+			Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN 35 ELSE cn.c_timeout_threshold END")
+	} else {
+		query = query.Where("c_supported_collectors LIKE ? AND c_invalid = ?", pattern, 0)
 	}
-	
+
 	result := query.Order("c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {
@@ -344,14 +357,18 @@ func (d *cloudNodeDaoImpl) GetNodesByPattern(ctx context.Context, pattern string
 		sqlPattern = strings.ReplaceAll(pattern, "*", "%")
 	}
 
-	query := d.db.WithContext(ctx).
-		Where("c_node_id LIKE ? AND c_invalid = ?", sqlPattern, 0)
-	
-	// 如果传入了状态过滤参数，则增加状态条件
+	query := d.db.WithContext(ctx).Table("t_cloud_nodes cn")
+
+	// 如果需要按在线状态过滤，则 JOIN 心跳表
 	if filter != nil && filter.Status != nil {
-		query = query.Where("c_status = ?", *filter.Status)
+		query = query.Select("cn.*").
+			Joins("INNER JOIN t_heartbeat_nodes hn ON cn.c_node_id = hn.c_node_id").
+			Where("cn.c_node_id LIKE ? AND cn.c_invalid = ? AND hn.c_invalid = ?", sqlPattern, 0, 0).
+			Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN 35 ELSE cn.c_timeout_threshold END")
+	} else {
+		query = query.Where("c_node_id LIKE ? AND c_invalid = ?", sqlPattern, 0)
 	}
-	
+
 	result := query.Order("c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {
@@ -368,14 +385,18 @@ func (d *cloudNodeDaoImpl) GetNodesByIDs(ctx context.Context, nodeIDs []string, 
 	}
 
 	var nodes []*model.CloudNode
-	query := d.db.WithContext(ctx).
-		Where("c_node_id IN ? AND c_invalid = ?", nodeIDs, 0)
-	
-	// 如果传入了状态过滤参数，则增加状态条件
+	query := d.db.WithContext(ctx).Table("t_cloud_nodes cn")
+
+	// 如果需要按在线状态过滤，则 JOIN 心跳表
 	if filter != nil && filter.Status != nil {
-		query = query.Where("c_status = ?", *filter.Status)
+		query = query.Select("cn.*").
+			Joins("INNER JOIN t_heartbeat_nodes hn ON cn.c_node_id = hn.c_node_id").
+			Where("cn.c_node_id IN ? AND cn.c_invalid = ? AND hn.c_invalid = ?", nodeIDs, 0, 0).
+			Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN 35 ELSE cn.c_timeout_threshold END")
+	} else {
+		query = query.Where("c_node_id IN ? AND c_invalid = ?", nodeIDs, 0)
 	}
-	
+
 	result := query.Order("c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {

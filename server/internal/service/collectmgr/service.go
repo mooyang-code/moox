@@ -166,6 +166,6 @@ type TaskPlannerService interface {
 	// 用于：用户禁用规则时调用
 	InvalidateRuleInstances(ctx context.Context, ruleID string) error
 
-	// SyncAllEnabledRules 同步所有启用的规则（定时任务调用）
-	SyncAllEnabledRules(ctx context.Context) (*BatchSyncResult, error)
+	// RecalculateAllTaskInstances 重算所有启用规则的任务实例（定时任务调用）
+	RecalculateAllTaskInstances(ctx context.Context) (*BatchSyncResult, error)
 }

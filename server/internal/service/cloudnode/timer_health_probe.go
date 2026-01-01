@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
-	"github.com/mooyang-code/moox/server/internal/service/collectmgr"
 	"github.com/mooyang-code/moox/server/internal/service/database"
 
 	"github.com/google/uuid"
@@ -25,17 +24,16 @@ var (
 
 // HeartbeatProber 主动探测器（重命名避免与接口冲突）
 type HeartbeatProber struct {
-	config             *config.ProberConfig          // 探测器配置
-	heartbeatDAO       dao.HeartbeatDAO              // 心跳DAO
-	nodeDAO            dao.CloudNodeDAO              // 云节点DAO（用于标记节点删除）
-	taskPlannerService collectmgr.TaskPlannerService // 任务规划器服务（用于触发任务重算）
+	config       *config.ProberConfig // 探测器配置
+	heartbeatDAO dao.HeartbeatDAO     // 心跳DAO
+	nodeDAO      dao.CloudNodeDAO     // 云节点DAO（用于标记节点删除）
 
 	probers map[string]Prober // 已注册的探测器
 	mu      sync.RWMutex      // 保护 probers 的读写锁
 }
 
 // InitProberInstance 初始化全局探测器实例（供 bootstrap 调用）
-func InitProberInstance(dbManager *database.Manager, cloudNodeCfg *config.Config, taskPlannerService collectmgr.TaskPlannerService) {
+func InitProberInstance(dbManager *database.Manager, cloudNodeCfg *config.Config) {
 	proberInstanceOnce.Do(func() {
 		log.Info("[HeartbeatProber] Initializing global prober instance...")
 
@@ -44,7 +42,7 @@ func InitProberInstance(dbManager *database.Manager, cloudNodeCfg *config.Config
 		nodeDAO := dao.NewCloudNodeDAO(dbManager.GetDB())
 
 		// 创建探测器实例
-		globalProberInstance = NewProber(heartbeatDAO, nodeDAO, &cloudNodeCfg.Prober, taskPlannerService)
+		globalProberInstance = NewProber(heartbeatDAO, nodeDAO, &cloudNodeCfg.Prober)
 
 		// 将全局注册表中的探测器注册到 prober 实例
 		// 注意：RegisterDefaultProbers 需要在外部调用，确保探测器已注册
@@ -96,7 +94,7 @@ func KeepaliveSchedule(ctx context.Context, params string) error {
 }
 
 // NewProber 创建主动探测器
-func NewProber(heartbeatDAO dao.HeartbeatDAO, nodeDAO dao.CloudNodeDAO, cfg *config.ProberConfig, taskPlannerService collectmgr.TaskPlannerService) *HeartbeatProber {
+func NewProber(heartbeatDAO dao.HeartbeatDAO, nodeDAO dao.CloudNodeDAO, cfg *config.ProberConfig) *HeartbeatProber {
 	// 设置默认配置
 	if cfg == nil {
 		cfg = &config.ProberConfig{
@@ -105,11 +103,10 @@ func NewProber(heartbeatDAO dao.HeartbeatDAO, nodeDAO dao.CloudNodeDAO, cfg *con
 	}
 
 	return &HeartbeatProber{
-		heartbeatDAO:       heartbeatDAO,
-		nodeDAO:            nodeDAO,
-		config:             cfg,
-		taskPlannerService: taskPlannerService,
-		probers:            make(map[string]Prober),
+		heartbeatDAO: heartbeatDAO,
+		nodeDAO:      nodeDAO,
+		config:       cfg,
+		probers:      make(map[string]Prober),
 	}
 }
 
@@ -162,14 +159,6 @@ func (p *HeartbeatProber) probeTimeoutNodes(ctx context.Context) error {
 			deletedCount++
 			log.InfoContextf(ctx, "[HeartbeatProber] Node %s is marked as deleted", nodeID)
 		}
-	}
-
-	// 6. 只有在有节点被标记为删除时，才触发任务重算
-	if deletedCount > 0 {
-		log.InfoContextf(ctx, "[HeartbeatProber] %d nodes marked as deleted, triggering task recalculation", deletedCount)
-		go p.triggerTaskRecalculation(trpc.CloneContext(ctx))
-	} else {
-		log.InfoContextf(ctx, "[HeartbeatProber] No nodes were marked as deleted, skipping task recalculation")
 	}
 
 	return nil
@@ -397,25 +386,6 @@ func (p *HeartbeatProber) markNodeAsDeleted(ctx context.Context, nodeID string) 
 
 	log.InfoContextf(ctx, "[HeartbeatProber] Node %s marked as deleted", nodeID)
 	return nil
-}
-
-// triggerTaskRecalculation 触发任务重算
-// 当检测到节点状态变化（变为离线/异常）时，触发全局任务重新分配
-func (p *HeartbeatProber) triggerTaskRecalculation(ctx context.Context) {
-	if p.taskPlannerService == nil {
-		log.WarnContext(ctx, "[HeartbeatProber] taskPlannerService is nil, skip task recalculation")
-		return
-	}
-
-	log.InfoContext(ctx, "[HeartbeatProber] Starting task recalculation...")
-	result, err := p.taskPlannerService.SyncAllEnabledRules(ctx)
-	if err != nil {
-		log.ErrorContextf(ctx, "[HeartbeatProber] Task recalculation failed: %v", err)
-		return
-	}
-
-	log.InfoContextf(ctx, "[HeartbeatProber] Task recalculation completed: synced=%d, created=%d, updated=%d, deleted=%d",
-		result.SyncedRules, result.TotalCreated, result.TotalUpdated, result.TotalDeleted)
 }
 
 // updateHeartbeatNodeFromProbe 从探测结果更新心跳节点信息

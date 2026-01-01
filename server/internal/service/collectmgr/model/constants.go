@@ -16,6 +16,7 @@ const (
 	AssignmentTypeAuto    = "auto"    // 自动分配：分配给所有支持该数据类型的节点
 	AssignmentTypeFixed   = "fixed"   // 固定分配：分配给指定的节点列表
 	AssignmentTypePattern = "pattern" // 通配符匹配：分配给节点ID匹配模式的节点
+	AssignmentTypeTag     = "tag"     // 标签匹配：分配给标签匹配的节点
 )
 
 // 任务实例状态常量

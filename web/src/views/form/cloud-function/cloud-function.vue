@@ -146,6 +146,21 @@
                 <span v-else>-</span>
               </template>
             </a-table-column>
+            <a-table-column title="支持的采集器" data-index="supported_collectors" :width="200">
+              <template #cell="{ record }">
+                <div v-if="getSupportedCollectors(record.supported_collectors).length > 0" style="display: flex; flex-wrap: wrap; gap: 4px;">
+                  <a-tag
+                    v-for="(collector, index) in getSupportedCollectors(record.supported_collectors)"
+                    :key="index"
+                    size="small"
+                    :color="getCollectorColor(collector)"
+                  >
+                    {{ getCollectorName(collector) }}
+                  </a-tag>
+                </div>
+                <span v-else>-</span>
+              </template>
+            </a-table-column>
             <a-table-column title="代码包版本" data-index="package_version" :width="150">
               <template #cell="{ record }">
                 <a-link
@@ -660,6 +675,7 @@ interface CloudFunction {
   version: string;
   package_id?: string;
   package_version?: string; // 代码包版本（包名-版本号）
+  supported_collectors: string; // 支持的采集器类型（JSON数组格式）
   capacity: string;
   current_load: string;
   metadata: string;
@@ -1351,6 +1367,46 @@ const getStatusText = (status: number) => {
     3: '过载'
   };
   return textMap[status] || '未知';
+};
+
+// 解析支持的采集器列表
+const getSupportedCollectors = (supportedCollectorsStr: string): string[] => {
+  if (!supportedCollectorsStr || supportedCollectorsStr === '[]') {
+    return [];
+  }
+  try {
+    const collectors = JSON.parse(supportedCollectorsStr);
+    return Array.isArray(collectors) ? collectors : [];
+  } catch (error) {
+    console.error('解析 supported_collectors 失败:', error);
+    return [];
+  }
+};
+
+// 获取采集器名称
+const getCollectorName = (collector: string) => {
+  const nameMap: Record<string, string> = {
+    'kline': 'K线',
+    'ticker': '行情',
+    'orderbook': '订单簿',
+    'trade': '逐笔',
+    'news': '资讯',
+    'symbol': '标的'
+  };
+  return nameMap[collector] || collector;
+};
+
+// 获取采集器颜色
+const getCollectorColor = (collector: string) => {
+  const colorMap: Record<string, string> = {
+    'kline': 'blue',
+    'ticker': 'green',
+    'orderbook': 'orange',
+    'trade': 'purple',
+    'news': 'red',
+    'symbol': 'cyan'
+  };
+  return colorMap[collector] || 'gray';
 };
 
 const getPackageTypeColor = (packageType: string) => {

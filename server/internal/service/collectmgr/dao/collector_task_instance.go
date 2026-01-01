@@ -117,6 +117,10 @@ type CollectorTaskInstanceDAO interface {
 	// UpdateInstanceNodeID 更新任务实例的节点ID（用于任务转移）
 	// 同时重置状态为待执行
 	UpdateInstanceNodeID(ctx context.Context, taskID string, newNodeID string) error
+
+	// TruncateAllInstances 清空所有任务实例（物理删除）
+	// 用于重算前清空表
+	TruncateAllInstances(ctx context.Context) error
 }
 
 // InstanceParamUpdate 实例参数更新结构
@@ -758,4 +762,14 @@ func (d *collectorTaskInstanceDaoImpl) ListInstancesWithFilter(ctx context.Conte
 	}
 
 	return instances, total, nil
+}
+
+// TruncateAllInstances 清空所有任务实例（物理删除）
+func (dao *collectorTaskInstanceDaoImpl) TruncateAllInstances(ctx context.Context) error {
+	// 使用 DELETE 物理删除所有记录
+	result := dao.db.WithContext(ctx).Exec("DELETE FROM t_collector_task_instances")
+	if result.Error != nil {
+		return fmt.Errorf("failed to truncate task instances: %w", result.Error)
+	}
+	return nil
 }

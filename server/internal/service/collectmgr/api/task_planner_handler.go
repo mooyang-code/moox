@@ -20,20 +20,20 @@ func NewTaskPlannerHandler(taskPlannerService collectmgr.TaskPlannerService) *Ta
 	}
 }
 
-// SyncAllEnabledRules 手动触发全量重算
-// POST /api/v1/collect/task_planner/sync_all
-func (h *TaskPlannerHandler) SyncAllEnabledRules(c *gin.Context) {
+// RecalculateAllTaskInstances 手动触发全量重算
+// POST /api/v1/collect/task_planner/recalculate_all
+func (h *TaskPlannerHandler) RecalculateAllTaskInstances(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	log.InfoContext(ctx, "[TaskPlannerHandler] Manual sync all enabled rules triggered")
+	log.InfoContext(ctx, "[TaskPlannerHandler] Manual recalculation triggered for all task instances")
 
-	result, err := h.taskPlannerService.SyncAllEnabledRules(ctx)
+	result, err := h.taskPlannerService.RecalculateAllTaskInstances(ctx)
 	if err != nil {
-		log.ErrorContextf(ctx, "[TaskPlannerHandler] Failed to sync all enabled rules: %v", err)
+		log.ErrorContextf(ctx, "[TaskPlannerHandler] Failed to recalculate all task instances: %v", err)
 		common.HandleAppError(c, errors.Internal("全量重算失败", err))
 		return
 	}
 
-	log.InfoContextf(ctx, "[TaskPlannerHandler] Sync all completed: %+v", result)
+	log.InfoContextf(ctx, "[TaskPlannerHandler] Recalculation completed: %+v", result)
 	common.SuccessResponse(c, "全量重算成功", result)
 }

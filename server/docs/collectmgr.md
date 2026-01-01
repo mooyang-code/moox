@@ -119,8 +119,8 @@ type TaskPlannerService interface {
     // 用于：用户禁用规则时调用
     InvalidateRuleInstances(ctx context.Context, ruleID string) error
 
-    // SyncAllEnabledRules 同步所有启用的规则（供客户端 API 调用）
-    SyncAllEnabledRules(ctx context.Context) (*BatchSyncResult, error)
+    // RecalculateAllTaskInstances 重算所有启用规则的任务实例（供客户端 API 调用）
+    RecalculateAllTaskInstances(ctx context.Context) (*BatchSyncResult, error)
 }
 
 // SyncResult 单规则同步结果
@@ -568,7 +568,7 @@ func (s *TaskRulesServiceImpl) DisableTaskRule(ctx, ruleID) error {
 
 **说明：**
 - 服务端不再使用定时器定时同步任务
-- 客户端（另一个项目）通过 API 轮询调用 `SyncAllEnabledRules` 接口获取任务
+- 客户端（另一个项目）通过 API 轮询调用 `RecalculateAllTaskInstances` 接口获取任务
 - TaskPlannerService 的功能保留，供 API 层调用
 
 ---

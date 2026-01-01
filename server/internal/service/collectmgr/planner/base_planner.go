@@ -81,6 +81,36 @@ func (b *BasePlanner) GetMatchingNodes(ctx context.Context, rule *dto.TaskRuleDT
 		// 通配符匹配：将 * 转换为 SQL LIKE 的 %，仅选择在线节点
 		return b.nodeDAO.GetNodesByPattern(ctx, rule.NodePattern, filter)
 
+	case model.AssignmentTypeTag:
+		// 标签匹配：解析 JSON 数组，查询标签匹配的在线节点
+		var tags []string
+		if err := json.Unmarshal([]byte(rule.NodeTags), &tags); err != nil {
+			// 如果解析失败，尝试作为逗号分隔的字符串处理
+			tags = strings.Split(rule.NodeTags, ",")
+			for i, tag := range tags {
+				tags[i] = strings.TrimSpace(tag)
+			}
+		}
+		if len(tags) == 0 {
+			return []*cloudnodemodel.CloudNode{}, nil
+		}
+		// 先按数据类型和状态过滤，再按标签过滤
+		allNodes, err := b.nodeDAO.GetNodesBySupportedCollector(ctx, dataType, filter)
+		if err != nil {
+			return nil, err
+		}
+		// 过滤出标签匹配的节点
+		var matchedNodes []*cloudnodemodel.CloudNode
+		for _, node := range allNodes {
+			for _, tag := range tags {
+				if node.Tag == tag {
+					matchedNodes = append(matchedNodes, node)
+					break
+				}
+			}
+		}
+		return matchedNodes, nil
+
 	default:
 		// 默认使用自动分配
 		return b.nodeDAO.GetNodesBySupportedCollector(ctx, dataType, filter)

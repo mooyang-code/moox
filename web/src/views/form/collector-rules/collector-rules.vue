@@ -157,6 +157,7 @@
                   <a-option value="auto">自动分配</a-option>
                   <a-option value="fixed">固定节点</a-option>
                   <a-option value="pattern">模式匹配</a-option>
+                  <a-option value="tag">标签匹配</a-option>
                 </a-select>
               </a-form-item>
             </a-col>
@@ -172,6 +173,13 @@
 
           <a-form-item v-if="addForm.assignment_type === 'pattern'" field="node_pattern" label="节点匹配模式">
             <a-input v-model="addForm.node_pattern" placeholder="如：scf-collector-*" allow-clear />
+          </a-form-item>
+
+          <a-form-item v-if="addForm.assignment_type === 'tag'" label="节点标签">
+            <a-select v-model="nodeTagsList" placeholder="请选择节点标签" multiple allow-clear>
+              <a-option value="国内">国内</a-option>
+              <a-option value="海外">海外</a-option>
+            </a-select>
           </a-form-item>
         </a-form>
 
@@ -311,6 +319,9 @@
           <div v-else-if="detailData.assignment_type === 'pattern'">
             节点模式：{{ detailData.node_pattern }}
           </div>
+          <div v-else-if="detailData.assignment_type === 'tag'">
+            节点标签：{{ detailData.node_tags }}
+          </div>
           <div v-else>自动分配</div>
         </a-descriptions-item>
         <a-descriptions-item label="采集参数">
@@ -338,6 +349,7 @@ interface TaskConfig {
   assignment_type: string;
   assigned_nodes: string;
   node_pattern: string;
+  node_tags: string;
   collect_params: string;
   enabled: string;
   creator: string;
@@ -388,6 +400,7 @@ const detailVisible = ref(false);
 const detailData = ref<Partial<TaskConfig>>({});
 const nodeOptions = ref<any[]>([]);
 const assignedNodesList = ref<string[]>([]);
+const nodeTagsList = ref<string[]>([]);
 const activeDataType = ref(''); // 用于跟踪当前激活的数据类型，防止重复初始化
 
 // 数据类型配置相关数据
@@ -472,6 +485,7 @@ const addForm = ref({
   assignment_type: 'auto',
   assigned_nodes: '[]',
   node_pattern: '',
+  node_tags: '[]',
   collect_params: '{}',
   enabled: 'true',
   creator: ''
@@ -531,7 +545,8 @@ const getAssignmentText = (type: string) => {
   const texts: { [key: string]: string } = {
     auto: '自动分配',
     fixed: '固定节点',
-    pattern: '模式匹配'
+    pattern: '模式匹配',
+    tag: '标签匹配'
   };
   return texts[type] || type;
 };
@@ -879,11 +894,13 @@ const onAdd = () => {
     assignment_type: 'auto',
     assigned_nodes: '[]',
     node_pattern: '',
+    node_tags: '[]',
     collect_params: '{}',
     enabled: 'true',
     creator: account.value.user.userName || ''
   };
   assignedNodesList.value = [];
+  nodeTagsList.value = [];
   currentFieldConfigs.value = [];
   resetDynamicFields();
   dataSourceOptions.value = [];
@@ -901,6 +918,13 @@ const onUpdate = (record: TaskConfig) => {
     assignedNodesList.value = JSON.parse(record.assigned_nodes || '[]');
   } catch {
     assignedNodesList.value = [];
+  }
+
+  // 解析 node_tags
+  try {
+    nodeTagsList.value = JSON.parse(record.node_tags || '[]');
+  } catch {
+    nodeTagsList.value = [];
   }
 
   // 解析现有的采集参数
@@ -1017,6 +1041,10 @@ const onAssignmentTypeChange = (value: string) => {
   if (value !== 'pattern') {
     addForm.value.node_pattern = '';
   }
+  if (value !== 'tag') {
+    nodeTagsList.value = [];
+    addForm.value.node_tags = '[]';
+  }
 };
 
 const afterClose = () => {
@@ -1061,6 +1089,9 @@ const handleOk = async (): Promise<boolean> => {
     if (addForm.value.assignment_type === 'fixed') {
       addForm.value.assigned_nodes = JSON.stringify(assignedNodesList.value || []);
     }
+    if (addForm.value.assignment_type === 'tag') {
+      addForm.value.node_tags = JSON.stringify(nodeTagsList.value || []);
+    }
 
     // 处理采集参数 - 只提取当前数据类型允许的字段
     const dataType = addForm.value.data_type?.toLowerCase() || '';
@@ -1093,6 +1124,7 @@ const handleOk = async (): Promise<boolean> => {
       assignment_type: addForm.value.assignment_type,
       assigned_nodes: addForm.value.assigned_nodes || '[]',
       node_pattern: addForm.value.node_pattern || '',
+      node_tags: addForm.value.node_tags || '[]',
       collect_params: addForm.value.collect_params,
       enabled: addForm.value.enabled || 'true',
       creator: addForm.value.creator || account.value.user?.userName || ''

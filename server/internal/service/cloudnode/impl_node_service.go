@@ -101,27 +101,15 @@ func (s *ServiceImpl) GetNodesByType(ctx context.Context, nodeType string) ([]*C
 }
 
 // GetOnlineNodes 获取所有在线云节点列表
+// DAO 层已经基于心跳表过滤了在线节点，这里直接转换即可
 func (s *ServiceImpl) GetOnlineNodes(ctx context.Context) ([]*CloudNodeDTO, error) {
 	nodes, err := s.nodeDAO.GetOnlineNodes(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get online nodes: %w", err)
 	}
 
-	// 过滤在线节点（根据HeartbeatNode表查询状态）
-	var onlineNodes []*model.CloudNode
-	for _, node := range nodes {
-		status, err := s.heartbeatDAO.GetNodeStatus(ctx, node.NodeID)
-		if err != nil {
-			log.WarnContextf(ctx, "[GetOnlineNodes] Failed to get node status for %s: %v", node.NodeID, err)
-			continue
-		}
-		if status != nil && *status == types.NodeStatusOnline {
-			onlineNodes = append(onlineNodes, node)
-		}
-	}
-
-	result := make([]*CloudNodeDTO, len(onlineNodes))
-	for i, node := range onlineNodes {
+	result := make([]*CloudNodeDTO, len(nodes))
+	for i, node := range nodes {
 		result[i] = s.ConvertToCloudNodeDTO(node)
 	}
 	return result, nil

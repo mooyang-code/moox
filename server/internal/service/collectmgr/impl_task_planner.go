@@ -2,10 +2,12 @@ package collectmgr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
 
+	cloudnodedao "github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/dao"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/planner"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/dto"
@@ -21,6 +23,7 @@ type TaskPlannerServiceImpl struct {
 	instanceDAO  dao.CollectorTaskInstanceDAO
 	registry     *planner.PlannerRegistry
 	snowflake    *snowflake.Node
+	nodeDAO      cloudnodedao.CloudNodeDAO // 新增：用于获取节点列表
 }
 
 // NewTaskPlannerServiceImpl 创建任务规划器服务
@@ -28,6 +31,7 @@ func NewTaskPlannerServiceImpl(
 	taskRulesDAO dao.CollectorTaskRulesDAO,
 	instanceDAO dao.CollectorTaskInstanceDAO,
 	registry *planner.PlannerRegistry,
+	nodeDAO cloudnodedao.CloudNodeDAO, // 新增参数
 ) TaskPlannerService {
 	// 创建 snowflake 节点
 	node, err := snowflake.NewNode(time.Now().Unix() % 1024)
@@ -40,6 +44,7 @@ func NewTaskPlannerServiceImpl(
 		instanceDAO:  instanceDAO,
 		registry:     registry,
 		snowflake:    node,
+		nodeDAO:      nodeDAO,
 	}
 }
 
@@ -82,6 +87,7 @@ func (s *TaskPlannerServiceImpl) SyncRuleInstances(ctx context.Context, ruleID s
 		AssignmentType: ruleModel.AssignmentType,
 		AssignedNodes:  ruleModel.AssignedNodes,
 		NodePattern:    ruleModel.NodePattern,
+		NodeTags:       ruleModel.NodeTags,
 		Enabled:        ruleModel.Enabled,
 		Creator:        ruleModel.Creator,
 		CreateTime:     ruleModel.CreateTime,
@@ -170,12 +176,13 @@ func (s *TaskPlannerServiceImpl) computeInstances(ctx context.Context, rule *dto
 		}
 
 		instance := &model.CollectorTaskInstance{
-			RuleID:     rule.RuleID,
-			NodeID:     node.NodeID,
-			Symbol:     object,
-			TaskParams: params,
-			Status:     model.InstanceStatusPending,
-			Invalid:    model.InvalidNo,
+			RuleID:          rule.RuleID,
+			NodeID:          node.NodeID,
+			Symbol:          object,
+			CollectDataType: rule.DataType, // 填充数据类型字段
+			TaskParams:      params,
+			Status:          model.InstanceStatusPending,
+			Invalid:         model.InvalidNo,
 		}
 		instances = append(instances, instance)
 	}
@@ -266,39 +273,99 @@ func (s *TaskPlannerServiceImpl) InvalidateRuleInstances(ctx context.Context, ru
 	return nil
 }
 
-// SyncAllEnabledRules 同步所有启用的规则
-func (s *TaskPlannerServiceImpl) SyncAllEnabledRules(ctx context.Context) (*BatchSyncResult, error) {
-	log.InfoContext(ctx, "[TaskPlanner] Starting sync for all enabled rules")
+// RecalculateAllTaskInstances 重算所有启用规则的任务实例
+// 优化算法：按数据类型分组处理，提高效率
+func (s *TaskPlannerServiceImpl) RecalculateAllTaskInstances(ctx context.Context) (*BatchSyncResult, error) {
+	log.InfoContext(ctx, "[TaskPlanner] Starting recalculation for all enabled rules")
 
 	result := &BatchSyncResult{}
 
-	// 获取所有启用的规则
+	// 步骤1：清空所有任务实例表
+	log.InfoContext(ctx, "[TaskPlanner] Step 1: Truncating all task instances...")
+	if err := s.instanceDAO.TruncateAllInstances(ctx); err != nil {
+		return nil, fmt.Errorf("failed to truncate task instances: %w", err)
+	}
+	log.InfoContext(ctx, "[TaskPlanner] All task instances truncated")
+
+	// 步骤2：获取所有有效的云节点（仅获取在线节点）
+	log.InfoContext(ctx, "[TaskPlanner] Step 2: Loading valid nodes...")
+	allNodes, err := s.nodeDAO.GetOnlineNodes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get nodes: %w", err)
+	}
+	log.InfoContextf(ctx, "[TaskPlanner] Loaded %d online nodes", len(allNodes))
+
+	// 步骤3：提取云节点支持的数据类型并集
+	log.InfoContext(ctx, "[TaskPlanner] Step 3: Extracting supported data types...")
+	dataTypeSet := make(map[string]bool)
+	nodesByDataType := make(map[string][]string) // data_type -> []node_id
+
+	for _, node := range allNodes {
+		// 解析 SupportedCollectors JSON 数组
+		supportedTypes, err := s.parseSupportedCollectors(node.SupportedCollectors)
+		if err != nil {
+			log.WarnContextf(ctx, "[TaskPlanner] Failed to parse supported collectors for node %s: %v", node.NodeID, err)
+			continue
+		}
+
+		for _, dataType := range supportedTypes {
+			dataTypeSet[dataType] = true
+			nodesByDataType[dataType] = append(nodesByDataType[dataType], node.NodeID)
+		}
+	}
+	log.InfoContextf(ctx, "[TaskPlanner] Found %d unique data types across all nodes", len(dataTypeSet))
+
+	// 步骤4：获取所有启用的规则并按数据类型分组
+	log.InfoContext(ctx, "[TaskPlanner] Step 4: Loading enabled rules...")
 	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, "", "", model.EnabledTrue)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get enabled rules: %w", err)
 	}
 
 	result.TotalRules = len(rules)
+	log.InfoContextf(ctx, "[TaskPlanner] Loaded %d enabled rules", result.TotalRules)
 
-	// 同步每个规则
+	// 按数据类型分组规则
+	rulesByDataType := make(map[string][]*model.CollectorTaskRules)
 	for _, rule := range rules {
-		syncResult, err := s.SyncRuleInstances(ctx, rule.RuleID)
-		if err != nil {
-			log.ErrorContextf(ctx, "[TaskPlanner] Failed to sync rule %s: %v", rule.RuleID, err)
-			result.FailedRules++
-			result.Errors = append(result.Errors, err)
+		rulesByDataType[rule.DataType] = append(rulesByDataType[rule.DataType], rule)
+	}
+	log.InfoContextf(ctx, "[TaskPlanner] Rules grouped into %d data types", len(rulesByDataType))
+
+	// 步骤5：按数据类型分组处理
+	log.InfoContext(ctx, "[TaskPlanner] Step 5: Processing by data type groups...")
+	for dataType := range dataTypeSet {
+		typeRules := rulesByDataType[dataType]
+		typeNodes := nodesByDataType[dataType]
+
+		if len(typeRules) == 0 {
+			log.InfoContextf(ctx, "[TaskPlanner] Data type '%s' has no rules, skipping", dataType)
 			continue
 		}
 
-		result.SyncedRules++
-		result.TotalCreated += syncResult.Created
-		result.TotalUpdated += syncResult.Updated
-		result.TotalDeleted += syncResult.Deleted
+		log.InfoContextf(ctx, "[TaskPlanner] Processing data type '%s': %d rules, %d nodes",
+			dataType, len(typeRules), len(typeNodes))
+
+		// 处理该数据类型的所有规则
+		for _, rule := range typeRules {
+			syncResult, err := s.SyncRuleInstances(ctx, rule.RuleID)
+			if err != nil {
+				log.ErrorContextf(ctx, "[TaskPlanner] Failed to sync rule %s (type=%s): %v",
+					rule.RuleID, dataType, err)
+				result.FailedRules++
+				result.Errors = append(result.Errors, err)
+				continue
+			}
+
+			result.SyncedRules++
+			result.TotalCreated += syncResult.Created
+			result.TotalUpdated += syncResult.Updated
+			result.TotalDeleted += syncResult.Deleted
+		}
 	}
 
-	log.InfoContextf(ctx, "[TaskPlanner] Sync all completed: total=%d, synced=%d, failed=%d, created=%d, updated=%d, deleted=%d",
-		result.TotalRules, result.SyncedRules, result.FailedRules,
-		result.TotalCreated, result.TotalUpdated, result.TotalDeleted)
+	log.InfoContextf(ctx, "[TaskPlanner] Recalculation completed: total=%d, synced=%d, failed=%d, created=%d",
+		result.TotalRules, result.SyncedRules, result.FailedRules, result.TotalCreated)
 	return result, nil
 }
 
@@ -311,4 +378,20 @@ func (s *TaskPlannerServiceImpl) makeInstanceKey(ruleID, nodeID, symbol string) 
 func (s *TaskPlannerServiceImpl) generateTaskID() string {
 	sfID := s.snowflake.Generate()
 	return strconv.FormatInt(sfID.Int64(), 10)
+}
+
+// parseSupportedCollectors 解析云节点支持的采集器类型 JSON 数组
+// 输入：JSON 数组字符串，如 ["kline", "ticker", "orderbook"]
+// 输出：数据类型字符串数组
+func (s *TaskPlannerServiceImpl) parseSupportedCollectors(jsonStr string) ([]string, error) {
+	if jsonStr == "" || jsonStr == "[]" {
+		return []string{}, nil
+	}
+
+	var collectors []string
+	if err := json.Unmarshal([]byte(jsonStr), &collectors); err != nil {
+		return nil, fmt.Errorf("failed to parse supported collectors: %w", err)
+	}
+
+	return collectors, nil
 }

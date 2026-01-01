@@ -57,6 +57,12 @@ server:
       network: "*/90 * * * * *?scheduler=keepaliveSchedule&startAtOnce=1&params="
       protocol: timer
       timeout: 30000  #请求最长处理时间 单位 毫秒
+      ######## 任务实例重算定时任务 ########
+    - name: trpc.collectmgr.timer
+      port: 8004
+      network: "*/17 * * * * *?scheduler=taskPlannerSchedule&startAtOnce=0&params="
+      protocol: timer
+      timeout: 60000  #请求最长处理时间 单位 毫秒 (1分钟)
 
 
 client:

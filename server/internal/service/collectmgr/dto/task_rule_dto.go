@@ -12,6 +12,7 @@ type TaskRuleDTO struct {
 	AssignmentType string    `json:"assignment_type"`
 	AssignedNodes  string    `json:"assigned_nodes"`
 	NodePattern    string    `json:"node_pattern"`
+	NodeTags       string    `json:"node_tags"`
 	Enabled        string    `json:"enabled"`
 	Creator        string    `json:"creator"`
 	CreateTime     time.Time `json:"create_time"`
