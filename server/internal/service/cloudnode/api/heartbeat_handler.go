@@ -40,10 +40,11 @@ func (h *HeartbeatHandler) ReportHeartbeat(c *gin.Context) {
 
 	// 转换为服务层请求
 	serviceReq := &types.ReportHeartbeatRequest{
-		NodeID:        req.NodeID,
-		NodeType:      req.NodeType,
-		SourceService: req.SourceService,
-		Metadata:      req.Metadata,
+		NodeID:              req.NodeID,
+		NodeType:            req.NodeType,
+		SourceService:       req.SourceService,
+		Metadata:            req.Metadata,
+		SupportedCollectors: req.SupportedCollectors,
 	}
 
 	response, err := h.service.ReportHeartbeat(c.Request.Context(), serviceReq)

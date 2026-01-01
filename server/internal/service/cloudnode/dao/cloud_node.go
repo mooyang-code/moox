@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // NodeListQuery 节点列表查询参数
@@ -78,6 +80,9 @@ type CloudNodeDAO interface {
 
 	// UpdateNodePackageID 更新节点代码包ID
 	UpdateNodePackageID(ctx context.Context, nodeID string, packageID string) error
+
+	// UpdateSupportedCollectors 更新节点支持的采集器类型
+	UpdateSupportedCollectors(ctx context.Context, nodeID string, collectors []string) error
 }
 
 type cloudNodeDaoImpl struct {
@@ -377,4 +382,32 @@ func (d *cloudNodeDaoImpl) GetNodesByIDs(ctx context.Context, nodeIDs []string, 
 		return nil, fmt.Errorf("failed to get nodes by IDs: %w", result.Error)
 	}
 	return nodes, nil
+}
+
+// UpdateSupportedCollectors 更新节点支持的采集器类型
+func (d *cloudNodeDaoImpl) UpdateSupportedCollectors(ctx context.Context, nodeID string, collectors []string) error {
+	// 序列化为 JSON
+	collectorsJSON, err := json.Marshal(collectors)
+	if err != nil {
+		return fmt.Errorf("序列化采集器类型失败: %w", err)
+	}
+
+	// 更新数据库
+	result := d.db.WithContext(ctx).
+		Model(&model.CloudNode{}).
+		Where("c_node_id = ? AND c_invalid = ?", nodeID, 0).
+		Update("c_supported_collectors", string(collectorsJSON))
+
+	if result.Error != nil {
+		return fmt.Errorf("更新采集器类型失败: %w", result.Error)
+	}
+
+	if result.RowsAffected == 0 {
+		// 节点不存在或已失效，记录警告但不报错
+		log.WarnContextf(ctx, "[CloudNodeDAO] 节点 %s 不存在或已失效，跳过更新采集器类型", nodeID)
+	} else {
+		log.InfoContextf(ctx, "[CloudNodeDAO] 节点 %s 的采集器类型已更新: %v", nodeID, collectors)
+	}
+
+	return nil
 }

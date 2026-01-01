@@ -455,13 +455,13 @@ const pollingTimer = ref<number | null>(null);
 // 搜索表单
 const searchForm = reactive<PackageListRequest>({
   page: 1,
-  page_size: 20
+  page_size: 10
 });
 
 // 分页信息
 const pagination = computed(() => ({
   current: searchForm.page || 1,
-  pageSize: searchForm.page_size || 20,
+  pageSize: searchForm.page_size || 10,
   total: total.value,
   showSizeChanger: true,
   showJumper: true,
@@ -560,7 +560,7 @@ const loadCloudAccounts = async () => {
 const resetSearch = () => {
   Object.assign(searchForm, {
     page: 1,
-    page_size: 20,
+    page_size: 10,
     package_name: '',
     runtime: '',
     package_type: '',

@@ -58,12 +58,13 @@ func (HeartbeatNode) TableName() string {
 
 // ReportHeartbeatRequest 上报心跳请求
 type ReportHeartbeatRequest struct {
-	NodeID        string                 `json:"node_id" binding:"required"`
-	NodeType      string                 `json:"node_type" binding:"required"`
-	SourceService string                 `json:"source_service"`
-	Timestamp     *time.Time             `json:"timestamp"`
-	Metrics       map[string]interface{} `json:"metrics"`
-	Metadata      map[string]interface{} `json:"metadata"`
+	NodeID              string                 `json:"node_id" binding:"required"`
+	NodeType            string                 `json:"node_type" binding:"required"`
+	SourceService       string                 `json:"source_service"`
+	Timestamp           *time.Time             `json:"timestamp"`
+	Metrics             map[string]interface{} `json:"metrics"`
+	Metadata            map[string]interface{} `json:"metadata"`
+	SupportedCollectors []string               `json:"supported_collectors"` // 支持的采集器数据类型
 }
 
 // ReportHeartbeatResponse 心跳上报响应

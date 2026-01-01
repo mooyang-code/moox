@@ -44,12 +44,13 @@ type ReportHeartbeatResponse = types.ReportHeartbeatResponse
 
 // HeartbeatReportRequest HTTP心跳上报请求
 type HeartbeatReportRequest struct {
-	NodeID        string                 `json:"node_id" binding:"required"`
-	NodeType      string                 `json:"node_type" binding:"required"`
-	SourceService string                 `json:"source_service"`
-	Status        int                    `json:"status"`
-	Message       string                 `json:"message,omitempty"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	NodeID              string                 `json:"node_id" binding:"required"`
+	NodeType            string                 `json:"node_type" binding:"required"`
+	SourceService       string                 `json:"source_service"`
+	Status              int                    `json:"status"`
+	Message             string                 `json:"message,omitempty"`
+	Metadata            map[string]interface{} `json:"metadata,omitempty"`
+	SupportedCollectors []string               `json:"supported_collectors,omitempty"` // 支持的采集器类型
 }
 
 // NodeRegisterRequest HTTP节点注册请求

@@ -71,7 +71,7 @@ func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHear
 		}
 	}
 
-	// 4. 保存到数据库
+	// 4. 保存到 t_heartbeat_nodes 表
 	if isNew {
 		if err := s.heartbeatDAO.Create(ctx, record); err != nil {
 			return nil, fmt.Errorf("create heartbeat record failed: %w", err)
@@ -82,7 +82,20 @@ func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHear
 		}
 	}
 
-	// 5. 获取包版本信息
+	// 5. 更新 t_cloud_nodes 表的 c_supported_collectors 字段
+	if req.SupportedCollectors != nil && len(req.SupportedCollectors) > 0 {
+		log.InfoContextf(ctx, "[Heartbeat] 节点 %s 上报采集器类型: %v", req.NodeID, req.SupportedCollectors)
+
+		// 异步更新，避免阻塞心跳响应
+		go func() {
+			updateCtx := context.Background() // 使用新context，避免超时取消
+			if err := s.nodeDAO.UpdateSupportedCollectors(updateCtx, req.NodeID, req.SupportedCollectors); err != nil {
+				log.ErrorContextf(updateCtx, "[Heartbeat] 更新节点采集器类型失败: nodeID=%s, error=%v", req.NodeID, err)
+			}
+		}()
+	}
+
+	// 6. 获取包版本信息
 	packageVersion, err := s.getLatestPackageVersion(ctx, req.NodeID)
 	if err != nil {
 		log.WarnContextf(ctx, "获取包版本信息失败: %v", err)
@@ -90,7 +103,7 @@ func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHear
 		packageVersion = ""
 	}
 
-	// 6. 返回包含版本信息的响应
+	// 7. 返回包含版本信息的响应
 	response := &types.ReportHeartbeatResponse{
 		PackageVersion: packageVersion,
 	}

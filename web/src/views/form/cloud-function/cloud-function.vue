@@ -135,7 +135,6 @@
                 {{ getRegionName(record.region) }}
               </template>
             </a-table-column>
-            <a-table-column title="IP地址" data-index="ip_address" :width="120"></a-table-column>
             <a-table-column title="代码包版本" data-index="package_version" :width="150">
               <template #cell="{ record }">
                 <a-link 
@@ -456,9 +455,6 @@
           </a-descriptions-item>
           <a-descriptions-item label="地区">
             {{ getRegionName(selectedNodeDetail.region) }}
-          </a-descriptions-item>
-          <a-descriptions-item label="IP地址">
-            {{ selectedNodeDetail.ip_address || '-' }}
           </a-descriptions-item>
           <a-descriptions-item label="版本">
             {{ selectedNodeDetail.version || '-' }}
