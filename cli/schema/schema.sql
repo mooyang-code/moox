@@ -142,6 +142,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_namespace TEXT NOT NULL DEFAULT '', -- 命名空间
     c_node_type TEXT NOT NULL DEFAULT 'scf', -- 节点类型（scf=云函数，server=服务器）
     c_region TEXT NOT NULL DEFAULT '', -- 部署地区（如：ap-guangzhou）
+    c_tag TEXT NOT NULL DEFAULT '', -- 标签（国内/海外）
     c_ip_address TEXT NOT NULL DEFAULT '', -- IP地址
     c_supported_collectors TEXT NOT NULL DEFAULT '[]', -- 支持的采集器类型（JSON数组:["kline"]）
     c_metadata TEXT NOT NULL DEFAULT '{}', -- 节点额外信息（JSON格式）
@@ -281,12 +282,13 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_rule_id TEXT NOT NULL, -- 规则ID（关联规则表）
     c_node_id TEXT NOT NULL, -- 执行节点ID
     c_symbol TEXT NOT NULL DEFAULT '', -- 标的符号（交易对，如：BTC-USDT，空字符串表示不按标的拆分）
+    c_collect_data_type TEXT NOT NULL DEFAULT '', -- 采集数据类型（从 c_task_params 中的 data_type 提取，用于快速查询）
     c_task_params TEXT NOT NULL DEFAULT '{}', -- 任务执行参数（JSON格式:{"symbol":"BTCUSDT","intervals":["1m","5m","1h"],"limit":100}）
 
     -- 任务状态
     c_status INTEGER NOT NULL DEFAULT 0, -- 状态（0=待执行，1=执行中，2=成功，3=部分失败，4=失败）
     c_start_time DATETIME, -- 开始时间
-    c_end_time DATETIME, -- 结束时间
+    c_last_exec_time DATETIME, -- 最后执行时间
     c_result TEXT NOT NULL DEFAULT '{}', -- 执行结果（JSON格式）
 
     c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记（软删除：0=有效，1=已删除）

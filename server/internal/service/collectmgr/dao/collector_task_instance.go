@@ -75,7 +75,7 @@ type CollectorTaskInstanceDAO interface {
 	CompleteInstance(ctx context.Context, instanceID string, success bool, result string) error
 
 	// ReportInstanceStatus 上报实例状态（客户端上报用，无状态前置条件限制）
-	// 更新 c_status、c_end_time、c_result
+	// 更新 c_status、c_last_exec_time、c_result
 	ReportInstanceStatus(ctx context.Context, instanceID string, status int, result string) error
 
 	// ========== 批量操作 ==========
@@ -187,7 +187,7 @@ func (d *collectorTaskInstanceDaoImpl) UpdateTaskInstance(ctx context.Context, i
 			"c_task_params": instance.TaskParams,
 			"c_status":      instance.Status,
 			"c_start_time":  instance.StartTime,
-			"c_end_time":    instance.EndTime,
+			"c_last_exec_time":    instance.LastExecTime,
 			"c_result":      instance.Result,
 			"c_mtime":       instance.ModifyTime,
 		})
@@ -390,7 +390,7 @@ func (d *collectorTaskInstanceDaoImpl) CompleteInstance(ctx context.Context, ins
 
 	updates := map[string]interface{}{
 		"c_status":   status,
-		"c_end_time": now,
+		"c_last_exec_time": now,
 		"c_result":   result,
 		"c_mtime":    now,
 	}
@@ -415,7 +415,7 @@ func (d *collectorTaskInstanceDaoImpl) ReportInstanceStatus(ctx context.Context,
 	now := time.Now()
 	updates := map[string]interface{}{
 		"c_status":   status,
-		"c_end_time": now,
+		"c_last_exec_time": now,
 		"c_mtime":    now,
 	}
 

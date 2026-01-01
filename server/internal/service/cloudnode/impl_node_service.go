@@ -179,6 +179,11 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 		nodeModel.Metadata = "{}"
 	}
 
+	// 根据 region 自动设置 tag（国内/海外）
+	if nodeModel.Tag == "" {
+		nodeModel.Tag = s.getRegionTag(nodeModel.Region)
+	}
+
 	// 初始化provider factory
 	s.init()
 
@@ -268,7 +273,15 @@ func (s *ServiceImpl) UpdateNode(ctx context.Context, node *CloudNodeDTO) error 
 		return err
 	}
 
-	if err := s.nodeDAO.UpdateCloudNode(ctx, cloudNodeDTOToModel(node)); err != nil {
+	// 转换为Model
+	nodeModel := cloudNodeDTOToModel(node)
+
+	// 如果 region 发生变化，或 tag 为空，则自动更新 tag
+	if nodeModel.Region != existing.Region || nodeModel.Tag == "" {
+		nodeModel.Tag = s.getRegionTag(nodeModel.Region)
+	}
+
+	if err := s.nodeDAO.UpdateCloudNode(ctx, nodeModel); err != nil {
 		return fmt.Errorf("failed to update node: %w", err)
 	}
 	log.InfoContextf(ctx, "[CloudNode] Successfully updated node %s", node.NodeID)

@@ -9,9 +9,12 @@
             </a-option>
           </a-select>
           <a-input v-model="form.namespace" placeholder="请输入命名空间" allow-clear />
-          <a-select placeholder="地区" v-model="form.region" style="width: 180px" allow-clear>
+          <a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear>
             <a-option v-for="region in regionOptions" :key="region.code" :value="region.code">
               {{ region.name }}
+              <a-tag v-if="region.tag" size="small" :color="region.tag === '国内' ? 'blue' : 'orange'" style="margin-left: 4px;">
+                {{ region.tag }}
+              </a-tag>
             </a-option>
           </a-select>
           <a-select placeholder="节点类型" v-model="form.nodeType" style="width: 120px" allow-clear>
@@ -135,24 +138,24 @@
                 {{ getRegionName(record.region) }}
               </template>
             </a-table-column>
+            <a-table-column title="标签" data-index="tag" :width="80">
+              <template #cell="{ record }">
+                <a-tag v-if="record.tag" size="small" :color="record.tag === '国内' ? 'blue' : 'orange'">
+                  {{ record.tag }}
+                </a-tag>
+                <span v-else>-</span>
+              </template>
+            </a-table-column>
             <a-table-column title="代码包版本" data-index="package_version" :width="150">
               <template #cell="{ record }">
-                <a-link 
-                  v-if="record.package_version && record.package_version !== '-'" 
+                <a-link
+                  v-if="record.package_version && record.package_version !== '-'"
                   @click="onShowPackageDetail(record)"
                   style="cursor: pointer;"
                 >
                   {{ record.package_version }}
                 </a-link>
                 <span v-else>-</span>
-              </template>
-            </a-table-column>
-            <a-table-column title="支持的采集器" data-index="supported_collectors" :width="160">
-              <template #cell="{ record }">
-                <div v-if="record.supported_collectors">
-                  <a-tag v-for="item in parseJSON(record.supported_collectors)" :key="item" 
-                    bordered size="small" style="margin: 2px">{{ item }}</a-tag>
-                </div>
               </template>
             </a-table-column>
             <a-table-column title="状态" :width="100" align="center">
@@ -221,6 +224,9 @@
           <a-select v-model="batchAddForm.region" placeholder="请选择地区" style="width: 100%">
             <a-option v-for="region in regionOptions" :key="region.code" :value="region.code">
               {{ region.name }}
+              <a-tag v-if="region.tag" size="small" :color="region.tag === '国内' ? 'blue' : 'orange'" style="margin-left: 4px;">
+                {{ region.tag }}
+              </a-tag>
             </a-option>
           </a-select>
         </a-form-item>
@@ -245,15 +251,6 @@
         
         <a-form-item field="namespace" label="命名空间">
           <a-input v-model="batchAddForm.namespace" placeholder="请输入命名空间（可选）" />
-        </a-form-item>
-        
-        <a-form-item field="supportedCollectors" label="支持的采集器">
-          <a-select v-model="batchAddForm.supportedCollectors" placeholder="请选择支持的采集器" style="width: 100%" multiple>
-            <a-option value="kline">K线数据</a-option>
-            <a-option value="metrics">指标数据</a-option>
-            <a-option value="logs">日志数据</a-option>
-            <a-option value="traces">链路数据</a-option>
-          </a-select>
         </a-form-item>
 
         <!-- 心跳配置 -->
@@ -456,6 +453,12 @@
           <a-descriptions-item label="地区">
             {{ getRegionName(selectedNodeDetail.region) }}
           </a-descriptions-item>
+          <a-descriptions-item label="标签">
+            <a-tag v-if="selectedNodeDetail.tag" size="small" :color="selectedNodeDetail.tag === '国内' ? 'blue' : 'orange'">
+              {{ selectedNodeDetail.tag }}
+            </a-tag>
+            <span v-else>-</span>
+          </a-descriptions-item>
           <a-descriptions-item label="版本">
             {{ selectedNodeDetail.version || '-' }}
           </a-descriptions-item>
@@ -482,13 +485,6 @@
             <a-tag bordered size="small" :color="selectedNodeDetail.probe_enabled ? 'green' : 'red'">
               {{ selectedNodeDetail.probe_enabled ? '是' : '否' }}
             </a-tag>
-          </a-descriptions-item>
-          <a-descriptions-item label="支持的采集器" :span="2">
-            <div v-if="selectedNodeDetail.supported_collectors">
-              <a-tag v-for="item in parseJSON(selectedNodeDetail.supported_collectors)" :key="item" 
-                bordered size="small" style="margin: 2px">{{ item }}</a-tag>
-            </div>
-            <span v-else>-</span>
           </a-descriptions-item>
           <a-descriptions-item label="元数据" :span="2">
             <div v-if="selectedNodeDetail.metadata" style="max-height: 200px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; background: #f6f8fa; padding: 8px; border-radius: 4px;">{{ formatMetadata(selectedNodeDetail.metadata) }}</div>
@@ -636,15 +632,6 @@
             <div style="font-size: 12px; color: #86909c;">是否启用节点健康检查探测</div>
           </template>
         </a-form-item>
-
-        <a-form-item field="supportedCollectors" label="支持的采集器">
-          <a-select v-model="editNodeForm.supportedCollectors" placeholder="请选择支持的采集器" style="width: 100%" multiple>
-            <a-option value="kline">K线数据</a-option>
-            <a-option value="metrics">指标数据</a-option>
-            <a-option value="logs">日志数据</a-option>
-            <a-option value="traces">链路数据</a-option>
-          </a-select>
-        </a-form-item>
       </a-form>
     </a-modal>
 
@@ -668,11 +655,11 @@ interface CloudFunction {
   namespace: string;
   node_type: string;
   region: string;
+  tag: string; // 标签（国内/海外）
   ip_address: string;
   version: string;
   package_id?: string;
   package_version?: string; // 代码包版本（包名-版本号）
-  supported_collectors: string;
   capacity: string;
   current_load: string;
   metadata: string;
@@ -717,6 +704,7 @@ const form = reactive({
 interface RegionInfo {
   code: string;
   name: string;
+  tag: string; // 标签（国内/海外）
 }
 
 // 数据列表
@@ -734,7 +722,6 @@ const batchAddForm = reactive({
   packageId: '', // 代码包版本ID
   nodeCount: 5,
   namespace: '',
-  supportedCollectors: ['kline'], // 默认支持kline
   // 新增心跳配置字段
   timeoutThreshold: 0,    // 超时阈值（秒），0表示使用全局默认值
   heartbeatInterval: 0,   // 心跳间隔（秒），0表示使用全局默认值
@@ -957,11 +944,10 @@ const onBatchAdd = async () => {
   
   // 重置表单
   batchAddForm.cloudAccountId = cloudAccountOptions.value[0]?.account_id || '';
-  batchAddForm.region = 'ap-guangzhou';
+  batchAddForm.region = 'ap-hongkong';
   batchAddForm.packageId = '';
   batchAddForm.nodeCount = 5;
   batchAddForm.namespace = '';
-  batchAddForm.supportedCollectors = ['kline'];
   batchAddForm.timeoutThreshold = 0;
   batchAddForm.heartbeatInterval = 0;
   batchAddForm.probeEnabled = true;
@@ -1015,9 +1001,9 @@ const executeBatchAdd = async () => {
       namespace: batchAddForm.namespace || undefined,
       node_type: 'scf',
       region: batchAddForm.region,
+      tag: getRegionTag(batchAddForm.region),
       package_id: batchAddForm.packageId,
       version: '1.0.0',
-      supported_collectors: JSON.stringify(batchAddForm.supportedCollectors),
       capacity: '100',
       metadata: JSON.stringify({ env: 'prod', index }),
       // 新增心跳配置字段
@@ -1341,6 +1327,12 @@ const getRegionName = (region: string) => {
   return regionInfo ? regionInfo.name : region;
 };
 
+// 根据地区代码获取标签
+const getRegionTag = (region: string) => {
+  const regionInfo = regionOptions.value.find(r => r.code === region);
+  return regionInfo ? regionInfo.tag : '';
+};
+
 const getStatusColor = (status: number) => {
   const colorMap: Record<number, string> = {
     0: 'red',
@@ -1359,14 +1351,6 @@ const getStatusText = (status: number) => {
     3: '过载'
   };
   return textMap[status] || '未知';
-};
-
-const parseJSON = (str: string) => {
-  try {
-    return JSON.parse(str);
-  } catch {
-    return [];
-  }
 };
 
 const getPackageTypeColor = (packageType: string) => {
@@ -1579,8 +1563,7 @@ const editNodeForm = reactive({
   region: '',
   timeoutThreshold: 0,
   heartbeatInterval: 0,
-  probeEnabled: true,
-  supportedCollectors: [] as string[]
+  probeEnabled: true
 });
 
 // 显示代码包详情
@@ -1835,8 +1818,7 @@ const onEdit = (record: CloudFunction) => {
   editNodeForm.timeoutThreshold = record.timeout_threshold || 0;
   editNodeForm.heartbeatInterval = record.heartbeat_interval || 0;
   editNodeForm.probeEnabled = record.probe_enabled;
-  editNodeForm.supportedCollectors = parseJSON(record.supported_collectors);
-  
+
   // 打开弹窗
   editNodeVisible.value = true;
 };
@@ -1851,7 +1833,6 @@ const handleEditNodeCancel = () => {
   editNodeForm.timeoutThreshold = 0;
   editNodeForm.heartbeatInterval = 0;
   editNodeForm.probeEnabled = true;
-  editNodeForm.supportedCollectors = [];
 };
 
 // 确认编辑
@@ -1862,8 +1843,7 @@ const handleEditNodeOk = async () => {
       node_id: editNodeForm.nodeId,
       timeout_threshold: editNodeForm.timeoutThreshold,
       heartbeat_interval: editNodeForm.heartbeatInterval,
-      probe_enabled: editNodeForm.probeEnabled,
-      supported_collectors: JSON.stringify(editNodeForm.supportedCollectors)
+      probe_enabled: editNodeForm.probeEnabled
     });
     
     if (response.data?.code === 200 || response.data?.ret_info?.code === 0) {

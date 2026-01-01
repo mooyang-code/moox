@@ -120,23 +120,28 @@ type TaskInstanceService interface {
 	// ReportTaskStatus 上报任务状态（客户端上报用）
 	// 更新 c_status、c_end_time、c_result，无状态前置条件限制
 	ReportTaskStatus(ctx context.Context, instanceID string, status int, result string) error
+
+	// InvalidateTaskInstance 作废任务实例
+	InvalidateTaskInstance(ctx context.Context, taskID string) error
 }
 
 // TaskInstanceDTO 任务实例数据传输对象
 type TaskInstanceDTO struct {
-	ID         int
-	TaskID     string
-	RuleID     string
-	NodeID     string
-	Symbol     string // 新增：标的
-	TaskParams string
-	Status     int
-	StartTime  *time.Time
-	EndTime    *time.Time
-	Result     string
-	Invalid    int // 新增：删除标记
-	CreateTime time.Time
-	ModifyTime time.Time
+	ID              int
+	TaskID          string
+	RuleID          string
+	NodeID          string
+	Symbol          string // 新增：标的
+	CollectDataType string // 新增：采集数据类型（从 task_params 提取）
+	DataType        string // 新增：数据类型（从规则表关联获取）
+	TaskParams      string
+	Status          int
+	StartTime       *time.Time
+	LastExecTime    *time.Time // 最后执行时间（原 EndTime）
+	Result          string
+	Invalid         int // 新增：删除标记
+	CreateTime      time.Time
+	ModifyTime      time.Time
 }
 
 // TaskInstanceFilterDTO 任务实例筛选条件

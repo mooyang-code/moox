@@ -34,14 +34,16 @@ func NewTaskInstanceServiceImpl(instanceDAO collectordao.CollectorTaskInstanceDA
 
 func (s *TaskInstanceServiceImpl) CreateTaskInstance(ctx context.Context, instance *TaskInstanceDTO) error {
 	modelInstance := &model.CollectorTaskInstance{
-		TaskID:     instance.TaskID,
-		RuleID:     instance.RuleID,
-		NodeID:     instance.NodeID,
-		TaskParams: instance.TaskParams,
-		Status:     instance.Status,
-		StartTime:  instance.StartTime,
-		EndTime:    instance.EndTime,
-		Result:     instance.Result,
+		TaskID:          instance.TaskID,
+		RuleID:          instance.RuleID,
+		NodeID:          instance.NodeID,
+		Symbol:          instance.Symbol,
+		CollectDataType: instance.CollectDataType,
+		TaskParams:      instance.TaskParams,
+		Status:          instance.Status,
+		StartTime:       instance.StartTime,
+		LastExecTime:    instance.LastExecTime,
+		Result:          instance.Result,
 	}
 
 	return s.instanceDAO.CreateTaskInstance(ctx, modelInstance)
@@ -61,19 +63,20 @@ func (s *TaskInstanceServiceImpl) GetTaskInstance(ctx context.Context, instanceI
 	}
 
 	return &TaskInstanceDTO{
-		ID:         instance.ID,
-		TaskID:     instance.TaskID,
-		RuleID:     instance.RuleID,
-		NodeID:     instance.NodeID,
-		Symbol:     instance.Symbol,
-		TaskParams: instance.TaskParams,
-		Status:     instance.Status,
-		StartTime:  instance.StartTime,
-		EndTime:    instance.EndTime,
-		Result:     instance.Result,
-		Invalid:    instance.Invalid,
-		CreateTime: instance.CreateTime,
-		ModifyTime: instance.ModifyTime,
+		ID:              instance.ID,
+		TaskID:          instance.TaskID,
+		RuleID:          instance.RuleID,
+		NodeID:          instance.NodeID,
+		Symbol:          instance.Symbol,
+		CollectDataType: instance.CollectDataType,
+		TaskParams:      instance.TaskParams,
+		Status:          instance.Status,
+		StartTime:       instance.StartTime,
+		LastExecTime:    instance.LastExecTime,
+		Result:          instance.Result,
+		Invalid:         instance.Invalid,
+		CreateTime:      instance.CreateTime,
+		ModifyTime:      instance.ModifyTime,
 	}, nil
 }
 
@@ -108,7 +111,7 @@ func (s *TaskInstanceServiceImpl) UpdateTaskInstance(ctx context.Context, instan
 		TaskParams: instance.TaskParams,
 		Status:     instance.Status,
 		StartTime:  instance.StartTime,
-		EndTime:    instance.EndTime,
+		LastExecTime:    instance.LastExecTime,
 		Result:     instance.Result,
 	}
 
@@ -160,6 +163,21 @@ func (s *TaskInstanceServiceImpl) ReportTaskStatus(ctx context.Context, instance
 	return nil
 }
 
+// InvalidateTaskInstance 作废任务实例
+func (s *TaskInstanceServiceImpl) InvalidateTaskInstance(ctx context.Context, taskID string) error {
+	if taskID == "" {
+		return fmt.Errorf("task ID is required")
+	}
+
+	// 调用 DAO 层批量作废方法（传入单个任务ID）
+	if err := s.instanceDAO.BatchInvalidate(ctx, []string{taskID}); err != nil {
+		return fmt.Errorf("failed to invalidate task instance: %w", err)
+	}
+
+	log.InfoContextf(ctx, "[TaskInstance] Task instance %s has been invalidated", taskID)
+	return nil
+}
+
 // 辅助方法
 func (s *TaskInstanceServiceImpl) GetTaskInstancesByNode(ctx context.Context, nodeID string, status []int) ([]*TaskInstanceDTO, error) {
 	instances, err := s.instanceDAO.GetTaskInstancesByNode(ctx, nodeID, status)
@@ -178,7 +196,7 @@ func (s *TaskInstanceServiceImpl) GetTaskInstancesByNode(ctx context.Context, no
 			TaskParams: instance.TaskParams,
 			Status:     instance.Status,
 			StartTime:  instance.StartTime,
-			EndTime:    instance.EndTime,
+			LastExecTime:    instance.LastExecTime,
 			Result:     instance.Result,
 			Invalid:    instance.Invalid,
 			CreateTime: instance.CreateTime,
@@ -210,7 +228,7 @@ func (s *TaskInstanceServiceImpl) GetRecentInstances(ctx context.Context, hours 
 			TaskParams: instance.TaskParams,
 			Status:     instance.Status,
 			StartTime:  instance.StartTime,
-			EndTime:    instance.EndTime,
+			LastExecTime:    instance.LastExecTime,
 			Result:     instance.Result,
 			Invalid:    instance.Invalid,
 			CreateTime: instance.CreateTime,
@@ -239,7 +257,7 @@ func (s *TaskInstanceServiceImpl) ListTaskInstances(ctx context.Context, nodeID,
 			TaskParams: instance.TaskParams,
 			Status:     instance.Status,
 			StartTime:  instance.StartTime,
-			EndTime:    instance.EndTime,
+			LastExecTime:    instance.LastExecTime,
 			Result:     instance.Result,
 			Invalid:    instance.Invalid,
 			CreateTime: instance.CreateTime,
@@ -269,6 +287,25 @@ func (s *TaskInstanceServiceImpl) ListTaskInstancesWithFilter(ctx context.Contex
 		return nil, 0, fmt.Errorf("failed to list task instances with filter: %w", err)
 	}
 
+	// 收集所有唯一的 RuleID
+	ruleIDSet := make(map[string]bool)
+	for _, instance := range instances {
+		ruleIDSet[instance.RuleID] = true
+	}
+
+	// 批量查询规则信息，获取 DataType
+	ruleDataTypeMap := make(map[string]string)
+	for ruleID := range ruleIDSet {
+		rule, err := s.taskRulesDAO.GetTaskRule(ctx, ruleID)
+		if err != nil {
+			log.WarnContextf(ctx, "[ListTaskInstancesWithFilter] Failed to get rule %s: %v", ruleID, err)
+			continue
+		}
+		if rule != nil {
+			ruleDataTypeMap[ruleID] = rule.DataType
+		}
+	}
+
 	var result []*TaskInstanceDTO
 	for _, instance := range instances {
 		dto := &TaskInstanceDTO{
@@ -277,10 +314,11 @@ func (s *TaskInstanceServiceImpl) ListTaskInstancesWithFilter(ctx context.Contex
 			RuleID:     instance.RuleID,
 			NodeID:     instance.NodeID,
 			Symbol:     instance.Symbol,
+			DataType:   ruleDataTypeMap[instance.RuleID], // 从规则信息中获取数据类型
 			TaskParams: instance.TaskParams,
 			Status:     instance.Status,
 			StartTime:  instance.StartTime,
-			EndTime:    instance.EndTime,
+			LastExecTime:    instance.LastExecTime,
 			Result:     instance.Result,
 			Invalid:    instance.Invalid,
 			CreateTime: instance.CreateTime,

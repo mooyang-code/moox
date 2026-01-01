@@ -10,6 +10,7 @@ import (
 type RegionInfo struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
+	Tag  string `json:"tag"` // 标签（国内/海外）
 }
 
 // CloudRegionHandler 云地区处理器
@@ -58,6 +59,7 @@ func getTencentRegions() []RegionInfo {
 		regions = append(regions, RegionInfo{
 			Code: r.Code,
 			Name: r.Name,
+			Tag:  r.Tag, // 返回标签
 		})
 	}
 	return regions

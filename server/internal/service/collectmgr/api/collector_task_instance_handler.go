@@ -226,3 +226,31 @@ func (h *CollectorTaskInstanceHandler) ReportTaskStatus(c *gin.Context) {
 
 	SuccessResponse(c, "状态上报成功", []interface{}{})
 }
+
+// InvalidateTaskInstanceRequest 作废任务实例请求
+type InvalidateTaskInstanceRequest struct {
+	TaskID string `json:"task_id" binding:"required"` // 任务ID
+}
+
+// InvalidateTaskInstance 作废任务实例
+func (h *CollectorTaskInstanceHandler) InvalidateTaskInstance(c *gin.Context) {
+	var req InvalidateTaskInstanceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		HandleAppError(c, apperrors.InvalidParam("request", "参数绑定失败："+err.Error()))
+		return
+	}
+
+	if req.TaskID == "" {
+		HandleAppError(c, apperrors.InvalidParam("task_id", "任务ID不能为空"))
+		return
+	}
+
+	// 调用service层作废任务
+	err := h.service.InvalidateTaskInstance(c.Request.Context(), req.TaskID)
+	if err != nil {
+		HandleAppError(c, apperrors.Internal("作废任务失败", err))
+		return
+	}
+
+	SuccessResponse(c, "作废任务成功", []interface{}{})
+}

@@ -16,6 +16,8 @@ type CollectorTaskInstance struct {
 	NodeID string `gorm:"column:c_node_id;index:idx_task_node,idx_node_status;not null" json:"node_id"`
 	// Symbol 标的（用于唯一约束和快速查询，如 BTC-USDT）
 	Symbol string `gorm:"column:c_symbol;not null;default:''" json:"symbol"`
+	// CollectDataType 采集数据类型（从 c_task_params 中的 data_type 提取，用于快速查询）
+	CollectDataType string `gorm:"column:c_collect_data_type;not null;default:''" json:"collect_data_type"`
 	// TaskParams 任务执行参数
 	TaskParams string `gorm:"column:c_task_params;type:text;not null;default:'{}'" json:"task_params"`
 
@@ -23,8 +25,8 @@ type CollectorTaskInstance struct {
 	Status int `gorm:"column:c_status;index:idx_node_status;not null;default:0" json:"status"`
 	// StartTime 开始时间
 	StartTime *time.Time `gorm:"column:c_start_time;type:datetime" json:"start_time"`
-	// EndTime 结束时间
-	EndTime *time.Time `gorm:"column:c_end_time;type:datetime" json:"end_time"`
+	// LastExecTime 最后执行时间
+	LastExecTime *time.Time `gorm:"column:c_last_exec_time;type:datetime" json:"last_exec_time"`
 	// Result 执行结果（JSON格式）
 	Result string `gorm:"column:c_result;type:text;not null;default:'{}'" json:"result"`
 	// Invalid 删除标记（0=有效，1=无效）

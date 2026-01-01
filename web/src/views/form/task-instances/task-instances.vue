@@ -34,10 +34,6 @@
               <template #icon><icon-sync /></template>
               <span>刷新</span>
             </a-button>
-            <a-button type="primary" status="danger" @click="batchInvalidate">
-              <template #icon><icon-close-circle /></template>
-              <span>批量作废</span>
-            </a-button>
           </a-space>
         </a-row>
 
@@ -107,36 +103,27 @@
                 </a-tag>
               </template>
             </a-table-column>
-            <a-table-column title="开始时间" :width="170">
+            <a-table-column title="数据类型" :width="100" align="center">
               <template #cell="{ record }">
-                {{ formatDateTime(record.StartTime) }}
+                <a-tag color="purple" size="small">{{ record.DataType || '-' }}</a-tag>
               </template>
             </a-table-column>
-            <a-table-column title="结束时间" :width="170">
+            <a-table-column title="最后执行时间" :width="170">
               <template #cell="{ record }">
-                {{ formatDateTime(record.EndTime) }}
+                {{ formatDateTime(record.LastExecTime) }}
               </template>
             </a-table-column>
-            <a-table-column title="创建时间" :width="170">
+            <a-table-column title="任务创建时间" :width="170">
               <template #cell="{ record }">
                 {{ formatDateTime(record.CreateTime) }}
               </template>
             </a-table-column>
-            <a-table-column title="操作" :width="150" align="center" fixed="right">
+            <a-table-column title="操作" :width="100" align="center" fixed="right">
               <template #cell="{ record }">
                 <a-space>
                   <a-button type="primary" size="mini" @click="onViewDetails(record)">
                     <template #icon><icon-eye /></template>
                     详情
-                  </a-button>
-                  <a-button
-                    v-if="record.Invalid === 0"
-                    type="outline"
-                    status="danger"
-                    size="mini"
-                    @click="handleInvalidate(record)">
-                    <template #icon><icon-close-circle /></template>
-                    作废
                   </a-button>
                 </a-space>
               </template>
@@ -168,8 +155,8 @@
           </a-tag>
         </a-descriptions-item>
         <a-descriptions-item label="开始时间">{{ formatDateTime(detailData.StartTime) }}</a-descriptions-item>
-        <a-descriptions-item label="结束时间">{{ formatDateTime(detailData.EndTime) }}</a-descriptions-item>
-        <a-descriptions-item label="创建时间">{{ formatDateTime(detailData.CreateTime) }}</a-descriptions-item>
+        <a-descriptions-item label="最后执行时间">{{ formatDateTime(detailData.LastExecTime) }}</a-descriptions-item>
+        <a-descriptions-item label="任务创建时间">{{ formatDateTime(detailData.CreateTime) }}</a-descriptions-item>
         <a-descriptions-item label="修改时间">{{ formatDateTime(detailData.ModifyTime) }}</a-descriptions-item>
       </a-descriptions>
 
@@ -189,7 +176,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
-import { Message, Modal } from '@arco-design/web-vue';
+import { Message } from '@arco-design/web-vue';
 import service from '@/api/index';
 import { useProjectStore } from '@/store/modules/project';
 import { storeToRefs } from 'pinia';
@@ -200,10 +187,12 @@ interface TaskInstance {
   RuleID: string;
   NodeID: string;
   Symbol: string;
+  CollectDataType: string;
+  DataType: string;
   TaskParams: string;
   Status: number;
   StartTime: string | null;
-  EndTime: string | null;
+  LastExecTime: string | null;
   Result: string;
   Invalid: number;
   CreateTime: string;
@@ -390,75 +379,6 @@ const getInstanceList = async () => {
 const onViewDetails = (record: TaskInstance) => {
   detailData.value = record;
   detailVisible.value = true;
-};
-
-const handleInvalidate = async (record: TaskInstance) => {
-  Modal.confirm({
-    title: '作废确认',
-    content: `确定要作废任务 ${record.TaskID} 吗？作废后任务将不再执行。`,
-    onOk: async () => {
-      try {
-        const response = await service.post('/gateway/collectmgr/InvalidateTaskInstance', {
-          task_id: record.TaskID
-        }, {
-          headers: {
-            'app_id': 'moox_frontend',
-            'app_key': '2521e0d21b6be0347b72bca93904a0dd'
-          }
-        });
-
-        const data = response as any;
-        if (data.code === 200) {
-          Message.success('作废成功');
-          getInstanceList();
-        } else {
-          Message.error(data.message || '作废失败');
-        }
-      } catch (error) {
-        console.error('作废失败:', error);
-        Message.error('作废失败');
-      }
-    }
-  });
-};
-
-const batchInvalidate = () => {
-  if (selectedKeys.value.length === 0) {
-    Message.warning('请选择要作废的任务实例');
-    return;
-  }
-
-  const invalidatableInstances = instanceList.value.filter(
-    instance => selectedKeys.value.includes(instance.TaskID) && instance.Invalid === 0
-  );
-
-  if (invalidatableInstances.length === 0) {
-    Message.warning('所选任务实例都已作废');
-    return;
-  }
-
-  Modal.confirm({
-    title: '批量作废确认',
-    content: `确定要作废选中的 ${invalidatableInstances.length} 个任务吗？作废后任务将不再执行。`,
-    onOk: async () => {
-      for (const instance of invalidatableInstances) {
-        try {
-          await service.post('/gateway/collectmgr/InvalidateTaskInstance', {
-            task_id: instance.TaskID
-          }, {
-            headers: {
-              'app_id': 'moox_frontend',
-              'app_key': '2521e0d21b6be0347b72bca93904a0dd'
-            }
-          });
-        } catch (error) {
-          console.error(`作废任务 ${instance.TaskID} 失败:`, error);
-        }
-      }
-      Message.success('批量作废完成');
-      getInstanceList();
-    }
-  });
 };
 
 // Watch for project changes

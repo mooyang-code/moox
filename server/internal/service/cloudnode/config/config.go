@@ -19,6 +19,7 @@ type Config struct {
 type RegionInfo struct {
 	Code string `yaml:"code" json:"code"`
 	Name string `yaml:"name" json:"name"`
+	Tag  string `yaml:"tag" json:"tag"` // 标签（国内/海外）
 }
 
 // CloudRegionsConfig 云厂商地区配置

@@ -253,6 +253,10 @@ func (h *CollectorGatewayHandler) parseMethodToRoute(method string, body []byte)
 				}
 			}
 		}
+	case "InvalidateTaskInstance":
+		route.Path = "/api/v1/task-instance/invalidate"
+		route.HTTPMethod = "POST"
+		route.Body = body
 
 	// Data Type Config methods (数据类型配置)
 	// 用于前端动态表单生成，根据数据类型获取参数字段配置

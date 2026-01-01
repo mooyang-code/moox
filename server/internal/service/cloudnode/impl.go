@@ -54,3 +54,19 @@ func NewService(dbManager *database.Manager, asyncTask asynctask.Service, cfg *c
 	}
 	return serviceImpl
 }
+
+// getRegionTag 根据地区代码从配置中获取标签（国内/海外）
+func (s *ServiceImpl) getRegionTag(region string) string {
+	if s.config == nil {
+		return ""
+	}
+
+	// 目前只支持腾讯云
+	for _, r := range s.config.CloudRegions.Tencent {
+		if r.Code == region {
+			return r.Tag
+		}
+	}
+
+	return ""
+}

@@ -44,6 +44,8 @@ type CloudNode struct {
 	NodeType string `gorm:"column:c_node_type;size:50;not null;default:'scf'" json:"node_type"`
 	// Region 部署地区
 	Region string `gorm:"column:c_region;size:50;not null;default:''" json:"region"`
+	// Tag 标签（国内/海外）
+	Tag string `gorm:"column:c_tag;size:20;not null;default:''" json:"tag"`
 	// IPAddress IP地址
 	IPAddress string `gorm:"column:c_ip_address;size:50;not null;default:''" json:"ip_address"`
 	// SupportedCollectors 支持的采集器类型（JSON数组）

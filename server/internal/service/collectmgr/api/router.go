@@ -32,6 +32,7 @@ func RegisterCollectorRoutes(router *gin.RouterGroup, taskRuleService collectmgr
 		taskInstanceGroup.POST("/:id/start", taskInstanceHandler.StartTaskInstance)
 		taskInstanceGroup.POST("/:id/stop", taskInstanceHandler.StopTaskInstance)
 		taskInstanceGroup.POST("/:id/report-status", taskInstanceHandler.ReportTaskStatus)
+		taskInstanceGroup.POST("/invalidate", taskInstanceHandler.InvalidateTaskInstance)
 	}
 
 	// 采集器数据类型配置路由

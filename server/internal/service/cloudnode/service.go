@@ -171,6 +171,7 @@ type CloudNodeDTO struct {
 	Namespace           string            `json:"namespace"`
 	NodeType            string            `json:"node_type"`
 	Region              string            `json:"region"`
+	Tag                 string            `json:"tag"` // 地区标签（国内/海外）
 	IPAddress           string            `json:"ip_address"`
 	SupportedCollectors string            `json:"supported_collectors"`
 	Metadata            string            `json:"metadata"`
