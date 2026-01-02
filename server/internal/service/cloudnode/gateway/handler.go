@@ -93,7 +93,8 @@ func (h *CloudNodeGatewayHandler) parseMethodToRoute(method string, body []byte)
 	// Cloud Node methods
 	case "GetCloudNodeList", "GetNodeList", "ListNodes":
 		route.Path = "/api/v1/cloud_node/list"
-		route.HTTPMethod = "GET"
+		route.HTTPMethod = "POST"  // 改为POST以支持JSON body参数
+		route.Body = body
 	case "GetCloudNodeDetail", "GetNodeDetail":
 		route.Path = "/api/v1/cloud_node/detail"
 		route.HTTPMethod = "GET"

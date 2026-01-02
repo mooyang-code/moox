@@ -56,7 +56,7 @@ type RouteInfo struct {
 
 // ForwardRequest 实现ServiceHandler接口，转发请求到内部引擎
 func (h *AsyncTaskGatewayHandler) ForwardRequest(ctx context.Context, method string, headers map[string]string, body []byte) ([]byte, error) {
-	log.InfoContextf(ctx, "[AsyncTask Gateway] ForwardRequest called - method: %s, headers: %+v, body: %s", method, headers, string(body))
+	log.InfoContextf(ctx, "[AsyncTask Gateway] ForwardRequest called - method: %s, headers: %+v", method, headers)
 
 	// 解析方法并获取路由信息
 	routeInfo, err := h.parseMethodToRoute(method, body)
@@ -64,7 +64,7 @@ func (h *AsyncTaskGatewayHandler) ForwardRequest(ctx context.Context, method str
 		return nil, err
 	}
 
-	log.InfoContextf(ctx, "[AsyncTask Gateway] Forwarding to engine: %s %s with body: %s", routeInfo.HTTPMethod, routeInfo.Path, string(routeInfo.Body))
+	log.InfoContextf(ctx, "[AsyncTask Gateway] Forwarding to engine: %s %s", routeInfo.HTTPMethod, routeInfo.Path)
 
 	// 创建并执行HTTP请求
 	req, err := h.createHTTPRequest(routeInfo, headers)
@@ -112,11 +112,18 @@ func (h *AsyncTaskGatewayHandler) buildDetailRouteWithParam(basePath, httpMethod
 		var params map[string]interface{}
 		if err := json.Unmarshal(body, &params); err == nil {
 			if id, ok := params[paramName]; ok {
-				route.Path = fmt.Sprintf("%s/%v", basePath, id)
+				// 将id转为字符串，并检查是否为空
+				idStr := fmt.Sprintf("%v", id)
+				if idStr != "" {
+					route.Path = fmt.Sprintf("%s/%s", basePath, idStr)
+					return route, nil
+				}
 			}
 		}
 	}
-	return route, nil
+
+	// 如果没有找到有效的ID参数，返回错误
+	return nil, fmt.Errorf("missing or empty required parameter: %s", paramName)
 }
 
 // buildDetailRouteWithParamAndSuffix 构建带参数名和后缀的路由
@@ -130,11 +137,18 @@ func (h *AsyncTaskGatewayHandler) buildDetailRouteWithParamAndSuffix(basePath, h
 		var params map[string]interface{}
 		if err := json.Unmarshal(body, &params); err == nil {
 			if id, ok := params[paramName]; ok {
-				route.Path = fmt.Sprintf("%s/%v/%s", basePath, id, suffix)
+				// 将id转为字符串，并检查是否为空
+				idStr := fmt.Sprintf("%v", id)
+				if idStr != "" {
+					route.Path = fmt.Sprintf("%s/%s/%s", basePath, idStr, suffix)
+					return route, nil
+				}
 			}
 		}
 	}
-	return route, nil
+
+	// 如果没有找到有效的ID参数，返回错误
+	return nil, fmt.Errorf("missing or empty required parameter: %s", paramName)
 }
 
 // buildQueryRoute 构建查询参数路由
@@ -197,6 +211,15 @@ func (h *AsyncTaskGatewayHandler) executeRequest(ctx context.Context, req *http.
 	// 创建响应记录器
 	recorder := httptest.NewRecorder()
 
+	// 添加 panic 恢复
+	defer func() {
+		if r := recover(); r != nil {
+			log.ErrorContextf(ctx, "[AsyncTask Gateway] Panic recovered: %v", r)
+		}
+	}()
+
+	log.InfoContextf(ctx, "[AsyncTask Gateway] Executing request: %s %s", req.Method, req.URL.Path)
+
 	// 使用引擎处理请求
 	h.engine.ServeHTTP(recorder, req)
 
@@ -204,10 +227,14 @@ func (h *AsyncTaskGatewayHandler) executeRequest(ctx context.Context, req *http.
 	respBody := recorder.Body.Bytes()
 	statusCode := recorder.Code
 
-	log.InfoContextf(ctx, "[AsyncTask Gateway] Response status: %d, body: %s", statusCode, string(respBody))
+	log.InfoContextf(ctx, "[AsyncTask Gateway] Response status: %d, body length: %d", statusCode, len(respBody))
+	if len(respBody) > 0 && len(respBody) < 1000 {
+		log.InfoContextf(ctx, "[AsyncTask Gateway] Response body: %s", string(respBody))
+	}
 
 	// 检查状态码
 	if statusCode != http.StatusOK {
+		log.ErrorContextf(ctx, "[AsyncTask Gateway] Non-OK status: %d, body: %s", statusCode, string(respBody))
 		return nil, fmt.Errorf("request failed with status %d: %s", statusCode, string(respBody))
 	}
 

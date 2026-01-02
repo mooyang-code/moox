@@ -8,7 +8,7 @@
               {{ account.account_name }} ({{ getProviderName(account.provider) }})
             </a-option>
           </a-select>
-          <a-input v-model="form.namespace" placeholder="请输入命名空间" allow-clear />
+          <a-input v-model="form.nodeId" placeholder="请输入节点ID" allow-clear />
           <a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear>
             <a-option v-for="region in regionOptions" :key="region.code" :value="region.code">
               {{ region.name }}
@@ -22,10 +22,8 @@
             <a-option value="server">服务器</a-option>
           </a-select>
           <a-select placeholder="节点状态" v-model="form.status" style="width: 120px" allow-clear>
-            <a-option value="1">在线</a-option>
-            <a-option value="0">离线</a-option>
-            <a-option value="2">维护中</a-option>
-            <a-option value="3">过载</a-option>
+            <a-option value="online">在线</a-option>
+            <a-option value="offline">离线</a-option>
           </a-select>
           <a-button type="primary" @click="search">
             <template #icon><icon-search /></template>
@@ -136,6 +134,11 @@
             <a-table-column title="地区" data-index="region" :width="150">
               <template #cell="{ record }">
                 {{ getRegionName(record.region) }}
+              </template>
+            </a-table-column>
+            <a-table-column title="最后心跳时间" data-index="last_heartbeat" :width="170">
+              <template #cell="{ record }">
+                {{ formatDateTime(record.last_heartbeat) }}
               </template>
             </a-table-column>
             <a-table-column title="标签" data-index="tag" :width="80">
@@ -258,16 +261,11 @@
           <a-input-number 
             v-model="batchAddForm.nodeCount" 
             :min="1" 
-            :max="100" 
             placeholder="请输入要创建的节点数量"
             style="width: 100%"
           />
         </a-form-item>
         
-        <a-form-item field="namespace" label="命名空间">
-          <a-input v-model="batchAddForm.namespace" placeholder="请输入命名空间（可选）" />
-        </a-form-item>
-
         <!-- 心跳配置 -->
         <a-divider orientation="left">心跳配置</a-divider>
         
@@ -686,6 +684,7 @@ interface CloudFunction {
   heartbeat_interval: number;   // 心跳间隔（秒），0表示使用全局默认值
   probe_enabled: boolean;       // 是否启用探测
   probe_url?: string;           // 探测URL
+  last_heartbeat?: string;
   created_at: string;
   updated_at: string;
 }
@@ -710,7 +709,7 @@ const taskCompleteHandled = ref(false); // 防止重复处理任务完成
 
 const form = reactive({
   cloudAccountId: '',
-  namespace: '',
+  nodeId: '',
   region: '',
   nodeType: '',
   status: ''
@@ -725,7 +724,6 @@ interface RegionInfo {
 
 // 数据列表
 const functionList = ref<CloudFunction[]>([]);
-const allFunctionList = ref<CloudFunction[]>([]);
 const selectedKeys = ref<string[]>([]);
 const cloudAccountOptions = ref<CloudAccount[]>([]);
 const regionOptions = ref<RegionInfo[]>([]); // 地区选项
@@ -1218,39 +1216,46 @@ const executeBatchDelete = async () => {
   }
 };
 
-// 加载数据
-const loadData = async () => {
+// 加载数据（使用后端分页）
+const loadData = async (showEmptyTip = false) => {
   loading.value = true;
   try {
     const response = await api.post('/cloudnode/GetNodeList', {
+      node_id: form.nodeId,
       cloud_account_id: form.cloudAccountId,
-      namespace: form.namespace,
       region: form.region,
       node_type: form.nodeType,
-      status: form.status
+      status: form.status,
+      page: pagination.value.current,
+      page_size: pagination.value.pageSize
     });
-    
+
     // 兼容两种响应格式
-    if (response.data?.code === 200 && response.data?.data) {
+    if (response.data?.code === 200) {
       // 新格式：处理数组格式的响应
       let data = response.data.data;
       if (Array.isArray(data)) {
-        allFunctionList.value = data;
+        functionList.value = data;
       } else {
-        allFunctionList.value = [data].filter(Boolean);
+        functionList.value = [data].filter(Boolean);
       }
-      pagination.value.total = allFunctionList.value.length;
-      updateCurrentPageData();
+      // 使用后端返回的 total
+      pagination.value.total = response.data.total || functionList.value.length;
+      if (showEmptyTip && functionList.value.length === 0) {
+        Message.info('查询结果为空');
+      }
     } else if (response.data?.ret_info?.code === 0) {
       // 旧格式
       let data = response.data.ret_info.data;
       if (Array.isArray(data)) {
-        allFunctionList.value = data;
+        functionList.value = data;
       } else {
-        allFunctionList.value = [data].filter(Boolean);
+        functionList.value = [data].filter(Boolean);
       }
-      pagination.value.total = allFunctionList.value.length;
-      updateCurrentPageData();
+      pagination.value.total = response.data.ret_info.total || functionList.value.length;
+      if (showEmptyTip && functionList.value.length === 0) {
+        Message.info('查询结果为空');
+      }
     }
   } catch (error) {
     console.error('加载数据失败:', error);
@@ -1352,9 +1357,7 @@ const getRegionTag = (region: string) => {
 const getStatusColor = (status: number) => {
   const colorMap: Record<number, string> = {
     0: 'red',
-    1: 'green',
-    2: 'orange',
-    3: 'red'
+    1: 'green'
   };
   return colorMap[status] || 'gray';
 };
@@ -1362,9 +1365,7 @@ const getStatusColor = (status: number) => {
 const getStatusText = (status: number) => {
   const textMap: Record<number, string> = {
     0: '离线',
-    1: '在线',
-    2: '维护中',
-    3: '过载'
+    1: '在线'
   };
   return textMap[status] || '未知';
 };
@@ -1472,33 +1473,27 @@ const formatMetadata = (metadata: string) => {
   }
 };
 
-// 分页相关
-const updateCurrentPageData = () => {
-  const startIndex = (pagination.value.current - 1) * pagination.value.pageSize;
-  const endIndex = startIndex + pagination.value.pageSize;
-  functionList.value = allFunctionList.value.slice(startIndex, endIndex);
-};
-
+// 分页相关（使用后端分页）
 const onPageChange = (page: number) => {
   pagination.value.current = page;
-  updateCurrentPageData();
+  loadData();
 };
 
 const onPageSizeChange = (pageSize: number) => {
   pagination.value.pageSize = pageSize;
   pagination.value.current = 1;
-  updateCurrentPageData();
+  loadData();
 };
 
 // 查询和重置
 const search = () => {
   pagination.value.current = 1;
-  loadData();
+  loadData(true);
 };
 
 const reset = () => {
   form.cloudAccountId = '';
-  form.namespace = '';
+  form.nodeId = '';
   form.region = '';
   form.nodeType = '';
   form.status = '';

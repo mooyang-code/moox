@@ -3,11 +3,11 @@
 
 # 探测器配置（主动健康探测）
 prober:
-  max_concurrent: 10      # 最大并发探测数
+  max_concurrent: 50      # 最大并发探测数
 
 # 心跳配置（心跳超时判定相关）
 heartbeat:
-  default_timeout_threshold: 31   # 默认超时阈值（秒），超过此时间未收到心跳则判定为超时
+  default_timeout_threshold: 60   # 默认超时阈值（秒），超过此时间未收到心跳则判定为超时
   default_heartbeat_interval: 10  # 默认心跳间隔（秒），节点上报心跳的期望间隔
 
 # 云函数配置
@@ -16,7 +16,7 @@ cloudfunction:
   zip_file_path: "/tmp/collector-scf.zip"
   
   # 其他云函数相关配置
-  default_timeout: 30
+  default_timeout: 30 # 调用云函数超时
   default_memory_size: 128
   
   # 默认环境变量

@@ -43,7 +43,7 @@ func NewProvider(config *Config) (*Provider, error) {
 	credential := common.NewCredential(config.SecretID, config.SecretKey)
 
 	// 从配置文件获取腾讯云地区列表
-	cloudnodeCfg := cloudnodeconfig.LoadConfig()
+	cloudnodeCfg := cloudnodeconfig.Get()
 	regions := cloudnodeCfg.GetTencentRegionCodes()
 
 	// 为每个地区创建 SCF 客户端

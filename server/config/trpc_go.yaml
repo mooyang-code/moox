@@ -14,7 +14,7 @@ server:
       port: 20103
       network: tcp  # 网络监听类型，tcp 或 udp
       protocol: http  # 应用层协议
-      timeout: 5000  # 请求最长处理时间，单位毫秒
+      timeout: 20000  # 请求最长处理时间，单位毫秒
       filter:
         - ratelimit
         - authorize

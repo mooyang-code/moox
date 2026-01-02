@@ -12,9 +12,46 @@ export interface PageInfo {
   size: number;      // 页大小
 }
 
+// 搜索操作符常量
+export const OperatorConst = {
+  PlaceHolder: 0,
+  eq: 1,      // 等于
+  ne: 2,      // 不等于
+  gt: 3,      // 大于
+  gte: 4,     // 大于等于
+  lt: 5,      // 小于
+  lte: 6,     // 小于等于
+  in: 7,      // 范围命中
+  notIn: 8,   // 范围不命中
+  like: 9,    // 模糊匹配 *贵州茅台*
+} as const;
+
+// 逻辑关系常量
+export const LogicalConst = {
+  and: 0,
+  or: 1
+} as const;
+
+// QueryObject 搜索条件
+export interface QueryCond {
+  field_key: string;   // 字段名
+  op: number;          // 操作符
+  value: SimpleValue;  // 值
+  map_key?: string;    // map字段的key
+}
+
+// QueryObject 搜索条件组
+export interface QueryCondGroup {
+  conds: QueryCond[];
+  logical?: number;
+}
+
 export interface Options {
-  includes?: string[];     // 返回字段
-  max_num?: number;       // 搜索结果的最大数量（默认10000）
+  cond_groups?: QueryCondGroup[];  // 请求条件组
+  logical?: number;                // 条件组关系
+  expr_cond?: string;              // 表达式请求条件
+  includes?: string[];             // 返回字段
+  max_num?: number;                // 搜索结果的最大数量（默认10000）
 }
 
 export interface QueryObjectReq {

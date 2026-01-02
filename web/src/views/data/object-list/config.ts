@@ -43,8 +43,7 @@ export interface FieldDetailInfo {
 // 搜索表单数据
 export interface FormData {
   form: {
-    objectId: string;
-    [key: string]: string; // 支持动态字段
+    [key: string]: string; // 动态字段
   };
   search: boolean;
 }
@@ -61,4 +60,5 @@ export interface Pagination {
   current: number;
   pageSize: number;
   total: number;
+  pageSizeOptions?: number[];
 }

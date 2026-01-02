@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/mooyang-code/moox/server/internal/common"
 	"github.com/mooyang-code/moox/server/internal/errors"
+	cloudnodeconfig "github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 	cloudnodemgr "github.com/mooyang-code/moox/server/internal/service/cloudnode"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
+	cloudnodetypes "github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
 
 	"github.com/gin-gonic/gin"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -112,7 +115,7 @@ func (h *CloudNodeHandler) GetHandle(ctx context.Context, params map[string]stri
 	}
 
 	if pageSizeStr, ok := params["page_size"]; ok && pageSizeStr != "" {
-		if pageSize, err := strconv.Atoi(pageSizeStr); err == nil && pageSize > 0 && pageSize <= 100 {
+		if pageSize, err := strconv.Atoi(pageSizeStr); err == nil && pageSize > 0 && pageSize <= 500 {
 			req.PageSize = pageSize
 		}
 	}
@@ -193,13 +196,20 @@ func (h *CloudNodeHandler) PostHandle(ctx context.Context, params map[string]str
 // GetNodeList 获取节点列表
 func (h *CloudNodeHandler) GetNodeList(c *gin.Context) {
 	ctx := c.Request.Context()
-	
+
 	// 构建分页请求参数
 	req := &cloudnodemgr.NodeListRequest{}
-	if err := c.ShouldBindQuery(req); err != nil {
-		common.HandleAppError(c, errors.InvalidParam("query", err.Error()))
+
+	// 直接使用 ShouldBindJSON，因为前端总是发送 JSON
+	if err := c.ShouldBindJSON(req); err != nil {
+		log.ErrorContextf(ctx, "[GetNodeList] Failed to bind JSON parameters: %v", err)
+		common.HandleAppError(c, errors.InvalidParam("request_body", err.Error()))
 		return
 	}
+
+	// 打印接收到的参数用于调试
+	log.InfoContextf(ctx, "[GetNodeList] Received params - Page: %d, PageSize: %d, NodeID: %s, CloudAccountID: %s, Namespace: %s, Region: %s, NodeType: %s, Status: %s",
+		req.Page, req.PageSize, req.NodeID, req.CloudAccountID, req.Namespace, req.Region, req.NodeType, req.Status)
 
 	// 设置默认分页参数
 	if req.Page <= 0 {
@@ -208,6 +218,8 @@ func (h *CloudNodeHandler) GetNodeList(c *gin.Context) {
 	if req.PageSize <= 0 {
 		req.PageSize = 20
 	}
+
+	log.InfoContextf(ctx, "[GetNodeList] After default - Page: %d, PageSize: %d", req.Page, req.PageSize)
 
 	resp, err := h.service.GetNodeList(ctx, req)
 	if err != nil {
@@ -230,17 +242,29 @@ func (h *CloudNodeHandler) GetNodeList(c *gin.Context) {
 			}
 		}
 
-		// 查询节点状态
-		nodeStatus, err := h.service.GetNodeStatus(ctx, node.NodeID)
-		if err != nil {
-			log.WarnContextf(ctx, "[CloudNode] 查询节点状态失败，node_id=%s, error=%v", node.NodeID, err)
-		} else if nodeStatus != nil {
-			node.Status = nodeStatus
-		}
+		node.Status = calcNodeStatus(node.LastHeartbeat, node.TimeoutThreshold)
 	}
 
 	// 使用新的分页列表响应格式
 	common.PaginatedListResponse(c, "查询成功", resp.Items, resp.Total)
+}
+
+func calcNodeStatus(lastHeartbeat *time.Time, timeoutThreshold int) *cloudnodetypes.NodeStatus {
+	status := cloudnodetypes.NodeStatusOffline
+	if lastHeartbeat == nil {
+		return &status
+	}
+
+	if timeoutThreshold <= 0 {
+		timeoutThreshold = cloudnodeconfig.Get().Heartbeat.DefaultTimeoutThreshold
+	}
+
+	if time.Since(*lastHeartbeat) > time.Duration(timeoutThreshold)*time.Second {
+		status = cloudnodetypes.NodeStatusOffline
+	} else {
+		status = cloudnodetypes.NodeStatusOnline
+	}
+	return &status
 }
 
 // GetNodeDetail 获取节点详情
@@ -275,5 +299,3 @@ func (h *CloudNodeHandler) UpdateNode(c *gin.Context) {
 	}
 	common.SuccessResponse(c, "node updated successfully", []interface{}{})
 }
-
-

@@ -125,6 +125,20 @@ func (e *UploadPackageExecutor) parseAndPreprocess(ctx context.Context, taskID, 
 	log.InfoContextf(ctx, "[UploadFileExecutor] Starting upload: TaskID=%s, PackageName=%s, Version=%s",
 		taskID, req.PackageName, req.Version)
 
+	// 验证必填参数
+	if req.CloudAccountID == "" {
+		return nil, nil, fmt.Errorf("cloud_account_id is required")
+	}
+	if req.PackageName == "" {
+		return nil, nil, fmt.Errorf("package_name is required")
+	}
+	if req.Version == "" {
+		return nil, nil, fmt.Errorf("version is required")
+	}
+	if req.FileContent == "" {
+		return nil, nil, fmt.Errorf("file_content is required")
+	}
+
 	// 解码base64文件内容
 	fileContent, err := base64.StdEncoding.DecodeString(req.FileContent)
 	if err != nil {
@@ -188,6 +202,9 @@ func (e *UploadPackageExecutor) uploadToCOS(ctx context.Context, packageID,
 	account, err := e.accountDAO.GetCloudAccount(ctx, cloudAccountID)
 	if err != nil {
 		return nil, fmt.Errorf("获取云账户信息失败: %w", err)
+	}
+	if account == nil {
+		return nil, fmt.Errorf("云账户不存在: account_id=%s", cloudAccountID)
 	}
 	accountInfo := &COSAccountInfo{
 		Provider:  account.Provider,

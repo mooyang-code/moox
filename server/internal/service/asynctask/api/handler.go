@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/mooyang-code/moox/server/internal/common"
 	"github.com/mooyang-code/moox/server/internal/errors"
@@ -95,9 +96,20 @@ func (h *AsyncJobHandler) CreateJob(c *gin.Context) {
 // GET /api/v1/async/jobs/:job_id
 func (h *AsyncJobHandler) QueryJob(c *gin.Context) {
 	ctx := c.Request.Context()
+
+	// 添加 panic 恢复
+	defer func() {
+		if r := recover(); r != nil {
+			log.ErrorContextf(ctx, "[AsyncTask] Panic in QueryJob: %v", r)
+			common.HandleAppError(c, errors.Internal("internal server error", fmt.Errorf("panic: %v", r)))
+		}
+	}()
+
 	jobID := c.Param("job_id")
+	log.InfoContextf(ctx, "[AsyncTask] QueryJob called - jobID param: '%s'", jobID)
 
 	if jobID == "" {
+		log.ErrorContextf(ctx, "[AsyncTask] Empty job_id parameter")
 		common.HandleAppError(c, errors.InvalidParam("job_id", "job_id is required"))
 		return
 	}

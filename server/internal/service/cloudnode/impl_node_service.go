@@ -8,7 +8,6 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
-	"github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -21,13 +20,26 @@ func (s *ServiceImpl) GetNodeList(ctx context.Context, req *NodeListRequest) (*N
 		return nil, fmt.Errorf("request cannot be nil")
 	}
 
+	page := req.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
 	// 构建DAO查询参数
 	query := &dao.NodeListQuery{
-		Page:     req.Page,
-		PageSize: req.PageSize,
-		NodeType: req.NodeType,
-		Status:   req.Status,
-		Keyword:  req.Keyword,
+		Page:           page,
+		PageSize:       pageSize,
+		NodeID:         req.NodeID,
+		CloudAccountID: req.CloudAccountID,
+		Namespace:      req.Namespace,
+		Region:         req.Region,
+		NodeType:       req.NodeType,
+		Status:         req.Status,
+		Keyword:        req.Keyword,
 	}
 
 	// 查询数据
@@ -42,29 +54,10 @@ func (s *ServiceImpl) GetNodeList(ctx context.Context, req *NodeListRequest) (*N
 		items[i] = s.ConvertToCloudNodeDTO(node)
 	}
 
-	// 对于状态过滤，需要根据HeartbeatNode表进行过滤
-	if req.Status == "online" {
-		var onlineItems []*CloudNodeDTO
-		for _, item := range items {
-			status, err := s.heartbeatDAO.GetNodeStatus(ctx, item.NodeID)
-			if err != nil {
-				log.WarnContextf(ctx, "[GetNodeList] Failed to get node status for %s: %v", item.NodeID, err)
-				continue
-			}
-			if status != nil && *status == types.NodeStatusOnline {
-				onlineItems = append(onlineItems, item)
-			}
-		}
-		items = onlineItems
-		// 注意：这里的total数量可能不准确，因为状态过滤是在内存中进行的
-		// 更好的方式是在DAO层实现状态过滤，但需要关联HeartbeatNode表
-		total = int64(len(onlineItems))
-	}
-
 	return &NodeListResponse{
 		Total: total,
 		Items: items,
-		Page:  req.Page,
+		Page:  page,
 		Size:  len(items),
 	}, nil
 }

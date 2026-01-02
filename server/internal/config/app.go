@@ -49,6 +49,7 @@ type StorageConfig struct {
 	LocalPath   string `yaml:"local_path"`   // 本地存储路径
 	CacheSize   int    `yaml:"cache_size"`   // 缓存大小（文件数量）
 	CacheExpiry int    `yaml:"cache_expiry"` // 缓存过期时间（分钟）
+	XDataURL    string `yaml:"xdata_url"`    // xData存储服务地址 (如 http://127.0.0.1:19104)
 }
 
 // AuthConfig 认证配置
@@ -252,4 +253,13 @@ func GetEncryptionKey() string {
 		return "moox-cloud-secret-key-32bytes"
 	}
 	return cfg.Security.EncryptionKey
+}
+
+// GetXDataURL 获取 xData 存储服务地址
+func GetXDataURL() string {
+	cfg := GetGlobalConfig()
+	if cfg == nil || cfg.Storage.XDataURL == "" {
+		return ""
+	}
+	return cfg.Storage.XDataURL
 }

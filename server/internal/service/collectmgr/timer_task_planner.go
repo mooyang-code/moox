@@ -34,16 +34,13 @@ func HandleTaskPlannerSchedule(ctx context.Context, params string) error {
 	}
 
 	// 执行全量重算
-	result, err := globalTaskPlannerInstance.RecalculateAllTaskInstances(ctxClone)
-	if err != nil {
+	if err := globalTaskPlannerInstance.RecalculateAllTaskInstances(ctxClone); err != nil {
 		log.ErrorContextf(ctxClone, "[TaskPlanner] Scheduled recalculation failed: %v", err)
 		return err
 	}
 
 	elapsed := time.Since(startTime)
-	log.InfoContextf(ctxClone,
-		"[TaskPlanner] Scheduled recalculation completed in %v: synced=%d/%d, created=%d, updated=%d, deleted=%d, failed=%d",
-		elapsed, result.SyncedRules, result.TotalRules, result.TotalCreated, result.TotalUpdated, result.TotalDeleted, result.FailedRules)
+	log.InfoContextf(ctxClone, "[TaskPlanner] Scheduled recalculation completed in %v", elapsed)
 
 	return nil
 }

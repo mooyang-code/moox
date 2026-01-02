@@ -21,6 +21,7 @@ type ServiceImpl struct {
 
 	asyncTask       asynctask.Service
 	providerFactory *provider.AccountFactory
+	heartbeatQueue  *heartbeatUpdateQueue
 }
 
 // init 初始化服务（延迟初始化）
@@ -33,6 +34,7 @@ func (s *ServiceImpl) init() {
 // NewService 创建云节点服务实例
 func NewService(dbManager *database.Manager, asyncTask asynctask.Service, cfg *config.Config) Service {
 	db := dbManager.GetDB()
+	heartbeatDAO := dao.NewHeartbeatNodeDAO(db)
 
 	serviceImpl := &ServiceImpl{
 		config:       cfg,
@@ -40,8 +42,16 @@ func NewService(dbManager *database.Manager, asyncTask asynctask.Service, cfg *c
 		accountDAO:   dao.NewCloudAccountDAO(db),
 		packageDAO:   dao.NewFunctionPackageDAO(db),
 		asyncTask:    asyncTask,
-		heartbeatDAO: dao.NewHeartbeatNodeDAO(db),
+		heartbeatDAO: heartbeatDAO,
 	}
+
+	serviceImpl.heartbeatQueue = newHeartbeatUpdateQueue(
+		heartbeatDAO,
+		defaultHeartbeatFlushInterval,
+		defaultHeartbeatBatchSize,
+		serviceImpl.createNewRecord,
+	)
+	serviceImpl.heartbeatQueue.Start()
 
 	// 初始化providerFactory
 	serviceImpl.init()

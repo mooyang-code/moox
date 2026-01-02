@@ -27,13 +27,12 @@ func (h *TaskPlannerHandler) RecalculateAllTaskInstances(c *gin.Context) {
 
 	log.InfoContext(ctx, "[TaskPlannerHandler] Manual recalculation triggered for all task instances")
 
-	result, err := h.taskPlannerService.RecalculateAllTaskInstances(ctx)
-	if err != nil {
+	if err := h.taskPlannerService.RecalculateAllTaskInstances(ctx); err != nil {
 		log.ErrorContextf(ctx, "[TaskPlannerHandler] Failed to recalculate all task instances: %v", err)
 		common.HandleAppError(c, errors.Internal("全量重算失败", err))
 		return
 	}
 
-	log.InfoContextf(ctx, "[TaskPlannerHandler] Recalculation completed: %+v", result)
-	common.SuccessResponse(c, "全量重算成功", result)
+	log.InfoContext(ctx, "[TaskPlannerHandler] Recalculation completed successfully")
+	common.SuccessResponse(c, "全量重算成功", nil)
 }

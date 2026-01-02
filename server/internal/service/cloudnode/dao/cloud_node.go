@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	cloudnodeconfig "github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 
 	"gorm.io/gorm"
@@ -16,11 +17,15 @@ import (
 
 // NodeListQuery 节点列表查询参数
 type NodeListQuery struct {
-	Page     int    // 页码
-	PageSize int    // 每页大小
-	NodeType string // 节点类型过滤
-	Status   string // 状态过滤（online等）
-	Keyword  string // 关键字搜索
+	Page           int    // 页码
+	PageSize       int    // 每页大小
+	NodeID         string // 节点ID过滤
+	CloudAccountID string // 云账号ID过滤
+	Namespace      string // 命名空间过滤
+	Region         string // 区域过滤
+	NodeType       string // 节点类型过滤
+	Status         string // 状态过滤（online等）
+	Keyword        string // 关键字搜索
 }
 
 // NodeStatusFilter 节点状态过滤参数
@@ -102,21 +107,57 @@ func (d *cloudNodeDaoImpl) GetCloudNodeList(ctx context.Context, query *NodeList
 		page = 1
 	}
 	pageSize := query.PageSize
-	if pageSize <= 0 || pageSize > 100 {
+	if pageSize <= 0 {
 		pageSize = 20
+	} else if pageSize > 500 {
+		pageSize = 500
 	}
 
 	// 构建查询条件
-	db := d.db.WithContext(ctx).Model(&model.CloudNode{}).Where("c_invalid = ?", 0)
+	db := d.db.WithContext(ctx).
+		Table("t_cloud_nodes cn").
+		Select("cn.*, hn.c_last_heartbeat").
+		Joins("LEFT JOIN t_heartbeat_nodes hn ON cn.c_node_id = hn.c_node_id AND hn.c_invalid = 0").
+		Where("cn.c_invalid = ?", 0)
 
 	// 应用过滤条件
+	if query.CloudAccountID != "" {
+		db = db.Where("cn.c_cloud_account_id = ?", query.CloudAccountID)
+	}
+
+	if query.NodeID != "" {
+		db = db.Where("cn.c_node_id LIKE ?", "%"+query.NodeID+"%")
+	}
+
+	if query.Namespace != "" {
+		db = db.Where("cn.c_namespace = ?", query.Namespace)
+	}
+
+	if query.Region != "" {
+		db = db.Where("cn.c_region = ?", query.Region)
+	}
+
 	if query.NodeType != "" {
-		db = db.Where("c_node_type = ?", query.NodeType)
+		db = db.Where("cn.c_node_type = ?", query.NodeType)
 	}
 
 	if query.Keyword != "" {
 		keyword := "%" + query.Keyword + "%"
-		db = db.Where("c_node_id LIKE ? OR c_region LIKE ? OR c_namespace LIKE ?", keyword, keyword, keyword)
+		db = db.Where("cn.c_node_id LIKE ? OR cn.c_region LIKE ? OR cn.c_namespace LIKE ?", keyword, keyword, keyword)
+	}
+
+	if query.Status != "" {
+		status := strings.ToLower(strings.TrimSpace(query.Status))
+		defaultTimeout := cloudnodeconfig.Get().Heartbeat.DefaultTimeoutThreshold
+
+		switch status {
+		case "online":
+			db = db.Where("hn.c_last_heartbeat IS NOT NULL").
+				Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN ? ELSE cn.c_timeout_threshold END", defaultTimeout)
+		case "offline":
+			db = db.Where("hn.c_last_heartbeat IS NULL OR "+
+				" (JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 >= CASE WHEN cn.c_timeout_threshold = 0 THEN ? ELSE cn.c_timeout_threshold END", defaultTimeout)
+		}
 	}
 
 	// 计算总数
@@ -128,7 +169,7 @@ func (d *cloudNodeDaoImpl) GetCloudNodeList(ctx context.Context, query *NodeList
 	// 分页查询
 	var nodes []*model.CloudNode
 	offset := (page - 1) * pageSize
-	result := db.Order("c_mtime DESC").
+	result := db.Order("cn.c_mtime DESC").
 		Offset(offset).
 		Limit(pageSize).
 		Find(&nodes)
@@ -136,7 +177,6 @@ func (d *cloudNodeDaoImpl) GetCloudNodeList(ctx context.Context, query *NodeList
 	if result.Error != nil {
 		return nil, 0, fmt.Errorf("failed to get nodes with pagination: %w", result.Error)
 	}
-
 	return nodes, total, nil
 }
 
@@ -234,16 +274,17 @@ func (d *cloudNodeDaoImpl) GetCloudNodesByType(ctx context.Context, nodeType str
 // 基于心跳表的最后心跳时间判断节点是否在线
 func (d *cloudNodeDaoImpl) GetOnlineNodes(ctx context.Context) ([]*model.CloudNode, error) {
 	var nodes []*model.CloudNode
+	defaultTimeout := cloudnodeconfig.Get().Heartbeat.DefaultTimeoutThreshold
 
 	// 使用 JOIN 查询，基于心跳表判断在线状态
-	// 判断逻辑：当前时间 - 最后心跳时间 < 超时阈值（默认35秒）
+	// 判断逻辑：当前时间 - 最后心跳时间 < 超时阈值（默认从配置获取）
 	// 注意：c_timeout_threshold = 0 表示使用默认值，需要用 CASE WHEN 处理
 	result := d.db.WithContext(ctx).
 		Table("t_cloud_nodes cn").
 		Select("cn.*").
 		Joins("INNER JOIN t_heartbeat_nodes hn ON cn.c_node_id = hn.c_node_id").
 		Where("cn.c_invalid = ? AND hn.c_invalid = ?", 0, 0).
-		Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN 35 ELSE cn.c_timeout_threshold END").
+		Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN ? ELSE cn.c_timeout_threshold END", defaultTimeout).
 		Order("cn.c_mtime DESC").
 		Find(&nodes)
 
@@ -294,7 +335,6 @@ func (d *cloudNodeDaoImpl) GetNamespaceStats(ctx context.Context, region string)
 	for _, stat := range stats {
 		statsMap[stat.Namespace] = stat.Count
 	}
-
 	return statsMap, nil
 }
 
@@ -320,6 +360,7 @@ func (d *cloudNodeDaoImpl) UpdateNodePackageID(ctx context.Context, nodeID strin
 // filter: 可选，传入则按状态过滤；不传或为nil则不过滤状态
 func (d *cloudNodeDaoImpl) GetNodesBySupportedCollector(ctx context.Context, collectorType string, filter *NodeStatusFilter) ([]*model.CloudNode, error) {
 	var nodes []*model.CloudNode
+	defaultTimeout := cloudnodeconfig.Get().Heartbeat.DefaultTimeoutThreshold
 	// c_supported_collectors 是 JSON 数组格式，如：["kline", "ticker"]
 	// 使用 LIKE 查询包含指定类型的节点
 	pattern := fmt.Sprintf("%%\"%s\"%%", collectorType)
@@ -331,12 +372,12 @@ func (d *cloudNodeDaoImpl) GetNodesBySupportedCollector(ctx context.Context, col
 		query = query.Select("cn.*").
 			Joins("INNER JOIN t_heartbeat_nodes hn ON cn.c_node_id = hn.c_node_id").
 			Where("cn.c_supported_collectors LIKE ? AND cn.c_invalid = ? AND hn.c_invalid = ?", pattern, 0, 0).
-			Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN 35 ELSE cn.c_timeout_threshold END")
+			Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN ? ELSE cn.c_timeout_threshold END", defaultTimeout)
 	} else {
 		query = query.Where("c_supported_collectors LIKE ? AND c_invalid = ?", pattern, 0)
 	}
 
-	result := query.Order("c_mtime DESC").Find(&nodes)
+	result := query.Order("cn.c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get nodes by supported collector: %w", result.Error)
@@ -349,6 +390,7 @@ func (d *cloudNodeDaoImpl) GetNodesBySupportedCollector(ctx context.Context, col
 // filter: 可选，传入则按状态过滤；不传或为nil则不过滤状态
 func (d *cloudNodeDaoImpl) GetNodesByPattern(ctx context.Context, pattern string, filter *NodeStatusFilter) ([]*model.CloudNode, error) {
 	var nodes []*model.CloudNode
+	defaultTimeout := cloudnodeconfig.Get().Heartbeat.DefaultTimeoutThreshold
 	// 将通配符 * 转换为 SQL LIKE 的 %
 	sqlPattern := pattern
 	// 如果 pattern 不包含 % 或 *，则不做转换（精确匹配）
@@ -364,12 +406,12 @@ func (d *cloudNodeDaoImpl) GetNodesByPattern(ctx context.Context, pattern string
 		query = query.Select("cn.*").
 			Joins("INNER JOIN t_heartbeat_nodes hn ON cn.c_node_id = hn.c_node_id").
 			Where("cn.c_node_id LIKE ? AND cn.c_invalid = ? AND hn.c_invalid = ?", sqlPattern, 0, 0).
-			Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN 35 ELSE cn.c_timeout_threshold END")
+			Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN ? ELSE cn.c_timeout_threshold END", defaultTimeout)
 	} else {
 		query = query.Where("c_node_id LIKE ? AND c_invalid = ?", sqlPattern, 0)
 	}
 
-	result := query.Order("c_mtime DESC").Find(&nodes)
+	result := query.Order("cn.c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get nodes by pattern: %w", result.Error)
@@ -385,6 +427,7 @@ func (d *cloudNodeDaoImpl) GetNodesByIDs(ctx context.Context, nodeIDs []string, 
 	}
 
 	var nodes []*model.CloudNode
+	defaultTimeout := cloudnodeconfig.Get().Heartbeat.DefaultTimeoutThreshold
 	query := d.db.WithContext(ctx).Table("t_cloud_nodes cn")
 
 	// 如果需要按在线状态过滤，则 JOIN 心跳表
@@ -392,12 +435,12 @@ func (d *cloudNodeDaoImpl) GetNodesByIDs(ctx context.Context, nodeIDs []string, 
 		query = query.Select("cn.*").
 			Joins("INNER JOIN t_heartbeat_nodes hn ON cn.c_node_id = hn.c_node_id").
 			Where("cn.c_node_id IN ? AND cn.c_invalid = ? AND hn.c_invalid = ?", nodeIDs, 0, 0).
-			Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN 35 ELSE cn.c_timeout_threshold END")
+			Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold = 0 THEN ? ELSE cn.c_timeout_threshold END", defaultTimeout)
 	} else {
 		query = query.Where("c_node_id IN ? AND c_invalid = ?", nodeIDs, 0)
 	}
 
-	result := query.Order("c_mtime DESC").Find(&nodes)
+	result := query.Order("cn.c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get nodes by IDs: %w", result.Error)
@@ -427,8 +470,7 @@ func (d *cloudNodeDaoImpl) UpdateSupportedCollectors(ctx context.Context, nodeID
 		// 节点不存在或已失效，记录警告但不报错
 		log.WarnContextf(ctx, "[CloudNodeDAO] 节点 %s 不存在或已失效，跳过更新采集器类型", nodeID)
 	} else {
-		log.InfoContextf(ctx, "[CloudNodeDAO] 节点 %s 的采集器类型已更新: %v", nodeID, collectors)
+		log.DebugContextf(ctx, "[CloudNodeDAO] 节点 %s 的采集器类型已更新: %v", nodeID, collectors)
 	}
-
 	return nil
 }

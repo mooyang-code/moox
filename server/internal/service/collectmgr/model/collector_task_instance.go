@@ -23,8 +23,6 @@ type CollectorTaskInstance struct {
 
 	// Status 任务状态（0=待执行，1=执行中，2=成功，3=部分失败，4=失败）
 	Status int `gorm:"column:c_status;index:idx_node_status;not null;default:0" json:"status"`
-	// StartTime 开始时间
-	StartTime *time.Time `gorm:"column:c_start_time;type:datetime" json:"start_time"`
 	// LastExecTime 最后执行时间
 	LastExecTime *time.Time `gorm:"column:c_last_exec_time;type:datetime" json:"last_exec_time"`
 	// Result 执行结果（JSON格式）

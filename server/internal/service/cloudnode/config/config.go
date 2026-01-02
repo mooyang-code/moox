@@ -2,9 +2,15 @@ package config
 
 import (
 	"os"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/log"
+)
+
+var (
+	cachedConfig *Config
+	loadOnce     sync.Once
 )
 
 // Config 云节点模块相关的配置
@@ -49,6 +55,14 @@ type CloudFunctionConfig struct {
 	DefaultEnvVars    map[string]string `yaml:"default_env_vars"`
 }
 
+// Get 获取配置（缓存）
+func Get() *Config {
+	loadOnce.Do(func() {
+		cachedConfig = LoadConfig()
+	})
+	return cachedConfig
+}
+
 // LoadConfig 加载配置
 func LoadConfig() *Config {
 	configPath := "./config/cloudnode.yaml"
@@ -59,7 +73,7 @@ func LoadConfig() *Config {
 			MaxConcurrent: 10,
 		},
 		Heartbeat: HeartbeatConfig{
-			DefaultTimeoutThreshold:  30, // 默认30秒超时
+			DefaultTimeoutThreshold:  50, // 默认50秒超时
 			DefaultHeartbeatInterval: 10, // 默认10秒心跳间隔
 		},
 		CloudFunction: CloudFunctionConfig{
@@ -102,7 +116,7 @@ func (c *Config) Validate() error {
 	}
 
 	if c.Heartbeat.DefaultTimeoutThreshold <= 0 {
-		c.Heartbeat.DefaultTimeoutThreshold = 30 // 默认30秒
+		c.Heartbeat.DefaultTimeoutThreshold = 50 // 默认50秒
 	}
 
 	if c.Heartbeat.DefaultHeartbeatInterval <= 0 {

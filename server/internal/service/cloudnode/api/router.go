@@ -14,7 +14,7 @@ func RegisterCloudNodeRoutes(router *gin.RouterGroup, service cloudnodemgr.Servi
 	nodeHandler := NewCloudNodeHandlerWithService(service)
 	nodeGroup := router.Group("/cloud_node")
 	{
-		nodeGroup.GET("/list", nodeHandler.GetNodeList)
+		nodeGroup.POST("/list", nodeHandler.GetNodeList)  // 改为POST以支持JSON body参数
 		nodeGroup.GET("/detail", nodeHandler.GetNodeDetail)
 		nodeGroup.PUT("/update", nodeHandler.UpdateNode)
 	}

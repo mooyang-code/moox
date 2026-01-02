@@ -425,8 +425,8 @@ const objectsSelectAll = ref(false);
 
 // CollectParams 中定义的有效字段（根据数据类型动态过滤）
 const COLLECT_PARAMS_FIELDS: { [dataType: string]: string[] } = {
-  // 标的数据：产品类型（多选）
-  'symbol': ['inst_types'],
+  // 标的数据：产品类型（多选）、时间周期
+  'symbol': ['inst_types', 'intervals'],
   // K线数据：产品类型、标的、周期
   'kline': ['inst_type', 'objects', 'intervals'],
   // 逐笔交易：产品类型、标的

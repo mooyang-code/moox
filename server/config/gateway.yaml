@@ -75,8 +75,8 @@ gateway:
 # 限流配置
 rate_limit:
   # 默认限流配置
-  default_qps: 20      # 默认QPS限制
-  default_burst: 1000    # 默认突发流量
+  default_qps: 2000      # 默认QPS限制
+  default_burst: 5000    # 默认突发流量
 
   # 按接口配置限流
   method_limits:

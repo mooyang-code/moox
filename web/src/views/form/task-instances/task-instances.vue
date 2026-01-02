@@ -42,7 +42,7 @@
           :data="instanceList"
           :bordered="{ cell: true }"
           :loading="loading"
-          :scroll="{ x: 1800, y: '100%' }"
+          :scroll="{ x: '100%', y: '100%', minWidth: 1600 }"
           :pagination="paginationConfig"
           :row-selection="{ type: 'checkbox', showCheckedAll: true }"
           :selected-keys="selectedKeys"

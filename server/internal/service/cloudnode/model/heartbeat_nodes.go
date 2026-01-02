@@ -18,7 +18,6 @@ type HeartbeatNode struct {
 
 	// 时间信息
 	LastHeartbeat  *time.Time `gorm:"column:c_last_heartbeat"`  // 最后心跳时间
-	FirstHeartbeat *time.Time `gorm:"column:c_first_heartbeat"` // 首次心跳时间
 
 	// 统计数据
 	ConsecutiveTimeouts int `gorm:"column:c_consecutive_timeouts;default:0"` // 连续超时次数
@@ -56,7 +55,6 @@ func (m *HeartbeatNode) ToDTO() *types.HeartbeatNode {
 		NodeType:            m.NodeType,
 		SourceService:       m.SourceService,
 		LastHeartbeat:       m.LastHeartbeat,
-		FirstHeartbeat:      m.FirstHeartbeat,
 		ConsecutiveTimeouts: m.ConsecutiveTimeouts,
 		TotalTimeouts:       m.TotalTimeouts,
 		TotalHeartbeats:     m.TotalHeartbeats,
@@ -75,7 +73,6 @@ func (m *HeartbeatNode) FromDTO(dto *types.HeartbeatNode) {
 	m.NodeType = dto.NodeType
 	m.SourceService = dto.SourceService
 	m.LastHeartbeat = dto.LastHeartbeat
-	m.FirstHeartbeat = dto.FirstHeartbeat
 	m.ConsecutiveTimeouts = dto.ConsecutiveTimeouts
 	m.TotalTimeouts = dto.TotalTimeouts
 	m.TotalHeartbeats = dto.TotalHeartbeats

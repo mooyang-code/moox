@@ -46,12 +46,19 @@ func (d *SymbolPlanner) GetTargetObjects(ctx context.Context, rule *dto.TaskRule
 // BuildTaskParams 为指定产品类型构建任务参数
 // object 参数是产品类型（如 "SPOT", "SWAP"）
 func (d *SymbolPlanner) BuildTaskParams(ctx context.Context, rule *dto.TaskRuleDTO, object string) (string, error) {
+	// 解析采集参数以获取 intervals
+	params, err := d.base.ParseCollectParams(rule.CollectParams)
+	if err != nil {
+		return "{}", err
+	}
+
 	// Symbol 任务的 object 是产品类型（SPOT/SWAP/FUTURES）
 	taskParams := TaskParams{
 		DataType:   rule.DataType,
 		DataSource: rule.DataSource,
-		InstType:   object, // SPOT, SWAP, FUTURES
-		Symbol:     "",     // Symbol 任务不指定具体标的
+		InstType:   object,          // SPOT, SWAP, FUTURES
+		Symbol:     "",              // Symbol 任务不指定具体标的
+		Intervals:  params.Intervals, // 时间周期
 	}
 
 	data, err := json.Marshal(taskParams)

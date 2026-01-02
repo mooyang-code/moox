@@ -60,7 +60,7 @@ var NewGatewayHandle = func() *GatewayHandle {
 	return &GatewayHandle{
 		handlers: make(map[string]ServiceHandler),
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: 20 * time.Second, // 20秒超时（用于CreateAsyncJob等耗时接口）
 		},
 		requestHandler: NewHTTPRequestHandler(),
 	}

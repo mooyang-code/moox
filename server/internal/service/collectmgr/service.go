@@ -136,7 +136,6 @@ type TaskInstanceDTO struct {
 	DataType        string // 新增：数据类型（从规则表关联获取）
 	TaskParams      string
 	Status          int
-	StartTime       *time.Time
 	LastExecTime    *time.Time // 最后执行时间（原 EndTime）
 	Result          string
 	Invalid         int // 新增：删除标记
@@ -158,14 +157,6 @@ type TaskInstanceFilterDTO struct {
 
 // TaskPlannerService 任务规划器服务接口
 type TaskPlannerService interface {
-	// SyncRuleInstances 同步指定规则的任务实例（幂等操作）
-	// 用于：用户创建/修改/启用规则时立即调用
-	SyncRuleInstances(ctx context.Context, ruleID string) (*SyncResult, error)
-
-	// InvalidateRuleInstances 使规则的所有实例失效（软删除）
-	// 用于：用户禁用规则时调用
-	InvalidateRuleInstances(ctx context.Context, ruleID string) error
-
 	// RecalculateAllTaskInstances 重算所有启用规则的任务实例（定时任务调用）
-	RecalculateAllTaskInstances(ctx context.Context) (*BatchSyncResult, error)
+	RecalculateAllTaskInstances(ctx context.Context) error
 }

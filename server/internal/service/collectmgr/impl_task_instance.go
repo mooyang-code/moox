@@ -9,6 +9,7 @@ import (
 	cloudnodedao "github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	collectordao "github.com/mooyang-code/moox/server/internal/service/collectmgr/dao"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/model"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -41,7 +42,6 @@ func (s *TaskInstanceServiceImpl) CreateTaskInstance(ctx context.Context, instan
 		CollectDataType: instance.CollectDataType,
 		TaskParams:      instance.TaskParams,
 		Status:          instance.Status,
-		StartTime:       instance.StartTime,
 		LastExecTime:    instance.LastExecTime,
 		Result:          instance.Result,
 	}
@@ -59,7 +59,7 @@ func (s *TaskInstanceServiceImpl) GetTaskInstance(ctx context.Context, instanceI
 		return nil, fmt.Errorf("failed to get task instance: %w", err)
 	}
 	if instance == nil {
-		return nil, fmt.Errorf("task instance not found")
+		return nil, fmt.Errorf("task instance not found:%s", instanceID)
 	}
 
 	return &TaskInstanceDTO{
@@ -71,7 +71,6 @@ func (s *TaskInstanceServiceImpl) GetTaskInstance(ctx context.Context, instanceI
 		CollectDataType: instance.CollectDataType,
 		TaskParams:      instance.TaskParams,
 		Status:          instance.Status,
-		StartTime:       instance.StartTime,
 		LastExecTime:    instance.LastExecTime,
 		Result:          instance.Result,
 		Invalid:         instance.Invalid,
@@ -104,15 +103,14 @@ func (s *TaskInstanceServiceImpl) UpdateTaskInstance(ctx context.Context, instan
 	}
 
 	modelInstance := &model.CollectorTaskInstance{
-		ID:         instance.ID,
-		TaskID:     instanceID,
-		RuleID:     instance.RuleID,
-		NodeID:     instance.NodeID,
-		TaskParams: instance.TaskParams,
-		Status:     instance.Status,
-		StartTime:  instance.StartTime,
-		LastExecTime:    instance.LastExecTime,
-		Result:     instance.Result,
+		ID:           instance.ID,
+		TaskID:       instanceID,
+		RuleID:       instance.RuleID,
+		NodeID:       instance.NodeID,
+		TaskParams:   instance.TaskParams,
+		Status:       instance.Status,
+		LastExecTime: instance.LastExecTime,
+		Result:       instance.Result,
 	}
 
 	return s.instanceDAO.UpdateTaskInstance(ctx, modelInstance)
@@ -157,7 +155,7 @@ func (s *TaskInstanceServiceImpl) ReportTaskStatus(ctx context.Context, instance
 	if status == model.InstanceStatusFailed || status == model.InstanceStatusPartFailed {
 		log.InfoContextf(ctx, "[TaskInstance] Task %s failed/part-failed, triggering transfer logic", instanceID)
 		// 异步执行任务转移，避免阻塞上报接口
-		go s.tryTransferFailedTask(context.Background(), instanceID)
+		go s.tryTransferFailedTask(trpc.CloneContext(ctx), instanceID)
 	}
 
 	return nil
@@ -188,19 +186,18 @@ func (s *TaskInstanceServiceImpl) GetTaskInstancesByNode(ctx context.Context, no
 	var result []*TaskInstanceDTO
 	for _, instance := range instances {
 		dto := &TaskInstanceDTO{
-			ID:         instance.ID,
-			TaskID:     instance.TaskID,
-			RuleID:     instance.RuleID,
-			NodeID:     instance.NodeID,
-			Symbol:     instance.Symbol,
-			TaskParams: instance.TaskParams,
-			Status:     instance.Status,
-			StartTime:  instance.StartTime,
-			LastExecTime:    instance.LastExecTime,
-			Result:     instance.Result,
-			Invalid:    instance.Invalid,
-			CreateTime: instance.CreateTime,
-			ModifyTime: instance.ModifyTime,
+			ID:           instance.ID,
+			TaskID:       instance.TaskID,
+			RuleID:       instance.RuleID,
+			NodeID:       instance.NodeID,
+			Symbol:       instance.Symbol,
+			TaskParams:   instance.TaskParams,
+			Status:       instance.Status,
+			LastExecTime: instance.LastExecTime,
+			Result:       instance.Result,
+			Invalid:      instance.Invalid,
+			CreateTime:   instance.CreateTime,
+			ModifyTime:   instance.ModifyTime,
 		}
 		result = append(result, dto)
 	}
@@ -220,19 +217,18 @@ func (s *TaskInstanceServiceImpl) GetRecentInstances(ctx context.Context, hours 
 	var result []*TaskInstanceDTO
 	for _, instance := range instances {
 		dto := &TaskInstanceDTO{
-			ID:         instance.ID,
-			TaskID:     instance.TaskID,
-			RuleID:     instance.RuleID,
-			NodeID:     instance.NodeID,
-			Symbol:     instance.Symbol,
-			TaskParams: instance.TaskParams,
-			Status:     instance.Status,
-			StartTime:  instance.StartTime,
-			LastExecTime:    instance.LastExecTime,
-			Result:     instance.Result,
-			Invalid:    instance.Invalid,
-			CreateTime: instance.CreateTime,
-			ModifyTime: instance.ModifyTime,
+			ID:           instance.ID,
+			TaskID:       instance.TaskID,
+			RuleID:       instance.RuleID,
+			NodeID:       instance.NodeID,
+			Symbol:       instance.Symbol,
+			TaskParams:   instance.TaskParams,
+			Status:       instance.Status,
+			LastExecTime: instance.LastExecTime,
+			Result:       instance.Result,
+			Invalid:      instance.Invalid,
+			CreateTime:   instance.CreateTime,
+			ModifyTime:   instance.ModifyTime,
 		}
 		result = append(result, dto)
 	}
@@ -249,19 +245,18 @@ func (s *TaskInstanceServiceImpl) ListTaskInstances(ctx context.Context, nodeID,
 	var result []*TaskInstanceDTO
 	for _, instance := range instances {
 		dto := &TaskInstanceDTO{
-			ID:         instance.ID,
-			TaskID:     instance.TaskID,
-			RuleID:     instance.RuleID,
-			NodeID:     instance.NodeID,
-			Symbol:     instance.Symbol,
-			TaskParams: instance.TaskParams,
-			Status:     instance.Status,
-			StartTime:  instance.StartTime,
-			LastExecTime:    instance.LastExecTime,
-			Result:     instance.Result,
-			Invalid:    instance.Invalid,
-			CreateTime: instance.CreateTime,
-			ModifyTime: instance.ModifyTime,
+			ID:           instance.ID,
+			TaskID:       instance.TaskID,
+			RuleID:       instance.RuleID,
+			NodeID:       instance.NodeID,
+			Symbol:       instance.Symbol,
+			TaskParams:   instance.TaskParams,
+			Status:       instance.Status,
+			LastExecTime: instance.LastExecTime,
+			Result:       instance.Result,
+			Invalid:      instance.Invalid,
+			CreateTime:   instance.CreateTime,
+			ModifyTime:   instance.ModifyTime,
 		}
 		result = append(result, dto)
 	}
@@ -309,20 +304,19 @@ func (s *TaskInstanceServiceImpl) ListTaskInstancesWithFilter(ctx context.Contex
 	var result []*TaskInstanceDTO
 	for _, instance := range instances {
 		dto := &TaskInstanceDTO{
-			ID:         instance.ID,
-			TaskID:     instance.TaskID,
-			RuleID:     instance.RuleID,
-			NodeID:     instance.NodeID,
-			Symbol:     instance.Symbol,
-			DataType:   ruleDataTypeMap[instance.RuleID], // 从规则信息中获取数据类型
-			TaskParams: instance.TaskParams,
-			Status:     instance.Status,
-			StartTime:  instance.StartTime,
-			LastExecTime:    instance.LastExecTime,
-			Result:     instance.Result,
-			Invalid:    instance.Invalid,
-			CreateTime: instance.CreateTime,
-			ModifyTime: instance.ModifyTime,
+			ID:           instance.ID,
+			TaskID:       instance.TaskID,
+			RuleID:       instance.RuleID,
+			NodeID:       instance.NodeID,
+			Symbol:       instance.Symbol,
+			DataType:     ruleDataTypeMap[instance.RuleID], // 从规则信息中获取数据类型
+			TaskParams:   instance.TaskParams,
+			Status:       instance.Status,
+			LastExecTime: instance.LastExecTime,
+			Result:       instance.Result,
+			Invalid:      instance.Invalid,
+			CreateTime:   instance.CreateTime,
+			ModifyTime:   instance.ModifyTime,
 		}
 		result = append(result, dto)
 	}

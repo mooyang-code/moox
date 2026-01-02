@@ -132,8 +132,8 @@ func (b *BasePlanner) ParseCollectParams(params string) (*CollectParams, error) 
 // GetSymbolProvider 获取标的提供者
 func (b *BasePlanner) GetSymbolProvider() SymbolProvider {
 	if b.symbolProvider == nil {
-		// 返回默认实现，包含硬编码的标的列表
-		return &DefaultSymbolProvider{}
+		// 返回存储服务实现，从 xData 获取标的列表
+		return NewStorageSymbolProvider()
 	}
 	return b.symbolProvider
 }

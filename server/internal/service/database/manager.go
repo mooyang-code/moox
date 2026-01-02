@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/server/internal/config"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -23,9 +25,10 @@ func NewManager() *Manager {
 }
 
 // Initialize 初始化数据库连接
-func (dm *Manager) Initialize(dbPath string) error {
-	if dbPath == "" {
-		dbPath = "./data/moox.db"
+func (dm *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
+	dbPath := "./data/moox.db"
+	if dbCfg != nil && dbCfg.Path != "" {
+		dbPath = dbCfg.Path
 	}
 
 	// 确保目录存在
@@ -34,12 +37,14 @@ func (dm *Manager) Initialize(dbPath string) error {
 		return fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	dsn := buildSQLiteDSN(dbPath)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 
 	dm.db = db
+	applySQLitePoolConfig(dm.db, dbCfg)
 	log.Infof("初始化SQLite数据库连接: %s", dbPath)
 	return nil
 }
@@ -94,4 +99,53 @@ func (dm *Manager) Close() error {
 	}
 	// GORM SQLite 不需要手动关闭
 	return nil
+}
+
+func buildSQLiteDSN(dbPath string) string {
+	pragmas := []string{
+		"_pragma=journal_mode(WAL)",
+		"_pragma=synchronous(OFF)",
+		"_pragma=busy_timeout(5000)",
+		"_pragma=temp_store(MEMORY)",
+		"_pragma=cache_size(-64000)",
+		"_pragma=wal_autocheckpoint(1000)",
+	}
+	sep := "?"
+	if strings.Contains(dbPath, "?") {
+		sep = "&"
+	}
+	return dbPath + sep + strings.Join(pragmas, "&")
+}
+
+func applySQLitePoolConfig(db *gorm.DB, cfg *config.DatabaseConfig) {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return
+	}
+
+	maxOpen := 10
+	maxIdle := 10
+	if cfg != nil {
+		if cfg.MaxOpenConns > 0 {
+			maxOpen = minInt(cfg.MaxOpenConns, 10)
+		}
+		if cfg.MaxIdleConns > 0 {
+			maxIdle = minInt(cfg.MaxIdleConns, maxOpen)
+		}
+		if cfg.ConnMaxLifetime > 0 {
+			sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+		}
+		if cfg.ConnMaxIdleTime > 0 {
+			sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+		}
+	}
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetMaxIdleConns(maxIdle)
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

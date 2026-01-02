@@ -236,15 +236,15 @@
           </a-select>
         </a-form-item>
         
-        <a-form-item field="cloud_account_id" label="云账户（可选）">
-          <a-select v-model="uploadForm.cloud_account_id" placeholder="选择云账户（用于COS存储）" allow-clear>
+        <a-form-item field="cloud_account_id" label="云账户" required>
+          <a-select v-model="uploadForm.cloud_account_id" placeholder="请选择云账户（COS存储）">
             <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
               {{ account.account_name }} ({{ getProviderName(account.provider) }})
             </a-option>
           </a-select>
           <template #extra>
             <span style="color: #86909c; font-size: 12px;">
-              选择云账户将使用COS存储，不选择将存储到本地/tmp目录。所有上传都为异步处理。
+              仅支持COS方式上传，请选择云账户。所有上传都为异步处理。
             </span>
           </template>
         </a-form-item>
@@ -762,36 +762,41 @@ const handleUploadCancel = () => {
 // 输入验证函数
 const validateUploadForm = () => {
   const errors: string[] = [];
-  
+
   // 验证函数包类型
   if (!uploadForm.package_type) {
     errors.push('请选择函数包类型');
   }
-  
+
   // 验证版本号
   if (!uploadForm.version) {
     errors.push('请输入版本号');
   } else {
     // 去除首尾空格
     uploadForm.version = uploadForm.version.trim();
-    
+
     // 版本号格式验证 (支持 v1.0.0, 1.0.0, v1.0, 1.0 等格式)
     const versionRegex = /^v?\d+(\.\d+){0,2}(-[a-zA-Z0-9]+)?$/;
     if (!versionRegex.test(uploadForm.version)) {
       errors.push('版本号格式不正确，请使用如 v1.0.0 或 1.0.0 的格式');
     }
-    
+
     // 检查版本号长度
     if (uploadForm.version.length > 20) {
       errors.push('版本号长度不能超过20个字符');
     }
   }
-  
+
   // 验证运行时环境
   if (!uploadForm.runtime) {
     errors.push('请选择运行时环境');
   }
-  
+
+  // 验证云账户（必填）
+  if (!uploadForm.cloud_account_id) {
+    errors.push('请选择云账户，仅支持COS方式上传');
+  }
+
   // 验证文件
   if (!uploadForm.file_content) {
     errors.push('请选择要上传的ZIP文件');

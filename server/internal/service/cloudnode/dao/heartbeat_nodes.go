@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	cloudnodeconfig "github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -127,23 +129,41 @@ func (d *heartbeatRecordDAO) List(ctx context.Context, filter *types.NodeFilter)
 	}
 	filter.SetDefaults()
 
-	query := d.db.WithContext(ctx).Model(&model.HeartbeatNode{}).Where("c_invalid = 0")
+	query := d.db.WithContext(ctx).Table("t_heartbeat_nodes hn").Where("hn.c_invalid = 0")
 
 	// 应用过滤条件
 	query = d.applyNodeFilter(query, filter)
 
+	if filter.Status != nil {
+		defaultTimeout := cloudnodeconfig.Get().Heartbeat.DefaultTimeoutThreshold
+		query = query.Joins("LEFT JOIN t_cloud_nodes cn ON hn.c_node_id = cn.c_node_id AND cn.c_invalid = 0")
+
+		switch *filter.Status {
+		case types.NodeStatusOnline:
+			query = query.Where("hn.c_last_heartbeat IS NOT NULL").
+				Where("(JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 < CASE WHEN cn.c_timeout_threshold IS NULL OR cn.c_timeout_threshold = 0 THEN ? ELSE cn.c_timeout_threshold END", defaultTimeout)
+		case types.NodeStatusOffline:
+			query = query.Where("hn.c_last_heartbeat IS NULL OR (JULIANDAY('now') - JULIANDAY(hn.c_last_heartbeat)) * 86400 >= CASE WHEN cn.c_timeout_threshold IS NULL OR cn.c_timeout_threshold = 0 THEN ? ELSE cn.c_timeout_threshold END", defaultTimeout)
+		default:
+			query = query.Where("1 = 0")
+		}
+	}
+
 	// 计算总数
 	var total int64
-	if err := query.Count(&total).Error; err != nil {
+	if err := query.Session(&gorm.Session{}).Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("count heartbeat records failed: %w", err)
 	}
 
 	// 应用分页和排序
 	offset := (filter.GetPage() - 1) * filter.GetPageSize()
-	query = query.Offset(offset).Limit(filter.GetPageSize())
+	query = query.Select("hn.*").Offset(offset).Limit(filter.GetPageSize())
 
 	if filter.SortBy != "" {
 		order := filter.SortBy
+		if !strings.Contains(order, ".") {
+			order = "hn." + order
+		}
 		if filter.SortOrder == "desc" {
 			order += " DESC"
 		} else {
@@ -151,7 +171,7 @@ func (d *heartbeatRecordDAO) List(ctx context.Context, filter *types.NodeFilter)
 		}
 		query = query.Order(order)
 	} else {
-		query = query.Order("c_mtime DESC")
+		query = query.Order("hn.c_mtime DESC")
 	}
 
 	var modelRecords []model.HeartbeatNode
@@ -170,12 +190,8 @@ func (d *heartbeatRecordDAO) List(ctx context.Context, filter *types.NodeFilter)
 		if now.IsZero() {
 			now = time.Now()
 		}
-		record.Status = d.calculateNodeStatus(record, now)
+		record.Status = d.calculateNodeStatus(ctx, record, now)
 
-		// 如果指定了状态过滤，则只包含匹配的记录
-		if filter.Status != nil && record.Status != *filter.Status {
-			continue
-		}
 		records = append(records, record)
 	}
 	return records, total, nil
@@ -184,7 +200,7 @@ func (d *heartbeatRecordDAO) List(ctx context.Context, filter *types.NodeFilter)
 // GetTimeoutNodes 获取超时节点
 func (d *heartbeatRecordDAO) GetTimeoutNodes(ctx context.Context) ([]*types.HeartbeatNode, error) {
 	// 获取默认超时阈值
-	defaultTimeout := 30 // 默认30秒超时
+	defaultTimeout := cloudnodeconfig.Get().Heartbeat.DefaultTimeoutThreshold
 
 	// 使用较小值作为超时判断阈值（更严格的超时检测）
 	minTimeoutThreshold := d.getMinTimeoutThreshold()
@@ -227,7 +243,7 @@ func (d *heartbeatRecordDAO) getMinTimeoutThreshold() int {
 
 	if err != nil || len(results) == 0 {
 		// 如果没有配置或查询失败，返回默认值
-		return 30 // 默认30秒超时
+		return cloudnodeconfig.Get().Heartbeat.DefaultTimeoutThreshold
 	}
 
 	// 找出最小值
@@ -271,37 +287,37 @@ func (d *heartbeatRecordDAO) BatchUpdate(ctx context.Context, records []*types.H
 // applyNodeFilter 应用节点过滤条件
 func (d *heartbeatRecordDAO) applyNodeFilter(query *gorm.DB, filter *types.NodeFilter) *gorm.DB {
 	if len(filter.NodeIDs) > 0 {
-		query = query.Where("c_node_id IN ?", filter.NodeIDs)
+		query = query.Where("hn.c_node_id IN ?", filter.NodeIDs)
 	}
 
 	if len(filter.NodeTypes) > 0 {
-		query = query.Where("c_node_type IN ?", filter.NodeTypes)
+		query = query.Where("hn.c_node_type IN ?", filter.NodeTypes)
 	}
 
 	if filter.SourceService != nil {
-		query = query.Where("c_source_service = ?", *filter.SourceService)
+		query = query.Where("hn.c_source_service = ?", *filter.SourceService)
 	}
 
 	if filter.ProbeEnabled != nil {
-		query = query.Where("c_probe_enabled = ?", *filter.ProbeEnabled)
+		query = query.Where("hn.c_probe_enabled = ?", *filter.ProbeEnabled)
 	}
 
 	if filter.Keyword != "" {
 		keyword := "%" + filter.Keyword + "%"
-		query = query.Where("c_node_id LIKE ? OR c_source_service LIKE ?", keyword, keyword)
+		query = query.Where("hn.c_node_id LIKE ? OR hn.c_source_service LIKE ?", keyword, keyword)
 	}
 	return query
 }
 
 // calculateNodeStatus 基于最后心跳时间计算节点状态
-func (d *heartbeatRecordDAO) calculateNodeStatus(record *types.HeartbeatNode, now time.Time) types.NodeStatus {
+func (d *heartbeatRecordDAO) calculateNodeStatus(ctx context.Context, record *types.HeartbeatNode, now time.Time) types.NodeStatus {
 	// 如果没有心跳记录，认为是离线
 	if record.LastHeartbeat == nil {
 		return types.NodeStatusOffline
 	}
 
 	// 智能获取超时阈值：优先使用节点配置，其次使用默认配置
-	timeoutThreshold := d.getTimeoutThresholdForNode(record.NodeID)
+	timeoutThreshold := d.getTimeoutThresholdForNode(ctx, record.NodeID)
 
 	// 计算距离最后心跳的时间
 	timeSinceLastHeartbeat := now.Sub(*record.LastHeartbeat)
@@ -316,13 +332,13 @@ func (d *heartbeatRecordDAO) calculateNodeStatus(record *types.HeartbeatNode, no
 }
 
 // getTimeoutThresholdForNode 获取节点的超时阈值
-func (d *heartbeatRecordDAO) getTimeoutThresholdForNode(nodeID string) int {
+func (d *heartbeatRecordDAO) getTimeoutThresholdForNode(ctx context.Context, nodeID string) int {
 	// 查询节点的配置
 	var nodeConfig struct {
 		TimeoutThreshold int `gorm:"column:c_timeout_threshold"`
 	}
 
-	err := d.db.WithContext(context.Background()).
+	err := d.db.WithContext(ctx).
 		Table("t_cloud_nodes").
 		Select("c_timeout_threshold").
 		Where("c_node_id = ? AND c_invalid = 0", nodeID).
@@ -333,7 +349,7 @@ func (d *heartbeatRecordDAO) getTimeoutThresholdForNode(nodeID string) int {
 	}
 
 	// 如果没有配置或配置为0，使用默认配置
-	return 30 // 默认30秒超时
+	return cloudnodeconfig.Get().Heartbeat.DefaultTimeoutThreshold
 }
 
 // GetNodeStatus 根据节点ID获取节点状态（基于最后心跳时间判断）
@@ -353,6 +369,6 @@ func (d *heartbeatRecordDAO) GetNodeStatus(ctx context.Context, nodeID string) (
 
 	// 基于最后心跳时间计算状态
 	typesRecord := record.ToDTO()
-	status := d.calculateNodeStatus(typesRecord, time.Now())
+	status := d.calculateNodeStatus(ctx, typesRecord, time.Now())
 	return &status, nil
 }

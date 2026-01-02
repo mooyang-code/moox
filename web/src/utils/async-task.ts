@@ -91,6 +91,8 @@ export class AsyncTaskManager {
           task_type: taskType,
           request_params: requestParams
         }]
+      }, {
+        timeout: 20000 // 20秒超时
       });
       
       // 检查响应状态
@@ -133,6 +135,8 @@ export class AsyncTaskManager {
           task_type: task.taskType,
           request_params: task.requestParams
         }))
+      }, {
+        timeout: 20000 // 20秒超时
       });
       
       // 检查响应状态

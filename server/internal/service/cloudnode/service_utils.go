@@ -267,6 +267,7 @@ func (s *ServiceImpl) ConvertToCloudNodeDTO(node *model.CloudNode) *CloudNodeDTO
 		HeartbeatInterval:   node.HeartbeatInterval,
 		ProbeEnabled:        node.ProbeEnabled,
 		ProbeURL:            node.ProbeURL,
+		LastHeartbeat:       node.LastHeartbeat,
 		Invalid:             node.Invalid,
 		CreateTime:          node.CreateTime,
 		ModifyTime:          node.ModifyTime,
@@ -345,9 +346,9 @@ func (s *ServiceImpl) generateNodeID(ctx context.Context, region string) (string
 	// 根据是否已有Master节点决定节点类型
 	var nodeID string
 	if !hasMaster {
-		nodeID = fmt.Sprintf("%s-DataCollector-Master-%d", randomStr, timestamp)
+		nodeID = fmt.Sprintf("scf%s-DataCollector-Master-%d", randomStr, timestamp)
 	} else {
-		nodeID = fmt.Sprintf("%s-DataCollector-General-%d", randomStr, timestamp)
+		nodeID = fmt.Sprintf("scf%s-DataCollector-General-%d", randomStr, timestamp)
 	}
 	return nodeID, nil
 }

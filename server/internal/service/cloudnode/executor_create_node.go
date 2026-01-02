@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/mooyang-code/moox/server/internal/service/asynctask"
+	cloudnodeconfig "github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/constants"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	heartbeattypes "github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
@@ -190,12 +191,13 @@ func (e *CreateNodeExecutor) registerToHeartbeatService(ctx context.Context, nod
 
 	// 构造心跳注册请求
 	// 注意：ProbeURL 暂时为空，后续可以通过云函数的公网访问地址或API网关地址填充
+	cfg := cloudnodeconfig.Get()
 	req := &heartbeattypes.RegisterNodeRequest{
 		NodeID:            node.NodeID,
 		NodeType:          heartbeattypes.NodeTypeSCF, // 云函数类型
 		SourceService:     "cloudnode",                // 来源服务
-		HeartbeatInterval: 30,                         // 心跳间隔30秒
-		TimeoutThreshold:  90,                         // 超时阈值90秒
+		HeartbeatInterval: cfg.Heartbeat.DefaultHeartbeatInterval,
+		TimeoutThreshold:  cfg.Heartbeat.DefaultTimeoutThreshold,
 		ProbeEnabled:      true,                       // 启用探测
 		Metadata: map[string]interface{}{
 			"region":           node.Region,

@@ -38,8 +38,9 @@ func InitProberInstance(dbManager *database.Manager, cloudNodeCfg *config.Config
 		log.Info("[HeartbeatProber] Initializing global prober instance...")
 
 		// 创建 DAO
-		heartbeatDAO := dao.NewHeartbeatNodeDAO(dbManager.GetDB())
-		nodeDAO := dao.NewCloudNodeDAO(dbManager.GetDB())
+		db := dbManager.GetDB()
+		heartbeatDAO := dao.NewHeartbeatNodeDAO(db)
+		nodeDAO := dao.NewCloudNodeDAO(db)
 
 		// 创建探测器实例
 		globalProberInstance = NewProber(heartbeatDAO, nodeDAO, &cloudNodeCfg.Prober)
@@ -459,7 +460,6 @@ func (p *HeartbeatProber) updateHeartbeatNodeFromProbe(ctx context.Context, node
 	} else {
 		// 创建新记录
 		// 设置初始统计数据
-		nodeRecord.FirstHeartbeat = &now
 		nodeRecord.TotalHeartbeats = 1
 		nodeRecord.ConsecutiveTimeouts = 0
 		nodeRecord.TotalTimeouts = 0

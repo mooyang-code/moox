@@ -288,7 +288,6 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
 
     -- 任务状态
     c_status INTEGER NOT NULL DEFAULT 0, -- 状态（0=待执行，1=执行中，2=成功，3=部分失败，4=失败）
-    c_start_time DATETIME, -- 开始时间
     c_last_exec_time DATETIME, -- 最后执行时间
     c_result TEXT NOT NULL DEFAULT '{}', -- 执行结果（JSON格式）
 
@@ -337,7 +336,6 @@ CREATE TABLE IF NOT EXISTS t_heartbeat_nodes (
 
     -- 时间信息
     c_last_heartbeat DATETIME,                                 -- 最后心跳时间
-    c_first_heartbeat DATETIME,                                -- 首次心跳时间
     
     -- 统计数据
     c_consecutive_timeouts INTEGER DEFAULT 0,                  -- 连续超时次数
@@ -411,7 +409,6 @@ CREATE TABLE IF NOT EXISTS t_function_packages (
 -- ************ 创建云函数代码包相关索引 ************
 -- 代码包表索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_function_packages_package_id ON t_function_packages(c_package_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_function_packages_name_version_invalid ON t_function_packages(c_package_name, c_version, c_invalid);
 CREATE INDEX IF NOT EXISTS idx_function_packages_status ON t_function_packages(c_status);
 CREATE INDEX IF NOT EXISTS idx_function_packages_runtime ON t_function_packages(c_runtime);
 CREATE INDEX IF NOT EXISTS idx_function_packages_package_type ON t_function_packages(c_package_type);
@@ -493,7 +490,8 @@ INSERT OR IGNORE INTO t_collector_data_type_configs (c_data_type, c_type_name, c
 -- ************ 采集器参数字段配置初始数据 ************
 -- 标的数据字段配置
 INSERT OR IGNORE INTO t_collector_field_configs (c_data_type, c_field_key, c_field_name, c_field_type, c_is_required, c_default_value, c_field_options, c_data_source_options, c_sort_order) VALUES
-('symbol', 'inst_types', '产品类型', 'multi-select', 1, '["SPOT"]', '{"options": [{"value": "SPOT", "label": "现货"}, {"value": "SWAP", "label": "永续合约"}, {"value": "FUTURES", "label": "交割合约"}, {"value": "OPTION", "label": "期权"}]}', '{"options": [{"value": "okx", "label": "OKX"}, {"value": "binance", "label": "币安 (Binance)"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}]}', 1);
+('symbol', 'inst_types', '产品类型', 'multi-select', 1, '["SPOT"]', '{"options": [{"value": "SPOT", "label": "现货"}, {"value": "SWAP", "label": "永续合约"}, {"value": "FUTURES", "label": "交割合约"}, {"value": "OPTION", "label": "期权"}]}', '{"options": [{"value": "okx", "label": "OKX"}, {"value": "binance", "label": "币安 (Binance)"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}]}', 1),
+('symbol', 'intervals', '时间周期', 'multi-select', 1, '["1m","5m","1h"]', '{"options": ["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d","3d","1w","1M"]}', '{"options": [{"value": "okx", "label": "OKX"}, {"value": "binance", "label": "币安 (Binance)"}, {"value": "huobi", "label": "火币 (Huobi)"}, {"value": "bybit", "label": "Bybit"}, {"value": "bitget", "label": "Bitget"}, {"value": "kucoin", "label": "KuCoin"}, {"value": "gate", "label": "Gate.io"}, {"value": "mexc", "label": "MEXC"}]}', 2);
 
 -- K线数据字段配置
 INSERT OR IGNORE INTO t_collector_field_configs (c_data_type, c_field_key, c_field_name, c_field_type, c_is_required, c_default_value, c_field_options, c_data_source_options, c_sort_order) VALUES
@@ -576,4 +574,3 @@ CREATE INDEX IF NOT EXISTS idx_exchange_symbols_exchange_inst ON t_exchange_symb
 DROP TRIGGER IF EXISTS update_exchange_symbols_mtime;
 CREATE TRIGGER update_exchange_symbols_mtime AFTER UPDATE ON t_exchange_symbols BEGIN
     UPDATE t_exchange_symbols SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
-

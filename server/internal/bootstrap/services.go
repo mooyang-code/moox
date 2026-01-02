@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 
+	"github.com/mooyang-code/moox/server/internal/config"
 	"github.com/mooyang-code/moox/server/internal/service/asynctask"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode"
 	cloudnodedao "github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
@@ -50,7 +51,7 @@ func StartBackgroundServices(ctx context.Context, cfg *Config) (*Services, error
 	log.Info("正在启动后台服务...")
 
 	// 1. 初始化数据库
-	dbManager, err := initializeDatabase(cfg.App.Database.Path)
+	dbManager, err := initializeDatabase(&cfg.App.Database)
 	if err != nil {
 		return nil, err
 	}
@@ -77,11 +78,11 @@ func StartBackgroundServices(ctx context.Context, cfg *Config) (*Services, error
 }
 
 // initializeDatabase 初始化数据库
-func initializeDatabase(dbPath string) (*database.Manager, error) {
+func initializeDatabase(dbCfg *config.DatabaseConfig) (*database.Manager, error) {
 	log.Info("[Bootstrap] 正在初始化数据库...")
 
 	dbManager := database.NewManager()
-	if err := dbManager.Initialize(dbPath); err != nil {
+	if err := dbManager.Initialize(dbCfg); err != nil {
 		log.Errorf("[Bootstrap] 初始化数据库失败: %v", err)
 		return nil, err
 	}
@@ -104,12 +105,13 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 
 	// 创建Collector服务实例
 	// 创建所需的DAO
-	taskRulesDAO := collectordao.NewCollectorTaskRulesDAO(dbManager.GetDB())
-	instanceDAO := collectordao.NewCollectorTaskInstanceDAO(dbManager.GetDB())
-	dataTypeConfigDAO := collectordao.NewCollectorDataTypeConfigsDAO(dbManager.GetDB())
-	fieldConfigDAO := collectordao.NewCollectorFieldConfigsDAO(dbManager.GetDB())
-	nodeDAO := cloudnodedao.NewCloudNodeDAO(dbManager.GetDB())
-	heartbeatDAO := cloudnodedao.NewHeartbeatNodeDAO(dbManager.GetDB())
+	db := dbManager.GetDB()
+	taskRulesDAO := collectordao.NewCollectorTaskRulesDAO(db)
+	instanceDAO := collectordao.NewCollectorTaskInstanceDAO(db)
+	dataTypeConfigDAO := collectordao.NewCollectorDataTypeConfigsDAO(db)
+	fieldConfigDAO := collectordao.NewCollectorFieldConfigsDAO(db)
+	nodeDAO := cloudnodedao.NewCloudNodeDAO(db)
+	heartbeatDAO := cloudnodedao.NewHeartbeatNodeDAO(db)
 
 	// 创建任务规划器实例（不再需要全局单例，因为改为客户端轮询）
 	log.Info("[Bootstrap] 正在创建任务规划器...")
@@ -123,7 +125,7 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	// 创建服务实例
 	taskRuleService := collectmgr.NewTaskRulesServiceImpl(taskRulesDAO, nodeDAO)
 	taskInstanceService := collectmgr.NewTaskInstanceServiceImpl(instanceDAO, taskRulesDAO, nodeDAO, heartbeatDAO)
-	dataTypeConfigService := collectmgr.NewDataTypeConfigServiceImpl(dataTypeConfigDAO, fieldConfigDAO, dbManager.GetDB())
+	dataTypeConfigService := collectmgr.NewDataTypeConfigServiceImpl(dataTypeConfigDAO, fieldConfigDAO, db)
 
 	// 注入 CloudNodeService 依赖到 TaskInstanceService（解决循环依赖）
 	// 创建适配器以匹配接口签名

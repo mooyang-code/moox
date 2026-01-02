@@ -180,6 +180,7 @@ type CloudNodeDTO struct {
 	ProbeEnabled        bool              `json:"probe_enabled"`      // 是否启用探测
 	ProbeURL            string            `json:"probe_url"`          // 探测URL
 	Status              *types.NodeStatus `json:"status,omitempty"`   // 节点状态
+	LastHeartbeat       *time.Time        `json:"last_heartbeat,omitempty"`
 	Invalid             int               `json:"invalid"`
 	CreateTime          time.Time         `json:"create_time"`
 	ModifyTime          time.Time         `json:"modify_time"`
@@ -308,11 +309,15 @@ type UploadPackageResponse struct {
 
 // NodeListRequest 节点列表查询请求
 type NodeListRequest struct {
-	Page     int    `form:"page,default=1"`
-	PageSize int    `form:"page_size,default=20"`
-	NodeType string `form:"node_type"`
-	Status   string `form:"status"`
-	Keyword  string `form:"keyword"`
+	Page           int    `form:"page,default=1" json:"page"`
+	PageSize       int    `form:"page_size,default=20" json:"page_size"`
+	NodeID         string `form:"node_id" json:"node_id"`
+	CloudAccountID string `form:"cloud_account_id" json:"cloud_account_id"`
+	Namespace      string `form:"namespace" json:"namespace"`
+	Region         string `form:"region" json:"region"`
+	NodeType       string `form:"node_type" json:"node_type"`
+	Status         string `form:"status" json:"status"`
+	Keyword        string `form:"keyword" json:"keyword"`
 }
 
 // NodeListResponse 节点列表响应

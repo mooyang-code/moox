@@ -30,7 +30,6 @@ type HeartbeatNode struct {
 
 	// 时间信息
 	LastHeartbeat  *time.Time `json:"last_heartbeat" gorm:"column:c_last_heartbeat"`   // 最后心跳时间
-	FirstHeartbeat *time.Time `json:"first_heartbeat" gorm:"column:c_first_heartbeat"` // 首次心跳时间
 
 	// 统计数据
 	ConsecutiveTimeouts int `json:"consecutive_timeouts" gorm:"column:c_consecutive_timeouts"` // 连续超时次数

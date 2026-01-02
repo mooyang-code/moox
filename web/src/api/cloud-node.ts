@@ -26,11 +26,12 @@ export interface CloudNode {
 
 // 获取云节点列表请求参数
 export interface GetNodeListRequest {
+  node_id?: string;
   cloud_account_id?: string;
   namespace?: string;
   region?: string;
   node_type?: string;
-  status?: number;
+  status?: string;
   page?: number;
   page_size?: number;
 }

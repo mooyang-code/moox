@@ -8,7 +8,7 @@
               {{ account.account_name }} ({{ getProviderName(account.provider) }})
             </a-option>
           </a-select>
-          <a-input v-model="form.namespace" placeholder="请输入命名空间" allow-clear />
+          <a-input v-model="form.nodeId" placeholder="请输入节点ID" allow-clear />
           <a-select placeholder="地区" v-model="form.region" style="width: 180px" allow-clear>
             <a-option value="ap-bangkok">亚太东南（曼谷）</a-option>
             <a-option value="ap-beijing">华北地区（北京）</a-option>
@@ -34,10 +34,8 @@
             <a-option value="server">服务器</a-option>
           </a-select>
           <a-select placeholder="节点状态" v-model="form.status" style="width: 120px" allow-clear>
-            <a-option value="1">在线</a-option>
-            <a-option value="0">离线</a-option>
-            <a-option value="2">维护中</a-option>
-            <a-option value="3">过载</a-option>
+            <a-option value="online">在线</a-option>
+            <a-option value="offline">离线</a-option>
           </a-select>
           <a-button type="primary" @click="search">
             <template #icon><icon-search /></template>
@@ -150,6 +148,11 @@
                 {{ getRegionName(record.region) }}
               </template>
             </a-table-column>
+            <a-table-column title="最后心跳时间" data-index="last_heartbeat" :width="170">
+              <template #cell="{ record }">
+                {{ formatDateTime(record.last_heartbeat) }}
+              </template>
+            </a-table-column>
             <a-table-column title="IP地址" data-index="ip_address" :width="120"></a-table-column>
             <a-table-column title="支持的采集器" data-index="supported_collectors" :width="160">
               <template #cell="{ record }">
@@ -226,6 +229,7 @@ interface CloudFunction {
   metadata: string;
   status: number;
   enabled: number;
+  last_heartbeat?: string;
   created_at: string;
   updated_at: string;
 }
@@ -248,7 +252,7 @@ const taskPolling = ref(false);
 const currentTaskStatus = ref<TaskStatusResponse | null>(null);
 const form = reactive({
   cloudAccountId: '',
-  namespace: '',
+  nodeId: '',
   region: '',
   nodeType: '',
   status: ''
@@ -467,18 +471,31 @@ const executeBatchDelete = async () => {
 };
 
 // 加载数据
-const loadData = async () => {
+const loadData = async (showEmptyTip = false) => {
   loading.value = true;
   try {
     const response = await api.post('/gateway/cloudnode/GetNodeList', {
+      node_id: form.nodeId,
       cloud_account_id: form.cloudAccountId,
-      namespace: form.namespace,
       region: form.region,
       node_type: form.nodeType,
       status: form.status
     });
     
-    if (response.data?.ret_info?.code === 0) {
+    if (response.data?.code === 200) {
+      // 新格式：处理数组格式的响应
+      let data = response.data.data;
+      if (Array.isArray(data)) {
+        allFunctionList.value = data;
+      } else {
+        allFunctionList.value = [data].filter(Boolean);
+      }
+      pagination.value.total = response.data.total || allFunctionList.value.length;
+      updateCurrentPageData();
+      if (showEmptyTip && allFunctionList.value.length === 0) {
+        Message.info('查询结果为空');
+      }
+    } else if (response.data?.ret_info?.code === 0) {
       // 处理数组格式的响应：response.data.ret_info.data 可能是数组
       let data = response.data.ret_info.data;
       if (Array.isArray(data)) {
@@ -488,6 +505,9 @@ const loadData = async () => {
       }
       pagination.value.total = allFunctionList.value.length;
       updateCurrentPageData();
+      if (showEmptyTip && allFunctionList.value.length === 0) {
+        Message.info('查询结果为空');
+      }
     }
   } catch (error) {
     console.error('加载数据失败:', error);
@@ -550,9 +570,7 @@ const getRegionName = (region: string) => {
 const getStatusColor = (status: number) => {
   const colorMap: Record<number, string> = {
     0: 'red',
-    1: 'green',
-    2: 'orange',
-    3: 'red'
+    1: 'green'
   };
   return colorMap[status] || 'gray';
 };
@@ -560,11 +578,25 @@ const getStatusColor = (status: number) => {
 const getStatusText = (status: number) => {
   const textMap: Record<number, string> = {
     0: '离线',
-    1: '在线',
-    2: '维护中',
-    3: '过载'
+    1: '在线'
   };
   return textMap[status] || '未知';
+};
+
+const formatDateTime = (dateTime?: string) => {
+  if (!dateTime) return '-';
+  try {
+    return new Date(dateTime).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  } catch (error) {
+    return dateTime;
+  }
 };
 
 const parseJSON = (str: string) => {
@@ -596,12 +628,12 @@ const onPageSizeChange = (pageSize: number) => {
 // 查询和重置
 const search = () => {
   pagination.value.current = 1;
-  loadData();
+  loadData(true);
 };
 
 const reset = () => {
   form.cloudAccountId = '';
-  form.namespace = '';
+  form.nodeId = '';
   form.region = '';
   form.nodeType = '';
   form.status = '';

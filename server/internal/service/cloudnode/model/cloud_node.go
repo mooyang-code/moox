@@ -66,6 +66,8 @@ type CloudNode struct {
 	CreateTime time.Time `gorm:"column:c_ctime;type:datetime;default:CURRENT_TIMESTAMP" json:"create_time"`
 	// ModifyTime 修改时间
 	ModifyTime time.Time `gorm:"column:c_mtime;type:datetime;default:CURRENT_TIMESTAMP" json:"modify_time"`
+	// LastHeartbeat 最后心跳时间（来自心跳表联表查询）
+	LastHeartbeat *time.Time `gorm:"column:c_last_heartbeat;->" json:"last_heartbeat,omitempty"`
 }
 
 // TableName 指定表名
