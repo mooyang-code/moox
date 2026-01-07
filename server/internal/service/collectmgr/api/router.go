@@ -25,6 +25,7 @@ func RegisterCollectorRoutes(router *gin.RouterGroup, taskRuleService collectmgr
 	taskInstanceGroup := router.Group("/task-instance")
 	{
 		taskInstanceGroup.GET("/list", taskInstanceHandler.GetTaskInstanceList)
+		taskInstanceGroup.GET("/cache/list", taskInstanceHandler.GetTaskInstanceListCache)
 		taskInstanceGroup.GET("/:id", taskInstanceHandler.GetTaskInstanceDetail)
 		taskInstanceGroup.POST("/create", taskInstanceHandler.CreateTaskInstance)
 		taskInstanceGroup.PUT("/:id", taskInstanceHandler.UpdateTaskInstance)

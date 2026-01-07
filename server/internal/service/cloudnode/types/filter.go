@@ -41,28 +41,3 @@ func (f *BaseFilter) SetDefaults() {
 		f.PageSize = 100
 	}
 }
-
-// SetDefaults 设置过滤器默认值
-func (f *NodeFilter) SetDefaults() {
-	baseFilter := BaseFilter{Page: f.Page, PageSize: f.PageSize}
-	baseFilter.SetDefaults()
-	f.Page = baseFilter.Page
-	f.PageSize = baseFilter.PageSize
-}
-
-// SetDefaults 设置过滤器默认值
-func (f *ProbeLogFilter) SetDefaults() {
-	baseFilter := BaseFilter{Page: f.Page, PageSize: f.PageSize}
-	baseFilter.SetDefaults()
-	f.Page = baseFilter.Page
-	f.PageSize = baseFilter.PageSize
-}
-
-// BaseFilter embedding in existing filters
-type NodeFilterBase struct {
-	BaseFilter
-}
-
-type ProbeLogFilterBase struct {
-	BaseFilter
-}

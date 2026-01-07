@@ -105,6 +105,9 @@ type TaskInstanceService interface {
 	// ListTaskInstancesWithFilter 带筛选条件的分页查询任务实例
 	ListTaskInstancesWithFilter(ctx context.Context, filter *TaskInstanceFilterDTO) ([]*TaskInstanceDTO, int64, error)
 
+	// GetTaskInstanceListCache 带缓存的任务实例列表查询（仅支持精确条件、有效数据）
+	GetTaskInstanceListCache(ctx context.Context, filter *TaskInstanceFilterDTO) ([]*TaskInstanceDTO, int64, error)
+
 	// UpdateTaskInstance 更新任务实例
 	UpdateTaskInstance(ctx context.Context, instanceID string, instance *TaskInstanceDTO) error
 
@@ -123,6 +126,9 @@ type TaskInstanceService interface {
 
 	// InvalidateTaskInstance 作废任务实例
 	InvalidateTaskInstance(ctx context.Context, taskID string) error
+
+	// InvalidateTaskInstanceCache 失效任务实例缓存
+	InvalidateTaskInstanceCache(ctx context.Context) error
 }
 
 // TaskInstanceDTO 任务实例数据传输对象

@@ -2,11 +2,12 @@ package cloudnode
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
 
@@ -17,6 +18,7 @@ import (
 const (
 	supportedCollectorsCacheTTLSeconds int64 = 50
 	packageVersionCacheTTLSeconds      int64 = 30
+	nodeTasksCacheTTLSeconds           int64 = 60
 )
 
 // ========== 接收心跳上报请求 ==========
@@ -36,24 +38,45 @@ func (s *ServiceImpl) ReportHeartbeat(ctx context.Context, req *types.ReportHear
 // handleHeartbeat 处理心跳上报
 func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHeartbeatRequest) (*types.ReportHeartbeatResponse, error) {
 	log.DebugContextf(ctx, "handleHeartbeat Enter")
-	// 将心跳写入队列（合并并批量写入）
-	if s.heartbeatQueue == nil {
-		return nil, fmt.Errorf("heartbeat queue not initialized")
+	// 直接写入内存存储（无锁，高性能）
+	if s.heartbeatStore == nil {
+		return nil, fmt.Errorf("heartbeat store not initialized")
 	}
-	if err := s.heartbeatQueue.Enqueue(ctx, req); err != nil {
-		return nil, fmt.Errorf("enqueue heartbeat update failed: %w", err)
-	}
+	s.heartbeatStore.UpdateHeartbeat(req)
 
 	if err := s.updateSupportedCollectors(ctx, req); err != nil {
 		return nil, err
 	}
 
+	// 获取包版本信息
 	packageVersion := s.loadPackageVersionForHeartbeat(ctx, req.NodeID)
 
-	// 返回包含版本信息的响应（用于云节点自检自己的版本是否一致，若不一致自己会挂掉，因为云节点可能同时存在多个版本实例）
+	// 获取节点任务列表（带缓存）
+	tasks, err := s.getNodeTasksCached(ctx, req.NodeID)
+	if err != nil {
+		log.ErrorContextf(ctx, "[Heartbeat] 获取节点任务失败: nodeID=%s, error=%v", req.NodeID, err)
+		// 任务查询失败不影响心跳，返回空任务列表
+		tasks = nil
+	}
+
+	// 计算服务端任务MD5
+	serverTasksMD5 := s.calculateTasksMD5(tasks)
+
+	// 构建响应
 	response := &types.ReportHeartbeatResponse{
 		PackageVersion: packageVersion,
+		TasksMD5:       serverTasksMD5,
 	}
+
+	// MD5比较：如果客户端上报的MD5与服务端计算的MD5不同，则返回任务列表
+	if req.TasksMD5 != serverTasksMD5 {
+		log.InfoContextf(ctx, "[Heartbeat] 任务MD5不匹配，返回任务列表: nodeID=%s, clientMD5=%s, serverMD5=%s, taskCount=%d",
+			req.NodeID, req.TasksMD5, serverTasksMD5, len(tasks))
+		response.TaskInstances = tasks
+	} else {
+		log.DebugContextf(ctx, "[Heartbeat] 任务MD5匹配，跳过任务下发: nodeID=%s, md5=%s", req.NodeID, serverTasksMD5)
+	}
+
 	return response, nil
 }
 
@@ -96,27 +119,6 @@ func (s *ServiceImpl) loadPackageVersionForHeartbeat(ctx context.Context, nodeID
 		return ""
 	}
 	return packageVersion
-}
-
-// createNewRecord 创建新的心跳记录
-func (s *ServiceImpl) createNewRecord(req *types.ReportHeartbeatRequest) *types.HeartbeatNode {
-	now := time.Now()
-	if req.Timestamp != nil {
-		now = *req.Timestamp
-	}
-
-	record := &types.HeartbeatNode{
-		NodeID:              req.NodeID,
-		NodeType:            req.NodeType,
-		SourceService:       req.SourceService,
-		LastHeartbeat:       &now,
-		ConsecutiveTimeouts: 0,
-		TotalTimeouts:       0,
-		TotalHeartbeats:     1,
-		Metadata:            req.Metadata,
-		LastProbeResult:     "",
-	}
-	return record
 }
 
 func (s *ServiceImpl) loadSupportedCollectors(ctx context.Context, nodeID string) ([]string, error) {
@@ -217,79 +219,8 @@ func packageVersionCacheKey(nodeID string) string {
 	return "heartbeat:package_version:" + nodeID
 }
 
-// ========== 节点管理 ==========
-
-// RegisterHeartbeatNode 注册心跳节点
-func (s *ServiceImpl) RegisterHeartbeatNode(ctx context.Context, req *types.RegisterNodeRequest) (*types.HeartbeatNode, error) {
-	if req == nil {
-		return nil, fmt.Errorf("request is nil")
-	}
-
-	if req.NodeID == "" || req.NodeType == "" {
-		return nil, fmt.Errorf("node_id and node_type are required")
-	}
-
-	// 检查节点是否已存在
-	existing, err := s.heartbeatDAO.GetNodeByID(ctx, req.NodeID)
-	if err != nil {
-		return nil, fmt.Errorf("check existing node failed: %w", err)
-	}
-
-	if existing != nil {
-		return nil, fmt.Errorf("node %s:%s already exists", req.NodeID, req.NodeType)
-	}
-
-	// 创建新节点记录（移除已删除的字段）
-	record := &types.HeartbeatNode{
-		NodeID:        req.NodeID,
-		NodeType:      req.NodeType,
-		SourceService: req.SourceService,
-		Metadata:      req.Metadata,
-	}
-
-	// 保存到数据库
-	if err := s.heartbeatDAO.Create(ctx, record); err != nil {
-		return nil, fmt.Errorf("create node record failed: %w", err)
-	}
-	return record, nil
-}
-
-// UnregisterHeartbeatNode 注销心跳节点
-func (s *ServiceImpl) UnregisterHeartbeatNode(ctx context.Context, nodeID, nodeType string) error {
-	if nodeID == "" || nodeType == "" {
-		return fmt.Errorf("node_id and node_type are required")
-	}
-
-	// 查找节点记录
-	record, err := s.heartbeatDAO.GetNodeByID(ctx, nodeID)
-	if err != nil {
-		return fmt.Errorf("get node record failed: %w", err)
-	}
-
-	if record == nil {
-		return fmt.Errorf("node %s:%s not found", nodeID, nodeType)
-	}
-
-	// 软删除节点记录
-	if err := s.heartbeatDAO.Delete(ctx, record.ID); err != nil {
-		return fmt.Errorf("delete node record failed: %w", err)
-	}
-	return nil
-}
-
-// GetHeartbeatNode 获取节点心跳信息
-func (s *ServiceImpl) GetHeartbeatNode(ctx context.Context, nodeID, nodeType string) (*types.HeartbeatNode, error) {
-	if nodeID == "" || nodeType == "" {
-		return nil, fmt.Errorf("node_id and node_type are required")
-	}
-
-	// 直接从数据库获取
-	record, err := s.heartbeatDAO.GetNodeByID(ctx, nodeID)
-	if err != nil {
-		return nil, fmt.Errorf("get node record failed: %w", err)
-	}
-
-	return record, nil
+func nodeTasksCacheKey(nodeID string) string {
+	return "heartbeat:node_tasks:" + nodeID
 }
 
 // GetNodeStatus 获取节点状态
@@ -298,66 +229,15 @@ func (s *ServiceImpl) GetNodeStatus(ctx context.Context, nodeID string) (*types.
 		return nil, fmt.Errorf("node_id is required")
 	}
 
-	return s.heartbeatDAO.GetNodeStatus(ctx, nodeID)
-}
-
-// ListHeartbeatNodes 列出心跳节点
-func (s *ServiceImpl) ListHeartbeatNodes(ctx context.Context, filter *types.NodeFilter) ([]*types.HeartbeatNode, int64, error) {
-	return s.heartbeatDAO.List(ctx, filter)
-}
-
-// UpdateHeartbeatNodeConfig 更新心跳节点配置
-func (s *ServiceImpl) UpdateHeartbeatNodeConfig(ctx context.Context, req *types.UpdateNodeConfigRequest) error {
-	if req == nil {
-		return fmt.Errorf("request is nil")
+	// 获取节点的超时阈值配置
+	timeoutThreshold := 0
+	node, err := s.nodeDAO.GetCloudNode(ctx, nodeID)
+	if err == nil && node != nil {
+		timeoutThreshold = node.TimeoutThreshold
 	}
 
-	if req.NodeID == "" || req.NodeType == "" {
-		return fmt.Errorf("node_id and node_type are required")
-	}
-
-	// 获取节点记录
-	record, err := s.heartbeatDAO.GetNodeByID(ctx, req.NodeID)
-	if err != nil {
-		return fmt.Errorf("get node record failed: %w", err)
-	}
-
-	if record == nil {
-		return fmt.Errorf("node %s:%s not found", req.NodeID, req.NodeType)
-	}
-
-	// 更新配置（移除已删除的字段）
-	// Note: HeartbeatInterval, TimeoutThreshold, ProbeEnabled, ProbeURL 字段已被移除
-
-	// 保存更新
-	if err := s.heartbeatDAO.Update(ctx, record); err != nil {
-		return fmt.Errorf("update node config failed: %w", err)
-	}
-	return nil
-}
-
-// ========== 探测管理 ==========
-
-// ProbeHeartbeatNode 手动探测心跳节点
-func (s *ServiceImpl) ProbeHeartbeatNode(ctx context.Context, nodeID, nodeType, action string) (*types.ProbeResult, error) {
-	if nodeID == "" || nodeType == "" {
-		return nil, fmt.Errorf("node_id and node_type are required")
-	}
-	if action == "" {
-		action = "health" // 默认健康检查动作
-	}
-
-	// 获取节点记录
-	record, err := s.GetHeartbeatNode(ctx, nodeID, nodeType)
-	if err != nil {
-		return nil, fmt.Errorf("get node record failed: %w", err)
-	}
-
-	if record == nil {
-		return nil, fmt.Errorf("node %s:%s not found", nodeID, nodeType)
-	}
-
-	return globalProberInstance.ProbeHeartbeatNode(ctx, record, action)
+	status := s.heartbeatStore.GetNodeStatus(nodeID, timeoutThreshold)
+	return &status, nil
 }
 
 // ========== 版本信息查询 ==========
@@ -385,4 +265,86 @@ func (s *ServiceImpl) getLatestPackageVersion(ctx context.Context, nodeID string
 		return "", nil
 	}
 	return pkg.Version, nil
+}
+
+// ========== 任务实例查询和MD5计算 ==========
+
+// getNodeTasksCached 获取节点任务列表（带缓存）
+func (s *ServiceImpl) getNodeTasksCached(ctx context.Context, nodeID string) ([]*types.TaskInstanceInfo, error) {
+	cacheKey := nodeTasksCacheKey(nodeID)
+	cached, err := localcache.GetWithLoad(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, error) {
+		return s.loadNodeTasks(ctx, nodeID)
+	}, nodeTasksCacheTTLSeconds)
+	if err != nil {
+		return nil, err
+	}
+
+	if cached == nil {
+		return nil, nil
+	}
+
+	tasks, ok := cached.([]*types.TaskInstanceInfo)
+	if ok {
+		return tasks, nil
+	}
+
+	// 缓存类型不匹配，清除缓存并重新加载
+	localcache.Del(cacheKey)
+	tasks, err = s.loadNodeTasks(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	localcache.Set(cacheKey, tasks, nodeTasksCacheTTLSeconds)
+	return tasks, nil
+}
+
+// loadNodeTasks 从DB加载节点任务
+func (s *ServiceImpl) loadNodeTasks(ctx context.Context, nodeID string) ([]*types.TaskInstanceInfo, error) {
+	// 获取节点的所有任务实例（不限制状态）
+	instances, err := s.taskInstanceDAO.GetTaskInstancesByNode(ctx, nodeID, nil)
+	if err != nil {
+		log.ErrorContextf(ctx, "[Heartbeat] 加载节点任务失败: nodeID=%s, error=%v", nodeID, err)
+		return nil, fmt.Errorf("load node tasks failed: %w", err)
+	}
+
+	// 转换为 TaskInstanceInfo，过滤掉 Invalid 的任务
+	var tasks []*types.TaskInstanceInfo
+	for _, instance := range instances {
+		// 跳过已标记为Invalid的任务
+		if instance.Invalid != 0 {
+			continue
+		}
+
+		tasks = append(tasks, &types.TaskInstanceInfo{
+			ID:         instance.ID,
+			TaskID:     instance.TaskID,
+			RuleID:     instance.RuleID,
+			NodeID:     instance.NodeID,
+			TaskParams: instance.TaskParams,
+			Invalid:    instance.Invalid,
+		})
+	}
+
+	return tasks, nil
+}
+
+// calculateTasksMD5 计算任务MD5值
+func (s *ServiceImpl) calculateTasksMD5(tasks []*types.TaskInstanceInfo) string {
+	if len(tasks) == 0 {
+		return "empty"
+	}
+
+	// 提取所有TaskID并排序
+	taskIDs := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		taskIDs = append(taskIDs, task.TaskID)
+	}
+	sort.Strings(taskIDs)
+
+	// 拼接成字符串
+	combined := strings.Join(taskIDs, ",")
+
+	// 计算MD5
+	hash := md5.Sum([]byte(combined))
+	return hex.EncodeToString(hash[:])
 }

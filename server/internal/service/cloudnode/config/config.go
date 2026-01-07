@@ -15,7 +15,6 @@ var (
 
 // Config 云节点模块相关的配置
 type Config struct {
-	Prober        ProberConfig        `yaml:"prober"`
 	Heartbeat     HeartbeatConfig     `yaml:"heartbeat"`
 	CloudFunction CloudFunctionConfig `yaml:"cloudfunction"`
 	CloudRegions  CloudRegionsConfig  `yaml:"cloud_regions"`
@@ -23,9 +22,12 @@ type Config struct {
 
 // RegionInfo 地区信息
 type RegionInfo struct {
-	Code string `yaml:"code" json:"code"`
-	Name string `yaml:"name" json:"name"`
-	Tag  string `yaml:"tag" json:"tag"` // 标签（国内/海外）
+	Code                     string `yaml:"code" json:"code"`
+	Name                     string `yaml:"name" json:"name"`
+	Tag                      string `yaml:"tag" json:"tag"`             // 标签（国内/海外）
+	MaxNodes                 int    `yaml:"max_nodes" json:"max_nodes"` // 地区最大节点数
+	MaxNamespacesPerRegion   int    `yaml:"max_namespaces_per_region" json:"max_namespaces_per_region"`
+	MaxFunctionsPerNamespace int    `yaml:"max_functions_per_namespace" json:"max_functions_per_namespace"`
 }
 
 // CloudRegionsConfig 云厂商地区配置
@@ -34,11 +36,6 @@ type CloudRegionsConfig struct {
 	// 未来可扩展其他云厂商
 	// Aliyun []RegionInfo `yaml:"aliyun"`
 	// AWS    []RegionInfo `yaml:"aws"`
-}
-
-// ProberConfig 探测器配置
-type ProberConfig struct {
-	MaxConcurrent int `yaml:"max_concurrent"` // 最大并发探测数
 }
 
 // HeartbeatConfig 心跳配置
@@ -69,9 +66,6 @@ func LoadConfig() *Config {
 
 	// 默认配置
 	cfg := &Config{
-		Prober: ProberConfig{
-			MaxConcurrent: 10,
-		},
 		Heartbeat: HeartbeatConfig{
 			DefaultTimeoutThreshold:  50, // 默认50秒超时
 			DefaultHeartbeatInterval: 10, // 默认10秒心跳间隔
@@ -111,10 +105,6 @@ func LoadConfig() *Config {
 
 // Validate 验证配置
 func (c *Config) Validate() error {
-	if c.Prober.MaxConcurrent <= 0 {
-		c.Prober.MaxConcurrent = 10 // 默认值
-	}
-
 	if c.Heartbeat.DefaultTimeoutThreshold <= 0 {
 		c.Heartbeat.DefaultTimeoutThreshold = 50 // 默认50秒
 	}

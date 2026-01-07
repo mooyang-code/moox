@@ -46,12 +46,6 @@ server:
       network: "*/15 * * * * *?scheduler=dnsproxySchedule&startAtOnce=1&params="
       protocol: timer
       timeout: 10000
-      ######## 健康检测定时任务 ########
-    - name: trpc.healthProbe.timer
-      port: 8002
-      network: "*/10 * * * * *?scheduler=healthProbeSchedule&startAtOnce=1&params="
-      protocol: timer
-      timeout: 10000  #请求最长处理时间 单位 毫秒
     - name: trpc.keepalive.timer
       port: 8003
       network: "*/90 * * * * *?scheduler=keepaliveSchedule&startAtOnce=1&params="

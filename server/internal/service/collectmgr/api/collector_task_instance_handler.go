@@ -83,6 +83,56 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 	PaginatedListResponse(c, "查询成功", instances, total)
 }
 
+// GetTaskInstanceListCache 获取任务实例列表（带缓存，仅支持精确条件、有效数据）
+func (h *CollectorTaskInstanceHandler) GetTaskInstanceListCache(c *gin.Context) {
+	if c.Query("task_id") != "" || c.Query("rule_id") != "" || c.Query("node_id") != "" || c.Query("symbol") != "" {
+		HandleAppError(c, apperrors.InvalidParam("filter", "cache mode does not support fuzzy query"))
+		return
+	}
+	if invalidStr := c.Query("invalid"); invalidStr != "" && invalidStr != "0" {
+		HandleAppError(c, apperrors.InvalidParam("filter", "cache mode only supports valid data"))
+		return
+	}
+
+	page := 1
+	size := 10
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+	if sizeStr := c.Query("size"); sizeStr != "" {
+		if s, err := strconv.Atoi(sizeStr); err == nil && s > 0 {
+			size = s
+		}
+	}
+
+	var status *int
+	if statusStr := c.Query("status"); statusStr != "" {
+		s, err := strconv.Atoi(statusStr)
+		if err != nil {
+			HandleAppError(c, apperrors.InvalidParam("status", "status must be a number"))
+			return
+		}
+		status = &s
+	}
+
+	filter := &collectmgr.TaskInstanceFilterDTO{
+		Status:   status,
+		Invalid:  nil,
+		Page:     page,
+		PageSize: size,
+	}
+
+	instances, total, err := h.service.GetTaskInstanceListCache(c.Request.Context(), filter)
+	if err != nil {
+		HandleAppError(c, apperrors.Internal("查询失败", err))
+		return
+	}
+
+	PaginatedListResponse(c, "查询成功", instances, total)
+}
+
 // GetTaskInstanceDetail 获取任务实例详情
 func (h *CollectorTaskInstanceHandler) GetTaskInstanceDetail(c *gin.Context) {
 	instanceID := c.Param("id")

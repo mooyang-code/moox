@@ -17,17 +17,14 @@ import (
 // DeployNodeExecutor 单节点部署执行器
 type DeployNodeExecutor struct {
 	cloudNodeService Service
-	heartbeatService HeartbeatService
 }
 
 // NewDeployNodeExecutor 创建单节点部署执行器
 func NewDeployNodeExecutor(
 	cloudNodeService Service,
-	heartbeatService HeartbeatService,
 ) *DeployNodeExecutor {
 	return &DeployNodeExecutor{
 		cloudNodeService: cloudNodeService,
-		heartbeatService: heartbeatService,
 	}
 }
 

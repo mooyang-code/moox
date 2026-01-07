@@ -93,7 +93,7 @@ func (h *CloudNodeGatewayHandler) parseMethodToRoute(method string, body []byte)
 	// Cloud Node methods
 	case "GetCloudNodeList", "GetNodeList", "ListNodes":
 		route.Path = "/api/v1/cloud_node/list"
-		route.HTTPMethod = "POST"  // 改为POST以支持JSON body参数
+		route.HTTPMethod = "POST" // 改为POST以支持JSON body参数
 		route.Body = body
 	case "GetCloudNodeDetail", "GetNodeDetail":
 		route.Path = "/api/v1/cloud_node/detail"
@@ -119,75 +119,6 @@ func (h *CloudNodeGatewayHandler) parseMethodToRoute(method string, body []byte)
 		route.HTTPMethod = "PUT"
 		route.Body = body
 
-	// Heartbeat Node management methods
-	case "HeartbeatRegisterNode":
-		route.Path = "/api/v1/heartbeat/nodes/register"
-		route.HTTPMethod = "POST"
-		route.Body = body
-	case "HeartbeatListNodes":
-		route.Path = "/api/v1/heartbeat/nodes"
-		route.HTTPMethod = "GET"
-	case "HeartbeatGetNode":
-		route.Path = "/api/v1/heartbeat/nodes"
-		route.HTTPMethod = "GET"
-		// Need to extract node_id and node_type from body and add to path
-		if len(body) > 0 {
-			var params map[string]interface{}
-			if err := json.Unmarshal(body, &params); err == nil {
-				if nodeID, ok := params["node_id"].(string); ok && nodeID != "" {
-					if nodeType, ok := params["node_type"].(string); ok && nodeType != "" {
-						route.Path = fmt.Sprintf("/api/v1/heartbeat/nodes/%s/%s", nodeID, nodeType)
-					}
-				}
-			}
-		}
-	case "HeartbeatUpdateNodeConfig":
-		route.Path = "/api/v1/heartbeat/nodes"
-		route.HTTPMethod = "PUT"
-		// Need to extract node_id and node_type from body and add to path
-		if len(body) > 0 {
-			var params map[string]interface{}
-			if err := json.Unmarshal(body, &params); err == nil {
-				if nodeID, ok := params["node_id"].(string); ok && nodeID != "" {
-					if nodeType, ok := params["node_type"].(string); ok && nodeType != "" {
-						route.Path = fmt.Sprintf("/api/v1/heartbeat/nodes/%s/%s/config", nodeID, nodeType)
-					}
-				}
-			}
-		}
-		route.Body = body
-	case "HeartbeatUnregisterNode":
-		route.Path = "/api/v1/heartbeat/nodes"
-		route.HTTPMethod = "DELETE"
-		// Need to extract node_id and node_type from body and add to path
-		if len(body) > 0 {
-			var params map[string]interface{}
-			if err := json.Unmarshal(body, &params); err == nil {
-				if nodeID, ok := params["node_id"].(string); ok && nodeID != "" {
-					if nodeType, ok := params["node_type"].(string); ok && nodeType != "" {
-						route.Path = fmt.Sprintf("/api/v1/heartbeat/nodes/%s/%s", nodeID, nodeType)
-					}
-				}
-			}
-		}
-		route.Body = body
-
-	// Probe methods
-	case "ProbeNode":
-		route.Path = "/api/v1/heartbeat/probe"
-		route.HTTPMethod = "POST"
-		// Need to extract node_id and node_type from body and add to path
-		if len(body) > 0 {
-			var params map[string]interface{}
-			if err := json.Unmarshal(body, &params); err == nil {
-				if nodeID, ok := params["node_id"].(string); ok && nodeID != "" {
-					if nodeType, ok := params["node_type"].(string); ok && nodeType != "" {
-						route.Path = fmt.Sprintf("/api/v1/heartbeat/probe/%s/%s", nodeID, nodeType)
-					}
-				}
-			}
-		}
-		route.Body = body
 	case "BatchCreateCloudNodes":
 		route.Path = "/api/v1/cloud_node/batch/create"
 		route.HTTPMethod = "POST"

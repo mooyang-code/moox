@@ -1,13 +1,9 @@
 # CloudNode 模块统一配置文件
 # 包含心跳、云函数等所有云节点相关配置
 
-# 探测器配置（主动健康探测）
-prober:
-  max_concurrent: 50      # 最大并发探测数
-
 # 心跳配置（心跳超时判定相关）
 heartbeat:
-  default_timeout_threshold: 60   # 默认超时阈值（秒），超过此时间未收到心跳则判定为超时
+  default_timeout_threshold: 70   # 默认超时阈值（秒），超过此时间未收到心跳则判定为超时
   default_heartbeat_interval: 10  # 默认心跳间隔（秒），节点上报心跳的期望间隔
 
 # 云函数配置
@@ -30,55 +26,109 @@ cloud_regions:
     - code: "ap-hongkong"
       name: "港澳台地区（中国香港）"
       tag: "海外"
+      max_nodes: 200 # 官方支持最大250
+      max_namespaces_per_region: 5 # 官方支持最大5
+      max_functions_per_namespace: 40 # 官方支持最大50
     - code: "ap-bangkok"
       name: "亚太东南（曼谷）"
       tag: "海外"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "ap-jakarta"
       name: "亚太东南（雅加达）"
       tag: "海外"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "ap-seoul"
       name: "亚太东北（首尔）"
       tag: "海外"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "ap-singapore"
       name: "亚太东南（新加坡）"
       tag: "海外"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "ap-tokyo"
       name: "亚太东北（东京）"
       tag: "海外"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "eu-frankfurt"
       name: "欧洲地区（法兰克福）"
       tag: "海外"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "na-ashburn"
       name: "美国东部（弗吉尼亚）"
       tag: "海外"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "na-siliconvalley"
       name: "美国西部（硅谷）"
       tag: "海外"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "sa-saopaulo"
       name: "南美地区（圣保罗）"
       tag: "海外"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     # 国内地区
     - code: "ap-beijing"
       name: "华北地区（北京）"
       tag: "国内"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "ap-chengdu"
       name: "西南地区（成都）"
       tag: "国内"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "ap-chongqing"
       name: "西南地区（重庆）"
       tag: "国内"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "ap-guangzhou"
       name: "华南地区（广州）"
       tag: "国内"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "ap-nanjing"
       name: "华东地区（南京）"
       tag: "国内"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "ap-shanghai"
       name: "华东地区（上海）"
       tag: "国内"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "ap-shanghai-fsi"
       name: "华东地区（上海金融）"
       tag: "国内"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40
     - code: "ap-shenzhen-fsi"
       name: "华南地区（深圳金融）"
       tag: "国内"
+      max_nodes: 200
+      max_namespaces_per_region: 5
+      max_functions_per_namespace: 40

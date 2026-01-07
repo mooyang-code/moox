@@ -28,8 +28,7 @@ CloudNode 模块是 MooX Server 的核心业务模块，负责管理多云厂商
 cloudnode/
 ├── manager/                    # 服务管理层
 │   ├── cloud_account.go        # 云账户服务
-│   ├── cloud_node.go           # 云节点服务（SCF）
-│   └── heartbeat.go            # 心跳服务
+│   └── cloud_node.go           # 云节点服务（SCF）
 ├── executors/                  # 异步任务执行器
 │   ├── create_node.go          # 创建节点执行器
 │   ├── deploy_node.go          # 部署节点执行器
@@ -44,12 +43,10 @@ cloudnode/
 │       └── types.go            # 腾讯云类型定义
 ├── dao/                        # 数据访问层
 │   ├── cloud_account.go        # 云账户 DAO
-│   ├── cloud_node.go           # 云节点 DAO
-│   └── heartbeat.go            # 心跳 DAO
+│   └── cloud_node.go           # 云节点 DAO
 ├── model/                      # 数据模型
 │   ├── cloud_account.go        # 云账户实体（加密钩子）
-│   ├── cloud_node.go           # 云节点实体
-│   └── heartbeat.go            # 心跳实体
+│   └── cloud_node.go           # 云节点实体
 ├── gateway/                    # TRPC Gateway
 │   ├── handler.go              # Gateway 处理器
 │   └── register.go             # Gateway 注册
@@ -569,7 +566,6 @@ cloudnode
 ```
 cloudnode (被以下模块依赖)
 ├── collector               # 采集器需要查询节点
-├── heartbeat               # 心跳监控需要更新节点状态
 └── gateway                 # Gateway 需要分发请求到节点
 ```
 

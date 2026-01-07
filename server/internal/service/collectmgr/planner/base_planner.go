@@ -35,27 +35,43 @@ type TaskParams struct {
 	Keywords   []string `json:"keywords,omitempty"`    // 关键词
 }
 
+// OnlineNodeIDsProvider 在线节点ID提供者接口
+type OnlineNodeIDsProvider interface {
+	GetOnlineNodeIDs() []string
+}
+
 // BasePlanner 基础规划器
 // 提供通用能力，被具体规划器组合使用
 type BasePlanner struct {
-	nodeDAO        cloudnodedao.CloudNodeDAO
-	symbolProvider SymbolProvider
+	nodeDAO              cloudnodedao.CloudNodeDAO
+	symbolProvider       SymbolProvider
+	onlineNodeIDProvider OnlineNodeIDsProvider
 }
 
 // NewBasePlanner 创建基础规划器
-func NewBasePlanner(nodeDAO cloudnodedao.CloudNodeDAO, symbolProvider SymbolProvider) *BasePlanner {
+func NewBasePlanner(nodeDAO cloudnodedao.CloudNodeDAO, symbolProvider SymbolProvider, onlineNodeIDProvider OnlineNodeIDsProvider) *BasePlanner {
 	return &BasePlanner{
-		nodeDAO:        nodeDAO,
-		symbolProvider: symbolProvider,
+		nodeDAO:              nodeDAO,
+		symbolProvider:       symbolProvider,
+		onlineNodeIDProvider: onlineNodeIDProvider,
 	}
 }
 
 // GetMatchingNodes 通用的节点匹配逻辑（三种规划策略）
 // 任务规划时，只选择在线节点
 func (b *BasePlanner) GetMatchingNodes(ctx context.Context, rule *dto.TaskRuleDTO, dataType string) ([]*cloudnodemodel.CloudNode, error) {
+	// 获取在线节点ID列表
+	var onlineNodeIDs []string
+	if b.onlineNodeIDProvider != nil {
+		onlineNodeIDs = b.onlineNodeIDProvider.GetOnlineNodeIDs()
+	}
+
 	// 构建状态过滤：仅选择在线节点
 	onlineStatus := cloudnodemodel.NodeStatusOnline
-	filter := &cloudnodedao.NodeStatusFilter{Status: &onlineStatus}
+	filter := &cloudnodedao.NodeStatusFilter{
+		Status:        &onlineStatus,
+		OnlineNodeIDs: onlineNodeIDs,
+	}
 
 	switch rule.AssignmentType {
 	case model.AssignmentTypeAuto:

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"time"
 
 	cloudnodedao "github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
@@ -25,6 +24,7 @@ type TaskPlannerServiceImpl struct {
 	registry     *planner.PlannerRegistry
 	snowflake    *snowflake.Node
 	nodeDAO      cloudnodedao.CloudNodeDAO // 新增：用于获取节点列表
+	onlineNodes  planner.OnlineNodeIDsProvider
 }
 
 // NewTaskPlannerServiceImpl 创建任务规划器服务
@@ -33,6 +33,7 @@ func NewTaskPlannerServiceImpl(
 	instanceDAO dao.CollectorTaskInstanceDAO,
 	registry *planner.PlannerRegistry,
 	nodeDAO cloudnodedao.CloudNodeDAO, // 新增参数
+	onlineNodes planner.OnlineNodeIDsProvider,
 ) TaskPlannerService {
 	// 创建 snowflake 节点
 	node, err := snowflake.NewNode(time.Now().Unix() % 1024)
@@ -46,7 +47,106 @@ func NewTaskPlannerServiceImpl(
 		registry:     registry,
 		snowflake:    node,
 		nodeDAO:      nodeDAO,
+		onlineNodes:  onlineNodes,
 	}
+}
+
+// buildNodeMap 构建节点ID映射表
+func (s *TaskPlannerServiceImpl) buildNodeMap(nodes []*cloudnodemodel.CloudNode) map[string]bool {
+	nodeMap := make(map[string]bool, len(nodes))
+	for _, node := range nodes {
+		nodeMap[node.NodeID] = true
+	}
+	return nodeMap
+}
+
+// selectNodeForTask 为任务选择执行节点
+// 使用卫语句处理不同场景，消除if嵌套
+// 分配策略：
+// 1. 新任务：负载均衡分配
+// 2. 失败任务：重新负载均衡分配
+// 3. 原节点不可用：重新负载均衡分配
+// 4. 默认：保留原节点（避免任务漂移）
+func (s *TaskPlannerServiceImpl) selectNodeForTask(
+	ctx context.Context,
+	taskID string,
+	nodes []*cloudnodemodel.CloudNode,
+	nodeMap map[string]bool,
+	existingInstances map[string]*model.CollectorTaskInstance,
+	nodeTaskCount map[string]int,
+) string {
+	existingInst, exists := existingInstances[taskID]
+
+	// 1：任务不存在，新任务分配
+	if !exists {
+		nodeID := s.selectLeastLoadedNode(nodes, nodeTaskCount)
+		log.InfoContextf(ctx, "[TaskPlanner] New instance %s assigned to %s",
+			taskID[:8], nodeID)
+		return nodeID
+	}
+
+	// 2：任务失败，重新分配
+	if existingInst.Status == model.InstanceStatusFailed {
+		nodeID := s.selectLeastLoadedNode(nodes, nodeTaskCount)
+		log.InfoContextf(ctx, "[TaskPlanner] Instance %s was failed, reassigning to %s",
+			taskID[:8], nodeID)
+		return nodeID
+	}
+
+	// 3：原节点不可用，重新分配
+	if !nodeMap[existingInst.NodeID] {
+		nodeID := s.selectLeastLoadedNode(nodes, nodeTaskCount)
+		log.InfoContextf(ctx, "[TaskPlanner] Instance %s original node %s unavailable, reassigning to %s",
+			taskID[:8], existingInst.NodeID, nodeID)
+		return nodeID
+	}
+
+	// 默认情况：保留原节点（避免任务漂移）
+	log.DebugContextf(ctx, "[TaskPlanner] Instance %s keeping existing node %s",
+		taskID[:8], existingInst.NodeID)
+	return existingInst.NodeID
+}
+
+// createInstanceForObject 为单个对象创建任务实例
+func (s *TaskPlannerServiceImpl) createInstanceForObject(
+	ctx context.Context,
+	rule *dto.TaskRuleDTO,
+	object string,
+	dist planner.TaskPlanner,
+	nodes []*cloudnodemodel.CloudNode,
+	nodeMap map[string]bool,
+	existingInstances map[string]*model.CollectorTaskInstance,
+	nodeTaskCount map[string]int,
+) (*model.CollectorTaskInstance, error) {
+	// 1. 构建任务参数
+	params, err := dist.BuildTaskParams(ctx, rule, object)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build task params: %w", err)
+	}
+
+	// 2. 生成稳定的TaskID（不包含nodeID，避免任务漂移）
+	taskID := planner.GenerateStableTaskID(rule.RuleID, params)
+
+	// 3. 选择执行节点
+	selectedNodeID := s.selectNodeForTask(ctx, taskID, nodes, nodeMap,
+		existingInstances, nodeTaskCount)
+
+	// 4. 更新节点任务计数
+	nodeTaskCount[selectedNodeID]++
+
+	// 5. 构建实例对象
+	instance := &model.CollectorTaskInstance{
+		TaskID:          taskID,
+		RuleID:          rule.RuleID,
+		NodeID:          selectedNodeID,
+		Symbol:          object,
+		CollectDataType: rule.DataType,
+		TaskParams:      params,
+		Status:          model.InstanceStatusPending,
+		Invalid:         model.InvalidNo,
+	}
+
+	return instance, nil
 }
 
 // computeInstances 计算应有的实例列表
@@ -60,24 +160,21 @@ func (s *TaskPlannerServiceImpl) computeInstances(
 	existingInstances map[string]*model.CollectorTaskInstance,
 	nodeTaskCount map[string]int,
 ) ([]*model.CollectorTaskInstance, error) {
-	var instances []*model.CollectorTaskInstance
-
-	// 获取匹配的节点
+	// 1. 获取匹配的节点
 	nodes, err := dist.GetMatchingNodes(ctx, rule)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get matching nodes: %w", err)
 	}
 	if len(nodes) == 0 {
 		log.InfoContextf(ctx, "[TaskPlanner] No matching nodes for rule %s", rule.RuleID)
-		return instances, nil
+		return nil, nil
 	}
 
-	// 获取目标对象
+	// 2. 获取目标对象（交易标的）
 	objects, err := dist.GetTargetObjects(ctx, rule)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get target objects: %w", err)
 	}
-
 	// 如果没有对象，生成一个 symbol="" 的实例（统一处理）
 	if len(objects) == 0 {
 		objects = []string{""}
@@ -86,68 +183,18 @@ func (s *TaskPlannerServiceImpl) computeInstances(
 	log.InfoContextf(ctx, "[TaskPlanner] Distributing %d objects to %d nodes for rule %s",
 		len(objects), len(nodes), rule.RuleID)
 
-	// 构建节点ID到节点的映射，用于验证节点可用性
-	nodeMap := make(map[string]bool)
-	for _, node := range nodes {
-		nodeMap[node.NodeID] = true
-	}
+	// 3. 构建节点映射（用于快速查找节点是否可用）
+	nodeMap := s.buildNodeMap(nodes)
 
+	// 4. 为每个对象创建实例
+	var instances []*model.CollectorTaskInstance
 	for _, object := range objects {
-		// 构建任务参数
-		params, err := dist.BuildTaskParams(ctx, rule, object)
+		instance, err := s.createInstanceForObject(ctx, rule, object, dist,
+			nodes, nodeMap, existingInstances, nodeTaskCount)
 		if err != nil {
-			log.WarnContextf(ctx, "[TaskPlanner] Failed to build task params for %s: %v", object, err)
+			log.WarnContextf(ctx, "[TaskPlanner] Failed to create instance for %s: %v",
+				object, err)
 			continue
-		}
-
-		// 生成稳定的 TaskID（不包含 nodeID，避免任务漂移）
-		taskID := planner.GenerateStableTaskID(rule.RuleID, params)
-
-		var selectedNodeID string
-
-		// 检查是否已有该任务实例
-		if existingInst, exists := existingInstances[taskID]; exists {
-			// 任务已存在
-			if existingInst.Status != model.InstanceStatusFailed {
-				// 非失败状态：优先保留原节点分配
-				if nodeMap[existingInst.NodeID] {
-					// 原节点仍可用，保留
-					selectedNodeID = existingInst.NodeID
-					log.DebugContextf(ctx, "[TaskPlanner] Instance %s keeping existing node %s",
-						taskID[:8], selectedNodeID)
-				} else {
-					// 原节点不可用，需要重新分配
-					selectedNodeID = s.selectLeastLoadedNode(nodes, nodeTaskCount)
-					log.InfoContextf(ctx, "[TaskPlanner] Instance %s original node %s unavailable, reassigning to %s",
-						taskID[:8], existingInst.NodeID, selectedNodeID)
-				}
-			} else {
-				// 失败状态：重新负载均衡分配
-				selectedNodeID = s.selectLeastLoadedNode(nodes, nodeTaskCount)
-				log.InfoContextf(ctx, "[TaskPlanner] Instance %s was failed, reassigning to %s",
-					taskID[:8], selectedNodeID)
-			}
-		} else {
-			// 新任务：负载均衡分配
-			selectedNodeID = s.selectLeastLoadedNode(nodes, nodeTaskCount)
-			log.InfoContextf(ctx, "[TaskPlanner] New instance %s assigned to %s",
-				taskID[:8], selectedNodeID)
-		}
-
-		// 更新节点任务计数
-		nodeTaskCount[selectedNodeID]++
-
-		// Symbol 字段直接使用 object 值
-		// 如果采集规则没有交易标的信息（object 为空），则 Symbol 为空，表示不按标的负载均衡
-		instance := &model.CollectorTaskInstance{
-			TaskID:          taskID,
-			RuleID:          rule.RuleID,
-			NodeID:          selectedNodeID,
-			Symbol:          object,
-			CollectDataType: rule.DataType,
-			TaskParams:      params,
-			Status:          model.InstanceStatusPending,
-			Invalid:         model.InvalidNo,
 		}
 		instances = append(instances, instance)
 	}
@@ -178,91 +225,162 @@ func (s *TaskPlannerServiceImpl) selectLeastLoadedNode(
 	return minNode
 }
 
-// RecalculateAllTaskInstances 重算所有启用规则的任务实例
-// 优化算法：差异更新 + 节点健康检查 + 稳定Task ID + 任务漂移防护
-// 1. 相同任务（rule_id + task_params 相同）保持相同的task_id，不依赖node_id
-// 2. 已存在且非失败的任务实例保留在原节点，避免任务漂移
-// 3. 新任务或失败任务使用负载均衡分配到任务最少的节点
-// 4. 检查节点健康状态，剔除异常节点的任务
-func (s *TaskPlannerServiceImpl) RecalculateAllTaskInstances(ctx context.Context) error {
-	log.InfoContext(ctx, "[TaskPlanner] Starting recalculation with diff update, node health check and drift prevention")
+// ========== RecalculateAllTaskInstances 辅助方法 ==========
 
-	// 步骤1：获取所有现有任务实例
+// loadExistingInstances 加载所有现有任务实例并构建映射
+func (s *TaskPlannerServiceImpl) loadExistingInstances(ctx context.Context) (
+	[]*model.CollectorTaskInstance,
+	map[string]*model.CollectorTaskInstance,
+	error,
+) {
 	log.InfoContext(ctx, "[TaskPlanner] Step 1: Loading existing task instances...")
-	existingInstances, err := s.instanceDAO.GetAllTaskInstances(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get existing instances: %w", err)
-	}
-	log.InfoContextf(ctx, "[TaskPlanner] Loaded %d existing instances", len(existingInstances))
 
-	// 构建现有实例映射 (新式TaskID -> Instance)，用于 computeInstances 查询
-	// 使用新式TaskID（基于 ruleID + taskParams，不含nodeID）作为key
-	// 这样可以正确匹配新旧实例，即使旧实例使用的是包含nodeID的旧式TaskID
-	existingInstancesMap := make(map[string]*model.CollectorTaskInstance)
-	for _, inst := range existingInstances {
+	// 获取所有实例
+	instances, err := s.instanceDAO.GetAllTaskInstances(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get existing instances: %w", err)
+	}
+
+	// 构建实例映射（使用新式TaskID作为key）
+	instancesMap := make(map[string]*model.CollectorTaskInstance, len(instances))
+	for _, inst := range instances {
 		newStyleTaskID := planner.GenerateStableTaskID(inst.RuleID, inst.TaskParams)
-		existingInstancesMap[newStyleTaskID] = inst
+		instancesMap[newStyleTaskID] = inst
 	}
 
-	// 步骤2：获取所有有效的云节点（仅获取在线节点）
-	log.InfoContext(ctx, "[TaskPlanner] Step 2: Loading valid nodes...")
-	allNodes, err := s.nodeDAO.GetOnlineNodes(ctx)
+	log.InfoContextf(ctx, "[TaskPlanner] Loaded %d existing instances", len(instances))
+	return instances, instancesMap, nil
+}
+
+// loadOnlineNodes 加载在线节点
+// 实现：从DB加载所有节点，然后内存过滤出在线节点
+// 优势：减少DB查询复杂度（全表扫描 vs WHERE IN）
+func (s *TaskPlannerServiceImpl) loadOnlineNodes(ctx context.Context) (
+	[]*cloudnodemodel.CloudNode,
+	map[string]bool,
+	error,
+) {
+	log.InfoContext(ctx, "[TaskPlanner] Step 2: Loading online nodes...")
+
+	// 1. 从DB获取所有节点
+	allNodesFromDB, err := s.nodeDAO.GetAllNodes(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get nodes: %w", err)
+		return nil, nil, fmt.Errorf("failed to get all nodes: %w", err)
 	}
-	log.InfoContextf(ctx, "[TaskPlanner] Loaded %d online nodes", len(allNodes))
+	log.InfoContextf(ctx, "[TaskPlanner] Loaded %d total nodes from DB", len(allNodesFromDB))
 
-	// 构建节点健康映射（node_id -> true）
-	healthyNodeMap := make(map[string]bool)
-	for _, node := range allNodes {
+	// 2. 获取在线节点ID列表（内存操作）
+	if s.onlineNodes == nil {
+		return nil, nil, fmt.Errorf("online node provider not set")
+	}
+	onlineNodeIDs := s.onlineNodes.GetOnlineNodeIDs()
+	log.InfoContextf(ctx, "[TaskPlanner] Got %d online node IDs from provider", len(onlineNodeIDs))
+
+	// 3. 构建在线节点ID集合（用于O(1)查找）
+	onlineIDSet := make(map[string]bool, len(onlineNodeIDs))
+	for _, nodeID := range onlineNodeIDs {
+		onlineIDSet[nodeID] = true
+	}
+
+	// 4. 过滤出在线节点
+	onlineNodes := make([]*cloudnodemodel.CloudNode, 0, len(onlineNodeIDs))
+	for _, node := range allNodesFromDB {
+		if onlineIDSet[node.NodeID] {
+			onlineNodes = append(onlineNodes, node)
+		}
+	}
+
+	// 5. 构建健康节点映射
+	healthyNodeMap := make(map[string]bool, len(onlineNodes))
+	for _, node := range onlineNodes {
 		healthyNodeMap[node.NodeID] = true
 	}
 
-	// 步骤3：提取云节点支持的数据类型并集
-	log.InfoContext(ctx, "[TaskPlanner] Step 3: Extracting supported data types...")
-	dataTypeSet := make(map[string]bool)
-	nodesByDataType := make(map[string][]string) // data_type -> []node_id
+	log.InfoContextf(ctx, "[TaskPlanner] Filtered to %d online nodes", len(onlineNodes))
+	return onlineNodes, healthyNodeMap, nil
+}
 
-	for _, node := range allNodes {
-		// 解析 SupportedCollectors JSON 数组
+// extractDataTypes 提取节点支持的数据类型并分组
+func (s *TaskPlannerServiceImpl) extractDataTypes(
+	ctx context.Context,
+	nodes []*cloudnodemodel.CloudNode,
+) (map[string]bool, map[string][]string, error) {
+	log.InfoContext(ctx, "[TaskPlanner] Step 3: Extracting supported data types...")
+
+	dataTypeSet := make(map[string]bool)
+	nodesByDataType := make(map[string][]string)
+
+	for _, node := range nodes {
+		// 解析节点支持的采集器类型
 		supportedTypes, err := s.parseSupportedCollectors(node.SupportedCollectors)
 		if err != nil {
-			log.WarnContextf(ctx, "[TaskPlanner] Failed to parse supported collectors for node %s: %v", node.NodeID, err)
+			log.WarnContextf(ctx, "[TaskPlanner] Failed to parse collectors for node %s: %v",
+				node.NodeID, err)
 			continue
 		}
 
+		// 添加到集合和映射
 		for _, dataType := range supportedTypes {
 			dataTypeSet[dataType] = true
 			nodesByDataType[dataType] = append(nodesByDataType[dataType], node.NodeID)
 		}
 	}
-	log.InfoContextf(ctx, "[TaskPlanner] Found %d unique data types across all nodes", len(dataTypeSet))
 
-	// 步骤4：获取所有启用的规则并按数据类型分组
+	log.InfoContextf(ctx, "[TaskPlanner] Found %d unique data types", len(dataTypeSet))
+	return dataTypeSet, nodesByDataType, nil
+}
+
+// loadEnabledRules 加载所有启用的规则并按数据类型分组
+func (s *TaskPlannerServiceImpl) loadEnabledRules(ctx context.Context) (
+	[]*model.CollectorTaskRules,
+	map[string][]*model.CollectorTaskRules,
+	error,
+) {
 	log.InfoContext(ctx, "[TaskPlanner] Step 4: Loading enabled rules...")
+
+	// 获取所有启用的规则
 	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, "", "", model.EnabledTrue)
 	if err != nil {
-		return fmt.Errorf("failed to get enabled rules: %w", err)
+		return nil, nil, fmt.Errorf("failed to get enabled rules: %w", err)
 	}
 
-	totalRules := len(rules)
-	log.InfoContextf(ctx, "[TaskPlanner] Loaded %d enabled rules", totalRules)
-
-	// 按数据类型分组规则
+	// 按数据类型分组
 	rulesByDataType := make(map[string][]*model.CollectorTaskRules)
 	for _, rule := range rules {
 		rulesByDataType[rule.DataType] = append(rulesByDataType[rule.DataType], rule)
 	}
-	log.InfoContextf(ctx, "[TaskPlanner] Rules grouped into %d data types", len(rulesByDataType))
 
-	// 步骤5：计算所有应有的实例（负载均衡 + 任务漂移防护）
+	log.InfoContextf(ctx, "[TaskPlanner] Loaded %d enabled rules grouped into %d types",
+		len(rules), len(rulesByDataType))
+	return rules, rulesByDataType, nil
+}
+
+// computeAllInstances 计算所有应有的任务实例
+// 流程：
+//  1. 遍历每个数据类型
+//  2. 获取该类型的规则和节点
+//  3. 对每个规则：
+//     a. 获取匹配节点（GetMatchingNodes）
+//     b. 获取交易标的（GetTargetObjects） ← 关键步骤
+//     c. 为每个标的创建任务实例
+//     d. 负载均衡分配到节点
+//  4. 任务漂移防护：已存在的非失败任务保留原节点
+func (s *TaskPlannerServiceImpl) computeAllInstances(
+	ctx context.Context,
+	dataTypeSet map[string]bool,
+	nodesByDataType map[string][]string,
+	rulesByDataType map[string][]*model.CollectorTaskRules,
+	existingInstancesMap map[string]*model.CollectorTaskInstance,
+) ([]*model.CollectorTaskInstance, int, int, error) {
 	log.InfoContext(ctx, "[TaskPlanner] Step 5: Computing all instances with load balancing...")
+
 	var allNewInstances []*model.CollectorTaskInstance
 	var syncedRules, failedRules int
 
-	// 节点任务计数，用于负载均衡分配
+	// 节点任务计数，用于负载均衡
 	nodeTaskCount := make(map[string]int)
 
+	// 遍历每个数据类型
 	for dataType := range dataTypeSet {
 		typeRules := rulesByDataType[dataType]
 		typeNodes := nodesByDataType[dataType]
@@ -276,34 +394,25 @@ func (s *TaskPlannerServiceImpl) RecalculateAllTaskInstances(ctx context.Context
 			dataType, len(typeRules), len(typeNodes))
 
 		// 获取该数据类型的分配器
-		dist := s.registry.Get(dataType)
+		dist := s.getDistributor(ctx, dataType)
 		if dist == nil {
-			dist = s.registry.GetOrDefault(dataType)
-			if dist == nil {
-				log.WarnContextf(ctx, "[TaskPlanner] Planner not found for data type: %s", dataType)
-				failedRules += len(typeRules)
-				continue
-			}
+			log.WarnContextf(ctx, "[TaskPlanner] No distributor for data type: %s", dataType)
+			failedRules += len(typeRules)
+			continue
 		}
 
 		// 处理该数据类型的所有规则
 		for _, ruleModel := range typeRules {
-			// 转换为 DTO
-			rule := &dto.TaskRuleDTO{
-				ID:             ruleModel.ID,
-				RuleID:         ruleModel.RuleID,
-				DataType:       ruleModel.DataType,
-				DataSource:     ruleModel.DataSource,
-				CollectParams:  ruleModel.CollectParams,
-				AssignmentType: ruleModel.AssignmentType,
-				AssignedNodes:  ruleModel.AssignedNodes,
-				NodePattern:    ruleModel.NodePattern,
-				NodeTags:       ruleModel.NodeTags,
-				Enabled:        ruleModel.Enabled,
-			}
+			// 转换为DTO
+			rule := s.convertRuleToDTO(ruleModel)
 
-			// 计算应有的实例列表（传入现有实例和节点任务计数，实现负载均衡和漂移防护）
-			computedInstances, err := s.computeInstances(ctx, rule, dist, existingInstancesMap, nodeTaskCount)
+			// 计算该规则的任务实例
+			// 注：在 computeInstances 内部会：
+			//   1. 调用 GetTargetObjects 获取交易标的
+			//   2. 为每个标的创建任务实例
+			//   3. 负载均衡分配到节点
+			computedInstances, err := s.computeInstances(ctx, rule, dist,
+				existingInstancesMap, nodeTaskCount)
 			if err != nil {
 				log.ErrorContextf(ctx, "[TaskPlanner] Failed to compute instances for rule %s: %v",
 					rule.RuleID, err)
@@ -311,30 +420,127 @@ func (s *TaskPlannerServiceImpl) RecalculateAllTaskInstances(ctx context.Context
 				continue
 			}
 
-			// TaskID 已在 computeInstances 中生成，直接添加到总列表
 			allNewInstances = append(allNewInstances, computedInstances...)
-
 			log.InfoContextf(ctx, "[TaskPlanner] Rule %s computed: %d instances",
 				rule.RuleID, len(computedInstances))
 			syncedRules++
 		}
 	}
 
-	// 步骤6：差异对比与节点健康检查
+	log.InfoContextf(ctx, "[TaskPlanner] Computed %d total instances (synced: %d, failed: %d)",
+		len(allNewInstances), syncedRules, failedRules)
+	return allNewInstances, syncedRules, failedRules, nil
+}
+
+// applyDiffUpdate 应用差异更新
+func (s *TaskPlannerServiceImpl) applyDiffUpdate(
+	ctx context.Context,
+	existingInstances []*model.CollectorTaskInstance,
+	shouldBeInstances []*model.CollectorTaskInstance,
+	healthyNodeMap map[string]bool,
+) error {
 	log.InfoContext(ctx, "[TaskPlanner] Step 6: Calculating diff with node health check...")
-	toCreate, toUpdate, toDelete := s.calculateDiff(ctx, existingInstances, allNewInstances, healthyNodeMap)
+
+	// 计算差异
+	toCreate, toUpdate, toDelete := s.calculateDiff(ctx, existingInstances,
+		shouldBeInstances, healthyNodeMap)
 
 	log.InfoContextf(ctx, "[TaskPlanner] Diff result: create=%d, update=%d, delete=%d",
 		len(toCreate), len(toUpdate), len(toDelete))
 
-	// 步骤7：原子性地执行差异更新
+	// 执行差异更新
 	log.InfoContext(ctx, "[TaskPlanner] Step 7: Applying diff update...")
 	if err := s.instanceDAO.DiffUpdateInstances(ctx, toCreate, toUpdate, toDelete); err != nil {
 		return fmt.Errorf("failed to apply diff update: %w", err)
 	}
 
-	log.InfoContextf(ctx, "[TaskPlanner] Recalculation completed: total_rules=%d, synced=%d, failed=%d, create=%d, update=%d, delete=%d",
-		totalRules, syncedRules, failedRules, len(toCreate), len(toUpdate), len(toDelete))
+	log.InfoContext(ctx, "[TaskPlanner] Diff update applied successfully")
+	return nil
+}
+
+// getDistributor 获取数据类型对应的分配器
+func (s *TaskPlannerServiceImpl) getDistributor(
+	ctx context.Context,
+	dataType string,
+) planner.TaskPlanner {
+	dist := s.registry.Get(dataType)
+	if dist == nil {
+		dist = s.registry.GetOrDefault(dataType)
+		if dist == nil {
+			log.WarnContextf(ctx, "[TaskPlanner] Planner not found for data type: %s", dataType)
+			return nil
+		}
+	}
+	return dist
+}
+
+// convertRuleToDTO 将规则Model转换为DTO
+func (s *TaskPlannerServiceImpl) convertRuleToDTO(
+	ruleModel *model.CollectorTaskRules,
+) *dto.TaskRuleDTO {
+	return &dto.TaskRuleDTO{
+		ID:             ruleModel.ID,
+		RuleID:         ruleModel.RuleID,
+		DataType:       ruleModel.DataType,
+		DataSource:     ruleModel.DataSource,
+		CollectParams:  ruleModel.CollectParams,
+		AssignmentType: ruleModel.AssignmentType,
+		AssignedNodes:  ruleModel.AssignedNodes,
+		NodePattern:    ruleModel.NodePattern,
+		NodeTags:       ruleModel.NodeTags,
+		Enabled:        ruleModel.Enabled,
+	}
+}
+
+// RecalculateAllTaskInstances 重算所有启用规则的任务实例
+// 优化算法：差异更新 + 节点健康检查 + 稳定Task ID + 任务漂移防护
+// 1. 相同任务（rule_id + task_params 相同）保持相同的task_id，不依赖node_id
+// 2. 已存在且非失败的任务实例保留在原节点，避免任务漂移
+// 3. 新任务或失败任务使用负载均衡分配到任务最少的节点
+// 4. 检查节点健康状态，剔除异常节点的任务
+func (s *TaskPlannerServiceImpl) RecalculateAllTaskInstances(ctx context.Context) error {
+	log.InfoContext(ctx, "[TaskPlanner] Starting recalculation with diff update, "+
+		"node health check and drift prevention")
+
+	// 步骤1：加载现有任务实例
+	existingInstances, existingMap, err := s.loadExistingInstances(ctx)
+	if err != nil {
+		return err
+	}
+
+	// 步骤2：加载在线节点
+	onlineNodes, healthyNodeMap, err := s.loadOnlineNodes(ctx)
+	if err != nil {
+		return err
+	}
+
+	// 步骤3：提取支持的数据类型
+	dataTypeSet, nodesByDataType, err := s.extractDataTypes(ctx, onlineNodes)
+	if err != nil {
+		return err
+	}
+
+	// 步骤4：加载启用的规则
+	rules, rulesByDataType, err := s.loadEnabledRules(ctx)
+	if err != nil {
+		return err
+	}
+
+	// 步骤5：计算应有实例
+	// 注：在此步骤中，会为每个规则获取交易标的（GetTargetObjects）并分配到节点
+	allNewInstances, syncedCount, failedCount, err := s.computeAllInstances(
+		ctx, dataTypeSet, nodesByDataType, rulesByDataType, existingMap)
+	if err != nil {
+		return err
+	}
+
+	// 步骤6：应用差异更新
+	if err := s.applyDiffUpdate(ctx, existingInstances, allNewInstances, healthyNodeMap); err != nil {
+		return err
+	}
+
+	log.InfoContextf(ctx, "[TaskPlanner] Recalculation completed: total_rules=%d, "+
+		"synced=%d, failed=%d", len(rules), syncedCount, failedCount)
 	return nil
 }
 
@@ -352,9 +558,9 @@ func (s *TaskPlannerServiceImpl) calculateDiff(
 	// 构建现有实例映射，使用内容键 (ruleID + taskParams -> instance)
 	// 同时保留原始 TaskID 用于删除操作
 	type existingInfo struct {
-		instance    *model.CollectorTaskInstance
-		origTaskID  string
-		contentKey  string
+		instance   *model.CollectorTaskInstance
+		origTaskID string
+		contentKey string
 	}
 	existingByContent := make(map[string]*existingInfo)
 	for _, inst := range existing {
@@ -430,12 +636,6 @@ func (s *TaskPlannerServiceImpl) calculateDiff(
 	}
 
 	return toCreate, toUpdate, toDelete
-}
-
-// generateTaskID 生成任务ID
-func (s *TaskPlannerServiceImpl) generateTaskID() string {
-	sfID := s.snowflake.Generate()
-	return strconv.FormatInt(sfID.Int64(), 10)
 }
 
 // parseSupportedCollectors 解析云节点支持的采集器类型 JSON 数组

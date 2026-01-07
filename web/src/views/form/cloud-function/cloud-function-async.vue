@@ -227,7 +227,7 @@ interface CloudFunction {
   capacity: string;
   current_load: string;
   metadata: string;
-  status: number;
+  status: string;
   enabled: number;
   last_heartbeat?: string;
   created_at: string;
@@ -567,20 +567,39 @@ const getRegionName = (region: string) => {
   return regionMap[region] || region;
 };
 
-const getStatusColor = (status: number) => {
-  const colorMap: Record<number, string> = {
-    0: 'red',
-    1: 'green'
-  };
-  return colorMap[status] || 'gray';
+const getStatusColor = (status: string | number) => {
+  if (status === 'online') {
+    return 'green';
+  }
+  if (status === 'offline') {
+    return 'red';
+  }
+  if (status === 1) {
+    return 'green';
+  }
+  if (status === 0) {
+    return 'red';
+  }
+  return 'gray';
 };
 
-const getStatusText = (status: number) => {
-  const textMap: Record<number, string> = {
-    0: '离线',
-    1: '在线'
-  };
-  return textMap[status] || '未知';
+const getStatusText = (status: string | number) => {
+  if (typeof status === 'string' && status) {
+    if (status === 'online') {
+      return '在线';
+    }
+    if (status === 'offline') {
+      return '离线';
+    }
+    return status;
+  }
+  if (status === 1) {
+    return '在线';
+  }
+  if (status === 0) {
+    return '离线';
+  }
+  return '未知';
 };
 
 const formatDateTime = (dateTime?: string) => {

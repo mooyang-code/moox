@@ -160,7 +160,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
 
 -- ************ 创建云函数采集器相关索引 ************
 -- 节点表索引
-CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_node_id ON t_cloud_nodes(c_node_id);
+CREATE INDEX IF NOT EXISTS idx_node_id_invalid ON t_cloud_nodes(c_node_id, c_invalid);
 CREATE INDEX IF NOT EXISTS idx_nodes_type ON t_cloud_nodes(c_node_type);
 
 -- ************ 创建云账户相关索引 ************
@@ -326,47 +326,6 @@ CREATE TRIGGER update_collector_task_instances_mtime AFTER UPDATE ON t_collector
     UPDATE t_collector_task_instances SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ============ 心跳服务表设计 ============
-
--- ************ 心跳节点主表 ************
-CREATE TABLE IF NOT EXISTS t_heartbeat_nodes (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 记录ID
-    c_node_id TEXT NOT NULL,                                   -- 节点ID
-    c_node_type TEXT NOT NULL,                                 -- 节点类型
-    c_source_service TEXT DEFAULT '',                          -- 来源服务
-
-    -- 时间信息
-    c_last_heartbeat DATETIME,                                 -- 最后心跳时间
-    
-    -- 统计数据
-    c_consecutive_timeouts INTEGER DEFAULT 0,                  -- 连续超时次数
-    c_total_timeouts INTEGER DEFAULT 0,                        -- 累计超时次数
-    c_total_heartbeats INTEGER DEFAULT 0,                      -- 累计心跳次数
-    
-    -- 扩展数据
-    c_metadata TEXT DEFAULT '{}',                              -- 元数据（JSON格式）
-    
-    -- 探测配置
-    c_last_probe_time DATETIME,                                -- 最后探测时间
-    c_last_probe_result TEXT DEFAULT '',                       -- 最后探测结果
-    
-    -- 审计字段
-    c_invalid INTEGER NOT NULL DEFAULT 0,                      -- 删除标记
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 更新时间
-);
-
--- ************ 创建心跳服务相关索引 ************
--- 心跳节点表索引
-CREATE UNIQUE INDEX IF NOT EXISTS idx_heartbeat_nodes_node_id ON t_heartbeat_nodes(c_node_id);
-CREATE INDEX IF NOT EXISTS idx_heartbeat_nodes_node_type ON t_heartbeat_nodes(c_node_type);
-CREATE INDEX IF NOT EXISTS idx_heartbeat_nodes_last_heartbeat ON t_heartbeat_nodes(c_last_heartbeat);
-CREATE INDEX IF NOT EXISTS idx_heartbeat_nodes_source_service ON t_heartbeat_nodes(c_source_service);
-
--- ************ 创建心跳服务相关触发器 ************
--- 心跳节点表更新触发器
-DROP TRIGGER IF EXISTS update_heartbeat_nodes_mtime;
-CREATE TRIGGER update_heartbeat_nodes_mtime AFTER UPDATE ON t_heartbeat_nodes BEGIN 
-    UPDATE t_heartbeat_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ============ 云函数代码包管理系统表设计 ============
 

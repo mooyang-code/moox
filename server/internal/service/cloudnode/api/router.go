@@ -14,7 +14,7 @@ func RegisterCloudNodeRoutes(router *gin.RouterGroup, service cloudnodemgr.Servi
 	nodeHandler := NewCloudNodeHandlerWithService(service)
 	nodeGroup := router.Group("/cloud_node")
 	{
-		nodeGroup.POST("/list", nodeHandler.GetNodeList)  // 改为POST以支持JSON body参数
+		nodeGroup.POST("/list", nodeHandler.GetNodeList) // 改为POST以支持JSON body参数
 		nodeGroup.GET("/detail", nodeHandler.GetNodeDetail)
 		nodeGroup.PUT("/update", nodeHandler.UpdateNode)
 	}
@@ -69,29 +69,11 @@ func RegisterPackageManagerRoutes(router *gin.RouterGroup, service cloudnodemgr.
 func RegisterHeartbeatRoutes(r *gin.RouterGroup, heartbeatService cloudnodemgr.HeartbeatService) {
 	// 创建处理器
 	heartbeatHandler := NewHeartbeatHandler(heartbeatService)
-	nodeHandler := NewNodeHandler(heartbeatService)
-	probeHandler := NewProbeHandler(heartbeatService)
 
 	// 心跳管理路由组
 	heartbeatGroup := r.Group("/heartbeat")
 	{
 		// 心跳上报
 		heartbeatGroup.POST("/report", heartbeatHandler.ReportHeartbeat)
-
-		// 节点管理
-		nodeGroup := heartbeatGroup.Group("/nodes")
-		{
-			nodeGroup.POST("/register", nodeHandler.RegisterNode)
-			nodeGroup.GET("", nodeHandler.ListNodes)
-			nodeGroup.GET("/:node_id/:node_type", nodeHandler.GetNode)
-			nodeGroup.PUT("/:node_id/:node_type/config", nodeHandler.UpdateNodeConfig)
-			nodeGroup.DELETE("/:node_id/:node_type", nodeHandler.UnregisterNode)
-		}
-
-		// 探测管理
-		probeGroup := heartbeatGroup.Group("/probe")
-		{
-			probeGroup.POST("/:node_id/:node_type", probeHandler.ProbeNode)
-		}
 	}
 }

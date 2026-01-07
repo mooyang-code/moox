@@ -123,11 +123,11 @@ func applySQLitePoolConfig(db *gorm.DB, cfg *config.DatabaseConfig) {
 		return
 	}
 
-	maxOpen := 10
-	maxIdle := 10
+	maxOpen := 30
+	maxIdle := 20
 	if cfg != nil {
 		if cfg.MaxOpenConns > 0 {
-			maxOpen = minInt(cfg.MaxOpenConns, 10)
+			maxOpen = cfg.MaxOpenConns
 		}
 		if cfg.MaxIdleConns > 0 {
 			maxIdle = minInt(cfg.MaxIdleConns, maxOpen)

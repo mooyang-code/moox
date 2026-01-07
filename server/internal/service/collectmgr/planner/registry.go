@@ -14,13 +14,13 @@ type PlannerRegistry struct {
 }
 
 // NewPlannerRegistry 创建规划器注册中心
-func NewPlannerRegistry(nodeDAO cloudnodedao.CloudNodeDAO, symbolProvider SymbolProvider) *PlannerRegistry {
+func NewPlannerRegistry(nodeDAO cloudnodedao.CloudNodeDAO, symbolProvider SymbolProvider, onlineNodeIDProvider OnlineNodeIDsProvider) *PlannerRegistry {
 	registry := &PlannerRegistry{
 		planners: make(map[string]TaskPlanner),
 	}
 
 	// 创建基础规划器
-	base := NewBasePlanner(nodeDAO, symbolProvider)
+	base := NewBasePlanner(nodeDAO, symbolProvider, onlineNodeIDProvider)
 
 	// 注册各类型规划器
 	registry.Register(NewKlinePlanner(base))

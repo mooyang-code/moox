@@ -102,6 +102,9 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	// 创建云节点服务（已集成心跳服务）
 	log.Info("[Bootstrap] 正在创建云节点服务...")
 	cloudNodeService := cloudnode.NewService(dbManager, asyncTaskService, cfg.CloudNode)
+	if err := cloudnode.InitKeepaliveInstance(cloudNodeService); err != nil {
+		return nil, err
+	}
 
 	// 创建Collector服务实例
 	// 创建所需的DAO
@@ -111,20 +114,16 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	dataTypeConfigDAO := collectordao.NewCollectorDataTypeConfigsDAO(db)
 	fieldConfigDAO := collectordao.NewCollectorFieldConfigsDAO(db)
 	nodeDAO := cloudnodedao.NewCloudNodeDAO(db)
-	heartbeatDAO := cloudnodedao.NewHeartbeatNodeDAO(db)
 
 	// 创建任务规划器实例（不再需要全局单例，因为改为客户端轮询）
 	log.Info("[Bootstrap] 正在创建任务规划器...")
-	registry := collectmgr_planner.NewPlannerRegistry(nodeDAO, nil)
-	taskPlanner := collectmgr.NewTaskPlannerServiceImpl(taskRulesDAO, instanceDAO, registry, nodeDAO)
-
-	// 初始化心跳探测器（全局单例，供定时器使用）注意：必须在 NewService 之后调用，因为 NewService 会注册全局探测器
-	log.Info("[Bootstrap] 正在初始化心跳探测器...")
-	cloudnode.InitProberInstance(dbManager, cfg.CloudNode)
+	// cloudNodeService 实现了 OnlineNodeIDsProvider 接口，用于获取在线节点ID列表
+	registry := collectmgr_planner.NewPlannerRegistry(nodeDAO, nil, cloudNodeService)
+	taskPlanner := collectmgr.NewTaskPlannerServiceImpl(taskRulesDAO, instanceDAO, registry, nodeDAO, cloudNodeService)
 
 	// 创建服务实例
 	taskRuleService := collectmgr.NewTaskRulesServiceImpl(taskRulesDAO, nodeDAO)
-	taskInstanceService := collectmgr.NewTaskInstanceServiceImpl(instanceDAO, taskRulesDAO, nodeDAO, heartbeatDAO)
+	taskInstanceService := collectmgr.NewTaskInstanceServiceImpl(instanceDAO, taskRulesDAO, nodeDAO)
 	dataTypeConfigService := collectmgr.NewDataTypeConfigServiceImpl(dataTypeConfigDAO, fieldConfigDAO, db)
 
 	// 注入 CloudNodeService 依赖到 TaskInstanceService（解决循环依赖）
@@ -163,7 +162,6 @@ func registerAsyncExecutors(services *Services) error {
 	// cloudnode模块自注册所有异步任务执行器（节点管理 + 代码包管理）
 	err := cloudnode.RegisterExecutors(
 		services.DBManager,
-		services.CloudNodeService,
 		services.CloudNodeService,
 	)
 	if err != nil {

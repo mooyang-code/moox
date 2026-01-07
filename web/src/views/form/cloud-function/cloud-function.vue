@@ -62,7 +62,32 @@
 
         <!-- 任务进度提示 -->
         <a-alert
-          v-if="currentTaskStatus && currentTaskStatus.task_status === 1"
+          v-if="batchJobStatuses.length > 0"
+          type="info"
+          style="margin: 16px 0;"
+          closable
+          @close="handleCloseTaskAlert"
+        >
+          <template #title>
+            <a-space>
+              <icon-loading spin />
+              <span>任务执行中</span>
+            </a-space>
+          </template>
+          <div v-for="(job, index) in batchJobStatuses" :key="job.task_id || index" style="margin-bottom: 12px;">
+            <div>批次 {{ index + 1 }}：{{ getTaskTypeText(job.task_type) }}</div>
+            <div>处理进度：{{ job.success_count + job.failed_count }} / {{ job.total_count }}</div>
+            <div>成功：{{ job.success_count }}，失败：{{ job.failed_count }}</div>
+            <a-progress 
+              :percent="(Number(job.progress) || 0) / 100" 
+              :status="job.failed_count > 0 ? 'warning' : 'normal'"
+              :stroke-width="8"
+              style="margin-top: 8px"
+            />
+          </div>
+        </a-alert>
+        <a-alert
+          v-else-if="currentTaskStatus && currentTaskStatus.task_status === 1"
           type="info"
           style="margin: 16px 0;"
           closable
@@ -240,6 +265,7 @@
         
         <a-form-item field="region" label="地区" required>
           <a-select v-model="batchAddForm.region" placeholder="请选择地区" style="width: 100%">
+            <a-option :value="REGION_UNLIMITED">不限</a-option>
             <a-option v-for="region in regionOptions" :key="region.code" :value="region.code">
               {{ region.name }}
               <a-tag v-if="region.tag" size="small" :color="region.tag === '国内' ? 'blue' : 'orange'" style="margin-left: 4px;">
@@ -247,6 +273,17 @@
               </a-tag>
             </a-option>
           </a-select>
+        </a-form-item>
+
+        <a-form-item field="tag" label="标签" required>
+          <a-select v-model="batchAddForm.tag" :disabled="batchAddTagLocked" placeholder="请选择标签" style="width: 100%">
+            <a-option v-for="tag in tagOptions" :key="tag" :value="tag">
+              {{ tag }}
+            </a-option>
+          </a-select>
+          <template #help>
+            <div style="font-size: 12px; color: #86909c;">选择具体地区时标签会自动锁定</div>
+          </template>
         </a-form-item>
         
         <a-form-item field="packageId" label="代码包版本" required>
@@ -302,6 +339,58 @@
           </template>
         </a-form-item>
       </a-form>
+    </a-modal>
+
+    <!-- 批量新增分布计划弹窗 -->
+    <a-modal
+      v-model:visible="batchPlanVisible"
+      title="预计分布计划"
+      :width="900"
+      :mask-closable="false"
+      @cancel="handleBatchPlanCancel"
+      @ok="handleBatchPlanOk"
+    >
+      <a-spin :loading="batchPlanLoading">
+        <div style="margin-bottom: 12px;">
+          <div>标签：{{ batchPlanTag }}</div>
+          <div>请求数量：{{ batchPlanRequested }}</div>
+          <div>可用总数：{{ batchPlanTotalAvailable }}</div>
+          <div>计划数量：{{ batchPlanPlannedTotal }} / {{ batchPlanTarget }}</div>
+        </div>
+        <a-alert v-if="batchPlanNotice" type="warning" style="margin-bottom: 12px;">
+          {{ batchPlanNotice }}
+        </a-alert>
+        <a-table
+          row-key="regionCode"
+          :data="batchPlanItems"
+          :pagination="false"
+          size="small"
+        >
+          <template #columns>
+            <a-table-column title="地区" data-index="regionName" :width="180" />
+            <a-table-column title="最大节点数" data-index="maxNodes" :width="120" />
+            <a-table-column title="已占用" data-index="usedNodes" :width="100" />
+            <a-table-column title="可用" data-index="availableNodes" :width="100" />
+            <a-table-column title="计划数" :width="140">
+              <template #cell="{ record }">
+                <a-input-number
+                  v-model="record.planCount"
+                  :min="0"
+                  :max="record.availableNodes"
+                  style="width: 120px"
+                />
+              </template>
+            </a-table-column>
+            <a-table-column title="操作" :width="80">
+              <template #cell="{ record }">
+                <a-button type="text" status="danger" size="mini" @click="removePlanItem(record)">
+                  删除
+                </a-button>
+              </template>
+            </a-table-column>
+          </template>
+        </a-table>
+      </a-spin>
     </a-modal>
 
     <!-- 批量部署弹窗 -->
@@ -652,12 +741,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onBeforeUnmount, h } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from 'vue';
 import { Message, Modal } from '@arco-design/web-vue';
 import { api } from '@/api/config';
 import { getFunctionPackageList, getFunctionPackageDetail, downloadPackageByURL, type FunctionPackage } from '@/api/function-package';
-import { AsyncTaskManager, asyncTaskManager } from '@/utils/async-task';
-import type { TaskStatusResponse } from '@/utils/async-task';
+import { AsyncTaskManager, asyncTaskManager, TaskStatus } from '@/utils/async-task';
+import type { TaskStatusResponse, TaskDetailItem } from '@/utils/async-task';
 import CloudAccountManage from '../cloud-account/cloud-account-manage.vue';
 import FunctionPackageManage from './function-package-manage.vue';
 
@@ -677,7 +766,7 @@ interface CloudFunction {
   capacity: string;
   current_load: string;
   metadata: string;
-  status: number;
+  status: string;
   enabled: number;
   // 新增心跳配置字段
   timeout_threshold: number;    // 超时阈值（秒），0表示使用全局默认值
@@ -720,19 +809,37 @@ interface RegionInfo {
   code: string;
   name: string;
   tag: string; // 标签（国内/海外）
+  max_nodes?: number; // 地区最大节点数
 }
+
+interface BatchPlanItem {
+  regionCode: string;
+  regionName: string;
+  tag: string;
+  maxNodes: number;
+  usedNodes: number;
+  availableNodes: number;
+  planCount: number;
+}
+
+type BatchJobStatus = TaskStatusResponse & {
+  batchIndex: number;
+};
 
 // 数据列表
 const functionList = ref<CloudFunction[]>([]);
 const selectedKeys = ref<string[]>([]);
 const cloudAccountOptions = ref<CloudAccount[]>([]);
 const regionOptions = ref<RegionInfo[]>([]); // 地区选项
+const REGION_UNLIMITED = 'all';
+const tagOptions = ['国内', '海外'];
 
 // 批量新增相关
 const batchAddVisible = ref(false);
 const batchAddForm = reactive({
   cloudAccountId: '',
   region: 'ap-guangzhou',
+  tag: '',
   packageId: '', // 代码包版本ID
   nodeCount: 5,
   namespace: '',
@@ -741,6 +848,15 @@ const batchAddForm = reactive({
   heartbeatInterval: 0,   // 心跳间隔（秒），0表示使用全局默认值
   probeEnabled: true      // 是否启用探测，默认启用
 });
+
+const batchPlanVisible = ref(false);
+const batchPlanLoading = ref(false);
+const batchPlanItems = ref<BatchPlanItem[]>([]);
+const batchPlanNotice = ref('');
+const batchPlanRequested = ref(0);
+const batchPlanTag = ref('');
+const batchJobStatuses = ref<BatchJobStatus[]>([]);
+let batchJobTimer: number | null = null;
 
 // 批量部署相关
 const batchDeployVisible = ref(false);
@@ -803,6 +919,11 @@ const paginationConfig = computed(() => ({
   pageSizeOptions: pagination.value.pageSizeOptions
 }));
 
+const batchAddTagLocked = computed(() => batchAddForm.region !== REGION_UNLIMITED);
+const batchPlanPlannedTotal = computed(() => batchPlanItems.value.reduce((sum, item) => sum + (Number(item.planCount) || 0), 0));
+const batchPlanTotalAvailable = computed(() => batchPlanItems.value.reduce((sum, item) => sum + (Number(item.availableNodes) || 0), 0));
+const batchPlanTarget = computed(() => Math.min(batchPlanRequested.value, batchPlanTotalAvailable.value));
+
 // 生命周期钩子
 onMounted(async () => {
   await loadData();
@@ -816,6 +937,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   // 清理轮询
   asyncTaskManager.stopPolling();
+  stopBatchJobPolling();
 });
 
 // 检查任务恢复
@@ -857,6 +979,8 @@ const handleTaskRestore = (taskId: string, status: TaskStatusResponse) => {
 
 // 任务完成处理
 const handleTaskComplete = async (data: TaskStatusResponse) => {
+  stopBatchJobPolling();
+  batchJobStatuses.value = [];
   console.log('handleTaskComplete called with data:', data);
   console.log('Task status:', data.task_status, 'Failed count:', data.failed_count);
   
@@ -939,6 +1063,8 @@ const handleTaskComplete = async (data: TaskStatusResponse) => {
 
 // 关闭任务提示
 const handleCloseTaskAlert = () => {
+  stopBatchJobPolling();
+  batchJobStatuses.value = [];
   currentTaskStatus.value = null;
   AsyncTaskManager.removeTaskIdFromUrl();
 };
@@ -959,6 +1085,7 @@ const onBatchAdd = async () => {
   // 重置表单
   batchAddForm.cloudAccountId = cloudAccountOptions.value[0]?.account_id || '';
   batchAddForm.region = 'ap-hongkong';
+  batchAddForm.tag = getRegionTag(batchAddForm.region) || '海外';
   batchAddForm.packageId = '';
   batchAddForm.nodeCount = 5;
   batchAddForm.namespace = '';
@@ -989,6 +1116,10 @@ const handleBatchAddOk = async () => {
     Message.warning('请选择地区');
     return;
   }
+  if (!batchAddForm.tag) {
+    Message.warning('请选择标签');
+    return;
+  }
   if (!batchAddForm.packageId) {
     Message.warning('请选择代码包版本');
     return;
@@ -1000,67 +1131,251 @@ const handleBatchAddOk = async () => {
   
   // 关闭弹窗
   batchAddVisible.value = false;
-  
+
+  if (batchAddForm.region === REGION_UNLIMITED) {
+    await prepareBatchPlan();
+    return;
+  }
+
   // 执行批量新增
-  await executeBatchAdd();
+  await executeBatchAddDirect();
 };
 
-// 执行批量新增
-const executeBatchAdd = async () => {
-  // 准备多个独立任务的数据
-  const tasks = Array(batchAddForm.nodeCount).fill(null).map((_, index) => ({
-    taskType: 'CREATE_NODE',
-    requestParams: {
-      cloud_account_id: batchAddForm.cloudAccountId,
-      namespace: batchAddForm.namespace || undefined,
-      node_type: 'scf',
-      region: batchAddForm.region,
-      tag: getRegionTag(batchAddForm.region),
-      package_id: batchAddForm.packageId,
-      version: '1.0.0',
-      capacity: '100',
-      metadata: JSON.stringify({ env: 'prod', index }),
-      // 新增心跳配置字段
-      timeout_threshold: batchAddForm.timeoutThreshold,
-      heartbeat_interval: batchAddForm.heartbeatInterval,
-      probe_enabled: batchAddForm.probeEnabled
+const buildCreateNodeTask = (region: string, index: number) => ({
+  taskType: 'CREATE_NODE',
+  requestParams: {
+    cloud_account_id: batchAddForm.cloudAccountId,
+    namespace: batchAddForm.namespace || undefined,
+    node_type: 'scf',
+    region,
+    tag: getRegionTag(region) || batchAddForm.tag,
+    package_id: batchAddForm.packageId,
+    version: '1.0.0',
+    capacity: '100',
+    metadata: JSON.stringify({ env: 'prod', index }),
+    // 新增心跳配置字段
+    timeout_threshold: batchAddForm.timeoutThreshold,
+    heartbeat_interval: batchAddForm.heartbeatInterval,
+    probe_enabled: batchAddForm.probeEnabled
+  }
+});
+
+const buildTasksForRegion = (region: string, count: number, startIndex: number) => (
+  Array(count).fill(null).map((_, index) => buildCreateNodeTask(region, startIndex + index))
+);
+
+const buildTasksFromPlan = (items: BatchPlanItem[]) => {
+  const tasks: Array<{ taskType: string; requestParams: any }> = [];
+  let index = 0;
+  items.forEach(item => {
+    const count = Number(item.planCount) || 0;
+    for (let i = 0; i < count; i += 1) {
+      tasks.push(buildCreateNodeTask(item.regionCode, index));
+      index += 1;
     }
+  });
+  return tasks;
+};
+
+const chunkTasks = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+};
+
+const executeBatchAddTasks = async (tasks: Array<{ taskType: string; requestParams: any }>) => {
+  if (tasks.length === 0) {
+    Message.warning('没有可执行的任务');
+    return;
+  }
+
+  const chunks = chunkTasks(tasks, 100);
+
+  taskPolling.value = true;
+  taskCompleteHandled.value = false;
+  currentTaskStatus.value = null;
+
+  const initialStatuses: BatchJobStatus[] = chunks.map((chunk, index) => ({
+    batchIndex: index,
+    task_id: '',
+    task_type: 'CREATE_NODE',
+    task_status: TaskStatus.PROCESSING,
+    total_count: chunk.length,
+    success_count: 0,
+    failed_count: 0,
+    progress: 0,
+    created_at: new Date().toISOString()
   }));
+  batchJobStatuses.value = initialStatuses;
+
+  const jobIds: string[] = [];
+
+  for (let i = 0; i < chunks.length; i += 1) {
+    const chunk = chunks[i];
+    try {
+      const jobId = await createAsyncJob(chunk);
+      jobIds.push(jobId);
+      batchJobStatuses.value = batchJobStatuses.value.map(item => (
+        item.batchIndex === i ? { ...item, task_id: jobId } : item
+      ));
+    } catch (error: any) {
+      batchJobStatuses.value = batchJobStatuses.value.map(item => (
+        item.batchIndex === i ? {
+          ...item,
+          task_status: TaskStatus.FAILED,
+          failed_count: item.total_count,
+          progress: 100,
+          error_message: error?.message || '创建任务失败'
+        } : item
+      ));
+    }
+  }
+
+  if (jobIds.length === 0) {
+    const finalStatus = computeAggregateStatus(batchJobStatuses.value);
+    batchJobStatuses.value = [];
+    handleTaskComplete(finalStatus);
+    return;
+  }
+
+  startBatchJobPolling(jobIds);
+};
+
+const executeBatchAddDirect = async () => {
+  const tasks = buildTasksForRegion(batchAddForm.region, batchAddForm.nodeCount, 0);
+  await executeBatchAddTasks(tasks);
+};
+
+const fetchRegionUsage = async (regionCode: string, tag: string) => {
+  const response = await api.post('/cloudnode/GetNodeList', {
+    region: regionCode,
+    tag,
+    node_type: 'scf',
+    page: 1,
+    page_size: 1
+  });
+
+  if (response.data?.code === 200) {
+    return Number(response.data.total || 0);
+  }
+
+  if (response.data?.ret_info?.code === 0) {
+    return Number(response.data.ret_info.total || 0);
+  }
+
+  throw new Error('获取地区占用失败');
+};
+
+const prepareBatchPlan = async () => {
+  const selectedTag = batchAddForm.tag;
+  const requestedCount = batchAddForm.nodeCount;
+
+  const taggedRegions = regionOptions.value.filter(region => region.tag === selectedTag);
+  if (taggedRegions.length === 0) {
+    Message.warning('未找到对应标签的地区');
+    return;
+  }
+
+  batchPlanLoading.value = true;
+  batchPlanNotice.value = '';
+  batchPlanRequested.value = requestedCount;
+  batchPlanTag.value = selectedTag;
 
   try {
-    // 创建多个独立任务的异步任务
-    const taskId = await asyncTaskManager.createMultipleAsyncTasks(tasks);
+    const usageList = await Promise.all(taggedRegions.map(async (region) => {
+      const usedNodes = await fetchRegionUsage(region.code, selectedTag);
+      const maxNodes = Number(region.max_nodes || 0);
+      const availableNodes = Math.max(0, maxNodes - usedNodes);
+      return {
+        regionCode: region.code,
+        regionName: region.name,
+        tag: region.tag,
+        maxNodes,
+        usedNodes,
+        availableNodes,
+        planCount: 0
+      };
+    }));
 
-    taskPolling.value = true;
-    taskCompleteHandled.value = false; // 重置任务完成处理标志
-    
-    // 开始轮询任务状态
-    asyncTaskManager.startPolling(taskId, {
-      onProgress: (data) => {
-        console.log('Task progress data:', {
-          total_count: data.total_count,
-          success_count: data.success_count,
-          failed_count: data.failed_count,
-          progress: data.progress,
-          calculated: data.total_count > 0 ? Math.round(((data.success_count + data.failed_count) / data.total_count) * 100) : 0
-        });
-        currentTaskStatus.value = data;
-      },
-      onSuccess: (data) => {
-        handleTaskComplete(data);
-      },
-      onFailed: (data) => {
-        handleTaskComplete(data);
-      },
-      onPartialSuccess: (data) => {
-        handleTaskComplete(data);
-      },
-      showLoading: false
+    const availableItems = usageList.filter(item => item.availableNodes > 0);
+    if (availableItems.length === 0) {
+      Message.warning('当前标签没有可用节点');
+      return;
+    }
+
+    availableItems.sort((a, b) => a.availableNodes - b.availableNodes);
+
+    let remaining = requestedCount;
+    availableItems.forEach(item => {
+      if (remaining <= 0) {
+        item.planCount = 0;
+        return;
+      }
+      const assign = Math.min(item.availableNodes, remaining);
+      item.planCount = assign;
+      remaining -= assign;
     });
-    
+
+    batchPlanItems.value = availableItems;
+    if (batchPlanTotalAvailable.value < requestedCount) {
+      batchPlanNotice.value = `当前可用节点总数为 ${batchPlanTotalAvailable.value}，小于需求 ${requestedCount}，将按可用数量创建。`;
+    } else {
+      batchPlanNotice.value = '';
+    }
+
+    batchPlanVisible.value = true;
   } catch (error) {
-    console.error('创建批量新增任务失败:', error);
+    console.error('生成分布计划失败:', error);
+    Message.error('生成分布计划失败，请稍后重试');
+  } finally {
+    batchPlanLoading.value = false;
   }
+};
+
+const handleBatchPlanCancel = () => {
+  batchPlanVisible.value = false;
+  batchPlanItems.value = [];
+  batchPlanNotice.value = '';
+};
+
+const removePlanItem = (record: BatchPlanItem) => {
+  batchPlanItems.value = batchPlanItems.value.filter(item => item.regionCode !== record.regionCode);
+  if (batchPlanTotalAvailable.value < batchPlanRequested.value) {
+    batchPlanNotice.value = `当前可用节点总数为 ${batchPlanTotalAvailable.value}，小于需求 ${batchPlanRequested.value}，将按可用数量创建。`;
+  } else {
+    batchPlanNotice.value = '';
+  }
+};
+
+const handleBatchPlanOk = async () => {
+  if (batchPlanItems.value.length === 0) {
+    Message.warning('没有可用地区');
+    return;
+  }
+  if (batchPlanPlannedTotal.value <= 0) {
+    Message.warning('计划数量不能为空');
+    return;
+  }
+  if (batchPlanPlannedTotal.value > batchAddForm.nodeCount) {
+    Message.warning('计划数量不能超过请求数量');
+    return;
+  }
+
+  const overLimit = batchPlanItems.value.find(item => item.planCount > item.availableNodes);
+  if (overLimit) {
+    Message.warning(`地区 ${overLimit.regionName} 的计划数超过可用数量`);
+    return;
+  }
+
+  if (batchPlanPlannedTotal.value < batchPlanTarget.value) {
+    Message.warning('计划数量少于可创建数量，将按当前计划创建');
+  }
+
+  const tasks = buildTasksFromPlan(batchPlanItems.value);
+  batchPlanVisible.value = false;
+  await executeBatchAddTasks(tasks);
 };
 
 // 批量部署
@@ -1343,6 +1658,9 @@ const getProviderName = (provider: string) => {
 };
 
 const getRegionName = (region: string) => {
+  if (region === REGION_UNLIMITED) {
+    return '不限';
+  }
   // 从动态加载的地区列表中查找
   const regionInfo = regionOptions.value.find(r => r.code === region);
   return regionInfo ? regionInfo.name : region;
@@ -1350,24 +1668,242 @@ const getRegionName = (region: string) => {
 
 // 根据地区代码获取标签
 const getRegionTag = (region: string) => {
+  if (region === REGION_UNLIMITED) {
+    return '';
+  }
   const regionInfo = regionOptions.value.find(r => r.code === region);
   return regionInfo ? regionInfo.tag : '';
 };
 
-const getStatusColor = (status: number) => {
-  const colorMap: Record<number, string> = {
-    0: 'red',
-    1: 'green'
-  };
-  return colorMap[status] || 'gray';
+watch(
+  () => batchAddForm.region,
+  (region) => {
+    if (region && region !== REGION_UNLIMITED) {
+      const tag = getRegionTag(region);
+      if (tag) {
+        batchAddForm.tag = tag;
+      }
+      return;
+    }
+
+    if (!batchAddForm.tag) {
+      batchAddForm.tag = '海外';
+    }
+  }
+);
+
+const getStatusColor = (status: string | number) => {
+  if (status === 'online') {
+    return 'green';
+  }
+  if (status === 'offline') {
+    return 'red';
+  }
+  if (status === 1) {
+    return 'green';
+  }
+  if (status === 0) {
+    return 'red';
+  }
+  return 'gray';
 };
 
-const getStatusText = (status: number) => {
-  const textMap: Record<number, string> = {
-    0: '离线',
-    1: '在线'
+const getStatusText = (status: string | number) => {
+  if (typeof status === 'string' && status) {
+    if (status === 'online') {
+      return '在线';
+    }
+    if (status === 'offline') {
+      return '离线';
+    }
+    return status;
+  }
+  if (status === 1) {
+    return '在线';
+  }
+  if (status === 0) {
+    return '离线';
+  }
+  return '未知';
+};
+
+const mapJobStatusToTaskStatus = (jobStatus: number): TaskStatus => {
+  switch (jobStatus) {
+    case 0:
+      return TaskStatus.PROCESSING;
+    case 1:
+      return TaskStatus.PROCESSING;
+    case 2:
+      return TaskStatus.SUCCESS;
+    case 3:
+      return TaskStatus.FAILED;
+    case 4:
+      return TaskStatus.PARTIAL;
+    default:
+      return TaskStatus.PROCESSING;
+  }
+};
+
+const extractFailedItems = (tasks: any[]): TaskDetailItem[] => {
+  if (!Array.isArray(tasks)) {
+    return [];
+  }
+  return tasks
+    .filter(task => task.task_status === 3)
+    .map(task => ({
+      item_id: task.task_id,
+      item_name: task.task_type,
+      status: task.task_status,
+      error_message: task.error_message
+    }));
+};
+
+const createAsyncJob = async (tasks: Array<{ taskType: string; requestParams: any }>) => {
+  const response = await api.post('/asynctask/CreateAsyncJob', {
+    tasks: tasks.map(task => ({
+      task_type: task.taskType,
+      request_params: task.requestParams
+    }))
+  }, {
+    timeout: 20000
+  });
+
+  if (response.data?.code !== 200) {
+    throw new Error(response.data?.message || '创建任务失败');
+  }
+
+  let jobData = response.data?.data;
+  if (Array.isArray(jobData) && jobData.length > 0) {
+    jobData = jobData[0];
+  }
+
+  const jobId = jobData?.job_id;
+  if (!jobId) {
+    throw new Error('服务器未返回job_id');
+  }
+
+  return jobId as string;
+};
+
+const queryAsyncJob = async (jobId: string): Promise<TaskStatusResponse | null> => {
+  try {
+    const response = await api.post('/asynctask/QueryAsyncJob', {
+      job_id: jobId
+    });
+
+    if (response.data?.code !== 200) {
+      // 请求成功但业务失败，返回null表示查询失败，继续重试
+      console.warn('queryAsyncJob 业务失败:', response.data?.message);
+      return null;
+    }
+
+    let jobData = response.data?.data;
+    if (Array.isArray(jobData) && jobData.length > 0) {
+      jobData = jobData[0];
+    }
+
+    return {
+      task_id: jobData?.job_id || jobId,
+      task_type: jobData?.tasks?.[0]?.task_type || 'UNKNOWN',
+      task_status: mapJobStatusToTaskStatus(jobData?.job_status),
+      total_count: jobData?.total_task_cnt || 0,
+      success_count: jobData?.success_task_cnt || 0,
+      failed_count: jobData?.failed_task_cnt || 0,
+      progress: jobData?.progress || 0,
+      error_message: jobData?.tasks?.[0]?.error_message,
+      created_at: jobData?.created_at || new Date().toISOString(),
+      completed_time: jobData?.updated_at,
+      failed_items: extractFailedItems(jobData?.tasks)
+    };
+  } catch (error: any) {
+    // 网络超时或请求失败，返回null继续重试，不弹窗
+    console.warn('queryAsyncJob 请求失败，将继续重试:', error?.message);
+    return null;
+  }
+};
+
+const stopBatchJobPolling = () => {
+  if (batchJobTimer) {
+    clearInterval(batchJobTimer);
+    batchJobTimer = null;
+  }
+};
+
+const computeAggregateStatus = (statuses: BatchJobStatus[]): TaskStatusResponse => {
+  const totals = statuses.reduce((acc, item) => {
+    acc.total += item.total_count || 0;
+    acc.success += item.success_count || 0;
+    acc.failed += item.failed_count || 0;
+    if (item.failed_items?.length) {
+      acc.failedItems.push(...item.failed_items);
+    }
+    return acc;
+  }, {
+    total: 0,
+    success: 0,
+    failed: 0,
+    failedItems: [] as TaskDetailItem[]
+  });
+
+  let status = TaskStatus.SUCCESS;
+  if (totals.failed > 0) {
+    status = totals.success > 0 ? TaskStatus.PARTIAL : TaskStatus.FAILED;
+  }
+
+  return {
+    task_id: '',
+    task_type: 'CREATE_NODE',
+    task_status: status,
+    total_count: totals.total,
+    success_count: totals.success,
+    failed_count: totals.failed,
+    progress: 100,
+    created_at: new Date().toISOString(),
+    completed_time: new Date().toISOString(),
+    failed_items: totals.failedItems
   };
-  return textMap[status] || '未知';
+};
+
+const startBatchJobPolling = (_jobIds: string[]) => {
+  stopBatchJobPolling();
+
+  const pollOnce = async () => {
+    const pendingJobs = batchJobStatuses.value.filter(job => job.task_status === TaskStatus.PROCESSING && job.task_id);
+    if (pendingJobs.length === 0) {
+      stopBatchJobPolling();
+      const finalStatus = computeAggregateStatus(batchJobStatuses.value);
+      batchJobStatuses.value = [];
+      handleTaskComplete(finalStatus);
+      return;
+    }
+
+    const updates = await Promise.all(pendingJobs.map(async (job) => {
+      const status = await queryAsyncJob(job.task_id);
+      // 如果查询失败（返回null），保持原状态继续轮询
+      if (status === null) {
+        return { batchIndex: job.batchIndex, status: null };
+      }
+      return { batchIndex: job.batchIndex, status };
+    }));
+
+    const nextStatuses = batchJobStatuses.value.map(job => {
+      const update = updates.find(item => item.batchIndex === job.batchIndex);
+      // 如果没有更新或状态为null，保持原状态
+      if (!update || update.status === null) {
+        return job;
+      }
+      return {
+        ...job,
+        ...update.status,
+        batchIndex: job.batchIndex
+      };
+    });
+
+    batchJobStatuses.value = nextStatuses;
+  };
+
+  pollOnce();
+  batchJobTimer = window.setInterval(pollOnce, 2000);
 };
 
 // 解析支持的采集器列表

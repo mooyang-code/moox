@@ -170,20 +170,22 @@ export class AsyncTaskManager {
 
   /**
    * 查询任务状态
+   * @param taskId 任务ID
+   * @param silent 是否静默模式（不弹出错误提示），用于轮询场景
    */
-  async queryTaskStatus(taskId: string): Promise<TaskStatusResponse> {
+  async queryTaskStatus(taskId: string, silent: boolean = false): Promise<TaskStatusResponse> {
     try {
       // 调用新的异步任务查询接口 - 使用Job-Task模型
       const response = await api.post('/asynctask/QueryAsyncJob', {
         job_id: taskId
       });
-      
+
       // 检查响应状态
       if (response.data?.code !== 200) {
         const errorMsg = response.data?.message || '查询任务状态失败';
         throw new Error(errorMsg);
       }
-      
+
       // 从后台响应中获取任务数据
       // 处理数组格式的响应：response.data.data 可能是数组
       let jobData = response.data?.data;
@@ -212,7 +214,10 @@ export class AsyncTaskManager {
       // 不抛出错误，让调用方处理失败状态
       return taskStatus;
     } catch (error: any) {
-      Message.error(error.message || '查询任务状态失败');
+      // 静默模式下不弹出错误提示，用于轮询场景（超时或网络问题时继续重试）
+      if (!silent) {
+        Message.error(error.message || '查询任务状态失败');
+      }
       throw error;
     }
   }
@@ -329,33 +334,34 @@ export class AsyncTaskManager {
     onPartialSuccess?: (data: TaskStatusResponse) => void
   ): Promise<void> {
     try {
-      const taskStatus = await this.queryTaskStatus(taskId);
-      
+      // 使用静默模式查询，超时或请求失败时不弹窗，继续轮询
+      const taskStatus = await this.queryTaskStatus(taskId, true);
+
       // 处理进度回调
       if (onProgress) {
         onProgress(taskStatus);
       }
-      
+
       // 根据任务状态处理
       switch (taskStatus.task_status) {
         case TaskStatus.PROCESSING:
           // 任务还在处理中，继续轮询
           break;
-          
+
         case TaskStatus.SUCCESS:
           this.stopPolling();
           if (onSuccess) {
             onSuccess(taskStatus);
           }
           break;
-          
+
         case TaskStatus.FAILED:
           this.stopPolling();
           if (onFailed) {
             onFailed(taskStatus);
           }
           break;
-          
+
         case TaskStatus.PARTIAL:
           this.stopPolling();
           if (onPartialSuccess) {
@@ -364,7 +370,8 @@ export class AsyncTaskManager {
           break;
       }
     } catch (error) {
-      console.error('轮询任务状态失败:', error);
+      // 查询失败时（如超时、网络问题），静默处理，继续轮询
+      console.warn('轮询任务状态失败，将继续重试:', error);
     }
   }
 

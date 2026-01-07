@@ -38,15 +38,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 
 	// 4. 注册定时器
-	// 节点心跳探测定时器（仅探测异常超时节点）
-	timer.RegisterScheduler("healthProbeSchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.healthProbe.timer"), cloudnode.HealthProbeSchedule)
-	// 节点心跳探测定时器（保活所有节点）
-	timer.RegisterScheduler("keepaliveSchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.keepalive.timer"), cloudnode.KeepaliveSchedule)
 	// DNS探测定时器
 	timer.RegisterScheduler("dnsproxySchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service("trpc.dnsproxy.timer"), dnsproxy.HandleSchedule)
+	// 云节点保活定时器
+	timer.RegisterScheduler("keepaliveSchedule", &timer.DefaultScheduler{})
+	timer.RegisterHandlerService(s.Service("trpc.keepalive.timer"), cloudnode.HandleKeepaliveSchedule)
 	// 任务实例重算定时器
 	timer.RegisterScheduler("taskPlannerSchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service("trpc.collectmgr.timer"), collectmgr.HandleTaskPlannerSchedule)

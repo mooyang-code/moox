@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -208,8 +209,8 @@ func (h *CloudNodeHandler) GetNodeList(c *gin.Context) {
 	}
 
 	// 打印接收到的参数用于调试
-	log.InfoContextf(ctx, "[GetNodeList] Received params - Page: %d, PageSize: %d, NodeID: %s, CloudAccountID: %s, Namespace: %s, Region: %s, NodeType: %s, Status: %s",
-		req.Page, req.PageSize, req.NodeID, req.CloudAccountID, req.Namespace, req.Region, req.NodeType, req.Status)
+	log.InfoContextf(ctx, "[GetNodeList] Received params - Page: %d, PageSize: %d, NodeID: %s, CloudAccountID: %s, Namespace: %s, Region: %s, NodeType: %s, Tag: %s, Status: %s",
+		req.Page, req.PageSize, req.NodeID, req.CloudAccountID, req.Namespace, req.Region, req.NodeType, req.Tag, req.Status)
 
 	// 设置默认分页参数
 	if req.Page <= 0 {
@@ -228,7 +229,8 @@ func (h *CloudNodeHandler) GetNodeList(c *gin.Context) {
 	}
 
 	// 添加代码包版本信息和节点状态到每个节点
-	for _, node := range resp.Items {
+	items := make([]map[string]interface{}, len(resp.Items))
+	for i, node := range resp.Items {
 		node.PackageVersion = "-" // 默认值
 
 		// 如果有代码包ID，查询代码包详情
@@ -242,11 +244,33 @@ func (h *CloudNodeHandler) GetNodeList(c *gin.Context) {
 			}
 		}
 
-		node.Status = calcNodeStatus(node.LastHeartbeat, node.TimeoutThreshold)
+		statusText := calcNodeStatusText(node.LastHeartbeat, node.TimeoutThreshold)
+		raw, err := json.Marshal(node)
+		if err != nil {
+			log.WarnContextf(ctx, "[CloudNode] Failed to marshal node: %v", err)
+			items[i] = map[string]interface{}{
+				"node_id": node.NodeID,
+				"status":  statusText,
+			}
+			continue
+		}
+
+		var item map[string]interface{}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			log.WarnContextf(ctx, "[CloudNode] Failed to unmarshal node: %v", err)
+			items[i] = map[string]interface{}{
+				"node_id": node.NodeID,
+				"status":  statusText,
+			}
+			continue
+		}
+
+		item["status"] = statusText
+		items[i] = item
 	}
 
 	// 使用新的分页列表响应格式
-	common.PaginatedListResponse(c, "查询成功", resp.Items, resp.Total)
+	common.PaginatedListResponse(c, "查询成功", items, resp.Total)
 }
 
 func calcNodeStatus(lastHeartbeat *time.Time, timeoutThreshold int) *cloudnodetypes.NodeStatus {
@@ -265,6 +289,20 @@ func calcNodeStatus(lastHeartbeat *time.Time, timeoutThreshold int) *cloudnodety
 		status = cloudnodetypes.NodeStatusOnline
 	}
 	return &status
+}
+
+func calcNodeStatusText(lastHeartbeat *time.Time, timeoutThreshold int) string {
+	status := calcNodeStatus(lastHeartbeat, timeoutThreshold)
+	if status == nil {
+		return "offline"
+	}
+
+	switch *status {
+	case cloudnodetypes.NodeStatusOnline:
+		return "online"
+	default:
+		return "offline"
+	}
 }
 
 // GetNodeDetail 获取节点详情

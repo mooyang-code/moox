@@ -2,8 +2,6 @@ package cloudnode
 
 import (
 	"context"
-	"fmt"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/server/internal/service/asynctask"
@@ -54,9 +52,6 @@ type NodeService interface {
 
 	// DeleteNodeFromDB 从数据库删除节点记录
 	DeleteNodeFromDB(ctx context.Context, nodeID string) error
-
-	// ========== 节点数据库操作 ==========
-	// 注意：SaveNodeToDB 已移至私有方法，仅供内部使用；UpdateNodeStatus 已移除，状态管理由HeartbeatNode表负责
 
 	// ========== 节点状态管理 ==========
 
@@ -135,30 +130,11 @@ type HeartbeatService interface {
 	// ReportHeartbeat 上报心跳
 	ReportHeartbeat(ctx context.Context, req *types.ReportHeartbeatRequest) (*types.ReportHeartbeatResponse, error)
 
-	// ========== 节点管理 ==========
-
-	// RegisterHeartbeatNode 注册心跳节点
-	RegisterHeartbeatNode(ctx context.Context, req *types.RegisterNodeRequest) (*types.HeartbeatNode, error)
-
-	// UnregisterHeartbeatNode 注销心跳节点
-	UnregisterHeartbeatNode(ctx context.Context, nodeID, nodeType string) error
-
-	// GetHeartbeatNode 获取节点心跳信息
-	GetHeartbeatNode(ctx context.Context, nodeID, nodeType string) (*types.HeartbeatNode, error)
-
 	// GetNodeStatus 获取节点状态
 	GetNodeStatus(ctx context.Context, nodeID string) (*types.NodeStatus, error)
 
-	// ListHeartbeatNodes 列出心跳节点
-	ListHeartbeatNodes(ctx context.Context, filter *types.NodeFilter) ([]*types.HeartbeatNode, int64, error)
-
-	// UpdateHeartbeatNodeConfig 更新心跳节点配置
-	UpdateHeartbeatNodeConfig(ctx context.Context, req *types.UpdateNodeConfigRequest) error
-
-	// ========== 探测管理 ==========
-
-	// ProbeHeartbeatNode 手动探测心跳节点
-	ProbeHeartbeatNode(ctx context.Context, nodeID, nodeType, action string) (*types.ProbeResult, error)
+	// GetOnlineNodeIDs 获取所有在线节点ID列表
+	GetOnlineNodeIDs() []string
 }
 
 // CloudNodeDTO 云节点数据传输对象（统一用于输入输出）
@@ -316,6 +292,7 @@ type NodeListRequest struct {
 	Namespace      string `form:"namespace" json:"namespace"`
 	Region         string `form:"region" json:"region"`
 	NodeType       string `form:"node_type" json:"node_type"`
+	Tag            string `form:"tag" json:"tag"`
 	Status         string `form:"status" json:"status"`
 	Keyword        string `form:"keyword" json:"keyword"`
 }
@@ -329,15 +306,15 @@ type NodeListResponse struct {
 }
 
 // RegisterExecutors 注册 cloudnode 模块的所有异步任务执行器
-func RegisterExecutors(dbManager *database.Manager, cloudNodeService Service, heartbeatService HeartbeatService) error {
+func RegisterExecutors(dbManager *database.Manager, cloudNodeService Service) error {
 	log.Info("[CloudNode] 正在注册异步任务执行器...")
 
 	// 注册节点管理 executors
 	// 需要类型断言为具体实现以访问私有方法
 	serviceImpl := cloudNodeService.(*ServiceImpl)
-	createNodeExecutor := NewCreateNodeExecutor(serviceImpl, heartbeatService)
-	deleteNodeExecutor := NewDeleteNodeExecutor(serviceImpl, heartbeatService)
-	deployNodeExecutor := NewDeployNodeExecutor(serviceImpl, heartbeatService)
+	createNodeExecutor := NewCreateNodeExecutor(serviceImpl)
+	deleteNodeExecutor := NewDeleteNodeExecutor(serviceImpl)
+	deployNodeExecutor := NewDeployNodeExecutor(serviceImpl)
 	err := asynctask.RegisterExecutor(createNodeExecutor)
 	if err != nil {
 		return err
@@ -362,113 +339,4 @@ func RegisterExecutors(dbManager *database.Manager, cloudNodeService Service, he
 
 	log.Info("[CloudNode] 异步任务执行器注册完成：CREATE_NODE, DELETE_NODE, DEPLOY_NODE, UPLOAD_FILE_TO_COS")
 	return nil
-}
-
-// ========== 探测器相关实现 ==========
-
-// 全局变量：探测器注册表
-var (
-	probersMu  sync.RWMutex
-	probersMap = make(map[string]Prober) // key为prober.Name()
-)
-
-// Prober 探测器接口，用于不同类型的节点探测
-type Prober interface {
-	// Name 探测器名称
-	Name() string
-	// Probe 执行探测
-	Probe(ctx context.Context, req *ProbeRequest) (*ProbeResponse, error)
-}
-
-// ProbeRequest 探测请求
-type ProbeRequest struct {
-	NodeID   string
-	NodeType string
-	ProbeURL string
-	Timeout  int
-	Action   string // 探测动作：health, init 等
-	Metadata map[string]interface{}
-}
-
-// ProbeResponse 探测响应
-type ProbeResponse struct {
-	NodeID          string `json:"node_id"`
-	State           string `json:"state"`
-	Timestamp       string `json:"timestamp"`
-	OSName          string `json:"os"`
-	FunctionVersion string `json:"function_version"`
-	RequestID       string `json:"request_id"`
-}
-
-// FunctionInvoker 函数调用接口（用于探测云函数）
-type FunctionInvoker interface {
-	InvokeFunction(ctx context.Context, nodeID string, eventData interface{}) (interface{}, error)
-}
-
-// ========== 全局探测器注册表函数 ==========
-
-// RegisterProber 注册探测器
-func RegisterProber(prober Prober) error {
-	if prober == nil {
-		return fmt.Errorf("prober cannot be nil")
-	}
-
-	name := prober.Name()
-	if name == "" {
-		return fmt.Errorf("prober name cannot be empty")
-	}
-
-	probersMu.Lock()
-	defer probersMu.Unlock()
-
-	probersMap[name] = prober
-	return nil
-}
-
-// RegisterDefaultProbers 注册默认探测器
-func RegisterDefaultProbers(nodeDAO dao.CloudNodeDAO, accountFactory *provider.AccountFactory) error {
-	// 注册HTTP探测器
-	err := RegisterProber(NewHTTPHeartbeatProber())
-	if err != nil {
-		return err
-	}
-
-	// 注册SCF探测器（需要依赖注入）
-	if nodeDAO != nil && accountFactory != nil {
-		err = RegisterProber(NewSCFHeartbeatProber(nodeDAO, accountFactory))
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// GetProber 获取探测器
-func GetProber(name string) (Prober, bool) {
-	probersMu.RLock()
-	defer probersMu.RUnlock()
-
-	prober, exists := probersMap[name]
-	return prober, exists
-}
-
-// HasProber 检查是否注册了指定探测器
-func HasProber(name string) bool {
-	probersMu.RLock()
-	defer probersMu.RUnlock()
-
-	_, exists := probersMap[name]
-	return exists
-}
-
-// ListProbers 列出所有探测器
-func ListProbers() map[string]Prober {
-	probersMu.RLock()
-	defer probersMu.RUnlock()
-
-	result := make(map[string]Prober)
-	for name, prober := range probersMap {
-		result[name] = prober
-	}
-	return result
 }

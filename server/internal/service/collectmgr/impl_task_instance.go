@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"strconv"
+	"time"
 
 	cloudnodedao "github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	collectordao "github.com/mooyang-code/moox/server/internal/service/collectmgr/dao"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/model"
+	"trpc.group/trpc-go/trpc-database/localcache"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -17,19 +20,27 @@ type TaskInstanceServiceImpl struct {
 	instanceDAO     collectordao.CollectorTaskInstanceDAO
 	taskRulesDAO    collectordao.CollectorTaskRulesDAO
 	nodeDAO         cloudnodedao.CloudNodeDAO
-	heartbeatDAO    cloudnodedao.HeartbeatDAO
 	functionInvoker CloudFunctionInvoker // 使用接口而不是具体类型
+}
+
+const (
+	taskInstanceCacheTTLSeconds        int64 = 30
+	taskInstanceCacheVersionTTLSeconds int64 = 3600
+	taskInstanceCacheVersionKey              = "collectmgr:task_instance:cache:version"
+)
+
+type taskInstanceListCachePayload struct {
+	Items []*TaskInstanceDTO
+	Total int64
 }
 
 func NewTaskInstanceServiceImpl(instanceDAO collectordao.CollectorTaskInstanceDAO,
 	taskRulesDAO collectordao.CollectorTaskRulesDAO,
-	nodeDAO cloudnodedao.CloudNodeDAO,
-	heartbeatDAO cloudnodedao.HeartbeatDAO) TaskInstanceService {
+	nodeDAO cloudnodedao.CloudNodeDAO) TaskInstanceService {
 	return &TaskInstanceServiceImpl{
 		instanceDAO:  instanceDAO,
 		taskRulesDAO: taskRulesDAO,
 		nodeDAO:      nodeDAO,
-		heartbeatDAO: heartbeatDAO,
 	}
 }
 
@@ -46,7 +57,11 @@ func (s *TaskInstanceServiceImpl) CreateTaskInstance(ctx context.Context, instan
 		Result:          instance.Result,
 	}
 
-	return s.instanceDAO.CreateTaskInstance(ctx, modelInstance)
+	if err := s.instanceDAO.CreateTaskInstance(ctx, modelInstance); err != nil {
+		return err
+	}
+	s.warnIfInvalidateCacheFailed(ctx, "CreateTaskInstance", s.InvalidateTaskInstanceCache(ctx))
+	return nil
 }
 
 func (s *TaskInstanceServiceImpl) GetTaskInstance(ctx context.Context, instanceID string) (*TaskInstanceDTO, error) {
@@ -113,7 +128,11 @@ func (s *TaskInstanceServiceImpl) UpdateTaskInstance(ctx context.Context, instan
 		Result:       instance.Result,
 	}
 
-	return s.instanceDAO.UpdateTaskInstance(ctx, modelInstance)
+	if err := s.instanceDAO.UpdateTaskInstance(ctx, modelInstance); err != nil {
+		return err
+	}
+	s.warnIfInvalidateCacheFailed(ctx, "UpdateTaskInstance", s.InvalidateTaskInstanceCache(ctx))
+	return nil
 }
 
 func (s *TaskInstanceServiceImpl) RemoveTaskInstance(ctx context.Context, instanceID string) error {
@@ -121,7 +140,11 @@ func (s *TaskInstanceServiceImpl) RemoveTaskInstance(ctx context.Context, instan
 		return fmt.Errorf("instance ID is required")
 	}
 
-	return s.instanceDAO.DeleteTaskInstance(ctx, instanceID)
+	if err := s.instanceDAO.DeleteTaskInstance(ctx, instanceID); err != nil {
+		return err
+	}
+	s.warnIfInvalidateCacheFailed(ctx, "RemoveTaskInstance", s.InvalidateTaskInstanceCache(ctx))
+	return nil
 }
 
 func (s *TaskInstanceServiceImpl) StartInstance(ctx context.Context, instanceID string) error {
@@ -129,7 +152,11 @@ func (s *TaskInstanceServiceImpl) StartInstance(ctx context.Context, instanceID 
 		return fmt.Errorf("instance ID is required")
 	}
 
-	return s.instanceDAO.StartInstance(ctx, instanceID)
+	if err := s.instanceDAO.StartInstance(ctx, instanceID); err != nil {
+		return err
+	}
+	s.warnIfInvalidateCacheFailed(ctx, "StartInstance", s.InvalidateTaskInstanceCache(ctx))
+	return nil
 }
 
 func (s *TaskInstanceServiceImpl) CompleteInstance(ctx context.Context, instanceID string, success bool, result string) error {
@@ -137,7 +164,11 @@ func (s *TaskInstanceServiceImpl) CompleteInstance(ctx context.Context, instance
 		return fmt.Errorf("instance ID is required")
 	}
 
-	return s.instanceDAO.CompleteInstance(ctx, instanceID, success, result)
+	if err := s.instanceDAO.CompleteInstance(ctx, instanceID, success, result); err != nil {
+		return err
+	}
+	s.warnIfInvalidateCacheFailed(ctx, "CompleteInstance", s.InvalidateTaskInstanceCache(ctx))
+	return nil
 }
 
 // ReportTaskStatus 上报任务状态（客户端上报用）
@@ -150,6 +181,7 @@ func (s *TaskInstanceServiceImpl) ReportTaskStatus(ctx context.Context, instance
 	if err := s.instanceDAO.ReportInstanceStatus(ctx, instanceID, status, result); err != nil {
 		return err
 	}
+	s.warnIfInvalidateCacheFailed(ctx, "ReportTaskStatus", s.InvalidateTaskInstanceCache(ctx))
 
 	// 如果任务失败或部分失败，触发任务转移逻辑
 	if status == model.InstanceStatusFailed || status == model.InstanceStatusPartFailed {
@@ -171,6 +203,7 @@ func (s *TaskInstanceServiceImpl) InvalidateTaskInstance(ctx context.Context, ta
 	if err := s.instanceDAO.BatchInvalidate(ctx, []string{taskID}); err != nil {
 		return fmt.Errorf("failed to invalidate task instance: %w", err)
 	}
+	s.warnIfInvalidateCacheFailed(ctx, "InvalidateTaskInstance", s.InvalidateTaskInstanceCache(ctx))
 
 	log.InfoContextf(ctx, "[TaskInstance] Task instance %s has been invalidated", taskID)
 	return nil
@@ -323,6 +356,42 @@ func (s *TaskInstanceServiceImpl) ListTaskInstancesWithFilter(ctx context.Contex
 	return result, total, nil
 }
 
+// GetTaskInstanceListCache 带缓存的任务实例列表查询（仅支持精确条件、有效数据）
+func (s *TaskInstanceServiceImpl) GetTaskInstanceListCache(ctx context.Context, filter *TaskInstanceFilterDTO) ([]*TaskInstanceDTO, int64, error) {
+	normalized, err := normalizeTaskInstanceCacheFilter(filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	cacheKey := buildTaskInstanceCacheKey(s.getTaskInstanceCacheVersion(ctx), normalized)
+	cached, err := localcache.GetWithLoad(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, error) {
+		items, total, err := s.ListTaskInstancesWithFilter(ctx, normalized)
+		if err != nil {
+			return nil, err
+		}
+		return &taskInstanceListCachePayload{Items: items, Total: total}, nil
+	}, taskInstanceCacheTTLSeconds)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	payload, ok := cached.(*taskInstanceListCachePayload)
+	if !ok {
+		localcache.Del(cacheKey)
+		return nil, 0, fmt.Errorf("invalid task instance cache payload")
+	}
+	return payload.Items, payload.Total, nil
+}
+
+// InvalidateTaskInstanceCache 失效任务实例缓存
+func (s *TaskInstanceServiceImpl) InvalidateTaskInstanceCache(ctx context.Context) error {
+	version := strconv.FormatInt(time.Now().UnixNano(), 10)
+	if ok := localcache.Set(taskInstanceCacheVersionKey, version, taskInstanceCacheVersionTTLSeconds); !ok {
+		return fmt.Errorf("failed to update task instance cache version")
+	}
+	return nil
+}
+
 // SetCloudNodeService 设置CloudNodeService（解决循环依赖）
 func (s *TaskInstanceServiceImpl) SetCloudNodeService(service CloudFunctionInvoker) {
 	s.functionInvoker = service
@@ -369,6 +438,7 @@ func (s *TaskInstanceServiceImpl) tryTransferFailedTask(ctx context.Context, tas
 		log.ErrorContextf(ctx, "[TaskTransfer] Failed to update instance node for task %s: %v", taskID, err)
 		return
 	}
+	s.warnIfInvalidateCacheFailed(ctx, "tryTransferFailedTask", s.InvalidateTaskInstanceCache(ctx))
 
 	// 5. 立即触发任务在新节点上执行
 	if err := s.triggerTaskOnNode(ctx, selectedNodeID, instance); err != nil {
@@ -438,4 +508,68 @@ func (s *TaskInstanceServiceImpl) triggerTaskOnNode(ctx context.Context, nodeID 
 
 	log.InfoContextf(ctx, "[TaskTransfer] Function invocation result: %v", result)
 	return nil
+}
+
+func (s *TaskInstanceServiceImpl) getTaskInstanceCacheVersion(ctx context.Context) string {
+	if cached, ok := localcache.Get(taskInstanceCacheVersionKey); ok {
+		if version, ok := cached.(string); ok && version != "" {
+			return version
+		}
+		localcache.Del(taskInstanceCacheVersionKey)
+	}
+	version := strconv.FormatInt(time.Now().UnixNano(), 10)
+	localcache.Set(taskInstanceCacheVersionKey, version, taskInstanceCacheVersionTTLSeconds)
+	return version
+}
+
+func buildTaskInstanceCacheKey(version string, filter *TaskInstanceFilterDTO) string {
+	statusKey := "all"
+	if filter.Status != nil {
+		statusKey = strconv.Itoa(*filter.Status)
+	}
+	return fmt.Sprintf("collectmgr:task_instance:cache:list:%s:page:%d:size:%d:status:%s",
+		version,
+		filter.Page,
+		filter.PageSize,
+		statusKey,
+	)
+}
+
+func normalizeTaskInstanceCacheFilter(filter *TaskInstanceFilterDTO) (*TaskInstanceFilterDTO, error) {
+	if filter == nil {
+		filter = &TaskInstanceFilterDTO{}
+	}
+	if filter.TaskID != "" || filter.RuleID != "" || filter.NodeID != "" || filter.Symbol != "" {
+		return nil, fmt.Errorf("cache mode does not support fuzzy query")
+	}
+	if filter.Invalid != nil && *filter.Invalid != model.InvalidNo {
+		return nil, fmt.Errorf("cache mode only supports valid data")
+	}
+
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := filter.PageSize
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	valid := model.InvalidNo
+	return &TaskInstanceFilterDTO{
+		Status:   filter.Status,
+		Invalid:  &valid,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
+}
+
+func (s *TaskInstanceServiceImpl) warnIfInvalidateCacheFailed(ctx context.Context, action string, err error) {
+	if err == nil {
+		return
+	}
+	log.WarnContextf(ctx, "[TaskInstance] %s cache invalidate failed: %v", action, err)
 }

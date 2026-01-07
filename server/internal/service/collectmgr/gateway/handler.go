@@ -173,6 +173,8 @@ func (h *CollectorGatewayHandler) parseMethodToRoute(method string, body []byte)
 	// Task Instance methods (任务实例)
 	case "GetTaskInstanceList", "GetTaskInstanceListInner", "ListTaskInstances":
 		return h.buildMultiQueryRoute("/api/v1/task-instance/list", body)
+	case "GetTaskInstanceListCache":
+		return h.buildMultiQueryRoute("/api/v1/task-instance/cache/list", body)
 	case "GetTaskInstanceDetail":
 		route.Path = "/api/v1/task-instance"
 		route.HTTPMethod = "GET"

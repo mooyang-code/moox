@@ -20,6 +20,7 @@ require (
 	github.com/mooyang-code/moox/server/proto/gen v0.0.0-20250626155508-b6cf71b7b8d0
 	github.com/nats-io/nats-server/v2 v2.12.1
 	github.com/nats-io/nats.go v1.47.0
+	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/rs/xid v1.6.0
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.1.26
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf v1.1.0

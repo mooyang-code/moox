@@ -275,6 +275,28 @@ func (s *ServiceImpl) ConvertToCloudNodeDTO(node *model.CloudNode) *CloudNodeDTO
 	return dto
 }
 
+// convertToCloudNodeDTOWithHeartbeat 将model转换为CloudNodeDTO，并从内存获取心跳数据
+func (s *ServiceImpl) convertToCloudNodeDTOWithHeartbeat(node *model.CloudNode) *CloudNodeDTO {
+	dto := s.ConvertToCloudNodeDTO(node)
+	if dto == nil {
+		return nil
+	}
+
+	// 从内存获取心跳信息
+	if s.heartbeatStore != nil {
+		lastHeartbeat := s.heartbeatStore.GetLastHeartbeat(node.NodeID)
+		if lastHeartbeat != nil {
+			dto.LastHeartbeat = lastHeartbeat
+		}
+
+		// 计算节点状态
+		status := s.heartbeatStore.GetNodeStatus(node.NodeID, node.TimeoutThreshold)
+		dto.Status = &status
+	}
+
+	return dto
+}
+
 // ConvertToCloudAccountDTO 将model转换为CloudAccountDTO（脱敏处理）
 func (s *ServiceImpl) ConvertToCloudAccountDTO(account *model.CloudAccount) *CloudAccountDTO {
 	if account == nil {
@@ -353,44 +375,157 @@ func (s *ServiceImpl) generateNodeID(ctx context.Context, region string) (string
 	return nodeID, nil
 }
 
-// allocateNamespace 分配命名空间
-func (s *ServiceImpl) allocateNamespace(ctx context.Context, region string) (string, error) {
-	// 获取该region下的所有命名空间使用情况
-	namespaceStats, err := s.nodeDAO.GetNamespaceStats(ctx, region)
+// ========== 命名空间分配相关方法 ==========
+
+// generateNamespaceID 生成命名空间ID
+// 格式：地区ID-3位随机字符串，如 ap-guangzhou-abc
+func (s *ServiceImpl) generateNamespaceID(region string) string {
+	randomStr := common.GenerateID(3)
+	return fmt.Sprintf("%s-%s", region, randomStr)
+}
+
+// getNamespaceUsage 获取指定region下各命名空间的节点使用数量
+func (s *ServiceImpl) getNamespaceUsage(ctx context.Context, region string) (map[string]int, error) {
+	usage, err := s.nodeDAO.GetNamespaceStats(ctx, region)
 	if err != nil {
-		return "", fmt.Errorf("failed to get namespace stats: %w", err)
+		return nil, fmt.Errorf("failed to get namespace stats: %w", err)
 	}
+	if usage == nil {
+		usage = make(map[string]int)
+	}
+	return usage, nil
+}
 
-	// 查找可用的命名空间
-	// 规则：每个命名空间最多50个函数，每个region最多5个命名空间
-	for i := 1; i <= 5; i++ {
-		namespace := fmt.Sprintf("%s-%02d", region, i)
-		count, exists := namespaceStats[namespace]
-
-		// 如果命名空间不存在或函数数少于50个，则可以使用
-		if !exists || count < 50 {
-			return namespace, nil
+// syncCloudNamespaces 从云端获取命名空间列表，同步到usage map
+// 云端存在但本地无记录的命名空间会被添加到usage中（节点数为0）
+func (s *ServiceImpl) syncCloudNamespaces(ctx context.Context, client provider.Client, region string, usage map[string]int) error {
+	namespaces, err := client.ListNamespaces(ctx, region)
+	if err != nil {
+		return fmt.Errorf("failed to list namespaces from cloud: %w", err)
+	}
+	for _, ns := range namespaces {
+		if ns.Name == "" {
+			continue
+		}
+		log.InfoContextf(ctx, "[CloudNode] Found cloud namespace: %s", ns.Name)
+		if _, exists := usage[ns.Name]; !exists {
+			usage[ns.Name] = 0
 		}
 	}
+	return nil
+}
 
-	// 如果所有命名空间都满了，尝试找到函数数最少的命名空间
-	minCount := 50
-	selectedNamespace := ""
-	for i := 1; i <= 5; i++ {
-		namespace := fmt.Sprintf("%s-%02d", region, i)
-		count, exists := namespaceStats[namespace]
-		if !exists {
-			// 如果命名空间不存在，直接使用
-			return namespace, nil
+// ensureNamespacesExist 确保命名空间数量达到maxCount，不足时创建新的
+// 返回新创建的命名空间列表
+func (s *ServiceImpl) ensureNamespacesExist(ctx context.Context, client provider.Client, region string, currentCount, maxCount int) ([]string, error) {
+	var created []string
+	needCreate := maxCount - currentCount
+	if needCreate <= 0 {
+		return created, nil
+	}
+
+	for i := 0; i < needCreate; i++ {
+		nsID := s.generateNamespaceID(region)
+		if err := client.CreateNamespace(ctx, nsID, "MooX Auto Created", region); err != nil {
+			log.ErrorContextf(ctx, "[CloudNode] Failed to create namespace %s: %v", nsID, err)
+			continue
+		}
+		created = append(created, nsID)
+		log.InfoContextf(ctx, "[CloudNode] Created namespace: %s", nsID)
+	}
+	return created, nil
+}
+
+// findAvailableNamespace 从usage中查找一个空闲的命名空间
+// 返回节点数最少且小于maxFunctions的命名空间
+func (s *ServiceImpl) findAvailableNamespace(usage map[string]int, maxFunctions int) (string, error) {
+	var selected string
+	minCount := maxFunctions
+
+	for ns, count := range usage {
+		if count >= maxFunctions {
+			continue
 		}
 		if count < minCount {
 			minCount = count
-			selectedNamespace = namespace
+			selected = ns
 		}
 	}
 
-	if selectedNamespace != "" {
-		return selectedNamespace, nil
+	if selected == "" {
+		return "", fmt.Errorf("no available namespace found")
 	}
-	return "", fmt.Errorf("no available namespace in region %s", region)
+	return selected, nil
+}
+
+// getNamespaceLimits 获取命名空间限制配置
+func (s *ServiceImpl) getNamespaceLimits(ctx context.Context, cloudAccountID, region string) (maxNamespaces, maxFunctions int) {
+	// 默认值
+	maxNamespaces = 5
+	maxFunctions = 50
+
+	if s.config == nil {
+		return
+	}
+
+	info, err := s.getRegionInfoByAccount(ctx, cloudAccountID, region)
+	if err != nil {
+		log.ErrorContextf(ctx, "[CloudNode] Failed to get region limits: %v", err)
+		return
+	}
+
+	if info.MaxNamespacesPerRegion > 0 {
+		maxNamespaces = info.MaxNamespacesPerRegion
+	}
+	if info.MaxFunctionsPerNamespace > 0 {
+		maxFunctions = info.MaxFunctionsPerNamespace
+	}
+	return
+}
+
+// getAvailableNamespace 获取一个可用的命名空间
+// 1. 获取本地命名空间使用情况
+// 2. 同步云端命名空间
+// 3. 补齐命名空间数量（不足时自动创建）
+// 4. 查找空闲命名空间返回
+func (s *ServiceImpl) getAvailableNamespace(ctx context.Context, cloudAccountID string, region string, client provider.Client) (string, error) {
+	if client == nil {
+		return "", fmt.Errorf("cloud provider client is required")
+	}
+
+	// 1. 获取配置限制
+	maxNamespaces, maxFunctions := s.getNamespaceLimits(ctx, cloudAccountID, region)
+	if maxNamespaces <= 0 || maxFunctions <= 0 {
+		return "", fmt.Errorf("invalid namespace limits: maxNamespaces=%d, maxFunctions=%d", maxNamespaces, maxFunctions)
+	}
+
+	// 2. 获取本地命名空间使用情况
+	usage, err := s.getNamespaceUsage(ctx, region)
+	if err != nil {
+		return "", err
+	}
+
+	// 3. 同步云端命名空间到usage
+	if err := s.syncCloudNamespaces(ctx, client, region, usage); err != nil {
+		return "", err
+	}
+
+	// 4. 补齐命名空间（如果不足）
+	if len(usage) < maxNamespaces {
+		newNamespaces, _ := s.ensureNamespacesExist(ctx, client, region, len(usage), maxNamespaces)
+		for _, ns := range newNamespaces {
+			usage[ns] = 0
+		}
+	}
+
+	// 5. 查找空闲命名空间
+	selected, err := s.findAvailableNamespace(usage, maxFunctions)
+	if err != nil {
+		if len(usage) >= maxNamespaces {
+			return "", fmt.Errorf("namespace limit reached in region %s", region)
+		}
+		return "", fmt.Errorf("no available namespace in region %s", region)
+	}
+
+	return selected, nil
 }

@@ -300,8 +300,7 @@ t_collector_task_configs (采集配置)
        │   │
        │   ├── asynctask.NewService()       # 创建异步任务服务
        │   ├── packagemgr.NewService()      # 创建包管理服务
-       │   ├── cloudnode 相关服务            # 创建云节点服务
-       │   ├── heartbeat.NewManager()       # 创建心跳管理器
+       │   ├── cloudnode 相关服务            # 创建云节点服务（含心跳内存存储）
        │   │
        │   ├── 注册异步任务处理器
        │   │   ├── cloudnode executors
@@ -368,16 +367,13 @@ t_collector_task_configs (采集配置)
    └── POST /api/heartbeat/report
        {node_id, load, timestamp}
 
-2. HeartbeatManager 处理心跳
-   ├── 更新内存状态 (NodeStates)
-   ├── 更新数据库记录
+2. HeartbeatService 处理心跳
+   ├── 更新内存心跳存储
+   ├── 更新节点采集器/版本缓存（如有变更）
    └── 返回配置更新
 
-3. 后台监控协程
-   └── monitorNodeHealth()
-       ├── 每 5 秒检查一次
-       ├── 超过 11 秒未心跳 → 标记离线
-       └── 更新节点状态到数据库
+3. 在线状态判断（按需）
+   └── 通过最后心跳时间 + 超时阈值计算在线/离线
 
 4. 初始化新节点协程
    └── initializeNewNodes()

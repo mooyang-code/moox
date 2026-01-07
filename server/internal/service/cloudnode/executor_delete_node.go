@@ -13,14 +13,12 @@ import (
 // DeleteNodeExecutor 单节点删除执行器
 type DeleteNodeExecutor struct {
 	cloudNodeService Service
-	heartbeatService HeartbeatService
 }
 
 // NewDeleteNodeExecutor 创建单节点删除执行器
-func NewDeleteNodeExecutor(cloudNodeService Service, heartbeatService HeartbeatService) *DeleteNodeExecutor {
+func NewDeleteNodeExecutor(cloudNodeService Service) *DeleteNodeExecutor {
 	return &DeleteNodeExecutor{
 		cloudNodeService: cloudNodeService,
-		heartbeatService: heartbeatService,
 	}
 }
 
@@ -50,16 +48,6 @@ func (e *DeleteNodeExecutor) Execute(ctx context.Context, taskID string, request
 
 	log.InfoContextf(ctx, "[DeleteNodeExecutor] Deleting node: TaskID=%s, NodeID=%s",
 		taskID, deleteItem.NodeID)
-
-	// 先从心跳服务中注销节点（避免心跳服务继续探测已删除的节点）
-	if e.heartbeatService != nil {
-		if err := e.heartbeatService.UnregisterHeartbeatNode(ctx, deleteItem.NodeID, "SCF"); err != nil {
-			log.WarnContextf(ctx, "[DeleteNodeExecutor] Failed to unregister node from heartbeat service: %v", err)
-			// 心跳注销失败不影响节点删除流程，仅记录警告
-		} else {
-			log.InfoContextf(ctx, "[DeleteNodeExecutor] Node unregistered from heartbeat service: %s", deleteItem.NodeID)
-		}
-	}
 
 	// 调用云厂商API删除节点
 	err := e.cloudNodeService.DeleteNode(ctx, deleteItem.NodeID)

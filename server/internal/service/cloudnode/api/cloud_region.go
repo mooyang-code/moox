@@ -8,9 +8,12 @@ import (
 
 // RegionInfo 地区信息
 type RegionInfo struct {
-	Code string `json:"code"`
-	Name string `json:"name"`
-	Tag  string `json:"tag"` // 标签（国内/海外）
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	Tag      string `json:"tag"`       // 标签（国内/海外）
+	MaxNodes int    `json:"max_nodes"` // 地区最大节点数
+	MaxNamespacesPerRegion   int `json:"max_namespaces_per_region"`
+	MaxFunctionsPerNamespace int `json:"max_functions_per_namespace"`
 }
 
 // CloudRegionHandler 云地区处理器
@@ -57,9 +60,12 @@ func getTencentRegions() []RegionInfo {
 	var regions []RegionInfo
 	for _, r := range cfg.CloudRegions.Tencent {
 		regions = append(regions, RegionInfo{
-			Code: r.Code,
-			Name: r.Name,
-			Tag:  r.Tag, // 返回标签
+			Code:     r.Code,
+			Name:     r.Name,
+			Tag:      r.Tag,
+			MaxNodes: r.MaxNodes,
+			MaxNamespacesPerRegion:   r.MaxNamespacesPerRegion,
+			MaxFunctionsPerNamespace: r.MaxFunctionsPerNamespace,
 		})
 	}
 	return regions

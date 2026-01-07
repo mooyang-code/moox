@@ -38,8 +38,14 @@ func (s *ServiceImpl) GetNodeList(ctx context.Context, req *NodeListRequest) (*N
 		Namespace:      req.Namespace,
 		Region:         req.Region,
 		NodeType:       req.NodeType,
+		Tag:            req.Tag,
 		Status:         req.Status,
 		Keyword:        req.Keyword,
+	}
+
+	// 如果有状态过滤，需要获取在线节点ID列表传给DAO
+	if req.Status != "" {
+		query.OnlineNodeIDs = s.heartbeatStore.GetOnlineNodeIDs()
 	}
 
 	// 查询数据
@@ -48,10 +54,10 @@ func (s *ServiceImpl) GetNodeList(ctx context.Context, req *NodeListRequest) (*N
 		return nil, fmt.Errorf("failed to get node list: %w", err)
 	}
 
-	// 转换为DTO
+	// 转换为DTO并合并心跳数据
 	items := make([]*CloudNodeDTO, len(nodes))
 	for i, node := range nodes {
-		items[i] = s.ConvertToCloudNodeDTO(node)
+		items[i] = s.convertToCloudNodeDTOWithHeartbeat(node)
 	}
 
 	return &NodeListResponse{
@@ -77,7 +83,7 @@ func (s *ServiceImpl) GetCloudNode(ctx context.Context, nodeID string) (*CloudNo
 		return nil, fmt.Errorf("node not found")
 	}
 
-	return s.ConvertToCloudNodeDTO(node), nil
+	return s.convertToCloudNodeDTOWithHeartbeat(node), nil
 }
 
 // GetNodesByType 根据节点类型获取云节点列表
@@ -88,22 +94,29 @@ func (s *ServiceImpl) GetNodesByType(ctx context.Context, nodeType string) ([]*C
 	}
 	result := make([]*CloudNodeDTO, len(nodes))
 	for i, node := range nodes {
-		result[i] = s.ConvertToCloudNodeDTO(node)
+		result[i] = s.convertToCloudNodeDTOWithHeartbeat(node)
 	}
 	return result, nil
 }
 
 // GetOnlineNodes 获取所有在线云节点列表
-// DAO 层已经基于心跳表过滤了在线节点，这里直接转换即可
+// 先从内存获取在线节点ID列表，再查询节点详情
 func (s *ServiceImpl) GetOnlineNodes(ctx context.Context) ([]*CloudNodeDTO, error) {
-	nodes, err := s.nodeDAO.GetOnlineNodes(ctx)
+	// 从内存获取在线节点ID列表
+	onlineNodeIDs := s.heartbeatStore.GetOnlineNodeIDs()
+	if len(onlineNodeIDs) == 0 {
+		return []*CloudNodeDTO{}, nil
+	}
+
+	// 根据ID列表查询节点
+	nodes, err := s.nodeDAO.GetNodesByIDs(ctx, onlineNodeIDs, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get online nodes: %w", err)
 	}
 
 	result := make([]*CloudNodeDTO, len(nodes))
 	for i, node := range nodes {
-		result[i] = s.ConvertToCloudNodeDTO(node)
+		result[i] = s.convertToCloudNodeDTOWithHeartbeat(node)
 	}
 	return result, nil
 }
@@ -134,6 +147,15 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 	// 转换为Model
 	nodeModel := cloudNodeDTOToModel(node)
 
+	// 初始化provider factory
+	s.init()
+
+	// 获取云厂商客户端
+	client := s.providerFactory.GetCloudProviderByAccount(nodeModel.CloudAccountID)
+	if client == nil {
+		return nil, fmt.Errorf("failed to get provider client for cloud account: %s", nodeModel.CloudAccountID)
+	}
+
 	// 生成NodeID（作为云函数名）
 	nodeID, err := s.generateNodeID(ctx, nodeModel.Region)
 	if err != nil {
@@ -142,7 +164,7 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 	nodeModel.NodeID = nodeID
 
 	// 分配Namespace
-	namespace, err := s.allocateNamespace(ctx, nodeModel.Region)
+	namespace, err := s.getAvailableNamespace(ctx, nodeModel.CloudAccountID, nodeModel.Region, client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate namespace: %w", err)
 	}
@@ -162,16 +184,7 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 
 	// 根据 region 自动设置 tag（国内/海外）
 	if nodeModel.Tag == "" {
-		nodeModel.Tag = s.getRegionTag(nodeModel.Region)
-	}
-
-	// 初始化provider factory
-	s.init()
-
-	// 获取云厂商客户端
-	client := s.providerFactory.GetCloudProviderByAccount(nodeModel.CloudAccountID)
-	if client == nil {
-		return nil, fmt.Errorf("failed to get provider client for cloud account: %s", nodeModel.CloudAccountID)
+		nodeModel.Tag = s.getRegionTagByAccount(ctx, nodeModel.CloudAccountID, nodeModel.Region)
 	}
 
 	// 调用云厂商API创建云函数（带重试机制）
@@ -205,11 +218,6 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 		req.ZipFile = codeConfig.ZipFileBase64
 		log.InfoContextf(ctx, "[CloudNode] Creating function with ZipFile: base64_length=%d, runtime=%s",
 			len(codeConfig.ZipFileBase64), runtime)
-	}
-
-	// 在创建云函数前，先确保命名空间存在
-	if err := s.ensureNamespaceExists(ctx, client, nodeModel.Namespace, nodeModel.Region); err != nil {
-		return nil, fmt.Errorf("failed to ensure namespace exists: %w", err)
 	}
 
 	var funcInfo *provider.FunctionInfo
@@ -259,7 +267,7 @@ func (s *ServiceImpl) UpdateNode(ctx context.Context, node *CloudNodeDTO) error 
 
 	// 如果 region 发生变化，或 tag 为空，则自动更新 tag
 	if nodeModel.Region != existing.Region || nodeModel.Tag == "" {
-		nodeModel.Tag = s.getRegionTag(nodeModel.Region)
+		nodeModel.Tag = s.getRegionTagByAccount(ctx, existing.CloudAccountID, nodeModel.Region)
 	}
 
 	if err := s.nodeDAO.UpdateCloudNode(ctx, nodeModel); err != nil {
@@ -482,30 +490,4 @@ func (s *ServiceImpl) InvokeFunction(ctx context.Context, nodeID string, eventDa
 		ErrorType:    resp.ErrorType,
 		ReturnResult: resp.ReturnResult,
 	}, nil
-}
-
-// ensureNamespaceExists 确保命名空间存在，如果不存在则创建
-func (s *ServiceImpl) ensureNamespaceExists(ctx context.Context, client provider.Client, namespace, region string) error {
-	// 列出所有命名空间
-	namespaces, err := client.ListNamespaces(ctx, region)
-	if err != nil {
-		return fmt.Errorf("failed to list namespaces: %w", err)
-	}
-
-	// 检查命名空间是否存在
-	for _, ns := range namespaces {
-		if ns.Name == namespace {
-			log.InfoContextf(ctx, "[CloudNode] Namespace %s already exists", namespace)
-			return nil
-		}
-	}
-
-	// 命名空间不存在，创建它
-	log.InfoContextf(ctx, "[CloudNode] Namespace %s does not exist, creating it...", namespace)
-	if err := client.CreateNamespace(ctx, namespace, "MooX Auto Created", region); err != nil {
-		return fmt.Errorf("failed to create namespace %s: %w", namespace, err)
-	}
-
-	log.InfoContextf(ctx, "[CloudNode] Successfully created namespace: %s", namespace)
-	return nil
 }

@@ -3,10 +3,9 @@ fields:
     field_name: "下架时间"
     dataset_ids: [100, 101]
     desc: "币种的下架时间"
-    required_flag: 1
-    unique_flag: -1
+    required: true
+    unique: false
     table_type: 1
-    field_category: 1  # 基础字段（静态数据字段）
     field_primary_format: 1  # 字符串类型
     field_secondary_format: 5  # 日期时间格式
     validation_rule: '{"string_rule":{"format":"YYYY-MM-DD HH:mm:ss","pattern":"^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$"}}'
@@ -16,14 +15,13 @@ fields:
   - interface_name: "symbol"
     field_name: "交易标的ID"
     dataset_ids: [100, 101]
-    desc: "交易对名称，例如BTC-USDT，全大写字母"
-    required_flag: 1
-    unique_flag: -1
-    table_type: 2
-    field_category: 2  # 时序数据中的字段
+    desc: "交易对名称，例如BTC-USDT"
+    required: true
+    unique: false
+    table_type: 1
     field_primary_format: 1  # 字符串类型
     field_secondary_format: 1  # 文本格式
-    validation_rule: '{"string_rule":{"min_length":6,"max_length":20,"pattern":"^[A-Z0-9]+-USDT$"}}'
+    validation_rule: '{"string_rule":{"min_length":6,"max_length":40}}'
     write_example: "BTC-USDT"
     remark: "交易对标识符，全大写字母和数字组合"
 
@@ -31,10 +29,9 @@ fields:
     field_name: "K线开始时间"
     dataset_ids: [100, 101]
     desc: "K线周期开始时间"
-    required_flag: 1
-    unique_flag: -1
+    required: true
+    unique: false
     table_type: 2
-    field_category: 2  # 时序字段
     field_primary_format: 1  # 字符串类型
     field_secondary_format: 5  # 日期时间格式
     validation_rule: '{"string_rule":{"format":"YYYY-MM-DD HH:mm:ss","pattern":"^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$"}}'
@@ -45,10 +42,9 @@ fields:
     field_name: "开盘价"
     dataset_ids: [100, 101]
     desc: "K线周期开盘价格"
-    required_flag: 1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: true
+    unique: false
+    table_type: 2
     field_primary_format: 3  # 双精度浮点数
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"double_rule":{"min":0.0,"max":999999999.0}}'
@@ -59,10 +55,9 @@ fields:
     field_name: "最高价"
     dataset_ids: [100, 101]
     desc: "K线周期最高价格"
-    required_flag: 1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: true
+    unique: false
+    table_type: 2
     field_primary_format: 3  # 双精度浮点数
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"double_rule":{"min":0.0,"max":999999999.0}}'
@@ -73,10 +68,9 @@ fields:
     field_name: "最低价"
     dataset_ids: [100, 101]
     desc: "K线周期最低价格"
-    required_flag: 1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: true
+    unique: false
+    table_type: 2
     field_primary_format: 3  # 双精度浮点数
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"double_rule":{"min":0.0,"max":999999999.0}}'
@@ -87,10 +81,9 @@ fields:
     field_name: "收盘价"
     dataset_ids: [100, 101]
     desc: "K线周期收盘价格"
-    required_flag: 1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: true
+    unique: false
+    table_type: 2
     field_primary_format: 3  # 双精度浮点数
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"double_rule":{"min":0.0,"max":999999999.0}}'
@@ -101,10 +94,9 @@ fields:
     field_name: "成交量"
     dataset_ids: [100, 101]
     desc: "K线周期成交量"
-    required_flag: 1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: true
+    unique: false
+    table_type: 2
     field_primary_format: 3  # 双精度浮点数
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"double_rule":{"min":0.0,"max":999999999999.0}}'
@@ -115,10 +107,9 @@ fields:
     field_name: "成交额"
     dataset_ids: [100, 101]
     desc: "K线周期成交额"
-    required_flag: 1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: true
+    unique: false
+    table_type: 2
     field_primary_format: 3  # 双精度浮点数
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"double_rule":{"min":0.0,"max":999999999999.0}}'
@@ -129,10 +120,9 @@ fields:
     field_name: "成交笔数"
     dataset_ids: [100, 101]
     desc: "K线周期成交笔数"
-    required_flag: 1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: true
+    unique: false
+    table_type: 2
     field_primary_format: 2  # 整型
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"integer_rule":{"min":0,"max":999999999}}'
@@ -143,10 +133,9 @@ fields:
     field_name: "主动买入成交量"
     dataset_ids: [100, 101]
     desc: "K线周期主动买入的基础资产成交量"
-    required_flag: 1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: true
+    unique: false
+    table_type: 2
     field_primary_format: 3  # 双精度浮点数
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"double_rule":{"min":0.0,"max":999999999999.0}}'
@@ -157,10 +146,9 @@ fields:
     field_name: "主动买入成交额"
     dataset_ids: [100, 101]
     desc: "K线周期主动买入的计价资产成交量"
-    required_flag: 1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: true
+    unique: false
+    table_type: 2
     field_primary_format: 3  # 双精度浮点数
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"double_rule":{"min":0.0,"max":999999999999.0}}'
@@ -171,10 +159,9 @@ fields:
     field_name: "K线结束时间"
     dataset_ids: [100, 101]
     desc: "K线周期结束时间"
-    required_flag: 1
-    unique_flag: -1
+    required: true
+    unique: false
     table_type: 2
-    field_category: 2  # 时序字段
     field_primary_format: 1  # 字符串类型
     field_secondary_format: 5  # 日期时间格式
     validation_rule: '{"string_rule":{"format":"YYYY-MM-DD HH:mm:ss","pattern":"^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$"}}'
@@ -185,10 +172,9 @@ fields:
     field_name: "价差"
     dataset_ids: [100, 101]
     desc: "买卖价差"
-    required_flag: -1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: false
+    unique: false
+    table_type: 2
     field_primary_format: 3  # 双精度浮点数
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"double_rule":{"min":-999999999.0,"max":999999999.0}}'
@@ -199,10 +185,9 @@ fields:
     field_name: "1分钟平均价"
     dataset_ids: [100, 101]
     desc: "1分钟平均价格"
-    required_flag: -1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: false
+    unique: false
+    table_type: 2
     field_primary_format: 3  # 双精度浮点数
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"double_rule":{"min":0.0,"max":999999999.0}}'
@@ -213,10 +198,9 @@ fields:
     field_name: "5分钟平均价"
     dataset_ids: [100, 101]
     desc: "5分钟平均价格"
-    required_flag: -1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: false
+    unique: false
+    table_type: 2
     field_primary_format: 3  # 双精度浮点数
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"double_rule":{"min":0.0,"max":999999999.0}}'
@@ -227,10 +211,9 @@ fields:
     field_name: "资金费率"
     dataset_ids: [100, 101]
     desc: "资金费率"
-    required_flag: -1
-    unique_flag: -1
-    metadata_flag: -1
-    field_category: 2  # 时序字段
+    required: false
+    unique: false
+    table_type: 2
     field_primary_format: 3  # 双精度浮点数
     field_secondary_format: 1  # 文本格式
     validation_rule: '{"double_rule":{"min":-1.0,"max":1.0}}'

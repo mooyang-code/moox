@@ -10,7 +10,7 @@ export interface CloudNode {
   namespace: string;
   function_name: string;
   runtime: string;
-  status: number;
+  status: string;
   status_desc: string;
   load_level: number;
   package_id?: string; 
@@ -31,6 +31,7 @@ export interface GetNodeListRequest {
   namespace?: string;
   region?: string;
   node_type?: string;
+  tag?: string;
   status?: string;
   page?: number;
   page_size?: number;
@@ -179,14 +180,26 @@ export const NODE_TYPE = {
 } as const;
 
 // 获取状态文本
-export const getStatusText = (status: number): string => {
+export const getStatusText = (status: string | number): string => {
+  if (typeof status === 'string' && status) {
+    if (status === 'online') {
+      return '在线';
+    }
+    if (status === 'offline') {
+      return '离线';
+    }
+    return status;
+  }
   const statusMap: Record<number, string> = {
     0: '离线',
     1: '在线',
     2: '维护中',
     3: '过载',
   };
-  return statusMap[status] || '未知';
+  if (typeof status === 'number') {
+    return statusMap[status] || '未知';
+  }
+  return '未知';
 };
 
 // 获取节点类型文本

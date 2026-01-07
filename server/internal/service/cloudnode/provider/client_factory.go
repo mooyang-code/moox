@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -28,18 +29,23 @@ type CloudAccount struct {
 // AccountFactory 云厂商客户端工厂（基于云账户；因为我们需要支持同一个云厂商下有N个独立的账户）
 type AccountFactory struct {
 	cloudAccountService CloudAccountService
+	// clientCache 缓存已创建的云厂商客户端，避免重复创建导致 goroutine 泄漏
+	// key: accountID, value: Client
+	clientCache map[string]Client
+	cacheMu     sync.RWMutex
 }
 
 // NewAccountFactory 创建云厂商客户端工厂
 func NewAccountFactory(cloudAccountService CloudAccountService) *AccountFactory {
 	return &AccountFactory{
 		cloudAccountService: cloudAccountService,
+		clientCache:         make(map[string]Client),
 	}
 }
 
-// GetCloudProviderByAccount 根据账户ID按需创建云厂商客户端
-// 每次调用都会从数据库查询最新的账户信息并创建新的客户端实例
-// 这样可以支持用户在运行时动态添加/修改云账户，无需重启服务
+// GetCloudProviderByAccount 根据账户ID获取云厂商客户端
+// ��用缓存机制避免重复创建，防止 goroutine 泄漏
+// 如果账户配置变更，调用 InvalidateCache 清除缓存后下次调用会重新创建
 func (f *AccountFactory) GetCloudProviderByAccount(accountID string) Client {
 	ctx := trpc.BackgroundContext()
 
@@ -48,6 +54,15 @@ func (f *AccountFactory) GetCloudProviderByAccount(accountID string) Client {
 		log.WarnContext(ctx, "[Provider AccountFactory] 账户ID为空，无法创建云厂商客户端")
 		return nil
 	}
+
+	// 先尝试从缓存获取
+	f.cacheMu.RLock()
+	if client, exists := f.clientCache[accountID]; exists {
+		f.cacheMu.RUnlock()
+		log.DebugContextf(ctx, "[Provider AccountFactory] 从缓存获取云厂商客户端 - 账户ID: %s", accountID)
+		return client
+	}
+	f.cacheMu.RUnlock()
 
 	// 从数据库获取不脱敏的账户信息
 	fullAccount, err := f.cloudAccountService.GetAccountWithoutMask(ctx, accountID)
@@ -98,5 +113,28 @@ func (f *AccountFactory) GetCloudProviderByAccount(accountID string) Client {
 
 	log.DebugContextf(ctx, "[Provider AccountFactory] 按需创建云厂商客户端 - 平台: %s, 账户: %s, 账户ID: %s",
 		fullAccount.Provider, fullAccount.AccountName, fullAccount.AccountID)
+
+	// 缓存客户端实例
+	f.cacheMu.Lock()
+	f.clientCache[accountID] = cloudClient
+	f.cacheMu.Unlock()
+
 	return cloudClient
+}
+
+// InvalidateCache 清除指定账户的客户端缓存
+// 当账户配置变更时调用此方法，下次 GetCloudProviderByAccount 会重新创建客户端
+func (f *AccountFactory) InvalidateCache(accountID string) {
+	f.cacheMu.Lock()
+	delete(f.clientCache, accountID)
+	f.cacheMu.Unlock()
+	log.Infof("[Provider AccountFactory] 清除账户 %s 的客户端缓存", accountID)
+}
+
+// InvalidateAllCache 清除所有客户端缓存
+func (f *AccountFactory) InvalidateAllCache() {
+	f.cacheMu.Lock()
+	f.clientCache = make(map[string]Client)
+	f.cacheMu.Unlock()
+	log.Info("[Provider AccountFactory] 清除所有客户端缓存")
 }
