@@ -13,6 +13,7 @@
 
 
 **/.claude/
+bin/
 log/
 data/
 # Code coverage profiles and other test artifacts

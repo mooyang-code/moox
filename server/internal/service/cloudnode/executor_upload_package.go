@@ -52,7 +52,8 @@ type UploadPackageExecutorRequest struct {
 	Runtime        string `json:"runtime"`
 	PackageType    string `json:"package_type"`
 	CloudAccountID string `json:"cloud_account_id"`
-	FileContent    string `json:"file_content"` // base64编码的文件内容
+	FilePath       string `json:"file_path"`       // 本地文件路径（新增）
+	FileContent    string `json:"file_content"`    // base64编码的文件内容（保留用于向后兼容，优先使用FilePath）
 }
 
 // UploadPackageExecutorResponse 代码包上传执行器响应
@@ -72,6 +73,17 @@ func (e *UploadPackageExecutor) Execute(ctx context.Context, taskID string, requ
 	req, fileContent, err := e.parseAndPreprocess(ctx, taskID, requestParams)
 	if err != nil {
 		return "", err
+	}
+
+	// 如果使用了临时文件，在任务完成后清理
+	if req.FilePath != "" {
+		defer func() {
+			if err := os.Remove(req.FilePath); err != nil {
+				log.WarnContextf(ctx, "[UploadFileExecutor] Failed to remove temp file %s: %v", req.FilePath, err)
+			} else {
+				log.InfoContextf(ctx, "[UploadFileExecutor] Removed temp file: %s", req.FilePath)
+			}
+		}()
 	}
 
 	// 2. 准备包数据
@@ -135,15 +147,29 @@ func (e *UploadPackageExecutor) parseAndPreprocess(ctx context.Context, taskID, 
 	if req.Version == "" {
 		return nil, nil, fmt.Errorf("version is required")
 	}
-	if req.FileContent == "" {
-		return nil, nil, fmt.Errorf("file_content is required")
+
+	var fileContent []byte
+	var err error
+
+	// 优先从本地文件路径读取
+	if req.FilePath != "" {
+		log.InfoContextf(ctx, "[UploadFileExecutor] Reading file from local path: %s", req.FilePath)
+		fileContent, err = os.ReadFile(req.FilePath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("读取本地文件失败: %w", err)
+		}
+		log.InfoContextf(ctx, "[UploadFileExecutor] Read file from path, size: %d bytes", len(fileContent))
+	} else if req.FileContent != "" {
+		// 向后兼容：如果没有FilePath，尝试从FileContent解码
+		log.InfoContextf(ctx, "[UploadFileExecutor] Using base64 file content (legacy mode)")
+		fileContent, err = base64.StdEncoding.DecodeString(req.FileContent)
+		if err != nil {
+			return nil, nil, fmt.Errorf("解码base64文件内容失败: %w", err)
+		}
+	} else {
+		return nil, nil, fmt.Errorf("file_path or file_content is required")
 	}
 
-	// 解码base64文件内容
-	fileContent, err := base64.StdEncoding.DecodeString(req.FileContent)
-	if err != nil {
-		return nil, nil, fmt.Errorf("解码base64文件内容失败: %w", err)
-	}
 	return &req, fileContent, nil
 }
 

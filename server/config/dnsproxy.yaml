@@ -12,6 +12,11 @@ dnsproxy:
     - api.binance.com
     - fapi.binance.com
 
+  # 是否启用本地DNS解析（默认：false）
+  # true: 合并本地DNS和终端DNS结果
+  # false: 仅使用终端DNS结果
+  enable_local_dns_resolve: false
+
   # 缓存配置
   cache:
     ttl_seconds: 360000        # 缓存过期时间（秒）设置一个大时间，意图为用不过期
@@ -74,6 +79,11 @@ dnsproxy:
 # - 这些域名会被定时任务自动解析并缓存
 # - 建议添加常用的、访问频率高的域名
 # - 支持子域名和国际化域名
+#
+# 本地DNS解析开关 (enable_local_dns_resolve):
+# - true: 合并本地DNS和终端上报的DNS结果进行探测（适用于需要全面覆盖的场景）
+# - false: 仅使用终端上报的DNS结果（默认，避免本地DNS污染或不准确的问题）
+# - 建议默认保持false，除非有特殊需求
 #
 # 缓存配置 (cache):
 # - ttl_seconds: 缓存过期时间，建议3600-86400秒（1-24小时）

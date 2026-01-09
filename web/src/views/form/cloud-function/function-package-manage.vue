@@ -964,7 +964,7 @@ const startTaskPolling = (taskId: string) => {
     asyncTaskManager.startPolling(taskId, {
       onProgress: (data: any) => {
         console.log('Package upload progress:', data);
-        uploadMessage.value = data.message || '正在处理上传任务，请勿关闭本页面...';
+        uploadMessage.value = data.message || '正在处理上传任务，请勿关闭本页面(需要几分钟)...';
       },
       onSuccess: (data: any) => {
         console.log('Upload task success:', data);

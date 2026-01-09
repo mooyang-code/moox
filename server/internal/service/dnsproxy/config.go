@@ -23,11 +23,12 @@ type Config struct {
 
 // DNSProxyConfig DNS代理配置
 type DNSProxyConfig struct {
-	Domains    []string          `yaml:"domains"`     // 需要定时解析的域名列表
-	Cache      CacheConfig       `yaml:"cache"`       // 缓存配置
-	DNSServers []DNSServerConfig `yaml:"dns_servers"` // DNS服务器配置
-	Timeouts   TimeoutConfig     `yaml:"timeouts"`    // 超时配置
-	Ping       PingConfig        `yaml:"ping"`        // Ping检测配置
+	Domains               []string          `yaml:"domains"`                  // 需要定时解析的域名列表
+	EnableLocalDNSResolve bool              `yaml:"enable_local_dns_resolve"` // 是否启用本地DNS解析（默认false）
+	Cache                 CacheConfig       `yaml:"cache"`                    // 缓存配置
+	DNSServers            []DNSServerConfig `yaml:"dns_servers"`              // DNS服务器配置
+	Timeouts              TimeoutConfig     `yaml:"timeouts"`                 // 超时配置
+	Ping                  PingConfig        `yaml:"ping"`                     // Ping检测配置
 }
 
 // CacheConfig 缓存配置

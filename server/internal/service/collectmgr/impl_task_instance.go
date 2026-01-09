@@ -10,9 +10,10 @@ import (
 
 	cloudnodedao "github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	collectordao "github.com/mooyang-code/moox/server/internal/service/collectmgr/dao"
+	"github.com/mooyang-code/moox/server/internal/service/collectmgr/dto"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/model"
+	"github.com/mooyang-code/moox/server/internal/service/collectmgr/planner"
 	"trpc.group/trpc-go/trpc-database/localcache"
-	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -21,6 +22,7 @@ type TaskInstanceServiceImpl struct {
 	taskRulesDAO    collectordao.CollectorTaskRulesDAO
 	nodeDAO         cloudnodedao.CloudNodeDAO
 	functionInvoker CloudFunctionInvoker // 使用接口而不是具体类型
+	memStore        TaskInstanceStore    // 内存仓库（状态同步）
 }
 
 const (
@@ -48,11 +50,12 @@ func (s *TaskInstanceServiceImpl) CreateTaskInstance(ctx context.Context, instan
 	modelInstance := &model.CollectorTaskInstance{
 		TaskID:          instance.TaskID,
 		RuleID:          instance.RuleID,
-		NodeID:          instance.NodeID,
+		PlannedExecNode: instance.PlannedExecNode,
+		LastExecNode:    instance.LastExecNode,
+		LastExecStatus:  instance.LastExecStatus,
 		Symbol:          instance.Symbol,
 		CollectDataType: instance.CollectDataType,
 		TaskParams:      instance.TaskParams,
-		Status:          instance.Status,
 		LastExecTime:    instance.LastExecTime,
 		Result:          instance.Result,
 	}
@@ -81,11 +84,12 @@ func (s *TaskInstanceServiceImpl) GetTaskInstance(ctx context.Context, instanceI
 		ID:              instance.ID,
 		TaskID:          instance.TaskID,
 		RuleID:          instance.RuleID,
-		NodeID:          instance.NodeID,
+		PlannedExecNode: instance.PlannedExecNode,
+		LastExecNode:    instance.LastExecNode,
+		LastExecStatus:  instance.LastExecStatus,
 		Symbol:          instance.Symbol,
 		CollectDataType: instance.CollectDataType,
 		TaskParams:      instance.TaskParams,
-		Status:          instance.Status,
 		LastExecTime:    instance.LastExecTime,
 		Result:          instance.Result,
 		Invalid:         instance.Invalid,
@@ -118,14 +122,15 @@ func (s *TaskInstanceServiceImpl) UpdateTaskInstance(ctx context.Context, instan
 	}
 
 	modelInstance := &model.CollectorTaskInstance{
-		ID:           instance.ID,
-		TaskID:       instanceID,
-		RuleID:       instance.RuleID,
-		NodeID:       instance.NodeID,
-		TaskParams:   instance.TaskParams,
-		Status:       instance.Status,
-		LastExecTime: instance.LastExecTime,
-		Result:       instance.Result,
+		ID:              instance.ID,
+		TaskID:          instanceID,
+		RuleID:          instance.RuleID,
+		PlannedExecNode: instance.PlannedExecNode,
+		LastExecNode:    instance.LastExecNode,
+		LastExecStatus:  instance.LastExecStatus,
+		TaskParams:      instance.TaskParams,
+		LastExecTime:    instance.LastExecTime,
+		Result:          instance.Result,
 	}
 
 	if err := s.instanceDAO.UpdateTaskInstance(ctx, modelInstance); err != nil {
@@ -172,23 +177,25 @@ func (s *TaskInstanceServiceImpl) CompleteInstance(ctx context.Context, instance
 }
 
 // ReportTaskStatus 上报任务状态（客户端上报用）
-func (s *TaskInstanceServiceImpl) ReportTaskStatus(ctx context.Context, instanceID string, status int, result string) error {
+// v2.0: 新增 nodeID 参数，只更新内存仓库，DB 通过 SnapshotWorker 异步刷入
+func (s *TaskInstanceServiceImpl) ReportTaskStatus(ctx context.Context, instanceID string, nodeID string, status int, result string) error {
 	if instanceID == "" {
 		return fmt.Errorf("instance ID is required")
 	}
-
-	// 更新任务状态
-	if err := s.instanceDAO.ReportInstanceStatus(ctx, instanceID, status, result); err != nil {
-		return err
+	if nodeID == "" {
+		return fmt.Errorf("node ID is required")
 	}
-	s.warnIfInvalidateCacheFailed(ctx, "ReportTaskStatus", s.InvalidateTaskInstanceCache(ctx))
 
-	// 如果任务失败或部分失败，触发任务转移逻辑
-	if status == model.InstanceStatusFailed || status == model.InstanceStatusPartFailed {
-		log.InfoContextf(ctx, "[TaskInstance] Task %s failed/part-failed, triggering transfer logic", instanceID)
-		// 异步执行任务转移，避免阻塞上报接口
-		go s.tryTransferFailedTask(trpc.CloneContext(ctx), instanceID)
-	}
+	// 更新内存仓库（内存是单一事实来源）
+	now := time.Now()
+	s.memStore.UpdateStatusWithNode(instanceID, nodeID, status, &now, result)
+	log.DebugContextf(ctx, "[TaskInstance] Status updated: taskID=%s, nodeID=%s, status=%d", instanceID, nodeID, status)
+
+	// 如果任务失败，触发任务转移逻辑 （避免持续失败，持续转移，滚雪球，这里不进行任务转移了。 下个执行周期会重新分配任务）
+	// if status == model.InstanceStatusFailed {
+	// 	log.InfoContextf(ctx, "[TaskInstance] Task %s failed, triggering transfer logic", instanceID)
+	// 	go s.tryTransferFailedTask(trpc.CloneContext(ctx), instanceID)
+	// }
 
 	return nil
 }
@@ -219,18 +226,19 @@ func (s *TaskInstanceServiceImpl) GetTaskInstancesByNode(ctx context.Context, no
 	var result []*TaskInstanceDTO
 	for _, instance := range instances {
 		dto := &TaskInstanceDTO{
-			ID:           instance.ID,
-			TaskID:       instance.TaskID,
-			RuleID:       instance.RuleID,
-			NodeID:       instance.NodeID,
-			Symbol:       instance.Symbol,
-			TaskParams:   instance.TaskParams,
-			Status:       instance.Status,
-			LastExecTime: instance.LastExecTime,
-			Result:       instance.Result,
-			Invalid:      instance.Invalid,
-			CreateTime:   instance.CreateTime,
-			ModifyTime:   instance.ModifyTime,
+			ID:              instance.ID,
+			TaskID:          instance.TaskID,
+			RuleID:          instance.RuleID,
+			PlannedExecNode: instance.PlannedExecNode,
+			LastExecNode:    instance.LastExecNode,
+			LastExecStatus:  instance.LastExecStatus,
+			Symbol:          instance.Symbol,
+			TaskParams:      instance.TaskParams,
+			LastExecTime:    instance.LastExecTime,
+			Result:          instance.Result,
+			Invalid:         instance.Invalid,
+			CreateTime:      instance.CreateTime,
+			ModifyTime:      instance.ModifyTime,
 		}
 		result = append(result, dto)
 	}
@@ -250,18 +258,19 @@ func (s *TaskInstanceServiceImpl) GetRecentInstances(ctx context.Context, hours 
 	var result []*TaskInstanceDTO
 	for _, instance := range instances {
 		dto := &TaskInstanceDTO{
-			ID:           instance.ID,
-			TaskID:       instance.TaskID,
-			RuleID:       instance.RuleID,
-			NodeID:       instance.NodeID,
-			Symbol:       instance.Symbol,
-			TaskParams:   instance.TaskParams,
-			Status:       instance.Status,
-			LastExecTime: instance.LastExecTime,
-			Result:       instance.Result,
-			Invalid:      instance.Invalid,
-			CreateTime:   instance.CreateTime,
-			ModifyTime:   instance.ModifyTime,
+			ID:              instance.ID,
+			TaskID:          instance.TaskID,
+			RuleID:          instance.RuleID,
+			PlannedExecNode: instance.PlannedExecNode,
+			LastExecNode:    instance.LastExecNode,
+			LastExecStatus:  instance.LastExecStatus,
+			Symbol:          instance.Symbol,
+			TaskParams:      instance.TaskParams,
+			LastExecTime:    instance.LastExecTime,
+			Result:          instance.Result,
+			Invalid:         instance.Invalid,
+			CreateTime:      instance.CreateTime,
+			ModifyTime:      instance.ModifyTime,
 		}
 		result = append(result, dto)
 	}
@@ -278,18 +287,19 @@ func (s *TaskInstanceServiceImpl) ListTaskInstances(ctx context.Context, nodeID,
 	var result []*TaskInstanceDTO
 	for _, instance := range instances {
 		dto := &TaskInstanceDTO{
-			ID:           instance.ID,
-			TaskID:       instance.TaskID,
-			RuleID:       instance.RuleID,
-			NodeID:       instance.NodeID,
-			Symbol:       instance.Symbol,
-			TaskParams:   instance.TaskParams,
-			Status:       instance.Status,
-			LastExecTime: instance.LastExecTime,
-			Result:       instance.Result,
-			Invalid:      instance.Invalid,
-			CreateTime:   instance.CreateTime,
-			ModifyTime:   instance.ModifyTime,
+			ID:              instance.ID,
+			TaskID:          instance.TaskID,
+			RuleID:          instance.RuleID,
+			PlannedExecNode: instance.PlannedExecNode,
+			LastExecNode:    instance.LastExecNode,
+			LastExecStatus:  instance.LastExecStatus,
+			Symbol:          instance.Symbol,
+			TaskParams:      instance.TaskParams,
+			LastExecTime:    instance.LastExecTime,
+			Result:          instance.Result,
+			Invalid:         instance.Invalid,
+			CreateTime:      instance.CreateTime,
+			ModifyTime:      instance.ModifyTime,
 		}
 		result = append(result, dto)
 	}
@@ -300,14 +310,15 @@ func (s *TaskInstanceServiceImpl) ListTaskInstances(ctx context.Context, nodeID,
 func (s *TaskInstanceServiceImpl) ListTaskInstancesWithFilter(ctx context.Context, filter *TaskInstanceFilterDTO) ([]*TaskInstanceDTO, int64, error) {
 	// 转换DTO为DAO过滤器
 	daoFilter := &collectordao.InstanceFilter{
-		TaskID:   filter.TaskID,
-		RuleID:   filter.RuleID,
-		NodeID:   filter.NodeID,
-		Symbol:   filter.Symbol,
-		Status:   filter.Status,
-		Invalid:  filter.Invalid,
-		Page:     filter.Page,
-		PageSize: filter.PageSize,
+		TaskID:          filter.TaskID,
+		RuleID:          filter.RuleID,
+		PlannedExecNode: filter.PlannedExecNode,
+		LastExecNode:    filter.LastExecNode,
+		LastExecStatus:  filter.LastExecStatus,
+		Symbol:          filter.Symbol,
+		Invalid:         filter.Invalid,
+		Page:            filter.Page,
+		PageSize:        filter.PageSize,
 	}
 
 	instances, total, err := s.instanceDAO.ListInstancesWithFilter(ctx, daoFilter)
@@ -337,19 +348,20 @@ func (s *TaskInstanceServiceImpl) ListTaskInstancesWithFilter(ctx context.Contex
 	var result []*TaskInstanceDTO
 	for _, instance := range instances {
 		dto := &TaskInstanceDTO{
-			ID:           instance.ID,
-			TaskID:       instance.TaskID,
-			RuleID:       instance.RuleID,
-			NodeID:       instance.NodeID,
-			Symbol:       instance.Symbol,
-			DataType:     ruleDataTypeMap[instance.RuleID], // 从规则信息中获取数据类型
-			TaskParams:   instance.TaskParams,
-			Status:       instance.Status,
-			LastExecTime: instance.LastExecTime,
-			Result:       instance.Result,
-			Invalid:      instance.Invalid,
-			CreateTime:   instance.CreateTime,
-			ModifyTime:   instance.ModifyTime,
+			ID:              instance.ID,
+			TaskID:          instance.TaskID,
+			RuleID:          instance.RuleID,
+			PlannedExecNode: instance.PlannedExecNode,
+			LastExecNode:    instance.LastExecNode,
+			LastExecStatus:  instance.LastExecStatus,
+			Symbol:          instance.Symbol,
+			DataType:        ruleDataTypeMap[instance.RuleID], // 从规则信息中获取数据类型
+			TaskParams:      instance.TaskParams,
+			LastExecTime:    instance.LastExecTime,
+			Result:          instance.Result,
+			Invalid:         instance.Invalid,
+			CreateTime:      instance.CreateTime,
+			ModifyTime:      instance.ModifyTime,
 		}
 		result = append(result, dto)
 	}
@@ -397,11 +409,16 @@ func (s *TaskInstanceServiceImpl) SetCloudNodeService(service CloudFunctionInvok
 	s.functionInvoker = service
 }
 
+// SetTaskInstanceStore 设置内存仓库（状态同步）
+func (s *TaskInstanceServiceImpl) SetTaskInstanceStore(store TaskInstanceStore) {
+	s.memStore = store
+}
+
 // ========== 任务转移相关私有方法 ==========
 
-// tryTransferFailedTask 尝试转移失败的任务到成功节点
+// tryTransferFailedTask 尝试转移失败的任务到可执行节点
 // 注意：客户端在上报失败前已经进行了多次重试，所以这里接到失败上报就立即触发转移
-// 使用负载均衡策略：从所有成功节点中随机选择一个，避免单个节点承载过多任务
+// 使用负载均衡策略：从匹配规则的节点中随机选择一个
 func (s *TaskInstanceServiceImpl) tryTransferFailedTask(ctx context.Context, taskID string) {
 	// 1. 获取任务实例信息
 	instance, err := s.instanceDAO.GetTaskInstance(ctx, taskID)
@@ -414,24 +431,88 @@ func (s *TaskInstanceServiceImpl) tryTransferFailedTask(ctx context.Context, tas
 		return
 	}
 
-	log.InfoContextf(ctx, "[TaskTransfer] Starting transfer for task %s (current node: %s)", taskID, instance.NodeID)
+	log.InfoContextf(ctx, "[TaskTransfer] Starting transfer for task %s (current node: %s)", taskID, instance.PlannedExecNode)
 
-	// 2. 查找同规则下所有执行成功的节点
-	successNodeIDs, err := s.instanceDAO.FindAllSuccessNodesByRule(ctx, instance.RuleID, instance.NodeID)
+	// 2. 获取规则并匹配可执行节点
+	rule, err := s.taskRulesDAO.GetTaskRule(ctx, instance.RuleID)
 	if err != nil {
-		log.ErrorContextf(ctx, "[TaskTransfer] Failed to find success nodes for rule %s: %v", instance.RuleID, err)
-		// 记录错误信息到 result
-		errorMsg := fmt.Sprintf("未找到成功节点: %v", err)
-		_ = s.instanceDAO.ReportInstanceStatus(ctx, taskID, instance.Status, errorMsg)
+		log.ErrorContextf(ctx, "[TaskTransfer] Failed to get rule %s: %v", instance.RuleID, err)
+		errorMsg := fmt.Sprintf("获取规则失败: %v", err)
+		_ = s.instanceDAO.ReportInstanceStatus(ctx, taskID, instance.LastExecNode, instance.LastExecStatus, errorMsg)
+		return
+	}
+	if rule == nil {
+		log.WarnContextf(ctx, "[TaskTransfer] Rule not found: %s", instance.RuleID)
+		_ = s.instanceDAO.ReportInstanceStatus(ctx, taskID, instance.LastExecNode, instance.LastExecStatus, "规则不存在")
 		return
 	}
 
-	log.InfoContextf(ctx, "[TaskTransfer] Found %d success nodes for rule %s: %v",
-		len(successNodeIDs), instance.RuleID, successNodeIDs)
+	ruleDTO := &dto.TaskRuleDTO{
+		ID:             rule.ID,
+		RuleID:         rule.RuleID,
+		DataType:       rule.DataType,
+		DataSource:     rule.DataSource,
+		CollectParams:  rule.CollectParams,
+		AssignmentType: rule.AssignmentType,
+		AssignedNodes:  rule.AssignedNodes,
+		NodePattern:    rule.NodePattern,
+		NodeTags:       rule.NodeTags,
+		Enabled:        rule.Enabled,
+		Creator:        rule.Creator,
+		CreateTime:     rule.CreateTime,
+		ModifyTime:     rule.ModifyTime,
+	}
 
-	// 3. 从成功节点列表中随机选择一个（负载均衡）
-	selectedNodeID := s.selectNodeWithLoadBalance(successNodeIDs)
-	log.InfoContextf(ctx, "[TaskTransfer] Selected node %s for task %s (load balancing)", selectedNodeID, taskID)
+	dataType := rule.DataType
+	if dataType == "" {
+		dataType = instance.CollectDataType
+	}
+	if dataType == "" {
+		log.WarnContextf(ctx, "[TaskTransfer] Missing data type for task %s", taskID)
+		_ = s.instanceDAO.ReportInstanceStatus(ctx, taskID, instance.LastExecNode, instance.LastExecStatus, "任务数据类型为空")
+		return
+	}
+	basePlanner := planner.NewBasePlanner(s.nodeDAO, nil, nil)
+	matchingNodes, err := basePlanner.GetMatchingNodes(ctx, ruleDTO, dataType)
+	if err != nil {
+		log.ErrorContextf(ctx, "[TaskTransfer] Failed to get matching nodes for rule %s: %v", instance.RuleID, err)
+		errorMsg := fmt.Sprintf("匹配节点失败: %v", err)
+		_ = s.instanceDAO.ReportInstanceStatus(ctx, taskID, instance.LastExecNode, instance.LastExecStatus, errorMsg)
+		return
+	}
+	if len(matchingNodes) == 0 {
+		log.WarnContextf(ctx, "[TaskTransfer] No matching nodes for rule %s", instance.RuleID)
+		_ = s.instanceDAO.ReportInstanceStatus(ctx, taskID, instance.LastExecNode, instance.LastExecStatus, "未找到可执行节点")
+		return
+	}
+
+	nodeIDs := make([]string, 0, len(matchingNodes))
+	for _, node := range matchingNodes {
+		if node.NodeID != "" {
+			nodeIDs = append(nodeIDs, node.NodeID)
+		}
+	}
+	if len(nodeIDs) == 0 {
+		log.WarnContextf(ctx, "[TaskTransfer] No valid node IDs for rule %s", instance.RuleID)
+		_ = s.instanceDAO.ReportInstanceStatus(ctx, taskID, instance.LastExecNode, instance.LastExecStatus, "节点ID为空")
+		return
+	}
+
+	if instance.PlannedExecNode != "" && len(nodeIDs) > 1 {
+		filtered := nodeIDs[:0]
+		for _, nodeID := range nodeIDs {
+			if nodeID != instance.PlannedExecNode {
+				filtered = append(filtered, nodeID)
+			}
+		}
+		if len(filtered) > 0 {
+			nodeIDs = filtered
+		}
+	}
+
+	// 3. 从匹配节点列表中随机选择一个
+	selectedNodeID := s.selectNodeWithLoadBalance(nodeIDs)
+	log.InfoContextf(ctx, "[TaskTransfer] Selected node %s for task %s", selectedNodeID, taskID)
 
 	// 4. 更新任务实例的节点ID
 	if err := s.instanceDAO.UpdateInstanceNodeID(ctx, taskID, selectedNodeID); err != nil {
@@ -445,12 +526,12 @@ func (s *TaskInstanceServiceImpl) tryTransferFailedTask(ctx context.Context, tas
 		log.ErrorContextf(ctx, "[TaskTransfer] Failed to trigger task on node %s: %v", selectedNodeID, err)
 		// 记录错误信息到 result
 		errorMsg := fmt.Sprintf("触发失败: %v", err)
-		_ = s.instanceDAO.ReportInstanceStatus(ctx, taskID, instance.Status, errorMsg)
+		_ = s.instanceDAO.ReportInstanceStatus(ctx, taskID, instance.LastExecNode, instance.LastExecStatus, errorMsg)
 		return
 	}
 
 	log.InfoContextf(ctx, "[TaskTransfer] Successfully transferred task %s from %s to %s",
-		taskID, instance.NodeID, selectedNodeID)
+		taskID, instance.PlannedExecNode, selectedNodeID)
 }
 
 // selectNodeWithLoadBalance 从节点列表中选择一个节点（负载均衡策略：随机选择）
@@ -524,8 +605,8 @@ func (s *TaskInstanceServiceImpl) getTaskInstanceCacheVersion(ctx context.Contex
 
 func buildTaskInstanceCacheKey(version string, filter *TaskInstanceFilterDTO) string {
 	statusKey := "all"
-	if filter.Status != nil {
-		statusKey = strconv.Itoa(*filter.Status)
+	if filter.LastExecStatus != nil {
+		statusKey = strconv.Itoa(*filter.LastExecStatus)
 	}
 	return fmt.Sprintf("collectmgr:task_instance:cache:list:%s:page:%d:size:%d:status:%s",
 		version,
@@ -539,7 +620,7 @@ func normalizeTaskInstanceCacheFilter(filter *TaskInstanceFilterDTO) (*TaskInsta
 	if filter == nil {
 		filter = &TaskInstanceFilterDTO{}
 	}
-	if filter.TaskID != "" || filter.RuleID != "" || filter.NodeID != "" || filter.Symbol != "" {
+	if filter.TaskID != "" || filter.RuleID != "" || filter.PlannedExecNode != "" || filter.LastExecNode != "" || filter.Symbol != "" {
 		return nil, fmt.Errorf("cache mode does not support fuzzy query")
 	}
 	if filter.Invalid != nil && *filter.Invalid != model.InvalidNo {
@@ -560,10 +641,10 @@ func normalizeTaskInstanceCacheFilter(filter *TaskInstanceFilterDTO) (*TaskInsta
 
 	valid := model.InvalidNo
 	return &TaskInstanceFilterDTO{
-		Status:   filter.Status,
-		Invalid:  &valid,
-		Page:     page,
-		PageSize: pageSize,
+		LastExecStatus: filter.LastExecStatus,
+		Invalid:        &valid,
+		Page:           page,
+		PageSize:       pageSize,
 	}, nil
 }
 

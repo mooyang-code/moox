@@ -1,11 +1,17 @@
 package cloudnode
 
 import (
+	"context"
 	"time"
 
 	cloudnodeconfig "github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
 	cmap "github.com/orcaman/concurrent-map/v2"
+)
+
+// 全局变量
+var (
+	globalHeartbeatStore *HeartbeatStore // 全局心跳存储实例
 )
 
 // HeartbeatInfo 心跳信息（内存存储）
@@ -30,13 +36,16 @@ type HeartbeatStore struct {
 
 // NewHeartbeatStore 创建心跳存储实例
 func NewHeartbeatStore() *HeartbeatStore {
-	return &HeartbeatStore{
+	store := &HeartbeatStore{
 		nodeType:        cmap.New[string](),
 		sourceService:   cmap.New[string](),
 		lastHeartbeat:   cmap.New[time.Time](),
 		totalHeartbeats: cmap.New[int64](),
 		metadata:        cmap.New[map[string]interface{}](),
 	}
+	// 设置全局实例
+	globalHeartbeatStore = store
+	return store
 }
 
 // UpdateHeartbeat 更新心跳信息
@@ -194,6 +203,11 @@ func (s *HeartbeatStore) Count() int {
 	return s.lastHeartbeat.Count()
 }
 
+// GetAllNodes 获取所有节点的心跳信息（内部使用）
+func (s *HeartbeatStore) GetAllNodes() map[string]*HeartbeatInfo {
+	return s.GetHeartbeatMap()
+}
+
 func cloneHeartbeatMetadata(metadata map[string]interface{}) map[string]interface{} {
 	if len(metadata) == 0 {
 		return nil
@@ -232,6 +246,26 @@ func (s *HeartbeatStore) buildHeartbeatInfo(nodeID string, lastHeartbeat time.Ti
 		TotalHeartbeats: totalHeartbeats,
 		Metadata:        cloneHeartbeatMetadata(metadata),
 	}
+}
+
+// GetActiveNodeIDs 获取所有活跃节点的 ID 列表（供dnsproxy使用）
+// 活跃节点定义: 最后心跳时间在 60 秒内
+func GetActiveNodeIDs(ctx context.Context) ([]string, error) {
+	if globalHeartbeatStore == nil {
+		return []string{}, nil
+	}
+
+	activeNodes := make([]string, 0)
+	now := time.Now()
+	activeThreshold := 60 * time.Second // 60秒阈值
+
+	globalHeartbeatStore.lastHeartbeat.IterCb(func(nodeID string, lastHeartbeat time.Time) {
+		if now.Sub(lastHeartbeat) < activeThreshold {
+			activeNodes = append(activeNodes, nodeID)
+		}
+	})
+
+	return activeNodes, nil
 }
 
 // GetOnlineNodeIDs 由 ServiceImpl 委托调用

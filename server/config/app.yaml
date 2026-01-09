@@ -15,12 +15,20 @@ storage:
   # local_path: ./data/packages
   cache_size: 100           # 缓存文件数量
   cache_expiry: 30          # 缓存过期时间（分钟）
+  xdata_url: "http://127.0.0.1:19104"
 
 worker:
   async_task_worker_count: 3
   node_creation_worker_count: 3
   node_deletion_worker_count: 3
   node_deployment_worker_count: 3
+
+task_management:
+  # 统一容差（秒），用于Pending超时判断
+  # - Pending超时：now > cycleBoundary + tolerance
+  tolerance: 30
+  # 默认interval（解析失败时使用）
+  default_interval: "1m"
 
 log:
   level: info               # debug, info, warn, error

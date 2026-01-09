@@ -37,10 +37,16 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 
+	// 3.5 注入依赖（避免循环依赖）
+	dnsproxy.GetActiveNodeIDsFunc = cloudnode.GetActiveNodeIDs
+
 	// 4. 注册定时器
-	// DNS探测定时器
+	// DNS探测定时器（本地DNS解析）
 	timer.RegisterScheduler("dnsproxySchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service("trpc.dnsproxy.timer"), dnsproxy.HandleSchedule)
+	// DNS探测定时器（合并终端+本地DNS并探测）
+	timer.RegisterScheduler("dnsProbeSchedule", &timer.DefaultScheduler{})
+	timer.RegisterHandlerService(s.Service("trpc.dnsprobe.timer"), dnsproxy.HandleDNSProbeSchedule)
 	// 云节点保活定时器
 	timer.RegisterScheduler("keepaliveSchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service("trpc.keepalive.timer"), cloudnode.HandleKeepaliveSchedule)

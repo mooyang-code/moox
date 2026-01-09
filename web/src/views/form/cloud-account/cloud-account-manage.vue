@@ -32,7 +32,7 @@
               </a-tag>
             </template>
           </a-table-column>
-          <a-table-column title="Access Key ID" data-index="secret_id" :width="200">
+          <a-table-column title="SecretId" data-index="secret_id" :width="200">
             <template #cell="{ record }">
               <a-space>
                 <span>{{ record.secret_id }}</span>
@@ -118,23 +118,44 @@
           </a-select>
         </a-form-item>
         
-        <a-form-item field="secret_id" label="Access Key ID" required>
-          <a-input v-model="form.secret_id" placeholder="请输入Access Key ID" />
-        </a-form-item>
-        
-        <a-form-item field="secret_key" label="Secret Key" :required="!isEdit">
-          <a-input-password 
-            v-model="form.secret_key" 
-            :placeholder="isEdit ? '如不修改请留空' : '请输入Secret Key'"
-            allow-clear
-          />
-          <template #extra>
-            <span style="color: #86909c; font-size: 12px;">
-              {{ isEdit ? '留空表示不修改密钥' : '密钥将加密存储' }}
+        <a-form-item field="secret_id" label="SecretId" required>
+          <a-input v-model="form.secret_id" placeholder="请输入SecretId" :disabled="isEdit" />
+          <template #extra v-if="isEdit">
+            <span style="color: #f53f3f; font-size: 12px;">
+              SecretId不允许修改,如需修改请删除后重新创建
             </span>
           </template>
         </a-form-item>
         
+        <a-form-item field="secret_key" label="SecretKey" :required="!isEdit">
+          <a-input-password
+            v-model="form.secret_key"
+            placeholder="请输入SecretKey"
+            :disabled="isEdit"
+            allow-clear
+          />
+          <template #extra>
+            <span :style="{ color: isEdit ? '#f53f3f' : '#86909c', fontSize: '12px' }">
+              {{ isEdit ? 'SecretKey不允许修改,如需修改请删除后重新创建' : '密钥将加密存储' }}
+            </span>
+          </template>
+        </a-form-item>
+
+        <a-divider v-if="form.provider === 'tencent'" orientation="left">COS配置(可选)</a-divider>
+
+        <a-form-item v-if="form.provider === 'tencent'" field="cos_url" label="COS控制台URL">
+          <a-input
+            v-model="cosUrl"
+            placeholder="粘贴COS控制台URL,如:https://console.cloud.tencent.com/cos/bucket?bucket=xxx&region=xxx"
+            @blur="parseCosUrl"
+          />
+          <template #extra>
+            <span style="color: #86909c; font-size: 12px;">
+              粘贴COS控制台URL后将自动解析并填充应用ID、桶名和地区
+            </span>
+          </template>
+        </a-form-item>
+
         <a-form-item field="app_id" label="应用ID">
           <a-input v-model="form.app_id" placeholder="请输入应用ID（可选）" />
         </a-form-item>
@@ -205,6 +226,9 @@ const defaultForm = {
 
 const form = reactive({ ...defaultForm });
 
+// COS URL 输入框
+const cosUrl = ref('');
+
 // 监听属性变化
 watch(() => props.modelValue, (newVal) => {
   visible.value = newVal;
@@ -253,6 +277,7 @@ const onAdd = () => {
     ...defaultForm,
     account_id: generateAccountId()
   });
+  cosUrl.value = '';
   formVisible.value = true;
 };
 
@@ -264,12 +289,13 @@ const onEdit = (record: CloudAccount) => {
     account_name: record.account_name,
     provider: record.provider,
     secret_id: record.secret_id,
-    secret_key: '', // 编辑时密钥留空
+    secret_key: '', // 编辑时密钥留空,但会被禁用不允许修改
     app_id: record.app_id || '',
     cos_region: record.cos_region || '',
     cos_bucket: record.cos_bucket || '',
     extra_config: record.extra_config || ''
   });
+  cosUrl.value = '';
   formVisible.value = true;
 };
 
@@ -295,6 +321,48 @@ const handleFormCancel = () => {
   formVisible.value = false;
 };
 
+// 解析COS URL
+const parseCosUrl = () => {
+  if (!cosUrl.value) return;
+
+  try {
+    const url = new URL(cosUrl.value);
+    const params = new URLSearchParams(url.search);
+
+    // 获取bucket参数
+    const bucket = params.get('bucket');
+    // 获取region参数
+    const region = params.get('region');
+
+    if (bucket) {
+      form.cos_bucket = bucket;
+
+      // 从桶名中提取应用ID
+      // 桶名格式通常为: bucketname-appid
+      const parts = bucket.split('-');
+      if (parts.length >= 2) {
+        const appId = parts[parts.length - 1];
+        // 验证是否为纯数字
+        if (/^\d+$/.test(appId)) {
+          form.app_id = appId;
+        }
+      }
+    }
+
+    if (region) {
+      form.cos_region = region;
+    }
+
+    if (bucket || region) {
+      Message.success('已自动填充COS配置信息');
+    } else {
+      Message.warning('无法从URL中解析出有效的配置信息');
+    }
+  } catch (error) {
+    Message.error('URL格式不正确,请检查后重试');
+  }
+};
+
 // 表单确认
 const handleFormOk = async () => {
   // 表单验证
@@ -316,22 +384,17 @@ const handleFormOk = async () => {
   try {
     let response;
     if (isEdit.value) {
-      // 编辑时，如果密钥为空，则不传递secret_key字段
+      // 编辑时,不传递secret_id和secret_key字段(不允许修改)
       const updateData: any = {
         account_id: form.account_id,
         account_name: form.account_name,
         provider: form.provider,
-        secret_id: form.secret_id,
         app_id: form.app_id,
         cos_region: form.cos_region,
         cos_bucket: form.cos_bucket,
         extra_config: form.extra_config || '{}'
       };
-      
-      if (form.secret_key) {
-        updateData.secret_key = form.secret_key;
-      }
-      
+
       response = await updateCloudAccount(form.account_id, updateData);
     } else {
       // 新增

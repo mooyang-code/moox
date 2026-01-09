@@ -45,6 +45,7 @@ func (h *HeartbeatHandler) ReportHeartbeat(c *gin.Context) {
 		SourceService:       req.SourceService,
 		Metadata:            req.Metadata,
 		SupportedCollectors: req.SupportedCollectors,
+		TasksMD5:            req.TasksMD5,
 	}
 
 	response, err := h.service.ReportHeartbeat(c.Request.Context(), serviceReq)

@@ -121,8 +121,8 @@ type TaskInstanceService interface {
 	CompleteInstance(ctx context.Context, instanceID string, success bool, result string) error
 
 	// ReportTaskStatus 上报任务状态（客户端上报用）
-	// 更新 c_status、c_end_time、c_result，无状态前置条件限制
-	ReportTaskStatus(ctx context.Context, instanceID string, status int, result string) error
+	// v2.0: 新增 nodeID 参数，更新 c_last_exec_node、c_last_exec_status、c_last_exec_time、c_result
+	ReportTaskStatus(ctx context.Context, instanceID string, nodeID string, status int, result string) error
 
 	// InvalidateTaskInstance 作废任务实例
 	InvalidateTaskInstance(ctx context.Context, taskID string) error
@@ -136,29 +136,33 @@ type TaskInstanceDTO struct {
 	ID              int
 	TaskID          string
 	RuleID          string
-	NodeID          string
-	Symbol          string // 新增：标的
-	CollectDataType string // 新增：采集数据类型（从 task_params 提取）
-	DataType        string // 新增：数据类型（从规则表关联获取）
+	// v2.0 新字段
+	PlannedExecNode string // 计划执行节点ID
+	LastExecNode    string // 最后执行节点ID
+	LastExecStatus  int    // 最后执行状态
+	// 其他字段
+	Symbol          string // ��的
+	CollectDataType string // 采集数据类型（从 task_params 提取）
+	DataType        string // 数据类型（从规则表关联获取）
 	TaskParams      string
-	Status          int
-	LastExecTime    *time.Time // 最后执行时间（原 EndTime）
+	LastExecTime    *time.Time // 最后执行时间
 	Result          string
-	Invalid         int // 新增：删除标记
+	Invalid         int // 删除标记
 	CreateTime      time.Time
 	ModifyTime      time.Time
 }
 
 // TaskInstanceFilterDTO 任务实例筛选条件
 type TaskInstanceFilterDTO struct {
-	TaskID   string // 任务ID
-	RuleID   string // 规则ID
-	NodeID   string // 节点ID
-	Symbol   string // 交易标的
-	Status   *int   // 状态（使用指针以区分0值和未设置）
-	Invalid  *int   // 是否有效（使用指针以区分0值和未设置）
-	Page     int    // 页码（从1开始）
-	PageSize int    // 每页数量
+	TaskID          string // 任务ID
+	RuleID          string // 规则ID
+	PlannedExecNode string // v2.0: 计划执行节点
+	LastExecNode    string // v2.0: 最后执行节点
+	LastExecStatus  *int   // v2.0: 最后执行状态（使用指针以区分0值和未设置）
+	Symbol          string // 交易标的
+	Invalid         *int   // 是否有效（使用指针以区分0值和未设置）
+	Page            int    // 页码（从1开始）
+	PageSize        int    // 每页数量
 }
 
 // TaskPlannerService 任务规划器服务接口

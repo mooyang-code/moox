@@ -250,9 +250,22 @@ const dataList = ref<DataRow[]>([]);
 const currentDataRow = ref<DataRow | null>(null);
 const dataModalVisible = ref(false);
 
+// 初始化默认时间范围的函数
+const initDefaultDateRange = (): string[] => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  
+  const startDate = '2025-10-01 00:01';
+  const endDate = `${year}-${month}-${day} 23:59`;
+  
+  return [startDate, endDate];
+};
+
 // 搜索表单
 const searchForm = reactive({
-  dateRange: [] as string[]
+  dateRange: initDefaultDateRange()
 });
 
 // 时间排序状态
@@ -660,7 +673,7 @@ const handleSearch = async () => {
 };
 
 const handleReset = () => {
-  searchForm.dateRange = [];
+  searchForm.dateRange = initDefaultDateRange(); // 重置为默认时间范围
   timeSortType.value = 1; // 重置为默认倒序
   pagination.value.current = 1;
   loadDataList();

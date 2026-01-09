@@ -58,6 +58,12 @@ func (s *AsyncTaskServiceImpl) AsyncJobCreate(ctx context.Context, tasks []TaskR
 		return "", fmt.Errorf("no tasks provided")
 	}
 
+	sanitizedTasks, err := sanitizeTaskRequests(ctx, tasks)
+	if err != nil {
+		return "", err
+	}
+	tasks = sanitizedTasks
+
 	// 生成JobID
 	jobID := uuid.New().String()
 	log.InfoContextf(ctx, "[AsyncTask] AsyncJobCreate: JobID=%s, TaskCount=%d", jobID, len(tasks))

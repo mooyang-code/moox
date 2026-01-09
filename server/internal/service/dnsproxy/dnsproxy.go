@@ -17,6 +17,7 @@ import (
 // 全局变量
 var (
 	globalDNSInstance *DNSProxy // 全局DNS代理实例
+	GlobalDNSInstance *DNSProxy // 导出给node_dns.go使用
 )
 
 // DNSProxy DNS代理服务
@@ -46,6 +47,7 @@ type DNSProxyResult struct {
 // InitDNSProxyInstance 初始化DNSProxy全局实例
 func InitDNSProxyInstance() {
 	globalDNSInstance = NewDNSProxy()
+	GlobalDNSInstance = globalDNSInstance // 同时设置导出的全局实例
 	// 这里没有context，使用基础的log.Info
 	log.Info("[DNSProxy] DNSProxy实例初始化完成")
 }
@@ -73,6 +75,13 @@ func NewDNSProxy() *DNSProxy {
 func HandleSchedule(ctx context.Context, params string) error {
 	ctxClone := trpc.CloneContext(ctx)
 	log.InfoContextf(ctxClone, "[DNSProxy] Starting DNS proxy schedule, params: %s", params)
+
+	// 检查是否启用本地DNS解析
+	cfg := GetConfig()
+	if cfg != nil && !cfg.DNSProxy.EnableLocalDNSResolve {
+		log.InfoContextf(ctxClone, "[DNSProxy] Local DNS resolve is disabled, skip schedule")
+		return nil
+	}
 
 	if globalDNSInstance == nil {
 		err := fmt.Errorf("DNS proxy instance not initialized")
@@ -236,6 +245,11 @@ func (d *DNSProxy) pingAndSort(ctx context.Context, ips []string) []*IPInfo {
 	return ipInfoList
 }
 
+// PingAndSort 导出的方法，供node_dns.go使用
+func (d *DNSProxy) PingAndSort(ctx context.Context, ips []string) []*IPInfo {
+	return d.pingAndSort(ctx, ips)
+}
+
 // pingIP 对单个IP进行ping测试
 func (d *DNSProxy) pingIP(ctx context.Context, ip string) (int64, bool) {
 	start := time.Now()
@@ -292,4 +306,20 @@ func resolveSingleBatch(ctx context.Context, batch []string) error {
 		})
 	}
 	return trpc.GoAndWait(handlers...)
+}
+
+// GetLocalDNSResult 获取本地DNS解析结果（从缓存读取）
+// 该函数供node_dns.go使用，用于合并本地和终端DNS结果
+func GetLocalDNSResult(domain string) []*IPInfo {
+	cached, ok := localcache.Get(domain)
+	if !ok {
+		return []*IPInfo{}
+	}
+
+	result, ok := cached.(*DNSProxyResult)
+	if !ok || !result.Success {
+		return []*IPInfo{}
+	}
+
+	return result.IPList
 }

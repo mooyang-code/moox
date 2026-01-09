@@ -46,6 +46,13 @@ server:
       network: "*/15 * * * * *?scheduler=dnsproxySchedule&startAtOnce=1&params="
       protocol: timer
       timeout: 10000
+      ######## DNS探测定时任务（合并终端+本地DNS并探测） ########
+    - name: trpc.dnsprobe.timer
+      port: 8005
+      network: "*/30 * * * * *?scheduler=dnsProbeSchedule&startAtOnce=1&params="
+      protocol: timer
+      timeout: 30000  #请求最长处理时间 单位 毫秒
+      ######## 云节点保活定时任务 ########
     - name: trpc.keepalive.timer
       port: 8003
       network: "*/90 * * * * *?scheduler=keepaliveSchedule&startAtOnce=1&params="
@@ -54,7 +61,7 @@ server:
       ######## 任务实例重算定时任务 ########
     - name: trpc.collectmgr.timer
       port: 8004
-      network: "*/17 * * * * *?scheduler=taskPlannerSchedule&startAtOnce=0&params="
+      network: "30 * * * * *?scheduler=taskPlannerSchedule&startAtOnce=0&params="
       protocol: timer
       timeout: 60000  #请求最长处理时间 单位 毫秒 (1分钟)
 
@@ -131,7 +138,7 @@ plugins:
   log:
     default: 
       - writer: file                              #本地文件日志
-        level: info                               #本地文件滚动日志的级别
+        level: debug                               #本地文件滚动日志的级别
         writer_config:                            #本地文件输出具体配置
           log_path: ./log                        #本地文件日志路径
           filename: trpc.log            #本地文件日志文件名

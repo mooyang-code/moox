@@ -7,6 +7,7 @@ import (
 	cloudnodemodel "github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/dto"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/model"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // SymbolPlanner 标的同步规划器
@@ -28,18 +29,27 @@ func (d *SymbolPlanner) GetDataType() string {
 // Symbol 任务不按标的拆分，而是按产品类型拆分
 // 返回: ["SPOT", "SWAP"] 或 ["SPOT"] 等
 func (d *SymbolPlanner) GetTargetObjects(ctx context.Context, rule *dto.TaskRuleDTO) ([]string, error) {
+	log.DebugContextf(ctx, "[SymbolPlanner] GetTargetObjects enter (ruleID=%s, dataSource=%s)",
+		rule.RuleID, rule.DataSource)
+
 	// 1. 从规则参数解析 inst_types
 	params, err := d.base.ParseCollectParams(rule.CollectParams)
 	if err != nil {
+		log.ErrorContextf(ctx, "[SymbolPlanner] Failed to parse collect params (ruleID=%s): %v",
+			rule.RuleID, err)
 		return nil, err
 	}
 
 	// 2. 如果没有指定 inst_types，默认返回 SPOT
 	if len(params.InstTypes) == 0 {
+		log.InfoContextf(ctx, "[SymbolPlanner] No inst_types specified, using default [SPOT] (ruleID=%s)",
+			rule.RuleID)
 		return []string{"SPOT"}, nil
 	}
 
 	// 3. 返回配置的产品类型列表
+	log.InfoContextf(ctx, "[SymbolPlanner] Got %d inst_types: %v (ruleID=%s)",
+		len(params.InstTypes), params.InstTypes, rule.RuleID)
 	return params.InstTypes, nil
 }
 
@@ -56,8 +66,8 @@ func (d *SymbolPlanner) BuildTaskParams(ctx context.Context, rule *dto.TaskRuleD
 	taskParams := TaskParams{
 		DataType:   rule.DataType,
 		DataSource: rule.DataSource,
-		InstType:   object,          // SPOT, SWAP, FUTURES
-		Symbol:     "",              // Symbol 任务不指定具体标的
+		InstType:   object,           // SPOT, SWAP, FUTURES
+		Symbol:     "",               // Symbol 任务不指定具体标的
 		Intervals:  params.Intervals, // 时间周期
 	}
 

@@ -10,6 +10,7 @@ import (
 	cloudnodemodel "github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/dto"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr/model"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // CollectParams 采集参数（从 JSON 解析）
@@ -178,7 +179,7 @@ func MergeUnique(a, b []string) []string {
 // patterns: 模式列表，如 ["*"], ["BTC-*", "ETH-USDT"], ["*-USDT"]
 // allObjects: 所有可用对象列表（从 SymbolProvider 获取）
 // 返回: 匹配的对象列表（已去重）
-func ResolveObjectPatterns(patterns []string, allObjects []string) []string {
+func ResolveObjectPatterns(ctx context.Context, ruleID string, patterns []string, allObjects []string) []string {
 	if len(patterns) == 0 {
 		return []string{}
 	}
@@ -186,6 +187,8 @@ func ResolveObjectPatterns(patterns []string, allObjects []string) []string {
 	// 检查是否包含全量通配符 "*"
 	for _, p := range patterns {
 		if p == "*" {
+			log.InfoContextf(ctx, "[ResolveObjectPatterns] Using wildcard '*', returning all %d objects (ruleID=%s)",
+				len(allObjects), ruleID)
 			return allObjects
 		}
 	}
@@ -202,6 +205,8 @@ func ResolveObjectPatterns(patterns []string, allObjects []string) []string {
 		if strings.Contains(pattern, "*") {
 			// 转换为正则表达式
 			matched := matchWildcard(pattern, allObjects)
+			log.DebugContextf(ctx, "[ResolveObjectPatterns] Pattern '%s' matched %d objects (ruleID=%s)",
+				pattern, len(matched), ruleID)
 			for _, m := range matched {
 				if !seen[m] {
 					seen[m] = true
@@ -210,6 +215,8 @@ func ResolveObjectPatterns(patterns []string, allObjects []string) []string {
 			}
 		} else {
 			// 精确匹配，直接添加
+			log.DebugContextf(ctx, "[ResolveObjectPatterns] Adding exact match '%s' (ruleID=%s)",
+				pattern, ruleID)
 			if !seen[pattern] {
 				seen[pattern] = true
 				result = append(result, pattern)
@@ -217,6 +224,8 @@ func ResolveObjectPatterns(patterns []string, allObjects []string) []string {
 		}
 	}
 
+	log.InfoContextf(ctx, "[ResolveObjectPatterns] Resolved %d objects from %d patterns (ruleID=%s)",
+		len(result), len(patterns), ruleID)
 	return result
 }
 

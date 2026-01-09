@@ -51,4 +51,5 @@ type HeartbeatReportRequest struct {
 	Message             string                 `json:"message,omitempty"`
 	Metadata            map[string]interface{} `json:"metadata,omitempty"`
 	SupportedCollectors []string               `json:"supported_collectors,omitempty"` // 支持的采集器类型
+	TasksMD5            string                 `json:"tasks_md5"`                      // 当前任务列表MD5值
 }

@@ -5,9 +5,10 @@
         <a-space wrap>
           <a-input v-model="form.taskId" placeholder="请输入任务ID" allow-clear style="width: 200px" />
           <a-input v-model="form.ruleId" placeholder="请输入规则ID" allow-clear style="width: 200px" />
-          <a-input v-model="form.nodeId" placeholder="请输入节点ID" allow-clear style="width: 220px" />
+          <a-input v-model="form.plannedExecNode" placeholder="计划节点" allow-clear style="width: 150px" />
+          <a-input v-model="form.lastExecNode" placeholder="最后执行节点" allow-clear style="width: 150px" />
           <a-input v-model="form.symbol" placeholder="请输入交易标的" allow-clear style="width: 150px" />
-          <a-select placeholder="执行状态" v-model="form.status" style="width: 120px" allow-clear>
+          <a-select placeholder="执行状态" v-model="form.lastExecStatus" style="width: 120px" allow-clear>
             <a-option :value="0">待执行</a-option>
             <a-option :value="1">执行中</a-option>
             <a-option :value="2">成功</a-option>
@@ -57,26 +58,33 @@
                 <a-link @click="onViewDetails(record)">{{ record.TaskID }}</a-link>
               </template>
             </a-table-column>
-            <a-table-column title="规则ID" data-index="RuleID" :width="200">
+            <a-table-column title="规则ID" data-index="RuleID" :width="120">
               <template #cell="{ record }">
                 <a-tooltip :content="record.RuleID">
                   <span class="ellipsis-text">{{ record.RuleID }}</span>
                 </a-tooltip>
               </template>
             </a-table-column>
-            <a-table-column title="交易标的" data-index="Symbol" :width="120">
+            <a-table-column title="交易标的" data-index="Symbol" :width="180">
               <template #cell="{ record }">
                 <a-tag color="arcoblue" size="small">{{ record.Symbol }}</a-tag>
               </template>
             </a-table-column>
-            <a-table-column title="执行节点" data-index="NodeID" :width="260">
+            <a-table-column title="计划节点" data-index="PlannedExecNode" :width="120">
               <template #cell="{ record }">
-                <a-tooltip :content="record.NodeID">
-                  <span class="ellipsis-text">{{ record.NodeID }}</span>
+                <a-tooltip :content="record.PlannedExecNode">
+                  <span class="ellipsis-text">{{ record.PlannedExecNode }}</span>
                 </a-tooltip>
               </template>
             </a-table-column>
-            <a-table-column title="任务参数" :width="180">
+            <a-table-column title="最后执行节点" data-index="LastExecNode" :width="120">
+              <template #cell="{ record }">
+                <a-tooltip :content="getLastExecNode(record)">
+                  <span class="ellipsis-text">{{ getLastExecNode(record) }}</span>
+                </a-tooltip>
+              </template>
+            </a-table-column>
+            <a-table-column title="任务参数" :width="120">
               <template #cell="{ record }">
                 <a-popover title="任务参数详情" trigger="click">
                   <template #content>
@@ -91,8 +99,8 @@
             </a-table-column>
             <a-table-column title="执行状态" :width="100" align="center">
               <template #cell="{ record }">
-                <a-tag bordered size="small" :color="getStatusColor(record.Status)">
-                  {{ getStatusText(record.Status) }}
+                <a-tag bordered size="small" :color="getStatusColor(record.LastExecStatus)">
+                  {{ getStatusText(record.LastExecStatus) }}
                 </a-tag>
               </template>
             </a-table-column>
@@ -140,13 +148,14 @@
         <a-descriptions-item label="ID">{{ detailData.ID }}</a-descriptions-item>
         <a-descriptions-item label="任务ID">{{ detailData.TaskID }}</a-descriptions-item>
         <a-descriptions-item label="规则ID">{{ detailData.RuleID }}</a-descriptions-item>
-        <a-descriptions-item label="执行节点">{{ detailData.NodeID }}</a-descriptions-item>
+        <a-descriptions-item label="计划节点">{{ detailData.PlannedExecNode }}</a-descriptions-item>
+        <a-descriptions-item label="最后执行节点">{{ getLastExecNode(detailData) }}</a-descriptions-item>
         <a-descriptions-item label="交易标的">
           <a-tag color="arcoblue">{{ detailData.Symbol }}</a-tag>
         </a-descriptions-item>
         <a-descriptions-item label="执行状态">
-          <a-tag :color="getStatusColor(detailData.Status || 0)">
-            {{ getStatusText(detailData.Status || 0) }}
+          <a-tag :color="getStatusColor(detailData.LastExecStatus || 0)">
+            {{ getStatusText(detailData.LastExecStatus || 0) }}
           </a-tag>
         </a-descriptions-item>
         <a-descriptions-item label="有效性">
@@ -154,7 +163,6 @@
             {{ detailData.Invalid === 0 ? '有效' : '无效' }}
           </a-tag>
         </a-descriptions-item>
-        <a-descriptions-item label="开始时间">{{ formatDateTime(detailData.StartTime) }}</a-descriptions-item>
         <a-descriptions-item label="最后执行时间">{{ formatDateTime(detailData.LastExecTime) }}</a-descriptions-item>
         <a-descriptions-item label="任务创建时间">{{ formatDateTime(detailData.CreateTime) }}</a-descriptions-item>
         <a-descriptions-item label="修改时间">{{ formatDateTime(detailData.ModifyTime) }}</a-descriptions-item>
@@ -185,19 +193,23 @@ interface TaskInstance {
   ID: number;
   TaskID: string;
   RuleID: string;
-  NodeID: string;
+  PlannedExecNode: string;    // v2.0: 计划执行节点
+  LastExecNode: string;       // v2.0: 最后执行节点
+  LastExecStatus: number;     // v2.0: 最后执行状态
   Symbol: string;
   CollectDataType: string;
   DataType: string;
   TaskParams: string;
-  Status: number;
-  StartTime: string | null;
   LastExecTime: string | null;
   Result: string;
   Invalid: number;
   CreateTime: string;
   ModifyTime: string;
 }
+
+type TaskInstanceRecord = Partial<TaskInstance> & {
+  last_exec_node?: string;
+};
 
 const loading = ref(false);
 const instanceList = ref<TaskInstance[]>([]);
@@ -208,9 +220,10 @@ const detailData = ref<Partial<TaskInstance>>({});
 const form = ref({
   taskId: '',
   ruleId: '',
-  nodeId: '',
+  plannedExecNode: '',      // v2.0: 计划节点
+  lastExecNode: '',         // v2.0: 执行节点
   symbol: '',
-  status: null as number | null,
+  lastExecStatus: null as number | null,  // v2.0: 执行状态
   invalid: null as number | null
 });
 
@@ -259,6 +272,11 @@ const getStatusText = (status: number) => {
     4: '失败'
   };
   return texts[status] || '未知';
+};
+
+const getLastExecNode = (record: TaskInstanceRecord) => {
+  if (!record) return '-';
+  return record.LastExecNode || record.last_exec_node || '-';
 };
 
 const formatJSON = (str: string) => {
@@ -322,9 +340,10 @@ const reset = () => {
   form.value = {
     taskId: '',
     ruleId: '',
-    nodeId: '',
+    plannedExecNode: '',      // v2.0: 计划节点
+    lastExecNode: '',         // v2.0: 执行节点
     symbol: '',
-    status: null,
+    lastExecStatus: null,     // v2.0: 执行状态
     invalid: null
   };
   getInstanceList();
@@ -349,9 +368,10 @@ const getInstanceList = async () => {
 
     if (form.value.taskId) params.task_id = form.value.taskId;
     if (form.value.ruleId) params.rule_id = form.value.ruleId;
-    if (form.value.nodeId) params.node_id = form.value.nodeId;
+    if (form.value.plannedExecNode) params.planned_exec_node = form.value.plannedExecNode;
+    if (form.value.lastExecNode) params.last_exec_node = form.value.lastExecNode;
     if (form.value.symbol) params.symbol = form.value.symbol;
-    if (form.value.status !== null) params.status = form.value.status;
+    if (form.value.lastExecStatus !== null) params.last_exec_status = form.value.lastExecStatus;
     if (form.value.invalid !== null) params.invalid = form.value.invalid;
 
     const response = await service.post('/gateway/collectmgr/ListTaskInstances', params, {

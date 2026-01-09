@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
+	"github.com/mooyang-code/moox/server/internal/service/dnsproxy"
 
 	"trpc.group/trpc-go/trpc-database/localcache"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -35,46 +36,63 @@ func (s *ServiceImpl) ReportHeartbeat(ctx context.Context, req *types.ReportHear
 	return s.handleHeartbeat(ctx, req)
 }
 
-// handleHeartbeat 处理心跳上报
+// handleHeartbeat 处理心跳上报（新版：从内存读取任务）
 func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHeartbeatRequest) (*types.ReportHeartbeatResponse, error) {
-	log.DebugContextf(ctx, "handleHeartbeat Enter")
-	// 直接写入内存存储（无锁，高性能）
+	log.DebugContextf(ctx, "handleHeartbeat Enter:%s", req.NodeID)
+
+	// 1. 写入内存存储（无锁，高性能）
 	if s.heartbeatStore == nil {
 		return nil, fmt.Errorf("heartbeat store not initialized")
 	}
 	s.heartbeatStore.UpdateHeartbeat(req)
 
+	// 2. 处理节点DNS记录（仅更新缓存，不触发探测）
+	if err := s.handleNodeDNSRecords(ctx, req.NodeID, req.LocalDNSRecords); err != nil {
+		log.ErrorContextf(ctx, "[Heartbeat] Failed to update node DNS records: nodeID=%s, error=%v",
+			req.NodeID, err)
+	}
+
+	// 3. 更新节点支持的采集器类型
 	if err := s.updateSupportedCollectors(ctx, req); err != nil {
 		return nil, err
 	}
 
-	// 获取包版本信息
+	// 4. 获取包版本信息
 	packageVersion := s.loadPackageVersionForHeartbeat(ctx, req.NodeID)
 
-	// 获取节点任务列表（带缓存）
-	tasks, err := s.getNodeTasksCached(ctx, req.NodeID)
-	if err != nil {
-		log.ErrorContextf(ctx, "[Heartbeat] 获取节点任务失败: nodeID=%s, error=%v", req.NodeID, err)
-		// 任务查询失败不影响心跳，返回空任务列表
-		tasks = nil
+	// 5. 检查任务实例仓库是否初始化
+	if s.taskInstanceStore == nil {
+		log.WarnContext(ctx, "[Heartbeat] Task instance store not initialized")
+		return &types.ReportHeartbeatResponse{
+			PackageVersion: packageVersion,
+			TasksMD5:       "initializing",
+			TaskInstances:  nil,
+		}, nil
 	}
 
-	// 计算服务端任务MD5
+	// 6. 从内存仓库获取节点任务列表
+	tasks := s.loadNodeTasksFromMemory(ctx, req.NodeID)
+
+	// 7. 检查任务仓库是否为空（启动期间）
+	storeCount := s.taskInstanceStore.GetCount()
+	if storeCount == 0 {
+		// 任务仓库为空，返回特殊标记，客户端保持本地任务不变
+		log.InfoContextf(ctx, "[Heartbeat] Task instance store is empty, returning initializing flag: nodeID=%s", req.NodeID)
+		return &types.ReportHeartbeatResponse{
+			PackageVersion: packageVersion,
+			TasksMD5:       "initializing", // 特殊标记
+			TaskInstances:  nil,
+		}, nil
+	}
+
+	// 8. 计算服务端任务MD5（仅用于返回，不再参与下发判断）
 	serverTasksMD5 := s.calculateTasksMD5(tasks)
 
-	// 构建响应
+	// 9. 构建响应（始终返回任务列表）
 	response := &types.ReportHeartbeatResponse{
 		PackageVersion: packageVersion,
 		TasksMD5:       serverTasksMD5,
-	}
-
-	// MD5比较：如果客户端上报的MD5与服务端计算的MD5不同，则返回任务列表
-	if req.TasksMD5 != serverTasksMD5 {
-		log.InfoContextf(ctx, "[Heartbeat] 任务MD5不匹配，返回任务列表: nodeID=%s, clientMD5=%s, serverMD5=%s, taskCount=%d",
-			req.NodeID, req.TasksMD5, serverTasksMD5, len(tasks))
-		response.TaskInstances = tasks
-	} else {
-		log.DebugContextf(ctx, "[Heartbeat] 任务MD5匹配，跳过任务下发: nodeID=%s, md5=%s", req.NodeID, serverTasksMD5)
+		TaskInstances:  tasks,
 	}
 
 	return response, nil
@@ -298,7 +316,50 @@ func (s *ServiceImpl) getNodeTasksCached(ctx context.Context, nodeID string) ([]
 	return tasks, nil
 }
 
-// loadNodeTasks 从DB加载节点任务
+// loadNodeTasksFromMemory 从内存仓库加载节点任务（新版）
+func (s *ServiceImpl) loadNodeTasksFromMemory(ctx context.Context, nodeID string) []*types.TaskInstanceInfo {
+	// 从内存仓库获取该节点的任务实例
+	instances := s.taskInstanceStore.GetByNodeID(nodeID)
+
+	// #region agent log
+	if len(instances) > 0 {
+		symbolsForLog := make([]string, 0, len(instances))
+		for _, inst := range instances {
+			symbolsForLog = append(symbolsForLog, inst.Symbol)
+		}
+		log.InfoContextf(ctx, "[DEBUG_AGENT] loadNodeTasksFromMemory: nodeID=%s, taskCount=%d, symbols=%v",
+			nodeID, len(instances), symbolsForLog)
+
+		// 详细日志：输出每个任务的 TaskParams
+		for i, inst := range instances {
+			if i < 3 { // 只输出前3个任务
+				log.InfoContextf(ctx, "[DEBUG_AGENT] Task[%d]: taskID=%s, symbol=%s, taskParams=%s",
+					i, inst.TaskID, inst.Symbol, inst.TaskParams)
+			}
+		}
+	}
+	// #endregion
+
+	// 转换为 TaskInstanceInfo
+	tasks := make([]*types.TaskInstanceInfo, 0, len(instances))
+	for _, inst := range instances {
+		tasks = append(tasks, &types.TaskInstanceInfo{
+			ID:              inst.ID,
+			TaskID:          inst.TaskID,
+			RuleID:          inst.RuleID,
+			PlannedExecNode: inst.PlannedExecNode,
+			DataType:        inst.DataType,
+			Symbol:          inst.Symbol,
+			Interval:        inst.Interval,
+			TaskParams:      inst.TaskParams,
+			Invalid:         inst.Invalid,
+		})
+	}
+
+	return tasks
+}
+
+// loadNodeTasks 从DB加载节点任务（旧版，保留用于兼容）
 func (s *ServiceImpl) loadNodeTasks(ctx context.Context, nodeID string) ([]*types.TaskInstanceInfo, error) {
 	// 获取节点的所有任务实例（不限制状态）
 	instances, err := s.taskInstanceDAO.GetTaskInstancesByNode(ctx, nodeID, nil)
@@ -316,12 +377,15 @@ func (s *ServiceImpl) loadNodeTasks(ctx context.Context, nodeID string) ([]*type
 		}
 
 		tasks = append(tasks, &types.TaskInstanceInfo{
-			ID:         instance.ID,
-			TaskID:     instance.TaskID,
-			RuleID:     instance.RuleID,
-			NodeID:     instance.NodeID,
-			TaskParams: instance.TaskParams,
-			Invalid:    instance.Invalid,
+			ID:              instance.ID,
+			TaskID:          instance.TaskID,
+			RuleID:          instance.RuleID,
+			PlannedExecNode: instance.PlannedExecNode,
+			DataType:        instance.CollectDataType,
+			Symbol:          instance.Symbol,
+			Interval:        instance.Interval,
+			TaskParams:      instance.TaskParams,
+			Invalid:         instance.Invalid,
 		})
 	}
 
@@ -348,3 +412,35 @@ func (s *ServiceImpl) calculateTasksMD5(tasks []*types.TaskInstanceInfo) string 
 	hash := md5.Sum([]byte(combined))
 	return hex.EncodeToString(hash[:])
 }
+
+// handleNodeDNSRecords 处理节点DNS记录上报
+// 仅将DNS记录更新到缓存，不触发探测（探测由独立定时器完成）
+func (s *ServiceImpl) handleNodeDNSRecords(ctx context.Context, nodeID string, records []*types.LocalDNSReportItem) error {
+	// 允许空记录（客户端解析失败场景）
+	if len(records) == 0 {
+		log.InfoContextf(ctx, "[Heartbeat] Node reported empty DNS records: nodeID=%s", nodeID)
+		return nil
+	}
+
+	// 导入dnsproxy包（需要在文件头部添加import）
+	// 转换为dnsproxy的NodeDNSRecord格式
+	dnsRecords := make([]*dnsproxy.NodeDNSRecord, 0, len(records))
+	for _, item := range records {
+		dnsRecords = append(dnsRecords, &dnsproxy.NodeDNSRecord{
+			Domain:    item.Domain,
+			IPList:    item.IPList,
+			ResolveAt: item.ResolveAt,
+		})
+	}
+
+	// 更新到缓存（365天TTL）
+	if err := dnsproxy.UpdateNodeDNSRecords(ctx, nodeID, dnsRecords); err != nil {
+		return fmt.Errorf("failed to update node DNS records: %w", err)
+	}
+
+	log.InfoContextf(ctx, "[Heartbeat] Node DNS records updated: nodeID=%s, domains=%d",
+		nodeID, len(records))
+
+	return nil
+}
+

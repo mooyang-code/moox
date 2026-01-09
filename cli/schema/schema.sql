@@ -281,13 +281,17 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
     c_task_id TEXT NOT NULL, -- 任务唯一标识
     c_rule_id TEXT NOT NULL, -- 规则ID（关联规则表）
-    c_node_id TEXT NOT NULL, -- 执行节点ID
+
+    -- 计划执行节点（定时重算时写入）
+    c_planned_exec_node TEXT NOT NULL DEFAULT '', -- 计划执行节点ID
+    c_last_exec_node TEXT NOT NULL DEFAULT '', -- 最后执行节点ID（客户端上报时写入）
+    c_last_exec_status INTEGER NOT NULL DEFAULT 0, -- 最后执行状态（0=待执行，1=执行中，2=成功，3=部分失败，4=失败）
+
     c_symbol TEXT NOT NULL DEFAULT '', -- 标的符号（交易对，如：BTC-USDT，空字符串表示不按标的拆分）
     c_collect_data_type TEXT NOT NULL DEFAULT '', -- 采集数据类型（从 c_task_params 中的 data_type 提取，用于快速查询）
-    c_task_params TEXT NOT NULL DEFAULT '{}', -- 任务执行参数（JSON格式:{"symbol":"BTCUSDT","intervals":["1m","5m","1h"],"limit":100}）
+    c_interval TEXT NOT NULL DEFAULT 'default', -- 时间间隔（1m/5m/1h等，非interval类任务为"default"）
+    c_task_params TEXT NOT NULL DEFAULT '{}', -- 任务执行参数（JSON格式:{"symbol":"BTCUSDT","intervals":["1m"],"limit":100}）
 
-    -- 任务状态
-    c_status INTEGER NOT NULL DEFAULT 0, -- 状态（0=待执行，1=执行中，2=成功，3=部分失败，4=失败）
     c_last_exec_time DATETIME, -- 最后执行时间
     c_result TEXT NOT NULL DEFAULT '{}', -- 执行结果（JSON格式）
 
@@ -307,10 +311,10 @@ CREATE INDEX IF NOT EXISTS idx_collector_task_rules_enabled ON t_collector_task_
 -- 任务实例表索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_task_instances_task_id ON t_collector_task_instances(c_task_id);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_rule_id ON t_collector_task_instances(c_rule_id);
-CREATE INDEX IF NOT EXISTS idx_collector_task_instances_rule_node_symbol ON t_collector_task_instances(c_rule_id, c_node_id, c_symbol); -- 用于增量同步的唯一性判断
-CREATE INDEX IF NOT EXISTS idx_collector_task_instances_task_node ON t_collector_task_instances(c_task_id, c_node_id);
-CREATE INDEX IF NOT EXISTS idx_collector_task_instances_node_status ON t_collector_task_instances(c_node_id, c_status);
-CREATE INDEX IF NOT EXISTS idx_collector_task_instances_status ON t_collector_task_instances(c_status);
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_rule_planned_node_symbol ON t_collector_task_instances(c_rule_id, c_planned_exec_node, c_symbol);
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_planned_node ON t_collector_task_instances(c_planned_exec_node);
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_planned_node_status ON t_collector_task_instances(c_planned_exec_node, c_last_exec_status);
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_planned_node_interval ON t_collector_task_instances(c_planned_exec_node, c_interval);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_invalid ON t_collector_task_instances(c_invalid); -- 用于过滤软删除记录
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_create_time ON t_collector_task_instances(c_ctime DESC);
 

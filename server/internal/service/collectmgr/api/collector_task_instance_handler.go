@@ -26,7 +26,8 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 	// 获取查询参数
 	taskID := c.Query("task_id")
 	ruleID := c.Query("rule_id")
-	nodeID := c.Query("node_id")
+	plannedExecNode := c.Query("planned_exec_node")
+	lastExecNode := c.Query("last_exec_node")
 	symbol := c.Query("symbol")
 
 	// 解析分页参数
@@ -46,7 +47,7 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 
 	// 解析状态参数
 	var status *int
-	if statusStr := c.Query("status"); statusStr != "" {
+	if statusStr := c.Query("last_exec_status"); statusStr != "" {
 		if s, err := strconv.Atoi(statusStr); err == nil {
 			status = &s
 		}
@@ -62,14 +63,15 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 
 	// 构建筛选器
 	filter := &collectmgr.TaskInstanceFilterDTO{
-		TaskID:   taskID,
-		RuleID:   ruleID,
-		NodeID:   nodeID,
-		Symbol:   symbol,
-		Status:   status,
-		Invalid:  invalid,
-		Page:     page,
-		PageSize: size,
+		TaskID:          taskID,
+		RuleID:          ruleID,
+		PlannedExecNode: plannedExecNode,
+		LastExecNode:    lastExecNode,
+		Symbol:          symbol,
+		LastExecStatus:  status,
+		Invalid:         invalid,
+		Page:            page,
+		PageSize:        size,
 	}
 
 	// 调用 service 层分页查询
@@ -85,7 +87,7 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 
 // GetTaskInstanceListCache 获取任务实例列表（带缓存，仅支持精确条件、有效数据）
 func (h *CollectorTaskInstanceHandler) GetTaskInstanceListCache(c *gin.Context) {
-	if c.Query("task_id") != "" || c.Query("rule_id") != "" || c.Query("node_id") != "" || c.Query("symbol") != "" {
+	if c.Query("task_id") != "" || c.Query("rule_id") != "" || c.Query("planned_exec_node") != "" || c.Query("last_exec_node") != "" || c.Query("symbol") != "" {
 		HandleAppError(c, apperrors.InvalidParam("filter", "cache mode does not support fuzzy query"))
 		return
 	}
@@ -108,20 +110,20 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceListCache(c *gin.Context) 
 	}
 
 	var status *int
-	if statusStr := c.Query("status"); statusStr != "" {
+	if statusStr := c.Query("last_exec_status"); statusStr != "" {
 		s, err := strconv.Atoi(statusStr)
 		if err != nil {
-			HandleAppError(c, apperrors.InvalidParam("status", "status must be a number"))
+			HandleAppError(c, apperrors.InvalidParam("last_exec_status", "last_exec_status must be a number"))
 			return
 		}
 		status = &s
 	}
 
 	filter := &collectmgr.TaskInstanceFilterDTO{
-		Status:   status,
-		Invalid:  nil,
-		Page:     page,
-		PageSize: size,
+		LastExecStatus: status,
+		Invalid:        nil,
+		Page:           page,
+		PageSize:       size,
 	}
 
 	instances, total, err := h.service.GetTaskInstanceListCache(c.Request.Context(), filter)
@@ -249,8 +251,9 @@ func (h *CollectorTaskInstanceHandler) StopTaskInstance(c *gin.Context) {
 
 // ReportTaskStatusRequest 上报任务状态请求
 type ReportTaskStatusRequest struct {
-	Status int    `json:"status" binding:"required"` // 状态码（0=待执行，1=执行中，2=成功，3=部分失败，4=失败）
-	Result string `json:"result"`                    // 执行结果（可选）
+	NodeID string `json:"node_id" binding:"required"` // v2.0: 节点ID（必填）
+	Status int    `json:"status" binding:"required"`    // 状态码（0=待执行，1=执行中，2=成功，3=部分失败，4=失败）
+	Result string `json:"result"`                       // 执行结果（可选）
 }
 
 // ReportTaskStatus 上报任务状态（客户端上报用）
@@ -267,8 +270,8 @@ func (h *CollectorTaskInstanceHandler) ReportTaskStatus(c *gin.Context) {
 		return
 	}
 
-	// 调用service层上报状态
-	err := h.service.ReportTaskStatus(c.Request.Context(), instanceID, req.Status, req.Result)
+	// 调用service层上报状态（v2.0: 新增 nodeID 参数）
+	err := h.service.ReportTaskStatus(c.Request.Context(), instanceID, req.NodeID, req.Status, req.Result)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("状态上报失败", err))
 		return

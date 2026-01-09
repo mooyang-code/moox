@@ -30,6 +30,7 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	config.SetGlobalConfig(appCfg) // 设置全局配置，供其他模块使用
 	log.Info("应用配置加载成功")
 
 	// 2. 加载认证配置

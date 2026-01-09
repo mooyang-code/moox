@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/provider"
+	collectmgrtypes "github.com/mooyang-code/moox/server/internal/service/collectmgr/types"
 	collectordao "github.com/mooyang-code/moox/server/internal/service/collectmgr/dao"
 	"github.com/mooyang-code/moox/server/internal/service/database"
 
@@ -16,6 +17,12 @@ import (
 )
 
 // ServiceImpl 实现 Service 接口（包含 NodeService, AccountService, PackageService, HeartbeatService）
+// TaskInstanceStoreGetter 任务实例仓库获取接口（避免循环依赖）
+type TaskInstanceStoreGetter interface {
+	GetByNodeID(nodeID string) []collectmgrtypes.TaskInstanceLite
+	GetCount() int
+}
+
 type ServiceImpl struct {
 	config *config.Config
 
@@ -24,10 +31,11 @@ type ServiceImpl struct {
 	packageDAO      dao.FunctionPackageDAO
 	taskInstanceDAO collectordao.CollectorTaskInstanceDAO
 
-	asyncTask       asynctask.Service
-	providerFactory *provider.AccountFactory
-	heartbeatStore  *HeartbeatStore // 心跳内存存储
-	probeStore      *ProbeStore     // 保活探测内存存储
+	asyncTask         asynctask.Service
+	providerFactory   *provider.AccountFactory
+	heartbeatStore    *HeartbeatStore          // 心跳内存存储
+	probeStore        *ProbeStore              // 保活探测内存存储
+	taskInstanceStore TaskInstanceStoreGetter // 任务实例内存仓库（新增）
 }
 
 // init 初始化服务（延迟初始化）
@@ -35,6 +43,12 @@ func (s *ServiceImpl) init() {
 	if s.providerFactory == nil {
 		s.providerFactory = provider.NewAccountFactory(s)
 	}
+}
+
+// SetTaskInstanceStore 设置任务实例仓库（解决循环依赖）
+func (s *ServiceImpl) SetTaskInstanceStore(store TaskInstanceStoreGetter) {
+	s.taskInstanceStore = store
+	log.Info("[CloudNode] Task instance store injected")
 }
 
 // NewService 创建云节点服务实例

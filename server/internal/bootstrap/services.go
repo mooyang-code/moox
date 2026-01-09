@@ -100,6 +100,7 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	asyncTaskService := asynctask.NewService(dbManager)
 
 	// 创建云节点服务（已集成心跳服务）
+	// 注意：这里先创建服务，稍后注入任务实例仓库
 	log.Info("[Bootstrap] 正在创建云节点服务...")
 	cloudNodeService := cloudnode.NewService(dbManager, asyncTaskService, cfg.CloudNode)
 	if err := cloudnode.InitKeepaliveInstance(cloudNodeService); err != nil {
@@ -115,22 +116,35 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	fieldConfigDAO := collectordao.NewCollectorFieldConfigsDAO(db)
 	nodeDAO := cloudnodedao.NewCloudNodeDAO(db)
 
-	// 创建任务规划器实例（不再需要全局单例，因为改为客户端轮询）
+	// 创建内存任务实例仓库
+	log.Info("[Bootstrap] 正在创建内存任务实例仓库...")
+	memStore := collectmgr.NewTaskInstanceStore()
+	// 注释：不加载历史数据，等待首次定时重算填充
+
+	// 创建任务规划器实例（注入内存仓库）
 	log.Info("[Bootstrap] 正在创建任务规划器...")
 	// cloudNodeService 实现了 OnlineNodeIDsProvider 接口，用于获取在线节点ID列表
 	registry := collectmgr_planner.NewPlannerRegistry(nodeDAO, nil, cloudNodeService)
-	taskPlanner := collectmgr.NewTaskPlannerServiceImpl(taskRulesDAO, instanceDAO, registry, nodeDAO, cloudNodeService)
+	taskPlanner := collectmgr.NewTaskPlannerServiceImpl(taskRulesDAO, instanceDAO, registry, nodeDAO, cloudNodeService, memStore)
 
 	// 创建服务实例
 	taskRuleService := collectmgr.NewTaskRulesServiceImpl(taskRulesDAO, nodeDAO)
 	taskInstanceService := collectmgr.NewTaskInstanceServiceImpl(instanceDAO, taskRulesDAO, nodeDAO)
 	dataTypeConfigService := collectmgr.NewDataTypeConfigServiceImpl(dataTypeConfigDAO, fieldConfigDAO, db)
-
+	
 	// 注入 CloudNodeService 依赖到 TaskInstanceService（解决循环依赖）
 	// 创建适配器以匹配接口签名
 	if impl, ok := taskInstanceService.(*collectmgr.TaskInstanceServiceImpl); ok {
 		invoker := &cloudFunctionInvokerAdapter{service: cloudNodeService}
 		impl.SetCloudNodeService(invoker)
+		// 注入内存仓库，用于状态同步（ReportTaskStatus时同步更新内存）
+		impl.SetTaskInstanceStore(memStore)
+	}
+	
+	// 【新增】注入任务实例仓库到 CloudNodeService（用于心跳任务下发）
+	taskStoreAdapter := collectmgr.NewTaskStoreAdapter(memStore)
+	if serviceImpl, ok := cloudNodeService.(*cloudnode.ServiceImpl); ok {
+		serviceImpl.SetTaskInstanceStore(taskStoreAdapter)
 	}
 
 	// 初始化DNSProxy实例（全局单例，供定时器使用）

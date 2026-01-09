@@ -2,10 +2,15 @@ package cloudnode
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/mooyang-code/moox/server/internal/service/asynctask"
+	"github.com/mooyang-code/moox/server/internal/service/cloudnode/constants"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 
@@ -120,7 +125,14 @@ func (s *ServiceImpl) UploadPackage(ctx context.Context, req *UploadPackageReque
 	log.InfoContextf(ctx, "[UploadPackage] Creating async upload task: PackageName=%s, Version=%s, PackageType=%s",
 		req.PackageName, req.Version, req.PackageType)
 
-	// 构建异步任务请求参数
+	// 1. 先将文件内容保存到本地临时文件
+	filePath, err := s.saveUploadFileToTemp(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("保存上传文件失败: %w", err)
+	}
+	log.InfoContextf(ctx, "[UploadPackage] Saved file to temp: %s", filePath)
+
+	// 2. 构建异步任务请求参数（不包含文件内容，只包含文件路径）
 	uploadFileReq := UploadPackageExecutorRequest{
 		PackageName:    req.PackageName,
 		Version:        req.Version,
@@ -128,7 +140,7 @@ func (s *ServiceImpl) UploadPackage(ctx context.Context, req *UploadPackageReque
 		Runtime:        req.Runtime,
 		PackageType:    req.PackageType,
 		CloudAccountID: req.CloudAccountID,
-		FileContent:    req.FileContent,
+		FilePath:       filePath, // 使用文件路径替代文件内容
 	}
 
 	// 将请求参数序列化为JSON
@@ -160,6 +172,39 @@ func (s *ServiceImpl) UploadPackage(ctx context.Context, req *UploadPackageReque
 		Status:      0, // 任务已创建，等待处理
 		Message:     "文件上传任务已创建，正在处理中...",
 	}, nil
+}
+
+// ========== 代码包下载 ==========
+
+// saveUploadFileToTemp 将上传的文件内容保存到本地临时文件
+func (s *ServiceImpl) saveUploadFileToTemp(ctx context.Context, req *UploadPackageRequest) (string, error) {
+	// 解码base64文件内容
+	fileContent, err := base64.StdEncoding.DecodeString(req.FileContent)
+	if err != nil {
+		return "", fmt.Errorf("解码base64文件内容失败: %w", err)
+	}
+
+	// 生成临时文件名（基于包名、版本和时间戳）
+	timestamp := time.Now().Unix()
+	packageID := model.GeneratePackageID()
+	filename := fmt.Sprintf("upload_%s_%s_%d_%s.zip", req.PackageName, req.Version, timestamp, packageID)
+	
+	// 使用 constants 提供的路径方法
+	filePath := constants.GetPackageStorageFilePath(filename)
+	
+	// 确保目录存在
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("创建目录失败: %w", err)
+	}
+
+	// 写入文件
+	if err := os.WriteFile(filePath, fileContent, 0644); err != nil {
+		return "", fmt.Errorf("写入文件失败: %w", err)
+	}
+
+	log.InfoContextf(ctx, "[SaveUploadFile] Saved file: %s, size: %d bytes", filePath, len(fileContent))
+	return filePath, nil
 }
 
 // ========== 代码包下载 ==========

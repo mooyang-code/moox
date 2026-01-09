@@ -19,12 +19,13 @@ var (
 
 // AppConfig 应用配置（总配置）
 type AppConfig struct {
-	Database DatabaseConfig `yaml:"database"`
-	Storage  StorageConfig  `yaml:"storage"`
-	Auth     AuthConfig     `yaml:"auth"`
-	Worker   WorkerConfig   `yaml:"worker"`
-	Log      LogConfig      `yaml:"log"`
-	Security SecurityConfig `yaml:"security"`
+	Database       DatabaseConfig       `yaml:"database"`
+	Storage        StorageConfig        `yaml:"storage"`
+	Auth           AuthConfig           `yaml:"auth"`
+	Worker         WorkerConfig         `yaml:"worker"`
+	TaskManagement TaskManagementConfig `yaml:"task_management"`
+	Log            LogConfig            `yaml:"log"`
+	Security       SecurityConfig       `yaml:"security"`
 }
 
 // DatabaseConfig 数据库配置
@@ -66,6 +67,12 @@ type WorkerConfig struct {
 	NodeCreationWorkerCount   int `yaml:"node_creation_worker_count"`   // 节点创建Worker数量
 	NodeDeletionWorkerCount   int `yaml:"node_deletion_worker_count"`   // 节点删除Worker数量
 	NodeDeploymentWorkerCount int `yaml:"node_deployment_worker_count"` // 节点部署Worker数量
+}
+
+// TaskManagementConfig 任务管理配置
+type TaskManagementConfig struct {
+	Tolerance       int    `yaml:"tolerance"`        // 统一容差（秒），用于Pending超时判断
+	DefaultInterval string `yaml:"default_interval"` // 默认interval（解析失败时使用）
 }
 
 // LogConfig 日志配置
@@ -110,6 +117,10 @@ func DefaultConfig() *AppConfig {
 			NodeCreationWorkerCount:   3,
 			NodeDeletionWorkerCount:   3,
 			NodeDeploymentWorkerCount: 3,
+		},
+		TaskManagement: TaskManagementConfig{
+			Tolerance:       30,
+			DefaultInterval: "1m",
 		},
 		Log: LogConfig{
 			Level:      "info",
