@@ -50,7 +50,7 @@ export default {
     ["monitor-view"]: "监控视图",
     ["resource-monitor"]: "资源监控",
     ["service-status"]: "运行状态",
-    ["form"]: "数据采集器",
+    ["collector"]: "数据采集器",
     ["common-form"]: "云函数",
     ["step-form"]: "采集规则",
     ["task-instances"]: "任务实例",
@@ -119,6 +119,11 @@ export default {
     ["common-page"]: "普通角色页面",
     ["functions"]: "常用功能",
     ["routing-operation"]: "路由操作",
+    ["factor"]: "因子库",
+    ["factor-list"]: "因子列表",
+    ["factor-cloud-function"]: "云函数",
+    ["factor-collector-rules"]: "计算规则",
+    ["factor-task-instances"]: "任务实例",
     ["test-common-route"]: "测试普通路由",
     ["test-dynamic-route"]: "测试动态路由"
   }

@@ -292,6 +292,7 @@ type NodeListRequest struct {
 	Namespace      string `form:"namespace" json:"namespace"`
 	Region         string `form:"region" json:"region"`
 	NodeType       string `form:"node_type" json:"node_type"`
+	BizType        string `form:"biz_type" json:"biz_type"`
 	Tag            string `form:"tag" json:"tag"`
 	Status         string `form:"status" json:"status"`
 	Keyword        string `form:"keyword" json:"keyword"`

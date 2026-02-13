@@ -23,6 +23,7 @@ type NodeListQuery struct {
 	Namespace      string   // 命名空间过滤
 	Region         string   // 区域过滤
 	NodeType       string   // 节点类型过滤
+	BizType        string   // 业务类型过滤
 	Tag            string   // 标签过滤（国内/海外）
 	Status         string   // 状态过滤（online/offline）
 	Keyword        string   // 关键字搜索
@@ -146,6 +147,10 @@ func (d *cloudNodeDaoImpl) GetCloudNodeList(ctx context.Context, query *NodeList
 		db = db.Where("cn.c_node_type = ?", query.NodeType)
 	}
 
+	if query.BizType != "" {
+		db = db.Where("cn.c_biz_type = ?", query.BizType)
+	}
+
 	if query.Tag != "" {
 		db = db.Where("cn.c_tag = ?", query.Tag)
 	}
@@ -222,6 +227,7 @@ func (d *cloudNodeDaoImpl) UpdateCloudNode(ctx context.Context, node *model.Clou
 			"c_cloud_account_id":     node.CloudAccountID,
 			"c_namespace":            node.Namespace,
 			"c_node_type":            node.NodeType,
+			"c_biz_type":             node.BizType,
 			"c_region":               node.Region,
 			"c_ip_address":           node.IPAddress,
 			"c_supported_collectors": node.SupportedCollectors,

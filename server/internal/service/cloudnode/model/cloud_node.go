@@ -17,6 +17,12 @@ const (
 	NodeTypeServer = "server" // 服务器节点
 )
 
+// 业务类型常量
+const (
+	BizTypeDataCollector     = "data_collector"     // 数据采集
+	BizTypeFactorCalculator  = "factor_calculator"  // 因子计算
+)
+
 // Invalid常量
 const (
 	InvalidNo  = 0 // 有效
@@ -42,6 +48,8 @@ type CloudNode struct {
 	Namespace string `gorm:"column:c_namespace;size:200;not null;default:''" json:"namespace"`
 	// NodeType 节点类型（scf=云函数，server=服务器）
 	NodeType string `gorm:"column:c_node_type;size:50;not null;default:'scf'" json:"node_type"`
+	// BizType 业务类型（data_collector=数据采集, factor_calculator=因子计算）
+	BizType string `gorm:"column:c_biz_type;size:50;not null;default:'data_collector'" json:"biz_type"`
 	// Region 部署地区
 	Region string `gorm:"column:c_region;size:50;not null;default:''" json:"region"`
 	// Tag 标签（国内/海外）

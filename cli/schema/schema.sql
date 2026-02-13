@@ -140,7 +140,8 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_cloud_account_id TEXT NOT NULL DEFAULT '', -- 云账户ID
     c_package_id TEXT DEFAULT '', -- 代码包ID，记录该节点当前部署的代码包(11位随机字符串)
     c_namespace TEXT NOT NULL DEFAULT '', -- 命名空间
-    c_node_type TEXT NOT NULL DEFAULT 'scf', -- 节点类型（scf=云函数，server=服务器）
+    c_biz_type TEXT NOT NULL DEFAULT '',         -- 业务类型: data_collector=数据采集, factor_calculator=因子计算
+    c_node_type TEXT NOT NULL DEFAULT 'scf-event', -- 节点类型【scf-event=云函数（事件型），scf-web云函数（webURL型） server=服务器】
     c_region TEXT NOT NULL DEFAULT '', -- 部署地区（如：ap-guangzhou）
     c_tag TEXT NOT NULL DEFAULT '', -- 标签（国内/海外）
     c_ip_address TEXT NOT NULL DEFAULT '', -- IP地址

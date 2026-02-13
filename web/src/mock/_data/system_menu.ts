@@ -478,11 +478,11 @@ export const systemMenu = [
   {
     id: "04",
     parentId: "0",
-    path: "/form",
-    name: "form",
-    redirect: "/form/cloud-function",
+    path: "/collector",
+    name: "collector",
+    redirect: "/collector/cloud-function",
     meta: {
-      title: "form",
+      title: "collector",
       hide: false,
       disable: false,
       keepAlive: true,
@@ -499,9 +499,9 @@ export const systemMenu = [
   {
     id: "0401",
     parentId: "04",
-    path: "/form/cloud-function",
+    path: "/collector/cloud-function",
     name: "common-form",
-    component: "form/cloud-function/cloud-function",
+    component: "collector/cloud-function/cloud-function",
     meta: {
       title: "common-form",
       hide: false,
@@ -520,9 +520,9 @@ export const systemMenu = [
   {
     id: "0402",
     parentId: "04",
-    path: "/form/collector-rules",
+    path: "/collector/collector-rules",
     name: "step-form",
-    component: "form/collector-rules/collector-rules",
+    component: "collector/collector-rules/collector-rules",
     meta: {
       title: "step-form",
       hide: false,
@@ -541,9 +541,9 @@ export const systemMenu = [
   {
     id: "0403",
     parentId: "04",
-    path: "/form/task-instances",
+    path: "/collector/task-instances",
     name: "task-instances",
-    component: "form/task-instances/task-instances",
+    component: "collector/task-instances/task-instances",
     meta: {
       title: "task-instances",
       hide: false,
@@ -559,16 +559,16 @@ export const systemMenu = [
     },
     children: null
   },
-  
-  
+
+
   {
     id: "09",
     parentId: "0",
-    path: "/functions",
-    name: "functions",
-    redirect: "/functions/routing-operation",
+    path: "/factor",
+    name: "factor",
+    redirect: "/factor/factor-list",
     meta: {
-      title: "functions",
+      title: "factor",
       hide: false,
       disable: false,
       keepAlive: true,
@@ -576,7 +576,7 @@ export const systemMenu = [
       link: "",
       iframe: false,
       roles: ["admin"],
-      svgIcon: "functions",
+      svgIcon: "data-queries",
       sort: 5,
       type: 1
     },
@@ -585,11 +585,11 @@ export const systemMenu = [
   {
     id: "0901",
     parentId: "09",
-    path: "/functions/routing-operation",
-    name: "routing-operation",
-    component: "functions/routing-operation/index",
+    path: "/factor/factor-list",
+    name: "factor-list",
+    component: "factor/factor-list/factor-list",
     meta: {
-      title: "routing-operation",
+      title: "factor-list",
       hide: false,
       disable: false,
       keepAlive: true,
@@ -599,6 +599,69 @@ export const systemMenu = [
       roles: ["admin"],
       icon: "icon-menu",
       sort: 1,
+      type: 2
+    },
+    children: null
+  },
+  {
+    id: "0902",
+    parentId: "09",
+    path: "/factor/cloud-function",
+    name: "factor-cloud-function",
+    component: "collector/cloud-function/cloud-function",
+    meta: {
+      title: "factor-cloud-function",
+      hide: false,
+      disable: false,
+      keepAlive: true,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin"],
+      icon: "icon-menu",
+      sort: 2,
+      type: 2
+    },
+    children: null
+  },
+  {
+    id: "0903",
+    parentId: "09",
+    path: "/factor/collector-rules",
+    name: "factor-collector-rules",
+    component: "collector/collector-rules/collector-rules",
+    meta: {
+      title: "factor-collector-rules",
+      hide: false,
+      disable: false,
+      keepAlive: true,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin"],
+      icon: "icon-menu",
+      sort: 3,
+      type: 2
+    },
+    children: null
+  },
+  {
+    id: "0904",
+    parentId: "09",
+    path: "/factor/task-instances",
+    name: "factor-task-instances",
+    component: "collector/task-instances/task-instances",
+    meta: {
+      title: "factor-task-instances",
+      hide: false,
+      disable: false,
+      keepAlive: true,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin"],
+      icon: "icon-menu",
+      sort: 4,
       type: 2
     },
     children: null
@@ -1227,11 +1290,11 @@ export const systemMenuTmp = [
   {
     id: "04",
     parentId: "0",
-    path: "/form",
-    name: "form",
-    redirect: "/form/cloud-function",
+    path: "/collector",
+    name: "collector",
+    redirect: "/collector/cloud-function",
     meta: {
-      title: "form",
+      title: "collector",
       hide: false,
       disable: false,
       keepAlive: true,
@@ -1248,9 +1311,9 @@ export const systemMenuTmp = [
   {
     id: "0401",
     parentId: "04",
-    path: "/form/cloud-function",
+    path: "/collector/cloud-function",
     name: "common-form",
-    component: "form/cloud-function/cloud-function",
+    component: "collector/cloud-function/cloud-function",
     meta: {
       title: "common-form",
       hide: false,
@@ -1269,9 +1332,9 @@ export const systemMenuTmp = [
   {
     id: "0402",
     parentId: "04",
-    path: "/form/collector-rules",
+    path: "/collector/collector-rules",
     name: "step-form",
-    component: "form/collector-rules/collector-rules",
+    component: "collector/collector-rules/collector-rules",
     meta: {
       title: "step-form",
       hide: false,
@@ -1814,11 +1877,11 @@ export const systemMenuTmp = [
   {
     id: "09",
     parentId: "0",
-    path: "/functions",
-    name: "functions",
-    redirect: "/functions/routing-operation",
+    path: "/factor",
+    name: "factor",
+    redirect: "/factor/factor-list",
     meta: {
-      title: "functions",
+      title: "factor",
       hide: false,
       disable: false,
       keepAlive: true,
@@ -1826,7 +1889,7 @@ export const systemMenuTmp = [
       link: "",
       iframe: false,
       roles: ["admin"],
-      svgIcon: "functions",
+      svgIcon: "data-queries",
       sort: 5,
       type: 1
     },
@@ -1835,11 +1898,11 @@ export const systemMenuTmp = [
   {
     id: "0901",
     parentId: "09",
-    path: "/functions/routing-operation",
-    name: "routing-operation",
-    component: "functions/routing-operation/index",
+    path: "/factor/factor-list",
+    name: "factor-list",
+    component: "factor/factor-list/factor-list",
     meta: {
-      title: "routing-operation",
+      title: "factor-list",
       hide: false,
       disable: false,
       keepAlive: true,
@@ -1849,6 +1912,69 @@ export const systemMenuTmp = [
       roles: ["admin"],
       icon: "icon-menu",
       sort: 1,
+      type: 2
+    },
+    children: null
+  },
+  {
+    id: "0902",
+    parentId: "09",
+    path: "/factor/cloud-function",
+    name: "factor-cloud-function",
+    component: "collector/cloud-function/cloud-function",
+    meta: {
+      title: "factor-cloud-function",
+      hide: false,
+      disable: false,
+      keepAlive: true,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin"],
+      icon: "icon-menu",
+      sort: 2,
+      type: 2
+    },
+    children: null
+  },
+  {
+    id: "0903",
+    parentId: "09",
+    path: "/factor/collector-rules",
+    name: "factor-collector-rules",
+    component: "collector/collector-rules/collector-rules",
+    meta: {
+      title: "factor-collector-rules",
+      hide: false,
+      disable: false,
+      keepAlive: true,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin"],
+      icon: "icon-menu",
+      sort: 3,
+      type: 2
+    },
+    children: null
+  },
+  {
+    id: "0904",
+    parentId: "09",
+    path: "/factor/task-instances",
+    name: "factor-task-instances",
+    component: "collector/task-instances/task-instances",
+    meta: {
+      title: "factor-task-instances",
+      hide: false,
+      disable: false,
+      keepAlive: true,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin"],
+      icon: "icon-menu",
+      sort: 4,
       type: 2
     },
     children: null

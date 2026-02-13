@@ -32,6 +32,7 @@ func NewCreateNodeExecutor(
 type NodeCreateItem struct {
 	CloudAccountID      string `json:"cloud_account_id"`
 	NodeType            string `json:"node_type"`
+	BizType             string `json:"biz_type"`
 	Region              string `json:"region"`
 	IPAddress           string `json:"ip_address"`
 	PackageID           string `json:"package_id"`
@@ -73,6 +74,7 @@ func (e *CreateNodeExecutor) Execute(ctx context.Context, taskID string, request
 		CloudAccountID:      nodeItem.CloudAccountID,
 		PackageID:           nodeItem.PackageID,
 		NodeType:            nodeItem.NodeType,
+		BizType:             nodeItem.BizType,
 		Region:              nodeItem.Region,
 		IPAddress:           nodeItem.IPAddress,
 		SupportedCollectors: nodeItem.SupportedCollectors,

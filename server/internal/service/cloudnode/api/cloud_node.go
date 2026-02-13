@@ -9,8 +9,8 @@ import (
 
 	"github.com/mooyang-code/moox/server/internal/common"
 	"github.com/mooyang-code/moox/server/internal/errors"
-	cloudnodeconfig "github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 	cloudnodemgr "github.com/mooyang-code/moox/server/internal/service/cloudnode"
+	cloudnodeconfig "github.com/mooyang-code/moox/server/internal/service/cloudnode/config"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode/model"
 	cloudnodetypes "github.com/mooyang-code/moox/server/internal/service/cloudnode/types"
 
@@ -209,8 +209,9 @@ func (h *CloudNodeHandler) GetNodeList(c *gin.Context) {
 	}
 
 	// 打印接收到的参数用于调试
-	log.InfoContextf(ctx, "[GetNodeList] Received params - Page: %d, PageSize: %d, NodeID: %s, CloudAccountID: %s, Namespace: %s, Region: %s, NodeType: %s, Tag: %s, Status: %s",
-		req.Page, req.PageSize, req.NodeID, req.CloudAccountID, req.Namespace, req.Region, req.NodeType, req.Tag, req.Status)
+	log.InfoContextf(ctx, "[GetNodeList] Received params - Page: %d, PageSize: %d, NodeID: %s,"+
+		" CloudAccountID: %s, Namespace: %s, Region: %s, NodeType: %s, BizType: %s, Tag: %s, Status: %s",
+		req.Page, req.PageSize, req.NodeID, req.CloudAccountID, req.Namespace, req.Region, req.NodeType, req.BizType, req.Tag, req.Status)
 
 	// 设置默认分页参数
 	if req.Page <= 0 {

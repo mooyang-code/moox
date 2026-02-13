@@ -140,6 +140,30 @@ export const staticRoutes = [
         name: "service-status",
         component: () => import("@/views/container/service-status/service-status.vue"),
         meta: { title: "运行状态" }
+      },
+      {
+        path: "/factor/factor-list",
+        name: "factor-list",
+        component: () => import("@/views/factor/factor-list/factor-list.vue"),
+        meta: { title: "因子列表" }
+      },
+      {
+        path: "/factor/cloud-function",
+        name: "factor-cloud-function",
+        component: () => import("@/views/collector/cloud-function/cloud-function.vue"),
+        meta: { title: "云函数" }
+      },
+      {
+        path: "/factor/collector-rules",
+        name: "factor-collector-rules",
+        component: () => import("@/views/collector/collector-rules/collector-rules.vue"),
+        meta: { title: "计算规则" }
+      },
+      {
+        path: "/factor/task-instances",
+        name: "factor-task-instances",
+        component: () => import("@/views/collector/task-instances/task-instances.vue"),
+        meta: { title: "任务实例" }
       }
     ]
   }

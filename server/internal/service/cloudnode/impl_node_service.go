@@ -38,6 +38,7 @@ func (s *ServiceImpl) GetNodeList(ctx context.Context, req *NodeListRequest) (*N
 		Namespace:      req.Namespace,
 		Region:         req.Region,
 		NodeType:       req.NodeType,
+		BizType:        req.BizType,
 		Tag:            req.Tag,
 		Status:         req.Status,
 		Keyword:        req.Keyword,
