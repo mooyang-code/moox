@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_cloud_account_id TEXT NOT NULL DEFAULT '', -- 云账户ID
     c_package_id TEXT DEFAULT '', -- 代码包ID，记录该节点当前部署的代码包(11位随机字符串)
     c_namespace TEXT NOT NULL DEFAULT '', -- 命名空间
-    c_biz_type TEXT NOT NULL DEFAULT '',         -- 业务类型: data_collector=数据采集, factor_calculator=因子计算
+    c_biz_type TEXT NOT NULL DEFAULT '',         -- 业务类型: data_collector=数据采集, factor_calculator=因子计算，container=容器管理
     c_node_type TEXT NOT NULL DEFAULT 'scf-event', -- 节点类型【scf-event=云函数（事件型），scf-web云函数（webURL型） server=服务器】
     c_region TEXT NOT NULL DEFAULT '', -- 部署地区（如：ap-guangzhou）
     c_tag TEXT NOT NULL DEFAULT '', -- 标签（国内/海外）
@@ -342,7 +342,8 @@ CREATE TABLE IF NOT EXISTS t_function_packages (
     c_version TEXT NOT NULL,                                       -- 版本号
     c_description TEXT DEFAULT '',                                 -- 版本描述
     c_runtime TEXT NOT NULL,                                       -- 运行时环境(Go1, Python3.7等)
-    c_package_type TEXT NOT NULL DEFAULT 'data_collector',         -- 函数包类型: data_collector=数据采集类型, factor_calculator=因子计算类型
+    c_package_type TEXT NOT NULL DEFAULT '',                       -- 函数包类型: data_collector=数据采集类型, factor_calculator=因子计算类型
+    c_biz_type TEXT NOT NULL DEFAULT '',         -- 业务类型: data_collector=数据采集, factor_calculator=因子计算，container=容器管理
 
     -- 文件信息
     c_original_filename TEXT NOT NULL,                             -- 原始文件名
@@ -538,3 +539,64 @@ CREATE INDEX IF NOT EXISTS idx_exchange_symbols_exchange_inst ON t_exchange_symb
 DROP TRIGGER IF EXISTS update_exchange_symbols_mtime;
 CREATE TRIGGER update_exchange_symbols_mtime AFTER UPDATE ON t_exchange_symbols BEGIN
     UPDATE t_exchange_symbols SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+
+-- ============ SSH 主机管理系统表设计 ============
+
+-- ************ SSH 主机配置表 ************
+CREATE TABLE IF NOT EXISTS t_ssh_host (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
+    c_name TEXT NOT NULL,                                       -- 主机名称
+    c_address TEXT NOT NULL,                                    -- 主机地址（IP或域名）
+    c_port INTEGER NOT NULL DEFAULT 22,                        -- SSH端口
+    c_user TEXT NOT NULL,                                       -- 登录用户名
+    c_password TEXT DEFAULT '',                                 -- 登录密码（AES加密存储）
+    c_auth_type TEXT NOT NULL DEFAULT 'pwd',                   -- 认证方式: pwd=密码, cert=证书
+    c_net_type TEXT NOT NULL DEFAULT 'tcp4',                   -- 网络类型: tcp4=IPv4, tcp6=IPv6
+    c_cert_data TEXT,                                           -- 证书数据（AES加密存储）
+    c_cert_pwd TEXT DEFAULT '',                                 -- 证书密码（AES加密存储）
+    -- 终端外观配置
+    c_font_size INTEGER NOT NULL DEFAULT 14,                   -- 终端字体大小
+    c_background TEXT NOT NULL DEFAULT '#000000',               -- 终端背景色
+    c_foreground TEXT NOT NULL DEFAULT '#FFFFFF',               -- 终端前景色
+    c_cursor_color TEXT NOT NULL DEFAULT '#FFFFFF',             -- 光标颜色
+    c_font_family TEXT NOT NULL DEFAULT 'Courier New',         -- 字体
+    c_cursor_style TEXT NOT NULL DEFAULT 'block',              -- 光标样式: block/underline/bar
+    -- Shell 配置
+    c_shell TEXT NOT NULL DEFAULT 'bash',                      -- Shell类型
+    c_pty_type TEXT NOT NULL DEFAULT 'xterm-256color',         -- 终端类型
+    c_init_cmd TEXT,                                            -- 连接后初始命令
+    -- 元数据
+    c_creator TEXT NOT NULL DEFAULT '',                         -- 创建人
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
+);
+
+-- ************ SSH 会话表（用于会话管理） ************
+CREATE TABLE IF NOT EXISTS t_ssh_session (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
+    c_session_id TEXT NOT NULL,                                 -- 会话唯一标识
+    c_host_id INTEGER NOT NULL,                                -- 关联主机ID
+    c_host_name TEXT DEFAULT '',                                -- 主机名称（冗余）
+    c_host_address TEXT NOT NULL,                               -- 主机地址（冗余）
+    c_client_ip TEXT DEFAULT '',                                -- 客户端IP
+    c_username TEXT DEFAULT '',                                 -- 登录用户名
+    c_status TEXT NOT NULL DEFAULT 'connected',                -- 状态: connected/disconnected/error
+    c_connect_time DATETIME,                                    -- 连接时间
+    c_close_time DATETIME,                                      -- 关闭时间
+    c_error_msg TEXT                                              -- 错误信息
+);
+
+-- ************ 创建SSH相关索引 ************
+CREATE INDEX IF NOT EXISTS idx_ssh_host_name ON t_ssh_host(c_name);
+CREATE INDEX IF NOT EXISTS idx_ssh_host_address ON t_ssh_host(c_address);
+CREATE INDEX IF NOT EXISTS idx_ssh_host_mtime ON t_ssh_host(c_mtime);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_session_session_id ON t_ssh_session(c_session_id);
+CREATE INDEX IF NOT EXISTS idx_ssh_session_host_id ON t_ssh_session(c_host_id);
+CREATE INDEX IF NOT EXISTS idx_ssh_session_status ON t_ssh_session(c_status);
+CREATE INDEX IF NOT EXISTS idx_ssh_session_connect_time ON t_ssh_session(c_connect_time);
+
+-- ************ 创建SSH相关触发器 ************
+DROP TRIGGER IF EXISTS update_ssh_host_mtime;
+CREATE TRIGGER update_ssh_host_mtime AFTER UPDATE ON t_ssh_host BEGIN
+    UPDATE t_ssh_host SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;

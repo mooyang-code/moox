@@ -28,6 +28,7 @@ func (s *ServiceImpl) GetPackageList(ctx context.Context, req *PackageListReques
 		PackageName: req.PackageName,
 		Runtime:     req.Runtime,
 		PackageType: req.PackageType,
+		BizType:     req.BizType,
 		Status:      req.Status,
 	}
 
@@ -48,6 +49,7 @@ func (s *ServiceImpl) GetPackageList(ctx context.Context, req *PackageListReques
 			Runtime:          pkg.Runtime,
 			PackageType:      pkg.PackageType,
 			PackageTypeLabel: model.GetPackageTypeDisplayName(pkg.PackageType),
+			BizType:          pkg.BizType,
 			FileSize:         pkg.FileSize,
 			FileMD5:          pkg.FileMD5,
 			CloudAccountID:   pkg.CloudAccountID,
@@ -122,8 +124,8 @@ func (s *ServiceImpl) DeletePackage(ctx context.Context, packageID string) error
 
 // UploadPackage 上传代码包（创建异步任务）
 func (s *ServiceImpl) UploadPackage(ctx context.Context, req *UploadPackageRequest) (*UploadPackageResponse, error) {
-	log.InfoContextf(ctx, "[UploadPackage] Creating async upload task: PackageName=%s, Version=%s, PackageType=%s",
-		req.PackageName, req.Version, req.PackageType)
+	log.InfoContextf(ctx, "[UploadPackage] Creating async upload task: PackageName=%s, Version=%s, PackageType=%s, BizType=%s",
+		req.PackageName, req.Version, req.PackageType, req.BizType)
 
 	// 1. 先将文件内容保存到本地临时文件
 	filePath, err := s.saveUploadFileToTemp(ctx, req)
@@ -139,6 +141,7 @@ func (s *ServiceImpl) UploadPackage(ctx context.Context, req *UploadPackageReque
 		Description:    req.Description,
 		Runtime:        req.Runtime,
 		PackageType:    req.PackageType,
+		BizType:        req.BizType,
 		CloudAccountID: req.CloudAccountID,
 		FilePath:       filePath, // 使用文件路径替代文件内容
 	}

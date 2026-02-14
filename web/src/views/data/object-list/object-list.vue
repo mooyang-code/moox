@@ -20,7 +20,7 @@
                       v-if="isTimeField(fieldKey)"
                       :xs="24" :sm="24" :md="12" :lg="12" :xl="8" :xxl="8"
                     >
-                      <a-form-item :field="fieldKey" :label="getFieldDisplayName(fieldKey)">
+                      <a-form-item :field="fieldKey" hide-label>
                         <a-range-picker
                           v-model="timeRanges[fieldKey]"
                           show-time
@@ -36,7 +36,7 @@
                       v-else
                       :xs="24" :sm="24" :md="12" :lg="12" :xl="6" :xxl="6"
                     >
-                      <a-form-item :field="fieldKey" :label="getFieldDisplayName(fieldKey)">
+                      <a-form-item :field="fieldKey" hide-label>
                         <a-input
                           v-model="formData.form[fieldKey]"
                           :placeholder="`请输入${getFieldDisplayName(fieldKey)}`"
@@ -863,58 +863,69 @@ onMounted(async () => {
 
 <style lang="scss" scoped>
 .search-btn {
-  margin-bottom: 20px;
+  margin-bottom: 1px;
 }
 
 // 操作按钮区域样式
 .action-buttons {
-  margin: 8px 0 16px 0;
-  padding: 0 0 12px 0;
+  margin: 8px 0 6px 0;
+  padding: 0 0 6px 0;
   border-bottom: 1px solid #f0f0f0;
 }
 
-// Tab样式自定义 - 使用更高权重的选择器
+// 调整 arco-card-body 的内边距
+:deep(.arco-card-body) {
+  padding: 12px 12px 24px 12px !important;
+}
+
+// Tab导航左侧留出间距
+:deep(.arco-tabs-nav) {
+  margin-top: -2px !important;
+  padding-left: 12px !important;
+}
+
+// Tab内容区减少顶部间距
+:deep(.arco-tabs-content) {
+  padding-top: 0 !important;
+}
+
+:deep(.arco-tabs-content-list) {
+  padding-top: 0 !important;
+}
+
+:deep(.arco-tabs-pane) {
+  padding-top: 0 !important;
+}
+
+// 表单项间距紧凑
+:deep(.arco-form-item) {
+  margin-bottom: 2px !important;
+}
+
+// Tab样式自定义
 :deep(.arco-tabs.arco-tabs-type-rounded) {
   .arco-tabs-tab.arco-tabs-tab-active {
-    background-color: #e8f5e8 !important; // 浅绿色背景
-    border-color: #52c41a !important; // 绿色边框
+    background-color: #e8f5e8 !important;
+    border-color: #52c41a !important;
 
     .arco-tabs-tab-title {
-      color: #389e0d !important; // 深绿色文字
+      color: #389e0d !important;
       font-weight: 600 !important;
     }
   }
 
   .arco-tabs-tab:hover:not(.arco-tabs-tab-active) {
-    background-color: #f6ffed !important; // 悬停时的浅绿色
+    background-color: #f6ffed !important;
   }
 }
 
-// 备用样式 - 如果上面的不生效，使用这个
-:deep(.arco-tabs) {
-  .arco-tabs-tab {
-    &.arco-tabs-tab-active {
-      background-color: #e8f5e8 !important;
-      border-color: #52c41a !important;
-
-      .arco-tabs-tab-title {
-        color: #389e0d !important;
-        font-weight: 600 !important;
-      }
-    }
-
-    &:hover:not(.arco-tabs-tab-active) {
-      background-color: #f6ffed !important;
-    }
-  }
-}
-
-// 表格样式优化
+// 表格行间距紧凑
 :deep(.arco-table) {
   .arco-table-th {
     background-color: #f7f8fa;
     font-weight: 600;
     white-space: nowrap;
+    padding: 6px 8px !important;
   }
 
   .arco-table-td {
@@ -922,6 +933,7 @@ onMounted(async () => {
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 150px;
+    padding: 4px 8px !important;
   }
 
   // 对象ID列样式

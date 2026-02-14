@@ -112,10 +112,22 @@ export const staticRoutes = [
         meta: { title: "新建项目", keepAlive: false }
       },
       {
-        path: "/container-management/container-list",
-        name: "container-list",
-        component: () => import("@/views/container/container-list/container-list.vue"),
-        meta: { title: "容器列表" }
+        path: "/container-management/resource-monitor",
+        name: "resource-monitor",
+        component: () => import("@/views/container/resource-monitor/resource-monitor.vue"),
+        meta: { title: "容器监控" }
+      },
+      {
+        path: "/container-management/service-status",
+        name: "service-status",
+        component: () => import("@/views/container/service-status/service-status.vue"),
+        meta: { title: "运行状态", hide: true }
+      },
+      {
+        path: "/container-management/ssh-hosts",
+        name: "ssh-hosts",
+        component: () => import("@/views/container/ssh-hosts/ssh-hosts.vue"),
+        meta: { title: "主机管理" }
       },
       {
         path: "/container-management/ssh-terminal",
@@ -124,22 +136,10 @@ export const staticRoutes = [
         meta: { title: "SSH终端" }
       },
       {
-        path: "/container-management/file-management",
-        name: "file-management",
-        component: () => import("@/views/container/file-management/file-management.vue"),
-        meta: { title: "文件管理" }
-      },
-      {
-        path: "/container-management/resource-monitor",
-        name: "resource-monitor",
-        component: () => import("@/views/container/resource-monitor/resource-monitor.vue"),
-        meta: { title: "资源监控" }
-      },
-      {
-        path: "/container-management/service-status",
-        name: "service-status",
-        component: () => import("@/views/container/service-status/service-status.vue"),
-        meta: { title: "运行状态" }
+        path: "/container-management/ssh-sessions",
+        name: "ssh-sessions",
+        component: () => import("@/views/container/ssh-sessions/ssh-sessions.vue"),
+        meta: { title: "会话管理" }
       },
       {
         path: "/factor/factor-list",

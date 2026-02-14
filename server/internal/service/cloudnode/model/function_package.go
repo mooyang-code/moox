@@ -15,6 +15,7 @@ type FunctionPackage struct {
 	Description string `gorm:"column:c_description;default:''" json:"description"`
 	Runtime     string `gorm:"column:c_runtime;not null" json:"runtime"`
 	PackageType string `gorm:"column:c_package_type;not null;default:'data_collector'" json:"package_type"`
+	BizType     string `gorm:"column:c_biz_type;not null;default:''" json:"biz_type"`
 
 	// 文件信息
 	OriginalFilename string `gorm:"column:c_original_filename;not null" json:"original_filename"`

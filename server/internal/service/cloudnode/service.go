@@ -186,6 +186,7 @@ type UploadPackageRequest struct {
 	Description    string `json:"description"`
 	Runtime        string `json:"runtime" binding:"required"`
 	PackageType    string `json:"package_type" binding:"required"`
+	BizType        string `json:"biz_type"`
 	FileContent    string `json:"file_content" binding:"required"` // base64编码的zip文件内容
 	CloudAccountID string `json:"cloud_account_id"`                // 云账户ID，可选，用于COS配置
 }
@@ -197,6 +198,7 @@ type PackageListRequest struct {
 	PackageName string `form:"package_name"`
 	Runtime     string `form:"runtime"`
 	PackageType string `form:"package_type"`
+	BizType     string `form:"biz_type"`
 	Status      *int   `form:"status"`
 }
 
@@ -215,6 +217,7 @@ type PackageListItem struct {
 	Runtime          string     `json:"runtime"`
 	PackageType      string     `json:"package_type"`
 	PackageTypeLabel string     `json:"package_type_label"`
+	BizType          string     `json:"biz_type"`
 	FileSize         int64      `json:"file_size"`
 	FileMD5          string     `json:"file_md5"`
 	CloudAccountID   string     `json:"cloud_account_id"`

@@ -36,13 +36,8 @@ func ReadSQLFromFile(filePath string) ([]string, error) {
 		if strings.HasPrefix(line, "--") || strings.HasPrefix(line, "#") || line == "" {
 			continue
 		}
-		// 处理行尾注释
-		if idx := strings.Index(line, "--"); idx >= 0 {
-			line = strings.TrimSpace(line[:idx])
-		}
-		if idx := strings.Index(line, "#"); idx >= 0 {
-			line = strings.TrimSpace(line[:idx])
-		}
+		// 处理行尾注释（需要跳过引号内的内容）
+		line = stripInlineComment(line)
 		if line == "" {
 			continue
 		}
@@ -157,4 +152,28 @@ func processTableSchema(schema string) string {
 		}
 	}
 	return strings.Join(lines, ",")
+}
+
+// stripInlineComment 去除行尾的 SQL 注释（-- 或 #），但跳过单引号内的内容
+func stripInlineComment(line string) string {
+	inQuote := false
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		if ch == '\'' {
+			inQuote = !inQuote
+			continue
+		}
+		if inQuote {
+			continue
+		}
+		// 检测 -- 注释
+		if ch == '-' && i+1 < len(line) && line[i+1] == '-' {
+			return strings.TrimSpace(line[:i])
+		}
+		// 检测 # 注释
+		if ch == '#' {
+			return strings.TrimSpace(line[:i])
+		}
+	}
+	return line
 }

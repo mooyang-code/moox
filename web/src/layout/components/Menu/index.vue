@@ -180,20 +180,13 @@ const onMenuItem = (key: string) => {
   }
 
   // 处理容器管理菜单项（直接使用路由name）
-  if (key === 'ssh-terminal' || key === 'file-management' || key === 'resource-monitor' || key === 'service-status') {
+  const containerKeys = [
+    'resource-monitor', 'service-status',
+    'ssh-hosts', 'ssh-terminal', 'ssh-sessions'
+  ];
+  if (containerKeys.includes(key)) {
     console.log('处理容器管理菜单项:', key);
-
-    let targetPath: string;
-    if (key === 'ssh-terminal') {
-      targetPath = '/container-management/ssh-terminal';
-    } else if (key === 'file-management') {
-      targetPath = '/container-management/file-management';
-    } else if (key === 'resource-monitor') {
-      targetPath = '/container-management/resource-monitor';
-    } else {
-      targetPath = '/container-management/service-status';
-    }
-
+    const targetPath = `/container-management/${key}`;
     console.log('跳转容器管理页面:', targetPath);
     router.push(targetPath);
     return;

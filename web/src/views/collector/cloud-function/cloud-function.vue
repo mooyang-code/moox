@@ -524,6 +524,7 @@
     <FunctionPackageManage
       v-model="functionPackageManageVisible"
       :package-type="currentPackageType"
+      :biz-type="currentBizType"
       @refresh="loadData"
     />
 

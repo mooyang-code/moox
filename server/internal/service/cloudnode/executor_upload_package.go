@@ -51,6 +51,7 @@ type UploadPackageExecutorRequest struct {
 	Description    string `json:"description"`
 	Runtime        string `json:"runtime"`
 	PackageType    string `json:"package_type"`
+	BizType        string `json:"biz_type"`
 	CloudAccountID string `json:"cloud_account_id"`
 	FilePath       string `json:"file_path"`       // 本地文件路径（新增）
 	FileContent    string `json:"file_content"`    // base64编码的文件内容（保留用于向后兼容，优先使用FilePath）
@@ -196,6 +197,7 @@ func (e *UploadPackageExecutor) preparePackageData(req *UploadPackageExecutorReq
 		Description:      req.Description,
 		Runtime:          req.Runtime,
 		PackageType:      req.PackageType,
+		BizType:          req.BizType,
 		OriginalFilename: filename,
 		FileSize:         fileSize,
 		FileMD5:          fileMD5,
