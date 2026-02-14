@@ -37,7 +37,7 @@ type FunctionPackageDAO interface {
 	CheckVersionExists(ctx context.Context, packageName, version string) (bool, error)
 
 	// GetOptions 获取代码包选项
-	GetOptions(ctx context.Context, packageType string) ([]model.FunctionPackage, error)
+	GetOptions(ctx context.Context, packageType, bizType string) ([]model.FunctionPackage, error)
 }
 
 // ListRequest 列表查询请求
@@ -47,6 +47,7 @@ type ListRequest struct {
 	PackageName string `json:"package_name"`
 	Runtime     string `json:"runtime"`
 	PackageType string `json:"package_type"`
+	BizType     string `json:"biz_type"`
 	Status      *int   `json:"status"`
 }
 
@@ -116,6 +117,9 @@ func (d *FunctionPackageDAOImpl) List(ctx context.Context, req *ListRequest) ([]
 	if req.PackageType != "" {
 		query = query.Where("c_package_type = ?", req.PackageType)
 	}
+	if req.BizType != "" {
+		query = query.Where("c_biz_type = ?", req.BizType)
+	}
 	if req.Status != nil {
 		query = query.Where("c_status = ?", *req.Status)
 	}
@@ -163,12 +167,15 @@ func (d *FunctionPackageDAOImpl) CheckVersionExists(ctx context.Context, package
 }
 
 // GetOptions 获取代码包选项
-func (d *FunctionPackageDAOImpl) GetOptions(ctx context.Context, packageType string) ([]model.FunctionPackage, error) {
+func (d *FunctionPackageDAOImpl) GetOptions(ctx context.Context, packageType, bizType string) ([]model.FunctionPackage, error) {
 	var packages []model.FunctionPackage
 	query := d.db.WithContext(ctx).Where("c_status = ? AND c_invalid = 0", model.PackageStatusAvailable)
 
 	if packageType != "" {
 		query = query.Where("c_package_type = ?", packageType)
+	}
+	if bizType != "" {
+		query = query.Where("c_biz_type = ?", bizType)
 	}
 
 	err := query.Order("c_package_name ASC, c_version DESC").Find(&packages).Error

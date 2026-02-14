@@ -4,35 +4,36 @@ import { api } from '@/api/config';
 // 云函数代码包接口定义
 export interface FunctionPackage {
   id: number;
-  package_id: string; 
+  package_id: string;
   package_name: string;
   version: string;
   description: string;
   runtime: string;
   package_type: string;
   package_type_label: string;
-  
+  biz_type: string;
+
   // 文件信息
   original_filename?: string;
   file_size: number;
   file_md5: string;
-  
+
   // COS存储信息
   cloud_account_id: string;
   cos_region: string;
   cos_bucket: string;
   cos_path: string;
   cos_url?: string;
-  
+
   // 状态管理
   status: number;
   status_label: string;
   upload_progress?: number;
   error_message?: string;
-  
+
   // 使用统计
   last_deploy_time?: string;
-  
+
   // 审计字段
   created_by: string;
   invalid?: number;
@@ -48,6 +49,7 @@ export interface UploadPackageRequest {
   description?: string;
   runtime: string;
   package_type: string;
+  biz_type?: string;
   file_content: string; // base64编码的文件内容
   cloud_account_id?: string; // 云账户ID，可选
 }
@@ -59,6 +61,7 @@ export interface PackageListRequest {
   package_name?: string;
   runtime?: string;
   package_type?: string;
+  biz_type?: string;
   status?: number;
 }
 

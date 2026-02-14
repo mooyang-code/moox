@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_cloud_account_id TEXT NOT NULL DEFAULT '', -- 云账户ID
     c_package_id TEXT DEFAULT '', -- 代码包ID，记录该节点当前部署的代码包(11位随机字符串)
     c_namespace TEXT NOT NULL DEFAULT '', -- 命名空间
-    c_biz_type TEXT NOT NULL DEFAULT '',         -- 业务类型: data_collector=数据采集, factor_calculator=因子计算
+    c_biz_type TEXT NOT NULL DEFAULT '',         -- 业务类型: data_collector=数据采集, factor_calculator=因子计算，container=容器管理
     c_node_type TEXT NOT NULL DEFAULT 'scf-event', -- 节点类型【scf-event=云函数（事件型），scf-web云函数（webURL型） server=服务器】
     c_region TEXT NOT NULL DEFAULT '', -- 部署地区（如：ap-guangzhou）
     c_tag TEXT NOT NULL DEFAULT '', -- 标签（国内/海外）
@@ -342,7 +342,8 @@ CREATE TABLE IF NOT EXISTS t_function_packages (
     c_version TEXT NOT NULL,                                       -- 版本号
     c_description TEXT DEFAULT '',                                 -- 版本描述
     c_runtime TEXT NOT NULL,                                       -- 运行时环境(Go1, Python3.7等)
-    c_package_type TEXT NOT NULL DEFAULT 'data_collector',         -- 函数包类型: data_collector=数据采集类型, factor_calculator=因子计算类型
+    c_package_type TEXT NOT NULL DEFAULT '',                       -- 函数包类型: data_collector=数据采集类型, factor_calculator=因子计算类型
+    c_biz_type TEXT NOT NULL DEFAULT '',         -- 业务类型: data_collector=数据采集, factor_calculator=因子计算，container=容器管理
 
     -- 文件信息
     c_original_filename TEXT NOT NULL,                             -- 原始文件名

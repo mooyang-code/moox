@@ -28,17 +28,6 @@
             </a-option>
           </a-select>
           <a-select
-            v-model="searchForm.package_type"
-            placeholder="函数包类型"
-            style="width: 150px"
-            allow-clear
-            :disabled="!!props.packageType"
-          >
-            <a-option v-for="type in PACKAGE_TYPE_OPTIONS" :key="type.value" :value="type.value">
-              {{ type.label }}
-            </a-option>
-          </a-select>
-          <a-select
             v-model="searchForm.status"
             placeholder="状态"
             style="width: 120px"
@@ -419,6 +408,7 @@ import { asyncTaskManager } from '@/utils/async-task';
 const props = defineProps<{
   modelValue: boolean;
   packageType?: string; // 用于过滤代码包类型
+  bizType?: string; // 用于过滤业务类型
 }>();
 
 // Emits
@@ -458,7 +448,7 @@ const pollingTimer = ref<number | null>(null);
 const searchForm = reactive<PackageListRequest>({
   page: 1,
   page_size: 10,
-  package_type: props.packageType // 根据传入的 packageType 初始化过滤条件
+  biz_type: props.bizType // 根据传入的 bizType 初始化过滤条件
 });
 
 // 分页信息
@@ -481,6 +471,7 @@ const defaultUploadForm = {
   description: '',
   runtime: 'Go1',
   package_type: 'data_collector',
+  biz_type: '',
   cloud_account_id: '',
   file_content: ''
 };
@@ -491,9 +482,9 @@ const uploadForm = reactive({ ...defaultUploadForm });
 watch(() => props.modelValue, async (newVal) => {
   visible.value = newVal;
   if (newVal) {
-    // 根据传入的 packageType 设置搜索条件
-    if (props.packageType) {
-      searchForm.package_type = props.packageType;
+    // 根据传入的 bizType 设置搜索条件
+    if (props.bizType) {
+      searchForm.biz_type = props.bizType;
     }
     loadPackageList();
     loadCloudAccounts();
@@ -524,9 +515,11 @@ watch(visible, (newVal) => {
 const loadPackageList = async () => {
   loading.value = true;
   try {
-    const response = await getFunctionPackageList(searchForm);
+    // 构建查询参数，排除 package_type
+    const { package_type, ...queryParams } = searchForm;
+    const response = await getFunctionPackageList(queryParams);
     console.log('代码包列表API响应:', response);
-    
+
     if (response?.code === 200 && response?.data) {
       console.log('解析后的列表数据:', response);
       packageList.value = response.data || [];
@@ -570,7 +563,7 @@ const resetSearch = () => {
     page_size: 10,
     package_name: '',
     runtime: '',
-    package_type: props.packageType || '', // 保持传入的 packageType
+    biz_type: props.bizType || '', // 保持传入的 bizType
     status: undefined
   });
   loadPackageList();
@@ -590,11 +583,13 @@ const handlePageSizeChange = (pageSize: number) => {
 
 // 新增
 const onAdd = () => {
-  // 根据传入的 packageType 设置默认值
+  // 根据传入的 packageType 和 bizType 设置默认值
   const defaultPackageType = props.packageType || 'data_collector';
+  const defaultBizType = props.bizType || '';
   Object.assign(uploadForm, {
     ...defaultUploadForm,
     package_type: defaultPackageType,
+    biz_type: defaultBizType,
     package_name: defaultPackageType // 根据包类型自动设置包名
   });
   fileList.value = [];
