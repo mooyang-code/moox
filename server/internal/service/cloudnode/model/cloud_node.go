@@ -21,6 +21,7 @@ const (
 const (
 	BizTypeDataCollector     = "data_collector"     // 数据采集
 	BizTypeFactorCalculator  = "factor_calculator"  // 因子计算
+	BizTypeContainer         = "container"          // 容器管理
 )
 
 // Invalid常量

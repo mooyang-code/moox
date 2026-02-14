@@ -118,28 +118,16 @@ export const staticRoutes = [
         meta: { title: "容器列表" }
       },
       {
-        path: "/container-management/ssh-terminal",
-        name: "ssh-terminal",
-        component: () => import("@/views/container/ssh-terminal/ssh-terminal.vue"),
-        meta: { title: "SSH终端" }
-      },
-      {
-        path: "/container-management/file-management",
-        name: "file-management",
-        component: () => import("@/views/container/file-management/file-management.vue"),
-        meta: { title: "文件管理" }
-      },
-      {
         path: "/container-management/resource-monitor",
         name: "resource-monitor",
         component: () => import("@/views/container/resource-monitor/resource-monitor.vue"),
-        meta: { title: "资源监控" }
+        meta: { title: "容器监控" }
       },
       {
         path: "/container-management/service-status",
         name: "service-status",
         component: () => import("@/views/container/service-status/service-status.vue"),
-        meta: { title: "运行状态" }
+        meta: { title: "运行状态", hide: true }
       },
       {
         path: "/factor/factor-list",
