@@ -31,14 +31,6 @@
     <span>{{ $t('menu.ssh-terminal') }}</span>
   </a-menu-item>
 
-  <!-- 文件管理菜单项 -->
-  <a-menu-item key="ssh-file-manager">
-    <template #icon>
-      <MenuItemIcon icon="icon-menu" />
-    </template>
-    <span>{{ $t('menu.ssh-file-manager') }}</span>
-  </a-menu-item>
-
   <!-- 会话管理菜单项 -->
   <a-menu-item key="ssh-sessions">
     <template #icon>

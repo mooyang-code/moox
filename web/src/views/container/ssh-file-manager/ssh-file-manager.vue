@@ -1,19 +1,5 @@
 <template>
   <div class="ssh-file-manager-page">
-    <!-- 面包屑路径导航 -->
-    <div class="path-navigation">
-      <a-breadcrumb>
-        <a-breadcrumb-item
-          v-for="(seg, index) in breadcrumbs"
-          :key="index"
-          @click="navigateTo(seg.dir)"
-          style="cursor: pointer;"
-        >
-          {{ seg.name }}
-        </a-breadcrumb-item>
-      </a-breadcrumb>
-    </div>
-
     <!-- 路径输入框 -->
     <div class="path-input-bar">
       <a-input
@@ -71,23 +57,23 @@
       @row-dblclick="onRowDblClick"
     >
       <template #columns>
-        <a-table-column title="名称" data-index="name" :width="320">
+        <a-table-column title="名称" data-index="name" :width="240">
           <template #cell="{ record }">
             <a-space>
               <icon-folder v-if="record.type === 'd'" style="color: #ffb84d; font-size: 18px;" />
               <icon-file v-else style="color: #4080ff; font-size: 18px;" />
-              <span>{{ record.name }}</span>
+              <span class="file-name">{{ record.name }}</span>
             </a-space>
           </template>
         </a-table-column>
-        <a-table-column title="类型" data-index="type" :width="100">
+        <a-table-column title="类型" data-index="type" :width="70">
           <template #cell="{ record }">
             <a-tag size="small" :color="record.type === 'd' ? 'orangered' : 'blue'">
               {{ record.type === 'd' ? '目录' : '文件' }}
             </a-tag>
           </template>
         </a-table-column>
-        <a-table-column title="大小" data-index="size" :width="120">
+        <a-table-column title="大小" data-index="size" :width="70">
           <template #cell="{ record }">
             {{ record.type === 'd' ? '-' : formatFileSize(record.size) }}
           </template>
@@ -97,14 +83,14 @@
             <a-tag size="small">{{ record.mode }}</a-tag>
           </template>
         </a-table-column>
-        <a-table-column title="修改时间" data-index="mod_time" :width="200">
+        <a-table-column title="修改时间" data-index="mod_time" :width="180">
           <template #cell="{ record }">
             {{ record.mod_time }}
           </template>
         </a-table-column>
-        <a-table-column title="操作" :width="160" align="center">
+        <a-table-column title="操作" :width="80">
           <template #cell="{ record }">
-            <a-space>
+            <a-space :size="4">
               <a-button
                 v-if="record.type === 'f'"
                 type="text"
@@ -155,7 +141,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import {
@@ -167,10 +153,14 @@ import {
   type SftpFileItem,
 } from '@/api/modules/ssh';
 
+const props = defineProps<{
+  sessionId?: string;
+}>();
+
 const route = useRoute();
 
 // ---------- 状态 ----------
-const sessionId = ref('');
+const resolvedSessionId = computed(() => props.sessionId || (route.query.sessionId as string) || '');
 const loading = ref(false);
 const fileList = ref<SftpFileItem[]>([]);
 const breadcrumbs = ref<{ name: string; dir: string }[]>([]);
@@ -186,7 +176,7 @@ const newDirName = ref('');
 const uploadAction = computed(() => getSftpUploadUrl());
 
 const uploadFormData = computed(() => ({
-  session_id: sessionId.value,
+  session_id: resolvedSessionId.value,
   path: currentDir.value,
 }));
 
@@ -202,13 +192,13 @@ const formatFileSize = (bytes: number): string => {
 
 // ---------- 数据加载 ----------
 const loadDir = async (path: string) => {
-  if (!sessionId.value) {
+  if (!resolvedSessionId.value) {
     Message.warning('缺少 sessionId 参数');
     return;
   }
   loading.value = true;
   try {
-    const response = await sftpList(sessionId.value, path);
+    const response = await sftpList(resolvedSessionId.value, path);
     const res = response.data;
     if (res.code === 200) {
       const dirData = res.data?.[0] || {};
@@ -232,10 +222,6 @@ const refresh = () => {
 };
 
 // ---------- 导航 ----------
-const navigateTo = (dir: string) => {
-  loadDir(dir);
-};
-
 const goParent = () => {
   if (currentDir.value === '/') return;
   const parts = currentDir.value.replace(/\/+$/, '').split('/');
@@ -273,7 +259,7 @@ const onMkdirConfirm = async () => {
     const targetPath = currentDir.value === '/'
       ? `/${name}`
       : `${currentDir.value}/${name}`;
-    const response = await sftpMkdir(sessionId.value, targetPath);
+    const response = await sftpMkdir(resolvedSessionId.value, targetPath);
     const res = response.data;
     if (res.code === 200) {
       Message.success('目录创建成功');
@@ -302,7 +288,7 @@ const onUploadError = () => {
 
 // ---------- 下载 ----------
 const downloadFile = (record: SftpFileItem) => {
-  const url = getSftpDownloadUrl(sessionId.value, record.path);
+  const url = getSftpDownloadUrl(resolvedSessionId.value, record.path);
   const a = document.createElement('a');
   a.href = url;
   a.download = record.name;
@@ -314,7 +300,7 @@ const downloadFile = (record: SftpFileItem) => {
 // ---------- 删除 ----------
 const deleteItem = async (record: SftpFileItem) => {
   try {
-    const response = await sftpDelete(sessionId.value, record.path);
+    const response = await sftpDelete(resolvedSessionId.value, record.path);
     const res = response.data;
     if (res.code === 200) {
       Message.success('删除成功');
@@ -328,15 +314,15 @@ const deleteItem = async (record: SftpFileItem) => {
   }
 };
 
-// ---------- 生命周期 ----------
-onMounted(() => {
-  sessionId.value = (route.query.sessionId as string) || '';
-  if (sessionId.value) {
+// ---------- 初始化 & 监听 ----------
+// 当 sessionId 变化时（包括首次传入），重新加载根目录
+watch(resolvedSessionId, (id) => {
+  if (id) {
+    currentDir.value = '/';
+    pathInput.value = '/';
     loadDir('/');
-  } else {
-    Message.warning('缺少 sessionId 参数，无法加载文件列表');
   }
-});
+}, { immediate: true });
 </script>
 
 <style lang="scss" scoped>
@@ -346,13 +332,6 @@ onMounted(() => {
   padding: 20px;
   overflow-y: auto;
   background: #fff;
-
-  .path-navigation {
-    margin-bottom: 12px;
-    padding: 10px 12px;
-    background: var(--color-fill-1);
-    border-radius: 4px;
-  }
 
   .path-input-bar {
     margin-bottom: 12px;
@@ -367,6 +346,14 @@ onMounted(() => {
 
     &:hover {
       background-color: var(--color-fill-1);
+    }
+
+    .file-name {
+      transition: color 0.15s;
+    }
+
+    &:hover .file-name {
+      color: rgb(var(--primary-6, 22, 93, 255));
     }
   }
 }

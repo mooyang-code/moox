@@ -107,12 +107,24 @@
         </div>
       </div>
     </div>
+
+    <!-- 文件管理弹窗 -->
+    <a-modal
+      v-model:visible="fileManagerVisible"
+      title="文件管理"
+      :width="960"
+      :footer="false"
+      :body-style="{ padding: 0, height: '70vh', overflowY: 'auto' }"
+      unmount-on-close
+    >
+      <SshFileManager :session-id="fileManagerSessionId" />
+    </a-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import { Terminal } from '@xterm/xterm';
 import { AttachAddon } from '@xterm/addon-attach';
@@ -127,9 +139,9 @@ import {
   getSSHHostDetail,
   type SSHHost,
 } from '@/api/modules/ssh';
+import SshFileManager from '@/views/container/ssh-file-manager/ssh-file-manager.vue';
 
 const route = useRoute();
-const router = useRouter();
 
 // ---------- Host list ----------
 
@@ -471,13 +483,16 @@ const disconnectCurrent = async () => {
   tab.terminal?.writeln('\r\n\x1b[33m[已手动断开连接]\x1b[0m');
 };
 
+// ---------- 文件管理弹窗 ----------
+
+const fileManagerVisible = ref(false);
+const fileManagerSessionId = ref('');
+
 const openFileManager = () => {
   const tab = activeTab.value;
   if (!tab) return;
-  router.push({
-    path: '/container-management/ssh-file-manager',
-    query: { sessionId: tab.id },
-  });
+  fileManagerSessionId.value = tab.id;
+  fileManagerVisible.value = true;
 };
 
 // ---------- Lifecycle ----------

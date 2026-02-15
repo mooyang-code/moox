@@ -1,91 +1,82 @@
 <template>
   <div class="ssh-hosts-page">
-    <div class="page-header">
-      <h2>主机管理</h2>
-      <p>管理 SSH 主机配置，支持密码和证书两种认证方式连接远程服务器</p>
+    <!-- 工具栏 -->
+    <div class="toolbar">
+      <a-input
+        v-model="keyword"
+        placeholder="搜索主机名称或地址"
+        allow-clear
+        style="width: 280px"
+        @press-enter="onSearch"
+        @clear="onSearch"
+      >
+        <template #prefix>
+          <icon-search />
+        </template>
+      </a-input>
+      <a-button type="primary" @click="onAdd">
+        <template #icon><icon-plus /></template>
+        <span>新增主机</span>
+      </a-button>
     </div>
 
-    <div class="page-content">
-      <a-card :bordered="false" class="host-card">
-        <!-- 工具栏 -->
-        <div class="toolbar">
-          <a-input
-            v-model="keyword"
-            placeholder="搜索主机名称或地址"
-            allow-clear
-            style="width: 280px"
-            @press-enter="onSearch"
-            @clear="onSearch"
-          >
-            <template #prefix>
-              <icon-search />
-            </template>
-          </a-input>
-          <a-button type="primary" @click="onAdd">
-            <template #icon><icon-plus /></template>
-            <span>新增主机</span>
-          </a-button>
-        </div>
-
-        <!-- 主机列表 -->
-        <a-table
-          row-key="id"
-          :loading="loading"
-          :data="hostList"
-          :bordered="false"
-          :pagination="false"
-          :scroll="{ x: 900 }"
-        >
-          <template #columns>
-            <a-table-column title="名称" data-index="name" :width="160">
-              <template #cell="{ record }">
-                <span class="host-name">{{ record.name }}</span>
-              </template>
-            </a-table-column>
-            <a-table-column title="地址" data-index="address" :width="180" />
-            <a-table-column title="端口" data-index="port" :width="80" align="center" />
-            <a-table-column title="用户" data-index="user" :width="120" />
-            <a-table-column title="认证方式" :width="100" align="center">
-              <template #cell="{ record }">
-                <a-tag v-if="record.auth_type === 'pwd'" size="small" color="arcoblue">密码</a-tag>
-                <a-tag v-else size="small" color="green">证书</a-tag>
-              </template>
-            </a-table-column>
-            <a-table-column title="操作" :width="200" align="center" fixed="right">
-              <template #cell="{ record }">
-                <a-space>
-                  <a-link type="primary" @click="onConnect(record)">连接</a-link>
-                  <a-link @click="onEdit(record)">编辑</a-link>
-                  <a-popconfirm
-                    content="确定要删除该主机吗？删除后将无法恢复。"
-                    ok-text="确定"
-                    cancel-text="取消"
-                    @ok="() => onDelete(record)"
-                    position="tr"
-                  >
-                    <a-link status="danger">删除</a-link>
-                  </a-popconfirm>
-                </a-space>
-              </template>
-            </a-table-column>
+    <!-- 主机列表 -->
+    <a-table
+      row-key="id"
+      :loading="loading"
+      :data="hostList"
+      :bordered="false"
+      :pagination="false"
+      :scroll="{ x: 900 }"
+    >
+      <template #columns>
+        <a-table-column title="名称" data-index="name" :width="160">
+          <template #cell="{ record }">
+            <span class="host-name">{{ record.name }}</span>
           </template>
-        </a-table>
+        </a-table-column>
+        <a-table-column title="地址" data-index="address" :width="180" />
+        <a-table-column title="端口" data-index="port" :width="80" align="center" />
+        <a-table-column title="用户" data-index="user" :width="120" />
+        <a-table-column title="认证方式" :width="100" align="center">
+          <template #cell="{ record }">
+            <a-tag v-if="record.auth_type === 'pwd'" size="small" color="arcoblue">密码</a-tag>
+            <a-tag v-else size="small" color="green">证书</a-tag>
+          </template>
+        </a-table-column>
+        <a-table-column title="操作" :width="200" align="center" fixed="right">
+          <template #cell="{ record }">
+            <a-space>
+              <a-link type="primary" @click="onConnect(record)">连接</a-link>
+              <a-link @click="onEdit(record)">编辑</a-link>
+              <a-popconfirm
+                content="确定要删除该主机吗？删除后将无法恢复。"
+                ok-text="确定"
+                cancel-text="取消"
+                @ok="() => onDelete(record)"
+                position="tr"
+              >
+                <a-link status="danger">删除</a-link>
+              </a-popconfirm>
+            </a-space>
+          </template>
+        </a-table-column>
+      </template>
+    </a-table>
 
-        <!-- 分页 -->
-        <div class="pagination-wrapper">
-          <a-pagination
-            v-model:current="pagination.current"
-            v-model:page-size="pagination.pageSize"
-            :total="total"
-            show-total
-            show-jumper
-            show-page-size
-            :page-size-options="[10, 20, 50]"
-            @change="onPageChange"
-            @page-size-change="onPageSizeChange"
-          />
-        </div>
-      </a-card>
+    <!-- 分页 -->
+    <div class="pagination-wrapper">
+      <a-pagination
+        v-model:current="pagination.current"
+        v-model:page-size="pagination.pageSize"
+        :total="total"
+        show-total
+        show-jumper
+        show-page-size
+        :page-size-options="[10, 20, 50]"
+        @change="onPageChange"
+        @page-size-change="onPageSizeChange"
+      />
     </div>
 
     <!-- 新增 / 编辑主机弹窗 -->
@@ -148,12 +139,12 @@
         </a-form-item>
 
         <template v-if="formData.auth_type === 'pwd'">
-          <a-form-item field="password" label="密码">
+          <a-form-item field="password" label="密码" :rules="passwordRules">
             <a-input-password v-model="formData.password" placeholder="请输入密码" allow-clear />
           </a-form-item>
         </template>
         <template v-else>
-          <a-form-item field="cert_data" label="证书内容">
+          <a-form-item field="cert_data" label="证书内容" :rules="certDataRules">
             <a-textarea
               v-model="formData.cert_data"
               placeholder="请粘贴 PEM 格式的私钥内容"
@@ -174,7 +165,7 @@
                 <a-form-item field="font_size" label="字体大小">
                   <a-input-number
                     v-model="formData.font_size"
-                    placeholder="14"
+                    placeholder="13"
                     :min="8"
                     :max="36"
                     :style="{ width: '100%' }"
@@ -184,12 +175,7 @@
               <a-col :span="12">
                 <a-form-item field="font_family" label="字体">
                   <a-select v-model="formData.font_family" placeholder="请选择字体" allow-clear>
-                    <a-option value="Consolas">Consolas</a-option>
-                    <a-option value="Monaco">Monaco</a-option>
-                    <a-option value="Courier New">Courier New</a-option>
-                    <a-option value="monospace">monospace</a-option>
-                    <a-option value="Menlo">Menlo</a-option>
-                    <a-option value="Source Code Pro">Source Code Pro</a-option>
+                    <a-option v-for="f in fontOptions" :key="f" :value="f">{{ f }}</a-option>
                   </a-select>
                 </a-form-item>
               </a-col>
@@ -197,17 +183,17 @@
             <a-row :gutter="16">
               <a-col :span="8">
                 <a-form-item field="background" label="背景色">
-                  <a-input v-model="formData.background" placeholder="#1e1e1e" allow-clear />
+                  <pick-colors v-model:value="formData.background" format="hex" :colors="bgPresetColors" :z-index="2000" />
                 </a-form-item>
               </a-col>
               <a-col :span="8">
                 <a-form-item field="foreground" label="前景色">
-                  <a-input v-model="formData.foreground" placeholder="#d4d4d4" allow-clear />
+                  <pick-colors v-model:value="formData.foreground" format="hex" :colors="fgPresetColors" :z-index="2000" />
                 </a-form-item>
               </a-col>
               <a-col :span="8">
                 <a-form-item field="cursor_color" label="光标颜色">
-                  <a-input v-model="formData.cursor_color" placeholder="#d4d4d4" allow-clear />
+                  <pick-colors v-model:value="formData.cursor_color" format="hex" :colors="cursorPresetColors" :z-index="2000" />
                 </a-form-item>
               </a-col>
             </a-row>
@@ -254,8 +240,29 @@ import { ref, reactive, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import { listSSHHosts, createSSHHost, updateSSHHost, deleteSSHHost, type SSHHost } from '@/api/modules/ssh';
+import PickColors from 'vue-pick-colors';
 
 const router = useRouter();
+
+// ---------- 字体选项 ----------
+const fontOptions = ['Menlo', 'Consolas', 'Monaco', 'Courier New', 'Source Code Pro', 'monospace'];
+
+// ---------- 预设色块 ----------
+// 背景色：深色系
+const bgPresetColors = [
+  '#1e1e1e', '#000000', '#0c0c0c', '#1a1a2e', '#282a36',
+  '#2d2d2d', '#263238', '#1e2127', '#002b36', '#3b3b3b',
+];
+// 前景色：浅色系
+const fgPresetColors = [
+  '#d4d4d4', '#ffffff', '#f8f8f2', '#c0c0c0', '#a9b7c6',
+  '#abb2bf', '#e0e0e0', '#cccccc', '#b0b0b0', '#50fa7b',
+];
+// 光标颜色
+const cursorPresetColors = [
+  '#d4d4d4', '#ffffff', '#f8f8f0', '#ffcc00', '#ff5555',
+  '#50fa7b', '#8be9fd', '#bd93f9', '#ff79c6', '#f1fa8c',
+];
 
 // ---------- 列表数据 ----------
 const loading = ref(false);
@@ -283,12 +290,12 @@ const getDefaultFormData = (): Partial<SSHHost> => ({
   password: '',
   cert_data: '',
   cert_pwd: '',
-  font_size: 14,
+  font_size: 13,
   background: '#1e1e1e',
   foreground: '#d4d4d4',
   cursor_color: '#d4d4d4',
-  font_family: 'Consolas',
-  cursor_style: 'block',
+  font_family: 'Menlo',
+  cursor_style: 'underline',
   shell: '/bin/bash',
   pty_type: 'xterm-256color',
   init_cmd: '',
@@ -314,6 +321,10 @@ const formRules = {
   ],
   user: [{ required: true, message: '请输入用户名' }],
 };
+
+// 认证方式动态校验规则
+const passwordRules = [{ required: true, message: '请输入密码' }];
+const certDataRules = [{ required: true, message: '请粘贴证书内容' }];
 
 // ---------- 数据加载 ----------
 const fetchHosts = async () => {
@@ -445,35 +456,9 @@ onMounted(() => {
 
 <style lang="scss" scoped>
 .ssh-hosts-page {
-  padding: 20px;
-  min-height: calc(100vh - 120px);
-
-  .page-header {
-    margin-bottom: 20px;
-
-    h2 {
-      margin: 0 0 8px 0;
-      font-size: 22px;
-      font-weight: 600;
-      color: var(--color-text-1);
-    }
-
-    p {
-      margin: 0;
-      font-size: 14px;
-      color: var(--color-text-3);
-    }
-  }
-
-  .page-content {
-    .host-card {
-      border-radius: 6px;
-
-      :deep(.arco-card-body) {
-        padding: 20px;
-      }
-    }
-  }
+  padding: 16px;
+  background: #f5f5f5;
+  min-height: calc(100vh - 60px);
 
   .toolbar {
     display: flex;
@@ -518,5 +503,13 @@ onMounted(() => {
       padding: 0;
     }
   }
+}
+</style>
+
+<style lang="scss">
+/* vue-pick-colors 色块描边，避免白色色块不可见 */
+.color-item {
+  border: 1px solid #d9d9d9 !important;
+  border-radius: 3px !important;
 }
 </style>

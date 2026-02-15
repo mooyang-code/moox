@@ -48,7 +48,6 @@ export default {
     ["resource-monitor"]: "容器监控",
     ["ssh-hosts"]: "主机管理",
     ["ssh-terminal"]: "SSH终端",
-    ["ssh-file-manager"]: "文件管理",
     ["ssh-sessions"]: "会话管理",
     ["collector"]: "数据采集器",
     ["common-form"]: "云函数",

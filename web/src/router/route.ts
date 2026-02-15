@@ -142,12 +142,6 @@ export const staticRoutes = [
         meta: { title: "SSH终端" }
       },
       {
-        path: "/container-management/ssh-file-manager",
-        name: "ssh-file-manager",
-        component: () => import("@/views/container/ssh-file-manager/ssh-file-manager.vue"),
-        meta: { title: "文件管理" }
-      },
-      {
         path: "/container-management/ssh-sessions",
         name: "ssh-sessions",
         component: () => import("@/views/container/ssh-sessions/ssh-sessions.vue"),
