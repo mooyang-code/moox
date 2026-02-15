@@ -14,6 +14,38 @@
     </template>
     <span>{{ $t('menu.resource-monitor') }}</span>
   </a-menu-item>
+
+  <!-- 主机管理菜单项 -->
+  <a-menu-item key="ssh-hosts">
+    <template #icon>
+      <MenuItemIcon icon="icon-menu" />
+    </template>
+    <span>{{ $t('menu.ssh-hosts') }}</span>
+  </a-menu-item>
+
+  <!-- SSH终端菜单项 -->
+  <a-menu-item key="ssh-terminal">
+    <template #icon>
+      <MenuItemIcon icon="icon-menu" />
+    </template>
+    <span>{{ $t('menu.ssh-terminal') }}</span>
+  </a-menu-item>
+
+  <!-- 文件管理菜单项 -->
+  <a-menu-item key="ssh-file-manager">
+    <template #icon>
+      <MenuItemIcon icon="icon-menu" />
+    </template>
+    <span>{{ $t('menu.ssh-file-manager') }}</span>
+  </a-menu-item>
+
+  <!-- 会话管理菜单项 -->
+  <a-menu-item key="ssh-sessions">
+    <template #icon>
+      <MenuItemIcon icon="icon-menu" />
+    </template>
+    <span>{{ $t('menu.ssh-sessions') }}</span>
+  </a-menu-item>
 </template>
 
 <script setup lang="ts">

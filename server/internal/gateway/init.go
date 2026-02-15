@@ -18,8 +18,8 @@ func InitGatewayServices(s *server.Server) {
 	// 动态注册配置文件中的所有服务
 	serviceIDs := cfg.GetAllServiceIDs()
 	for _, serviceID := range serviceIDs {
-		// 跳过collector和cloudnode服务，它们将使用自定义的处理器
-		if serviceID == "collector" || serviceID == "cloudnode" {
+		// 跳过collector、cloudnode、ssh服务，它们将使用自定义的处理器
+		if serviceID == "collector" || serviceID == "cloudnode" || serviceID == "ssh" {
 			log.Infof("跳过%s服务的HTTPServiceHandler注册，将使用自定义处理器", serviceID)
 			continue
 		}

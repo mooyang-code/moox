@@ -130,6 +130,30 @@ export const staticRoutes = [
         meta: { title: "运行状态", hide: true }
       },
       {
+        path: "/container-management/ssh-hosts",
+        name: "ssh-hosts",
+        component: () => import("@/views/container/ssh-hosts/ssh-hosts.vue"),
+        meta: { title: "主机管理" }
+      },
+      {
+        path: "/container-management/ssh-terminal",
+        name: "ssh-terminal",
+        component: () => import("@/views/container/ssh-terminal/ssh-terminal.vue"),
+        meta: { title: "SSH终端" }
+      },
+      {
+        path: "/container-management/ssh-file-manager",
+        name: "ssh-file-manager",
+        component: () => import("@/views/container/ssh-file-manager/ssh-file-manager.vue"),
+        meta: { title: "文件管理" }
+      },
+      {
+        path: "/container-management/ssh-sessions",
+        name: "ssh-sessions",
+        component: () => import("@/views/container/ssh-sessions/ssh-sessions.vue"),
+        meta: { title: "会话管理" }
+      },
+      {
         path: "/factor/factor-list",
         name: "factor-list",
         component: () => import("@/views/factor/factor-list/factor-list.vue"),

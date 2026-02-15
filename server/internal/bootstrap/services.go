@@ -2,7 +2,9 @@ package bootstrap
 
 import (
 	"context"
+	"net/http"
 
+	"github.com/gin-gonic/gin"
 	"github.com/mooyang-code/moox/server/internal/config"
 	"github.com/mooyang-code/moox/server/internal/service/asynctask"
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode"
@@ -13,7 +15,9 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/database"
 	"github.com/mooyang-code/moox/server/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/server/internal/service/fileserver"
-	sshapp "github.com/mooyang-code/moox/server/internal/service/ssh/app"
+	ssh "github.com/mooyang-code/moox/server/internal/service/ssh"
+	sshapi "github.com/mooyang-code/moox/server/internal/service/ssh/api"
+	sshdao "github.com/mooyang-code/moox/server/internal/service/ssh/dao"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -43,6 +47,9 @@ type Services struct {
 	TaskInstanceService   collectmgr.TaskInstanceService
 	DataTypeConfigService collectmgr.DataTypeConfigService
 	TaskPlannerService    collectmgr.TaskPlannerService
+
+	// SSH 服务
+	SSHService ssh.Service
 }
 
 // StartBackgroundServices 启动所有后台服务
@@ -131,7 +138,7 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	taskRuleService := collectmgr.NewTaskRulesServiceImpl(taskRulesDAO, nodeDAO)
 	taskInstanceService := collectmgr.NewTaskInstanceServiceImpl(instanceDAO, taskRulesDAO, nodeDAO)
 	dataTypeConfigService := collectmgr.NewDataTypeConfigServiceImpl(dataTypeConfigDAO, fieldConfigDAO, db)
-	
+
 	// 注入 CloudNodeService 依赖到 TaskInstanceService（解决循环依赖）
 	// 创建适配器以匹配接口签名
 	if impl, ok := taskInstanceService.(*collectmgr.TaskInstanceServiceImpl); ok {
@@ -140,7 +147,7 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 		// 注入内存仓库，用于状态同步（ReportTaskStatus时同步更新内存）
 		impl.SetTaskInstanceStore(memStore)
 	}
-	
+
 	// 【新增】注入任务实例仓库到 CloudNodeService（用于心跳任务下发）
 	taskStoreAdapter := collectmgr.NewTaskStoreAdapter(memStore)
 	if serviceImpl, ok := cloudNodeService.(*cloudnode.ServiceImpl); ok {
@@ -151,6 +158,12 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	log.Info("[Bootstrap] 正在初始化DNSProxy实例...")
 	dnsproxy.InitDNSProxyInstance()
 
+	// 创建 SSH 服务
+	log.Info("[Bootstrap] 正在创建 SSH 服务...")
+	sshHostDAO := sshdao.NewSSHHostDAO(db)
+	sshSessionDAO := sshdao.NewSSHSessionDAO(db)
+	sshService := ssh.NewService(sshHostDAO, sshSessionDAO)
+
 	log.Info("[Bootstrap] 核心服务创建完成")
 	services := &Services{
 		DBManager:             dbManager,
@@ -160,12 +173,12 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 		TaskInstanceService:   taskInstanceService,
 		DataTypeConfigService: dataTypeConfigService,
 		TaskPlannerService:    taskPlanner,
+		SSHService:            sshService,
 	}
 
 	// 初始化 TaskPlanner 全局实例（供定时器使用）
 	log.Info("[Bootstrap] 正在初始化 TaskPlanner 全局实例...")
 	collectmgr.InitTaskPlannerInstance(taskPlanner)
-
 	return services, nil
 }
 
@@ -202,12 +215,52 @@ func startBackgroundWorkers(ctx context.Context, services *Services, workerCount
 	log.Info("[Bootstrap] 正在启动文件下载服务...")
 	fileserver.StartFileDownloadService()
 
-	// 3. 启动WebSSH服务（在独立的goroutine中运行）
-	log.Info("[Bootstrap] 正在启动WebSSH服务...")
-	sshapp.StartWebSSHService()
+	// 3. 启动 SSH 独立 HTTP 服务（WebSocket + 文件传输端点，不走 Gateway）
+	log.Info("[Bootstrap] 正在启动 SSH 独立 HTTP 服务...")
+	startSSHDirectServer(services.SSHService)
 
 	// 4. CloudNode服务已通过网关方式启动，无需独立HTTP服务
 
 	log.Info("[Bootstrap] 所有后台服务已启动")
 	return nil
+}
+
+// startSSHDirectServer 启动 SSH 独立 HTTP 服务
+// 提供 WebSocket 终端连接、文件上传下载等无法通过 Gateway 代理的端点
+func startSSHDirectServer(sshService ssh.Service) {
+	go func() {
+		gin.SetMode(gin.ReleaseMode)
+		engine := gin.New()
+		engine.Use(gin.Recovery())
+
+		// CORS 中间件：允许前端跨端口访问（WebSocket / 文件上传下载）
+		engine.Use(func(c *gin.Context) {
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			if c.Request.Method == "OPTIONS" {
+				c.AbortWithStatus(http.StatusNoContent)
+				return
+			}
+			c.Next()
+		})
+
+		// 健康检查
+		engine.GET("/", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{
+				"message": "MooX SSH Direct Service",
+				"version": "1.0.0",
+				"status":  "running",
+			})
+		})
+
+		// 注册直连路由（WebSocket + 文件传输）
+		sshapi.RegisterSSHDirectRoutes(engine, sshService)
+
+		address := "0.0.0.0:20180"
+		log.Infof("[SSH Direct] 启动 SSH 独立 HTTP 服务: %s", address)
+		if err := engine.Run(address); err != nil {
+			log.Errorf("[SSH Direct] 启动失败: %v", err)
+		}
+	}()
 }

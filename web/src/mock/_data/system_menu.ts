@@ -281,6 +281,90 @@ export const systemMenu = [
     children: null
   },
   {
+    id: "03503",
+    parentId: "035",
+    path: "/container-management/ssh-hosts",
+    name: "ssh-hosts",
+    component: "container/ssh-hosts/ssh-hosts",
+    meta: {
+      title: "ssh-hosts",
+      hide: false,
+      disable: false,
+      keepAlive: true,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin", "common"],
+      icon: "icon-menu",
+      sort: 3,
+      type: 2
+    },
+    children: null
+  },
+  {
+    id: "03504",
+    parentId: "035",
+    path: "/container-management/ssh-terminal",
+    name: "ssh-terminal",
+    component: "container/ssh-terminal/ssh-terminal",
+    meta: {
+      title: "ssh-terminal",
+      hide: false,
+      disable: false,
+      keepAlive: false,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin", "common"],
+      icon: "icon-menu",
+      sort: 4,
+      type: 2
+    },
+    children: null
+  },
+  {
+    id: "03505",
+    parentId: "035",
+    path: "/container-management/ssh-file-manager",
+    name: "ssh-file-manager",
+    component: "container/ssh-file-manager/ssh-file-manager",
+    meta: {
+      title: "ssh-file-manager",
+      hide: false,
+      disable: false,
+      keepAlive: false,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin", "common"],
+      icon: "icon-menu",
+      sort: 5,
+      type: 2
+    },
+    children: null
+  },
+  {
+    id: "03506",
+    parentId: "035",
+    path: "/container-management/ssh-sessions",
+    name: "ssh-sessions",
+    component: "container/ssh-sessions/ssh-sessions",
+    meta: {
+      title: "ssh-sessions",
+      hide: false,
+      disable: false,
+      keepAlive: true,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin", "common"],
+      icon: "icon-menu",
+      sort: 6,
+      type: 2
+    },
+    children: null
+  },
+  {
     id: "0301",
     parentId: "03",
     path: "/data-management/:projectId",
