@@ -7,6 +7,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/cloudnode"
 	"github.com/mooyang-code/moox/server/internal/service/collectmgr"
 	"github.com/mooyang-code/moox/server/internal/service/dnsproxy"
+	"github.com/mooyang-code/moox/server/internal/service/monitor"
 
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -53,6 +54,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	// 任务实例重算定时器
 	timer.RegisterScheduler("taskPlannerSchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service("trpc.collectmgr.timer"), collectmgr.HandleTaskPlannerSchedule)
+	// 监控数据采集定时器
+	timer.RegisterScheduler("monitorSchedule", &timer.DefaultScheduler{})
+	timer.RegisterHandlerService(s.Service("trpc.monitor.timer"), monitor.HandleMonitorSchedule)
+	// 监控历史数据清理定时器（每天0点清理7天前数据）
+	timer.RegisterScheduler("monitorCleanupSchedule", &timer.DefaultScheduler{})
+	timer.RegisterHandlerService(s.Service("trpc.monitor.cleanup.timer"), monitor.HandleMonitorCleanupSchedule)
 
 	log.InfoContextf(ctx, "应用初始化完成")
 	return s, nil

@@ -26,6 +26,7 @@ type AppConfig struct {
 	TaskManagement TaskManagementConfig `yaml:"task_management"`
 	Log            LogConfig            `yaml:"log"`
 	Security       SecurityConfig       `yaml:"security"`
+	Monitor        MonitorConfig        `yaml:"monitor"`
 }
 
 // DatabaseConfig 数据库配置
@@ -89,6 +90,13 @@ type SecurityConfig struct {
 	EncryptionKey string `yaml:"encryption_key"` // 数据加密密钥（32字节）
 }
 
+// MonitorConfig 监控配置
+type MonitorConfig struct {
+	NodeExporterPort int `yaml:"node_exporter_port"` // Node Exporter 端口，默认 9100
+	CollectTimeout   int `yaml:"collect_timeout"`    // 采集超时时间（秒），默认 10
+	ConcurrentLimit  int `yaml:"concurrent_limit"`   // 并发采集限制，默认 20
+}
+
 // DefaultConfig 返回默认配置
 func DefaultConfig() *AppConfig {
 	return &AppConfig{
@@ -131,6 +139,11 @@ func DefaultConfig() *AppConfig {
 		},
 		Security: SecurityConfig{
 			EncryptionKey: "moox-cloud-secret-key-32bytes", // 默认密钥（仅用于开发环境）
+		},
+		Monitor: MonitorConfig{
+			NodeExporterPort: 9100, // Node Exporter 默认端口
+			CollectTimeout:   10,   // 10秒超时
+			ConcurrentLimit:  20,   // 最多 20 个并发
 		},
 	}
 }
@@ -208,6 +221,17 @@ func (c *AppConfig) applyEnv() {
 	if v := os.Getenv("MOOX_ENCRYPTION_KEY"); v != "" {
 		c.Security.EncryptionKey = v
 	}
+
+	// Monitor
+	if v := os.Getenv("NODE_EXPORTER_PORT"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Monitor.NodeExporterPort)
+	}
+	if v := os.Getenv("MONITOR_COLLECT_TIMEOUT"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Monitor.CollectTimeout)
+	}
+	if v := os.Getenv("MONITOR_CONCURRENT_LIMIT"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Monitor.ConcurrentLimit)
+	}
 }
 
 // Validate 验证配置
@@ -273,4 +297,18 @@ func GetXDataURL() string {
 		return ""
 	}
 	return cfg.Storage.XDataURL
+}
+
+// GetMonitorConfig 获取监控配置
+func GetMonitorConfig() MonitorConfig {
+	cfg := GetGlobalConfig()
+	if cfg == nil {
+		// 返回默认配置
+		return MonitorConfig{
+			NodeExporterPort: 9100,
+			CollectTimeout:   10,
+			ConcurrentLimit:  20,
+		}
+	}
+	return cfg.Monitor
 }

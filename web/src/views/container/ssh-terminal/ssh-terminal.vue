@@ -137,7 +137,9 @@ import {
   resizeSSHTerminal,
   getSSHWebSocketUrl,
   getSSHHostDetail,
+  getOnlineSessions,
   type SSHHost,
+  type SessionInfo,
 } from '@/api/modules/ssh';
 import SshFileManager from '@/views/container/ssh-file-manager/ssh-file-manager.vue';
 
@@ -279,6 +281,9 @@ const connectToHost = async (hostId: number) => {
   tabs.value.push(tab);
   activeTabId.value = sessionId;
 
+  // Update selected host in dropdown
+  selectedHostId.value = hostId;
+
   // Wait for DOM to render
   await nextTick();
 
@@ -358,14 +363,19 @@ const switchTab = async (tabId: string) => {
   await nextTick();
 
   const tab = tabs.value.find((t) => t.id === tabId);
-  if (tab?.fitAddon && tab.terminal) {
-    try {
-      tab.fitAddon.fit();
-      tab.terminal.focus();
-    } catch {
-      // ignore
+  if (tab) {
+    // Update selected host in dropdown
+    selectedHostId.value = tab.hostId;
+
+    if (tab.fitAddon && tab.terminal) {
+      try {
+        tab.fitAddon.fit();
+        tab.terminal.focus();
+      } catch {
+        // ignore
+      }
+      setupResizeObserver(tabId);
     }
-    setupResizeObserver(tabId);
   }
 };
 
@@ -405,17 +415,23 @@ const closeTab = async (tabId: string) => {
       activeTabId.value = tabs.value[newIndex].id;
       await nextTick();
       const newTab = tabs.value[newIndex];
-      if (newTab?.fitAddon) {
-        try {
-          newTab.fitAddon.fit();
-          newTab.terminal?.focus();
-        } catch {
-          // ignore
+      if (newTab) {
+        // Update selected host in dropdown
+        selectedHostId.value = newTab.hostId;
+
+        if (newTab.fitAddon) {
+          try {
+            newTab.fitAddon.fit();
+            newTab.terminal?.focus();
+          } catch {
+            // ignore
+          }
+          setupResizeObserver(newTab.id);
         }
-        setupResizeObserver(newTab.id);
       }
     } else {
       activeTabId.value = '';
+      selectedHostId.value = undefined;
     }
   }
 };
@@ -502,13 +518,36 @@ onMounted(async () => {
 
   window.addEventListener('resize', handleWindowResize);
 
-  // Auto-connect if hostId is provided in query
+  // Priority 1: Auto-connect if hostId is provided in query
   const hostIdQuery = route.query.hostId;
   if (hostIdQuery) {
     const hostId = Number(hostIdQuery);
     if (!isNaN(hostId) && hostId > 0) {
       await connectToHost(hostId);
+      return;
     }
+  }
+
+  // Priority 2: Try to connect to the most recent active host (create new session)
+  try {
+    const sessionsRes = await getOnlineSessions();
+    const sessions = sessionsRes.data?.data as SessionInfo[] | undefined;
+
+    if (sessions && sessions.length > 0) {
+      // Sort by last_active_time (most recent first)
+      const sortedSessions = [...sessions].sort((a, b) => {
+        const timeA = new Date(a.last_active_time).getTime();
+        const timeB = new Date(b.last_active_time).getTime();
+        return timeB - timeA;
+      });
+
+      // Connect to the most recent active host (create a new session)
+      const mostRecentSession = sortedSessions[0];
+      await connectToHost(mostRecentSession.host_id);
+    }
+  } catch (err) {
+    // Silently ignore errors - just keep the terminal empty
+    console.warn('Failed to fetch online sessions:', err);
   }
 });
 

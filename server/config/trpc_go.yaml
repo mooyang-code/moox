@@ -64,6 +64,18 @@ server:
       network: "30 * * * * *?scheduler=taskPlannerSchedule&startAtOnce=0&params="
       protocol: timer
       timeout: 60000  #请求最长处理时间 单位 毫秒 (1分钟)
+      ######## 监控数据采集定时任务 ########
+    - name: trpc.monitor.timer
+      port: 8006
+      network: "*/10 * * * * *?scheduler=monitorSchedule&startAtOnce=1&params="
+      protocol: timer
+      timeout: 15000  #请求最长处理时间 单位 毫秒
+      ######## 监控历史数据清理定时任务（每天0点） ########
+    - name: trpc.monitor.cleanup.timer
+      port: 8007
+      network: "0 0 0 * * *?scheduler=monitorCleanupSchedule&startAtOnce=0&params="
+      protocol: timer
+      timeout: 60000  #请求最长处理时间 单位 毫秒
 
 
 client:

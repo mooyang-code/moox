@@ -36,3 +36,8 @@ log:
   max_size: 100             # MB
   max_backups: 10
   max_age: 30               # 天
+
+monitor:
+  node_exporter_port: 9100  # Node Exporter 端口
+  collect_timeout: 10       # 采集超时时间（秒）
+  concurrent_limit: 20      # 并发采集限制

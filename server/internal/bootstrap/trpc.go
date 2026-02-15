@@ -7,6 +7,7 @@ import (
 	cloudnodegateway "github.com/mooyang-code/moox/server/internal/service/cloudnode/gateway"
 	collectorgateway "github.com/mooyang-code/moox/server/internal/service/collectmgr/gateway"
 	dnsproxygateway "github.com/mooyang-code/moox/server/internal/service/dnsproxy/gateway"
+	monitorgateway "github.com/mooyang-code/moox/server/internal/service/monitor/gateway"
 	sshgateway "github.com/mooyang-code/moox/server/internal/service/ssh/gateway"
 	pb "github.com/mooyang-code/moox/server/proto/gen"
 
@@ -52,6 +53,9 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 
 	// 3.5 注册 SSH 网关
 	sshgateway.RegisterSSHGateway(services.SSHService)
+
+	// 3.6 注册监控服务网关
+	monitorgateway.RegisterMonitorGateway(services.MonitorService)
 
 	log.Info("TRPC 服务注册完成")
 	return nil

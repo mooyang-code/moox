@@ -34,6 +34,8 @@ go.work.sum
 
 server/.claude/
 
+build/
+
 release/
 
 *.log

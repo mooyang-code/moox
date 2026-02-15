@@ -565,6 +565,8 @@ CREATE TABLE IF NOT EXISTS t_ssh_host (
     c_shell TEXT NOT NULL DEFAULT 'bash',                      -- Shell类型
     c_pty_type TEXT NOT NULL DEFAULT 'xterm-256color',         -- 终端类型
     c_init_cmd TEXT,                                            -- 连接后初始命令
+    -- 监控配置
+    c_monitor_enabled INTEGER NOT NULL DEFAULT 0,              -- 是否启用监控: 0=未启用, 1=已启用
     -- 元数据
     c_creator TEXT NOT NULL DEFAULT '',                         -- 创建人
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
@@ -588,8 +590,9 @@ CREATE TABLE IF NOT EXISTS t_ssh_session (
 
 -- ************ 创建SSH相关索引 ************
 CREATE INDEX IF NOT EXISTS idx_ssh_host_name ON t_ssh_host(c_name);
-CREATE INDEX IF NOT EXISTS idx_ssh_host_address ON t_ssh_host(c_address);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_host_address ON t_ssh_host(c_address);
 CREATE INDEX IF NOT EXISTS idx_ssh_host_mtime ON t_ssh_host(c_mtime);
+CREATE INDEX IF NOT EXISTS idx_ssh_host_monitor_enabled ON t_ssh_host(c_monitor_enabled);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_session_session_id ON t_ssh_session(c_session_id);
 CREATE INDEX IF NOT EXISTS idx_ssh_session_host_id ON t_ssh_session(c_host_id);
@@ -600,3 +603,46 @@ CREATE INDEX IF NOT EXISTS idx_ssh_session_connect_time ON t_ssh_session(c_conne
 DROP TRIGGER IF EXISTS update_ssh_host_mtime;
 CREATE TRIGGER update_ssh_host_mtime AFTER UPDATE ON t_ssh_host BEGIN
     UPDATE t_ssh_host SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+
+-- ============ 主机监控系统表设计 ============
+
+-- ************ 主机监控历史数据表 ************
+CREATE TABLE IF NOT EXISTS t_host_monitor_history (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,       -- 主键ID
+    c_host_address TEXT NOT NULL,                           -- 主机IP地址
+
+    -- CPU 指标
+    c_cpu_usage REAL,                                      -- CPU使用率（%）
+    c_cpu_cores INTEGER,                                   -- CPU核心数
+
+    -- 内存指标
+    c_memory_total INTEGER,                                -- 总内存（字节）
+    c_memory_used INTEGER,                                 -- 已用内存（字节）
+    c_memory_available INTEGER,                            -- 可用内存（字节）
+    c_memory_percent REAL,                                 -- 内存使用率（%）
+
+    -- 磁盘指标（根分区）
+    c_disk_total INTEGER,                                  -- 磁盘总容量（字节）
+    c_disk_used INTEGER,                                   -- 已用空间（字节）
+    c_disk_percent REAL,                                   -- 磁盘使用率（%）
+
+    -- 网络指标（主网卡）
+    c_network_device TEXT,                                 -- 网卡名称（如 eth0）
+    c_network_rx_speed INTEGER,                            -- 接收速率（字节/秒）
+    c_network_tx_speed INTEGER,                            -- 发送速率（字节/秒）
+
+    -- 系统负载
+    c_load1 REAL,                                          -- 1分钟负载
+    c_load5 REAL,                                          -- 5分钟负载
+    c_load15 REAL,                                         -- 15分钟负载
+
+    -- 时间戳
+    c_collect_time DATETIME NOT NULL,                      -- 采集时间
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP             -- 创建时间
+);
+
+-- ************ 创建监控历史相关索引 ************
+CREATE INDEX IF NOT EXISTS idx_host_monitor_history_address_time
+    ON t_host_monitor_history(c_host_address, c_collect_time DESC);
+CREATE INDEX IF NOT EXISTS idx_host_monitor_history_collect_time
+    ON t_host_monitor_history(c_collect_time DESC);

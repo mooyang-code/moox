@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/server/internal/service/database"
 	"github.com/mooyang-code/moox/server/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/server/internal/service/fileserver"
+	"github.com/mooyang-code/moox/server/internal/service/monitor"
 	ssh "github.com/mooyang-code/moox/server/internal/service/ssh"
 	sshapi "github.com/mooyang-code/moox/server/internal/service/ssh/api"
 	sshdao "github.com/mooyang-code/moox/server/internal/service/ssh/dao"
@@ -50,6 +51,9 @@ type Services struct {
 
 	// SSH 服务
 	SSHService ssh.Service
+
+	// 监控服务
+	MonitorService monitor.Service
 }
 
 // StartBackgroundServices 启动所有后台服务
@@ -164,6 +168,11 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	sshSessionDAO := sshdao.NewSSHSessionDAO(db)
 	sshService := ssh.NewService(sshHostDAO, sshSessionDAO)
 
+	// 创建监控服务
+	log.Info("[Bootstrap] 正在创建监控服务...")
+	monitorService := monitor.NewService(dbManager)
+	monitor.InitMonitorInstance(dbManager)
+
 	log.Info("[Bootstrap] 核心服务创建完成")
 	services := &Services{
 		DBManager:             dbManager,
@@ -174,6 +183,7 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 		DataTypeConfigService: dataTypeConfigService,
 		TaskPlannerService:    taskPlanner,
 		SSHService:            sshService,
+		MonitorService:        monitorService,
 	}
 
 	// 初始化 TaskPlanner 全局实例（供定时器使用）
