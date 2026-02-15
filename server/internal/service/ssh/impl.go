@@ -28,8 +28,8 @@ type ServiceImpl struct {
 // NewService 创建 SSH 服务
 func NewService(hostDAO *dao.SSHHostDAO, sessionDAO *dao.SSHSessionDAO) *ServiceImpl {
 	mgr := conn.NewSessionManager()
-	// 每 30 秒检查一次，超过 5 分钟不活跃的会话自动清理
-	mgr.StartCleanupTimer(30*time.Second, 5*time.Minute)
+	// 每 30 秒检查一次，超过 30 分钟不活跃的会话自动清理
+	mgr.StartCleanupTimer(30*time.Second, 30*time.Minute)
 
 	return &ServiceImpl{
 		hostDAO:    hostDAO,

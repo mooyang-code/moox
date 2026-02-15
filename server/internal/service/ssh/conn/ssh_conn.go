@@ -131,6 +131,20 @@ func (s *SSHConn) Connect(clientIP string) error {
 	return nil
 }
 
+// activeReader 包装 io.Reader，每次读取数据时刷新会话活跃时间
+type activeReader struct {
+	reader io.Reader
+	conn   *SSHConn
+}
+
+func (r *activeReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		r.conn.RefreshActiveTime()
+	}
+	return n, err
+}
+
 // RunTerminal 启动终端
 func (s *SSHConn) RunTerminal(stdout, stderr io.Writer, stdin io.Reader, w, h int, ws *websocket.Conn) error {
 	defer func() {
@@ -143,7 +157,7 @@ func (s *SSHConn) RunTerminal(stdout, stderr io.Writer, stdin io.Reader, w, h in
 
 	s.sshSession.Stdout = stdout
 	s.sshSession.Stderr = stderr
-	s.sshSession.Stdin = stdin
+	s.sshSession.Stdin = &activeReader{reader: stdin, conn: s}
 
 	modes := ssh.TerminalModes{}
 	ptyType := s.Host.PtyType

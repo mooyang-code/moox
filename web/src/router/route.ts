@@ -112,12 +112,6 @@ export const staticRoutes = [
         meta: { title: "新建项目", keepAlive: false }
       },
       {
-        path: "/container-management/container-list",
-        name: "container-list",
-        component: () => import("@/views/container/container-list/container-list.vue"),
-        meta: { title: "容器列表" }
-      },
-      {
         path: "/container-management/resource-monitor",
         name: "resource-monitor",
         component: () => import("@/views/container/resource-monitor/resource-monitor.vue"),

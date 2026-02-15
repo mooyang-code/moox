@@ -1,82 +1,99 @@
 <template>
-  <div class="ssh-hosts-page">
-    <!-- 工具栏 -->
-    <div class="toolbar">
-      <a-input
-        v-model="keyword"
-        placeholder="搜索主机名称或地址"
-        allow-clear
-        style="width: 280px"
-        @press-enter="onSearch"
-        @clear="onSearch"
-      >
-        <template #prefix>
-          <icon-search />
-        </template>
-      </a-input>
-      <a-button type="primary" @click="onAdd">
-        <template #icon><icon-plus /></template>
-        <span>新增主机</span>
-      </a-button>
-    </div>
+  <div class="moox-page">
+    <div class="moox-inner">
+      <!-- 筛选区域 -->
+      <a-space wrap>
+        <a-input
+          v-model="keyword"
+          placeholder="搜索主机名称或地址"
+          allow-clear
+          style="width: 280px"
+          @press-enter="onSearch"
+          @clear="onSearch"
+        />
+        <a-button type="primary" @click="onSearch">
+          <template #icon><icon-search /></template>
+          <span>查询</span>
+        </a-button>
+        <a-button @click="reset">
+          <template #icon><icon-refresh /></template>
+          <span>重置</span>
+        </a-button>
+      </a-space>
 
-    <!-- 主机列表 -->
-    <a-table
-      row-key="id"
-      :loading="loading"
-      :data="hostList"
-      :bordered="false"
-      :pagination="false"
-      :scroll="{ x: 900 }"
-    >
-      <template #columns>
-        <a-table-column title="名称" data-index="name" :width="160">
-          <template #cell="{ record }">
-            <span class="host-name">{{ record.name }}</span>
-          </template>
-        </a-table-column>
-        <a-table-column title="地址" data-index="address" :width="180" />
-        <a-table-column title="端口" data-index="port" :width="80" align="center" />
-        <a-table-column title="用户" data-index="user" :width="120" />
-        <a-table-column title="认证方式" :width="100" align="center">
-          <template #cell="{ record }">
-            <a-tag v-if="record.auth_type === 'pwd'" size="small" color="arcoblue">密码</a-tag>
-            <a-tag v-else size="small" color="green">证书</a-tag>
-          </template>
-        </a-table-column>
-        <a-table-column title="操作" :width="200" align="center" fixed="right">
-          <template #cell="{ record }">
-            <a-space>
-              <a-link type="primary" @click="onConnect(record)">连接</a-link>
-              <a-link @click="onEdit(record)">编辑</a-link>
-              <a-popconfirm
-                content="确定要删除该主机吗？删除后将无法恢复。"
-                ok-text="确定"
-                cancel-text="取消"
-                @ok="() => onDelete(record)"
-                position="tr"
-              >
-                <a-link status="danger">删除</a-link>
-              </a-popconfirm>
-            </a-space>
-          </template>
-        </a-table-column>
-      </template>
-    </a-table>
+      <!-- 操作按钮区域 -->
+      <a-row>
+        <a-space wrap>
+          <a-button type="primary" status="success" @click="onAdd">
+            <template #icon><icon-plus /></template>
+            <span>新增主机</span>
+          </a-button>
+          <a-button type="primary" status="warning" @click="batchDeploy">
+            <template #icon><icon-upload /></template>
+            <span>批量部署</span>
+          </a-button>
+          <a-button type="primary" status="danger" @click="batchDelete" :disabled="selectedKeys.length === 0">
+            <template #icon><icon-delete /></template>
+            <span>批量删除</span>
+          </a-button>
+          <a-button type="outline" @click="onCloudAccountManage">
+            <template #icon><icon-settings /></template>
+            <span>云账户管理</span>
+          </a-button>
+          <a-button type="outline" @click="onFunctionPackageManage">
+            <template #icon><icon-code-block /></template>
+            <span>代码包版本管理</span>
+          </a-button>
+        </a-space>
+      </a-row>
 
-    <!-- 分页 -->
-    <div class="pagination-wrapper">
-      <a-pagination
-        v-model:current="pagination.current"
-        v-model:page-size="pagination.pageSize"
-        :total="total"
-        show-total
-        show-jumper
-        show-page-size
-        :page-size-options="[10, 20, 50]"
-        @change="onPageChange"
+      <!-- 主机列表 -->
+      <a-table
+        row-key="id"
+        :loading="loading"
+        :data="hostList"
+        :bordered="{ cell: true }"
+        :pagination="paginationConfig"
+        :scroll="{ x: '100%', y: '100%', minWidth: 1000 }"
+        v-model:selectedKeys="selectedKeys"
+        :row-selection="rowSelection"
+        @page-change="onPageChange"
         @page-size-change="onPageSizeChange"
-      />
+      >
+        <template #columns>
+          <a-table-column title="名称" data-index="name" :width="160">
+            <template #cell="{ record }">
+              <span class="host-name">{{ record.name }}</span>
+            </template>
+          </a-table-column>
+          <a-table-column title="地址" data-index="address" :width="180" />
+          <a-table-column title="端口" data-index="port" :width="80" align="center" />
+          <a-table-column title="用户" data-index="user" :width="120" />
+          <a-table-column title="认证方式" :width="100" align="center">
+            <template #cell="{ record }">
+              <a-tag v-if="record.auth_type === 'pwd'" size="small" color="arcoblue">密码</a-tag>
+              <a-tag v-else size="small" color="green">证书</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="操作" :width="200" align="center" fixed="right">
+            <template #cell="{ record }">
+              <a-space>
+                <a-link type="primary" @click="onConnect(record)">连接</a-link>
+                <a-link @click="onEdit(record)">编辑</a-link>
+                <a-popconfirm
+                  content="确定要删除该主机吗？删除后将无法恢复。"
+                  ok-text="确定"
+                  cancel-text="取消"
+                  @ok="() => onDelete(record)"
+                  position="tr"
+                >
+                  <a-link status="danger">删除</a-link>
+                </a-popconfirm>
+              </a-space>
+            </template>
+          </a-table-column>
+        </template>
+      </a-table>
     </div>
 
     <!-- 新增 / 编辑主机弹窗 -->
@@ -232,15 +249,29 @@
         </a-collapse>
       </a-form>
     </a-modal>
+
+    <!-- 云账户管理弹窗 -->
+    <CloudAccountManage
+      v-model="cloudAccountManageVisible"
+    />
+
+    <!-- 代码包版本管理弹窗 -->
+    <FunctionPackageManage
+      v-model="functionPackageManageVisible"
+      package-type="data_collector"
+      biz-type="container"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
-import { Message } from '@arco-design/web-vue';
+import { Message, Modal } from '@arco-design/web-vue';
 import { listSSHHosts, createSSHHost, updateSSHHost, deleteSSHHost, type SSHHost } from '@/api/modules/ssh';
 import PickColors from 'vue-pick-colors';
+import CloudAccountManage from '@/views/collector/cloud-account/cloud-account-manage.vue';
+import FunctionPackageManage from '@/views/collector/cloud-function/function-package-manage.vue';
 
 const router = useRouter();
 
@@ -268,11 +299,38 @@ const cursorPresetColors = [
 const loading = ref(false);
 const keyword = ref('');
 const hostList = ref<SSHHost[]>([]);
-const total = ref(0);
-const pagination = reactive({
+const selectedKeys = ref<number[]>([]);
+
+// 分页配置
+const pagination = ref({
   current: 1,
   pageSize: 20,
+  total: 0,
+  showTotal: true,
+  showJumper: true,
+  showPageSize: true,
+  pageSizeOptions: [10, 20, 30, 50, 100]
 });
+
+const paginationConfig = computed(() => ({
+  current: pagination.value.current,
+  pageSize: pagination.value.pageSize,
+  total: pagination.value.total,
+  showTotal: pagination.value.showTotal,
+  showJumper: pagination.value.showJumper,
+  showPageSize: pagination.value.showPageSize,
+  pageSizeOptions: pagination.value.pageSizeOptions
+}));
+
+// ---------- 行选择配置 ----------
+const rowSelection = reactive({
+  type: 'checkbox' as const,
+  showCheckedAll: true,
+});
+
+// ---------- 云账户 / 代码包管理弹窗 ----------
+const cloudAccountManageVisible = ref(false);
+const functionPackageManageVisible = ref(false);
 
 // ---------- 弹窗状态 ----------
 const modalVisible = ref(false);
@@ -332,13 +390,13 @@ const fetchHosts = async () => {
   try {
     const response = await listSSHHosts({
       keyword: keyword.value || undefined,
-      offset: (pagination.current - 1) * pagination.pageSize,
-      limit: pagination.pageSize,
+      offset: (pagination.value.current - 1) * pagination.value.pageSize,
+      limit: pagination.value.pageSize,
     });
     const res = response.data;
     if (res.code === 200) {
       hostList.value = res.data;
-      total.value = res.total || 0;
+      pagination.value.total = res.total || 0;
     }
   } catch (error) {
     console.error('加载主机列表失败:', error);
@@ -350,19 +408,24 @@ const fetchHosts = async () => {
 
 // ---------- 搜索 ----------
 const onSearch = () => {
-  pagination.current = 1;
+  pagination.value.current = 1;
   fetchHosts();
+};
+
+const reset = () => {
+  keyword.value = '';
+  onSearch();
 };
 
 // ---------- 分页 ----------
 const onPageChange = (page: number) => {
-  pagination.current = page;
+  pagination.value.current = page;
   fetchHosts();
 };
 
 const onPageSizeChange = (pageSize: number) => {
-  pagination.pageSize = pageSize;
-  pagination.current = 1;
+  pagination.value.pageSize = pageSize;
+  pagination.value.current = 1;
   fetchHosts();
 };
 
@@ -448,6 +511,59 @@ const handleCancel = () => {
   formRef.value?.resetFields();
 };
 
+// ---------- 批量部署（占位） ----------
+const batchDeploy = () => {
+  Message.info('批量部署功能开发中');
+};
+
+// ---------- 批量删除 ----------
+const batchDelete = () => {
+  if (selectedKeys.value.length === 0) {
+    Message.warning('请先选择要删除的主机');
+    return;
+  }
+  Modal.warning({
+    title: '批量删除确认',
+    content: `确定要删除选中的 ${selectedKeys.value.length} 台主机吗？删除后将无法恢复。`,
+    okText: '确定删除',
+    cancelText: '取消',
+    hideCancel: false,
+    onOk: async () => {
+      let successCount = 0;
+      let failCount = 0;
+      for (const id of selectedKeys.value) {
+        try {
+          const response = await deleteSSHHost(id);
+          if (response.data?.code === 200) {
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } catch {
+          failCount++;
+        }
+      }
+      if (failCount === 0) {
+        Message.success(`成功删除 ${successCount} 台主机`);
+      } else {
+        Message.warning(`删除完成：成功 ${successCount}，失败 ${failCount}`);
+      }
+      selectedKeys.value = [];
+      fetchHosts();
+    },
+  });
+};
+
+// ---------- 云账户管理 ----------
+const onCloudAccountManage = () => {
+  cloudAccountManageVisible.value = true;
+};
+
+// ---------- 代码包版本管理 ----------
+const onFunctionPackageManage = () => {
+  functionPackageManageVisible.value = true;
+};
+
 // ---------- 初始化 ----------
 onMounted(() => {
   fetchHosts();
@@ -455,29 +571,30 @@ onMounted(() => {
 </script>
 
 <style lang="scss" scoped>
-.ssh-hosts-page {
+.moox-page {
   padding: 16px;
-  background: #f5f5f5;
-  min-height: calc(100vh - 60px);
+  height: 100%;
 
-  .toolbar {
+  .moox-inner {
+    background: #fff;
+    padding: 16px;
+    border-radius: 4px;
+    height: 100%;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
+    flex-direction: column;
+
+    :deep(.arco-row) {
+      margin-top: 2px;
+    }
+
+    :deep(.arco-table) {
+      margin-top: 2px;
+    }
   }
 
   .host-name {
     font-weight: 500;
     color: var(--color-text-1);
-  }
-
-  .pagination-wrapper {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 16px;
-    padding-top: 16px;
-    border-top: 1px solid var(--color-border-1);
   }
 
   .form-collapse {

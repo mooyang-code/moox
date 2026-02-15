@@ -181,8 +181,8 @@ const onMenuItem = (key: string) => {
 
   // 处理容器管理菜单项（直接使用路由name）
   const containerKeys = [
-    'container-list', 'resource-monitor', 'service-status',
-    'ssh-hosts', 'ssh-terminal', 'ssh-file-manager', 'ssh-sessions'
+    'resource-monitor', 'service-status',
+    'ssh-hosts', 'ssh-terminal', 'ssh-sessions'
   ];
   if (containerKeys.includes(key)) {
     console.log('处理容器管理菜单项:', key);

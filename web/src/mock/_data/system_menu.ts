@@ -222,7 +222,7 @@ export const systemMenu = [
     parentId: "0",
     path: "/container-management",
     name: "container-management",
-    redirect: "/container-management/container-list",
+    redirect: "/container-management/ssh-hosts",
     meta: {
       title: "container-management",
       hide: false,
@@ -235,27 +235,6 @@ export const systemMenu = [
       svgIcon: "functions",
       sort: 4,
       type: 1
-    },
-    children: null
-  },
-  {
-    id: "03501",
-    parentId: "035",
-    path: "/container-management/container-list",
-    name: "container-list",
-    component: "container/container-list/container-list",
-    meta: {
-      title: "container-list",
-      hide: false,
-      disable: false,
-      keepAlive: true,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin", "common"],
-      icon: "icon-menu",
-      sort: 1,
-      type: 2
     },
     children: null
   },

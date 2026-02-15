@@ -43,21 +43,9 @@
               <template #icon><icon-plus-circle /></template>
               <span>批量新增</span>
             </a-button>
-            <a-button type="primary" status="warning" @click="batchDeploy" :disabled="taskPolling">
-              <template #icon><icon-upload /></template>
-              <span>批量部署</span>
-            </a-button>
             <a-button type="primary" status="danger" @click="batchDelete" :disabled="taskPolling">
               <template #icon><icon-delete /></template>
               <span>批量删除</span>
-            </a-button>
-            <a-button type="outline" @click="onCloudAccountManage">
-              <template #icon><icon-settings /></template>
-              <span>云账户管理</span>
-            </a-button>
-            <a-button type="outline" @click="onFunctionPackageManage">
-              <template #icon><icon-code-block /></template>
-              <span>代码包版本管理</span>
             </a-button>
           </a-space>
         </a-row>
@@ -198,21 +186,6 @@
       </template>
     </a-table>
 
-    <!-- 云账户管理弹窗 -->
-    <CloudAccountManage
-      v-model="cloudAccountManageVisible"
-      @refresh="loadCloudAccounts"
-    />
-
-    <!-- 代码包版本管理弹窗 -->
-    <FunctionPackageManage
-      v-model="functionPackageManageVisible"
-      :package-type="currentPackageType"
-      :biz-type="currentBizType"
-      @refresh="loadData"
-    />
-
-    <!-- 其他弹窗省略，与云函数页面完全一致 -->
   </div>
 </template>
 
@@ -221,8 +194,6 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { api } from '@/api/config';
 import { asyncTaskManager } from '@/utils/async-task';
-import CloudAccountManage from '@/views/collector/cloud-account/cloud-account-manage.vue';
-import FunctionPackageManage from '@/views/collector/cloud-function/function-package-manage.vue';
 
 // 状态管理
 const loading = ref(false);
@@ -241,8 +212,6 @@ const functionList = ref<any[]>([]);
 const selectedKeys = ref<string[]>([]);
 const cloudAccountOptions = ref<any[]>([]);
 const regionOptions = ref<any[]>([]);
-const cloudAccountManageVisible = ref(false);
-const functionPackageManageVisible = ref(false);
 const batchJobStatuses = ref<any[]>([]);
 
 const pagination = reactive({
@@ -284,11 +253,6 @@ const paginationProps = computed(() => ({
   showPageSize: pagination.showPageSize,
   pageSizeOptions: pagination.pageSizeOptions
 }));
-
-// 根据路由路径判断当前的 package_type
-const currentPackageType = computed(() => {
-  return 'data_collector'; // 容器列表固定为数据采集类型
-});
 
 // 根据路由路径判断默认的节点类型
 const defaultNodeType = computed(() => {
@@ -480,20 +444,8 @@ const onBatchAdd = () => {
   Message.info('批量新增功能开发中');
 };
 
-const batchDeploy = () => {
-  Message.info('批量部署功能开发中');
-};
-
 const batchDelete = () => {
   Message.info('批量删除功能开发中');
-};
-
-const onCloudAccountManage = () => {
-  cloudAccountManageVisible.value = true;
-};
-
-const onFunctionPackageManage = () => {
-  functionPackageManageVisible.value = true;
 };
 
 const onViewNodeDetail = (record: any) => {

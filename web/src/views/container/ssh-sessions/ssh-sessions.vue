@@ -1,10 +1,5 @@
 <template>
   <div class="ssh-sessions-page">
-    <div class="page-header">
-      <h2>会话管理</h2>
-      <p>查看和管理当前在线的SSH会话</p>
-    </div>
-
     <div class="page-content">
       <a-card :bordered="false">
         <template #title>
@@ -202,21 +197,6 @@ onBeforeUnmount(() => {
 <style lang="scss" scoped>
 .ssh-sessions-page {
   padding: 20px;
-
-  .page-header {
-    margin-bottom: 20px;
-
-    h2 {
-      margin: 0 0 8px 0;
-      font-size: 24px;
-      font-weight: 600;
-    }
-
-    p {
-      margin: 0;
-      color: var(--color-text-2);
-    }
-  }
 
   .page-content {
     .session-id-cell {
