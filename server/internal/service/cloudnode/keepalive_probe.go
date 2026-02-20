@@ -1,8 +1,13 @@
 package cloudnode
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -62,8 +67,13 @@ func (s *ServiceImpl) RunKeepaliveProbe(ctx context.Context) error {
 			node := node
 			handlers = append(handlers, func() error {
 				probeTime := time.Now()
-				eventData := buildKeepaliveEventData(serverIP, serverPort, node.NodeID)
-				ok := s.invokeKeepalive(ctx, node, eventData)
+				var ok bool
+				if node.NodeType == model.NodeTypeSCFWeb {
+					ok = s.probeHTTP(ctx, node, serverIP, serverPort)
+				} else {
+					eventData := buildKeepaliveEventData(serverIP, serverPort, node.NodeID)
+					ok = s.invokeKeepalive(ctx, node, eventData)
+				}
 				s.probeStore.UpdateProbe(node.NodeID, probeTime, ok)
 				if ok {
 					atomic.AddInt64(&successCount, 1)
@@ -141,4 +151,104 @@ func getServerAddress() (string, int) {
 		}
 	}
 	return common.GetPublicIP(), port
+}
+
+// probeHTTP 对 scf-web 节点发起 HTTP POST /probe 请求进行探测
+func (s *ServiceImpl) probeHTTP(ctx context.Context, node *model.CloudNode, serverIP string, serverPort int) bool {
+	probeURL, err := extractProbeURL(node)
+	if err != nil {
+		log.WarnContextf(ctx, "[Keepalive] HTTP probe extract URL failed: node_id=%s, error=%v", node.NodeID, err)
+		return false
+	}
+
+	// 构造与 factor-calculator /probe 接口兼容的请求体
+	eventData := buildKeepaliveEventData(serverIP, serverPort, node.NodeID)
+	body, err := json.Marshal(eventData)
+	if err != nil {
+		log.WarnContextf(ctx, "[Keepalive] HTTP probe marshal body failed: node_id=%s, error=%v", node.NodeID, err)
+		return false
+	}
+
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, probeURL, bytes.NewReader(body))
+	if err != nil {
+		log.WarnContextf(ctx, "[Keepalive] HTTP probe create request failed: node_id=%s, error=%v", node.NodeID, err)
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.WarnContextf(ctx, "[Keepalive] HTTP probe request failed: node_id=%s, url=%s, error=%v", node.NodeID, probeURL, err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.WarnContextf(ctx, "[Keepalive] HTTP probe unexpected status: node_id=%s, status=%d", node.NodeID, resp.StatusCode)
+		return false
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.WarnContextf(ctx, "[Keepalive] HTTP probe read response failed: node_id=%s, error=%v", node.NodeID, err)
+		return false
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		log.WarnContextf(ctx, "[Keepalive] HTTP probe parse response failed: node_id=%s, error=%v", node.NodeID, err)
+		return false
+	}
+
+	if success, ok := result["success"].(bool); ok && success {
+		log.InfoContextf(ctx, "[Keepalive] HTTP probe success: node_id=%s", node.NodeID)
+		return true
+	}
+
+	log.WarnContextf(ctx, "[Keepalive] HTTP probe returned success=false: node_id=%s, response=%s", node.NodeID, string(respBody))
+	return false
+}
+
+// extractProbeURL 从节点 metadata 中提取 scf-web 的探测 URL
+// 解析链路: metadata["function_url_trigger"] -> JSON string -> NetConfig.ExtranetHTTPUrl -> + "/probe"
+// 若节点已设置 ProbeURL 字段（手动覆盖），则优先使用 ProbeURL + "/probe"
+func extractProbeURL(node *model.CloudNode) (string, error) {
+	// 优先使用手动配置的 ProbeURL
+	if node.ProbeURL != "" {
+		return strings.TrimRight(node.ProbeURL, "/") + "/probe", nil
+	}
+
+	// 从 metadata 中解析 function_url_trigger
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(node.Metadata), &metadata); err != nil {
+		return "", fmt.Errorf("parse metadata failed: %w", err)
+	}
+
+	triggerDescRaw, ok := metadata["function_url_trigger"]
+	if !ok {
+		return "", fmt.Errorf("function_url_trigger not found in metadata")
+	}
+
+	triggerDescStr, ok := triggerDescRaw.(string)
+	if !ok {
+		return "", fmt.Errorf("function_url_trigger is not a string")
+	}
+
+	// triggerDescStr 本身是一段 JSON，解析其中的 NetConfig.ExtranetHTTPUrl
+	var triggerDesc struct {
+		NetConfig struct {
+			ExtranetHTTPUrl string `json:"ExtranetHTTPUrl"`
+		} `json:"NetConfig"`
+	}
+	if err := json.Unmarshal([]byte(triggerDescStr), &triggerDesc); err != nil {
+		return "", fmt.Errorf("parse function_url_trigger JSON failed: %w", err)
+	}
+
+	httpURL := triggerDesc.NetConfig.ExtranetHTTPUrl
+	if httpURL == "" {
+		return "", fmt.Errorf("ExtranetHTTPUrl is empty in function_url_trigger")
+	}
+
+	return strings.TrimRight(httpURL, "/") + "/probe", nil
 }

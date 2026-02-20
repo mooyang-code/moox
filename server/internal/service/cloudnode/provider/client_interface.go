@@ -93,6 +93,7 @@ type CreateFunctionRequest struct {
 	Runtime      string            // 运行时环境
 	Namespace    string            // 命名空间
 	Description  string            // 函数描述
+	FunctionType string            // 函数类型：Event（默认）或 HTTP
 	ZipFile      string            // 代码包（base64编码）
 	COSBucket    string            // COS桶名，优先使用COS部署
 	COSPath      string            // COS对象路径，优先使用COS部署

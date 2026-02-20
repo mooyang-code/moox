@@ -207,6 +207,7 @@ func cloudNodeDTOToModel(dto *CloudNodeDTO) *model.CloudNode {
 		PackageID:           dto.PackageID,
 		Namespace:           dto.Namespace,
 		NodeType:            dto.NodeType,
+		BizType:             dto.BizType,
 		Region:              dto.Region,
 		Tag:                 dto.Tag,
 		IPAddress:           dto.IPAddress,
@@ -258,6 +259,7 @@ func (s *ServiceImpl) ConvertToCloudNodeDTO(node *model.CloudNode) *CloudNodeDTO
 		PackageVersion:      node.PackageVersion,
 		Namespace:           node.Namespace,
 		NodeType:            node.NodeType,
+		BizType:             node.BizType,
 		Region:              node.Region,
 		Tag:                 node.Tag,
 		IPAddress:           node.IPAddress,
@@ -343,17 +345,21 @@ func (s *ServiceImpl) validateJSONField(field string, fieldName string) error {
 }
 
 // generateNodeID 生成节点ID
-func (s *ServiceImpl) generateNodeID(ctx context.Context, region string) (string, error) {
-	// 检查该region是否已有Master节点
+func (s *ServiceImpl) generateNodeID(ctx context.Context, region string, bizType string) (string, error) {
+	// 根据业务类型确定节点ID中的标记名
+	bizLabel := model.BizTypeLabel(bizType)
+
+	// 检查该region是否已有同业务类型的Master节点
 	nodes, err := s.nodeDAO.GetCloudNodesByRegion(ctx, region)
 	if err != nil {
 		return "", fmt.Errorf("failed to check existing nodes: %w", err)
 	}
 
 	// 检查是否已有Master节点
+	masterPrefix := fmt.Sprintf("%s-Master-", bizLabel)
 	hasMaster := false
 	for _, node := range nodes {
-		if strings.HasPrefix(node.NodeID, "DataCollector-Master-") {
+		if strings.Contains(node.NodeID, masterPrefix) {
 			hasMaster = true
 			break
 		}
@@ -368,9 +374,9 @@ func (s *ServiceImpl) generateNodeID(ctx context.Context, region string) (string
 	// 根据是否已有Master节点决定节点类型
 	var nodeID string
 	if !hasMaster {
-		nodeID = fmt.Sprintf("scf%s-DataCollector-Master-%d", randomStr, timestamp)
+		nodeID = fmt.Sprintf("scf%s-%s-Master-%d", randomStr, bizLabel, timestamp)
 	} else {
-		nodeID = fmt.Sprintf("scf%s-DataCollector-General-%d", randomStr, timestamp)
+		nodeID = fmt.Sprintf("scf%s-%s-General-%d", randomStr, bizLabel, timestamp)
 	}
 	return nodeID, nil
 }

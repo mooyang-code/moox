@@ -265,6 +265,18 @@
           </a-select>
         </a-form-item>
 
+        <a-form-item field="runtime" label="运行时环境" required>
+          <a-select v-model="batchAddForm.runtime" placeholder="请选择运行时环境" style="width: 100%">
+            <a-option value="Go1">Go1</a-option>
+            <a-option value="Python3.6">Python3.6</a-option>
+            <a-option value="Python3.7">Python3.7</a-option>
+            <a-option value="Python3.9">Python3.9</a-option>
+            <a-option value="Nodejs12.16">Node.js 12.16</a-option>
+            <a-option value="Nodejs16.13">Node.js 16.13</a-option>
+            <a-option value="CustomRuntime">CustomRuntime</a-option>
+          </a-select>
+        </a-form-item>
+
         <a-form-item field="region" label="地区" required>
           <a-select v-model="batchAddForm.region" placeholder="请选择地区" style="width: 100%">
             <a-option :value="REGION_UNLIMITED">不限</a-option>
@@ -847,6 +859,7 @@ const batchAddVisible = ref(false);
 const batchAddForm = reactive({
   cloudAccountId: '',
   nodeType: 'scf-event', // 节点类型，默认为事件型云函数
+  runtime: 'Go1', // 运行时环境，默认Go1
   region: 'ap-guangzhou',
   tag: '',
   packageId: '', // 代码包版本ID
@@ -953,6 +966,17 @@ const defaultNodeType = computed(() => {
     return 'scf-web'; // 因子计算默认为 Web 型
   }
   return 'scf-event'; // 兜底默认值
+});
+
+// 根据路由路径判断默认的运行时
+const defaultRuntime = computed(() => {
+  const path = route.path;
+  if (path.includes('/collector/cloud-function')) {
+    return 'Go1'; // 数据采集默认 Go1
+  } else if (path.includes('/factor/cloud-function')) {
+    return 'Python3.9'; // 因子计算默认 Python3.9
+  }
+  return 'Go1'; // 兜底默认值
 });
 
 // 根据路由路径判断当前的业务类型
@@ -1130,6 +1154,7 @@ const onBatchAdd = async () => {
   // 重置表单
   batchAddForm.cloudAccountId = cloudAccountOptions.value[0]?.account_id || '';
   batchAddForm.nodeType = defaultNodeType.value; // 根据路由设置默认节点类型
+  batchAddForm.runtime = defaultRuntime.value; // 根据路由设置默认运行时
   batchAddForm.region = 'ap-hongkong';
   batchAddForm.tag = getRegionTag(batchAddForm.region) || '海外';
   batchAddForm.packageId = '';
@@ -1160,6 +1185,10 @@ const handleBatchAddOk = async () => {
   }
   if (!batchAddForm.nodeType) {
     Message.warning('请选择节点类型');
+    return;
+  }
+  if (!batchAddForm.runtime) {
+    Message.warning('请选择运行时环境');
     return;
   }
   if (!batchAddForm.region) {
@@ -1197,6 +1226,7 @@ const buildCreateNodeTask = (region: string, index: number) => ({
     cloud_account_id: batchAddForm.cloudAccountId,
     namespace: batchAddForm.namespace || undefined,
     node_type: batchAddForm.nodeType, // 使用表单中选择的节点类型
+    runtime: batchAddForm.runtime, // 运行时环境
     biz_type: currentBizType.value, // 根据路由设置业务类型
     region,
     tag: getRegionTag(region) || batchAddForm.tag,

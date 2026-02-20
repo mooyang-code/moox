@@ -99,6 +99,8 @@ export const uploadFunctionPackage = async (data: UploadPackageRequest) => {
       task_type: 'UPLOAD_FILE_TO_COS',
       request_params: data
     }]
+  }, {
+    timeout: 15000 // 上传代码包超时设置为15秒
   });
   return response;
 };

@@ -469,7 +469,7 @@ const defaultUploadForm = {
   package_name: 'data_collector', // 根据默认包类型设置
   version: '',
   description: '',
-  runtime: 'Go1',
+  runtime: 'Python3.9',
   package_type: 'data_collector',
   biz_type: '',
   cloud_account_id: '',

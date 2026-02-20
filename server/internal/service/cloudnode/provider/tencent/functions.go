@@ -29,6 +29,11 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 	request.Namespace = common.StringPtr(req.Namespace)
 	request.Description = common.StringPtr(req.Description)
 
+	// 设置函数类型（Event 或 HTTP）
+	if req.FunctionType != "" {
+		request.Type = common.StringPtr(req.FunctionType)
+	}
+
 	// 设置代码
 	request.Code = &scf.Code{}
 

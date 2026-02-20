@@ -32,12 +32,16 @@ func NewCreateNodeExecutor(
 type NodeCreateItem struct {
 	CloudAccountID      string `json:"cloud_account_id"`
 	NodeType            string `json:"node_type"`
+	Runtime             string `json:"runtime"`
 	BizType             string `json:"biz_type"`
 	Region              string `json:"region"`
 	IPAddress           string `json:"ip_address"`
 	PackageID           string `json:"package_id"`
 	SupportedCollectors string `json:"supported_collectors"`
 	Metadata            string `json:"metadata"`
+	TimeoutThreshold    int    `json:"timeout_threshold"`
+	HeartbeatInterval   int    `json:"heartbeat_interval"`
+	ProbeEnabled        *bool  `json:"probe_enabled"`
 }
 
 // Name 返回执行器外显名称
@@ -69,7 +73,16 @@ func (e *CreateNodeExecutor) Execute(ctx context.Context, taskID string, request
 		return "", fmt.Errorf("获取代码包配置失败: %w", err)
 	}
 
+	// 如果请求中指定了Runtime，则覆盖代码包中的Runtime
+	if nodeItem.Runtime != "" {
+		codeConfig.Runtime = nodeItem.Runtime
+	}
+
 	// 准备节点数据
+	probeEnabled := true // 默认启用
+	if nodeItem.ProbeEnabled != nil {
+		probeEnabled = *nodeItem.ProbeEnabled
+	}
 	node := &model.CloudNode{
 		CloudAccountID:      nodeItem.CloudAccountID,
 		PackageID:           nodeItem.PackageID,
@@ -79,6 +92,9 @@ func (e *CreateNodeExecutor) Execute(ctx context.Context, taskID string, request
 		IPAddress:           nodeItem.IPAddress,
 		SupportedCollectors: nodeItem.SupportedCollectors,
 		Metadata:            nodeItem.Metadata,
+		TimeoutThreshold:    nodeItem.TimeoutThreshold,
+		HeartbeatInterval:   nodeItem.HeartbeatInterval,
+		ProbeEnabled:        probeEnabled,
 	}
 
 	// 转换为DTO
@@ -186,10 +202,14 @@ func modelToCloudNodeDTO(node *model.CloudNode) *CloudNodeDTO {
 		PackageID:           node.PackageID,
 		Namespace:           node.Namespace,
 		NodeType:            node.NodeType,
+		BizType:             node.BizType,
 		Region:              node.Region,
 		IPAddress:           node.IPAddress,
 		SupportedCollectors: node.SupportedCollectors,
 		Metadata:            node.Metadata,
+		TimeoutThreshold:    node.TimeoutThreshold,
+		HeartbeatInterval:   node.HeartbeatInterval,
+		ProbeEnabled:        node.ProbeEnabled,
 		Invalid:             node.Invalid,
 		CreateTime:          node.CreateTime,
 		ModifyTime:          node.ModifyTime,

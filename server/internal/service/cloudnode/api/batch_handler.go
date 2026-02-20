@@ -32,6 +32,7 @@ type BatchCreateNodeRequest struct {
 type NodeCreateItem struct {
 	CloudAccountID string                 `json:"cloud_account_id" binding:"required"`
 	NodeType       string                 `json:"node_type" binding:"required"`
+	Runtime        string                 `json:"runtime"`
 	Region         string                 `json:"region" binding:"required"`
 	Namespace      string                 `json:"namespace"`
 	PackageID      string                 `json:"package_id"`

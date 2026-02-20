@@ -2,6 +2,7 @@ package cloudnode
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/mooyang-code/moox/server/internal/common"
@@ -158,7 +159,7 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 	}
 
 	// 生成NodeID（作为云函数名）
-	nodeID, err := s.generateNodeID(ctx, nodeModel.Region)
+	nodeID, err := s.generateNodeID(ctx, nodeModel.Region, nodeModel.BizType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate node id: %w", err)
 	}
@@ -173,7 +174,7 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 
 	// 设置默认值
 	if nodeModel.NodeType == "" {
-		nodeModel.NodeType = model.NodeTypeSCF
+		nodeModel.NodeType = model.NodeTypeSCFEvent
 	}
 	nodeModel.Invalid = model.InvalidNo
 	if nodeModel.SupportedCollectors == "" {
@@ -202,6 +203,7 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 		Runtime:      runtime,
 		Namespace:    nodeModel.Namespace,
 		Description:  "MooX Created",
+		FunctionType: model.SCFFunctionType(nodeModel.NodeType),
 		MemorySize:   128, // 默认128MB
 		Timeout:      30,  // 默认30秒
 		Environment:  map[string]string{},
@@ -234,8 +236,78 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 
 	log.InfoContextf(ctx, "[CloudNode] Successfully created cloud function: %s (ID: %s)", funcInfo.FunctionName, funcInfo.FunctionID)
 
+	// 对 scf-web 类型的函数，自动创建函数URL触发器
+	if nodeModel.NodeType == model.NodeTypeSCFWeb {
+		if err := s.createFunctionURL(ctx, client, nodeModel); err != nil {
+			// 函数URL创建失败不阻塞整体流程，仅记录警告日志
+			log.WarnContextf(ctx, "[CloudNode] Failed to create function URL for %s: %v", nodeModel.NodeID, err)
+		}
+	}
+
 	// 转换回DTO返回
 	return s.ConvertToCloudNodeDTO(nodeModel), nil
+}
+
+// createFunctionURL 为scf-web类型函数创建函数URL触发器
+func (s *ServiceImpl) createFunctionURL(ctx context.Context, client provider.Client, node *model.CloudNode) error {
+	// 构建TriggerDesc JSON
+	triggerDesc := `{"AuthType":"NONE","NetConfig":{"EnableIntranet":true,"EnableExtranet":true}}`
+
+	req := &provider.CreateTriggerRequest{
+		Region:       node.Region,
+		FunctionName: node.NodeID,
+		TriggerName:  "func_url",  // 函数URL触发器固定名称
+		TriggerType:  "http",      // 函数URL类型
+		TriggerDesc:  triggerDesc,
+		Namespace:    node.Namespace,
+		Enable:       true,
+		Description:  "MooX Auto Created Function URL",
+	}
+
+	err := common.RetryOperation(ctx, func() error {
+		return client.CreateTrigger(ctx, req)
+	}, fmt.Sprintf("CreateFunctionURL(%s)", node.NodeID))
+
+	if err != nil {
+		return fmt.Errorf("create function URL trigger failed: %w", err)
+	}
+
+	log.InfoContextf(ctx, "[CloudNode] Successfully created function URL for: %s", node.NodeID)
+
+	// 查询触发器信息，获取函数URL地址并保存到Metadata
+	s.saveFunctionURLToMetadata(ctx, client, node)
+
+	return nil
+}
+
+// saveFunctionURLToMetadata 查询函数URL触发器信息并保存到节点Metadata
+func (s *ServiceImpl) saveFunctionURLToMetadata(ctx context.Context, client provider.Client, node *model.CloudNode) {
+	triggers, err := client.ListTriggers(ctx, node.NodeID, node.Namespace, node.Region)
+	if err != nil {
+		log.WarnContextf(ctx, "[CloudNode] Failed to list triggers for %s: %v", node.NodeID, err)
+		return
+	}
+
+	// 查找http类型触发器，从TriggerDesc中解析函数URL
+	for _, trigger := range triggers {
+		if trigger.TriggerType == "http" {
+			// 将函数URL信息合并到节点Metadata
+			var metadata map[string]interface{}
+			if err := json.Unmarshal([]byte(node.Metadata), &metadata); err != nil {
+				metadata = make(map[string]interface{})
+			}
+			metadata["function_url_trigger"] = trigger.TriggerDesc
+
+			metadataBytes, err := json.Marshal(metadata)
+			if err != nil {
+				log.WarnContextf(ctx, "[CloudNode] Failed to marshal metadata: %v", err)
+				return
+			}
+			node.Metadata = string(metadataBytes)
+			log.InfoContextf(ctx, "[CloudNode] Saved function URL to metadata for: %s", node.NodeID)
+			return
+		}
+	}
 }
 
 // UpdateNode 更新云节点
@@ -254,24 +326,57 @@ func (s *ServiceImpl) UpdateNode(ctx context.Context, node *CloudNodeDTO) error 
 		return fmt.Errorf("node not found")
 	}
 
+	// 在已有节点基础上，仅覆盖前端传入的非零值字段
+	if node.CloudAccountID != "" {
+		existing.CloudAccountID = node.CloudAccountID
+	}
+	if node.Namespace != "" {
+		existing.Namespace = node.Namespace
+	}
+	if node.NodeType != "" {
+		existing.NodeType = node.NodeType
+	}
+	if node.BizType != "" {
+		existing.BizType = node.BizType
+	}
+	if node.Region != "" {
+		existing.Region = node.Region
+	}
+	if node.Tag != "" {
+		existing.Tag = node.Tag
+	}
+	if node.IPAddress != "" {
+		existing.IPAddress = node.IPAddress
+	}
+	if node.SupportedCollectors != "" {
+		existing.SupportedCollectors = node.SupportedCollectors
+	}
+	if node.Metadata != "" {
+		existing.Metadata = node.Metadata
+	}
+	if node.ProbeURL != "" {
+		existing.ProbeURL = node.ProbeURL
+	}
+
+	// 数值和布尔字段始终覆盖（前端总是显式传递这些字段）
+	existing.TimeoutThreshold = node.TimeoutThreshold
+	existing.HeartbeatInterval = node.HeartbeatInterval
+	existing.ProbeEnabled = node.ProbeEnabled
+
 	// 验证JSON字段
-	if err := s.validateJSONField(node.SupportedCollectors, "supported_collectors"); err != nil {
+	if err := s.validateJSONField(existing.SupportedCollectors, "supported_collectors"); err != nil {
 		return err
 	}
-
-	if err := s.validateJSONField(node.Metadata, "metadata"); err != nil {
+	if err := s.validateJSONField(existing.Metadata, "metadata"); err != nil {
 		return err
 	}
-
-	// 转换为Model
-	nodeModel := cloudNodeDTOToModel(node)
 
 	// 如果 region 发生变化，或 tag 为空，则自动更新 tag
-	if nodeModel.Region != existing.Region || nodeModel.Tag == "" {
-		nodeModel.Tag = s.getRegionTagByAccount(ctx, existing.CloudAccountID, nodeModel.Region)
+	if existing.Region != node.Region && node.Region != "" || existing.Tag == "" {
+		existing.Tag = s.getRegionTagByAccount(ctx, existing.CloudAccountID, existing.Region)
 	}
 
-	if err := s.nodeDAO.UpdateCloudNode(ctx, nodeModel); err != nil {
+	if err := s.nodeDAO.UpdateCloudNode(ctx, existing); err != nil {
 		return fmt.Errorf("failed to update node: %w", err)
 	}
 	log.InfoContextf(ctx, "[CloudNode] Successfully updated node %s", node.NodeID)

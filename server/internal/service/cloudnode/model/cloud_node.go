@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 )
 
@@ -13,16 +14,41 @@ const (
 
 // 节点类型常量
 const (
-	NodeTypeSCF    = "scf"    // 云函数节点
-	NodeTypeServer = "server" // 服务器节点
+	NodeTypeSCFEvent = "scf-event" // 云函数节点（事件型）
+	NodeTypeSCFWeb   = "scf-web"   // 云函数节点（Web型）
+	NodeTypeServer   = "server"    // 服务器节点
 )
 
-// 业务类型常量
-const (
-	BizTypeDataCollector     = "data_collector"     // 数据采集
-	BizTypeFactorCalculator  = "factor_calculator"  // 因子计算
-	BizTypeContainer         = "container"          // 容器管理
-)
+// SCFFunctionType 根据NodeType返回腾讯云SCF函数类型
+// scf-event -> "Event", scf-web -> "HTTP", 其他 -> ""
+func SCFFunctionType(nodeType string) string {
+	switch nodeType {
+	case NodeTypeSCFEvent:
+		return "Event"
+	case NodeTypeSCFWeb:
+		return "HTTP"
+	default:
+		return ""
+	}
+}
+
+// BizTypeLabel 根据业务类型返回用于节点ID的标记名
+// 将下划线分隔的snake_case转为PascalCase，如 "data_collector" -> "DataCollector"
+func BizTypeLabel(bizType string) string {
+	if bizType == "" {
+		return "DataCollector"
+	}
+	parts := strings.Split(bizType, "_")
+	var b strings.Builder
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		b.WriteString(strings.ToUpper(p[:1]))
+		b.WriteString(p[1:])
+	}
+	return b.String()
+}
 
 // Invalid常量
 const (
@@ -47,8 +73,8 @@ type CloudNode struct {
 	PackageVersion string `gorm:"-" json:"package_version,omitempty"`
 	// Namespace 命名空间
 	Namespace string `gorm:"column:c_namespace;size:200;not null;default:''" json:"namespace"`
-	// NodeType 节点类型（scf=云函数，server=服务器）
-	NodeType string `gorm:"column:c_node_type;size:50;not null;default:'scf'" json:"node_type"`
+	// NodeType 节点类型（scf-event=云函数事件型，scf-web=云函数Web型，server=服务器）
+	NodeType string `gorm:"column:c_node_type;type:text;not null;default:'scf-event'" json:"node_type"`
 	// BizType 业务类型（data_collector=数据采集, factor_calculator=因子计算）
 	BizType string `gorm:"column:c_biz_type;size:50;not null;default:'data_collector'" json:"biz_type"`
 	// Region 部署地区

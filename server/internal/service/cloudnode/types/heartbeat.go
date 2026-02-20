@@ -15,7 +15,8 @@ const (
 
 // NodeType 节点类型
 const (
-	NodeTypeSCF       = "scf"       // 云函数
+	NodeTypeSCFEvent  = "scf-event" // 云函数（事件型）
+	NodeTypeSCFWeb    = "scf-web"   // 云函数（Web型）
 	NodeTypeServer    = "server"    // 服务器
 	NodeTypeContainer = "container" // 容器
 	NodeTypeCustom    = "custom"    // 自定义

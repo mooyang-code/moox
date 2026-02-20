@@ -83,6 +83,7 @@ func (p *TencentWrapper) CreateFunction(ctx context.Context, req *provider.Creat
 		Runtime:      req.Runtime,
 		Namespace:    req.Namespace,
 		Description:  req.Description,
+		FunctionType: req.FunctionType,
 		ZipFile:      req.ZipFile,
 		COSBucket:    req.COSBucket,
 		COSPath:      req.COSPath,

@@ -146,6 +146,7 @@ type CloudNodeDTO struct {
 	PackageVersion      string            `json:"package_version,omitempty"`
 	Namespace           string            `json:"namespace"`
 	NodeType            string            `json:"node_type"`
+	BizType             string            `json:"biz_type"`
 	Region              string            `json:"region"`
 	Tag                 string            `json:"tag"` // 地区标签（国内/海外）
 	IPAddress           string            `json:"ip_address"`
