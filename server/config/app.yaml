@@ -12,10 +12,9 @@ database:
 storage:
   cos_bucket: moox-packages
   cos_region: ap-guangzhou
-  # local_path: ./data/packages
   cache_size: 100           # 缓存文件数量
   cache_expiry: 30          # 缓存过期时间（分钟）
-  xdata_url: "http://127.0.0.1:19104"
+  xdata_url: "http://43.136.59.72:19104"
 
 worker:
   async_task_worker_count: 3

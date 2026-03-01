@@ -164,6 +164,30 @@ export const staticRoutes = [
         name: "factor-task-instances",
         component: () => import("@/views/collector/task-instances/task-instances.vue"),
         meta: { title: "任务实例" }
+      },
+      {
+        path: "/strategy/strategy-list",
+        name: "strategy-list",
+        component: () => import("@/views/strategy/strategy-list/strategy-list.vue"),
+        meta: { title: "策略列表" }
+      },
+      {
+        path: "/trading/account-overview",
+        name: "account-overview",
+        component: () => import("@/views/trading/account-overview/account-overview.vue"),
+        meta: { title: "账户总览" }
+      },
+      {
+        path: "/trading/position-detail",
+        name: "position-detail",
+        component: () => import("@/views/trading/position-detail/position-detail.vue"),
+        meta: { title: "持仓详情" }
+      },
+      {
+        path: "/trading/trade-record",
+        name: "trade-record",
+        component: () => import("@/views/trading/trade-record/trade-record.vue"),
+        meta: { title: "交易明细" }
       }
     ]
   }

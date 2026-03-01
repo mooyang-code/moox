@@ -641,14 +641,15 @@ export const systemMenu = [
     },
     children: null
   },
+
   {
-    id: "10",
+    id: "21",
     parentId: "0",
-    path: "/system",
-    name: "system",
-    redirect: "/system/account",
+    path: "/strategy",
+    name: "strategy",
+    redirect: "/strategy/strategy-list",
     meta: {
-      title: "system",
+      title: "strategy",
       hide: false,
       disable: false,
       keepAlive: true,
@@ -656,20 +657,20 @@ export const systemMenu = [
       link: "",
       iframe: false,
       roles: ["admin"],
-      svgIcon: "set",
+      svgIcon: "firewall",
       sort: 6,
       type: 1
     },
     children: null
   },
   {
-    id: "1001",
-    parentId: "10",
-    path: "/system/account",
-    name: "account",
-    component: "system/account/account",
+    id: "2101",
+    parentId: "21",
+    path: "/strategy/strategy-list",
+    name: "strategy-list",
+    component: "strategy/strategy-list/strategy-list",
     meta: {
-      title: "account",
+      title: "strategy-list",
       hide: false,
       disable: false,
       keepAlive: true,
@@ -683,187 +684,39 @@ export const systemMenu = [
     },
     children: null
   },
+
   {
-    id: "1002",
-    parentId: "10",
-    path: "/system/role",
-    name: "role",
-    component: "system/role/role",
-    meta: {
-      title: "role",
-      hide: false,
-      disable: false,
-      keepAlive: true,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      icon: "icon-menu",
-      sort: 2,
-      type: 2
-    },
-    children: null
-  },
-  {
-    id: "1003",
-    parentId: "10",
-    path: "/system/menu",
-    name: "menu",
-    component: "system/menu/menu",
-    meta: {
-      title: "menu",
-      hide: false,
-      disable: false,
-      keepAlive: true,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      icon: "icon-menu",
-      sort: 3,
-      type: 2
-    },
-    children: null
-  },
-  {
-    id: "1004",
-    parentId: "10",
-    path: "/system/division",
-    name: "division",
-    component: "system/division/division",
-    meta: {
-      title: "division",
-      hide: false,
-      disable: false,
-      keepAlive: true,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      icon: "icon-menu",
-      sort: 4,
-      type: 2
-    },
-    children: null
-  },
-  {
-    id: "1005",
-    parentId: "10",
-    path: "/system/dictionary",
-    name: "dictionary",
-    component: "system/dictionary/dictionary",
-    meta: {
-      title: "dictionary",
-      hide: false,
-      disable: false,
-      keepAlive: true,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      icon: "icon-menu",
-      sort: 5,
-      type: 2
-    },
-    children: null
-  },
-  {
-    id: "1006",
-    parentId: "10",
-    path: "/system/log",
-    name: "log",
-    component: "system/log/log",
-    meta: {
-      title: "log",
-      hide: true,
-      disable: false,
-      keepAlive: true,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      icon: "icon-menu",
-      sort: 6,
-      type: 2
-    },
-    children: null
-  },
-  {
-    id: "11",
+    id: "22",
     parentId: "0",
-    path: "/disable-menu",
-    name: "disable-menu",
-    component: "disable-menu/disable-menu",
+    path: "/trading",
+    name: "trading",
+    redirect: "/trading/account-overview",
     meta: {
-      title: "disable-menu",
+      title: "trading",
       hide: false,
-      disable: true,
+      disable: false,
       keepAlive: true,
       affix: false,
       link: "",
       iframe: false,
       roles: ["admin"],
-      svgIcon: "switch",
+      svgIcon: "balance-inquiry",
       sort: 7,
-      type: 2
-    },
-    children: null
-  },
-  {
-    id: "12",
-    parentId: "0",
-    path: "/hide-menu",
-    name: "hide-menu",
-    component: "hide-menu/hide-menu",
-    meta: {
-      title: "hide-menu",
-      hide: true,
-      disable: false,
-      keepAlive: true,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      svgIcon: "switch",
-      sort: 8,
-      type: 2
-    },
-    children: null
-  },
-  
-  
-  {
-    id: "15",
-    parentId: "0",
-    path: "/monitor",
-    name: "monitor",
-    redirect: "/monitor/onlineuser",
-    meta: {
-      title: "system-monitor",
-      hide: false,
-      disable: false,
-      keepAlive: true,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      svgIcon: "financial-statement",
-      sort: 9,
       type: 1
     },
     children: null
   },
   {
-    id: "1501",
-    parentId: "15",
-    path: "/monitor/onlineuser",
-    name: "onlineuser",
-    component: "monitor/onlineuser/index",
+    id: "2201",
+    parentId: "22",
+    path: "/trading/account-overview",
+    name: "account-overview",
+    component: "trading/account-overview/account-overview",
     meta: {
-      title: "onlineuser",
+      title: "account-overview",
       hide: false,
-      keepAlive: true,
       disable: false,
+      keepAlive: true,
       affix: false,
       link: "",
       iframe: false,
@@ -875,16 +728,16 @@ export const systemMenu = [
     children: null
   },
   {
-    id: "1502",
-    parentId: "15",
-    path: "/monitor/crontab",
-    name: "crontab",
-    component: "monitor/crontab/index",
+    id: "2202",
+    parentId: "22",
+    path: "/trading/position-detail",
+    name: "position-detail",
+    component: "trading/position-detail/position-detail",
     meta: {
-      title: "crontab",
+      title: "position-detail",
       hide: false,
-      keepAlive: true,
       disable: false,
+      keepAlive: true,
       affix: false,
       link: "",
       iframe: false,
@@ -896,16 +749,16 @@ export const systemMenu = [
     children: null
   },
   {
-    id: "1503",
-    parentId: "15",
-    path: "/monitor/crontab-logs",
-    name: "crontab-logs",
-    component: "monitor/crontab-logs/index",
+    id: "2203",
+    parentId: "22",
+    path: "/trading/trade-record",
+    name: "trade-record",
+    component: "trading/trade-record/trade-record",
     meta: {
-      title: "crontab-logs",
+      title: "trade-record",
       hide: false,
-      keepAlive: true,
       disable: false,
+      keepAlive: true,
       affix: false,
       link: "",
       iframe: false,
@@ -916,7 +769,7 @@ export const systemMenu = [
     },
     children: null
   },
-  
+
   {
     id: "18",
     parentId: "0",
@@ -1955,13 +1808,13 @@ export const systemMenuTmp = [
     children: null
   },
   {
-    id: "10",
+    id: "21",
     parentId: "0",
-    path: "/system",
-    name: "system",
-    redirect: "/system/account",
+    path: "/strategy",
+    name: "strategy",
+    redirect: "/strategy/strategy-list",
     meta: {
-      title: "system",
+      title: "strategy",
       hide: false,
       disable: false,
       keepAlive: true,
@@ -1969,20 +1822,20 @@ export const systemMenuTmp = [
       link: "",
       iframe: false,
       roles: ["admin"],
-      svgIcon: "set",
+      svgIcon: "firewall",
       sort: 6,
       type: 1
     },
     children: null
   },
   {
-    id: "1001",
-    parentId: "10",
-    path: "/system/account",
-    name: "account",
-    component: "system/account/account",
+    id: "2101",
+    parentId: "21",
+    path: "/strategy/strategy-list",
+    name: "strategy-list",
+    component: "strategy/strategy-list/strategy-list",
     meta: {
-      title: "account",
+      title: "strategy-list",
       hide: false,
       disable: false,
       keepAlive: true,
@@ -1997,13 +1850,55 @@ export const systemMenuTmp = [
     children: null
   },
   {
-    id: "1002",
-    parentId: "10",
-    path: "/system/role",
-    name: "role",
-    component: "system/role/role",
+    id: "22",
+    parentId: "0",
+    path: "/trading",
+    name: "trading",
+    redirect: "/trading/account-overview",
     meta: {
-      title: "role",
+      title: "trading",
+      hide: false,
+      disable: false,
+      keepAlive: true,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin"],
+      svgIcon: "balance-inquiry",
+      sort: 7,
+      type: 1
+    },
+    children: null
+  },
+  {
+    id: "2201",
+    parentId: "22",
+    path: "/trading/account-overview",
+    name: "account-overview",
+    component: "trading/account-overview/account-overview",
+    meta: {
+      title: "account-overview",
+      hide: false,
+      disable: false,
+      keepAlive: true,
+      affix: false,
+      link: "",
+      iframe: false,
+      roles: ["admin"],
+      icon: "icon-menu",
+      sort: 1,
+      type: 2
+    },
+    children: null
+  },
+  {
+    id: "2202",
+    parentId: "22",
+    path: "/trading/position-detail",
+    name: "position-detail",
+    component: "trading/position-detail/position-detail",
+    meta: {
+      title: "position-detail",
       hide: false,
       disable: false,
       keepAlive: true,
@@ -2018,13 +1913,13 @@ export const systemMenuTmp = [
     children: null
   },
   {
-    id: "1003",
-    parentId: "10",
-    path: "/system/menu",
-    name: "menu",
-    component: "system/menu/menu",
+    id: "2203",
+    parentId: "22",
+    path: "/trading/trade-record",
+    name: "trade-record",
+    component: "trading/trade-record/trade-record",
     meta: {
-      title: "menu",
+      title: "trade-record",
       hide: false,
       disable: false,
       keepAlive: true,
@@ -2034,69 +1929,6 @@ export const systemMenuTmp = [
       roles: ["admin"],
       icon: "icon-menu",
       sort: 3,
-      type: 2
-    },
-    children: null
-  },
-  {
-    id: "1004",
-    parentId: "10",
-    path: "/system/division",
-    name: "division",
-    component: "system/division/division",
-    meta: {
-      title: "division",
-      hide: false,
-      disable: false,
-      keepAlive: true,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      icon: "icon-menu",
-      sort: 4,
-      type: 2
-    },
-    children: null
-  },
-  {
-    id: "1005",
-    parentId: "10",
-    path: "/system/dictionary",
-    name: "dictionary",
-    component: "system/dictionary/dictionary",
-    meta: {
-      title: "dictionary",
-      hide: false,
-      disable: false,
-      keepAlive: true,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      icon: "icon-menu",
-      sort: 5,
-      type: 2
-    },
-    children: null
-  },
-  {
-    id: "1006",
-    parentId: "10",
-    path: "/system/log",
-    name: "log",
-    component: "system/log/log",
-    meta: {
-      title: "log",
-      hide: true,
-      disable: false,
-      keepAlive: true,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      icon: "icon-menu",
-      sort: 6,
       type: 2
     },
     children: null
@@ -2454,90 +2286,6 @@ export const systemMenuTmp = [
       roles: ["admin"],
       icon: "icon-menu",
       sort: 4,
-      type: 2
-    },
-    children: null
-  },
-  {
-    id: "15",
-    parentId: "0",
-    path: "/monitor",
-    name: "monitor",
-    redirect: "/monitor/onlineuser",
-    meta: {
-      title: "system-monitor",
-      hide: false,
-      disable: false,
-      keepAlive: true,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      svgIcon: "financial-statement",
-      sort: 9,
-      type: 1
-    },
-    children: null
-  },
-  {
-    id: "1501",
-    parentId: "15",
-    path: "/monitor/onlineuser",
-    name: "onlineuser",
-    component: "monitor/onlineuser/index",
-    meta: {
-      title: "onlineuser",
-      hide: false,
-      keepAlive: true,
-      disable: false,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      icon: "icon-menu",
-      sort: 1,
-      type: 2
-    },
-    children: null
-  },
-  {
-    id: "1502",
-    parentId: "15",
-    path: "/monitor/crontab",
-    name: "crontab",
-    component: "monitor/crontab/index",
-    meta: {
-      title: "crontab",
-      hide: false,
-      keepAlive: true,
-      disable: false,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      icon: "icon-menu",
-      sort: 2,
-      type: 2
-    },
-    children: null
-  },
-  {
-    id: "1503",
-    parentId: "15",
-    path: "/monitor/crontab-logs",
-    name: "crontab-logs",
-    component: "monitor/crontab-logs/index",
-    meta: {
-      title: "crontab-logs",
-      hide: false,
-      keepAlive: true,
-      disable: false,
-      affix: false,
-      link: "",
-      iframe: false,
-      roles: ["admin"],
-      icon: "icon-menu",
-      sort: 3,
       type: 2
     },
     children: null

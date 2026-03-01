@@ -102,8 +102,11 @@ func (s *ServiceImpl) invokeKeepalive(ctx context.Context, node *model.CloudNode
 		return false
 	}
 
+	// 使用独立的超时上下文，避免与父 ctx 的 deadline 累加
+	invokeCtx := trpc.CloneContext(ctx)
+
 	client := s.providerFactory.GetCloudProviderByAccount(node.CloudAccountID)
-	_, err := client.InvokeFunction(ctx, &provider.InvokeFunctionRequest{
+	_, err := client.InvokeFunction(invokeCtx, &provider.InvokeFunctionRequest{
 		FunctionName: node.NodeID,
 		Namespace:    node.Namespace,
 		Region:       node.Region,
@@ -122,12 +125,12 @@ func buildKeepaliveEventData(serverIP string, serverPort int, nodeID string) map
 	requestID := fmt.Sprintf("keepalive_%d", time.Now().UnixNano())
 	internalIP := common.GetInternalIP()
 	payload := map[string]interface{}{
-		"action":      keepaliveAction,
-		"timestamp":   timestamp,
-		"request_id":  requestID,
-		"source":      keepaliveSource,
-		"server_ip":   serverIP,
-		"server_port": serverPort,
+		"action":             keepaliveAction,
+		"timestamp":          timestamp,
+		"request_id":         requestID,
+		"source":             keepaliveSource,
+		"moox_server_url":    fmt.Sprintf("http://%s:%d", serverIP, serverPort),
+		"storage_server_url": config.GetXDataURL(),
 	}
 	data := map[string]interface{}{
 		"internal_ip": internalIP,
@@ -169,8 +172,11 @@ func (s *ServiceImpl) probeHTTP(ctx context.Context, node *model.CloudNode, serv
 		return false
 	}
 
+	// 使用独立的超时上下文，避免与父 ctx 的 deadline 累加
+	probeCtx := trpc.CloneContext(ctx)
+
 	httpClient := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, probeURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodPost, probeURL, bytes.NewReader(body))
 	if err != nil {
 		log.WarnContextf(ctx, "[Keepalive] HTTP probe create request failed: node_id=%s, error=%v", node.NodeID, err)
 		return false

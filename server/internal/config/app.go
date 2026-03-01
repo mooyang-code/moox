@@ -279,17 +279,6 @@ func GetGlobalConfig() *AppConfig {
 	return globalConfig
 }
 
-// GetEncryptionKey 获取加密密钥
-// 这是一个便捷方法，用于快速获取加密密钥
-func GetEncryptionKey() string {
-	cfg := GetGlobalConfig()
-	if cfg == nil || cfg.Security.EncryptionKey == "" {
-		// 如果配置未初始化，返回默认值
-		return "moox-cloud-secret-key-32bytes"
-	}
-	return cfg.Security.EncryptionKey
-}
-
 // GetXDataURL 获取 xData 存储服务地址
 func GetXDataURL() string {
 	cfg := GetGlobalConfig()
