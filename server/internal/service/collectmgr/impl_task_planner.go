@@ -101,6 +101,7 @@ func (s *TaskPlannerServiceImpl) createInstanceForObject(
 	instance := &model.CollectorTaskInstance{
 		TaskID:          taskID,
 		RuleID:          rule.RuleID,
+		BizType:         rule.BizType,
 		PlannedExecNode: selectedNodeID, // 计划执行节点
 		Symbol:          symbol,
 		CollectDataType: rule.DataType,
@@ -290,7 +291,7 @@ func (s *TaskPlannerServiceImpl) loadEnabledRules(ctx context.Context) (
 	log.InfoContext(ctx, "[TaskPlanner] Step 3: Loading enabled rules...")
 
 	// 获取所有启用的规则
-	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, "", "", model.EnabledTrue)
+	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, "", "", "", model.EnabledTrue)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get enabled rules: %w", err)
 	}
@@ -307,14 +308,12 @@ func (s *TaskPlannerServiceImpl) loadEnabledRules(ctx context.Context) (
 }
 
 // computeAllInstances 计算所有应有的任务实例
-// 简化流程：
-//  1. 遍历每个数据类型
-//  2. 获取该类型的规则和节点
-//  3. 对每个规则：获取匹配节点、交易标的，负载均衡分配
+// 以规则为驱动遍历，避免因节点 SupportedCollectors 未包含某数据类型
+// 而导致对应规则被整体跳过（如 symbol 类型规则）
 func (s *TaskPlannerServiceImpl) computeAllInstances(
 	ctx context.Context,
-	dataTypeSet map[string]bool,
-	nodesByDataType map[string][]string,
+	_ map[string]bool,
+	_ map[string][]string,
 	rulesByDataType map[string][]*model.CollectorTaskRules,
 ) ([]*model.CollectorTaskInstance, int, int, error) {
 	log.InfoContext(ctx, "[TaskPlanner] Step 4: Computing all instances with load balancing...")
@@ -325,18 +324,12 @@ func (s *TaskPlannerServiceImpl) computeAllInstances(
 	// 节点任务计数，用于负载均衡
 	nodeTaskCount := make(map[string]int)
 
-	// 遍历每个数据类型
-	for dataType := range dataTypeSet {
-		typeRules := rulesByDataType[dataType]
-		typeNodes := nodesByDataType[dataType]
-
+	// 以规则为驱动：遍历所有数据类型的规则
+	// 不依赖 dataTypeSet（节点侧的数据类型集合），避免节点未声明某类型时规则被跳过
+	for dataType, typeRules := range rulesByDataType {
 		if len(typeRules) == 0 {
-			log.InfoContextf(ctx, "[TaskPlanner] Data type '%s' has no rules, skipping", dataType)
 			continue
 		}
-
-		log.InfoContextf(ctx, "[TaskPlanner] Processing data type '%s': %d rules, %d nodes",
-			dataType, len(typeRules), len(typeNodes))
 
 		// 获取该数据类型的分配器
 		dist := s.getDistributor(ctx, dataType)
@@ -346,12 +339,12 @@ func (s *TaskPlannerServiceImpl) computeAllInstances(
 			continue
 		}
 
+		log.InfoContextf(ctx, "[TaskPlanner] Processing data type '%s': %d rules", dataType, len(typeRules))
+
 		// 处理该数据类型的所有规则
 		for _, ruleModel := range typeRules {
-			// 转换为DTO
 			rule := s.convertRuleToDTO(ruleModel)
 
-			// 计算该规则的任务实例（负载均衡分配）
 			computedInstances, err := s.computeInstances(ctx, rule, dist, nodeTaskCount)
 			if err != nil {
 				log.ErrorContextf(ctx, "[TaskPlanner] Failed to compute instances for rule %s: %v",
@@ -395,6 +388,7 @@ func (s *TaskPlannerServiceImpl) convertRuleToDTO(
 	return &dto.TaskRuleDTO{
 		ID:             ruleModel.ID,
 		RuleID:         ruleModel.RuleID,
+		BizType:        ruleModel.BizType,
 		DataType:       ruleModel.DataType,
 		DataSource:     ruleModel.DataSource,
 		CollectParams:  ruleModel.CollectParams,

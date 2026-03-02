@@ -959,13 +959,7 @@ const currentPackageType = computed(() => {
 
 // 根据路由路径判断默认的节点类型
 const defaultNodeType = computed(() => {
-  const path = route.path;
-  if (path.includes('/collector/cloud-function')) {
-    return 'scf-event'; // 数据采集默认为事件型
-  } else if (path.includes('/factor/cloud-function')) {
-    return 'scf-web'; // 因子计算默认为 Web 型
-  }
-  return 'scf-event'; // 兜底默认值
+  return ''; // 搜索框节点类型不设默认值
 });
 
 // 根据路由路径判断默认的运行时

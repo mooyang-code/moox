@@ -26,8 +26,8 @@ func NewTaskRulesServiceImpl(
 	}
 }
 
-func (s *TaskRulesServiceImpl) GetTaskRuleList(ctx context.Context, dataType, dataSource, enabled string) ([]*dto.TaskRuleDTO, error) {
-	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, dataType, dataSource, enabled)
+func (s *TaskRulesServiceImpl) GetTaskRuleList(ctx context.Context, bizType, dataType, dataSource, enabled string) ([]*dto.TaskRuleDTO, error) {
+	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, bizType, dataType, dataSource, enabled)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get task rules list: %w", err)
 	}
@@ -37,6 +37,7 @@ func (s *TaskRulesServiceImpl) GetTaskRuleList(ctx context.Context, dataType, da
 		ruleDTO := &dto.TaskRuleDTO{
 			ID:             rule.ID,
 			RuleID:         rule.RuleID,
+			BizType:        rule.BizType,
 			DataType:       rule.DataType,
 			DataSource:     rule.DataSource,
 			CollectParams:  rule.CollectParams,
@@ -70,6 +71,7 @@ func (s *TaskRulesServiceImpl) GetTaskRule(ctx context.Context, ruleID string) (
 	return &dto.TaskRuleDTO{
 		ID:             rule.ID,
 		RuleID:         rule.RuleID,
+		BizType:        rule.BizType,
 		DataType:       rule.DataType,
 		DataSource:     rule.DataSource,
 		CollectParams:  rule.CollectParams,
@@ -91,6 +93,7 @@ func (s *TaskRulesServiceImpl) CreateTaskRule(ctx context.Context, rule *dto.Tas
 
 	modelRule := &model.CollectorTaskRules{
 		RuleID:         rule.RuleID,
+		BizType:        rule.BizType,
 		DataType:       rule.DataType,
 		DataSource:     rule.DataSource,
 		CollectParams:  rule.CollectParams,
@@ -117,6 +120,7 @@ func (s *TaskRulesServiceImpl) UpdateTaskRule(ctx context.Context, rule *dto.Tas
 	modelRule := &model.CollectorTaskRules{
 		ID:             rule.ID,
 		RuleID:         rule.RuleID,
+		BizType:        rule.BizType,
 		DataType:       rule.DataType,
 		DataSource:     rule.DataSource,
 		CollectParams:  rule.CollectParams,

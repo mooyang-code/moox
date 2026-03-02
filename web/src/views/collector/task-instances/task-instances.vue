@@ -84,19 +84,6 @@
                 </a-tooltip>
               </template>
             </a-table-column>
-            <a-table-column title="任务参数" :width="120">
-              <template #cell="{ record }">
-                <a-popover title="任务参数详情" trigger="click">
-                  <template #content>
-                    <pre class="params-preview">{{ formatJSON(record.TaskParams) }}</pre>
-                  </template>
-                  <a-button type="text" size="mini">
-                    <template #icon><icon-eye /></template>
-                    查看参数
-                  </a-button>
-                </a-popover>
-              </template>
-            </a-table-column>
             <a-table-column title="执行状态" :width="100" align="center">
               <template #cell="{ record }">
                 <a-tag bordered size="small" :color="getStatusColor(record.LastExecStatus)">
@@ -184,6 +171,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import service from '@/api/index';
 import { useProjectStore } from '@/store/modules/project';
@@ -212,6 +200,16 @@ type TaskInstanceRecord = Partial<TaskInstance> & {
 };
 
 const loading = ref(false);
+const route = useRoute();
+
+// 根据路由路径判断当前的业务类型
+const currentBizType = computed(() => {
+  const path = route.path;
+  if (path.includes('/factor/')) {
+    return 'factor_calculator';
+  }
+  return 'data_collector';
+});
 const instanceList = ref<TaskInstance[]>([]);
 const selectedKeys = ref<string[]>([]);
 const detailVisible = ref(false);
@@ -358,7 +356,8 @@ const getInstanceList = async () => {
   try {
     const params: any = {
       page: pagination.value.current,
-      size: pagination.value.pageSize
+      size: pagination.value.pageSize,
+      biz_type: currentBizType.value
     };
 
     // Always include the selected project ID from the global dropdown

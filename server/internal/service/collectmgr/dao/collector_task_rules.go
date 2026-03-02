@@ -13,6 +13,7 @@ import (
 
 // TaskRuleQuery 任务规则查询条件
 type TaskRuleQuery struct {
+	BizType        string // 业务类型
 	DataType       string // 数据类型
 	DataSource     string // 数据源
 	Enabled        string // 启用状态 ("true"/"false")
@@ -24,7 +25,7 @@ type TaskRuleQuery struct {
 // CollectorTaskRulesDAO 采集任务规则数据访问对象接口
 type CollectorTaskRulesDAO interface {
 	// GetTaskRulesList 获取任务规则列表
-	GetTaskRulesList(ctx context.Context, dataType, dataSource, enabled string) ([]*model.CollectorTaskRules, error)
+	GetTaskRulesList(ctx context.Context, bizType, dataType, dataSource, enabled string) ([]*model.CollectorTaskRules, error)
 
 	// GetTaskRule 获取单个任务规则
 	GetTaskRule(ctx context.Context, ruleID string) (*model.CollectorTaskRules, error)
@@ -52,10 +53,13 @@ func NewCollectorTaskRulesDAO(db *gorm.DB) CollectorTaskRulesDAO {
 }
 
 // GetTaskRulesList 获取任务规则列表
-func (d *collectorTaskRulesDaoImpl) GetTaskRulesList(ctx context.Context, dataType, dataSource, enabled string) ([]*model.CollectorTaskRules, error) {
+func (d *collectorTaskRulesDaoImpl) GetTaskRulesList(ctx context.Context, bizType, dataType, dataSource, enabled string) ([]*model.CollectorTaskRules, error) {
 	var rules []*model.CollectorTaskRules
 	query := d.db.WithContext(ctx).Where("1=1")
-	
+
+	if bizType != "" {
+		query = query.Where("c_biz_type = ?", bizType)
+	}
 	if dataType != "" {
 		query = query.Where("c_data_type = ?", dataType)
 	}
@@ -109,6 +113,7 @@ func (d *collectorTaskRulesDaoImpl) UpdateTaskRule(ctx context.Context, rule *mo
 		Model(&model.CollectorTaskRules{}).
 		Where("c_rule_id = ?", rule.RuleID).
 		Updates(map[string]interface{}{
+			"c_biz_type":        rule.BizType,
 			"c_data_type":       rule.DataType,
 			"c_data_source":     rule.DataSource,
 			"c_collect_params":  rule.CollectParams,
@@ -157,6 +162,9 @@ func (d *collectorTaskRulesDaoImpl) SearchTaskRules(ctx context.Context, query *
 	// 根据查询条件构建 WHERE 子句
 	if query.RuleID != "" {
 		dbQuery = dbQuery.Where("c_rule_id = ?", query.RuleID)
+	}
+	if query.BizType != "" {
+		dbQuery = dbQuery.Where("c_biz_type = ?", query.BizType)
 	}
 	if query.DataType != "" {
 		dbQuery = dbQuery.Where("c_data_type = ?", query.DataType)

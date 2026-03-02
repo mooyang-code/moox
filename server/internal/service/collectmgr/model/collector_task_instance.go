@@ -12,6 +12,8 @@ type CollectorTaskInstance struct {
 	TaskID string `gorm:"column:c_task_id;uniqueIndex:idx_task_id;not null" json:"task_id"`
 	// RuleID 规则ID（关联配置表）
 	RuleID string `gorm:"column:c_rule_id;index:idx_rule_id;not null" json:"rule_id"`
+	// BizType 业务类型（data_collector=数据采集, factor_calculator=因子计算）
+	BizType string `gorm:"column:c_biz_type;not null;default:'data_collector'" json:"biz_type"`
 
 	// ===== v2.0 新字段 =====
 	// PlannedExecNode 计划执行节点ID（定时重算时写入）

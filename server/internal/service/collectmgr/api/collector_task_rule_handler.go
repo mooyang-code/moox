@@ -24,12 +24,13 @@ func NewCollectorTaskRuleHandler(service collectmgr.TaskRuleService) *CollectorT
 // GetTaskRuleList 获取任务规则列表
 func (h *CollectorTaskRuleHandler) GetTaskRuleList(c *gin.Context) {
 	// 获取查询参数
+	bizType := c.Query("biz_type")
 	dataType := c.Query("data_type")
 	dataSource := c.Query("data_source")
 	enabled := c.Query("enabled")
 
 	// 调用service层获取数据
-	configs, err := h.service.GetTaskRuleList(c.Request.Context(), dataType, dataSource, enabled)
+	configs, err := h.service.GetTaskRuleList(c.Request.Context(), bizType, dataType, dataSource, enabled)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("查询失败", err))
 		return

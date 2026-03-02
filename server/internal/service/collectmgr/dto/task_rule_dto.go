@@ -6,6 +6,7 @@ import "time"
 type TaskRuleDTO struct {
 	ID             int       `json:"id"`
 	RuleID         string    `json:"rule_id"`
+	BizType        string    `json:"biz_type"`
 	DataType       string    `json:"data_type"`
 	DataSource     string    `json:"data_source"`
 	CollectParams  string    `json:"collect_params"`

@@ -335,6 +335,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import service from '@/api/index';
 import { useProjectStore } from '@/store/modules/project';
@@ -390,6 +391,16 @@ interface FieldConfig {
 // }
 
 const loading = ref(false);
+const route = useRoute();
+
+// 根据路由路径判断当前的业务类型
+const currentBizType = computed(() => {
+  const path = route.path;
+  if (path.includes('/factor/')) {
+    return 'factor_calculator';
+  }
+  return 'data_collector';
+});
 const submitLoading = ref(false);
 const taskList = ref<TaskConfig[]>([]);
 const selectedKeys = ref<string[]>([]);
@@ -691,7 +702,8 @@ const getTaskList = async () => {
   try {
     const params: any = {
       page: pagination.value.current,
-      size: pagination.value.pageSize
+      size: pagination.value.pageSize,
+      biz_type: currentBizType.value
     };
 
     // Always include the selected project ID from the global dropdown
@@ -1118,6 +1130,7 @@ const handleOk = async (): Promise<boolean> => {
 
     // 准备请求数据
     const requestData: any = {
+      biz_type: currentBizType.value,
       project_id: addForm.value.project_id || selectedProjectId.value || '',
       data_type: addForm.value.data_type,
       data_source: addForm.value.data_source,

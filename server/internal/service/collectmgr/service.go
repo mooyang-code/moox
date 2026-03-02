@@ -68,7 +68,7 @@ type FieldConfigDTO struct {
 // TaskRuleService 任务规则服务接口
 type TaskRuleService interface {
 	// GetTaskRuleList 获取任务规则列表
-	GetTaskRuleList(ctx context.Context, dataType, dataSource, enabled string) ([]*dto.TaskRuleDTO, error)
+	GetTaskRuleList(ctx context.Context, bizType, dataType, dataSource, enabled string) ([]*dto.TaskRuleDTO, error)
 
 	// GetTaskRule 获取单个任务规则
 	GetTaskRule(ctx context.Context, ruleID string) (*dto.TaskRuleDTO, error)
@@ -136,12 +136,13 @@ type TaskInstanceDTO struct {
 	ID              int
 	TaskID          string
 	RuleID          string
+	BizType         string // 业务类型
 	// v2.0 新字段
 	PlannedExecNode string // 计划执行节点ID
 	LastExecNode    string // 最后执行节点ID
 	LastExecStatus  int    // 最后执行状态
 	// 其他字段
-	Symbol          string // ��的
+	Symbol          string // 标的
 	CollectDataType string // 采集数据类型（从 task_params 提取）
 	DataType        string // 数据类型（从规则表关联获取）
 	TaskParams      string
@@ -154,6 +155,7 @@ type TaskInstanceDTO struct {
 
 // TaskInstanceFilterDTO 任务实例筛选条件
 type TaskInstanceFilterDTO struct {
+	BizType         string // 业务类型
 	TaskID          string // 任务ID
 	RuleID          string // 规则ID
 	PlannedExecNode string // v2.0: 计划执行节点

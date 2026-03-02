@@ -50,6 +50,7 @@ func (s *TaskInstanceServiceImpl) CreateTaskInstance(ctx context.Context, instan
 	modelInstance := &model.CollectorTaskInstance{
 		TaskID:          instance.TaskID,
 		RuleID:          instance.RuleID,
+		BizType:         instance.BizType,
 		PlannedExecNode: instance.PlannedExecNode,
 		LastExecNode:    instance.LastExecNode,
 		LastExecStatus:  instance.LastExecStatus,
@@ -84,6 +85,7 @@ func (s *TaskInstanceServiceImpl) GetTaskInstance(ctx context.Context, instanceI
 		ID:              instance.ID,
 		TaskID:          instance.TaskID,
 		RuleID:          instance.RuleID,
+		BizType:         instance.BizType,
 		PlannedExecNode: instance.PlannedExecNode,
 		LastExecNode:    instance.LastExecNode,
 		LastExecStatus:  instance.LastExecStatus,
@@ -310,6 +312,7 @@ func (s *TaskInstanceServiceImpl) ListTaskInstances(ctx context.Context, nodeID,
 func (s *TaskInstanceServiceImpl) ListTaskInstancesWithFilter(ctx context.Context, filter *TaskInstanceFilterDTO) ([]*TaskInstanceDTO, int64, error) {
 	// 转换DTO为DAO过滤器
 	daoFilter := &collectordao.InstanceFilter{
+		BizType:         filter.BizType,
 		TaskID:          filter.TaskID,
 		RuleID:          filter.RuleID,
 		PlannedExecNode: filter.PlannedExecNode,
@@ -351,6 +354,7 @@ func (s *TaskInstanceServiceImpl) ListTaskInstancesWithFilter(ctx context.Contex
 			ID:              instance.ID,
 			TaskID:          instance.TaskID,
 			RuleID:          instance.RuleID,
+			BizType:         instance.BizType,
 			PlannedExecNode: instance.PlannedExecNode,
 			LastExecNode:    instance.LastExecNode,
 			LastExecStatus:  instance.LastExecStatus,
@@ -450,6 +454,7 @@ func (s *TaskInstanceServiceImpl) tryTransferFailedTask(ctx context.Context, tas
 	ruleDTO := &dto.TaskRuleDTO{
 		ID:             rule.ID,
 		RuleID:         rule.RuleID,
+		BizType:        rule.BizType,
 		DataType:       rule.DataType,
 		DataSource:     rule.DataSource,
 		CollectParams:  rule.CollectParams,

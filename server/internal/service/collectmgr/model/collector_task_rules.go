@@ -10,6 +10,8 @@ type CollectorTaskRules struct {
 	ID int `gorm:"primaryKey;column:c_id;autoIncrement" json:"id"`
 	// RuleID 规则ID
 	RuleID string `gorm:"column:c_rule_id;uniqueIndex:idx_rule_id;not null" json:"rule_id"`
+	// BizType 业务类型（data_collector=数据采集, factor_calculator=因子计算）
+	BizType string `gorm:"column:c_biz_type;not null;default:'data_collector'" json:"biz_type"`
 	// DataType 数据类型（kline/ticker/orderbook/trade/news/list等）
 	DataType string `gorm:"column:c_data_type;index:idx_data_type;not null" json:"data_type"`
 	// DataSource 数据源名称（binance/okx等）

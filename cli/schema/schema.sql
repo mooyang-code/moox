@@ -260,16 +260,17 @@ CREATE TRIGGER update_node_task_snapshot_mtime AFTER UPDATE ON t_node_task_snaps
 CREATE TABLE IF NOT EXISTS t_collector_task_rules (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
     c_rule_id TEXT NOT NULL, -- 规则唯一标识
+    c_biz_type TEXT NOT NULL DEFAULT '', -- 业务类型: data_collector=数据采集, factor_calculator=因子计算
     c_data_type TEXT NOT NULL, -- 数据类型（kline/ticker/orderbook/trade/news/list等）
     c_data_source TEXT NOT NULL DEFAULT '', -- 数据源名称（binance/okx等）
     c_collect_params TEXT NOT NULL DEFAULT '{}', -- 采集参数（JSON：{intervals:["1m","5m"],depth:20, objects:["BTC-USDT","ETH-USDT"]}）
-    
+
     -- 任务分配配置
     c_assignment_type TEXT NOT NULL DEFAULT 'auto', -- 分配类型（auto=自动分配，fixed=固定节点，pattern=通配符匹配，tag=标签匹配）
     c_assigned_nodes TEXT NOT NULL DEFAULT '[]', -- 指定节点列表（JSON数组，fixed类型时使用）
     c_node_pattern TEXT NOT NULL DEFAULT '', -- 节点匹配模式（pattern类型时使用，如：scf-collector-*）
     c_node_tags TEXT NOT NULL DEFAULT '[]', -- 节点标签列表（JSON数组，tag类型时使用，如：["国内","海外"]）
-    
+
     -- 任务状态
     c_enabled TEXT NOT NULL DEFAULT 'true', -- 是否启用（"true"=启用，"false"=禁用）
     c_creator TEXT NOT NULL DEFAULT '', -- 创建人
@@ -282,6 +283,7 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
     c_task_id TEXT NOT NULL, -- 任务唯一标识
     c_rule_id TEXT NOT NULL, -- 规则ID（关联规则表）
+    c_biz_type TEXT NOT NULL DEFAULT '', -- 业务类型: data_collector=数据采集, factor_calculator=因子计算
 
     -- 计划执行节点（定时重算时写入）
     c_planned_exec_node TEXT NOT NULL DEFAULT '', -- 计划执行节点ID
@@ -304,6 +306,7 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
 -- ************ 创建采集任务规则相关索引 ************
 -- 任务规则表索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_task_rules_rule_id ON t_collector_task_rules(c_rule_id);
+CREATE INDEX IF NOT EXISTS idx_collector_task_rules_biz_type ON t_collector_task_rules(c_biz_type);
 CREATE INDEX IF NOT EXISTS idx_collector_task_rules_data_type ON t_collector_task_rules(c_data_type);
 CREATE INDEX IF NOT EXISTS idx_collector_task_rules_data_source ON t_collector_task_rules(c_data_source);
 CREATE INDEX IF NOT EXISTS idx_collector_task_rules_assignment_type ON t_collector_task_rules(c_assignment_type);
@@ -312,6 +315,7 @@ CREATE INDEX IF NOT EXISTS idx_collector_task_rules_enabled ON t_collector_task_
 -- 任务实例表索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_task_instances_task_id ON t_collector_task_instances(c_task_id);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_rule_id ON t_collector_task_instances(c_rule_id);
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_biz_type ON t_collector_task_instances(c_biz_type);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_rule_planned_node_symbol ON t_collector_task_instances(c_rule_id, c_planned_exec_node, c_symbol);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_planned_node ON t_collector_task_instances(c_planned_exec_node);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_planned_node_status ON t_collector_task_instances(c_planned_exec_node, c_last_exec_status);

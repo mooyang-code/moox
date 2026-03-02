@@ -35,6 +35,7 @@ type NodeListQuery struct {
 type NodeStatusFilter struct {
 	Status        *int     // 节点状态，nil 表示不过滤
 	OnlineNodeIDs []string // 在线节点ID列表（用于状态过滤，由Service层传入）
+	BizType       string   // 业务类型过滤，非空时只返回匹配的节点
 }
 
 // CloudNodeDAO 节点数据访问对象接口
@@ -375,6 +376,11 @@ func (d *cloudNodeDaoImpl) GetNodesBySupportedCollector(ctx context.Context, col
 		query = query.Where("cn.c_node_id IN ?", filter.OnlineNodeIDs)
 	}
 
+	// 如果指定了 BizType，只返回该业务类型的节点
+	if filter != nil && filter.BizType != "" {
+		query = query.Where("cn.c_biz_type = ?", filter.BizType)
+	}
+
 	result := query.Order("cn.c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {
@@ -404,6 +410,11 @@ func (d *cloudNodeDaoImpl) GetNodesByPattern(ctx context.Context, pattern string
 		query = query.Where("cn.c_node_id IN ?", filter.OnlineNodeIDs)
 	}
 
+	// 如果指定了 BizType，只返回该业务类型的节点
+	if filter != nil && filter.BizType != "" {
+		query = query.Where("cn.c_biz_type = ?", filter.BizType)
+	}
+
 	result := query.Order("cn.c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {
@@ -426,6 +437,11 @@ func (d *cloudNodeDaoImpl) GetNodesByIDs(ctx context.Context, nodeIDs []string, 
 	// 如果需要按在线状态过滤，使用 OnlineNodeIDs 列表
 	if filter != nil && filter.Status != nil && len(filter.OnlineNodeIDs) > 0 {
 		query = query.Where("cn.c_node_id IN ?", filter.OnlineNodeIDs)
+	}
+
+	// 如果指定了 BizType，只返回该业务类型的节点
+	if filter != nil && filter.BizType != "" {
+		query = query.Where("cn.c_biz_type = ?", filter.BizType)
 	}
 
 	result := query.Order("cn.c_mtime DESC").Find(&nodes)

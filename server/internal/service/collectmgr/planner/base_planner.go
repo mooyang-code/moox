@@ -59,7 +59,7 @@ func NewBasePlanner(nodeDAO cloudnodedao.CloudNodeDAO, symbolProvider SymbolProv
 }
 
 // GetMatchingNodes 通用的节点匹配逻辑（三种规划策略）
-// 任务规划时，只选择在线节点
+// 任务规划时，只选择在线节点，且只选择与规则同 biz_type 的节点
 func (b *BasePlanner) GetMatchingNodes(ctx context.Context, rule *dto.TaskRuleDTO, dataType string) ([]*cloudnodemodel.CloudNode, error) {
 	// 获取在线节点ID列表
 	var onlineNodeIDs []string
@@ -67,11 +67,12 @@ func (b *BasePlanner) GetMatchingNodes(ctx context.Context, rule *dto.TaskRuleDT
 		onlineNodeIDs = b.onlineNodeIDProvider.GetOnlineNodeIDs()
 	}
 
-	// 构建状态过滤：仅选择在线节点
+	// 构建状态过滤：仅选择在线节点，且按 biz_type 隔离
 	onlineStatus := cloudnodemodel.NodeStatusOnline
 	filter := &cloudnodedao.NodeStatusFilter{
 		Status:        &onlineStatus,
 		OnlineNodeIDs: onlineNodeIDs,
+		BizType:       rule.BizType, // 按规则的业务类型过滤节点
 	}
 
 	switch rule.AssignmentType {

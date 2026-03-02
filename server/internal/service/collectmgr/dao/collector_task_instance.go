@@ -152,6 +152,7 @@ type InstanceParamUpdate struct {
 
 // InstanceFilter 任务实例筛选条件
 type InstanceFilter struct {
+	BizType         string // 业务类型
 	TaskID          string // 任务ID
 	RuleID          string // 规则ID
 	PlannedExecNode string // v2.0: 计划执行节点
@@ -769,6 +770,9 @@ func (d *collectorTaskInstanceDaoImpl) ListInstancesWithFilter(ctx context.Conte
 		query = query.Where("c_invalid = ?", 0)
 	}
 
+	if filter.BizType != "" {
+		query = query.Where("c_biz_type = ?", filter.BizType)
+	}
 	if filter.TaskID != "" {
 		query = query.Where("c_task_id LIKE ?", "%"+filter.TaskID+"%")
 	}

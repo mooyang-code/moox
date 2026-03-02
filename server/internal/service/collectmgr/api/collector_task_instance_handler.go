@@ -24,6 +24,7 @@ func NewCollectorTaskInstanceHandler(service collectmgr.TaskInstanceService) *Co
 // GetTaskInstanceList 获取任务实例列表（支持分页和筛选）
 func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 	// 获取查询参数
+	bizType := c.Query("biz_type")
 	taskID := c.Query("task_id")
 	ruleID := c.Query("rule_id")
 	plannedExecNode := c.Query("planned_exec_node")
@@ -63,6 +64,7 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 
 	// 构建筛选器
 	filter := &collectmgr.TaskInstanceFilterDTO{
+		BizType:         bizType,
 		TaskID:          taskID,
 		RuleID:          ruleID,
 		PlannedExecNode: plannedExecNode,
