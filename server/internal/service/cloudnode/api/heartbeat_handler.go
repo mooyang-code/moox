@@ -42,6 +42,7 @@ func (h *HeartbeatHandler) ReportHeartbeat(c *gin.Context) {
 	serviceReq := &types.ReportHeartbeatRequest{
 		NodeID:              req.NodeID,
 		NodeType:            req.NodeType,
+		RunningVersion:      req.RunningVersion,
 		SourceService:       req.SourceService,
 		Metadata:            req.Metadata,
 		SupportedCollectors: req.SupportedCollectors,

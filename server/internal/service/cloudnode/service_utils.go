@@ -217,6 +217,7 @@ func cloudNodeDTOToModel(dto *CloudNodeDTO) *model.CloudNode {
 		HeartbeatInterval:   dto.HeartbeatInterval,
 		ProbeEnabled:        dto.ProbeEnabled,
 		ProbeURL:            dto.ProbeURL,
+		RunningVersion:      dto.RunningVersion,
 		Invalid:             dto.Invalid,
 		CreateTime:          dto.CreateTime,
 		ModifyTime:          dto.ModifyTime,
@@ -269,6 +270,7 @@ func (s *ServiceImpl) ConvertToCloudNodeDTO(node *model.CloudNode) *CloudNodeDTO
 		HeartbeatInterval:   node.HeartbeatInterval,
 		ProbeEnabled:        node.ProbeEnabled,
 		ProbeURL:            node.ProbeURL,
+		RunningVersion:      node.RunningVersion,
 		LastHeartbeat:       node.LastHeartbeat,
 		Invalid:             node.Invalid,
 		CreateTime:          node.CreateTime,
@@ -294,6 +296,11 @@ func (s *ServiceImpl) convertToCloudNodeDTOWithHeartbeat(node *model.CloudNode) 
 		// 计算节点状态
 		status := s.heartbeatStore.GetNodeStatus(node.NodeID, node.TimeoutThreshold)
 		dto.Status = &status
+
+		// 获取节点运行版本（心跳上报的实时版本优先于数据库值）
+		if liveVersion := s.heartbeatStore.GetRunningVersion(node.NodeID); liveVersion != "" {
+			dto.RunningVersion = liveVersion
+		}
 	}
 
 	return dto

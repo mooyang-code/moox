@@ -46,6 +46,7 @@ type ReportHeartbeatResponse = types.ReportHeartbeatResponse
 type HeartbeatReportRequest struct {
 	NodeID              string                 `json:"node_id" binding:"required"`
 	NodeType            string                 `json:"node_type" binding:"required"`
+	RunningVersion      string                 `json:"running_version"`
 	SourceService       string                 `json:"source_service"`
 	Status              int                    `json:"status"`
 	Message             string                 `json:"message,omitempty"`

@@ -144,6 +144,7 @@ type CloudNodeDTO struct {
 	CloudAccountID      string            `json:"cloud_account_id"`
 	PackageID           string            `json:"package_id"`
 	PackageVersion      string            `json:"package_version,omitempty"`
+	RunningVersion      string            `json:"running_version,omitempty"` // 节点当前运行版本（来自心跳上报）
 	Namespace           string            `json:"namespace"`
 	NodeType            string            `json:"node_type"`
 	BizType             string            `json:"biz_type"`

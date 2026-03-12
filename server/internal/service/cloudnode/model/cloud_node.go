@@ -95,6 +95,8 @@ type CloudNode struct {
 	ProbeEnabled bool `gorm:"column:c_probe_enabled;default:true" json:"probe_enabled"`
 	// ProbeURL 探测URL
 	ProbeURL string `gorm:"column:c_probe_url;default:''" json:"probe_url"`
+	// RunningVersion 当前运行版本（来自心跳上报）
+	RunningVersion string `gorm:"column:c_running_version;size:50;not null;default:''" json:"running_version"`
 	// Invalid 删除标记
 	Invalid int `gorm:"column:c_invalid;not null;default:0" json:"invalid"`
 	// CreateTime 创建时间

@@ -16,6 +16,7 @@ export interface CloudNode {
   package_id?: string; 
   package_name?: string;
   package_version?: string;
+  running_version?: string;
   memory_size?: number;
   timeout?: number;
   environment?: Record<string, string>;

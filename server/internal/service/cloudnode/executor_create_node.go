@@ -210,6 +210,7 @@ func modelToCloudNodeDTO(node *model.CloudNode) *CloudNodeDTO {
 		TimeoutThreshold:    node.TimeoutThreshold,
 		HeartbeatInterval:   node.HeartbeatInterval,
 		ProbeEnabled:        node.ProbeEnabled,
+		RunningVersion:      node.RunningVersion,
 		Invalid:             node.Invalid,
 		CreateTime:          node.CreateTime,
 		ModifyTime:          node.ModifyTime,

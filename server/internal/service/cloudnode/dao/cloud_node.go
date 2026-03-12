@@ -95,6 +95,9 @@ type CloudNodeDAO interface {
 
 	// UpdateSupportedCollectors 更新节点支持的采集器类型
 	UpdateSupportedCollectors(ctx context.Context, nodeID string, collectors []string) error
+
+	// UpdateRunningVersion 更新节点当前运行版本
+	UpdateRunningVersion(ctx context.Context, nodeID string, version string) error
 }
 
 type cloudNodeDaoImpl struct {
@@ -489,6 +492,25 @@ func (d *cloudNodeDaoImpl) UpdateSupportedCollectors(ctx context.Context, nodeID
 		log.WarnContextf(ctx, "[CloudNodeDAO] 节点 %s 不存在或已失效，跳过更新采集器类型", nodeID)
 	} else {
 		log.DebugContextf(ctx, "[CloudNodeDAO] 节点 %s 的采集器类型已更新: %v", nodeID, collectors)
+	}
+	return nil
+}
+
+// UpdateRunningVersion 更新节点当前运行版本
+func (d *cloudNodeDaoImpl) UpdateRunningVersion(ctx context.Context, nodeID string, version string) error {
+	result := d.db.WithContext(ctx).
+		Model(&model.CloudNode{}).
+		Where("c_node_id = ? AND c_invalid = ?", nodeID, 0).
+		Update("c_running_version", version)
+
+	if result.Error != nil {
+		return fmt.Errorf("更新运行版本失败: %w", result.Error)
+	}
+
+	if result.RowsAffected == 0 {
+		log.WarnContextf(ctx, "[CloudNodeDAO] 节点 %s 不存在或已失效，跳过更新运行版本", nodeID)
+	} else {
+		log.DebugContextf(ctx, "[CloudNodeDAO] 节点 %s 的运行版本已更新: %s", nodeID, version)
 	}
 	return nil
 }

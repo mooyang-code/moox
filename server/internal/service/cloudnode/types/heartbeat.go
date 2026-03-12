@@ -26,6 +26,7 @@ const (
 type ReportHeartbeatRequest struct {
 	NodeID              string                 `json:"node_id" binding:"required"`
 	NodeType            string                 `json:"node_type" binding:"required"`
+	RunningVersion      string                 `json:"running_version"`                // 节点当前运行版本
 	SourceService       string                 `json:"source_service"`
 	Timestamp           *time.Time             `json:"timestamp"`
 	Metrics             map[string]interface{} `json:"metrics"`

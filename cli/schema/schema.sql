@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_region TEXT NOT NULL DEFAULT '', -- 部署地区（如：ap-guangzhou）
     c_tag TEXT NOT NULL DEFAULT '', -- 标签（国内/海外）
     c_ip_address TEXT NOT NULL DEFAULT '', -- IP地址
+    c_running_version TEXT NOT NULL DEFAULT '', -- 运行时版本
     c_supported_collectors TEXT NOT NULL DEFAULT '[]', -- 支持的采集器类型（JSON数组:["kline"]）
     c_metadata TEXT NOT NULL DEFAULT '{}', -- 节点额外信息（JSON格式）
     c_timeout_threshold INTEGER DEFAULT 35, -- 超时阈值（秒），0表示使用全局默认值

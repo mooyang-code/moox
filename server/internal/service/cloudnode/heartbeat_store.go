@@ -18,6 +18,7 @@ var (
 type HeartbeatInfo struct {
 	NodeID          string
 	NodeType        string
+	RunningVersion  string
 	SourceService   string
 	LastHeartbeat   time.Time
 	TotalHeartbeats int64
@@ -28,6 +29,7 @@ type HeartbeatInfo struct {
 // 使用 concurrent-map 存储节点字段，避免并发写入冲突
 type HeartbeatStore struct {
 	nodeType        cmap.ConcurrentMap[string, string]
+	runningVersion  cmap.ConcurrentMap[string, string]
 	sourceService   cmap.ConcurrentMap[string, string]
 	lastHeartbeat   cmap.ConcurrentMap[string, time.Time]
 	totalHeartbeats cmap.ConcurrentMap[string, int64]
@@ -38,6 +40,7 @@ type HeartbeatStore struct {
 func NewHeartbeatStore() *HeartbeatStore {
 	store := &HeartbeatStore{
 		nodeType:        cmap.New[string](),
+		runningVersion:  cmap.New[string](),
 		sourceService:   cmap.New[string](),
 		lastHeartbeat:   cmap.New[time.Time](),
 		totalHeartbeats: cmap.New[int64](),
@@ -59,6 +62,9 @@ func (s *HeartbeatStore) UpdateHeartbeat(req *types.ReportHeartbeatRequest) {
 	s.lastHeartbeat.Set(req.NodeID, now)
 	if req.NodeType != "" {
 		s.nodeType.Set(req.NodeID, req.NodeType)
+	}
+	if req.RunningVersion != "" {
+		s.runningVersion.Set(req.NodeID, req.RunningVersion)
 	}
 	if req.SourceService != "" {
 		s.sourceService.Set(req.NodeID, req.SourceService)
@@ -98,9 +104,16 @@ func (s *HeartbeatStore) GetLastHeartbeat(nodeID string) *time.Time {
 	return &info.LastHeartbeat
 }
 
+// GetRunningVersion 获取节点当前运行版本
+func (s *HeartbeatStore) GetRunningVersion(nodeID string) string {
+	version, _ := s.runningVersion.Get(nodeID)
+	return version
+}
+
 // DeleteHeartbeat 删除指定节点的心跳信息
 func (s *HeartbeatStore) DeleteHeartbeat(nodeID string) {
 	s.nodeType.Remove(nodeID)
+	s.runningVersion.Remove(nodeID)
 	s.sourceService.Remove(nodeID)
 	s.lastHeartbeat.Remove(nodeID)
 	s.totalHeartbeats.Remove(nodeID)
@@ -235,12 +248,14 @@ func mergeHeartbeatMetadata(existing map[string]interface{}, incoming map[string
 
 func (s *HeartbeatStore) buildHeartbeatInfo(nodeID string, lastHeartbeat time.Time) *HeartbeatInfo {
 	nodeType, _ := s.nodeType.Get(nodeID)
+	runningVersion, _ := s.runningVersion.Get(nodeID)
 	sourceService, _ := s.sourceService.Get(nodeID)
 	totalHeartbeats, _ := s.totalHeartbeats.Get(nodeID)
 	metadata, _ := s.metadata.Get(nodeID)
 	return &HeartbeatInfo{
 		NodeID:          nodeID,
 		NodeType:        nodeType,
+		RunningVersion:  runningVersion,
 		SourceService:   sourceService,
 		LastHeartbeat:   lastHeartbeat,
 		TotalHeartbeats: totalHeartbeats,

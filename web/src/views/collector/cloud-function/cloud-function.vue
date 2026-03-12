@@ -160,6 +160,14 @@
                 {{ formatDateTime(record.last_heartbeat) }}
               </template>
             </a-table-column>
+            <a-table-column title="当前运行版本" data-index="running_version" :width="120">
+              <template #cell="{ record }">
+                <a-tag v-if="record.running_version" size="small" color="arcoblue">
+                  {{ record.running_version }}
+                </a-tag>
+                <span v-else>-</span>
+              </template>
+            </a-table-column>
             <a-table-column title="标签" data-index="tag" :width="80">
               <template #cell="{ record }">
                 <a-tag v-if="record.tag" size="small" :color="record.tag === '国内' ? 'blue' : 'orange'">
@@ -203,16 +211,12 @@
                 </a-tag>
               </template>
             </a-table-column>
-            <a-table-column title="操作" :width="250" align="center" fixed="right">
+            <a-table-column title="操作" :width="170" align="center" fixed="right">
               <template #cell="{ record }">
                 <a-space>
                   <a-button type="outline" size="mini" @click="onEdit(record)" :disabled="taskPolling">
                     <template #icon><icon-edit /></template>
                     <span>编辑</span>
-                  </a-button>
-                  <a-button v-if="['scf-event', 'scf-web'].includes(record.node_type)" type="primary" size="mini" @click="onDeploy(record)" :disabled="taskPolling">
-                    <template #icon><icon-upload /></template>
-                    <span>部署</span>
                   </a-button>
                   <a-popconfirm
                     content="确定要删除该节点吗？删除后将无法恢复。"
@@ -221,10 +225,10 @@
                     @ok="() => onDelete(record)"
                     position="tr"
                   >
-                    <a-button 
-                      type="primary" 
-                      size="mini" 
-                      status="danger" 
+                    <a-button
+                      type="primary"
+                      size="mini"
+                      status="danger"
                       :disabled="taskPolling"
                     >
                       <template #icon><icon-delete /></template>
@@ -782,6 +786,7 @@ interface CloudFunction {
   version: string;
   package_id?: string;
   package_version?: string; // 代码包版本（包名-版本号）
+  running_version?: string; // 当前运行版本（来自心跳上报）
   supported_collectors: string; // 支持的采集器类型（JSON数组格式）
   capacity: string;
   current_load: string;
@@ -2194,20 +2199,6 @@ const onDelete = async (record: CloudFunction) => {
   } catch (error: any) {
     Message.error('删除失败: ' + (error?.message || '未知错误'));
   }
-};
-
-const onDeploy = async (record: CloudFunction) => {
-  // 填充表单
-  singleDeployForm.nodeId = record.node_id;
-  singleDeployForm.namespace = record.namespace;
-  singleDeployForm.region = getRegionName(record.region);
-  singleDeployForm.selectedPackageId = '';
-  
-  // 打开弹窗
-  singleDeployVisible.value = true;
-  
-  // 加载代码包列表
-  await loadSingleDeployPackages();
 };
 
 const onViewNodeDetail = (record: CloudFunction) => {

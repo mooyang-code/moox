@@ -115,7 +115,7 @@ func (d *DNSProxy) resolveDomain(ctx context.Context, domain string) (*DNSProxyR
 	// 直接进行DNS解析（不检查缓存，缓存留给API接口读取）
 	ips, err := d.resolveWithMultipleDNS(ctx, domain)
 	if err != nil {
-		log.ErrorContextf(ctx, "[DNSProxy] DNS resolution failed: %s, error: %v", domain, err)
+		log.ErrorContextf(ctx, "[DNSProxy] 服务端DNS解析失败: domain=%s, error=%v", domain, err)
 		return result, err
 	}
 
@@ -134,7 +134,7 @@ func (d *DNSProxy) resolveDomain(ctx context.Context, domain string) (*DNSProxyR
 		cacheTTL = 36000 // 默认10小时(意图为 永不过期)
 	}
 	localcache.Set(domain, result, cacheTTL)
-	log.InfoContextf(ctx, "[DNSProxy] Successfully resolved domain %s, got %d IP addresses", domain, len(ipInfoList))
+	log.InfoContextf(ctx, "[DNSProxy] 服务端DNS解析成功: domain=%s, IPs=%d", domain, len(ipInfoList))
 	return result, nil
 }
 
@@ -153,7 +153,7 @@ func (d *DNSProxy) resolveWithMultipleDNS(ctx context.Context, domain string) ([
 
 	// 并发执行所有DNS解析任务
 	if err := trpc.GoAndWait(handlers...); err != nil {
-		log.WarnContextf(ctx, "[DNSProxy] 并发DNS解析过程中出现错误: %v", err)
+		log.WarnContextf(ctx, "[DNSProxy] 服务端并发DNS解析过程中出现错误: %v", err)
 	}
 
 	// 将sync.Map中的所有IP转换为slice
@@ -186,7 +186,7 @@ func (d *DNSProxy) resolveWithDNS(ctx context.Context, domain, dnsServer string,
 
 	ips, err := resolver.LookupIPAddr(ctx, domain)
 	if err != nil {
-		log.WarnContextf(ctx, "[DNSProxy] DNS server %s failed to resolve domain %s: %v", dnsServer, domain, err)
+		log.WarnContextf(ctx, "[DNSProxy] 服务端DNS解析失败: dnsServer=%s, domain=%s, error=%v", dnsServer, domain, err)
 		return nil // 继续处理其他服务器
 	}
 
@@ -285,7 +285,7 @@ func resolveDomainsBatch(ctx context.Context, domains []string, maxConcurrent in
 		}
 		batch := domains[i:end]
 		if err := resolveSingleBatch(ctx, batch); err != nil {
-			log.ErrorContextf(ctx, "[DNSProxy] resolve batch failed: %v", err)
+			log.ErrorContextf(ctx, "[DNSProxy] 服务端DNS批量解析失败: %v", err)
 		}
 	}
 	return nil
@@ -299,7 +299,7 @@ func resolveSingleBatch(ctx context.Context, batch []string) error {
 		d := domain // 避免闭包问题
 		handlers = append(handlers, func() error {
 			if _, err := globalDNSInstance.resolveDomain(ctx, d); err != nil {
-				log.ErrorContextf(ctx, "[DNSProxy] resolve domain %s failed: %v", d, err)
+				log.ErrorContextf(ctx, "[DNSProxy] 服务端DNS解析域名失败: domain=%s, error=%v", d, err)
 				return nil
 			}
 			return nil

@@ -20,6 +20,7 @@ const (
 	supportedCollectorsCacheTTLSeconds int64 = 50
 	packageVersionCacheTTLSeconds      int64 = 30
 	nodeTasksCacheTTLSeconds           int64 = 60
+	runningVersionCacheTTLSeconds      int64 = 50
 )
 
 // ========== 接收心跳上报请求 ==========
@@ -55,6 +56,11 @@ func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHear
 	// 3. 更新节点支持的采集器类型
 	if err := s.updateSupportedCollectors(ctx, req); err != nil {
 		return nil, err
+	}
+
+	// 3.5 更新节点运行版本到数据库
+	if err := s.updateRunningVersion(ctx, req); err != nil {
+		log.ErrorContextf(ctx, "[Heartbeat] 更新运行版本失败: nodeID=%s, error=%v", req.NodeID, err)
 	}
 
 	// 4. 获取包版本信息
@@ -128,6 +134,46 @@ func (s *ServiceImpl) updateSupportedCollectors(ctx context.Context, req *types.
 	}
 
 	return nil
+}
+
+// updateRunningVersion 更新节点运行版本到数据库（带缓存，避免每次心跳都写DB）
+func (s *ServiceImpl) updateRunningVersion(ctx context.Context, req *types.ReportHeartbeatRequest) error {
+	if req.RunningVersion == "" {
+		return nil
+	}
+
+	cacheKey := runningVersionCacheKey(req.NodeID)
+	cached, err := localcache.GetWithLoad(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, error) {
+		return s.loadRunningVersion(ctx, req.NodeID)
+	}, runningVersionCacheTTLSeconds)
+	if err != nil {
+		log.ErrorContextf(ctx, "[Heartbeat] 加载节点运行版本失败: nodeID=%s, error=%v", req.NodeID, err)
+		return fmt.Errorf("load running version failed: %w", err)
+	}
+
+	cachedVersion, _ := cached.(string)
+	if cachedVersion != req.RunningVersion {
+		if err := s.nodeDAO.UpdateRunningVersion(ctx, req.NodeID, req.RunningVersion); err != nil {
+			log.ErrorContextf(ctx, "[Heartbeat] 更新节点运行版本失败: nodeID=%s, error=%v", req.NodeID, err)
+			return fmt.Errorf("update running version failed: %w", err)
+		}
+		localcache.Set(cacheKey, req.RunningVersion, runningVersionCacheTTLSeconds)
+		log.InfoContextf(ctx, "[Heartbeat] 节点 %s 运行版本已更新: %s -> %s", req.NodeID, cachedVersion, req.RunningVersion)
+	}
+
+	return nil
+}
+
+// loadRunningVersion 从数据库加载节点当前运行版本
+func (s *ServiceImpl) loadRunningVersion(ctx context.Context, nodeID string) (string, error) {
+	node, err := s.nodeDAO.GetCloudNode(ctx, nodeID)
+	if err != nil {
+		return "", err
+	}
+	if node == nil {
+		return "", fmt.Errorf("node %s not found", nodeID)
+	}
+	return node.RunningVersion, nil
 }
 
 func (s *ServiceImpl) loadPackageVersionForHeartbeat(ctx context.Context, nodeID string) string {
@@ -239,6 +285,10 @@ func packageVersionCacheKey(nodeID string) string {
 
 func nodeTasksCacheKey(nodeID string) string {
 	return "heartbeat:node_tasks:" + nodeID
+}
+
+func runningVersionCacheKey(nodeID string) string {
+	return "heartbeat:running_version:" + nodeID
 }
 
 // GetNodeStatus 获取节点状态

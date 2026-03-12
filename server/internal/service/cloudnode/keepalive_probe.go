@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -124,13 +125,15 @@ func buildKeepaliveEventData(serverIP string, serverPort int, nodeID string) map
 	timestamp := time.Now().Format(time.RFC3339)
 	requestID := fmt.Sprintf("keepalive_%d", time.Now().UnixNano())
 	internalIP := common.GetInternalIP()
+	xDataURL := config.GetXDataURL()
 	payload := map[string]interface{}{
-		"action":             keepaliveAction,
-		"timestamp":          timestamp,
-		"request_id":         requestID,
-		"source":             keepaliveSource,
-		"moox_server_url":    fmt.Sprintf("http://%s:%d", serverIP, serverPort),
-		"storage_server_url": config.GetXDataURL(),
+		"action":              keepaliveAction,
+		"timestamp":           timestamp,
+		"request_id":          requestID,
+		"source":              keepaliveSource,
+		"moox_server_url":     fmt.Sprintf("http://%s:%d", serverIP, serverPort),
+		"storage_server_url":  xDataURL,
+		"storage_server_rpc":  buildStorageRPCTarget(xDataURL, 18201),
 	}
 	data := map[string]interface{}{
 		"internal_ip": internalIP,
@@ -154,6 +157,23 @@ func getServerAddress() (string, int) {
 		}
 	}
 	return common.GetPublicIP(), port
+}
+
+// buildStorageRPCTarget 从 HTTP URL 提取 host IP，拼接为 ip://host:rpcPort
+// 输入 "http://10.0.0.1:8080", 18201 → 输出 "ip://10.0.0.1:18201"
+func buildStorageRPCTarget(httpURL string, rpcPort int) string {
+	if httpURL == "" {
+		return ""
+	}
+	u, err := url.Parse(httpURL)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	if host == "" {
+		return ""
+	}
+	return fmt.Sprintf("ip://%s:%d", host, rpcPort)
 }
 
 // probeHTTP 对 scf-web 节点发起 HTTP POST /probe 请求进行探测
