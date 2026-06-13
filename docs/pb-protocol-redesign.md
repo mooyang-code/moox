@@ -44,7 +44,7 @@ common.proto
 metadata.proto
 data.proto
 query.proto
-adaptor.proto
+adapter.proto
 ```
 
 职责如下：
@@ -55,7 +55,7 @@ adaptor.proto
 | `metadata.proto` | Workspace、Market、Exchange、Instrument、DataSet、Field、Factor、DataView、StorageRoute |
 | `data.proto` | 在线数据读写，例如时间序列、因子值、普通记录、最新快照 |
 | `query.proto` | 分析查询、DataView 查询、文本检索、查询解释 |
-| `adaptor.proto` | xData 内部执行协议，不对 moox 和普通用户暴露 |
+| `adapter.proto` | xData 内部执行协议，不对 moox 和普通用户暴露 |
 
 moox 侧协议建议保留控制面聚合接口：
 
@@ -583,7 +583,7 @@ xData:
   metadata.proto
   data.proto
   query.proto
-  adaptor.proto
+  adapter.proto
 
 moox:
   control.proto
