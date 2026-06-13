@@ -1,4 +1,4 @@
-PROTO_FILES := common.proto metadata.proto data.proto query.proto adapter.proto message.proto
+PROTO_FILES := v2_common.proto v2_metadata.proto v2_data.proto v2_query.proto v2_adapter.proto v2_message.proto
 OUTPUT_DIR := ./genv2
 
 .PHONY: all clean legacy-list

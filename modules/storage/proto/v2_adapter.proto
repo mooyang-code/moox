@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package trpc.storage.adapter;
+package trpc.storage.v2.adapter;
 
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/genv2;storagepb";
 
-import "common.proto";
-import "data.proto";
+import "v2_common.proto";
+import "v2_data.proto";
 
 message PhysicalTableRef {
   string device_id = 1;

@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package trpc.storage.common;
+package trpc.storage.v2.common;
 
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/genv2;storagepb";
 

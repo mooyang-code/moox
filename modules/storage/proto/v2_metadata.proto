@@ -1,10 +1,10 @@
 syntax = "proto3";
 
-package trpc.storage.metadata;
+package trpc.storage.v2.metadata;
 
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/genv2;storagepb";
 
-import "common.proto";
+import "v2_common.proto";
 
 message Workspace {
   string workspace_id = 1;

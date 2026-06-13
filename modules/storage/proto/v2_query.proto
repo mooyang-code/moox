@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package trpc.storage.query;
+package trpc.storage.v2.query;
 
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/genv2;storagepb";
 
-import "common.proto";
-import "data.proto";
+import "v2_common.proto";
+import "v2_data.proto";
 
 message QueryTime {
   common.TimeRange time_range = 1;

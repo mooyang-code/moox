@@ -2,13 +2,27 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STORAGE_ROOT="${STORAGE_ROOT:-${ROOT}/var/storage/acceptance}"
+DEFAULT_STORAGE_ROOT="${ROOT}/var/storage/acceptance"
+if [[ -d "${ROOT}/storage" ]]; then
+  DEFAULT_STORAGE_ROOT="${ROOT}/storage/var/storage/acceptance"
+fi
+STORAGE_ROOT="${STORAGE_ROOT:-${DEFAULT_STORAGE_ROOT}}"
 WORKSPACE="${WORKSPACE:-default}"
 EXCHANGE="${EXCHANGE:-BINANCE}"
 DATASET="${DATASET:-binance_spot_kline_1m}"
 FREQ="${FREQ:-1m}"
-CSV_DIR="${CSV_DIR:-${HOME}/Downloads}"
-CLI="${CLI:-${ROOT}/bin/moox-cli}"
+DEFAULT_CSV_DIR="${HOME}/Downloads"
+if [[ -d "${ROOT}/storage/sample-data" ]]; then
+  DEFAULT_CSV_DIR="${ROOT}/storage/sample-data"
+elif [[ -d "${ROOT}/sample-data" ]]; then
+  DEFAULT_CSV_DIR="${ROOT}/sample-data"
+fi
+CSV_DIR="${CSV_DIR:-${DEFAULT_CSV_DIR}}"
+DEFAULT_CLI="${ROOT}/bin/moox-cli"
+if [[ -x "${ROOT}/cli/bin/moox-cli" ]]; then
+  DEFAULT_CLI="${ROOT}/cli/bin/moox-cli"
+fi
+CLI="${CLI:-${DEFAULT_CLI}}"
 
 if [[ ! -x "${CLI}" ]]; then
   echo "==> moox-cli not found, building binaries first"

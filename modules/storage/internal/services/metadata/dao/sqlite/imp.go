@@ -12,7 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/services/metadata/dao/model"
 	"trpc.group/trpc-go/trpc-go/log"
 
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
