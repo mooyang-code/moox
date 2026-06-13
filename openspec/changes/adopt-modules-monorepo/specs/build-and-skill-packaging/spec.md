@@ -1,15 +1,15 @@
 ## ADDED Requirements
 
 ### Requirement: Root build scripts
-The repository SHALL centralize cross-module build, test, release, and skill packaging scripts under root `build/`.
+The repository SHALL centralize cross-module build, test, release, and skill packaging scripts under root `scripts/`.
 
-#### Scenario: Build directory is created
+#### Scenario: Scripts directory is created
 - **WHEN** first-stage build infrastructure is added
-- **THEN** root `build/` SHALL contain scripts for build, test, release, and skill packaging
+- **THEN** root `scripts/` SHALL contain scripts for build, test, release, and skill packaging
 
 #### Scenario: Root Makefile delegates
 - **WHEN** a user runs common root make targets
-- **THEN** the root `Makefile` SHALL delegate to scripts under `build/` instead of embedding complex build logic directly
+- **THEN** the root `Makefile` SHALL delegate to scripts under `scripts/` instead of embedding complex build logic directly
 
 ### Requirement: Module-specific build strategies
 The build system SHALL allow each module to keep its required build strategy while exposing common root commands.

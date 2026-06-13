@@ -5,7 +5,7 @@ The repository SHALL expose moox as a workspace monorepo root that contains shar
 
 #### Scenario: Root directories exist
 - **WHEN** the first-stage monorepo skeleton is created
-- **THEN** the repository root SHALL contain `docs/`, `openspec/`, `skills/`, `build/`, `modules/`, `configs/`, `schema/`, `deployments/`, and `var/`
+- **THEN** the repository root SHALL contain `docs/`, `openspec/`, `skills/`, `scripts/`, `modules/`, `configs/`, `schema/`, `deployments/`, and `var/`
 
 #### Scenario: Business code is not root-sprawled
 - **WHEN** a Go business component is migrated into moox

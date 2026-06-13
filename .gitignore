@@ -43,6 +43,7 @@ server/.claude/
 /modules/*/.cache/
 /modules/storage/.deps/
 /modules/storage/data/
+/scripts/node_exporter/build/
 cover.out
 cover.out.tmp
 

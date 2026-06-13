@@ -27,12 +27,12 @@
 - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/go.work`
 - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/Makefile`
 - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.gitignore`
-- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/build/build.sh`
-- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/build/test.sh`
-- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/build/release.sh`
-- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/build/deploy.sh`
-- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/build/acceptance.sh`
-- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/build/package-skill.sh`
+- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/build.sh`
+- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/test.sh`
+- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/release.sh`
+- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/deploy.sh`
+- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/acceptance.sh`
+- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/package-skill.sh`
 - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/skills/moox/SKILL.md`
 - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/skills/moox/references/build.md`
 - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/skills/moox/references/storage.md`
@@ -155,8 +155,8 @@
 
   ```text
   /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules
-  /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/build
-  /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/build/make
+  /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts
+  /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/make
   /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/skills/moox/references
   /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/configs
   /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/deployments
@@ -233,25 +233,25 @@
   .PHONY: build test release deploy acceptance package-skill clean proto
 
   build:
-  	./build/build.sh
+  	./scripts/build.sh
 
   test:
-  	./build/test.sh
+  	./scripts/test.sh
 
   release:
-  	./build/release.sh
+  	./scripts/release.sh
 
   deploy:
-  	./build/deploy.sh
+  	./scripts/deploy.sh
 
   acceptance:
-  	./build/acceptance.sh
+  	./scripts/acceptance.sh
 
   package-skill:
-  	./build/package-skill.sh
+  	./scripts/package-skill.sh
 
   proto:
-  	./build/build.sh proto
+  	./scripts/build.sh proto
 
   clean:
   	rm -rf bin release dist coverage
@@ -1431,7 +1431,7 @@
 
 ## Phase 13: Build, Release, And Skill Packaging
 
-- [ ] **13.1 Implement `build/test.sh`**
+- [ ] **13.1 Implement `scripts/test.sh`**
 
   Required behavior:
 
@@ -1447,7 +1447,7 @@
 
   Required output: print module name before each test command and stop at first failure.
 
-- [ ] **13.2 Implement `build/build.sh`**
+- [ ] **13.2 Implement `scripts/build.sh`**
 
   Required behavior:
 
@@ -1461,7 +1461,7 @@
   build moox-account from modules/account/cmd/moox-account
   ```
 
-- [ ] **13.3 Implement `build/release.sh`**
+- [ ] **13.3 Implement `scripts/release.sh`**
 
   Required behavior:
 
@@ -1473,7 +1473,7 @@
   server binaries for requested target platform
   ```
 
-- [ ] **13.4 Implement `build/package-skill.sh`**
+- [ ] **13.4 Implement `scripts/package-skill.sh`**
 
   Required package content:
 
@@ -1517,12 +1517,12 @@
 
 ## Phase 14: Remote Deploy And CSV Acceptance
 
-- [ ] **14.1 Implement `build/deploy.sh`**
+- [ ] **14.1 Implement `scripts/deploy.sh`**
 
   Create:
 
   ```text
-  /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/build/deploy.sh
+  /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/deploy.sh
   ```
 
   Required defaults:
@@ -1553,16 +1553,16 @@
 
   ```bash
   cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-  REMOTE_HOST=43.132.204.177 REMOTE_ROOT='~/moox' ./build/deploy.sh
+  REMOTE_HOST=43.132.204.177 REMOTE_ROOT='~/moox' ./scripts/deploy.sh
   ```
 
 - [ ] **14.2 Implement remote process control**
 
-  Add to `build/deploy.sh` or create:
+  Add to `scripts/deploy.sh` or create:
 
   ```text
-  /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/build/remote-start.sh
-  /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/build/remote-stop.sh
+  /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/remote-start.sh
+  /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/remote-stop.sh
   ```
 
   Required behavior:
@@ -1576,12 +1576,12 @@
   verify processes are alive after start
   ```
 
-- [ ] **14.3 Implement `build/acceptance.sh`**
+- [ ] **14.3 Implement `scripts/acceptance.sh`**
 
   Create:
 
   ```text
-  /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/build/acceptance.sh
+  /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/acceptance.sh
   ```
 
   Required inputs:

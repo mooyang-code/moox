@@ -26,7 +26,7 @@ Core concepts:
 - `modules/order`: order module.
 - `modules/account`: account module.
 - `docs`: architecture, concept, and protocol documents.
-- `build`: root build, release, deploy, and acceptance scripts.
+- `scripts`: root build, release, deploy, acceptance, and node_exporter operation scripts.
 
 ## Common Commands
 

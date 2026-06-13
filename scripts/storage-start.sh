@@ -4,18 +4,13 @@ set -euo pipefail
 APP_NAME="${APP_NAME:-moox-storage}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="${SCRIPT_DIR}/${APP_NAME}.pid"
+STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-6}"
 
 cd "${SCRIPT_DIR}"
 mkdir -p log database data var/storage
 
-if [[ -f "${PID_FILE}" ]]; then
-  old_pid="$(cat "${PID_FILE}")"
-  if ps -p "${old_pid}" >/dev/null 2>&1; then
-    echo "stopping existing ${APP_NAME} pid=${old_pid}"
-    kill "${old_pid}" 2>/dev/null || true
-    sleep 2
-  fi
-  rm -f "${PID_FILE}"
+if [[ -x "${SCRIPT_DIR}/stop.sh" ]]; then
+  APP_NAME="${APP_NAME}" "${SCRIPT_DIR}/stop.sh" || true
 fi
 
 export STORAGE_CONFIG_PATH="${SCRIPT_DIR}/config"
@@ -25,7 +20,7 @@ export MOOX_STORAGE_HOME="${SCRIPT_DIR}/var/storage"
 echo "starting ${APP_NAME}"
 nohup "./bin/${APP_NAME}" -conf=./config/trpc_go.yaml > ./log/app.log 2>&1 &
 echo $! > "${PID_FILE}"
-sleep 1
+sleep "${STARTUP_WAIT_SECONDS}"
 
 pid="$(cat "${PID_FILE}")"
 if ! ps -p "${pid}" >/dev/null 2>&1; then

@@ -26,7 +26,7 @@ CLI="${CLI:-${DEFAULT_CLI}}"
 
 if [[ ! -x "${CLI}" ]]; then
   echo "==> moox-cli not found, building binaries first"
-  "${ROOT}/build/build.sh"
+  "${ROOT}/scripts/build.sh"
 fi
 
 rm -rf "${STORAGE_ROOT}"

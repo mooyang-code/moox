@@ -1,27 +1,27 @@
 .PHONY: build test release deploy acceptance package-skill clean proto
 
 build:
-	./build/build.sh
+	./scripts/build.sh
 
 test:
-	./build/test.sh
+	./scripts/test.sh
 
 release:
-	./build/release.sh
+	./scripts/release.sh
 
 deploy:
-	./build/deploy.sh
+	./scripts/deploy.sh
 
 acceptance:
-	./build/acceptance.sh
+	./scripts/acceptance.sh
 
 package-skill:
-	./build/package-skill.sh
+	./scripts/package-skill.sh
 
 proto:
 	$(MAKE) -C modules/storage proto
 	$(MAKE) -C modules/control/proto all
 
 clean:
-	rm -rf bin release dist coverage
+	rm -rf bin release dist coverage scripts/node_exporter/build
 	find modules -type d \( -name bin -o -name release -o -name .cache \) -prune -exec rm -rf {} +

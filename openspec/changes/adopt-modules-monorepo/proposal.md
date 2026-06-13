@@ -10,7 +10,7 @@ moox 要成为个人量化数据存储的唯一大仓，需要先统一代码组
 - 将 CLI 入口命名从泛化的 `cmd/moox` 收窄为 `cmd/moox-cli`，所有二进制统一使用 `moox-*` 前缀。
 - 将代码中的存储抽象目录命名统一为 `internal/storage`，避免 `internal/data` 与业务数据、运行时数据混淆。
 - 新增根 `skills/moox`，用于沉淀 moox 专用 Agent 技能和 references。
-- 新增根 `build/`，集中管理编译、测试、发布和技能打包脚本。
+- 新增根 `scripts/`，集中管理编译、测试、发布和技能打包脚本。
 - 新增大仓架构文档 `docs/monorepo-architecture.md`。
 
 ## Capabilities
@@ -19,7 +19,7 @@ moox 要成为个人量化数据存储的唯一大仓，需要先统一代码组
 
 - `monorepo-workspace`: 定义 moox 第一阶段采用 `modules/ + go.work + 多 go.mod` 的 workspace 大仓能力。
 - `module-layout`: 定义控制面、CLI、存储、采集、因子、订单、账户等模块的目录和命名约束。
-- `build-and-skill-packaging`: 定义根 `build/` 构建发布入口和 `skills/moox` Agent 技能打包能力。
+- `build-and-skill-packaging`: 定义根 `scripts/` 构建发布入口和 `skills/moox` Agent 技能打包能力。
 
 ### Modified Capabilities
 

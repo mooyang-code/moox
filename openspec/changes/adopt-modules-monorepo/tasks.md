@@ -1,6 +1,6 @@
 ## 1. 建立大仓基础骨架
 
-- [ ] 1.1 在 moox 根目录创建 `modules/`、`build/`、`skills/moox/`、`configs/`、`deployments/`、`var/`，并确保 `var/` 不提交运行时数据。
+- [ ] 1.1 在 moox 根目录创建 `modules/`、`scripts/`、`skills/moox/`、`configs/`、`deployments/`、`var/`，并确保 `var/` 不提交运行时数据。
 - [ ] 1.2 创建根 `go.work`，先纳入现有可迁移模块路径，执行 `go work sync` 验证 workspace 可用。
 - [ ] 1.3 创建或更新根 `README.md`，说明 moox 是量化数据存储统一解决方案，并链接 `docs/monorepo-architecture.md`。
 - [ ] 1.4 创建根 `.gitignore` 规则，覆盖 `var/`、构建产物、各模块 release/bin/cache 目录。
@@ -53,12 +53,12 @@
 ## 8. 建立根构建和发布入口
 
 - [ ] 8.1 创建根 `Makefile`，提供 `build`、`test`、`release`、`package-skill`、`clean` 入口。
-- [ ] 8.2 创建 `build/build.sh`，按模块执行构建，storage 使用模块专用构建策略。
-- [ ] 8.3 创建 `build/test.sh`，按模块执行测试，storage 使用 `make test`，普通 Go 模块使用 `go test ./...`。
-- [ ] 8.4 创建 `build/release.sh`，服务端按目标平台构建，CLI 固定构建 Linux amd64、Darwin amd64、Darwin arm64、Windows amd64。
-- [ ] 8.5 创建 `build/package-skill.sh`，打包 `skills/moox` 和全平台 `moox-cli` 二进制。
-- [ ] 8.6 创建 `build/deploy.sh`，支持把 moox 各模块统一发布到 `43.132.204.177:~/moox`，并允许通过 `REMOTE_ROOT` 自定义远端发布根目录；脚本必须在远端解析 `~/moox`，不能把它展开成本机用户目录。
-- [ ] 8.7 创建 `build/acceptance.sh`，支持上传本机 `/Users/mooyang/Downloads/APT-USDT.csv` 和 `/Users/mooyang/Downloads/AR-USDT.csv` 到远端 `~/moox/var/storage/acceptance`，并写入 xData/storage 作为验收数据。
+- [ ] 8.2 创建 `scripts/build.sh`，按模块执行构建，storage 使用模块专用构建策略。
+- [ ] 8.3 创建 `scripts/test.sh`，按模块执行测试，storage 使用 `make test`，普通 Go 模块使用 `go test ./...`。
+- [ ] 8.4 创建 `scripts/release.sh`，服务端按目标平台构建，CLI 固定构建 Linux amd64、Darwin amd64、Darwin arm64、Windows amd64。
+- [ ] 8.5 创建 `scripts/package-skill.sh`，打包 `skills/moox` 和全平台 `moox-cli` 二进制。
+- [ ] 8.6 创建 `scripts/deploy.sh`，支持把 moox 各模块统一发布到 `43.132.204.177:~/moox`，并允许通过 `REMOTE_ROOT` 自定义远端发布根目录；脚本必须在远端解析 `~/moox`，不能把它展开成本机用户目录。
+- [ ] 8.7 创建 `scripts/acceptance.sh`，支持上传本机 `/Users/mooyang/Downloads/APT-USDT.csv` 和 `/Users/mooyang/Downloads/AR-USDT.csv` 到远端 `~/moox/var/storage/acceptance`，并写入 xData/storage 作为验收数据。
 
 ## 9. 建立 moox Agent 技能
 
