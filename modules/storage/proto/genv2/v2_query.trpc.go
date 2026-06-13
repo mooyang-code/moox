@@ -19,10 +19,11 @@ import (
 
 // QueryServiceService defines service.
 type QueryServiceService interface {
+	// QueryFrame 返回可组合基础字段、因子实例、表达式和系统列的表格结果。
 	QueryFrame(ctx context.Context, req *QueryFrameReq) (*QueryFrameRsp, error)
-
+	// TextSearch 检索文本索引记录。
 	TextSearch(ctx context.Context, req *TextSearchReq) (*TextSearchRsp, error)
-
+	// ExplainQuery 解释服务端路由和执行策略，不让调用方控制物理细节。
 	ExplainQuery(ctx context.Context, req *ExplainQueryReq) (*ExplainQueryRsp, error)
 }
 
@@ -111,12 +112,17 @@ func RegisterQueryServiceService(s server.Service, svr QueryServiceService) {
 
 type UnimplementedQueryService struct{}
 
+// QueryFrame 返回可组合基础字段、因子实例、表达式和系统列的表格结果。
 func (s *UnimplementedQueryService) QueryFrame(ctx context.Context, req *QueryFrameReq) (*QueryFrameRsp, error) {
 	return nil, errors.New("rpc QueryFrame of service QueryService is not implemented")
 }
+
+// TextSearch 检索文本索引记录。
 func (s *UnimplementedQueryService) TextSearch(ctx context.Context, req *TextSearchReq) (*TextSearchRsp, error) {
 	return nil, errors.New("rpc TextSearch of service QueryService is not implemented")
 }
+
+// ExplainQuery 解释服务端路由和执行策略，不让调用方控制物理细节。
 func (s *UnimplementedQueryService) ExplainQuery(ctx context.Context, req *ExplainQueryReq) (*ExplainQueryRsp, error) {
 	return nil, errors.New("rpc ExplainQuery of service QueryService is not implemented")
 }
@@ -129,10 +135,11 @@ func (s *UnimplementedQueryService) ExplainQuery(ctx context.Context, req *Expla
 
 // QueryServiceClientProxy defines service client proxy
 type QueryServiceClientProxy interface {
+	// QueryFrame 返回可组合基础字段、因子实例、表达式和系统列的表格结果。
 	QueryFrame(ctx context.Context, req *QueryFrameReq, opts ...client.Option) (rsp *QueryFrameRsp, err error)
-
+	// TextSearch 检索文本索引记录。
 	TextSearch(ctx context.Context, req *TextSearchReq, opts ...client.Option) (rsp *TextSearchRsp, err error)
-
+	// ExplainQuery 解释服务端路由和执行策略，不让调用方控制物理细节。
 	ExplainQuery(ctx context.Context, req *ExplainQueryReq, opts ...client.Option) (rsp *ExplainQueryRsp, err error)
 }
 

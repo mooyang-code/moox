@@ -21,13 +21,16 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// 分析查询的时间条件。
 type QueryTime struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	TimeRange    *TimeRange `protobuf:"bytes,1,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
-	SnapshotTime string     `protobuf:"bytes,2,opt,name=snapshot_time,json=snapshotTime,proto3" json:"snapshot_time,omitempty"`
+	// 区间查询使用的时间范围。
+	TimeRange *TimeRange `protobuf:"bytes,1,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
+	// 截面查询使用的时间点。
+	SnapshotTime string `protobuf:"bytes,2,opt,name=snapshot_time,json=snapshotTime,proto3" json:"snapshot_time,omitempty"`
 }
 
 func (x *QueryTime) Reset() {
@@ -76,19 +79,28 @@ func (x *QueryTime) GetSnapshotTime() string {
 	return ""
 }
 
+// 组合查询请求或返回中的一列。
 type QueryFrameColumn struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	ColumnId         string         `protobuf:"bytes,1,opt,name=column_id,json=columnId,proto3" json:"column_id,omitempty"`
-	OutputName       string         `protobuf:"bytes,2,opt,name=output_name,json=outputName,proto3" json:"output_name,omitempty"`
-	ColumnOrigin     ColumnOrigin   `protobuf:"varint,3,opt,name=column_origin,json=columnOrigin,proto3,enum=trpc.storage.v2.common.ColumnOrigin" json:"column_origin,omitempty"`
-	DatasetId        string         `protobuf:"bytes,4,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	FieldId          string         `protobuf:"bytes,5,opt,name=field_id,json=fieldId,proto3" json:"field_id,omitempty"`
-	FactorInstanceId string         `protobuf:"bytes,6,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
-	Expression       string         `protobuf:"bytes,7,opt,name=expression,proto3" json:"expression,omitempty"`
-	ValueType        FieldValueType `protobuf:"varint,8,opt,name=value_type,json=valueType,proto3,enum=trpc.storage.v2.common.FieldValueType" json:"value_type,omitempty"`
+	// 数据视图中的列 ID。
+	ColumnId string `protobuf:"bytes,1,opt,name=column_id,json=columnId,proto3" json:"column_id,omitempty"`
+	// 返回给调用方的列名。
+	OutputName string `protobuf:"bytes,2,opt,name=output_name,json=outputName,proto3" json:"output_name,omitempty"`
+	// 列来源，例如字段、因子实例、表达式或系统列。
+	ColumnOrigin ColumnOrigin `protobuf:"varint,3,opt,name=column_origin,json=columnOrigin,proto3,enum=trpc.storage.v2.common.ColumnOrigin" json:"column_origin,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,4,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 字段 ID。
+	FieldId string `protobuf:"bytes,5,opt,name=field_id,json=fieldId,proto3" json:"field_id,omitempty"`
+	// 因子实例 ID，表示带参数的因子结果。
+	FactorInstanceId string `protobuf:"bytes,6,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
+	// 服务端支持的表达式文本。
+	Expression string `protobuf:"bytes,7,opt,name=expression,proto3" json:"expression,omitempty"`
+	// 值的逻辑类型。
+	ValueType FieldValueType `protobuf:"varint,8,opt,name=value_type,json=valueType,proto3,enum=trpc.storage.v2.common.FieldValueType" json:"value_type,omitempty"`
 }
 
 func (x *QueryFrameColumn) Reset() {
@@ -179,14 +191,18 @@ func (x *QueryFrameColumn) GetValueType() FieldValueType {
 	return FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED
 }
 
+// 组合查询返回的一行。
 type QueryFrameRow struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	InstrumentId string        `protobuf:"bytes,1,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
-	Time         string        `protobuf:"bytes,2,opt,name=time,proto3" json:"time,omitempty"`
-	Values       []*FieldValue `protobuf:"bytes,3,rep,name=values,proto3" json:"values,omitempty"`
+	// 内部标准化标的 ID；非标的数据可为空。
+	InstrumentId string `protobuf:"bytes,1,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
+	// 时序结果中的行时间，或截面结果中的截面时间。
+	Time string `protobuf:"bytes,2,opt,name=time,proto3" json:"time,omitempty"`
+	// 与返回列顺序对齐的字段值。
+	Values []*FieldValue `protobuf:"bytes,3,rep,name=values,proto3" json:"values,omitempty"`
 }
 
 func (x *QueryFrameRow) Reset() {
@@ -242,20 +258,30 @@ func (x *QueryFrameRow) GetValues() []*FieldValue {
 	return nil
 }
 
+// 组合查询请求，可查询字段、因子、表达式和系统列。
 type QueryFrameReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo      *AuthInfo           `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId   string              `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DataViewId    string              `protobuf:"bytes,3,opt,name=data_view_id,json=dataViewId,proto3" json:"data_view_id,omitempty"`
-	InstrumentIds []string            `protobuf:"bytes,4,rep,name=instrument_ids,json=instrumentIds,proto3" json:"instrument_ids,omitempty"`
-	QueryTime     *QueryTime          `protobuf:"bytes,5,opt,name=query_time,json=queryTime,proto3" json:"query_time,omitempty"`
-	Columns       []*QueryFrameColumn `protobuf:"bytes,6,rep,name=columns,proto3" json:"columns,omitempty"`
-	Filters       []*FilterExpr       `protobuf:"bytes,7,rep,name=filters,proto3" json:"filters,omitempty"`
-	Sorts         []*SortSpec         `protobuf:"bytes,8,rep,name=sorts,proto3" json:"sorts,omitempty"`
-	Page          *Page               `protobuf:"bytes,9,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 已配置的数据视图 ID；为空时可由 columns 描述临时查询。
+	DataViewId string `protobuf:"bytes,3,opt,name=data_view_id,json=dataViewId,proto3" json:"data_view_id,omitempty"`
+	// 调用方指定的标的 ID 列表；标的池由上层应用处理。
+	InstrumentIds []string `protobuf:"bytes,4,rep,name=instrument_ids,json=instrumentIds,proto3" json:"instrument_ids,omitempty"`
+	// 查询时间条件，可表示区间查询或截面查询。
+	QueryTime *QueryTime `protobuf:"bytes,5,opt,name=query_time,json=queryTime,proto3" json:"query_time,omitempty"`
+	// 查询输出列；为空时使用数据视图激活版本的默认列。
+	Columns []*QueryFrameColumn `protobuf:"bytes,6,rep,name=columns,proto3" json:"columns,omitempty"`
+	// 过滤条件列表。
+	Filters []*FilterExpr `protobuf:"bytes,7,rep,name=filters,proto3" json:"filters,omitempty"`
+	// 排序条件列表。
+	Sorts []*SortSpec `protobuf:"bytes,8,rep,name=sorts,proto3" json:"sorts,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,9,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *QueryFrameReq) Reset() {
@@ -353,15 +379,20 @@ func (x *QueryFrameReq) GetPage() *Page {
 	return nil
 }
 
+// 组合查询返回的表格结果。
 type QueryFrameRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo            `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Columns    []*QueryFrameColumn `protobuf:"bytes,2,rep,name=columns,proto3" json:"columns,omitempty"`
-	Rows       []*QueryFrameRow    `protobuf:"bytes,3,rep,name=rows,proto3" json:"rows,omitempty"`
-	PageResult *PageResult         `protobuf:"bytes,4,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 返回列或请求列列表。
+	Columns []*QueryFrameColumn `protobuf:"bytes,2,rep,name=columns,proto3" json:"columns,omitempty"`
+	// 返回行列表。
+	Rows []*QueryFrameRow `protobuf:"bytes,3,rep,name=rows,proto3" json:"rows,omitempty"`
+	// 分页结果。
+	PageResult *PageResult `protobuf:"bytes,4,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *QueryFrameRsp) Reset() {
@@ -424,18 +455,26 @@ func (x *QueryFrameRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// 全文检索请求，用于文档型或已建立文本索引的数据集。
 type TextSearchReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo      *AuthInfo  `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId   string     `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DatasetId     string     `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	Query         string     `protobuf:"bytes,4,opt,name=query,proto3" json:"query,omitempty"`
-	InstrumentIds []string   `protobuf:"bytes,5,rep,name=instrument_ids,json=instrumentIds,proto3" json:"instrument_ids,omitempty"`
-	TimeRange     *TimeRange `protobuf:"bytes,6,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
-	Page          *Page      `protobuf:"bytes,7,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 用户输入的检索文本。
+	Query string `protobuf:"bytes,4,opt,name=query,proto3" json:"query,omitempty"`
+	// 调用方指定的标的 ID 列表；标的池由上层应用处理。
+	InstrumentIds []string `protobuf:"bytes,5,rep,name=instrument_ids,json=instrumentIds,proto3" json:"instrument_ids,omitempty"`
+	// time_range 参数。
+	TimeRange *TimeRange `protobuf:"bytes,6,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,7,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *TextSearchReq) Reset() {
@@ -519,13 +558,17 @@ func (x *TextSearchReq) GetPage() *Page {
 	return nil
 }
 
+// 全文检索返回结果。
 type TextSearchRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Records    []*Record   `protobuf:"bytes,2,rep,name=records,proto3" json:"records,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// records 参数。
+	Records []*Record `protobuf:"bytes,2,rep,name=records,proto3" json:"records,omitempty"`
+	// 分页结果。
 	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
@@ -582,15 +625,20 @@ func (x *TextSearchRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// 查询执行计划中的一步。
 type QueryPlanStep struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	StepId    string `protobuf:"bytes,1,opt,name=step_id,json=stepId,proto3" json:"step_id,omitempty"`
-	Engine    string `protobuf:"bytes,2,opt,name=engine,proto3" json:"engine,omitempty"`
+	// 执行计划步骤 ID。
+	StepId string `protobuf:"bytes,1,opt,name=step_id,json=stepId,proto3" json:"step_id,omitempty"`
+	// 执行引擎名称，例如 Pebble、DuckDB、CSV 或 Bleve。
+	Engine string `protobuf:"bytes,2,opt,name=engine,proto3" json:"engine,omitempty"`
+	// 执行操作，例如扫描、过滤、连接或读取物化视图。
 	Operation string `protobuf:"bytes,3,opt,name=operation,proto3" json:"operation,omitempty"`
-	Detail    string `protobuf:"bytes,4,opt,name=detail,proto3" json:"detail,omitempty"`
+	// 面向诊断的执行细节。
+	Detail string `protobuf:"bytes,4,opt,name=detail,proto3" json:"detail,omitempty"`
 }
 
 func (x *QueryPlanStep) Reset() {
@@ -653,13 +701,16 @@ func (x *QueryPlanStep) GetDetail() string {
 	return ""
 }
 
+// 解释组合查询执行计划的请求。
 type ExplainQueryReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo *AuthInfo      `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Query    *QueryFrameReq `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 需要解释执行计划的组合查询请求。
+	Query *QueryFrameReq `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
 }
 
 func (x *ExplainQueryReq) Reset() {
@@ -708,13 +759,16 @@ func (x *ExplainQueryReq) GetQuery() *QueryFrameReq {
 	return nil
 }
 
+// 查询执行计划说明。
 type ExplainQueryRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo         `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Steps   []*QueryPlanStep `protobuf:"bytes,2,rep,name=steps,proto3" json:"steps,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// steps 参数。
+	Steps []*QueryPlanStep `protobuf:"bytes,2,rep,name=steps,proto3" json:"steps,omitempty"`
 }
 
 func (x *ExplainQueryRsp) Reset() {

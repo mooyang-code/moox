@@ -7,21 +7,36 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/genv2;st
 import "v2_common.proto";
 import "v2_data.proto";
 
+// 普通数据或时序数据变更事件。
 message DataMutationEvent {
+  // event_id 参数。
   string event_id = 1;
+  // 工作空间 ID，用于隔离用户、策略和元数据。
   string workspace_id = 2;
+  // 数据集 ID。
   string dataset_id = 3;
+  // 内部标准化标的 ID；非标的数据可为空。
   string instrument_id = 4;
+  // 业务事件时间。
   string event_time = 5;
+  // records 参数。
   repeated data.Record records = 6;
+  // 扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 7;
 }
 
+// 因子计算完成事件。
 message FactorCalculatedEvent {
+  // event_id 参数。
   string event_id = 1;
+  // 工作空间 ID，用于隔离用户、策略和元数据。
   string workspace_id = 2;
+  // 数据集 ID。
   string dataset_id = 3;
+  // 因子实例 ID，表示带参数的因子结果。
   string factor_instance_id = 4;
+  // 业务事件时间。
   string event_time = 5;
+  // 时序点或因子点列表。
   repeated data.FactorValuePoint points = 6;
 }

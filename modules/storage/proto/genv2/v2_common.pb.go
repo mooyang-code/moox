@@ -21,14 +21,20 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// 写入模式。
 type WriteMode int32
 
 const (
+	// 未指定写入模式，由服务端使用默认策略。
 	WriteMode_WRITE_MODE_UNSPECIFIED WriteMode = 0
-	WriteMode_WRITE_MODE_UPSERT      WriteMode = 1
-	WriteMode_WRITE_MODE_APPEND      WriteMode = 2
-	WriteMode_WRITE_MODE_OVERWRITE   WriteMode = 3
-	WriteMode_WRITE_MODE_DELETE      WriteMode = 4
+	// 插入新数据，并更新相同逻辑键的已有数据。
+	WriteMode_WRITE_MODE_UPSERT WriteMode = 1
+	// 只追加新数据。
+	WriteMode_WRITE_MODE_APPEND WriteMode = 2
+	// 覆盖匹配的逻辑数据切片。
+	WriteMode_WRITE_MODE_OVERWRITE WriteMode = 3
+	// 删除或标记删除匹配的逻辑数据切片。
+	WriteMode_WRITE_MODE_DELETE WriteMode = 4
 )
 
 // Enum value maps for WriteMode.
@@ -76,16 +82,24 @@ func (WriteMode) EnumDescriptor() ([]byte, []int) {
 	return file_v2_common_proto_rawDescGZIP(), []int{0}
 }
 
+// 数据集的结构形态。
 type DataKind int32
 
 const (
+	// 未指定结构形态。
 	DataKind_DATA_KIND_UNSPECIFIED DataKind = 0
-	DataKind_DATA_KIND_OBJECT      DataKind = 1
+	// 对象型数据，例如公司资料。
+	DataKind_DATA_KIND_OBJECT DataKind = 1
+	// 时序数据，例如 K 线或 tick。
 	DataKind_DATA_KIND_TIME_SERIES DataKind = 2
-	DataKind_DATA_KIND_SNAPSHOT    DataKind = 3
-	DataKind_DATA_KIND_EVENT       DataKind = 4
-	DataKind_DATA_KIND_DOCUMENT    DataKind = 5
-	DataKind_DATA_KIND_TABLE       DataKind = 6
+	// 快照数据，例如最新行情状态。
+	DataKind_DATA_KIND_SNAPSHOT DataKind = 3
+	// 事件数据，例如公告或成交事件。
+	DataKind_DATA_KIND_EVENT DataKind = 4
+	// 文档型数据，例如新闻或研报。
+	DataKind_DATA_KIND_DOCUMENT DataKind = 5
+	// 通用表格数据，例如榜单。
+	DataKind_DATA_KIND_TABLE DataKind = 6
 )
 
 // Enum value maps for DataKind.
@@ -137,20 +151,33 @@ func (DataKind) EnumDescriptor() ([]byte, []int) {
 	return file_v2_common_proto_rawDescGZIP(), []int{1}
 }
 
+// 数据集所属的金融业务领域。
 type DataDomain int32
 
 const (
-	DataDomain_DATA_DOMAIN_UNSPECIFIED      DataDomain = 0
-	DataDomain_DATA_DOMAIN_MARKET_BAR       DataDomain = 1
-	DataDomain_DATA_DOMAIN_MARKET_TICK      DataDomain = 2
-	DataDomain_DATA_DOMAIN_ORDER_BOOK       DataDomain = 3
-	DataDomain_DATA_DOMAIN_TRADE            DataDomain = 4
-	DataDomain_DATA_DOMAIN_SYMBOL_PROFILE   DataDomain = 5
-	DataDomain_DATA_DOMAIN_COMPANY_PROFILE  DataDomain = 6
-	DataDomain_DATA_DOMAIN_NEWS             DataDomain = 7
-	DataDomain_DATA_DOMAIN_ANNOUNCEMENT     DataDomain = 8
-	DataDomain_DATA_DOMAIN_FACTOR_VALUE     DataDomain = 9
-	DataDomain_DATA_DOMAIN_RANKING_LIST     DataDomain = 10
+	// 未指定业务领域。
+	DataDomain_DATA_DOMAIN_UNSPECIFIED DataDomain = 0
+	// K 线或 OHLCV 数据。
+	DataDomain_DATA_DOMAIN_MARKET_BAR DataDomain = 1
+	// tick 级行情或成交数据。
+	DataDomain_DATA_DOMAIN_MARKET_TICK DataDomain = 2
+	// 订单簿深度数据。
+	DataDomain_DATA_DOMAIN_ORDER_BOOK DataDomain = 3
+	// 成交明细或交易记录。
+	DataDomain_DATA_DOMAIN_TRADE DataDomain = 4
+	// 交易场所代码资料。
+	DataDomain_DATA_DOMAIN_SYMBOL_PROFILE DataDomain = 5
+	// 上市公司或发行主体资料。
+	DataDomain_DATA_DOMAIN_COMPANY_PROFILE DataDomain = 6
+	// 新闻数据。
+	DataDomain_DATA_DOMAIN_NEWS DataDomain = 7
+	// 公告数据。
+	DataDomain_DATA_DOMAIN_ANNOUNCEMENT DataDomain = 8
+	// 因子值数据。
+	DataDomain_DATA_DOMAIN_FACTOR_VALUE DataDomain = 9
+	// 榜单数据。
+	DataDomain_DATA_DOMAIN_RANKING_LIST DataDomain = 10
+	// 财务报表数据。
 	DataDomain_DATA_DOMAIN_FINANCIAL_REPORT DataDomain = 11
 )
 
@@ -213,17 +240,26 @@ func (DataDomain) EnumDescriptor() ([]byte, []int) {
 	return file_v2_common_proto_rawDescGZIP(), []int{2}
 }
 
+// 字段、因子和查询列的逻辑值类型。
 type FieldValueType int32
 
 const (
+	// 未指定值类型。
 	FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED FieldValueType = 0
-	FieldValueType_FIELD_VALUE_TYPE_STRING      FieldValueType = 1
-	FieldValueType_FIELD_VALUE_TYPE_INT         FieldValueType = 2
-	FieldValueType_FIELD_VALUE_TYPE_DOUBLE      FieldValueType = 3
-	FieldValueType_FIELD_VALUE_TYPE_BOOL        FieldValueType = 4
-	FieldValueType_FIELD_VALUE_TYPE_TIME        FieldValueType = 5
-	FieldValueType_FIELD_VALUE_TYPE_JSON        FieldValueType = 6
-	FieldValueType_FIELD_VALUE_TYPE_BYTES       FieldValueType = 7
+	// 字符串类型。
+	FieldValueType_FIELD_VALUE_TYPE_STRING FieldValueType = 1
+	// 整数类型。
+	FieldValueType_FIELD_VALUE_TYPE_INT FieldValueType = 2
+	// 浮点数类型。
+	FieldValueType_FIELD_VALUE_TYPE_DOUBLE FieldValueType = 3
+	// 布尔类型。
+	FieldValueType_FIELD_VALUE_TYPE_BOOL FieldValueType = 4
+	// 时间类型。
+	FieldValueType_FIELD_VALUE_TYPE_TIME FieldValueType = 5
+	// JSON 文本类型。
+	FieldValueType_FIELD_VALUE_TYPE_JSON FieldValueType = 6
+	// 二进制类型。
+	FieldValueType_FIELD_VALUE_TYPE_BYTES FieldValueType = 7
 )
 
 // Enum value maps for FieldValueType.
@@ -277,14 +313,20 @@ func (FieldValueType) EnumDescriptor() ([]byte, []int) {
 	return file_v2_common_proto_rawDescGZIP(), []int{3}
 }
 
+// 数据视图或查询列的来源。
 type ColumnOrigin int32
 
 const (
-	ColumnOrigin_COLUMN_ORIGIN_UNSPECIFIED     ColumnOrigin = 0
-	ColumnOrigin_COLUMN_ORIGIN_FIELD           ColumnOrigin = 1
+	// 未指定列来源。
+	ColumnOrigin_COLUMN_ORIGIN_UNSPECIFIED ColumnOrigin = 0
+	// 列来自数据集字段。
+	ColumnOrigin_COLUMN_ORIGIN_FIELD ColumnOrigin = 1
+	// 列来自因子实例。
 	ColumnOrigin_COLUMN_ORIGIN_FACTOR_INSTANCE ColumnOrigin = 2
-	ColumnOrigin_COLUMN_ORIGIN_EXPRESSION      ColumnOrigin = 3
-	ColumnOrigin_COLUMN_ORIGIN_SYSTEM_COLUMN   ColumnOrigin = 4
+	// 列来自数据视图表达式。
+	ColumnOrigin_COLUMN_ORIGIN_EXPRESSION ColumnOrigin = 3
+	// 列来自系统列，例如标的 ID 或时间。
+	ColumnOrigin_COLUMN_ORIGIN_SYSTEM_COLUMN ColumnOrigin = 4
 )
 
 // Enum value maps for ColumnOrigin.
@@ -332,26 +374,44 @@ func (ColumnOrigin) EnumDescriptor() ([]byte, []int) {
 	return file_v2_common_proto_rawDescGZIP(), []int{4}
 }
 
+// v2 存储接口通用错误码。
 type ErrorCode int32
 
 const (
-	ErrorCode_SUCCESS                        ErrorCode = 0
-	ErrorCode_INVALID_PARAM                  ErrorCode = 1
-	ErrorCode_NO_AUTH                        ErrorCode = 2
-	ErrorCode_NO_PERMISSION                  ErrorCode = 3
-	ErrorCode_INNER_ERR                      ErrorCode = 4
-	ErrorCode_WORKSPACE_NOT_FOUND            ErrorCode = 5
-	ErrorCode_DATASET_NOT_FOUND              ErrorCode = 6
-	ErrorCode_INSTRUMENT_NOT_FOUND           ErrorCode = 7
-	ErrorCode_FIELD_NOT_FOUND                ErrorCode = 8
-	ErrorCode_FACTOR_INSTANCE_NOT_FOUND      ErrorCode = 9
-	ErrorCode_DATA_VIEW_NOT_READY            ErrorCode = 10
-	ErrorCode_DATA_VIEW_COLUMN_NOT_FOUND     ErrorCode = 11
-	ErrorCode_QUERY_SHAPE_UNSUPPORTED        ErrorCode = 12
-	ErrorCode_ROUTE_NOT_FOUND                ErrorCode = 13
+	// 请求成功。
+	ErrorCode_SUCCESS ErrorCode = 0
+	// 请求参数错误。
+	ErrorCode_INVALID_PARAM ErrorCode = 1
+	// 未认证或认证失败。
+	ErrorCode_NO_AUTH ErrorCode = 2
+	// 没有操作权限。
+	ErrorCode_NO_PERMISSION ErrorCode = 3
+	// 服务内部错误。
+	ErrorCode_INNER_ERR ErrorCode = 4
+	// 工作空间不存在。
+	ErrorCode_WORKSPACE_NOT_FOUND ErrorCode = 5
+	// 数据集不存在。
+	ErrorCode_DATASET_NOT_FOUND ErrorCode = 6
+	// 标的不存在。
+	ErrorCode_INSTRUMENT_NOT_FOUND ErrorCode = 7
+	// 字段不存在。
+	ErrorCode_FIELD_NOT_FOUND ErrorCode = 8
+	// 因子实例不存在。
+	ErrorCode_FACTOR_INSTANCE_NOT_FOUND ErrorCode = 9
+	// 数据视图尚未就绪。
+	ErrorCode_DATA_VIEW_NOT_READY ErrorCode = 10
+	// 数据视图列不存在或无法解析。
+	ErrorCode_DATA_VIEW_COLUMN_NOT_FOUND ErrorCode = 11
+	// 不支持当前查询形态。
+	ErrorCode_QUERY_SHAPE_UNSUPPORTED ErrorCode = 12
+	// 未找到匹配的存储路由。
+	ErrorCode_ROUTE_NOT_FOUND ErrorCode = 13
+	// 不支持当前跨设备路由。
 	ErrorCode_ROUTE_CROSS_DEVICE_UNSUPPORTED ErrorCode = 14
-	ErrorCode_ENGINE_CAPABILITY_UNSUPPORTED  ErrorCode = 15
-	ErrorCode_DIMENSION_VALUE_INVALID        ErrorCode = 16
+	// 所选存储引擎不支持该能力。
+	ErrorCode_ENGINE_CAPABILITY_UNSUPPORTED ErrorCode = 15
+	// 业务维度取值不合法。
+	ErrorCode_DIMENSION_VALUE_INVALID ErrorCode = 16
 )
 
 // Enum value maps for ErrorCode.
@@ -423,14 +483,19 @@ func (ErrorCode) EnumDescriptor() ([]byte, []int) {
 	return file_v2_common_proto_rawDescGZIP(), []int{5}
 }
 
+// 调用方身份和链路追踪信息。
 type AuthInfo struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AppId     string `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
-	AppKey    string `protobuf:"bytes,2,opt,name=app_key,json=appKey,proto3" json:"app_key,omitempty"`
-	Operator  string `protobuf:"bytes,3,opt,name=operator,proto3" json:"operator,omitempty"`
+	// 调用方应用或服务 ID。
+	AppId string `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	// 调用方凭证，服务端应按敏感信息处理。
+	AppKey string `protobuf:"bytes,2,opt,name=app_key,json=appKey,proto3" json:"app_key,omitempty"`
+	// 发起请求的用户、机器人或任务。
+	Operator string `protobuf:"bytes,3,opt,name=operator,proto3" json:"operator,omitempty"`
+	// 调用方传入的链路追踪 ID，也可用于幂等检查。
 	RequestId string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
 
@@ -494,13 +559,16 @@ func (x *AuthInfo) GetRequestId() string {
 	return ""
 }
 
+// 通用接口返回状态。
 type RetInfo struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 短代码。
 	Code ErrorCode `protobuf:"varint,1,opt,name=code,proto3,enum=trpc.storage.v2.common.ErrorCode" json:"code,omitempty"`
-	Msg  string    `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
+	// 面向人的返回说明。
+	Msg string `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
 }
 
 func (x *RetInfo) Reset() {
@@ -549,12 +617,15 @@ func (x *RetInfo) GetMsg() string {
 	return ""
 }
 
+// 分页请求参数。
 type Page struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 分页参数。
 	Page uint32 `protobuf:"varint,1,opt,name=page,proto3" json:"page,omitempty"`
+	// 分页大小；为 0 时由服务端使用默认值。
 	Size uint32 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
 }
 
@@ -604,15 +675,21 @@ func (x *Page) GetSize() uint32 {
 	return 0
 }
 
+// 分页返回结果。
 type PageResult struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Page       uint32 `protobuf:"varint,1,opt,name=page,proto3" json:"page,omitempty"`
-	Size       uint32 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
-	Total      uint64 `protobuf:"varint,3,opt,name=total,proto3" json:"total,omitempty"`
-	HasMore    bool   `protobuf:"varint,4,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	// 分页参数。
+	Page uint32 `protobuf:"varint,1,opt,name=page,proto3" json:"page,omitempty"`
+	// 分页大小；为 0 时由服务端使用默认值。
+	Size uint32 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+	// 结果总数；无法计算时可为 0。
+	Total uint64 `protobuf:"varint,3,opt,name=total,proto3" json:"total,omitempty"`
+	// 是否还有更多结果。
+	HasMore bool `protobuf:"varint,4,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	// 游标分页的下一页游标；非游标分页可为空。
 	NextCursor string `protobuf:"bytes,5,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"`
 }
 
@@ -683,15 +760,20 @@ func (x *PageResult) GetNextCursor() string {
 	return ""
 }
 
+// 时间区间条件。
 type TimeRange struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	StartTime      string `protobuf:"bytes,1,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
-	EndTime        string `protobuf:"bytes,2,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
-	StartInclusive bool   `protobuf:"varint,3,opt,name=start_inclusive,json=startInclusive,proto3" json:"start_inclusive,omitempty"`
-	EndInclusive   bool   `protobuf:"varint,4,opt,name=end_inclusive,json=endInclusive,proto3" json:"end_inclusive,omitempty"`
+	// 时间区间下界，格式遵循项目统一时间格式。
+	StartTime string `protobuf:"bytes,1,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
+	// 时间区间上界，格式与 start_time 一致。
+	EndTime string `protobuf:"bytes,2,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
+	// 是否包含 start_time。
+	StartInclusive bool `protobuf:"varint,3,opt,name=start_inclusive,json=startInclusive,proto3" json:"start_inclusive,omitempty"`
+	// 是否包含 end_time。
+	EndInclusive bool `protobuf:"varint,4,opt,name=end_inclusive,json=endInclusive,proto3" json:"end_inclusive,omitempty"`
 }
 
 func (x *TimeRange) Reset() {
@@ -754,11 +836,13 @@ func (x *TimeRange) GetEndInclusive() bool {
 	return false
 }
 
+// 类型值列表。
 type ValueList struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 有序值列表。
 	Values []*TypedValue `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
 }
 
@@ -801,6 +885,7 @@ func (x *ValueList) GetValues() []*TypedValue {
 	return nil
 }
 
+// 通用类型值容器，用于字段值、过滤参数、因子值和查询结果。
 type TypedValue struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -919,34 +1004,42 @@ type isTypedValue_Value interface {
 }
 
 type TypedValue_StringValue struct {
+	// 字符串值。
 	StringValue string `protobuf:"bytes,1,opt,name=string_value,json=stringValue,proto3,oneof"`
 }
 
 type TypedValue_IntValue struct {
+	// 整数值。
 	IntValue int64 `protobuf:"varint,2,opt,name=int_value,json=intValue,proto3,oneof"`
 }
 
 type TypedValue_DoubleValue struct {
+	// 浮点数值。
 	DoubleValue float64 `protobuf:"fixed64,3,opt,name=double_value,json=doubleValue,proto3,oneof"`
 }
 
 type TypedValue_BoolValue struct {
+	// 布尔值。
 	BoolValue bool `protobuf:"varint,4,opt,name=bool_value,json=boolValue,proto3,oneof"`
 }
 
 type TypedValue_TimeValue struct {
+	// 时间值，使用项目统一时间字符串格式。
 	TimeValue string `protobuf:"bytes,5,opt,name=time_value,json=timeValue,proto3,oneof"`
 }
 
 type TypedValue_JsonValue struct {
+	// JSON 文本值。
 	JsonValue string `protobuf:"bytes,6,opt,name=json_value,json=jsonValue,proto3,oneof"`
 }
 
 type TypedValue_BytesValue struct {
+	// 二进制值。
 	BytesValue []byte `protobuf:"bytes,7,opt,name=bytes_value,json=bytesValue,proto3,oneof"`
 }
 
 type TypedValue_ListValue struct {
+	// 列表值。
 	ListValue *ValueList `protobuf:"bytes,8,opt,name=list_value,json=listValue,proto3,oneof"`
 }
 
@@ -966,12 +1059,15 @@ func (*TypedValue_BytesValue) isTypedValue_Value() {}
 
 func (*TypedValue_ListValue) isTypedValue_Value() {}
 
+// 一个业务维度值，例如复权类型或报告期。
 type DimensionValue struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Name  string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// 业务维度名称，必须由数据集预先声明。
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// 该业务维度的具体取值。
 	Value string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 }
 
@@ -1021,11 +1117,13 @@ func (x *DimensionValue) GetValue() string {
 	return ""
 }
 
+// 业务维度值集合。
 type DimensionValues struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 有序值列表。
 	Values []*DimensionValue `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
 }
 
@@ -1068,15 +1166,20 @@ func (x *DimensionValues) GetValues() []*DimensionValue {
 	return nil
 }
 
+// 一个逻辑字段及其取值。
 type FieldValue struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	FieldId   string         `protobuf:"bytes,1,opt,name=field_id,json=fieldId,proto3" json:"field_id,omitempty"`
-	FieldName string         `protobuf:"bytes,2,opt,name=field_name,json=fieldName,proto3" json:"field_name,omitempty"`
+	// 字段 ID。
+	FieldId string `protobuf:"bytes,1,opt,name=field_id,json=fieldId,proto3" json:"field_id,omitempty"`
+	// 对调用方暴露的稳定字段名。
+	FieldName string `protobuf:"bytes,2,opt,name=field_name,json=fieldName,proto3" json:"field_name,omitempty"`
+	// 值的逻辑类型。
 	ValueType FieldValueType `protobuf:"varint,3,opt,name=value_type,json=valueType,proto3,enum=trpc.storage.v2.common.FieldValueType" json:"value_type,omitempty"`
-	Value     *TypedValue    `protobuf:"bytes,4,opt,name=value,proto3" json:"value,omitempty"`
+	// 字段的实际取值。
+	Value *TypedValue `protobuf:"bytes,4,opt,name=value,proto3" json:"value,omitempty"`
 }
 
 func (x *FieldValue) Reset() {
@@ -1139,13 +1242,16 @@ func (x *FieldValue) GetValue() *TypedValue {
 	return nil
 }
 
+// 排序条件。
 type SortSpec struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 对调用方暴露的稳定字段名。
 	FieldName string `protobuf:"bytes,1,opt,name=field_name,json=fieldName,proto3" json:"field_name,omitempty"`
-	Desc      bool   `protobuf:"varint,2,opt,name=desc,proto3" json:"desc,omitempty"`
+	// 为 true 时按降序排序，为 false 时按升序排序。
+	Desc bool `protobuf:"varint,2,opt,name=desc,proto3" json:"desc,omitempty"`
 }
 
 func (x *SortSpec) Reset() {
@@ -1194,12 +1300,15 @@ func (x *SortSpec) GetDesc() bool {
 	return false
 }
 
+// 服务端支持的过滤表达式。
 type FilterExpr struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Expr string                 `protobuf:"bytes,1,opt,name=expr,proto3" json:"expr,omitempty"`
+	// 表达式文本；服务端只接受受支持的表达式子集。
+	Expr string `protobuf:"bytes,1,opt,name=expr,proto3" json:"expr,omitempty"`
+	// 表达式使用的命名参数。
 	Args map[string]*TypedValue `protobuf:"bytes,2,rep,name=args,proto3" json:"args,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 

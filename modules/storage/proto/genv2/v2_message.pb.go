@@ -21,18 +21,26 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// 普通数据或时序数据变更事件。
 type DataMutationEvent struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	EventId      string            `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	WorkspaceId  string            `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DatasetId    string            `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	InstrumentId string            `protobuf:"bytes,4,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
-	EventTime    string            `protobuf:"bytes,5,opt,name=event_time,json=eventTime,proto3" json:"event_time,omitempty"`
-	Records      []*Record         `protobuf:"bytes,6,rep,name=records,proto3" json:"records,omitempty"`
-	Attributes   map[string]string `protobuf:"bytes,7,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// event_id 参数。
+	EventId string `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 内部标准化标的 ID；非标的数据可为空。
+	InstrumentId string `protobuf:"bytes,4,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
+	// 业务事件时间。
+	EventTime string `protobuf:"bytes,5,opt,name=event_time,json=eventTime,proto3" json:"event_time,omitempty"`
+	// records 参数。
+	Records []*Record `protobuf:"bytes,6,rep,name=records,proto3" json:"records,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,7,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *DataMutationEvent) Reset() {
@@ -116,17 +124,24 @@ func (x *DataMutationEvent) GetAttributes() map[string]string {
 	return nil
 }
 
+// 因子计算完成事件。
 type FactorCalculatedEvent struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	EventId          string              `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	WorkspaceId      string              `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DatasetId        string              `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	FactorInstanceId string              `protobuf:"bytes,4,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
-	EventTime        string              `protobuf:"bytes,5,opt,name=event_time,json=eventTime,proto3" json:"event_time,omitempty"`
-	Points           []*FactorValuePoint `protobuf:"bytes,6,rep,name=points,proto3" json:"points,omitempty"`
+	// event_id 参数。
+	EventId string `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 因子实例 ID，表示带参数的因子结果。
+	FactorInstanceId string `protobuf:"bytes,4,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
+	// 业务事件时间。
+	EventTime string `protobuf:"bytes,5,opt,name=event_time,json=eventTime,proto3" json:"event_time,omitempty"`
+	// 时序点或因子点列表。
+	Points []*FactorValuePoint `protobuf:"bytes,6,rep,name=points,proto3" json:"points,omitempty"`
 }
 
 func (x *FactorCalculatedEvent) Reset() {

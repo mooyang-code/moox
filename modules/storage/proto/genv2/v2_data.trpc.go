@@ -19,18 +19,19 @@ import (
 
 // DataServiceService defines service.
 type DataServiceService interface {
+	// UpsertRecords 写入普通结构化数据，例如公司资料、榜单行或公告摘要。
 	UpsertRecords(ctx context.Context, req *UpsertRecordsReq) (*UpsertRecordsRsp, error)
-
+	// QueryRecords 按逻辑位置、过滤条件、排序和分页查询普通结构化数据。
 	QueryRecords(ctx context.Context, req *QueryRecordsReq) (*QueryRecordsRsp, error)
-
+	// SetTimeSeries 写入有序时序事实数据，例如 K 线或 tick。
 	SetTimeSeries(ctx context.Context, req *SetTimeSeriesReq) (*SetTimeSeriesRsp, error)
-
+	// ScanTimeSeries 按时间区间扫描有序时序事实数据。
 	ScanTimeSeries(ctx context.Context, req *ScanTimeSeriesReq) (*ScanTimeSeriesRsp, error)
-
+	// SetFactorValues 按因子实例写入计算后的因子结果。
 	SetFactorValues(ctx context.Context, req *SetFactorValuesReq) (*SetFactorValuesRsp, error)
-
+	// ScanFactorValues 按逻辑位置、因子实例和时间区间扫描因子结果。
 	ScanFactorValues(ctx context.Context, req *ScanFactorValuesReq) (*ScanFactorValuesRsp, error)
-
+	// GetLatestSnapshot 获取每个逻辑数据位置的最新可用状态。
 	GetLatestSnapshot(ctx context.Context, req *GetLatestSnapshotReq) (*GetLatestSnapshotRsp, error)
 }
 
@@ -207,24 +208,37 @@ func RegisterDataServiceService(s server.Service, svr DataServiceService) {
 
 type UnimplementedDataService struct{}
 
+// UpsertRecords 写入普通结构化数据，例如公司资料、榜单行或公告摘要。
 func (s *UnimplementedDataService) UpsertRecords(ctx context.Context, req *UpsertRecordsReq) (*UpsertRecordsRsp, error) {
 	return nil, errors.New("rpc UpsertRecords of service DataService is not implemented")
 }
+
+// QueryRecords 按逻辑位置、过滤条件、排序和分页查询普通结构化数据。
 func (s *UnimplementedDataService) QueryRecords(ctx context.Context, req *QueryRecordsReq) (*QueryRecordsRsp, error) {
 	return nil, errors.New("rpc QueryRecords of service DataService is not implemented")
 }
+
+// SetTimeSeries 写入有序时序事实数据，例如 K 线或 tick。
 func (s *UnimplementedDataService) SetTimeSeries(ctx context.Context, req *SetTimeSeriesReq) (*SetTimeSeriesRsp, error) {
 	return nil, errors.New("rpc SetTimeSeries of service DataService is not implemented")
 }
+
+// ScanTimeSeries 按时间区间扫描有序时序事实数据。
 func (s *UnimplementedDataService) ScanTimeSeries(ctx context.Context, req *ScanTimeSeriesReq) (*ScanTimeSeriesRsp, error) {
 	return nil, errors.New("rpc ScanTimeSeries of service DataService is not implemented")
 }
+
+// SetFactorValues 按因子实例写入计算后的因子结果。
 func (s *UnimplementedDataService) SetFactorValues(ctx context.Context, req *SetFactorValuesReq) (*SetFactorValuesRsp, error) {
 	return nil, errors.New("rpc SetFactorValues of service DataService is not implemented")
 }
+
+// ScanFactorValues 按逻辑位置、因子实例和时间区间扫描因子结果。
 func (s *UnimplementedDataService) ScanFactorValues(ctx context.Context, req *ScanFactorValuesReq) (*ScanFactorValuesRsp, error) {
 	return nil, errors.New("rpc ScanFactorValues of service DataService is not implemented")
 }
+
+// GetLatestSnapshot 获取每个逻辑数据位置的最新可用状态。
 func (s *UnimplementedDataService) GetLatestSnapshot(ctx context.Context, req *GetLatestSnapshotReq) (*GetLatestSnapshotRsp, error) {
 	return nil, errors.New("rpc GetLatestSnapshot of service DataService is not implemented")
 }
@@ -237,18 +251,19 @@ func (s *UnimplementedDataService) GetLatestSnapshot(ctx context.Context, req *G
 
 // DataServiceClientProxy defines service client proxy
 type DataServiceClientProxy interface {
+	// UpsertRecords 写入普通结构化数据，例如公司资料、榜单行或公告摘要。
 	UpsertRecords(ctx context.Context, req *UpsertRecordsReq, opts ...client.Option) (rsp *UpsertRecordsRsp, err error)
-
+	// QueryRecords 按逻辑位置、过滤条件、排序和分页查询普通结构化数据。
 	QueryRecords(ctx context.Context, req *QueryRecordsReq, opts ...client.Option) (rsp *QueryRecordsRsp, err error)
-
+	// SetTimeSeries 写入有序时序事实数据，例如 K 线或 tick。
 	SetTimeSeries(ctx context.Context, req *SetTimeSeriesReq, opts ...client.Option) (rsp *SetTimeSeriesRsp, err error)
-
+	// ScanTimeSeries 按时间区间扫描有序时序事实数据。
 	ScanTimeSeries(ctx context.Context, req *ScanTimeSeriesReq, opts ...client.Option) (rsp *ScanTimeSeriesRsp, err error)
-
+	// SetFactorValues 按因子实例写入计算后的因子结果。
 	SetFactorValues(ctx context.Context, req *SetFactorValuesReq, opts ...client.Option) (rsp *SetFactorValuesRsp, err error)
-
+	// ScanFactorValues 按逻辑位置、因子实例和时间区间扫描因子结果。
 	ScanFactorValues(ctx context.Context, req *ScanFactorValuesReq, opts ...client.Option) (rsp *ScanFactorValuesRsp, err error)
-
+	// GetLatestSnapshot 获取每个逻辑数据位置的最新可用状态。
 	GetLatestSnapshot(ctx context.Context, req *GetLatestSnapshotReq, opts ...client.Option) (rsp *GetLatestSnapshotRsp, err error)
 }
 

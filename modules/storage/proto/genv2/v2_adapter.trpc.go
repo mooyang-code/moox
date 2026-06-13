@@ -19,14 +19,15 @@ import (
 
 // AdapterService defines service.
 type AdapterService interface {
+	// CreatePhysicalTable 为解析后的存储路由创建物理表或物理索引。
 	CreatePhysicalTable(ctx context.Context, req *CreatePhysicalTableReq) (*CreatePhysicalTableRsp, error)
-
+	// DropPhysicalTable 删除物理表或物理索引。
 	DropPhysicalTable(ctx context.Context, req *DropPhysicalTableReq) (*DropPhysicalTableRsp, error)
-
+	// WriteRows 将已完成路由的记录写入物理引擎。
 	WriteRows(ctx context.Context, req *WriteRowsReq) (*WriteRowsRsp, error)
-
+	// ScanRows 从物理引擎扫描已完成路由的记录。
 	ScanRows(ctx context.Context, req *ScanRowsReq) (*ScanRowsRsp, error)
-
+	// ExplainRoute 解释逻辑数据到物理表的路由结果。
 	ExplainRoute(ctx context.Context, req *ExplainRouteReq) (*ExplainRouteRsp, error)
 }
 
@@ -159,18 +160,27 @@ func RegisterAdapterService(s server.Service, svr AdapterService) {
 
 type UnimplementedAdapter struct{}
 
+// CreatePhysicalTable 为解析后的存储路由创建物理表或物理索引。
 func (s *UnimplementedAdapter) CreatePhysicalTable(ctx context.Context, req *CreatePhysicalTableReq) (*CreatePhysicalTableRsp, error) {
 	return nil, errors.New("rpc CreatePhysicalTable of service Adapter is not implemented")
 }
+
+// DropPhysicalTable 删除物理表或物理索引。
 func (s *UnimplementedAdapter) DropPhysicalTable(ctx context.Context, req *DropPhysicalTableReq) (*DropPhysicalTableRsp, error) {
 	return nil, errors.New("rpc DropPhysicalTable of service Adapter is not implemented")
 }
+
+// WriteRows 将已完成路由的记录写入物理引擎。
 func (s *UnimplementedAdapter) WriteRows(ctx context.Context, req *WriteRowsReq) (*WriteRowsRsp, error) {
 	return nil, errors.New("rpc WriteRows of service Adapter is not implemented")
 }
+
+// ScanRows 从物理引擎扫描已完成路由的记录。
 func (s *UnimplementedAdapter) ScanRows(ctx context.Context, req *ScanRowsReq) (*ScanRowsRsp, error) {
 	return nil, errors.New("rpc ScanRows of service Adapter is not implemented")
 }
+
+// ExplainRoute 解释逻辑数据到物理表的路由结果。
 func (s *UnimplementedAdapter) ExplainRoute(ctx context.Context, req *ExplainRouteReq) (*ExplainRouteRsp, error) {
 	return nil, errors.New("rpc ExplainRoute of service Adapter is not implemented")
 }
@@ -183,14 +193,15 @@ func (s *UnimplementedAdapter) ExplainRoute(ctx context.Context, req *ExplainRou
 
 // AdapterClientProxy defines service client proxy
 type AdapterClientProxy interface {
+	// CreatePhysicalTable 为解析后的存储路由创建物理表或物理索引。
 	CreatePhysicalTable(ctx context.Context, req *CreatePhysicalTableReq, opts ...client.Option) (rsp *CreatePhysicalTableRsp, err error)
-
+	// DropPhysicalTable 删除物理表或物理索引。
 	DropPhysicalTable(ctx context.Context, req *DropPhysicalTableReq, opts ...client.Option) (rsp *DropPhysicalTableRsp, err error)
-
+	// WriteRows 将已完成路由的记录写入物理引擎。
 	WriteRows(ctx context.Context, req *WriteRowsReq, opts ...client.Option) (rsp *WriteRowsRsp, err error)
-
+	// ScanRows 从物理引擎扫描已完成路由的记录。
 	ScanRows(ctx context.Context, req *ScanRowsReq, opts ...client.Option) (rsp *ScanRowsRsp, err error)
-
+	// ExplainRoute 解释逻辑数据到物理表的路由结果。
 	ExplainRoute(ctx context.Context, req *ExplainRouteReq, opts ...client.Option) (rsp *ExplainRouteRsp, err error)
 }
 

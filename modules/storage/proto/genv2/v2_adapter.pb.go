@@ -21,15 +21,20 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// 一个存储设备内的物理表或物理索引引用，仅供存储内部使用。
 type PhysicalTableRef struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	DeviceId  string   `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	TableName string   `protobuf:"bytes,2,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
-	DataKind  DataKind `protobuf:"varint,3,opt,name=data_kind,json=dataKind,proto3,enum=trpc.storage.v2.common.DataKind" json:"data_kind,omitempty"`
-	DatasetId string   `protobuf:"bytes,4,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 存储设备 ID。
+	DeviceId string `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	// 存储引擎内部的物理表名或索引名。
+	TableName string `protobuf:"bytes,2,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
+	// 数据集的结构形态。
+	DataKind DataKind `protobuf:"varint,3,opt,name=data_kind,json=dataKind,proto3,enum=trpc.storage.v2.common.DataKind" json:"data_kind,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,4,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
 }
 
 func (x *PhysicalTableRef) Reset() {
@@ -92,15 +97,20 @@ func (x *PhysicalTableRef) GetDatasetId() string {
 	return ""
 }
 
+// 创建物理表或物理索引的请求。
 type CreatePhysicalTableReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo    *AuthInfo         `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Table       *PhysicalTableRef `protobuf:"bytes,2,opt,name=table,proto3" json:"table,omitempty"`
-	Columns     []string          `protobuf:"bytes,3,rep,name=columns,proto3" json:"columns,omitempty"`
-	ForceCreate bool              `protobuf:"varint,4,opt,name=force_create,json=forceCreate,proto3" json:"force_create,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 物理表或物理索引引用。
+	Table *PhysicalTableRef `protobuf:"bytes,2,opt,name=table,proto3" json:"table,omitempty"`
+	// 返回列或请求列列表。
+	Columns []string `protobuf:"bytes,3,rep,name=columns,proto3" json:"columns,omitempty"`
+	// 为 true 时允许按引擎能力执行强制创建或幂等创建。
+	ForceCreate bool `protobuf:"varint,4,opt,name=force_create,json=forceCreate,proto3" json:"force_create,omitempty"`
 }
 
 func (x *CreatePhysicalTableReq) Reset() {
@@ -163,11 +173,13 @@ func (x *CreatePhysicalTableReq) GetForceCreate() bool {
 	return false
 }
 
+// 物理表或物理索引创建结果。
 type CreatePhysicalTableRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 接口返回状态。
 	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 }
 
@@ -210,14 +222,18 @@ func (x *CreatePhysicalTableRsp) GetRetInfo() *RetInfo {
 	return nil
 }
 
+// 删除物理表或物理索引的请求。
 type DropPhysicalTableReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo  *AuthInfo         `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Table     *PhysicalTableRef `protobuf:"bytes,2,opt,name=table,proto3" json:"table,omitempty"`
-	ForceDrop bool              `protobuf:"varint,3,opt,name=force_drop,json=forceDrop,proto3" json:"force_drop,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 物理表或物理索引引用。
+	Table *PhysicalTableRef `protobuf:"bytes,2,opt,name=table,proto3" json:"table,omitempty"`
+	// 为 true 时允许在非关键元数据不一致时继续删除。
+	ForceDrop bool `protobuf:"varint,3,opt,name=force_drop,json=forceDrop,proto3" json:"force_drop,omitempty"`
 }
 
 func (x *DropPhysicalTableReq) Reset() {
@@ -273,11 +289,13 @@ func (x *DropPhysicalTableReq) GetForceDrop() bool {
 	return false
 }
 
+// 物理表或物理索引删除结果。
 type DropPhysicalTableRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 接口返回状态。
 	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 }
 
@@ -320,15 +338,20 @@ func (x *DropPhysicalTableRsp) GetRetInfo() *RetInfo {
 	return nil
 }
 
+// 逻辑路由完成后写入物理行的请求。
 type WriteRowsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo  *AuthInfo         `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Table     *PhysicalTableRef `protobuf:"bytes,2,opt,name=table,proto3" json:"table,omitempty"`
-	WriteMode WriteMode         `protobuf:"varint,3,opt,name=write_mode,json=writeMode,proto3,enum=trpc.storage.v2.common.WriteMode" json:"write_mode,omitempty"`
-	Rows      []*Record         `protobuf:"bytes,4,rep,name=rows,proto3" json:"rows,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 物理表或物理索引引用。
+	Table *PhysicalTableRef `protobuf:"bytes,2,opt,name=table,proto3" json:"table,omitempty"`
+	// 本次写入如何影响已有数据。
+	WriteMode WriteMode `protobuf:"varint,3,opt,name=write_mode,json=writeMode,proto3,enum=trpc.storage.v2.common.WriteMode" json:"write_mode,omitempty"`
+	// 返回行列表。
+	Rows []*Record `protobuf:"bytes,4,rep,name=rows,proto3" json:"rows,omitempty"`
 }
 
 func (x *WriteRowsReq) Reset() {
@@ -391,13 +414,16 @@ func (x *WriteRowsReq) GetRows() []*Record {
 	return nil
 }
 
+// 物理行写入结果。
 type WriteRowsRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Affected uint64   `protobuf:"varint,2,opt,name=affected,proto3" json:"affected,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 服务端接受或影响的记录数。
+	Affected uint64 `protobuf:"varint,2,opt,name=affected,proto3" json:"affected,omitempty"`
 }
 
 func (x *WriteRowsRsp) Reset() {
@@ -446,16 +472,22 @@ func (x *WriteRowsRsp) GetAffected() uint64 {
 	return 0
 }
 
+// 扫描物理表行的请求。
 type ScanRowsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo *AuthInfo         `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Table    *PhysicalTableRef `protobuf:"bytes,2,opt,name=table,proto3" json:"table,omitempty"`
-	Filters  []*FilterExpr     `protobuf:"bytes,3,rep,name=filters,proto3" json:"filters,omitempty"`
-	Sorts    []*SortSpec       `protobuf:"bytes,4,rep,name=sorts,proto3" json:"sorts,omitempty"`
-	Page     *Page             `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 物理表或物理索引引用。
+	Table *PhysicalTableRef `protobuf:"bytes,2,opt,name=table,proto3" json:"table,omitempty"`
+	// 过滤条件列表。
+	Filters []*FilterExpr `protobuf:"bytes,3,rep,name=filters,proto3" json:"filters,omitempty"`
+	// 排序条件列表。
+	Sorts []*SortSpec `protobuf:"bytes,4,rep,name=sorts,proto3" json:"sorts,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ScanRowsReq) Reset() {
@@ -525,13 +557,17 @@ func (x *ScanRowsReq) GetPage() *Page {
 	return nil
 }
 
+// 物理表行扫描结果。
 type ScanRowsRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Rows       []*Record   `protobuf:"bytes,2,rep,name=rows,proto3" json:"rows,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 返回行列表。
+	Rows []*Record `protobuf:"bytes,2,rep,name=rows,proto3" json:"rows,omitempty"`
+	// 分页结果。
 	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
@@ -588,14 +624,18 @@ func (x *ScanRowsRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// 解释逻辑数据会命中哪些物理表的请求。
 type ExplainRouteReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo   *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	DataRef    *DataRef  `protobuf:"bytes,2,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
-	FieldNames []string  `protobuf:"bytes,3,rep,name=field_names,json=fieldNames,proto3" json:"field_names,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 记录所属的逻辑数据位置。
+	DataRef *DataRef `protobuf:"bytes,2,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
+	// 要返回的字段名列表；为空时由服务端使用默认字段或全部可读字段。
+	FieldNames []string `protobuf:"bytes,3,rep,name=field_names,json=fieldNames,proto3" json:"field_names,omitempty"`
 }
 
 func (x *ExplainRouteReq) Reset() {
@@ -651,13 +691,16 @@ func (x *ExplainRouteReq) GetFieldNames() []string {
 	return nil
 }
 
+// 逻辑到物理路由解释结果。
 type ExplainRouteRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo            `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Tables  []*PhysicalTableRef `protobuf:"bytes,2,rep,name=tables,proto3" json:"tables,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// tables 参数。
+	Tables []*PhysicalTableRef `protobuf:"bytes,2,rep,name=tables,proto3" json:"tables,omitempty"`
 }
 
 func (x *ExplainRouteRsp) Reset() {

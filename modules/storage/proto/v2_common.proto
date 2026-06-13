@@ -4,149 +4,258 @@ package trpc.storage.v2.common;
 
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/genv2;storagepb";
 
+// 调用方身份和链路追踪信息。
 message AuthInfo {
+  // 调用方应用或服务 ID。
   string app_id = 1;
+  // 调用方凭证，服务端应按敏感信息处理。
   string app_key = 2;
+  // 发起请求的用户、机器人或任务。
   string operator = 3;
+  // 调用方传入的链路追踪 ID，也可用于幂等检查。
   string request_id = 4;
 }
 
+// 通用接口返回状态。
 message RetInfo {
+  // 短代码。
   ErrorCode code = 1;
+  // 面向人的返回说明。
   string msg = 2;
 }
 
+// 分页请求参数。
 message Page {
+  // 分页参数。
   uint32 page = 1;
+  // 分页大小；为 0 时由服务端使用默认值。
   uint32 size = 2;
 }
 
+// 分页返回结果。
 message PageResult {
+  // 分页参数。
   uint32 page = 1;
+  // 分页大小；为 0 时由服务端使用默认值。
   uint32 size = 2;
+  // 结果总数；无法计算时可为 0。
   uint64 total = 3;
+  // 是否还有更多结果。
   bool has_more = 4;
+  // 游标分页的下一页游标；非游标分页可为空。
   string next_cursor = 5;
 }
 
+// 时间区间条件。
 message TimeRange {
+  // 时间区间下界，格式遵循项目统一时间格式。
   string start_time = 1;
+  // 时间区间上界，格式与 start_time 一致。
   string end_time = 2;
+  // 是否包含 start_time。
   bool start_inclusive = 3;
+  // 是否包含 end_time。
   bool end_inclusive = 4;
 }
 
+// 类型值列表。
 message ValueList {
+  // 有序值列表。
   repeated TypedValue values = 1;
 }
 
+// 通用类型值容器，用于字段值、过滤参数、因子值和查询结果。
 message TypedValue {
   oneof value {
+    // 字符串值。
     string string_value = 1;
+    // 整数值。
     int64 int_value = 2;
+    // 浮点数值。
     double double_value = 3;
+    // 布尔值。
     bool bool_value = 4;
+    // 时间值，使用项目统一时间字符串格式。
     string time_value = 5;
+    // JSON 文本值。
     string json_value = 6;
+    // 二进制值。
     bytes bytes_value = 7;
+    // 列表值。
     ValueList list_value = 8;
   }
 }
 
+// 一个业务维度值，例如复权类型或报告期。
 message DimensionValue {
+  // 业务维度名称，必须由数据集预先声明。
   string name = 1;
+  // 该业务维度的具体取值。
   string value = 2;
 }
 
+// 业务维度值集合。
 message DimensionValues {
+  // 有序值列表。
   repeated DimensionValue values = 1;
 }
 
+// 一个逻辑字段及其取值。
 message FieldValue {
+  // 字段 ID。
   string field_id = 1;
+  // 对调用方暴露的稳定字段名。
   string field_name = 2;
+  // 值的逻辑类型。
   FieldValueType value_type = 3;
+  // 字段的实际取值。
   TypedValue value = 4;
 }
 
+// 排序条件。
 message SortSpec {
+  // 对调用方暴露的稳定字段名。
   string field_name = 1;
+  // 为 true 时按降序排序，为 false 时按升序排序。
   bool desc = 2;
 }
 
+// 服务端支持的过滤表达式。
 message FilterExpr {
+  // 表达式文本；服务端只接受受支持的表达式子集。
   string expr = 1;
+  // 表达式使用的命名参数。
   map<string, TypedValue> args = 2;
 }
 
+// 写入模式。
 enum WriteMode {
+  // 未指定写入模式，由服务端使用默认策略。
   WRITE_MODE_UNSPECIFIED = 0;
+  // 插入新数据，并更新相同逻辑键的已有数据。
   WRITE_MODE_UPSERT = 1;
+  // 只追加新数据。
   WRITE_MODE_APPEND = 2;
+  // 覆盖匹配的逻辑数据切片。
   WRITE_MODE_OVERWRITE = 3;
+  // 删除或标记删除匹配的逻辑数据切片。
   WRITE_MODE_DELETE = 4;
 }
 
+// 数据集的结构形态。
 enum DataKind {
+  // 未指定结构形态。
   DATA_KIND_UNSPECIFIED = 0;
+  // 对象型数据，例如公司资料。
   DATA_KIND_OBJECT = 1;
+  // 时序数据，例如 K 线或 tick。
   DATA_KIND_TIME_SERIES = 2;
+  // 快照数据，例如最新行情状态。
   DATA_KIND_SNAPSHOT = 3;
+  // 事件数据，例如公告或成交事件。
   DATA_KIND_EVENT = 4;
+  // 文档型数据，例如新闻或研报。
   DATA_KIND_DOCUMENT = 5;
+  // 通用表格数据，例如榜单。
   DATA_KIND_TABLE = 6;
 }
 
+// 数据集所属的金融业务领域。
 enum DataDomain {
+  // 未指定业务领域。
   DATA_DOMAIN_UNSPECIFIED = 0;
+  // K 线或 OHLCV 数据。
   DATA_DOMAIN_MARKET_BAR = 1;
+  // tick 级行情或成交数据。
   DATA_DOMAIN_MARKET_TICK = 2;
+  // 订单簿深度数据。
   DATA_DOMAIN_ORDER_BOOK = 3;
+  // 成交明细或交易记录。
   DATA_DOMAIN_TRADE = 4;
+  // 交易场所代码资料。
   DATA_DOMAIN_SYMBOL_PROFILE = 5;
+  // 上市公司或发行主体资料。
   DATA_DOMAIN_COMPANY_PROFILE = 6;
+  // 新闻数据。
   DATA_DOMAIN_NEWS = 7;
+  // 公告数据。
   DATA_DOMAIN_ANNOUNCEMENT = 8;
+  // 因子值数据。
   DATA_DOMAIN_FACTOR_VALUE = 9;
+  // 榜单数据。
   DATA_DOMAIN_RANKING_LIST = 10;
+  // 财务报表数据。
   DATA_DOMAIN_FINANCIAL_REPORT = 11;
 }
 
+// 字段、因子和查询列的逻辑值类型。
 enum FieldValueType {
+  // 未指定值类型。
   FIELD_VALUE_TYPE_UNSPECIFIED = 0;
+  // 字符串类型。
   FIELD_VALUE_TYPE_STRING = 1;
+  // 整数类型。
   FIELD_VALUE_TYPE_INT = 2;
+  // 浮点数类型。
   FIELD_VALUE_TYPE_DOUBLE = 3;
+  // 布尔类型。
   FIELD_VALUE_TYPE_BOOL = 4;
+  // 时间类型。
   FIELD_VALUE_TYPE_TIME = 5;
+  // JSON 文本类型。
   FIELD_VALUE_TYPE_JSON = 6;
+  // 二进制类型。
   FIELD_VALUE_TYPE_BYTES = 7;
 }
 
+// 数据视图或查询列的来源。
 enum ColumnOrigin {
+  // 未指定列来源。
   COLUMN_ORIGIN_UNSPECIFIED = 0;
+  // 列来自数据集字段。
   COLUMN_ORIGIN_FIELD = 1;
+  // 列来自因子实例。
   COLUMN_ORIGIN_FACTOR_INSTANCE = 2;
+  // 列来自数据视图表达式。
   COLUMN_ORIGIN_EXPRESSION = 3;
+  // 列来自系统列，例如标的 ID 或时间。
   COLUMN_ORIGIN_SYSTEM_COLUMN = 4;
 }
 
+// v2 存储接口通用错误码。
 enum ErrorCode {
+  // 请求成功。
   SUCCESS = 0;
+  // 请求参数错误。
   INVALID_PARAM = 1;
+  // 未认证或认证失败。
   NO_AUTH = 2;
+  // 没有操作权限。
   NO_PERMISSION = 3;
+  // 服务内部错误。
   INNER_ERR = 4;
+  // 工作空间不存在。
   WORKSPACE_NOT_FOUND = 5;
+  // 数据集不存在。
   DATASET_NOT_FOUND = 6;
+  // 标的不存在。
   INSTRUMENT_NOT_FOUND = 7;
+  // 字段不存在。
   FIELD_NOT_FOUND = 8;
+  // 因子实例不存在。
   FACTOR_INSTANCE_NOT_FOUND = 9;
+  // 数据视图尚未就绪。
   DATA_VIEW_NOT_READY = 10;
+  // 数据视图列不存在或无法解析。
   DATA_VIEW_COLUMN_NOT_FOUND = 11;
+  // 不支持当前查询形态。
   QUERY_SHAPE_UNSUPPORTED = 12;
+  // 未找到匹配的存储路由。
   ROUTE_NOT_FOUND = 13;
+  // 不支持当前跨设备路由。
   ROUTE_CROSS_DEVICE_UNSUPPORTED = 14;
+  // 所选存储引擎不支持该能力。
   ENGINE_CAPABILITY_UNSUPPORTED = 15;
+  // 业务维度取值不合法。
   DIMENSION_VALUE_INVALID = 16;
 }

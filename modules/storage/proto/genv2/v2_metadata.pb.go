@@ -21,20 +21,30 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// 工作空间，是用户、策略、权限、元数据和数据的隔离边界。
 type Workspace struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	WorkspaceId string            `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	Name        string            `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	DisplayName string            `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Description string            `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
-	Owner       string            `protobuf:"bytes,5,opt,name=owner,proto3" json:"owner,omitempty"`
-	Status      string            `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
-	CreatedAt   string            `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt   string            `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	Attributes  map[string]string `protobuf:"bytes,9,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 机器可读名称。
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// 展示名称。
+	DisplayName string `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// 说明文本。
+	Description string `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	// 所有者用户或团队。
+	Owner string `protobuf:"bytes,5,opt,name=owner,proto3" json:"owner,omitempty"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
+	// 创建时间。
+	CreatedAt string `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// 最后更新时间。
+	UpdatedAt string `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,9,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *Workspace) Reset() {
@@ -132,16 +142,22 @@ func (x *Workspace) GetAttributes() map[string]string {
 	return nil
 }
 
+// 市场信息，例如美股、港股或数字货币市场。
 type MarketInfo struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Market      string            `protobuf:"bytes,1,opt,name=market,proto3" json:"market,omitempty"`
-	DisplayName string            `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Timezone    string            `protobuf:"bytes,3,opt,name=timezone,proto3" json:"timezone,omitempty"`
-	Currency    string            `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`
-	Attributes  map[string]string `protobuf:"bytes,5,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 市场代码。
+	Market string `protobuf:"bytes,1,opt,name=market,proto3" json:"market,omitempty"`
+	// 展示名称。
+	DisplayName string `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// 时区。
+	Timezone string `protobuf:"bytes,3,opt,name=timezone,proto3" json:"timezone,omitempty"`
+	// 币种或结算货币。
+	Currency string `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,5,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *MarketInfo) Reset() {
@@ -211,20 +227,30 @@ func (x *MarketInfo) GetAttributes() map[string]string {
 	return nil
 }
 
+// 交易场所或行情数据场所。
 type Exchange struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	ExchangeId      string            `protobuf:"bytes,1,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
-	Code            string            `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
-	Name            string            `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	Market          string            `protobuf:"bytes,4,opt,name=market,proto3" json:"market,omitempty"`
-	Timezone        string            `protobuf:"bytes,5,opt,name=timezone,proto3" json:"timezone,omitempty"`
-	Currency        string            `protobuf:"bytes,6,opt,name=currency,proto3" json:"currency,omitempty"`
-	TradingCalendar string            `protobuf:"bytes,7,opt,name=trading_calendar,json=tradingCalendar,proto3" json:"trading_calendar,omitempty"`
-	Status          string            `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
-	Attributes      map[string]string `protobuf:"bytes,9,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 交易场所或数据场所 ID。
+	ExchangeId string `protobuf:"bytes,1,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
+	// 短代码。
+	Code string `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
+	// 机器可读名称。
+	Name string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	// 市场代码。
+	Market string `protobuf:"bytes,4,opt,name=market,proto3" json:"market,omitempty"`
+	// 时区。
+	Timezone string `protobuf:"bytes,5,opt,name=timezone,proto3" json:"timezone,omitempty"`
+	// 币种或结算货币。
+	Currency string `protobuf:"bytes,6,opt,name=currency,proto3" json:"currency,omitempty"`
+	// 交易日历标识。
+	TradingCalendar string `protobuf:"bytes,7,opt,name=trading_calendar,json=tradingCalendar,proto3" json:"trading_calendar,omitempty"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,9,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *Exchange) Reset() {
@@ -322,23 +348,36 @@ func (x *Exchange) GetAttributes() map[string]string {
 	return nil
 }
 
+// 系统内部标准化的金融交易标的。
 type Instrument struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	InstrumentId   string            `protobuf:"bytes,1,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
-	InternalSymbol string            `protobuf:"bytes,2,opt,name=internal_symbol,json=internalSymbol,proto3" json:"internal_symbol,omitempty"`
-	DisplaySymbol  string            `protobuf:"bytes,3,opt,name=display_symbol,json=displaySymbol,proto3" json:"display_symbol,omitempty"`
-	ExchangeId     string            `protobuf:"bytes,4,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
-	Market         string            `protobuf:"bytes,5,opt,name=market,proto3" json:"market,omitempty"`
-	InstrumentType string            `protobuf:"bytes,6,opt,name=instrument_type,json=instrumentType,proto3" json:"instrument_type,omitempty"`
-	BaseAsset      string            `protobuf:"bytes,7,opt,name=base_asset,json=baseAsset,proto3" json:"base_asset,omitempty"`
-	QuoteAsset     string            `protobuf:"bytes,8,opt,name=quote_asset,json=quoteAsset,proto3" json:"quote_asset,omitempty"`
-	Currency       string            `protobuf:"bytes,9,opt,name=currency,proto3" json:"currency,omitempty"`
-	Timezone       string            `protobuf:"bytes,10,opt,name=timezone,proto3" json:"timezone,omitempty"`
-	Status         string            `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"`
-	Attributes     map[string]string `protobuf:"bytes,12,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 内部标准化标的 ID；非标的数据可为空。
+	InstrumentId string `protobuf:"bytes,1,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
+	// 系统内部标准化代码。
+	InternalSymbol string `protobuf:"bytes,2,opt,name=internal_symbol,json=internalSymbol,proto3" json:"internal_symbol,omitempty"`
+	// 展示给用户的代码。
+	DisplaySymbol string `protobuf:"bytes,3,opt,name=display_symbol,json=displaySymbol,proto3" json:"display_symbol,omitempty"`
+	// 交易场所或数据场所 ID。
+	ExchangeId string `protobuf:"bytes,4,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
+	// 市场代码。
+	Market string `protobuf:"bytes,5,opt,name=market,proto3" json:"market,omitempty"`
+	// 标的类型，例如现货、股票、期货、期权或 ETF。
+	InstrumentType string `protobuf:"bytes,6,opt,name=instrument_type,json=instrumentType,proto3" json:"instrument_type,omitempty"`
+	// 交易对或衍生品的基础资产。
+	BaseAsset string `protobuf:"bytes,7,opt,name=base_asset,json=baseAsset,proto3" json:"base_asset,omitempty"`
+	// 交易对或衍生品的计价资产。
+	QuoteAsset string `protobuf:"bytes,8,opt,name=quote_asset,json=quoteAsset,proto3" json:"quote_asset,omitempty"`
+	// 币种或结算货币。
+	Currency string `protobuf:"bytes,9,opt,name=currency,proto3" json:"currency,omitempty"`
+	// 时区。
+	Timezone string `protobuf:"bytes,10,opt,name=timezone,proto3" json:"timezone,omitempty"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,12,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *Instrument) Reset() {
@@ -457,17 +496,24 @@ func (x *Instrument) GetAttributes() map[string]string {
 	return nil
 }
 
+// 外部数据源代码到内部标的的映射。
 type InstrumentAlias struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	InstrumentId   string            `protobuf:"bytes,1,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
-	DataSource     string            `protobuf:"bytes,2,opt,name=data_source,json=dataSource,proto3" json:"data_source,omitempty"`
-	ExchangeId     string            `protobuf:"bytes,3,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
-	ExternalSymbol string            `protobuf:"bytes,4,opt,name=external_symbol,json=externalSymbol,proto3" json:"external_symbol,omitempty"`
-	Status         string            `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
-	Attributes     map[string]string `protobuf:"bytes,6,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 内部标准化标的 ID；非标的数据可为空。
+	InstrumentId string `protobuf:"bytes,1,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
+	// 外部数据源标识。
+	DataSource string `protobuf:"bytes,2,opt,name=data_source,json=dataSource,proto3" json:"data_source,omitempty"`
+	// 交易场所或数据场所 ID。
+	ExchangeId string `protobuf:"bytes,3,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
+	// 外部数据源使用的代码。
+	ExternalSymbol string `protobuf:"bytes,4,opt,name=external_symbol,json=externalSymbol,proto3" json:"external_symbol,omitempty"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,6,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *InstrumentAlias) Reset() {
@@ -544,15 +590,21 @@ func (x *InstrumentAlias) GetAttributes() map[string]string {
 	return nil
 }
 
+// 数据集允许使用的一个业务维度定义。
 type DimensionDef struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Name          string   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	DisplayName   string   `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Description   string   `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
-	Required      bool     `protobuf:"varint,4,opt,name=required,proto3" json:"required,omitempty"`
+	// 机器可读名称。
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// 展示名称。
+	DisplayName string `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// 说明文本。
+	Description string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	// 是否必填。
+	Required bool `protobuf:"varint,4,opt,name=required,proto3" json:"required,omitempty"`
+	// 允许的取值列表；为空表示不限制枚举值。
 	AllowedValues []string `protobuf:"bytes,5,rep,name=allowed_values,json=allowedValues,proto3" json:"allowed_values,omitempty"`
 }
 
@@ -623,28 +675,46 @@ func (x *DimensionDef) GetAllowedValues() []string {
 	return nil
 }
 
+// 一组可读写的逻辑数据集合。
 type DataSet struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	DatasetId       string            `protobuf:"bytes,1,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	WorkspaceId     string            `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	Name            string            `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	DisplayName     string            `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	DataKind        DataKind          `protobuf:"varint,5,opt,name=data_kind,json=dataKind,proto3,enum=trpc.storage.v2.common.DataKind" json:"data_kind,omitempty"`
-	DataDomain      DataDomain        `protobuf:"varint,6,opt,name=data_domain,json=dataDomain,proto3,enum=trpc.storage.v2.common.DataDomain" json:"data_domain,omitempty"`
-	MarketScope     []string          `protobuf:"bytes,7,rep,name=market_scope,json=marketScope,proto3" json:"market_scope,omitempty"`
-	ExchangeScope   []string          `protobuf:"bytes,8,rep,name=exchange_scope,json=exchangeScope,proto3" json:"exchange_scope,omitempty"`
-	InstrumentScope []string          `protobuf:"bytes,9,rep,name=instrument_scope,json=instrumentScope,proto3" json:"instrument_scope,omitempty"`
-	DefaultFreqs    []string          `protobuf:"bytes,10,rep,name=default_freqs,json=defaultFreqs,proto3" json:"default_freqs,omitempty"`
-	SchemaVersion   uint32            `protobuf:"varint,11,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
-	Dimensions      []*DimensionDef   `protobuf:"bytes,12,rep,name=dimensions,proto3" json:"dimensions,omitempty"`
-	RetentionPolicy string            `protobuf:"bytes,13,opt,name=retention_policy,json=retentionPolicy,proto3" json:"retention_policy,omitempty"`
-	Status          string            `protobuf:"bytes,14,opt,name=status,proto3" json:"status,omitempty"`
-	CreatedAt       string            `protobuf:"bytes,15,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt       string            `protobuf:"bytes,16,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	Attributes      map[string]string `protobuf:"bytes,17,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,1,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 机器可读名称。
+	Name string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	// 展示名称。
+	DisplayName string `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// 数据集的结构形态。
+	DataKind DataKind `protobuf:"varint,5,opt,name=data_kind,json=dataKind,proto3,enum=trpc.storage.v2.common.DataKind" json:"data_kind,omitempty"`
+	// 数据集的金融业务领域。
+	DataDomain DataDomain `protobuf:"varint,6,opt,name=data_domain,json=dataDomain,proto3,enum=trpc.storage.v2.common.DataDomain" json:"data_domain,omitempty"`
+	// 数据集覆盖的市场范围。
+	MarketScope []string `protobuf:"bytes,7,rep,name=market_scope,json=marketScope,proto3" json:"market_scope,omitempty"`
+	// 数据集覆盖的交易场所范围。
+	ExchangeScope []string `protobuf:"bytes,8,rep,name=exchange_scope,json=exchangeScope,proto3" json:"exchange_scope,omitempty"`
+	// 数据集覆盖的标的范围。
+	InstrumentScope []string `protobuf:"bytes,9,rep,name=instrument_scope,json=instrumentScope,proto3" json:"instrument_scope,omitempty"`
+	// 默认或支持的数据频率列表。
+	DefaultFreqs []string `protobuf:"bytes,10,rep,name=default_freqs,json=defaultFreqs,proto3" json:"default_freqs,omitempty"`
+	// 逻辑结构版本号。
+	SchemaVersion uint32 `protobuf:"varint,11,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	// 数据集允许使用的业务维度定义。
+	Dimensions []*DimensionDef `protobuf:"bytes,12,rep,name=dimensions,proto3" json:"dimensions,omitempty"`
+	// 保留策略，例如热存、冷存或备份策略。
+	RetentionPolicy string `protobuf:"bytes,13,opt,name=retention_policy,json=retentionPolicy,proto3" json:"retention_policy,omitempty"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,14,opt,name=status,proto3" json:"status,omitempty"`
+	// 创建时间。
+	CreatedAt string `protobuf:"bytes,15,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// 最后更新时间。
+	UpdatedAt string `protobuf:"bytes,16,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,17,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *DataSet) Reset() {
@@ -798,23 +868,36 @@ func (x *DataSet) GetAttributes() map[string]string {
 	return nil
 }
 
+// 数据集中的一个逻辑字段定义。
 type Field struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	FieldId       string            `protobuf:"bytes,1,opt,name=field_id,json=fieldId,proto3" json:"field_id,omitempty"`
-	WorkspaceId   string            `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DatasetId     string            `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	InterfaceName string            `protobuf:"bytes,4,opt,name=interface_name,json=interfaceName,proto3" json:"interface_name,omitempty"`
-	DisplayName   string            `protobuf:"bytes,5,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Description   string            `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`
-	ValueType     FieldValueType    `protobuf:"varint,7,opt,name=value_type,json=valueType,proto3,enum=trpc.storage.v2.common.FieldValueType" json:"value_type,omitempty"`
-	Required      bool              `protobuf:"varint,8,opt,name=required,proto3" json:"required,omitempty"`
-	Unique        bool              `protobuf:"varint,9,opt,name=unique,proto3" json:"unique,omitempty"`
-	Unit          string            `protobuf:"bytes,10,opt,name=unit,proto3" json:"unit,omitempty"`
-	Status        string            `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"`
-	Attributes    map[string]string `protobuf:"bytes,12,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 字段 ID。
+	FieldId string `protobuf:"bytes,1,opt,name=field_id,json=fieldId,proto3" json:"field_id,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 接口层稳定字段名，例如 open、close 或 volume。
+	InterfaceName string `protobuf:"bytes,4,opt,name=interface_name,json=interfaceName,proto3" json:"interface_name,omitempty"`
+	// 展示名称。
+	DisplayName string `protobuf:"bytes,5,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// 说明文本。
+	Description string `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`
+	// 值的逻辑类型。
+	ValueType FieldValueType `protobuf:"varint,7,opt,name=value_type,json=valueType,proto3,enum=trpc.storage.v2.common.FieldValueType" json:"value_type,omitempty"`
+	// 是否必填。
+	Required bool `protobuf:"varint,8,opt,name=required,proto3" json:"required,omitempty"`
+	// 是否参与唯一性约束。
+	Unique bool `protobuf:"varint,9,opt,name=unique,proto3" json:"unique,omitempty"`
+	// 计量单位，例如 USD、股或百分比。
+	Unit string `protobuf:"bytes,10,opt,name=unit,proto3" json:"unit,omitempty"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,12,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *Field) Reset() {
@@ -933,20 +1016,30 @@ func (x *Field) GetAttributes() map[string]string {
 	return nil
 }
 
+// 不含参数取值的因子算法定义。
 type FactorDef struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	FactorDefId string            `protobuf:"bytes,1,opt,name=factor_def_id,json=factorDefId,proto3" json:"factor_def_id,omitempty"`
-	WorkspaceId string            `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	Name        string            `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	DisplayName string            `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Description string            `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
-	Algorithm   string            `protobuf:"bytes,6,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
-	Version     string            `protobuf:"bytes,7,opt,name=version,proto3" json:"version,omitempty"`
-	Status      string            `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
-	Attributes  map[string]string `protobuf:"bytes,9,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 因子定义 ID。
+	FactorDefId string `protobuf:"bytes,1,opt,name=factor_def_id,json=factorDefId,proto3" json:"factor_def_id,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 机器可读名称。
+	Name string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	// 展示名称。
+	DisplayName string `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// 说明文本。
+	Description string `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
+	// 因子算法或公式族标识。
+	Algorithm string `protobuf:"bytes,6,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
+	// 版本号。
+	Version string `protobuf:"bytes,7,opt,name=version,proto3" json:"version,omitempty"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,9,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *FactorDef) Reset() {
@@ -1044,22 +1137,34 @@ func (x *FactorDef) GetAttributes() map[string]string {
 	return nil
 }
 
+// 带参数的因子实例，例如 MA20 或 RSI14。
 type FactorInstance struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	FactorInstanceId string            `protobuf:"bytes,1,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
-	WorkspaceId      string            `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	FactorDefId      string            `protobuf:"bytes,3,opt,name=factor_def_id,json=factorDefId,proto3" json:"factor_def_id,omitempty"`
-	DatasetId        string            `protobuf:"bytes,4,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	Name             string            `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
-	DisplayName      string            `protobuf:"bytes,6,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Freq             string            `protobuf:"bytes,7,opt,name=freq,proto3" json:"freq,omitempty"`
-	Params           map[string]string `protobuf:"bytes,8,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
-	ValueType        FieldValueType    `protobuf:"varint,9,opt,name=value_type,json=valueType,proto3,enum=trpc.storage.v2.common.FieldValueType" json:"value_type,omitempty"`
-	Status           string            `protobuf:"bytes,10,opt,name=status,proto3" json:"status,omitempty"`
-	Attributes       map[string]string `protobuf:"bytes,11,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 因子实例 ID，表示带参数的因子结果。
+	FactorInstanceId string `protobuf:"bytes,1,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 因子定义 ID。
+	FactorDefId string `protobuf:"bytes,3,opt,name=factor_def_id,json=factorDefId,proto3" json:"factor_def_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,4,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 机器可读名称。
+	Name string `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
+	// 展示名称。
+	DisplayName string `protobuf:"bytes,6,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// 数据频率，例如 1m、1d 或 tick。
+	Freq string `protobuf:"bytes,7,opt,name=freq,proto3" json:"freq,omitempty"`
+	// 参数键值对，例如 window=20。
+	Params map[string]string `protobuf:"bytes,8,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 值的逻辑类型。
+	ValueType FieldValueType `protobuf:"varint,9,opt,name=value_type,json=valueType,proto3,enum=trpc.storage.v2.common.FieldValueType" json:"value_type,omitempty"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,10,opt,name=status,proto3" json:"status,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,11,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *FactorInstance) Reset() {
@@ -1171,17 +1276,24 @@ func (x *FactorInstance) GetAttributes() map[string]string {
 	return nil
 }
 
+// 数据视图的服务端查询和物化策略。
 type DataViewQueryConfig struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	PrimaryDatasetId  string        `protobuf:"bytes,1,opt,name=primary_dataset_id,json=primaryDatasetId,proto3" json:"primary_dataset_id,omitempty"`
-	JoinDatasetIds    []string      `protobuf:"bytes,2,rep,name=join_dataset_ids,json=joinDatasetIds,proto3" json:"join_dataset_ids,omitempty"`
-	InstrumentIds     []string      `protobuf:"bytes,3,rep,name=instrument_ids,json=instrumentIds,proto3" json:"instrument_ids,omitempty"`
-	Filters           []*FilterExpr `protobuf:"bytes,4,rep,name=filters,proto3" json:"filters,omitempty"`
-	Sorts             []*SortSpec   `protobuf:"bytes,5,rep,name=sorts,proto3" json:"sorts,omitempty"`
-	MaterializePolicy string        `protobuf:"bytes,6,opt,name=materialize_policy,json=materializePolicy,proto3" json:"materialize_policy,omitempty"`
+	// 数据视图的主数据集 ID。
+	PrimaryDatasetId string `protobuf:"bytes,1,opt,name=primary_dataset_id,json=primaryDatasetId,proto3" json:"primary_dataset_id,omitempty"`
+	// 数据视图需要关联的辅助数据集 ID 列表。
+	JoinDatasetIds []string `protobuf:"bytes,2,rep,name=join_dataset_ids,json=joinDatasetIds,proto3" json:"join_dataset_ids,omitempty"`
+	// 调用方指定的标的 ID 列表；标的池由上层应用处理。
+	InstrumentIds []string `protobuf:"bytes,3,rep,name=instrument_ids,json=instrumentIds,proto3" json:"instrument_ids,omitempty"`
+	// 过滤条件列表。
+	Filters []*FilterExpr `protobuf:"bytes,4,rep,name=filters,proto3" json:"filters,omitempty"`
+	// 排序条件列表。
+	Sorts []*SortSpec `protobuf:"bytes,5,rep,name=sorts,proto3" json:"sorts,omitempty"`
+	// 服务端物化策略，例如延迟、立即或关闭物化。
+	MaterializePolicy string `protobuf:"bytes,6,opt,name=materialize_policy,json=materializePolicy,proto3" json:"materialize_policy,omitempty"`
 }
 
 func (x *DataViewQueryConfig) Reset() {
@@ -1258,20 +1370,30 @@ func (x *DataViewQueryConfig) GetMaterializePolicy() string {
 	return ""
 }
 
+// 数据视图某个版本的一列输出定义。
 type DataViewColumn struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	ColumnId         string            `protobuf:"bytes,1,opt,name=column_id,json=columnId,proto3" json:"column_id,omitempty"`
-	OutputName       string            `protobuf:"bytes,2,opt,name=output_name,json=outputName,proto3" json:"output_name,omitempty"`
-	ColumnOrigin     ColumnOrigin      `protobuf:"varint,3,opt,name=column_origin,json=columnOrigin,proto3,enum=trpc.storage.v2.common.ColumnOrigin" json:"column_origin,omitempty"`
-	DatasetId        string            `protobuf:"bytes,4,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	FieldId          string            `protobuf:"bytes,5,opt,name=field_id,json=fieldId,proto3" json:"field_id,omitempty"`
-	FactorInstanceId string            `protobuf:"bytes,6,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
-	Expression       string            `protobuf:"bytes,7,opt,name=expression,proto3" json:"expression,omitempty"`
-	ValueType        FieldValueType    `protobuf:"varint,8,opt,name=value_type,json=valueType,proto3,enum=trpc.storage.v2.common.FieldValueType" json:"value_type,omitempty"`
-	Attributes       map[string]string `protobuf:"bytes,9,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 数据视图中的列 ID。
+	ColumnId string `protobuf:"bytes,1,opt,name=column_id,json=columnId,proto3" json:"column_id,omitempty"`
+	// 返回给调用方的列名。
+	OutputName string `protobuf:"bytes,2,opt,name=output_name,json=outputName,proto3" json:"output_name,omitempty"`
+	// 列来源，例如字段、因子实例、表达式或系统列。
+	ColumnOrigin ColumnOrigin `protobuf:"varint,3,opt,name=column_origin,json=columnOrigin,proto3,enum=trpc.storage.v2.common.ColumnOrigin" json:"column_origin,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,4,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 字段 ID。
+	FieldId string `protobuf:"bytes,5,opt,name=field_id,json=fieldId,proto3" json:"field_id,omitempty"`
+	// 因子实例 ID，表示带参数的因子结果。
+	FactorInstanceId string `protobuf:"bytes,6,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
+	// 服务端支持的表达式文本。
+	Expression string `protobuf:"bytes,7,opt,name=expression,proto3" json:"expression,omitempty"`
+	// 值的逻辑类型。
+	ValueType FieldValueType `protobuf:"varint,8,opt,name=value_type,json=valueType,proto3,enum=trpc.storage.v2.common.FieldValueType" json:"value_type,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,9,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *DataViewColumn) Reset() {
@@ -1369,16 +1491,22 @@ func (x *DataViewColumn) GetAttributes() map[string]string {
 	return nil
 }
 
+// 数据视图的一个不可变结构版本。
 type DataViewVersion struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	VersionId string            `protobuf:"bytes,1,opt,name=version_id,json=versionId,proto3" json:"version_id,omitempty"`
-	Version   uint32            `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
-	Columns   []*DataViewColumn `protobuf:"bytes,3,rep,name=columns,proto3" json:"columns,omitempty"`
-	CreatedAt string            `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	Status    string            `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
+	// 版本 ID。
+	VersionId string `protobuf:"bytes,1,opt,name=version_id,json=versionId,proto3" json:"version_id,omitempty"`
+	// 版本号。
+	Version uint32 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	// 返回列或请求列列表。
+	Columns []*DataViewColumn `protobuf:"bytes,3,rep,name=columns,proto3" json:"columns,omitempty"`
+	// 创建时间。
+	CreatedAt string `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
 }
 
 func (x *DataViewVersion) Reset() {
@@ -1448,23 +1576,36 @@ func (x *DataViewVersion) GetStatus() string {
 	return ""
 }
 
+// 面向查询的数据视图，可组合字段、因子、表达式和系统列。
 type DataView struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	DataViewId      string               `protobuf:"bytes,1,opt,name=data_view_id,json=dataViewId,proto3" json:"data_view_id,omitempty"`
-	WorkspaceId     string               `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	Name            string               `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	DisplayName     string               `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Description     string               `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
-	QueryConfig     *DataViewQueryConfig `protobuf:"bytes,6,opt,name=query_config,json=queryConfig,proto3" json:"query_config,omitempty"`
-	Versions        []*DataViewVersion   `protobuf:"bytes,7,rep,name=versions,proto3" json:"versions,omitempty"`
-	ActiveVersionId string               `protobuf:"bytes,8,opt,name=active_version_id,json=activeVersionId,proto3" json:"active_version_id,omitempty"`
-	Status          string               `protobuf:"bytes,9,opt,name=status,proto3" json:"status,omitempty"`
-	CreatedAt       string               `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt       string               `protobuf:"bytes,11,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	Attributes      map[string]string    `protobuf:"bytes,12,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 数据视图 ID。
+	DataViewId string `protobuf:"bytes,1,opt,name=data_view_id,json=dataViewId,proto3" json:"data_view_id,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 机器可读名称。
+	Name string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	// 展示名称。
+	DisplayName string `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// 说明文本。
+	Description string `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
+	// query_config 参数。
+	QueryConfig *DataViewQueryConfig `protobuf:"bytes,6,opt,name=query_config,json=queryConfig,proto3" json:"query_config,omitempty"`
+	// 数据视图的结构版本列表；新增动态因子列时应创建新版本。
+	Versions []*DataViewVersion `protobuf:"bytes,7,rep,name=versions,proto3" json:"versions,omitempty"`
+	// 默认查询使用的激活版本 ID。
+	ActiveVersionId string `protobuf:"bytes,8,opt,name=active_version_id,json=activeVersionId,proto3" json:"active_version_id,omitempty"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,9,opt,name=status,proto3" json:"status,omitempty"`
+	// 创建时间。
+	CreatedAt string `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// 最后更新时间。
+	UpdatedAt string `protobuf:"bytes,11,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,12,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *DataView) Reset() {
@@ -1583,17 +1724,25 @@ func (x *DataView) GetAttributes() map[string]string {
 	return nil
 }
 
+// 物理存储后端，例如 Pebble、DuckDB、CSV 或 Bleve。
 type StorageDevice struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	DeviceId   string            `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	Name       string            `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Engine     string            `protobuf:"bytes,3,opt,name=engine,proto3" json:"engine,omitempty"`
-	Endpoint   string            `protobuf:"bytes,4,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
-	ConfigJson string            `protobuf:"bytes,5,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
-	Status     string            `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
+	// 存储设备 ID。
+	DeviceId string `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	// 机器可读名称。
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// 执行引擎名称，例如 Pebble、DuckDB、CSV 或 Bleve。
+	Engine string `protobuf:"bytes,3,opt,name=engine,proto3" json:"engine,omitempty"`
+	// 连接地址、文件路径或 URI。
+	Endpoint string `protobuf:"bytes,4,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	// 存储引擎专用配置，使用 JSON 文本。
+	ConfigJson string `protobuf:"bytes,5,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
 	Attributes map[string]string `protobuf:"bytes,7,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
@@ -1678,22 +1827,34 @@ func (x *StorageDevice) GetAttributes() map[string]string {
 	return nil
 }
 
+// 逻辑数据到物理存储设备的路由规则。
 type StorageRoute struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RouteId          string            `protobuf:"bytes,1,opt,name=route_id,json=routeId,proto3" json:"route_id,omitempty"`
-	WorkspaceId      string            `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DatasetId        string            `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	FieldId          string            `protobuf:"bytes,4,opt,name=field_id,json=fieldId,proto3" json:"field_id,omitempty"`
-	FactorInstanceId string            `protobuf:"bytes,5,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
-	DeviceId         string            `protobuf:"bytes,6,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	DimensionValues  []*DimensionValue `protobuf:"bytes,7,rep,name=dimension_values,json=dimensionValues,proto3" json:"dimension_values,omitempty"`
-	Mode             string            `protobuf:"bytes,8,opt,name=mode,proto3" json:"mode,omitempty"`
-	Priority         uint32            `protobuf:"varint,9,opt,name=priority,proto3" json:"priority,omitempty"`
-	Status           string            `protobuf:"bytes,10,opt,name=status,proto3" json:"status,omitempty"`
-	Attributes       map[string]string `protobuf:"bytes,11,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 路由规则 ID。
+	RouteId string `protobuf:"bytes,1,opt,name=route_id,json=routeId,proto3" json:"route_id,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 字段 ID。
+	FieldId string `protobuf:"bytes,4,opt,name=field_id,json=fieldId,proto3" json:"field_id,omitempty"`
+	// 因子实例 ID，表示带参数的因子结果。
+	FactorInstanceId string `protobuf:"bytes,5,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
+	// 存储设备 ID。
+	DeviceId string `protobuf:"bytes,6,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	// 业务维度取值，例如复权类型、报告期或榜单类型。
+	DimensionValues []*DimensionValue `protobuf:"bytes,7,rep,name=dimension_values,json=dimensionValues,proto3" json:"dimension_values,omitempty"`
+	// 路由用途，例如 online、analytics、text、cold 或 backup。
+	Mode string `protobuf:"bytes,8,opt,name=mode,proto3" json:"mode,omitempty"`
+	// 路由优先级；约定数值越小优先级越高。
+	Priority uint32 `protobuf:"varint,9,opt,name=priority,proto3" json:"priority,omitempty"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,10,opt,name=status,proto3" json:"status,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,11,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *StorageRoute) Reset() {
@@ -1805,19 +1966,28 @@ func (x *StorageRoute) GetAttributes() map[string]string {
 	return nil
 }
 
+// 采集任务类型到目标数据集的绑定关系。
 type CollectorDataSetBinding struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	BindingId         string            `protobuf:"bytes,1,opt,name=binding_id,json=bindingId,proto3" json:"binding_id,omitempty"`
-	WorkspaceId       string            `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DatasetId         string            `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	DataSource        string            `protobuf:"bytes,4,opt,name=data_source,json=dataSource,proto3" json:"data_source,omitempty"`
-	ExchangeId        string            `protobuf:"bytes,5,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
-	CollectorTaskType string            `protobuf:"bytes,6,opt,name=collector_task_type,json=collectorTaskType,proto3" json:"collector_task_type,omitempty"`
-	Params            map[string]string `protobuf:"bytes,7,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
-	Status            string            `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
+	// 绑定关系 ID。
+	BindingId string `protobuf:"bytes,1,opt,name=binding_id,json=bindingId,proto3" json:"binding_id,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 外部数据源标识。
+	DataSource string `protobuf:"bytes,4,opt,name=data_source,json=dataSource,proto3" json:"data_source,omitempty"`
+	// 交易场所或数据场所 ID。
+	ExchangeId string `protobuf:"bytes,5,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
+	// 采集任务类型，例如 spot_kline_1m。
+	CollectorTaskType string `protobuf:"bytes,6,opt,name=collector_task_type,json=collectorTaskType,proto3" json:"collector_task_type,omitempty"`
+	// 参数键值对，例如 window=20。
+	Params map[string]string `protobuf:"bytes,7,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 状态，例如启用、停用、构建中或归档。
+	Status string `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
 }
 
 func (x *CollectorDataSetBinding) Reset() {
@@ -1908,12 +2078,15 @@ func (x *CollectorDataSetBinding) GetStatus() string {
 	return ""
 }
 
+// CreateWorkspaceReq 消息。
 type CreateWorkspaceReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo  *AuthInfo  `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间元数据。
 	Workspace *Workspace `protobuf:"bytes,2,opt,name=workspace,proto3" json:"workspace,omitempty"`
 }
 
@@ -1963,12 +2136,15 @@ func (x *CreateWorkspaceReq) GetWorkspace() *Workspace {
 	return nil
 }
 
+// CreateWorkspaceRsp 消息。
 type CreateWorkspaceRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo   *RetInfo   `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 工作空间元数据。
 	Workspace *Workspace `protobuf:"bytes,2,opt,name=workspace,proto3" json:"workspace,omitempty"`
 }
 
@@ -2018,12 +2194,15 @@ func (x *CreateWorkspaceRsp) GetWorkspace() *Workspace {
 	return nil
 }
 
+// UpdateWorkspaceReq 消息。
 type UpdateWorkspaceReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo  *AuthInfo  `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间元数据。
 	Workspace *Workspace `protobuf:"bytes,2,opt,name=workspace,proto3" json:"workspace,omitempty"`
 }
 
@@ -2073,12 +2252,15 @@ func (x *UpdateWorkspaceReq) GetWorkspace() *Workspace {
 	return nil
 }
 
+// UpdateWorkspaceRsp 消息。
 type UpdateWorkspaceRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo   *RetInfo   `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 工作空间元数据。
 	Workspace *Workspace `protobuf:"bytes,2,opt,name=workspace,proto3" json:"workspace,omitempty"`
 }
 
@@ -2128,13 +2310,16 @@ func (x *UpdateWorkspaceRsp) GetWorkspace() *Workspace {
 	return nil
 }
 
+// GetWorkspaceReq 消息。
 type GetWorkspaceReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo    *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId string    `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
 }
 
 func (x *GetWorkspaceReq) Reset() {
@@ -2183,12 +2368,15 @@ func (x *GetWorkspaceReq) GetWorkspaceId() string {
 	return ""
 }
 
+// GetWorkspaceRsp 消息。
 type GetWorkspaceRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo   *RetInfo   `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 工作空间元数据。
 	Workspace *Workspace `protobuf:"bytes,2,opt,name=workspace,proto3" json:"workspace,omitempty"`
 }
 
@@ -2238,13 +2426,16 @@ func (x *GetWorkspaceRsp) GetWorkspace() *Workspace {
 	return nil
 }
 
+// ListWorkspacesReq 消息。
 type ListWorkspacesReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Page     *Page     `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListWorkspacesReq) Reset() {
@@ -2293,14 +2484,18 @@ func (x *ListWorkspacesReq) GetPage() *Page {
 	return nil
 }
 
+// ListWorkspacesRsp 消息。
 type ListWorkspacesRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo     `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 工作空间列表。
 	Workspaces []*Workspace `protobuf:"bytes,2,rep,name=workspaces,proto3" json:"workspaces,omitempty"`
-	PageResult *PageResult  `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	// 分页结果。
+	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListWorkspacesRsp) Reset() {
@@ -2356,12 +2551,15 @@ func (x *ListWorkspacesRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// CreateExchangeReq 消息。
 type CreateExchangeReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 交易场所元数据。
 	Exchange *Exchange `protobuf:"bytes,2,opt,name=exchange,proto3" json:"exchange,omitempty"`
 }
 
@@ -2411,12 +2609,15 @@ func (x *CreateExchangeReq) GetExchange() *Exchange {
 	return nil
 }
 
+// CreateExchangeRsp 消息。
 type CreateExchangeRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo  `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 交易场所元数据。
 	Exchange *Exchange `protobuf:"bytes,2,opt,name=exchange,proto3" json:"exchange,omitempty"`
 }
 
@@ -2466,12 +2667,15 @@ func (x *CreateExchangeRsp) GetExchange() *Exchange {
 	return nil
 }
 
+// UpdateExchangeReq 消息。
 type UpdateExchangeReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 交易场所元数据。
 	Exchange *Exchange `protobuf:"bytes,2,opt,name=exchange,proto3" json:"exchange,omitempty"`
 }
 
@@ -2521,12 +2725,15 @@ func (x *UpdateExchangeReq) GetExchange() *Exchange {
 	return nil
 }
 
+// UpdateExchangeRsp 消息。
 type UpdateExchangeRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo  `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 交易场所元数据。
 	Exchange *Exchange `protobuf:"bytes,2,opt,name=exchange,proto3" json:"exchange,omitempty"`
 }
 
@@ -2576,13 +2783,16 @@ func (x *UpdateExchangeRsp) GetExchange() *Exchange {
 	return nil
 }
 
+// GetExchangeReq 消息。
 type GetExchangeReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo   *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	ExchangeId string    `protobuf:"bytes,2,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 交易场所或数据场所 ID。
+	ExchangeId string `protobuf:"bytes,2,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
 }
 
 func (x *GetExchangeReq) Reset() {
@@ -2631,12 +2841,15 @@ func (x *GetExchangeReq) GetExchangeId() string {
 	return ""
 }
 
+// GetExchangeRsp 消息。
 type GetExchangeRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo  `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 交易场所元数据。
 	Exchange *Exchange `protobuf:"bytes,2,opt,name=exchange,proto3" json:"exchange,omitempty"`
 }
 
@@ -2686,14 +2899,18 @@ func (x *GetExchangeRsp) GetExchange() *Exchange {
 	return nil
 }
 
+// ListExchangesReq 消息。
 type ListExchangesReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Market   string    `protobuf:"bytes,2,opt,name=market,proto3" json:"market,omitempty"`
-	Page     *Page     `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
+	// 市场代码。
+	Market string `protobuf:"bytes,2,opt,name=market,proto3" json:"market,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListExchangesReq) Reset() {
@@ -2749,13 +2966,17 @@ func (x *ListExchangesReq) GetPage() *Page {
 	return nil
 }
 
+// ListExchangesRsp 消息。
 type ListExchangesRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Exchanges  []*Exchange `protobuf:"bytes,2,rep,name=exchanges,proto3" json:"exchanges,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 交易场所列表。
+	Exchanges []*Exchange `protobuf:"bytes,2,rep,name=exchanges,proto3" json:"exchanges,omitempty"`
+	// 分页结果。
 	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
@@ -2812,12 +3033,15 @@ func (x *ListExchangesRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// UpsertInstrumentReq 消息。
 type UpsertInstrumentReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo   *AuthInfo   `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 标的元数据。
 	Instrument *Instrument `protobuf:"bytes,2,opt,name=instrument,proto3" json:"instrument,omitempty"`
 }
 
@@ -2867,12 +3091,15 @@ func (x *UpsertInstrumentReq) GetInstrument() *Instrument {
 	return nil
 }
 
+// UpsertInstrumentRsp 消息。
 type UpsertInstrumentRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 标的元数据。
 	Instrument *Instrument `protobuf:"bytes,2,opt,name=instrument,proto3" json:"instrument,omitempty"`
 }
 
@@ -2922,13 +3149,16 @@ func (x *UpsertInstrumentRsp) GetInstrument() *Instrument {
 	return nil
 }
 
+// GetInstrumentReq 消息。
 type GetInstrumentReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo     *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	InstrumentId string    `protobuf:"bytes,2,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 内部标准化标的 ID；非标的数据可为空。
+	InstrumentId string `protobuf:"bytes,2,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
 }
 
 func (x *GetInstrumentReq) Reset() {
@@ -2977,12 +3207,15 @@ func (x *GetInstrumentReq) GetInstrumentId() string {
 	return ""
 }
 
+// GetInstrumentRsp 消息。
 type GetInstrumentRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 标的元数据。
 	Instrument *Instrument `protobuf:"bytes,2,opt,name=instrument,proto3" json:"instrument,omitempty"`
 }
 
@@ -3032,16 +3265,22 @@ func (x *GetInstrumentRsp) GetInstrument() *Instrument {
 	return nil
 }
 
+// ListInstrumentsReq 消息。
 type ListInstrumentsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo      *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	ExchangeId    string    `protobuf:"bytes,2,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
-	Market        string    `protobuf:"bytes,3,opt,name=market,proto3" json:"market,omitempty"`
-	InstrumentIds []string  `protobuf:"bytes,4,rep,name=instrument_ids,json=instrumentIds,proto3" json:"instrument_ids,omitempty"`
-	Page          *Page     `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 交易场所或数据场所 ID。
+	ExchangeId string `protobuf:"bytes,2,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
+	// 市场代码。
+	Market string `protobuf:"bytes,3,opt,name=market,proto3" json:"market,omitempty"`
+	// 调用方指定的标的 ID 列表；标的池由上层应用处理。
+	InstrumentIds []string `protobuf:"bytes,4,rep,name=instrument_ids,json=instrumentIds,proto3" json:"instrument_ids,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListInstrumentsReq) Reset() {
@@ -3111,14 +3350,18 @@ func (x *ListInstrumentsReq) GetPage() *Page {
 	return nil
 }
 
+// ListInstrumentsRsp 消息。
 type ListInstrumentsRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo     *RetInfo      `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 标的列表。
 	Instruments []*Instrument `protobuf:"bytes,2,rep,name=instruments,proto3" json:"instruments,omitempty"`
-	PageResult  *PageResult   `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	// 分页结果。
+	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListInstrumentsRsp) Reset() {
@@ -3174,13 +3417,16 @@ func (x *ListInstrumentsRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// UpsertInstrumentAliasReq 消息。
 type UpsertInstrumentAliasReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo *AuthInfo        `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Alias    *InstrumentAlias `protobuf:"bytes,2,opt,name=alias,proto3" json:"alias,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 外部代码映射。
+	Alias *InstrumentAlias `protobuf:"bytes,2,opt,name=alias,proto3" json:"alias,omitempty"`
 }
 
 func (x *UpsertInstrumentAliasReq) Reset() {
@@ -3229,13 +3475,16 @@ func (x *UpsertInstrumentAliasReq) GetAlias() *InstrumentAlias {
 	return nil
 }
 
+// UpsertInstrumentAliasRsp 消息。
 type UpsertInstrumentAliasRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo         `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Alias   *InstrumentAlias `protobuf:"bytes,2,opt,name=alias,proto3" json:"alias,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 外部代码映射。
+	Alias *InstrumentAlias `protobuf:"bytes,2,opt,name=alias,proto3" json:"alias,omitempty"`
 }
 
 func (x *UpsertInstrumentAliasRsp) Reset() {
@@ -3284,15 +3533,20 @@ func (x *UpsertInstrumentAliasRsp) GetAlias() *InstrumentAlias {
 	return nil
 }
 
+// ListInstrumentAliasesReq 消息。
 type ListInstrumentAliasesReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo     *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	InstrumentId string    `protobuf:"bytes,2,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
-	DataSource   string    `protobuf:"bytes,3,opt,name=data_source,json=dataSource,proto3" json:"data_source,omitempty"`
-	Page         *Page     `protobuf:"bytes,4,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 内部标准化标的 ID；非标的数据可为空。
+	InstrumentId string `protobuf:"bytes,2,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
+	// 外部数据源标识。
+	DataSource string `protobuf:"bytes,3,opt,name=data_source,json=dataSource,proto3" json:"data_source,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,4,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListInstrumentAliasesReq) Reset() {
@@ -3355,14 +3609,18 @@ func (x *ListInstrumentAliasesReq) GetPage() *Page {
 	return nil
 }
 
+// ListInstrumentAliasesRsp 消息。
 type ListInstrumentAliasesRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo           `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Aliases    []*InstrumentAlias `protobuf:"bytes,2,rep,name=aliases,proto3" json:"aliases,omitempty"`
-	PageResult *PageResult        `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 外部代码映射列表。
+	Aliases []*InstrumentAlias `protobuf:"bytes,2,rep,name=aliases,proto3" json:"aliases,omitempty"`
+	// 分页结果。
+	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListInstrumentAliasesRsp) Reset() {
@@ -3418,13 +3676,16 @@ func (x *ListInstrumentAliasesRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// CreateDataSetReq 消息。
 type CreateDataSetReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Dataset  *DataSet  `protobuf:"bytes,2,opt,name=dataset,proto3" json:"dataset,omitempty"`
+	// 数据集元数据。
+	Dataset *DataSet `protobuf:"bytes,2,opt,name=dataset,proto3" json:"dataset,omitempty"`
 }
 
 func (x *CreateDataSetReq) Reset() {
@@ -3473,12 +3734,15 @@ func (x *CreateDataSetReq) GetDataset() *DataSet {
 	return nil
 }
 
+// CreateDataSetRsp 消息。
 type CreateDataSetRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 接口返回状态。
 	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 数据集元数据。
 	Dataset *DataSet `protobuf:"bytes,2,opt,name=dataset,proto3" json:"dataset,omitempty"`
 }
 
@@ -3528,13 +3792,16 @@ func (x *CreateDataSetRsp) GetDataset() *DataSet {
 	return nil
 }
 
+// UpdateDataSetReq 消息。
 type UpdateDataSetReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Dataset  *DataSet  `protobuf:"bytes,2,opt,name=dataset,proto3" json:"dataset,omitempty"`
+	// 数据集元数据。
+	Dataset *DataSet `protobuf:"bytes,2,opt,name=dataset,proto3" json:"dataset,omitempty"`
 }
 
 func (x *UpdateDataSetReq) Reset() {
@@ -3583,12 +3850,15 @@ func (x *UpdateDataSetReq) GetDataset() *DataSet {
 	return nil
 }
 
+// UpdateDataSetRsp 消息。
 type UpdateDataSetRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 接口返回状态。
 	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 数据集元数据。
 	Dataset *DataSet `protobuf:"bytes,2,opt,name=dataset,proto3" json:"dataset,omitempty"`
 }
 
@@ -3638,14 +3908,18 @@ func (x *UpdateDataSetRsp) GetDataset() *DataSet {
 	return nil
 }
 
+// GetDataSetReq 消息。
 type GetDataSetReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo    *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId string    `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DatasetId   string    `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
 }
 
 func (x *GetDataSetReq) Reset() {
@@ -3701,12 +3975,15 @@ func (x *GetDataSetReq) GetDatasetId() string {
 	return ""
 }
 
+// GetDataSetRsp 消息。
 type GetDataSetRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 接口返回状态。
 	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 数据集元数据。
 	Dataset *DataSet `protobuf:"bytes,2,opt,name=dataset,proto3" json:"dataset,omitempty"`
 }
 
@@ -3756,16 +4033,22 @@ func (x *GetDataSetRsp) GetDataset() *DataSet {
 	return nil
 }
 
+// ListDataSetsReq 消息。
 type ListDataSetsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo    *AuthInfo  `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId string     `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DataKind    DataKind   `protobuf:"varint,3,opt,name=data_kind,json=dataKind,proto3,enum=trpc.storage.v2.common.DataKind" json:"data_kind,omitempty"`
-	DataDomain  DataDomain `protobuf:"varint,4,opt,name=data_domain,json=dataDomain,proto3,enum=trpc.storage.v2.common.DataDomain" json:"data_domain,omitempty"`
-	Page        *Page      `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集的结构形态。
+	DataKind DataKind `protobuf:"varint,3,opt,name=data_kind,json=dataKind,proto3,enum=trpc.storage.v2.common.DataKind" json:"data_kind,omitempty"`
+	// 数据集的金融业务领域。
+	DataDomain DataDomain `protobuf:"varint,4,opt,name=data_domain,json=dataDomain,proto3,enum=trpc.storage.v2.common.DataDomain" json:"data_domain,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListDataSetsReq) Reset() {
@@ -3835,13 +4118,17 @@ func (x *ListDataSetsReq) GetPage() *Page {
 	return nil
 }
 
+// ListDataSetsRsp 消息。
 type ListDataSetsRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Datasets   []*DataSet  `protobuf:"bytes,2,rep,name=datasets,proto3" json:"datasets,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 数据集列表。
+	Datasets []*DataSet `protobuf:"bytes,2,rep,name=datasets,proto3" json:"datasets,omitempty"`
+	// 分页结果。
 	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
@@ -3898,13 +4185,16 @@ func (x *ListDataSetsRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// CreateFieldReq 消息。
 type CreateFieldReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Field    *Field    `protobuf:"bytes,2,opt,name=field,proto3" json:"field,omitempty"`
+	// 字段定义。
+	Field *Field `protobuf:"bytes,2,opt,name=field,proto3" json:"field,omitempty"`
 }
 
 func (x *CreateFieldReq) Reset() {
@@ -3953,13 +4243,16 @@ func (x *CreateFieldReq) GetField() *Field {
 	return nil
 }
 
+// CreateFieldRsp 消息。
 type CreateFieldRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 接口返回状态。
 	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Field   *Field   `protobuf:"bytes,2,opt,name=field,proto3" json:"field,omitempty"`
+	// 字段定义。
+	Field *Field `protobuf:"bytes,2,opt,name=field,proto3" json:"field,omitempty"`
 }
 
 func (x *CreateFieldRsp) Reset() {
@@ -4008,13 +4301,16 @@ func (x *CreateFieldRsp) GetField() *Field {
 	return nil
 }
 
+// UpdateFieldReq 消息。
 type UpdateFieldReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Field    *Field    `protobuf:"bytes,2,opt,name=field,proto3" json:"field,omitempty"`
+	// 字段定义。
+	Field *Field `protobuf:"bytes,2,opt,name=field,proto3" json:"field,omitempty"`
 }
 
 func (x *UpdateFieldReq) Reset() {
@@ -4063,13 +4359,16 @@ func (x *UpdateFieldReq) GetField() *Field {
 	return nil
 }
 
+// UpdateFieldRsp 消息。
 type UpdateFieldRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 接口返回状态。
 	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Field   *Field   `protobuf:"bytes,2,opt,name=field,proto3" json:"field,omitempty"`
+	// 字段定义。
+	Field *Field `protobuf:"bytes,2,opt,name=field,proto3" json:"field,omitempty"`
 }
 
 func (x *UpdateFieldRsp) Reset() {
@@ -4118,16 +4417,22 @@ func (x *UpdateFieldRsp) GetField() *Field {
 	return nil
 }
 
+// GetFieldReq 消息。
 type GetFieldReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo      *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId   string    `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DatasetId     string    `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	FieldId       string    `protobuf:"bytes,4,opt,name=field_id,json=fieldId,proto3" json:"field_id,omitempty"`
-	InterfaceName string    `protobuf:"bytes,5,opt,name=interface_name,json=interfaceName,proto3" json:"interface_name,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 字段 ID。
+	FieldId string `protobuf:"bytes,4,opt,name=field_id,json=fieldId,proto3" json:"field_id,omitempty"`
+	// 接口层稳定字段名，例如 open、close 或 volume。
+	InterfaceName string `protobuf:"bytes,5,opt,name=interface_name,json=interfaceName,proto3" json:"interface_name,omitempty"`
 }
 
 func (x *GetFieldReq) Reset() {
@@ -4197,13 +4502,16 @@ func (x *GetFieldReq) GetInterfaceName() string {
 	return ""
 }
 
+// GetFieldRsp 消息。
 type GetFieldRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 接口返回状态。
 	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Field   *Field   `protobuf:"bytes,2,opt,name=field,proto3" json:"field,omitempty"`
+	// 字段定义。
+	Field *Field `protobuf:"bytes,2,opt,name=field,proto3" json:"field,omitempty"`
 }
 
 func (x *GetFieldRsp) Reset() {
@@ -4252,15 +4560,20 @@ func (x *GetFieldRsp) GetField() *Field {
 	return nil
 }
 
+// ListFieldsReq 消息。
 type ListFieldsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo    *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId string    `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DatasetId   string    `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	Page        *Page     `protobuf:"bytes,4,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,4,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListFieldsReq) Reset() {
@@ -4323,13 +4636,17 @@ func (x *ListFieldsReq) GetPage() *Page {
 	return nil
 }
 
+// ListFieldsRsp 消息。
 type ListFieldsRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Fields     []*Field    `protobuf:"bytes,2,rep,name=fields,proto3" json:"fields,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 字段值列表。
+	Fields []*Field `protobuf:"bytes,2,rep,name=fields,proto3" json:"fields,omitempty"`
+	// 分页结果。
 	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
@@ -4386,12 +4703,15 @@ func (x *ListFieldsRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// CreateFactorDefReq 消息。
 type CreateFactorDefReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo  *AuthInfo  `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 因子定义。
 	FactorDef *FactorDef `protobuf:"bytes,2,opt,name=factor_def,json=factorDef,proto3" json:"factor_def,omitempty"`
 }
 
@@ -4441,12 +4761,15 @@ func (x *CreateFactorDefReq) GetFactorDef() *FactorDef {
 	return nil
 }
 
+// CreateFactorDefRsp 消息。
 type CreateFactorDefRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo   *RetInfo   `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 因子定义。
 	FactorDef *FactorDef `protobuf:"bytes,2,opt,name=factor_def,json=factorDef,proto3" json:"factor_def,omitempty"`
 }
 
@@ -4496,12 +4819,15 @@ func (x *CreateFactorDefRsp) GetFactorDef() *FactorDef {
 	return nil
 }
 
+// UpdateFactorDefReq 消息。
 type UpdateFactorDefReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo  *AuthInfo  `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 因子定义。
 	FactorDef *FactorDef `protobuf:"bytes,2,opt,name=factor_def,json=factorDef,proto3" json:"factor_def,omitempty"`
 }
 
@@ -4551,12 +4877,15 @@ func (x *UpdateFactorDefReq) GetFactorDef() *FactorDef {
 	return nil
 }
 
+// UpdateFactorDefRsp 消息。
 type UpdateFactorDefRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo   *RetInfo   `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 因子定义。
 	FactorDef *FactorDef `protobuf:"bytes,2,opt,name=factor_def,json=factorDef,proto3" json:"factor_def,omitempty"`
 }
 
@@ -4606,14 +4935,18 @@ func (x *UpdateFactorDefRsp) GetFactorDef() *FactorDef {
 	return nil
 }
 
+// GetFactorDefReq 消息。
 type GetFactorDefReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo    *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId string    `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	FactorDefId string    `protobuf:"bytes,3,opt,name=factor_def_id,json=factorDefId,proto3" json:"factor_def_id,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 因子定义 ID。
+	FactorDefId string `protobuf:"bytes,3,opt,name=factor_def_id,json=factorDefId,proto3" json:"factor_def_id,omitempty"`
 }
 
 func (x *GetFactorDefReq) Reset() {
@@ -4669,12 +5002,15 @@ func (x *GetFactorDefReq) GetFactorDefId() string {
 	return ""
 }
 
+// GetFactorDefRsp 消息。
 type GetFactorDefRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo   *RetInfo   `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 因子定义。
 	FactorDef *FactorDef `protobuf:"bytes,2,opt,name=factor_def,json=factorDef,proto3" json:"factor_def,omitempty"`
 }
 
@@ -4724,14 +5060,18 @@ func (x *GetFactorDefRsp) GetFactorDef() *FactorDef {
 	return nil
 }
 
+// ListFactorDefsReq 消息。
 type ListFactorDefsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo    *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId string    `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	Page        *Page     `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListFactorDefsReq) Reset() {
@@ -4787,14 +5127,18 @@ func (x *ListFactorDefsReq) GetPage() *Page {
 	return nil
 }
 
+// ListFactorDefsRsp 消息。
 type ListFactorDefsRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo     `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 因子定义列表。
 	FactorDefs []*FactorDef `protobuf:"bytes,2,rep,name=factor_defs,json=factorDefs,proto3" json:"factor_defs,omitempty"`
-	PageResult *PageResult  `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	// 分页结果。
+	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListFactorDefsRsp) Reset() {
@@ -4850,12 +5194,15 @@ func (x *ListFactorDefsRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// CreateFactorInstanceReq 消息。
 type CreateFactorInstanceReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo       *AuthInfo       `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 因子实例。
 	FactorInstance *FactorInstance `protobuf:"bytes,2,opt,name=factor_instance,json=factorInstance,proto3" json:"factor_instance,omitempty"`
 }
 
@@ -4905,12 +5252,15 @@ func (x *CreateFactorInstanceReq) GetFactorInstance() *FactorInstance {
 	return nil
 }
 
+// CreateFactorInstanceRsp 消息。
 type CreateFactorInstanceRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo        *RetInfo        `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 因子实例。
 	FactorInstance *FactorInstance `protobuf:"bytes,2,opt,name=factor_instance,json=factorInstance,proto3" json:"factor_instance,omitempty"`
 }
 
@@ -4960,12 +5310,15 @@ func (x *CreateFactorInstanceRsp) GetFactorInstance() *FactorInstance {
 	return nil
 }
 
+// UpdateFactorInstanceReq 消息。
 type UpdateFactorInstanceReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo       *AuthInfo       `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 因子实例。
 	FactorInstance *FactorInstance `protobuf:"bytes,2,opt,name=factor_instance,json=factorInstance,proto3" json:"factor_instance,omitempty"`
 }
 
@@ -5015,12 +5368,15 @@ func (x *UpdateFactorInstanceReq) GetFactorInstance() *FactorInstance {
 	return nil
 }
 
+// UpdateFactorInstanceRsp 消息。
 type UpdateFactorInstanceRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo        *RetInfo        `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 因子实例。
 	FactorInstance *FactorInstance `protobuf:"bytes,2,opt,name=factor_instance,json=factorInstance,proto3" json:"factor_instance,omitempty"`
 }
 
@@ -5070,14 +5426,18 @@ func (x *UpdateFactorInstanceRsp) GetFactorInstance() *FactorInstance {
 	return nil
 }
 
+// GetFactorInstanceReq 消息。
 type GetFactorInstanceReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo         *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId      string    `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	FactorInstanceId string    `protobuf:"bytes,3,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 因子实例 ID，表示带参数的因子结果。
+	FactorInstanceId string `protobuf:"bytes,3,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
 }
 
 func (x *GetFactorInstanceReq) Reset() {
@@ -5133,12 +5493,15 @@ func (x *GetFactorInstanceReq) GetFactorInstanceId() string {
 	return ""
 }
 
+// GetFactorInstanceRsp 消息。
 type GetFactorInstanceRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo        *RetInfo        `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 因子实例。
 	FactorInstance *FactorInstance `protobuf:"bytes,2,opt,name=factor_instance,json=factorInstance,proto3" json:"factor_instance,omitempty"`
 }
 
@@ -5188,16 +5551,22 @@ func (x *GetFactorInstanceRsp) GetFactorInstance() *FactorInstance {
 	return nil
 }
 
+// ListFactorInstancesReq 消息。
 type ListFactorInstancesReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo    *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId string    `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	FactorDefId string    `protobuf:"bytes,3,opt,name=factor_def_id,json=factorDefId,proto3" json:"factor_def_id,omitempty"`
-	DatasetId   string    `protobuf:"bytes,4,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	Page        *Page     `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 因子定义 ID。
+	FactorDefId string `protobuf:"bytes,3,opt,name=factor_def_id,json=factorDefId,proto3" json:"factor_def_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,4,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListFactorInstancesReq) Reset() {
@@ -5267,14 +5636,18 @@ func (x *ListFactorInstancesReq) GetPage() *Page {
 	return nil
 }
 
+// ListFactorInstancesRsp 消息。
 type ListFactorInstancesRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo         *RetInfo          `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 因子实例列表。
 	FactorInstances []*FactorInstance `protobuf:"bytes,2,rep,name=factor_instances,json=factorInstances,proto3" json:"factor_instances,omitempty"`
-	PageResult      *PageResult       `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	// 分页结果。
+	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListFactorInstancesRsp) Reset() {
@@ -5330,12 +5703,15 @@ func (x *ListFactorInstancesRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// CreateDataViewReq 消息。
 type CreateDataViewReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 数据视图定义。
 	DataView *DataView `protobuf:"bytes,2,opt,name=data_view,json=dataView,proto3" json:"data_view,omitempty"`
 }
 
@@ -5385,12 +5761,15 @@ func (x *CreateDataViewReq) GetDataView() *DataView {
 	return nil
 }
 
+// CreateDataViewRsp 消息。
 type CreateDataViewRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo  `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 数据视图定义。
 	DataView *DataView `protobuf:"bytes,2,opt,name=data_view,json=dataView,proto3" json:"data_view,omitempty"`
 }
 
@@ -5440,12 +5819,15 @@ func (x *CreateDataViewRsp) GetDataView() *DataView {
 	return nil
 }
 
+// UpdateDataViewReq 消息。
 type UpdateDataViewReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 数据视图定义。
 	DataView *DataView `protobuf:"bytes,2,opt,name=data_view,json=dataView,proto3" json:"data_view,omitempty"`
 }
 
@@ -5495,12 +5877,15 @@ func (x *UpdateDataViewReq) GetDataView() *DataView {
 	return nil
 }
 
+// UpdateDataViewRsp 消息。
 type UpdateDataViewRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo  `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 数据视图定义。
 	DataView *DataView `protobuf:"bytes,2,opt,name=data_view,json=dataView,proto3" json:"data_view,omitempty"`
 }
 
@@ -5550,14 +5935,18 @@ func (x *UpdateDataViewRsp) GetDataView() *DataView {
 	return nil
 }
 
+// GetDataViewReq 消息。
 type GetDataViewReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo    *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId string    `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DataViewId  string    `protobuf:"bytes,3,opt,name=data_view_id,json=dataViewId,proto3" json:"data_view_id,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据视图 ID。
+	DataViewId string `protobuf:"bytes,3,opt,name=data_view_id,json=dataViewId,proto3" json:"data_view_id,omitempty"`
 }
 
 func (x *GetDataViewReq) Reset() {
@@ -5613,12 +6002,15 @@ func (x *GetDataViewReq) GetDataViewId() string {
 	return ""
 }
 
+// GetDataViewRsp 消息。
 type GetDataViewRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo  `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 数据视图定义。
 	DataView *DataView `protobuf:"bytes,2,opt,name=data_view,json=dataView,proto3" json:"data_view,omitempty"`
 }
 
@@ -5668,14 +6060,18 @@ func (x *GetDataViewRsp) GetDataView() *DataView {
 	return nil
 }
 
+// ListDataViewsReq 消息。
 type ListDataViewsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo    *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId string    `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	Page        *Page     `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListDataViewsReq) Reset() {
@@ -5731,13 +6127,17 @@ func (x *ListDataViewsReq) GetPage() *Page {
 	return nil
 }
 
+// ListDataViewsRsp 消息。
 type ListDataViewsRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	DataViews  []*DataView `protobuf:"bytes,2,rep,name=data_views,json=dataViews,proto3" json:"data_views,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 数据视图列表。
+	DataViews []*DataView `protobuf:"bytes,2,rep,name=data_views,json=dataViews,proto3" json:"data_views,omitempty"`
+	// 分页结果。
 	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
@@ -5794,12 +6194,15 @@ func (x *ListDataViewsRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// CreateStorageDeviceReq 消息。
 type CreateStorageDeviceReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo      *AuthInfo      `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 存储设备定义。
 	StorageDevice *StorageDevice `protobuf:"bytes,2,opt,name=storage_device,json=storageDevice,proto3" json:"storage_device,omitempty"`
 }
 
@@ -5849,12 +6252,15 @@ func (x *CreateStorageDeviceReq) GetStorageDevice() *StorageDevice {
 	return nil
 }
 
+// CreateStorageDeviceRsp 消息。
 type CreateStorageDeviceRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo       *RetInfo       `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 存储设备定义。
 	StorageDevice *StorageDevice `protobuf:"bytes,2,opt,name=storage_device,json=storageDevice,proto3" json:"storage_device,omitempty"`
 }
 
@@ -5904,12 +6310,15 @@ func (x *CreateStorageDeviceRsp) GetStorageDevice() *StorageDevice {
 	return nil
 }
 
+// UpdateStorageDeviceReq 消息。
 type UpdateStorageDeviceReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo      *AuthInfo      `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 存储设备定义。
 	StorageDevice *StorageDevice `protobuf:"bytes,2,opt,name=storage_device,json=storageDevice,proto3" json:"storage_device,omitempty"`
 }
 
@@ -5959,12 +6368,15 @@ func (x *UpdateStorageDeviceReq) GetStorageDevice() *StorageDevice {
 	return nil
 }
 
+// UpdateStorageDeviceRsp 消息。
 type UpdateStorageDeviceRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo       *RetInfo       `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 存储设备定义。
 	StorageDevice *StorageDevice `protobuf:"bytes,2,opt,name=storage_device,json=storageDevice,proto3" json:"storage_device,omitempty"`
 }
 
@@ -6014,13 +6426,16 @@ func (x *UpdateStorageDeviceRsp) GetStorageDevice() *StorageDevice {
 	return nil
 }
 
+// GetStorageDeviceReq 消息。
 type GetStorageDeviceReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	DeviceId string    `protobuf:"bytes,2,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	// 存储设备 ID。
+	DeviceId string `protobuf:"bytes,2,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
 }
 
 func (x *GetStorageDeviceReq) Reset() {
@@ -6069,12 +6484,15 @@ func (x *GetStorageDeviceReq) GetDeviceId() string {
 	return ""
 }
 
+// GetStorageDeviceRsp 消息。
 type GetStorageDeviceRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo       *RetInfo       `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 存储设备定义。
 	StorageDevice *StorageDevice `protobuf:"bytes,2,opt,name=storage_device,json=storageDevice,proto3" json:"storage_device,omitempty"`
 }
 
@@ -6124,13 +6542,16 @@ func (x *GetStorageDeviceRsp) GetStorageDevice() *StorageDevice {
 	return nil
 }
 
+// ListStorageDevicesReq 消息。
 type ListStorageDevicesReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Page     *Page     `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListStorageDevicesReq) Reset() {
@@ -6179,14 +6600,18 @@ func (x *ListStorageDevicesReq) GetPage() *Page {
 	return nil
 }
 
+// ListStorageDevicesRsp 消息。
 type ListStorageDevicesRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo        *RetInfo         `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 存储设备列表。
 	StorageDevices []*StorageDevice `protobuf:"bytes,2,rep,name=storage_devices,json=storageDevices,proto3" json:"storage_devices,omitempty"`
-	PageResult     *PageResult      `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	// 分页结果。
+	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListStorageDevicesRsp) Reset() {
@@ -6242,12 +6667,15 @@ func (x *ListStorageDevicesRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// CreateStorageRouteReq 消息。
 type CreateStorageRouteReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo     *AuthInfo     `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 存储路由规则。
 	StorageRoute *StorageRoute `protobuf:"bytes,2,opt,name=storage_route,json=storageRoute,proto3" json:"storage_route,omitempty"`
 }
 
@@ -6297,12 +6725,15 @@ func (x *CreateStorageRouteReq) GetStorageRoute() *StorageRoute {
 	return nil
 }
 
+// CreateStorageRouteRsp 消息。
 type CreateStorageRouteRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo      *RetInfo      `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 存储路由规则。
 	StorageRoute *StorageRoute `protobuf:"bytes,2,opt,name=storage_route,json=storageRoute,proto3" json:"storage_route,omitempty"`
 }
 
@@ -6352,12 +6783,15 @@ func (x *CreateStorageRouteRsp) GetStorageRoute() *StorageRoute {
 	return nil
 }
 
+// UpdateStorageRouteReq 消息。
 type UpdateStorageRouteReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo     *AuthInfo     `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 存储路由规则。
 	StorageRoute *StorageRoute `protobuf:"bytes,2,opt,name=storage_route,json=storageRoute,proto3" json:"storage_route,omitempty"`
 }
 
@@ -6407,12 +6841,15 @@ func (x *UpdateStorageRouteReq) GetStorageRoute() *StorageRoute {
 	return nil
 }
 
+// UpdateStorageRouteRsp 消息。
 type UpdateStorageRouteRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo      *RetInfo      `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 存储路由规则。
 	StorageRoute *StorageRoute `protobuf:"bytes,2,opt,name=storage_route,json=storageRoute,proto3" json:"storage_route,omitempty"`
 }
 
@@ -6462,13 +6899,16 @@ func (x *UpdateStorageRouteRsp) GetStorageRoute() *StorageRoute {
 	return nil
 }
 
+// GetStorageRouteReq 消息。
 type GetStorageRouteReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 调用方身份和链路追踪信息。
 	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	RouteId  string    `protobuf:"bytes,2,opt,name=route_id,json=routeId,proto3" json:"route_id,omitempty"`
+	// 路由规则 ID。
+	RouteId string `protobuf:"bytes,2,opt,name=route_id,json=routeId,proto3" json:"route_id,omitempty"`
 }
 
 func (x *GetStorageRouteReq) Reset() {
@@ -6517,12 +6957,15 @@ func (x *GetStorageRouteReq) GetRouteId() string {
 	return ""
 }
 
+// GetStorageRouteRsp 消息。
 type GetStorageRouteRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo      *RetInfo      `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 存储路由规则。
 	StorageRoute *StorageRoute `protobuf:"bytes,2,opt,name=storage_route,json=storageRoute,proto3" json:"storage_route,omitempty"`
 }
 
@@ -6572,16 +7015,22 @@ func (x *GetStorageRouteRsp) GetStorageRoute() *StorageRoute {
 	return nil
 }
 
+// ListStorageRoutesReq 消息。
 type ListStorageRoutesReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo    *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId string    `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DatasetId   string    `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	DeviceId    string    `protobuf:"bytes,4,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	Page        *Page     `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 存储设备 ID。
+	DeviceId string `protobuf:"bytes,4,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListStorageRoutesReq) Reset() {
@@ -6651,14 +7100,18 @@ func (x *ListStorageRoutesReq) GetPage() *Page {
 	return nil
 }
 
+// ListStorageRoutesRsp 消息。
 type ListStorageRoutesRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo       *RetInfo        `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 存储路由规则列表。
 	StorageRoutes []*StorageRoute `protobuf:"bytes,2,rep,name=storage_routes,json=storageRoutes,proto3" json:"storage_routes,omitempty"`
-	PageResult    *PageResult     `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	// 分页结果。
+	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListStorageRoutesRsp) Reset() {
@@ -6714,13 +7167,16 @@ func (x *ListStorageRoutesRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// ConfigureCollectorDataSetBindingReq 消息。
 type ConfigureCollectorDataSetBindingReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo *AuthInfo                `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	Binding  *CollectorDataSetBinding `protobuf:"bytes,2,opt,name=binding,proto3" json:"binding,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 采集任务到数据集的绑定配置。
+	Binding *CollectorDataSetBinding `protobuf:"bytes,2,opt,name=binding,proto3" json:"binding,omitempty"`
 }
 
 func (x *ConfigureCollectorDataSetBindingReq) Reset() {
@@ -6769,12 +7225,15 @@ func (x *ConfigureCollectorDataSetBindingReq) GetBinding() *CollectorDataSetBind
 	return nil
 }
 
+// ConfigureCollectorDataSetBindingRsp 消息。
 type ConfigureCollectorDataSetBindingRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo                 `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 采集任务到数据集的绑定配置。
 	Binding *CollectorDataSetBinding `protobuf:"bytes,2,opt,name=binding,proto3" json:"binding,omitempty"`
 }
 
@@ -6824,16 +7283,22 @@ func (x *ConfigureCollectorDataSetBindingRsp) GetBinding() *CollectorDataSetBind
 	return nil
 }
 
+// ListCollectorDataSetBindingsReq 消息。
 type ListCollectorDataSetBindingsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo    *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WorkspaceId string    `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DatasetId   string    `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	DataSource  string    `protobuf:"bytes,4,opt,name=data_source,json=dataSource,proto3" json:"data_source,omitempty"`
-	Page        *Page     `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 工作空间 ID，用于隔离用户、策略和元数据。
+	WorkspaceId string `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 外部数据源标识。
+	DataSource string `protobuf:"bytes,4,opt,name=data_source,json=dataSource,proto3" json:"data_source,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListCollectorDataSetBindingsReq) Reset() {
@@ -6903,14 +7368,18 @@ func (x *ListCollectorDataSetBindingsReq) GetPage() *Page {
 	return nil
 }
 
+// ListCollectorDataSetBindingsRsp 消息。
 type ListCollectorDataSetBindingsRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo                   `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Bindings   []*CollectorDataSetBinding `protobuf:"bytes,2,rep,name=bindings,proto3" json:"bindings,omitempty"`
-	PageResult *PageResult                `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 采集任务到数据集的绑定列表。
+	Bindings []*CollectorDataSetBinding `protobuf:"bytes,2,rep,name=bindings,proto3" json:"bindings,omitempty"`
+	// 分页结果。
+	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListCollectorDataSetBindingsRsp) Reset() {

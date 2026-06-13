@@ -19,90 +19,91 @@ import (
 
 // MetadataServiceService defines service.
 type MetadataServiceService interface {
+	// CreateWorkspace 创建工作空间。
 	CreateWorkspace(ctx context.Context, req *CreateWorkspaceReq) (*CreateWorkspaceRsp, error)
-
+	// UpdateWorkspace 更新工作空间元数据和状态。
 	UpdateWorkspace(ctx context.Context, req *UpdateWorkspaceReq) (*UpdateWorkspaceRsp, error)
-
+	// GetWorkspace 按 ID 获取工作空间。
 	GetWorkspace(ctx context.Context, req *GetWorkspaceReq) (*GetWorkspaceRsp, error)
-
+	// ListWorkspaces 列出调用方可见的工作空间。
 	ListWorkspaces(ctx context.Context, req *ListWorkspacesReq) (*ListWorkspacesRsp, error)
-
+	// CreateExchange 创建交易场所或数据场所。
 	CreateExchange(ctx context.Context, req *CreateExchangeReq) (*CreateExchangeRsp, error)
-
+	// UpdateExchange 更新交易场所元数据。
 	UpdateExchange(ctx context.Context, req *UpdateExchangeReq) (*UpdateExchangeRsp, error)
-
+	// GetExchange 按 ID 获取交易场所。
 	GetExchange(ctx context.Context, req *GetExchangeReq) (*GetExchangeRsp, error)
-
+	// ListExchanges 列出交易场所，可按市场过滤。
 	ListExchanges(ctx context.Context, req *ListExchangesReq) (*ListExchangesRsp, error)
-
+	// UpsertInstrument 创建或更新内部标准化标的。
 	UpsertInstrument(ctx context.Context, req *UpsertInstrumentReq) (*UpsertInstrumentRsp, error)
-
+	// GetInstrument 按 ID 获取标的。
 	GetInstrument(ctx context.Context, req *GetInstrumentReq) (*GetInstrumentRsp, error)
-
+	// ListInstruments 按交易场所、市场或指定 ID 列出标的。
 	ListInstruments(ctx context.Context, req *ListInstrumentsReq) (*ListInstrumentsRsp, error)
-
+	// UpsertInstrumentAlias 创建或更新外部代码映射。
 	UpsertInstrumentAlias(ctx context.Context, req *UpsertInstrumentAliasReq) (*UpsertInstrumentAliasRsp, error)
-
+	// ListInstrumentAliases 列出外部代码映射。
 	ListInstrumentAliases(ctx context.Context, req *ListInstrumentAliasesReq) (*ListInstrumentAliasesRsp, error)
-
+	// CreateDataSet 创建逻辑数据集。
 	CreateDataSet(ctx context.Context, req *CreateDataSetReq) (*CreateDataSetRsp, error)
-
+	// UpdateDataSet 更新数据集元数据、维度或结构版本。
 	UpdateDataSet(ctx context.Context, req *UpdateDataSetReq) (*UpdateDataSetRsp, error)
-
+	// GetDataSet 获取一个数据集。
 	GetDataSet(ctx context.Context, req *GetDataSetReq) (*GetDataSetRsp, error)
-
+	// ListDataSets 按工作空间和分类条件列出数据集。
 	ListDataSets(ctx context.Context, req *ListDataSetsReq) (*ListDataSetsRsp, error)
-
+	// CreateField 创建数据集字段定义。
 	CreateField(ctx context.Context, req *CreateFieldReq) (*CreateFieldRsp, error)
-
+	// UpdateField 更新数据集字段定义。
 	UpdateField(ctx context.Context, req *UpdateFieldReq) (*UpdateFieldRsp, error)
-
+	// GetField 按字段 ID 或接口名获取字段定义。
 	GetField(ctx context.Context, req *GetFieldReq) (*GetFieldRsp, error)
-
+	// ListFields 列出一个数据集下的字段定义。
 	ListFields(ctx context.Context, req *ListFieldsReq) (*ListFieldsRsp, error)
-
+	// CreateFactorDef 创建因子算法定义。
 	CreateFactorDef(ctx context.Context, req *CreateFactorDefReq) (*CreateFactorDefRsp, error)
-
+	// UpdateFactorDef 更新因子算法定义。
 	UpdateFactorDef(ctx context.Context, req *UpdateFactorDefReq) (*UpdateFactorDefRsp, error)
-
+	// GetFactorDef 获取一个因子算法定义。
 	GetFactorDef(ctx context.Context, req *GetFactorDefReq) (*GetFactorDefRsp, error)
-
+	// ListFactorDefs 列出一个工作空间中的因子算法定义。
 	ListFactorDefs(ctx context.Context, req *ListFactorDefsReq) (*ListFactorDefsRsp, error)
-
+	// CreateFactorInstance 创建一个带参数的因子实例。
 	CreateFactorInstance(ctx context.Context, req *CreateFactorInstanceReq) (*CreateFactorInstanceRsp, error)
-
+	// UpdateFactorInstance 更新一个带参数的因子实例。
 	UpdateFactorInstance(ctx context.Context, req *UpdateFactorInstanceReq) (*UpdateFactorInstanceRsp, error)
-
+	// GetFactorInstance 获取一个因子实例。
 	GetFactorInstance(ctx context.Context, req *GetFactorInstanceReq) (*GetFactorInstanceRsp, error)
-
+	// ListFactorInstances 按工作空间和可选条件列出因子实例。
 	ListFactorInstances(ctx context.Context, req *ListFactorInstancesReq) (*ListFactorInstancesRsp, error)
-
+	// CreateDataView 创建面向查询的数据视图。
 	CreateDataView(ctx context.Context, req *CreateDataViewReq) (*CreateDataViewRsp, error)
-
+	// UpdateDataView 更新数据视图，或创建新的视图版本。
 	UpdateDataView(ctx context.Context, req *UpdateDataViewReq) (*UpdateDataViewRsp, error)
-
+	// GetDataView 获取一个数据视图。
 	GetDataView(ctx context.Context, req *GetDataViewReq) (*GetDataViewRsp, error)
-
+	// ListDataViews 列出一个工作空间中的数据视图。
 	ListDataViews(ctx context.Context, req *ListDataViewsReq) (*ListDataViewsRsp, error)
-
+	// CreateStorageDevice 创建物理存储设备定义。
 	CreateStorageDevice(ctx context.Context, req *CreateStorageDeviceReq) (*CreateStorageDeviceRsp, error)
-
+	// UpdateStorageDevice 更新物理存储设备定义。
 	UpdateStorageDevice(ctx context.Context, req *UpdateStorageDeviceReq) (*UpdateStorageDeviceRsp, error)
-
+	// GetStorageDevice 获取一个存储设备定义。
 	GetStorageDevice(ctx context.Context, req *GetStorageDeviceReq) (*GetStorageDeviceRsp, error)
-
+	// ListStorageDevices 列出物理存储设备。
 	ListStorageDevices(ctx context.Context, req *ListStorageDevicesReq) (*ListStorageDevicesRsp, error)
-
+	// CreateStorageRoute 创建逻辑到物理存储的路由规则。
 	CreateStorageRoute(ctx context.Context, req *CreateStorageRouteReq) (*CreateStorageRouteRsp, error)
-
+	// UpdateStorageRoute 更新存储路由规则。
 	UpdateStorageRoute(ctx context.Context, req *UpdateStorageRouteReq) (*UpdateStorageRouteRsp, error)
-
+	// GetStorageRoute 获取一个存储路由规则。
 	GetStorageRoute(ctx context.Context, req *GetStorageRouteReq) (*GetStorageRouteRsp, error)
-
+	// ListStorageRoutes 按工作空间、数据集或设备列出存储路由。
 	ListStorageRoutes(ctx context.Context, req *ListStorageRoutesReq) (*ListStorageRoutesRsp, error)
-
+	// ConfigureCollectorDataSetBinding 创建或更新采集任务到目标数据集的绑定。
 	ConfigureCollectorDataSetBinding(ctx context.Context, req *ConfigureCollectorDataSetBindingReq) (*ConfigureCollectorDataSetBindingRsp, error)
-
+	// ListCollectorDataSetBindings 列出采集任务到数据集的绑定关系。
 	ListCollectorDataSetBindings(ctx context.Context, req *ListCollectorDataSetBindingsReq) (*ListCollectorDataSetBindingsRsp, error)
 }
 
@@ -1071,132 +1072,217 @@ func RegisterMetadataServiceService(s server.Service, svr MetadataServiceService
 
 type UnimplementedMetadataService struct{}
 
+// CreateWorkspace 创建工作空间。
 func (s *UnimplementedMetadataService) CreateWorkspace(ctx context.Context, req *CreateWorkspaceReq) (*CreateWorkspaceRsp, error) {
 	return nil, errors.New("rpc CreateWorkspace of service MetadataService is not implemented")
 }
+
+// UpdateWorkspace 更新工作空间元数据和状态。
 func (s *UnimplementedMetadataService) UpdateWorkspace(ctx context.Context, req *UpdateWorkspaceReq) (*UpdateWorkspaceRsp, error) {
 	return nil, errors.New("rpc UpdateWorkspace of service MetadataService is not implemented")
 }
+
+// GetWorkspace 按 ID 获取工作空间。
 func (s *UnimplementedMetadataService) GetWorkspace(ctx context.Context, req *GetWorkspaceReq) (*GetWorkspaceRsp, error) {
 	return nil, errors.New("rpc GetWorkspace of service MetadataService is not implemented")
 }
+
+// ListWorkspaces 列出调用方可见的工作空间。
 func (s *UnimplementedMetadataService) ListWorkspaces(ctx context.Context, req *ListWorkspacesReq) (*ListWorkspacesRsp, error) {
 	return nil, errors.New("rpc ListWorkspaces of service MetadataService is not implemented")
 }
+
+// CreateExchange 创建交易场所或数据场所。
 func (s *UnimplementedMetadataService) CreateExchange(ctx context.Context, req *CreateExchangeReq) (*CreateExchangeRsp, error) {
 	return nil, errors.New("rpc CreateExchange of service MetadataService is not implemented")
 }
+
+// UpdateExchange 更新交易场所元数据。
 func (s *UnimplementedMetadataService) UpdateExchange(ctx context.Context, req *UpdateExchangeReq) (*UpdateExchangeRsp, error) {
 	return nil, errors.New("rpc UpdateExchange of service MetadataService is not implemented")
 }
+
+// GetExchange 按 ID 获取交易场所。
 func (s *UnimplementedMetadataService) GetExchange(ctx context.Context, req *GetExchangeReq) (*GetExchangeRsp, error) {
 	return nil, errors.New("rpc GetExchange of service MetadataService is not implemented")
 }
+
+// ListExchanges 列出交易场所，可按市场过滤。
 func (s *UnimplementedMetadataService) ListExchanges(ctx context.Context, req *ListExchangesReq) (*ListExchangesRsp, error) {
 	return nil, errors.New("rpc ListExchanges of service MetadataService is not implemented")
 }
+
+// UpsertInstrument 创建或更新内部标准化标的。
 func (s *UnimplementedMetadataService) UpsertInstrument(ctx context.Context, req *UpsertInstrumentReq) (*UpsertInstrumentRsp, error) {
 	return nil, errors.New("rpc UpsertInstrument of service MetadataService is not implemented")
 }
+
+// GetInstrument 按 ID 获取标的。
 func (s *UnimplementedMetadataService) GetInstrument(ctx context.Context, req *GetInstrumentReq) (*GetInstrumentRsp, error) {
 	return nil, errors.New("rpc GetInstrument of service MetadataService is not implemented")
 }
+
+// ListInstruments 按交易场所、市场或指定 ID 列出标的。
 func (s *UnimplementedMetadataService) ListInstruments(ctx context.Context, req *ListInstrumentsReq) (*ListInstrumentsRsp, error) {
 	return nil, errors.New("rpc ListInstruments of service MetadataService is not implemented")
 }
+
+// UpsertInstrumentAlias 创建或更新外部代码映射。
 func (s *UnimplementedMetadataService) UpsertInstrumentAlias(ctx context.Context, req *UpsertInstrumentAliasReq) (*UpsertInstrumentAliasRsp, error) {
 	return nil, errors.New("rpc UpsertInstrumentAlias of service MetadataService is not implemented")
 }
+
+// ListInstrumentAliases 列出外部代码映射。
 func (s *UnimplementedMetadataService) ListInstrumentAliases(ctx context.Context, req *ListInstrumentAliasesReq) (*ListInstrumentAliasesRsp, error) {
 	return nil, errors.New("rpc ListInstrumentAliases of service MetadataService is not implemented")
 }
+
+// CreateDataSet 创建逻辑数据集。
 func (s *UnimplementedMetadataService) CreateDataSet(ctx context.Context, req *CreateDataSetReq) (*CreateDataSetRsp, error) {
 	return nil, errors.New("rpc CreateDataSet of service MetadataService is not implemented")
 }
+
+// UpdateDataSet 更新数据集元数据、维度或结构版本。
 func (s *UnimplementedMetadataService) UpdateDataSet(ctx context.Context, req *UpdateDataSetReq) (*UpdateDataSetRsp, error) {
 	return nil, errors.New("rpc UpdateDataSet of service MetadataService is not implemented")
 }
+
+// GetDataSet 获取一个数据集。
 func (s *UnimplementedMetadataService) GetDataSet(ctx context.Context, req *GetDataSetReq) (*GetDataSetRsp, error) {
 	return nil, errors.New("rpc GetDataSet of service MetadataService is not implemented")
 }
+
+// ListDataSets 按工作空间和分类条件列出数据集。
 func (s *UnimplementedMetadataService) ListDataSets(ctx context.Context, req *ListDataSetsReq) (*ListDataSetsRsp, error) {
 	return nil, errors.New("rpc ListDataSets of service MetadataService is not implemented")
 }
+
+// CreateField 创建数据集字段定义。
 func (s *UnimplementedMetadataService) CreateField(ctx context.Context, req *CreateFieldReq) (*CreateFieldRsp, error) {
 	return nil, errors.New("rpc CreateField of service MetadataService is not implemented")
 }
+
+// UpdateField 更新数据集字段定义。
 func (s *UnimplementedMetadataService) UpdateField(ctx context.Context, req *UpdateFieldReq) (*UpdateFieldRsp, error) {
 	return nil, errors.New("rpc UpdateField of service MetadataService is not implemented")
 }
+
+// GetField 按字段 ID 或接口名获取字段定义。
 func (s *UnimplementedMetadataService) GetField(ctx context.Context, req *GetFieldReq) (*GetFieldRsp, error) {
 	return nil, errors.New("rpc GetField of service MetadataService is not implemented")
 }
+
+// ListFields 列出一个数据集下的字段定义。
 func (s *UnimplementedMetadataService) ListFields(ctx context.Context, req *ListFieldsReq) (*ListFieldsRsp, error) {
 	return nil, errors.New("rpc ListFields of service MetadataService is not implemented")
 }
+
+// CreateFactorDef 创建因子算法定义。
 func (s *UnimplementedMetadataService) CreateFactorDef(ctx context.Context, req *CreateFactorDefReq) (*CreateFactorDefRsp, error) {
 	return nil, errors.New("rpc CreateFactorDef of service MetadataService is not implemented")
 }
+
+// UpdateFactorDef 更新因子算法定义。
 func (s *UnimplementedMetadataService) UpdateFactorDef(ctx context.Context, req *UpdateFactorDefReq) (*UpdateFactorDefRsp, error) {
 	return nil, errors.New("rpc UpdateFactorDef of service MetadataService is not implemented")
 }
+
+// GetFactorDef 获取一个因子算法定义。
 func (s *UnimplementedMetadataService) GetFactorDef(ctx context.Context, req *GetFactorDefReq) (*GetFactorDefRsp, error) {
 	return nil, errors.New("rpc GetFactorDef of service MetadataService is not implemented")
 }
+
+// ListFactorDefs 列出一个工作空间中的因子算法定义。
 func (s *UnimplementedMetadataService) ListFactorDefs(ctx context.Context, req *ListFactorDefsReq) (*ListFactorDefsRsp, error) {
 	return nil, errors.New("rpc ListFactorDefs of service MetadataService is not implemented")
 }
+
+// CreateFactorInstance 创建一个带参数的因子实例。
 func (s *UnimplementedMetadataService) CreateFactorInstance(ctx context.Context, req *CreateFactorInstanceReq) (*CreateFactorInstanceRsp, error) {
 	return nil, errors.New("rpc CreateFactorInstance of service MetadataService is not implemented")
 }
+
+// UpdateFactorInstance 更新一个带参数的因子实例。
 func (s *UnimplementedMetadataService) UpdateFactorInstance(ctx context.Context, req *UpdateFactorInstanceReq) (*UpdateFactorInstanceRsp, error) {
 	return nil, errors.New("rpc UpdateFactorInstance of service MetadataService is not implemented")
 }
+
+// GetFactorInstance 获取一个因子实例。
 func (s *UnimplementedMetadataService) GetFactorInstance(ctx context.Context, req *GetFactorInstanceReq) (*GetFactorInstanceRsp, error) {
 	return nil, errors.New("rpc GetFactorInstance of service MetadataService is not implemented")
 }
+
+// ListFactorInstances 按工作空间和可选条件列出因子实例。
 func (s *UnimplementedMetadataService) ListFactorInstances(ctx context.Context, req *ListFactorInstancesReq) (*ListFactorInstancesRsp, error) {
 	return nil, errors.New("rpc ListFactorInstances of service MetadataService is not implemented")
 }
+
+// CreateDataView 创建面向查询的数据视图。
 func (s *UnimplementedMetadataService) CreateDataView(ctx context.Context, req *CreateDataViewReq) (*CreateDataViewRsp, error) {
 	return nil, errors.New("rpc CreateDataView of service MetadataService is not implemented")
 }
+
+// UpdateDataView 更新数据视图，或创建新的视图版本。
 func (s *UnimplementedMetadataService) UpdateDataView(ctx context.Context, req *UpdateDataViewReq) (*UpdateDataViewRsp, error) {
 	return nil, errors.New("rpc UpdateDataView of service MetadataService is not implemented")
 }
+
+// GetDataView 获取一个数据视图。
 func (s *UnimplementedMetadataService) GetDataView(ctx context.Context, req *GetDataViewReq) (*GetDataViewRsp, error) {
 	return nil, errors.New("rpc GetDataView of service MetadataService is not implemented")
 }
+
+// ListDataViews 列出一个工作空间中的数据视图。
 func (s *UnimplementedMetadataService) ListDataViews(ctx context.Context, req *ListDataViewsReq) (*ListDataViewsRsp, error) {
 	return nil, errors.New("rpc ListDataViews of service MetadataService is not implemented")
 }
+
+// CreateStorageDevice 创建物理存储设备定义。
 func (s *UnimplementedMetadataService) CreateStorageDevice(ctx context.Context, req *CreateStorageDeviceReq) (*CreateStorageDeviceRsp, error) {
 	return nil, errors.New("rpc CreateStorageDevice of service MetadataService is not implemented")
 }
+
+// UpdateStorageDevice 更新物理存储设备定义。
 func (s *UnimplementedMetadataService) UpdateStorageDevice(ctx context.Context, req *UpdateStorageDeviceReq) (*UpdateStorageDeviceRsp, error) {
 	return nil, errors.New("rpc UpdateStorageDevice of service MetadataService is not implemented")
 }
+
+// GetStorageDevice 获取一个存储设备定义。
 func (s *UnimplementedMetadataService) GetStorageDevice(ctx context.Context, req *GetStorageDeviceReq) (*GetStorageDeviceRsp, error) {
 	return nil, errors.New("rpc GetStorageDevice of service MetadataService is not implemented")
 }
+
+// ListStorageDevices 列出物理存储设备。
 func (s *UnimplementedMetadataService) ListStorageDevices(ctx context.Context, req *ListStorageDevicesReq) (*ListStorageDevicesRsp, error) {
 	return nil, errors.New("rpc ListStorageDevices of service MetadataService is not implemented")
 }
+
+// CreateStorageRoute 创建逻辑到物理存储的路由规则。
 func (s *UnimplementedMetadataService) CreateStorageRoute(ctx context.Context, req *CreateStorageRouteReq) (*CreateStorageRouteRsp, error) {
 	return nil, errors.New("rpc CreateStorageRoute of service MetadataService is not implemented")
 }
+
+// UpdateStorageRoute 更新存储路由规则。
 func (s *UnimplementedMetadataService) UpdateStorageRoute(ctx context.Context, req *UpdateStorageRouteReq) (*UpdateStorageRouteRsp, error) {
 	return nil, errors.New("rpc UpdateStorageRoute of service MetadataService is not implemented")
 }
+
+// GetStorageRoute 获取一个存储路由规则。
 func (s *UnimplementedMetadataService) GetStorageRoute(ctx context.Context, req *GetStorageRouteReq) (*GetStorageRouteRsp, error) {
 	return nil, errors.New("rpc GetStorageRoute of service MetadataService is not implemented")
 }
+
+// ListStorageRoutes 按工作空间、数据集或设备列出存储路由。
 func (s *UnimplementedMetadataService) ListStorageRoutes(ctx context.Context, req *ListStorageRoutesReq) (*ListStorageRoutesRsp, error) {
 	return nil, errors.New("rpc ListStorageRoutes of service MetadataService is not implemented")
 }
+
+// ConfigureCollectorDataSetBinding 创建或更新采集任务到目标数据集的绑定。
 func (s *UnimplementedMetadataService) ConfigureCollectorDataSetBinding(ctx context.Context, req *ConfigureCollectorDataSetBindingReq) (*ConfigureCollectorDataSetBindingRsp, error) {
 	return nil, errors.New("rpc ConfigureCollectorDataSetBinding of service MetadataService is not implemented")
 }
+
+// ListCollectorDataSetBindings 列出采集任务到数据集的绑定关系。
 func (s *UnimplementedMetadataService) ListCollectorDataSetBindings(ctx context.Context, req *ListCollectorDataSetBindingsReq) (*ListCollectorDataSetBindingsRsp, error) {
 	return nil, errors.New("rpc ListCollectorDataSetBindings of service MetadataService is not implemented")
 }
@@ -1209,90 +1295,91 @@ func (s *UnimplementedMetadataService) ListCollectorDataSetBindings(ctx context.
 
 // MetadataServiceClientProxy defines service client proxy
 type MetadataServiceClientProxy interface {
+	// CreateWorkspace 创建工作空间。
 	CreateWorkspace(ctx context.Context, req *CreateWorkspaceReq, opts ...client.Option) (rsp *CreateWorkspaceRsp, err error)
-
+	// UpdateWorkspace 更新工作空间元数据和状态。
 	UpdateWorkspace(ctx context.Context, req *UpdateWorkspaceReq, opts ...client.Option) (rsp *UpdateWorkspaceRsp, err error)
-
+	// GetWorkspace 按 ID 获取工作空间。
 	GetWorkspace(ctx context.Context, req *GetWorkspaceReq, opts ...client.Option) (rsp *GetWorkspaceRsp, err error)
-
+	// ListWorkspaces 列出调用方可见的工作空间。
 	ListWorkspaces(ctx context.Context, req *ListWorkspacesReq, opts ...client.Option) (rsp *ListWorkspacesRsp, err error)
-
+	// CreateExchange 创建交易场所或数据场所。
 	CreateExchange(ctx context.Context, req *CreateExchangeReq, opts ...client.Option) (rsp *CreateExchangeRsp, err error)
-
+	// UpdateExchange 更新交易场所元数据。
 	UpdateExchange(ctx context.Context, req *UpdateExchangeReq, opts ...client.Option) (rsp *UpdateExchangeRsp, err error)
-
+	// GetExchange 按 ID 获取交易场所。
 	GetExchange(ctx context.Context, req *GetExchangeReq, opts ...client.Option) (rsp *GetExchangeRsp, err error)
-
+	// ListExchanges 列出交易场所，可按市场过滤。
 	ListExchanges(ctx context.Context, req *ListExchangesReq, opts ...client.Option) (rsp *ListExchangesRsp, err error)
-
+	// UpsertInstrument 创建或更新内部标准化标的。
 	UpsertInstrument(ctx context.Context, req *UpsertInstrumentReq, opts ...client.Option) (rsp *UpsertInstrumentRsp, err error)
-
+	// GetInstrument 按 ID 获取标的。
 	GetInstrument(ctx context.Context, req *GetInstrumentReq, opts ...client.Option) (rsp *GetInstrumentRsp, err error)
-
+	// ListInstruments 按交易场所、市场或指定 ID 列出标的。
 	ListInstruments(ctx context.Context, req *ListInstrumentsReq, opts ...client.Option) (rsp *ListInstrumentsRsp, err error)
-
+	// UpsertInstrumentAlias 创建或更新外部代码映射。
 	UpsertInstrumentAlias(ctx context.Context, req *UpsertInstrumentAliasReq, opts ...client.Option) (rsp *UpsertInstrumentAliasRsp, err error)
-
+	// ListInstrumentAliases 列出外部代码映射。
 	ListInstrumentAliases(ctx context.Context, req *ListInstrumentAliasesReq, opts ...client.Option) (rsp *ListInstrumentAliasesRsp, err error)
-
+	// CreateDataSet 创建逻辑数据集。
 	CreateDataSet(ctx context.Context, req *CreateDataSetReq, opts ...client.Option) (rsp *CreateDataSetRsp, err error)
-
+	// UpdateDataSet 更新数据集元数据、维度或结构版本。
 	UpdateDataSet(ctx context.Context, req *UpdateDataSetReq, opts ...client.Option) (rsp *UpdateDataSetRsp, err error)
-
+	// GetDataSet 获取一个数据集。
 	GetDataSet(ctx context.Context, req *GetDataSetReq, opts ...client.Option) (rsp *GetDataSetRsp, err error)
-
+	// ListDataSets 按工作空间和分类条件列出数据集。
 	ListDataSets(ctx context.Context, req *ListDataSetsReq, opts ...client.Option) (rsp *ListDataSetsRsp, err error)
-
+	// CreateField 创建数据集字段定义。
 	CreateField(ctx context.Context, req *CreateFieldReq, opts ...client.Option) (rsp *CreateFieldRsp, err error)
-
+	// UpdateField 更新数据集字段定义。
 	UpdateField(ctx context.Context, req *UpdateFieldReq, opts ...client.Option) (rsp *UpdateFieldRsp, err error)
-
+	// GetField 按字段 ID 或接口名获取字段定义。
 	GetField(ctx context.Context, req *GetFieldReq, opts ...client.Option) (rsp *GetFieldRsp, err error)
-
+	// ListFields 列出一个数据集下的字段定义。
 	ListFields(ctx context.Context, req *ListFieldsReq, opts ...client.Option) (rsp *ListFieldsRsp, err error)
-
+	// CreateFactorDef 创建因子算法定义。
 	CreateFactorDef(ctx context.Context, req *CreateFactorDefReq, opts ...client.Option) (rsp *CreateFactorDefRsp, err error)
-
+	// UpdateFactorDef 更新因子算法定义。
 	UpdateFactorDef(ctx context.Context, req *UpdateFactorDefReq, opts ...client.Option) (rsp *UpdateFactorDefRsp, err error)
-
+	// GetFactorDef 获取一个因子算法定义。
 	GetFactorDef(ctx context.Context, req *GetFactorDefReq, opts ...client.Option) (rsp *GetFactorDefRsp, err error)
-
+	// ListFactorDefs 列出一个工作空间中的因子算法定义。
 	ListFactorDefs(ctx context.Context, req *ListFactorDefsReq, opts ...client.Option) (rsp *ListFactorDefsRsp, err error)
-
+	// CreateFactorInstance 创建一个带参数的因子实例。
 	CreateFactorInstance(ctx context.Context, req *CreateFactorInstanceReq, opts ...client.Option) (rsp *CreateFactorInstanceRsp, err error)
-
+	// UpdateFactorInstance 更新一个带参数的因子实例。
 	UpdateFactorInstance(ctx context.Context, req *UpdateFactorInstanceReq, opts ...client.Option) (rsp *UpdateFactorInstanceRsp, err error)
-
+	// GetFactorInstance 获取一个因子实例。
 	GetFactorInstance(ctx context.Context, req *GetFactorInstanceReq, opts ...client.Option) (rsp *GetFactorInstanceRsp, err error)
-
+	// ListFactorInstances 按工作空间和可选条件列出因子实例。
 	ListFactorInstances(ctx context.Context, req *ListFactorInstancesReq, opts ...client.Option) (rsp *ListFactorInstancesRsp, err error)
-
+	// CreateDataView 创建面向查询的数据视图。
 	CreateDataView(ctx context.Context, req *CreateDataViewReq, opts ...client.Option) (rsp *CreateDataViewRsp, err error)
-
+	// UpdateDataView 更新数据视图，或创建新的视图版本。
 	UpdateDataView(ctx context.Context, req *UpdateDataViewReq, opts ...client.Option) (rsp *UpdateDataViewRsp, err error)
-
+	// GetDataView 获取一个数据视图。
 	GetDataView(ctx context.Context, req *GetDataViewReq, opts ...client.Option) (rsp *GetDataViewRsp, err error)
-
+	// ListDataViews 列出一个工作空间中的数据视图。
 	ListDataViews(ctx context.Context, req *ListDataViewsReq, opts ...client.Option) (rsp *ListDataViewsRsp, err error)
-
+	// CreateStorageDevice 创建物理存储设备定义。
 	CreateStorageDevice(ctx context.Context, req *CreateStorageDeviceReq, opts ...client.Option) (rsp *CreateStorageDeviceRsp, err error)
-
+	// UpdateStorageDevice 更新物理存储设备定义。
 	UpdateStorageDevice(ctx context.Context, req *UpdateStorageDeviceReq, opts ...client.Option) (rsp *UpdateStorageDeviceRsp, err error)
-
+	// GetStorageDevice 获取一个存储设备定义。
 	GetStorageDevice(ctx context.Context, req *GetStorageDeviceReq, opts ...client.Option) (rsp *GetStorageDeviceRsp, err error)
-
+	// ListStorageDevices 列出物理存储设备。
 	ListStorageDevices(ctx context.Context, req *ListStorageDevicesReq, opts ...client.Option) (rsp *ListStorageDevicesRsp, err error)
-
+	// CreateStorageRoute 创建逻辑到物理存储的路由规则。
 	CreateStorageRoute(ctx context.Context, req *CreateStorageRouteReq, opts ...client.Option) (rsp *CreateStorageRouteRsp, err error)
-
+	// UpdateStorageRoute 更新存储路由规则。
 	UpdateStorageRoute(ctx context.Context, req *UpdateStorageRouteReq, opts ...client.Option) (rsp *UpdateStorageRouteRsp, err error)
-
+	// GetStorageRoute 获取一个存储路由规则。
 	GetStorageRoute(ctx context.Context, req *GetStorageRouteReq, opts ...client.Option) (rsp *GetStorageRouteRsp, err error)
-
+	// ListStorageRoutes 按工作空间、数据集或设备列出存储路由。
 	ListStorageRoutes(ctx context.Context, req *ListStorageRoutesReq, opts ...client.Option) (rsp *ListStorageRoutesRsp, err error)
-
+	// ConfigureCollectorDataSetBinding 创建或更新采集任务到目标数据集的绑定。
 	ConfigureCollectorDataSetBinding(ctx context.Context, req *ConfigureCollectorDataSetBindingReq, opts ...client.Option) (rsp *ConfigureCollectorDataSetBindingRsp, err error)
-
+	// ListCollectorDataSetBindings 列出采集任务到数据集的绑定关系。
 	ListCollectorDataSetBindings(ctx context.Context, req *ListCollectorDataSetBindingsReq, opts ...client.Option) (rsp *ListCollectorDataSetBindingsRsp, err error)
 }
 

@@ -21,16 +21,23 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// 一次读写中的逻辑数据定位，不暴露物理表、文件路径或存储分区。
 type DataRef struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	WorkspaceId     string            `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	DatasetId       string            `protobuf:"bytes,2,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	InstrumentId    string            `protobuf:"bytes,3,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
-	ExchangeId      string            `protobuf:"bytes,4,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
-	Freq            string            `protobuf:"bytes,5,opt,name=freq,proto3" json:"freq,omitempty"`
+	// 工作空间 ID，用于隔离数据和元数据。
+	WorkspaceId string `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// 数据集 ID。
+	DatasetId string `protobuf:"bytes,2,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	// 内部标的 ID；非标的数据可为空。
+	InstrumentId string `protobuf:"bytes,3,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
+	// 交易场所或数据场所 ID。
+	ExchangeId string `protobuf:"bytes,4,opt,name=exchange_id,json=exchangeId,proto3" json:"exchange_id,omitempty"`
+	// 数据频率，例如 1m、1d 或 tick。
+	Freq string `protobuf:"bytes,5,opt,name=freq,proto3" json:"freq,omitempty"`
+	// 业务维度取值，替代底层分区键概念。
 	DimensionValues []*DimensionValue `protobuf:"bytes,6,rep,name=dimension_values,json=dimensionValues,proto3" json:"dimension_values,omitempty"`
 }
 
@@ -108,17 +115,24 @@ func (x *DataRef) GetDimensionValues() []*DimensionValue {
 	return nil
 }
 
+// 普通结构化记录，用于资料、榜单、文档、事件或快照数据。
 type Record struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RecordId     string            `protobuf:"bytes,1,opt,name=record_id,json=recordId,proto3" json:"record_id,omitempty"`
-	DataRef      *DataRef          `protobuf:"bytes,2,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
-	EventTime    string            `protobuf:"bytes,3,opt,name=event_time,json=eventTime,proto3" json:"event_time,omitempty"`
-	SnapshotTime string            `protobuf:"bytes,4,opt,name=snapshot_time,json=snapshotTime,proto3" json:"snapshot_time,omitempty"`
-	Fields       []*FieldValue     `protobuf:"bytes,5,rep,name=fields,proto3" json:"fields,omitempty"`
-	Attributes   map[string]string `protobuf:"bytes,6,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// 数据切片内的逻辑记录 ID。
+	RecordId string `protobuf:"bytes,1,opt,name=record_id,json=recordId,proto3" json:"record_id,omitempty"`
+	// 记录所属的逻辑数据位置。
+	DataRef *DataRef `protobuf:"bytes,2,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
+	// 业务事件时间。
+	EventTime string `protobuf:"bytes,3,opt,name=event_time,json=eventTime,proto3" json:"event_time,omitempty"`
+	// 记录代表的截面时间。
+	SnapshotTime string `protobuf:"bytes,4,opt,name=snapshot_time,json=snapshotTime,proto3" json:"snapshot_time,omitempty"`
+	// 字段值列表。
+	Fields []*FieldValue `protobuf:"bytes,5,rep,name=fields,proto3" json:"fields,omitempty"`
+	// 扩展属性，默认不作为索引字段使用。
+	Attributes map[string]string `protobuf:"bytes,6,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *Record) Reset() {
@@ -195,13 +209,16 @@ func (x *Record) GetAttributes() map[string]string {
 	return nil
 }
 
+// 一条结构化记录写入操作。
 type RecordMutation struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// 本次写入如何影响已有数据。
 	WriteMode WriteMode `protobuf:"varint,1,opt,name=write_mode,json=writeMode,proto3,enum=trpc.storage.v2.common.WriteMode" json:"write_mode,omitempty"`
-	Record    *Record   `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
+	// 记录内容。
+	Record *Record `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
 }
 
 func (x *RecordMutation) Reset() {
@@ -250,14 +267,18 @@ func (x *RecordMutation) GetRecord() *Record {
 	return nil
 }
 
+// 一个带时间戳的时序点，例如 K 线或 tick。
 type TimeSeriesPoint struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	DataRef *DataRef      `protobuf:"bytes,1,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
-	Time    string        `protobuf:"bytes,2,opt,name=time,proto3" json:"time,omitempty"`
-	Fields  []*FieldValue `protobuf:"bytes,3,rep,name=fields,proto3" json:"fields,omitempty"`
+	// 记录所属的逻辑数据位置。
+	DataRef *DataRef `protobuf:"bytes,1,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
+	// 时序点时间戳。
+	Time string `protobuf:"bytes,2,opt,name=time,proto3" json:"time,omitempty"`
+	// 字段值列表。
+	Fields []*FieldValue `protobuf:"bytes,3,rep,name=fields,proto3" json:"fields,omitempty"`
 }
 
 func (x *TimeSeriesPoint) Reset() {
@@ -313,15 +334,20 @@ func (x *TimeSeriesPoint) GetFields() []*FieldValue {
 	return nil
 }
 
+// 某个因子实例在某个时间点的计算结果。
 type FactorValuePoint struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	DataRef          *DataRef    `protobuf:"bytes,1,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
-	Time             string      `protobuf:"bytes,2,opt,name=time,proto3" json:"time,omitempty"`
-	FactorInstanceId string      `protobuf:"bytes,3,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
-	Value            *TypedValue `protobuf:"bytes,4,opt,name=value,proto3" json:"value,omitempty"`
+	// 记录所属的逻辑数据位置。
+	DataRef *DataRef `protobuf:"bytes,1,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
+	// 因子值时间戳。
+	Time string `protobuf:"bytes,2,opt,name=time,proto3" json:"time,omitempty"`
+	// 因子实例 ID，表示带参数的因子结果。
+	FactorInstanceId string `protobuf:"bytes,3,opt,name=factor_instance_id,json=factorInstanceId,proto3" json:"factor_instance_id,omitempty"`
+	// 计算后的因子值。
+	Value *TypedValue `protobuf:"bytes,4,opt,name=value,proto3" json:"value,omitempty"`
 }
 
 func (x *FactorValuePoint) Reset() {
@@ -384,14 +410,18 @@ func (x *FactorValuePoint) GetValue() *TypedValue {
 	return nil
 }
 
+// 某个逻辑数据切片在指定截面前后的最新状态。
 type LatestSnapshotRow struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	DataRef      *DataRef      `protobuf:"bytes,1,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
-	SnapshotTime string        `protobuf:"bytes,2,opt,name=snapshot_time,json=snapshotTime,proto3" json:"snapshot_time,omitempty"`
-	Fields       []*FieldValue `protobuf:"bytes,3,rep,name=fields,proto3" json:"fields,omitempty"`
+	// 记录所属的逻辑数据位置。
+	DataRef *DataRef `protobuf:"bytes,1,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
+	// 服务端实际选中的最新快照时间。
+	SnapshotTime string `protobuf:"bytes,2,opt,name=snapshot_time,json=snapshotTime,proto3" json:"snapshot_time,omitempty"`
+	// 字段值列表。
+	Fields []*FieldValue `protobuf:"bytes,3,rep,name=fields,proto3" json:"fields,omitempty"`
 }
 
 func (x *LatestSnapshotRow) Reset() {
@@ -447,12 +477,15 @@ func (x *LatestSnapshotRow) GetFields() []*FieldValue {
 	return nil
 }
 
+// 写入普通结构化记录的请求。
 type UpsertRecordsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo  *AuthInfo         `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 记录级写入操作列表。
 	Mutations []*RecordMutation `protobuf:"bytes,2,rep,name=mutations,proto3" json:"mutations,omitempty"`
 }
 
@@ -502,13 +535,17 @@ func (x *UpsertRecordsReq) GetMutations() []*RecordMutation {
 	return nil
 }
 
+// 普通结构化记录写入结果。
 type UpsertRecordsRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo         *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Affected        uint64   `protobuf:"varint,2,opt,name=affected,proto3" json:"affected,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 服务端接受或影响的记录数。
+	Affected uint64 `protobuf:"varint,2,opt,name=affected,proto3" json:"affected,omitempty"`
+	// 部分写入失败的记录 ID 列表。
 	FailedRecordIds []string `protobuf:"bytes,3,rep,name=failed_record_ids,json=failedRecordIds,proto3" json:"failed_record_ids,omitempty"`
 }
 
@@ -565,16 +602,22 @@ func (x *UpsertRecordsRsp) GetFailedRecordIds() []string {
 	return nil
 }
 
+// 按逻辑位置和过滤条件查询普通结构化记录的请求。
 type QueryRecordsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo *AuthInfo     `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	DataRef  *DataRef      `protobuf:"bytes,2,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
-	Filters  []*FilterExpr `protobuf:"bytes,3,rep,name=filters,proto3" json:"filters,omitempty"`
-	Sorts    []*SortSpec   `protobuf:"bytes,4,rep,name=sorts,proto3" json:"sorts,omitempty"`
-	Page     *Page         `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 记录所属的逻辑数据位置。
+	DataRef *DataRef `protobuf:"bytes,2,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
+	// 过滤条件列表。
+	Filters []*FilterExpr `protobuf:"bytes,3,rep,name=filters,proto3" json:"filters,omitempty"`
+	// 排序条件列表。
+	Sorts []*SortSpec `protobuf:"bytes,4,rep,name=sorts,proto3" json:"sorts,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *QueryRecordsReq) Reset() {
@@ -644,13 +687,17 @@ func (x *QueryRecordsReq) GetPage() *Page {
 	return nil
 }
 
+// 普通结构化记录查询结果。
 type QueryRecordsRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Records    []*Record   `protobuf:"bytes,2,rep,name=records,proto3" json:"records,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// records 参数。
+	Records []*Record `protobuf:"bytes,2,rep,name=records,proto3" json:"records,omitempty"`
+	// 分页结果。
 	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
@@ -707,14 +754,18 @@ func (x *QueryRecordsRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// 写入时序数据点的请求。
 type SetTimeSeriesReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo  *AuthInfo          `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WriteMode WriteMode          `protobuf:"varint,2,opt,name=write_mode,json=writeMode,proto3,enum=trpc.storage.v2.common.WriteMode" json:"write_mode,omitempty"`
-	Points    []*TimeSeriesPoint `protobuf:"bytes,3,rep,name=points,proto3" json:"points,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 本次写入如何影响已有数据。
+	WriteMode WriteMode `protobuf:"varint,2,opt,name=write_mode,json=writeMode,proto3,enum=trpc.storage.v2.common.WriteMode" json:"write_mode,omitempty"`
+	// 时序点或因子点列表。
+	Points []*TimeSeriesPoint `protobuf:"bytes,3,rep,name=points,proto3" json:"points,omitempty"`
 }
 
 func (x *SetTimeSeriesReq) Reset() {
@@ -770,13 +821,16 @@ func (x *SetTimeSeriesReq) GetPoints() []*TimeSeriesPoint {
 	return nil
 }
 
+// 时序数据写入结果。
 type SetTimeSeriesRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Affected uint64   `protobuf:"varint,2,opt,name=affected,proto3" json:"affected,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 服务端接受或影响的记录数。
+	Affected uint64 `protobuf:"varint,2,opt,name=affected,proto3" json:"affected,omitempty"`
 }
 
 func (x *SetTimeSeriesRsp) Reset() {
@@ -825,17 +879,24 @@ func (x *SetTimeSeriesRsp) GetAffected() uint64 {
 	return 0
 }
 
+// 按逻辑位置和时间区间扫描时序数据的请求。
 type ScanTimeSeriesReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo   *AuthInfo   `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	DataRef    *DataRef    `protobuf:"bytes,2,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
-	TimeRange  *TimeRange  `protobuf:"bytes,3,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
-	FieldNames []string    `protobuf:"bytes,4,rep,name=field_names,json=fieldNames,proto3" json:"field_names,omitempty"`
-	Sorts      []*SortSpec `protobuf:"bytes,5,rep,name=sorts,proto3" json:"sorts,omitempty"`
-	Page       *Page       `protobuf:"bytes,6,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 记录所属的逻辑数据位置。
+	DataRef *DataRef `protobuf:"bytes,2,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
+	// time_range 参数。
+	TimeRange *TimeRange `protobuf:"bytes,3,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
+	// 要返回的字段名列表；为空时由服务端使用默认字段或全部可读字段。
+	FieldNames []string `protobuf:"bytes,4,rep,name=field_names,json=fieldNames,proto3" json:"field_names,omitempty"`
+	// 排序条件列表。
+	Sorts []*SortSpec `protobuf:"bytes,5,rep,name=sorts,proto3" json:"sorts,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,6,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ScanTimeSeriesReq) Reset() {
@@ -912,14 +973,18 @@ func (x *ScanTimeSeriesReq) GetPage() *Page {
 	return nil
 }
 
+// 时序数据扫描结果。
 type ScanTimeSeriesRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo           `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Points     []*TimeSeriesPoint `protobuf:"bytes,2,rep,name=points,proto3" json:"points,omitempty"`
-	PageResult *PageResult        `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 时序点或因子点列表。
+	Points []*TimeSeriesPoint `protobuf:"bytes,2,rep,name=points,proto3" json:"points,omitempty"`
+	// 分页结果。
+	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ScanTimeSeriesRsp) Reset() {
@@ -975,14 +1040,18 @@ func (x *ScanTimeSeriesRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// 写入因子值的请求，不为每组参数自动创建全局字段。
 type SetFactorValuesReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo  *AuthInfo           `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	WriteMode WriteMode           `protobuf:"varint,2,opt,name=write_mode,json=writeMode,proto3,enum=trpc.storage.v2.common.WriteMode" json:"write_mode,omitempty"`
-	Points    []*FactorValuePoint `protobuf:"bytes,3,rep,name=points,proto3" json:"points,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 本次写入如何影响已有数据。
+	WriteMode WriteMode `protobuf:"varint,2,opt,name=write_mode,json=writeMode,proto3,enum=trpc.storage.v2.common.WriteMode" json:"write_mode,omitempty"`
+	// 时序点或因子点列表。
+	Points []*FactorValuePoint `protobuf:"bytes,3,rep,name=points,proto3" json:"points,omitempty"`
 }
 
 func (x *SetFactorValuesReq) Reset() {
@@ -1038,13 +1107,16 @@ func (x *SetFactorValuesReq) GetPoints() []*FactorValuePoint {
 	return nil
 }
 
+// 因子值写入结果。
 type SetFactorValuesRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Affected uint64   `protobuf:"varint,2,opt,name=affected,proto3" json:"affected,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 服务端接受或影响的记录数。
+	Affected uint64 `protobuf:"varint,2,opt,name=affected,proto3" json:"affected,omitempty"`
 }
 
 func (x *SetFactorValuesRsp) Reset() {
@@ -1093,16 +1165,22 @@ func (x *SetFactorValuesRsp) GetAffected() uint64 {
 	return 0
 }
 
+// 按逻辑位置、因子实例和时间区间扫描因子值的请求。
 type ScanFactorValuesReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo          *AuthInfo  `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	DataRef           *DataRef   `protobuf:"bytes,2,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
-	FactorInstanceIds []string   `protobuf:"bytes,3,rep,name=factor_instance_ids,json=factorInstanceIds,proto3" json:"factor_instance_ids,omitempty"`
-	TimeRange         *TimeRange `protobuf:"bytes,4,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
-	Page              *Page      `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 记录所属的逻辑数据位置。
+	DataRef *DataRef `protobuf:"bytes,2,opt,name=data_ref,json=dataRef,proto3" json:"data_ref,omitempty"`
+	// factor_instance_ids 参数。
+	FactorInstanceIds []string `protobuf:"bytes,3,rep,name=factor_instance_ids,json=factorInstanceIds,proto3" json:"factor_instance_ids,omitempty"`
+	// time_range 参数。
+	TimeRange *TimeRange `protobuf:"bytes,4,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
+	// 分页参数。
+	Page *Page `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ScanFactorValuesReq) Reset() {
@@ -1172,14 +1250,18 @@ func (x *ScanFactorValuesReq) GetPage() *Page {
 	return nil
 }
 
+// 因子值扫描结果。
 type ScanFactorValuesRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo            `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Points     []*FactorValuePoint `protobuf:"bytes,2,rep,name=points,proto3" json:"points,omitempty"`
-	PageResult *PageResult         `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 时序点或因子点列表。
+	Points []*FactorValuePoint `protobuf:"bytes,2,rep,name=points,proto3" json:"points,omitempty"`
+	// 分页结果。
+	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ScanFactorValuesRsp) Reset() {
@@ -1235,15 +1317,20 @@ func (x *ScanFactorValuesRsp) GetPageResult() *PageResult {
 	return nil
 }
 
+// 获取每个逻辑数据切片最新状态的请求。
 type GetLatestSnapshotReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AuthInfo     *AuthInfo  `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	DataRefs     []*DataRef `protobuf:"bytes,2,rep,name=data_refs,json=dataRefs,proto3" json:"data_refs,omitempty"`
-	FieldNames   []string   `protobuf:"bytes,3,rep,name=field_names,json=fieldNames,proto3" json:"field_names,omitempty"`
-	SnapshotTime string     `protobuf:"bytes,4,opt,name=snapshot_time,json=snapshotTime,proto3" json:"snapshot_time,omitempty"`
+	// 调用方身份和链路追踪信息。
+	AuthInfo *AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	// 要查询的逻辑数据位置列表。
+	DataRefs []*DataRef `protobuf:"bytes,2,rep,name=data_refs,json=dataRefs,proto3" json:"data_refs,omitempty"`
+	// 要返回的字段名列表；为空时由服务端使用默认字段或全部可读字段。
+	FieldNames []string `protobuf:"bytes,3,rep,name=field_names,json=fieldNames,proto3" json:"field_names,omitempty"`
+	// 截面时间，用于表示某一时点的状态。
+	SnapshotTime string `protobuf:"bytes,4,opt,name=snapshot_time,json=snapshotTime,proto3" json:"snapshot_time,omitempty"`
 }
 
 func (x *GetLatestSnapshotReq) Reset() {
@@ -1306,13 +1393,16 @@ func (x *GetLatestSnapshotReq) GetSnapshotTime() string {
 	return ""
 }
 
+// 最新状态查询结果。
 type GetLatestSnapshotRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo             `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Rows    []*LatestSnapshotRow `protobuf:"bytes,2,rep,name=rows,proto3" json:"rows,omitempty"`
+	// 接口返回状态。
+	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// 返回行列表。
+	Rows []*LatestSnapshotRow `protobuf:"bytes,2,rep,name=rows,proto3" json:"rows,omitempty"`
 }
 
 func (x *GetLatestSnapshotRsp) Reset() {
