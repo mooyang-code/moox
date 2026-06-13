@@ -5,10 +5,10 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/services/adapter/config"
-	_ "github.com/mooyang-code/moox/modules/storage/internal/services/adapter/dao/bleve"   // 注册Bleve设备(触发init函数)
-	_ "github.com/mooyang-code/moox/modules/storage/internal/services/adapter/dao/csv"     // 注册CSV设备(触发init函数)
-	_ "github.com/mooyang-code/moox/modules/storage/internal/services/adapter/dao/duckdb"  // 注册DuckDB设备(触发init函数)
-	_ "github.com/mooyang-code/moox/modules/storage/internal/services/adapter/dao/rocksdb" // 注册RocksDB设备(触发init函数)
+	_ "github.com/mooyang-code/moox/modules/storage/internal/services/adapter/dao/bleve"  // 注册Bleve设备(触发init函数)
+	_ "github.com/mooyang-code/moox/modules/storage/internal/services/adapter/dao/csv"    // 注册CSV设备(触发init函数)
+	_ "github.com/mooyang-code/moox/modules/storage/internal/services/adapter/dao/duckdb" // 注册DuckDB设备(触发init函数)
+	_ "github.com/mooyang-code/moox/modules/storage/internal/services/adapter/dao/pebble" // 注册Pebble设备(触发init函数)
 	"github.com/mooyang-code/moox/modules/storage/internal/toolkit/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"trpc.group/trpc-go/trpc-go/log"

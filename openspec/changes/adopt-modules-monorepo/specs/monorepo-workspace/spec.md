@@ -27,4 +27,4 @@ The repository SHALL NOT require a single root `go.mod` during the first migrati
 
 #### Scenario: Storage module has CGO constraints
 - **WHEN** `modules/storage` is migrated
-- **THEN** its RocksDB and DuckDB CGO build constraints SHALL remain isolated to the storage module build and test commands
+- **THEN** its Pebble and DuckDB CGO build constraints SHALL remain isolated to the storage module build and test commands

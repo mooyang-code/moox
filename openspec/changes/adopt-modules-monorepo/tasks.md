@@ -24,7 +24,7 @@
 - [ ] 4.1 将 `xData-mini/storage` 迁移为 `modules/storage`，保留独立 `go.mod` 和 storage 专用 Makefile。
 - [ ] 4.2 将入口调整为 `modules/storage/cmd/moox-storage/main.go`，二进制名统一为 `moox-storage`。
 - [ ] 4.3 将存储模块内的服务路径、proto 生成路径、配置路径和 release 路径改为新目录结构。
-- [ ] 4.4 保留 storage 的 CGO-aware 测试入口，执行 `make test` 验证 RocksDB、DuckDB 构建约束没有被根 workspace 破坏。
+- [ ] 4.4 保留 storage 的 CGO-aware 测试入口，执行 `make test` 验证 Pebble、DuckDB 构建约束没有被根 workspace 破坏。
 - [ ] 4.5 将 `xData-mini/cli` 中仍有价值的数据导入、扫描、元数据命令迁入 `modules/cli`，避免长期保留第二套 CLI。
 
 ## 5. 迁移采集模块并吸收 miner 能力
@@ -64,7 +64,7 @@
 
 - [ ] 9.1 创建 `skills/moox/SKILL.md`，说明 moox 大仓模块边界、常用命令和触发场景。
 - [ ] 9.2 创建 `skills/moox/references/build.md`，记录 build/test/release/package-skill 命令。
-- [ ] 9.3 创建 `skills/moox/references/storage.md`，记录 storage 模块、RocksDB、DuckDB、Bleve、CSV 的职责边界。
+- [ ] 9.3 创建 `skills/moox/references/storage.md`，记录 storage 模块、Pebble、DuckDB、Bleve、CSV 的职责边界。
 - [ ] 9.4 创建 `skills/moox/references/protocol.md`，链接 PB 协议重设计文档和核心概念文档。
 - [ ] 9.5 创建 `skills/moox/references/release.md`，记录技能包和 CLI 发布流程。
 

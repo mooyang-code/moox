@@ -71,11 +71,11 @@ func resolveConnectInfo(ctx context.Context, deviceType pb.EnumDeviceType, conne
 		} else {
 			defaultPath = "../database/duckdb"
 		}
-	case pb.EnumDeviceType_ROCKDB_DEVICE:
-		if cfg != nil && cfg.RocksDB.DataPath != "" {
-			defaultPath = cfg.RocksDB.DataPath
+	case pb.EnumDeviceType_PEBBLE_DEVICE:
+		if cfg != nil && cfg.Pebble.DataPath != "" {
+			defaultPath = cfg.Pebble.DataPath
 		} else {
-			defaultPath = "../database/rocksdb"
+			defaultPath = "../database/pebble"
 		}
 	case pb.EnumDeviceType_BLEVE_DEVICE:
 		if cfg != nil && cfg.Bleve.IndexPath != "" {
@@ -181,8 +181,8 @@ func (dp *devicePool) getDeviceFromPool(ctx context.Context, deviceID int,
 	// 解析实际连接路径（处理 localhost 等特殊情况）
 	actualConnInfo := resolveConnectInfo(ctx, deviceType, deviceInfo.ConnInfo)
 
-	// 使用 deviceType + 实际连接路径 作为池的 key，避免相同连接信息被重复打开
-	// 这对于 RocksDB 等不支持同时打开同一数据库的存储引擎至关重要
+	// 使用 deviceType + 实际连接路径 作为池的 key，避免相同连接信息被重复打开。
+	// 这对于 Pebble 等不支持同时打开同一数据库的存储引擎至关重要。
 	poolKey := fmt.Sprintf("%d_%s", deviceType, actualConnInfo)
 
 	// 先尝试从池中获取

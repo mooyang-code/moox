@@ -36,8 +36,8 @@ const (
 	EnumDeviceType_BLEVE_DEVICE EnumDeviceType = 3
 	// CSV 存储设备
 	EnumDeviceType_CSV_DEVICE EnumDeviceType = 4
-	// RockDB 存储设备
-	EnumDeviceType_ROCKDB_DEVICE EnumDeviceType = 5
+	// Pebble 存储设备
+	EnumDeviceType_PEBBLE_DEVICE EnumDeviceType = 5
 )
 
 // Enum value maps for EnumDeviceType.
@@ -48,7 +48,7 @@ var (
 		2: "DUCKDB_DEVICE",
 		3: "BLEVE_DEVICE",
 		4: "CSV_DEVICE",
-		5: "ROCKDB_DEVICE",
+		5: "PEBBLE_DEVICE",
 	}
 	EnumDeviceType_value = map[string]int32{
 		"DEVICE_INVALID": 0,
@@ -56,7 +56,7 @@ var (
 		"DUCKDB_DEVICE":  2,
 		"BLEVE_DEVICE":   3,
 		"CSV_DEVICE":     4,
-		"ROCKDB_DEVICE":  5,
+		"PEBBLE_DEVICE":  5,
 	}
 )
 

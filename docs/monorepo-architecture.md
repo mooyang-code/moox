@@ -24,7 +24,7 @@ moox 将作为唯一大仓，逐步吸收 `data-collector`、`account-center`、
 原因：
 
 - 当前 `moox/cli`、`moox/server`、`xData-mini/storage`、`xData-mini/cli`、`data-collector`、`data-miner` 已经是独立 Go module；其中 `data-miner` 不再作为一级模块迁移，而是作为 collector 的内部能力来源。
-- 各模块依赖差异很大，尤其 `xData-mini/storage` 包含 RocksDB、DuckDB 等 CGO 依赖。
+- 各模块依赖差异很大，尤其 `xData-mini/storage` 包含 Pebble、DuckDB 等 CGO 依赖。
 - 使用多 `go.mod` 可以降低迁移风险，让每个模块保持可独立编译和测试。
 - `go.work` 可以在本地开发时消除大量临时 `replace`，同时保留模块边界。
 

@@ -31,7 +31,7 @@ xData 是数据事实面和执行面：
 
 - 保存元数据事实。
 - 执行在线写入和查询。
-- 管理 RocksDB、DuckDB、Bleve、Parquet 和 CSV 等存储执行器。
+- 管理 Pebble、DuckDB、Bleve、Parquet 和 CSV 等存储执行器。
 - 根据元数据路由读写请求。
 - 执行 DataView 查询和文本查询。
 

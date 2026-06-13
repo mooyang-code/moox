@@ -76,7 +76,7 @@ test:
 build:
 	@echo "📦 正在构建 $(APP_NAME) (当前平台)..."
 	@mkdir -p $(BUILD_DIR)
-	@if $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(APP_NAME) .; then \
+	@if $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(APP_NAME) ./cmd/moox-server; then \
 		echo "✅ 构建完成: $(BUILD_DIR)/$(APP_NAME)"; \
 	else \
 		echo "❌ 构建失败"; \
@@ -96,7 +96,7 @@ build-linux:
 		echo "  架构: $$arch"; \
 		echo "  CGO: 已禁用"; \
 		if ! GOOS=linux GOARCH=$$arch $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" \
-			-o $(RELEASE_DIR)/linux/bin/$(APP_NAME)-$$arch .; then \
+			-o $(RELEASE_DIR)/linux/bin/$(APP_NAME)-$$arch ./cmd/moox-server; then \
 			echo "❌ Linux $$arch 构建失败"; \
 			BUILD_FAILED=true; \
 		else \
@@ -126,7 +126,7 @@ build-darwin:
 		echo "  架构: $$arch"; \
 		echo "  CGO: 已禁用"; \
 		if ! GOOS=darwin GOARCH=$$arch $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" \
-			-o $(RELEASE_DIR)/darwin/bin/$(APP_NAME)-$$arch .; then \
+			-o $(RELEASE_DIR)/darwin/bin/$(APP_NAME)-$$arch ./cmd/moox-server; then \
 			echo "❌ macOS $$arch 构建失败"; \
 			BUILD_FAILED=true; \
 		else \
@@ -159,7 +159,7 @@ build-windows:
 		echo "  架构: $$arch"; \
 		echo "  CGO: 已禁用"; \
 		if ! GOOS=windows GOARCH=$$arch $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" \
-			-o $(RELEASE_DIR)/windows/bin/$(APP_NAME)-$$arch.exe .; then \
+			-o $(RELEASE_DIR)/windows/bin/$(APP_NAME)-$$arch.exe ./cmd/moox-server; then \
 			echo "❌ Windows $$arch 构建失败"; \
 			BUILD_FAILED=true; \
 		else \
@@ -312,7 +312,7 @@ clean:
 # Development shortcuts
 dev:
 	@echo "🚀 开发模式启动..."
-	$(CGO_FLAGS) go run .
+	$(CGO_FLAGS) go run ./cmd/moox-server
 
 # Install to local bin
 install: build

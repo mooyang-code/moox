@@ -411,7 +411,7 @@ prod-storage-cluster
 示例：
 
 ```text
-RocksDB
+Pebble
 DuckDB
 Bleve
 ParquetArchive
@@ -423,7 +423,7 @@ SQLite
 
 | StorageDevice | 主要职责 |
 | --- | --- |
-| RocksDB | 在线事实层，支持低延迟时序读写 |
+| Pebble | 在线事实层，支持低延迟时序读写 |
 | DuckDB | 分析查询层，支持组合筛选和横截面查询 |
 | Bleve | 文本索引 |
 | Parquet / CSV | 冷归档和备份 |
@@ -456,7 +456,7 @@ status
 推荐角色：
 
 ```text
-HOT_STORE      // 在线事实库，例如 RocksDB
+HOT_STORE      // 在线事实库，例如 Pebble
 ANALYTIC_VIEW  // 分析查询视图，例如 DuckDB DataView
 TEXT_INDEX     // 文本索引，例如 Bleve
 ARCHIVE        // 冷归档，例如 Parquet/CSV

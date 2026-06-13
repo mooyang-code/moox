@@ -1,0 +1,147 @@
+syntax = "proto3";
+
+package trpc.storage.data;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/genv2;storagepb";
+
+import "common.proto";
+
+message DataRef {
+  string workspace_id = 1;
+  string dataset_id = 2;
+  string instrument_id = 3;
+  string exchange_id = 4;
+  string freq = 5;
+  repeated common.DimensionValue dimension_values = 6;
+}
+
+message Record {
+  string record_id = 1;
+  DataRef data_ref = 2;
+  string event_time = 3;
+  string snapshot_time = 4;
+  repeated common.FieldValue fields = 5;
+  map<string, string> attributes = 6;
+}
+
+message RecordMutation {
+  common.WriteMode write_mode = 1;
+  Record record = 2;
+}
+
+message TimeSeriesPoint {
+  DataRef data_ref = 1;
+  string time = 2;
+  repeated common.FieldValue fields = 3;
+}
+
+message FactorValuePoint {
+  DataRef data_ref = 1;
+  string time = 2;
+  string factor_instance_id = 3;
+  common.TypedValue value = 4;
+}
+
+message LatestSnapshotRow {
+  DataRef data_ref = 1;
+  string snapshot_time = 2;
+  repeated common.FieldValue fields = 3;
+}
+
+message UpsertRecordsReq {
+  common.AuthInfo auth_info = 1;
+  repeated RecordMutation mutations = 2;
+}
+
+message UpsertRecordsRsp {
+  common.RetInfo ret_info = 1;
+  uint64 affected = 2;
+  repeated string failed_record_ids = 3;
+}
+
+message QueryRecordsReq {
+  common.AuthInfo auth_info = 1;
+  DataRef data_ref = 2;
+  repeated common.FilterExpr filters = 3;
+  repeated common.SortSpec sorts = 4;
+  common.Page page = 5;
+}
+
+message QueryRecordsRsp {
+  common.RetInfo ret_info = 1;
+  repeated Record records = 2;
+  common.PageResult page_result = 3;
+}
+
+message SetTimeSeriesReq {
+  common.AuthInfo auth_info = 1;
+  common.WriteMode write_mode = 2;
+  repeated TimeSeriesPoint points = 3;
+}
+
+message SetTimeSeriesRsp {
+  common.RetInfo ret_info = 1;
+  uint64 affected = 2;
+}
+
+message ScanTimeSeriesReq {
+  common.AuthInfo auth_info = 1;
+  DataRef data_ref = 2;
+  common.TimeRange time_range = 3;
+  repeated string field_names = 4;
+  repeated common.SortSpec sorts = 5;
+  common.Page page = 6;
+}
+
+message ScanTimeSeriesRsp {
+  common.RetInfo ret_info = 1;
+  repeated TimeSeriesPoint points = 2;
+  common.PageResult page_result = 3;
+}
+
+message SetFactorValuesReq {
+  common.AuthInfo auth_info = 1;
+  common.WriteMode write_mode = 2;
+  repeated FactorValuePoint points = 3;
+}
+
+message SetFactorValuesRsp {
+  common.RetInfo ret_info = 1;
+  uint64 affected = 2;
+}
+
+message ScanFactorValuesReq {
+  common.AuthInfo auth_info = 1;
+  DataRef data_ref = 2;
+  repeated string factor_instance_ids = 3;
+  common.TimeRange time_range = 4;
+  common.Page page = 5;
+}
+
+message ScanFactorValuesRsp {
+  common.RetInfo ret_info = 1;
+  repeated FactorValuePoint points = 2;
+  common.PageResult page_result = 3;
+}
+
+message GetLatestSnapshotReq {
+  common.AuthInfo auth_info = 1;
+  repeated DataRef data_refs = 2;
+  repeated string field_names = 3;
+  string snapshot_time = 4;
+}
+
+message GetLatestSnapshotRsp {
+  common.RetInfo ret_info = 1;
+  repeated LatestSnapshotRow rows = 2;
+}
+
+service DataService {
+  rpc UpsertRecords(UpsertRecordsReq) returns (UpsertRecordsRsp);
+  rpc QueryRecords(QueryRecordsReq) returns (QueryRecordsRsp);
+  rpc SetTimeSeries(SetTimeSeriesReq) returns (SetTimeSeriesRsp);
+  rpc ScanTimeSeries(ScanTimeSeriesReq) returns (ScanTimeSeriesRsp);
+  rpc SetFactorValues(SetFactorValuesReq) returns (SetFactorValuesRsp);
+  rpc ScanFactorValues(ScanFactorValuesReq) returns (ScanFactorValuesRsp);
+  rpc GetLatestSnapshot(GetLatestSnapshotReq) returns (GetLatestSnapshotRsp);
+}

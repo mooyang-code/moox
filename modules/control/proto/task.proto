@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package trpc.moox.task;
+
+option go_package = "github.com/mooyang-code/moox/modules/control/proto/genv2;mooxpb";
+
+import "common.proto";
+
+message TaskInfo {
+  string task_id = 1;
+  string workspace_id = 2;
+  string task_type = 3;
+  string target_id = 4;
+  common.TaskStatus status = 5;
+  string payload_json = 6;
+  string message = 7;
+  string created_at = 8;
+  string updated_at = 9;
+}
+
+message CreateTaskReq { common.AuthInfo auth_info = 1; TaskInfo task = 2; }
+message CreateTaskRsp { common.RetInfo ret_info = 1; TaskInfo task = 2; }
+message UpdateTaskReq { common.AuthInfo auth_info = 1; TaskInfo task = 2; }
+message UpdateTaskRsp { common.RetInfo ret_info = 1; TaskInfo task = 2; }
+message GetTaskReq { common.AuthInfo auth_info = 1; string task_id = 2; }
+message GetTaskRsp { common.RetInfo ret_info = 1; TaskInfo task = 2; }
+message ListTasksReq { common.AuthInfo auth_info = 1; string workspace_id = 2; common.TaskStatus status = 3; common.Page page = 4; }
+message ListTasksRsp { common.RetInfo ret_info = 1; repeated TaskInfo tasks = 2; common.PageResult page_result = 3; }
+message CancelTaskReq { common.AuthInfo auth_info = 1; string task_id = 2; string reason = 3; }
+message CancelTaskRsp { common.RetInfo ret_info = 1; TaskInfo task = 2; }
+
+service TaskService {
+  rpc CreateTask(CreateTaskReq) returns (CreateTaskRsp);
+  rpc UpdateTask(UpdateTaskReq) returns (UpdateTaskRsp);
+  rpc GetTask(GetTaskReq) returns (GetTaskRsp);
+  rpc ListTasks(ListTasksReq) returns (ListTasksRsp);
+  rpc CancelTask(CancelTaskReq) returns (CancelTaskRsp);
+}

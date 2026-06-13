@@ -12,7 +12,7 @@ storage 服务需要同时支持几类数据：
 - 文本数据，例如公告、新闻、公司简介。
 - 冷数据和备份数据，例如历史行情归档。
 
-核心原则是：上层协议表达“用户要什么数据”，底层执行器再选择 RocksDB、DuckDB、Bleve、CSV 或 Parquet。协议不暴露物理表名、宽表版本和具体存储引擎。
+核心原则是：上层协议表达“用户要什么数据”，底层执行器再选择 Pebble、DuckDB、Bleve、CSV 或 Parquet。协议不暴露物理表名、宽表版本和具体存储引擎。
 
 ## 存储组件职责
 
@@ -20,14 +20,14 @@ storage 服务需要同时支持几类数据：
 | --- | --- | --- | --- |
 | Memory | 热缓存 | 最新价、最新 K 线、最近 N 条、写入缓冲 | 唯一事实存储、崩溃恢复 |
 | MQ / WAL / JetStream | 写入日志 | 削峰、重放、异步 fan-out、解耦写入和投影 | 直接查询业务数据 |
-| RocksDB | 在线事实层 | `object_id + freq + time_range` 范围查询、最新值、低延迟读写、崩溃恢复 | SQL、复杂过滤、横截面聚合 |
+| Pebble | 在线事实层 | `object_id + freq + time_range` 范围查询、最新值、低延迟读写、崩溃恢复 | SQL、复杂过滤、横截面聚合 |
 | DuckDB 长表 | 分析事实层 | 动态因子、动态字段、批量分析、回测查询 | 高频小批量并发写、在线 schema 频繁变更 |
 | DuckDB 宽表投影 | 查询加速层 | K 线 + 热门因子的组合筛选、排序、横截面查询 | 唯一事实存储、频繁原地改表 |
 | Bleve | 文本索引 | 股票名、公司简介、公告、新闻、标签检索 | 数值时序查询 |
 | CSV / Parquet | 冷归档 | 降冷、备份、离线导出、长期保存 | 在线随机查询 |
 | SQLite / 元数据 DB | 控制面 | schema、dataset、field、route、projection 版本 | 高频行情数据 |
 
-RocksDB 仍应保留。它填补 Memory 和 DuckDB 之间的空位：Memory 快但不可靠，DuckDB 好查但不适合承担高频在线写入事实库。RocksDB 适合做可恢复、低延迟、按 key 有序扫描的在线时序存储。
+Pebble 仍应保留。它填补 Memory 和 DuckDB 之间的空位：Memory 快但不可靠，DuckDB 好查但不适合承担高频在线写入事实库。Pebble 适合做可恢复、低延迟、按 key 有序扫描的在线时序存储。
 
 ## 数据集类型
 
@@ -52,7 +52,7 @@ FACTOR         // 因子值
 ### 同步写入
 
 ```text
-API -> RocksDB 成功 -> 返回成功
+API -> Pebble 成功 -> 返回成功
                    -> 发布变更事件
                    -> 异步同步 DuckDB / Bleve / CSV / Parquet
 ```
@@ -63,7 +63,7 @@ API -> RocksDB 成功 -> 返回成功
 
 ```text
 API -> durable MQ / WAL 成功 -> 返回 accepted
-                          -> 后台 batch writer -> RocksDB
+                          -> 后台 batch writer -> Pebble
                                                 -> DuckDB / Bleve / CSV / Parquet
 ```
 
@@ -102,9 +102,9 @@ factor_instance:
 
 `MA(20)`、`MA(60)` 和 `MA(120)` 是三个不同的 factor instance。新增因子时新增元数据，不要求修改在线事实库 schema。
 
-## RocksDB 因子存储
+## Pebble 因子存储
 
-RocksDB 使用窄模型存在线因子事实：
+Pebble 使用窄模型存在线因子事实：
 
 ```text
 key:
@@ -281,7 +281,7 @@ bar_factor_snapshot_wide:
 
 ```text
 ScanTimeSeries:
-  在线时序读取。优先走 RocksDB。
+  在线时序读取。优先走 Pebble。
 
 QueryFrame / ScreenData:
   K 线 + 多因子组合查询。优先走 DuckDB 宽表投影，可回退长表。
@@ -412,7 +412,7 @@ rsi14 < 30
 
 短期内应明确以下约束：
 
-- RocksDB 只承诺在线时序范围查询和点查，不承诺复杂 search。
+- Pebble 只承诺在线时序范围查询和点查，不承诺复杂 search。
 - DuckDB 负责多字段过滤、排序、横截面和分析查询。
 - Bleve 负责文本检索。
 - `SearchData` 不再承载所有查询语义，应逐步拆成更明确的接口。
@@ -458,11 +458,11 @@ archive/
 
 1. 在元数据中增加 dataset kind、factor definition、factor instance 和 projection metadata。
 2. 在协议中新增 `ScanTimeSeries` 和 `QueryFrame`，并收窄 `SearchData` 的职责。
-3. 将 RocksDB 明确为在线事实层，统一 K 线和因子的 key 设计。
+3. 将 Pebble 明确为在线事实层，统一 K 线和因子的 key 设计。
 4. 在 DuckDB 中建立 `bar_values` 和 `factor_values_long`。
 5. 增加宽表投影构建器，采用新版本表构建和 active version 切换。
 6. 增加写入模式：`SYNC_COMMIT` 和 `ASYNC_INGEST`。
-7. 增加 engine conformance tests，验证 RocksDB、DuckDB 长表和宽表投影的查询语义。
+7. 增加 engine conformance tests，验证 Pebble、DuckDB 长表和宽表投影的查询语义。
 
 ## 当前结论
 
@@ -470,7 +470,7 @@ archive/
 
 ```text
 API
-  -> RocksDB 在线事实层
+  -> Pebble 在线事实层
   -> MQ / WAL 变更日志
        -> DuckDB 长表
        -> DuckDB 宽表投影

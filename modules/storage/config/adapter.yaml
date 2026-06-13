@@ -26,12 +26,10 @@ csv:
   # CSV数据文件根路径（当connectInfo为localhost时使用）
   data_path: "./data/csv"
 
-# RocksDB配置
-rocksdb:
-  # RocksDB数据文件路径（当connectInfo为localhost时使用）
-  data_path: "./data/rocksdb"
-  # 块缓存大小（MB）
-  block_cache_mb: 512
+# Pebble配置
+pebble:
+  # Pebble数据文件路径（当connectInfo为localhost时使用）
+  data_path: "./data/pebble"
 
 # 数据操作限制配置
 limits:

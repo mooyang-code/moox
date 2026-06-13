@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package trpc.storage.query;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/genv2;storagepb";
+
+import "common.proto";
+import "data.proto";
+
+message QueryTime {
+  common.TimeRange time_range = 1;
+  string snapshot_time = 2;
+}
+
+message QueryFrameColumn {
+  string column_id = 1;
+  string output_name = 2;
+  common.ColumnOrigin column_origin = 3;
+  string dataset_id = 4;
+  string field_id = 5;
+  string factor_instance_id = 6;
+  string expression = 7;
+  common.FieldValueType value_type = 8;
+}
+
+message QueryFrameRow {
+  string instrument_id = 1;
+  string time = 2;
+  repeated common.FieldValue values = 3;
+}
+
+message QueryFrameReq {
+  common.AuthInfo auth_info = 1;
+  string workspace_id = 2;
+  string data_view_id = 3;
+  repeated string instrument_ids = 4;
+  QueryTime query_time = 5;
+  repeated QueryFrameColumn columns = 6;
+  repeated common.FilterExpr filters = 7;
+  repeated common.SortSpec sorts = 8;
+  common.Page page = 9;
+}
+
+message QueryFrameRsp {
+  common.RetInfo ret_info = 1;
+  repeated QueryFrameColumn columns = 2;
+  repeated QueryFrameRow rows = 3;
+  common.PageResult page_result = 4;
+}
+
+message TextSearchReq {
+  common.AuthInfo auth_info = 1;
+  string workspace_id = 2;
+  string dataset_id = 3;
+  string query = 4;
+  repeated string instrument_ids = 5;
+  common.TimeRange time_range = 6;
+  common.Page page = 7;
+}
+
+message TextSearchRsp {
+  common.RetInfo ret_info = 1;
+  repeated data.Record records = 2;
+  common.PageResult page_result = 3;
+}
+
+message QueryPlanStep {
+  string step_id = 1;
+  string engine = 2;
+  string operation = 3;
+  string detail = 4;
+}
+
+message ExplainQueryReq {
+  common.AuthInfo auth_info = 1;
+  QueryFrameReq query = 2;
+}
+
+message ExplainQueryRsp {
+  common.RetInfo ret_info = 1;
+  repeated QueryPlanStep steps = 2;
+}
+
+service QueryService {
+  rpc QueryFrame(QueryFrameReq) returns (QueryFrameRsp);
+  rpc TextSearch(TextSearchReq) returns (TextSearchRsp);
+  rpc ExplainQuery(ExplainQueryReq) returns (ExplainQueryRsp);
+}

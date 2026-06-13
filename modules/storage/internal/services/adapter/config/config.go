@@ -19,8 +19,8 @@ type Config struct {
 	Bleve BleveConfig `yaml:"bleve"`
 	// CSV配置
 	CSV CSVConfig `yaml:"csv"`
-	// RocksDB配置
-	RocksDB RocksDBConfig `yaml:"rocksdb"`
+	// Pebble配置
+	Pebble PebbleConfig `yaml:"pebble"`
 	// 数据操作限制配置
 	Limits LimitsConfig `yaml:"limits"`
 }
@@ -45,12 +45,10 @@ type CSVConfig struct {
 	DataPath string `yaml:"data_path"`
 }
 
-// RocksDBConfig RocksDB配置
-type RocksDBConfig struct {
-	// DataPath RocksDB数据文件路径（当connectInfo为localhost时使用）
+// PebbleConfig Pebble配置
+type PebbleConfig struct {
+	// DataPath Pebble数据文件路径（当connectInfo为localhost时使用）
 	DataPath string `yaml:"data_path"`
-	// BlockCacheMB 块缓存大小（MB）
-	BlockCacheMB int64 `yaml:"block_cache_mb"`
 }
 
 // LimitsConfig 数据操作限制配置
@@ -108,11 +106,8 @@ func setDefaults(cfg *Config) {
 		cfg.CSV.DataPath = "../database/csv"
 	}
 
-	if cfg.RocksDB.DataPath == "" {
-		cfg.RocksDB.DataPath = "../database/rocksdb"
-	}
-	if cfg.RocksDB.BlockCacheMB == 0 {
-		cfg.RocksDB.BlockCacheMB = 512 // 默认512MB
+	if cfg.Pebble.DataPath == "" {
+		cfg.Pebble.DataPath = "../database/pebble"
 	}
 
 	// 设置限制配置的默认值

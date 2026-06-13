@@ -6,7 +6,7 @@
 
 **Architecture:** 第一阶段采用 `modules/ + go.work + 多 go.mod`。控制面进入 `modules/control`，统一 CLI 进入 `modules/cli`，xData 存储面进入 `modules/storage`，采集以及原 `data-miner` 的交易所连接、调度限频、标的发现能力统一进入 `modules/collector`，因子、订单、账户先建可编译骨架。协议按 `common.proto`、`metadata.proto`、`data.proto`、`query.proto`、`adapter.proto` 和 moox 侧 `control.proto`、`collector.proto`、`node.proto`、`task.proto` 落地。
 
-**Tech Stack:** Go 1.24、tRPC-Go、Protocol Buffers、OpenSpec、RocksDB/grocksdb、DuckDB、Bleve、NATS、SQLite/GORM、Makefile、shell build scripts。
+**Tech Stack:** Go 1.24、tRPC-Go、Protocol Buffers、OpenSpec、Pebble、DuckDB、Bleve、NATS、SQLite/GORM、Makefile、shell build scripts。
 
 ---
 
@@ -1128,13 +1128,13 @@
   DataDomain
   ```
 
-- [ ] **8.3 Update DuckDB/RocksDB/Bleve/CSV adapters**
+- [ ] **8.3 Update DuckDB/Pebble/Bleve/CSV adapters**
 
   Modify packages:
 
   ```text
   internal/services/adapter/dao/duckdb
-  internal/services/adapter/dao/rocksdb
+  internal/services/adapter/dao/pebble
   internal/services/adapter/dao/bleve
   internal/services/adapter/dao/csv
   ```
@@ -1142,7 +1142,7 @@
   Required behavior:
 
   ```text
-  RocksDB remains online time-series and latest-value path
+  Pebble remains online time-series and latest-value path
   DuckDB remains analytical/query projection path
   Bleve remains text search path
   CSV remains cold backup/offline export path
@@ -1157,7 +1157,7 @@
   make test
   ```
 
-  Expected: adapter, DuckDB, RocksDB, metadata, data, and query tests pass with CGO-aware settings.
+  Expected: adapter, DuckDB, Pebble, metadata, data, and query tests pass with CGO-aware settings.
 
 ---
 
