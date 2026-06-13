@@ -1,0 +1,15 @@
+
+serverless
+main
+scf-build/
+data-collector
+release/*
+**/.claude/
+bin/
+*.log
+*.exe
+.DS_Store
+.idea/
+.vscode/
+**/*.zip
+configs/trpc_go.yaml

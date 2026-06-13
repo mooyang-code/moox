@@ -26,7 +26,6 @@ profile.cov
 # vendor/
 
 # Go workspace file
-go.work
 go.work.sum
 
 # env file
@@ -34,7 +33,18 @@ go.work.sum
 
 server/.claude/
 
-build/
+/var/
+/bin/
+/release/
+/dist/
+/coverage/
+/modules/*/bin/
+/modules/*/release/
+/modules/*/.cache/
+/modules/storage/.deps/
+/modules/storage/data/
+cover.out
+cover.out.tmp
 
 release/
 

@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package trpc.storage.dbmanager;
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen";
+import "trpc/proto/trpc_options.proto";
+import "common.proto";
+import "access.proto";
+
+// 新建数据库表请求
+message CreateDatabaseTableReq {
+  // 鉴权信息
+  common.AuthInfo auth_info = 1;
+  // 表类型（数据对象表或数据表）
+  common.EnumTableType table_type = 2;
+  // 数据键（包含项目ID、数据集ID、数据对象ID、时序频率）
+  access.DataKey data_key = 3;
+  // 表名（可选，如果不提供则根据data_key自动生成）
+  optional string table_name = 4;
+  // 表描述信息
+  optional string description = 5;
+  // 是否强制创建（如果表已存在是否覆盖）
+  optional bool force_create = 6;
+}
+
+// 新建数据库表响应
+message CreateDatabaseTableRsp {
+  // 返回信息
+  common.RetInfo ret_info = 1;
+  // 创建的表ID
+  string table_id = 2;
+}
+
+// 删除数据库表请求
+message DropDatabaseTableReq {
+  // 鉴权信息
+  common.AuthInfo auth_info = 1;
+  // 表类型（数据对象表或数据表）
+  common.EnumTableType table_type = 2;
+  // 数据键
+  access.DataKey data_key = 3;
+  // 表ID（可选，如果不提供则根据data_key自动查找）
+  optional string table_id = 4;
+  // 是否强制删除（即使表中有数据）
+  optional bool force_drop = 5;
+}
+
+// 删除数据库表响应
+message DropDatabaseTableRsp {
+  // 返回信息
+  common.RetInfo ret_info = 1;
+}
+
+// 检查数据库表状态请求
+message CheckDatabaseTableReq {
+  // 鉴权信息
+  common.AuthInfo auth_info = 1;
+  // 表类型（数据对象表或数据表）
+  common.EnumTableType table_type = 2;
+  // 数据键
+  access.DataKey data_key = 3;
+  // 表名（可选）
+  optional string table_id = 4;
+}
+
+// 检查数据库表状态响应
+message CheckDatabaseTableRsp {
+  // 返回信息
+  common.RetInfo ret_info = 1;
+  // 表是否存在
+  bool table_exists = 2;
+}
+
+// 管理台数据库管理服务
+service DBTableManager {
+  // 新建数据库表
+  rpc CreateDatabaseTable(CreateDatabaseTableReq) returns (CreateDatabaseTableRsp);
+
+  // 删除数据库表
+  rpc DropDatabaseTable(DropDatabaseTableReq) returns (DropDatabaseTableRsp);
+
+  // 检查数据库表状态
+  rpc CheckDatabaseTable(CheckDatabaseTableReq) returns (CheckDatabaseTableRsp);
+}

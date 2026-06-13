@@ -1,0 +1,4 @@
+
+metadata_database: 
+  storage_device: "sqlite:./data/metadata.db"
+

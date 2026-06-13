@@ -1,0 +1,39 @@
+schemacaches:
+  t_storage_entity: http://127.0.0.1:19101/metaapi/t_storage_entity
+  t_storage_device: http://127.0.0.1:19101/metaapi/t_storage_device
+  t_object_route: http://127.0.0.1:19101/metaapi/t_object_route
+  t_field_route: http://127.0.0.1:19101/metaapi/t_field_route
+  t_field: http://127.0.0.1:19101/metaapi/t_field
+  t_field_column_map: http://127.0.0.1:19101/metaapi/t_field_column_map
+
+# 缓存轮询间隔（秒），0 表示使用默认值
+schema_cache_polling_interval_seconds: 60
+
+# DuckDB配置
+duckdb:
+  # DuckDB数据文件路径（当connectInfo为localhost时使用）
+  data_path: "./data/duckdb"
+  # DuckDB内存限制（默认3GB）
+  memory_limit: "3GB"
+
+# Bleve配置
+bleve:
+  # Bleve索引根路径（当connectInfo为localhost时使用）
+  index_path: "./data/bleve"
+
+# CSV配置
+csv:
+  # CSV数据文件根路径（当connectInfo为localhost时使用）
+  data_path: "./data/csv"
+
+# RocksDB配置
+rocksdb:
+  # RocksDB数据文件路径（当connectInfo为localhost时使用）
+  data_path: "./data/rocksdb"
+  # 块缓存大小（MB）
+  block_cache_mb: 512
+
+# 数据操作限制配置
+limits:
+  # 单次set操作的最大行数限制
+  max_update_rows: 25

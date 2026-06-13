@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package trpc.storage.message;
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen";
+import "access.proto";
+
+
+// ObjectModifyMsg 数据对象变更消息（数据对象的一次字段变更，产生一条消息）
+message ObjectModifyMsg {
+    // 对应AppId
+    string app_id = 1;
+    // 项目ID
+    int32 project_id = 2;
+    // 数据集ID
+    int32 dataset_id = 3;
+    // 数据对象ID
+    string object_id = 4;
+    
+    // 当前变更行的旧数据
+    trpc.storage.access.ObjectRow old_row = 5;
+    // 当前变更行的新数据
+    trpc.storage.access.ObjectRow new_row = 6;
+    
+    // 消息发送时的时间戳
+    int64 push_timestamp = 7;
+    // 消息ID（唯一，但不保证全局有序）
+    string msg_id = 8;
+}
+
+// DataDetailModifyMsg 数据详情变更消息（每一行详情数据的字段变更，产生一条消息）
+message DataDetailModifyMsg {
+    // 对应AppId
+    string app_id = 1;
+    // 项目ID
+    int32 project_id = 2;
+    // 数据集ID
+    int32 dataset_id = 3;
+    // 数据对象ID
+    string object_id = 4;
+    // 时序频率（时序数据专有）
+    string freq = 5;
+    // 时序数据的时刻值
+    string times = 6;
+    // 数据行ID
+    string row_id = 7;
+    
+    // 当前变更行的旧数据
+    trpc.storage.access.DataRow old_row = 8;
+    // 当前变更行的新数据
+    trpc.storage.access.DataRow new_row = 9;
+    // 附带当前变更行的上一行数据（时序数据专有）
+    trpc.storage.access.DataRow last_row = 10;
+    
+    // 消息发送时的时间戳
+    int64 push_timestamp = 11;
+    // 消息ID（唯一，但不保证全局有序）
+    string msg_id = 12;
+}

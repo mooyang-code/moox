@@ -1,0 +1,147 @@
+# Binance数据源配置
+app:
+  id: "binance"
+  name: "币安交易所"
+  description: "币安现货市场数据采集"
+  type: "market"
+
+# API配置
+api:
+  base_url: "https://api.binance.com"
+  websocket_url: "wss://stream.binance.com:9443"
+  timeout: 10
+  rate_limit:
+    requests_per_minute: 1200
+    enable_burst: true
+    burst_size: 100
+
+# 认证配置（可选）
+auth:
+  api_key: "${BINANCE_API_KEY}"
+  api_secret: "${BINANCE_API_SECRET}"
+
+# 采集器配置
+collectors:
+  # K线数据采集器
+  kline:
+    enabled: true
+    symbols: 
+      - "BTCUSDT"
+      - "ETHUSDT"
+      - "BNBUSDT"
+    intervals:
+      - "1m"
+      - "5m"
+      - "15m"
+      - "1h"
+      - "4h"
+      - "1d"
+    batch_size: 100
+    history_days: 30
+
+  # 实时行情采集器
+  ticker:
+    enabled: false
+    mode: "all"  # all, specific
+    symbols: []  # 空表示所有交易对
+    update_interval: "5s"
+
+  # 订单簿采集器
+  orderbook:
+    enabled: false
+    symbols:
+      - "BTCUSDT"
+      - "ETHUSDT"
+    depth: 20
+    update_interval: "100ms"
+
+  # 成交记录采集器
+  trade:
+    enabled: false
+    symbols:
+      - "BTCUSDT"
+      - "ETHUSDT"
+    buffer_size: 1000
+
+# 数据处理配置
+processing:
+  # 数据验证
+  validation:
+    enabled: true
+    check_sequence: true
+    check_timestamp: true
+    
+  # 数据转换
+  transformation:
+    normalize_symbol: true
+    convert_timestamp: true
+    
+  # 数据聚合
+  aggregation:
+    enabled: true
+    intervals:
+      - "5m"
+      - "1h"
+
+# 存储配置（覆盖默认配置）
+storage:
+  kline:
+    backend: "clickhouse"
+    table: "klines_binance"
+    partition_by: "toYYYYMM(timestamp)"
+    
+  ticker:
+    backend: "redis"
+    ttl: "1h"
+    
+  orderbook:
+    backend: "memory"
+    max_depth: 100
+
+# 监控和告警
+monitoring:
+  # 性能指标
+  metrics:
+    enabled: true
+    export_interval: "30s"
+    
+  # 健康检查
+  health_check:
+    enabled: true
+    interval: "60s"
+    timeout: "10s"
+    
+  # 告警规则
+  alerts:
+    - name: "high_latency"
+      condition: "latency > 1000ms"
+      severity: "warning"
+      
+    - name: "data_gap"
+      condition: "no_data_for > 5m"
+      severity: "critical"
+      
+    - name: "error_rate"
+      condition: "error_rate > 0.05"
+      severity: "warning"
+
+# 高级配置
+advanced:
+  # 重试策略
+  retry:
+    max_attempts: 3
+    backoff: "exponential"
+    base_delay: "1s"
+    max_delay: "30s"
+    
+  # 缓存配置
+  cache:
+    enabled: true
+    ttl: "5m"
+    max_size: 10000
+    
+  # 日志配置
+  logging:
+    level: "info"
+    separate_file: true
+    path: "logs/binance.log"
