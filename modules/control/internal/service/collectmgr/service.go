@@ -121,7 +121,7 @@ type TaskInstanceService interface {
 	CompleteInstance(ctx context.Context, instanceID string, success bool, result string) error
 
 	// ReportTaskStatus 上报任务状态（客户端上报用）
-	// v2.0: 新增 nodeID 参数，更新 c_last_exec_node、c_last_exec_status、c_last_exec_time、c_result
+	// 新增 nodeID 参数，更新 c_last_exec_node、c_last_exec_status、c_last_exec_time、c_result
 	ReportTaskStatus(ctx context.Context, instanceID string, nodeID string, status int, result string) error
 
 	// InvalidateTaskInstance 作废任务实例
@@ -137,7 +137,7 @@ type TaskInstanceDTO struct {
 	TaskID          string
 	RuleID          string
 	BizType         string // 业务类型
-	// v2.0 新字段
+	// 新增字段
 	PlannedExecNode string // 计划执行节点ID
 	LastExecNode    string // 最后执行节点ID
 	LastExecStatus  int    // 最后执行状态
@@ -158,9 +158,9 @@ type TaskInstanceFilterDTO struct {
 	BizType         string // 业务类型
 	TaskID          string // 任务ID
 	RuleID          string // 规则ID
-	PlannedExecNode string // v2.0: 计划执行节点
-	LastExecNode    string // v2.0: 最后执行节点
-	LastExecStatus  *int   // v2.0: 最后执行状态（使用指针以区分0值和未设置）
+	PlannedExecNode string // 计划执行节点
+	LastExecNode    string // 最后执行节点
+	LastExecStatus  *int   // 最后执行状态（使用指针以区分0值和未设置）
 	Symbol          string // 交易标的
 	Invalid         *int   // 是否有效（使用指针以区分0值和未设置）
 	Page            int    // 页码（从1开始）

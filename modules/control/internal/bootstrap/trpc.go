@@ -6,12 +6,12 @@ import (
 	authsvr "github.com/mooyang-code/moox/modules/control/internal/service/auth"
 	cloudnodegateway "github.com/mooyang-code/moox/modules/control/internal/service/cloudnode/gateway"
 	collectorgateway "github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/gateway"
-	controlv2 "github.com/mooyang-code/moox/modules/control/internal/service/controlv2"
+	controlsvc "github.com/mooyang-code/moox/modules/control/internal/service/control"
 	dnsproxygateway "github.com/mooyang-code/moox/modules/control/internal/service/dnsproxy/gateway"
 	monitorgateway "github.com/mooyang-code/moox/modules/control/internal/service/monitor/gateway"
 	sshgateway "github.com/mooyang-code/moox/modules/control/internal/service/ssh/gateway"
+	controlpb "github.com/mooyang-code/moox/modules/control/proto/controlgen"
 	pb "github.com/mooyang-code/moox/modules/control/proto/gen"
-	pbv2 "github.com/mooyang-code/moox/modules/control/proto/genv2"
 
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -29,11 +29,11 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	pb.RegisterAuthAPIService(s, authImp)
 
 	// 注册新量化数据系统控制面协议。该服务只暴露编排语义，不暴露 storage adapter。
-	controlV2Imp := controlv2.NewService()
-	pbv2.RegisterControlServiceService(s, controlV2Imp)
-	pbv2.RegisterCollectorServiceService(s, controlV2Imp)
-	pbv2.RegisterNodeServiceService(s, controlV2Imp)
-	pbv2.RegisterTaskServiceService(s, controlV2Imp)
+	controlImp := controlsvc.NewService()
+	controlpb.RegisterControlServiceService(s, controlImp)
+	controlpb.RegisterCollectorServiceService(s, controlImp)
+	controlpb.RegisterNodeServiceService(s, controlImp)
+	controlpb.RegisterTaskServiceService(s, controlImp)
 
 	// 2. 初始化网关服务
 	log.Info("正在初始化网关服务...")

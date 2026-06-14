@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package trpc.storage.adapter;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
+
+import "common.proto";
+import "data.proto";
+
+// DeviceRef 表示路由解析后的存储设备位置。
+message DeviceRef {
+  // entity_id 是 adapter 服务实例或服务组 ID。
+  string entity_id = 1;
+  // device_id 是存储设备 ID。
+  string device_id = 2;
+  // engine 是设备引擎类型，例如 pebble、duckdb、bleve 或 parquet_archive。
+  string engine = 3;
+  // dataset_id 是事实数据集 ID。
+  string dataset_id = 4;
+  // device_table 是设备内部表、索引或键空间名称。
+  string device_table = 5;
+}
+
+// WriteDeviceRowsReq 表示写入设备行的内部请求。
+message WriteDeviceRowsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // device 是目标存储设备位置。
+  DeviceRef device = 2;
+  // write_mode 表示本次写入如何处理相同逻辑键的已有数据。
+  common.WriteMode write_mode = 3;
+  // rows 是已完成路由的数据行。
+  repeated data.DataRow rows = 4;
+}
+
+// WriteDeviceRowsRsp 表示设备行写入结果。
+message WriteDeviceRowsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+}
+
+// ReadDeviceRowsReq 表示读取设备行的内部请求。
+message ReadDeviceRowsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // device 是目标存储设备位置。
+  DeviceRef device = 2;
+  // read_mode 是读取方式。
+  data.ReadMode read_mode = 3;
+  // slice 是要读取的数据切片。
+  data.DataSlice slice = 4;
+  // time_range 是时间区间条件。
+  common.TimeRange time_range = 5;
+  // snapshot_time 是截面时间。
+  string snapshot_time = 6;
+  // row_ids 是要读取的逻辑行 ID 列表。
+  repeated string row_ids = 7;
+  // column_names 是要返回的列名；为空时返回整行。
+  repeated string column_names = 8;
+  // page 是分页参数。
+  common.Page page = 9;
+}
+
+// ReadDeviceRowsRsp 表示设备行读取结果。
+message ReadDeviceRowsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // rows 是读取到的数据行。
+  repeated data.DataRow rows = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// AdapterService 是存储设备内部执行服务。
+service AdapterService {
+  // WriteDeviceRows 将已完成路由的数据行写入目标设备。
+  rpc WriteDeviceRows(WriteDeviceRowsReq) returns (WriteDeviceRowsRsp);
+  // ReadDeviceRows 从目标设备读取数据行。
+  rpc ReadDeviceRows(ReadDeviceRowsReq) returns (ReadDeviceRowsRsp);
+}

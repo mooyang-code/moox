@@ -179,7 +179,7 @@ func (s *TaskInstanceServiceImpl) CompleteInstance(ctx context.Context, instance
 }
 
 // ReportTaskStatus 上报任务状态（客户端上报用）
-// v2.0: 新增 nodeID 参数，只更新内存仓库，DB 通过 SnapshotWorker 异步刷入
+// 新增 nodeID 参数，只更新内存仓库，DB 通过 SnapshotWorker 异步刷入
 func (s *TaskInstanceServiceImpl) ReportTaskStatus(ctx context.Context, instanceID string, nodeID string, status int, result string) error {
 	if instanceID == "" {
 		return fmt.Errorf("instance ID is required")

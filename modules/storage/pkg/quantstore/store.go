@@ -14,14 +14,12 @@ import (
 	"strings"
 	"sync"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/genv2"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
-const (
-	defaultRoot = "var/storage"
-)
+const defaultRoot = "var/storage"
 
 type Store struct {
 	root string
@@ -29,13 +27,11 @@ type Store struct {
 }
 
 type CSVImportOptions struct {
-	WorkspaceID     string
-	DatasetID       string
-	InstrumentID    string
-	ExchangeID      string
-	Freq            string
-	TimeColumn      string
-	DimensionValues []*pb.DimensionValue
+	DatasetID  string
+	SubjectID  string
+	Freq       string
+	TimeColumn string
+	Dimensions map[string]string
 }
 
 func New(root string) *Store {
@@ -66,263 +62,119 @@ func Error(code pb.ErrorCode, err error) *pb.RetInfo {
 	return &pb.RetInfo{Code: code, Msg: err.Error()}
 }
 
-func StringValue(name, value string) *pb.FieldValue {
-	return &pb.FieldValue{
-		FieldName: name,
-		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING,
-		Value:     &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}},
+func StringValue(name, value string) *pb.ColumnValue {
+	return &pb.ColumnValue{
+		ColumnName: name,
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_STRING,
+		Value:      &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}},
 	}
 }
 
-func DoubleValue(name string, value float64) *pb.FieldValue {
-	return &pb.FieldValue{
-		FieldName: name,
-		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		Value:     &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}},
+func DoubleValue(name string, value float64) *pb.ColumnValue {
+	return &pb.ColumnValue{
+		ColumnName: name,
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		Value:      &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}},
 	}
 }
 
-func IntValue(name string, value int64) *pb.FieldValue {
-	return &pb.FieldValue{
-		FieldName: name,
-		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT,
-		Value:     &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: value}},
+func IntValue(name string, value int64) *pb.ColumnValue {
+	return &pb.ColumnValue{
+		ColumnName: name,
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_INT,
+		Value:      &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: value}},
 	}
 }
 
-func (s *Store) SetTimeSeries(ctx context.Context, points []*pb.TimeSeriesPoint, mode pb.WriteMode) (uint64, error) {
+func (s *Store) WriteRows(ctx context.Context, rows []*pb.DataRow, mode pb.WriteMode) error {
 	_ = ctx
-	if len(points) == 0 {
-		return 0, nil
+	if len(rows) == 0 {
+		return nil
 	}
+	if mode == pb.WriteMode_WRITE_MODE_UNSPECIFIED {
+		mode = pb.WriteMode_WRITE_MODE_UPSERT
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	grouped := make(map[string][]*pb.TimeSeriesPoint)
-	for _, point := range points {
-		if point == nil || point.GetDataRef() == nil {
-			return 0, errors.New("time series point data_ref is required")
+	grouped := make(map[string][]*pb.DataRow)
+	for _, row := range rows {
+		if err := validateRow(row); err != nil {
+			return err
 		}
-		if err := validateDataRef(point.GetDataRef()); err != nil {
-			return 0, err
-		}
-		grouped[s.timeSeriesPath(point.GetDataRef())] = append(grouped[s.timeSeriesPath(point.GetDataRef())], point)
+		path := s.factPath(row.GetSlice())
+		grouped[path] = append(grouped[path], row)
 	}
 
-	var affected uint64
-	for path, rows := range grouped {
-		if mode == pb.WriteMode_WRITE_MODE_OVERWRITE || mode == pb.WriteMode_WRITE_MODE_DELETE {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return affected, err
+	for path, pathRows := range grouped {
+		switch mode {
+		case pb.WriteMode_WRITE_MODE_APPEND:
+			if err := appendMessages(path, dataRowsToMessages(pathRows)); err != nil {
+				return err
+			}
+		case pb.WriteMode_WRITE_MODE_OVERWRITE:
+			if err := rewriteRows(path, pathRows); err != nil {
+				return err
+			}
+		default:
+			if err := upsertRows(path, pathRows); err != nil {
+				return err
 			}
 		}
-		if mode == pb.WriteMode_WRITE_MODE_DELETE {
-			continue
-		}
-		if err := appendMessages(path, rowsToMessages(rows)); err != nil {
-			return affected, err
-		}
-		affected += uint64(len(rows))
 	}
-	return affected, nil
+	return nil
 }
 
-func (s *Store) ScanTimeSeries(ctx context.Context, ref *pb.DataRef, timeRange *pb.TimeRange, fieldNames []string, page *pb.Page) ([]*pb.TimeSeriesPoint, *pb.PageResult, error) {
+func (s *Store) ReadRows(ctx context.Context, slice *pb.DataSlice, readMode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, rowIDs []string, columnNames []string, page *pb.Page) ([]*pb.DataRow, *pb.PageResult, error) {
 	_ = ctx
-	if ref == nil {
-		return nil, nil, errors.New("data_ref is required")
-	}
-	if err := validateDataRef(ref); err != nil {
+	if err := validateSlice(slice); err != nil {
 		return nil, nil, err
 	}
-	paths, err := s.timeSeriesPaths(ref)
+	if readMode == pb.ReadMode_READ_MODE_UNSPECIFIED {
+		readMode = pb.ReadMode_READ_MODE_RANGE
+	}
+	if readMode == pb.ReadMode_READ_MODE_POINT && len(rowIDs) == 0 {
+		return nil, nil, errors.New("row_ids is required for point read")
+	}
+
+	paths, err := s.factPaths(slice)
 	if err != nil {
 		return nil, nil, err
 	}
+	allowRows := makeSet(rowIDs)
 
-	var rows []*pb.TimeSeriesPoint
+	var rows []*pb.DataRow
 	for _, path := range paths {
-		var fileRows []*pb.TimeSeriesPoint
-		if err := readMessages(path, func() proto.Message { return &pb.TimeSeriesPoint{} }, func(msg proto.Message) {
-			fileRows = append(fileRows, msg.(*pb.TimeSeriesPoint))
-		}); err != nil {
-			return nil, nil, err
-		}
-		for _, row := range fileRows {
-			if !timeInRange(row.GetTime(), timeRange) {
-				continue
+		if err := readMessages(path, func() proto.Message { return &pb.DataRow{} }, func(msg proto.Message) {
+			row := msg.(*pb.DataRow)
+			if readMode == pb.ReadMode_READ_MODE_POINT && !allowRows[row.GetRowId()] {
+				return
 			}
-			rows = append(rows, filterPointFields(row, fieldNames))
-		}
-	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		if rows[i].GetDataRef().GetInstrumentId() == rows[j].GetDataRef().GetInstrumentId() {
-			return rows[i].GetTime() < rows[j].GetTime()
-		}
-		return rows[i].GetDataRef().GetInstrumentId() < rows[j].GetDataRef().GetInstrumentId()
-	})
-	paged, result := pageTimeSeries(rows, page)
-	return paged, result, nil
-}
-
-func (s *Store) SetFactorValues(ctx context.Context, points []*pb.FactorValuePoint, mode pb.WriteMode) (uint64, error) {
-	_ = ctx
-	if len(points) == 0 {
-		return 0, nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	grouped := make(map[string][]*pb.FactorValuePoint)
-	for _, point := range points {
-		if point == nil || point.GetDataRef() == nil {
-			return 0, errors.New("factor value point data_ref is required")
-		}
-		if err := validateDataRef(point.GetDataRef()); err != nil {
-			return 0, err
-		}
-		if point.GetFactorInstanceId() == "" {
-			return 0, errors.New("factor_instance_id is required")
-		}
-		path := s.factorPath(point.GetDataRef(), point.GetFactorInstanceId())
-		grouped[path] = append(grouped[path], point)
-	}
-
-	var affected uint64
-	for path, rows := range grouped {
-		if mode == pb.WriteMode_WRITE_MODE_OVERWRITE || mode == pb.WriteMode_WRITE_MODE_DELETE {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return affected, err
+			if readMode != pb.ReadMode_READ_MODE_POINT && !timeInRange(row.GetDataTime(), timeRange) {
+				return
 			}
-		}
-		if mode == pb.WriteMode_WRITE_MODE_DELETE {
-			continue
-		}
-		if err := appendMessages(path, factorRowsToMessages(rows)); err != nil {
-			return affected, err
-		}
-		affected += uint64(len(rows))
-	}
-	return affected, nil
-}
-
-func (s *Store) ScanFactorValues(ctx context.Context, ref *pb.DataRef, factorIDs []string, timeRange *pb.TimeRange, page *pb.Page) ([]*pb.FactorValuePoint, *pb.PageResult, error) {
-	_ = ctx
-	if ref == nil {
-		return nil, nil, errors.New("data_ref is required")
-	}
-	if err := validateDataRef(ref); err != nil {
-		return nil, nil, err
-	}
-	paths, err := s.factorPaths(ref, factorIDs)
-	if err != nil {
-		return nil, nil, err
-	}
-	var rows []*pb.FactorValuePoint
-	for _, path := range paths {
-		if err := readMessages(path, func() proto.Message { return &pb.FactorValuePoint{} }, func(msg proto.Message) {
-			row := msg.(*pb.FactorValuePoint)
-			if timeInRange(row.GetTime(), timeRange) {
-				rows = append(rows, row)
+			if readMode == pb.ReadMode_READ_MODE_LATEST_BEFORE && snapshotTime != "" && row.GetDataTime() > snapshotTime {
+				return
 			}
+			rows = append(rows, filterRowColumns(row, columnNames))
 		}); err != nil {
 			return nil, nil, err
 		}
 	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		if rows[i].GetDataRef().GetInstrumentId() == rows[j].GetDataRef().GetInstrumentId() {
-			return rows[i].GetTime() < rows[j].GetTime()
-		}
-		return rows[i].GetDataRef().GetInstrumentId() < rows[j].GetDataRef().GetInstrumentId()
-	})
-	paged, result := pageFactors(rows, page)
+
+	if readMode == pb.ReadMode_READ_MODE_LATEST_BEFORE {
+		rows = latestRows(rows)
+	}
+	sortRows(rows)
+	paged, result := pageRows(rows, page)
 	return paged, result, nil
 }
 
-func (s *Store) UpsertRecords(ctx context.Context, records []*pb.Record, mode pb.WriteMode) (uint64, error) {
-	_ = ctx
-	if len(records) == 0 {
-		return 0, nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	grouped := make(map[string][]*pb.Record)
-	for _, record := range records {
-		if record == nil || record.GetDataRef() == nil {
-			return 0, errors.New("record data_ref is required")
-		}
-		if err := validateDataRef(record.GetDataRef()); err != nil {
-			return 0, err
-		}
-		grouped[s.recordPath(record.GetDataRef())] = append(grouped[s.recordPath(record.GetDataRef())], record)
-	}
-	var affected uint64
-	for path, rows := range grouped {
-		if mode == pb.WriteMode_WRITE_MODE_OVERWRITE || mode == pb.WriteMode_WRITE_MODE_DELETE {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return affected, err
-			}
-		}
-		if mode == pb.WriteMode_WRITE_MODE_DELETE {
-			continue
-		}
-		if err := appendMessages(path, recordRowsToMessages(rows)); err != nil {
-			return affected, err
-		}
-		affected += uint64(len(rows))
-	}
-	return affected, nil
-}
-
-func (s *Store) QueryRecords(ctx context.Context, ref *pb.DataRef, page *pb.Page) ([]*pb.Record, *pb.PageResult, error) {
-	_ = ctx
-	if ref == nil {
-		return nil, nil, errors.New("data_ref is required")
-	}
-	if err := validateDataRef(ref); err != nil {
-		return nil, nil, err
-	}
-	paths, err := s.recordPaths(ref)
-	if err != nil {
-		return nil, nil, err
-	}
-	var rows []*pb.Record
-	for _, path := range paths {
-		if err := readMessages(path, func() proto.Message { return &pb.Record{} }, func(msg proto.Message) {
-			rows = append(rows, msg.(*pb.Record))
-		}); err != nil {
-			return nil, nil, err
-		}
-	}
-	paged, result := pageRecords(rows, page)
-	return paged, result, nil
-}
-
-func (s *Store) LatestSnapshot(ctx context.Context, refs []*pb.DataRef, fieldNames []string, snapshotTime string) ([]*pb.LatestSnapshotRow, error) {
-	var result []*pb.LatestSnapshotRow
-	for _, ref := range refs {
-		rows, _, err := s.ScanTimeSeries(ctx, ref, &pb.TimeRange{EndTime: snapshotTime, EndInclusive: true}, fieldNames, nil)
-		if err != nil {
-			return nil, err
-		}
-		if len(rows) == 0 {
-			continue
-		}
-		last := rows[len(rows)-1]
-		result = append(result, &pb.LatestSnapshotRow{
-			DataRef:      last.GetDataRef(),
-			SnapshotTime: last.GetTime(),
-			Fields:       last.GetFields(),
-		})
-	}
-	return result, nil
-}
-
-func (s *Store) ImportCSV(ctx context.Context, path string, opts CSVImportOptions) (uint64, error) {
+func (s *Store) ImportCSV(ctx context.Context, path string, opts CSVImportOptions) error {
 	file, err := os.Open(path)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer file.Close()
 
@@ -330,133 +182,83 @@ func (s *Store) ImportCSV(ctx context.Context, path string, opts CSVImportOption
 	reader.FieldsPerRecord = -1
 	header, err := readCSVHeader(reader, opts.TimeColumn)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	timeIndex := findColumn(header, opts.TimeColumn)
 	if timeIndex < 0 {
 		timeIndex = findAnyColumn(header, []string{"time", "timestamp", "date", "datetime", "open_time"})
 	}
 	if timeIndex < 0 {
-		return 0, fmt.Errorf("time column not found in %s", path)
+		return fmt.Errorf("time column not found in %s", path)
 	}
 
-	ref := &pb.DataRef{
-		WorkspaceId:     opts.WorkspaceID,
-		DatasetId:       opts.DatasetID,
-		InstrumentId:    opts.InstrumentID,
-		ExchangeId:      opts.ExchangeID,
-		Freq:            opts.Freq,
-		DimensionValues: opts.DimensionValues,
+	slice := &pb.DataSlice{
+		DatasetId:  opts.DatasetID,
+		SubjectId:  opts.SubjectID,
+		Freq:       opts.Freq,
+		Dimensions: opts.Dimensions,
 	}
-	var batch []*pb.TimeSeriesPoint
+	var batch []*pb.DataRow
 	for {
 		record, err := reader.Read()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return 0, err
+			return err
 		}
 		if timeIndex >= len(record) {
 			continue
 		}
-		point := &pb.TimeSeriesPoint{DataRef: ref, Time: strings.TrimSpace(record[timeIndex])}
+		row := &pb.DataRow{Slice: slice, DataTime: strings.TrimSpace(record[timeIndex])}
 		for i, name := range header {
 			if i >= len(record) || i == timeIndex {
 				continue
 			}
-			point.Fields = append(point.Fields, inferFieldValue(strings.TrimSpace(name), strings.TrimSpace(record[i])))
+			row.Columns = append(row.Columns, inferColumnValue(strings.TrimSpace(name), strings.TrimSpace(record[i])))
 		}
-		batch = append(batch, point)
+		batch = append(batch, row)
 	}
-	return s.SetTimeSeries(ctx, batch, pb.WriteMode_WRITE_MODE_APPEND)
+	return s.WriteRows(ctx, batch, pb.WriteMode_WRITE_MODE_APPEND)
 }
 
-func (s *Store) timeSeriesPath(ref *pb.DataRef) string {
-	parts := append([]string{s.root, "timeseries"}, keyParts(ref)...)
+func (s *Store) factPath(slice *pb.DataSlice) string {
+	parts := []string{
+		s.root,
+		"facts",
+		safe(slice.GetDatasetId()),
+		safe(defaultString(slice.GetSubjectId(), "default")),
+		safe(defaultString(slice.GetFreq(), "default")),
+		dimensionKey(slice.GetDimensions()),
+	}
 	return filepath.Join(parts...) + ".jsonl"
 }
 
-func (s *Store) recordPath(ref *pb.DataRef) string {
-	parts := append([]string{s.root, "records"}, keyParts(ref)...)
-	return filepath.Join(parts...) + ".jsonl"
+func (s *Store) factPaths(slice *pb.DataSlice) ([]string, error) {
+	parts := []string{
+		s.root,
+		"facts",
+		safe(slice.GetDatasetId()),
+		patternPart(slice.GetSubjectId()),
+		patternPart(slice.GetFreq()),
+		dimensionPattern(slice.GetDimensions()),
+	}
+	return filepath.Glob(filepath.Join(parts...) + ".jsonl")
 }
 
-func (s *Store) factorPath(ref *pb.DataRef, factorID string) string {
-	parts := keyParts(ref)
-	parts = append(parts, safe(factorID))
-	return filepath.Join(s.root, "factors", filepath.Join(parts...)) + ".jsonl"
+func validateRow(row *pb.DataRow) error {
+	if row == nil {
+		return errors.New("row is required")
+	}
+	return validateSlice(row.GetSlice())
 }
 
-func (s *Store) timeSeriesPaths(ref *pb.DataRef) ([]string, error) {
-	if ref.GetFreq() != "" && ref.GetExchangeId() != "" {
-		return []string{s.timeSeriesPath(ref)}, nil
+func validateSlice(slice *pb.DataSlice) error {
+	if slice == nil {
+		return errors.New("slice is required")
 	}
-	patternParts := keyPartsPattern(ref)
-	return filepath.Glob(filepath.Join(s.root, "timeseries", filepath.Join(patternParts...)) + ".jsonl")
-}
-
-func (s *Store) recordPaths(ref *pb.DataRef) ([]string, error) {
-	if ref.GetFreq() != "" && ref.GetExchangeId() != "" {
-		return []string{s.recordPath(ref)}, nil
-	}
-	patternParts := keyPartsPattern(ref)
-	return filepath.Glob(filepath.Join(s.root, "records", filepath.Join(patternParts...)) + ".jsonl")
-}
-
-func (s *Store) factorPaths(ref *pb.DataRef, factorIDs []string) ([]string, error) {
-	if len(factorIDs) > 0 {
-		paths := make([]string, 0, len(factorIDs))
-		for _, factorID := range factorIDs {
-			paths = append(paths, s.factorPath(ref, factorID))
-		}
-		return paths, nil
-	}
-	patternParts := keyParts(ref)
-	patternParts = append(patternParts, "*")
-	return filepath.Glob(filepath.Join(s.root, "factors", filepath.Join(patternParts...)) + ".jsonl")
-}
-
-func keyParts(ref *pb.DataRef) []string {
-	return []string{
-		safe(ref.GetWorkspaceId()),
-		safe(ref.GetDatasetId()),
-		safe(ref.GetExchangeId()),
-		safe(ref.GetInstrumentId()),
-		safe(defaultString(ref.GetFreq(), "default")),
-		dimensionKey(ref.GetDimensionValues()),
-	}
-}
-
-func keyPartsPattern(ref *pb.DataRef) []string {
-	exchangeID := ref.GetExchangeId()
-	if exchangeID == "" {
-		exchangeID = "*"
-	}
-	freq := ref.GetFreq()
-	if freq == "" {
-		freq = "*"
-	}
-	dimensions := dimensionKey(ref.GetDimensionValues())
-	return []string{
-		safe(ref.GetWorkspaceId()),
-		safe(ref.GetDatasetId()),
-		safe(exchangeID),
-		safe(ref.GetInstrumentId()),
-		safe(freq),
-		dimensions,
-	}
-}
-
-func validateDataRef(ref *pb.DataRef) error {
-	if ref.GetWorkspaceId() == "" {
-		return errors.New("workspace_id is required")
-	}
-	if ref.GetDatasetId() == "" {
+	if slice.GetDatasetId() == "" {
 		return errors.New("dataset_id is required")
-	}
-	if ref.GetInstrumentId() == "" {
-		return errors.New("instrument_id is required")
 	}
 	return nil
 }
@@ -506,7 +308,37 @@ func readMessages(path string, newMessage func() proto.Message, onRow func(proto
 	return scanner.Err()
 }
 
-func rowsToMessages(rows []*pb.TimeSeriesPoint) []proto.Message {
+func rewriteRows(path string, rows []*pb.DataRow) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return appendMessages(path, dataRowsToMessages(rows))
+}
+
+func upsertRows(path string, rows []*pb.DataRow) error {
+	var existing []*pb.DataRow
+	if err := readMessages(path, func() proto.Message { return &pb.DataRow{} }, func(msg proto.Message) {
+		existing = append(existing, msg.(*pb.DataRow))
+	}); err != nil {
+		return err
+	}
+	index := make(map[string]int, len(existing))
+	for i, row := range existing {
+		index[rowKey(row, i)] = i
+	}
+	for i, row := range rows {
+		key := rowKey(row, len(existing)+i)
+		if pos, ok := index[key]; ok {
+			existing[pos] = row
+			continue
+		}
+		index[key] = len(existing)
+		existing = append(existing, row)
+	}
+	return rewriteRows(path, existing)
+}
+
+func dataRowsToMessages(rows []*pb.DataRow) []proto.Message {
 	out := make([]proto.Message, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, row)
@@ -514,38 +346,51 @@ func rowsToMessages(rows []*pb.TimeSeriesPoint) []proto.Message {
 	return out
 }
 
-func factorRowsToMessages(rows []*pb.FactorValuePoint) []proto.Message {
-	out := make([]proto.Message, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, row)
-	}
-	return out
-}
-
-func recordRowsToMessages(rows []*pb.Record) []proto.Message {
-	out := make([]proto.Message, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, row)
-	}
-	return out
-}
-
-func filterPointFields(point *pb.TimeSeriesPoint, includes []string) *pb.TimeSeriesPoint {
+func filterRowColumns(row *pb.DataRow, includes []string) *pb.DataRow {
 	if len(includes) == 0 {
-		return point
+		return row
 	}
-	allow := make(map[string]bool, len(includes))
-	for _, name := range includes {
-		allow[name] = true
-	}
-	filtered := proto.Clone(point).(*pb.TimeSeriesPoint)
-	filtered.Fields = filtered.Fields[:0]
-	for _, field := range point.GetFields() {
-		if allow[field.GetFieldName()] || allow[field.GetFieldId()] {
-			filtered.Fields = append(filtered.Fields, field)
+	allow := makeSet(includes)
+	filtered := proto.Clone(row).(*pb.DataRow)
+	filtered.Columns = filtered.Columns[:0]
+	for _, column := range row.GetColumns() {
+		if allow[column.GetColumnName()] {
+			filtered.Columns = append(filtered.Columns, column)
 		}
 	}
 	return filtered
+}
+
+func latestRows(rows []*pb.DataRow) []*pb.DataRow {
+	latest := make(map[string]*pb.DataRow)
+	for _, row := range rows {
+		key := row.GetSlice().GetSubjectId()
+		if key == "" {
+			key = row.GetSlice().GetDatasetId()
+		}
+		if prev := latest[key]; prev == nil || row.GetDataTime() > prev.GetDataTime() {
+			latest[key] = row
+		}
+	}
+	out := make([]*pb.DataRow, 0, len(latest))
+	for _, row := range latest {
+		out = append(out, row)
+	}
+	return out
+}
+
+func sortRows(rows []*pb.DataRow) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		left := rows[i]
+		right := rows[j]
+		if left.GetSlice().GetSubjectId() != right.GetSlice().GetSubjectId() {
+			return left.GetSlice().GetSubjectId() < right.GetSlice().GetSubjectId()
+		}
+		if left.GetDataTime() != right.GetDataTime() {
+			return left.GetDataTime() < right.GetDataTime()
+		}
+		return left.GetRowId() < right.GetRowId()
+	})
 }
 
 func timeInRange(value string, timeRange *pb.TimeRange) bool {
@@ -565,17 +410,7 @@ func timeInRange(value string, timeRange *pb.TimeRange) bool {
 	return true
 }
 
-func pageTimeSeries(rows []*pb.TimeSeriesPoint, page *pb.Page) ([]*pb.TimeSeriesPoint, *pb.PageResult) {
-	start, end, result := pageBounds(len(rows), page)
-	return rows[start:end], result
-}
-
-func pageFactors(rows []*pb.FactorValuePoint, page *pb.Page) ([]*pb.FactorValuePoint, *pb.PageResult) {
-	start, end, result := pageBounds(len(rows), page)
-	return rows[start:end], result
-}
-
-func pageRecords(rows []*pb.Record, page *pb.Page) ([]*pb.Record, *pb.PageResult) {
+func pageRows(rows []*pb.DataRow, page *pb.Page) ([]*pb.DataRow, *pb.PageResult) {
 	start, end, result := pageBounds(len(rows), page)
 	return rows[start:end], result
 }
@@ -607,7 +442,7 @@ func pageBounds(total int, page *pb.Page) (int, int, *pb.PageResult) {
 	}
 }
 
-func inferFieldValue(name, raw string) *pb.FieldValue {
+func inferColumnValue(name, raw string) *pb.ColumnValue {
 	if raw == "" {
 		return StringValue(name, raw)
 	}
@@ -617,7 +452,32 @@ func inferFieldValue(name, raw string) *pb.FieldValue {
 	if v, err := strconv.ParseFloat(raw, 64); err == nil {
 		return DoubleValue(name, v)
 	}
+	if v, err := strconv.ParseBool(raw); err == nil {
+		return &pb.ColumnValue{
+			ColumnName: name,
+			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_BOOL,
+			Value:      &pb.TypedValue{Value: &pb.TypedValue_BoolValue{BoolValue: v}},
+		}
+	}
 	return StringValue(name, raw)
+}
+
+func rowKey(row *pb.DataRow, fallback int) string {
+	if row.GetRowId() != "" {
+		return "id:" + row.GetRowId()
+	}
+	if row.GetDataTime() != "" {
+		return "time:" + row.GetDataTime()
+	}
+	return fmt.Sprintf("append:%d", fallback)
+}
+
+func makeSet(values []string) map[string]bool {
+	out := make(map[string]bool, len(values))
+	for _, value := range values {
+		out[value] = true
+	}
+	return out
 }
 
 func findColumn(header []string, name string) int {
@@ -654,16 +514,30 @@ func readCSVHeader(reader *csv.Reader, timeColumn string) ([]string, error) {
 	return nil, errors.New("csv header not found")
 }
 
-func dimensionKey(values []*pb.DimensionValue) string {
+func dimensionKey(values map[string]string) string {
 	if len(values) == 0 {
 		return "default"
 	}
 	items := make([]string, 0, len(values))
-	for _, value := range values {
-		items = append(items, safe(value.GetName())+"="+safe(value.GetValue()))
+	for key, value := range values {
+		items = append(items, safe(key)+"="+safe(value))
 	}
 	sort.Strings(items)
 	return strings.Join(items, "__")
+}
+
+func dimensionPattern(values map[string]string) string {
+	if len(values) == 0 {
+		return "*"
+	}
+	return dimensionKey(values)
+}
+
+func patternPart(value string) string {
+	if value == "" {
+		return "*"
+	}
+	return safe(value)
 }
 
 func defaultString(value, fallback string) string {

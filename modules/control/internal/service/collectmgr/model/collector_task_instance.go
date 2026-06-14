@@ -15,7 +15,7 @@ type CollectorTaskInstance struct {
 	// BizType 业务类型（data_collector=数据采集, factor_calculator=因子计算）
 	BizType string `gorm:"column:c_biz_type;not null;default:'data_collector'" json:"biz_type"`
 
-	// ===== v2.0 新字段 =====
+	// ===== 新增字段 =====
 	// PlannedExecNode 计划执行节点ID（定时重算时写入）
 	PlannedExecNode string `gorm:"column:c_planned_exec_node;index:idx_planned_node,idx_planned_node_status,idx_planned_node_interval;not null;default:''" json:"planned_exec_node"`
 	// LastExecNode 最后执行节点ID（客户端上报时写入）

@@ -20,7 +20,7 @@ help:
 	@echo ""
 	@echo "目标:"
 	@echo "  deps          安装 Go 依赖"
-	@echo "  proto         生成 v2 protobuf 代码"
+	@echo "  proto         生成 protobuf 代码"
 	@echo "  test          运行单元测试和覆盖率检查"
 	@echo "  build         构建当前平台二进制"
 	@echo "  build-linux   构建 Linux amd64 二进制"

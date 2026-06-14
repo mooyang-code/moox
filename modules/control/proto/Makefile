@@ -1,7 +1,7 @@
 PROTO_FILES := common.proto control.proto collector.proto node.proto task.proto
-OUTPUT_DIR := ./genv2
+OUTPUT_DIR := ./controlgen
 
-.PHONY: all clean legacy-list
+.PHONY: all clean
 
 all:
 	@mkdir -p $(OUTPUT_DIR)
@@ -17,6 +17,3 @@ all:
 
 clean:
 	rm -rf $(OUTPUT_DIR)/*.pb.go $(OUTPUT_DIR)/*.trpc.go
-
-legacy-list:
-	@find legacy -maxdepth 1 -name '*.proto' -print | sort

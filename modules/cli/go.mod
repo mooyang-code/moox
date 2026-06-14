@@ -8,13 +8,10 @@ replace github.com/mooyang-code/moox/modules/control/proto/gen => ../control/pro
 
 replace github.com/mooyang-code/moox/modules/storage => ../storage
 
-replace github.com/mooyang-code/moox/modules/storage/proto/genv2 => ../storage/proto/genv2
-
 require (
 	github.com/mooyang-code/moox/modules/control/proto/gen v0.0.0
 	github.com/mooyang-code/moox/modules/storage v0.0.0
 	github.com/mooyang-code/moox/modules/storage/proto/gen v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/modules/storage/proto/genv2 v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats.go v1.47.0
 	github.com/spf13/cobra v1.9.1
 	golang.org/x/term v0.38.0

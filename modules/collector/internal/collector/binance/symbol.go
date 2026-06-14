@@ -118,18 +118,12 @@ func (c *SymbolCollector) filterSymbols(symbols []*exchange.SymbolInfo) []*excha
 	return filtered
 }
 
-// reportSymbols 上报标的到存储服务（调用 UpsertObject 接口）
+// reportSymbols 上报标的到存储服务（调用 DataService.WriteRows 接口）
 // 分批并发上报，每批最多 25 条，最大并发 20
 func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, symbols []*exchange.SymbolInfo) error {
-	// 根据 instType 确定 datasetID
-	var datasetID int32
-	switch instType {
-	case InstTypeSWAP:
-		datasetID = 100 // 合约标的
-	case InstTypeSPOT:
-		datasetID = 101 // 现货标的
-	default:
-		return fmt.Errorf("不支持的产品类型: %s", instType)
+	datasetID, err := symbolDataSetID(instType)
+	if err != nil {
+		return err
 	}
 
 	// 获取存储服务地址
@@ -139,7 +133,7 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 	}
 
 	// 构建所有对象行
-	allRows := c.buildObjectRows(symbols)
+	allRows := c.buildSymbolRecordRows(symbols)
 	totalRows := len(allRows)
 	if totalRows == 0 {
 		log.InfoContextf(ctx, "[SymbolCollector] 无标的需要上报")
@@ -147,7 +141,7 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 	}
 
 	// 分批（一个请求最多25行，分N次请求）
-	var batches [][]ObjectRow
+	var batches [][]SymbolRecordRow
 	for i := 0; i < totalRows; i += batchSize {
 		end := i + batchSize
 		if end > totalRows {
@@ -157,7 +151,7 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 	}
 
 	totalBatches := len(batches)
-	log.InfoContextf(ctx, "[SymbolCollector] 开始上报标的, 总数=%d, 批次数=%d, datasetID=%d",
+	log.InfoContextf(ctx, "[SymbolCollector] 开始上报标的, 总数=%d, 批次数=%d, datasetID=%s",
 		totalRows, totalBatches, datasetID)
 
 	// 结果收集
@@ -203,12 +197,23 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 		return fmt.Errorf("部分批次上报失败: %w", firstErr)
 	}
 
-	log.InfoContextf(ctx, "[SymbolCollector] 上报标的成功, count=%d, datasetID=%d", totalRows, datasetID)
+	log.InfoContextf(ctx, "[SymbolCollector] 上报标的成功, count=%d, datasetID=%s", totalRows, datasetID)
 	return nil
 }
 
+func symbolDataSetID(instType string) (string, error) {
+	switch instType {
+	case InstTypeSWAP:
+		return "binance_swap_symbols", nil
+	case InstTypeSPOT:
+		return "binance_spot_symbols", nil
+	default:
+		return "", fmt.Errorf("不支持的产品类型: %s", instType)
+	}
+}
+
 // sendWithRetry 发送单个批次请求（带重试）
-func (c *SymbolCollector) sendWithRetry(ctx context.Context, storageURL string, datasetID int32, rows []ObjectRow, batchIdx, totalBatches int) error {
+func (c *SymbolCollector) sendWithRetry(ctx context.Context, storageURL string, datasetID string, rows []SymbolRecordRow, batchIdx, totalBatches int) error {
 	return retry.Do(
 		func() error {
 			return c.send(ctx, storageURL, datasetID, rows)
@@ -225,15 +230,14 @@ func (c *SymbolCollector) sendWithRetry(ctx context.Context, storageURL string, 
 }
 
 // send 发送单个批次请求
-func (c *SymbolCollector) send(ctx context.Context, storageURL string, datasetID int32, rows []ObjectRow) error {
-	request := &UpsertObjectRequest{
+func (c *SymbolCollector) send(ctx context.Context, storageURL string, datasetID string, rows []SymbolRecordRow) error {
+	request := &WriteRowsRequest{
 		AuthInfo: AuthInfo{
 			AppID:  "data-collector",
 			AppKey: "symbol-sync",
 		},
-		ProjectID:  1,
-		DatasetID:  datasetID,
-		ObjectRows: rows,
+		WriteMode: "WRITE_MODE_UPSERT",
+		Rows:      buildSymbolDataRows(datasetID, rows),
 	}
 
 	data, err := json.Marshal(request)
@@ -241,7 +245,7 @@ func (c *SymbolCollector) send(ctx context.Context, storageURL string, datasetID
 		return fmt.Errorf("序列化失败: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/trpc.storage.access.Access/UpsertObject", storageURL)
+	url := fmt.Sprintf("%s/trpc.storage.data.DataService/WriteRows", storageURL)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %w", err)
@@ -262,40 +266,34 @@ func (c *SymbolCollector) send(ctx context.Context, storageURL string, datasetID
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, respBody.String())
 	}
 
-	var upsertResp UpsertObjectResponse
-	if err := json.Unmarshal(respBody.Bytes(), &upsertResp); err != nil {
+	var writeResp WriteRowsResponse
+	if err := json.Unmarshal(respBody.Bytes(), &writeResp); err != nil {
 		return fmt.Errorf("解析响应失败: %w", err)
 	}
 
-	if upsertResp.RetInfo.Code != 0 {
-		return fmt.Errorf("错误码 %d: %s", upsertResp.RetInfo.Code, upsertResp.RetInfo.Msg)
+	if writeResp.RetInfo.Code != 0 {
+		return fmt.Errorf("错误码 %d: %s", writeResp.RetInfo.Code, writeResp.RetInfo.Msg)
 	}
 
 	return nil
 }
 
-// buildObjectRows 构建 UpsertObject 请求的对象行列表
-func (c *SymbolCollector) buildObjectRows(symbols []*exchange.SymbolInfo) []ObjectRow {
-	rows := make([]ObjectRow, 0, len(symbols))
+// buildSymbolRecordRows 构建标的结构化记录行列表。
+func (c *SymbolCollector) buildSymbolRecordRows(symbols []*exchange.SymbolInfo) []SymbolRecordRow {
+	rows := make([]SymbolRecordRow, 0, len(symbols))
 	for _, s := range symbols {
-		// 对象ID格式：BaseAsset-QuoteAsset (如 BTC-USDT)
-		objectID := fmt.Sprintf("%s-%s", s.BaseAsset, s.QuoteAsset)
+		// 标的 ID 格式：BaseAsset-QuoteAsset (如 BTC-USDT)
+		instrumentID := fmt.Sprintf("%s-%s", s.BaseAsset, s.QuoteAsset)
 
-		row := ObjectRow{
-			ObjectID: objectID,
-			Fields: map[string]UpdateField{
-				"symbol": {
-					FieldKey:    "symbol",
-					FieldType:   1, // STR_FIELD
-					UpdateType:  1, // SET_UPDATE
-					SimpleValue: SimpleValue{Str: objectID},
-				},
-				"unshelve_time": {
-					FieldKey:    "unshelve_time",
-					FieldType:   1, // STR_FIELD
-					UpdateType:  1, // SET_UPDATE
-					SimpleValue: SimpleValue{Str: "2099-01-01 00:00:00"},
-				},
+		row := SymbolRecordRow{
+			RecordID: instrumentID,
+			Columns: []ColumnValue{
+				stringField("symbol", instrumentID),
+				stringField("base_asset", s.BaseAsset),
+				stringField("quote_asset", s.QuoteAsset),
+				stringField("external_symbol", s.Symbol),
+				stringField("status", s.Status),
+				stringField("unshelve_time", "2099-01-01 00:00:00"),
 			},
 		}
 		rows = append(rows, row)
@@ -303,12 +301,19 @@ func (c *SymbolCollector) buildObjectRows(symbols []*exchange.SymbolInfo) []Obje
 	return rows
 }
 
-// UpsertObjectRequest UpsertObject 请求结构
-type UpsertObjectRequest struct {
-	AuthInfo   AuthInfo    `json:"auth_info"`
-	ProjectID  int32       `json:"project_id"`
-	DatasetID  int32       `json:"dataset_id"`
-	ObjectRows []ObjectRow `json:"object_rows"`
+func buildSymbolDataRows(datasetID string, rows []SymbolRecordRow) []DataRow {
+	out := make([]DataRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, DataRow{
+			Slice: DataSlice{
+				DatasetID: datasetID,
+				SubjectID: row.RecordID,
+			},
+			RowID:   row.RecordID,
+			Columns: row.Columns,
+		})
+	}
+	return out
 }
 
 // AuthInfo 鉴权信息
@@ -317,28 +322,10 @@ type AuthInfo struct {
 	AppKey string `json:"app_key"`
 }
 
-// ObjectRow 对象行
-type ObjectRow struct {
-	ObjectID string                 `json:"object_id"`
-	Fields   map[string]UpdateField `json:"fields"`
-}
-
-// UpdateField 更新字段
-type UpdateField struct {
-	FieldKey    string      `json:"field_key"`
-	FieldType   int         `json:"field_type"`  // 1 = STR_FIELD
-	UpdateType  int         `json:"update_type"` // 1 = SET_UPDATE
-	SimpleValue SimpleValue `json:"simple_value"`
-}
-
-// SimpleValue 简单值
-type SimpleValue struct {
-	Str string `json:"str,omitempty"`
-}
-
-// UpsertObjectResponse UpsertObject 响应结构
-type UpsertObjectResponse struct {
-	RetInfo RetInfo `json:"ret_info"`
+// SymbolRecordRow 标的结构化记录行。
+type SymbolRecordRow struct {
+	RecordID string        `json:"record_id"`
+	Columns  []ColumnValue `json:"columns"`
 }
 
 // RetInfo 返回信息

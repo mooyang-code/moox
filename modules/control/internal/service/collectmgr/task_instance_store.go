@@ -18,13 +18,13 @@ type TaskInstanceStore interface {
 	// ReplaceAll 原子替换全部实例（重算后调用）
 	ReplaceAll(ctx context.Context, instances []*model.CollectorTaskInstance)
 
-	// GetByNodeID 按节点ID查询任务实例（v2.0: 查询 PlannedExecNode）
+	// GetByNodeID 按节点ID查询任务实例（查询 PlannedExecNode）
 	GetByNodeID(nodeID string) []*model.CollectorTaskInstance
 
 	// GetByTaskID 按TaskID查询任务实例
 	GetByTaskID(taskID string) *model.CollectorTaskInstance
 
-	// UpdateStatusWithNode 更新单个实例状态（心跳上报时，v2.0: 新增 nodeID 参数）
+	// UpdateStatusWithNode 更新单个实例状态（心跳上报时，新增 nodeID 参数）
 	UpdateStatusWithNode(taskID string, nodeID string, status int, lastExecTime *time.Time, result string)
 
 	// GetSnapshot 获取全部实例快照（刷库时）
@@ -102,7 +102,7 @@ func (s *taskInstanceStoreImpl) ReplaceAll(ctx context.Context, instances []*mod
 		len(instances), s.version.Load())
 }
 
-// GetByNodeID 按节点ID查询任务实例（v2.0: 查询 PlannedExecNode）
+// GetByNodeID 按节点ID查询任务实例（查询 PlannedExecNode）
 func (s *taskInstanceStoreImpl) GetByNodeID(nodeID string) []*model.CollectorTaskInstance {
 	var result []*model.CollectorTaskInstance
 
@@ -125,7 +125,7 @@ func (s *taskInstanceStoreImpl) GetByTaskID(taskID string) *model.CollectorTaskI
 	return inst
 }
 
-// UpdateStatusWithNode 更新单个实例状态（心跳上报时调用，v2.0: 新增 nodeID 参数）
+// UpdateStatusWithNode 更新单个实例状态（心跳上报时调用，新增 nodeID 参数）
 // 仅更新内存，不写DB
 func (s *taskInstanceStoreImpl) UpdateStatusWithNode(taskID string, nodeID string, status int, lastExecTime *time.Time, result string) {
 	inst, ok := s.store.Get(taskID)
@@ -134,7 +134,7 @@ func (s *taskInstanceStoreImpl) UpdateStatusWithNode(taskID string, nodeID strin
 		return
 	}
 
-	// 更新字段
+	// 更新增字段
 	inst.LastExecNode = nodeID
 	inst.LastExecStatus = status
 	inst.LastExecTime = lastExecTime

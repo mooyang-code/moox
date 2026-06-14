@@ -1,10 +1,6 @@
 // Package constants 提供系统中使用的常量定义
 package constants
 
-import (
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
-)
-
 // PublisherType 消息发布器类型
 type PublisherType string
 
@@ -44,9 +40,9 @@ const SystemFieldIDStart = 100000
 
 // SystemFieldInfo 系统字段信息
 type SystemFieldInfo struct {
-	FieldID     uint32           // 字段ID
-	FieldType   pb.EnumFieldType // 字段类型
-	Description string           // 字段描述
+	FieldID     uint32 // 字段ID
+	FieldType   int    // 字段类型
+	Description string // 字段描述
 }
 
 // SystemFields 系统字段列表（保持向后兼容）
@@ -67,47 +63,47 @@ var (
 	SystemFieldInfoMap = map[string]SystemFieldInfo{
 		"_row_id": {
 			FieldID:     SystemFieldIDStart + 1, // 100001
-			FieldType:   pb.EnumFieldType_STR_FIELD,
+			FieldType:   1,
 			Description: "数据行唯一标识符",
 		},
 		"_ctime": {
 			FieldID:     SystemFieldIDStart + 2, // 100002
-			FieldType:   pb.EnumFieldType_TIME_FIELD,
+			FieldType:   4,
 			Description: "数据创建时间",
 		},
 		"_mtime": {
 			FieldID:     SystemFieldIDStart + 3, // 100003
-			FieldType:   pb.EnumFieldType_TIME_FIELD,
+			FieldType:   4,
 			Description: "数据修改时间",
 		},
 		"_replay_timestamps": {
 			FieldID:     SystemFieldIDStart + 4, // 100004
-			FieldType:   pb.EnumFieldType_STR_FIELD,
+			FieldType:   1,
 			Description: "重放时间戳",
 		},
 		"_times": {
 			FieldID:     SystemFieldIDStart + 5, // 100005
-			FieldType:   pb.EnumFieldType_TIME_FIELD,
+			FieldType:   4,
 			Description: "时序数据时间字段",
 		},
 		"_deleted": {
 			FieldID:     SystemFieldIDStart + 6, // 100006
-			FieldType:   pb.EnumFieldType_INT_FIELD,
+			FieldType:   2,
 			Description: "软删除标记",
 		},
 		"_deleted_time": {
 			FieldID:     SystemFieldIDStart + 7, // 100007
-			FieldType:   pb.EnumFieldType_TIME_FIELD,
+			FieldType:   4,
 			Description: "删除时间",
 		},
 		"_extended_data": {
 			FieldID:     SystemFieldIDStart + 8, // 100008
-			FieldType:   pb.EnumFieldType_STR_FIELD,
+			FieldType:   1,
 			Description: "扩展数据字段",
 		},
 		"_metadata": {
 			FieldID:     SystemFieldIDStart + 9, // 100009
-			FieldType:   pb.EnumFieldType_STR_FIELD,
+			FieldType:   1,
 			Description: "元数据字段",
 		},
 	}

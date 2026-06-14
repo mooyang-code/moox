@@ -27,7 +27,7 @@ func NewStorageSymbolProvider() *StorageSymbolProvider {
 }
 
 // GetSymbols 获取指定数据源和产品类型的所有标的
-// 从 xData 存储服务的 FetchObject 接口获取
+// 从存储服务的 QueryRecords 接口获取。
 func (p *StorageSymbolProvider) GetSymbols(ctx context.Context, dataSource string, instType ...string) ([]string, error) {
 	log.DebugContextf(ctx, "[StorageSymbolProvider] GetSymbols enter (dataSource=%s, instType=%v)",
 		dataSource, instType)
@@ -48,72 +48,74 @@ func (p *StorageSymbolProvider) GetSymbols(ctx context.Context, dataSource strin
 	log.DebugContextf(ctx, "[StorageSymbolProvider] Using instType: %s (dataSource=%s)",
 		targetInstType, dataSource)
 
-	// 根据产品类型确定 datasetID
-	// SWAP = 100, SPOT = 101
-	var datasetID int32
-	switch targetInstType {
-	case "SWAP":
-		datasetID = 100
-	case "SPOT":
-		datasetID = 101
-	default:
-		datasetID = 101 // 默认 SPOT
-	}
-	log.DebugContextf(ctx, "[StorageSymbolProvider] Mapped to datasetID=%d (dataSource=%s, instType=%s)",
+	datasetID := symbolDataSetID(targetInstType)
+	log.DebugContextf(ctx, "[StorageSymbolProvider] Mapped to datasetID=%s (dataSource=%s, instType=%s)",
 		datasetID, dataSource, targetInstType)
 
 	// 调用 xData FetchObject 接口
 	symbols, err := p.fetchSymbolsFromStorage(ctx, datasetID)
 	if err != nil {
-		log.ErrorContextf(ctx, "[StorageSymbolProvider] Failed to fetch symbols from storage (dataSource=%s, instType=%s, datasetID=%d): %v",
+		log.ErrorContextf(ctx, "[StorageSymbolProvider] Failed to fetch symbols from storage (dataSource=%s, instType=%s, datasetID=%s): %v",
 			dataSource, targetInstType, datasetID, err)
 		return []string{}, err
 	}
 
-	log.InfoContextf(ctx, "[StorageSymbolProvider] Fetched %d symbols (dataSource=%s, instType=%s, datasetID=%d)",
+	log.InfoContextf(ctx, "[StorageSymbolProvider] Fetched %d symbols (dataSource=%s, instType=%s, datasetID=%s)",
 		len(symbols), dataSource, targetInstType, datasetID)
 	return symbols, nil
 }
 
+func symbolDataSetID(instType string) string {
+	switch instType {
+	case "SWAP":
+		return "binance_swap_symbols"
+	case "SPOT":
+		return "binance_spot_symbols"
+	default:
+		return "binance_spot_symbols"
+	}
+}
+
 // fetchSymbolsFromStorage 从存储服务获取标的列表
-// 使用 QueryObject 接口翻页查询，每页 200 条
-func (p *StorageSymbolProvider) fetchSymbolsFromStorage(ctx context.Context, datasetID int32) ([]string, error) {
-	log.DebugContextf(ctx, "[StorageSymbolProvider] fetchSymbolsFromStorage enter (datasetID=%d)", datasetID)
+// 使用 QueryRecords 接口翻页查询，每页 200 条。
+func (p *StorageSymbolProvider) fetchSymbolsFromStorage(ctx context.Context, datasetID string) ([]string, error) {
+	log.DebugContextf(ctx, "[StorageSymbolProvider] fetchSymbolsFromStorage enter (datasetID=%s)", datasetID)
 
 	const pageSize = 200
 	var allSymbols []string
 	pageIdx := uint32(1)
 
 	for {
-		// 构建 QueryObject 请求
-		request := &QueryObjectRequest{
+		request := &QueryRecordsRequest{
 			AuthInfo: AuthInfo{
 				AppID:  "moox-server",
 				AppKey: "symbol-provider",
 			},
-			ProjectID: 1,
-			DatasetID: datasetID,
-			PageInfo: PageInfo{
-				PageIdx: pageIdx,
-				Size:    pageSize,
+			DataRef: DataRef{
+				WorkspaceID: "default",
+				DatasetID:   datasetID,
+				ExchangeID:  "BINANCE",
+			},
+			Page: Page{
+				Page: pageIdx,
+				Size: pageSize,
 			},
 		}
 
 		// 序列化为 JSON
 		data, err := json.Marshal(request)
 		if err != nil {
-			log.ErrorContextf(ctx, "[StorageSymbolProvider] Failed to marshal request (datasetID=%d, page=%d): %v",
+			log.ErrorContextf(ctx, "[StorageSymbolProvider] Failed to marshal request (datasetID=%s, page=%d): %v",
 				datasetID, pageIdx, err)
 			return nil, fmt.Errorf("failed to marshal request: %w", err)
 		}
 
-		// 发送 HTTP POST 请求
-		url := fmt.Sprintf("%s/trpc.storage.access.Access/QueryObject", p.xdataURL)
-		log.DebugContextf(ctx, "[StorageSymbolProvider] Sending request to %s (datasetID=%d, page=%d)", url, datasetID, pageIdx)
+		url := fmt.Sprintf("%s/trpc.storage.data.DataService/QueryRecords", p.xdataURL)
+		log.DebugContextf(ctx, "[StorageSymbolProvider] Sending request to %s (datasetID=%s, page=%d)", url, datasetID, pageIdx)
 
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
 		if err != nil {
-			log.ErrorContextf(ctx, "[StorageSymbolProvider] Failed to create request (datasetID=%d, page=%d): %v",
+			log.ErrorContextf(ctx, "[StorageSymbolProvider] Failed to create request (datasetID=%s, page=%d): %v",
 				datasetID, pageIdx, err)
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
@@ -122,7 +124,7 @@ func (p *StorageSymbolProvider) fetchSymbolsFromStorage(ctx context.Context, dat
 		client := &http.Client{Timeout: 30 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
-			log.ErrorContextf(ctx, "[StorageSymbolProvider] Failed to send request (datasetID=%d, page=%d, url=%s): %v",
+			log.ErrorContextf(ctx, "[StorageSymbolProvider] Failed to send request (datasetID=%s, page=%d, url=%s): %v",
 				datasetID, pageIdx, url, err)
 			return nil, fmt.Errorf("failed to send request: %w", err)
 		}
@@ -133,39 +135,42 @@ func (p *StorageSymbolProvider) fetchSymbolsFromStorage(ctx context.Context, dat
 		_, _ = respBody.ReadFrom(resp.Body)
 
 		if resp.StatusCode != http.StatusOK {
-			log.ErrorContextf(ctx, "[StorageSymbolProvider] HTTP error (datasetID=%d, page=%d, status=%d, body=%s)",
+			log.ErrorContextf(ctx, "[StorageSymbolProvider] HTTP error (datasetID=%s, page=%d, status=%d, body=%s)",
 				datasetID, pageIdx, resp.StatusCode, respBody.String())
 			return nil, fmt.Errorf("HTTP error: %d, body: %s", resp.StatusCode, respBody.String())
 		}
 
-		// 解析响应
-		var queryResp QueryObjectResponse
+		var queryResp QueryRecordsResponse
 		if err := json.Unmarshal(respBody.Bytes(), &queryResp); err != nil {
-			log.ErrorContextf(ctx, "[StorageSymbolProvider] Failed to parse response (datasetID=%d, page=%d): %v",
+			log.ErrorContextf(ctx, "[StorageSymbolProvider] Failed to parse response (datasetID=%s, page=%d): %v",
 				datasetID, pageIdx, err)
 			return nil, fmt.Errorf("failed to parse response: %w", err)
 		}
 
 		if queryResp.RetInfo.Code != 0 {
-			log.ErrorContextf(ctx, "[StorageSymbolProvider] API error (datasetID=%d, page=%d, code=%d, msg=%s)",
+			log.ErrorContextf(ctx, "[StorageSymbolProvider] API error (datasetID=%s, page=%d, code=%d, msg=%s)",
 				datasetID, pageIdx, queryResp.RetInfo.Code, queryResp.RetInfo.Msg)
 			return nil, fmt.Errorf("API error: code=%d, msg=%s", queryResp.RetInfo.Code, queryResp.RetInfo.Msg)
 		}
 
-		// 提取当前页的 symbol 列表（object_id 就是 symbol）
+		// 提取当前页的 symbol 列表，优先使用 record_id。
 		pageCount := 0
-		for _, row := range queryResp.ObjectRows {
-			if row.ObjectID != "" {
-				allSymbols = append(allSymbols, row.ObjectID)
+		for _, row := range queryResp.Records {
+			symbol := row.RecordID
+			if symbol == "" {
+				symbol = row.DataRef.InstrumentID
+			}
+			if symbol != "" {
+				allSymbols = append(allSymbols, symbol)
 				pageCount++
 			}
 		}
 
-		log.DebugContextf(ctx, "[StorageSymbolProvider] Fetched page %d: got %d symbols (datasetID=%d, total=%d)",
-			pageIdx, pageCount, datasetID, uint64(queryResp.Total))
+		log.DebugContextf(ctx, "[StorageSymbolProvider] Fetched page %d: got %d symbols (datasetID=%s, total=%d)",
+			pageIdx, pageCount, datasetID, queryResp.PageResult.Total)
 
 		// 检查是否已经获取完所有数据
-		if uint64(len(allSymbols)) >= uint64(queryResp.Total) {
+		if !queryResp.PageResult.HasMore || uint64(len(allSymbols)) >= uint64(queryResp.PageResult.Total) {
 			break
 		}
 
@@ -178,7 +183,7 @@ func (p *StorageSymbolProvider) fetchSymbolsFromStorage(ctx context.Context, dat
 		pageIdx++
 	}
 
-	log.InfoContextf(ctx, "[StorageSymbolProvider] Successfully fetched %d symbols (datasetID=%d)",
+	log.InfoContextf(ctx, "[StorageSymbolProvider] Successfully fetched %d symbols (datasetID=%s)",
 		len(allSymbols), datasetID)
 	uniqueSymbols := make([]string, 0, len(allSymbols))
 	seen := make(map[string]struct{}, len(allSymbols))
@@ -192,34 +197,49 @@ func (p *StorageSymbolProvider) fetchSymbolsFromStorage(ctx context.Context, dat
 		uniqueSymbols = append(uniqueSymbols, symbol)
 	}
 	if dupCount > 0 {
-		log.WarnContextf(ctx, "[StorageSymbolProvider] Deduped %d duplicate symbols (datasetID=%d)",
+		log.WarnContextf(ctx, "[StorageSymbolProvider] Deduped %d duplicate symbols (datasetID=%s)",
 			dupCount, datasetID)
 	}
 	return uniqueSymbols, nil
 }
 
-// QueryObjectRequest QueryObject 请求结构
-type QueryObjectRequest struct {
-	AuthInfo  AuthInfo  `json:"auth_info"`
-	ProjectID int32     `json:"project_id"`
-	DatasetID int32     `json:"dataset_id"`
-	PageInfo  PageInfo  `json:"page_info"`
+// QueryRecordsRequest QueryRecords 请求结构。
+type QueryRecordsRequest struct {
+	AuthInfo AuthInfo `json:"auth_info"`
+	DataRef  DataRef  `json:"data_ref"`
+	Page     Page     `json:"page"`
 }
 
-// PageInfo 分页信息
-type PageInfo struct {
-	PageIdx uint32 `json:"page_idx"` // 页数(从1开始计数)
-	Size    uint32 `json:"size"`     // 页大小
+// DataRef 逻辑数据定位。
+type DataRef struct {
+	WorkspaceID  string `json:"workspace_id"`
+	DatasetID    string `json:"dataset_id"`
+	InstrumentID string `json:"instrument_id,omitempty"`
+	ExchangeID   string `json:"exchange_id,omitempty"`
 }
 
-// QueryObjectResponse QueryObject 响应结构
-type QueryObjectResponse struct {
-	RetInfo    RetInfo     `json:"ret_info"`
-	Total      Uint64Value `json:"total"`
-	ObjectRows []ObjectRow `json:"object_rows"`
+// Page 分页信息。
+type Page struct {
+	Page uint32 `json:"page"`
+	Size uint32 `json:"size"`
 }
 
-// Uint64Value supports numeric or string totals.
+// QueryRecordsResponse QueryRecords 响应结构。
+type QueryRecordsResponse struct {
+	RetInfo    RetInfo    `json:"ret_info"`
+	Records    []Record   `json:"records"`
+	PageResult PageResult `json:"page_result"`
+}
+
+// PageResult 分页结果。
+type PageResult struct {
+	Page    uint32      `json:"page"`
+	Size    uint32      `json:"size"`
+	Total   Uint64Value `json:"total"`
+	HasMore bool        `json:"has_more"`
+}
+
+// Uint64Value 支持数字或字符串形式的 total。
 type Uint64Value uint64
 
 // UnmarshalJSON accepts numbers or quoted numbers.
@@ -244,19 +264,19 @@ func (u *Uint64Value) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// AuthInfo 鉴权信息
+// AuthInfo 鉴权信息。
 type AuthInfo struct {
 	AppID  string `json:"app_id"`
 	AppKey string `json:"app_key"`
 }
 
-// ObjectRow 对象行
-type ObjectRow struct {
-	ObjectID string                 `json:"object_id"`
-	Fields   map[string]interface{} `json:"fields,omitempty"`
+// Record 普通结构化记录。
+type Record struct {
+	RecordID string  `json:"record_id"`
+	DataRef  DataRef `json:"data_ref"`
 }
 
-// RetInfo 返回信息
+// RetInfo 返回信息。
 type RetInfo struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`

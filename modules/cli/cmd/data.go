@@ -7,17 +7,14 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/pkg/quantstore"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/genv2"
 	"github.com/spf13/cobra"
 )
 
 var (
 	dataStorageRoot string
 	dataCSVFile     string
-	dataWorkspaceID string
-	dataExchangeID  string
 	dataDatasetID   string
-	dataInstrument  string
+	dataSubjectID   string
 	dataFreq        string
 	dataTimeColumn  string
 	dataDimensions  []string
@@ -40,26 +37,22 @@ var dataCSVImportCmd = &cobra.Command{
 		if dataCSVFile == "" {
 			return fmt.Errorf("必须指定 --file")
 		}
-		instrumentID := dataInstrument
-		if instrumentID == "" {
-			instrumentID = strings.TrimSuffix(filepath.Base(dataCSVFile), filepath.Ext(dataCSVFile))
+		subjectID := dataSubjectID
+		if subjectID == "" {
+			subjectID = strings.TrimSuffix(filepath.Base(dataCSVFile), filepath.Ext(dataCSVFile))
 		}
 		opts := quantstore.CSVImportOptions{
-			WorkspaceID:     defaultFlag(dataWorkspaceID, "default"),
-			DatasetID:       defaultFlag(dataDatasetID, "binance_spot_kline_1m"),
-			InstrumentID:    instrumentID,
-			ExchangeID:      defaultFlag(dataExchangeID, "BINANCE"),
-			Freq:            defaultFlag(dataFreq, "1m"),
-			TimeColumn:      defaultFlag(dataTimeColumn, "candle_begin_time"),
-			DimensionValues: parseDimensions(dataDimensions),
+			DatasetID:  defaultFlag(dataDatasetID, "binance_spot_kline_1m"),
+			SubjectID:  subjectID,
+			Freq:       defaultFlag(dataFreq, "1m"),
+			TimeColumn: defaultFlag(dataTimeColumn, "candle_begin_time"),
+			Dimensions: parseDimensions(dataDimensions),
 		}
 		store := quantstore.New(dataStorageRoot)
-		affected, err := store.ImportCSV(context.Background(), dataCSVFile, opts)
-		if err != nil {
+		if err := store.ImportCSV(context.Background(), dataCSVFile, opts); err != nil {
 			return err
 		}
-		fmt.Printf("imported rows=%d workspace=%s dataset=%s instrument=%s root=%s\n",
-			affected, opts.WorkspaceID, opts.DatasetID, opts.InstrumentID, store.Root())
+		fmt.Printf("imported dataset=%s subject=%s root=%s\n", opts.DatasetID, opts.SubjectID, store.Root())
 		return nil
 	},
 }
@@ -71,23 +64,21 @@ func init() {
 
 	dataCSVImportCmd.Flags().StringVar(&dataStorageRoot, "storage-root", "", "本地存储根目录，默认读取 MOOX_STORAGE_HOME 或 var/storage")
 	dataCSVImportCmd.Flags().StringVar(&dataCSVFile, "file", "", "CSV 文件路径")
-	dataCSVImportCmd.Flags().StringVar(&dataWorkspaceID, "workspace", "default", "Workspace ID")
-	dataCSVImportCmd.Flags().StringVar(&dataExchangeID, "exchange", "BINANCE", "Exchange ID")
 	dataCSVImportCmd.Flags().StringVar(&dataDatasetID, "dataset", "binance_spot_kline_1m", "DataSet ID")
-	dataCSVImportCmd.Flags().StringVar(&dataInstrument, "instrument", "", "Instrument ID，默认取文件名")
+	dataCSVImportCmd.Flags().StringVar(&dataSubjectID, "subject", "", "Subject ID，默认取文件名")
 	dataCSVImportCmd.Flags().StringVar(&dataFreq, "freq", "1m", "K 线频率")
 	dataCSVImportCmd.Flags().StringVar(&dataTimeColumn, "time-column", "candle_begin_time", "时间列名")
 	dataCSVImportCmd.Flags().StringArrayVar(&dataDimensions, "dimension", nil, "自定义维度，格式 name=value，可重复")
 }
 
-func parseDimensions(items []string) []*pb.DimensionValue {
-	values := make([]*pb.DimensionValue, 0, len(items))
+func parseDimensions(items []string) map[string]string {
+	values := make(map[string]string, len(items))
 	for _, item := range items {
 		name, value, ok := strings.Cut(item, "=")
 		if !ok || strings.TrimSpace(name) == "" {
 			continue
 		}
-		values = append(values, &pb.DimensionValue{Name: strings.TrimSpace(name), Value: strings.TrimSpace(value)})
+		values[strings.TrimSpace(name)] = strings.TrimSpace(value)
 	}
 	return values
 }

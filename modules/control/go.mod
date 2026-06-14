@@ -16,8 +16,8 @@ require (
 	github.com/matoous/go-nanoid/v2 v2.1.0
 	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
+	github.com/mooyang-code/moox/modules/control/proto/controlgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/control/proto/gen v0.0.0-20250626155508-b6cf71b7b8d0
-	github.com/mooyang-code/moox/modules/control/proto/genv2 v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.12.1
 	github.com/nats-io/nats.go v1.47.0
 	github.com/orcaman/concurrent-map/v2 v2.0.1
@@ -41,7 +41,7 @@ require (
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
 )
 
-replace github.com/mooyang-code/moox/modules/control/proto/genv2 => ./proto/genv2
+replace github.com/mooyang-code/moox/modules/control/proto/controlgen => ./proto/controlgen
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect

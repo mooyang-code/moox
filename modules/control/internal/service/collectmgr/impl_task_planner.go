@@ -97,7 +97,7 @@ func (s *TaskPlannerServiceImpl) createInstanceForObject(
 	// 5. 提取 symbol 和 interval
 	symbol, interval := s.parseObject(object, rule.DataType, params)
 
-	// 6. 构建实例对象（v2.0: 使用新字段）
+	// 6. 构建实例对象（使用新增字段）
 	instance := &model.CollectorTaskInstance{
 		TaskID:          taskID,
 		RuleID:          rule.RuleID,

@@ -253,7 +253,7 @@ func (h *CollectorTaskInstanceHandler) StopTaskInstance(c *gin.Context) {
 
 // ReportTaskStatusRequest 上报任务状态请求
 type ReportTaskStatusRequest struct {
-	NodeID string `json:"node_id" binding:"required"` // v2.0: 节点ID（必填）
+	NodeID string `json:"node_id" binding:"required"` // 节点ID（必填）
 	Status int    `json:"status" binding:"required"`    // 状态码（0=待执行，1=执行中，2=成功，3=部分失败，4=失败）
 	Result string `json:"result"`                       // 执行结果（可选）
 }
@@ -272,7 +272,7 @@ func (h *CollectorTaskInstanceHandler) ReportTaskStatus(c *gin.Context) {
 		return
 	}
 
-	// 调用service层上报状态（v2.0: 新增 nodeID 参数）
+	// 调用service层上报状态（新增 nodeID 参数）
 	err := h.service.ReportTaskStatus(c.Request.Context(), instanceID, req.NodeID, req.Status, req.Result)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("状态上报失败", err))

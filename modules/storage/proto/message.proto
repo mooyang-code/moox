@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package trpc.storage.message;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
+
+import "data.proto";
+
+// DataRowsChangedEvent 表示事实数据行变更事件。
+message DataRowsChangedEvent {
+  // event_id 是事件 ID。
+  string event_id = 1;
+  // dataset_id 是事实数据集 ID。
+  string dataset_id = 2;
+  // subject_id 是数据对象 ID。
+  string subject_id = 3;
+  // event_time 是事件产生时间。
+  string event_time = 4;
+  // rows 是本次变更涉及的数据行。
+  repeated data.DataRow rows = 5;
+  // attrs 是附加事件属性。
+  map<string, string> attrs = 6;
+}

@@ -61,7 +61,7 @@ bin/moox-cli data csv import \
 
 ## Development Rules
 
-- Prefer the new v2 protocol under `modules/storage/proto/*.proto` and `modules/control/proto/*.proto`.
+- Prefer the new protocol under `modules/storage/proto/*.proto` and `modules/control/proto/*.proto`.
 - Keep legacy proto files under `proto/legacy` until their old call paths are deleted.
 - Do not reintroduce `object_id` into public APIs. Use Workspace, Exchange, Instrument, DataSet, DataView, Field, FactorDef, and FactorInstance.
 - Use `internal_symbol` for normalized symbols and `InstrumentAlias.external_symbol` for source-specific symbols.

@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package trpc.storage.common;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
+
+// AuthInfo 表示调用方身份和链路追踪信息。
+message AuthInfo {
+  // app_id 是调用方应用或服务 ID。
+  string app_id = 1;
+  // app_key 是调用方凭证，服务端应按敏感信息处理。
+  string app_key = 2;
+  // operator 是发起请求的用户、机器人或任务名。
+  string operator = 3;
+  // request_id 是调用方传入的链路追踪 ID，也可用于幂等检查。
+  string request_id = 4;
+}
+
+// RetInfo 表示通用接口返回状态。
+message RetInfo {
+  // code 是机器可读的返回码。
+  ErrorCode code = 1;
+  // msg 是面向人的返回说明。
+  string msg = 2;
+}
+
+// Page 表示分页请求参数。
+message Page {
+  // page 是页号，从 1 开始；为 0 时由服务端使用默认值。
+  uint32 page = 1;
+  // size 是每页条数；为 0 时由服务端使用默认值。
+  uint32 size = 2;
+  // cursor 是游标分页使用的上一页返回游标；普通分页可为空。
+  string cursor = 3;
+}
+
+// PageResult 表示分页返回结果。
+message PageResult {
+  // page 是本次返回对应的页号。
+  uint32 page = 1;
+  // size 是本次返回采用的每页条数。
+  uint32 size = 2;
+  // total 是结果总数；无法低成本计算时可为 0。
+  uint64 total = 3;
+  // has_more 表示是否还有更多结果。
+  bool has_more = 4;
+  // next_cursor 是下一页游标；普通分页可为空。
+  string next_cursor = 5;
+}
+
+// TimeRange 表示时间区间条件。
+message TimeRange {
+  // start_time 是时间区间下界，格式遵循项目统一时间字符串。
+  string start_time = 1;
+  // end_time 是时间区间上界，格式与 start_time 一致。
+  string end_time = 2;
+  // start_inclusive 表示是否包含 start_time。
+  bool start_inclusive = 3;
+  // end_inclusive 表示是否包含 end_time。
+  bool end_inclusive = 4;
+}
+
+// ValueList 表示有序类型值列表。
+message ValueList {
+  // values 是列表中的值。
+  repeated TypedValue values = 1;
+}
+
+// TypedValue 是通用类型值容器，用于数据列、过滤参数和查询结果。
+message TypedValue {
+  oneof value {
+    // string_value 表示字符串值。
+    string string_value = 1;
+    // int_value 表示整数值。
+    int64 int_value = 2;
+    // double_value 表示浮点数值。
+    double double_value = 3;
+    // bool_value 表示布尔值。
+    bool bool_value = 4;
+    // time_value 表示时间值，使用项目统一时间字符串格式。
+    string time_value = 5;
+    // json_value 表示 JSON 文本值。
+    string json_value = 6;
+    // bytes_value 表示二进制值。
+    bytes bytes_value = 7;
+    // list_value 表示列表值。
+    ValueList list_value = 8;
+  }
+}
+
+// DimensionValue 表示一个业务维度值，例如复权类型或报告期。
+message DimensionValue {
+  // name 是业务维度名称。
+  string name = 1;
+  // value 是业务维度取值。
+  string value = 2;
+}
+
+// DimensionValues 表示业务维度值集合。
+message DimensionValues {
+  // values 是业务维度值列表。
+  repeated DimensionValue values = 1;
+}
+
+// FieldValue 表示一个旧式字段值。新读写协议优先使用 data.ColumnValue。
+message FieldValue {
+  // field_id 是字段 ID，可为空。
+  string field_id = 1;
+  // field_name 是对调用方暴露的稳定字段名。
+  string field_name = 2;
+  // value_type 是值的逻辑类型。
+  FieldValueType value_type = 3;
+  // value 是字段实际取值。
+  TypedValue value = 4;
+}
+
+// SortSpec 表示排序条件。
+message SortSpec {
+  // field_name 是排序字段名。
+  string field_name = 1;
+  // desc 为 true 时按降序排序，为 false 时按升序排序。
+  bool desc = 2;
+}
+
+// FilterExpr 表示服务端支持的过滤表达式。
+message FilterExpr {
+  // expr 是表达式文本，服务端只接受受支持的表达式子集。
+  string expr = 1;
+  // args 是表达式使用的命名参数。
+  map<string, TypedValue> args = 2;
+}
+
+// WriteMode 表示写入模式。
+enum WriteMode {
+  // WRITE_MODE_UNSPECIFIED 表示由服务端使用默认策略。
+  WRITE_MODE_UNSPECIFIED = 0;
+  // WRITE_MODE_UPSERT 表示插入新数据，并更新相同逻辑键的已有数据。
+  WRITE_MODE_UPSERT = 1;
+  // WRITE_MODE_APPEND 表示只追加新数据。
+  WRITE_MODE_APPEND = 2;
+  // WRITE_MODE_OVERWRITE 表示覆盖匹配的逻辑数据切片。
+  WRITE_MODE_OVERWRITE = 3;
+}
+
+// DataKind 表示数据集的结构形态。
+enum DataKind {
+  // DATA_KIND_UNSPECIFIED 表示未指定结构形态。
+  DATA_KIND_UNSPECIFIED = 0;
+  // DATA_KIND_OBJECT 表示对象型数据，例如公司资料。
+  DATA_KIND_OBJECT = 1;
+  // DATA_KIND_TIME_SERIES 表示时序数据，例如 K 线或 tick。
+  DATA_KIND_TIME_SERIES = 2;
+  // DATA_KIND_SNAPSHOT 表示快照数据，例如最新行情状态。
+  DATA_KIND_SNAPSHOT = 3;
+  // DATA_KIND_EVENT 表示事件数据，例如公告或成交事件。
+  DATA_KIND_EVENT = 4;
+  // DATA_KIND_DOCUMENT 表示文档型数据，例如新闻或研报。
+  DATA_KIND_DOCUMENT = 5;
+  // DATA_KIND_TABLE 表示通用表格数据，例如榜单。
+  DATA_KIND_TABLE = 6;
+}
+
+// FieldValueType 表示字段、因子和查询列的逻辑值类型。
+enum FieldValueType {
+  // FIELD_VALUE_TYPE_UNSPECIFIED 表示未指定值类型。
+  FIELD_VALUE_TYPE_UNSPECIFIED = 0;
+  // FIELD_VALUE_TYPE_STRING 表示字符串类型。
+  FIELD_VALUE_TYPE_STRING = 1;
+  // FIELD_VALUE_TYPE_INT 表示整数类型。
+  FIELD_VALUE_TYPE_INT = 2;
+  // FIELD_VALUE_TYPE_DOUBLE 表示浮点数类型。
+  FIELD_VALUE_TYPE_DOUBLE = 3;
+  // FIELD_VALUE_TYPE_BOOL 表示布尔类型。
+  FIELD_VALUE_TYPE_BOOL = 4;
+  // FIELD_VALUE_TYPE_TIME 表示时间类型。
+  FIELD_VALUE_TYPE_TIME = 5;
+  // FIELD_VALUE_TYPE_JSON 表示 JSON 文本类型。
+  FIELD_VALUE_TYPE_JSON = 6;
+  // FIELD_VALUE_TYPE_BYTES 表示二进制类型。
+  FIELD_VALUE_TYPE_BYTES = 7;
+}
+
+// ColumnSourceType 表示数据列或查询列的来源。
+enum ColumnSourceType {
+  // COLUMN_SOURCE_TYPE_UNSPECIFIED 表示未指定列来源。
+  COLUMN_SOURCE_TYPE_UNSPECIFIED = 0;
+  // COLUMN_SOURCE_TYPE_FIELD 表示列来自普通字段。
+  COLUMN_SOURCE_TYPE_FIELD = 1;
+  // COLUMN_SOURCE_TYPE_FACTOR 表示列来自已参数化的因子结果。
+  COLUMN_SOURCE_TYPE_FACTOR = 2;
+  // COLUMN_SOURCE_TYPE_EXPRESSION 表示列来自服务端表达式。
+  COLUMN_SOURCE_TYPE_EXPRESSION = 3;
+  // COLUMN_SOURCE_TYPE_SYSTEM 表示列来自系统列，例如 subject_id、data_time 或 freq。
+  COLUMN_SOURCE_TYPE_SYSTEM = 4;
+}
+
+// ErrorCode 表示存储接口通用错误码。
+enum ErrorCode {
+  option allow_alias = true;
+
+  // SUCCESS 表示请求成功。
+  SUCCESS = 0;
+  // INVALID_PARAM 表示请求参数错误。
+  INVALID_PARAM = 1;
+  // NO_AUTH 表示未认证或认证失败。
+  NO_AUTH = 2;
+  // NO_PERMISSION 表示没有操作权限。
+  NO_PERMISSION = 3;
+  // INNER_ERR 表示服务内部错误。
+  INNER_ERR = 4;
+  // SPACE_NOT_FOUND 表示使用空间不存在。
+  SPACE_NOT_FOUND = 5;
+  // WORKSPACE_NOT_FOUND 是旧命名别名，后续只在兼容元数据代码中使用。
+  WORKSPACE_NOT_FOUND = 5;
+  // DATASET_NOT_FOUND 表示数据集不存在。
+  DATASET_NOT_FOUND = 6;
+  // SUBJECT_NOT_FOUND 表示数据对象不存在。
+  SUBJECT_NOT_FOUND = 7;
+  // INSTRUMENT_NOT_FOUND 是旧命名别名，后续只在兼容元数据代码中使用。
+  INSTRUMENT_NOT_FOUND = 7;
+  // FIELD_NOT_FOUND 表示字段不存在。
+  FIELD_NOT_FOUND = 8;
+  // FACTOR_NOT_FOUND 表示因子不存在。
+  FACTOR_NOT_FOUND = 9;
+  // FACTOR_INSTANCE_NOT_FOUND 是旧命名别名，后续只在兼容元数据代码中使用。
+  FACTOR_INSTANCE_NOT_FOUND = 9;
+  // VIEW_NOT_FOUND 表示查询视图不存在。
+  VIEW_NOT_FOUND = 10;
+  // VIEW_NOT_READY 表示查询视图尚未就绪。
+  VIEW_NOT_READY = 11;
+  // DATA_VIEW_NOT_READY 是旧命名别名，后续只在兼容元数据代码中使用。
+  DATA_VIEW_NOT_READY = 11;
+  // VIEW_COLUMN_NOT_FOUND 表示查询视图列不存在或无法解析。
+  VIEW_COLUMN_NOT_FOUND = 12;
+  // DATA_VIEW_COLUMN_NOT_FOUND 是旧命名别名，后续只在兼容元数据代码中使用。
+  DATA_VIEW_COLUMN_NOT_FOUND = 12;
+  // QUERY_SHAPE_UNSUPPORTED 表示不支持当前查询形态。
+  QUERY_SHAPE_UNSUPPORTED = 13;
+  // ROUTE_NOT_FOUND 表示未找到匹配的存储路由。
+  ROUTE_NOT_FOUND = 14;
+  // ROUTE_CROSS_DEVICE_UNSUPPORTED 表示不支持当前跨设备路由。
+  ROUTE_CROSS_DEVICE_UNSUPPORTED = 15;
+  // ENGINE_CAPABILITY_UNSUPPORTED 表示所选存储引擎不支持该能力。
+  ENGINE_CAPABILITY_UNSUPPORTED = 16;
+  // DIMENSION_VALUE_INVALID 表示业务维度取值不合法。
+  DIMENSION_VALUE_INVALID = 17;
+  // SUBJECT_NOT_IN_DATASET 表示数据对象未登记到目标数据集。
+  SUBJECT_NOT_IN_DATASET = 18;
+}

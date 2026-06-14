@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/avast/retry-go"
@@ -21,13 +22,6 @@ import (
 const (
 	InstTypeSPOT = "SPOT" // 现货
 	InstTypeSWAP = "SWAP" // 永续合约
-)
-
-const (
-	fieldTypeString = 1 // STR_FIELD
-	fieldTypeInt    = 2 // INT_FIELD
-	fieldTypeFloat  = 3 // FLOAT_FIELD
-	updateTypeSet   = 1 // SET_UPDATE
 )
 
 // KlineCollector K线数据采集器
@@ -148,11 +142,6 @@ func (c *KlineCollector) reportKlines(ctx context.Context, params *collector.Col
 		return nil
 	}
 
-	datasetID, err := datasetIDFromInstType(params.InstType)
-	if err != nil {
-		return err
-	}
-
 	storageURL := config.GetStorageURL()
 	if storageURL == "" {
 		return fmt.Errorf("未配置存储服务地址")
@@ -163,33 +152,27 @@ func (c *KlineCollector) reportKlines(ctx context.Context, params *collector.Col
 		return err
 	}
 
-	// 将交易对作为 rowID 传递给 buildUpdateDataRows
-	dataRows, err := buildUpdateDataRows(klines, params.Symbol)
+	datasetID, err := klineDataSetID(params.InstType, freq)
 	if err != nil {
 		return err
 	}
 
-	dataList := UpdateDataList{
-		DataKey: DataKey{
-			ProjectID: 1,
-			DatasetID: datasetID,
-			ObjectID:  params.Symbol,
-			Freq:      freq,
-		},
-		DataRows: dataRows,
+	rows, err := buildKlineRows(klines, params.Symbol, datasetID, freq)
+	if err != nil {
+		return err
 	}
 
-	return c.sendSetDataWithRetry(ctx, storageURL, []UpdateDataList{dataList})
+	return c.sendWriteRowsWithRetry(ctx, storageURL, rows)
 }
 
-func datasetIDFromInstType(instType string) (int32, error) {
+func klineDataSetID(instType, freq string) (string, error) {
 	switch instType {
 	case InstTypeSWAP:
-		return 100, nil
+		return "binance_swap_kline_" + strings.ToLower(freq), nil
 	case InstTypeSPOT:
-		return 101, nil
+		return "binance_spot_kline_" + strings.ToLower(freq), nil
 	default:
-		return 0, fmt.Errorf("不支持的产品类型: %s", instType)
+		return "", fmt.Errorf("不支持的产品类型: %s", instType)
 	}
 }
 
@@ -214,8 +197,8 @@ func normalizeFreq(interval string) (string, error) {
 	}
 }
 
-func buildUpdateDataRows(klines []*market.Kline, symbol string) ([]UpdateDataRow, error) {
-	rows := make([]UpdateDataRow, 0, len(klines))
+func buildKlineRows(klines []*market.Kline, symbol, datasetID, freq string) ([]DataRow, error) {
+	rows := make([]DataRow, 0, len(klines))
 	for _, kline := range klines {
 		openTime := formatKlineTime(kline.OpenTime)
 		closeTime := formatKlineTime(kline.CloseTime)
@@ -245,86 +228,24 @@ func buildUpdateDataRows(klines []*market.Kline, symbol string) ([]UpdateDataRow
 			return nil, fmt.Errorf("解析成交额失败: %w", err)
 		}
 
-		fields := map[string]DataUpdateField{
-			"candle_begin_time": {
-				FieldKey:   "candle_begin_time",
-				FieldType:  fieldTypeString,
-				UpdateType: updateTypeSet,
-				SimpleValue: DataSimpleValue{
-					Str: stringPtr(openTime),
-				},
+		rows = append(rows, DataRow{
+			Slice: DataSlice{
+				DatasetID: datasetID,
+				SubjectID: symbol,
+				Freq:      freq,
 			},
-			"candle_end_time": {
-				FieldKey:   "candle_end_time",
-				FieldType:  fieldTypeString,
-				UpdateType: updateTypeSet,
-				SimpleValue: DataSimpleValue{
-					Str: stringPtr(closeTime),
-				},
+			DataTime: openTime,
+			Columns: []ColumnValue{
+				stringField("candle_begin_time", openTime),
+				stringField("candle_end_time", closeTime),
+				doubleField("open", openValue),
+				doubleField("high", highValue),
+				doubleField("low", lowValue),
+				doubleField("close", closeValue),
+				doubleField("volume", volumeValue),
+				doubleField("quote_volume", quoteVolumeValue),
+				intField("trade_num", kline.TradeCount),
 			},
-			"open": {
-				FieldKey:   "open",
-				FieldType:  fieldTypeFloat,
-				UpdateType: updateTypeSet,
-				SimpleValue: DataSimpleValue{
-					Float: float64Ptr(openValue),
-				},
-			},
-			"high": {
-				FieldKey:   "high",
-				FieldType:  fieldTypeFloat,
-				UpdateType: updateTypeSet,
-				SimpleValue: DataSimpleValue{
-					Float: float64Ptr(highValue),
-				},
-			},
-			"low": {
-				FieldKey:   "low",
-				FieldType:  fieldTypeFloat,
-				UpdateType: updateTypeSet,
-				SimpleValue: DataSimpleValue{
-					Float: float64Ptr(lowValue),
-				},
-			},
-			"close": {
-				FieldKey:   "close",
-				FieldType:  fieldTypeFloat,
-				UpdateType: updateTypeSet,
-				SimpleValue: DataSimpleValue{
-					Float: float64Ptr(closeValue),
-				},
-			},
-			"volume": {
-				FieldKey:   "volume",
-				FieldType:  fieldTypeFloat,
-				UpdateType: updateTypeSet,
-				SimpleValue: DataSimpleValue{
-					Float: float64Ptr(volumeValue),
-				},
-			},
-			"quote_volume": {
-				FieldKey:   "quote_volume",
-				FieldType:  fieldTypeFloat,
-				UpdateType: updateTypeSet,
-				SimpleValue: DataSimpleValue{
-					Float: float64Ptr(quoteVolumeValue),
-				},
-			},
-			"trade_num": {
-				FieldKey:   "trade_num",
-				FieldType:  fieldTypeInt,
-				UpdateType: updateTypeSet,
-				SimpleValue: DataSimpleValue{
-					Int: int64Ptr(kline.TradeCount),
-				},
-			},
-		}
-
-		// 使用交易对作为 rowID，时间作为 times
-		rows = append(rows, UpdateDataRow{
-			Times:  openTime,
-			RowID:  symbol, // 使用交易对作为 rowID
-			Fields: fields,
 		})
 	}
 	return rows, nil
@@ -334,10 +255,10 @@ func formatKlineTime(t time.Time) string {
 	return t.UTC().Format("2006-01-02 15:04:05")
 }
 
-func (c *KlineCollector) sendSetDataWithRetry(ctx context.Context, storageURL string, dataList []UpdateDataList) error {
+func (c *KlineCollector) sendWriteRowsWithRetry(ctx context.Context, storageURL string, rows []DataRow) error {
 	return retry.Do(
 		func() error {
-			return c.sendSetData(ctx, storageURL, dataList)
+			return c.sendWriteRows(ctx, storageURL, rows, "kline-sync")
 		},
 		retry.Attempts(3),
 		retry.Delay(500*time.Millisecond),
@@ -349,13 +270,14 @@ func (c *KlineCollector) sendSetDataWithRetry(ctx context.Context, storageURL st
 	)
 }
 
-func (c *KlineCollector) sendSetData(ctx context.Context, storageURL string, dataList []UpdateDataList) error {
-	request := &SetDataRequest{
+func (c *KlineCollector) sendWriteRows(ctx context.Context, storageURL string, rows []DataRow, appKey string) error {
+	request := &WriteRowsRequest{
 		AuthInfo: AuthInfo{
 			AppID:  "data-collector",
-			AppKey: "kline-sync",
+			AppKey: appKey,
 		},
-		DataList: dataList,
+		WriteMode: "WRITE_MODE_APPEND",
+		Rows:      rows,
 	}
 
 	data, err := json.Marshal(request)
@@ -363,7 +285,7 @@ func (c *KlineCollector) sendSetData(ctx context.Context, storageURL string, dat
 		return fmt.Errorf("序列化失败: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/trpc.storage.access.Access/SetData", storageURL)
+	url := fmt.Sprintf("%s/trpc.storage.data.DataService/WriteRows", storageURL)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %w", err)
@@ -384,66 +306,63 @@ func (c *KlineCollector) sendSetData(ctx context.Context, storageURL string, dat
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, respBody.String())
 	}
 
-	var setResp SetDataResponse
-	if err := json.Unmarshal(respBody.Bytes(), &setResp); err != nil {
+	var writeResp WriteRowsResponse
+	if err := json.Unmarshal(respBody.Bytes(), &writeResp); err != nil {
 		return fmt.Errorf("解析响应失败: %w", err)
 	}
 
-	if setResp.RetInfo.Code != 0 {
-		return fmt.Errorf("错误码 %d: %s", setResp.RetInfo.Code, setResp.RetInfo.Msg)
+	if writeResp.RetInfo.Code != 0 {
+		return fmt.Errorf("错误码 %d: %s", writeResp.RetInfo.Code, writeResp.RetInfo.Msg)
 	}
 
 	return nil
 }
 
-func stringPtr(value string) *string {
-	return &value
+type WriteRowsRequest struct {
+	AuthInfo  AuthInfo  `json:"auth_info"`
+	WriteMode string    `json:"write_mode"`
+	Rows      []DataRow `json:"rows"`
 }
 
-func float64Ptr(value float64) *float64 {
-	return &value
-}
-
-func int64Ptr(value int64) *int64 {
-	return &value
-}
-
-type SetDataRequest struct {
-	AuthInfo AuthInfo         `json:"auth_info"`
-	DataList []UpdateDataList `json:"data_list"`
-}
-
-type SetDataResponse struct {
+type WriteRowsResponse struct {
 	RetInfo RetInfo `json:"ret_info"`
 }
 
-type DataKey struct {
-	ProjectID int32  `json:"project_id"`
-	DatasetID int32  `json:"dataset_id"`
-	ObjectID  string `json:"object_id"`
-	Freq      string `json:"freq"`
+type DataSlice struct {
+	DatasetID  string            `json:"dataset_id"`
+	SubjectID  string            `json:"subject_id"`
+	Freq       string            `json:"freq,omitempty"`
+	Dimensions map[string]string `json:"dimensions,omitempty"`
 }
 
-type UpdateDataList struct {
-	DataKey  DataKey         `json:"data_key"`
-	DataRows []UpdateDataRow `json:"data_rows"`
+type DataRow struct {
+	Slice    DataSlice         `json:"slice"`
+	DataTime string            `json:"data_time,omitempty"`
+	RowID    string            `json:"row_id,omitempty"`
+	Columns  []ColumnValue     `json:"columns"`
+	Attrs    map[string]string `json:"attrs,omitempty"`
 }
 
-type UpdateDataRow struct {
-	Times  string                     `json:"times"`
-	RowID  string                     `json:"row_id,omitempty"`
-	Fields map[string]DataUpdateField `json:"fields"`
+type ColumnValue struct {
+	ColumnName string     `json:"column_name"`
+	ValueType  string     `json:"value_type"`
+	Value      TypedValue `json:"value"`
 }
 
-type DataUpdateField struct {
-	FieldKey    string          `json:"field_key"`
-	FieldType   int             `json:"field_type"`
-	UpdateType  int             `json:"update_type"`
-	SimpleValue DataSimpleValue `json:"simple_value"`
+type TypedValue struct {
+	StringValue *string  `json:"string_value,omitempty"`
+	IntValue    *int64   `json:"int_value,omitempty"`
+	DoubleValue *float64 `json:"double_value,omitempty"`
 }
 
-type DataSimpleValue struct {
-	Str   *string  `json:"str,omitempty"`
-	Int   *int64   `json:"int,omitempty"`
-	Float *float64 `json:"float,omitempty"`
+func stringField(name, value string) ColumnValue {
+	return ColumnValue{ColumnName: name, ValueType: "FIELD_VALUE_TYPE_STRING", Value: TypedValue{StringValue: &value}}
+}
+
+func intField(name string, value int64) ColumnValue {
+	return ColumnValue{ColumnName: name, ValueType: "FIELD_VALUE_TYPE_INT", Value: TypedValue{IntValue: &value}}
+}
+
+func doubleField(name string, value float64) ColumnValue {
+	return ColumnValue{ColumnName: name, ValueType: "FIELD_VALUE_TYPE_DOUBLE", Value: TypedValue{DoubleValue: &value}}
 }

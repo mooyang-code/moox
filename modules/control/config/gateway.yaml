@@ -56,7 +56,7 @@ gateway:
   services:
     # 存储服务配置
     storage:
-      path: "trpc.storage.access.Access"
+      path: "trpc.storage.data.DataService"
 
     # 认证服务配置
     auth:
@@ -64,9 +64,9 @@ gateway:
 
     # 元数据服务配置
     metadata:
-      path: "trpc.storage.metadata.MetaAdmin"
+      path: "trpc.storage.metadata.MetadataService"
     field:
-      path: "trpc.storage.metadata.MetaField"
+      path: "trpc.storage.metadata.MetadataService"
 
     # 管理服务配置
     admin:

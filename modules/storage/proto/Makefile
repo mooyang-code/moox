@@ -1,7 +1,7 @@
-PROTO_FILES := v2_common.proto v2_metadata.proto v2_data.proto v2_query.proto v2_adapter.proto v2_message.proto
-OUTPUT_DIR := ./genv2
+PROTO_FILES := common.proto metadata.proto data.proto query.proto adapter.proto message.proto
+OUTPUT_DIR := ./gen
 
-.PHONY: all clean legacy-list
+.PHONY: all clean
 
 all:
 	@mkdir -p $(OUTPUT_DIR)
@@ -17,6 +17,3 @@ all:
 
 clean:
 	rm -rf $(OUTPUT_DIR)/*.pb.go $(OUTPUT_DIR)/*.trpc.go
-
-legacy-list:
-	@find legacy -maxdepth 1 -name '*.proto' -print | sort

@@ -5,11 +5,10 @@ use (
 	./modules/cli
 	./modules/collector
 	./modules/control
+	./modules/control/proto/controlgen
 	./modules/control/proto/gen
-	./modules/control/proto/genv2
 	./modules/factor
 	./modules/order
 	./modules/storage
 	./modules/storage/proto/gen
-	./modules/storage/proto/genv2
 )

@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package trpc.storage.data;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
+
+import "common.proto";
+
+// DataSlice 表示一次事实读写的逻辑数据切片。
+message DataSlice {
+  // dataset_id 是事实数据集 ID，所有用户写入都以数据集为入口。
+  string dataset_id = 1;
+  // subject_id 是数据对象 ID，例如交易标的、榜单、新闻源或账户。
+  string subject_id = 2;
+  // freq 是时序频率，例如 1m、1h、1d；非时序数据可为空。
+  string freq = 3;
+  // dimensions 是参与逻辑定位的低基数业务维度，不是普通过滤条件。
+  // 只有当某个值决定“是否为同一条事实序列或事实切片”时才放在这里。
+  map<string, string> dimensions = 4;
+}
+
+// ColumnValue 表示一列数据值。
+message ColumnValue {
+  // column_name 是 DataSetColumn 中登记的列名。
+  string column_name = 1;
+  // value_type 是列值的逻辑类型。
+  common.FieldValueType value_type = 2;
+  // value 是列实际取值。
+  common.TypedValue value = 3;
+}
+
+// DataRow 表示一行事实数据。
+message DataRow {
+  // slice 是本行所属的数据切片。
+  DataSlice slice = 1;
+  // data_time 是本行代表的业务时间；对象型数据可为空。
+  string data_time = 2;
+  // row_id 是数据切片内的逻辑行 ID；为空时服务端按切片和时间生成逻辑键。
+  string row_id = 3;
+  // columns 是本行携带的列值，列名必须先登记到元数据。
+  repeated ColumnValue columns = 4;
+  // attrs 是不参与列契约的附加信息，默认不进入索引。
+  map<string, string> attrs = 5;
+}
+
+// ReadMode 表示读取方式。
+enum ReadMode {
+  // READ_MODE_UNSPECIFIED 表示由服务端使用默认读取方式。
+  READ_MODE_UNSPECIFIED = 0;
+  // READ_MODE_RANGE 表示按时间区间读取。
+  READ_MODE_RANGE = 1;
+  // READ_MODE_POINT 表示按 row_id 读取。
+  READ_MODE_POINT = 2;
+  // READ_MODE_LATEST_BEFORE 表示读取指定截面时间之前的最新行。
+  READ_MODE_LATEST_BEFORE = 3;
+}
+
+// WriteRowsReq 表示写入事实数据行的请求。
+message WriteRowsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // write_mode 表示本次写入如何处理相同逻辑键的已有数据。
+  common.WriteMode write_mode = 2;
+  // rows 是待写入的数据行。
+  repeated DataRow rows = 3;
+}
+
+// WriteRowsRsp 表示事实数据行写入结果。
+message WriteRowsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+}
+
+// ReadRowsReq 表示读取事实数据行的请求。
+message ReadRowsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // slice 是要读取的数据切片。
+  DataSlice slice = 2;
+  // read_mode 是读取方式。
+  ReadMode read_mode = 3;
+  // time_range 是时间区间条件，适用于区间读取。
+  common.TimeRange time_range = 4;
+  // snapshot_time 是截面时间，适用于读取截面时间之前最新行。
+  string snapshot_time = 5;
+  // row_ids 是要读取的逻辑行 ID 列表，适用于点查。
+  repeated string row_ids = 6;
+  // column_names 是要返回的列名；为空时返回整行。
+  repeated string column_names = 7;
+  // page 是分页参数。
+  common.Page page = 8;
+}
+
+// ReadRowsRsp 表示事实数据行读取结果。
+message ReadRowsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // rows 是读取到的数据行。
+  repeated DataRow rows = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// DataService 是用户侧事实数据读写服务。
+service DataService {
+  // WriteRows 写入事实数据行，例如 K 线、公司资料、榜单、文档摘要或因子结果。
+  rpc WriteRows(WriteRowsReq) returns (WriteRowsRsp);
+  // ReadRows 按数据集、数据对象、频率、时间和列名读取事实数据行。
+  rpc ReadRows(ReadRowsReq) returns (ReadRowsRsp);
+}

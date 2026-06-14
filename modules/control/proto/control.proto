@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package trpc.moox.control;
 
-option go_package = "github.com/mooyang-code/moox/modules/control/proto/genv2;mooxpb";
+option go_package = "github.com/mooyang-code/moox/modules/control/proto/controlgen;mooxpb";
 
 import "common.proto";
 
