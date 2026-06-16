@@ -60,6 +60,14 @@ func TestStorageProtocolUsesCanonicalSurface(t *testing.T) {
 		requireNoProjectSourceContains(t, root, needle)
 	}
 
+	for _, needle := range []string{
+		"facts/",
+		".jsonl",
+		"CSVImportOptions",
+	} {
+		requireNoProjectSourceContains(t, root, needle)
+	}
+
 	for _, proto := range []string{"common.proto", "data.proto", "query.proto", "adapter.proto"} {
 		requireProtocolFileNotContains(t, filepath.Join(root, "proto", proto), []string{
 			"workspace_id",
