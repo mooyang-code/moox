@@ -19,55 +19,18 @@ func (s *Service) QueryView(ctx context.Context, req *pb.QueryViewReq) (*pb.Quer
 	if err != nil {
 		return &pb.QueryViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
 	}
-	datasetID := view.GetPrimaryDatasetId()
-	if datasetID == "" && len(view.GetDatasetIds()) > 0 {
-		datasetID = view.GetDatasetIds()[0]
+	if view.GetActiveResult() == "" {
+		return &pb.QueryViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_VIEW_NOT_FOUND, errText("view active_result is empty"))}, nil
 	}
-	if datasetID == "" {
-		return &pb.QueryViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_VIEW_NOT_FOUND, errText("view primary_dataset_id is required"))}, nil
+	viewStore, err := s.viewStore()
+	if err != nil {
+		return &pb.QueryViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-
-	readMode := pb.ReadMode_READ_MODE_RANGE
-	snapshotTime := ""
-	if req.GetQueryTime().GetSnapshotTime() != "" {
-		readMode = pb.ReadMode_READ_MODE_LATEST_BEFORE
-		snapshotTime = req.GetQueryTime().GetSnapshotTime()
+	columns, rows, page, err := viewStore.QueryView(ctx, view.GetActiveResult(), req)
+	if err != nil {
+		return &pb.QueryViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	subjectIDs := req.GetSubjectIds()
-	if len(subjectIDs) == 0 {
-		subjectIDs = []string{""}
-	}
-
-	var rows []*pb.QueryViewRow
-	var columns []*pb.QueryViewColumn
-	for _, subjectID := range subjectIDs {
-		readRows, _, err := s.store.ReadRows(
-			ctx,
-			&pb.DataScope{SpaceId: req.GetSpaceId(), DatasetId: datasetID, SubjectId: subjectID},
-			readMode,
-			req.GetQueryTime().GetTimeRange(),
-			snapshotTime,
-			nil,
-			req.GetColumnNames(),
-			req.GetPage(),
-		)
-		if err != nil {
-			return &pb.QueryViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-		}
-		if len(columns) == 0 {
-			columns = queryColumnsFromRows(req.GetColumnNames(), datasetID, readRows)
-		}
-		for _, row := range readRows {
-			rows = append(rows, &pb.QueryViewRow{
-				SubjectId: row.GetKey().GetScope().GetSubjectId(),
-				DataTime:  row.GetKey().GetDataTime(),
-				Values:    row.GetColumns(),
-			})
-		}
-	}
-	sortQueryViewRows(rows)
-	paged, page := pageSlice(rows, req.GetPage())
-	return &pb.QueryViewRsp{RetInfo: quantstore.Success("success"), Columns: columns, Rows: paged, PageResult: page}, nil
+	return &pb.QueryViewRsp{RetInfo: quantstore.Success("success"), Columns: columns, Rows: rows, PageResult: page}, nil
 }
 
 func (s *Service) SearchRows(ctx context.Context, req *pb.SearchRowsReq) (*pb.SearchRowsRsp, error) {
@@ -128,42 +91,6 @@ func (s *Service) SearchRows(ctx context.Context, req *pb.SearchRowsReq) (*pb.Se
 	sortSearchRows(matched, req.GetSorts())
 	paged, page := pageSlice(matched, req.GetPage())
 	return &pb.SearchRowsRsp{RetInfo: quantstore.Success("success"), Rows: paged, PageResult: page}, nil
-}
-
-func queryColumnsFromRows(names []string, datasetID string, rows []*pb.DataRow) []*pb.QueryViewColumn {
-	if len(names) > 0 {
-		columns := make([]*pb.QueryViewColumn, 0, len(names))
-		for _, name := range names {
-			columns = append(columns, &pb.QueryViewColumn{
-				ColumnName: name,
-				OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-				DatasetId:  datasetID,
-				OriginId:   datasetColumnOriginID(datasetID, name),
-			})
-		}
-		return columns
-	}
-	if len(rows) == 0 {
-		return nil
-	}
-	columns := make([]*pb.QueryViewColumn, 0, len(rows[0].GetColumns()))
-	for _, column := range rows[0].GetColumns() {
-		columns = append(columns, &pb.QueryViewColumn{
-			ColumnName: column.GetColumnName(),
-			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-			DatasetId:  datasetID,
-			OriginId:   datasetColumnOriginID(datasetID, column.GetColumnName()),
-			ValueType:  column.GetValueType(),
-		})
-	}
-	return columns
-}
-
-func datasetColumnOriginID(datasetID, columnName string) string {
-	if datasetID == "" {
-		return columnName
-	}
-	return datasetID + "." + columnName
 }
 
 func textRowMatch(row *pb.DataRow, query string) bool {

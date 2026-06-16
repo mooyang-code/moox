@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/services/adapter"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/changefeed"
 	devicebleve "github.com/mooyang-code/moox/modules/storage/internal/services/device/bleve"
+	deviceduckdb "github.com/mooyang-code/moox/modules/storage/internal/services/device/duckdb"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/metadata"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/services/metadata/sqlite"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/router"
@@ -66,6 +67,7 @@ func NewServiceWithOptions(opts Options) *Service {
 }
 
 var searchIndexes sync.Map
+var viewStores sync.Map
 
 func (s *Service) searchIndex() (*devicebleve.Index, error) {
 	path := filepath.Join(s.root, "bleve", "default")
@@ -81,6 +83,22 @@ func (s *Service) searchIndex() (*devicebleve.Index, error) {
 		_ = index.Close()
 	}
 	return actual.(*devicebleve.Index), nil
+}
+
+func (s *Service) viewStore() (*deviceduckdb.ViewStore, error) {
+	path := filepath.Join(s.root, "duckdb", "views.duckdb")
+	if value, ok := viewStores.Load(path); ok {
+		return value.(*deviceduckdb.ViewStore), nil
+	}
+	store, err := deviceduckdb.Open(deviceduckdb.Options{Path: path})
+	if err != nil {
+		return nil, err
+	}
+	actual, loaded := viewStores.LoadOrStore(path, store)
+	if loaded {
+		_ = store.Close()
+	}
+	return actual.(*deviceduckdb.ViewStore), nil
 }
 
 func openDefaultMetadataStore(ctx context.Context, root string) (metadata.Store, error) {

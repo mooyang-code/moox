@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/storage/pkg/quantstore"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/stretchr/testify/require"
 )
@@ -61,9 +62,77 @@ func TestServiceDataAndQueryView(t *testing.T) {
 		ColumnNames: []string{"close"},
 	})
 	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, queryRsp.GetRetInfo().GetCode())
-	require.Len(t, queryRsp.GetRows(), 1)
-	require.Equal(t, "APT-USDT", queryRsp.GetRows()[0].GetSubjectId())
+	require.Equal(t, pb.ErrorCode_VIEW_NOT_FOUND, queryRsp.GetRetInfo().GetCode())
+}
+
+func TestQueryViewReturnsViewNotFoundWhenViewHasNoActiveResult(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(t.TempDir())
+
+	spaceRsp, err := svc.CreateSpace(ctx, &pb.CreateSpaceReq{Space: &pb.Space{SpaceId: "crypto", Name: "crypto"}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, spaceRsp.GetRetInfo().GetCode())
+
+	sourceRsp, err := svc.CreateDataSource(ctx, &pb.CreateDataSourceReq{DataSource: &pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Kind: "exchange"}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, sourceRsp.GetRetInfo().GetCode())
+
+	datasetRsp, err := svc.CreateDataSet(ctx, &pb.CreateDataSetReq{Dataset: &pb.DataSet{SpaceId: "crypto", DatasetId: "kline", DataSourceId: "binance", Name: "K线", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}, Status: "active"}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, datasetRsp.GetRetInfo().GetCode())
+
+	_, err = svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "kline_view",
+		Name:             "K线视图",
+		PrimaryDatasetId: datasetRsp.GetDataset().GetDatasetId(),
+		DatasetIds:       []string{datasetRsp.GetDataset().GetDatasetId()},
+		QueryWindow:      "30d",
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+
+	rsp, err := svc.QueryView(ctx, &pb.QueryViewReq{SpaceId: "crypto", ViewId: "kline_view"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_VIEW_NOT_FOUND, rsp.GetRetInfo().GetCode())
+}
+
+func TestQueryViewReadsActiveDuckDBResult(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(t.TempDir())
+	seedStringDataset(t, svc, "crypto", "kline", []string{"close"})
+
+	viewRsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "kline_view_active",
+		Name:             "K线视图",
+		PrimaryDatasetId: "kline",
+		DatasetIds:       []string{"kline"},
+		ActiveResult:     "view_result_crypto_kline_active",
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, viewRsp.GetRetInfo().GetCode())
+
+	store, err := svc.viewStore()
+	require.NoError(t, err)
+	require.NoError(t, store.CreateResultTable(ctx, "view_result_crypto_kline_active", []*pb.ViewColumn{{
+		ColumnName: "close",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   "kline.close",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	}}))
+	require.NoError(t, store.InsertRows(ctx, "view_result_crypto_kline_active", []*pb.QueryViewRow{{
+		SubjectId: "APT-USDT",
+		DataTime:  "2026-06-15T00:00:00+08:00",
+		Values:    []*pb.ColumnValue{quantstore.DoubleValue("close", 8.1)},
+	}}))
+
+	rsp, err := svc.QueryView(ctx, &pb.QueryViewReq{SpaceId: "crypto", ViewId: "kline_view_active", SubjectIds: []string{"APT-USDT"}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetRows(), 1)
+	require.Equal(t, "APT-USDT", rsp.GetRows()[0].GetSubjectId())
 }
 
 func TestServiceMetadataUsesNewModel(t *testing.T) {
