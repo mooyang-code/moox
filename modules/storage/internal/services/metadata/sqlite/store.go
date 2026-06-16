@@ -1,0 +1,88 @@
+package sqlite
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"os"
+	"sort"
+
+	_ "modernc.org/sqlite"
+)
+
+type Options struct {
+	Path       string
+	SchemaPath string
+}
+
+type Store struct {
+	db         *sql.DB
+	schemaPath string
+}
+
+func Open(ctx context.Context, opts Options) (*Store, error) {
+	if opts.Path == "" {
+		return nil, errors.New("metadata sqlite path is required")
+	}
+	if opts.SchemaPath == "" {
+		return nil, errors.New("metadata schema path is required")
+	}
+	db, err := sql.Open("sqlite", opts.Path)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return &Store{db: db, schemaPath: opts.SchemaPath}, nil
+}
+
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
+func (s *Store) InitSchema(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return errors.New("metadata store is not open")
+	}
+	schema, err := os.ReadFile(s.schemaPath)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, string(schema))
+	return err
+}
+
+func (s *Store) TableNames(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT name
+		FROM sqlite_master
+		WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+		ORDER BY name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Strings(names)
+	return names, nil
+}

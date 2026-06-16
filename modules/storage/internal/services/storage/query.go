@@ -14,9 +14,16 @@ func (s *Service) QueryView(ctx context.Context, req *pb.QueryViewReq) (*pb.Quer
 	if req.GetViewId() == "" {
 		return &pb.QueryViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_VIEW_NOT_FOUND, errText("view_id is required"))}, nil
 	}
-	datasetID := s.viewPrimaryDataset(req.GetSpaceId(), req.GetViewId())
+	view, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+	if err != nil {
+		return &pb.QueryViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
+	}
+	datasetID := view.GetPrimaryDatasetId()
+	if datasetID == "" && len(view.GetDatasetIds()) > 0 {
+		datasetID = view.GetDatasetIds()[0]
+	}
 	if datasetID == "" {
-		return &pb.QueryViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_VIEW_NOT_FOUND, errText("view not found"))}, nil
+		return &pb.QueryViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_VIEW_NOT_FOUND, errText("view primary_dataset_id is required"))}, nil
 	}
 
 	readMode := pb.ReadMode_READ_MODE_RANGE
@@ -95,19 +102,6 @@ func (s *Service) SearchRows(ctx context.Context, req *pb.SearchRowsReq) (*pb.Se
 	sortSearchRows(matched, req.GetSorts())
 	paged, page := pageSlice(matched, req.GetPage())
 	return &pb.SearchRowsRsp{RetInfo: quantstore.Success("success"), Rows: paged, PageResult: page}, nil
-}
-
-func (s *Service) viewPrimaryDataset(spaceID, viewID string) string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	view := s.views[metadataKey(spaceID, viewID)]
-	if view == nil || len(view.GetDatasetIds()) == 0 {
-		return ""
-	}
-	if view.GetPrimaryDatasetId() != "" {
-		return view.GetPrimaryDatasetId()
-	}
-	return view.GetDatasetIds()[0]
 }
 
 func queryColumnsFromRows(names []string, datasetID string, rows []*pb.DataRow) []*pb.QueryViewColumn {

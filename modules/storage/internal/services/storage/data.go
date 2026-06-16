@@ -12,6 +12,9 @@ func (s *Service) WriteRows(ctx context.Context, req *pb.WriteRowsReq) (*pb.Writ
 	if mode == pb.WriteMode_WRITE_MODE_UNSPECIFIED {
 		mode = pb.WriteMode_WRITE_MODE_UPSERT
 	}
+	if err := s.validator.ValidateWriteRows(ctx, req.GetRows()); err != nil {
+		return &pb.WriteRowsRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	if err := s.store.WriteRows(ctx, req.GetRows(), mode); err != nil {
 		return &pb.WriteRowsRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
