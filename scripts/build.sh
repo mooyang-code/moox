@@ -8,8 +8,9 @@ GIT_COMMIT="$(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknow
 BIN_DIR="${ROOT}/bin"
 TARGET_GOOS="${TARGET_GOOS:-${GOOS:-$(go env GOOS)}}"
 TARGET_GOARCH="${TARGET_GOARCH:-${GOARCH:-$(go env GOARCH)}}"
+TARGET_MODULE="${1:-all}"
 
-if [[ "${1:-}" == "proto" ]]; then
+if [[ "${TARGET_MODULE}" == "proto" ]]; then
   (cd "${ROOT}/modules/storage" && make proto)
   (cd "${ROOT}/modules/control/proto" && make all)
   exit 0
@@ -39,25 +40,57 @@ build_go() {
   )
 }
 
-build_go modules/cli ./cmd/moox-cli moox-cli 0
-build_go modules/control ./cmd/moox-server moox-server 0
-build_go modules/collector ./cmd/moox-collector moox-collector 0
-build_go modules/factor ./cmd/moox-factor moox-factor 0
-build_go modules/order ./cmd/moox-order moox-order 0
-build_go modules/account ./cmd/moox-account moox-account 0
+build_storage() {
+  echo "==> build moox-storage"
+  (
+    cd "${ROOT}/modules/storage"
+    if [[ -n "${STORAGE_BUILD_TAGS:-}" ]]; then
+      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${STORAGE_CGO_ENABLED:-1}" go build -tags "${STORAGE_BUILD_TAGS}" \
+        -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+        -o "${BIN_DIR}/moox-storage" ./cmd/moox-storage
+    else
+      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${STORAGE_CGO_ENABLED:-1}" go build \
+        -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+        -o "${BIN_DIR}/moox-storage" ./cmd/moox-storage
+    fi
+  )
+}
 
-echo "==> build moox-storage"
-(
-  cd "${ROOT}/modules/storage"
-  if [[ -n "${STORAGE_BUILD_TAGS:-}" ]]; then
-    GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${STORAGE_CGO_ENABLED:-1}" go build -tags "${STORAGE_BUILD_TAGS}" \
-      -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-      -o "${BIN_DIR}/moox-storage" ./cmd/moox-storage
-  else
-    GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${STORAGE_CGO_ENABLED:-1}" go build \
-      -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-      -o "${BIN_DIR}/moox-storage" ./cmd/moox-storage
-  fi
-)
+case "${TARGET_MODULE}" in
+  all)
+    build_go modules/cli ./cmd/moox-cli moox-cli 0
+    build_go modules/control ./cmd/moox-server moox-server 0
+    build_go modules/collector ./cmd/moox-collector moox-collector 0
+    build_go modules/factor ./cmd/moox-factor moox-factor 0
+    build_go modules/order ./cmd/moox-order moox-order 0
+    build_go modules/account ./cmd/moox-account moox-account 0
+    build_storage
+    ;;
+  cli)
+    build_go modules/cli ./cmd/moox-cli moox-cli 0
+    ;;
+  control)
+    build_go modules/control ./cmd/moox-server moox-server 0
+    ;;
+  collector)
+    build_go modules/collector ./cmd/moox-collector moox-collector 0
+    ;;
+  factor)
+    build_go modules/factor ./cmd/moox-factor moox-factor 0
+    ;;
+  order)
+    build_go modules/order ./cmd/moox-order moox-order 0
+    ;;
+  account)
+    build_go modules/account ./cmd/moox-account moox-account 0
+    ;;
+  storage)
+    build_storage
+    ;;
+  *)
+    echo "unknown build target: ${TARGET_MODULE}" >&2
+    exit 1
+    ;;
+esac
 
 echo "==> binaries written to ${BIN_DIR}"

@@ -14,6 +14,65 @@ type ConfigLoader struct {
 	baseDir string
 }
 
+type RuntimeConfig struct {
+	Storage StorageConfig `yaml:"storage"`
+}
+
+type StorageConfig struct {
+	Root       string            `yaml:"root"`
+	Metadata   StorageMetadata   `yaml:"metadata"`
+	Devices    StorageDevices    `yaml:"devices"`
+	Changefeed StorageChangefeed `yaml:"changefeed"`
+}
+
+type StorageMetadata struct {
+	Path       string `yaml:"path"`
+	SchemaPath string `yaml:"schema_path"`
+}
+
+type StorageDevices struct {
+	PebblePath  string `yaml:"pebble_path"`
+	DuckDBPath  string `yaml:"duckdb_path"`
+	BlevePath   string `yaml:"bleve_path"`
+	ParquetPath string `yaml:"parquet_path"`
+}
+
+type StorageChangefeed struct {
+	Type    string `yaml:"type"`
+	NATSURL string `yaml:"nats_url"`
+}
+
+func (c *RuntimeConfig) ApplyDefaults() {
+	c.Storage.ApplyDefaults()
+}
+
+func (c *StorageConfig) ApplyDefaults() {
+	if c.Root == "" {
+		c.Root = "./var/storage"
+	}
+	if c.Metadata.Path == "" {
+		c.Metadata.Path = filepath.Join(c.Root, "metadata", "storage_metadata.db")
+	}
+	if c.Metadata.SchemaPath == "" {
+		c.Metadata.SchemaPath = "../../schema/storage_metadata.sql"
+	}
+	if c.Devices.PebblePath == "" {
+		c.Devices.PebblePath = filepath.Join(c.Root, "pebble")
+	}
+	if c.Devices.DuckDBPath == "" {
+		c.Devices.DuckDBPath = filepath.Join(c.Root, "duckdb", "views.duckdb")
+	}
+	if c.Devices.BlevePath == "" {
+		c.Devices.BlevePath = filepath.Join(c.Root, "bleve")
+	}
+	if c.Devices.ParquetPath == "" {
+		c.Devices.ParquetPath = filepath.Join(c.Root, "archive")
+	}
+	if c.Changefeed.Type == "" {
+		c.Changefeed.Type = "memory"
+	}
+}
+
 // NewConfigLoader 创建配置加载器
 func NewConfigLoader(baseDir string) *ConfigLoader {
 	return &ConfigLoader{

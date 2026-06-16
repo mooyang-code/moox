@@ -1,0 +1,111 @@
+global: #全局配置
+  namespace: Development            #环境类型，分正式production和非正式development两种类型
+  env_name: test                    #环境名称，非正式环境下多环境的名称
+
+storage:
+  root: ./var/storage
+  metadata:
+    path: ./var/storage/metadata/storage_metadata.db
+    schema_path: ../../schema/storage_metadata.sql
+  devices:
+    pebble_path: ./var/storage/pebble
+    duckdb_path: ./var/storage/duckdb/views.duckdb
+    bleve_path: ./var/storage/bleve
+    parquet_path: ./var/storage/archive
+  changefeed:
+    type: memory
+    nats_url: ""
+
+server:
+  filter:
+    - validation
+    - cors
+  timeout: 5000
+  admin:
+    port: 9000
+    read_timeout: 5000   #ms. 请求被接受到请求信息被完全读取的超时时间设置，防止慢客户端
+    write_timeout: 60000 #ms. 处理的超时时间
+  service:
+    - name: trpc.storage.data.DataService
+      #ip: 0.0.0.0
+      port: 18201
+      network: tcp
+      protocol: trpc
+    - name: trpc.storage.query.QueryService
+      #ip: 0.0.0.0
+      port: 18202
+      network: tcp
+      protocol: trpc
+    - name: trpc.storage.adapter.Adapter
+      #ip: 0.0.0.0
+      port: 18101
+      network: tcp # 注意：若是多机分布式部署，此处应改为tcp（单机也可设置tcp，只是unix域套接字本机通信效率更高）
+      protocol: trpc
+    - name: trpc.storage.metadata.MetadataService
+      #ip: 0.0.0.0
+      port: 18001
+      network: tcp
+      protocol: trpc
+
+    - name: trpc.storage.data.DataService
+      #ip: 0.0.0.0
+      port: 19104
+      network: tcp
+      protocol: http
+    - name: trpc.storage.metadata.MetadataService
+      #ip: 0.0.0.0
+      port: 19101
+      network: tcp
+      protocol: http
+    - name: trpc.storage.query.QueryService
+      #ip: 0.0.0.0
+      port: 19105
+      network: tcp
+      protocol: http
+      
+client:
+  filter:
+    - validation
+  service:
+    - name: trpc.storage.adapter.Adapter
+      target: ip://127.0.0.1:18101
+      network: tcp
+      protocol: trpc
+      timeout: 3000
+    - name: trpc.storage.data.DataService
+      target: ip://127.0.0.1:18201
+      network: tcp
+      protocol: trpc
+      timeout: 3000
+    - name: trpc.storage.metadata.MetadataService
+      target: ip://127.0.0.1:18001
+      network: tcp
+      protocol: trpc
+      timeout: 3000
+    - name: trpc.storage.query.QueryService
+      target: ip://127.0.0.1:18202
+      network: tcp
+      protocol: trpc
+      timeout: 3000
+
+plugins:
+  auth:
+    cors:
+      apply_to_all_path:
+        - insecure_allow_all
+    validation:
+      enable_error_log: true
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  log:
+    default: 
+      - writer: file                              #本地文件日志
+        level: debug                               #本地文件滚动日志的级别
+        writer_config:                            #本地文件输出具体配置
+          log_path: ./logs                        #本地文件日志路径
+          filename: trpc.log                      #本地文件日志文件名
+          roll_type: size                         #文件滚动类型,size为按大小滚动
+          max_age: 7                              #最大日志保留天数
+          max_size: 10                            #本地文件滚动日志的大小 单位 MB
+          max_backups: 5                         #最大日志文件数
+          compress:  false                        #日志文件是否压缩

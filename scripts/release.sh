@@ -22,7 +22,7 @@ mkdir -p \
   "${RELEASE_ROOT}/storage/config" \
   "${RELEASE_ROOT}/storage/data" \
   "${RELEASE_ROOT}/storage/database" \
-  "${RELEASE_ROOT}/storage/log" \
+  "${RELEASE_ROOT}/storage/logs" \
   "${RELEASE_ROOT}/storage/sample-data" \
   "${RELEASE_ROOT}/storage/var/storage" \
   "${RELEASE_ROOT}/docs" \

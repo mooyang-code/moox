@@ -105,3 +105,46 @@ func TestConfigLoaderLoadConfigWithDefaults(t *testing.T) {
 		t.Fatalf("Timeout = %d, want 10", cfg.Timeout)
 	}
 }
+
+func TestStorageRuntimeConfigLoadsStorageSection(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "trpc_go.yaml")
+	content := []byte(`
+storage:
+  root: ./var/storage
+  metadata:
+    path: ./var/storage/metadata/storage_metadata.db
+    schema_path: ../../schema/storage_metadata.sql
+  devices:
+    pebble_path: ./var/storage/pebble
+    duckdb_path: ./var/storage/duckdb/views.duckdb
+    bleve_path: ./var/storage/bleve
+    parquet_path: ./var/storage/archive
+  changefeed:
+    type: memory
+    nats_url: ""
+`)
+	if err := os.WriteFile(configPath, content, 0o600); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	var cfg RuntimeConfig
+	err := NewConfigLoader(dir).LoadConfigWithDefaults("trpc_go.yaml", &cfg, cfg.ApplyDefaults)
+	if err != nil {
+		t.Fatalf("LoadConfigWithDefaults returned error: %v", err)
+	}
+	if cfg.Storage.Root != "./var/storage" {
+		t.Fatalf("Storage.Root = %q", cfg.Storage.Root)
+	}
+	if cfg.Storage.Metadata.Path != "./var/storage/metadata/storage_metadata.db" {
+		t.Fatalf("metadata path = %q", cfg.Storage.Metadata.Path)
+	}
+	if cfg.Storage.Devices.DuckDBPath != "./var/storage/duckdb/views.duckdb" {
+		t.Fatalf("duckdb path = %q", cfg.Storage.Devices.DuckDBPath)
+	}
+	if cfg.Storage.Changefeed.Type != "memory" {
+		t.Fatalf("changefeed type = %q", cfg.Storage.Changefeed.Type)
+	}
+}
