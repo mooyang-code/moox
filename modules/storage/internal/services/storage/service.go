@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/services/adapter"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/changefeed"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/metadata"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/services/metadata/sqlite"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/router"
@@ -25,6 +26,7 @@ type Service struct {
 	validator *schema.Validator
 	router    *router.Resolver
 	adapter   adapter.Client
+	changes   changefeed.Publisher
 }
 
 var (
@@ -55,6 +57,7 @@ func NewServiceWithOptions(opts Options) *Service {
 		validator: schema.NewValidator(meta),
 		router:    router.NewResolver(meta),
 		adapter:   adapter.NewLocalClient(store),
+		changes:   changefeed.NewMemoryPublisher(),
 	}
 }
 

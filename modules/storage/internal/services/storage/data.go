@@ -2,9 +2,11 @@ package storage
 
 import (
 	"context"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/pkg/quantstore"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/rs/xid"
 )
 
 func (s *Service) WriteRows(ctx context.Context, req *pb.WriteRowsReq) (*pb.WriteRowsRsp, error) {
@@ -23,6 +25,9 @@ func (s *Service) WriteRows(ctx context.Context, req *pb.WriteRowsReq) (*pb.Writ
 		if err := s.adapter.WriteRows(ctx, group.device, group.rows, mode); err != nil {
 			return &pb.WriteRowsRsp{RetInfo: quantstore.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 		}
+	}
+	if err := s.publishRowsChanged(ctx, req.GetRows()); err != nil {
+		return &pb.WriteRowsRsp{RetInfo: quantstore.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	return &pb.WriteRowsRsp{RetInfo: quantstore.Success("success")}, nil
 }
@@ -69,4 +74,31 @@ func (s *Service) groupRowsByDevice(ctx context.Context, rows []*pb.DataRow) ([]
 		out = append(out, group)
 	}
 	return out, nil
+}
+
+func (s *Service) publishRowsChanged(ctx context.Context, rows []*pb.DataRow) error {
+	if len(rows) == 0 || s.changes == nil {
+		return nil
+	}
+	events := make(map[string]*pb.DataRowsChangedEvent)
+	for _, row := range rows {
+		scope := row.GetKey().GetScope()
+		key := scope.GetSpaceId() + "|" + scope.GetDatasetId() + "|" + scope.GetSubjectId() + "|" + scope.GetFreq()
+		event := events[key]
+		if event == nil {
+			event = &pb.DataRowsChangedEvent{
+				EventId:   xid.New().String(),
+				Scope:     scope,
+				EventTime: time.Now().Format(time.RFC3339Nano),
+			}
+			events[key] = event
+		}
+		event.Rows = append(event.Rows, row)
+	}
+	for _, event := range events {
+		if err := s.changes.PublishRowsChanged(ctx, event); err != nil {
+			return err
+		}
+	}
+	return nil
 }
