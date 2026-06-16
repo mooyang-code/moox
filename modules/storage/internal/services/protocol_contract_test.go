@@ -23,7 +23,6 @@ func TestStorageProtocolUsesCanonicalSurface(t *testing.T) {
 		"internal/services/" + versionTag,
 		"internal/services/access",
 		"internal/services/dbmanager",
-		"internal/services/adapter",
 	} {
 		require.NoDirExists(t, filepath.Join(root, filepath.FromSlash(path)))
 	}

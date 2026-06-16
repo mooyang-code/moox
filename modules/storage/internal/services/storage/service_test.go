@@ -20,6 +20,7 @@ func TestServiceDataAndQueryView(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.UpsertDataSetColumn(context.Background(), &pb.UpsertDataSetColumnReq{Column: &pb.DataSetColumn{SpaceId: "default", DatasetId: datasetRsp.GetDataset().GetDatasetId(), ColumnName: "close", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FIELD, OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}})
 	require.NoError(t, err)
+	seedRoute(t, svc, "default", datasetRsp.GetDataset().GetDatasetId())
 
 	writeRsp, err := svc.WriteRows(context.Background(), &pb.WriteRowsReq{
 		WriteMode: pb.WriteMode_WRITE_MODE_APPEND,
@@ -213,6 +214,18 @@ func seedStringDataset(t *testing.T, svc *Service, spaceID string, datasetID str
 		_, err = svc.UpsertDataSetColumn(ctx, &pb.UpsertDataSetColumnReq{Column: &pb.DataSetColumn{SpaceId: spaceID, DatasetId: datasetID, ColumnName: column, OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FIELD, OriginId: column, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}})
 		require.NoError(t, err)
 	}
+	seedRoute(t, svc, spaceID, datasetID)
+}
+
+func seedRoute(t *testing.T, svc *Service, spaceID string, datasetID string) {
+	t.Helper()
+	ctx := context.Background()
+	nodeRsp, err := svc.CreateStorageNode(ctx, &pb.CreateStorageNodeReq{Node: &pb.StorageNode{NodeId: "node_" + datasetID, Name: "node_" + datasetID, Endpoint: "local"}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, nodeRsp.GetRetInfo().GetCode())
+	routeRsp, err := svc.CreateStorageRoute(ctx, &pb.CreateStorageRouteReq{StorageRoute: &pb.StorageRoute{SpaceId: spaceID, DatasetId: datasetID, SubjectPattern: "*", NodeId: nodeRsp.GetNode().GetNodeId()}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, routeRsp.GetRetInfo().GetCode())
 }
 
 func stringColumn(name, value string) *pb.ColumnValue {

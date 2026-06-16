@@ -9,8 +9,10 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/services/adapter"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/metadata"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/services/metadata/sqlite"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/router"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/schema"
 	"github.com/mooyang-code/moox/modules/storage/pkg/quantstore"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -21,6 +23,8 @@ type Service struct {
 	store     *quantstore.Store
 	metadata  metadata.Store
 	validator *schema.Validator
+	router    *router.Resolver
+	adapter   adapter.Client
 }
 
 var (
@@ -44,7 +48,14 @@ func NewServiceWithOptions(opts Options) *Service {
 			panic(fmt.Sprintf("open storage metadata store: %v", err))
 		}
 	}
-	return &Service{store: quantstore.New(root), metadata: meta, validator: schema.NewValidator(meta)}
+	store := quantstore.New(root)
+	return &Service{
+		store:     store,
+		metadata:  meta,
+		validator: schema.NewValidator(meta),
+		router:    router.NewResolver(meta),
+		adapter:   adapter.NewLocalClient(store),
+	}
 }
 
 func openDefaultMetadataStore(ctx context.Context, root string) (metadata.Store, error) {
