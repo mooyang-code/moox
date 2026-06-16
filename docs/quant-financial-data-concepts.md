@@ -390,9 +390,9 @@ data_view_version:
 
 DataView 可以对应 DuckDB 宽表、DuckDB 长表查询、Bleve 索引或其他查询加速结构。协议只暴露 DataView 的逻辑名，不暴露物理表名。
 
-## StorageEntity
+## StorageNode
 
-`StorageEntity` 表示一个存储服务实例或存储集群入口。
+`StorageNode` 表示存储代理节点，也就是一个 adapter 服务实例或服务组入口。它包裹一组底层存储设备，对外提供统一的读写能力。
 
 示例：
 
@@ -446,7 +446,7 @@ field_id
 data_kind
 data_domain
 freq
-storage_entity_id
+storage_node_id
 storage_device_id
 role
 priority

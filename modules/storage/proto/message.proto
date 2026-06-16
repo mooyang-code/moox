@@ -10,14 +10,12 @@ import "data.proto";
 message DataRowsChangedEvent {
   // event_id 是事件 ID。
   string event_id = 1;
-  // dataset_id 是事实数据集 ID。
-  string dataset_id = 2;
-  // subject_id 是数据对象 ID。
-  string subject_id = 3;
+  // scope 是本次变更所属的事实数据范围。
+  data.DataScope scope = 2;
   // event_time 是事件产生时间。
-  string event_time = 4;
+  string event_time = 3;
   // rows 是本次变更涉及的数据行。
-  repeated data.DataRow rows = 5;
-  // attrs 是附加事件属性。
-  map<string, string> attrs = 6;
+  repeated data.DataRow rows = 4;
+  // attributes 是附加事件属性。
+  map<string, string> attributes = 5;
 }

@@ -1,23 +1,23 @@
 import { api, AUTH_INFO } from './config';
 
 // ================================================================================
-// 存储实体相关类型定义
+// 存储节点相关类型定义
 
-export interface StorageEntity {
-  entity_id: number;
-  entity_alias: string;
-  entity_srv_conn: string;
+export interface StorageNode {
+  node_id: number;
+  node_alias: string;
+  node_srv_conn: string;
   ctime: string;
   mtime: string;
   enabled: string; // 是否启用（"true"=启用；"false"=禁用）
 }
 
-export interface ListStorageEntitiesResponse {
+export interface ListStorageNodesResponse {
   ret_info: {
     code: number;
     msg: string;
   };
-  entities: StorageEntity[];
+  nodes: StorageNode[];
 }
 
 // ================================================================================
@@ -48,7 +48,7 @@ export interface ObjectRoute {
   route_id: number;
   dataset_id: number;
   object_id: string;
-  entity_id: number;
+  node_id: number;
   ctime: string;
   mtime: string;
   enabled: string; // 是否启用（"true"=启用；"false"=禁用）
@@ -57,7 +57,7 @@ export interface ObjectRoute {
 export interface ListObjectRoutesRequest {
   project_id: number;
   dataset_id?: number;
-  entity_id?: number;
+  node_id?: number;
   page_info?: {
     page_no: number;
     page_size: number;
@@ -114,37 +114,37 @@ export interface ListFieldRoutesResponse {
 // ================================================================================
 // API接口函数
 
-// 获取存储实体列表
-export const listStorageEntities = async (): Promise<ListStorageEntitiesResponse> => {
+// 获取存储节点列表
+export const listStorageNodes = async (): Promise<ListStorageNodesResponse> => {
   try {
-    console.log('获取存储实体列表');
+    console.log('获取存储节点列表');
     
-    const response = await api.post('/metadata/ListStorageEntities', {
+    const response = await api.post('/metadata/ListStorageNodes', {
       auth_info: {
         app_id: AUTH_INFO.app_id,
         app_key: AUTH_INFO.app_key
       }
     });
 
-    console.log('存储实体列表响应:', response.data);
+    console.log('存储节点列表响应:', response.data);
     const data = response?.data;
     
     if (!data) {
-      throw new Error('获取存储实体列表失败：响应数据为空');
+      throw new Error('获取存储节点列表失败：响应数据为空');
     }
     
     if (!data.ret_info) {
-      throw new Error('获取存储实体列表失败：响应格式错误，缺少ret_info字段');
+      throw new Error('获取存储节点列表失败：响应格式错误，缺少ret_info字段');
     }
     
     if (data.ret_info.code !== 0) {
-      throw new Error(data.ret_info.msg || '获取存储实体列表失败');
+      throw new Error(data.ret_info.msg || '获取存储节点列表失败');
     }
     
     return data;
   } catch (error: any) {
-    console.error('获取存储实体列表失败:', error);
-    throw new Error(error?.message || '获取存储实体列表失败');
+    console.error('获取存储节点列表失败:', error);
+    throw new Error(error?.message || '获取存储节点列表失败');
   }
 };
 
@@ -199,8 +199,8 @@ export const listObjectRoutes = async (params: ListObjectRoutesRequest): Promise
     if (params?.dataset_id) {
       requestData.dataset_id = params.dataset_id;
     }
-    if (params?.entity_id) {
-      requestData.entity_id = params.entity_id;
+    if (params?.node_id) {
+      requestData.node_id = params.node_id;
     }
     if (params?.page_info) {
       requestData.page_info = params.page_info;
@@ -282,50 +282,50 @@ export const listFieldRoutes = async (params: ListFieldRoutesRequest): Promise<L
 };
 
 // ================================================================================
-// 创建、更新、删除存储实体相关接口
+// 创建、更新、删除存储节点相关接口
 
-export interface CreateStorageEntityRequest {
-  entity_alias: string;
-  entity_srv_conn: string;
+export interface CreateStorageNodeRequest {
+  node_alias: string;
+  node_srv_conn: string;
 }
 
-export interface CreateStorageEntityResponse {
+export interface CreateStorageNodeResponse {
   ret_info: {
     code: number;
     msg: string;
   };
-  entity_id?: number;
+  node_id?: number;
 }
 
-export interface UpdateStorageEntityRequest {
-  entity_id: number;
-  entity_alias: string;
+export interface UpdateStorageNodeRequest {
+  node_id: number;
+  node_alias: string;
 }
 
-export interface UpdateStorageEntityResponse {
-  ret_info: {
-    code: number;
-    msg: string;
-  };
-}
-
-export interface DeleteStorageEntityRequest {
-  entity_id: number;
-}
-
-export interface DeleteStorageEntityResponse {
+export interface UpdateStorageNodeResponse {
   ret_info: {
     code: number;
     msg: string;
   };
 }
 
-// 创建存储实体
-export const createStorageEntity = async (params: CreateStorageEntityRequest): Promise<CreateStorageEntityResponse> => {
+export interface DeleteStorageNodeRequest {
+  node_id: number;
+}
+
+export interface DeleteStorageNodeResponse {
+  ret_info: {
+    code: number;
+    msg: string;
+  };
+}
+
+// 创建存储节点
+export const createStorageNode = async (params: CreateStorageNodeRequest): Promise<CreateStorageNodeResponse> => {
   try {
-    console.log('创建存储实体', params);
+    console.log('创建存储节点', params);
     
-    const response = await api.post('/metadata/CreateStorageEntity', {
+    const response = await api.post('/metadata/CreateStorageNode', {
       auth_info: {
         app_id: AUTH_INFO.app_id,
         app_key: AUTH_INFO.app_key
@@ -333,70 +333,70 @@ export const createStorageEntity = async (params: CreateStorageEntityRequest): P
       ...params
     });
 
-    console.log('创建存储实体响应:', response.data);
+    console.log('创建存储节点响应:', response.data);
     const data = response?.data;
     
     if (!data) {
-      throw new Error('创建存储实体失败：响应数据为空');
+      throw new Error('创建存储节点失败：响应数据为空');
     }
     
     if (!data.ret_info) {
-      throw new Error('创建存储实体失败：响应格式错误，缺少ret_info字段');
+      throw new Error('创建存储节点失败：响应格式错误，缺少ret_info字段');
     }
     
     if (data.ret_info.code !== 0) {
-      throw new Error(data.ret_info.msg || '创建存储实体失败');
+      throw new Error(data.ret_info.msg || '创建存储节点失败');
     }
     
     return data;
   } catch (error: any) {
-    console.error('创建存储实体失败:', error);
-    throw new Error(error?.message || '创建存储实体失败');
+    console.error('创建存储节点失败:', error);
+    throw new Error(error?.message || '创建存储节点失败');
   }
 };
 
-// 更新存储实体
-export const updateStorageEntity = async (params: UpdateStorageEntityRequest): Promise<UpdateStorageEntityResponse> => {
+// 更新存储节点
+export const updateStorageNode = async (params: UpdateStorageNodeRequest): Promise<UpdateStorageNodeResponse> => {
   try {
-    console.log('更新存储实体', params);
+    console.log('更新存储节点', params);
     
-    const response = await api.post('/metadata/UpdateStorageEntity', {
+    const response = await api.post('/metadata/UpdateStorageNode', {
       auth_info: {
         app_id: AUTH_INFO.app_id,
         app_key: AUTH_INFO.app_key
       },
-      entity_id: params.entity_id,
-      entity_alias: params.entity_alias
+      node_id: params.node_id,
+      node_alias: params.node_alias
     });
 
-    console.log('更新存储实体响应:', response.data);
+    console.log('更新存储节点响应:', response.data);
     const data = response?.data;
     
     if (!data) {
-      throw new Error('更新存储实体失败：响应数据为空');
+      throw new Error('更新存储节点失败：响应数据为空');
     }
     
     if (!data.ret_info) {
-      throw new Error('更新存储实体失败：响应格式错误，缺少ret_info字段');
+      throw new Error('更新存储节点失败：响应格式错误，缺少ret_info字段');
     }
     
     if (data.ret_info.code !== 0) {
-      throw new Error(data.ret_info.msg || '更新存储实体失败');
+      throw new Error(data.ret_info.msg || '更新存储节点失败');
     }
     
     return data;
   } catch (error: any) {
-    console.error('更新存储实体失败:', error);
-    throw new Error(error?.message || '更新存储实体失败');
+    console.error('更新存储节点失败:', error);
+    throw new Error(error?.message || '更新存储节点失败');
   }
 };
 
-// 删除存储实体
-export const deleteStorageEntity = async (params: DeleteStorageEntityRequest): Promise<DeleteStorageEntityResponse> => {
+// 删除存储节点
+export const deleteStorageNode = async (params: DeleteStorageNodeRequest): Promise<DeleteStorageNodeResponse> => {
   try {
-    console.log('删除存储实体', params);
+    console.log('删除存储节点', params);
     
-    const response = await api.post('/metadata/DeleteStorageEntity', {
+    const response = await api.post('/metadata/DeleteStorageNode', {
       auth_info: {
         app_id: AUTH_INFO.app_id,
         app_key: AUTH_INFO.app_key
@@ -404,25 +404,25 @@ export const deleteStorageEntity = async (params: DeleteStorageEntityRequest): P
       ...params
     });
 
-    console.log('删除存储实体响应:', response.data);
+    console.log('删除存储节点响应:', response.data);
     const data = response?.data;
     
     if (!data) {
-      throw new Error('删除存储实体失败：响应数据为空');
+      throw new Error('删除存储节点失败：响应数据为空');
     }
     
     if (!data.ret_info) {
-      throw new Error('删除存储实体失败：响应格式错误，缺少ret_info字段');
+      throw new Error('删除存储节点失败：响应格式错误，缺少ret_info字段');
     }
     
     if (data.ret_info.code !== 0) {
-      throw new Error(data.ret_info.msg || '删除存储实体失败');
+      throw new Error(data.ret_info.msg || '删除存储节点失败');
     }
     
     return data;
   } catch (error: any) {
-    console.error('删除存储实体失败:', error);
-    throw new Error(error?.message || '删除存储实体失败');
+    console.error('删除存储节点失败:', error);
+    throw new Error(error?.message || '删除存储节点失败');
   }
 };
 
@@ -579,7 +579,7 @@ export interface CreateObjectRouteRequest {
   project_id: number;
   dataset_id: number;
   object_id: string;
-  entity_id: number;
+  node_id: number;
 }
 
 export interface CreateObjectRouteResponse {
@@ -594,7 +594,7 @@ export interface UpdateObjectRouteRequest {
   route_id: number;
   dataset_id: number;
   object_id: string;
-  entity_id: number;
+  node_id: number;
 }
 
 export interface UpdateObjectRouteResponse {
@@ -663,7 +663,7 @@ export const updateObjectRoute = async (params: UpdateObjectRouteRequest): Promi
       route_id: params.route_id,
       dataset_id: params.dataset_id,
       object_id: params.object_id,
-      entity_id: params.entity_id
+      node_id: params.node_id
     });
 
     console.log('更新数据对象路由响应:', response.data);

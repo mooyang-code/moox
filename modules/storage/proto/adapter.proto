@@ -9,16 +9,18 @@ import "data.proto";
 
 // DeviceRef 表示路由解析后的存储设备位置。
 message DeviceRef {
-  // entity_id 是 adapter 服务实例或服务组 ID。
-  string entity_id = 1;
+  // space_id 是使用空间 ID。
+  string space_id = 1;
+  // node_id 是 adapter 存储代理节点 ID。
+  string node_id = 2;
   // device_id 是存储设备 ID。
-  string device_id = 2;
+  string device_id = 3;
   // engine 是设备引擎类型，例如 pebble、duckdb、bleve 或 parquet_archive。
-  string engine = 3;
+  string engine = 4;
   // dataset_id 是事实数据集 ID。
-  string dataset_id = 4;
+  string dataset_id = 5;
   // device_table 是设备内部表、索引或键空间名称。
-  string device_table = 5;
+  string device_table = 6;
 }
 
 // WriteDeviceRowsReq 表示写入设备行的内部请求。
@@ -47,8 +49,8 @@ message ReadDeviceRowsReq {
   DeviceRef device = 2;
   // read_mode 是读取方式。
   data.ReadMode read_mode = 3;
-  // slice 是要读取的数据切片。
-  data.DataSlice slice = 4;
+  // scope 是要读取的事实数据范围。
+  data.DataScope scope = 4;
   // time_range 是时间区间条件。
   common.TimeRange time_range = 5;
   // snapshot_time 是截面时间。

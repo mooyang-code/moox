@@ -35,7 +35,7 @@ func (s *Service) QueryView(ctx context.Context, req *pb.QueryViewReq) (*pb.Quer
 	for _, subjectID := range subjectIDs {
 		readRows, _, err := s.store.ReadRows(
 			ctx,
-			&pb.DataSlice{DatasetId: datasetID, SubjectId: subjectID},
+			&pb.DataScope{SpaceId: req.GetSpaceId(), DatasetId: datasetID, SubjectId: subjectID},
 			readMode,
 			req.GetQueryTime().GetTimeRange(),
 			snapshotTime,
@@ -51,8 +51,8 @@ func (s *Service) QueryView(ctx context.Context, req *pb.QueryViewReq) (*pb.Quer
 		}
 		for _, row := range readRows {
 			rows = append(rows, &pb.QueryViewRow{
-				SubjectId: row.GetSlice().GetSubjectId(),
-				DataTime:  row.GetDataTime(),
+				SubjectId: row.GetKey().GetScope().GetSubjectId(),
+				DataTime:  row.GetKey().GetDataTime(),
 				Values:    row.GetColumns(),
 			})
 		}
@@ -75,7 +75,7 @@ func (s *Service) SearchRows(ctx context.Context, req *pb.SearchRowsReq) (*pb.Se
 	for _, subjectID := range subjectIDs {
 		rows, _, err := s.store.ReadRows(
 			ctx,
-			&pb.DataSlice{DatasetId: req.GetDatasetId(), SubjectId: subjectID},
+			&pb.DataScope{SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), SubjectId: subjectID},
 			pb.ReadMode_READ_MODE_RANGE,
 			req.GetTimeRange(),
 			"",
@@ -100,10 +100,14 @@ func (s *Service) SearchRows(ctx context.Context, req *pb.SearchRowsReq) (*pb.Se
 func (s *Service) viewPrimaryDataset(spaceID, viewID string) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if view := s.dataViews[workspaceKey(spaceID, viewID)]; view != nil {
-		return view.GetQueryConfig().GetPrimaryDatasetId()
+	view := s.views[metadataKey(spaceID, viewID)]
+	if view == nil || len(view.GetDatasetIds()) == 0 {
+		return ""
 	}
-	return ""
+	if view.GetPrimaryDatasetId() != "" {
+		return view.GetPrimaryDatasetId()
+	}
+	return view.GetDatasetIds()[0]
 }
 
 func queryColumnsFromRows(names []string, datasetID string, rows []*pb.DataRow) []*pb.QueryViewColumn {
@@ -112,9 +116,9 @@ func queryColumnsFromRows(names []string, datasetID string, rows []*pb.DataRow) 
 		for _, name := range names {
 			columns = append(columns, &pb.QueryViewColumn{
 				ColumnName: name,
-				SourceType: pb.ColumnSourceType_COLUMN_SOURCE_TYPE_FIELD,
+				OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 				DatasetId:  datasetID,
-				SourceId:   name,
+				OriginId:   datasetColumnOriginID(datasetID, name),
 			})
 		}
 		return columns
@@ -126,13 +130,20 @@ func queryColumnsFromRows(names []string, datasetID string, rows []*pb.DataRow) 
 	for _, column := range rows[0].GetColumns() {
 		columns = append(columns, &pb.QueryViewColumn{
 			ColumnName: column.GetColumnName(),
-			SourceType: pb.ColumnSourceType_COLUMN_SOURCE_TYPE_FIELD,
+			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 			DatasetId:  datasetID,
-			SourceId:   column.GetColumnName(),
+			OriginId:   datasetColumnOriginID(datasetID, column.GetColumnName()),
 			ValueType:  column.GetValueType(),
 		})
 	}
 	return columns
+}
+
+func datasetColumnOriginID(datasetID, columnName string) string {
+	if datasetID == "" {
+		return columnName
+	}
+	return datasetID + "." + columnName
 }
 
 func textRowMatch(row *pb.DataRow, query string) bool {
@@ -145,7 +156,7 @@ func textRowMatch(row *pb.DataRow, query string) bool {
 			return true
 		}
 	}
-	for _, value := range row.GetAttrs() {
+	for _, value := range row.GetAttributes() {
 		if strings.Contains(strings.ToLower(value), query) {
 			return true
 		}
@@ -262,10 +273,10 @@ func sortSearchRows(rows []*pb.DataRow, sorts []*pb.SortSpec) {
 			}
 			return leftText < rightText
 		}
-		if rows[i].GetSlice().GetSubjectId() == rows[j].GetSlice().GetSubjectId() {
-			return rows[i].GetDataTime() < rows[j].GetDataTime()
+		if rows[i].GetKey().GetScope().GetSubjectId() == rows[j].GetKey().GetScope().GetSubjectId() {
+			return rows[i].GetKey().GetDataTime() < rows[j].GetKey().GetDataTime()
 		}
-		return rows[i].GetSlice().GetSubjectId() < rows[j].GetSlice().GetSubjectId()
+		return rows[i].GetKey().GetScope().GetSubjectId() < rows[j].GetKey().GetScope().GetSubjectId()
 	})
 }
 

@@ -27,6 +27,7 @@ type Store struct {
 }
 
 type CSVImportOptions struct {
+	SpaceID    string
 	DatasetID  string
 	SubjectID  string
 	Freq       string
@@ -103,7 +104,7 @@ func (s *Store) WriteRows(ctx context.Context, rows []*pb.DataRow, mode pb.Write
 		if err := validateRow(row); err != nil {
 			return err
 		}
-		path := s.factPath(row.GetSlice())
+		path := s.factPath(row.GetKey().GetScope())
 		grouped[path] = append(grouped[path], row)
 	}
 
@@ -126,9 +127,9 @@ func (s *Store) WriteRows(ctx context.Context, rows []*pb.DataRow, mode pb.Write
 	return nil
 }
 
-func (s *Store) ReadRows(ctx context.Context, slice *pb.DataSlice, readMode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, rowIDs []string, columnNames []string, page *pb.Page) ([]*pb.DataRow, *pb.PageResult, error) {
+func (s *Store) ReadRows(ctx context.Context, scope *pb.DataScope, readMode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, rowIDs []string, columnNames []string, page *pb.Page) ([]*pb.DataRow, *pb.PageResult, error) {
 	_ = ctx
-	if err := validateSlice(slice); err != nil {
+	if err := validateScope(scope); err != nil {
 		return nil, nil, err
 	}
 	if readMode == pb.ReadMode_READ_MODE_UNSPECIFIED {
@@ -138,7 +139,7 @@ func (s *Store) ReadRows(ctx context.Context, slice *pb.DataSlice, readMode pb.R
 		return nil, nil, errors.New("row_ids is required for point read")
 	}
 
-	paths, err := s.factPaths(slice)
+	paths, err := s.factPaths(scope)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -148,13 +149,13 @@ func (s *Store) ReadRows(ctx context.Context, slice *pb.DataSlice, readMode pb.R
 	for _, path := range paths {
 		if err := readMessages(path, func() proto.Message { return &pb.DataRow{} }, func(msg proto.Message) {
 			row := msg.(*pb.DataRow)
-			if readMode == pb.ReadMode_READ_MODE_POINT && !allowRows[row.GetRowId()] {
+			if readMode == pb.ReadMode_READ_MODE_POINT && !allowRows[row.GetKey().GetRowId()] {
 				return
 			}
-			if readMode != pb.ReadMode_READ_MODE_POINT && !timeInRange(row.GetDataTime(), timeRange) {
+			if readMode != pb.ReadMode_READ_MODE_POINT && !timeInRange(row.GetKey().GetDataTime(), timeRange) {
 				return
 			}
-			if readMode == pb.ReadMode_READ_MODE_LATEST_BEFORE && snapshotTime != "" && row.GetDataTime() > snapshotTime {
+			if readMode == pb.ReadMode_READ_MODE_LATEST_BEFORE && snapshotTime != "" && row.GetKey().GetDataTime() > snapshotTime {
 				return
 			}
 			rows = append(rows, filterRowColumns(row, columnNames))
@@ -192,7 +193,8 @@ func (s *Store) ImportCSV(ctx context.Context, path string, opts CSVImportOption
 		return fmt.Errorf("time column not found in %s", path)
 	}
 
-	slice := &pb.DataSlice{
+	scope := &pb.DataScope{
+		SpaceId:    opts.SpaceID,
 		DatasetId:  opts.DatasetID,
 		SubjectId:  opts.SubjectID,
 		Freq:       opts.Freq,
@@ -210,7 +212,7 @@ func (s *Store) ImportCSV(ctx context.Context, path string, opts CSVImportOption
 		if timeIndex >= len(record) {
 			continue
 		}
-		row := &pb.DataRow{Slice: slice, DataTime: strings.TrimSpace(record[timeIndex])}
+		row := &pb.DataRow{Key: &pb.DataKey{Scope: scope, DataTime: strings.TrimSpace(record[timeIndex])}}
 		for i, name := range header {
 			if i >= len(record) || i == timeIndex {
 				continue
@@ -222,26 +224,28 @@ func (s *Store) ImportCSV(ctx context.Context, path string, opts CSVImportOption
 	return s.WriteRows(ctx, batch, pb.WriteMode_WRITE_MODE_APPEND)
 }
 
-func (s *Store) factPath(slice *pb.DataSlice) string {
+func (s *Store) factPath(scope *pb.DataScope) string {
 	parts := []string{
 		s.root,
 		"facts",
-		safe(slice.GetDatasetId()),
-		safe(defaultString(slice.GetSubjectId(), "default")),
-		safe(defaultString(slice.GetFreq(), "default")),
-		dimensionKey(slice.GetDimensions()),
+		safe(scope.GetSpaceId()),
+		safe(scope.GetDatasetId()),
+		safe(defaultString(scope.GetSubjectId(), "default")),
+		safe(defaultString(scope.GetFreq(), "default")),
+		dimensionKey(scope.GetDimensions()),
 	}
 	return filepath.Join(parts...) + ".jsonl"
 }
 
-func (s *Store) factPaths(slice *pb.DataSlice) ([]string, error) {
+func (s *Store) factPaths(scope *pb.DataScope) ([]string, error) {
 	parts := []string{
 		s.root,
 		"facts",
-		safe(slice.GetDatasetId()),
-		patternPart(slice.GetSubjectId()),
-		patternPart(slice.GetFreq()),
-		dimensionPattern(slice.GetDimensions()),
+		safe(scope.GetSpaceId()),
+		safe(scope.GetDatasetId()),
+		patternPart(scope.GetSubjectId()),
+		patternPart(scope.GetFreq()),
+		dimensionPattern(scope.GetDimensions()),
 	}
 	return filepath.Glob(filepath.Join(parts...) + ".jsonl")
 }
@@ -250,15 +254,21 @@ func validateRow(row *pb.DataRow) error {
 	if row == nil {
 		return errors.New("row is required")
 	}
-	return validateSlice(row.GetSlice())
+	if row.GetKey() == nil {
+		return errors.New("key is required")
+	}
+	return validateScope(row.GetKey().GetScope())
 }
 
-func validateSlice(slice *pb.DataSlice) error {
-	if slice == nil {
-		return errors.New("slice is required")
+func validateScope(scope *pb.DataScope) error {
+	if scope == nil {
+		return errors.New("scope is required")
 	}
-	if slice.GetDatasetId() == "" {
+	if scope.GetDatasetId() == "" {
 		return errors.New("dataset_id is required")
+	}
+	if scope.GetSpaceId() == "" {
+		return errors.New("space_id is required")
 	}
 	return nil
 }
@@ -364,11 +374,11 @@ func filterRowColumns(row *pb.DataRow, includes []string) *pb.DataRow {
 func latestRows(rows []*pb.DataRow) []*pb.DataRow {
 	latest := make(map[string]*pb.DataRow)
 	for _, row := range rows {
-		key := row.GetSlice().GetSubjectId()
+		key := row.GetKey().GetScope().GetSubjectId()
 		if key == "" {
-			key = row.GetSlice().GetDatasetId()
+			key = row.GetKey().GetScope().GetDatasetId()
 		}
-		if prev := latest[key]; prev == nil || row.GetDataTime() > prev.GetDataTime() {
+		if prev := latest[key]; prev == nil || row.GetKey().GetDataTime() > prev.GetKey().GetDataTime() {
 			latest[key] = row
 		}
 	}
@@ -383,13 +393,13 @@ func sortRows(rows []*pb.DataRow) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		left := rows[i]
 		right := rows[j]
-		if left.GetSlice().GetSubjectId() != right.GetSlice().GetSubjectId() {
-			return left.GetSlice().GetSubjectId() < right.GetSlice().GetSubjectId()
+		if left.GetKey().GetScope().GetSubjectId() != right.GetKey().GetScope().GetSubjectId() {
+			return left.GetKey().GetScope().GetSubjectId() < right.GetKey().GetScope().GetSubjectId()
 		}
-		if left.GetDataTime() != right.GetDataTime() {
-			return left.GetDataTime() < right.GetDataTime()
+		if left.GetKey().GetDataTime() != right.GetKey().GetDataTime() {
+			return left.GetKey().GetDataTime() < right.GetKey().GetDataTime()
 		}
-		return left.GetRowId() < right.GetRowId()
+		return left.GetKey().GetRowId() < right.GetKey().GetRowId()
 	})
 }
 
@@ -463,11 +473,11 @@ func inferColumnValue(name, raw string) *pb.ColumnValue {
 }
 
 func rowKey(row *pb.DataRow, fallback int) string {
-	if row.GetRowId() != "" {
-		return "id:" + row.GetRowId()
+	if row.GetKey().GetRowId() != "" {
+		return "id:" + row.GetKey().GetRowId()
 	}
-	if row.GetDataTime() != "" {
-		return "time:" + row.GetDataTime()
+	if row.GetKey().GetDataTime() != "" {
+		return "time:" + row.GetKey().GetDataTime()
 	}
 	return fmt.Sprintf("append:%d", fallback)
 }

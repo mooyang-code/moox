@@ -19,102 +19,114 @@ import (
 
 // MetadataServiceService defines service.
 type MetadataServiceService interface {
-	// CreateWorkspace 创建工作空间。
-	CreateWorkspace(ctx context.Context, req *CreateWorkspaceReq) (*CreateWorkspaceRsp, error)
-	// UpdateWorkspace 更新工作空间元数据和状态。
-	UpdateWorkspace(ctx context.Context, req *UpdateWorkspaceReq) (*UpdateWorkspaceRsp, error)
-	// GetWorkspace 按 ID 获取工作空间。
-	GetWorkspace(ctx context.Context, req *GetWorkspaceReq) (*GetWorkspaceRsp, error)
-	// ListWorkspaces 列出调用方可见的工作空间。
-	ListWorkspaces(ctx context.Context, req *ListWorkspacesReq) (*ListWorkspacesRsp, error)
-	// CreateExchange 创建交易场所或数据场所。
-	CreateExchange(ctx context.Context, req *CreateExchangeReq) (*CreateExchangeRsp, error)
-	// UpdateExchange 更新交易场所元数据。
-	UpdateExchange(ctx context.Context, req *UpdateExchangeReq) (*UpdateExchangeRsp, error)
-	// GetExchange 按 ID 获取交易场所。
-	GetExchange(ctx context.Context, req *GetExchangeReq) (*GetExchangeRsp, error)
-	// ListExchanges 列出交易场所，可按市场过滤。
-	ListExchanges(ctx context.Context, req *ListExchangesReq) (*ListExchangesRsp, error)
-	// UpsertInstrument 创建或更新内部标准化标的。
-	UpsertInstrument(ctx context.Context, req *UpsertInstrumentReq) (*UpsertInstrumentRsp, error)
-	// GetInstrument 按 ID 获取标的。
-	GetInstrument(ctx context.Context, req *GetInstrumentReq) (*GetInstrumentRsp, error)
-	// ListInstruments 按交易场所、市场或指定 ID 列出标的。
-	ListInstruments(ctx context.Context, req *ListInstrumentsReq) (*ListInstrumentsRsp, error)
-	// UpsertInstrumentAlias 创建或更新外部代码映射。
-	UpsertInstrumentAlias(ctx context.Context, req *UpsertInstrumentAliasReq) (*UpsertInstrumentAliasRsp, error)
-	// ListInstrumentAliases 列出外部代码映射。
-	ListInstrumentAliases(ctx context.Context, req *ListInstrumentAliasesReq) (*ListInstrumentAliasesRsp, error)
-	// CreateDataSet 创建逻辑数据集。
+	// CreateSpace 创建使用空间。
+	CreateSpace(ctx context.Context, req *CreateSpaceReq) (*CreateSpaceRsp, error)
+	// UpdateSpace 更新使用空间。
+	UpdateSpace(ctx context.Context, req *UpdateSpaceReq) (*UpdateSpaceRsp, error)
+	// GetSpace 按 ID 获取使用空间。
+	GetSpace(ctx context.Context, req *GetSpaceReq) (*GetSpaceRsp, error)
+	// ListSpaces 列出使用空间。
+	ListSpaces(ctx context.Context, req *ListSpacesReq) (*ListSpacesRsp, error)
+	// CreateView 创建查询视图。
+	CreateView(ctx context.Context, req *CreateViewReq) (*CreateViewRsp, error)
+	// UpdateView 更新查询视图。
+	UpdateView(ctx context.Context, req *UpdateViewReq) (*UpdateViewRsp, error)
+	// GetView 按 ID 获取查询视图。
+	GetView(ctx context.Context, req *GetViewReq) (*GetViewRsp, error)
+	// ListViews 列出查询视图。
+	ListViews(ctx context.Context, req *ListViewsReq) (*ListViewsRsp, error)
+	// UpsertViewColumn 创建或更新视图列。
+	UpsertViewColumn(ctx context.Context, req *UpsertViewColumnReq) (*UpsertViewColumnRsp, error)
+	// ListViewColumns 列出视图列。
+	ListViewColumns(ctx context.Context, req *ListViewColumnsReq) (*ListViewColumnsRsp, error)
+	// CreateDataSource 创建数据来源。
+	CreateDataSource(ctx context.Context, req *CreateDataSourceReq) (*CreateDataSourceRsp, error)
+	// UpdateDataSource 更新数据来源。
+	UpdateDataSource(ctx context.Context, req *UpdateDataSourceReq) (*UpdateDataSourceRsp, error)
+	// GetDataSource 按 ID 获取数据来源。
+	GetDataSource(ctx context.Context, req *GetDataSourceReq) (*GetDataSourceRsp, error)
+	// ListDataSources 列出数据来源。
+	ListDataSources(ctx context.Context, req *ListDataSourcesReq) (*ListDataSourcesRsp, error)
+	// UpsertSubject 创建或更新数据对象。
+	UpsertSubject(ctx context.Context, req *UpsertSubjectReq) (*UpsertSubjectRsp, error)
+	// GetSubject 按 ID 获取数据对象。
+	GetSubject(ctx context.Context, req *GetSubjectReq) (*GetSubjectRsp, error)
+	// ListSubjects 列出数据对象。
+	ListSubjects(ctx context.Context, req *ListSubjectsReq) (*ListSubjectsRsp, error)
+	// UpsertSubjectSymbol 创建或更新数据对象的来源侧代码映射。
+	UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq) (*UpsertSubjectSymbolRsp, error)
+	// ListSubjectSymbols 列出数据对象的来源侧代码映射。
+	ListSubjectSymbols(ctx context.Context, req *ListSubjectSymbolsReq) (*ListSubjectSymbolsRsp, error)
+	// CreateDataSet 创建数据集。
 	CreateDataSet(ctx context.Context, req *CreateDataSetReq) (*CreateDataSetRsp, error)
-	// UpdateDataSet 更新数据集元数据、维度或结构版本。
+	// UpdateDataSet 更新数据集。
 	UpdateDataSet(ctx context.Context, req *UpdateDataSetReq) (*UpdateDataSetRsp, error)
-	// GetDataSet 获取一个数据集。
+	// GetDataSet 按 ID 获取数据集。
 	GetDataSet(ctx context.Context, req *GetDataSetReq) (*GetDataSetRsp, error)
-	// ListDataSets 按工作空间和分类条件列出数据集。
+	// ListDataSets 列出数据集。
 	ListDataSets(ctx context.Context, req *ListDataSetsReq) (*ListDataSetsRsp, error)
-	// CreateField 创建数据集字段定义。
+	// BindDataSetSubject 为 DataSet 绑定 Subject。
+	BindDataSetSubject(ctx context.Context, req *BindDataSetSubjectReq) (*BindDataSetSubjectRsp, error)
+	// ListDataSetSubjects 列出 DataSet 覆盖的 Subject。
+	ListDataSetSubjects(ctx context.Context, req *ListDataSetSubjectsReq) (*ListDataSetSubjectsRsp, error)
+	// CreateField 创建普通字段。
 	CreateField(ctx context.Context, req *CreateFieldReq) (*CreateFieldRsp, error)
-	// UpdateField 更新数据集字段定义。
+	// UpdateField 更新普通字段。
 	UpdateField(ctx context.Context, req *UpdateFieldReq) (*UpdateFieldRsp, error)
-	// GetField 按字段 ID 或接口名获取字段定义。
+	// GetField 按字段 ID 获取字段。
 	GetField(ctx context.Context, req *GetFieldReq) (*GetFieldRsp, error)
-	// ListFields 列出一个数据集下的字段定义。
+	// ListFields 列出普通字段。
 	ListFields(ctx context.Context, req *ListFieldsReq) (*ListFieldsRsp, error)
-	// CreateFactorDef 创建因子算法定义。
-	CreateFactorDef(ctx context.Context, req *CreateFactorDefReq) (*CreateFactorDefRsp, error)
-	// UpdateFactorDef 更新因子算法定义。
-	UpdateFactorDef(ctx context.Context, req *UpdateFactorDefReq) (*UpdateFactorDefRsp, error)
-	// GetFactorDef 获取一个因子算法定义。
-	GetFactorDef(ctx context.Context, req *GetFactorDefReq) (*GetFactorDefRsp, error)
-	// ListFactorDefs 列出一个工作空间中的因子算法定义。
-	ListFactorDefs(ctx context.Context, req *ListFactorDefsReq) (*ListFactorDefsRsp, error)
-	// CreateFactorInstance 创建一个带参数的因子实例。
-	CreateFactorInstance(ctx context.Context, req *CreateFactorInstanceReq) (*CreateFactorInstanceRsp, error)
-	// UpdateFactorInstance 更新一个带参数的因子实例。
-	UpdateFactorInstance(ctx context.Context, req *UpdateFactorInstanceReq) (*UpdateFactorInstanceRsp, error)
-	// GetFactorInstance 获取一个因子实例。
-	GetFactorInstance(ctx context.Context, req *GetFactorInstanceReq) (*GetFactorInstanceRsp, error)
-	// ListFactorInstances 按工作空间和可选条件列出因子实例。
-	ListFactorInstances(ctx context.Context, req *ListFactorInstancesReq) (*ListFactorInstancesRsp, error)
-	// CreateDataView 创建面向查询的数据视图。
-	CreateDataView(ctx context.Context, req *CreateDataViewReq) (*CreateDataViewRsp, error)
-	// UpdateDataView 更新数据视图，或创建新的视图版本。
-	UpdateDataView(ctx context.Context, req *UpdateDataViewReq) (*UpdateDataViewRsp, error)
-	// GetDataView 获取一个数据视图。
-	GetDataView(ctx context.Context, req *GetDataViewReq) (*GetDataViewRsp, error)
-	// ListDataViews 列出一个工作空间中的数据视图。
-	ListDataViews(ctx context.Context, req *ListDataViewsReq) (*ListDataViewsRsp, error)
-	// CreateStorageDevice 创建物理存储设备定义。
-	CreateStorageDevice(ctx context.Context, req *CreateStorageDeviceReq) (*CreateStorageDeviceRsp, error)
-	// UpdateStorageDevice 更新物理存储设备定义。
-	UpdateStorageDevice(ctx context.Context, req *UpdateStorageDeviceReq) (*UpdateStorageDeviceRsp, error)
-	// GetStorageDevice 获取一个存储设备定义。
-	GetStorageDevice(ctx context.Context, req *GetStorageDeviceReq) (*GetStorageDeviceRsp, error)
-	// ListStorageDevices 列出物理存储设备。
-	ListStorageDevices(ctx context.Context, req *ListStorageDevicesReq) (*ListStorageDevicesRsp, error)
-	// CreateStorageRoute 创建逻辑到物理存储的路由规则。
+	// CreateFactor 创建因子。
+	CreateFactor(ctx context.Context, req *CreateFactorReq) (*CreateFactorRsp, error)
+	// UpdateFactor 更新因子。
+	UpdateFactor(ctx context.Context, req *UpdateFactorReq) (*UpdateFactorRsp, error)
+	// GetFactor 按 ID 获取因子。
+	GetFactor(ctx context.Context, req *GetFactorReq) (*GetFactorRsp, error)
+	// ListFactors 列出因子。
+	ListFactors(ctx context.Context, req *ListFactorsReq) (*ListFactorsRsp, error)
+	// UpsertDataSetColumn 创建或更新数据集列。
+	UpsertDataSetColumn(ctx context.Context, req *UpsertDataSetColumnReq) (*UpsertDataSetColumnRsp, error)
+	// ListDataSetColumns 列出数据集列。
+	ListDataSetColumns(ctx context.Context, req *ListDataSetColumnsReq) (*ListDataSetColumnsRsp, error)
+	// CreateStorageNode 创建存储节点。
+	CreateStorageNode(ctx context.Context, req *CreateStorageNodeReq) (*CreateStorageNodeRsp, error)
+	// UpdateStorageNode 更新存储节点。
+	UpdateStorageNode(ctx context.Context, req *UpdateStorageNodeReq) (*UpdateStorageNodeRsp, error)
+	// GetStorageNode 按 ID 获取存储节点。
+	GetStorageNode(ctx context.Context, req *GetStorageNodeReq) (*GetStorageNodeRsp, error)
+	// ListStorageNodes 列出存储节点。
+	ListStorageNodes(ctx context.Context, req *ListStorageNodesReq) (*ListStorageNodesRsp, error)
+	// CreateDevice 创建设备。
+	CreateDevice(ctx context.Context, req *CreateDeviceReq) (*CreateDeviceRsp, error)
+	// UpdateDevice 更新设备。
+	UpdateDevice(ctx context.Context, req *UpdateDeviceReq) (*UpdateDeviceRsp, error)
+	// GetDevice 按 ID 获取设备。
+	GetDevice(ctx context.Context, req *GetDeviceReq) (*GetDeviceRsp, error)
+	// ListDevices 列出设备。
+	ListDevices(ctx context.Context, req *ListDevicesReq) (*ListDevicesRsp, error)
+	// CreateStorageRoute 创建在线主存路由。
 	CreateStorageRoute(ctx context.Context, req *CreateStorageRouteReq) (*CreateStorageRouteRsp, error)
-	// UpdateStorageRoute 更新存储路由规则。
+	// UpdateStorageRoute 更新在线主存路由。
 	UpdateStorageRoute(ctx context.Context, req *UpdateStorageRouteReq) (*UpdateStorageRouteRsp, error)
-	// GetStorageRoute 获取一个存储路由规则。
+	// GetStorageRoute 按 ID 获取在线主存路由。
 	GetStorageRoute(ctx context.Context, req *GetStorageRouteReq) (*GetStorageRouteRsp, error)
-	// ListStorageRoutes 按工作空间、数据集或设备列出存储路由。
+	// ListStorageRoutes 列出在线主存路由。
 	ListStorageRoutes(ctx context.Context, req *ListStorageRoutesReq) (*ListStorageRoutesRsp, error)
-	// ConfigureCollectorDataSetBinding 创建或更新采集任务到目标数据集的绑定。
-	ConfigureCollectorDataSetBinding(ctx context.Context, req *ConfigureCollectorDataSetBindingReq) (*ConfigureCollectorDataSetBindingRsp, error)
-	// ListCollectorDataSetBindings 列出采集任务到数据集的绑定关系。
-	ListCollectorDataSetBindings(ctx context.Context, req *ListCollectorDataSetBindingsReq) (*ListCollectorDataSetBindingsRsp, error)
+	// RegisterArchiveFile 登记 Parquet 归档文件。
+	RegisterArchiveFile(ctx context.Context, req *RegisterArchiveFileReq) (*RegisterArchiveFileRsp, error)
+	// ListArchiveFiles 列出 Parquet 归档文件。
+	ListArchiveFiles(ctx context.Context, req *ListArchiveFilesReq) (*ListArchiveFilesRsp, error)
 }
 
-func MetadataServiceService_CreateWorkspace_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateWorkspaceReq{}
+func MetadataServiceService_CreateSpace_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateSpaceReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).CreateWorkspace(ctx, reqbody.(*CreateWorkspaceReq))
+		return svr.(MetadataServiceService).CreateSpace(ctx, reqbody.(*CreateSpaceReq))
 	}
 
 	var rsp interface{}
@@ -125,14 +137,14 @@ func MetadataServiceService_CreateWorkspace_Handler(svr interface{}, ctx context
 	return rsp, nil
 }
 
-func MetadataServiceService_UpdateWorkspace_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateWorkspaceReq{}
+func MetadataServiceService_UpdateSpace_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateSpaceReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).UpdateWorkspace(ctx, reqbody.(*UpdateWorkspaceReq))
+		return svr.(MetadataServiceService).UpdateSpace(ctx, reqbody.(*UpdateSpaceReq))
 	}
 
 	var rsp interface{}
@@ -143,14 +155,14 @@ func MetadataServiceService_UpdateWorkspace_Handler(svr interface{}, ctx context
 	return rsp, nil
 }
 
-func MetadataServiceService_GetWorkspace_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetWorkspaceReq{}
+func MetadataServiceService_GetSpace_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetSpaceReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).GetWorkspace(ctx, reqbody.(*GetWorkspaceReq))
+		return svr.(MetadataServiceService).GetSpace(ctx, reqbody.(*GetSpaceReq))
 	}
 
 	var rsp interface{}
@@ -161,14 +173,14 @@ func MetadataServiceService_GetWorkspace_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
-func MetadataServiceService_ListWorkspaces_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListWorkspacesReq{}
+func MetadataServiceService_ListSpaces_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListSpacesReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).ListWorkspaces(ctx, reqbody.(*ListWorkspacesReq))
+		return svr.(MetadataServiceService).ListSpaces(ctx, reqbody.(*ListSpacesReq))
 	}
 
 	var rsp interface{}
@@ -179,14 +191,14 @@ func MetadataServiceService_ListWorkspaces_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-func MetadataServiceService_CreateExchange_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateExchangeReq{}
+func MetadataServiceService_CreateView_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateViewReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).CreateExchange(ctx, reqbody.(*CreateExchangeReq))
+		return svr.(MetadataServiceService).CreateView(ctx, reqbody.(*CreateViewReq))
 	}
 
 	var rsp interface{}
@@ -197,14 +209,14 @@ func MetadataServiceService_CreateExchange_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-func MetadataServiceService_UpdateExchange_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateExchangeReq{}
+func MetadataServiceService_UpdateView_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateViewReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).UpdateExchange(ctx, reqbody.(*UpdateExchangeReq))
+		return svr.(MetadataServiceService).UpdateView(ctx, reqbody.(*UpdateViewReq))
 	}
 
 	var rsp interface{}
@@ -215,14 +227,14 @@ func MetadataServiceService_UpdateExchange_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-func MetadataServiceService_GetExchange_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetExchangeReq{}
+func MetadataServiceService_GetView_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetViewReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).GetExchange(ctx, reqbody.(*GetExchangeReq))
+		return svr.(MetadataServiceService).GetView(ctx, reqbody.(*GetViewReq))
 	}
 
 	var rsp interface{}
@@ -233,14 +245,14 @@ func MetadataServiceService_GetExchange_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
-func MetadataServiceService_ListExchanges_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListExchangesReq{}
+func MetadataServiceService_ListViews_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListViewsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).ListExchanges(ctx, reqbody.(*ListExchangesReq))
+		return svr.(MetadataServiceService).ListViews(ctx, reqbody.(*ListViewsReq))
 	}
 
 	var rsp interface{}
@@ -251,14 +263,14 @@ func MetadataServiceService_ListExchanges_Handler(svr interface{}, ctx context.C
 	return rsp, nil
 }
 
-func MetadataServiceService_UpsertInstrument_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpsertInstrumentReq{}
+func MetadataServiceService_UpsertViewColumn_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertViewColumnReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).UpsertInstrument(ctx, reqbody.(*UpsertInstrumentReq))
+		return svr.(MetadataServiceService).UpsertViewColumn(ctx, reqbody.(*UpsertViewColumnReq))
 	}
 
 	var rsp interface{}
@@ -269,14 +281,14 @@ func MetadataServiceService_UpsertInstrument_Handler(svr interface{}, ctx contex
 	return rsp, nil
 }
 
-func MetadataServiceService_GetInstrument_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetInstrumentReq{}
+func MetadataServiceService_ListViewColumns_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListViewColumnsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).GetInstrument(ctx, reqbody.(*GetInstrumentReq))
+		return svr.(MetadataServiceService).ListViewColumns(ctx, reqbody.(*ListViewColumnsReq))
 	}
 
 	var rsp interface{}
@@ -287,14 +299,14 @@ func MetadataServiceService_GetInstrument_Handler(svr interface{}, ctx context.C
 	return rsp, nil
 }
 
-func MetadataServiceService_ListInstruments_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListInstrumentsReq{}
+func MetadataServiceService_CreateDataSource_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateDataSourceReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).ListInstruments(ctx, reqbody.(*ListInstrumentsReq))
+		return svr.(MetadataServiceService).CreateDataSource(ctx, reqbody.(*CreateDataSourceReq))
 	}
 
 	var rsp interface{}
@@ -305,14 +317,14 @@ func MetadataServiceService_ListInstruments_Handler(svr interface{}, ctx context
 	return rsp, nil
 }
 
-func MetadataServiceService_UpsertInstrumentAlias_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpsertInstrumentAliasReq{}
+func MetadataServiceService_UpdateDataSource_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateDataSourceReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).UpsertInstrumentAlias(ctx, reqbody.(*UpsertInstrumentAliasReq))
+		return svr.(MetadataServiceService).UpdateDataSource(ctx, reqbody.(*UpdateDataSourceReq))
 	}
 
 	var rsp interface{}
@@ -323,14 +335,122 @@ func MetadataServiceService_UpsertInstrumentAlias_Handler(svr interface{}, ctx c
 	return rsp, nil
 }
 
-func MetadataServiceService_ListInstrumentAliases_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListInstrumentAliasesReq{}
+func MetadataServiceService_GetDataSource_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetDataSourceReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).ListInstrumentAliases(ctx, reqbody.(*ListInstrumentAliasesReq))
+		return svr.(MetadataServiceService).GetDataSource(ctx, reqbody.(*GetDataSourceReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataServiceService_ListDataSources_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListDataSourcesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataServiceService).ListDataSources(ctx, reqbody.(*ListDataSourcesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataServiceService_UpsertSubject_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertSubjectReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataServiceService).UpsertSubject(ctx, reqbody.(*UpsertSubjectReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataServiceService_GetSubject_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetSubjectReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataServiceService).GetSubject(ctx, reqbody.(*GetSubjectReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataServiceService_ListSubjects_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListSubjectsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataServiceService).ListSubjects(ctx, reqbody.(*ListSubjectsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataServiceService_UpsertSubjectSymbol_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertSubjectSymbolReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataServiceService).UpsertSubjectSymbol(ctx, reqbody.(*UpsertSubjectSymbolReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataServiceService_ListSubjectSymbols_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListSubjectSymbolsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataServiceService).ListSubjectSymbols(ctx, reqbody.(*ListSubjectSymbolsReq))
 	}
 
 	var rsp interface{}
@@ -413,6 +533,42 @@ func MetadataServiceService_ListDataSets_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
+func MetadataServiceService_BindDataSetSubject_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &BindDataSetSubjectReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataServiceService).BindDataSetSubject(ctx, reqbody.(*BindDataSetSubjectReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataServiceService_ListDataSetSubjects_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListDataSetSubjectsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataServiceService).ListDataSetSubjects(ctx, reqbody.(*ListDataSetSubjectsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func MetadataServiceService_CreateField_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &CreateFieldReq{}
 	filters, err := f(req)
@@ -485,14 +641,14 @@ func MetadataServiceService_ListFields_Handler(svr interface{}, ctx context.Cont
 	return rsp, nil
 }
 
-func MetadataServiceService_CreateFactorDef_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateFactorDefReq{}
+func MetadataServiceService_CreateFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateFactorReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).CreateFactorDef(ctx, reqbody.(*CreateFactorDefReq))
+		return svr.(MetadataServiceService).CreateFactor(ctx, reqbody.(*CreateFactorReq))
 	}
 
 	var rsp interface{}
@@ -503,14 +659,14 @@ func MetadataServiceService_CreateFactorDef_Handler(svr interface{}, ctx context
 	return rsp, nil
 }
 
-func MetadataServiceService_UpdateFactorDef_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateFactorDefReq{}
+func MetadataServiceService_UpdateFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateFactorReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).UpdateFactorDef(ctx, reqbody.(*UpdateFactorDefReq))
+		return svr.(MetadataServiceService).UpdateFactor(ctx, reqbody.(*UpdateFactorReq))
 	}
 
 	var rsp interface{}
@@ -521,14 +677,14 @@ func MetadataServiceService_UpdateFactorDef_Handler(svr interface{}, ctx context
 	return rsp, nil
 }
 
-func MetadataServiceService_GetFactorDef_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetFactorDefReq{}
+func MetadataServiceService_GetFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetFactorReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).GetFactorDef(ctx, reqbody.(*GetFactorDefReq))
+		return svr.(MetadataServiceService).GetFactor(ctx, reqbody.(*GetFactorReq))
 	}
 
 	var rsp interface{}
@@ -539,14 +695,14 @@ func MetadataServiceService_GetFactorDef_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
-func MetadataServiceService_ListFactorDefs_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListFactorDefsReq{}
+func MetadataServiceService_ListFactors_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListFactorsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).ListFactorDefs(ctx, reqbody.(*ListFactorDefsReq))
+		return svr.(MetadataServiceService).ListFactors(ctx, reqbody.(*ListFactorsReq))
 	}
 
 	var rsp interface{}
@@ -557,14 +713,14 @@ func MetadataServiceService_ListFactorDefs_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-func MetadataServiceService_CreateFactorInstance_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateFactorInstanceReq{}
+func MetadataServiceService_UpsertDataSetColumn_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertDataSetColumnReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).CreateFactorInstance(ctx, reqbody.(*CreateFactorInstanceReq))
+		return svr.(MetadataServiceService).UpsertDataSetColumn(ctx, reqbody.(*UpsertDataSetColumnReq))
 	}
 
 	var rsp interface{}
@@ -575,14 +731,14 @@ func MetadataServiceService_CreateFactorInstance_Handler(svr interface{}, ctx co
 	return rsp, nil
 }
 
-func MetadataServiceService_UpdateFactorInstance_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateFactorInstanceReq{}
+func MetadataServiceService_ListDataSetColumns_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListDataSetColumnsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).UpdateFactorInstance(ctx, reqbody.(*UpdateFactorInstanceReq))
+		return svr.(MetadataServiceService).ListDataSetColumns(ctx, reqbody.(*ListDataSetColumnsReq))
 	}
 
 	var rsp interface{}
@@ -593,14 +749,14 @@ func MetadataServiceService_UpdateFactorInstance_Handler(svr interface{}, ctx co
 	return rsp, nil
 }
 
-func MetadataServiceService_GetFactorInstance_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetFactorInstanceReq{}
+func MetadataServiceService_CreateStorageNode_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateStorageNodeReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).GetFactorInstance(ctx, reqbody.(*GetFactorInstanceReq))
+		return svr.(MetadataServiceService).CreateStorageNode(ctx, reqbody.(*CreateStorageNodeReq))
 	}
 
 	var rsp interface{}
@@ -611,14 +767,14 @@ func MetadataServiceService_GetFactorInstance_Handler(svr interface{}, ctx conte
 	return rsp, nil
 }
 
-func MetadataServiceService_ListFactorInstances_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListFactorInstancesReq{}
+func MetadataServiceService_UpdateStorageNode_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateStorageNodeReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).ListFactorInstances(ctx, reqbody.(*ListFactorInstancesReq))
+		return svr.(MetadataServiceService).UpdateStorageNode(ctx, reqbody.(*UpdateStorageNodeReq))
 	}
 
 	var rsp interface{}
@@ -629,14 +785,14 @@ func MetadataServiceService_ListFactorInstances_Handler(svr interface{}, ctx con
 	return rsp, nil
 }
 
-func MetadataServiceService_CreateDataView_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateDataViewReq{}
+func MetadataServiceService_GetStorageNode_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetStorageNodeReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).CreateDataView(ctx, reqbody.(*CreateDataViewReq))
+		return svr.(MetadataServiceService).GetStorageNode(ctx, reqbody.(*GetStorageNodeReq))
 	}
 
 	var rsp interface{}
@@ -647,14 +803,14 @@ func MetadataServiceService_CreateDataView_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-func MetadataServiceService_UpdateDataView_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateDataViewReq{}
+func MetadataServiceService_ListStorageNodes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListStorageNodesReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).UpdateDataView(ctx, reqbody.(*UpdateDataViewReq))
+		return svr.(MetadataServiceService).ListStorageNodes(ctx, reqbody.(*ListStorageNodesReq))
 	}
 
 	var rsp interface{}
@@ -665,14 +821,14 @@ func MetadataServiceService_UpdateDataView_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-func MetadataServiceService_GetDataView_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetDataViewReq{}
+func MetadataServiceService_CreateDevice_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateDeviceReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).GetDataView(ctx, reqbody.(*GetDataViewReq))
+		return svr.(MetadataServiceService).CreateDevice(ctx, reqbody.(*CreateDeviceReq))
 	}
 
 	var rsp interface{}
@@ -683,14 +839,14 @@ func MetadataServiceService_GetDataView_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
-func MetadataServiceService_ListDataViews_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListDataViewsReq{}
+func MetadataServiceService_UpdateDevice_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateDeviceReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).ListDataViews(ctx, reqbody.(*ListDataViewsReq))
+		return svr.(MetadataServiceService).UpdateDevice(ctx, reqbody.(*UpdateDeviceReq))
 	}
 
 	var rsp interface{}
@@ -701,14 +857,14 @@ func MetadataServiceService_ListDataViews_Handler(svr interface{}, ctx context.C
 	return rsp, nil
 }
 
-func MetadataServiceService_CreateStorageDevice_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateStorageDeviceReq{}
+func MetadataServiceService_GetDevice_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetDeviceReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).CreateStorageDevice(ctx, reqbody.(*CreateStorageDeviceReq))
+		return svr.(MetadataServiceService).GetDevice(ctx, reqbody.(*GetDeviceReq))
 	}
 
 	var rsp interface{}
@@ -719,50 +875,14 @@ func MetadataServiceService_CreateStorageDevice_Handler(svr interface{}, ctx con
 	return rsp, nil
 }
 
-func MetadataServiceService_UpdateStorageDevice_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateStorageDeviceReq{}
+func MetadataServiceService_ListDevices_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListDevicesReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).UpdateStorageDevice(ctx, reqbody.(*UpdateStorageDeviceReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataServiceService_GetStorageDevice_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetStorageDeviceReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).GetStorageDevice(ctx, reqbody.(*GetStorageDeviceReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataServiceService_ListStorageDevices_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListStorageDevicesReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).ListStorageDevices(ctx, reqbody.(*ListStorageDevicesReq))
+		return svr.(MetadataServiceService).ListDevices(ctx, reqbody.(*ListDevicesReq))
 	}
 
 	var rsp interface{}
@@ -845,14 +965,14 @@ func MetadataServiceService_ListStorageRoutes_Handler(svr interface{}, ctx conte
 	return rsp, nil
 }
 
-func MetadataServiceService_ConfigureCollectorDataSetBinding_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ConfigureCollectorDataSetBindingReq{}
+func MetadataServiceService_RegisterArchiveFile_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RegisterArchiveFileReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).ConfigureCollectorDataSetBinding(ctx, reqbody.(*ConfigureCollectorDataSetBindingReq))
+		return svr.(MetadataServiceService).RegisterArchiveFile(ctx, reqbody.(*RegisterArchiveFileReq))
 	}
 
 	var rsp interface{}
@@ -863,14 +983,14 @@ func MetadataServiceService_ConfigureCollectorDataSetBinding_Handler(svr interfa
 	return rsp, nil
 }
 
-func MetadataServiceService_ListCollectorDataSetBindings_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListCollectorDataSetBindingsReq{}
+func MetadataServiceService_ListArchiveFiles_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListArchiveFilesReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataServiceService).ListCollectorDataSetBindings(ctx, reqbody.(*ListCollectorDataSetBindingsReq))
+		return svr.(MetadataServiceService).ListArchiveFiles(ctx, reqbody.(*ListArchiveFilesReq))
 	}
 
 	var rsp interface{}
@@ -887,56 +1007,80 @@ var MetadataServiceServer_ServiceDesc = server.ServiceDesc{
 	HandlerType: ((*MetadataServiceService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.storage.metadata.MetadataService/CreateWorkspace",
-			Func: MetadataServiceService_CreateWorkspace_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/CreateSpace",
+			Func: MetadataServiceService_CreateSpace_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/UpdateWorkspace",
-			Func: MetadataServiceService_UpdateWorkspace_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/UpdateSpace",
+			Func: MetadataServiceService_UpdateSpace_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/GetWorkspace",
-			Func: MetadataServiceService_GetWorkspace_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/GetSpace",
+			Func: MetadataServiceService_GetSpace_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/ListWorkspaces",
-			Func: MetadataServiceService_ListWorkspaces_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/ListSpaces",
+			Func: MetadataServiceService_ListSpaces_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/CreateExchange",
-			Func: MetadataServiceService_CreateExchange_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/CreateView",
+			Func: MetadataServiceService_CreateView_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/UpdateExchange",
-			Func: MetadataServiceService_UpdateExchange_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/UpdateView",
+			Func: MetadataServiceService_UpdateView_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/GetExchange",
-			Func: MetadataServiceService_GetExchange_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/GetView",
+			Func: MetadataServiceService_GetView_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/ListExchanges",
-			Func: MetadataServiceService_ListExchanges_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/ListViews",
+			Func: MetadataServiceService_ListViews_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/UpsertInstrument",
-			Func: MetadataServiceService_UpsertInstrument_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/UpsertViewColumn",
+			Func: MetadataServiceService_UpsertViewColumn_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/GetInstrument",
-			Func: MetadataServiceService_GetInstrument_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/ListViewColumns",
+			Func: MetadataServiceService_ListViewColumns_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/ListInstruments",
-			Func: MetadataServiceService_ListInstruments_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/CreateDataSource",
+			Func: MetadataServiceService_CreateDataSource_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/UpsertInstrumentAlias",
-			Func: MetadataServiceService_UpsertInstrumentAlias_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/UpdateDataSource",
+			Func: MetadataServiceService_UpdateDataSource_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/ListInstrumentAliases",
-			Func: MetadataServiceService_ListInstrumentAliases_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/GetDataSource",
+			Func: MetadataServiceService_GetDataSource_Handler,
+		},
+		{
+			Name: "/trpc.storage.metadata.MetadataService/ListDataSources",
+			Func: MetadataServiceService_ListDataSources_Handler,
+		},
+		{
+			Name: "/trpc.storage.metadata.MetadataService/UpsertSubject",
+			Func: MetadataServiceService_UpsertSubject_Handler,
+		},
+		{
+			Name: "/trpc.storage.metadata.MetadataService/GetSubject",
+			Func: MetadataServiceService_GetSubject_Handler,
+		},
+		{
+			Name: "/trpc.storage.metadata.MetadataService/ListSubjects",
+			Func: MetadataServiceService_ListSubjects_Handler,
+		},
+		{
+			Name: "/trpc.storage.metadata.MetadataService/UpsertSubjectSymbol",
+			Func: MetadataServiceService_UpsertSubjectSymbol_Handler,
+		},
+		{
+			Name: "/trpc.storage.metadata.MetadataService/ListSubjectSymbols",
+			Func: MetadataServiceService_ListSubjectSymbols_Handler,
 		},
 		{
 			Name: "/trpc.storage.metadata.MetadataService/CreateDataSet",
@@ -955,6 +1099,14 @@ var MetadataServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataServiceService_ListDataSets_Handler,
 		},
 		{
+			Name: "/trpc.storage.metadata.MetadataService/BindDataSetSubject",
+			Func: MetadataServiceService_BindDataSetSubject_Handler,
+		},
+		{
+			Name: "/trpc.storage.metadata.MetadataService/ListDataSetSubjects",
+			Func: MetadataServiceService_ListDataSetSubjects_Handler,
+		},
+		{
 			Name: "/trpc.storage.metadata.MetadataService/CreateField",
 			Func: MetadataServiceService_CreateField_Handler,
 		},
@@ -971,68 +1123,60 @@ var MetadataServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataServiceService_ListFields_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/CreateFactorDef",
-			Func: MetadataServiceService_CreateFactorDef_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/CreateFactor",
+			Func: MetadataServiceService_CreateFactor_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/UpdateFactorDef",
-			Func: MetadataServiceService_UpdateFactorDef_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/UpdateFactor",
+			Func: MetadataServiceService_UpdateFactor_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/GetFactorDef",
-			Func: MetadataServiceService_GetFactorDef_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/GetFactor",
+			Func: MetadataServiceService_GetFactor_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/ListFactorDefs",
-			Func: MetadataServiceService_ListFactorDefs_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/ListFactors",
+			Func: MetadataServiceService_ListFactors_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/CreateFactorInstance",
-			Func: MetadataServiceService_CreateFactorInstance_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/UpsertDataSetColumn",
+			Func: MetadataServiceService_UpsertDataSetColumn_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/UpdateFactorInstance",
-			Func: MetadataServiceService_UpdateFactorInstance_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/ListDataSetColumns",
+			Func: MetadataServiceService_ListDataSetColumns_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/GetFactorInstance",
-			Func: MetadataServiceService_GetFactorInstance_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/CreateStorageNode",
+			Func: MetadataServiceService_CreateStorageNode_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/ListFactorInstances",
-			Func: MetadataServiceService_ListFactorInstances_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/UpdateStorageNode",
+			Func: MetadataServiceService_UpdateStorageNode_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/CreateDataView",
-			Func: MetadataServiceService_CreateDataView_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/GetStorageNode",
+			Func: MetadataServiceService_GetStorageNode_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/UpdateDataView",
-			Func: MetadataServiceService_UpdateDataView_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/ListStorageNodes",
+			Func: MetadataServiceService_ListStorageNodes_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/GetDataView",
-			Func: MetadataServiceService_GetDataView_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/CreateDevice",
+			Func: MetadataServiceService_CreateDevice_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/ListDataViews",
-			Func: MetadataServiceService_ListDataViews_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/UpdateDevice",
+			Func: MetadataServiceService_UpdateDevice_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/CreateStorageDevice",
-			Func: MetadataServiceService_CreateStorageDevice_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/GetDevice",
+			Func: MetadataServiceService_GetDevice_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/UpdateStorageDevice",
-			Func: MetadataServiceService_UpdateStorageDevice_Handler,
-		},
-		{
-			Name: "/trpc.storage.metadata.MetadataService/GetStorageDevice",
-			Func: MetadataServiceService_GetStorageDevice_Handler,
-		},
-		{
-			Name: "/trpc.storage.metadata.MetadataService/ListStorageDevices",
-			Func: MetadataServiceService_ListStorageDevices_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/ListDevices",
+			Func: MetadataServiceService_ListDevices_Handler,
 		},
 		{
 			Name: "/trpc.storage.metadata.MetadataService/CreateStorageRoute",
@@ -1051,12 +1195,12 @@ var MetadataServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataServiceService_ListStorageRoutes_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/ConfigureCollectorDataSetBinding",
-			Func: MetadataServiceService_ConfigureCollectorDataSetBinding_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/RegisterArchiveFile",
+			Func: MetadataServiceService_RegisterArchiveFile_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.MetadataService/ListCollectorDataSetBindings",
-			Func: MetadataServiceService_ListCollectorDataSetBindings_Handler,
+			Name: "/trpc.storage.metadata.MetadataService/ListArchiveFiles",
+			Func: MetadataServiceService_ListArchiveFiles_Handler,
 		},
 	},
 }
@@ -1072,219 +1216,249 @@ func RegisterMetadataServiceService(s server.Service, svr MetadataServiceService
 
 type UnimplementedMetadataService struct{}
 
-// CreateWorkspace 创建工作空间。
-func (s *UnimplementedMetadataService) CreateWorkspace(ctx context.Context, req *CreateWorkspaceReq) (*CreateWorkspaceRsp, error) {
-	return nil, errors.New("rpc CreateWorkspace of service MetadataService is not implemented")
+// CreateSpace 创建使用空间。
+func (s *UnimplementedMetadataService) CreateSpace(ctx context.Context, req *CreateSpaceReq) (*CreateSpaceRsp, error) {
+	return nil, errors.New("rpc CreateSpace of service MetadataService is not implemented")
 }
 
-// UpdateWorkspace 更新工作空间元数据和状态。
-func (s *UnimplementedMetadataService) UpdateWorkspace(ctx context.Context, req *UpdateWorkspaceReq) (*UpdateWorkspaceRsp, error) {
-	return nil, errors.New("rpc UpdateWorkspace of service MetadataService is not implemented")
+// UpdateSpace 更新使用空间。
+func (s *UnimplementedMetadataService) UpdateSpace(ctx context.Context, req *UpdateSpaceReq) (*UpdateSpaceRsp, error) {
+	return nil, errors.New("rpc UpdateSpace of service MetadataService is not implemented")
 }
 
-// GetWorkspace 按 ID 获取工作空间。
-func (s *UnimplementedMetadataService) GetWorkspace(ctx context.Context, req *GetWorkspaceReq) (*GetWorkspaceRsp, error) {
-	return nil, errors.New("rpc GetWorkspace of service MetadataService is not implemented")
+// GetSpace 按 ID 获取使用空间。
+func (s *UnimplementedMetadataService) GetSpace(ctx context.Context, req *GetSpaceReq) (*GetSpaceRsp, error) {
+	return nil, errors.New("rpc GetSpace of service MetadataService is not implemented")
 }
 
-// ListWorkspaces 列出调用方可见的工作空间。
-func (s *UnimplementedMetadataService) ListWorkspaces(ctx context.Context, req *ListWorkspacesReq) (*ListWorkspacesRsp, error) {
-	return nil, errors.New("rpc ListWorkspaces of service MetadataService is not implemented")
+// ListSpaces 列出使用空间。
+func (s *UnimplementedMetadataService) ListSpaces(ctx context.Context, req *ListSpacesReq) (*ListSpacesRsp, error) {
+	return nil, errors.New("rpc ListSpaces of service MetadataService is not implemented")
 }
 
-// CreateExchange 创建交易场所或数据场所。
-func (s *UnimplementedMetadataService) CreateExchange(ctx context.Context, req *CreateExchangeReq) (*CreateExchangeRsp, error) {
-	return nil, errors.New("rpc CreateExchange of service MetadataService is not implemented")
+// CreateView 创建查询视图。
+func (s *UnimplementedMetadataService) CreateView(ctx context.Context, req *CreateViewReq) (*CreateViewRsp, error) {
+	return nil, errors.New("rpc CreateView of service MetadataService is not implemented")
 }
 
-// UpdateExchange 更新交易场所元数据。
-func (s *UnimplementedMetadataService) UpdateExchange(ctx context.Context, req *UpdateExchangeReq) (*UpdateExchangeRsp, error) {
-	return nil, errors.New("rpc UpdateExchange of service MetadataService is not implemented")
+// UpdateView 更新查询视图。
+func (s *UnimplementedMetadataService) UpdateView(ctx context.Context, req *UpdateViewReq) (*UpdateViewRsp, error) {
+	return nil, errors.New("rpc UpdateView of service MetadataService is not implemented")
 }
 
-// GetExchange 按 ID 获取交易场所。
-func (s *UnimplementedMetadataService) GetExchange(ctx context.Context, req *GetExchangeReq) (*GetExchangeRsp, error) {
-	return nil, errors.New("rpc GetExchange of service MetadataService is not implemented")
+// GetView 按 ID 获取查询视图。
+func (s *UnimplementedMetadataService) GetView(ctx context.Context, req *GetViewReq) (*GetViewRsp, error) {
+	return nil, errors.New("rpc GetView of service MetadataService is not implemented")
 }
 
-// ListExchanges 列出交易场所，可按市场过滤。
-func (s *UnimplementedMetadataService) ListExchanges(ctx context.Context, req *ListExchangesReq) (*ListExchangesRsp, error) {
-	return nil, errors.New("rpc ListExchanges of service MetadataService is not implemented")
+// ListViews 列出查询视图。
+func (s *UnimplementedMetadataService) ListViews(ctx context.Context, req *ListViewsReq) (*ListViewsRsp, error) {
+	return nil, errors.New("rpc ListViews of service MetadataService is not implemented")
 }
 
-// UpsertInstrument 创建或更新内部标准化标的。
-func (s *UnimplementedMetadataService) UpsertInstrument(ctx context.Context, req *UpsertInstrumentReq) (*UpsertInstrumentRsp, error) {
-	return nil, errors.New("rpc UpsertInstrument of service MetadataService is not implemented")
+// UpsertViewColumn 创建或更新视图列。
+func (s *UnimplementedMetadataService) UpsertViewColumn(ctx context.Context, req *UpsertViewColumnReq) (*UpsertViewColumnRsp, error) {
+	return nil, errors.New("rpc UpsertViewColumn of service MetadataService is not implemented")
 }
 
-// GetInstrument 按 ID 获取标的。
-func (s *UnimplementedMetadataService) GetInstrument(ctx context.Context, req *GetInstrumentReq) (*GetInstrumentRsp, error) {
-	return nil, errors.New("rpc GetInstrument of service MetadataService is not implemented")
+// ListViewColumns 列出视图列。
+func (s *UnimplementedMetadataService) ListViewColumns(ctx context.Context, req *ListViewColumnsReq) (*ListViewColumnsRsp, error) {
+	return nil, errors.New("rpc ListViewColumns of service MetadataService is not implemented")
 }
 
-// ListInstruments 按交易场所、市场或指定 ID 列出标的。
-func (s *UnimplementedMetadataService) ListInstruments(ctx context.Context, req *ListInstrumentsReq) (*ListInstrumentsRsp, error) {
-	return nil, errors.New("rpc ListInstruments of service MetadataService is not implemented")
+// CreateDataSource 创建数据来源。
+func (s *UnimplementedMetadataService) CreateDataSource(ctx context.Context, req *CreateDataSourceReq) (*CreateDataSourceRsp, error) {
+	return nil, errors.New("rpc CreateDataSource of service MetadataService is not implemented")
 }
 
-// UpsertInstrumentAlias 创建或更新外部代码映射。
-func (s *UnimplementedMetadataService) UpsertInstrumentAlias(ctx context.Context, req *UpsertInstrumentAliasReq) (*UpsertInstrumentAliasRsp, error) {
-	return nil, errors.New("rpc UpsertInstrumentAlias of service MetadataService is not implemented")
+// UpdateDataSource 更新数据来源。
+func (s *UnimplementedMetadataService) UpdateDataSource(ctx context.Context, req *UpdateDataSourceReq) (*UpdateDataSourceRsp, error) {
+	return nil, errors.New("rpc UpdateDataSource of service MetadataService is not implemented")
 }
 
-// ListInstrumentAliases 列出外部代码映射。
-func (s *UnimplementedMetadataService) ListInstrumentAliases(ctx context.Context, req *ListInstrumentAliasesReq) (*ListInstrumentAliasesRsp, error) {
-	return nil, errors.New("rpc ListInstrumentAliases of service MetadataService is not implemented")
+// GetDataSource 按 ID 获取数据来源。
+func (s *UnimplementedMetadataService) GetDataSource(ctx context.Context, req *GetDataSourceReq) (*GetDataSourceRsp, error) {
+	return nil, errors.New("rpc GetDataSource of service MetadataService is not implemented")
 }
 
-// CreateDataSet 创建逻辑数据集。
+// ListDataSources 列出数据来源。
+func (s *UnimplementedMetadataService) ListDataSources(ctx context.Context, req *ListDataSourcesReq) (*ListDataSourcesRsp, error) {
+	return nil, errors.New("rpc ListDataSources of service MetadataService is not implemented")
+}
+
+// UpsertSubject 创建或更新数据对象。
+func (s *UnimplementedMetadataService) UpsertSubject(ctx context.Context, req *UpsertSubjectReq) (*UpsertSubjectRsp, error) {
+	return nil, errors.New("rpc UpsertSubject of service MetadataService is not implemented")
+}
+
+// GetSubject 按 ID 获取数据对象。
+func (s *UnimplementedMetadataService) GetSubject(ctx context.Context, req *GetSubjectReq) (*GetSubjectRsp, error) {
+	return nil, errors.New("rpc GetSubject of service MetadataService is not implemented")
+}
+
+// ListSubjects 列出数据对象。
+func (s *UnimplementedMetadataService) ListSubjects(ctx context.Context, req *ListSubjectsReq) (*ListSubjectsRsp, error) {
+	return nil, errors.New("rpc ListSubjects of service MetadataService is not implemented")
+}
+
+// UpsertSubjectSymbol 创建或更新数据对象的来源侧代码映射。
+func (s *UnimplementedMetadataService) UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq) (*UpsertSubjectSymbolRsp, error) {
+	return nil, errors.New("rpc UpsertSubjectSymbol of service MetadataService is not implemented")
+}
+
+// ListSubjectSymbols 列出数据对象的来源侧代码映射。
+func (s *UnimplementedMetadataService) ListSubjectSymbols(ctx context.Context, req *ListSubjectSymbolsReq) (*ListSubjectSymbolsRsp, error) {
+	return nil, errors.New("rpc ListSubjectSymbols of service MetadataService is not implemented")
+}
+
+// CreateDataSet 创建数据集。
 func (s *UnimplementedMetadataService) CreateDataSet(ctx context.Context, req *CreateDataSetReq) (*CreateDataSetRsp, error) {
 	return nil, errors.New("rpc CreateDataSet of service MetadataService is not implemented")
 }
 
-// UpdateDataSet 更新数据集元数据、维度或结构版本。
+// UpdateDataSet 更新数据集。
 func (s *UnimplementedMetadataService) UpdateDataSet(ctx context.Context, req *UpdateDataSetReq) (*UpdateDataSetRsp, error) {
 	return nil, errors.New("rpc UpdateDataSet of service MetadataService is not implemented")
 }
 
-// GetDataSet 获取一个数据集。
+// GetDataSet 按 ID 获取数据集。
 func (s *UnimplementedMetadataService) GetDataSet(ctx context.Context, req *GetDataSetReq) (*GetDataSetRsp, error) {
 	return nil, errors.New("rpc GetDataSet of service MetadataService is not implemented")
 }
 
-// ListDataSets 按工作空间和分类条件列出数据集。
+// ListDataSets 列出数据集。
 func (s *UnimplementedMetadataService) ListDataSets(ctx context.Context, req *ListDataSetsReq) (*ListDataSetsRsp, error) {
 	return nil, errors.New("rpc ListDataSets of service MetadataService is not implemented")
 }
 
-// CreateField 创建数据集字段定义。
+// BindDataSetSubject 为 DataSet 绑定 Subject。
+func (s *UnimplementedMetadataService) BindDataSetSubject(ctx context.Context, req *BindDataSetSubjectReq) (*BindDataSetSubjectRsp, error) {
+	return nil, errors.New("rpc BindDataSetSubject of service MetadataService is not implemented")
+}
+
+// ListDataSetSubjects 列出 DataSet 覆盖的 Subject。
+func (s *UnimplementedMetadataService) ListDataSetSubjects(ctx context.Context, req *ListDataSetSubjectsReq) (*ListDataSetSubjectsRsp, error) {
+	return nil, errors.New("rpc ListDataSetSubjects of service MetadataService is not implemented")
+}
+
+// CreateField 创建普通字段。
 func (s *UnimplementedMetadataService) CreateField(ctx context.Context, req *CreateFieldReq) (*CreateFieldRsp, error) {
 	return nil, errors.New("rpc CreateField of service MetadataService is not implemented")
 }
 
-// UpdateField 更新数据集字段定义。
+// UpdateField 更新普通字段。
 func (s *UnimplementedMetadataService) UpdateField(ctx context.Context, req *UpdateFieldReq) (*UpdateFieldRsp, error) {
 	return nil, errors.New("rpc UpdateField of service MetadataService is not implemented")
 }
 
-// GetField 按字段 ID 或接口名获取字段定义。
+// GetField 按字段 ID 获取字段。
 func (s *UnimplementedMetadataService) GetField(ctx context.Context, req *GetFieldReq) (*GetFieldRsp, error) {
 	return nil, errors.New("rpc GetField of service MetadataService is not implemented")
 }
 
-// ListFields 列出一个数据集下的字段定义。
+// ListFields 列出普通字段。
 func (s *UnimplementedMetadataService) ListFields(ctx context.Context, req *ListFieldsReq) (*ListFieldsRsp, error) {
 	return nil, errors.New("rpc ListFields of service MetadataService is not implemented")
 }
 
-// CreateFactorDef 创建因子算法定义。
-func (s *UnimplementedMetadataService) CreateFactorDef(ctx context.Context, req *CreateFactorDefReq) (*CreateFactorDefRsp, error) {
-	return nil, errors.New("rpc CreateFactorDef of service MetadataService is not implemented")
+// CreateFactor 创建因子。
+func (s *UnimplementedMetadataService) CreateFactor(ctx context.Context, req *CreateFactorReq) (*CreateFactorRsp, error) {
+	return nil, errors.New("rpc CreateFactor of service MetadataService is not implemented")
 }
 
-// UpdateFactorDef 更新因子算法定义。
-func (s *UnimplementedMetadataService) UpdateFactorDef(ctx context.Context, req *UpdateFactorDefReq) (*UpdateFactorDefRsp, error) {
-	return nil, errors.New("rpc UpdateFactorDef of service MetadataService is not implemented")
+// UpdateFactor 更新因子。
+func (s *UnimplementedMetadataService) UpdateFactor(ctx context.Context, req *UpdateFactorReq) (*UpdateFactorRsp, error) {
+	return nil, errors.New("rpc UpdateFactor of service MetadataService is not implemented")
 }
 
-// GetFactorDef 获取一个因子算法定义。
-func (s *UnimplementedMetadataService) GetFactorDef(ctx context.Context, req *GetFactorDefReq) (*GetFactorDefRsp, error) {
-	return nil, errors.New("rpc GetFactorDef of service MetadataService is not implemented")
+// GetFactor 按 ID 获取因子。
+func (s *UnimplementedMetadataService) GetFactor(ctx context.Context, req *GetFactorReq) (*GetFactorRsp, error) {
+	return nil, errors.New("rpc GetFactor of service MetadataService is not implemented")
 }
 
-// ListFactorDefs 列出一个工作空间中的因子算法定义。
-func (s *UnimplementedMetadataService) ListFactorDefs(ctx context.Context, req *ListFactorDefsReq) (*ListFactorDefsRsp, error) {
-	return nil, errors.New("rpc ListFactorDefs of service MetadataService is not implemented")
+// ListFactors 列出因子。
+func (s *UnimplementedMetadataService) ListFactors(ctx context.Context, req *ListFactorsReq) (*ListFactorsRsp, error) {
+	return nil, errors.New("rpc ListFactors of service MetadataService is not implemented")
 }
 
-// CreateFactorInstance 创建一个带参数的因子实例。
-func (s *UnimplementedMetadataService) CreateFactorInstance(ctx context.Context, req *CreateFactorInstanceReq) (*CreateFactorInstanceRsp, error) {
-	return nil, errors.New("rpc CreateFactorInstance of service MetadataService is not implemented")
+// UpsertDataSetColumn 创建或更新数据集列。
+func (s *UnimplementedMetadataService) UpsertDataSetColumn(ctx context.Context, req *UpsertDataSetColumnReq) (*UpsertDataSetColumnRsp, error) {
+	return nil, errors.New("rpc UpsertDataSetColumn of service MetadataService is not implemented")
 }
 
-// UpdateFactorInstance 更新一个带参数的因子实例。
-func (s *UnimplementedMetadataService) UpdateFactorInstance(ctx context.Context, req *UpdateFactorInstanceReq) (*UpdateFactorInstanceRsp, error) {
-	return nil, errors.New("rpc UpdateFactorInstance of service MetadataService is not implemented")
+// ListDataSetColumns 列出数据集列。
+func (s *UnimplementedMetadataService) ListDataSetColumns(ctx context.Context, req *ListDataSetColumnsReq) (*ListDataSetColumnsRsp, error) {
+	return nil, errors.New("rpc ListDataSetColumns of service MetadataService is not implemented")
 }
 
-// GetFactorInstance 获取一个因子实例。
-func (s *UnimplementedMetadataService) GetFactorInstance(ctx context.Context, req *GetFactorInstanceReq) (*GetFactorInstanceRsp, error) {
-	return nil, errors.New("rpc GetFactorInstance of service MetadataService is not implemented")
+// CreateStorageNode 创建存储节点。
+func (s *UnimplementedMetadataService) CreateStorageNode(ctx context.Context, req *CreateStorageNodeReq) (*CreateStorageNodeRsp, error) {
+	return nil, errors.New("rpc CreateStorageNode of service MetadataService is not implemented")
 }
 
-// ListFactorInstances 按工作空间和可选条件列出因子实例。
-func (s *UnimplementedMetadataService) ListFactorInstances(ctx context.Context, req *ListFactorInstancesReq) (*ListFactorInstancesRsp, error) {
-	return nil, errors.New("rpc ListFactorInstances of service MetadataService is not implemented")
+// UpdateStorageNode 更新存储节点。
+func (s *UnimplementedMetadataService) UpdateStorageNode(ctx context.Context, req *UpdateStorageNodeReq) (*UpdateStorageNodeRsp, error) {
+	return nil, errors.New("rpc UpdateStorageNode of service MetadataService is not implemented")
 }
 
-// CreateDataView 创建面向查询的数据视图。
-func (s *UnimplementedMetadataService) CreateDataView(ctx context.Context, req *CreateDataViewReq) (*CreateDataViewRsp, error) {
-	return nil, errors.New("rpc CreateDataView of service MetadataService is not implemented")
+// GetStorageNode 按 ID 获取存储节点。
+func (s *UnimplementedMetadataService) GetStorageNode(ctx context.Context, req *GetStorageNodeReq) (*GetStorageNodeRsp, error) {
+	return nil, errors.New("rpc GetStorageNode of service MetadataService is not implemented")
 }
 
-// UpdateDataView 更新数据视图，或创建新的视图版本。
-func (s *UnimplementedMetadataService) UpdateDataView(ctx context.Context, req *UpdateDataViewReq) (*UpdateDataViewRsp, error) {
-	return nil, errors.New("rpc UpdateDataView of service MetadataService is not implemented")
+// ListStorageNodes 列出存储节点。
+func (s *UnimplementedMetadataService) ListStorageNodes(ctx context.Context, req *ListStorageNodesReq) (*ListStorageNodesRsp, error) {
+	return nil, errors.New("rpc ListStorageNodes of service MetadataService is not implemented")
 }
 
-// GetDataView 获取一个数据视图。
-func (s *UnimplementedMetadataService) GetDataView(ctx context.Context, req *GetDataViewReq) (*GetDataViewRsp, error) {
-	return nil, errors.New("rpc GetDataView of service MetadataService is not implemented")
+// CreateDevice 创建设备。
+func (s *UnimplementedMetadataService) CreateDevice(ctx context.Context, req *CreateDeviceReq) (*CreateDeviceRsp, error) {
+	return nil, errors.New("rpc CreateDevice of service MetadataService is not implemented")
 }
 
-// ListDataViews 列出一个工作空间中的数据视图。
-func (s *UnimplementedMetadataService) ListDataViews(ctx context.Context, req *ListDataViewsReq) (*ListDataViewsRsp, error) {
-	return nil, errors.New("rpc ListDataViews of service MetadataService is not implemented")
+// UpdateDevice 更新设备。
+func (s *UnimplementedMetadataService) UpdateDevice(ctx context.Context, req *UpdateDeviceReq) (*UpdateDeviceRsp, error) {
+	return nil, errors.New("rpc UpdateDevice of service MetadataService is not implemented")
 }
 
-// CreateStorageDevice 创建物理存储设备定义。
-func (s *UnimplementedMetadataService) CreateStorageDevice(ctx context.Context, req *CreateStorageDeviceReq) (*CreateStorageDeviceRsp, error) {
-	return nil, errors.New("rpc CreateStorageDevice of service MetadataService is not implemented")
+// GetDevice 按 ID 获取设备。
+func (s *UnimplementedMetadataService) GetDevice(ctx context.Context, req *GetDeviceReq) (*GetDeviceRsp, error) {
+	return nil, errors.New("rpc GetDevice of service MetadataService is not implemented")
 }
 
-// UpdateStorageDevice 更新物理存储设备定义。
-func (s *UnimplementedMetadataService) UpdateStorageDevice(ctx context.Context, req *UpdateStorageDeviceReq) (*UpdateStorageDeviceRsp, error) {
-	return nil, errors.New("rpc UpdateStorageDevice of service MetadataService is not implemented")
+// ListDevices 列出设备。
+func (s *UnimplementedMetadataService) ListDevices(ctx context.Context, req *ListDevicesReq) (*ListDevicesRsp, error) {
+	return nil, errors.New("rpc ListDevices of service MetadataService is not implemented")
 }
 
-// GetStorageDevice 获取一个存储设备定义。
-func (s *UnimplementedMetadataService) GetStorageDevice(ctx context.Context, req *GetStorageDeviceReq) (*GetStorageDeviceRsp, error) {
-	return nil, errors.New("rpc GetStorageDevice of service MetadataService is not implemented")
-}
-
-// ListStorageDevices 列出物理存储设备。
-func (s *UnimplementedMetadataService) ListStorageDevices(ctx context.Context, req *ListStorageDevicesReq) (*ListStorageDevicesRsp, error) {
-	return nil, errors.New("rpc ListStorageDevices of service MetadataService is not implemented")
-}
-
-// CreateStorageRoute 创建逻辑到物理存储的路由规则。
+// CreateStorageRoute 创建在线主存路由。
 func (s *UnimplementedMetadataService) CreateStorageRoute(ctx context.Context, req *CreateStorageRouteReq) (*CreateStorageRouteRsp, error) {
 	return nil, errors.New("rpc CreateStorageRoute of service MetadataService is not implemented")
 }
 
-// UpdateStorageRoute 更新存储路由规则。
+// UpdateStorageRoute 更新在线主存路由。
 func (s *UnimplementedMetadataService) UpdateStorageRoute(ctx context.Context, req *UpdateStorageRouteReq) (*UpdateStorageRouteRsp, error) {
 	return nil, errors.New("rpc UpdateStorageRoute of service MetadataService is not implemented")
 }
 
-// GetStorageRoute 获取一个存储路由规则。
+// GetStorageRoute 按 ID 获取在线主存路由。
 func (s *UnimplementedMetadataService) GetStorageRoute(ctx context.Context, req *GetStorageRouteReq) (*GetStorageRouteRsp, error) {
 	return nil, errors.New("rpc GetStorageRoute of service MetadataService is not implemented")
 }
 
-// ListStorageRoutes 按工作空间、数据集或设备列出存储路由。
+// ListStorageRoutes 列出在线主存路由。
 func (s *UnimplementedMetadataService) ListStorageRoutes(ctx context.Context, req *ListStorageRoutesReq) (*ListStorageRoutesRsp, error) {
 	return nil, errors.New("rpc ListStorageRoutes of service MetadataService is not implemented")
 }
 
-// ConfigureCollectorDataSetBinding 创建或更新采集任务到目标数据集的绑定。
-func (s *UnimplementedMetadataService) ConfigureCollectorDataSetBinding(ctx context.Context, req *ConfigureCollectorDataSetBindingReq) (*ConfigureCollectorDataSetBindingRsp, error) {
-	return nil, errors.New("rpc ConfigureCollectorDataSetBinding of service MetadataService is not implemented")
+// RegisterArchiveFile 登记 Parquet 归档文件。
+func (s *UnimplementedMetadataService) RegisterArchiveFile(ctx context.Context, req *RegisterArchiveFileReq) (*RegisterArchiveFileRsp, error) {
+	return nil, errors.New("rpc RegisterArchiveFile of service MetadataService is not implemented")
 }
 
-// ListCollectorDataSetBindings 列出采集任务到数据集的绑定关系。
-func (s *UnimplementedMetadataService) ListCollectorDataSetBindings(ctx context.Context, req *ListCollectorDataSetBindingsReq) (*ListCollectorDataSetBindingsRsp, error) {
-	return nil, errors.New("rpc ListCollectorDataSetBindings of service MetadataService is not implemented")
+// ListArchiveFiles 列出 Parquet 归档文件。
+func (s *UnimplementedMetadataService) ListArchiveFiles(ctx context.Context, req *ListArchiveFilesReq) (*ListArchiveFilesRsp, error) {
+	return nil, errors.New("rpc ListArchiveFiles of service MetadataService is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -1295,92 +1469,104 @@ func (s *UnimplementedMetadataService) ListCollectorDataSetBindings(ctx context.
 
 // MetadataServiceClientProxy defines service client proxy
 type MetadataServiceClientProxy interface {
-	// CreateWorkspace 创建工作空间。
-	CreateWorkspace(ctx context.Context, req *CreateWorkspaceReq, opts ...client.Option) (rsp *CreateWorkspaceRsp, err error)
-	// UpdateWorkspace 更新工作空间元数据和状态。
-	UpdateWorkspace(ctx context.Context, req *UpdateWorkspaceReq, opts ...client.Option) (rsp *UpdateWorkspaceRsp, err error)
-	// GetWorkspace 按 ID 获取工作空间。
-	GetWorkspace(ctx context.Context, req *GetWorkspaceReq, opts ...client.Option) (rsp *GetWorkspaceRsp, err error)
-	// ListWorkspaces 列出调用方可见的工作空间。
-	ListWorkspaces(ctx context.Context, req *ListWorkspacesReq, opts ...client.Option) (rsp *ListWorkspacesRsp, err error)
-	// CreateExchange 创建交易场所或数据场所。
-	CreateExchange(ctx context.Context, req *CreateExchangeReq, opts ...client.Option) (rsp *CreateExchangeRsp, err error)
-	// UpdateExchange 更新交易场所元数据。
-	UpdateExchange(ctx context.Context, req *UpdateExchangeReq, opts ...client.Option) (rsp *UpdateExchangeRsp, err error)
-	// GetExchange 按 ID 获取交易场所。
-	GetExchange(ctx context.Context, req *GetExchangeReq, opts ...client.Option) (rsp *GetExchangeRsp, err error)
-	// ListExchanges 列出交易场所，可按市场过滤。
-	ListExchanges(ctx context.Context, req *ListExchangesReq, opts ...client.Option) (rsp *ListExchangesRsp, err error)
-	// UpsertInstrument 创建或更新内部标准化标的。
-	UpsertInstrument(ctx context.Context, req *UpsertInstrumentReq, opts ...client.Option) (rsp *UpsertInstrumentRsp, err error)
-	// GetInstrument 按 ID 获取标的。
-	GetInstrument(ctx context.Context, req *GetInstrumentReq, opts ...client.Option) (rsp *GetInstrumentRsp, err error)
-	// ListInstruments 按交易场所、市场或指定 ID 列出标的。
-	ListInstruments(ctx context.Context, req *ListInstrumentsReq, opts ...client.Option) (rsp *ListInstrumentsRsp, err error)
-	// UpsertInstrumentAlias 创建或更新外部代码映射。
-	UpsertInstrumentAlias(ctx context.Context, req *UpsertInstrumentAliasReq, opts ...client.Option) (rsp *UpsertInstrumentAliasRsp, err error)
-	// ListInstrumentAliases 列出外部代码映射。
-	ListInstrumentAliases(ctx context.Context, req *ListInstrumentAliasesReq, opts ...client.Option) (rsp *ListInstrumentAliasesRsp, err error)
-	// CreateDataSet 创建逻辑数据集。
+	// CreateSpace 创建使用空间。
+	CreateSpace(ctx context.Context, req *CreateSpaceReq, opts ...client.Option) (rsp *CreateSpaceRsp, err error)
+	// UpdateSpace 更新使用空间。
+	UpdateSpace(ctx context.Context, req *UpdateSpaceReq, opts ...client.Option) (rsp *UpdateSpaceRsp, err error)
+	// GetSpace 按 ID 获取使用空间。
+	GetSpace(ctx context.Context, req *GetSpaceReq, opts ...client.Option) (rsp *GetSpaceRsp, err error)
+	// ListSpaces 列出使用空间。
+	ListSpaces(ctx context.Context, req *ListSpacesReq, opts ...client.Option) (rsp *ListSpacesRsp, err error)
+	// CreateView 创建查询视图。
+	CreateView(ctx context.Context, req *CreateViewReq, opts ...client.Option) (rsp *CreateViewRsp, err error)
+	// UpdateView 更新查询视图。
+	UpdateView(ctx context.Context, req *UpdateViewReq, opts ...client.Option) (rsp *UpdateViewRsp, err error)
+	// GetView 按 ID 获取查询视图。
+	GetView(ctx context.Context, req *GetViewReq, opts ...client.Option) (rsp *GetViewRsp, err error)
+	// ListViews 列出查询视图。
+	ListViews(ctx context.Context, req *ListViewsReq, opts ...client.Option) (rsp *ListViewsRsp, err error)
+	// UpsertViewColumn 创建或更新视图列。
+	UpsertViewColumn(ctx context.Context, req *UpsertViewColumnReq, opts ...client.Option) (rsp *UpsertViewColumnRsp, err error)
+	// ListViewColumns 列出视图列。
+	ListViewColumns(ctx context.Context, req *ListViewColumnsReq, opts ...client.Option) (rsp *ListViewColumnsRsp, err error)
+	// CreateDataSource 创建数据来源。
+	CreateDataSource(ctx context.Context, req *CreateDataSourceReq, opts ...client.Option) (rsp *CreateDataSourceRsp, err error)
+	// UpdateDataSource 更新数据来源。
+	UpdateDataSource(ctx context.Context, req *UpdateDataSourceReq, opts ...client.Option) (rsp *UpdateDataSourceRsp, err error)
+	// GetDataSource 按 ID 获取数据来源。
+	GetDataSource(ctx context.Context, req *GetDataSourceReq, opts ...client.Option) (rsp *GetDataSourceRsp, err error)
+	// ListDataSources 列出数据来源。
+	ListDataSources(ctx context.Context, req *ListDataSourcesReq, opts ...client.Option) (rsp *ListDataSourcesRsp, err error)
+	// UpsertSubject 创建或更新数据对象。
+	UpsertSubject(ctx context.Context, req *UpsertSubjectReq, opts ...client.Option) (rsp *UpsertSubjectRsp, err error)
+	// GetSubject 按 ID 获取数据对象。
+	GetSubject(ctx context.Context, req *GetSubjectReq, opts ...client.Option) (rsp *GetSubjectRsp, err error)
+	// ListSubjects 列出数据对象。
+	ListSubjects(ctx context.Context, req *ListSubjectsReq, opts ...client.Option) (rsp *ListSubjectsRsp, err error)
+	// UpsertSubjectSymbol 创建或更新数据对象的来源侧代码映射。
+	UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq, opts ...client.Option) (rsp *UpsertSubjectSymbolRsp, err error)
+	// ListSubjectSymbols 列出数据对象的来源侧代码映射。
+	ListSubjectSymbols(ctx context.Context, req *ListSubjectSymbolsReq, opts ...client.Option) (rsp *ListSubjectSymbolsRsp, err error)
+	// CreateDataSet 创建数据集。
 	CreateDataSet(ctx context.Context, req *CreateDataSetReq, opts ...client.Option) (rsp *CreateDataSetRsp, err error)
-	// UpdateDataSet 更新数据集元数据、维度或结构版本。
+	// UpdateDataSet 更新数据集。
 	UpdateDataSet(ctx context.Context, req *UpdateDataSetReq, opts ...client.Option) (rsp *UpdateDataSetRsp, err error)
-	// GetDataSet 获取一个数据集。
+	// GetDataSet 按 ID 获取数据集。
 	GetDataSet(ctx context.Context, req *GetDataSetReq, opts ...client.Option) (rsp *GetDataSetRsp, err error)
-	// ListDataSets 按工作空间和分类条件列出数据集。
+	// ListDataSets 列出数据集。
 	ListDataSets(ctx context.Context, req *ListDataSetsReq, opts ...client.Option) (rsp *ListDataSetsRsp, err error)
-	// CreateField 创建数据集字段定义。
+	// BindDataSetSubject 为 DataSet 绑定 Subject。
+	BindDataSetSubject(ctx context.Context, req *BindDataSetSubjectReq, opts ...client.Option) (rsp *BindDataSetSubjectRsp, err error)
+	// ListDataSetSubjects 列出 DataSet 覆盖的 Subject。
+	ListDataSetSubjects(ctx context.Context, req *ListDataSetSubjectsReq, opts ...client.Option) (rsp *ListDataSetSubjectsRsp, err error)
+	// CreateField 创建普通字段。
 	CreateField(ctx context.Context, req *CreateFieldReq, opts ...client.Option) (rsp *CreateFieldRsp, err error)
-	// UpdateField 更新数据集字段定义。
+	// UpdateField 更新普通字段。
 	UpdateField(ctx context.Context, req *UpdateFieldReq, opts ...client.Option) (rsp *UpdateFieldRsp, err error)
-	// GetField 按字段 ID 或接口名获取字段定义。
+	// GetField 按字段 ID 获取字段。
 	GetField(ctx context.Context, req *GetFieldReq, opts ...client.Option) (rsp *GetFieldRsp, err error)
-	// ListFields 列出一个数据集下的字段定义。
+	// ListFields 列出普通字段。
 	ListFields(ctx context.Context, req *ListFieldsReq, opts ...client.Option) (rsp *ListFieldsRsp, err error)
-	// CreateFactorDef 创建因子算法定义。
-	CreateFactorDef(ctx context.Context, req *CreateFactorDefReq, opts ...client.Option) (rsp *CreateFactorDefRsp, err error)
-	// UpdateFactorDef 更新因子算法定义。
-	UpdateFactorDef(ctx context.Context, req *UpdateFactorDefReq, opts ...client.Option) (rsp *UpdateFactorDefRsp, err error)
-	// GetFactorDef 获取一个因子算法定义。
-	GetFactorDef(ctx context.Context, req *GetFactorDefReq, opts ...client.Option) (rsp *GetFactorDefRsp, err error)
-	// ListFactorDefs 列出一个工作空间中的因子算法定义。
-	ListFactorDefs(ctx context.Context, req *ListFactorDefsReq, opts ...client.Option) (rsp *ListFactorDefsRsp, err error)
-	// CreateFactorInstance 创建一个带参数的因子实例。
-	CreateFactorInstance(ctx context.Context, req *CreateFactorInstanceReq, opts ...client.Option) (rsp *CreateFactorInstanceRsp, err error)
-	// UpdateFactorInstance 更新一个带参数的因子实例。
-	UpdateFactorInstance(ctx context.Context, req *UpdateFactorInstanceReq, opts ...client.Option) (rsp *UpdateFactorInstanceRsp, err error)
-	// GetFactorInstance 获取一个因子实例。
-	GetFactorInstance(ctx context.Context, req *GetFactorInstanceReq, opts ...client.Option) (rsp *GetFactorInstanceRsp, err error)
-	// ListFactorInstances 按工作空间和可选条件列出因子实例。
-	ListFactorInstances(ctx context.Context, req *ListFactorInstancesReq, opts ...client.Option) (rsp *ListFactorInstancesRsp, err error)
-	// CreateDataView 创建面向查询的数据视图。
-	CreateDataView(ctx context.Context, req *CreateDataViewReq, opts ...client.Option) (rsp *CreateDataViewRsp, err error)
-	// UpdateDataView 更新数据视图，或创建新的视图版本。
-	UpdateDataView(ctx context.Context, req *UpdateDataViewReq, opts ...client.Option) (rsp *UpdateDataViewRsp, err error)
-	// GetDataView 获取一个数据视图。
-	GetDataView(ctx context.Context, req *GetDataViewReq, opts ...client.Option) (rsp *GetDataViewRsp, err error)
-	// ListDataViews 列出一个工作空间中的数据视图。
-	ListDataViews(ctx context.Context, req *ListDataViewsReq, opts ...client.Option) (rsp *ListDataViewsRsp, err error)
-	// CreateStorageDevice 创建物理存储设备定义。
-	CreateStorageDevice(ctx context.Context, req *CreateStorageDeviceReq, opts ...client.Option) (rsp *CreateStorageDeviceRsp, err error)
-	// UpdateStorageDevice 更新物理存储设备定义。
-	UpdateStorageDevice(ctx context.Context, req *UpdateStorageDeviceReq, opts ...client.Option) (rsp *UpdateStorageDeviceRsp, err error)
-	// GetStorageDevice 获取一个存储设备定义。
-	GetStorageDevice(ctx context.Context, req *GetStorageDeviceReq, opts ...client.Option) (rsp *GetStorageDeviceRsp, err error)
-	// ListStorageDevices 列出物理存储设备。
-	ListStorageDevices(ctx context.Context, req *ListStorageDevicesReq, opts ...client.Option) (rsp *ListStorageDevicesRsp, err error)
-	// CreateStorageRoute 创建逻辑到物理存储的路由规则。
+	// CreateFactor 创建因子。
+	CreateFactor(ctx context.Context, req *CreateFactorReq, opts ...client.Option) (rsp *CreateFactorRsp, err error)
+	// UpdateFactor 更新因子。
+	UpdateFactor(ctx context.Context, req *UpdateFactorReq, opts ...client.Option) (rsp *UpdateFactorRsp, err error)
+	// GetFactor 按 ID 获取因子。
+	GetFactor(ctx context.Context, req *GetFactorReq, opts ...client.Option) (rsp *GetFactorRsp, err error)
+	// ListFactors 列出因子。
+	ListFactors(ctx context.Context, req *ListFactorsReq, opts ...client.Option) (rsp *ListFactorsRsp, err error)
+	// UpsertDataSetColumn 创建或更新数据集列。
+	UpsertDataSetColumn(ctx context.Context, req *UpsertDataSetColumnReq, opts ...client.Option) (rsp *UpsertDataSetColumnRsp, err error)
+	// ListDataSetColumns 列出数据集列。
+	ListDataSetColumns(ctx context.Context, req *ListDataSetColumnsReq, opts ...client.Option) (rsp *ListDataSetColumnsRsp, err error)
+	// CreateStorageNode 创建存储节点。
+	CreateStorageNode(ctx context.Context, req *CreateStorageNodeReq, opts ...client.Option) (rsp *CreateStorageNodeRsp, err error)
+	// UpdateStorageNode 更新存储节点。
+	UpdateStorageNode(ctx context.Context, req *UpdateStorageNodeReq, opts ...client.Option) (rsp *UpdateStorageNodeRsp, err error)
+	// GetStorageNode 按 ID 获取存储节点。
+	GetStorageNode(ctx context.Context, req *GetStorageNodeReq, opts ...client.Option) (rsp *GetStorageNodeRsp, err error)
+	// ListStorageNodes 列出存储节点。
+	ListStorageNodes(ctx context.Context, req *ListStorageNodesReq, opts ...client.Option) (rsp *ListStorageNodesRsp, err error)
+	// CreateDevice 创建设备。
+	CreateDevice(ctx context.Context, req *CreateDeviceReq, opts ...client.Option) (rsp *CreateDeviceRsp, err error)
+	// UpdateDevice 更新设备。
+	UpdateDevice(ctx context.Context, req *UpdateDeviceReq, opts ...client.Option) (rsp *UpdateDeviceRsp, err error)
+	// GetDevice 按 ID 获取设备。
+	GetDevice(ctx context.Context, req *GetDeviceReq, opts ...client.Option) (rsp *GetDeviceRsp, err error)
+	// ListDevices 列出设备。
+	ListDevices(ctx context.Context, req *ListDevicesReq, opts ...client.Option) (rsp *ListDevicesRsp, err error)
+	// CreateStorageRoute 创建在线主存路由。
 	CreateStorageRoute(ctx context.Context, req *CreateStorageRouteReq, opts ...client.Option) (rsp *CreateStorageRouteRsp, err error)
-	// UpdateStorageRoute 更新存储路由规则。
+	// UpdateStorageRoute 更新在线主存路由。
 	UpdateStorageRoute(ctx context.Context, req *UpdateStorageRouteReq, opts ...client.Option) (rsp *UpdateStorageRouteRsp, err error)
-	// GetStorageRoute 获取一个存储路由规则。
+	// GetStorageRoute 按 ID 获取在线主存路由。
 	GetStorageRoute(ctx context.Context, req *GetStorageRouteReq, opts ...client.Option) (rsp *GetStorageRouteRsp, err error)
-	// ListStorageRoutes 按工作空间、数据集或设备列出存储路由。
+	// ListStorageRoutes 列出在线主存路由。
 	ListStorageRoutes(ctx context.Context, req *ListStorageRoutesReq, opts ...client.Option) (rsp *ListStorageRoutesRsp, err error)
-	// ConfigureCollectorDataSetBinding 创建或更新采集任务到目标数据集的绑定。
-	ConfigureCollectorDataSetBinding(ctx context.Context, req *ConfigureCollectorDataSetBindingReq, opts ...client.Option) (rsp *ConfigureCollectorDataSetBindingRsp, err error)
-	// ListCollectorDataSetBindings 列出采集任务到数据集的绑定关系。
-	ListCollectorDataSetBindings(ctx context.Context, req *ListCollectorDataSetBindingsReq, opts ...client.Option) (rsp *ListCollectorDataSetBindingsRsp, err error)
+	// RegisterArchiveFile 登记 Parquet 归档文件。
+	RegisterArchiveFile(ctx context.Context, req *RegisterArchiveFileReq, opts ...client.Option) (rsp *RegisterArchiveFileRsp, err error)
+	// ListArchiveFiles 列出 Parquet 归档文件。
+	ListArchiveFiles(ctx context.Context, req *ListArchiveFilesReq, opts ...client.Option) (rsp *ListArchiveFilesRsp, err error)
 }
 
 type MetadataServiceClientProxyImpl struct {
@@ -1392,260 +1578,380 @@ var NewMetadataServiceClientProxy = func(opts ...client.Option) MetadataServiceC
 	return &MetadataServiceClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *MetadataServiceClientProxyImpl) CreateWorkspace(ctx context.Context, req *CreateWorkspaceReq, opts ...client.Option) (*CreateWorkspaceRsp, error) {
+func (c *MetadataServiceClientProxyImpl) CreateSpace(ctx context.Context, req *CreateSpaceReq, opts ...client.Option) (*CreateSpaceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/CreateWorkspace")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/CreateSpace")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("CreateWorkspace")
+	msg.WithCalleeMethod("CreateSpace")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &CreateWorkspaceRsp{}
+	rsp := &CreateSpaceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) UpdateWorkspace(ctx context.Context, req *UpdateWorkspaceReq, opts ...client.Option) (*UpdateWorkspaceRsp, error) {
+func (c *MetadataServiceClientProxyImpl) UpdateSpace(ctx context.Context, req *UpdateSpaceReq, opts ...client.Option) (*UpdateSpaceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpdateWorkspace")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpdateSpace")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("UpdateWorkspace")
+	msg.WithCalleeMethod("UpdateSpace")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &UpdateWorkspaceRsp{}
+	rsp := &UpdateSpaceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) GetWorkspace(ctx context.Context, req *GetWorkspaceReq, opts ...client.Option) (*GetWorkspaceRsp, error) {
+func (c *MetadataServiceClientProxyImpl) GetSpace(ctx context.Context, req *GetSpaceReq, opts ...client.Option) (*GetSpaceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetWorkspace")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetSpace")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("GetWorkspace")
+	msg.WithCalleeMethod("GetSpace")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetWorkspaceRsp{}
+	rsp := &GetSpaceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) ListWorkspaces(ctx context.Context, req *ListWorkspacesReq, opts ...client.Option) (*ListWorkspacesRsp, error) {
+func (c *MetadataServiceClientProxyImpl) ListSpaces(ctx context.Context, req *ListSpacesReq, opts ...client.Option) (*ListSpacesRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListWorkspaces")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListSpaces")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("ListWorkspaces")
+	msg.WithCalleeMethod("ListSpaces")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListWorkspacesRsp{}
+	rsp := &ListSpacesRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) CreateExchange(ctx context.Context, req *CreateExchangeReq, opts ...client.Option) (*CreateExchangeRsp, error) {
+func (c *MetadataServiceClientProxyImpl) CreateView(ctx context.Context, req *CreateViewReq, opts ...client.Option) (*CreateViewRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/CreateExchange")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/CreateView")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("CreateExchange")
+	msg.WithCalleeMethod("CreateView")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &CreateExchangeRsp{}
+	rsp := &CreateViewRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) UpdateExchange(ctx context.Context, req *UpdateExchangeReq, opts ...client.Option) (*UpdateExchangeRsp, error) {
+func (c *MetadataServiceClientProxyImpl) UpdateView(ctx context.Context, req *UpdateViewReq, opts ...client.Option) (*UpdateViewRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpdateExchange")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpdateView")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("UpdateExchange")
+	msg.WithCalleeMethod("UpdateView")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &UpdateExchangeRsp{}
+	rsp := &UpdateViewRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) GetExchange(ctx context.Context, req *GetExchangeReq, opts ...client.Option) (*GetExchangeRsp, error) {
+func (c *MetadataServiceClientProxyImpl) GetView(ctx context.Context, req *GetViewReq, opts ...client.Option) (*GetViewRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetExchange")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetView")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("GetExchange")
+	msg.WithCalleeMethod("GetView")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetExchangeRsp{}
+	rsp := &GetViewRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) ListExchanges(ctx context.Context, req *ListExchangesReq, opts ...client.Option) (*ListExchangesRsp, error) {
+func (c *MetadataServiceClientProxyImpl) ListViews(ctx context.Context, req *ListViewsReq, opts ...client.Option) (*ListViewsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListExchanges")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListViews")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("ListExchanges")
+	msg.WithCalleeMethod("ListViews")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListExchangesRsp{}
+	rsp := &ListViewsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) UpsertInstrument(ctx context.Context, req *UpsertInstrumentReq, opts ...client.Option) (*UpsertInstrumentRsp, error) {
+func (c *MetadataServiceClientProxyImpl) UpsertViewColumn(ctx context.Context, req *UpsertViewColumnReq, opts ...client.Option) (*UpsertViewColumnRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpsertInstrument")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpsertViewColumn")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("UpsertInstrument")
+	msg.WithCalleeMethod("UpsertViewColumn")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &UpsertInstrumentRsp{}
+	rsp := &UpsertViewColumnRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) GetInstrument(ctx context.Context, req *GetInstrumentReq, opts ...client.Option) (*GetInstrumentRsp, error) {
+func (c *MetadataServiceClientProxyImpl) ListViewColumns(ctx context.Context, req *ListViewColumnsReq, opts ...client.Option) (*ListViewColumnsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetInstrument")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListViewColumns")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("GetInstrument")
+	msg.WithCalleeMethod("ListViewColumns")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetInstrumentRsp{}
+	rsp := &ListViewColumnsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) ListInstruments(ctx context.Context, req *ListInstrumentsReq, opts ...client.Option) (*ListInstrumentsRsp, error) {
+func (c *MetadataServiceClientProxyImpl) CreateDataSource(ctx context.Context, req *CreateDataSourceReq, opts ...client.Option) (*CreateDataSourceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListInstruments")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/CreateDataSource")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("ListInstruments")
+	msg.WithCalleeMethod("CreateDataSource")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListInstrumentsRsp{}
+	rsp := &CreateDataSourceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) UpsertInstrumentAlias(ctx context.Context, req *UpsertInstrumentAliasReq, opts ...client.Option) (*UpsertInstrumentAliasRsp, error) {
+func (c *MetadataServiceClientProxyImpl) UpdateDataSource(ctx context.Context, req *UpdateDataSourceReq, opts ...client.Option) (*UpdateDataSourceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpsertInstrumentAlias")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpdateDataSource")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("UpsertInstrumentAlias")
+	msg.WithCalleeMethod("UpdateDataSource")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &UpsertInstrumentAliasRsp{}
+	rsp := &UpdateDataSourceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) ListInstrumentAliases(ctx context.Context, req *ListInstrumentAliasesReq, opts ...client.Option) (*ListInstrumentAliasesRsp, error) {
+func (c *MetadataServiceClientProxyImpl) GetDataSource(ctx context.Context, req *GetDataSourceReq, opts ...client.Option) (*GetDataSourceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListInstrumentAliases")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetDataSource")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("ListInstrumentAliases")
+	msg.WithCalleeMethod("GetDataSource")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListInstrumentAliasesRsp{}
+	rsp := &GetDataSourceRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataServiceClientProxyImpl) ListDataSources(ctx context.Context, req *ListDataSourcesReq, opts ...client.Option) (*ListDataSourcesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListDataSources")
+	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("metadata")
+	msg.WithCalleeService("MetadataService")
+	msg.WithCalleeMethod("ListDataSources")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListDataSourcesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataServiceClientProxyImpl) UpsertSubject(ctx context.Context, req *UpsertSubjectReq, opts ...client.Option) (*UpsertSubjectRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpsertSubject")
+	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("metadata")
+	msg.WithCalleeService("MetadataService")
+	msg.WithCalleeMethod("UpsertSubject")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpsertSubjectRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataServiceClientProxyImpl) GetSubject(ctx context.Context, req *GetSubjectReq, opts ...client.Option) (*GetSubjectRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetSubject")
+	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("metadata")
+	msg.WithCalleeService("MetadataService")
+	msg.WithCalleeMethod("GetSubject")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetSubjectRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataServiceClientProxyImpl) ListSubjects(ctx context.Context, req *ListSubjectsReq, opts ...client.Option) (*ListSubjectsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListSubjects")
+	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("metadata")
+	msg.WithCalleeService("MetadataService")
+	msg.WithCalleeMethod("ListSubjects")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListSubjectsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataServiceClientProxyImpl) UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq, opts ...client.Option) (*UpsertSubjectSymbolRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpsertSubjectSymbol")
+	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("metadata")
+	msg.WithCalleeService("MetadataService")
+	msg.WithCalleeMethod("UpsertSubjectSymbol")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpsertSubjectSymbolRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataServiceClientProxyImpl) ListSubjectSymbols(ctx context.Context, req *ListSubjectSymbolsReq, opts ...client.Option) (*ListSubjectSymbolsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListSubjectSymbols")
+	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("metadata")
+	msg.WithCalleeService("MetadataService")
+	msg.WithCalleeMethod("ListSubjectSymbols")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListSubjectSymbolsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1732,6 +2038,46 @@ func (c *MetadataServiceClientProxyImpl) ListDataSets(ctx context.Context, req *
 	return rsp, nil
 }
 
+func (c *MetadataServiceClientProxyImpl) BindDataSetSubject(ctx context.Context, req *BindDataSetSubjectReq, opts ...client.Option) (*BindDataSetSubjectRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/BindDataSetSubject")
+	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("metadata")
+	msg.WithCalleeService("MetadataService")
+	msg.WithCalleeMethod("BindDataSetSubject")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &BindDataSetSubjectRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataServiceClientProxyImpl) ListDataSetSubjects(ctx context.Context, req *ListDataSetSubjectsReq, opts ...client.Option) (*ListDataSetSubjectsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListDataSetSubjects")
+	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("metadata")
+	msg.WithCalleeService("MetadataService")
+	msg.WithCalleeMethod("ListDataSetSubjects")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListDataSetSubjectsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func (c *MetadataServiceClientProxyImpl) CreateField(ctx context.Context, req *CreateFieldReq, opts ...client.Option) (*CreateFieldRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -1812,320 +2158,280 @@ func (c *MetadataServiceClientProxyImpl) ListFields(ctx context.Context, req *Li
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) CreateFactorDef(ctx context.Context, req *CreateFactorDefReq, opts ...client.Option) (*CreateFactorDefRsp, error) {
+func (c *MetadataServiceClientProxyImpl) CreateFactor(ctx context.Context, req *CreateFactorReq, opts ...client.Option) (*CreateFactorRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/CreateFactorDef")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/CreateFactor")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("CreateFactorDef")
+	msg.WithCalleeMethod("CreateFactor")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &CreateFactorDefRsp{}
+	rsp := &CreateFactorRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) UpdateFactorDef(ctx context.Context, req *UpdateFactorDefReq, opts ...client.Option) (*UpdateFactorDefRsp, error) {
+func (c *MetadataServiceClientProxyImpl) UpdateFactor(ctx context.Context, req *UpdateFactorReq, opts ...client.Option) (*UpdateFactorRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpdateFactorDef")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpdateFactor")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("UpdateFactorDef")
+	msg.WithCalleeMethod("UpdateFactor")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &UpdateFactorDefRsp{}
+	rsp := &UpdateFactorRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) GetFactorDef(ctx context.Context, req *GetFactorDefReq, opts ...client.Option) (*GetFactorDefRsp, error) {
+func (c *MetadataServiceClientProxyImpl) GetFactor(ctx context.Context, req *GetFactorReq, opts ...client.Option) (*GetFactorRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetFactorDef")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetFactor")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("GetFactorDef")
+	msg.WithCalleeMethod("GetFactor")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetFactorDefRsp{}
+	rsp := &GetFactorRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) ListFactorDefs(ctx context.Context, req *ListFactorDefsReq, opts ...client.Option) (*ListFactorDefsRsp, error) {
+func (c *MetadataServiceClientProxyImpl) ListFactors(ctx context.Context, req *ListFactorsReq, opts ...client.Option) (*ListFactorsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListFactorDefs")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListFactors")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("ListFactorDefs")
+	msg.WithCalleeMethod("ListFactors")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListFactorDefsRsp{}
+	rsp := &ListFactorsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) CreateFactorInstance(ctx context.Context, req *CreateFactorInstanceReq, opts ...client.Option) (*CreateFactorInstanceRsp, error) {
+func (c *MetadataServiceClientProxyImpl) UpsertDataSetColumn(ctx context.Context, req *UpsertDataSetColumnReq, opts ...client.Option) (*UpsertDataSetColumnRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/CreateFactorInstance")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpsertDataSetColumn")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("CreateFactorInstance")
+	msg.WithCalleeMethod("UpsertDataSetColumn")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &CreateFactorInstanceRsp{}
+	rsp := &UpsertDataSetColumnRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) UpdateFactorInstance(ctx context.Context, req *UpdateFactorInstanceReq, opts ...client.Option) (*UpdateFactorInstanceRsp, error) {
+func (c *MetadataServiceClientProxyImpl) ListDataSetColumns(ctx context.Context, req *ListDataSetColumnsReq, opts ...client.Option) (*ListDataSetColumnsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpdateFactorInstance")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListDataSetColumns")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("UpdateFactorInstance")
+	msg.WithCalleeMethod("ListDataSetColumns")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &UpdateFactorInstanceRsp{}
+	rsp := &ListDataSetColumnsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) GetFactorInstance(ctx context.Context, req *GetFactorInstanceReq, opts ...client.Option) (*GetFactorInstanceRsp, error) {
+func (c *MetadataServiceClientProxyImpl) CreateStorageNode(ctx context.Context, req *CreateStorageNodeReq, opts ...client.Option) (*CreateStorageNodeRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetFactorInstance")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/CreateStorageNode")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("GetFactorInstance")
+	msg.WithCalleeMethod("CreateStorageNode")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetFactorInstanceRsp{}
+	rsp := &CreateStorageNodeRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) ListFactorInstances(ctx context.Context, req *ListFactorInstancesReq, opts ...client.Option) (*ListFactorInstancesRsp, error) {
+func (c *MetadataServiceClientProxyImpl) UpdateStorageNode(ctx context.Context, req *UpdateStorageNodeReq, opts ...client.Option) (*UpdateStorageNodeRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListFactorInstances")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpdateStorageNode")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("ListFactorInstances")
+	msg.WithCalleeMethod("UpdateStorageNode")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListFactorInstancesRsp{}
+	rsp := &UpdateStorageNodeRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) CreateDataView(ctx context.Context, req *CreateDataViewReq, opts ...client.Option) (*CreateDataViewRsp, error) {
+func (c *MetadataServiceClientProxyImpl) GetStorageNode(ctx context.Context, req *GetStorageNodeReq, opts ...client.Option) (*GetStorageNodeRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/CreateDataView")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetStorageNode")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("CreateDataView")
+	msg.WithCalleeMethod("GetStorageNode")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &CreateDataViewRsp{}
+	rsp := &GetStorageNodeRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) UpdateDataView(ctx context.Context, req *UpdateDataViewReq, opts ...client.Option) (*UpdateDataViewRsp, error) {
+func (c *MetadataServiceClientProxyImpl) ListStorageNodes(ctx context.Context, req *ListStorageNodesReq, opts ...client.Option) (*ListStorageNodesRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpdateDataView")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListStorageNodes")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("UpdateDataView")
+	msg.WithCalleeMethod("ListStorageNodes")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &UpdateDataViewRsp{}
+	rsp := &ListStorageNodesRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) GetDataView(ctx context.Context, req *GetDataViewReq, opts ...client.Option) (*GetDataViewRsp, error) {
+func (c *MetadataServiceClientProxyImpl) CreateDevice(ctx context.Context, req *CreateDeviceReq, opts ...client.Option) (*CreateDeviceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetDataView")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/CreateDevice")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("GetDataView")
+	msg.WithCalleeMethod("CreateDevice")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetDataViewRsp{}
+	rsp := &CreateDeviceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) ListDataViews(ctx context.Context, req *ListDataViewsReq, opts ...client.Option) (*ListDataViewsRsp, error) {
+func (c *MetadataServiceClientProxyImpl) UpdateDevice(ctx context.Context, req *UpdateDeviceReq, opts ...client.Option) (*UpdateDeviceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListDataViews")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpdateDevice")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("ListDataViews")
+	msg.WithCalleeMethod("UpdateDevice")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListDataViewsRsp{}
+	rsp := &UpdateDeviceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) CreateStorageDevice(ctx context.Context, req *CreateStorageDeviceReq, opts ...client.Option) (*CreateStorageDeviceRsp, error) {
+func (c *MetadataServiceClientProxyImpl) GetDevice(ctx context.Context, req *GetDeviceReq, opts ...client.Option) (*GetDeviceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/CreateStorageDevice")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetDevice")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("CreateStorageDevice")
+	msg.WithCalleeMethod("GetDevice")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &CreateStorageDeviceRsp{}
+	rsp := &GetDeviceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) UpdateStorageDevice(ctx context.Context, req *UpdateStorageDeviceReq, opts ...client.Option) (*UpdateStorageDeviceRsp, error) {
+func (c *MetadataServiceClientProxyImpl) ListDevices(ctx context.Context, req *ListDevicesReq, opts ...client.Option) (*ListDevicesRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/UpdateStorageDevice")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListDevices")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("UpdateStorageDevice")
+	msg.WithCalleeMethod("ListDevices")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &UpdateStorageDeviceRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataServiceClientProxyImpl) GetStorageDevice(ctx context.Context, req *GetStorageDeviceReq, opts ...client.Option) (*GetStorageDeviceRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/GetStorageDevice")
-	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
-	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("GetStorageDevice")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetStorageDeviceRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataServiceClientProxyImpl) ListStorageDevices(ctx context.Context, req *ListStorageDevicesReq, opts ...client.Option) (*ListStorageDevicesRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListStorageDevices")
-	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
-	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("ListStorageDevices")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListStorageDevicesRsp{}
+	rsp := &ListDevicesRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -2212,40 +2518,40 @@ func (c *MetadataServiceClientProxyImpl) ListStorageRoutes(ctx context.Context, 
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) ConfigureCollectorDataSetBinding(ctx context.Context, req *ConfigureCollectorDataSetBindingReq, opts ...client.Option) (*ConfigureCollectorDataSetBindingRsp, error) {
+func (c *MetadataServiceClientProxyImpl) RegisterArchiveFile(ctx context.Context, req *RegisterArchiveFileReq, opts ...client.Option) (*RegisterArchiveFileRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ConfigureCollectorDataSetBinding")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/RegisterArchiveFile")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("ConfigureCollectorDataSetBinding")
+	msg.WithCalleeMethod("RegisterArchiveFile")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ConfigureCollectorDataSetBindingRsp{}
+	rsp := &RegisterArchiveFileRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MetadataServiceClientProxyImpl) ListCollectorDataSetBindings(ctx context.Context, req *ListCollectorDataSetBindingsReq, opts ...client.Option) (*ListCollectorDataSetBindingsRsp, error) {
+func (c *MetadataServiceClientProxyImpl) ListArchiveFiles(ctx context.Context, req *ListArchiveFilesReq, opts ...client.Option) (*ListArchiveFilesRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListCollectorDataSetBindings")
+	msg.WithClientRPCName("/trpc.storage.metadata.MetadataService/ListArchiveFiles")
 	msg.WithCalleeServiceName(MetadataServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("metadata")
 	msg.WithCalleeService("MetadataService")
-	msg.WithCalleeMethod("ListCollectorDataSetBindings")
+	msg.WithCalleeMethod("ListArchiveFiles")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListCollectorDataSetBindingsRsp{}
+	rsp := &ListArchiveFilesRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

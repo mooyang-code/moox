@@ -21,7 +21,7 @@ func (s *Service) WriteRows(ctx context.Context, req *pb.WriteRowsReq) (*pb.Writ
 func (s *Service) ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	rows, page, err := s.store.ReadRows(
 		ctx,
-		req.GetSlice(),
+		req.GetScope(),
 		req.GetReadMode(),
 		req.GetTimeRange(),
 		req.GetSnapshotTime(),

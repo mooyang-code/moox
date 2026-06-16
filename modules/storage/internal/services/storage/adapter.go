@@ -19,21 +19,25 @@ func (s *Service) WriteDeviceRows(ctx context.Context, req *pb.WriteDeviceRowsRe
 }
 
 func (s *Service) ReadDeviceRows(ctx context.Context, req *pb.ReadDeviceRowsReq) (*pb.ReadDeviceRowsRsp, error) {
-	slice := req.GetSlice()
-	if slice == nil {
-		slice = &pb.DataSlice{}
+	scope := req.GetScope()
+	if scope == nil {
+		scope = &pb.DataScope{}
 	}
-	if slice.DatasetId == "" {
-		slice = &pb.DataSlice{
+	if scope.DatasetId == "" {
+		scope = &pb.DataScope{
+			SpaceId:    req.GetDevice().GetSpaceId(),
 			DatasetId:  req.GetDevice().GetDatasetId(),
-			SubjectId:  slice.GetSubjectId(),
-			Freq:       slice.GetFreq(),
-			Dimensions: slice.GetDimensions(),
+			SubjectId:  scope.GetSubjectId(),
+			Freq:       scope.GetFreq(),
+			Dimensions: scope.GetDimensions(),
 		}
+	}
+	if scope.SpaceId == "" {
+		scope.SpaceId = req.GetDevice().GetSpaceId()
 	}
 	rows, page, err := s.store.ReadRows(
 		ctx,
-		slice,
+		scope,
 		req.GetReadMode(),
 		req.GetTimeRange(),
 		req.GetSnapshotTime(),

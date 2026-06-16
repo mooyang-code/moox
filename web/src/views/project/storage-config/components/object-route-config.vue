@@ -12,13 +12,13 @@
         </a-option>
       </a-select>
       <a-input v-model="form.object_id" placeholder="请输入数据对象ID" allow-clear style="width: 180px" />
-      <a-select v-model="form.entity_id" placeholder="请选择存储实体" allow-clear style="width: 200px" :loading="entityLoading">
+      <a-select v-model="form.node_id" placeholder="请选择存储节点" allow-clear style="width: 200px" :loading="nodeLoading">
         <a-option 
-          v-for="entity in entityOptions" 
-          :key="entity.entity_id" 
-          :value="entity.entity_id"
+          v-for="node in nodeOptions" 
+          :key="node.node_id" 
+          :value="node.node_id"
         >
-          {{ entity.entity_alias }} ({{ entity.entity_id }})
+          {{ node.node_alias }} ({{ node.node_id }})
         </a-option>
       </a-select>
       <a-button type="primary" @click="search">
@@ -67,9 +67,9 @@
           </template>
         </a-table-column>
         <a-table-column title="数据对象ID" data-index="object_id"></a-table-column>
-        <a-table-column title="存储实体" data-index="entity_id">
+        <a-table-column title="存储节点" data-index="node_id">
           <template #cell="{ record }">
-            {{ getEntityName(record.entity_id) }}
+            {{ getNodeName(record.node_id) }}
           </template>
         </a-table-column>
         <a-table-column title="状态" :width="100" align="center">
@@ -117,14 +117,14 @@
           <a-form-item field="object_id" label="数据对象ID" validate-trigger="blur">
             <a-input v-model="formData.object_id" placeholder="请输入数据对象ID（* 表示所有对象）" allow-clear />
           </a-form-item>
-          <a-form-item field="entity_id" label="存储实体" validate-trigger="blur">
-            <a-select v-model="formData.entity_id" placeholder="请选择存储实体" allow-clear :loading="entityLoading">
+          <a-form-item field="node_id" label="存储节点" validate-trigger="blur">
+            <a-select v-model="formData.node_id" placeholder="请选择存储节点" allow-clear :loading="nodeLoading">
               <a-option 
-                v-for="entity in entityOptions" 
-                :key="entity.entity_id" 
-                :value="entity.entity_id"
+                v-for="node in nodeOptions" 
+                :key="node.node_id" 
+                :value="node.node_id"
               >
-                {{ entity.entity_alias }} ({{ entity.entity_id }})
+                {{ node.node_alias }} ({{ node.node_id }})
               </a-option>
             </a-select>
           </a-form-item>
@@ -139,12 +139,12 @@ import { ref, computed, watch, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import { IconSearch, IconRefresh, IconPlus, IconEdit, IconDelete } from '@arco-design/web-vue/es/icon';
-import type { ObjectRoute, StorageEntity } from '@/api/storage-config';
+import type { ObjectRoute, StorageNode } from '@/api/storage-config';
 import { 
   createObjectRoute, 
   updateObjectRoute, 
   deleteObjectRoute,
-  listStorageEntities
+  listStorageNodes
 } from '@/api/storage-config';
 import { listProjects, type Dataset } from '@/api/project';
 
@@ -161,7 +161,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 // Emits定义
 const emits = defineEmits<{
-  refresh: [searchParams?: { dataset_id?: number; entity_id?: number }];
+  refresh: [searchParams?: { dataset_id?: number; node_id?: number }];
 }>();
 
 // 定义表单数据类型
@@ -169,14 +169,14 @@ interface RouteFormData {
   route_id?: number;
   dataset_id: number;
   object_id: string;
-  entity_id: number;
+  node_id: number;
 }
 
 // 搜索表单
 const form = ref({
   dataset_id: undefined as any,
   object_id: '',
-  entity_id: undefined as any,
+  node_id: undefined as any,
 });
 
 // 表格数据 - 基于props计算
@@ -206,9 +206,9 @@ const currentProjectId = computed(() => {
 const datasetOptions = ref<Dataset[]>([]);
 const datasetLoading = ref(false);
 
-// 存储实体选项
-const entityOptions = ref<StorageEntity[]>([]);
-const entityLoading = ref(false);
+// 存储节点选项
+const nodeOptions = ref<StorageNode[]>([]);
+const nodeLoading = ref(false);
 
 // 弹窗相关
 const modalVisible = ref(false);
@@ -217,14 +217,14 @@ const formRef = ref();
 const formData = ref<RouteFormData>({
   dataset_id: undefined as any,
   object_id: '*',
-  entity_id: undefined as any,
+  node_id: undefined as any,
 });
 
 // 表单验证规则
 const rules = {
   dataset_id: [{ required: true, message: '请选择数据集' }],
   object_id: [{ required: true, message: '请输入数据对象ID' }],
-  entity_id: [{ required: true, message: '请选择存储实体' }],
+  node_id: [{ required: true, message: '请选择存储节点' }],
 };
 
 // 获取数据集列表
@@ -255,19 +255,19 @@ const loadDatasetOptions = async () => {
   }
 };
 
-// 获取存储实体列表
-const loadEntityOptions = async () => {
+// 获取存储节点列表
+const loadNodeOptions = async () => {
   try {
-    entityLoading.value = true;
-    const response = await listStorageEntities();
-    entityOptions.value = response.entities || [];
-    console.log('存储实体列表加载成功:', entityOptions.value);
+    nodeLoading.value = true;
+    const response = await listStorageNodes();
+    nodeOptions.value = response.nodes || [];
+    console.log('存储节点列表加载成功:', nodeOptions.value);
   } catch (error: any) {
-    console.error('获取存储实体列表失败:', error);
-    Message.error(error.message || '获取存储实体列表失败');
-    entityOptions.value = [];
+    console.error('获取存储节点列表失败:', error);
+    Message.error(error.message || '获取存储节点列表失败');
+    nodeOptions.value = [];
   } finally {
-    entityLoading.value = false;
+    nodeLoading.value = false;
   }
 };
 
@@ -275,12 +275,12 @@ const loadEntityOptions = async () => {
 const search = () => {
   pagination.value.current = 1;
   // 构建搜索参数，只传递有值的参数
-  const searchParams: { dataset_id?: number; entity_id?: number } = {};
+  const searchParams: { dataset_id?: number; node_id?: number } = {};
   if (form.value.dataset_id) {
     searchParams.dataset_id = form.value.dataset_id;
   }
-  if (form.value.entity_id) {
-    searchParams.entity_id = form.value.entity_id;
+  if (form.value.node_id) {
+    searchParams.node_id = form.value.node_id;
   }
   emits('refresh', searchParams);
 };
@@ -290,7 +290,7 @@ const reset = () => {
   form.value = {
     dataset_id: undefined as any,
     object_id: '',
-    entity_id: undefined as any,
+    node_id: undefined as any,
   };
   // 重置时不传递搜索参数，获取全部数据
   emits('refresh');
@@ -320,14 +320,14 @@ const onAdd = async () => {
   formData.value = {
     dataset_id: undefined as any,
     object_id: '*',
-    entity_id: undefined as any,
+    node_id: undefined as any,
   };
   modalVisible.value = true;
   
   // 加载下拉框数据
   await Promise.all([
     loadDatasetOptions(),
-    loadEntityOptions()
+    loadNodeOptions()
   ]);
 };
 
@@ -338,14 +338,14 @@ const onUpdate = async (record: ObjectRoute) => {
     route_id: record.route_id,
     dataset_id: record.dataset_id,
     object_id: record.object_id,
-    entity_id: record.entity_id,
+    node_id: record.node_id,
   };
   modalVisible.value = true;
   
   // 加载下拉框数据
   await Promise.all([
     loadDatasetOptions(),
-    loadEntityOptions()
+    loadNodeOptions()
   ]);
 };
 
@@ -384,7 +384,7 @@ const handleOk = async () => {
         route_id: formData.value.route_id,
         dataset_id: formData.value.dataset_id,
         object_id: formData.value.object_id,
-        entity_id: formData.value.entity_id,
+        node_id: formData.value.node_id,
       });
       Message.success('更新对象路由配置成功');
     } else {
@@ -397,7 +397,7 @@ const handleOk = async () => {
         project_id: currentProjectId.value,
         dataset_id: formData.value.dataset_id,
         object_id: formData.value.object_id,
-        entity_id: formData.value.entity_id,
+        node_id: formData.value.node_id,
       });
       Message.success('创建对象路由配置成功');
     }
@@ -421,17 +421,17 @@ const getDatasetName = (datasetId: number): string => {
   return dataset ? `${dataset.dataset_name} (${datasetId})` : `数据集 (${datasetId})`;
 };
 
-// 获取存储实体名称的映射函数
-const getEntityName = (entityId: number): string => {
-  const entity = entityOptions.value.find(e => e.entity_id === entityId);
-  return entity ? `${entity.entity_alias} (${entityId})` : `存储实体 (${entityId})`;
+// 获取存储节点名称的映射函数
+const getNodeName = (nodeId: number): string => {
+  const node = nodeOptions.value.find(item => item.node_id === nodeId);
+  return node ? `${node.node_alias} (${nodeId})` : `存储节点 (${nodeId})`;
 };
 
 // 初始化加载映射数据
 const initMappingData = async () => {
   await Promise.all([
     loadDatasetOptions(),
-    loadEntityOptions()
+    loadNodeOptions()
   ]);
 };
 

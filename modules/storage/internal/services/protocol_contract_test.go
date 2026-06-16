@@ -80,26 +80,37 @@ func TestStorageProtocolUsesCanonicalSurface(t *testing.T) {
 			"ExplainQuery",
 			"Physical",
 			"DeletePhysicalRows",
+			"attrs",
+			" entity_id =",
 		})
 	}
 
 	requireProtocolFileContains(t, filepath.Join(root, "proto", "data.proto"), []string{
-		"message DataSlice",
+		"message DataScope",
+		"message DataKey",
 		"message DataRow",
 		"参与逻辑定位",
 		"不是普通过滤条件",
+		"DataKey key",
 		"rpc WriteRows",
 		"rpc ReadRows",
+	})
+	requireProtocolFileNotContains(t, filepath.Join(root, "proto", "data.proto"), []string{
+		"message DataSlice",
 	})
 	requireProtocolFileNotContains(t, filepath.Join(root, "proto", "query.proto"), []string{
 		"SearchText",
 		"TextSearch",
 		"expression =",
+		" source_type =",
+		" source_id =",
 	})
 	requireProtocolFileContains(t, filepath.Join(root, "proto", "query.proto"), []string{
 		"rpc QueryView",
 		"rpc SearchRows",
 		"message SearchRowsReq",
+		"origin_type",
+		"origin_id",
 		"text_query",
 		"repeated common.FilterExpr filters",
 		"repeated common.SortSpec sorts",
@@ -107,13 +118,78 @@ func TestStorageProtocolUsesCanonicalSurface(t *testing.T) {
 	})
 	requireProtocolFileContains(t, filepath.Join(root, "proto", "adapter.proto"), []string{
 		"message DeviceRef",
+		"node_id",
 		"device_table",
 		"rpc WriteDeviceRows",
 		"rpc ReadDeviceRows",
 	})
 	requireProtocolFileContains(t, filepath.Join(root, "proto", "metadata.proto"), []string{
 		"message DataSetColumn",
+		"space_id",
+		"origin_type",
+		"origin_id",
 		"text_indexed",
+	})
+	requireProtocolFileNotContains(t, filepath.Join(root, "proto", "metadata.proto"), []string{
+		"Workspace",
+		"workspace_id",
+		"MarketInfo",
+		"Exchange",
+		"Instrument",
+		"InstrumentAlias",
+		"DataView",
+		"data_view",
+		"FactorDef",
+		"FactorInstance",
+		"factor_instance",
+		"CollectorDataSetBinding",
+		"StorageEntity",
+		"StorageDevice",
+		"storage_entity",
+		"message SpaceView",
+		"BindSpaceView",
+		"ListSpaceViews",
+		"interface_name",
+		" entity_id =",
+		" source_type =",
+		" source_id =",
+		" role =",
+		"device_id 是目标 Pebble 设备 ID",
+	})
+	requireProtocolFileContains(t, filepath.Join(root, "proto", "metadata.proto"), []string{
+		"message Space",
+		"message View",
+		"message ViewColumn",
+		"message DataSource",
+		"message Subject",
+		"message SubjectSymbol",
+		"message DataSetSubject",
+		"message Field",
+		"message Factor",
+		"message StorageNode",
+		"message Device",
+		"message StorageRoute",
+		"message ArchiveFile",
+		"rpc CreateSpace",
+		"rpc CreateView",
+		"rpc ListViews",
+		"rpc CreateDataSource",
+		"rpc UpsertSubject",
+		"rpc UpsertSubjectSymbol",
+		"rpc BindDataSetSubject",
+		"rpc UpsertDataSetColumn",
+		"rpc CreateFactor",
+		"rpc CreateStorageNode",
+		"rpc ListStorageNodes",
+		"rpc CreateDevice",
+		"rpc ListArchiveFiles",
+	})
+	requireProtocolFileNotContains(t, filepath.Join(root, "proto", "metadata.proto"), []string{
+		"SubjectAlias",
+		"UpsertSubjectAlias",
+		"ListSubjectAliases",
+		"active_table",
+		"DuckDB 宽表名称",
 	})
 }
 

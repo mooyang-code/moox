@@ -16,19 +16,22 @@ import (
 type Service struct {
 	store *quantstore.Store
 
-	mu                sync.RWMutex
-	workspaces        map[string]*pb.Workspace
-	exchanges         map[string]*pb.Exchange
-	instruments       map[string]*pb.Instrument
-	aliases           map[string]*pb.InstrumentAlias
-	datasets          map[string]*pb.DataSet
-	fields            map[string]*pb.Field
-	factorDefs        map[string]*pb.FactorDef
-	factorInstances   map[string]*pb.FactorInstance
-	dataViews         map[string]*pb.DataView
-	storageDevices    map[string]*pb.StorageDevice
-	storageRoutes     map[string]*pb.StorageRoute
-	collectorBindings map[string]*pb.CollectorDataSetBinding
+	mu              sync.RWMutex
+	spaces          map[string]*pb.Space
+	views           map[string]*pb.View
+	viewColumns     map[string]*pb.ViewColumn
+	dataSources     map[string]*pb.DataSource
+	subjects        map[string]*pb.Subject
+	subjectSymbols  map[string]*pb.SubjectSymbol
+	datasets        map[string]*pb.DataSet
+	datasetSubjects map[string]*pb.DataSetSubject
+	fields          map[string]*pb.Field
+	factors         map[string]*pb.Factor
+	datasetColumns  map[string]*pb.DataSetColumn
+	storageNodes    map[string]*pb.StorageNode
+	devices         map[string]*pb.Device
+	storageRoutes   map[string]*pb.StorageRoute
+	archiveFiles    map[string]*pb.ArchiveFile
 }
 
 var (
@@ -40,151 +43,222 @@ var (
 
 func NewService(root string) *Service {
 	return &Service{
-		store:             quantstore.New(root),
-		workspaces:        make(map[string]*pb.Workspace),
-		exchanges:         make(map[string]*pb.Exchange),
-		instruments:       make(map[string]*pb.Instrument),
-		aliases:           make(map[string]*pb.InstrumentAlias),
-		datasets:          make(map[string]*pb.DataSet),
-		fields:            make(map[string]*pb.Field),
-		factorDefs:        make(map[string]*pb.FactorDef),
-		factorInstances:   make(map[string]*pb.FactorInstance),
-		dataViews:         make(map[string]*pb.DataView),
-		storageDevices:    make(map[string]*pb.StorageDevice),
-		storageRoutes:     make(map[string]*pb.StorageRoute),
-		collectorBindings: make(map[string]*pb.CollectorDataSetBinding),
+		store:           quantstore.New(root),
+		spaces:          make(map[string]*pb.Space),
+		views:           make(map[string]*pb.View),
+		viewColumns:     make(map[string]*pb.ViewColumn),
+		dataSources:     make(map[string]*pb.DataSource),
+		subjects:        make(map[string]*pb.Subject),
+		subjectSymbols:  make(map[string]*pb.SubjectSymbol),
+		datasets:        make(map[string]*pb.DataSet),
+		datasetSubjects: make(map[string]*pb.DataSetSubject),
+		fields:          make(map[string]*pb.Field),
+		factors:         make(map[string]*pb.Factor),
+		datasetColumns:  make(map[string]*pb.DataSetColumn),
+		storageNodes:    make(map[string]*pb.StorageNode),
+		devices:         make(map[string]*pb.Device),
+		storageRoutes:   make(map[string]*pb.StorageRoute),
+		archiveFiles:    make(map[string]*pb.ArchiveFile),
 	}
 }
 
-func (s *Service) CreateWorkspace(_ context.Context, req *pb.CreateWorkspaceReq) (*pb.CreateWorkspaceRsp, error) {
-	if req.GetWorkspace() == nil {
-		return &pb.CreateWorkspaceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("workspace is required"))}, nil
+func (s *Service) CreateSpace(_ context.Context, req *pb.CreateSpaceReq) (*pb.CreateSpaceRsp, error) {
+	space := req.GetSpace()
+	if space == nil || (space.GetSpaceId() == "" && space.GetName() == "") {
+		return &pb.CreateSpaceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id or name is required"))}, nil
 	}
-	workspace := req.GetWorkspace()
-	if workspace.WorkspaceId == "" {
-		workspace.WorkspaceId = defaultID(workspace.GetName(), "workspace")
+	if space.SpaceId == "" {
+		space.SpaceId = defaultID(space.GetName(), "space")
 	}
 	s.mu.Lock()
-	s.workspaces[workspace.GetWorkspaceId()] = workspace
+	s.spaces[space.GetSpaceId()] = space
 	s.mu.Unlock()
-	return &pb.CreateWorkspaceRsp{RetInfo: quantstore.Success("success"), Workspace: workspace}, nil
+	return &pb.CreateSpaceRsp{RetInfo: quantstore.Success("success"), Space: space}, nil
 }
 
-func (s *Service) UpdateWorkspace(_ context.Context, req *pb.UpdateWorkspaceReq) (*pb.UpdateWorkspaceRsp, error) {
-	workspace := req.GetWorkspace()
-	if workspace == nil || workspace.GetWorkspaceId() == "" {
-		return &pb.UpdateWorkspaceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("workspace_id is required"))}, nil
+func (s *Service) UpdateSpace(_ context.Context, req *pb.UpdateSpaceReq) (*pb.UpdateSpaceRsp, error) {
+	space := req.GetSpace()
+	if space == nil || space.GetSpaceId() == "" {
+		return &pb.UpdateSpaceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id is required"))}, nil
 	}
 	s.mu.Lock()
-	s.workspaces[workspace.GetWorkspaceId()] = workspace
+	s.spaces[space.GetSpaceId()] = space
 	s.mu.Unlock()
-	return &pb.UpdateWorkspaceRsp{RetInfo: quantstore.Success("success"), Workspace: workspace}, nil
+	return &pb.UpdateSpaceRsp{RetInfo: quantstore.Success("success"), Space: space}, nil
 }
 
-func (s *Service) GetWorkspace(_ context.Context, req *pb.GetWorkspaceReq) (*pb.GetWorkspaceRsp, error) {
+func (s *Service) GetSpace(_ context.Context, req *pb.GetSpaceReq) (*pb.GetSpaceRsp, error) {
 	s.mu.RLock()
-	workspace := s.workspaces[req.GetWorkspaceId()]
+	space := s.spaces[req.GetSpaceId()]
 	s.mu.RUnlock()
-	if workspace == nil {
-		return &pb.GetWorkspaceRsp{RetInfo: quantstore.Error(pb.ErrorCode_WORKSPACE_NOT_FOUND, fmt.Errorf("workspace %s not found", req.GetWorkspaceId()))}, nil
+	if space == nil {
+		return &pb.GetSpaceRsp{RetInfo: quantstore.Error(pb.ErrorCode_SPACE_NOT_FOUND, fmt.Errorf("space %s not found", req.GetSpaceId()))}, nil
 	}
-	return &pb.GetWorkspaceRsp{RetInfo: quantstore.Success("success"), Workspace: workspace}, nil
+	return &pb.GetSpaceRsp{RetInfo: quantstore.Success("success"), Space: space}, nil
 }
 
-func (s *Service) ListWorkspaces(_ context.Context, req *pb.ListWorkspacesReq) (*pb.ListWorkspacesRsp, error) {
+func (s *Service) ListSpaces(_ context.Context, req *pb.ListSpacesReq) (*pb.ListSpacesRsp, error) {
 	s.mu.RLock()
-	items := values(s.workspaces)
-	s.mu.RUnlock()
-	sort.Slice(items, func(i, j int) bool { return items[i].GetWorkspaceId() < items[j].GetWorkspaceId() })
-	paged, page := pageSlice(items, req.GetPage())
-	return &pb.ListWorkspacesRsp{RetInfo: quantstore.Success("success"), Workspaces: paged, PageResult: page}, nil
-}
-
-func (s *Service) CreateExchange(_ context.Context, req *pb.CreateExchangeReq) (*pb.CreateExchangeRsp, error) {
-	exchange := req.GetExchange()
-	if exchange == nil {
-		return &pb.CreateExchangeRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("exchange is required"))}, nil
-	}
-	if exchange.ExchangeId == "" {
-		exchange.ExchangeId = defaultID(exchange.GetCode(), "exchange")
-	}
-	s.mu.Lock()
-	s.exchanges[exchange.GetExchangeId()] = exchange
-	s.mu.Unlock()
-	return &pb.CreateExchangeRsp{RetInfo: quantstore.Success("success"), Exchange: exchange}, nil
-}
-
-func (s *Service) UpdateExchange(_ context.Context, req *pb.UpdateExchangeReq) (*pb.UpdateExchangeRsp, error) {
-	exchange := req.GetExchange()
-	if exchange == nil || exchange.GetExchangeId() == "" {
-		return &pb.UpdateExchangeRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("exchange_id is required"))}, nil
-	}
-	s.mu.Lock()
-	s.exchanges[exchange.GetExchangeId()] = exchange
-	s.mu.Unlock()
-	return &pb.UpdateExchangeRsp{RetInfo: quantstore.Success("success"), Exchange: exchange}, nil
-}
-
-func (s *Service) GetExchange(_ context.Context, req *pb.GetExchangeReq) (*pb.GetExchangeRsp, error) {
-	s.mu.RLock()
-	exchange := s.exchanges[req.GetExchangeId()]
-	s.mu.RUnlock()
-	if exchange == nil {
-		return &pb.GetExchangeRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("exchange %s not found", req.GetExchangeId()))}, nil
-	}
-	return &pb.GetExchangeRsp{RetInfo: quantstore.Success("success"), Exchange: exchange}, nil
-}
-
-func (s *Service) ListExchanges(_ context.Context, req *pb.ListExchangesReq) (*pb.ListExchangesRsp, error) {
-	s.mu.RLock()
-	var items []*pb.Exchange
-	for _, item := range s.exchanges {
-		if req.GetMarket() == "" || item.GetMarket() == req.GetMarket() {
-			items = append(items, item)
-		}
-	}
-	s.mu.RUnlock()
-	sort.Slice(items, func(i, j int) bool { return items[i].GetExchangeId() < items[j].GetExchangeId() })
-	paged, page := pageSlice(items, req.GetPage())
-	return &pb.ListExchangesRsp{RetInfo: quantstore.Success("success"), Exchanges: paged, PageResult: page}, nil
-}
-
-func (s *Service) UpsertInstrument(_ context.Context, req *pb.UpsertInstrumentReq) (*pb.UpsertInstrumentRsp, error) {
-	instrument := req.GetInstrument()
-	if instrument == nil {
-		return &pb.UpsertInstrumentRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("instrument is required"))}, nil
-	}
-	if instrument.InstrumentId == "" {
-		instrument.InstrumentId = defaultID(instrument.GetInternalSymbol(), "instrument")
-	}
-	s.mu.Lock()
-	s.instruments[instrument.GetInstrumentId()] = instrument
-	s.mu.Unlock()
-	return &pb.UpsertInstrumentRsp{RetInfo: quantstore.Success("success"), Instrument: instrument}, nil
-}
-
-func (s *Service) GetInstrument(_ context.Context, req *pb.GetInstrumentReq) (*pb.GetInstrumentRsp, error) {
-	s.mu.RLock()
-	instrument := s.instruments[req.GetInstrumentId()]
-	s.mu.RUnlock()
-	if instrument == nil {
-		return &pb.GetInstrumentRsp{RetInfo: quantstore.Error(pb.ErrorCode_INSTRUMENT_NOT_FOUND, fmt.Errorf("instrument %s not found", req.GetInstrumentId()))}, nil
-	}
-	return &pb.GetInstrumentRsp{RetInfo: quantstore.Success("success"), Instrument: instrument}, nil
-}
-
-func (s *Service) ListInstruments(_ context.Context, req *pb.ListInstrumentsReq) (*pb.ListInstrumentsRsp, error) {
-	allowIDs := make(map[string]bool, len(req.GetInstrumentIds()))
-	for _, id := range req.GetInstrumentIds() {
-		allowIDs[id] = true
-	}
-	s.mu.RLock()
-	var items []*pb.Instrument
-	for _, item := range s.instruments {
-		if len(allowIDs) > 0 && !allowIDs[item.GetInstrumentId()] {
+	items := make([]*pb.Space, 0, len(s.spaces))
+	for _, item := range s.spaces {
+		if req.GetOwner() != "" && item.GetOwner() != req.GetOwner() {
 			continue
 		}
-		if req.GetExchangeId() != "" && item.GetExchangeId() != req.GetExchangeId() {
+		items = append(items, item)
+	}
+	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].GetSpaceId() < items[j].GetSpaceId() })
+	paged, page := pageSlice(items, req.GetPage())
+	return &pb.ListSpacesRsp{RetInfo: quantstore.Success("success"), Spaces: paged, PageResult: page}, nil
+}
+
+func (s *Service) CreateView(_ context.Context, req *pb.CreateViewReq) (*pb.CreateViewRsp, error) {
+	view := req.GetView()
+	if view == nil || view.GetSpaceId() == "" || (view.GetViewId() == "" && view.GetName() == "") {
+		return &pb.CreateViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id or name are required"))}, nil
+	}
+	if view.ViewId == "" {
+		view.ViewId = defaultID(view.GetName(), "view")
+	}
+	s.mu.Lock()
+	s.views[metadataKey(view.GetSpaceId(), view.GetViewId())] = view
+	for _, column := range view.GetColumns() {
+		if column.GetSpaceId() == "" {
+			column.SpaceId = view.GetSpaceId()
+		}
+		if column.GetViewId() == "" {
+			column.ViewId = view.GetViewId()
+		}
+		if column.GetColumnName() != "" {
+			s.viewColumns[metadataKey(column.GetSpaceId(), column.GetViewId(), column.GetColumnName())] = column
+		}
+	}
+	s.mu.Unlock()
+	return &pb.CreateViewRsp{RetInfo: quantstore.Success("success"), View: view}, nil
+}
+
+func (s *Service) UpdateView(_ context.Context, req *pb.UpdateViewReq) (*pb.UpdateViewRsp, error) {
+	view := req.GetView()
+	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
+		return &pb.UpdateViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
+	}
+	s.mu.Lock()
+	s.views[metadataKey(view.GetSpaceId(), view.GetViewId())] = view
+	s.mu.Unlock()
+	return &pb.UpdateViewRsp{RetInfo: quantstore.Success("success"), View: view}, nil
+}
+
+func (s *Service) GetView(_ context.Context, req *pb.GetViewReq) (*pb.GetViewRsp, error) {
+	s.mu.RLock()
+	view := s.views[metadataKey(req.GetSpaceId(), req.GetViewId())]
+	s.mu.RUnlock()
+	if view == nil {
+		return &pb.GetViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_VIEW_NOT_FOUND, fmt.Errorf("view %s not found", req.GetViewId()))}, nil
+	}
+	return &pb.GetViewRsp{RetInfo: quantstore.Success("success"), View: view}, nil
+}
+
+func (s *Service) ListViews(_ context.Context, req *pb.ListViewsReq) (*pb.ListViewsRsp, error) {
+	s.mu.RLock()
+	var items []*pb.View
+	for _, item := range s.views {
+		if req.GetSpaceId() != "" && item.GetSpaceId() != req.GetSpaceId() {
+			continue
+		}
+		if req.GetDatasetId() != "" && !containsString(item.GetDatasetIds(), req.GetDatasetId()) {
+			continue
+		}
+		if req.GetStatus() != "" && item.GetStatus() != req.GetStatus() {
+			continue
+		}
+		items = append(items, item)
+	}
+	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].GetViewId() < items[j].GetViewId() })
+	paged, page := pageSlice(items, req.GetPage())
+	return &pb.ListViewsRsp{RetInfo: quantstore.Success("success"), Views: paged, PageResult: page}, nil
+}
+
+func (s *Service) UpsertViewColumn(_ context.Context, req *pb.UpsertViewColumnReq) (*pb.UpsertViewColumnRsp, error) {
+	column := req.GetColumn()
+	if column == nil || column.GetSpaceId() == "" || column.GetViewId() == "" || column.GetColumnName() == "" {
+		return &pb.UpsertViewColumnRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, view_id and column_name are required"))}, nil
+	}
+	s.mu.Lock()
+	s.viewColumns[metadataKey(column.GetSpaceId(), column.GetViewId(), column.GetColumnName())] = column
+	if view := s.views[metadataKey(column.GetSpaceId(), column.GetViewId())]; view != nil {
+		view.Columns = upsertViewColumn(view.GetColumns(), column)
+	}
+	s.mu.Unlock()
+	return &pb.UpsertViewColumnRsp{RetInfo: quantstore.Success("success"), Column: column}, nil
+}
+
+func (s *Service) ListViewColumns(_ context.Context, req *pb.ListViewColumnsReq) (*pb.ListViewColumnsRsp, error) {
+	s.mu.RLock()
+	var items []*pb.ViewColumn
+	for _, item := range s.viewColumns {
+		if req.GetSpaceId() != "" && item.GetSpaceId() != req.GetSpaceId() {
+			continue
+		}
+		if req.GetViewId() != "" && item.GetViewId() != req.GetViewId() {
+			continue
+		}
+		items = append(items, item)
+	}
+	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].GetSortOrder() == items[j].GetSortOrder() {
+			return items[i].GetColumnName() < items[j].GetColumnName()
+		}
+		return items[i].GetSortOrder() < items[j].GetSortOrder()
+	})
+	paged, page := pageSlice(items, req.GetPage())
+	return &pb.ListViewColumnsRsp{RetInfo: quantstore.Success("success"), Columns: paged, PageResult: page}, nil
+}
+
+func (s *Service) CreateDataSource(_ context.Context, req *pb.CreateDataSourceReq) (*pb.CreateDataSourceRsp, error) {
+	item := req.GetDataSource()
+	if item == nil || item.GetSpaceId() == "" || (item.GetDataSourceId() == "" && item.GetName() == "") {
+		return &pb.CreateDataSourceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and data_source_id or name are required"))}, nil
+	}
+	if item.DataSourceId == "" {
+		item.DataSourceId = defaultID(item.GetName(), "data_source")
+	}
+	s.mu.Lock()
+	s.dataSources[metadataKey(item.GetSpaceId(), item.GetDataSourceId())] = item
+	s.mu.Unlock()
+	return &pb.CreateDataSourceRsp{RetInfo: quantstore.Success("success"), DataSource: item}, nil
+}
+
+func (s *Service) UpdateDataSource(_ context.Context, req *pb.UpdateDataSourceReq) (*pb.UpdateDataSourceRsp, error) {
+	item := req.GetDataSource()
+	if item == nil || item.GetSpaceId() == "" || item.GetDataSourceId() == "" {
+		return &pb.UpdateDataSourceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and data_source_id are required"))}, nil
+	}
+	s.mu.Lock()
+	s.dataSources[metadataKey(item.GetSpaceId(), item.GetDataSourceId())] = item
+	s.mu.Unlock()
+	return &pb.UpdateDataSourceRsp{RetInfo: quantstore.Success("success"), DataSource: item}, nil
+}
+
+func (s *Service) GetDataSource(_ context.Context, req *pb.GetDataSourceReq) (*pb.GetDataSourceRsp, error) {
+	s.mu.RLock()
+	item := s.dataSources[metadataKey(req.GetSpaceId(), req.GetDataSourceId())]
+	s.mu.RUnlock()
+	if item == nil {
+		return &pb.GetDataSourceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("data_source not found"))}, nil
+	}
+	return &pb.GetDataSourceRsp{RetInfo: quantstore.Success("success"), DataSource: item}, nil
+}
+
+func (s *Service) ListDataSources(_ context.Context, req *pb.ListDataSourcesReq) (*pb.ListDataSourcesRsp, error) {
+	s.mu.RLock()
+	var items []*pb.DataSource
+	for _, item := range s.dataSources {
+		if req.GetSpaceId() != "" && item.GetSpaceId() != req.GetSpaceId() {
+			continue
+		}
+		if req.GetKind() != "" && item.GetKind() != req.GetKind() {
 			continue
 		}
 		if req.GetMarket() != "" && item.GetMarket() != req.GetMarket() {
@@ -193,376 +267,447 @@ func (s *Service) ListInstruments(_ context.Context, req *pb.ListInstrumentsReq)
 		items = append(items, item)
 	}
 	s.mu.RUnlock()
-	sort.Slice(items, func(i, j int) bool { return items[i].GetInstrumentId() < items[j].GetInstrumentId() })
+	sort.Slice(items, func(i, j int) bool { return items[i].GetDataSourceId() < items[j].GetDataSourceId() })
 	paged, page := pageSlice(items, req.GetPage())
-	return &pb.ListInstrumentsRsp{RetInfo: quantstore.Success("success"), Instruments: paged, PageResult: page}, nil
+	return &pb.ListDataSourcesRsp{RetInfo: quantstore.Success("success"), DataSources: paged, PageResult: page}, nil
 }
 
-func (s *Service) UpsertInstrumentAlias(_ context.Context, req *pb.UpsertInstrumentAliasReq) (*pb.UpsertInstrumentAliasRsp, error) {
-	alias := req.GetAlias()
-	if alias == nil || alias.GetInstrumentId() == "" || alias.GetExternalSymbol() == "" {
-		return &pb.UpsertInstrumentAliasRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("instrument_id and external_symbol are required"))}, nil
+func (s *Service) UpsertSubject(_ context.Context, req *pb.UpsertSubjectReq) (*pb.UpsertSubjectRsp, error) {
+	item := req.GetSubject()
+	if item == nil || item.GetSpaceId() == "" || (item.GetSubjectId() == "" && item.GetName() == "") {
+		return &pb.UpsertSubjectRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and subject_id or name are required"))}, nil
 	}
-	key := strings.Join([]string{alias.GetInstrumentId(), alias.GetDataSource(), alias.GetExchangeId(), alias.GetExternalSymbol()}, "|")
+	if item.SubjectId == "" {
+		item.SubjectId = defaultID(item.GetName(), "subject")
+	}
 	s.mu.Lock()
-	s.aliases[key] = alias
+	s.subjects[metadataKey(item.GetSpaceId(), item.GetSubjectId())] = item
 	s.mu.Unlock()
-	return &pb.UpsertInstrumentAliasRsp{RetInfo: quantstore.Success("success"), Alias: alias}, nil
+	return &pb.UpsertSubjectRsp{RetInfo: quantstore.Success("success"), Subject: item}, nil
 }
 
-func (s *Service) ListInstrumentAliases(_ context.Context, req *pb.ListInstrumentAliasesReq) (*pb.ListInstrumentAliasesRsp, error) {
+func (s *Service) GetSubject(_ context.Context, req *pb.GetSubjectReq) (*pb.GetSubjectRsp, error) {
 	s.mu.RLock()
-	var items []*pb.InstrumentAlias
-	for _, item := range s.aliases {
-		if req.GetInstrumentId() != "" && item.GetInstrumentId() != req.GetInstrumentId() {
+	item := s.subjects[metadataKey(req.GetSpaceId(), req.GetSubjectId())]
+	s.mu.RUnlock()
+	if item == nil {
+		return &pb.GetSubjectRsp{RetInfo: quantstore.Error(pb.ErrorCode_SUBJECT_NOT_FOUND, fmt.Errorf("subject %s not found", req.GetSubjectId()))}, nil
+	}
+	return &pb.GetSubjectRsp{RetInfo: quantstore.Success("success"), Subject: item}, nil
+}
+
+func (s *Service) ListSubjects(_ context.Context, req *pb.ListSubjectsReq) (*pb.ListSubjectsRsp, error) {
+	allow := stringSet(req.GetSubjectIds())
+	s.mu.RLock()
+	var items []*pb.Subject
+	for _, item := range s.subjects {
+		if len(allow) > 0 && !allow[item.GetSubjectId()] {
 			continue
 		}
-		if req.GetDataSource() != "" && item.GetDataSource() != req.GetDataSource() {
+		if req.GetSpaceId() != "" && item.GetSpaceId() != req.GetSpaceId() {
+			continue
+		}
+		if req.GetSubjectType() != "" && item.GetSubjectType() != req.GetSubjectType() {
+			continue
+		}
+		if req.GetMarket() != "" && item.GetMarket() != req.GetMarket() {
 			continue
 		}
 		items = append(items, item)
 	}
 	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].GetSubjectId() < items[j].GetSubjectId() })
 	paged, page := pageSlice(items, req.GetPage())
-	return &pb.ListInstrumentAliasesRsp{RetInfo: quantstore.Success("success"), Aliases: paged, PageResult: page}, nil
+	return &pb.ListSubjectsRsp{RetInfo: quantstore.Success("success"), Subjects: paged, PageResult: page}, nil
+}
+
+func (s *Service) UpsertSubjectSymbol(_ context.Context, req *pb.UpsertSubjectSymbolReq) (*pb.UpsertSubjectSymbolRsp, error) {
+	item := req.GetSubjectSymbol()
+	if item == nil || item.GetSpaceId() == "" || item.GetSubjectId() == "" || item.GetDataSourceId() == "" || item.GetExternalSymbol() == "" {
+		return &pb.UpsertSubjectSymbolRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, subject_id, data_source_id and external_symbol are required"))}, nil
+	}
+	s.mu.Lock()
+	s.subjectSymbols[metadataKey(item.GetSpaceId(), item.GetDataSourceId(), item.GetExternalSymbol())] = item
+	s.mu.Unlock()
+	return &pb.UpsertSubjectSymbolRsp{RetInfo: quantstore.Success("success"), SubjectSymbol: item}, nil
+}
+
+func (s *Service) ListSubjectSymbols(_ context.Context, req *pb.ListSubjectSymbolsReq) (*pb.ListSubjectSymbolsRsp, error) {
+	s.mu.RLock()
+	var items []*pb.SubjectSymbol
+	for _, item := range s.subjectSymbols {
+		if req.GetSpaceId() != "" && item.GetSpaceId() != req.GetSpaceId() {
+			continue
+		}
+		if req.GetSubjectId() != "" && item.GetSubjectId() != req.GetSubjectId() {
+			continue
+		}
+		if req.GetDataSourceId() != "" && item.GetDataSourceId() != req.GetDataSourceId() {
+			continue
+		}
+		if req.GetExternalSymbol() != "" && item.GetExternalSymbol() != req.GetExternalSymbol() {
+			continue
+		}
+		items = append(items, item)
+	}
+	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool {
+		return metadataKey(items[i].GetSpaceId(), items[i].GetDataSourceId(), items[i].GetExternalSymbol()) < metadataKey(items[j].GetSpaceId(), items[j].GetDataSourceId(), items[j].GetExternalSymbol())
+	})
+	paged, page := pageSlice(items, req.GetPage())
+	return &pb.ListSubjectSymbolsRsp{RetInfo: quantstore.Success("success"), SubjectSymbols: paged, PageResult: page}, nil
 }
 
 func (s *Service) CreateDataSet(_ context.Context, req *pb.CreateDataSetReq) (*pb.CreateDataSetRsp, error) {
-	dataset := req.GetDataset()
-	if dataset == nil || dataset.GetWorkspaceId() == "" {
-		return &pb.CreateDataSetRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset.workspace_id is required"))}, nil
+	item := req.GetDataset()
+	if item == nil || item.GetSpaceId() == "" || item.GetDataSourceId() == "" || (item.GetDatasetId() == "" && item.GetName() == "") {
+		return &pb.CreateDataSetRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, data_source_id and dataset_id or name are required"))}, nil
 	}
-	if dataset.DatasetId == "" {
-		dataset.DatasetId = defaultID(dataset.GetName(), "dataset")
+	if item.DatasetId == "" {
+		item.DatasetId = defaultID(item.GetName(), "dataset")
 	}
 	s.mu.Lock()
-	s.datasets[datasetKey(dataset.GetWorkspaceId(), dataset.GetDatasetId())] = dataset
+	s.datasets[metadataKey(item.GetSpaceId(), item.GetDatasetId())] = item
 	s.mu.Unlock()
-	return &pb.CreateDataSetRsp{RetInfo: quantstore.Success("success"), Dataset: dataset}, nil
+	return &pb.CreateDataSetRsp{RetInfo: quantstore.Success("success"), Dataset: item}, nil
 }
 
 func (s *Service) UpdateDataSet(_ context.Context, req *pb.UpdateDataSetReq) (*pb.UpdateDataSetRsp, error) {
-	dataset := req.GetDataset()
-	if dataset == nil || dataset.GetWorkspaceId() == "" || dataset.GetDatasetId() == "" {
-		return &pb.UpdateDataSetRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("workspace_id and dataset_id are required"))}, nil
+	item := req.GetDataset()
+	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" {
+		return &pb.UpdateDataSetRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
 	s.mu.Lock()
-	s.datasets[datasetKey(dataset.GetWorkspaceId(), dataset.GetDatasetId())] = dataset
+	s.datasets[metadataKey(item.GetSpaceId(), item.GetDatasetId())] = item
 	s.mu.Unlock()
-	return &pb.UpdateDataSetRsp{RetInfo: quantstore.Success("success"), Dataset: dataset}, nil
+	return &pb.UpdateDataSetRsp{RetInfo: quantstore.Success("success"), Dataset: item}, nil
 }
 
 func (s *Service) GetDataSet(_ context.Context, req *pb.GetDataSetReq) (*pb.GetDataSetRsp, error) {
 	s.mu.RLock()
-	dataset := s.datasets[datasetKey(req.GetWorkspaceId(), req.GetDatasetId())]
+	item := s.datasets[metadataKey(req.GetSpaceId(), req.GetDatasetId())]
 	s.mu.RUnlock()
-	if dataset == nil {
+	if item == nil {
 		return &pb.GetDataSetRsp{RetInfo: quantstore.Error(pb.ErrorCode_DATASET_NOT_FOUND, fmt.Errorf("dataset %s not found", req.GetDatasetId()))}, nil
 	}
-	return &pb.GetDataSetRsp{RetInfo: quantstore.Success("success"), Dataset: dataset}, nil
+	return &pb.GetDataSetRsp{RetInfo: quantstore.Success("success"), Dataset: item}, nil
 }
 
 func (s *Service) ListDataSets(_ context.Context, req *pb.ListDataSetsReq) (*pb.ListDataSetsRsp, error) {
 	s.mu.RLock()
 	var items []*pb.DataSet
 	for _, item := range s.datasets {
-		if req.GetWorkspaceId() != "" && item.GetWorkspaceId() != req.GetWorkspaceId() {
+		if req.GetSpaceId() != "" && item.GetSpaceId() != req.GetSpaceId() {
+			continue
+		}
+		if req.GetDataSourceId() != "" && item.GetDataSourceId() != req.GetDataSourceId() {
 			continue
 		}
 		if req.GetDataKind() != pb.DataKind_DATA_KIND_UNSPECIFIED && item.GetDataKind() != req.GetDataKind() {
 			continue
 		}
+		if req.GetFreq() != "" && !containsString(item.GetFreqs(), req.GetFreq()) {
+			continue
+		}
 		items = append(items, item)
 	}
 	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].GetDatasetId() < items[j].GetDatasetId() })
 	paged, page := pageSlice(items, req.GetPage())
 	return &pb.ListDataSetsRsp{RetInfo: quantstore.Success("success"), Datasets: paged, PageResult: page}, nil
 }
 
-func (s *Service) CreateField(_ context.Context, req *pb.CreateFieldReq) (*pb.CreateFieldRsp, error) {
-	field := req.GetField()
-	if field == nil || field.GetWorkspaceId() == "" || field.GetDatasetId() == "" {
-		return &pb.CreateFieldRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("field workspace_id and dataset_id are required"))}, nil
-	}
-	if field.FieldId == "" {
-		field.FieldId = defaultID(field.GetInterfaceName(), "field")
+func (s *Service) BindDataSetSubject(_ context.Context, req *pb.BindDataSetSubjectReq) (*pb.BindDataSetSubjectRsp, error) {
+	item := req.GetDatasetSubject()
+	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetSubjectId() == "" {
+		return &pb.BindDataSetSubjectRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and subject_id are required"))}, nil
 	}
 	s.mu.Lock()
-	s.fields[fieldKey(field.GetWorkspaceId(), field.GetDatasetId(), field.GetFieldId())] = field
+	s.datasetSubjects[metadataKey(item.GetSpaceId(), item.GetDatasetId(), item.GetSubjectId())] = item
 	s.mu.Unlock()
-	return &pb.CreateFieldRsp{RetInfo: quantstore.Success("success"), Field: field}, nil
+	return &pb.BindDataSetSubjectRsp{RetInfo: quantstore.Success("success"), DatasetSubject: item}, nil
+}
+
+func (s *Service) ListDataSetSubjects(_ context.Context, req *pb.ListDataSetSubjectsReq) (*pb.ListDataSetSubjectsRsp, error) {
+	s.mu.RLock()
+	var items []*pb.DataSetSubject
+	for _, item := range s.datasetSubjects {
+		if req.GetSpaceId() != "" && item.GetSpaceId() != req.GetSpaceId() {
+			continue
+		}
+		if req.GetDatasetId() != "" && item.GetDatasetId() != req.GetDatasetId() {
+			continue
+		}
+		if req.GetSubjectId() != "" && item.GetSubjectId() != req.GetSubjectId() {
+			continue
+		}
+		items = append(items, item)
+	}
+	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool {
+		return metadataKey(items[i].GetSpaceId(), items[i].GetDatasetId(), items[i].GetSubjectId()) < metadataKey(items[j].GetSpaceId(), items[j].GetDatasetId(), items[j].GetSubjectId())
+	})
+	paged, page := pageSlice(items, req.GetPage())
+	return &pb.ListDataSetSubjectsRsp{RetInfo: quantstore.Success("success"), DatasetSubjects: paged, PageResult: page}, nil
+}
+
+func (s *Service) CreateField(_ context.Context, req *pb.CreateFieldReq) (*pb.CreateFieldRsp, error) {
+	item := req.GetField()
+	if item == nil || item.GetSpaceId() == "" || item.GetFieldId() == "" {
+		return &pb.CreateFieldRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and field_id are required"))}, nil
+	}
+	s.mu.Lock()
+	s.fields[metadataKey(item.GetSpaceId(), item.GetFieldId())] = item
+	s.mu.Unlock()
+	return &pb.CreateFieldRsp{RetInfo: quantstore.Success("success"), Field: item}, nil
 }
 
 func (s *Service) UpdateField(_ context.Context, req *pb.UpdateFieldReq) (*pb.UpdateFieldRsp, error) {
-	field := req.GetField()
-	if field == nil || field.GetWorkspaceId() == "" || field.GetDatasetId() == "" || field.GetFieldId() == "" {
-		return &pb.UpdateFieldRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("field workspace_id, dataset_id and field_id are required"))}, nil
+	item := req.GetField()
+	if item == nil || item.GetSpaceId() == "" || item.GetFieldId() == "" {
+		return &pb.UpdateFieldRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and field_id are required"))}, nil
 	}
 	s.mu.Lock()
-	s.fields[fieldKey(field.GetWorkspaceId(), field.GetDatasetId(), field.GetFieldId())] = field
+	s.fields[metadataKey(item.GetSpaceId(), item.GetFieldId())] = item
 	s.mu.Unlock()
-	return &pb.UpdateFieldRsp{RetInfo: quantstore.Success("success"), Field: field}, nil
+	return &pb.UpdateFieldRsp{RetInfo: quantstore.Success("success"), Field: item}, nil
 }
 
 func (s *Service) GetField(_ context.Context, req *pb.GetFieldReq) (*pb.GetFieldRsp, error) {
 	s.mu.RLock()
-	var field *pb.Field
-	if req.GetFieldId() != "" {
-		field = s.fields[fieldKey(req.GetWorkspaceId(), req.GetDatasetId(), req.GetFieldId())]
-	} else {
-		for _, item := range s.fields {
-			if item.GetWorkspaceId() == req.GetWorkspaceId() && item.GetDatasetId() == req.GetDatasetId() && item.GetInterfaceName() == req.GetInterfaceName() {
-				field = item
-				break
-			}
-		}
-	}
+	item := s.fields[metadataKey(req.GetSpaceId(), req.GetFieldId())]
 	s.mu.RUnlock()
-	if field == nil {
+	if item == nil {
 		return &pb.GetFieldRsp{RetInfo: quantstore.Error(pb.ErrorCode_FIELD_NOT_FOUND, errors.New("field not found"))}, nil
 	}
-	return &pb.GetFieldRsp{RetInfo: quantstore.Success("success"), Field: field}, nil
+	return &pb.GetFieldRsp{RetInfo: quantstore.Success("success"), Field: item}, nil
 }
 
 func (s *Service) ListFields(_ context.Context, req *pb.ListFieldsReq) (*pb.ListFieldsRsp, error) {
 	s.mu.RLock()
 	var items []*pb.Field
 	for _, item := range s.fields {
-		if req.GetWorkspaceId() != "" && item.GetWorkspaceId() != req.GetWorkspaceId() {
+		if req.GetSpaceId() != "" && item.GetSpaceId() != req.GetSpaceId() {
 			continue
 		}
-		if req.GetDatasetId() != "" && item.GetDatasetId() != req.GetDatasetId() {
+		if req.GetValueType() != pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED && item.GetValueType() != req.GetValueType() {
 			continue
 		}
 		items = append(items, item)
 	}
 	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].GetFieldId() < items[j].GetFieldId() })
 	paged, page := pageSlice(items, req.GetPage())
 	return &pb.ListFieldsRsp{RetInfo: quantstore.Success("success"), Fields: paged, PageResult: page}, nil
 }
 
-func (s *Service) CreateFactorDef(_ context.Context, req *pb.CreateFactorDefReq) (*pb.CreateFactorDefRsp, error) {
-	item := req.GetFactorDef()
-	if item == nil || item.GetWorkspaceId() == "" {
-		return &pb.CreateFactorDefRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("factor_def workspace_id is required"))}, nil
-	}
-	if item.FactorDefId == "" {
-		item.FactorDefId = defaultID(item.GetName(), "factor_def")
+func (s *Service) CreateFactor(_ context.Context, req *pb.CreateFactorReq) (*pb.CreateFactorRsp, error) {
+	item := req.GetFactor()
+	if item == nil || item.GetSpaceId() == "" || item.GetFactorId() == "" {
+		return &pb.CreateFactorRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and factor_id are required"))}, nil
 	}
 	s.mu.Lock()
-	s.factorDefs[workspaceKey(item.GetWorkspaceId(), item.GetFactorDefId())] = item
+	s.factors[metadataKey(item.GetSpaceId(), item.GetFactorId())] = item
 	s.mu.Unlock()
-	return &pb.CreateFactorDefRsp{RetInfo: quantstore.Success("success"), FactorDef: item}, nil
+	return &pb.CreateFactorRsp{RetInfo: quantstore.Success("success"), Factor: item}, nil
 }
 
-func (s *Service) UpdateFactorDef(_ context.Context, req *pb.UpdateFactorDefReq) (*pb.UpdateFactorDefRsp, error) {
-	item := req.GetFactorDef()
-	if item == nil || item.GetWorkspaceId() == "" || item.GetFactorDefId() == "" {
-		return &pb.UpdateFactorDefRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("factor_def workspace_id and factor_def_id are required"))}, nil
+func (s *Service) UpdateFactor(_ context.Context, req *pb.UpdateFactorReq) (*pb.UpdateFactorRsp, error) {
+	item := req.GetFactor()
+	if item == nil || item.GetSpaceId() == "" || item.GetFactorId() == "" {
+		return &pb.UpdateFactorRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and factor_id are required"))}, nil
 	}
 	s.mu.Lock()
-	s.factorDefs[workspaceKey(item.GetWorkspaceId(), item.GetFactorDefId())] = item
+	s.factors[metadataKey(item.GetSpaceId(), item.GetFactorId())] = item
 	s.mu.Unlock()
-	return &pb.UpdateFactorDefRsp{RetInfo: quantstore.Success("success"), FactorDef: item}, nil
+	return &pb.UpdateFactorRsp{RetInfo: quantstore.Success("success"), Factor: item}, nil
 }
 
-func (s *Service) GetFactorDef(_ context.Context, req *pb.GetFactorDefReq) (*pb.GetFactorDefRsp, error) {
+func (s *Service) GetFactor(_ context.Context, req *pb.GetFactorReq) (*pb.GetFactorRsp, error) {
 	s.mu.RLock()
-	item := s.factorDefs[workspaceKey(req.GetWorkspaceId(), req.GetFactorDefId())]
+	item := s.factors[metadataKey(req.GetSpaceId(), req.GetFactorId())]
 	s.mu.RUnlock()
 	if item == nil {
-		return &pb.GetFactorDefRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("factor_def not found"))}, nil
+		return &pb.GetFactorRsp{RetInfo: quantstore.Error(pb.ErrorCode_FACTOR_NOT_FOUND, errors.New("factor not found"))}, nil
 	}
-	return &pb.GetFactorDefRsp{RetInfo: quantstore.Success("success"), FactorDef: item}, nil
+	return &pb.GetFactorRsp{RetInfo: quantstore.Success("success"), Factor: item}, nil
 }
 
-func (s *Service) ListFactorDefs(_ context.Context, req *pb.ListFactorDefsReq) (*pb.ListFactorDefsRsp, error) {
+func (s *Service) ListFactors(_ context.Context, req *pb.ListFactorsReq) (*pb.ListFactorsRsp, error) {
 	s.mu.RLock()
-	var items []*pb.FactorDef
-	for _, item := range s.factorDefs {
-		if req.GetWorkspaceId() == "" || item.GetWorkspaceId() == req.GetWorkspaceId() {
-			items = append(items, item)
-		}
-	}
-	s.mu.RUnlock()
-	paged, page := pageSlice(items, req.GetPage())
-	return &pb.ListFactorDefsRsp{RetInfo: quantstore.Success("success"), FactorDefs: paged, PageResult: page}, nil
-}
-
-func (s *Service) CreateFactorInstance(_ context.Context, req *pb.CreateFactorInstanceReq) (*pb.CreateFactorInstanceRsp, error) {
-	item := req.GetFactorInstance()
-	if item == nil || item.GetWorkspaceId() == "" {
-		return &pb.CreateFactorInstanceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("factor_instance workspace_id is required"))}, nil
-	}
-	if item.FactorInstanceId == "" {
-		item.FactorInstanceId = defaultID(item.GetName(), "factor_instance")
-	}
-	s.mu.Lock()
-	s.factorInstances[workspaceKey(item.GetWorkspaceId(), item.GetFactorInstanceId())] = item
-	s.mu.Unlock()
-	return &pb.CreateFactorInstanceRsp{RetInfo: quantstore.Success("success"), FactorInstance: item}, nil
-}
-
-func (s *Service) UpdateFactorInstance(_ context.Context, req *pb.UpdateFactorInstanceReq) (*pb.UpdateFactorInstanceRsp, error) {
-	item := req.GetFactorInstance()
-	if item == nil || item.GetWorkspaceId() == "" || item.GetFactorInstanceId() == "" {
-		return &pb.UpdateFactorInstanceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("factor_instance workspace_id and factor_instance_id are required"))}, nil
-	}
-	s.mu.Lock()
-	s.factorInstances[workspaceKey(item.GetWorkspaceId(), item.GetFactorInstanceId())] = item
-	s.mu.Unlock()
-	return &pb.UpdateFactorInstanceRsp{RetInfo: quantstore.Success("success"), FactorInstance: item}, nil
-}
-
-func (s *Service) GetFactorInstance(_ context.Context, req *pb.GetFactorInstanceReq) (*pb.GetFactorInstanceRsp, error) {
-	s.mu.RLock()
-	item := s.factorInstances[workspaceKey(req.GetWorkspaceId(), req.GetFactorInstanceId())]
-	s.mu.RUnlock()
-	if item == nil {
-		return &pb.GetFactorInstanceRsp{RetInfo: quantstore.Error(pb.ErrorCode_FACTOR_INSTANCE_NOT_FOUND, errors.New("factor_instance not found"))}, nil
-	}
-	return &pb.GetFactorInstanceRsp{RetInfo: quantstore.Success("success"), FactorInstance: item}, nil
-}
-
-func (s *Service) ListFactorInstances(_ context.Context, req *pb.ListFactorInstancesReq) (*pb.ListFactorInstancesRsp, error) {
-	s.mu.RLock()
-	var items []*pb.FactorInstance
-	for _, item := range s.factorInstances {
-		if req.GetWorkspaceId() != "" && item.GetWorkspaceId() != req.GetWorkspaceId() {
+	var items []*pb.Factor
+	for _, item := range s.factors {
+		if req.GetSpaceId() != "" && item.GetSpaceId() != req.GetSpaceId() {
 			continue
 		}
-		if req.GetFactorDefId() != "" && item.GetFactorDefId() != req.GetFactorDefId() {
-			continue
-		}
-		if req.GetDatasetId() != "" && item.GetDatasetId() != req.GetDatasetId() {
+		if req.GetAlgorithm() != "" && item.GetAlgorithm() != req.GetAlgorithm() {
 			continue
 		}
 		items = append(items, item)
 	}
 	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].GetFactorId() < items[j].GetFactorId() })
 	paged, page := pageSlice(items, req.GetPage())
-	return &pb.ListFactorInstancesRsp{RetInfo: quantstore.Success("success"), FactorInstances: paged, PageResult: page}, nil
+	return &pb.ListFactorsRsp{RetInfo: quantstore.Success("success"), Factors: paged, PageResult: page}, nil
 }
 
-func (s *Service) CreateDataView(_ context.Context, req *pb.CreateDataViewReq) (*pb.CreateDataViewRsp, error) {
-	item := req.GetDataView()
-	if item == nil || item.GetWorkspaceId() == "" {
-		return &pb.CreateDataViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("data_view workspace_id is required"))}, nil
-	}
-	if item.DataViewId == "" {
-		item.DataViewId = defaultID(item.GetName(), "data_view")
+func (s *Service) UpsertDataSetColumn(_ context.Context, req *pb.UpsertDataSetColumnReq) (*pb.UpsertDataSetColumnRsp, error) {
+	item := req.GetColumn()
+	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
+		return &pb.UpsertDataSetColumnRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and column_name are required"))}, nil
 	}
 	s.mu.Lock()
-	s.dataViews[workspaceKey(item.GetWorkspaceId(), item.GetDataViewId())] = item
+	s.datasetColumns[metadataKey(item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName())] = item
 	s.mu.Unlock()
-	return &pb.CreateDataViewRsp{RetInfo: quantstore.Success("success"), DataView: item}, nil
+	return &pb.UpsertDataSetColumnRsp{RetInfo: quantstore.Success("success"), Column: item}, nil
 }
 
-func (s *Service) UpdateDataView(_ context.Context, req *pb.UpdateDataViewReq) (*pb.UpdateDataViewRsp, error) {
-	item := req.GetDataView()
-	if item == nil || item.GetWorkspaceId() == "" || item.GetDataViewId() == "" {
-		return &pb.UpdateDataViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("data_view workspace_id and data_view_id are required"))}, nil
-	}
-	s.mu.Lock()
-	s.dataViews[workspaceKey(item.GetWorkspaceId(), item.GetDataViewId())] = item
-	s.mu.Unlock()
-	return &pb.UpdateDataViewRsp{RetInfo: quantstore.Success("success"), DataView: item}, nil
-}
-
-func (s *Service) GetDataView(_ context.Context, req *pb.GetDataViewReq) (*pb.GetDataViewRsp, error) {
+func (s *Service) ListDataSetColumns(_ context.Context, req *pb.ListDataSetColumnsReq) (*pb.ListDataSetColumnsRsp, error) {
 	s.mu.RLock()
-	item := s.dataViews[workspaceKey(req.GetWorkspaceId(), req.GetDataViewId())]
-	s.mu.RUnlock()
-	if item == nil {
-		return &pb.GetDataViewRsp{RetInfo: quantstore.Error(pb.ErrorCode_DATA_VIEW_NOT_READY, errors.New("data_view not found"))}, nil
-	}
-	return &pb.GetDataViewRsp{RetInfo: quantstore.Success("success"), DataView: item}, nil
-}
-
-func (s *Service) ListDataViews(_ context.Context, req *pb.ListDataViewsReq) (*pb.ListDataViewsRsp, error) {
-	s.mu.RLock()
-	var items []*pb.DataView
-	for _, item := range s.dataViews {
-		if req.GetWorkspaceId() == "" || item.GetWorkspaceId() == req.GetWorkspaceId() {
-			items = append(items, item)
+	var items []*pb.DataSetColumn
+	for _, item := range s.datasetColumns {
+		if req.GetSpaceId() != "" && item.GetSpaceId() != req.GetSpaceId() {
+			continue
 		}
+		if req.GetDatasetId() != "" && item.GetDatasetId() != req.GetDatasetId() {
+			continue
+		}
+		if req.GetTextIndexedOnly() && !item.GetTextIndexed() {
+			continue
+		}
+		items = append(items, item)
 	}
 	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].GetColumnName() < items[j].GetColumnName() })
 	paged, page := pageSlice(items, req.GetPage())
-	return &pb.ListDataViewsRsp{RetInfo: quantstore.Success("success"), DataViews: paged, PageResult: page}, nil
+	return &pb.ListDataSetColumnsRsp{RetInfo: quantstore.Success("success"), Columns: paged, PageResult: page}, nil
 }
 
-func (s *Service) CreateStorageDevice(_ context.Context, req *pb.CreateStorageDeviceReq) (*pb.CreateStorageDeviceRsp, error) {
-	item := req.GetStorageDevice()
+func (s *Service) CreateStorageNode(_ context.Context, req *pb.CreateStorageNodeReq) (*pb.CreateStorageNodeRsp, error) {
+	item := req.GetNode()
+	if item == nil || (item.GetNodeId() == "" && item.GetName() == "") {
+		return &pb.CreateStorageNodeRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id or name is required"))}, nil
+	}
+	if item.NodeId == "" {
+		item.NodeId = defaultID(item.GetName(), "node")
+	}
+	s.mu.Lock()
+	s.storageNodes[item.GetNodeId()] = item
+	s.mu.Unlock()
+	return &pb.CreateStorageNodeRsp{RetInfo: quantstore.Success("success"), Node: item}, nil
+}
+
+func (s *Service) UpdateStorageNode(_ context.Context, req *pb.UpdateStorageNodeReq) (*pb.UpdateStorageNodeRsp, error) {
+	item := req.GetNode()
+	if item == nil || item.GetNodeId() == "" {
+		return &pb.UpdateStorageNodeRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id is required"))}, nil
+	}
+	s.mu.Lock()
+	s.storageNodes[item.GetNodeId()] = item
+	s.mu.Unlock()
+	return &pb.UpdateStorageNodeRsp{RetInfo: quantstore.Success("success"), Node: item}, nil
+}
+
+func (s *Service) GetStorageNode(_ context.Context, req *pb.GetStorageNodeReq) (*pb.GetStorageNodeRsp, error) {
+	s.mu.RLock()
+	item := s.storageNodes[req.GetNodeId()]
+	s.mu.RUnlock()
 	if item == nil {
-		return &pb.CreateStorageDeviceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("storage_device is required"))}, nil
+		return &pb.GetStorageNodeRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("storage_node not found"))}, nil
+	}
+	return &pb.GetStorageNodeRsp{RetInfo: quantstore.Success("success"), Node: item}, nil
+}
+
+func (s *Service) ListStorageNodes(_ context.Context, req *pb.ListStorageNodesReq) (*pb.ListStorageNodesRsp, error) {
+	s.mu.RLock()
+	items := values(s.storageNodes)
+	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].GetNodeId() < items[j].GetNodeId() })
+	paged, page := pageSlice(items, req.GetPage())
+	return &pb.ListStorageNodesRsp{RetInfo: quantstore.Success("success"), Nodes: paged, PageResult: page}, nil
+}
+
+func (s *Service) CreateDevice(_ context.Context, req *pb.CreateDeviceReq) (*pb.CreateDeviceRsp, error) {
+	item := req.GetDevice()
+	if item == nil || (item.GetDeviceId() == "" && item.GetName() == "") {
+		return &pb.CreateDeviceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("device_id or name is required"))}, nil
 	}
 	if item.DeviceId == "" {
 		item.DeviceId = defaultID(item.GetName(), "device")
 	}
 	s.mu.Lock()
-	s.storageDevices[item.GetDeviceId()] = item
+	s.devices[item.GetDeviceId()] = item
 	s.mu.Unlock()
-	return &pb.CreateStorageDeviceRsp{RetInfo: quantstore.Success("success"), StorageDevice: item}, nil
+	return &pb.CreateDeviceRsp{RetInfo: quantstore.Success("success"), Device: item}, nil
 }
 
-func (s *Service) UpdateStorageDevice(_ context.Context, req *pb.UpdateStorageDeviceReq) (*pb.UpdateStorageDeviceRsp, error) {
-	item := req.GetStorageDevice()
+func (s *Service) UpdateDevice(_ context.Context, req *pb.UpdateDeviceReq) (*pb.UpdateDeviceRsp, error) {
+	item := req.GetDevice()
 	if item == nil || item.GetDeviceId() == "" {
-		return &pb.UpdateStorageDeviceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("device_id is required"))}, nil
+		return &pb.UpdateDeviceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("device_id is required"))}, nil
 	}
 	s.mu.Lock()
-	s.storageDevices[item.GetDeviceId()] = item
+	s.devices[item.GetDeviceId()] = item
 	s.mu.Unlock()
-	return &pb.UpdateStorageDeviceRsp{RetInfo: quantstore.Success("success"), StorageDevice: item}, nil
+	return &pb.UpdateDeviceRsp{RetInfo: quantstore.Success("success"), Device: item}, nil
 }
 
-func (s *Service) GetStorageDevice(_ context.Context, req *pb.GetStorageDeviceReq) (*pb.GetStorageDeviceRsp, error) {
+func (s *Service) GetDevice(_ context.Context, req *pb.GetDeviceReq) (*pb.GetDeviceRsp, error) {
 	s.mu.RLock()
-	item := s.storageDevices[req.GetDeviceId()]
+	item := s.devices[req.GetDeviceId()]
 	s.mu.RUnlock()
 	if item == nil {
-		return &pb.GetStorageDeviceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("storage_device not found"))}, nil
+		return &pb.GetDeviceRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("device not found"))}, nil
 	}
-	return &pb.GetStorageDeviceRsp{RetInfo: quantstore.Success("success"), StorageDevice: item}, nil
+	return &pb.GetDeviceRsp{RetInfo: quantstore.Success("success"), Device: item}, nil
 }
 
-func (s *Service) ListStorageDevices(_ context.Context, req *pb.ListStorageDevicesReq) (*pb.ListStorageDevicesRsp, error) {
+func (s *Service) ListDevices(_ context.Context, req *pb.ListDevicesReq) (*pb.ListDevicesRsp, error) {
 	s.mu.RLock()
-	items := values(s.storageDevices)
+	var items []*pb.Device
+	for _, item := range s.devices {
+		if req.GetNodeId() != "" && item.GetNodeId() != req.GetNodeId() {
+			continue
+		}
+		if req.GetEngine() != "" && item.GetEngine() != req.GetEngine() {
+			continue
+		}
+		items = append(items, item)
+	}
 	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].GetDeviceId() < items[j].GetDeviceId() })
 	paged, page := pageSlice(items, req.GetPage())
-	return &pb.ListStorageDevicesRsp{RetInfo: quantstore.Success("success"), StorageDevices: paged, PageResult: page}, nil
+	return &pb.ListDevicesRsp{RetInfo: quantstore.Success("success"), Devices: paged, PageResult: page}, nil
 }
 
 func (s *Service) CreateStorageRoute(_ context.Context, req *pb.CreateStorageRouteReq) (*pb.CreateStorageRouteRsp, error) {
 	item := req.GetStorageRoute()
-	if item == nil || item.GetWorkspaceId() == "" || item.GetDatasetId() == "" {
-		return &pb.CreateStorageRouteRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("route workspace_id and dataset_id are required"))}, nil
+	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetNodeId() == "" {
+		return &pb.CreateStorageRouteRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and node_id are required"))}, nil
 	}
 	if item.RouteId == "" {
-		item.RouteId = defaultID(item.GetDatasetId()+"-"+item.GetDeviceId(), "route")
+		item.RouteId = defaultID(strings.Join([]string{item.GetSpaceId(), item.GetDatasetId(), item.GetSubjectId(), item.GetNodeId()}, "-"), "route")
 	}
 	s.mu.Lock()
-	s.storageRoutes[item.GetRouteId()] = item
+	s.storageRoutes[metadataKey(item.GetSpaceId(), item.GetRouteId())] = item
 	s.mu.Unlock()
 	return &pb.CreateStorageRouteRsp{RetInfo: quantstore.Success("success"), StorageRoute: item}, nil
 }
 
 func (s *Service) UpdateStorageRoute(_ context.Context, req *pb.UpdateStorageRouteReq) (*pb.UpdateStorageRouteRsp, error) {
 	item := req.GetStorageRoute()
-	if item == nil || item.GetRouteId() == "" {
-		return &pb.UpdateStorageRouteRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("route_id is required"))}, nil
+	if item == nil || item.GetSpaceId() == "" || item.GetRouteId() == "" {
+		return &pb.UpdateStorageRouteRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and route_id are required"))}, nil
 	}
 	s.mu.Lock()
-	s.storageRoutes[item.GetRouteId()] = item
+	s.storageRoutes[metadataKey(item.GetSpaceId(), item.GetRouteId())] = item
 	s.mu.Unlock()
 	return &pb.UpdateStorageRouteRsp{RetInfo: quantstore.Success("success"), StorageRoute: item}, nil
 }
 
 func (s *Service) GetStorageRoute(_ context.Context, req *pb.GetStorageRouteReq) (*pb.GetStorageRouteRsp, error) {
 	s.mu.RLock()
-	item := s.storageRoutes[req.GetRouteId()]
+	item := s.storageRoutes[metadataKey(req.GetSpaceId(), req.GetRouteId())]
 	s.mu.RUnlock()
 	if item == nil {
 		return &pb.GetStorageRouteRsp{RetInfo: quantstore.Error(pb.ErrorCode_ROUTE_NOT_FOUND, errors.New("storage_route not found"))}, nil
@@ -574,7 +719,45 @@ func (s *Service) ListStorageRoutes(_ context.Context, req *pb.ListStorageRoutes
 	s.mu.RLock()
 	var items []*pb.StorageRoute
 	for _, item := range s.storageRoutes {
-		if req.GetWorkspaceId() != "" && item.GetWorkspaceId() != req.GetWorkspaceId() {
+		if req.GetSpaceId() != "" && item.GetSpaceId() != req.GetSpaceId() {
+			continue
+		}
+		if req.GetDatasetId() != "" && item.GetDatasetId() != req.GetDatasetId() {
+			continue
+		}
+		if req.GetSubjectId() != "" && item.GetSubjectId() != req.GetSubjectId() {
+			continue
+		}
+		if req.GetNodeId() != "" && item.GetNodeId() != req.GetNodeId() {
+			continue
+		}
+		items = append(items, item)
+	}
+	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].GetRouteId() < items[j].GetRouteId() })
+	paged, page := pageSlice(items, req.GetPage())
+	return &pb.ListStorageRoutesRsp{RetInfo: quantstore.Success("success"), StorageRoutes: paged, PageResult: page}, nil
+}
+
+func (s *Service) RegisterArchiveFile(_ context.Context, req *pb.RegisterArchiveFileReq) (*pb.RegisterArchiveFileRsp, error) {
+	item := req.GetArchiveFile()
+	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetDeviceId() == "" || item.GetFileUri() == "" {
+		return &pb.RegisterArchiveFileRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id, device_id and file_uri are required"))}, nil
+	}
+	if item.ArchiveFileId == "" {
+		item.ArchiveFileId = defaultID(strings.Join([]string{item.GetSpaceId(), item.GetDatasetId(), item.GetPartitionKey(), item.GetFileUri()}, "-"), "archive_file")
+	}
+	s.mu.Lock()
+	s.archiveFiles[metadataKey(item.GetSpaceId(), item.GetArchiveFileId())] = item
+	s.mu.Unlock()
+	return &pb.RegisterArchiveFileRsp{RetInfo: quantstore.Success("success"), ArchiveFile: item}, nil
+}
+
+func (s *Service) ListArchiveFiles(_ context.Context, req *pb.ListArchiveFilesReq) (*pb.ListArchiveFilesRsp, error) {
+	s.mu.RLock()
+	var items []*pb.ArchiveFile
+	for _, item := range s.archiveFiles {
+		if req.GetSpaceId() != "" && item.GetSpaceId() != req.GetSpaceId() {
 			continue
 		}
 		if req.GetDatasetId() != "" && item.GetDatasetId() != req.GetDatasetId() {
@@ -583,57 +766,22 @@ func (s *Service) ListStorageRoutes(_ context.Context, req *pb.ListStorageRoutes
 		if req.GetDeviceId() != "" && item.GetDeviceId() != req.GetDeviceId() {
 			continue
 		}
-		items = append(items, item)
-	}
-	s.mu.RUnlock()
-	paged, page := pageSlice(items, req.GetPage())
-	return &pb.ListStorageRoutesRsp{RetInfo: quantstore.Success("success"), StorageRoutes: paged, PageResult: page}, nil
-}
-
-func (s *Service) ConfigureCollectorDataSetBinding(_ context.Context, req *pb.ConfigureCollectorDataSetBindingReq) (*pb.ConfigureCollectorDataSetBindingRsp, error) {
-	item := req.GetBinding()
-	if item == nil || item.GetWorkspaceId() == "" || item.GetDatasetId() == "" {
-		return &pb.ConfigureCollectorDataSetBindingRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errors.New("binding workspace_id and dataset_id are required"))}, nil
-	}
-	if item.BindingId == "" {
-		item.BindingId = defaultID(item.GetDatasetId()+"-"+item.GetDataSource(), "binding")
-	}
-	s.mu.Lock()
-	s.collectorBindings[item.GetBindingId()] = item
-	s.mu.Unlock()
-	return &pb.ConfigureCollectorDataSetBindingRsp{RetInfo: quantstore.Success("success"), Binding: item}, nil
-}
-
-func (s *Service) ListCollectorDataSetBindings(_ context.Context, req *pb.ListCollectorDataSetBindingsReq) (*pb.ListCollectorDataSetBindingsRsp, error) {
-	s.mu.RLock()
-	var items []*pb.CollectorDataSetBinding
-	for _, item := range s.collectorBindings {
-		if req.GetWorkspaceId() != "" && item.GetWorkspaceId() != req.GetWorkspaceId() {
+		if req.GetPartitionKey() != "" && item.GetPartitionKey() != req.GetPartitionKey() {
 			continue
 		}
-		if req.GetDatasetId() != "" && item.GetDatasetId() != req.GetDatasetId() {
-			continue
-		}
-		if req.GetDataSource() != "" && item.GetDataSource() != req.GetDataSource() {
+		if !archiveFileOverlaps(item, req.GetTimeRange()) {
 			continue
 		}
 		items = append(items, item)
 	}
 	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].GetArchiveFileId() < items[j].GetArchiveFileId() })
 	paged, page := pageSlice(items, req.GetPage())
-	return &pb.ListCollectorDataSetBindingsRsp{RetInfo: quantstore.Success("success"), Bindings: paged, PageResult: page}, nil
+	return &pb.ListArchiveFilesRsp{RetInfo: quantstore.Success("success"), ArchiveFiles: paged, PageResult: page}, nil
 }
 
-func datasetKey(workspaceID, datasetID string) string {
-	return workspaceID + "|" + datasetID
-}
-
-func workspaceKey(workspaceID, id string) string {
-	return workspaceID + "|" + id
-}
-
-func fieldKey(workspaceID, datasetID, fieldID string) string {
-	return workspaceID + "|" + datasetID + "|" + fieldID
+func metadataKey(parts ...string) string {
+	return strings.Join(parts, "|")
 }
 
 func defaultID(name, prefix string) string {
@@ -673,4 +821,47 @@ func pageSlice[T any](items []T, page *pb.Page) ([]T, *pb.PageResult) {
 		end = len(items)
 	}
 	return items[start:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint64(len(items)), HasMore: end < len(items)}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func stringSet(values []string) map[string]bool {
+	if len(values) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(values))
+	for _, value := range values {
+		set[value] = true
+	}
+	return set
+}
+
+func upsertViewColumn(columns []*pb.ViewColumn, column *pb.ViewColumn) []*pb.ViewColumn {
+	for i, existing := range columns {
+		if existing.GetColumnName() == column.GetColumnName() {
+			columns[i] = column
+			return columns
+		}
+	}
+	return append(columns, column)
+}
+
+func archiveFileOverlaps(item *pb.ArchiveFile, timeRange *pb.TimeRange) bool {
+	if timeRange == nil {
+		return true
+	}
+	if timeRange.GetStartTime() != "" && item.GetMaxTime() != "" && item.GetMaxTime() < timeRange.GetStartTime() {
+		return false
+	}
+	if timeRange.GetEndTime() != "" && item.GetMinTime() != "" && item.GetMinTime() > timeRange.GetEndTime() {
+		return false
+	}
+	return true
 }

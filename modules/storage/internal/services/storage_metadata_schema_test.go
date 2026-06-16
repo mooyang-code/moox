@@ -1,0 +1,112 @@
+package services_test
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestStorageMetadataSchemaMatchesCurrentConcepts(t *testing.T) {
+	schema := readStorageMetadataSchema(t)
+
+	for _, table := range []string{
+		"t_spaces",
+		"t_views",
+		"t_view_columns",
+		"t_data_sources",
+		"t_subjects",
+		"t_subject_symbols",
+		"t_datasets",
+		"t_dataset_subjects",
+		"t_dataset_columns",
+		"t_fields",
+		"t_factors",
+		"t_storage_nodes",
+		"t_storage_devices",
+		"t_storage_routes",
+		"t_archive_files",
+	} {
+		require.Contains(t, schema, "CREATE TABLE IF NOT EXISTS "+table, table)
+	}
+
+	for _, table := range []string{
+		"t_views",
+		"t_view_columns",
+		"t_data_sources",
+		"t_subjects",
+		"t_subject_symbols",
+		"t_datasets",
+		"t_dataset_subjects",
+		"t_dataset_columns",
+		"t_fields",
+		"t_factors",
+		"t_storage_routes",
+		"t_archive_files",
+	} {
+		requireTableContains(t, schema, table, "c_space_id TEXT NOT NULL")
+	}
+
+	requireTableContains(t, schema, "t_views", "c_primary_dataset_id TEXT NOT NULL")
+	requireTableContains(t, schema, "t_views", "c_active_result TEXT NOT NULL")
+	requireTableContains(t, schema, "t_datasets", "c_data_source_id TEXT NOT NULL")
+	requireTableContains(t, schema, "t_data_sources", "c_kind TEXT NOT NULL")
+	requireTableContains(t, schema, "t_subject_symbols", "c_external_symbol TEXT NOT NULL")
+	requireTableContains(t, schema, "t_view_columns", "c_origin_type TEXT NOT NULL")
+	requireTableContains(t, schema, "t_view_columns", "c_origin_id TEXT NOT NULL")
+	requireTableContains(t, schema, "t_dataset_columns", "c_origin_type TEXT NOT NULL")
+	requireTableContains(t, schema, "t_dataset_columns", "c_origin_id TEXT NOT NULL")
+
+	requireTableNotContains(t, schema, "t_subjects", "c_data_source_id")
+	requireTableNotContains(t, schema, "t_subjects", "c_source_symbol")
+	requireTableNotContains(t, schema, "t_subjects", "c_aliases_json")
+	requireTableNotContains(t, schema, "t_views", "c_freq")
+	requireTableNotContains(t, schema, "t_views", "c_active_table")
+	requireTableNotContains(t, schema, "t_subject_symbols", "c_aliases_json")
+	requireTableNotContains(t, schema, "t_view_columns", "c_source_type")
+	requireTableNotContains(t, schema, "t_view_columns", "c_source_id")
+	requireTableNotContains(t, schema, "t_dataset_columns", "c_source_type")
+	requireTableNotContains(t, schema, "t_dataset_columns", "c_source_id")
+	requireTableNotContains(t, schema, "t_fields", "c_interface_name")
+	requireTableContains(t, schema, "t_storage_devices", "c_node_id TEXT NOT NULL")
+	requireTableContains(t, schema, "t_storage_routes", "c_node_id TEXT NOT NULL")
+	requireTableNotContains(t, schema, "t_storage_nodes", "c_role")
+	requireTableNotContains(t, schema, "t_storage_devices", "c_entity_id")
+	requireTableNotContains(t, schema, "t_storage_routes", "c_entity_id")
+	requireTableNotContains(t, schema, "t_storage_routes", "c_device_id")
+	require.NotContains(t, schema, "CREATE TABLE IF NOT EXISTS t_storage_entities")
+	require.NotContains(t, schema, "CREATE TABLE IF NOT EXISTS t_subject_aliases")
+	require.NotContains(t, schema, "CREATE TABLE IF NOT EXISTS t_space_views")
+	require.NotContains(t, schema, "idx_t_storage_routes_device")
+}
+
+func readStorageMetadataSchema(t *testing.T) string {
+	t.Helper()
+	root := filepath.Dir(filepath.Dir(moduleRoot(t)))
+	data, err := os.ReadFile(filepath.Join(root, "schema", "storage_metadata.sql"))
+	require.NoError(t, err)
+	return strings.ReplaceAll(string(data), "\r\n", "\n")
+}
+
+func requireTableContains(t *testing.T, schema, table, needle string) {
+	t.Helper()
+	require.Contains(t, tableBlock(t, schema, table), needle, table)
+}
+
+func requireTableNotContains(t *testing.T, schema, table, needle string) {
+	t.Helper()
+	require.NotContains(t, tableBlock(t, schema, table), needle, table)
+}
+
+func tableBlock(t *testing.T, schema, table string) string {
+	t.Helper()
+	startNeedle := "CREATE TABLE IF NOT EXISTS " + table
+	start := strings.Index(schema, startNeedle)
+	require.NotEqual(t, -1, start, table)
+	rest := schema[start:]
+	end := strings.Index(rest, ");")
+	require.NotEqual(t, -1, end, table)
+	return rest[:end+2]
+}

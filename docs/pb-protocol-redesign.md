@@ -2,6 +2,8 @@
 
 本文记录 storage 在新架构下的 PB 协议边界、命名和接口语义。当前项目未上线，协议以清晰和可演进为优先，不考虑旧接口兼容。
 
+协议中的概念边界和设计取舍见 `docs/storage-concepts-and-design-intent.md`。本文只描述接口如何表达这些概念。
+
 ## 设计目标
 
 - 用户写入和读取事实数据时只感知 `DataSet`。
@@ -40,12 +42,14 @@ message.proto
 
 | 概念 | 含义 |
 | --- | --- |
-| `Space` | 用户可见 View 的集合，只承载权限和视图选择 |
-| `View` | 面向查询的宽表定义和查询入口 |
-| `DataSet` | 可写的事实数据集 |
-| `Subject` | 数据源下的数据对象，例如交易标的、榜单、新闻源或账户 |
-| `Field` | 全局普通字段字典 |
-| `Factor` | 全局、已参数化的因子结果定义 |
+| `Space` | 业务命名空间和用户可见 View 的集合；本文“全局”均指 Space 内全局 |
+| `View` | 面向查询的物化结果定义和查询入口 |
+| `DataSource` | Space 内数据来源，例如交易所、API、文件导入或内部计算 |
+| `DataSet` | Space 内可写事实数据集，并且只绑定一个 DataSource |
+| `Subject` | Space 内业务对象，例如交易标的、榜单、新闻源或账户 |
+| `SubjectSymbol` | Subject 在某个 DataSource 下的外部代码映射 |
+| `Field` | Space 内普通字段字典 |
+| `Factor` | Space 内、已参数化的因子结果定义 |
 | `DataSetColumn` | DataSet 下允许写入的列，可来自 Field、Factor 或系统列 |
 | `ViewColumn` | View 对用户暴露的查询列 |
 | `Device` | 底层具体存储组件，例如 Pebble、DuckDB、Bleve、Parquet |
@@ -71,18 +75,21 @@ OVERWRITE
 
 ### 列来源
 
-`ColumnSourceType` 统一表达字段、因子、表达式和系统列：
+`ColumnOriginType` 统一表达字段、因子、DataSetColumn、表达式和系统列：
 
 ```text
 FIELD
 FACTOR
+DATASET_COLUMN
 EXPRESSION
 SYSTEM
 ```
 
-`FIELD` 表示普通字段。
+`FIELD` 表示 Space 内普通字段。
 
-`FACTOR` 表示已参数化后的因子结果，例如 `ma20_close`。
+`FACTOR` 表示 Space 内已参数化后的因子结果，例如 `ma20_close`。
+
+`DATASET_COLUMN` 表示 ViewColumn 来自某个 DataSetColumn。
 
 `EXPRESSION` 表示 View 内部登记的表达式列，不由临时查询随意传入执行。
 
@@ -110,29 +117,40 @@ rows
 `DataRow` 结构：
 
 ```text
-slice
-data_time
-row_id
+key
 columns
-attrs
+attributes
 ```
 
-`DataSlice` 结构：
+`DataKey` 结构：
 
 ```text
+scope
+data_time
+row_id
+```
+
+`DataScope` 结构：
+
+```text
+space_id
 dataset_id
 subject_id
 freq
 dimensions
 ```
 
-`dimensions` 是参与逻辑定位的低基数业务维度，不是普通查询过滤条件。只有当某个值决定“是否为同一条事实序列或事实切片”时才放在这里，例如 `adjust_type=qfq`、`report_period=2025Q4`、`ranking_type=amount_top`。如果一个值只是展示、筛选或排序字段，应放在 `DataRow.columns`。
+`DataScope` 定位一组事实数据。`DataKey` 在 `DataScope` 上增加 `data_time` 和 `row_id`，定位一条事实行。写入时，调用方是在某个 `DataKey` 下写入一组列值。
+
+`dimensions` 是参与逻辑定位的低基数业务维度，不是普通查询过滤条件。只有当某个值决定“是否为同一条事实序列或事实范围”时才放在这里，例如 `adjust_type=qfq`、`report_period=2025Q4`、`ranking_type=amount_top`。如果一个值只是展示、筛选或排序字段，应放在 `DataRow.columns`。
 
 语义约束：
 
 - `dataset_id` 必填。
-- 时序数据应填写 `subject_id`、`freq` 和 `data_time`。
-- 对象型或表格型数据可以使用 `row_id` 表示逻辑行。
+- `space_id` 必填；DataSet、Subject、Field 和 Factor 的唯一性均限定在 Space 内。
+- 时序数据应填写 `scope.subject_id`、`scope.freq` 和 `key.data_time`。
+- 对象型或表格型数据可以使用 `key.row_id` 表示逻辑行。
+- 事件或 tick 数据可以同时使用 `key.data_time` 和 `key.row_id`，避免同一时间多行冲突。
 - `columns.column_name` 必须登记在 `DataSetColumn` 中。
 - 写入成功只返回 `ret_info`。
 
@@ -144,7 +162,7 @@ dimensions
 
 ```text
 auth_info
-slice
+scope
 read_mode
 time_range
 snapshot_time
@@ -160,6 +178,27 @@ RANGE          // 按时间区间读取
 POINT          // 按 row_id 点查
 LATEST_BEFORE  // 读取某个截面时间之前的最新行
 ```
+
+范围查询使用 `scope + time_range`。例如读取 Binance `APT-USDT` 现货 1m K 线最近一天数据：
+
+```text
+scope:
+  space_id: crypto
+  dataset_id: binance_spot_kline
+  subject_id: APT-USDT
+  freq: 1m
+time_range:
+  start_time: 2026-06-15T00:00:00+08:00
+  end_time: 2026-06-16T00:00:00+08:00
+column_names:
+  open
+  high
+  low
+  close
+  volume
+```
+
+这里 `scope` 表示“哪一组数据”，`time_range` 表示“这组数据里的哪一段时间”，`column_names` 表示“要哪些列”。
 
 响应结构：
 
@@ -202,12 +241,17 @@ page
 - 调用方不控制是否 fallback、不控制底层表、不控制执行引擎。
 - 表达式列属于 View 元数据和后台构建逻辑，不出现在 `QueryViewColumn` 响应中。
 
+View 创建时必须配置 `primary_dataset_id`。`primary_dataset_id` 决定 View 的 Subject 范围，系统使用主 DataSet 绑定的 Subject 集合作为 View 的行域。协议不提供 `subject_scope_policy`，也不让调用方在创建 View 时逐个选择 Subject。
+
+当 View 关联多个 DataSet 时，其他 DataSet 只提供列。构建宽表时，系统以主 DataSet 的 Subject 集合为准，再按粒度键关联其他 DataSet 的列。
+
 ### SearchRows
 
 `SearchRows` 按 DataSet 维度执行全文和结构化搜索。请求结构：
 
 ```text
 auth_info
+space_id
 dataset_id
 text_query
 subject_ids
@@ -246,7 +290,8 @@ ReadDeviceRows
 `DeviceRef` 结构：
 
 ```text
-entity_id
+space_id
+node_id
 device_id
 engine
 dataset_id
@@ -280,6 +325,9 @@ device_table
 协议需要依赖以下元数据：
 
 ```text
+t_data_sources
+t_subjects
+t_subject_symbols
 t_datasets
 t_dataset_subjects
 t_dataset_columns
@@ -291,4 +339,4 @@ t_storage_devices
 
 其中 `t_dataset_columns.c_text_indexed` 是 Bleve 同步开关。
 
-View 的 DuckDB 宽表由后台任务根据 `t_views.c_query_window` 回扫 Pebble 主存并异步构建。新增列或因子时，不原地修改当前宽表，而是新建宽表后切换 `c_active_table`。
+View 的物化查询结果由后台任务根据 `t_views.c_query_window` 回扫 Pebble 主存并异步构建。新增列或因子时，不原地修改当前结果，而是新建物化结果后切换 `c_active_result`。
