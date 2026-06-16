@@ -49,7 +49,7 @@ func NewServiceWithOptions(opts Options) *Service {
 	meta := opts.Metadata
 	if meta == nil {
 		var err error
-		meta, err = openDefaultMetadataStore(context.Background(), root)
+		meta, err = openDefaultMetadataStore(context.Background(), root, opts.MetadataPath, opts.SchemaPath)
 		if err != nil {
 			panic(fmt.Sprintf("open storage metadata store: %v", err))
 		}
@@ -101,14 +101,20 @@ func (s *Service) viewStore() (*deviceduckdb.ViewStore, error) {
 	return actual.(*deviceduckdb.ViewStore), nil
 }
 
-func openDefaultMetadataStore(ctx context.Context, root string) (metadata.Store, error) {
-	metaDir := filepath.Join(root, "metadata")
+func openDefaultMetadataStore(ctx context.Context, root string, metadataPath string, schemaPath string) (metadata.Store, error) {
+	if metadataPath == "" {
+		metadataPath = filepath.Join(root, "metadata", "storage_metadata.db")
+	}
+	if schemaPath == "" {
+		schemaPath = defaultSchemaPath()
+	}
+	metaDir := filepath.Dir(metadataPath)
 	if err := os.MkdirAll(metaDir, 0o755); err != nil {
 		return nil, err
 	}
 	store, err := metasqlite.Open(ctx, metasqlite.Options{
-		Path:       filepath.Join(metaDir, "storage_metadata.db"),
-		SchemaPath: defaultSchemaPath(),
+		Path:       metadataPath,
+		SchemaPath: schemaPath,
 	})
 	if err != nil {
 		return nil, err

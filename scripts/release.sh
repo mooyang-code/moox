@@ -25,6 +25,7 @@ mkdir -p \
   "${RELEASE_ROOT}/storage/logs" \
   "${RELEASE_ROOT}/storage/sample-data" \
   "${RELEASE_ROOT}/storage/var/storage" \
+  "${RELEASE_ROOT}/schema" \
   "${RELEASE_ROOT}/docs" \
   "${RELEASE_ROOT}/skills" \
   "${RELEASE_ROOT}/scripts"
@@ -37,6 +38,7 @@ cp "${ROOT}/bin/moox-order" "${RELEASE_ROOT}/order/bin/"
 cp "${ROOT}/bin/moox-account" "${RELEASE_ROOT}/account/bin/"
 cp "${ROOT}/bin/moox-storage" "${RELEASE_ROOT}/storage/bin/"
 cp -R "${ROOT}/modules/storage/config/." "${RELEASE_ROOT}/storage/config/"
+cp -R "${ROOT}/schema/." "${RELEASE_ROOT}/schema/"
 cp "${ROOT}/scripts/storage-start.sh" "${RELEASE_ROOT}/storage/start.sh"
 cp "${ROOT}/scripts/storage-stop.sh" "${RELEASE_ROOT}/storage/stop.sh"
 cp -R "${ROOT}/docs/." "${RELEASE_ROOT}/docs/" 2>/dev/null || true

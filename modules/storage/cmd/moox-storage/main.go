@@ -23,7 +23,7 @@ func main() {
 
 	// 量化金融数据协议服务。当前实现提供真实的文件型读写路径，用于承接
 	// Space/Subject/DataSet/View 等新概念和 CSV 验收数据。
-	storageService := storagesvc.NewService(storageRoot())
+	storageService := storagesvc.NewServiceWithOptions(storageOptions())
 	pb.RegisterMetadataServiceService(s, storageService)
 	pb.RegisterDataServiceService(s, storageService)
 	pb.RegisterQueryServiceService(s, storageService)
@@ -36,10 +36,15 @@ func main() {
 }
 
 func storageRoot() string {
+	return storageOptions().Root
+}
+
+func storageOptions() storagesvc.Options {
+	opts := loadStorageOptions(configPathFromArgs(os.Args))
 	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
-		return root
+		opts.Root = root
 	}
-	return loadStorageRoot(configPathFromArgs(os.Args))
+	return opts
 }
 
 func configPathFromArgs(args []string) string {
@@ -65,17 +70,48 @@ func configPathFromArgs(args []string) string {
 }
 
 func loadStorageRoot(configPath string) string {
+	return loadStorageOptions(configPath).Root
+}
+
+func loadStorageOptions(configPath string) storagesvc.Options {
 	if configPath == "" {
-		return ""
+		return storagesvc.Options{}
 	}
 	dir := filepath.Dir(configPath)
 	file := filepath.Base(configPath)
 	var cfg storageconfig.RuntimeConfig
 	if err := storageconfig.NewConfigLoader(dir).LoadConfigWithDefaults(file, &cfg, cfg.ApplyDefaults); err != nil {
 		log.Warnf("加载 storage 配置失败，使用默认目录: %v", err)
-		return ""
+		return storagesvc.Options{}
 	}
-	return cfg.Storage.Root
+	return storagesvc.Options{
+		Root:         cfg.Storage.Root,
+		MetadataPath: cfg.Storage.Metadata.Path,
+		SchemaPath:   resolveConfigPath(configPath, cfg.Storage.Metadata.SchemaPath),
+	}
+}
+
+func resolveConfigPath(configPath string, value string) string {
+	if value == "" || filepath.IsAbs(value) {
+		return value
+	}
+	candidates := []string{
+		filepath.Clean(filepath.Join(filepath.Dir(configPath), value)),
+		filepath.Clean(value),
+	}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		candidates = append(candidates,
+			filepath.Clean(filepath.Join(exeDir, value)),
+			filepath.Clean(filepath.Join(exeDir, "..", "schema", filepath.Base(value))),
+		)
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return candidates[0]
 }
 
 func clearSocketFiles() {
