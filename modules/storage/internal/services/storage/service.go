@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/services/adapter"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/changefeed"
+	devicebleve "github.com/mooyang-code/moox/modules/storage/internal/services/device/bleve"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/metadata"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/services/metadata/sqlite"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/router"
@@ -22,6 +24,7 @@ import (
 
 type Service struct {
 	store     *quantstore.Store
+	root      string
 	metadata  metadata.Store
 	validator *schema.Validator
 	router    *router.Resolver
@@ -53,12 +56,31 @@ func NewServiceWithOptions(opts Options) *Service {
 	store := quantstore.New(root)
 	return &Service{
 		store:     store,
+		root:      root,
 		metadata:  meta,
 		validator: schema.NewValidator(meta),
 		router:    router.NewResolver(meta),
 		adapter:   adapter.NewLocalClient(store),
 		changes:   changefeed.NewMemoryPublisher(),
 	}
+}
+
+var searchIndexes sync.Map
+
+func (s *Service) searchIndex() (*devicebleve.Index, error) {
+	path := filepath.Join(s.root, "bleve", "default")
+	if value, ok := searchIndexes.Load(path); ok {
+		return value.(*devicebleve.Index), nil
+	}
+	index, err := devicebleve.Open(devicebleve.Options{Path: path})
+	if err != nil {
+		return nil, err
+	}
+	actual, loaded := searchIndexes.LoadOrStore(path, index)
+	if loaded {
+		_ = index.Close()
+	}
+	return actual.(*devicebleve.Index), nil
 }
 
 func openDefaultMetadataStore(ctx context.Context, root string) (metadata.Store, error) {

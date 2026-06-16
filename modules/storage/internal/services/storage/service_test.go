@@ -211,7 +211,7 @@ func seedStringDataset(t *testing.T, svc *Service, spaceID string, datasetID str
 	_, err = svc.CreateDataSet(ctx, &pb.CreateDataSetReq{Dataset: &pb.DataSet{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: "test_source", Name: datasetID, DataKind: pb.DataKind_DATA_KIND_TABLE}})
 	require.NoError(t, err)
 	for _, column := range columns {
-		_, err = svc.UpsertDataSetColumn(ctx, &pb.UpsertDataSetColumnReq{Column: &pb.DataSetColumn{SpaceId: spaceID, DatasetId: datasetID, ColumnName: column, OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FIELD, OriginId: column, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}})
+		_, err = svc.UpsertDataSetColumn(ctx, &pb.UpsertDataSetColumnReq{Column: &pb.DataSetColumn{SpaceId: spaceID, DatasetId: datasetID, ColumnName: column, OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FIELD, OriginId: column, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, TextIndexed: true}})
 		require.NoError(t, err)
 	}
 	seedRoute(t, svc, spaceID, datasetID)

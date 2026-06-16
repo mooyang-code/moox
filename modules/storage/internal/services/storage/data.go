@@ -26,6 +26,9 @@ func (s *Service) WriteRows(ctx context.Context, req *pb.WriteRowsReq) (*pb.Writ
 			return &pb.WriteRowsRsp{RetInfo: quantstore.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 		}
 	}
+	if err := s.indexRowsForSearch(ctx, req.GetRows()); err != nil {
+		return &pb.WriteRowsRsp{RetInfo: quantstore.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
 	if err := s.publishRowsChanged(ctx, req.GetRows()); err != nil {
 		return &pb.WriteRowsRsp{RetInfo: quantstore.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
@@ -74,6 +77,43 @@ func (s *Service) groupRowsByDevice(ctx context.Context, rows []*pb.DataRow) ([]
 		out = append(out, group)
 	}
 	return out, nil
+}
+
+func (s *Service) indexRowsForSearch(ctx context.Context, rows []*pb.DataRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	type datasetKey struct {
+		spaceID   string
+		datasetID string
+	}
+	grouped := make(map[datasetKey][]*pb.DataRow)
+	for _, row := range rows {
+		scope := row.GetKey().GetScope()
+		key := datasetKey{spaceID: scope.GetSpaceId(), datasetID: scope.GetDatasetId()}
+		grouped[key] = append(grouped[key], row)
+	}
+	for key, datasetRows := range grouped {
+		columns, _, err := s.metadata.ListDataSetColumns(ctx, key.spaceID, key.datasetID, true, nil)
+		if err != nil {
+			return err
+		}
+		indexed := make(map[string]bool, len(columns))
+		for _, column := range columns {
+			indexed[column.GetColumnName()] = true
+		}
+		if len(indexed) == 0 {
+			continue
+		}
+		index, err := s.searchIndex()
+		if err != nil {
+			return err
+		}
+		if err := index.IndexRows(ctx, datasetRows, indexed); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) publishRowsChanged(ctx context.Context, rows []*pb.DataRow) error {

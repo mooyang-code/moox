@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	devicebleve "github.com/mooyang-code/moox/modules/storage/internal/services/device/bleve"
 	"github.com/mooyang-code/moox/modules/storage/pkg/quantstore"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
@@ -72,6 +73,31 @@ func (s *Service) QueryView(ctx context.Context, req *pb.QueryViewReq) (*pb.Quer
 func (s *Service) SearchRows(ctx context.Context, req *pb.SearchRowsReq) (*pb.SearchRowsRsp, error) {
 	if req.GetDatasetId() == "" {
 		return &pb.SearchRowsRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, errText("dataset_id is required"))}, nil
+	}
+	if strings.TrimSpace(req.GetTextQuery()) != "" {
+		index, err := s.searchIndex()
+		if err != nil {
+			return &pb.SearchRowsRsp{RetInfo: quantstore.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		}
+		rows, _, err := index.SearchRows(ctx, devicebleve.SearchRequest{
+			SpaceID:    req.GetSpaceId(),
+			DatasetID:  req.GetDatasetId(),
+			SubjectIDs: req.GetSubjectIds(),
+			TextQuery:  req.GetTextQuery(),
+			TimeRange:  req.GetTimeRange(),
+		})
+		if err != nil {
+			return &pb.SearchRowsRsp{RetInfo: quantstore.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		}
+		var matched []*pb.DataRow
+		for _, row := range rows {
+			if rowMatchesFilters(row, req.GetFilters()) {
+				matched = append(matched, projectRowColumns(row, req.GetColumnNames()))
+			}
+		}
+		sortSearchRows(matched, req.GetSorts())
+		paged, page := pageSlice(matched, req.GetPage())
+		return &pb.SearchRowsRsp{RetInfo: quantstore.Success("success"), Rows: paged, PageResult: page}, nil
 	}
 	subjectIDs := req.GetSubjectIds()
 	if len(subjectIDs) == 0 {
