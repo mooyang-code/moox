@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/services/archive"
-	"github.com/mooyang-code/moox/modules/storage/internal/services/materializer"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/viewbuilder"
 	"github.com/mooyang-code/moox/modules/storage/pkg/quantstore"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/stretchr/testify/require"
@@ -77,7 +77,7 @@ func TestStorageAcceptance(t *testing.T) {
 	require.NoError(t, err)
 	viewStore, err := svc.viewStore()
 	require.NoError(t, err)
-	builder := materializer.NewBuilder(materializer.Options{
+	builder := viewbuilder.NewBuilder(viewbuilder.Options{
 		Metadata: svc.metadata,
 		Facts:    svc.store,
 		Views:    viewStore,

@@ -36,16 +36,11 @@ func (s *Service) WriteRows(ctx context.Context, req *pb.WriteRowsReq) (*pb.Writ
 }
 
 func (s *Service) ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
-	rows, page, err := s.store.ReadRows(
-		ctx,
-		req.GetScope(),
-		req.GetReadMode(),
-		req.GetTimeRange(),
-		req.GetSnapshotTime(),
-		req.GetRowIds(),
-		req.GetColumnNames(),
-		req.GetPage(),
-	)
+	ref, err := s.router.Resolve(ctx, req.GetScope())
+	if err != nil {
+		return &pb.ReadRowsRsp{RetInfo: quantstore.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+	}
+	rows, page, err := s.adapter.ReadRows(ctx, ref, req)
 	if err != nil {
 		return &pb.ReadRowsRsp{RetInfo: quantstore.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}

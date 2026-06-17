@@ -9,6 +9,7 @@ import (
 
 	blevelib "github.com/blevesearch/bleve/v2"
 	blevequery "github.com/blevesearch/bleve/v2/search/query"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -137,6 +138,7 @@ func documentID(row *pb.DataRow) string {
 		scope.GetDatasetId(),
 		scope.GetSubjectId(),
 		scope.GetFreq(),
+		factkey.DimensionsHash(scope.GetDimensions()),
 		key.GetDataTime(),
 		key.GetRowId(),
 	}, "/")

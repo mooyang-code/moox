@@ -27,3 +27,14 @@ func TestLocalAdapterWritesToPebbleDevice(t *testing.T) {
 	err = client.WriteRows(ctx, &pb.DeviceRef{SpaceId: "crypto", NodeId: "local", Engine: "pebble", DatasetId: "kline"}, []*pb.DataRow{row}, pb.WriteMode_WRITE_MODE_UPSERT)
 	require.NoError(t, err)
 }
+
+func TestLocalClientRejectsUnsupportedEngine(t *testing.T) {
+	ctx := context.Background()
+	client := adapter.NewLocalClient(quantstore.New(t.TempDir()))
+
+	err := client.WriteRows(ctx, &pb.DeviceRef{Engine: "duckdb"}, nil, pb.WriteMode_WRITE_MODE_UPSERT)
+	require.ErrorContains(t, err, "unsupported write engine")
+
+	_, _, err = client.ReadRows(ctx, &pb.DeviceRef{Engine: "duckdb"}, &pb.ReadRowsReq{})
+	require.ErrorContains(t, err, "unsupported read engine")
+}

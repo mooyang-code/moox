@@ -46,13 +46,20 @@ func (v *Validator) ValidateWriteRows(ctx context.Context, rows []*pb.DataRow) e
 				allowed[column.GetColumnName()] = column
 			}
 		}
+		present := make(map[string]bool, len(row.GetColumns()))
 		for _, value := range row.GetColumns() {
+			present[value.GetColumnName()] = true
 			column := allowed[value.GetColumnName()]
 			if column == nil {
 				return fmt.Errorf("column %s is not registered in dataset %s", value.GetColumnName(), scope.GetDatasetId())
 			}
 			if value.GetValueType() != pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED && column.GetValueType() != pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED && value.GetValueType() != column.GetValueType() {
 				return fmt.Errorf("column %s type mismatch: got %s want %s", value.GetColumnName(), value.GetValueType().String(), column.GetValueType().String())
+			}
+		}
+		for _, column := range allowed {
+			if column.GetRequired() && !present[column.GetColumnName()] {
+				return fmt.Errorf("required column %s is missing in dataset %s", column.GetColumnName(), scope.GetDatasetId())
 			}
 		}
 	}

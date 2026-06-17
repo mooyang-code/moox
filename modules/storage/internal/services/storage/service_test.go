@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/services/viewbuilder"
 	"github.com/mooyang-code/moox/modules/storage/pkg/quantstore"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/stretchr/testify/require"
@@ -133,6 +134,90 @@ func TestQueryViewReadsActiveDuckDBResult(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Len(t, rsp.GetRows(), 1)
 	require.Equal(t, "APT-USDT", rsp.GetRows()[0].GetSubjectId())
+}
+
+func TestReadRowsUsesResolvedAdapterRoute(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(t.TempDir())
+	seedStringDataset(t, svc, "crypto", "kline", []string{"close"})
+
+	expectedRows := []*pb.DataRow{{
+		Key: &pb.DataKey{
+			Scope:    &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"},
+			DataTime: "2026-06-15T00:00:00Z",
+		},
+		Columns: []*pb.ColumnValue{stringColumn("close", "8.1")},
+	}}
+	svc.adapter = &fakeReadAdapter{rows: expectedRows}
+
+	rsp, err := svc.ReadRows(ctx, &pb.ReadRowsReq{
+		Scope:    &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"},
+		ReadMode: pb.ReadMode_READ_MODE_RANGE,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetRows(), 1)
+	require.Equal(t, "8.1", rsp.GetRows()[0].GetColumns()[0].GetValue().GetStringValue())
+}
+
+func TestInitViewBuilderAllowsTimerToBuildPendingViews(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(t.TempDir())
+	seedStringDataset(t, svc, "crypto", "kline", []string{"close"})
+	_, err := svc.BindDataSetSubject(ctx, &pb.BindDataSetSubjectReq{DatasetSubject: &pb.DataSetSubject{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT"}})
+	require.NoError(t, err)
+	_, err = svc.WriteRows(ctx, &pb.WriteRowsReq{
+		WriteMode: pb.WriteMode_WRITE_MODE_UPSERT,
+		Rows: []*pb.DataRow{{
+			Key: &pb.DataKey{
+				Scope:    &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"},
+				DataTime: "2026-06-15T00:00:00Z",
+			},
+			Columns: []*pb.ColumnValue{stringColumn("close", "8.1")},
+		}},
+	})
+	require.NoError(t, err)
+	_, err = svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "kline_view",
+		Name:             "K线视图",
+		PrimaryDatasetId: "kline",
+		DatasetIds:       []string{"kline"},
+		GrainKeys:        []string{"subject_id", "data_time", "freq"},
+		QueryWindow:      "30d",
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+	_, err = svc.UpsertViewColumn(ctx, &pb.UpsertViewColumnReq{Column: &pb.ViewColumn{
+		SpaceId:    "crypto",
+		ViewId:     "kline_view",
+		ColumnName: "close",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   "kline.close",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_STRING,
+	}})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.InitViewBuilder())
+	t.Cleanup(func() { viewbuilder.SetDefaultBuilder(nil) })
+	require.NoError(t, viewbuilder.HandleSchedule(ctx, "space_id=crypto"))
+
+	view, err := svc.metadata.GetView(ctx, "crypto", "kline_view")
+	require.NoError(t, err)
+	require.Equal(t, "active", view.GetBuildStatus())
+	require.NotEmpty(t, view.GetActiveResult())
+}
+
+type fakeReadAdapter struct {
+	rows []*pb.DataRow
+}
+
+func (f *fakeReadAdapter) WriteRows(ctx context.Context, device *pb.DeviceRef, rows []*pb.DataRow, mode pb.WriteMode) error {
+	return nil
+}
+
+func (f *fakeReadAdapter) ReadRows(ctx context.Context, device *pb.DeviceRef, req *pb.ReadRowsReq) ([]*pb.DataRow, *pb.PageResult, error) {
+	return f.rows, &pb.PageResult{Page: 1, Size: uint32(len(f.rows)), Total: uint64(len(f.rows))}, nil
 }
 
 func TestServiceMetadataUsesNewModel(t *testing.T) {

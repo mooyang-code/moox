@@ -63,7 +63,7 @@
 │   │   ├── duckdb
 │   │   ├── parquet
 │   │   └── pebble
-│   ├── materializer
+│   ├── viewbuilder
 │   ├── metadata
 │   │   └── sqlite
 │   ├── router
@@ -85,7 +85,7 @@
 - `device/bleve`: 文本索引。
 - `device/parquet`: 从 Pebble 事实归档生成 Parquet。
 - `changefeed`: 写入 Pebble 后发布 `DataRowsChangedEvent`。
-- `materializer`: 根据 View 元数据从 Pebble 回扫并构建 DuckDB 物化结果。
+- `viewbuilder`: 根据 View 元数据从 Pebble 回扫并构建 DuckDB 物化结果。
 - `archive`: 从 Pebble 读取事实数据并登记 `ArchiveFile`。
 - `pkg/quantstore`: 保留返回值、TypedValue 和少量可复用工具，不再作为 JSONL 主存。
 
@@ -717,7 +717,7 @@
   CGO_ENABLED=1 go test ./modules/storage/internal/services/device/duckdb -count=1
   go test ./modules/storage/internal/services/storage -run TestQueryView -count=1
   git add modules/storage/internal/services/device/duckdb modules/storage/internal/services/storage modules/storage/go.mod modules/storage/go.sum
-  git commit -m "feat(storage): query materialized duckdb views"
+  git commit -m "feat(storage): query viewbuilder duckdb views"
   ```
 
 ---
@@ -726,8 +726,8 @@
 
 **Files:**
 
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/materializer/view_builder.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/materializer/view_builder_test.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/viewbuilder/view_builder.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/viewbuilder/view_builder_test.go`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/storage/service.go`
 
 - [ ] **Step 9.1: 写构建器测试**
@@ -769,8 +769,8 @@
   当前阶段至少提供可调用的 Go 方法；若已有 worker 框架，则注册：
 
   ```text
-  materializer.BuildView(space_id, view_id)
-  materializer.RebuildPendingViews()
+  viewbuilder.BuildView(space_id, view_id)
+  viewbuilder.RebuildPendingViews()
   ```
 
 - [ ] **Step 9.5: 跑测试并提交**
@@ -778,9 +778,9 @@
   Run:
 
   ```bash
-  go test ./modules/storage/internal/services/materializer ./modules/storage/internal/services/storage -run 'Test.*Material|TestQueryView' -count=1
-  git add modules/storage/internal/services/materializer modules/storage/internal/services/storage
-  git commit -m "feat(storage): materialize views from pebble facts"
+  go test ./modules/storage/internal/services/viewbuilder ./modules/storage/internal/services/storage -run 'Test.*ViewBuilder|TestQueryView' -count=1
+  git add modules/storage/internal/services/viewbuilder modules/storage/internal/services/storage
+  git commit -m "feat(storage): build views from pebble facts"
   ```
 
 ---
@@ -935,7 +935,7 @@
   ReadRows 读回 K 线
   SearchRows 搜索 text_indexed 列
   创建 View 和 ViewColumn
-  Materializer 构建 View
+  ViewBuilder 构建 View
   QueryView 读回物化结果
   Archive 生成 Parquet 并登记 ArchiveFile
   ```
@@ -1165,9 +1165,8 @@
 - `ReadRows` 能按 DataSet 读回 Pebble facts。
 - `SearchRows` 能按 DataSet 做 Bleve 全文和结构化搜索。
 - `QueryView` 只读取已有 View 的物化结果；未构建返回 `VIEW_NOT_FOUND`。
-- Materializer 能从 Pebble 构建 DuckDB View 物化结果。
+- ViewBuilder 能从 Pebble 构建 DuckDB View 物化结果。
 - Parquet 归档只从 Pebble facts 产生，并登记 `t_archive_files`。
 - 本地下载目录的 `APT-USDT.csv`、`AR-USDT.csv` 可作为验收输入写入 storage，并能从 storage 读回到 `/Users/mooyang/Downloads/moox-storage-acceptance.json`。
 - 远端 `43.132.204.177` 使用 `~/moox/storage` 运行新的 `moox-storage`，旧 `xdata-storage` 已停止。
 - 远端日志位于 `~/moox/storage/logs/moox-storage.log`。
-

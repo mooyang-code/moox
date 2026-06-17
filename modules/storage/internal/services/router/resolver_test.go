@@ -22,6 +22,32 @@ func TestResolverSelectsExactSubjectRouteBeforeWildcard(t *testing.T) {
 	require.Equal(t, "node-b", ref.GetNodeId())
 }
 
+func TestResolverPrefersExactSubjectRouteOverLowerPriorityWildcard(t *testing.T) {
+	ctx := context.Background()
+	meta := &fakeRouteMetadata{routes: []*pb.StorageRoute{
+		{SpaceId: "crypto", RouteId: "wildcard", DatasetId: "kline", SubjectPattern: "*", NodeId: "node-a", Priority: 1, Status: "active"},
+		{SpaceId: "crypto", RouteId: "apt", DatasetId: "kline", SubjectId: "APT-USDT", NodeId: "node-b", Priority: 100, Status: "active"},
+	}}
+	resolver := router.NewResolver(meta)
+
+	ref, err := resolver.Resolve(ctx, &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT"})
+	require.NoError(t, err)
+	require.Equal(t, "node-b", ref.GetNodeId())
+}
+
+func TestResolverSupportsSubjectGlobPatternBeforeDatasetDefault(t *testing.T) {
+	ctx := context.Background()
+	meta := &fakeRouteMetadata{routes: []*pb.StorageRoute{
+		{SpaceId: "crypto", RouteId: "default", DatasetId: "kline", NodeId: "node-a", Priority: 1, Status: "active"},
+		{SpaceId: "crypto", RouteId: "apt-pattern", DatasetId: "kline", SubjectPattern: "APT-*", NodeId: "node-b", Priority: 100, Status: "active"},
+	}}
+	resolver := router.NewResolver(meta)
+
+	ref, err := resolver.Resolve(ctx, &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT"})
+	require.NoError(t, err)
+	require.Equal(t, "node-b", ref.GetNodeId())
+}
+
 type fakeRouteMetadata struct {
 	routes []*pb.StorageRoute
 }

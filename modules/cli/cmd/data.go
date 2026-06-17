@@ -18,7 +18,9 @@ import (
 
 var (
 	dataStorageRoot string
+	dataStorageURL  string
 	dataSpaceID     string
+	dataSourceID    string
 	dataCSVFile     string
 	dataDatasetID   string
 	dataSubjectID   string
@@ -62,6 +64,13 @@ var dataCSVImportCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if dataStorageURL != "" {
+			if err := importCSVRowsRemote(context.Background(), dataStorageURL, defaultFlag(dataSpaceID, "default"), defaultFlag(dataSourceID, "binance"), defaultFlag(dataDatasetID, "binance_spot_kline_1m"), subjectID, defaultFlag(dataFreq, "1m"), rows); err != nil {
+				return err
+			}
+			fmt.Printf("imported dataset=%s subject=%s rows=%d storage_url=%s\n", defaultFlag(dataDatasetID, "binance_spot_kline_1m"), subjectID, len(rows), dataStorageURL)
+			return nil
+		}
 		store := quantstore.New(dataStorageRoot)
 		if err := store.WriteRows(context.Background(), rows, pb.WriteMode_WRITE_MODE_UPSERT); err != nil {
 			return err
@@ -80,6 +89,29 @@ var dataRowsExportCmd = &cobra.Command{
 	Use:   "export",
 	Short: "导出 DataSet 行为 JSON",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if dataStorageURL != "" {
+			rsp, err := exportRowsRemote(context.Background(), dataStorageURL, &pb.ReadRowsReq{
+				Scope: &pb.DataScope{
+					SpaceId:    defaultFlag(dataSpaceID, "default"),
+					DatasetId:  defaultFlag(dataDatasetID, "binance_spot_kline_1m"),
+					SubjectId:  dataSubjectID,
+					Freq:       dataFreq,
+					Dimensions: parseDimensions(dataDimensions),
+				},
+				ReadMode: pb.ReadMode_READ_MODE_RANGE,
+				TimeRange: &pb.TimeRange{
+					StartTime:      dataStartTime,
+					StartInclusive: true,
+					EndTime:        dataEndTime,
+					EndInclusive:   true,
+				},
+				Page: &pb.Page{Page: 1, Size: dataPageSize},
+			})
+			if err != nil {
+				return err
+			}
+			return writeRowsExport(rsp, dataOutputFile, dataStorageURL, defaultFlag(dataDatasetID, "binance_spot_kline_1m"), dataSubjectID)
+		}
 		store := quantstore.New(dataStorageRoot)
 		rows, page, err := store.ReadRows(context.Background(), &pb.DataScope{
 			SpaceId:    defaultFlag(dataSpaceID, "default"),
@@ -96,23 +128,11 @@ var dataRowsExportCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		raw, err := protojson.MarshalOptions{UseProtoNames: true, Multiline: true}.Marshal(&pb.ReadRowsRsp{
+		return writeRowsExport(&pb.ReadRowsRsp{
 			RetInfo:    quantstore.Success("success"),
 			Rows:       rows,
 			PageResult: page,
-		})
-		if err != nil {
-			return err
-		}
-		if dataOutputFile == "" {
-			fmt.Println(string(raw))
-			return nil
-		}
-		if err := os.WriteFile(dataOutputFile, raw, 0o600); err != nil {
-			return err
-		}
-		fmt.Printf("exported dataset=%s subject=%s rows=%d output=%s\n", defaultFlag(dataDatasetID, "binance_spot_kline_1m"), dataSubjectID, len(rows), dataOutputFile)
-		return nil
+		}, dataOutputFile, quantstore.New(dataStorageRoot).Root(), defaultFlag(dataDatasetID, "binance_spot_kline_1m"), dataSubjectID)
 	},
 }
 
@@ -124,8 +144,10 @@ func init() {
 	dataRowsCmd.AddCommand(dataRowsExportCmd)
 
 	dataCSVImportCmd.Flags().StringVar(&dataStorageRoot, "storage-root", "", "本地存储根目录，默认读取 MOOX_STORAGE_HOME 或 var/storage")
+	dataCSVImportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:19104")
 	dataCSVImportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
 	dataCSVImportCmd.Flags().StringVar(&dataSpaceID, "workspace", "default", "Space ID，兼容旧参数名")
+	dataCSVImportCmd.Flags().StringVar(&dataSourceID, "data-source", "binance", "DataSource ID")
 	dataCSVImportCmd.Flags().StringVar(&dataCSVFile, "file", "", "CSV 文件路径")
 	dataCSVImportCmd.Flags().StringVar(&dataDatasetID, "dataset", "binance_spot_kline_1m", "DataSet ID")
 	dataCSVImportCmd.Flags().StringVar(&dataSubjectID, "subject", "", "Subject ID，默认取文件名")
@@ -134,6 +156,7 @@ func init() {
 	dataCSVImportCmd.Flags().StringArrayVar(&dataDimensions, "dimension", nil, "自定义维度，格式 name=value，可重复")
 
 	dataRowsExportCmd.Flags().StringVar(&dataStorageRoot, "storage-root", "", "本地存储根目录，默认读取 MOOX_STORAGE_HOME 或 var/storage")
+	dataRowsExportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:19104")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "workspace", "default", "Space ID，兼容旧参数名")
 	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset", "binance_spot_kline_1m", "DataSet ID")
@@ -144,6 +167,22 @@ func init() {
 	dataRowsExportCmd.Flags().StringVar(&dataEndTime, "end-time", "", "结束时间")
 	dataRowsExportCmd.Flags().Uint32Var(&dataPageSize, "page-size", 1000, "最多导出行数")
 	dataRowsExportCmd.Flags().StringVar(&dataOutputFile, "output", "", "输出 JSON 文件；为空则输出到 stdout")
+}
+
+func writeRowsExport(rsp *pb.ReadRowsRsp, outputFile string, source string, datasetID string, subjectID string) error {
+	raw, err := protojson.MarshalOptions{UseProtoNames: true, Multiline: true}.Marshal(rsp)
+	if err != nil {
+		return err
+	}
+	if outputFile == "" {
+		fmt.Println(string(raw))
+		return nil
+	}
+	if err := os.WriteFile(outputFile, raw, 0o600); err != nil {
+		return err
+	}
+	fmt.Printf("exported dataset=%s subject=%s rows=%d source=%s output=%s\n", datasetID, subjectID, len(rsp.GetRows()), source, outputFile)
+	return nil
 }
 
 func readCSVRows(path string, scope *pb.DataScope, timeColumn string) ([]*pb.DataRow, error) {

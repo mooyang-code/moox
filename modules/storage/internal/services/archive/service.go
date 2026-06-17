@@ -64,7 +64,7 @@ func (s *Service) ArchiveDataSet(ctx context.Context, spaceID string, datasetID 
 	if partitionKey == "" {
 		partitionKey = "default"
 	}
-	rows, _, err := s.facts.ReadRows(ctx, &pb.DataScope{SpaceId: spaceID, DatasetId: datasetID}, pb.ReadMode_READ_MODE_RANGE, timeRange, "", nil, nil, nil)
+	rows, err := s.readAllRows(ctx, &pb.DataScope{SpaceId: spaceID, DatasetId: datasetID}, timeRange)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +94,21 @@ func (s *Service) ArchiveDataSet(ctx context.Context, spaceID string, datasetID 
 		Status:        "active",
 	}
 	return s.metadata.RegisterArchiveFile(ctx, file)
+}
+
+func (s *Service) readAllRows(ctx context.Context, scope *pb.DataScope, timeRange *pb.TimeRange) ([]*pb.DataRow, error) {
+	const pageSize = uint32(1000)
+	var out []*pb.DataRow
+	for pageNo := uint32(1); ; pageNo++ {
+		rows, page, err := s.facts.ReadRows(ctx, scope, pb.ReadMode_READ_MODE_RANGE, timeRange, "", nil, nil, &pb.Page{Page: pageNo, Size: pageSize})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		if page == nil || !page.GetHasMore() {
+			return out, nil
+		}
+	}
 }
 
 var unsafePathPart = regexp.MustCompile(`[^A-Za-z0-9_.=-]+`)

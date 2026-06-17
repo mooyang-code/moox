@@ -82,8 +82,10 @@ if [[ ${#CSV_FILES[@]} -eq 0 ]]; then
   CSV_FILES=("${CSV_DIR}/APT-USDT.csv" "${CSV_DIR}/AR-USDT.csv")
 fi
 
+REMOTE_MODE=0
 if [[ -n "${STORAGE_URL}" && "${LOCAL_MODE}" -eq 0 ]]; then
-  echo "==> storage-url=${STORAGE_URL} recorded; current acceptance uses local storage root ${STORAGE_ROOT}"
+  REMOTE_MODE=1
+  echo "==> storage-url=${STORAGE_URL}; acceptance will use remote moox-storage HTTP service"
 fi
 
 if [[ ! -x "${CLI}" ]]; then
@@ -105,23 +107,44 @@ for file in "${CSV_FILES[@]}"; do
   subjects+=("${symbol}")
 
   echo "==> import ${file}"
-  "${CLI}" data csv import \
-    --storage-root "${STORAGE_ROOT}" \
-    --space "${SPACE}" \
-    --dataset "${DATASET}" \
-    --subject "${symbol}" \
-    --freq "${FREQ}" \
-    --file "${file}"
+  if [[ "${REMOTE_MODE}" -eq 1 ]]; then
+    "${CLI}" data csv import \
+      --storage-url "${STORAGE_URL}" \
+      --space "${SPACE}" \
+      --data-source "${DATA_SOURCE}" \
+      --dataset "${DATASET}" \
+      --subject "${symbol}" \
+      --freq "${FREQ}" \
+      --file "${file}"
+  else
+    "${CLI}" data csv import \
+      --storage-root "${STORAGE_ROOT}" \
+      --space "${SPACE}" \
+      --dataset "${DATASET}" \
+      --subject "${symbol}" \
+      --freq "${FREQ}" \
+      --file "${file}"
+  fi
 done
 
 echo "==> export readback ${OUTPUT}"
-"${CLI}" data rows export \
-  --storage-root "${STORAGE_ROOT}" \
-  --space "${SPACE}" \
-  --dataset "${DATASET}" \
-  --freq "${FREQ}" \
-  --page-size "${PAGE_SIZE}" \
-  --output "${OUTPUT}"
+if [[ "${REMOTE_MODE}" -eq 1 ]]; then
+  "${CLI}" data rows export \
+    --storage-url "${STORAGE_URL}" \
+    --space "${SPACE}" \
+    --dataset "${DATASET}" \
+    --freq "${FREQ}" \
+    --page-size "${PAGE_SIZE}" \
+    --output "${OUTPUT}"
+else
+  "${CLI}" data rows export \
+    --storage-root "${STORAGE_ROOT}" \
+    --space "${SPACE}" \
+    --dataset "${DATASET}" \
+    --freq "${FREQ}" \
+    --page-size "${PAGE_SIZE}" \
+    --output "${OUTPUT}"
+fi
 
 for subject in "${subjects[@]}"; do
   if ! grep -q "${subject}" "${OUTPUT}"; then
@@ -131,5 +154,9 @@ for subject in "${subjects[@]}"; do
 done
 
 echo "==> acceptance passed"
-echo "storage root: ${STORAGE_ROOT}"
+if [[ "${REMOTE_MODE}" -eq 1 ]]; then
+  echo "storage url: ${STORAGE_URL}"
+else
+  echo "storage root: ${STORAGE_ROOT}"
+fi
 echo "readback: ${OUTPUT}"

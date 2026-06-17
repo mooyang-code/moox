@@ -134,6 +134,45 @@ func TestStorePersistsMetadataRoundTrip(t *testing.T) {
 	require.Len(t, archives, 1)
 }
 
+func TestUpsertViewColumnMarksActiveViewPending(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	_, err := store.UpsertSpace(ctx, &pb.Space{SpaceId: "quant", Name: "量化空间"})
+	require.NoError(t, err)
+	_, err = store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "quant", DataSourceId: "binance", Name: "币安", Kind: "exchange"})
+	require.NoError(t, err)
+	_, err = store.UpsertDataSet(ctx, &pb.DataSet{SpaceId: "quant", DatasetId: "kline", DataSourceId: "binance", Name: "K线", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES})
+	require.NoError(t, err)
+	_, err = store.UpsertView(ctx, &pb.View{
+		SpaceId:          "quant",
+		ViewId:           "kline_view",
+		Name:             "K线视图",
+		PrimaryDatasetId: "kline",
+		DatasetIds:       []string{"kline"},
+		ActiveResult:     "view_result_quant_kline_v1",
+		BuildStatus:      "active",
+		Status:           "active",
+	})
+	require.NoError(t, err)
+
+	_, err = store.UpsertViewColumn(ctx, &pb.ViewColumn{
+		SpaceId:    "quant",
+		ViewId:     "kline_view",
+		ColumnName: "ma20",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   "kline.ma20",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	})
+	require.NoError(t, err)
+
+	view, err := store.GetView(ctx, "quant", "kline_view")
+	require.NoError(t, err)
+	require.Equal(t, "pending", view.GetBuildStatus())
+	require.Equal(t, "view_result_quant_kline_v1", view.GetActiveResult())
+}
+
 func openTestStore(t *testing.T) *sqlite.Store {
 	t.Helper()
 	ctx := context.Background()

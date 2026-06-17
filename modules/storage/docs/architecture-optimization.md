@@ -37,10 +37,12 @@ DataService.WriteRows
   -> StorageNode adapter
   -> Pebble fact store
   -> DataRowsChangedEvent
-  -> Bleve / DuckDB materializer / Parquet archive
+  -> Bleve / DuckDB viewbuilder / Parquet archive
 ```
 
 当前实现优先保证同步写入成功后可从 Pebble 读回。派生层由事件或后台任务异步构建。
+
+`moox-storage` 启动时会初始化 `viewbuilder`，并注册 tRPC timer 服务 `trpc.storage.viewbuilder.timer`。定时器通过 `viewBuilderSchedule` 扫描 `build_status` 为空或 `pending` 的 View，发现新 View 或新增 ViewColumn 后重新构建并切换 `active_result`。
 
 ## 查询链路
 
@@ -70,4 +72,3 @@ params_json = {"window":20,"price":"close"}
 ```
 
 新增因子时新增 Factor 和对应列，不要求在线事实主存改 schema。
-

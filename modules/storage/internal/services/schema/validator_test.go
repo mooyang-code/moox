@@ -43,6 +43,48 @@ func TestValidatorRejectsUnknownColumn(t *testing.T) {
 	require.ErrorContains(t, err, "column unknown_close is not registered")
 }
 
+func TestValidatorRejectsMissingRequiredColumn(t *testing.T) {
+	ctx := context.Background()
+	meta := &fakeValidatorMetadata{
+		dataset: &pb.DataSet{SpaceId: "crypto", DatasetId: "binance_spot_kline", Status: "active"},
+		columns: []*pb.DataSetColumn{
+			{
+				SpaceId:    "crypto",
+				DatasetId:  "binance_spot_kline",
+				ColumnName: "open",
+				ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+				Required:   true,
+				Status:     "active",
+			},
+			{
+				SpaceId:    "crypto",
+				DatasetId:  "binance_spot_kline",
+				ColumnName: "close",
+				ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+				Status:     "active",
+			},
+		},
+	}
+	validator := schema.NewValidator(meta)
+
+	err := validator.ValidateWriteRows(ctx, []*pb.DataRow{{
+		Key: &pb.DataKey{
+			Scope: &pb.DataScope{
+				SpaceId:   "crypto",
+				DatasetId: "binance_spot_kline",
+				SubjectId: "APT-USDT",
+				Freq:      "1m",
+			},
+			DataTime: "2026-06-15T00:00:00+08:00",
+		},
+		Columns: []*pb.ColumnValue{
+			quantstore.DoubleValue("close", 9.9),
+		},
+	}})
+
+	require.ErrorContains(t, err, "required column open is missing")
+}
+
 type fakeValidatorMetadata struct {
 	dataset *pb.DataSet
 	columns []*pb.DataSetColumn

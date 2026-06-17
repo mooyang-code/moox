@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/services/common/config"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/services/storage"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/viewbuilder"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	"trpc.group/trpc-go/trpc-go"
@@ -24,10 +26,16 @@ func main() {
 	// 量化金融数据协议服务。当前实现提供真实的文件型读写路径，用于承接
 	// Space/Subject/DataSet/View 等新概念和 CSV 验收数据。
 	storageService := storagesvc.NewServiceWithOptions(storageOptions())
+	if err := storageService.InitViewBuilder(); err != nil {
+		log.Errorf("初始化 ViewBuilder 失败: %v", err)
+		os.Exit(1)
+	}
 	pb.RegisterMetadataServiceService(s, storageService)
 	pb.RegisterDataServiceService(s, storageService)
 	pb.RegisterQueryServiceService(s, storageService)
 	pb.RegisterAdapterServiceService(s, storageService)
+	timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
+	timer.RegisterHandlerService(s.Service("trpc.storage.viewbuilder.timer"), viewbuilder.HandleSchedule)
 
 	// 启动trpc服务器
 	if err := s.Serve(); err != nil {

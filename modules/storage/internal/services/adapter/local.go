@@ -48,11 +48,19 @@ func NewLocalClient(store *quantstore.Store) *LocalClient {
 }
 
 func (c *LocalClient) WriteRows(ctx context.Context, device *pb.DeviceRef, rows []*pb.DataRow, mode pb.WriteMode) error {
-	_ = device
-	return c.store.WriteRows(ctx, rows, mode)
+	switch device.GetEngine() {
+	case "", "pebble":
+		return c.store.WriteRows(ctx, rows, mode)
+	default:
+		return fmt.Errorf("unsupported write engine %s", device.GetEngine())
+	}
 }
 
 func (c *LocalClient) ReadRows(ctx context.Context, device *pb.DeviceRef, req *pb.ReadRowsReq) ([]*pb.DataRow, *pb.PageResult, error) {
-	_ = device
-	return c.store.ReadRows(ctx, req.GetScope(), req.GetReadMode(), req.GetTimeRange(), req.GetSnapshotTime(), req.GetRowIds(), req.GetColumnNames(), req.GetPage())
+	switch device.GetEngine() {
+	case "", "pebble":
+		return c.store.ReadRows(ctx, req.GetScope(), req.GetReadMode(), req.GetTimeRange(), req.GetSnapshotTime(), req.GetRowIds(), req.GetColumnNames(), req.GetPage())
+	default:
+		return nil, nil, fmt.Errorf("unsupported read engine %s", device.GetEngine())
+	}
 }

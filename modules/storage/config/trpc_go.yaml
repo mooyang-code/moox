@@ -46,6 +46,11 @@ server:
       port: 18001
       network: tcp
       protocol: trpc
+    - name: trpc.storage.viewbuilder.timer
+      port: 18009
+      network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params="
+      protocol: timer
+      timeout: 60000
 
     - name: trpc.storage.data.DataService
       #ip: 0.0.0.0

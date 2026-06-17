@@ -1,9 +1,9 @@
 package pebble
 
 import (
-	"sort"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/services/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
@@ -26,7 +26,7 @@ func encodeRowKey(row *pb.DataRow) string {
 		escape(scope.GetDatasetId()),
 		escape(scope.GetSubjectId()),
 		escape(scope.GetFreq()),
-		escape(dimensionKey(scope.GetDimensions())),
+		escape(factkey.DimensionsHash(scope.GetDimensions())),
 		escape(dataTime),
 		escape(rowID),
 	}, "|")
@@ -38,18 +38,6 @@ func encodeScopePrefix(scope *pb.DataScope) string {
 		parts = append(parts, escape(scope.GetSubjectId()))
 	}
 	return strings.Join(parts, "|") + "|"
-}
-
-func dimensionKey(values map[string]string) string {
-	if len(values) == 0 {
-		return "_"
-	}
-	parts := make([]string, 0, len(values))
-	for key, value := range values {
-		parts = append(parts, key+"="+value)
-	}
-	sort.Strings(parts)
-	return strings.Join(parts, "&")
 }
 
 func escape(value string) string {

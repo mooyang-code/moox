@@ -553,7 +553,34 @@ func (s *Store) UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.
 			c_sort_order = excluded.c_sort_order,
 			c_attrs_json = excluded.c_attrs_json
 	`, item.GetSpaceId(), item.GetViewId(), item.GetColumnName(), viewOriginSQL(item.GetOriginType()), item.GetOriginId(), valueTypeSQL(item.GetValueType()), item.GetOnlineTime(), item.GetSortOrder(), raw)
-	return item, err
+	if err != nil {
+		return nil, err
+	}
+	if err := s.markViewPending(ctx, item.GetSpaceId(), item.GetViewId()); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func (s *Store) markViewPending(ctx context.Context, spaceID string, viewID string) error {
+	view, err := getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{spaceID, viewID}, func() *pb.View { return &pb.View{} })
+	if err != nil {
+		return err
+	}
+	if view.GetBuildStatus() == "pending" || view.GetBuildStatus() == "building" {
+		return nil
+	}
+	view.BuildStatus = "pending"
+	raw, err := marshal(view)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE t_views
+		SET c_build_status = ?, c_attrs_json = ?
+		WHERE c_space_id = ? AND c_view_id = ?
+	`, view.GetBuildStatus(), raw, spaceID, viewID)
+	return err
 }
 
 func (s *Store) ListViewColumns(ctx context.Context, spaceID string, viewID string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {

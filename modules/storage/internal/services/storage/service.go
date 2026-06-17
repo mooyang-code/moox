@@ -90,6 +90,9 @@ func (s *Service) viewStore() (*deviceduckdb.ViewStore, error) {
 	if value, ok := viewStores.Load(path); ok {
 		return value.(*deviceduckdb.ViewStore), nil
 	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
 	store, err := deviceduckdb.Open(deviceduckdb.Options{Path: path})
 	if err != nil {
 		return nil, err

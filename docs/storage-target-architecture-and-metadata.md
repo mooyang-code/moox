@@ -341,11 +341,11 @@ build_end_time = now
 
 ### StorageNode
 
-`StorageNode` 表示存储代理节点，也就是一个 adapter 服务实例或服务组入口。它包裹一组底层 StorageDevice，对外提供统一的读写能力。moox-storage 接入层根据 StorageRoute 把在线主存写入分发到不同 StorageNode。
+`StorageNode` 表示存储代理节点，也就是一个 adapter 服务实例或服务组入口。它包裹一组底层 Device，对外提供统一的读写能力。moox-storage 接入层根据 StorageRoute 把在线主存写入分发到不同 StorageNode。
 
-### StorageDevice
+### Device
 
-`StorageDevice` 是底层具体存储组件。
+`Device` 是底层具体存储组件；表定义中仍使用 `t_storage_devices` 作为元数据表名。
 
 示例：
 
@@ -356,7 +356,7 @@ Bleve
 ParquetArchive
 ```
 
-StorageDevice 可以挂在某个 StorageNode 下。StorageRoute 只路由到在线主存对应的 StorageNode；具体 Pebble 设备由 adapter 内部配置或设备清单决定。DuckDB、Bleve 和 Parquet 设备由异步派生任务使用。
+Device 可以挂在某个 StorageNode 下。StorageRoute 只路由到在线主存对应的 StorageNode；具体 Pebble 设备由 adapter 内部配置或设备清单决定。DuckDB、Bleve 和 Parquet 设备由异步派生任务使用。
 
 ### StorageRoute
 
