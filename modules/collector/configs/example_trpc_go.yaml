@@ -1,0 +1,47 @@
+global: #全局配置
+  namespace: Production            #环境类型，分正式production和非正式development两种类型
+  env_name: dev                    #环境名称，非正式环境下多环境的名称
+
+server:
+  timeout: 5000
+  service:
+      ######## 定时任务 ########
+    - name: trpc.heartbeat.timer
+      port: 8001
+      network: "*/9 * * * * *?scheduler=heartbeatSchedule&startAtOnce=1&params="
+      protocol: timer
+      timeout: 5000  #请求最长处理时间 单位 毫秒
+
+    - name: trpc.collectexec.timer
+      port: 8002
+      network: "0 * * * * *?scheduler=collectExecSchedule&startAtOnce=0&params="
+      protocol: timer
+      timeout: 30000  #请求最长处理时间 单位 毫秒（采集任务可能较耗时）
+
+    - name: trpc.dnsresolve.timer
+      port: 8003
+      network: "30 * * * * *?scheduler=dnsResolveSchedule&startAtOnce=1&params="
+      protocol: timer
+      timeout: 5000  #请求最长处理时间 单位 毫秒
+
+plugins:
+  log: # Logging configuration, supports multiple logs, can log using log.Get("xxx").Debug
+    default: # Default log configuration, multiple outputs are supported for each log
+      - writer: cls # CLS remote log output
+        level: debug # Log level for remote logging
+        remote_config: # Remote log configuration
+          topic_id:   # CLS log topic ID
+          host: ap-guangzhou.cls.tencentcs.com # CLS log reporting domain
+          secret_id:   # Tencent Cloud secret_id
+          secret_key:   # Tencent Cloud secret_key
+          total_size_ln_bytes: 104857600 # [Optional, 100 * 1024 * 1024] Maximum log size that the instance can cache
+          max_send_worker_count: 50 # [Optional, 50] Maximum number of "goroutines" for concurrency
+          max_block_sec: 0 # [Optional, 0] Maximum blocking time on the send method, default is 0 (non-blocking)
+          max_batch_size: 5242880 # [Optional, 5 * 1024 * 1024] When the log size cached in the Batch is greater than or equal to MaxBatchSize, the batch will be sent
+          max_batch_count: 4096 # [Optional, 4096] When the number of logs cached in the Batch is greater than or equal to MaxBatchCount, the batch will be sent
+          linger_ms: 2000 # [Optional, 2 * 1000] The time from batch creation to being able to send
+          retries: 10 # [Optional, 10] Number of retries for a batch that failed to send for the first time
+          max_reserved_attempts: 11 # [Optional, 11] Each attempt to send a batch corresponds to an attempt, and this parameter controls the number of attempts returned to the user
+          base_retry_backoff_ms: 100 # [Optional, 100] Backoff time for the first retry
+          max_retry_backoff_ms: 50000 # [Optional, 50 * 1000] Maximum backoff time for retries
+          source: 127.0.0.1 # [Optional] Default to using trpc global local_ip, service listening IP

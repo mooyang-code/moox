@@ -1,0 +1,14 @@
+go 1.24.0
+
+use (
+	./modules/account
+	./modules/cli
+	./modules/collector
+	./modules/control
+	./modules/control/proto/controlgen
+	./modules/control/proto/gen
+	./modules/factor
+	./modules/order
+	./modules/storage
+	./modules/storage/proto/gen
+)

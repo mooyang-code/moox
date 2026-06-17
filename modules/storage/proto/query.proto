@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+package trpc.storage.query;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
+
+import "common.proto";
+import "data.proto";
+
+// QueryTime 表示查询时间条件。
+message QueryTime {
+  // time_range 是区间查询使用的时间范围。
+  common.TimeRange time_range = 1;
+  // snapshot_time 是截面查询使用的时间点。
+  string snapshot_time = 2;
+}
+
+// QueryViewColumn 表示查询视图返回的一列。
+message QueryViewColumn {
+  // column_name 是返回给调用方的列名。
+  string column_name = 1;
+  // origin_type 是列来源类型。
+  common.ColumnOriginType origin_type = 2;
+  // dataset_id 是列所属的事实数据集 ID。
+  string dataset_id = 3;
+  // origin_id 是来源 ID，例如 DataSetColumn、表达式或系统列名。
+  string origin_id = 4;
+  // value_type 是列值的逻辑类型。
+  common.FieldValueType value_type = 5;
+}
+
+// QueryViewRow 表示查询视图返回的一行。
+message QueryViewRow {
+  // subject_id 是数据对象 ID。
+  string subject_id = 1;
+  // data_time 是本行代表的业务时间。
+  string data_time = 2;
+  // values 是与返回列集合对应的列值。
+  repeated data.ColumnValue values = 3;
+}
+
+// QueryViewReq 表示查询已登记视图的请求。
+message QueryViewReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是用户可见视图集合的空间 ID。
+  string space_id = 2;
+  // view_id 是已登记的查询视图 ID。
+  string view_id = 3;
+  // subject_ids 是调用方明确指定的数据对象 ID 列表。
+  repeated string subject_ids = 4;
+  // query_time 是查询时间条件。
+  QueryTime query_time = 5;
+  // column_names 是要返回的列名；为空时返回视图默认列。
+  repeated string column_names = 6;
+  // filters 是过滤条件列表。
+  repeated common.FilterExpr filters = 7;
+  // sorts 是排序条件列表。
+  repeated common.SortSpec sorts = 8;
+  // page 是分页参数。
+  common.Page page = 9;
+}
+
+// QueryViewRsp 表示查询视图结果。
+message QueryViewRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // columns 是返回列定义。
+  repeated QueryViewColumn columns = 2;
+  // rows 是返回行列表。
+  repeated QueryViewRow rows = 3;
+  // page_result 是分页结果。
+  common.PageResult page_result = 4;
+}
+
+// SearchRowsReq 表示数据集搜索请求。
+message SearchRowsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是使用空间 ID。
+  string space_id = 2;
+  // dataset_id 是要搜索的数据集 ID。
+  string dataset_id = 3;
+  // text_query 是可选全文检索文本；为空时只按结构化条件搜索。
+  string text_query = 4;
+  // subject_ids 是可选的数据对象过滤列表。
+  repeated string subject_ids = 5;
+  // time_range 是可选时间范围。
+  common.TimeRange time_range = 6;
+  // filters 是结构化过滤条件列表。
+  repeated common.FilterExpr filters = 7;
+  // sorts 是排序条件列表。
+  repeated common.SortSpec sorts = 8;
+  // column_names 是要返回的列名；为空时返回整行。
+  repeated string column_names = 9;
+  // page 是分页参数。
+  common.Page page = 10;
+}
+
+// SearchRowsRsp 表示数据集搜索结果。
+message SearchRowsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // rows 是匹配的事实数据行。
+  repeated data.DataRow rows = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// QueryService 是用户侧查询服务。
+service QueryService {
+  // QueryView 查询已登记并异步构建的视图；不存在的组合直接返回 VIEW_NOT_FOUND。
+  rpc QueryView(QueryViewReq) returns (QueryViewRsp);
+  // SearchRows 按数据集执行全文和结构化搜索。
+  rpc SearchRows(SearchRowsReq) returns (SearchRowsRsp);
+}

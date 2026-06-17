@@ -1,0 +1,152 @@
+package collectmgr
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/mooyang-code/moox/modules/control/internal/common"
+	cloudnodedao "github.com/mooyang-code/moox/modules/control/internal/service/cloudnode/dao"
+	collectordao "github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/dao"
+	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/dto"
+	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/model"
+)
+
+type TaskRulesServiceImpl struct {
+	taskRulesDAO collectordao.CollectorTaskRulesDAO
+	nodeDAO      cloudnodedao.CloudNodeDAO
+}
+
+func NewTaskRulesServiceImpl(
+	taskRulesDAO collectordao.CollectorTaskRulesDAO,
+	nodeDAO cloudnodedao.CloudNodeDAO,
+) TaskRuleService {
+	return &TaskRulesServiceImpl{
+		taskRulesDAO: taskRulesDAO,
+		nodeDAO:      nodeDAO,
+	}
+}
+
+func (s *TaskRulesServiceImpl) GetTaskRuleList(ctx context.Context, bizType, dataType, dataSource, enabled string) ([]*dto.TaskRuleDTO, error) {
+	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, bizType, dataType, dataSource, enabled)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get task rules list: %w", err)
+	}
+
+	var result []*dto.TaskRuleDTO
+	for _, rule := range rules {
+		ruleDTO := &dto.TaskRuleDTO{
+			ID:             rule.ID,
+			RuleID:         rule.RuleID,
+			BizType:        rule.BizType,
+			DataType:       rule.DataType,
+			DataSource:     rule.DataSource,
+			CollectParams:  rule.CollectParams,
+			AssignmentType: rule.AssignmentType,
+			AssignedNodes:  rule.AssignedNodes,
+			NodePattern:    rule.NodePattern,
+			NodeTags:       rule.NodeTags,
+			Enabled:        rule.Enabled,
+			Creator:        rule.Creator,
+			CreateTime:     rule.CreateTime,
+			ModifyTime:     rule.ModifyTime,
+		}
+		result = append(result, ruleDTO)
+	}
+	return result, nil
+}
+
+func (s *TaskRulesServiceImpl) GetTaskRule(ctx context.Context, ruleID string) (*dto.TaskRuleDTO, error) {
+	if ruleID == "" {
+		return nil, fmt.Errorf("rule ID is required")
+	}
+
+	rule, err := s.taskRulesDAO.GetTaskRule(ctx, ruleID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get task rule: %w", err)
+	}
+	if rule == nil {
+		return nil, fmt.Errorf("task rule not found")
+	}
+
+	return &dto.TaskRuleDTO{
+		ID:             rule.ID,
+		RuleID:         rule.RuleID,
+		BizType:        rule.BizType,
+		DataType:       rule.DataType,
+		DataSource:     rule.DataSource,
+		CollectParams:  rule.CollectParams,
+		AssignmentType: rule.AssignmentType,
+		AssignedNodes:  rule.AssignedNodes,
+		NodePattern:    rule.NodePattern,
+		NodeTags:       rule.NodeTags,
+		Enabled:        rule.Enabled,
+		Creator:        rule.Creator,
+		CreateTime:     rule.CreateTime,
+		ModifyTime:     rule.ModifyTime,
+	}, nil
+}
+
+func (s *TaskRulesServiceImpl) CreateTaskRule(ctx context.Context, rule *dto.TaskRuleDTO) (string, error) {
+	// 生成10位随机字符串作为RuleID
+	ruleID := common.GenerateID(10)
+	rule.RuleID = ruleID
+
+	modelRule := &model.CollectorTaskRules{
+		RuleID:         rule.RuleID,
+		BizType:        rule.BizType,
+		DataType:       rule.DataType,
+		DataSource:     rule.DataSource,
+		CollectParams:  rule.CollectParams,
+		AssignmentType: rule.AssignmentType,
+		AssignedNodes:  rule.AssignedNodes,
+		NodePattern:    rule.NodePattern,
+		NodeTags:       rule.NodeTags,
+		Enabled:        rule.Enabled,
+		Creator:        rule.Creator,
+	}
+
+	if err := s.taskRulesDAO.CreateTaskRule(ctx, modelRule); err != nil {
+		return "", err
+	}
+
+	return ruleID, nil
+}
+
+func (s *TaskRulesServiceImpl) UpdateTaskRule(ctx context.Context, rule *dto.TaskRuleDTO) error {
+	if rule.RuleID == "" {
+		return fmt.Errorf("rule ID is required for update")
+	}
+
+	modelRule := &model.CollectorTaskRules{
+		ID:             rule.ID,
+		RuleID:         rule.RuleID,
+		BizType:        rule.BizType,
+		DataType:       rule.DataType,
+		DataSource:     rule.DataSource,
+		CollectParams:  rule.CollectParams,
+		AssignmentType: rule.AssignmentType,
+		AssignedNodes:  rule.AssignedNodes,
+		NodePattern:    rule.NodePattern,
+		NodeTags:       rule.NodeTags,
+		Enabled:        rule.Enabled,
+		Creator:        rule.Creator,
+	}
+
+	if err := s.taskRulesDAO.UpdateTaskRule(ctx, modelRule); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *TaskRulesServiceImpl) DisableTaskRule(ctx context.Context, ruleID string) error {
+	if ruleID == "" {
+		return fmt.Errorf("rule ID is required")
+	}
+
+	if err := s.taskRulesDAO.DisableTaskRule(ctx, ruleID); err != nil {
+		return err
+	}
+
+	return nil
+}

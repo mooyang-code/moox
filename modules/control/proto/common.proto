@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package trpc.moox.common;
+
+option go_package = "github.com/mooyang-code/moox/modules/control/proto/controlgen;mooxpb";
+
+message AuthInfo {
+  string app_id = 1;
+  string app_key = 2;
+  string operator = 3;
+  string request_id = 4;
+}
+
+message RetInfo {
+  ErrorCode code = 1;
+  string msg = 2;
+}
+
+message Page {
+  uint32 page = 1;
+  uint32 size = 2;
+}
+
+message PageResult {
+  uint32 page = 1;
+  uint32 size = 2;
+  uint64 total = 3;
+  bool has_more = 4;
+}
+
+enum ErrorCode {
+  SUCCESS = 0;
+  INVALID_PARAM = 1;
+  NO_AUTH = 2;
+  NO_PERMISSION = 3;
+  INNER_ERR = 4;
+  NOT_FOUND = 5;
+}
+
+enum TaskStatus {
+  TASK_STATUS_UNSPECIFIED = 0;
+  TASK_STATUS_PENDING = 1;
+  TASK_STATUS_RUNNING = 2;
+  TASK_STATUS_SUCCEEDED = 3;
+  TASK_STATUS_FAILED = 4;
+  TASK_STATUS_CANCELLED = 5;
+}

@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package trpc.moox.node;
+
+option go_package = "github.com/mooyang-code/moox/modules/control/proto/controlgen;mooxpb";
+
+import "common.proto";
+
+message NodeInfo {
+  string node_id = 1;
+  string name = 2;
+  string node_type = 3;
+  string endpoint = 4;
+  string status = 5;
+  map<string, string> labels = 6;
+}
+
+message RegisterNodeReq { common.AuthInfo auth_info = 1; NodeInfo node = 2; }
+message RegisterNodeRsp { common.RetInfo ret_info = 1; NodeInfo node = 2; }
+message UpdateNodeStatusReq { common.AuthInfo auth_info = 1; string node_id = 2; string status = 3; string message = 4; }
+message UpdateNodeStatusRsp { common.RetInfo ret_info = 1; NodeInfo node = 2; }
+message ListNodesReq { common.AuthInfo auth_info = 1; string node_type = 2; string status = 3; common.Page page = 4; }
+message ListNodesRsp { common.RetInfo ret_info = 1; repeated NodeInfo nodes = 2; common.PageResult page_result = 3; }
+
+service NodeService {
+  rpc RegisterNode(RegisterNodeReq) returns (RegisterNodeRsp);
+  rpc UpdateNodeStatus(UpdateNodeStatusReq) returns (UpdateNodeStatusRsp);
+  rpc ListNodes(ListNodesReq) returns (ListNodesRsp);
+}

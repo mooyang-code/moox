@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package trpc.moox.collector;
+
+option go_package = "github.com/mooyang-code/moox/modules/control/proto/controlgen;mooxpb";
+
+import "common.proto";
+import "control.proto";
+
+message CollectorInfo {
+  string collector_id = 1;
+  string name = 2;
+  string version = 3;
+  repeated string data_sources = 4;
+  repeated string exchanges = 5;
+  string status = 6;
+  map<string, string> labels = 7;
+}
+
+message CollectorTask {
+  string task_id = 1;
+  string collector_id = 2;
+  string workspace_id = 3;
+  string dataset_id = 4;
+  string instrument_id = 5;
+  string freq = 6;
+  control.CollectorBindingConfig binding = 7;
+  map<string, string> params = 8;
+}
+
+message RegisterCollectorReq { common.AuthInfo auth_info = 1; CollectorInfo collector = 2; }
+message RegisterCollectorRsp { common.RetInfo ret_info = 1; CollectorInfo collector = 2; }
+message HeartbeatReq { common.AuthInfo auth_info = 1; string collector_id = 2; string status = 3; string observed_at = 4; }
+message HeartbeatRsp { common.RetInfo ret_info = 1; }
+message AssignTaskReq { common.AuthInfo auth_info = 1; string collector_id = 2; }
+message AssignTaskRsp { common.RetInfo ret_info = 1; repeated CollectorTask tasks = 2; }
+message ReportTaskStatusReq { common.AuthInfo auth_info = 1; string collector_id = 2; string task_id = 3; common.TaskStatus status = 4; string message = 5; }
+message ReportTaskStatusRsp { common.RetInfo ret_info = 1; }
+
+service CollectorService {
+  rpc RegisterCollector(RegisterCollectorReq) returns (RegisterCollectorRsp);
+  rpc Heartbeat(HeartbeatReq) returns (HeartbeatRsp);
+  rpc AssignTask(AssignTaskReq) returns (AssignTaskRsp);
+  rpc ReportTaskStatus(ReportTaskStatusReq) returns (ReportTaskStatusRsp);
+}

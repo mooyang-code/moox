@@ -5,7 +5,7 @@
       <a-card :bordered="false" class="overview-card">
         <a-descriptions title="存储配置总览" :data="overviewData" :column="3" :align="{ label: 'right' }" />
         <a-alert type="info" style="margin-top: 16px;" :show-icon="false">
-          <div>存储配置管理系统用于管理数据存储的各种配置，包括存储实体、存储设备以及数据路由配置。</div>
+          <div>存储配置管理系统用于管理数据存储的各种配置，包括存储节点、存储设备以及数据路由配置。</div>
           <div>通过合理配置可以实现数据的高效存储和快速访问。</div>
         </a-alert>
       </a-card>
@@ -13,8 +13,8 @@
       <!-- Tab切换区域 -->
       <a-card class="margin-top" :bordered="false">
         <a-tabs :type="type" :size="size" v-model:active-key="activeTab">
-          <a-tab-pane key="storage-entity" title="存储实体配置">
-            <StorageEntityConfig :entities="storageEntities" :loading="loading" @refresh="loadStorageEntities" />
+          <a-tab-pane key="storage-node" title="存储节点配置">
+            <StorageNodeConfig :nodes="storageNodes" :loading="loading" @refresh="loadStorageNodes" />
           </a-tab-pane>
           <a-tab-pane key="storage-device" title="存储设备配置">
             <StorageDeviceConfig :devices="storageDevices" :loading="loading" @refresh="loadStorageDevices" />
@@ -35,18 +35,18 @@
 import { ref, onMounted, watch, computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
-import StorageEntityConfig from './components/storage-entity-config.vue';
+import StorageNodeConfig from './components/storage-node-config.vue';
 import StorageDeviceConfig from './components/storage-device-config.vue';
 import ObjectRouteConfig from './components/object-route-config.vue';
 import FieldRouteConfig from './components/field-route-config.vue';
 
 // 导入API接口
 import { 
-  listStorageEntities, 
+  listStorageNodes, 
   listStorageDevices, 
   listObjectRoutes, 
   listFieldRoutes,
-  type StorageEntity,
+  type StorageNode,
   type StorageDevice,
   type ObjectRoute,
   type FieldRoute
@@ -64,11 +64,11 @@ const currentProjectId = computed(() => {
 // Tab配置
 const type = ref("rounded");
 const size = ref("medium");
-const activeTab = ref("storage-entity");
+const activeTab = ref("storage-node");
 
 // 数据状态
 const loading = ref(false);
-const storageEntities = ref<StorageEntity[]>([]);
+const storageNodes = ref<StorageNode[]>([]);
 const storageDevices = ref<StorageDevice[]>([]);
 const objectRoutes = ref<ObjectRoute[]>([]);
 const fieldRoutes = ref<FieldRoute[]>([]);
@@ -76,7 +76,7 @@ const fieldRoutes = ref<FieldRoute[]>([]);
 // 总览数据
 const overviewData = ref([
   {
-    label: "存储实体数量：",
+    label: "存储节点数量：",
     value: "0"
   },
   {
@@ -101,20 +101,20 @@ const overviewData = ref([
   }
 ]);
 
-// 加载存储实体列表
-const loadStorageEntities = async () => {
+// 加载存储节点列表
+const loadStorageNodes = async () => {
   try {
     loading.value = true;
-    const response = await listStorageEntities();
-    storageEntities.value = response.entities || [];
+    const response = await listStorageNodes();
+    storageNodes.value = response.nodes || [];
     
     // 更新总览数据
-    overviewData.value[0].value = storageEntities.value.length.toString();
-    console.log('存储实体列表加载成功:', storageEntities.value);
+    overviewData.value[0].value = storageNodes.value.length.toString();
+    console.log('存储节点列表加载成功:', storageNodes.value);
   } catch (error: any) {
-    console.error('加载存储实体列表失败:', error);
-    Message.error(error.message || '获取存储实体列表失败');
-    storageEntities.value = [];
+    console.error('加载存储节点列表失败:', error);
+    Message.error(error.message || '获取存储节点列表失败');
+    storageNodes.value = [];
   } finally {
     loading.value = false;
   }
@@ -140,7 +140,7 @@ const loadStorageDevices = async () => {
 };
 
 // 加载数据对象路由列表
-const loadObjectRoutes = async (searchParams?: { dataset_id?: number; entity_id?: number }) => {
+const loadObjectRoutes = async (searchParams?: { dataset_id?: number; node_id?: number }) => {
   if (!currentProjectId.value) {
     console.warn('当前项目ID为空，无法获取数据对象路由列表');
     return;
@@ -168,7 +168,7 @@ const loadObjectRoutes = async (searchParams?: { dataset_id?: number; entity_id?
 };
 
 // 加载数据字段路由列表
-const loadFieldRoutes = async (searchParams?: { entity_id?: number; field_id?: number; data_category?: string; device_id?: number }) => {
+const loadFieldRoutes = async (searchParams?: { node_id?: number; field_id?: number; data_category?: string; device_id?: number }) => {
   if (!currentProjectId.value) {
     console.warn('当前项目ID为空，无法获取数据字段路由列表');
     return;
@@ -202,7 +202,7 @@ const loadAllData = async () => {
     
     // 并行加载所有数据
     await Promise.allSettled([
-      loadStorageEntities(),
+      loadStorageNodes(),
       loadStorageDevices(),
       loadObjectRoutes(),
       loadFieldRoutes()
@@ -227,9 +227,9 @@ watch(activeTab, (newTab, oldTab) => {
   if (oldTab === undefined) return;
 
   switch (newTab) {
-    case 'storage-entity':
-      console.log('切换到存储实体配置tab，重新加载数据');
-      loadStorageEntities();
+    case 'storage-node':
+      console.log('切换到存储节点配置tab，重新加载数据');
+      loadStorageNodes();
       break;
     case 'storage-device':
       console.log('切换到存储设备配置tab，重新加载数据');

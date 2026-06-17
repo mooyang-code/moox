@@ -1,0 +1,1434 @@
+syntax = "proto3";
+
+package trpc.storage.metadata;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
+
+import "common.proto";
+
+// Space 是业务命名空间，也是用户可见 View 的集合。
+message Space {
+  // space_id 是使用空间 ID；本文所有“全局”概念均限定在该空间内。
+  string space_id = 1;
+  // name 是空间名称，通常用于管理台展示。
+  string name = 2;
+  // description 是说明文本。
+  string description = 3;
+  // owner 是空间拥有者，可以是用户、团队或系统任务。
+  string owner = 4;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 5;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 6;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 7;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 8;
+}
+
+// View 是 Space 内的用户查询入口，也是可异步构建的物化结果定义。
+message View {
+  // space_id 是 View 所属 Space。
+  string space_id = 1;
+  // view_id 是 Space 内唯一的查询视图 ID。
+  string view_id = 2;
+  // name 是视图名称，通常用于管理台展示。
+  string name = 3;
+  // description 是说明文本。
+  string description = 4;
+  // primary_dataset_id 是视图的主数据集，用于默认读路径和主时间轴。
+  string primary_dataset_id = 5;
+  // dataset_ids 是该视图组合的事实数据集 ID 列表。
+  repeated string dataset_ids = 6;
+  // grain_keys 表示视图行粒度键，例如 subject_id、data_time 或 freq。
+  repeated string grain_keys = 7;
+  // filter_json 是构建视图物化结果时使用的固定过滤条件。
+  string filter_json = 8;
+  // engine 是视图查询执行引擎标识，由控制面配置。
+  string engine = 9;
+  // query_window 是视图物化结果保留和回扫的查询窗口，例如 30d。
+  string query_window = 10;
+  // active_result 是当前生效的物化结果标识，由后台构建任务维护。
+  string active_result = 11;
+  // build_status 表示物化结果构建状态，例如 pending、building、active 或 failed。
+  string build_status = 12;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 13;
+  // columns 是视图对用户暴露的查询列。
+  repeated ViewColumn columns = 14;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 15;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 16;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 17;
+}
+
+// ViewColumn 定义 View 对用户暴露的一列。
+message ViewColumn {
+  // space_id 是 ViewColumn 所属 Space。
+  string space_id = 1;
+  // view_id 是查询视图 ID。
+  string view_id = 2;
+  // column_name 是视图中对用户暴露的列名。
+  string column_name = 3;
+  // origin_type 表示列来源，可为 DataSetColumn、表达式或系统列。
+  common.ColumnOriginType origin_type = 4;
+  // origin_id 是来源 ID；DataSetColumn 推荐使用 dataset_id.column_name。
+  string origin_id = 5;
+  // value_type 是列值的逻辑类型。
+  common.FieldValueType value_type = 6;
+  // online_time 是该列进入视图的上线时间，用于解释列可见性。
+  string online_time = 7;
+  // sort_order 是视图列展示和物化构建时的稳定排序。
+  uint32 sort_order = 8;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 9;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 10;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 11;
+}
+
+// DataSource 表示 Space 内的数据来源，交易所、行情接口、文件导入和内部计算都可作为来源。
+message DataSource {
+  // space_id 是 DataSource 所属 Space。
+  string space_id = 1;
+  // data_source_id 是 Space 内唯一的数据来源 ID。
+  string data_source_id = 2;
+  // name 是数据来源名称，通常用于管理台展示。
+  string name = 3;
+  // kind 表示来源类型，例如 exchange、vendor_api、file_import、manual 或 internal。
+  string kind = 4;
+  // market 是可选市场标识，例如 US、HK、CN 或 crypto。
+  string market = 5;
+  // timezone 是该来源默认时区。
+  string timezone = 6;
+  // config_json 是来源连接和采集配置，服务端应按敏感配置处理。
+  string config_json = 7;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 8;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 9;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 10;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 11;
+}
+
+// Subject 表示 Space 内的数据对象，交易标的只是其中一种。
+message Subject {
+  // space_id 是 Subject 所属 Space。
+  string space_id = 1;
+  // subject_id 是 Space 内唯一的数据对象 ID。
+  string subject_id = 2;
+  // subject_type 是对象类型，例如 stock、crypto_pair、ranking_board、news_source 或 custom。
+  string subject_type = 3;
+  // name 是对象名称，通常用于管理台展示。
+  string name = 4;
+  // market 是可选市场标识。
+  string market = 5;
+  // currency 是交易、报价或结算币种。
+  string currency = 6;
+  // timezone 是该对象默认时区。
+  string timezone = 7;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 8;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 9;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 10;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 11;
+}
+
+// SubjectSymbol 表示 Subject 在某个 DataSource 下的外部代码映射。
+message SubjectSymbol {
+  // space_id 是 SubjectSymbol 所属 Space。
+  string space_id = 1;
+  // subject_id 是 Space 内的数据对象 ID。
+  string subject_id = 2;
+  // data_source_id 是外部代码所属的数据来源 ID。
+  string data_source_id = 3;
+  // external_symbol 是数据来源使用的原始对象代码。
+  string external_symbol = 4;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 5;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 6;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 7;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 8;
+}
+
+// DataSet 是 Space 内可写的事实数据集，定义一类数据及其列契约。
+message DataSet {
+  // space_id 是 DataSet 所属 Space。
+  string space_id = 1;
+  // dataset_id 是 Space 内唯一的数据集 ID。
+  string dataset_id = 2;
+  // data_source_id 是该 DataSet 绑定的数据来源 ID；一个 DataSet 只绑定一个 DataSource。
+  string data_source_id = 3;
+  // name 是数据集名称，通常用于管理台展示。
+  string name = 4;
+  // description 是说明文本。
+  string description = 5;
+  // data_kind 是数据集的结构形态。
+  common.DataKind data_kind = 6;
+  // freqs 是该数据集支持的数据频率列表。
+  repeated string freqs = 7;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 8;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 9;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 10;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 11;
+}
+
+// DataSetSubject 表示 DataSet 覆盖的 Subject 集合。
+message DataSetSubject {
+  // space_id 是绑定关系所属 Space。
+  string space_id = 1;
+  // dataset_id 是数据集 ID。
+  string dataset_id = 2;
+  // subject_id 是数据对象 ID。
+  string subject_id = 3;
+  // subject_role 是对象在数据集中的角色，例如 normal、benchmark、index 或 universe_member。
+  string subject_role = 4;
+  // effective_start_time 是对象在数据集中的生效开始时间。
+  string effective_start_time = 5;
+  // effective_end_time 是对象在数据集中的生效结束时间；为空表示仍然生效。
+  string effective_end_time = 6;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 7;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 8;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 9;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 10;
+}
+
+// Field 是 Space 内普通字段字典，不直接归属某个 DataSet。
+message Field {
+  // space_id 是 Field 所属 Space。
+  string space_id = 1;
+  // field_id 是 Space 内唯一字段英文名，例如 open、close 或 volume。
+  string field_id = 2;
+  // name 是字段中文名或展示名。
+  string name = 3;
+  // description 是说明文本。
+  string description = 4;
+  // value_type 是字段值的逻辑类型。
+  common.FieldValueType value_type = 5;
+  // unit 是默认计量单位，例如 CNY、USD、share 或 percent。
+  string unit = 6;
+  // validation_rule_json 是字段写入校验规则。
+  string validation_rule_json = 7;
+  // write_example 是示例写入值，便于管理台展示和文档生成。
+  string write_example = 8;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 9;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 10;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 11;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 12;
+}
+
+// Factor 是 Space 内、已参数化的因子结果定义。
+message Factor {
+  // space_id 是 Factor 所属 Space。
+  string space_id = 1;
+  // factor_id 是 Space 内唯一因子英文名，例如 ma20_close。
+  string factor_id = 2;
+  // name 是因子中文名或展示名。
+  string name = 3;
+  // description 是说明文本。
+  string description = 4;
+  // algorithm 是因子算法或计算族标识，例如 MA 或 RSI。
+  string algorithm = 5;
+  // params_json 是已参数化后的因子参数，例如 {"window":20,"price":"close"}。
+  string params_json = 6;
+  // value_type 是因子值的逻辑类型。
+  common.FieldValueType value_type = 7;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 8;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 9;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 10;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 11;
+}
+
+// DataSetColumn 表示 DataSet 下允许写入和读取的一列。
+message DataSetColumn {
+  // space_id 是 DataSetColumn 所属 Space。
+  string space_id = 1;
+  // dataset_id 是数据集 ID。
+  string dataset_id = 2;
+  // column_name 是数据集内稳定列名。
+  string column_name = 3;
+  // origin_type 表示列来源，可为字段、因子或系统列。
+  common.ColumnOriginType origin_type = 4;
+  // origin_id 是字段 ID、因子 ID 或系统列名。
+  string origin_id = 5;
+  // value_type 是列值的逻辑类型。
+  common.FieldValueType value_type = 6;
+  // required 表示写入时是否必填。
+  bool required = 7;
+  // is_unique 表示该列是否参与数据集内唯一性约束。
+  bool is_unique = 8;
+  // aliases 是外部来源字段名别名。
+  repeated string aliases = 9;
+  // text_indexed 表示该列是否同步到 Bleve 文本索引。
+  bool text_indexed = 10;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 11;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 12;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 13;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 14;
+}
+
+// StorageNode 表示在线主存节点，即一个 PrimaryStore 服务实例或服务组入口。
+message StorageNode {
+  // node_id 是存储节点 ID。
+  string node_id = 1;
+  // name 是节点名称，通常用于管理台展示。
+  string name = 2;
+  // endpoint 是 PrimaryStore 服务地址。
+  string endpoint = 3;
+  // weight 是路由权重。
+  uint32 weight = 4;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 5;
+  // config_json 是节点专用配置。
+  string config_json = 6;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 7;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 8;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 9;
+}
+
+// Device 是底层具体存储组件，例如 Pebble、DuckDB、Bleve 或 Parquet 归档。
+message Device {
+  // device_id 是设备 ID。
+  string device_id = 1;
+  // node_id 是所属存储节点 ID。
+  string node_id = 2;
+  // name 是设备名称，通常用于管理台展示。
+  string name = 3;
+  // engine 是存储引擎，例如 pebble、duckdb、bleve 或 parquet_archive。
+  string engine = 4;
+  // endpoint 是连接地址、文件路径或 URI。
+  string endpoint = 5;
+  // config_json 是设备专用配置。
+  string config_json = 6;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 7;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 8;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 9;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 10;
+}
+
+// StorageRoute 表示在线事实主存的水平切分路由。
+message StorageRoute {
+  // space_id 是路由所属 Space。
+  string space_id = 1;
+  // route_id 是路由规则 ID。
+  string route_id = 2;
+  // dataset_id 是数据集 ID。
+  string dataset_id = 3;
+  // subject_id 是精确匹配的数据对象 ID；为空表示不按对象精确匹配。
+  string subject_id = 4;
+  // subject_pattern 是对象匹配模式；为空表示不使用模式匹配。
+  string subject_pattern = 5;
+  // hash_rule 是水平切分哈希规则；为空表示不使用哈希切分。
+  string hash_rule = 6;
+  // node_id 是目标 PrimaryStore 节点 ID。
+  string node_id = 7;
+  // priority 是路由优先级，数值越小优先级越高。
+  uint32 priority = 8;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 9;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 10;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 11;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 12;
+}
+
+// ArchiveFile 表示从 Pebble 主存归档出来的 Parquet 事实文件。
+message ArchiveFile {
+  // space_id 是归档所属 Space。
+  string space_id = 1;
+  // archive_file_id 是归档文件记录 ID。
+  string archive_file_id = 2;
+  // dataset_id 是归档所属数据集 ID。
+  string dataset_id = 3;
+  // device_id 是归档文件所在设备 ID。
+  string device_id = 4;
+  // partition_key 是归档分区键，例如 date=2026-06-15/source=binance。
+  string partition_key = 5;
+  // file_uri 是归档文件 URI。
+  string file_uri = 6;
+  // file_format 是文件格式，当前固定为 parquet。
+  string file_format = 7;
+  // min_time 是文件内最小数据时间。
+  string min_time = 8;
+  // max_time 是文件内最大数据时间。
+  string max_time = 9;
+  // row_count 是文件内事实行数。
+  uint64 row_count = 10;
+  // content_hash 是归档文件内容校验值。
+  string content_hash = 11;
+  // columns 是该文件包含的事实列名列表。
+  repeated string columns = 12;
+  // status 表示启用、停用、归档、删除或失败等状态。
+  string status = 13;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 14;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 15;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 16;
+}
+
+// CreateSpaceReq 表示创建使用空间的请求。
+message CreateSpaceReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space 是待创建的使用空间元数据。
+  Space space = 2;
+}
+
+// CreateSpaceRsp 表示创建使用空间的响应。
+message CreateSpaceRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // space 是创建后的使用空间元数据。
+  Space space = 2;
+}
+
+// UpdateSpaceReq 表示更新使用空间的请求。
+message UpdateSpaceReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space 是更新后的使用空间元数据。
+  Space space = 2;
+}
+
+// UpdateSpaceRsp 表示更新使用空间的响应。
+message UpdateSpaceRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // space 是更新后的使用空间元数据。
+  Space space = 2;
+}
+
+// GetSpaceReq 表示获取使用空间的请求。
+message GetSpaceReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是使用空间 ID。
+  string space_id = 2;
+}
+
+// GetSpaceRsp 表示获取使用空间的响应。
+message GetSpaceRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // space 是使用空间元数据。
+  Space space = 2;
+}
+
+// ListSpacesReq 表示列出使用空间的请求。
+message ListSpacesReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // owner 是可选拥有者过滤条件。
+  string owner = 2;
+  // page 是分页参数。
+  common.Page page = 3;
+}
+
+// ListSpacesRsp 表示列出使用空间的响应。
+message ListSpacesRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // spaces 是使用空间列表。
+  repeated Space spaces = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// CreateViewReq 表示创建查询视图的请求。
+message CreateViewReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // view 是待创建的查询视图元数据。
+  View view = 2;
+}
+
+// CreateViewRsp 表示创建查询视图的响应。
+message CreateViewRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // view 是创建后的查询视图元数据。
+  View view = 2;
+}
+
+// UpdateViewReq 表示更新查询视图的请求。
+message UpdateViewReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // view 是更新后的查询视图元数据。
+  View view = 2;
+}
+
+// UpdateViewRsp 表示更新查询视图的响应。
+message UpdateViewRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // view 是更新后的查询视图元数据。
+  View view = 2;
+}
+
+// GetViewReq 表示获取查询视图的请求。
+message GetViewReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是使用空间 ID。
+  string space_id = 2;
+  // view_id 是查询视图 ID。
+  string view_id = 3;
+}
+
+// GetViewRsp 表示获取查询视图的响应。
+message GetViewRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // view 是查询视图元数据。
+  View view = 2;
+}
+
+// ListViewsReq 表示列出查询视图的请求。
+message ListViewsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是可选使用空间 ID 过滤条件。
+  string space_id = 2;
+  // dataset_id 是可选数据集过滤条件。
+  string dataset_id = 3;
+  // status 是可选状态过滤条件。
+  string status = 4;
+  // page 是分页参数。
+  common.Page page = 5;
+}
+
+// ListViewsRsp 表示列出查询视图的响应。
+message ListViewsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // views 是查询视图列表。
+  repeated View views = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// UpsertViewColumnReq 表示创建或更新视图列的请求。
+message UpsertViewColumnReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // column 是待写入的视图列元数据。
+  ViewColumn column = 2;
+}
+
+// UpsertViewColumnRsp 表示创建或更新视图列的响应。
+message UpsertViewColumnRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // column 是写入后的视图列元数据。
+  ViewColumn column = 2;
+}
+
+// ListViewColumnsReq 表示列出视图列的请求。
+message ListViewColumnsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是使用空间 ID。
+  string space_id = 2;
+  // view_id 是查询视图 ID。
+  string view_id = 3;
+  // page 是分页参数。
+  common.Page page = 4;
+}
+
+// ListViewColumnsRsp 表示列出视图列的响应。
+message ListViewColumnsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // columns 是视图列列表。
+  repeated ViewColumn columns = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// CreateDataSourceReq 表示创建数据来源的请求。
+message CreateDataSourceReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // data_source 是待创建的数据来源元数据。
+  DataSource data_source = 2;
+}
+
+// CreateDataSourceRsp 表示创建数据来源的响应。
+message CreateDataSourceRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // data_source 是创建后的数据来源元数据。
+  DataSource data_source = 2;
+}
+
+// UpdateDataSourceReq 表示更新数据来源的请求。
+message UpdateDataSourceReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // data_source 是更新后的数据来源元数据。
+  DataSource data_source = 2;
+}
+
+// UpdateDataSourceRsp 表示更新数据来源的响应。
+message UpdateDataSourceRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // data_source 是更新后的数据来源元数据。
+  DataSource data_source = 2;
+}
+
+// GetDataSourceReq 表示获取数据来源的请求。
+message GetDataSourceReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是使用空间 ID。
+  string space_id = 2;
+  // data_source_id 是数据来源 ID。
+  string data_source_id = 3;
+}
+
+// GetDataSourceRsp 表示获取数据来源的响应。
+message GetDataSourceRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // data_source 是数据来源元数据。
+  DataSource data_source = 2;
+}
+
+// ListDataSourcesReq 表示列出数据来源的请求。
+message ListDataSourcesReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是可选使用空间 ID 过滤条件。
+  string space_id = 2;
+  // kind 是可选来源类型过滤条件。
+  string kind = 3;
+  // market 是可选市场过滤条件。
+  string market = 4;
+  // page 是分页参数。
+  common.Page page = 5;
+}
+
+// ListDataSourcesRsp 表示列出数据来源的响应。
+message ListDataSourcesRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // data_sources 是数据来源列表。
+  repeated DataSource data_sources = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// UpsertSubjectReq 表示创建或更新数据对象的请求。
+message UpsertSubjectReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // subject 是待写入的数据对象元数据。
+  Subject subject = 2;
+}
+
+// UpsertSubjectRsp 表示创建或更新数据对象的响应。
+message UpsertSubjectRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // subject 是写入后的数据对象元数据。
+  Subject subject = 2;
+}
+
+// GetSubjectReq 表示获取数据对象的请求。
+message GetSubjectReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是使用空间 ID。
+  string space_id = 2;
+  // subject_id 是数据对象 ID。
+  string subject_id = 3;
+}
+
+// GetSubjectRsp 表示获取数据对象的响应。
+message GetSubjectRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // subject 是数据对象元数据。
+  Subject subject = 2;
+}
+
+// ListSubjectsReq 表示列出数据对象的请求。
+message ListSubjectsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是可选使用空间 ID 过滤条件。
+  string space_id = 2;
+  // subject_type 是可选对象类型过滤条件。
+  string subject_type = 3;
+  // market 是可选市场过滤条件。
+  string market = 4;
+  // subject_ids 是可选对象 ID 白名单。
+  repeated string subject_ids = 5;
+  // page 是分页参数。
+  common.Page page = 6;
+}
+
+// ListSubjectsRsp 表示列出数据对象的响应。
+message ListSubjectsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // subjects 是数据对象列表。
+  repeated Subject subjects = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// UpsertSubjectSymbolReq 表示创建或更新数据对象外部代码映射的请求。
+message UpsertSubjectSymbolReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // subject_symbol 是待写入的外部代码映射。
+  SubjectSymbol subject_symbol = 2;
+}
+
+// UpsertSubjectSymbolRsp 表示创建或更新数据对象外部代码映射的响应。
+message UpsertSubjectSymbolRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // subject_symbol 是写入后的外部代码映射。
+  SubjectSymbol subject_symbol = 2;
+}
+
+// ListSubjectSymbolsReq 表示列出数据对象外部代码映射的请求。
+message ListSubjectSymbolsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是可选使用空间 ID 过滤条件。
+  string space_id = 2;
+  // subject_id 是可选数据对象 ID 过滤条件。
+  string subject_id = 3;
+  // data_source_id 是可选数据来源 ID 过滤条件。
+  string data_source_id = 4;
+  // external_symbol 是可选外部对象代码过滤条件。
+  string external_symbol = 5;
+  // page 是分页参数。
+  common.Page page = 6;
+}
+
+// ListSubjectSymbolsRsp 表示列出数据对象外部代码映射的响应。
+message ListSubjectSymbolsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // subject_symbols 是外部代码映射列表。
+  repeated SubjectSymbol subject_symbols = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// CreateDataSetReq 表示创建数据集的请求。
+message CreateDataSetReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // dataset 是待创建的数据集元数据。
+  DataSet dataset = 2;
+}
+
+// CreateDataSetRsp 表示创建数据集的响应。
+message CreateDataSetRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // dataset 是创建后的数据集元数据。
+  DataSet dataset = 2;
+}
+
+// UpdateDataSetReq 表示更新数据集的请求。
+message UpdateDataSetReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // dataset 是更新后的数据集元数据。
+  DataSet dataset = 2;
+}
+
+// UpdateDataSetRsp 表示更新数据集的响应。
+message UpdateDataSetRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // dataset 是更新后的数据集元数据。
+  DataSet dataset = 2;
+}
+
+// GetDataSetReq 表示获取数据集的请求。
+message GetDataSetReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是使用空间 ID。
+  string space_id = 2;
+  // dataset_id 是数据集 ID。
+  string dataset_id = 3;
+}
+
+// GetDataSetRsp 表示获取数据集的响应。
+message GetDataSetRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // dataset 是数据集元数据。
+  DataSet dataset = 2;
+}
+
+// ListDataSetsReq 表示列出数据集的请求。
+message ListDataSetsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是可选使用空间 ID 过滤条件。
+  string space_id = 2;
+  // data_source_id 是可选数据来源 ID 过滤条件。
+  string data_source_id = 3;
+  // data_kind 是可选数据形态过滤条件。
+  common.DataKind data_kind = 4;
+  // freq 是可选频率过滤条件。
+  string freq = 5;
+  // page 是分页参数。
+  common.Page page = 6;
+}
+
+// ListDataSetsRsp 表示列出数据集的响应。
+message ListDataSetsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // datasets 是数据集列表。
+  repeated DataSet datasets = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// BindDataSetSubjectReq 表示为 DataSet 绑定 Subject 的请求。
+message BindDataSetSubjectReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // dataset_subject 是数据集与对象的绑定关系。
+  DataSetSubject dataset_subject = 2;
+}
+
+// BindDataSetSubjectRsp 表示为 DataSet 绑定 Subject 的响应。
+message BindDataSetSubjectRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // dataset_subject 是绑定后的关系。
+  DataSetSubject dataset_subject = 2;
+}
+
+// ListDataSetSubjectsReq 表示列出 DataSet 覆盖对象的请求。
+message ListDataSetSubjectsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是可选使用空间 ID 过滤条件。
+  string space_id = 2;
+  // dataset_id 是可选数据集 ID 过滤条件。
+  string dataset_id = 3;
+  // subject_id 是可选数据对象 ID 过滤条件。
+  string subject_id = 4;
+  // page 是分页参数。
+  common.Page page = 5;
+}
+
+// ListDataSetSubjectsRsp 表示列出 DataSet 覆盖对象的响应。
+message ListDataSetSubjectsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // dataset_subjects 是数据集与对象的绑定关系列表。
+  repeated DataSetSubject dataset_subjects = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// CreateFieldReq 表示创建字段的请求。
+message CreateFieldReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // field 是待创建的字段元数据。
+  Field field = 2;
+}
+
+// CreateFieldRsp 表示创建字段的响应。
+message CreateFieldRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // field 是创建后的字段元数据。
+  Field field = 2;
+}
+
+// UpdateFieldReq 表示更新字段的请求。
+message UpdateFieldReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // field 是更新后的字段元数据。
+  Field field = 2;
+}
+
+// UpdateFieldRsp 表示更新字段的响应。
+message UpdateFieldRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // field 是更新后的字段元数据。
+  Field field = 2;
+}
+
+// GetFieldReq 表示获取字段的请求。
+message GetFieldReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是使用空间 ID。
+  string space_id = 2;
+  // field_id 是字段 ID。
+  string field_id = 3;
+}
+
+// GetFieldRsp 表示获取字段的响应。
+message GetFieldRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // field 是字段元数据。
+  Field field = 2;
+}
+
+// ListFieldsReq 表示列出字段的请求。
+message ListFieldsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是可选使用空间 ID 过滤条件。
+  string space_id = 2;
+  // value_type 是可选字段类型过滤条件。
+  common.FieldValueType value_type = 3;
+  // page 是分页参数。
+  common.Page page = 4;
+}
+
+// ListFieldsRsp 表示列出字段的响应。
+message ListFieldsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // fields 是字段列表。
+  repeated Field fields = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// CreateFactorReq 表示创建因子的请求。
+message CreateFactorReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // factor 是待创建的因子元数据。
+  Factor factor = 2;
+}
+
+// CreateFactorRsp 表示创建因子的响应。
+message CreateFactorRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // factor 是创建后的因子元数据。
+  Factor factor = 2;
+}
+
+// UpdateFactorReq 表示更新因子的请求。
+message UpdateFactorReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // factor 是更新后的因子元数据。
+  Factor factor = 2;
+}
+
+// UpdateFactorRsp 表示更新因子的响应。
+message UpdateFactorRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // factor 是更新后的因子元数据。
+  Factor factor = 2;
+}
+
+// GetFactorReq 表示获取因子的请求。
+message GetFactorReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是使用空间 ID。
+  string space_id = 2;
+  // factor_id 是因子 ID。
+  string factor_id = 3;
+}
+
+// GetFactorRsp 表示获取因子的响应。
+message GetFactorRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // factor 是因子元数据。
+  Factor factor = 2;
+}
+
+// ListFactorsReq 表示列出因子的请求。
+message ListFactorsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是可选使用空间 ID 过滤条件。
+  string space_id = 2;
+  // algorithm 是可选算法过滤条件。
+  string algorithm = 3;
+  // page 是分页参数。
+  common.Page page = 4;
+}
+
+// ListFactorsRsp 表示列出因子的响应。
+message ListFactorsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // factors 是因子列表。
+  repeated Factor factors = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// UpsertDataSetColumnReq 表示创建或更新数据集列的请求。
+message UpsertDataSetColumnReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // column 是待写入的数据集列元数据。
+  DataSetColumn column = 2;
+}
+
+// UpsertDataSetColumnRsp 表示创建或更新数据集列的响应。
+message UpsertDataSetColumnRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // column 是写入后的数据集列元数据。
+  DataSetColumn column = 2;
+}
+
+// ListDataSetColumnsReq 表示列出数据集列的请求。
+message ListDataSetColumnsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是可选使用空间 ID 过滤条件。
+  string space_id = 2;
+  // dataset_id 是数据集 ID。
+  string dataset_id = 3;
+  // text_indexed_only 为 true 时只返回参与全文索引的列。
+  bool text_indexed_only = 4;
+  // page 是分页参数。
+  common.Page page = 5;
+}
+
+// ListDataSetColumnsRsp 表示列出数据集列的响应。
+message ListDataSetColumnsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // columns 是数据集列列表。
+  repeated DataSetColumn columns = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// CreateStorageNodeReq 表示创建存储节点的请求。
+message CreateStorageNodeReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // node 是待创建的存储节点元数据。
+  StorageNode node = 2;
+}
+
+// CreateStorageNodeRsp 表示创建存储节点的响应。
+message CreateStorageNodeRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // node 是创建后的存储节点元数据。
+  StorageNode node = 2;
+}
+
+// UpdateStorageNodeReq 表示更新存储节点的请求。
+message UpdateStorageNodeReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // node 是更新后的存储节点元数据。
+  StorageNode node = 2;
+}
+
+// UpdateStorageNodeRsp 表示更新存储节点的响应。
+message UpdateStorageNodeRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // node 是更新后的存储节点元数据。
+  StorageNode node = 2;
+}
+
+// GetStorageNodeReq 表示获取存储节点的请求。
+message GetStorageNodeReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // node_id 是存储节点 ID。
+  string node_id = 2;
+}
+
+// GetStorageNodeRsp 表示获取存储节点的响应。
+message GetStorageNodeRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // node 是存储节点元数据。
+  StorageNode node = 2;
+}
+
+// ListStorageNodesReq 表示列出存储节点的请求。
+message ListStorageNodesReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // page 是分页参数。
+  common.Page page = 2;
+}
+
+// ListStorageNodesRsp 表示列出存储节点的响应。
+message ListStorageNodesRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // nodes 是存储节点列表。
+  repeated StorageNode nodes = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// CreateDeviceReq 表示创建设备的请求。
+message CreateDeviceReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // device 是待创建的设备元数据。
+  Device device = 2;
+}
+
+// CreateDeviceRsp 表示创建设备的响应。
+message CreateDeviceRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // device 是创建后的设备元数据。
+  Device device = 2;
+}
+
+// UpdateDeviceReq 表示更新设备的请求。
+message UpdateDeviceReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // device 是更新后的设备元数据。
+  Device device = 2;
+}
+
+// UpdateDeviceRsp 表示更新设备的响应。
+message UpdateDeviceRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // device 是更新后的设备元数据。
+  Device device = 2;
+}
+
+// GetDeviceReq 表示获取设备的请求。
+message GetDeviceReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // device_id 是设备 ID。
+  string device_id = 2;
+}
+
+// GetDeviceRsp 表示获取设备的响应。
+message GetDeviceRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // device 是设备元数据。
+  Device device = 2;
+}
+
+// ListDevicesReq 表示列出设备的请求。
+message ListDevicesReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // node_id 是可选存储节点 ID 过滤条件。
+  string node_id = 2;
+  // engine 是可选存储引擎过滤条件。
+  string engine = 3;
+  // page 是分页参数。
+  common.Page page = 4;
+}
+
+// ListDevicesRsp 表示列出设备的响应。
+message ListDevicesRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // devices 是设备列表。
+  repeated Device devices = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// CreateStorageRouteReq 表示创建存储路由的请求。
+message CreateStorageRouteReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // storage_route 是待创建的存储路由元数据。
+  StorageRoute storage_route = 2;
+}
+
+// CreateStorageRouteRsp 表示创建存储路由的响应。
+message CreateStorageRouteRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // storage_route 是创建后的存储路由元数据。
+  StorageRoute storage_route = 2;
+}
+
+// UpdateStorageRouteReq 表示更新存储路由的请求。
+message UpdateStorageRouteReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // storage_route 是更新后的存储路由元数据。
+  StorageRoute storage_route = 2;
+}
+
+// UpdateStorageRouteRsp 表示更新存储路由的响应。
+message UpdateStorageRouteRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // storage_route 是更新后的存储路由元数据。
+  StorageRoute storage_route = 2;
+}
+
+// GetStorageRouteReq 表示获取存储路由的请求。
+message GetStorageRouteReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是使用空间 ID。
+  string space_id = 2;
+  // route_id 是路由规则 ID。
+  string route_id = 3;
+}
+
+// GetStorageRouteRsp 表示获取存储路由的响应。
+message GetStorageRouteRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // storage_route 是存储路由元数据。
+  StorageRoute storage_route = 2;
+}
+
+// ListStorageRoutesReq 表示列出存储路由的请求。
+message ListStorageRoutesReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是可选使用空间 ID 过滤条件。
+  string space_id = 2;
+  // dataset_id 是可选数据集 ID 过滤条件。
+  string dataset_id = 3;
+  // subject_id 是可选数据对象 ID 过滤条件。
+  string subject_id = 4;
+  // node_id 是可选存储节点 ID 过滤条件。
+  string node_id = 5;
+  // page 是分页参数。
+  common.Page page = 6;
+}
+
+// ListStorageRoutesRsp 表示列出存储路由的响应。
+message ListStorageRoutesRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // storage_routes 是存储路由列表。
+  repeated StorageRoute storage_routes = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// RegisterArchiveFileReq 表示登记归档文件的请求。
+message RegisterArchiveFileReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // archive_file 是待登记的归档文件元数据。
+  ArchiveFile archive_file = 2;
+}
+
+// RegisterArchiveFileRsp 表示登记归档文件的响应。
+message RegisterArchiveFileRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // archive_file 是登记后的归档文件元数据。
+  ArchiveFile archive_file = 2;
+}
+
+// ListArchiveFilesReq 表示列出归档文件的请求。
+message ListArchiveFilesReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是可选使用空间 ID 过滤条件。
+  string space_id = 2;
+  // dataset_id 是可选数据集 ID 过滤条件。
+  string dataset_id = 3;
+  // device_id 是可选设备 ID 过滤条件。
+  string device_id = 4;
+  // partition_key 是可选分区键过滤条件。
+  string partition_key = 5;
+  // time_range 是可选数据时间范围过滤条件。
+  common.TimeRange time_range = 6;
+  // page 是分页参数。
+  common.Page page = 7;
+}
+
+// ListArchiveFilesRsp 表示列出归档文件的响应。
+message ListArchiveFilesRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // archive_files 是归档文件列表。
+  repeated ArchiveFile archive_files = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// MetadataService 管理量化存储系统的核心元数据。
+service MetadataService {
+  // 创建使用空间。
+  rpc CreateSpace(CreateSpaceReq) returns (CreateSpaceRsp);
+  // 更新使用空间。
+  rpc UpdateSpace(UpdateSpaceReq) returns (UpdateSpaceRsp);
+  // 按 ID 获取使用空间。
+  rpc GetSpace(GetSpaceReq) returns (GetSpaceRsp);
+  // 列出使用空间。
+  rpc ListSpaces(ListSpacesReq) returns (ListSpacesRsp);
+
+  // 创建查询视图。
+  rpc CreateView(CreateViewReq) returns (CreateViewRsp);
+  // 更新查询视图。
+  rpc UpdateView(UpdateViewReq) returns (UpdateViewRsp);
+  // 按 ID 获取查询视图。
+  rpc GetView(GetViewReq) returns (GetViewRsp);
+  // 列出查询视图。
+  rpc ListViews(ListViewsReq) returns (ListViewsRsp);
+  // 创建或更新视图列。
+  rpc UpsertViewColumn(UpsertViewColumnReq) returns (UpsertViewColumnRsp);
+  // 列出视图列。
+  rpc ListViewColumns(ListViewColumnsReq) returns (ListViewColumnsRsp);
+
+  // 创建数据来源。
+  rpc CreateDataSource(CreateDataSourceReq) returns (CreateDataSourceRsp);
+  // 更新数据来源。
+  rpc UpdateDataSource(UpdateDataSourceReq) returns (UpdateDataSourceRsp);
+  // 按 ID 获取数据来源。
+  rpc GetDataSource(GetDataSourceReq) returns (GetDataSourceRsp);
+  // 列出数据来源。
+  rpc ListDataSources(ListDataSourcesReq) returns (ListDataSourcesRsp);
+
+  // 创建或更新数据对象。
+  rpc UpsertSubject(UpsertSubjectReq) returns (UpsertSubjectRsp);
+  // 按 ID 获取数据对象。
+  rpc GetSubject(GetSubjectReq) returns (GetSubjectRsp);
+  // 列出数据对象。
+  rpc ListSubjects(ListSubjectsReq) returns (ListSubjectsRsp);
+  // 创建或更新数据对象的来源侧代码映射。
+  rpc UpsertSubjectSymbol(UpsertSubjectSymbolReq) returns (UpsertSubjectSymbolRsp);
+  // 列出数据对象的来源侧代码映射。
+  rpc ListSubjectSymbols(ListSubjectSymbolsReq) returns (ListSubjectSymbolsRsp);
+
+  // 创建数据集。
+  rpc CreateDataSet(CreateDataSetReq) returns (CreateDataSetRsp);
+  // 更新数据集。
+  rpc UpdateDataSet(UpdateDataSetReq) returns (UpdateDataSetRsp);
+  // 按 ID 获取数据集。
+  rpc GetDataSet(GetDataSetReq) returns (GetDataSetRsp);
+  // 列出数据集。
+  rpc ListDataSets(ListDataSetsReq) returns (ListDataSetsRsp);
+  // 为 DataSet 绑定 Subject。
+  rpc BindDataSetSubject(BindDataSetSubjectReq) returns (BindDataSetSubjectRsp);
+  // 列出 DataSet 覆盖的 Subject。
+  rpc ListDataSetSubjects(ListDataSetSubjectsReq) returns (ListDataSetSubjectsRsp);
+
+  // 创建普通字段。
+  rpc CreateField(CreateFieldReq) returns (CreateFieldRsp);
+  // 更新普通字段。
+  rpc UpdateField(UpdateFieldReq) returns (UpdateFieldRsp);
+  // 按字段 ID 获取字段。
+  rpc GetField(GetFieldReq) returns (GetFieldRsp);
+  // 列出普通字段。
+  rpc ListFields(ListFieldsReq) returns (ListFieldsRsp);
+
+  // 创建因子。
+  rpc CreateFactor(CreateFactorReq) returns (CreateFactorRsp);
+  // 更新因子。
+  rpc UpdateFactor(UpdateFactorReq) returns (UpdateFactorRsp);
+  // 按 ID 获取因子。
+  rpc GetFactor(GetFactorReq) returns (GetFactorRsp);
+  // 列出因子。
+  rpc ListFactors(ListFactorsReq) returns (ListFactorsRsp);
+
+  // 创建或更新数据集列。
+  rpc UpsertDataSetColumn(UpsertDataSetColumnReq) returns (UpsertDataSetColumnRsp);
+  // 列出数据集列。
+  rpc ListDataSetColumns(ListDataSetColumnsReq) returns (ListDataSetColumnsRsp);
+
+  // 创建存储节点。
+  rpc CreateStorageNode(CreateStorageNodeReq) returns (CreateStorageNodeRsp);
+  // 更新存储节点。
+  rpc UpdateStorageNode(UpdateStorageNodeReq) returns (UpdateStorageNodeRsp);
+  // 按 ID 获取存储节点。
+  rpc GetStorageNode(GetStorageNodeReq) returns (GetStorageNodeRsp);
+  // 列出存储节点。
+  rpc ListStorageNodes(ListStorageNodesReq) returns (ListStorageNodesRsp);
+
+  // 创建设备。
+  rpc CreateDevice(CreateDeviceReq) returns (CreateDeviceRsp);
+  // 更新设备。
+  rpc UpdateDevice(UpdateDeviceReq) returns (UpdateDeviceRsp);
+  // 按 ID 获取设备。
+  rpc GetDevice(GetDeviceReq) returns (GetDeviceRsp);
+  // 列出设备。
+  rpc ListDevices(ListDevicesReq) returns (ListDevicesRsp);
+
+  // 创建在线主存路由。
+  rpc CreateStorageRoute(CreateStorageRouteReq) returns (CreateStorageRouteRsp);
+  // 更新在线主存路由。
+  rpc UpdateStorageRoute(UpdateStorageRouteReq) returns (UpdateStorageRouteRsp);
+  // 按 ID 获取在线主存路由。
+  rpc GetStorageRoute(GetStorageRouteReq) returns (GetStorageRouteRsp);
+  // 列出在线主存路由。
+  rpc ListStorageRoutes(ListStorageRoutesReq) returns (ListStorageRoutesRsp);
+
+  // 登记 Parquet 归档文件。
+  rpc RegisterArchiveFile(RegisterArchiveFileReq) returns (RegisterArchiveFileRsp);
+  // 列出 Parquet 归档文件。
+  rpc ListArchiveFiles(ListArchiveFilesReq) returns (ListArchiveFilesRsp);
+}

@@ -1,50 +1,31 @@
-# moox 与 xData PB 协议重设计草案
+# moox-storage PB 协议设计
 
-本文记录 moox 与 xData 在新概念体系下的 PB 协议设计方向。本文只描述协议边界、命名和语义，不涉及具体实现。
+本文记录 storage 在新架构下的 PB 协议边界、命名和接口语义。当前项目未上线，协议以清晰和可演进为优先，不考虑旧接口兼容。
+
+协议中的概念边界和设计取舍见 `docs/storage-concepts-and-design-intent.md`。本文只描述接口如何表达这些概念。
 
 ## 设计目标
 
-新协议要服务个人量化金融数据系统，支持多市场、多交易场所、多数据源和动态因子。
+- 用户写入和读取事实数据时只感知 `DataSet`。
+- 用户做组合分析查询时只感知已登记的 `View`。
+- 文本检索按 `DataSet` 维度执行，由元数据控制哪些列进入 Bleve。
+- 所有用户侧和业务侧数据访问都先进入 Access Service；PrimaryStore、Search、View 和 Archive 都是内部服务。
+- 接入层和底层存储设备解耦，底层统一称为 `Device`。
+- 不提供用户删除数据的能力。
+- 写请求保持简单，不返回行变更、旧值或写入统计。
+- 查询请求只表达“要什么数据”，不让调用方控制底层执行策略。
 
-核心目标：
+## 文件划分
 
-- 使用 `Workspace` 替代旧的 `Project`。
-- 保留 `DataSet` 作为数据集合概念。
-- 使用 `Instrument` 表达金融交易标的。
-- 废弃 `object_id` 作为泛化对象 ID。
-- 使用 `DataView` 表达查询视图。
-- 使用 `DataViewColumn` 表达查询视图的输出列。
-- 使用 `DataRef` 表达一次数据读写中的逻辑定位。
-- moox 负责控制面和编排面，xData 负责元数据事实面和数据执行面。
-
-## 系统边界
-
-moox 是控制面和编排面：
-
-- 管理 Workspace。
-- 管理采集规则。
-- 管理节点和任务调度。
-- 管理 DataSet、Field、Factor、DataView 和 StorageRoute 的配置入口。
-- 负责把管理台操作转成 xData 元数据变更。
-
-xData 是数据事实面和执行面：
-
-- 保存元数据事实。
-- 执行在线写入和查询。
-- 管理 RocksDB、DuckDB、Bleve、Parquet 和 CSV 等存储执行器。
-- 根据元数据路由读写请求。
-- 执行 DataView 查询和文本查询。
-
-## PB 文件划分
-
-xData 侧协议不宜拆得过细。建议保留 5 个核心文件：
+storage 侧协议保留 6 个文件：
 
 ```text
 common.proto
 metadata.proto
 data.proto
 query.proto
-adaptor.proto
+primary.proto
+message.proto
 ```
 
 职责如下：
@@ -52,565 +33,314 @@ adaptor.proto
 | 文件 | 职责 |
 | --- | --- |
 | `common.proto` | 通用类型、错误码、分页、时间范围、TypedValue、AuthInfo、WriteMode |
-| `metadata.proto` | Workspace、Market、Exchange、Instrument、DataSet、Field、Factor、DataView、StorageRoute |
-| `data.proto` | 在线数据读写，例如时间序列、因子值、普通记录、最新快照 |
-| `query.proto` | 分析查询、DataView 查询、文本检索、查询解释 |
-| `adaptor.proto` | xData 内部执行协议，不对 moox 和普通用户暴露 |
+| `metadata.proto` | Space、View、DataSet、Subject、Field、Factor、Device、Route 等元数据 |
+| `data.proto` | 用户侧事实数据写入和读取 |
+| `query.proto` | 用户侧组合查询和文本检索 |
+| `primary.proto` | Access 到 PrimaryStore Service 的内部执行协议 |
+| `message.proto` | 主存变更事件，供 DuckDB、Bleve、Parquet 异步派生使用 |
 
-moox 侧协议建议保留控制面聚合接口：
+## 核心命名
 
-```text
-control.proto
-collector.proto
-node.proto
-task.proto
-```
+| 概念 | 含义 |
+| --- | --- |
+| `Space` | 业务命名空间和用户可见 View 的集合；本文“全局”均指 Space 内全局 |
+| `View` | 面向查询的物化结果定义和查询入口 |
+| `DataSource` | Space 内数据来源，例如交易所、API、文件导入或内部计算 |
+| `DataSet` | Space 内可写事实数据集，并且只绑定一个 DataSource |
+| `Subject` | Space 内业务对象，例如交易标的、榜单、新闻源或账户 |
+| `SubjectSymbol` | Subject 在某个 DataSource 下的外部代码映射 |
+| `Field` | Space 内普通字段字典 |
+| `Factor` | Space 内、已参数化的因子结果定义 |
+| `DataSetColumn` | DataSet 下允许写入的列，可来自 Field、Factor 或系统列 |
+| `ViewColumn` | View 对用户暴露的查询列 |
+| `Device` | 底层具体存储组件，例如 Pebble、DuckDB、Bleve、Parquet |
 
-`control.proto` 的包名可以是 `trpc.moox.control`，但文件名和 service 不再使用 `moox_control` 这种重复命名。
+## 通用协议
 
-## 命名决策
+### 时间字段
 
-| 旧概念 | 新概念 | 说明 |
-| --- | --- | --- |
-| Project | Workspace | 用户或业务隔离空间 |
-| Dataset | DataSet | 保留数据集合概念 |
-| DataType | DataKind | 数据形态分类 |
-| DataCategory | DataDomain | 业务语义分类 |
-| Object | 废弃 | 金融主路径使用 Instrument |
-| object_id | 废弃 | 不再作为泛化对象 ID |
-| DataKey / DataAddress | DataRef | 一次读写中的逻辑数据引用 |
-| Projection | DataView | 查询视图或查询加速视图 |
-| DataViewMetric | DataViewColumn | 查询视图输出列 |
-| source_type | column_origin | DataViewColumn 的来源 |
-| partition_key | dimension_values | 业务维度值 |
-| GetLatestValues | GetLatestSnapshot | 获取最新状态快照 |
-| as_of_time | snapshot_time | 截面查询时间 |
+协议字段使用 `start_time`、`end_time`、`snapshot_time`、`data_time` 这类中性命名，不在字段名中带 `_ms`、`_ns` 等单位。具体格式由项目统一约定。
 
-## Workspace
+### 写入模式
 
-`Workspace` 是用户或业务隔离空间，不表达市场或交易场所。
-
-建议核心字段：
+`WriteMode` 只保留：
 
 ```text
-workspace_id
-name
-display_name
-description
-owner
-status
-created_at
-updated_at
+UNSPECIFIED
+UPSERT
+APPEND
+OVERWRITE
 ```
 
-## Market、Exchange、Instrument
+不提供 `DELETE`。用户侧不开放删除数据能力。
 
-`Market` 表示市场大类，例如 `US_STOCK`、`HK_STOCK`、`CN_STOCK`、`CRYPTO`。
+### 列来源
 
-`Exchange` 表示交易场所，例如 `NASDAQ`、`NYSE`、`HKEX`、`SSE`、`SZSE`、`BINANCE`、`OKX`。
-
-`Instrument` 表示金融交易标的。协议中不再使用 `object_id`，金融数据统一通过 `instrument_id` 定位。
-
-建议模型：
+`ColumnOriginType` 统一表达字段、因子、DataSetColumn、表达式和系统列：
 
 ```text
-Instrument:
-  instrument_id
-  internal_symbol
-  exchange_id
-  market
-  instrument_type
-  base_asset
-  quote_asset
-  currency
-  status
+FIELD
+FACTOR
+DATASET_COLUMN
+EXPRESSION
+SYSTEM
 ```
 
-`internal_symbol` 是系统内部标准化后的标的代码。
+`FIELD` 表示 Space 内普通字段。
 
-示例：
+`FACTOR` 表示 Space 内已参数化后的因子结果，例如 `ma20_close`。
 
-```text
-BTC-USDT
-00700.HK
-AAPL
-```
+`DATASET_COLUMN` 表示 ViewColumn 来自某个 DataSetColumn。
 
-外部数据源中的代码由 `InstrumentAlias` 管理：
+`EXPRESSION` 表示 View 内部登记的表达式列，不由临时查询随意传入执行。
 
-```text
-InstrumentAlias:
-  instrument_id
-  data_source
-  exchange_id
-  external_symbol
-```
-
-示例：
-
-| instrument | data_source | external_symbol |
-| --- | --- | --- |
-| BTC-USDT | BINANCE | BTCUSDT |
-| BTC-USDT | OKX | BTC-USDT |
-| 00700.HK | Yahoo | 0700.HK |
-
-## DataSet、DataKind、DataDomain
-
-`DataSet` 表示一组可读写的数据集合。它不等同于数据形态。
-
-建议核心字段：
-
-```text
-dataset_id
-workspace_id
-name
-display_name
-data_kind
-data_domain
-market_scope
-exchange_scope
-instrument_scope
-default_freqs
-schema_version
-status
-```
-
-`DataKind` 表示数据形态：
-
-```text
-OBJECT
-TIME_SERIES
-SNAPSHOT
-EVENT
-DOCUMENT
-TABLE
-```
-
-`DataDomain` 表示业务语义：
-
-```text
-MARKET_BAR
-MARKET_TICK
-ORDER_BOOK
-TRADE
-SYMBOL_PROFILE
-COMPANY_PROFILE
-NEWS
-ANNOUNCEMENT
-FACTOR_VALUE
-RANKING_LIST
-FINANCIAL_REPORT
-```
-
-示例：
-
-| 数据 | DataKind | DataDomain |
-| --- | --- | --- |
-| 公司信息 | OBJECT | COMPANY_PROFILE |
-| 日 K | TIME_SERIES | MARKET_BAR |
-| tick | TIME_SERIES | MARKET_TICK |
-| 订单簿快照 | SNAPSHOT | ORDER_BOOK |
-| 公告正文 | DOCUMENT | ANNOUNCEMENT |
-| MA20 因子序列 | TIME_SERIES | FACTOR_VALUE |
-
-## Field 与 Factor
-
-Field 和 Factor 不应完全统一管理。
-
-`Field` 管事实数据字段和用户声明字段：
-
-```text
-open
-close
-volume
-industry
-market_cap
-announcement_title
-```
-
-`FactorDef` 和 `FactorInstance` 管因子算法和参数化结果：
-
-```text
-MA(window=20)
-MA(window=60)
-RSI(window=14)
-```
-
-不要让每个 `FactorInstance` 自动变成全局 `Field`。否则字段管理会被参数化因子污染，字段数量也会快速膨胀。
-
-建议采用：
-
-```text
-FieldService:
-  管原始字段、对象字段、业务字段。
-
-FactorService:
-  管因子定义、因子实例、因子版本。
-
-DataViewColumn:
-  在查询层统一 Field、FactorInstance、Expression 和 SystemColumn。
-```
-
-## DataView
-
-`DataView` 是查询视图，不是原始 DataSet。它从一个或多个 DataSet 派生，用于分析查询、组合查询或查询加速。
-
-示例：
-
-```text
-日 K + 热门因子横截面视图
-分钟 K + MA/RSI 因子视图
-公司资料 + 行业标签视图
-公告文本搜索视图
-```
-
-建议模型：
-
-```text
-DataViewDef:
-  data_view_id
-  workspace_id
-  name
-  source_datasets
-  grain
-  query_config
-  status
-
-DataViewVersion:
-  data_view_id
-  version
-  physical_name
-  storage_device_id
-  status
-  built_at
-```
-
-`query_config` 是服务端查询策略配置，不由调用方在请求里控制。
-
-示例：
-
-```text
-allow_fallback
-max_fallback_rows
-max_staleness
-preferred_storage
-```
-
-## DataViewColumn
-
-`DataViewColumn` 表达 DataView 的输出列。它替代 `DataViewMetric`。
-
-建议字段：
-
-```text
-data_view_column_id
-column_key
-display_name
-column_origin
-field_id
-factor_instance_id
-expression
-value_type
-```
-
-`column_origin` 表示列来源：
-
-```text
-COLUMN_ORIGIN_FIELD
-COLUMN_ORIGIN_FACTOR
-COLUMN_ORIGIN_EXPRESSION
-COLUMN_ORIGIN_SYSTEM
-```
-
-含义如下：
-
-| column_origin | 含义 | 示例 |
-| --- | --- | --- |
-| FIELD | 来自 Field 管理的普通字段 | close、volume、industry |
-| FACTOR | 来自 FactorInstance | MA20、RSI14 |
-| EXPRESSION | DataView 内部派生表达式 | close / ma20 - 1 |
-| SYSTEM | 系统列 | instrument_id、exchange_id、timestamp、freq、ingest_time |
-
-## DataRef
-
-`DataRef` 表示一次数据读写中的逻辑数据引用。它替代 `DataKey` 和 `DataAddress`。
-
-建议字段：
-
-```text
-workspace_id
-dataset_id
-instrument_id
-record_key
-exchange_id
-freq
-timestamp
-dimension_values
-```
-
-典型定位方式：
-
-```text
-时间序列:
-  workspace_id + dataset_id + instrument_id + freq + timestamp
-
-标的资料:
-  workspace_id + dataset_id + instrument_id
-
-普通记录:
-  workspace_id + dataset_id + record_key
-
-榜单或财报:
-  workspace_id + dataset_id + dimension_values
-```
-
-## dimension_values
-
-`dimension_values` 表示业务维度值。它替代 `partition_key`。
-
-它适合描述不完全由 `instrument_id` 定位的数据切片：
-
-```text
-trade_date = 2026-06-13
-ranking_type = amount_top
-report_period = 2025Q4
-adjust_type = qfq
-news_category = macro
-```
-
-建议不要把它设计成完全自由的 map。DataSet 应先声明允许哪些维度。
-
-```text
-DimensionDef:
-  key
-  value_type
-  required
-  indexable
-  allowed_values
-```
-
-`dimension_values` 是数据定位的一部分，不等同于普通字段，也不一定等同于物理分区。
+`SYSTEM` 表示系统列，例如 `subject_id`、`data_time`、`freq`。
 
 ## DataService
 
-`DataService` 负责在线数据读写。
-
-建议接口：
+`DataService` 是用户侧事实数据读写服务。
 
 ```text
-UpsertRecords
-QueryRecords
-SetTimeSeries
-ScanTimeSeries
-SetFactorValues
-ScanFactorValues
-GetLatestSnapshot
+WriteRows
+ReadRows
 ```
 
-说明：
+### WriteRows
 
-- `UpsertRecords` 写普通结构化记录，例如公司资料、榜单行、公告摘要。
-- `QueryRecords` 查普通结构化记录。
-- `SetTimeSeries` 写 K 线、tick 等时间序列事实数据。
-- `ScanTimeSeries` 按时间范围扫描时间序列。
-- `SetFactorValues` 写因子结果。
-- `ScanFactorValues` 按时间范围扫描因子结果。
-- `GetLatestSnapshot` 获取一批标的的最新状态。
+`WriteRows` 写入事实数据行。请求结构：
 
-`GetLatestSnapshot` 的语义是“每个 instrument 取最新一份状态”。如果要取最近 N 条，应使用 `ScanTimeSeries`。
+```text
+auth_info
+write_mode
+rows
+```
+
+`DataRow` 结构：
+
+```text
+key
+columns
+attributes
+```
+
+`DataKey` 结构：
+
+```text
+scope
+data_time
+row_id
+```
+
+`DataScope` 结构：
+
+```text
+space_id
+dataset_id
+subject_id
+freq
+dimensions
+```
+
+`DataScope` 定位一组事实数据。`DataKey` 在 `DataScope` 上增加 `data_time` 和 `row_id`，定位一条事实行。写入时，调用方是在某个 `DataKey` 下写入一组列值。
+
+`dimensions` 是参与逻辑定位的低基数业务维度，不是普通查询过滤条件。只有当某个值决定“是否为同一条事实序列或事实范围”时才放在这里，例如 `adjust_type=qfq`、`report_period=2025Q4`、`ranking_type=amount_top`。如果一个值只是展示、筛选或排序字段，应放在 `DataRow.columns`。
+
+语义约束：
+
+- `dataset_id` 必填。
+- `space_id` 必填；DataSet、Subject、Field 和 Factor 的唯一性均限定在 Space 内。
+- 时序数据应填写 `scope.subject_id`、`scope.freq` 和 `key.data_time`。
+- 对象型或表格型数据可以使用 `key.row_id` 表示逻辑行。
+- 事件或 tick 数据可以同时使用 `key.data_time` 和 `key.row_id`，避免同一时间多行冲突。
+- `columns.column_name` 必须登记在 `DataSetColumn` 中。
+- 写入成功只返回 `ret_info`。
+
+写入请求不包含额外写入选项对象。写入响应不返回行变更、不返回旧值、不返回写入数量。
+
+### ReadRows
+
+`ReadRows` 按 DataSet 维度读取事实数据。请求结构：
+
+```text
+auth_info
+scope
+read_mode
+time_range
+snapshot_time
+row_ids
+column_names
+page
+```
+
+读取模式：
+
+```text
+RANGE          // 按时间区间读取
+POINT          // 按 row_id 点查
+LATEST_BEFORE  // 读取某个截面时间之前的最新行
+```
+
+范围查询使用 `scope + time_range`。例如读取 Binance `APT-USDT` 现货 1m K 线最近一天数据：
+
+```text
+scope:
+  space_id: crypto
+  dataset_id: binance_spot_kline
+  subject_id: APT-USDT
+  freq: 1m
+time_range:
+  start_time: 2026-06-15T00:00:00+08:00
+  end_time: 2026-06-16T00:00:00+08:00
+column_names:
+  open
+  high
+  low
+  close
+  volume
+```
+
+这里 `scope` 表示“哪一组数据”，`time_range` 表示“这组数据里的哪一段时间”，`column_names` 表示“要哪些列”。
+
+响应结构：
+
+```text
+ret_info
+rows
+page_result
+```
 
 ## QueryService
 
-`QueryService` 负责分析查询、DataView 查询和文本查询。
-
-建议接口：
+`QueryService` 是用户侧查询服务。
 
 ```text
-QueryFrame
-TextSearch
-ExplainQuery
+QueryView
+SearchRows
 ```
 
-`QueryFrame` 用于 K 线、字段和因子的组合查询。
+### QueryView
 
-建议请求结构：
+`QueryView` 查询已登记并异步构建的 View。请求结构：
 
 ```text
-QueryFrameReq:
-  workspace_id
-  dataset_id
-  instrument_ids
-  freq
-  query_time
-  select_columns
-  filter
-  order_by
-  page
+auth_info
+space_id
+view_id
+subject_ids
+query_time
+column_names
+filters
+sorts
+page
 ```
 
-`instrument_ids` 由上层应用传入。标的池、选股池、指数成分等概念通常在应用层处理，不放入 xData 第一版协议。
+语义约束：
 
-时间条件建议使用结构化 `QueryTime`：
+- `view_id` 必填。
+- 用户只能查询已登记的 View。
+- 临时不存在的字段组合直接返回 `VIEW_NOT_FOUND`。
+- 调用方不控制是否 fallback、不控制底层表、不控制执行引擎。
+- 表达式列属于 View 元数据和后台构建逻辑，不出现在 `QueryViewColumn` 响应中。
+
+View 创建时必须配置 `primary_dataset_id`。`primary_dataset_id` 决定 View 的 Subject 范围，系统使用主 DataSet 绑定的 Subject 集合作为 View 的行域。协议不提供 `subject_scope_policy`，也不让调用方在创建 View 时逐个选择 Subject。
+
+当 View 关联多个 DataSet 时，其他 DataSet 只提供列。构建宽表时，系统以主 DataSet 的 Subject 集合为准，再按粒度键关联其他 DataSet 的列。
+
+### SearchRows
+
+`SearchRows` 按 DataSet 维度执行全文和结构化搜索。请求结构：
 
 ```text
-QueryTime:
-  snapshot_time
-  time_range
-
-TimeRange:
-  start_time
-  end_time
+auth_info
+space_id
+dataset_id
+text_query
+subject_ids
+time_range
+filters
+sorts
+column_names
+page
 ```
 
-`snapshot_time` 用于截面查询：
+语义约束：
+
+- `SearchRows` 查询 Search Service 中的集中式 Bleve 派生索引。
+- Search Service 汇聚所有 PrimaryStore 节点的主存变更，查询时不走 PrimaryRoute，也不 fan-out 到 Pebble 分片。
+- `text_query` 非空时，使用 Bleve 全文索引召回匹配行。
+- `filters` 非空时，做结构化过滤。
+- `text_query + filters` 同时存在时，先全文召回，再结构化过滤。
+- `text_query` 为空但 `filters` 非空时，作为 DataSet 维度结构化搜索。
+- `column_names` 控制返回列，不影响过滤列解析。
+
+Bleve 同步策略由元数据控制：
 
 ```text
-某个时间点，全市场 ma20 > ma60 的标的
+t_dataset_columns.c_text_indexed = 1
 ```
 
-`time_range` 用于区间查询：
+只有开启该标记的列会进入文本索引。这样可以避免把数值字段、内部字段和无关扩展字段写入 Bleve。
+
+## PrimaryStore 内部执行协议
+
+`PrimaryStoreService` 是在线事实主存的内部执行接口，不对普通用户暴露。
 
 ```text
-某个时间范围内，某批标的的 close、ma20、rsi14
+WritePrimaryRows
+ReadPrimaryRows
 ```
 
-时间类型建议使用 `google.protobuf.Timestamp`，不在字段名里写 `_ms`、`_ns` 等单位。
-
-## 查询执行策略
-
-调用方不应控制是否使用 DataView、是否 fallback、是否走长表。执行策略属于服务端配置。
-
-推荐放在：
+`PrimaryTarget` 结构：
 
 ```text
-DataViewDef.query_config
+space_id
+node_id
+device_id
+engine
+dataset_id
+device_table
+endpoint
 ```
 
-如果调用方需要了解执行方式，使用：
+`PrimaryTarget` 表示 Access 已完成路由后的主存执行目标。`device_table` 表示设备内部表、索引或键空间名称。`endpoint` 来自目标 PrimaryStore 节点，用于让内部 client 连接正确节点；为空时使用默认 PrimaryStore 服务名。Access 根据 PrimaryRoute 和元数据生成它，用户请求中不携带它。
+
+内部接口不提供创建、删除或解释路由的用户式 RPC。建表、视图构建、归档和索引刷新应由控制面任务或后台任务驱动。
+
+## DataSet 与 View 的边界
+
+读写事实数据使用 DataSet，组合查询使用 View。两者不统一是刻意设计。
 
 ```text
-ExplainQuery
+写入事实：DataSet
+读取事实：DataSet
+组合分析：View
+全文和结构化搜索：DataSet
 ```
 
-这样请求只表达“我要什么数据”，不表达“系统应该怎么查”。
+原因：
 
-## ControlService
+- DataSet 是事实契约，保证写入稳定。
+- View 是查询产品，允许异步构建宽表和按用户场景裁剪列。
+- 文本检索天然属于某个事实数据集，不需要额外创建 View。
+- 不存在的组合查询不应临时消耗大量 DuckDB pivot/join 资源。
 
-moox 侧控制面接口建议命名为 `ControlService`，文件为 `control.proto`。
+## 元数据联动
 
-建议职责：
+协议需要依赖以下元数据：
 
 ```text
-CreateWorkspaceWithDefaults
-ConfigureDataSet
-ConfigureFields
-ConfigureStorageRoutes
-ConfigureCollectorBinding
-PublishMetadataChange
+t_data_sources
+t_subjects
+t_subject_symbols
+t_datasets
+t_dataset_subjects
+t_dataset_columns
+t_views
+t_view_columns
+t_storage_routes
+t_storage_devices
 ```
 
-`ControlService` 是管理台聚合接口。它可以调用 xData 的 MetadataService，但不把 xData 内部接口直接暴露给前端。
+其中 `t_dataset_columns.c_text_indexed` 是 Bleve 同步开关。
 
-## CollectorDataSetBinding
-
-采集任务和 DataSet 的关系应配置化，不应硬编码 dataset_id。
-
-建议模型：
-
-```text
-CollectorDataSetBinding:
-  workspace_id
-  data_source
-  collector_data_type
-  market
-  exchange
-  instrument_type
-  dataset_id
-  internal_symbol_rule
-  external_symbol_rule
-  freq_rule
-```
-
-示例：
-
-```text
-data_source = BINANCE
-collector_data_type = KLINE
-market = CRYPTO
-exchange = BINANCE
-instrument_type = SPOT
-dataset_id = binance_spot_bar
-```
-
-这样采集器只需要根据绑定关系写入目标 DataSet，不需要在代码里写死 `SPOT -> 101`、`SWAP -> 100`。
-
-## 错误码建议
-
-建议新增面向新协议的错误码：
-
-```text
-WORKSPACE_NOT_FOUND
-DATASET_NOT_FOUND
-INSTRUMENT_NOT_FOUND
-FIELD_NOT_FOUND
-FACTOR_INSTANCE_NOT_FOUND
-DATA_VIEW_NOT_READY
-DATA_VIEW_COLUMN_NOT_FOUND
-QUERY_SHAPE_UNSUPPORTED
-ROUTE_NOT_FOUND
-ROUTE_CROSS_DEVICE_UNSUPPORTED
-ENGINE_CAPABILITY_UNSUPPORTED
-DIMENSION_VALUE_INVALID
-```
-
-## 待确认问题
-
-以下问题还需要在真正改 proto 前确认：
-
-- `Record` 是否需要独立 service，还是放在 `DataService.UpsertRecords / QueryRecords` 中即可。
-- `DataView` 是否需要支持文本索引视图，还是文本索引单独由 `TextSearch` 管理。
-- `dimension_values` 是否需要支持多值，例如 `market=["US_STOCK","HK_STOCK"]`。
-- `GetLatestSnapshot` 是否需要同时支持时间序列字段和因子值。
-- `QueryFrame` 第一版是否支持表达式列，还是只支持 Field 和 Factor。
-
-## 当前结论
-
-当前推荐方案：
-
-```text
-xData:
-  common.proto
-  metadata.proto
-  data.proto
-  query.proto
-  adaptor.proto
-
-moox:
-  control.proto
-  collector.proto
-  node.proto
-  task.proto
-```
-
-核心命名：
-
-```text
-Workspace
-DataSet
-Instrument
-InstrumentAlias
-DataRef
-DataView
-DataViewColumn
-dimension_values
-snapshot_time
-GetLatestSnapshot
-```
-
-核心原则：
-
-- Field 和 Factor 分开管理。
-- DataViewColumn 在查询层统一 Field、Factor、Expression 和 SystemColumn。
-- 调用方不控制 DataView 执行策略。
-- 标的池由上层应用处理，xData 只接收明确的 `instrument_ids`。
-- 时间字段使用 `google.protobuf.Timestamp`，不在字段名中携带单位。
+View 的物化查询结果由后台任务根据 `t_views.c_query_window` 回扫 Pebble 主存并异步构建。新增列或因子时，不原地修改当前结果，而是新建物化结果后切换 `c_active_result`。

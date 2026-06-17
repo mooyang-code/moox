@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package trpc.storage.primary;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
+
+import "common.proto";
+import "data.proto";
+
+// PrimaryTarget 表示 Access 完成路由后得到的在线主存目标位置。
+message PrimaryTarget {
+  // space_id 是使用空间 ID。
+  string space_id = 1;
+  // node_id 是 PrimaryStore 服务节点 ID。
+  string node_id = 2;
+  // device_id 是 PrimaryStore 节点内的 Pebble 设备 ID。
+  string device_id = 3;
+  // engine 是在线主存引擎类型，当前固定为 pebble。
+  string engine = 4;
+  // dataset_id 是事实数据集 ID。
+  string dataset_id = 5;
+  // device_table 是 PrimaryStore 内部表或键空间名称。
+  string device_table = 6;
+  // endpoint 是 PrimaryStore 服务节点访问地址；为空时使用默认 PrimaryStore 服务名。
+  string endpoint = 7;
+}
+
+// WritePrimaryRowsReq 表示写入在线主存行的内部请求。
+message WritePrimaryRowsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // target 是在线主存目标位置。
+  PrimaryTarget target = 2;
+  // write_mode 表示本次写入如何处理相同逻辑键的已有数据。
+  common.WriteMode write_mode = 3;
+  // rows 是已完成路由的数据行。
+  repeated data.DataRow rows = 4;
+}
+
+// WritePrimaryRowsRsp 表示在线主存行写入结果。
+message WritePrimaryRowsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+}
+
+// ReadPrimaryRowsReq 表示读取在线主存行的内部请求。
+message ReadPrimaryRowsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // target 是在线主存目标位置。
+  PrimaryTarget target = 2;
+  // read_mode 是读取方式。
+  data.ReadMode read_mode = 3;
+  // scope 是要读取的事实数据范围。
+  data.DataScope scope = 4;
+  // time_range 是时间区间条件。
+  common.TimeRange time_range = 5;
+  // snapshot_time 是截面时间。
+  string snapshot_time = 6;
+  // row_ids 是要读取的逻辑行 ID 列表。
+  repeated string row_ids = 7;
+  // column_names 是要返回的列名；为空时返回整行。
+  repeated string column_names = 8;
+  // page 是分页参数。
+  common.Page page = 9;
+}
+
+// ReadPrimaryRowsRsp 表示在线主存行读取结果。
+message ReadPrimaryRowsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // rows 是读取到的数据行。
+  repeated data.DataRow rows = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// PrimaryStoreService 是 Access 调用在线事实主存的内部执行服务。
+service PrimaryStoreService {
+  // WritePrimaryRows 将已完成路由的数据行写入在线主存。
+  rpc WritePrimaryRows(WritePrimaryRowsReq) returns (WritePrimaryRowsRsp);
+  // ReadPrimaryRows 从在线主存读取数据行。
+  rpc ReadPrimaryRows(ReadPrimaryRowsReq) returns (ReadPrimaryRowsRsp);
+}

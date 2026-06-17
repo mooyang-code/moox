@@ -1,0 +1,72 @@
+# 主配置文件
+system:
+  name: "multi-source-data-collector"
+  version: "v0.0.3"
+  environment: "Production"
+  timezone: "UTC"
+  storage_url: "http://43.136.59.72:19104"
+
+# 事件总线配置
+event_bus:
+  type: "memory"
+  buffer_size: 10000
+  workers: 10
+  config:
+    redis:
+      addr: "localhost:6379"
+      db: 0
+
+# DNS 代理配置
+dnsproxy:
+  # 本地 DNS 解析配置
+  dns_servers:
+    - "8.8.8.8"
+    - "1.1.1.1"
+    - "localhost"
+  dns_timeout: 5              # DNS 解析超时时间（秒）
+  concurrent_limit: 10        # 并发解析域名数
+  scheduled_domains:          # 需要定时解析的域名列表
+    - "api.binance.com"
+    - "fapi.binance.com"
+
+  # 域名探测配置列表
+  probe_configs:
+    # Binance 现货 API 域名
+    - domain: "api.binance.com"
+      probe_type: "https"
+      probe_api:
+        path: "/api/v3/time"
+        method: "GET"
+        timeout: 3
+        expected_status: 200
+
+    # Binance 合约 API 域名
+    - domain: "fapi.binance.com"
+      probe_type: "https"
+      probe_api:
+        path: "/fapi/v1/ping"
+        method: "GET"
+        timeout: 3
+        expected_status: 200
+
+# 数据源配置
+sources:
+  market:
+    - name: "binance"
+      enabled: true
+      config: "configs/sources/market/binance.yaml"
+    - name: "okx"
+      enabled: false
+      config: "configs/sources/market/okx.yaml"
+  social:
+    - name: "twitter"
+      enabled: false
+      config: "configs/sources/social/twitter.yaml"
+  news:
+    - name: "coindesk"
+      enabled: false
+      config: "configs/sources/news/coindesk.yaml"
+  blockchain:
+    - name: "ethereum"
+      enabled: false
+      config: "configs/sources/blockchain/ethereum.yaml"
