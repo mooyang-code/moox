@@ -11,17 +11,22 @@ import (
 
 func TestStorageProtocolUsesCanonicalSurface(t *testing.T) {
 	root := moduleRoot(t)
+	repoRoot := filepath.Dir(filepath.Dir(root))
 	versionTag := "v" + "2"
+	legacyProxyName := "adapt" + "er"
+	legacyServiceName := "Adapt" + "erService"
+	legacyTargetName := "Device" + "Ref"
 
-	for _, name := range []string{"common.proto", "metadata.proto", "data.proto", "query.proto", "adapter.proto", "message.proto"} {
+	for _, name := range []string{"common.proto", "metadata.proto", "data.proto", "query.proto", "primary.proto", "message.proto"} {
 		require.FileExists(t, filepath.Join(root, "proto", name))
 	}
 
 	for _, path := range []string{
 		"proto/gen" + versionTag,
 		"proto/legacy",
+		"pkg/quantstore",
 		"internal/services/" + versionTag,
-		"internal/services/access",
+		"internal/services/storage",
 		"internal/services/dbmanager",
 	} {
 		require.NoDirExists(t, filepath.Join(root, filepath.FromSlash(path)))
@@ -32,10 +37,13 @@ func TestStorageProtocolUsesCanonicalSurface(t *testing.T) {
 		"proto/" + versionTag + "_metadata.proto",
 		"proto/" + versionTag + "_data.proto",
 		"proto/" + versionTag + "_query.proto",
-		"proto/" + versionTag + "_adapter.proto",
+		"proto/" + versionTag + "_" + legacyProxyName + ".proto",
 		"proto/" + versionTag + "_message.proto",
+		"proto/" + legacyProxyName + ".proto",
 		"proto/gen/access.pb.go",
 		"proto/gen/access.trpc.go",
+		"proto/gen/" + legacyProxyName + ".pb.go",
+		"proto/gen/" + legacyProxyName + ".trpc.go",
 		"proto/gen/dbmanager.pb.go",
 		"proto/gen/dbmanager.trpc.go",
 	} {
@@ -51,9 +59,15 @@ func TestStorageProtocolUsesCanonicalSurface(t *testing.T) {
 		" " + versionTag + " ",
 		versionTag + " protocol",
 		"trpc.storage.access.Access",
+		"trpc.storage." + legacyProxyName,
 		"trpc.storage.dbmanager.DBTableManager",
 		"RegisterAccessService",
+		"Register" + legacyServiceName,
 		"RegisterDBTableManagerService",
+		"pkg/quantstore",
+		legacyServiceName,
+		legacyTargetName,
+		"services/" + legacyProxyName,
 	} {
 		requireNoProjectSourceContains(t, root, needle)
 	}
@@ -65,8 +79,13 @@ func TestStorageProtocolUsesCanonicalSurface(t *testing.T) {
 	} {
 		requireNoProjectSourceContains(t, root, needle)
 	}
+	requireFileNotContains(t, filepath.Join(repoRoot, "docs", "superpowers", "plans", "2026-06-17-storage-module-implementation.md"), []string{
+		"pkg/quantstore",
+		"quantstore.Store",
+		"go test ./pkg/quantstore",
+	})
 
-	for _, proto := range []string{"common.proto", "data.proto", "query.proto", "adapter.proto"} {
+	for _, proto := range []string{"common.proto", "data.proto", "query.proto", "primary.proto"} {
 		requireProtocolFileNotContains(t, filepath.Join(root, "proto", proto), []string{
 			"workspace_id",
 			"DataRef",
@@ -122,12 +141,12 @@ func TestStorageProtocolUsesCanonicalSurface(t *testing.T) {
 		"repeated common.SortSpec sorts",
 		"repeated string column_names",
 	})
-	requireProtocolFileContains(t, filepath.Join(root, "proto", "adapter.proto"), []string{
-		"message DeviceRef",
+	requireProtocolFileContains(t, filepath.Join(root, "proto", "primary.proto"), []string{
+		"message PrimaryTarget",
 		"node_id",
 		"device_table",
-		"rpc WriteDeviceRows",
-		"rpc ReadDeviceRows",
+		"rpc WritePrimaryRows",
+		"rpc ReadPrimaryRows",
 	})
 	requireProtocolFileContains(t, filepath.Join(root, "proto", "metadata.proto"), []string{
 		"message DataSetColumn",
@@ -243,6 +262,11 @@ func requireNoProjectSourceContains(t *testing.T, root, needle string) {
 }
 
 func requireProtocolFileNotContains(t *testing.T, path string, needles []string) {
+	t.Helper()
+	requireFileNotContains(t, path, needles)
+}
+
+func requireFileNotContains(t *testing.T, path string, needles []string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)

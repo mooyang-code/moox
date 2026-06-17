@@ -9,6 +9,7 @@
 - 用户写入和读取事实数据时只感知 `DataSet`。
 - 用户做组合分析查询时只感知已登记的 `View`。
 - 文本检索按 `DataSet` 维度执行，由元数据控制哪些列进入 Bleve。
+- 所有用户侧和业务侧数据访问都先进入 Access Service；PrimaryStore、Search、View 和 Archive 都是内部服务。
 - 接入层和底层存储设备解耦，底层统一称为 `Device`。
 - 不提供用户删除数据的能力。
 - 写请求保持简单，不返回行变更、旧值或写入统计。
@@ -23,7 +24,7 @@ common.proto
 metadata.proto
 data.proto
 query.proto
-adapter.proto
+primary.proto
 message.proto
 ```
 
@@ -35,7 +36,7 @@ message.proto
 | `metadata.proto` | Space、View、DataSet、Subject、Field、Factor、Device、Route 等元数据 |
 | `data.proto` | 用户侧事实数据写入和读取 |
 | `query.proto` | 用户侧组合查询和文本检索 |
-| `adapter.proto` | 接入层到 adapter 服务的内部执行协议 |
+| `primary.proto` | Access 到 PrimaryStore Service 的内部执行协议 |
 | `message.proto` | 主存变更事件，供 DuckDB、Bleve、Parquet 异步派生使用 |
 
 ## 核心命名
@@ -264,6 +265,8 @@ page
 
 语义约束：
 
+- `SearchRows` 查询 Search Service 中的集中式 Bleve 派生索引。
+- Search Service 汇聚所有 PrimaryStore 节点的主存变更，查询时不走 PrimaryRoute，也不 fan-out 到 Pebble 分片。
 - `text_query` 非空时，使用 Bleve 全文索引召回匹配行。
 - `filters` 非空时，做结构化过滤。
 - `text_query + filters` 同时存在时，先全文召回，再结构化过滤。
@@ -278,16 +281,16 @@ t_dataset_columns.c_text_indexed = 1
 
 只有开启该标记的列会进入文本索引。这样可以避免把数值字段、内部字段和无关扩展字段写入 Bleve。
 
-## AdapterService
+## PrimaryStore 内部执行协议
 
-`AdapterService` 是内部执行接口，不对普通用户暴露。
+`PrimaryStoreService` 是在线事实主存的内部执行接口，不对普通用户暴露。
 
 ```text
-WriteDeviceRows
-ReadDeviceRows
+WritePrimaryRows
+ReadPrimaryRows
 ```
 
-`DeviceRef` 结构：
+`PrimaryTarget` 结构：
 
 ```text
 space_id
@@ -296,9 +299,10 @@ device_id
 engine
 dataset_id
 device_table
+endpoint
 ```
 
-`device_table` 表示设备内部表、索引或键空间名称。接入层根据路由和元数据生成它，用户请求中不携带它。
+`PrimaryTarget` 表示 Access 已完成路由后的主存执行目标。`device_table` 表示设备内部表、索引或键空间名称。`endpoint` 来自目标 PrimaryStore 节点，用于让内部 client 连接正确节点；为空时使用默认 PrimaryStore 服务名。Access 根据 PrimaryRoute 和元数据生成它，用户请求中不携带它。
 
 内部接口不提供创建、删除或解释路由的用户式 RPC。建表、视图构建、归档和索引刷新应由控制面任务或后台任务驱动。
 

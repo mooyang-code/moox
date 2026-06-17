@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	deviceparquet "github.com/mooyang-code/moox/modules/storage/internal/infra/device/parquet"
+	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/archive"
-	deviceparquet "github.com/mooyang-code/moox/modules/storage/internal/services/device/parquet"
-	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/services/metadata/sqlite"
-	"github.com/mooyang-code/moox/modules/storage/pkg/quantstore"
+	"github.com/mooyang-code/moox/modules/storage/internal/testutil"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	parquetgo "github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/require"
@@ -47,15 +47,15 @@ func TestServiceArchivesPebbleFactsAndRegistersArchiveFile(t *testing.T) {
 	_, err = meta.UpsertDevice(ctx, &pb.Device{DeviceId: "archive-device", NodeId: "node-1", Name: "archive", Engine: "parquet_archive", Status: "active"})
 	require.NoError(t, err)
 
-	facts := quantstore.New(root)
+	facts := testutil.OpenPebbleFactStore(t, root)
 	require.NoError(t, facts.WriteRows(ctx, []*pb.DataRow{{
 		Key: &pb.DataKey{
 			Scope:    &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"},
 			DataTime: "2026-06-15T00:00:00Z",
 		},
 		Columns: []*pb.ColumnValue{
-			quantstore.DoubleValue("close", 8.1),
-			quantstore.DoubleValue("volume", 10),
+			testutil.DoubleValue("close", 8.1),
+			testutil.DoubleValue("volume", 10),
 		},
 	}}, pb.WriteMode_WRITE_MODE_UPSERT))
 
@@ -122,7 +122,7 @@ func TestServiceArchivesAllPagesOfPebbleFacts(t *testing.T) {
 	_, err = meta.UpsertDevice(ctx, &pb.Device{DeviceId: "archive-device", NodeId: "node-1", Name: "archive", Engine: "parquet_archive", Status: "active"})
 	require.NoError(t, err)
 
-	facts := quantstore.New(root)
+	facts := testutil.OpenPebbleFactStore(t, root)
 	rows := make([]*pb.DataRow, 0, 1001)
 	for i := 0; i < 1001; i++ {
 		rows = append(rows, &pb.DataRow{
@@ -131,7 +131,7 @@ func TestServiceArchivesAllPagesOfPebbleFacts(t *testing.T) {
 				DataTime: time.Date(2026, 6, 15, 0, i, 0, 0, time.UTC).Format(time.RFC3339),
 				RowId:    "row-" + strconv.Itoa(i),
 			},
-			Columns: []*pb.ColumnValue{quantstore.DoubleValue("close", float64(i))},
+			Columns: []*pb.ColumnValue{testutil.DoubleValue("close", float64(i))},
 		})
 	}
 	require.NoError(t, facts.WriteRows(ctx, rows, pb.WriteMode_WRITE_MODE_UPSERT))
@@ -159,5 +159,5 @@ func schemaPath(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	require.True(t, ok)
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "../../../../../schema/storage_metadata.sql"))
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "../../../schema/storage_metadata.sql"))
 }

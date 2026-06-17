@@ -298,13 +298,13 @@ message DataSetColumn {
   map<string, string> attributes = 14;
 }
 
-// StorageNode 表示存储代理节点，即一个 adapter 服务实例或服务组入口。
+// StorageNode 表示在线主存节点，即一个 PrimaryStore 服务实例或服务组入口。
 message StorageNode {
   // node_id 是存储节点 ID。
   string node_id = 1;
   // name 是节点名称，通常用于管理台展示。
   string name = 2;
-  // endpoint 是 adapter 服务地址。
+  // endpoint 是 PrimaryStore 服务地址。
   string endpoint = 3;
   // weight 是路由权重。
   uint32 weight = 4;
@@ -358,7 +358,7 @@ message StorageRoute {
   string subject_pattern = 5;
   // hash_rule 是水平切分哈希规则；为空表示不使用哈希切分。
   string hash_rule = 6;
-  // node_id 是目标存储代理节点 ID。
+  // node_id 是目标 PrimaryStore 节点 ID。
   string node_id = 7;
   // priority 是路由优先级，数值越小优先级越高。
   uint32 priority = 8;

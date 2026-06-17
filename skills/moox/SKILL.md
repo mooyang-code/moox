@@ -8,19 +8,19 @@ MooX is the unified repository for a personal quant data platform. It groups sto
 
 Core concepts:
 
-- Workspace: an isolated user or strategy domain.
-- Exchange: a trading venue or market data venue, such as BINANCE, HKEX, NASDAQ, or OKX.
-- Instrument: the internal normalized tradable object.
-- InstrumentAlias: external symbols from data sources and exchanges.
-- DataSet: a logical kind of data, such as kline, ticker, company profile, ranking, event, or factor values.
-- DataView: a query-facing view that can combine base fields, factor instances, expressions, and system columns.
-- StorageRoute: a policy that maps a DataSet/DataView to Pebble, DuckDB, CSV, Bleve, or the file-backed acceptance store.
+- Space: an isolated user or strategy domain.
+- DataSource: a concrete upstream source, such as BINANCE spot, OKX spot, HKEX, NASDAQ, or a custom feed.
+- Subject: the business object stored in a Space, such as APT-USDT, a stock, a ranking item, or a document subject.
+- DataSet: a source-bound logical kind of data, such as kline, ticker, company profile, ranking, event, or factor values.
+- Field and Factor: Space-scoped reusable column definitions selected by DataSet columns.
+- View: a query-facing, asynchronously built wide view over one primary DataSet and selected columns from related DataSets.
+- StorageRoute: a policy that maps online primary facts to PrimaryStore nodes. DuckDB views, Bleve search, and Parquet archive are derived asynchronously from primary fact changes.
 
 ## Repository Layout
 
 - `modules/cli`: `moox-cli`.
 - `modules/control`: control plane service and metadata orchestration.
-- `modules/storage`: storage service, protocol, adapters, and file-backed quant store.
+- `modules/storage`: storage service, protocol, access, primary store, view, search, archive, and device drivers.
 - `modules/collector`: market data collection. The former miner responsibility is folded into collector discovery/source/scheduler packages.
 - `modules/factor`: factor calculation module.
 - `modules/order`: order module.
@@ -50,11 +50,11 @@ CSV acceptance import:
 
 ```bash
 bin/moox-cli data csv import \
-  --storage-root var/storage/acceptance \
-  --workspace default \
-  --exchange BINANCE \
+  --storage-url http://127.0.0.1:19104 \
+  --space default \
+  --data-source BINANCE \
   --dataset binance_spot_kline_1m \
-  --instrument APT-USDT \
+  --subject APT-USDT \
   --freq 1m \
   --file ~/Downloads/APT-USDT.csv
 ```
@@ -63,10 +63,10 @@ bin/moox-cli data csv import \
 
 - Prefer the new protocol under `modules/storage/proto/*.proto` and `modules/control/proto/*.proto`.
 - Keep legacy proto files under `proto/legacy` until their old call paths are deleted.
-- Do not reintroduce `object_id` into public APIs. Use Workspace, Exchange, Instrument, DataSet, DataView, Field, FactorDef, and FactorInstance.
-- Use `internal_symbol` for normalized symbols and `InstrumentAlias.external_symbol` for source-specific symbols.
+- Do not reintroduce `object_id` into public APIs. Use Space, DataSource, Subject, DataSet, View, Field, and Factor.
+- Use `subject_id` for normalized subject identity and `SubjectSymbol.external_symbol` for source-specific symbols.
 - Use `start_time`, `end_time`, and `snapshot_time`; avoid suffixes such as `_ms`.
 - Keep `dimensions` as user-defined partition/query dimensions. Do not expose storage-level partition keys to callers.
-- Treat Pebble as the online ordered time-series write/read engine. Treat DuckDB as analytical query and versioned wide table materialization. Treat CSV as cold backup/export. Treat Bleve as text search.
+- Treat Pebble-backed PrimaryStore as the online ordered fact store. Treat DuckDB as analytical query and versioned wide view storage. Treat Parquet as cold archive. Treat Bleve as text search.
 
 See `references/` for more detailed notes.

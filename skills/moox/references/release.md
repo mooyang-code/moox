@@ -18,6 +18,6 @@ Environment variables:
 - `REMOTE_SSH`: override full SSH target, for example `ubuntu@43.132.204.177`.
 - `REMOTE_ROOT`: default `~/moox`.
 - `CSV_DIR`: location of acceptance CSV files.
-- `STORAGE_ROOT`: local or remote storage root for acceptance writes.
+- `STORAGE_URL`: moox-storage Access Service HTTP endpoint for acceptance writes.
 
 Deployment uploads binaries, docs, skills, build scripts, and sample CSV files when they exist. It then runs the CSV acceptance script on the remote host.

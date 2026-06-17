@@ -79,5 +79,5 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "${REMOTE_SSH}" \
    chmod +x scripts/*.sh cli/bin/* control/bin/* collector/bin/* factor/bin/* order/bin/* account/bin/* storage/bin/* storage/*.sh
    (cd storage && ./stop.sh) || true
    (cd storage && ./start.sh)
-   CSV_DIR=${REMOTE_ROOT}/storage/sample-data STORAGE_ROOT=${REMOTE_ROOT}/storage/var/storage/acceptance CLI=${REMOTE_ROOT}/cli/bin/moox-cli ./scripts/acceptance.sh"
+   CSV_DIR=${REMOTE_ROOT}/storage/sample-data STORAGE_URL=http://127.0.0.1:19104 CLI=${REMOTE_ROOT}/cli/bin/moox-cli ./scripts/acceptance.sh"
 echo "==> deploy, storage start, and remote acceptance passed"

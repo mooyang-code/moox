@@ -3,19 +3,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-DEFAULT_STORAGE_ROOT="${ROOT}/var/storage/acceptance"
-if [[ -d "${ROOT}/storage" ]]; then
-  DEFAULT_STORAGE_ROOT="${ROOT}/storage/var/storage/acceptance"
-fi
-
-STORAGE_ROOT="${STORAGE_ROOT:-${DEFAULT_STORAGE_ROOT}}"
 SPACE="${SPACE:-${WORKSPACE:-crypto_acceptance}}"
 DATA_SOURCE="${DATA_SOURCE:-binance}"
 DATASET="${DATASET:-binance_spot_kline_1m}"
 FREQ="${FREQ:-1m}"
 OUTPUT="${OUTPUT:-${HOME}/Downloads/moox-storage-acceptance.json}"
 PAGE_SIZE="${PAGE_SIZE:-200000}"
-LOCAL_MODE=0
 STORAGE_URL="${STORAGE_URL:-}"
 CSV_FILES=()
 
@@ -35,10 +28,6 @@ CSV_DIR="${CSV_DIR:-${DEFAULT_CSV_DIR}}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --local)
-      LOCAL_MODE=1
-      shift
-      ;;
     --storage-url)
       STORAGE_URL="$2"
       shift 2
@@ -63,10 +52,6 @@ while [[ $# -gt 0 ]]; do
       OUTPUT="$2"
       shift 2
       ;;
-    --storage-root)
-      STORAGE_ROOT="$2"
-      shift 2
-      ;;
     --page-size)
       PAGE_SIZE="$2"
       shift 2
@@ -82,10 +67,11 @@ if [[ ${#CSV_FILES[@]} -eq 0 ]]; then
   CSV_FILES=("${CSV_DIR}/APT-USDT.csv" "${CSV_DIR}/AR-USDT.csv")
 fi
 
-REMOTE_MODE=0
-if [[ -n "${STORAGE_URL}" && "${LOCAL_MODE}" -eq 0 ]]; then
-  REMOTE_MODE=1
+if [[ -n "${STORAGE_URL}" ]]; then
   echo "==> storage-url=${STORAGE_URL}; acceptance will use remote moox-storage HTTP service"
+else
+  echo "missing --storage-url; acceptance must go through moox-storage Access Service" >&2
+  exit 1
 fi
 
 if [[ ! -x "${CLI}" ]]; then
@@ -93,8 +79,7 @@ if [[ ! -x "${CLI}" ]]; then
   "${ROOT}/scripts/build.sh"
 fi
 
-rm -rf "${STORAGE_ROOT}"
-mkdir -p "${STORAGE_ROOT}" "$(dirname "${OUTPUT}")"
+mkdir -p "$(dirname "${OUTPUT}")"
 
 subjects=()
 for file in "${CSV_FILES[@]}"; do
@@ -107,44 +92,24 @@ for file in "${CSV_FILES[@]}"; do
   subjects+=("${symbol}")
 
   echo "==> import ${file}"
-  if [[ "${REMOTE_MODE}" -eq 1 ]]; then
-    "${CLI}" data csv import \
-      --storage-url "${STORAGE_URL}" \
-      --space "${SPACE}" \
-      --data-source "${DATA_SOURCE}" \
-      --dataset "${DATASET}" \
-      --subject "${symbol}" \
-      --freq "${FREQ}" \
-      --file "${file}"
-  else
-    "${CLI}" data csv import \
-      --storage-root "${STORAGE_ROOT}" \
-      --space "${SPACE}" \
-      --dataset "${DATASET}" \
-      --subject "${symbol}" \
-      --freq "${FREQ}" \
-      --file "${file}"
-  fi
+  "${CLI}" data csv import \
+    --storage-url "${STORAGE_URL}" \
+    --space "${SPACE}" \
+    --data-source "${DATA_SOURCE}" \
+    --dataset "${DATASET}" \
+    --subject "${symbol}" \
+    --freq "${FREQ}" \
+    --file "${file}"
 done
 
 echo "==> export readback ${OUTPUT}"
-if [[ "${REMOTE_MODE}" -eq 1 ]]; then
-  "${CLI}" data rows export \
-    --storage-url "${STORAGE_URL}" \
-    --space "${SPACE}" \
-    --dataset "${DATASET}" \
-    --freq "${FREQ}" \
-    --page-size "${PAGE_SIZE}" \
-    --output "${OUTPUT}"
-else
-  "${CLI}" data rows export \
-    --storage-root "${STORAGE_ROOT}" \
-    --space "${SPACE}" \
-    --dataset "${DATASET}" \
-    --freq "${FREQ}" \
-    --page-size "${PAGE_SIZE}" \
-    --output "${OUTPUT}"
-fi
+"${CLI}" data rows export \
+  --storage-url "${STORAGE_URL}" \
+  --space "${SPACE}" \
+  --dataset "${DATASET}" \
+  --freq "${FREQ}" \
+  --page-size "${PAGE_SIZE}" \
+  --output "${OUTPUT}"
 
 for subject in "${subjects[@]}"; do
   if ! grep -q "${subject}" "${OUTPUT}"; then
@@ -154,9 +119,5 @@ for subject in "${subjects[@]}"; do
 done
 
 echo "==> acceptance passed"
-if [[ "${REMOTE_MODE}" -eq 1 ]]; then
-  echo "storage url: ${STORAGE_URL}"
-else
-  echo "storage root: ${STORAGE_ROOT}"
-fi
+echo "storage url: ${STORAGE_URL}"
 echo "readback: ${OUTPUT}"

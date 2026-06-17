@@ -82,9 +82,33 @@ func TestStorageMetadataSchemaMatchesCurrentConcepts(t *testing.T) {
 	require.NotContains(t, schema, "idx_t_storage_routes_device")
 }
 
+func TestSQLTableDefinitionsLiveUnderStorageSchema(t *testing.T) {
+	storageRoot := moduleRoot(t)
+	repoRoot := filepath.Dir(filepath.Dir(storageRoot))
+	err := filepath.WalkDir(repoRoot, func(path string, entry os.DirEntry, err error) error {
+		require.NoError(t, err)
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "bin", "release", "var":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".sql" {
+			return nil
+		}
+		rel, err := filepath.Rel(repoRoot, path)
+		require.NoError(t, err)
+		require.True(t, strings.HasPrefix(filepath.ToSlash(rel), "modules/storage/schema/"), rel)
+		return nil
+	})
+	require.NoError(t, err)
+}
+
 func readStorageMetadataSchema(t *testing.T) string {
 	t.Helper()
-	root := filepath.Dir(filepath.Dir(moduleRoot(t)))
+	root := moduleRoot(t)
+	require.NoFileExists(t, filepath.Join(filepath.Dir(filepath.Dir(root)), "schema", "storage_metadata.sql"))
 	data, err := os.ReadFile(filepath.Join(root, "schema", "storage_metadata.sql"))
 	require.NoError(t, err)
 	return strings.ReplaceAll(string(data), "\r\n", "\n")

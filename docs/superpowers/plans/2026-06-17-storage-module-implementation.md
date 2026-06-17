@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将 `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage` 落地为新的量化数据存储模块：按 `DataSet` 写入和读取事实数据，按 `View` 查询异步物化结果，底层由 `StorageNode`/adapter 编排 Pebble、DuckDB、Bleve 和 Parquet。
+**Goal:** 将 `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage` 落地为新的量化数据存储模块：所有数据访问先进入 Access Service，Access 按语义转发到 PrimaryStore、Search、View 和 Archive 等可独立部署的内部服务。
 
-**Architecture:** `moox-storage` 是接入层，负责 PB 协议、元数据校验、路由和查询入口；`StorageNode` 是 adapter 存储代理节点，包裹底层 `Device`。Pebble 是在线事实主存，DuckDB、Bleve、Parquet 都从 Pebble 主存变更异步派生，用户不感知底层设备细节。
+**Architecture:** Access Service 是唯一公开数据访问入口，负责 PB 协议、元数据校验、PrimaryRoute 解析和请求转发。PrimaryStore Service 使用 Pebble 承载在线事实主存，并可按 Subject 水平切分。Search Service 使用 Bleve 承载集中式搜索索引。View Service 使用 DuckDB 承载异步物化结果。Archive Service 使用 Parquet 承载事实冷备。用户不感知底层设备细节。
 
 **Tech Stack:** Go 1.24、tRPC-Go、Protocol Buffers、SQLite、Pebble、DuckDB、Bleve、Parquet、NATS、YAML、Makefile、shell scripts。
 
@@ -31,8 +31,8 @@
 
 **元数据表：**
 
-- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/schema/storage_metadata.sql`
-- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/schema/admin_console.sql`
+- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/storage_metadata.sql`
+- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/admin_console.sql`
 
 **协议：**
 
@@ -40,7 +40,7 @@
 - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/proto/metadata.proto`
 - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/proto/data.proto`
 - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/proto/query.proto`
-- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/proto/adapter.proto`
+- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/proto/primary.proto`
 - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/proto/message.proto`
 
 **旧 xData 参考：**
@@ -53,41 +53,52 @@
 /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage
 ├── cmd/moox-storage
 ├── config
-├── internal/services
-│   ├── adapter
-│   ├── archive
-│   ├── changefeed
-│   ├── common/config
-│   ├── device
-│   │   ├── bleve
-│   │   ├── duckdb
-│   │   ├── parquet
-│   │   └── pebble
-│   ├── viewbuilder
-│   ├── metadata
-│   │   └── sqlite
-│   ├── router
-│   ├── schema
-│   └── storage
-├── pkg/quantstore
+├── internal
+│   ├── config
+│   ├── core
+│   │   ├── eventbus
+│   │   ├── metadata
+│   │   ├── router
+│   │   └── schema
+│   ├── infra
+│   │   ├── device
+│   │   │   ├── bleve
+│   │   │   ├── duckdb
+│   │   │   ├── parquet
+│   │   │   └── pebble
+│   │   ├── eventbus
+│   │   ├── metadata
+│   │   │   └── sqlite
+│   │   └── transport
+│   │       └── nats
+│   └── services
+│       ├── access
+│       ├── primary
+│       ├── search
+│       ├── view
+│       └── archive
 └── proto
 ```
 
 职责边界：
 
-- `storage`: tRPC service handler，组合元数据、校验器、路由器、adapter、查询器。
-- `metadata/sqlite`: `schema/storage_metadata.sql` 的 SQLite 持久化实现。
-- `schema`: 写入契约校验，校验 DataSet、DataSetColumn、类型、必填列。
-- `router`: 根据 `StorageRoute` 把在线事实主存路由到 `StorageNode`。
-- `adapter`: 接入层到 adapter 服务的客户端抽象，以及单进程本地 adapter。
-- `device/pebble`: 在线事实主存。
-- `device/duckdb`: View 物化结果存储和查询。
-- `device/bleve`: 文本索引。
-- `device/parquet`: 从 Pebble 事实归档生成 Parquet。
-- `changefeed`: 写入 Pebble 后发布 `DataRowsChangedEvent`。
-- `viewbuilder`: 根据 View 元数据从 Pebble 回扫并构建 DuckDB 物化结果。
-- `archive`: 从 Pebble 读取事实数据并登记 `ArchiveFile`。
-- `pkg/quantstore`: 保留返回值、TypedValue 和少量可复用工具，不再作为 JSONL 主存。
+- `services/access`: 唯一公开数据访问入口，组合元数据、校验器、PrimaryRoute、PrimaryStore/Search/View/Archive client 和查询转发。
+- `services/primary`: PrimaryStore Service，负责 Pebble 在线事实主存读写，可多实例部署。
+- `services/search`: Search Service，根据主存变更维护 Bleve 集中式索引，并执行 `SearchRows`。
+- `services/view`: View Service，根据 View 元数据构建 DuckDB 物化结果，并执行 `QueryView`。
+- `services/archive`: Archive Service，从 Pebble 事实数据归档 Parquet 并登记 `ArchiveFile`。
+- `core/metadata`: 元数据存储接口。
+- `core/schema`: 写入契约校验，校验 DataSet、DataSetColumn、类型、必填列。
+- `core/router`: 根据 PrimaryRoute 把在线事实主存路由到 PrimaryNode。当前协议和表结构仍使用 StorageRoute/StorageNode 旧名。
+- `core/eventbus`: 写入 Pebble 后发布 `DataRowsChangedEvent` 等 storage 领域事件。
+- `infra/metadata/sqlite`: `modules/storage/schema/storage_metadata.sql` 的 SQLite 持久化实现。
+- `infra/device/pebble`: 在线事实主存。
+- `infra/device/duckdb`: View 物化结果存储和查询。
+- `infra/device/bleve`: 文本索引。
+- `infra/device/parquet`: 从 Pebble 事实归档生成 Parquet。
+- `infra/eventbus`: 把底层 transport producer 适配为业务 `eventbus.Bus`。
+- `infra/transport`: NATS 等底层消息传输实现，供 eventbus 的具体实现复用。
+- `internal/config`: moox-storage 运行配置加载。
 
 ## 3. 核心概念验收
 
@@ -103,8 +114,10 @@
 - `DataSetColumn.text_indexed` 控制是否同步到 Bleve。
 - `View` 是查询入口和物化结果定义；创建时确定 `primary_dataset_id`。
 - `QueryView` 只查询已有 View 的 `active_result`；没有可用结果返回 `VIEW_NOT_FOUND`。
-- `StorageRoute` 只路由在线主存到 `StorageNode`，不直接路由到 `Device`。
-- `StorageNode` 是 adapter 存储代理节点，`Device` 是底层实际存储组件。
+- PrimaryRoute 只记录在线事实主存到 PrimaryNode 的水平切分；当前协议和表结构仍使用 StorageRoute/StorageNode 旧名。
+- PrimaryNode 是 PrimaryStore Service 节点；Device 是底层实际存储组件。
+- SearchRows 查询 Search Service 的集中式索引，不走 PrimaryRoute。
+- QueryView 查询 View Service 的物化结果，不走 PrimaryRoute。
 
 ---
 
@@ -232,10 +245,10 @@
 
 **Files:**
 
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/metadata/store.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/metadata/sqlite/store.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/metadata/sqlite/crud.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/metadata/sqlite/store_test.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/core/metadata/store.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite/store.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite/crud.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite/store_test.go`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/go.mod`
 
 - [ ] **Step 2.1: 写 schema 初始化测试**
@@ -246,7 +259,7 @@
   func TestStoreInitializesStorageMetadataSchema(t *testing.T) {
       ctx := context.Background()
       dbPath := filepath.Join(t.TempDir(), "storage_metadata.db")
-      schemaPath := "/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/schema/storage_metadata.sql"
+      schemaPath := "/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/storage_metadata.sql"
 
       store, err := sqlite.Open(ctx, sqlite.Options{Path: dbPath, SchemaPath: schemaPath})
       require.NoError(t, err)
@@ -279,9 +292,9 @@
   DataSetColumn
   View
   ViewColumn
-  StorageNode
+  PrimaryNode
   Device
-  StorageRoute
+  PrimaryRoute
   ArchiveFile
   ```
 
@@ -326,12 +339,12 @@
       UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.ViewColumn, error)
       ListViewColumns(ctx context.Context, spaceID string, viewID string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error)
 
-      UpsertStorageNode(ctx context.Context, item *pb.StorageNode) (*pb.StorageNode, error)
-      GetStorageNode(ctx context.Context, nodeID string) (*pb.StorageNode, error)
+      UpsertPrimaryNode(ctx context.Context, item *pb.PrimaryNode) (*pb.PrimaryNode, error)
+      GetPrimaryNode(ctx context.Context, nodeID string) (*pb.PrimaryNode, error)
       UpsertDevice(ctx context.Context, item *pb.Device) (*pb.Device, error)
       ListDevices(ctx context.Context, nodeID string, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error)
-      UpsertStorageRoute(ctx context.Context, item *pb.StorageRoute) (*pb.StorageRoute, error)
-      ListStorageRoutes(ctx context.Context, spaceID string, datasetID string, subjectID string, nodeID string, page *pb.Page) ([]*pb.StorageRoute, *pb.PageResult, error)
+      UpsertPrimaryRoute(ctx context.Context, item *pb.PrimaryRoute) (*pb.PrimaryRoute, error)
+      ListPrimaryRoutes(ctx context.Context, spaceID string, datasetID string, subjectID string, nodeID string, page *pb.Page) ([]*pb.PrimaryRoute, *pb.PageResult, error)
 
       RegisterArchiveFile(ctx context.Context, item *pb.ArchiveFile) (*pb.ArchiveFile, error)
       ListArchiveFiles(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error)
@@ -343,7 +356,7 @@
   Run:
 
   ```bash
-  go test ./modules/storage/internal/services/metadata/... -count=1
+  go test ./modules/storage/internal/core/metadata/... -count=1
   ```
 
   Expected: PASS。
@@ -353,7 +366,7 @@
   Run:
 
   ```bash
-  git add modules/storage/internal/services/metadata modules/storage/go.mod modules/storage/go.sum
+  git add modules/storage/internal/core/metadata modules/storage/go.mod modules/storage/go.sum
   git commit -m "feat(storage): add sqlite metadata store"
   ```
 
@@ -363,9 +376,9 @@
 
 **Files:**
 
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/schema/validator.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/schema/validator_test.go`
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/storage/data.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/core/schema/validator.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/core/schema/validator_test.go`
+- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/access/data.go`
 
 - [ ] **Step 3.1: 写失败测试**
 
@@ -397,7 +410,7 @@
   validate request
   validate schema
   resolve route
-  write through adapter
+  write through PrimaryStore
   publish change event
   return ret_info only
   ```
@@ -407,8 +420,8 @@
   Run:
 
   ```bash
-  go test ./modules/storage/internal/services/schema ./modules/storage/internal/services/storage -run 'Test.*WriteRows|Test.*Validator' -count=1
-  git add modules/storage/internal/services/schema modules/storage/internal/services/storage
+  go test ./modules/storage/internal/core/schema ./modules/storage/internal/services/access -run 'Test.*WriteRows|Test.*Validator' -count=1
+  git add modules/storage/internal/core/schema modules/storage/internal/services/access
   git commit -m "feat(storage): validate dataset write contracts"
   ```
 
@@ -418,11 +431,11 @@
 
 **Files:**
 
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/device/store.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/device/pebble/key.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/device/pebble/store.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/device/pebble/store_test.go`
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/pkg/quantstore/store.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/device/store.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/device/pebble/key.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/device/pebble/store.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/device/pebble/store_test.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/primary/local.go`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/go.mod`
 
 - [ ] **Step 4.1: 写 Pebble 主存测试**
@@ -449,32 +462,31 @@
 
 - [ ] **Step 4.3: 删除 JSONL 主存**
 
-  `pkg/quantstore.Store` 不再写 `facts/*.jsonl`。如果保留 `quantstore.Store`，它应包装 Pebble 或只保留 helper。
+  在线主存不再写 `facts/*.jsonl`，也不再暴露公开存储 helper 包。主存访问收敛到 `services/primary`，底层通过 Pebble device 实现。
 
 - [ ] **Step 4.4: 跑测试并提交**
 
   Run:
 
   ```bash
-  go test ./modules/storage/internal/services/device/pebble ./modules/storage/pkg/quantstore -count=1
+  go test ./modules/storage/internal/infra/device/pebble ./modules/storage/internal/services/primary -count=1
   go test ./modules/storage/internal/services -run TestStorageProtocolUsesCanonicalSurface -count=1
-  git add modules/storage/internal/services/device modules/storage/pkg/quantstore modules/storage/go.mod modules/storage/go.sum
+  git add modules/storage/internal/infra/device modules/storage/internal/services/primary modules/storage/go.mod modules/storage/go.sum
   git commit -m "feat(storage): use pebble as fact store"
   ```
 
 ---
 
-## Task 5: StorageRoute 与 adapter 写入链路
+## Task 5: PrimaryRoute 与 PrimaryStore 写入链路
 
 **Files:**
 
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/router/resolver.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/router/resolver_test.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/adapter/client.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/adapter/local.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/adapter/local_test.go`
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/storage/adapter.go`
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/storage/data.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/core/router/resolver.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/core/router/resolver_test.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/primary/client.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/primary/service.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/primary/service_test.go`
+- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/access/data.go`
 
 - [ ] **Step 5.1: 写路由测试**
 
@@ -490,50 +502,52 @@
 
 - [ ] **Step 5.2: 实现 Resolver**
 
-  Resolver 只返回 `StorageNode` 和 route，不直接返回 Device。Device 选择由 adapter 节点内部完成。
+  PrimaryRoute 元数据只绑定到 PrimaryNode。当前协议和表结构仍使用 StorageRoute/StorageNode 旧名。Resolver 先按 subject 精确、subject pattern、dataset 默认路由选择 PrimaryNode，再生成内部路由结果。
 
-- [ ] **Step 5.3: 实现 adapter.Client**
+- [ ] **Step 5.3: 实现 PrimaryStore client**
 
   接口：
 
   ```go
   type Client interface {
-      WriteRows(ctx context.Context, node *pb.StorageNode, route *pb.StorageRoute, req *pb.WriteDeviceRowsReq) (*pb.WriteDeviceRowsRsp, error)
-      ReadRows(ctx context.Context, node *pb.StorageNode, route *pb.StorageRoute, req *pb.ReadDeviceRowsReq) (*pb.ReadDeviceRowsRsp, error)
+      WriteRows(ctx context.Context, target *PrimaryTarget, rows []*pb.DataRow, mode pb.WriteMode) error
+      ReadRows(ctx context.Context, target *PrimaryTarget, req *pb.ReadRowsReq) ([]*pb.DataRow, *pb.PageResult, error)
   }
   ```
 
-- [ ] **Step 5.4: 实现 LocalAdapter**
+- [ ] **Step 5.4: 实现本地 PrimaryStore**
 
   单进程模式用于本地测试和个人部署：
 
   ```text
-  StorageNode -> 找到 node 下 engine=pebble 的 Device -> 写入 Pebble
+  PrimaryNode -> 找到 node 下 engine=pebble 的 Device -> 写入 Pebble
   ```
 
-- [ ] **Step 5.5: WriteRows 接入 adapter**
+- [ ] **Step 5.5: WriteRows 接入 PrimaryStore**
 
-  `storage.WriteRows` 按路由分组，分别调用 adapter。成功后不返回 affected/change，只返回 `ret_info`。
+  `storage.WriteRows` 按 PrimaryRoute 分组，分别调用 PrimaryStore。成功后不返回 affected/change，只返回 `ret_info`。
 
 - [ ] **Step 5.6: 跑测试并提交**
 
   Run:
 
   ```bash
-  go test ./modules/storage/internal/services/router ./modules/storage/internal/services/adapter ./modules/storage/internal/services/storage -run 'Test.*Route|Test.*Adapter|Test.*WriteRows' -count=1
-  git add modules/storage/internal/services/router modules/storage/internal/services/adapter modules/storage/internal/services/storage
-  git commit -m "feat(storage): route writes through storage nodes"
+  go test ./modules/storage/internal/core/router ./modules/storage/internal/services/primary ./modules/storage/internal/services/access -run 'Test.*Route|Test.*Primary|Test.*WriteRows' -count=1
+  git add modules/storage/internal/core/router modules/storage/internal/services/primary modules/storage/internal/services/access
+  git commit -m "feat(storage): route writes through primary store"
   ```
 
 ---
 
-## Task 6: Changefeed 事件发布
+## Task 6: EventBus 事件发布
 
 **Files:**
 
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/changefeed/publisher.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/changefeed/publisher_test.go`
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/storage/data.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/core/eventbus/bus.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/core/eventbus/bus_test.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/transport/producer.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/transport/nats/producer.go`
+- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/access/data.go`
 - Check: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/proto/message.proto`
 
 - [ ] **Step 6.1: 写事件测试**
@@ -547,9 +561,9 @@
   event_time 非空
   ```
 
-- [ ] **Step 6.2: 实现 Publisher 抽象**
+- [ ] **Step 6.2: 实现 EventBus 抽象**
 
-  支持内存 publisher 和 NATS publisher。单元测试使用内存 publisher。
+  上层使用 `eventbus.Bus`，底层消息传输使用 `transport.Producer`。单元测试使用 `eventbus.MemoryBus`。
 
 - [ ] **Step 6.3: WriteRows 成功后发布事件**
 
@@ -566,8 +580,8 @@
   Run:
 
   ```bash
-  go test ./modules/storage/internal/services/changefeed ./modules/storage/internal/services/storage -run 'Test.*Change|Test.*WriteRows' -count=1
-  git add modules/storage/internal/services/changefeed modules/storage/internal/services/storage
+  go test ./modules/storage/internal/core/eventbus ./modules/storage/internal/infra/transport ./modules/storage/internal/services/access -run 'Test.*Event|Test.*WriteRows' -count=1
+  git add modules/storage/internal/core/eventbus modules/storage/internal/infra/transport modules/storage/internal/services/access
   git commit -m "feat(storage): publish fact row change events"
   ```
 
@@ -577,10 +591,10 @@
 
 **Files:**
 
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/device/bleve/index.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/device/bleve/index_test.go`
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/storage/data.go`
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/storage/query.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/device/bleve/index.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/device/bleve/index_test.go`
+- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/access/data.go`
+- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/access/query.go`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/go.mod`
 
 - [ ] **Step 7.1: 写 Bleve 测试**
@@ -639,8 +653,8 @@
   Run:
 
   ```bash
-  go test ./modules/storage/internal/services/device/bleve ./modules/storage/internal/services/storage -run 'Test.*Search|Test.*Bleve' -count=1
-  git add modules/storage/internal/services/device/bleve modules/storage/internal/services/storage modules/storage/go.mod modules/storage/go.sum
+  go test ./modules/storage/internal/infra/device/bleve ./modules/storage/internal/services/access -run 'Test.*Search|Test.*Bleve' -count=1
+  git add modules/storage/internal/infra/device/bleve modules/storage/internal/services/access modules/storage/go.mod modules/storage/go.sum
   git commit -m "feat(storage): search rows with bleve index"
   ```
 
@@ -650,12 +664,12 @@
 
 **Files:**
 
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/device/duckdb/view_store.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/device/duckdb/view_store_fallback.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/device/duckdb/view_store_test.go`
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/storage/query.go`
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/storage/service.go`
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/storage/service_test.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb/view_store.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb/view_store_fallback.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb/view_store_test.go`
+- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/access/query.go`
+- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/access/service.go`
+- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/access/service_test.go`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/go.mod`
 
 - [ ] **Step 8.1: 写 View 未物化测试**
@@ -713,10 +727,10 @@
   Run:
 
   ```bash
-  go test ./modules/storage/internal/services/device/duckdb -count=1
-  CGO_ENABLED=1 go test ./modules/storage/internal/services/device/duckdb -count=1
-  go test ./modules/storage/internal/services/storage -run TestQueryView -count=1
-  git add modules/storage/internal/services/device/duckdb modules/storage/internal/services/storage modules/storage/go.mod modules/storage/go.sum
+  go test ./modules/storage/internal/infra/device/duckdb -count=1
+  CGO_ENABLED=1 go test ./modules/storage/internal/infra/device/duckdb -count=1
+  go test ./modules/storage/internal/services/access -run TestQueryView -count=1
+  git add modules/storage/internal/infra/device/duckdb modules/storage/internal/services/access modules/storage/go.mod modules/storage/go.sum
   git commit -m "feat(storage): query viewbuilder duckdb views"
   ```
 
@@ -726,9 +740,9 @@
 
 **Files:**
 
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/viewbuilder/view_builder.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/viewbuilder/view_builder_test.go`
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/storage/service.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/view/view_builder.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/view/view_builder_test.go`
+- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/access/service.go`
 
 - [ ] **Step 9.1: 写构建器测试**
 
@@ -769,8 +783,8 @@
   当前阶段至少提供可调用的 Go 方法；若已有 worker 框架，则注册：
 
   ```text
-  viewbuilder.BuildView(space_id, view_id)
-  viewbuilder.RebuildPendingViews()
+  view.BuildView(space_id, view_id)
+  view.RebuildPendingViews()
   ```
 
 - [ ] **Step 9.5: 跑测试并提交**
@@ -778,8 +792,8 @@
   Run:
 
   ```bash
-  go test ./modules/storage/internal/services/viewbuilder ./modules/storage/internal/services/storage -run 'Test.*ViewBuilder|TestQueryView' -count=1
-  git add modules/storage/internal/services/viewbuilder modules/storage/internal/services/storage
+  go test ./modules/storage/internal/services/view ./modules/storage/internal/services/access -run 'Test.*ViewBuilder|TestQueryView' -count=1
+  git add modules/storage/internal/services/view modules/storage/internal/services/access
   git commit -m "feat(storage): build views from pebble facts"
   ```
 
@@ -789,8 +803,8 @@
 
 **Files:**
 
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/device/parquet/archive.go`
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/device/parquet/archive_test.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/device/parquet/archive.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/device/parquet/archive_test.go`
 - Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/archive/service.go`
 - Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/archive/service_test.go`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/go.mod`
@@ -845,8 +859,8 @@
   Run:
 
   ```bash
-  go test ./modules/storage/internal/services/device/parquet ./modules/storage/internal/services/archive -count=1
-  git add modules/storage/internal/services/device/parquet modules/storage/internal/services/archive modules/storage/go.mod modules/storage/go.sum
+  go test ./modules/storage/internal/infra/device/parquet ./modules/storage/internal/services/archive -count=1
+  git add modules/storage/internal/infra/device/parquet modules/storage/internal/services/archive modules/storage/go.mod modules/storage/go.sum
   git commit -m "feat(storage): archive pebble facts to parquet"
   ```
 
@@ -856,8 +870,8 @@
 
 **Files:**
 
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/common/config/loader.go`
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/common/config/loader_test.go`
+- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/config/loader.go`
+- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/config/loader_test.go`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/cmd/moox-storage/main.go`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/config/trpc_go.yaml`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/build.sh`
@@ -874,13 +888,12 @@
     root: ./var/storage
     metadata:
       path: ./var/storage/metadata/storage_metadata.db
-      schema_path: ../../schema/storage_metadata.sql
     devices:
       pebble_path: ./var/storage/pebble
       duckdb_path: ./var/storage/duckdb/views.duckdb
       bleve_path: ./var/storage/bleve
       parquet_path: ./var/storage/archive
-    changefeed:
+    eventbus:
       type: memory
       nats_url: ""
   ```
@@ -892,8 +905,8 @@
   ```text
   读取配置
   初始化 SQLite metadata
-  初始化 local adapter 和设备目录
-  注册 DataService/QueryService/MetadataService/AdapterService
+  初始化本地 PrimaryStore 和设备目录
+  注册 DataService/QueryService/MetadataService/PrimaryStoreService
   ```
 
 - [ ] **Step 11.3: 脚本统一到 scripts**
@@ -905,9 +918,9 @@
   Run:
 
   ```bash
-  go test ./modules/storage/internal/services/common/config ./modules/storage/cmd/moox-storage/... -count=1
+  go test ./modules/storage/internal/config ./modules/storage/cmd/moox-storage/... -count=1
   bash scripts/build.sh storage
-  git add modules/storage/internal/services/common/config modules/storage/cmd/moox-storage modules/storage/config scripts
+  git add modules/storage/internal/config modules/storage/cmd/moox-storage modules/storage/config scripts
   git commit -m "feat(storage): wire storage configuration and scripts"
   ```
 
@@ -917,7 +930,7 @@
 
 **Files:**
 
-- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/storage/acceptance_test.go`
+- Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/services/access/acceptance_test.go`
 - Create/Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/scripts/acceptance.sh`
 
 - [ ] **Step 12.1: 写 Go 端到端测试**
@@ -930,7 +943,7 @@
   创建 Subject 和 SubjectSymbol
   创建 DataSet，绑定 Subject
   创建 Field 和 DataSetColumn
-  创建 StorageNode、Device、StorageRoute
+  创建 PrimaryNode、Device、PrimaryRoute
   WriteRows 写入 K 线
   ReadRows 读回 K 线
   SearchRows 搜索 text_indexed 列
@@ -960,7 +973,7 @@
   Run:
 
   ```bash
-  go test ./modules/storage/internal/services/storage -run TestStorageAcceptance -count=1
+  go test ./modules/storage/internal/services/access -run TestStorageAcceptance -count=1
   bash scripts/acceptance.sh \
     --local \
     --space crypto_acceptance \
@@ -982,7 +995,7 @@
   Run:
 
   ```bash
-  git add modules/storage/internal/services/storage/acceptance_test.go scripts/acceptance.sh
+  git add modules/storage/internal/services/access/acceptance_test.go scripts/acceptance.sh
   git commit -m "test(storage): add end-to-end acceptance flow"
   ```
 
@@ -1113,7 +1126,7 @@
   rg -n "RocksDB|StorageEntity|object_id|DataView|\\.jsonl|CSVImportOptions" \
     /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage \
     /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/docs \
-    /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/schema
+    /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema
   ```
 
   Expected: 无命中，或只命中文档中明确说明“已废弃”的历史说明。storage 实现代码不得命中。
@@ -1122,8 +1135,10 @@
 
   确保文档说明：
 
-  - `StorageNode` 是 adapter 存储代理节点。
+  - `Access` 是唯一公开数据访问入口。
+  - `PrimaryNode` 是 PrimaryStore 节点；当前协议和表结构仍使用 StorageNode 旧名时，要注明目标语义。
   - `Device` 是底层具体存储组件。
+  - `SearchRows` 查询 Search Service 的集中式索引，不走 PrimaryRoute。
   - `View` 不暴露底层物理表细节。
   - `QueryView` 只查询 `active_result`。
   - Parquet 冷备只从 Pebble 事实归档。
@@ -1161,7 +1176,7 @@
 - `go work` 保持 `go 1.24.0`。
 - storage 源码不再依赖 JSONL/CSV 主存、RocksDB、旧 `StorageEntity`、旧 `DataView`、旧 `object_id`。
 - SQLite 元数据覆盖所有当前表。
-- 写入链路按 `DataSet` 校验并通过 `StorageRoute -> StorageNode -> adapter -> Pebble` 写入。
+- 写入链路按 `DataSet` 校验并通过 `PrimaryRoute -> PrimaryStore -> Pebble` 写入。
 - `ReadRows` 能按 DataSet 读回 Pebble facts。
 - `SearchRows` 能按 DataSet 做 Bleve 全文和结构化搜索。
 - `QueryView` 只读取已有 View 的物化结果；未构建返回 `VIEW_NOT_FOUND`。

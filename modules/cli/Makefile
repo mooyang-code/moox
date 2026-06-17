@@ -13,7 +13,7 @@ GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DIR=./bin
 RELEASE_DIR=./release
 CONFIG_DIR=./config
-SCHEMA_DIR=./schema
+SCHEMA_DIR=../storage/schema
 
 # Build flags
 LDFLAGS=-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)

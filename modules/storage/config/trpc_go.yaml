@@ -6,15 +6,18 @@ storage:
   root: ./var/storage
   metadata:
     path: ./var/storage/metadata/storage_metadata.db
-    schema_path: ../../schema/storage_metadata.sql
   devices:
     pebble_path: ./var/storage/pebble
     duckdb_path: ./var/storage/duckdb/views.duckdb
     bleve_path: ./var/storage/bleve
     parquet_path: ./var/storage/archive
-  changefeed:
+  primary:
+    service_name: trpc.storage.primary.PrimaryStoreService
+  eventbus:
     type: memory
     nats_url: ""
+    stream_name: MOOX_STORAGE
+    rows_changed_subject: storage.rows.changed
 
 server:
   filter:
@@ -36,7 +39,7 @@ server:
       port: 18202
       network: tcp
       protocol: trpc
-    - name: trpc.storage.adapter.Adapter
+    - name: trpc.storage.primary.PrimaryStoreService
       #ip: 0.0.0.0
       port: 18101
       network: tcp # 注意：若是多机分布式部署，此处应改为tcp（单机也可设置tcp，只是unix域套接字本机通信效率更高）
@@ -46,7 +49,7 @@ server:
       port: 18001
       network: tcp
       protocol: trpc
-    - name: trpc.storage.viewbuilder.timer
+    - name: trpc.storage.view.timer
       port: 18009
       network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params="
       protocol: timer
@@ -72,7 +75,7 @@ client:
   filter:
     - validation
   service:
-    - name: trpc.storage.adapter.Adapter
+    - name: trpc.storage.primary.PrimaryStoreService
       target: ip://127.0.0.1:18101
       network: tcp
       protocol: trpc

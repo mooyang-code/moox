@@ -55,12 +55,11 @@ moox/
 │   └── account/
 ├── web/
 ├── configs/
-├── schema/
 ├── deployments/
 └── var/
 ```
 
-`modules/` 的好处是边界清楚：根目录放跨模块资产，业务代码统一进入 modules。
+`modules/` 的好处是边界清楚：根目录放跨模块资产，业务代码统一进入 modules。storage 相关 SQL 表定义统一放在 `modules/storage/schema/`。
 
 ### cmd 命名
 

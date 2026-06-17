@@ -2,7 +2,7 @@
 
 本文记录 moox 量化数据存储系统的目标架构、核心概念、数据流和元数据表设计。它以旧 xData 的简单分层为基础，保留数据集、数据对象、字段契约和存储路由，同时删掉过早的治理表。
 
-本文是目标设计。`schema/storage_metadata.sql` 和 storage proto 应按本文保持一致。
+本文是目标设计。`modules/storage/schema/storage_metadata.sql` 和 storage proto 应按本文保持一致。
 
 如果是第一次阅读本系统，建议先读 `docs/storage-concepts-and-design-intent.md`。该文档解释 Space、DataSource、Subject、DataSet、Field、Factor、View 等概念的边界，以及这些取舍背后的设计意图。
 
@@ -19,7 +19,10 @@
 - `Field` 是 Space 内普通字段字典，可被多个 DataSet 选用。
 - `Factor` 是 Space 内、已参数化的因子结果定义，可被多个 DataSet 选用。
 - Pebble 是在线事实主存。DuckDB、Bleve 和 Parquet 都从 Pebble 主存变更异步派生。
-- `StorageRoute` 只负责 Pebble 在线主存的水平切分，并路由到 StorageNode，不直接绑定 Device。
+- `core/eventbus` 承载 storage 领域事件，`infra/transport` 承载 NATS 等底层消息传输实现，`infra/eventbus` 将底层 producer 适配成业务事件总线，业务层不直接依赖具体消息组件。
+- 所有用户侧和业务侧数据访问都必须先进入 Access Service。Collector、FactorCalculator、管理台和 CLI 不直接访问 PrimaryStore、Search、View、Archive 或底层设备。
+- `PrimaryRoute` 只负责 Pebble 在线事实主存的水平切分，并路由到 PrimaryStore Service 节点。当前协议和表名仍有 `StorageRoute` / `StorageNode`，后续应重命名为 `PrimaryRoute` / `PrimaryNode`。
+- 不再使用旧的存储代理服务名作为业务服务名。底层实现统一称为 Device 或设备驱动，例如 Pebble、DuckDB、Bleve 和 Parquet 的具体实现。
 - Parquet 冷备只从 Pebble 做事实归档，不从 DuckDB 宽表归档。
 - DuckDB 保存近期宽表查询缓存，不保存常驻 long 表。
 - 用户请求不存在的字段组合时，服务直接返回 `VIEW_NOT_FOUND`，不在线动态 pivot/join。
@@ -46,16 +49,16 @@ flowchart TD
         SA["SubjectSymbol"]
     end
 
-    subgraph Access["moox-storage 接入层"]
+    subgraph Access["Access Service<br/>唯一公开数据访问入口"]
         API["API Handler"]
         VAL["Schema Validator"]
-        R["HotStore Router<br/>只路由在线主存"]
+        R["PrimaryRoute Resolver<br/>只路由在线事实主存"]
     end
 
-    subgraph Adapter["Adapter 服务，可多实例部署"]
-        A1["adapter-1"]
-        A2["adapter-2"]
-        A3["adapter-3"]
+    subgraph PrimarySvc["PrimaryStore Service<br/>Pebble，可多实例部署"]
+        PS1["primary-store-1"]
+        PS2["primary-store-2"]
+        PS3["primary-store-3"]
     end
 
     subgraph Primary["在线事实主存"]
@@ -64,13 +67,16 @@ flowchart TD
         P3["Pebble"]
     end
 
-    subgraph Derived["异步派生层"]
-        D["DuckDB<br/>分析查询缓存"]
-        B["Bleve<br/>文本索引"]
-        P["Parquet<br/>事实冷备"]
+    subgraph DerivedSvc["异步派生服务，均可独立部署"]
+        VS["View Service<br/>DuckDB"]
+        SS["Search Service<br/>Bleve"]
+        AS["Archive Service<br/>Parquet"]
     end
 
     C --> API --> VAL --> R
+    API --> SS
+    API --> VS
+    API --> AS
     SP --> Vw --> VC
     SP --> SRC
     SP --> S
@@ -85,22 +91,51 @@ flowchart TD
     SRC --> DS
     SRC --> SA --> S
 
-    R --> A1 --> P1
-    R --> A2 --> P2
-    R --> A3 --> P3
+    R --> PS1 --> P1
+    R --> PS2 --> P2
+    R --> PS3 --> P3
 
-    P1 -. "主存变更" .-> D
-    P2 -. "主存变更" .-> D
-    P3 -. "主存变更" .-> D
+    P1 -. "主存变更" .-> VS
+    P2 -. "主存变更" .-> VS
+    P3 -. "主存变更" .-> VS
 
-    P1 -. "主存变更" .-> B
-    P2 -. "主存变更" .-> B
-    P3 -. "主存变更" .-> B
+    P1 -. "主存变更" .-> SS
+    P2 -. "主存变更" .-> SS
+    P3 -. "主存变更" .-> SS
 
-    P1 -. "事实归档" .-> P
-    P2 -. "事实归档" .-> P
-    P3 -. "事实归档" .-> P
+    P1 -. "事实归档" .-> AS
+    P2 -. "事实归档" .-> AS
+    P3 -. "事实归档" .-> AS
 ```
+
+## 模块内代码组织
+
+```text
+modules/storage/
+  schema/              # storage 相关 SQL 表定义
+    storage_metadata.sql
+    admin_console.sql
+  internal/
+  config/              # moox-storage 配置加载
+  core/                # 领域抽象和规则，不绑定具体设备
+    eventbus/
+    metadata/
+    router/
+    schema/
+  infra/               # 具体底层实现
+    device/
+    eventbus/
+    metadata/sqlite/
+    transport/
+  services/            # 可独立部署或独立调度的服务
+    access/            # 统一读写查询接入层
+    primary/           # PrimaryStore Service，Pebble 在线事实主存
+    search/            # Search Service，Bleve 全文和结构化搜索
+    view/              # View Service，DuckDB View 物化和查询
+    archive/           # Archive Service，Parquet 事实冷备
+```
+
+`services/access` 是唯一公开数据访问入口。它负责协议编排、鉴权、校验、元数据解释、PrimaryRoute 解析、请求转发和统一错误码。`services/primary`、`services/search`、`services/view` 和 `services/archive` 都是内部执行服务，可以独立部署和扩缩容。`core` 只放领域抽象，`infra` 只放 SQLite、Pebble、DuckDB、Bleve、Parquet、NATS 等具体实现。
 
 ## 核心概念
 
@@ -339,9 +374,11 @@ build_start_time = now - view.c_query_window
 build_end_time = now
 ```
 
-### StorageNode
+### PrimaryNode
 
-`StorageNode` 表示存储代理节点，也就是一个 adapter 服务实例或服务组入口。它包裹一组底层 Device，对外提供统一的读写能力。moox-storage 接入层根据 StorageRoute 把在线主存写入分发到不同 StorageNode。
+`PrimaryNode` 表示 PrimaryStore Service 节点，也就是一个 Pebble 在线事实主存服务实例或服务组入口。Access Service 根据 PrimaryRoute 把事实写入和事实读取分发到不同 PrimaryNode。
+
+当前协议和元数据表仍使用 `StorageNode` 名称。它的目标语义已经收窄为 PrimaryNode，后续协议和表结构重命名时应一并清理。
 
 ### Device
 
@@ -356,13 +393,15 @@ Bleve
 ParquetArchive
 ```
 
-Device 可以挂在某个 StorageNode 下。StorageRoute 只路由到在线主存对应的 StorageNode；具体 Pebble 设备由 adapter 内部配置或设备清单决定。DuckDB、Bleve 和 Parquet 设备由异步派生任务使用。
+Device 可以挂在某个内部服务节点下。PrimaryStore Service 只使用 Pebble Device；View Service 使用 DuckDB Device；Search Service 使用 Bleve Device；Archive Service 使用 Parquet Device。普通调用方不感知 Device。
 
-### StorageRoute
+### PrimaryRoute
 
-`StorageRoute` 只负责在线主存水平切分。
+`PrimaryRoute` 只负责在线事实主存水平切分。
 
 它不表示字段级垂直切分，也不表示 DuckDB、Bleve 或 Parquet 的派生路径。派生路径统一来自 Pebble 主存变更。
+
+当前协议和元数据表仍使用 `StorageRoute` 名称。它的目标语义已经收窄为 PrimaryRoute，后续协议和表结构重命名时应一并清理。
 
 常见路由策略：
 
@@ -406,18 +445,18 @@ ingest_time
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant S as moox-storage
+    participant S as Access
     participant M as Metadata
-    participant A as Adapter
+    participant PSS as PrimaryStore
     participant P as Pebble
 
-    C->>S: Write(dataset_id, subject_id, columns)
-    S->>M: 解析 DataSetColumn / StorageRoute
-    M-->>S: 列契约和在线主存路由
-    S->>A: 写入目标 adapter
-    A->>P: 写 Pebble
-    P-->>A: 写入成功
-    A-->>S: 返回成功
+    C->>S: WriteRows(dataset_id, subject_id, columns)
+    S->>M: 解析 DataSetColumn / PrimaryRoute
+    M-->>S: 列契约和 PrimaryNode
+    S->>PSS: WritePrimaryRows(scope, rows)
+    PSS->>P: 写 Pebble
+    P-->>PSS: 写入成功
+    PSS-->>S: 返回成功
     S-->>C: 返回成功
 ```
 
@@ -531,7 +570,7 @@ SearchRows
 
 表达式列属于 View 元数据和后台构建逻辑。`QueryViewColumn` 响应只返回列名、来源、数据集、来源 ID 和值类型，不返回表达式文本。
 
-`SearchRows` 使用 Space + DataSet 维度，支持全文检索和结构化过滤。只有 `t_dataset_columns.c_text_indexed = 1` 的列会同步到 Bleve，避免把无关字段写入全文索引，影响索引体积和查询性能。`SearchRows` 的 `filters` 和 `sorts` 用于 DataSet 内搜索，不替代跨 DataSet 的组合分析查询。
+`SearchRows` 使用 Space + DataSet 维度，查询 Search Service 中的集中式 Bleve 派生索引。Search Service 汇聚多个 PrimaryStore 节点的主存变更，查询时不走 PrimaryRoute，也不 fan-out 到 Pebble 分片。只有 `t_dataset_columns.c_text_indexed = 1` 的列会同步到 Bleve，避免把无关字段写入全文索引，影响索引体积和查询性能。`SearchRows` 的 `filters` 和 `sorts` 用于 DataSet 内搜索，不替代跨 DataSet 的组合分析查询。
 
 DataSet 与 View 的维度不同是刻意设计：
 
@@ -542,16 +581,16 @@ DataSet 与 View 的维度不同是刻意设计：
 全文和结构化搜索：DataSet
 ```
 
-### AdapterService
+### PrimaryStore 内部执行协议
 
-Adapter 是内部执行接口，用于把接入层已解析路由的数据分发到具体存储设备。协议统一使用 `Device` 表达底层存储，不再使用额外的 Physical 概念。
+`PrimaryStoreService` 是在线事实主存的内部执行接口。View、Search 和 Archive 分别由独立内部服务承载。
 
 ```text
-WriteDeviceRows
-ReadDeviceRows
+WritePrimaryRows
+ReadPrimaryRows
 ```
 
-`DeviceRef.device_table` 表示设备内部表、索引或键空间名称。它是内部执行细节，不对普通用户暴露。
+`PrimaryTarget` 表示 Access 已完成路由后的主存执行目标。它包含目标 `node_id`、Pebble `device_id`、内部 `device_table` 和 PrimaryStore 节点 `endpoint`，只在 Access 到 PrimaryStore 的内部调用中使用，不对普通用户暴露。
 
 ## 目标元数据表
 
@@ -923,4 +962,4 @@ c_mtime
 - Exchange、Market、Instrument 的独立底层表。
 - FactorDef 和 FactorInstance 的二层模型。
 
-最终目标是保留旧 xData 的简单性，同时支持 adapter 多实例、Pebble 主存、DuckDB View 宽表、Bleve 文本索引和 Parquet 事实归档。
+最终目标是保留旧 xData 的简单性，同时支持 Access 统一入口、PrimaryStore 多实例、Pebble 主存、DuckDB View 宽表、Bleve 文本索引和 Parquet 事实归档。

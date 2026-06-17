@@ -1577,7 +1577,7 @@ func (x *DataSetColumn) GetAttributes() map[string]string {
 	return nil
 }
 
-// StorageNode 表示存储代理节点，即一个 adapter 服务实例或服务组入口。
+// StorageNode 表示在线主存节点，即一个 PrimaryStore 服务实例或服务组入口。
 type StorageNode struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -1587,7 +1587,7 @@ type StorageNode struct {
 	NodeId string `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	// name 是节点名称，通常用于管理台展示。
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	// endpoint 是 adapter 服务地址。
+	// endpoint 是 PrimaryStore 服务地址。
 	Endpoint string `protobuf:"bytes,3,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
 	// weight 是路由权重。
 	Weight uint32 `protobuf:"varint,4,opt,name=weight,proto3" json:"weight,omitempty"`
@@ -1846,7 +1846,7 @@ type StorageRoute struct {
 	SubjectPattern string `protobuf:"bytes,5,opt,name=subject_pattern,json=subjectPattern,proto3" json:"subject_pattern,omitempty"`
 	// hash_rule 是水平切分哈希规则；为空表示不使用哈希切分。
 	HashRule string `protobuf:"bytes,6,opt,name=hash_rule,json=hashRule,proto3" json:"hash_rule,omitempty"`
-	// node_id 是目标存储代理节点 ID。
+	// node_id 是目标 PrimaryStore 节点 ID。
 	NodeId string `protobuf:"bytes,7,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	// priority 是路由优先级，数值越小优先级越高。
 	Priority uint32 `protobuf:"varint,8,opt,name=priority,proto3" json:"priority,omitempty"`

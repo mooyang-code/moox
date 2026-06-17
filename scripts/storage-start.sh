@@ -17,6 +17,9 @@ export STORAGE_CONFIG_PATH="${SCRIPT_DIR}/config"
 export STORAGE_DATABASE_PATH="${SCRIPT_DIR}/database"
 export MOOX_STORAGE_HOME="${SCRIPT_DIR}/var/storage"
 
+echo "initializing metadata schema"
+"./bin/${APP_NAME}" -init-metadata -conf=./config/trpc_go.yaml >> ./logs/${APP_NAME}.log 2>&1
+
 echo "starting ${APP_NAME}"
 nohup "./bin/${APP_NAME}" -conf=./config/trpc_go.yaml > ./logs/${APP_NAME}.log 2>&1 &
 echo $! > "${PID_FILE}"

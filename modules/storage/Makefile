@@ -12,6 +12,7 @@ BUILD_DIR := ./bin
 RELEASE_DIR := ./release
 PROTO_DIR := ./proto
 CONFIG_DIR := ./config
+SCHEMA_DIR := ./schema
 LDFLAGS := -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)
 CGO_ENABLED ?= 1
 
@@ -58,17 +59,19 @@ build:
 
 build-linux:
 	@echo "正在构建 Linux amd64 二进制..."
-	@mkdir -p $(RELEASE_DIR)/linux/bin $(RELEASE_DIR)/linux/config $(RELEASE_DIR)/linux/log $(RELEASE_DIR)/linux/database
+	@mkdir -p $(RELEASE_DIR)/linux/bin $(RELEASE_DIR)/linux/config $(RELEASE_DIR)/linux/schema $(RELEASE_DIR)/linux/log $(RELEASE_DIR)/linux/database
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=$(CGO_ENABLED) go build -ldflags "$(LDFLAGS)" -o $(RELEASE_DIR)/linux/bin/$(APP_NAME) ./cmd/moox-storage
 	@cp -r $(CONFIG_DIR)/* $(RELEASE_DIR)/linux/config/ 2>/dev/null || true
+	@cp -r $(SCHEMA_DIR)/* $(RELEASE_DIR)/linux/schema/ 2>/dev/null || true
 	@$(MAKE) create-unix-scripts PLATFORM_DIR=$(RELEASE_DIR)/linux
 	@echo "Linux 构建完成: $(RELEASE_DIR)/linux/bin/$(APP_NAME)"
 
 build-darwin:
 	@echo "正在构建 macOS 当前架构二进制..."
-	@mkdir -p $(RELEASE_DIR)/darwin/bin $(RELEASE_DIR)/darwin/config $(RELEASE_DIR)/darwin/log $(RELEASE_DIR)/darwin/database
+	@mkdir -p $(RELEASE_DIR)/darwin/bin $(RELEASE_DIR)/darwin/config $(RELEASE_DIR)/darwin/schema $(RELEASE_DIR)/darwin/log $(RELEASE_DIR)/darwin/database
 	CGO_ENABLED=$(CGO_ENABLED) go build -ldflags "$(LDFLAGS)" -o $(RELEASE_DIR)/darwin/bin/$(APP_NAME) ./cmd/moox-storage
 	@cp -r $(CONFIG_DIR)/* $(RELEASE_DIR)/darwin/config/ 2>/dev/null || true
+	@cp -r $(SCHEMA_DIR)/* $(RELEASE_DIR)/darwin/schema/ 2>/dev/null || true
 	@$(MAKE) create-unix-scripts PLATFORM_DIR=$(RELEASE_DIR)/darwin
 	@echo "macOS 构建完成: $(RELEASE_DIR)/darwin/bin/$(APP_NAME)"
 
@@ -97,6 +100,8 @@ create-unix-scripts:
 	@echo "export STORAGE_CONFIG_PATH=\"\$$SCRIPT_DIR/config\"" >> $(PLATFORM_DIR)/start.sh
 	@echo "mkdir -p \"\$$SCRIPT_DIR/log\" \"\$$SCRIPT_DIR/database\"" >> $(PLATFORM_DIR)/start.sh
 	@echo "cd \"\$$SCRIPT_DIR\"" >> $(PLATFORM_DIR)/start.sh
+	@echo "echo \"initializing metadata schema\"" >> $(PLATFORM_DIR)/start.sh
+	@echo "./bin/\$$APP_NAME -init-metadata -conf=./config/trpc_go.yaml >> ./log/app.log 2>&1" >> $(PLATFORM_DIR)/start.sh
 	@echo "nohup ./bin/\$$APP_NAME -conf=./config/trpc_go.yaml > ./log/app.log 2>&1 &" >> $(PLATFORM_DIR)/start.sh
 	@echo "echo \$$! > \"\$$PID_FILE\"" >> $(PLATFORM_DIR)/start.sh
 	@echo "echo \"started \$$APP_NAME pid=\$$(cat \"\$$PID_FILE\")\"" >> $(PLATFORM_DIR)/start.sh

@@ -10,27 +10,25 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/storage/pkg/quantstore"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
 var (
-	dataStorageRoot string
-	dataStorageURL  string
-	dataSpaceID     string
-	dataSourceID    string
-	dataCSVFile     string
-	dataDatasetID   string
-	dataSubjectID   string
-	dataFreq        string
-	dataTimeColumn  string
-	dataDimensions  []string
-	dataOutputFile  string
-	dataStartTime   string
-	dataEndTime     string
-	dataPageSize    uint32
+	dataStorageURL string
+	dataSpaceID    string
+	dataSourceID   string
+	dataCSVFile    string
+	dataDatasetID  string
+	dataSubjectID  string
+	dataFreq       string
+	dataTimeColumn string
+	dataDimensions []string
+	dataOutputFile string
+	dataStartTime  string
+	dataEndTime    string
+	dataPageSize   uint32
 )
 
 var dataCmd = &cobra.Command{
@@ -71,12 +69,7 @@ var dataCSVImportCmd = &cobra.Command{
 			fmt.Printf("imported dataset=%s subject=%s rows=%d storage_url=%s\n", defaultFlag(dataDatasetID, "binance_spot_kline_1m"), subjectID, len(rows), dataStorageURL)
 			return nil
 		}
-		store := quantstore.New(dataStorageRoot)
-		if err := store.WriteRows(context.Background(), rows, pb.WriteMode_WRITE_MODE_UPSERT); err != nil {
-			return err
-		}
-		fmt.Printf("imported dataset=%s subject=%s rows=%d root=%s\n", defaultFlag(dataDatasetID, "binance_spot_kline_1m"), subjectID, len(rows), store.Root())
-		return nil
+		return fmt.Errorf("必须指定 --storage-url，通过 moox-storage Access Service 写入")
 	},
 }
 
@@ -112,27 +105,7 @@ var dataRowsExportCmd = &cobra.Command{
 			}
 			return writeRowsExport(rsp, dataOutputFile, dataStorageURL, defaultFlag(dataDatasetID, "binance_spot_kline_1m"), dataSubjectID)
 		}
-		store := quantstore.New(dataStorageRoot)
-		rows, page, err := store.ReadRows(context.Background(), &pb.DataScope{
-			SpaceId:    defaultFlag(dataSpaceID, "default"),
-			DatasetId:  defaultFlag(dataDatasetID, "binance_spot_kline_1m"),
-			SubjectId:  dataSubjectID,
-			Freq:       dataFreq,
-			Dimensions: parseDimensions(dataDimensions),
-		}, pb.ReadMode_READ_MODE_RANGE, &pb.TimeRange{
-			StartTime:      dataStartTime,
-			StartInclusive: true,
-			EndTime:        dataEndTime,
-			EndInclusive:   true,
-		}, "", nil, nil, &pb.Page{Page: 1, Size: dataPageSize})
-		if err != nil {
-			return err
-		}
-		return writeRowsExport(&pb.ReadRowsRsp{
-			RetInfo:    quantstore.Success("success"),
-			Rows:       rows,
-			PageResult: page,
-		}, dataOutputFile, quantstore.New(dataStorageRoot).Root(), defaultFlag(dataDatasetID, "binance_spot_kline_1m"), dataSubjectID)
+		return fmt.Errorf("必须指定 --storage-url，通过 moox-storage Access Service 读取")
 	},
 }
 
@@ -143,7 +116,6 @@ func init() {
 	dataCSVCmd.AddCommand(dataCSVImportCmd)
 	dataRowsCmd.AddCommand(dataRowsExportCmd)
 
-	dataCSVImportCmd.Flags().StringVar(&dataStorageRoot, "storage-root", "", "本地存储根目录，默认读取 MOOX_STORAGE_HOME 或 var/storage")
 	dataCSVImportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:19104")
 	dataCSVImportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
 	dataCSVImportCmd.Flags().StringVar(&dataSpaceID, "workspace", "default", "Space ID，兼容旧参数名")
@@ -155,7 +127,6 @@ func init() {
 	dataCSVImportCmd.Flags().StringVar(&dataTimeColumn, "time-column", "candle_begin_time", "时间列名")
 	dataCSVImportCmd.Flags().StringArrayVar(&dataDimensions, "dimension", nil, "自定义维度，格式 name=value，可重复")
 
-	dataRowsExportCmd.Flags().StringVar(&dataStorageRoot, "storage-root", "", "本地存储根目录，默认读取 MOOX_STORAGE_HOME 或 var/storage")
 	dataRowsExportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:19104")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "workspace", "default", "Space ID，兼容旧参数名")
@@ -264,9 +235,17 @@ func normalizeHeader(record []string) []string {
 
 func csvColumnValue(name string, value string) *pb.ColumnValue {
 	if parsed, err := strconv.ParseFloat(value, 64); err == nil {
-		return quantstore.DoubleValue(name, parsed)
+		return &pb.ColumnValue{
+			ColumnName: name,
+			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			Value:      &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: parsed}},
+		}
 	}
-	return quantstore.StringValue(name, value)
+	return &pb.ColumnValue{
+		ColumnName: name,
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_STRING,
+		Value:      &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}},
+	}
 }
 
 func parseDimensions(items []string) map[string]string {

@@ -12,6 +12,7 @@
 Space 里管理 DataSource、Subject、Field、Factor、DataSet 和 View。
 用户按 DataSet 写入与读取事实数据，按 View 查询异步物化后的组合结果。
 Pebble 是在线事实主存，DuckDB、Bleve、Parquet 从 Pebble 变更派生。
+所有数据访问都先进入 Access Service，再由 Access 转发到内部执行服务。
 ```
 
 ## 概念关系
@@ -29,9 +30,13 @@ flowchart TD
     DC["DataSetColumn"]
     VIEW["View"]
     VC["ViewColumn"]
-    NODE["StorageNode"]
+    ACCESS["Access"]
+    PNODE["PrimaryNode"]
     DEV["Device"]
-    ROUTE["StorageRoute"]
+    ROUTE["PrimaryRoute"]
+    SEARCH["SearchService"]
+    VIEW_SVC["ViewService"]
+    ARCHIVE["ArchiveService"]
 
     SP --> SRC
     SP --> SUB
@@ -48,7 +53,10 @@ flowchart TD
     VIEW --> DS
     VIEW --> VC
     VC --> DC
-    ROUTE --> NODE --> DEV
+    ACCESS --> ROUTE --> PNODE --> DEV
+    ACCESS --> SEARCH
+    ACCESS --> VIEW_SVC
+    ACCESS --> ARCHIVE
 ```
 
 ## 核心概念
@@ -66,9 +74,10 @@ flowchart TD
 | `DataSetColumn` | DataSet 下允许写入的列，可来自 Field、Factor 或系统列。 |
 | `View` | 查询入口和异步物化结果定义。 |
 | `ViewColumn` | View 对用户暴露的列。 |
-| `StorageNode` | adapter 存储代理节点。 |
+| `Access` | 唯一公开数据访问入口，负责校验、元数据解释、路由和请求转发。 |
+| `PrimaryNode` | 在线事实主存节点，底层使用 Pebble。当前协议和表结构仍有 `StorageNode` 旧名。 |
 | `Device` | 底层具体存储组件，例如 Pebble、DuckDB、Bleve、Parquet。 |
-| `StorageRoute` | 在线事实主存的水平切分路由。 |
+| `PrimaryRoute` | 在线事实主存的水平切分路由。当前协议和表结构仍有 `StorageRoute` 旧名。 |
 
 ## 读写边界
 
@@ -79,13 +88,14 @@ flowchart TD
 
 系统不在线生成临时组合查询计划。调用方请求不存在的组合时，返回 `VIEW_NOT_FOUND`。
 
+`ReadRows` 使用 PrimaryRoute 访问 PrimaryStore。`SearchRows` 查询 Search Service 中的集中式索引，不走 PrimaryRoute，也不 fan-out 到多个 Pebble 分片。`QueryView` 查询 View Service 中的物化结果。
+
 ## 存储职责
 
 | 组件 | 职责 |
 | --- | --- |
-| Pebble | 在线事实主存，支持低延迟写入和按 key 范围扫描。 |
-| DuckDB | View 的近期物化查询结果。 |
-| Bleve | 只索引 `DataSetColumn.text_indexed=true` 的文本列。 |
-| Parquet | 从 Pebble 事实主存归档生成冷备文件。 |
+| PrimaryStore Service / Pebble | 在线事实主存，支持低延迟写入和按 key 范围扫描。 |
+| View Service / DuckDB | View 的近期物化查询结果。 |
+| Search Service / Bleve | 只索引 `DataSetColumn.text_indexed=true` 的文本列。 |
+| Archive Service / Parquet | 从 Pebble 事实主存归档生成冷备文件。 |
 | SQLite | 元数据控制面。 |
-

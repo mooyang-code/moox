@@ -18,9 +18,9 @@ make acceptance
 - `moox-order`
 - `moox-account`
 
-The default `moox-storage` binary builds the full storage service, including the legacy adapter path and the new protocol service.
+The default `moox-storage` binary builds the full storage service, including Access, PrimaryStore, view building, text indexing, and archive services.
 
-Pebble is used for the online ordered KV adapter and does not require an external C++ KV library. DuckDB still uses the module's normal CGO-enabled build path.
+Pebble is used for the online ordered PrimaryStore and does not require an external C++ KV library. DuckDB still uses the module's normal CGO-enabled build path.
 
 ```bash
 make build
