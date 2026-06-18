@@ -1,4 +1,4 @@
-package services_test
+package schema_test
 
 import (
 	"os"
@@ -89,7 +89,7 @@ func TestSQLTableDefinitionsLiveUnderStorageSchema(t *testing.T) {
 		require.NoError(t, err)
 		if entry.IsDir() {
 			switch entry.Name() {
-			case ".git", "bin", "release", "var":
+			case ".git", "bin", "data", "dist", "log", "logs", "release", "var":
 				return filepath.SkipDir
 			}
 			return nil
@@ -133,4 +133,18 @@ func tableBlock(t *testing.T, schema, table string) string {
 	end := strings.Index(rest, ");")
 	require.NotEqual(t, -1, end, table)
 	return rest[:end+2]
+}
+
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		if _, err := os.Stat(filepath.Join(wd, "go.mod")); err == nil {
+			return wd
+		}
+		parent := filepath.Dir(wd)
+		require.NotEqual(t, wd, parent, "go.mod not found")
+		wd = parent
+	}
 }

@@ -141,6 +141,80 @@ make package-skill
 
 CLI 产物固定全平台构建，服务端产物按目标平台构建。技能包可以包含 `moox-cli` 多平台二进制和 `skills/moox` 内容。
 
+## 当前落地约定
+
+### 运行产物不进入源码树
+
+根目录和各模块下的运行产物、构建产物统一通过 `.gitignore` 排除：
+
+```text
+/bin/
+/data/
+/log/
+/logs/
+/var/
+/release/
+/dist/
+/coverage/
+/modules/*/bin/
+/modules/*/data/
+/modules/*/log/
+/modules/*/logs/
+/modules/*/var/
+/modules/*/release/
+/modules/*/dist/
+/modules/*/coverage/
+/modules/*/.cache/
+```
+
+源码仓库只保留代码、配置模板、schema、文档、脚本和测试样例。真实运行数据应放到部署目录，例如远端 `~/moox/var/<module>`。
+
+### 模块目录规范
+
+每个业务模块优先使用同一套目录语义：
+
+| 目录 | 含义 |
+| --- | --- |
+| `cmd/` | 可编译二进制入口，目录名与二进制名一致 |
+| `internal/` | 模块私有实现，不允许跨模块 import |
+| `proto/` | 对外协议和生成代码，是当前允许跨模块引用的主要边界 |
+| `schema/` | 模块拥有的数据表定义或元数据定义 |
+| `config/` 或 `configs/` | 配置模板，不放本地运行时配置 |
+| `docs/` | 模块内设计文档和操作说明 |
+| `tests/` | 跨包契约、schema、端到端验收等测试 |
+
+普通单元测试继续放在被测包旁边。跨多个 service、验证表结构、验证协议契约或端到端链路的测试，放到模块根目录的 `tests/` 下。例如 storage 的元数据表定义测试位于 `modules/storage/tests/schema/`。
+
+### 跨模块依赖边界
+
+业务模块不能随意互相 import。当前强制规则：
+
+- 同一模块内可以 import 自己的 `internal/`、`pkg/`、`proto/`。
+- 跨模块只能 import 对方 `proto/` 下的生成协议包。
+- 如果未来需要稳定共享库，应新建根级 `packages/`，并把它作为明确的公共依赖，而不是引用其他业务模块的 `internal/` 或 `pkg/`。
+
+依赖边界由根脚本检查：
+
+```bash
+make check-boundaries
+```
+
+### 统一验证入口
+
+根目录是大仓操作入口，模块内 Makefile 可以保留模块自己的细节，但日常命令优先从根目录执行：
+
+```bash
+make build
+make test
+make test MODULE=storage
+make test-changed
+make check-boundaries
+make release
+make deploy
+```
+
+`make test` 默认执行依赖边界检查和全量模块测试。`make test MODULE=<name>` 只验证指定模块。`make test-changed` 根据当前工作区变更路径选择相关模块；当根脚本、`Makefile` 或 `go.work` 变化时，会自动退回全量测试。
+
 ## 模块职责
 
 | 模块 | 来源 | 职责 |

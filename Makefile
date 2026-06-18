@@ -1,10 +1,16 @@
-.PHONY: build test release deploy acceptance package-skill clean proto
+.PHONY: build test test-changed check-boundaries release deploy acceptance package-skill clean proto
 
 build:
 	./scripts/build.sh
 
 test:
-	./scripts/test.sh
+	./scripts/test.sh $(MODULE)
+
+test-changed:
+	./scripts/test.sh changed
+
+check-boundaries:
+	./scripts/check-module-boundaries.sh
 
 release:
 	./scripts/release.sh

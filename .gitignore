@@ -13,9 +13,7 @@
 
 
 **/.claude/
-bin/
-log/
-data/
+
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*
@@ -33,21 +31,31 @@ go.work.sum
 
 server/.claude/
 
-/var/
+# Monorepo runtime/build artifacts. 真实运行数据应放到部署目录或 var，
+# 仓库中只保留源码、配置模板、schema、文档和测试样例。
 /bin/
+/data/
+/log/
+/logs/
+/var/
 /release/
 /dist/
 /coverage/
 /modules/*/bin/
+/modules/*/data/
+/modules/*/log/
+/modules/*/logs/
+/modules/*/var/
 /modules/*/release/
+/modules/*/dist/
+/modules/*/coverage/
 /modules/*/.cache/
+/modules/*/scf-build/
 /modules/storage/.deps/
-/modules/storage/data/
+/web-host/release/
 /scripts/node_exporter/build/
 cover.out
 cover.out.tmp
-
-release/
 
 *.log
 
