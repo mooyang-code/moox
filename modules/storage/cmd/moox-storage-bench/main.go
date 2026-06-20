@@ -174,7 +174,7 @@ func run(ctx context.Context) error {
 		opts.moduleDir = moduleDir
 	}
 	if opts.reportDir == "" {
-		opts.reportDir = filepath.Join(opts.moduleDir, "bench-reports")
+		opts.reportDir = filepath.Join(opts.moduleDir, "docs", "bench-reports")
 	}
 	if err := os.MkdirAll(opts.reportDir, 0o755); err != nil {
 		return err
@@ -292,7 +292,7 @@ func parseOptions() options {
 	flag.StringVar(&opts.dataDir, "data-dir", "", "pre-extracted data root; skips zip extraction when set")
 	flag.StringVar(&opts.workDir, "work-dir", "", "working directory; defaults to a temp dir")
 	flag.StringVar(&opts.moduleDir, "module-dir", "", "modules/storage directory; defaults to current module")
-	flag.StringVar(&opts.reportDir, "report-dir", "", "report output directory; defaults to ./bench-reports")
+	flag.StringVar(&opts.reportDir, "report-dir", "", "report output directory; defaults to ./docs/bench-reports")
 	flag.IntVar(&opts.rowLimit, "row-limit", 0, "max rows per CSV; 0 means all")
 	flag.IntVar(&opts.objectRows, "object-rows", 1000, "synthetic non-time-series object rows to write; 0 disables object write benchmark")
 	flag.IntVar(&opts.batchSize, "batch-size", 1000, "write batch size")

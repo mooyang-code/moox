@@ -1,0 +1,193 @@
+{
+  "started_at": "2026-06-20T08:24:25Z",
+  "finished_at": "2026-06-20T08:25:49Z",
+  "duration_seconds": 83.75634475,
+  "zip_path": "/Users/mooyang/Downloads/coin-binance-spot-swap-preprocess-pkl-1h-5m-2026-03-03.zip",
+  "data_root": "/var/folders/hn/3h2ztdt511z5kg823csr5kvr0000gn/T/moox-storage-bench-882014117/data",
+  "warnings": [
+    "解压 zip 时检测到异常（退出码 1），但已恢复出可用 K 线 CSV 并继续压测。解压工具输出: bsdtar: 输入文件疑似截断 (需要 188429592 字节，但文件仅有 134665007 字节)\nbsdtar: 因前述错误退出。"
+  ],
+  "files": [
+    {
+      "path": "/var/folders/hn/3h2ztdt511z5kg823csr5kvr0000gn/T/moox-storage-bench-882014117/data/period_1h_kline/spot/BNB-USDT.csv",
+      "market": "spot",
+      "subject_id": "BNB-USDT",
+      "freq": "1h"
+    },
+    {
+      "path": "/var/folders/hn/3h2ztdt511z5kg823csr5kvr0000gn/T/moox-storage-bench-882014117/data/period_1h_kline/spot/BTC-USDT.csv",
+      "market": "spot",
+      "subject_id": "BTC-USDT",
+      "freq": "1h"
+    },
+    {
+      "path": "/var/folders/hn/3h2ztdt511z5kg823csr5kvr0000gn/T/moox-storage-bench-882014117/data/period_1h_kline/spot/ETH-USDT.csv",
+      "market": "spot",
+      "subject_id": "ETH-USDT",
+      "freq": "1h"
+    },
+    {
+      "path": "/var/folders/hn/3h2ztdt511z5kg823csr5kvr0000gn/T/moox-storage-bench-882014117/data/period_1h_kline/spot/SOL-USDT.csv",
+      "market": "spot",
+      "subject_id": "SOL-USDT",
+      "freq": "1h"
+    },
+    {
+      "path": "/var/folders/hn/3h2ztdt511z5kg823csr5kvr0000gn/T/moox-storage-bench-882014117/data/period_1h_kline/swap/BNB-USDT.csv",
+      "market": "swap",
+      "subject_id": "BNB-USDT",
+      "freq": "1h"
+    },
+    {
+      "path": "/var/folders/hn/3h2ztdt511z5kg823csr5kvr0000gn/T/moox-storage-bench-882014117/data/period_1h_kline/swap/BTC-USDT.csv",
+      "market": "swap",
+      "subject_id": "BTC-USDT",
+      "freq": "1h"
+    },
+    {
+      "path": "/var/folders/hn/3h2ztdt511z5kg823csr5kvr0000gn/T/moox-storage-bench-882014117/data/period_1h_kline/swap/ETH-USDT.csv",
+      "market": "swap",
+      "subject_id": "ETH-USDT",
+      "freq": "1h"
+    },
+    {
+      "path": "/var/folders/hn/3h2ztdt511z5kg823csr5kvr0000gn/T/moox-storage-bench-882014117/data/period_1h_kline/swap/SOL-USDT.csv",
+      "market": "swap",
+      "subject_id": "SOL-USDT",
+      "freq": "1h"
+    }
+  ],
+  "datasets": [
+    {
+      "market": "spot",
+      "dataset_id": "bench_binance_spot_kline_1h",
+      "view_id": "bench_spot_kline_view",
+      "rows": 35040
+    },
+    {
+      "market": "swap",
+      "dataset_id": "bench_binance_swap_kline_1h",
+      "view_id": "bench_swap_kline_view",
+      "rows": 35040
+    }
+  ],
+  "metadata_ready": {
+    "duration_seconds": 10.148791167,
+    "attempts": 11,
+    "refresh_interval_hint": "snapshotcache 默认 10s",
+    "timeout_seconds": 35
+  },
+  "write": {
+    "rows": 70080,
+    "batches": 72,
+    "duration_seconds": 2.535699163,
+    "rows_per_second": 27637.347924620506,
+    "steady_rows": 69080,
+    "steady_seconds": 2.4743125790000002,
+    "steady_rows_per_second": 27918.865460369143,
+    "slowest_batch_ms": 61.386584,
+    "batch_latency": {
+      "count": 72,
+      "min_ms": 24.235417,
+      "p50_ms": 34.034458,
+      "p90_ms": 43.972625,
+      "p95_ms": 44.854625,
+      "p99_ms": 61.386584,
+      "max_ms": 61.386584,
+      "avg_ms": 35.218043
+    }
+  },
+  "object_write": {
+    "rows": 1000,
+    "batches": 1,
+    "duration_seconds": 0.03960625,
+    "rows_per_second": 25248.54031876282,
+    "slowest_batch_ms": 39.60625,
+    "batch_latency": {
+      "count": 1,
+      "min_ms": 39.60625,
+      "p50_ms": 39.60625,
+      "p90_ms": 39.60625,
+      "p95_ms": 39.60625,
+      "p99_ms": 39.60625,
+      "max_ms": 39.60625,
+      "avg_ms": 39.60625
+    }
+  },
+  "primary_read": {
+    "requests": 200,
+    "concurrency": 4,
+    "page_size": 1000,
+    "rows_returned": 200000,
+    "duration_seconds": 39.315999625,
+    "requests_per_second": 5.086987534530987,
+    "rows_per_second": 5086.987534530987,
+    "latency": {
+      "count": 200,
+      "min_ms": 749.099833,
+      "p50_ms": 781.569542,
+      "p90_ms": 806.322708,
+      "p95_ms": 813.202625,
+      "p99_ms": 833.840833,
+      "max_ms": 841.659708,
+      "avg_ms": 783.052097
+    }
+  },
+  "primary_kline_point": {
+    "requests": 200,
+    "concurrency": 4,
+    "page_size": 1,
+    "rows_returned": 200,
+    "duration_seconds": 0.006558041,
+    "requests_per_second": 30496.91211140644,
+    "rows_per_second": 30496.91211140644,
+    "latency": {
+      "count": 200,
+      "min_ms": 0.079792,
+      "p50_ms": 0.104667,
+      "p90_ms": 0.134083,
+      "p95_ms": 0.149667,
+      "p99_ms": 1.128417,
+      "max_ms": 1.1635,
+      "avg_ms": 0.12741
+    }
+  },
+  "kline_point_target": {
+    "market": "spot",
+    "dataset_id": "bench_binance_spot_kline_1h",
+    "subject_id": "BNB-USDT",
+    "data_time": "2025-03-03T00:05:00Z",
+    "row_id": "2025-03-03T00:05:00Z"
+  },
+  "duckdb_view": {
+    "verified": true,
+    "expected_rows": 70080,
+    "materialized_rows": {
+      "bench_binance_spot_kline_1h": 35040,
+      "bench_binance_swap_kline_1h": 35040
+    },
+    "query_benchmark": {
+      "requests": 200,
+      "concurrency": 4,
+      "page_size": 1000,
+      "rows_returned": 200000,
+      "duration_seconds": 4.62187125,
+      "requests_per_second": 43.27251651590252,
+      "rows_per_second": 43272.51651590251,
+      "latency": {
+        "count": 200,
+        "min_ms": 80.794916,
+        "p50_ms": 92.683667,
+        "p90_ms": 100.811791,
+        "p95_ms": 104.546083,
+        "p99_ms": 124.314625,
+        "max_ms": 126.489333,
+        "avg_ms": 92.27126
+      }
+    }
+  },
+  "report_json_path": "/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/bench-reports/storage-bench-20260620-162549.json",
+  "report_markdown_path": "/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/bench-reports/storage-bench-20260620-162549.md",
+  "storage_work_dir": "/var/folders/hn/3h2ztdt511z5kg823csr5kvr0000gn/T/moox-storage-bench-882014117/storage",
+  "storage_log_path": "/var/folders/hn/3h2ztdt511z5kg823csr5kvr0000gn/T/moox-storage-bench-882014117/storage/server.log"
+}

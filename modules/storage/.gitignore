@@ -1,2 +1,4 @@
 .cache/
 cover.out.tmp
+/bench-reports/
+/moox-storage
