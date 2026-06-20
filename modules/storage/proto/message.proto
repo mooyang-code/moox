@@ -14,7 +14,7 @@ message DataRowsChangedEvent {
   data.DataScope scope = 2;
   // event_time 是事件产生时间。
   string event_time = 3;
-  // rows 是本次变更涉及的数据行。
+  // rows 是本次变更涉及的数据行，可只包含本次写入的列；派生消费者应回读主存最新完整行。
   repeated data.DataRow rows = 4;
   // attributes 是附加事件属性。
   map<string, string> attributes = 5;

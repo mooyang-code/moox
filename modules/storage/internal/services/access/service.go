@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/core/router"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/schema"
 	deviceduckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
+	metacache "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/cache"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/primary"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/search"
@@ -26,15 +27,30 @@ import (
 )
 
 type Service struct {
-	root       string
-	duckDBPath string
-	metadata   metadata.Store
-	validator  *schema.Validator
-	router     *router.Resolver
-	primary    primary.Client
-	search     *search.Service
-	events     eventbus.Bus
-	report     DerivedErrorReporter
+	root           string
+	duckDBPath     string
+	parquetPath    string
+	metadata       metadata.Store
+	metadataReader metadata.Reader
+	metadataCache  *metacache.Store
+	validator      *schema.Validator
+	router         *router.Resolver
+	primary        primary.Client
+	search         *search.Service
+	factReader     factReadService
+	events         eventbus.Bus
+	report         DerivedErrorReporter
+	indexMu        sync.Mutex
+	indexCond      *sync.Cond
+	indexJobs      []indexJob
+	indexWG        sync.WaitGroup
+	closing        bool
+	rowsChangedSub eventbus.Subscription
+	openedDuckDB   sync.Map
+}
+
+type factReadService interface {
+	ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error)
 }
 
 var (
@@ -50,11 +66,20 @@ func NewService(root string) *Service {
 func NewServiceWithOptions(opts Options) *Service {
 	root := storageRoot(opts.Root)
 	meta := opts.Metadata
+	reader := opts.MetadataReader
+	var cacheReader *metacache.Store
 	if meta == nil {
 		var err error
-		meta, err = openDefaultMetadataStore(context.Background(), root, opts.MetadataPath, opts.InitSchemaPath)
+		meta, cacheReader, err = openDefaultMetadataStores(context.Background(), root, opts.MetadataPath, opts.InitSchemaPath)
 		if err != nil {
 			panic(fmt.Sprintf("open storage metadata store: %v", err))
+		}
+	}
+	if reader == nil {
+		if cacheReader != nil {
+			reader = cacheReader
+		} else {
+			reader = meta
 		}
 	}
 	primaryClient := opts.PrimaryClient
@@ -72,74 +97,229 @@ func NewServiceWithOptions(opts Options) *Service {
 	if reporter == nil {
 		reporter = logDerivedError
 	}
-	return &Service{
-		root:       root,
-		duckDBPath: opts.DuckDBPath,
-		metadata:   meta,
-		validator:  schema.NewValidator(meta),
-		router:     router.NewResolver(meta),
-		primary:    primaryClient,
+	svc := &Service{
+		root:           root,
+		duckDBPath:     opts.DuckDBPath,
+		parquetPath:    opts.ParquetPath,
+		metadata:       meta,
+		metadataReader: reader,
+		metadataCache:  cacheReader,
+		validator:      schema.NewValidator(reader),
+		router:         router.NewResolver(reader),
+		primary:        primaryClient,
 		search: search.NewService(search.Options{
 			Root:      root,
 			BlevePath: opts.BlevePath,
-			Metadata:  meta,
+			Metadata:  reader,
 		}),
 		events: events,
 		report: reporter,
 	}
+	svc.indexCond = sync.NewCond(&svc.indexMu)
+	svc.factReader = svc
+	go svc.runSearchIndexWorker()
+	return svc
 }
 
-var viewStores sync.Map
+// StartEventConsumers 启动派生事件消费者。订阅失败会显式返回错误，
+// 让服务启动阶段能发现 NATS subject / durable consumer 等配置问题。
+func (s *Service) StartEventConsumers(ctx context.Context) error {
+	subscriber, ok := s.events.(eventbus.Subscriber)
+	if !ok {
+		return nil
+	}
+	s.indexMu.Lock()
+	if s.rowsChangedSub != nil {
+		s.indexMu.Unlock()
+		return nil
+	}
+	s.indexMu.Unlock()
+	subscription, err := subscriber.SubscribeRowsChanged(ctx, s.handleRowsChangedForSearch)
+	if err != nil {
+		return fmt.Errorf("subscribe rows changed: %w", err)
+	}
+	s.indexMu.Lock()
+	if s.closing {
+		s.indexMu.Unlock()
+		_ = subscription.Close()
+		return fmt.Errorf("subscribe rows changed: service is closing")
+	}
+	if s.rowsChangedSub != nil {
+		s.indexMu.Unlock()
+		return subscription.Close()
+	}
+	s.rowsChangedSub = subscription
+	s.indexMu.Unlock()
+	return nil
+}
+
+type sharedViewStore struct {
+	store *deviceduckdb.ViewStore
+	refs  int
+}
+
+var viewStores = struct {
+	sync.Mutex
+	items map[string]*sharedViewStore
+}{items: make(map[string]*sharedViewStore)}
 
 func (s *Service) viewStore() (*deviceduckdb.ViewStore, error) {
 	path := s.duckDBPath
 	if path == "" {
 		path = filepath.Join(s.root, "duckdb", "views.duckdb")
 	}
-	if value, ok := viewStores.Load(path); ok {
-		return value.(*deviceduckdb.ViewStore), nil
+	if _, ok := s.openedDuckDB.Load(path); ok {
+		return getViewStore(path)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	store, err := deviceduckdb.Open(deviceduckdb.Options{Path: path})
+	store, err := acquireViewStore(path)
 	if err != nil {
 		return nil, err
 	}
-	actual, loaded := viewStores.LoadOrStore(path, store)
-	if loaded {
-		_ = store.Close()
-	}
-	return actual.(*deviceduckdb.ViewStore), nil
+	s.openedDuckDB.Store(path, struct{}{})
+	return store, nil
 }
 
-func openDefaultMetadataStore(ctx context.Context, root string, metadataPath string, initSchemaPath string) (metadata.Store, error) {
+// Close 释放本 Service 持有的派生资源，等待异步索引完成，并回收其打开的 DuckDB 视图存储。
+// 用于优雅关闭，避免进程级全局缓存长期泄漏。
+func (s *Service) Close() error {
+	s.indexMu.Lock()
+	s.closing = true
+	if s.indexCond != nil {
+		s.indexCond.Broadcast()
+	}
+	rowsChangedSub := s.rowsChangedSub
+	s.rowsChangedSub = nil
+	s.indexMu.Unlock()
+	var firstErr error
+	if rowsChangedSub != nil {
+		if err := rowsChangedSub.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	s.WaitForIndex()
+	s.openedDuckDB.Range(func(key, _ any) bool {
+		path, _ := key.(string)
+		if err := releaseViewStore(path); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		s.openedDuckDB.Delete(key)
+		return true
+	})
+	if s.search != nil {
+		if err := s.search.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if closer, ok := s.events.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if closer, ok := s.primary.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if s.metadataCache != nil {
+		if err := s.metadataCache.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if closer, ok := s.metadata.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func acquireViewStore(path string) (*deviceduckdb.ViewStore, error) {
+	viewStores.Lock()
+	if shared := viewStores.items[path]; shared != nil {
+		shared.refs++
+		store := shared.store
+		viewStores.Unlock()
+		return store, nil
+	}
+	viewStores.Unlock()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	opened, err := deviceduckdb.Open(deviceduckdb.Options{Path: path})
+	if err != nil {
+		return nil, err
+	}
+
+	viewStores.Lock()
+	defer viewStores.Unlock()
+	if shared := viewStores.items[path]; shared != nil {
+		shared.refs++
+		_ = opened.Close()
+		return shared.store, nil
+	}
+	viewStores.items[path] = &sharedViewStore{store: opened, refs: 1}
+	return opened, nil
+}
+
+func getViewStore(path string) (*deviceduckdb.ViewStore, error) {
+	viewStores.Lock()
+	if shared := viewStores.items[path]; shared != nil {
+		store := shared.store
+		viewStores.Unlock()
+		return store, nil
+	}
+	viewStores.Unlock()
+	return acquireViewStore(path)
+}
+
+func releaseViewStore(path string) error {
+	viewStores.Lock()
+	shared := viewStores.items[path]
+	if shared == nil {
+		viewStores.Unlock()
+		return nil
+	}
+	shared.refs--
+	if shared.refs > 0 {
+		viewStores.Unlock()
+		return nil
+	}
+	delete(viewStores.items, path)
+	viewStores.Unlock()
+	return shared.store.Close()
+}
+
+func openDefaultMetadataStores(ctx context.Context, root string, metadataPath string, initSchemaPath string) (metadata.Store, *metacache.Store, error) {
 	if metadataPath == "" {
 		metadataPath = filepath.Join(root, "metadata", "storage_metadata.db")
 	}
 	metaDir := filepath.Dir(metadataPath)
 	if err := os.MkdirAll(metaDir, 0o755); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	store, err := metasqlite.Open(ctx, metasqlite.Options{
 		Path:       metadataPath,
 		SchemaPath: initSchemaPath,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if initSchemaPath != "" {
 		if err := store.InitSchema(ctx); err != nil {
 			_ = store.Close()
-			return nil, err
+			return nil, nil, err
 		}
-		return store, nil
-	}
-	if err := requireMetadataSchema(ctx, store); err != nil {
+	} else if err := requireMetadataSchema(ctx, store); err != nil {
 		_ = store.Close()
-		return nil, err
+		return nil, nil, err
 	}
-	return store, nil
+	cached, err := metacache.New(ctx, store, metacache.Options{})
+	if err != nil {
+		_ = store.Close()
+		return nil, nil, err
+	}
+	return store, cached, nil
 }
 
 func requireMetadataSchema(ctx context.Context, store metadata.Store) error {

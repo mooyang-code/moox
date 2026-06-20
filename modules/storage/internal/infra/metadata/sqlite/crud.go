@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -441,15 +442,26 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 	if item == nil || item.GetSpaceId() == "" || item.GetViewId() == "" || item.GetName() == "" || item.GetPrimaryDatasetId() == "" {
 		return nil, errors.New("space_id, view_id, name and primary_dataset_id are required")
 	}
+	existing, _ := getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), item.GetViewId()}, func() *pb.View { return &pb.View{} })
+	inputBuildStatus := item.GetBuildStatus()
 	item.Status = defaultStatus(item.GetStatus())
 	if item.Engine == "" {
 		item.Engine = "duckdb"
 	}
-	if item.BuildStatus == "" {
-		item.BuildStatus = "pending"
-	}
 	if len(item.DatasetIds) == 0 {
 		item.DatasetIds = []string{item.GetPrimaryDatasetId()}
+	}
+	if existing != nil && item.ActiveResult == "" {
+		item.ActiveResult = existing.GetActiveResult()
+	}
+	if inputBuildStatus == "" {
+		if existing == nil {
+			item.BuildStatus = "pending"
+		} else if viewBuildShapeChanged(existing, item) {
+			item.BuildStatus = "pending"
+		} else {
+			item.BuildStatus = existing.GetBuildStatus()
+		}
 	}
 	raw, err := marshal(item)
 	if err != nil {
@@ -497,6 +509,25 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 		}
 	}
 	return s.GetView(ctx, item.GetSpaceId(), item.GetViewId())
+}
+
+func viewBuildShapeChanged(existing *pb.View, next *pb.View) bool {
+	if existing.GetPrimaryDatasetId() != next.GetPrimaryDatasetId() {
+		return true
+	}
+	if !slices.Equal(existing.GetDatasetIds(), next.GetDatasetIds()) {
+		return true
+	}
+	if !slices.Equal(existing.GetGrainKeys(), next.GetGrainKeys()) {
+		return true
+	}
+	if existing.GetFilterJson() != next.GetFilterJson() {
+		return true
+	}
+	if existing.GetEngine() != next.GetEngine() {
+		return true
+	}
+	return existing.GetQueryWindow() != next.GetQueryWindow()
 }
 
 func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {

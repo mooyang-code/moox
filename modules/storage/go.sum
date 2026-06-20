@@ -185,6 +185,8 @@ github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2 h1:n5nI/+Jw9FRhGQB
 github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2/go.mod h1:L8JbvCKwtHzPote6enLHEnS2NqyR3U9L1/v90xHjmb4=
 github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1 h1:QNbY1qWomSusjUsmjbC30Nyf9R/mqUvdxOkR71Vra6o=
 github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1/go.mod h1:ldOcdwwOiq60YoP2IgU8VWRDIKLy7ntujr/x+OCEPFQ=
+github.com/mooyang-code/snapshotcache v0.1.1 h1:ac1+aZGzp8Ieq/66oXB0myq6Li4isHp4tjEtjzVgeuQ=
+github.com/mooyang-code/snapshotcache v0.1.1/go.mod h1:Xqz432rJ4mUeq8ZgjBp/tmk3XlHOnAXxdqz4TaQDDsk=
 github.com/mschoch/smat v0.2.0 h1:8imxQsjDm8yFEAVBe7azKmKSgzSkZXDuKkSq9374khM=
 github.com/mschoch/smat v0.2.0/go.mod h1:kc9mz7DoBKqDyiRL7VZN8KvXQMWeTaVnttLRXOlotKw=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=

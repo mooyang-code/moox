@@ -13,11 +13,13 @@ type DerivedErrorReporter func(ctx context.Context, stage string, err error)
 type Options struct {
 	Root               string
 	Metadata           metadata.Store
+	MetadataReader     metadata.Reader
 	MetadataPath       string
 	InitSchemaPath     string
 	PebblePath         string
 	DuckDBPath         string
 	BlevePath          string
+	ParquetPath        string
 	PrimaryClient      primary.Client
 	PrimaryServiceName string
 	Events             eventbus.Bus

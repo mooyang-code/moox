@@ -48,16 +48,36 @@ message PageResult {
   string next_cursor = 5;
 }
 
-// TimeRange 表示时间区间条件。
+// SortOrder 表示范围读取的返回顺序。
+enum SortOrder {
+  // SORT_ORDER_ASC 表示按 version/time 从小到大返回。
+  SORT_ORDER_ASC = 0;
+  // SORT_ORDER_DESC 表示按 version/time 从大到小返回。
+  SORT_ORDER_DESC = 1;
+}
+
+// TimeRange 表示闭区间时间条件：[start_time, end_time]。
+// start_time / end_time 为空时表示对应方向无界。
+// 对外请求必须使用 RFC3339 / RFC3339Nano 时间格式，例如：
+//   2025-03-03T00:05:00Z
+//   2025-03-03T08:05:00+08:00
+//   2025-03-03T00:05:00.123456789Z
+// 服务端会统一归一化为 UTC + 固定 9 位纳秒格式：
+//   2006-01-02T15:04:05.000000000Z
 message TimeRange {
-  // start_time 是时间区间下界，格式遵循项目统一时间字符串。
+  // start_time 是闭区间下界，必须为 RFC3339/RFC3339Nano；为空表示无下界。
   string start_time = 1;
-  // end_time 是时间区间上界，格式与 start_time 一致。
+  // end_time 是闭区间上界，必须为 RFC3339/RFC3339Nano；为空表示无上界。
   string end_time = 2;
-  // start_inclusive 表示是否包含 start_time。
-  bool start_inclusive = 3;
-  // end_inclusive 表示是否包含 end_time。
-  bool end_inclusive = 4;
+}
+
+// VersionRange 表示闭区间版本条件：[start_version, end_version]。
+// start_version / end_version 为空时表示对应方向无界。
+message VersionRange {
+  // start_version 是闭区间版本下界；为空表示无下界。
+  string start_version = 1;
+  // end_version 是闭区间版本上界；为空表示无上界。
+  string end_version = 2;
 }
 
 // ValueList 表示有序类型值列表。
@@ -131,14 +151,15 @@ message FilterExpr {
 }
 
 // WriteMode 表示写入模式。
+// 当前事实存储只对外承诺按 DataKey 的列级更新语义；历史枚举值保留兼容。
 enum WriteMode {
   // WRITE_MODE_UNSPECIFIED 表示由服务端使用默认策略。
   WRITE_MODE_UNSPECIFIED = 0;
-  // WRITE_MODE_UPSERT 表示插入新数据，并更新相同逻辑键的已有数据。
+  // WRITE_MODE_UPSERT 表示插入新数据，并更新相同 DataKey 下本次携带的列值。
   WRITE_MODE_UPSERT = 1;
-  // WRITE_MODE_APPEND 表示只追加新数据。
+  // WRITE_MODE_APPEND 为历史兼容值；当前不提供跨服务唯一插入事务语义。
   WRITE_MODE_APPEND = 2;
-  // WRITE_MODE_OVERWRITE 表示覆盖匹配的逻辑数据切片。
+  // WRITE_MODE_OVERWRITE 为历史兼容值；不表示删除 scope 下旧行或整段数据。
   WRITE_MODE_OVERWRITE = 3;
 }
 

@@ -41,7 +41,9 @@ type StorageEventBus struct {
 	Type               string `yaml:"type"`
 	NATSURL            string `yaml:"nats_url"`
 	StreamName         string `yaml:"stream_name"`
+	SubjectPrefix      string `yaml:"subject_prefix"`
 	RowsChangedSubject string `yaml:"rows_changed_subject"`
+	ConsumerName       string `yaml:"consumer_name"`
 }
 
 type StoragePrimary struct {
@@ -71,17 +73,20 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.Devices.ParquetPath == "" {
 		c.Devices.ParquetPath = filepath.Join(c.Root, "archive")
 	}
-	if c.Primary.ServiceName == "" {
-		c.Primary.ServiceName = "trpc.storage.primary.PrimaryStoreService"
-	}
 	if c.EventBus.Type == "" {
 		c.EventBus.Type = "memory"
 	}
+	if c.EventBus.SubjectPrefix == "" {
+		c.EventBus.SubjectPrefix = "moox.storage"
+	}
 	if c.EventBus.RowsChangedSubject == "" {
-		c.EventBus.RowsChangedSubject = "storage.rows.changed"
+		c.EventBus.RowsChangedSubject = c.EventBus.SubjectPrefix + ".fact.rows_changed.v1"
 	}
 	if c.EventBus.Type == "nats" && c.EventBus.StreamName == "" {
 		c.EventBus.StreamName = "MOOX_STORAGE"
+	}
+	if c.EventBus.Type == "nats" && c.EventBus.ConsumerName == "" {
+		c.EventBus.ConsumerName = "storage_rows_changed_deriver"
 	}
 }
 

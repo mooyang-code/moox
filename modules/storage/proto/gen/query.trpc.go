@@ -23,6 +23,8 @@ type QueryServiceService interface {
 	QueryView(ctx context.Context, req *QueryViewReq) (*QueryViewRsp, error)
 	// SearchRows SearchRows 按数据集执行全文和结构化搜索。
 	SearchRows(ctx context.Context, req *SearchRowsReq) (*SearchRowsRsp, error)
+	// RebuildSearchIndex RebuildSearchIndex 异步按 Access 读路径回扫历史数据并重建搜索索引。
+	RebuildSearchIndex(ctx context.Context, req *RebuildSearchIndexReq) (*RebuildSearchIndexRsp, error)
 }
 
 func QueryServiceService_QueryView_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -61,6 +63,24 @@ func QueryServiceService_SearchRows_Handler(svr interface{}, ctx context.Context
 	return rsp, nil
 }
 
+func QueryServiceService_RebuildSearchIndex_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RebuildSearchIndexReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(QueryServiceService).RebuildSearchIndex(ctx, reqbody.(*RebuildSearchIndexReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // QueryServiceServer_ServiceDesc descriptor for server.RegisterService.
 var QueryServiceServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.storage.query.QueryService",
@@ -73,6 +93,10 @@ var QueryServiceServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.storage.query.QueryService/SearchRows",
 			Func: QueryServiceService_SearchRows_Handler,
+		},
+		{
+			Name: "/trpc.storage.query.QueryService/RebuildSearchIndex",
+			Func: QueryServiceService_RebuildSearchIndex_Handler,
 		},
 	},
 }
@@ -98,6 +122,11 @@ func (s *UnimplementedQueryService) SearchRows(ctx context.Context, req *SearchR
 	return nil, errors.New("rpc SearchRows of service QueryService is not implemented")
 }
 
+// RebuildSearchIndex RebuildSearchIndex 异步按 Access 读路径回扫历史数据并重建搜索索引。
+func (s *UnimplementedQueryService) RebuildSearchIndex(ctx context.Context, req *RebuildSearchIndexReq) (*RebuildSearchIndexRsp, error) {
+	return nil, errors.New("rpc RebuildSearchIndex of service QueryService is not implemented")
+}
+
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
@@ -110,6 +139,8 @@ type QueryServiceClientProxy interface {
 	QueryView(ctx context.Context, req *QueryViewReq, opts ...client.Option) (rsp *QueryViewRsp, err error)
 	// SearchRows SearchRows 按数据集执行全文和结构化搜索。
 	SearchRows(ctx context.Context, req *SearchRowsReq, opts ...client.Option) (rsp *SearchRowsRsp, err error)
+	// RebuildSearchIndex RebuildSearchIndex 异步按 Access 读路径回扫历史数据并重建搜索索引。
+	RebuildSearchIndex(ctx context.Context, req *RebuildSearchIndexReq, opts ...client.Option) (rsp *RebuildSearchIndexRsp, err error)
 }
 
 type QueryServiceClientProxyImpl struct {
@@ -155,6 +186,26 @@ func (c *QueryServiceClientProxyImpl) SearchRows(ctx context.Context, req *Searc
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SearchRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *QueryServiceClientProxyImpl) RebuildSearchIndex(ctx context.Context, req *RebuildSearchIndexReq, opts ...client.Option) (*RebuildSearchIndexRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.query.QueryService/RebuildSearchIndex")
+	msg.WithCalleeServiceName(QueryServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("query")
+	msg.WithCalleeService("QueryService")
+	msg.WithCalleeMethod("RebuildSearchIndex")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RebuildSearchIndexRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -23,6 +23,14 @@ type DataServiceService interface {
 	WriteRows(ctx context.Context, req *WriteRowsReq) (*WriteRowsRsp, error)
 	// ReadRows ReadRows 按数据集、数据对象、频率、时间和列名读取事实数据行。
 	ReadRows(ctx context.Context, req *ReadRowsReq) (*ReadRowsRsp, error)
+	// WriteTimeSeriesRows WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
+	WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq) (*WriteTimeSeriesRowsRsp, error)
+	// ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
+	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
+	// WriteObjectRows WriteObjectRows 写入对象事实数据；非固定 subject+freq 的数据均使用对象接口。
+	WriteObjectRows(ctx context.Context, req *WriteObjectRowsReq) (*WriteObjectRowsRsp, error)
+	// ReadObjectRows ReadObjectRows 按对象 ID 与闭区间版本范围读取事实数据。
+	ReadObjectRows(ctx context.Context, req *ReadObjectRowsReq) (*ReadObjectRowsRsp, error)
 }
 
 func DataServiceService_WriteRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -61,6 +69,78 @@ func DataServiceService_ReadRows_Handler(svr interface{}, ctx context.Context, f
 	return rsp, nil
 }
 
+func DataServiceService_WriteTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &WriteTimeSeriesRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataServiceService).WriteTimeSeriesRows(ctx, reqbody.(*WriteTimeSeriesRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataServiceService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReadTimeSeriesRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataServiceService).ReadTimeSeriesRows(ctx, reqbody.(*ReadTimeSeriesRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataServiceService_WriteObjectRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &WriteObjectRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataServiceService).WriteObjectRows(ctx, reqbody.(*WriteObjectRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataServiceService_ReadObjectRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReadObjectRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataServiceService).ReadObjectRows(ctx, reqbody.(*ReadObjectRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // DataServiceServer_ServiceDesc descriptor for server.RegisterService.
 var DataServiceServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.storage.data.DataService",
@@ -73,6 +153,22 @@ var DataServiceServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.storage.data.DataService/ReadRows",
 			Func: DataServiceService_ReadRows_Handler,
+		},
+		{
+			Name: "/trpc.storage.data.DataService/WriteTimeSeriesRows",
+			Func: DataServiceService_WriteTimeSeriesRows_Handler,
+		},
+		{
+			Name: "/trpc.storage.data.DataService/ReadTimeSeriesRows",
+			Func: DataServiceService_ReadTimeSeriesRows_Handler,
+		},
+		{
+			Name: "/trpc.storage.data.DataService/WriteObjectRows",
+			Func: DataServiceService_WriteObjectRows_Handler,
+		},
+		{
+			Name: "/trpc.storage.data.DataService/ReadObjectRows",
+			Func: DataServiceService_ReadObjectRows_Handler,
 		},
 	},
 }
@@ -98,6 +194,26 @@ func (s *UnimplementedDataService) ReadRows(ctx context.Context, req *ReadRowsRe
 	return nil, errors.New("rpc ReadRows of service DataService is not implemented")
 }
 
+// WriteTimeSeriesRows WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
+func (s *UnimplementedDataService) WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq) (*WriteTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc WriteTimeSeriesRows of service DataService is not implemented")
+}
+
+// ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
+func (s *UnimplementedDataService) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc ReadTimeSeriesRows of service DataService is not implemented")
+}
+
+// WriteObjectRows WriteObjectRows 写入对象事实数据；非固定 subject+freq 的数据均使用对象接口。
+func (s *UnimplementedDataService) WriteObjectRows(ctx context.Context, req *WriteObjectRowsReq) (*WriteObjectRowsRsp, error) {
+	return nil, errors.New("rpc WriteObjectRows of service DataService is not implemented")
+}
+
+// ReadObjectRows ReadObjectRows 按对象 ID 与闭区间版本范围读取事实数据。
+func (s *UnimplementedDataService) ReadObjectRows(ctx context.Context, req *ReadObjectRowsReq) (*ReadObjectRowsRsp, error) {
+	return nil, errors.New("rpc ReadObjectRows of service DataService is not implemented")
+}
+
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
@@ -110,6 +226,14 @@ type DataServiceClientProxy interface {
 	WriteRows(ctx context.Context, req *WriteRowsReq, opts ...client.Option) (rsp *WriteRowsRsp, err error)
 	// ReadRows ReadRows 按数据集、数据对象、频率、时间和列名读取事实数据行。
 	ReadRows(ctx context.Context, req *ReadRowsReq, opts ...client.Option) (rsp *ReadRowsRsp, err error)
+	// WriteTimeSeriesRows WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
+	WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq, opts ...client.Option) (rsp *WriteTimeSeriesRowsRsp, err error)
+	// ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
+	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
+	// WriteObjectRows WriteObjectRows 写入对象事实数据；非固定 subject+freq 的数据均使用对象接口。
+	WriteObjectRows(ctx context.Context, req *WriteObjectRowsReq, opts ...client.Option) (rsp *WriteObjectRowsRsp, err error)
+	// ReadObjectRows ReadObjectRows 按对象 ID 与闭区间版本范围读取事实数据。
+	ReadObjectRows(ctx context.Context, req *ReadObjectRowsReq, opts ...client.Option) (rsp *ReadObjectRowsRsp, err error)
 }
 
 type DataServiceClientProxyImpl struct {
@@ -155,6 +279,86 @@ func (c *DataServiceClientProxyImpl) ReadRows(ctx context.Context, req *ReadRows
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReadRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataServiceClientProxyImpl) WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq, opts ...client.Option) (*WriteTimeSeriesRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.data.DataService/WriteTimeSeriesRows")
+	msg.WithCalleeServiceName(DataServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("data")
+	msg.WithCalleeService("DataService")
+	msg.WithCalleeMethod("WriteTimeSeriesRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &WriteTimeSeriesRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataServiceClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (*ReadTimeSeriesRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.data.DataService/ReadTimeSeriesRows")
+	msg.WithCalleeServiceName(DataServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("data")
+	msg.WithCalleeService("DataService")
+	msg.WithCalleeMethod("ReadTimeSeriesRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReadTimeSeriesRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataServiceClientProxyImpl) WriteObjectRows(ctx context.Context, req *WriteObjectRowsReq, opts ...client.Option) (*WriteObjectRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.data.DataService/WriteObjectRows")
+	msg.WithCalleeServiceName(DataServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("data")
+	msg.WithCalleeService("DataService")
+	msg.WithCalleeMethod("WriteObjectRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &WriteObjectRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataServiceClientProxyImpl) ReadObjectRows(ctx context.Context, req *ReadObjectRowsReq, opts ...client.Option) (*ReadObjectRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.storage.data.DataService/ReadObjectRows")
+	msg.WithCalleeServiceName(DataServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("storage")
+	msg.WithCalleeServer("data")
+	msg.WithCalleeService("DataService")
+	msg.WithCalleeMethod("ReadObjectRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReadObjectRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

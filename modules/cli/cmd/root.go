@@ -153,6 +153,7 @@ func showLogo() {
 	fmt.Println("🛠️  可用命令:")
 	fmt.Println("    🔐 auth (认证)         用户注册、登录、密码管理")
 	fmt.Println("    📊 import (导入)       从 YAML 文件导入数据到数据库")
+	fmt.Println("    🧭 metadata (元数据)   通过服务导入存储元数据")
 	fmt.Println("    🗄️  db (数据库)         数据库初始化、删除、元数据表管理、数据查询操作")
 	fmt.Println("    📦 storage (存储)      高性能数据读写服务")
 	fmt.Println("    📨 msg (消息队列)       实时消息处理和队列管理")
@@ -187,7 +188,7 @@ func Execute() {
 
 	// 先执行命令解析，这样可以检查是否使用了--version标志
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -208,8 +209,8 @@ func loadGlobalConfig() {
 	var err error
 	AppConfig, err = config.LoadConfig()
 	if err != nil {
-		fmt.Printf("%v\n", err)
-		fmt.Println("\033[93m💡 将使用默认配置，某些功能可能无法正常工作\033[0m")
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		fmt.Fprintln(os.Stderr, "\033[93m💡 将使用默认配置，某些功能可能无法正常工作\033[0m")
 		// 创建默认配置，避免panic
 		AppConfig = &config.Config{}
 		if AppConfig.MooX == nil {

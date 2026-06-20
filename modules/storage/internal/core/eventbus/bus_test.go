@@ -22,3 +22,31 @@ func TestMemoryBusRecordsRowsChangedEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bus.Events(), 1)
 }
+
+func TestMemoryBusRowsChangedSubscriptionCanClose(t *testing.T) {
+	ctx := context.Background()
+	bus := eventbus.NewMemoryBus()
+	var called int
+	sub, err := bus.SubscribeRowsChanged(ctx, func(ctx context.Context, event *pb.DataRowsChangedEvent) error {
+		_ = ctx
+		_ = event
+		called++
+		return nil
+	})
+	require.NoError(t, err)
+
+	err = bus.PublishRowsChanged(ctx, &pb.DataRowsChangedEvent{
+		EventId: "evt-1",
+		Scope:   &pb.DataScope{SpaceId: "crypto", DatasetId: "kline"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, called)
+
+	require.NoError(t, sub.Close())
+	err = bus.PublishRowsChanged(ctx, &pb.DataRowsChangedEvent{
+		EventId: "evt-2",
+		Scope:   &pb.DataScope{SpaceId: "crypto", DatasetId: "kline"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, called)
+}

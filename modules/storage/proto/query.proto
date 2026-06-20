@@ -107,10 +107,42 @@ message SearchRowsRsp {
   common.PageResult page_result = 3;
 }
 
+// RebuildSearchIndexReq 表示手动重建搜索索引的请求。
+message RebuildSearchIndexReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是使用空间 ID。
+  string space_id = 2;
+  // dataset_id 是要重建索引的数据集 ID。
+  string dataset_id = 3;
+  // subject_ids 是可选的数据对象列表；为空时从 DataSetSubject 绑定关系枚举。
+  // DataSet 必须已绑定这些 subject，未绑定 subject 会被拒绝。
+  repeated string subject_ids = 4;
+  // freq 是可选时序频率。
+  string freq = 5;
+  // time_range 是可选时间范围。
+  common.TimeRange time_range = 6;
+  // dimensions 是可选业务维度过滤。
+  map<string, string> dimensions = 7;
+}
+
+// RebuildSearchIndexRsp 表示手动重建搜索索引的受理结果。
+message RebuildSearchIndexRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // indexed_rows 是本次实际写入搜索索引的行数。
+  // 异步重建时返回 0；实际进度由后台任务日志或后续任务状态接口承载。
+  uint64 indexed_rows = 2;
+  // rebuild_id 是本次异步重建任务 ID。
+  string rebuild_id = 3;
+}
+
 // QueryService 是用户侧查询服务。
 service QueryService {
   // QueryView 查询已登记并异步构建的视图；不存在的组合直接返回 VIEW_NOT_FOUND。
   rpc QueryView(QueryViewReq) returns (QueryViewRsp);
   // SearchRows 按数据集执行全文和结构化搜索。
   rpc SearchRows(SearchRowsReq) returns (SearchRowsRsp);
+  // RebuildSearchIndex 异步按 Access 读路径回扫历史数据并重建搜索索引。
+  rpc RebuildSearchIndex(RebuildSearchIndexReq) returns (RebuildSearchIndexRsp);
 }

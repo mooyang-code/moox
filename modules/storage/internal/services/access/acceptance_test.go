@@ -60,6 +60,7 @@ func TestStorageAcceptance(t *testing.T) {
 	}}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, writeRsp.GetRetInfo().GetCode())
+	svc.WaitForIndex()
 
 	readRsp, err := svc.ReadRows(ctx, &pb.ReadRowsReq{Scope: &pb.DataScope{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", SubjectId: "APT-USDT", Freq: "1m"}, ReadMode: pb.ReadMode_READ_MODE_RANGE})
 	require.NoError(t, err)
@@ -87,6 +88,7 @@ func TestStorageAcceptance(t *testing.T) {
 	})
 	_, err = builder.Build(ctx, "crypto_acceptance", "kline_view")
 	require.NoError(t, err)
+	refreshMetadataCacheForTest(t, svc)
 	queryRsp, err := svc.QueryView(ctx, &pb.QueryViewReq{SpaceId: "crypto_acceptance", ViewId: "kline_view", SubjectIds: []string{"APT-USDT"}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, queryRsp.GetRetInfo().GetCode())

@@ -42,7 +42,7 @@ func (c *RemoteClient) ReadRows(ctx context.Context, target *pb.PrimaryTarget, r
 		Scope:        req.GetScope(),
 		TimeRange:    req.GetTimeRange(),
 		SnapshotTime: req.GetSnapshotTime(),
-		RowIds:       req.GetRowIds(),
+		ObjectId:     req.GetObjectId(),
 		ColumnNames:  req.GetColumnNames(),
 		Page:         req.GetPage(),
 	})

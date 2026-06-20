@@ -6,6 +6,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"google.golang.org/protobuf/proto"
 )
 
 type Options struct {
@@ -22,6 +23,13 @@ var _ pb.PrimaryStoreServiceService = (*Service)(nil)
 
 func NewService(opts Options) *Service {
 	return &Service{client: NewLocalClient(LocalClientOptions{Root: opts.Root, PebblePath: opts.PebblePath, Pebble: opts.Pebble})}
+}
+
+func (s *Service) Close() error {
+	if s == nil || s.client == nil {
+		return nil
+	}
+	return s.client.Close()
 }
 
 func (s *Service) WritePrimaryRows(ctx context.Context, req *pb.WritePrimaryRowsReq) (*pb.WritePrimaryRowsRsp, error) {
@@ -43,7 +51,7 @@ func (s *Service) ReadPrimaryRows(ctx context.Context, req *pb.ReadPrimaryRowsRe
 		ReadMode:     readReq.GetReadMode(),
 		TimeRange:    readReq.GetTimeRange(),
 		SnapshotTime: readReq.GetSnapshotTime(),
-		RowIds:       readReq.GetRowIds(),
+		ObjectId:     readReq.GetObjectId(),
 		ColumnNames:  readReq.GetColumnNames(),
 		Page:         readReq.GetPage(),
 	})
@@ -74,7 +82,7 @@ func normalizeReadPrimaryRowsReq(req *pb.ReadPrimaryRowsReq) *pb.ReadPrimaryRows
 	if scope.GetSpaceId() == "" {
 		scope.SpaceId = target.GetSpaceId()
 	}
-	cloned := *req
+	cloned := proto.Clone(req).(*pb.ReadPrimaryRowsReq)
 	cloned.Scope = scope
-	return &cloned
+	return cloned
 }

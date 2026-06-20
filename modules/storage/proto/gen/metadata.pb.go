@@ -1006,7 +1006,7 @@ type DataSetSubject struct {
 	DatasetId string `protobuf:"bytes,2,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
 	// subject_id 是数据对象 ID。
 	SubjectId string `protobuf:"bytes,3,opt,name=subject_id,json=subjectId,proto3" json:"subject_id,omitempty"`
-	// subject_role 是对象在数据集中的角色，例如 normal、benchmark、index 或 universe_member。
+	// subject_role 是对象在数据集中的角色，例如 normal、benchmark、index、universe_member 或 object。
 	SubjectRole string `protobuf:"bytes,4,opt,name=subject_role,json=subjectRole,proto3" json:"subject_role,omitempty"`
 	// effective_start_time 是对象在数据集中的生效开始时间。
 	EffectiveStartTime string `protobuf:"bytes,5,opt,name=effective_start_time,json=effectiveStartTime,proto3" json:"effective_start_time,omitempty"`
@@ -1429,7 +1429,7 @@ type DataSetColumn struct {
 	OriginId string `protobuf:"bytes,5,opt,name=origin_id,json=originId,proto3" json:"origin_id,omitempty"`
 	// value_type 是列值的逻辑类型。
 	ValueType FieldValueType `protobuf:"varint,6,opt,name=value_type,json=valueType,proto3,enum=trpc.storage.common.FieldValueType" json:"value_type,omitempty"`
-	// required 表示写入时是否必填。
+	// required 表示采集契约或全量导入时是否必填；字段级更新不要求每次携带。
 	Required bool `protobuf:"varint,7,opt,name=required,proto3" json:"required,omitempty"`
 	// is_unique 表示该列是否参与数据集内唯一性约束。
 	IsUnique bool `protobuf:"varint,8,opt,name=is_unique,json=isUnique,proto3" json:"is_unique,omitempty"`

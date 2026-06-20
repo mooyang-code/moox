@@ -1,7 +1,6 @@
 package access
 
 import (
-	"fmt"
 	"sort"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -14,12 +13,4 @@ func sortQueryViewRows(rows []*pb.QueryViewRow) {
 		}
 		return rows[i].GetSubjectId() < rows[j].GetSubjectId()
 	})
-}
-
-func fmtInt(v int64) string {
-	return fmt.Sprintf("%d", v)
-}
-
-func fmtDouble(v float64) string {
-	return fmt.Sprintf("%g", v)
 }

@@ -19,9 +19,10 @@
 - `Field` 是 Space 内普通字段字典，可被多个 DataSet 选用。
 - `Factor` 是 Space 内、已参数化的因子结果定义，可被多个 DataSet 选用。
 - Pebble 是在线事实主存。DuckDB、Bleve 和 Parquet 都从 Pebble 主存变更异步派生。
-- `core/eventbus` 承载 storage 领域事件，`infra/transport` 承载 NATS 等底层消息传输实现，`infra/eventbus` 将底层 producer 适配成业务事件总线，业务层不直接依赖具体消息组件。
+- `core/eventbus` 承载 storage 领域事件，`infra/transport` 承载 NATS 等底层消息传输实现，`infra/eventbus` 将底层 producer / subscriber 适配成业务事件总线，业务层不直接依赖具体消息组件。
+- storage 事件 subject 使用统一前缀，默认 `moox.storage`；行变更事件默认 `moox.storage.fact.rows_changed.v1`，NATS 可用 `moox.storage.>` 订阅整组 storage 事件。
 - 所有用户侧和业务侧数据访问都必须先进入 Access Service。Collector、FactorCalculator、管理台和 CLI 不直接访问 PrimaryStore、Search、View、Archive 或底层设备。
-- `PrimaryRoute` 只负责 Pebble 在线事实主存的水平切分，并路由到 PrimaryStore Service 节点。当前协议和表名仍有 `StorageRoute` / `StorageNode`，后续应重命名为 `PrimaryRoute` / `PrimaryNode`。
+- `PrimaryRoute` 只负责 Pebble 在线事实主存的水平切分，并路由到 PrimaryStore Service 节点。`PrimaryTarget` 是 Access 内部解析后的执行目标，不暴露给用户协议，也不要求派生消费者理解。当前协议和表名仍有 `StorageRoute` / `StorageNode`，后续应重命名为 `PrimaryRoute` / `PrimaryNode`。
 - 不再使用旧的存储代理服务名作为业务服务名。底层实现统一称为 Device 或设备驱动，例如 Pebble、DuckDB、Bleve 和 Parquet 的具体实现。
 - Parquet 冷备只从 Pebble 做事实归档，不从 DuckDB 宽表归档。
 - DuckDB 保存近期宽表查询缓存，不保存常驻 long 表。
@@ -135,7 +136,7 @@ modules/storage/
     archive/           # Archive Service，Parquet 事实冷备
 ```
 
-`services/access` 是唯一公开数据访问入口。它负责协议编排、鉴权、校验、元数据解释、PrimaryRoute 解析、请求转发和统一错误码。`services/primary`、`services/search`、`services/view` 和 `services/archive` 都是内部执行服务，可以独立部署和扩缩容。`core` 只放领域抽象，`infra` 只放 SQLite、Pebble、DuckDB、Bleve、Parquet、NATS 等具体实现。
+`services/access` 是唯一公开数据访问入口。它负责协议编排、鉴权、校验、元数据解释、PrimaryRoute 解析、请求转发和统一错误码。Search、View、Archive 等派生消费者需要回读完整事实行时，也通过 Access 的读接口完成，不直接访问 `PrimaryTarget` 或底层分片。`services/primary`、`services/search`、`services/view` 和 `services/archive` 都是内部执行服务，可以独立部署和扩缩容；单进程部署下 Access 默认使用 LocalClient 访问 PrimaryStore，只有显式配置 `storage.primary.service_name` 时才走远程 PrimaryStore Service。`core` 只放领域抽象，`infra` 只放 SQLite、Pebble、DuckDB、Bleve、Parquet、NATS 等具体实现。
 
 ## 核心概念
 
@@ -446,7 +447,7 @@ ingest_time
 sequenceDiagram
     participant C as Client
     participant S as Access
-    participant M as Metadata
+    participant M as Metadata Cache
     participant PSS as PrimaryStore
     participant P as Pebble
 
@@ -462,6 +463,16 @@ sequenceDiagram
 
 写入成功以 Pebble 主存成功为准。DuckDB、Bleve 和 Parquet 的延迟不影响主写入返回。
 
+元数据控制面直接读写 SQLite，用于管理台、CLI 和控制面任务。Access 的写入校验、PrimaryRoute 解析、Search 索引列解释等服务读路径使用独立的 metadata cache。cache 启动时加载快照，后续刷新调度由 snapshotcache 组件负责；storage 不在元数据写入时手动刷新或更新 cache，也不要求“刚写入的元数据立刻被服务读路径读到”。
+
+事实写入链路不负责写入 DataSetSubject 绑定关系；应用层、管理台或 CLI 可按自身业务需要独立维护 DataSetSubject，用于“列出 dataset 下有哪些 subject/object”、索引重建枚举等控制面场景。Access 写入校验只校验 DataSet、列契约以及必要的 key 字段；时序与对象数据只要携带合法 key 和已登记列即可写入。服务侧允许等 snapshotcache 刷新后再让读路径看到新绑定。`RebuildSearchIndex` 是控制面补偿接口，枚举和校验绑定时以元数据存储为准，但后台回扫仍通过 Access 读路径执行。
+
+事实写入语义收敛为按 `DataKey` 更新列值。同一个 `DataKey` 再次写入时，只处理本次 `DataRow.columns` 中携带的列；同名列覆盖，未携带的旧列保留。写入协议不提供用户删除能力，也不提供整行删除或按 scope 清空切片的能力，底层不得用 `DeleteRange` 表达 `OVERWRITE`。
+
+Access 会按 PrimaryRoute 把同批 rows 分组写入一个或多个 `PrimaryTarget`。`PrimaryTarget` 是内部执行目标，不是跨节点事务边界；跨 `PrimaryTarget` 写入不承诺全局原子性，也不回滚已经成功写入的目标。若后续目标失败，已经成功写入的 rows 仍会发布 `DataRowsChangedEvent`，便于派生侧追上成功部分。
+
+主存写入完成后发布 `DataRowsChangedEvent`。事件中的 rows 是变更提示，不要求携带完整行；Search 等派生消费者收到事件后通过 Access 读接口回读最新完整行，再覆盖写入 Bleve 或其他派生结果，保证重试消费是幂等的。消费者不直接请求 `PrimaryTarget`，也不理解分片、路由或底层设备细节。Search 索引始终异步派生，不提供写后立即可搜契约；主链路只负责主存写入和事件发布。生产环境可把 eventbus 配置为 NATS，并通过 `subject_prefix`、`rows_changed_subject` 和 `consumer_name` 配置统一 subject 前缀、行变更 subject 与 durable consumer；默认行变更 subject 为 `moox.storage.fact.rows_changed.v1`，NATS stream 可订阅 `moox.storage.>`。
+
 ### View 物化构建
 
 DuckDB 不保存常驻 long 表。系统定时或按事件从 Pebble 扫描 View 的查询窗口，构建新的 View 物化结果。
@@ -474,9 +485,9 @@ DuckDB 不保存常驻 long 表。系统定时或按事件从 Pebble 扫描 View
 4. 新建物化查询结果。
 5. 按粒度键关联附属 DataSet 的列，写入宽表并校验。
 6. 切换 View 的 `c_active_result`。
-7. 删除旧宽表。
+7. 由后台 cleanup 任务异步删除不再被任何 active View 引用的旧结果表。
 
-系统不在线 `ALTER` 当前宽表。新增字段或因子时，后台新建宽表并切换。
+系统不在线 `ALTER` 当前宽表。新增字段或因子时，后台新建宽表并切换；旧结果表不会在切换瞬间删除，避免影响已经拿到旧 `active_result` 的并发查询。
 
 ### Parquet 事实归档
 
@@ -493,7 +504,7 @@ flowchart LR
     J --> AF
 ```
 
-不从 DuckDB 宽表归档，原因是宽表只覆盖近期缓存，且新增字段后新旧宽表文件 schema 可能不同。事实归档使用稳定 long schema，新增字段只新增行，不改变文件 schema。
+不从 DuckDB 宽表归档，原因是宽表只覆盖近期缓存，且新增字段后新旧宽表文件 schema 可能不同。事实归档使用稳定 long schema，新增字段只新增行，不改变文件 schema。`moox-storage` 提供 archive timer handler，调度参数使用 `space_id`、`dataset_id`、`partition_key`、`start_time`、`end_time` 表达一次归档任务；`dataset_id=*` 表示归档该 Space 下所有 active DataSet。在 tRPC timer 的 `network` 配置中业务参数使用 `;` 分隔，避免和框架参数的 `&` 冲突。未显式指定 `DeviceID` 时，Archive Service 从 metadata 中选择 active `parquet_archive` 设备登记归档文件。
 
 ## 读写与查询协议
 
@@ -502,56 +513,49 @@ flowchart LR
 用户写入和读取事实数据统一使用 DataSet 维度。
 
 ```text
-WriteRows
-ReadRows
+WriteTimeSeriesRows
+ReadTimeSeriesRows
+WriteObjectRows
+ReadObjectRows
+WriteRows       // 兼容入口
+ReadRows        // 兼容入口
 ```
 
-`WriteRows` 写入 `DataRow`。`DataRow.key` 定位一条事实行，`DataRow.columns` 表示写入这一行的列值。
+事实行底层统一为 `space_id + dataset_id + data_key + version -> columns + attributes`。再次写入相同 key 时，系统只更新请求中携带的列值和 attributes。未携带的列不会被置空或删除。DataSetColumn 的 `required` 不表示每次字段级更新都必须携带该列；它可作为采集契约、管理台提示或全量导入校验依据。`WRITE_MODE_OVERWRITE` 只是兼容历史协议值，不表示删除同一 scope 下旧行或重写整段数据。
 
-`DataScope` 表示一组事实数据的范围：
+TimeSeries 用于固定 `subject_id + freq` 下按 `data_time` 演进的数据：
 
 ```text
-space_id
-dataset_id
-subject_id
-freq
-dimensions
+TimeSeriesKey(space_id, dataset_id, subject_id, freq, dimensions, data_time)
+data_key = subject_id | freq | dimhash
+version  = data_time
 ```
 
-`DataKey` 在 `DataScope` 上增加行级定位字段：
+Object 用于其他所有数据，即使数据本身有时间线也通过 version 表达：
 
 ```text
-scope
-data_time
-row_id
+ObjectKey(space_id, dataset_id, object_id, version)
+data_key = object_id
+version  = version
 ```
 
-`DataRow` 包含：
+`dimensions` 是事实范围定位维度，不是普通查询过滤条件。它适合表达低基数且参与事实身份的维度，例如复权类型、报告期、榜单类型或订单簿深度层级。用于展示、筛选或排序的业务值应写入 columns。
+
+Pebble 在线主存使用两个物理 key 空间：
 
 ```text
-key
-columns
-attributes
+t|space|dataset|subject|freq|version|dimhash|legacy_row_id
+o|space|dataset|object_id|version
 ```
 
-`DataScope.dimensions` 是事实范围定位维度，不是普通查询过滤条件。它适合表达低基数且参与事实身份的维度，例如复权类型、报告期、榜单类型或订单簿深度层级。用于展示、筛选或排序的业务值应写入 `DataRow.columns`。
+`legacy_row_id` 只用于旧 `WriteRows` 兼容入口，防止同一时间不同旧 `row_id` 写入被物理合并；新的 `TimeSeriesRow` 不暴露该字段。TimeRange 固定为闭区间 `[start_time, end_time]`，时间必须是 RFC3339/RFC3339Nano；内部归一化为 UTC 固定 9 位纳秒，保证字典序与时间顺序一致。VersionRange 固定为闭区间 `[start_version, end_version]`。
 
-时序写入通常使用：
+写入协议不提供用户删除能力，不返回行变更明细，也不返回旧值。写入成功只表示在线事实主存已接受请求。若同一批请求被路由到多个 `PrimaryTarget`，成功目标不会因为后续目标失败而回滚。DuckDB、Bleve 和 Parquet 的派生结果由异步任务处理。
 
-```text
-DataScope(space_id, dataset_id, subject_id, freq, dimensions)
-+ data_time
-```
-
-对象型、榜单型或事件型数据可以使用 `row_id` 表示同一 `DataScope` 下的逻辑行。若同一 `data_time` 可能出现多条事件，可同时使用 `data_time` 和 `row_id`。
-
-写入协议不提供用户删除能力，不返回行变更明细，也不返回旧值。写入成功只表示在线事实主存已接受请求。DuckDB、Bleve 和 Parquet 的派生结果由异步任务处理。
-
-`ReadRows` 仍以 DataSet 维度读取事实数据，支持：
+`ReadTimeSeriesRows` 使用 `TimeSeriesKey + TimeRange` 读取时序数据。`ReadObjectRows` 使用 `ObjectKey + VersionRange` 读取对象数据。`ReadRows` 作为低阶入口仍以 DataSet 维度读取事实数据，支持：
 
 ```text
 range           // 时间区间读取
-point           // row_id 点查
 latest_before   // 某个截面时间之前的最新行
 ```
 
@@ -590,7 +594,7 @@ WritePrimaryRows
 ReadPrimaryRows
 ```
 
-`PrimaryTarget` 表示 Access 已完成路由后的主存执行目标。它包含目标 `node_id`、Pebble `device_id`、内部 `device_table` 和 PrimaryStore 节点 `endpoint`，只在 Access 到 PrimaryStore 的内部调用中使用，不对普通用户暴露。
+`PrimaryTarget` 表示 Access 已完成路由后的主存执行目标。它包含目标 `node_id`、Pebble `device_id`、内部 `device_table` 和 PrimaryStore 节点 `endpoint`，只在 Access 到 PrimaryStore 的内部调用中使用，不对普通用户暴露。它不是事务对象，storage 不在多个 `PrimaryTarget` 之间提供原子提交。
 
 ## 目标元数据表
 

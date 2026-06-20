@@ -1,0 +1,17 @@
+storage:
+  root: ./var/storage
+  metadata:
+    path: ./var/storage/metadata/storage_metadata.db
+  devices:
+    pebble_path: ./var/storage/pebble
+    duckdb_path: ./var/storage/duckdb/views.duckdb
+    bleve_path: ./var/storage/bleve
+    parquet_path: ./var/storage/archive
+  primary:
+    service_name: ""
+  eventbus:
+    type: memory
+    nats_url: ""
+    stream_name: MOOX_STORAGE
+    subject_prefix: moox.storage
+    rows_changed_subject: moox.storage.fact.rows_changed.v1

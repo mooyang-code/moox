@@ -1,3 +1,9 @@
+// Package router 解析在线事实主存的水平切分路由。
+//
+// 注意：本包及 proto/表结构中的 StorageRoute / StorageNode 命名为历史遗留，
+// 其目标语义已收窄为 PrimaryRoute / PrimaryNode（仅负责 Pebble 在线主存切分，
+// 不路由 DuckDB/Bleve/Parquet 派生设备）。物理重命名需随 proto 协议统一重生成，
+// 属已知技术债，详见 docs/storage-target-architecture-and-metadata.md。
 package router
 
 import (

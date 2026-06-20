@@ -106,11 +106,11 @@ func TestConfigLoaderLoadConfigWithDefaults(t *testing.T) {
 	}
 }
 
-func TestStorageRuntimeConfigLoadsStorageSection(t *testing.T) {
+func TestStorageRuntimeConfigLoadsStorageBusinessConfig(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	configPath := filepath.Join(dir, "trpc_go.yaml")
+	configPath := filepath.Join(dir, "storage.yaml")
 	content := []byte(`
 storage:
   root: ./var/storage
@@ -124,13 +124,14 @@ storage:
   eventbus:
     type: memory
     nats_url: ""
+    consumer_name: storage_rows_custom
 `)
 	if err := os.WriteFile(configPath, content, 0o600); err != nil {
 		t.Fatalf("write config failed: %v", err)
 	}
 
 	var cfg RuntimeConfig
-	err := NewConfigLoader(dir).LoadConfigWithDefaults("trpc_go.yaml", &cfg, cfg.ApplyDefaults)
+	err := NewConfigLoader(dir).LoadConfigWithDefaults("storage.yaml", &cfg, cfg.ApplyDefaults)
 	if err != nil {
 		t.Fatalf("LoadConfigWithDefaults returned error: %v", err)
 	}
@@ -145,5 +146,53 @@ storage:
 	}
 	if cfg.Storage.EventBus.Type != "memory" {
 		t.Fatalf("eventbus type = %q", cfg.Storage.EventBus.Type)
+	}
+	if cfg.Storage.EventBus.ConsumerName != "storage_rows_custom" {
+		t.Fatalf("eventbus consumer_name = %q", cfg.Storage.EventBus.ConsumerName)
+	}
+}
+
+func TestStorageRuntimeConfigDefaultsNATSConsumerName(t *testing.T) {
+	t.Parallel()
+
+	var cfg RuntimeConfig
+	cfg.Storage.EventBus.Type = "nats"
+	cfg.ApplyDefaults()
+	if cfg.Storage.EventBus.ConsumerName != "storage_rows_changed_deriver" {
+		t.Fatalf("eventbus consumer_name = %q", cfg.Storage.EventBus.ConsumerName)
+	}
+}
+
+func TestStorageRuntimeConfigDefaultsEventSubjects(t *testing.T) {
+	t.Parallel()
+
+	var cfg RuntimeConfig
+	cfg.ApplyDefaults()
+	if cfg.Storage.EventBus.SubjectPrefix != "moox.storage" {
+		t.Fatalf("eventbus subject_prefix = %q", cfg.Storage.EventBus.SubjectPrefix)
+	}
+	if cfg.Storage.EventBus.RowsChangedSubject != "moox.storage.fact.rows_changed.v1" {
+		t.Fatalf("eventbus rows_changed_subject = %q", cfg.Storage.EventBus.RowsChangedSubject)
+	}
+}
+
+func TestStorageRuntimeConfigDefaultsPrimaryServiceNameToLocal(t *testing.T) {
+	t.Parallel()
+
+	var cfg RuntimeConfig
+	cfg.ApplyDefaults()
+	if cfg.Storage.Primary.ServiceName != "" {
+		t.Fatalf("primary service_name = %q, want empty for local primary", cfg.Storage.Primary.ServiceName)
+	}
+}
+
+func TestStorageRuntimeConfigBuildsRowsChangedSubjectFromCustomPrefix(t *testing.T) {
+	t.Parallel()
+
+	var cfg RuntimeConfig
+	cfg.Storage.EventBus.SubjectPrefix = "custom.storage"
+	cfg.ApplyDefaults()
+	if cfg.Storage.EventBus.RowsChangedSubject != "custom.storage.fact.rows_changed.v1" {
+		t.Fatalf("eventbus rows_changed_subject = %q", cfg.Storage.EventBus.RowsChangedSubject)
 	}
 }

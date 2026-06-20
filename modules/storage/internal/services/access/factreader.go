@@ -14,7 +14,7 @@ func (s *Service) primaryFactReader() *primaryFactReader {
 	return &primaryFactReader{service: s}
 }
 
-func (r *primaryFactReader) ReadRows(ctx context.Context, scope *pb.DataScope, mode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, rowIDs []string, columnNames []string, page *pb.Page) ([]*pb.DataRow, *pb.PageResult, error) {
+func (r *primaryFactReader) ReadRows(ctx context.Context, scope *pb.DataScope, mode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, objectID string, columnNames []string, page *pb.Page) ([]*pb.DataRow, *pb.PageResult, error) {
 	ref, err := r.service.router.Resolve(ctx, scope)
 	if err != nil {
 		return nil, nil, err
@@ -24,7 +24,7 @@ func (r *primaryFactReader) ReadRows(ctx context.Context, scope *pb.DataScope, m
 		ReadMode:     mode,
 		TimeRange:    timeRange,
 		SnapshotTime: snapshotTime,
-		RowIds:       rowIDs,
+		ObjectId:     objectID,
 		ColumnNames:  columnNames,
 		Page:         page,
 	})

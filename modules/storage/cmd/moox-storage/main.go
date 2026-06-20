@@ -2,36 +2,45 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
+	"github.com/mooyang-code/moox/modules/storage/internal/bootstrap/eventbus"
+	"github.com/mooyang-code/moox/modules/storage/internal/bootstrap/metadata"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
-	transporteventbus "github.com/mooyang-code/moox/modules/storage/internal/infra/eventbus"
-	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/transport"
-	_ "github.com/mooyang-code/moox/modules/storage/internal/infra/transport/nats"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/services/access"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/archive"
 	primarysvc "github.com/mooyang-code/moox/modules/storage/internal/services/primary"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
 func main() {
 	if metadataInitRequested(os.Args) {
-		if err := initMetadataSchema(context.Background(), configPathFromArgs(os.Args)); err != nil {
+		frameworkConfigPath := configPathFromArgs(os.Args)
+		storageConfigPath := storageConfigPathFromArgs(os.Args, frameworkConfigPath)
+		if err := initMetadataSchema(trpc.BackgroundContext(), frameworkConfigPath, storageConfigPath); err != nil {
 			log.Errorf("初始化 metadata schema 失败: %v", err)
 			os.Exit(1)
 		}
 		log.Infof("metadata schema 初始化完成")
+		return
+	}
+
+	if metadataImportRequested(os.Args) {
+		frameworkConfigPath := configPathFromArgs(os.Args)
+		storageConfigPath := storageConfigPathFromArgs(os.Args, frameworkConfigPath)
+		if err := importMetadataSeed(trpc.BackgroundContext(), frameworkConfigPath, storageConfigPath); err != nil {
+			log.Errorf("导入 metadata seed 失败: %v", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -49,8 +58,24 @@ func main() {
 		Root:       opts.Root,
 		PebblePath: opts.PebblePath,
 	})
+	defer func() {
+		if err := storageService.Close(); err != nil {
+			log.Errorf("关闭 storage service 失败: %v", err)
+		}
+		if err := primaryService.Close(); err != nil {
+			log.Errorf("关闭 primary service 失败: %v", err)
+		}
+	}()
+	if err := storageService.StartEventConsumers(trpc.BackgroundContext()); err != nil {
+		log.Errorf("启动 storage event consumers 失败: %v", err)
+		os.Exit(1)
+	}
 	if err := storageService.InitViewBuilder(); err != nil {
 		log.Errorf("初始化 ViewBuilder 失败: %v", err)
+		os.Exit(1)
+	}
+	if err := storageService.InitArchiveService(); err != nil {
+		log.Errorf("初始化 ArchiveService 失败: %v", err)
 		os.Exit(1)
 	}
 	pb.RegisterMetadataServiceService(s, storageService)
@@ -58,7 +83,11 @@ func main() {
 	pb.RegisterQueryServiceService(s, storageService)
 	pb.RegisterPrimaryStoreServiceService(s, primaryService)
 	timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.storage.view.timer"), view.HandleSchedule)
+	registerTimerHandlerService("trpc.storage.view.timer", s.Service("trpc.storage.view.timer"), view.HandleSchedule)
+	registerTimerHandlerService("trpc.storage.view.cleanup.timer", s.Service("trpc.storage.view.cleanup.timer"), view.HandleSchedule)
+	registerTimerHandlerService("trpc.storage.view.retry_failed.timer", s.Service("trpc.storage.view.retry_failed.timer"), view.HandleSchedule)
+	timer.RegisterScheduler("archiveSchedule", &timer.DefaultScheduler{})
+	registerTimerHandlerService("trpc.storage.archive.timer", s.Service("trpc.storage.archive.timer"), archive.HandleSchedule)
 
 	// 启动trpc服务器
 	if err := s.Serve(); err != nil {
@@ -66,15 +95,21 @@ func main() {
 	}
 }
 
-func storageRoot() string {
-	return storageOptions().Root
+func registerTimerHandlerService(name string, service server.Service, handle func(context.Context, string) error) bool {
+	if service == nil {
+		log.Warnf("timer service %s is not configured, skip register", name)
+		return false
+	}
+	timer.RegisterHandlerService(service, handle)
+	return true
 }
 
 func storageOptions() storagesvc.Options {
 	configPath := configPathFromArgs(os.Args)
-	opts := loadStorageOptions(configPath)
-	if cfg, ok := loadStorageConfig(configPath); ok {
-		events, err := newRowsChangedBus(context.Background(), cfg.Storage.EventBus)
+	storageConfigPath := storageConfigPathFromArgs(os.Args, configPath)
+	opts := loadStorageOptions(storageConfigPath)
+	if cfg, ok := loadStorageConfig(storageConfigPath); ok {
+		events, err := eventbus.NewRowsChangedBus(trpc.BackgroundContext(), cfg.Storage.EventBus)
 		if err != nil {
 			log.Errorf("初始化 storage eventbus 失败: %v", err)
 			os.Exit(1)
@@ -109,6 +144,34 @@ func configPathFromArgs(args []string) string {
 	return filepath.Join("config", "trpc_go.yaml")
 }
 
+func storageConfigPathFromArgs(args []string, frameworkConfigPath string) string {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-storage-conf=") {
+			return strings.TrimPrefix(arg, "-storage-conf=")
+		}
+		if strings.HasPrefix(arg, "--storage-conf=") {
+			return strings.TrimPrefix(arg, "--storage-conf=")
+		}
+		if (arg == "-storage-conf" || arg == "--storage-conf") && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	if path := os.Getenv("MOOX_STORAGE_CONFIG"); path != "" {
+		return path
+	}
+	if path := os.Getenv("STORAGE_APP_CONFIG"); path != "" {
+		return path
+	}
+	if dir := os.Getenv("STORAGE_CONFIG_PATH"); dir != "" {
+		return filepath.Join(dir, "storage.yaml")
+	}
+	if frameworkConfigPath != "" {
+		return filepath.Join(filepath.Dir(frameworkConfigPath), "storage.yaml")
+	}
+	return filepath.Join("config", "storage.yaml")
+}
+
 func metadataInitRequested(args []string) bool {
 	for _, arg := range args {
 		if arg == "-init-metadata" || arg == "--init-metadata" {
@@ -118,29 +181,73 @@ func metadataInitRequested(args []string) bool {
 	return false
 }
 
-func initMetadataSchema(ctx context.Context, configPath string) error {
-	opts := loadStorageOptions(configPath)
+func initMetadataSchema(ctx context.Context, frameworkConfigPath string, storageConfigPath string) error {
+	var storage storageconfig.StorageConfig
+	if cfg, ok := loadStorageConfig(storageConfigPath); ok {
+		storage = cfg.Storage
+	}
 	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
-		opts.Root = root
+		storage.Root = root
 	}
-	root := opts.Root
-	if root == "" {
-		root = "var/storage"
+	return metadata.InitSchema(ctx, metadata.SchemaOptions{
+		Storage:    storage,
+		SchemaPath: metadataSchemaPath(frameworkConfigPath),
+	})
+}
+
+func metadataImportRequested(args []string) bool {
+	for _, arg := range args {
+		if arg == "-import-metadata" || arg == "--import-metadata" {
+			return true
+		}
 	}
-	metadataPath := opts.MetadataPath
-	if metadataPath == "" {
-		metadataPath = filepath.Join(root, "metadata", "storage_metadata.db")
+	return false
+}
+
+func importMetadataSeed(ctx context.Context, frameworkConfigPath string, storageConfigPath string) error {
+	var storage storageconfig.StorageConfig
+	if cfg, ok := loadStorageConfig(storageConfigPath); ok {
+		storage = cfg.Storage
 	}
-	schemaPath := metadataSchemaPath(configPath)
-	if err := os.MkdirAll(filepath.Dir(metadataPath), 0o755); err != nil {
-		return err
+	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
+		storage.Root = root
 	}
-	store, err := metasqlite.Open(ctx, metasqlite.Options{Path: metadataPath, SchemaPath: schemaPath})
+	seedPath := seedPathFromArgs(os.Args, storageConfigPath)
+	result, err := metadata.ImportSeed(ctx, metadata.SeedOptions{
+		Storage:    storage,
+		SchemaPath: metadataSchemaPath(frameworkConfigPath),
+		SeedPath:   seedPath,
+	})
 	if err != nil {
 		return err
 	}
-	defer store.Close()
-	return store.InitSchema(ctx)
+	log.Infof("metadata seed 导入完成 (%s): spaces=%d data_sources=%d subjects=%d subject_symbols=%d datasets=%d dataset_subjects=%d fields=%d factors=%d dataset_columns=%d views=%d view_columns=%d storage_nodes=%d devices=%d storage_routes=%d",
+		seedPath, result.Spaces, result.DataSources, result.Subjects, result.SubjectSymbols, result.DataSets,
+		result.DataSetSubjects, result.Fields, result.Factors, result.DataSetColumns, result.Views,
+		result.ViewColumns, result.StorageNodes, result.Devices, result.StorageRoutes)
+	return nil
+}
+
+func seedPathFromArgs(args []string, storageConfigPath string) string {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-seed=") {
+			return strings.TrimPrefix(arg, "-seed=")
+		}
+		if strings.HasPrefix(arg, "--seed=") {
+			return strings.TrimPrefix(arg, "--seed=")
+		}
+		if (arg == "-seed" || arg == "--seed") && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	if path := os.Getenv("STORAGE_SEED_FILE"); path != "" {
+		return path
+	}
+	if storageConfigPath != "" {
+		return filepath.Join(filepath.Dir(storageConfigPath), "metadata.seed.yaml")
+	}
+	return filepath.Join("config", "metadata.seed.yaml")
 }
 
 func metadataSchemaPath(configPath string) string {
@@ -163,10 +270,6 @@ func metadataSchemaPath(configPath string) string {
 	return candidates[0]
 }
 
-func loadStorageRoot(configPath string) string {
-	return loadStorageOptions(configPath).Root
-}
-
 func loadStorageOptions(configPath string) storagesvc.Options {
 	cfg, ok := loadStorageConfig(configPath)
 	if !ok {
@@ -178,6 +281,7 @@ func loadStorageOptions(configPath string) storagesvc.Options {
 		PebblePath:         cfg.Storage.Devices.PebblePath,
 		DuckDBPath:         cfg.Storage.Devices.DuckDBPath,
 		BlevePath:          cfg.Storage.Devices.BlevePath,
+		ParquetPath:        cfg.Storage.Devices.ParquetPath,
 		PrimaryServiceName: cfg.Storage.Primary.ServiceName,
 	}
 }
@@ -194,33 +298,6 @@ func loadStorageConfig(configPath string) (storageconfig.RuntimeConfig, bool) {
 		return cfg, false
 	}
 	return cfg, true
-}
-
-func newRowsChangedBus(ctx context.Context, cfg storageconfig.StorageEventBus) (coreeventbus.Bus, error) {
-	switch strings.ToLower(strings.TrimSpace(cfg.Type)) {
-	case "", "memory":
-		return coreeventbus.NewMemoryBus(), nil
-	case "nats":
-		subject := cfg.RowsChangedSubject
-		if subject == "" {
-			subject = transporteventbus.DefaultRowsChangedSubject
-		}
-		producer, err := transport.NewProducer(transport.ProducerKindNATS, transport.ProducerOptions{
-			ServerURL:      cfg.NATSURL,
-			ConnectTimeout: 10 * time.Second,
-			StreamName:     cfg.StreamName,
-			StreamSubjects: []string{subject},
-		})
-		if err != nil {
-			return nil, err
-		}
-		if err := producer.Connect(ctx); err != nil {
-			return nil, err
-		}
-		return transporteventbus.NewProducerBus(producer, subject), nil
-	default:
-		return nil, fmt.Errorf("unsupported storage eventbus type %s", cfg.Type)
-	}
 }
 
 func clearSocketFiles() {

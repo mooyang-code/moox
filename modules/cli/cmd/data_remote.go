@@ -100,6 +100,13 @@ func inferColumnTypes(rows []*pb.DataRow) map[string]pb.FieldValueType {
 }
 
 func postStorage(ctx context.Context, storageURL string, service string, method string, req proto.Message, rsp proto.Message) error {
+	if err := postStorageRaw(ctx, storageURL, service, method, req, rsp); err != nil {
+		return err
+	}
+	return checkStorageRetInfo(service, method, rsp)
+}
+
+func postStorageRaw(ctx context.Context, storageURL string, service string, method string, req proto.Message, rsp proto.Message) error {
 	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(req)
 	if err != nil {
 		return err
@@ -123,14 +130,27 @@ func postStorage(ctx context.Context, storageURL string, service string, method 
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(body, rsp); err != nil {
 		return err
 	}
-	if withRet, ok := rsp.(retInfoResponse); ok {
-		retInfo := withRet.GetRetInfo()
-		if retInfo == nil {
-			return fmt.Errorf("%s/%s failed: missing ret_info", service, method)
-		}
-		if retInfo.GetCode() != pb.ErrorCode_SUCCESS {
-			return fmt.Errorf("%s/%s failed: %s", service, method, retInfo.GetMsg())
-		}
+	return nil
+}
+
+func checkStorageRetInfo(service string, method string, rsp proto.Message) error {
+	retInfo, ok := responseRetInfo(rsp)
+	if !ok {
+		return nil
+	}
+	if retInfo == nil {
+		return fmt.Errorf("%s/%s failed: missing ret_info", service, method)
+	}
+	if retInfo.GetCode() != pb.ErrorCode_SUCCESS {
+		return fmt.Errorf("%s/%s failed: %s", service, method, retInfo.GetMsg())
 	}
 	return nil
+}
+
+func responseRetInfo(rsp proto.Message) (*pb.RetInfo, bool) {
+	withRet, ok := rsp.(retInfoResponse)
+	if !ok {
+		return nil, false
+	}
+	return withRet.GetRetInfo(), true
 }

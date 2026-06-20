@@ -2,9 +2,11 @@ package view_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"sync"
 	"testing"
@@ -61,6 +63,29 @@ func TestBuilderRebuildsPendingViews(t *testing.T) {
 	stored, err := fixture.meta.GetView(ctx, "crypto", "kline_view")
 	require.NoError(t, err)
 	require.Equal(t, "active", stored.GetBuildStatus())
+}
+
+func TestBuilderRebuildsInterruptedBuildingViews(t *testing.T) {
+	ctx := context.Background()
+	fixture := newBuilderFixture(t, ctx)
+	defer fixture.close()
+
+	stored, err := fixture.meta.GetView(ctx, "crypto", "kline_view")
+	require.NoError(t, err)
+	stored.BuildStatus = "building"
+	stored.Columns = nil
+	_, err = fixture.meta.UpsertView(ctx, stored)
+	require.NoError(t, err)
+
+	views, err := fixture.builder.RebuildPendingViews(ctx, "crypto")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Equal(t, "kline_view", views[0].GetViewId())
+
+	stored, err = fixture.meta.GetView(ctx, "crypto", "kline_view")
+	require.NoError(t, err)
+	require.Equal(t, "active", stored.GetBuildStatus())
+	require.NotEmpty(t, stored.GetActiveResult())
 }
 
 func TestBuilderBuildsAllPagesOfPebbleFacts(t *testing.T) {
@@ -213,6 +238,111 @@ func TestBuilderRejectsOverlappingBuildForSameView(t *testing.T) {
 	require.ErrorContains(t, err, "already running")
 	close(writer.release)
 	require.NoError(t, <-firstErr)
+}
+
+func TestBuilderMarksViewBuildingWhileBuildRuns(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	meta, err := metasqlite.Open(ctx, metasqlite.Options{
+		Path:       filepath.Join(root, "metadata.db"),
+		SchemaPath: schemaPath(t),
+	})
+	require.NoError(t, err)
+	defer meta.Close()
+	require.NoError(t, meta.InitSchema(ctx))
+	require.NoError(t, seedMinimalViewMetadata(ctx, meta))
+
+	writer := &blockingViewWriter{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	builder := view.NewBuilder(view.Options{
+		Metadata: meta,
+		Facts:    fakeFactReader{},
+		Views:    writer,
+		Now:      fixedNow,
+	})
+
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := builder.Build(ctx, "crypto", "kline_view")
+		firstErr <- err
+	}()
+	<-writer.started
+
+	stored, err := meta.GetView(ctx, "crypto", "kline_view")
+	require.NoError(t, err)
+	require.Equal(t, "building", stored.GetBuildStatus())
+
+	close(writer.release)
+	require.NoError(t, <-firstErr)
+	stored, err = meta.GetView(ctx, "crypto", "kline_view")
+	require.NoError(t, err)
+	require.Equal(t, "active", stored.GetBuildStatus())
+}
+
+func TestBuilderMarksViewFailedWhenBuildFails(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	meta, err := metasqlite.Open(ctx, metasqlite.Options{
+		Path:       filepath.Join(root, "metadata.db"),
+		SchemaPath: schemaPath(t),
+	})
+	require.NoError(t, err)
+	defer meta.Close()
+	require.NoError(t, meta.InitSchema(ctx))
+	require.NoError(t, seedMinimalViewMetadata(ctx, meta))
+
+	builder := view.NewBuilder(view.Options{
+		Metadata: meta,
+		Facts:    fakeFactReader{},
+		Views:    insertFailingViewWriter{},
+		Now:      fixedNow,
+	})
+
+	_, err = builder.Build(ctx, "crypto", "kline_view")
+	require.ErrorContains(t, err, "insert failed")
+	stored, err := meta.GetView(ctx, "crypto", "kline_view")
+	require.NoError(t, err)
+	require.Equal(t, "failed", stored.GetBuildStatus())
+}
+
+func TestHandleScheduleRetriesFailedViewsWhenRequested(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	meta, err := metasqlite.Open(ctx, metasqlite.Options{
+		Path:       filepath.Join(root, "metadata.db"),
+		SchemaPath: schemaPath(t),
+	})
+	require.NoError(t, err)
+	defer meta.Close()
+	require.NoError(t, meta.InitSchema(ctx))
+	require.NoError(t, seedMinimalViewMetadata(ctx, meta))
+
+	failing := view.NewBuilder(view.Options{
+		Metadata: meta,
+		Facts:    fakeFactReader{},
+		Views:    insertFailingViewWriter{},
+		Now:      fixedNow,
+	})
+	_, err = failing.Build(ctx, "crypto", "kline_view")
+	require.ErrorContains(t, err, "insert failed")
+
+	writer := &fakeViewWriter{}
+	view.SetDefaultBuilder(view.NewBuilder(view.Options{
+		Metadata: meta,
+		Facts:    fakeFactReader{},
+		Views:    writer,
+		Now:      fixedNow,
+	}))
+	t.Cleanup(func() { view.SetDefaultBuilder(nil) })
+
+	require.NoError(t, view.HandleSchedule(ctx, "op=retry_failed&space_id=crypto"))
+	stored, err := meta.GetView(ctx, "crypto", "kline_view")
+	require.NoError(t, err)
+	require.Equal(t, "active", stored.GetBuildStatus())
+	require.NotEmpty(t, stored.GetActiveResult())
+	require.Len(t, writer.tables, 1)
 }
 
 func TestBuilderJoinsColumnsFromMultipleDatasets(t *testing.T) {
@@ -434,6 +564,90 @@ func TestHandleScheduleRebuildsPendingViews(t *testing.T) {
 	require.NotEmpty(t, stored.GetActiveResult())
 }
 
+func TestBuilderCleanupInactiveResultsKeepsActiveResult(t *testing.T) {
+	ctx := context.Background()
+	fixture := newBuilderFixture(t, ctx)
+	defer fixture.close()
+
+	built, err := fixture.builder.Build(ctx, "crypto", "kline_view")
+	require.NoError(t, err)
+	oldResult := "view_result_crypto_kline_view_old"
+	require.NoError(t, fixture.views.CreateResultTable(ctx, oldResult, []*pb.ViewColumn{{
+		ColumnName: "close",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   "kline.close",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	}}))
+
+	dropped, err := fixture.builder.CleanupInactiveResults(ctx, "crypto")
+	require.NoError(t, err)
+	require.Equal(t, 1, dropped)
+
+	tables, err := fixture.views.ListResultTables(ctx)
+	require.NoError(t, err)
+	require.Contains(t, tables, built.GetActiveResult())
+	require.NotContains(t, tables, oldResult)
+	_, rows, _, err := fixture.views.QueryView(ctx, built.GetActiveResult(), &pb.QueryViewReq{SpaceId: "crypto", ViewId: "kline_view"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	_, _, _, err = fixture.views.QueryView(ctx, oldResult, &pb.QueryViewReq{})
+	require.Error(t, err)
+}
+
+func TestHandleScheduleCleansInactiveResults(t *testing.T) {
+	ctx := context.Background()
+	fixture := newBuilderFixture(t, ctx)
+	defer fixture.close()
+	view.SetDefaultBuilder(fixture.builder)
+	t.Cleanup(func() { view.SetDefaultBuilder(nil) })
+
+	_, err := fixture.builder.Build(ctx, "crypto", "kline_view")
+	require.NoError(t, err)
+	oldResult := "view_result_crypto_schedule_old"
+	require.NoError(t, fixture.views.CreateResultTable(ctx, oldResult, []*pb.ViewColumn{{
+		ColumnName: "close",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   "kline.close",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	}}))
+
+	require.NoError(t, view.HandleSchedule(ctx, "op=cleanup&space_id=crypto"))
+
+	tables, err := fixture.views.ListResultTables(ctx)
+	require.NoError(t, err)
+	require.NotContains(t, tables, oldResult)
+}
+
+func TestBuilderCleanupInactiveResultsKeepsActiveResultFromSanitizedSpaceCollision(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	meta, err := metasqlite.Open(ctx, metasqlite.Options{
+		Path:       filepath.Join(root, "metadata.db"),
+		SchemaPath: schemaPath(t),
+	})
+	require.NoError(t, err)
+	defer meta.Close()
+	require.NoError(t, meta.InitSchema(ctx))
+	require.NoError(t, seedCleanupCollisionMetadata(ctx, meta))
+
+	cleaner := &fakeViewCleaner{tables: map[string]bool{
+		"view_result_a_b_foreign_active": true,
+		"view_result_a_b_local_old":      true,
+	}}
+	builder := view.NewBuilder(view.Options{
+		Metadata: meta,
+		Facts:    fakeFactReader{},
+		Views:    cleaner,
+		Now:      fixedNow,
+	})
+
+	dropped, err := builder.CleanupInactiveResults(ctx, "a-b")
+	require.NoError(t, err)
+	require.Equal(t, 1, dropped)
+	require.True(t, cleaner.tables["view_result_a_b_foreign_active"])
+	require.False(t, cleaner.tables["view_result_a_b_local_old"])
+}
+
 type builderFixture struct {
 	meta    *metasqlite.Store
 	facts   device.FactStore
@@ -593,9 +807,49 @@ func seedMinimalViewMetadata(ctx context.Context, meta *metasqlite.Store) error 
 	return err
 }
 
+func seedCleanupCollisionMetadata(ctx context.Context, meta *metasqlite.Store) error {
+	for _, spaceID := range []string{"a-b", "a_b"} {
+		if _, err := meta.UpsertSpace(ctx, &pb.Space{SpaceId: spaceID, Name: spaceID}); err != nil {
+			return err
+		}
+		if _, err := meta.UpsertDataSource(ctx, &pb.DataSource{SpaceId: spaceID, DataSourceId: "source", Name: "source", Kind: "internal"}); err != nil {
+			return err
+		}
+		if _, err := meta.UpsertDataSet(ctx, &pb.DataSet{
+			SpaceId:      spaceID,
+			DatasetId:    "dataset",
+			DataSourceId: "source",
+			Name:         "dataset",
+			DataKind:     pb.DataKind_DATA_KIND_TIME_SERIES,
+			Status:       "active",
+		}); err != nil {
+			return err
+		}
+		if _, err := meta.UpsertView(ctx, &pb.View{
+			SpaceId:          spaceID,
+			ViewId:           "view",
+			Name:             "view",
+			PrimaryDatasetId: "dataset",
+			DatasetIds:       []string{"dataset"},
+			Status:           "active",
+		}); err != nil {
+			return err
+		}
+	}
+	foreign, err := meta.GetView(ctx, "a_b", "view")
+	if err != nil {
+		return err
+	}
+	foreign.ActiveResult = "view_result_a_b_foreign_active"
+	foreign.BuildStatus = "active"
+	foreign.Columns = nil
+	_, err = meta.UpsertView(ctx, foreign)
+	return err
+}
+
 type fakeFactReader struct{}
 
-func (fakeFactReader) ReadRows(_ context.Context, scope *pb.DataScope, _ pb.ReadMode, _ *pb.TimeRange, _ string, _ []string, _ []string, _ *pb.Page) ([]*pb.DataRow, *pb.PageResult, error) {
+func (fakeFactReader) ReadRows(_ context.Context, scope *pb.DataScope, _ pb.ReadMode, _ *pb.TimeRange, _ string, _ string, _ []string, _ *pb.Page) ([]*pb.DataRow, *pb.PageResult, error) {
 	return []*pb.DataRow{{
 		Key: &pb.DataKey{
 			Scope:    scope,
@@ -618,6 +872,43 @@ func (w *fakeViewWriter) CreateResultTable(_ context.Context, tableName string, 
 func (w *fakeViewWriter) InsertRows(_ context.Context, _ string, rows []*pb.QueryViewRow) error {
 	w.rows = append(w.rows, rows...)
 	return nil
+}
+
+type fakeViewCleaner struct {
+	tables map[string]bool
+}
+
+func (w *fakeViewCleaner) CreateResultTable(_ context.Context, tableName string, _ []*pb.ViewColumn) error {
+	w.tables[tableName] = true
+	return nil
+}
+
+func (w *fakeViewCleaner) InsertRows(context.Context, string, []*pb.QueryViewRow) error {
+	return nil
+}
+
+func (w *fakeViewCleaner) ListResultTables(context.Context) ([]string, error) {
+	out := make([]string, 0, len(w.tables))
+	for tableName := range w.tables {
+		out = append(out, tableName)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func (w *fakeViewCleaner) DropResultTable(_ context.Context, tableName string) error {
+	delete(w.tables, tableName)
+	return nil
+}
+
+type insertFailingViewWriter struct{}
+
+func (insertFailingViewWriter) CreateResultTable(context.Context, string, []*pb.ViewColumn) error {
+	return nil
+}
+
+func (insertFailingViewWriter) InsertRows(context.Context, string, []*pb.QueryViewRow) error {
+	return errors.New("insert failed")
 }
 
 type blockingViewWriter struct {

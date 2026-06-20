@@ -61,6 +61,22 @@ message.proto
 
 协议字段使用 `start_time`、`end_time`、`snapshot_time`、`data_time` 这类中性命名，不在字段名中带 `_ms`、`_ns` 等单位。具体格式由项目统一约定。
 
+`TimeRange` 固定表示闭区间 `[start_time, end_time]`，不再提供 `start_inclusive/end_inclusive`。任一端为空表示该方向无界。调用方必须使用 RFC3339 或 RFC3339Nano，例如：
+
+```text
+2025-03-03T00:05:00Z
+2025-03-03T08:05:00+08:00
+2025-03-03T00:05:00.123456789Z
+```
+
+服务端内部会统一归一化为 UTC 固定 9 位纳秒格式：
+
+```text
+2006-01-02T15:04:05.000000000Z
+```
+
+`VersionRange` 同样表示闭区间 `[start_version, end_version]`，用于对象数据的版本范围读取。版本值如果是 RFC3339/RFC3339Nano，也按同一时间格式归一化；否则按普通字符串版本比较。
+
 ### 写入模式
 
 `WriteMode` 只保留：
@@ -73,6 +89,8 @@ OVERWRITE
 ```
 
 不提供 `DELETE`。用户侧不开放删除数据能力。
+
+当前 storage 对外只承诺更新语义：调用方在某个 `DataKey` 下写入哪些列，服务就只处理这些列。`OVERWRITE` 是历史兼容枚举，不表示按 scope 删除旧行或重写整段数据；底层不得用范围删除来实现它。`APPEND` 也不提供跨服务的唯一插入事务语义。
 
 ### 列来源
 
@@ -101,11 +119,80 @@ SYSTEM
 `DataService` 是用户侧事实数据读写服务。
 
 ```text
+WriteTimeSeriesRows
+ReadTimeSeriesRows
+WriteObjectRows
+ReadObjectRows
 WriteRows
 ReadRows
 ```
 
-### WriteRows
+推荐新接入方使用 TimeSeries/Object 两组接口。`WriteRows/ReadRows` 是旧兼容入口，用于历史测试和内部过渡。
+
+### 统一事实行模型
+
+底层事实行统一为：
+
+```text
+space_id + dataset_id + data_key + version -> columns + attributes
+```
+
+时序数据和对象数据的差异只在 `data_key/version` 如何构造：
+
+| 数据形态 | 对外定义 | 内部逻辑 key |
+| --- | --- | --- |
+| TimeSeries | 固定 `subject_id + freq` 下按 `data_time` 演进的数据，例如 K 线、tick | `data_key = subject_id|freq|dimhash`，`version = data_time` |
+| Object | 非固定 `subject_id + freq` 的数据。即使新闻、研报有时间线，也用对象版本表达 | `data_key = object_id`，`version = version` |
+
+Pebble 物理 key 空间按形态分开：
+
+```text
+t|space|dataset|subject|freq|version|dimhash|legacy_row_id
+o|space|dataset|object_id|version
+```
+
+时序物理 key 把 `version(data_time)` 放在 `freq` 后面，是为了让最常见的“某个标的某个频率的一段时间”读取可以直接用 key 边界裁剪；逻辑上它仍对应 `data_key + version`。`legacy_row_id` 只服务旧 `WriteRows` 兼容入口，新的 `TimeSeriesRow` 不暴露该字段。
+
+### WriteTimeSeriesRows / ReadTimeSeriesRows
+
+`TimeSeriesRow` 使用统一的 `TimeSeriesKey`：
+
+```text
+space_id
+dataset_id
+subject_id
+freq
+dimensions
+data_time
+```
+
+约束：
+
+- `space_id`、`dataset_id`、`subject_id`、`freq`、`data_time` 写入时必填。
+- `data_time` 必须是 RFC3339/RFC3339Nano。
+- `dimensions` 只放参与同一事实序列身份的低基数维度，不放普通筛选字段。
+- 读取时仍使用 `TimeSeriesKey`，其中 `data_time` 可为空；精确读一根 K 线时使用 `time_range.start_time = time_range.end_time`。
+- `order` 位于读取请求顶层，表示按 `data_time/version` 升序或降序返回，不属于 `TimeRange` 本身。
+
+### WriteObjectRows / ReadObjectRows
+
+`ObjectRow` 使用统一的 `ObjectKey`：
+
+```text
+space_id
+dataset_id
+object_id
+version
+```
+
+约束：
+
+- `space_id`、`dataset_id`、`object_id` 必填。
+- `version` 为空时服务端归一为默认版本。
+- 读取时可用 `ObjectKey.version` 表达精确版本，也可用 `VersionRange` 表达闭区间版本范围。
+- `order` 位于读取请求顶层，表示按 `version` 升序或降序返回。
+
+### WriteRows（兼容入口）
 
 `WriteRows` 写入事实数据行。请求结构：
 
@@ -141,7 +228,11 @@ freq
 dimensions
 ```
 
-`DataScope` 定位一组事实数据。`DataKey` 在 `DataScope` 上增加 `data_time` 和 `row_id`，定位一条事实行。写入时，调用方是在某个 `DataKey` 下写入一组列值。
+`DataScope` 定位一组事实数据。`DataKey` 在 `DataScope` 上增加 `data_time` 和旧兼容字段 `row_id`，定位一条事实行。写入时，调用方是在某个 `DataKey` 下写入一组列值。
+
+同一个 `DataKey` 再次写入时，服务按列名 merge：本次携带的同名列覆盖旧值，未携带的旧列保留。attributes 也按 key 覆盖，不携带的旧 attributes 保留。写入不是整行替换，更不是删除同一 scope 下其他行。
+
+`DataSetColumn.required` 不表示每次 `WriteRows` 都必须携带该列。事实写入是字段级更新，required 可作为采集契约、管理台提示或全量导入校验依据，服务侧写入校验只要求本次携带的列已登记且类型匹配。
 
 `dimensions` 是参与逻辑定位的低基数业务维度，不是普通查询过滤条件。只有当某个值决定“是否为同一条事实序列或事实范围”时才放在这里，例如 `adjust_type=qfq`、`report_period=2025Q4`、`ranking_type=amount_top`。如果一个值只是展示、筛选或排序字段，应放在 `DataRow.columns`。
 
@@ -150,10 +241,14 @@ dimensions
 - `dataset_id` 必填。
 - `space_id` 必填；DataSet、Subject、Field 和 Factor 的唯一性均限定在 Space 内。
 - 时序数据应填写 `scope.subject_id`、`scope.freq` 和 `key.data_time`。
-- 对象型或表格型数据可以使用 `key.row_id` 表示逻辑行。
-- 事件或 tick 数据可以同时使用 `key.data_time` 和 `key.row_id`，避免同一时间多行冲突。
+- 对象型或表格型旧接口可以使用 `key.row_id` 表示逻辑行。
+- 新接入方不要用 `DataKey.row_id` 表达时序唯一性；同一时间多事件应建模为 `ObjectKey.object_id + version` 或放入参与身份的业务维度。
 - `columns.column_name` 必须登记在 `DataSetColumn` 中。
 - 写入成功只返回 `ret_info`。
+
+主存写入成功后发布 `DataRowsChangedEvent`。事件 rows 表示本次变更涉及的 `DataKey` 和 patch 列集合，不承诺是完整行；Search、View、Archive 等派生消费者应通过 Access 读接口回读主存当前完整行，再覆盖写入派生存储，使重放与重试消费保持幂等。若同批写入跨多个 `PrimaryTarget` 且后续 target 失败，服务仍应为已经成功写入的 rows 发布事件；storage 不提供跨 target 原子性，也不回滚已经成功写入的 target。
+
+派生消费者回读完整行时必须调用 Access 读接口，不能直接请求某个 `PrimaryTarget`。`PrimaryTarget` 是 Access 内部解析 PrimaryRoute 后得到的执行目标，只描述这批数据当前应发往哪个 PrimaryStore 节点/设备，不是用户协议，也不是派生消费者需要理解的分片信息。
 
 写入请求不包含额外写入选项对象。写入响应不返回行变更、不返回旧值、不返回写入数量。
 
@@ -167,7 +262,6 @@ scope
 read_mode
 time_range
 snapshot_time
-row_ids
 column_names
 page
 ```
@@ -176,7 +270,6 @@ page
 
 ```text
 RANGE          // 按时间区间读取
-POINT          // 按 row_id 点查
 LATEST_BEFORE  // 读取某个截面时间之前的最新行
 ```
 
@@ -216,6 +309,7 @@ page_result
 ```text
 QueryView
 SearchRows
+RebuildSearchIndex
 ```
 
 ### QueryView
@@ -270,8 +364,31 @@ page
 - `text_query` 非空时，使用 Bleve 全文索引召回匹配行。
 - `filters` 非空时，做结构化过滤。
 - `text_query + filters` 同时存在时，先全文召回，再结构化过滤。
-- `text_query` 为空但 `filters` 非空时，作为 DataSet 维度结构化搜索。
-- `column_names` 控制返回列，不影响过滤列解析。
+
+新增或修改 `DataSetColumn.text_indexed` 后，系统只保证后续增量写入按最新元数据进入 Bleve；历史 rows 不自动重建，避免元数据写入触发不可控的全量任务。
+
+### RebuildSearchIndex
+
+`RebuildSearchIndex` 是手动补偿接口，用于管理台、CLI 或运维任务按当前元数据重建某个 DataSet 的历史搜索索引。请求结构：
+
+```text
+auth_info
+space_id
+dataset_id
+subject_ids
+freq
+time_range
+dimensions
+```
+
+语义约束：
+
+- `space_id` 和 `dataset_id` 必填。
+- DataSet 必须通过 DataSetSubject 绑定 subject；显式传入的 `subject_ids` 中只要存在未绑定项，接口直接返回 `INVALID_PARAM`。
+- `subject_ids` 为空时，服务从元数据存储中的 DataSetSubject 绑定关系枚举；若没有任何绑定，接口直接拒绝，避免无边界回扫。
+- 接口只负责受理重建任务，返回 `rebuild_id`；后台任务通过 Access 的 `ReadRows` 路径分页读取事实数据，不绕过 Access，也不直接访问 PrimaryTarget。
+- 异步受理时 `indexed_rows` 返回 0，实际进度后续由任务状态接口或日志承载。
+- 重建任务失败只上报派生错误，不阻塞正常事实写入链路。
 
 Bleve 同步策略由元数据控制：
 
@@ -302,7 +419,7 @@ device_table
 endpoint
 ```
 
-`PrimaryTarget` 表示 Access 已完成路由后的主存执行目标。`device_table` 表示设备内部表、索引或键空间名称。`endpoint` 来自目标 PrimaryStore 节点，用于让内部 client 连接正确节点；为空时使用默认 PrimaryStore 服务名。Access 根据 PrimaryRoute 和元数据生成它，用户请求中不携带它。
+`PrimaryTarget` 表示 Access 已完成路由后的主存执行目标。`device_table` 表示设备内部表、索引或键空间名称。`endpoint` 来自目标 PrimaryStore 节点，用于让内部 client 连接正确节点；为空时使用默认 PrimaryStore 服务名。Access 根据 PrimaryRoute 和元数据生成它，用户请求中不携带它。`PrimaryTarget` 不是事务边界；多 target 写入按 target 分组执行，不提供全局原子提交。
 
 内部接口不提供创建、删除或解释路由的用户式 RPC。建表、视图构建、归档和索引刷新应由控制面任务或后台任务驱动。
 
@@ -344,3 +461,5 @@ t_storage_devices
 其中 `t_dataset_columns.c_text_indexed` 是 Bleve 同步开关。
 
 View 的物化查询结果由后台任务根据 `t_views.c_query_window` 回扫 Pebble 主存并异步构建。新增列或因子时，不原地修改当前结果，而是新建物化结果后切换 `c_active_result`。
+
+元数据 CRUD 直接读写 SQLite，供管理台、CLI 和控制面任务使用。Access 的校验、路由、Search 列解释等服务读路径使用独立 metadata cache。cache 启动加载快照，后续刷新由 snapshotcache 组件负责；元数据写入不会同步更新 cache，协议也不要求写入元数据后立即被数据服务读到。

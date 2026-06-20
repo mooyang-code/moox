@@ -2,20 +2,25 @@ package access
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	searchsvc "github.com/mooyang-code/moox/modules/storage/internal/services/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/rs/xid"
 	"google.golang.org/protobuf/proto"
 )
+
+const rebuildSearchIndexPageSize = 1000
 
 func (s *Service) QueryView(ctx context.Context, req *pb.QueryViewReq) (*pb.QueryViewRsp, error) {
 	if req.GetViewId() == "" {
 		return &pb.QueryViewRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, errText("view_id is required"))}, nil
 	}
-	view, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+	view, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
 	if err != nil {
 		return &pb.QueryViewRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
 	}
@@ -56,6 +61,128 @@ func (s *Service) SearchRows(ctx context.Context, req *pb.SearchRowsReq) (*pb.Se
 	sortSearchRows(matched, req.GetSorts())
 	paged, page := pageSlice(matched, req.GetPage())
 	return &pb.SearchRowsRsp{RetInfo: response.Success("success"), Rows: paged, PageResult: page}, nil
+}
+
+func (s *Service) RebuildSearchIndex(ctx context.Context, req *pb.RebuildSearchIndexReq) (*pb.RebuildSearchIndexRsp, error) {
+	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
+		return &pb.RebuildSearchIndexRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	subjectIDs, err := s.rebuildSearchIndexSubjects(ctx, req)
+	if err != nil {
+		return &pb.RebuildSearchIndexRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	if len(subjectIDs) == 0 {
+		return &pb.RebuildSearchIndexRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("subject_ids are required when dataset has no subject bindings"))}, nil
+	}
+	if err := s.requireDataSetSubjectsBound(ctx, req.GetSpaceId(), req.GetDatasetId(), subjectIDs); err != nil {
+		return &pb.RebuildSearchIndexRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	rebuildID := xid.New().String()
+	rebuildReq := proto.Clone(req).(*pb.RebuildSearchIndexReq)
+	s.indexMu.Lock()
+	if s.closing {
+		s.indexMu.Unlock()
+		return &pb.RebuildSearchIndexRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("service is closing"))}, nil
+	}
+	s.indexWG.Add(1)
+	s.indexMu.Unlock()
+	go func() {
+		defer s.indexWG.Done()
+		if _, err := s.rebuildSearchIndex(context.WithoutCancel(ctx), rebuildReq, subjectIDs); err != nil {
+			s.reportDerivedError(ctx, "search_rebuild_index", err)
+		}
+	}()
+	return &pb.RebuildSearchIndexRsp{RetInfo: response.Success("rebuild accepted"), RebuildId: rebuildID}, nil
+}
+
+func (s *Service) rebuildSearchIndex(ctx context.Context, req *pb.RebuildSearchIndexReq, subjectIDs []string) (uint64, error) {
+	var indexed uint64
+	for _, subjectID := range subjectIDs {
+		cursor := ""
+		for {
+			readRsp, err := s.ReadRows(ctx, &pb.ReadRowsReq{
+				AuthInfo: req.GetAuthInfo(),
+				Scope: &pb.DataScope{
+					SpaceId:    req.GetSpaceId(),
+					DatasetId:  req.GetDatasetId(),
+					SubjectId:  subjectID,
+					Freq:       req.GetFreq(),
+					Dimensions: req.GetDimensions(),
+				},
+				ReadMode:  pb.ReadMode_READ_MODE_RANGE,
+				TimeRange: req.GetTimeRange(),
+				Page:      &pb.Page{Size: rebuildSearchIndexPageSize, Cursor: cursor},
+			})
+			if err != nil {
+				return indexed, err
+			}
+			if readRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+				return indexed, errText(readRsp.GetRetInfo().GetMsg())
+			}
+			if len(readRsp.GetRows()) > 0 {
+				if err := s.search.IndexRows(ctx, readRsp.GetRows()); err != nil {
+					return indexed, err
+				}
+				indexed += uint64(len(readRsp.GetRows()))
+			}
+			page := readRsp.GetPageResult()
+			if !page.GetHasMore() || page.GetNextCursor() == "" {
+				break
+			}
+			cursor = page.GetNextCursor()
+		}
+	}
+	return indexed, nil
+}
+
+func (s *Service) rebuildSearchIndexSubjects(ctx context.Context, req *pb.RebuildSearchIndexReq) ([]string, error) {
+	if len(req.GetSubjectIds()) > 0 {
+		return uniqueNonEmpty(req.GetSubjectIds()), nil
+	}
+	const pageSize = 1000
+	var subjects []string
+	for pageNo := uint32(1); ; pageNo++ {
+		bindings, page, err := s.metadata.ListDataSetSubjectsPage(ctx, req.GetSpaceId(), req.GetDatasetId(), "", &pb.Page{Page: pageNo, Size: pageSize})
+		if err != nil {
+			return nil, err
+		}
+		for _, binding := range bindings {
+			if subjectID := strings.TrimSpace(binding.GetSubjectId()); subjectID != "" {
+				subjects = append(subjects, subjectID)
+			}
+		}
+		if !page.GetHasMore() {
+			break
+		}
+	}
+	return uniqueNonEmpty(subjects), nil
+}
+
+func (s *Service) requireDataSetSubjectsBound(ctx context.Context, spaceID string, datasetID string, subjectIDs []string) error {
+	for _, subjectID := range subjectIDs {
+		bindings, _, err := s.metadata.ListDataSetSubjectsPage(ctx, spaceID, datasetID, subjectID, &pb.Page{Page: 1, Size: 1})
+		if err != nil {
+			return err
+		}
+		if len(bindings) == 0 {
+			return errors.New("subject " + subjectID + " is not bound to dataset " + datasetID)
+		}
+	}
+	return nil
+}
+
+func uniqueNonEmpty(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func rowMatchesFilters(row *pb.DataRow, filters []*pb.FilterExpr) bool {
@@ -111,21 +238,20 @@ func rowColumnValue(row *pb.DataRow, name string) (*pb.TypedValue, bool) {
 }
 
 func compareTypedValues(left, right *pb.TypedValue, op string) bool {
-	leftText := typedValueString(left)
-	rightText := typedValueString(right)
+	cmp := factvalue.Compare(left, right)
 	switch op {
 	case "==":
-		return leftText == rightText
+		return cmp == 0
 	case "!=":
-		return leftText != rightText
+		return cmp != 0
 	case ">":
-		return leftText > rightText
+		return cmp > 0
 	case ">=":
-		return leftText >= rightText
+		return cmp >= 0
 	case "<":
-		return leftText < rightText
+		return cmp < 0
 	case "<=":
-		return leftText <= rightText
+		return cmp <= 0
 	default:
 		return false
 	}
@@ -175,28 +301,7 @@ func sortSearchRows(rows []*pb.DataRow, sorts []*pb.SortSpec) {
 }
 
 func typedValueString(value *pb.TypedValue) string {
-	if value == nil {
-		return ""
-	}
-	switch v := value.GetValue().(type) {
-	case *pb.TypedValue_StringValue:
-		return v.StringValue
-	case *pb.TypedValue_TimeValue:
-		return v.TimeValue
-	case *pb.TypedValue_JsonValue:
-		return v.JsonValue
-	case *pb.TypedValue_IntValue:
-		return fmtInt(v.IntValue)
-	case *pb.TypedValue_DoubleValue:
-		return fmtDouble(v.DoubleValue)
-	case *pb.TypedValue_BoolValue:
-		if v.BoolValue {
-			return "true"
-		}
-		return "false"
-	default:
-		return ""
-	}
+	return factvalue.String(value)
 }
 
 func errText(msg string) error {

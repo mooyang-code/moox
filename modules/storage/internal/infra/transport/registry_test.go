@@ -16,7 +16,7 @@ func TestRegistryCreatesProducerByKind(t *testing.T) {
 	producer, err := transport.NewProducer("fake", transport.ProducerOptions{ServerURL: "memory://test"})
 	require.NoError(t, err)
 	require.Equal(t, transport.ProducerOptions{ServerURL: "memory://test"}, producer.Options())
-	require.NoError(t, producer.Send(context.Background(), &transport.Message{Subject: "storage.rows.changed", Data: []byte("ok")}))
+	require.NoError(t, producer.Send(context.Background(), &transport.Message{Subject: "moox.storage.fact.rows_changed.v1", Data: []byte("ok")}))
 }
 
 type fakeProducer struct {

@@ -29,6 +29,24 @@ func HandleSchedule(ctx context.Context, params string) error {
 		return nil
 	}
 	spaceID := scheduleSpaceID(params)
+	switch scheduleOperation(params) {
+	case "cleanup":
+		dropped, err := builder.CleanupInactiveResults(ctx, spaceID)
+		if err != nil {
+			log.ErrorContextf(ctx, "[ViewBuilder] cleanup schedule failed: %v", err)
+			return err
+		}
+		log.InfoContextf(ctx, "[ViewBuilder] cleanup dropped %d inactive result table(s)", dropped)
+		return nil
+	case "retry_failed":
+		built, err := builder.RebuildFailedViews(ctx, spaceID)
+		if err != nil {
+			log.ErrorContextf(ctx, "[ViewBuilder] retry failed schedule failed: %v", err)
+			return err
+		}
+		log.InfoContextf(ctx, "[ViewBuilder] retry failed schedule rebuilt %d view(s)", len(built))
+		return nil
+	}
 	var (
 		built []*pb.View
 		err   error
@@ -88,7 +106,30 @@ func scheduleSpaceID(params string) string {
 		}
 	}
 	if !strings.Contains(params, "=") {
+		if strings.EqualFold(params, "cleanup") {
+			return ""
+		}
 		return params
+	}
+	return ""
+}
+
+func scheduleOperation(params string) string {
+	params = strings.TrimSpace(params)
+	if params == "" {
+		return ""
+	}
+	values, err := url.ParseQuery(strings.TrimPrefix(params, "?"))
+	if err == nil {
+		if op := strings.TrimSpace(values.Get("op")); op != "" {
+			return strings.ToLower(op)
+		}
+		if action := strings.TrimSpace(values.Get("action")); action != "" {
+			return strings.ToLower(action)
+		}
+	}
+	if !strings.Contains(params, "=") && strings.EqualFold(params, "cleanup") {
+		return "cleanup"
 	}
 	return ""
 }

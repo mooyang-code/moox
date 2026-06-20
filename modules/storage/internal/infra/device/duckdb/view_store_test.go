@@ -28,10 +28,8 @@ func TestViewStoreCreatesInsertsAndQueriesRows(t *testing.T) {
 	gotColumns, rows, page, err := store.QueryView(ctx, "view_result_crypto_kline_1", &pb.QueryViewReq{
 		SubjectIds: []string{"APT-USDT"},
 		QueryTime: &pb.QueryTime{TimeRange: &pb.TimeRange{
-			StartTime:      "2026-06-15T00:00:00+08:00",
-			EndTime:        "2026-06-15T00:00:00+08:00",
-			StartInclusive: true,
-			EndInclusive:   true,
+			StartTime: "2026-06-15T00:00:00+08:00",
+			EndTime:   "2026-06-15T00:00:00+08:00",
 		}},
 	})
 	require.NoError(t, err)
@@ -41,7 +39,7 @@ func TestViewStoreCreatesInsertsAndQueriesRows(t *testing.T) {
 	require.Equal(t, "APT-USDT", rows[0].GetSubjectId())
 }
 
-func TestViewStoreAppliesTimeRangeWithTimeZonesAndInclusivity(t *testing.T) {
+func TestViewStoreAppliesClosedTimeRangeWithTimeZones(t *testing.T) {
 	ctx := context.Background()
 	store, err := duckdb.Open(duckdb.Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
 	require.NoError(t, err)
@@ -57,10 +55,8 @@ func TestViewStoreAppliesTimeRangeWithTimeZonesAndInclusivity(t *testing.T) {
 
 	_, rows, page, err := store.QueryView(ctx, "view_result_crypto_kline_time", &pb.QueryViewReq{
 		QueryTime: &pb.QueryTime{TimeRange: &pb.TimeRange{
-			StartTime:      "2026-06-14T15:59:59Z",
-			StartInclusive: false,
-			EndTime:        "2026-06-14T16:00:00Z",
-			EndInclusive:   true,
+			StartTime: "2026-06-14T15:59:59Z",
+			EndTime:   "2026-06-14T16:00:00Z",
 		}},
 	})
 	require.NoError(t, err)
@@ -69,15 +65,13 @@ func TestViewStoreAppliesTimeRangeWithTimeZonesAndInclusivity(t *testing.T) {
 
 	_, rows, page, err = store.QueryView(ctx, "view_result_crypto_kline_time", &pb.QueryViewReq{
 		QueryTime: &pb.QueryTime{TimeRange: &pb.TimeRange{
-			StartTime:      "2026-06-14T15:59:59Z",
-			StartInclusive: false,
-			EndTime:        "2026-06-14T16:00:00Z",
-			EndInclusive:   false,
+			StartTime: "2026-06-14T15:59:59Z",
+			EndTime:   "2026-06-14T16:00:00Z",
 		}},
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(0), page.GetTotal())
-	require.Empty(t, rows)
+	require.Equal(t, uint64(1), page.GetTotal())
+	require.Len(t, rows, 1)
 }
 
 func TestViewStoreAppliesProjectionFiltersAndSorts(t *testing.T) {
@@ -157,4 +151,31 @@ func TestViewStoreRejectsUnsupportedFilterExpression(t *testing.T) {
 		Filters: []*pb.FilterExpr{{Expr: "unsupported(close)"}},
 	})
 	require.ErrorContains(t, err, "unsupported filter expression")
+}
+
+func TestViewStoreDropsResultTableAndColumns(t *testing.T) {
+	ctx := context.Background()
+	store, err := duckdb.Open(duckdb.Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	require.NoError(t, err)
+	defer store.Close()
+
+	columns := []*pb.ViewColumn{{ColumnName: "close", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "kline.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+	require.NoError(t, store.CreateResultTable(ctx, "view_result_crypto_kline_drop", columns))
+	require.NoError(t, store.InsertRows(ctx, "view_result_crypto_kline_drop", []*pb.QueryViewRow{{
+		SubjectId: "APT-USDT",
+		DataTime:  "2026-06-15T00:00:00Z",
+		Values:    []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)},
+	}}))
+
+	tables, err := store.ListResultTables(ctx)
+	require.NoError(t, err)
+	require.Contains(t, tables, "view_result_crypto_kline_drop")
+
+	require.NoError(t, store.DropResultTable(ctx, "view_result_crypto_kline_drop"))
+
+	tables, err = store.ListResultTables(ctx)
+	require.NoError(t, err)
+	require.NotContains(t, tables, "view_result_crypto_kline_drop")
+	_, _, _, err = store.QueryView(ctx, "view_result_crypto_kline_drop", &pb.QueryViewReq{})
+	require.Error(t, err)
 }

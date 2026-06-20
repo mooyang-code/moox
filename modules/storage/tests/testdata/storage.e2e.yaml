@@ -1,0 +1,15 @@
+storage:
+  root: ./var/e2e
+  metadata:
+    path: ./var/e2e/metadata/metadata.db
+  devices:
+    pebble_path: ./var/e2e/pebble
+    duckdb_path: ./var/e2e/duckdb/views.duckdb
+    bleve_path: ./var/e2e/bleve
+    parquet_path: ./var/e2e/archive
+  primary:
+    service_name: ""
+  eventbus:
+    type: memory
+    stream_name: MOOX_STORAGE_E2E
+    rows_changed_subject: moox.storage.e2e.fact.rows_changed.v1

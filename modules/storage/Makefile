@@ -1,6 +1,6 @@
 # MooX Storage Makefile
 
-.PHONY: help all deps proto lint test build build-linux build-darwin build-windows build-all release deploy clean dev install
+.PHONY: help all deps proto lint test e2e bench build build-linux build-darwin build-windows build-all release deploy clean dev install
 
 all: deps proto build
 
@@ -23,6 +23,8 @@ help:
 	@echo "  deps          安装 Go 依赖"
 	@echo "  proto         生成 protobuf 代码"
 	@echo "  test          运行单元测试和覆盖率检查"
+	@echo "  e2e           运行端到端测试（本地部署整套服务 + K线数据）"
+	@echo "  bench         运行 storage 读写与 DuckDB View 压测"
 	@echo "  build         构建当前平台二进制"
 	@echo "  build-linux   构建 Linux amd64 二进制"
 	@echo "  build-darwin  构建 macOS 当前架构二进制"
@@ -50,6 +52,18 @@ lint:
 test:
 	@echo "正在运行测试..."
 	CGO_ENABLED=$(CGO_ENABLED) go test -v -covermode=count -coverprofile=cover.out.tmp -coverpkg=./... '-gcflags=all=-N -l' ./...
+
+# E2E_TIMEOUT 可覆盖端到端测试超时；E2E_ARGS 透传给 go test（如 -run / -v）。
+E2E_TIMEOUT ?= 600s
+e2e:
+	@echo "正在运行端到端测试（本地部署整套 storage 服务）..."
+	CGO_ENABLED=$(CGO_ENABLED) go test -tags e2e -timeout $(E2E_TIMEOUT) -v ./tests/e2e/... $(E2E_ARGS)
+
+# BENCH_ARGS 透传给 moox-storage-bench，例如：
+#   make bench BENCH_ARGS="--row-limit 1000 --read-requests 500 --view-requests 500"
+bench:
+	@echo "正在运行 storage 压测..."
+	CGO_ENABLED=$(CGO_ENABLED) go run ./cmd/moox-storage-bench $(BENCH_ARGS)
 
 build:
 	@echo "正在构建 $(APP_NAME)..."

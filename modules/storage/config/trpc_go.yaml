@@ -2,23 +2,6 @@ global: #全局配置
   namespace: Development            #环境类型，分正式production和非正式development两种类型
   env_name: test                    #环境名称，非正式环境下多环境的名称
 
-storage:
-  root: ./var/storage
-  metadata:
-    path: ./var/storage/metadata/storage_metadata.db
-  devices:
-    pebble_path: ./var/storage/pebble
-    duckdb_path: ./var/storage/duckdb/views.duckdb
-    bleve_path: ./var/storage/bleve
-    parquet_path: ./var/storage/archive
-  primary:
-    service_name: trpc.storage.primary.PrimaryStoreService
-  eventbus:
-    type: memory
-    nats_url: ""
-    stream_name: MOOX_STORAGE
-    rows_changed_subject: storage.rows.changed
-
 server:
   filter:
     - validation
@@ -52,6 +35,21 @@ server:
     - name: trpc.storage.view.timer
       port: 18009
       network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params="
+      protocol: timer
+      timeout: 60000
+    - name: trpc.storage.view.cleanup.timer
+      port: 18010
+      network: "0 0 * * * *?scheduler=viewBuilderSchedule&params=op=cleanup"
+      protocol: timer
+      timeout: 60000
+    - name: trpc.storage.view.retry_failed.timer
+      port: 18012
+      network: "0 */10 * * * *?disable=1&scheduler=viewBuilderSchedule&params=op=retry_failed"
+      protocol: timer
+      timeout: 60000
+    - name: trpc.storage.archive.timer
+      port: 18011
+      network: "0 0 * * * *?disable=1&scheduler=archiveSchedule&params=space_id=crypto;dataset_id=*"
       protocol: timer
       timeout: 60000
 

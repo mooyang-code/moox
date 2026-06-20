@@ -444,7 +444,7 @@
 
   ```text
   WriteRows 后 ReadRows RANGE 可读取
-  POINT 按 row_id 读取
+  RANGE 按 TimeRange 精确读取单行
   LATEST_BEFORE 返回截面前最新行
   同 scope+data_time 覆盖写入保持幂等
   dimensions 参与 key 前缀

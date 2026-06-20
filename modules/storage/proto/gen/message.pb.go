@@ -33,7 +33,7 @@ type DataRowsChangedEvent struct {
 	Scope *DataScope `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"`
 	// event_time 是事件产生时间。
 	EventTime string `protobuf:"bytes,3,opt,name=event_time,json=eventTime,proto3" json:"event_time,omitempty"`
-	// rows 是本次变更涉及的数据行。
+	// rows 是本次变更涉及的数据行，可只包含本次写入的列；派生消费者应回读主存最新完整行。
 	Rows []*DataRow `protobuf:"bytes,4,rep,name=rows,proto3" json:"rows,omitempty"`
 	// attributes 是附加事件属性。
 	Attributes map[string]string `protobuf:"bytes,5,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`

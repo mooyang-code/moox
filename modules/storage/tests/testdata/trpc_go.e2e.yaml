@@ -1,0 +1,54 @@
+global:
+  namespace: Development
+  env_name: e2e
+
+# 手动本地部署 storage 整套子服务用的参考配置。
+# 端口段刻意使用 28xxx/29xxx，避免与默认 config/trpc_go.yaml(18xxx) 冲突。
+# 自动化 e2e 测试不直接使用本文件，而是由 tests/e2e/harness 生成隔离配置；
+# 本文件供手工 `MOOX_STORAGE_CONFIG=tests/testdata/storage.e2e.yaml moox-storage -conf=...`
+# 部署 / 排障参考。
+
+server:
+  timeout: 5000
+  admin:
+    ip: 127.0.0.1
+    port: 29000
+    read_timeout: 5000
+    write_timeout: 60000
+  service:
+    - name: trpc.storage.query.QueryService
+      ip: 127.0.0.1
+      port: 28202
+      network: tcp
+      protocol: trpc
+    - name: trpc.storage.primary.PrimaryStoreService
+      ip: 127.0.0.1
+      port: 28101
+      network: tcp
+      protocol: trpc
+    - name: trpc.storage.view.timer
+      port: 28301
+      network: "*/5 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params="
+      protocol: timer
+      timeout: 60000
+    - name: trpc.storage.archive.timer
+      port: 28302
+      network: "*/20 * * * * *?scheduler=archiveSchedule&params=space_id=crypto;dataset_id=*"
+      protocol: timer
+      timeout: 60000
+    - name: trpc.storage.data.DataService
+      ip: 127.0.0.1
+      port: 29104
+      network: tcp
+      protocol: http
+    - name: trpc.storage.metadata.MetadataService
+      ip: 127.0.0.1
+      port: 29101
+      network: tcp
+      protocol: http
+
+plugins:
+  log:
+    default:
+      - writer: console
+        level: info

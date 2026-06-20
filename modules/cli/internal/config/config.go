@@ -81,7 +81,7 @@ func LoadConfig() (*Config, error) {
 		}
 
 		// 成功加载配置
-		fmt.Printf("\033[32m✅ 成功加载配置文件: %s\033[0m\n", configPath)
+		fmt.Fprintf(os.Stderr, "\033[32m✅ 成功加载配置文件: %s\033[0m\n", configPath)
 		return &config, nil
 	}
 

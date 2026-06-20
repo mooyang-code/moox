@@ -60,7 +60,7 @@ func TestServiceImplementsPrimaryProtocol(t *testing.T) {
 		Target:    &pb.PrimaryTarget{SpaceId: "crypto", NodeId: "primary-1", DeviceId: "pebble-1", Engine: "pebble", DatasetId: "kline"},
 		Scope:     scope,
 		ReadMode:  pb.ReadMode_READ_MODE_RANGE,
-		TimeRange: &pb.TimeRange{StartTime: "2026-06-15T00:00:00+08:00", StartInclusive: true},
+		TimeRange: &pb.TimeRange{StartTime: "2026-06-15T00:00:00+08:00"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, readRsp.GetRetInfo().GetCode())

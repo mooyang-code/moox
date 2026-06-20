@@ -10,6 +10,7 @@ import (
 type MetadataReader interface {
 	GetDataSet(ctx context.Context, spaceID string, datasetID string) (*pb.DataSet, error)
 	ListDataSetColumns(ctx context.Context, spaceID string, datasetID string, textIndexedOnly bool, page *pb.Page) ([]*pb.DataSetColumn, *pb.PageResult, error)
+	ListDataSetSubjectsPage(ctx context.Context, spaceID string, datasetID string, subjectID string, page *pb.Page) ([]*pb.DataSetSubject, *pb.PageResult, error)
 }
 
 type Validator struct {
@@ -21,6 +22,9 @@ func NewValidator(store MetadataReader) *Validator {
 }
 
 func (v *Validator) ValidateWriteRows(ctx context.Context, rows []*pb.DataRow) error {
+	datasets := make(map[string]*pb.DataSet)
+	columnsByDataset := make(map[string]map[string]*pb.DataSetColumn)
+	subjectBindings := make(map[string]bool)
 	for _, row := range rows {
 		if row.GetKey() == nil || row.GetKey().GetScope() == nil {
 			return fmt.Errorf("data key and scope are required")
@@ -29,26 +33,59 @@ func (v *Validator) ValidateWriteRows(ctx context.Context, rows []*pb.DataRow) e
 		if scope.GetSpaceId() == "" || scope.GetDatasetId() == "" {
 			return fmt.Errorf("space_id and dataset_id are required")
 		}
-		dataset, err := v.metadata.GetDataSet(ctx, scope.GetSpaceId(), scope.GetDatasetId())
-		if err != nil {
-			return err
+		datasetKey := scope.GetSpaceId() + "|" + scope.GetDatasetId()
+		dataset, ok := datasets[datasetKey]
+		if !ok {
+			var err error
+			dataset, err = v.metadata.GetDataSet(ctx, scope.GetSpaceId(), scope.GetDatasetId())
+			if err != nil {
+				return err
+			}
+			datasets[datasetKey] = dataset
 		}
 		if dataset.GetStatus() != "" && dataset.GetStatus() != "active" {
 			return fmt.Errorf("dataset %s is not active", scope.GetDatasetId())
 		}
-		columns, _, err := v.metadata.ListDataSetColumns(ctx, scope.GetSpaceId(), scope.GetDatasetId(), false, nil)
-		if err != nil {
-			return err
-		}
-		allowed := make(map[string]*pb.DataSetColumn, len(columns))
-		for _, column := range columns {
-			if column.GetStatus() == "" || column.GetStatus() == "active" {
-				allowed[column.GetColumnName()] = column
+		if dataset.GetDataKind() != pb.DataKind_DATA_KIND_OBJECT {
+			if scope.GetSubjectId() == "" {
+				return fmt.Errorf("subject_id is required")
 			}
 		}
-		present := make(map[string]bool, len(row.GetColumns()))
+		if requiresSubjectBinding(dataset) {
+			bindingKey := datasetKey + "|" + scope.GetSubjectId()
+			bound, ok := subjectBindings[bindingKey]
+			if !ok {
+				bindings, _, err := v.metadata.ListDataSetSubjectsPage(ctx, scope.GetSpaceId(), scope.GetDatasetId(), scope.GetSubjectId(), &pb.Page{Page: 1, Size: 1})
+				if err != nil {
+					return err
+				}
+				for _, binding := range bindings {
+					if binding.GetStatus() == "" || binding.GetStatus() == "active" {
+						bound = true
+						break
+					}
+				}
+				subjectBindings[bindingKey] = bound
+			}
+			if !bound {
+				return fmt.Errorf("subject %s is not bound to dataset %s", scope.GetSubjectId(), scope.GetDatasetId())
+			}
+		}
+		allowed, ok := columnsByDataset[datasetKey]
+		if !ok {
+			columns, _, err := v.metadata.ListDataSetColumns(ctx, scope.GetSpaceId(), scope.GetDatasetId(), false, nil)
+			if err != nil {
+				return err
+			}
+			allowed = make(map[string]*pb.DataSetColumn, len(columns))
+			for _, column := range columns {
+				if column.GetStatus() == "" || column.GetStatus() == "active" {
+					allowed[column.GetColumnName()] = column
+				}
+			}
+			columnsByDataset[datasetKey] = allowed
+		}
 		for _, value := range row.GetColumns() {
-			present[value.GetColumnName()] = true
 			column := allowed[value.GetColumnName()]
 			if column == nil {
 				return fmt.Errorf("column %s is not registered in dataset %s", value.GetColumnName(), scope.GetDatasetId())
@@ -57,11 +94,15 @@ func (v *Validator) ValidateWriteRows(ctx context.Context, rows []*pb.DataRow) e
 				return fmt.Errorf("column %s type mismatch: got %s want %s", value.GetColumnName(), value.GetValueType().String(), column.GetValueType().String())
 			}
 		}
-		for _, column := range allowed {
-			if column.GetRequired() && !present[column.GetColumnName()] {
-				return fmt.Errorf("required column %s is missing in dataset %s", column.GetColumnName(), scope.GetDatasetId())
-			}
-		}
 	}
 	return nil
+}
+
+func requiresSubjectBinding(dataset *pb.DataSet) bool {
+	switch dataset.GetDataKind() {
+	case pb.DataKind_DATA_KIND_OBJECT, pb.DataKind_DATA_KIND_TIME_SERIES:
+		return false
+	default:
+		return true
+	}
 }

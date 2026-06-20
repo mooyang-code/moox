@@ -241,7 +241,7 @@ CREATE TABLE IF NOT EXISTS t_dataset_subjects (
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_subject_role IN ('normal', 'benchmark', 'index', 'universe_member')),
+    CHECK (c_subject_role IN ('normal', 'benchmark', 'index', 'universe_member', 'object')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (c_space_id, c_subject_id) REFERENCES t_subjects (c_space_id, c_subject_id) ON DELETE CASCADE ON UPDATE CASCADE,

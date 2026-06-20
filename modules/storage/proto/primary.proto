@@ -8,6 +8,7 @@ import "common.proto";
 import "data.proto";
 
 // PrimaryTarget 表示 Access 完成路由后得到的在线主存目标位置。
+// 它只是内部执行目标，不表示跨多个 target 的事务边界。
 message PrimaryTarget {
   // space_id 是使用空间 ID。
   string space_id = 1;
@@ -31,7 +32,7 @@ message WritePrimaryRowsReq {
   common.AuthInfo auth_info = 1;
   // target 是在线主存目标位置。
   PrimaryTarget target = 2;
-  // write_mode 表示本次写入如何处理相同逻辑键的已有数据。
+  // write_mode 表示本次写入如何处理相同 DataKey 的已有数据。
   common.WriteMode write_mode = 3;
   // rows 是已完成路由的数据行。
   repeated data.DataRow rows = 4;
@@ -57,8 +58,8 @@ message ReadPrimaryRowsReq {
   common.TimeRange time_range = 5;
   // snapshot_time 是截面时间。
   string snapshot_time = 6;
-  // row_ids 是要读取的逻辑行 ID 列表。
-  repeated string row_ids = 7;
+  // object_id 是低阶对象过滤条件。
+  string object_id = 7;
   // column_names 是要返回的列名；为空时返回整行。
   repeated string column_names = 8;
   // page 是分页参数。

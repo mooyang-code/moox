@@ -11,9 +11,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -120,6 +120,51 @@ func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb
 	return tx.Commit()
 }
 
+func (s *ViewStore) ListResultTables(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT table_name
+		FROM information_schema.tables
+		WHERE table_name LIKE 'view_result_%'
+		ORDER BY table_name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			return nil, err
+		}
+		out = append(out, tableName)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *ViewStore) DropResultTable(ctx context.Context, tableName string) error {
+	quoted, err := quoteTableName(tableName)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, quoted)); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM moox_view_columns WHERE table_name = ?`, tableName); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *ViewStore) QueryView(ctx context.Context, tableName string, req *pb.QueryViewReq) ([]*pb.QueryViewColumn, []*pb.QueryViewRow, *pb.PageResult, error) {
 	quoted, err := quoteTableName(tableName)
 	if err != nil {
@@ -129,13 +174,25 @@ func (s *ViewStore) QueryView(ctx context.Context, tableName string, req *pb.Que
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT row_json FROM %s ORDER BY subject_id, data_time`, quoted))
+
+	// 条件下推：subject_id / data_time 是结果表真实列，直接在 SQL 层 WHERE 过滤，
+	// 避免把整表 row_json 全量拉到内存。row_json 内部列的 filter/sort 仍在内存完成。
+	where, args := buildPushdownPredicates(req)
+	sqlText := fmt.Sprintf(`SELECT row_json FROM %s`, quoted)
+	if where != "" {
+		sqlText += " WHERE " + where
+	}
+	sqlText += " ORDER BY subject_id, data_time"
+
+	rows, err := s.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	defer rows.Close()
 
-	allowSubjects := stringSet(req.GetSubjectIds())
+	// 内存兜底过滤：覆盖未能下推到 SQL 的情况（如非 RFC3339 时间边界），
+	// 与下推条件幂等，不会误删已通过 SQL 过滤的行。
+	allowSubjects := factvalue.StringSet(req.GetSubjectIds())
 	var out []*pb.QueryViewRow
 	for rows.Next() {
 		var raw string
@@ -149,7 +206,7 @@ func (s *ViewStore) QueryView(ctx context.Context, tableName string, req *pb.Que
 		if len(allowSubjects) > 0 && !allowSubjects[row.GetSubjectId()] {
 			continue
 		}
-		if !timeInRange(row.GetDataTime(), req.GetQueryTime().GetTimeRange()) {
+		if !factvalue.TimeInRange(row.GetDataTime(), req.GetQueryTime().GetTimeRange()) {
 			continue
 		}
 		out = append(out, row)
@@ -166,6 +223,23 @@ func (s *ViewStore) QueryView(ctx context.Context, tableName string, req *pb.Que
 	projectedRows := projectRows(out, req.GetColumnNames())
 	paged, page := pageRows(projectedRows, req.GetPage())
 	return projectedColumns, paged, page, nil
+}
+
+// buildPushdownPredicates 构造可下推到 DuckDB 的 WHERE 条件与参数。
+// 仅下推 subject_id（IN 列表）。data_time 不下推：结果表以字符串存储时间，
+// 跨时区（如 +08:00 与 Z）字符串比较不可靠，时间过滤统一交由内存按 RFC3339 解析处理。
+func buildPushdownPredicates(req *pb.QueryViewReq) (string, []any) {
+	var clauses []string
+	var args []any
+	if subjects := req.GetSubjectIds(); len(subjects) > 0 {
+		placeholders := make([]string, 0, len(subjects))
+		for _, subject := range subjects {
+			placeholders = append(placeholders, "?")
+			args = append(args, subject)
+		}
+		clauses = append(clauses, "subject_id IN ("+strings.Join(placeholders, ",")+")")
+	}
+	return strings.Join(clauses, " AND "), args
 }
 
 func (s *ViewStore) loadColumns(ctx context.Context, tableName string) ([]*pb.QueryViewColumn, error) {
@@ -205,78 +279,7 @@ func quoteTableName(tableName string) (string, error) {
 }
 
 func stringSet(values []string) map[string]bool {
-	if len(values) == 0 {
-		return nil
-	}
-	out := make(map[string]bool, len(values))
-	for _, value := range values {
-		out[value] = true
-	}
-	return out
-}
-
-func timeInRange(value string, timeRange *pb.TimeRange) bool {
-	if timeRange == nil {
-		return true
-	}
-	valueTime, valueOK := parseTimeValue(value)
-	if start := strings.TrimSpace(timeRange.GetStartTime()); start != "" {
-		if startTime, startOK := parseTimeValue(start); valueOK && startOK {
-			if timeRange.GetStartInclusive() {
-				if valueTime.Before(startTime) {
-					return false
-				}
-			} else if !valueTime.After(startTime) {
-				return false
-			}
-		} else if !textAfterLowerBound(value, start, timeRange.GetStartInclusive()) {
-			return false
-		}
-	}
-	if end := strings.TrimSpace(timeRange.GetEndTime()); end != "" {
-		if endTime, endOK := parseTimeValue(end); valueOK && endOK {
-			if timeRange.GetEndInclusive() {
-				if valueTime.After(endTime) {
-					return false
-				}
-			} else if !valueTime.Before(endTime) {
-				return false
-			}
-		} else if !textBeforeUpperBound(value, end, timeRange.GetEndInclusive()) {
-			return false
-		}
-	}
-	return true
-}
-
-func parseTimeValue(value string) (time.Time, bool) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return time.Time{}, false
-	}
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
-		parsed, err := time.Parse(layout, value)
-		if err == nil {
-			return parsed, true
-		}
-	}
-	return time.Time{}, false
-}
-
-func textAfterLowerBound(value string, start string, inclusive bool) bool {
-	cmp := strings.Compare(value, start)
-	if inclusive {
-		return cmp >= 0
-	}
-	return cmp > 0
-}
-
-func textBeforeUpperBound(value string, end string, inclusive bool) bool {
-	cmp := strings.Compare(value, end)
-	if inclusive {
-		return cmp <= 0
-	}
-	return cmp < 0
+	return factvalue.StringSet(values)
 }
 
 func filterRows(rows []*pb.QueryViewRow, filters []*pb.FilterExpr) ([]*pb.QueryViewRow, error) {
@@ -369,7 +372,7 @@ func sortRows(rows []*pb.QueryViewRow, sorts []*pb.SortSpec) {
 		for _, spec := range sorts {
 			left, _ := rowColumnValue(rows[i], spec.GetFieldName())
 			right, _ := rowColumnValue(rows[j], spec.GetFieldName())
-			cmp := compareForSort(left, right)
+			cmp := factvalue.Compare(left, right)
 			if cmp == 0 {
 				continue
 			}
@@ -432,9 +435,9 @@ func rowColumnValue(row *pb.QueryViewRow, name string) (*pb.TypedValue, bool) {
 
 func compareTypedValues(left, right *pb.TypedValue, op string) bool {
 	if op == "contains" {
-		return strings.Contains(typedValueString(left), typedValueString(right))
+		return strings.Contains(factvalue.String(left), factvalue.String(right))
 	}
-	cmp := compareForSort(left, right)
+	cmp := factvalue.Compare(left, right)
 	switch op {
 	case "=", "==":
 		return cmp == 0
@@ -454,60 +457,15 @@ func compareTypedValues(left, right *pb.TypedValue, op string) bool {
 }
 
 func compareForSort(left, right *pb.TypedValue) int {
-	leftNumber, leftOK := numericValue(left)
-	rightNumber, rightOK := numericValue(right)
-	if leftOK && rightOK {
-		switch {
-		case leftNumber < rightNumber:
-			return -1
-		case leftNumber > rightNumber:
-			return 1
-		default:
-			return 0
-		}
-	}
-	leftText := typedValueString(left)
-	rightText := typedValueString(right)
-	switch {
-	case leftText < rightText:
-		return -1
-	case leftText > rightText:
-		return 1
-	default:
-		return 0
-	}
+	return factvalue.Compare(left, right)
 }
 
 func numericValue(value *pb.TypedValue) (float64, bool) {
-	switch v := value.GetValue().(type) {
-	case *pb.TypedValue_IntValue:
-		return float64(v.IntValue), true
-	case *pb.TypedValue_DoubleValue:
-		return v.DoubleValue, true
-	default:
-		return 0, false
-	}
+	return factvalue.Numeric(value)
 }
 
 func typedValueString(value *pb.TypedValue) string {
-	switch v := value.GetValue().(type) {
-	case *pb.TypedValue_StringValue:
-		return v.StringValue
-	case *pb.TypedValue_IntValue:
-		return strconv.FormatInt(v.IntValue, 10)
-	case *pb.TypedValue_DoubleValue:
-		return strconv.FormatFloat(v.DoubleValue, 'g', -1, 64)
-	case *pb.TypedValue_BoolValue:
-		return strconv.FormatBool(v.BoolValue)
-	case *pb.TypedValue_TimeValue:
-		return v.TimeValue
-	case *pb.TypedValue_JsonValue:
-		return v.JsonValue
-	case *pb.TypedValue_BytesValue:
-		return string(v.BytesValue)
-	default:
-		return ""
-	}
+	return factvalue.String(value)
 }
 
 func pageRows(rows []*pb.QueryViewRow, page *pb.Page) ([]*pb.QueryViewRow, *pb.PageResult) {

@@ -15,13 +15,14 @@ import (
 type Options struct {
 	Root      string
 	BlevePath string
-	Metadata  metadata.Store
+	Metadata  metadata.Reader
 }
 
 type Service struct {
 	root      string
 	blevePath string
-	metadata  metadata.Store
+	metadata  metadata.Reader
+	openMu    sync.Mutex
 	indexes   sync.Map
 }
 
@@ -100,11 +101,36 @@ func (s *Service) SearchRows(ctx context.Context, req SearchRequest) ([]*pb.Data
 	})
 }
 
+func (s *Service) Close() error {
+	if s == nil {
+		return nil
+	}
+	var firstErr error
+	s.indexes.Range(func(key, value any) bool {
+		path, _ := key.(string)
+		if loaded, ok := s.indexes.LoadAndDelete(path); ok {
+			value = loaded
+		}
+		if index, ok := value.(*devicebleve.Index); ok {
+			if err := index.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		return true
+	})
+	return firstErr
+}
+
 func (s *Service) searchIndex() (*devicebleve.Index, error) {
 	path := filepath.Join(s.root, "bleve", "default")
 	if s.blevePath != "" {
 		path = filepath.Join(s.blevePath, "default")
 	}
+	if value, ok := s.indexes.Load(path); ok {
+		return value.(*devicebleve.Index), nil
+	}
+	s.openMu.Lock()
+	defer s.openMu.Unlock()
 	if value, ok := s.indexes.Load(path); ok {
 		return value.(*devicebleve.Index), nil
 	}
@@ -115,9 +141,6 @@ func (s *Service) searchIndex() (*devicebleve.Index, error) {
 	if err != nil {
 		return nil, err
 	}
-	actual, loaded := s.indexes.LoadOrStore(path, index)
-	if loaded {
-		_ = index.Close()
-	}
-	return actual.(*devicebleve.Index), nil
+	s.indexes.Store(path, index)
+	return index, nil
 }

@@ -93,10 +93,8 @@ var dataRowsExportCmd = &cobra.Command{
 				},
 				ReadMode: pb.ReadMode_READ_MODE_RANGE,
 				TimeRange: &pb.TimeRange{
-					StartTime:      dataStartTime,
-					StartInclusive: true,
-					EndTime:        dataEndTime,
-					EndInclusive:   true,
+					StartTime: dataStartTime,
+					EndTime:   dataEndTime,
 				},
 				Page: &pb.Page{Page: 1, Size: dataPageSize},
 			})

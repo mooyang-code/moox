@@ -3,6 +3,7 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -85,7 +86,7 @@ func (p *NATSProducer) Connect(ctx context.Context) error {
 
 	// 如果提供了StreamName，则创建或更新流
 	if p.options.StreamName != "" && len(p.options.StreamSubjects) > 0 {
-		_, err = js.AddStream(&nats.StreamConfig{
+		err = ensureStream(js, &nats.StreamConfig{
 			Name:     p.options.StreamName,
 			Subjects: p.options.StreamSubjects,
 			Storage:  nats.FileStorage, // 使用文件存储以实现持久化
@@ -99,6 +100,22 @@ func (p *NATSProducer) Connect(ctx context.Context) error {
 
 	p.connected = true
 	log.Infof("已连接到NATS服务器: %s", p.options.ServerURL)
+	return nil
+}
+
+type streamManager interface {
+	AddStream(cfg *nats.StreamConfig, opts ...nats.JSOpt) (*nats.StreamInfo, error)
+	UpdateStream(cfg *nats.StreamConfig, opts ...nats.JSOpt) (*nats.StreamInfo, error)
+}
+
+func ensureStream(manager streamManager, cfg *nats.StreamConfig) error {
+	if _, err := manager.AddStream(cfg); err != nil {
+		if errors.Is(err, nats.ErrStreamNameAlreadyInUse) {
+			_, updateErr := manager.UpdateStream(cfg)
+			return updateErr
+		}
+		return err
+	}
 	return nil
 }
 
@@ -136,6 +153,54 @@ func (p *NATSProducer) Send(ctx context.Context, msg *transport.Message) error {
 	}
 	log.Debugf("消息已发布: 主题=%s, 序列号=%d", msg.Subject, ack.Sequence)
 	return nil
+}
+
+// Subscribe 订阅指定主题并把消息交给 handler 处理。
+func (p *NATSProducer) Subscribe(ctx context.Context, subject string, handler transport.MessageHandler) (transport.Subscription, error) {
+	_ = ctx
+	if !p.connected || p.js == nil {
+		return nil, fmt.Errorf("未连接到NATS服务器")
+	}
+	if subject == "" {
+		return nil, fmt.Errorf("消息主题不能为空")
+	}
+	if handler == nil {
+		return nil, fmt.Errorf("消息处理器不能为空")
+	}
+	consumerName := p.options.ConsumerName
+	if consumerName == "" {
+		consumerName = "storage_rows_changed_deriver"
+	}
+	subscription, err := p.js.Subscribe(subject, func(msg *nats.Msg) {
+		event := &transport.Message{
+			Subject: msg.Subject,
+			Data:    msg.Data,
+			Time:    time.Now(),
+		}
+		if err := handler(context.Background(), event); err != nil {
+			_ = msg.Nak()
+			log.Errorf("处理NATS消息失败: %v", err)
+			return
+		}
+		if err := msg.Ack(); err != nil {
+			log.Errorf("确认NATS消息失败: %v", err)
+		}
+	}, nats.ManualAck(), nats.Durable(consumerName))
+	if err != nil {
+		return nil, fmt.Errorf("订阅消息失败: %w", err)
+	}
+	return natsSubscription{subscription: subscription}, nil
+}
+
+type natsSubscription struct {
+	subscription *nats.Subscription
+}
+
+func (s natsSubscription) Close() error {
+	if s.subscription == nil {
+		return nil
+	}
+	return s.subscription.Unsubscribe()
 }
 
 // IsConnected 检查是否已连接到NATS服务器

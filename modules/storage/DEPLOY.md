@@ -68,6 +68,7 @@ cd ~/xdata-storage
 启动脚本会设置：
 
 - `STORAGE_CONFIG_PATH=./config`
+- `MOOX_STORAGE_CONFIG=./config/storage.yaml`
 - `STORAGE_DATABASE_PATH=./database`
 
 日志输出：

@@ -254,35 +254,74 @@ System Column
 - 写入时只校验 DataSetColumn，不需要调用方理解 Field 和 Factor 的内部差异。
 - `text_indexed` 放在 DataSetColumn 上，而不是 Field 上，因为同一个 Field 在不同 DataSet 下是否需要全文索引可能不同。
 
-## DataScope 与 DataKey
+`text_indexed` 的变更只影响之后的增量索引消费。历史 rows 不会因为元数据更新自动重建索引；需要管理台或 CLI 显式调用 `RebuildSearchIndex`，异步按当前列配置回扫事实数据。重建任务通过 Access 读路径读取数据，且只处理 DataSetSubject 已绑定的 subject。
 
-`DataScope` 表示一组事实数据的范围。它回答的是：
+## TimeSeries 与 Object
 
-```text
-在哪个 Space？
-哪个 DataSet？
-哪个 Subject？
-哪个频率？
-还有哪些参与事实身份的维度？
-```
+storage 对外把事实写入分成两类接口：TimeSeries 和 Object。
 
-`DataKey` 表示一条事实行的主键。它在 `DataScope` 上增加 `data_time` 和 `row_id`。
-
-写入时，调用方把列值写到一个明确的 `DataKey` 下：
+**TimeSeries** 指固定 `subject_id + freq` 下按 `data_time` 演进的数据，例如 K 线、tick、分钟级指标。它必须有明确 Subject 和固定频率。调用方用 `TimeSeriesKey` 表达：
 
 ```text
-DataKey = DataScope + data_time + row_id
-DataRow = DataKey + columns + attributes
+space_id
+dataset_id
+subject_id
+freq
+dimensions
+data_time
 ```
 
-范围查询时，调用方不需要给出完整 `DataKey`。它使用 `DataScope + time_range` 表示“读取这一组事实数据里的某段时间”。
+其中 `data_time` 必须是 RFC3339/RFC3339Nano。读取一段 K 线时使用 `TimeRange` 闭区间 `[start_time, end_time]`；精确读取一根 K 线时让 `start_time=end_time` 即可。
+
+**Object** 指非固定 `subject_id + freq` 的数据，例如公司资料、榜单、新闻、研报、账户资料、人工录入对象。即使新闻或研报具备时间线，也归为 Object，通过版本表达时间或修订序列。调用方用 `ObjectKey` 表达：
+
+```text
+space_id
+dataset_id
+object_id
+version
+```
+
+`version` 可以是 RFC3339/RFC3339Nano，也可以是业务版本字符串；为空表示默认版本。读取版本范围时使用 `VersionRange` 闭区间 `[start_version, end_version]`。
+
+这个划分的核心不是“有没有时间字段”，而是“是不是固定 Subject + 固定频率的连续时序”。只有满足这个条件的数据才走 TimeSeries。
+
+## DataKey 与 Version
+
+底层事实行统一成一个模型：
+
+```text
+space_id + dataset_id + data_key + version -> columns + attributes
+```
+
+两类外部 key 都会归一到这个模型：
+
+```text
+TimeSeries: data_key = subject_id | freq | dimhash, version = data_time
+Object    : data_key = object_id,                  version = version
+```
+
+再次写入相同 `space_id + dataset_id + data_key + version` 时，系统只处理本次携带的列值和 attributes。同名列覆盖，未携带的旧列保留。storage 不把写入解释成整行替换，也不提供按 scope 删除旧行或整段事实切片的能力。
+
+DataSetColumn 的 `required` 不要求每次字段级更新都携带该列。它更适合表达采集契约、管理台提示或全量导入校验；在线写入只校验本次携带的列是否合法。
+
+Pebble 在线主存为了让常见时序范围读取更快，会把物理 key 拆成两类前缀：
+
+```text
+t|space|dataset|subject|freq|version|dimhash|legacy_row_id
+o|space|dataset|object_id|version
+```
+
+`t|` 表示时序 key 空间，`o|` 表示对象 key 空间。时序物理 key 把 `version(data_time)` 放在 `freq` 后面，方便“某个标的某个频率的一段时间”用 key 边界直接裁剪；逻辑上它仍对应 `data_key + version`。`legacy_row_id` 只用于旧 `WriteRows` 兼容入口，新的 `TimeSeriesRow` 不暴露该字段。
+
+`TimeRange` 中的 `start_time/end_time` 是闭区间，必须使用 RFC3339/RFC3339Nano。服务端内部统一归一化成 UTC 固定 9 位纳秒格式，避免 `2026-01-01T00:00:00Z` 与 `2026-01-01T00:00:00.5Z` 在字典序上反向。
 
 设计意图：
 
-- `DataScope` 服务范围查询、扫描和路由前缀。
-- `DataKey` 服务写入、点查、幂等和变更事件。
-- `data_time` 归入 `DataKey`，让“向某一行 key 写入列值”的意图更清楚。
-- `row_id` 用于对象型、榜单型、事件型数据，也可用于同一 `data_time` 下多行数据去重。
+- TimeSeries/Object 拆开后，对外接口不暴露内部 `data_key` 拼接细节。
+- 统一 `data_key + version` 后，时序和非时序在底层没有本质区别，只有 key 的业务构造不同。
+- 时间格式统一后，范围读取可以依赖 key 字典序，不会因整秒/亚秒混用漏读。
+- Object 也支持 version，因此新闻、研报等带时间线的数据不需要伪装成固定频率时序。
 
 ## View
 
@@ -371,12 +410,15 @@ moox-storage 采用主存加派生存储的模型。
 
 - 写入成功以 Pebble 成功为准。
 - DuckDB、Bleve、Parquet 都是异步派生，不阻塞主写入。
+- 同批数据若被路由到多个 PrimaryStore 目标，不提供跨目标原子提交；已经成功写入的目标不会因为后续目标失败而回滚。
 - Parquet 不从查询物化结果归档，因为物化结果 schema 会随 View 和字段上线变化。
 - 冷备采用事实归档路径，保证新旧数据文件 schema 更稳定。
 
 ## Access、PrimaryStore、Device 与 PrimaryRoute
 
 `Access Service` 是唯一公开数据访问入口。Collector、FactorCalculator、管理台、CLI 和其他业务调用方都先访问 Access，再由 Access 按请求语义转发到内部服务。
+
+元数据管理和服务侧读取分开：管理台、CLI 和控制面任务直接通过 SQLite 元数据 store 做 CRUD；Access 的校验、路由、Search 列解释等服务读路径使用独立 metadata cache。cache 启动加载快照，后续刷新由 snapshotcache 组件负责，元数据写入不会同步更新 cache。
 
 `PrimaryStore Service` 是在线事实主存服务，底层使用 Pebble。它可以多实例部署，并按 Subject 水平切分。
 
