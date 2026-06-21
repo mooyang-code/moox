@@ -1,7 +1,7 @@
 <template>
   <div class="moox-page">
-    <!-- 如果有选中项目，显示量化交易首页 -->
-    <div v-if="selectedProjectId" class="trading-dashboard">
+    <!-- 如果有选中空间，显示量化交易首页 -->
+    <div v-if="selectedSpaceId" class="trading-dashboard">
       <!-- 核心指标卡片 -->
       <div class="metrics-grid">
         <a-card class="metric-card" hoverable>
@@ -204,8 +204,14 @@
       </div>
     </div>
 
-    <!-- 如果没有选中项目，显示默认首页 -->
+    <!-- 如果没有选中空间，显示默认首页 -->
     <div v-else class="home-page">
+      <a-alert class="space-empty-state" type="info" title="请选择或创建空间">
+        空间是 MooX 的最大业务隔离上下文。容器、采集、数据资产、策略和交易模块会逐步围绕当前空间工作。
+        <template #action>
+          <a-button type="primary" size="small" @click="goSpaceSettings">创建空间</a-button>
+        </template>
+      </a-alert>
       <!-- 常用功能 -->
       <Shortcut />
       <!-- 第三板指标 -->
@@ -222,17 +228,18 @@
 import { ref, onMounted, watch, nextTick, onUnmounted } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import VChart from '@visactor/vchart';
-import { useProjectStore } from '@/store/modules/project';
+import { useSpaceStore } from '@/store/modules/space';
 import { storeToRefs } from 'pinia';
+import { useRouter } from 'vue-router';
 import Shortcut from "@/views/home/components/shortcut.vue";
 import TargetBox from "@/views/home/components/target-box.vue";
 import Finance from "@/views/home/components/finance.vue";
 import DataBox from "@/views/home/components/data-box.vue";
 
 
-// 使用项目状态管理
-const projectStore = useProjectStore();
-const { selectedProjectId } = storeToRefs(projectStore);
+const router = useRouter();
+const spaceStore = useSpaceStore();
+const { selectedSpaceId } = storeToRefs(spaceStore);
 
 // 图表实例
 const revenueChartRef = ref<HTMLElement>();
@@ -397,37 +404,40 @@ const viewAllTrades = () => {
   Message.info('跳转到交易记录页面');
 };
 
-// 监听项目ID变化
-watch(selectedProjectId, (newProjectId) => {
-  if (newProjectId) {
-    // 当有项目ID时，加载项目相关的数据
-    loadProjectData(newProjectId.toString());
+// 监听空间ID变化
+watch(selectedSpaceId, (newSpaceId) => {
+  if (newSpaceId) {
+    loadSpaceData(newSpaceId);
   }
 });
 
-// 加载项目数据
-const loadProjectData = async (projectId: string) => {
+// 加载空间数据
+const loadSpaceData = async (spaceId: string) => {
   try {
-    // 这里可以调用API加载项目相关的量化交易数据
-    console.log('加载项目数据:', projectId);
+    console.log('加载空间数据:', spaceId);
     
     // 初始化图表
     await nextTick();
-    if (selectedProjectId.value) {
+    if (selectedSpaceId.value) {
       initRevenueChart();
     }
   } catch (error) {
-    console.error('加载项目数据失败:', error);
-    Message.error('加载项目数据失败');
+    console.error('加载空间数据失败:', error);
+    Message.error('加载空间数据失败');
   }
 };
 
+const goSpaceSettings = () => {
+  router.push('/settings/spaces');
+};
+
 onMounted(async () => {
-  // 确保项目数据已加载
-  await projectStore.fetchProjects();
-  
-  if (selectedProjectId.value) {
-    await loadProjectData(selectedProjectId.value.toString());
+  if (!selectedSpaceId.value) {
+    await spaceStore.loadSpaces();
+  }
+
+  if (selectedSpaceId.value) {
+    await loadSpaceData(selectedSpaceId.value);
   }
 });
 
@@ -444,6 +454,10 @@ onUnmounted(() => {
 .home-page {
   padding: $padding;
   background: $color-bg-1;
+}
+
+.space-empty-state {
+  margin-bottom: 16px;
 }
 
 .trading-dashboard {

@@ -32,6 +32,25 @@
         </div>
         <ButtonCollapsed v-else />
 
+        <div class="space-switcher" v-if="!isMobile">
+          <span class="space-label">当前空间</span>
+          <a-select
+            class="space-select"
+            :model-value="selectedSpaceId"
+            :loading="spaceLoading"
+            size="small"
+            placeholder="请选择空间"
+            @change="onSpaceChange"
+          >
+            <a-option v-for="space in spaces" :key="space.space_id" :value="space.space_id">
+              {{ space.name || space.space_id }}
+            </a-option>
+          </a-select>
+          <a-button class="space-setting-button" type="text" size="small" @click="goSpaceSettings">
+            <template #icon><icon-settings /></template>
+          </a-button>
+        </div>
+
         <HeaderRight />
       </a-layout-header>
       <Main />
@@ -52,14 +71,18 @@ import { storeToRefs } from "pinia";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { useRoutingMethod } from "@/hooks/useRoutingMethod";
 import { useThemeConfig } from "@/store/modules/theme-config";
+import { useSpaceStore } from "@/store/modules/space";
 import { useMenuMethod } from "@/hooks/useMenuMethod";
 import { useDevicesSize } from "@/hooks/useDevicesSize";
+import { Message } from "@arco-design/web-vue";
 defineOptions({ name: "LayoutHead" });
 const router = useRouter();
 const routerStore = useRoutesConfigStore();
 const themeStore = useThemeConfig();
+const spaceStore = useSpaceStore();
 const { routeTree, currentRoute } = storeToRefs(routerStore);
 const { isFooter, language } = storeToRefs(themeStore);
+const { spaces, selectedSpaceId, loading: spaceLoading } = storeToRefs(spaceStore);
 const { isMobile } = useDevicesSize();
 const { menuShow, aMenuShow } = useMenuMethod();
 
@@ -68,6 +91,26 @@ watch(language, () => {
   drawing.value = false;
   nextTick(() => (drawing.value = true));
 });
+
+onMounted(async () => {
+  try {
+    await spaceStore.loadSpaces();
+    if (spaces.value.length === 0) {
+      Message.info("暂无空间，请先创建空间");
+    }
+  } catch (error) {
+    console.error("加载空间列表失败:", error);
+    Message.error("加载空间列表失败");
+  }
+});
+
+const onSpaceChange = (value: string | number | boolean | Record<string, unknown> | undefined) => {
+  spaceStore.setSelectedSpace(typeof value === "string" ? value : "");
+};
+
+const goSpaceSettings = () => {
+  router.push("/settings/spaces");
+};
 
 /**
  * @description 菜单点击事件
@@ -111,7 +154,30 @@ const onMenuItem = (key: string) => {
   .layout-head-menu {
     display: flex;
     flex: 1;
+    min-width: 0;
     overflow: hidden;
+  }
+  .space-switcher {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 8px;
+    min-width: 260px;
+    max-width: 340px;
+    margin-left: 16px;
+  }
+  .space-label {
+    flex-shrink: 0;
+    font-size: 13px;
+    color: $color-text-2;
+    white-space: nowrap;
+  }
+  .space-select {
+    flex: 1;
+    min-width: 150px;
+  }
+  .space-setting-button {
+    flex-shrink: 0;
   }
 }
 :deep(.arco-menu-pop) {
