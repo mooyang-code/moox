@@ -1,5 +1,6 @@
 <template>
   <div class="file-management-page">
+    <SpaceContextBar />
     <div class="page-header">
       <h2>文件管理</h2>
       <p>查看和管理容器中的文件</p>
@@ -169,6 +170,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message, Modal } from '@arco-design/web-vue';
+import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 
 const route = useRoute();
 

@@ -8,6 +8,7 @@
     @cancel="handleCancel"
   >
     <div class="cloud-account-manage">
+      <SpaceContextBar />
       <a-row>
         <a-button type="primary" @click="onAdd">
           <template #icon><icon-plus /></template>
@@ -183,6 +184,7 @@
 <script setup lang="ts">
 import { ref, watch, reactive } from 'vue';
 import { Message } from '@arco-design/web-vue';
+import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { 
   getCloudAccountList, 
   createCloudAccount, 

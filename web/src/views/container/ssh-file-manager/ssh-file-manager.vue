@@ -1,5 +1,6 @@
 <template>
   <div class="ssh-file-manager-page">
+    <SpaceContextBar />
     <!-- 路径输入框 -->
     <div class="path-input-bar">
       <a-input
@@ -144,6 +145,7 @@
 import { ref, computed, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
+import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import {
   sftpList,
   sftpMkdir,

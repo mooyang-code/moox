@@ -24,6 +24,7 @@
     "build:prod": "vue-tsc && vite build --mode production",
     "build:test": "vue-tsc && vite build --mode test",
     "preview": "vite preview",
+    "verify:space-context": "node scripts/verify-space-context.mjs",
     "lint:eslint": "eslint --fix --ext .js,.ts,.vue ./src",
     "lint:prettier": "prettier --write \"src/**/*.{js,ts,json,tsx,css,less,scss,vue,html,md}\"",
     "lint:lint-staged": "lint-staged",

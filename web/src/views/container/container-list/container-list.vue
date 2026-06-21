@@ -1,5 +1,6 @@
 <template>
   <div class="cloud-function-page">
+    <SpaceContextBar />
     <!-- 搜索栏 -->
     <div class="search-section">
       <div class="search-bar">
@@ -192,6 +193,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import { Message } from '@arco-design/web-vue';
+import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { api } from '@/api/config';
 import { asyncTaskManager } from '@/utils/async-task';
 
