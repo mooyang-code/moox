@@ -52,15 +52,20 @@ export const systemMenu = [
   menu("01", "0", "/home", "home", "home", "home/home", 1, { affix: true, svgIcon: "home", icon: "" }),
 
   directory("02", "0", "/data/overview", "data-assets", "data-assets", 2, { svgIcon: "folder-menu", icon: "" }),
-  menu("0201", "02", "/data/sources", "data-sources", "data-sources", "data/sources/index", 1),
-  menu("0202", "02", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 2),
-  menu("0203", "02", "/data/datasets", "data-datasets", "data-datasets", "data/datasets/index", 3),
-  menu("0204", "02", "/data/fields", "data-fields", "data-fields", "data/fields/index", 4),
-  menu("0205", "02", "/data/factors", "data-factors", "data-factors", "data/factors/index", 5),
-  menu("0206", "02", "/data/views", "data-views", "data-views", "data/views/index", 6),
-  menu("0207", "02", "/data/overview", "data-overview", "data-overview", "data/overview/overview", 7),
-  menu("0208", "02", "/data/list", "data-list", "data-list", "data/list/index", 8),
-  menu("0209", "02", "/data/sync", "data-sync", "data-sync", "data/sync/index", 9),
+  // 二级分组：数据建模
+  directory("0210", "02", "/data/sources", "data-modeling", "data-modeling", 1),
+  menu("021001", "0210", "/data/sources", "data-sources", "data-sources", "data/sources/index", 1),
+  menu("021002", "0210", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 2),
+  menu("021003", "0210", "/data/datasets", "data-datasets", "data-datasets", "data/datasets/index", 3),
+  menu("021004", "0210", "/data/fields", "data-fields", "data-fields", "data/fields/index", 4),
+  menu("021005", "0210", "/data/factors", "data-factors", "data-factors", "data/factors/index", 5),
+  // 二级单页：查询视图（独立成组）
+  menu("0220", "02", "/data/views", "data-views", "data-views", "data/views/index", 2),
+  // 二级分组：数据管理
+  directory("0230", "02", "/data/overview", "data-mgmt", "data-mgmt", 3),
+  menu("023001", "0230", "/data/overview", "data-overview", "data-overview", "data/overview/overview", 1),
+  menu("023002", "0230", "/data/browse", "data-browse", "data-browse", "data/browse/index", 2),
+  menu("023003", "0230", "/data/import", "data-import", "data-import", "data/import/index", 3),
 
   directory("03", "0", "/collector/functions", "compute-collector", "compute-collector", 3, { svgIcon: "functions", icon: "" }),
   menu("0301", "03", "/collector/functions", "collector-functions", "collector-functions", "collector/cloud-function/cloud-function", 1),
