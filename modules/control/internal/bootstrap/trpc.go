@@ -9,6 +9,7 @@ import (
 	controlsvc "github.com/mooyang-code/moox/modules/control/internal/service/control"
 	dnsproxygateway "github.com/mooyang-code/moox/modules/control/internal/service/dnsproxy/gateway"
 	monitorgateway "github.com/mooyang-code/moox/modules/control/internal/service/monitor/gateway"
+	spacegateway "github.com/mooyang-code/moox/modules/control/internal/service/space"
 	sshgateway "github.com/mooyang-code/moox/modules/control/internal/service/ssh/gateway"
 	controlpb "github.com/mooyang-code/moox/modules/control/proto/controlgen"
 	pb "github.com/mooyang-code/moox/modules/control/proto/gen"
@@ -40,6 +41,9 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	gateway.InitGatewayServices(s)
 
 	// 3. 注册各模块网关（必须在网关服务初始化之后）
+	// 3.0 注册 Space 管理台网关
+	spacegateway.RegisterGateway(services.SpaceService)
+
 	// 3.1 注册异步任务网关
 	asynctaskgateway.RegisterAsyncTaskGateway(services.AsyncTaskService)
 

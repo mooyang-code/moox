@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/control/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/modules/control/internal/service/fileserver"
 	"github.com/mooyang-code/moox/modules/control/internal/service/monitor"
+	"github.com/mooyang-code/moox/modules/control/internal/service/space"
 	ssh "github.com/mooyang-code/moox/modules/control/internal/service/ssh"
 	sshapi "github.com/mooyang-code/moox/modules/control/internal/service/ssh/api"
 	sshdao "github.com/mooyang-code/moox/modules/control/internal/service/ssh/dao"
@@ -40,6 +41,7 @@ type Services struct {
 	DBManager *database.Manager
 
 	// 各模块服务
+	SpaceService     space.Service
 	AsyncTaskService asynctask.Service
 	CloudNodeService cloudnode.Service
 
@@ -105,6 +107,10 @@ func initializeDatabase(dbCfg *config.DatabaseConfig) (*database.Manager, error)
 // createCoreServices 创建核心服务
 func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, error) {
 	log.Info("[Bootstrap] 正在创建核心服务...")
+
+	// 创建 Space 服务
+	log.Info("[Bootstrap] 正在创建 Space 服务...")
+	spaceService := space.NewService(dbManager)
 
 	// 创建异步任务管理服务
 	log.Info("[Bootstrap] 正在创建异步任务管理服务...")
@@ -176,6 +182,7 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	log.Info("[Bootstrap] 核心服务创建完成")
 	services := &Services{
 		DBManager:             dbManager,
+		SpaceService:          spaceService,
 		AsyncTaskService:      asyncTaskService,
 		CloudNodeService:      cloudNodeService,
 		TaskRuleService:       taskRuleService,
