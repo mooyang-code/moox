@@ -1,4 +1,5 @@
 import { api } from '@/api/config';
+export { withOptionalSpace } from '@/api/space-context';
 
 
 // 云函数代码包接口定义

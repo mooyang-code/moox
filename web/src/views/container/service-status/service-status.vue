@@ -4,6 +4,7 @@
       <h2>运行状态</h2>
       <p>监控各个容器上运行的服务状态</p>
     </div>
+    <SpaceContextBar />
     
     <div class="page-content">
       <a-row :gutter="20">
@@ -172,6 +173,7 @@
 </template>
 
 <script setup lang="ts">
+import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, computed, onMounted } from 'vue';
 import { Message, Modal } from '@arco-design/web-vue';
 

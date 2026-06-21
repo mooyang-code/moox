@@ -1,4 +1,5 @@
 import { api } from '@/api/config';
+export { withOptionalSpace } from '@/api/space-context';
 
 // 云节点接口定义
 export interface CloudNode {

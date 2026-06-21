@@ -8,6 +8,7 @@
     @cancel="handleCancel"
   >
     <div class="function-package-manage">
+      <SpaceContextBar />
       <!-- 搜索区域 -->
       <a-row style="margin-bottom: 16px;">
         <a-space wrap>
@@ -387,6 +388,7 @@
 </template>
 
 <script setup lang="ts">
+import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, watch, reactive, computed, onUnmounted } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { 

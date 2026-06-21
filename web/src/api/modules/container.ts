@@ -1,4 +1,5 @@
 import axios from '@/api/index';
+export { withOptionalSpace } from '@/api/space-context';
 
 // 容器SSH相关API接口
 

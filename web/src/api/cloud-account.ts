@@ -1,4 +1,5 @@
 import { api } from '@/api/config';
+export { withOptionalSpace } from '@/api/space-context';
 
 // 云账户接口定义
 export interface CloudAccount {

@@ -2,6 +2,7 @@
   <div class="moox-page">
     <a-spin :loading="loading">
       <div class="moox-inner">
+        <SpaceContextBar />
         <a-space wrap>
           <a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear>
             <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
@@ -761,6 +762,7 @@
 </template>
 
 <script setup lang="ts">
+import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from 'vue';
 import { Message, Modal } from '@arco-design/web-vue';
 import { useRoute } from 'vue-router';
