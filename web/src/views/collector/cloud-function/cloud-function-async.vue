@@ -474,7 +474,7 @@ const executeBatchDelete = async () => {
 const loadData = async (showEmptyTip = false) => {
   loading.value = true;
   try {
-    const response = await api.post('/gateway/cloudnode/GetNodeList', {
+    const response = await api.post('/cloudnode/GetNodeList', {
       node_id: form.nodeId,
       cloud_account_id: form.cloudAccountId,
       region: form.region,
@@ -520,7 +520,7 @@ const loadData = async (showEmptyTip = false) => {
 // 加载云账户列表
 const loadCloudAccounts = async () => {
   try {
-    const response = await api.post('/gateway/cloudnode/ListCloudAccounts', {});
+    const response = await api.post('/cloudnode/ListCloudAccounts', {});
     if (response.data?.ret_info?.code === 0) {
       // 处理数组格式的响应：response.data.ret_info.data 可能是数组
       let data = response.data.ret_info.data;
@@ -694,7 +694,7 @@ const onEdit = (_record: CloudFunction) => {
 
 const onDelete = async (record: CloudFunction) => {
   try {
-    const response = await api.post('/gateway/cloudnode/DeleteNode', {
+    const response = await api.post('/cloudnode/DeleteNode', {
       node_id: record.node_id
     });
     

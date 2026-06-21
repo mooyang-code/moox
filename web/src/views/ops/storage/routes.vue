@@ -144,7 +144,7 @@ async function loadOptions() {
     listPrimaryStoreNodes({ page: { page: 1, size: 500 } }),
   ]);
   datasets.value = datasetRsp.datasets || [];
-  nodes.value = nodeRsp.primary_store_nodes || [];
+  nodes.value = nodeRsp.nodes || [];
 }
 
 async function load() {

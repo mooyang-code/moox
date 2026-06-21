@@ -124,12 +124,12 @@ export function listFactors(params: { space_id: string; status?: string; page?: 
 }
 
 export async function upsertDatasetColumn(dataset_column: DatasetColumn) {
-  const rsp = await callMetadata<{ dataset_column: DatasetColumn }, RetRsp & { dataset_column: DatasetColumn }>('UpsertDatasetColumn', { dataset_column });
-  return rsp.dataset_column;
+  const rsp = await callMetadata<{ column: DatasetColumn }, RetRsp & { column: DatasetColumn }>('UpsertDatasetColumn', { column: dataset_column });
+  return rsp.column;
 }
 
 export function listDatasetColumns(params: { space_id: string; dataset_id: string; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { dataset_columns: DatasetColumn[]; page_result: PageResult }>('ListDatasetColumns', params);
+  return callMetadata<typeof params, RetRsp & { columns: DatasetColumn[]; page_result: PageResult }>('ListDatasetColumns', params);
 }
 
 export async function createView(view: View) {
@@ -151,30 +151,30 @@ export function listViews(params: { space_id: string; primary_dataset_id?: strin
 }
 
 export async function upsertViewColumn(view_column: ViewColumn) {
-  const rsp = await callMetadata<{ view_column: ViewColumn }, RetRsp & { view_column: ViewColumn }>('UpsertViewColumn', { view_column });
-  return rsp.view_column;
+  const rsp = await callMetadata<{ column: ViewColumn }, RetRsp & { column: ViewColumn }>('UpsertViewColumn', { column: view_column });
+  return rsp.column;
 }
 
 export function listViewColumns(params: { space_id: string; view_id: string; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { view_columns: ViewColumn[]; page_result: PageResult }>('ListViewColumns', params);
+  return callMetadata<typeof params, RetRsp & { columns: ViewColumn[]; page_result: PageResult }>('ListViewColumns', params);
 }
 
 export async function createPrimaryStoreNode(primary_store_node: PrimaryStoreNode) {
-  const rsp = await callMetadata<{ primary_store_node: PrimaryStoreNode }, RetRsp & { primary_store_node: PrimaryStoreNode }>('CreatePrimaryStoreNode', { primary_store_node });
-  return rsp.primary_store_node;
+  const rsp = await callMetadata<{ node: PrimaryStoreNode }, RetRsp & { node: PrimaryStoreNode }>('CreatePrimaryStoreNode', { node: primary_store_node });
+  return rsp.node;
 }
 
 export async function updatePrimaryStoreNode(primary_store_node: PrimaryStoreNode) {
-  const rsp = await callMetadata<{ primary_store_node: PrimaryStoreNode }, RetRsp & { primary_store_node: PrimaryStoreNode }>('UpdatePrimaryStoreNode', { primary_store_node });
-  return rsp.primary_store_node;
+  const rsp = await callMetadata<{ node: PrimaryStoreNode }, RetRsp & { node: PrimaryStoreNode }>('UpdatePrimaryStoreNode', { node: primary_store_node });
+  return rsp.node;
 }
 
 export function getPrimaryStoreNode(params: { node_id: string }) {
-  return callMetadata<typeof params, RetRsp & { primary_store_node: PrimaryStoreNode }>('GetPrimaryStoreNode', params);
+  return callMetadata<typeof params, RetRsp & { node: PrimaryStoreNode }>('GetPrimaryStoreNode', params);
 }
 
 export function listPrimaryStoreNodes(params: { status?: string; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { primary_store_nodes: PrimaryStoreNode[]; page_result: PageResult }>('ListPrimaryStoreNodes', params);
+  return callMetadata<typeof params, RetRsp & { nodes: PrimaryStoreNode[]; page_result: PageResult }>('ListPrimaryStoreNodes', params);
 }
 
 export async function createPrimaryStoreRoute(primary_store_route: PrimaryStoreRoute) {

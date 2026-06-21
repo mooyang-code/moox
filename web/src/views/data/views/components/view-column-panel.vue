@@ -128,7 +128,7 @@ async function load() {
       view_id: props.viewId,
       page: { page: pagination.current, size: pagination.pageSize },
     });
-    rows.value = rsp.view_columns || [];
+    rows.value = rsp.columns || [];
     applyPageResult(pagination, rsp.page_result);
   } finally {
     loading.value = false;

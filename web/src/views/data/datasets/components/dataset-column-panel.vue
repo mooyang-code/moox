@@ -161,7 +161,7 @@ async function load() {
       dataset_id: props.datasetId,
       page: { page: pagination.current, size: pagination.pageSize },
     });
-    rows.value = rsp.dataset_columns || [];
+    rows.value = rsp.columns || [];
     applyPageResult(pagination, rsp.page_result);
   } finally {
     loading.value = false;

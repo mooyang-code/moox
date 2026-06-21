@@ -103,7 +103,7 @@ async function load() {
   loading.value = true;
   try {
     const rsp = await listPrimaryStoreNodes({ page: { page: pagination.current, size: pagination.pageSize } });
-    rows.value = rsp.primary_store_nodes || [];
+    rows.value = rsp.nodes || [];
     applyPageResult(pagination, rsp.page_result);
   } finally {
     loading.value = false;

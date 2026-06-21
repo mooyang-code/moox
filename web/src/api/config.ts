@@ -6,16 +6,9 @@ export const AUTH_INFO = {
   app_key: "2521e0d21b6be0347b72bca93904a0dd"
 };
 
-// 获取当前页面的IP地址
-const getCurrentHost = () => {
-  const url = window.location.href;
-  const urlObj = new URL(url);
-  return urlObj.hostname;
-};
-
 // 创建axios实例
 export const api = axios.create({
-  baseURL: `http://${getCurrentHost()}:20103/gateway`,
+  baseURL: '/api/control',
   timeout: 10000, // 10秒超时
   headers: {
     'Content-Type': 'application/json',

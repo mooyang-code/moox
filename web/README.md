@@ -131,6 +131,42 @@ pnpm install
 }
 ```
 
+### MooX 管理台本地联调
+
+当前管理台以 Space 作为全局业务上下文。顶部选择框维护当前空间，数据资产、计算与采集、策略管理、交易管理、资源与运维等页面都在当前 Space 下工作。
+
+本地联调建议按以下顺序启动：
+
+```bash
+# 1. 启动 Control 服务，提供 Space 与管理台网关
+cd ../modules/control
+go run ./cmd/moox-server -conf=config/trpc_go.yaml
+
+# 2. 启动 Storage 服务，提供 Metadata / Access / View tRPC HTTP 服务
+cd ../storage
+MOOX_STORAGE_CONFIG=config/storage.yaml go run ./cmd/moox-storage -init-metadata -conf=config/trpc_go.yaml
+MOOX_STORAGE_CONFIG=config/storage.yaml go run ./cmd/moox-storage -conf=config/trpc_go.yaml
+
+# 3. 启动前端开发服务器
+cd ../../web
+pnpm dev
+```
+
+Vite 开发模式会代理以下浏览器路径：
+
+- `/api/control/{service}/{method}` -> Control 网关 `/gateway/{service}/{method}`
+- `/api/storage/metadata/{method}` -> Storage MetadataService
+- `/api/storage/access/{method}` -> Storage AccessService
+- `/api/storage/view/{method}` -> Storage ViewService
+
+手工验收重点：
+
+1. 进入「系统设置 / 空间管理」创建空间，并在顶部选择框切换，刷新后仍保持选中空间。
+2. 在「数据资产」下创建数据来源、数据对象、数据集、字段、因子和查询视图，确认请求都携带当前 `space_id`。
+3. 在「数据同步」执行 CSV dry-run 与导入；导入只写数据，不自动创建或绑定 DatasetSubject。
+4. 在「数据列表」分别验证 TimeSeries / Record 主存查询，以及 TimeSeries View / Record View 查询。
+5. 打开云函数、SSH 终端、策略列表、账户总览等非存储页面，确认页面仍可在顶部 Space 上下文下渲染。
+
 ### 文件资源目录 📚
 
 ```text

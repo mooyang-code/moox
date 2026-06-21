@@ -718,7 +718,7 @@ const getTaskList = async () => {
     if (form.value.dataSource) params.data_source = form.value.dataSource;
     if (form.value.enabled !== null) params.enabled = form.value.enabled ? 'true' : 'false';
 
-    const response = await service.post('/gateway/collectmgr/ListTaskRules', params, {
+    const response = await service.post('/api/control/collectmgr/ListTaskRules', params, {
       headers: {
         'app_id': 'moox_frontend',
         'app_key': '2521e0d21b6be0347b72bca93904a0dd'
@@ -742,7 +742,7 @@ const getTaskList = async () => {
 
 const getNodeList = async () => {
   try {
-    const response = await service.post('/gateway/cloudnode/ListNodes', {}, {
+    const response = await service.post('/api/control/cloudnode/ListNodes', {}, {
       headers: {
         'app_id': 'moox_frontend',
         'app_key': '2521e0d21b6be0347b72bca93904a0dd'
@@ -760,7 +760,7 @@ const getNodeList = async () => {
 // 获取数据类型配置
 const getDataTypeConfigs = async () => {
   try {
-    const response = await service.post('/gateway/collectmgr/ListDataTypeConfigs', {}, {
+    const response = await service.post('/api/control/collectmgr/ListDataTypeConfigs', {}, {
       headers: {
         'app_id': 'moox_frontend',
         'app_key': '2521e0d21b6be0347b72bca93904a0dd'
@@ -786,7 +786,7 @@ const getFieldConfigs = async (dataType: string) => {
   }
 
   try {
-    const response = await service.post('/gateway/collectmgr/GetDataTypeConfigWithFields', { data_type: dataType }, {
+    const response = await service.post('/api/control/collectmgr/GetDataTypeConfigWithFields', { data_type: dataType }, {
       headers: {
         'app_id': 'moox_frontend',
         'app_key': '2521e0d21b6be0347b72bca93904a0dd'
@@ -1150,7 +1150,7 @@ const handleOk = async (): Promise<boolean> => {
       requestData.rule_id = addForm.value.rule_id;
     }
 
-    const endpoint = title.value.includes('新建') ? '/gateway/collectmgr/CreateTaskRule' : '/gateway/collectmgr/UpdateTaskRule';
+    const endpoint = title.value.includes('新建') ? '/api/control/collectmgr/CreateTaskRule' : '/api/control/collectmgr/UpdateTaskRule';
 
     submitLoading.value = true;
     // 发送请求
@@ -1194,7 +1194,7 @@ const handleOk = async (): Promise<boolean> => {
 
 const handleEnableChange = async (record: TaskConfig, value: boolean) => {
   try {
-    const response = await service.post('/gateway/collectmgr/UpdateTaskRule', { 
+    const response = await service.post('/api/control/collectmgr/UpdateTaskRule', {
       ...record,
       enabled: value ? 'true' : 'false'
     }, {

@@ -2,6 +2,10 @@ export interface ControlResponse<T> {
   code?: number | string;
   message?: string;
   msg?: string;
+  ret_info?: {
+    code?: number | string;
+    msg?: string;
+  };
   data?: T;
 }
 

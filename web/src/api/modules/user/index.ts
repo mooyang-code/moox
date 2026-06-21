@@ -11,7 +11,7 @@ export const loginAPI = async (data: { username: string; password: string; verif
 export const getLoginSaltAPI = async (data: { username: string }) => {
   try {
     const response = await axios({
-      url: "/gateway/auth/GetLoginSalt",
+      url: "/api/control/auth/GetLoginSalt",
       method: "post",
       data: {
         app_info: {
@@ -50,7 +50,7 @@ export const getLoginSaltAPI = async (data: { username: string }) => {
 export const getUserInfoAPI = async (accessToken: string) => {
   try {
     const response = await axios({
-      url: "/gateway/auth/GetUserInfo",
+      url: "/api/control/auth/GetUserInfo",
       method: "post",
       data: {
         app_info: {

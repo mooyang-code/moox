@@ -189,7 +189,7 @@ async function loadColumns() {
     dataset_id: form.dataset_id,
     page: { page: 1, size: 1000 },
   });
-  columns.value = rsp.dataset_columns || [];
+  columns.value = rsp.columns || [];
 }
 
 async function onDatasetChange() {

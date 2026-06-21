@@ -375,7 +375,7 @@ const getInstanceList = async () => {
     if (form.value.lastExecStatus !== null) params.last_exec_status = form.value.lastExecStatus;
     if (form.value.invalid !== null) params.invalid = form.value.invalid;
 
-    const response = await service.post('/gateway/collectmgr/ListTaskInstances', params, {
+    const response = await service.post('/api/control/collectmgr/ListTaskInstances', params, {
       headers: {
         'app_id': 'moox_frontend',
         'app_key': '2521e0d21b6be0347b72bca93904a0dd'
