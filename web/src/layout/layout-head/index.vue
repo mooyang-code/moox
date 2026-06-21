@@ -62,8 +62,7 @@
       <a-modal
         v-model:visible="createVisible"
         title="新建空间"
-        :ok-loading="creating"
-        @ok="submitCreate"
+        :on-before-ok="submitCreate"
         @cancel="resetCreate"
       >
         <a-form :model="createForm" layout="vertical">
@@ -146,7 +145,6 @@ const goSpaceSettings = () => {
 };
 
 const createVisible = ref(false);
-const creating = ref(false);
 const createForm = reactive({
   space_id: "",
   name: "",
@@ -170,23 +168,23 @@ const openCreate = () => {
   createVisible.value = true;
 };
 
-const submitCreate = async () => {
-  if (!createForm.space_id.trim() || !createForm.name.trim()) {
+const submitCreate = async (): Promise<boolean> => {
+  const spaceId = createForm.space_id.trim();
+  const name = createForm.name.trim();
+  if (!spaceId || !name) {
     Message.warning("请填写空间 ID 和名称");
-    return;
+    return false;
   }
-  creating.value = true;
   try {
-    await createSpace({ ...createForm, status: "active" });
+    await createSpace({ ...createForm, space_id: spaceId, name, status: "active" });
     await spaceStore.loadSpaces();
-    spaceStore.setSelectedSpace(createForm.space_id.trim());
+    spaceStore.setSelectedSpace(spaceId);
     Message.success("空间创建成功");
-    createVisible.value = false;
     resetCreate();
+    return true;
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "创建空间失败");
-  } finally {
-    creating.value = false;
+    return false;
   }
 };
 
