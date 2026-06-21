@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/dgraph-io/badger/v4"
@@ -45,7 +46,25 @@ func (dm *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
 
 	dm.db = db
 	applySQLitePoolConfig(dm.db, dbCfg)
+	if err := dm.ApplySchema(defaultAdminSchemaPath()); err != nil {
+		return err
+	}
 	log.Infof("初始化SQLite数据库连接: %s", dbPath)
+	return nil
+}
+
+// ApplySchema 应用 Control/Admin 的权威 SQL schema。
+func (dm *Manager) ApplySchema(schemaPath string) error {
+	if dm.db == nil {
+		return fmt.Errorf("database is not initialized")
+	}
+	raw, err := os.ReadFile(schemaPath)
+	if err != nil {
+		return fmt.Errorf("read schema %s: %w", schemaPath, err)
+	}
+	if err := dm.db.Exec(string(raw)).Error; err != nil {
+		return fmt.Errorf("apply schema %s: %w", schemaPath, err)
+	}
 	return nil
 }
 
@@ -148,4 +167,23 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func defaultAdminSchemaPath() string {
+	if path := strings.TrimSpace(os.Getenv("MOOX_CONTROL_ADMIN_SCHEMA_FILE")); path != "" {
+		return path
+	}
+	candidates := []string{
+		filepath.Join("schema", "admin.sql"),
+		filepath.Join("modules", "control", "schema", "admin.sql"),
+	}
+	if _, file, _, ok := runtime.Caller(0); ok {
+		candidates = append(candidates, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", "schema", "admin.sql")))
+	}
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return filepath.Join("schema", "admin.sql")
 }

@@ -264,7 +264,7 @@ CREATE TABLE IF NOT EXISTS t_spaces (c_id INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS t_datasets (c_id INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS t_primary_store_routes (c_id INTEGER PRIMARY KEY);
 `)
-	if err := os.WriteFile(filepath.Join(schemaDir, "storage_metadata.sql"), schema, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(schemaDir, "metadata.sql"), schema, 0o600); err != nil {
 		t.Fatalf("write schema failed: %v", err)
 	}
 

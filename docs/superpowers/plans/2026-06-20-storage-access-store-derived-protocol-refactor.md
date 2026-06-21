@@ -795,7 +795,7 @@ Required behavior:
 ## Task 10: Update Metadata Storage and Schema
 
 **Files:**
-- Modify: `modules/storage/schema/storage_metadata.sql`
+- Modify: `modules/storage/schema/metadata.sql`
 - Modify: `modules/storage/internal/infra/metadata/sqlite/crud.go`
 - Modify: `modules/storage/internal/infra/metadata/cache/store.go`
 - Modify tests under `modules/storage/internal/infra/metadata`

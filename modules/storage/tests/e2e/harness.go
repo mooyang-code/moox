@@ -178,7 +178,7 @@ func (h *Harness) launch() error {
 func (h *Harness) childEnv() []string {
 	env := os.Environ()
 	// 显式指定 schema 文件绝对路径，避免依赖 cwd 推断。
-	env = append(env, "STORAGE_SCHEMA_FILE="+filepath.Join(h.moduleDir, "schema", "storage_metadata.sql"))
+	env = append(env, "STORAGE_SCHEMA_FILE="+filepath.Join(h.moduleDir, "schema", "metadata.sql"))
 	env = append(env, "MOOX_STORAGE_CONFIG="+h.storageCfg)
 	return env
 }

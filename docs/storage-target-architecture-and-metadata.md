@@ -2,7 +2,7 @@
 
 本文记录 moox 量化数据存储系统的目标架构、核心概念、数据流和元数据表设计。它以旧 xData 的简单分层为基础，保留数据集、数据对象、字段契约和存储路由，同时删掉过早的治理表。
 
-本文是目标设计。`modules/storage/schema/storage_metadata.sql` 和 storage proto 应按本文保持一致。
+本文是目标设计。`modules/storage/schema/metadata.sql` 和 storage proto 应按本文保持一致。
 
 如果是第一次阅读本系统，建议先读 `docs/storage-concepts-and-design-intent.md`。该文档解释 Space、DataSource、Subject、Dataset、Field、Factor、View 等概念的边界，以及这些取舍背后的设计意图。
 
@@ -114,7 +114,7 @@ flowchart TD
 ```text
 modules/storage/
   schema/              # storage 相关 SQL 表定义
-    storage_metadata.sql
+    metadata.sql
     admin_console.sql
   internal/
   config/              # moox-storage 配置加载

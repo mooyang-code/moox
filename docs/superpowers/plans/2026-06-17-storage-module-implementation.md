@@ -31,7 +31,7 @@
 
 **元数据表：**
 
-- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/storage_metadata.sql`
+- `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/metadata.sql`
 - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/admin_console.sql`
 
 **协议：**
@@ -91,7 +91,7 @@
 - `core/schema`: 写入契约校验，校验 DataSet、DataSetColumn、类型、必填列。
 - `core/router`: 根据 PrimaryRoute 把在线事实主存路由到 PrimaryNode。当前协议和表结构仍使用 StorageRoute/StorageNode 旧名。
 - `core/eventbus`: 写入 Pebble 后发布 `DataRowsChangedEvent` 等 storage 领域事件。
-- `infra/metadata/sqlite`: `modules/storage/schema/storage_metadata.sql` 的 SQLite 持久化实现。
+- `infra/metadata/sqlite`: `modules/storage/schema/metadata.sql` 的 SQLite 持久化实现。
 - `infra/device/pebble`: 在线事实主存。
 - `infra/device/duckdb`: View 物化结果存储和查询。
 - `infra/device/bleve`: 文本索引。
@@ -259,7 +259,7 @@
   func TestStoreInitializesStorageMetadataSchema(t *testing.T) {
       ctx := context.Background()
       dbPath := filepath.Join(t.TempDir(), "storage_metadata.db")
-      schemaPath := "/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/storage_metadata.sql"
+      schemaPath := "/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/metadata.sql"
 
       store, err := sqlite.Open(ctx, sqlite.Options{Path: dbPath, SchemaPath: schemaPath})
       require.NoError(t, err)

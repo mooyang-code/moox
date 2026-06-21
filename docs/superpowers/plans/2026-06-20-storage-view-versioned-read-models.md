@@ -91,7 +91,7 @@ Proto contracts:
 
 Metadata:
 
-- `modules/storage/schema/storage_metadata.sql`: SQLite table columns and indexes.
+- `modules/storage/schema/metadata.sql`: SQLite table columns and indexes.
 - `modules/storage/internal/infra/metadata/sqlite/crud.go`: version bump, build state updates, view lookup.
 - `modules/storage/internal/core/metadata/store.go`: metadata interfaces.
 - `modules/storage/internal/infra/metadata/cache/store.go`: cache snapshot structs and forwarding methods.
@@ -182,7 +182,7 @@ go test -run '^$' ./modules/storage/proto/gen
 
 **Files:**
 
-- Modify: `modules/storage/schema/storage_metadata.sql`
+- Modify: `modules/storage/schema/metadata.sql`
 - Modify: `modules/storage/internal/infra/metadata/sqlite/crud.go`
 - Modify: `modules/storage/internal/core/metadata/store.go`
 - Modify: `modules/storage/internal/infra/metadata/cache/store.go`

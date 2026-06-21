@@ -6,8 +6,6 @@ import (
 	"github.com/mooyang-code/moox/modules/control/internal/service/auth/config"
 	"github.com/mooyang-code/moox/modules/control/internal/service/auth/dao"
 	"github.com/mooyang-code/moox/modules/control/internal/service/database"
-
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // AuthServiceImpl 认证服务实现
@@ -47,14 +45,5 @@ func InitAuthServiceImpl(cfg *config.Config, dbManager *database.Manager) (*Auth
 
 	// 初始化DAO
 	imp.userDAO = dao.NewUserDAO(db, cache)
-
-	// 自动迁移表结构
-	// 作用：根据 model 定义自动创建或更新数据库表
-	// - 首次运行时自动创建表（t_users, t_active_tokens, t_login_history, t_user_actions）
-	// - 代码更新添加新字段时自动添加列到表中
-	// - 不是数据迁移，而是表结构（schema）的自动管理
-	if err := imp.userDAO.AutoMigrate(); err != nil {
-		log.Warnf("[Auth] 自动迁移表结构失败: %v", err)
-	}
 	return imp, nil
 }

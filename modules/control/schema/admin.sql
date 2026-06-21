@@ -1,8 +1,45 @@
 
 -- ============ MooX 认证系统数据库表设计 ============
 
+PRAGMA foreign_keys = ON;
+
+-- ************ 平台空间表 ************
+CREATE TABLE IF NOT EXISTS t_spaces (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_name TEXT NOT NULL,
+    c_description TEXT NOT NULL DEFAULT '',
+    c_owner TEXT NOT NULL DEFAULT '',
+    c_market TEXT NOT NULL DEFAULT '',
+    c_timezone TEXT NOT NULL DEFAULT '',
+    c_status TEXT NOT NULL DEFAULT 'active',
+    c_attributes TEXT NOT NULL DEFAULT '{}',
+    c_invalid INTEGER NOT NULL DEFAULT 0,
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_spaces_space_id_invalid
+ON t_spaces(c_space_id, c_invalid);
+
+CREATE TABLE IF NOT EXISTS t_space_members (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_user_id TEXT NOT NULL,
+    c_role TEXT NOT NULL DEFAULT 'member',
+    c_status TEXT NOT NULL DEFAULT 'active',
+    c_attributes TEXT NOT NULL DEFAULT '{}',
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_space_members_space_user
+ON t_space_members(c_space_id, c_user_id);
+CREATE INDEX IF NOT EXISTS idx_space_members_user_id
+ON t_space_members(c_user_id);
+
 -- ************ 用户表 ************
-CREATE TABLE t_users (
+CREATE TABLE IF NOT EXISTS t_users (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 自增ID
     c_user_id TEXT NOT NULL,                                   -- 用户UUID (对应代码中的string类型)
     c_username TEXT NOT NULL,                                  -- 用户名
@@ -24,7 +61,7 @@ CREATE TABLE t_users (
 );
 
 -- ************ 活跃令牌表 (JWT会话管理) ************
-CREATE TABLE t_active_tokens (
+CREATE TABLE IF NOT EXISTS t_active_tokens (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 自增ID
     c_jti TEXT NOT NULL,                                       -- JWT ID (唯一标识)
     c_user_id TEXT NOT NULL,                                   -- 用户UUID (对应用户表)
@@ -44,7 +81,7 @@ CREATE TABLE t_active_tokens (
 );
 
 -- ************ 登录历史表 (安全审计) ************
-CREATE TABLE t_login_history (
+CREATE TABLE IF NOT EXISTS t_login_history (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 自增ID
     c_user_id TEXT NOT NULL,                                   -- 用户UUID
     c_username TEXT NOT NULL,                                  -- 用户名 (冗余存储，便于查询)
@@ -62,7 +99,7 @@ CREATE TABLE t_login_history (
 );
 
 -- ************ 用户操作日志表 (可选，用于审计) ************
-CREATE TABLE t_user_actions (
+CREATE TABLE IF NOT EXISTS t_user_actions (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 自增ID
     c_user_id TEXT NOT NULL,                                   -- 用户UUID
     c_action TEXT NOT NULL,                                    -- 操作类型: login, logout, change_password, update_profile
@@ -78,39 +115,39 @@ CREATE TABLE t_user_actions (
 
 -- ************ 创建索引 ************
 -- 用户表索引
-CREATE UNIQUE INDEX idx_users_user_id ON t_users(c_user_id);
-CREATE UNIQUE INDEX idx_users_username ON t_users(c_username);
-CREATE INDEX idx_users_email ON t_users(c_email);
-CREATE INDEX idx_users_status ON t_users(c_status);
-CREATE INDEX idx_users_role ON t_users(c_role);
-CREATE INDEX idx_users_last_login ON t_users(c_last_login_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_user_id ON t_users(c_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON t_users(c_username);
+CREATE INDEX IF NOT EXISTS idx_users_email ON t_users(c_email);
+CREATE INDEX IF NOT EXISTS idx_users_status ON t_users(c_status);
+CREATE INDEX IF NOT EXISTS idx_users_role ON t_users(c_role);
+CREATE INDEX IF NOT EXISTS idx_users_last_login ON t_users(c_last_login_at);
 
 -- 令牌表索引
-CREATE UNIQUE INDEX idx_tokens_jti ON t_active_tokens(c_jti);
-CREATE INDEX idx_tokens_user_id ON t_active_tokens(c_user_id);
-CREATE INDEX idx_tokens_expires ON t_active_tokens(c_expires_at);
-CREATE INDEX idx_tokens_type ON t_active_tokens(c_token_type);
-CREATE INDEX idx_tokens_device ON t_active_tokens(c_device_id);
-CREATE INDEX idx_tokens_revoked ON t_active_tokens(c_revoked);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tokens_jti ON t_active_tokens(c_jti);
+CREATE INDEX IF NOT EXISTS idx_tokens_user_id ON t_active_tokens(c_user_id);
+CREATE INDEX IF NOT EXISTS idx_tokens_expires ON t_active_tokens(c_expires_at);
+CREATE INDEX IF NOT EXISTS idx_tokens_type ON t_active_tokens(c_token_type);
+CREATE INDEX IF NOT EXISTS idx_tokens_device ON t_active_tokens(c_device_id);
+CREATE INDEX IF NOT EXISTS idx_tokens_revoked ON t_active_tokens(c_revoked);
 
 -- 登录历史索引
-CREATE INDEX idx_login_history_user_id ON t_login_history(c_user_id);
-CREATE INDEX idx_login_history_ip ON t_login_history(c_client_ip);
-CREATE INDEX idx_login_history_time ON t_login_history(c_ctime);
-CREATE INDEX idx_login_history_result ON t_login_history(c_login_result);
+CREATE INDEX IF NOT EXISTS idx_login_history_user_id ON t_login_history(c_user_id);
+CREATE INDEX IF NOT EXISTS idx_login_history_ip ON t_login_history(c_client_ip);
+CREATE INDEX IF NOT EXISTS idx_login_history_time ON t_login_history(c_ctime);
+CREATE INDEX IF NOT EXISTS idx_login_history_result ON t_login_history(c_login_result);
 
 -- 操作日志索引
-CREATE INDEX idx_user_actions_user_id ON t_user_actions(c_user_id);
-CREATE INDEX idx_user_actions_action ON t_user_actions(c_action);
-CREATE INDEX idx_user_actions_time ON t_user_actions(c_ctime);
+CREATE INDEX IF NOT EXISTS idx_user_actions_user_id ON t_user_actions(c_user_id);
+CREATE INDEX IF NOT EXISTS idx_user_actions_action ON t_user_actions(c_action);
+CREATE INDEX IF NOT EXISTS idx_user_actions_time ON t_user_actions(c_ctime);
 
 -- ************ 创建触发器，自动更新修改时间 ************
 -- 用户表触发器 - 更新时间
-CREATE TRIGGER update_users_mtime AFTER UPDATE ON t_users BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_users_mtime AFTER UPDATE ON t_users BEGIN 
     UPDATE t_users SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 活跃令牌表触发器 - 更新时间
-CREATE TRIGGER update_tokens_mtime AFTER UPDATE ON t_active_tokens BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_tokens_mtime AFTER UPDATE ON t_active_tokens BEGIN 
     UPDATE t_active_tokens SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 
@@ -119,6 +156,7 @@ CREATE TRIGGER update_tokens_mtime AFTER UPDATE ON t_active_tokens BEGIN
 -- ************ 云账户配置表 ************
 CREATE TABLE IF NOT EXISTS t_cloud_accounts (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
+    c_space_id TEXT NOT NULL DEFAULT '', -- 空间ID
     c_account_id TEXT NOT NULL, -- 账户唯一标识
     c_account_name TEXT NOT NULL, -- 账户名称
     c_provider TEXT NOT NULL, -- 云厂商（tencent/aliyun/aws）
@@ -136,6 +174,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_accounts (
 -- ************ 创建云函数数据采集器节点信息表 ************
 CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
+    c_space_id TEXT NOT NULL DEFAULT '', -- 空间ID
     c_node_id TEXT NOT NULL, -- 节点唯一标识（如：scf-collector-01）
     c_cloud_account_id TEXT NOT NULL DEFAULT '', -- 云账户ID
     c_package_id TEXT DEFAULT '', -- 代码包ID，记录该节点当前部署的代码包(11位随机字符串)
@@ -173,18 +212,19 @@ CREATE INDEX IF NOT EXISTS idx_cloud_accounts_invalid ON t_cloud_accounts(c_inva
 -- ************ 创建云函数采集器相关触发器 ************
 -- 云账户表更新触发器
 DROP TRIGGER IF EXISTS update_cloud_accounts_mtime;
-CREATE TRIGGER update_cloud_accounts_mtime AFTER UPDATE ON t_cloud_accounts BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_cloud_accounts_mtime AFTER UPDATE ON t_cloud_accounts BEGIN 
     UPDATE t_cloud_accounts SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 节点表更新触发器
 DROP TRIGGER IF EXISTS update_scf_collector_nodes_mtime;
-CREATE TRIGGER update_scf_collector_nodes_mtime AFTER UPDATE ON t_cloud_nodes BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_scf_collector_nodes_mtime AFTER UPDATE ON t_cloud_nodes BEGIN 
     UPDATE t_cloud_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ============ 异步任务管理表设计 (Job-Task 模型) ============
 
 -- ************ 异步任务Job表 ************
-CREATE TABLE t_async_jobs (
+CREATE TABLE IF NOT EXISTS t_async_jobs (
+    c_space_id TEXT NOT NULL DEFAULT '',                           -- 空间ID
     c_job_id TEXT NOT NULL,                                    -- 用户一次提交的批次ID
     c_request_params TEXT,                                      -- 请求参数 (JSON格式)
 
@@ -198,7 +238,8 @@ CREATE TABLE t_async_jobs (
 );
 
 -- ************ 异步任务Task表 ************
-CREATE TABLE t_async_job_tasks (
+CREATE TABLE IF NOT EXISTS t_async_job_tasks (
+    c_space_id TEXT NOT NULL DEFAULT '',                         -- 空间ID
     c_task_id TEXT NOT NULL,                                   -- 任务UUID
     c_job_id TEXT NOT NULL,                                    -- 任务所属的用户一次提交的批次ID
 
@@ -215,28 +256,29 @@ CREATE TABLE t_async_job_tasks (
 );
 
 -- ************ 创建异步任务相关索引 ************
-CREATE UNIQUE INDEX idx_async_jobs_job_id ON t_async_jobs(c_job_id);
-CREATE INDEX idx_async_jobs_ctime ON t_async_jobs(c_ctime);
-CREATE INDEX idx_async_jobs_is_started ON t_async_jobs(c_is_started);
-CREATE UNIQUE INDEX idx_async_job_tasks_task_id ON t_async_job_tasks(c_task_id);
-CREATE INDEX idx_async_job_tasks_job_id ON t_async_job_tasks(c_job_id);
-CREATE INDEX idx_async_job_tasks_status ON t_async_job_tasks(c_task_status);
-CREATE INDEX idx_async_job_tasks_ctime ON t_async_job_tasks(c_ctime);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_async_jobs_job_id ON t_async_jobs(c_job_id);
+CREATE INDEX IF NOT EXISTS idx_async_jobs_ctime ON t_async_jobs(c_ctime);
+CREATE INDEX IF NOT EXISTS idx_async_jobs_is_started ON t_async_jobs(c_is_started);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_async_job_tasks_task_id ON t_async_job_tasks(c_task_id);
+CREATE INDEX IF NOT EXISTS idx_async_job_tasks_job_id ON t_async_job_tasks(c_job_id);
+CREATE INDEX IF NOT EXISTS idx_async_job_tasks_status ON t_async_job_tasks(c_task_status);
+CREATE INDEX IF NOT EXISTS idx_async_job_tasks_ctime ON t_async_job_tasks(c_ctime);
 
 -- ************ 创建异步任务相关触发器 ************
 -- 异步任务Job表更新触发器
 DROP TRIGGER IF EXISTS update_async_jobs_mtime;
-CREATE TRIGGER update_async_jobs_mtime AFTER UPDATE ON t_async_jobs BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_async_jobs_mtime AFTER UPDATE ON t_async_jobs BEGIN 
     UPDATE t_async_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 异步任务Task表更新触发器
 DROP TRIGGER IF EXISTS update_async_job_tasks_mtime;
-CREATE TRIGGER update_async_job_tasks_mtime AFTER UPDATE ON t_async_job_tasks BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_async_job_tasks_mtime AFTER UPDATE ON t_async_job_tasks BEGIN 
     UPDATE t_async_job_tasks SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ************ 节点任务快照表 ************
-CREATE TABLE t_node_task_snapshot (
+CREATE TABLE IF NOT EXISTS t_node_task_snapshot (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
+    c_space_id TEXT NOT NULL DEFAULT '',                       -- 空间ID
     c_node_id TEXT NOT NULL,                                   -- 节点ID
     c_task_id TEXT NOT NULL,                                   -- 任务ID
     c_task_status TEXT DEFAULT '',                             -- 任务状态
@@ -247,12 +289,12 @@ CREATE TABLE t_node_task_snapshot (
 );
 
 -- 节点任务快照表索引
-CREATE INDEX idx_node_task_snapshot_node_task ON t_node_task_snapshot(c_node_id, c_task_id);
-CREATE INDEX idx_node_task_snapshot_sync_time ON t_node_task_snapshot(c_sync_time);
+CREATE INDEX IF NOT EXISTS idx_node_task_snapshot_node_task ON t_node_task_snapshot(c_node_id, c_task_id);
+CREATE INDEX IF NOT EXISTS idx_node_task_snapshot_sync_time ON t_node_task_snapshot(c_sync_time);
 
 -- 节点任务快照表更新触发器
 DROP TRIGGER IF EXISTS update_node_task_snapshot_mtime;
-CREATE TRIGGER update_node_task_snapshot_mtime AFTER UPDATE ON t_node_task_snapshot BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_node_task_snapshot_mtime AFTER UPDATE ON t_node_task_snapshot BEGIN 
     UPDATE t_node_task_snapshot SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ============ 采集器任务规则系统表设计 ============
@@ -260,6 +302,7 @@ CREATE TRIGGER update_node_task_snapshot_mtime AFTER UPDATE ON t_node_task_snaps
 -- ************ 采集任务规则表 ************
 CREATE TABLE IF NOT EXISTS t_collector_task_rules (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
+    c_space_id TEXT NOT NULL DEFAULT '', -- 空间ID
     c_rule_id TEXT NOT NULL, -- 规则唯一标识
     c_biz_type TEXT NOT NULL DEFAULT '', -- 业务类型: data_collector=数据采集, factor_calculator=因子计算
     c_data_type TEXT NOT NULL, -- 数据类型（kline/ticker/orderbook/trade/news/list等）
@@ -282,6 +325,7 @@ CREATE TABLE IF NOT EXISTS t_collector_task_rules (
 -- ************ 采集任务实例表 ************
 CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, -- 主键ID
+    c_space_id TEXT NOT NULL DEFAULT '', -- 空间ID
     c_task_id TEXT NOT NULL, -- 任务唯一标识
     c_rule_id TEXT NOT NULL, -- 规则ID（关联规则表）
     c_biz_type TEXT NOT NULL DEFAULT '', -- 业务类型: data_collector=数据采集, factor_calculator=因子计算
@@ -327,12 +371,12 @@ CREATE INDEX IF NOT EXISTS idx_collector_task_instances_create_time ON t_collect
 -- ************ 创建采集任务规则相关触发器 ************
 -- 任务规则表更新触发器
 DROP TRIGGER IF EXISTS update_collector_task_rules_mtime;
-CREATE TRIGGER update_collector_task_rules_mtime AFTER UPDATE ON t_collector_task_rules BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_collector_task_rules_mtime AFTER UPDATE ON t_collector_task_rules BEGIN 
     UPDATE t_collector_task_rules SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 任务实例表更新触发器
 DROP TRIGGER IF EXISTS update_collector_task_instances_mtime;
-CREATE TRIGGER update_collector_task_instances_mtime AFTER UPDATE ON t_collector_task_instances BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_collector_task_instances_mtime AFTER UPDATE ON t_collector_task_instances BEGIN 
     UPDATE t_collector_task_instances SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ============ 心跳服务表设计 ============
@@ -342,6 +386,7 @@ CREATE TRIGGER update_collector_task_instances_mtime AFTER UPDATE ON t_collector
 -- ************ 云函数代码包表 ************
 CREATE TABLE IF NOT EXISTS t_function_packages (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,               -- 主键ID
+    c_space_id TEXT NOT NULL DEFAULT '',                       -- 空间ID
     c_package_id TEXT NOT NULL,                                    -- 代码包唯一标识(11位随机字符串)
     c_package_name TEXT NOT NULL,                                  -- 代码包名称
     c_version TEXT NOT NULL,                                       -- 版本号
@@ -388,7 +433,7 @@ CREATE INDEX IF NOT EXISTS idx_function_packages_invalid ON t_function_packages(
 -- ************ 创建云函数代码包相关触发器 ************
 -- 代码包表更新触发器
 DROP TRIGGER IF EXISTS update_function_packages_mtime;
-CREATE TRIGGER update_function_packages_mtime AFTER UPDATE ON t_function_packages BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_function_packages_mtime AFTER UPDATE ON t_function_packages BEGIN 
     UPDATE t_function_packages SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ============ 采集器数据类型配置系统表设计 ============
@@ -439,12 +484,12 @@ CREATE INDEX IF NOT EXISTS idx_collector_field_configs_invalid ON t_collector_fi
 -- ************ 采集器数据类型配置相关触发器 ************
 -- 数据类型配置表更新触发器
 DROP TRIGGER IF EXISTS update_collector_data_type_configs_mtime;
-CREATE TRIGGER update_collector_data_type_configs_mtime AFTER UPDATE ON t_collector_data_type_configs BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_collector_data_type_configs_mtime AFTER UPDATE ON t_collector_data_type_configs BEGIN 
     UPDATE t_collector_data_type_configs SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- 参数字段配置表更新触发器  
 DROP TRIGGER IF EXISTS update_collector_field_configs_mtime;
-CREATE TRIGGER update_collector_field_configs_mtime AFTER UPDATE ON t_collector_field_configs BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_collector_field_configs_mtime AFTER UPDATE ON t_collector_field_configs BEGIN 
     UPDATE t_collector_field_configs SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ************ 采集器数据类型配置初始数据 ************
@@ -500,6 +545,7 @@ INSERT OR IGNORE INTO t_collector_field_configs (c_data_type, c_field_key, c_fie
 -- ************ 交易所标的表 ************
 CREATE TABLE IF NOT EXISTS t_exchange_symbols (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,       -- 主键ID
+    c_space_id TEXT NOT NULL DEFAULT '',                   -- 空间ID
     c_exchange TEXT NOT NULL,                              -- 交易所名称（binance/okx/huobi等）
     c_inst_type TEXT NOT NULL,                             -- 产品类型（SPOT/SWAP/FUTURES等）
     c_symbol TEXT NOT NULL,                                -- 标的符号（BTC-USDT）
@@ -542,7 +588,7 @@ CREATE INDEX IF NOT EXISTS idx_exchange_symbols_exchange_inst ON t_exchange_symb
 -- ************ 创建交易所标的相关触发器 ************
 -- 标的表更新触发器
 DROP TRIGGER IF EXISTS update_exchange_symbols_mtime;
-CREATE TRIGGER update_exchange_symbols_mtime AFTER UPDATE ON t_exchange_symbols BEGIN
+CREATE TRIGGER IF NOT EXISTS update_exchange_symbols_mtime AFTER UPDATE ON t_exchange_symbols BEGIN
     UPDATE t_exchange_symbols SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ============ SSH 主机管理系统表设计 ============
@@ -550,6 +596,7 @@ CREATE TRIGGER update_exchange_symbols_mtime AFTER UPDATE ON t_exchange_symbols 
 -- ************ SSH 主机配置表 ************
 CREATE TABLE IF NOT EXISTS t_ssh_host (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
+    c_space_id TEXT NOT NULL DEFAULT '',                       -- 空间ID
     c_name TEXT NOT NULL,                                       -- 主机名称
     c_address TEXT NOT NULL,                                    -- 主机地址（IP或域名）
     c_port INTEGER NOT NULL DEFAULT 22,                        -- SSH端口
@@ -581,6 +628,7 @@ CREATE TABLE IF NOT EXISTS t_ssh_host (
 -- ************ SSH 会话表（用于会话管理） ************
 CREATE TABLE IF NOT EXISTS t_ssh_session (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
+    c_space_id TEXT NOT NULL DEFAULT '',                       -- 空间ID
     c_session_id TEXT NOT NULL,                                 -- 会话唯一标识
     c_host_id INTEGER NOT NULL,                                -- 关联主机ID
     c_host_name TEXT DEFAULT '',                                -- 主机名称（冗余）
@@ -606,7 +654,7 @@ CREATE INDEX IF NOT EXISTS idx_ssh_session_connect_time ON t_ssh_session(c_conne
 
 -- ************ 创建SSH相关触发器 ************
 DROP TRIGGER IF EXISTS update_ssh_host_mtime;
-CREATE TRIGGER update_ssh_host_mtime AFTER UPDATE ON t_ssh_host BEGIN
+CREATE TRIGGER IF NOT EXISTS update_ssh_host_mtime AFTER UPDATE ON t_ssh_host BEGIN
     UPDATE t_ssh_host SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 
 -- ============ 主机监控系统表设计 ============
@@ -614,6 +662,7 @@ CREATE TRIGGER update_ssh_host_mtime AFTER UPDATE ON t_ssh_host BEGIN
 -- ************ 主机监控历史数据表 ************
 CREATE TABLE IF NOT EXISTS t_host_monitor_history (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,       -- 主键ID
+    c_space_id TEXT NOT NULL DEFAULT '',                   -- 空间ID
     c_host_address TEXT NOT NULL,                           -- 主机IP地址
 
     -- CPU 指标

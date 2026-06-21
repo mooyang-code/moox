@@ -20,7 +20,7 @@
   - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/control/schema/admin.sql`
   - `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/metadata.sql`
 - Remove `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/admin_console.sql` from Storage ownership.
-- Rename `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/storage_metadata.sql` to `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/metadata.sql`.
+- Rename `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/metadata.sql` to `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/metadata.sql`.
 - Container, SSH, cloud function, strategy, and trading-account modules stay in the console and will be gradually aligned to Space.
 - Space is the largest user-facing business isolation concept, such as `A股交易空间`, `美股交易空间`, `Crypto 交易空间`, or `生产交易空间`.
 - Space selection belongs in the top header, not as a deep left-menu directory.
@@ -142,7 +142,7 @@ Old concepts to replace in Storage-related code:
 | field directly binding dataset | `DatasetColumn` |
 | `/gateway/*` | `/api/control/{service}/{method}` for Control/Admin and `/api/storage/{metadata|access|view}/{Method}` for Storage |
 | `modules/storage/schema/admin_console.sql` | `modules/control/schema/admin.sql` |
-| `modules/storage/schema/storage_metadata.sql` | `modules/storage/schema/metadata.sql` |
+| `modules/storage/schema/metadata.sql` | `modules/storage/schema/metadata.sql` |
 
 Schema policy:
 
@@ -158,7 +158,7 @@ Non-storage modules keep their pages. Their routes move under the new menu, and 
 Schema ownership:
 
 - Create or rewrite: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/control/schema/admin.sql`: full latest Control/Admin schema for users, tokens, platform Spaces, Space members, cloud accounts, cloud nodes, function packages, collector rules, async jobs, SSH hosts/sessions, host monitoring, and future strategy/trading admin state.
-- Rename and rewrite: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/storage_metadata.sql` -> `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/metadata.sql`: full latest Storage metadata schema only.
+- Rename and rewrite: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/metadata.sql` -> `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/metadata.sql`: full latest Storage metadata schema only.
 - Delete: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/admin_console.sql`: admin-console tables do not belong to Storage.
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/control/internal/service/database/manager.go`: apply `admin.sql` at startup or through an explicit bootstrap command.
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite/store.go`: default schema path uses `schema/metadata.sql`.
@@ -254,7 +254,7 @@ Non-storage pages to keep:
 **Files:**
 
 - Create or rewrite: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/control/schema/admin.sql`
-- Rename and rewrite: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/storage_metadata.sql` -> `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/metadata.sql`
+- Rename and rewrite: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/metadata.sql` -> `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/metadata.sql`
 - Delete: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/schema/admin_console.sql`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/control/internal/service/database/manager.go`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/control/internal/service/auth/dao/user.go`
@@ -361,7 +361,7 @@ Delete `modules/storage/schema/admin_console.sql`. No Control/Admin table may be
 
 - [ ] **Step 4: Rename Storage metadata schema**
 
-Rename `modules/storage/schema/storage_metadata.sql` to `modules/storage/schema/metadata.sql`. Update all code, config, tests, and docs that refer to the old filename.
+Rename `modules/storage/schema/metadata.sql` to `modules/storage/schema/metadata.sql`. Update all code, config, tests, and docs that refer to the old filename.
 
 The default storage schema path must become:
 
@@ -2002,7 +2002,7 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 test -f modules/control/schema/admin.sql
 test -f modules/storage/schema/metadata.sql
 test ! -f modules/storage/schema/admin_console.sql
-test ! -f modules/storage/schema/storage_metadata.sql
+test ! -f modules/storage/schema/metadata.sql
 test ! -d modules/control/migrations
 test ! -d modules/storage/migrations
 rg -n "storage_metadata\\.sql|admin_console\\.sql|modules/storage/schema/admin|modules/.*/migrations" modules/control modules/storage web web-host docs/superpowers/plans/2026-06-21-moox-web-space-workbench.md
@@ -2026,7 +2026,7 @@ Expected: changes are limited to management console, web-host gateway, Control/A
 - Control/Admin owns platform-level Space and `modules/control/schema/admin.sql`.
 - Storage owns only storage metadata and uses `modules/storage/schema/metadata.sql`.
 - The plan has no compatibility layer, no data migration path, and no `migrations/` directory for this pre-release rebuild.
-- `modules/storage/schema/admin_console.sql` and `modules/storage/schema/storage_metadata.sql` are removed or renamed in the plan.
+- `modules/storage/schema/admin_console.sql` and `modules/storage/schema/metadata.sql` are removed or renamed in the plan.
 - The plan preserves container, SSH, cloud function, strategy, and trading modules.
 - The plan keeps hardcoded frontend `app_key` only in one centralized file.
 - The plan removes user-facing Device configuration.

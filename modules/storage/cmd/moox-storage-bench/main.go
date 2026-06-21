@@ -482,7 +482,7 @@ func (e *serviceEnv) Stop() error {
 
 func (e *serviceEnv) childEnv(moduleDir string) []string {
 	return append(os.Environ(),
-		"STORAGE_SCHEMA_FILE="+filepath.Join(moduleDir, "schema", "storage_metadata.sql"),
+		"STORAGE_SCHEMA_FILE="+filepath.Join(moduleDir, "schema", "metadata.sql"),
 		"MOOX_STORAGE_CONFIG="+e.storageCfg,
 	)
 }

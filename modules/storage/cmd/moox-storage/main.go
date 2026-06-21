@@ -256,11 +256,11 @@ func metadataSchemaPath(configPath string) string {
 	}
 	candidates := []string{}
 	if configPath != "" {
-		candidates = append(candidates, filepath.Clean(filepath.Join(filepath.Dir(configPath), "..", "schema", "storage_metadata.sql")))
+		candidates = append(candidates, filepath.Clean(filepath.Join(filepath.Dir(configPath), "..", "schema", "metadata.sql")))
 	}
 	candidates = append(candidates,
-		filepath.Join("schema", "storage_metadata.sql"),
-		filepath.Join("modules", "storage", "schema", "storage_metadata.sql"),
+		filepath.Join("schema", "metadata.sql"),
+		filepath.Join("modules", "storage", "schema", "metadata.sql"),
 	)
 	for _, candidate := range candidates {
 		if _, err := os.Stat(candidate); err == nil {

@@ -96,6 +96,10 @@ func TestStorageMetadataSchemaMatchesCurrentConcepts(t *testing.T) {
 func TestSQLTableDefinitionsLiveUnderStorageSchema(t *testing.T) {
 	storageRoot := moduleRoot(t)
 	repoRoot := filepath.Dir(filepath.Dir(storageRoot))
+	allowed := map[string]bool{
+		"modules/control/schema/admin.sql":    true,
+		"modules/storage/schema/metadata.sql": true,
+	}
 	err := filepath.WalkDir(repoRoot, func(path string, entry os.DirEntry, err error) error {
 		require.NoError(t, err)
 		if entry.IsDir() {
@@ -110,7 +114,7 @@ func TestSQLTableDefinitionsLiveUnderStorageSchema(t *testing.T) {
 		}
 		rel, err := filepath.Rel(repoRoot, path)
 		require.NoError(t, err)
-		require.True(t, strings.HasPrefix(filepath.ToSlash(rel), "modules/storage/schema/"), rel)
+		require.True(t, allowed[filepath.ToSlash(rel)], rel)
 		return nil
 	})
 	require.NoError(t, err)
@@ -119,10 +123,20 @@ func TestSQLTableDefinitionsLiveUnderStorageSchema(t *testing.T) {
 func readStorageMetadataSchema(t *testing.T) string {
 	t.Helper()
 	root := moduleRoot(t)
-	require.NoFileExists(t, filepath.Join(filepath.Dir(filepath.Dir(root)), "schema", "storage_metadata.sql"))
-	data, err := os.ReadFile(filepath.Join(root, "schema", "storage_metadata.sql"))
+	require.NoFileExists(t, filepath.Join(root, "schema", "storage_metadata.sql"))
+	require.NoFileExists(t, filepath.Join(root, "schema", "admin_console.sql"))
+	data, err := os.ReadFile(filepath.Join(root, "schema", "metadata.sql"))
 	require.NoError(t, err)
-	return strings.ReplaceAll(string(data), "\r\n", "\n")
+	schema := strings.ReplaceAll(string(data), "\r\n", "\n")
+	for _, table := range []string{
+		"t_users",
+		"t_cloud_nodes",
+		"t_ssh_host",
+		"t_collector_task_rules",
+	} {
+		require.NotContains(t, schema, "CREATE TABLE IF NOT EXISTS "+table)
+	}
+	return schema
 }
 
 func requireTableContains(t *testing.T, schema, table, needle string) {
