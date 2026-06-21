@@ -47,21 +47,6 @@ router.beforeEach(async (to: any, from: any, next: any) => {
   // 显示路由加载状态
   loadingStore.showRouteLoading();
 
-  // 如果从新建项目页面切换到其他页面，清理该组件的缓存
-  if (from.name === 'create-project' && to.name !== 'create-project') {
-    routeStore.removeRouteName('CreateProject');
-    console.log('清理新建项目组件缓存');
-    
-    // 强制清理可能残留的DOM元素
-    setTimeout(() => {
-      const elementsToRemove = document.querySelectorAll('[data-v-152e326b]');
-      elementsToRemove.forEach(element => {
-        console.log('强制清理残留DOM元素:', element);
-        element.remove();
-      });
-    }, 100);
-  }
-  
   // 如果从任务管理页面切换到其他页面，清理该组件的缓存
   if (from.name === 'step-form' && to.name !== 'step-form') {
     routeStore.removeRouteName('StepForm');

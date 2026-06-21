@@ -30,14 +30,12 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
-import { useRoute } from "vue-router";
 import Tabs from "@/layout/components/Tabs/index.vue";
 import MainTransition from "@/components/main-transition/index.vue";
 import { storeToRefs } from "pinia";
 import { useThemeConfig } from "@/store/modules/theme-config";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { useLoadingStore } from "@/store/modules/loading";
-const route = useRoute();
 const themeStore = useThemeConfig();
 let { refreshPage, isTabs, watermark, watermarkStyle, watermarkRotate, watermarkGap } = storeToRefs(themeStore);
 const routerStore = useRoutesConfigStore();
@@ -69,13 +67,6 @@ const loadingStore = useLoadingStore();
     });
   };
   
-  // 监听路由变化，清理特定组件的DOM残留
-  watch(() => route.name, (newRouteName, oldRouteName) => {
-    if (oldRouteName === 'create-project' && newRouteName === 'home') {
-      console.log('路由从create-project切换到home，执行DOM清理');
-      cleanupComponentDOM('CreateProject');
-    }
-  });
 // 水印配置
 const watermarkConfig = computed(() => {
   return {

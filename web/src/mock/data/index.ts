@@ -133,7 +133,7 @@ export default [
     }
   },
   {
-    url: new RegExp("/mock/data/project/.+/object-list"),
+    url: new RegExp("/mock/data/space/.+/object-list"),
     method: "get",
     timeout: 500,
     response: () => {
@@ -145,7 +145,7 @@ export default [
     }
   },
   {
-    url: new RegExp("/mock/data/project/.+/data-list"),
+    url: new RegExp("/mock/data/space/.+/data-list"),
     method: "get",
     timeout: 500,
     response: () => {

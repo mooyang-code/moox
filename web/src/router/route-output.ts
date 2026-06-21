@@ -16,8 +16,7 @@ export function linearArray(tree: any) {
 }
 
 /**
- * 统一处理所有的路由跳转：当前路由高亮、tabs栏数据
- * 处理项目内跳转，存入当前跳转路由和tabs标签栏数据
+ * 统一处理所有的路由跳转：当前路由高亮、tabs栏数据。
  * menu和tabs以及手动刷新浏览器等功能只需要跳转即可，缓存和高亮的逻辑这边负责
  * @param {any} current 需要跳转的路由和路由参数
  */
@@ -32,8 +31,7 @@ export const currentlyRoute = (current: any) => {
     store.setTabs(routeList.value[0]);
   }
 
-  // 定义静态路由名称列表（项目管理、数据管理和容器管理的三级菜单）
-  const staticRouteNames = ['dataset', 'field-management', 'storage-config', 'data-overview', 'data-sync', 'data-object-list', 'data-data-list', 'resource-monitor', 'service-status'];
+  const staticRouteNames = ["home", "userinfo", "user-settings"];
   
   // 跳转路由是有权限的，从有权限路由中匹配
   const { hasRoute } = useRoutingMethod();

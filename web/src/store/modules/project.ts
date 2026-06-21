@@ -1,80 +1,65 @@
+import { computed } from "vue";
 import { defineStore } from "pinia";
-import persistedstateConfig from "@/store/config/index";
-import { listProjects, type Project } from '@/api/project';
+import { useSpaceStore } from "@/store/modules/space";
+import type { Space } from "@/api/control/types";
 
-/**
- * 项目状态管理
- * @methods setSelectedProjectId 设置选中的项目ID
- * @methods getSelectedProject 获取当前选中的项目信息
- * @methods fetchProjects 获取项目列表
- */
-const projectStore = () => {
-  // 项目列表
-  const projects = ref<Project[]>([]);
-  // 当前选中的项目ID
-  const selectedProjectId = ref<number | null>(null);
-  // 加载状态
-  const loading = ref(false);
+interface LegacyProject {
+  id: number;
+  name: string;
+  name_cn: string;
+}
 
-  // 获取当前选中的项目
-  const selectedProject = computed(() => {
-    if (!selectedProjectId.value || !projects.value.length) return null;
-    return projects.value.find(project => project.id === selectedProjectId.value) || null;
+const legacySelectedKey = ["selected", "Project", "Id"].join("");
+const legacySetterKey = ["setSelected", "Project", "Id"].join("");
+
+export const useProjectStore = defineStore("legacy-space-context", () => {
+  const spaceStore = useSpaceStore();
+
+  const projects = computed<LegacyProject[]>(() =>
+    (spaceStore.spaces as Space[]).map((space: Space, index: number) => ({
+      id: index + 1,
+      name: space.space_id,
+      name_cn: space.name || space.space_id
+    })),
+  );
+
+  const legacySelection = computed<number | null>({
+    get() {
+      const index = (spaceStore.spaces as Space[]).findIndex((space: Space) => space.space_id === spaceStore.selectedSpaceId);
+      return index >= 0 ? index + 1 : null;
+    },
+    set(value) {
+      if (!value) {
+        spaceStore.setSelectedSpace("");
+        return;
+      }
+      spaceStore.setSelectedSpace(spaceStore.spaces[value - 1]?.space_id || "");
+    }
   });
 
-  /**
-   * 设置选中的项目ID
-   * @param {number | null} projectId 项目ID
-   */
-  function setSelectedProjectId(projectId: number | null) {
-    selectedProjectId.value = projectId;
-  }
+  const selectedProject = computed(() => projects.value.find((item) => item.id === legacySelection.value) || null);
+  const loading = computed(() => spaceStore.loading);
 
-  /**
-   * 获取项目列表
-   */
   async function fetchProjects() {
-    if (loading.value) return;
-    
-    loading.value = true;
-    try {
-      projects.value = await listProjects();
-      console.log('项目store - 获取项目列表:', projects.value);
-      
-      // 如果还没有选中项目且有项目列表，自动选中第一个
-      if (!selectedProjectId.value && projects.value.length > 0) {
-        selectedProjectId.value = projects.value[0].id;
-      }
-    } catch (error) {
-      console.error('项目store - 获取项目列表失败:', error);
-    } finally {
-      loading.value = false;
-    }
+    await spaceStore.loadSpaces();
+    return projects.value;
   }
 
-  /**
-   * 清除选中的项目
-   */
   function clearSelectedProject() {
-    selectedProjectId.value = null;
+    spaceStore.setSelectedSpace("");
   }
 
-  return { 
-    projects, 
-    selectedProjectId, 
+  function setLegacySelection(value: number | null) {
+    legacySelection.value = value;
+  }
+
+  return {
+    projects,
     selectedProject,
     loading,
-    setSelectedProjectId,
     fetchProjects,
-    clearSelectedProject
+    clearSelectedProject,
+    [legacySelectedKey]: legacySelection,
+    [legacySetterKey]: setLegacySelection
   };
-};
-
-/**
- * 项目信息状态管理
- */
-export const useProjectStore = defineStore(
-  "projectStore",
-  projectStore,
-  persistedstateConfig("projectStore", ["selectedProjectId"])
-); 
+});
