@@ -201,10 +201,12 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
 
 -- ************ 创建云函数采集器相关索引 ************
 -- 节点表索引
+CREATE INDEX IF NOT EXISTS idx_cloud_nodes_space_id ON t_cloud_nodes(c_space_id);
 CREATE INDEX IF NOT EXISTS idx_node_id_invalid ON t_cloud_nodes(c_node_id, c_invalid);
 CREATE INDEX IF NOT EXISTS idx_nodes_type ON t_cloud_nodes(c_node_type);
 
 -- ************ 创建云账户相关索引 ************
+CREATE INDEX IF NOT EXISTS idx_cloud_accounts_space_id ON t_cloud_accounts(c_space_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_accounts_account_id_invalid ON t_cloud_accounts(c_account_id, c_invalid);
 CREATE INDEX IF NOT EXISTS idx_cloud_accounts_provider ON t_cloud_accounts(c_provider);
 CREATE INDEX IF NOT EXISTS idx_cloud_accounts_invalid ON t_cloud_accounts(c_invalid);
@@ -256,9 +258,11 @@ CREATE TABLE IF NOT EXISTS t_async_job_tasks (
 );
 
 -- ************ 创建异步任务相关索引 ************
+CREATE INDEX IF NOT EXISTS idx_async_jobs_space_id ON t_async_jobs(c_space_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_async_jobs_job_id ON t_async_jobs(c_job_id);
 CREATE INDEX IF NOT EXISTS idx_async_jobs_ctime ON t_async_jobs(c_ctime);
 CREATE INDEX IF NOT EXISTS idx_async_jobs_is_started ON t_async_jobs(c_is_started);
+CREATE INDEX IF NOT EXISTS idx_async_job_tasks_space_id ON t_async_job_tasks(c_space_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_async_job_tasks_task_id ON t_async_job_tasks(c_task_id);
 CREATE INDEX IF NOT EXISTS idx_async_job_tasks_job_id ON t_async_job_tasks(c_job_id);
 CREATE INDEX IF NOT EXISTS idx_async_job_tasks_status ON t_async_job_tasks(c_task_status);
@@ -289,6 +293,7 @@ CREATE TABLE IF NOT EXISTS t_node_task_snapshot (
 );
 
 -- 节点任务快照表索引
+CREATE INDEX IF NOT EXISTS idx_node_task_snapshot_space_id ON t_node_task_snapshot(c_space_id);
 CREATE INDEX IF NOT EXISTS idx_node_task_snapshot_node_task ON t_node_task_snapshot(c_node_id, c_task_id);
 CREATE INDEX IF NOT EXISTS idx_node_task_snapshot_sync_time ON t_node_task_snapshot(c_sync_time);
 
@@ -350,6 +355,7 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
 
 -- ************ 创建采集任务规则相关索引 ************
 -- 任务规则表索引
+CREATE INDEX IF NOT EXISTS idx_collector_task_rules_space_id ON t_collector_task_rules(c_space_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_task_rules_rule_id ON t_collector_task_rules(c_rule_id);
 CREATE INDEX IF NOT EXISTS idx_collector_task_rules_biz_type ON t_collector_task_rules(c_biz_type);
 CREATE INDEX IF NOT EXISTS idx_collector_task_rules_data_type ON t_collector_task_rules(c_data_type);
@@ -358,6 +364,7 @@ CREATE INDEX IF NOT EXISTS idx_collector_task_rules_assignment_type ON t_collect
 CREATE INDEX IF NOT EXISTS idx_collector_task_rules_enabled ON t_collector_task_rules(c_enabled);
 
 -- 任务实例表索引
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_space_id ON t_collector_task_instances(c_space_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_task_instances_task_id ON t_collector_task_instances(c_task_id);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_rule_id ON t_collector_task_instances(c_rule_id);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_biz_type ON t_collector_task_instances(c_biz_type);
@@ -423,6 +430,7 @@ CREATE TABLE IF NOT EXISTS t_function_packages (
 
 -- ************ 创建云函数代码包相关索引 ************
 -- 代码包表索引
+CREATE INDEX IF NOT EXISTS idx_function_packages_space_id ON t_function_packages(c_space_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_function_packages_package_id ON t_function_packages(c_package_id);
 CREATE INDEX IF NOT EXISTS idx_function_packages_status ON t_function_packages(c_status);
 CREATE INDEX IF NOT EXISTS idx_function_packages_runtime ON t_function_packages(c_runtime);
@@ -573,6 +581,7 @@ CREATE TABLE IF NOT EXISTS t_exchange_symbols (
 
 -- ************ 创建交易所标的相关索引 ************
 -- 唯一索引：交易所+产品类型+标的
+CREATE INDEX IF NOT EXISTS idx_exchange_symbols_space_id ON t_exchange_symbols(c_space_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_symbols_unique ON t_exchange_symbols(c_exchange, c_inst_type, c_symbol, c_invalid);
 
 -- 查询索引
@@ -642,11 +651,13 @@ CREATE TABLE IF NOT EXISTS t_ssh_session (
 );
 
 -- ************ 创建SSH相关索引 ************
+CREATE INDEX IF NOT EXISTS idx_ssh_host_space_id ON t_ssh_host(c_space_id);
 CREATE INDEX IF NOT EXISTS idx_ssh_host_name ON t_ssh_host(c_name);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_host_address ON t_ssh_host(c_address);
 CREATE INDEX IF NOT EXISTS idx_ssh_host_mtime ON t_ssh_host(c_mtime);
 CREATE INDEX IF NOT EXISTS idx_ssh_host_monitor_enabled ON t_ssh_host(c_monitor_enabled);
 
+CREATE INDEX IF NOT EXISTS idx_ssh_session_space_id ON t_ssh_session(c_space_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_session_session_id ON t_ssh_session(c_session_id);
 CREATE INDEX IF NOT EXISTS idx_ssh_session_host_id ON t_ssh_session(c_host_id);
 CREATE INDEX IF NOT EXISTS idx_ssh_session_status ON t_ssh_session(c_status);
@@ -696,6 +707,8 @@ CREATE TABLE IF NOT EXISTS t_host_monitor_history (
 );
 
 -- ************ 创建监控历史相关索引 ************
+CREATE INDEX IF NOT EXISTS idx_host_monitor_history_space_id
+    ON t_host_monitor_history(c_space_id);
 CREATE INDEX IF NOT EXISTS idx_host_monitor_history_address_time
     ON t_host_monitor_history(c_host_address, c_collect_time DESC);
 CREATE INDEX IF NOT EXISTS idx_host_monitor_history_collect_time

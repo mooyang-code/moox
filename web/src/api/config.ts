@@ -1,10 +1,8 @@
 import axios from 'axios';
+import { APP_AUTH_INFO, appAuthHeaders } from './storage/auth';
 
 // 认证信息配置
-export const AUTH_INFO = {
-  app_id: "moox_frontend",
-  app_key: "2521e0d21b6be0347b72bca93904a0dd"
-};
+export const AUTH_INFO = APP_AUTH_INFO;
 
 // 创建axios实例
 export const api = axios.create({
@@ -13,8 +11,7 @@ export const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
-    'app_id': AUTH_INFO.app_id,
-    'app_key': AUTH_INFO.app_key
+    ...appAuthHeaders()
   }
 });
 

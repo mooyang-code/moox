@@ -176,7 +176,8 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import service from '@/api/index';
-import { useProjectStore } from '@/store/modules/project';
+import { appAuthHeaders } from '@/api/storage/auth';
+import { useSpaceStore } from '@/store/modules/space';
 import { storeToRefs } from 'pinia';
 
 interface TaskInstance {
@@ -235,9 +236,9 @@ const pagination = ref({
   showPageSize: true
 });
 
-// Get project store
-const projectStore = useProjectStore();
-const { selectedProjectId } = storeToRefs(projectStore);
+// Get Space store
+const spaceStore = useSpaceStore();
+const { selectedSpaceId } = storeToRefs(spaceStore);
 
 const paginationConfig = computed(() => ({
   ...pagination.value,
@@ -362,9 +363,9 @@ const getInstanceList = async () => {
       biz_type: currentBizType.value
     };
 
-    // Always include the selected project ID from the global dropdown
-    if (selectedProjectId.value) {
-      params.project_id = selectedProjectId.value;
+    // Always include the selected Space from the global header selector.
+    if (selectedSpaceId.value) {
+      params.space_id = selectedSpaceId.value;
     }
 
     if (form.value.taskId) params.task_id = form.value.taskId;
@@ -376,10 +377,7 @@ const getInstanceList = async () => {
     if (form.value.invalid !== null) params.invalid = form.value.invalid;
 
     const response = await service.post('/api/control/collectmgr/ListTaskInstances', params, {
-      headers: {
-        'app_id': 'moox_frontend',
-        'app_key': '2521e0d21b6be0347b72bca93904a0dd'
-      }
+      headers: appAuthHeaders()
     });
 
     const data = response as any;
@@ -402,8 +400,8 @@ const onViewDetails = (record: TaskInstance) => {
   detailVisible.value = true;
 };
 
-// Watch for project changes
-watch(selectedProjectId, () => {
+// Watch for Space changes
+watch(selectedSpaceId, () => {
   getInstanceList();
 });
 

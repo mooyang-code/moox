@@ -54,6 +54,24 @@ func TestAdminSchemaOwnsControlTables(t *testing.T) {
 		requireTableContains(t, schema, table, "c_space_id TEXT NOT NULL")
 	}
 
+	for table, index := range map[string]string{
+		"t_cloud_accounts":           "idx_cloud_accounts_space_id",
+		"t_cloud_nodes":              "idx_cloud_nodes_space_id",
+		"t_function_packages":        "idx_function_packages_space_id",
+		"t_collector_task_rules":     "idx_collector_task_rules_space_id",
+		"t_collector_task_instances": "idx_collector_task_instances_space_id",
+		"t_async_jobs":               "idx_async_jobs_space_id",
+		"t_async_job_tasks":          "idx_async_job_tasks_space_id",
+		"t_node_task_snapshot":       "idx_node_task_snapshot_space_id",
+		"t_exchange_symbols":         "idx_exchange_symbols_space_id",
+		"t_ssh_host":                 "idx_ssh_host_space_id",
+		"t_ssh_session":              "idx_ssh_session_space_id",
+		"t_host_monitor_history":     "idx_host_monitor_history_space_id",
+	} {
+		require.Contains(t, schema, "CREATE INDEX IF NOT EXISTS "+index, table)
+		require.Contains(t, schema, "ON "+table+"(c_space_id)", table)
+	}
+
 	for _, table := range []string{
 		"t_users",
 		"t_active_tokens",

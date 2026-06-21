@@ -340,13 +340,14 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import service from '@/api/index';
-import { useProjectStore } from '@/store/modules/project';
+import { appAuthHeaders } from '@/api/storage/auth';
+import { useSpaceStore } from '@/store/modules/space';
 import { useUserInfoStore } from '@/store/modules/user-info';
 import { storeToRefs } from 'pinia';
 
 interface TaskConfig {
   rule_id: string;
-  project_id: string;
+  space_id: string;
   data_type: string;
   data_source: string;
   assignment_type: string;
@@ -454,9 +455,9 @@ const COLLECT_PARAMS_FIELDS: { [dataType: string]: string[] } = {
   'default': ['inst_type', 'objects', 'intervals', 'depth', 'sources', 'keywords']
 };
 
-// Get project store
-const projectStore = useProjectStore();
-const { selectedProjectId } = storeToRefs(projectStore);
+// Get Space store
+const spaceStore = useSpaceStore();
+const { selectedSpaceId } = storeToRefs(spaceStore);
 
 // Get user info store
 const userInfoStore = useUserInfoStore();
@@ -492,7 +493,7 @@ const paginationConfig = computed(() => ({
 
 const addForm = ref({
   rule_id: '',
-  project_id: '',
+  space_id: '',
   data_type: '',
   data_source: '',
   assignment_type: 'auto',
@@ -708,9 +709,9 @@ const getTaskList = async () => {
       biz_type: currentBizType.value
     };
 
-    // Always include the selected project ID from the global dropdown
-    if (selectedProjectId.value) {
-      params.project_id = selectedProjectId.value;
+    // Always include the selected Space from the global header selector.
+    if (selectedSpaceId.value) {
+      params.space_id = selectedSpaceId.value;
     }
 
     if (form.value.ruleId) params.rule_id = form.value.ruleId;
@@ -719,10 +720,7 @@ const getTaskList = async () => {
     if (form.value.enabled !== null) params.enabled = form.value.enabled ? 'true' : 'false';
 
     const response = await service.post('/api/control/collectmgr/ListTaskRules', params, {
-      headers: {
-        'app_id': 'moox_frontend',
-        'app_key': '2521e0d21b6be0347b72bca93904a0dd'
-      }
+      headers: appAuthHeaders()
     });
 
     const data = response as any;
@@ -743,10 +741,7 @@ const getTaskList = async () => {
 const getNodeList = async () => {
   try {
     const response = await service.post('/api/control/cloudnode/ListNodes', {}, {
-      headers: {
-        'app_id': 'moox_frontend',
-        'app_key': '2521e0d21b6be0347b72bca93904a0dd'
-      }
+      headers: appAuthHeaders()
     });
     const data = response as any;
     if (data.code === 200) {
@@ -761,10 +756,7 @@ const getNodeList = async () => {
 const getDataTypeConfigs = async () => {
   try {
     const response = await service.post('/api/control/collectmgr/ListDataTypeConfigs', {}, {
-      headers: {
-        'app_id': 'moox_frontend',
-        'app_key': '2521e0d21b6be0347b72bca93904a0dd'
-      }
+      headers: appAuthHeaders()
     });
     const data = response as any;
     if (data.code === 200) {
@@ -787,10 +779,7 @@ const getFieldConfigs = async (dataType: string) => {
 
   try {
     const response = await service.post('/api/control/collectmgr/GetDataTypeConfigWithFields', { data_type: dataType }, {
-      headers: {
-        'app_id': 'moox_frontend',
-        'app_key': '2521e0d21b6be0347b72bca93904a0dd'
-      }
+      headers: appAuthHeaders()
     });
     const data = response as any;
     if (data.code === 200) {
@@ -902,7 +891,7 @@ const onAdd = () => {
   title.value = '新建采集规则';
   addForm.value = {
     rule_id: '',
-    project_id: selectedProjectId.value || '',
+    space_id: selectedSpaceId.value || '',
     data_type: '',
     data_source: '',
     assignment_type: 'auto',
@@ -1133,7 +1122,7 @@ const handleOk = async (): Promise<boolean> => {
     // 准备请求数据
     const requestData: any = {
       biz_type: currentBizType.value,
-      project_id: addForm.value.project_id || selectedProjectId.value || '',
+      space_id: addForm.value.space_id || selectedSpaceId.value || '',
       data_type: addForm.value.data_type,
       data_source: addForm.value.data_source,
       assignment_type: addForm.value.assignment_type,
@@ -1155,10 +1144,7 @@ const handleOk = async (): Promise<boolean> => {
     submitLoading.value = true;
     // 发送请求
     const response = await service.post(endpoint, requestData, {
-      headers: {
-        'app_id': 'moox_frontend',
-        'app_key': '2521e0d21b6be0347b72bca93904a0dd'
-      }
+      headers: appAuthHeaders()
     });
 
     const data = response as any;
@@ -1198,10 +1184,7 @@ const handleEnableChange = async (record: TaskConfig, value: boolean) => {
       ...record,
       enabled: value ? 'true' : 'false'
     }, {
-      headers: {
-        'app_id': 'moox_frontend',
-        'app_key': '2521e0d21b6be0347b72bca93904a0dd'
-      }
+      headers: appAuthHeaders()
     });
 
     const data = response as any;
@@ -1223,8 +1206,8 @@ const onViewDetails = (record: TaskConfig) => {
   detailVisible.value = true;
 };
 
-// Watch for project changes
-watch(selectedProjectId, () => {
+// Watch for Space changes
+watch(selectedSpaceId, () => {
   getTaskList();
 });
 

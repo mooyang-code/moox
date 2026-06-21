@@ -4,6 +4,7 @@
  */
 import CryptoJS from 'crypto-js';
 import forge from 'node-forge';
+import { getAppInfo } from '@/api/storage/auth';
 
 /**
  * 生成设备指纹
@@ -250,10 +251,7 @@ export function generateDeviceId(): string {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-        app_info: {
-          app_id: "moox_frontend",
-          app_key: "2521e0d21b6be0347b72bca93904a0dd"
-        },
+        app_info: getAppInfo(),
         username: username
       })
       });
@@ -298,10 +296,7 @@ export function generateDeviceId(): string {
   
         // 3. 构建登录请求（严格按照 LoginReq 协议）
         const loginRequest = {
-          app_info: {
-            app_id: "moox_frontend",
-            app_key: "2521e0d21b6be0347b72bca93904a0dd"
-          },
+          app_info: getAppInfo(),
           username: username,
           password_hash: encryptedPassword,
           salt: saltData.salt,

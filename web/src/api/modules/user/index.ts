@@ -1,4 +1,5 @@
 import axios from "@/api";
+import { getAppInfo } from "@/api/storage/auth";
 import { secureLoginManager } from "@/utils/crypto";
 
 // 安全登录（新版本）
@@ -14,10 +15,7 @@ export const getLoginSaltAPI = async (data: { username: string }) => {
       url: "/api/control/auth/GetLoginSalt",
       method: "post",
       data: {
-        app_info: {
-          app_id: "moox_frontend",
-          app_key: "2521e0d21b6be0347b72bca93904a0dd"
-        },
+        app_info: getAppInfo(),
         username: data.username
       }
     });
@@ -53,10 +51,7 @@ export const getUserInfoAPI = async (accessToken: string) => {
       url: "/api/control/auth/GetUserInfo",
       method: "post",
       data: {
-        app_info: {
-          app_id: "moox_frontend",
-          app_key: "2521e0d21b6be0347b72bca93904a0dd"
-        },
+        app_info: getAppInfo(),
         access_token: accessToken,
         user_id: "" // 空字符串表示获取当前用户信息
       }
