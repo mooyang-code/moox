@@ -2,322 +2,190 @@ package pebble_test
 
 import (
 	"context"
-	"fmt"
-	"sync"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/testutil"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/stretchr/testify/require"
 )
 
-func TestStoreWritesAndReadsRowsByTimeRange(t *testing.T) {
+func TestStoreWritesAndReadsTimeSeriesRange(t *testing.T) {
 	ctx := context.Background()
-	store, err := pebble.Open(pebble.Options{Path: t.TempDir()})
-	require.NoError(t, err)
-	defer store.Close()
+	store := openStore(t)
+	key := timeSeriesStoreKey("APT-USDT", "1m", "2026-06-15T00:00:00Z")
 
-	scope := &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"}
-	rows := []*pb.DataRow{
-		{Key: &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:00:00+08:00"}, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)}},
-		{Key: &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:01:00+08:00"}, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.2)}},
-	}
+	require.NoError(t, store.WriteRows(ctx, []*pb.PrimaryStoreRow{
+		{Key: key, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)}},
+		{Key: timeSeriesStoreKey("APT-USDT", "1m", "2026-06-15T00:01:00Z"), Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.2)}},
+	}))
 
-	require.NoError(t, store.WriteRows(ctx, rows, pb.WriteMode_WRITE_MODE_UPSERT))
-	got, page, err := store.ReadRows(ctx, scope, pb.ReadMode_READ_MODE_RANGE, &pb.TimeRange{
-		StartTime: "2026-06-15T00:00:00+08:00",
-		EndTime:   "2026-06-15T00:01:00+08:00",
-	}, "", "", []string{"close"}, nil)
+	got, page, err := store.ReadRows(ctx, []*pb.PrimaryStoreKey{withoutVersion(key)}, &pb.VersionRange{
+		StartVersion: normalizeTime(t, "2026-06-15T00:00:00Z"),
+		EndVersion:   normalizeTime(t, "2026-06-15T00:01:00Z"),
+	}, pb.SortOrder_SORT_ORDER_ASC, []string{"close"}, nil)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	require.Equal(t, uint64(2), page.GetTotal())
-	require.Len(t, got[0].GetColumns(), 1)
 	require.Equal(t, "close", got[0].GetColumns()[0].GetColumnName())
 }
 
 func TestStoreReadsSubsecondRowsAfterWholeSecondLowerBound(t *testing.T) {
 	ctx := context.Background()
-	store, err := pebble.Open(pebble.Options{Path: t.TempDir()})
-	require.NoError(t, err)
-	defer store.Close()
+	store := openStore(t)
+	key := timeSeriesStoreKey("APT-USDT", "1m", "2026-01-01T00:00:00.5Z")
+	require.NoError(t, store.WriteRows(ctx, []*pb.PrimaryStoreRow{
+		{Key: key, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)}},
+		{Key: timeSeriesStoreKey("APT-USDT", "1m", "2026-01-01T00:00:01Z"), Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.2)}},
+	}))
 
-	scope := &pb.DataScope{
-		SpaceId:    "crypto",
-		DatasetId:  "kline",
-		SubjectId:  "APT-USDT",
-		Freq:       "1m",
-		Dimensions: map[string]string{"market": "spot"},
-	}
-	rows := []*pb.DataRow{
-		{Key: &pb.DataKey{Scope: scope, DataTime: "2026-01-01T00:00:00.5Z", RowId: "half"}, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)}},
-		{Key: &pb.DataKey{Scope: scope, DataTime: "2026-01-01T00:00:01Z", RowId: "one"}, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.2)}},
-	}
-
-	require.NoError(t, store.WriteRows(ctx, rows, pb.WriteMode_WRITE_MODE_UPSERT))
-	got, page, err := store.ReadRows(ctx, scope, pb.ReadMode_READ_MODE_RANGE, &pb.TimeRange{
-		StartTime: "2026-01-01T00:00:00Z",
-		EndTime:   "2026-01-01T00:00:01Z",
-	}, "", "", []string{"close"}, nil)
+	got, _, err := store.ReadRows(ctx, []*pb.PrimaryStoreKey{withoutVersion(key)}, &pb.VersionRange{
+		StartVersion: normalizeTime(t, "2026-01-01T00:00:00Z"),
+		EndVersion:   normalizeTime(t, "2026-01-01T00:00:01Z"),
+	}, pb.SortOrder_SORT_ORDER_ASC, nil, nil)
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), page.GetTotal())
 	require.Len(t, got, 2)
-	require.Equal(t, "half", got[0].GetKey().GetRowId())
-	require.Equal(t, "one", got[1].GetKey().GetRowId())
+	require.Equal(t, normalizeTime(t, "2026-01-01T00:00:00.5Z"), got[0].GetKey().GetVersion())
+	require.Equal(t, normalizeTime(t, "2026-01-01T00:00:01Z"), got[1].GetKey().GetVersion())
 }
 
-func TestStoreKeepsRowsWithAmbiguousDimensionTextSeparate(t *testing.T) {
+func TestStoreDescCursorPaginationDoesNotRepeatRows(t *testing.T) {
 	ctx := context.Background()
-	store, err := pebble.Open(pebble.Options{Path: t.TempDir()})
-	require.NoError(t, err)
-	defer store.Close()
+	store := openStore(t)
+	key := timeSeriesStoreKey("APT-USDT", "1m", "2026-06-15T00:00:00Z")
+	require.NoError(t, store.WriteRows(ctx, []*pb.PrimaryStoreRow{
+		{Key: key, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)}},
+		{Key: timeSeriesStoreKey("APT-USDT", "1m", "2026-06-15T00:01:00Z"), Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.2)}},
+		{Key: timeSeriesStoreKey("APT-USDT", "1m", "2026-06-15T00:02:00Z"), Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.3)}},
+	}))
 
-	baseScope := &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"}
-	rows := []*pb.DataRow{
-		{
-			Key: &pb.DataKey{
-				Scope:    &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m", Dimensions: map[string]string{"a": "b&c=d"}},
-				DataTime: "2026-06-15T00:00:00+08:00",
-				RowId:    "same-row",
-			},
-			Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)},
-		},
-		{
-			Key: &pb.DataKey{
-				Scope:    &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m", Dimensions: map[string]string{"a": "b", "c": "d"}},
-				DataTime: "2026-06-15T00:00:00+08:00",
-				RowId:    "same-row",
-			},
-			Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.2)},
-		},
-	}
-
-	require.NoError(t, store.WriteRows(ctx, rows, pb.WriteMode_WRITE_MODE_UPSERT))
-	got, page, err := store.ReadRows(ctx, baseScope, pb.ReadMode_READ_MODE_RANGE, nil, "", "", []string{"close"}, nil)
+	first, page, err := store.ReadRows(ctx, []*pb.PrimaryStoreKey{withoutVersion(key)}, nil, pb.SortOrder_SORT_ORDER_DESC, nil, &pb.Page{Size: 2})
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), page.GetTotal())
-	require.Len(t, got, 2)
-	require.NotEqual(t, got[0].GetKey().GetScope().GetDimensions(), got[1].GetKey().GetScope().GetDimensions())
+	require.Len(t, first, 2)
+	require.True(t, page.GetHasMore())
+	require.NotEmpty(t, page.GetNextCursor())
+	require.Equal(t, normalizeTime(t, "2026-06-15T00:02:00Z"), first[0].GetKey().GetVersion())
+	require.Equal(t, normalizeTime(t, "2026-06-15T00:01:00Z"), first[1].GetKey().GetVersion())
+
+	second, page, err := store.ReadRows(ctx, []*pb.PrimaryStoreKey{withoutVersion(key)}, nil, pb.SortOrder_SORT_ORDER_DESC, nil, &pb.Page{Size: 2, Cursor: page.GetNextCursor()})
+	require.NoError(t, err)
+	require.Len(t, second, 1)
+	require.False(t, page.GetHasMore())
+	require.Equal(t, normalizeTime(t, "2026-06-15T00:00:00Z"), second[0].GetKey().GetVersion())
 }
 
-func TestStoreKeepsLegacyTimeSeriesRowsWithDifferentRowIDsSeparate(t *testing.T) {
+func TestStorePatchMergesColumns(t *testing.T) {
 	ctx := context.Background()
-	store, err := pebble.Open(pebble.Options{Path: t.TempDir()})
+	store := openStore(t)
+	key := timeSeriesStoreKey("APT-USDT", "1m", "2026-06-15T00:00:00Z")
+	require.NoError(t, store.WriteRows(ctx, []*pb.PrimaryStoreRow{{
+		Key: key, Columns: []*pb.ColumnValue{testutil.DoubleValue("open", 8.0), testutil.DoubleValue("close", 8.1)},
+	}}))
+	require.NoError(t, store.WriteRows(ctx, []*pb.PrimaryStoreRow{{
+		Key: key, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.2)},
+	}}))
+	require.NoError(t, store.WriteRows(ctx, []*pb.PrimaryStoreRow{{
+		Key: key, Columns: []*pb.ColumnValue{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+	}}))
+
+	got, _, err := store.ReadRows(ctx, []*pb.PrimaryStoreKey{key}, nil, pb.SortOrder_SORT_ORDER_ASC, nil, nil)
 	require.NoError(t, err)
-	defer store.Close()
-
-	scope := &pb.DataScope{SpaceId: "crypto", DatasetId: "ticks", SubjectId: "APT-USDT", Freq: "tick"}
-	require.NoError(t, store.WriteRows(ctx, []*pb.DataRow{
-		{
-			Key:     &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:00:00Z", RowId: "trade-1"},
-			Columns: []*pb.ColumnValue{testutil.DoubleValue("price", 8.1)},
-		},
-		{
-			Key:     &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:00:00Z", RowId: "trade-2"},
-			Columns: []*pb.ColumnValue{testutil.DoubleValue("price", 8.2)},
-		},
-	}, pb.WriteMode_WRITE_MODE_UPSERT))
-
-	got, page, err := store.ReadRows(ctx, scope, pb.ReadMode_READ_MODE_RANGE, &pb.TimeRange{
-		StartTime: "2026-06-15T00:00:00Z",
-		EndTime:   "2026-06-15T00:00:00Z",
-	}, "", "", nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), page.GetTotal())
-	require.Len(t, got, 2)
-	require.Equal(t, "trade-1", got[0].GetKey().GetRowId())
-	require.Equal(t, "trade-2", got[1].GetKey().GetRowId())
-}
-
-func TestStoreMergesColumnsForSameDataKey(t *testing.T) {
-	ctx := context.Background()
-	store, err := pebble.Open(pebble.Options{Path: t.TempDir()})
-	require.NoError(t, err)
-	defer store.Close()
-
-	scope := &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"}
-	key := &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:00:00Z", RowId: "bar-1"}
-
-	require.NoError(t, store.WriteRows(ctx, []*pb.DataRow{{
-		Key: key,
-		Columns: []*pb.ColumnValue{
-			testutil.DoubleValue("open", 8.0),
-			testutil.DoubleValue("close", 8.1),
-		},
-	}}, pb.WriteMode_WRITE_MODE_UPSERT))
-
-	require.NoError(t, store.WriteRows(ctx, []*pb.DataRow{{
-		Key:     key,
-		Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.2)},
-	}}, pb.WriteMode_WRITE_MODE_UPSERT))
-
-	got, page, err := store.ReadRows(ctx, scope, pb.ReadMode_READ_MODE_RANGE, nil, "", "", nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), page.GetTotal())
 	require.Len(t, got, 1)
 	values := columnDoubles(got[0])
 	require.Equal(t, 8.0, values["open"])
 	require.Equal(t, 8.2, values["close"])
 }
 
-func TestStoreOverwriteModeDoesNotDeleteOtherRowsInScope(t *testing.T) {
+func TestStoreSeparatesRecordAndTimeSeriesKeySpaces(t *testing.T) {
 	ctx := context.Background()
-	store, err := pebble.Open(pebble.Options{Path: t.TempDir()})
+	store := openStore(t)
+	recordKey := &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "symbols", DataKind: pb.DataKind_DATA_KIND_RECORD, Key: "APT-USDT", Version: "v1"}
+	timeKey := timeSeriesStoreKey("APT-USDT", "1m", "2026-06-15T00:00:00Z")
+	timeKey.DatasetId = "symbols"
+	require.NoError(t, store.WriteRows(ctx, []*pb.PrimaryStoreRow{
+		{Key: recordKey, Columns: []*pb.ColumnValue{testutil.StringValue("name", "Aptos")}},
+		{Key: timeKey, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)}},
+	}))
+
+	records, _, err := store.ReadRows(ctx, []*pb.PrimaryStoreKey{recordKey}, nil, pb.SortOrder_SORT_ORDER_ASC, nil, nil)
 	require.NoError(t, err)
-	defer store.Close()
-
-	scope := &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"}
-	require.NoError(t, store.WriteRows(ctx, []*pb.DataRow{
-		{
-			Key:     &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:00:00Z", RowId: "bar-1"},
-			Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)},
-		},
-		{
-			Key:     &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:01:00Z", RowId: "bar-2"},
-			Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.2)},
-		},
-	}, pb.WriteMode_WRITE_MODE_UPSERT))
-
-	require.NoError(t, store.WriteRows(ctx, []*pb.DataRow{{
-		Key:     &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:00:00Z", RowId: "bar-1"},
-		Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.3)},
-	}}, pb.WriteMode_WRITE_MODE_OVERWRITE))
-
-	got, page, err := store.ReadRows(ctx, scope, pb.ReadMode_READ_MODE_RANGE, nil, "", "", nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), page.GetTotal())
-	require.Len(t, got, 2)
-	require.Equal(t, 8.3, columnDoubles(got[0])["close"])
-	require.Equal(t, 8.2, columnDoubles(got[1])["close"])
+	require.Len(t, records, 1)
+	require.Equal(t, pb.DataKind_DATA_KIND_RECORD, records[0].GetKey().GetDataKind())
 }
 
-func TestStoreConcurrentUpdatesMergeColumnsForSameDataKey(t *testing.T) {
+func TestStoreScansDatasetPrefixByDataKind(t *testing.T) {
 	ctx := context.Background()
-	store, err := pebble.Open(pebble.Options{Path: t.TempDir()})
+	store := openStore(t)
+	timeKey := timeSeriesStoreKey("APT-USDT", "1m", "2026-06-15T00:00:00Z")
+	recordKey := recordStoreKey("APT-USDT", "2026-06-15T00:00:00Z")
+	require.NoError(t, store.WriteRows(ctx, []*pb.PrimaryStoreRow{
+		{Key: timeKey, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)}},
+		{Key: timeSeriesStoreKey("APT-USDT", "1m", "2026-06-15T00:01:00Z"), Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.2)}},
+		{Key: recordKey, Columns: []*pb.ColumnValue{testutil.StringValue("name", "Aptos")}},
+	}))
+
+	rows, page, err := store.ScanRows(ctx, &pb.PrimaryStoreTarget{SpaceId: "crypto", DatasetId: "kline"}, pb.DataKind_DATA_KIND_TIME_SERIES, &pb.VersionRange{
+		StartVersion: "2026-06-15T00:00:30Z",
+		EndVersion:   "2026-06-15T00:01:30Z",
+	}, pb.SortOrder_SORT_ORDER_ASC, []string{"close"}, &pb.Page{Size: 1})
 	require.NoError(t, err)
-	defer store.Close()
-
-	scope := &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"}
-	key := &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:00:00Z", RowId: "bar-1"}
-	require.NoError(t, store.WriteRows(ctx, []*pb.DataRow{{
-		Key:     key,
-		Columns: []*pb.ColumnValue{testutil.DoubleValue("base", 1)},
-	}}, pb.WriteMode_WRITE_MODE_UPSERT))
-
-	const updates = 20
-	var wg sync.WaitGroup
-	errs := make(chan error, updates)
-	for i := 0; i < updates; i++ {
-		i := i
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			errs <- store.WriteRows(ctx, []*pb.DataRow{{
-				Key:     key,
-				Columns: []*pb.ColumnValue{testutil.DoubleValue(fmt.Sprintf("c%02d", i), float64(i))},
-			}}, pb.WriteMode_WRITE_MODE_UPSERT)
-		}()
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		require.NoError(t, err)
-	}
-
-	got, _, err := store.ReadRows(ctx, scope, pb.ReadMode_READ_MODE_RANGE, nil, "", "", nil, nil)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	values := columnDoubles(got[0])
-	require.Equal(t, 1.0, values["base"])
-	for i := 0; i < updates; i++ {
-		require.Equal(t, float64(i), values[fmt.Sprintf("c%02d", i)])
-	}
-}
-
-func TestStoreReadsNextCursorPageForExactScope(t *testing.T) {
-	ctx := context.Background()
-	store, err := pebble.Open(pebble.Options{Path: t.TempDir()})
-	require.NoError(t, err)
-	defer store.Close()
-
-	scope := &pb.DataScope{
-		SpaceId:    "crypto",
-		DatasetId:  "kline",
-		SubjectId:  "APT-USDT",
-		Freq:       "1m",
-		Dimensions: map[string]string{"market": "spot"},
-	}
-	require.NoError(t, store.WriteRows(ctx, []*pb.DataRow{
-		{Key: &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:00:00Z", RowId: "bar-1"}, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)}},
-		{Key: &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:01:00Z", RowId: "bar-2"}, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.2)}},
-		{Key: &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:02:00Z", RowId: "bar-3"}, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.3)}},
-	}, pb.WriteMode_WRITE_MODE_UPSERT))
-
-	first, page, err := store.ReadRows(ctx, scope, pb.ReadMode_READ_MODE_RANGE, nil, "", "", nil, &pb.Page{Size: 2})
-	require.NoError(t, err)
-	require.Len(t, first, 2)
-	require.True(t, page.GetHasMore())
-	require.NotEmpty(t, page.GetNextCursor())
-
-	next, nextPage, err := store.ReadRows(ctx, scope, pb.ReadMode_READ_MODE_RANGE, nil, "", "", nil, &pb.Page{Size: 2, Cursor: page.GetNextCursor()})
-	require.NoError(t, err)
-	require.Len(t, next, 1)
-	require.False(t, nextPage.GetHasMore())
-	require.Equal(t, "bar-3", next[0].GetKey().GetRowId())
-}
-
-func TestStoreCanDisableSyncWrites(t *testing.T) {
-	ctx := context.Background()
-	store, err := pebble.Open(pebble.Options{Path: t.TempDir(), DisableSyncWrites: true})
-	require.NoError(t, err)
-	defer store.Close()
-
-	scope := &pb.DataScope{SpaceId: "crypto", DatasetId: "symbols", SubjectId: "APT-USDT"}
-	require.NoError(t, store.WriteRows(ctx, []*pb.DataRow{{
-		Key:     &pb.DataKey{Scope: scope, DataTime: "2026-06-15T00:00:00Z", RowId: "symbol"},
-		Columns: []*pb.ColumnValue{testutil.StringValue("status", "active")},
-	}}, pb.WriteMode_WRITE_MODE_UPSERT))
-
-	got, page, err := store.ReadRows(ctx, &pb.DataScope{SpaceId: "crypto", DatasetId: "symbols"}, pb.ReadMode_READ_MODE_RANGE, nil, "", "symbol", nil, nil)
-	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, normalizeTime(t, "2026-06-15T00:01:00Z"), rows[0].GetKey().GetVersion())
 	require.Equal(t, uint64(1), page.GetTotal())
-	require.Len(t, got, 1)
-	require.Equal(t, "active", got[0].GetColumns()[0].GetValue().GetStringValue())
+	require.Equal(t, "close", rows[0].GetColumns()[0].GetColumnName())
+
+	records, _, err := store.ScanRows(ctx, &pb.PrimaryStoreTarget{SpaceId: "crypto", DatasetId: "kline"}, pb.DataKind_DATA_KIND_RECORD, nil, pb.SortOrder_SORT_ORDER_ASC, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, pb.DataKind_DATA_KIND_RECORD, records[0].GetKey().GetDataKind())
 }
 
-func TestStoreReadsObjectRowsByObjectIDPrefix(t *testing.T) {
-	ctx := context.Background()
+func openStore(t *testing.T) *pebble.Store {
+	t.Helper()
 	store, err := pebble.Open(pebble.Options{Path: t.TempDir()})
 	require.NoError(t, err)
-	defer store.Close()
-
-	objectScope := &pb.DataScope{SpaceId: "crypto", DatasetId: "symbols"}
-	timeSeriesScope := &pb.DataScope{SpaceId: "crypto", DatasetId: "symbols", SubjectId: "AR-USDT", Freq: "1m"}
-	require.NoError(t, store.WriteRows(ctx, []*pb.DataRow{
-		{
-			Key:     &pb.DataKey{Scope: objectScope, DataTime: "v1", RowId: "AR-USDT"},
-			Columns: []*pb.ColumnValue{testutil.StringValue("status", "active")},
-		},
-		{
-			Key:     &pb.DataKey{Scope: objectScope, DataTime: "v1", RowId: "APT-USDT"},
-			Columns: []*pb.ColumnValue{testutil.StringValue("status", "inactive")},
-		},
-		{
-			Key:     &pb.DataKey{Scope: timeSeriesScope, DataTime: "2026-06-15T00:00:00Z", RowId: "2026-06-15T00:00:00Z"},
-			Columns: []*pb.ColumnValue{testutil.StringValue("status", "timeseries")},
-		},
-	}, pb.WriteMode_WRITE_MODE_UPSERT))
-
-	got, page, err := store.ReadRows(ctx, &pb.DataScope{SpaceId: "crypto", DatasetId: "symbols"}, pb.ReadMode_READ_MODE_RANGE, nil, "", "AR-USDT", nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), page.GetTotal())
-	require.Len(t, got, 1)
-	require.Equal(t, "AR-USDT", got[0].GetKey().GetRowId())
-	require.Equal(t, "active", got[0].GetColumns()[0].GetValue().GetStringValue())
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	return store
 }
 
-func columnDoubles(row *pb.DataRow) map[string]float64 {
-	out := make(map[string]float64, len(row.GetColumns()))
+func timeSeriesStoreKey(subjectID string, freq string, dataTime string) *pb.PrimaryStoreKey {
+	normalized, err := factkey.NormalizeTimeVersion(dataTime)
+	if err != nil {
+		panic(err)
+	}
+	return &pb.PrimaryStoreKey{
+		SpaceId:   "crypto",
+		DatasetId: "kline",
+		DataKind:  pb.DataKind_DATA_KIND_TIME_SERIES,
+		Key:       factkey.BuildTimeSeriesDataKey(subjectID, freq, nil),
+		Version:   normalized,
+	}
+}
+
+func recordStoreKey(recordID string, version string) *pb.PrimaryStoreKey {
+	return &pb.PrimaryStoreKey{
+		SpaceId:   "crypto",
+		DatasetId: "kline",
+		DataKind:  pb.DataKind_DATA_KIND_RECORD,
+		Key:       recordID,
+		Version:   factkey.NormalizeVersion(version),
+	}
+}
+
+func withoutVersion(key *pb.PrimaryStoreKey) *pb.PrimaryStoreKey {
+	return &pb.PrimaryStoreKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), DataKind: key.GetDataKind(), Key: key.GetKey()}
+}
+
+func normalizeTime(t *testing.T, value string) string {
+	t.Helper()
+	normalized, err := factkey.NormalizeTimeVersion(value)
+	require.NoError(t, err)
+	return normalized
+}
+
+func columnDoubles(row *pb.PrimaryStoreRow) map[string]float64 {
+	out := make(map[string]float64)
 	for _, column := range row.GetColumns() {
 		out[column.GetColumnName()] = column.GetValue().GetDoubleValue()
 	}

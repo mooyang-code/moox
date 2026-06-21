@@ -36,6 +36,7 @@ type CloudAccountDAO interface {
 	GetCloudAccountsByProvider(ctx context.Context, provider string) ([]*model.CloudAccount, error)
 }
 
+// cloudAccountDAOImpl 实现云账号表的数据访问逻辑。
 type cloudAccountDAOImpl struct {
 	db *gorm.DB
 }

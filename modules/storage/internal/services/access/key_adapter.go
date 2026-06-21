@@ -10,43 +10,67 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func timeSeriesRowToDataRow(row *pb.TimeSeriesRow) (*pb.DataRow, error) {
+func timeSeriesRowToPrimaryStoreRow(row *pb.TimeSeriesRow) (*pb.PrimaryStoreRow, error) {
 	if row == nil {
 		return nil, errors.New("row is required")
 	}
-	key := row.GetKey()
-	if err := validateTimeSeriesKey(key, true); err != nil {
+	key, err := timeSeriesKeyToPrimaryStoreKey(row.GetKey(), true)
+	if err != nil {
 		return nil, err
 	}
-	return &pb.DataRow{
-		Key: &pb.DataKey{
-			Scope: &pb.DataScope{
-				SpaceId:    key.GetSpaceId(),
-				DatasetId:  key.GetDatasetId(),
-				SubjectId:  key.GetSubjectId(),
-				Freq:       key.GetFreq(),
-				Dimensions: cloneStringMap(key.GetDimensions()),
-			},
-			DataTime: key.GetDataTime(),
-			RowId:    key.GetDataTime(),
-		},
+	return &pb.PrimaryStoreRow{
+		Key:        key,
 		Columns:    cloneColumns(row.GetColumns()),
 		Attributes: cloneStringMap(row.GetAttributes()),
 	}, nil
 }
 
-func dataRowToTimeSeriesRow(row *pb.DataRow) *pb.TimeSeriesRow {
-	key := row.GetKey()
-	scope := key.GetScope()
+func timeSeriesKeyToPrimaryStoreKey(key *pb.TimeSeriesKey, requireDataTime bool) (*pb.PrimaryStoreKey, error) {
+	if err := validateTimeSeriesKey(key, requireDataTime); err != nil {
+		return nil, err
+	}
+	storeKey := &pb.PrimaryStoreKey{
+		SpaceId:   key.GetSpaceId(),
+		DatasetId: key.GetDatasetId(),
+		DataKind:  pb.DataKind_DATA_KIND_TIME_SERIES,
+		Key:       factkey.BuildTimeSeriesDataKey(key.GetSubjectId(), key.GetFreq(), key.GetDimensions()),
+	}
+	if key.GetDataTime() != "" {
+		normalized, err := factkey.NormalizeTimeVersion(key.GetDataTime())
+		if err != nil {
+			return nil, errors.New("data_time must be RFC3339/RFC3339Nano")
+		}
+		storeKey.Version = normalized
+	}
+	return storeKey, nil
+}
+
+func primaryStoreRowToTimeSeriesRow(row *pb.PrimaryStoreRow, template *pb.TimeSeriesKey) *pb.TimeSeriesRow {
+	key := &pb.TimeSeriesKey{}
+	if template != nil {
+		key = proto.Clone(template).(*pb.TimeSeriesKey)
+	}
+	storeKey := row.GetKey()
+	if key.GetSpaceId() == "" {
+		key.SpaceId = storeKey.GetSpaceId()
+	}
+	if key.GetDatasetId() == "" {
+		key.DatasetId = storeKey.GetDatasetId()
+	}
+	if key.GetSubjectId() == "" || key.GetFreq() == "" {
+		subjectID, freq, _, err := factkey.ParseTimeSeriesDataKey(storeKey.GetKey())
+		if err == nil {
+			if key.GetSubjectId() == "" {
+				key.SubjectId = subjectID
+			}
+			if key.GetFreq() == "" {
+				key.Freq = freq
+			}
+		}
+	}
+	key.DataTime = storeKey.GetVersion()
 	return &pb.TimeSeriesRow{
-		Key: &pb.TimeSeriesKey{
-			SpaceId:    scope.GetSpaceId(),
-			DatasetId:  scope.GetDatasetId(),
-			SubjectId:  scope.GetSubjectId(),
-			Freq:       scope.GetFreq(),
-			Dimensions: cloneStringMap(scope.GetDimensions()),
-			DataTime:   key.GetDataTime(),
-		},
+		Key:        key,
 		Columns:    cloneColumns(row.GetColumns()),
 		Attributes: cloneStringMap(row.GetAttributes()),
 	}
@@ -82,6 +106,31 @@ func validateTimeRange(timeRange *pb.TimeRange) error {
 	return nil
 }
 
+func timeRangeToVersionRange(timeRange *pb.TimeRange) (*pb.VersionRange, error) {
+	if timeRange == nil {
+		return nil, nil
+	}
+	out := &pb.VersionRange{}
+	if timeRange.GetStartTime() != "" {
+		normalized, err := factkey.NormalizeTimeVersion(timeRange.GetStartTime())
+		if err != nil {
+			return nil, errors.New("start_time must be RFC3339/RFC3339Nano")
+		}
+		out.StartVersion = normalized
+	}
+	if timeRange.GetEndTime() != "" {
+		normalized, err := factkey.NormalizeTimeVersion(timeRange.GetEndTime())
+		if err != nil {
+			return nil, errors.New("end_time must be RFC3339/RFC3339Nano")
+		}
+		out.EndVersion = normalized
+	}
+	if out.GetStartVersion() == "" && out.GetEndVersion() == "" {
+		return nil, nil
+	}
+	return out, nil
+}
+
 func validateTimeSeriesKey(key *pb.TimeSeriesKey, requireDataTime bool) error {
 	if key == nil {
 		return errors.New("key is required")
@@ -109,48 +158,73 @@ func validateTimeSeriesKey(key *pb.TimeSeriesKey, requireDataTime bool) error {
 	return nil
 }
 
-func objectRowToDataRow(row *pb.ObjectRow) (*pb.DataRow, error) {
+func recordRowToPrimaryStoreRow(row *pb.RecordRow) (*pb.PrimaryStoreRow, error) {
 	if row == nil {
 		return nil, errors.New("row is required")
 	}
-	key := row.GetKey()
-	if err := validateObjectKeyTemplate(key); err != nil {
+	key, err := recordKeyToPrimaryStoreKey(row.GetKey(), true)
+	if err != nil {
 		return nil, err
 	}
-	return &pb.DataRow{
-		Key: &pb.DataKey{
-			Scope: &pb.DataScope{
-				SpaceId:   key.GetSpaceId(),
-				DatasetId: key.GetDatasetId(),
-			},
-			DataTime: key.GetVersion(),
-			RowId:    key.GetObjectId(),
-		},
+	return &pb.PrimaryStoreRow{
+		Key:        key,
 		Columns:    cloneColumns(row.GetColumns()),
 		Attributes: cloneStringMap(row.GetAttributes()),
 	}, nil
 }
 
-func dataRowToObjectRow(row *pb.DataRow) *pb.ObjectRow {
-	key := row.GetKey()
-	scope := key.GetScope()
-	objectID := key.GetRowId()
-	if objectID == "" {
-		objectID = scope.GetSubjectId()
+func recordKeyToPrimaryStoreKey(key *pb.RecordKey, requireRecordID bool) (*pb.PrimaryStoreKey, error) {
+	if err := validateRecordKey(key, requireRecordID); err != nil {
+		return nil, err
 	}
-	return &pb.ObjectRow{
-		Key: &pb.ObjectKey{
-			SpaceId:   scope.GetSpaceId(),
-			DatasetId: scope.GetDatasetId(),
-			ObjectId:  objectID,
-			Version:   key.GetDataTime(),
-		},
+	recordKey, err := factkey.BuildRecordDataKey(key.GetRecordId())
+	if err != nil {
+		return nil, err
+	}
+	return &pb.PrimaryStoreKey{
+		SpaceId:   key.GetSpaceId(),
+		DatasetId: key.GetDatasetId(),
+		DataKind:  pb.DataKind_DATA_KIND_RECORD,
+		Key:       recordKey,
+		Version:   factkey.NormalizeVersion(key.GetVersion()),
+	}, nil
+}
+
+func primaryStoreRowToRecordRow(row *pb.PrimaryStoreRow, template *pb.RecordKey) *pb.RecordRow {
+	key := &pb.RecordKey{}
+	if template != nil {
+		key = proto.Clone(template).(*pb.RecordKey)
+	}
+	storeKey := row.GetKey()
+	if key.GetSpaceId() == "" {
+		key.SpaceId = storeKey.GetSpaceId()
+	}
+	if key.GetDatasetId() == "" {
+		key.DatasetId = storeKey.GetDatasetId()
+	}
+	if key.GetRecordId() == "" {
+		key.RecordId = factkey.ParseRecordDataKey(storeKey.GetKey())
+	}
+	key.Version = publicRecordVersion(storeKey.GetVersion(), template)
+	return &pb.RecordRow{
+		Key:        key,
 		Columns:    cloneColumns(row.GetColumns()),
 		Attributes: cloneStringMap(row.GetAttributes()),
 	}
 }
 
-func validateObjectKeyTemplate(key *pb.ObjectKey) error {
+func publicRecordVersion(version string, template *pb.RecordKey) string {
+	if version == factkey.EmptyVersion && (template == nil || strings.TrimSpace(template.GetVersion()) == "") {
+		return ""
+	}
+	return version
+}
+
+func validateRecordKeyTemplate(key *pb.RecordKey) error {
+	return validateRecordKey(key, true)
+}
+
+func validateRecordKey(key *pb.RecordKey, requireRecordID bool) error {
 	if key == nil {
 		return errors.New("key is required")
 	}
@@ -160,43 +234,10 @@ func validateObjectKeyTemplate(key *pb.ObjectKey) error {
 	if strings.TrimSpace(key.GetDatasetId()) == "" {
 		return errors.New("dataset_id is required")
 	}
-	if strings.TrimSpace(key.GetObjectId()) == "" {
-		return errors.New("object_id is required")
+	if requireRecordID && strings.TrimSpace(key.GetRecordId()) == "" {
+		return errors.New("record_id is required")
 	}
 	return nil
-}
-
-func dataRowMatchesObjectKey(row *pb.DataRow, key *pb.ObjectKey) bool {
-	rowKey := row.GetKey()
-	scope := rowKey.GetScope()
-	if scope.GetFreq() != "" {
-		return false
-	}
-	if scope.GetSpaceId() != key.GetSpaceId() || scope.GetDatasetId() != key.GetDatasetId() {
-		return false
-	}
-	objectID := rowKey.GetRowId()
-	if objectID == "" {
-		objectID = scope.GetSubjectId()
-	}
-	return objectID == key.GetObjectId()
-}
-
-func objectVersionMatches(version string, exact string, versionRange *pb.VersionRange) bool {
-	value := factkey.NormalizeVersion(version)
-	if exact != "" && value != factkey.NormalizeVersion(exact) {
-		return false
-	}
-	if versionRange == nil {
-		return true
-	}
-	if start := versionRange.GetStartVersion(); start != "" && value < factkey.NormalizeVersion(start) {
-		return false
-	}
-	if end := versionRange.GetEndVersion(); end != "" && value > factkey.NormalizeVersion(end) {
-		return false
-	}
-	return true
 }
 
 func reverseTimeSeriesRows(rows []*pb.TimeSeriesRow) {
@@ -205,7 +246,7 @@ func reverseTimeSeriesRows(rows []*pb.TimeSeriesRow) {
 	}
 }
 
-func reverseObjectRows(rows []*pb.ObjectRow) {
+func reverseRecordRows(rows []*pb.RecordRow) {
 	for left, right := 0, len(rows)-1; left < right; left, right = left+1, right-1 {
 		rows[left], rows[right] = rows[right], rows[left]
 	}
@@ -231,7 +272,7 @@ func sortTimeSeriesRows(rows []*pb.TimeSeriesRow) {
 	})
 }
 
-func sortObjectRows(rows []*pb.ObjectRow) {
+func sortRecordRows(rows []*pb.RecordRow) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		left := rows[i].GetKey()
 		right := rows[j].GetKey()
@@ -241,8 +282,8 @@ func sortObjectRows(rows []*pb.ObjectRow) {
 		if left.GetDatasetId() != right.GetDatasetId() {
 			return left.GetDatasetId() < right.GetDatasetId()
 		}
-		if left.GetObjectId() != right.GetObjectId() {
-			return left.GetObjectId() < right.GetObjectId()
+		if left.GetRecordId() != right.GetRecordId() {
+			return left.GetRecordId() < right.GetRecordId()
 		}
 		return factkey.NormalizeVersion(left.GetVersion()) < factkey.NormalizeVersion(right.GetVersion())
 	})
@@ -275,7 +316,7 @@ func pageTimeSeriesRows(rows []*pb.TimeSeriesRow, page *pb.Page) ([]*pb.TimeSeri
 	}
 }
 
-func pageObjectRows(rows []*pb.ObjectRow, page *pb.Page) ([]*pb.ObjectRow, *pb.PageResult) {
+func pageRecordRows(rows []*pb.RecordRow, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult) {
 	pageNo := uint32(1)
 	size := uint32(1000)
 	if page != nil {

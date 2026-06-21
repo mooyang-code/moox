@@ -12,17 +12,17 @@ server:
     read_timeout: 5000   #ms. 请求被接受到请求信息被完全读取的超时时间设置，防止慢客户端
     write_timeout: 60000 #ms. 处理的超时时间
   service:
-    - name: trpc.storage.data.DataService
+    - name: trpc.storage.access.AccessService
       #ip: 0.0.0.0
       port: 18201
       network: tcp
       protocol: trpc
-    - name: trpc.storage.query.QueryService
+    - name: trpc.storage.view.ViewService
       #ip: 0.0.0.0
       port: 18202
       network: tcp
       protocol: trpc
-    - name: trpc.storage.primary.PrimaryStoreService
+    - name: trpc.storage.store.PrimaryStoreService
       #ip: 0.0.0.0
       port: 18101
       network: tcp # 注意：若是多机分布式部署，此处应改为tcp（单机也可设置tcp，只是unix域套接字本机通信效率更高）
@@ -53,7 +53,7 @@ server:
       protocol: timer
       timeout: 60000
 
-    - name: trpc.storage.data.DataService
+    - name: trpc.storage.access.AccessService
       #ip: 0.0.0.0
       port: 19104
       network: tcp
@@ -63,7 +63,7 @@ server:
       port: 19101
       network: tcp
       protocol: http
-    - name: trpc.storage.query.QueryService
+    - name: trpc.storage.view.ViewService
       #ip: 0.0.0.0
       port: 19105
       network: tcp
@@ -73,12 +73,12 @@ client:
   filter:
     - validation
   service:
-    - name: trpc.storage.primary.PrimaryStoreService
+    - name: trpc.storage.store.PrimaryStoreService
       target: ip://127.0.0.1:18101
       network: tcp
       protocol: trpc
       timeout: 3000
-    - name: trpc.storage.data.DataService
+    - name: trpc.storage.access.AccessService
       target: ip://127.0.0.1:18201
       network: tcp
       protocol: trpc
@@ -88,7 +88,7 @@ client:
       network: tcp
       protocol: trpc
       timeout: 3000
-    - name: trpc.storage.query.QueryService
+    - name: trpc.storage.view.ViewService
       target: ip://127.0.0.1:18202
       network: tcp
       protocol: trpc

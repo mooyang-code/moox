@@ -88,7 +88,7 @@ storage:
     bleve_path: /data/bleve
     parquet_path: /data/archive
   primary:
-    service_name: trpc.storage.primary.PrimaryStoreService
+    service_name: trpc.storage.store.PrimaryStoreService
 `)
 	if err := os.WriteFile(configPath, config, 0o600); err != nil {
 		t.Fatalf("write config failed: %v", err)
@@ -107,7 +107,7 @@ storage:
 	if opts.ParquetPath != "/data/archive" {
 		t.Fatalf("ParquetPath = %q", opts.ParquetPath)
 	}
-	if opts.PrimaryServiceName != "trpc.storage.primary.PrimaryStoreService" {
+	if opts.PrimaryServiceName != "trpc.storage.store.PrimaryStoreService" {
 		t.Fatalf("PrimaryServiceName = %q", opts.PrimaryServiceName)
 	}
 	if opts.InitSchemaPath != "" {
@@ -134,13 +134,71 @@ storage:
 	}
 }
 
-func TestRepositoryConfigUsesUnifiedRowsChangedSubject(t *testing.T) {
+func TestRepositoryConfigUsesUnifiedEventSubjectPrefix(t *testing.T) {
 	cfg, ok := loadStorageConfig(filepath.Join("..", "..", "config", "storage.yaml"))
 	if !ok {
 		t.Fatalf("load repository config failed")
 	}
-	if cfg.Storage.EventBus.RowsChangedSubject != "moox.storage.fact.rows_changed.v1" {
-		t.Fatalf("rows_changed_subject = %q", cfg.Storage.EventBus.RowsChangedSubject)
+	if cfg.Storage.EventBus.SubjectPrefix != "moox.storage" {
+		t.Fatalf("subject_prefix = %q", cfg.Storage.EventBus.SubjectPrefix)
+	}
+}
+
+func TestRepositoryUsesViewProtocolFileNames(t *testing.T) {
+	root := filepath.Join("..", "..")
+	for _, path := range []string{
+		filepath.Join(root, "proto", "view.proto"),
+		filepath.Join(root, "proto", "gen", "view.pb.go"),
+		filepath.Join(root, "proto", "gen", "view.trpc.go"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected view protocol artifact %s: %v", path, err)
+		}
+	}
+	legacyPrefix := "deri" + "ved"
+	for _, path := range []string{
+		filepath.Join(root, "proto", legacyPrefix+".proto"),
+		filepath.Join(root, "proto", "gen", legacyPrefix+".pb.go"),
+		filepath.Join(root, "proto", "gen", legacyPrefix+".trpc.go"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("legacy view protocol artifact %s should not exist", path)
+		}
+	}
+	makefile, err := os.ReadFile(filepath.Join(root, "proto", "Makefile"))
+	if err != nil {
+		t.Fatalf("read proto Makefile failed: %v", err)
+	}
+	text := string(makefile)
+	if !strings.Contains(text, "view.proto") || strings.Contains(text, legacyPrefix+".proto") {
+		t.Fatalf("proto Makefile must generate view.proto and not legacy protocol file")
+	}
+}
+
+func TestAccessServiceUsesViewErrorReporterNames(t *testing.T) {
+	root := filepath.Join("..", "..")
+	for _, path := range []string{
+		filepath.Join(root, "internal", "services", "access", "options.go"),
+		filepath.Join(root, "internal", "services", "access", "service.go"),
+		filepath.Join(root, "internal", "services", "access", "data.go"),
+		filepath.Join(root, "internal", "services", "access", "query.go"),
+	} {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s failed: %v", path, err)
+		}
+		text := string(content)
+		legacyPrefix := "Deri" + "ved"
+		for _, forbidden := range []string{
+			legacyPrefix + "ErrorReporter",
+			legacyPrefix + "Errors",
+			"report" + legacyPrefix + "Error",
+			"log" + legacyPrefix + "Error",
+		} {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("%s should not contain legacy view error reporter name %q", path, forbidden)
+			}
+		}
 	}
 }
 
@@ -204,7 +262,7 @@ func TestInitMetadataSchemaUsesSchemaNextToConfig(t *testing.T) {
 	schema := []byte(`
 CREATE TABLE IF NOT EXISTS t_spaces (c_id INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS t_datasets (c_id INTEGER PRIMARY KEY);
-CREATE TABLE IF NOT EXISTS t_storage_routes (c_id INTEGER PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS t_primary_store_routes (c_id INTEGER PRIMARY KEY);
 `)
 	if err := os.WriteFile(filepath.Join(schemaDir, "storage_metadata.sql"), schema, 0o600); err != nil {
 		t.Fatalf("write schema failed: %v", err)

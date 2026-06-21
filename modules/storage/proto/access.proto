@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+package trpc.storage.access;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
+
+import "common.proto";
+
+// TimeSeriesKey 表示时序数据行的业务主键。
+// 时序数据必须是固定 subject_id + 固定 freq 下，按 data_time 连续演进的数据。
+// 服务端内部将其归一为 PrimaryStoreKey(key=subject_id|freq|dimhash, version=data_time)。
+message TimeSeriesKey {
+  // space_id 是使用空间 ID。
+  string space_id = 1;
+  // dataset_id 是事实数据集 ID。
+  string dataset_id = 2;
+  // subject_id 是固定数据对象 ID，例如交易标的。
+  string subject_id = 3;
+  // freq 是固定时序频率，例如 1m、1h、1d。
+  string freq = 4;
+  // dimensions 是参与同一事实序列定位的低基数业务维度。
+  map<string, string> dimensions = 5;
+  // data_time 是本行版本时间，必须为 RFC3339/RFC3339Nano。
+  // 范围读取时可为空，实际版本集合由 time_range 表达。
+  string data_time = 6;
+}
+
+// TimeSeriesRow 表示一行时序事实数据。
+message TimeSeriesRow {
+  // key 是时序业务主键。
+  TimeSeriesKey key = 1;
+  // columns 是本次写入携带的列值。
+  // 再次写入同一 key + data_time 时，只更新本次携带的列；未携带的旧列保留。
+  repeated common.ColumnValue columns = 2;
+  // attributes 是附加属性，更新时按 key 覆盖。
+  map<string, string> attributes = 3;
+}
+
+// RecordKey 表示记录数据行的业务主键。
+// 非固定 subject + freq 的数据都归为记录数据，即使其具备时间线，也通过 version 表达。
+// 服务端内部将其归一为 PrimaryStoreKey(key=record_id, version=version)。
+message RecordKey {
+  // space_id 是使用空间 ID。
+  string space_id = 1;
+  // dataset_id 是事实数据集 ID。
+  string dataset_id = 2;
+  // record_id 是记录唯一 ID，例如 news_id、profile_id、ranking_id。
+  string record_id = 3;
+  // version 是该 record_id 下的版本；写入为空时服务端按当前 UTC 时间戳生成默认版本。
+  // 范围读取时可为空，实际版本集合由 version_range 表达。
+  string version = 4;
+}
+
+// RecordRow 表示一行记录事实数据。
+message RecordRow {
+  // key 是记录业务主键。
+  RecordKey key = 1;
+  // columns 是本次写入携带的列值。
+  // 再次写入同一 key + version 时，只更新本次携带的列；未携带的旧列保留。
+  repeated common.ColumnValue columns = 2;
+  // attributes 是附加属性，更新时按 key 覆盖。
+  map<string, string> attributes = 3;
+}
+
+// WriteTimeSeriesRowsReq 表示写入时序事实数据行。
+message WriteTimeSeriesRowsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // rows 是待写入的时序数据行。
+  repeated TimeSeriesRow rows = 2;
+}
+
+// WriteTimeSeriesRowsRsp 表示时序事实数据写入结果。
+message WriteTimeSeriesRowsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+}
+
+// ReadTimeSeriesRowsReq 表示读取时序事实数据。
+message ReadTimeSeriesRowsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // keys 是查询 key；范围读时 key.data_time 可为空，实际版本集合由 time_range 表达。
+  repeated TimeSeriesKey keys = 2;
+  // time_range 是闭区间时间范围；精确读时 start_time=end_time。
+  common.TimeRange time_range = 3;
+  // order 表示按 data_time 返回的顺序，默认升序。
+  common.SortOrder order = 4;
+  // column_names 是要返回的列名；为空时返回整行。
+  repeated string column_names = 5;
+  // page 是分页参数。
+  common.Page page = 6;
+}
+
+// ReadTimeSeriesRowsRsp 表示时序事实数据读取结果。
+message ReadTimeSeriesRowsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // rows 是读取到的时序数据行。
+  repeated TimeSeriesRow rows = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// WriteRecordRowsReq 表示写入记录事实数据行。
+message WriteRecordRowsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // rows 是待写入的记录数据行。
+  repeated RecordRow rows = 2;
+}
+
+// WriteRecordRowsRsp 表示记录事实数据写入结果。
+message WriteRecordRowsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // keys 是服务端最终写入的记录 key；当请求未传 version 时，这里返回补齐后的版本。
+  repeated RecordKey keys = 2;
+}
+
+// ReadRecordRowsReq 表示读取记录事实数据。
+message ReadRecordRowsReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // keys 是查询 key；范围读时 key.version 可为空，实际版本集合由 version_range 表达。
+  repeated RecordKey keys = 2;
+  // version_range 是闭区间版本范围；精确读时 start_version=end_version。
+  common.VersionRange version_range = 3;
+  // order 表示按 version 返回的顺序，默认升序。
+  common.SortOrder order = 4;
+  // column_names 是要返回的列名；为空时返回整行。
+  repeated string column_names = 5;
+  // page 是分页参数。
+  common.Page page = 6;
+}
+
+// ReadRecordRowsRsp 表示记录事实数据读取结果。
+message ReadRecordRowsRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // rows 是读取到的记录数据行。
+  repeated RecordRow rows = 2;
+  // page_result 是分页结果。
+  common.PageResult page_result = 3;
+}
+
+// AccessService 是用户侧事实数据读写入口。
+service AccessService {
+  // WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
+  rpc WriteTimeSeriesRows(WriteTimeSeriesRowsReq) returns (WriteTimeSeriesRowsRsp);
+  // ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
+  rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
+  // WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
+  rpc WriteRecordRows(WriteRecordRowsReq) returns (WriteRecordRowsRsp);
+  // ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
+  rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
+}

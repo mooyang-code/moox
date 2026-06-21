@@ -4,18 +4,30 @@ package trpc.storage.message;
 
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
 
-import "data.proto";
+import "access.proto";
 
-// DataRowsChangedEvent 表示事实数据行变更事件。
-message DataRowsChangedEvent {
+// TimeSeriesRowsChangedEvent 表示时序事实数据行变更事件。
+// 派生消费者应通过 AccessService 回读最新完整行，不应理解 PrimaryStore 分片和路由。
+message TimeSeriesRowsChangedEvent {
   // event_id 是事件 ID。
   string event_id = 1;
-  // scope 是本次变更所属的事实数据范围。
-  data.DataScope scope = 2;
   // event_time 是事件产生时间。
-  string event_time = 3;
-  // rows 是本次变更涉及的数据行，可只包含本次写入的列；派生消费者应回读主存最新完整行。
-  repeated data.DataRow rows = 4;
+  string event_time = 2;
+  // keys 是本次变更涉及的时序业务 key。
+  repeated access.TimeSeriesKey keys = 3;
   // attributes 是附加事件属性。
-  map<string, string> attributes = 5;
+  map<string, string> attributes = 4;
+}
+
+// RecordRowsChangedEvent 表示记录事实数据行变更事件。
+// 派生消费者应通过 AccessService 回读最新完整行，不应理解 PrimaryStore 分片和路由。
+message RecordRowsChangedEvent {
+  // event_id 是事件 ID。
+  string event_id = 1;
+  // event_time 是事件产生时间。
+  string event_time = 2;
+  // keys 是本次变更涉及的记录业务 key。
+  repeated access.RecordKey keys = 3;
+  // attributes 是附加事件属性。
+  map<string, string> attributes = 4;
 }

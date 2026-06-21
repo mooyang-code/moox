@@ -6,26 +6,6 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
-func KlineRowsToDataRows(spaceID, datasetID, subjectID, freq string, rows []KlineRow) []*pb.DataRow {
-	out := make([]*pb.DataRow, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, &pb.DataRow{
-			Key: &pb.DataKey{
-				Scope: &pb.DataScope{
-					SpaceId:   spaceID,
-					DatasetId: datasetID,
-					SubjectId: subjectID,
-					Freq:      freq,
-				},
-				DataTime: row.Time.UTC().Format(time.RFC3339),
-				RowId:    row.Time.UTC().Format(time.RFC3339),
-			},
-			Columns: klineColumns(row),
-		})
-	}
-	return out
-}
-
 func KlineRowsToTimeSeriesRows(spaceID, datasetID, subjectID, freq string, rows []KlineRow) []*pb.TimeSeriesRow {
 	out := make([]*pb.TimeSeriesRow, 0, len(rows))
 	for _, row := range rows {

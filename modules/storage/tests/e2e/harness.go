@@ -225,12 +225,12 @@ func (h *Harness) MetadataClient() pb.MetadataServiceClientProxy {
 	return pb.NewMetadataServiceClientProxy(httpTargetOpts(portMetadataHTTP)...)
 }
 
-func (h *Harness) DataClient() pb.DataServiceClientProxy {
-	return pb.NewDataServiceClientProxy(httpTargetOpts(portDataHTTP)...)
+func (h *Harness) DataClient() pb.AccessServiceClientProxy {
+	return pb.NewAccessServiceClientProxy(httpTargetOpts(portDataHTTP)...)
 }
 
-func (h *Harness) QueryClient() pb.QueryServiceClientProxy {
-	return pb.NewQueryServiceClientProxy(targetOpts(portQuery)...)
+func (h *Harness) QueryClient() pb.ViewServiceClientProxy {
+	return pb.NewViewServiceClientProxy(targetOpts(portQuery)...)
 }
 
 func (h *Harness) PrimaryClient() pb.PrimaryStoreServiceClientProxy {

@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+// TaskInstanceServiceImpl 实现采集任务实例业务服务。
 type TaskInstanceServiceImpl struct {
 	instanceDAO     collectordao.CollectorTaskInstanceDAO
 	taskRulesDAO    collectordao.CollectorTaskRulesDAO
@@ -31,6 +32,7 @@ const (
 	taskInstanceCacheVersionKey              = "collectmgr:task_instance:cache:version"
 )
 
+// taskInstanceListCachePayload 保存任务实例列表缓存的载荷。
 type taskInstanceListCachePayload struct {
 	Items []*TaskInstanceDTO
 	Total int64

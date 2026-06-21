@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 )
 
+// SSHHostDAO 实现 SSH 主机表的数据访问逻辑。
 type SSHHostDAO struct {
 	db *gorm.DB
 }

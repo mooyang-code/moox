@@ -62,7 +62,7 @@ datasets:
     data_source_id: binance
     name: Binance Spot Symbols
     description: Binance spot symbol profile facts
-    data_kind: object
+    data_kind: record
     freqs: []
     status: active
 
@@ -217,7 +217,6 @@ dataset_columns:
     origin_id: symbol
     value_type: string
     required: true
-    text_indexed: true
     status: active
   - space_id: crypto
     dataset_id: binance_spot_symbols
@@ -225,7 +224,6 @@ dataset_columns:
     origin_type: field
     origin_id: status
     value_type: string
-    text_indexed: true
     status: active
   - space_id: crypto
     dataset_id: binance_spot_symbols
@@ -233,7 +231,6 @@ dataset_columns:
     origin_type: field
     origin_id: note
     value_type: string
-    text_indexed: true
     status: active
 
 views:
@@ -265,7 +262,7 @@ view_columns:
     value_type: double
     sort_order: 2
 
-storage_nodes:
+primary_store_nodes:
   - node_id: local
     name: local-primary
     endpoint: local
@@ -298,7 +295,7 @@ devices:
     endpoint: ./var/storage/archive
     status: active
 
-storage_routes:
+primary_store_routes:
   - space_id: crypto
     route_id: route-binance-spot-kline
     dataset_id: binance_spot_kline

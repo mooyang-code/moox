@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/mooyang-code/moox/modules/control/internal/service/asynctask/model"
-	
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -14,25 +14,26 @@ import (
 // AsyncJobDAO 异步Job数据访问对象接口
 type AsyncJobDAO interface {
 	// ========== Job管理 ==========
-	
+
 	// CreateAsyncJob 创建异步Job
 	CreateAsyncJob(ctx context.Context, job *model.AsyncJob) error
-	
+
 	// GetAsyncJob 根据JobID获取Job
 	GetAsyncJob(ctx context.Context, jobID string) (*model.AsyncJob, error)
-	
+
 	// ========== Job状态更新 ==========
-	
+
 	// SetJobStarted 设置Job为已启动状态
 	SetJobStarted(ctx context.Context, jobID string) error
-	
+
 	// IncrementSuccessCount 原子递增成功计数
 	IncrementSuccessCount(ctx context.Context, jobID string) error
-	
+
 	// IncrementFailedCount 原子递增失败计数
 	IncrementFailedCount(ctx context.Context, jobID string) error
 }
 
+// asyncJobDAOImpl 实现异步任务作业表的数据访问逻辑。
 type asyncJobDAOImpl struct {
 	db *gorm.DB
 }

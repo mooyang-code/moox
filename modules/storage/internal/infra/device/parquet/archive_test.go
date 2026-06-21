@@ -12,20 +12,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWriteFactsExpandsDataRowsToReadableParquet(t *testing.T) {
+func TestWriteFactsExpandsTimeSeriesRowsToReadableParquet(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "facts.parquet")
-	rows := []*pb.DataRow{{
-		Key: &pb.DataKey{
-			Scope: &pb.DataScope{
-				SpaceId:    "crypto",
-				DatasetId:  "kline",
-				SubjectId:  "APT-USDT",
-				Freq:       "1m",
-				Dimensions: map[string]string{"adjust_type": "raw"},
-			},
-			DataTime: "2026-06-15T00:00:00Z",
-			RowId:    "bar-1",
+	rows := []*pb.TimeSeriesRow{{
+		Key: &pb.TimeSeriesKey{
+			SpaceId:    "crypto",
+			DatasetId:  "kline",
+			SubjectId:  "APT-USDT",
+			Freq:       "1m",
+			Dimensions: map[string]string{"adjust_type": "raw"},
+			DataTime:   "2026-06-15T00:00:00Z",
 		},
 		Columns: []*pb.ColumnValue{
 			testutil.DoubleValue("close", 8.1),
@@ -48,7 +45,7 @@ func TestWriteFactsExpandsDataRowsToReadableParquet(t *testing.T) {
 	require.Equal(t, "APT-USDT", facts[0].SubjectID)
 	require.Equal(t, "1m", facts[0].Freq)
 	require.Equal(t, "2026-06-15T00:00:00Z", facts[0].DataTime)
-	require.Equal(t, "bar-1", facts[0].RowID)
+	require.Equal(t, "2026-06-15T00:00:00Z", facts[0].RowID)
 	require.JSONEq(t, `{"adjust_type":"raw"}`, facts[0].DimensionsJSON)
 	require.JSONEq(t, `{"source":"acceptance"}`, facts[0].AttributesJSON)
 }

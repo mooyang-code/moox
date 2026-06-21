@@ -3,21 +3,26 @@ package search
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	devicebleve "github.com/mooyang-code/moox/modules/storage/internal/infra/device/bleve"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
+// Options 保存 Record 搜索服务创建时的依赖与路径配置。
 type Options struct {
 	Root      string
 	BlevePath string
 	Metadata  metadata.Reader
 }
 
+// Service 实现 Record 视图的索引写入和检索能力。
 type Service struct {
 	root      string
 	blevePath string
@@ -26,13 +31,15 @@ type Service struct {
 	indexes   sync.Map
 }
 
+// SearchRequest 描述一次 Record 视图检索请求。
 type SearchRequest struct {
-	SpaceID    string
-	DatasetID  string
-	SubjectIDs []string
-	TextQuery  string
-	TimeRange  *pb.TimeRange
-	Page       *pb.Page
+	ResultName   string
+	SpaceID      string
+	DatasetID    string
+	RecordIDs    []string
+	TextQuery    string
+	VersionRange *pb.VersionRange
+	Page         *pb.Page
 }
 
 func NewService(opts Options) *Service {
@@ -43,61 +50,44 @@ func NewService(opts Options) *Service {
 	}
 }
 
-func (s *Service) IndexRows(ctx context.Context, rows []*pb.DataRow) error {
+func (s *Service) IndexRecordViewRows(ctx context.Context, resultName string, columns []*pb.ViewColumn, rows []*pb.RecordRow) error {
+	if resultName == "" {
+		return errors.New("result_name is required")
+	}
+	indexed := make(map[string]bool, len(columns))
+	for _, column := range columns {
+		if column.GetColumnName() != "" {
+			indexed[column.GetColumnName()] = true
+		}
+	}
+	index, err := s.searchIndex(resultName, true)
+	if err != nil {
+		return err
+	}
 	if len(rows) == 0 {
 		return nil
 	}
-	if s == nil || s.metadata == nil {
-		return errors.New("search metadata is required")
-	}
-	type datasetKey struct {
-		spaceID   string
-		datasetID string
-	}
-	grouped := make(map[datasetKey][]*pb.DataRow)
-	for _, row := range rows {
-		scope := row.GetKey().GetScope()
-		key := datasetKey{spaceID: scope.GetSpaceId(), datasetID: scope.GetDatasetId()}
-		grouped[key] = append(grouped[key], row)
-	}
-	for key, datasetRows := range grouped {
-		columns, _, err := s.metadata.ListDataSetColumns(ctx, key.spaceID, key.datasetID, true, nil)
-		if err != nil {
-			return err
-		}
-		indexed := make(map[string]bool, len(columns))
-		for _, column := range columns {
-			indexed[column.GetColumnName()] = true
-		}
-		if len(indexed) == 0 {
-			continue
-		}
-		index, err := s.searchIndex()
-		if err != nil {
-			return err
-		}
-		if err := index.IndexRows(ctx, datasetRows, indexed); err != nil {
-			return err
-		}
-	}
-	return nil
+	return index.IndexRows(ctx, rows, indexed)
 }
 
-func (s *Service) SearchRows(ctx context.Context, req SearchRequest) ([]*pb.DataRow, *pb.PageResult, error) {
+func (s *Service) SearchRecordRows(ctx context.Context, req SearchRequest) ([]*pb.RecordRow, *pb.PageResult, error) {
 	if s == nil {
 		return nil, nil, errors.New("search service is required")
 	}
-	index, err := s.searchIndex()
+	if req.ResultName == "" {
+		return nil, nil, errors.New("result_name is required")
+	}
+	index, err := s.searchIndex(req.ResultName, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	return index.SearchRows(ctx, devicebleve.SearchRequest{
-		SpaceID:    req.SpaceID,
-		DatasetID:  req.DatasetID,
-		SubjectIDs: req.SubjectIDs,
-		TextQuery:  req.TextQuery,
-		TimeRange:  req.TimeRange,
-		Page:       req.Page,
+	return index.SearchRecordRows(ctx, devicebleve.SearchRequest{
+		SpaceID:      req.SpaceID,
+		DatasetID:    req.DatasetID,
+		RecordIDs:    req.RecordIDs,
+		TextQuery:    req.TextQuery,
+		VersionRange: req.VersionRange,
+		Page:         req.Page,
 	})
 }
 
@@ -121,10 +111,11 @@ func (s *Service) Close() error {
 	return firstErr
 }
 
-func (s *Service) searchIndex() (*devicebleve.Index, error) {
-	path := filepath.Join(s.root, "bleve", "default")
+func (s *Service) searchIndex(resultName string, createIfMissing bool) (*devicebleve.Index, error) {
+	resultName = sanitizeRecordIndexName(resultName)
+	path := filepath.Join(s.root, "bleve", resultName)
 	if s.blevePath != "" {
-		path = filepath.Join(s.blevePath, "default")
+		path = filepath.Join(s.blevePath, resultName)
 	}
 	if value, ok := s.indexes.Load(path); ok {
 		return value.(*devicebleve.Index), nil
@@ -134,13 +125,50 @@ func (s *Service) searchIndex() (*devicebleve.Index, error) {
 	if value, ok := s.indexes.Load(path); ok {
 		return value.(*devicebleve.Index), nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
+	var (
+		index *devicebleve.Index
+		err   error
+	)
+	if createIfMissing {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, err
+		}
+		index, err = devicebleve.Open(devicebleve.Options{Path: path})
+	} else {
+		index, err = devicebleve.OpenExisting(devicebleve.Options{Path: path})
 	}
-	index, err := devicebleve.Open(devicebleve.Options{Path: path})
 	if err != nil {
 		return nil, err
 	}
 	s.indexes.Store(path, index)
 	return index, nil
+}
+
+var invalidRecordIndexChar = regexp.MustCompile(`[^A-Za-z0-9_]+`)
+
+func RecordIndexName(spaceID string, viewID string, viewVersion uint64, now time.Time) string {
+	if viewVersion == 0 {
+		viewVersion = 1
+	}
+	raw := fmt.Sprintf("record_view_s%s_%s_v%d_r_%d", encodeRecordIndexPart(spaceID), encodeRecordIndexPart(viewID), viewVersion, now.UnixNano())
+	name := sanitizeRecordIndexName(raw)
+	if name == "" {
+		return "record_view"
+	}
+	return name
+}
+
+func encodeRecordIndexPart(value string) string {
+	if value == "" {
+		return "_"
+	}
+	return invalidRecordIndexChar.ReplaceAllString(value, "_")
+}
+
+func sanitizeRecordIndexName(value string) string {
+	value = invalidRecordIndexChar.ReplaceAllString(value, "_")
+	if value == "" {
+		return ""
+	}
+	return value
 }

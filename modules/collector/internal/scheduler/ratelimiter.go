@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// Limiter 表示采集调度使用的令牌桶限速器。
 type Limiter struct {
 	limit  int
 	window time.Duration

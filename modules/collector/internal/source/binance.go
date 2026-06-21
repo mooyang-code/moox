@@ -10,6 +10,7 @@ import (
 
 const defaultBinanceBaseURL = "https://api.binance.com"
 
+// Instrument 表示从 Binance 发现的交易标的。
 type Instrument struct {
 	Symbol         string
 	ExternalSymbol string
@@ -19,10 +20,12 @@ type Instrument struct {
 	Status         string
 }
 
+// DiscoverRequest 描述一次数据源标的发现请求。
 type DiscoverRequest struct {
 	QuoteAsset string
 }
 
+// BinanceSource 实现 Binance 交易标的发现能力。
 type BinanceSource struct {
 	baseURL string
 	client  *http.Client

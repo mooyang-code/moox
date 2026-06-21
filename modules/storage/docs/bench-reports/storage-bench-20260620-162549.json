@@ -97,7 +97,7 @@
       "avg_ms": 35.218043
     }
   },
-  "object_write": {
+  "record_write": {
     "rows": 1000,
     "batches": 1,
     "duration_seconds": 0.03960625,

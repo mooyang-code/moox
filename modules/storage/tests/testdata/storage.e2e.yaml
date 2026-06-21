@@ -12,4 +12,3 @@ storage:
   eventbus:
     type: memory
     stream_name: MOOX_STORAGE_E2E
-    rows_changed_subject: moox.storage.e2e.fact.rows_changed.v1

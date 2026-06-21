@@ -11,39 +11,39 @@ import (
 
 func TestResolverSelectsExactSubjectRouteBeforeWildcard(t *testing.T) {
 	ctx := context.Background()
-	meta := &fakeRouteMetadata{routes: []*pb.StorageRoute{
+	meta := &fakeRouteMetadata{routes: []*pb.PrimaryStoreRoute{
 		{SpaceId: "crypto", RouteId: "wildcard", DatasetId: "kline", SubjectPattern: "*", NodeId: "node-a", Priority: 100, Status: "active"},
 		{SpaceId: "crypto", RouteId: "apt", DatasetId: "kline", SubjectId: "APT-USDT", NodeId: "node-b", Priority: 10, Status: "active"},
 	}}
 	resolver := router.NewResolver(meta)
 
-	ref, err := resolver.Resolve(ctx, &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT"})
+	ref, err := resolver.Resolve(ctx, "crypto", "kline", "APT-USDT")
 	require.NoError(t, err)
 	require.Equal(t, "node-b", ref.GetNodeId())
 }
 
 func TestResolverPrefersExactSubjectRouteOverLowerPriorityWildcard(t *testing.T) {
 	ctx := context.Background()
-	meta := &fakeRouteMetadata{routes: []*pb.StorageRoute{
+	meta := &fakeRouteMetadata{routes: []*pb.PrimaryStoreRoute{
 		{SpaceId: "crypto", RouteId: "wildcard", DatasetId: "kline", SubjectPattern: "*", NodeId: "node-a", Priority: 1, Status: "active"},
 		{SpaceId: "crypto", RouteId: "apt", DatasetId: "kline", SubjectId: "APT-USDT", NodeId: "node-b", Priority: 100, Status: "active"},
 	}}
 	resolver := router.NewResolver(meta)
 
-	ref, err := resolver.Resolve(ctx, &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT"})
+	ref, err := resolver.Resolve(ctx, "crypto", "kline", "APT-USDT")
 	require.NoError(t, err)
 	require.Equal(t, "node-b", ref.GetNodeId())
 }
 
 func TestResolverSupportsSubjectGlobPatternBeforeDatasetDefault(t *testing.T) {
 	ctx := context.Background()
-	meta := &fakeRouteMetadata{routes: []*pb.StorageRoute{
+	meta := &fakeRouteMetadata{routes: []*pb.PrimaryStoreRoute{
 		{SpaceId: "crypto", RouteId: "default", DatasetId: "kline", NodeId: "node-a", Priority: 1, Status: "active"},
 		{SpaceId: "crypto", RouteId: "apt-pattern", DatasetId: "kline", SubjectPattern: "APT-*", NodeId: "node-b", Priority: 100, Status: "active"},
 	}}
 	resolver := router.NewResolver(meta)
 
-	ref, err := resolver.Resolve(ctx, &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT"})
+	ref, err := resolver.Resolve(ctx, "crypto", "kline", "APT-USDT")
 	require.NoError(t, err)
 	require.Equal(t, "node-b", ref.GetNodeId())
 }
@@ -51,10 +51,10 @@ func TestResolverSupportsSubjectGlobPatternBeforeDatasetDefault(t *testing.T) {
 func TestResolverReturnsDeviceLocationForChosenNode(t *testing.T) {
 	ctx := context.Background()
 	meta := &fakeRouteMetadata{
-		routes: []*pb.StorageRoute{
+		routes: []*pb.PrimaryStoreRoute{
 			{SpaceId: "crypto", RouteId: "apt", DatasetId: "kline", SubjectId: "APT-USDT", NodeId: "node-b", Priority: 10, Status: "active"},
 		},
-		nodes: map[string]*pb.StorageNode{
+		nodes: map[string]*pb.PrimaryStoreNode{
 			"node-b": {NodeId: "node-b", Name: "primary-b", Endpoint: "127.0.0.1:18101", Status: "active"},
 		},
 		devices: map[string][]*pb.Device{
@@ -66,7 +66,7 @@ func TestResolverReturnsDeviceLocationForChosenNode(t *testing.T) {
 	}
 	resolver := router.NewResolver(meta)
 
-	ref, err := resolver.Resolve(ctx, &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT"})
+	ref, err := resolver.Resolve(ctx, "crypto", "kline", "APT-USDT")
 	require.NoError(t, err)
 	require.Equal(t, "node-b", ref.GetNodeId())
 	require.Equal(t, "pebble-b", ref.GetDeviceId())
@@ -76,14 +76,15 @@ func TestResolverReturnsDeviceLocationForChosenNode(t *testing.T) {
 	require.Equal(t, "127.0.0.1:18101", ref.GetEndpoint())
 }
 
+// fakeRouteMetadata 是路由解析测试使用的元数据桩。
 type fakeRouteMetadata struct {
-	routes  []*pb.StorageRoute
-	nodes   map[string]*pb.StorageNode
+	routes  []*pb.PrimaryStoreRoute
+	nodes   map[string]*pb.PrimaryStoreNode
 	devices map[string][]*pb.Device
 }
 
-func (f *fakeRouteMetadata) ListStorageRoutes(ctx context.Context, spaceID string, datasetID string, subjectID string, nodeID string, page *pb.Page) ([]*pb.StorageRoute, *pb.PageResult, error) {
-	var out []*pb.StorageRoute
+func (f *fakeRouteMetadata) ListPrimaryStoreRoutes(ctx context.Context, spaceID string, datasetID string, subjectID string, nodeID string, page *pb.Page) ([]*pb.PrimaryStoreRoute, *pb.PageResult, error) {
+	var out []*pb.PrimaryStoreRoute
 	for _, route := range f.routes {
 		if route.GetSpaceId() == spaceID && route.GetDatasetId() == datasetID {
 			out = append(out, route)
@@ -92,9 +93,9 @@ func (f *fakeRouteMetadata) ListStorageRoutes(ctx context.Context, spaceID strin
 	return out, &pb.PageResult{Total: uint64(len(out))}, nil
 }
 
-func (f *fakeRouteMetadata) GetStorageNode(ctx context.Context, nodeID string) (*pb.StorageNode, error) {
+func (f *fakeRouteMetadata) GetPrimaryStoreNode(ctx context.Context, nodeID string) (*pb.PrimaryStoreNode, error) {
 	if f.nodes == nil {
-		return &pb.StorageNode{NodeId: nodeID, Name: nodeID, Status: "active"}, nil
+		return &pb.PrimaryStoreNode{NodeId: nodeID, Name: nodeID, Status: "active"}, nil
 	}
 	return f.nodes[nodeID], nil
 }

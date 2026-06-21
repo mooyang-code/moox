@@ -10,11 +10,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// Options 保存 SQLite 元数据存储打开配置。
 type Options struct {
 	Path       string
 	SchemaPath string
 }
 
+// Store 封装 SQLite 元数据表的直接读写能力。
 type Store struct {
 	db         *sql.DB
 	schemaPath string

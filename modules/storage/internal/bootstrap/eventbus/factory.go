@@ -18,15 +18,7 @@ func NewRowsChangedBus(ctx context.Context, cfg storageconfig.StorageEventBus) (
 	case "", "memory":
 		return coreeventbus.NewMemoryBus(), nil
 	case "nats":
-		defaultSubject := infraeventbus.RowsChangedSubject(cfg.SubjectPrefix)
-		subject := cfg.RowsChangedSubject
-		if subject == "" {
-			subject = defaultSubject
-		}
 		streamSubject := infraeventbus.SubjectPrefixWildcard(cfg.SubjectPrefix)
-		if subject != defaultSubject {
-			streamSubject = subject
-		}
 		producer, err := transport.NewProducer(transport.ProducerKindNATS, transport.ProducerOptions{
 			ServerURL:      cfg.NATSURL,
 			ConnectTimeout: 10 * time.Second,
@@ -45,7 +37,7 @@ func NewRowsChangedBus(ctx context.Context, cfg storageconfig.StorageEventBus) (
 			_ = producer.Close()
 			return nil, fmt.Errorf("storage eventbus type %s does not support subscription", cfg.Type)
 		}
-		return infraeventbus.NewSubscriberBus(pubsub, subject), nil
+		return infraeventbus.NewSubscriberBus(pubsub, cfg.SubjectPrefix), nil
 	default:
 		return nil, fmt.Errorf("unsupported storage eventbus type %s", cfg.Type)
 	}

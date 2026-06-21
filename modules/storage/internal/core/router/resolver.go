@@ -1,9 +1,7 @@
 // Package router 解析在线事实主存的水平切分路由。
 //
-// 注意：本包及 proto/表结构中的 StorageRoute / StorageNode 命名为历史遗留，
-// 其目标语义已收窄为 PrimaryRoute / PrimaryNode（仅负责 Pebble 在线主存切分，
-// 不路由 DuckDB/Bleve/Parquet 派生设备）。物理重命名需随 proto 协议统一重生成，
-// 属已知技术债，详见 docs/storage-target-architecture-and-metadata.md。
+// 注意：PrimaryStoreRoute / PrimaryStoreNode 只负责在线主存切分，
+// 不路由 DuckDB/Bleve/Parquet 派生设备。
 package router
 
 import (
@@ -15,12 +13,14 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
+// RouteReader 定义路由解析所需的元数据读取接口。
 type RouteReader interface {
-	ListStorageRoutes(ctx context.Context, spaceID string, datasetID string, subjectID string, nodeID string, page *pb.Page) ([]*pb.StorageRoute, *pb.PageResult, error)
-	GetStorageNode(ctx context.Context, nodeID string) (*pb.StorageNode, error)
+	ListPrimaryStoreRoutes(ctx context.Context, spaceID string, datasetID string, subjectID string, nodeID string, page *pb.Page) ([]*pb.PrimaryStoreRoute, *pb.PageResult, error)
+	GetPrimaryStoreNode(ctx context.Context, nodeID string) (*pb.PrimaryStoreNode, error)
 	ListDevices(ctx context.Context, nodeID string, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error)
 }
 
+// Resolver 根据元数据把写入请求解析到主存目标。
 type Resolver struct {
 	metadata RouteReader
 }
@@ -29,11 +29,11 @@ func NewResolver(store RouteReader) *Resolver {
 	return &Resolver{metadata: store}
 }
 
-func (r *Resolver) Resolve(ctx context.Context, scope *pb.DataScope) (*pb.PrimaryTarget, error) {
-	if scope == nil {
-		return nil, fmt.Errorf("data scope is required")
+func (r *Resolver) Resolve(ctx context.Context, spaceID string, datasetID string, subjectID string) (*pb.PrimaryStoreTarget, error) {
+	if spaceID == "" || datasetID == "" {
+		return nil, fmt.Errorf("space_id and dataset_id are required")
 	}
-	routes, _, err := r.metadata.ListStorageRoutes(ctx, scope.GetSpaceId(), scope.GetDatasetId(), "", "", nil)
+	routes, _, err := r.metadata.ListPrimaryStoreRoutes(ctx, spaceID, datasetID, "", "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -42,14 +42,14 @@ func (r *Resolver) Resolve(ctx context.Context, scope *pb.DataScope) (*pb.Primar
 		if route.GetStatus() != "" && route.GetStatus() != "active" {
 			continue
 		}
-		rank, ok := matchRank(route, scope.GetSubjectId())
+		rank, ok := matchRank(route, subjectID)
 		if !ok {
 			continue
 		}
 		candidates = append(candidates, routeCandidate{route: route, rank: rank})
 	}
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("storage route not found for %s/%s/%s", scope.GetSpaceId(), scope.GetDatasetId(), scope.GetSubjectId())
+		return nil, fmt.Errorf("primary store route not found for %s/%s/%s", spaceID, datasetID, subjectID)
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].rank != candidates[j].rank {
@@ -61,7 +61,7 @@ func (r *Resolver) Resolve(ctx context.Context, scope *pb.DataScope) (*pb.Primar
 		return candidates[i].route.GetPriority() < candidates[j].route.GetPriority()
 	})
 	chosen := candidates[0].route
-	node, err := r.metadata.GetStorageNode(ctx, chosen.GetNodeId())
+	node, err := r.metadata.GetPrimaryStoreNode(ctx, chosen.GetNodeId())
 	if err != nil {
 		return nil, fmt.Errorf("storage node %s not found: %w", chosen.GetNodeId(), err)
 	}
@@ -75,13 +75,13 @@ func (r *Resolver) Resolve(ctx context.Context, scope *pb.DataScope) (*pb.Primar
 	if err != nil {
 		return nil, err
 	}
-	return &pb.PrimaryTarget{
-		SpaceId:     scope.GetSpaceId(),
+	return &pb.PrimaryStoreTarget{
+		SpaceId:     spaceID,
 		NodeId:      node.GetNodeId(),
 		DeviceId:    device.GetDeviceId(),
 		Engine:      device.GetEngine(),
-		DatasetId:   scope.GetDatasetId(),
-		DeviceTable: path.Join(scope.GetSpaceId(), scope.GetDatasetId()),
+		DatasetId:   datasetID,
+		DeviceTable: path.Join(spaceID, datasetID),
 		Endpoint:    node.GetEndpoint(),
 	}, nil
 }
@@ -102,12 +102,13 @@ func (r *Resolver) resolvePrimaryDevice(ctx context.Context, nodeID string) (*pb
 	return nil, fmt.Errorf("active pebble device not found for storage node %s", nodeID)
 }
 
+// routeCandidate 表示一次路由解析命中的候选主存路由。
 type routeCandidate struct {
-	route *pb.StorageRoute
+	route *pb.PrimaryStoreRoute
 	rank  int
 }
 
-func matchRank(route *pb.StorageRoute, subjectID string) (int, bool) {
+func matchRank(route *pb.PrimaryStoreRoute, subjectID string) (int, bool) {
 	if route.GetSubjectId() != "" {
 		if route.GetSubjectId() == subjectID {
 			return 3, true

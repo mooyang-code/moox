@@ -8,16 +8,17 @@ import (
 	"sync"
 
 	cpebble "github.com/cockroachdb/pebble"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
 )
 
+// Options 保存 Pebble 主存打开配置。
 type Options struct {
 	Path              string
 	DisableSyncWrites bool
 }
 
+// Store 封装 Pebble 主存的行级读写能力。
 type Store struct {
 	db           *cpebble.DB
 	writeOptions *cpebble.WriteOptions
@@ -25,6 +26,7 @@ type Store struct {
 	locks        map[string]*rowLock
 }
 
+// rowLock 保存同一行合并写入时使用的互斥锁。
 type rowLock struct {
 	mu   sync.Mutex
 	refs int
@@ -52,30 +54,24 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) WriteRows(ctx context.Context, rows []*pb.DataRow, mode pb.WriteMode) error {
+func (s *Store) WriteRows(ctx context.Context, rows []*pb.PrimaryStoreRow) error {
 	_ = ctx
 	if len(rows) == 0 {
 		return nil
 	}
-	if mode == pb.WriteMode_WRITE_MODE_UNSPECIFIED {
-		mode = pb.WriteMode_WRITE_MODE_UPSERT
-	}
-	// 先全部校验，避免在批次中途失败后留下半成品写入。
 	for _, row := range rows {
 		if err := validateRow(row); err != nil {
 			return err
 		}
 	}
-	batch := s.db.NewBatch()
-	defer batch.Close()
-	pending := make(map[string]*pb.DataRow, len(rows))
 	keys := make([]string, 0, len(rows))
 	for _, row := range rows {
-		key := encodeRowKey(row)
-		keys = append(keys, key)
+		keys = append(keys, encodeRowKey(row))
 	}
 	unlock := s.lockRows(keys)
 	defer unlock()
+
+	pending := make(map[string]*pb.PrimaryStoreRow, len(rows))
 	for _, row := range rows {
 		key := encodeRowKey(row)
 		base := pending[key]
@@ -88,6 +84,9 @@ func (s *Store) WriteRows(ctx context.Context, rows []*pb.DataRow, mode pb.Write
 		}
 		pending[key] = mergeRow(base, row)
 	}
+
+	batch := s.db.NewBatch()
+	defer batch.Close()
 	for key, row := range pending {
 		data, err := proto.Marshal(row)
 		if err != nil {
@@ -136,7 +135,7 @@ func (s *Store) lockRows(keys []string) func() {
 	}
 }
 
-func (s *Store) getRow(key string) (*pb.DataRow, error) {
+func (s *Store) getRow(key string) (*pb.PrimaryStoreRow, error) {
 	data, closer, err := s.db.Get([]byte(key))
 	if errors.Is(err, cpebble.ErrNotFound) {
 		return nil, nil
@@ -145,19 +144,19 @@ func (s *Store) getRow(key string) (*pb.DataRow, error) {
 		return nil, err
 	}
 	defer closer.Close()
-	row := &pb.DataRow{}
+	row := &pb.PrimaryStoreRow{}
 	if err := proto.Unmarshal(data, row); err != nil {
 		return nil, err
 	}
 	return row, nil
 }
 
-func mergeRow(base *pb.DataRow, patch *pb.DataRow) *pb.DataRow {
+func mergeRow(base *pb.PrimaryStoreRow, patch *pb.PrimaryStoreRow) *pb.PrimaryStoreRow {
 	if base == nil {
-		return proto.Clone(patch).(*pb.DataRow)
+		return proto.Clone(patch).(*pb.PrimaryStoreRow)
 	}
-	merged := proto.Clone(base).(*pb.DataRow)
-	merged.Key = proto.Clone(patch.GetKey()).(*pb.DataKey)
+	merged := proto.Clone(base).(*pb.PrimaryStoreRow)
+	merged.Key = proto.Clone(patch.GetKey()).(*pb.PrimaryStoreKey)
 	positions := make(map[string]int, len(merged.GetColumns()))
 	for idx, column := range merged.GetColumns() {
 		positions[column.GetColumnName()] = idx
@@ -165,6 +164,9 @@ func mergeRow(base *pb.DataRow, patch *pb.DataRow) *pb.DataRow {
 	for _, column := range patch.GetColumns() {
 		copied := proto.Clone(column).(*pb.ColumnValue)
 		if idx, ok := positions[column.GetColumnName()]; ok {
+			if isNullColumn(copied) && !isNullColumn(merged.Columns[idx]) {
+				continue
+			}
 			merged.Columns[idx] = copied
 			continue
 		}
@@ -182,66 +184,64 @@ func mergeRow(base *pb.DataRow, patch *pb.DataRow) *pb.DataRow {
 	return merged
 }
 
-func (s *Store) ReadRows(ctx context.Context, scope *pb.DataScope, mode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, objectID string, columnNames []string, page *pb.Page) ([]*pb.DataRow, *pb.PageResult, error) {
+func isNullColumn(column *pb.ColumnValue) bool {
+	return column == nil || column.GetValue() == nil
+}
+
+func (s *Store) ReadRows(ctx context.Context, keys []*pb.PrimaryStoreKey, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
 	_ = ctx
-	if err := validateScope(scope); err != nil {
-		return nil, nil, err
+	if len(keys) == 0 {
+		return nil, &pb.PageResult{Size: pageSize(page)}, nil
 	}
-	if mode == pb.ReadMode_READ_MODE_UNSPECIFIED {
-		mode = pb.ReadMode_READ_MODE_RANGE
+	for _, key := range keys {
+		if err := validateKey(key); err != nil {
+			return nil, nil, err
+		}
 	}
-	if objectID != "" {
-		return s.readObjectRows(scope, mode, timeRange, snapshotTime, objectID, columnNames, page)
+	if canReadExact(keys, versionRange, page) {
+		return s.readExactRows(keys, order, columnNames, page)
 	}
-	if scope.GetFreq() == "" {
-		return s.readMixedRows(scope, mode, timeRange, snapshotTime, columnNames, page)
+	var rows []*pb.PrimaryStoreRow
+	for _, key := range keys {
+		readRows, err := s.readRowsForKey(key, versionRange, order, columnNames, page)
+		if err != nil {
+			return nil, nil, err
+		}
+		rows = append(rows, readRows...)
 	}
-	lower, upper := readBounds(scope, timeRange)
-	cursorMode := false
-	if cursorLower, ok := cursorLowerBound(scope, mode, snapshotTime, page, lower, upper); ok {
-		lower = cursorLower
-		cursorMode = true
-	}
-	return s.readRowsInBounds(scope, mode, timeRange, snapshotTime, "", columnNames, page, lower, upper, cursorMode)
+	sortRows(rows, order)
+	paged, result := pageRows(rows, page, order)
+	return paged, result, nil
 }
 
-func (s *Store) readMixedRows(scope *pb.DataScope, mode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, columnNames []string, page *pb.Page) ([]*pb.DataRow, *pb.PageResult, error) {
-	bounds := [][2][]byte{}
-	objectID := ""
-	if scope.GetSubjectId() != "" {
-		objectID = scope.GetSubjectId()
+func (s *Store) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, dataKind pb.DataKind, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	_ = ctx
+	if target == nil {
+		return nil, nil, errors.New("target is required")
 	}
-	objectLower := []byte(objectReadPrefix(scope, objectID))
-	bounds = append(bounds, [2][]byte{objectLower, nextPrefix(objectLower)})
-	timeLower, timeUpper := readBounds(scope, timeRange)
-	bounds = append(bounds, [2][]byte{timeLower, timeUpper})
-	return s.readRowsAcrossBounds(scope, mode, timeRange, snapshotTime, "", columnNames, page, bounds)
-}
-
-func (s *Store) readObjectRows(scope *pb.DataScope, mode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, objectID string, columnNames []string, page *pb.Page) ([]*pb.DataRow, *pb.PageResult, error) {
-	bounds := [][2][]byte{}
-	objectLower := []byte(objectReadPrefix(scope, objectID))
-	bounds = append(bounds, [2][]byte{objectLower, nextPrefix(objectLower)})
-	return s.readRowsAcrossBounds(scope, mode, timeRange, snapshotTime, objectID, columnNames, page, bounds)
-}
-
-func (s *Store) readRowsInBounds(scope *pb.DataScope, mode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, objectID string, columnNames []string, page *pb.Page, lower []byte, upper []byte, cursorMode bool) ([]*pb.DataRow, *pb.PageResult, error) {
-	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if target.GetSpaceId() == "" {
+		return nil, nil, errors.New("space_id is required")
+	}
+	if target.GetDatasetId() == "" {
+		return nil, nil, errors.New("dataset_id is required")
+	}
+	if kindPrefix(dataKind) == "" {
+		return nil, nil, errors.New("data_kind is required")
+	}
+	prefix := []byte(encodeDatasetPrefix(dataKind, target.GetSpaceId(), target.GetDatasetId()))
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: nextPrefix(prefix)})
 	if err != nil {
 		return nil, nil, err
 	}
 	defer iter.Close()
 
-	if cursorMode {
-		return readRowsByCursor(iter, scope, mode, timeRange, snapshotTime, objectID, columnNames, page)
-	}
-	var rows []*pb.DataRow
+	rows := make([]*pb.PrimaryStoreRow, 0)
 	for valid := iter.First(); valid; valid = iter.Next() {
-		row := &pb.DataRow{}
+		row := &pb.PrimaryStoreRow{}
 		if err := proto.Unmarshal(iter.Value(), row); err != nil {
 			return nil, nil, err
 		}
-		if !rowMatchesRead(row, scope, mode, timeRange, snapshotTime, objectID) {
+		if !versionRangeContains(row.GetKey().GetVersion(), versionRange) {
 			continue
 		}
 		rows = append(rows, filterRowColumns(row, columnNames))
@@ -249,164 +249,119 @@ func (s *Store) readRowsInBounds(scope *pb.DataScope, mode pb.ReadMode, timeRang
 	if err := iter.Error(); err != nil {
 		return nil, nil, err
 	}
-	if mode == pb.ReadMode_READ_MODE_LATEST_BEFORE {
-		rows = latestRows(rows)
-	}
-	sortRows(rows)
-	paged, result := pageRows(rows, page)
+	sortRows(rows, order)
+	paged, result := pageRows(rows, page, order)
 	return paged, result, nil
 }
 
-func (s *Store) readRowsAcrossBounds(scope *pb.DataScope, mode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, objectID string, columnNames []string, page *pb.Page, bounds [][2][]byte) ([]*pb.DataRow, *pb.PageResult, error) {
-	var rows []*pb.DataRow
-	for _, bound := range bounds {
-		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: bound[0], UpperBound: bound[1]})
-		if err != nil {
-			return nil, nil, err
-		}
-		for valid := iter.First(); valid; valid = iter.Next() {
-			row := &pb.DataRow{}
-			if err := proto.Unmarshal(iter.Value(), row); err != nil {
-				iter.Close()
-				return nil, nil, err
-			}
-			if !rowMatchesRead(row, scope, mode, timeRange, snapshotTime, objectID) {
-				continue
-			}
-			rows = append(rows, filterRowColumns(row, columnNames))
-		}
-		if err := iter.Error(); err != nil {
-			iter.Close()
-			return nil, nil, err
-		}
-		iter.Close()
-	}
-	if mode == pb.ReadMode_READ_MODE_LATEST_BEFORE {
-		rows = latestRows(rows)
-	}
-	sortRows(rows)
-	paged, result := pageRows(rows, page)
-	return paged, result, nil
-}
-
-func cursorLowerBound(scope *pb.DataScope, mode pb.ReadMode, snapshotTime string, page *pb.Page, lower []byte, upper []byte) ([]byte, bool) {
-	if page == nil || page.GetCursor() == "" {
-		return nil, false
-	}
-	if mode != pb.ReadMode_READ_MODE_RANGE || snapshotTime != "" {
-		return nil, false
-	}
-	if scope.GetSubjectId() == "" || scope.GetFreq() == "" || len(scope.GetDimensions()) == 0 {
-		return nil, false
-	}
-	cursor := []byte(page.GetCursor())
-	if bytes.Compare(cursor, lower) < 0 {
-		return nil, false
-	}
-	if len(upper) > 0 && bytes.Compare(cursor, upper) >= 0 {
-		return nil, false
-	}
-	next := nextPrefix(cursor)
-	if len(next) == 0 {
-		return nil, false
-	}
-	return next, true
-}
-
-func readRowsByCursor(iter *cpebble.Iterator, scope *pb.DataScope, mode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, objectID string, columnNames []string, page *pb.Page) ([]*pb.DataRow, *pb.PageResult, error) {
-	size := pageSize(page)
-	limit := int(size) + 1
-	rows := make([]*pb.DataRow, 0, limit)
-	for valid := iter.First(); valid; valid = iter.Next() {
-		row := &pb.DataRow{}
-		if err := proto.Unmarshal(iter.Value(), row); err != nil {
-			return nil, nil, err
-		}
-		if !rowMatchesRead(row, scope, mode, timeRange, snapshotTime, objectID) {
-			continue
-		}
-		rows = append(rows, filterRowColumns(row, columnNames))
-		if len(rows) >= limit {
-			break
-		}
-	}
-	if err := iter.Error(); err != nil {
-		return nil, nil, err
-	}
-	hasMore := len(rows) > int(size)
-	if hasMore {
-		rows = rows[:size]
-	}
-	next := ""
-	if hasMore && len(rows) > 0 {
-		next = encodeRowKey(rows[len(rows)-1])
-	}
-	return rows, &pb.PageResult{
-		Size:       size,
-		HasMore:    hasMore,
-		NextCursor: next,
-	}, nil
-}
-
-func validateRow(row *pb.DataRow) error {
-	if row == nil {
-		return errors.New("row is required")
-	}
-	if row.GetKey() == nil {
-		return errors.New("key is required")
-	}
-	return validateScope(row.GetKey().GetScope())
-}
-
-func validateScope(scope *pb.DataScope) error {
-	if scope == nil {
-		return errors.New("scope is required")
-	}
-	if scope.GetSpaceId() == "" {
-		return errors.New("space_id is required")
-	}
-	if scope.GetDatasetId() == "" {
-		return errors.New("dataset_id is required")
-	}
-	return nil
-}
-
-func scopeMatches(row *pb.DataRow, query *pb.DataScope) bool {
-	rowScope := row.GetKey().GetScope()
-	if rowScope.GetSpaceId() != query.GetSpaceId() || rowScope.GetDatasetId() != query.GetDatasetId() {
+func canReadExact(keys []*pb.PrimaryStoreKey, versionRange *pb.VersionRange, page *pb.Page) bool {
+	if page != nil && page.GetCursor() != "" {
 		return false
 	}
-	if query.GetSubjectId() != "" {
-		rowSubjectID := rowScope.GetSubjectId()
-		if rowSubjectID == "" && rowScope.GetFreq() == "" {
-			rowSubjectID = row.GetKey().GetRowId()
-		}
-		if rowSubjectID != query.GetSubjectId() {
-			return false
-		}
-	}
-	if query.GetFreq() != "" && rowScope.GetFreq() != query.GetFreq() {
+	if versionRange != nil {
 		return false
 	}
-	for key, value := range query.GetDimensions() {
-		if rowScope.GetDimensions()[key] != value {
+	for _, key := range keys {
+		if key.GetVersion() == "" {
 			return false
 		}
 	}
 	return true
 }
 
-func rowMatchesRead(row *pb.DataRow, scope *pb.DataScope, mode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, objectID string) bool {
-	if !scopeMatches(row, scope) {
+func (s *Store) readExactRows(keys []*pb.PrimaryStoreKey, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	rows := make([]*pb.PrimaryStoreRow, 0, len(keys))
+	seen := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		encoded := encodePrimaryStoreKey(key)
+		if seen[encoded] {
+			continue
+		}
+		seen[encoded] = true
+		row, err := s.getRow(encoded)
+		if err != nil {
+			return nil, nil, err
+		}
+		if row != nil {
+			rows = append(rows, filterRowColumns(row, columnNames))
+		}
+	}
+	sortRows(rows, order)
+	paged, result := pageRows(rows, page, order)
+	return paged, result, nil
+}
+
+func (s *Store) readRowsForKey(key *pb.PrimaryStoreKey, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, error) {
+	if key.GetVersion() != "" && versionRange == nil {
+		row, err := s.getRow(encodePrimaryStoreKey(key))
+		if err != nil || row == nil {
+			return nil, err
+		}
+		return []*pb.PrimaryStoreRow{filterRowColumns(row, columnNames)}, nil
+	}
+	lower, upper := keyBounds(key, versionRange)
+	if cursor := page.GetCursor(); cursor != "" && order != pb.SortOrder_SORT_ORDER_DESC {
+		cursorBytes := []byte(cursor)
+		if bytes.Compare(cursorBytes, lower) >= 0 && (len(upper) == 0 || bytes.Compare(cursorBytes, upper) < 0) {
+			if next := nextPrefix(cursorBytes); len(next) > 0 {
+				lower = next
+			}
+		}
+	}
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	var rows []*pb.PrimaryStoreRow
+	for valid := iter.First(); valid; valid = iter.Next() {
+		row := &pb.PrimaryStoreRow{}
+		if err := proto.Unmarshal(iter.Value(), row); err != nil {
+			return nil, err
+		}
+		rows = append(rows, filterRowColumns(row, columnNames))
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func validateRow(row *pb.PrimaryStoreRow) error {
+	if row == nil {
+		return errors.New("row is required")
+	}
+	return validateKey(row.GetKey())
+}
+
+func validateKey(key *pb.PrimaryStoreKey) error {
+	if key == nil {
+		return errors.New("key is required")
+	}
+	if key.GetSpaceId() == "" {
+		return errors.New("space_id is required")
+	}
+	if key.GetDatasetId() == "" {
+		return errors.New("dataset_id is required")
+	}
+	if kindPrefix(key.GetDataKind()) == "" {
+		return errors.New("data_kind is required")
+	}
+	if key.GetKey() == "" {
+		return errors.New("key is required")
+	}
+	return nil
+}
+
+func versionRangeContains(version string, versionRange *pb.VersionRange) bool {
+	if versionRange == nil {
+		return true
+	}
+	normalized := normalizeVersionForKey(version)
+	if start := versionRange.GetStartVersion(); start != "" && normalized < normalizeVersionForKey(start) {
 		return false
 	}
-	if objectID != "" && row.GetKey().GetRowId() != objectID {
-		return false
-	}
-	if !factvalue.TimeInRangeClosed(row.GetKey().GetDataTime(), timeRange) {
-		return false
-	}
-	if mode == pb.ReadMode_READ_MODE_LATEST_BEFORE && snapshotTime != "" && row.GetKey().GetDataTime() > snapshotTime {
+	if end := versionRange.GetEndVersion(); end != "" && normalized > normalizeVersionForKey(end) {
 		return false
 	}
 	return true
@@ -426,12 +381,12 @@ func nextPrefix(prefix []byte) []byte {
 	return nil
 }
 
-func filterRowColumns(row *pb.DataRow, includes []string) *pb.DataRow {
+func filterRowColumns(row *pb.PrimaryStoreRow, includes []string) *pb.PrimaryStoreRow {
 	if len(includes) == 0 {
 		return row
 	}
 	allow := makeSet(includes)
-	filtered := proto.Clone(row).(*pb.DataRow)
+	filtered := proto.Clone(row).(*pb.PrimaryStoreRow)
 	filtered.Columns = filtered.Columns[:0]
 	for _, column := range row.GetColumns() {
 		if allow[column.GetColumnName()] {
@@ -441,39 +396,33 @@ func filterRowColumns(row *pb.DataRow, includes []string) *pb.DataRow {
 	return filtered
 }
 
-func latestRows(rows []*pb.DataRow) []*pb.DataRow {
-	latest := make(map[string]*pb.DataRow)
-	for _, row := range rows {
-		key := row.GetKey().GetScope().GetSubjectId()
-		if key == "" {
-			key = row.GetKey().GetScope().GetDatasetId()
-		}
-		if prev := latest[key]; prev == nil || row.GetKey().GetDataTime() > prev.GetKey().GetDataTime() {
-			latest[key] = row
-		}
-	}
-	out := make([]*pb.DataRow, 0, len(latest))
-	for _, row := range latest {
-		out = append(out, row)
-	}
-	return out
-}
-
-func sortRows(rows []*pb.DataRow) {
+func sortRows(rows []*pb.PrimaryStoreRow, order pb.SortOrder) {
 	sort.SliceStable(rows, func(i, j int) bool {
-		left := rows[i]
-		right := rows[j]
-		if left.GetKey().GetScope().GetSubjectId() != right.GetKey().GetScope().GetSubjectId() {
-			return left.GetKey().GetScope().GetSubjectId() < right.GetKey().GetScope().GetSubjectId()
+		left := rows[i].GetKey()
+		right := rows[j].GetKey()
+		if left.GetDataKind() != right.GetDataKind() {
+			return left.GetDataKind() < right.GetDataKind()
 		}
-		if left.GetKey().GetDataTime() != right.GetKey().GetDataTime() {
-			return left.GetKey().GetDataTime() < right.GetKey().GetDataTime()
+		if left.GetSpaceId() != right.GetSpaceId() {
+			return left.GetSpaceId() < right.GetSpaceId()
 		}
-		return left.GetKey().GetRowId() < right.GetKey().GetRowId()
+		if left.GetDatasetId() != right.GetDatasetId() {
+			return left.GetDatasetId() < right.GetDatasetId()
+		}
+		if left.GetKey() != right.GetKey() {
+			return left.GetKey() < right.GetKey()
+		}
+		if left.GetVersion() != right.GetVersion() {
+			if order == pb.SortOrder_SORT_ORDER_DESC {
+				return left.GetVersion() > right.GetVersion()
+			}
+			return left.GetVersion() < right.GetVersion()
+		}
+		return false
 	})
 }
 
-func pageRows(rows []*pb.DataRow, page *pb.Page) ([]*pb.DataRow, *pb.PageResult) {
+func pageRows(rows []*pb.PrimaryStoreRow, page *pb.Page, order pb.SortOrder) ([]*pb.PrimaryStoreRow, *pb.PageResult) {
 	pageNo := uint32(1)
 	size := pageSize(page)
 	cursor := ""
@@ -483,17 +432,8 @@ func pageRows(rows []*pb.DataRow, page *pb.Page) ([]*pb.DataRow, *pb.PageResult)
 		}
 		cursor = page.GetCursor()
 	}
-	// 游标分页：利用结果按 row key 有序的特性，从 cursor 之后开始返回 size 条，
-	// 避免深翻页时重复扫描前面的数据（keyset pagination）。
 	if cursor != "" {
-		start := 0
-		for idx, row := range rows {
-			if encodeRowKey(row) > cursor {
-				start = idx
-				break
-			}
-			start = idx + 1
-		}
+		start := cursorStart(rows, cursor, order)
 		end := start + int(size)
 		if end > len(rows) {
 			end = len(rows)
@@ -528,6 +468,27 @@ func pageRows(rows []*pb.DataRow, page *pb.Page) ([]*pb.DataRow, *pb.PageResult)
 		HasMore:    end < len(rows),
 		NextCursor: next,
 	}
+}
+
+func cursorStart(rows []*pb.PrimaryStoreRow, cursor string, order pb.SortOrder) int {
+	for idx, row := range rows {
+		if encodeRowKey(row) == cursor {
+			return idx + 1
+		}
+	}
+	for idx, row := range rows {
+		encoded := encodeRowKey(row)
+		if order == pb.SortOrder_SORT_ORDER_DESC {
+			if encoded < cursor {
+				return idx
+			}
+			continue
+		}
+		if encoded > cursor {
+			return idx
+		}
+	}
+	return len(rows)
 }
 
 func pageSize(page *pb.Page) uint32 {

@@ -21,13 +21,13 @@ func TestStoreServesRouteMetadataFromSnapshotAfterBaseClosed(t *testing.T) {
 	require.NoError(t, err)
 	_, err = base.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Kind: "exchange"})
 	require.NoError(t, err)
-	_, err = base.UpsertDataSet(ctx, &pb.DataSet{SpaceId: "crypto", DatasetId: "kline", DataSourceId: "binance", Name: "Kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES})
+	_, err = base.UpsertDataset(ctx, &pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataSourceId: "binance", Name: "Kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES})
 	require.NoError(t, err)
-	_, err = base.UpsertStorageNode(ctx, &pb.StorageNode{NodeId: "node-1", Name: "node-1", Endpoint: "127.0.0.1:19001", Status: "active"})
+	_, err = base.UpsertPrimaryStoreNode(ctx, &pb.PrimaryStoreNode{NodeId: "node-1", Name: "node-1", Endpoint: "127.0.0.1:19001", Status: "active"})
 	require.NoError(t, err)
 	_, err = base.UpsertDevice(ctx, &pb.Device{DeviceId: "pebble-1", NodeId: "node-1", Name: "pebble-1", Engine: "pebble", Status: "active"})
 	require.NoError(t, err)
-	_, err = base.UpsertStorageRoute(ctx, &pb.StorageRoute{SpaceId: "crypto", RouteId: "route-1", DatasetId: "kline", SubjectPattern: "*", NodeId: "node-1", Status: "active"})
+	_, err = base.UpsertPrimaryStoreRoute(ctx, &pb.PrimaryStoreRoute{SpaceId: "crypto", RouteId: "route-1", DatasetId: "kline", SubjectPattern: "*", NodeId: "node-1", Status: "active"})
 	require.NoError(t, err)
 
 	store, err := metacache.New(ctx, base, metacache.Options{RefreshInterval: metacache.RefreshDisabled})
@@ -36,11 +36,7 @@ func TestStoreServesRouteMetadataFromSnapshotAfterBaseClosed(t *testing.T) {
 
 	require.NoError(t, base.Close())
 
-	target, err := router.NewResolver(store).Resolve(ctx, &pb.DataScope{
-		SpaceId:   "crypto",
-		DatasetId: "kline",
-		SubjectId: "APT-USDT",
-	})
+	target, err := router.NewResolver(store).Resolve(ctx, "crypto", "kline", "APT-USDT")
 	require.NoError(t, err)
 	require.Equal(t, "node-1", target.GetNodeId())
 	require.Equal(t, "pebble-1", target.GetDeviceId())
@@ -94,11 +90,11 @@ func TestStoreLoadsMultipleRelationshipRowsWithCompositeIDs(t *testing.T) {
 	require.NoError(t, err)
 	_, err = base.UpsertSubjectSymbol(ctx, &pb.SubjectSymbol{SpaceId: "crypto", SubjectId: "AR-USDT", DataSourceId: "okx", ExternalSymbol: "AR-USDT"})
 	require.NoError(t, err)
-	_, err = base.UpsertDataSet(ctx, &pb.DataSet{SpaceId: "crypto", DatasetId: "symbols", DataSourceId: "binance", Name: "symbols", DataKind: pb.DataKind_DATA_KIND_TABLE})
+	_, err = base.UpsertDataset(ctx, &pb.Dataset{SpaceId: "crypto", DatasetId: "symbols", DataSourceId: "binance", Name: "symbols", DataKind: pb.DataKind_DATA_KIND_TABLE})
 	require.NoError(t, err)
-	_, err = base.BindDataSetSubject(ctx, &pb.DataSetSubject{SpaceId: "crypto", DatasetId: "symbols", SubjectId: "APT-USDT"})
+	_, err = base.BindDatasetSubject(ctx, &pb.DatasetSubject{SpaceId: "crypto", DatasetId: "symbols", SubjectId: "APT-USDT"})
 	require.NoError(t, err)
-	_, err = base.BindDataSetSubject(ctx, &pb.DataSetSubject{SpaceId: "crypto", DatasetId: "symbols", SubjectId: "AR-USDT"})
+	_, err = base.BindDatasetSubject(ctx, &pb.DatasetSubject{SpaceId: "crypto", DatasetId: "symbols", SubjectId: "AR-USDT"})
 	require.NoError(t, err)
 
 	store, err := metacache.New(ctx, base, metacache.Options{RefreshInterval: metacache.RefreshDisabled})
@@ -110,7 +106,7 @@ func TestStoreLoadsMultipleRelationshipRowsWithCompositeIDs(t *testing.T) {
 	require.Equal(t, uint64(2), page.GetTotal())
 	require.Len(t, symbols, 2)
 
-	subjects, err := store.ListDataSetSubjects(ctx, "crypto", "symbols")
+	subjects, _, err := store.ListDatasetSubjects(ctx, "crypto", "symbols", "", nil)
 	require.NoError(t, err)
 	require.Len(t, subjects, 2)
 }

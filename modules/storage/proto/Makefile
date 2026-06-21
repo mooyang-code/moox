@@ -1,4 +1,4 @@
-PROTO_FILES := common.proto metadata.proto data.proto query.proto primary.proto message.proto
+PROTO_FILES := common.proto metadata.proto access.proto store.proto view.proto message.proto
 OUTPUT_DIR := ./gen
 
 .PHONY: all clean

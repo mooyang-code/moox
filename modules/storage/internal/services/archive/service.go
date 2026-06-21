@@ -14,10 +14,12 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
+// FactReader 定义归档服务读取 TimeSeries 行所需的接口。
 type FactReader interface {
-	ReadRows(ctx context.Context, scope *pb.DataScope, mode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, objectID string, columnNames []string, page *pb.Page) ([]*pb.DataRow, *pb.PageResult, error)
+	ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
 }
 
+// Options 保存归档服务创建时的依赖与路径配置。
 type Options struct {
 	Metadata    metadata.Store
 	Facts       FactReader
@@ -26,6 +28,7 @@ type Options struct {
 	Now         func() time.Time
 }
 
+// Service 实现主存数据到 Parquet 文件的归档流程。
 type Service struct {
 	metadata    metadata.Store
 	facts       FactReader
@@ -48,7 +51,7 @@ func NewService(opts Options) *Service {
 	}
 }
 
-func (s *Service) ArchiveDataSet(ctx context.Context, spaceID string, datasetID string, partitionKey string, timeRange *pb.TimeRange) (*pb.ArchiveFile, error) {
+func (s *Service) ArchiveDataset(ctx context.Context, spaceID string, datasetID string, partitionKey string, timeRange *pb.TimeRange) (*pb.ArchiveFile, error) {
 	if s == nil || s.metadata == nil || s.facts == nil {
 		return nil, errors.New("metadata and facts are required")
 	}
@@ -69,7 +72,7 @@ func (s *Service) ArchiveDataSet(ctx context.Context, spaceID string, datasetID 
 	if partitionKey == "" {
 		partitionKey = "default"
 	}
-	rows, err := s.readAllRows(ctx, &pb.DataScope{SpaceId: spaceID, DatasetId: datasetID}, timeRange)
+	rows, err := s.readAllRows(ctx, spaceID, datasetID, timeRange)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +104,7 @@ func (s *Service) ArchiveDataSet(ctx context.Context, spaceID string, datasetID 
 	return s.metadata.RegisterArchiveFile(ctx, file)
 }
 
-func (s *Service) ArchiveDataSets(ctx context.Context, spaceID string, partitionKey string, timeRange *pb.TimeRange) ([]*pb.ArchiveFile, error) {
+func (s *Service) ArchiveDatasets(ctx context.Context, spaceID string, partitionKey string, timeRange *pb.TimeRange) ([]*pb.ArchiveFile, error) {
 	if s == nil || s.metadata == nil {
 		return nil, errors.New("metadata is required")
 	}
@@ -111,7 +114,7 @@ func (s *Service) ArchiveDataSets(ctx context.Context, spaceID string, partition
 	const pageSize = uint32(1000)
 	var out []*pb.ArchiveFile
 	for pageNo := uint32(1); ; pageNo++ {
-		datasets, page, err := s.metadata.ListDataSets(ctx, spaceID, "", pb.DataKind_DATA_KIND_UNSPECIFIED, "", &pb.Page{Page: pageNo, Size: pageSize})
+		datasets, page, err := s.metadata.ListDatasets(ctx, spaceID, "", pb.DataKind_DATA_KIND_UNSPECIFIED, "", &pb.Page{Page: pageNo, Size: pageSize})
 		if err != nil {
 			return nil, err
 		}
@@ -119,7 +122,10 @@ func (s *Service) ArchiveDataSets(ctx context.Context, spaceID string, partition
 			if dataset.GetStatus() != "" && dataset.GetStatus() != "active" {
 				continue
 			}
-			file, err := s.ArchiveDataSet(ctx, spaceID, dataset.GetDatasetId(), partitionKey, timeRange)
+			if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
+				continue
+			}
+			file, err := s.ArchiveDataset(ctx, spaceID, dataset.GetDatasetId(), partitionKey, timeRange)
 			if err != nil {
 				return out, err
 			}
@@ -144,19 +150,95 @@ func (s *Service) defaultDeviceID(ctx context.Context) (string, error) {
 	return "", errors.New("active parquet_archive device not found")
 }
 
-func (s *Service) readAllRows(ctx context.Context, scope *pb.DataScope, timeRange *pb.TimeRange) ([]*pb.DataRow, error) {
+func (s *Service) readAllRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange) ([]*pb.TimeSeriesRow, error) {
 	const pageSize = uint32(1000)
-	var out []*pb.DataRow
+	subjects, err := s.datasetSubjects(ctx, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	freqs, err := s.datasetFreqs(ctx, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	var out []*pb.TimeSeriesRow
+	for _, subjectID := range subjects {
+		for _, freq := range freqs {
+			for pageNo := uint32(1); ; pageNo++ {
+				rsp, err := s.facts.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+					Keys: []*pb.TimeSeriesKey{{
+						SpaceId:   spaceID,
+						DatasetId: datasetID,
+						SubjectId: subjectID,
+						Freq:      freq,
+					}},
+					TimeRange: timeRange,
+					Page:      &pb.Page{Page: pageNo, Size: pageSize},
+				})
+				if err != nil {
+					return nil, err
+				}
+				if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+					return nil, errors.New(rsp.GetRetInfo().GetMsg())
+				}
+				out = append(out, rsp.GetRows()...)
+				if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+					break
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) datasetSubjects(ctx context.Context, spaceID string, datasetID string) ([]string, error) {
+	const pageSize = uint32(1000)
+	seen := make(map[string]bool)
+	var out []string
 	for pageNo := uint32(1); ; pageNo++ {
-		rows, page, err := s.facts.ReadRows(ctx, scope, pb.ReadMode_READ_MODE_RANGE, timeRange, "", "", nil, &pb.Page{Page: pageNo, Size: pageSize})
+		bindings, page, err := s.metadata.ListDatasetSubjects(ctx, spaceID, datasetID, "", &pb.Page{Page: pageNo, Size: pageSize})
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, rows...)
+		for _, binding := range bindings {
+			if binding.GetStatus() != "" && binding.GetStatus() != "active" {
+				continue
+			}
+			subjectID := strings.TrimSpace(binding.GetSubjectId())
+			if subjectID == "" || seen[subjectID] {
+				continue
+			}
+			seen[subjectID] = true
+			out = append(out, subjectID)
+		}
 		if page == nil || !page.GetHasMore() {
-			return out, nil
+			break
 		}
 	}
+	if len(out) == 0 {
+		return nil, errors.New("dataset subjects are required for archive")
+	}
+	return out, nil
+}
+
+func (s *Service) datasetFreqs(ctx context.Context, spaceID string, datasetID string) ([]string, error) {
+	dataset, err := s.metadata.GetDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(dataset.GetFreqs()))
+	for _, freq := range dataset.GetFreqs() {
+		freq = strings.TrimSpace(freq)
+		if freq == "" || seen[freq] {
+			continue
+		}
+		seen[freq] = true
+		out = append(out, freq)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("dataset freqs are required for archive")
+	}
+	return out, nil
 }
 
 var unsafePathPart = regexp.MustCompile(`[^A-Za-z0-9_.=-]+`)

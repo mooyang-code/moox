@@ -243,10 +243,10 @@ moox db --show-data mytable
 moox storage --help
 
 # 写入数据
-moox storage --interface set --project-id 1 --dataset-id 1 --object-id mydata
+moox storage --interface set --project-id 1 --dataset-id 1 --record-id mydata
 
 # 读取数据
-moox storage --interface get --project-id 1 --dataset-id 1 --object-id mydata
+moox storage --interface get --project-id 1 --dataset-id 1 --record-id mydata
 ```
 
 ### 消息队列

@@ -14,14 +14,19 @@ import (
 
 	_ "github.com/marcboeker/go-duckdb/v2"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
+	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
+// Options 保存 DuckDB 视图存储打开配置。
 type Options struct {
 	Path string
 }
 
+// ViewStore 封装 TimeSeries 视图在 DuckDB 中的物化读写能力。
 type ViewStore struct {
 	db *sql.DB
 }
@@ -41,7 +46,7 @@ func Open(opts Options) (*ViewStore, error) {
 		return nil, err
 	}
 	store := &ViewStore{db: db}
-	if err := store.init(context.Background()); err != nil {
+	if err := store.init(trpc.BackgroundContext()); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -72,6 +77,7 @@ func (s *ViewStore) CreateResultTable(ctx context.Context, tableName string, col
 	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
+			row_key VARCHAR NOT NULL,
 			subject_id VARCHAR NOT NULL,
 			data_time VARCHAR NOT NULL,
 			row_json VARCHAR NOT NULL
@@ -91,7 +97,7 @@ func (s *ViewStore) CreateResultTable(ctx context.Context, tableName string, col
 	return err
 }
 
-func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb.QueryViewRow) error {
+func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb.TimeSeriesRow) error {
 	quoted, err := quoteTableName(tableName)
 	if err != nil {
 		return err
@@ -100,19 +106,54 @@ func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`INSERT INTO %s (subject_id, data_time, row_json) VALUES (?, ?, ?)`, quoted))
+	selectStmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`SELECT row_json FROM %s WHERE row_key = ? AND data_time = ? LIMIT 1`, quoted))
 	if err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	defer stmt.Close()
+	defer selectStmt.Close()
+	deleteStmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE row_key = ? AND data_time = ?`, quoted))
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	defer deleteStmt.Close()
+	insertStmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`INSERT INTO %s (row_key, subject_id, data_time, row_json) VALUES (?, ?, ?, ?)`, quoted))
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	defer insertStmt.Close()
 	for _, row := range rows {
+		rowKey := timeSeriesRowKey(row)
+		merged := row
+		var existingRaw string
+		if err := selectStmt.QueryRowContext(ctx, rowKey, row.GetKey().GetDataTime()).Scan(&existingRaw); err == nil {
+			existing := &pb.TimeSeriesRow{}
+			if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(existingRaw), existing); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+			merged = mergeTimeSeriesRow(existing, row)
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return err
+		}
 		raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(row)
 		if err != nil {
 			_ = tx.Rollback()
 			return err
 		}
-		if _, err := stmt.ExecContext(ctx, row.GetSubjectId(), row.GetDataTime(), string(raw)); err != nil {
+		raw, err = protojson.MarshalOptions{UseProtoNames: true}.Marshal(merged)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if _, err := deleteStmt.ExecContext(ctx, rowKey, row.GetKey().GetDataTime()); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if _, err := insertStmt.ExecContext(ctx, rowKey, merged.GetKey().GetSubjectId(), merged.GetKey().GetDataTime(), string(raw)); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -120,11 +161,45 @@ func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb
 	return tx.Commit()
 }
 
+func timeSeriesRowKey(row *pb.TimeSeriesRow) string {
+	key := row.GetKey()
+	return key.GetDatasetId() + "|" + factkey.BuildTimeSeriesDataKey(key.GetSubjectId(), key.GetFreq(), key.GetDimensions())
+}
+
+func mergeTimeSeriesRow(base *pb.TimeSeriesRow, patch *pb.TimeSeriesRow) *pb.TimeSeriesRow {
+	if base == nil {
+		return proto.Clone(patch).(*pb.TimeSeriesRow)
+	}
+	merged := proto.Clone(base).(*pb.TimeSeriesRow)
+	merged.Key = proto.Clone(patch.GetKey()).(*pb.TimeSeriesKey)
+	positions := make(map[string]int, len(merged.GetColumns()))
+	for idx, column := range merged.GetColumns() {
+		positions[column.GetColumnName()] = idx
+	}
+	for _, column := range patch.GetColumns() {
+		copied := proto.Clone(column).(*pb.ColumnValue)
+		if idx, ok := positions[column.GetColumnName()]; ok {
+			if isNullColumn(copied) && !isNullColumn(merged.Columns[idx]) {
+				continue
+			}
+			merged.Columns[idx] = copied
+			continue
+		}
+		positions[column.GetColumnName()] = len(merged.Columns)
+		merged.Columns = append(merged.Columns, copied)
+	}
+	return merged
+}
+
+func isNullColumn(column *pb.ColumnValue) bool {
+	return column == nil || column.GetValue() == nil
+}
+
 func (s *ViewStore) ListResultTables(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT table_name
 		FROM information_schema.tables
-		WHERE table_name LIKE 'view_result_%'
+		WHERE table_name LIKE 'ts_view_%' OR table_name LIKE 'view_result_%'
 		ORDER BY table_name
 	`)
 	if err != nil {
@@ -165,7 +240,7 @@ func (s *ViewStore) DropResultTable(ctx context.Context, tableName string) error
 	return tx.Commit()
 }
 
-func (s *ViewStore) QueryView(ctx context.Context, tableName string, req *pb.QueryViewReq) ([]*pb.QueryViewColumn, []*pb.QueryViewRow, *pb.PageResult, error) {
+func (s *ViewStore) QueryTimeSeriesRows(ctx context.Context, tableName string, req *pb.QueryTimeSeriesRowsReq) ([]*pb.ResultColumn, []*pb.TimeSeriesRow, *pb.PageResult, error) {
 	quoted, err := quoteTableName(tableName)
 	if err != nil {
 		return nil, nil, nil, err
@@ -192,21 +267,18 @@ func (s *ViewStore) QueryView(ctx context.Context, tableName string, req *pb.Que
 
 	// 内存兜底过滤：覆盖未能下推到 SQL 的情况（如非 RFC3339 时间边界），
 	// 与下推条件幂等，不会误删已通过 SQL 过滤的行。
-	allowSubjects := factvalue.StringSet(req.GetSubjectIds())
-	var out []*pb.QueryViewRow
+	allowSubjects := querySubjectSet(req.GetKeys())
+	var out []*pb.TimeSeriesRow
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
 			return nil, nil, nil, err
 		}
-		row := &pb.QueryViewRow{}
+		row := &pb.TimeSeriesRow{}
 		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(raw), row); err != nil {
 			return nil, nil, nil, err
 		}
-		if len(allowSubjects) > 0 && !allowSubjects[row.GetSubjectId()] {
-			continue
-		}
-		if !factvalue.TimeInRange(row.GetDataTime(), req.GetQueryTime().GetTimeRange()) {
+		if !timeSeriesRowMatchesQuery(row, req, allowSubjects) {
 			continue
 		}
 		out = append(out, row)
@@ -228,10 +300,10 @@ func (s *ViewStore) QueryView(ctx context.Context, tableName string, req *pb.Que
 // buildPushdownPredicates 构造可下推到 DuckDB 的 WHERE 条件与参数。
 // 仅下推 subject_id（IN 列表）。data_time 不下推：结果表以字符串存储时间，
 // 跨时区（如 +08:00 与 Z）字符串比较不可靠，时间过滤统一交由内存按 RFC3339 解析处理。
-func buildPushdownPredicates(req *pb.QueryViewReq) (string, []any) {
+func buildPushdownPredicates(req *pb.QueryTimeSeriesRowsReq) (string, []any) {
 	var clauses []string
 	var args []any
-	if subjects := req.GetSubjectIds(); len(subjects) > 0 {
+	if subjects := querySubjects(req.GetKeys()); len(subjects) > 0 {
 		placeholders := make([]string, 0, len(subjects))
 		for _, subject := range subjects {
 			placeholders = append(placeholders, "?")
@@ -242,12 +314,12 @@ func buildPushdownPredicates(req *pb.QueryViewReq) (string, []any) {
 	return strings.Join(clauses, " AND "), args
 }
 
-func (s *ViewStore) loadColumns(ctx context.Context, tableName string) ([]*pb.QueryViewColumn, error) {
+func (s *ViewStore) loadColumns(ctx context.Context, tableName string) ([]*pb.ResultColumn, error) {
 	var raw string
 	if err := s.db.QueryRowContext(ctx, `SELECT columns_json FROM moox_view_columns WHERE table_name = ?`, tableName).Scan(&raw); err != nil {
 		return nil, err
 	}
-	rsp := &pb.QueryViewRsp{}
+	rsp := &pb.QueryTimeSeriesRowsRsp{}
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(raw), rsp); err != nil {
 		return nil, err
 	}
@@ -255,16 +327,16 @@ func (s *ViewStore) loadColumns(ctx context.Context, tableName string) ([]*pb.Qu
 }
 
 func encodeColumns(columns []*pb.ViewColumn) (string, error) {
-	out := make([]*pb.QueryViewColumn, 0, len(columns))
+	out := make([]*pb.ResultColumn, 0, len(columns))
 	for _, column := range columns {
-		out = append(out, &pb.QueryViewColumn{
+		out = append(out, &pb.ResultColumn{
 			ColumnName: column.GetColumnName(),
 			OriginType: column.GetOriginType(),
 			OriginId:   column.GetOriginId(),
 			ValueType:  column.GetValueType(),
 		})
 	}
-	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(&pb.QueryViewRsp{Columns: out})
+	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(&pb.QueryTimeSeriesRowsRsp{Columns: out})
 	if err != nil {
 		return "", err
 	}
@@ -282,7 +354,85 @@ func stringSet(values []string) map[string]bool {
 	return factvalue.StringSet(values)
 }
 
-func filterRows(rows []*pb.QueryViewRow, filters []*pb.FilterExpr) ([]*pb.QueryViewRow, error) {
+func querySubjectSet(keys []*pb.TimeSeriesKey) map[string]bool {
+	return factvalue.StringSet(querySubjects(keys))
+}
+
+func querySubjects(keys []*pb.TimeSeriesKey) []string {
+	seen := make(map[string]bool, len(keys))
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		subjectID := strings.TrimSpace(key.GetSubjectId())
+		if subjectID == "" || seen[subjectID] {
+			continue
+		}
+		seen[subjectID] = true
+		out = append(out, subjectID)
+	}
+	return out
+}
+
+func timeSeriesRowMatchesQuery(row *pb.TimeSeriesRow, req *pb.QueryTimeSeriesRowsReq, allowSubjects map[string]bool) bool {
+	if len(allowSubjects) > 0 && !allowSubjects[row.GetKey().GetSubjectId()] {
+		return false
+	}
+	if !factvalue.TimeInRange(row.GetKey().GetDataTime(), req.GetTimeRange()) {
+		return false
+	}
+	keys := req.GetKeys()
+	if len(keys) == 0 {
+		return true
+	}
+	for _, key := range keys {
+		if timeSeriesRowMatchesKey(row, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func timeSeriesRowMatchesKey(row *pb.TimeSeriesRow, key *pb.TimeSeriesKey) bool {
+	if key == nil {
+		return true
+	}
+	rowKey := row.GetKey()
+	if key.GetSpaceId() != "" && key.GetSpaceId() != rowKey.GetSpaceId() {
+		return false
+	}
+	if key.GetDatasetId() != "" && key.GetDatasetId() != rowKey.GetDatasetId() {
+		return false
+	}
+	if key.GetSubjectId() != "" && key.GetSubjectId() != rowKey.GetSubjectId() {
+		return false
+	}
+	if key.GetFreq() != "" && key.GetFreq() != rowKey.GetFreq() {
+		return false
+	}
+	if !dimensionsEqual(key.GetDimensions(), rowKey.GetDimensions()) {
+		return false
+	}
+	if key.GetDataTime() != "" {
+		return factvalue.TimeInRange(rowKey.GetDataTime(), &pb.TimeRange{
+			StartTime: key.GetDataTime(),
+			EndTime:   key.GetDataTime(),
+		})
+	}
+	return true
+}
+
+func dimensionsEqual(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		if right[key] != leftValue {
+			return false
+		}
+	}
+	return true
+}
+
+func filterRows(rows []*pb.TimeSeriesRow, filters []*pb.FilterExpr) ([]*pb.TimeSeriesRow, error) {
 	if len(filters) == 0 {
 		return rows, nil
 	}
@@ -299,7 +449,7 @@ func filterRows(rows []*pb.QueryViewRow, filters []*pb.FilterExpr) ([]*pb.QueryV
 	return out, nil
 }
 
-func rowMatchesFilters(row *pb.QueryViewRow, filters []*pb.FilterExpr) (bool, error) {
+func rowMatchesFilters(row *pb.TimeSeriesRow, filters []*pb.FilterExpr) (bool, error) {
 	for _, filter := range filters {
 		ok, err := rowMatchesFilter(row, filter)
 		if err != nil {
@@ -312,7 +462,7 @@ func rowMatchesFilters(row *pb.QueryViewRow, filters []*pb.FilterExpr) (bool, er
 	return true, nil
 }
 
-func rowMatchesFilter(row *pb.QueryViewRow, filter *pb.FilterExpr) (bool, error) {
+func rowMatchesFilter(row *pb.TimeSeriesRow, filter *pb.FilterExpr) (bool, error) {
 	if filter == nil || strings.TrimSpace(filter.GetExpr()) == "" {
 		return true, nil
 	}
@@ -364,7 +514,7 @@ func filterValue(token string, args map[string]*pb.TypedValue) *pb.TypedValue {
 	return nil
 }
 
-func sortRows(rows []*pb.QueryViewRow, sorts []*pb.SortSpec) {
+func sortRows(rows []*pb.TimeSeriesRow, sorts []*pb.SortSpec) {
 	if len(sorts) == 0 {
 		return
 	}
@@ -381,19 +531,19 @@ func sortRows(rows []*pb.QueryViewRow, sorts []*pb.SortSpec) {
 			}
 			return cmp < 0
 		}
-		if rows[i].GetSubjectId() == rows[j].GetSubjectId() {
-			return rows[i].GetDataTime() < rows[j].GetDataTime()
+		if rows[i].GetKey().GetSubjectId() == rows[j].GetKey().GetSubjectId() {
+			return rows[i].GetKey().GetDataTime() < rows[j].GetKey().GetDataTime()
 		}
-		return rows[i].GetSubjectId() < rows[j].GetSubjectId()
+		return rows[i].GetKey().GetSubjectId() < rows[j].GetKey().GetSubjectId()
 	})
 }
 
-func projectColumns(columns []*pb.QueryViewColumn, includes []string) []*pb.QueryViewColumn {
+func projectColumns(columns []*pb.ResultColumn, includes []string) []*pb.ResultColumn {
 	if len(includes) == 0 {
 		return columns
 	}
 	allow := stringSet(includes)
-	out := make([]*pb.QueryViewColumn, 0, len(includes))
+	out := make([]*pb.ResultColumn, 0, len(includes))
 	for _, column := range columns {
 		if allow[column.GetColumnName()] {
 			out = append(out, column)
@@ -402,21 +552,20 @@ func projectColumns(columns []*pb.QueryViewColumn, includes []string) []*pb.Quer
 	return out
 }
 
-func projectRows(rows []*pb.QueryViewRow, includes []string) []*pb.QueryViewRow {
+func projectRows(rows []*pb.TimeSeriesRow, includes []string) []*pb.TimeSeriesRow {
 	if len(includes) == 0 {
 		return rows
 	}
 	allow := stringSet(includes)
-	out := make([]*pb.QueryViewRow, 0, len(rows))
+	out := make([]*pb.TimeSeriesRow, 0, len(rows))
 	for _, row := range rows {
-		projected := &pb.QueryViewRow{
-			SubjectId: row.GetSubjectId(),
-			DataTime:  row.GetDataTime(),
-			Values:    make([]*pb.ColumnValue, 0, len(includes)),
+		projected := &pb.TimeSeriesRow{
+			Key:     row.GetKey(),
+			Columns: make([]*pb.ColumnValue, 0, len(includes)),
 		}
-		for _, value := range row.GetValues() {
+		for _, value := range row.GetColumns() {
 			if allow[value.GetColumnName()] {
-				projected.Values = append(projected.Values, value)
+				projected.Columns = append(projected.Columns, value)
 			}
 		}
 		out = append(out, projected)
@@ -424,8 +573,8 @@ func projectRows(rows []*pb.QueryViewRow, includes []string) []*pb.QueryViewRow 
 	return out
 }
 
-func rowColumnValue(row *pb.QueryViewRow, name string) (*pb.TypedValue, bool) {
-	for _, value := range row.GetValues() {
+func rowColumnValue(row *pb.TimeSeriesRow, name string) (*pb.TypedValue, bool) {
+	for _, value := range row.GetColumns() {
 		if value.GetColumnName() == name {
 			return value.GetValue(), true
 		}
@@ -468,7 +617,7 @@ func typedValueString(value *pb.TypedValue) string {
 	return factvalue.String(value)
 }
 
-func pageRows(rows []*pb.QueryViewRow, page *pb.Page) ([]*pb.QueryViewRow, *pb.PageResult) {
+func pageRows(rows []*pb.TimeSeriesRow, page *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult) {
 	pageNo := uint32(1)
 	size := uint32(1000)
 	if page != nil {

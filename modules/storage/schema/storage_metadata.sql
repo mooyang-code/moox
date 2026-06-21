@@ -1,11 +1,11 @@
 -- moox storage metadata schema
 --
 -- 设计目标：
--- 1. Space 是业务命名空间；DataSource、Subject、DataSet、Field、Factor 和 View 都归属 Space。
--- 2. DataSet 描述可写事实数据集，并且只绑定一个 DataSource。
+-- 1. Space 是业务命名空间；DataSource、Subject、Dataset、Field、Factor 和 View 都归属 Space。
+-- 2. Dataset 描述可写事实数据集，并且只绑定一个 DataSource。
 -- 3. Subject 是 Space 内业务对象，不归属 DataSource；来源侧代码由 SubjectSymbol 管理。
 -- 4. View 是查询入口，必须指定 primary_dataset_id，物化结果按 c_query_window 异步构建。
--- 5. StorageRoute 只把在线事实主存路由到 StorageNode，不直接绑定 Device。
+-- 5. PrimaryStoreRoute 只把在线事实主存路由到 PrimaryStoreNode，不直接绑定 Device。
 -- 6. DuckDB、Bleve 和 Parquet 均从 Pebble 主存变更异步派生。
 
 PRAGMA foreign_keys = ON;
@@ -52,11 +52,18 @@ CREATE TABLE IF NOT EXISTS t_views (
     c_query_window TEXT NOT NULL DEFAULT '',
     c_active_result TEXT NOT NULL DEFAULT '',
     c_build_status TEXT NOT NULL DEFAULT 'pending',
+    c_view_version INTEGER NOT NULL DEFAULT 1,
+    c_active_view_version INTEGER NOT NULL DEFAULT 0,
+    c_building_view_version INTEGER NOT NULL DEFAULT 0,
+    c_building_result TEXT NOT NULL DEFAULT '',
+    c_build_error TEXT NOT NULL DEFAULT '',
+    c_build_started_at TEXT NOT NULL DEFAULT '',
+    c_build_finished_at TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'active',
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_engine IN ('duckdb')),
+    CHECK (c_engine IN ('duckdb', 'bleve')),
     CHECK (c_build_status IN ('pending', 'building', 'active', 'failed', 'disabled', 'archived', 'deleted')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -68,6 +75,7 @@ CREATE TABLE IF NOT EXISTS t_views (
 CREATE INDEX IF NOT EXISTS idx_t_views_space ON t_views (c_space_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_t_views_primary_dataset ON t_views (c_space_id, c_primary_dataset_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_t_views_build_status ON t_views (c_space_id, c_build_status);
+CREATE INDEX IF NOT EXISTS idx_t_views_version_pending ON t_views (c_space_id, c_status, c_view_version, c_active_view_version);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_views_mtime
 AFTER UPDATE ON t_views
@@ -196,7 +204,7 @@ BEGIN
     UPDATE t_subject_symbols SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- ************ DataSet、Field 与 Factor ************
+-- ************ Dataset、Field 与 Factor ************
 CREATE TABLE IF NOT EXISTS t_datasets (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
@@ -210,7 +218,7 @@ CREATE TABLE IF NOT EXISTS t_datasets (
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_data_kind IN ('object', 'time_series', 'snapshot', 'event', 'document', 'table')),
+    CHECK (c_data_kind IN ('record', 'time_series', 'snapshot', 'event', 'document', 'table')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (c_space_id, c_data_source_id) REFERENCES t_data_sources (c_space_id, c_data_source_id) ON DELETE RESTRICT ON UPDATE CASCADE,
@@ -241,7 +249,7 @@ CREATE TABLE IF NOT EXISTS t_dataset_subjects (
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_subject_role IN ('normal', 'benchmark', 'index', 'universe_member', 'object')),
+    CHECK (c_subject_role IN ('normal', 'benchmark', 'index', 'universe_member', 'record')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (c_space_id, c_subject_id) REFERENCES t_subjects (c_space_id, c_subject_id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -331,7 +339,6 @@ CREATE TABLE IF NOT EXISTS t_dataset_columns (
     c_required INTEGER NOT NULL DEFAULT 0,
     c_is_unique INTEGER NOT NULL DEFAULT 0,
     c_aliases_json TEXT NOT NULL DEFAULT '[]',
-    c_text_indexed INTEGER NOT NULL DEFAULT 0,
     c_status TEXT NOT NULL DEFAULT 'active',
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -340,7 +347,6 @@ CREATE TABLE IF NOT EXISTS t_dataset_columns (
     CHECK (c_value_type IN ('string', 'int', 'double', 'bool', 'time', 'json', 'bytes')),
     CHECK (c_required IN (0, 1)),
     CHECK (c_is_unique IN (0, 1)),
-    CHECK (c_text_indexed IN (0, 1)),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_dataset_id, c_column_name),
@@ -349,7 +355,6 @@ CREATE TABLE IF NOT EXISTS t_dataset_columns (
 
 CREATE INDEX IF NOT EXISTS idx_t_dataset_columns_dataset ON t_dataset_columns (c_space_id, c_dataset_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_t_dataset_columns_origin ON t_dataset_columns (c_space_id, c_origin_type, c_origin_id);
-CREATE INDEX IF NOT EXISTS idx_t_dataset_columns_text_indexed ON t_dataset_columns (c_space_id, c_dataset_id, c_text_indexed, c_status);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_dataset_columns_mtime
 AFTER UPDATE ON t_dataset_columns
@@ -360,7 +365,7 @@ BEGIN
 END;
 
 -- ************ 存储节点、设备、路由和归档 ************
-CREATE TABLE IF NOT EXISTS t_storage_nodes (
+CREATE TABLE IF NOT EXISTS t_primary_store_nodes (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_node_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
@@ -377,14 +382,14 @@ CREATE TABLE IF NOT EXISTS t_storage_nodes (
     UNIQUE (c_name)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_storage_nodes_status ON t_storage_nodes (c_status);
+CREATE INDEX IF NOT EXISTS idx_t_primary_store_nodes_status ON t_primary_store_nodes (c_status);
 
-CREATE TRIGGER IF NOT EXISTS trg_t_storage_nodes_mtime
-AFTER UPDATE ON t_storage_nodes
+CREATE TRIGGER IF NOT EXISTS trg_t_primary_store_nodes_mtime
+AFTER UPDATE ON t_primary_store_nodes
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_storage_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+    UPDATE t_primary_store_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
 CREATE TABLE IF NOT EXISTS t_storage_devices (
@@ -401,7 +406,7 @@ CREATE TABLE IF NOT EXISTS t_storage_devices (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_engine IN ('pebble', 'duckdb', 'bleve', 'parquet_archive')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
-    FOREIGN KEY (c_node_id) REFERENCES t_storage_nodes (c_node_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (c_node_id) REFERENCES t_primary_store_nodes (c_node_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE (c_device_id),
     UNIQUE (c_node_id, c_name)
 );
@@ -417,7 +422,7 @@ BEGIN
     UPDATE t_storage_devices SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
-CREATE TABLE IF NOT EXISTS t_storage_routes (
+CREATE TABLE IF NOT EXISTS t_primary_store_routes (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
     c_route_id TEXT NOT NULL,
@@ -434,20 +439,20 @@ CREATE TABLE IF NOT EXISTS t_storage_routes (
     CHECK (c_priority >= 0),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (c_node_id) REFERENCES t_storage_nodes (c_node_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (c_node_id) REFERENCES t_primary_store_nodes (c_node_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_route_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_storage_routes_lookup ON t_storage_routes (c_space_id, c_dataset_id, c_status, c_priority);
-CREATE INDEX IF NOT EXISTS idx_t_storage_routes_subject ON t_storage_routes (c_space_id, c_subject_id, c_status, c_priority);
-CREATE INDEX IF NOT EXISTS idx_t_storage_routes_node ON t_storage_routes (c_node_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_primary_store_routes_lookup ON t_primary_store_routes (c_space_id, c_dataset_id, c_status, c_priority);
+CREATE INDEX IF NOT EXISTS idx_t_primary_store_routes_subject ON t_primary_store_routes (c_space_id, c_subject_id, c_status, c_priority);
+CREATE INDEX IF NOT EXISTS idx_t_primary_store_routes_node ON t_primary_store_routes (c_node_id, c_status);
 
-CREATE TRIGGER IF NOT EXISTS trg_t_storage_routes_mtime
-AFTER UPDATE ON t_storage_routes
+CREATE TRIGGER IF NOT EXISTS trg_t_primary_store_routes_mtime
+AFTER UPDATE ON t_primary_store_routes
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_storage_routes SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+    UPDATE t_primary_store_routes SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
 CREATE TABLE IF NOT EXISTS t_archive_files (

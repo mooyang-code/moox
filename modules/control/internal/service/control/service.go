@@ -11,6 +11,7 @@ import (
 	"github.com/rs/xid"
 )
 
+// Service 表示 Control 模块的服务入口。
 type Service struct {
 	mu             sync.RWMutex
 	workspaces     map[string]*pb.WorkspaceSummary

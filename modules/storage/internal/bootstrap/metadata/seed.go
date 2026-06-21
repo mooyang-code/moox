@@ -22,20 +22,20 @@ type SeedOptions struct {
 
 // ImportResult 汇总各类元数据的导入数量，便于日志展示。
 type ImportResult struct {
-	Spaces          int
-	DataSources     int
-	Subjects        int
-	SubjectSymbols  int
-	DataSets        int
-	DataSetSubjects int
-	Fields          int
-	Factors         int
-	DataSetColumns  int
-	Views           int
-	ViewColumns     int
-	StorageNodes    int
-	Devices         int
-	StorageRoutes   int
+	Spaces             int
+	DataSources        int
+	Subjects           int
+	SubjectSymbols     int
+	Datasets           int
+	DatasetSubjects    int
+	Fields             int
+	Factors            int
+	DatasetColumns     int
+	Views              int
+	ViewColumns        int
+	PrimaryStoreNodes  int
+	Devices            int
+	PrimaryStoreRoutes int
 }
 
 // ImportSeed 读取领域型 metadata seed 文件，并按依赖顺序通过元数据控制面写入。
@@ -125,26 +125,26 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		result.SubjectSymbols++
 	}
 
-	for _, item := range seed.DataSets {
-		if _, err := store.UpsertDataSet(ctx, &pb.DataSet{
+	for _, item := range seed.Datasets {
+		if _, err := store.UpsertDataset(ctx, &pb.Dataset{
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, DataSourceId: item.DataSourceID,
 			Name: item.Name, Description: item.Description, DataKind: parseDataKind(item.DataKind),
 			Freqs: item.Freqs, Status: item.Status,
 		}); err != nil {
 			return result, seedErr("dataset", item.DatasetID, err)
 		}
-		result.DataSets++
+		result.Datasets++
 	}
 
-	for _, item := range seed.DataSetSubjects {
-		if _, err := store.BindDataSetSubject(ctx, &pb.DataSetSubject{
+	for _, item := range seed.DatasetSubjects {
+		if _, err := store.BindDatasetSubject(ctx, &pb.DatasetSubject{
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, SubjectId: item.SubjectID,
 			SubjectRole: item.SubjectRole, EffectiveStartTime: item.EffectiveStartTime,
 			EffectiveEndTime: item.EffectiveEndTime, Status: item.Status,
 		}); err != nil {
 			return result, seedErr("dataset_subject", item.DatasetID+"/"+item.SubjectID, err)
 		}
-		result.DataSetSubjects++
+		result.DatasetSubjects++
 	}
 
 	for _, item := range seed.Fields {
@@ -169,16 +169,16 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		result.Factors++
 	}
 
-	for _, item := range seed.DataSetColumns {
-		if _, err := store.UpsertDataSetColumn(ctx, &pb.DataSetColumn{
+	for _, item := range seed.DatasetColumns {
+		if _, err := store.UpsertDatasetColumn(ctx, &pb.DatasetColumn{
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, ColumnName: item.ColumnName,
-			OriginType: parseOriginType(item.OriginType), OriginId: item.OriginID,
+			OriginType: parseDatasetColumnOriginType(item.OriginType), OriginId: item.OriginID,
 			ValueType: parseValueType(item.ValueType), Required: item.Required, IsUnique: item.IsUnique,
-			Aliases: item.Aliases, TextIndexed: item.TextIndexed, Status: item.Status,
+			Aliases: item.Aliases, Status: item.Status,
 		}); err != nil {
 			return result, seedErr("dataset_column", item.DatasetID+"."+item.ColumnName, err)
 		}
-		result.DataSetColumns++
+		result.DatasetColumns++
 	}
 
 	for _, item := range seed.Views {
@@ -196,7 +196,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 	for _, item := range seed.ViewColumns {
 		if _, err := store.UpsertViewColumn(ctx, &pb.ViewColumn{
 			SpaceId: item.SpaceID, ViewId: item.ViewID, ColumnName: item.ColumnName,
-			OriginType: parseOriginType(item.OriginType), OriginId: item.OriginID,
+			OriginType: parseColumnOriginType(item.OriginType), OriginId: item.OriginID,
 			ValueType: parseValueType(item.ValueType), OnlineTime: item.OnlineTime, SortOrder: item.SortOrder,
 		}); err != nil {
 			return result, seedErr("view_column", item.ViewID+"."+item.ColumnName, err)
@@ -204,14 +204,14 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		result.ViewColumns++
 	}
 
-	for _, item := range seed.StorageNodes {
-		if _, err := store.UpsertStorageNode(ctx, &pb.StorageNode{
+	for _, item := range seed.PrimaryStoreNodes {
+		if _, err := store.UpsertPrimaryStoreNode(ctx, &pb.PrimaryStoreNode{
 			NodeId: item.NodeID, Name: item.Name, Endpoint: item.Endpoint, Weight: item.Weight,
 			Status: item.Status, ConfigJson: item.ConfigJSON,
 		}); err != nil {
 			return result, seedErr("storage_node", item.NodeID, err)
 		}
-		result.StorageNodes++
+		result.PrimaryStoreNodes++
 	}
 
 	for _, item := range seed.Devices {
@@ -224,15 +224,15 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		result.Devices++
 	}
 
-	for _, item := range seed.StorageRoutes {
-		if _, err := store.UpsertStorageRoute(ctx, &pb.StorageRoute{
+	for _, item := range seed.PrimaryStoreRoutes {
+		if _, err := store.UpsertPrimaryStoreRoute(ctx, &pb.PrimaryStoreRoute{
 			SpaceId: item.SpaceID, RouteId: item.RouteID, DatasetId: item.DatasetID,
 			SubjectId: item.SubjectID, SubjectPattern: item.SubjectPattern, HashRule: item.HashRule,
 			NodeId: item.NodeID, Priority: item.Priority, Status: item.Status,
 		}); err != nil {
 			return result, seedErr("storage_route", item.RouteID, err)
 		}
-		result.StorageRoutes++
+		result.PrimaryStoreRoutes++
 	}
 
 	return result, nil
@@ -265,8 +265,8 @@ func parseValueType(value string) pb.FieldValueType {
 
 func parseDataKind(value string) pb.DataKind {
 	switch value {
-	case "object":
-		return pb.DataKind_DATA_KIND_OBJECT
+	case "record":
+		return pb.DataKind_DATA_KIND_RECORD
 	case "time_series":
 		return pb.DataKind_DATA_KIND_TIME_SERIES
 	case "snapshot":
@@ -282,12 +282,21 @@ func parseDataKind(value string) pb.DataKind {
 	}
 }
 
-func parseOriginType(value string) pb.ColumnOriginType {
+func parseDatasetColumnOriginType(value string) pb.DatasetColumnOriginType {
 	switch value {
 	case "field":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FIELD
+		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD
 	case "factor":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FACTOR
+		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR
+	case "system":
+		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM
+	default:
+		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED
+	}
+}
+
+func parseColumnOriginType(value string) pb.ColumnOriginType {
+	switch value {
 	case "dataset_column":
 		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN
 	case "expression":
@@ -301,23 +310,25 @@ func parseOriginType(value string) pb.ColumnOriginType {
 
 // ---- seed 文件结构（领域型，与 config/metadata.seed.yaml 对应）----
 
+// seedFile 对应 metadata.seed.yaml 的顶层配置。
 type seedFile struct {
-	Spaces          []seedSpace          `yaml:"spaces"`
-	DataSources     []seedDataSource     `yaml:"data_sources"`
-	Subjects        []seedSubject        `yaml:"subjects"`
-	SubjectSymbols  []seedSubjectSymbol  `yaml:"subject_symbols"`
-	DataSets        []seedDataSet        `yaml:"datasets"`
-	DataSetSubjects []seedDataSetSubject `yaml:"dataset_subjects"`
-	Fields          []seedField          `yaml:"fields"`
-	Factors         []seedFactor         `yaml:"factors"`
-	DataSetColumns  []seedDataSetColumn  `yaml:"dataset_columns"`
-	Views           []seedView           `yaml:"views"`
-	ViewColumns     []seedViewColumn     `yaml:"view_columns"`
-	StorageNodes    []seedStorageNode    `yaml:"storage_nodes"`
-	Devices         []seedDevice         `yaml:"devices"`
-	StorageRoutes   []seedStorageRoute   `yaml:"storage_routes"`
+	Spaces             []seedSpace             `yaml:"spaces"`
+	DataSources        []seedDataSource        `yaml:"data_sources"`
+	Subjects           []seedSubject           `yaml:"subjects"`
+	SubjectSymbols     []seedSubjectSymbol     `yaml:"subject_symbols"`
+	Datasets           []seedDataset           `yaml:"datasets"`
+	DatasetSubjects    []seedDatasetSubject    `yaml:"dataset_subjects"`
+	Fields             []seedField             `yaml:"fields"`
+	Factors            []seedFactor            `yaml:"factors"`
+	DatasetColumns     []seedDatasetColumn     `yaml:"dataset_columns"`
+	Views              []seedView              `yaml:"views"`
+	ViewColumns        []seedViewColumn        `yaml:"view_columns"`
+	PrimaryStoreNodes  []seedPrimaryStoreNode  `yaml:"primary_store_nodes"`
+	Devices            []seedDevice            `yaml:"devices"`
+	PrimaryStoreRoutes []seedPrimaryStoreRoute `yaml:"primary_store_routes"`
 }
 
+// seedSpace 描述待初始化的 Space 元数据。
 type seedSpace struct {
 	SpaceID     string `yaml:"space_id"`
 	Name        string `yaml:"name"`
@@ -326,6 +337,7 @@ type seedSpace struct {
 	Status      string `yaml:"status"`
 }
 
+// seedDataSource 描述待初始化的数据源元数据。
 type seedDataSource struct {
 	SpaceID      string `yaml:"space_id"`
 	DataSourceID string `yaml:"data_source_id"`
@@ -337,6 +349,7 @@ type seedDataSource struct {
 	Status       string `yaml:"status"`
 }
 
+// seedSubject 描述待初始化的 Subject 元数据。
 type seedSubject struct {
 	SpaceID     string `yaml:"space_id"`
 	SubjectID   string `yaml:"subject_id"`
@@ -348,6 +361,7 @@ type seedSubject struct {
 	Status      string `yaml:"status"`
 }
 
+// seedSubjectSymbol 描述 Subject 与外部数据源符号的映射。
 type seedSubjectSymbol struct {
 	SpaceID        string `yaml:"space_id"`
 	SubjectID      string `yaml:"subject_id"`
@@ -356,7 +370,8 @@ type seedSubjectSymbol struct {
 	Status         string `yaml:"status"`
 }
 
-type seedDataSet struct {
+// seedDataset 描述待初始化的 Dataset 元数据。
+type seedDataset struct {
 	SpaceID      string   `yaml:"space_id"`
 	DatasetID    string   `yaml:"dataset_id"`
 	DataSourceID string   `yaml:"data_source_id"`
@@ -367,7 +382,8 @@ type seedDataSet struct {
 	Status       string   `yaml:"status"`
 }
 
-type seedDataSetSubject struct {
+// seedDatasetSubject 描述 Dataset 与 Subject 的绑定关系。
+type seedDatasetSubject struct {
 	SpaceID            string `yaml:"space_id"`
 	DatasetID          string `yaml:"dataset_id"`
 	SubjectID          string `yaml:"subject_id"`
@@ -377,6 +393,7 @@ type seedDataSetSubject struct {
 	Status             string `yaml:"status"`
 }
 
+// seedField 描述待初始化的字段定义。
 type seedField struct {
 	SpaceID            string `yaml:"space_id"`
 	FieldID            string `yaml:"field_id"`
@@ -389,6 +406,7 @@ type seedField struct {
 	Status             string `yaml:"status"`
 }
 
+// seedFactor 描述待初始化的因子定义。
 type seedFactor struct {
 	SpaceID     string `yaml:"space_id"`
 	FactorID    string `yaml:"factor_id"`
@@ -400,20 +418,21 @@ type seedFactor struct {
 	Status      string `yaml:"status"`
 }
 
-type seedDataSetColumn struct {
-	SpaceID     string   `yaml:"space_id"`
-	DatasetID   string   `yaml:"dataset_id"`
-	ColumnName  string   `yaml:"column_name"`
-	OriginType  string   `yaml:"origin_type"`
-	OriginID    string   `yaml:"origin_id"`
-	ValueType   string   `yaml:"value_type"`
-	Required    bool     `yaml:"required"`
-	IsUnique    bool     `yaml:"is_unique"`
-	Aliases     []string `yaml:"aliases"`
-	TextIndexed bool     `yaml:"text_indexed"`
-	Status      string   `yaml:"status"`
+// seedDatasetColumn 描述 Dataset 中可写入的列定义。
+type seedDatasetColumn struct {
+	SpaceID    string   `yaml:"space_id"`
+	DatasetID  string   `yaml:"dataset_id"`
+	ColumnName string   `yaml:"column_name"`
+	OriginType string   `yaml:"origin_type"`
+	OriginID   string   `yaml:"origin_id"`
+	ValueType  string   `yaml:"value_type"`
+	Required   bool     `yaml:"required"`
+	IsUnique   bool     `yaml:"is_unique"`
+	Aliases    []string `yaml:"aliases"`
+	Status     string   `yaml:"status"`
 }
 
+// seedView 描述待初始化的 View 定义。
 type seedView struct {
 	SpaceID          string   `yaml:"space_id"`
 	ViewID           string   `yaml:"view_id"`
@@ -429,6 +448,7 @@ type seedView struct {
 	Status           string   `yaml:"status"`
 }
 
+// seedViewColumn 描述 View 中对外可查询的结果列。
 type seedViewColumn struct {
 	SpaceID    string `yaml:"space_id"`
 	ViewID     string `yaml:"view_id"`
@@ -440,7 +460,8 @@ type seedViewColumn struct {
 	SortOrder  uint32 `yaml:"sort_order"`
 }
 
-type seedStorageNode struct {
+// seedPrimaryStoreNode 描述待初始化的主存节点。
+type seedPrimaryStoreNode struct {
 	NodeID     string `yaml:"node_id"`
 	Name       string `yaml:"name"`
 	Endpoint   string `yaml:"endpoint"`
@@ -449,6 +470,7 @@ type seedStorageNode struct {
 	Status     string `yaml:"status"`
 }
 
+// seedDevice 描述待初始化的物理存储设备。
 type seedDevice struct {
 	DeviceID   string `yaml:"device_id"`
 	NodeID     string `yaml:"node_id"`
@@ -459,7 +481,8 @@ type seedDevice struct {
 	Status     string `yaml:"status"`
 }
 
-type seedStorageRoute struct {
+// seedPrimaryStoreRoute 描述待初始化的主存路由。
+type seedPrimaryStoreRoute struct {
 	SpaceID        string `yaml:"space_id"`
 	RouteID        string `yaml:"route_id"`
 	DatasetID      string `yaml:"dataset_id"`

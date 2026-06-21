@@ -45,6 +45,7 @@ type AsyncJobTaskDAO interface {
 	SetTaskCompleted(ctx context.Context, taskID string, status int, resultData, errorMessage string) error
 }
 
+// asyncJobTaskDAOImpl 实现异步任务子任务表的数据访问逻辑。
 type asyncJobTaskDAOImpl struct {
 	db *gorm.DB
 }

@@ -3,198 +3,353 @@ package access
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
+	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	searchsvc "github.com/mooyang-code/moox/modules/storage/internal/services/search"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/rs/xid"
 	"google.golang.org/protobuf/proto"
 )
 
-const rebuildSearchIndexPageSize = 1000
+const rebuildViewPageSize = 1000
 
-func (s *Service) QueryView(ctx context.Context, req *pb.QueryViewReq) (*pb.QueryViewRsp, error) {
+func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
 	if req.GetViewId() == "" {
-		return &pb.QueryViewRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, errText("view_id is required"))}, nil
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, errText("view_id is required"))}, nil
 	}
 	view, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
 	if err != nil {
-		return &pb.QueryViewRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
+	}
+	if err := s.validateTimeSeriesView(ctx, view); err != nil {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if view.GetActiveResult() == "" {
-		return &pb.QueryViewRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, errText("view active_result is empty"))}, nil
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, errText("view active_result is empty"))}, nil
 	}
 	viewStore, err := s.viewStore()
 	if err != nil {
-		return &pb.QueryViewRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	columns, rows, page, err := viewStore.QueryView(ctx, view.GetActiveResult(), req)
+	columns, rows, page, err := viewStore.QueryTimeSeriesRows(ctx, view.GetActiveResult(), req)
 	if err != nil {
-		return &pb.QueryViewRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	return &pb.QueryViewRsp{RetInfo: response.Success("success"), Columns: columns, Rows: rows, PageResult: page}, nil
+	return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Success("success"), Columns: columns, Rows: rows, PageResult: page}, nil
 }
 
-func (s *Service) SearchRows(ctx context.Context, req *pb.SearchRowsReq) (*pb.SearchRowsRsp, error) {
-	if req.GetDatasetId() == "" {
-		return &pb.SearchRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("dataset_id is required"))}, nil
+func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
+	if strings.TrimSpace(req.GetViewId()) == "" {
+		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view_id is required"))}, nil
 	}
-	rows, _, err := s.search.SearchRows(ctx, searchsvc.SearchRequest{
-		SpaceID:    req.GetSpaceId(),
-		DatasetID:  req.GetDatasetId(),
-		SubjectIDs: req.GetSubjectIds(),
-		TextQuery:  req.GetTextQuery(),
-		TimeRange:  req.GetTimeRange(),
+	view, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+	if err != nil {
+		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
+	}
+	if err := s.validateRecordView(ctx, view); err != nil {
+		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	if view.GetActiveResult() == "" {
+		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, errors.New("view active_result is empty"))}, nil
+	}
+	datasetID := view.GetPrimaryDatasetId()
+	if strings.TrimSpace(datasetID) == "" {
+		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view primary_dataset_id is required"))}, nil
+	}
+	viewColumns, _, err := s.metadataReader.ListViewColumns(ctx, req.GetSpaceId(), req.GetViewId(), &pb.Page{Size: 10000})
+	if err != nil {
+		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	keys, err := normalizeRecordSearchKeys(req.GetSpaceId(), datasetID, req.GetKeys())
+	if err != nil {
+		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	recordIDs := make([]string, 0, len(keys))
+	for _, key := range keys {
+		recordIDs = append(recordIDs, key.GetRecordId())
+	}
+	rows, _, err := s.search.SearchRecordRows(ctx, searchsvc.SearchRequest{
+		ResultName:   view.GetActiveResult(),
+		SpaceID:      req.GetSpaceId(),
+		DatasetID:    datasetID,
+		RecordIDs:    recordIDs,
+		TextQuery:    req.GetTextQuery(),
+		VersionRange: req.GetVersionRange(),
 	})
 	if err != nil {
-		return &pb.SearchRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	var matched []*pb.DataRow
+	var matched []*pb.RecordRow
 	for _, row := range rows {
-		if rowMatchesFilters(row, req.GetFilters()) {
-			matched = append(matched, projectRowColumns(row, req.GetColumnNames()))
+		if recordRowMatchesSearchKeys(row, keys, req.GetVersionRange() != nil) && recordRowMatchesFilters(row, req.GetFilters()) {
+			matched = append(matched, projectRecordRowColumns(row, req.GetColumnNames()))
 		}
 	}
-	sortSearchRows(matched, req.GetSorts())
-	paged, page := pageSlice(matched, req.GetPage())
-	return &pb.SearchRowsRsp{RetInfo: response.Success("success"), Rows: paged, PageResult: page}, nil
+	sortSearchRecordRows(matched, req.GetSorts())
+	paged, page := pageRecordRows(matched, req.GetPage())
+	return &pb.SearchRecordRowsRsp{RetInfo: response.Success("success"), Columns: projectResultColumns(viewColumns, req.GetColumnNames()), Rows: paged, PageResult: page}, nil
 }
 
-func (s *Service) RebuildSearchIndex(ctx context.Context, req *pb.RebuildSearchIndexReq) (*pb.RebuildSearchIndexRsp, error) {
-	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
-		return &pb.RebuildSearchIndexRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+func (s *Service) RebuildTimeSeriesView(ctx context.Context, req *pb.RebuildTimeSeriesViewReq) (*pb.RebuildTimeSeriesViewRsp, error) {
+	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
+		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
 	}
-	subjectIDs, err := s.rebuildSearchIndexSubjects(ctx, req)
+	viewMeta, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
 	if err != nil {
-		return &pb.RebuildSearchIndexRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
 	}
-	if len(subjectIDs) == 0 {
-		return &pb.RebuildSearchIndexRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("subject_ids are required when dataset has no subject bindings"))}, nil
-	}
-	if err := s.requireDataSetSubjectsBound(ctx, req.GetSpaceId(), req.GetDatasetId(), subjectIDs); err != nil {
-		return &pb.RebuildSearchIndexRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	if err := s.validateTimeSeriesView(ctx, viewMeta); err != nil {
+		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	rebuildID := xid.New().String()
-	rebuildReq := proto.Clone(req).(*pb.RebuildSearchIndexReq)
+	rebuildReq := proto.Clone(req).(*pb.RebuildTimeSeriesViewReq)
 	s.indexMu.Lock()
 	if s.closing {
 		s.indexMu.Unlock()
-		return &pb.RebuildSearchIndexRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("service is closing"))}, nil
+		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("service is closing"))}, nil
 	}
 	s.indexWG.Add(1)
 	s.indexMu.Unlock()
 	go func() {
 		defer s.indexWG.Done()
-		if _, err := s.rebuildSearchIndex(context.WithoutCancel(ctx), rebuildReq, subjectIDs); err != nil {
-			s.reportDerivedError(ctx, "search_rebuild_index", err)
+		if err := s.rebuildTimeSeriesView(context.WithoutCancel(ctx), rebuildReq); err != nil {
+			s.reportViewError(ctx, "time_series_view_rebuild", err)
 		}
 	}()
-	return &pb.RebuildSearchIndexRsp{RetInfo: response.Success("rebuild accepted"), RebuildId: rebuildID}, nil
+	return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Success("rebuild accepted"), RebuildId: rebuildID}, nil
 }
 
-func (s *Service) rebuildSearchIndex(ctx context.Context, req *pb.RebuildSearchIndexReq, subjectIDs []string) (uint64, error) {
-	var indexed uint64
-	for _, subjectID := range subjectIDs {
-		cursor := ""
-		for {
-			readRsp, err := s.ReadRows(ctx, &pb.ReadRowsReq{
-				AuthInfo: req.GetAuthInfo(),
-				Scope: &pb.DataScope{
-					SpaceId:    req.GetSpaceId(),
-					DatasetId:  req.GetDatasetId(),
-					SubjectId:  subjectID,
-					Freq:       req.GetFreq(),
-					Dimensions: req.GetDimensions(),
-				},
-				ReadMode:  pb.ReadMode_READ_MODE_RANGE,
-				TimeRange: req.GetTimeRange(),
-				Page:      &pb.Page{Size: rebuildSearchIndexPageSize, Cursor: cursor},
-			})
-			if err != nil {
-				return indexed, err
-			}
-			if readRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-				return indexed, errText(readRsp.GetRetInfo().GetMsg())
-			}
-			if len(readRsp.GetRows()) > 0 {
-				if err := s.search.IndexRows(ctx, readRsp.GetRows()); err != nil {
-					return indexed, err
-				}
-				indexed += uint64(len(readRsp.GetRows()))
-			}
-			page := readRsp.GetPageResult()
-			if !page.GetHasMore() || page.GetNextCursor() == "" {
-				break
-			}
-			cursor = page.GetNextCursor()
+func (s *Service) RebuildRecordView(ctx context.Context, req *pb.RebuildRecordViewReq) (*pb.RebuildRecordViewRsp, error) {
+	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
+		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
+	}
+	viewMeta, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+	if err != nil {
+		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
+	}
+	if err := s.validateRecordView(ctx, viewMeta); err != nil {
+		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	rebuildID := xid.New().String()
+	rebuildReq := proto.Clone(req).(*pb.RebuildRecordViewReq)
+	s.indexMu.Lock()
+	if s.closing {
+		s.indexMu.Unlock()
+		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("service is closing"))}, nil
+	}
+	s.indexWG.Add(1)
+	s.indexMu.Unlock()
+	go func() {
+		defer s.indexWG.Done()
+		if err := s.rebuildRecordView(context.WithoutCancel(ctx), rebuildReq); err != nil {
+			s.reportViewError(ctx, "record_view_rebuild", err)
 		}
-	}
-	return indexed, nil
+	}()
+	return &pb.RebuildRecordViewRsp{RetInfo: response.Success("rebuild accepted"), RebuildId: rebuildID}, nil
 }
 
-func (s *Service) rebuildSearchIndexSubjects(ctx context.Context, req *pb.RebuildSearchIndexReq) ([]string, error) {
-	if len(req.GetSubjectIds()) > 0 {
-		return uniqueNonEmpty(req.GetSubjectIds()), nil
+func (s *Service) rebuildTimeSeriesView(ctx context.Context, req *pb.RebuildTimeSeriesViewReq) error {
+	views, err := s.viewStore()
+	if err != nil {
+		return err
 	}
-	const pageSize = 1000
-	var subjects []string
-	for pageNo := uint32(1); ; pageNo++ {
-		bindings, page, err := s.metadata.ListDataSetSubjectsPage(ctx, req.GetSpaceId(), req.GetDatasetId(), "", &pb.Page{Page: pageNo, Size: pageSize})
+	builder := view.NewBuilder(view.Options{
+		Metadata: s.metadata,
+		Facts:    s.primaryFactReader(),
+		Views:    views,
+		OnBuildStarted: func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) {
+			s.startViewDirtyTracking(pb.DataKind_DATA_KIND_TIME_SERIES, item, targetVersion, resultName)
+		},
+		BeforeComplete: func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) error {
+			return s.drainTimeSeriesDirty(ctx, viewDirtyHandle(pb.DataKind_DATA_KIND_TIME_SERIES, item.GetSpaceId(), item.GetViewId(), targetVersion, resultName))
+		},
+		OnBuildFinished: func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) {
+			s.stopViewDirtyTracking(viewDirtyHandle(pb.DataKind_DATA_KIND_TIME_SERIES, item.GetSpaceId(), item.GetViewId(), targetVersion, resultName))
+		},
+	})
+	_, err = builder.BuildView(ctx, req.GetSpaceId(), req.GetViewId())
+	return err
+}
+
+func (s *Service) rebuildRecordView(ctx context.Context, req *pb.RebuildRecordViewReq) error {
+	view, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+	if err != nil {
+		return err
+	}
+	if err := s.validateRecordView(ctx, view); err != nil {
+		return err
+	}
+	if strings.TrimSpace(view.GetPrimaryDatasetId()) == "" {
+		return errors.New("view primary_dataset_id is required")
+	}
+	target, err := s.router.Resolve(ctx, req.GetSpaceId(), view.GetPrimaryDatasetId(), "")
+	if err != nil {
+		return err
+	}
+	columns, _, err := s.metadataReader.ListViewColumns(ctx, req.GetSpaceId(), req.GetViewId(), &pb.Page{Size: 10000})
+	if err != nil {
+		return err
+	}
+	if !isProjectableRecordView(view, columns) {
+		return fmt.Errorf("record view %s/%s contains unsupported columns for bleve projection", req.GetSpaceId(), req.GetViewId())
+	}
+	targetVersion := view.GetViewVersion()
+	if targetVersion == 0 {
+		targetVersion = 1
+	}
+	resultName := searchsvc.RecordIndexName(req.GetSpaceId(), req.GetViewId(), targetVersion, time.Now().UTC())
+	if _, err := s.metadata.BeginViewBuild(ctx, req.GetSpaceId(), req.GetViewId(), targetVersion, resultName); err != nil {
+		return err
+	}
+	if err := s.search.IndexRecordViewRows(ctx, resultName, columns, nil); err != nil {
+		_ = s.metadata.FailViewBuild(ctx, req.GetSpaceId(), req.GetViewId(), targetVersion, resultName, err)
+		return err
+	}
+	dirtyHandle := s.startViewDirtyTracking(pb.DataKind_DATA_KIND_RECORD, view, targetVersion, resultName)
+	defer s.stopViewDirtyTracking(dirtyHandle)
+	failBuild := func(buildErr error) error {
+		_ = s.metadata.FailViewBuild(ctx, req.GetSpaceId(), req.GetViewId(), targetVersion, resultName, buildErr)
+		return buildErr
+	}
+	cursor := ""
+	for {
+		rows, page, err := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{
+			Target:   target,
+			DataKind: pb.DataKind_DATA_KIND_RECORD,
+			Page:     &pb.Page{Size: rebuildViewPageSize, Cursor: cursor},
+		})
 		if err != nil {
-			return nil, err
+			return failBuild(err)
 		}
-		for _, binding := range bindings {
-			if subjectID := strings.TrimSpace(binding.GetSubjectId()); subjectID != "" {
-				subjects = append(subjects, subjectID)
+		if len(rows) > 0 {
+			recordRows := make([]*pb.RecordRow, 0, len(rows))
+			for _, row := range rows {
+				recordRows = append(recordRows, primaryStoreRowToRecordRow(row, nil))
+			}
+			projected, ok := recordRowsForView(view, columns, recordRows)
+			if !ok {
+				return failBuild(fmt.Errorf("record view %s/%s contains unsupported columns for bleve projection", req.GetSpaceId(), req.GetViewId()))
+			}
+			if err := s.search.IndexRecordViewRows(ctx, resultName, columns, projected); err != nil {
+				return failBuild(err)
 			}
 		}
-		if !page.GetHasMore() {
+		if !page.GetHasMore() || page.GetNextCursor() == "" {
 			break
 		}
+		cursor = page.GetNextCursor()
 	}
-	return uniqueNonEmpty(subjects), nil
+	if err := s.drainRecordDirty(ctx, dirtyHandle, columns); err != nil {
+		return failBuild(err)
+	}
+	return s.metadata.CompleteViewBuild(ctx, req.GetSpaceId(), req.GetViewId(), targetVersion, resultName)
 }
 
-func (s *Service) requireDataSetSubjectsBound(ctx context.Context, spaceID string, datasetID string, subjectIDs []string) error {
-	for _, subjectID := range subjectIDs {
-		bindings, _, err := s.metadata.ListDataSetSubjectsPage(ctx, spaceID, datasetID, subjectID, &pb.Page{Page: 1, Size: 1})
-		if err != nil {
-			return err
-		}
-		if len(bindings) == 0 {
-			return errors.New("subject " + subjectID + " is not bound to dataset " + datasetID)
-		}
+func (s *Service) validateTimeSeriesView(ctx context.Context, view *pb.View) error {
+	if view == nil {
+		return errors.New("view is required")
+	}
+	if !strings.EqualFold(strings.TrimSpace(view.GetEngine()), "duckdb") {
+		return fmt.Errorf("time series view %s requires duckdb engine", view.GetViewId())
+	}
+	dataset, err := s.metadataReader.GetDataset(ctx, view.GetSpaceId(), view.GetPrimaryDatasetId())
+	if err != nil {
+		return err
+	}
+	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
+		return fmt.Errorf("time series view %s requires time series primary dataset", view.GetViewId())
 	}
 	return nil
 }
 
-func uniqueNonEmpty(values []string) []string {
-	seen := make(map[string]bool, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
+func (s *Service) validateRecordView(ctx context.Context, view *pb.View) error {
+	if view == nil {
+		return errors.New("view is required")
 	}
-	return out
+	if !strings.EqualFold(strings.TrimSpace(view.GetEngine()), "bleve") {
+		return fmt.Errorf("record view %s requires bleve engine", view.GetViewId())
+	}
+	dataset, err := s.metadataReader.GetDataset(ctx, view.GetSpaceId(), view.GetPrimaryDatasetId())
+	if err != nil {
+		return err
+	}
+	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_RECORD {
+		return fmt.Errorf("record view %s requires record primary dataset", view.GetViewId())
+	}
+	return nil
 }
 
-func rowMatchesFilters(row *pb.DataRow, filters []*pb.FilterExpr) bool {
+func normalizeRecordSearchKeys(spaceID string, datasetID string, keys []*pb.RecordKey) ([]*pb.RecordKey, error) {
+	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
+		return nil, errors.New("space_id and dataset_id are required")
+	}
+	out := make([]*pb.RecordKey, 0, len(keys))
+	for _, key := range keys {
+		if key == nil {
+			continue
+		}
+		copied := proto.Clone(key).(*pb.RecordKey)
+		if copied.GetSpaceId() == "" {
+			copied.SpaceId = spaceID
+		}
+		if copied.GetDatasetId() == "" {
+			copied.DatasetId = datasetID
+		}
+		if copied.GetSpaceId() != spaceID || copied.GetDatasetId() != datasetID {
+			return nil, errors.New("record key must belong to the query view primary dataset")
+		}
+		if copied.GetRecordId() != "" {
+			out = append(out, copied)
+		}
+	}
+	return out, nil
+}
+
+func recordRowMatchesSearchKeys(row *pb.RecordRow, keys []*pb.RecordKey, versionRangeMode bool) bool {
+	if len(keys) == 0 {
+		return true
+	}
+	rowKey := row.GetKey()
+	for _, key := range keys {
+		if key.GetRecordId() != rowKey.GetRecordId() {
+			continue
+		}
+		if recordVersionMatches(rowKey.GetVersion(), key.GetVersion(), versionRangeMode) {
+			return true
+		}
+	}
+	return false
+}
+
+func recordVersionMatches(rowVersion string, wantVersion string, versionRangeMode bool) bool {
+	rowVersion = strings.TrimSpace(rowVersion)
+	wantVersion = strings.TrimSpace(wantVersion)
+	if wantVersion == "" {
+		if versionRangeMode {
+			return true
+		}
+		return rowVersion == "" || rowVersion == factkey.EmptyVersion
+	}
+	return factkey.NormalizeVersion(rowVersion) == factkey.NormalizeVersion(wantVersion)
+}
+
+func recordRowMatchesFilters(row *pb.RecordRow, filters []*pb.FilterExpr) bool {
 	for _, filter := range filters {
-		if !rowMatchesFilter(row, filter) {
+		if !recordRowMatchesFilter(row, filter) {
 			return false
 		}
 	}
 	return true
 }
 
-func rowMatchesFilter(row *pb.DataRow, filter *pb.FilterExpr) bool {
+func recordRowMatchesFilter(row *pb.RecordRow, filter *pb.FilterExpr) bool {
 	if filter == nil || strings.TrimSpace(filter.GetExpr()) == "" {
 		return true
 	}
@@ -202,7 +357,7 @@ func rowMatchesFilter(row *pb.DataRow, filter *pb.FilterExpr) bool {
 	if !ok {
 		return false
 	}
-	rowValue, ok := rowColumnValue(row, left)
+	rowValue, ok := recordRowColumnValue(row, left)
 	if !ok {
 		return false
 	}
@@ -228,7 +383,7 @@ func parseSimpleFilter(expr string) (left, op, right string, ok bool) {
 	return "", "", "", false
 }
 
-func rowColumnValue(row *pb.DataRow, name string) (*pb.TypedValue, bool) {
+func recordRowColumnValue(row *pb.RecordRow, name string) (*pb.TypedValue, bool) {
 	for _, column := range row.GetColumns() {
 		if column.GetColumnName() == name {
 			return column.GetValue(), true
@@ -257,7 +412,7 @@ func compareTypedValues(left, right *pb.TypedValue, op string) bool {
 	}
 }
 
-func projectRowColumns(row *pb.DataRow, includes []string) *pb.DataRow {
+func projectRecordRowColumns(row *pb.RecordRow, includes []string) *pb.RecordRow {
 	if len(includes) == 0 {
 		return row
 	}
@@ -265,7 +420,7 @@ func projectRowColumns(row *pb.DataRow, includes []string) *pb.DataRow {
 	for _, name := range includes {
 		allow[name] = true
 	}
-	filtered := proto.Clone(row).(*pb.DataRow)
+	filtered := proto.Clone(row).(*pb.RecordRow)
 	filtered.Columns = filtered.Columns[:0]
 	for _, column := range row.GetColumns() {
 		if allow[column.GetColumnName()] {
@@ -275,16 +430,49 @@ func projectRowColumns(row *pb.DataRow, includes []string) *pb.DataRow {
 	return filtered
 }
 
-func sortSearchRows(rows []*pb.DataRow, sorts []*pb.SortSpec) {
+func projectResultColumns(columns []*pb.ViewColumn, includes []string) []*pb.ResultColumn {
+	allow := map[string]bool(nil)
+	if len(includes) > 0 {
+		allow = make(map[string]bool, len(includes))
+		for _, name := range includes {
+			allow[name] = true
+		}
+	}
+	out := make([]*pb.ResultColumn, 0, len(columns))
+	for _, column := range columns {
+		if allow != nil && !allow[column.GetColumnName()] {
+			continue
+		}
+		out = append(out, &pb.ResultColumn{
+			ColumnName: column.GetColumnName(),
+			OriginType: column.GetOriginType(),
+			DatasetId:  viewColumnDatasetID(column),
+			OriginId:   column.GetOriginId(),
+			ValueType:  column.GetValueType(),
+		})
+	}
+	return out
+}
+
+func viewColumnDatasetID(column *pb.ViewColumn) string {
+	originID := column.GetOriginId()
+	if before, _, ok := strings.Cut(originID, "."); ok {
+		return before
+	}
+	return ""
+}
+
+func sortSearchRecordRows(rows []*pb.RecordRow, sorts []*pb.SortSpec) {
 	if len(sorts) == 0 {
+		sortRecordRows(rows)
 		return
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
 		for _, spec := range sorts {
-			left, _ := rowColumnValue(rows[i], spec.GetFieldName())
-			right, _ := rowColumnValue(rows[j], spec.GetFieldName())
-			leftText := typedValueString(left)
-			rightText := typedValueString(right)
+			left, _ := recordRowColumnValue(rows[i], spec.GetFieldName())
+			right, _ := recordRowColumnValue(rows[j], spec.GetFieldName())
+			leftText := factvalue.String(left)
+			rightText := factvalue.String(right)
 			if leftText == rightText {
 				continue
 			}
@@ -293,15 +481,13 @@ func sortSearchRows(rows []*pb.DataRow, sorts []*pb.SortSpec) {
 			}
 			return leftText < rightText
 		}
-		if rows[i].GetKey().GetScope().GetSubjectId() == rows[j].GetKey().GetScope().GetSubjectId() {
-			return rows[i].GetKey().GetDataTime() < rows[j].GetKey().GetDataTime()
+		left := rows[i].GetKey()
+		right := rows[j].GetKey()
+		if left.GetRecordId() == right.GetRecordId() {
+			return left.GetVersion() < right.GetVersion()
 		}
-		return rows[i].GetKey().GetScope().GetSubjectId() < rows[j].GetKey().GetScope().GetSubjectId()
+		return left.GetRecordId() < right.GetRecordId()
 	})
-}
-
-func typedValueString(value *pb.TypedValue) string {
-	return factvalue.String(value)
 }
 
 func errText(msg string) error {

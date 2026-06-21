@@ -1,9 +1,11 @@
 package service
 
+// Service 表示 Account 模块的服务实现。
 type Service struct {
 	module string
 }
 
+// Health 表示 Account 模块的健康检查处理器。
 type Health struct {
 	Module string `json:"module"`
 	Ready  bool   `json:"ready"`

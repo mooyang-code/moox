@@ -13,21 +13,20 @@ func TestMemoryBusRecordsRowsChangedEvent(t *testing.T) {
 	ctx := context.Background()
 	bus := eventbus.NewMemoryBus()
 
-	err := bus.PublishRowsChanged(ctx, &pb.DataRowsChangedEvent{
-		Scope:     &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT"},
+	err := bus.PublishRecordRowsChanged(ctx, &pb.RecordRowsChangedEvent{
 		EventTime: "2026-06-15T00:00:00+08:00",
-		Rows:      []*pb.DataRow{{Key: &pb.DataKey{DataTime: "2026-06-15T00:00:00+08:00"}}},
+		Keys:      []*pb.RecordKey{{SpaceId: "crypto", DatasetId: "symbols", RecordId: "APT-USDT"}},
 	})
 
 	require.NoError(t, err)
-	require.Len(t, bus.Events(), 1)
+	require.Len(t, bus.RecordEvents(), 1)
 }
 
 func TestMemoryBusRowsChangedSubscriptionCanClose(t *testing.T) {
 	ctx := context.Background()
 	bus := eventbus.NewMemoryBus()
 	var called int
-	sub, err := bus.SubscribeRowsChanged(ctx, func(ctx context.Context, event *pb.DataRowsChangedEvent) error {
+	sub, err := bus.SubscribeTimeSeriesRowsChanged(ctx, func(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
 		_ = ctx
 		_ = event
 		called++
@@ -35,17 +34,17 @@ func TestMemoryBusRowsChangedSubscriptionCanClose(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = bus.PublishRowsChanged(ctx, &pb.DataRowsChangedEvent{
+	err = bus.PublishTimeSeriesRowsChanged(ctx, &pb.TimeSeriesRowsChangedEvent{
 		EventId: "evt-1",
-		Scope:   &pb.DataScope{SpaceId: "crypto", DatasetId: "kline"},
+		Keys:    []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, called)
 
 	require.NoError(t, sub.Close())
-	err = bus.PublishRowsChanged(ctx, &pb.DataRowsChangedEvent{
+	err = bus.PublishTimeSeriesRowsChanged(ctx, &pb.TimeSeriesRowsChangedEvent{
 		EventId: "evt-2",
-		Scope:   &pb.DataScope{SpaceId: "crypto", DatasetId: "kline"},
+		Keys:    []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, called)

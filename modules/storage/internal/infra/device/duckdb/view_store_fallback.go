@@ -12,17 +12,21 @@ import (
 	"sync"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
+	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"google.golang.org/protobuf/proto"
 )
 
+// Options 保存无 DuckDB 构建环境下的占位配置。
 type Options struct {
 	Path string
 }
 
+// ViewStore 是无 DuckDB 构建环境下的占位实现。
 type ViewStore struct {
 	mu      sync.Mutex
-	columns map[string][]*pb.QueryViewColumn
-	rows    map[string][]*pb.QueryViewRow
+	columns map[string][]*pb.ResultColumn
+	rows    map[string][]*pb.TimeSeriesRow
 }
 
 func Open(opts Options) (*ViewStore, error) {
@@ -30,8 +34,8 @@ func Open(opts Options) (*ViewStore, error) {
 		return nil, errors.New("duckdb path is required")
 	}
 	return &ViewStore{
-		columns: make(map[string][]*pb.QueryViewColumn),
-		rows:    make(map[string][]*pb.QueryViewRow),
+		columns: make(map[string][]*pb.ResultColumn),
+		rows:    make(map[string][]*pb.TimeSeriesRow),
 	}, nil
 }
 
@@ -50,11 +54,23 @@ func (s *ViewStore) CreateResultTable(ctx context.Context, tableName string, col
 	return nil
 }
 
-func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb.QueryViewRow) error {
+func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb.TimeSeriesRow) error {
 	_ = ctx
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.rows[tableName] = append(s.rows[tableName], rows...)
+	positions := make(map[string]int, len(s.rows[tableName]))
+	for idx, row := range s.rows[tableName] {
+		positions[timeSeriesRowKey(row)+"|"+row.GetKey().GetDataTime()] = idx
+	}
+	for _, row := range rows {
+		key := timeSeriesRowKey(row) + "|" + row.GetKey().GetDataTime()
+		if idx, ok := positions[key]; ok {
+			s.rows[tableName][idx] = mergeTimeSeriesRow(s.rows[tableName][idx], row)
+			continue
+		}
+		positions[key] = len(s.rows[tableName])
+		s.rows[tableName] = append(s.rows[tableName], proto.Clone(row).(*pb.TimeSeriesRow))
+	}
 	return nil
 }
 
@@ -64,12 +80,46 @@ func (s *ViewStore) ListResultTables(ctx context.Context) ([]string, error) {
 	defer s.mu.Unlock()
 	out := make([]string, 0, len(s.rows))
 	for tableName := range s.rows {
-		if strings.HasPrefix(tableName, "view_result_") {
+		if strings.HasPrefix(tableName, "ts_view_") || strings.HasPrefix(tableName, "view_result_") {
 			out = append(out, tableName)
 		}
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+func timeSeriesRowKey(row *pb.TimeSeriesRow) string {
+	key := row.GetKey()
+	return key.GetDatasetId() + "|" + factkey.BuildTimeSeriesDataKey(key.GetSubjectId(), key.GetFreq(), key.GetDimensions())
+}
+
+func mergeTimeSeriesRow(base *pb.TimeSeriesRow, patch *pb.TimeSeriesRow) *pb.TimeSeriesRow {
+	if base == nil {
+		return proto.Clone(patch).(*pb.TimeSeriesRow)
+	}
+	merged := proto.Clone(base).(*pb.TimeSeriesRow)
+	merged.Key = proto.Clone(patch.GetKey()).(*pb.TimeSeriesKey)
+	positions := make(map[string]int, len(merged.GetColumns()))
+	for idx, column := range merged.GetColumns() {
+		positions[column.GetColumnName()] = idx
+	}
+	for _, column := range patch.GetColumns() {
+		copied := proto.Clone(column).(*pb.ColumnValue)
+		if idx, ok := positions[column.GetColumnName()]; ok {
+			if isNullColumn(copied) && !isNullColumn(merged.Columns[idx]) {
+				continue
+			}
+			merged.Columns[idx] = copied
+			continue
+		}
+		positions[column.GetColumnName()] = len(merged.Columns)
+		merged.Columns = append(merged.Columns, copied)
+	}
+	return merged
+}
+
+func isNullColumn(column *pb.ColumnValue) bool {
+	return column == nil || column.GetValue() == nil
 }
 
 func (s *ViewStore) DropResultTable(ctx context.Context, tableName string) error {
@@ -81,7 +131,7 @@ func (s *ViewStore) DropResultTable(ctx context.Context, tableName string) error
 	return nil
 }
 
-func (s *ViewStore) QueryView(ctx context.Context, tableName string, req *pb.QueryViewReq) ([]*pb.QueryViewColumn, []*pb.QueryViewRow, *pb.PageResult, error) {
+func (s *ViewStore) QueryTimeSeriesRows(ctx context.Context, tableName string, req *pb.QueryTimeSeriesRowsReq) ([]*pb.ResultColumn, []*pb.TimeSeriesRow, *pb.PageResult, error) {
 	_ = ctx
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -89,13 +139,10 @@ func (s *ViewStore) QueryView(ctx context.Context, tableName string, req *pb.Que
 	if !ok {
 		return nil, nil, nil, errors.New("duckdb view result table not found")
 	}
-	allowSubjects := factvalue.StringSet(req.GetSubjectIds())
-	var matched []*pb.QueryViewRow
+	allowSubjects := querySubjectSet(req.GetKeys())
+	var matched []*pb.TimeSeriesRow
 	for _, row := range s.rows[tableName] {
-		if len(allowSubjects) > 0 && !allowSubjects[row.GetSubjectId()] {
-			continue
-		}
-		if !factvalue.TimeInRange(row.GetDataTime(), req.GetQueryTime().GetTimeRange()) {
+		if !timeSeriesRowMatchesQuery(row, req, allowSubjects) {
 			continue
 		}
 		matched = append(matched, row)
@@ -111,10 +158,10 @@ func (s *ViewStore) QueryView(ctx context.Context, tableName string, req *pb.Que
 	return projectedColumns, paged, page, nil
 }
 
-func convertColumns(columns []*pb.ViewColumn) []*pb.QueryViewColumn {
-	out := make([]*pb.QueryViewColumn, 0, len(columns))
+func convertColumns(columns []*pb.ViewColumn) []*pb.ResultColumn {
+	out := make([]*pb.ResultColumn, 0, len(columns))
 	for _, column := range columns {
-		out = append(out, &pb.QueryViewColumn{
+		out = append(out, &pb.ResultColumn{
 			ColumnName: column.GetColumnName(),
 			OriginType: column.GetOriginType(),
 			OriginId:   column.GetOriginId(),
@@ -124,7 +171,85 @@ func convertColumns(columns []*pb.ViewColumn) []*pb.QueryViewColumn {
 	return out
 }
 
-func filterRows(rows []*pb.QueryViewRow, filters []*pb.FilterExpr) ([]*pb.QueryViewRow, error) {
+func querySubjectSet(keys []*pb.TimeSeriesKey) map[string]bool {
+	return factvalue.StringSet(querySubjects(keys))
+}
+
+func querySubjects(keys []*pb.TimeSeriesKey) []string {
+	seen := make(map[string]bool, len(keys))
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		subjectID := strings.TrimSpace(key.GetSubjectId())
+		if subjectID == "" || seen[subjectID] {
+			continue
+		}
+		seen[subjectID] = true
+		out = append(out, subjectID)
+	}
+	return out
+}
+
+func timeSeriesRowMatchesQuery(row *pb.TimeSeriesRow, req *pb.QueryTimeSeriesRowsReq, allowSubjects map[string]bool) bool {
+	if len(allowSubjects) > 0 && !allowSubjects[row.GetKey().GetSubjectId()] {
+		return false
+	}
+	if !factvalue.TimeInRange(row.GetKey().GetDataTime(), req.GetTimeRange()) {
+		return false
+	}
+	keys := req.GetKeys()
+	if len(keys) == 0 {
+		return true
+	}
+	for _, key := range keys {
+		if timeSeriesRowMatchesKey(row, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func timeSeriesRowMatchesKey(row *pb.TimeSeriesRow, key *pb.TimeSeriesKey) bool {
+	if key == nil {
+		return true
+	}
+	rowKey := row.GetKey()
+	if key.GetSpaceId() != "" && key.GetSpaceId() != rowKey.GetSpaceId() {
+		return false
+	}
+	if key.GetDatasetId() != "" && key.GetDatasetId() != rowKey.GetDatasetId() {
+		return false
+	}
+	if key.GetSubjectId() != "" && key.GetSubjectId() != rowKey.GetSubjectId() {
+		return false
+	}
+	if key.GetFreq() != "" && key.GetFreq() != rowKey.GetFreq() {
+		return false
+	}
+	if !dimensionsEqual(key.GetDimensions(), rowKey.GetDimensions()) {
+		return false
+	}
+	if key.GetDataTime() != "" {
+		return factvalue.TimeInRange(rowKey.GetDataTime(), &pb.TimeRange{
+			StartTime: key.GetDataTime(),
+			EndTime:   key.GetDataTime(),
+		})
+	}
+	return true
+}
+
+func dimensionsEqual(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		if right[key] != leftValue {
+			return false
+		}
+	}
+	return true
+}
+
+func filterRows(rows []*pb.TimeSeriesRow, filters []*pb.FilterExpr) ([]*pb.TimeSeriesRow, error) {
 	if len(filters) == 0 {
 		return rows, nil
 	}
@@ -141,7 +266,7 @@ func filterRows(rows []*pb.QueryViewRow, filters []*pb.FilterExpr) ([]*pb.QueryV
 	return out, nil
 }
 
-func rowMatchesFilters(row *pb.QueryViewRow, filters []*pb.FilterExpr) (bool, error) {
+func rowMatchesFilters(row *pb.TimeSeriesRow, filters []*pb.FilterExpr) (bool, error) {
 	for _, filter := range filters {
 		ok, err := rowMatchesFilter(row, filter)
 		if err != nil {
@@ -154,7 +279,7 @@ func rowMatchesFilters(row *pb.QueryViewRow, filters []*pb.FilterExpr) (bool, er
 	return true, nil
 }
 
-func rowMatchesFilter(row *pb.QueryViewRow, filter *pb.FilterExpr) (bool, error) {
+func rowMatchesFilter(row *pb.TimeSeriesRow, filter *pb.FilterExpr) (bool, error) {
 	if filter == nil || strings.TrimSpace(filter.GetExpr()) == "" {
 		return true, nil
 	}
@@ -206,7 +331,7 @@ func filterValue(token string, args map[string]*pb.TypedValue) *pb.TypedValue {
 	return nil
 }
 
-func sortRows(rows []*pb.QueryViewRow, sorts []*pb.SortSpec) {
+func sortRows(rows []*pb.TimeSeriesRow, sorts []*pb.SortSpec) {
 	if len(sorts) == 0 {
 		return
 	}
@@ -223,19 +348,19 @@ func sortRows(rows []*pb.QueryViewRow, sorts []*pb.SortSpec) {
 			}
 			return cmp < 0
 		}
-		if rows[i].GetSubjectId() == rows[j].GetSubjectId() {
-			return rows[i].GetDataTime() < rows[j].GetDataTime()
+		if rows[i].GetKey().GetSubjectId() == rows[j].GetKey().GetSubjectId() {
+			return rows[i].GetKey().GetDataTime() < rows[j].GetKey().GetDataTime()
 		}
-		return rows[i].GetSubjectId() < rows[j].GetSubjectId()
+		return rows[i].GetKey().GetSubjectId() < rows[j].GetKey().GetSubjectId()
 	})
 }
 
-func projectColumns(columns []*pb.QueryViewColumn, includes []string) []*pb.QueryViewColumn {
+func projectColumns(columns []*pb.ResultColumn, includes []string) []*pb.ResultColumn {
 	if len(includes) == 0 {
 		return columns
 	}
 	allow := factvalue.StringSet(includes)
-	out := make([]*pb.QueryViewColumn, 0, len(includes))
+	out := make([]*pb.ResultColumn, 0, len(includes))
 	for _, column := range columns {
 		if allow[column.GetColumnName()] {
 			out = append(out, column)
@@ -244,21 +369,20 @@ func projectColumns(columns []*pb.QueryViewColumn, includes []string) []*pb.Quer
 	return out
 }
 
-func projectRows(rows []*pb.QueryViewRow, includes []string) []*pb.QueryViewRow {
+func projectRows(rows []*pb.TimeSeriesRow, includes []string) []*pb.TimeSeriesRow {
 	if len(includes) == 0 {
 		return rows
 	}
 	allow := factvalue.StringSet(includes)
-	out := make([]*pb.QueryViewRow, 0, len(rows))
+	out := make([]*pb.TimeSeriesRow, 0, len(rows))
 	for _, row := range rows {
-		projected := &pb.QueryViewRow{
-			SubjectId: row.GetSubjectId(),
-			DataTime:  row.GetDataTime(),
-			Values:    make([]*pb.ColumnValue, 0, len(includes)),
+		projected := &pb.TimeSeriesRow{
+			Key:     row.GetKey(),
+			Columns: make([]*pb.ColumnValue, 0, len(includes)),
 		}
-		for _, value := range row.GetValues() {
+		for _, value := range row.GetColumns() {
 			if allow[value.GetColumnName()] {
-				projected.Values = append(projected.Values, value)
+				projected.Columns = append(projected.Columns, value)
 			}
 		}
 		out = append(out, projected)
@@ -266,8 +390,8 @@ func projectRows(rows []*pb.QueryViewRow, includes []string) []*pb.QueryViewRow 
 	return out
 }
 
-func rowColumnValue(row *pb.QueryViewRow, name string) (*pb.TypedValue, bool) {
-	for _, value := range row.GetValues() {
+func rowColumnValue(row *pb.TimeSeriesRow, name string) (*pb.TypedValue, bool) {
+	for _, value := range row.GetColumns() {
 		if value.GetColumnName() == name {
 			return value.GetValue(), true
 		}
@@ -302,7 +426,7 @@ func compareForSort(left, right *pb.TypedValue) int {
 	return factvalue.Compare(left, right)
 }
 
-func pageRows(rows []*pb.QueryViewRow, page *pb.Page) ([]*pb.QueryViewRow, *pb.PageResult) {
+func pageRows(rows []*pb.TimeSeriesRow, page *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult) {
 	pageNo := uint32(1)
 	size := uint32(1000)
 	if page != nil {

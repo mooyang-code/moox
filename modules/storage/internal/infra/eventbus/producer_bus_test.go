@@ -11,44 +11,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProducerBusPublishesRowsChangedEvent(t *testing.T) {
+func TestProducerBusPublishesRecordRowsChangedEvent(t *testing.T) {
 	ctx := context.Background()
 	producer := &recordingProducer{}
-	bus := infraeventbus.NewProducerBus(producer, infraeventbus.RowsChangedSubject("moox.storage"))
+	bus := infraeventbus.NewProducerBus(producer, "moox.storage")
 
-	err := bus.PublishRowsChanged(ctx, &pb.DataRowsChangedEvent{
+	err := bus.PublishRecordRowsChanged(ctx, &pb.RecordRowsChangedEvent{
 		EventId:   "evt-1",
-		Scope:     &pb.DataScope{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT"},
 		EventTime: "2026-06-15T00:00:00+08:00",
+		Keys:      []*pb.RecordKey{{SpaceId: "crypto", DatasetId: "symbols", RecordId: "APT-USDT"}},
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, "moox.storage.fact.rows_changed.v1", producer.message.Subject)
+	require.Equal(t, "moox.storage.record.rows_changed.v1", producer.message.Subject)
 	require.Equal(t, "evt-1", producer.message.ID)
 	require.Contains(t, string(producer.message.Data), "APT-USDT")
 }
 
-func TestRowsChangedSubjectUsesUnifiedPrefix(t *testing.T) {
-	require.Equal(t, "moox.storage.fact.rows_changed.v1", infraeventbus.RowsChangedSubject("moox.storage"))
+func TestRowsChangedSubjectsUseUnifiedPrefix(t *testing.T) {
+	require.Equal(t, "moox.storage.time_series.rows_changed.v1", infraeventbus.TimeSeriesRowsChangedSubject("moox.storage"))
+	require.Equal(t, "moox.storage.record.rows_changed.v1", infraeventbus.RecordRowsChangedSubject("moox.storage"))
 	require.Equal(t, "moox.storage.>", infraeventbus.SubjectPrefixWildcard("moox.storage"))
-	require.Equal(t, "moox.storage.fact.rows_changed.v1", infraeventbus.RowsChangedSubject(""))
+	require.Equal(t, infraeventbus.DefaultRecordRowsChangedSubject, infraeventbus.RecordRowsChangedSubject(""))
 }
 
 func TestProducerBusClosesProducer(t *testing.T) {
 	producer := &recordingProducer{}
-	bus := infraeventbus.NewProducerBus(producer, infraeventbus.DefaultRowsChangedSubject)
+	bus := infraeventbus.NewProducerBus(producer, "")
 
 	require.NoError(t, bus.Close())
 	require.True(t, producer.closed)
 }
 
-func TestSubscriberBusConsumesRowsChangedEventFromTransport(t *testing.T) {
+func TestSubscriberBusConsumesTimeSeriesRowsChangedEventFromTransport(t *testing.T) {
 	ctx := context.Background()
 	pubsub := &recordingPubSub{}
-	bus := infraeventbus.NewSubscriberBus(pubsub, infraeventbus.DefaultRowsChangedSubject)
+	bus := infraeventbus.NewSubscriberBus(pubsub, "")
 
-	var got *pb.DataRowsChangedEvent
-	sub, err := bus.SubscribeRowsChanged(ctx, func(ctx context.Context, event *pb.DataRowsChangedEvent) error {
+	var got *pb.TimeSeriesRowsChangedEvent
+	sub, err := bus.SubscribeTimeSeriesRowsChanged(ctx, func(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
 		_ = ctx
 		got = event
 		return nil
@@ -56,25 +57,25 @@ func TestSubscriberBusConsumesRowsChangedEventFromTransport(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sub)
 
-	require.Equal(t, infraeventbus.DefaultRowsChangedSubject, pubsub.subject)
+	require.Equal(t, infraeventbus.DefaultTimeSeriesRowsChangedSubject, pubsub.subject)
 	require.NotNil(t, pubsub.handler)
 	err = pubsub.handler(ctx, &transport.Message{
-		Subject: infraeventbus.DefaultRowsChangedSubject,
-		Data:    []byte(`{"event_id":"evt-1","scope":{"space_id":"crypto","dataset_id":"kline","subject_id":"APT-USDT"}}`),
+		Subject: infraeventbus.DefaultTimeSeriesRowsChangedSubject,
+		Data:    []byte(`{"event_id":"evt-1","keys":[{"space_id":"crypto","dataset_id":"kline","subject_id":"APT-USDT","freq":"1m"}]}`),
 		ID:      "evt-1",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "evt-1", got.GetEventId())
-	require.Equal(t, "APT-USDT", got.GetScope().GetSubjectId())
+	require.Equal(t, "APT-USDT", got.GetKeys()[0].GetSubjectId())
 }
 
 func TestSubscriberBusReturnsTransportSubscribeError(t *testing.T) {
 	ctx := context.Background()
 	wantErr := errors.New("durable consumer conflict")
 	pubsub := &recordingPubSub{subscribeErr: wantErr}
-	bus := infraeventbus.NewSubscriberBus(pubsub, infraeventbus.DefaultRowsChangedSubject)
+	bus := infraeventbus.NewSubscriberBus(pubsub, "")
 
-	sub, err := bus.SubscribeRowsChanged(ctx, func(ctx context.Context, event *pb.DataRowsChangedEvent) error {
+	sub, err := bus.SubscribeRecordRowsChanged(ctx, func(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
 		return nil
 	})
 
@@ -85,9 +86,9 @@ func TestSubscriberBusReturnsTransportSubscribeError(t *testing.T) {
 func TestSubscriberBusClosesTransportSubscription(t *testing.T) {
 	ctx := context.Background()
 	pubsub := &recordingPubSub{subscription: &recordingSubscription{}}
-	bus := infraeventbus.NewSubscriberBus(pubsub, infraeventbus.DefaultRowsChangedSubject)
+	bus := infraeventbus.NewSubscriberBus(pubsub, "")
 
-	sub, err := bus.SubscribeRowsChanged(ctx, func(ctx context.Context, event *pb.DataRowsChangedEvent) error {
+	sub, err := bus.SubscribeRecordRowsChanged(ctx, func(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
 		return nil
 	})
 	require.NoError(t, err)
@@ -96,6 +97,7 @@ func TestSubscriberBusClosesTransportSubscription(t *testing.T) {
 	require.True(t, pubsub.subscription.closed)
 }
 
+// recordingProducer 是事件发布测试使用的记录型生产者。
 type recordingProducer struct {
 	message *transport.Message
 	closed  bool
@@ -124,6 +126,7 @@ func (p *recordingProducer) Options() transport.ProducerOptions {
 	return transport.ProducerOptions{}
 }
 
+// recordingPubSub 是事件总线适配测试使用的内存传输。
 type recordingPubSub struct {
 	recordingProducer
 	subject      string
@@ -145,6 +148,7 @@ func (p *recordingPubSub) Subscribe(ctx context.Context, subject string, handler
 	return p.subscription, nil
 }
 
+// recordingSubscription 是事件订阅测试使用的记录型订阅句柄。
 type recordingSubscription struct {
 	closed bool
 }

@@ -7,12 +7,13 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
-// RowsChangedHandler 处理一次主存行变更事件。
-type RowsChangedHandler func(ctx context.Context, event *pb.DataRowsChangedEvent) error
+type TimeSeriesRowsChangedHandler func(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error
+type RecordRowsChangedHandler func(ctx context.Context, event *pb.RecordRowsChangedEvent) error
 
 // Bus 是 storage 领域事件总线，负责发布主存行变更事件。
 type Bus interface {
-	PublishRowsChanged(ctx context.Context, event *pb.DataRowsChangedEvent) error
+	PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error
+	PublishRecordRowsChanged(ctx context.Context, event *pb.RecordRowsChangedEvent) error
 }
 
 // Subscription 表示一个已建立的事件订阅。
@@ -22,45 +23,64 @@ type Subscription interface {
 
 // Subscriber 是可订阅行变更事件的总线扩展能力。实现该接口的总线支持异步派生消费者。
 type Subscriber interface {
-	SubscribeRowsChanged(ctx context.Context, handler RowsChangedHandler) (Subscription, error)
+	SubscribeTimeSeriesRowsChanged(ctx context.Context, handler TimeSeriesRowsChangedHandler) (Subscription, error)
+	SubscribeRecordRowsChanged(ctx context.Context, handler RecordRowsChangedHandler) (Subscription, error)
 }
 
-// MemoryBus 是进程内事件总线。发布的事件会被记录（用于测试与回放），
-// 同时同步分发给所有已注册的处理器。处理器在 PublishRowsChanged 调用栈内执行，
-// 由调用方决定是否放入独立 goroutine 以实现异步派生。
+// MemoryBus 是进程内事件总线实现，用于测试和单进程部署。
 type MemoryBus struct {
-	mu       sync.Mutex
-	events   []*pb.DataRowsChangedEvent
-	nextID   uint64
-	handlers map[uint64]RowsChangedHandler
+	mu                 sync.Mutex
+	timeSeriesEvents   []*pb.TimeSeriesRowsChangedEvent
+	recordEvents       []*pb.RecordRowsChangedEvent
+	nextID             uint64
+	timeSeriesHandlers map[uint64]TimeSeriesRowsChangedHandler
+	recordHandlers     map[uint64]RecordRowsChangedHandler
 }
 
 func NewMemoryBus() *MemoryBus {
-	return &MemoryBus{handlers: make(map[uint64]RowsChangedHandler)}
+	return &MemoryBus{
+		timeSeriesHandlers: make(map[uint64]TimeSeriesRowsChangedHandler),
+		recordHandlers:     make(map[uint64]RecordRowsChangedHandler),
+	}
 }
 
-// SubscribeRowsChanged 注册一个行变更处理器。
-func (b *MemoryBus) SubscribeRowsChanged(ctx context.Context, handler RowsChangedHandler) (Subscription, error) {
+func (b *MemoryBus) SubscribeTimeSeriesRowsChanged(ctx context.Context, handler TimeSeriesRowsChangedHandler) (Subscription, error) {
 	_ = ctx
 	if handler == nil {
 		return noopSubscription{}, nil
 	}
 	b.mu.Lock()
-	if b.handlers == nil {
-		b.handlers = make(map[uint64]RowsChangedHandler)
+	if b.timeSeriesHandlers == nil {
+		b.timeSeriesHandlers = make(map[uint64]TimeSeriesRowsChangedHandler)
 	}
 	b.nextID++
 	id := b.nextID
-	b.handlers[id] = handler
+	b.timeSeriesHandlers[id] = handler
 	b.mu.Unlock()
-	return &memorySubscription{bus: b, id: id}, nil
+	return &memorySubscription{close: func() { b.deleteTimeSeriesHandler(id) }}, nil
 }
 
-func (b *MemoryBus) PublishRowsChanged(ctx context.Context, event *pb.DataRowsChangedEvent) error {
+func (b *MemoryBus) SubscribeRecordRowsChanged(ctx context.Context, handler RecordRowsChangedHandler) (Subscription, error) {
+	_ = ctx
+	if handler == nil {
+		return noopSubscription{}, nil
+	}
 	b.mu.Lock()
-	b.events = append(b.events, event)
-	handlers := make([]RowsChangedHandler, 0, len(b.handlers))
-	for _, handler := range b.handlers {
+	if b.recordHandlers == nil {
+		b.recordHandlers = make(map[uint64]RecordRowsChangedHandler)
+	}
+	b.nextID++
+	id := b.nextID
+	b.recordHandlers[id] = handler
+	b.mu.Unlock()
+	return &memorySubscription{close: func() { b.deleteRecordHandler(id) }}, nil
+}
+
+func (b *MemoryBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
+	b.mu.Lock()
+	b.timeSeriesEvents = append(b.timeSeriesEvents, event)
+	handlers := make([]TimeSeriesRowsChangedHandler, 0, len(b.timeSeriesHandlers))
+	for _, handler := range b.timeSeriesHandlers {
 		handlers = append(handlers, handler)
 	}
 	b.mu.Unlock()
@@ -72,29 +92,63 @@ func (b *MemoryBus) PublishRowsChanged(ctx context.Context, event *pb.DataRowsCh
 	return nil
 }
 
-func (b *MemoryBus) Events() []*pb.DataRowsChangedEvent {
+func (b *MemoryBus) PublishRecordRowsChanged(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := make([]*pb.DataRowsChangedEvent, len(b.events))
-	copy(out, b.events)
-	return out
-}
-
-type memorySubscription struct {
-	bus *MemoryBus
-	id  uint64
-}
-
-func (s *memorySubscription) Close() error {
-	if s == nil || s.bus == nil {
-		return nil
+	b.recordEvents = append(b.recordEvents, event)
+	handlers := make([]RecordRowsChangedHandler, 0, len(b.recordHandlers))
+	for _, handler := range b.recordHandlers {
+		handlers = append(handlers, handler)
 	}
-	s.bus.mu.Lock()
-	delete(s.bus.handlers, s.id)
-	s.bus.mu.Unlock()
+	b.mu.Unlock()
+	for _, handler := range handlers {
+		if err := handler(ctx, event); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
+func (b *MemoryBus) TimeSeriesEvents() []*pb.TimeSeriesRowsChangedEvent {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]*pb.TimeSeriesRowsChangedEvent, len(b.timeSeriesEvents))
+	copy(out, b.timeSeriesEvents)
+	return out
+}
+
+func (b *MemoryBus) RecordEvents() []*pb.RecordRowsChangedEvent {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]*pb.RecordRowsChangedEvent, len(b.recordEvents))
+	copy(out, b.recordEvents)
+	return out
+}
+
+func (b *MemoryBus) deleteTimeSeriesHandler(id uint64) {
+	b.mu.Lock()
+	delete(b.timeSeriesHandlers, id)
+	b.mu.Unlock()
+}
+
+func (b *MemoryBus) deleteRecordHandler(id uint64) {
+	b.mu.Lock()
+	delete(b.recordHandlers, id)
+	b.mu.Unlock()
+}
+
+// memorySubscription 表示 MemoryBus 返回的订阅句柄。
+type memorySubscription struct {
+	close func()
+}
+
+func (s *memorySubscription) Close() error {
+	if s != nil && s.close != nil {
+		s.close()
+	}
+	return nil
+}
+
+// noopSubscription 表示无需关闭动作的空订阅句柄。
 type noopSubscription struct{}
 
 func (noopSubscription) Close() error { return nil }

@@ -9,8 +9,8 @@
 ## 一句话模型
 
 ```text
-Space 里管理 DataSource、Subject、Field、Factor、DataSet 和 View。
-用户按 DataSet 写入与读取事实数据，按 View 查询异步物化后的组合结果。
+Space 里管理 DataSource、Subject、Field、Factor、Dataset 和 View。
+用户按 Dataset 写入与读取事实数据，按 View 查询异步物化后的组合结果。
 Pebble 是在线事实主存，DuckDB、Bleve、Parquet 从 Pebble 变更派生。
 所有数据访问都先进入 Access Service，再由 Access 转发到内部执行服务。
 ```
@@ -23,17 +23,17 @@ flowchart TD
     SRC["DataSource"]
     SUB["Subject"]
     SYM["SubjectSymbol"]
-    DS["DataSet"]
-    DSS["DataSetSubject"]
+    DS["Dataset"]
+    DSS["DatasetSubject"]
     FIELD["Field"]
     FACTOR["Factor"]
-    DC["DataSetColumn"]
+    DC["DatasetColumn"]
     VIEW["View"]
     VC["ViewColumn"]
     ACCESS["Access"]
-    PNODE["PrimaryNode"]
+    PNODE["PrimaryStoreNode"]
     DEV["Device"]
-    ROUTE["PrimaryRoute"]
+    ROUTE["PrimaryStoreRoute"]
     SEARCH["SearchService"]
     VIEW_SVC["ViewService"]
     ARCHIVE["ArchiveService"]
@@ -67,35 +67,35 @@ flowchart TD
 | `DataSource` | 数据来源，例如交易所、供应商 API、文件导入、内部计算。 |
 | `Subject` | Space 内业务对象，例如交易标的、榜单、新闻源、账户。 |
 | `SubjectSymbol` | Subject 在某个 DataSource 下的外部代码映射。 |
-| `DataSet` | 可写事实数据集，并且只绑定一个 DataSource。 |
-| `DataSetSubject` | DataSet 的对象池，用于采集范围和查询范围。 |
+| `Dataset` | 可写事实数据集，并且只绑定一个 DataSource。 |
+| `DatasetSubject` | Dataset 的对象池，用于采集范围和查询范围。 |
 | `Field` | Space 内普通字段字典。 |
 | `Factor` | Space 内、已参数化的因子结果定义。 |
-| `DataSetColumn` | DataSet 下允许写入的列，可来自 Field、Factor 或系统列。 |
+| `DatasetColumn` | Dataset 下允许写入的列，可来自 Field、Factor 或系统列。 |
 | `View` | 查询入口和异步物化结果定义。 |
 | `ViewColumn` | View 对用户暴露的列。 |
 | `Access` | 唯一公开数据访问入口，负责校验、元数据解释、路由和请求转发。 |
-| `PrimaryNode` | 在线事实主存节点，底层使用 Pebble。当前协议和表结构仍有 `StorageNode` 旧名。 |
+| `PrimaryStoreNode` | 在线事实主存节点，底层使用 Pebble。 |
 | `Device` | 底层具体存储组件，例如 Pebble、DuckDB、Bleve、Parquet。 |
-| `PrimaryRoute` | 在线事实主存的水平切分路由。当前协议和表结构仍有 `StorageRoute` 旧名。 |
+| `PrimaryStoreRoute` | 在线事实主存的水平切分路由。 |
 
 ## 读写边界
 
-- 写入事实数据：使用 `DataService.WriteRows`，入口是 `DataSet`。
-- 读取事实数据：使用 `DataService.ReadRows`，入口是 `DataSet`。
-- 组合分析查询：使用 `QueryService.QueryView`，入口是已经登记并构建的 `View`。
-- 文本检索：使用 `QueryService.SearchRows`，入口是 `DataSet`。
+- 写入事实数据：使用 `AccessService.WriteTimeSeriesRows` 或 `AccessService.WriteRecordRows`，入口是 `Dataset`。
+- 读取事实数据：使用 `AccessService.ReadTimeSeriesRows` 或 `AccessService.ReadRecordRows`，入口是 `Dataset`。
+- 组合分析查询：使用 `ViewService.QueryTimeSeriesRows`，入口是已经登记并构建的 `View`。
+- 文本检索：使用 `ViewService.SearchRecordRows`，入口是已经登记并构建的 Record View。
 
 系统不在线生成临时组合查询计划。调用方请求不存在的组合时，返回 `VIEW_NOT_FOUND`。
 
-`ReadRows` 使用 PrimaryRoute 访问 PrimaryStore。`SearchRows` 查询 Search Service 中的集中式索引，不走 PrimaryRoute，也不 fan-out 到多个 Pebble 分片。`QueryView` 查询 View Service 中的物化结果。
+Access 读写接口通过 `PrimaryStoreRoute` 访问 PrimaryStore。`SearchRecordRows` 查询 Search Service 中的集中式索引，不走 PrimaryStoreRoute，也不 fan-out 到多个 Pebble 分片。`QueryTimeSeriesRows` 查询 View Service 中的物化结果。
 
 ## 存储职责
 
 | 组件 | 职责 |
 | --- | --- |
 | PrimaryStore Service / Pebble | 在线事实主存，支持低延迟写入和按 key 范围扫描。 |
-| View Service / DuckDB | View 的近期物化查询结果。 |
-| Search Service / Bleve | 只索引 `DataSetColumn.text_indexed=true` 的文本列。 |
+| View Service / DuckDB | TimeSeries View 的近期版本化物化查询结果。 |
+| Search Service / Bleve | Record View 的版本化全文索引，索引字段由 ViewColumn 决定。 |
 | Archive Service / Parquet | 从 Pebble 事实主存归档生成冷备文件。 |
 | SQLite | 元数据控制面。 |

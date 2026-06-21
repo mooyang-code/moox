@@ -59,6 +59,7 @@ var storageImportCmd = &cobra.Command{
 	},
 }
 
+// storageImportOptions 保存数据导入命令的参数配置。
 type storageImportOptions struct {
 	Format       string
 	File         string
@@ -72,69 +73,78 @@ type storageImportOptions struct {
 	Freq         string
 	TimeColumn   string
 	Dimensions   []string
-	WriteMode    string
 	BatchSize    int
 	DryRun       bool
 }
 
+// storageImportContext 保存一次数据导入运行中的依赖上下文。
 type storageImportContext struct {
 	Options storageImportOptions
-	Columns map[string]*pb.DataSetColumn
+	Columns map[string]*pb.DatasetColumn
 }
 
+// storageImportParseResult 保存数据文件解析后的行和统计信息。
 type storageImportParseResult struct {
 	Rows  []*pb.TimeSeriesRow
 	Stats storageImportStats
 }
 
+// storageImportStats 统计数据导入过程中的行数与批次数。
 type storageImportStats struct {
 	ValidatedRows int `json:"validated_rows"`
 	SkippedRows   int `json:"skipped_rows,omitempty"`
 }
 
+// storageImportSummary 汇总数据导入命令的执行结果。
 type storageImportSummary struct {
-	Status           string `json:"status"`
-	File             string `json:"file"`
-	Format           string `json:"format"`
-	AccessURL        string `json:"access_url,omitempty"`
-	MetadataURL      string `json:"metadata_url"`
-	SpaceID          string `json:"space"`
-	ViewID           string `json:"view,omitempty"`
-	DatasetID        string `json:"dataset"`
-	SubjectID        string `json:"subject"`
-	Freq             string `json:"freq,omitempty"`
-	ValidatedRows    int    `json:"validated_rows"`
-	WrittenRows      int    `json:"written_rows,omitempty"`
-	WouldWriteRows   int    `json:"would_write_rows,omitempty"`
-	Batches          int    `json:"batches,omitempty"`
-	BoundSubject     bool   `json:"bound_subject,omitempty"`
-	WouldBindSubject bool   `json:"would_bind_subject,omitempty"`
+	Status                   string `json:"status"`
+	File                     string `json:"file"`
+	Format                   string `json:"format"`
+	AccessURL                string `json:"access_url,omitempty"`
+	MetadataURL              string `json:"metadata_url"`
+	SpaceID                  string `json:"space"`
+	ViewID                   string `json:"view,omitempty"`
+	DatasetID                string `json:"dataset"`
+	SubjectID                string `json:"subject"`
+	Freq                     string `json:"freq,omitempty"`
+	ValidatedRows            int    `json:"validated_rows"`
+	WrittenRows              int    `json:"written_rows,omitempty"`
+	WouldWriteTimeSeriesRows int    `json:"would_write_time_series_rows,omitempty"`
+	Batches                  int    `json:"batches,omitempty"`
+	BoundSubject             bool   `json:"bound_subject,omitempty"`
+	WouldBindSubject         bool   `json:"would_bind_subject,omitempty"`
 }
 
+// storageImportMetadataClient 定义数据导入所需的元数据查询接口。
 type storageImportMetadataClient interface {
-	GetDataSet(context.Context, string, string) (*pb.DataSet, error)
+	GetDataset(context.Context, string, string) (*pb.Dataset, error)
 	GetView(context.Context, string, string) (*pb.View, error)
 	GetSubject(context.Context, string, string) (*pb.Subject, error)
-	ListDataSetColumns(context.Context, string, string) ([]*pb.DataSetColumn, error)
-	ListDataSetSubjects(context.Context, string, string, string) ([]*pb.DataSetSubject, error)
-	BindDataSetSubject(context.Context, *pb.DataSetSubject) error
+	ListDatasetColumns(context.Context, string, string) ([]*pb.DatasetColumn, error)
+	ListDatasetSubjects(context.Context, string, string, string) ([]*pb.DatasetSubject, error)
+	BindDatasetSubject(context.Context, *pb.DatasetSubject) error
 }
 
+// storageDataWriter 定义数据导入写入 Storage 的接口。
 type storageDataWriter interface {
 	WriteTimeSeriesRows(context.Context, *pb.WriteTimeSeriesRowsReq) error
 }
 
+// storageFileImporter 定义一种本地数据文件格式的导入器。
 type storageFileImporter interface {
 	Format() string
-	ReadRows(string, storageImportContext) (storageImportParseResult, error)
+	ReadTimeSeriesRows(string, storageImportContext) (storageImportParseResult, error)
 }
 
+// csvStorageFileImporter 实现 CSV 文件到 Storage 行的导入。
 type csvStorageFileImporter struct{}
 
+// httpStorageImportMetadataClient 通过 tRPC 读取远端元数据。
 type httpStorageImportMetadataClient struct {
 	URL string
 }
 
+// httpStorageDataWriter 通过 tRPC 将数据写入 Access 服务。
 type httpStorageDataWriter struct {
 	URL string
 }
@@ -146,7 +156,6 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 	}
 	opts.Format = format
 	opts.BatchSize = normalizedStorageImportBatchSize(opts.BatchSize)
-	opts.WriteMode = defaultFlag(opts.WriteMode, "upsert")
 	if err := validateStorageImportOptions(opts); err != nil {
 		return storageImportSummary{}, err
 	}
@@ -154,7 +163,7 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		return storageImportSummary{}, err
 	}
 
-	dataset, err := meta.GetDataSet(ctx, opts.SpaceID, opts.DatasetID)
+	dataset, err := meta.GetDataset(ctx, opts.SpaceID, opts.DatasetID)
 	if err != nil {
 		return storageImportSummary{}, err
 	}
@@ -184,7 +193,7 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		return storageImportSummary{}, fmt.Errorf("subject %s/%s not found", opts.SpaceID, opts.SubjectID)
 	}
 
-	columns, err := meta.ListDataSetColumns(ctx, opts.SpaceID, opts.DatasetID)
+	columns, err := meta.ListDatasetColumns(ctx, opts.SpaceID, opts.DatasetID)
 	if err != nil {
 		return storageImportSummary{}, err
 	}
@@ -196,12 +205,12 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 	if err != nil {
 		return storageImportSummary{}, err
 	}
-	result, err := importer.ReadRows(opts.File, storageImportContext{Options: opts, Columns: columnByName})
+	result, err := importer.ReadTimeSeriesRows(opts.File, storageImportContext{Options: opts, Columns: columnByName})
 	if err != nil {
 		return storageImportSummary{}, err
 	}
 
-	subjects, err := meta.ListDataSetSubjects(ctx, opts.SpaceID, opts.DatasetID, opts.SubjectID)
+	subjects, err := meta.ListDatasetSubjects(ctx, opts.SpaceID, opts.DatasetID, opts.SubjectID)
 	if err != nil {
 		return storageImportSummary{}, err
 	}
@@ -221,12 +230,12 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 	}
 	if opts.DryRun {
 		summary.Status = "dry_run"
-		summary.WouldWriteRows = len(result.Rows)
+		summary.WouldWriteTimeSeriesRows = len(result.Rows)
 		summary.WouldBindSubject = needsBind
 		return summary, nil
 	}
 	if needsBind {
-		if err := meta.BindDataSetSubject(ctx, &pb.DataSetSubject{
+		if err := meta.BindDatasetSubject(ctx, &pb.DatasetSubject{
 			SpaceId:     opts.SpaceID,
 			DatasetId:   opts.DatasetID,
 			SubjectId:   opts.SubjectID,
@@ -237,16 +246,12 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		}
 		summary.BoundSubject = true
 	}
-	writeMode, err := parseStorageImportWriteMode(opts.WriteMode)
-	if err != nil {
-		return storageImportSummary{}, err
-	}
 	for start := 0; start < len(result.Rows); start += opts.BatchSize {
 		end := start + opts.BatchSize
 		if end > len(result.Rows) {
 			end = len(result.Rows)
 		}
-		if err := writeStorageImportRows(ctx, writer, &pb.WriteTimeSeriesRowsReq{WriteMode: writeMode, Rows: result.Rows[start:end]}, true); err != nil {
+		if err := writeStorageImportRows(ctx, writer, &pb.WriteTimeSeriesRowsReq{Rows: result.Rows[start:end]}, true); err != nil {
 			return storageImportSummary{}, err
 		}
 		summary.Batches++
@@ -379,7 +384,7 @@ func validateStorageImportFile(path string) error {
 	return nil
 }
 
-func validateStorageImportFreq(opts storageImportOptions, dataset *pb.DataSet) error {
+func validateStorageImportFreq(opts storageImportOptions, dataset *pb.Dataset) error {
 	if opts.Freq == "" || len(dataset.GetFreqs()) == 0 {
 		return nil
 	}
@@ -389,11 +394,11 @@ func validateStorageImportFreq(opts storageImportOptions, dataset *pb.DataSet) e
 	return nil
 }
 
-func storageImportColumnMap(columns []*pb.DataSetColumn) (map[string]*pb.DataSetColumn, error) {
+func storageImportColumnMap(columns []*pb.DatasetColumn) (map[string]*pb.DatasetColumn, error) {
 	if len(columns) == 0 {
 		return nil, fmt.Errorf("dataset columns are empty")
 	}
-	values := make(map[string]*pb.DataSetColumn, len(columns))
+	values := make(map[string]*pb.DatasetColumn, len(columns))
 	for _, column := range columns {
 		if column.GetColumnName() == "" {
 			continue
@@ -409,26 +414,13 @@ func storageImportColumnMap(columns []*pb.DataSetColumn) (map[string]*pb.DataSet
 	return values, nil
 }
 
-func storageImportSubjectBound(subjects []*pb.DataSetSubject, subjectID string) bool {
+func storageImportSubjectBound(subjects []*pb.DatasetSubject, subjectID string) bool {
 	for _, item := range subjects {
 		if item.GetSubjectId() == subjectID && item.GetStatus() != "deleted" {
 			return true
 		}
 	}
 	return false
-}
-
-func parseStorageImportWriteMode(value string) (pb.WriteMode, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "upsert":
-		return pb.WriteMode_WRITE_MODE_UPSERT, nil
-	case "append":
-		return pb.WriteMode_WRITE_MODE_APPEND, nil
-	case "overwrite":
-		return pb.WriteMode_WRITE_MODE_OVERWRITE, nil
-	default:
-		return pb.WriteMode_WRITE_MODE_UNSPECIFIED, fmt.Errorf("unsupported write-mode %q", value)
-	}
 }
 
 func normalizedStorageImportBatchSize(size int) int {
@@ -440,7 +432,7 @@ func normalizedStorageImportBatchSize(size int) int {
 
 func (csvStorageFileImporter) Format() string { return "csv" }
 
-func (csvStorageFileImporter) ReadRows(path string, ctx storageImportContext) (storageImportParseResult, error) {
+func (csvStorageFileImporter) ReadTimeSeriesRows(path string, ctx storageImportContext) (storageImportParseResult, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return storageImportParseResult{}, err
@@ -699,9 +691,9 @@ func writeStorageImportSummary(summary storageImportSummary) error {
 	return encoder.Encode(summary)
 }
 
-func (c httpStorageImportMetadataClient) GetDataSet(ctx context.Context, spaceID string, datasetID string) (*pb.DataSet, error) {
-	rsp := &pb.GetDataSetRsp{}
-	if err := postStorage(ctx, c.URL, metadataServiceName, "GetDataSet", &pb.GetDataSetReq{SpaceId: spaceID, DatasetId: datasetID}, rsp); err != nil {
+func (c httpStorageImportMetadataClient) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
+	rsp := &pb.GetDatasetRsp{}
+	if err := postStorage(ctx, c.URL, metadataServiceName, "GetDataset", &pb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID}, rsp); err != nil {
 		return nil, err
 	}
 	return rsp.GetDataset(), nil
@@ -723,9 +715,9 @@ func (c httpStorageImportMetadataClient) GetSubject(ctx context.Context, spaceID
 	return rsp.GetSubject(), nil
 }
 
-func (c httpStorageImportMetadataClient) ListDataSetColumns(ctx context.Context, spaceID string, datasetID string) ([]*pb.DataSetColumn, error) {
-	rsp := &pb.ListDataSetColumnsRsp{}
-	if err := postStorage(ctx, c.URL, metadataServiceName, "ListDataSetColumns", &pb.ListDataSetColumnsReq{
+func (c httpStorageImportMetadataClient) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string) ([]*pb.DatasetColumn, error) {
+	rsp := &pb.ListDatasetColumnsRsp{}
+	if err := postStorage(ctx, c.URL, metadataServiceName, "ListDatasetColumns", &pb.ListDatasetColumnsReq{
 		SpaceId:   spaceID,
 		DatasetId: datasetID,
 		Page:      &pb.Page{Page: 1, Size: 10000},
@@ -735,9 +727,9 @@ func (c httpStorageImportMetadataClient) ListDataSetColumns(ctx context.Context,
 	return rsp.GetColumns(), nil
 }
 
-func (c httpStorageImportMetadataClient) ListDataSetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string) ([]*pb.DataSetSubject, error) {
-	rsp := &pb.ListDataSetSubjectsRsp{}
-	if err := postStorage(ctx, c.URL, metadataServiceName, "ListDataSetSubjects", &pb.ListDataSetSubjectsReq{
+func (c httpStorageImportMetadataClient) ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string) ([]*pb.DatasetSubject, error) {
+	rsp := &pb.ListDatasetSubjectsRsp{}
+	if err := postStorage(ctx, c.URL, metadataServiceName, "ListDatasetSubjects", &pb.ListDatasetSubjectsReq{
 		SpaceId:   spaceID,
 		DatasetId: datasetID,
 		SubjectId: subjectID,
@@ -748,29 +740,28 @@ func (c httpStorageImportMetadataClient) ListDataSetSubjects(ctx context.Context
 	return rsp.GetDatasetSubjects(), nil
 }
 
-func (c httpStorageImportMetadataClient) BindDataSetSubject(ctx context.Context, item *pb.DataSetSubject) error {
-	return postStorage(ctx, c.URL, metadataServiceName, "BindDataSetSubject", &pb.BindDataSetSubjectReq{DatasetSubject: item}, &pb.BindDataSetSubjectRsp{})
+func (c httpStorageImportMetadataClient) BindDatasetSubject(ctx context.Context, item *pb.DatasetSubject) error {
+	return postStorage(ctx, c.URL, metadataServiceName, "BindDatasetSubject", &pb.BindDatasetSubjectReq{DatasetSubject: item}, &pb.BindDatasetSubjectRsp{})
 }
 
 func (w httpStorageDataWriter) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeriesRowsReq) error {
-	return postStorage(ctx, w.URL, "trpc.storage.data.DataService", "WriteTimeSeriesRows", req, &pb.WriteTimeSeriesRowsRsp{})
+	return postStorage(ctx, w.URL, accessServiceName, "WriteTimeSeriesRows", req, &pb.WriteTimeSeriesRowsRsp{})
 }
 
 func init() {
 	storageCmd.AddCommand(storageImportCmd)
 	storageImportCmd.Flags().StringVar(&storageImportFlags.Format, "format", defaultStorageImportFormat, "导入文件格式：auto/csv")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.File, "file", "", "本地数据文件路径")
-	storageImportCmd.Flags().StringVar(&storageImportFlags.AccessURL, "access-url", "", "moox-storage DataService HTTP 地址，例如 http://127.0.0.1:19104")
+	storageImportCmd.Flags().StringVar(&storageImportFlags.AccessURL, "access-url", "", "moox-storage AccessService HTTP 地址，例如 http://127.0.0.1:19104")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.MetadataURL, "metadata-url", "", "moox-storage MetadataService HTTP 地址，例如 http://127.0.0.1:19101")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.SpaceID, "space", "", "Space ID")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.ViewID, "view", "", "可选 View ID；传入时校验 dataset 属于该 view")
-	storageImportCmd.Flags().StringVar(&storageImportFlags.DatasetID, "dataset", "", "DataSet ID")
+	storageImportCmd.Flags().StringVar(&storageImportFlags.DatasetID, "dataset", "", "Dataset ID")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.SubjectID, "subject", "", "Subject ID")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.DataSourceID, "data-source", "", "可选 DataSource ID；传入时校验 dataset 归属")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.Freq, "freq", "", "时序频率，例如 1m/1h/1d")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.TimeColumn, "time-column", "candle_begin_time", "CSV 时间列名")
 	storageImportCmd.Flags().StringArrayVar(&storageImportFlags.Dimensions, "dimension", nil, "自定义维度，格式 name=value，可重复")
-	storageImportCmd.Flags().StringVar(&storageImportFlags.WriteMode, "write-mode", "upsert", "写入模式：upsert/append/overwrite")
 	storageImportCmd.Flags().IntVar(&storageImportFlags.BatchSize, "batch-size", defaultStorageImportBatchSize, "每批写入行数")
 	storageImportCmd.Flags().BoolVar(&storageImportFlags.DryRun, "dry-run", false, "只校验并输出导入计划，不绑定 subject，不写入数据")
 }

@@ -52,7 +52,7 @@ var dataCSVImportCmd = &cobra.Command{
 		if subjectID == "" {
 			subjectID = strings.TrimSuffix(filepath.Base(dataCSVFile), filepath.Ext(dataCSVFile))
 		}
-		rows, err := readCSVRows(dataCSVFile, &pb.DataScope{
+		rows, err := readCSVRows(dataCSVFile, &pb.TimeSeriesKey{
 			SpaceId:    defaultFlag(dataSpaceID, "default"),
 			DatasetId:  defaultFlag(dataDatasetID, "binance_spot_kline_1m"),
 			SubjectId:  subjectID,
@@ -75,23 +75,22 @@ var dataCSVImportCmd = &cobra.Command{
 
 var dataRowsCmd = &cobra.Command{
 	Use:   "rows",
-	Short: "DataSet 行读取工具",
+	Short: "Dataset 行读取工具",
 }
 
 var dataRowsExportCmd = &cobra.Command{
 	Use:   "export",
-	Short: "导出 DataSet 行为 JSON",
+	Short: "导出 Dataset 行为 JSON",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if dataStorageURL != "" {
-			rsp, err := exportRowsRemote(context.Background(), dataStorageURL, &pb.ReadRowsReq{
-				Scope: &pb.DataScope{
+			rsp, err := exportRowsRemote(context.Background(), dataStorageURL, &pb.ReadTimeSeriesRowsReq{
+				Keys: []*pb.TimeSeriesKey{{
 					SpaceId:    defaultFlag(dataSpaceID, "default"),
 					DatasetId:  defaultFlag(dataDatasetID, "binance_spot_kline_1m"),
 					SubjectId:  dataSubjectID,
 					Freq:       dataFreq,
 					Dimensions: parseDimensions(dataDimensions),
-				},
-				ReadMode: pb.ReadMode_READ_MODE_RANGE,
+				}},
 				TimeRange: &pb.TimeRange{
 					StartTime: dataStartTime,
 					EndTime:   dataEndTime,
@@ -119,7 +118,7 @@ func init() {
 	dataCSVImportCmd.Flags().StringVar(&dataSpaceID, "workspace", "default", "Space ID，兼容旧参数名")
 	dataCSVImportCmd.Flags().StringVar(&dataSourceID, "data-source", "binance", "DataSource ID")
 	dataCSVImportCmd.Flags().StringVar(&dataCSVFile, "file", "", "CSV 文件路径")
-	dataCSVImportCmd.Flags().StringVar(&dataDatasetID, "dataset", "binance_spot_kline_1m", "DataSet ID")
+	dataCSVImportCmd.Flags().StringVar(&dataDatasetID, "dataset", "binance_spot_kline_1m", "Dataset ID")
 	dataCSVImportCmd.Flags().StringVar(&dataSubjectID, "subject", "", "Subject ID，默认取文件名")
 	dataCSVImportCmd.Flags().StringVar(&dataFreq, "freq", "1m", "K 线频率")
 	dataCSVImportCmd.Flags().StringVar(&dataTimeColumn, "time-column", "candle_begin_time", "时间列名")
@@ -128,7 +127,7 @@ func init() {
 	dataRowsExportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:19104")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "workspace", "default", "Space ID，兼容旧参数名")
-	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset", "binance_spot_kline_1m", "DataSet ID")
+	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset", "binance_spot_kline_1m", "Dataset ID")
 	dataRowsExportCmd.Flags().StringVar(&dataSubjectID, "subject", "", "Subject ID")
 	dataRowsExportCmd.Flags().StringVar(&dataFreq, "freq", "1m", "K 线频率")
 	dataRowsExportCmd.Flags().StringArrayVar(&dataDimensions, "dimension", nil, "自定义维度，格式 name=value，可重复")
@@ -138,7 +137,7 @@ func init() {
 	dataRowsExportCmd.Flags().StringVar(&dataOutputFile, "output", "", "输出 JSON 文件；为空则输出到 stdout")
 }
 
-func writeRowsExport(rsp *pb.ReadRowsRsp, outputFile string, source string, datasetID string, subjectID string) error {
+func writeRowsExport(rsp *pb.ReadTimeSeriesRowsRsp, outputFile string, source string, datasetID string, subjectID string) error {
 	raw, err := protojson.MarshalOptions{UseProtoNames: true, Multiline: true}.Marshal(rsp)
 	if err != nil {
 		return err
@@ -154,7 +153,7 @@ func writeRowsExport(rsp *pb.ReadRowsRsp, outputFile string, source string, data
 	return nil
 }
 
-func readCSVRows(path string, scope *pb.DataScope, timeColumn string) ([]*pb.DataRow, error) {
+func readCSVRows(path string, key *pb.TimeSeriesKey, timeColumn string) ([]*pb.TimeSeriesRow, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -187,7 +186,7 @@ func readCSVRows(path string, scope *pb.DataScope, timeColumn string) ([]*pb.Dat
 		}
 	}
 
-	var rows []*pb.DataRow
+	var rows []*pb.TimeSeriesRow
 	for {
 		record, err := reader.Read()
 		if err != nil {
@@ -199,11 +198,8 @@ func readCSVRows(path string, scope *pb.DataScope, timeColumn string) ([]*pb.Dat
 		if timeIndex >= len(record) || strings.TrimSpace(record[timeIndex]) == "" {
 			continue
 		}
-		row := &pb.DataRow{
-			Key: &pb.DataKey{
-				Scope:    scope,
-				DataTime: strings.TrimSpace(record[timeIndex]),
-			},
+		row := &pb.TimeSeriesRow{
+			Key: cloneCSVTimeSeriesKey(key, strings.TrimSpace(record[timeIndex])),
 		}
 		for index, name := range header {
 			if index >= len(record) || name == "" || name == timeColumn {
@@ -221,6 +217,23 @@ func readCSVRows(path string, scope *pb.DataScope, timeColumn string) ([]*pb.Dat
 		return nil, fmt.Errorf("CSV %s has no data rows", path)
 	}
 	return rows, nil
+}
+
+func cloneCSVTimeSeriesKey(key *pb.TimeSeriesKey, dataTime string) *pb.TimeSeriesKey {
+	cloned := &pb.TimeSeriesKey{
+		SpaceId:   key.GetSpaceId(),
+		DatasetId: key.GetDatasetId(),
+		SubjectId: key.GetSubjectId(),
+		Freq:      key.GetFreq(),
+		DataTime:  dataTime,
+	}
+	if len(key.GetDimensions()) > 0 {
+		cloned.Dimensions = make(map[string]string, len(key.GetDimensions()))
+		for name, value := range key.GetDimensions() {
+			cloned.Dimensions[name] = value
+		}
+	}
+	return cloned
 }
 
 func normalizeHeader(record []string) []string {

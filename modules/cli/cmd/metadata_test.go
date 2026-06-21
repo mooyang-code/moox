@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestLoadMetadataSeedUsesDomainObjects(t *testing.T) {
+func TestLoadMetadataSeedUsesDomainRecords(t *testing.T) {
 	seedPath := filepath.Join("..", "..", "storage", "config", "metadata.seed.yaml")
 	seed, err := loadMetadataSeed(seedPath)
 	if err != nil {
@@ -15,13 +15,13 @@ func TestLoadMetadataSeedUsesDomainObjects(t *testing.T) {
 	if len(seed.Spaces) != 1 || seed.Spaces[0].SpaceID != "crypto" {
 		t.Fatalf("spaces = %+v, want crypto seed space", seed.Spaces)
 	}
-	if len(seed.DataSets) < 2 {
-		t.Fatalf("datasets = %d, want kline and symbols datasets", len(seed.DataSets))
+	if len(seed.Datasets) < 2 {
+		t.Fatalf("datasets = %d, want kline and symbols datasets", len(seed.Datasets))
 	}
-	if len(seed.DataSetSubjects) == 0 {
+	if len(seed.DatasetSubjects) == 0 {
 		t.Fatalf("seed must bind datasets to subjects")
 	}
-	if len(seed.StorageRoutes) == 0 {
+	if len(seed.PrimaryStoreRoutes) == 0 {
 		t.Fatalf("seed must include storage routes")
 	}
 	if len(seed.ViewColumns) == 0 {
@@ -31,18 +31,18 @@ func TestLoadMetadataSeedUsesDomainObjects(t *testing.T) {
 
 func TestBuildMetadataImportCallsOrdersDependencies(t *testing.T) {
 	seed := metadataSeed{
-		Spaces:          []seedSpace{{SpaceID: "crypto", Name: "crypto"}},
-		DataSources:     []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance"}},
-		Subjects:        []seedSubject{{SpaceID: "crypto", SubjectID: "APT-USDT", SubjectType: "crypto_pair", Name: "APT-USDT"}},
-		DataSets:        []seedDataSet{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "kline", DataKind: "time_series"}},
-		DataSetSubjects: []seedDataSetSubject{{SpaceID: "crypto", DatasetID: "kline", SubjectID: "APT-USDT"}},
-		Fields:          []seedField{{SpaceID: "crypto", FieldID: "close", Name: "close", ValueType: "double"}},
-		DataSetColumns:  []seedDataSetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "field", OriginID: "close", ValueType: "double"}},
-		StorageNodes:    []seedStorageNode{{NodeID: "local", Name: "local", Endpoint: "local"}},
-		Devices:         []seedDevice{{DeviceID: "pebble", NodeID: "local", Name: "pebble", Engine: "pebble", Endpoint: "./pebble"}},
-		StorageRoutes:   []seedStorageRoute{{SpaceID: "crypto", RouteID: "route-kline", DatasetID: "kline", SubjectPattern: "*", NodeID: "local"}},
-		Views:           []seedView{{SpaceID: "crypto", ViewID: "close_view", Name: "close view", PrimaryDatasetID: "kline", DatasetIDs: []string{"kline"}}},
-		ViewColumns:     []seedViewColumn{{SpaceID: "crypto", ViewID: "close_view", ColumnName: "close", OriginType: "dataset_column", OriginID: "kline.close", ValueType: "double"}},
+		Spaces:             []seedSpace{{SpaceID: "crypto", Name: "crypto"}},
+		DataSources:        []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance"}},
+		Subjects:           []seedSubject{{SpaceID: "crypto", SubjectID: "APT-USDT", SubjectType: "crypto_pair", Name: "APT-USDT"}},
+		Datasets:           []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "kline", DataKind: "time_series"}},
+		DatasetSubjects:    []seedDatasetSubject{{SpaceID: "crypto", DatasetID: "kline", SubjectID: "APT-USDT"}},
+		Fields:             []seedField{{SpaceID: "crypto", FieldID: "close", Name: "close", ValueType: "double"}},
+		DatasetColumns:     []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "field", OriginID: "close", ValueType: "double"}},
+		PrimaryStoreNodes:  []seedPrimaryStoreNode{{NodeID: "local", Name: "local", Endpoint: "local"}},
+		Devices:            []seedDevice{{DeviceID: "pebble", NodeID: "local", Name: "pebble", Engine: "pebble", Endpoint: "./pebble"}},
+		PrimaryStoreRoutes: []seedPrimaryStoreRoute{{SpaceID: "crypto", RouteID: "route-kline", DatasetID: "kline", SubjectPattern: "*", NodeID: "local"}},
+		Views:              []seedView{{SpaceID: "crypto", ViewID: "close_view", Name: "close view", PrimaryDatasetID: "kline", DatasetIDs: []string{"kline"}}},
+		ViewColumns:        []seedViewColumn{{SpaceID: "crypto", ViewID: "close_view", ColumnName: "close", OriginType: "dataset_column", OriginID: "kline.close", ValueType: "double"}},
 	}
 
 	calls, err := buildMetadataImportCalls(seed)
@@ -57,13 +57,13 @@ func TestBuildMetadataImportCallsOrdersDependencies(t *testing.T) {
 		"CreateSpace",
 		"CreateDataSource",
 		"UpsertSubject",
-		"CreateDataSet",
-		"BindDataSetSubject",
+		"CreateDataset",
+		"BindDatasetSubject",
 		"CreateField",
-		"UpsertDataSetColumn",
-		"CreateStorageNode",
+		"UpsertDatasetColumn",
+		"CreatePrimaryStoreNode",
 		"CreateDevice",
-		"CreateStorageRoute",
+		"CreatePrimaryStoreRoute",
 		"CreateView",
 		"UpsertViewColumn",
 	}

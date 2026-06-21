@@ -14,48 +14,21 @@ import (
 
 const defaultRoot = "var/storage"
 
-type LocalOptions struct {
-	Pebble device.FactStore
-}
-
-type Local struct {
-	pebble device.FactStore
-}
-
-func NewLocal(opts LocalOptions) *Local {
-	return &Local{pebble: opts.Pebble}
-}
-
-func (l *Local) WriteRows(ctx context.Context, ref *pb.PrimaryTarget, rows []*pb.DataRow, mode pb.WriteMode) error {
-	switch ref.GetEngine() {
-	case "", "pebble":
-		return l.pebble.WriteRows(ctx, rows, mode)
-	default:
-		return fmt.Errorf("unsupported write engine %s", ref.GetEngine())
-	}
-}
-
-func (l *Local) ReadRows(ctx context.Context, ref *pb.PrimaryTarget, req *pb.ReadRowsReq) ([]*pb.DataRow, *pb.PageResult, error) {
-	switch ref.GetEngine() {
-	case "", "pebble":
-		return l.pebble.ReadRows(ctx, req.GetScope(), req.GetReadMode(), req.GetTimeRange(), req.GetSnapshotTime(), req.GetObjectId(), req.GetColumnNames(), req.GetPage())
-	default:
-		return nil, nil, fmt.Errorf("unsupported read engine %s", ref.GetEngine())
-	}
-}
-
+// LocalClientOptions 保存本地 PrimaryStore 客户端配置。
 type LocalClientOptions struct {
 	Root       string
 	PebblePath string
 	Pebble     device.FactStore
 }
 
+// LocalClient 在进程内直接调用 PrimaryStore 服务实现。
 type LocalClient struct {
 	pebblePath string
 	pebble     device.FactStore
 	opened     sync.Map
 }
 
+// sharedPebbleStore 保存进程内共享 Pebble Store 及其引用计数。
 type sharedPebbleStore struct {
 	store device.FactStore
 	refs  int
@@ -70,29 +43,42 @@ func NewLocalClient(opts LocalClientOptions) *LocalClient {
 	return &LocalClient{pebblePath: localPebblePath(opts.Root, opts.PebblePath), pebble: opts.Pebble}
 }
 
-func (c *LocalClient) WriteRows(ctx context.Context, target *pb.PrimaryTarget, rows []*pb.DataRow, mode pb.WriteMode) error {
+func (c *LocalClient) WriteRows(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow) error {
 	switch target.GetEngine() {
 	case "", "pebble":
 		store, err := c.factStore()
 		if err != nil {
 			return err
 		}
-		return store.WriteRows(ctx, rows, mode)
+		return store.WriteRows(ctx, rows)
 	default:
 		return fmt.Errorf("unsupported write engine %s", target.GetEngine())
 	}
 }
 
-func (c *LocalClient) ReadRows(ctx context.Context, target *pb.PrimaryTarget, req *pb.ReadRowsReq) ([]*pb.DataRow, *pb.PageResult, error) {
+func (c *LocalClient) ReadRows(ctx context.Context, target *pb.PrimaryStoreTarget, req *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
 	switch target.GetEngine() {
 	case "", "pebble":
 		store, err := c.factStore()
 		if err != nil {
 			return nil, nil, err
 		}
-		return store.ReadRows(ctx, req.GetScope(), req.GetReadMode(), req.GetTimeRange(), req.GetSnapshotTime(), req.GetObjectId(), req.GetColumnNames(), req.GetPage())
+		return store.ReadRows(ctx, req.GetKeys(), req.GetVersionRange(), req.GetOrder(), req.GetColumnNames(), req.GetPage())
 	default:
 		return nil, nil, fmt.Errorf("unsupported read engine %s", target.GetEngine())
+	}
+}
+
+func (c *LocalClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, req *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	switch target.GetEngine() {
+	case "", "pebble":
+		store, err := c.factStore()
+		if err != nil {
+			return nil, nil, err
+		}
+		return store.ScanRows(ctx, target, req.GetDataKind(), req.GetVersionRange(), req.GetOrder(), req.GetColumnNames(), req.GetPage())
+	default:
+		return nil, nil, fmt.Errorf("unsupported scan engine %s", target.GetEngine())
 	}
 }
 

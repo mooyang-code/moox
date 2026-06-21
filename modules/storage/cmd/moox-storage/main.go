@@ -51,7 +51,7 @@ func main() {
 	s := trpc.NewServer()
 
 	// 量化金融数据协议服务。当前实现提供真实的文件型读写路径，用于承接
-	// Space/Subject/DataSet/View 等新概念和 CSV 验收数据。
+	// Space/Subject/Dataset/View 等新概念和 CSV 验收数据。
 	opts := storageOptions()
 	storageService := storagesvc.NewServiceWithOptions(opts)
 	primaryService := primarysvc.NewService(primarysvc.Options{
@@ -79,8 +79,8 @@ func main() {
 		os.Exit(1)
 	}
 	pb.RegisterMetadataServiceService(s, storageService)
-	pb.RegisterDataServiceService(s, storageService)
-	pb.RegisterQueryServiceService(s, storageService)
+	pb.RegisterAccessServiceService(s, storageService)
+	pb.RegisterViewServiceService(s, storageService)
 	pb.RegisterPrimaryStoreServiceService(s, primaryService)
 	timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
 	registerTimerHandlerService("trpc.storage.view.timer", s.Service("trpc.storage.view.timer"), view.HandleSchedule)
@@ -221,10 +221,10 @@ func importMetadataSeed(ctx context.Context, frameworkConfigPath string, storage
 	if err != nil {
 		return err
 	}
-	log.Infof("metadata seed 导入完成 (%s): spaces=%d data_sources=%d subjects=%d subject_symbols=%d datasets=%d dataset_subjects=%d fields=%d factors=%d dataset_columns=%d views=%d view_columns=%d storage_nodes=%d devices=%d storage_routes=%d",
-		seedPath, result.Spaces, result.DataSources, result.Subjects, result.SubjectSymbols, result.DataSets,
-		result.DataSetSubjects, result.Fields, result.Factors, result.DataSetColumns, result.Views,
-		result.ViewColumns, result.StorageNodes, result.Devices, result.StorageRoutes)
+	log.Infof("metadata seed 导入完成 (%s): spaces=%d data_sources=%d subjects=%d subject_symbols=%d datasets=%d dataset_subjects=%d fields=%d factors=%d dataset_columns=%d views=%d view_columns=%d primary_store_nodes=%d devices=%d primary_store_routes=%d",
+		seedPath, result.Spaces, result.DataSources, result.Subjects, result.SubjectSymbols, result.Datasets,
+		result.DatasetSubjects, result.Fields, result.Factors, result.DatasetColumns, result.Views,
+		result.ViewColumns, result.PrimaryStoreNodes, result.Devices, result.PrimaryStoreRoutes)
 	return nil
 }
 

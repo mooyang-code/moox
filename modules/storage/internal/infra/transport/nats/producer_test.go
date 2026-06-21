@@ -30,6 +30,7 @@ func TestEnsureStreamReturnsAddError(t *testing.T) {
 	require.Zero(t, manager.updates)
 }
 
+// fakeStreamManager 是 NATS 生产者测试使用的流管理桩。
 type fakeStreamManager struct {
 	adds          int
 	updates       int

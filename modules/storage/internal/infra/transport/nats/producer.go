@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/transport"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 
 	"github.com/nats-io/nats.go"
@@ -103,6 +104,7 @@ func (p *NATSProducer) Connect(ctx context.Context) error {
 	return nil
 }
 
+// streamManager 定义 NATS JetStream 流声明所需的接口。
 type streamManager interface {
 	AddStream(cfg *nats.StreamConfig, opts ...nats.JSOpt) (*nats.StreamInfo, error)
 	UpdateStream(cfg *nats.StreamConfig, opts ...nats.JSOpt) (*nats.StreamInfo, error)
@@ -177,7 +179,7 @@ func (p *NATSProducer) Subscribe(ctx context.Context, subject string, handler tr
 			Data:    msg.Data,
 			Time:    time.Now(),
 		}
-		if err := handler(context.Background(), event); err != nil {
+		if err := handler(trpc.BackgroundContext(), event); err != nil {
 			_ = msg.Nak()
 			log.Errorf("处理NATS消息失败: %v", err)
 			return
@@ -192,6 +194,7 @@ func (p *NATSProducer) Subscribe(ctx context.Context, subject string, handler tr
 	return natsSubscription{subscription: subscription}, nil
 }
 
+// natsSubscription 表示 NATS 消费者订阅句柄。
 type natsSubscription struct {
 	subscription *nats.Subscription
 }

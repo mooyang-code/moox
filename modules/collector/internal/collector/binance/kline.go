@@ -318,16 +318,19 @@ func (c *KlineCollector) sendWriteRows(ctx context.Context, storageURL string, r
 	return nil
 }
 
+// WriteRowsRequest 表示 Binance K 线采集写入 Storage 的请求体。
 type WriteRowsRequest struct {
 	AuthInfo  AuthInfo  `json:"auth_info"`
 	WriteMode string    `json:"write_mode"`
 	Rows      []DataRow `json:"rows"`
 }
 
+// WriteRowsResponse 表示 Binance K 线采集写入 Storage 的响应体。
 type WriteRowsResponse struct {
 	RetInfo RetInfo `json:"ret_info"`
 }
 
+// DataSlice 表示一次写入请求中的数据切片。
 type DataSlice struct {
 	DatasetID  string            `json:"dataset_id"`
 	SubjectID  string            `json:"subject_id"`
@@ -335,6 +338,7 @@ type DataSlice struct {
 	Dimensions map[string]string `json:"dimensions,omitempty"`
 }
 
+// DataRow 表示采集器写入 Storage 的一行数据。
 type DataRow struct {
 	Slice    DataSlice         `json:"slice"`
 	DataTime string            `json:"data_time,omitempty"`
@@ -343,12 +347,14 @@ type DataRow struct {
 	Attrs    map[string]string `json:"attrs,omitempty"`
 }
 
+// ColumnValue 表示采集器写入行中的一个列值。
 type ColumnValue struct {
 	ColumnName string     `json:"column_name"`
 	ValueType  string     `json:"value_type"`
 	Value      TypedValue `json:"value"`
 }
 
+// TypedValue 表示采集器写入列的类型化值。
 type TypedValue struct {
 	StringValue *string  `json:"string_value,omitempty"`
 	IntValue    *int64   `json:"int_value,omitempty"`

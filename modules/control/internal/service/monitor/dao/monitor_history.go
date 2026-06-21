@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 )
 
+// MonitorHistoryDAO 实现监控历史表的数据访问逻辑。
 type MonitorHistoryDAO struct {
 	db *gorm.DB
 }

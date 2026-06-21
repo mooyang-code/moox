@@ -100,6 +100,7 @@ type CloudNodeDAO interface {
 	UpdateRunningVersion(ctx context.Context, nodeID string, version string) error
 }
 
+// cloudNodeDaoImpl 实现云节点表的数据访问逻辑。
 type cloudNodeDaoImpl struct {
 	db *gorm.DB
 }

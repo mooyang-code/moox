@@ -13,7 +13,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const metadataServiceName = "trpc.storage.metadata.MetadataService"
+const (
+	accessServiceName   = "trpc.storage.access.AccessService"
+	metadataServiceName = "trpc.storage.metadata.MetadataService"
+)
 
 var (
 	metadataImportFile        string
@@ -66,22 +69,24 @@ var metadataImportCmd = &cobra.Command{
 	},
 }
 
+// metadataSeed 对应 CLI 元数据导入文件的顶层配置。
 type metadataSeed struct {
-	Spaces          []seedSpace          `yaml:"spaces"`
-	DataSources     []seedDataSource     `yaml:"data_sources"`
-	Subjects        []seedSubject        `yaml:"subjects"`
-	SubjectSymbols  []seedSubjectSymbol  `yaml:"subject_symbols"`
-	DataSets        []seedDataSet        `yaml:"datasets"`
-	DataSetSubjects []seedDataSetSubject `yaml:"dataset_subjects"`
-	Fields          []seedField          `yaml:"fields"`
-	DataSetColumns  []seedDataSetColumn  `yaml:"dataset_columns"`
-	Views           []seedView           `yaml:"views"`
-	ViewColumns     []seedViewColumn     `yaml:"view_columns"`
-	StorageNodes    []seedStorageNode    `yaml:"storage_nodes"`
-	Devices         []seedDevice         `yaml:"devices"`
-	StorageRoutes   []seedStorageRoute   `yaml:"storage_routes"`
+	Spaces             []seedSpace             `yaml:"spaces"`
+	DataSources        []seedDataSource        `yaml:"data_sources"`
+	Subjects           []seedSubject           `yaml:"subjects"`
+	SubjectSymbols     []seedSubjectSymbol     `yaml:"subject_symbols"`
+	Datasets           []seedDataset           `yaml:"datasets"`
+	DatasetSubjects    []seedDatasetSubject    `yaml:"dataset_subjects"`
+	Fields             []seedField             `yaml:"fields"`
+	DatasetColumns     []seedDatasetColumn     `yaml:"dataset_columns"`
+	Views              []seedView              `yaml:"views"`
+	ViewColumns        []seedViewColumn        `yaml:"view_columns"`
+	PrimaryStoreNodes  []seedPrimaryStoreNode  `yaml:"primary_store_nodes"`
+	Devices            []seedDevice            `yaml:"devices"`
+	PrimaryStoreRoutes []seedPrimaryStoreRoute `yaml:"primary_store_routes"`
 }
 
+// seedCommon 保存元数据种子条目的通用字段。
 type seedCommon struct {
 	Status     string            `yaml:"status"`
 	CreatedAt  string            `yaml:"created_at"`
@@ -89,6 +94,7 @@ type seedCommon struct {
 	Attributes map[string]string `yaml:"attributes"`
 }
 
+// seedSpace 描述 CLI 可导入的 Space 元数据。
 type seedSpace struct {
 	SpaceID     string `yaml:"space_id"`
 	Name        string `yaml:"name"`
@@ -97,6 +103,7 @@ type seedSpace struct {
 	seedCommon  `yaml:",inline"`
 }
 
+// seedDataSource 描述 CLI 可导入的数据源元数据。
 type seedDataSource struct {
 	SpaceID      string `yaml:"space_id"`
 	DataSourceID string `yaml:"data_source_id"`
@@ -108,6 +115,7 @@ type seedDataSource struct {
 	seedCommon   `yaml:",inline"`
 }
 
+// seedSubject 描述 CLI 可导入的 Subject 元数据。
 type seedSubject struct {
 	SpaceID     string `yaml:"space_id"`
 	SubjectID   string `yaml:"subject_id"`
@@ -119,6 +127,7 @@ type seedSubject struct {
 	seedCommon  `yaml:",inline"`
 }
 
+// seedSubjectSymbol 描述 Subject 与外部符号的映射元数据。
 type seedSubjectSymbol struct {
 	SpaceID        string `yaml:"space_id"`
 	SubjectID      string `yaml:"subject_id"`
@@ -127,7 +136,8 @@ type seedSubjectSymbol struct {
 	seedCommon     `yaml:",inline"`
 }
 
-type seedDataSet struct {
+// seedDataset 描述 CLI 可导入的 Dataset 元数据。
+type seedDataset struct {
 	SpaceID      string   `yaml:"space_id"`
 	DatasetID    string   `yaml:"dataset_id"`
 	DataSourceID string   `yaml:"data_source_id"`
@@ -138,7 +148,8 @@ type seedDataSet struct {
 	seedCommon   `yaml:",inline"`
 }
 
-type seedDataSetSubject struct {
+// seedDatasetSubject 描述 Dataset 与 Subject 的绑定元数据。
+type seedDatasetSubject struct {
 	SpaceID            string `yaml:"space_id"`
 	DatasetID          string `yaml:"dataset_id"`
 	SubjectID          string `yaml:"subject_id"`
@@ -148,6 +159,7 @@ type seedDataSetSubject struct {
 	seedCommon         `yaml:",inline"`
 }
 
+// seedField 描述 CLI 可导入的字段元数据。
 type seedField struct {
 	SpaceID            string `yaml:"space_id"`
 	FieldID            string `yaml:"field_id"`
@@ -160,20 +172,21 @@ type seedField struct {
 	seedCommon         `yaml:",inline"`
 }
 
-type seedDataSetColumn struct {
-	SpaceID     string   `yaml:"space_id"`
-	DatasetID   string   `yaml:"dataset_id"`
-	ColumnName  string   `yaml:"column_name"`
-	OriginType  string   `yaml:"origin_type"`
-	OriginID    string   `yaml:"origin_id"`
-	ValueType   string   `yaml:"value_type"`
-	Required    bool     `yaml:"required"`
-	IsUnique    bool     `yaml:"is_unique"`
-	Aliases     []string `yaml:"aliases"`
-	TextIndexed bool     `yaml:"text_indexed"`
-	seedCommon  `yaml:",inline"`
+// seedDatasetColumn 描述 CLI 可导入的 Dataset 列元数据。
+type seedDatasetColumn struct {
+	SpaceID    string   `yaml:"space_id"`
+	DatasetID  string   `yaml:"dataset_id"`
+	ColumnName string   `yaml:"column_name"`
+	OriginType string   `yaml:"origin_type"`
+	OriginID   string   `yaml:"origin_id"`
+	ValueType  string   `yaml:"value_type"`
+	Required   bool     `yaml:"required"`
+	IsUnique   bool     `yaml:"is_unique"`
+	Aliases    []string `yaml:"aliases"`
+	seedCommon `yaml:",inline"`
 }
 
+// seedView 描述 CLI 可导入的 View 元数据。
 type seedView struct {
 	SpaceID          string   `yaml:"space_id"`
 	ViewID           string   `yaml:"view_id"`
@@ -190,6 +203,7 @@ type seedView struct {
 	seedCommon       `yaml:",inline"`
 }
 
+// seedViewColumn 描述 CLI 可导入的 View 结果列元数据。
 type seedViewColumn struct {
 	SpaceID    string `yaml:"space_id"`
 	ViewID     string `yaml:"view_id"`
@@ -202,7 +216,8 @@ type seedViewColumn struct {
 	seedCommon `yaml:",inline"`
 }
 
-type seedStorageNode struct {
+// seedPrimaryStoreNode 描述 CLI 可导入的主存节点元数据。
+type seedPrimaryStoreNode struct {
 	NodeID     string `yaml:"node_id"`
 	Name       string `yaml:"name"`
 	Endpoint   string `yaml:"endpoint"`
@@ -211,6 +226,7 @@ type seedStorageNode struct {
 	seedCommon `yaml:",inline"`
 }
 
+// seedDevice 描述 CLI 可导入的存储设备元数据。
 type seedDevice struct {
 	DeviceID   string `yaml:"device_id"`
 	NodeID     string `yaml:"node_id"`
@@ -221,7 +237,8 @@ type seedDevice struct {
 	seedCommon `yaml:",inline"`
 }
 
-type seedStorageRoute struct {
+// seedPrimaryStoreRoute 描述 CLI 可导入的主存路由元数据。
+type seedPrimaryStoreRoute struct {
 	SpaceID        string `yaml:"space_id"`
 	RouteID        string `yaml:"route_id"`
 	DatasetID      string `yaml:"dataset_id"`
@@ -233,6 +250,7 @@ type seedStorageRoute struct {
 	seedCommon     `yaml:",inline"`
 }
 
+// metadataImportCall 封装一次元数据导入接口调用。
 type metadataImportCall struct {
 	Resource string
 	Method   string
@@ -241,12 +259,14 @@ type metadataImportCall struct {
 	Exists   *metadataExistsProbe
 }
 
+// metadataExistsProbe 封装一次元数据是否存在的探测调用。
 type metadataExistsProbe struct {
 	Method   string
 	Request  proto.Message
 	Response proto.Message
 }
 
+// metadataImportSummary 汇总 CLI 元数据导入结果。
 type metadataImportSummary struct {
 	Status      string         `json:"status"`
 	DryRun      bool           `json:"dry_run,omitempty"`
@@ -305,25 +325,25 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 	for _, item := range seed.SubjectSymbols {
 		calls = append(calls, metadataImportCall{Resource: "subject_symbols", Method: "UpsertSubjectSymbol", Request: &pb.UpsertSubjectSymbolReq{SubjectSymbol: item.toPB()}, Response: &pb.UpsertSubjectSymbolRsp{}})
 	}
-	for _, item := range seed.DataSets {
+	for _, item := range seed.Datasets {
 		dataset, err := item.toPB()
 		if err != nil {
 			return nil, err
 		}
 		calls = append(calls, metadataImportCall{
 			Resource: "datasets",
-			Method:   "CreateDataSet",
-			Request:  &pb.CreateDataSetReq{Dataset: dataset},
-			Response: &pb.CreateDataSetRsp{},
+			Method:   "CreateDataset",
+			Request:  &pb.CreateDatasetReq{Dataset: dataset},
+			Response: &pb.CreateDatasetRsp{},
 			Exists: &metadataExistsProbe{
-				Method:   "GetDataSet",
-				Request:  &pb.GetDataSetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()},
-				Response: &pb.GetDataSetRsp{},
+				Method:   "GetDataset",
+				Request:  &pb.GetDatasetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()},
+				Response: &pb.GetDatasetRsp{},
 			},
 		})
 	}
-	for _, item := range seed.DataSetSubjects {
-		calls = append(calls, metadataImportCall{Resource: "dataset_subjects", Method: "BindDataSetSubject", Request: &pb.BindDataSetSubjectReq{DatasetSubject: item.toPB()}, Response: &pb.BindDataSetSubjectRsp{}})
+	for _, item := range seed.DatasetSubjects {
+		calls = append(calls, metadataImportCall{Resource: "dataset_subjects", Method: "BindDatasetSubject", Request: &pb.BindDatasetSubjectReq{DatasetSubject: item.toPB()}, Response: &pb.BindDatasetSubjectRsp{}})
 	}
 	for _, item := range seed.Fields {
 		field, err := item.toPB()
@@ -342,24 +362,24 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 			},
 		})
 	}
-	for _, item := range seed.DataSetColumns {
+	for _, item := range seed.DatasetColumns {
 		column, err := item.toPB()
 		if err != nil {
 			return nil, err
 		}
-		calls = append(calls, metadataImportCall{Resource: "dataset_columns", Method: "UpsertDataSetColumn", Request: &pb.UpsertDataSetColumnReq{Column: column}, Response: &pb.UpsertDataSetColumnRsp{}})
+		calls = append(calls, metadataImportCall{Resource: "dataset_columns", Method: "UpsertDatasetColumn", Request: &pb.UpsertDatasetColumnReq{Column: column}, Response: &pb.UpsertDatasetColumnRsp{}})
 	}
-	for _, item := range seed.StorageNodes {
+	for _, item := range seed.PrimaryStoreNodes {
 		node := item.toPB()
 		calls = append(calls, metadataImportCall{
-			Resource: "storage_nodes",
-			Method:   "CreateStorageNode",
-			Request:  &pb.CreateStorageNodeReq{Node: node},
-			Response: &pb.CreateStorageNodeRsp{},
+			Resource: "primary_store_nodes",
+			Method:   "CreatePrimaryStoreNode",
+			Request:  &pb.CreatePrimaryStoreNodeReq{Node: node},
+			Response: &pb.CreatePrimaryStoreNodeRsp{},
 			Exists: &metadataExistsProbe{
-				Method:   "GetStorageNode",
-				Request:  &pb.GetStorageNodeReq{NodeId: node.GetNodeId()},
-				Response: &pb.GetStorageNodeRsp{},
+				Method:   "GetPrimaryStoreNode",
+				Request:  &pb.GetPrimaryStoreNodeReq{NodeId: node.GetNodeId()},
+				Response: &pb.GetPrimaryStoreNodeRsp{},
 			},
 		})
 	}
@@ -377,17 +397,17 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 			},
 		})
 	}
-	for _, item := range seed.StorageRoutes {
+	for _, item := range seed.PrimaryStoreRoutes {
 		route := item.toPB()
 		calls = append(calls, metadataImportCall{
-			Resource: "storage_routes",
-			Method:   "CreateStorageRoute",
-			Request:  &pb.CreateStorageRouteReq{StorageRoute: route},
-			Response: &pb.CreateStorageRouteRsp{},
+			Resource: "primary_store_routes",
+			Method:   "CreatePrimaryStoreRoute",
+			Request:  &pb.CreatePrimaryStoreRouteReq{PrimaryStoreRoute: route},
+			Response: &pb.CreatePrimaryStoreRouteRsp{},
 			Exists: &metadataExistsProbe{
-				Method:   "GetStorageRoute",
-				Request:  &pb.GetStorageRouteReq{SpaceId: route.GetSpaceId(), RouteId: route.GetRouteId()},
-				Response: &pb.GetStorageRouteRsp{},
+				Method:   "GetPrimaryStoreRoute",
+				Request:  &pb.GetPrimaryStoreRouteReq{SpaceId: route.GetSpaceId(), RouteId: route.GetRouteId()},
+				Response: &pb.GetPrimaryStoreRouteRsp{},
 			},
 		})
 	}
@@ -526,16 +546,16 @@ func (s seedSubjectSymbol) toPB() *pb.SubjectSymbol {
 	return &pb.SubjectSymbol{SpaceId: s.SpaceID, SubjectId: s.SubjectID, DataSourceId: s.DataSourceID, ExternalSymbol: s.ExternalSymbol, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
-func (s seedDataSet) toPB() (*pb.DataSet, error) {
+func (s seedDataset) toPB() (*pb.Dataset, error) {
 	dataKind, err := parseDataKind(s.DataKind)
 	if err != nil {
 		return nil, err
 	}
-	return &pb.DataSet{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, Freqs: s.Freqs, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, Freqs: s.Freqs, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
-func (s seedDataSetSubject) toPB() *pb.DataSetSubject {
-	return &pb.DataSetSubject{SpaceId: s.SpaceID, DatasetId: s.DatasetID, SubjectId: s.SubjectID, SubjectRole: s.SubjectRole, EffectiveStartTime: s.EffectiveStartTime, EffectiveEndTime: s.EffectiveEndTime, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+func (s seedDatasetSubject) toPB() *pb.DatasetSubject {
+	return &pb.DatasetSubject{SpaceId: s.SpaceID, DatasetId: s.DatasetID, SubjectId: s.SubjectID, SubjectRole: s.SubjectRole, EffectiveStartTime: s.EffectiveStartTime, EffectiveEndTime: s.EffectiveEndTime, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedField) toPB() (*pb.Field, error) {
@@ -546,12 +566,12 @@ func (s seedField) toPB() (*pb.Field, error) {
 	return &pb.Field{SpaceId: s.SpaceID, FieldId: s.FieldID, Name: s.Name, Description: s.Description, ValueType: valueType, Unit: s.Unit, ValidationRuleJson: s.ValidationRuleJSON, WriteExample: s.WriteExample, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
-func (s seedDataSetColumn) toPB() (*pb.DataSetColumn, error) {
-	originType, valueType, err := parseColumnAndValueTypes(s.OriginType, s.ValueType)
+func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
+	originType, valueType, err := parseDatasetColumnAndValueTypes(s.OriginType, s.ValueType)
 	if err != nil {
 		return nil, err
 	}
-	return &pb.DataSetColumn{SpaceId: s.SpaceID, DatasetId: s.DatasetID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, Required: s.Required, IsUnique: s.IsUnique, Aliases: s.Aliases, TextIndexed: s.TextIndexed, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+	return &pb.DatasetColumn{SpaceId: s.SpaceID, DatasetId: s.DatasetID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, Required: s.Required, IsUnique: s.IsUnique, Aliases: s.Aliases, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
 func (s seedView) toPB() *pb.View {
@@ -566,24 +586,24 @@ func (s seedViewColumn) toPB() (*pb.ViewColumn, error) {
 	return &pb.ViewColumn{SpaceId: s.SpaceID, ViewId: s.ViewID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, OnlineTime: s.OnlineTime, SortOrder: s.SortOrder, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
-func (s seedStorageNode) toPB() *pb.StorageNode {
-	return &pb.StorageNode{NodeId: s.NodeID, Name: s.Name, Endpoint: s.Endpoint, Weight: s.Weight, ConfigJson: s.ConfigJSON, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+func (s seedPrimaryStoreNode) toPB() *pb.PrimaryStoreNode {
+	return &pb.PrimaryStoreNode{NodeId: s.NodeID, Name: s.Name, Endpoint: s.Endpoint, Weight: s.Weight, ConfigJson: s.ConfigJSON, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedDevice) toPB() *pb.Device {
 	return &pb.Device{DeviceId: s.DeviceID, NodeId: s.NodeID, Name: s.Name, Engine: s.Engine, Endpoint: s.Endpoint, ConfigJson: s.ConfigJSON, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
-func (s seedStorageRoute) toPB() *pb.StorageRoute {
-	return &pb.StorageRoute{SpaceId: s.SpaceID, RouteId: s.RouteID, DatasetId: s.DatasetID, SubjectId: s.SubjectID, SubjectPattern: s.SubjectPattern, HashRule: s.HashRule, NodeId: s.NodeID, Priority: s.Priority, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+func (s seedPrimaryStoreRoute) toPB() *pb.PrimaryStoreRoute {
+	return &pb.PrimaryStoreRoute{SpaceId: s.SpaceID, RouteId: s.RouteID, DatasetId: s.DatasetID, SubjectId: s.SubjectID, SubjectPattern: s.SubjectPattern, HashRule: s.HashRule, NodeId: s.NodeID, Priority: s.Priority, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func parseDataKind(value string) (pb.DataKind, error) {
 	switch normalizeEnum(value) {
 	case "", "UNSPECIFIED":
 		return pb.DataKind_DATA_KIND_UNSPECIFIED, nil
-	case "OBJECT":
-		return pb.DataKind_DATA_KIND_OBJECT, nil
+	case "RECORD":
+		return pb.DataKind_DATA_KIND_RECORD, nil
 	case "TIME_SERIES":
 		return pb.DataKind_DATA_KIND_TIME_SERIES, nil
 	case "SNAPSHOT":
@@ -622,14 +642,25 @@ func parseFieldValueType(value string) (pb.FieldValueType, error) {
 	}
 }
 
+func parseDatasetColumnOriginType(value string) (pb.DatasetColumnOriginType, error) {
+	switch normalizeEnum(value) {
+	case "", "UNSPECIFIED":
+		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED, nil
+	case "FIELD":
+		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, nil
+	case "FACTOR":
+		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR, nil
+	case "SYSTEM":
+		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM, nil
+	default:
+		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED, fmt.Errorf("unsupported dataset column origin_type %q", value)
+	}
+}
+
 func parseColumnOriginType(value string) (pb.ColumnOriginType, error) {
 	switch normalizeEnum(value) {
 	case "", "UNSPECIFIED":
 		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_UNSPECIFIED, nil
-	case "FIELD":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FIELD, nil
-	case "FACTOR":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FACTOR, nil
 	case "DATASET_COLUMN":
 		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, nil
 	case "EXPRESSION":
@@ -637,8 +668,20 @@ func parseColumnOriginType(value string) (pb.ColumnOriginType, error) {
 	case "SYSTEM":
 		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM, nil
 	default:
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_UNSPECIFIED, fmt.Errorf("unsupported origin_type %q", value)
+		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_UNSPECIFIED, fmt.Errorf("unsupported column origin_type %q", value)
 	}
+}
+
+func parseDatasetColumnAndValueTypes(origin string, value string) (pb.DatasetColumnOriginType, pb.FieldValueType, error) {
+	originType, err := parseDatasetColumnOriginType(origin)
+	if err != nil {
+		return originType, pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED, err
+	}
+	valueType, err := parseFieldValueType(value)
+	if err != nil {
+		return originType, valueType, err
+	}
+	return originType, valueType, nil
 }
 
 func parseColumnAndValueTypes(origin string, value string) (pb.ColumnOriginType, pb.FieldValueType, error) {
@@ -657,6 +700,7 @@ func normalizeEnum(value string) string {
 	value = strings.TrimSpace(strings.ToUpper(value))
 	value = strings.TrimPrefix(value, "DATA_KIND_")
 	value = strings.TrimPrefix(value, "FIELD_VALUE_TYPE_")
+	value = strings.TrimPrefix(value, "DATASET_COLUMN_ORIGIN_TYPE_")
 	value = strings.TrimPrefix(value, "COLUMN_ORIGIN_TYPE_")
 	value = strings.ReplaceAll(value, "-", "_")
 	return value

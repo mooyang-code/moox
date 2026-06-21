@@ -29,7 +29,6 @@ func TestStorageImportCommandExposesFormatBasedImport(t *testing.T) {
 		"data-source",
 		"freq",
 		"time-column",
-		"write-mode",
 		"batch-size",
 		"dry-run",
 	} {
@@ -58,14 +57,14 @@ func TestInferStorageImportFormat(t *testing.T) {
 func TestCSVImporterRejectsUnregisteredHeader(t *testing.T) {
 	csvPath := writeTempCSV(t, "candle_begin_time,close,unregistered\n2024-01-01 00:00:00,1.23,oops\n")
 	importer := csvStorageFileImporter{}
-	_, err := importer.ReadRows(csvPath, storageImportContext{
+	_, err := importer.ReadTimeSeriesRows(csvPath, storageImportContext{
 		Options: validStorageImportOptions(csvPath),
-		Columns: map[string]*pb.DataSetColumn{
+		Columns: map[string]*pb.DatasetColumn{
 			"close": datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
 		},
 	})
 	if err == nil {
-		t.Fatalf("ReadRows should reject unregistered header")
+		t.Fatalf("ReadTimeSeriesRows should reject unregistered header")
 	}
 	if !strings.Contains(err.Error(), "unregistered") {
 		t.Fatalf("error = %q, want unregistered column detail", err.Error())
@@ -75,9 +74,9 @@ func TestCSVImporterRejectsUnregisteredHeader(t *testing.T) {
 func TestCSVImporterValidatesTypesAndBuildsRows(t *testing.T) {
 	csvPath := writeTempCSV(t, "candle_begin_time,close,trade_num,tradable,note\n2024-01-01 00:00:00,1.23,7,true,ok\n")
 	importer := csvStorageFileImporter{}
-	result, err := importer.ReadRows(csvPath, storageImportContext{
+	result, err := importer.ReadTimeSeriesRows(csvPath, storageImportContext{
 		Options: validStorageImportOptions(csvPath),
-		Columns: map[string]*pb.DataSetColumn{
+		Columns: map[string]*pb.DatasetColumn{
 			"close":     datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
 			"trade_num": datasetColumn("trade_num", pb.FieldValueType_FIELD_VALUE_TYPE_INT),
 			"tradable":  datasetColumn("tradable", pb.FieldValueType_FIELD_VALUE_TYPE_BOOL),
@@ -85,7 +84,7 @@ func TestCSVImporterValidatesTypesAndBuildsRows(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("ReadRows returned error: %v", err)
+		t.Fatalf("ReadTimeSeriesRows returned error: %v", err)
 	}
 	if result.Stats.ValidatedRows != 1 || len(result.Rows) != 1 {
 		t.Fatalf("validated rows = %d len(rows)=%d, want 1", result.Stats.ValidatedRows, len(result.Rows))
@@ -105,14 +104,14 @@ func TestCSVImporterValidatesTypesAndBuildsRows(t *testing.T) {
 func TestCSVImporterSkipsBannerBeforeHeader(t *testing.T) {
 	csvPath := writeTempCSV(t, "downloaded from exchange\ncandle_begin_time,close\n2024-01-01 00:00:00,1.23\n")
 	importer := csvStorageFileImporter{}
-	result, err := importer.ReadRows(csvPath, storageImportContext{
+	result, err := importer.ReadTimeSeriesRows(csvPath, storageImportContext{
 		Options: validStorageImportOptions(csvPath),
-		Columns: map[string]*pb.DataSetColumn{
+		Columns: map[string]*pb.DatasetColumn{
 			"close": datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
 		},
 	})
 	if err != nil {
-		t.Fatalf("ReadRows returned error: %v", err)
+		t.Fatalf("ReadTimeSeriesRows returned error: %v", err)
 	}
 	if result.Stats.ValidatedRows != 1 {
 		t.Fatalf("validated rows = %d, want 1", result.Stats.ValidatedRows)
@@ -124,14 +123,14 @@ func TestCSVImporterRejectsInvalidDimension(t *testing.T) {
 	importer := csvStorageFileImporter{}
 	opts := validStorageImportOptions(csvPath)
 	opts.Dimensions = []string{"market"}
-	_, err := importer.ReadRows(csvPath, storageImportContext{
+	_, err := importer.ReadTimeSeriesRows(csvPath, storageImportContext{
 		Options: opts,
-		Columns: map[string]*pb.DataSetColumn{
+		Columns: map[string]*pb.DatasetColumn{
 			"close": datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
 		},
 	})
 	if err == nil {
-		t.Fatalf("ReadRows should reject invalid dimension")
+		t.Fatalf("ReadTimeSeriesRows should reject invalid dimension")
 	}
 	if !strings.Contains(err.Error(), "dimension") || !strings.Contains(err.Error(), "name=value") {
 		t.Fatalf("error = %q, want dimension format detail", err.Error())
@@ -141,14 +140,14 @@ func TestCSVImporterRejectsInvalidDimension(t *testing.T) {
 func TestCSVImporterRejectsBadTypedValueBeforeWrite(t *testing.T) {
 	csvPath := writeTempCSV(t, "candle_begin_time,close\n2024-01-01 00:00:00,not-a-number\n")
 	importer := csvStorageFileImporter{}
-	_, err := importer.ReadRows(csvPath, storageImportContext{
+	_, err := importer.ReadTimeSeriesRows(csvPath, storageImportContext{
 		Options: validStorageImportOptions(csvPath),
-		Columns: map[string]*pb.DataSetColumn{
+		Columns: map[string]*pb.DatasetColumn{
 			"close": datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
 		},
 	})
 	if err == nil {
-		t.Fatalf("ReadRows should reject invalid double")
+		t.Fatalf("ReadTimeSeriesRows should reject invalid double")
 	}
 	if !strings.Contains(err.Error(), "row 2") || !strings.Contains(err.Error(), "close") {
 		t.Fatalf("error = %q, want row and column detail", err.Error())
@@ -158,9 +157,9 @@ func TestCSVImporterRejectsBadTypedValueBeforeWrite(t *testing.T) {
 func TestRunStorageImportBindsSubjectAndWritesBatches(t *testing.T) {
 	csvPath := writeTempCSV(t, "candle_begin_time,close\n2024-01-01 00:00:00,1.23\n2024-01-01 00:01:00,1.24\n")
 	meta := &fakeStorageImportMetadata{
-		dataset: &pb.DataSet{SpaceId: "crypto", DatasetId: "binance_spot_kline", DataSourceId: "binance", Freqs: []string{"1m"}},
+		dataset: &pb.Dataset{SpaceId: "crypto", DatasetId: "binance_spot_kline", DataSourceId: "binance", Freqs: []string{"1m"}},
 		view:    &pb.View{SpaceId: "crypto", ViewId: "spot_kline_close_view", DatasetIds: []string{"binance_spot_kline"}},
-		columns: []*pb.DataSetColumn{
+		columns: []*pb.DatasetColumn{
 			datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
 		},
 	}
@@ -193,8 +192,8 @@ func TestRunStorageImportBindsSubjectAndWritesBatches(t *testing.T) {
 func TestRunStorageImportDryRunDoesNotBindOrWrite(t *testing.T) {
 	csvPath := writeTempCSV(t, "candle_begin_time,close\n2024-01-01 00:00:00,1.23\n")
 	meta := &fakeStorageImportMetadata{
-		dataset: &pb.DataSet{SpaceId: "crypto", DatasetId: "binance_spot_kline", DataSourceId: "binance", Freqs: []string{"1m"}},
-		columns: []*pb.DataSetColumn{datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE)},
+		dataset: &pb.Dataset{SpaceId: "crypto", DatasetId: "binance_spot_kline", DataSourceId: "binance", Freqs: []string{"1m"}},
+		columns: []*pb.DatasetColumn{datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE)},
 	}
 	writer := &fakeStorageDataWriter{}
 	opts := validStorageImportOptions(csvPath)
@@ -204,7 +203,7 @@ func TestRunStorageImportDryRunDoesNotBindOrWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runStorageImport returned error: %v", err)
 	}
-	if summary.Status != "dry_run" || !summary.WouldBindSubject || summary.WouldWriteRows != 1 {
+	if summary.Status != "dry_run" || !summary.WouldBindSubject || summary.WouldWriteTimeSeriesRows != 1 {
 		t.Fatalf("summary = %+v, want dry-run bind/write plan", summary)
 	}
 	if len(meta.binds) != 0 || len(writer.requests) != 0 {
@@ -216,8 +215,8 @@ func TestRunStorageImportRejectsMissingSubject(t *testing.T) {
 	csvPath := writeTempCSV(t, "candle_begin_time,close\n2024-01-01 00:00:00,1.23\n")
 	meta := &fakeStorageImportMetadata{
 		subjectMissing: true,
-		dataset:        &pb.DataSet{SpaceId: "crypto", DatasetId: "binance_spot_kline", DataSourceId: "binance", Freqs: []string{"1m"}},
-		columns:        []*pb.DataSetColumn{datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE)},
+		dataset:        &pb.Dataset{SpaceId: "crypto", DatasetId: "binance_spot_kline", DataSourceId: "binance", Freqs: []string{"1m"}},
+		columns:        []*pb.DatasetColumn{datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE)},
 	}
 
 	_, err := runStorageImport(context.Background(), validStorageImportOptions(csvPath), meta, &fakeStorageDataWriter{})
@@ -241,9 +240,9 @@ func TestRunStorageImportRetriesWriteAfterMetadataCacheLag(t *testing.T) {
 
 	csvPath := writeTempCSV(t, "candle_begin_time,close\n2024-01-01 00:00:00,1.23\n")
 	meta := &fakeStorageImportMetadata{
-		dataset:  &pb.DataSet{SpaceId: "crypto", DatasetId: "binance_spot_kline", DataSourceId: "binance", Freqs: []string{"1m"}},
-		columns:  []*pb.DataSetColumn{datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE)},
-		subjects: []*pb.DataSetSubject{{SpaceId: "crypto", DatasetId: "binance_spot_kline", SubjectId: "ARB-USDT", Status: "active"}},
+		dataset:  &pb.Dataset{SpaceId: "crypto", DatasetId: "binance_spot_kline", DataSourceId: "binance", Freqs: []string{"1m"}},
+		columns:  []*pb.DatasetColumn{datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE)},
+		subjects: []*pb.DatasetSubject{{SpaceId: "crypto", DatasetId: "binance_spot_kline", SubjectId: "ARB-USDT", Status: "active"}},
 	}
 	writer := &fakeStorageDataWriter{errors: []error{errors.New("dataset metadata is not loaded yet")}}
 
@@ -265,9 +264,9 @@ func TestRunStorageImportRetriesWriteAfterMetadataCacheLag(t *testing.T) {
 func TestRunStorageImportRejectsViewDatasetMismatch(t *testing.T) {
 	csvPath := writeTempCSV(t, "candle_begin_time,close\n2024-01-01 00:00:00,1.23\n")
 	meta := &fakeStorageImportMetadata{
-		dataset: &pb.DataSet{SpaceId: "crypto", DatasetId: "binance_spot_kline", DataSourceId: "binance", Freqs: []string{"1m"}},
+		dataset: &pb.Dataset{SpaceId: "crypto", DatasetId: "binance_spot_kline", DataSourceId: "binance", Freqs: []string{"1m"}},
 		view:    &pb.View{SpaceId: "crypto", ViewId: "other_view", DatasetIds: []string{"other_dataset"}},
-		columns: []*pb.DataSetColumn{datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE)},
+		columns: []*pb.DatasetColumn{datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE)},
 	}
 	opts := validStorageImportOptions(csvPath)
 	opts.ViewID = "other_view"
@@ -293,13 +292,12 @@ func validStorageImportOptions(file string) storageImportOptions {
 		DataSourceID: "binance",
 		Freq:         "1m",
 		TimeColumn:   "candle_begin_time",
-		WriteMode:    "upsert",
 		BatchSize:    1000,
 	}
 }
 
-func datasetColumn(name string, valueType pb.FieldValueType) *pb.DataSetColumn {
-	return &pb.DataSetColumn{
+func datasetColumn(name string, valueType pb.FieldValueType) *pb.DatasetColumn {
+	return &pb.DatasetColumn{
 		SpaceId:    "crypto",
 		DatasetId:  "binance_spot_kline",
 		ColumnName: name,
@@ -317,17 +315,18 @@ func writeTempCSV(t *testing.T, content string) string {
 	return path
 }
 
+// fakeStorageImportMetadata 是数据导入测试使用的元数据桩。
 type fakeStorageImportMetadata struct {
-	dataset        *pb.DataSet
+	dataset        *pb.Dataset
 	view           *pb.View
-	columns        []*pb.DataSetColumn
-	subjects       []*pb.DataSetSubject
-	binds          []*pb.DataSetSubject
+	columns        []*pb.DatasetColumn
+	subjects       []*pb.DatasetSubject
+	binds          []*pb.DatasetSubject
 	subject        *pb.Subject
 	subjectMissing bool
 }
 
-func (f *fakeStorageImportMetadata) GetDataSet(context.Context, string, string) (*pb.DataSet, error) {
+func (f *fakeStorageImportMetadata) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
 	return f.dataset, nil
 }
 
@@ -345,19 +344,20 @@ func (f *fakeStorageImportMetadata) GetSubject(context.Context, string, string) 
 	return &pb.Subject{SpaceId: "crypto", SubjectId: "ARB-USDT", Status: "active"}, nil
 }
 
-func (f *fakeStorageImportMetadata) ListDataSetColumns(context.Context, string, string) ([]*pb.DataSetColumn, error) {
+func (f *fakeStorageImportMetadata) ListDatasetColumns(context.Context, string, string) ([]*pb.DatasetColumn, error) {
 	return f.columns, nil
 }
 
-func (f *fakeStorageImportMetadata) ListDataSetSubjects(context.Context, string, string, string) ([]*pb.DataSetSubject, error) {
+func (f *fakeStorageImportMetadata) ListDatasetSubjects(context.Context, string, string, string) ([]*pb.DatasetSubject, error) {
 	return f.subjects, nil
 }
 
-func (f *fakeStorageImportMetadata) BindDataSetSubject(_ context.Context, item *pb.DataSetSubject) error {
+func (f *fakeStorageImportMetadata) BindDatasetSubject(_ context.Context, item *pb.DatasetSubject) error {
 	f.binds = append(f.binds, item)
 	return nil
 }
 
+// fakeStorageDataWriter 是数据导入测试使用的写入桩。
 type fakeStorageDataWriter struct {
 	requests []*pb.WriteTimeSeriesRowsReq
 	errors   []error

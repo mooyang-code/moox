@@ -13,6 +13,7 @@ import (
 	parquetgo "github.com/parquet-go/parquet-go"
 )
 
+// Manifest 描述一次 Parquet 归档产物的元信息。
 type Manifest struct {
 	RowCount    uint64
 	ContentHash string
@@ -21,6 +22,7 @@ type Manifest struct {
 	MaxTime     string
 }
 
+// FactRow 表示归档文件中保存的一行主存事实数据。
 type FactRow struct {
 	SpaceID        string `parquet:"space_id"`
 	DatasetID      string `parquet:"dataset_id"`
@@ -43,7 +45,7 @@ type FactRow struct {
 
 type double = float64
 
-func WriteFacts(ctx context.Context, path string, rows []*pb.DataRow) (*Manifest, error) {
+func WriteFacts(ctx context.Context, path string, rows []*pb.TimeSeriesRow) (*Manifest, error) {
 	_ = ctx
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -63,13 +65,13 @@ func WriteFacts(ctx context.Context, path string, rows []*pb.DataRow) (*Manifest
 	return manifest, nil
 }
 
-func flattenRows(rows []*pb.DataRow) ([]FactRow, *Manifest, error) {
+func flattenRows(rows []*pb.TimeSeriesRow) ([]FactRow, *Manifest, error) {
 	columns := make(map[string]bool)
 	var facts []FactRow
 	manifest := &Manifest{}
 	for _, row := range rows {
-		scope := row.GetKey().GetScope()
-		dimensions, err := marshalJSON(scope.GetDimensions())
+		key := row.GetKey()
+		dimensions, err := marshalJSON(key.GetDimensions())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -77,7 +79,7 @@ func flattenRows(rows []*pb.DataRow) ([]FactRow, *Manifest, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		dataTime := row.GetKey().GetDataTime()
+		dataTime := key.GetDataTime()
 		if manifest.MinTime == "" || dataTime < manifest.MinTime {
 			manifest.MinTime = dataTime
 		}
@@ -86,13 +88,13 @@ func flattenRows(rows []*pb.DataRow) ([]FactRow, *Manifest, error) {
 		}
 		for _, column := range row.GetColumns() {
 			fact := FactRow{
-				SpaceID:        scope.GetSpaceId(),
-				DatasetID:      scope.GetDatasetId(),
-				SubjectID:      scope.GetSubjectId(),
-				Freq:           scope.GetFreq(),
+				SpaceID:        key.GetSpaceId(),
+				DatasetID:      key.GetDatasetId(),
+				SubjectID:      key.GetSubjectId(),
+				Freq:           key.GetFreq(),
 				DimensionsJSON: dimensions,
 				DataTime:       dataTime,
-				RowID:          row.GetKey().GetRowId(),
+				RowID:          dataTime,
 				ColumnName:     column.GetColumnName(),
 				ValueType:      valueTypeName(column.GetValueType()),
 				AttributesJSON: attributes,

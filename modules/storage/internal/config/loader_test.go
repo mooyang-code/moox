@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// loaderTestConfig 是配置加载测试使用的临时配置结构。
 type loaderTestConfig struct {
 	Name    string `yaml:"name"`
 	Timeout int    `yaml:"timeout"`
@@ -163,16 +164,13 @@ func TestStorageRuntimeConfigDefaultsNATSConsumerName(t *testing.T) {
 	}
 }
 
-func TestStorageRuntimeConfigDefaultsEventSubjects(t *testing.T) {
+func TestStorageRuntimeConfigDefaultsEventSubjectPrefix(t *testing.T) {
 	t.Parallel()
 
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
 	if cfg.Storage.EventBus.SubjectPrefix != "moox.storage" {
 		t.Fatalf("eventbus subject_prefix = %q", cfg.Storage.EventBus.SubjectPrefix)
-	}
-	if cfg.Storage.EventBus.RowsChangedSubject != "moox.storage.fact.rows_changed.v1" {
-		t.Fatalf("eventbus rows_changed_subject = %q", cfg.Storage.EventBus.RowsChangedSubject)
 	}
 }
 
@@ -186,13 +184,13 @@ func TestStorageRuntimeConfigDefaultsPrimaryServiceNameToLocal(t *testing.T) {
 	}
 }
 
-func TestStorageRuntimeConfigBuildsRowsChangedSubjectFromCustomPrefix(t *testing.T) {
+func TestStorageRuntimeConfigKeepsCustomSubjectPrefix(t *testing.T) {
 	t.Parallel()
 
 	var cfg RuntimeConfig
 	cfg.Storage.EventBus.SubjectPrefix = "custom.storage"
 	cfg.ApplyDefaults()
-	if cfg.Storage.EventBus.RowsChangedSubject != "custom.storage.fact.rows_changed.v1" {
-		t.Fatalf("eventbus rows_changed_subject = %q", cfg.Storage.EventBus.RowsChangedSubject)
+	if cfg.Storage.EventBus.SubjectPrefix != "custom.storage" {
+		t.Fatalf("eventbus subject_prefix = %q", cfg.Storage.EventBus.SubjectPrefix)
 	}
 }

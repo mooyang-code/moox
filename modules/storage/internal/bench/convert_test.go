@@ -7,7 +7,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
-func TestKlineRowsToDataRowsMapsColumnsAndSkipsEmptyFundingRate(t *testing.T) {
+func TestKlineRowsToTimeSeriesRowsMapsColumnsAndSkipsEmptyFundingRate(t *testing.T) {
 	fundingRate := -0.0001
 	rows := []KlineRow{
 		{
@@ -22,15 +22,15 @@ func TestKlineRowsToDataRowsMapsColumnsAndSkipsEmptyFundingRate(t *testing.T) {
 		},
 	}
 
-	got := KlineRowsToDataRows("crypto", "bench_swap_kline_1h", "BTC-USDT", "1h", rows)
+	got := KlineRowsToTimeSeriesRows("crypto", "bench_swap_kline_1h", "BTC-USDT", "1h", rows)
 	if len(got) != 2 {
 		t.Fatalf("rows len = %d, want 2", len(got))
 	}
 	if got[0].GetKey().GetDataTime() != "2025-03-03T00:05:00Z" {
 		t.Fatalf("data_time = %q", got[0].GetKey().GetDataTime())
 	}
-	if got[0].GetKey().GetRowId() != "2025-03-03T00:05:00Z" {
-		t.Fatalf("row_id = %q", got[0].GetKey().GetRowId())
+	if got[0].GetKey().GetSubjectId() != "BTC-USDT" {
+		t.Fatalf("subject_id = %q", got[0].GetKey().GetSubjectId())
 	}
 	if !hasColumn(got[0], "fundingRate") {
 		t.Fatalf("first row should include fundingRate: %+v", got[0].GetColumns())
@@ -43,7 +43,7 @@ func TestKlineRowsToDataRowsMapsColumnsAndSkipsEmptyFundingRate(t *testing.T) {
 	}
 }
 
-func hasColumn(row *pb.DataRow, name string) bool {
+func hasColumn(row *pb.TimeSeriesRow, name string) bool {
 	for _, column := range row.GetColumns() {
 		if column.GetColumnName() == name {
 			return true
@@ -52,7 +52,7 @@ func hasColumn(row *pb.DataRow, name string) bool {
 	return false
 }
 
-func valueType(row *pb.DataRow, name string) pb.FieldValueType {
+func valueType(row *pb.TimeSeriesRow, name string) pb.FieldValueType {
 	for _, column := range row.GetColumns() {
 		if column.GetColumnName() == name {
 			return column.GetValueType()

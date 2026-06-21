@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -33,8 +32,8 @@ func HandleSchedule(ctx context.Context, params string) error {
 		log.ErrorContextf(ctx, "[Archive] schedule params invalid: %v", err)
 		return err
 	}
-	if req.allDataSets {
-		files, err := service.ArchiveDataSets(ctx, req.spaceID, req.partitionKey, req.timeRange)
+	if req.allDatasets {
+		files, err := service.ArchiveDatasets(ctx, req.spaceID, req.partitionKey, req.timeRange)
 		if err != nil {
 			log.ErrorContextf(ctx, "[Archive] schedule all datasets failed: %v", err)
 			return err
@@ -42,7 +41,7 @@ func HandleSchedule(ctx context.Context, params string) error {
 		log.InfoContextf(ctx, "[Archive] schedule archived %d dataset(s) in %s", len(files), req.spaceID)
 		return nil
 	}
-	file, err := service.ArchiveDataSet(ctx, req.spaceID, req.datasetID, req.partitionKey, req.timeRange)
+	file, err := service.ArchiveDataset(ctx, req.spaceID, req.datasetID, req.partitionKey, req.timeRange)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Archive] schedule failed: %v", err)
 		return err
@@ -57,10 +56,11 @@ func currentDefaultService() *Service {
 	return defaultService.value
 }
 
+// scheduleRequest 保存归档定时器解析出的调度参数。
 type scheduleRequest struct {
 	spaceID      string
 	datasetID    string
-	allDataSets  bool
+	allDatasets  bool
 	partitionKey string
 	timeRange    *pb.TimeRange
 }
@@ -75,7 +75,7 @@ func parseScheduleParams(params string) (scheduleRequest, error) {
 		datasetID:    strings.TrimSpace(values.Get("dataset_id")),
 		partitionKey: strings.TrimSpace(values.Get("partition_key")),
 	}
-	req.allDataSets = req.datasetID == "*" || strings.EqualFold(req.datasetID, "all")
+	req.allDatasets = req.datasetID == "*" || strings.EqualFold(req.datasetID, "all")
 	if req.spaceID == "" || req.datasetID == "" {
 		return scheduleRequest{}, errors.New("space_id and dataset_id are required")
 	}
@@ -104,16 +104,4 @@ func parseTimeRange(values url.Values) (*pb.TimeRange, error) {
 		StartTime: start,
 		EndTime:   end,
 	}, nil
-}
-
-func parseBoolDefault(value string, fallback bool) (bool, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, err
-	}
-	return parsed, nil
 }

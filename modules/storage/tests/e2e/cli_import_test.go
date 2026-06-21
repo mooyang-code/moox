@@ -31,8 +31,8 @@ func testCLIStorageImportCSV(ctx context.Context, t *testing.T) {
 		require.NoError(t, err)
 		return rsp.GetRetInfo()
 	})
-	mustSuccess(t, "CreateDataSet:cli-import", func() *pb.RetInfo {
-		rsp, err := meta.CreateDataSet(ctx, &pb.CreateDataSetReq{Dataset: &pb.DataSet{
+	mustSuccess(t, "CreateDataset:cli-import", func() *pb.RetInfo {
+		rsp, err := meta.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{
 			SpaceId:      e2eSpaceID,
 			DatasetId:    cliDatasetID,
 			DataSourceId: dataSourceID,
@@ -44,12 +44,12 @@ func testCLIStorageImportCSV(ctx context.Context, t *testing.T) {
 		require.NoError(t, err)
 		return rsp.GetRetInfo()
 	})
-	mustSuccess(t, "UpsertDataSetColumn:cli-import:close", func() *pb.RetInfo {
-		rsp, err := meta.UpsertDataSetColumn(ctx, &pb.UpsertDataSetColumnReq{Column: &pb.DataSetColumn{
+	mustSuccess(t, "UpsertDatasetColumn:cli-import:close", func() *pb.RetInfo {
+		rsp, err := meta.UpsertDatasetColumn(ctx, &pb.UpsertDatasetColumnReq{Column: &pb.DatasetColumn{
 			SpaceId:    e2eSpaceID,
 			DatasetId:  cliDatasetID,
 			ColumnName: "close",
-			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FIELD,
+			OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD,
 			OriginId:   "close",
 			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 			Status:     "active",
@@ -57,8 +57,8 @@ func testCLIStorageImportCSV(ctx context.Context, t *testing.T) {
 		require.NoError(t, err)
 		return rsp.GetRetInfo()
 	})
-	mustSuccess(t, "CreateStorageRoute:cli-import", func() *pb.RetInfo {
-		rsp, err := meta.CreateStorageRoute(ctx, &pb.CreateStorageRouteReq{StorageRoute: &pb.StorageRoute{
+	mustSuccess(t, "CreatePrimaryStoreRoute:cli-import", func() *pb.RetInfo {
+		rsp, err := meta.CreatePrimaryStoreRoute(ctx, &pb.CreatePrimaryStoreRouteReq{PrimaryStoreRoute: &pb.PrimaryStoreRoute{
 			SpaceId:        e2eSpaceID,
 			DatasetId:      cliDatasetID,
 			SubjectPattern: "*",
@@ -118,12 +118,11 @@ func testCLIStorageImportCSV(ctx context.Context, t *testing.T) {
 
 	data := harness.DataClient()
 	point := first.Time.UTC().Format(time.RFC3339)
-	rsp, err := data.ReadRows(ctx, &pb.ReadRowsReq{
-		Scope:    &pb.DataScope{SpaceId: e2eSpaceID, DatasetId: cliDatasetID, SubjectId: cliSubjectID, Freq: freq},
-		ReadMode: pb.ReadMode_READ_MODE_RANGE,
+	rsp, err := data.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+		Keys: []*pb.TimeSeriesKey{{SpaceId: e2eSpaceID, DatasetId: cliDatasetID, SubjectId: cliSubjectID, Freq: freq}},
 		TimeRange: &pb.TimeRange{
-			StartTime:      point,
-			EndTime:        point,
+			StartTime: point,
+			EndTime:   point,
 		},
 		ColumnNames: []string{"close"},
 		Page:        &pb.Page{Size: 1},

@@ -16,9 +16,10 @@ func TestRegistryCreatesProducerByKind(t *testing.T) {
 	producer, err := transport.NewProducer("fake", transport.ProducerOptions{ServerURL: "memory://test"})
 	require.NoError(t, err)
 	require.Equal(t, transport.ProducerOptions{ServerURL: "memory://test"}, producer.Options())
-	require.NoError(t, producer.Send(context.Background(), &transport.Message{Subject: "moox.storage.fact.rows_changed.v1", Data: []byte("ok")}))
+	require.NoError(t, producer.Send(context.Background(), &transport.Message{Subject: "moox.storage.record.rows_changed.v1", Data: []byte("ok")}))
 }
 
+// fakeProducer 是传输注册测试使用的事件生产者桩。
 type fakeProducer struct {
 	opts transport.ProducerOptions
 }

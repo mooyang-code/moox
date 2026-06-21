@@ -164,6 +164,7 @@ type InstanceFilter struct {
 	PageSize        int    // 每页数量
 }
 
+// collectorTaskInstanceDaoImpl 实现采集任务实例表的数据访问逻辑。
 type collectorTaskInstanceDaoImpl struct {
 	db *gorm.DB
 }

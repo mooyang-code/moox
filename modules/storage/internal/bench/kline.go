@@ -15,6 +15,7 @@ import (
 
 const klineTimeLayout = "2006-01-02 15:04:05"
 
+// KlineFile 表示从本地文件发现的一组 K 线数据。
 type KlineFile struct {
 	Path      string `json:"path"`
 	Market    string `json:"market"`
@@ -22,6 +23,7 @@ type KlineFile struct {
 	Freq      string `json:"freq"`
 }
 
+// KlineRow 表示压测导入前解析出的单根 K 线。
 type KlineRow struct {
 	Time                     time.Time
 	Open                     float64

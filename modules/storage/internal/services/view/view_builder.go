@@ -17,32 +17,45 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// FactReader 定义 View 构建器读取主存 TimeSeries 行所需的接口。
 type FactReader interface {
-	ReadRows(ctx context.Context, scope *pb.DataScope, mode pb.ReadMode, timeRange *pb.TimeRange, snapshotTime string, objectID string, columnNames []string, page *pb.Page) ([]*pb.DataRow, *pb.PageResult, error)
+	ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
+	ScanTimeSeriesRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange, columnNames []string, page *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult, error)
 }
 
+// ViewWriter 定义 View 构建器写入物化结果所需的接口。
 type ViewWriter interface {
 	CreateResultTable(ctx context.Context, tableName string, columns []*pb.ViewColumn) error
-	InsertRows(ctx context.Context, tableName string, rows []*pb.QueryViewRow) error
+	InsertRows(ctx context.Context, tableName string, rows []*pb.TimeSeriesRow) error
 }
 
+// ViewCleaner 定义 View 构建器清理旧结果表所需的接口。
 type ViewCleaner interface {
 	ListResultTables(ctx context.Context) ([]string, error)
 	DropResultTable(ctx context.Context, tableName string) error
 }
 
+// Options 保存 View 构建器创建时的依赖与并发配置。
 type Options struct {
 	Metadata metadata.Store
 	Facts    FactReader
 	Views    ViewWriter
 	Now      func() time.Time
+
+	OnBuildStarted  func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string)
+	BeforeComplete  func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) error
+	OnBuildFinished func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string)
 }
 
+// Builder 负责把主存 TimeSeries 行构建为版本化 View 结果。
 type Builder struct {
 	metadata     metadata.Store
 	facts        FactReader
 	views        ViewWriter
 	now          func() time.Time
+	onStarted    func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string)
+	beforeDone   func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) error
+	onFinished   func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string)
 	buildMu      sync.Mutex
 	activeBuilds map[string]struct{}
 }
@@ -57,6 +70,9 @@ func NewBuilder(opts Options) *Builder {
 		facts:        opts.Facts,
 		views:        opts.Views,
 		now:          now,
+		onStarted:    opts.OnBuildStarted,
+		beforeDone:   opts.BeforeComplete,
+		onFinished:   opts.OnBuildFinished,
 		activeBuilds: make(map[string]struct{}),
 	}
 }
@@ -81,12 +97,22 @@ func (b *Builder) buildLocked(ctx context.Context, spaceID string, viewID string
 	if err != nil {
 		return nil, err
 	}
+	if !isDuckDBView(view) {
+		return nil, fmt.Errorf("view %s/%s engine %q is not supported by time series builder", spaceID, viewID, view.GetEngine())
+	}
 	primaryDatasetID := view.GetPrimaryDatasetId()
 	if primaryDatasetID == "" && len(view.GetDatasetIds()) > 0 {
 		primaryDatasetID = view.GetDatasetIds()[0]
 	}
 	if primaryDatasetID == "" {
 		return nil, errors.New("view primary_dataset_id is required")
+	}
+	dataset, err := b.metadata.GetDataset(ctx, spaceID, primaryDatasetID)
+	if err != nil {
+		return nil, err
+	}
+	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
+		return nil, fmt.Errorf("view %s/%s primary dataset %s is not time series", spaceID, viewID, primaryDatasetID)
 	}
 	columns, _, err := b.metadata.ListViewColumns(ctx, spaceID, viewID, nil)
 	if err != nil {
@@ -98,44 +124,43 @@ func (b *Builder) buildLocked(ctx context.Context, spaceID string, viewID string
 	if len(columns) == 0 {
 		return nil, errors.New("view columns are required")
 	}
-	if err := b.updateViewBuildStatus(ctx, view, "building"); err != nil {
+	targetVersion := view.GetViewVersion()
+	if targetVersion == 0 {
+		targetVersion = 1
+	}
+	resultName := resultTableName(spaceID, viewID, targetVersion, b.now())
+	if _, err := b.metadata.BeginViewBuild(ctx, spaceID, viewID, targetVersion, resultName); err != nil {
 		return nil, err
 	}
-
-	resultName := resultTableName(spaceID, viewID, b.now())
+	if b.onStarted != nil {
+		b.onStarted(ctx, view, targetVersion, resultName)
+	}
+	if b.onFinished != nil {
+		defer b.onFinished(ctx, view, targetVersion, resultName)
+	}
 	if err := b.views.CreateResultTable(ctx, resultName, columns); err != nil {
-		_ = b.updateViewBuildStatus(ctx, view, "failed")
+		_ = b.metadata.FailViewBuild(ctx, spaceID, viewID, targetVersion, resultName, err)
 		return nil, err
 	}
 	rows, err := b.readViewRows(ctx, view, primaryDatasetID, columns)
 	if err != nil {
-		_ = b.updateViewBuildStatus(ctx, view, "failed")
+		_ = b.metadata.FailViewBuild(ctx, spaceID, viewID, targetVersion, resultName, err)
 		return nil, err
 	}
 	if err := b.views.InsertRows(ctx, resultName, rows); err != nil {
-		_ = b.updateViewBuildStatus(ctx, view, "failed")
+		_ = b.metadata.FailViewBuild(ctx, spaceID, viewID, targetVersion, resultName, err)
 		return nil, err
 	}
-
-	updated := proto.Clone(view).(*pb.View)
-	updated.ActiveResult = resultName
-	updated.BuildStatus = "active"
-	updated.Columns = nil
-	if updated.Status == "" {
-		updated.Status = "active"
+	if b.beforeDone != nil {
+		if err := b.beforeDone(ctx, view, targetVersion, resultName); err != nil {
+			_ = b.metadata.FailViewBuild(ctx, spaceID, viewID, targetVersion, resultName, err)
+			return nil, err
+		}
 	}
-	return b.metadata.UpsertView(ctx, updated)
-}
-
-func (b *Builder) updateViewBuildStatus(ctx context.Context, view *pb.View, status string) error {
-	updated := proto.Clone(view).(*pb.View)
-	updated.BuildStatus = status
-	updated.Columns = nil
-	if updated.Status == "" {
-		updated.Status = "active"
+	if err := b.metadata.CompleteViewBuild(ctx, spaceID, viewID, targetVersion, resultName); err != nil {
+		return nil, err
 	}
-	_, err := b.metadata.UpsertView(ctx, updated)
-	return err
+	return b.metadata.GetView(ctx, spaceID, viewID)
 }
 
 func (b *Builder) BuildView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
@@ -163,16 +188,18 @@ func (b *Builder) tryLockView(spaceID string, viewID string) (func(), bool) {
 }
 
 func (b *Builder) RebuildPendingViews(ctx context.Context, spaceID string) ([]*pb.View, error) {
-	return b.rebuildViews(ctx, spaceID, rebuildableBuildStatus)
-}
-
-func (b *Builder) RebuildFailedViews(ctx context.Context, spaceID string) ([]*pb.View, error) {
-	return b.rebuildViews(ctx, spaceID, func(status string) bool {
-		return status == "failed"
+	return b.rebuildViews(ctx, spaceID, func(view *pb.View) bool {
+		return view.GetViewVersion() > view.GetActiveViewVersion() || rebuildableBuildStatus(view.GetBuildStatus())
 	})
 }
 
-func (b *Builder) rebuildViews(ctx context.Context, spaceID string, rebuildable func(string) bool) ([]*pb.View, error) {
+func (b *Builder) RebuildFailedViews(ctx context.Context, spaceID string) ([]*pb.View, error) {
+	return b.rebuildViews(ctx, spaceID, func(view *pb.View) bool {
+		return view.GetBuildStatus() == "failed"
+	})
+}
+
+func (b *Builder) rebuildViews(ctx context.Context, spaceID string, rebuildable func(*pb.View) bool) ([]*pb.View, error) {
 	if b == nil || b.metadata == nil {
 		return nil, errMetadataRequired()
 	}
@@ -182,7 +209,10 @@ func (b *Builder) rebuildViews(ctx context.Context, spaceID string, rebuildable 
 	}
 	var built []*pb.View
 	for _, view := range views {
-		if !rebuildable(view.GetBuildStatus()) {
+		if !isDuckDBView(view) {
+			continue
+		}
+		if !rebuildable(view) {
 			continue
 		}
 		unlock, ok := b.tryLockView(view.GetSpaceId(), view.GetViewId())
@@ -200,7 +230,11 @@ func (b *Builder) rebuildViews(ctx context.Context, spaceID string, rebuildable 
 }
 
 func rebuildableBuildStatus(status string) bool {
-	return status == "" || status == "pending" || status == "building"
+	return status == "" || status == "pending" || status == "building" || status == "failed"
+}
+
+func isDuckDBView(view *pb.View) bool {
+	return view != nil && (strings.TrimSpace(view.GetEngine()) == "" || strings.EqualFold(view.GetEngine(), "duckdb"))
 }
 
 func (b *Builder) CleanupInactiveResults(ctx context.Context, spaceID string) (int, error) {
@@ -211,7 +245,7 @@ func (b *Builder) CleanupInactiveResults(ctx context.Context, spaceID string) (i
 	if !ok {
 		return 0, errors.New("view cleaner is required")
 	}
-	active, err := b.activeResultTables(ctx, "")
+	active, err := b.resultTablesInUse(ctx, "")
 	if err != nil {
 		return 0, err
 	}
@@ -236,7 +270,7 @@ func (b *Builder) CleanupInactiveResults(ctx context.Context, spaceID string) (i
 	return dropped, nil
 }
 
-func (b *Builder) activeResultTables(ctx context.Context, spaceID string) (map[string]bool, error) {
+func (b *Builder) resultTablesInUse(ctx context.Context, spaceID string) (map[string]bool, error) {
 	active := make(map[string]bool)
 	if spaceID != "" {
 		views, err := b.listAllActiveViews(ctx, spaceID)
@@ -246,6 +280,9 @@ func (b *Builder) activeResultTables(ctx context.Context, spaceID string) (map[s
 		for _, view := range views {
 			if view.GetActiveResult() != "" {
 				active[view.GetActiveResult()] = true
+			}
+			if view.GetBuildingResult() != "" {
+				active[view.GetBuildingResult()] = true
 			}
 		}
 		return active, nil
@@ -265,6 +302,9 @@ func (b *Builder) activeResultTables(ctx context.Context, spaceID string) (map[s
 				if view.GetActiveResult() != "" {
 					active[view.GetActiveResult()] = true
 				}
+				if view.GetBuildingResult() != "" {
+					active[view.GetBuildingResult()] = true
+				}
 			}
 		}
 		if page == nil || !page.GetHasMore() {
@@ -273,64 +313,40 @@ func (b *Builder) activeResultTables(ctx context.Context, spaceID string) (map[s
 	}
 }
 
-func (b *Builder) readViewRows(ctx context.Context, view *pb.View, primaryDatasetID string, columns []*pb.ViewColumn) ([]*pb.QueryViewRow, error) {
+func (b *Builder) readViewRows(ctx context.Context, view *pb.View, primaryDatasetID string, columns []*pb.ViewColumn) ([]*pb.TimeSeriesRow, error) {
 	spaceID := view.GetSpaceId()
 	datasetIDs := viewDatasetIDs(primaryDatasetID, view.GetDatasetIds(), columns)
 	sourceColumns := sourceColumnNamesByDataset(primaryDatasetID, columns)
-	subjects, err := b.datasetSubjects(ctx, spaceID, primaryDatasetID)
-	if err != nil {
-		return nil, err
-	}
 	timeRange := buildTimeRange(b.now(), view.GetQueryWindow())
 
-	// 按 Subject 并行读取与组装，结果按 subjects 原始顺序合并以保证输出确定性。
-	perSubject := make([][]*pb.QueryViewRow, len(subjects))
+	rowsByDataset := make(map[string][]*pb.TimeSeriesRow, len(datasetIDs))
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(viewBuildConcurrency)
-	for idx, subjectID := range subjects {
-		idx, subjectID := idx, subjectID
+	var mu sync.Mutex
+	for _, datasetID := range datasetIDs {
+		datasetID := datasetID
 		group.Go(func() error {
-			rows, err := b.readSubjectRows(groupCtx, view, spaceID, primaryDatasetID, datasetIDs, sourceColumns, columns, subjectID, timeRange)
+			rows, err := b.readAllRows(groupCtx, spaceID, datasetID, timeRange, sourceColumns[datasetID])
 			if err != nil {
 				return err
 			}
-			perSubject[idx] = rows
+			mu.Lock()
+			rowsByDataset[datasetID] = rows
+			mu.Unlock()
 			return nil
 		})
 	}
 	if err := group.Wait(); err != nil {
 		return nil, err
 	}
-	var out []*pb.QueryViewRow
-	for _, rows := range perSubject {
-		out = append(out, rows...)
-	}
-	return out, nil
-}
-
-// viewBuildConcurrency 限制 View 构建时并行读取的 Subject 数，避免压垮 PrimaryStore。
-const viewBuildConcurrency = 8
-
-// readSubjectRows 读取并组装单个 Subject 在各 DataSet 上的宽表行。
-func (b *Builder) readSubjectRows(ctx context.Context, view *pb.View, spaceID, primaryDatasetID string, datasetIDs []string, sourceColumns map[string][]string, columns []*pb.ViewColumn, subjectID string, timeRange *pb.TimeRange) ([]*pb.QueryViewRow, error) {
-	rowsByDataset := make(map[string][]*pb.DataRow, len(datasetIDs))
-	indexByDataset := make(map[string]map[string]*pb.DataRow, len(datasetIDs))
+	indexByDataset := make(map[string]map[string]*pb.TimeSeriesRow, len(datasetIDs))
 	for _, datasetID := range datasetIDs {
-		readRows, err := b.readAllRows(ctx, &pb.DataScope{
-			SpaceId:   spaceID,
-			DatasetId: datasetID,
-			SubjectId: subjectID,
-		}, timeRange, sourceColumns[datasetID])
-		if err != nil {
-			return nil, err
-		}
-		rowsByDataset[datasetID] = readRows
-		indexByDataset[datasetID] = indexRowsByGrain(readRows, view.GetGrainKeys())
+		indexByDataset[datasetID] = indexRowsByGrain(rowsByDataset[datasetID], view.GetGrainKeys())
 	}
-	var out []*pb.QueryViewRow
+	var out []*pb.TimeSeriesRow
 	for _, primaryRow := range rowsByDataset[primaryDatasetID] {
 		key := rowGrainKey(primaryRow, view.GetGrainKeys())
-		rowSet := make(map[string]*pb.DataRow, len(datasetIDs))
+		rowSet := make(map[string]*pb.TimeSeriesRow, len(datasetIDs))
 		rowSet[primaryDatasetID] = primaryRow
 		for _, datasetID := range datasetIDs {
 			if datasetID == primaryDatasetID {
@@ -341,55 +357,34 @@ func (b *Builder) readSubjectRows(ctx context.Context, view *pb.View, spaceID, p
 			}
 		}
 		mapped := mapViewValues(rowSet, primaryDatasetID, columns)
-		out = append(out, &pb.QueryViewRow{
-			SubjectId: primaryRow.GetKey().GetScope().GetSubjectId(),
-			DataTime:  primaryRow.GetKey().GetDataTime(),
-			Values:    mapped,
+		out = append(out, &pb.TimeSeriesRow{
+			Key:        proto.Clone(primaryRow.GetKey()).(*pb.TimeSeriesKey),
+			Columns:    mapped,
+			Attributes: cloneStringMap(primaryRow.GetAttributes()),
 		})
 	}
 	return out, nil
 }
 
-func (b *Builder) readAllRows(ctx context.Context, scope *pb.DataScope, timeRange *pb.TimeRange, columnNames []string) ([]*pb.DataRow, error) {
+// viewBuildConcurrency 限制 View 构建时并行扫描 Dataset 数，避免压垮 PrimaryStore。
+const viewBuildConcurrency = 8
+
+func (b *Builder) readAllRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange, columnNames []string) ([]*pb.TimeSeriesRow, error) {
 	const pageSize = uint32(1000)
-	var out []*pb.DataRow
-	for pageNo := uint32(1); ; pageNo++ {
-		rows, page, err := b.facts.ReadRows(ctx, scope, pb.ReadMode_READ_MODE_RANGE, timeRange, "", "", columnNames, &pb.Page{Page: pageNo, Size: pageSize})
+	var out []*pb.TimeSeriesRow
+	cursor := ""
+	for {
+		rows, page, err := b.facts.ScanTimeSeriesRows(ctx, spaceID, datasetID, timeRange, columnNames, &pb.Page{Size: pageSize, Cursor: cursor})
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, rows...)
-		if page == nil || !page.GetHasMore() {
-			return out, nil
+		if page == nil || !page.GetHasMore() || page.GetNextCursor() == "" {
+			break
 		}
+		cursor = page.GetNextCursor()
 	}
-}
-
-func (b *Builder) datasetSubjects(ctx context.Context, spaceID string, datasetID string) ([]string, error) {
-	bindings, err := b.listAllDataSetSubjects(ctx, spaceID, datasetID)
-	if err != nil {
-		return nil, err
-	}
-	if len(bindings) == 0 {
-		return []string{""}, nil
-	}
-	subjects := make([]string, 0, len(bindings))
-	seen := make(map[string]bool, len(bindings))
-	for _, binding := range bindings {
-		if binding.GetStatus() != "" && binding.GetStatus() != "active" {
-			continue
-		}
-		subjectID := binding.GetSubjectId()
-		if subjectID == "" || seen[subjectID] {
-			continue
-		}
-		seen[subjectID] = true
-		subjects = append(subjects, subjectID)
-	}
-	if len(subjects) == 0 {
-		return []string{""}, nil
-	}
-	return subjects, nil
+	return out, nil
 }
 
 func (b *Builder) listAllActiveViews(ctx context.Context, spaceID string) ([]*pb.View, error) {
@@ -407,22 +402,7 @@ func (b *Builder) listAllActiveViews(ctx context.Context, spaceID string) ([]*pb
 	}
 }
 
-func (b *Builder) listAllDataSetSubjects(ctx context.Context, spaceID string, datasetID string) ([]*pb.DataSetSubject, error) {
-	const pageSize = uint32(1000)
-	var out []*pb.DataSetSubject
-	for pageNo := uint32(1); ; pageNo++ {
-		bindings, page, err := b.metadata.ListDataSetSubjectsPage(ctx, spaceID, datasetID, "", &pb.Page{Page: pageNo, Size: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, bindings...)
-		if page == nil || !page.GetHasMore() {
-			return out, nil
-		}
-	}
-}
-
-func mapViewValues(rowsByDataset map[string]*pb.DataRow, primaryDatasetID string, columns []*pb.ViewColumn) []*pb.ColumnValue {
+func mapViewValues(rowsByDataset map[string]*pb.TimeSeriesRow, primaryDatasetID string, columns []*pb.ViewColumn) []*pb.ColumnValue {
 	valuesByDataset := make(map[string]map[string]*pb.ColumnValue, len(rowsByDataset))
 	for datasetID, row := range rowsByDataset {
 		values := make(map[string]*pb.ColumnValue, len(row.GetColumns()))
@@ -446,6 +426,17 @@ func mapViewValues(rowsByDataset map[string]*pb.DataRow, primaryDatasetID string
 			copied.ValueType = viewColumn.GetValueType()
 		}
 		out = append(out, copied)
+	}
+	return out
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
 	}
 	return out
 }
@@ -518,15 +509,15 @@ func viewDatasetIDs(primaryDatasetID string, datasetIDs []string, columns []*pb.
 	return out
 }
 
-func indexRowsByGrain(rows []*pb.DataRow, grainKeys []string) map[string]*pb.DataRow {
-	out := make(map[string]*pb.DataRow, len(rows))
+func indexRowsByGrain(rows []*pb.TimeSeriesRow, grainKeys []string) map[string]*pb.TimeSeriesRow {
+	out := make(map[string]*pb.TimeSeriesRow, len(rows))
 	for _, row := range rows {
 		out[rowGrainKey(row, grainKeys)] = row
 	}
 	return out
 }
 
-func rowGrainKey(row *pb.DataRow, grainKeys []string) string {
+func rowGrainKey(row *pb.TimeSeriesRow, grainKeys []string) string {
 	if len(grainKeys) == 0 {
 		grainKeys = []string{"subject_id", "data_time", "freq", "dimensions"}
 	}
@@ -534,19 +525,17 @@ func rowGrainKey(row *pb.DataRow, grainKeys []string) string {
 	for _, key := range grainKeys {
 		switch key {
 		case "subject_id":
-			parts = append(parts, grainPart("subject_id", row.GetKey().GetScope().GetSubjectId()))
+			parts = append(parts, grainPart("subject_id", row.GetKey().GetSubjectId()))
 		case "data_time":
 			parts = append(parts, grainPart("data_time", row.GetKey().GetDataTime()))
 		case "freq":
-			parts = append(parts, grainPart("freq", row.GetKey().GetScope().GetFreq()))
+			parts = append(parts, grainPart("freq", row.GetKey().GetFreq()))
 		case "dimensions":
-			parts = append(parts, grainPart("dimensions", factkey.DimensionsHash(row.GetKey().GetScope().GetDimensions())))
-		case "row_id":
-			parts = append(parts, grainPart("row_id", row.GetKey().GetRowId()))
+			parts = append(parts, grainPart("dimensions", factkey.DimensionsHash(row.GetKey().GetDimensions())))
 		default:
 			if strings.HasPrefix(key, "dimension.") {
 				name := strings.TrimPrefix(key, "dimension.")
-				parts = append(parts, grainPart(key, row.GetKey().GetScope().GetDimensions()[name]))
+				parts = append(parts, grainPart(key, row.GetKey().GetDimensions()[name]))
 			}
 		}
 	}
@@ -591,25 +580,28 @@ func parseWindow(value string) (time.Duration, bool) {
 
 var invalidTableChar = regexp.MustCompile(`[^A-Za-z0-9_]+`)
 
-func resultTableName(spaceID string, viewID string, now time.Time) string {
-	raw := fmt.Sprintf("%s%s_%s_%d", resultTablePrefix(spaceID), encodeResultTablePart(viewID), "r", now.UnixNano())
+func resultTableName(spaceID string, viewID string, viewVersion uint64, now time.Time) string {
+	if viewVersion == 0 {
+		viewVersion = 1
+	}
+	raw := fmt.Sprintf("%s%s_v%d_%s_%d", resultTablePrefix(spaceID), encodeResultTablePart(viewID), viewVersion, "r", now.UnixNano())
 	name := sanitizeResultTableName(raw)
 	if name == "" {
-		return "view_result"
+		return "ts_view"
 	}
 	return name
 }
 
 func resultTablePrefix(spaceID string) string {
 	if strings.TrimSpace(spaceID) == "" {
-		return "view_result_"
+		return "ts_view_"
 	}
-	return "view_result_s" + encodeResultTablePart(spaceID) + "_"
+	return "ts_view_s" + encodeResultTablePart(spaceID) + "_"
 }
 
 func resultTablePrefixes(spaceID string) []string {
 	if strings.TrimSpace(spaceID) == "" {
-		return []string{"view_result_"}
+		return []string{"ts_view_", "view_result_"}
 	}
 	return []string{
 		resultTablePrefix(spaceID),

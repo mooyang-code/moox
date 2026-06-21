@@ -1,5 +1,5 @@
 # moox storage metadata seed sample
-# 该文件只保留当前 Space/DataSource/Subject/DataSet/View 模型，不再保留旧 Project/ObjectRoute/FieldRoute 概念。
+# 该文件只保留当前 Space/DataSource/Subject/Dataset/View 模型，不再保留旧 Project/RecordRoute/FieldRoute 概念。
 
 t_spaces:
   - c_space_id: "crypto"
@@ -54,7 +54,7 @@ t_datasets:
     c_data_source_id: "binance"
     c_name: "币安现货标的信息"
     c_description: "Binance spot symbol profile facts"
-    c_data_kind: "object"
+    c_data_kind: "record"
     c_freqs_json: '[]'
 
 t_dataset_subjects:
@@ -154,14 +154,12 @@ t_dataset_columns:
     c_origin_type: "field"
     c_origin_id: "symbol"
     c_value_type: "string"
-    c_text_indexed: 1
   - c_space_id: "crypto"
     c_dataset_id: "binance_spot_symbols"
     c_column_name: "status"
     c_origin_type: "field"
     c_origin_id: "status"
     c_value_type: "string"
-    c_text_indexed: 1
 
 t_views:
   - c_space_id: "crypto"
@@ -180,39 +178,39 @@ t_view_columns:
     c_origin_id: "binance_spot_kline.close"
     c_value_type: "double"
 
-t_storage_nodes:
-  - c_node_id: "adapter-1"
-    c_name: "storage-adapter-1"
-    c_endpoint: "127.0.0.1:19001"
-    c_weight: 100
+primary_store_nodes:
+  - node_id: "local"
+    name: "local-primary"
+    endpoint: "local"
+    weight: 100
 
-t_storage_devices:
-  - c_device_id: "pebble-1"
-    c_node_id: "adapter-1"
-    c_name: "pebble-main"
-    c_engine: "pebble"
-    c_endpoint: "~/moox/storage/pebble"
-  - c_device_id: "duckdb-1"
-    c_node_id: "adapter-1"
-    c_name: "duckdb-view"
-    c_engine: "duckdb"
-    c_endpoint: "~/moox/storage/duckdb/moox.duckdb"
-  - c_device_id: "bleve-1"
-    c_node_id: "adapter-1"
-    c_name: "bleve-text"
-    c_engine: "bleve"
-    c_endpoint: "~/moox/storage/bleve"
-  - c_device_id: "parquet-archive-1"
-    c_node_id: "adapter-1"
-    c_name: "parquet-archive"
-    c_engine: "parquet_archive"
-    c_endpoint: "~/moox/storage/archive"
+devices:
+  - device_id: "pebble-1"
+    node_id: "local"
+    name: "pebble-main"
+    engine: "pebble"
+    endpoint: "~/moox/storage/pebble"
+  - device_id: "duckdb-1"
+    node_id: "local"
+    name: "duckdb-view"
+    engine: "duckdb"
+    endpoint: "~/moox/storage/duckdb/moox.duckdb"
+  - device_id: "bleve-1"
+    node_id: "local"
+    name: "bleve-text"
+    engine: "bleve"
+    endpoint: "~/moox/storage/bleve"
+  - device_id: "parquet-archive-1"
+    node_id: "local"
+    name: "parquet-archive"
+    engine: "parquet_archive"
+    endpoint: "~/moox/storage/archive"
 
-t_storage_routes:
-  - c_space_id: "crypto"
-    c_route_id: "route-binance-spot-kline"
-    c_dataset_id: "binance_spot_kline"
-    c_subject_pattern: "*"
-    c_hash_rule: "subject_id"
-    c_node_id: "adapter-1"
-    c_priority: 100
+primary_store_routes:
+  - space_id: "crypto"
+    route_id: "route-binance-spot-kline"
+    dataset_id: "binance_spot_kline"
+    subject_pattern: "*"
+    hash_rule: "subject_id"
+    node_id: "local"
+    priority: 100

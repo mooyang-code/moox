@@ -117,11 +117,6 @@ func TimeInRange(value string, timeRange *pb.TimeRange) bool {
 	return true
 }
 
-// TimeInRangeClosed 保留旧调用名；TimeRange 现在固定为闭区间。
-func TimeInRangeClosed(value string, timeRange *pb.TimeRange) bool {
-	return TimeInRange(value, timeRange)
-}
-
 // ParseTime 解析 RFC3339 / RFC3339Nano 时间字符串。
 func ParseTime(value string) (time.Time, bool) {
 	value = strings.TrimSpace(value)
@@ -134,20 +129,4 @@ func ParseTime(value string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
-}
-
-func textAfterLowerBound(value, start string, inclusive bool) bool {
-	cmp := strings.Compare(value, start)
-	if inclusive {
-		return cmp >= 0
-	}
-	return cmp > 0
-}
-
-func textBeforeUpperBound(value, end string, inclusive bool) bool {
-	cmp := strings.Compare(value, end)
-	if inclusive {
-		return cmp <= 0
-	}
-	return cmp < 0
 }

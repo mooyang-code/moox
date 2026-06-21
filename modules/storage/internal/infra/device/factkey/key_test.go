@@ -17,17 +17,17 @@ func TestBuildTimeSeriesDataKeyUsesSubjectFreqAndStableDimensionHash(t *testing.
 	}
 }
 
-func TestBuildObjectDataKeyRequiresObjectID(t *testing.T) {
-	got, err := BuildObjectDataKey("news|123")
+func TestBuildRecordDataKeyRequiresRecordID(t *testing.T) {
+	got, err := BuildRecordDataKey("news|123")
 	if err != nil {
-		t.Fatalf("build object data key: %v", err)
+		t.Fatalf("build record data key: %v", err)
 	}
 	if got != "news%7C123" {
-		t.Fatalf("object data key = %q, want escaped object id", got)
+		t.Fatalf("record data key = %q, want escaped record id", got)
 	}
 
-	if _, err := BuildObjectDataKey(""); err == nil {
-		t.Fatalf("empty object id should fail")
+	if _, err := BuildRecordDataKey(""); err == nil {
+		t.Fatalf("empty record id should fail")
 	}
 }
 

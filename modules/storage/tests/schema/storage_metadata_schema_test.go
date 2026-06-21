@@ -24,9 +24,9 @@ func TestStorageMetadataSchemaMatchesCurrentConcepts(t *testing.T) {
 		"t_dataset_columns",
 		"t_fields",
 		"t_factors",
-		"t_storage_nodes",
+		"t_primary_store_nodes",
 		"t_storage_devices",
-		"t_storage_routes",
+		"t_primary_store_routes",
 		"t_archive_files",
 	} {
 		require.Contains(t, schema, "CREATE TABLE IF NOT EXISTS "+table, table)
@@ -43,7 +43,7 @@ func TestStorageMetadataSchemaMatchesCurrentConcepts(t *testing.T) {
 		"t_dataset_columns",
 		"t_fields",
 		"t_factors",
-		"t_storage_routes",
+		"t_primary_store_routes",
 		"t_archive_files",
 	} {
 		requireTableContains(t, schema, table, "c_space_id TEXT NOT NULL")
@@ -51,6 +51,13 @@ func TestStorageMetadataSchemaMatchesCurrentConcepts(t *testing.T) {
 
 	requireTableContains(t, schema, "t_views", "c_primary_dataset_id TEXT NOT NULL")
 	requireTableContains(t, schema, "t_views", "c_active_result TEXT NOT NULL")
+	requireTableContains(t, schema, "t_views", "c_view_version INTEGER NOT NULL DEFAULT 1")
+	requireTableContains(t, schema, "t_views", "c_active_view_version INTEGER NOT NULL DEFAULT 0")
+	requireTableContains(t, schema, "t_views", "c_building_view_version INTEGER NOT NULL DEFAULT 0")
+	requireTableContains(t, schema, "t_views", "c_building_result TEXT NOT NULL DEFAULT ''")
+	requireTableContains(t, schema, "t_views", "c_build_error TEXT NOT NULL DEFAULT ''")
+	requireTableContains(t, schema, "t_views", "c_build_started_at TEXT NOT NULL DEFAULT ''")
+	requireTableContains(t, schema, "t_views", "c_build_finished_at TEXT NOT NULL DEFAULT ''")
 	requireTableContains(t, schema, "t_datasets", "c_data_source_id TEXT NOT NULL")
 	requireTableContains(t, schema, "t_data_sources", "c_kind TEXT NOT NULL")
 	requireTableContains(t, schema, "t_subject_symbols", "c_external_symbol TEXT NOT NULL")
@@ -71,15 +78,19 @@ func TestStorageMetadataSchemaMatchesCurrentConcepts(t *testing.T) {
 	requireTableNotContains(t, schema, "t_dataset_columns", "c_source_id")
 	requireTableNotContains(t, schema, "t_fields", "c_interface_name")
 	requireTableContains(t, schema, "t_storage_devices", "c_node_id TEXT NOT NULL")
-	requireTableContains(t, schema, "t_storage_routes", "c_node_id TEXT NOT NULL")
-	requireTableNotContains(t, schema, "t_storage_nodes", "c_role")
+	requireTableContains(t, schema, "t_primary_store_routes", "c_node_id TEXT NOT NULL")
+	requireTableNotContains(t, schema, "t_primary_store_nodes", "c_role")
 	requireTableNotContains(t, schema, "t_storage_devices", "c_entity_id")
-	requireTableNotContains(t, schema, "t_storage_routes", "c_entity_id")
-	requireTableNotContains(t, schema, "t_storage_routes", "c_device_id")
+	requireTableNotContains(t, schema, "t_primary_store_routes", "c_entity_id")
+	requireTableNotContains(t, schema, "t_primary_store_routes", "c_device_id")
 	require.NotContains(t, schema, "CREATE TABLE IF NOT EXISTS t_storage_entities")
 	require.NotContains(t, schema, "CREATE TABLE IF NOT EXISTS t_subject_aliases")
 	require.NotContains(t, schema, "CREATE TABLE IF NOT EXISTS t_space_views")
-	require.NotContains(t, schema, "idx_t_storage_routes_device")
+	require.NotContains(t, schema, "idx_t_primary_store_routes_device")
+	oldStoragePrefix := "t_storage_"
+	require.NotContains(t, schema, "CREATE TABLE IF NOT EXISTS "+oldStoragePrefix+"nodes")
+	require.NotContains(t, schema, "CREATE TABLE IF NOT EXISTS "+oldStoragePrefix+"routes")
+	require.NotContains(t, schema, "'"+"ob"+"ject"+"'")
 }
 
 func TestSQLTableDefinitionsLiveUnderStorageSchema(t *testing.T) {

@@ -172,17 +172,15 @@ func parseInt(value string) int64 {
 	return int64(f)
 }
 
-// klineDataRow 把一条 K 线转换成事实数据写入行。
-func klineDataRow(spaceID, datasetID, subjectID, freq string, k Kline) *pb.DataRow {
-	return &pb.DataRow{
-		Key: &pb.DataKey{
-			Scope: &pb.DataScope{
-				SpaceId:   spaceID,
-				DatasetId: datasetID,
-				SubjectId: subjectID,
-				Freq:      freq,
-			},
-			DataTime: k.Time.UTC().Format(time.RFC3339),
+// klineTimeSeriesRow 把一条 K 线转换成时序事实数据写入行。
+func klineTimeSeriesRow(spaceID, datasetID, subjectID, freq string, k Kline) *pb.TimeSeriesRow {
+	return &pb.TimeSeriesRow{
+		Key: &pb.TimeSeriesKey{
+			SpaceId:   spaceID,
+			DatasetId: datasetID,
+			SubjectId: subjectID,
+			Freq:      freq,
+			DataTime:  k.Time.UTC().Format(time.RFC3339),
 		},
 		Columns: []*pb.ColumnValue{
 			testutil.DoubleValue("open", k.Open),
@@ -193,7 +191,7 @@ func klineDataRow(spaceID, datasetID, subjectID, freq string, k Kline) *pb.DataR
 			testutil.DoubleValue("quote_volume", k.QuoteVolume),
 			testutil.IntValue("trade_num", k.TradeNum),
 			testutil.StringValue("symbol", k.Symbol),
-			// note 是一个稳定的全文检索列，保证 SearchRows 有确定可命中的 token。
+			// note 是一个稳定的全文检索列，保证 SearchRecordRows 有确定可命中的 token。
 			testutil.StringValue("note", "kline "+k.Symbol),
 		},
 	}

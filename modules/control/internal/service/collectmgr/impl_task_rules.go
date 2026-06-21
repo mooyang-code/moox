@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/model"
 )
 
+// TaskRulesServiceImpl 实现采集任务规则业务服务。
 type TaskRulesServiceImpl struct {
 	taskRulesDAO collectordao.CollectorTaskRulesDAO
 	nodeDAO      cloudnodedao.CloudNodeDAO

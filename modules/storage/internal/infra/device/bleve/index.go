@@ -14,21 +14,24 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
+// Options 保存 Bleve 索引打开与初始化配置。
 type Options struct {
 	Path string
 }
 
+// Index 封装 Record 视图的 Bleve 索引读写能力。
 type Index struct {
 	index blevelib.Index
 }
 
+// SearchRequest 描述一次 Bleve 复合检索请求。
 type SearchRequest struct {
-	SpaceID    string
-	DatasetID  string
-	SubjectIDs []string
-	TextQuery  string
-	TimeRange  *pb.TimeRange
-	Page       *pb.Page
+	SpaceID      string
+	DatasetID    string
+	RecordIDs    []string
+	TextQuery    string
+	VersionRange *pb.VersionRange
+	Page         *pb.Page
 }
 
 const searchBatchSize = 10000
@@ -47,10 +50,17 @@ func Open(opts Options) (*Index, error) {
 	return &Index{index: index}, nil
 }
 
-// buildIndexMapping 构造索引映射：
-//   - _row_json 仅存储不索引（用于回放完整行）；
-//   - space_id / dataset_id / subject_id / freq / data_time 建为不分词 keyword 字段，
-//     支持精确 TermQuery，避免查询时 MatchAll 全表扫描后内存过滤。
+func OpenExisting(opts Options) (*Index, error) {
+	if opts.Path == "" {
+		return nil, errors.New("bleve path is required")
+	}
+	index, err := blevelib.Open(opts.Path)
+	if err != nil {
+		return nil, err
+	}
+	return &Index{index: index}, nil
+}
+
 func buildIndexMapping() mapping.IndexMapping {
 	mapping := blevelib.NewIndexMapping()
 	docMapping := blevelib.NewDocumentMapping()
@@ -60,7 +70,7 @@ func buildIndexMapping() mapping.IndexMapping {
 	rowMapping.Index = false
 	docMapping.AddFieldMappingsAt("_row_json", rowMapping)
 
-	for _, field := range []string{"space_id", "dataset_id", "subject_id", "freq", "data_time"} {
+	for _, field := range []string{"space_id", "dataset_id", "record_id", "version"} {
 		kw := blevelib.NewKeywordFieldMapping()
 		kw.Store = false
 		kw.Index = true
@@ -78,7 +88,7 @@ func (i *Index) Close() error {
 	return i.index.Close()
 }
 
-func (i *Index) IndexRows(ctx context.Context, rows []*pb.DataRow, textIndexedColumns map[string]bool) error {
+func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexedColumns map[string]bool) error {
 	_ = ctx
 	batch := i.index.NewBatch()
 	for _, row := range rows {
@@ -86,13 +96,12 @@ func (i *Index) IndexRows(ctx context.Context, rows []*pb.DataRow, textIndexedCo
 		if err != nil {
 			return err
 		}
+		key := row.GetKey()
 		doc := map[string]any{
-			"space_id":   row.GetKey().GetScope().GetSpaceId(),
-			"dataset_id": row.GetKey().GetScope().GetDatasetId(),
-			"subject_id": row.GetKey().GetScope().GetSubjectId(),
-			"freq":       row.GetKey().GetScope().GetFreq(),
-			"data_time":  row.GetKey().GetDataTime(),
-			"row_id":     row.GetKey().GetRowId(),
+			"space_id":   key.GetSpaceId(),
+			"dataset_id": key.GetDatasetId(),
+			"record_id":  key.GetRecordId(),
+			"version":    key.GetVersion(),
 			"_row_json":  string(raw),
 		}
 		for _, column := range row.GetColumns() {
@@ -107,11 +116,11 @@ func (i *Index) IndexRows(ctx context.Context, rows []*pb.DataRow, textIndexedCo
 	return i.index.Batch(batch)
 }
 
-func (i *Index) SearchRows(ctx context.Context, req SearchRequest) ([]*pb.DataRow, *pb.PageResult, error) {
+func (i *Index) SearchRecordRows(ctx context.Context, req SearchRequest) ([]*pb.RecordRow, *pb.PageResult, error) {
 	_ = ctx
 	query := buildBooleanQuery(req)
-	var rows []*pb.DataRow
-	allowSubjects := factvalue.StringSet(req.SubjectIDs)
+	var rows []*pb.RecordRow
+	allowRecords := factvalue.StringSet(req.RecordIDs)
 	for from := 0; ; from += searchBatchSize {
 		searchReq := blevelib.NewSearchRequestOptions(query, searchBatchSize, from, false)
 		searchReq.Fields = []string{"_row_json"}
@@ -124,23 +133,21 @@ func (i *Index) SearchRows(ctx context.Context, req SearchRequest) ([]*pb.DataRo
 			if !ok {
 				continue
 			}
-			row := &pb.DataRow{}
+			row := &pb.RecordRow{}
 			if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(raw), row); err != nil {
 				return nil, nil, err
 			}
-			scope := row.GetKey().GetScope()
-			// 兜底校验：复合查询已在索引层过滤 space/dataset/subject，这里再确认一次，
-			// 同时处理无法下推到索引的 data_time 范围（跨时区按 RFC3339 解析）。
-			if req.SpaceID != "" && scope.GetSpaceId() != req.SpaceID {
+			key := row.GetKey()
+			if req.SpaceID != "" && key.GetSpaceId() != req.SpaceID {
 				continue
 			}
-			if req.DatasetID != "" && scope.GetDatasetId() != req.DatasetID {
+			if req.DatasetID != "" && key.GetDatasetId() != req.DatasetID {
 				continue
 			}
-			if len(allowSubjects) > 0 && !allowSubjects[scope.GetSubjectId()] {
+			if len(allowRecords) > 0 && !allowRecords[key.GetRecordId()] {
 				continue
 			}
-			if !factvalue.TimeInRangeClosed(row.GetKey().GetDataTime(), req.TimeRange) {
+			if !versionInRange(key.GetVersion(), req.VersionRange) {
 				continue
 			}
 			rows = append(rows, row)
@@ -152,9 +159,6 @@ func (i *Index) SearchRows(ctx context.Context, req SearchRequest) ([]*pb.DataRo
 	return pageRows(rows, req.Page)
 }
 
-// buildBooleanQuery 把可下推到 Bleve 索引的条件组合成 BooleanQuery：
-// space_id / dataset_id / subject_id 作为精确 TermQuery（Must），
-// 文本查询作为 MatchQuery（Must）；无任何条件时退化为 MatchAll。
 func buildBooleanQuery(req SearchRequest) blevequery.Query {
 	var musts []blevequery.Query
 	if space := strings.TrimSpace(req.SpaceID); space != "" {
@@ -163,16 +167,15 @@ func buildBooleanQuery(req SearchRequest) blevequery.Query {
 	if dataset := strings.TrimSpace(req.DatasetID); dataset != "" {
 		musts = append(musts, scopeFieldQuery(dataset, "dataset_id"))
 	}
-	if len(req.SubjectIDs) == 1 {
-		if subject := strings.TrimSpace(req.SubjectIDs[0]); subject != "" {
-			musts = append(musts, scopeFieldQuery(subject, "subject_id"))
+	if len(req.RecordIDs) == 1 {
+		if recordID := strings.TrimSpace(req.RecordIDs[0]); recordID != "" {
+			musts = append(musts, scopeFieldQuery(recordID, "record_id"))
 		}
-	} else if len(req.SubjectIDs) > 1 {
-		// 多 subject 用 OR 子句下推，整体作为一个 Must 条件。
-		disjuncts := make([]blevequery.Query, 0, len(req.SubjectIDs))
-		for _, subject := range req.SubjectIDs {
-			if s := strings.TrimSpace(subject); s != "" {
-				disjuncts = append(disjuncts, scopeFieldQuery(s, "subject_id"))
+	} else if len(req.RecordIDs) > 1 {
+		disjuncts := make([]blevequery.Query, 0, len(req.RecordIDs))
+		for _, recordID := range req.RecordIDs {
+			if id := strings.TrimSpace(recordID); id != "" {
+				disjuncts = append(disjuncts, scopeFieldQuery(id, "record_id"))
 			}
 		}
 		if len(disjuncts) > 0 {
@@ -200,25 +203,31 @@ func termQuery(value string, field string) blevequery.Query {
 	return q
 }
 
-func documentID(row *pb.DataRow) string {
+func documentID(row *pb.RecordRow) string {
 	key := row.GetKey()
-	scope := key.GetScope()
 	return strings.Join([]string{
-		scope.GetSpaceId(),
-		scope.GetDatasetId(),
-		scope.GetSubjectId(),
-		scope.GetFreq(),
-		factkey.DimensionsHash(scope.GetDimensions()),
-		key.GetDataTime(),
-		key.GetRowId(),
+		key.GetSpaceId(),
+		key.GetDatasetId(),
+		key.GetRecordId(),
+		key.GetVersion(),
 	}, "/")
 }
 
-func typedValueString(value *pb.TypedValue) string {
-	return factvalue.String(value)
+func versionInRange(version string, versionRange *pb.VersionRange) bool {
+	if versionRange == nil {
+		return true
+	}
+	version = factkey.NormalizeVersion(version)
+	if start := factkey.NormalizeVersion(versionRange.GetStartVersion()); versionRange.GetStartVersion() != "" && version < start {
+		return false
+	}
+	if end := factkey.NormalizeVersion(versionRange.GetEndVersion()); versionRange.GetEndVersion() != "" && version > end {
+		return false
+	}
+	return true
 }
 
-func pageRows(rows []*pb.DataRow, page *pb.Page) ([]*pb.DataRow, *pb.PageResult, error) {
+func pageRows(rows []*pb.RecordRow, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
 	pageNo := uint32(1)
 	size := uint32(len(rows))
 	if page != nil {

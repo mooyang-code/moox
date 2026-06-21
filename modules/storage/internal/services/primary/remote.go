@@ -10,6 +10,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
+// RemoteClient 通过 tRPC 调用远端 PrimaryStore 服务。
 type RemoteClient struct {
 	serviceName string
 	proxies     sync.Map
@@ -19,11 +20,10 @@ func NewRemoteClient(serviceName string) *RemoteClient {
 	return &RemoteClient{serviceName: serviceName}
 }
 
-func (c *RemoteClient) WriteRows(ctx context.Context, target *pb.PrimaryTarget, rows []*pb.DataRow, mode pb.WriteMode) error {
+func (c *RemoteClient) WriteRows(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow) error {
 	rsp, err := c.proxyFor(target).WritePrimaryRows(ctx, &pb.WritePrimaryRowsReq{
-		Target:    target,
-		WriteMode: mode,
-		Rows:      rows,
+		Target: target,
+		Rows:   rows,
 	})
 	if err != nil {
 		return err
@@ -31,18 +31,16 @@ func (c *RemoteClient) WriteRows(ctx context.Context, target *pb.PrimaryTarget, 
 	return retInfoError(rsp.GetRetInfo())
 }
 
-func (c *RemoteClient) ReadRows(ctx context.Context, target *pb.PrimaryTarget, req *pb.ReadRowsReq) ([]*pb.DataRow, *pb.PageResult, error) {
+func (c *RemoteClient) ReadRows(ctx context.Context, target *pb.PrimaryStoreTarget, req *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
 	if req == nil {
-		req = &pb.ReadRowsReq{}
+		req = &pb.ReadPrimaryRowsReq{}
 	}
 	rsp, err := c.proxyFor(target).ReadPrimaryRows(ctx, &pb.ReadPrimaryRowsReq{
 		AuthInfo:     req.GetAuthInfo(),
 		Target:       target,
-		ReadMode:     req.GetReadMode(),
-		Scope:        req.GetScope(),
-		TimeRange:    req.GetTimeRange(),
-		SnapshotTime: req.GetSnapshotTime(),
-		ObjectId:     req.GetObjectId(),
+		Keys:         req.GetKeys(),
+		VersionRange: req.GetVersionRange(),
+		Order:        req.GetOrder(),
 		ColumnNames:  req.GetColumnNames(),
 		Page:         req.GetPage(),
 	})
@@ -55,7 +53,29 @@ func (c *RemoteClient) ReadRows(ctx context.Context, target *pb.PrimaryTarget, r
 	return rsp.GetRows(), rsp.GetPageResult(), nil
 }
 
-func (c *RemoteClient) proxyFor(target *pb.PrimaryTarget) pb.PrimaryStoreServiceClientProxy {
+func (c *RemoteClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, req *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	if req == nil {
+		req = &pb.ScanPrimaryRowsReq{}
+	}
+	rsp, err := c.proxyFor(target).ScanPrimaryRows(ctx, &pb.ScanPrimaryRowsReq{
+		AuthInfo:     req.GetAuthInfo(),
+		Target:       target,
+		DataKind:     req.GetDataKind(),
+		VersionRange: req.GetVersionRange(),
+		Order:        req.GetOrder(),
+		ColumnNames:  req.GetColumnNames(),
+		Page:         req.GetPage(),
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := retInfoError(rsp.GetRetInfo()); err != nil {
+		return nil, nil, err
+	}
+	return rsp.GetRows(), rsp.GetPageResult(), nil
+}
+
+func (c *RemoteClient) proxyFor(target *pb.PrimaryStoreTarget) pb.PrimaryStoreServiceClientProxy {
 	endpoint := ""
 	if target != nil {
 		endpoint = strings.TrimSpace(target.GetEndpoint())

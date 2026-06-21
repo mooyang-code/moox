@@ -2,6 +2,7 @@ package factkey
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -19,11 +20,23 @@ func BuildTimeSeriesDataKey(subjectID string, freq string, dimensions map[string
 	}, "|")
 }
 
-func BuildObjectDataKey(objectID string) (string, error) {
-	if strings.TrimSpace(objectID) == "" {
-		return "", errors.New("object_id is required")
+func BuildRecordDataKey(recordID string) (string, error) {
+	if strings.TrimSpace(recordID) == "" {
+		return "", errors.New("record_id is required")
 	}
-	return EscapePart(objectID), nil
+	return EscapePart(recordID), nil
+}
+
+func ParseTimeSeriesDataKey(value string) (subjectID string, freq string, dimHash string, err error) {
+	parts := strings.Split(value, "|")
+	if len(parts) != 3 {
+		return "", "", "", fmt.Errorf("invalid time series data_key")
+	}
+	return UnescapePart(parts[0]), UnescapePart(parts[1]), UnescapePart(parts[2]), nil
+}
+
+func ParseRecordDataKey(value string) string {
+	return UnescapePart(value)
 }
 
 func NormalizeVersion(value string) string {
@@ -52,5 +65,11 @@ func NormalizeTimeVersion(value string) (string, error) {
 func EscapePart(value string) string {
 	value = strings.ReplaceAll(value, "%", "%25")
 	value = strings.ReplaceAll(value, "|", "%7C")
+	return value
+}
+
+func UnescapePart(value string) string {
+	value = strings.ReplaceAll(value, "%7C", "|")
+	value = strings.ReplaceAll(value, "%25", "%")
 	return value
 }

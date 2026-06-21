@@ -43,6 +43,7 @@ type CollectorTaskRulesDAO interface {
 	SearchTaskRules(ctx context.Context, query *TaskRuleQuery) ([]*model.CollectorTaskRules, error)
 }
 
+// collectorTaskRulesDaoImpl 实现采集任务规则表的数据访问逻辑。
 type collectorTaskRulesDaoImpl struct {
 	db *gorm.DB
 }

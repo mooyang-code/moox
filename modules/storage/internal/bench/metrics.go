@@ -5,10 +5,12 @@ import (
 	"time"
 )
 
+// LatencyRecorder 收集压测请求或批次的延迟样本。
 type LatencyRecorder struct {
 	values []time.Duration
 }
 
+// LatencySummary 表示延迟样本的平均值、P95 和 P99。
 type LatencySummary struct {
 	Count int     `json:"count"`
 	MinMS float64 `json:"min_ms"`

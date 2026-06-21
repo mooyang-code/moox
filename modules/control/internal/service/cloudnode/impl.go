@@ -9,8 +9,8 @@ import (
 	"github.com/mooyang-code/moox/modules/control/internal/service/cloudnode/config"
 	"github.com/mooyang-code/moox/modules/control/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/modules/control/internal/service/cloudnode/provider"
-	collectmgrtypes "github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/types"
 	collectordao "github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/dao"
+	collectmgrtypes "github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/types"
 	"github.com/mooyang-code/moox/modules/control/internal/service/database"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -23,6 +23,7 @@ type TaskInstanceStoreGetter interface {
 	GetCount() int
 }
 
+// ServiceImpl 实现云节点业务服务。
 type ServiceImpl struct {
 	config *config.Config
 
@@ -33,8 +34,8 @@ type ServiceImpl struct {
 
 	asyncTask         asynctask.Service
 	providerFactory   *provider.AccountFactory
-	heartbeatStore    *HeartbeatStore          // 心跳内存存储
-	probeStore        *ProbeStore              // 保活探测内存存储
+	heartbeatStore    *HeartbeatStore         // 心跳内存存储
+	probeStore        *ProbeStore             // 保活探测内存存储
 	taskInstanceStore TaskInstanceStoreGetter // 任务实例内存仓库（新增）
 }
 

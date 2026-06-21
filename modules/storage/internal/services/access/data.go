@@ -6,59 +6,34 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
+	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/rs/xid"
 	"google.golang.org/protobuf/proto"
 )
 
-func (s *Service) WriteRows(ctx context.Context, req *pb.WriteRowsReq) (*pb.WriteRowsRsp, error) {
-	mode := req.GetWriteMode()
-	if mode == pb.WriteMode_WRITE_MODE_UNSPECIFIED {
-		mode = pb.WriteMode_WRITE_MODE_UPSERT
-	}
-	if err := s.validator.ValidateWriteRows(ctx, req.GetRows()); err != nil {
-		return &pb.WriteRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	groups, err := s.groupRowsByPrimaryTarget(ctx, req.GetRows())
-	if err != nil {
-		return &pb.WriteRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
-	}
-	var writtenRows []*pb.DataRow
-	for _, group := range groups {
-		if err := s.primary.WriteRows(ctx, group.target, group.rows, mode); err != nil {
-			if publishErr := s.publishRowsChanged(ctx, writtenRows); publishErr != nil {
-				s.reportDerivedError(ctx, "rows_changed_event", publishErr)
-			}
-			return &pb.WriteRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
-		}
-		writtenRows = append(writtenRows, group.rows...)
-	}
-	// 写入主链路只对主存负责。派生（Search 索引等）通过事件总线异步消费，
-	// 不再阻塞主写入返回。
-	if err := s.publishRowsChanged(ctx, writtenRows); err != nil {
-		s.reportDerivedError(ctx, "rows_changed_event", err)
-	}
-	return &pb.WriteRowsRsp{RetInfo: response.Success("success")}, nil
-}
-
 func (s *Service) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeriesRowsReq) (*pb.WriteTimeSeriesRowsRsp, error) {
-	rows := make([]*pb.DataRow, 0, len(req.GetRows()))
-	for _, row := range req.GetRows() {
-		converted, err := timeSeriesRowToDataRow(row)
-		if err != nil {
-			return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-		}
-		rows = append(rows, converted)
+	if err := s.validator.ValidateWriteTimeSeriesRows(ctx, req.GetRows()); err != nil {
+		return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	rsp, err := s.WriteRows(ctx, &pb.WriteRowsReq{
-		AuthInfo:  req.GetAuthInfo(),
-		WriteMode: req.GetWriteMode(),
-		Rows:      rows,
-	})
+	groups, err := s.groupTimeSeriesRowsByPrimaryStoreTarget(ctx, req.GetRows())
 	if err != nil {
-		return nil, err
+		return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
 	}
-	return &pb.WriteTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo()}, nil
+	var written []*pb.TimeSeriesKey
+	for _, group := range groups {
+		if err := s.primary.WriteRows(ctx, group.target, group.rows); err != nil {
+			if publishErr := s.publishTimeSeriesRowsChanged(ctx, written); publishErr != nil {
+				s.reportViewError(ctx, "time_series_rows_changed_event", publishErr)
+			}
+			return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+		}
+		written = append(written, group.timeSeriesKeys...)
+	}
+	if err := s.publishTimeSeriesRowsChanged(ctx, written); err != nil {
+		s.reportViewError(ctx, "time_series_rows_changed_event", err)
+	}
+	return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Success("success")}, nil
 }
 
 func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
@@ -70,31 +45,42 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		if err := validateTimeSeriesKeyTemplate(key); err != nil {
 			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
-		timeRange := req.GetTimeRange()
-		if timeRange == nil && key.GetDataTime() != "" {
-			timeRange = &pb.TimeRange{StartTime: key.GetDataTime(), EndTime: key.GetDataTime()}
+		storeKey, err := timeSeriesKeyToPrimaryStoreKey(key, false)
+		if err != nil {
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
-		rows, ret, err := s.readAllRows(ctx, &pb.ReadRowsReq{
-			AuthInfo: req.GetAuthInfo(),
-			Scope: &pb.DataScope{
-				SpaceId:    key.GetSpaceId(),
-				DatasetId:  key.GetDatasetId(),
-				SubjectId:  key.GetSubjectId(),
-				Freq:       key.GetFreq(),
-				Dimensions: key.GetDimensions(),
-			},
-			ReadMode:    pb.ReadMode_READ_MODE_RANGE,
-			TimeRange:   timeRange,
-			ColumnNames: req.GetColumnNames(),
+		versionRange, err := timeRangeToVersionRange(req.GetTimeRange())
+		if err != nil {
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		if versionRange != nil {
+			storeKey.Version = ""
+		}
+		target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), key.GetSubjectId())
+		if err != nil {
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+		}
+		page := req.GetPage()
+		if len(req.GetKeys()) > 1 {
+			page = nil
+		}
+		rows, pageResult, err := s.primary.ReadRows(ctx, target, &pb.ReadPrimaryRowsReq{
+			AuthInfo:     req.GetAuthInfo(),
+			Target:       target,
+			Keys:         []*pb.PrimaryStoreKey{storeKey},
+			VersionRange: versionRange,
+			Order:        req.GetOrder(),
+			ColumnNames:  req.GetColumnNames(),
+			Page:         page,
 		})
 		if err != nil {
-			return nil, err
-		}
-		if ret.GetCode() != pb.ErrorCode_SUCCESS {
-			return &pb.ReadTimeSeriesRowsRsp{RetInfo: ret}, nil
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
 		}
 		for _, row := range rows {
-			out = append(out, dataRowToTimeSeriesRow(row))
+			out = append(out, primaryStoreRowToTimeSeriesRow(row, key))
+		}
+		if len(req.GetKeys()) == 1 {
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
 		}
 	}
 	sortTimeSeriesRows(out)
@@ -105,206 +91,108 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 
-func (s *Service) WriteObjectRows(ctx context.Context, req *pb.WriteObjectRowsReq) (*pb.WriteObjectRowsRsp, error) {
-	rows := make([]*pb.DataRow, 0, len(req.GetRows()))
-	for _, row := range req.GetRows() {
-		converted, err := objectRowToDataRow(row)
-		if err != nil {
-			return &pb.WriteObjectRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-		}
-		rows = append(rows, converted)
+func (s *Service) WriteRecordRows(ctx context.Context, req *pb.WriteRecordRowsReq) (*pb.WriteRecordRowsRsp, error) {
+	rows := s.normalizeWriteRecordRows(req.GetRows())
+	if err := s.validator.ValidateWriteRecordRows(ctx, rows); err != nil {
+		return &pb.WriteRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	rsp, err := s.WriteRows(ctx, &pb.WriteRowsReq{
-		AuthInfo:  req.GetAuthInfo(),
-		WriteMode: req.GetWriteMode(),
-		Rows:      rows,
-	})
+	groups, err := s.groupRecordRowsByPrimaryStoreTarget(ctx, rows)
 	if err != nil {
-		return nil, err
+		return &pb.WriteRecordRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
 	}
-	return &pb.WriteObjectRowsRsp{RetInfo: rsp.GetRetInfo()}, nil
+	var written []*pb.RecordKey
+	for _, group := range groups {
+		if err := s.primary.WriteRows(ctx, group.target, group.rows); err != nil {
+			if publishErr := s.publishRecordRowsChanged(ctx, written); publishErr != nil {
+				s.reportViewError(ctx, "record_rows_changed_event", publishErr)
+			}
+			return &pb.WriteRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+		}
+		written = append(written, group.recordKeys...)
+	}
+	if err := s.publishRecordRowsChanged(ctx, written); err != nil {
+		s.reportViewError(ctx, "record_rows_changed_event", err)
+	}
+	return &pb.WriteRecordRowsRsp{RetInfo: response.Success("success"), Keys: cloneRecordKeys(written)}, nil
 }
 
-func (s *Service) ReadObjectRows(ctx context.Context, req *pb.ReadObjectRowsReq) (*pb.ReadObjectRowsRsp, error) {
-	var out []*pb.ObjectRow
-	for _, key := range req.GetKeys() {
-		if err := validateObjectKeyTemplate(key); err != nil {
-			return &pb.ReadObjectRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+func (s *Service) normalizeWriteRecordRows(rows []*pb.RecordRow) []*pb.RecordRow {
+	out := make([]*pb.RecordRow, 0, len(rows))
+	for _, row := range rows {
+		if row == nil {
+			out = append(out, nil)
+			continue
 		}
-		rows, ret, err := s.readAllRows(ctx, &pb.ReadRowsReq{
-			AuthInfo: req.GetAuthInfo(),
-			Scope: &pb.DataScope{
-				SpaceId:   key.GetSpaceId(),
-				DatasetId: key.GetDatasetId(),
-			},
-			ReadMode:    pb.ReadMode_READ_MODE_RANGE,
-			ObjectId:    key.GetObjectId(),
-			ColumnNames: req.GetColumnNames(),
+		copied := proto.Clone(row).(*pb.RecordRow)
+		if copied.Key != nil && strings.TrimSpace(copied.Key.GetVersion()) == "" {
+			copied.Key.Version = s.nextRecordVersion().Format(factkey.TimeVersionLayout)
+		}
+		out = append(out, copied)
+	}
+	return out
+}
+
+func (s *Service) nextRecordVersion() time.Time {
+	now := time.Now().UTC()
+	if s == nil {
+		return now
+	}
+	s.recordVersionMu.Lock()
+	defer s.recordVersionMu.Unlock()
+	if !now.After(s.lastRecordVersion) {
+		now = s.lastRecordVersion.Add(time.Nanosecond)
+	}
+	s.lastRecordVersion = now
+	return now
+}
+
+func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error) {
+	var out []*pb.RecordRow
+	for _, key := range req.GetKeys() {
+		if err := validateRecordKeyTemplate(key); err != nil {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		storeKey, err := recordKeyToPrimaryStoreKey(key, true)
+		if err != nil {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		versionRange := req.GetVersionRange()
+		if versionRange != nil {
+			storeKey.Version = ""
+		}
+		target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), "")
+		if err != nil {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+		}
+		page := req.GetPage()
+		if len(req.GetKeys()) > 1 {
+			page = nil
+		}
+		rows, pageResult, err := s.primary.ReadRows(ctx, target, &pb.ReadPrimaryRowsReq{
+			AuthInfo:     req.GetAuthInfo(),
+			Target:       target,
+			Keys:         []*pb.PrimaryStoreKey{storeKey},
+			VersionRange: versionRange,
+			Order:        req.GetOrder(),
+			ColumnNames:  req.GetColumnNames(),
+			Page:         page,
 		})
 		if err != nil {
-			return nil, err
-		}
-		if ret.GetCode() != pb.ErrorCode_SUCCESS {
-			return &pb.ReadObjectRowsRsp{RetInfo: ret}, nil
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
 		}
 		for _, row := range rows {
-			if !dataRowMatchesObjectKey(row, key) {
-				continue
-			}
-			converted := dataRowToObjectRow(row)
-			if objectVersionMatches(converted.GetKey().GetVersion(), key.GetVersion(), req.GetVersionRange()) {
-				out = append(out, converted)
-			}
+			out = append(out, primaryStoreRowToRecordRow(row, key))
+		}
+		if len(req.GetKeys()) == 1 {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
 		}
 	}
-	sortObjectRows(out)
+	sortRecordRows(out)
 	if req.GetOrder() == pb.SortOrder_SORT_ORDER_DESC {
-		reverseObjectRows(out)
+		reverseRecordRows(out)
 	}
-	out, pageResult := pageObjectRows(out, req.GetPage())
-	return &pb.ReadObjectRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
-}
-
-func (s *Service) readAllRows(ctx context.Context, req *pb.ReadRowsReq) ([]*pb.DataRow, *pb.RetInfo, error) {
-	const size = uint32(1000)
-	var out []*pb.DataRow
-	for pageNo := uint32(1); ; pageNo++ {
-		next := proto.Clone(req).(*pb.ReadRowsReq)
-		next.Page = &pb.Page{Page: pageNo, Size: size}
-		rsp, err := s.ReadRows(ctx, next)
-		if err != nil {
-			return nil, nil, err
-		}
-		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			return nil, rsp.GetRetInfo(), nil
-		}
-		out = append(out, rsp.GetRows()...)
-		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
-			return out, rsp.GetRetInfo(), nil
-		}
-	}
-}
-
-// handleRowsChangedForSearch 是 Search 索引的派生消费者。订阅自事件总线，
-// 把行变更异步同步到 Bleve 全文索引。Search 是派生结果，不提供写后立即可搜契约。
-func (s *Service) handleRowsChangedForSearch(ctx context.Context, event *pb.DataRowsChangedEvent) error {
-	if len(event.GetRows()) == 0 {
-		return nil
-	}
-	copied := proto.Clone(event).(*pb.DataRowsChangedEvent)
-	s.indexMu.Lock()
-	if s.closing {
-		s.indexMu.Unlock()
-		return nil
-	}
-	s.indexWG.Add(1)
-	s.indexJobs = append(s.indexJobs, indexJob{
-		ctx:   context.WithoutCancel(ctx),
-		event: copied,
-	})
-	s.indexCond.Signal()
-	s.indexMu.Unlock()
-	return nil
-}
-
-type indexJob struct {
-	ctx   context.Context
-	event *pb.DataRowsChangedEvent
-}
-
-func (s *Service) runSearchIndexWorker() {
-	for {
-		s.indexMu.Lock()
-		for len(s.indexJobs) == 0 && !s.closing {
-			s.indexCond.Wait()
-		}
-		if len(s.indexJobs) == 0 && s.closing {
-			s.indexMu.Unlock()
-			return
-		}
-		job := s.indexJobs[0]
-		copy(s.indexJobs, s.indexJobs[1:])
-		s.indexJobs[len(s.indexJobs)-1] = indexJob{}
-		s.indexJobs = s.indexJobs[:len(s.indexJobs)-1]
-		s.indexMu.Unlock()
-
-		s.indexRowsFromAccess(job.ctx, job.event)
-		s.indexWG.Done()
-	}
-}
-
-func (s *Service) indexRowsFromAccess(ctx context.Context, event *pb.DataRowsChangedEvent) {
-	rows, err := s.currentAccessRows(ctx, event.GetRows())
-	if err != nil {
-		s.reportDerivedError(ctx, "search_index", err)
-		return
-	}
-	if err := s.search.IndexRows(ctx, rows); err != nil {
-		s.reportDerivedError(ctx, "search_index", err)
-	}
-}
-
-func (s *Service) currentAccessRows(ctx context.Context, rows []*pb.DataRow) ([]*pb.DataRow, error) {
-	out := make([]*pb.DataRow, 0, len(rows))
-	for _, row := range rows {
-		current, err := s.currentAccessRow(ctx, row)
-		if err != nil {
-			return nil, err
-		}
-		if current != nil {
-			out = append(out, current)
-		}
-	}
-	return out, nil
-}
-
-func (s *Service) currentAccessRow(ctx context.Context, row *pb.DataRow) (*pb.DataRow, error) {
-	key := row.GetKey()
-	scope := proto.Clone(key.GetScope()).(*pb.DataScope)
-	req := &pb.ReadRowsReq{Scope: scope, ReadMode: pb.ReadMode_READ_MODE_RANGE}
-	if scope.GetFreq() == "" && key.GetRowId() != "" {
-		req.ObjectId = key.GetRowId()
-	}
-	if key.GetDataTime() != "" {
-		req.TimeRange = &pb.TimeRange{
-			StartTime: key.GetDataTime(),
-			EndTime:   key.GetDataTime(),
-		}
-	}
-	reader := s.factReader
-	if reader == nil {
-		reader = s
-	}
-	rsp, err := reader.ReadRows(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		return nil, errText(rsp.GetRetInfo().GetMsg())
-	}
-	for _, current := range rsp.GetRows() {
-		if sameDataKey(current.GetKey(), key) {
-			return current, nil
-		}
-	}
-	return nil, nil
-}
-
-// WaitForIndex 等待所有异步索引任务完成，用于优雅关闭或测试同步点。
-func (s *Service) WaitForIndex() {
-	s.indexWG.Wait()
-}
-
-func (s *Service) ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
-	ref, err := s.router.Resolve(ctx, req.GetScope())
-	if err != nil {
-		return &pb.ReadRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
-	}
-	rows, page, err := s.primary.ReadRows(ctx, ref, req)
-	if err != nil {
-		return &pb.ReadRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
-	}
-	return &pb.ReadRowsRsp{RetInfo: response.Success("success"), Rows: rows, PageResult: page}, nil
+	out, pageResult := pageRecordRows(out, req.GetPage())
+	return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 
 func primaryErrorCode(err error) pb.ErrorCode {
@@ -324,37 +212,50 @@ func primaryErrorCode(err error) pb.ErrorCode {
 	return pb.ErrorCode_INNER_ERR
 }
 
-type routedRows struct {
-	target *pb.PrimaryTarget
-	rows   []*pb.DataRow
+func groupRowsErrorCode(err error) pb.ErrorCode {
+	if primaryErrorCode(err) == pb.ErrorCode_INVALID_PARAM {
+		return pb.ErrorCode_INVALID_PARAM
+	}
+	return pb.ErrorCode_ROUTE_NOT_FOUND
 }
 
-func (s *Service) groupRowsByPrimaryTarget(ctx context.Context, rows []*pb.DataRow) ([]*routedRows, error) {
+// routedRows 保存路由到同一主存目标的一批写入行。
+type routedRows struct {
+	target         *pb.PrimaryStoreTarget
+	rows           []*pb.PrimaryStoreRow
+	timeSeriesKeys []*pb.TimeSeriesKey
+	recordKeys     []*pb.RecordKey
+}
+
+func (s *Service) groupTimeSeriesRowsByPrimaryStoreTarget(ctx context.Context, rows []*pb.TimeSeriesRow) ([]*routedRows, error) {
 	groups := make(map[string]*routedRows)
 	var order []string
-	// 同一批写入中，相同路由维度（space/dataset/subject）的行共享解析结果，
-	// 避免逐行重复 Resolve 带来的元数据查询与排序开销。
-	resolved := make(map[string]*pb.PrimaryTarget)
+	resolved := make(map[string]*pb.PrimaryStoreTarget)
 	for _, row := range rows {
-		scope := row.GetKey().GetScope()
-		scopeKey := scope.GetSpaceId() + "|" + scope.GetDatasetId() + "|" + scope.GetSubjectId()
-		ref, ok := resolved[scopeKey]
+		converted, err := timeSeriesRowToPrimaryStoreRow(row)
+		if err != nil {
+			return nil, err
+		}
+		key := row.GetKey()
+		routeKey := key.GetSpaceId() + "|" + key.GetDatasetId() + "|" + key.GetSubjectId()
+		target, ok := resolved[routeKey]
 		if !ok {
 			var err error
-			ref, err = s.router.Resolve(ctx, scope)
+			target, err = s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), key.GetSubjectId())
 			if err != nil {
 				return nil, err
 			}
-			resolved[scopeKey] = ref
+			resolved[routeKey] = target
 		}
-		key := ref.GetNodeId() + "|" + ref.GetEngine() + "|" + ref.GetDeviceTable()
-		group := groups[key]
+		groupKey := target.GetNodeId() + "|" + target.GetEngine() + "|" + target.GetDeviceTable()
+		group := groups[groupKey]
 		if group == nil {
-			group = &routedRows{target: ref}
-			groups[key] = group
-			order = append(order, key)
+			group = &routedRows{target: target}
+			groups[groupKey] = group
+			order = append(order, groupKey)
 		}
-		group.rows = append(group.rows, row)
+		group.rows = append(group.rows, converted)
+		group.timeSeriesKeys = append(group.timeSeriesKeys, proto.Clone(key).(*pb.TimeSeriesKey))
 	}
 	out := make([]*routedRows, 0, len(groups))
 	for _, key := range order {
@@ -363,59 +264,312 @@ func (s *Service) groupRowsByPrimaryTarget(ctx context.Context, rows []*pb.DataR
 	return out, nil
 }
 
-func (s *Service) publishRowsChanged(ctx context.Context, rows []*pb.DataRow) error {
-	if len(rows) == 0 || s.events == nil {
+func (s *Service) groupRecordRowsByPrimaryStoreTarget(ctx context.Context, rows []*pb.RecordRow) ([]*routedRows, error) {
+	groups := make(map[string]*routedRows)
+	var order []string
+	resolved := make(map[string]*pb.PrimaryStoreTarget)
+	for _, row := range rows {
+		converted, err := recordRowToPrimaryStoreRow(row)
+		if err != nil {
+			return nil, err
+		}
+		key := row.GetKey()
+		routeKey := key.GetSpaceId() + "|" + key.GetDatasetId()
+		target, ok := resolved[routeKey]
+		if !ok {
+			var err error
+			target, err = s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), "")
+			if err != nil {
+				return nil, err
+			}
+			resolved[routeKey] = target
+		}
+		groupKey := target.GetNodeId() + "|" + target.GetEngine() + "|" + target.GetDeviceTable()
+		group := groups[groupKey]
+		if group == nil {
+			group = &routedRows{target: target}
+			groups[groupKey] = group
+			order = append(order, groupKey)
+		}
+		group.rows = append(group.rows, converted)
+		group.recordKeys = append(group.recordKeys, proto.Clone(key).(*pb.RecordKey))
+	}
+	out := make([]*routedRows, 0, len(groups))
+	for _, key := range order {
+		out = append(out, groups[key])
+	}
+	return out, nil
+}
+
+func (s *Service) publishTimeSeriesRowsChanged(ctx context.Context, keys []*pb.TimeSeriesKey) error {
+	if len(keys) == 0 || s.events == nil {
 		return nil
 	}
-	events := make(map[string]*pb.DataRowsChangedEvent)
-	for _, row := range rows {
-		scope := row.GetKey().GetScope()
-		key := scope.GetSpaceId() + "|" + scope.GetDatasetId() + "|" + scope.GetSubjectId() + "|" + scope.GetFreq()
-		event := events[key]
-		if event == nil {
-			event = &pb.DataRowsChangedEvent{
-				EventId:   xid.New().String(),
-				Scope:     scope,
-				EventTime: time.Now().Format(time.RFC3339Nano),
-			}
-			events[key] = event
-		}
-		event.Rows = append(event.Rows, row)
+	return s.events.PublishTimeSeriesRowsChanged(ctx, &pb.TimeSeriesRowsChangedEvent{
+		EventId:   xid.New().String(),
+		EventTime: time.Now().Format(time.RFC3339Nano),
+		Keys:      cloneTimeSeriesKeys(keys),
+	})
+}
+
+func (s *Service) publishRecordRowsChanged(ctx context.Context, keys []*pb.RecordKey) error {
+	if len(keys) == 0 || s.events == nil {
+		return nil
 	}
-	for _, event := range events {
-		if err := s.events.PublishRowsChanged(ctx, event); err != nil {
+	return s.events.PublishRecordRowsChanged(ctx, &pb.RecordRowsChangedEvent{
+		EventId:   xid.New().String(),
+		EventTime: time.Now().Format(time.RFC3339Nano),
+		Keys:      cloneRecordKeys(keys),
+	})
+}
+
+func (s *Service) handleRecordRowsChangedForSearch(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
+	if len(event.GetKeys()) == 0 {
+		return nil
+	}
+	copied := proto.Clone(event).(*pb.RecordRowsChangedEvent)
+	s.indexMu.Lock()
+	if s.closing {
+		s.indexMu.Unlock()
+		return nil
+	}
+	s.indexWG.Add(1)
+	s.indexJobs = append(s.indexJobs, indexJob{
+		ctx:         context.WithoutCancel(ctx),
+		recordEvent: copied,
+	})
+	s.indexCond.Signal()
+	s.indexMu.Unlock()
+	return nil
+}
+
+func (s *Service) handleTimeSeriesRowsChangedForView(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
+	if len(event.GetKeys()) == 0 {
+		return nil
+	}
+	type datasetKey struct {
+		spaceID   string
+		datasetID string
+	}
+	eventKeys := make(map[datasetKey][]*pb.TimeSeriesKey)
+	for _, key := range event.GetKeys() {
+		if key == nil {
+			continue
+		}
+		groupKey := datasetKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
+		eventKeys[groupKey] = append(eventKeys[groupKey], key)
+	}
+	for key, keys := range eventKeys {
+		s.markDirtyTimeSeriesKeys(key.spaceID, key.datasetID, keys)
+	}
+	rows, err := s.currentTimeSeriesRows(ctx, event.GetKeys())
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	viewStore, err := s.viewStore()
+	if err != nil {
+		return err
+	}
+	grouped := make(map[datasetKey][]*pb.TimeSeriesRow)
+	for _, row := range rows {
+		key := row.GetKey()
+		grouped[datasetKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}] = append(grouped[datasetKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}], row)
+	}
+	for key, datasetRows := range grouped {
+		views, err := s.metadataReader.ListViewsByDataset(ctx, key.spaceID, key.datasetID)
+		if err != nil {
 			return err
+		}
+		for _, item := range views {
+			if !strings.EqualFold(item.GetEngine(), "duckdb") {
+				continue
+			}
+			columns, _, err := s.metadataReader.ListViewColumns(ctx, item.GetSpaceId(), item.GetViewId(), &pb.Page{Size: 10000})
+			if err != nil {
+				return err
+			}
+			mapped, ok, err := s.timeSeriesRowsForView(ctx, item, columns, datasetRows)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				if err := s.markViewPending(ctx, item); err != nil {
+					return err
+				}
+				continue
+			}
+			if len(mapped) == 0 {
+				continue
+			}
+			if item.GetActiveResult() != "" {
+				if err := viewStore.InsertRows(ctx, item.GetActiveResult(), mapped); err != nil {
+					return err
+				}
+			}
+			if item.GetBuildingResult() != "" {
+				if err := viewStore.InsertRows(ctx, item.GetBuildingResult(), mapped); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
 }
 
-func (s *Service) reportDerivedError(ctx context.Context, stage string, err error) {
+// indexJob 表示待由异步工作协程执行的一次索引任务。
+type indexJob struct {
+	ctx         context.Context
+	recordEvent *pb.RecordRowsChangedEvent
+}
+
+func (s *Service) runSearchIndexWorker() {
+	for {
+		s.indexMu.Lock()
+		for len(s.indexJobs) == 0 && !s.closing {
+			s.indexCond.Wait()
+		}
+		if len(s.indexJobs) == 0 && s.closing {
+			s.indexMu.Unlock()
+			return
+		}
+		job := s.indexJobs[0]
+		copy(s.indexJobs, s.indexJobs[1:])
+		s.indexJobs[len(s.indexJobs)-1] = indexJob{}
+		s.indexJobs = s.indexJobs[:len(s.indexJobs)-1]
+		s.indexMu.Unlock()
+
+		s.indexRecordRowsFromAccess(job.ctx, job.recordEvent)
+		s.indexWG.Done()
+	}
+}
+
+func (s *Service) indexRecordRowsFromAccess(ctx context.Context, event *pb.RecordRowsChangedEvent) {
+	type datasetKey struct {
+		spaceID   string
+		datasetID string
+	}
+	eventKeys := make(map[datasetKey][]*pb.RecordKey)
+	for _, key := range event.GetKeys() {
+		if key == nil {
+			continue
+		}
+		groupKey := datasetKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
+		eventKeys[groupKey] = append(eventKeys[groupKey], key)
+	}
+	for key, keys := range eventKeys {
+		s.markDirtyRecordKeys(key.spaceID, key.datasetID, keys)
+	}
+	rows, err := s.currentRecordRows(ctx, event.GetKeys())
+	if err != nil {
+		s.reportViewError(ctx, "record_search_index", err)
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	grouped := make(map[datasetKey][]*pb.RecordRow)
+	for _, row := range rows {
+		key := row.GetKey()
+		grouped[datasetKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}] = append(grouped[datasetKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}], row)
+	}
+	for key, datasetRows := range grouped {
+		views, err := s.metadataReader.ListViewsByDataset(ctx, key.spaceID, key.datasetID)
+		if err != nil {
+			s.reportViewError(ctx, "record_search_index", err)
+			continue
+		}
+		for _, item := range views {
+			if !strings.EqualFold(item.GetEngine(), "bleve") {
+				continue
+			}
+			columns, _, err := s.metadataReader.ListViewColumns(ctx, item.GetSpaceId(), item.GetViewId(), &pb.Page{Size: 10000})
+			if err != nil {
+				s.reportViewError(ctx, "record_search_index", err)
+				continue
+			}
+			projected, ok := recordRowsForView(item, columns, datasetRows)
+			if !ok {
+				if err := s.markViewPending(ctx, item); err != nil {
+					s.reportViewError(ctx, "record_search_index", err)
+				}
+				continue
+			}
+			if item.GetActiveResult() != "" {
+				if err := s.search.IndexRecordViewRows(ctx, item.GetActiveResult(), columns, projected); err != nil {
+					s.reportViewError(ctx, "record_search_index", err)
+				}
+			}
+			if item.GetBuildingResult() != "" {
+				if err := s.search.IndexRecordViewRows(ctx, item.GetBuildingResult(), columns, projected); err != nil {
+					s.reportViewError(ctx, "record_search_index", err)
+				}
+			}
+		}
+	}
+}
+
+func (s *Service) currentTimeSeriesRows(ctx context.Context, keys []*pb.TimeSeriesKey) ([]*pb.TimeSeriesRow, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	var out []*pb.TimeSeriesRow
+	for _, key := range keys {
+		rsp, err := s.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{Keys: []*pb.TimeSeriesKey{key}})
+		if err != nil {
+			return nil, err
+		}
+		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return nil, errText(rsp.GetRetInfo().GetMsg())
+		}
+		out = append(out, rsp.GetRows()...)
+	}
+	return out, nil
+}
+
+func (s *Service) currentRecordRows(ctx context.Context, keys []*pb.RecordKey) ([]*pb.RecordRow, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	reader := s.factReader
+	if reader == nil {
+		reader = s
+	}
+	rsp, err := reader.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: keys})
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		return nil, errText(rsp.GetRetInfo().GetMsg())
+	}
+	return rsp.GetRows(), nil
+}
+
+func (s *Service) WaitForIndex() {
+	s.indexWG.Wait()
+}
+
+func (s *Service) reportViewError(ctx context.Context, stage string, err error) {
 	if s == nil || s.report == nil || err == nil {
 		return
 	}
 	s.report(ctx, stage, err)
 }
 
-func sameDataKey(left, right *pb.DataKey) bool {
-	leftScope := left.GetScope()
-	rightScope := right.GetScope()
-	if left.GetDataTime() != right.GetDataTime() || left.GetRowId() != right.GetRowId() {
-		return false
+func cloneTimeSeriesKeys(keys []*pb.TimeSeriesKey) []*pb.TimeSeriesKey {
+	out := make([]*pb.TimeSeriesKey, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, proto.Clone(key).(*pb.TimeSeriesKey))
 	}
-	if leftScope.GetSpaceId() != rightScope.GetSpaceId() ||
-		leftScope.GetDatasetId() != rightScope.GetDatasetId() ||
-		leftScope.GetSubjectId() != rightScope.GetSubjectId() ||
-		leftScope.GetFreq() != rightScope.GetFreq() {
-		return false
+	return out
+}
+
+func cloneRecordKeys(keys []*pb.RecordKey) []*pb.RecordKey {
+	out := make([]*pb.RecordKey, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, proto.Clone(key).(*pb.RecordKey))
 	}
-	if len(leftScope.GetDimensions()) != len(rightScope.GetDimensions()) {
-		return false
-	}
-	for key, value := range leftScope.GetDimensions() {
-		if rightScope.GetDimensions()[key] != value {
-			return false
-		}
-	}
-	return true
+	return out
 }

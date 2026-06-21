@@ -116,7 +116,7 @@ export MOOX_CONFIG="/path/to/custom/config.yaml"
 
 ## 📥 历史数据导入
 
-通过 `storage import` 将本地历史数据文件导入已登记的 DataSet。命令入口保持稳定，数据格式通过 `--format` 选择；当前支持 `csv`，也可以使用 `auto` 按文件扩展名推断，后续新增 JSONL、Parquet 等格式时会复用同一入口。
+通过 `storage import` 将本地历史数据文件导入已登记的 Dataset。命令入口保持稳定，数据格式通过 `--format` 选择；当前支持 `csv`，也可以使用 `auto` 按文件扩展名推断，后续新增 JSONL、Parquet 等格式时会复用同一入口。
 
 ```bash
 ./moox-cli storage import \
@@ -133,7 +133,7 @@ export MOOX_CONFIG="/path/to/custom/config.yaml"
   --time-column candle_begin_time
 ```
 
-导入前会读取 MetadataService 校验 DataSet、View 归属、Subject 绑定、列契约和字段类型；CSV 可包含交易所下载横幅，CLI 会跳过横幅并从包含 `--time-column` 的行识别表头。试跑可加 `--dry-run`，只做校验和导入计划输出，不写入数据。
+导入前会读取 MetadataService 校验 Dataset、View 归属、Subject 绑定、列契约和字段类型；CSV 可包含交易所下载横幅，CLI 会跳过横幅并从包含 `--time-column` 的行识别表头。试跑可加 `--dry-run`，只做校验和导入计划输出，不写入数据。
 
 ## 🔐 用户认证功能
 

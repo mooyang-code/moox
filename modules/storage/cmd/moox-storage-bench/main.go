@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"math/rand"
 	"net"
 	"os"
 	"os/exec"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/bench"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -27,10 +27,11 @@ const (
 	spaceID                     = "crypto_bench"
 	dataSourceID                = "binance"
 	freq                        = "1h"
-	objectDatasetID             = "bench_synthetic_objects"
+	recordDatasetID             = "bench_synthetic_records"
 	metadataRefreshIntervalHint = "snapshotcache 默认 10s"
 )
 
+// options 保存压测命令行解析后的运行参数。
 type options struct {
 	zipPath            string
 	dataDir            string
@@ -38,7 +39,7 @@ type options struct {
 	moduleDir          string
 	reportDir          string
 	rowLimit           int
-	objectRows         int
+	recordRows         int
 	batchSize          int
 	readRequests       int
 	klinePointRequests int
@@ -54,6 +55,7 @@ type options struct {
 	targetTime         string
 }
 
+// serviceEnv 保存压测期间拉起 Storage 服务所需的进程和路径。
 type serviceEnv struct {
 	workDir    string
 	binPath    string
@@ -65,6 +67,7 @@ type serviceEnv struct {
 	logFile    *os.File
 }
 
+// servicePorts 保存压测服务监听的端口集合。
 type servicePorts struct {
 	admin    int
 	data     int
@@ -74,6 +77,7 @@ type servicePorts struct {
 	timer    int
 }
 
+// datasetInfo 描述压测报告中的数据集与视图信息。
 type datasetInfo struct {
 	Market    string `json:"market"`
 	DatasetID string `json:"dataset_id"`
@@ -81,6 +85,7 @@ type datasetInfo struct {
 	Rows      int    `json:"rows"`
 }
 
+// querySample 描述压测中用于点查的一条样本数据。
 type querySample struct {
 	Market    string `json:"market"`
 	DatasetID string `json:"dataset_id"`
@@ -89,6 +94,7 @@ type querySample struct {
 	RowID     string `json:"row_id"`
 }
 
+// benchmarkReport 汇总一次 Storage 压测的输入、结果和产物路径。
 type benchmarkReport struct {
 	StartedAt         string                 `json:"started_at"`
 	FinishedAt        string                 `json:"finished_at"`
@@ -100,7 +106,7 @@ type benchmarkReport struct {
 	Datasets          []datasetInfo          `json:"datasets"`
 	MetadataReady     metadataReadyReport    `json:"metadata_ready"`
 	Write             writeReport            `json:"write"`
-	ObjectWrite       writeReport            `json:"object_write"`
+	RecordWrite       writeReport            `json:"record_write"`
 	PrimaryRead       operationReport        `json:"primary_read"`
 	PrimaryKlinePoint operationReport        `json:"primary_kline_point"`
 	KlinePointTarget  querySample            `json:"kline_point_target"`
@@ -112,6 +118,7 @@ type benchmarkReport struct {
 	Extra             map[string]interface{} `json:"extra,omitempty"`
 }
 
+// metadataReadyReport 记录等待元数据缓存可读的耗时与重试信息。
 type metadataReadyReport struct {
 	DurationSeconds     float64 `json:"duration_seconds"`
 	Attempts            int     `json:"attempts"`
@@ -119,6 +126,7 @@ type metadataReadyReport struct {
 	TimeoutSeconds      float64 `json:"timeout_seconds"`
 }
 
+// writeReport 记录一类写入压测的吞吐与延迟指标。
 type writeReport struct {
 	Rows             int                  `json:"rows"`
 	Batches          int                  `json:"batches"`
@@ -131,6 +139,7 @@ type writeReport struct {
 	BatchLatency     bench.LatencySummary `json:"batch_latency"`
 }
 
+// operationReport 记录一类读查询压测的吞吐与延迟指标。
 type operationReport struct {
 	Requests        int                  `json:"requests"`
 	Concurrency     int                  `json:"concurrency"`
@@ -142,6 +151,7 @@ type operationReport struct {
 	Latency         bench.LatencySummary `json:"latency"`
 }
 
+// duckDBReport 记录 DuckDB 视图物化校验和查询压测结果。
 type duckDBReport struct {
 	Verified       bool              `json:"verified"`
 	ExpectedRows   int               `json:"expected_rows"`
@@ -150,7 +160,7 @@ type duckDBReport struct {
 }
 
 func main() {
-	if err := run(context.Background()); err != nil {
+	if err := run(trpc.BackgroundContext()); err != nil {
 		fmt.Fprintf(os.Stderr, "moox-storage-bench failed: %v\n", err)
 		os.Exit(1)
 	}
@@ -202,8 +212,8 @@ func run(ctx context.Context) error {
 	defer func() { _ = env.Stop() }()
 
 	meta := pb.NewMetadataServiceClientProxy(targetOpts(env.ports.metadata)...)
-	data := pb.NewDataServiceClientProxy(targetOpts(env.ports.data)...)
-	query := pb.NewQueryServiceClientProxy(targetOpts(env.ports.query)...)
+	data := pb.NewAccessServiceClientProxy(targetOpts(env.ports.data)...)
+	query := pb.NewViewServiceClientProxy(targetOpts(env.ports.query)...)
 
 	if err := seedMetadata(ctx, meta, files, opts); err != nil {
 		return err
@@ -216,7 +226,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	objectWriteStats, err := writeObjects(ctx, data, opts)
+	recordWriteStats, err := writeRecords(ctx, data, opts)
 	if err != nil {
 		return err
 	}
@@ -263,7 +273,7 @@ func run(ctx context.Context) error {
 		Datasets:          datasets,
 		MetadataReady:     metadataReady,
 		Write:             writeStats,
-		ObjectWrite:       objectWriteStats,
+		RecordWrite:       recordWriteStats,
 		PrimaryRead:       primaryRead,
 		PrimaryKlinePoint: primaryKlinePoint,
 		KlinePointTarget:  klinePointTarget,
@@ -294,11 +304,11 @@ func parseOptions() options {
 	flag.StringVar(&opts.moduleDir, "module-dir", "", "modules/storage directory; defaults to current module")
 	flag.StringVar(&opts.reportDir, "report-dir", "", "report output directory; defaults to ./docs/bench-reports")
 	flag.IntVar(&opts.rowLimit, "row-limit", 0, "max rows per CSV; 0 means all")
-	flag.IntVar(&opts.objectRows, "object-rows", 1000, "synthetic non-time-series object rows to write; 0 disables object write benchmark")
+	flag.IntVar(&opts.recordRows, "record-rows", 1000, "synthetic non-time-series record rows to write; 0 disables record write benchmark")
 	flag.IntVar(&opts.batchSize, "batch-size", 1000, "write batch size")
 	flag.IntVar(&opts.readRequests, "read-requests", 200, "primary ReadTimeSeriesRows requests")
 	flag.IntVar(&opts.klinePointRequests, "kline-point-requests", 200, "single K-line time-point ReadTimeSeriesRows requests")
-	flag.IntVar(&opts.viewRequests, "view-requests", 200, "DuckDB QueryView requests")
+	flag.IntVar(&opts.viewRequests, "view-requests", 200, "DuckDB QueryTimeSeriesRows requests")
 	flag.IntVar(&opts.concurrency, "concurrency", 4, "read benchmark concurrency")
 	flag.UintVar(&pageSize, "page-size", pageSize, "read/query page size")
 	flag.DurationVar(&opts.viewWait, "view-wait", 2*time.Minute, "max wait for async DuckDB view materialization")
@@ -324,8 +334,8 @@ func parseOptions() options {
 	if opts.viewRequests < 0 {
 		opts.viewRequests = 0
 	}
-	if opts.objectRows < 0 {
-		opts.objectRows = 0
+	if opts.recordRows < 0 {
+		opts.recordRows = 0
 	}
 	if opts.metadataWait < 0 {
 		opts.metadataWait = 0
@@ -525,7 +535,6 @@ storage:
   eventbus:
     type: memory
     stream_name: MOOX_STORAGE_BENCH
-    rows_changed_subject: moox.storage.bench.fact.rows_changed.v1
 `
 
 const trpcConfigTemplate = `global:
@@ -540,17 +549,17 @@ server:
     read_timeout: 5000
     write_timeout: 60000
   service:
-    - name: trpc.storage.data.DataService
+    - name: trpc.storage.access.AccessService
       ip: 127.0.0.1
       port: %d
       network: tcp
       protocol: trpc
-    - name: trpc.storage.query.QueryService
+    - name: trpc.storage.view.ViewService
       ip: 127.0.0.1
       port: %d
       network: tcp
       protocol: trpc
-    - name: trpc.storage.primary.PrimaryStoreService
+    - name: trpc.storage.store.PrimaryStoreService
       ip: 127.0.0.1
       port: %d
       network: tcp
@@ -595,8 +604,8 @@ func seedMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy, files
 			return err
 		}
 	}
-	if err := call("CreateStorageNode", func() (*pb.RetInfo, error) {
-		rsp, err := meta.CreateStorageNode(ctx, &pb.CreateStorageNodeReq{Node: &pb.StorageNode{NodeId: "bench_node_pebble", Name: "bench_node_pebble", Endpoint: "local", Status: "active"}})
+	if err := call("CreatePrimaryStoreNode", func() (*pb.RetInfo, error) {
+		rsp, err := meta.CreatePrimaryStoreNode(ctx, &pb.CreatePrimaryStoreNodeReq{Node: &pb.PrimaryStoreNode{NodeId: "bench_node_pebble", Name: "bench_node_pebble", Endpoint: "local", Status: "active"}})
 		return rsp.GetRetInfo(), err
 	}); err != nil {
 		return err
@@ -632,8 +641,8 @@ func seedMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy, files
 	for market := range markets {
 		market := market
 		datasetID := datasetID(market)
-		if err := call("CreateDataSet:"+datasetID, func() (*pb.RetInfo, error) {
-			rsp, err := meta.CreateDataSet(ctx, &pb.CreateDataSetReq{Dataset: &pb.DataSet{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: dataSourceID, Name: "Bench " + market + " kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{freq}, Status: "active"}})
+		if err := call("CreateDataset:"+datasetID, func() (*pb.RetInfo, error) {
+			rsp, err := meta.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: dataSourceID, Name: "Bench " + market + " kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{freq}, Status: "active"}})
 			return rsp.GetRetInfo(), err
 		}); err != nil {
 			return err
@@ -642,15 +651,15 @@ func seedMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy, files
 			column := column
 			column.SpaceId = spaceID
 			column.DatasetId = datasetID
-			if err := call("UpsertDataSetColumn:"+datasetID+"."+column.ColumnName, func() (*pb.RetInfo, error) {
-				rsp, err := meta.UpsertDataSetColumn(ctx, &pb.UpsertDataSetColumnReq{Column: column})
+			if err := call("UpsertDatasetColumn:"+datasetID+"."+column.ColumnName, func() (*pb.RetInfo, error) {
+				rsp, err := meta.UpsertDatasetColumn(ctx, &pb.UpsertDatasetColumnReq{Column: column})
 				return rsp.GetRetInfo(), err
 			}); err != nil {
 				return err
 			}
 		}
-		if err := call("CreateStorageRoute:"+datasetID, func() (*pb.RetInfo, error) {
-			rsp, err := meta.CreateStorageRoute(ctx, &pb.CreateStorageRouteReq{StorageRoute: &pb.StorageRoute{SpaceId: spaceID, DatasetId: datasetID, SubjectPattern: "*", NodeId: "bench_node_pebble", Status: "active"}})
+		if err := call("CreatePrimaryStoreRoute:"+datasetID, func() (*pb.RetInfo, error) {
+			rsp, err := meta.CreatePrimaryStoreRoute(ctx, &pb.CreatePrimaryStoreRouteReq{PrimaryStoreRoute: &pb.PrimaryStoreRoute{SpaceId: spaceID, DatasetId: datasetID, SubjectPattern: "*", NodeId: "bench_node_pebble", Status: "active"}})
 			return rsp.GetRetInfo(), err
 		}); err != nil {
 			return err
@@ -658,39 +667,39 @@ func seedMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy, files
 	}
 	for _, file := range files {
 		file := file
-		if err := call("BindDataSetSubject:"+file.Market+"."+file.SubjectID, func() (*pb.RetInfo, error) {
-			rsp, err := meta.BindDataSetSubject(ctx, &pb.BindDataSetSubjectReq{DatasetSubject: &pb.DataSetSubject{SpaceId: spaceID, DatasetId: datasetID(file.Market), SubjectId: file.SubjectID, SubjectRole: "normal", Status: "active"}})
+		if err := call("BindDatasetSubject:"+file.Market+"."+file.SubjectID, func() (*pb.RetInfo, error) {
+			rsp, err := meta.BindDatasetSubject(ctx, &pb.BindDatasetSubjectReq{DatasetSubject: &pb.DatasetSubject{SpaceId: spaceID, DatasetId: datasetID(file.Market), SubjectId: file.SubjectID, SubjectRole: "normal", Status: "active"}})
 			return rsp.GetRetInfo(), err
 		}); err != nil {
 			return err
 		}
 	}
-	if opts.objectRows > 0 {
-		if err := seedObjectMetadata(ctx, meta); err != nil {
+	if opts.recordRows > 0 {
+		if err := seedRecordMetadata(ctx, meta); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func seedObjectMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy) error {
-	if err := call("CreateDataSet:"+objectDatasetID, func() (*pb.RetInfo, error) {
-		rsp, err := meta.CreateDataSet(ctx, &pb.CreateDataSetReq{Dataset: &pb.DataSet{SpaceId: spaceID, DatasetId: objectDatasetID, DataSourceId: dataSourceID, Name: "Bench synthetic objects", DataKind: pb.DataKind_DATA_KIND_OBJECT, Status: "active"}})
+func seedRecordMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy) error {
+	if err := call("CreateDataset:"+recordDatasetID, func() (*pb.RetInfo, error) {
+		rsp, err := meta.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{SpaceId: spaceID, DatasetId: recordDatasetID, DataSourceId: dataSourceID, Name: "Bench synthetic records", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"}})
 		return rsp.GetRetInfo(), err
 	}); err != nil {
 		return err
 	}
-	for _, column := range objectColumns() {
+	for _, column := range recordColumns() {
 		column := column
-		if err := call("UpsertDataSetColumn:"+objectDatasetID+"."+column.ColumnName, func() (*pb.RetInfo, error) {
-			rsp, err := meta.UpsertDataSetColumn(ctx, &pb.UpsertDataSetColumnReq{Column: column})
+		if err := call("UpsertDatasetColumn:"+recordDatasetID+"."+column.ColumnName, func() (*pb.RetInfo, error) {
+			rsp, err := meta.UpsertDatasetColumn(ctx, &pb.UpsertDatasetColumnReq{Column: column})
 			return rsp.GetRetInfo(), err
 		}); err != nil {
 			return err
 		}
 	}
-	if err := call("CreateStorageRoute:"+objectDatasetID, func() (*pb.RetInfo, error) {
-		rsp, err := meta.CreateStorageRoute(ctx, &pb.CreateStorageRouteReq{StorageRoute: &pb.StorageRoute{SpaceId: spaceID, DatasetId: objectDatasetID, SubjectPattern: "*", NodeId: "bench_node_pebble", Status: "active"}})
+	if err := call("CreatePrimaryStoreRoute:"+recordDatasetID, func() (*pb.RetInfo, error) {
+		rsp, err := meta.CreatePrimaryStoreRoute(ctx, &pb.CreatePrimaryStoreRouteReq{PrimaryStoreRoute: &pb.PrimaryStoreRoute{SpaceId: spaceID, DatasetId: recordDatasetID, SubjectPattern: "*", NodeId: "bench_node_pebble", Status: "active"}})
 		return rsp.GetRetInfo(), err
 	}); err != nil {
 		return err
@@ -698,7 +707,7 @@ func seedObjectMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy)
 	return nil
 }
 
-func waitMetadataReady(ctx context.Context, data pb.DataServiceClientProxy, files []bench.KlineFile, opts options) (metadataReadyReport, error) {
+func waitMetadataReady(ctx context.Context, data pb.AccessServiceClientProxy, files []bench.KlineFile, opts options) (metadataReadyReport, error) {
 	report := metadataReadyReport{
 		RefreshIntervalHint: metadataRefreshIntervalHint,
 		TimeoutSeconds:      opts.metadataWait.Seconds(),
@@ -710,13 +719,13 @@ func waitMetadataReady(ctx context.Context, data pb.DataServiceClientProxy, file
 	if err != nil {
 		return report, err
 	}
-	objectRows := metadataReadyObjectRows(opts)
+	recordRows := metadataReadyRecordRows(opts)
 	started := time.Now()
 	deadline := started.Add(opts.metadataWait)
 	var last error
 	for {
 		report.Attempts++
-		last = runMetadataReadyProbe(ctx, data, timeSeriesRows, objectRows)
+		last = runMetadataReadyProbe(ctx, data, timeSeriesRows, recordRows)
 		report.DurationSeconds = time.Since(started).Seconds()
 		if last == nil {
 			return report, nil
@@ -744,16 +753,16 @@ func metadataReadyTimeSeriesRows(files []bench.KlineFile) ([]*pb.TimeSeriesRow, 
 	return rows, nil
 }
 
-func metadataReadyObjectRows(opts options) []*pb.ObjectRow {
-	if opts.objectRows == 0 {
+func metadataReadyRecordRows(opts options) []*pb.RecordRow {
+	if opts.recordRows == 0 {
 		return nil
 	}
-	return syntheticObjectRows(1)
+	return syntheticRecordRows(1)
 }
 
-func runMetadataReadyProbe(ctx context.Context, data pb.DataServiceClientProxy, timeSeriesRows []*pb.TimeSeriesRow, objectRows []*pb.ObjectRow) error {
+func runMetadataReadyProbe(ctx context.Context, data pb.AccessServiceClientProxy, timeSeriesRows []*pb.TimeSeriesRow, recordRows []*pb.RecordRow) error {
 	if len(timeSeriesRows) > 0 {
-		rsp, err := data.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{WriteMode: pb.WriteMode_WRITE_MODE_UPSERT, Rows: timeSeriesRows})
+		rsp, err := data.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: timeSeriesRows})
 		if err != nil {
 			return err
 		}
@@ -761,19 +770,19 @@ func runMetadataReadyProbe(ctx context.Context, data pb.DataServiceClientProxy, 
 			return err
 		}
 	}
-	if len(objectRows) > 0 {
-		rsp, err := data.WriteObjectRows(ctx, &pb.WriteObjectRowsReq{WriteMode: pb.WriteMode_WRITE_MODE_UPSERT, Rows: objectRows})
+	if len(recordRows) > 0 {
+		rsp, err := data.WriteRecordRows(ctx, &pb.WriteRecordRowsReq{Rows: recordRows})
 		if err != nil {
 			return err
 		}
-		if err := retErr("WriteObjectRows metadata ready probe", rsp.GetRetInfo()); err != nil {
+		if err := retErr("WriteRecordRows metadata ready probe", rsp.GetRetInfo()); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func writeKlines(ctx context.Context, data pb.DataServiceClientProxy, files []bench.KlineFile, opts options) (writeReport, map[string]int, []querySample, error) {
+func writeKlines(ctx context.Context, data pb.AccessServiceClientProxy, files []bench.KlineFile, opts options) (writeReport, map[string]int, []querySample, error) {
 	var report writeReport
 	var recorder bench.LatencyRecorder
 	var batchDurations []time.Duration
@@ -801,7 +810,7 @@ func writeKlines(ctx context.Context, data pb.DataServiceClientProxy, files []be
 			if end > len(timeSeriesRows) {
 				end = len(timeSeriesRows)
 			}
-			req := &pb.WriteTimeSeriesRowsReq{WriteMode: pb.WriteMode_WRITE_MODE_UPSERT, Rows: timeSeriesRows[start:end]}
+			req := &pb.WriteTimeSeriesRowsReq{Rows: timeSeriesRows[start:end]}
 			begin := time.Now()
 			if err := retry(30*time.Second, time.Second, func() error {
 				rsp, err := data.WriteTimeSeriesRows(ctx, req)
@@ -825,28 +834,28 @@ func writeKlines(ctx context.Context, data pb.DataServiceClientProxy, files []be
 	return report, datasetRows, samples, nil
 }
 
-func writeObjects(ctx context.Context, data pb.DataServiceClientProxy, opts options) (writeReport, error) {
+func writeRecords(ctx context.Context, data pb.AccessServiceClientProxy, opts options) (writeReport, error) {
 	var report writeReport
-	if opts.objectRows == 0 {
+	if opts.recordRows == 0 {
 		return report, nil
 	}
 	var recorder bench.LatencyRecorder
 	var batchDurations []time.Duration
 	var batchRows []int
-	rows := syntheticObjectRows(opts.objectRows)
+	rows := syntheticRecordRows(opts.recordRows)
 	for start := 0; start < len(rows); start += opts.batchSize {
 		end := start + opts.batchSize
 		if end > len(rows) {
 			end = len(rows)
 		}
-		req := &pb.WriteObjectRowsReq{WriteMode: pb.WriteMode_WRITE_MODE_UPSERT, Rows: rows[start:end]}
+		req := &pb.WriteRecordRowsReq{Rows: rows[start:end]}
 		begin := time.Now()
 		if err := retry(30*time.Second, time.Second, func() error {
-			rsp, err := data.WriteObjectRows(ctx, req)
+			rsp, err := data.WriteRecordRows(ctx, req)
 			if err != nil {
 				return err
 			}
-			return retErr("WriteObjectRows", rsp.GetRetInfo())
+			return retErr("WriteRecordRows", rsp.GetRetInfo())
 		}); err != nil {
 			return report, err
 		}
@@ -914,16 +923,16 @@ func createViews(ctx context.Context, meta pb.MetadataServiceClientProxy, datase
 	return nil
 }
 
-func waitViews(ctx context.Context, query pb.QueryServiceClientProxy, datasetRows map[string]int, timeout time.Duration) (map[string]uint64, error) {
+func waitViews(ctx context.Context, query pb.ViewServiceClientProxy, datasetRows map[string]int, timeout time.Duration) (map[string]uint64, error) {
 	out := make(map[string]uint64)
 	err := retry(timeout, 2*time.Second, func() error {
 		for datasetID, want := range datasetRows {
 			market := strings.TrimSuffix(strings.TrimPrefix(datasetID, "bench_binance_"), "_kline_1h")
-			rsp, err := query.QueryView(ctx, &pb.QueryViewReq{SpaceId: spaceID, ViewId: viewID(market), Page: &pb.Page{Size: 1}})
+			rsp, err := query.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{SpaceId: spaceID, ViewId: viewID(market), Page: &pb.Page{Size: 1}})
 			if err != nil {
 				return err
 			}
-			if err := retErr("QueryView", rsp.GetRetInfo()); err != nil {
+			if err := retErr("QueryTimeSeriesRows", rsp.GetRetInfo()); err != nil {
 				return err
 			}
 			total := rsp.GetPageResult().GetTotal()
@@ -937,7 +946,7 @@ func waitViews(ctx context.Context, query pb.QueryServiceClientProxy, datasetRow
 	return out, err
 }
 
-func benchmarkPrimaryReads(ctx context.Context, data pb.DataServiceClientProxy, files []bench.KlineFile, opts options) (operationReport, error) {
+func benchmarkPrimaryReads(ctx context.Context, data pb.AccessServiceClientProxy, files []bench.KlineFile, opts options) (operationReport, error) {
 	return runConcurrentBenchmark(opts.readRequests, opts.concurrency, func(worker int, request int) (int, error) {
 		file := files[(worker+request)%len(files)]
 		rsp, err := data.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
@@ -960,7 +969,7 @@ func benchmarkPrimaryReads(ctx context.Context, data pb.DataServiceClientProxy, 
 	}, opts.pageSize)
 }
 
-func benchmarkPrimaryKlinePoint(ctx context.Context, data pb.DataServiceClientProxy, sample querySample, opts options) (operationReport, error) {
+func benchmarkPrimaryKlinePoint(ctx context.Context, data pb.AccessServiceClientProxy, sample querySample, opts options) (operationReport, error) {
 	return runConcurrentBenchmark(opts.klinePointRequests, opts.concurrency, func(worker int, request int) (int, error) {
 		rsp, err := data.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
 			Keys: []*pb.TimeSeriesKey{{
@@ -986,28 +995,24 @@ func benchmarkPrimaryKlinePoint(ctx context.Context, data pb.DataServiceClientPr
 	}, 1)
 }
 
-func benchmarkViewReads(ctx context.Context, query pb.QueryServiceClientProxy, files []bench.KlineFile, opts options) (operationReport, error) {
+func benchmarkViewReads(ctx context.Context, query pb.ViewServiceClientProxy, files []bench.KlineFile, opts options) (operationReport, error) {
 	return runConcurrentBenchmark(opts.viewRequests, opts.concurrency, func(worker int, request int) (int, error) {
 		file := files[(worker+request)%len(files)]
-		rsp, err := query.QueryView(ctx, &pb.QueryViewReq{
+		rsp, err := query.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
 			SpaceId:     spaceID,
 			ViewId:      viewID(file.Market),
-			SubjectIds:  []string{file.SubjectID},
+			Keys:        []*pb.TimeSeriesKey{{SpaceId: spaceID, DatasetId: datasetID(file.Market), SubjectId: file.SubjectID, Freq: freq}},
 			ColumnNames: []string{"close", "volume"},
 			Page:        &pb.Page{Size: opts.pageSize},
 		})
 		if err != nil {
 			return 0, err
 		}
-		if err := retErr("QueryView", rsp.GetRetInfo()); err != nil {
+		if err := retErr("QueryTimeSeriesRows", rsp.GetRetInfo()); err != nil {
 			return 0, err
 		}
 		return len(rsp.GetRows()), nil
 	}, opts.pageSize)
-}
-
-func (s querySample) scope() *pb.DataScope {
-	return &pb.DataScope{SpaceId: spaceID, DatasetId: s.DatasetID, SubjectId: s.SubjectID, Freq: freq}
 }
 
 func exactTimeRange(value string) *pb.TimeRange {
@@ -1125,21 +1130,21 @@ func markdownReport(report benchmarkReport) string {
 		}
 		fmt.Fprintf(&b, "\n")
 	}
-	fmt.Fprintf(&b, "## 数据集\n\n| 市场 | DataSet | View | 行数 |\n| --- | --- | --- | ---: |\n")
+	fmt.Fprintf(&b, "## 数据集\n\n| 市场 | Dataset | View | 行数 |\n| --- | --- | --- | ---: |\n")
 	for _, dataset := range report.Datasets {
 		fmt.Fprintf(&b, "| %s | `%s` | `%s` | %d |\n", dataset.Market, dataset.DatasetID, dataset.ViewID, dataset.Rows)
 	}
 	fmt.Fprintf(&b, "\n")
 	appendMetadataReadySection(&b, report.MetadataReady)
 	appendWriteSection(&b, "## 时序 K 线写入性能", "场景: `WriteTimeSeriesRows`，K 线数据按 `subject_id + freq + data_time` 写入", report.Write)
-	appendWriteSection(&b, "## 非时序对象写入性能", fmt.Sprintf("场景: `WriteObjectRows`，合成对象数据写入 `%s`，按 `object_id + version` 定位", objectDatasetID), report.ObjectWrite)
+	appendWriteSection(&b, "## 非时序记录写入性能", fmt.Sprintf("场景: `WriteRecordRows`，合成记录数据写入 `%s`，按 `record_id + version` 定位", recordDatasetID), report.RecordWrite)
 	fmt.Fprintf(&b, "## Primary 主存读取性能\n\n- 场景: `ReadTimeSeriesRows` 首页读取，默认每次返回 `%d` 行\n- 请求数: `%d`\n- 并发数: `%d`\n- 返回行数: `%d`\n- 平均请求吞吐: `%.2f req/s`\n- 平均行吞吐: `%.2f rows/s`\n", report.PrimaryRead.PageSize, report.PrimaryRead.Requests, report.PrimaryRead.Concurrency, report.PrimaryRead.RowsReturned, report.PrimaryRead.RequestsPerSec, report.PrimaryRead.RowsPerSecond)
 	appendLatencyLines(&b, "读取", report.PrimaryRead.Latency)
 	fmt.Fprintf(&b, "\n")
 	fmt.Fprintf(&b, "## Primary 单根 K 线查询性能\n\n- 场景: `ReadTimeSeriesRows` + 固定标的 + 固定 `data_time` 精确 TimeRange，每次返回 1 根 K 线\n- 目标市场: `%s`\n- 目标标的: `%s`\n- 目标时间: `%s`\n- 请求数: `%d`\n- 并发数: `%d`\n- 返回行数: `%d`\n- 平均请求吞吐: `%.2f req/s`\n- 平均行吞吐: `%.2f rows/s`\n", report.KlinePointTarget.Market, report.KlinePointTarget.SubjectID, report.KlinePointTarget.DataTime, report.PrimaryKlinePoint.Requests, report.PrimaryKlinePoint.Concurrency, report.PrimaryKlinePoint.RowsReturned, report.PrimaryKlinePoint.RequestsPerSec, report.PrimaryKlinePoint.RowsPerSecond)
 	appendLatencyLines(&b, "查询", report.PrimaryKlinePoint.Latency)
 	fmt.Fprintf(&b, "\n")
-	fmt.Fprintf(&b, "## DuckDB 视图读取性能\n\n- 异步物化验证: `%t`\n- 预期物化行数: `%d`\n\n| DataSet | DuckDB 物化行数 |\n| --- | ---: |\n", report.DuckDBView.Verified, report.DuckDBView.ExpectedRows)
+	fmt.Fprintf(&b, "## DuckDB 视图读取性能\n\n- 异步物化验证: `%t`\n- 预期物化行数: `%d`\n\n| Dataset | DuckDB 物化行数 |\n| --- | ---: |\n", report.DuckDBView.Verified, report.DuckDBView.ExpectedRows)
 	keys := make([]string, 0, len(report.DuckDBView.Materialized))
 	for key := range report.DuckDBView.Materialized {
 		keys = append(keys, key)
@@ -1148,7 +1153,7 @@ func markdownReport(report benchmarkReport) string {
 	for _, key := range keys {
 		fmt.Fprintf(&b, "| `%s` | %d |\n", key, report.DuckDBView.Materialized[key])
 	}
-	fmt.Fprintf(&b, "\n- QueryView 请求数: `%d`\n- 并发数: `%d`\n- 返回行数: `%d`\n- 平均查询吞吐: `%.2f req/s`\n- 平均行吞吐: `%.2f rows/s`\n", report.DuckDBView.QueryBenchmark.Requests, report.DuckDBView.QueryBenchmark.Concurrency, report.DuckDBView.QueryBenchmark.RowsReturned, report.DuckDBView.QueryBenchmark.RequestsPerSec, report.DuckDBView.QueryBenchmark.RowsPerSecond)
+	fmt.Fprintf(&b, "\n- QueryTimeSeriesRows 请求数: `%d`\n- 并发数: `%d`\n- 返回行数: `%d`\n- 平均查询吞吐: `%.2f req/s`\n- 平均行吞吐: `%.2f rows/s`\n", report.DuckDBView.QueryBenchmark.Requests, report.DuckDBView.QueryBenchmark.Concurrency, report.DuckDBView.QueryBenchmark.RowsReturned, report.DuckDBView.QueryBenchmark.RequestsPerSec, report.DuckDBView.QueryBenchmark.RowsPerSecond)
 	appendLatencyLines(&b, "查询", report.DuckDBView.QueryBenchmark.Latency)
 	fmt.Fprintf(&b, "\n")
 	fmt.Fprintf(&b, "## 运行环境\n\n- Storage 工作目录: `%s`\n- Storage 日志: `%s`\n", report.StorageWorkDir, report.StorageLogPath)
@@ -1215,19 +1220,19 @@ func fieldDefs() []*pb.Field {
 	return out
 }
 
-func columnsForMarket(market string) []*pb.DataSetColumn {
+func columnsForMarket(market string) []*pb.DatasetColumn {
 	names := []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num", "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "symbol", "avg_price_1m", "avg_price_5m"}
 	if market == "swap" {
 		names = append(names, "fundingRate")
 	}
-	out := make([]*pb.DataSetColumn, 0, len(names))
+	out := make([]*pb.DatasetColumn, 0, len(names))
 	for _, name := range names {
-		out = append(out, &pb.DataSetColumn{ColumnName: name, OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FIELD, OriginId: name, ValueType: valueTypeForColumn(name), Required: isRequiredColumn(name), Status: "active"})
+		out = append(out, &pb.DatasetColumn{ColumnName: name, OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: name, ValueType: valueTypeForColumn(name), Required: isRequiredColumn(name), Status: "active"})
 	}
 	return out
 }
 
-func objectColumns() []*pb.DataSetColumn {
+func recordColumns() []*pb.DatasetColumn {
 	defs := []struct {
 		name        string
 		valueType   pb.FieldValueType
@@ -1239,17 +1244,16 @@ func objectColumns() []*pb.DataSetColumn {
 		{name: "updated_at", valueType: pb.FieldValueType_FIELD_VALUE_TYPE_TIME},
 		{name: "payload_json", valueType: pb.FieldValueType_FIELD_VALUE_TYPE_JSON},
 	}
-	out := make([]*pb.DataSetColumn, 0, len(defs))
+	out := make([]*pb.DatasetColumn, 0, len(defs))
 	for _, def := range defs {
-		out = append(out, &pb.DataSetColumn{
-			SpaceId:     spaceID,
-			DatasetId:   objectDatasetID,
-			ColumnName:  def.name,
-			OriginType:  pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FIELD,
-			OriginId:    def.name,
-			ValueType:   def.valueType,
-			TextIndexed: def.textIndexed,
-			Status:      "active",
+		out = append(out, &pb.DatasetColumn{
+			SpaceId:    spaceID,
+			DatasetId:  recordDatasetID,
+			ColumnName: def.name,
+			OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD,
+			OriginId:   def.name,
+			ValueType:  def.valueType,
+			Status:     "active",
 		})
 	}
 	return out
@@ -1282,25 +1286,25 @@ func viewID(market string) string {
 	return "bench_" + market + "_kline_view"
 }
 
-func syntheticObjectID(index int) string {
-	return fmt.Sprintf("bench-object-%06d", index)
+func syntheticRecordID(index int) string {
+	return fmt.Sprintf("bench-record-%06d", index)
 }
 
-func syntheticObjectRows(count int) []*pb.ObjectRow {
+func syntheticRecordRows(count int) []*pb.RecordRow {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	out := make([]*pb.ObjectRow, 0, count)
+	out := make([]*pb.RecordRow, 0, count)
 	for i := 0; i < count; i++ {
-		objectID := syntheticObjectID(i)
+		recordID := syntheticRecordID(i)
 		updatedAt := base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339)
-		out = append(out, &pb.ObjectRow{
-			Key: &pb.ObjectKey{
+		out = append(out, &pb.RecordRow{
+			Key: &pb.RecordKey{
 				SpaceId:   spaceID,
-				DatasetId: objectDatasetID,
-				ObjectId:  objectID,
+				DatasetId: recordDatasetID,
+				RecordId:  recordID,
 				Version:   updatedAt,
 			},
 			Columns: []*pb.ColumnValue{
-				stringValue("title", fmt.Sprintf("synthetic object %06d", i)),
+				stringValue("title", fmt.Sprintf("synthetic record %06d", i)),
 				stringValue("status", []string{"active", "paused", "archived"}[i%3]),
 				doubleValue("score", 100+float64(i%1000)/10),
 				timeValue("updated_at", updatedAt),
@@ -1449,8 +1453,4 @@ func locateModuleDir() (string, error) {
 		}
 		wd = parent
 	}
-}
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
 }

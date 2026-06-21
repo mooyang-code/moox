@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
@@ -23,45 +23,49 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/services/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/rs/xid"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+// Service 实现元数据、写入、权威读取和视图查询入口。
 type Service struct {
-	root           string
-	duckDBPath     string
-	parquetPath    string
-	metadata       metadata.Store
-	metadataReader metadata.Reader
-	metadataCache  *metacache.Store
-	validator      *schema.Validator
-	router         *router.Resolver
-	primary        primary.Client
-	search         *search.Service
-	factReader     factReadService
-	events         eventbus.Bus
-	report         DerivedErrorReporter
-	indexMu        sync.Mutex
-	indexCond      *sync.Cond
-	indexJobs      []indexJob
-	indexWG        sync.WaitGroup
-	closing        bool
-	rowsChangedSub eventbus.Subscription
-	openedDuckDB   sync.Map
+	root                     string
+	duckDBPath               string
+	parquetPath              string
+	metadata                 metadata.Store
+	metadataReader           metadata.Reader
+	metadataCache            *metacache.Store
+	validator                *schema.Validator
+	router                   *router.Resolver
+	primary                  primary.Client
+	search                   *search.Service
+	factReader               factReadService
+	events                   eventbus.Bus
+	report                   ViewErrorReporter
+	indexMu                  sync.Mutex
+	indexCond                *sync.Cond
+	indexJobs                []indexJob
+	indexWG                  sync.WaitGroup
+	closing                  bool
+	recordRowsChangedSub     eventbus.Subscription
+	timeSeriesRowsChangedSub eventbus.Subscription
+	viewDirtyMu              sync.Mutex
+	viewDirtyBuilds          map[string]*viewDirtyBuild
+	recordVersionMu          sync.Mutex
+	lastRecordVersion        time.Time
+	openedDuckDB             sync.Map
 }
 
+// factReadService 定义 Access 内部回读 Record 行所需的接口。
 type factReadService interface {
-	ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error)
+	ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error)
 }
 
 var (
 	_ pb.MetadataServiceService = (*Service)(nil)
-	_ pb.DataServiceService     = (*Service)(nil)
-	_ pb.QueryServiceService    = (*Service)(nil)
+	_ pb.AccessServiceService   = (*Service)(nil)
+	_ pb.ViewServiceService     = (*Service)(nil)
 )
-
-func NewService(root string) *Service {
-	return NewServiceWithOptions(Options{Root: root})
-}
 
 func NewServiceWithOptions(opts Options) *Service {
 	root := storageRoot(opts.Root)
@@ -70,7 +74,7 @@ func NewServiceWithOptions(opts Options) *Service {
 	var cacheReader *metacache.Store
 	if meta == nil {
 		var err error
-		meta, cacheReader, err = openDefaultMetadataStores(context.Background(), root, opts.MetadataPath, opts.InitSchemaPath)
+		meta, cacheReader, err = openDefaultMetadataStores(trpc.BackgroundContext(), root, opts.MetadataPath, opts.InitSchemaPath)
 		if err != nil {
 			panic(fmt.Sprintf("open storage metadata store: %v", err))
 		}
@@ -93,9 +97,9 @@ func NewServiceWithOptions(opts Options) *Service {
 	if events == nil {
 		events = eventbus.NewMemoryBus()
 	}
-	reporter := opts.DerivedErrors
+	reporter := opts.ViewErrors
 	if reporter == nil {
-		reporter = logDerivedError
+		reporter = logViewError
 	}
 	svc := &Service{
 		root:           root,
@@ -129,30 +133,39 @@ func (s *Service) StartEventConsumers(ctx context.Context) error {
 		return nil
 	}
 	s.indexMu.Lock()
-	if s.rowsChangedSub != nil {
+	if s.recordRowsChangedSub != nil || s.timeSeriesRowsChangedSub != nil {
 		s.indexMu.Unlock()
 		return nil
 	}
 	s.indexMu.Unlock()
-	subscription, err := subscriber.SubscribeRowsChanged(ctx, s.handleRowsChangedForSearch)
+	timeSeriesSubscription, err := subscriber.SubscribeTimeSeriesRowsChanged(ctx, s.handleTimeSeriesRowsChangedForView)
 	if err != nil {
-		return fmt.Errorf("subscribe rows changed: %w", err)
+		return fmt.Errorf("subscribe time series rows changed: %w", err)
+	}
+	recordSubscription, err := subscriber.SubscribeRecordRowsChanged(ctx, s.handleRecordRowsChangedForSearch)
+	if err != nil {
+		_ = timeSeriesSubscription.Close()
+		return fmt.Errorf("subscribe record rows changed: %w", err)
 	}
 	s.indexMu.Lock()
 	if s.closing {
 		s.indexMu.Unlock()
-		_ = subscription.Close()
+		_ = timeSeriesSubscription.Close()
+		_ = recordSubscription.Close()
 		return fmt.Errorf("subscribe rows changed: service is closing")
 	}
-	if s.rowsChangedSub != nil {
+	if s.recordRowsChangedSub != nil || s.timeSeriesRowsChangedSub != nil {
 		s.indexMu.Unlock()
-		return subscription.Close()
+		_ = timeSeriesSubscription.Close()
+		return recordSubscription.Close()
 	}
-	s.rowsChangedSub = subscription
+	s.timeSeriesRowsChangedSub = timeSeriesSubscription
+	s.recordRowsChangedSub = recordSubscription
 	s.indexMu.Unlock()
 	return nil
 }
 
+// sharedViewStore 保存进程内共享 DuckDB ViewStore 及其引用计数。
 type sharedViewStore struct {
 	store *deviceduckdb.ViewStore
 	refs  int
@@ -187,12 +200,19 @@ func (s *Service) Close() error {
 	if s.indexCond != nil {
 		s.indexCond.Broadcast()
 	}
-	rowsChangedSub := s.rowsChangedSub
-	s.rowsChangedSub = nil
+	recordRowsChangedSub := s.recordRowsChangedSub
+	timeSeriesRowsChangedSub := s.timeSeriesRowsChangedSub
+	s.recordRowsChangedSub = nil
+	s.timeSeriesRowsChangedSub = nil
 	s.indexMu.Unlock()
 	var firstErr error
-	if rowsChangedSub != nil {
-		if err := rowsChangedSub.Close(); err != nil && firstErr == nil {
+	if timeSeriesRowsChangedSub != nil {
+		if err := timeSeriesRowsChangedSub.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if recordRowsChangedSub != nil {
+		if err := recordRowsChangedSub.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -328,9 +348,9 @@ func requireMetadataSchema(ctx context.Context, store metadata.Store) error {
 		return err
 	}
 	required := map[string]bool{
-		"t_spaces":         false,
-		"t_datasets":       false,
-		"t_storage_routes": false,
+		"t_spaces":               false,
+		"t_datasets":             false,
+		"t_primary_store_routes": false,
 	}
 	for _, table := range tables {
 		if _, ok := required[table]; ok {
@@ -350,14 +370,6 @@ func requireMetadataSchema(ctx context.Context, store metadata.Store) error {
 	return nil
 }
 
-func defaultSchemaPath() string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return filepath.Join("schema", "storage_metadata.sql")
-	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "../../../schema/storage_metadata.sql"))
-}
-
 func storageRoot(root string) string {
 	if root != "" {
 		return root
@@ -368,11 +380,11 @@ func storageRoot(root string) string {
 	return "var/storage"
 }
 
-func logDerivedError(ctx context.Context, stage string, err error) {
+func logViewError(ctx context.Context, stage string, err error) {
 	if err == nil {
 		return
 	}
-	log.WarnContextf(ctx, "[StorageAccess] derived stage %s failed: %v", stage, err)
+	log.WarnContextf(ctx, "[StorageAccess] view stage %s failed: %v", stage, err)
 }
 
 func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.CreateSpaceRsp, error) {
@@ -595,10 +607,10 @@ func (s *Service) ListSubjectSymbols(ctx context.Context, req *pb.ListSubjectSym
 	return &pb.ListSubjectSymbolsRsp{RetInfo: response.Success("success"), SubjectSymbols: items, PageResult: page}, nil
 }
 
-func (s *Service) CreateDataSet(ctx context.Context, req *pb.CreateDataSetReq) (*pb.CreateDataSetRsp, error) {
+func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (*pb.CreateDatasetRsp, error) {
 	item := req.GetDataset()
 	if item == nil || item.GetSpaceId() == "" || item.GetDataSourceId() == "" || (item.GetDatasetId() == "" && item.GetName() == "") {
-		return &pb.CreateDataSetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, data_source_id and dataset_id or name are required"))}, nil
+		return &pb.CreateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, data_source_id and dataset_id or name are required"))}, nil
 	}
 	if item.DatasetId == "" {
 		item.DatasetId = defaultID(item.GetName(), "dataset")
@@ -606,55 +618,55 @@ func (s *Service) CreateDataSet(ctx context.Context, req *pb.CreateDataSetReq) (
 	if item.Name == "" {
 		item.Name = item.GetDatasetId()
 	}
-	created, err := s.metadata.UpsertDataSet(ctx, item)
+	created, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
-		return &pb.CreateDataSetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.CreateDataSetRsp{RetInfo: response.Success("success"), Dataset: created}, nil
+	return &pb.CreateDatasetRsp{RetInfo: response.Success("success"), Dataset: created}, nil
 }
 
-func (s *Service) UpdateDataSet(ctx context.Context, req *pb.UpdateDataSetReq) (*pb.UpdateDataSetRsp, error) {
-	updated, err := s.metadata.UpsertDataSet(ctx, req.GetDataset())
+func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (*pb.UpdateDatasetRsp, error) {
+	updated, err := s.metadata.UpsertDataset(ctx, req.GetDataset())
 	if err != nil {
-		return &pb.UpdateDataSetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.UpdateDataSetRsp{RetInfo: response.Success("success"), Dataset: updated}, nil
+	return &pb.UpdateDatasetRsp{RetInfo: response.Success("success"), Dataset: updated}, nil
 }
 
-func (s *Service) GetDataSet(ctx context.Context, req *pb.GetDataSetReq) (*pb.GetDataSetRsp, error) {
-	item, err := s.metadata.GetDataSet(ctx, req.GetSpaceId(), req.GetDatasetId())
+func (s *Service) GetDataset(ctx context.Context, req *pb.GetDatasetReq) (*pb.GetDatasetRsp, error) {
+	item, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if err != nil {
-		return &pb.GetDataSetRsp{RetInfo: response.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
+		return &pb.GetDatasetRsp{RetInfo: response.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
 	}
-	return &pb.GetDataSetRsp{RetInfo: response.Success("success"), Dataset: item}, nil
+	return &pb.GetDatasetRsp{RetInfo: response.Success("success"), Dataset: item}, nil
 }
 
-func (s *Service) ListDataSets(ctx context.Context, req *pb.ListDataSetsReq) (*pb.ListDataSetsRsp, error) {
-	items, page, err := s.metadata.ListDataSets(ctx, req.GetSpaceId(), req.GetDataSourceId(), req.GetDataKind(), req.GetFreq(), req.GetPage())
+func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*pb.ListDatasetsRsp, error) {
+	items, page, err := s.metadata.ListDatasets(ctx, req.GetSpaceId(), req.GetDataSourceId(), req.GetDataKind(), req.GetFreq(), req.GetPage())
 	if err != nil {
-		return &pb.ListDataSetsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListDatasetsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.ListDataSetsRsp{RetInfo: response.Success("success"), Datasets: items, PageResult: page}, nil
+	return &pb.ListDatasetsRsp{RetInfo: response.Success("success"), Datasets: items, PageResult: page}, nil
 }
 
-func (s *Service) BindDataSetSubject(ctx context.Context, req *pb.BindDataSetSubjectReq) (*pb.BindDataSetSubjectRsp, error) {
+func (s *Service) BindDatasetSubject(ctx context.Context, req *pb.BindDatasetSubjectReq) (*pb.BindDatasetSubjectRsp, error) {
 	item := req.GetDatasetSubject()
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetSubjectId() == "" {
-		return &pb.BindDataSetSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and subject_id are required"))}, nil
+		return &pb.BindDatasetSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and subject_id are required"))}, nil
 	}
-	created, err := s.metadata.BindDataSetSubject(ctx, item)
+	created, err := s.metadata.BindDatasetSubject(ctx, item)
 	if err != nil {
-		return &pb.BindDataSetSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.BindDatasetSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.BindDataSetSubjectRsp{RetInfo: response.Success("success"), DatasetSubject: created}, nil
+	return &pb.BindDatasetSubjectRsp{RetInfo: response.Success("success"), DatasetSubject: created}, nil
 }
 
-func (s *Service) ListDataSetSubjects(ctx context.Context, req *pb.ListDataSetSubjectsReq) (*pb.ListDataSetSubjectsRsp, error) {
-	items, page, err := s.metadata.ListDataSetSubjectsPage(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetSubjectId(), req.GetPage())
+func (s *Service) ListDatasetSubjects(ctx context.Context, req *pb.ListDatasetSubjectsReq) (*pb.ListDatasetSubjectsRsp, error) {
+	items, page, err := s.metadata.ListDatasetSubjects(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetSubjectId(), req.GetPage())
 	if err != nil {
-		return &pb.ListDataSetSubjectsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListDatasetSubjectsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.ListDataSetSubjectsRsp{RetInfo: response.Success("success"), DatasetSubjects: items, PageResult: page}, nil
+	return &pb.ListDatasetSubjectsRsp{RetInfo: response.Success("success"), DatasetSubjects: items, PageResult: page}, nil
 }
 
 func (s *Service) CreateField(ctx context.Context, req *pb.CreateFieldReq) (*pb.CreateFieldRsp, error) {
@@ -721,30 +733,30 @@ func (s *Service) ListFactors(ctx context.Context, req *pb.ListFactorsReq) (*pb.
 	return &pb.ListFactorsRsp{RetInfo: response.Success("success"), Factors: items, PageResult: page}, nil
 }
 
-func (s *Service) UpsertDataSetColumn(ctx context.Context, req *pb.UpsertDataSetColumnReq) (*pb.UpsertDataSetColumnRsp, error) {
+func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDatasetColumnReq) (*pb.UpsertDatasetColumnRsp, error) {
 	item := req.GetColumn()
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
-		return &pb.UpsertDataSetColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and column_name are required"))}, nil
+		return &pb.UpsertDatasetColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and column_name are required"))}, nil
 	}
-	created, err := s.metadata.UpsertDataSetColumn(ctx, item)
+	created, err := s.metadata.UpsertDatasetColumn(ctx, item)
 	if err != nil {
-		return &pb.UpsertDataSetColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpsertDatasetColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.UpsertDataSetColumnRsp{RetInfo: response.Success("success"), Column: created}, nil
+	return &pb.UpsertDatasetColumnRsp{RetInfo: response.Success("success"), Column: created}, nil
 }
 
-func (s *Service) ListDataSetColumns(ctx context.Context, req *pb.ListDataSetColumnsReq) (*pb.ListDataSetColumnsRsp, error) {
-	items, page, err := s.metadata.ListDataSetColumns(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetTextIndexedOnly(), req.GetPage())
+func (s *Service) ListDatasetColumns(ctx context.Context, req *pb.ListDatasetColumnsReq) (*pb.ListDatasetColumnsRsp, error) {
+	items, page, err := s.metadata.ListDatasetColumns(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetPage())
 	if err != nil {
-		return &pb.ListDataSetColumnsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListDatasetColumnsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.ListDataSetColumnsRsp{RetInfo: response.Success("success"), Columns: items, PageResult: page}, nil
+	return &pb.ListDatasetColumnsRsp{RetInfo: response.Success("success"), Columns: items, PageResult: page}, nil
 }
 
-func (s *Service) CreateStorageNode(ctx context.Context, req *pb.CreateStorageNodeReq) (*pb.CreateStorageNodeRsp, error) {
+func (s *Service) CreatePrimaryStoreNode(ctx context.Context, req *pb.CreatePrimaryStoreNodeReq) (*pb.CreatePrimaryStoreNodeRsp, error) {
 	item := req.GetNode()
 	if item == nil || (item.GetNodeId() == "" && item.GetName() == "") {
-		return &pb.CreateStorageNodeRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id or name is required"))}, nil
+		return &pb.CreatePrimaryStoreNodeRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id or name is required"))}, nil
 	}
 	if item.NodeId == "" {
 		item.NodeId = defaultID(item.GetName(), "node")
@@ -752,35 +764,35 @@ func (s *Service) CreateStorageNode(ctx context.Context, req *pb.CreateStorageNo
 	if item.Name == "" {
 		item.Name = item.GetNodeId()
 	}
-	created, err := s.metadata.UpsertStorageNode(ctx, item)
+	created, err := s.metadata.UpsertPrimaryStoreNode(ctx, item)
 	if err != nil {
-		return &pb.CreateStorageNodeRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreatePrimaryStoreNodeRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.CreateStorageNodeRsp{RetInfo: response.Success("success"), Node: created}, nil
+	return &pb.CreatePrimaryStoreNodeRsp{RetInfo: response.Success("success"), Node: created}, nil
 }
 
-func (s *Service) UpdateStorageNode(ctx context.Context, req *pb.UpdateStorageNodeReq) (*pb.UpdateStorageNodeRsp, error) {
-	updated, err := s.metadata.UpsertStorageNode(ctx, req.GetNode())
+func (s *Service) UpdatePrimaryStoreNode(ctx context.Context, req *pb.UpdatePrimaryStoreNodeReq) (*pb.UpdatePrimaryStoreNodeRsp, error) {
+	updated, err := s.metadata.UpsertPrimaryStoreNode(ctx, req.GetNode())
 	if err != nil {
-		return &pb.UpdateStorageNodeRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdatePrimaryStoreNodeRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.UpdateStorageNodeRsp{RetInfo: response.Success("success"), Node: updated}, nil
+	return &pb.UpdatePrimaryStoreNodeRsp{RetInfo: response.Success("success"), Node: updated}, nil
 }
 
-func (s *Service) GetStorageNode(ctx context.Context, req *pb.GetStorageNodeReq) (*pb.GetStorageNodeRsp, error) {
-	item, err := s.metadata.GetStorageNode(ctx, req.GetNodeId())
+func (s *Service) GetPrimaryStoreNode(ctx context.Context, req *pb.GetPrimaryStoreNodeReq) (*pb.GetPrimaryStoreNodeRsp, error) {
+	item, err := s.metadata.GetPrimaryStoreNode(ctx, req.GetNodeId())
 	if err != nil {
-		return &pb.GetStorageNodeRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.GetPrimaryStoreNodeRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.GetStorageNodeRsp{RetInfo: response.Success("success"), Node: item}, nil
+	return &pb.GetPrimaryStoreNodeRsp{RetInfo: response.Success("success"), Node: item}, nil
 }
 
-func (s *Service) ListStorageNodes(ctx context.Context, req *pb.ListStorageNodesReq) (*pb.ListStorageNodesRsp, error) {
-	items, page, err := s.metadata.ListStorageNodes(ctx, req.GetPage())
+func (s *Service) ListPrimaryStoreNodes(ctx context.Context, req *pb.ListPrimaryStoreNodesReq) (*pb.ListPrimaryStoreNodesRsp, error) {
+	items, page, err := s.metadata.ListPrimaryStoreNodes(ctx, req.GetPage())
 	if err != nil {
-		return &pb.ListStorageNodesRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListPrimaryStoreNodesRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.ListStorageNodesRsp{RetInfo: response.Success("success"), Nodes: items, PageResult: page}, nil
+	return &pb.ListPrimaryStoreNodesRsp{RetInfo: response.Success("success"), Nodes: items, PageResult: page}, nil
 }
 
 func (s *Service) CreateDevice(ctx context.Context, req *pb.CreateDeviceReq) (*pb.CreateDeviceRsp, error) {
@@ -825,43 +837,43 @@ func (s *Service) ListDevices(ctx context.Context, req *pb.ListDevicesReq) (*pb.
 	return &pb.ListDevicesRsp{RetInfo: response.Success("success"), Devices: items, PageResult: page}, nil
 }
 
-func (s *Service) CreateStorageRoute(ctx context.Context, req *pb.CreateStorageRouteReq) (*pb.CreateStorageRouteRsp, error) {
-	item := req.GetStorageRoute()
+func (s *Service) CreatePrimaryStoreRoute(ctx context.Context, req *pb.CreatePrimaryStoreRouteReq) (*pb.CreatePrimaryStoreRouteRsp, error) {
+	item := req.GetPrimaryStoreRoute()
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetNodeId() == "" {
-		return &pb.CreateStorageRouteRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and node_id are required"))}, nil
+		return &pb.CreatePrimaryStoreRouteRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and node_id are required"))}, nil
 	}
 	if item.RouteId == "" {
 		item.RouteId = defaultID(strings.Join([]string{item.GetSpaceId(), item.GetDatasetId(), item.GetSubjectId(), item.GetNodeId()}, "-"), "route")
 	}
-	created, err := s.metadata.UpsertStorageRoute(ctx, item)
+	created, err := s.metadata.UpsertPrimaryStoreRoute(ctx, item)
 	if err != nil {
-		return &pb.CreateStorageRouteRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreatePrimaryStoreRouteRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.CreateStorageRouteRsp{RetInfo: response.Success("success"), StorageRoute: created}, nil
+	return &pb.CreatePrimaryStoreRouteRsp{RetInfo: response.Success("success"), PrimaryStoreRoute: created}, nil
 }
 
-func (s *Service) UpdateStorageRoute(ctx context.Context, req *pb.UpdateStorageRouteReq) (*pb.UpdateStorageRouteRsp, error) {
-	updated, err := s.metadata.UpsertStorageRoute(ctx, req.GetStorageRoute())
+func (s *Service) UpdatePrimaryStoreRoute(ctx context.Context, req *pb.UpdatePrimaryStoreRouteReq) (*pb.UpdatePrimaryStoreRouteRsp, error) {
+	updated, err := s.metadata.UpsertPrimaryStoreRoute(ctx, req.GetPrimaryStoreRoute())
 	if err != nil {
-		return &pb.UpdateStorageRouteRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdatePrimaryStoreRouteRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.UpdateStorageRouteRsp{RetInfo: response.Success("success"), StorageRoute: updated}, nil
+	return &pb.UpdatePrimaryStoreRouteRsp{RetInfo: response.Success("success"), PrimaryStoreRoute: updated}, nil
 }
 
-func (s *Service) GetStorageRoute(ctx context.Context, req *pb.GetStorageRouteReq) (*pb.GetStorageRouteRsp, error) {
-	item, err := s.metadata.GetStorageRoute(ctx, req.GetSpaceId(), req.GetRouteId())
+func (s *Service) GetPrimaryStoreRoute(ctx context.Context, req *pb.GetPrimaryStoreRouteReq) (*pb.GetPrimaryStoreRouteRsp, error) {
+	item, err := s.metadata.GetPrimaryStoreRoute(ctx, req.GetSpaceId(), req.GetRouteId())
 	if err != nil {
-		return &pb.GetStorageRouteRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+		return &pb.GetPrimaryStoreRouteRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
 	}
-	return &pb.GetStorageRouteRsp{RetInfo: response.Success("success"), StorageRoute: item}, nil
+	return &pb.GetPrimaryStoreRouteRsp{RetInfo: response.Success("success"), PrimaryStoreRoute: item}, nil
 }
 
-func (s *Service) ListStorageRoutes(ctx context.Context, req *pb.ListStorageRoutesReq) (*pb.ListStorageRoutesRsp, error) {
-	items, page, err := s.metadata.ListStorageRoutes(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetSubjectId(), req.GetNodeId(), req.GetPage())
+func (s *Service) ListPrimaryStoreRoutes(ctx context.Context, req *pb.ListPrimaryStoreRoutesReq) (*pb.ListPrimaryStoreRoutesRsp, error) {
+	items, page, err := s.metadata.ListPrimaryStoreRoutes(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetSubjectId(), req.GetNodeId(), req.GetPage())
 	if err != nil {
-		return &pb.ListStorageRoutesRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListPrimaryStoreRoutesRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.ListStorageRoutesRsp{RetInfo: response.Success("success"), StorageRoutes: items, PageResult: page}, nil
+	return &pb.ListPrimaryStoreRoutesRsp{RetInfo: response.Success("success"), PrimaryStoreRoutes: items, PageResult: page}, nil
 }
 
 func (s *Service) RegisterArchiveFile(ctx context.Context, req *pb.RegisterArchiveFileReq) (*pb.RegisterArchiveFileRsp, error) {

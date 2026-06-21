@@ -2,7 +2,6 @@ package pebble
 
 import (
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -10,136 +9,69 @@ import (
 
 const (
 	timeSeriesKeyPrefix = "t"
-	objectKeyPrefix     = "o"
-	keyTimeLayout       = factkey.TimeVersionLayout
+	recordKeyPrefix     = "r"
 )
 
-func encodeRowKey(row *pb.DataRow) string {
-	if rowIsTimeSeries(row) {
-		return encodeTimeSeriesRowKey(row)
-	}
-	return encodeLegacyObjectRowKey(row)
+func encodeRowKey(row *pb.PrimaryStoreRow) string {
+	return encodePrimaryStoreKey(row.GetKey())
 }
 
-func encodeTimeSeriesRowKey(row *pb.DataRow) string {
-	key := row.GetKey()
-	scope := key.GetScope()
-	dataTime := key.GetDataTime()
-	if dataTime == "" {
-		dataTime = factkey.EmptyVersion
-	} else if normalized, ok := normalizeKeyTime(dataTime); ok {
-		dataTime = normalized
-	}
-	rowID := key.GetRowId()
-	if rowID == "" {
-		rowID = factkey.EmptyVersion
-	}
+func encodePrimaryStoreKey(key *pb.PrimaryStoreKey) string {
 	return strings.Join([]string{
-		timeSeriesKeyPrefix,
-		escape(scope.GetSpaceId()),
-		escape(scope.GetDatasetId()),
-		escape(scope.GetSubjectId()),
-		escape(scope.GetFreq()),
-		escape(dataTime),
-		escape(factkey.DimensionsHash(scope.GetDimensions())),
-		escape(rowID),
+		kindPrefix(key.GetDataKind()),
+		escape(key.GetSpaceId()),
+		escape(key.GetDatasetId()),
+		escape(key.GetKey()),
+		escape(normalizeVersionForKey(key.GetVersion())),
 	}, "|")
 }
 
-func encodeLegacyObjectRowKey(row *pb.DataRow) string {
-	key := row.GetKey()
-	scope := key.GetScope()
-	objectID := key.GetRowId()
-	if objectID == "" {
-		objectID = scope.GetSubjectId()
-	}
-	version := factkey.EmptyVersion
-	if key.GetDataTime() != "" {
-		version = normalizeVersionForKey(key.GetDataTime())
-	}
-	return encodeObjectKeyParts(scope.GetSpaceId(), scope.GetDatasetId(), objectID, version)
+func encodeKeyPrefix(key *pb.PrimaryStoreKey) string {
+	return strings.Join([]string{
+		kindPrefix(key.GetDataKind()),
+		escape(key.GetSpaceId()),
+		escape(key.GetDatasetId()),
+		escape(key.GetKey()),
+	}, "|") + "|"
 }
 
-func encodeObjectKeyParts(spaceID string, datasetID string, objectID string, version string) string {
-	if objectID == "" {
-		objectID = factkey.EmptyVersion
-	}
-	if version == "" {
-		version = factkey.EmptyVersion
-	}
+func encodeDatasetPrefix(kind pb.DataKind, spaceID string, datasetID string) string {
 	return strings.Join([]string{
-		objectKeyPrefix,
+		kindPrefix(kind),
 		escape(spaceID),
 		escape(datasetID),
-		escape(objectID),
-		escape(version),
-	}, "|")
+	}, "|") + "|"
 }
 
-func rowIsTimeSeries(row *pb.DataRow) bool {
-	key := row.GetKey()
-	scope := key.GetScope()
-	return scope.GetSubjectId() != "" && scope.GetFreq() != "" && key.GetDataTime() != ""
-}
-
-func encodeTimeSeriesScopePrefix(scope *pb.DataScope) string {
-	parts := []string{timeSeriesKeyPrefix, escape(scope.GetSpaceId()), escape(scope.GetDatasetId())}
-	if scope.GetSubjectId() != "" {
-		parts = append(parts, escape(scope.GetSubjectId()))
-	}
-	if scope.GetSubjectId() != "" && scope.GetFreq() != "" {
-		parts = append(parts, escape(scope.GetFreq()))
-	}
-	return strings.Join(parts, "|") + "|"
-}
-
-func readBounds(scope *pb.DataScope, timeRange *pb.TimeRange) ([]byte, []byte) {
-	prefix := []byte(encodeTimeSeriesScopePrefix(scope))
+func keyBounds(key *pb.PrimaryStoreKey, versionRange *pb.VersionRange) ([]byte, []byte) {
+	prefix := []byte(encodeKeyPrefix(key))
 	lower := prefix
 	upper := nextPrefix(prefix)
-	if scope.GetSubjectId() == "" || scope.GetFreq() == "" || timeRange == nil {
+	if versionRange == nil {
 		return lower, upper
 	}
-	if start := timeRange.GetStartTime(); start != "" {
-		if normalized, ok := normalizeKeyTime(start); ok {
-			bound := []byte(string(prefix) + escape(normalized))
-			lower = bound
-		}
+	if start := versionRange.GetStartVersion(); start != "" {
+		lower = []byte(string(prefix) + escape(normalizeVersionForKey(start)))
 	}
-	if end := timeRange.GetEndTime(); end != "" {
-		if normalized, ok := normalizeKeyTime(end); ok {
-			bound := []byte(string(prefix) + escape(normalized))
-			upper = nextPrefix(bound)
-		}
+	if end := versionRange.GetEndVersion(); end != "" {
+		upper = nextPrefix([]byte(string(prefix) + escape(normalizeVersionForKey(end))))
 	}
 	return lower, upper
 }
 
-func objectReadPrefix(scope *pb.DataScope, objectID string) string {
-	parts := []string{objectKeyPrefix, escape(scope.GetSpaceId()), escape(scope.GetDatasetId())}
-	if objectID != "" {
-		parts = append(parts, escape(objectID))
+func kindPrefix(kind pb.DataKind) string {
+	switch kind {
+	case pb.DataKind_DATA_KIND_TIME_SERIES:
+		return timeSeriesKeyPrefix
+	case pb.DataKind_DATA_KIND_RECORD:
+		return recordKeyPrefix
+	default:
+		return ""
 	}
-	return strings.Join(parts, "|") + "|"
-}
-
-func normalizeKeyTime(value string) (string, bool) {
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return value, false
-	}
-	return parsed.UTC().Format(keyTimeLayout), true
 }
 
 func normalizeVersionForKey(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return factkey.EmptyVersion
-	}
-	if normalized, ok := normalizeKeyTime(value); ok {
-		return normalized
-	}
-	return value
+	return factkey.NormalizeVersion(value)
 }
 
 func escape(value string) string {

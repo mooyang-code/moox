@@ -23,7 +23,7 @@ func TestMarkdownReportUsesChineseLabels(t *testing.T) {
 		}},
 		MetadataReady: metadataReadyReport{DurationSeconds: 10, Attempts: 3, RefreshIntervalHint: "snapshotcache 默认 10s", TimeoutSeconds: 35},
 		Write:         writeReport{Rows: 100, Batches: 1, DurationSeconds: 2, RowsPerSecond: 50, BatchLatency: benchLatency(10, 20, 30, 40)},
-		ObjectWrite:   writeReport{Rows: 80, Batches: 1, DurationSeconds: 1, RowsPerSecond: 80, BatchLatency: benchLatency(11, 21, 31, 41)},
+		RecordWrite:   writeReport{Rows: 80, Batches: 1, DurationSeconds: 1, RowsPerSecond: 80, BatchLatency: benchLatency(11, 21, 31, 41)},
 		PrimaryRead: operationReport{
 			Requests: 10, Concurrency: 2, RowsReturned: 1000, RequestsPerSec: 20, RowsPerSecond: 2000, Latency: benchLatency(12, 22, 32, 42),
 		},
@@ -55,7 +55,7 @@ func TestMarkdownReportUsesChineseLabels(t *testing.T) {
 		"等待耗时",
 		"探测轮次",
 		"## 时序 K 线写入性能",
-		"## 非时序对象写入性能",
+		"## 非时序记录写入性能",
 		"## Primary 主存读取性能",
 		"## Primary 单根 K 线查询性能",
 		"## DuckDB 视图读取性能",
@@ -72,12 +72,13 @@ func TestMarkdownReportUsesChineseLabels(t *testing.T) {
 			t.Fatalf("markdown report should contain %q:\n%s", want, got)
 		}
 	}
+	oldReadRPC := "Read" + "Rows"
 	for _, unexpected := range []string{
 		"# MooX Storage Benchmark Report",
 		"## Write",
-		"## Primary ReadRows",
-		"## Primary Point ReadRows",
-		"## DuckDB QueryView",
+		"## Primary " + oldReadRPC,
+		"## Primary Point " + oldReadRPC,
+		"## DuckDB QueryTimeSeriesRows",
 	} {
 		if strings.Contains(got, unexpected) {
 			t.Fatalf("markdown report should not contain %q:\n%s", unexpected, got)

@@ -16,12 +16,13 @@ import (
 
 const remoteWriteBatchSize = 1000
 
+// retInfoResponse 定义远端接口响应中读取 RetInfo 的公共能力。
 type retInfoResponse interface {
 	GetRetInfo() *pb.RetInfo
 }
 
-func importCSVRowsRemote(ctx context.Context, storageURL string, spaceID string, dataSourceID string, datasetID string, subjectID string, freq string, rows []*pb.DataRow) error {
-	if err := ensureRemoteDataSet(ctx, storageURL, spaceID, dataSourceID, datasetID, subjectID, freq, rows); err != nil {
+func importCSVRowsRemote(ctx context.Context, storageURL string, spaceID string, dataSourceID string, datasetID string, subjectID string, freq string, rows []*pb.TimeSeriesRow) error {
+	if err := ensureRemoteDataset(ctx, storageURL, spaceID, dataSourceID, datasetID, subjectID, freq, rows); err != nil {
 		return err
 	}
 	for start := 0; start < len(rows); start += remoteWriteBatchSize {
@@ -29,25 +30,24 @@ func importCSVRowsRemote(ctx context.Context, storageURL string, spaceID string,
 		if end > len(rows) {
 			end = len(rows)
 		}
-		if err := postStorage(ctx, storageURL, "trpc.storage.data.DataService", "WriteRows", &pb.WriteRowsReq{
-			WriteMode: pb.WriteMode_WRITE_MODE_UPSERT,
-			Rows:      rows[start:end],
-		}, &pb.WriteRowsRsp{}); err != nil {
+		if err := postStorage(ctx, storageURL, accessServiceName, "WriteTimeSeriesRows", &pb.WriteTimeSeriesRowsReq{
+			Rows: rows[start:end],
+		}, &pb.WriteTimeSeriesRowsRsp{}); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func exportRowsRemote(ctx context.Context, storageURL string, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
-	rsp := &pb.ReadRowsRsp{}
-	if err := postStorage(ctx, storageURL, "trpc.storage.data.DataService", "ReadRows", req, rsp); err != nil {
+func exportRowsRemote(ctx context.Context, storageURL string, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
+	rsp := &pb.ReadTimeSeriesRowsRsp{}
+	if err := postStorage(ctx, storageURL, accessServiceName, "ReadTimeSeriesRows", req, rsp); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func ensureRemoteDataSet(ctx context.Context, storageURL string, spaceID string, dataSourceID string, datasetID string, subjectID string, freq string, rows []*pb.DataRow) error {
+func ensureRemoteDataset(ctx context.Context, storageURL string, spaceID string, dataSourceID string, datasetID string, subjectID string, freq string, rows []*pb.TimeSeriesRow) error {
 	calls := []struct {
 		method string
 		req    proto.Message
@@ -56,10 +56,10 @@ func ensureRemoteDataSet(ctx context.Context, storageURL string, spaceID string,
 		{"CreateSpace", &pb.CreateSpaceReq{Space: &pb.Space{SpaceId: spaceID, Name: spaceID}}, &pb.CreateSpaceRsp{}},
 		{"CreateDataSource", &pb.CreateDataSourceReq{DataSource: &pb.DataSource{SpaceId: spaceID, DataSourceId: dataSourceID, Name: dataSourceID, Kind: "file_import", Status: "active"}}, &pb.CreateDataSourceRsp{}},
 		{"UpsertSubject", &pb.UpsertSubjectReq{Subject: &pb.Subject{SpaceId: spaceID, SubjectId: subjectID, SubjectType: "instrument", Name: subjectID, Status: "active"}}, &pb.UpsertSubjectRsp{}},
-		{"CreateDataSet", &pb.CreateDataSetReq{Dataset: &pb.DataSet{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: dataSourceID, Name: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{freq}, Status: "active"}}, &pb.CreateDataSetRsp{}},
-		{"BindDataSetSubject", &pb.BindDataSetSubjectReq{DatasetSubject: &pb.DataSetSubject{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subjectID, Status: "active"}}, &pb.BindDataSetSubjectRsp{}},
-		{"CreateStorageNode", &pb.CreateStorageNodeReq{Node: &pb.StorageNode{NodeId: "local", Name: "local", Endpoint: "local", Status: "active"}}, &pb.CreateStorageNodeRsp{}},
-		{"CreateStorageRoute", &pb.CreateStorageRouteReq{StorageRoute: &pb.StorageRoute{SpaceId: spaceID, RouteId: "route_" + datasetID, DatasetId: datasetID, SubjectPattern: "*", NodeId: "local", Priority: 100, Status: "active"}}, &pb.CreateStorageRouteRsp{}},
+		{"CreateDataset", &pb.CreateDatasetReq{Dataset: &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: dataSourceID, Name: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{freq}, Status: "active"}}, &pb.CreateDatasetRsp{}},
+		{"BindDatasetSubject", &pb.BindDatasetSubjectReq{DatasetSubject: &pb.DatasetSubject{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subjectID, Status: "active"}}, &pb.BindDatasetSubjectRsp{}},
+		{"CreatePrimaryStoreNode", &pb.CreatePrimaryStoreNodeReq{Node: &pb.PrimaryStoreNode{NodeId: "local", Name: "local", Endpoint: "local", Status: "active"}}, &pb.CreatePrimaryStoreNodeRsp{}},
+		{"CreatePrimaryStoreRoute", &pb.CreatePrimaryStoreRouteReq{PrimaryStoreRoute: &pb.PrimaryStoreRoute{SpaceId: spaceID, RouteId: "route_" + datasetID, DatasetId: datasetID, SubjectPattern: "*", NodeId: "local", Priority: 100, Status: "active"}}, &pb.CreatePrimaryStoreRouteRsp{}},
 	}
 	for _, call := range calls {
 		if err := postStorage(ctx, storageURL, "trpc.storage.metadata.MetadataService", call.method, call.req, call.rsp); err != nil {
@@ -67,22 +67,22 @@ func ensureRemoteDataSet(ctx context.Context, storageURL string, spaceID string,
 		}
 	}
 	for columnName, valueType := range inferColumnTypes(rows) {
-		if err := postStorage(ctx, storageURL, "trpc.storage.metadata.MetadataService", "UpsertDataSetColumn", &pb.UpsertDataSetColumnReq{Column: &pb.DataSetColumn{
+		if err := postStorage(ctx, storageURL, "trpc.storage.metadata.MetadataService", "UpsertDatasetColumn", &pb.UpsertDatasetColumnReq{Column: &pb.DatasetColumn{
 			SpaceId:    spaceID,
 			DatasetId:  datasetID,
 			ColumnName: columnName,
-			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FIELD,
+			OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD,
 			OriginId:   columnName,
 			ValueType:  valueType,
 			Status:     "active",
-		}}, &pb.UpsertDataSetColumnRsp{}); err != nil {
+		}}, &pb.UpsertDatasetColumnRsp{}); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func inferColumnTypes(rows []*pb.DataRow) map[string]pb.FieldValueType {
+func inferColumnTypes(rows []*pb.TimeSeriesRow) map[string]pb.FieldValueType {
 	types := make(map[string]pb.FieldValueType)
 	for _, row := range rows {
 		for _, column := range row.GetColumns() {

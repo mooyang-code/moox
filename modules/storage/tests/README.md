@@ -11,25 +11,25 @@
 
 | 子测试 | 模块 / 接口 | 说明 |
 | --- | --- | --- |
-| `01_metadata_crud` | `MetadataService` | Space/DataSource/Subject/SubjectSymbol/DataSet/Field 的创建与查询 |
-| `02_seed_route_and_columns` | `MetadataService` | DataSet 列契约、StorageNode/Device、StorageRoute、归档设备 |
-| `03_write_klines` | `DataService.WriteRows` | 从 CSV 载入 K 线分批写入（含等待元数据缓存生效） |
-| `04_read_range` | `DataService.ReadRows` | 区间读，校验行数、时间升序、列值 |
-| `05_read_latest_before` | `DataService.ReadRows` | 截面最新读 |
-| `06_read_range_pagination` | `DataService.ReadRows` | 游标分页，校验无遗漏无重复地覆盖全量 |
-| `07_read_column_projection` | `DataService.ReadRows` | 列裁剪，只返回指定列 |
-| `08_search_rows` | `QueryService.SearchRows` | 全文检索（等待异步索引构建） |
-| `09_rebuild_search_index` | `QueryService.RebuildSearchIndex` | 异步重建索引，返回 rebuild_id 后仍可命中 |
-| `10_query_view` | `MetadataService.CreateView` + `QueryService.QueryView` | 视图登记 + 计时器物化 + 查询 |
-| `11_cli_storage_import_csv` | `moox-cli storage import` + HTTP `MetadataService`/`DataService.WriteTimeSeriesRows` | CLI 读取 CSV、校验元数据、写入并回读主存 |
-| `12_object_read` | `DataService.WriteObjectRows` / `ReadObjectRows` | 对象型数据集按 `object_id` 读取 |
-| `13_upsert_column_merge` | `DataService.WriteObjectRows` | 对象列级合并写入：只更新携带列，其余保留 |
+| `01_metadata_crud` | `MetadataService` | Space/DataSource/Subject/SubjectSymbol/Dataset/Field 的创建与查询 |
+| `02_seed_route_and_columns` | `MetadataService` | Dataset 列契约、PrimaryStoreNode/Device、PrimaryStoreRoute、归档设备 |
+| `03_write_klines` | `AccessService.WriteTimeSeriesRows` | 从 CSV 载入 K 线分批写入（含等待元数据缓存生效） |
+| `04_read_range` | `AccessService.ReadTimeSeriesRows` | 区间读，校验行数、时间升序、列值 |
+| `05_read_latest_before` | `AccessService.ReadTimeSeriesRows` | 用 `TimeRange.end_time + DESC + limit 1` 表达截面最新读 |
+| `06_read_range_pagination` | `AccessService.ReadTimeSeriesRows` | 游标分页，校验无遗漏无重复地覆盖全量 |
+| `07_read_column_projection` | `AccessService.ReadTimeSeriesRows` | 列裁剪，只返回指定列 |
+| `08_query_time_series_rows` | `MetadataService.CreateView` + `ViewService.QueryTimeSeriesRows` | TimeSeries + DuckDB 视图登记 + 计时器物化 + 查询 |
+| `09_cli_storage_import_csv` | `moox-cli storage import` + HTTP `MetadataService`/`AccessService.WriteTimeSeriesRows` | CLI 读取 CSV、校验元数据、写入并回读主存 |
+| `10_record_read` | `AccessService.WriteRecordRows` / `ReadRecordRows` | 记录型数据集按 `record_id` 读取 |
+| `11_search_record_rows` | `ViewService.SearchRecordRows` | Record + Bleve 全文检索（等待异步索引构建） |
+| `12_rebuild_record_view` | `ViewService.RebuildRecordView` | 异步重建 Record 派生索引，返回 rebuild_id 后仍可命中 |
+| `13_upsert_column_merge` | `AccessService.WriteRecordRows` | Record 列级合并写入：只更新携带列，其余保留 |
 | `14_archive` | `archive.timer` + `MetadataService.ListArchiveFiles` | 计时器归档为 Parquet 并登记 |
-| `15_write_validation_errors` | `DataService` | 未登记列 / 缺 subject_id / 无路由 的错误码 |
-| `16_not_found_errors` | `MetadataService` / `QueryService` | Space / DataSet / View 不存在的错误码 |
+| `15_write_validation_errors` | `AccessService` | 未登记列 / 缺 subject_id / 无路由 的错误码 |
+| `16_not_found_errors` | `MetadataService` / `ViewService` | Space / Dataset / View 不存在的错误码 |
 | `17_direct_storage_counts` | SQLite / Pebble / DuckDB / Bleve | 停止服务后直接打开底层存储文件，校验元数据表、主存事实行、View 结果表、搜索索引文档数 |
 
-`PrimaryStoreService` 作为在线主存随进程一起部署，由 `DataService` 的写读链路间接覆盖；
+`PrimaryStoreService` 作为在线主存随进程一起部署，由 `AccessService` 的写读链路间接覆盖；
 `view.timer` / `archive.timer` 在部署期即按更短周期（5s / 20s）启用，使物化与归档在测试中能快速完成。
 
 ## 运行

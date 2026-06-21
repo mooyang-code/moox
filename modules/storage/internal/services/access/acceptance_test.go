@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/archive"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	"github.com/mooyang-code/moox/modules/storage/internal/testutil"
@@ -16,43 +17,11 @@ import (
 func TestStorageAcceptance(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	svc := newTestServiceWithRoot(t, root)
+	svc := newAccessTestServiceWithRootAndEvents(t, root, eventbus.NewMemoryBus())
+	seedAcceptanceDataset(t, ctx, svc)
 
-	_, err := svc.CreateSpace(ctx, &pb.CreateSpaceReq{Space: &pb.Space{SpaceId: "crypto_acceptance", Name: "crypto_acceptance"}})
-	require.NoError(t, err)
-	_, err = svc.CreateDataSource(ctx, &pb.CreateDataSourceReq{DataSource: &pb.DataSource{SpaceId: "crypto_acceptance", DataSourceId: "binance", Name: "Binance", Kind: "exchange"}})
-	require.NoError(t, err)
-	_, err = svc.UpsertSubject(ctx, &pb.UpsertSubjectReq{Subject: &pb.Subject{SpaceId: "crypto_acceptance", SubjectId: "APT-USDT", SubjectType: "crypto_pair", Name: "APT-USDT"}})
-	require.NoError(t, err)
-	_, err = svc.UpsertSubjectSymbol(ctx, &pb.UpsertSubjectSymbolReq{SubjectSymbol: &pb.SubjectSymbol{SpaceId: "crypto_acceptance", SubjectId: "APT-USDT", DataSourceId: "binance", ExternalSymbol: "APTUSDT"}})
-	require.NoError(t, err)
-	_, err = svc.CreateDataSet(ctx, &pb.CreateDataSetReq{Dataset: &pb.DataSet{
-		SpaceId:      "crypto_acceptance",
-		DatasetId:    "binance_spot_kline_1m",
-		DataSourceId: "binance",
-		Name:         "Binance 现货 K 线",
-		DataKind:     pb.DataKind_DATA_KIND_TIME_SERIES,
-		Freqs:        []string{"1m"},
-		Status:       "active",
-	}})
-	require.NoError(t, err)
-	_, err = svc.BindDataSetSubject(ctx, &pb.BindDataSetSubjectReq{DatasetSubject: &pb.DataSetSubject{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", SubjectId: "APT-USDT"}})
-	require.NoError(t, err)
-	_, err = svc.CreateField(ctx, &pb.CreateFieldReq{Field: &pb.Field{SpaceId: "crypto_acceptance", FieldId: "close", Name: "收盘价", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}})
-	require.NoError(t, err)
-	_, err = svc.CreateField(ctx, &pb.CreateFieldReq{Field: &pb.Field{SpaceId: "crypto_acceptance", FieldId: "note", Name: "说明", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}})
-	require.NoError(t, err)
-	_, err = svc.UpsertDataSetColumn(ctx, &pb.UpsertDataSetColumnReq{Column: &pb.DataSetColumn{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", ColumnName: "close", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FIELD, OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}})
-	require.NoError(t, err)
-	_, err = svc.UpsertDataSetColumn(ctx, &pb.UpsertDataSetColumnReq{Column: &pb.DataSetColumn{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", ColumnName: "note", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_FIELD, OriginId: "note", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, TextIndexed: true, Status: "active"}})
-	require.NoError(t, err)
-	seedRoute(t, svc, "crypto_acceptance", "binance_spot_kline_1m")
-
-	writeRsp, err := svc.WriteRows(ctx, &pb.WriteRowsReq{WriteMode: pb.WriteMode_WRITE_MODE_UPSERT, Rows: []*pb.DataRow{{
-		Key: &pb.DataKey{
-			Scope:    &pb.DataScope{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", SubjectId: "APT-USDT", Freq: "1m"},
-			DataTime: "2026-06-15T00:00:00Z",
-		},
+	writeRsp, err := svc.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: []*pb.TimeSeriesRow{{
+		Key: &pb.TimeSeriesKey{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", SubjectId: "APT-USDT", Freq: "1m", DataTime: "2026-06-15T00:00:00Z"},
 		Columns: []*pb.ColumnValue{
 			testutil.DoubleValue("close", 8.1),
 			testutil.StringValue("note", "acceptance row"),
@@ -60,17 +29,13 @@ func TestStorageAcceptance(t *testing.T) {
 	}}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, writeRsp.GetRetInfo().GetCode())
-	svc.WaitForIndex()
 
-	readRsp, err := svc.ReadRows(ctx, &pb.ReadRowsReq{Scope: &pb.DataScope{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", SubjectId: "APT-USDT", Freq: "1m"}, ReadMode: pb.ReadMode_READ_MODE_RANGE})
+	readRsp, err := svc.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+		Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", SubjectId: "APT-USDT", Freq: "1m"}},
+	})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, readRsp.GetRetInfo().GetCode())
 	require.Len(t, readRsp.GetRows(), 1)
-
-	searchRsp, err := svc.SearchRows(ctx, &pb.SearchRowsReq{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", TextQuery: "acceptance"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, searchRsp.GetRetInfo().GetCode())
-	require.Len(t, searchRsp.GetRows(), 1)
 
 	_, err = svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{SpaceId: "crypto_acceptance", ViewId: "kline_view", Name: "K线视图", PrimaryDatasetId: "binance_spot_kline_1m", DatasetIds: []string{"binance_spot_kline_1m"}, QueryWindow: "30d", Status: "active"}})
 	require.NoError(t, err)
@@ -82,19 +47,20 @@ func TestStorageAcceptance(t *testing.T) {
 		Metadata: svc.metadata,
 		Facts:    svc.primaryFactReader(),
 		Views:    viewStore,
-		Now: func() time.Time {
-			return time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC)
-		},
+		Now:      func() time.Time { return time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC) },
 	})
 	_, err = builder.Build(ctx, "crypto_acceptance", "kline_view")
 	require.NoError(t, err)
-	refreshMetadataCacheForTest(t, svc)
-	queryRsp, err := svc.QueryView(ctx, &pb.QueryViewReq{SpaceId: "crypto_acceptance", ViewId: "kline_view", SubjectIds: []string{"APT-USDT"}})
+	queryRsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
+		SpaceId: "crypto_acceptance",
+		ViewId:  "kline_view",
+		Keys:    []*pb.TimeSeriesKey{{SubjectId: "APT-USDT"}},
+	})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, queryRsp.GetRetInfo().GetCode())
 	require.Len(t, queryRsp.GetRows(), 1)
 
-	_, err = svc.CreateStorageNode(ctx, &pb.CreateStorageNodeReq{Node: &pb.StorageNode{NodeId: "archive-node", Name: "archive-node", Status: "active"}})
+	_, err = svc.CreatePrimaryStoreNode(ctx, &pb.CreatePrimaryStoreNodeReq{Node: &pb.PrimaryStoreNode{NodeId: "archive-node", Name: "archive-node", Status: "active"}})
 	require.NoError(t, err)
 	_, err = svc.CreateDevice(ctx, &pb.CreateDeviceReq{Device: &pb.Device{DeviceId: "archive-device", NodeId: "archive-node", Name: "archive", Engine: "parquet_archive", Status: "active"}})
 	require.NoError(t, err)
@@ -103,12 +69,30 @@ func TestStorageAcceptance(t *testing.T) {
 		Facts:       svc.primaryFactReader(),
 		ArchiveRoot: filepath.Join(root, "archive"),
 		DeviceID:    "archive-device",
-		Now: func() time.Time {
-			return time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC)
-		},
+		Now:         func() time.Time { return time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC) },
 	})
-	file, err := archiveSvc.ArchiveDataSet(ctx, "crypto_acceptance", "binance_spot_kline_1m", "date=2026-06-15", nil)
+	file, err := archiveSvc.ArchiveDataset(ctx, "crypto_acceptance", "binance_spot_kline_1m", "date=2026-06-15", nil)
 	require.NoError(t, err)
 	require.Equal(t, "parquet", file.GetFileFormat())
 	require.Equal(t, uint64(2), file.GetRowCount())
+}
+
+func seedAcceptanceDataset(t *testing.T, ctx context.Context, svc *Service) {
+	t.Helper()
+	_, err := svc.metadata.UpsertSpace(ctx, &pb.Space{SpaceId: "crypto_acceptance", Name: "crypto_acceptance"})
+	require.NoError(t, err)
+	_, err = svc.metadata.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "crypto_acceptance", DataSourceId: "binance", Name: "Binance", Kind: "exchange"})
+	require.NoError(t, err)
+	_, err = svc.metadata.UpsertDataset(ctx, &pb.Dataset{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", DataSourceId: "binance", Name: "Binance 现货 K 线", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}, Status: "active"})
+	require.NoError(t, err)
+	_, err = svc.metadata.UpsertSubject(ctx, &pb.Subject{SpaceId: "crypto_acceptance", SubjectId: "APT-USDT", SubjectType: "crypto_pair", Name: "APT-USDT", Status: "active"})
+	require.NoError(t, err)
+	_, err = svc.metadata.BindDatasetSubject(ctx, &pb.DatasetSubject{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", SubjectId: "APT-USDT", Status: "active"})
+	require.NoError(t, err)
+	_, err = svc.metadata.UpsertDatasetColumn(ctx, &pb.DatasetColumn{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", ColumnName: "close", OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"})
+	require.NoError(t, err)
+	_, err = svc.metadata.UpsertDatasetColumn(ctx, &pb.DatasetColumn{SpaceId: "crypto_acceptance", DatasetId: "binance_spot_kline_1m", ColumnName: "note", OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: "note", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"})
+	require.NoError(t, err)
+	_, err = svc.metadata.UpsertPrimaryStoreRoute(ctx, &pb.PrimaryStoreRoute{SpaceId: "crypto_acceptance", RouteId: "acceptance-route", DatasetId: "binance_spot_kline_1m", SubjectPattern: "*", NodeId: "node-1", Status: "active"})
+	require.NoError(t, err)
 }

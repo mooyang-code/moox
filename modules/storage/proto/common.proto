@@ -108,6 +108,16 @@ message TypedValue {
   }
 }
 
+// ColumnValue 表示一列事实数据值。
+message ColumnValue {
+  // column_name 是 DatasetColumn 中登记的列名。
+  string column_name = 1;
+  // value_type 是列值的逻辑类型。
+  FieldValueType value_type = 2;
+  // value 是列实际取值。
+  TypedValue value = 3;
+}
+
 // DimensionValue 表示一个业务维度值，例如复权类型或报告期。
 message DimensionValue {
   // name 是业务维度名称。
@@ -120,18 +130,6 @@ message DimensionValue {
 message DimensionValues {
   // values 是业务维度值列表。
   repeated DimensionValue values = 1;
-}
-
-// FieldValue 表示一个旧式字段值。新读写协议优先使用 data.ColumnValue。
-message FieldValue {
-  // field_id 是字段 ID，可为空。
-  string field_id = 1;
-  // field_name 是对调用方暴露的稳定字段名。
-  string field_name = 2;
-  // value_type 是值的逻辑类型。
-  FieldValueType value_type = 3;
-  // value 是字段实际取值。
-  TypedValue value = 4;
 }
 
 // SortSpec 表示排序条件。
@@ -150,25 +148,12 @@ message FilterExpr {
   map<string, TypedValue> args = 2;
 }
 
-// WriteMode 表示写入模式。
-// 当前事实存储只对外承诺按 DataKey 的列级更新语义；历史枚举值保留兼容。
-enum WriteMode {
-  // WRITE_MODE_UNSPECIFIED 表示由服务端使用默认策略。
-  WRITE_MODE_UNSPECIFIED = 0;
-  // WRITE_MODE_UPSERT 表示插入新数据，并更新相同 DataKey 下本次携带的列值。
-  WRITE_MODE_UPSERT = 1;
-  // WRITE_MODE_APPEND 为历史兼容值；当前不提供跨服务唯一插入事务语义。
-  WRITE_MODE_APPEND = 2;
-  // WRITE_MODE_OVERWRITE 为历史兼容值；不表示删除 scope 下旧行或整段数据。
-  WRITE_MODE_OVERWRITE = 3;
-}
-
-// DataKind 表示数据集的结构形态。
+// DataKind 表示 Dataset 的结构形态。
 enum DataKind {
   // DATA_KIND_UNSPECIFIED 表示未指定结构形态。
   DATA_KIND_UNSPECIFIED = 0;
-  // DATA_KIND_OBJECT 表示对象型数据，例如公司资料。
-  DATA_KIND_OBJECT = 1;
+  // DATA_KIND_RECORD 表示记录型数据，例如公司资料、新闻、研报或榜单。
+  DATA_KIND_RECORD = 1;
   // DATA_KIND_TIME_SERIES 表示时序数据，例如 K 线或 tick。
   DATA_KIND_TIME_SERIES = 2;
   // DATA_KIND_SNAPSHOT 表示快照数据，例如最新行情状态。
@@ -201,26 +186,32 @@ enum FieldValueType {
   FIELD_VALUE_TYPE_BYTES = 7;
 }
 
-// ColumnOriginType 表示数据列或查询列的来源。
+// DatasetColumnOriginType 表示 DatasetColumn 的来源。
+enum DatasetColumnOriginType {
+  // DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED 表示未指定 DatasetColumn 来源。
+  DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED = 0;
+  // DATASET_COLUMN_ORIGIN_TYPE_FIELD 表示列来自 Space 内普通字段。
+  DATASET_COLUMN_ORIGIN_TYPE_FIELD = 1;
+  // DATASET_COLUMN_ORIGIN_TYPE_FACTOR 表示列来自 Space 内已参数化因子结果。
+  DATASET_COLUMN_ORIGIN_TYPE_FACTOR = 2;
+  // DATASET_COLUMN_ORIGIN_TYPE_SYSTEM 表示列来自系统列，例如 subject_id、data_time 或 freq。
+  DATASET_COLUMN_ORIGIN_TYPE_SYSTEM = 3;
+}
+
+// ColumnOriginType 表示 ViewColumn 或查询结果列的来源。
 enum ColumnOriginType {
   // COLUMN_ORIGIN_TYPE_UNSPECIFIED 表示未指定列来源。
   COLUMN_ORIGIN_TYPE_UNSPECIFIED = 0;
-  // COLUMN_ORIGIN_TYPE_FIELD 表示列来自 Space 内普通字段。
-  COLUMN_ORIGIN_TYPE_FIELD = 1;
-  // COLUMN_ORIGIN_TYPE_FACTOR 表示列来自 Space 内已参数化因子结果。
-  COLUMN_ORIGIN_TYPE_FACTOR = 2;
-  // COLUMN_ORIGIN_TYPE_DATASET_COLUMN 表示列来自某个 DataSetColumn。
-  COLUMN_ORIGIN_TYPE_DATASET_COLUMN = 3;
-  // COLUMN_ORIGIN_TYPE_EXPRESSION 表示列来自服务端登记表达式。
-  COLUMN_ORIGIN_TYPE_EXPRESSION = 4;
+  // COLUMN_ORIGIN_TYPE_DATASET_COLUMN 表示列来自某个 DatasetColumn。
+  COLUMN_ORIGIN_TYPE_DATASET_COLUMN = 1;
   // COLUMN_ORIGIN_TYPE_SYSTEM 表示列来自系统列，例如 subject_id、data_time 或 freq。
-  COLUMN_ORIGIN_TYPE_SYSTEM = 5;
+  COLUMN_ORIGIN_TYPE_SYSTEM = 2;
+  // COLUMN_ORIGIN_TYPE_EXPRESSION 表示列来自服务端登记表达式。
+  COLUMN_ORIGIN_TYPE_EXPRESSION = 3;
 }
 
 // ErrorCode 表示存储接口通用错误码。
 enum ErrorCode {
-  option allow_alias = true;
-
   // SUCCESS 表示请求成功。
   SUCCESS = 0;
   // INVALID_PARAM 表示请求参数错误。
@@ -233,30 +224,20 @@ enum ErrorCode {
   INNER_ERR = 4;
   // SPACE_NOT_FOUND 表示使用空间不存在。
   SPACE_NOT_FOUND = 5;
-  // WORKSPACE_NOT_FOUND 是旧命名别名，后续只在兼容元数据代码中使用。
-  WORKSPACE_NOT_FOUND = 5;
   // DATASET_NOT_FOUND 表示数据集不存在。
   DATASET_NOT_FOUND = 6;
   // SUBJECT_NOT_FOUND 表示数据对象不存在。
   SUBJECT_NOT_FOUND = 7;
-  // INSTRUMENT_NOT_FOUND 是旧命名别名，后续只在兼容元数据代码中使用。
-  INSTRUMENT_NOT_FOUND = 7;
   // FIELD_NOT_FOUND 表示字段不存在。
   FIELD_NOT_FOUND = 8;
   // FACTOR_NOT_FOUND 表示因子不存在。
   FACTOR_NOT_FOUND = 9;
-  // FACTOR_INSTANCE_NOT_FOUND 是旧命名别名，后续只在兼容元数据代码中使用。
-  FACTOR_INSTANCE_NOT_FOUND = 9;
   // VIEW_NOT_FOUND 表示查询视图不存在。
   VIEW_NOT_FOUND = 10;
   // VIEW_NOT_READY 表示查询视图尚未就绪。
   VIEW_NOT_READY = 11;
-  // DATA_VIEW_NOT_READY 是旧命名别名，后续只在兼容元数据代码中使用。
-  DATA_VIEW_NOT_READY = 11;
   // VIEW_COLUMN_NOT_FOUND 表示查询视图列不存在或无法解析。
   VIEW_COLUMN_NOT_FOUND = 12;
-  // DATA_VIEW_COLUMN_NOT_FOUND 是旧命名别名，后续只在兼容元数据代码中使用。
-  DATA_VIEW_COLUMN_NOT_FOUND = 12;
   // QUERY_SHAPE_UNSUPPORTED 表示不支持当前查询形态。
   QUERY_SHAPE_UNSUPPORTED = 13;
   // ROUTE_NOT_FOUND 表示未找到匹配的存储路由。

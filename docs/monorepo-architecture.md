@@ -88,7 +88,7 @@ modules/account/cmd/moox-account/main.go
 | 目录 | 含义 |
 | --- | --- |
 | `internal/storage` | 存储抽象、存储路由、存储引擎封装 |
-| `internal/dataset` | DataSet 领域模型和业务规则 |
+| `internal/dataset` | Dataset 领域模型和业务规则 |
 | `var/` | 本地运行时数据，例如 db、index、cache、临时文件 |
 | `testdata/` | Go 测试样例数据 |
 

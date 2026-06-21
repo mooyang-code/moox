@@ -39,12 +39,12 @@ func (h *Harness) writeConfig() error {
 	}
 	trpcContent := fmt.Sprintf(configTemplate,
 		portAdmin,        // admin.port
-		portQuery,        // QueryService
+		portQuery,        // ViewService
 		portPrimary,      // PrimaryStoreService
 		portViewTimer,    // view.timer
 		portArchiveTimer, // archive.timer
 		e2eSpaceID,       // archive timer space_id
-		portDataHTTP,     // DataService HTTP
+		portDataHTTP,     // AccessService HTTP
 		portMetadataHTTP, // MetadataService HTTP
 	)
 	if err := os.WriteFile(h.configPth, []byte(trpcContent), 0o644); err != nil {
@@ -68,7 +68,6 @@ storage:
   eventbus:
     type: memory
     stream_name: MOOX_STORAGE_E2E
-    rows_changed_subject: moox.storage.e2e.fact.rows_changed.v1
 `
 
 const configTemplate = `global:
@@ -83,12 +82,12 @@ server:
     read_timeout: 5000
     write_timeout: 60000
   service:
-    - name: trpc.storage.query.QueryService
+    - name: trpc.storage.view.ViewService
       ip: 127.0.0.1
       port: %d
       network: tcp
       protocol: trpc
-    - name: trpc.storage.primary.PrimaryStoreService
+    - name: trpc.storage.store.PrimaryStoreService
       ip: 127.0.0.1
       port: %d
       network: tcp
@@ -103,7 +102,7 @@ server:
       network: "*/20 * * * * *?scheduler=archiveSchedule&params=space_id=%s;dataset_id=*"
       protocol: timer
       timeout: 60000
-    - name: trpc.storage.data.DataService
+    - name: trpc.storage.access.AccessService
       ip: 127.0.0.1
       port: %d
       network: tcp

@@ -14,10 +14,12 @@ type ConfigLoader struct {
 	baseDir string
 }
 
+// RuntimeConfig 保存运行时加载出的完整业务配置。
 type RuntimeConfig struct {
 	Storage StorageConfig `yaml:"storage"`
 }
 
+// StorageConfig 保存 storage.yaml 中的业务配置。
 type StorageConfig struct {
 	Root     string          `yaml:"root"`
 	Metadata StorageMetadata `yaml:"metadata"`
@@ -26,10 +28,12 @@ type StorageConfig struct {
 	EventBus StorageEventBus `yaml:"eventbus"`
 }
 
+// StorageMetadata 保存元数据存储与种子数据配置。
 type StorageMetadata struct {
 	Path string `yaml:"path"`
 }
 
+// StorageDevices 保存底层存储设备路径配置。
 type StorageDevices struct {
 	PebblePath  string `yaml:"pebble_path"`
 	DuckDBPath  string `yaml:"duckdb_path"`
@@ -37,15 +41,16 @@ type StorageDevices struct {
 	ParquetPath string `yaml:"parquet_path"`
 }
 
+// StorageEventBus 保存事件总线传输配置。
 type StorageEventBus struct {
-	Type               string `yaml:"type"`
-	NATSURL            string `yaml:"nats_url"`
-	StreamName         string `yaml:"stream_name"`
-	SubjectPrefix      string `yaml:"subject_prefix"`
-	RowsChangedSubject string `yaml:"rows_changed_subject"`
-	ConsumerName       string `yaml:"consumer_name"`
+	Type          string `yaml:"type"`
+	NATSURL       string `yaml:"nats_url"`
+	StreamName    string `yaml:"stream_name"`
+	SubjectPrefix string `yaml:"subject_prefix"`
+	ConsumerName  string `yaml:"consumer_name"`
 }
 
+// StoragePrimary 保存主存服务访问配置。
 type StoragePrimary struct {
 	ServiceName string `yaml:"service_name"`
 }
@@ -78,9 +83,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.EventBus.SubjectPrefix == "" {
 		c.EventBus.SubjectPrefix = "moox.storage"
-	}
-	if c.EventBus.RowsChangedSubject == "" {
-		c.EventBus.RowsChangedSubject = c.EventBus.SubjectPrefix + ".fact.rows_changed.v1"
 	}
 	if c.EventBus.Type == "nats" && c.EventBus.StreamName == "" {
 		c.EventBus.StreamName = "MOOX_STORAGE"
