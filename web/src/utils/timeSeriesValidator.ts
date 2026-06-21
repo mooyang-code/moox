@@ -90,12 +90,26 @@ export function validateSingleFreq(freq: string): TimeSeriesValidationResult {
 }
 
 /**
- * 验证时序周期字符串（支持多个周期用+分割）
- * @param freqs 时序周期字符串，如 "1m+5m+1H+1D" 或 "0"（表示无固定周期）
+ * 将用户粘贴的周期文本解析为数组。
+ * 支持逗号、中文逗号、加号和换行，便于从旧表达式迁移到 string[]。
+ */
+export function parseFreqInput(input: string | string[]): string[] {
+  if (Array.isArray(input)) {
+    return input.map((item) => item.trim()).filter(Boolean);
+  }
+  return input
+    .split(/[+,\n，]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+/**
+ * 验证时序周期数组。
+ * @param freqs 时序周期数组，如 ["1m", "5m", "1H"] 或 ["0"]（表示无固定周期）
  * @returns 验证结果
  */
-export function validateTimeSeriesFreqs(freqs: string): TimeSeriesValidationResult {
-  if (!freqs || typeof freqs !== 'string') {
+export function validateTimeSeriesFreqs(freqs: string[]): TimeSeriesValidationResult {
+  if (!Array.isArray(freqs)) {
     return {
       isValid: false,
       message: '时序周期不能为空',
@@ -103,8 +117,8 @@ export function validateTimeSeriesFreqs(freqs: string): TimeSeriesValidationResu
     };
   }
 
-  const trimmedFreqs = freqs.trim();
-  if (!trimmedFreqs) {
+  const freqList = freqs.map((freq) => freq.trim()).filter(Boolean);
+  if (freqList.length === 0) {
     return {
       isValid: false,
       message: '时序周期不能为空',
@@ -113,21 +127,10 @@ export function validateTimeSeriesFreqs(freqs: string): TimeSeriesValidationResu
   }
 
   // 特殊情况：0 表示无固定周期的时序数据
-  if (trimmedFreqs === '0') {
+  if (freqList.length === 1 && freqList[0] === '0') {
     return {
       isValid: true,
       message: '无固定周期的时序数据'
-    };
-  }
-
-  // 分割多个周期
-  const freqList = trimmedFreqs.split('+').map(f => f.trim()).filter(f => f);
-
-  if (freqList.length === 0) {
-    return {
-      isValid: false,
-      message: '时序周期不能为空',
-      validFormats: getValidFormats()
     };
   }
 
@@ -178,7 +181,7 @@ export function getValidFormats(): string[] {
     'W - 周（如：1W, 2W）',
     'M - 月（如：1M, 3M）',
     'Y - 年（如：1Y）',
-    '多个周期用+分割（如：1m+5m+1H+1D）'
+    '多个周期使用数组表达（如：["1m", "5m", "1H", "1D"]）'
   ];
 }
 
@@ -195,8 +198,8 @@ export function getFreqExamples(): string[] {
     '1H',
     '4H',
     '1D',
-    '1m+5m+1H+1D',
-    '1s+1m+1H',
-    '15m+1H+4H+1D'
+    '1m,5m,1H,1D',
+    '1s,1m,1H',
+    '15m,1H,4H,1D'
   ];
 }

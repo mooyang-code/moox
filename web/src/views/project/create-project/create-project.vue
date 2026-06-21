@@ -108,7 +108,7 @@ import { ref, onBeforeUnmount } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { useRouter } from 'vue-router';
 import { api, AUTH_INFO } from '@/api/config';
-import { validateTimeSeriesFreqs, type TimeSeriesValidationResult } from '@/utils/timeSeriesValidator';
+import { parseFreqInput, validateTimeSeriesFreqs, type TimeSeriesValidationResult } from '@/utils/timeSeriesValidator';
 
 const router = useRouter();
 
@@ -206,7 +206,7 @@ const validateTimePeriod = (value: string, callback: (error?: string) => void) =
   }
 
   if (value && form.value.dataType === '2') {
-    const result = validateTimeSeriesFreqs(value);
+    const result = validateTimeSeriesFreqs(parseFreqInput(value));
     timePeriodValidationResult.value = result;
     timePeriodValidationMessage.value = result.message;
 
@@ -222,7 +222,7 @@ const validateTimePeriod = (value: string, callback: (error?: string) => void) =
 // 时序周期输入框失焦时验证
 const handleTimePeriodBlur = () => {
   if (form.value.timePeriod && form.value.dataType === '2') {
-    const result = validateTimeSeriesFreqs(form.value.timePeriod);
+    const result = validateTimeSeriesFreqs(parseFreqInput(form.value.timePeriod));
     timePeriodValidationResult.value = result;
     timePeriodValidationMessage.value = result.message;
   } else {

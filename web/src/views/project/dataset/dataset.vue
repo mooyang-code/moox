@@ -194,7 +194,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { Message, Modal } from '@arco-design/web-vue';
 import { listProjects, type Project } from '@/api/project';
 import { createDataset, updateDataset, deleteDataset } from '@/api/dataset';
-import { validateTimeSeriesFreqs, type TimeSeriesValidationResult } from '@/utils/timeSeriesValidator';
+import { parseFreqInput, validateTimeSeriesFreqs, type TimeSeriesValidationResult } from '@/utils/timeSeriesValidator';
 import {
   IconPlus,
   IconEye,
@@ -242,7 +242,7 @@ const validateFreqs = (value: string, callback: (error?: string) => void) => {
   }
 
   if (value && datasetForm.data_type === 2) {
-    const result = validateTimeSeriesFreqs(value);
+    const result = validateTimeSeriesFreqs(parseFreqInput(value));
     freqsValidationResult.value = result;
     freqsValidationMessage.value = result.message;
 
@@ -258,7 +258,7 @@ const validateFreqs = (value: string, callback: (error?: string) => void) => {
 // 时序周期输入框失焦时验证
 const handleFreqsBlur = () => {
   if (datasetForm.freqs && datasetForm.data_type === 2) {
-    const result = validateTimeSeriesFreqs(datasetForm.freqs);
+    const result = validateTimeSeriesFreqs(parseFreqInput(datasetForm.freqs));
     freqsValidationResult.value = result;
     freqsValidationMessage.value = result.message;
   } else {
