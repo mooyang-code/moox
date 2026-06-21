@@ -66,7 +66,7 @@
                 <a-input v-model="tsForm.column_names" placeholder="close,volume" />
               </a-form-item>
             </a-col>
-            <a-col :xs="12" :md="6" :lg="4">
+            <a-col v-if="source === 'dataset'" :xs="12" :md="6" :lg="4">
               <a-form-item label="排序">
                 <a-select v-model="tsForm.order">
                   <a-option value="SORT_ORDER_ASC">升序</a-option>
@@ -115,7 +115,7 @@
                 <a-input v-model="recForm.column_names" placeholder="title,body" />
               </a-form-item>
             </a-col>
-            <a-col :xs="12" :md="6" :lg="4">
+            <a-col v-if="source === 'dataset'" :xs="12" :md="6" :lg="4">
               <a-form-item label="排序">
                 <a-select v-model="recForm.order">
                   <a-option value="SORT_ORDER_ASC">升序</a-option>
@@ -192,13 +192,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { listDatasets, listViews } from '@/api/storage/metadata';
 import { readRecordRows, readTimeSeriesRows } from '@/api/storage/access';
 import { queryTimeSeriesRows, searchRecordRows } from '@/api/storage/view';
 import type { Dataset, FilterExpr, RecordRow, SortOrder, SortSpec, TimeSeriesRow, View } from '@/api/storage/types';
-import { resolveViewRebuildKind } from '@/views/data/shared/metadata-utils';
+import { resolveViewRebuildKind, splitList } from '@/views/data/shared/metadata-utils';
 import { useSpaceStore } from '@/store/modules/space';
 
 defineOptions({ name: 'DataBrowse' });
@@ -279,13 +279,6 @@ const modeHint = computed(() => {
   if (mode.value === 'missing') return '无法识别该对象的数据类型';
   return '';
 });
-
-function splitNames(value: string) {
-  return value
-    .split(/[,，\n]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
 
 function parseJsonObject(value: string, label: string) {
   if (!value.trim()) return {};
@@ -389,7 +382,7 @@ async function runQuery() {
         }],
         time_range: { start_time: tsForm.start_time, end_time: tsForm.end_time },
         order: tsForm.order as SortOrder,
-        column_names: splitNames(tsForm.column_names),
+        column_names: splitList(tsForm.column_names),
         page: { page: 1, size: tsForm.page_size },
       });
       resultRows.value = mapTimeSeries(rsp.rows || []);
@@ -402,7 +395,7 @@ async function runQuery() {
         keys: [{ space_id, dataset_id: objectId.value, record_id: recForm.record_id }],
         version_range: { start_version: recForm.start_version, end_version: recForm.end_version },
         order: recForm.order as SortOrder,
-        column_names: splitNames(recForm.column_names),
+        column_names: splitList(recForm.column_names),
         page: { page: 1, size: recForm.page_size },
       });
       resultRows.value = mapRecord(rsp.rows || []);
@@ -431,7 +424,7 @@ async function runQuery() {
           dimensions: parseJsonObject(tsForm.dimensions, '维度'),
         }],
         time_range: { start_time: tsForm.start_time, end_time: tsForm.end_time },
-        column_names: splitNames(tsForm.column_names),
+        column_names: splitList(tsForm.column_names),
         page: { page: 1, size: tsForm.page_size },
       });
       resultRows.value = mapTimeSeries(rsp.rows || []);
@@ -448,7 +441,7 @@ async function runQuery() {
       version_range: { start_version: recForm.start_version, end_version: recForm.end_version },
       filters: parseJsonArray<FilterExpr>(viewRecForm.filters, '过滤'),
       sorts: parseJsonArray<SortSpec>(viewRecForm.sorts, '排序'),
-      column_names: splitNames(recForm.column_names),
+      column_names: splitList(recForm.column_names),
       page: { page: 1, size: recForm.page_size },
     });
     resultRows.value = mapRecord(rsp.rows || []);
