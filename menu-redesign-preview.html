@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MooX 前端交互再设计 · 菜单方案预览</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --border: #e5e6eb;
+    --text: #1d2129;
+    --text-2: #4e5969;
+    --text-3: #86909c;
+    --primary: #165dff;
+    --primary-bg: #e8f3ff;
+    --green: #00b42a;
+    --orange: #ff7d00;
+    --mono: "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 32px 24px 64px;
+  }
+  .wrap { max-width: 1280px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: var(--text-2); margin: 0 0 24px; font-size: 14px; }
+  .pillbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 28px; }
+  .pill { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 4px 12px; font-size: 13px; color: var(--text-3); }
+  .pill.bad { color: var(--orange); border-color: #ffd8b3; background: #fff7ef; }
+  .common {
+    background: var(--primary-bg); border: 1px solid #bedaff; border-radius: 10px;
+    padding: 14px 18px; margin-bottom: 28px; font-size: 14px; color: #1c3d8f;
+  }
+  .common b { color: var(--primary); }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    overflow: hidden; display: flex; flex-direction: column;
+  }
+  .card.rec { border-color: var(--primary); box-shadow: 0 6px 20px rgba(22,93,255,.12); }
+  .card-head { padding: 16px 18px 10px; }
+  .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 6px; background: #f2f3f5; color: var(--text-3); margin-bottom: 8px; }
+  .badge.rec { background: var(--green); color: #fff; }
+  .badge.min { background: #f2f3f5; color: var(--text-2); }
+  .card h2 { font-size: 17px; margin: 0 0 4px; }
+  .card .desc { font-size: 13px; color: var(--text-2); margin: 0; min-height: 40px; }
+  .menu {
+    margin: 4px 14px 16px; background: #fafbfc; border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px; font-family: var(--mono); font-size: 13px; line-height: 1.95; flex: 1;
+  }
+  .menu .root { font-weight: 600; }
+  .menu .hint { color: var(--text-3); font-family: -apple-system, sans-serif; font-size: 12px; }
+  .menu .item { color: var(--text); }
+  .count { font-size: 12px; color: var(--text-3); margin: 0 14px 14px; }
+  .count b { color: var(--text); }
+
+  .browse { margin-top: 40px; }
+  .browse h2 { font-size: 20px; margin: 0 0 4px; }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 16px; }
+  @media (max-width: 980px) { .twocol { grid-template-columns: 1fr; } }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+  .panel.before { border-style: dashed; }
+  .panel h3 { margin: 0 0 12px; font-size: 15px; }
+  .panel h3 .tag { font-size: 12px; padding: 2px 8px; border-radius: 6px; margin-left: 6px; }
+  .tag.old { background: #fff1f0; color: #f53f3f; }
+  .tag.new { background: #e8ffea; color: var(--green); }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .tab { font-size: 12px; padding: 4px 10px; border-radius: 6px; background: #f2f3f5; color: var(--text-2); }
+  .tab.active { background: var(--primary); color: #fff; }
+  .tab.nest { background: #fff7ef; color: var(--orange); }
+  .field { background: #fafbfc; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 6px 0; font-size: 13px; }
+  .field .k { color: var(--text-3); }
+  .arrow { text-align: center; color: var(--text-3); font-size: 13px; margin: 8px 0; }
+  .auto { background: var(--primary-bg); border: 1px dashed #bedaff; border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 13px; color: #1c3d8f; }
+  .head-mock { margin-top: 40px; }
+  .topbar {
+    display: flex; align-items: center; gap: 10px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; margin-top: 12px;
+  }
+  .topbar .logo { font-weight: 700; color: var(--primary); }
+  .spacer { flex: 1; }
+  .sel { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+  .sel .label { color: var(--text-3); }
+  .newbtn { background: var(--primary); color: #fff; border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+  .footnote { margin-top: 36px; color: var(--text-3); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>MooX 前端交互再设计 · 预览</h1>
+  <p class="sub">目标：收敛「数据资产」子菜单、重构「数据列表」，从用户视角降低理解与使用成本。</p>
+
+  <div class="pillbar">
+    <span class="pill bad">现状：数据资产下 9 个平铺子菜单</span>
+    <span class="pill">数据来源</span><span class="pill">数据对象</span><span class="pill">数据集</span>
+    <span class="pill">字段管理</span><span class="pill">因子管理</span><span class="pill">查询视图</span>
+    <span class="pill">数据概览</span><span class="pill bad">数据列表（4 层 tab）</span><span class="pill">数据同步</span>
+  </div>
+
+  <div class="common">
+    <b>三个方案的共同改进：</b>
+    ① 「数据概览」变成板块<b>首页</b>（点"数据资产"即落地），不再单列；
+    ② 旧「数据列表」重构为<b>「数据浏览」</b>——先选数据集/视图，系统<b>自动判断</b> 时序/记录 与 主存/视图，
+    用户不用再手点 主存读取 / View查询 × TimeSeries / Record 四层 tab。
+  </div>
+
+  <div class="grid">
+    <!-- 方案 A -->
+    <div class="card rec">
+      <div class="card-head">
+        <span class="badge rec">推荐 · 平衡</span>
+        <h2>方案 A · 对象分组</h2>
+        <p class="desc">字段+因子合并为"建模元素"一页；保留各对象独立页，学习曲线平缓。</p>
+      </div>
+      <div class="menu">
+        <div class="root">数据资产 <span class="hint">首页=概览仪表盘</span></div>
+        <div class="item">├─ 数据来源</div>
+        <div class="item">├─ 数据对象</div>
+        <div class="item">├─ 数据集 <span class="hint">列/对象绑定在页内 tab</span></div>
+        <div class="item">├─ 建模元素 <span class="hint">字段 + 因子 两 tab</span></div>
+        <div class="item">├─ 查询视图</div>
+        <div class="item">├─ 数据浏览 <span class="hint">选对象→自动判类型</span></div>
+        <div class="item">└─ 数据导入</div>
+      </div>
+      <div class="count">子项：<b>9 → 7</b></div>
+    </div>
+
+    <!-- 方案 B -->
+    <div class="card">
+      <div class="card-head">
+        <span class="badge">最精简 · 改动最大</span>
+        <h2>方案 B · 阶段分组</h2>
+        <p class="desc">建模收进一个"左树+右详情"工作台；数据页合并浏览+导入。</p>
+      </div>
+      <div class="menu">
+        <div class="root">数据资产 <span class="hint">首页=概览仪表盘</span></div>
+        <div class="item">├─ 数据建模 <span class="hint">左树:来源→对象→数据集<br>&nbsp;&nbsp;&nbsp;&nbsp;右:列/字段/因子/绑定</span></div>
+        <div class="item">├─ 查询视图</div>
+        <div class="item">└─ 数据 <span class="hint">浏览 / 导入 两 tab</span></div>
+      </div>
+      <div class="count">子项：<b>9 → 4</b></div>
+    </div>
+
+    <!-- 方案 C -->
+    <div class="card">
+      <div class="card-head">
+        <span class="badge min">最小改动</span>
+        <h2>方案 C · 轻收敛</h2>
+        <p class="desc">仅概览变首页、浏览+导入合一；字段/因子各自保留。</p>
+      </div>
+      <div class="menu">
+        <div class="root">数据资产 <span class="hint">首页=概览</span></div>
+        <div class="item">├─ 数据来源</div>
+        <div class="item">├─ 数据对象</div>
+        <div class="item">├─ 数据集</div>
+        <div class="item">├─ 字段管理</div>
+        <div class="item">├─ 因子管理</div>
+        <div class="item">├─ 查询视图</div>
+        <div class="item">└─ 数据 <span class="hint">浏览 + 导入</span></div>
+      </div>
+      <div class="count">子项：<b>9 → 6</b></div>
+    </div>
+  </div>
+
+  <!-- 数据浏览 重构 -->
+  <div class="browse">
+    <h2>核心改造：「数据列表」→「数据浏览」</h2>
+    <p class="sub">把"底层协议选择"交给系统推断，用户只面对自己懂的概念：数据集 / 视图。</p>
+    <div class="twocol">
+      <div class="panel before">
+        <h3>现状 <span class="tag old">理解成本高</span></h3>
+        <div class="tabs"><span class="tab active">主存读取</span><span class="tab">View 查询</span></div>
+        <div class="tabs"><span class="tab nest">TimeSeries</span><span class="tab nest">Record</span></div>
+        <div class="field"><span class="k">dataset_id</span>　手填字符串</div>
+        <div class="field"><span class="k">start_time</span>　手填 RFC3339</div>
+        <div class="field"><span class="k">dimensions</span>　手填 JSON</div>
+        <div class="field"><span class="k">order</span>　SORT_ORDER_ASC（裸枚举）</div>
+        <p class="sub" style="margin-top:10px">用户需先理解 主存 vs 视图、时序 vs 记录，再手填底层字段。</p>
+      </div>
+      <div class="panel">
+        <h3>重构后 <span class="tag new">零协议概念</span></h3>
+        <div class="field"><span class="k">第 1 步</span>　选择数据集或视图（下拉，带名称搜索）</div>
+        <div class="auto">系统自动识别：该对象是 <b>时序</b> 还是 <b>记录</b>，是查 <b>主存</b> 还是 <b>视图</b> → 自动切换对应表单</div>
+        <div class="field"><span class="k">第 2 步</span>　按对象类型只显示相关筛选项<br>（时序：对象/周期/时间范围；记录：record_id/版本）</div>
+        <div class="field"><span class="k">时间/枚举</span>　日期选择器 + 中文下拉（升序/降序），不暴露 RFC3339/裸枚举</div>
+        <div class="arrow">▼ 一键查询，结果表格自适应列</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 顶部空间选择器 + 新建 -->
+  <div class="head-mock">
+    <h2>顶部空间选择器 + 新建按钮</h2>
+    <p class="sub">下拉内置"新建空间"项，下拉旁保留齿轮进入空间管理。</p>
+    <div class="topbar">
+      <span class="logo">MooX</span>
+      <span class="spacer"></span>
+      <div class="sel"><span class="label">当前空间</span> ▾ A股交易空间</div>
+      <span class="newbtn">＋ 新建空间</span>
+      <span class="sel">⚙</span>
+    </div>
+  </div>
+
+  <p class="footnote">这是设计预览，未改任何业务代码。确认方案方向后，我会写设计文档 → 实现计划 → 再动手。</p>
+</div>
+</body>
+</html>

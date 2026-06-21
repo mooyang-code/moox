@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/control/internal/config"
+	adminschema "github.com/mooyang-code/moox/modules/control/schema"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -46,11 +46,22 @@ func (dm *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
 
 	dm.db = db
 	applySQLitePoolConfig(dm.db, dbCfg)
-	if err := dm.ApplySchema(defaultAdminSchemaPath()); err != nil {
+	if err := dm.ApplyAdminSchema(); err != nil {
 		return err
 	}
 	log.Infof("初始化SQLite数据库连接: %s", dbPath)
 	return nil
+}
+
+// ApplyAdminSchema 应用 Control/Admin schema。
+//
+// 默认使用编译进二进制的 schema，避免部署时依赖工作目录或源码路径。
+// 如确需临时覆盖，可通过 MOOX_CONTROL_ADMIN_SCHEMA_FILE 指向外部 SQL 文件。
+func (dm *Manager) ApplyAdminSchema() error {
+	if path := strings.TrimSpace(os.Getenv("MOOX_CONTROL_ADMIN_SCHEMA_FILE")); path != "" {
+		return dm.ApplySchema(path)
+	}
+	return dm.ApplySchemaSQL("embedded admin.sql", adminSchemaSQL())
 }
 
 // ApplySchema 应用 Control/Admin 的权威 SQL schema。
@@ -62,8 +73,16 @@ func (dm *Manager) ApplySchema(schemaPath string) error {
 	if err != nil {
 		return fmt.Errorf("read schema %s: %w", schemaPath, err)
 	}
-	if err := dm.db.Exec(string(raw)).Error; err != nil {
-		return fmt.Errorf("apply schema %s: %w", schemaPath, err)
+	return dm.ApplySchemaSQL(schemaPath, string(raw))
+}
+
+// ApplySchemaSQL 应用给定 SQL 文本。
+func (dm *Manager) ApplySchemaSQL(schemaName string, raw string) error {
+	if dm.db == nil {
+		return fmt.Errorf("database is not initialized")
+	}
+	if err := dm.db.Exec(raw).Error; err != nil {
+		return fmt.Errorf("apply schema %s: %w", schemaName, err)
 	}
 	return nil
 }
@@ -169,21 +188,6 @@ func minInt(a, b int) int {
 	return b
 }
 
-func defaultAdminSchemaPath() string {
-	if path := strings.TrimSpace(os.Getenv("MOOX_CONTROL_ADMIN_SCHEMA_FILE")); path != "" {
-		return path
-	}
-	candidates := []string{
-		filepath.Join("schema", "admin.sql"),
-		filepath.Join("modules", "control", "schema", "admin.sql"),
-	}
-	if _, file, _, ok := runtime.Caller(0); ok {
-		candidates = append(candidates, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", "schema", "admin.sql")))
-	}
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	return filepath.Join("schema", "admin.sql")
+func adminSchemaSQL() string {
+	return adminschema.AdminSQL()
 }

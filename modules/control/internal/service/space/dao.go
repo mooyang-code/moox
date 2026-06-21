@@ -3,6 +3,7 @@ package space
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -18,6 +19,14 @@ func NewDAO(db *gorm.DB) *DAO { return &DAO{db: db} }
 
 // CreateSpace 新建 Space。
 func (d *DAO) CreateSpace(ctx context.Context, item *Space) error {
+	exists, err := d.spaceExists(ctx, item.SpaceID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("space_id already exists: %s", item.SpaceID)
+	}
+
 	now := time.Now()
 	item.CreatedAt = now
 	item.UpdatedAt = now
@@ -27,7 +36,13 @@ func (d *DAO) CreateSpace(ctx context.Context, item *Space) error {
 	if item.Attributes == "" {
 		item.Attributes = "{}"
 	}
-	return d.db.WithContext(ctx).Create(item).Error
+	if err := d.db.WithContext(ctx).Create(item).Error; err != nil {
+		if isUniqueConstraintError(err) {
+			return fmt.Errorf("space_id already exists: %s", item.SpaceID)
+		}
+		return err
+	}
+	return nil
 }
 
 // UpdateSpace 更新 Space 的管理台展示属性。
@@ -94,4 +109,20 @@ func (d *DAO) ListSpaceMembers(ctx context.Context, spaceID string, offset int, 
 		return nil, 0, err
 	}
 	return rows, total, nil
+}
+
+func (d *DAO) spaceExists(ctx context.Context, spaceID string) (bool, error) {
+	var count int64
+	err := d.db.WithContext(ctx).Model(&Space{}).
+		Where("c_space_id = ? AND c_invalid = 0", spaceID).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func isUniqueConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "UNIQUE constraint") || strings.Contains(message, "constraint failed")
 }

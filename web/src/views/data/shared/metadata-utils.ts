@@ -107,3 +107,15 @@ export function optionLabel<T extends string | number>(options: SelectOption<T>[
 export function isTimeSeriesDataKind(value?: DataKind) {
   return value === 'DATA_KIND_TIME_SERIES' || value === 2;
 }
+
+export type ViewRebuildKind = 'time_series' | 'record' | 'missing';
+
+export function resolveViewRebuildKind(
+  datasets: Array<{ dataset_id?: string; data_kind?: DataKind }>,
+  primaryDatasetId?: string,
+): ViewRebuildKind {
+  if (!primaryDatasetId) return 'missing';
+  const primaryDataset = datasets.find((item) => item.dataset_id === primaryDatasetId);
+  if (!primaryDataset) return 'missing';
+  return isTimeSeriesDataKind(primaryDataset.data_kind) ? 'time_series' : 'record';
+}

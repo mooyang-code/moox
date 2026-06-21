@@ -152,6 +152,8 @@ storage:
 | **Device** | 节点上的设备，`engine` ∈ `pebble`/`duckdb`/`bleve`/`parquet_archive`；路由只用 `pebble` 设备 | PrimaryStoreNode |
 | **PrimaryStoreRoute** | 把 `(space, dataset[, subject/pattern])` 路由到 PrimaryStoreNode，`hash_rule` 决定分片 | Space + Dataset + PrimaryStoreNode |
 
+> Space 边界说明：Storage 中的 `space_id` 是存储隔离标签和元数据根键，不主动向 Control/Admin 校验 Space 是否存在，也不建立跨服务外键。管理台顶部 Space 选择器的数据来源是 Control/Admin；Storage 的 `ListSpaces` / `GetSpace` 只返回 Storage 自身登记的元数据。写错 `space_id` 可能产生孤立的 Storage 元数据或事实数据，接入方应统一使用 Control/Admin 选中的 `space_id`，或通过初始化脚本显式同步 Storage 侧 Space 元数据。
+
 > 命名注记：`PrimaryStoreRoute` / `PrimaryStoreNode` 为历史命名，语义已收窄为"仅路由 Pebble 在线主存切分"，不路由 DuckDB/Bleve/Parquet 派生设备。
 
 枚举取值（在 seed 文件里用短名书写）：

@@ -13,6 +13,7 @@
 
 
 **/.claude/
+.superpowers/
 
 # Code coverage profiles and other test artifacts
 *.out

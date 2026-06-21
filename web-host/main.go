@@ -33,7 +33,7 @@ type gatewayTarget struct {
 }
 
 type gatewayProxy struct {
-	baseURLs map[string]*url.URL
+	proxies map[string]*httputil.ReverseProxy
 }
 
 func loadGatewayConfig() gatewayConfig {
@@ -100,19 +100,19 @@ func newGatewayProxy(cfg gatewayConfig) (*gatewayProxy, error) {
 		"access":   cfg.AccessURL,
 		"view":     cfg.ViewURL,
 	}
-	parsed := make(map[string]*url.URL, len(baseURLs))
+	proxies := make(map[string]*httputil.ReverseProxy, len(baseURLs))
 	for name, raw := range baseURLs {
 		baseURL, err := url.Parse(raw)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s url %q: %w", name, raw, err)
 		}
-		parsed[name] = baseURL
+		proxies[name] = httputil.NewSingleHostReverseProxy(baseURL)
 	}
-	return &gatewayProxy{baseURLs: parsed}, nil
+	return &gatewayProxy{proxies: proxies}, nil
 }
 
 func (p *gatewayProxy) ServeHTTP(w http.ResponseWriter, r *http.Request, target gatewayTarget) {
-	baseURL, ok := p.baseURLs[target.Base]
+	proxy, ok := p.proxies[target.Base]
 	if !ok {
 		http.Error(w, "unknown gateway base: "+target.Base, http.StatusBadGateway)
 		return
@@ -124,7 +124,6 @@ func (p *gatewayProxy) ServeHTTP(w http.ResponseWriter, r *http.Request, target 
 	proxyReq.URL.RawPath = ""
 	proxyReq.RequestURI = ""
 
-	proxy := httputil.NewSingleHostReverseProxy(baseURL)
 	proxy.ServeHTTP(w, proxyReq)
 }
 

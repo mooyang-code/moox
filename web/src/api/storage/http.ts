@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { Message } from '@arco-design/web-vue';
+import { isRetInfoSuccess } from '../ret-info';
 import { getStorageAuthInfo } from './auth';
 import type { RetInfo } from './types';
 
@@ -13,7 +14,7 @@ function assertSuccess(retInfo?: RetInfo) {
   if (!retInfo) {
     throw new Error('storage response missing ret_info');
   }
-  if (retInfo.code !== 'SUCCESS' && retInfo.code !== 0 && retInfo.code !== '0') {
+  if (!isRetInfoSuccess(retInfo.code)) {
     throw new Error(retInfo.msg || `storage request failed: ${retInfo.code}`);
   }
 }

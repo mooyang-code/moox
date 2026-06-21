@@ -22,3 +22,10 @@ func TestInitializeAppliesAdminSchema(t *testing.T) {
 		require.Equal(t, int64(1), count, table)
 	}
 }
+
+func TestEmbeddedAdminSchemaContainsCoreTables(t *testing.T) {
+	schema := adminSchemaSQL()
+	require.Contains(t, schema, "CREATE TABLE IF NOT EXISTS t_spaces")
+	require.Contains(t, schema, "CREATE TABLE IF NOT EXISTS t_users")
+	require.Contains(t, schema, "CREATE TABLE IF NOT EXISTS t_cloud_nodes")
+}

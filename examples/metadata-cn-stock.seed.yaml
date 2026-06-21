@@ -1,0 +1,591 @@
+# MooX storage metadata example for China A-share market.
+# Import with:
+#   modules/cli/cmd/moox-cli metadata import --file examples/metadata-cn-stock.seed.yaml --metadata-url http://127.0.0.1:19101 --if-not-exists
+
+spaces:
+  - space_id: cn_stock
+    name: A股交易空间
+    description: A-share market data, factors, and research workspace
+    owner: default
+    status: active
+
+data_sources:
+  - space_id: cn_stock
+    data_source_id: eastmoney
+    name: 东方财富
+    kind: vendor_api
+    market: CN-A
+    timezone: Asia/Shanghai
+    status: active
+  - space_id: cn_stock
+    data_source_id: akshare
+    name: AKShare
+    kind: vendor_api
+    market: CN-A
+    timezone: Asia/Shanghai
+    status: active
+
+subjects:
+  - space_id: cn_stock
+    subject_id: 600519.SH
+    subject_type: stock
+    name: 贵州茅台
+    market: SSE
+    currency: CNY
+    timezone: Asia/Shanghai
+    status: active
+  - space_id: cn_stock
+    subject_id: 000001.SZ
+    subject_type: stock
+    name: 平安银行
+    market: SZSE
+    currency: CNY
+    timezone: Asia/Shanghai
+    status: active
+  - space_id: cn_stock
+    subject_id: 510300.SH
+    subject_type: etf
+    name: 沪深300ETF
+    market: SSE
+    currency: CNY
+    timezone: Asia/Shanghai
+    status: active
+
+subject_symbols:
+  - space_id: cn_stock
+    subject_id: 600519.SH
+    data_source_id: eastmoney
+    external_symbol: SH600519
+    status: active
+  - space_id: cn_stock
+    subject_id: 000001.SZ
+    data_source_id: eastmoney
+    external_symbol: SZ000001
+    status: active
+  - space_id: cn_stock
+    subject_id: 510300.SH
+    data_source_id: eastmoney
+    external_symbol: SH510300
+    status: active
+  - space_id: cn_stock
+    subject_id: 600519.SH
+    data_source_id: akshare
+    external_symbol: sh600519
+    status: active
+  - space_id: cn_stock
+    subject_id: 000001.SZ
+    data_source_id: akshare
+    external_symbol: sz000001
+    status: active
+
+datasets:
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    data_source_id: eastmoney
+    name: 东方财富日线行情
+    description: A-share daily OHLCV bars from EastMoney
+    data_kind: time_series
+    freqs: ["1d"]
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_stock_profile
+    data_source_id: eastmoney
+    name: 东方财富股票资料
+    description: Basic stock profile and listing metadata
+    data_kind: record
+    freqs: []
+    status: active
+  - space_id: cn_stock
+    dataset_id: akshare_financial_indicator
+    data_source_id: akshare
+    name: AKShare 财务指标
+    description: Periodic financial indicators for listed companies
+    data_kind: record
+    freqs: []
+    status: active
+
+dataset_subjects:
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    subject_id: 600519.SH
+    subject_role: normal
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    subject_id: 000001.SZ
+    subject_role: normal
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    subject_id: 510300.SH
+    subject_role: normal
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_stock_profile
+    subject_id: 600519.SH
+    subject_role: normal
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_stock_profile
+    subject_id: 000001.SZ
+    subject_role: normal
+    status: active
+  - space_id: cn_stock
+    dataset_id: akshare_financial_indicator
+    subject_id: 600519.SH
+    subject_role: normal
+    status: active
+  - space_id: cn_stock
+    dataset_id: akshare_financial_indicator
+    subject_id: 000001.SZ
+    subject_role: normal
+    status: active
+
+fields:
+  - space_id: cn_stock
+    field_id: open
+    name: 开盘价
+    value_type: double
+    unit: CNY
+    write_example: "1688.00"
+    status: active
+  - space_id: cn_stock
+    field_id: high
+    name: 最高价
+    value_type: double
+    unit: CNY
+    write_example: "1700.00"
+    status: active
+  - space_id: cn_stock
+    field_id: low
+    name: 最低价
+    value_type: double
+    unit: CNY
+    write_example: "1660.00"
+    status: active
+  - space_id: cn_stock
+    field_id: close
+    name: 收盘价
+    value_type: double
+    unit: CNY
+    write_example: "1690.50"
+    status: active
+  - space_id: cn_stock
+    field_id: volume
+    name: 成交量
+    value_type: double
+    unit: shares
+    write_example: "1250000"
+    status: active
+  - space_id: cn_stock
+    field_id: amount
+    name: 成交额
+    value_type: double
+    unit: CNY
+    write_example: "2100000000"
+    status: active
+  - space_id: cn_stock
+    field_id: pct_chg
+    name: 涨跌幅
+    value_type: double
+    unit: percent
+    write_example: "1.25"
+    status: active
+  - space_id: cn_stock
+    field_id: symbol
+    name: 证券代码
+    value_type: string
+    write_example: 600519.SH
+    status: active
+  - space_id: cn_stock
+    field_id: stock_name
+    name: 证券名称
+    value_type: string
+    write_example: 贵州茅台
+    status: active
+  - space_id: cn_stock
+    field_id: industry
+    name: 所属行业
+    value_type: string
+    write_example: 白酒
+    status: active
+  - space_id: cn_stock
+    field_id: list_date
+    name: 上市日期
+    value_type: time
+    write_example: "2001-08-27T00:00:00+08:00"
+    status: active
+  - space_id: cn_stock
+    field_id: pe_ttm
+    name: 市盈率TTM
+    value_type: double
+    write_example: "28.6"
+    status: active
+  - space_id: cn_stock
+    field_id: pb
+    name: 市净率
+    value_type: double
+    write_example: "8.5"
+    status: active
+  - space_id: cn_stock
+    field_id: roe
+    name: 净资产收益率
+    value_type: double
+    unit: percent
+    write_example: "30.2"
+    status: active
+  - space_id: cn_stock
+    field_id: revenue
+    name: 营业收入
+    value_type: double
+    unit: CNY
+    write_example: "150000000000"
+    status: active
+  - space_id: cn_stock
+    field_id: net_profit
+    name: 归母净利润
+    value_type: double
+    unit: CNY
+    write_example: "75000000000"
+    status: active
+  - space_id: cn_stock
+    field_id: report_period
+    name: 报告期
+    value_type: string
+    write_example: "2024Q4"
+    status: active
+
+factors:
+  - space_id: cn_stock
+    factor_id: ma20_close
+    name: 20日均线
+    description: 收盘价20日简单移动平均
+    algorithm: moving_average
+    params_json: '{"window":20,"input":"close"}'
+    value_type: double
+    status: active
+  - space_id: cn_stock
+    factor_id: daily_return
+    name: 日收益率
+    description: 基于前收盘价计算的单日收益率
+    algorithm: pct_change
+    params_json: '{"input":"close","period":1}'
+    value_type: double
+    status: active
+  - space_id: cn_stock
+    factor_id: roe_growth
+    name: ROE同比变化
+    description: 最近报告期 ROE 与去年同期 ROE 的差值
+    algorithm: yoy_diff
+    params_json: '{"input":"roe","period":"1y"}'
+    value_type: double
+    status: active
+
+dataset_columns:
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    column_name: open
+    origin_type: field
+    origin_id: open
+    value_type: double
+    required: true
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    column_name: high
+    origin_type: field
+    origin_id: high
+    value_type: double
+    required: true
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    column_name: low
+    origin_type: field
+    origin_id: low
+    value_type: double
+    required: true
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    column_name: close
+    origin_type: field
+    origin_id: close
+    value_type: double
+    required: true
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    column_name: volume
+    origin_type: field
+    origin_id: volume
+    value_type: double
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    column_name: amount
+    origin_type: field
+    origin_id: amount
+    value_type: double
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    column_name: pct_chg
+    origin_type: field
+    origin_id: pct_chg
+    value_type: double
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    column_name: ma20_close
+    origin_type: factor
+    origin_id: ma20_close
+    value_type: double
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_daily_kline
+    column_name: daily_return
+    origin_type: factor
+    origin_id: daily_return
+    value_type: double
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_stock_profile
+    column_name: symbol
+    origin_type: field
+    origin_id: symbol
+    value_type: string
+    required: true
+    is_unique: true
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_stock_profile
+    column_name: stock_name
+    origin_type: field
+    origin_id: stock_name
+    value_type: string
+    required: true
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_stock_profile
+    column_name: industry
+    origin_type: field
+    origin_id: industry
+    value_type: string
+    status: active
+  - space_id: cn_stock
+    dataset_id: eastmoney_stock_profile
+    column_name: list_date
+    origin_type: field
+    origin_id: list_date
+    value_type: time
+    status: active
+  - space_id: cn_stock
+    dataset_id: akshare_financial_indicator
+    column_name: report_period
+    origin_type: field
+    origin_id: report_period
+    value_type: string
+    required: true
+    status: active
+  - space_id: cn_stock
+    dataset_id: akshare_financial_indicator
+    column_name: pe_ttm
+    origin_type: field
+    origin_id: pe_ttm
+    value_type: double
+    status: active
+  - space_id: cn_stock
+    dataset_id: akshare_financial_indicator
+    column_name: pb
+    origin_type: field
+    origin_id: pb
+    value_type: double
+    status: active
+  - space_id: cn_stock
+    dataset_id: akshare_financial_indicator
+    column_name: roe
+    origin_type: field
+    origin_id: roe
+    value_type: double
+    status: active
+  - space_id: cn_stock
+    dataset_id: akshare_financial_indicator
+    column_name: revenue
+    origin_type: field
+    origin_id: revenue
+    value_type: double
+    status: active
+  - space_id: cn_stock
+    dataset_id: akshare_financial_indicator
+    column_name: net_profit
+    origin_type: field
+    origin_id: net_profit
+    value_type: double
+    status: active
+  - space_id: cn_stock
+    dataset_id: akshare_financial_indicator
+    column_name: roe_growth
+    origin_type: factor
+    origin_id: roe_growth
+    value_type: double
+    status: active
+
+views:
+  - space_id: cn_stock
+    view_id: eastmoney_daily_kline_view
+    name: A股日线行情视图
+    description: A-share daily kline view backed by DuckDB
+    primary_dataset_id: eastmoney_daily_kline
+    dataset_ids: ["eastmoney_daily_kline"]
+    grain_keys: ["subject_id", "freq", "data_time"]
+    engine: duckdb
+    query_window: 365d
+    build_status: pending
+    status: active
+  - space_id: cn_stock
+    view_id: stock_profile_search
+    name: A股资料检索视图
+    description: Search stock profile records by symbol, name, and industry
+    primary_dataset_id: eastmoney_stock_profile
+    dataset_ids: ["eastmoney_stock_profile"]
+    grain_keys: ["record_id"]
+    engine: bleve
+    query_window: ""
+    build_status: pending
+    status: active
+  - space_id: cn_stock
+    view_id: financial_indicator_search
+    name: A股财务指标检索视图
+    description: Search financial indicator records by report period and valuation metrics
+    primary_dataset_id: akshare_financial_indicator
+    dataset_ids: ["akshare_financial_indicator"]
+    grain_keys: ["record_id"]
+    engine: bleve
+    query_window: ""
+    build_status: pending
+    status: active
+
+view_columns:
+  - space_id: cn_stock
+    view_id: eastmoney_daily_kline_view
+    column_name: close
+    origin_type: dataset_column
+    origin_id: eastmoney_daily_kline.close
+    value_type: double
+    sort_order: 1
+  - space_id: cn_stock
+    view_id: eastmoney_daily_kline_view
+    column_name: volume
+    origin_type: dataset_column
+    origin_id: eastmoney_daily_kline.volume
+    value_type: double
+    sort_order: 2
+  - space_id: cn_stock
+    view_id: eastmoney_daily_kline_view
+    column_name: ma20_close
+    origin_type: dataset_column
+    origin_id: eastmoney_daily_kline.ma20_close
+    value_type: double
+    sort_order: 3
+  - space_id: cn_stock
+    view_id: stock_profile_search
+    column_name: symbol
+    origin_type: dataset_column
+    origin_id: eastmoney_stock_profile.symbol
+    value_type: string
+    sort_order: 1
+  - space_id: cn_stock
+    view_id: stock_profile_search
+    column_name: stock_name
+    origin_type: dataset_column
+    origin_id: eastmoney_stock_profile.stock_name
+    value_type: string
+    sort_order: 2
+  - space_id: cn_stock
+    view_id: stock_profile_search
+    column_name: industry
+    origin_type: dataset_column
+    origin_id: eastmoney_stock_profile.industry
+    value_type: string
+    sort_order: 3
+  - space_id: cn_stock
+    view_id: financial_indicator_search
+    column_name: report_period
+    origin_type: dataset_column
+    origin_id: akshare_financial_indicator.report_period
+    value_type: string
+    sort_order: 1
+  - space_id: cn_stock
+    view_id: financial_indicator_search
+    column_name: roe
+    origin_type: dataset_column
+    origin_id: akshare_financial_indicator.roe
+    value_type: double
+    sort_order: 2
+  - space_id: cn_stock
+    view_id: financial_indicator_search
+    column_name: roe_growth
+    origin_type: dataset_column
+    origin_id: akshare_financial_indicator.roe_growth
+    value_type: double
+    sort_order: 3
+
+primary_store_nodes:
+  - node_id: local
+    name: local-primary
+    endpoint: local
+    weight: 100
+    status: active
+
+devices:
+  - device_id: pebble-local
+    node_id: local
+    name: local-pebble-primary
+    engine: pebble
+    endpoint: ./var/storage/pebble
+    status: active
+  - device_id: duckdb-local
+    node_id: local
+    name: local-duckdb-view
+    engine: duckdb
+    endpoint: ./var/storage/duckdb/views.duckdb
+    status: active
+  - device_id: bleve-local
+    node_id: local
+    name: local-bleve-search
+    engine: bleve
+    endpoint: ./var/storage/bleve
+    status: active
+  - device_id: parquet-local
+    node_id: local
+    name: local-parquet-archive
+    engine: parquet_archive
+    endpoint: ./var/storage/archive
+    status: active
+
+primary_store_routes:
+  - space_id: cn_stock
+    route_id: route-eastmoney-daily-kline
+    dataset_id: eastmoney_daily_kline
+    subject_pattern: "*"
+    hash_rule: subject_id
+    node_id: local
+    priority: 100
+    status: active
+  - space_id: cn_stock
+    route_id: route-eastmoney-stock-profile
+    dataset_id: eastmoney_stock_profile
+    subject_pattern: "*"
+    hash_rule: subject_id
+    node_id: local
+    priority: 100
+    status: active
+  - space_id: cn_stock
+    route_id: route-akshare-financial-indicator
+    dataset_id: akshare_financial_indicator
+    subject_pattern: "*"
+    hash_rule: subject_id
+    node_id: local
+    priority: 100
+    status: active

@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { Message } from '@arco-design/web-vue';
+import { isRetInfoSuccess } from '../ret-info';
 import type { ControlResponse } from './types';
 
 const controlClient = axios.create({
@@ -21,13 +22,13 @@ function readAccessToken(): string {
 
 function assertControlSuccess<T>(rsp: ControlResponse<T>): T {
   if (rsp.ret_info) {
-    const retCode = rsp.ret_info.code ?? 0;
-    if (retCode !== 0 && retCode !== '0' && retCode !== 'SUCCESS') {
+    const retCode = rsp.ret_info.code;
+    if (!isRetInfoSuccess(retCode)) {
       throw new Error(rsp.ret_info.msg || `control request failed: ${retCode}`);
     }
   }
-  const code = rsp.code ?? 0;
-  if (code !== 0 && code !== '0' && code !== 'SUCCESS') {
+  const code = rsp.code;
+  if (code !== undefined && code !== null && !isRetInfoSuccess(code)) {
     throw new Error(rsp.message || rsp.msg || `control request failed: ${code}`);
   }
   return (rsp.data ?? rsp) as T;

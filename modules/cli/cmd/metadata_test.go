@@ -3,6 +3,8 @@ package cmd
 import (
 	"path/filepath"
 	"testing"
+
+	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
 func TestLoadMetadataSeedUsesDomainRecords(t *testing.T) {
@@ -37,6 +39,7 @@ func TestBuildMetadataImportCallsOrdersDependencies(t *testing.T) {
 		Datasets:           []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "kline", DataKind: "time_series"}},
 		DatasetSubjects:    []seedDatasetSubject{{SpaceID: "crypto", DatasetID: "kline", SubjectID: "APT-USDT"}},
 		Fields:             []seedField{{SpaceID: "crypto", FieldID: "close", Name: "close", ValueType: "double"}},
+		Factors:            []seedFactor{{SpaceID: "crypto", FactorID: "ma20_close", Name: "ma20 close", Algorithm: "moving_average", ParamsJSON: `{"window":20,"input":"close"}`, ValueType: "double"}},
 		DatasetColumns:     []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "field", OriginID: "close", ValueType: "double"}},
 		PrimaryStoreNodes:  []seedPrimaryStoreNode{{NodeID: "local", Name: "local", Endpoint: "local"}},
 		Devices:            []seedDevice{{DeviceID: "pebble", NodeID: "local", Name: "pebble", Engine: "pebble", Endpoint: "./pebble"}},
@@ -60,6 +63,7 @@ func TestBuildMetadataImportCallsOrdersDependencies(t *testing.T) {
 		"CreateDataset",
 		"BindDatasetSubject",
 		"CreateField",
+		"CreateFactor",
 		"UpsertDatasetColumn",
 		"CreatePrimaryStoreNode",
 		"CreateDevice",
@@ -90,5 +94,11 @@ func TestMetadataImportCommandExposesServiceFlags(t *testing.T) {
 		if flag := importCmd.Flags().Lookup(name); flag == nil {
 			t.Fatalf("metadata import missing --%s", name)
 		}
+	}
+}
+
+func TestMetadataNotFoundCoversFactors(t *testing.T) {
+	if !metadataNotFound(&pb.RetInfo{Code: pb.ErrorCode_FACTOR_NOT_FOUND, Msg: "factor not found"}) {
+		t.Fatal("FACTOR_NOT_FOUND should be treated as a missing resource")
 	}
 }

@@ -1,0 +1,360 @@
+# MooX storage metadata seed sample.
+# This file is domain-oriented and should be imported through MetadataService,
+# not by writing metadata tables directly.
+
+spaces:
+  - space_id: crypto
+    name: Crypto Market Data
+    description: Binance/OKX style crypto market data workspace
+    owner: default
+    status: active
+
+data_sources:
+  - space_id: crypto
+    data_source_id: binance
+    name: Binance
+    kind: exchange
+    market: crypto
+    timezone: UTC
+    status: active
+
+subjects:
+  - space_id: crypto
+    subject_id: APT-USDT
+    subject_type: crypto_pair
+    name: APT-USDT
+    market: crypto
+    currency: USDT
+    timezone: UTC
+    status: active
+  - space_id: crypto
+    subject_id: AR-USDT
+    subject_type: crypto_pair
+    name: AR-USDT
+    market: crypto
+    currency: USDT
+    timezone: UTC
+    status: active
+
+subject_symbols:
+  - space_id: crypto
+    subject_id: APT-USDT
+    data_source_id: binance
+    external_symbol: APTUSDT
+    status: active
+  - space_id: crypto
+    subject_id: AR-USDT
+    data_source_id: binance
+    external_symbol: ARUSDT
+    status: active
+
+datasets:
+  - space_id: crypto
+    dataset_id: binance_spot_kline
+    data_source_id: binance
+    name: Binance Spot Kline
+    description: Binance spot OHLCV kline facts
+    data_kind: time_series
+    freqs: ["1m", "1h", "1d"]
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    data_source_id: binance
+    name: Binance Spot Symbols
+    description: Binance spot symbol profile facts
+    data_kind: record
+    freqs: []
+    status: active
+
+dataset_subjects:
+  - space_id: crypto
+    dataset_id: binance_spot_kline
+    subject_id: APT-USDT
+    subject_role: normal
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_kline
+    subject_id: AR-USDT
+    subject_role: normal
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    subject_id: APT-USDT
+    subject_role: normal
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    subject_id: AR-USDT
+    subject_role: normal
+    status: active
+
+fields:
+  - space_id: crypto
+    field_id: open
+    name: Open Price
+    value_type: double
+    unit: USDT
+    write_example: "7.1200"
+    status: active
+  - space_id: crypto
+    field_id: high
+    name: High Price
+    value_type: double
+    unit: USDT
+    write_example: "7.1800"
+    status: active
+  - space_id: crypto
+    field_id: low
+    name: Low Price
+    value_type: double
+    unit: USDT
+    write_example: "7.0900"
+    status: active
+  - space_id: crypto
+    field_id: close
+    name: Close Price
+    value_type: double
+    unit: USDT
+    write_example: "7.1500"
+    status: active
+  - space_id: crypto
+    field_id: volume
+    name: Base Asset Volume
+    value_type: double
+    unit: base_asset
+    write_example: "1250.5"
+    status: active
+  - space_id: crypto
+    field_id: quote_volume
+    name: Quote Asset Volume
+    value_type: double
+    unit: USDT
+    write_example: "8941.075"
+    status: active
+  - space_id: crypto
+    field_id: trade_num
+    name: Trade Count
+    value_type: int
+    write_example: "123"
+    status: active
+  - space_id: crypto
+    field_id: symbol
+    name: Exchange Symbol
+    value_type: string
+    write_example: APTUSDT
+    status: active
+  - space_id: crypto
+    field_id: status
+    name: Trading Status
+    value_type: string
+    write_example: TRADING
+    status: active
+  - space_id: crypto
+    field_id: note
+    name: Text Note
+    value_type: string
+    write_example: actively traded pair
+    status: active
+
+factors:
+  - space_id: crypto
+    factor_id: ma20_close
+    name: 20 Period Moving Average
+    description: 20-period moving average of close price for spot klines
+    algorithm: moving_average
+    params_json: '{"window":20,"input":"close"}'
+    value_type: double
+    status: active
+  - space_id: crypto
+    factor_id: volume_ratio_5
+    name: 5 Period Volume Ratio
+    description: Current volume divided by the 5-period average volume
+    algorithm: volume_ratio
+    params_json: '{"window":5,"input":"volume"}'
+    value_type: double
+    status: active
+
+dataset_columns:
+  - space_id: crypto
+    dataset_id: binance_spot_kline
+    column_name: open
+    origin_type: field
+    origin_id: open
+    value_type: double
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_kline
+    column_name: high
+    origin_type: field
+    origin_id: high
+    value_type: double
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_kline
+    column_name: low
+    origin_type: field
+    origin_id: low
+    value_type: double
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_kline
+    column_name: close
+    origin_type: field
+    origin_id: close
+    value_type: double
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_kline
+    column_name: volume
+    origin_type: field
+    origin_id: volume
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_kline
+    column_name: quote_volume
+    origin_type: field
+    origin_id: quote_volume
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_kline
+    column_name: trade_num
+    origin_type: field
+    origin_id: trade_num
+    value_type: int
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_kline
+    column_name: ma20_close
+    origin_type: factor
+    origin_id: ma20_close
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_kline
+    column_name: volume_ratio_5
+    origin_type: factor
+    origin_id: volume_ratio_5
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    column_name: symbol
+    origin_type: field
+    origin_id: symbol
+    value_type: string
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    column_name: status
+    origin_type: field
+    origin_id: status
+    value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    column_name: note
+    origin_type: field
+    origin_id: note
+    value_type: string
+    status: active
+
+views:
+  - space_id: crypto
+    view_id: spot_kline_close_view
+    name: Spot Kline Close View
+    description: Materialized close price view for spot klines
+    primary_dataset_id: binance_spot_kline
+    dataset_ids: ["binance_spot_kline"]
+    grain_keys: ["subject_id", "freq", "data_time"]
+    engine: duckdb
+    query_window: 30d
+    build_status: pending
+    status: active
+
+view_columns:
+  - space_id: crypto
+    view_id: spot_kline_close_view
+    column_name: close
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.close
+    value_type: double
+    sort_order: 1
+  - space_id: crypto
+    view_id: spot_kline_close_view
+    column_name: volume
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.volume
+    value_type: double
+    sort_order: 2
+  - space_id: crypto
+    view_id: spot_kline_close_view
+    column_name: ma20_close
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.ma20_close
+    value_type: double
+    sort_order: 3
+  - space_id: crypto
+    view_id: spot_kline_close_view
+    column_name: volume_ratio_5
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.volume_ratio_5
+    value_type: double
+    sort_order: 4
+
+primary_store_nodes:
+  - node_id: local
+    name: local-primary
+    endpoint: local
+    weight: 100
+    status: active
+
+devices:
+  - device_id: pebble-local
+    node_id: local
+    name: local-pebble-primary
+    engine: pebble
+    endpoint: ./var/storage/pebble
+    status: active
+  - device_id: duckdb-local
+    node_id: local
+    name: local-duckdb-view
+    engine: duckdb
+    endpoint: ./var/storage/duckdb/views.duckdb
+    status: active
+  - device_id: bleve-local
+    node_id: local
+    name: local-bleve-search
+    engine: bleve
+    endpoint: ./var/storage/bleve
+    status: active
+  - device_id: parquet-local
+    node_id: local
+    name: local-parquet-archive
+    engine: parquet_archive
+    endpoint: ./var/storage/archive
+    status: active
+
+primary_store_routes:
+  - space_id: crypto
+    route_id: route-binance-spot-kline
+    dataset_id: binance_spot_kline
+    subject_pattern: "*"
+    hash_rule: subject_id
+    node_id: local
+    priority: 100
+    status: active
+  - space_id: crypto
+    route_id: route-binance-spot-symbols
+    dataset_id: binance_spot_symbols
+    subject_pattern: "*"
+    hash_rule: subject_id
+    node_id: local
+    priority: 100
+    status: active

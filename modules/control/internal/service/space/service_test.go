@@ -61,6 +61,20 @@ func TestServiceCreatesListsAndUpdatesSpaces(t *testing.T) {
 	require.Equal(t, `{"tier":"prod"}`, spaces[0].Attributes)
 }
 
+func TestServiceCreateSpaceDuplicateReturnsFriendlyError(t *testing.T) {
+	manager := newTestManager(t)
+	service := NewService(manager)
+	ctx := context.Background()
+
+	_, err := service.CreateSpace(ctx, &Space{SpaceID: "cn-stock", Name: "A股交易空间"})
+	require.NoError(t, err)
+
+	_, err = service.CreateSpace(ctx, &Space{SpaceID: "cn-stock", Name: "重复空间"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "space_id already exists: cn-stock")
+	require.NotContains(t, err.Error(), "UNIQUE constraint")
+}
+
 func TestServiceListsSpaceMembers(t *testing.T) {
 	manager := newTestManager(t)
 	service := NewService(manager)

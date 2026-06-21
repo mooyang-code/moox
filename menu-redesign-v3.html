@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MooX 交互设计 v3 · 终稿确认</title>
+<style>
+  :root{--bg:#f5f6f8;--card:#fff;--border:#e5e6eb;--text:#1d2129;--t2:#4e5969;--t3:#86909c;--primary:#165dff;--pbg:#e8f3ff;--green:#00b42a;--orange:#ff7d00;--mono:"SF Mono",Menlo,Consolas,monospace}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:32px 24px 64px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:25px;margin:0 0 4px}
+  .sub{color:var(--t2);margin:0 0 22px;font-size:14px}
+  h2{font-size:19px;margin:34px 0 10px}
+  .lead{color:var(--t2);font-size:14px;margin:0 0 14px}
+  .row{display:grid;grid-template-columns:340px 1fr;gap:18px}
+  @media(max-width:900px){.row{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px 18px}
+  .tree{font-family:var(--mono);font-size:13.5px;line-height:2.05}
+  .tree .l1{font-weight:700;color:var(--primary)}
+  .tree .l2{font-weight:600}
+  .tree .hint{color:var(--t3);font-family:-apple-system,sans-serif;font-size:12px}
+  .tree .route{color:var(--t3);font-family:var(--mono);font-size:11px}
+  /* browse wireframe */
+  .wf{background:#fafbfc;border:1px solid var(--border);border-radius:10px;padding:16px}
+  .step{display:flex;gap:10px;align-items:flex-start;margin:0 0 12px}
+  .num{flex:0 0 24px;height:24px;border-radius:50%;background:var(--primary);color:#fff;font-size:13px;display:flex;align-items:center;justify-content:center;font-weight:600}
+  .step .body{flex:1}
+  .step .body .t{font-size:14px;font-weight:600}
+  .step .body .d{font-size:13px;color:var(--t2)}
+  .selbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+  .seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .seg span{padding:5px 12px;font-size:13px;background:#fff;color:var(--t2)}
+  .seg span.on{background:var(--primary);color:#fff}
+  .mockinput{border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;background:#fff;color:var(--t3);min-width:220px}
+  .auto{background:var(--pbg);border:1px dashed #bedaff;border-radius:8px;padding:8px 12px;margin:8px 0;font-size:13px;color:#1c3d8f}
+  .auto b{color:var(--primary)}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .chip{font-size:12px;border:1px solid var(--border);border-radius:6px;padding:4px 8px;background:#fff;color:var(--t2)}
+  .resgrid{margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .resgrid .hd{display:flex;background:#f2f3f5;font-size:12px;color:var(--t3)}
+  .resgrid .hd div{padding:6px 10px;flex:1;border-right:1px solid var(--border)}
+  .resgrid .rw{display:flex;font-size:12px}
+  .resgrid .rw div{padding:6px 10px;flex:1;border-right:1px solid var(--border);border-top:1px solid var(--border)}
+  /* top bar */
+  .topbar{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 16px;margin-top:12px}
+  .logo{font-weight:700;color:var(--primary)}
+  .spacer{flex:1}
+  .seldrop{position:relative;border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:13px}
+  .dropmenu{margin-top:8px;border:1px solid var(--border);border-radius:8px;background:#fff;width:260px;font-size:13px;overflow:hidden}
+  .dropmenu .it{padding:7px 12px;border-bottom:1px solid #f2f3f5}
+  .dropmenu .add{padding:8px 12px;color:var(--primary);font-weight:600;background:#f7faff}
+  .footnote{margin-top:32px;color:var(--t3);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>交互设计 v3 · 终稿确认</h1>
+  <p class="sub">结构 X（数据资产为父，3 组二级）+ "数据管理" + 查询视图独立。下面是最终菜单、数据浏览交互、顶部新建空间，请确认。</p>
+
+  <h2>① 最终菜单（数据资产）</h2>
+  <div class="card tree">
+    <div class="l1">数据资产 ▾</div> <span class="hint">点击落地到 数据概览</span><br>
+    ├─ <span class="l2">数据建模 ▸</span><br>
+    │&nbsp;&nbsp;&nbsp;├─ 数据来源 <span class="route">/data/sources</span><br>
+    │&nbsp;&nbsp;&nbsp;├─ 数据对象 <span class="route">/data/subjects</span><br>
+    │&nbsp;&nbsp;&nbsp;├─ 数据集 <span class="route">/data/datasets</span><br>
+    │&nbsp;&nbsp;&nbsp;├─ 字段 <span class="route">/data/fields</span><br>
+    │&nbsp;&nbsp;&nbsp;└─ 因子 <span class="route">/data/factors</span><br>
+    ├─ <span class="l2">查询视图</span> <span class="route">/data/views</span> <span class="hint">单页直达</span><br>
+    └─ <span class="l2">数据管理 ▸</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;├─ 数据概览 <span class="route">/data/overview</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;├─ 数据浏览 <span class="route">/data/browse（原 /data/list）</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;└─ 数据导入 <span class="route">/data/import（原 /data/sync）</span>
+  </div>
+
+  <h2>② 数据浏览 · 重构后交互</h2>
+  <p class="lead">核心：把"主存/视图、时序/记录"4 个底层选择，压成"选 1 个对象 + 1 个来源开关"，其余系统自动推断。</p>
+  <div class="card">
+    <div class="wf">
+      <div class="step">
+        <div class="num">1</div>
+        <div class="body">
+          <div class="t">选来源 + 选对象</div>
+          <div class="d">先一个开关决定查"原始主存"还是"加速视图"，再从下拉选具体对象（带名称搜索）。</div>
+          <div class="selbar">
+            <span class="seg"><span class="on">主存（数据集）</span><span>视图</span></span>
+            <span class="mockinput">选择数据集：A股日线 (cn_stock_daily) ▾</span>
+          </div>
+        </div>
+      </div>
+      <div class="auto">系统自动识别：该数据集 data_kind = <b>时序</b> → 调用 <b>ReadTimeSeriesRows</b>，并只显示时序相关筛选项。<br>（若选"视图"，按视图引擎自动用 QueryTimeSeriesRows / SearchRecordRows）</div>
+      <div class="step">
+        <div class="num">2</div>
+        <div class="body">
+          <div class="t">按类型显示筛选项（不暴露裸协议）</div>
+          <div class="d">时序：对象 + 周期 + 时间范围（日期选择器）+ 列；记录：record_id + 版本范围 + 列。排序用中文下拉。</div>
+          <div class="chips">
+            <span class="chip">对象 subject_id</span><span class="chip">周期 1m▾</span>
+            <span class="chip">开始🗓 结束🗓</span><span class="chip">列 close,volume</span><span class="chip">排序 降序▾</span>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">3</div>
+        <div class="body">
+          <div class="t">一键查询，结果表自适应列</div>
+          <div class="resgrid">
+            <div class="hd"><div>data_time</div><div>subject</div><div>close</div><div>volume</div></div>
+            <div class="rw"><div>2026-06-19</div><div>600000</div><div>12.34</div><div>1.2M</div></div>
+            <div class="rw"><div>2026-06-18</div><div>600000</div><div>12.10</div><div>0.9M</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>③ 顶部空间选择器 + 新建</h2>
+  <p class="lead">下拉底部内置"＋ 新建空间"，弹窗内填基本信息即可创建；齿轮仍进空间管理。</p>
+  <div class="card">
+    <div class="topbar">
+      <span class="logo">MooX</span><span class="spacer"></span>
+      <span class="seldrop">当前空间：A股交易空间 ▾</span><span class="seldrop">⚙</span>
+    </div>
+    <div class="dropmenu">
+      <div class="it">A股交易空间 ✓</div>
+      <div class="it">美股交易空间</div>
+      <div class="it">Crypto 交易空间</div>
+      <div class="add">＋ 新建空间…</div>
+    </div>
+  </div>
+
+  <p class="footnote">这是讨论终稿，仍未改代码。确认无误后我会写设计文档（docs/superpowers/specs/…）→ 实现计划 → 再编码。</p>
+</div>
+</body>
+</html>

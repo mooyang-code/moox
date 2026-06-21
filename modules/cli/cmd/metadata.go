@@ -78,6 +78,7 @@ type metadataSeed struct {
 	Datasets           []seedDataset           `yaml:"datasets"`
 	DatasetSubjects    []seedDatasetSubject    `yaml:"dataset_subjects"`
 	Fields             []seedField             `yaml:"fields"`
+	Factors            []seedFactor            `yaml:"factors"`
 	DatasetColumns     []seedDatasetColumn     `yaml:"dataset_columns"`
 	Views              []seedView              `yaml:"views"`
 	ViewColumns        []seedViewColumn        `yaml:"view_columns"`
@@ -170,6 +171,18 @@ type seedField struct {
 	ValidationRuleJSON string `yaml:"validation_rule_json"`
 	WriteExample       string `yaml:"write_example"`
 	seedCommon         `yaml:",inline"`
+}
+
+// seedFactor 描述 CLI 可导入的因子元数据。
+type seedFactor struct {
+	SpaceID     string `yaml:"space_id"`
+	FactorID    string `yaml:"factor_id"`
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	Algorithm   string `yaml:"algorithm"`
+	ParamsJSON  string `yaml:"params_json"`
+	ValueType   string `yaml:"value_type"`
+	seedCommon  `yaml:",inline"`
 }
 
 // seedDatasetColumn 描述 CLI 可导入的 Dataset 列元数据。
@@ -362,6 +375,23 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 			},
 		})
 	}
+	for _, item := range seed.Factors {
+		factor, err := item.toPB()
+		if err != nil {
+			return nil, err
+		}
+		calls = append(calls, metadataImportCall{
+			Resource: "factors",
+			Method:   "CreateFactor",
+			Request:  &pb.CreateFactorReq{Factor: factor},
+			Response: &pb.CreateFactorRsp{},
+			Exists: &metadataExistsProbe{
+				Method:   "GetFactor",
+				Request:  &pb.GetFactorReq{SpaceId: factor.GetSpaceId(), FactorId: factor.GetFactorId()},
+				Response: &pb.GetFactorRsp{},
+			},
+		})
+	}
 	for _, item := range seed.DatasetColumns {
 		column, err := item.toPB()
 		if err != nil {
@@ -512,6 +542,7 @@ func metadataNotFound(retInfo *pb.RetInfo) bool {
 		pb.ErrorCode_DATASET_NOT_FOUND,
 		pb.ErrorCode_SUBJECT_NOT_FOUND,
 		pb.ErrorCode_FIELD_NOT_FOUND,
+		pb.ErrorCode_FACTOR_NOT_FOUND,
 		pb.ErrorCode_VIEW_NOT_FOUND,
 		pb.ErrorCode_VIEW_COLUMN_NOT_FOUND,
 		pb.ErrorCode_ROUTE_NOT_FOUND:
@@ -564,6 +595,14 @@ func (s seedField) toPB() (*pb.Field, error) {
 		return nil, err
 	}
 	return &pb.Field{SpaceId: s.SpaceID, FieldId: s.FieldID, Name: s.Name, Description: s.Description, ValueType: valueType, Unit: s.Unit, ValidationRuleJson: s.ValidationRuleJSON, WriteExample: s.WriteExample, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+}
+
+func (s seedFactor) toPB() (*pb.Factor, error) {
+	valueType, err := parseFieldValueType(s.ValueType)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.Factor{SpaceId: s.SpaceID, FactorId: s.FactorID, Name: s.Name, Description: s.Description, Algorithm: s.Algorithm, ParamsJson: s.ParamsJSON, ValueType: valueType, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
 func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {

@@ -1861,7 +1861,7 @@ Run from storage module:
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage
-./bin/moox-storage -storage-conf=config/storage.yaml -trpc-conf=config/trpc_go.yaml
+MOOX_STORAGE_CONFIG=config/storage.yaml ./bin/moox-storage -conf=config/trpc_go.yaml
 ```
 
 Expected: HTTP ports `19101`, `19104`, and `19105` are listening.

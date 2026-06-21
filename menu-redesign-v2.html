@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MooX 菜单分组 v2</title>
+<style>
+  :root{--bg:#f5f6f8;--card:#fff;--border:#e5e6eb;--text:#1d2129;--t2:#4e5969;--t3:#86909c;--primary:#165dff;--pbg:#e8f3ff;--green:#00b42a;--orange:#ff7d00;--mono:"SF Mono",Menlo,Consolas,monospace}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:32px 24px 64px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:25px;margin:0 0 4px}
+  .sub{color:var(--t2);margin:0 0 22px;font-size:14px}
+  h2{font-size:19px;margin:34px 0 10px}
+  .lead{color:var(--t2);font-size:14px;margin:0 0 14px}
+  /* bucket mapping */
+  .buckets{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media(max-width:900px){.buckets{grid-template-columns:1fr}}
+  .bucket{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+  .bucket .bh{padding:14px 16px;border-bottom:1px solid var(--border)}
+  .bucket .bh .name{font-size:16px;font-weight:600}
+  .bucket .bh .role{font-size:12px;color:var(--t3);display:block;margin-top:2px}
+  .bucket ul{list-style:none;margin:0;padding:10px 16px 14px}
+  .bucket li{padding:7px 10px;margin:5px 0;background:#fafbfc;border:1px solid var(--border);border-radius:8px;font-size:13px;display:flex;justify-content:space-between;align-items:center}
+  .bucket li .src{font-size:11px;color:var(--t3);font-family:var(--mono)}
+  .b1 .bh{background:#eef2ff}.b2 .bh{background:#fff7ef}.b3 .bh{background:#e8fff0}
+  /* structure options */
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:6px}
+  @media(max-width:900px){.twocol{grid-template-columns:1fr}}
+  .opt{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px 18px}
+  .opt.rec{border-color:var(--primary);box-shadow:0 6px 20px rgba(22,93,255,.12)}
+  .opt .badge{display:inline-block;font-size:12px;padding:2px 8px;border-radius:6px;background:#f2f3f5;color:var(--t3);margin-bottom:8px}
+  .opt .badge.rec{background:var(--green);color:#fff}
+  .opt h3{margin:0 0 4px;font-size:16px}
+  .opt .d{font-size:13px;color:var(--t2);margin:0 0 12px;min-height:34px}
+  .tree{background:#fafbfc;border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-family:var(--mono);font-size:13px;line-height:1.95}
+  .tree .lvl1{font-weight:600}
+  .tree .hint{color:var(--t3);font-family:-apple-system,sans-serif;font-size:12px}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:5px;margin-left:6px}
+  .tag.lv{background:#fff1f0;color:#f53f3f}.tag.flat{background:#e8fff0;color:var(--green)}
+  .names{background:var(--pbg);border:1px solid #bedaff;border-radius:10px;padding:12px 16px;font-size:14px;color:#1c3d8f;margin-top:14px}
+  .footnote{margin-top:32px;color:var(--t3);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>菜单分组 v2 · 三桶归类</h1>
+  <p class="sub">去掉抽象的"建模元素"。把 9 个概念按一条主线归类：<b>定义结构 → 定义视图 → 使用数据</b>。字段/因子只是"数据建模"里的普通页面，不再单独显眼。</p>
+
+  <div class="buckets">
+    <div class="bucket b1">
+      <div class="bh"><span class="name">① 数据建模</span><span class="role">定义"有哪些数据"——结构与口径</span></div>
+      <ul>
+        <li>数据来源 <span class="src">DataSource</span></li>
+        <li>数据对象 <span class="src">Subject</span></li>
+        <li>数据集 <span class="src">Dataset</span></li>
+        <li>字段 <span class="src">Field</span></li>
+        <li>因子 <span class="src">Factor</span></li>
+      </ul>
+    </div>
+    <div class="bucket b2">
+      <div class="bh"><span class="name">② 查询视图</span><span class="role">定义"怎么查得快"——物化读模型</span></div>
+      <ul>
+        <li>视图管理 <span class="src">View + Column + 重建</span></li>
+      </ul>
+    </div>
+    <div class="bucket b3">
+      <div class="bh"><span class="name">③ 数据管理 <span style="font-size:11px;color:#86909c">(名字待定)</span></span><span class="role">实际"看 / 查 / 灌"数据</span></div>
+      <ul>
+        <li>数据概览 <span class="src">Overview</span></li>
+        <li>数据浏览 <span class="src">查询(自动判类型)</span></li>
+        <li>数据导入 <span class="src">Sync</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>结构选择：这 3 个分组放在哪一层？</h2>
+  <p class="lead">这是关键分歧点——决定菜单深度与顶栏宽度。</p>
+  <div class="twocol">
+    <div class="opt rec">
+      <span class="badge rec">推荐</span>
+      <h3>方案 Y · 提升为一级菜单（2 层）</h3>
+      <p class="d">把"数据资产"拆成 3 个顶级菜单，叶子页做二级。菜单只有 2 层，点一下就到页面，最浅。</p>
+      <div class="tree">
+        <div class="lvl1">数据建模 ▾</div>
+        ├─ 数据来源 / 数据对象 / 数据集<br>
+        └─ 字段 / 因子<br>
+        <div class="lvl1" style="margin-top:6px">查询视图</div> <span class="hint">单页直达</span><br>
+        <div class="lvl1" style="margin-top:6px">数据管理 ▾</div>
+        └─ 数据概览 / 数据浏览 / 数据导入
+      </div>
+      <p class="d" style="margin-top:10px">代价：顶栏一级项从 6 → 8 个。<span class="tag flat">最多 2 层</span></p>
+    </div>
+    <div class="opt">
+      <span class="badge">备选</span>
+      <h3>方案 X · 保留"数据资产"父级（3 层）</h3>
+      <p class="d">"数据资产"仍是唯一顶级，3 个分组做二级，叶子页做三级弹出。顶栏不变胖，但层级更深。</p>
+      <div class="tree">
+        <div class="lvl1">数据资产 ▾</div>
+        ├─ 数据建模 ▸ <span class="hint">来源/对象/数据集/字段/因子</span><br>
+        ├─ 查询视图<br>
+        └─ 数据管理 ▸ <span class="hint">概览/浏览/导入</span>
+      </div>
+      <p class="d" style="margin-top:10px">代价：横向菜单出现三级弹出，鼠标路径长。<span class="tag lv">最多 3 层</span></p>
+    </div>
+  </div>
+
+  <div class="names">
+    <b>第 ③ 桶命名候选：</b>　数据管理　|　数据使用　|　数据查询（"导入"并入此页）　|　数据运营
+    　——它含 概览 / 浏览 / 导入，"数据管理"略泛，"数据使用"更贴近用户视角。你定。
+  </div>
+
+  <p class="footnote">仍是讨论阶段，未改任何代码。请告诉我：① 选 Y 还是 X；② 第三桶叫什么；③ "查询视图"放一级/并入某桶 是否 OK。</p>
+</div>
+</body>
+</html>

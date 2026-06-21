@@ -119,7 +119,7 @@ import { rebuildRecordView, rebuildTimeSeriesView } from '@/api/storage/view';
 import type { Dataset, View } from '@/api/storage/types';
 import { useSpaceStore } from '@/store/modules/space';
 import ViewColumnPanel from './components/view-column-panel.vue';
-import { applyPageResult, defaultPagination, formatTime, isTimeSeriesDataKind, jsonText, splitList, statusColor, statusOptions } from '@/views/data/shared/metadata-utils';
+import { applyPageResult, defaultPagination, formatTime, jsonText, resolveViewRebuildKind, splitList, statusColor, statusOptions } from '@/views/data/shared/metadata-utils';
 
 defineOptions({ name: 'DataViews' });
 
@@ -257,8 +257,12 @@ async function submit() {
 
 async function rebuild(record: View) {
   const spaceId = spaceStore.requireSpaceId();
-  const primaryDataset = datasets.value.find((item) => item.dataset_id === record.primary_dataset_id);
-  if (isTimeSeriesDataKind(primaryDataset?.data_kind)) {
+  const rebuildKind = resolveViewRebuildKind(datasets.value, record.primary_dataset_id);
+  if (rebuildKind === 'missing') {
+    Message.warning(`主数据集 ${record.primary_dataset_id || ''} 未加载，无法判断视图类型`);
+    return;
+  }
+  if (rebuildKind === 'time_series') {
     await rebuildTimeSeriesView({ space_id: spaceId, view_id: record.view_id });
   } else {
     await rebuildRecordView({ space_id: spaceId, view_id: record.view_id });

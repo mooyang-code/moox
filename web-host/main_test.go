@@ -60,3 +60,21 @@ func TestGatewayRewriteRejectsInvalidPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestNewGatewayProxyPrebuildsReverseProxies(t *testing.T) {
+	proxy, err := newGatewayProxy(gatewayConfig{
+		ControlURL:  "http://127.0.0.1:20103",
+		MetadataURL: "http://127.0.0.1:19101",
+		AccessURL:   "http://127.0.0.1:19104",
+		ViewURL:     "http://127.0.0.1:19105",
+	})
+	if err != nil {
+		t.Fatalf("newGatewayProxy returned error: %v", err)
+	}
+
+	for _, base := range []string{"control", "metadata", "access", "view"} {
+		if proxy.proxies[base] == nil {
+			t.Fatalf("proxy for %s was not prebuilt", base)
+		}
+	}
+}
