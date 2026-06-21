@@ -95,12 +95,31 @@ export default defineConfig(({ mode }) => {
     server: {
       // host: "0.0.0.0",
       open: false,
-      // 为开发服务器配置自定义代理规则-用于开发时的代理
+      // 为开发服务器配置管理台 API 代理规则。
       proxy: {
-        "/gateway": {
-          target: "http://localhost:20103",
+        "/api/control": {
+          target: "http://127.0.0.1:20103",
           changeOrigin: true,
-          secure: false
+          secure: false,
+          rewrite: (proxyPath) => proxyPath.replace(/^\/api\/control\/([^/]+)\/([^/]+)$/, "/gateway/$1/$2")
+        },
+        "/api/storage/metadata": {
+          target: "http://127.0.0.1:19101",
+          changeOrigin: true,
+          secure: false,
+          rewrite: (proxyPath) => proxyPath.replace(/^\/api\/storage\/metadata\/(.+)$/, "/trpc.storage.metadata.MetadataService/$1")
+        },
+        "/api/storage/access": {
+          target: "http://127.0.0.1:19104",
+          changeOrigin: true,
+          secure: false,
+          rewrite: (proxyPath) => proxyPath.replace(/^\/api\/storage\/access\/(.+)$/, "/trpc.storage.access.AccessService/$1")
+        },
+        "/api/storage/view": {
+          target: "http://127.0.0.1:19105",
+          changeOrigin: true,
+          secure: false,
+          rewrite: (proxyPath) => proxyPath.replace(/^\/api\/storage\/view\/(.+)$/, "/trpc.storage.view.ViewService/$1")
         },
         "/trpc.moox.server": {
           target: "http://localhost:20102", 
