@@ -2,7 +2,7 @@
   <div class="sync-page">
     <div class="page-head">
       <div>
-        <h2>数据同步</h2>
+        <h2>数据导入</h2>
         <span>当前空间：{{ spaceStore.selectedSpace?.name || '未选择' }}</span>
       </div>
       <a-button :disabled="!selectedSpaceId" @click="loadDatasets">
@@ -135,7 +135,7 @@ import type { ColumnValue, Dataset, DatasetColumn, FieldValueType, RecordRow, Ti
 import { useSpaceStore } from '@/store/modules/space';
 import { isTimeSeriesDataKind } from '@/views/data/shared/metadata-utils';
 
-defineOptions({ name: 'DataSync' });
+defineOptions({ name: 'DataImport' });
 
 type CsvRow = Record<string, string>;
 
