@@ -91,16 +91,16 @@ export const staticRoutes = [
         meta: { title: "data-overview" }
       },
       {
-        path: "/data/list",
-        name: "data-list",
-        component: () => import("@/views/data/list/index.vue"),
-        meta: { title: "data-list" }
+        path: "/data/browse",
+        name: "data-browse",
+        component: () => import("@/views/data/browse/index.vue"),
+        meta: { title: "data-browse" }
       },
       {
-        path: "/data/sync",
-        name: "data-sync",
-        component: () => import("@/views/data/sync/index.vue"),
-        meta: { title: "data-sync" }
+        path: "/data/import",
+        name: "data-import",
+        component: () => import("@/views/data/import/index.vue"),
+        meta: { title: "data-import" }
       },
       {
         path: "/collector/functions",
