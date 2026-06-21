@@ -105,7 +105,7 @@
         :pagination="false"
       >
         <template #columns>
-          <a-table-column title="数据来源ID" data-index="data_source_id" />
+          <a-table-column title="数据源ID" data-index="data_source_id" />
           <a-table-column title="外部符号" data-index="external_symbol" />
           <a-table-column title="状态" :width="90">
             <template #cell="{ record }">
@@ -123,7 +123,7 @@
 
     <a-modal v-model:visible="symbolVisible" width="560px" title="外部符号" @ok="submitSymbol">
       <a-form :model="symbolForm" auto-label-width>
-        <a-form-item field="data_source_id" label="数据来源ID" required>
+        <a-form-item field="data_source_id" label="数据源ID" required>
           <a-input v-model="symbolForm.data_source_id" :disabled="symbolEditing" placeholder="例如 binance" />
         </a-form-item>
         <a-form-item field="external_symbol" label="外部符号" required>
@@ -289,7 +289,7 @@ async function submitSymbol() {
   const spaceId = spaceStore.requireSpaceId();
   const subjectId = activeSubject.value?.subject_id;
   if (!subjectId || !symbolForm.data_source_id || !symbolForm.external_symbol) {
-    Message.warning('请补全数据来源ID和外部符号');
+    Message.warning('请补全数据源ID和外部符号');
     return;
   }
   await upsertSubjectSymbol({ ...symbolForm, space_id: spaceId, subject_id: subjectId });

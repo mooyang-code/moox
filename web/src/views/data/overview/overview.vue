@@ -62,7 +62,7 @@ const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const loading = ref(false);
 const stats = reactive<StatItem[]>([
-  { key: 'sources', label: '数据来源', path: '/data/sources', value: 0, hasMore: false },
+  { key: 'sources', label: '数据源', path: '/data/sources', value: 0, hasMore: false },
   { key: 'subjects', label: '数据对象', path: '/data/subjects', value: 0, hasMore: false },
   { key: 'datasets', label: '数据集', path: '/data/datasets', value: 0, hasMore: false },
   { key: 'fields', label: '字段', path: '/data/fields', value: 0, hasMore: false },

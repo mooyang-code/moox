@@ -31,7 +31,7 @@
       <template #columns>
         <a-table-column title="数据集ID" data-index="dataset_id" :width="180" />
         <a-table-column title="名称" data-index="name" :width="180" />
-        <a-table-column title="数据来源" data-index="data_source_id" :width="150" />
+        <a-table-column title="数据源" data-index="data_source_id" :width="150" />
         <a-table-column title="数据形态" :width="130">
           <template #cell="{ record }">{{ optionLabel(dataKindOptions, record.data_kind) }}</template>
         </a-table-column>
@@ -62,7 +62,7 @@
         <a-form-item field="dataset_id" label="数据集ID" required>
           <a-input v-model="form.dataset_id" :disabled="editing" placeholder="例如 kline" />
         </a-form-item>
-        <a-form-item field="data_source_id" label="数据来源ID" required>
+        <a-form-item field="data_source_id" label="数据源ID" required>
           <a-select v-model="form.data_source_id" allow-search allow-create placeholder="选择或输入来源ID">
             <a-option v-for="item in dataSources" :key="item.data_source_id" :value="item.data_source_id">
               {{ item.name }} ({{ item.data_source_id }})
@@ -227,7 +227,7 @@ function openManage(record: Dataset) {
 async function submit() {
   const spaceId = spaceStore.requireSpaceId();
   if (!form.dataset_id || !form.data_source_id || !form.name || !form.data_kind) {
-    Message.warning('请补全数据集ID、数据来源、名称和数据形态');
+    Message.warning('请补全数据集ID、数据源、名称和数据形态');
     return;
   }
   const payload: Dataset = {

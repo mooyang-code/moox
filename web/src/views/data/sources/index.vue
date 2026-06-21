@@ -1,7 +1,7 @@
 <template>
   <div class="metadata-page">
     <div class="page-head">
-      <h2>数据来源</h2>
+      <h2>数据源</h2>
       <a-space>
         <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
           <template #icon><icon-plus /></template>
@@ -109,7 +109,7 @@ const form = reactive<DataSource>({
   status: 'active',
 });
 
-const modalTitle = computed(() => (editing.value ? '编辑数据来源' : '新增数据来源'));
+const modalTitle = computed(() => (editing.value ? '编辑数据源' : '新增数据源'));
 
 async function load() {
   if (!selectedSpaceId.value) {
@@ -166,7 +166,7 @@ async function submit() {
   const payload = { ...form, space_id: spaceId, config_json: jsonText(form.config_json) };
   if (editing.value) await updateDataSource(payload);
   else await createDataSource(payload);
-  Message.success('数据来源已保存');
+  Message.success('数据源已保存');
   visible.value = false;
   await load();
 }

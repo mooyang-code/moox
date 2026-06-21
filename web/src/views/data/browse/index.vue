@@ -10,7 +10,7 @@
     <template v-else>
       <section class="picker">
         <a-form layout="inline">
-          <a-form-item label="数据来源">
+          <a-form-item label="来源类型">
             <a-radio-group v-model="source" type="button" @change="onSourceChange">
               <a-radio value="dataset">数据集</a-radio>
               <a-radio value="view">视图</a-radio>
