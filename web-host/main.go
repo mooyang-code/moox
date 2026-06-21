@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -16,14 +17,123 @@ import (
 	"github.com/rakyll/statik/fs"
 )
 
-// gzipResponseWriter 实现gzip压缩的ResponseWriter
-type gzipResponseWriter struct {
-	io.Writer
-	http.ResponseWriter
+type gatewayConfig struct {
+	ListenAddr  string
+	ControlURL  string
+	MetadataURL string
+	AccessURL   string
+	ViewURL     string
 }
 
-func (w gzipResponseWriter) Write(b []byte) (int, error) {
-	return w.Writer.Write(b)
+type gatewayTarget struct {
+	Base    string
+	Service string
+	Path    string
+	Method  string
+}
+
+type gatewayProxy struct {
+	baseURLs map[string]*url.URL
+}
+
+func loadGatewayConfig() gatewayConfig {
+	return gatewayConfig{
+		ListenAddr:  envOr("MOOX_WEB_HOST_ADDR", ":19527"),
+		ControlURL:  strings.TrimRight(envOr("MOOX_CONTROL_GATEWAY_URL", "http://127.0.0.1:20103"), "/"),
+		MetadataURL: strings.TrimRight(envOr("MOOX_STORAGE_METADATA_URL", "http://127.0.0.1:19101"), "/"),
+		AccessURL:   strings.TrimRight(envOr("MOOX_STORAGE_ACCESS_URL", "http://127.0.0.1:19104"), "/"),
+		ViewURL:     strings.TrimRight(envOr("MOOX_STORAGE_VIEW_URL", "http://127.0.0.1:19105"), "/"),
+	}
+}
+
+func envOr(key string, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func resolveControlGatewayTarget(path string) (gatewayTarget, bool) {
+	const prefix = "/api/control/"
+	if !strings.HasPrefix(path, prefix) {
+		return gatewayTarget{}, false
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return gatewayTarget{}, false
+	}
+	return gatewayTarget{
+		Base:    "control",
+		Service: parts[0],
+		Path:    "/gateway/" + parts[0] + "/" + parts[1],
+		Method:  parts[1],
+	}, true
+}
+
+func resolveStorageGatewayTarget(path string) (gatewayTarget, bool) {
+	const prefix = "/api/storage/"
+	if !strings.HasPrefix(path, prefix) {
+		return gatewayTarget{}, false
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 || parts[1] == "" {
+		return gatewayTarget{}, false
+	}
+	switch parts[0] {
+	case "metadata":
+		return gatewayTarget{Base: "metadata", Path: "/trpc.storage.metadata.MetadataService/" + parts[1], Method: parts[1]}, true
+	case "access":
+		return gatewayTarget{Base: "access", Path: "/trpc.storage.access.AccessService/" + parts[1], Method: parts[1]}, true
+	case "view":
+		return gatewayTarget{Base: "view", Path: "/trpc.storage.view.ViewService/" + parts[1], Method: parts[1]}, true
+	default:
+		return gatewayTarget{}, false
+	}
+}
+
+func newGatewayProxy(cfg gatewayConfig) (*gatewayProxy, error) {
+	baseURLs := map[string]string{
+		"control":  cfg.ControlURL,
+		"metadata": cfg.MetadataURL,
+		"access":   cfg.AccessURL,
+		"view":     cfg.ViewURL,
+	}
+	parsed := make(map[string]*url.URL, len(baseURLs))
+	for name, raw := range baseURLs {
+		baseURL, err := url.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s url %q: %w", name, raw, err)
+		}
+		parsed[name] = baseURL
+	}
+	return &gatewayProxy{baseURLs: parsed}, nil
+}
+
+func (p *gatewayProxy) ServeHTTP(w http.ResponseWriter, r *http.Request, target gatewayTarget) {
+	baseURL, ok := p.baseURLs[target.Base]
+	if !ok {
+		http.Error(w, "unknown gateway base: "+target.Base, http.StatusBadGateway)
+		return
+	}
+
+	proxyReq := r.Clone(r.Context())
+	proxyReq.URL = cloneURL(r.URL)
+	proxyReq.URL.Path = target.Path
+	proxyReq.URL.RawPath = ""
+	proxyReq.RequestURI = ""
+
+	proxy := httputil.NewSingleHostReverseProxy(baseURL)
+	proxy.ServeHTTP(w, proxyReq)
+}
+
+func cloneURL(source *url.URL) *url.URL {
+	if source == nil {
+		return &url.URL{}
+	}
+	copied := *source
+	return &copied
 }
 
 // 优化的静态文件处理器，支持缓存和gzip压缩
@@ -71,7 +181,6 @@ func optimizedStaticHandler(statikFS http.FileSystem, w http.ResponseWriter, r *
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 
 	// 生成ETag
 	etag := generateETag(stat.Name(), stat.ModTime(), stat.Size())
@@ -129,7 +238,7 @@ func generateETag(name string, modTime time.Time, size int64) string {
 // 设置缓存头
 func setCacheHeaders(w http.ResponseWriter, path, etag string) {
 	w.Header().Set("ETag", etag)
-	
+
 	// 根据文件类型设置不同的缓存策略
 	if isStaticAsset(path) {
 		// 静态资源（JS、CSS、图片等）缓存1年
@@ -149,14 +258,14 @@ func checkClientCache(r *http.Request, etag string, modTime time.Time) bool {
 	if inm := r.Header.Get("If-None-Match"); inm != "" {
 		return inm == etag
 	}
-	
+
 	// 检查If-Modified-Since
 	if ims := r.Header.Get("If-Modified-Since"); ims != "" {
 		if t, err := time.Parse(http.TimeFormat, ims); err == nil {
 			return modTime.Before(t.Add(1 * time.Second))
 		}
 	}
-	
+
 	return false
 }
 
@@ -192,23 +301,23 @@ func shouldCompress(r *http.Request, path string) bool {
 // 设置正确的Content-Type
 func setContentType(w http.ResponseWriter, path string) {
 	contentTypes := map[string]string{
-		".html": "text/html; charset=utf-8",
-		".css":  "text/css; charset=utf-8",
-		".js":   "application/javascript; charset=utf-8",
-		".mjs":  "application/javascript; charset=utf-8",
-		".json": "application/json; charset=utf-8",
-		".png":  "image/png",
-		".jpg":  "image/jpeg",
-		".jpeg": "image/jpeg",
-		".gif":  "image/gif",
-		".svg":  "image/svg+xml",
-		".ico":  "image/x-icon",
-		".woff": "font/woff",
+		".html":  "text/html; charset=utf-8",
+		".css":   "text/css; charset=utf-8",
+		".js":    "application/javascript; charset=utf-8",
+		".mjs":   "application/javascript; charset=utf-8",
+		".json":  "application/json; charset=utf-8",
+		".png":   "image/png",
+		".jpg":   "image/jpeg",
+		".jpeg":  "image/jpeg",
+		".gif":   "image/gif",
+		".svg":   "image/svg+xml",
+		".ico":   "image/x-icon",
+		".woff":  "font/woff",
 		".woff2": "font/woff2",
-		".ttf":  "font/ttf",
-		".eot":  "application/vnd.ms-fontobject",
-		".xml":  "application/xml; charset=utf-8",
-		".txt":  "text/plain; charset=utf-8",
+		".ttf":   "font/ttf",
+		".eot":   "application/vnd.ms-fontobject",
+		".xml":   "application/xml; charset=utf-8",
+		".txt":   "text/plain; charset=utf-8",
 	}
 
 	// 根据文件扩展名设置Content-Type
@@ -230,21 +339,23 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// 配置后端服务地址
-	backendURL, err := url.Parse("http://localhost:20103")
+	cfg := loadGatewayConfig()
+	proxy, err := newGatewayProxy(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// 创建反向代理
-	proxy := httputil.NewSingleHostReverseProxy(backendURL)
-
 	// 设置路由
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// 如果是 /gateway 开头的请求，转发到后端
-		if strings.HasPrefix(r.URL.Path, "/gateway") {
-			log.Printf("转发请求到后端: %s", r.URL.Path)
-			proxy.ServeHTTP(w, r)
+		if target, ok := resolveControlGatewayTarget(r.URL.Path); ok {
+			log.Printf("转发 Control 请求: %s -> %s", r.URL.Path, target.Path)
+			proxy.ServeHTTP(w, r, target)
+			return
+		}
+
+		if target, ok := resolveStorageGatewayTarget(r.URL.Path); ok {
+			log.Printf("转发 Storage 请求: %s -> %s", r.URL.Path, target.Path)
+			proxy.ServeHTTP(w, r, target)
 			return
 		}
 
@@ -253,8 +364,11 @@ func main() {
 	})
 
 	// 启动服务器
-	log.Println("服务器启动在 http://localhost:19527")
+	log.Printf("服务器启动在 http://localhost%s", cfg.ListenAddr)
 	log.Println("静态文件服务: /")
-	log.Println("API代理转发: /gateway/* -> http://localhost:20103/gateway/*")
-	log.Fatal(http.ListenAndServe(":19527", nil))
+	log.Printf("Control API代理: /api/control/{service}/{method} -> %s/gateway/{service}/{method}", cfg.ControlURL)
+	log.Printf("Storage Metadata代理: /api/storage/metadata/{method} -> %s/trpc.storage.metadata.MetadataService/{method}", cfg.MetadataURL)
+	log.Printf("Storage Access代理: /api/storage/access/{method} -> %s/trpc.storage.access.AccessService/{method}", cfg.AccessURL)
+	log.Printf("Storage View代理: /api/storage/view/{method} -> %s/trpc.storage.view.ViewService/{method}", cfg.ViewURL)
+	log.Fatal(http.ListenAndServe(cfg.ListenAddr, nil))
 }
