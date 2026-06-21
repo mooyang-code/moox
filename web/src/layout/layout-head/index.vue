@@ -46,7 +46,10 @@
               {{ space.name || space.space_id }}
             </a-option>
           </a-select>
-          <a-button class="space-setting-button" type="text" size="small" @click="goSpaceSettings">
+          <a-button class="space-setting-button" type="text" size="small" title="新建空间" @click="openCreate">
+            <template #icon><icon-plus /></template>
+          </a-button>
+          <a-button class="space-setting-button" type="text" size="small" title="空间管理" @click="goSpaceSettings">
             <template #icon><icon-settings /></template>
           </a-button>
         </div>
@@ -55,6 +58,35 @@
       </a-layout-header>
       <Main />
       <Footer v-if="isFooter" />
+
+      <a-modal
+        v-model:visible="createVisible"
+        title="新建空间"
+        :ok-loading="creating"
+        @ok="submitCreate"
+        @cancel="resetCreate"
+      >
+        <a-form :model="createForm" layout="vertical">
+          <a-form-item label="空间 ID" required>
+            <a-input v-model="createForm.space_id" placeholder="如 hk_stock" />
+          </a-form-item>
+          <a-form-item label="名称" required>
+            <a-input v-model="createForm.name" placeholder="空间名称" />
+          </a-form-item>
+          <a-form-item label="描述">
+            <a-input v-model="createForm.description" />
+          </a-form-item>
+          <a-form-item label="负责人">
+            <a-input v-model="createForm.owner" />
+          </a-form-item>
+          <a-form-item label="市场">
+            <a-input v-model="createForm.market" placeholder="如 HK / US / CN" />
+          </a-form-item>
+          <a-form-item label="时区">
+            <a-input v-model="createForm.timezone" placeholder="如 Asia/Shanghai" />
+          </a-form-item>
+        </a-form>
+      </a-modal>
     </div>
   </div>
 </template>
@@ -72,6 +104,7 @@ import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { useRoutingMethod } from "@/hooks/useRoutingMethod";
 import { useThemeConfig } from "@/store/modules/theme-config";
 import { useSpaceStore } from "@/store/modules/space";
+import { createSpace } from "@/api/control/spaces";
 import { useMenuMethod } from "@/hooks/useMenuMethod";
 import { useDevicesSize } from "@/hooks/useDevicesSize";
 import { Message } from "@arco-design/web-vue";
@@ -110,6 +143,51 @@ const onSpaceChange = (value: string | number | boolean | Record<string, unknown
 
 const goSpaceSettings = () => {
   router.push("/settings/spaces");
+};
+
+const createVisible = ref(false);
+const creating = ref(false);
+const createForm = reactive({
+  space_id: "",
+  name: "",
+  description: "",
+  owner: "",
+  market: "",
+  timezone: ""
+});
+
+const resetCreate = () => {
+  createForm.space_id = "";
+  createForm.name = "";
+  createForm.description = "";
+  createForm.owner = "";
+  createForm.market = "";
+  createForm.timezone = "";
+};
+
+const openCreate = () => {
+  resetCreate();
+  createVisible.value = true;
+};
+
+const submitCreate = async () => {
+  if (!createForm.space_id.trim() || !createForm.name.trim()) {
+    Message.warning("请填写空间 ID 和名称");
+    return;
+  }
+  creating.value = true;
+  try {
+    await createSpace({ ...createForm, status: "active" });
+    await spaceStore.loadSpaces();
+    spaceStore.setSelectedSpace(createForm.space_id.trim());
+    Message.success("空间创建成功");
+    createVisible.value = false;
+    resetCreate();
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "创建空间失败");
+  } finally {
+    creating.value = false;
+  }
 };
 
 /**
