@@ -1,4 +1,4 @@
-.PHONY: build test test-changed check-boundaries release deploy acceptance package-skill clean proto
+.PHONY: build test test-changed check-boundaries release deploy deploy-test acceptance package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -16,7 +16,10 @@ release:
 	./scripts/release.sh
 
 deploy:
-	./scripts/deploy.sh
+	./scripts/deploy-moox.sh $(ARGS)
+
+deploy-test:
+	./scripts/deploy-moox-test.sh
 
 acceptance:
 	./scripts/acceptance.sh
