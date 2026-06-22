@@ -445,5 +445,5 @@ func pageRows(rows []*pb.TimeSeriesRow, page *pb.Page) ([]*pb.TimeSeriesRow, *pb
 	if end > len(rows) {
 		end = len(rows)
 	}
-	return rows[start:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint64(len(rows)), HasMore: end < len(rows)}
+	return rows[start:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint32(len(rows)), HasMore: end < len(rows)}
 }

@@ -311,7 +311,7 @@ func pageTimeSeriesRows(rows []*pb.TimeSeriesRow, page *pb.Page) ([]*pb.TimeSeri
 	return rows[start:end], &pb.PageResult{
 		Page:    pageNo,
 		Size:    size,
-		Total:   uint64(len(rows)),
+		Total:   uint32(len(rows)),
 		HasMore: end < len(rows),
 	}
 }
@@ -338,7 +338,7 @@ func pageRecordRows(rows []*pb.RecordRow, page *pb.Page) ([]*pb.RecordRow, *pb.P
 	return rows[start:end], &pb.PageResult{
 		Page:    pageNo,
 		Size:    size,
-		Total:   uint64(len(rows)),
+		Total:   uint32(len(rows)),
 		HasMore: end < len(rows),
 	}
 }

@@ -94,5 +94,5 @@ func (f fakeValidatorMetadata) GetDataset(ctx context.Context, spaceID string, d
 }
 
 func (f fakeValidatorMetadata) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	return f.columns, &pb.PageResult{Total: uint64(len(f.columns))}, nil
+	return f.columns, &pb.PageResult{Total: uint32(len(f.columns))}, nil
 }

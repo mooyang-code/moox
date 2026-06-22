@@ -17,7 +17,7 @@ export interface PageReq {
 export interface PageResult {
   page: number;
   size: number;
-  total: number | string;
+  total: number;
   has_more?: boolean;
 }
 

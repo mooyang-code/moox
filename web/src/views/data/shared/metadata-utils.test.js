@@ -10,7 +10,15 @@ const { outputText } = ts.transpileModule(source, {
   },
 });
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`;
-const { resolveViewRebuildKind } = await import(moduleUrl);
+const {
+  applyPageResult,
+  dataKindOptions,
+  datasetColumnOriginOptions,
+  fieldValueTypeOptions,
+  optionLabel,
+  resolveViewRebuildKind,
+  viewColumnOriginOptions,
+} = await import(moduleUrl);
 
 const datasets = [
   { dataset_id: 'kline', data_kind: 'DATA_KIND_TIME_SERIES' },
@@ -26,5 +34,18 @@ assert.equal(resolveViewRebuildKind([], 'kline'), 'missing');
 assert.equal(resolveViewRebuildKind(datasets, 'kline'), 'time_series'); // 时序数据集 → 时序读取
 assert.equal(resolveViewRebuildKind(datasets, 'company_profile'), 'record'); // 记录数据集 → 记录读取
 assert.equal(resolveViewRebuildKind(datasets, ''), 'missing'); // 未选对象
+
+const pagination = { total: 0 };
+applyPageResult(pagination, { total: 10 });
+assert.equal(pagination.total, 10);
+assert.throws(
+  () => applyPageResult(pagination, { total: '10' }),
+  /page_result\.total must be a number/,
+);
+
+assert.equal(optionLabel(datasetColumnOriginOptions, 1), '字段');
+assert.equal(optionLabel(fieldValueTypeOptions, 3), '浮点数');
+assert.equal(optionLabel(viewColumnOriginOptions, 1), '数据集列');
+assert.equal(optionLabel(dataKindOptions, 2), '时序数据');
 
 console.log('metadata utils tests passed');

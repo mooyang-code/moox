@@ -49,7 +49,7 @@ export interface Page {
 export interface PageResult {
   page: number;
   size: number;
-  total: string | number;
+  total: number;
   has_more: boolean;
   next_cursor: string;
 }

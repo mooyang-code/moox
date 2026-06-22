@@ -27,7 +27,7 @@ func TestViewStoreCreatesInsertsAndQueriesRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, gotColumns, 1)
 	require.Len(t, rows, 1)
-	require.Equal(t, uint64(1), page.GetTotal())
+	require.Equal(t, uint32(1), page.GetTotal())
 	require.Equal(t, "APT-USDT", rows[0].GetKey().GetSubjectId())
 }
 
@@ -44,7 +44,7 @@ func TestViewStoreAppliesClosedTimeRangeWithTimeZones(t *testing.T) {
 		TimeRange: &pb.TimeRange{StartTime: "2026-06-14T15:59:59Z", EndTime: "2026-06-14T16:00:00Z"},
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), page.GetTotal())
+	require.Equal(t, uint32(1), page.GetTotal())
 	require.Len(t, rows, 1)
 }
 
@@ -72,7 +72,7 @@ func TestViewStoreFiltersByCompleteTimeSeriesKey(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), page.GetTotal())
+	require.Equal(t, uint32(1), page.GetTotal())
 	require.Len(t, rows, 1)
 	require.InDelta(t, 8.1, rows[0].GetColumns()[0].GetValue().GetDoubleValue(), 1e-9)
 }
@@ -101,7 +101,7 @@ func TestViewStoreAppliesProjectionFiltersAndSorts(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, gotColumns, 1)
-	require.Equal(t, uint64(2), page.GetTotal())
+	require.Equal(t, uint32(2), page.GetTotal())
 	require.Len(t, rows, 2)
 	require.Equal(t, "APT-USDT", rows[0].GetKey().GetSubjectId())
 	require.Equal(t, "OP-USDT", rows[1].GetKey().GetSubjectId())

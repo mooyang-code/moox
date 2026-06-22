@@ -531,39 +531,6 @@ view_columns:
     value_type: double
     sort_order: 3
 
-primary_store_nodes:
-  - node_id: local
-    name: local-primary
-    endpoint: local
-    weight: 100
-    status: active
-
-devices:
-  - device_id: pebble-local
-    node_id: local
-    name: local-pebble-primary
-    engine: pebble
-    endpoint: ./var/storage/pebble
-    status: active
-  - device_id: duckdb-local
-    node_id: local
-    name: local-duckdb-view
-    engine: duckdb
-    endpoint: ./var/storage/duckdb/views.duckdb
-    status: active
-  - device_id: bleve-local
-    node_id: local
-    name: local-bleve-search
-    engine: bleve
-    endpoint: ./var/storage/bleve
-    status: active
-  - device_id: parquet-local
-    node_id: local
-    name: local-parquet-archive
-    engine: parquet_archive
-    endpoint: ./var/storage/archive
-    status: active
-
 primary_store_routes:
   - space_id: cn_stock
     route_id: route-eastmoney-daily-kline

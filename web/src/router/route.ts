@@ -91,6 +91,11 @@ export const staticRoutes = [
         meta: { title: "data-overview" }
       },
       {
+        path: "/data/list",
+        redirect: "/data/browse",
+        meta: { title: "data-browse", hide: true }
+      },
+      {
         path: "/data/browse",
         name: "data-browse",
         component: () => import("@/views/data/browse/index.vue"),

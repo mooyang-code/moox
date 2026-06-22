@@ -98,7 +98,7 @@ const modules = import.meta.glob("@/views/**/*.vue");
 export const moduleMatch = (item: any) => {
   // 匹配每个views文件夹下的文件路径
   for (const key in modules) {
-    const dir = key.split("views/")[1].replace(".vue", "");
+    const dir = normalizeViewModulePath(key);
     // 若匹配上，则替换真实模块
     if (item.component === dir) {
       // 按需引入modules
@@ -107,3 +107,15 @@ export const moduleMatch = (item: any) => {
     }
   }
 };
+
+function normalizeViewModulePath(key: string) {
+  const normalized = key.replace(/\.vue$/, "");
+  const prefixes = ["@/views/", "/src/views/"];
+  const matchedPrefix = prefixes.find((prefix) => normalized.startsWith(prefix));
+  if (matchedPrefix) return normalized.slice(matchedPrefix.length);
+
+  const marker = "/views/";
+  const markerIndex = normalized.indexOf(marker);
+  if (markerIndex >= 0) return normalized.slice(markerIndex + marker.length);
+  return normalized;
+}

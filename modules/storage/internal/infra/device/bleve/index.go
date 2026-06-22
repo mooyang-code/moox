@@ -247,5 +247,5 @@ func pageRows(rows []*pb.RecordRow, page *pb.Page) ([]*pb.RecordRow, *pb.PageRes
 	if end > len(rows) {
 		end = len(rows)
 	}
-	return rows[start:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint64(len(rows)), HasMore: end < len(rows)}, nil
+	return rows[start:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint32(len(rows)), HasMore: end < len(rows)}, nil
 }

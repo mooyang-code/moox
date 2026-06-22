@@ -27,7 +27,7 @@ func TestStoreWritesAndReadsTimeSeriesRange(t *testing.T) {
 	}, pb.SortOrder_SORT_ORDER_ASC, []string{"close"}, nil)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
-	require.Equal(t, uint64(2), page.GetTotal())
+	require.Equal(t, uint32(2), page.GetTotal())
 	require.Equal(t, "close", got[0].GetColumns()[0].GetColumnName())
 }
 
@@ -132,7 +132,7 @@ func TestStoreScansDatasetPrefixByDataKind(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, normalizeTime(t, "2026-06-15T00:01:00Z"), rows[0].GetKey().GetVersion())
-	require.Equal(t, uint64(1), page.GetTotal())
+	require.Equal(t, uint32(1), page.GetTotal())
 	require.Equal(t, "close", rows[0].GetColumns()[0].GetColumnName())
 
 	records, _, err := store.ScanRows(ctx, &pb.PrimaryStoreTarget{SpaceId: "crypto", DatasetId: "kline"}, pb.DataKind_DATA_KIND_RECORD, nil, pb.SortOrder_SORT_ORDER_ASC, nil, nil)

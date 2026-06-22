@@ -147,6 +147,9 @@ func (s *Service) nextRecordVersion() time.Time {
 }
 
 func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error) {
+	if isRecordDatasetScan(req) {
+		return s.scanRecordDataset(ctx, req)
+	}
 	var out []*pb.RecordRow
 	for _, key := range req.GetKeys() {
 		if err := validateRecordKeyTemplate(key); err != nil {
@@ -192,6 +195,39 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 		reverseRecordRows(out)
 	}
 	out, pageResult := pageRecordRows(out, req.GetPage())
+	return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
+}
+
+func isRecordDatasetScan(req *pb.ReadRecordRowsReq) bool {
+	keys := req.GetKeys()
+	return len(keys) == 1 && strings.TrimSpace(keys[0].GetRecordId()) == ""
+}
+
+func (s *Service) scanRecordDataset(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error) {
+	key := req.GetKeys()[0]
+	if err := validateRecordKey(key, false); err != nil {
+		return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), "")
+	if err != nil {
+		return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+	}
+	rows, pageResult, err := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{
+		AuthInfo:     req.GetAuthInfo(),
+		Target:       target,
+		DataKind:     pb.DataKind_DATA_KIND_RECORD,
+		VersionRange: req.GetVersionRange(),
+		Order:        req.GetOrder(),
+		ColumnNames:  req.GetColumnNames(),
+		Page:         req.GetPage(),
+	})
+	if err != nil {
+		return &pb.ReadRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+	}
+	out := make([]*pb.RecordRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, primaryStoreRowToRecordRow(row, key))
+	}
 	return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 

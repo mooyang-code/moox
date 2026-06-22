@@ -80,6 +80,34 @@ func TestServiceReadsDefaultRecordVersionOnly(t *testing.T) {
 	require.Equal(t, "default", readRsp.GetRows()[0].GetColumns()[0].GetValue().GetStringValue())
 }
 
+func TestServiceScansRecordDatasetWhenRecordIDIsEmpty(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	seedDataset(t, ctx, svc, "symbols", pb.DataKind_DATA_KIND_RECORD, nil, []string{"name"})
+
+	_, err := svc.WriteRecordRows(ctx, &pb.WriteRecordRowsReq{Rows: []*pb.RecordRow{
+		{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "symbols", RecordId: "BTC-USDT", Version: "v1"}, Columns: []*pb.ColumnValue{testutil.StringValue("name", "Bitcoin")}},
+		{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "symbols", RecordId: "ETH-USDT", Version: "v1"}, Columns: []*pb.ColumnValue{testutil.StringValue("name", "Ethereum")}},
+		{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "symbols", RecordId: "ETH-USDT", Version: "v2"}, Columns: []*pb.ColumnValue{testutil.StringValue("name", "Ethereum v2")}},
+	}})
+	require.NoError(t, err)
+
+	rsp, err := svc.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{
+		Keys:  []*pb.RecordKey{{SpaceId: "crypto", DatasetId: "symbols"}},
+		Order: pb.SortOrder_SORT_ORDER_DESC,
+		Page:  &pb.Page{Page: 1, Size: 3},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetRows(), 3)
+	require.Equal(t, uint32(3), rsp.GetPageResult().GetTotal())
+	require.ElementsMatch(t, []string{"BTC-USDT:v1", "ETH-USDT:v1", "ETH-USDT:v2"}, []string{
+		rsp.GetRows()[0].GetKey().GetRecordId() + ":" + rsp.GetRows()[0].GetKey().GetVersion(),
+		rsp.GetRows()[1].GetKey().GetRecordId() + ":" + rsp.GetRows()[1].GetKey().GetVersion(),
+		rsp.GetRows()[2].GetKey().GetRecordId() + ":" + rsp.GetRows()[2].GetKey().GetVersion(),
+	})
+}
+
 func TestServicePublishesRecordChangedEvent(t *testing.T) {
 	ctx := context.Background()
 	bus := eventbus.NewMemoryBus()

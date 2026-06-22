@@ -50,7 +50,7 @@ func TestIndexFiltersByRecordIDAndVersionRange(t *testing.T) {
 		VersionRange: &pb.VersionRange{StartVersion: "v2", EndVersion: "v2"},
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), page.GetTotal())
+	require.Equal(t, uint32(1), page.GetTotal())
 	require.Len(t, got, 1)
 	require.Equal(t, "v2", got[0].GetKey().GetVersion())
 }
@@ -72,7 +72,7 @@ func TestIndexNormalizesTimeVersionsForRange(t *testing.T) {
 		VersionRange: &pb.VersionRange{StartVersion: "2026-01-01T00:00:00Z", EndVersion: "2026-01-01T00:00:00Z"},
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), page.GetTotal())
+	require.Equal(t, uint32(1), page.GetTotal())
 	require.Len(t, got, 1)
 	require.Equal(t, "2026-01-01T00:00:00.000000000Z", got[0].GetKey().GetVersion())
 }

@@ -90,7 +90,7 @@ func (f *fakeRouteMetadata) ListPrimaryStoreRoutes(ctx context.Context, spaceID 
 			out = append(out, route)
 		}
 	}
-	return out, &pb.PageResult{Total: uint64(len(out))}, nil
+	return out, &pb.PageResult{Total: uint32(len(out))}, nil
 }
 
 func (f *fakeRouteMetadata) GetPrimaryStoreNode(ctx context.Context, nodeID string) (*pb.PrimaryStoreNode, error) {
@@ -110,5 +110,5 @@ func (f *fakeRouteMetadata) ListDevices(ctx context.Context, nodeID string, engi
 	if len(out) == 0 {
 		out = append(out, &pb.Device{DeviceId: nodeID + "-pebble", NodeId: nodeID, Name: "pebble", Engine: "pebble", Status: "active"})
 	}
-	return out, &pb.PageResult{Total: uint64(len(out))}, nil
+	return out, &pb.PageResult{Total: uint32(len(out))}, nil
 }

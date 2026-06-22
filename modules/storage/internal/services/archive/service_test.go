@@ -83,7 +83,7 @@ type fakeTimeSeriesReader struct {
 
 func (f fakeTimeSeriesReader) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	_ = ctx
-	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Rows: f.rows, PageResult: &pb.PageResult{Total: uint64(len(f.rows))}}, nil
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Rows: f.rows, PageResult: &pb.PageResult{Total: uint32(len(f.rows))}}, nil
 }
 
 func openArchiveMetadata(t *testing.T, ctx context.Context, root string) *metasqlite.Store {

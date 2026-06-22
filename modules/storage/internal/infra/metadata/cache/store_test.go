@@ -103,7 +103,7 @@ func TestStoreLoadsMultipleRelationshipRowsWithCompositeIDs(t *testing.T) {
 
 	symbols, page, err := store.ListSubjectSymbols(ctx, "crypto", "", "", "", nil)
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), page.GetTotal())
+	require.Equal(t, uint32(2), page.GetTotal())
 	require.Len(t, symbols, 2)
 
 	subjects, _, err := store.ListDatasetSubjects(ctx, "crypto", "symbols", "", nil)

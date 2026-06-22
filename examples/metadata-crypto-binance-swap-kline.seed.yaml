@@ -1,0 +1,321 @@
+# MooX storage metadata example for Binance USDT-M swap 1h kline CSV files.
+# Import after platform-local.seed.yaml and metadata-crypto.seed.yaml:
+#   modules/cli/cmd/moox-cli metadata import \
+#     --file examples/metadata-crypto-binance-swap-kline.seed.yaml \
+#     --metadata-url http://127.0.0.1:19101 \
+#     --if-not-exists
+
+subjects:
+  - space_id: crypto
+    subject_id: BTC-USDT
+    subject_type: crypto_swap
+    name: BTC-USDT Perpetual Swap
+    market: crypto
+    currency: USDT
+    timezone: UTC
+    status: active
+  - space_id: crypto
+    subject_id: ETH-USDT
+    subject_type: crypto_swap
+    name: ETH-USDT Perpetual Swap
+    market: crypto
+    currency: USDT
+    timezone: UTC
+    status: active
+  - space_id: crypto
+    subject_id: SOL-USDT
+    subject_type: crypto_swap
+    name: SOL-USDT Perpetual Swap
+    market: crypto
+    currency: USDT
+    timezone: UTC
+    status: active
+  - space_id: crypto
+    subject_id: BNB-USDT
+    subject_type: crypto_swap
+    name: BNB-USDT Perpetual Swap
+    market: crypto
+    currency: USDT
+    timezone: UTC
+    status: active
+
+subject_symbols:
+  - space_id: crypto
+    subject_id: BTC-USDT
+    data_source_id: binance
+    external_symbol: BTC-USDT
+    status: active
+  - space_id: crypto
+    subject_id: ETH-USDT
+    data_source_id: binance
+    external_symbol: ETH-USDT
+    status: active
+  - space_id: crypto
+    subject_id: SOL-USDT
+    data_source_id: binance
+    external_symbol: SOL-USDT
+    status: active
+  - space_id: crypto
+    subject_id: BNB-USDT
+    data_source_id: binance
+    external_symbol: BNB-USDT
+    status: active
+
+datasets:
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    data_source_id: binance
+    name: Binance Swap Kline
+    description: Binance USDT-M perpetual swap OHLCV kline facts
+    data_kind: time_series
+    freqs: ["1h"]
+    status: active
+
+dataset_subjects:
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    subject_id: BTC-USDT
+    subject_role: normal
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    subject_id: ETH-USDT
+    subject_role: normal
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    subject_id: SOL-USDT
+    subject_role: normal
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    subject_id: BNB-USDT
+    subject_role: normal
+    status: active
+
+fields:
+  - space_id: crypto
+    field_id: taker_buy_base_asset_volume
+    name: Taker Buy Base Asset Volume
+    value_type: double
+    unit: base_asset
+    write_example: "155718.0"
+    status: active
+  - space_id: crypto
+    field_id: taker_buy_quote_asset_volume
+    name: Taker Buy Quote Asset Volume
+    value_type: double
+    unit: USDT
+    write_example: "524259.78"
+    status: active
+  - space_id: crypto
+    field_id: Spread
+    name: Spread
+    value_type: double
+    write_example: "0.001"
+    status: active
+  - space_id: crypto
+    field_id: avg_price_1m
+    name: Average Price 1m
+    value_type: double
+    unit: USDT
+    write_example: "10000.0"
+    status: active
+  - space_id: crypto
+    field_id: avg_price_5m
+    name: Average Price 5m
+    value_type: double
+    unit: USDT
+    write_example: "10000.0"
+    status: active
+  - space_id: crypto
+    field_id: fundingRate
+    name: Funding Rate
+    value_type: double
+    write_example: "0.0001"
+    status: active
+
+dataset_columns:
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: open
+    origin_type: field
+    origin_id: open
+    value_type: double
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: high
+    origin_type: field
+    origin_id: high
+    value_type: double
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: low
+    origin_type: field
+    origin_id: low
+    value_type: double
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: close
+    origin_type: field
+    origin_id: close
+    value_type: double
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: volume
+    origin_type: field
+    origin_id: volume
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: quote_volume
+    origin_type: field
+    origin_id: quote_volume
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: trade_num
+    origin_type: field
+    origin_id: trade_num
+    value_type: int
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: taker_buy_base_asset_volume
+    origin_type: field
+    origin_id: taker_buy_base_asset_volume
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: taker_buy_quote_asset_volume
+    origin_type: field
+    origin_id: taker_buy_quote_asset_volume
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: Spread
+    origin_type: field
+    origin_id: Spread
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: symbol
+    origin_type: field
+    origin_id: symbol
+    value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: avg_price_1m
+    origin_type: field
+    origin_id: avg_price_1m
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: avg_price_5m
+    origin_type: field
+    origin_id: avg_price_5m
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_kline
+    column_name: fundingRate
+    origin_type: field
+    origin_id: fundingRate
+    value_type: double
+    status: active
+
+views:
+  - space_id: crypto
+    view_id: swap_kline_1h_view
+    name: Swap Kline 1H View
+    description: Materialized 1h view for Binance perpetual swap klines
+    primary_dataset_id: binance_swap_kline
+    dataset_ids: ["binance_swap_kline"]
+    grain_keys: ["subject_id", "freq", "data_time"]
+    engine: duckdb
+    query_window: 3650d
+    build_status: pending
+    status: active
+
+view_columns:
+  - space_id: crypto
+    view_id: swap_kline_1h_view
+    column_name: open
+    origin_type: dataset_column
+    origin_id: binance_swap_kline.open
+    value_type: double
+    sort_order: 1
+  - space_id: crypto
+    view_id: swap_kline_1h_view
+    column_name: high
+    origin_type: dataset_column
+    origin_id: binance_swap_kline.high
+    value_type: double
+    sort_order: 2
+  - space_id: crypto
+    view_id: swap_kline_1h_view
+    column_name: low
+    origin_type: dataset_column
+    origin_id: binance_swap_kline.low
+    value_type: double
+    sort_order: 3
+  - space_id: crypto
+    view_id: swap_kline_1h_view
+    column_name: close
+    origin_type: dataset_column
+    origin_id: binance_swap_kline.close
+    value_type: double
+    sort_order: 4
+  - space_id: crypto
+    view_id: swap_kline_1h_view
+    column_name: volume
+    origin_type: dataset_column
+    origin_id: binance_swap_kline.volume
+    value_type: double
+    sort_order: 5
+  - space_id: crypto
+    view_id: swap_kline_1h_view
+    column_name: quote_volume
+    origin_type: dataset_column
+    origin_id: binance_swap_kline.quote_volume
+    value_type: double
+    sort_order: 6
+  - space_id: crypto
+    view_id: swap_kline_1h_view
+    column_name: trade_num
+    origin_type: dataset_column
+    origin_id: binance_swap_kline.trade_num
+    value_type: int
+    sort_order: 7
+  - space_id: crypto
+    view_id: swap_kline_1h_view
+    column_name: fundingRate
+    origin_type: dataset_column
+    origin_id: binance_swap_kline.fundingRate
+    value_type: double
+    sort_order: 8
+
+primary_store_routes:
+  - space_id: crypto
+    route_id: route-binance-swap-kline
+    dataset_id: binance_swap_kline
+    subject_pattern: "*"
+    hash_rule: subject_id
+    node_id: local
+    priority: 100
+    status: active

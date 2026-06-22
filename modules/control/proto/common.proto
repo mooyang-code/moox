@@ -24,7 +24,8 @@ message Page {
 message PageResult {
   uint32 page = 1;
   uint32 size = 2;
-  uint64 total = 3;
+  // total 是结果总数；管理台 JSON 响应应输出为 number。
+  uint32 total = 3;
   bool has_more = 4;
 }
 

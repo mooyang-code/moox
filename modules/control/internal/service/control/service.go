@@ -345,5 +345,5 @@ func pageSlice[T any](items []T, page *pb.Page) ([]T, *pb.PageResult) {
 	if end > len(items) {
 		end = len(items)
 	}
-	return items[start:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint64(len(items)), HasMore: end < len(items)}
+	return items[start:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint32(len(items)), HasMore: end < len(items)}
 }

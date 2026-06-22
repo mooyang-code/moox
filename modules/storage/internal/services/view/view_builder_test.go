@@ -92,12 +92,12 @@ type fakeFactReader struct {
 
 func (f fakeFactReader) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	_ = ctx
-	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Rows: f.rows, PageResult: &pb.PageResult{Total: uint64(len(f.rows))}}, nil
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Rows: f.rows, PageResult: &pb.PageResult{Total: uint32(len(f.rows))}}, nil
 }
 
 func (f fakeFactReader) ScanTimeSeriesRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange, columnNames []string, page *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult, error) {
 	_ = ctx
-	return f.rows, &pb.PageResult{Total: uint64(len(f.rows))}, nil
+	return f.rows, &pb.PageResult{Total: uint32(len(f.rows))}, nil
 }
 
 // fakeViewWriter 是 View 构建测试使用的结果写入桩。

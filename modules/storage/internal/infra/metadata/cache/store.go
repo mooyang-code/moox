@@ -744,7 +744,7 @@ func pageItems[T any](items []T, page *pb.Page) ([]T, *pb.PageResult, error) {
 	if end > len(items) {
 		end = len(items)
 	}
-	return items[start:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint64(len(items)), HasMore: end < len(items)}, nil
+	return items[start:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint32(len(items)), HasMore: end < len(items)}, nil
 }
 
 func notFound(kind string, spaceID string, id string) error {

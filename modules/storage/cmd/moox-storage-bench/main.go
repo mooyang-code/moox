@@ -936,8 +936,8 @@ func waitViews(ctx context.Context, query pb.ViewServiceClientProxy, datasetRows
 				return err
 			}
 			total := rsp.GetPageResult().GetTotal()
-			out[datasetID] = total
-			if total < uint64(want) {
+			out[datasetID] = uint64(total)
+			if uint64(total) < uint64(want) {
 				return fmt.Errorf("view %s materialized rows=%d, want %d", viewID(market), total, want)
 			}
 		}

@@ -20,6 +20,7 @@ export const routesConfigStore = () => {
   const cacheRoutes = ref<string[]>([]); // 所有可缓存路由的路由名
   const tabsList = ref<any>([]); // 标签页数据
   const currentRoute = ref<any>({}); // 当前路由
+  const addedRouteNames = ref<string[]>([]); // 本次动态注册的路由名
 
   /**
    * 设置可缓存路由的路由名
@@ -84,9 +85,10 @@ export const routesConfigStore = () => {
     // 清除标签页数据
     tabsList.value = [];
     // 清除动态添加的路由
-    routeList.value.forEach((item: any) => {
-      if (router.hasRoute(item.name)) router.removeRoute(item.name);
+    addedRouteNames.value.forEach((name: string) => {
+      if (router.hasRoute(name)) router.removeRoute(name);
     });
+    addedRouteNames.value = [];
   }
   /**
    * 路由初始化
@@ -107,7 +109,12 @@ export const routesConfigStore = () => {
     // 4、根据树生成一维路由数组
     tree = linearArray(tree);
     // 5、动态添加路由
-    tree.forEach((route: any) => router.addRoute("layout", route));
+    addedRouteNames.value = [];
+    tree.forEach((route: any) => {
+      if (router.hasRoute(route.name)) return;
+      router.addRoute("layout", route);
+      addedRouteNames.value.push(route.name);
+    });
     // 6、缓存一维路由
     routeList.value = tree;
   }

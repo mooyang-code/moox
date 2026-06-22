@@ -444,7 +444,7 @@ func pageRows(rows []*pb.PrimaryStoreRow, page *pb.Page, order pb.SortOrder) ([]
 		}
 		return rows[start:end], &pb.PageResult{
 			Size:       size,
-			Total:      uint64(len(rows)),
+			Total:      uint32(len(rows)),
 			HasMore:    end < len(rows),
 			NextCursor: next,
 		}
@@ -464,7 +464,7 @@ func pageRows(rows []*pb.PrimaryStoreRow, page *pb.Page, order pb.SortOrder) ([]
 	return rows[start:end], &pb.PageResult{
 		Page:       pageNo,
 		Size:       size,
-		Total:      uint64(len(rows)),
+		Total:      uint32(len(rows)),
 		HasMore:    end < len(rows),
 		NextCursor: next,
 	}

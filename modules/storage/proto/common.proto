@@ -40,8 +40,8 @@ message PageResult {
   uint32 page = 1;
   // size 是本次返回采用的每页条数。
   uint32 size = 2;
-  // total 是结果总数；无法低成本计算时可为 0。
-  uint64 total = 3;
+  // total 是结果总数；无法低成本计算时可为 0。使用 uint32 以保证 JSON 输出为数字。
+  uint32 total = 3;
   // has_more 表示是否还有更多结果。
   bool has_more = 4;
   // next_cursor 是下一页游标；普通分页可为空。
