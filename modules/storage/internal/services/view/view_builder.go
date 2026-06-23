@@ -584,33 +584,25 @@ func resultTableName(spaceID string, viewID string, viewVersion uint64, now time
 	if viewVersion == 0 {
 		viewVersion = 1
 	}
-	raw := fmt.Sprintf("%s%s_v%d_%s_%d", resultTablePrefix(spaceID), encodeResultTablePart(viewID), viewVersion, "r", now.UnixNano())
+	viewPart := sanitizeResultTableName(viewID)
+	if viewPart == "" {
+		viewPart = "view"
+	}
+	spacePart := encodeResultTablePart(spaceID)
+	raw := fmt.Sprintf("view_%s_s%s_v%d_%s_%d", viewPart, spacePart, viewVersion, "r", now.UnixNano())
 	name := sanitizeResultTableName(raw)
 	if name == "" {
-		return "ts_view"
+		return "view_result"
 	}
 	return name
 }
 
 func resultTablePrefix(spaceID string) string {
-	if strings.TrimSpace(spaceID) == "" {
-		return "ts_view_"
-	}
-	return "ts_view_s" + encodeResultTablePart(spaceID) + "_"
+	return "view_"
 }
 
 func resultTablePrefixes(spaceID string) []string {
-	if strings.TrimSpace(spaceID) == "" {
-		return []string{"ts_view_", "view_result_"}
-	}
-	return []string{
-		resultTablePrefix(spaceID),
-		legacyResultTablePrefix(spaceID),
-	}
-}
-
-func legacyResultTablePrefix(spaceID string) string {
-	return sanitizeResultTableName(fmt.Sprintf("view_result_%s", spaceID)) + "_"
+	return []string{resultTablePrefix(spaceID)}
 }
 
 func encodeResultTablePart(value string) string {

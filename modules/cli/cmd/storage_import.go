@@ -44,7 +44,7 @@ var storageImportCmd = &cobra.Command{
     --subject ARB-USDT --freq 1m --time-column candle_begin_time
 
   moox-cli storage import --format csv --file ~/Downloads/ARB-USDT.csv \
-    --view spot_kline_close_view --dataset binance_spot_kline --subject ARB-USDT`,
+    --view swap_spot_kline_view --dataset binance_swap_kline --subject ARB-USDT --freq 1h`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		opts := storageImportFlags
 		opts.Format = defaultFlag(opts.Format, defaultStorageImportFormat)

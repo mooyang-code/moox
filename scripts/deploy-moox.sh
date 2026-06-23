@@ -168,7 +168,7 @@ build_core_binaries() {
 
   log "build core binaries (${TARGET_GOOS}/${TARGET_GOARCH})"
   if [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
-    log "cross build detected; storage keeps DuckDB enabled unless STORAGE_* env explicitly overrides it"
+    log "cross build detected; storage requires CGO-enabled DuckDB build"
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build.sh" all
     return

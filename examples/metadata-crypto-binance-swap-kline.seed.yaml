@@ -241,74 +241,67 @@ dataset_columns:
 
 views:
   - space_id: crypto
-    view_id: swap_kline_1h_view
-    name: Swap Kline 1H View
-    description: Materialized 1h view for Binance perpetual swap klines
+    view_id: swap_spot_kline_view
+    name: Swap Spot Kline Join View
+    description: Join Binance swap and spot 1H klines by subject_id, freq and data_time
     primary_dataset_id: binance_swap_kline
-    dataset_ids: ["binance_swap_kline"]
+    dataset_ids: ["binance_swap_kline", "binance_spot_kline"]
     grain_keys: ["subject_id", "freq", "data_time"]
     engine: duckdb
-    query_window: 3650d
+    query_window: 30d
     build_status: pending
     status: active
 
 view_columns:
   - space_id: crypto
-    view_id: swap_kline_1h_view
-    column_name: open
+    view_id: swap_spot_kline_view
+    column_name: binance_swap_kline.open
     origin_type: dataset_column
     origin_id: binance_swap_kline.open
     value_type: double
     sort_order: 1
   - space_id: crypto
-    view_id: swap_kline_1h_view
-    column_name: high
-    origin_type: dataset_column
-    origin_id: binance_swap_kline.high
-    value_type: double
-    sort_order: 2
-  - space_id: crypto
-    view_id: swap_kline_1h_view
-    column_name: low
-    origin_type: dataset_column
-    origin_id: binance_swap_kline.low
-    value_type: double
-    sort_order: 3
-  - space_id: crypto
-    view_id: swap_kline_1h_view
-    column_name: close
+    view_id: swap_spot_kline_view
+    column_name: binance_swap_kline.close
     origin_type: dataset_column
     origin_id: binance_swap_kline.close
     value_type: double
-    sort_order: 4
+    sort_order: 2
   - space_id: crypto
-    view_id: swap_kline_1h_view
-    column_name: volume
+    view_id: swap_spot_kline_view
+    column_name: binance_swap_kline.volume
     origin_type: dataset_column
     origin_id: binance_swap_kline.volume
     value_type: double
-    sort_order: 5
+    sort_order: 3
   - space_id: crypto
-    view_id: swap_kline_1h_view
-    column_name: quote_volume
-    origin_type: dataset_column
-    origin_id: binance_swap_kline.quote_volume
-    value_type: double
-    sort_order: 6
-  - space_id: crypto
-    view_id: swap_kline_1h_view
-    column_name: trade_num
-    origin_type: dataset_column
-    origin_id: binance_swap_kline.trade_num
-    value_type: int
-    sort_order: 7
-  - space_id: crypto
-    view_id: swap_kline_1h_view
-    column_name: fundingRate
+    view_id: swap_spot_kline_view
+    column_name: binance_swap_kline.fundingRate
     origin_type: dataset_column
     origin_id: binance_swap_kline.fundingRate
     value_type: double
-    sort_order: 8
+    sort_order: 4
+  - space_id: crypto
+    view_id: swap_spot_kline_view
+    column_name: binance_spot_kline.open
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.open
+    value_type: double
+    sort_order: 5
+  - space_id: crypto
+    view_id: swap_spot_kline_view
+    column_name: binance_spot_kline.close
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.close
+    value_type: double
+    sort_order: 6
+  - space_id: crypto
+    view_id: swap_spot_kline_view
+    column_name: binance_spot_kline.volume
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.volume
+    value_type: double
+    sort_order: 7
 
 primary_store_routes:
   - space_id: crypto

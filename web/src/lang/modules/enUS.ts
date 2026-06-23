@@ -122,6 +122,8 @@ export default {
     ["data-import"]: "data import",
     ["data-factors"]: "factors",
     ["data-views"]: "views",
+    ["data-view-list"]: "view list",
+    ["data-view-browse"]: "view browse",
     ["compute-collector"]: "compute and collection",
     ["collector-functions"]: "cloud functions",
     ["collector-packages"]: "packages",

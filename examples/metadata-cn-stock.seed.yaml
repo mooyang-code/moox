@@ -80,7 +80,7 @@ subject_symbols:
 
 datasets:
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     data_source_id: eastmoney
     name: 东方财富日线行情
     description: A-share daily OHLCV bars from EastMoney
@@ -88,7 +88,7 @@ datasets:
     freqs: ["1d"]
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_stock_profile
+    dataset_id: em_stock_profile
     data_source_id: eastmoney
     name: 东方财富股票资料
     description: Basic stock profile and listing metadata
@@ -96,7 +96,7 @@ datasets:
     freqs: []
     status: active
   - space_id: cn_stock
-    dataset_id: akshare_financial_indicator
+    dataset_id: ak_fin_indicator
     data_source_id: akshare
     name: AKShare 财务指标
     description: Periodic financial indicators for listed companies
@@ -106,37 +106,37 @@ datasets:
 
 dataset_subjects:
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     subject_id: 600519.SH
     subject_role: normal
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     subject_id: 000001.SZ
     subject_role: normal
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     subject_id: 510300.SH
     subject_role: normal
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_stock_profile
+    dataset_id: em_stock_profile
     subject_id: 600519.SH
     subject_role: normal
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_stock_profile
+    dataset_id: em_stock_profile
     subject_id: 000001.SZ
     subject_role: normal
     status: active
   - space_id: cn_stock
-    dataset_id: akshare_financial_indicator
+    dataset_id: ak_fin_indicator
     subject_id: 600519.SH
     subject_role: normal
     status: active
   - space_id: cn_stock
-    dataset_id: akshare_financial_indicator
+    dataset_id: ak_fin_indicator
     subject_id: 000001.SZ
     subject_role: normal
     status: active
@@ -283,7 +283,7 @@ factors:
 
 dataset_columns:
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     column_name: open
     origin_type: field
     origin_id: open
@@ -291,7 +291,7 @@ dataset_columns:
     required: true
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     column_name: high
     origin_type: field
     origin_id: high
@@ -299,7 +299,7 @@ dataset_columns:
     required: true
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     column_name: low
     origin_type: field
     origin_id: low
@@ -307,7 +307,7 @@ dataset_columns:
     required: true
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     column_name: close
     origin_type: field
     origin_id: close
@@ -315,42 +315,42 @@ dataset_columns:
     required: true
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     column_name: volume
     origin_type: field
     origin_id: volume
     value_type: double
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     column_name: amount
     origin_type: field
     origin_id: amount
     value_type: double
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     column_name: pct_chg
     origin_type: field
     origin_id: pct_chg
     value_type: double
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     column_name: ma20_close
     origin_type: factor
     origin_id: ma20_close
     value_type: double
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     column_name: daily_return
     origin_type: factor
     origin_id: daily_return
     value_type: double
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_stock_profile
+    dataset_id: em_stock_profile
     column_name: symbol
     origin_type: field
     origin_id: symbol
@@ -359,7 +359,7 @@ dataset_columns:
     is_unique: true
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_stock_profile
+    dataset_id: em_stock_profile
     column_name: stock_name
     origin_type: field
     origin_id: stock_name
@@ -367,21 +367,21 @@ dataset_columns:
     required: true
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_stock_profile
+    dataset_id: em_stock_profile
     column_name: industry
     origin_type: field
     origin_id: industry
     value_type: string
     status: active
   - space_id: cn_stock
-    dataset_id: eastmoney_stock_profile
+    dataset_id: em_stock_profile
     column_name: list_date
     origin_type: field
     origin_id: list_date
     value_type: time
     status: active
   - space_id: cn_stock
-    dataset_id: akshare_financial_indicator
+    dataset_id: ak_fin_indicator
     column_name: report_period
     origin_type: field
     origin_id: report_period
@@ -389,152 +389,52 @@ dataset_columns:
     required: true
     status: active
   - space_id: cn_stock
-    dataset_id: akshare_financial_indicator
+    dataset_id: ak_fin_indicator
     column_name: pe_ttm
     origin_type: field
     origin_id: pe_ttm
     value_type: double
     status: active
   - space_id: cn_stock
-    dataset_id: akshare_financial_indicator
+    dataset_id: ak_fin_indicator
     column_name: pb
     origin_type: field
     origin_id: pb
     value_type: double
     status: active
   - space_id: cn_stock
-    dataset_id: akshare_financial_indicator
+    dataset_id: ak_fin_indicator
     column_name: roe
     origin_type: field
     origin_id: roe
     value_type: double
     status: active
   - space_id: cn_stock
-    dataset_id: akshare_financial_indicator
+    dataset_id: ak_fin_indicator
     column_name: revenue
     origin_type: field
     origin_id: revenue
     value_type: double
     status: active
   - space_id: cn_stock
-    dataset_id: akshare_financial_indicator
+    dataset_id: ak_fin_indicator
     column_name: net_profit
     origin_type: field
     origin_id: net_profit
     value_type: double
     status: active
   - space_id: cn_stock
-    dataset_id: akshare_financial_indicator
+    dataset_id: ak_fin_indicator
     column_name: roe_growth
     origin_type: factor
     origin_id: roe_growth
     value_type: double
     status: active
 
-views:
-  - space_id: cn_stock
-    view_id: eastmoney_daily_kline_view
-    name: A股日线行情视图
-    description: A-share daily kline view backed by DuckDB
-    primary_dataset_id: eastmoney_daily_kline
-    dataset_ids: ["eastmoney_daily_kline"]
-    grain_keys: ["subject_id", "freq", "data_time"]
-    engine: duckdb
-    query_window: 365d
-    build_status: pending
-    status: active
-  - space_id: cn_stock
-    view_id: stock_profile_search
-    name: A股资料检索视图
-    description: Search stock profile records by symbol, name, and industry
-    primary_dataset_id: eastmoney_stock_profile
-    dataset_ids: ["eastmoney_stock_profile"]
-    grain_keys: ["record_id"]
-    engine: bleve
-    query_window: ""
-    build_status: pending
-    status: active
-  - space_id: cn_stock
-    view_id: financial_indicator_search
-    name: A股财务指标检索视图
-    description: Search financial indicator records by report period and valuation metrics
-    primary_dataset_id: akshare_financial_indicator
-    dataset_ids: ["akshare_financial_indicator"]
-    grain_keys: ["record_id"]
-    engine: bleve
-    query_window: ""
-    build_status: pending
-    status: active
-
-view_columns:
-  - space_id: cn_stock
-    view_id: eastmoney_daily_kline_view
-    column_name: close
-    origin_type: dataset_column
-    origin_id: eastmoney_daily_kline.close
-    value_type: double
-    sort_order: 1
-  - space_id: cn_stock
-    view_id: eastmoney_daily_kline_view
-    column_name: volume
-    origin_type: dataset_column
-    origin_id: eastmoney_daily_kline.volume
-    value_type: double
-    sort_order: 2
-  - space_id: cn_stock
-    view_id: eastmoney_daily_kline_view
-    column_name: ma20_close
-    origin_type: dataset_column
-    origin_id: eastmoney_daily_kline.ma20_close
-    value_type: double
-    sort_order: 3
-  - space_id: cn_stock
-    view_id: stock_profile_search
-    column_name: symbol
-    origin_type: dataset_column
-    origin_id: eastmoney_stock_profile.symbol
-    value_type: string
-    sort_order: 1
-  - space_id: cn_stock
-    view_id: stock_profile_search
-    column_name: stock_name
-    origin_type: dataset_column
-    origin_id: eastmoney_stock_profile.stock_name
-    value_type: string
-    sort_order: 2
-  - space_id: cn_stock
-    view_id: stock_profile_search
-    column_name: industry
-    origin_type: dataset_column
-    origin_id: eastmoney_stock_profile.industry
-    value_type: string
-    sort_order: 3
-  - space_id: cn_stock
-    view_id: financial_indicator_search
-    column_name: report_period
-    origin_type: dataset_column
-    origin_id: akshare_financial_indicator.report_period
-    value_type: string
-    sort_order: 1
-  - space_id: cn_stock
-    view_id: financial_indicator_search
-    column_name: roe
-    origin_type: dataset_column
-    origin_id: akshare_financial_indicator.roe
-    value_type: double
-    sort_order: 2
-  - space_id: cn_stock
-    view_id: financial_indicator_search
-    column_name: roe_growth
-    origin_type: dataset_column
-    origin_id: akshare_financial_indicator.roe_growth
-    value_type: double
-    sort_order: 3
-
 primary_store_routes:
   - space_id: cn_stock
     route_id: route-eastmoney-daily-kline
-    dataset_id: eastmoney_daily_kline
+    dataset_id: em_daily_kline
     subject_pattern: "*"
     hash_rule: subject_id
     node_id: local
@@ -542,7 +442,7 @@ primary_store_routes:
     status: active
   - space_id: cn_stock
     route_id: route-eastmoney-stock-profile
-    dataset_id: eastmoney_stock_profile
+    dataset_id: em_stock_profile
     subject_pattern: "*"
     hash_rule: subject_id
     node_id: local
@@ -550,7 +450,7 @@ primary_store_routes:
     status: active
   - space_id: cn_stock
     route_id: route-akshare-financial-indicator
-    dataset_id: akshare_financial_indicator
+    dataset_id: ak_fin_indicator
     subject_pattern: "*"
     hash_rule: subject_id
     node_id: local

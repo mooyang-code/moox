@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,8 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
+
+var lowerSnakeIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // Service 实现元数据、写入、权威读取和视图查询入口。
 type Service struct {
@@ -447,8 +450,14 @@ func (s *Service) CreateView(ctx context.Context, req *pb.CreateViewReq) (*pb.Cr
 	if view.Name == "" {
 		view.Name = view.GetViewId()
 	}
+	if err := validateViewID(view.GetViewId()); err != nil {
+		return &pb.CreateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	if view.PrimaryDatasetId == "" && len(view.GetDatasetIds()) > 0 {
 		view.PrimaryDatasetId = view.GetDatasetIds()[0]
+	}
+	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
+		return &pb.CreateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	created, err := s.metadata.UpsertView(ctx, view)
 	if err != nil {
@@ -465,14 +474,123 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 	if view.Name == "" {
 		view.Name = view.GetViewId()
 	}
+	if err := validateViewID(view.GetViewId()); err != nil {
+		return &pb.UpdateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	if view.PrimaryDatasetId == "" && len(view.GetDatasetIds()) > 0 {
 		view.PrimaryDatasetId = view.GetDatasetIds()[0]
+	}
+	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
+		return &pb.UpdateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	updated, err := s.metadata.UpsertView(ctx, view)
 	if err != nil {
 		return &pb.UpdateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	return &pb.UpdateViewRsp{RetInfo: response.Success("success"), View: updated}, nil
+}
+
+func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb.View) error {
+	if view == nil {
+		return errors.New("view is required")
+	}
+	spaceID := strings.TrimSpace(view.GetSpaceId())
+	primaryDatasetID := strings.TrimSpace(view.GetPrimaryDatasetId())
+	if spaceID == "" || primaryDatasetID == "" {
+		return errors.New("space_id and primary_dataset_id are required")
+	}
+	datasetIDs := normalizeViewDatasetIDs(primaryDatasetID, view.GetDatasetIds())
+	var primary *pb.Dataset
+	for idx, datasetID := range datasetIDs {
+		dataset, err := s.metadata.GetDataset(ctx, spaceID, datasetID)
+		if err != nil {
+			return fmt.Errorf("view dataset %s not found: %w", datasetID, err)
+		}
+		if idx == 0 {
+			primary = dataset
+		}
+	}
+	if primary == nil {
+		return errors.New("view datasets are required")
+	}
+	view.PrimaryDatasetId = primaryDatasetID
+	view.DatasetIds = datasetIDs
+	view.GrainKeys = defaultViewGrainKeys(primary.GetDataKind())
+	view.Engine = defaultViewEngine(primary.GetDataKind())
+	return nil
+}
+
+func defaultViewGrainKeys(kind pb.DataKind) []string {
+	if kind == pb.DataKind_DATA_KIND_TIME_SERIES {
+		return []string{"subject_id", "freq", "data_time"}
+	}
+	return []string{"record_id", "version"}
+}
+
+func defaultViewEngine(kind pb.DataKind) string {
+	if kind == pb.DataKind_DATA_KIND_TIME_SERIES {
+		return "duckdb"
+	}
+	return "bleve"
+}
+
+func validateDatasetID(datasetID string) error {
+	return validateLowerSnakeID("dataset_id", datasetID, 20)
+}
+
+func validateViewID(viewID string) error {
+	return validateLowerSnakeID("view_id", viewID, 30)
+}
+
+func validateLowerSnakeID(field string, value string, maxLen int) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	if len(value) > maxLen {
+		return fmt.Errorf("%s length must be <= %d", field, maxLen)
+	}
+	if !lowerSnakeIDPattern.MatchString(value) {
+		return fmt.Errorf("%s must use lower snake case letters, digits and underscores", field)
+	}
+	return nil
+}
+
+func validateViewColumnName(column *pb.ViewColumn) error {
+	if column.GetOriginType() != pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
+		return nil
+	}
+	originID := strings.TrimSpace(column.GetOriginId())
+	columnName := strings.TrimSpace(column.GetColumnName())
+	datasetID, sourceName, ok := strings.Cut(originID, ".")
+	if !ok || datasetID == "" || sourceName == "" {
+		return errors.New("dataset view column origin_id must use dataset_id.column_name")
+	}
+	if err := validateDatasetID(datasetID); err != nil {
+		return fmt.Errorf("invalid view column origin dataset: %w", err)
+	}
+	if columnName != originID {
+		return errors.New("dataset view column column_name must equal origin_id and use dataset_id.column_name")
+	}
+	return nil
+}
+
+func normalizeViewDatasetIDs(primaryDatasetID string, datasetIDs []string) []string {
+	seen := make(map[string]bool, len(datasetIDs)+1)
+	out := make([]string, 0, len(datasetIDs)+1)
+	add := func(datasetID string) {
+		datasetID = strings.TrimSpace(datasetID)
+		if datasetID == "" || seen[datasetID] {
+			return
+		}
+		seen[datasetID] = true
+		out = append(out, datasetID)
+	}
+	add(primaryDatasetID)
+	for _, datasetID := range datasetIDs {
+		add(datasetID)
+	}
+	return out
 }
 
 func (s *Service) GetView(ctx context.Context, req *pb.GetViewReq) (*pb.GetViewRsp, error) {
@@ -495,6 +613,9 @@ func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumn
 	column := req.GetColumn()
 	if column == nil || column.GetSpaceId() == "" || column.GetViewId() == "" || column.GetColumnName() == "" {
 		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, view_id and column_name are required"))}, nil
+	}
+	if err := validateViewColumnName(column); err != nil {
+		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	created, err := s.metadata.UpsertViewColumn(ctx, column)
 	if err != nil {
@@ -618,6 +739,9 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	if item.Name == "" {
 		item.Name = item.GetDatasetId()
 	}
+	if err := validateDatasetID(item.GetDatasetId()); err != nil {
+		return &pb.CreateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	created, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -626,7 +750,14 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 }
 
 func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (*pb.UpdateDatasetRsp, error) {
-	updated, err := s.metadata.UpsertDataset(ctx, req.GetDataset())
+	item := req.GetDataset()
+	if item == nil || item.GetDatasetId() == "" {
+		return &pb.UpdateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id is required"))}, nil
+	}
+	if err := validateDatasetID(item.GetDatasetId()); err != nil {
+		return &pb.UpdateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	updated, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}

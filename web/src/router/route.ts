@@ -82,7 +82,13 @@ export const staticRoutes = [
         path: "/data/views",
         name: "data-views",
         component: () => import("@/views/data/views/index.vue"),
-        meta: { title: "data-views" }
+        meta: { title: "data-view-list" }
+      },
+      {
+        path: "/data/view-browse",
+        name: "data-view-browse",
+        component: () => import("@/views/data/view-browse/index.vue"),
+        meta: { title: "data-view-browse" }
       },
       {
         path: "/data/overview",

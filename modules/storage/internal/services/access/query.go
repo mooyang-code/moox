@@ -353,16 +353,43 @@ func recordRowMatchesFilter(row *pb.RecordRow, filter *pb.FilterExpr) bool {
 	if filter == nil || strings.TrimSpace(filter.GetExpr()) == "" {
 		return true
 	}
+	if fn, field, token, ok := parseFunctionFilter(filter.GetExpr()); ok {
+		rowValue, exists := recordRowValue(row, field)
+		switch fn {
+		case "is_empty":
+			return !exists || factvalue.String(rowValue) == ""
+		case "is_not_empty":
+			return exists && factvalue.String(rowValue) != ""
+		}
+		if !exists {
+			return fn == "not_contains"
+		}
+		expected := filterValue(token, filter.GetArgs())
+		if expected == nil {
+			return false
+		}
+		left := factvalue.String(rowValue)
+		right := factvalue.String(expected)
+		switch fn {
+		case "starts_with":
+			return strings.HasPrefix(left, right)
+		case "ends_with":
+			return strings.HasSuffix(left, right)
+		case "not_contains":
+			return !strings.Contains(left, right)
+		default:
+			return false
+		}
+	}
 	left, op, right, ok := parseSimpleFilter(filter.GetExpr())
 	if !ok {
 		return false
 	}
-	rowValue, ok := recordRowColumnValue(row, left)
+	rowValue, ok := recordRowValue(row, left)
 	if !ok {
 		return false
 	}
-	argName := strings.TrimPrefix(right, "$")
-	expected := filter.GetArgs()[argName]
+	expected := filterValue(right, filter.GetArgs())
 	if expected == nil {
 		return false
 	}
@@ -370,17 +397,66 @@ func recordRowMatchesFilter(row *pb.RecordRow, filter *pb.FilterExpr) bool {
 }
 
 func parseSimpleFilter(expr string) (left, op, right string, ok bool) {
-	for _, candidate := range []string{"==", "!=", ">=", "<=", ">", "<"} {
-		if parts := strings.Split(expr, candidate); len(parts) == 2 {
-			left = strings.TrimSpace(parts[0])
-			right = strings.TrimSpace(parts[1])
-			if left == "" || !strings.HasPrefix(right, "$") {
+	expr = strings.TrimSpace(expr)
+	for _, candidate := range []string{" contains ", "==", "!=", ">=", "<=", "=", ">", "<"} {
+		if idx := strings.Index(expr, candidate); idx >= 0 {
+			left = strings.TrimSpace(expr[:idx])
+			right = strings.TrimSpace(expr[idx+len(candidate):])
+			op = strings.TrimSpace(candidate)
+			if left == "" || right == "" {
 				return "", "", "", false
 			}
-			return left, candidate, right, true
+			return left, op, right, true
 		}
 	}
 	return "", "", "", false
+}
+
+func parseFunctionFilter(expr string) (name, field, token string, ok bool) {
+	expr = strings.TrimSpace(expr)
+	open := strings.Index(expr, "(")
+	if open <= 0 || !strings.HasSuffix(expr, ")") {
+		return "", "", "", false
+	}
+	name = strings.TrimSpace(expr[:open])
+	body := strings.TrimSpace(strings.TrimSuffix(expr[open+1:], ")"))
+	if name == "" || body == "" {
+		return "", "", "", false
+	}
+	switch name {
+	case "is_empty", "is_not_empty":
+		if strings.Contains(body, ",") {
+			return "", "", "", false
+		}
+		return name, strings.TrimSpace(body), "", true
+	case "starts_with", "ends_with", "not_contains":
+		left, right, found := strings.Cut(body, ",")
+		if !found {
+			return "", "", "", false
+		}
+		field = strings.TrimSpace(left)
+		token = strings.TrimSpace(right)
+		if field == "" || token == "" {
+			return "", "", "", false
+		}
+		return name, field, token, true
+	default:
+		return "", "", "", false
+	}
+}
+
+func filterValue(token string, args map[string]*pb.TypedValue) *pb.TypedValue {
+	token = strings.TrimSpace(token)
+	if strings.HasPrefix(token, "$") {
+		return args[strings.TrimPrefix(token, "$")]
+	}
+	if strings.HasPrefix(token, "'") && strings.HasSuffix(token, "'") && len(token) >= 2 {
+		return &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: strings.Trim(token, "'")}}
+	}
+	if strings.HasPrefix(token, `"`) && strings.HasSuffix(token, `"`) && len(token) >= 2 {
+		return &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: strings.Trim(token, `"`)}}
+	}
+	return nil
 }
 
 func recordRowColumnValue(row *pb.RecordRow, name string) (*pb.TypedValue, bool) {
@@ -392,10 +468,31 @@ func recordRowColumnValue(row *pb.RecordRow, name string) (*pb.TypedValue, bool)
 	return nil, false
 }
 
+func recordRowValue(row *pb.RecordRow, name string) (*pb.TypedValue, bool) {
+	key := row.GetKey()
+	switch name {
+	case "record_id":
+		if key.GetRecordId() == "" {
+			return nil, false
+		}
+		return &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: key.GetRecordId()}}, true
+	case "version":
+		if key.GetVersion() == "" {
+			return nil, false
+		}
+		return &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: key.GetVersion()}}, true
+	default:
+		return recordRowColumnValue(row, name)
+	}
+}
+
 func compareTypedValues(left, right *pb.TypedValue, op string) bool {
+	if op == "contains" {
+		return strings.Contains(factvalue.String(left), factvalue.String(right))
+	}
 	cmp := factvalue.Compare(left, right)
 	switch op {
-	case "==":
+	case "=", "==":
 		return cmp == 0
 	case "!=":
 		return cmp != 0
@@ -469,8 +566,8 @@ func sortSearchRecordRows(rows []*pb.RecordRow, sorts []*pb.SortSpec) {
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
 		for _, spec := range sorts {
-			left, _ := recordRowColumnValue(rows[i], spec.GetFieldName())
-			right, _ := recordRowColumnValue(rows[j], spec.GetFieldName())
+			left, _ := recordRowValue(rows[i], spec.GetFieldName())
+			right, _ := recordRowValue(rows[j], spec.GetFieldName())
 			leftText := factvalue.String(left)
 			rightText := factvalue.String(right)
 			if leftText == rightText {

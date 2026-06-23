@@ -26,8 +26,8 @@ func TestLoadMetadataSeedUsesDomainRecords(t *testing.T) {
 	if len(seed.PrimaryStoreRoutes) == 0 {
 		t.Fatalf("seed must include storage routes")
 	}
-	if len(seed.ViewColumns) == 0 {
-		t.Fatalf("seed must include view columns")
+	if len(seed.Views) != 0 || len(seed.ViewColumns) != 0 {
+		t.Fatalf("base storage seed should not include views, got views=%d view_columns=%d", len(seed.Views), len(seed.ViewColumns))
 	}
 }
 

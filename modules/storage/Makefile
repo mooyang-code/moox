@@ -14,7 +14,7 @@ PROTO_DIR := ./proto
 CONFIG_DIR := ./config
 SCHEMA_DIR := ./schema
 LDFLAGS := -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)
-CGO_ENABLED ?= 1
+override CGO_ENABLED := 1
 
 help:
 	@echo "MooX Storage 构建工具"

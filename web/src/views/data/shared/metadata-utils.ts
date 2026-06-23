@@ -75,6 +75,14 @@ export function joinList(value?: string[]) {
   return (value || []).join(',');
 }
 
+export function validateLowerSnakeId(value: string | undefined, maxLength: number) {
+  const id = (value || '').trim();
+  if (!id) return 'ID 不能为空';
+  if (id.length > maxLength) return `ID 总长度不能超过 ${maxLength}`;
+  if (!/^[a-z][a-z0-9_]*$/.test(id)) return 'ID 只能使用小写字母、数字和下划线，且必须以小写字母开头';
+  return '';
+}
+
 export const statusOptions: SelectOption[] = [
   { label: '启用', value: 'active' },
   { label: '禁用', value: 'disabled' },

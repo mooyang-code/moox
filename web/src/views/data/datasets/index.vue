@@ -123,6 +123,7 @@ import {
   splitList,
   statusColor,
   statusOptions,
+  validateLowerSnakeId,
 } from '@/views/data/shared/metadata-utils';
 
 defineOptions({ name: 'DataDatasets' });
@@ -228,6 +229,11 @@ async function submit() {
   const spaceId = spaceStore.requireSpaceId();
   if (!form.dataset_id || !form.data_source_id || !form.name || !form.data_kind) {
     Message.warning('请补全数据集ID、数据源、名称和数据形态');
+    return;
+  }
+  const idError = validateLowerSnakeId(form.dataset_id, 20);
+  if (idError) {
+    Message.warning(`数据集${idError}`);
     return;
   }
   const payload: Dataset = {

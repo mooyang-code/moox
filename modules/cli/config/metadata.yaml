@@ -161,23 +161,6 @@ t_dataset_columns:
     c_origin_id: "status"
     c_value_type: "string"
 
-t_views:
-  - c_space_id: "crypto"
-    c_view_id: "spot_kline_close_view"
-    c_name: "现货 K 线收盘价视图"
-    c_primary_dataset_id: "binance_spot_kline"
-    c_dataset_ids_json: '["binance_spot_kline"]'
-    c_grain_keys_json: '["subject_id","freq","data_time"]'
-    c_query_window: "30d"
-
-t_view_columns:
-  - c_space_id: "crypto"
-    c_view_id: "spot_kline_close_view"
-    c_column_name: "close"
-    c_origin_type: "dataset_column"
-    c_origin_id: "binance_spot_kline.close"
-    c_value_type: "double"
-
 primary_store_nodes:
   - node_id: "local"
     name: "local-primary"

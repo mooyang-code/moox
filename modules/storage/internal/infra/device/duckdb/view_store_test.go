@@ -31,6 +31,68 @@ func TestViewStoreCreatesInsertsAndQueriesRows(t *testing.T) {
 	require.Equal(t, "APT-USDT", rows[0].GetKey().GetSubjectId())
 }
 
+func TestViewStorePersistsResultTableAcrossReopen(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "views.duckdb")
+	columns := []*pb.ViewColumn{{
+		ColumnName: "close",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   "kline.close",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	}}
+
+	store, err := duckdb.Open(duckdb.Options{Path: path})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateResultTable(ctx, "view_result_crypto_kline_persist", columns))
+	require.NoError(t, store.InsertRows(ctx, "view_result_crypto_kline_persist", []*pb.TimeSeriesRow{
+		timeSeriesRow("BTC-USDT", "2026-06-15T00:00:00Z", []*pb.ColumnValue{testutil.DoubleValue("close", 68000)}),
+	}))
+	require.NoError(t, store.Close())
+
+	reopened, err := duckdb.Open(duckdb.Options{Path: path})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	tables, err := reopened.ListResultTables(ctx)
+	require.NoError(t, err)
+	require.Contains(t, tables, "view_result_crypto_kline_persist")
+	gotColumns, rows, page, err := reopened.QueryTimeSeriesRows(ctx, "view_result_crypto_kline_persist", &pb.QueryTimeSeriesRowsReq{
+		Keys: []*pb.TimeSeriesKey{{SubjectId: "BTC-USDT"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, gotColumns, 1)
+	require.Len(t, rows, 1)
+	require.Equal(t, uint32(1), page.GetTotal())
+	require.InDelta(t, 68000, rows[0].GetColumns()[0].GetValue().GetDoubleValue(), 1e-9)
+}
+
+func TestViewStoreMergesDuplicateRowsOnInitialInsert(t *testing.T) {
+	ctx := context.Background()
+	store := openViewStore(t)
+	columns := []*pb.ViewColumn{
+		{ColumnName: "close", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "kline.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "volume", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "kline.volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+	}
+	require.NoError(t, store.CreateResultTable(ctx, "view_result_crypto_kline_initial_merge", columns))
+	key := &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-06-15T00:00:00Z"}
+	require.NoError(t, store.InsertRows(ctx, "view_result_crypto_kline_initial_merge", []*pb.TimeSeriesRow{
+		{Key: key, Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 68000)}},
+		{Key: key, Columns: []*pb.ColumnValue{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, testutil.DoubleValue("volume", 12.5)}},
+	}))
+
+	_, rows, page, err := store.QueryTimeSeriesRows(ctx, "view_result_crypto_kline_initial_merge", &pb.QueryTimeSeriesRowsReq{
+		Keys: []*pb.TimeSeriesKey{{SubjectId: "BTC-USDT"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), page.GetTotal())
+	require.Len(t, rows, 1)
+	values := map[string]float64{}
+	for _, column := range rows[0].GetColumns() {
+		values[column.GetColumnName()] = column.GetValue().GetDoubleValue()
+	}
+	require.InDelta(t, 68000, values["close"], 1e-9)
+	require.InDelta(t, 12.5, values["volume"], 1e-9)
+}
+
 func TestViewStoreAppliesClosedTimeRangeWithTimeZones(t *testing.T) {
 	ctx := context.Background()
 	store := openViewStore(t)
@@ -122,6 +184,43 @@ func TestViewStoreRejectsUnsupportedFilterExpression(t *testing.T) {
 		Filters: []*pb.FilterExpr{{Expr: "unsupported(close)"}},
 	})
 	require.ErrorContains(t, err, "unsupported filter expression")
+}
+
+func TestViewStoreAppliesStringFunctionFilters(t *testing.T) {
+	ctx := context.Background()
+	store := openViewStore(t)
+	columns := []*pb.ViewColumn{
+		{ColumnName: "symbol", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "kline.symbol", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+		{ColumnName: "note", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "kline.note", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+	}
+	require.NoError(t, store.CreateResultTable(ctx, "view_result_crypto_kline_string_filter", columns))
+	require.NoError(t, store.InsertRows(ctx, "view_result_crypto_kline_string_filter", []*pb.TimeSeriesRow{
+		timeSeriesRow("BTC-USDT", "2026-06-15T00:00:00Z", []*pb.ColumnValue{testutil.StringValue("symbol", "BTC-USDT"), testutil.StringValue("note", "tradeable")}),
+		timeSeriesRow("ETH-USDT", "2026-06-15T00:00:00Z", []*pb.ColumnValue{testutil.StringValue("symbol", "ETH-USDT"), testutil.StringValue("note", "test-only")}),
+		timeSeriesRow("BNB-USDT", "2026-06-15T00:00:00Z", []*pb.ColumnValue{testutil.StringValue("symbol", "BNB-USDT")}),
+	}))
+
+	_, rows, page, err := store.QueryTimeSeriesRows(ctx, "view_result_crypto_kline_string_filter", &pb.QueryTimeSeriesRowsReq{
+		Filters: []*pb.FilterExpr{
+			{Expr: "starts_with(symbol, $prefix)", Args: map[string]*pb.TypedValue{"prefix": {Value: &pb.TypedValue_StringValue{StringValue: "B"}}}},
+			{Expr: "ends_with(symbol, $suffix)", Args: map[string]*pb.TypedValue{"suffix": {Value: &pb.TypedValue_StringValue{StringValue: "USDT"}}}},
+			{Expr: "not_contains(note, $blocked)", Args: map[string]*pb.TypedValue{"blocked": {Value: &pb.TypedValue_StringValue{StringValue: "test"}}}},
+		},
+		Sorts: []*pb.SortSpec{{FieldName: "symbol"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint32(2), page.GetTotal())
+	require.Len(t, rows, 2)
+	require.Equal(t, "BNB-USDT", rows[0].GetKey().GetSubjectId())
+	require.Equal(t, "BTC-USDT", rows[1].GetKey().GetSubjectId())
+
+	_, emptyRows, emptyPage, err := store.QueryTimeSeriesRows(ctx, "view_result_crypto_kline_string_filter", &pb.QueryTimeSeriesRowsReq{
+		Filters: []*pb.FilterExpr{{Expr: "is_empty(note)"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), emptyPage.GetTotal())
+	require.Len(t, emptyRows, 1)
+	require.Equal(t, "BNB-USDT", emptyRows[0].GetKey().GetSubjectId())
 }
 
 func TestViewStoreDropsResultTableAndColumns(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 
 	cpebble "github.com/cockroachdb/pebble"
@@ -229,6 +230,9 @@ func (s *Store) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, dat
 		return nil, nil, errors.New("data_kind is required")
 	}
 	prefix := []byte(encodeDatasetPrefix(dataKind, target.GetSpaceId(), target.GetDatasetId()))
+	if page.GetCursor() != "" && order != pb.SortOrder_SORT_ORDER_DESC {
+		return s.scanRowsForwardCursor(ctx, prefix, versionRange, columnNames, page)
+	}
 	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: nextPrefix(prefix)})
 	if err != nil {
 		return nil, nil, err
@@ -252,6 +256,57 @@ func (s *Store) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, dat
 	sortRows(rows, order)
 	paged, result := pageRows(rows, page, order)
 	return paged, result, nil
+}
+
+func (s *Store) scanRowsForwardCursor(ctx context.Context, prefix []byte, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	_ = ctx
+	size := pageSize(page)
+	lower := prefix
+	upper := nextPrefix(prefix)
+	if cursor := page.GetCursor(); cursor != "" {
+		cursorBytes := []byte(cursor)
+		if bytes.Compare(cursorBytes, prefix) >= 0 && (len(upper) == 0 || bytes.Compare(cursorBytes, upper) < 0) {
+			if next := nextPrefix(cursorBytes); len(next) > 0 {
+				lower = next
+			}
+		}
+	}
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer iter.Close()
+
+	rows := make([]*pb.PrimaryStoreRow, 0, size)
+	nextCursor := ""
+	hasMore := false
+	for valid := iter.First(); valid; valid = iter.Next() {
+		encoded := string(iter.Key())
+		if !versionRangeContains(encodedRowVersion(encoded), versionRange) {
+			continue
+		}
+		if uint32(len(rows)) >= size {
+			hasMore = true
+			break
+		}
+		row := &pb.PrimaryStoreRow{}
+		if err := proto.Unmarshal(iter.Value(), row); err != nil {
+			return nil, nil, err
+		}
+		rows = append(rows, filterRowColumns(row, columnNames))
+		nextCursor = encoded
+	}
+	if err := iter.Error(); err != nil {
+		return nil, nil, err
+	}
+	if !hasMore {
+		nextCursor = ""
+	}
+	return rows, &pb.PageResult{
+		Size:       size,
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
+	}, nil
 }
 
 func canReadExact(keys []*pb.PrimaryStoreKey, versionRange *pb.VersionRange, page *pb.Page) bool {
@@ -365,6 +420,20 @@ func versionRangeContains(version string, versionRange *pb.VersionRange) bool {
 		return false
 	}
 	return true
+}
+
+func encodedRowVersion(encoded string) string {
+	parts := strings.Split(encoded, "|")
+	if len(parts) < 5 {
+		return ""
+	}
+	return unescape(parts[len(parts)-1])
+}
+
+func unescape(value string) string {
+	value = strings.ReplaceAll(value, "%7C", "|")
+	value = strings.ReplaceAll(value, "%25", "%")
+	return value
 }
 
 func nextPrefix(prefix []byte) []byte {

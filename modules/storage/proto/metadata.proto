@@ -30,7 +30,7 @@ message Space {
 message View {
   // space_id 是 View 所属 Space。
   string space_id = 1;
-  // view_id 是 Space 内唯一的查询视图 ID。
+  // view_id 是 Space 内唯一的查询视图 ID；必须为 lower_snake_case，最长 30 字符。
   string view_id = 2;
   // name 是视图名称，通常用于管理台展示。
   string name = 3;
@@ -84,11 +84,11 @@ message ViewColumn {
   string space_id = 1;
   // view_id 是查询视图 ID。
   string view_id = 2;
-  // column_name 是视图中对用户暴露的列名。
+  // column_name 是视图中对用户暴露的列名；DatasetColumn 来源必须使用 dataset_id.column_name。
   string column_name = 3;
   // origin_type 表示列来源，可为 DatasetColumn、表达式或系统列。
   common.ColumnOriginType origin_type = 4;
-  // origin_id 是来源 ID；DatasetColumn 推荐使用 dataset_id.column_name。
+  // origin_id 是来源 ID；DatasetColumn 必须使用 dataset_id.column_name，并与 column_name 保持一致。
   string origin_id = 5;
   // value_type 是列值的逻辑类型。
   common.FieldValueType value_type = 6;
@@ -180,7 +180,7 @@ message SubjectSymbol {
 message Dataset {
   // space_id 是 Dataset 所属 Space。
   string space_id = 1;
-  // dataset_id 是 Space 内唯一的数据集 ID。
+  // dataset_id 是 Space 内唯一的数据集 ID；必须为 lower_snake_case，最长 20 字符。
   string dataset_id = 2;
   // data_source_id 是该 Dataset 绑定的数据来源 ID；一个 Dataset 只绑定一个 DataSource。
   string data_source_id = 3;

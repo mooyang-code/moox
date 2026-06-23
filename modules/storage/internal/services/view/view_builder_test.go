@@ -35,6 +35,58 @@ func TestBuilderBuildsViewFromTimeSeriesRows(t *testing.T) {
 	require.Equal(t, "close", writer.rows[built.GetActiveResult()][0].GetColumns()[0].GetColumnName())
 }
 
+func TestBuilderBuildsViewByJoiningDatasetsOnGrain(t *testing.T) {
+	ctx := context.Background()
+	meta := openViewMetadata(t, ctx)
+	_, err := meta.UpsertDataset(ctx, &pb.Dataset{SpaceId: "crypto", DatasetId: "factor", DataSourceId: "binance", Name: "因子", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}, Status: "active"})
+	require.NoError(t, err)
+	_, err = meta.UpsertView(ctx, &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "joined_kline_view",
+		Name:             "K线因子视图",
+		PrimaryDatasetId: "kline",
+		DatasetIds:       []string{"kline", "factor"},
+		GrainKeys:        []string{"subject_id", "data_time", "freq"},
+		Engine:           "duckdb",
+		BuildStatus:      "pending",
+		Status:           "active",
+	})
+	require.NoError(t, err)
+	_, err = meta.UpsertViewColumn(ctx, &pb.ViewColumn{SpaceId: "crypto", ViewId: "joined_kline_view", ColumnName: "kline.close", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "kline.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1})
+	require.NoError(t, err)
+	_, err = meta.UpsertViewColumn(ctx, &pb.ViewColumn{SpaceId: "crypto", ViewId: "joined_kline_view", ColumnName: "factor.alpha", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "factor.alpha", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 2})
+	require.NoError(t, err)
+	writer := &fakeViewWriter{}
+	builder := view.NewBuilder(view.Options{
+		Metadata: meta,
+		Facts: fakeFactReader{rowsByDataset: map[string][]*pb.TimeSeriesRow{
+			"kline": {
+				timeSeriesRowForDataset("kline", "APT-USDT", "2026-06-15T00:00:00Z", []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)}),
+				timeSeriesRowForDataset("kline", "APT-USDT", "2026-06-15T01:00:00Z", []*pb.ColumnValue{testutil.DoubleValue("close", 8.2)}),
+			},
+			"factor": {
+				timeSeriesRowForDataset("factor", "APT-USDT", "2026-06-15T00:00:00Z", []*pb.ColumnValue{testutil.DoubleValue("alpha", 0.42)}),
+			},
+		}},
+		Views: writer,
+		Now:   func() time.Time { return time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC) },
+	})
+
+	built, err := builder.BuildView(ctx, "crypto", "joined_kline_view")
+	require.NoError(t, err)
+	rows := writer.rows[built.GetActiveResult()]
+	require.Len(t, rows, 2)
+	require.Equal(t, "kline", rows[0].GetKey().GetDatasetId())
+	require.Equal(t, "APT-USDT", rows[0].GetKey().GetSubjectId())
+	require.Equal(t, "kline.close", rows[0].GetColumns()[0].GetColumnName())
+	require.Equal(t, 8.1, rows[0].GetColumns()[0].GetValue().GetDoubleValue())
+	require.Equal(t, "factor.alpha", rows[0].GetColumns()[1].GetColumnName())
+	require.Equal(t, 0.42, rows[0].GetColumns()[1].GetValue().GetDoubleValue())
+	require.Equal(t, "2026-06-15T01:00:00Z", rows[1].GetKey().GetDataTime())
+	require.Equal(t, "factor.alpha", rows[1].GetColumns()[1].GetColumnName())
+	require.Nil(t, rows[1].GetColumns()[1].GetValue())
+}
+
 func TestBuilderRebuildPendingTreatsBuildingAsRecoverable(t *testing.T) {
 	ctx := context.Background()
 	meta := openViewMetadata(t, ctx)
@@ -87,7 +139,8 @@ func TestBuilderCleanupInactiveResultsDropsOnlyInactiveTables(t *testing.T) {
 
 // fakeFactReader 是 View 构建测试使用的主存读取桩。
 type fakeFactReader struct {
-	rows []*pb.TimeSeriesRow
+	rows          []*pb.TimeSeriesRow
+	rowsByDataset map[string][]*pb.TimeSeriesRow
 }
 
 func (f fakeFactReader) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
@@ -97,6 +150,10 @@ func (f fakeFactReader) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTime
 
 func (f fakeFactReader) ScanTimeSeriesRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange, columnNames []string, page *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult, error) {
 	_ = ctx
+	if f.rowsByDataset != nil {
+		rows := f.rowsByDataset[datasetID]
+		return rows, &pb.PageResult{Total: uint32(len(rows))}, nil
+	}
 	return f.rows, &pb.PageResult{Total: uint32(len(f.rows))}, nil
 }
 
@@ -168,6 +225,10 @@ func openViewMetadata(t *testing.T, ctx context.Context) *metasqlite.Store {
 
 func timeSeriesRow(subjectID string, dataTime string, columns []*pb.ColumnValue) *pb.TimeSeriesRow {
 	return &pb.TimeSeriesRow{Key: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: subjectID, Freq: "1m", DataTime: dataTime}, Columns: columns}
+}
+
+func timeSeriesRowForDataset(datasetID string, subjectID string, dataTime string, columns []*pb.ColumnValue) *pb.TimeSeriesRow {
+	return &pb.TimeSeriesRow{Key: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: datasetID, SubjectId: subjectID, Freq: "1m", DataTime: dataTime}, Columns: columns}
 }
 
 func schemaPath(t *testing.T) string {

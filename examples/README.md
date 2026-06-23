@@ -7,9 +7,9 @@
 ## 文件
 
 - `platform-local.seed.yaml`：本地开发和演示用的平台级默认存储拓扑，包含 `local` 主存节点以及 Pebble、DuckDB、Bleve、Parquet 设备。
-- `metadata-cn-stock.seed.yaml`：A股交易空间示例，包含东方财富、AKShare、日线行情、股票资料、财务指标、字段、因子、视图和 Dataset 默认主存路由。
-- `metadata-crypto.seed.yaml`：加密货币交易空间示例，包含 Binance 现货 K 线、交易对资料、字段、因子、视图和 Dataset 默认主存路由。
-- `metadata-crypto-binance-swap-kline.seed.yaml`：Binance U 本位永续合约 1H K 线示例，匹配 `coin-binance-swap-candle-csv-1h-*` CSV 表头，包含 swap 数据集、常用标的、字段、视图和默认主存路由。
+- `metadata-cn-stock.seed.yaml`：A股交易空间示例，包含东方财富、AKShare、日线行情、股票资料、财务指标、字段、因子和 Dataset 默认主存路由。
+- `metadata-crypto.seed.yaml`：加密货币交易空间示例，包含 Binance 现货 K 线、交易对资料、字段、因子和 Dataset 默认主存路由。
+- `metadata-crypto-binance-swap-kline.seed.yaml`：Binance U 本位永续合约 1H K 线示例，匹配 `coin-binance-swap-candle-csv-1h-*` CSV 表头，包含 swap 数据集、常用标的、字段、跨 swap/spot K 线的示例 View 和默认主存路由。
 
 ## 默认存储拓扑
 

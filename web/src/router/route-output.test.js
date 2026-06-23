@@ -6,6 +6,7 @@ const root = process.cwd();
 const routeConfig = fs.readFileSync(path.join(root, 'src/store/modules/route-config.ts'), 'utf8');
 const routeOutput = fs.readFileSync(path.join(root, 'src/router/route-output.ts'), 'utf8');
 const staticRoutes = fs.readFileSync(path.join(root, 'src/router/route.ts'), 'utf8');
+const systemMenu = fs.readFileSync(path.join(root, 'src/mock/_data/system_menu.ts'), 'utf8');
 
 assert.match(
   routeConfig,
@@ -28,6 +29,30 @@ assert.match(
   staticRoutes,
   /path:\s*["']\/data\/list["'][\s\S]*redirect:\s*["']\/data\/browse["']/,
   'legacy data list route must redirect to the data browse page',
+);
+
+assert.match(
+  staticRoutes,
+  /path:\s*["']\/data\/view-browse["'][\s\S]*name:\s*["']data-view-browse["']/,
+  'view browse route must be registered as a standalone page',
+);
+
+assert.match(
+  systemMenu,
+  /directory\("0220",\s*"02",\s*"\/data\/views",\s*"data-views"/,
+  'query views must be a menu group',
+);
+
+assert.match(
+  systemMenu,
+  /menu\("022001",\s*"0220",\s*"\/data\/views",\s*"data-view-list"/,
+  'query views group must include view list',
+);
+
+assert.match(
+  systemMenu,
+  /menu\("022002",\s*"0220",\s*"\/data\/view-browse",\s*"data-view-browse"/,
+  'query views group must include view browse',
 );
 
 console.log('route-output tests passed');

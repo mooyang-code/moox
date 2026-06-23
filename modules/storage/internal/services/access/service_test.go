@@ -124,6 +124,161 @@ func TestServicePublishesRecordChangedEvent(t *testing.T) {
 	require.Equal(t, writeRsp.GetKeys()[0].GetVersion(), bus.RecordEvents()[0].GetKeys()[0].GetVersion())
 }
 
+func TestServiceCreateViewNormalizesDatasetIDs(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	seedDataset(t, ctx, svc, "kline", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1h"}, []string{"close"})
+	seedDataset(t, ctx, svc, "factor", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1m", "1h", "1d"}, []string{"alpha"})
+
+	rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "kline_factor_view",
+		Name:             "Kline Factor View",
+		PrimaryDatasetId: "kline",
+		DatasetIds:       []string{"factor", "kline", "factor"},
+		GrainKeys:        []string{"manual"},
+		Engine:           "bleve",
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, []string{"kline", "factor"}, rsp.GetView().GetDatasetIds())
+	require.Equal(t, []string{"subject_id", "freq", "data_time"}, rsp.GetView().GetGrainKeys())
+	require.Equal(t, "duckdb", rsp.GetView().GetEngine())
+}
+
+func TestServiceRejectsInvalidDatasetAndViewIDs(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+
+	for _, datasetID := range []string{"BadDataset", "bad-dataset", "bad.dataset", "dataset_id_that_is_too_long"} {
+		rsp, err := svc.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{
+			SpaceId:      "crypto",
+			DatasetId:    datasetID,
+			DataSourceId: "binance",
+			Name:         "Bad Dataset",
+			DataKind:     pb.DataKind_DATA_KIND_RECORD,
+			Status:       "active",
+		}})
+		require.NoError(t, err)
+		require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), datasetID)
+	}
+
+	seedDataset(t, ctx, svc, "symbols", pb.DataKind_DATA_KIND_RECORD, nil, []string{"name"})
+	for _, viewID := range []string{"BadView", "bad-view", "bad.view", "view_id_that_is_definitely_too_long"} {
+		rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+			SpaceId:          "crypto",
+			ViewId:           viewID,
+			Name:             "Bad View",
+			PrimaryDatasetId: "symbols",
+			DatasetIds:       []string{"symbols"},
+			Status:           "active",
+		}})
+		require.NoError(t, err)
+		require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), viewID)
+	}
+}
+
+func TestServiceCreateRecordViewDefaultsGrainKeys(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	seedDataset(t, ctx, svc, "symbols", pb.DataKind_DATA_KIND_RECORD, nil, []string{"name"})
+
+	rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "symbols_view",
+		Name:             "Symbols View",
+		PrimaryDatasetId: "symbols",
+		DatasetIds:       []string{"symbols"},
+		GrainKeys:        []string{"manual"},
+		Engine:           "duckdb",
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, []string{"record_id", "version"}, rsp.GetView().GetGrainKeys())
+	require.Equal(t, "bleve", rsp.GetView().GetEngine())
+}
+
+func TestServiceCreateViewAllowsMixedDatasetKinds(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	seedDataset(t, ctx, svc, "kline", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1h"}, []string{"close"})
+	seedDataset(t, ctx, svc, "news", pb.DataKind_DATA_KIND_RECORD, nil, []string{"title"})
+
+	rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "bad_view",
+		Name:             "Bad View",
+		PrimaryDatasetId: "kline",
+		DatasetIds:       []string{"kline", "news"},
+		Engine:           "duckdb",
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, []string{"kline", "news"}, rsp.GetView().GetDatasetIds())
+	require.Equal(t, "duckdb", rsp.GetView().GetEngine())
+}
+
+func TestServiceCreateViewAllowsMismatchedTimeSeriesFreqs(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	seedDataset(t, ctx, svc, "kline_1h", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1h"}, []string{"close"})
+	seedDataset(t, ctx, svc, "factor_5m", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"5m"}, []string{"alpha"})
+
+	rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "bad_freq_view",
+		Name:             "Bad Freq View",
+		PrimaryDatasetId: "kline_1h",
+		DatasetIds:       []string{"kline_1h", "factor_5m"},
+		Engine:           "duckdb",
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, []string{"kline_1h", "factor_5m"}, rsp.GetView().GetDatasetIds())
+}
+
+func TestServiceUpsertViewColumnRequiresQualifiedDatasetColumnName(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	seedDataset(t, ctx, svc, "kline", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1h"}, []string{"close"})
+	rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "kline_view",
+		Name:             "Kline View",
+		PrimaryDatasetId: "kline",
+		DatasetIds:       []string{"kline"},
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+
+	bad, err := svc.UpsertViewColumn(ctx, &pb.UpsertViewColumnReq{Column: &pb.ViewColumn{
+		SpaceId:    "crypto",
+		ViewId:     "kline_view",
+		ColumnName: "close",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   "kline.close",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
+
+	good, err := svc.UpsertViewColumn(ctx, &pb.UpsertViewColumnReq{Column: &pb.ViewColumn{
+		SpaceId:    "crypto",
+		ViewId:     "kline_view",
+		ColumnName: "kline.close",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   "kline.close",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, good.GetRetInfo().GetCode())
+}
+
 func TestServiceTimeSeriesEventConsumerWritesActiveAndBuildingResults(t *testing.T) {
 	ctx := context.Background()
 	bus := eventbus.NewMemoryBus()
@@ -288,6 +443,37 @@ func TestServiceSearchRecordRowsMissingActiveIndexReturnsError(t *testing.T) {
 	rsp, err := svc.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{SpaceId: "crypto", ViewId: "news_view", TextQuery: "token"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+}
+
+func TestRecordRowMatchesStringFunctionFilters(t *testing.T) {
+	row := &pb.RecordRow{Columns: []*pb.ColumnValue{
+		testutil.StringValue("symbol", "BTC-USDT"),
+		testutil.StringValue("note", "tradeable"),
+	}}
+	row.Key = &pb.RecordKey{RecordId: "record-btc", Version: "2026-06-01T00:00:00Z"}
+	require.True(t, recordRowMatchesFilter(row, &pb.FilterExpr{
+		Expr: "starts_with(symbol, $prefix)",
+		Args: map[string]*pb.TypedValue{"prefix": {Value: &pb.TypedValue_StringValue{StringValue: "BTC"}}},
+	}))
+	require.True(t, recordRowMatchesFilter(row, &pb.FilterExpr{
+		Expr: "record_id == $record_id",
+		Args: map[string]*pb.TypedValue{"record_id": {Value: &pb.TypedValue_StringValue{StringValue: "record-btc"}}},
+	}))
+	require.True(t, recordRowMatchesFilter(row, &pb.FilterExpr{
+		Expr: "version contains $version",
+		Args: map[string]*pb.TypedValue{"version": {Value: &pb.TypedValue_StringValue{StringValue: "2026"}}},
+	}))
+	require.True(t, recordRowMatchesFilter(row, &pb.FilterExpr{
+		Expr: "ends_with(symbol, $suffix)",
+		Args: map[string]*pb.TypedValue{"suffix": {Value: &pb.TypedValue_StringValue{StringValue: "USDT"}}},
+	}))
+	require.True(t, recordRowMatchesFilter(row, &pb.FilterExpr{
+		Expr: "not_contains(note, $blocked)",
+		Args: map[string]*pb.TypedValue{"blocked": {Value: &pb.TypedValue_StringValue{StringValue: "test"}}},
+	}))
+	require.False(t, recordRowMatchesFilter(row, &pb.FilterExpr{Expr: "is_empty(note)"}))
+	require.True(t, recordRowMatchesFilter(&pb.RecordRow{}, &pb.FilterExpr{Expr: "is_empty(note)"}))
+	require.True(t, recordRowMatchesFilter(row, &pb.FilterExpr{Expr: "is_not_empty(note)"}))
 }
 
 func TestServiceRebuildRecordViewProjectsColumnsAndCreatesEmptyIndex(t *testing.T) {

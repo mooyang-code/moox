@@ -126,6 +126,8 @@ export default {
     ["data-fields"]: "字段管理",
     ["data-factors"]: "因子管理",
     ["data-views"]: "查询视图",
+    ["data-view-list"]: "视图列表",
+    ["data-view-browse"]: "视图浏览",
     ["data-browse"]: "数据浏览",
     ["data-import"]: "数据导入",
     ["compute-collector"]: "计算与采集",

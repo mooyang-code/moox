@@ -25,7 +25,7 @@
     "build:test": "vue-tsc && vite build --mode test",
     "preview": "vite preview",
     "test:api": "node src/api/ret-info.test.js",
-    "test:unit": "pnpm test:api && node src/views/data/shared/metadata-utils.test.js && node src/views/data/browse/browse-utils.test.js && node src/router/route-output.test.js",
+    "test:unit": "pnpm test:api && node src/views/data/shared/metadata-utils.test.js && node src/views/data/browse/browse-utils.test.js && node src/views/data/view-browse/view-browse-utils.test.js && node src/views/data/views/view-form-utils.test.js && node src/router/route-output.test.js",
     "verify:space-context": "node scripts/verify-space-context.mjs",
     "lint:eslint": "eslint --fix --ext .js,.ts,.vue ./src",
     "lint:prettier": "prettier --write \"src/**/*.{js,ts,json,tsx,css,less,scss,vue,html,md}\"",

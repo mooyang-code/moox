@@ -138,7 +138,7 @@ func (h *Harness) LogTail() string { return h.tailLog() }
 func (h *Harness) build(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "go", "build", "-o", h.binPath, "./cmd/moox-storage")
 	cmd.Dir = h.moduleDir
-	// CGO 必须开启，DuckDB 视图存储依赖 //go:build cgo 实现，否则会退化为 fallback。
+	// CGO 必须开启，DuckDB 视图存储依赖真实磁盘 DuckDB 实现；no-cgo 构建会启动失败。
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=1")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("编译 moox-storage 失败: %w\n%s", err, out)

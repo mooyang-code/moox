@@ -45,11 +45,11 @@ build_storage() {
   (
     cd "${ROOT}/modules/storage"
     if [[ -n "${STORAGE_BUILD_TAGS:-}" ]]; then
-      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${STORAGE_CGO_ENABLED:-1}" go build -tags "${STORAGE_BUILD_TAGS}" \
+      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=1 go build -tags "${STORAGE_BUILD_TAGS}" \
         -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
         -o "${BIN_DIR}/moox-storage" ./cmd/moox-storage
     else
-      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${STORAGE_CGO_ENABLED:-1}" go build \
+      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=1 go build \
         -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
         -o "${BIN_DIR}/moox-storage" ./cmd/moox-storage
     fi

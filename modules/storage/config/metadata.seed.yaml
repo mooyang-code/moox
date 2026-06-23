@@ -233,35 +233,6 @@ dataset_columns:
     value_type: string
     status: active
 
-views:
-  - space_id: crypto
-    view_id: spot_kline_close_view
-    name: Spot Kline Close View
-    description: Materialized close price view for spot klines
-    primary_dataset_id: binance_spot_kline
-    dataset_ids: ["binance_spot_kline"]
-    grain_keys: ["subject_id", "freq", "data_time"]
-    engine: duckdb
-    query_window: 30d
-    build_status: pending
-    status: active
-
-view_columns:
-  - space_id: crypto
-    view_id: spot_kline_close_view
-    column_name: close
-    origin_type: dataset_column
-    origin_id: binance_spot_kline.close
-    value_type: double
-    sort_order: 1
-  - space_id: crypto
-    view_id: spot_kline_close_view
-    column_name: volume
-    origin_type: dataset_column
-    origin_id: binance_spot_kline.volume
-    value_type: double
-    sort_order: 2
-
 primary_store_nodes:
   - node_id: local
     name: local-primary

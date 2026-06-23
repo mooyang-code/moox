@@ -37,7 +37,7 @@ internal/
   infra/           # 底层实现
     device/        # 存储设备驱动层
       pebble/      #   在线事实主存（KV，时序/点查）
-      duckdb/      #   视图物化结果（OLAP，含 !cgo fallback）
+      duckdb/      #   视图物化结果（OLAP，必须启用 CGO）
       bleve/       #   全文索引
       parquet/     #   冷归档文件
       factkey/     #   事实主键/维度编码
@@ -88,7 +88,7 @@ tests/e2e/         # 端到端测试（本地部署整套服务驱动）
 | SQLite | 元数据控制面 | 保存全部元数据（Space/DataSource/Subject/Dataset/Field/Factor/View/PrimaryStoreNode/Device/PrimaryStoreRoute/ArchiveFile）。元数据 CRUD 直接读写 SQLite。 |
 | snapshotcache | 服务侧元数据读快照 | Access 的校验、路由、Search 列解释等**读路径**使用快照（`infra/metadata/cache`）。CRUD 不在写时更新缓存；启动加载与周期刷新（默认 10s）由 snapshotcache 负责。 |
 | Pebble | 在线事实主存 | 由 PrimaryStore 管理，承接事实数据写入；内部按时序 `t|` 与记录 `r|` 两类 key 空间保存，支持低延迟写入、时间范围读取、记录按 `record_id/version` 读取、截面最新读，区间读支持游标分页。 |
-| DuckDB | TimeSeries View 结果 | 由 View 管理，按 `view_version` 保存版本化物化结果供 `QueryTimeSeriesRows` 读取；无 cgo 时退化为 fallback 实现。 |
+| DuckDB | TimeSeries View 结果 | 由 View 管理，按 `view_version` 保存版本化物化结果供 `QueryTimeSeriesRows` 读取；结果表名以 `view_{view_id}` 开头，按 `ViewColumn` 展开为 `dataset_id.column_name` 物理列，并为行键、`subject_id + freq + data_time`、各视图字段建索引；必须使用 `CGO_ENABLED=1` 的真实磁盘 DuckDB 实现。 |
 | Bleve | Record View 索引 | 由 Search 管理，按 `view_version` 保存版本化全文索引供 `SearchRecordRows` 读取；索引字段由 ViewColumn 决定。 |
 | Parquet | 事实冷备 | 由 Archive 管理，只从 Pebble 事实主存归档，不从 DuckDB 物化结果归档。 |
 
@@ -138,7 +138,7 @@ QueryTimeSeriesRows: Access -> View 物化结果（DuckDB active_result）
 - `ReadTimeSeriesRows` 使用 `TimeSeriesKey + TimeRange` 读取固定 Subject/Freq 下的时序数据。`TimeRange` 是闭区间 `[start_time, end_time]`，两端为空表示无界；时间格式必须是 RFC3339/RFC3339Nano。
 - `ReadRecordRows` 使用 `RecordKey + VersionRange` 读取记录数据。`VersionRange` 是闭区间 `[start_version, end_version]`，两端为空表示无界。
 - `SearchRecordRows` 查询 Record View 的 active Bleve 索引，不走路由，也不 fan-out 到多个 Pebble 分片；支持全文 `text_query` 与结构化过滤。
-- `QueryTimeSeriesRows` 只查询 TimeSeries View 的 active DuckDB 结果；没有可用 `active_result` 时返回 `VIEW_NOT_FOUND`。
+- `QueryTimeSeriesRows` 只查询 TimeSeries View 的 active DuckDB 结果；没有可用 `active_result` 时返回 `VIEW_NOT_FOUND`。DuckDB 结果表使用 UTC 固定 9 位纳秒时间字符串存储 `data_time`，因此 `time_range` 可以安全下推到 SQL；`subject_id`、`freq`、filter、sort 与分页也优先在 DuckDB 执行。
 - `RebuildTimeSeriesView` / `RebuildRecordView` 异步受理并返回 `rebuild_id`，后台按当前 `view_version` 从 PrimaryStore 全量扫描构建新结果；构建期间事件消费者会同时写 active 与 building 结果，切换前再 drain dirty key。
 
 ## 元数据控制面与缓存

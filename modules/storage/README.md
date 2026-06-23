@@ -36,6 +36,10 @@ Storage 的事实主存统一按 `key + version` 定位一行数据，Access 对
 
 View 是用户可查询的派生读模型：TimeSeries View 由 DuckDB 维护版本化结果表，Record View 由 Bleve 维护版本化索引。只要 View 定义变化，例如新增查询列，`view_version` 就会递增；后台构建新版本，成功后再把读取切到新 active 版本。
 
+TimeSeries View 的 DuckDB 结果表按 `ViewColumn` 展开为真实物理列，不再以 `row_json` 作为查询主路径。物理表名以 `view_{view_id}` 开头；视图字段统一使用 `dataset_id.column_name`，并为 `(subject_id, freq, data_time)`、内部行键与每个视图字段创建索引；`QueryTimeSeriesRows` 会把 `subject_id`、`freq`、`time_range`、结构化 filter、sort 和分页尽量下推到 DuckDB SQL 执行。
+
+创建或更新 View 时，主数据集决定 View 的引擎和粒度：时序主数据集对应 DuckDB View，记录主数据集对应 Bleve View。包含数据集只要求已在同一空间注册，不能与主数据集重复；实际物化时是否能对齐取决于 View 字段能否按主数据集粒度聚合。`dataset_id` 必须是 lower_snake_case 且最长 20 字符，`view_id` 必须是 lower_snake_case 且最长 30 字符。
+
 | 字段 | 含义 |
 | --- | --- |
 | `view_version` | 当前 View 定义版本，新增列或构建形态变化时递增 |
@@ -52,7 +56,7 @@ View 是用户可查询的派生读模型：TimeSeries View 由 DuckDB 维护版
 ## 环境要求
 
 - Go **1.24+**
-- **CGO 开启**（`CGO_ENABLED=1`）并具备 C 编译器（gcc/clang）—— DuckDB 视图存储依赖 cgo。
+- **CGO 开启**（`CGO_ENABLED=1`）并具备 C 编译器（gcc/clang）—— DuckDB 视图存储依赖真实磁盘 DuckDB，no-cgo 构建会在启动 ViewBuilder 时失败。
 - 支持 macOS / Linux；Windows 需自备 CGO 工具链。
 
 ## 安装与构建
@@ -256,9 +260,9 @@ views:
 view_columns:
   - space_id: crypto
     view_id: spot_kline_close_view
-    column_name: close
+    column_name: binance_spot_kline.close
     origin_type: dataset_column
-    origin_id: binance_spot_kline.close   # 引用 dataset.column
+    origin_id: binance_spot_kline.close   # DatasetColumn 来源：column_name 与 origin_id 保持一致
     value_type: double
     sort_order: 1
 

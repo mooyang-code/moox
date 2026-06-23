@@ -17,6 +17,7 @@ const {
   fieldValueTypeOptions,
   optionLabel,
   resolveViewRebuildKind,
+  validateLowerSnakeId,
   viewColumnOriginOptions,
 } = await import(moduleUrl);
 
@@ -47,5 +48,10 @@ assert.equal(optionLabel(datasetColumnOriginOptions, 1), '字段');
 assert.equal(optionLabel(fieldValueTypeOptions, 3), '浮点数');
 assert.equal(optionLabel(viewColumnOriginOptions, 1), '数据集列');
 assert.equal(optionLabel(dataKindOptions, 2), '时序数据');
+assert.equal(validateLowerSnakeId('binance_spot_kline', 20), '');
+assert.equal(validateLowerSnakeId('binance_spot_symbols', 20), '');
+assert.match(validateLowerSnakeId('BadDataset', 20), /小写字母/);
+assert.match(validateLowerSnakeId('bad-dataset', 20), /小写字母/);
+assert.match(validateLowerSnakeId('dataset_id_that_is_too_long', 20), /不能超过 20/);
 
 console.log('metadata utils tests passed');

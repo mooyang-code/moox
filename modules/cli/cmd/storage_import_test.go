@@ -158,14 +158,14 @@ func TestRunStorageImportBindsSubjectAndWritesBatches(t *testing.T) {
 	csvPath := writeTempCSV(t, "candle_begin_time,close\n2024-01-01 00:00:00,1.23\n2024-01-01 00:01:00,1.24\n")
 	meta := &fakeStorageImportMetadata{
 		dataset: &pb.Dataset{SpaceId: "crypto", DatasetId: "binance_spot_kline", DataSourceId: "binance", Freqs: []string{"1m"}},
-		view:    &pb.View{SpaceId: "crypto", ViewId: "spot_kline_close_view", DatasetIds: []string{"binance_spot_kline"}},
+		view:    &pb.View{SpaceId: "crypto", ViewId: "swap_spot_kline_view", DatasetIds: []string{"binance_spot_kline"}},
 		columns: []*pb.DatasetColumn{
 			datasetColumn("close", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
 		},
 	}
 	writer := &fakeStorageDataWriter{}
 	opts := validStorageImportOptions(csvPath)
-	opts.ViewID = "spot_kline_close_view"
+	opts.ViewID = "swap_spot_kline_view"
 	opts.BatchSize = 1
 
 	summary, err := runStorageImport(context.Background(), opts, meta, writer)
