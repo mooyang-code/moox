@@ -2,7 +2,9 @@ package eventbus_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -25,11 +27,11 @@ func TestMemoryBusRecordsRowsChangedEvent(t *testing.T) {
 func TestMemoryBusRowsChangedSubscriptionCanClose(t *testing.T) {
 	ctx := context.Background()
 	bus := eventbus.NewMemoryBus()
-	var called int
+	var called atomic.Int32
 	sub, err := bus.SubscribeTimeSeriesRowsChanged(ctx, func(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
 		_ = ctx
 		_ = event
-		called++
+		called.Add(1)
 		return nil
 	})
 	require.NoError(t, err)
@@ -39,7 +41,9 @@ func TestMemoryBusRowsChangedSubscriptionCanClose(t *testing.T) {
 		Keys:    []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"}},
 	})
 	require.NoError(t, err)
-	require.Equal(t, 1, called)
+	require.Eventually(t, func() bool {
+		return called.Load() == 1
+	}, time.Second, 10*time.Millisecond)
 
 	require.NoError(t, sub.Close())
 	err = bus.PublishTimeSeriesRowsChanged(ctx, &pb.TimeSeriesRowsChangedEvent{
@@ -47,5 +51,50 @@ func TestMemoryBusRowsChangedSubscriptionCanClose(t *testing.T) {
 		Keys:    []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"}},
 	})
 	require.NoError(t, err)
-	require.Equal(t, 1, called)
+	require.NoError(t, bus.Wait(context.Background()))
+	require.Equal(t, int32(1), called.Load())
+}
+
+func TestMemoryBusPublishDoesNotRunHandlerInline(t *testing.T) {
+	ctx := context.Background()
+	bus := eventbus.NewMemoryBus()
+	started := make(chan struct{})
+	block := make(chan struct{})
+
+	_, err := bus.SubscribeRecordRowsChanged(ctx, func(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
+		_ = ctx
+		_ = event
+		close(started)
+		<-block
+		return nil
+	})
+	require.NoError(t, err)
+
+	published := make(chan error, 1)
+	go func() {
+		published <- bus.PublishRecordRowsChanged(ctx, &pb.RecordRowsChangedEvent{
+			EventId: "evt-1",
+			Keys:    []*pb.RecordKey{{SpaceId: "crypto", DatasetId: "symbols", RecordId: "APT-USDT"}},
+		})
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-started:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	select {
+	case err := <-published:
+		require.NoError(t, err)
+	default:
+		close(block)
+		require.FailNow(t, "PublishRecordRowsChanged ran the handler inline")
+	}
+
+	close(block)
+	require.NoError(t, bus.Wait(context.Background()))
 }

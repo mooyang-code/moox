@@ -35,12 +35,17 @@ type MemoryBus struct {
 	nextID             uint64
 	timeSeriesHandlers map[uint64]TimeSeriesRowsChangedHandler
 	recordHandlers     map[uint64]RecordRowsChangedHandler
+	inFlight           int
+	idle               chan struct{}
 }
 
 func NewMemoryBus() *MemoryBus {
+	idle := make(chan struct{})
+	close(idle)
 	return &MemoryBus{
 		timeSeriesHandlers: make(map[uint64]TimeSeriesRowsChangedHandler),
 		recordHandlers:     make(map[uint64]RecordRowsChangedHandler),
+		idle:               idle,
 	}
 }
 
@@ -83,11 +88,13 @@ func (b *MemoryBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.
 	for _, handler := range b.timeSeriesHandlers {
 		handlers = append(handlers, handler)
 	}
+	b.addInFlightLocked(len(handlers))
 	b.mu.Unlock()
 	for _, handler := range handlers {
-		if err := handler(ctx, event); err != nil {
-			return err
-		}
+		go func(handler TimeSeriesRowsChangedHandler) {
+			defer b.finishHandler()
+			_ = handler(ctx, event)
+		}(handler)
 	}
 	return nil
 }
@@ -99,13 +106,36 @@ func (b *MemoryBus) PublishRecordRowsChanged(ctx context.Context, event *pb.Reco
 	for _, handler := range b.recordHandlers {
 		handlers = append(handlers, handler)
 	}
+	b.addInFlightLocked(len(handlers))
 	b.mu.Unlock()
 	for _, handler := range handlers {
-		if err := handler(ctx, event); err != nil {
-			return err
-		}
+		go func(handler RecordRowsChangedHandler) {
+			defer b.finishHandler()
+			_ = handler(ctx, event)
+		}(handler)
 	}
 	return nil
+}
+
+func (b *MemoryBus) Wait(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	b.mu.Lock()
+	b.ensureIdleLocked()
+	idle := b.idle
+	b.mu.Unlock()
+
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (b *MemoryBus) Close() error {
+	return b.Wait(context.Background())
 }
 
 func (b *MemoryBus) TimeSeriesEvents() []*pb.TimeSeriesRowsChangedEvent {
@@ -134,6 +164,34 @@ func (b *MemoryBus) deleteRecordHandler(id uint64) {
 	b.mu.Lock()
 	delete(b.recordHandlers, id)
 	b.mu.Unlock()
+}
+
+func (b *MemoryBus) addInFlightLocked(count int) {
+	if count == 0 {
+		return
+	}
+	b.ensureIdleLocked()
+	if b.inFlight == 0 {
+		b.idle = make(chan struct{})
+	}
+	b.inFlight += count
+}
+
+func (b *MemoryBus) finishHandler() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.inFlight--
+	if b.inFlight == 0 {
+		close(b.idle)
+	}
+}
+
+func (b *MemoryBus) ensureIdleLocked() {
+	if b.idle != nil {
+		return
+	}
+	b.idle = make(chan struct{})
+	close(b.idle)
 }
 
 // memorySubscription 表示 MemoryBus 返回的订阅句柄。
