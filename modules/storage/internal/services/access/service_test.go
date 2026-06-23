@@ -325,6 +325,7 @@ func TestServiceTimeSeriesEventConsumerWritesActiveAndBuildingResults(t *testing
 	writeRsp, err := svc.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: []*pb.TimeSeriesRow{row}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, writeRsp.GetRetInfo().GetCode())
+	require.NoError(t, bus.Wait(ctx))
 
 	assertViewResultRows := func(tableName string) {
 		t.Helper()
