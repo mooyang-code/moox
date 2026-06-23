@@ -1,5 +1,8 @@
 storage:
   root: ./var/storage
+  roles:
+    - access
+    - deriver
   metadata:
     path: ./var/storage/metadata/storage_metadata.db
   devices:
@@ -10,7 +13,13 @@ storage:
   primary:
     service_name: ""
   eventbus:
-    type: memory
-    nats_url: ""
+    type: nats
+    nats_url: nats://127.0.0.1:4222
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
+    consumer_name: storage_deriver
+  deriver:
+    access_service_name: trpc.storage.access.AccessService
+    batch_size: 500
+    batch_wait_ms: 200
+    max_workers: 4

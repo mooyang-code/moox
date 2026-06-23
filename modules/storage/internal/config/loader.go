@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v2"
 )
@@ -22,10 +23,12 @@ type RuntimeConfig struct {
 // StorageConfig 保存 storage.yaml 中的业务配置。
 type StorageConfig struct {
 	Root     string          `yaml:"root"`
+	Roles    []string        `yaml:"roles"`
 	Metadata StorageMetadata `yaml:"metadata"`
 	Devices  StorageDevices  `yaml:"devices"`
 	Primary  StoragePrimary  `yaml:"primary"`
 	EventBus StorageEventBus `yaml:"eventbus"`
+	Deriver  StorageDeriver  `yaml:"deriver"`
 }
 
 // StorageMetadata 保存元数据存储与种子数据配置。
@@ -50,6 +53,14 @@ type StorageEventBus struct {
 	ConsumerName  string `yaml:"consumer_name"`
 }
 
+// StorageDeriver 保存派生服务消费与批处理配置。
+type StorageDeriver struct {
+	AccessServiceName string `yaml:"access_service_name"`
+	BatchSize         int    `yaml:"batch_size"`
+	BatchWaitMS       int    `yaml:"batch_wait_ms"`
+	MaxWorkers        int    `yaml:"max_workers"`
+}
+
 // StoragePrimary 保存主存服务访问配置。
 type StoragePrimary struct {
 	ServiceName string `yaml:"service_name"`
@@ -62,6 +73,9 @@ func (c *RuntimeConfig) ApplyDefaults() {
 func (c *StorageConfig) ApplyDefaults() {
 	if c.Root == "" {
 		c.Root = "./var/storage"
+	}
+	if len(c.Roles) == 0 {
+		c.Roles = []string{"access", "deriver"}
 	}
 	if c.Metadata.Path == "" {
 		c.Metadata.Path = filepath.Join(c.Root, "metadata", "storage_metadata.db")
@@ -79,17 +93,45 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.Devices.ParquetPath = filepath.Join(c.Root, "archive")
 	}
 	if c.EventBus.Type == "" {
-		c.EventBus.Type = "memory"
+		c.EventBus.Type = "nats"
+	}
+	if c.EventBus.NATSURL == "" {
+		c.EventBus.NATSURL = "nats://127.0.0.1:4222"
 	}
 	if c.EventBus.SubjectPrefix == "" {
 		c.EventBus.SubjectPrefix = "moox.storage"
 	}
-	if c.EventBus.Type == "nats" && c.EventBus.StreamName == "" {
+	if c.EventBus.StreamName == "" {
 		c.EventBus.StreamName = "MOOX_STORAGE"
 	}
-	if c.EventBus.Type == "nats" && c.EventBus.ConsumerName == "" {
-		c.EventBus.ConsumerName = "storage_rows_changed_deriver"
+	if c.EventBus.ConsumerName == "" {
+		c.EventBus.ConsumerName = "storage_deriver"
 	}
+	if c.EventBus.Type == "nats" && c.Deriver.AccessServiceName == "" {
+		c.Deriver.AccessServiceName = "trpc.storage.access.AccessService"
+	}
+	if c.Deriver.BatchSize == 0 {
+		c.Deriver.BatchSize = 500
+	}
+	if c.Deriver.BatchWaitMS == 0 {
+		c.Deriver.BatchWaitMS = 200
+	}
+	if c.Deriver.MaxWorkers == 0 {
+		c.Deriver.MaxWorkers = 4
+	}
+}
+
+func (c *StorageConfig) HasRole(role string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(role))
+	if normalized == "" {
+		return false
+	}
+	for _, candidate := range c.Roles {
+		if strings.ToLower(strings.TrimSpace(candidate)) == normalized {
+			return true
+		}
+	}
+	return false
 }
 
 // NewConfigLoader 创建配置加载器

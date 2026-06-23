@@ -153,13 +153,74 @@ storage:
 	}
 }
 
+func TestStorageRuntimeConfigDefaultsRolesEventBusAndDeriver(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "storage.yaml")
+	if err := os.WriteFile(configPath, []byte(""), 0o600); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	var cfg RuntimeConfig
+	err := NewConfigLoader(dir).LoadConfigWithDefaults("storage.yaml", &cfg, cfg.ApplyDefaults)
+	if err != nil {
+		t.Fatalf("LoadConfigWithDefaults returned error: %v", err)
+	}
+	if roles := strings.Join(cfg.Storage.Roles, ","); roles != "access,deriver" {
+		t.Fatalf("storage roles = %q, want access,deriver", roles)
+	}
+	if cfg.Storage.EventBus.Type != "nats" {
+		t.Fatalf("eventbus type = %q", cfg.Storage.EventBus.Type)
+	}
+	if cfg.Storage.EventBus.NATSURL != "nats://127.0.0.1:4222" {
+		t.Fatalf("eventbus nats_url = %q", cfg.Storage.EventBus.NATSURL)
+	}
+	if cfg.Storage.EventBus.StreamName != "MOOX_STORAGE" {
+		t.Fatalf("eventbus stream_name = %q", cfg.Storage.EventBus.StreamName)
+	}
+	if cfg.Storage.EventBus.SubjectPrefix != "moox.storage" {
+		t.Fatalf("eventbus subject_prefix = %q", cfg.Storage.EventBus.SubjectPrefix)
+	}
+	if cfg.Storage.EventBus.ConsumerName != "storage_deriver" {
+		t.Fatalf("eventbus consumer_name = %q", cfg.Storage.EventBus.ConsumerName)
+	}
+	if cfg.Storage.Deriver.AccessServiceName != "trpc.storage.access.AccessService" {
+		t.Fatalf("deriver access_service_name = %q", cfg.Storage.Deriver.AccessServiceName)
+	}
+	if cfg.Storage.Deriver.BatchSize != 500 {
+		t.Fatalf("deriver batch_size = %d", cfg.Storage.Deriver.BatchSize)
+	}
+	if cfg.Storage.Deriver.BatchWaitMS != 200 {
+		t.Fatalf("deriver batch_wait_ms = %d", cfg.Storage.Deriver.BatchWaitMS)
+	}
+	if cfg.Storage.Deriver.MaxWorkers != 4 {
+		t.Fatalf("deriver max_workers = %d", cfg.Storage.Deriver.MaxWorkers)
+	}
+}
+
+func TestStorageRuntimeConfigHasRole(t *testing.T) {
+	t.Parallel()
+
+	cfg := StorageConfig{Roles: []string{" Access ", "DERIVER"}}
+	if !cfg.HasRole("access") {
+		t.Fatalf("HasRole(access) = false, want true")
+	}
+	if !cfg.HasRole("deriver") {
+		t.Fatalf("HasRole(deriver) = false, want true")
+	}
+	if cfg.HasRole("primary") {
+		t.Fatalf("HasRole(primary) = true, want false")
+	}
+}
+
 func TestStorageRuntimeConfigDefaultsNATSConsumerName(t *testing.T) {
 	t.Parallel()
 
 	var cfg RuntimeConfig
 	cfg.Storage.EventBus.Type = "nats"
 	cfg.ApplyDefaults()
-	if cfg.Storage.EventBus.ConsumerName != "storage_rows_changed_deriver" {
+	if cfg.Storage.EventBus.ConsumerName != "storage_deriver" {
 		t.Fatalf("eventbus consumer_name = %q", cfg.Storage.EventBus.ConsumerName)
 	}
 }
