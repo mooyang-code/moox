@@ -187,8 +187,35 @@ func TestRoleHelpers(t *testing.T) {
 	if !shouldCreateStorageService(accessDeriver) {
 		t.Fatalf("access+deriver roles should create access storage service")
 	}
-	if shouldCreatePrimaryService(accessDeriver) {
-		t.Fatalf("access+deriver roles should not create primary service")
+	if !shouldCreatePrimaryService(accessDeriver) {
+		t.Fatalf("local access+deriver roles should create primary service")
+	}
+
+	remotePrimary := storageconfig.StorageConfig{
+		Roles:   []string{"access", "deriver"},
+		Primary: storageconfig.StoragePrimary{ServiceName: "trpc.storage.store.PrimaryStoreService"},
+	}
+	if shouldCreatePrimaryService(remotePrimary) {
+		t.Fatalf("access+deriver with remote primary should not create local primary service")
+	}
+}
+
+func TestDefaultAndRepositoryLocalAccessCreatePrimary(t *testing.T) {
+	var defaults storageconfig.RuntimeConfig
+	defaults.ApplyDefaults()
+	if !shouldCreatePrimaryService(defaults.Storage) {
+		t.Fatalf("default local access+deriver roles should create primary service")
+	}
+
+	cfg, ok := loadStorageConfig(filepath.Join("..", "..", "config", "storage.yaml"))
+	if !ok {
+		t.Fatalf("load repository config failed")
+	}
+	if cfg.Storage.Primary.ServiceName != "" {
+		t.Fatalf("repository primary service_name = %q, want empty local primary", cfg.Storage.Primary.ServiceName)
+	}
+	if !shouldCreatePrimaryService(cfg.Storage) {
+		t.Fatalf("repository local access+deriver roles should create primary service")
 	}
 }
 

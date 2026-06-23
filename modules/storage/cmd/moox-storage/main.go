@@ -211,7 +211,10 @@ func shouldCreateStorageService(storage storageconfig.StorageConfig) bool {
 }
 
 func shouldCreatePrimaryService(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("primary")
+	if storage.HasRole("primary") {
+		return true
+	}
+	return storage.HasRole("access") && strings.TrimSpace(storage.Primary.ServiceName) == ""
 }
 
 func shouldUseLocalAccessReader(storage storageconfig.StorageConfig) bool {
