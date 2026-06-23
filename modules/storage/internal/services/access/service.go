@@ -195,6 +195,34 @@ func (s *Service) viewStore() (*deviceduckdb.ViewStore, error) {
 	return store, nil
 }
 
+func (s *Service) ViewStore() (*deviceduckdb.ViewStore, error) {
+	if s == nil {
+		return nil, errors.New("storage service is nil")
+	}
+	return s.viewStore()
+}
+
+func (s *Service) MetadataStore() metadata.Store {
+	if s == nil {
+		return nil
+	}
+	return s.metadata
+}
+
+func (s *Service) MetadataReader() metadata.Reader {
+	if s == nil {
+		return nil
+	}
+	return s.metadataReader
+}
+
+func (s *Service) SearchService() *search.Service {
+	if s == nil {
+		return nil
+	}
+	return s.search
+}
+
 // Close 释放本 Service 持有的派生资源，等待异步索引完成，并回收其打开的 DuckDB 视图存储。
 // 用于优雅关闭，避免进程级全局缓存长期泄漏。
 func (s *Service) Close() error {

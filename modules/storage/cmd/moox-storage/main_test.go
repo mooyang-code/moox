@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	_ "modernc.org/sqlite"
 )
 
@@ -74,6 +75,33 @@ func TestStorageConfigPathFromArgs(t *testing.T) {
 	}
 }
 
+func TestStorageRolesDefaultToAccessAndDeriver(t *testing.T) {
+	var cfg storageconfig.RuntimeConfig
+	cfg.ApplyDefaults()
+	if !cfg.Storage.HasRole("access") {
+		t.Fatalf("default storage roles should include access")
+	}
+	if !cfg.Storage.HasRole("deriver") {
+		t.Fatalf("default storage roles should include deriver")
+	}
+	if cfg.Storage.HasRole("primary") {
+		t.Fatalf("default storage roles should not include primary")
+	}
+}
+
+func TestRoleEnabledIsCaseInsensitive(t *testing.T) {
+	cfg := storageconfig.StorageConfig{Roles: []string{" Access ", "DERIVER"}}
+	if !cfg.HasRole("access") {
+		t.Fatalf("HasRole(access) = false, want true")
+	}
+	if !cfg.HasRole("deriver") {
+		t.Fatalf("HasRole(deriver) = false, want true")
+	}
+	if cfg.HasRole("primary") {
+		t.Fatalf("HasRole(primary) = true, want false")
+	}
+}
+
 func TestLoadStorageOptionsUsesDeviceAndPrimaryConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "storage.yaml")
@@ -89,6 +117,9 @@ storage:
     parquet_path: /data/archive
   primary:
     service_name: trpc.storage.store.PrimaryStoreService
+  eventbus:
+    type: nats
+    nats_url: nats://127.0.0.1:4222
 `)
 	if err := os.WriteFile(configPath, config, 0o600); err != nil {
 		t.Fatalf("write config failed: %v", err)
@@ -113,6 +144,9 @@ storage:
 	if opts.InitSchemaPath != "" {
 		t.Fatalf("InitSchemaPath = %q, runtime config must not carry DDL schema path", opts.InitSchemaPath)
 	}
+	if opts.Events != nil {
+		t.Fatalf("Events = %#v, loadStorageOptions must not initialize eventbus", opts.Events)
+	}
 }
 
 func TestLoadStorageOptionsDefaultsToLocalPrimary(t *testing.T) {
@@ -131,6 +165,56 @@ storage:
 	opts := loadStorageOptions(configPath)
 	if opts.PrimaryServiceName != "" {
 		t.Fatalf("PrimaryServiceName = %q, want empty for local primary", opts.PrimaryServiceName)
+	}
+}
+
+func TestRoleHelpers(t *testing.T) {
+	primaryOnly := storageconfig.StorageConfig{Roles: []string{"primary"}}
+	if needsRowsChangedBus(primaryOnly) {
+		t.Fatalf("primary-only role should not need row changed eventbus")
+	}
+	if shouldCreateStorageService(primaryOnly) {
+		t.Fatalf("primary-only role should not create access storage service")
+	}
+	if !shouldCreatePrimaryService(primaryOnly) {
+		t.Fatalf("primary-only role should create primary service")
+	}
+
+	accessDeriver := storageconfig.StorageConfig{Roles: []string{"access", "deriver"}}
+	if !needsRowsChangedBus(accessDeriver) {
+		t.Fatalf("access+deriver roles should need row changed eventbus")
+	}
+	if !shouldCreateStorageService(accessDeriver) {
+		t.Fatalf("access+deriver roles should create access storage service")
+	}
+	if shouldCreatePrimaryService(accessDeriver) {
+		t.Fatalf("access+deriver roles should not create primary service")
+	}
+}
+
+func TestDeriverUsesLocalAccessReaderOnlyForInProcessMemoryAccess(t *testing.T) {
+	memoryAccess := storageconfig.StorageConfig{
+		Roles:    []string{"access", "deriver"},
+		EventBus: storageconfig.StorageEventBus{Type: "memory"},
+	}
+	if !shouldUseLocalAccessReader(memoryAccess) {
+		t.Fatalf("access+deriver with memory eventbus should use local access reader")
+	}
+
+	natsAccess := storageconfig.StorageConfig{
+		Roles:    []string{"access", "deriver"},
+		EventBus: storageconfig.StorageEventBus{Type: "nats"},
+	}
+	if shouldUseLocalAccessReader(natsAccess) {
+		t.Fatalf("access+deriver with nats eventbus should use remote access reader")
+	}
+
+	memoryDeriverOnly := storageconfig.StorageConfig{
+		Roles:    []string{"deriver"},
+		EventBus: storageconfig.StorageEventBus{Type: "memory"},
+	}
+	if shouldUseLocalAccessReader(memoryDeriverOnly) {
+		t.Fatalf("deriver-only with memory eventbus should not use local access reader")
 	}
 }
 

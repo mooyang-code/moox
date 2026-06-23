@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
@@ -13,6 +15,7 @@ import (
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/services/access"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/archive"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/deriver"
 	primarysvc "github.com/mooyang-code/moox/modules/storage/internal/services/primary"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -50,49 +53,133 @@ func main() {
 	// 创建trpc服务器
 	s := trpc.NewServer()
 
-	// 量化金融数据协议服务。当前实现提供真实的文件型读写路径，用于承接
-	// Space/Subject/Dataset/View 等新概念和 CSV 验收数据。
-	opts := storageOptions()
-	storageService := storagesvc.NewServiceWithOptions(opts)
-	primaryService := primarysvc.NewService(primarysvc.Options{
-		Root:       opts.Root,
-		PebblePath: opts.PebblePath,
-	})
-	defer func() {
-		if err := storageService.Close(); err != nil {
-			log.Errorf("关闭 storage service 失败: %v", err)
+	frameworkConfigPath := configPathFromArgs(os.Args)
+	storageConfigPath := storageConfigPathFromArgs(os.Args, frameworkConfigPath)
+	cfg := loadRuntimeConfig(storageConfigPath)
+	opts := storageOptionsFromConfig(cfg.Storage)
+	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
+		cfg.Storage.Root = root
+		opts.Root = root
+	}
+	if needsRowsChangedBus(cfg.Storage) {
+		events, err := eventbus.NewRowsChangedBus(trpc.BackgroundContext(), cfg.Storage.EventBus)
+		if err != nil {
+			log.Errorf("初始化 storage eventbus 失败: %v", err)
+			os.Exit(1)
 		}
-		if err := primaryService.Close(); err != nil {
-			log.Errorf("关闭 primary service 失败: %v", err)
-		}
-	}()
-	if err := storageService.StartEventConsumers(trpc.BackgroundContext()); err != nil {
-		log.Errorf("启动 storage event consumers 失败: %v", err)
-		os.Exit(1)
+		opts.Events = events
 	}
-	if err := storageService.InitViewBuilder(); err != nil {
-		log.Errorf("初始化 ViewBuilder 失败: %v", err)
-		os.Exit(1)
-	}
-	if err := storageService.InitArchiveService(); err != nil {
-		log.Errorf("初始化 ArchiveService 失败: %v", err)
-		os.Exit(1)
-	}
-	pb.RegisterMetadataServiceService(s, storageService)
-	pb.RegisterAccessServiceService(s, storageService)
-	pb.RegisterViewServiceService(s, storageService)
-	pb.RegisterPrimaryStoreServiceService(s, primaryService)
-	timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
-	registerTimerHandlerService("trpc.storage.view.timer", s.Service("trpc.storage.view.timer"), view.HandleSchedule)
-	registerTimerHandlerService("trpc.storage.view.cleanup.timer", s.Service("trpc.storage.view.cleanup.timer"), view.HandleSchedule)
-	registerTimerHandlerService("trpc.storage.view.retry_failed.timer", s.Service("trpc.storage.view.retry_failed.timer"), view.HandleSchedule)
-	timer.RegisterScheduler("archiveSchedule", &timer.DefaultScheduler{})
-	registerTimerHandlerService("trpc.storage.archive.timer", s.Service("trpc.storage.archive.timer"), archive.HandleSchedule)
 
+	var storageService *storagesvc.Service
+	if shouldCreateStorageService(cfg.Storage) {
+		storageService = storagesvc.NewServiceWithOptions(opts)
+		defer func() {
+			if err := storageService.Close(); err != nil {
+				log.Errorf("关闭 storage service 失败: %v", err)
+			}
+		}()
+	}
+
+	if cfg.Storage.HasRole("access") {
+		if storageService == nil {
+			log.Errorf("access role requires storage service")
+			os.Exit(1)
+		}
+		pb.RegisterMetadataServiceService(s, storageService)
+		pb.RegisterAccessServiceService(s, storageService)
+	}
+
+	if cfg.Storage.HasRole("access") || cfg.Storage.HasRole("deriver") {
+		if err := registerViewRole(s, storageService); err != nil {
+			log.Errorf("初始化 ViewService 失败: %v", err)
+			os.Exit(1)
+		}
+	}
+
+	if cfg.Storage.HasRole("deriver") {
+		deriverService, err := startDeriverService(trpc.BackgroundContext(), cfg.Storage, opts, storageService)
+		if err != nil {
+			log.Errorf("启动 deriver service 失败: %v", err)
+			os.Exit(1)
+		}
+		defer func() {
+			if err := deriverService.Close(); err != nil {
+				log.Errorf("关闭 deriver service 失败: %v", err)
+			}
+		}()
+	}
+
+	if cfg.Storage.HasRole("access") {
+		if err := storageService.InitArchiveService(); err != nil {
+			log.Errorf("初始化 ArchiveService 失败: %v", err)
+			os.Exit(1)
+		}
+		timer.RegisterScheduler("archiveSchedule", &timer.DefaultScheduler{})
+		registerTimerHandlerService("trpc.storage.archive.timer", s.Service("trpc.storage.archive.timer"), archive.HandleSchedule)
+	}
+
+	if shouldCreatePrimaryService(cfg.Storage) {
+		primaryService := primarysvc.NewService(primarysvc.Options{
+			Root:       opts.Root,
+			PebblePath: opts.PebblePath,
+		})
+		defer func() {
+			if err := primaryService.Close(); err != nil {
+				log.Errorf("关闭 primary service 失败: %v", err)
+			}
+		}()
+		pb.RegisterPrimaryStoreServiceService(s, primaryService)
+	}
 	// 启动trpc服务器
 	if err := s.Serve(); err != nil {
 		log.Errorf("trpc服务器出错: %v", err)
 	}
+}
+
+func registerViewRole(s *server.Server, storageService *storagesvc.Service) error {
+	if storageService == nil {
+		return errors.New("view role requires storage service")
+	}
+	if err := storageService.InitViewBuilder(); err != nil {
+		return err
+	}
+	pb.RegisterViewServiceService(s, storageService)
+	timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
+	registerTimerHandlerService("trpc.storage.view.timer", s.Service("trpc.storage.view.timer"), view.HandleSchedule)
+	registerTimerHandlerService("trpc.storage.view.cleanup.timer", s.Service("trpc.storage.view.cleanup.timer"), view.HandleSchedule)
+	registerTimerHandlerService("trpc.storage.view.retry_failed.timer", s.Service("trpc.storage.view.retry_failed.timer"), view.HandleSchedule)
+	return nil
+}
+
+func startDeriverService(ctx context.Context, storage storageconfig.StorageConfig, opts storagesvc.Options, storageService *storagesvc.Service) (*deriver.Service, error) {
+	if storageService == nil {
+		return nil, errors.New("deriver role requires storage service")
+	}
+	views, err := storageService.ViewStore()
+	if err != nil {
+		return nil, err
+	}
+	var local deriver.FactReader
+	accessServiceName := storage.Deriver.AccessServiceName
+	if shouldUseLocalAccessReader(storage) {
+		local = storageService
+		accessServiceName = ""
+	}
+	service := deriver.NewService(deriver.Options{
+		Events:         opts.Events,
+		Reader:         deriver.NewAccessReader(local, accessServiceName),
+		Metadata:       storageService.MetadataStore(),
+		MetadataReader: storageService.MetadataReader(),
+		Views:          views,
+		Search:         storageService.SearchService(),
+		BatchSize:      storage.Deriver.BatchSize,
+		BatchWait:      time.Duration(storage.Deriver.BatchWaitMS) * time.Millisecond,
+		MaxWorkers:     storage.Deriver.MaxWorkers,
+	})
+	if err := service.Start(ctx); err != nil {
+		return nil, err
+	}
+	return service, nil
 }
 
 func registerTimerHandlerService(name string, service server.Service, handle func(context.Context, string) error) bool {
@@ -107,19 +194,33 @@ func registerTimerHandlerService(name string, service server.Service, handle fun
 func storageOptions() storagesvc.Options {
 	configPath := configPathFromArgs(os.Args)
 	storageConfigPath := storageConfigPathFromArgs(os.Args, configPath)
-	opts := loadStorageOptions(storageConfigPath)
-	if cfg, ok := loadStorageConfig(storageConfigPath); ok {
-		events, err := eventbus.NewRowsChangedBus(trpc.BackgroundContext(), cfg.Storage.EventBus)
-		if err != nil {
-			log.Errorf("初始化 storage eventbus 失败: %v", err)
-			os.Exit(1)
-		}
-		opts.Events = events
-	}
+	cfg := loadRuntimeConfig(storageConfigPath)
+	opts := storageOptionsFromConfig(cfg.Storage)
 	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
 		opts.Root = root
 	}
 	return opts
+}
+
+func needsRowsChangedBus(storage storageconfig.StorageConfig) bool {
+	return storage.HasRole("access") || storage.HasRole("deriver")
+}
+
+func shouldCreateStorageService(storage storageconfig.StorageConfig) bool {
+	return storage.HasRole("access") || storage.HasRole("deriver")
+}
+
+func shouldCreatePrimaryService(storage storageconfig.StorageConfig) bool {
+	return storage.HasRole("primary")
+}
+
+func shouldUseLocalAccessReader(storage storageconfig.StorageConfig) bool {
+	return storage.HasRole("access") && storage.HasRole("deriver") && isMemoryRowsChangedBus(storage.EventBus)
+}
+
+func isMemoryRowsChangedBus(cfg storageconfig.StorageEventBus) bool {
+	kind := strings.ToLower(strings.TrimSpace(cfg.Type))
+	return kind == "" || kind == "memory"
 }
 
 func configPathFromArgs(args []string) string {
@@ -275,15 +376,28 @@ func loadStorageOptions(configPath string) storagesvc.Options {
 	if !ok {
 		return storagesvc.Options{}
 	}
+	return storageOptionsFromConfig(cfg.Storage)
+}
+
+func storageOptionsFromConfig(storage storageconfig.StorageConfig) storagesvc.Options {
 	return storagesvc.Options{
-		Root:               cfg.Storage.Root,
-		MetadataPath:       cfg.Storage.Metadata.Path,
-		PebblePath:         cfg.Storage.Devices.PebblePath,
-		DuckDBPath:         cfg.Storage.Devices.DuckDBPath,
-		BlevePath:          cfg.Storage.Devices.BlevePath,
-		ParquetPath:        cfg.Storage.Devices.ParquetPath,
-		PrimaryServiceName: cfg.Storage.Primary.ServiceName,
+		Root:               storage.Root,
+		MetadataPath:       storage.Metadata.Path,
+		PebblePath:         storage.Devices.PebblePath,
+		DuckDBPath:         storage.Devices.DuckDBPath,
+		BlevePath:          storage.Devices.BlevePath,
+		ParquetPath:        storage.Devices.ParquetPath,
+		PrimaryServiceName: storage.Primary.ServiceName,
 	}
+}
+
+func loadRuntimeConfig(configPath string) storageconfig.RuntimeConfig {
+	if cfg, ok := loadStorageConfig(configPath); ok {
+		return cfg
+	}
+	var cfg storageconfig.RuntimeConfig
+	cfg.ApplyDefaults()
+	return cfg
 }
 
 func loadStorageConfig(configPath string) (storageconfig.RuntimeConfig, bool) {
