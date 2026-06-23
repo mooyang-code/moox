@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/transport"
@@ -169,10 +170,7 @@ func (p *NATSProducer) Subscribe(ctx context.Context, subject string, handler tr
 	if handler == nil {
 		return nil, fmt.Errorf("消息处理器不能为空")
 	}
-	consumerName := p.options.ConsumerName
-	if consumerName == "" {
-		consumerName = "storage_rows_changed_deriver"
-	}
+	consumerName := durableConsumerName(p.options.ConsumerName, subject)
 	subscription, err := p.js.Subscribe(subject, func(msg *nats.Msg) {
 		event := &transport.Message{
 			Subject: msg.Subject,
@@ -214,4 +212,46 @@ func (p *NATSProducer) IsConnected() bool {
 // Options 获取生产者配置选项。
 func (p *NATSProducer) Options() transport.ProducerOptions {
 	return p.options
+}
+
+func durableConsumerName(base string, subject string) string {
+	base = sanitizeDurableName(base)
+	if base == "" {
+		base = "storage_deriver"
+	}
+	kind := sanitizeDurableName(subjectKind(subject))
+	if kind == "" {
+		return base
+	}
+	return base + "_" + kind
+}
+
+func subjectKind(subject string) string {
+	subject = strings.Trim(strings.TrimSpace(subject), ".")
+	if subject == "" {
+		return ""
+	}
+	parts := strings.Split(subject, ".")
+	if len(parts) < 3 {
+		return subject
+	}
+	return strings.Join(parts[len(parts)-3:], ".")
+}
+
+func sanitizeDurableName(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	var b strings.Builder
+	prevUnderscore := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevUnderscore = false
+			continue
+		}
+		if !prevUnderscore {
+			b.WriteByte('_')
+			prevUnderscore = true
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }

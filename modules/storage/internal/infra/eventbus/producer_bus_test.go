@@ -57,9 +57,9 @@ func TestSubscriberBusConsumesTimeSeriesRowsChangedEventFromTransport(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, sub)
 
-	require.Equal(t, infraeventbus.DefaultTimeSeriesRowsChangedSubject, pubsub.subject)
-	require.NotNil(t, pubsub.handler)
-	err = pubsub.handler(ctx, &transport.Message{
+	handler := pubsub.handler(infraeventbus.DefaultTimeSeriesRowsChangedSubject)
+	require.NotNil(t, handler)
+	err = handler(ctx, &transport.Message{
 		Subject: infraeventbus.DefaultTimeSeriesRowsChangedSubject,
 		Data:    []byte(`{"event_id":"evt-1","keys":[{"space_id":"crypto","dataset_id":"kline","subject_id":"APT-USDT","freq":"1m"}]}`),
 		ID:      "evt-1",
@@ -67,6 +67,74 @@ func TestSubscriberBusConsumesTimeSeriesRowsChangedEventFromTransport(t *testing
 	require.NoError(t, err)
 	require.Equal(t, "evt-1", got.GetEventId())
 	require.Equal(t, "APT-USDT", got.GetKeys()[0].GetSubjectId())
+}
+
+func TestSubscriberBusSubscribesToDistinctRowsChangedSubjects(t *testing.T) {
+	ctx := context.Background()
+	pubsub := &recordingPubSub{}
+	bus := infraeventbus.NewSubscriberBus(pubsub, "")
+
+	timeSeriesSub, err := bus.SubscribeTimeSeriesRowsChanged(ctx, func(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
+		return nil
+	})
+	require.NoError(t, err)
+	recordSub, err := bus.SubscribeRecordRowsChanged(ctx, func(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
+		return nil
+	})
+	require.NoError(t, err)
+	defer timeSeriesSub.Close()
+	defer recordSub.Close()
+
+	require.ElementsMatch(t, []string{
+		infraeventbus.DefaultTimeSeriesRowsChangedSubject,
+		infraeventbus.DefaultRecordRowsChangedSubject,
+	}, pubsub.subjects)
+	require.NotEqual(t,
+		infraeventbus.DefaultTimeSeriesRowsChangedSubject,
+		infraeventbus.DefaultRecordRowsChangedSubject,
+	)
+}
+
+func TestSubscriberBusPropagatesTimeSeriesHandlerError(t *testing.T) {
+	ctx := context.Background()
+	wantErr := errors.New("derive failed")
+	pubsub := &recordingPubSub{}
+	bus := infraeventbus.NewSubscriberBus(pubsub, "")
+
+	_, err := bus.SubscribeTimeSeriesRowsChanged(ctx, func(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
+		return wantErr
+	})
+	require.NoError(t, err)
+
+	handler := pubsub.handler(infraeventbus.DefaultTimeSeriesRowsChangedSubject)
+	require.NotNil(t, handler)
+	err = handler(ctx, &transport.Message{
+		Subject: infraeventbus.DefaultTimeSeriesRowsChangedSubject,
+		Data:    []byte(`{"event_id":"evt-1"}`),
+		ID:      "evt-1",
+	})
+	require.ErrorIs(t, err, wantErr)
+}
+
+func TestSubscriberBusPropagatesRecordHandlerError(t *testing.T) {
+	ctx := context.Background()
+	wantErr := errors.New("index failed")
+	pubsub := &recordingPubSub{}
+	bus := infraeventbus.NewSubscriberBus(pubsub, "")
+
+	_, err := bus.SubscribeRecordRowsChanged(ctx, func(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
+		return wantErr
+	})
+	require.NoError(t, err)
+
+	handler := pubsub.handler(infraeventbus.DefaultRecordRowsChangedSubject)
+	require.NotNil(t, handler)
+	err = handler(ctx, &transport.Message{
+		Subject: infraeventbus.DefaultRecordRowsChangedSubject,
+		Data:    []byte(`{"event_id":"evt-1"}`),
+		ID:      "evt-1",
+	})
+	require.ErrorIs(t, err, wantErr)
 }
 
 func TestSubscriberBusReturnsTransportSubscribeError(t *testing.T) {
@@ -129,10 +197,11 @@ func (p *recordingProducer) Options() transport.ProducerOptions {
 // recordingPubSub 是事件总线适配测试使用的内存传输。
 type recordingPubSub struct {
 	recordingProducer
-	subject      string
-	handler      transport.MessageHandler
-	subscribeErr error
-	subscription *recordingSubscription
+	subjects      []string
+	handlers      map[string]transport.MessageHandler
+	subscribeErr  error
+	subscription  *recordingSubscription
+	subscriptions map[string]*recordingSubscription
 }
 
 func (p *recordingPubSub) Subscribe(ctx context.Context, subject string, handler transport.MessageHandler) (transport.Subscription, error) {
@@ -140,12 +209,28 @@ func (p *recordingPubSub) Subscribe(ctx context.Context, subject string, handler
 	if p.subscribeErr != nil {
 		return nil, p.subscribeErr
 	}
-	p.subject = subject
-	p.handler = handler
-	if p.subscription == nil {
-		p.subscription = &recordingSubscription{}
+	p.subjects = append(p.subjects, subject)
+	if p.handlers == nil {
+		p.handlers = make(map[string]transport.MessageHandler)
 	}
-	return p.subscription, nil
+	p.handlers[subject] = handler
+	if p.subscriptions == nil {
+		p.subscriptions = make(map[string]*recordingSubscription)
+	}
+	subscription := p.subscription
+	if subscription == nil {
+		subscription = &recordingSubscription{}
+	}
+	p.subscriptions[subject] = subscription
+	p.subscription = subscription
+	return subscription, nil
+}
+
+func (p *recordingPubSub) handler(subject string) transport.MessageHandler {
+	if p.handlers == nil {
+		return nil
+	}
+	return p.handlers[subject]
 }
 
 // recordingSubscription 是事件订阅测试使用的记录型订阅句柄。

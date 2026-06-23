@@ -30,6 +30,28 @@ func TestEnsureStreamReturnsAddError(t *testing.T) {
 	require.Zero(t, manager.updates)
 }
 
+func TestDurableConsumerNameDerivesSubjectKind(t *testing.T) {
+	require.Equal(t,
+		"storage_deriver_time_series_rows_changed_v1",
+		durableConsumerName("storage_deriver", "moox.storage.time_series.rows_changed.v1"),
+	)
+	require.Equal(t,
+		"storage_deriver_record_rows_changed_v1",
+		durableConsumerName("storage_deriver", "moox.storage.record.rows_changed.v1"),
+	)
+}
+
+func TestDurableConsumerNameSanitizesBaseAndSubject(t *testing.T) {
+	require.Equal(t,
+		"storage_deriver_record_rows_changed_v1",
+		durableConsumerName("", "moox.storage.record.rows_changed.v1"),
+	)
+	require.Equal(t,
+		"storage_deriver_us_east_time_series_rows_changed_v1",
+		durableConsumerName(" storage-deriver.us/east ", "moox.storage.time_series.rows_changed.v1"),
+	)
+}
+
 // fakeStreamManager 是 NATS 生产者测试使用的流管理桩。
 type fakeStreamManager struct {
 	adds          int
