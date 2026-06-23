@@ -65,6 +65,14 @@ datasets:
     data_kind: record
     freqs: []
     status: active
+  - space_id: crypto
+    dataset_id: spot_symbol_profiles
+    data_source_id: binance
+    name: Spot Symbol Profiles
+    description: Exchange-independent symbol profile and narrative facts
+    data_kind: record
+    freqs: []
+    status: active
 
 dataset_subjects:
   - space_id: crypto
@@ -84,6 +92,16 @@ dataset_subjects:
     status: active
   - space_id: crypto
     dataset_id: binance_spot_symbols
+    subject_id: AR-USDT
+    subject_role: normal
+    status: active
+  - space_id: crypto
+    dataset_id: spot_symbol_profiles
+    subject_id: APT-USDT
+    subject_role: normal
+    status: active
+  - space_id: crypto
+    dataset_id: spot_symbol_profiles
     subject_id: AR-USDT
     subject_role: normal
     status: active
@@ -154,6 +172,24 @@ fields:
     name: Text Note
     value_type: string
     write_example: actively traded pair
+    status: active
+  - space_id: crypto
+    field_id: sector
+    name: Sector
+    value_type: string
+    write_example: layer1
+    status: active
+  - space_id: crypto
+    field_id: description
+    name: Description
+    value_type: string
+    write_example: Layer 1 blockchain token
+    status: active
+  - space_id: crypto
+    field_id: launch_year
+    name: Launch Year
+    value_type: int
+    write_example: "2021"
     status: active
 
 factors:
@@ -264,6 +300,84 @@ dataset_columns:
     origin_id: note
     value_type: string
     status: active
+  - space_id: crypto
+    dataset_id: spot_symbol_profiles
+    column_name: sector
+    origin_type: field
+    origin_id: sector
+    value_type: string
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: spot_symbol_profiles
+    column_name: description
+    origin_type: field
+    origin_id: description
+    value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: spot_symbol_profiles
+    column_name: launch_year
+    origin_type: field
+    origin_id: launch_year
+    value_type: int
+    status: active
+
+views:
+  - space_id: crypto
+    view_id: spot_symbol_profile_view
+    name: Spot Symbol Profile View
+    description: Aggregate spot symbol status with symbol profile text for Bleve search
+    primary_dataset_id: binance_spot_symbols
+    dataset_ids: ["binance_spot_symbols", "spot_symbol_profiles"]
+    grain_keys: ["record_id", "version"]
+    engine: bleve
+    build_status: pending
+    status: active
+
+view_columns:
+  - space_id: crypto
+    view_id: spot_symbol_profile_view
+    column_name: binance_spot_symbols.symbol
+    origin_type: dataset_column
+    origin_id: binance_spot_symbols.symbol
+    value_type: string
+    status: active
+  - space_id: crypto
+    view_id: spot_symbol_profile_view
+    column_name: binance_spot_symbols.status
+    origin_type: dataset_column
+    origin_id: binance_spot_symbols.status
+    value_type: string
+    status: active
+  - space_id: crypto
+    view_id: spot_symbol_profile_view
+    column_name: binance_spot_symbols.note
+    origin_type: dataset_column
+    origin_id: binance_spot_symbols.note
+    value_type: string
+    status: active
+  - space_id: crypto
+    view_id: spot_symbol_profile_view
+    column_name: spot_symbol_profiles.sector
+    origin_type: dataset_column
+    origin_id: spot_symbol_profiles.sector
+    value_type: string
+    status: active
+  - space_id: crypto
+    view_id: spot_symbol_profile_view
+    column_name: spot_symbol_profiles.description
+    origin_type: dataset_column
+    origin_id: spot_symbol_profiles.description
+    value_type: string
+    status: active
+  - space_id: crypto
+    view_id: spot_symbol_profile_view
+    column_name: spot_symbol_profiles.launch_year
+    origin_type: dataset_column
+    origin_id: spot_symbol_profiles.launch_year
+    value_type: int
+    status: active
 
 primary_store_routes:
   - space_id: crypto
@@ -277,6 +391,14 @@ primary_store_routes:
   - space_id: crypto
     route_id: route-binance-spot-symbols
     dataset_id: binance_spot_symbols
+    subject_pattern: "*"
+    hash_rule: subject_id
+    node_id: local
+    priority: 100
+    status: active
+  - space_id: crypto
+    route_id: route-spot-symbol-profiles
+    dataset_id: spot_symbol_profiles
     subject_pattern: "*"
     hash_rule: subject_id
     node_id: local

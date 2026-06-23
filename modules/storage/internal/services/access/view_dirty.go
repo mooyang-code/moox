@@ -147,7 +147,10 @@ func (s *Service) drainRecordDirty(ctx context.Context, handle string, columns [
 			continue
 		}
 		item := s.dirtyBuildView(handle)
-		projected, ok := recordRowsForView(item, columns, rows)
+		projected, ok, err := s.recordRowsForView(ctx, item, columns, rows)
+		if err != nil {
+			return err
+		}
 		if !ok {
 			if item == nil {
 				return fmt.Errorf("view dirty build %s is not registered", handle)

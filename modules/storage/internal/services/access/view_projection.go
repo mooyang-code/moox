@@ -153,42 +153,91 @@ func viewColumnSourceName(datasetID string, column *pb.ViewColumn) string {
 	return column.GetColumnName()
 }
 
-func recordRowsForView(item *pb.View, columns []*pb.ViewColumn, rows []*pb.RecordRow) ([]*pb.RecordRow, bool) {
+func (s *Service) recordRowsForView(ctx context.Context, item *pb.View, columns []*pb.ViewColumn, rows []*pb.RecordRow) ([]*pb.RecordRow, bool, error) {
 	if item == nil || !isProjectableRecordView(item, columns) {
-		return nil, false
+		return nil, false, nil
 	}
 	primaryDatasetID := item.GetPrimaryDatasetId()
+	datasetIDs := viewProjectionDatasets(primaryDatasetID, columns)
 	out := make([]*pb.RecordRow, 0, len(rows))
+	seen := make(map[string]bool, len(rows))
 	for _, row := range rows {
-		if row == nil || row.GetKey().GetDatasetId() != primaryDatasetID {
+		if row == nil || row.GetKey() == nil {
 			continue
 		}
+		grainKey := recordProjectionGrainKey(row.GetKey())
+		if seen[grainKey] {
+			continue
+		}
+		seen[grainKey] = true
+		rowsByDataset := map[string]*pb.RecordRow{row.GetKey().GetDatasetId(): row}
+		for _, datasetID := range datasetIDs {
+			if rowsByDataset[datasetID] != nil {
+				continue
+			}
+			read, err := s.readRecordProjectionRow(ctx, row.GetKey(), datasetID)
+			if err != nil {
+				return nil, true, err
+			}
+			if read != nil {
+				rowsByDataset[datasetID] = read
+			}
+		}
+		primaryRow := rowsByDataset[primaryDatasetID]
+		if primaryRow == nil {
+			continue
+		}
+		out = append(out, &pb.RecordRow{
+			Key:        proto.Clone(primaryRow.GetKey()).(*pb.RecordKey),
+			Columns:    projectRecordColumnsForView(primaryDatasetID, columns, rowsByDataset),
+			Attributes: cloneStringMap(primaryRow.GetAttributes()),
+		})
+	}
+	return out, true, nil
+}
+
+func (s *Service) readRecordProjectionRow(ctx context.Context, base *pb.RecordKey, datasetID string) (*pb.RecordRow, error) {
+	key := proto.Clone(base).(*pb.RecordKey)
+	key.DatasetId = datasetID
+	rsp, err := s.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: []*pb.RecordKey{key}})
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		return nil, errText(rsp.GetRetInfo().GetMsg())
+	}
+	if len(rsp.GetRows()) == 0 {
+		return nil, nil
+	}
+	return rsp.GetRows()[0], nil
+}
+
+func projectRecordColumnsForView(primaryDatasetID string, columns []*pb.ViewColumn, rowsByDataset map[string]*pb.RecordRow) []*pb.ColumnValue {
+	valuesByDataset := make(map[string]map[string]*pb.ColumnValue, len(rowsByDataset))
+	for datasetID, row := range rowsByDataset {
 		values := make(map[string]*pb.ColumnValue, len(row.GetColumns()))
 		for _, column := range row.GetColumns() {
 			values[column.GetColumnName()] = column
 		}
-		projected := make([]*pb.ColumnValue, 0, len(columns))
-		for _, viewColumn := range columns {
-			sourceName := viewColumnSourceName(primaryDatasetID, viewColumn)
-			source, ok := values[sourceName]
-			if !ok {
-				projected = append(projected, &pb.ColumnValue{ColumnName: viewColumn.GetColumnName(), ValueType: viewColumn.GetValueType()})
-				continue
-			}
-			copied := proto.Clone(source).(*pb.ColumnValue)
-			copied.ColumnName = viewColumn.GetColumnName()
-			if copied.ValueType == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED {
-				copied.ValueType = viewColumn.GetValueType()
-			}
-			projected = append(projected, copied)
-		}
-		out = append(out, &pb.RecordRow{
-			Key:        proto.Clone(row.GetKey()).(*pb.RecordKey),
-			Columns:    projected,
-			Attributes: cloneStringMap(row.GetAttributes()),
-		})
+		valuesByDataset[datasetID] = values
 	}
-	return out, true
+	out := make([]*pb.ColumnValue, 0, len(columns))
+	for _, viewColumn := range columns {
+		datasetID := viewColumnOriginDataset(primaryDatasetID, viewColumn)
+		sourceName := viewColumnSourceName(datasetID, viewColumn)
+		source, ok := valuesByDataset[datasetID][sourceName]
+		if !ok {
+			out = append(out, &pb.ColumnValue{ColumnName: viewColumn.GetColumnName(), ValueType: viewColumn.GetValueType()})
+			continue
+		}
+		copied := proto.Clone(source).(*pb.ColumnValue)
+		copied.ColumnName = viewColumn.GetColumnName()
+		if copied.ValueType == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED {
+			copied.ValueType = viewColumn.GetValueType()
+		}
+		out = append(out, copied)
+	}
+	return out
 }
 
 func isProjectableRecordView(item *pb.View, columns []*pb.ViewColumn) bool {
@@ -199,7 +248,7 @@ func isProjectableRecordView(item *pb.View, columns []*pb.ViewColumn) bool {
 		if column.GetOriginType() != pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
 			return false
 		}
-		if viewColumnOriginDataset(item.GetPrimaryDatasetId(), column) != item.GetPrimaryDatasetId() {
+		if viewColumnOriginDataset(item.GetPrimaryDatasetId(), column) == "" {
 			return false
 		}
 	}
@@ -214,5 +263,13 @@ func timeSeriesProjectionGrainKey(key *pb.TimeSeriesKey) string {
 		key.GetFreq(),
 		key.GetDataTime(),
 		string(dimensions),
+	}, "\x00")
+}
+
+func recordProjectionGrainKey(key *pb.RecordKey) string {
+	return strings.Join([]string{
+		key.GetSpaceId(),
+		key.GetRecordId(),
+		key.GetVersion(),
 	}, "\x00")
 }

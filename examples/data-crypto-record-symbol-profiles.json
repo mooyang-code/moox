@@ -1,0 +1,82 @@
+{
+  "rows": [
+    {
+      "key": {
+        "space_id": "crypto",
+        "dataset_id": "binance_spot_symbols",
+        "record_id": "APT-USDT",
+        "version": "v1"
+      },
+      "columns": [
+        {"column_name": "symbol", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "APT-USDT"}},
+        {"column_name": "status", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "TRADING"}},
+        {"column_name": "note", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "Aptos active spot pair"}}
+      ]
+    },
+    {
+      "key": {
+        "space_id": "crypto",
+        "dataset_id": "binance_spot_symbols",
+        "record_id": "AR-USDT",
+        "version": "v1"
+      },
+      "columns": [
+        {"column_name": "symbol", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "AR-USDT"}},
+        {"column_name": "status", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "TRADING"}},
+        {"column_name": "note", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "Arweave active spot pair"}}
+      ]
+    },
+    {
+      "key": {
+        "space_id": "crypto",
+        "dataset_id": "binance_spot_symbols",
+        "record_id": "BTC-USDT",
+        "version": "v1"
+      },
+      "columns": [
+        {"column_name": "symbol", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "BTC-USDT"}},
+        {"column_name": "status", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "TRADING"}},
+        {"column_name": "note", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "Bitcoin active spot pair"}}
+      ]
+    },
+    {
+      "key": {
+        "space_id": "crypto",
+        "dataset_id": "spot_symbol_profiles",
+        "record_id": "APT-USDT",
+        "version": "v1"
+      },
+      "columns": [
+        {"column_name": "sector", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "layer1"}},
+        {"column_name": "description", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "Aptos layer1 blockchain with Move ecosystem"}},
+        {"column_name": "launch_year", "value_type": "FIELD_VALUE_TYPE_INT", "value": {"int_value": 2022}}
+      ]
+    },
+    {
+      "key": {
+        "space_id": "crypto",
+        "dataset_id": "spot_symbol_profiles",
+        "record_id": "AR-USDT",
+        "version": "v1"
+      },
+      "columns": [
+        {"column_name": "sector", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "storage"}},
+        {"column_name": "description", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "Arweave permanent storage network"}},
+        {"column_name": "launch_year", "value_type": "FIELD_VALUE_TYPE_INT", "value": {"int_value": 2018}}
+      ]
+    },
+    {
+      "key": {
+        "space_id": "crypto",
+        "dataset_id": "spot_symbol_profiles",
+        "record_id": "BTC-USDT",
+        "version": "v1"
+      },
+      "columns": [
+        {"column_name": "sector", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "store_of_value"}},
+        {"column_name": "description", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "Bitcoin digital commodity and settlement network"}},
+        {"column_name": "launch_year", "value_type": "FIELD_VALUE_TYPE_INT", "value": {"int_value": 2009}}
+      ]
+    }
+  ]
+}

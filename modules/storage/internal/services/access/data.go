@@ -526,7 +526,11 @@ func (s *Service) indexRecordRowsFromAccess(ctx context.Context, event *pb.Recor
 				s.reportViewError(ctx, "record_search_index", err)
 				continue
 			}
-			projected, ok := recordRowsForView(item, columns, datasetRows)
+			projected, ok, err := s.recordRowsForView(ctx, item, columns, datasetRows)
+			if err != nil {
+				s.reportViewError(ctx, "record_search_index", err)
+				continue
+			}
 			if !ok {
 				if err := s.markViewPending(ctx, item); err != nil {
 					s.reportViewError(ctx, "record_search_index", err)

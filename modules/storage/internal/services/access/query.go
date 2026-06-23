@@ -233,7 +233,10 @@ func (s *Service) rebuildRecordView(ctx context.Context, req *pb.RebuildRecordVi
 			for _, row := range rows {
 				recordRows = append(recordRows, primaryStoreRowToRecordRow(row, nil))
 			}
-			projected, ok := recordRowsForView(view, columns, recordRows)
+			projected, ok, err := s.recordRowsForView(ctx, view, columns, recordRows)
+			if err != nil {
+				return failBuild(err)
+			}
 			if !ok {
 				return failBuild(fmt.Errorf("record view %s/%s contains unsupported columns for bleve projection", req.GetSpaceId(), req.GetViewId()))
 			}

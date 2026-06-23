@@ -527,6 +527,91 @@ func TestServiceRebuildRecordViewProjectsColumnsAndCreatesEmptyIndex(t *testing.
 	require.Equal(t, "headline", rsp.GetRows()[0].GetColumns()[0].GetColumnName())
 }
 
+func TestServiceRebuildRecordViewAggregatesMultipleRecordDatasets(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	seedDataset(t, ctx, svc, "symbols", pb.DataKind_DATA_KIND_RECORD, nil, []string{"symbol", "status"})
+	seedDataset(t, ctx, svc, "profiles", pb.DataKind_DATA_KIND_RECORD, nil, []string{"sector", "description"})
+	_, err := svc.metadata.UpsertView(ctx, &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "symbol_profile_view",
+		Name:             "Symbol Profile View",
+		PrimaryDatasetId: "symbols",
+		DatasetIds:       []string{"symbols", "profiles"},
+		Engine:           "bleve",
+		Status:           "active",
+	})
+	require.NoError(t, err)
+	for _, column := range []*pb.ViewColumn{
+		{ColumnName: "symbols.symbol", OriginId: "symbols.symbol", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+		{ColumnName: "symbols.status", OriginId: "symbols.status", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+		{ColumnName: "profiles.sector", OriginId: "profiles.sector", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+		{ColumnName: "profiles.description", OriginId: "profiles.description", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+	} {
+		column.SpaceId = "crypto"
+		column.ViewId = "symbol_profile_view"
+		column.OriginType = pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN
+		_, err = svc.metadata.UpsertViewColumn(ctx, column)
+		require.NoError(t, err)
+	}
+
+	_, err = svc.WriteRecordRows(ctx, &pb.WriteRecordRowsReq{Rows: []*pb.RecordRow{
+		{
+			Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "symbols", RecordId: "BTC-USDT", Version: "v1"},
+			Columns: []*pb.ColumnValue{
+				testutil.StringValue("symbol", "BTC-USDT"),
+				testutil.StringValue("status", "active"),
+			},
+		},
+		{
+			Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "profiles", RecordId: "BTC-USDT", Version: "v1"},
+			Columns: []*pb.ColumnValue{
+				testutil.StringValue("sector", "crypto"),
+				testutil.StringValue("description", "Bitcoin market profile"),
+			},
+		},
+		{
+			Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "symbols", RecordId: "ETH-USDT", Version: "v1"},
+			Columns: []*pb.ColumnValue{
+				testutil.StringValue("symbol", "ETH-USDT"),
+				testutil.StringValue("status", "inactive"),
+			},
+		},
+	}})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.rebuildRecordView(ctx, &pb.RebuildRecordViewReq{SpaceId: "crypto", ViewId: "symbol_profile_view"}))
+	rsp, err := svc.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{
+		SpaceId:   "crypto",
+		ViewId:    "symbol_profile_view",
+		TextQuery: "Bitcoin",
+		Keys:      []*pb.RecordKey{{RecordId: "BTC-USDT", Version: "v1"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetRows(), 1)
+	require.Equal(t, "symbols", rsp.GetRows()[0].GetKey().GetDatasetId())
+	require.ElementsMatch(t, []string{"symbols.symbol", "symbols.status", "profiles.sector", "profiles.description"}, recordColumnNames(rsp.GetRows()[0]))
+	require.Equal(t, "Bitcoin market profile", recordColumnString(rsp.GetRows()[0], "profiles.description"))
+}
+
+func recordColumnNames(row *pb.RecordRow) []string {
+	names := make([]string, 0, len(row.GetColumns()))
+	for _, column := range row.GetColumns() {
+		names = append(names, column.GetColumnName())
+	}
+	return names
+}
+
+func recordColumnString(row *pb.RecordRow, name string) string {
+	for _, column := range row.GetColumns() {
+		if column.GetColumnName() == name {
+			return column.GetValue().GetStringValue()
+		}
+	}
+	return ""
+}
+
 func newAccessTestService(t *testing.T) *Service {
 	t.Helper()
 	return newAccessTestServiceWithEvents(t, eventbus.NewMemoryBus())
