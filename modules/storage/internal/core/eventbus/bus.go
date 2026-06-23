@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"google.golang.org/protobuf/proto"
 )
 
 type TimeSeriesRowsChangedHandler func(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error
@@ -91,10 +92,11 @@ func (b *MemoryBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.
 	b.addInFlightLocked(len(handlers))
 	b.mu.Unlock()
 	for _, handler := range handlers {
-		go func(handler TimeSeriesRowsChangedHandler) {
+		eventCopy := cloneTimeSeriesRowsChangedEvent(event)
+		go func(handler TimeSeriesRowsChangedHandler, event *pb.TimeSeriesRowsChangedEvent) {
 			defer b.finishHandler()
 			_ = handler(ctx, event)
-		}(handler)
+		}(handler, eventCopy)
 	}
 	return nil
 }
@@ -109,10 +111,11 @@ func (b *MemoryBus) PublishRecordRowsChanged(ctx context.Context, event *pb.Reco
 	b.addInFlightLocked(len(handlers))
 	b.mu.Unlock()
 	for _, handler := range handlers {
-		go func(handler RecordRowsChangedHandler) {
+		eventCopy := cloneRecordRowsChangedEvent(event)
+		go func(handler RecordRowsChangedHandler, event *pb.RecordRowsChangedEvent) {
 			defer b.finishHandler()
 			_ = handler(ctx, event)
-		}(handler)
+		}(handler, eventCopy)
 	}
 	return nil
 }
@@ -192,6 +195,20 @@ func (b *MemoryBus) ensureIdleLocked() {
 	}
 	b.idle = make(chan struct{})
 	close(b.idle)
+}
+
+func cloneTimeSeriesRowsChangedEvent(event *pb.TimeSeriesRowsChangedEvent) *pb.TimeSeriesRowsChangedEvent {
+	if event == nil {
+		return nil
+	}
+	return proto.Clone(event).(*pb.TimeSeriesRowsChangedEvent)
+}
+
+func cloneRecordRowsChangedEvent(event *pb.RecordRowsChangedEvent) *pb.RecordRowsChangedEvent {
+	if event == nil {
+		return nil
+	}
+	return proto.Clone(event).(*pb.RecordRowsChangedEvent)
 }
 
 // memorySubscription 表示 MemoryBus 返回的订阅句柄。

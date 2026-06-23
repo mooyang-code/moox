@@ -98,3 +98,40 @@ func TestMemoryBusPublishDoesNotRunHandlerInline(t *testing.T) {
 	close(block)
 	require.NoError(t, bus.Wait(context.Background()))
 }
+
+func TestMemoryBusRecordHandlerDoesNotObserveCallerMutationAfterPublish(t *testing.T) {
+	ctx := context.Background()
+	bus := eventbus.NewMemoryBus()
+	started := make(chan struct{})
+	block := make(chan struct{})
+	seen := make(chan string, 1)
+
+	_, err := bus.SubscribeRecordRowsChanged(ctx, func(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
+		_ = ctx
+		close(started)
+		<-block
+		seen <- event.Keys[0].RecordId
+		return nil
+	})
+	require.NoError(t, err)
+
+	event := &pb.RecordRowsChangedEvent{
+		EventId: "evt-1",
+		Keys:    []*pb.RecordKey{{SpaceId: "crypto", DatasetId: "symbols", RecordId: "A"}},
+	}
+	require.NoError(t, bus.PublishRecordRowsChanged(ctx, event))
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-started:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	event.Keys[0].RecordId = "B"
+	close(block)
+	require.NoError(t, bus.Wait(context.Background()))
+	require.Equal(t, "A", <-seen)
+}
