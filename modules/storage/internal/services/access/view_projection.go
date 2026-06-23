@@ -15,7 +15,7 @@ func (s *Service) timeSeriesRowsForView(ctx context.Context, item *pb.View, colu
 func (s *Service) readTimeSeriesProjectionRow(ctx context.Context, base *pb.TimeSeriesKey, datasetID string) (*pb.TimeSeriesRow, error) {
 	key := proto.Clone(base).(*pb.TimeSeriesKey)
 	key.DatasetId = datasetID
-	rsp, err := s.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{Keys: []*pb.TimeSeriesKey{key}})
+	rsp, err := s.viewFactReaderOrDefault().ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{Keys: []*pb.TimeSeriesKey{key}})
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func (s *Service) recordRowsForView(ctx context.Context, item *pb.View, columns 
 func (s *Service) readRecordProjectionRow(ctx context.Context, base *pb.RecordKey, datasetID string) (*pb.RecordRow, error) {
 	key := proto.Clone(base).(*pb.RecordKey)
 	key.DatasetId = datasetID
-	rsp, err := s.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: []*pb.RecordKey{key}})
+	rsp, err := s.viewFactReaderOrDefault().ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: []*pb.RecordKey{key}})
 	if err != nil {
 		return nil, err
 	}

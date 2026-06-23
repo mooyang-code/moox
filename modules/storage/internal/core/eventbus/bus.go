@@ -83,8 +83,9 @@ func (b *MemoryBus) SubscribeRecordRowsChanged(ctx context.Context, handler Reco
 }
 
 func (b *MemoryBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
+	stored := cloneTimeSeriesRowsChangedEvent(event)
 	b.mu.Lock()
-	b.timeSeriesEvents = append(b.timeSeriesEvents, event)
+	b.timeSeriesEvents = append(b.timeSeriesEvents, stored)
 	handlers := make([]TimeSeriesRowsChangedHandler, 0, len(b.timeSeriesHandlers))
 	for _, handler := range b.timeSeriesHandlers {
 		handlers = append(handlers, handler)
@@ -102,8 +103,9 @@ func (b *MemoryBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.
 }
 
 func (b *MemoryBus) PublishRecordRowsChanged(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
+	stored := cloneRecordRowsChangedEvent(event)
 	b.mu.Lock()
-	b.recordEvents = append(b.recordEvents, event)
+	b.recordEvents = append(b.recordEvents, stored)
 	handlers := make([]RecordRowsChangedHandler, 0, len(b.recordHandlers))
 	for _, handler := range b.recordHandlers {
 		handlers = append(handlers, handler)
@@ -145,7 +147,9 @@ func (b *MemoryBus) TimeSeriesEvents() []*pb.TimeSeriesRowsChangedEvent {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	out := make([]*pb.TimeSeriesRowsChangedEvent, len(b.timeSeriesEvents))
-	copy(out, b.timeSeriesEvents)
+	for i, event := range b.timeSeriesEvents {
+		out[i] = cloneTimeSeriesRowsChangedEvent(event)
+	}
 	return out
 }
 
@@ -153,7 +157,9 @@ func (b *MemoryBus) RecordEvents() []*pb.RecordRowsChangedEvent {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	out := make([]*pb.RecordRowsChangedEvent, len(b.recordEvents))
-	copy(out, b.recordEvents)
+	for i, event := range b.recordEvents {
+		out[i] = cloneRecordRowsChangedEvent(event)
+	}
 	return out
 }
 

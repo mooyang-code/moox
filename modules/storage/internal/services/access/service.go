@@ -22,6 +22,7 @@ import (
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/primary"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/search"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/rs/xid"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -43,6 +44,7 @@ type Service struct {
 	primary                  primary.Client
 	search                   *search.Service
 	factReader               factReadService
+	viewFactReader           viewFactReadService
 	events                   eventbus.Bus
 	report                   ViewErrorReporter
 	indexMu                  sync.Mutex
@@ -62,6 +64,13 @@ type Service struct {
 // factReadService 定义 Access 内部回读 Record 行所需的接口。
 type factReadService interface {
 	ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error)
+}
+
+// viewFactReadService 定义 View 查询/重建从 Access 读取事实行所需的接口。
+type viewFactReadService interface {
+	view.FactReader
+	ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error)
+	ScanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error)
 }
 
 var (
@@ -124,8 +133,17 @@ func NewServiceWithOptions(opts Options) *Service {
 	}
 	svc.indexCond = sync.NewCond(&svc.indexMu)
 	svc.factReader = svc
+	svc.viewFactReader = svc
 	go svc.runSearchIndexWorker()
 	return svc
+}
+
+func (s *Service) SetViewFactReader(reader viewFactReadService) {
+	if s == nil || reader == nil {
+		return
+	}
+	s.factReader = reader
+	s.viewFactReader = reader
 }
 
 // StartEventConsumers 启动派生事件消费者。订阅失败会显式返回错误，

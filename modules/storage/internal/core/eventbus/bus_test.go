@@ -135,3 +135,21 @@ func TestMemoryBusRecordHandlerDoesNotObserveCallerMutationAfterPublish(t *testi
 	require.NoError(t, bus.Wait(context.Background()))
 	require.Equal(t, "A", <-seen)
 }
+
+func TestMemoryBusRecordHistoryIsCloned(t *testing.T) {
+	ctx := context.Background()
+	bus := eventbus.NewMemoryBus()
+	event := &pb.RecordRowsChangedEvent{
+		EventId: "evt-1",
+		Keys:    []*pb.RecordKey{{SpaceId: "crypto", DatasetId: "symbols", RecordId: "A"}},
+	}
+	require.NoError(t, bus.PublishRecordRowsChanged(ctx, event))
+
+	event.Keys[0].RecordId = "B"
+	firstRead := bus.RecordEvents()
+	require.Equal(t, "A", firstRead[0].GetKeys()[0].GetRecordId())
+
+	firstRead[0].Keys[0].RecordId = "C"
+	secondRead := bus.RecordEvents()
+	require.Equal(t, "A", secondRead[0].GetKeys()[0].GetRecordId())
+}

@@ -73,11 +73,13 @@ tests/e2e/         # 端到端测试（本地部署整套服务驱动）
 | --- | --- |
 | `access` | 面向用户的写入和权威读取入口；校验列契约、解析路由、写 PrimaryStore，并发布行变更事件。 |
 | `primary` | 拥有 Pebble PrimaryStore RPC；可按路由和配置部署多个 primary 服务。 |
-| `deriver` | 消费行变更事件、批量聚合 key、通过 AccessService 回读当前行；TimeSeries View 写 DuckDB，Record View 写 Bleve。 |
+| `deriver` | 注册 ViewService，消费行变更事件、批量聚合 key、通过 AccessService 回读当前行；TimeSeries View 写 DuckDB，Record View 写 Bleve。 |
 
 默认角色是 `access + deriver`。如果 `access` 角色的 `storage.primary.service_name` 为空，进程也会暴露本地 `PrimaryStoreService`，用于单进程本地主存模式；如果该字段非空，Access 通过远程 PrimaryStore RPC 写读，除非同时显式启用 `primary` 角色。
 
 默认事件总线是 NATS。`memory` 只用于单进程开发和测试，且仍是异步总线，不提供写后立即可查派生结果的契约。Deriver 配置项包括：
+
+ViewService 只随 `deriver` 角色启动。`access` 角色不打开 DuckDB/Bleve View 存储，避免跨进程部署时与 deriver 争抢 DuckDB 文件锁，也避免 deriver 绕过 AccessService 理解 PrimaryStore 路由。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -205,7 +207,7 @@ params_json = {"window":20,"price":"close"}
 ## 部署形态
 
 - 单进程开发/测试可显式启用 `roles: [access, primary, deriver]`，设置 `eventbus.type: memory`、`primary.service_name: ""`、`deriver.access_service_name: ""`。该模式不需要 NATS，但派生仍异步。
-- 分布式部署通常拆成 `primary` 节点和 `access + deriver` 节点。`access` 节点配置远程 `primary.service_name`，`deriver` 通过 `deriver.access_service_name` 回读 AccessService。
+- 分布式部署通常拆成 `primary`、`access`、`deriver` 三类节点。`access` 节点配置远程 `primary.service_name`，`deriver` 节点通过 `deriver.access_service_name` 回读 AccessService 并独占 DuckDB/Bleve View 写入。
 - 默认事件总线为 NATS；跨进程部署必须使用 NATS 或等价外部传输，不能使用 memory。
 - 运行配置由 `internal/config.RuntimeConfig` 加载，覆盖角色、元数据路径、各设备目录、primary 服务名、eventbus 类型和 deriver 批处理参数。
 

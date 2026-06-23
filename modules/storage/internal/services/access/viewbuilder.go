@@ -8,13 +8,23 @@ import (
 )
 
 func (s *Service) InitViewBuilder() error {
+	return s.InitViewBuilderWithFacts(s.viewFactReaderOrDefault())
+}
+
+func (s *Service) InitViewBuilderWithFacts(facts view.FactReader) error {
 	views, err := s.viewStore()
 	if err != nil {
 		return err
 	}
+	if facts == nil {
+		facts = s.viewFactReaderOrDefault()
+	}
+	if reader, ok := facts.(viewFactReadService); ok {
+		s.viewFactReader = reader
+	}
 	view.SetDefaultBuilder(view.NewBuilder(view.Options{
 		Metadata: s.metadata,
-		Facts:    s.primaryFactReader(),
+		Facts:    facts,
 		Views:    views,
 		OnBuildStarted: func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) {
 			s.startViewDirtyTracking(pb.DataKind_DATA_KIND_TIME_SERIES, item, targetVersion, resultName)
@@ -27,4 +37,11 @@ func (s *Service) InitViewBuilder() error {
 		},
 	}))
 	return nil
+}
+
+func (s *Service) viewFactReaderOrDefault() viewFactReadService {
+	if s != nil && s.viewFactReader != nil {
+		return s.viewFactReader
+	}
+	return s
 }

@@ -79,19 +79,19 @@ client:
       protocol: trpc
       timeout: 3000
     - name: trpc.storage.access.AccessService
-      target: ip://127.0.0.1:18201
+      target: ip://127.0.0.1:19104
       network: tcp
-      protocol: trpc
+      protocol: http
       timeout: 3000
     - name: trpc.storage.metadata.MetadataService
-      target: ip://127.0.0.1:18001
+      target: ip://127.0.0.1:19101
       network: tcp
-      protocol: trpc
+      protocol: http
       timeout: 3000
     - name: trpc.storage.view.ViewService
-      target: ip://127.0.0.1:18202
+      target: ip://127.0.0.1:19105
       network: tcp
-      protocol: trpc
+      protocol: http
       timeout: 3000
 
 plugins:

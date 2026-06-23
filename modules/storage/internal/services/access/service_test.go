@@ -37,6 +37,35 @@ func TestServiceWritesAndReadsTimeSeriesRows(t *testing.T) {
 	require.Equal(t, "close", readRsp.GetRows()[0].GetColumns()[0].GetColumnName())
 }
 
+func TestServiceScansTimeSeriesDatasetWhenSubjectAndFreqAreEmpty(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	seedDataset(t, ctx, svc, "kline", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1m"}, []string{"close"})
+
+	_, err := svc.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: []*pb.TimeSeriesRow{
+		{
+			Key:     &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-06-15T00:00:00Z"},
+			Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 10)},
+		},
+		{
+			Key:     &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "ETH-USDT", Freq: "1m", DataTime: "2026-06-15T00:01:00Z"},
+			Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 20)},
+		},
+	}})
+	require.NoError(t, err)
+
+	rsp, err := svc.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+		Keys:      []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "kline"}},
+		TimeRange: &pb.TimeRange{StartTime: "2026-06-15T00:00:30Z", EndTime: "2026-06-15T00:01:30Z"},
+		Page:      &pb.Page{Size: 10},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetRows(), 1)
+	require.Equal(t, "ETH-USDT", rsp.GetRows()[0].GetKey().GetSubjectId())
+	require.Equal(t, "1m", rsp.GetRows()[0].GetKey().GetFreq())
+}
+
 func TestServiceWritesRecordRowsWithPatchSemantics(t *testing.T) {
 	ctx := context.Background()
 	svc := newAccessTestService(t)

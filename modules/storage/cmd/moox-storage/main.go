@@ -79,6 +79,11 @@ func main() {
 			}
 		}()
 	}
+	var accessReader deriver.AccessReader
+	if storageService != nil {
+		accessReader = accessReaderForRuntime(cfg.Storage, storageService)
+		storageService.SetViewFactReader(accessReader)
+	}
 
 	if cfg.Storage.HasRole("access") {
 		if storageService == nil {
@@ -89,19 +94,21 @@ func main() {
 		pb.RegisterAccessServiceService(s, storageService)
 	}
 
-	if cfg.Storage.HasRole("access") || cfg.Storage.HasRole("deriver") {
-		if err := registerViewRole(s, storageService); err != nil {
+	if cfg.Storage.HasRole("deriver") {
+		if err := registerViewRole(s, storageService, accessReader); err != nil {
 			log.Errorf("初始化 ViewService 失败: %v", err)
 			os.Exit(1)
 		}
+		log.Infof("ViewService role initialized")
 	}
 
 	if cfg.Storage.HasRole("deriver") {
-		deriverService, err := startDeriverService(trpc.BackgroundContext(), cfg.Storage, opts, storageService)
+		deriverService, err := startDeriverService(trpc.BackgroundContext(), cfg.Storage, opts, storageService, accessReader)
 		if err != nil {
 			log.Errorf("启动 deriver service 失败: %v", err)
 			os.Exit(1)
 		}
+		log.Infof("Deriver role initialized")
 		defer func() {
 			if err := deriverService.Close(); err != nil {
 				log.Errorf("关闭 deriver service 失败: %v", err)
@@ -131,16 +138,18 @@ func main() {
 		pb.RegisterPrimaryStoreServiceService(s, primaryService)
 	}
 	// 启动trpc服务器
+	log.Infof("Storage roles %v serving", cfg.Storage.Roles)
 	if err := s.Serve(); err != nil {
 		log.Errorf("trpc服务器出错: %v", err)
 	}
+	log.Warnf("Storage roles %v stopped", cfg.Storage.Roles)
 }
 
-func registerViewRole(s *server.Server, storageService *storagesvc.Service) error {
+func registerViewRole(s *server.Server, storageService *storagesvc.Service, accessReader deriver.AccessReader) error {
 	if storageService == nil {
 		return errors.New("view role requires storage service")
 	}
-	if err := storageService.InitViewBuilder(); err != nil {
+	if err := storageService.InitViewBuilderWithFacts(accessReader); err != nil {
 		return err
 	}
 	pb.RegisterViewServiceService(s, storageService)
@@ -151,7 +160,7 @@ func registerViewRole(s *server.Server, storageService *storagesvc.Service) erro
 	return nil
 }
 
-func startDeriverService(ctx context.Context, storage storageconfig.StorageConfig, opts storagesvc.Options, storageService *storagesvc.Service) (*deriver.Service, error) {
+func startDeriverService(ctx context.Context, storage storageconfig.StorageConfig, opts storagesvc.Options, storageService *storagesvc.Service, accessReader deriver.AccessReader) (*deriver.Service, error) {
 	if storageService == nil {
 		return nil, errors.New("deriver role requires storage service")
 	}
@@ -159,15 +168,12 @@ func startDeriverService(ctx context.Context, storage storageconfig.StorageConfi
 	if err != nil {
 		return nil, err
 	}
-	var local deriver.FactReader
-	accessServiceName := storage.Deriver.AccessServiceName
-	if shouldUseLocalAccessReader(storage) {
-		local = storageService
-		accessServiceName = ""
+	if accessReader == nil {
+		accessReader = accessReaderForRuntime(storage, storageService)
 	}
 	service := deriver.NewService(deriver.Options{
 		Events:         opts.Events,
-		Reader:         deriver.NewAccessReader(local, accessServiceName),
+		Reader:         accessReader,
 		Metadata:       storageService.MetadataStore(),
 		MetadataReader: storageService.MetadataReader(),
 		Views:          views,
@@ -180,6 +186,16 @@ func startDeriverService(ctx context.Context, storage storageconfig.StorageConfi
 		return nil, err
 	}
 	return service, nil
+}
+
+func accessReaderForRuntime(storage storageconfig.StorageConfig, storageService *storagesvc.Service) deriver.AccessReader {
+	var local deriver.AccessReader
+	accessServiceName := storage.Deriver.AccessServiceName
+	if storage.HasRole("access") || shouldUseLocalAccessReader(storage) {
+		local = storageService
+		accessServiceName = ""
+	}
+	return deriver.NewAccessReader(local, accessServiceName)
 }
 
 func registerTimerHandlerService(name string, service server.Service, handle func(context.Context, string) error) bool {

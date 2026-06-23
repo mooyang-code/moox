@@ -40,6 +40,9 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	if err := validateTimeRange(req.GetTimeRange()); err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
+	if isTimeSeriesDatasetScan(req) {
+		return s.scanTimeSeriesDataset(ctx, req)
+	}
 	var out []*pb.TimeSeriesRow
 	for _, key := range req.GetKeys() {
 		if err := validateTimeSeriesKeyTemplate(key); err != nil {
@@ -88,6 +91,51 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		reverseTimeSeriesRows(out)
 	}
 	out, pageResult := pageTimeSeriesRows(out, req.GetPage())
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
+}
+
+func isTimeSeriesDatasetScan(req *pb.ReadTimeSeriesRowsReq) bool {
+	keys := req.GetKeys()
+	if len(keys) != 1 {
+		return false
+	}
+	key := keys[0]
+	return key != nil &&
+		strings.TrimSpace(key.GetSubjectId()) == "" &&
+		strings.TrimSpace(key.GetFreq()) == "" &&
+		strings.TrimSpace(key.GetDataTime()) == "" &&
+		len(key.GetDimensions()) == 0
+}
+
+func (s *Service) scanTimeSeriesDataset(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
+	key := req.GetKeys()[0]
+	if strings.TrimSpace(key.GetSpaceId()) == "" || strings.TrimSpace(key.GetDatasetId()) == "" {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("space_id and dataset_id are required"))}, nil
+	}
+	versionRange, err := timeRangeToVersionRange(req.GetTimeRange())
+	if err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), "")
+	if err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+	}
+	rows, pageResult, err := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{
+		AuthInfo:     req.GetAuthInfo(),
+		Target:       target,
+		DataKind:     pb.DataKind_DATA_KIND_TIME_SERIES,
+		VersionRange: versionRange,
+		Order:        req.GetOrder(),
+		ColumnNames:  req.GetColumnNames(),
+		Page:         req.GetPage(),
+	})
+	if err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+	}
+	out := make([]*pb.TimeSeriesRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, primaryStoreRowToTimeSeriesRow(row, key))
+	}
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 

@@ -162,7 +162,7 @@ func (s *Service) rebuildTimeSeriesView(ctx context.Context, req *pb.RebuildTime
 	}
 	builder := view.NewBuilder(view.Options{
 		Metadata: s.metadata,
-		Facts:    s.primaryFactReader(),
+		Facts:    s.viewFactReaderOrDefault(),
 		Views:    views,
 		OnBuildStarted: func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) {
 			s.startViewDirtyTracking(pb.DataKind_DATA_KIND_TIME_SERIES, item, targetVersion, resultName)
@@ -188,10 +188,6 @@ func (s *Service) rebuildRecordView(ctx context.Context, req *pb.RebuildRecordVi
 	}
 	if strings.TrimSpace(view.GetPrimaryDatasetId()) == "" {
 		return errors.New("view primary_dataset_id is required")
-	}
-	target, err := s.router.Resolve(ctx, req.GetSpaceId(), view.GetPrimaryDatasetId(), "")
-	if err != nil {
-		return err
 	}
 	columns, _, err := s.metadataReader.ListViewColumns(ctx, req.GetSpaceId(), req.GetViewId(), &pb.Page{Size: 10000})
 	if err != nil {
@@ -219,21 +215,14 @@ func (s *Service) rebuildRecordView(ctx context.Context, req *pb.RebuildRecordVi
 		return buildErr
 	}
 	cursor := ""
+	reader := s.viewFactReaderOrDefault()
 	for {
-		rows, page, err := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{
-			Target:   target,
-			DataKind: pb.DataKind_DATA_KIND_RECORD,
-			Page:     &pb.Page{Size: rebuildViewPageSize, Cursor: cursor},
-		})
+		rows, page, err := reader.ScanRecordRows(ctx, req.GetSpaceId(), view.GetPrimaryDatasetId(), nil, nil, &pb.Page{Size: rebuildViewPageSize, Cursor: cursor})
 		if err != nil {
 			return failBuild(err)
 		}
 		if len(rows) > 0 {
-			recordRows := make([]*pb.RecordRow, 0, len(rows))
-			for _, row := range rows {
-				recordRows = append(recordRows, primaryStoreRowToRecordRow(row, nil))
-			}
-			projected, ok, err := s.recordRowsForView(ctx, view, columns, recordRows)
+			projected, ok, err := s.recordRowsForView(ctx, view, columns, rows)
 			if err != nil {
 				return failBuild(err)
 			}
