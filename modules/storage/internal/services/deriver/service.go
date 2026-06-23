@@ -29,9 +29,19 @@ type Service struct {
 	cancel            context.CancelFunc
 	timeSeriesSub     eventbus.Subscription
 	recordSub         eventbus.Subscription
-	timeSeriesBatcher *batcher[*pb.TimeSeriesKey]
-	recordBatcher     *batcher[*pb.RecordKey]
+	timeSeriesBatcher *batcher[timeSeriesDeriveItem]
+	recordBatcher     *batcher[recordDeriveItem]
 	wg                sync.WaitGroup
+}
+
+type timeSeriesDeriveItem struct {
+	key  *pb.TimeSeriesKey
+	done chan error
+}
+
+type recordDeriveItem struct {
+	key  *pb.RecordKey
+	done chan error
 }
 
 // NewService creates a standalone deriver service.
@@ -72,6 +82,18 @@ func (s *Service) Start(ctx context.Context) error {
 	if !ok {
 		return errors.New("deriver service requires subscribable event bus")
 	}
+	if s.reader == nil {
+		return errors.New("deriver service requires fact reader")
+	}
+	if s.metadataReader == nil {
+		return errors.New("deriver service requires metadata reader")
+	}
+	if s.views == nil {
+		return errors.New("deriver service requires time-series view writer")
+	}
+	if s.search == nil {
+		return errors.New("deriver service requires record view indexer")
+	}
 
 	s.mu.Lock()
 	if s.cancel != nil {
@@ -79,32 +101,15 @@ func (s *Service) Start(ctx context.Context) error {
 		return errors.New("deriver service is already started")
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	timeSeriesBatcher := newBatcher[*pb.TimeSeriesKey](s.batchOpts)
-	recordBatcher := newBatcher[*pb.RecordKey](s.batchOpts)
+	timeSeriesBatcher := newBatcher[timeSeriesDeriveItem](s.batchOpts)
+	recordBatcher := newBatcher[recordDeriveItem](s.batchOpts)
 	s.cancel = cancel
 	s.runCtx = runCtx
 	s.timeSeriesBatcher = timeSeriesBatcher
 	s.recordBatcher = recordBatcher
-	s.mu.Unlock()
-
-	timeSeriesSub, err := subscriber.SubscribeTimeSeriesRowsChanged(ctx, s.enqueueTimeSeries)
-	if err != nil {
-		s.clearStartedState(cancel)
-		return err
-	}
-	recordSub, err := subscriber.SubscribeRecordRowsChanged(ctx, s.enqueueRecord)
-	if err != nil {
-		_ = timeSeriesSub.Close()
-		s.clearStartedState(cancel)
-		return err
-	}
-
-	timeSeriesOut := make(chan []*pb.TimeSeriesKey, s.maxWorkers)
-	recordOut := make(chan []*pb.RecordKey, s.maxWorkers)
-
-	s.mu.Lock()
-	s.timeSeriesSub = timeSeriesSub
-	s.recordSub = recordSub
+	timeSeriesOut := make(chan []timeSeriesDeriveItem, s.maxWorkers)
+	recordOut := make(chan []recordDeriveItem, s.maxWorkers)
+	processCtx := context.WithoutCancel(runCtx)
 	s.wg.Add(2 + 2*s.maxWorkers)
 	s.mu.Unlock()
 
@@ -122,16 +127,33 @@ func (s *Service) Start(ctx context.Context) error {
 		go func() {
 			defer s.wg.Done()
 			for batch := range timeSeriesOut {
-				_ = s.processTimeSeriesBatch(runCtx, batch)
+				s.processTimeSeriesItemBatch(processCtx, batch)
 			}
 		}()
 		go func() {
 			defer s.wg.Done()
 			for batch := range recordOut {
-				_ = s.processRecordBatch(runCtx, batch)
+				s.processRecordItemBatch(processCtx, batch)
 			}
 		}()
 	}
+
+	timeSeriesSub, err := subscriber.SubscribeTimeSeriesRowsChanged(ctx, s.enqueueTimeSeries)
+	if err != nil {
+		s.clearStartedState(cancel)
+		return err
+	}
+	recordSub, err := subscriber.SubscribeRecordRowsChanged(ctx, s.enqueueRecord)
+	if err != nil {
+		_ = timeSeriesSub.Close()
+		s.clearStartedState(cancel)
+		return err
+	}
+
+	s.mu.Lock()
+	s.timeSeriesSub = timeSeriesSub
+	s.recordSub = recordSub
+	s.mu.Unlock()
 	return nil
 }
 
@@ -148,12 +170,6 @@ func (s *Service) Close() error {
 		s.mu.Unlock()
 		return nil
 	}
-	s.cancel = nil
-	s.runCtx = nil
-	s.timeSeriesSub = nil
-	s.recordSub = nil
-	s.timeSeriesBatcher = nil
-	s.recordBatcher = nil
 	s.mu.Unlock()
 
 	var err error
@@ -165,10 +181,22 @@ func (s *Service) Close() error {
 	}
 	cancel()
 	s.wg.Wait()
+
+	s.mu.Lock()
+	s.cancel = nil
+	s.runCtx = nil
+	s.timeSeriesSub = nil
+	s.recordSub = nil
+	s.timeSeriesBatcher = nil
+	s.recordBatcher = nil
+	s.mu.Unlock()
 	return err
 }
 
 func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if event == nil {
 		return nil
 	}
@@ -182,18 +210,27 @@ func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRow
 	if addCtx == nil {
 		addCtx = ctx
 	}
+	var done []chan error
 	for _, key := range event.GetKeys() {
 		if key == nil {
 			continue
 		}
-		if err := batcher.add(addCtx, proto.Clone(key).(*pb.TimeSeriesKey)); err != nil {
+		item := timeSeriesDeriveItem{
+			key:  proto.Clone(key).(*pb.TimeSeriesKey),
+			done: make(chan error, 1),
+		}
+		if err := batcher.add(addCtx, item); err != nil {
 			return err
 		}
+		done = append(done, item.done)
 	}
-	return nil
+	return waitDeriveResults(ctx, done)
 }
 
 func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if event == nil {
 		return nil
 	}
@@ -207,25 +244,82 @@ func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsChanged
 	if addCtx == nil {
 		addCtx = ctx
 	}
+	var done []chan error
 	for _, key := range event.GetKeys() {
 		if key == nil {
 			continue
 		}
-		if err := batcher.add(addCtx, proto.Clone(key).(*pb.RecordKey)); err != nil {
+		item := recordDeriveItem{
+			key:  proto.Clone(key).(*pb.RecordKey),
+			done: make(chan error, 1),
+		}
+		if err := batcher.add(addCtx, item); err != nil {
 			return err
 		}
+		done = append(done, item.done)
 	}
-	return nil
+	return waitDeriveResults(ctx, done)
 }
 
 func (s *Service) clearStartedState(cancel context.CancelFunc) {
 	cancel()
+	s.wg.Wait()
 	s.mu.Lock()
 	s.cancel = nil
 	s.runCtx = nil
 	s.timeSeriesBatcher = nil
 	s.recordBatcher = nil
 	s.mu.Unlock()
+}
+
+func (s *Service) processTimeSeriesItemBatch(ctx context.Context, items []timeSeriesDeriveItem) {
+	keys := make([]*pb.TimeSeriesKey, 0, len(items))
+	for _, item := range items {
+		if item.key != nil {
+			keys = append(keys, item.key)
+		}
+	}
+	err := s.processTimeSeriesBatch(ctx, keys)
+	for _, item := range items {
+		completeDeriveItem(item.done, err)
+	}
+}
+
+func (s *Service) processRecordItemBatch(ctx context.Context, items []recordDeriveItem) {
+	keys := make([]*pb.RecordKey, 0, len(items))
+	for _, item := range items {
+		if item.key != nil {
+			keys = append(keys, item.key)
+		}
+	}
+	err := s.processRecordBatch(ctx, keys)
+	for _, item := range items {
+		completeDeriveItem(item.done, err)
+	}
+}
+
+func completeDeriveItem(done chan error, err error) {
+	if done == nil {
+		return
+	}
+	done <- err
+}
+
+func waitDeriveResults(ctx context.Context, results []chan error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, result := range results {
+		select {
+		case err := <-result:
+			if err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 type projectionDatasetKey struct {

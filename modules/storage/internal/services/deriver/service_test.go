@@ -2,6 +2,7 @@ package deriver
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -52,6 +53,7 @@ func TestServiceConsumesTimeSeriesRowsChangedAndWritesView(t *testing.T) {
 		Reader:         reader,
 		MetadataReader: meta,
 		Views:          writer,
+		Search:         &capturingRecordIndexer{},
 		BatchSize:      1,
 		BatchWait:      time.Millisecond,
 		MaxWorkers:     1,
@@ -81,6 +83,125 @@ func TestServiceConsumesTimeSeriesRowsChangedAndWritesView(t *testing.T) {
 	columns := calls[0].rows[0].GetColumns()
 	if len(columns) != 1 || columns[0].GetColumnName() != "close_alias" {
 		t.Fatalf("projected columns = %#v", columns)
+	}
+}
+
+func TestServiceTimeSeriesHandlerReturnsWriterError(t *testing.T) {
+	ctx := context.Background()
+	writerErr := errors.New("insert failed")
+	service := newStartedDeriverTestService(t, ctx, deriverTestOptions{
+		timeSeriesRows: []*pb.TimeSeriesRow{
+			{
+				Key:     &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m", DataTime: "2026-06-15T00:00:00Z"},
+				Columns: []*pb.ColumnValue{doubleColumn("close", 8.1)},
+			},
+		},
+		viewsByDataset: map[string][]*pb.View{
+			"crypto/kline": {
+				{
+					SpaceId:          "crypto",
+					ViewId:           "kline_view",
+					PrimaryDatasetId: "kline",
+					Engine:           "duckdb",
+					ActiveResult:     "ts_view_crypto_kline_active",
+				},
+			},
+		},
+		columnsByView: map[string][]*pb.ViewColumn{
+			"crypto/kline_view": {
+				{
+					ColumnName: "close_alias",
+					OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+					OriginId:   "kline.close",
+					ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+				},
+			},
+		},
+		writerErr: writerErr,
+	})
+
+	err := service.enqueueTimeSeries(ctx, &pb.TimeSeriesRowsChangedEvent{
+		Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m", DataTime: "2026-06-15T00:00:00Z"}},
+	})
+	if !errors.Is(err, writerErr) {
+		t.Fatalf("enqueueTimeSeries error = %v, want %v", err, writerErr)
+	}
+}
+
+func TestServiceCloseFlushesPendingTimeSeriesHandler(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeDeriverReader{
+		timeSeriesRows: []*pb.TimeSeriesRow{
+			{
+				Key:     &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m", DataTime: "2026-06-15T00:00:00Z"},
+				Columns: []*pb.ColumnValue{doubleColumn("close", 8.1)},
+			},
+		},
+	}
+	meta := &fakeDeriverMetadata{
+		viewsByDataset: map[string][]*pb.View{
+			"crypto/kline": {
+				{
+					SpaceId:          "crypto",
+					ViewId:           "kline_view",
+					PrimaryDatasetId: "kline",
+					Engine:           "duckdb",
+					ActiveResult:     "ts_view_crypto_kline_active",
+				},
+			},
+		},
+		columnsByView: map[string][]*pb.ViewColumn{
+			"crypto/kline_view": {
+				{
+					ColumnName: "close_alias",
+					OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+					OriginId:   "kline.close",
+					ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+				},
+			},
+		},
+	}
+	writer := &capturingTimeSeriesWriter{requireLiveContext: true}
+	service := NewService(Options{
+		Events:         eventbus.NewMemoryBus(),
+		Reader:         reader,
+		MetadataReader: meta,
+		Views:          writer,
+		Search:         &capturingRecordIndexer{},
+		BatchSize:      10,
+		BatchWait:      time.Hour,
+		MaxWorkers:     1,
+	})
+	if err := service.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- service.enqueueTimeSeries(ctx, &pb.TimeSeriesRowsChangedEvent{
+			Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m", DataTime: "2026-06-15T00:00:00Z"}},
+		})
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("enqueueTimeSeries returned before pending batch was closed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := service.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("enqueueTimeSeries error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for enqueueTimeSeries after Close")
+	}
+	if got := writer.callCount(); got != 1 {
+		t.Fatalf("writer call count = %d, want 1", got)
 	}
 }
 
@@ -123,6 +244,7 @@ func TestServiceConsumesRecordRowsChangedAndIndexesView(t *testing.T) {
 		Events:         bus,
 		Reader:         reader,
 		MetadataReader: meta,
+		Views:          &capturingTimeSeriesWriter{},
 		Search:         indexer,
 		BatchSize:      1,
 		BatchWait:      time.Millisecond,
@@ -156,11 +278,122 @@ func TestServiceConsumesRecordRowsChangedAndIndexesView(t *testing.T) {
 	}
 }
 
+func TestServiceRecordHandlerReturnsIndexerError(t *testing.T) {
+	ctx := context.Background()
+	indexErr := errors.New("index failed")
+	service := newStartedDeriverTestService(t, ctx, deriverTestOptions{
+		recordRows: []*pb.RecordRow{
+			{
+				Key:     &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "n1", Version: "v1"},
+				Columns: []*pb.ColumnValue{stringColumn("title", "hello")},
+			},
+		},
+		viewsByDataset: map[string][]*pb.View{
+			"crypto/news": {
+				{
+					SpaceId:          "crypto",
+					ViewId:           "news_view",
+					PrimaryDatasetId: "news",
+					Engine:           "bleve",
+					ActiveResult:     "record_view_crypto_news_active",
+				},
+			},
+		},
+		columnsByView: map[string][]*pb.ViewColumn{
+			"crypto/news_view": {
+				{
+					ColumnName: "headline",
+					OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+					OriginId:   "news.title",
+					ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_STRING,
+				},
+			},
+		},
+		indexErr: indexErr,
+	})
+
+	err := service.enqueueRecord(ctx, &pb.RecordRowsChangedEvent{
+		Keys: []*pb.RecordKey{{SpaceId: "crypto", DatasetId: "news", RecordId: "n1", Version: "v1"}},
+	})
+	if !errors.Is(err, indexErr) {
+		t.Fatalf("enqueueRecord error = %v, want %v", err, indexErr)
+	}
+}
+
 func TestServiceStartRequiresSubscribableEventBus(t *testing.T) {
 	service := NewService(Options{Events: publishOnlyBus{}})
 	if err := service.Start(context.Background()); err == nil {
 		t.Fatal("Start error = nil, want error")
 	}
+}
+
+func TestServiceStartValidatesRequiredDependencies(t *testing.T) {
+	base := func() Options {
+		return Options{
+			Events:         eventbus.NewMemoryBus(),
+			Reader:         &fakeDeriverReader{},
+			MetadataReader: &fakeDeriverMetadata{},
+			Views:          &capturingTimeSeriesWriter{},
+			Search:         &capturingRecordIndexer{},
+		}
+	}
+	tests := []struct {
+		name string
+		mut  func(*Options)
+	}{
+		{name: "reader", mut: func(opts *Options) { opts.Reader = nil }},
+		{name: "metadata reader", mut: func(opts *Options) { opts.MetadataReader = nil }},
+		{name: "views", mut: func(opts *Options) { opts.Views = nil }},
+		{name: "search", mut: func(opts *Options) { opts.Search = nil }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := base()
+			tt.mut(&opts)
+			service := NewService(opts)
+			if err := service.Start(context.Background()); err == nil {
+				t.Fatal("Start error = nil, want error")
+			}
+		})
+	}
+}
+
+type deriverTestOptions struct {
+	timeSeriesRows []*pb.TimeSeriesRow
+	recordRows     []*pb.RecordRow
+	viewsByDataset map[string][]*pb.View
+	columnsByView  map[string][]*pb.ViewColumn
+	writerErr      error
+	indexErr       error
+}
+
+func newStartedDeriverTestService(t *testing.T, ctx context.Context, opts deriverTestOptions) *Service {
+	t.Helper()
+	service := NewService(Options{
+		Events: eventbus.NewMemoryBus(),
+		Reader: &fakeDeriverReader{
+			timeSeriesRows: opts.timeSeriesRows,
+			recordRows:     opts.recordRows,
+		},
+		MetadataReader: &fakeDeriverMetadata{
+			viewsByDataset: opts.viewsByDataset,
+			columnsByView:  opts.columnsByView,
+		},
+		Views: &capturingTimeSeriesWriter{
+			err: opts.writerErr,
+		},
+		Search: &capturingRecordIndexer{
+			err: opts.indexErr,
+		},
+		BatchSize:  1,
+		BatchWait:  time.Millisecond,
+		MaxWorkers: 1,
+	})
+	if err := service.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	return service
 }
 
 type fakeDeriverReader struct {
@@ -218,11 +451,21 @@ type timeSeriesWriteCall struct {
 }
 
 type capturingTimeSeriesWriter struct {
-	mu    sync.Mutex
-	items []timeSeriesWriteCall
+	mu                 sync.Mutex
+	items              []timeSeriesWriteCall
+	err                error
+	requireLiveContext bool
 }
 
-func (w *capturingTimeSeriesWriter) InsertRows(_ context.Context, tableName string, rows []*pb.TimeSeriesRow) error {
+func (w *capturingTimeSeriesWriter) InsertRows(ctx context.Context, tableName string, rows []*pb.TimeSeriesRow) error {
+	if w.requireLiveContext {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	if w.err != nil {
+		return w.err
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	copied := make([]*pb.TimeSeriesRow, 0, len(rows))
@@ -256,9 +499,13 @@ type recordIndexCall struct {
 type capturingRecordIndexer struct {
 	mu    sync.Mutex
 	items []recordIndexCall
+	err   error
 }
 
 func (i *capturingRecordIndexer) IndexRecordViewRows(_ context.Context, resultName string, columns []*pb.ViewColumn, rows []*pb.RecordRow) error {
+	if i.err != nil {
+		return i.err
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	copiedColumns := make([]*pb.ViewColumn, 0, len(columns))
