@@ -1,5 +1,9 @@
 storage:
   root: ./var/e2e
+  roles:
+    - access
+    - primary
+    - deriver
   metadata:
     path: ./var/e2e/metadata/metadata.db
   devices:
@@ -12,3 +16,8 @@ storage:
   eventbus:
     type: memory
     stream_name: MOOX_STORAGE_E2E
+  deriver:
+    access_service_name: ""
+    batch_size: 100
+    batch_wait_ms: 50
+    max_workers: 1

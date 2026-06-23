@@ -353,19 +353,20 @@ metadata seed 导入完成 (config/metadata.seed.yaml): spaces=1 data_sources=1 
 
 单进程开发/测试模式下，显式启用 `access + primary + deriver`，`primary.service_name` 留空，`eventbus.type` 设为 `memory`，`deriver.access_service_name` 留空。这样所有服务、派生消费者和计时器都跑在一个进程里，且不需要本地 NATS。
 
+仓库自带的 `config/storage.yaml` 使用 NATS，适合默认/分布式运行；如果本机没有 NATS，请新建一份本地配置，例如：
+
 ```bash
-# 1. 初始化 schema 并导入元数据
-./bin/moox-storage -import-metadata -conf=config/trpc_go.yaml -storage-conf=config/storage.yaml
-
-# 2. 启动服务（开发态也可用 make dev）
-./bin/moox-storage -conf=config/trpc_go.yaml -storage-conf=config/storage.yaml
-```
-
-建议使用独立的开发/测试配置覆盖以下字段：
-
-```yaml
+cat > config/storage.local.yaml <<'YAML'
 storage:
+  root: ./var/storage
   roles: [access, primary, deriver]
+  metadata:
+    path: ./var/storage/metadata/storage_metadata.db
+  devices:
+    pebble_path: ./var/storage/pebble
+    duckdb_path: ./var/storage/duckdb/views.duckdb
+    bleve_path: ./var/storage/bleve
+    parquet_path: ./var/storage/archive
   primary:
     service_name: ""
   eventbus:
@@ -375,6 +376,17 @@ storage:
     batch_size: 100
     batch_wait_ms: 50
     max_workers: 1
+YAML
+```
+
+然后用这份本地配置启动：
+
+```bash
+# 1. 初始化 schema 并导入元数据
+./bin/moox-storage -import-metadata -conf=config/trpc_go.yaml -storage-conf=config/storage.local.yaml
+
+# 2. 启动服务
+./bin/moox-storage -conf=config/trpc_go.yaml -storage-conf=config/storage.local.yaml
 ```
 
 `metadata.seed.yaml` 中 PrimaryStoreNode 仍应使用 `endpoint: local`。

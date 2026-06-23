@@ -74,7 +74,7 @@ CGO_ENABLED=1 go test -tags e2e -timeout 600s -v ./tests/e2e/...
 
 ## 手动部署（排障用）
 
-`tests/testdata/trpc_go.e2e.yaml` 与 `tests/testdata/storage.e2e.yaml` 是一组等价的手动部署参考配置（使用 `./var/e2e` 相对目录）：
+`tests/testdata/trpc_go.e2e.yaml` 与 `tests/testdata/storage.e2e.yaml` 是一组等价的手动部署参考配置（使用 `./var/e2e` 相对目录）。其中 storage 配置显式启用 `access`、`primary`、`deriver`，使用 memory eventbus，并把 deriver 配为同进程本地 Access reader：
 
 ```bash
 cd modules/storage
