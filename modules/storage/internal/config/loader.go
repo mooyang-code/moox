@@ -107,7 +107,7 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.EventBus.ConsumerName == "" {
 		c.EventBus.ConsumerName = "storage_deriver"
 	}
-	if c.EventBus.Type == "nats" && c.Deriver.AccessServiceName == "" {
+	if c.Deriver.AccessServiceName == "" {
 		c.Deriver.AccessServiceName = "trpc.storage.access.AccessService"
 	}
 	if c.Deriver.BatchSize == 0 {

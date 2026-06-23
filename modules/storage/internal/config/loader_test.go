@@ -199,6 +199,33 @@ func TestStorageRuntimeConfigDefaultsRolesEventBusAndDeriver(t *testing.T) {
 	}
 }
 
+func TestStorageRuntimeConfigDefaultsDeriverAccessServiceNameForMemoryEventBus(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "storage.yaml")
+	content := []byte(`
+storage:
+  eventbus:
+    type: memory
+`)
+	if err := os.WriteFile(configPath, content, 0o600); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	var cfg RuntimeConfig
+	err := NewConfigLoader(dir).LoadConfigWithDefaults("storage.yaml", &cfg, cfg.ApplyDefaults)
+	if err != nil {
+		t.Fatalf("LoadConfigWithDefaults returned error: %v", err)
+	}
+	if cfg.Storage.EventBus.Type != "memory" {
+		t.Fatalf("eventbus type = %q", cfg.Storage.EventBus.Type)
+	}
+	if cfg.Storage.Deriver.AccessServiceName != "trpc.storage.access.AccessService" {
+		t.Fatalf("deriver access_service_name = %q", cfg.Storage.Deriver.AccessServiceName)
+	}
+}
+
 func TestStorageRuntimeConfigHasRole(t *testing.T) {
 	t.Parallel()
 
