@@ -50,6 +50,7 @@ internal/
   services/        # 可独立部署/调度的服务层
     access/        #   唯一公开数据访问入口
     primary/       #   在线事实主存服务（local / remote client）
+    deriver/       #   行变更事件消费与 View 增量派生
     search/        #   全文检索服务
     view/          #   视图物化构建与清理
     archive/       #   Parquet 归档服务
@@ -60,9 +61,30 @@ tests/e2e/         # 端到端测试（本地部署整套服务驱动）
 分层约束：
 
 - `services/access` 是唯一公开入口，负责 tRPC 协议编排、写入校验、路由解析与请求转发。
-- `services/primary`、`services/search`、`services/view`、`services/archive` 是内部执行服务，均可独立部署，也可在同进程内装配。
+- `services/primary`、`services/deriver`、`services/search`、`services/view`、`services/archive` 是内部执行服务，均可独立部署，也可在同进程内装配。
 - `infra/device` 是设备驱动层，所有具体存储引擎实现集中于此。
 - `core` 与 `infra` 不直接作为服务启动，只作为上层服务依赖的领域抽象和底层实现。
+
+## Runtime Roles
+
+`cmd/moox-storage` 由 `storage.roles` 选择本进程启用的运行角色：
+
+| 角色 | 职责 |
+| --- | --- |
+| `access` | 面向用户的写入和权威读取入口；校验列契约、解析路由、写 PrimaryStore，并发布行变更事件。 |
+| `primary` | 拥有 Pebble PrimaryStore RPC；可按路由和配置部署多个 primary 服务。 |
+| `deriver` | 消费行变更事件、批量聚合 key、通过 AccessService 回读当前行；TimeSeries View 写 DuckDB，Record View 写 Bleve。 |
+
+默认角色是 `access + deriver`。如果 `access` 角色的 `storage.primary.service_name` 为空，进程也会暴露本地 `PrimaryStoreService`，用于单进程本地主存模式；如果该字段非空，Access 通过远程 PrimaryStore RPC 写读，除非同时显式启用 `primary` 角色。
+
+默认事件总线是 NATS。`memory` 只用于单进程开发和测试，且仍是异步总线，不提供写后立即可查派生结果的契约。Deriver 配置项包括：
+
+| 字段 | 含义 |
+| --- | --- |
+| `deriver.access_service_name` | Deriver 回读当前事实行使用的 AccessService 名称；留空时使用同进程本地 Access reader。 |
+| `deriver.batch_size` | 单批最多聚合的变更 key 数。 |
+| `deriver.batch_wait_ms` | 未达到批大小时的最长等待时间。 |
+| `deriver.max_workers` | TimeSeries 与 Record 各自的并发处理 worker 数。 |
 
 ## 核心概念
 
@@ -101,7 +123,7 @@ AccessService.WriteTimeSeriesRows / WriteRecordRows
   -> services/access         调用 primary.Client（local 或 remote）
   -> Pebble fact store        写入主存
   -> eventbus.Bus             PublishTimeSeriesRowsChanged / PublishRecordRowsChanged
-  -> Search / View / Archive  异步派生（事件或后台 timer）
+  -> services/deriver         异步回读并写 DuckDB / Bleve 派生结果
 ```
 
 要点：
@@ -122,9 +144,10 @@ AccessService.WriteTimeSeriesRows / WriteRecordRows
 
 部署形态：
 
-- `MemoryBus` 支持进程内订阅，Access 据此驱动 Search 索引增量更新。Search 是异步派生结果，**不提供写后立即可搜契约**。
-- 生产环境可将 eventbus 配置为 NATS，`infra/eventbus.SubscriberBus` 通过统一前缀订阅，`consumer_name` 可配置 durable consumer。订阅失败是启动阶段显式错误，不能只记录日志后继续运行。
+- 默认 eventbus 为 NATS；`MemoryBus` 只支持单进程开发/测试订阅，且仍异步派生，**不提供写后立即可搜/可查 View 契约**。
+- 生产环境使用 NATS 时，`infra/eventbus.SubscriberBus` 分别订阅 `${prefix}.time_series.rows_changed.v1` 与 `${prefix}.record.rows_changed.v1`。NATS transport 会基于 `consumer_name + subject kind` 派生不同 durable consumer，避免两个 subject 共用 durable 名冲突。
 - 事件 subject 统一前缀默认 `moox.storage`，时序行变更默认 `moox.storage.time_series.rows_changed.v1`，记录行变更默认 `moox.storage.record.rows_changed.v1`；NATS stream 可用 `moox.storage.>` 前缀通配，便于扩展 View/Archive 等派生事件。
+- Deriver handler 只有在 DuckDB/Bleve 派生写入成功后才返回 success。处理失败会向上传递错误，NATS transport 因此 `Nak` 消息并交给 JetStream 重试。
 
 ## 查询链路
 
@@ -152,7 +175,7 @@ QueryTimeSeriesRows: Access -> View 物化结果（DuckDB active_result）
 
 ## 派生与后台调度
 
-`cmd/moox-storage` 启动时装配 Access、PrimaryStore、View、Archive，并注册 tRPC timer handler：
+`cmd/moox-storage` 启动时按 `storage.roles` 装配 Access、PrimaryStore、Deriver 与 View 查询服务，并注册 tRPC timer handler：
 
 | Timer | 调度器 | 行为 |
 | --- | --- | --- |
@@ -181,9 +204,10 @@ params_json = {"window":20,"price":"close"}
 
 ## 部署形态
 
-- 默认在同进程内用 `primary.LocalClient` 访问 Pebble；Access 与 PrimaryStore 通过进程级共享的 Pebble 实例（引用计数）协作，不会重复打开同一目录。
-- 仅当显式配置 `storage.primary.service_name` 时，Access 才通过 `primary.RemoteClient` 经远程 PrimaryStore Service 转发，支持主存独立水平扩展。
-- 运行配置由 `internal/config.RuntimeConfig` 加载，覆盖元数据路径、各设备目录、primary 服务名与 eventbus 类型（memory/nats）。
+- 单进程开发/测试可显式启用 `roles: [access, primary, deriver]`，设置 `eventbus.type: memory`、`primary.service_name: ""`、`deriver.access_service_name: ""`。该模式不需要 NATS，但派生仍异步。
+- 分布式部署通常拆成 `primary` 节点和 `access + deriver` 节点。`access` 节点配置远程 `primary.service_name`，`deriver` 通过 `deriver.access_service_name` 回读 AccessService。
+- 默认事件总线为 NATS；跨进程部署必须使用 NATS 或等价外部传输，不能使用 memory。
+- 运行配置由 `internal/config.RuntimeConfig` 加载，覆盖角色、元数据路径、各设备目录、primary 服务名、eventbus 类型和 deriver 批处理参数。
 
 ## 测试
 

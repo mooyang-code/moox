@@ -94,6 +94,9 @@ CGO_ENABLED=1 go build -o bin/moox-storage ./cmd/moox-storage
 ```yaml
 storage:
   root: ./var/storage                                  # 数据根目录
+  roles:                                              # 本进程承担的运行角色
+    - access
+    - deriver
   metadata:
     path: ./var/storage/metadata/storage_metadata.db   # 元数据 SQLite 文件
   devices:
@@ -104,11 +107,36 @@ storage:
   primary:
     service_name: ""        # 留空=同进程内嵌主存；填服务名=走远程 PrimaryStore（分布式）
   eventbus:
-    type: memory            # memory=单进程内存总线；nats=跨进程/跨机
-    nats_url: ""            # type=nats 时填 NATS 地址，如 nats://10.0.0.9:4222
+    type: nats              # 默认 nats；memory 只用于单进程开发/测试，仍是异步总线
+    nats_url: nats://127.0.0.1:4222
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
+    consumer_name: storage_deriver
+  deriver:
+    access_service_name: trpc.storage.access.AccessService  # 留空=同进程本地 Access reader
+    batch_size: 500
+    batch_wait_ms: 200
+    max_workers: 4
 ```
+
+### Runtime Roles
+
+`moox-storage` 通过 `storage.roles` 决定同一个二进制在本进程启用哪些运行角色：
+
+| 角色 | 职责 |
+| --- | --- |
+| `access` | 面向用户的写入和权威读取入口；校验列契约、解析路由、写 PrimaryStore，并发布行变更事件。 |
+| `primary` | 拥有 Pebble PrimaryStore RPC；可按路由和配置部署多个 primary 服务。 |
+| `deriver` | 消费行变更事件、批量聚合 key、通过 AccessService 回读当前行；TimeSeries View 写入 DuckDB，Record View 写入 Bleve。 |
+
+默认运行角色是 `access + deriver`，不包含显式 `primary`。当 `access` 的 `primary.service_name` 为空时，进程会同时暴露本地 `PrimaryStoreService`，保持单进程/本地主存部署可用；当 `primary.service_name` 非空时，Access 走远程 PrimaryStore，除非显式加入 `primary` 角色。
+
+默认事件总线是 NATS。`memory` 只适合单进程开发和测试；它仍然异步投递事件，不提供写后立即可查派生结果的契约。NATS 行变更 subject 使用 `eventbus.subject_prefix` 拼接：
+
+- `${prefix}.time_series.rows_changed.v1`
+- `${prefix}.record.rows_changed.v1`
+
+NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。Deriver 事件 handler 只有在派生写入成功后才返回 success；失败会向上传递错误，让 NATS `Nak` 并重试。Deriver 批处理参数为 `deriver.access_service_name`、`deriver.batch_size`、`deriver.batch_wait_ms`、`deriver.max_workers`。
 
 ### `config/trpc_go.yaml` 默认服务端口
 
@@ -321,9 +349,9 @@ metadata seed 导入完成 (config/metadata.seed.yaml): spaces=1 data_sources=1 
 
 ## 部署
 
-### 单机部署（默认，推荐起步）
+### 单进程开发/测试部署
 
-单机模式下：主存同进程内嵌（`primary.service_name: ""`）、事件总线用内存（`eventbus.type: memory`），所有服务与计时器跑在一个进程里。
+单进程开发/测试模式下，显式启用 `access + primary + deriver`，`primary.service_name` 留空，`eventbus.type` 设为 `memory`，`deriver.access_service_name` 留空。这样所有服务、派生消费者和计时器都跑在一个进程里，且不需要本地 NATS。
 
 ```bash
 # 1. 初始化 schema 并导入元数据
@@ -333,7 +361,23 @@ metadata seed 导入完成 (config/metadata.seed.yaml): spaces=1 data_sources=1 
 ./bin/moox-storage -conf=config/trpc_go.yaml -storage-conf=config/storage.yaml
 ```
 
-需要改动的配置：保持默认即可（`config/storage.yaml` 中 `primary.service_name=""`、`eventbus.type=memory`，`metadata.seed.yaml` 中 PrimaryStoreNode `endpoint: local`）。
+建议使用独立的开发/测试配置覆盖以下字段：
+
+```yaml
+storage:
+  roles: [access, primary, deriver]
+  primary:
+    service_name: ""
+  eventbus:
+    type: memory
+  deriver:
+    access_service_name: ""
+    batch_size: 100
+    batch_wait_ms: 50
+    max_workers: 1
+```
+
+`metadata.seed.yaml` 中 PrimaryStoreNode 仍应使用 `endpoint: local`。
 
 `make release` 产物自带 `start.sh` / `stop.sh`，会自动执行 schema 初始化并以 nohup 后台启动。
 
@@ -350,6 +394,8 @@ metadata seed 导入完成 (config/metadata.seed.yaml): spaces=1 data_sources=1 
 
 ```yaml
 storage:
+  roles:
+    - primary
   primary:
     service_name: ""        # 本机就是主存，内嵌 Pebble
   eventbus:
@@ -363,11 +409,19 @@ storage:
 
 ```yaml
 storage:
+  roles:
+    - access
+    - deriver
   primary:
     service_name: trpc.storage.store.PrimaryStoreService   # 走远程主存
   eventbus:
     type: nats
     nats_url: nats://10.0.0.9:4222
+  deriver:
+    access_service_name: trpc.storage.access.AccessService
+    batch_size: 500
+    batch_wait_ms: 200
+    max_workers: 4
 ```
 
 并在元数据种子里把每个分片节点写成真实地址、用路由把 subject 分到不同节点：
@@ -414,10 +468,10 @@ primary_store_routes:
 
 #### 服务的分散运行
 
-`moox-storage` 二进制总是注册全部服务，**通过配置决定每个节点实际承担的角色**：
+`moox-storage` 二进制只注册 `storage.roles` 启用的服务。常见拆分：
 
 - **物化/归档节点**：让该节点的 `view.timer` / `archive.timer` 在 `trpc_go.yaml` 中启用（去掉 `?disable=1`），其它节点把这些计时器 `disable`，避免重复物化。
-- **全文索引**：由行变更事件驱动（NATS），运行 Access 服务的进程会消费并写 Bleve；多副本时注意索引目录隔离或只在一个节点消费。
+- **派生节点**：启用 `deriver` 角色，消费 NATS 行变更事件并写 DuckDB/Bleve；多副本时用独立 durable consumer 名或隔离结果目录。
 - 元数据 SQLite 是控制面单点，建议集中在 Access/控制节点；各数据面节点通过元数据快照缓存（默认 10s 刷新）读取路由与列契约。
 
 ### 启动验证
@@ -509,7 +563,7 @@ internal/
   config/           运行配置加载
   core/             领域抽象（eventbus/metadata/router/schema/factvalue/response）
   infra/            底层实现（device/metadata/eventbus/transport）
-  services/         access / primary / search / view / archive
+  services/         access / primary / deriver / search / view / archive
 tests/e2e/          端到端测试
 docs/               架构与设计文档
 ```

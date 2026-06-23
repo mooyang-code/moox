@@ -31,6 +31,7 @@
 
 `PrimaryStoreService` 作为在线主存随进程一起部署，由 `AccessService` 的写读链路间接覆盖；
 `view.timer` / `archive.timer` 在部署期即按更短周期（5s / 20s）启用，使物化与归档在测试中能快速完成。
+E2E 生成的 `storage.yaml` 显式启用 `roles: [access, primary, deriver]`，使用 `eventbus.type: memory`，并把 `deriver.access_service_name` 置空，让 deriver 通过同进程 Access reader 回读事实行。内存 eventbus 仍是异步的，所以搜索和视图断言都通过轮询等待派生结果。
 
 ## 运行
 
@@ -63,7 +64,7 @@ CGO_ENABLED=1 go test -tags e2e -timeout 600s -v ./tests/e2e/...
 ## 运行机制
 
 1. `tests/e2e/harness.go` 用 `CGO_ENABLED=1 go build` 编译 `moox-storage`（DuckDB 视图存储依赖 cgo）。
-2. 在临时目录生成隔离的 `trpc_go.yaml` 与 `storage.yaml`（独立端口 + 独立设备目录 + 快速计时器）。
+2. 在临时目录生成隔离的 `trpc_go.yaml` 与 `storage.yaml`（独立端口 + 独立设备目录 + 快速计时器 + 单进程 memory eventbus）。
 3. 执行 `moox-storage -init-metadata` 初始化 SQLite 元数据 schema。
 4. 启动服务并轮询端口直到就绪。
 5. 测试以 HTTP/tRPC 客户端串行驱动各接口；测试结束后优雅停止进程并清理临时目录。

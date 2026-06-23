@@ -19,7 +19,7 @@ const (
 //   - storage 各设备目录全部落在工作目录内，便于测试结束清理；
 //   - view.timer 每 5s 触发一次，archive.timer 每 20s 触发一次，
 //     让视图物化与归档在 e2e 中能较快完成；
-//   - primary.service_name 留空，access 走进程内本地 Pebble。
+//   - 显式启用 access/primary/deriver，使用异步内存 eventbus 和本地 PrimaryStore。
 func (h *Harness) writeConfig() error {
 	storageRoot := filepath.Join(h.workDir, "var", "storage")
 	if err := os.MkdirAll(storageRoot, 0o755); err != nil {
@@ -56,6 +56,10 @@ func (h *Harness) writeConfig() error {
 const storageConfigTemplate = `
 storage:
   root: %s
+  roles:
+    - access
+    - primary
+    - deriver
   metadata:
     path: %s
   devices:
@@ -68,6 +72,11 @@ storage:
   eventbus:
     type: memory
     stream_name: MOOX_STORAGE_E2E
+  deriver:
+    access_service_name: ""
+    batch_size: 100
+    batch_wait_ms: 50
+    max_workers: 1
 `
 
 const configTemplate = `global:
