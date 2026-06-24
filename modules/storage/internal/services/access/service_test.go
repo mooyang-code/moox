@@ -2,11 +2,13 @@ package access
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
+	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
 	"github.com/mooyang-code/moox/modules/storage/internal/testutil"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -64,6 +66,134 @@ func TestServiceScansTimeSeriesDatasetWhenSubjectAndFreqAreEmpty(t *testing.T) {
 	require.Len(t, rsp.GetRows(), 1)
 	require.Equal(t, "ETH-USDT", rsp.GetRows()[0].GetKey().GetSubjectId())
 	require.Equal(t, "1m", rsp.GetRows()[0].GetKey().GetFreq())
+}
+
+func TestServiceScansTimeSeriesDatasetAcrossRoutesAndPreservesDimensions(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	seedDataset(t, ctx, svc, "split_kline", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1m"}, []string{"close"})
+	_, err := svc.metadata.UpsertPrimaryStoreNode(ctx, &pb.PrimaryStoreNode{NodeId: "node-2", Name: "node-2", Status: "active"})
+	require.NoError(t, err)
+	_, err = svc.metadata.UpsertDevice(ctx, &pb.Device{DeviceId: "pebble-2", NodeId: "node-2", Name: "pebble-2", Engine: "pebble", Status: "active"})
+	require.NoError(t, err)
+	_, err = svc.metadata.UpsertPrimaryStoreRoute(ctx, &pb.PrimaryStoreRoute{SpaceId: "crypto", RouteId: "split-kline-btc", DatasetId: "split_kline", SubjectId: "BTC-USDT", NodeId: "node-1", Status: "active"})
+	require.NoError(t, err)
+	_, err = svc.metadata.UpsertPrimaryStoreRoute(ctx, &pb.PrimaryStoreRoute{SpaceId: "crypto", RouteId: "split-kline-eth", DatasetId: "split_kline", SubjectId: "ETH-USDT", NodeId: "node-2", Status: "active"})
+	require.NoError(t, err)
+
+	_, err = svc.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: []*pb.TimeSeriesRow{
+		{
+			Key:     &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "split_kline", SubjectId: "BTC-USDT", Freq: "1m", Dimensions: map[string]string{"adj": "raw"}, DataTime: "2026-06-15T00:00:00Z"},
+			Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 10)},
+		},
+		{
+			Key:     &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "split_kline", SubjectId: "ETH-USDT", Freq: "1m", DataTime: "2026-06-15T00:01:00Z"},
+			Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 20)},
+		},
+	}})
+	require.NoError(t, err)
+
+	rsp, err := svc.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+		Keys:      []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "split_kline"}},
+		TimeRange: &pb.TimeRange{StartTime: "2026-06-15T00:00:00Z", EndTime: "2026-06-15T00:01:00Z"},
+		Page:      &pb.Page{Size: 10},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetRows(), 2)
+	bySubject := make(map[string]*pb.TimeSeriesRow, len(rsp.GetRows()))
+	for _, row := range rsp.GetRows() {
+		bySubject[row.GetKey().GetSubjectId()] = row
+	}
+	require.Contains(t, bySubject, "BTC-USDT")
+	require.Contains(t, bySubject, "ETH-USDT")
+	require.Equal(t, map[string]string{"adj": "raw"}, bySubject["BTC-USDT"].GetKey().GetDimensions())
+}
+
+func TestServiceScansTimeSeriesDatasetAcrossPrimaryTargets(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	seedDataset(t, ctx, svc, "routed_kline", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1m"}, []string{"close"})
+	_, err := svc.metadata.UpsertPrimaryStoreNode(ctx, &pb.PrimaryStoreNode{NodeId: "node-2", Name: "node-2", Status: "active"})
+	require.NoError(t, err)
+	_, err = svc.metadata.UpsertDevice(ctx, &pb.Device{DeviceId: "pebble-2", NodeId: "node-2", Name: "pebble-2", Engine: "pebble", Status: "active"})
+	require.NoError(t, err)
+	_, err = svc.metadata.UpsertPrimaryStoreRoute(ctx, &pb.PrimaryStoreRoute{SpaceId: "crypto", RouteId: "routed-kline-eth", DatasetId: "routed_kline", SubjectId: "ETH-USDT", NodeId: "node-2", Status: "active"})
+	require.NoError(t, err)
+	fake := &scanTargetsPrimaryClient{}
+	svc.primary = fake
+
+	rsp, err := svc.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+		Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "routed_kline"}},
+		Page: &pb.Page{Size: 10},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.ElementsMatch(t, []string{"node-1", "node-2"}, fake.scannedNodes)
+	require.ElementsMatch(t, []string{"BTC-USDT", "ETH-USDT"}, []string{
+		rsp.GetRows()[0].GetKey().GetSubjectId(),
+		rsp.GetRows()[1].GetKey().GetSubjectId(),
+	})
+}
+
+func TestServiceScansTimeSeriesDatasetReadsAllPrimaryPages(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	seedDataset(t, ctx, svc, "deep_kline", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1m"}, []string{"close"})
+	rows := make([]*pb.TimeSeriesRow, 0, 1001)
+	for idx := 0; idx < 1001; idx++ {
+		rows = append(rows, &pb.TimeSeriesRow{
+			Key:     &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "deep_kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: fmt.Sprintf("2026-06-15T00:%02d:%02dZ", idx/60, idx%60)},
+			Columns: []*pb.ColumnValue{testutil.DoubleValue("close", float64(idx))},
+		})
+	}
+	_, err := svc.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: rows})
+	require.NoError(t, err)
+
+	rsp, err := svc.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+		Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "deep_kline"}},
+		Page: &pb.Page{Size: 1001},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetRows(), 1001)
+}
+
+func TestServiceRejectsReservedTimeSeriesAttributes(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	seedDataset(t, ctx, svc, "kline_reserved", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1m"}, []string{"close"})
+
+	rsp, err := svc.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: []*pb.TimeSeriesRow{{
+		Key:        &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline_reserved", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-06-15T00:00:00Z"},
+		Columns:    []*pb.ColumnValue{testutil.DoubleValue("close", 10)},
+		Attributes: map[string]string{timeSeriesDimensionsAttribute: `{"adj":"raw"}`},
+	}}})
+
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+}
+
+func TestCurrentTimeSeriesRowsUsesInjectedTimeSeriesReader(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+	reader := &fakeTimeSeriesFactReader{rows: []*pb.TimeSeriesRow{{
+		Key:     &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-06-15T00:00:00Z"},
+		Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 10)},
+	}}}
+	svc.timeSeriesFactReader = reader
+
+	rows, err := svc.currentTimeSeriesRows(ctx, []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-06-15T00:00:00Z"}})
+
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, 1, reader.reads)
+}
+
+func TestTimeSeriesDirtyKeyIncludesDimensions(t *testing.T) {
+	raw := timeSeriesDirtyKey(&pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-06-15T00:00:00Z", Dimensions: map[string]string{"adjust": "raw"}})
+	qfq := timeSeriesDirtyKey(&pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-06-15T00:00:00Z", Dimensions: map[string]string{"adjust": "qfq"}})
+	require.NotEqual(t, raw, qfq)
 }
 
 func TestServiceWritesRecordRowsWithPatchSemantics(t *testing.T) {
@@ -692,4 +822,48 @@ func schemaPath(t *testing.T) string {
 	_, file, _, ok := runtime.Caller(0)
 	require.True(t, ok)
 	return filepath.Join(filepath.Dir(file), "..", "..", "..", "schema", "metadata.sql")
+}
+
+type scanTargetsPrimaryClient struct {
+	scannedNodes []string
+}
+
+type fakeTimeSeriesFactReader struct {
+	rows  []*pb.TimeSeriesRow
+	reads int
+}
+
+func (r *fakeTimeSeriesFactReader) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
+	r.reads++
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Rows: r.rows}, nil
+}
+
+func (r *fakeTimeSeriesFactReader) ScanTimeSeriesRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange, columnNames []string, page *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult, error) {
+	return r.rows, &pb.PageResult{}, nil
+}
+
+func (c *scanTargetsPrimaryClient) WriteRows(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow) error {
+	return nil
+}
+
+func (c *scanTargetsPrimaryClient) ReadRows(ctx context.Context, target *pb.PrimaryStoreTarget, req *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	return nil, &pb.PageResult{}, nil
+}
+
+func (c *scanTargetsPrimaryClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, req *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	c.scannedNodes = append(c.scannedNodes, target.GetNodeId())
+	subjectID := "BTC-USDT"
+	if target.GetNodeId() == "node-2" {
+		subjectID = "ETH-USDT"
+	}
+	return []*pb.PrimaryStoreRow{{
+		Key: &pb.PrimaryStoreKey{
+			SpaceId:   target.GetSpaceId(),
+			DatasetId: target.GetDatasetId(),
+			DataKind:  pb.DataKind_DATA_KIND_TIME_SERIES,
+			Key:       factkey.BuildTimeSeriesDataKey(subjectID, "1m", nil),
+			Version:   "2026-06-15T00:00:00.000000000Z",
+		},
+		Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 10)},
+	}}, &pb.PageResult{Size: req.GetPage().GetSize()}, nil
 }

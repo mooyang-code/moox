@@ -44,6 +44,7 @@ type Service struct {
 	primary                  primary.Client
 	search                   *search.Service
 	factReader               factReadService
+	timeSeriesFactReader     view.FactReader
 	viewFactReader           viewFactReadService
 	events                   eventbus.Bus
 	report                   ViewErrorReporter
@@ -133,6 +134,7 @@ func NewServiceWithOptions(opts Options) *Service {
 	}
 	svc.indexCond = sync.NewCond(&svc.indexMu)
 	svc.factReader = svc
+	svc.timeSeriesFactReader = svc
 	svc.viewFactReader = svc
 	go svc.runSearchIndexWorker()
 	return svc
@@ -143,6 +145,7 @@ func (s *Service) SetViewFactReader(reader viewFactReadService) {
 		return
 	}
 	s.factReader = reader
+	s.timeSeriesFactReader = reader
 	s.viewFactReader = reader
 }
 

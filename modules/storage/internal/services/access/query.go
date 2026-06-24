@@ -162,7 +162,7 @@ func (s *Service) rebuildTimeSeriesView(ctx context.Context, req *pb.RebuildTime
 	}
 	builder := view.NewBuilder(view.Options{
 		Metadata: s.metadata,
-		Facts:    s.viewFactReaderOrDefault(),
+		Facts:    s.timeSeriesFactReaderOrDefault(),
 		Views:    views,
 		OnBuildStarted: func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) {
 			s.startViewDirtyTracking(pb.DataKind_DATA_KIND_TIME_SERIES, item, targetVersion, resultName)

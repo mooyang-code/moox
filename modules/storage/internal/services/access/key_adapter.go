@@ -1,13 +1,20 @@
 package access
 
 import (
+	"encoding/json"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
+)
+
+const (
+	reservedAttributePrefix       = "__moox_"
+	timeSeriesDimensionsAttribute = reservedAttributePrefix + "time_series_dimensions"
 )
 
 func timeSeriesRowToPrimaryStoreRow(row *pb.TimeSeriesRow) (*pb.PrimaryStoreRow, error) {
@@ -18,11 +25,34 @@ func timeSeriesRowToPrimaryStoreRow(row *pb.TimeSeriesRow) (*pb.PrimaryStoreRow,
 	if err != nil {
 		return nil, err
 	}
+	if err := validateUserAttributes(row.GetAttributes()); err != nil {
+		return nil, err
+	}
+	attributes := cloneStringMap(row.GetAttributes())
+	if len(row.GetKey().GetDimensions()) > 0 {
+		raw, err := json.Marshal(row.GetKey().GetDimensions())
+		if err != nil {
+			return nil, err
+		}
+		if attributes == nil {
+			attributes = make(map[string]string, 1)
+		}
+		attributes[timeSeriesDimensionsAttribute] = string(raw)
+	}
 	return &pb.PrimaryStoreRow{
 		Key:        key,
 		Columns:    cloneColumns(row.GetColumns()),
-		Attributes: cloneStringMap(row.GetAttributes()),
+		Attributes: attributes,
 	}, nil
+}
+
+func validateUserAttributes(values map[string]string) error {
+	for key := range values {
+		if strings.HasPrefix(key, reservedAttributePrefix) {
+			return errors.New("invalid reserved attribute " + key)
+		}
+	}
+	return nil
 }
 
 func timeSeriesKeyToPrimaryStoreKey(key *pb.TimeSeriesKey, requireDataTime bool) (*pb.PrimaryStoreKey, error) {
@@ -68,11 +98,19 @@ func primaryStoreRowToTimeSeriesRow(row *pb.PrimaryStoreRow, template *pb.TimeSe
 			}
 		}
 	}
+	if len(key.GetDimensions()) == 0 {
+		if raw := row.GetAttributes()[timeSeriesDimensionsAttribute]; raw != "" {
+			dimensions := map[string]string{}
+			if err := json.Unmarshal([]byte(raw), &dimensions); err == nil && len(dimensions) > 0 {
+				key.Dimensions = dimensions
+			}
+		}
+	}
 	key.DataTime = storeKey.GetVersion()
 	return &pb.TimeSeriesRow{
 		Key:        key,
 		Columns:    cloneColumns(row.GetColumns()),
-		Attributes: cloneStringMap(row.GetAttributes()),
+		Attributes: cloneTimeSeriesAttributes(row.GetAttributes()),
 	}
 }
 
@@ -292,6 +330,7 @@ func sortRecordRows(rows []*pb.RecordRow) {
 func pageTimeSeriesRows(rows []*pb.TimeSeriesRow, page *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult) {
 	pageNo := uint32(1)
 	size := uint32(1000)
+	start := 0
 	if page != nil {
 		if page.GetPage() > 0 {
 			pageNo = page.GetPage()
@@ -299,8 +338,15 @@ func pageTimeSeriesRows(rows []*pb.TimeSeriesRow, page *pb.Page) ([]*pb.TimeSeri
 		if page.GetSize() > 0 {
 			size = page.GetSize()
 		}
+		if page.GetCursor() != "" {
+			if offset, err := strconv.Atoi(page.GetCursor()); err == nil && offset > 0 {
+				start = offset
+			}
+		}
 	}
-	start := int((pageNo - 1) * size)
+	if start == 0 {
+		start = int((pageNo - 1) * size)
+	}
 	if start > len(rows) {
 		start = len(rows)
 	}
@@ -308,17 +354,24 @@ func pageTimeSeriesRows(rows []*pb.TimeSeriesRow, page *pb.Page) ([]*pb.TimeSeri
 	if end > len(rows) {
 		end = len(rows)
 	}
+	nextCursor := ""
+	hasMore := end < len(rows)
+	if hasMore {
+		nextCursor = strconv.Itoa(end)
+	}
 	return rows[start:end], &pb.PageResult{
-		Page:    pageNo,
-		Size:    size,
-		Total:   uint32(len(rows)),
-		HasMore: end < len(rows),
+		Page:       pageNo,
+		Size:       size,
+		Total:      uint32(len(rows)),
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
 	}
 }
 
 func pageRecordRows(rows []*pb.RecordRow, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult) {
 	pageNo := uint32(1)
 	size := uint32(1000)
+	start := 0
 	if page != nil {
 		if page.GetPage() > 0 {
 			pageNo = page.GetPage()
@@ -326,8 +379,15 @@ func pageRecordRows(rows []*pb.RecordRow, page *pb.Page) ([]*pb.RecordRow, *pb.P
 		if page.GetSize() > 0 {
 			size = page.GetSize()
 		}
+		if page.GetCursor() != "" {
+			if offset, err := strconv.Atoi(page.GetCursor()); err == nil && offset > 0 {
+				start = offset
+			}
+		}
 	}
-	start := int((pageNo - 1) * size)
+	if start == 0 {
+		start = int((pageNo - 1) * size)
+	}
 	if start > len(rows) {
 		start = len(rows)
 	}
@@ -335,11 +395,17 @@ func pageRecordRows(rows []*pb.RecordRow, page *pb.Page) ([]*pb.RecordRow, *pb.P
 	if end > len(rows) {
 		end = len(rows)
 	}
+	nextCursor := ""
+	hasMore := end < len(rows)
+	if hasMore {
+		nextCursor = strconv.Itoa(end)
+	}
 	return rows[start:end], &pb.PageResult{
-		Page:    pageNo,
-		Size:    size,
-		Total:   uint32(len(rows)),
-		HasMore: end < len(rows),
+		Page:       pageNo,
+		Size:       size,
+		Total:      uint32(len(rows)),
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
 	}
 }
 
@@ -360,4 +426,24 @@ func cloneStringMap(values map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
+}
+
+func cloneTimeSeriesAttributes(values map[string]string) map[string]string {
+	out := cloneStringMap(values)
+	delete(out, timeSeriesDimensionsAttribute)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func primaryStoreRowID(row *pb.PrimaryStoreRow) string {
+	key := row.GetKey()
+	return strings.Join([]string{
+		key.GetSpaceId(),
+		key.GetDatasetId(),
+		key.GetDataKind().String(),
+		key.GetKey(),
+		key.GetVersion(),
+	}, "\x00")
 }

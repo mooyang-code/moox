@@ -8,7 +8,7 @@ import (
 )
 
 func (s *Service) InitViewBuilder() error {
-	return s.InitViewBuilderWithFacts(s.viewFactReaderOrDefault())
+	return s.InitViewBuilderWithFacts(s.timeSeriesFactReaderOrDefault())
 }
 
 func (s *Service) InitViewBuilderWithFacts(facts view.FactReader) error {
@@ -17,8 +17,9 @@ func (s *Service) InitViewBuilderWithFacts(facts view.FactReader) error {
 		return err
 	}
 	if facts == nil {
-		facts = s.viewFactReaderOrDefault()
+		facts = s.timeSeriesFactReaderOrDefault()
 	}
+	s.timeSeriesFactReader = facts
 	if reader, ok := facts.(viewFactReadService); ok {
 		s.viewFactReader = reader
 	}
@@ -42,6 +43,13 @@ func (s *Service) InitViewBuilderWithFacts(facts view.FactReader) error {
 func (s *Service) viewFactReaderOrDefault() viewFactReadService {
 	if s != nil && s.viewFactReader != nil {
 		return s.viewFactReader
+	}
+	return s
+}
+
+func (s *Service) timeSeriesFactReaderOrDefault() view.FactReader {
+	if s != nil && s.timeSeriesFactReader != nil {
+		return s.timeSeriesFactReader
 	}
 	return s
 }

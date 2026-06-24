@@ -33,7 +33,7 @@ func (r *Resolver) Resolve(ctx context.Context, spaceID string, datasetID string
 	if spaceID == "" || datasetID == "" {
 		return nil, fmt.Errorf("space_id and dataset_id are required")
 	}
-	routes, _, err := r.metadata.ListPrimaryStoreRoutes(ctx, spaceID, datasetID, "", "", nil)
+	routes, err := r.listDatasetRoutes(ctx, spaceID, datasetID)
 	if err != nil {
 		return nil, err
 	}
@@ -60,18 +60,79 @@ func (r *Resolver) Resolve(ctx context.Context, spaceID string, datasetID string
 		}
 		return candidates[i].route.GetPriority() < candidates[j].route.GetPriority()
 	})
-	chosen := candidates[0].route
-	node, err := r.metadata.GetPrimaryStoreNode(ctx, chosen.GetNodeId())
+	return r.targetForRoute(ctx, spaceID, datasetID, candidates[0].route)
+}
+
+// ResolveDatasetTargets 返回某个 Dataset 所有 active 主存目标。
+// Access 用它做全量 scan/rebuild；deriver 仍只调用 Access，不理解这些路由细节。
+func (r *Resolver) ResolveDatasetTargets(ctx context.Context, spaceID string, datasetID string) ([]*pb.PrimaryStoreTarget, error) {
+	if spaceID == "" || datasetID == "" {
+		return nil, fmt.Errorf("space_id and dataset_id are required")
+	}
+	routes, err := r.listDatasetRoutes(ctx, spaceID, datasetID)
 	if err != nil {
-		return nil, fmt.Errorf("storage node %s not found: %w", chosen.GetNodeId(), err)
+		return nil, err
+	}
+	sort.SliceStable(routes, func(i, j int) bool {
+		if routes[i].GetPriority() == routes[j].GetPriority() {
+			return routes[i].GetRouteId() < routes[j].GetRouteId()
+		}
+		return routes[i].GetPriority() < routes[j].GetPriority()
+	})
+	var targets []*pb.PrimaryStoreTarget
+	seen := make(map[string]bool)
+	for _, route := range routes {
+		if route.GetStatus() != "" && route.GetStatus() != "active" {
+			continue
+		}
+		target, err := r.targetForRoute(ctx, spaceID, datasetID, route)
+		if err != nil {
+			return nil, err
+		}
+		key := target.GetNodeId() + "\x00" + target.GetDeviceId() + "\x00" + target.GetDatasetId()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		targets = append(targets, target)
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("primary store route not found for %s/%s", spaceID, datasetID)
+	}
+	return targets, nil
+}
+
+func (r *Resolver) listDatasetRoutes(ctx context.Context, spaceID string, datasetID string) ([]*pb.PrimaryStoreRoute, error) {
+	const pageSize = uint32(1000)
+	var out []*pb.PrimaryStoreRoute
+	for pageNo := uint32(1); ; pageNo++ {
+		routes, page, err := r.metadata.ListPrimaryStoreRoutes(ctx, spaceID, datasetID, "", "", &pb.Page{Page: pageNo, Size: pageSize})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, routes...)
+		if page == nil || !page.GetHasMore() {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r *Resolver) targetForRoute(ctx context.Context, spaceID string, datasetID string, route *pb.PrimaryStoreRoute) (*pb.PrimaryStoreTarget, error) {
+	if route == nil {
+		return nil, fmt.Errorf("primary store route is required")
+	}
+	node, err := r.metadata.GetPrimaryStoreNode(ctx, route.GetNodeId())
+	if err != nil {
+		return nil, fmt.Errorf("storage node %s not found: %w", route.GetNodeId(), err)
 	}
 	if node == nil {
-		return nil, fmt.Errorf("storage node %s not found", chosen.GetNodeId())
+		return nil, fmt.Errorf("storage node %s not found", route.GetNodeId())
 	}
 	if node.GetStatus() != "" && node.GetStatus() != "active" {
-		return nil, fmt.Errorf("storage node %s is not active", chosen.GetNodeId())
+		return nil, fmt.Errorf("storage node %s is not active", route.GetNodeId())
 	}
-	device, err := r.resolvePrimaryDevice(ctx, chosen.GetNodeId())
+	device, err := r.resolvePrimaryDevice(ctx, route.GetNodeId())
 	if err != nil {
 		return nil, err
 	}

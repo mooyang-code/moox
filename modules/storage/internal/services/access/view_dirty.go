@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
 )
@@ -243,6 +244,7 @@ func timeSeriesDirtyKey(key *pb.TimeSeriesKey) string {
 		key.GetDatasetId(),
 		key.GetSubjectId(),
 		key.GetFreq(),
+		factkey.DimensionsHash(key.GetDimensions()),
 		key.GetDataTime(),
 	}, "\x00")
 }

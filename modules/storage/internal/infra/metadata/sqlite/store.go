@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"sort"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -26,10 +27,12 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	if opts.Path == "" {
 		return nil, errors.New("metadata sqlite path is required")
 	}
-	db, err := sql.Open("sqlite", opts.Path)
+	db, err := sql.Open("sqlite", withPragmas(opts.Path))
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -47,6 +50,14 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 		return nil, err
 	}
 	return &Store{db: db, schemaPath: opts.SchemaPath}, nil
+}
+
+func withPragmas(path string) string {
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	return path + separator + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
 }
 
 func (s *Store) Close() error {

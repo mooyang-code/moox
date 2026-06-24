@@ -116,26 +116,31 @@ func (s *Service) scanTimeSeriesDataset(ctx context.Context, req *pb.ReadTimeSer
 	if err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), "")
+	targets, err := s.router.ResolveDatasetTargets(ctx, key.GetSpaceId(), key.GetDatasetId())
 	if err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
 	}
-	rows, pageResult, err := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{
-		AuthInfo:     req.GetAuthInfo(),
-		Target:       target,
-		DataKind:     pb.DataKind_DATA_KIND_TIME_SERIES,
-		VersionRange: versionRange,
-		Order:        req.GetOrder(),
-		ColumnNames:  req.GetColumnNames(),
-		Page:         req.GetPage(),
-	})
-	if err != nil {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+	var out []*pb.TimeSeriesRow
+	seen := make(map[string]bool)
+	for _, target := range targets {
+		rows, err := s.scanAllPrimaryRows(ctx, req.GetAuthInfo(), target, pb.DataKind_DATA_KIND_TIME_SERIES, versionRange, req.GetColumnNames())
+		if err != nil {
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+		}
+		for _, row := range rows {
+			id := primaryStoreRowID(row)
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			out = append(out, primaryStoreRowToTimeSeriesRow(row, key))
+		}
 	}
-	out := make([]*pb.TimeSeriesRow, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, primaryStoreRowToTimeSeriesRow(row, key))
+	sortTimeSeriesRows(out)
+	if req.GetOrder() == pb.SortOrder_SORT_ORDER_DESC {
+		reverseTimeSeriesRows(out)
 	}
+	out, pageResult := pageTimeSeriesRows(out, req.GetPage())
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 
@@ -256,27 +261,57 @@ func (s *Service) scanRecordDataset(ctx context.Context, req *pb.ReadRecordRowsR
 	if err := validateRecordKey(key, false); err != nil {
 		return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), "")
+	targets, err := s.router.ResolveDatasetTargets(ctx, key.GetSpaceId(), key.GetDatasetId())
 	if err != nil {
 		return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
 	}
-	rows, pageResult, err := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{
-		AuthInfo:     req.GetAuthInfo(),
-		Target:       target,
-		DataKind:     pb.DataKind_DATA_KIND_RECORD,
-		VersionRange: req.GetVersionRange(),
-		Order:        req.GetOrder(),
-		ColumnNames:  req.GetColumnNames(),
-		Page:         req.GetPage(),
-	})
-	if err != nil {
-		return &pb.ReadRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+	var out []*pb.RecordRow
+	seen := make(map[string]bool)
+	for _, target := range targets {
+		rows, err := s.scanAllPrimaryRows(ctx, req.GetAuthInfo(), target, pb.DataKind_DATA_KIND_RECORD, req.GetVersionRange(), req.GetColumnNames())
+		if err != nil {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+		}
+		for _, row := range rows {
+			id := primaryStoreRowID(row)
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			out = append(out, primaryStoreRowToRecordRow(row, key))
+		}
 	}
-	out := make([]*pb.RecordRow, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, primaryStoreRowToRecordRow(row, key))
+	sortRecordRows(out)
+	if req.GetOrder() == pb.SortOrder_SORT_ORDER_DESC {
+		reverseRecordRows(out)
 	}
+	out, pageResult := pageRecordRows(out, req.GetPage())
 	return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
+}
+
+func (s *Service) scanAllPrimaryRows(ctx context.Context, auth *pb.AuthInfo, target *pb.PrimaryStoreTarget, kind pb.DataKind, versionRange *pb.VersionRange, columnNames []string) ([]*pb.PrimaryStoreRow, error) {
+	const pageSize = uint32(1000)
+	var out []*pb.PrimaryStoreRow
+	cursor := ""
+	for {
+		rows, page, err := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{
+			AuthInfo:     auth,
+			Target:       target,
+			DataKind:     kind,
+			VersionRange: versionRange,
+			ColumnNames:  columnNames,
+			Page:         &pb.Page{Size: pageSize, Cursor: cursor},
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		if page == nil || !page.GetHasMore() || page.GetNextCursor() == "" {
+			break
+		}
+		cursor = page.GetNextCursor()
+	}
+	return out, nil
 }
 
 func primaryErrorCode(err error) pb.ErrorCode {
@@ -603,9 +638,10 @@ func (s *Service) currentTimeSeriesRows(ctx context.Context, keys []*pb.TimeSeri
 	if len(keys) == 0 {
 		return nil, nil
 	}
+	reader := s.timeSeriesFactReaderOrDefault()
 	var out []*pb.TimeSeriesRow
 	for _, key := range keys {
-		rsp, err := s.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{Keys: []*pb.TimeSeriesKey{key}})
+		rsp, err := reader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{Keys: []*pb.TimeSeriesKey{key}})
 		if err != nil {
 			return nil, err
 		}
