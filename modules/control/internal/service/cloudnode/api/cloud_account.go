@@ -269,3 +269,71 @@ func (h *CloudAccountHandler) DeleteCloudAccount(c *gin.Context) {
 	}
 	c.JSON(200, gin.H{"code": 200, "message": "success"})
 }
+
+// COSInfoResponse COS 账户信息响应（供 scf-publish 等外部工具消费）。
+// 默认对 SecretID/SecretKey 脱敏；当 reveal=true 时返回原始明文凭证，
+// 仅供受信的发布工具在签名为后台 service-auth 的内网调用中使用。
+//
+// 安全说明：reveal=true 走 /api/service/cloudnode/GetCOSAccountInfo 路径，
+// 该路径受 gateway service_auth HMAC 签名鉴权保护，未签名请求会被拒绝。
+type COSInfoResponse struct {
+	AccountID string `json:"account_id"`
+	Provider  string `json:"provider"`
+	AppID     string `json:"app_id"`
+	COSRegion string `json:"cos_region"`
+	COSBucket string `json:"cos_bucket"`
+	SecretID  string `json:"secret_id"`
+	SecretKey string `json:"secret_key"`
+}
+
+// GetCOSAccountInfo 获取 COS 账户信息（含 bucket/region/appid/凭证）。
+// GET /api/v1/cloud_account/cos-info?account_id=xxx&reveal=true
+//
+// 当 reveal=true 时返回原始凭证明文，否则脱敏。该接口通过后台服务 API
+// /api/service/cloudnode/GetCOSAccountInfo 暴露，受 HMAC 签名鉴权保护。
+func (h *CloudAccountHandler) GetCOSAccountInfo(c *gin.Context) {
+	ctx := c.Request.Context()
+	accountID := c.Query("account_id")
+	if accountID == "" {
+		c.JSON(400, gin.H{"code": 400, "message": "account_id is required"})
+		return
+	}
+	reveal := c.Query("reveal") == "true"
+
+	info, err := h.service.GetCOSAccountInfo(ctx, accountID)
+	if err != nil {
+		common.HandleAppError(c, errors.Internal("获取 COS 账户信息失败", err))
+		return
+	}
+	if info == nil {
+		c.JSON(404, gin.H{"code": 404, "message": "cloud account not found"})
+		return
+	}
+
+	resp := &COSInfoResponse{
+		AccountID: accountID,
+		Provider:  info.Provider,
+		AppID:     info.AppID,
+		COSRegion: info.COSRegion,
+		COSBucket: info.COSBucket,
+	}
+	if reveal {
+		resp.SecretID = info.SecretID
+		resp.SecretKey = info.SecretKey
+	} else {
+		resp.SecretID = maskSecret(info.SecretID)
+		resp.SecretKey = maskSecret(info.SecretKey)
+	}
+	c.JSON(200, gin.H{"code": 200, "data": resp})
+}
+
+// maskSecret 对凭证做简单脱敏：长度<=8 全隐藏，否则保留首3尾3。
+func maskSecret(s string) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) <= 8 {
+		return "********"
+	}
+	return s[:3] + "********" + s[len(s)-3:]
+}

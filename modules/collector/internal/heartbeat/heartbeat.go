@@ -83,9 +83,12 @@ func ReportHeartbeat(ctx context.Context) error {
 		return fmt.Errorf("failed to send heartbeat: %w", err)
 	}
 
-	// 检查版本一致性，如果不一致则终止服务（避免云平台同时保留多个版本节点的运行）
+	// 检查版本一致性。SCF 环境（频繁冷启动、多实例并存）下版本临时不一致是常态，
+	// 若用 log.FatalContextf 触发 os.Exit 会导致整个 SCF 实例退出，表现为
+	// "Process exited unexpectedly"，心跳链路中断、K线停采。这里改为告警 + 继续运行，
+	// 仅记录不一致，不终止服务。
 	if packageVersion != "" && packageVersion != localVersion {
-		log.FatalContextf(ctx, "版本不一致，终止服务 - 本地版本: %s, 服务端版本: %s", localVersion, packageVersion)
+		log.ErrorContextf(ctx, "[Heartbeat] 版本不一致（不终止服务）- 本地版本: %s, 服务端版本: %s", localVersion, packageVersion)
 	}
 	return nil
 }
@@ -306,10 +309,31 @@ func parseServerResponse(ctx context.Context, respData []byte) (string, error) {
 	// 5. 提取包版本
 	packageVersion := extractPackageVersion(dataMap)
 
-	// 6. 处理任务实例列表
-	processTaskInstances(ctx, dataMap)
+	// 6. 提取服务端 tasks_md5（用于区分 initializing / empty / 正常）
+	tasksMD5 := extractTasksMD5(dataMap)
+
+	// 7. 处理任务实例列表
+	processTaskInstances(ctx, dataMap, tasksMD5)
 
 	return packageVersion, nil
+}
+
+// extractTasksMD5 提取服务端下发的 tasks_md5 标记
+// 取值含义：
+//
+//	"initializing"：服务端任务仓库尚未完成首次规划，客户端应保持本地任务不变
+//	"empty"       ：服务端已完成首次规划且结果为权威空列表，客户端应清空本地任务缓存
+//	其他          ：正常任务列表的 MD5
+func extractTasksMD5(dataMap map[string]interface{}) string {
+	raw, exists := dataMap["tasks_md5"]
+	if !exists || raw == nil {
+		return ""
+	}
+	str, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return str
 }
 
 // extractPackageVersion 提取包版本信息
@@ -328,44 +352,58 @@ func extractPackageVersion(dataMap map[string]interface{}) string {
 }
 
 // processTaskInstances 处理任务实例列表
-func processTaskInstances(ctx context.Context, dataMap map[string]interface{}) {
-	// 1. 检查任务实例字段是否存在
-	taskInstances, exists := dataMap["task_instances"]
-	if !exists || taskInstances == nil {
-		log.DebugContextf(ctx, "[Heartbeat] 响应中无任务实例数据")
+// tasksMD5 用于区分三种语义：
+//
+//	"initializing"：服务端未完成首次规划，字段缺失或为 nil，保持本地任务不变（不动作）
+//	"empty"       ：服务端权威空列表，task_instances 为空数组，需清空本地任务缓存
+//	其他          ：正常下发，用 task_instances 覆盖本地缓存
+func processTaskInstances(ctx context.Context, dataMap map[string]interface{}, tasksMD5 string) {
+	// 1. 启动期：服务端尚未规划，保持本地任务不变
+	if tasksMD5 == "initializing" {
+		log.DebugContextf(ctx, "[Heartbeat] 服务端任务仓库未完成首次规划(initializing)，保持本地任务不变")
 		return
 	}
 
-	// 2. 序列化任务实例数据
+	// 2. 检查任务实例字段是否存在
+	taskInstances, exists := dataMap["task_instances"]
+	if !exists || taskInstances == nil {
+		// tasksMD5 非 initializing 但字段缺失：保守起见不动作
+		log.DebugContextf(ctx, "[Heartbeat] 响应中无任务实例数据，tasks_md5=%s", tasksMD5)
+		return
+	}
+
+	// 3. 序列化任务实例数据
 	taskInstancesJSON, err := json.Marshal(taskInstances)
 	if err != nil {
 		log.WarnContextf(ctx, "[Heartbeat] failed to marshal task instances: %v", err)
 		return
 	}
 
-	// 3. 反序列化为任务列表
+	// 4. 反序列化为任务列表
 	var tasks []TaskInstanceResponse
 	if err := json.Unmarshal(taskInstancesJSON, &tasks); err != nil {
 		log.WarnContextf(ctx, "[Heartbeat] failed to unmarshal task instances: %v", err)
 		return
 	}
 
-	// 4. 检查任务列表是否为空
+	// 5. 权威空列表：清空本地任务缓存
 	if len(tasks) == 0 {
-		log.DebugContextf(ctx, "[Heartbeat] 任务MD5匹配，无需更新")
+		log.InfoContextf(ctx, "[Heartbeat] 收到权威空列表(tasks_md5=empty)，清空本地任务缓存")
+		config.UpdateTaskInstances(nil)
+		log.InfoContextf(ctx, "[Heartbeat] 本地任务缓存已清空，当前MD5: %s", config.GetCurrentTasksMD5())
 		return
 	}
 
-	// 5. 更新任务实例到内存存储
+	// 6. 更新任务实例到内存存储
 	log.InfoContextf(ctx, "[Heartbeat] 收到任务实例更新，任务数: %d", len(tasks))
 
-	// 6. 打印每个任务的详细信息
+	// 7. 打印每个任务的详细信息
 	for i, task := range tasks {
 		log.InfoContextf(ctx, "[Heartbeat] Task[%d]: ID=%d, TaskID=%s, RuleID=%s, PlannedExecNode=%s, DataType=%s, Symbol=%s, Interval=%s, TaskParams=%s, Invalid=%d",
 			i, task.ID, task.TaskID, task.RuleID, task.NodeID, task.DataType, task.Symbol, task.Interval, task.TaskParams, task.Invalid)
 	}
 
-	// 7. 更新任务实例
+	// 8. 更新任务实例
 	updateTaskInstancesFromResponse(ctx, tasks)
 }
 

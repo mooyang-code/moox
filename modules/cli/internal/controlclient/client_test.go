@@ -135,3 +135,69 @@ func TestClientUsesGatewayAsyncTaskRoutes(t *testing.T) {
 		t.Fatalf("paths = %v, want %v", gotPaths, want)
 	}
 }
+
+// TestClientServiceAuthRewriteAndHeader 验证配置 ServiceAuth 后：
+//  1. 请求路径从 /api/control/asynctask/* 改写为 /api/service/asynctask/*
+//  2. 携带 Auth 头，格式为 5 段 "/" 分隔
+//  3. 签名与 control 端 validateServiceAuthHeader 算法对称（此处用镜像算法校验）
+func TestClientServiceAuthRewriteAndHeader(t *testing.T) {
+	var gotPath, gotAuth, gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Auth")
+		buf := make([]byte, 0)
+		chunk := make([]byte, 4096)
+		for {
+			n, err := r.Body.Read(chunk)
+			if n > 0 {
+				buf = append(buf, chunk[:n]...)
+			}
+			if err != nil {
+				break
+			}
+		}
+		gotBody = string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":200,"message":"ok","data":[{"job_id":"job-svc","total_task_cnt":1}]}`))
+	}))
+	defer server.Close()
+
+	cfg := &ServiceAuthConfig{
+		Version:    "moox-auth-v1",
+		AccessKey:  "moox-service",
+		SecretKey:  "moox-service-secret-change-me",
+		ExpireSecs: 1800,
+	}
+	client := New(server.URL)
+	client.ServiceAuth = cfg
+	resp, err := client.CreateNodeJob(context.Background(), CreateNodeJobRequest{
+		CloudAccountID: "acct-1",
+		NodeType:       "scf-event",
+		Runtime:        "CustomRuntime",
+		Handler:        "main",
+		Region:         "ap-guangzhou",
+		PackageID:      "pkg-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.JobID != "job-svc" {
+		t.Fatalf("job id = %q, want job-svc", resp.JobID)
+	}
+	if gotPath != "/api/service/asynctask/CreateAsyncJob" {
+		t.Fatalf("path = %q, want /api/service/asynctask/CreateAsyncJob", gotPath)
+	}
+	if gotAuth == "" {
+		t.Fatal("missing Auth header")
+	}
+	parts := strings.Split(gotAuth, "/")
+	if len(parts) != 5 {
+		t.Fatalf("Auth header has %d parts, want 5: %q", len(parts), gotAuth)
+	}
+	// 用相同算法重新生成期望签名并比对：用解析出的 prefix 重算 signature。
+	prefix := strings.Join(parts[:4], "/")
+	wantSig := hmacSha256Hex(hmacSha256Hex(cfg.SecretKey, prefix), gotBody)
+	if parts[4] != wantSig {
+		t.Fatalf("signature mismatch: got %q, want %q", parts[4], wantSig)
+	}
+}

@@ -5,6 +5,7 @@ import (
 
 	apperrors "github.com/mooyang-code/moox/modules/control/internal/errors"
 	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr"
+	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/spacecontext"
 
 	"github.com/gin-gonic/gin"
 )
@@ -77,7 +78,7 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceList(c *gin.Context) {
 	}
 
 	// 调用 service 层分页查询
-	instances, total, err := h.service.ListTaskInstancesWithFilter(c.Request.Context(), filter)
+	instances, total, err := h.service.ListTaskInstancesWithFilter(spacecontext.InjectToGinContext(c), filter)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("查询失败", err))
 		return
@@ -128,7 +129,7 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceListCache(c *gin.Context) 
 		PageSize:       size,
 	}
 
-	instances, total, err := h.service.GetTaskInstanceListCache(c.Request.Context(), filter)
+	instances, total, err := h.service.GetTaskInstanceListCache(spacecontext.InjectToGinContext(c), filter)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("查询失败", err))
 		return
@@ -146,7 +147,7 @@ func (h *CollectorTaskInstanceHandler) GetTaskInstanceDetail(c *gin.Context) {
 	}
 
 	// 调用service层获取数据
-	instance, err := h.service.GetTaskInstance(c.Request.Context(), instanceID)
+	instance, err := h.service.GetTaskInstance(spacecontext.InjectToGinContext(c), instanceID)
 	if err != nil {
 		HandleAppError(c, apperrors.NotFound("任务实例"))
 		return
@@ -164,7 +165,7 @@ func (h *CollectorTaskInstanceHandler) CreateTaskInstance(c *gin.Context) {
 	}
 
 	// 调用service层创建数据
-	err := h.service.CreateTaskInstance(c.Request.Context(), &instance)
+	err := h.service.CreateTaskInstance(spacecontext.InjectToGinContext(c), &instance)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("创建失败", err))
 		return
@@ -188,7 +189,7 @@ func (h *CollectorTaskInstanceHandler) UpdateTaskInstance(c *gin.Context) {
 	}
 
 	// 调用service层更新数据
-	err := h.service.UpdateTaskInstance(c.Request.Context(), instanceID, &instance)
+	err := h.service.UpdateTaskInstance(spacecontext.InjectToGinContext(c), instanceID, &instance)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("更新失败", err))
 		return
@@ -206,7 +207,7 @@ func (h *CollectorTaskInstanceHandler) DeleteTaskInstance(c *gin.Context) {
 	}
 
 	// 调用service层删除数据
-	err := h.service.RemoveTaskInstance(c.Request.Context(), instanceID)
+	err := h.service.RemoveTaskInstance(spacecontext.InjectToGinContext(c), instanceID)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("删除失败", err))
 		return
@@ -224,7 +225,7 @@ func (h *CollectorTaskInstanceHandler) StartTaskInstance(c *gin.Context) {
 	}
 
 	// 调用service层启动任务
-	err := h.service.StartInstance(c.Request.Context(), instanceID)
+	err := h.service.StartInstance(spacecontext.InjectToGinContext(c), instanceID)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("启动失败", err))
 		return
@@ -242,7 +243,7 @@ func (h *CollectorTaskInstanceHandler) StopTaskInstance(c *gin.Context) {
 	}
 
 	// 调用service层停止任务
-	err := h.service.CompleteInstance(c.Request.Context(), instanceID, false, "手动停止")
+	err := h.service.CompleteInstance(spacecontext.InjectToGinContext(c), instanceID, false, "手动停止")
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("停止失败", err))
 		return
@@ -273,7 +274,7 @@ func (h *CollectorTaskInstanceHandler) ReportTaskStatus(c *gin.Context) {
 	}
 
 	// 调用service层上报状态（新增 nodeID 参数）
-	err := h.service.ReportTaskStatus(c.Request.Context(), instanceID, req.NodeID, req.Status, req.Result)
+	err := h.service.ReportTaskStatus(spacecontext.InjectToGinContext(c), instanceID, req.NodeID, req.Status, req.Result)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("状态上报失败", err))
 		return
@@ -301,7 +302,7 @@ func (h *CollectorTaskInstanceHandler) InvalidateTaskInstance(c *gin.Context) {
 	}
 
 	// 调用service层作废任务
-	err := h.service.InvalidateTaskInstance(c.Request.Context(), req.TaskID)
+	err := h.service.InvalidateTaskInstance(spacecontext.InjectToGinContext(c), req.TaskID)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("作废任务失败", err))
 		return

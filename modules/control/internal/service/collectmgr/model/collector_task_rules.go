@@ -8,8 +8,11 @@ import (
 type CollectorTaskRules struct {
 	// ID 主键ID
 	ID int `gorm:"primaryKey;column:c_id;autoIncrement" json:"id"`
-	// RuleID 规则ID
-	RuleID string `gorm:"column:c_rule_id;uniqueIndex:idx_rule_id;not null" json:"rule_id"`
+	// SpaceID 空间ID（硬隔离维度）
+	// 参与复合唯一索引 (c_space_id, c_rule_id)；priority:1 保证列序为 (space_id, rule_id)
+	SpaceID string `gorm:"column:c_space_id;index:idx_collector_task_rules_space_id;uniqueIndex:idx_collector_task_rules_space_rule_id,priority:1;not null;default:''" json:"space_id"`
+	// RuleID 规则ID（与 SpaceID 联合唯一：idx_collector_task_rules_space_rule_id）
+	RuleID string `gorm:"column:c_rule_id;uniqueIndex:idx_collector_task_rules_space_rule_id,priority:2;not null" json:"rule_id"`
 	// BizType 业务类型（data_collector=数据采集, factor_calculator=因子计算）
 	BizType string `gorm:"column:c_biz_type;not null;default:'data_collector'" json:"biz_type"`
 	// DataType 数据类型（kline/ticker/orderbook/trade/news/list等）

@@ -9,6 +9,7 @@ import (
 	collectordao "github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/dao"
 	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/dto"
 	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/model"
+	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/spacecontext"
 )
 
 // TaskRulesServiceImpl 实现采集任务规则业务服务。
@@ -28,7 +29,8 @@ func NewTaskRulesServiceImpl(
 }
 
 func (s *TaskRulesServiceImpl) GetTaskRuleList(ctx context.Context, bizType, dataType, dataSource, enabled string) ([]*dto.TaskRuleDTO, error) {
-	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, bizType, dataType, dataSource, enabled)
+	spaceID, _ := spacecontext.FromContext(ctx)
+	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, spaceID, bizType, dataType, dataSource, enabled)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get task rules list: %w", err)
 	}
@@ -37,6 +39,7 @@ func (s *TaskRulesServiceImpl) GetTaskRuleList(ctx context.Context, bizType, dat
 	for _, rule := range rules {
 		ruleDTO := &dto.TaskRuleDTO{
 			ID:             rule.ID,
+			SpaceID:        rule.SpaceID,
 			RuleID:         rule.RuleID,
 			BizType:        rule.BizType,
 			DataType:       rule.DataType,
@@ -61,7 +64,8 @@ func (s *TaskRulesServiceImpl) GetTaskRule(ctx context.Context, ruleID string) (
 		return nil, fmt.Errorf("rule ID is required")
 	}
 
-	rule, err := s.taskRulesDAO.GetTaskRule(ctx, ruleID)
+	spaceID, _ := spacecontext.FromContext(ctx)
+	rule, err := s.taskRulesDAO.GetTaskRule(ctx, spaceID, ruleID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get task rule: %w", err)
 	}
@@ -71,6 +75,7 @@ func (s *TaskRulesServiceImpl) GetTaskRule(ctx context.Context, ruleID string) (
 
 	return &dto.TaskRuleDTO{
 		ID:             rule.ID,
+		SpaceID:        rule.SpaceID,
 		RuleID:         rule.RuleID,
 		BizType:        rule.BizType,
 		DataType:       rule.DataType,
@@ -88,11 +93,18 @@ func (s *TaskRulesServiceImpl) GetTaskRule(ctx context.Context, ruleID string) (
 }
 
 func (s *TaskRulesServiceImpl) CreateTaskRule(ctx context.Context, rule *dto.TaskRuleDTO) (string, error) {
+	// 从登录态注入 space_id，若 body 传入则忽略以防止越权
+	spaceID, _ := spacecontext.FromContext(ctx)
+	if spaceID != "" {
+		rule.SpaceID = spaceID
+	}
+
 	// 生成10位随机字符串作为RuleID
 	ruleID := common.GenerateID(10)
 	rule.RuleID = ruleID
 
 	modelRule := &model.CollectorTaskRules{
+		SpaceID:        rule.SpaceID,
 		RuleID:         rule.RuleID,
 		BizType:        rule.BizType,
 		DataType:       rule.DataType,
@@ -118,8 +130,15 @@ func (s *TaskRulesServiceImpl) UpdateTaskRule(ctx context.Context, rule *dto.Tas
 		return fmt.Errorf("rule ID is required for update")
 	}
 
+	// space_id 以登录态为准，防止越权改其他空间
+	spaceID, _ := spacecontext.FromContext(ctx)
+	if spaceID != "" {
+		rule.SpaceID = spaceID
+	}
+
 	modelRule := &model.CollectorTaskRules{
 		ID:             rule.ID,
+		SpaceID:        rule.SpaceID,
 		RuleID:         rule.RuleID,
 		BizType:        rule.BizType,
 		DataType:       rule.DataType,
@@ -145,7 +164,8 @@ func (s *TaskRulesServiceImpl) DisableTaskRule(ctx context.Context, ruleID strin
 		return fmt.Errorf("rule ID is required")
 	}
 
-	if err := s.taskRulesDAO.DisableTaskRule(ctx, ruleID); err != nil {
+	spaceID, _ := spacecontext.FromContext(ctx)
+	if err := s.taskRulesDAO.DisableTaskRule(ctx, spaceID, ruleID); err != nil {
 		return err
 	}
 

@@ -16,6 +16,7 @@ func RegisterCloudNodeRoutes(router *gin.RouterGroup, service cloudnodemgr.Servi
 	{
 		nodeGroup.POST("/list", nodeHandler.GetNodeList) // 改为POST以支持JSON body参数
 		nodeGroup.GET("/detail", nodeHandler.GetNodeDetail)
+		nodeGroup.GET("/scf-deploy-info", nodeHandler.GetSCFDeployInfo)
 		nodeGroup.PUT("/update", nodeHandler.UpdateNode)
 		nodeGroup.POST("/invoke", nodeHandler.InvokeFunction)
 	}
@@ -35,6 +36,7 @@ func RegisterCloudNodeRoutes(router *gin.RouterGroup, service cloudnodemgr.Servi
 	{
 		accountGroup.GET("/list", accountHandler.GetCloudAccountList)
 		accountGroup.GET("/detail", accountHandler.GetCloudAccountDetail)
+		accountGroup.GET("/cos-info", accountHandler.GetCOSAccountInfo)
 		accountGroup.POST("/create", accountHandler.CreateCloudAccount)
 		accountGroup.PUT("/update", accountHandler.UpdateCloudAccount)
 		accountGroup.DELETE("/delete", accountHandler.DeleteCloudAccount)

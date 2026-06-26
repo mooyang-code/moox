@@ -5,6 +5,7 @@ import (
 	apperrors "github.com/mooyang-code/moox/modules/control/internal/errors"
 	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/dto"
 	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr"
+	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/spacecontext"
 
 	"github.com/gin-gonic/gin"
 )
@@ -30,7 +31,7 @@ func (h *CollectorTaskRuleHandler) GetTaskRuleList(c *gin.Context) {
 	enabled := c.Query("enabled")
 
 	// 调用service层获取数据
-	configs, err := h.service.GetTaskRuleList(c.Request.Context(), bizType, dataType, dataSource, enabled)
+	configs, err := h.service.GetTaskRuleList(spacecontext.InjectToGinContext(c), bizType, dataType, dataSource, enabled)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("查询失败", err))
 		return
@@ -52,7 +53,7 @@ func (h *CollectorTaskRuleHandler) GetTaskRuleDetail(c *gin.Context) {
 	}
 
 	// 调用service层获取数据
-	config, err := h.service.GetTaskRule(c.Request.Context(), ruleID)
+	config, err := h.service.GetTaskRule(spacecontext.InjectToGinContext(c), ruleID)
 	if err != nil {
 		HandleAppError(c, apperrors.NotFound("任务配置"))
 		return
@@ -74,7 +75,7 @@ func (h *CollectorTaskRuleHandler) CreateTaskRule(c *gin.Context) {
 	config.AssignedNodes = cleanJSONString(config.AssignedNodes)
 
 	// 调用service层创建数据，获取生成的RuleID
-	ruleID, err := h.service.CreateTaskRule(c.Request.Context(), &config)
+	ruleID, err := h.service.CreateTaskRule(spacecontext.InjectToGinContext(c), &config)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("创建失败", err))
 		return
@@ -109,7 +110,7 @@ func (h *CollectorTaskRuleHandler) UpdateTaskRule(c *gin.Context) {
 	config.RuleID = ruleID
 
 	// 调用service层更新数据
-	err := h.service.UpdateTaskRule(c.Request.Context(), &config)
+	err := h.service.UpdateTaskRule(spacecontext.InjectToGinContext(c), &config)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("更新失败", err))
 		return
@@ -127,7 +128,7 @@ func (h *CollectorTaskRuleHandler) DeleteTaskRule(c *gin.Context) {
 	}
 
 	// 调用service层关闭任务规则
-	err := h.service.DisableTaskRule(c.Request.Context(), ruleID)
+	err := h.service.DisableTaskRule(spacecontext.InjectToGinContext(c), ruleID)
 	if err != nil {
 		HandleAppError(c, apperrors.Internal("关闭任务规则失败", err))
 		return

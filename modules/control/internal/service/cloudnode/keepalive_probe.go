@@ -155,6 +155,13 @@ func buildKeepaliveEventData(serverIP string, serverPort int, nodeID string) map
 		"timestamp":          timestamp,
 		"request_id":         requestID,
 		"source":             keepaliveSource,
+		// 心跳回包通道：SCF collector 通过 server_ip/server_port 顶层字段更新本地
+		// ServerInfo，进而主动向控制面上报心跳拉取任务实例。历史故障：keepalive
+		// 事件只下发 moox_server_url（URL 字符串），collector 不解析，导致 SCF 冷
+		// 启动后 ServerInfo 为空、ReportHeartbeat 直接 return nil，任务列表永不
+		// 刷新，K线停采。此处与 task 事件字段保持一致，作为主通道。
+		"server_ip":          serverIP,
+		"server_port":        serverPort,
 		"moox_server_url":    fmt.Sprintf("http://%s:%d", serverIP, serverPort),
 		"storage_server_url": xDataURL,
 		"storage_server_rpc": buildStorageRPCTarget(xDataURL, 18201),

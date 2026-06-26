@@ -28,17 +28,20 @@ type collectorPublishOptions struct {
 	collectorPackageOptions
 	ControlURL     string
 	AccessToken    string
-	CloudAccountID string
-	Runtime        string
-	Handler        string
-	Region         string
-	ZipPath        string
-	PackageName    string
-	PackageType    string
-	BizType        string
-	NodeType       string
-	Env            []string
-	Config         []string
+	// 后台服务签名鉴权（推荐，取代登录态 AccessToken）
+	ServiceAccessKey string
+	ServiceSecretKey string
+	CloudAccountID   string
+	Runtime          string
+	Handler          string
+	Region           string
+	ZipPath          string
+	PackageName      string
+	PackageType      string
+	BizType          string
+	NodeType         string
+	Env              []string
+	Config           []string
 }
 
 var collectorPackageFlags collectorPackageOptions
@@ -103,7 +106,9 @@ func init() {
 	addCollectorPackageFlags(collectorFunctionPublishCmd, &collectorPublishFlags.collectorPackageOptions)
 
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ControlURL, "control-url", "", "Control service base URL")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN")
+	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN (登录态, 不推荐)")
+	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 access_key; 默认取 MOOX_SERVICE_AUTH_ACCESS_KEY (推荐, 走 /api/service 后台接口)")
+	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_SERVICE_AUTH_SECRET_KEY (推荐, 走 /api/service 后台接口)")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.Runtime, "runtime", "CustomRuntime", "SCF runtime")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.Handler, "handler", "main", "SCF handler")
@@ -185,6 +190,16 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 
 	client := controlclient.New(opts.ControlURL)
 	client.AccessToken = defaultFlag(opts.AccessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
+	// 优先使用后台服务签名鉴权（/api/service 路由），避免依赖前端登录态。
+	accessKey := defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"))
+	secretKey := defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"))
+	if accessKey != "" && secretKey != "" {
+		client.ServiceAuth = &controlclient.ServiceAuthConfig{
+			AccessKey:  accessKey,
+			SecretKey:  secretKey,
+			ExpireSecs: 1800,
+		}
+	}
 	uploadResp, err := client.CreateUploadPackageJob(ctx, controlclient.UploadPackageJobRequest{
 		PackageName:    defaultFlag(opts.PackageName, "data-collector"),
 		Version:        defaultFlag(opts.Version, "dev"),

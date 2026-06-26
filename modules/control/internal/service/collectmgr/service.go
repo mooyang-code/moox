@@ -134,6 +134,7 @@ type TaskInstanceService interface {
 // TaskInstanceDTO 任务实例数据传输对象
 type TaskInstanceDTO struct {
 	ID              int
+	SpaceID         string // 空间ID
 	TaskID          string
 	RuleID          string
 	BizType         string // 业务类型
@@ -155,6 +156,7 @@ type TaskInstanceDTO struct {
 
 // TaskInstanceFilterDTO 任务实例筛选条件
 type TaskInstanceFilterDTO struct {
+	SpaceID         string // 空间ID（硬隔离，必填）
 	BizType         string // 业务类型
 	TaskID          string // 任务ID
 	RuleID          string // 规则ID

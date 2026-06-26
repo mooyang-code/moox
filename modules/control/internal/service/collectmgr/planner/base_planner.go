@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"sort"
 	"strings"
 
 	cloudnodedao "github.com/mooyang-code/moox/modules/control/internal/service/cloudnode/dao"
@@ -67,12 +68,13 @@ func (b *BasePlanner) GetMatchingNodes(ctx context.Context, rule *dto.TaskRuleDT
 		onlineNodeIDs = b.onlineNodeIDProvider.GetOnlineNodeIDs()
 	}
 
-	// 构建状态过滤：仅选择在线节点，且按 biz_type 隔离
+	// 构建状态过滤：仅选择在线节点，且按 biz_type 和 space 隔离
 	onlineStatus := cloudnodemodel.NodeStatusOnline
 	filter := &cloudnodedao.NodeStatusFilter{
 		Status:        &onlineStatus,
 		OnlineNodeIDs: onlineNodeIDs,
-		BizType:       rule.BizType, // 按规则的业务类型过滤节点
+		BizType:       rule.BizType,     // 按规则的业务类型过滤节点
+		SpaceID:       rule.SpaceID,     // 按规则的空间过滤节点（硬隔离）
 	}
 
 	switch rule.AssignmentType {
@@ -91,9 +93,48 @@ func (b *BasePlanner) GetMatchingNodes(ctx context.Context, rule *dto.TaskRuleDT
 			}
 		}
 		if len(nodeIDs) == 0 {
+			log.WarnContextf(ctx, "[BasePlanner] fixed rule has empty assigned_nodes: ruleID=%s, spaceID=%s",
+				rule.RuleID, rule.SpaceID)
 			return []*cloudnodemodel.CloudNode{}, nil
 		}
-		return b.nodeDAO.GetNodesByIDs(ctx, nodeIDs, filter)
+		matched, err := b.nodeDAO.GetNodesByIDs(ctx, nodeIDs, filter)
+		if err != nil {
+			return nil, err
+		}
+
+		// C2: 校验指定节点是否支持该 data_type
+		// GetNodesByIDs 已按 在线/biz_type/space_id 过滤，此处只补 data_type 校验
+		// 指定但不存在/离线/biz不匹配/data_type不支持的节点，逐一 warning 并剔除
+		matchedIDSet := make(map[string]*cloudnodemodel.CloudNode, len(matched))
+		for _, n := range matched {
+			matchedIDSet[n.NodeID] = n
+		}
+		var validated []*cloudnodemodel.CloudNode
+		for _, id := range nodeIDs {
+			node, ok := matchedIDSet[id]
+			if !ok {
+				log.WarnContextf(ctx, "[BasePlanner] fixed node not available (offline/not-found/biz-or-space-mismatch): ruleID=%s, spaceID=%s, nodeID=%s",
+					rule.RuleID, rule.SpaceID, id)
+				continue
+			}
+			supported, perr := parseCollectorsForCheck(node.SupportedCollectors)
+			if perr != nil {
+				log.WarnContextf(ctx, "[BasePlanner] fixed node has invalid supported_collectors: ruleID=%s, nodeID=%s, err=%v",
+					rule.RuleID, id, perr)
+				continue
+			}
+			if !containsString(supported, dataType) {
+				log.WarnContextf(ctx, "[BasePlanner] fixed node does not support data_type: ruleID=%s, spaceID=%s, nodeID=%s, data_type=%s, supported=%v",
+					rule.RuleID, rule.SpaceID, id, dataType, supported)
+				continue
+			}
+			validated = append(validated, node)
+		}
+		// D1: 候选节点按 node_id 字典序稳定排序
+		sort.Slice(validated, func(i, j int) bool {
+			return validated[i].NodeID < validated[j].NodeID
+		})
+		return validated, nil
 
 	case model.AssignmentTypePattern:
 		// 通配符匹配：将 * 转换为 SQL LIKE 的 %，仅选择在线节点
@@ -271,4 +312,27 @@ func wildcardToRegex(pattern string) string {
 		}
 	}
 	return result.String()
+}
+
+// parseCollectorsForCheck 解析节点支持的采集器类型 JSON 数组
+// 用于 fixed 节点校验，区别于上层 Service 的 parseSupportedCollectors：纯解析、无副作用
+func parseCollectorsForCheck(jsonStr string) ([]string, error) {
+	if strings.TrimSpace(jsonStr) == "" || jsonStr == "[]" {
+		return nil, nil
+	}
+	var collectors []string
+	if err := json.Unmarshal([]byte(jsonStr), &collectors); err != nil {
+		return nil, err
+	}
+	return collectors, nil
+}
+
+// containsString 判断字符串切片是否包含指定值
+func containsString(slice []string, target string) bool {
+	for _, s := range slice {
+		if s == target {
+			return true
+		}
+	}
+	return false
 }

@@ -63,6 +63,8 @@ const CloudNodeTableName = "t_cloud_nodes"
 type CloudNode struct {
 	// ID 自增主键
 	ID int `gorm:"primaryKey;column:c_id;autoIncrement" json:"id"`
+	// SpaceID 空间ID（硬隔离维度）
+	SpaceID string `gorm:"column:c_space_id;index:idx_cloud_nodes_space_id;size:100;not null;default:''" json:"space_id"`
 	// NodeID 节点唯一标识
 	NodeID string `gorm:"column:c_node_id;uniqueIndex:idx_node_id;size:100;not null;default:''" json:"node_id"`
 	// CloudAccountID 云账户ID

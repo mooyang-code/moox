@@ -35,6 +35,12 @@ type TaskInstanceStore interface {
 
 	// GetCount 获取任务实例总数
 	GetCount() int
+
+	// IsPlanned 是否已完成首次规划
+	// 用于区分「启动期未规划」与「规划结果为权威空列表」：
+	//   false：尚未执行过 RecalculateAllTaskInstances，心跳应返回 initializing
+	//   true ：已规划过，即使 GetCount()==0 也是权威空列表，心跳应下发空数组清空 collector 缓存
+	IsPlanned() bool
 }
 
 // taskInstanceStoreImpl 内存任务实例仓库实现
@@ -46,6 +52,11 @@ type taskInstanceStoreImpl struct {
 	// 版本号，每次ReplaceAll或UpdateStatus时自增
 	// 用于MD5缓存失效判定
 	version atomic.Uint64
+
+	// planned 标记是否已完成首次规划
+	// 启动期为 false，第一次 ReplaceAll 后置 true，之后不再回退
+	// 用于心跳区分 initializing 与权威空列表
+	planned atomic.Bool
 }
 
 // NewTaskInstanceStore 创建内存任务实例仓库
@@ -98,7 +109,11 @@ func (s *taskInstanceStoreImpl) ReplaceAll(ctx context.Context, instances []*mod
 	// 4. 版本号自增
 	s.version.Add(1)
 
-	log.InfoContextf(ctx, "[TaskInstanceStore] ReplaceAll completed: total=%d, version=%d",
+	// 5. 标记已完成首次规划
+	// 即使 instances 为空，也是「规划结果为权威空列表」，不再是 initializing
+	s.planned.Store(true)
+
+	log.InfoContextf(ctx, "[TaskInstanceStore] ReplaceAll completed: total=%d, version=%d, planned=true",
 		len(instances), s.version.Load())
 }
 
@@ -157,8 +172,10 @@ func (s *taskInstanceStoreImpl) GetSnapshot() []*model.CollectorTaskInstance {
 		// 创建副本（避免并发修改）
 		snapshot = append(snapshot, &model.CollectorTaskInstance{
 			ID:              inst.ID,
+			SpaceID:         inst.SpaceID,
 			TaskID:          inst.TaskID,
 			RuleID:          inst.RuleID,
+			BizType:         inst.BizType,
 			PlannedExecNode: inst.PlannedExecNode,
 			LastExecNode:    inst.LastExecNode,
 			LastExecStatus:  inst.LastExecStatus,
@@ -185,4 +202,9 @@ func (s *taskInstanceStoreImpl) GetVersion() uint64 {
 // GetCount 获取任务实例总数
 func (s *taskInstanceStoreImpl) GetCount() int {
 	return s.store.Count()
+}
+
+// IsPlanned 是否已完成首次规划
+func (s *taskInstanceStoreImpl) IsPlanned() bool {
+	return s.planned.Load()
 }

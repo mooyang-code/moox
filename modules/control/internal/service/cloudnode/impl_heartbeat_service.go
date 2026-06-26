@@ -76,18 +76,31 @@ func (s *ServiceImpl) handleHeartbeat(ctx context.Context, req *types.ReportHear
 		}, nil
 	}
 
+	// 5.5 区分「启动期未规划」与「权威空列表」
+	//   未规划过（IsPlanned()==false）：返回 initializing，collector 保持本地任务不变
+	//   已规划过但结果为空：返回 empty + 非nil空数组，让 collector 清空本地缓存
+	if !s.taskInstanceStore.IsPlanned() {
+		log.InfoContextf(ctx, "[Heartbeat] Task instance store not planned yet, returning initializing: nodeID=%s", req.NodeID)
+		return &types.ReportHeartbeatResponse{
+			PackageVersion: packageVersion,
+			TasksMD5:       "initializing", // 启动期特殊标记，客户端保持本地任务
+			TaskInstances:  nil,
+		}, nil
+	}
+
 	// 6. 从内存仓库获取节点任务列表
 	tasks := s.loadNodeTasksFromMemory(ctx, req.NodeID)
 
-	// 7. 检查任务仓库是否为空（启动期间）
+	// 7. 已完成首次规划后，无论是否为空都视为权威结果
+	//    旧逻辑用 storeCount==0 当作 initializing，会与「规划结果为空」混淆，已废弃
 	storeCount := s.taskInstanceStore.GetCount()
 	if storeCount == 0 {
-		// 任务仓库为空，返回特殊标记，客户端保持本地任务不变
-		log.InfoContextf(ctx, "[Heartbeat] Task instance store is empty, returning initializing flag: nodeID=%s", req.NodeID)
+		// 权威空列表：下发空数组让 collector 清空本地任务缓存
+		log.InfoContextf(ctx, "[Heartbeat] Task instance store is empty but planned, returning empty list: nodeID=%s", req.NodeID)
 		return &types.ReportHeartbeatResponse{
 			PackageVersion: packageVersion,
-			TasksMD5:       "initializing", // 特殊标记
-			TaskInstances:  nil,
+			TasksMD5:       "empty", // 权威空列表标记
+			TaskInstances:  []*types.TaskInstanceInfo{},
 		}, nil
 	}
 

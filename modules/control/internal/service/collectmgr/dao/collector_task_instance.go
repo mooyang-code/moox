@@ -152,6 +152,7 @@ type InstanceParamUpdate struct {
 
 // InstanceFilter 任务实例筛选条件
 type InstanceFilter struct {
+	SpaceID         string // 空间ID（硬隔离，必填）
 	BizType         string // 业务类型
 	TaskID          string // 任务ID
 	RuleID          string // 规则ID
@@ -764,6 +765,11 @@ func (d *collectorTaskInstanceDaoImpl) ListInstancesWithFilter(ctx context.Conte
 	// 构建查询条件
 	query := d.db.WithContext(ctx).Model(&model.CollectorTaskInstance{})
 
+	// 空间硬隔离：指定 SpaceID 时必按空间过滤
+	if filter.SpaceID != "" {
+		query = query.Where("c_space_id = ?", filter.SpaceID)
+	}
+
 	// 如果没有指定invalid，默认只查询有效的记录
 	if filter.Invalid != nil {
 		query = query.Where("c_invalid = ?", *filter.Invalid)
@@ -933,6 +939,7 @@ func (dao *collectorTaskInstanceDaoImpl) BatchUpsertInstances(ctx context.Contex
 		} else {
 			// 记录存在，更新
 			if err := dao.db.WithContext(ctx).Model(&existing).Updates(map[string]interface{}{
+				"c_space_id":         instance.SpaceID,
 				"c_rule_id":           instance.RuleID,
 				"c_planned_exec_node": instance.PlannedExecNode,
 				"c_symbol":            instance.Symbol,

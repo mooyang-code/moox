@@ -356,7 +356,10 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
 -- ************ 创建采集任务规则相关索引 ************
 -- 任务规则表索引
 CREATE INDEX IF NOT EXISTS idx_collector_task_rules_space_id ON t_collector_task_rules(c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_task_rules_rule_id ON t_collector_task_rules(c_rule_id);
+-- rule_id 唯一性改为 (space_id, rule_id) 联合唯一，支持多空间隔离下相同 rule_id 前缀复用
+-- 升级时先丢弃旧的纯 rule_id 唯一索引，再创建联合唯一索引
+DROP INDEX IF EXISTS idx_collector_task_rules_rule_id;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_task_rules_space_rule_id ON t_collector_task_rules(c_space_id, c_rule_id);
 CREATE INDEX IF NOT EXISTS idx_collector_task_rules_biz_type ON t_collector_task_rules(c_biz_type);
 CREATE INDEX IF NOT EXISTS idx_collector_task_rules_data_type ON t_collector_task_rules(c_data_type);
 CREATE INDEX IF NOT EXISTS idx_collector_task_rules_data_source ON t_collector_task_rules(c_data_source);
@@ -365,7 +368,10 @@ CREATE INDEX IF NOT EXISTS idx_collector_task_rules_enabled ON t_collector_task_
 
 -- 任务实例表索引
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_space_id ON t_collector_task_instances(c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_task_instances_task_id ON t_collector_task_instances(c_task_id);
+-- task_id 唯一性改为 (space_id, task_id) 联合唯一，与 task_id 生成 md5(space_id|rule_id|task_params) 对齐
+-- 升级时先丢弃旧的纯 task_id 唯一索引，再创建联合唯一索引
+DROP INDEX IF EXISTS idx_collector_task_instances_task_id;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_task_instances_space_task_id ON t_collector_task_instances(c_space_id, c_task_id);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_rule_id ON t_collector_task_instances(c_rule_id);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_biz_type ON t_collector_task_instances(c_biz_type);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_rule_planned_node_symbol ON t_collector_task_instances(c_rule_id, c_planned_exec_node, c_symbol);

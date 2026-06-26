@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/dto"
 	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/model"
 	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/planner"
+	"github.com/mooyang-code/moox/modules/control/internal/service/collectmgr/spacecontext"
 	"trpc.group/trpc-go/trpc-database/localcache"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -316,8 +317,14 @@ func (s *TaskInstanceServiceImpl) ListTaskInstances(ctx context.Context, nodeID,
 
 // ListTaskInstancesWithFilter 带筛选条件的分页查询任务实例
 func (s *TaskInstanceServiceImpl) ListTaskInstancesWithFilter(ctx context.Context, filter *TaskInstanceFilterDTO) ([]*TaskInstanceDTO, int64, error) {
+	// 空间硬隔离：以 ctx 注入的 space_id 为准，防止前端越权传其他空间
+	if spaceID, ok := spacecontext.FromContext(ctx); ok && spaceID != "" {
+		filter.SpaceID = spaceID
+	}
+
 	// 转换DTO为DAO过滤器
 	daoFilter := &collectordao.InstanceFilter{
+		SpaceID:         filter.SpaceID,
 		BizType:         filter.BizType,
 		TaskID:          filter.TaskID,
 		RuleID:          filter.RuleID,
@@ -342,9 +349,10 @@ func (s *TaskInstanceServiceImpl) ListTaskInstancesWithFilter(ctx context.Contex
 	}
 
 	// 批量查询规则信息，获取 DataType
+	// 此处 rule 查询为辅助补字段，rule_id 全局唯一；instance 已按 filter.SpaceID 过滤
 	ruleDataTypeMap := make(map[string]string)
 	for ruleID := range ruleIDSet {
-		rule, err := s.taskRulesDAO.GetTaskRule(ctx, ruleID)
+		rule, err := s.taskRulesDAO.GetTaskRule(ctx, "", ruleID)
 		if err != nil {
 			log.WarnContextf(ctx, "[ListTaskInstancesWithFilter] Failed to get rule %s: %v", ruleID, err)
 			continue
@@ -444,7 +452,7 @@ func (s *TaskInstanceServiceImpl) tryTransferFailedTask(ctx context.Context, tas
 	log.InfoContextf(ctx, "[TaskTransfer] Starting transfer for task %s (current node: %s)", taskID, instance.PlannedExecNode)
 
 	// 2. 获取规则并匹配可执行节点
-	rule, err := s.taskRulesDAO.GetTaskRule(ctx, instance.RuleID)
+	rule, err := s.taskRulesDAO.GetTaskRule(ctx, instance.SpaceID, instance.RuleID)
 	if err != nil {
 		log.ErrorContextf(ctx, "[TaskTransfer] Failed to get rule %s: %v", instance.RuleID, err)
 		errorMsg := fmt.Sprintf("获取规则失败: %v", err)

@@ -1,0 +1,4 @@
+interface:
+  display_name: "MooX Debug"
+  short_description: "SCF E2E debugging and remote deploy checks"
+  default_prompt: "Use $debug to diagnose a MooX collector SCF publish or end-to-end data collection issue."

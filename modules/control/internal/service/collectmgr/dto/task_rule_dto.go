@@ -5,6 +5,7 @@ import "time"
 // TaskRuleDTO 任务规则数据传输对象
 type TaskRuleDTO struct {
 	ID             int       `json:"id"`
+	SpaceID        string    `json:"space_id"`
 	RuleID         string    `json:"rule_id"`
 	BizType        string    `json:"biz_type"`
 	DataType       string    `json:"data_type"`

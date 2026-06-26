@@ -14,10 +14,20 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+// NodeStatusFilter 节点状态过滤参数
+// 用于任务分配时过滤节点状态
+type NodeStatusFilter struct {
+	Status        *int     // 节点状态，nil 表示不过滤
+	OnlineNodeIDs []string // 在线节点ID列表（用于状态过滤，由Service层传入）
+	BizType       string   // 业务类型过滤，非空时只返回匹配的节点
+	SpaceID       string   // 空间ID过滤，非空时只返回同空间的节点（硬隔离）
+}
+
 // NodeListQuery 节点列表查询参数
 type NodeListQuery struct {
 	Page           int      // 页码
 	PageSize       int      // 每页大小
+	SpaceID        string   // 空间ID过滤（硬隔离）
 	NodeID         string   // 节点ID过滤
 	CloudAccountID string   // 云账号ID过滤
 	Namespace      string   // 命名空间过滤
@@ -28,14 +38,6 @@ type NodeListQuery struct {
 	Status         string   // 状态过滤（online/offline）
 	Keyword        string   // 关键字搜索
 	OnlineNodeIDs  []string // 在线节点ID列表（用于状态过滤，由Service层传入）
-}
-
-// NodeStatusFilter 节点状态过滤参数
-// 用于任务分配时过滤节点状态
-type NodeStatusFilter struct {
-	Status        *int     // 节点状态，nil 表示不过滤
-	OnlineNodeIDs []string // 在线节点ID列表（用于状态过滤，由Service层传入）
-	BizType       string   // 业务类型过滤，非空时只返回匹配的节点
 }
 
 // CloudNodeDAO 节点数据访问对象接口
@@ -401,6 +403,11 @@ func (d *cloudNodeDaoImpl) GetNodesBySupportedCollector(ctx context.Context, col
 		query = query.Where("cn.c_biz_type = ?", filter.BizType)
 	}
 
+	// 如果指定了 SpaceID，只返回同空间的节点（硬隔离）
+	if filter != nil && filter.SpaceID != "" {
+		query = query.Where("cn.c_space_id = ?", filter.SpaceID)
+	}
+
 	result := query.Order("cn.c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {
@@ -435,6 +442,11 @@ func (d *cloudNodeDaoImpl) GetNodesByPattern(ctx context.Context, pattern string
 		query = query.Where("cn.c_biz_type = ?", filter.BizType)
 	}
 
+	// 如果指定了 SpaceID，只返回同空间的节点（硬隔离）
+	if filter != nil && filter.SpaceID != "" {
+		query = query.Where("cn.c_space_id = ?", filter.SpaceID)
+	}
+
 	result := query.Order("cn.c_mtime DESC").Find(&nodes)
 
 	if result.Error != nil {
@@ -462,6 +474,11 @@ func (d *cloudNodeDaoImpl) GetNodesByIDs(ctx context.Context, nodeIDs []string, 
 	// 如果指定了 BizType，只返回该业务类型的节点
 	if filter != nil && filter.BizType != "" {
 		query = query.Where("cn.c_biz_type = ?", filter.BizType)
+	}
+
+	// 如果指定了 SpaceID，只返回同空间的节点（硬隔离）
+	if filter != nil && filter.SpaceID != "" {
+		query = query.Where("cn.c_space_id = ?", filter.SpaceID)
 	}
 
 	result := query.Order("cn.c_mtime DESC").Find(&nodes)

@@ -21,6 +21,7 @@ import (
 type TaskInstanceStoreGetter interface {
 	GetByNodeID(nodeID string) []collectmgrtypes.TaskInstanceLite
 	GetCount() int
+	IsPlanned() bool
 }
 
 // ServiceImpl 实现云节点业务服务。

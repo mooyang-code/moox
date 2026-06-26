@@ -43,3 +43,8 @@ func (a *TaskStoreAdapter) GetByNodeID(nodeID string) []collectmgrtypes.TaskInst
 func (a *TaskStoreAdapter) GetCount() int {
 	return a.store.GetCount()
 }
+
+// IsPlanned 实现 cloudnode.TaskInstanceStoreGetter 接口
+func (a *TaskStoreAdapter) IsPlanned() bool {
+	return a.store.IsPlanned()
+}

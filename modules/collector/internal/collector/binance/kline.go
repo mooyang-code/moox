@@ -92,7 +92,7 @@ func (c *KlineCollector) Collect(ctx context.Context, params *collector.CollectP
 
 	if len(klines) > 0 {
 		log.InfoContextf(ctx, "K线采集完成: inst_type=%s, symbol=%s, interval=%s, count=%d, latest=%+v",
-			params.InstType, params.Symbol, params.Interval, len(klines), klines[0])
+			params.InstType, params.Symbol, params.Interval, len(klines), klines[len(klines)-1])
 	}
 
 	fmt.Printf("[kline] storage write start inst_type=%s symbol=%s interval=%s count=%d storage_url=%s\n",

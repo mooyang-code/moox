@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"runtime/debug"
+	"strconv"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/executor"
@@ -41,6 +44,15 @@ func RegisterCloudFunction() {
 
 // HandleRequest 处理云函数请求 - 通用处理器【入口方法】
 func (h *CloudFunctionHandler) HandleRequest(ctx context.Context, event json.RawMessage) (interface{}, error) {
+	// SCF 环境下任何未恢复的 panic 都会导致 "Process exited unexpectedly"，
+	// 整个实例退出、后续 invoke 全部失败、K线停采。这里统一 recover 并打印栈，
+	// 保证单个事件处理异常不会拖垮整个 SCF 实例。
+	defer func() {
+		if r := recover(); r != nil {
+			log.ErrorContextf(ctx, "[CloudFunction] HandleRequest panic recovered: %v\n%s", r, debug.Stack())
+		}
+	}()
+
 	// 从上下文获取云函数信息
 	funcCtx, _ := functioncontext.FromContext(ctx)
 
@@ -67,6 +79,12 @@ func (h *CloudFunctionHandler) applyRuntimeConfig(ctx context.Context, event mod
 	if event.ServerIP != "" && event.ServerPort > 0 {
 		config.UpdateServerInfo(event.ServerIP, event.ServerPort)
 		log.DebugContextf(ctx, "[CloudFunction] runtime server updated: %s:%d", event.ServerIP, event.ServerPort)
+	} else if ip, port, ok := parseServerFromMooxURL(event.MooxServerURL); ok {
+		// fallback：控制面 keepalive 事件可能只下发 moox_server_url 而未带
+		// server_ip/server_port（历史版本兼容）。从 URL 解析出 ip:port，避免 SCF
+		// 冷启动后 ServerInfo 为空导致 ReportHeartbeat 静默 return nil。
+		config.UpdateServerInfo(ip, port)
+		log.DebugContextf(ctx, "[CloudFunction] runtime server updated from moox_server_url: %s:%d", ip, port)
 	}
 
 	nodeID := ""
@@ -83,6 +101,28 @@ func (h *CloudFunctionHandler) applyRuntimeConfig(ctx context.Context, event mod
 		config.UpdateNodeInfo(nodeID, version)
 		log.DebugContextf(ctx, "[CloudFunction] runtime node updated: nodeID=%s", nodeID)
 	}
+}
+
+// parseServerFromMooxURL 从 moox_server_url（形如 http://ip:port）解析出 ip 和 port。
+// 解析失败或字段缺失时返回 ok=false。
+func parseServerFromMooxURL(rawURL string) (string, int, bool) {
+	if rawURL == "" {
+		return "", 0, false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return "", 0, false
+	}
+	host := u.Hostname()
+	portStr := u.Port()
+	if host == "" || portStr == "" {
+		return "", 0, false
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 {
+		return "", 0, false
+	}
+	return host, port, true
 }
 
 // processCloudFunctionEvent 处理云函数事件
@@ -159,19 +199,36 @@ func (h *CloudFunctionHandler) handleTask(ctx context.Context, event model.Cloud
 }
 
 // handleKeepalive 处理保活探测事件（包括心跳探测功能）
+//
+// 链路说明：
+//   - 探测源标识 (source=keepalive_probe/heartbeat_probe) 来自控制面 keepalive_probe.go
+//   - 只要 event 携带 ServerIP/ServerPort，无论 source 是否为探测源，都应尝试
+//     ProcessProbe → ReportHeartbeat → ExecuteDueTasks，避免因 source 解析丢失
+//     导致整条回调链路静默中断（历史故障：SCF 冷启动后 source 为空，collector
+//     不再回调控制面，任务列表永不更新，K线视图停在某个时刻）
 func (h *CloudFunctionHandler) handleKeepalive(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
-	log.InfoContextf(ctx, "[handleKeepalive] 执行保活探测, source=%s, ServerIP=%s, ServerPort=%d",
-		event.Source, event.ServerIP, event.ServerPort)
+	log.InfoContextf(ctx, "[handleKeepalive] 执行保活探测, source=%s, ServerIP=%s, ServerPort=%d, action=%s",
+		event.Source, event.ServerIP, event.ServerPort, event.Action)
 
-	// 处理心跳探测请求（服务端主动发送的探测）
-	if !isKeepaliveProbeSource(event.Source) {
-		// 不是moox后台来的保活探测请求，直接返回保活响应
-		log.InfoContextf(ctx, "[handleKeepalive] 非探测请求，直接返回保活响应")
+	// 判定是否需要走完整心跳回调链路
+	// 1. 探测源标识匹配 → 走完整链路
+	// 2. 探测源标识缺失但携带 ServerIP → 仍走完整链路（防御 source 解析回归）
+	// 3. 既非探测源也无 ServerIP → 仅返回保活响应（无法回调，无意义）
+	probeSource := isKeepaliveProbeSource(event.Source)
+	hasServerAddr := event.ServerIP != "" && event.ServerPort > 0
+	shouldRunHeartbeat := probeSource || hasServerAddr
+
+	if !shouldRunHeartbeat {
+		log.WarnContextf(ctx, "[handleKeepalive] 跳过心跳回调: source=%q 无 ServerIP, 仅返回保活响应", event.Source)
 		return h.buildKeepaliveResponse(ctx, event)
 	}
 
-	// 调用函数式心跳模块处理探测请求
-	log.InfoContextf(ctx, "[handleKeepalive] 检测到探测请求，调用 ProcessProbe")
+	if !probeSource {
+		log.WarnContextf(ctx, "[handleKeepalive] source=%q 非探测源但携带 ServerIP，仍执行心跳回调链路 (防御回归)", event.Source)
+	}
+
+	// 调用函数式心跳模块处理探测请求（更新 NodeID / ServerInfo）
+	log.InfoContextf(ctx, "[handleKeepalive] 调用 ProcessProbe")
 	_, err := heartbeat.ProcessProbe(ctx, event)
 	if err != nil {
 		log.ErrorContextf(ctx, "[handleKeepalive] 处理心跳探测请求失败: %v", err)
@@ -207,8 +264,13 @@ func (h *CloudFunctionHandler) buildKeepaliveResponse(ctx context.Context, event
 	// 从云函数上下文获取信息
 	funcCtx, _ := functioncontext.FromContext(ctx)
 
-	// 获取节点ID：优先使用全局配置，降级使用函数名
+	// 获取节点ID：优先使用探测源携带的 node_id，其次全局配置，降级使用函数名
 	nodeID, _ := config.GetNodeInfo()
+	if isKeepaliveProbeSource(event.Source) && event.Data != nil {
+		if probeNodeID, ok := event.Data["node_id"].(string); ok && probeNodeID != "" {
+			nodeID = probeNodeID
+		}
+	}
 	if nodeID == "" && funcCtx.FunctionName != "" {
 		nodeID = funcCtx.FunctionName
 	}
@@ -217,13 +279,14 @@ func (h *CloudFunctionHandler) buildKeepaliveResponse(ctx context.Context, event
 	}
 
 	// 构建节点信息
+	// RunningTasks 反映本地真实任务缓存（按 nodeID 过滤），便于控制面观测 SCF 实际持有哪些任务
 	nodeInfo := &model.NodeInfo{
 		NodeID:       nodeID,
 		NodeType:     "scf",
 		Region:       funcCtx.TencentcloudRegion,
 		Namespace:    funcCtx.Namespace,
 		Version:      funcCtx.FunctionVersion,
-		RunningTasks: make([]string, 0),
+		RunningTasks: h.collectRunningTaskIDs(nodeID),
 		Capabilities: []model.CollectorType{
 			model.CollectorTypeBinance,
 			model.CollectorTypeOKX,
@@ -233,13 +296,6 @@ func (h *CloudFunctionHandler) buildKeepaliveResponse(ctx context.Context, event
 			"function_name": funcCtx.FunctionName,
 			"request_id":    event.RequestID,
 		},
-	}
-
-	// 如果是保活探测请求，使用探测源中的节点ID（优先级最高）
-	if isKeepaliveProbeSource(event.Source) && event.Data != nil {
-		if probeNodeID, ok := event.Data["node_id"].(string); ok && probeNodeID != "" {
-			nodeInfo.NodeID = probeNodeID
-		}
 	}
 
 	return &model.Response{
@@ -253,6 +309,19 @@ func (h *CloudFunctionHandler) buildKeepaliveResponse(ctx context.Context, event
 		RequestID: event.RequestID,
 		Timestamp: time.Now(),
 	}, nil
+}
+
+// collectRunningTaskIDs 收集本地缓存中属于该节点的任务 ID 列表
+// 用于 keepalive 响应的 RunningTasks 字段，反映 SCF 实际持有的任务
+func (h *CloudFunctionHandler) collectRunningTaskIDs(nodeID string) []string {
+	tasks := config.GetTaskInstancesByNode(nodeID)
+	ids := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		if t != nil && t.TaskID != "" {
+			ids = append(ids, t.TaskID)
+		}
+	}
+	return ids
 }
 
 // errorResponse 创建错误响应

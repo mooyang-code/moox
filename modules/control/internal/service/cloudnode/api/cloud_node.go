@@ -323,6 +323,52 @@ func (h *CloudNodeHandler) GetNodeDetail(c *gin.Context) {
 	common.SuccessResponse(c, "success", []interface{}{node})
 }
 
+// SCFDeployInfoResponse SCF 部署所需信息（供 scf-publish 等发布工具消费）。
+// 聚合 t_cloud_nodes 中的 SCF 函数定位字段与关联云账户 ID，避免发布工具
+// 硬编码 function/namespace/region/account_id。
+type SCFDeployInfoResponse struct {
+	NodeID         string `json:"node_id"`
+	FunctionName   string `json:"function_name"`   // SCF 函数名（= node_id）
+	Namespace      string `json:"namespace"`       // SCF 命名空间
+	Region         string `json:"region"`          // SCF region
+	NodeType       string `json:"node_type"`       // 节点类型
+	CloudAccountID string `json:"cloud_account_id"` // 关联云账户 ID（用于查询 COS 凭证）
+}
+
+// GetSCFDeployInfo 获取 SCF 节点部署信息。
+// GET /api/v1/cloud_node/scf-deploy-info?node_id=xxx
+//
+// 供 scf-publish 通过 /api/service/cloudnode/GetSCFDeployInfo 调用，
+// 受 gateway service_auth HMAC 签名鉴权保护。
+func (h *CloudNodeHandler) GetSCFDeployInfo(c *gin.Context) {
+	ctx := c.Request.Context()
+	nodeID := c.Query("node_id")
+	if nodeID == "" {
+		common.HandleAppError(c, errors.InvalidParam("node_id", "node_id is required"))
+		return
+	}
+
+	node, err := h.service.GetCloudNode(ctx, nodeID)
+	if err != nil {
+		common.HandleAppError(c, errors.Internal("failed to get node", err))
+		return
+	}
+	if node == nil {
+		c.JSON(404, gin.H{"code": 404, "message": "node not found"})
+		return
+	}
+
+	resp := &SCFDeployInfoResponse{
+		NodeID:         node.NodeID,
+		FunctionName:   node.NodeID, // SCF 函数名即 node_id
+		Namespace:      node.Namespace,
+		Region:         node.Region,
+		NodeType:       node.NodeType,
+		CloudAccountID: node.CloudAccountID,
+	}
+	c.JSON(200, gin.H{"code": 200, "data": resp})
+}
+
 // UpdateNode 更新节点
 func (h *CloudNodeHandler) UpdateNode(c *gin.Context) {
 	ctx := c.Request.Context()

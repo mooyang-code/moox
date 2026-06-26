@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -19,6 +20,9 @@ const (
 type Client struct {
 	BaseURL     string
 	AccessToken string
+	// ServiceAuth 后台服务签名鉴权配置。设置后请求走 /api/service/{service}/{method}
+	// 路由并使用 HMAC Auth 头，不再依赖用户登录态 X-Access-Token。
+	ServiceAuth *ServiceAuthConfig
 	HTTPClient  *http.Client
 }
 
@@ -166,11 +170,28 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body any, out 
 		}
 		reader = bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reader)
+	// 若配置了后台服务签名鉴权，则改走 /api/service/{service}/{method} 路由，
+	// 并对原始请求体做 HMAC 签名放进 Auth 头，不再依赖用户登录态。
+	finalPath := path
+	var authHeader string
+	if c.ServiceAuth != nil {
+		finalPath = rewriteToServiceRoute(path)
+		rawBody, _ := io.ReadAll(reader)
+		reader = bytes.NewReader(rawBody)
+		header, err := c.ServiceAuth.BuildAuthHeader(rawBody, time.Now())
+		if err != nil {
+			return err
+		}
+		authHeader = header
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+finalPath, reader)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if authHeader != "" {
+		req.Header.Set("Auth", authHeader)
+	}
 	if c.AccessToken != "" {
 		req.Header.Set("X-Access-Token", c.AccessToken)
 	}
@@ -193,4 +214,14 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body any, out 
 		return fmt.Errorf("control returned code %d: %s", resp.Code, resp.Message)
 	}
 	return nil
+}
+
+// rewriteToServiceRoute 将 /api/control/{service}/{method} 改写为 /api/service/{service}/{method}。
+// 仅识别 /api/control/ 前缀；非该前缀的路径原样返回。
+func rewriteToServiceRoute(path string) string {
+	const controlPrefix = "/api/control/"
+	if strings.HasPrefix(path, controlPrefix) {
+		return "/api/service/" + strings.TrimPrefix(path, controlPrefix)
+	}
+	return path
 }

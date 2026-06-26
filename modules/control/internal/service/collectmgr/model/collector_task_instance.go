@@ -8,8 +8,11 @@ import (
 type CollectorTaskInstance struct {
 	// ID 主键ID
 	ID int `gorm:"primaryKey;column:c_id;autoIncrement" json:"id"`
-	// TaskID 任务唯一标识
-	TaskID string `gorm:"column:c_task_id;uniqueIndex:idx_task_id;not null" json:"task_id"`
+	// SpaceID 空间ID（硬隔离维度，与规则保持一致）
+	// 参与复合唯一索引 (c_space_id, c_task_id)；priority:1 保证列序为 (space_id, task_id)
+	SpaceID string `gorm:"column:c_space_id;index:idx_collector_task_instances_space_id;uniqueIndex:idx_collector_task_instances_space_task_id,priority:1;not null;default:''" json:"space_id"`
+	// TaskID 任务唯一标识（与 SpaceID 联合唯一：idx_collector_task_instances_space_task_id）
+	TaskID string `gorm:"column:c_task_id;uniqueIndex:idx_collector_task_instances_space_task_id,priority:2;not null" json:"task_id"`
 	// RuleID 规则ID（关联配置表）
 	RuleID string `gorm:"column:c_rule_id;index:idx_rule_id;not null" json:"rule_id"`
 	// BizType 业务类型（data_collector=数据采集, factor_calculator=因子计算）

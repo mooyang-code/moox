@@ -13,6 +13,7 @@ import (
 
 // TaskRuleQuery 任务规则查询条件
 type TaskRuleQuery struct {
+	SpaceID        string // 空间ID（硬隔离，必填）
 	BizType        string // 业务类型
 	DataType       string // 数据类型
 	DataSource     string // 数据源
@@ -25,10 +26,11 @@ type TaskRuleQuery struct {
 // CollectorTaskRulesDAO 采集任务规则数据访问对象接口
 type CollectorTaskRulesDAO interface {
 	// GetTaskRulesList 获取任务规则列表
-	GetTaskRulesList(ctx context.Context, bizType, dataType, dataSource, enabled string) ([]*model.CollectorTaskRules, error)
+	// spaceID 为空时返回所有空间的规则（仅规划器全量重算使用），非空时按空间过滤
+	GetTaskRulesList(ctx context.Context, spaceID, bizType, dataType, dataSource, enabled string) ([]*model.CollectorTaskRules, error)
 
 	// GetTaskRule 获取单个任务规则
-	GetTaskRule(ctx context.Context, ruleID string) (*model.CollectorTaskRules, error)
+	GetTaskRule(ctx context.Context, spaceID, ruleID string) (*model.CollectorTaskRules, error)
 
 	// CreateTaskRule 创建任务规则
 	CreateTaskRule(ctx context.Context, rule *model.CollectorTaskRules) error
@@ -37,7 +39,7 @@ type CollectorTaskRulesDAO interface {
 	UpdateTaskRule(ctx context.Context, rule *model.CollectorTaskRules) error
 
 	// DisableTaskRule 关闭任务规则（设置为禁用）
-	DisableTaskRule(ctx context.Context, ruleID string) error
+	DisableTaskRule(ctx context.Context, spaceID, ruleID string) error
 
 	// SearchTaskRules 搜索任务规则，支持多种查询条件
 	SearchTaskRules(ctx context.Context, query *TaskRuleQuery) ([]*model.CollectorTaskRules, error)
@@ -54,10 +56,13 @@ func NewCollectorTaskRulesDAO(db *gorm.DB) CollectorTaskRulesDAO {
 }
 
 // GetTaskRulesList 获取任务规则列表
-func (d *collectorTaskRulesDaoImpl) GetTaskRulesList(ctx context.Context, bizType, dataType, dataSource, enabled string) ([]*model.CollectorTaskRules, error) {
+func (d *collectorTaskRulesDaoImpl) GetTaskRulesList(ctx context.Context, spaceID, bizType, dataType, dataSource, enabled string) ([]*model.CollectorTaskRules, error) {
 	var rules []*model.CollectorTaskRules
 	query := d.db.WithContext(ctx).Where("1=1")
 
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
 	if bizType != "" {
 		query = query.Where("c_biz_type = ?", bizType)
 	}
@@ -79,11 +84,14 @@ func (d *collectorTaskRulesDaoImpl) GetTaskRulesList(ctx context.Context, bizTyp
 }
 
 // GetTaskRule 根据规则ID获取单个任务规则
-func (d *collectorTaskRulesDaoImpl) GetTaskRule(ctx context.Context, ruleID string) (*model.CollectorTaskRules, error) {
+func (d *collectorTaskRulesDaoImpl) GetTaskRule(ctx context.Context, spaceID, ruleID string) (*model.CollectorTaskRules, error) {
 	var rule model.CollectorTaskRules
-	result := d.db.WithContext(ctx).
-		Where("c_rule_id = ?", ruleID).
-		First(&rule)
+	query := d.db.WithContext(ctx).
+		Where("c_rule_id = ?", ruleID)
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	result := query.First(&rule)
 
 	if result.Error != nil {
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -114,6 +122,7 @@ func (d *collectorTaskRulesDaoImpl) UpdateTaskRule(ctx context.Context, rule *mo
 		Model(&model.CollectorTaskRules{}).
 		Where("c_rule_id = ?", rule.RuleID).
 		Updates(map[string]interface{}{
+			"c_space_id":        rule.SpaceID,
 			"c_biz_type":        rule.BizType,
 			"c_data_type":       rule.DataType,
 			"c_data_source":     rule.DataSource,
@@ -136,14 +145,17 @@ func (d *collectorTaskRulesDaoImpl) UpdateTaskRule(ctx context.Context, rule *mo
 }
 
 // DisableTaskRule 关闭任务规则（设置为禁用）
-func (d *collectorTaskRulesDaoImpl) DisableTaskRule(ctx context.Context, ruleID string) error {
-	result := d.db.WithContext(ctx).
+func (d *collectorTaskRulesDaoImpl) DisableTaskRule(ctx context.Context, spaceID, ruleID string) error {
+	query := d.db.WithContext(ctx).
 		Model(&model.CollectorTaskRules{}).
-		Where("c_rule_id = ?", ruleID).
-		Updates(map[string]interface{}{
-			"c_enabled": "false",
-			"c_mtime":   time.Now(),
-		})
+		Where("c_rule_id = ?", ruleID)
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	result := query.Updates(map[string]interface{}{
+		"c_enabled": "false",
+		"c_mtime":   time.Now(),
+	})
 
 	if result.Error != nil {
 		return fmt.Errorf("failed to disable task rule: %w", result.Error)
@@ -161,6 +173,9 @@ func (d *collectorTaskRulesDaoImpl) SearchTaskRules(ctx context.Context, query *
 	dbQuery := d.db.WithContext(ctx).Where("1=1")
 
 	// 根据查询条件构建 WHERE 子句
+	if query.SpaceID != "" {
+		dbQuery = dbQuery.Where("c_space_id = ?", query.SpaceID)
+	}
 	if query.RuleID != "" {
 		dbQuery = dbQuery.Where("c_rule_id = ?", query.RuleID)
 	}

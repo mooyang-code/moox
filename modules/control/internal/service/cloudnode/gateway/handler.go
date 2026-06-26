@@ -99,6 +99,10 @@ func (h *CloudNodeGatewayHandler) parseMethodToRoute(method string, body []byte)
 	case "GetCloudNodeDetail", "GetNodeDetail":
 		route.Path = "/api/v1/cloud_node/detail"
 		route.HTTPMethod = "GET"
+	case "GetSCFDeployInfo":
+		// SCF 部署信息（function/namespace/region/account_id）。走 buildMultiQueryRoute
+		// 把 POST body 中的 node_id 转成 query string。
+		return h.buildMultiQueryRoute("/api/v1/cloud_node/scf-deploy-info", body)
 	case "CreateCloudNode", "RegisterNode":
 		route.Path = "/api/v1/cloud_node/register"
 		route.HTTPMethod = "POST"
@@ -144,6 +148,10 @@ func (h *CloudNodeGatewayHandler) parseMethodToRoute(method string, body []byte)
 	case "GetCloudAccountDetail":
 		route.Path = "/api/v1/cloud_account/detail"
 		route.HTTPMethod = "GET"
+	case "GetCOSAccountInfo":
+		// COS 账户信息（含凭证，reveal=true 返回明文）。走 buildMultiQueryRoute
+		// 把 POST body 中的 account_id/reveal 转成 query string。
+		return h.buildMultiQueryRoute("/api/v1/cloud_account/cos-info", body)
 	case "CreateCloudAccount":
 		route.Path = "/api/v1/cloud_account/create"
 		route.HTTPMethod = "POST"
