@@ -30,18 +30,21 @@ func NewCreateNodeExecutor(
 
 // NodeCreateItem 节点创建项
 type NodeCreateItem struct {
-	CloudAccountID      string `json:"cloud_account_id"`
-	NodeType            string `json:"node_type"`
-	Runtime             string `json:"runtime"`
-	BizType             string `json:"biz_type"`
-	Region              string `json:"region"`
-	IPAddress           string `json:"ip_address"`
-	PackageID           string `json:"package_id"`
-	SupportedCollectors string `json:"supported_collectors"`
-	Metadata            string `json:"metadata"`
-	TimeoutThreshold    int    `json:"timeout_threshold"`
-	HeartbeatInterval   int    `json:"heartbeat_interval"`
-	ProbeEnabled        *bool  `json:"probe_enabled"`
+	CloudAccountID      string            `json:"cloud_account_id"`
+	NodeType            string            `json:"node_type"`
+	Runtime             string            `json:"runtime"`
+	Handler             string            `json:"handler"`
+	BizType             string            `json:"biz_type"`
+	Config              map[string]string `json:"config"`
+	Environment         map[string]string `json:"environment"`
+	Region              string            `json:"region"`
+	IPAddress           string            `json:"ip_address"`
+	PackageID           string            `json:"package_id"`
+	SupportedCollectors string            `json:"supported_collectors"`
+	Metadata            string            `json:"metadata"`
+	TimeoutThreshold    int               `json:"timeout_threshold"`
+	HeartbeatInterval   int               `json:"heartbeat_interval"`
+	ProbeEnabled        *bool             `json:"probe_enabled"`
 }
 
 // Name 返回执行器外显名称
@@ -73,10 +76,7 @@ func (e *CreateNodeExecutor) Execute(ctx context.Context, taskID string, request
 		return "", fmt.Errorf("获取代码包配置失败: %w", err)
 	}
 
-	// 如果请求中指定了Runtime，则覆盖代码包中的Runtime
-	if nodeItem.Runtime != "" {
-		codeConfig.Runtime = nodeItem.Runtime
-	}
+	applyNodeCreateItemToCodeConfig(codeConfig, nodeItem)
 
 	// 准备节点数据
 	probeEnabled := true // 默认启用
@@ -132,6 +132,25 @@ func (e *CreateNodeExecutor) Execute(ctx context.Context, taskID string, request
 		return "", fmt.Errorf("failed to marshal result data: %w", err)
 	}
 	return string(resultJSON), nil
+}
+
+func applyNodeCreateItemToCodeConfig(codeConfig *FunctionCodeConfig, nodeItem NodeCreateItem) {
+	if nodeItem.Runtime != "" {
+		codeConfig.Runtime = nodeItem.Runtime
+	}
+	if nodeItem.Handler != "" {
+		codeConfig.Handler = nodeItem.Handler
+	}
+	merged := cloneStringMap(codeConfig.Environment)
+	for key, value := range nodeItem.Config {
+		merged[key] = value
+	}
+	for key, value := range nodeItem.Environment {
+		merged[key] = value
+	}
+	if len(merged) > 0 {
+		codeConfig.Environment = merged
+	}
 }
 
 // getPackageCodeConfig 获取代码包配置（支持本地存储和COS存储）

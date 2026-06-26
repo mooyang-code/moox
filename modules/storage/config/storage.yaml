@@ -18,6 +18,8 @@ storage:
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
     consumer_name: storage_deriver
+    embedded:
+      enabled: true
   deriver:
     access_service_name: trpc.storage.access.AccessService
     batch_size: 500

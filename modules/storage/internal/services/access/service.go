@@ -2,6 +2,7 @@ package access
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
@@ -33,33 +36,29 @@ var lowerSnakeIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // Service 实现元数据、写入、权威读取和视图查询入口。
 type Service struct {
-	root                     string
-	duckDBPath               string
-	parquetPath              string
-	metadata                 metadata.Store
-	metadataReader           metadata.Reader
-	metadataCache            *metacache.Store
-	validator                *schema.Validator
-	router                   *router.Resolver
-	primary                  primary.Client
-	search                   *search.Service
-	factReader               factReadService
-	timeSeriesFactReader     view.FactReader
-	viewFactReader           viewFactReadService
-	events                   eventbus.Bus
-	report                   ViewErrorReporter
-	indexMu                  sync.Mutex
-	indexCond                *sync.Cond
-	indexJobs                []indexJob
-	indexWG                  sync.WaitGroup
-	closing                  bool
-	recordRowsChangedSub     eventbus.Subscription
-	timeSeriesRowsChangedSub eventbus.Subscription
-	viewDirtyMu              sync.Mutex
-	viewDirtyBuilds          map[string]*viewDirtyBuild
-	recordVersionMu          sync.Mutex
-	lastRecordVersion        time.Time
-	openedDuckDB             sync.Map
+	root                 string
+	duckDBPath           string
+	parquetPath          string
+	metadata             metadata.Store
+	metadataReader       metadata.Reader
+	metadataCache        *metacache.Store
+	validator            *schema.Validator
+	router               *router.Resolver
+	primary              primary.Client
+	search               *search.Service
+	factReader           factReadService
+	timeSeriesFactReader view.FactReader
+	viewFactReader       viewFactReadService
+	events               eventbus.Bus
+	report               ViewErrorReporter
+	asyncMu              sync.Mutex
+	asyncWG              sync.WaitGroup
+	closing              bool
+	viewDirtyMu          sync.Mutex
+	viewDirtyBuilds      map[string]*viewDirtyBuild
+	recordVersionMu      sync.Mutex
+	lastRecordVersion    time.Time
+	openedDuckDB         sync.Map
 }
 
 // factReadService 定义 Access 内部回读 Record 行所需的接口。
@@ -132,11 +131,9 @@ func NewServiceWithOptions(opts Options) *Service {
 		events: events,
 		report: reporter,
 	}
-	svc.indexCond = sync.NewCond(&svc.indexMu)
 	svc.factReader = svc
 	svc.timeSeriesFactReader = svc
 	svc.viewFactReader = svc
-	go svc.runSearchIndexWorker()
 	return svc
 }
 
@@ -147,46 +144,6 @@ func (s *Service) SetViewFactReader(reader viewFactReadService) {
 	s.factReader = reader
 	s.timeSeriesFactReader = reader
 	s.viewFactReader = reader
-}
-
-// StartEventConsumers 启动派生事件消费者。订阅失败会显式返回错误，
-// 让服务启动阶段能发现 NATS subject / durable consumer 等配置问题。
-func (s *Service) StartEventConsumers(ctx context.Context) error {
-	subscriber, ok := s.events.(eventbus.Subscriber)
-	if !ok {
-		return nil
-	}
-	s.indexMu.Lock()
-	if s.recordRowsChangedSub != nil || s.timeSeriesRowsChangedSub != nil {
-		s.indexMu.Unlock()
-		return nil
-	}
-	s.indexMu.Unlock()
-	timeSeriesSubscription, err := subscriber.SubscribeTimeSeriesRowsChanged(ctx, s.handleTimeSeriesRowsChangedForView)
-	if err != nil {
-		return fmt.Errorf("subscribe time series rows changed: %w", err)
-	}
-	recordSubscription, err := subscriber.SubscribeRecordRowsChanged(ctx, s.handleRecordRowsChangedForSearch)
-	if err != nil {
-		_ = timeSeriesSubscription.Close()
-		return fmt.Errorf("subscribe record rows changed: %w", err)
-	}
-	s.indexMu.Lock()
-	if s.closing {
-		s.indexMu.Unlock()
-		_ = timeSeriesSubscription.Close()
-		_ = recordSubscription.Close()
-		return fmt.Errorf("subscribe rows changed: service is closing")
-	}
-	if s.recordRowsChangedSub != nil || s.timeSeriesRowsChangedSub != nil {
-		s.indexMu.Unlock()
-		_ = timeSeriesSubscription.Close()
-		return recordSubscription.Close()
-	}
-	s.timeSeriesRowsChangedSub = timeSeriesSubscription
-	s.recordRowsChangedSub = recordSubscription
-	s.indexMu.Unlock()
-	return nil
 }
 
 // sharedViewStore 保存进程内共享 DuckDB ViewStore 及其引用计数。
@@ -244,31 +201,14 @@ func (s *Service) SearchService() *search.Service {
 	return s.search
 }
 
-// Close 释放本 Service 持有的派生资源，等待异步索引完成，并回收其打开的 DuckDB 视图存储。
+// Close 释放本 Service 持有的派生资源，等待异步重建任务完成，并回收其打开的 DuckDB 视图存储。
 // 用于优雅关闭，避免进程级全局缓存长期泄漏。
 func (s *Service) Close() error {
-	s.indexMu.Lock()
+	s.asyncMu.Lock()
 	s.closing = true
-	if s.indexCond != nil {
-		s.indexCond.Broadcast()
-	}
-	recordRowsChangedSub := s.recordRowsChangedSub
-	timeSeriesRowsChangedSub := s.timeSeriesRowsChangedSub
-	s.recordRowsChangedSub = nil
-	s.timeSeriesRowsChangedSub = nil
-	s.indexMu.Unlock()
+	s.asyncMu.Unlock()
 	var firstErr error
-	if timeSeriesRowsChangedSub != nil {
-		if err := timeSeriesRowsChangedSub.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if recordRowsChangedSub != nil {
-		if err := recordRowsChangedSub.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	s.WaitForIndex()
+	s.waitForAsyncJobs()
 	s.openedDuckDB.Range(func(key, _ any) bool {
 		path, _ := key.(string)
 		if err := releaseViewStore(path); err != nil && firstErr == nil {
@@ -496,8 +436,8 @@ func (s *Service) CreateView(ctx context.Context, req *pb.CreateViewReq) (*pb.Cr
 	if view.ViewId == "" {
 		view.ViewId = defaultID(view.GetName(), "view")
 	}
-	if view.Name == "" {
-		view.Name = view.GetViewId()
+	if err := validateChineseDisplayName("view name", view.GetName()); err != nil {
+		return &pb.CreateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := validateViewID(view.GetViewId()); err != nil {
 		return &pb.CreateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -522,6 +462,9 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 	}
 	if view.Name == "" {
 		view.Name = view.GetViewId()
+	}
+	if err := validateChineseDisplayName("view name", view.GetName()); err != nil {
+		return &pb.UpdateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := validateViewID(view.GetViewId()); err != nil {
 		return &pb.UpdateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -550,11 +493,13 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 	}
 	datasetIDs := normalizeViewDatasetIDs(primaryDatasetID, view.GetDatasetIds())
 	var primary *pb.Dataset
+	datasets := make([]*pb.Dataset, 0, len(datasetIDs))
 	for idx, datasetID := range datasetIDs {
 		dataset, err := s.metadata.GetDataset(ctx, spaceID, datasetID)
 		if err != nil {
 			return fmt.Errorf("view dataset %s not found: %w", datasetID, err)
 		}
+		datasets = append(datasets, dataset)
 		if idx == 0 {
 			primary = dataset
 		}
@@ -562,11 +507,66 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 	if primary == nil {
 		return errors.New("view datasets are required")
 	}
+	if primary.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES {
+		freq, normalizedFilterJSON, err := normalizeTimeSeriesViewFilterJSON(view.GetFilterJson())
+		if err != nil {
+			return err
+		}
+		for _, dataset := range datasets {
+			if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
+				continue
+			}
+			if !datasetSupportsFreq(dataset, freq) {
+				return fmt.Errorf("view dataset %s does not support freq %q", dataset.GetDatasetId(), freq)
+			}
+		}
+		view.FilterJson = normalizedFilterJSON
+	}
 	view.PrimaryDatasetId = primaryDatasetID
 	view.DatasetIds = datasetIDs
 	view.GrainKeys = defaultViewGrainKeys(primary.GetDataKind())
 	view.Engine = defaultViewEngine(primary.GetDataKind())
 	return nil
+}
+
+func normalizeTimeSeriesViewFilterJSON(raw string) (string, string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", errors.New("time series view filter_json.freq is required")
+	}
+	fields := make(map[string]json.RawMessage)
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		return "", "", fmt.Errorf("invalid time series view filter_json: %w", err)
+	}
+	var freq string
+	if rawFreq, ok := fields["freq"]; ok {
+		if err := json.Unmarshal(rawFreq, &freq); err != nil {
+			return "", "", errors.New("time series view filter_json.freq must be a string")
+		}
+	}
+	freq = strings.TrimSpace(freq)
+	if freq == "" {
+		return "", "", errors.New("time series view filter_json.freq is required")
+	}
+	encodedFreq, err := json.Marshal(freq)
+	if err != nil {
+		return "", "", err
+	}
+	fields["freq"] = encodedFreq
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return "", "", err
+	}
+	return freq, string(normalized), nil
+}
+
+func datasetSupportsFreq(dataset *pb.Dataset, freq string) bool {
+	for _, item := range dataset.GetFreqs() {
+		if strings.TrimSpace(item) == freq {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultViewGrainKeys(kind pb.DataKind) []string {
@@ -589,6 +589,31 @@ func validateDatasetID(datasetID string) error {
 
 func validateViewID(viewID string) error {
 	return validateLowerSnakeID("view_id", viewID, 30)
+}
+
+const maxChineseDisplayNameRunes = 10
+
+func validateChineseDisplayName(field string, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	if utf8.RuneCountInString(value) > maxChineseDisplayNameRunes {
+		return fmt.Errorf("%s must be <= %d characters", field, maxChineseDisplayNameRunes)
+	}
+	for _, r := range value {
+		if unicode.Is(unicode.Han, r) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s must contain Chinese characters", field)
+}
+
+func validateColumnDisplayName(field string, attrs map[string]string) error {
+	if attrs == nil {
+		return validateChineseDisplayName(field, "")
+	}
+	return validateChineseDisplayName(field, attrs["display_name"])
 }
 
 func validateLowerSnakeID(field string, value string, maxLen int) error {
@@ -662,6 +687,9 @@ func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumn
 	column := req.GetColumn()
 	if column == nil || column.GetSpaceId() == "" || column.GetViewId() == "" || column.GetColumnName() == "" {
 		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, view_id and column_name are required"))}, nil
+	}
+	if err := validateColumnDisplayName("view column display_name", column.GetAttributes()); err != nil {
+		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := validateViewColumnName(column); err != nil {
 		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -741,6 +769,57 @@ func (s *Service) UpsertSubject(ctx context.Context, req *pb.UpsertSubjectReq) (
 	return &pb.UpsertSubjectRsp{RetInfo: response.Success("success"), Subject: created}, nil
 }
 
+func (s *Service) RegisterDataSubject(ctx context.Context, req *pb.RegisterDataSubjectReq) (*pb.RegisterDataSubjectRsp, error) {
+	item := req.GetSubject()
+	if req == nil || req.GetSpaceId() == "" || req.GetDataSourceId() == "" || req.GetExternalSymbol() == "" || item == nil || item.GetSubjectId() == "" {
+		return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, data_source_id, external_symbol and subject.subject_id are required"))}, nil
+	}
+	for _, binding := range req.GetDatasetBindings() {
+		if binding == nil || binding.GetDatasetId() == "" {
+			return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_bindings.dataset_id is required"))}, nil
+		}
+		if _, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), binding.GetDatasetId()); err != nil {
+			return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
+		}
+	}
+	item.SpaceId = req.GetSpaceId()
+	if item.Status == "" {
+		item.Status = "active"
+	}
+	created, err := s.metadata.UpsertSubject(ctx, item)
+	if err != nil {
+		return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	_, err = s.metadata.UpsertSubjectSymbol(ctx, &pb.SubjectSymbol{
+		SpaceId:        req.GetSpaceId(),
+		SubjectId:      created.GetSubjectId(),
+		DataSourceId:   req.GetDataSourceId(),
+		ExternalSymbol: req.GetExternalSymbol(),
+		Status:         "active",
+	})
+	if err != nil {
+		return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+
+	bindings := make([]*pb.DatasetSubject, 0, len(req.GetDatasetBindings()))
+	for _, binding := range req.GetDatasetBindings() {
+		binding.SpaceId = req.GetSpaceId()
+		binding.SubjectId = created.GetSubjectId()
+		if binding.SubjectRole == "" {
+			binding.SubjectRole = "normal"
+		}
+		if binding.Status == "" {
+			binding.Status = "active"
+		}
+		createdBinding, err := s.metadata.BindDatasetSubject(ctx, binding)
+		if err != nil {
+			return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		bindings = append(bindings, createdBinding)
+	}
+	return &pb.RegisterDataSubjectRsp{RetInfo: response.Success("success"), Subject: created, DatasetBindings: bindings}, nil
+}
+
 func (s *Service) GetSubject(ctx context.Context, req *pb.GetSubjectReq) (*pb.GetSubjectRsp, error) {
 	item, err := s.metadata.GetSubject(ctx, req.GetSpaceId(), req.GetSubjectId())
 	if err != nil {
@@ -785,8 +864,8 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	if item.DatasetId == "" {
 		item.DatasetId = defaultID(item.GetName(), "dataset")
 	}
-	if item.Name == "" {
-		item.Name = item.GetDatasetId()
+	if err := validateChineseDisplayName("dataset name", item.GetName()); err != nil {
+		return &pb.CreateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -802,6 +881,9 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 	item := req.GetDataset()
 	if item == nil || item.GetDatasetId() == "" {
 		return &pb.UpdateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id is required"))}, nil
+	}
+	if err := validateChineseDisplayName("dataset name", item.GetName()); err != nil {
+		return &pb.UpdateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -833,6 +915,9 @@ func (s *Service) BindDatasetSubject(ctx context.Context, req *pb.BindDatasetSub
 	item := req.GetDatasetSubject()
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetSubjectId() == "" {
 		return &pb.BindDatasetSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and subject_id are required"))}, nil
+	}
+	if _, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
+		return &pb.BindDatasetSubjectRsp{RetInfo: response.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
 	}
 	created, err := s.metadata.BindDatasetSubject(ctx, item)
 	if err != nil {
@@ -917,6 +1002,9 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 	item := req.GetColumn()
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and column_name are required"))}, nil
+	}
+	if err := validateColumnDisplayName("dataset column display_name", item.GetAttributes()); err != nil {
+		return &pb.UpsertDatasetColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	created, err := s.metadata.UpsertDatasetColumn(ctx, item)
 	if err != nil {

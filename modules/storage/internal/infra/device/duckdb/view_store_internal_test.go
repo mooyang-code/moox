@@ -3,6 +3,7 @@ package duckdb
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/testutil"
@@ -68,6 +69,50 @@ func TestQueryTimeSeriesRowsUsesTypedColumnsForFiltersSortsAndPagination(t *test
 	require.Len(t, rows, 1)
 	require.Equal(t, "2026-06-15T02:00:00.000000000Z", rows[0].GetKey().GetDataTime())
 	require.InDelta(t, 110, rows[0].GetColumns()[0].GetValue().GetDoubleValue(), 1e-9)
+}
+
+func TestInsertRowsSerializesConcurrentInitialIndexRebuildsPerTable(t *testing.T) {
+	ctx := context.Background()
+	store := openInternalViewStore(t)
+	columns := []*pb.ViewColumn{
+		{ColumnName: "kline.close", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "kline.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "kline.volume", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "kline.volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+	}
+	require.NoError(t, store.CreateResultTable(ctx, "ts_view_crypto_kline_concurrent", columns))
+
+	start := make(chan struct{})
+	errs := make(chan error, 16)
+	var wg sync.WaitGroup
+	for i := 0; i < cap(errs); i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- store.InsertRows(ctx, "ts_view_crypto_kline_concurrent", []*pb.TimeSeriesRow{
+				{
+					Key: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-06-15T00:00:00Z"},
+					Columns: []*pb.ColumnValue{
+						testutil.DoubleValue("kline.close", float64(100+i)),
+						testutil.DoubleValue("kline.volume", float64(i)),
+					},
+				},
+			})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	_, rows, page, err := store.QueryTimeSeriesRows(ctx, "ts_view_crypto_kline_concurrent", &pb.QueryTimeSeriesRowsReq{
+		Keys: []*pb.TimeSeriesKey{{SubjectId: "BTC-USDT", Freq: "1h"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), page.GetTotal())
+	require.Len(t, rows, 1)
 }
 
 func openInternalViewStore(t *testing.T) *ViewStore {

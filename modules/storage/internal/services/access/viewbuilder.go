@@ -27,6 +27,7 @@ func (s *Service) InitViewBuilderWithFacts(facts view.FactReader) error {
 		Metadata: s.metadata,
 		Facts:    facts,
 		Views:    views,
+		Search:   s.search,
 		OnBuildStarted: func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) {
 			s.startViewDirtyTracking(pb.DataKind_DATA_KIND_TIME_SERIES, item, targetVersion, resultName)
 		},

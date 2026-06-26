@@ -66,7 +66,7 @@ func resolveControlGatewayTarget(path string) (gatewayTarget, bool) {
 	return gatewayTarget{
 		Base:    "control",
 		Service: parts[0],
-		Path:    "/gateway/" + parts[0] + "/" + parts[1],
+		Path:    prefix + parts[0] + "/" + parts[1],
 		Method:  parts[1],
 	}, true
 }
@@ -365,7 +365,7 @@ func main() {
 	// 启动服务器
 	log.Printf("服务器启动在 http://localhost%s", cfg.ListenAddr)
 	log.Println("静态文件服务: /")
-	log.Printf("Control API代理: /api/control/{service}/{method} -> %s/gateway/{service}/{method}", cfg.ControlURL)
+	log.Printf("Control API代理: /api/control/{service}/{method} -> %s/api/control/{service}/{method}", cfg.ControlURL)
 	log.Printf("Storage Metadata代理: /api/storage/metadata/{method} -> %s/trpc.storage.metadata.MetadataService/{method}", cfg.MetadataURL)
 	log.Printf("Storage Access代理: /api/storage/access/{method} -> %s/trpc.storage.access.AccessService/{method}", cfg.AccessURL)
 	log.Printf("Storage View代理: /api/storage/view/{method} -> %s/trpc.storage.view.ViewService/{method}", cfg.ViewURL)

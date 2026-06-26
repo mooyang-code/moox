@@ -46,11 +46,21 @@ type StorageDevices struct {
 
 // StorageEventBus 保存事件总线传输配置。
 type StorageEventBus struct {
-	Type          string `yaml:"type"`
-	NATSURL       string `yaml:"nats_url"`
-	StreamName    string `yaml:"stream_name"`
-	SubjectPrefix string `yaml:"subject_prefix"`
-	ConsumerName  string `yaml:"consumer_name"`
+	Type          string                  `yaml:"type"`
+	NATSURL       string                  `yaml:"nats_url"`
+	StreamName    string                  `yaml:"stream_name"`
+	SubjectPrefix string                  `yaml:"subject_prefix"`
+	ConsumerName  string                  `yaml:"consumer_name"`
+	Embedded      StorageEmbeddedEventBus `yaml:"embedded"`
+}
+
+// StorageEmbeddedEventBus 保存本地内嵌事件总线服务配置。
+type StorageEmbeddedEventBus struct {
+	Enabled          bool   `yaml:"enabled"`
+	Host             string `yaml:"host"`
+	Port             int    `yaml:"port"`
+	StoreDir         string `yaml:"store_dir"`
+	StartupTimeoutMS int    `yaml:"startup_timeout_ms"`
 }
 
 // StorageDeriver 保存派生服务消费与批处理配置。
@@ -107,16 +117,30 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.EventBus.ConsumerName == "" {
 		c.EventBus.ConsumerName = "storage_deriver"
 	}
+	if c.EventBus.Embedded.Enabled {
+		if c.EventBus.Embedded.Host == "" {
+			c.EventBus.Embedded.Host = "127.0.0.1"
+		}
+		if c.EventBus.Embedded.Port == 0 {
+			c.EventBus.Embedded.Port = 4222
+		}
+		if c.EventBus.Embedded.StoreDir == "" {
+			c.EventBus.Embedded.StoreDir = filepath.Join(c.Root, "nats")
+		}
+		if c.EventBus.Embedded.StartupTimeoutMS <= 0 {
+			c.EventBus.Embedded.StartupTimeoutMS = 10000
+		}
+	}
 	if c.Deriver.AccessServiceName == "" {
 		c.Deriver.AccessServiceName = "trpc.storage.access.AccessService"
 	}
-	if c.Deriver.BatchSize == 0 {
+	if c.Deriver.BatchSize <= 0 {
 		c.Deriver.BatchSize = 500
 	}
-	if c.Deriver.BatchWaitMS == 0 {
+	if c.Deriver.BatchWaitMS <= 0 {
 		c.Deriver.BatchWaitMS = 200
 	}
-	if c.Deriver.MaxWorkers == 0 {
+	if c.Deriver.MaxWorkers <= 0 {
 		c.Deriver.MaxWorkers = 4
 	}
 }

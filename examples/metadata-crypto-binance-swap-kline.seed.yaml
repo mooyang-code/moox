@@ -5,40 +5,6 @@
 #     --metadata-url http://127.0.0.1:19101 \
 #     --if-not-exists
 
-subjects:
-  - space_id: crypto
-    subject_id: BTC-USDT
-    subject_type: crypto_swap
-    name: BTC-USDT Perpetual Swap
-    market: crypto
-    currency: USDT
-    timezone: UTC
-    status: active
-  - space_id: crypto
-    subject_id: ETH-USDT
-    subject_type: crypto_swap
-    name: ETH-USDT Perpetual Swap
-    market: crypto
-    currency: USDT
-    timezone: UTC
-    status: active
-  - space_id: crypto
-    subject_id: SOL-USDT
-    subject_type: crypto_swap
-    name: SOL-USDT Perpetual Swap
-    market: crypto
-    currency: USDT
-    timezone: UTC
-    status: active
-  - space_id: crypto
-    subject_id: BNB-USDT
-    subject_type: crypto_swap
-    name: BNB-USDT Perpetual Swap
-    market: crypto
-    currency: USDT
-    timezone: UTC
-    status: active
-
 subject_symbols:
   - space_id: crypto
     subject_id: BTC-USDT
@@ -65,7 +31,7 @@ datasets:
   - space_id: crypto
     dataset_id: binance_swap_kline
     data_source_id: binance
-    name: Binance Swap Kline
+    name: 币安合约K线
     description: Binance USDT-M perpetual swap OHLCV kline facts
     data_kind: time_series
     freqs: ["1h"]
@@ -96,41 +62,41 @@ dataset_subjects:
 fields:
   - space_id: crypto
     field_id: taker_buy_base_asset_volume
-    name: Taker Buy Base Asset Volume
+    name: 主动买量
     value_type: double
     unit: base_asset
     write_example: "155718.0"
     status: active
   - space_id: crypto
     field_id: taker_buy_quote_asset_volume
-    name: Taker Buy Quote Asset Volume
+    name: 主动买额
     value_type: double
     unit: USDT
     write_example: "524259.78"
     status: active
   - space_id: crypto
     field_id: Spread
-    name: Spread
+    name: 价差
     value_type: double
     write_example: "0.001"
     status: active
   - space_id: crypto
     field_id: avg_price_1m
-    name: Average Price 1m
+    name: 均价1分
     value_type: double
     unit: USDT
     write_example: "10000.0"
     status: active
   - space_id: crypto
     field_id: avg_price_5m
-    name: Average Price 5m
+    name: 均价5分
     value_type: double
     unit: USDT
     write_example: "10000.0"
     status: active
   - space_id: crypto
     field_id: fundingRate
-    name: Funding Rate
+    name: 资金费率
     value_type: double
     write_example: "0.0001"
     status: active
@@ -139,6 +105,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: open
+    attributes:
+      display_name: 开盘价
     origin_type: field
     origin_id: open
     value_type: double
@@ -147,6 +115,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: high
+    attributes:
+      display_name: 最高价
     origin_type: field
     origin_id: high
     value_type: double
@@ -155,6 +125,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: low
+    attributes:
+      display_name: 最低价
     origin_type: field
     origin_id: low
     value_type: double
@@ -163,6 +135,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: close
+    attributes:
+      display_name: 收盘价
     origin_type: field
     origin_id: close
     value_type: double
@@ -171,6 +145,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: volume
+    attributes:
+      display_name: 成交量
     origin_type: field
     origin_id: volume
     value_type: double
@@ -178,6 +154,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: quote_volume
+    attributes:
+      display_name: 成交额
     origin_type: field
     origin_id: quote_volume
     value_type: double
@@ -185,6 +163,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: trade_num
+    attributes:
+      display_name: 成交笔数
     origin_type: field
     origin_id: trade_num
     value_type: int
@@ -192,6 +172,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: taker_buy_base_asset_volume
+    attributes:
+      display_name: 主动买量
     origin_type: field
     origin_id: taker_buy_base_asset_volume
     value_type: double
@@ -199,6 +181,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: taker_buy_quote_asset_volume
+    attributes:
+      display_name: 主动买额
     origin_type: field
     origin_id: taker_buy_quote_asset_volume
     value_type: double
@@ -206,6 +190,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: Spread
+    attributes:
+      display_name: 价差
     origin_type: field
     origin_id: Spread
     value_type: double
@@ -213,6 +199,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: symbol
+    attributes:
+      display_name: 交易标的
     origin_type: field
     origin_id: symbol
     value_type: string
@@ -220,6 +208,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: avg_price_1m
+    attributes:
+      display_name: 均价1分
     origin_type: field
     origin_id: avg_price_1m
     value_type: double
@@ -227,6 +217,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: avg_price_5m
+    attributes:
+      display_name: 均价5分
     origin_type: field
     origin_id: avg_price_5m
     value_type: double
@@ -234,6 +226,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_swap_kline
     column_name: fundingRate
+    attributes:
+      display_name: 资金费率
     origin_type: field
     origin_id: fundingRate
     value_type: double
@@ -242,7 +236,7 @@ dataset_columns:
 views:
   - space_id: crypto
     view_id: swap_spot_kline_view
-    name: Swap Spot Kline Join View
+    name: 合约现货视图
     description: Join Binance swap and spot 1H klines by subject_id, freq and data_time
     primary_dataset_id: binance_swap_kline
     dataset_ids: ["binance_swap_kline", "binance_spot_kline"]
@@ -256,6 +250,8 @@ view_columns:
   - space_id: crypto
     view_id: swap_spot_kline_view
     column_name: binance_swap_kline.open
+    attributes:
+      display_name: 合约开盘
     origin_type: dataset_column
     origin_id: binance_swap_kline.open
     value_type: double
@@ -263,6 +259,8 @@ view_columns:
   - space_id: crypto
     view_id: swap_spot_kline_view
     column_name: binance_swap_kline.close
+    attributes:
+      display_name: 合约收盘
     origin_type: dataset_column
     origin_id: binance_swap_kline.close
     value_type: double
@@ -270,6 +268,8 @@ view_columns:
   - space_id: crypto
     view_id: swap_spot_kline_view
     column_name: binance_swap_kline.volume
+    attributes:
+      display_name: 合约成交量
     origin_type: dataset_column
     origin_id: binance_swap_kline.volume
     value_type: double
@@ -277,6 +277,8 @@ view_columns:
   - space_id: crypto
     view_id: swap_spot_kline_view
     column_name: binance_swap_kline.fundingRate
+    attributes:
+      display_name: 资金费率
     origin_type: dataset_column
     origin_id: binance_swap_kline.fundingRate
     value_type: double
@@ -284,6 +286,8 @@ view_columns:
   - space_id: crypto
     view_id: swap_spot_kline_view
     column_name: binance_spot_kline.open
+    attributes:
+      display_name: 现货开盘
     origin_type: dataset_column
     origin_id: binance_spot_kline.open
     value_type: double
@@ -291,6 +295,8 @@ view_columns:
   - space_id: crypto
     view_id: swap_spot_kline_view
     column_name: binance_spot_kline.close
+    attributes:
+      display_name: 现货收盘
     origin_type: dataset_column
     origin_id: binance_spot_kline.close
     value_type: double
@@ -298,6 +304,8 @@ view_columns:
   - space_id: crypto
     view_id: swap_spot_kline_view
     column_name: binance_spot_kline.volume
+    attributes:
+      display_name: 现货成交量
     origin_type: dataset_column
     origin_id: binance_spot_kline.volume
     value_type: double

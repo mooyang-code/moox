@@ -106,6 +106,30 @@ client:
       timeout: 3000 #请求最长处理时间 
       disable_servicerouter: true
 
+      # 网关层转发的存储元数据服务
+    - name: storage_metadata
+      network: tcp
+      protocol: http
+      target: ip://127.0.0.1:19101
+      timeout: 3000 #请求最长处理时间
+      disable_servicerouter: true
+
+      # 网关层转发的存储读写服务
+    - name: storage_access
+      network: tcp
+      protocol: http
+      target: ip://127.0.0.1:19104
+      timeout: 3000 #请求最长处理时间
+      disable_servicerouter: true
+
+      # 网关层转发的存储视图服务
+    - name: storage_view
+      network: tcp
+      protocol: http
+      target: ip://127.0.0.1:19105
+      timeout: 3000 #请求最长处理时间
+      disable_servicerouter: true
+
       # 网关层转发的底层服务：trpc.moox.server.AuthAPIhttp
     - name: auth
       network: tcp

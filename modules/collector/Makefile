@@ -379,18 +379,20 @@ build-scf:
 	cp -r configs/* scf-build/; \
 	echo "📝 更新配置文件版本号..."; \
 	if [ -f "scf-build/config.yaml" ]; then \
-		sed -i.bak "s/version: \".*\"/version: \"$$SCF_VERSION\"/" scf-build/config.yaml; \
-		rm -f scf-build/config.yaml.bak; \
+		awk -v v="$$SCF_VERSION" '\
+			BEGIN { in_system=0; done=0 } \
+			/^system:/ { in_system=1 } \
+			/^[^[:space:]].*:/ && $$0 !~ /^system:/ { in_system=0 } \
+			in_system && !done && /^[[:space:]]+version:/ { sub(/version: .*/, "version: \"" v "\""); done=1 } \
+			{ print }' scf-build/config.yaml > scf-build/config.yaml.tmp; \
+		mv scf-build/config.yaml.tmp scf-build/config.yaml; \
 		echo "✅ 配置文件版本号已更新为: $$SCF_VERSION"; \
 	else \
 		echo "⚠️  警告: config.yaml 文件不存在"; \
 	fi; \
-	sed -i.bak "s/version: \".*\"/version: \"$$SCF_VERSION\"/" configs/config.yaml; \
-	rm -f configs/config.yaml.bak; \
-	echo "✅ 源配置文件版本号已更新为: $$SCF_VERSION"; \
 	cp main scf-build/; \
 	echo "📦 打包云函数..."; \
-	cd scf-build && zip -r ../collector-scf-$$SCF_VERSION.zip main *.yaml; \
+	cd scf-build && if [ -d sources ]; then zip -r ../collector-scf-$$SCF_VERSION.zip main *.yaml sources; else zip -r ../collector-scf-$$SCF_VERSION.zip main *.yaml; fi; \
 	rm -rf scf-build; \
 	rm -f main; \
 	echo "✅ 云函数构建完成: collector-scf-$$SCF_VERSION.zip"
@@ -425,4 +427,3 @@ deploy:
 	@echo "📦 上传文件: collector-scf.zip"
 	@scp collector-scf.zip $(SERVER):/tmp/
 	@echo "✅ 部署完成: collector-scf.zip 已上传到 $(SERVER):/tmp/"
-

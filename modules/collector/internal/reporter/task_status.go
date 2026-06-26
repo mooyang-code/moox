@@ -1,7 +1,6 @@
 package reporter
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/avast/retry-go"
+	"github.com/mooyang-code/moox/modules/collector/internal/controlapi"
 	"github.com/mooyang-code/moox/modules/collector/pkg/config"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -76,7 +76,7 @@ func ReportTaskStatus(ctx context.Context, taskID string, status int, result str
 
 // executeReport 执行上报请求
 func executeReport(ctx context.Context, taskID string, nodeID string, status int, result string, serverIP string, serverPort int) error {
-	url := fmt.Sprintf("http://%s:%d/gateway/collectmgr/ReportTaskStatus", serverIP, serverPort)
+	url := controlapi.URL(serverIP, serverPort, "collectmgr", "ReportTaskStatus")
 
 	// 构建请求体
 	reqBody := &ReportTaskStatusRequest{
@@ -119,11 +119,10 @@ func executeReport(ctx context.Context, taskID string, nodeID string, status int
 
 // sendRequest 发送单次请求
 func sendRequest(ctx context.Context, url string, data []byte, httpClient *http.Client) error {
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
+	req, err := controlapi.NewSignedRequestWithContext(ctx, "POST", url, data, controlapi.DefaultAuthConfig())
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {

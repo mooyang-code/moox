@@ -33,6 +33,7 @@ func TestServiceConsumesTimeSeriesRowsChangedAndWritesView(t *testing.T) {
 					PrimaryDatasetId: "kline",
 					Engine:           "duckdb",
 					ActiveResult:     "ts_view_crypto_kline_active",
+					BuildingResult:   "ts_view_crypto_kline_building",
 				},
 			},
 		},
@@ -71,18 +72,24 @@ func TestServiceConsumesTimeSeriesRowsChangedAndWritesView(t *testing.T) {
 	}
 
 	eventually(t, time.Second, func() bool {
-		return writer.callCount() == 1
+		return writer.callCount() == 2
 	})
 	calls := writer.calls()
-	if calls[0].tableName != "ts_view_crypto_kline_active" {
-		t.Fatalf("tableName = %q, want ts_view_crypto_kline_active", calls[0].tableName)
+	gotTables := map[string]bool{}
+	for _, call := range calls {
+		gotTables[call.tableName] = true
+		if len(call.rows) != 1 {
+			t.Fatalf("len(rows) = %d, want 1", len(call.rows))
+		}
+		columns := call.rows[0].GetColumns()
+		if len(columns) != 1 || columns[0].GetColumnName() != "close_alias" {
+			t.Fatalf("projected columns = %#v", columns)
+		}
 	}
-	if len(calls[0].rows) != 1 {
-		t.Fatalf("len(rows) = %d, want 1", len(calls[0].rows))
-	}
-	columns := calls[0].rows[0].GetColumns()
-	if len(columns) != 1 || columns[0].GetColumnName() != "close_alias" {
-		t.Fatalf("projected columns = %#v", columns)
+	for _, tableName := range []string{"ts_view_crypto_kline_active", "ts_view_crypto_kline_building"} {
+		if !gotTables[tableName] {
+			t.Fatalf("missing write to %s, calls=%#v", tableName, calls)
+		}
 	}
 }
 

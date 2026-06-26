@@ -11,6 +11,11 @@ export default defineConfig(({ mode }) => {
   const root = process.cwd();
   // 获取跟路径对应的文件
   const env: any = loadEnv(mode, root);
+  const remoteServiceHost = env.VITE_REMOTE_SERVICE_HOST || "106.53.107.122";
+  const remoteTarget = (port: number, overrideKey: string) => env[overrideKey] || `http://${remoteServiceHost}:${port}`;
+  const controlTarget = remoteTarget(20103, "VITE_CONTROL_API_TARGET");
+  const webHostTarget = env.VITE_WEB_HOST_TARGET || "http://localhost:20102";
+
   return {
     base: mode === 'production' ? './' : '/',
     plugins: createVitePlugins(env),
@@ -98,31 +103,12 @@ export default defineConfig(({ mode }) => {
       // 为开发服务器配置管理台 API 代理规则。
       proxy: {
         "/api/control": {
-          target: "http://127.0.0.1:20103",
+          target: controlTarget,
           changeOrigin: true,
-          secure: false,
-          rewrite: (proxyPath) => proxyPath.replace(/^\/api\/control\/([^/]+)\/([^/]+)$/, "/gateway/$1/$2")
-        },
-        "/api/storage/metadata": {
-          target: "http://127.0.0.1:19101",
-          changeOrigin: true,
-          secure: false,
-          rewrite: (proxyPath) => proxyPath.replace(/^\/api\/storage\/metadata\/(.+)$/, "/trpc.storage.metadata.MetadataService/$1")
-        },
-        "/api/storage/access": {
-          target: "http://127.0.0.1:19104",
-          changeOrigin: true,
-          secure: false,
-          rewrite: (proxyPath) => proxyPath.replace(/^\/api\/storage\/access\/(.+)$/, "/trpc.storage.access.AccessService/$1")
-        },
-        "/api/storage/view": {
-          target: "http://127.0.0.1:19105",
-          changeOrigin: true,
-          secure: false,
-          rewrite: (proxyPath) => proxyPath.replace(/^\/api\/storage\/view\/(.+)$/, "/trpc.storage.view.ViewService/$1")
+          secure: false
         },
         "/trpc.moox.server": {
-          target: "http://localhost:20102", 
+          target: webHostTarget,
           changeOrigin: true,
           secure: false
         }

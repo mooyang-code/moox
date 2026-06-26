@@ -25,7 +25,10 @@
       @page-size-change="onPageSizeChange"
     >
       <template #columns>
-        <a-table-column title="列名" data-index="column_name" :width="150" />
+        <a-table-column title="中文名" :width="120">
+          <template #cell="{ record }">{{ record.attributes?.display_name || '-' }}</template>
+        </a-table-column>
+        <a-table-column title="技术列名" data-index="column_name" :width="150" />
         <a-table-column title="来源类型" :width="120">
           <template #cell="{ record }">
             {{ optionLabel(datasetColumnOriginOptions, record.origin_type) }}
@@ -67,6 +70,9 @@
 
     <a-modal v-model:visible="visible" width="720px" :title="modalTitle" @ok="submit">
       <a-form :model="form" auto-label-width>
+        <a-form-item field="display_name" label="中文名" required>
+          <a-input v-model="form.display_name" :max-length="10" show-word-limit placeholder="例如 收盘价" />
+        </a-form-item>
         <a-form-item field="column_name" label="列名" required>
           <a-input v-model="form.column_name" :disabled="editing" placeholder="例如 close" />
         </a-form-item>
@@ -121,6 +127,7 @@ import {
   splitList,
   statusColor,
   statusOptions,
+  validateChineseDisplayName,
 } from '@/views/data/shared/metadata-utils';
 
 defineOptions({ name: 'DatasetColumnPanel' });
@@ -137,6 +144,7 @@ const editing = ref(false);
 const pagination = reactive(defaultPagination());
 
 const form = reactive({
+  display_name: '',
   column_name: '',
   origin_type: 'DATASET_COLUMN_ORIGIN_TYPE_FIELD' as DatasetColumn['origin_type'],
   origin_id: '',
@@ -171,6 +179,7 @@ async function load() {
 function resetForm() {
   Object.assign(form, {
     column_name: '',
+    display_name: '',
     origin_type: 'DATASET_COLUMN_ORIGIN_TYPE_FIELD',
     origin_id: '',
     value_type: 'FIELD_VALUE_TYPE_STRING',
@@ -191,6 +200,7 @@ function openEdit(record: DatasetColumn) {
   editing.value = true;
   Object.assign(form, {
     column_name: record.column_name,
+    display_name: record.attributes?.display_name || '',
     origin_type: record.origin_type || 'DATASET_COLUMN_ORIGIN_TYPE_FIELD',
     origin_id: record.origin_id,
     value_type: record.value_type || 'FIELD_VALUE_TYPE_STRING',
@@ -203,8 +213,13 @@ function openEdit(record: DatasetColumn) {
 }
 
 async function submit() {
-  if (!props.spaceId || !props.datasetId || !form.column_name || !form.origin_id) {
-    Message.warning('请补全列名、来源ID和数据集');
+  if (!props.spaceId || !props.datasetId || !form.column_name || !form.origin_id || !form.display_name) {
+    Message.warning('请补全中文名、列名、来源ID和数据集');
+    return;
+  }
+  const nameError = validateChineseDisplayName(form.display_name);
+  if (nameError) {
+    Message.warning(nameError);
     return;
   }
   await upsertDatasetColumn({
@@ -218,6 +233,7 @@ async function submit() {
     is_unique: form.is_unique,
     aliases: splitList(form.aliasesText),
     status: form.status,
+    attributes: { display_name: form.display_name },
   });
   Message.success('数据集列已保存');
   visible.value = false;

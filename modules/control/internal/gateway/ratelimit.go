@@ -47,10 +47,10 @@ func getDefaultRateLimitConfig() *RateLimitConfig {
 		DefaultQPS:   10,
 		DefaultBurst: 20,
 		MethodLimits: map[string]MethodLimit{
-			"/gateway/auth/Login":        {QPS: 1, Burst: 2},  // 登录接口限制更严格
-			"/gateway/auth/Register":     {QPS: 2, Burst: 4},  // 注册接口限制更严格
-			"/gateway/auth/GetLoginSalt": {QPS: 2, Burst: 4},  // 获取盐值接口
-			"/gateway/auth/GetUserInfo":  {QPS: 5, Burst: 10}, // 获取用户信息
+			"/api/control/auth/Login":        {QPS: 1, Burst: 2},  // 登录接口限制更严格
+			"/api/control/auth/Register":     {QPS: 2, Burst: 4},  // 注册接口限制更严格
+			"/api/control/auth/GetLoginSalt": {QPS: 2, Burst: 4},  // 获取盐值接口
+			"/api/control/auth/GetUserInfo":  {QPS: 5, Burst: 10}, // 获取用户信息
 		},
 	}
 }
@@ -122,6 +122,9 @@ func RateLimit() filter.ServerFilter {
 	return func(ctx context.Context, req interface{}, next filter.ServerHandleFunc) (interface{}, error) {
 		ctxMsg := trpc.Message(ctx)
 		rpcName := ctxMsg.ServerRPCName()
+		if !IsControlAPIPath(rpcName) {
+			return next(ctx, req)
+		}
 
 		// 获取TraceID（用于日志追踪）
 		traceIDBytes := trpc.GetMetaData(ctx, model.CtxTraceID)

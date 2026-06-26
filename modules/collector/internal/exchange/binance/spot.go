@@ -27,6 +27,7 @@ func NewSpotAPI(client *Client) *SpotAPI {
 // API: GET https://api.binance.com/api/v3/klines
 func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
 	params := url.Values{}
+	domain := api.client.SpotDomain()
 
 	// 转换交易对格式
 	symbol := FormatSymbol(req.Symbol)
@@ -52,22 +53,22 @@ func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 	err := retry.Do(
 		func() error {
 			// 获取下一个可用的IP（排除已失败的IP）
-			currentIP := dnsproxy.GetNextAvailableIP(SpotDomain, triedIPs)
+			currentIP := dnsproxy.GetNextAvailableIP(domain, triedIPs)
 
-			// 如果没有可用的IP，直接返回失败，不再重试
+			// DNS proxy 记录可能尚未同步，允许降级为标准域名访问。
 			if currentIP == "" {
-				log.WarnContextf(ctx, "[SpotAPI] 无可用IP，symbol=%s, interval=%s, 已尝试IP: %v",
+				log.WarnContextf(ctx, "[SpotAPI] 无可用DNS优选IP，降级为域名直连, symbol=%s, interval=%s, 已尝试IP: %v",
 					symbol, req.Interval, triedIPs)
-				// 返回 retry.Unrecoverable 让重试立即停止
-				return retry.Unrecoverable(fmt.Errorf("无可用IP访问 %s", SpotDomain))
 			}
 
 			// 使用指定IP发送请求
-			err := api.client.GetWithIP(ctx, SpotDomain, SpotKlineEndpoint, params, &rawKlines, currentIP)
+			err := api.client.GetWithIP(ctx, domain, SpotKlineEndpoint, params, &rawKlines, currentIP)
 			if err != nil {
-				// 请求失败，记录这个IP
-				triedIPs = append(triedIPs, currentIP)
-				log.WarnContextf(ctx, "[SpotAPI] IP %s 请求失败，加入排除列表", currentIP)
+				if currentIP != "" {
+					// 请求失败，记录这个IP
+					triedIPs = append(triedIPs, currentIP)
+					log.WarnContextf(ctx, "[SpotAPI] IP %s 请求失败，加入排除列表", currentIP)
+				}
 				return err
 			}
 			return nil
@@ -102,19 +103,21 @@ func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 func (api *SpotAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo, error) {
 	var result ExchangeInfoResponse
 	var triedIPs []string
+	domain := api.client.SpotDomain()
 
 	err := retry.Do(
 		func() error {
-			currentIP := dnsproxy.GetNextAvailableIP(SpotDomain, triedIPs)
+			currentIP := dnsproxy.GetNextAvailableIP(domain, triedIPs)
 			if currentIP == "" {
-				log.WarnContextf(ctx, "[SpotAPI] 无可用IP获取ExchangeInfo，已尝试IP: %v", triedIPs)
-				return retry.Unrecoverable(fmt.Errorf("无可用IP访问 %s", SpotDomain))
+				log.WarnContextf(ctx, "[SpotAPI] 无可用DNS优选IP获取ExchangeInfo，降级为域名直连, 已尝试IP: %v", triedIPs)
 			}
 
-			err := api.client.GetWithIP(ctx, SpotDomain, SpotExchangeInfoEndpoint, nil, &result, currentIP)
+			err := api.client.GetWithIP(ctx, domain, SpotExchangeInfoEndpoint, nil, &result, currentIP)
 			if err != nil {
-				triedIPs = append(triedIPs, currentIP)
-				log.WarnContextf(ctx, "[SpotAPI] IP %s 获取ExchangeInfo失败，加入排除列表", currentIP)
+				if currentIP != "" {
+					triedIPs = append(triedIPs, currentIP)
+					log.WarnContextf(ctx, "[SpotAPI] IP %s 获取ExchangeInfo失败，加入排除列表", currentIP)
+				}
 				return err
 			}
 			return nil

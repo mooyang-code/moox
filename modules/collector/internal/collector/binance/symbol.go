@@ -1,11 +1,9 @@
 package binance
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -14,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/exchange"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/exchange/binance"
 	"github.com/mooyang-code/moox/modules/collector/pkg/config"
+	"github.com/mooyang-code/moox/modules/collector/pkg/storage"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -23,6 +22,8 @@ const (
 	batchSize = 25
 	// maxConcurrency 最大并发请求数
 	maxConcurrency = 20
+	// symbolRecordVersionLatest is the fixed symbol record version.
+	symbolRecordVersionLatest = "latest"
 )
 
 // SymbolCollector 标的同步采集器
@@ -43,7 +44,7 @@ func (c *SymbolCollector) DataType() string {
 }
 
 func init() {
-	client := binanceapi.NewClient()
+	client := newConfiguredClient()
 	c := &SymbolCollector{
 		client:  client,
 		spotAPI: binanceapi.NewSpotAPI(client),
@@ -118,10 +119,10 @@ func (c *SymbolCollector) filterSymbols(symbols []*exchange.SymbolInfo) []*excha
 	return filtered
 }
 
-// reportSymbols 上报标的到存储服务（调用 DataService.WriteRows 接口）
+// reportSymbols 上报标的到存储服务。
 // 分批并发上报，每批最多 25 条，最大并发 20
 func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, symbols []*exchange.SymbolInfo) error {
-	datasetID, err := symbolDataSetID(instType)
+	binding, err := ResolveStorageBinding(instType)
 	if err != nil {
 		return err
 	}
@@ -133,7 +134,10 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 	}
 
 	// 构建所有对象行
-	allRows := c.buildSymbolRecordRows(symbols)
+	allRows, err := buildSymbolRecordRows(symbols, binding)
+	if err != nil {
+		return err
+	}
 	totalRows := len(allRows)
 	if totalRows == 0 {
 		log.InfoContextf(ctx, "[SymbolCollector] 无标的需要上报")
@@ -141,18 +145,20 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 	}
 
 	// 分批（一个请求最多25行，分N次请求）
-	var batches [][]SymbolRecordRow
+	var rowBatches [][]storage.RecordRow
+	var symbolBatches [][]*exchange.SymbolInfo
 	for i := 0; i < totalRows; i += batchSize {
 		end := i + batchSize
 		if end > totalRows {
 			end = totalRows
 		}
-		batches = append(batches, allRows[i:end])
+		rowBatches = append(rowBatches, allRows[i:end])
+		symbolBatches = append(symbolBatches, symbols[i:end])
 	}
 
-	totalBatches := len(batches)
+	totalBatches := len(rowBatches)
 	log.InfoContextf(ctx, "[SymbolCollector] 开始上报标的, 总数=%d, 批次数=%d, datasetID=%s",
-		totalRows, totalBatches, datasetID)
+		totalRows, totalBatches, binding.RecordDatasetID)
 
 	// 结果收集
 	var mu sync.Mutex
@@ -170,9 +176,10 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 		var handlers []func() error
 		for j := i; j < end; j++ {
 			idx := j
-			rows := batches[j]
+			rows := rowBatches[j]
+			batchSymbols := symbolBatches[j]
 			handlers = append(handlers, func() error {
-				err := c.sendWithRetry(ctx, storageURL, datasetID, rows, idx, totalBatches)
+				err := c.sendSymbolBatchWithRetry(ctx, storageURL, binding, batchSymbols, rows, idx, totalBatches)
 				mu.Lock()
 				defer mu.Unlock()
 				if err != nil {
@@ -197,26 +204,24 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 		return fmt.Errorf("部分批次上报失败: %w", firstErr)
 	}
 
-	log.InfoContextf(ctx, "[SymbolCollector] 上报标的成功, count=%d, datasetID=%s", totalRows, datasetID)
+	log.InfoContextf(ctx, "[SymbolCollector] 上报标的成功, count=%d, datasetID=%s", totalRows, binding.RecordDatasetID)
 	return nil
 }
 
-func symbolDataSetID(instType string) (string, error) {
-	switch instType {
-	case InstTypeSWAP:
-		return "binance_swap_symbols", nil
-	case InstTypeSPOT:
-		return "binance_spot_symbols", nil
-	default:
-		return "", fmt.Errorf("不支持的产品类型: %s", instType)
-	}
-}
-
 // sendWithRetry 发送单个批次请求（带重试）
-func (c *SymbolCollector) sendWithRetry(ctx context.Context, storageURL string, datasetID string, rows []SymbolRecordRow, batchIdx, totalBatches int) error {
+func (c *SymbolCollector) sendSymbolBatchWithRetry(ctx context.Context, storageURL string, binding StorageBinding, symbols []*exchange.SymbolInfo, rows []storage.RecordRow, batchIdx, totalBatches int) error {
 	return retry.Do(
 		func() error {
-			return c.send(ctx, storageURL, datasetID, rows)
+			client := storage.NewClient(storageURL, storageAuthInfo(binding))
+			if err := client.WriteRecordRows(ctx, rows); err != nil {
+				return err
+			}
+			for _, symbol := range symbols {
+				if err := client.RegisterDataSubject(ctx, buildSymbolRegisterRequest(symbol, binding)); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 		retry.Attempts(3),
 		retry.Delay(500*time.Millisecond),
@@ -229,107 +234,120 @@ func (c *SymbolCollector) sendWithRetry(ctx context.Context, storageURL string, 
 	)
 }
 
-// send 发送单个批次请求
-func (c *SymbolCollector) send(ctx context.Context, storageURL string, datasetID string, rows []SymbolRecordRow) error {
-	request := &WriteRowsRequest{
-		AuthInfo: AuthInfo{
-			AppID:  "data-collector",
-			AppKey: "symbol-sync",
+func buildSymbolRegisterRequest(symbol *exchange.SymbolInfo, binding StorageBinding) storage.RegisterDataSubjectRequest {
+	subjectID := normalizedSubjectID(symbol)
+	externalSymbol := binanceapi.FormatSymbol(subjectID)
+	bindings := make([]storage.DatasetSubject, 0, len(binding.BindDatasetIDs))
+	for _, datasetID := range binding.BindDatasetIDs {
+		bindings = append(bindings, storage.DatasetSubject{
+			SpaceID:     binding.SpaceID,
+			DatasetID:   datasetID,
+			SubjectID:   subjectID,
+			SubjectRole: "normal",
+			Status:      "active",
+		})
+	}
+	return storage.RegisterDataSubjectRequest{
+		SpaceID:        binding.SpaceID,
+		DataSourceID:   binding.DataSourceID,
+		ExternalSymbol: externalSymbol,
+		Subject: storage.Subject{
+			SpaceID:     binding.SpaceID,
+			SubjectID:   subjectID,
+			SubjectType: binding.SubjectType,
+			Name:        subjectID,
+			Market:      binding.SubjectMarket,
+			Currency:    symbol.QuoteAsset,
+			Status:      symbol.Status,
+			Attributes: map[string]string{
+				"base_asset":      symbol.BaseAsset,
+				"quote_asset":     symbol.QuoteAsset,
+				"external_symbol": externalSymbol,
+			},
 		},
-		WriteMode: "WRITE_MODE_UPSERT",
-		Rows:      buildSymbolDataRows(datasetID, rows),
+		DatasetBindings: bindings,
 	}
-
-	data, err := json.Marshal(request)
-	if err != nil {
-		return fmt.Errorf("序列化失败: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/trpc.storage.data.DataService/WriteRows", storageURL)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
-	if err != nil {
-		return fmt.Errorf("创建请求失败: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("发送请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var respBody bytes.Buffer
-	_, _ = respBody.ReadFrom(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, respBody.String())
-	}
-
-	var writeResp WriteRowsResponse
-	if err := json.Unmarshal(respBody.Bytes(), &writeResp); err != nil {
-		return fmt.Errorf("解析响应失败: %w", err)
-	}
-
-	if writeResp.RetInfo.Code != 0 {
-		return fmt.Errorf("错误码 %d: %s", writeResp.RetInfo.Code, writeResp.RetInfo.Msg)
-	}
-
-	return nil
 }
 
 // buildSymbolRecordRows 构建标的结构化记录行列表。
-func (c *SymbolCollector) buildSymbolRecordRows(symbols []*exchange.SymbolInfo) []SymbolRecordRow {
-	rows := make([]SymbolRecordRow, 0, len(symbols))
+func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, binding StorageBinding) ([]storage.RecordRow, error) {
+	rows := make([]storage.RecordRow, 0, len(symbols))
 	for _, s := range symbols {
-		// 标的 ID 格式：BaseAsset-QuoteAsset (如 BTC-USDT)
-		instrumentID := fmt.Sprintf("%s-%s", s.BaseAsset, s.QuoteAsset)
+		subjectID := normalizedSubjectID(s)
+		columns := []storage.ColumnValue{
+			storage.StringField("symbol", subjectID),
+			storage.StringField("external_symbol", binanceapi.FormatSymbol(subjectID)),
+			storage.StringField("base_asset", s.BaseAsset),
+			storage.StringField("quote_asset", s.QuoteAsset),
+			storage.StringField("status", s.Status),
+		}
+		var err error
+		columns, err = appendOptionalDoubleField(columns, "min_qty", s.MinQty)
+		if err != nil {
+			return nil, fmt.Errorf("%s min_qty: %w", subjectID, err)
+		}
+		columns, err = appendOptionalDoubleField(columns, "max_qty", s.MaxQty)
+		if err != nil {
+			return nil, fmt.Errorf("%s max_qty: %w", subjectID, err)
+		}
+		columns, err = appendOptionalDoubleField(columns, "tick_size", s.TickSize)
+		if err != nil {
+			return nil, fmt.Errorf("%s tick_size: %w", subjectID, err)
+		}
+		columns, err = appendOptionalDoubleField(columns, "lot_size", s.LotSize)
+		if err != nil {
+			return nil, fmt.Errorf("%s lot_size: %w", subjectID, err)
+		}
 
-		row := SymbolRecordRow{
-			RecordID: instrumentID,
-			Columns: []ColumnValue{
-				stringField("symbol", instrumentID),
-				stringField("base_asset", s.BaseAsset),
-				stringField("quote_asset", s.QuoteAsset),
-				stringField("external_symbol", s.Symbol),
-				stringField("status", s.Status),
-				stringField("unshelve_time", "2099-01-01 00:00:00"),
+		row := storage.RecordRow{
+			Key: storage.RecordKey{
+				SpaceID:   binding.SpaceID,
+				DatasetID: binding.RecordDatasetID,
+				RecordID:  subjectID,
+				Version:   symbolRecordVersionLatest,
 			},
+			Columns: columns,
 		}
 		rows = append(rows, row)
 	}
-	return rows
+	return rows, nil
 }
 
-func buildSymbolDataRows(datasetID string, rows []SymbolRecordRow) []DataRow {
-	out := make([]DataRow, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, DataRow{
-			Slice: DataSlice{
-				DatasetID: datasetID,
-				SubjectID: row.RecordID,
-			},
-			RowID:   row.RecordID,
-			Columns: row.Columns,
-		})
+func normalizedSubjectID(symbol *exchange.SymbolInfo) string {
+	if symbol.Symbol != "" && containsHyphen(symbol.Symbol) {
+		return symbol.Symbol
 	}
-	return out
+	if symbol.BaseAsset != "" && symbol.QuoteAsset != "" {
+		return fmt.Sprintf("%s-%s", symbol.BaseAsset, symbol.QuoteAsset)
+	}
+	return binanceapi.ParseSymbol(symbol.Symbol, symbol.QuoteAsset)
 }
 
-// AuthInfo 鉴权信息
-type AuthInfo struct {
-	AppID  string `json:"app_id"`
-	AppKey string `json:"app_key"`
+func containsHyphen(value string) bool {
+	for _, r := range value {
+		if r == '-' {
+			return true
+		}
+	}
+	return false
 }
 
-// SymbolRecordRow 标的结构化记录行。
-type SymbolRecordRow struct {
-	RecordID string        `json:"record_id"`
-	Columns  []ColumnValue `json:"columns"`
+func appendOptionalDoubleField(columns []storage.ColumnValue, name, raw string) ([]storage.ColumnValue, error) {
+	if raw == "" {
+		return columns, nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return columns, err
+	}
+	return append(columns, storage.DoubleField(name, value)), nil
 }
 
-// RetInfo 返回信息
-type RetInfo struct {
-	Code int    `json:"code"`
-	Msg  string `json:"msg"`
+func storageAuthInfo(binding StorageBinding) storage.AuthInfo {
+	return storage.AuthInfo{
+		AppID:     binding.AuthInfo.AppID,
+		AppKey:    binding.AuthInfo.AppKey,
+		Operator:  binding.AuthInfo.Operator,
+		RequestID: binding.AuthInfo.RequestID,
+	}
 }

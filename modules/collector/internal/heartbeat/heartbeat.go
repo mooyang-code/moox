@@ -1,7 +1,6 @@
 package heartbeat
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/avast/retry-go"
 	"github.com/mooyang-code/moox/modules/collector/internal/collector"
+	"github.com/mooyang-code/moox/modules/collector/internal/controlapi"
 	"github.com/mooyang-code/moox/modules/collector/internal/dnsproxy"
 	"github.com/mooyang-code/moox/modules/collector/pkg/config"
 	"github.com/mooyang-code/moox/modules/collector/pkg/model"
@@ -201,7 +201,7 @@ func sendToServer(ctx context.Context, payload *model.HeartbeatPayload, serverIP
 
 // executeReport 准备并发送心跳请求
 func executeReport(ctx context.Context, payload *model.HeartbeatPayload, serverIP string, serverPort int) (string, error) {
-	url := fmt.Sprintf("http://%s:%d/gateway/cloudnode/ReportHeartbeatInner", serverIP, serverPort)
+	url := controlapi.URL(serverIP, serverPort, "cloudnode", "ReportHeartbeatInner")
 
 	// 构建请求体
 	apiPayload := map[string]interface{}{
@@ -245,11 +245,10 @@ func executeReport(ctx context.Context, payload *model.HeartbeatPayload, serverI
 // sendSingleHeartbeat 发送单次心跳请求
 func sendSingleHeartbeat(ctx context.Context, url string, data []byte, httpClient *http.Client, packageVersion *string) error {
 	// 创建HTTP请求
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
+	req, err := controlapi.NewSignedRequestWithContext(ctx, "POST", url, data, controlapi.DefaultAuthConfig())
 	if err != nil {
 		return fmt.Errorf("failed to create heartbeat request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
 
 	// 发送请求并检查错误
 	resp, err := httpClient.Do(req)
@@ -605,4 +604,3 @@ func buildLocalDNSRecords() []*model.LocalDNSReportItem {
 
 	return reportItems
 }
-

@@ -3,7 +3,9 @@ package cloudnode
 import (
 	"context"
 	"fmt"
+	"strconv"
 
+	apperrors "github.com/mooyang-code/moox/modules/control/internal/errors"
 	"github.com/mooyang-code/moox/modules/control/internal/service/cloudnode/provider"
 )
 
@@ -21,6 +23,23 @@ func (s *ServiceImpl) UpdateAccount(ctx context.Context, account *CloudAccountDT
 
 // DeleteAccount 删除云账户
 func (s *ServiceImpl) DeleteAccount(ctx context.Context, accountID string) error {
+	nodeRefs, err := s.nodeDAO.CountByCloudAccountID(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("检查云账户节点引用失败: %w", err)
+	}
+	packageRefs, err := s.packageDAO.CountByCloudAccountID(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("检查云账户代码包引用失败: %w", err)
+	}
+	if nodeRefs > 0 || packageRefs > 0 {
+		return apperrors.Conflict(
+			fmt.Sprintf("云账户 %s 正在被 %d 个节点、%d 个代码包引用，请先解绑或迁移后再删除", accountID, nodeRefs, packageRefs),
+			nil,
+		).
+			WithDetail("account_id", accountID).
+			WithDetail("node_refs", strconv.FormatInt(nodeRefs, 10)).
+			WithDetail("package_refs", strconv.FormatInt(packageRefs, 10))
+	}
 	return s.accountDAO.DeleteCloudAccount(ctx, accountID)
 }
 

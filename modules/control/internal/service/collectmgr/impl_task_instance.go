@@ -181,7 +181,6 @@ func (s *TaskInstanceServiceImpl) CompleteInstance(ctx context.Context, instance
 }
 
 // ReportTaskStatus 上报任务状态（客户端上报用）
-// 新增 nodeID 参数，只更新内存仓库，DB 通过 SnapshotWorker 异步刷入
 func (s *TaskInstanceServiceImpl) ReportTaskStatus(ctx context.Context, instanceID string, nodeID string, status int, result string) error {
 	if instanceID == "" {
 		return fmt.Errorf("instance ID is required")
@@ -190,9 +189,14 @@ func (s *TaskInstanceServiceImpl) ReportTaskStatus(ctx context.Context, instance
 		return fmt.Errorf("node ID is required")
 	}
 
-	// 更新内存仓库（内存是单一事实来源）
 	now := time.Now()
-	s.memStore.UpdateStatusWithNode(instanceID, nodeID, status, &now, result)
+	if err := s.instanceDAO.ReportInstanceStatus(ctx, instanceID, nodeID, status, result); err != nil {
+		return err
+	}
+	if s.memStore != nil {
+		s.memStore.UpdateStatusWithNode(instanceID, nodeID, status, &now, result)
+	}
+	s.warnIfInvalidateCacheFailed(ctx, "ReportTaskStatus", s.InvalidateTaskInstanceCache(ctx))
 	log.DebugContextf(ctx, "[TaskInstance] Status updated: taskID=%s, nodeID=%s, status=%d", instanceID, nodeID, status)
 
 	// 如果任务失败，触发任务转移逻辑 （避免持续失败，持续转移，滚雪球，这里不进行任务转移了。 下个执行周期会重新分配任务）

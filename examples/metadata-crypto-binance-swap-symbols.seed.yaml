@@ -1,0 +1,192 @@
+# MooX storage metadata example for Binance USDT-M swap symbol records.
+# Import after platform-local.seed.yaml and metadata-crypto.seed.yaml:
+#   modules/cli/cmd/moox-cli metadata import \
+#     --file examples/metadata-crypto-binance-swap-symbols.seed.yaml \
+#     --metadata-url http://127.0.0.1:19101 \
+#     --if-not-exists
+
+datasets:
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    data_source_id: binance
+    name: 币安合约标的
+    description: Binance USDT-M swap symbol metadata records
+    data_kind: record
+    freqs: []
+    status: active
+
+dataset_subjects:
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    subject_id: BTC-USDT
+    subject_role: record
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    subject_id: ETH-USDT
+    subject_role: record
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    subject_id: SOL-USDT
+    subject_role: record
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    subject_id: BNB-USDT
+    subject_role: record
+    status: active
+
+fields:
+  - space_id: crypto
+    field_id: external_symbol
+    name: 外部代码
+    value_type: string
+    write_example: BTCUSDT
+    status: active
+  - space_id: crypto
+    field_id: base_asset
+    name: 基础资产
+    value_type: string
+    write_example: BTC
+    status: active
+  - space_id: crypto
+    field_id: quote_asset
+    name: 计价资产
+    value_type: string
+    write_example: USDT
+    status: active
+  - space_id: crypto
+    field_id: min_qty
+    name: 最小数量
+    value_type: double
+    write_example: "0.001"
+    status: active
+  - space_id: crypto
+    field_id: max_qty
+    name: 最大数量
+    value_type: double
+    write_example: "100000"
+    status: active
+  - space_id: crypto
+    field_id: tick_size
+    name: 价格步长
+    value_type: double
+    write_example: "0.01"
+    status: active
+  - space_id: crypto
+    field_id: lot_size
+    name: 数量步长
+    value_type: double
+    write_example: "0.001"
+    status: active
+  - space_id: crypto
+    field_id: filters_json
+    name: 过滤规则
+    value_type: json
+    write_example: '{"PRICE_FILTER":{"tickSize":"0.01"}}'
+    status: active
+
+dataset_columns:
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: symbol
+    attributes:
+      display_name: 交易标的
+    origin_type: field
+    origin_id: symbol
+    value_type: string
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: external_symbol
+    attributes:
+      display_name: 外部代码
+    origin_type: field
+    origin_id: external_symbol
+    value_type: string
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: base_asset
+    attributes:
+      display_name: 基础资产
+    origin_type: field
+    origin_id: base_asset
+    value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: quote_asset
+    attributes:
+      display_name: 计价资产
+    origin_type: field
+    origin_id: quote_asset
+    value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: status
+    attributes:
+      display_name: 交易状态
+    origin_type: field
+    origin_id: status
+    value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: min_qty
+    attributes:
+      display_name: 最小数量
+    origin_type: field
+    origin_id: min_qty
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: max_qty
+    attributes:
+      display_name: 最大数量
+    origin_type: field
+    origin_id: max_qty
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: tick_size
+    attributes:
+      display_name: 价格步长
+    origin_type: field
+    origin_id: tick_size
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: lot_size
+    attributes:
+      display_name: 数量步长
+    origin_type: field
+    origin_id: lot_size
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: filters_json
+    attributes:
+      display_name: 过滤规则
+    origin_type: field
+    origin_id: filters_json
+    value_type: json
+    status: active
+
+primary_store_routes:
+  - space_id: crypto
+    route_id: route-binance-swap-symbols
+    dataset_id: binance_swap_symbols
+    subject_pattern: "*"
+    hash_rule: subject_id
+    node_id: local
+    priority: 100
+    status: active

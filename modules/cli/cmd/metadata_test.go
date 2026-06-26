@@ -3,6 +3,8 @@ package cmd
 import (
 	"path/filepath"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
@@ -101,4 +103,47 @@ func TestMetadataNotFoundCoversFactors(t *testing.T) {
 	if !metadataNotFound(&pb.RetInfo{Code: pb.ErrorCode_FACTOR_NOT_FOUND, Msg: "factor not found"}) {
 		t.Fatal("FACTOR_NOT_FOUND should be treated as a missing resource")
 	}
+}
+
+func TestMetadataSeedsUseChineseDisplayNames(t *testing.T) {
+	paths := []string{
+		filepath.Join("..", "..", "storage", "config", "metadata.seed.yaml"),
+		filepath.Join("..", "..", "..", "examples", "metadata-crypto.seed.yaml"),
+		filepath.Join("..", "..", "..", "examples", "metadata-crypto-binance-swap-kline.seed.yaml"),
+		filepath.Join("..", "..", "..", "examples", "metadata-cn-stock.seed.yaml"),
+	}
+	for _, path := range paths {
+		seed, err := loadMetadataSeed(path)
+		if err != nil {
+			t.Fatalf("loadMetadataSeed(%s) returned error: %v", path, err)
+		}
+		for _, item := range seed.Datasets {
+			assertChineseDisplayName(t, path, "dataset "+item.DatasetID, item.Name)
+		}
+		for _, item := range seed.Views {
+			assertChineseDisplayName(t, path, "view "+item.ViewID, item.Name)
+		}
+		for _, item := range seed.DatasetColumns {
+			assertChineseDisplayName(t, path, "dataset column "+item.DatasetID+"."+item.ColumnName, item.Attributes["display_name"])
+		}
+		for _, item := range seed.ViewColumns {
+			assertChineseDisplayName(t, path, "view column "+item.ViewID+"."+item.ColumnName, item.Attributes["display_name"])
+		}
+	}
+}
+
+func assertChineseDisplayName(t *testing.T, path string, field string, value string) {
+	t.Helper()
+	if value == "" {
+		t.Fatalf("%s %s missing display name", path, field)
+	}
+	if utf8.RuneCountInString(value) > 10 {
+		t.Fatalf("%s %s display name %q exceeds 10 chars", path, field, value)
+	}
+	for _, r := range value {
+		if unicode.Is(unicode.Han, r) {
+			return
+		}
+	}
+	t.Fatalf("%s %s display name %q must contain Chinese", path, field, value)
 }

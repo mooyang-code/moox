@@ -107,11 +107,13 @@ storage:
   primary:
     service_name: ""        # 留空=同进程内嵌主存；填服务名=走远程 PrimaryStore（分布式）
   eventbus:
-    type: nats              # 默认 nats；memory 只用于单进程开发/测试，仍是异步总线
+    type: nats              # 默认 nats；memory 只用于极简单进程测试，仍是异步总线
     nats_url: nats://127.0.0.1:4222
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
     consumer_name: storage_deriver
+    embedded:
+      enabled: true         # 本地默认内嵌 JetStream，无需单独启动 nats-server
   deriver:
     access_service_name: trpc.storage.access.AccessService  # 留空=同进程本地 Access reader
     batch_size: 500
@@ -131,7 +133,7 @@ storage:
 
 默认运行角色是 `access + deriver`，不包含显式 `primary`。当 `access` 的 `primary.service_name` 为空时，进程会同时暴露本地 `PrimaryStoreService`，保持单进程/本地主存部署可用；当 `primary.service_name` 非空时，Access 走远程 PrimaryStore，除非显式加入 `primary` 角色。
 
-默认事件总线是 NATS。`memory` 只适合单进程开发和测试；它仍然异步投递事件，不提供写后立即可查派生结果的契约。NATS 行变更 subject 使用 `eventbus.subject_prefix` 拼接：
+默认事件总线是 NATS。仓库自带 `config/storage.yaml` 会在进程内启动一个内嵌 JetStream，因此本地运行不需要额外安装或启动 `nats-server`；分布式部署时可以关闭 `eventbus.embedded.enabled`，让各节点连接同一个独立 NATS。`memory` 只适合极简单进程测试；它仍然异步投递事件，不提供写后立即可查派生结果的契约。NATS 行变更 subject 使用 `eventbus.subject_prefix` 拼接：
 
 - `${prefix}.time_series.rows_changed.v1`
 - `${prefix}.record.rows_changed.v1`
@@ -152,7 +154,7 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 
 | 计时器服务 | 作用 | 默认 |
 | --- | --- | --- |
-| `trpc.storage.view.timer` | 物化视图构建 | 开（每 30s） |
+| `trpc.storage.view.timer` | 版本化 View 构建：TimeSeries 生成 DuckDB 结果表，Record 生成 Bleve 索引 | 开（每 30s） |
 | `trpc.storage.view.cleanup.timer` | 清理旧物化结果表 | 开（每小时） |
 | `trpc.storage.view.retry_failed.timer` | 重试失败视图 | 关 |
 | `trpc.storage.archive.timer` | Parquet 冷归档 | 关 |
@@ -351,9 +353,9 @@ metadata seed 导入完成 (config/metadata.seed.yaml): spaces=1 data_sources=1 
 
 ### 单进程开发/测试部署
 
-单进程开发/测试模式下，显式启用 `access + primary + deriver`，`primary.service_name` 留空，`eventbus.type` 设为 `memory`，`deriver.access_service_name` 留空。这样所有服务、派生消费者和计时器都跑在一个进程里，且不需要本地 NATS。
+单进程开发/测试模式下，使用仓库自带的 `config/storage.yaml` 即可：它启用 `access + deriver`，`primary.service_name` 留空时自动暴露同进程 `PrimaryStoreService`，并通过 `eventbus.embedded.enabled: true` 内嵌 JetStream，不需要单独启动 `nats-server`。
 
-仓库自带的 `config/storage.yaml` 使用 NATS，适合默认/分布式运行；如果本机没有 NATS，请新建一份本地配置，例如：
+如果只跑极简内存事件总线测试，可新建一份本地配置：
 
 ```bash
 cat > config/storage.local.yaml <<'YAML'
@@ -397,7 +399,7 @@ YAML
 
 把在线主存（Pebble 分片）与 Access/Query/物化等角色拆到不同机器。两点前提：
 
-1. **事件总线必须用 NATS**（`eventbus.type: nats`，配 `nats_url`），否则行变更事件无法跨进程传播到派生存储（全文索引、视图）。
+1. **事件总线必须用 NATS 或等价跨进程传输**（`eventbus.type: nats`，配 `nats_url`），否则行变更事件无法跨进程传播到派生存储（全文索引、视图）。可选择一台节点启用 `eventbus.embedded.enabled: true` 作为内嵌 broker，也可统一连接独立部署的 NATS。
 2. **主存走远程**：Access 节点的 `storage.primary.service_name` 必须非空，并在元数据里把 PrimaryStoreNode 的 `endpoint` 指向真实主存地址。
 
 #### 角色拆分示例（2 层）

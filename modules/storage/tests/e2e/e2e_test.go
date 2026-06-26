@@ -134,25 +134,13 @@ func testMetadataCRUD(ctx context.Context, t *testing.T) {
 		return rsp.GetRetInfo()
 	})
 
-	// Subject + Symbol
-	mustSuccess(t, "UpsertSubject", func() *pb.RetInfo {
-		rsp, err := meta.UpsertSubject(ctx, &pb.UpsertSubjectReq{Subject: &pb.Subject{SpaceId: e2eSpaceID, SubjectId: subjectID, SubjectType: "crypto_pair", Name: subjectID, Market: "crypto", Status: "active"}})
-		require.NoError(t, err)
-		return rsp.GetRetInfo()
-	})
-	mustSuccess(t, "UpsertSubjectSymbol", func() *pb.RetInfo {
-		rsp, err := meta.UpsertSubjectSymbol(ctx, &pb.UpsertSubjectSymbolReq{SubjectSymbol: &pb.SubjectSymbol{SpaceId: e2eSpaceID, SubjectId: subjectID, DataSourceId: dataSourceID, ExternalSymbol: "ARUSDT", Status: "active"}})
-		require.NoError(t, err)
-		return rsp.GetRetInfo()
-	})
-
-	// Dataset + bind subject
+	// Dataset + subject registration.
 	mustSuccess(t, "CreateDataset", func() *pb.RetInfo {
 		rsp, err := meta.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{
 			SpaceId:      e2eSpaceID,
 			DatasetId:    datasetID,
 			DataSourceId: dataSourceID,
-			Name:         "Binance 现货 K 线 1h",
+			Name:         "现货K线",
 			DataKind:     pb.DataKind_DATA_KIND_TIME_SERIES,
 			Freqs:        []string{freq},
 			Status:       "active",
@@ -160,8 +148,16 @@ func testMetadataCRUD(ctx context.Context, t *testing.T) {
 		require.NoError(t, err)
 		return rsp.GetRetInfo()
 	})
-	mustSuccess(t, "BindDatasetSubject", func() *pb.RetInfo {
-		rsp, err := meta.BindDatasetSubject(ctx, &pb.BindDatasetSubjectReq{DatasetSubject: &pb.DatasetSubject{SpaceId: e2eSpaceID, DatasetId: datasetID, SubjectId: subjectID, Status: "active"}})
+	mustSuccess(t, "RegisterDataSubject", func() *pb.RetInfo {
+		rsp, err := meta.RegisterDataSubject(ctx, &pb.RegisterDataSubjectReq{
+			SpaceId:        e2eSpaceID,
+			DataSourceId:   dataSourceID,
+			ExternalSymbol: "ARUSDT",
+			Subject:        &pb.Subject{SubjectId: subjectID, SubjectType: "crypto_pair", Name: subjectID, Market: "crypto", Status: "active"},
+			DatasetBindings: []*pb.DatasetSubject{
+				{DatasetId: datasetID, SubjectRole: "normal", Status: "active"},
+			},
+		})
 		require.NoError(t, err)
 		return rsp.GetRetInfo()
 	})
@@ -205,6 +201,7 @@ func testSeedRouteAndColumns(ctx context.Context, t *testing.T) {
 				OriginId:   c.name,
 				ValueType:  c.valueType,
 				Status:     "active",
+				Attributes: e2eDisplayNameAttrs(c.name),
 			}})
 			require.NoError(t, err)
 			return rsp.GetRetInfo()
@@ -364,7 +361,7 @@ func testQueryTimeSeriesRows(ctx context.Context, t *testing.T) {
 		rsp, err := meta.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
 			SpaceId:          e2eSpaceID,
 			ViewId:           viewID,
-			Name:             "AR-USDT 收盘价视图",
+			Name:             "收盘视图",
 			PrimaryDatasetId: datasetID,
 			DatasetIds:       []string{datasetID},
 			QueryWindow:      "4000d",
@@ -381,6 +378,7 @@ func testQueryTimeSeriesRows(ctx context.Context, t *testing.T) {
 			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 			OriginId:   datasetID + ".close",
 			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			Attributes: e2eDisplayNameAttrs("close"),
 		}})
 		require.NoError(t, err)
 		return rsp.GetRetInfo()
@@ -422,6 +420,7 @@ func testViewVersionRebuildAfterColumnAdd(ctx context.Context, t *testing.T) {
 			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 			OriginId:   datasetID + ".volume",
 			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			Attributes: e2eDisplayNameAttrs("volume"),
 		}})
 		require.NoError(t, err)
 		return rsp.GetRetInfo()
@@ -677,7 +676,7 @@ func testRecordRead(ctx context.Context, t *testing.T) {
 	mustSuccess(t, "CreateDataset:symbols", func() *pb.RetInfo {
 		rsp, err := meta.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{
 			SpaceId: e2eSpaceID, DatasetId: symbolsDatasetID, DataSourceId: dataSourceID,
-			Name: "Binance 交易对资料", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active",
+			Name: "交易对资料", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active",
 		}})
 		require.NoError(t, err)
 		return rsp.GetRetInfo()
@@ -686,7 +685,7 @@ func testRecordRead(ctx context.Context, t *testing.T) {
 		rsp, err := meta.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
 			SpaceId:          e2eSpaceID,
 			ViewId:           symbolsViewID,
-			Name:             "Binance 交易对资料视图",
+			Name:             "资料视图",
 			PrimaryDatasetId: symbolsDatasetID,
 			DatasetIds:       []string{symbolsDatasetID},
 			Engine:           "bleve",
@@ -706,6 +705,7 @@ func testRecordRead(ctx context.Context, t *testing.T) {
 				SpaceId: e2eSpaceID, DatasetId: symbolsDatasetID, ColumnName: c.name,
 				OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: c.name,
 				ValueType: c.valueType, Status: "active",
+				Attributes: e2eDisplayNameAttrs(c.name),
 			}})
 			require.NoError(t, err)
 			return rsp.GetRetInfo()
@@ -718,6 +718,7 @@ func testRecordRead(ctx context.Context, t *testing.T) {
 				OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 				OriginId:   symbolsDatasetID + "." + c.name,
 				ValueType:  c.valueType,
+				Attributes: e2eDisplayNameAttrs(c.name),
 			}})
 			require.NoError(t, err)
 			return rsp.GetRetInfo()
@@ -900,6 +901,39 @@ func klineFields() []fieldDef {
 		out = append(out, fieldDef{id: c.name, name: c.name, valueType: c.valueType})
 	}
 	return out
+}
+
+func e2eDisplayNameAttrs(name string) map[string]string {
+	return map[string]string{"display_name": e2eDisplayName(name)}
+}
+
+func e2eDisplayName(name string) string {
+	switch name {
+	case "open":
+		return "开盘价"
+	case "high":
+		return "最高价"
+	case "low":
+		return "最低价"
+	case "close":
+		return "收盘价"
+	case "volume":
+		return "成交量"
+	case "quote_volume":
+		return "成交额"
+	case "trade_num":
+		return "成交笔数"
+	case "symbol":
+		return "交易标的"
+	case "status":
+		return "状态"
+	case "base_asset":
+		return "基础资产"
+	case "note":
+		return "备注"
+	default:
+		return "字段"
+	}
 }
 
 // ---------- 通用辅助 ----------

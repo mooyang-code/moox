@@ -1,6 +1,26 @@
 # moox storage field seed sample
 # 字段是 Space 内可复用的业务列定义；Dataset 通过 dataset_columns 选择字段并确定列名、必填、索引等写入约束。
 
+column_display_names:
+  open: "开盘价"
+  high: "最高价"
+  low: "最低价"
+  close: "收盘价"
+  volume: "成交量"
+  quote_volume: "成交额"
+  trade_num: "成交笔数"
+  taker_buy_base_asset_volume: "主动买量"
+  taker_buy_quote_asset_volume: "主动买额"
+  symbol: "交易标的"
+  status: "交易状态"
+  unshelve_time: "下架时间"
+  fundingRate: "资金费率"
+  funding_rate: "资金费率"
+  Spread: "价差"
+  spread: "价差"
+  avg_price_1m: "均价1分"
+  avg_price_5m: "均价5分"
+
 fields:
   - space_id: "crypto"
     field_id: "symbol"

@@ -17,6 +17,7 @@ const {
   fieldValueTypeOptions,
   optionLabel,
   resolveViewRebuildKind,
+  validateChineseDisplayName,
   validateLowerSnakeId,
   viewColumnOriginOptions,
 } = await import(moduleUrl);
@@ -53,5 +54,9 @@ assert.equal(validateLowerSnakeId('binance_spot_symbols', 20), '');
 assert.match(validateLowerSnakeId('BadDataset', 20), /小写字母/);
 assert.match(validateLowerSnakeId('bad-dataset', 20), /小写字母/);
 assert.match(validateLowerSnakeId('dataset_id_that_is_too_long', 20), /不能超过 20/);
+assert.equal(validateChineseDisplayName('交易对'), '');
+assert.equal(validateChineseDisplayName('K线'), '');
+assert.match(validateChineseDisplayName('Symbol'), /中文/);
+assert.match(validateChineseDisplayName('这是一个超过十个字符的名称'), /不能超过 10/);
 
 console.log('metadata utils tests passed');

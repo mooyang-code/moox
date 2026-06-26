@@ -40,23 +40,33 @@ gateway:
   # 是否开启调试模式
   debug: true
 
+  # 后台服务对外接口签名鉴权配置
+  # 请求路径: /api/service/{service}/{method}
+  service_auth:
+    enabled: true
+    version: "moox-auth-v1"
+    access_key: "moox-service"
+    secret_key: "moox-service-secret-change-me"
+    max_expire_seconds: 1800
+    clock_skew_seconds: 300
+
   # 不需要鉴权的接口列表
   no_auth_methods:
-    - "/gateway/auth/Register"
-    - "/gateway/auth/GetLoginSalt"
-    - "/gateway/auth/Login"
-    - "/gateway/cloudnode/ReportHeartbeatInner"
-    - "/gateway/collectmgr/GetTaskInstanceListInner"
-    - "/gateway/collectmgr/GetTaskInstanceListCache"
-    - "/gateway/collectmgr/ReportTaskStatus"
-    - "/gateway/dnsproxy/GetDNSRecordList"
-    - "/gateway/dnsproxy/GetDNSRecordDetail"
-
+    - "/api/control/health"
+    - "/api/control/auth/Register"
+    - "/api/control/auth/GetLoginSalt"
+    - "/api/control/auth/Login"
   # 服务配置映射【仅trpc服务才配置】
   services:
     # 存储服务配置
     storage:
       path: "trpc.storage.data.DataService"
+    storage_metadata:
+      path: "trpc.storage.metadata.MetadataService"
+    storage_access:
+      path: "trpc.storage.access.AccessService"
+    storage_view:
+      path: "trpc.storage.view.ViewService"
 
     # 认证服务配置
     auth:
@@ -81,16 +91,16 @@ rate_limit:
 
   # 按接口配置限流
   method_limits:
-    "/gateway/auth/Login":
+    "/api/control/auth/Login":
       qps: 1
       burst: 2
-    "/gateway/auth/Register":
+    "/api/control/auth/Register":
       qps: 1
       burst: 1
-    "/gateway/auth/GetLoginSalt":
+    "/api/control/auth/GetLoginSalt":
       qps: 2
       burst: 5
-    "/gateway/auth/GetUserInfo":
+    "/api/control/auth/GetUserInfo":
       qps: 2
       burst: 5
 

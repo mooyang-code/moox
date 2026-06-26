@@ -28,23 +28,12 @@ export interface ViewFilterState {
   valueType?: FieldValueType;
 }
 
-const commonViewLabels: Record<string, string> = {
+const systemViewLabels: Record<string, string> = {
   subject_id: '数据ID',
   record_id: '记录ID',
   freq: '频率',
   data_time: '时间',
   version: '版本',
-  open: '开盘价',
-  high: '最高价',
-  low: '最低价',
-  close: '收盘价',
-  volume: '成交量',
-  quote_volume: '成交额',
-  trade_num: '成交笔数',
-  fundingRate: '资金费率',
-  ma20_close: '20周期收盘均线',
-  spread: '价差',
-  Spread: '价差',
 };
 
 export function viewDisplayName(view?: Pick<View, 'view_id' | 'name'> | null) {
@@ -83,11 +72,16 @@ export function buildViewColumnLabels(
     if (!column.column_name) continue;
     const fromDataset = datasetColumnByQualifiedName.get(column.origin_id);
     if (fromDataset) {
-      const label = datasetColumnLabels[fromDataset.column_name] || readableViewColumnLabel(column.column_name);
+      const label = displayName(column.attributes)
+        || datasetColumnLabels[qualifiedDatasetColumnName(fromDataset)]
+        || datasetColumnLabels[fromDataset.column_name]
+        || readableViewColumnLabel(column.column_name);
       labels[column.column_name] = showDatasetName ? appendDatasetName(label, fromDataset.dataset_id, datasets) : label;
       continue;
     }
-    labels[column.column_name] = commonViewLabels[column.origin_id] || readableViewColumnLabel(column.column_name);
+    labels[column.column_name] = displayName(column.attributes)
+      || systemViewLabels[column.origin_id]
+      || readableViewColumnLabel(column.column_name);
   }
   return labels;
 }
@@ -158,7 +152,7 @@ export function buildViewFilterExprs(filters: ViewFilterState[]): FilterExpr[] {
 }
 
 function readableViewColumnLabel(columnName: string) {
-  return commonViewLabels[columnName] || columnName;
+  return systemViewLabels[columnName] || columnName;
 }
 
 function viewDatasetCount(view?: Pick<View, 'primary_dataset_id' | 'dataset_ids'> | null) {
@@ -182,28 +176,48 @@ function buildDatasetColumnLabels(datasetColumns: DatasetColumn[], fields: Field
   const labels: Record<string, string> = {};
   for (const column of datasetColumns) {
     if (!column.column_name) continue;
+    const labelKey = qualifiedDatasetColumnName(column);
+    const columnDisplayName = displayName(column.attributes);
+    if (columnDisplayName) {
+      labels[labelKey] = columnDisplayName;
+      if (!column.dataset_id) labels[column.column_name] = columnDisplayName;
+      continue;
+    }
     if (isOriginType(column.origin_type, 'DATASET_COLUMN_ORIGIN_TYPE_FIELD', 1)) {
-      labels[column.column_name] = readableMetadataLabel(
+      const label = readableMetadataLabel(
         column.column_name,
         fieldByID.get(column.origin_id)?.name || fieldByID.get(column.column_name)?.name,
       );
+      labels[labelKey] = label;
+      if (!column.dataset_id) labels[column.column_name] = label;
       continue;
     }
     if (isOriginType(column.origin_type, 'DATASET_COLUMN_ORIGIN_TYPE_FACTOR', 2)) {
-      labels[column.column_name] = readableMetadataLabel(
+      const label = readableMetadataLabel(
         column.column_name,
         factorByID.get(column.origin_id)?.name || factorByID.get(column.column_name)?.name,
       );
+      labels[labelKey] = label;
+      if (!column.dataset_id) labels[column.column_name] = label;
       continue;
     }
-    labels[column.column_name] = commonViewLabels[column.origin_id] || readableViewColumnLabel(column.column_name);
+    const label = systemViewLabels[column.origin_id] || readableViewColumnLabel(column.column_name);
+    labels[labelKey] = label;
+    if (!column.dataset_id) labels[column.column_name] = label;
   }
   return labels;
 }
 
 function readableMetadataLabel(columnName: string, metadataName?: string) {
-  if (metadataName && containsCJK(metadataName)) return metadataName;
-  return commonViewLabels[columnName] || metadataName || columnName;
+  return metadataName || systemViewLabels[columnName] || columnName;
+}
+
+function qualifiedDatasetColumnName(column: Pick<DatasetColumn, 'dataset_id' | 'column_name'>) {
+  return column.dataset_id ? `${column.dataset_id}.${column.column_name}` : column.column_name;
+}
+
+function displayName(attributes?: Record<string, string>) {
+  return attributes?.display_name?.trim() || '';
 }
 
 function isOriginType(value: unknown, name: string, alias: number) {
@@ -212,10 +226,6 @@ function isOriginType(value: unknown, name: string, alias: number) {
 
 function isTimeSeriesDataKind(value: unknown) {
   return value === 'DATA_KIND_TIME_SERIES' || value === 2;
-}
-
-function containsCJK(value: string) {
-  return /[\u3400-\u9fff]/.test(value);
 }
 
 function safeArgName(value: string) {

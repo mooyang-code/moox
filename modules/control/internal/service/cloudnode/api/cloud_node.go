@@ -338,3 +338,30 @@ func (h *CloudNodeHandler) UpdateNode(c *gin.Context) {
 	}
 	common.SuccessResponse(c, "node updated successfully", []interface{}{})
 }
+
+// InvokeFunction 调用云节点对应的云函数
+func (h *CloudNodeHandler) InvokeFunction(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var req InvokeFunctionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.HandleAppError(c, errors.InvalidParam("request_body", err.Error()))
+		return
+	}
+	if req.NodeID == "" {
+		common.HandleAppError(c, errors.InvalidParam("node_id", "node_id is required"))
+		return
+	}
+	if req.EventData == nil {
+		common.HandleAppError(c, errors.InvalidParam("event_data", "event_data is required"))
+		return
+	}
+
+	resp, err := h.service.InvokeFunction(ctx, req.NodeID, req.EventData)
+	if err != nil {
+		common.HandleAppError(c, errors.Internal("调用云函数失败", err))
+		return
+	}
+
+	common.SuccessResponse(c, "调用成功", []interface{}{resp})
+}

@@ -18,6 +18,14 @@ import (
 // CloudFunctionHandler 云函数处理器
 type CloudFunctionHandler struct{}
 
+const keepaliveHeartbeatTimeout = 8 * time.Second
+const keepaliveTaskExecutionTimeout = 45 * time.Second
+
+var reportHeartbeatAfterProbe = heartbeat.ReportHeartbeat
+var executeDueTasksAfterHeartbeat = func(ctx context.Context) error {
+	return executor.ExecuteDueTasks(ctx)
+}
+
 // NewCloudFunctionHandler 创建云函数处理器
 func NewCloudFunctionHandler() *CloudFunctionHandler {
 	return &CloudFunctionHandler{}
@@ -51,7 +59,30 @@ func (h *CloudFunctionHandler) HandleRequest(ctx context.Context, event json.Raw
 	if cfEvent.RequestID == "" {
 		cfEvent.RequestID = funcCtx.RequestID
 	}
+	h.applyRuntimeConfig(ctx, cfEvent, funcCtx)
 	return h.processCloudFunctionEvent(ctx, cfEvent)
+}
+
+func (h *CloudFunctionHandler) applyRuntimeConfig(ctx context.Context, event model.CloudFunctionEvent, funcCtx *functioncontext.FunctionContext) {
+	if event.ServerIP != "" && event.ServerPort > 0 {
+		config.UpdateServerInfo(event.ServerIP, event.ServerPort)
+		log.DebugContextf(ctx, "[CloudFunction] runtime server updated: %s:%d", event.ServerIP, event.ServerPort)
+	}
+
+	nodeID := ""
+	if event.Data != nil {
+		if value, ok := event.Data["node_id"].(string); ok && value != "" {
+			nodeID = value
+		}
+	}
+	if nodeID == "" && funcCtx != nil && funcCtx.FunctionName != "" {
+		nodeID = funcCtx.FunctionName
+	}
+	if nodeID != "" {
+		_, version := config.GetNodeInfo()
+		config.UpdateNodeInfo(nodeID, version)
+		log.DebugContextf(ctx, "[CloudFunction] runtime node updated: nodeID=%s", nodeID)
+	}
 }
 
 // processCloudFunctionEvent 处理云函数事件
@@ -147,6 +178,20 @@ func (h *CloudFunctionHandler) handleKeepalive(ctx context.Context, event model.
 		// 探测处理失败不影响保活响应
 	} else {
 		log.InfoContextf(ctx, "[handleKeepalive] ProcessProbe 执行成功")
+		heartbeatCtx, cancel := context.WithTimeout(ctx, keepaliveHeartbeatTimeout)
+		defer cancel()
+		if err := reportHeartbeatAfterProbe(heartbeatCtx); err != nil {
+			log.WarnContextf(ctx, "[handleKeepalive] 心跳上报失败: %v", err)
+		} else {
+			log.InfoContextf(ctx, "[handleKeepalive] 心跳上报成功")
+			executeCtx, cancel := context.WithTimeout(ctx, keepaliveTaskExecutionTimeout)
+			defer cancel()
+			if err := executeDueTasksAfterHeartbeat(executeCtx); err != nil {
+				log.WarnContextf(ctx, "[handleKeepalive] 任务执行调度失败: %v", err)
+			} else {
+				log.InfoContextf(ctx, "[handleKeepalive] 任务执行调度完成")
+			}
+		}
 	}
 
 	// 构建保活响应

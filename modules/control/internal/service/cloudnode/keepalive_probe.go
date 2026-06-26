@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/control/internal/gateway"
 	"github.com/mooyang-code/moox/modules/control/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/modules/control/internal/service/cloudnode/provider"
+	"github.com/mooyang-code/moox/modules/control/internal/service/cloudnode/types"
 
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -30,7 +31,6 @@ const (
 var keepaliveProbeBatchSize = 20
 
 // RunKeepaliveProbe 运行保活探测任务
-// 仅用于保活，不参与在线判定
 func (s *ServiceImpl) RunKeepaliveProbe(ctx context.Context) error {
 	s.init()
 	if s.probeStore == nil {
@@ -77,6 +77,7 @@ func (s *ServiceImpl) RunKeepaliveProbe(ctx context.Context) error {
 				}
 				s.probeStore.UpdateProbe(node.NodeID, probeTime, ok)
 				if ok {
+					s.updateSCFEventHeartbeatFromKeepalive(node, probeTime)
 					atomic.AddInt64(&successCount, 1)
 				} else {
 					atomic.AddInt64(&failCount, 1)
@@ -121,19 +122,42 @@ func (s *ServiceImpl) invokeKeepalive(ctx context.Context, node *model.CloudNode
 	return true
 }
 
+func (s *ServiceImpl) updateSCFEventHeartbeatFromKeepalive(node *model.CloudNode, heartbeatTime time.Time) {
+	if s == nil || s.heartbeatStore == nil || node == nil || node.NodeID == "" {
+		return
+	}
+	if node.NodeType != model.NodeTypeSCFEvent {
+		return
+	}
+
+	s.heartbeatStore.UpdateHeartbeat(&types.ReportHeartbeatRequest{
+		NodeID:         node.NodeID,
+		NodeType:       node.NodeType,
+		RunningVersion: node.RunningVersion,
+		SourceService:  keepaliveSource,
+		Timestamp:      &heartbeatTime,
+		Metadata: map[string]interface{}{
+			"action":    keepaliveAction,
+			"source":    keepaliveSource,
+			"region":    node.Region,
+			"namespace": node.Namespace,
+		},
+	})
+}
+
 func buildKeepaliveEventData(serverIP string, serverPort int, nodeID string) map[string]interface{} {
 	timestamp := time.Now().Format(time.RFC3339)
 	requestID := fmt.Sprintf("keepalive_%d", time.Now().UnixNano())
 	internalIP := common.GetInternalIP()
 	xDataURL := config.GetXDataURL()
 	payload := map[string]interface{}{
-		"action":              keepaliveAction,
-		"timestamp":           timestamp,
-		"request_id":          requestID,
-		"source":              keepaliveSource,
-		"moox_server_url":     fmt.Sprintf("http://%s:%d", serverIP, serverPort),
-		"storage_server_url":  xDataURL,
-		"storage_server_rpc":  buildStorageRPCTarget(xDataURL, 18201),
+		"action":             keepaliveAction,
+		"timestamp":          timestamp,
+		"request_id":         requestID,
+		"source":             keepaliveSource,
+		"moox_server_url":    fmt.Sprintf("http://%s:%d", serverIP, serverPort),
+		"storage_server_url": xDataURL,
+		"storage_server_rpc": buildStorageRPCTarget(xDataURL, 18201),
 	}
 	data := map[string]interface{}{
 		"internal_ip": internalIP,

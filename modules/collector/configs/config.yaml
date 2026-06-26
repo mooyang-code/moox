@@ -4,7 +4,12 @@ system:
   version: "v0.0.3"
   environment: "Production"
   timezone: "UTC"
-  storage_url: "http://43.136.59.72:19104"
+  storage_url: "http://106.53.107.122:19104"
+  service_auth:
+    version: "moox-auth-v1"
+    access_key: "moox-service"
+    secret_key: "moox-service-secret-change-me"
+    expire_seconds: 1800
 
 # 事件总线配置
 event_bus:

@@ -136,8 +136,8 @@
               <a-table-column title="序号" :width="72" align="center" fixed="left">
                 <template #cell="{ rowIndex }">{{ (pagination.current - 1) * pagination.pageSize + rowIndex + 1 }}</template>
               </a-table-column>
-              <a-table-column title="记录ID" data-index="key" :width="200" fixed="left" />
-              <a-table-column title="版本" data-index="version" :width="230" />
+              <a-table-column title="记录ID" data-index="key" :width="180" fixed="left" />
+              <a-table-column title="版本" data-index="version" :width="160" />
               <a-table-column
                 v-for="column in tableColumnNames"
                 :key="column"
@@ -485,7 +485,16 @@ watch(selectedSpaceId, () => {
 
 <style scoped>
 .data-browse-page {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   padding: 20px;
+}
+
+.data-browse-page :deep(.arco-spin) {
+  display: block;
+  width: 100%;
+  min-width: 0;
 }
 
 .page-head {
@@ -551,6 +560,8 @@ watch(selectedSpaceId, () => {
 .data-id-pane,
 .table-pane,
 .record-table-pane {
+  box-sizing: border-box;
+  width: 100%;
   min-width: 0;
   border: 1px solid var(--color-border-2);
   border-radius: 8px;

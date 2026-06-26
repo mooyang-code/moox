@@ -49,7 +49,7 @@ import type { ColumnValue, Dataset, Field, PrimaryStoreNode, PrimaryStoreRoute, 
 
 const sampleSpace: Space = {
   space_id: 'contract-space',
-  name: 'Contract Space',
+  name: '契约空间',
   status: 'active',
 };
 
@@ -57,7 +57,7 @@ const sampleDataset: Dataset = {
   space_id: sampleSpace.space_id,
   dataset_id: 'kline',
   data_source_id: 'binance',
-  name: 'Kline',
+  name: 'K线',
   data_kind: 'DATA_KIND_TIME_SERIES',
   freqs: ['1m'],
   status: 'active',
@@ -66,7 +66,7 @@ const sampleDataset: Dataset = {
 const sampleField: Field = {
   space_id: sampleSpace.space_id,
   field_id: 'close',
-  name: 'Close',
+  name: '收盘价',
   value_type: 'FIELD_VALUE_TYPE_DOUBLE',
   status: 'active',
 };
@@ -99,7 +99,7 @@ const sampleRecordRow: RecordRow = {
 
 const sampleNode: PrimaryStoreNode = {
   node_id: 'primary-local',
-  name: 'Local Primary',
+  name: '本地主存',
   endpoint: 'local',
   weight: 100,
   status: 'active',
@@ -120,8 +120,8 @@ export async function assertManagementApiContract() {
   await updateSpace(sampleSpace);
   await listSpaceMembers({ space_id: sampleSpace.space_id });
 
-  await createDataSource({ space_id: sampleSpace.space_id, data_source_id: 'binance', name: 'Binance', kind: 'exchange', status: 'active' });
-  await updateDataSource({ space_id: sampleSpace.space_id, data_source_id: 'binance', name: 'Binance', kind: 'exchange', status: 'active' });
+  await createDataSource({ space_id: sampleSpace.space_id, data_source_id: 'binance', name: '币安', kind: 'exchange', status: 'active' });
+  await updateDataSource({ space_id: sampleSpace.space_id, data_source_id: 'binance', name: '币安', kind: 'exchange', status: 'active' });
   await getDataSource({ space_id: sampleSpace.space_id, data_source_id: 'binance' });
   await listDataSources({ space_id: sampleSpace.space_id });
 
@@ -143,19 +143,19 @@ export async function assertManagementApiContract() {
   await getField({ space_id: sampleSpace.space_id, field_id: sampleField.field_id });
   await listFields({ space_id: sampleSpace.space_id });
 
-  await createFactor({ space_id: sampleSpace.space_id, factor_id: 'ma20', name: 'MA20', algorithm: 'MA', value_type: 'FIELD_VALUE_TYPE_DOUBLE', status: 'active' });
-  await updateFactor({ space_id: sampleSpace.space_id, factor_id: 'ma20', name: 'MA20', algorithm: 'MA', value_type: 'FIELD_VALUE_TYPE_DOUBLE', status: 'active' });
+  await createFactor({ space_id: sampleSpace.space_id, factor_id: 'ma20', name: '均线', algorithm: 'MA', value_type: 'FIELD_VALUE_TYPE_DOUBLE', status: 'active' });
+  await updateFactor({ space_id: sampleSpace.space_id, factor_id: 'ma20', name: '均线', algorithm: 'MA', value_type: 'FIELD_VALUE_TYPE_DOUBLE', status: 'active' });
   await getFactor({ space_id: sampleSpace.space_id, factor_id: 'ma20' });
   await listFactors({ space_id: sampleSpace.space_id });
 
-  await upsertDatasetColumn({ space_id: sampleSpace.space_id, dataset_id: sampleDataset.dataset_id, column_name: 'close', origin_type: 'DATASET_COLUMN_ORIGIN_TYPE_FIELD', origin_id: 'close', value_type: 'FIELD_VALUE_TYPE_DOUBLE', status: 'active' });
+  await upsertDatasetColumn({ space_id: sampleSpace.space_id, dataset_id: sampleDataset.dataset_id, column_name: 'close', origin_type: 'DATASET_COLUMN_ORIGIN_TYPE_FIELD', origin_id: 'close', value_type: 'FIELD_VALUE_TYPE_DOUBLE', status: 'active', attributes: { display_name: '收盘价' } });
   await listDatasetColumns({ space_id: sampleSpace.space_id, dataset_id: sampleDataset.dataset_id });
 
-  await createView({ space_id: sampleSpace.space_id, view_id: 'kline_view', name: 'Kline View', primary_dataset_id: sampleDataset.dataset_id, dataset_ids: [sampleDataset.dataset_id], status: 'active' });
-  await updateView({ space_id: sampleSpace.space_id, view_id: 'kline_view', name: 'Kline View', primary_dataset_id: sampleDataset.dataset_id, dataset_ids: [sampleDataset.dataset_id], status: 'active' });
+  await createView({ space_id: sampleSpace.space_id, view_id: 'kline_view', name: 'K线视图', primary_dataset_id: sampleDataset.dataset_id, dataset_ids: [sampleDataset.dataset_id], status: 'active' });
+  await updateView({ space_id: sampleSpace.space_id, view_id: 'kline_view', name: 'K线视图', primary_dataset_id: sampleDataset.dataset_id, dataset_ids: [sampleDataset.dataset_id], status: 'active' });
   await getView({ space_id: sampleSpace.space_id, view_id: 'kline_view' });
   await listViews({ space_id: sampleSpace.space_id });
-  await upsertViewColumn({ space_id: sampleSpace.space_id, view_id: 'kline_view', column_name: 'close', origin_type: 'COLUMN_ORIGIN_TYPE_DATASET_COLUMN', origin_id: 'kline.close', value_type: 'FIELD_VALUE_TYPE_DOUBLE' });
+  await upsertViewColumn({ space_id: sampleSpace.space_id, view_id: 'kline_view', column_name: 'close', origin_type: 'COLUMN_ORIGIN_TYPE_DATASET_COLUMN', origin_id: 'kline.close', value_type: 'FIELD_VALUE_TYPE_DOUBLE', attributes: { display_name: '收盘价' } });
   await listViewColumns({ space_id: sampleSpace.space_id, view_id: 'kline_view' });
 
   await createPrimaryStoreNode(sampleNode);

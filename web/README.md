@@ -154,7 +154,7 @@ pnpm dev
 
 Vite 开发模式会代理以下浏览器路径：
 
-- `/api/control/{service}/{method}` -> Control 网关 `/gateway/{service}/{method}`
+- `/api/control/{service}/{method}` -> Control API `/api/control/{service}/{method}`
 - `/api/storage/metadata/{method}` -> Storage MetadataService
 - `/api/storage/access/{method}` -> Storage AccessService
 - `/api/storage/view/{method}` -> Storage ViewService

@@ -44,7 +44,18 @@ type GatewayConfig struct {
 	Timeout       int                      `yaml:"timeout"`         // 超时时间(毫秒)
 	Debug         bool                     `yaml:"debug"`           // 是否开启调试模式
 	NoAuthMethods []string                 `yaml:"no_auth_methods"` // 不需要鉴权的接口列表
+	ServiceAuth   ServiceAuthConfig        `yaml:"service_auth"`    // 后台服务请求签名鉴权配置
 	Services      map[string]ServiceDetail `yaml:"services"`        // 服务配置映射
+}
+
+// ServiceAuthConfig 后台服务请求签名鉴权配置。
+type ServiceAuthConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	Version       string `yaml:"version"`
+	AccessKey     string `yaml:"access_key"`
+	SecretKey     string `yaml:"secret_key"`
+	MaxExpireSecs int64  `yaml:"max_expire_seconds"`
+	ClockSkewSecs int64  `yaml:"clock_skew_seconds"`
 }
 
 // ServiceDetail 服务详细配置

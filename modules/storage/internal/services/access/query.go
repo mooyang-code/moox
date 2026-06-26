@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
@@ -17,8 +16,6 @@ import (
 	"github.com/rs/xid"
 	"google.golang.org/protobuf/proto"
 )
-
-const rebuildViewPageSize = 1000
 
 func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
 	if req.GetViewId() == "" {
@@ -110,15 +107,15 @@ func (s *Service) RebuildTimeSeriesView(ctx context.Context, req *pb.RebuildTime
 	}
 	rebuildID := xid.New().String()
 	rebuildReq := proto.Clone(req).(*pb.RebuildTimeSeriesViewReq)
-	s.indexMu.Lock()
+	s.asyncMu.Lock()
 	if s.closing {
-		s.indexMu.Unlock()
+		s.asyncMu.Unlock()
 		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("service is closing"))}, nil
 	}
-	s.indexWG.Add(1)
-	s.indexMu.Unlock()
+	s.asyncWG.Add(1)
+	s.asyncMu.Unlock()
 	go func() {
-		defer s.indexWG.Done()
+		defer s.asyncWG.Done()
 		if err := s.rebuildTimeSeriesView(context.WithoutCancel(ctx), rebuildReq); err != nil {
 			s.reportViewError(ctx, "time_series_view_rebuild", err)
 		}
@@ -139,15 +136,15 @@ func (s *Service) RebuildRecordView(ctx context.Context, req *pb.RebuildRecordVi
 	}
 	rebuildID := xid.New().String()
 	rebuildReq := proto.Clone(req).(*pb.RebuildRecordViewReq)
-	s.indexMu.Lock()
+	s.asyncMu.Lock()
 	if s.closing {
-		s.indexMu.Unlock()
+		s.asyncMu.Unlock()
 		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("service is closing"))}, nil
 	}
-	s.indexWG.Add(1)
-	s.indexMu.Unlock()
+	s.asyncWG.Add(1)
+	s.asyncMu.Unlock()
 	go func() {
-		defer s.indexWG.Done()
+		defer s.asyncWG.Done()
 		if err := s.rebuildRecordView(context.WithoutCancel(ctx), rebuildReq); err != nil {
 			s.reportViewError(ctx, "record_view_rebuild", err)
 		}
@@ -179,69 +176,20 @@ func (s *Service) rebuildTimeSeriesView(ctx context.Context, req *pb.RebuildTime
 }
 
 func (s *Service) rebuildRecordView(ctx context.Context, req *pb.RebuildRecordViewReq) error {
-	view, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+	viewMeta, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
 	if err != nil {
 		return err
 	}
-	if err := s.validateRecordView(ctx, view); err != nil {
+	if err := s.validateRecordView(ctx, viewMeta); err != nil {
 		return err
 	}
-	if strings.TrimSpace(view.GetPrimaryDatasetId()) == "" {
-		return errors.New("view primary_dataset_id is required")
-	}
-	columns, _, err := s.metadataReader.ListViewColumns(ctx, req.GetSpaceId(), req.GetViewId(), &pb.Page{Size: 10000})
-	if err != nil {
-		return err
-	}
-	if !isProjectableRecordView(view, columns) {
-		return fmt.Errorf("record view %s/%s contains unsupported columns for bleve projection", req.GetSpaceId(), req.GetViewId())
-	}
-	targetVersion := view.GetViewVersion()
-	if targetVersion == 0 {
-		targetVersion = 1
-	}
-	resultName := searchsvc.RecordIndexName(req.GetSpaceId(), req.GetViewId(), targetVersion, time.Now().UTC())
-	if _, err := s.metadata.BeginViewBuild(ctx, req.GetSpaceId(), req.GetViewId(), targetVersion, resultName); err != nil {
-		return err
-	}
-	if err := s.search.IndexRecordViewRows(ctx, resultName, columns, nil); err != nil {
-		_ = s.metadata.FailViewBuild(ctx, req.GetSpaceId(), req.GetViewId(), targetVersion, resultName, err)
-		return err
-	}
-	dirtyHandle := s.startViewDirtyTracking(pb.DataKind_DATA_KIND_RECORD, view, targetVersion, resultName)
-	defer s.stopViewDirtyTracking(dirtyHandle)
-	failBuild := func(buildErr error) error {
-		_ = s.metadata.FailViewBuild(ctx, req.GetSpaceId(), req.GetViewId(), targetVersion, resultName, buildErr)
-		return buildErr
-	}
-	cursor := ""
-	reader := s.viewFactReaderOrDefault()
-	for {
-		rows, page, err := reader.ScanRecordRows(ctx, req.GetSpaceId(), view.GetPrimaryDatasetId(), nil, nil, &pb.Page{Size: rebuildViewPageSize, Cursor: cursor})
-		if err != nil {
-			return failBuild(err)
-		}
-		if len(rows) > 0 {
-			projected, ok, err := s.recordRowsForView(ctx, view, columns, rows)
-			if err != nil {
-				return failBuild(err)
-			}
-			if !ok {
-				return failBuild(fmt.Errorf("record view %s/%s contains unsupported columns for bleve projection", req.GetSpaceId(), req.GetViewId()))
-			}
-			if err := s.search.IndexRecordViewRows(ctx, resultName, columns, projected); err != nil {
-				return failBuild(err)
-			}
-		}
-		if !page.GetHasMore() || page.GetNextCursor() == "" {
-			break
-		}
-		cursor = page.GetNextCursor()
-	}
-	if err := s.drainRecordDirty(ctx, dirtyHandle, columns); err != nil {
-		return failBuild(err)
-	}
-	return s.metadata.CompleteViewBuild(ctx, req.GetSpaceId(), req.GetViewId(), targetVersion, resultName)
+	builder := view.NewBuilder(view.Options{
+		Metadata: s.metadata,
+		Records:  s.viewFactReaderOrDefault(),
+		Search:   s.search,
+	})
+	_, err = builder.BuildView(ctx, req.GetSpaceId(), req.GetViewId())
+	return err
 }
 
 func (s *Service) validateTimeSeriesView(ctx context.Context, view *pb.View) error {

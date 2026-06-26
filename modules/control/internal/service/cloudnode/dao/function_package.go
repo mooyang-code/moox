@@ -38,6 +38,9 @@ type FunctionPackageDAO interface {
 
 	// GetOptions 获取代码包选项
 	GetOptions(ctx context.Context, packageType, bizType string) ([]model.FunctionPackage, error)
+
+	// CountByCloudAccountID 统计引用指定云账户的有效代码包数量
+	CountByCloudAccountID(ctx context.Context, accountID string) (int64, error)
 }
 
 // ListRequest 列表查询请求
@@ -144,6 +147,16 @@ func (d *FunctionPackageDAOImpl) List(ctx context.Context, req *ListRequest) ([]
 		return nil, 0, err
 	}
 	return packages, total, nil
+}
+
+// CountByCloudAccountID 统计引用指定云账户的有效代码包数量
+func (d *FunctionPackageDAOImpl) CountByCloudAccountID(ctx context.Context, accountID string) (int64, error) {
+	var count int64
+	err := d.db.WithContext(ctx).
+		Model(&model.FunctionPackage{}).
+		Where("c_cloud_account_id = ? AND c_invalid = 0", accountID).
+		Count(&count).Error
+	return count, err
 }
 
 // GetByNameAndVersion 根据包名和版本获取代码包

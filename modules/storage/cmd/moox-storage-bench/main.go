@@ -617,32 +617,15 @@ func seedMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy, files
 		return err
 	}
 
-	subjects := make(map[string]bool)
 	markets := make(map[string]bool)
 	for _, file := range files {
-		subjects[file.SubjectID] = true
 		markets[file.Market] = true
-	}
-	for subjectID := range subjects {
-		subjectID := subjectID
-		if err := call("UpsertSubject:"+subjectID, func() (*pb.RetInfo, error) {
-			rsp, err := meta.UpsertSubject(ctx, &pb.UpsertSubjectReq{Subject: &pb.Subject{SpaceId: spaceID, SubjectId: subjectID, SubjectType: "crypto_pair", Name: subjectID, Market: "crypto", Currency: "USDT", Status: "active"}})
-			return rsp.GetRetInfo(), err
-		}); err != nil {
-			return err
-		}
-		if err := call("UpsertSubjectSymbol:"+subjectID, func() (*pb.RetInfo, error) {
-			rsp, err := meta.UpsertSubjectSymbol(ctx, &pb.UpsertSubjectSymbolReq{SubjectSymbol: &pb.SubjectSymbol{SpaceId: spaceID, SubjectId: subjectID, DataSourceId: dataSourceID, ExternalSymbol: strings.ReplaceAll(subjectID, "-", ""), Status: "active"}})
-			return rsp.GetRetInfo(), err
-		}); err != nil {
-			return err
-		}
 	}
 	for market := range markets {
 		market := market
 		datasetID := datasetID(market)
 		if err := call("CreateDataset:"+datasetID, func() (*pb.RetInfo, error) {
-			rsp, err := meta.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: dataSourceID, Name: "Bench " + market + " kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{freq}, Status: "active"}})
+			rsp, err := meta.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: dataSourceID, Name: benchDatasetName(market), DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{freq}, Status: "active"}})
 			return rsp.GetRetInfo(), err
 		}); err != nil {
 			return err
@@ -667,8 +650,16 @@ func seedMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy, files
 	}
 	for _, file := range files {
 		file := file
-		if err := call("BindDatasetSubject:"+file.Market+"."+file.SubjectID, func() (*pb.RetInfo, error) {
-			rsp, err := meta.BindDatasetSubject(ctx, &pb.BindDatasetSubjectReq{DatasetSubject: &pb.DatasetSubject{SpaceId: spaceID, DatasetId: datasetID(file.Market), SubjectId: file.SubjectID, SubjectRole: "normal", Status: "active"}})
+		if err := call("RegisterDataSubject:"+file.Market+"."+file.SubjectID, func() (*pb.RetInfo, error) {
+			rsp, err := meta.RegisterDataSubject(ctx, &pb.RegisterDataSubjectReq{
+				SpaceId:        spaceID,
+				DataSourceId:   dataSourceID,
+				ExternalSymbol: strings.ReplaceAll(file.SubjectID, "-", ""),
+				Subject:        &pb.Subject{SubjectId: file.SubjectID, SubjectType: "crypto_pair", Name: file.SubjectID, Market: "crypto", Currency: "USDT", Status: "active"},
+				DatasetBindings: []*pb.DatasetSubject{
+					{DatasetId: datasetID(file.Market), SubjectRole: "normal", Status: "active"},
+				},
+			})
 			return rsp.GetRetInfo(), err
 		}); err != nil {
 			return err
@@ -684,7 +675,7 @@ func seedMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy, files
 
 func seedRecordMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy) error {
 	if err := call("CreateDataset:"+recordDatasetID, func() (*pb.RetInfo, error) {
-		rsp, err := meta.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{SpaceId: spaceID, DatasetId: recordDatasetID, DataSourceId: dataSourceID, Name: "Bench synthetic records", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"}})
+		rsp, err := meta.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{SpaceId: spaceID, DatasetId: recordDatasetID, DataSourceId: dataSourceID, Name: "合成记录", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"}})
 		return rsp.GetRetInfo(), err
 	}); err != nil {
 		return err
@@ -905,7 +896,7 @@ func createViews(ctx context.Context, meta pb.MetadataServiceClientProxy, datase
 		market := strings.TrimSuffix(strings.TrimPrefix(datasetID, "bench_binance_"), "_kline_1h")
 		viewID := viewID(market)
 		if err := call("CreateView:"+viewID, func() (*pb.RetInfo, error) {
-			rsp, err := meta.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{SpaceId: spaceID, ViewId: viewID, Name: "Bench " + market + " close view", PrimaryDatasetId: datasetID, DatasetIds: []string{datasetID}, QueryWindow: "4000d", Status: "active"}})
+			rsp, err := meta.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{SpaceId: spaceID, ViewId: viewID, Name: benchViewName(market), PrimaryDatasetId: datasetID, DatasetIds: []string{datasetID}, QueryWindow: "4000d", Status: "active"}})
 			return rsp.GetRetInfo(), err
 		}); err != nil {
 			return err
@@ -913,7 +904,7 @@ func createViews(ctx context.Context, meta pb.MetadataServiceClientProxy, datase
 		for _, name := range []string{"close", "volume", "quote_volume", "trade_num"} {
 			name := name
 			if err := call("UpsertViewColumn:"+viewID+"."+name, func() (*pb.RetInfo, error) {
-				rsp, err := meta.UpsertViewColumn(ctx, &pb.UpsertViewColumnReq{Column: &pb.ViewColumn{SpaceId: spaceID, ViewId: viewID, ColumnName: name, OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: datasetID + "." + name, ValueType: valueTypeForColumn(name)}})
+				rsp, err := meta.UpsertViewColumn(ctx, &pb.UpsertViewColumnReq{Column: &pb.ViewColumn{SpaceId: spaceID, ViewId: viewID, ColumnName: name, OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: datasetID + "." + name, ValueType: valueTypeForColumn(name), Attributes: displayNameAttrs(name)}})
 				return rsp.GetRetInfo(), err
 			}); err != nil {
 				return err
@@ -1227,7 +1218,7 @@ func columnsForMarket(market string) []*pb.DatasetColumn {
 	}
 	out := make([]*pb.DatasetColumn, 0, len(names))
 	for _, name := range names {
-		out = append(out, &pb.DatasetColumn{ColumnName: name, OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: name, ValueType: valueTypeForColumn(name), Required: isRequiredColumn(name), Status: "active"})
+		out = append(out, &pb.DatasetColumn{ColumnName: name, OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: name, ValueType: valueTypeForColumn(name), Required: isRequiredColumn(name), Status: "active", Attributes: displayNameAttrs(name)})
 	}
 	return out
 }
@@ -1254,9 +1245,71 @@ func recordColumns() []*pb.DatasetColumn {
 			OriginId:   def.name,
 			ValueType:  def.valueType,
 			Status:     "active",
+			Attributes: displayNameAttrs(def.name),
 		})
 	}
 	return out
+}
+
+func benchDatasetName(market string) string {
+	if market == "swap" {
+		return "合约K线"
+	}
+	return "现货K线"
+}
+
+func benchViewName(market string) string {
+	if market == "swap" {
+		return "合约收盘"
+	}
+	return "现货收盘"
+}
+
+func displayNameAttrs(name string) map[string]string {
+	return map[string]string{"display_name": displayName(name)}
+}
+
+func displayName(name string) string {
+	switch name {
+	case "open":
+		return "开盘价"
+	case "high":
+		return "最高价"
+	case "low":
+		return "最低价"
+	case "close":
+		return "收盘价"
+	case "volume":
+		return "成交量"
+	case "quote_volume":
+		return "成交额"
+	case "trade_num":
+		return "成交笔数"
+	case "taker_buy_base_asset_volume":
+		return "主动买量"
+	case "taker_buy_quote_asset_volume":
+		return "主动买额"
+	case "symbol":
+		return "交易标的"
+	case "avg_price_1m":
+		return "均价1分"
+	case "avg_price_5m":
+		return "均价5分"
+	case "fundingRate":
+		return "资金费率"
+	case "title":
+		return "标题"
+	case "status":
+		return "状态"
+	case "score":
+		return "分数"
+	case "updated_at":
+		return "更新时间"
+	case "payload_json":
+		return "载荷JSON"
+	default:
+		return "字段"
+	}
 }
 
 func valueTypeForColumn(name string) pb.FieldValueType {

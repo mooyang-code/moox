@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/control/internal/service/cloudnode/model"
@@ -61,26 +62,42 @@ func (d *cloudAccountDAOImpl) CreateCloudAccount(ctx context.Context, account *m
 
 // UpdateCloudAccount 更新云账户
 func (d *cloudAccountDAOImpl) UpdateCloudAccount(ctx context.Context, account *model.CloudAccount) error {
-	account.ModifyTime = time.Now()
-
-	// 构建更新字段map
-	updates := map[string]interface{}{
-		"c_account_name": account.AccountName,
-		"c_provider":     account.Provider,
-		"c_secret_id":    account.SecretID,
-		"c_extra_config": account.ExtraConfig,
-		"c_mtime":        account.ModifyTime,
+	existing, err := d.GetCloudAccount(ctx, account.AccountID)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return fmt.Errorf("cloud account not found or already deleted")
 	}
 
-	// 如果SecretKey不是脱敏的，则更新
-	if !account.IsMasked() && account.SecretKey != "" {
-		updates["c_secret_key"] = account.SecretKey
+	if account.AccountName != "" {
+		existing.AccountName = account.AccountName
 	}
+	if account.Provider != "" {
+		existing.Provider = account.Provider
+	}
+	if account.SecretID != "" && !isMaskedSecret(account.SecretID) {
+		existing.SecretID = account.SecretID
+	}
+	if account.SecretKey != "" && !isMaskedSecret(account.SecretKey) {
+		existing.SecretKey = account.SecretKey
+	}
+	if account.AppID != "" {
+		existing.AppID = account.AppID
+	}
+	if account.COSRegion != "" {
+		existing.COSRegion = account.COSRegion
+	}
+	if account.COSBucket != "" {
+		existing.COSBucket = account.COSBucket
+	}
+	if account.ExtraConfig != "" {
+		existing.ExtraConfig = account.ExtraConfig
+	}
+	existing.ModifyTime = time.Now()
 
 	result := d.db.WithContext(ctx).
-		Model(&model.CloudAccount{}).
-		Where("c_account_id = ? AND c_invalid = ?", account.AccountID, model.InvalidNo).
-		Updates(updates)
+		Save(existing)
 
 	if result.Error != nil {
 		return fmt.Errorf("failed to update cloud account: %w", result.Error)
@@ -90,6 +107,10 @@ func (d *cloudAccountDAOImpl) UpdateCloudAccount(ctx context.Context, account *m
 		return fmt.Errorf("cloud account not found or already deleted")
 	}
 	return nil
+}
+
+func isMaskedSecret(value string) bool {
+	return strings.Contains(value, "*")
 }
 
 // DeleteCloudAccount 删除云账户（软删除）

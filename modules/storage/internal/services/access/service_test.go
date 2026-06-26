@@ -292,10 +292,11 @@ func TestServiceCreateViewNormalizesDatasetIDs(t *testing.T) {
 	rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
 		SpaceId:          "crypto",
 		ViewId:           "kline_factor_view",
-		Name:             "Kline Factor View",
+		Name:             "因子视图",
 		PrimaryDatasetId: "kline",
 		DatasetIds:       []string{"factor", "kline", "factor"},
 		GrainKeys:        []string{"manual"},
+		FilterJson:       `{"freq":"1h"}`,
 		Engine:           "bleve",
 		Status:           "active",
 	}})
@@ -338,6 +339,125 @@ func TestServiceRejectsInvalidDatasetAndViewIDs(t *testing.T) {
 	}
 }
 
+func TestServiceRequiresChineseDisplayNamesForDatasetsViewsAndColumns(t *testing.T) {
+	ctx := context.Background()
+	svc := newAccessTestService(t)
+
+	badDataset, err := svc.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{
+		SpaceId:      "crypto",
+		DatasetId:    "english_name",
+		DataSourceId: "binance",
+		Name:         "EnglishName",
+		DataKind:     pb.DataKind_DATA_KIND_RECORD,
+		Status:       "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, badDataset.GetRetInfo().GetCode())
+
+	longDataset, err := svc.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{
+		SpaceId:      "crypto",
+		DatasetId:    "long_cn_name",
+		DataSourceId: "binance",
+		Name:         "这是一个超过十个字符的名称",
+		DataKind:     pb.DataKind_DATA_KIND_RECORD,
+		Status:       "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, longDataset.GetRetInfo().GetCode())
+
+	missingDataset, err := svc.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{
+		SpaceId:      "crypto",
+		DatasetId:    "missing_name",
+		DataSourceId: "binance",
+		DataKind:     pb.DataKind_DATA_KIND_RECORD,
+		Status:       "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, missingDataset.GetRetInfo().GetCode())
+	require.Contains(t, missingDataset.GetRetInfo().GetMsg(), "required")
+
+	seedDataset(t, ctx, svc, "symbols", pb.DataKind_DATA_KIND_RECORD, nil, nil)
+	badView, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "bad_view",
+		Name:             "Bad View",
+		PrimaryDatasetId: "symbols",
+		DatasetIds:       []string{"symbols"},
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, badView.GetRetInfo().GetCode())
+
+	missingView, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "missing_view_name",
+		PrimaryDatasetId: "symbols",
+		DatasetIds:       []string{"symbols"},
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, missingView.GetRetInfo().GetCode())
+	require.Contains(t, missingView.GetRetInfo().GetMsg(), "required")
+
+	goodDataset, err := svc.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{
+		SpaceId:      "crypto",
+		DatasetId:    "symbols_cn",
+		DataSourceId: "binance",
+		Name:         "交易对",
+		DataKind:     pb.DataKind_DATA_KIND_RECORD,
+		Status:       "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, goodDataset.GetRetInfo().GetCode())
+
+	goodView, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "symbols_view",
+		Name:             "交易视图",
+		PrimaryDatasetId: "symbols",
+		DatasetIds:       []string{"symbols"},
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, goodView.GetRetInfo().GetCode())
+
+	badDatasetColumn, err := svc.UpsertDatasetColumn(ctx, &pb.UpsertDatasetColumnReq{Column: &pb.DatasetColumn{
+		SpaceId: "crypto", DatasetId: "symbols", ColumnName: "symbol",
+		OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD,
+		OriginId:   "symbol", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active",
+		Attributes: map[string]string{"display_name": "Symbol"},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, badDatasetColumn.GetRetInfo().GetCode())
+
+	goodDatasetColumn, err := svc.UpsertDatasetColumn(ctx, &pb.UpsertDatasetColumnReq{Column: &pb.DatasetColumn{
+		SpaceId: "crypto", DatasetId: "symbols", ColumnName: "symbol",
+		OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD,
+		OriginId:   "symbol", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active",
+		Attributes: map[string]string{"display_name": "交易对"},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, goodDatasetColumn.GetRetInfo().GetCode())
+
+	badViewColumn, err := svc.UpsertViewColumn(ctx, &pb.UpsertViewColumnReq{Column: &pb.ViewColumn{
+		SpaceId: "crypto", ViewId: "symbols_view", ColumnName: "symbols.symbol",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   "symbols.symbol", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING,
+		Attributes: map[string]string{"display_name": "Symbol"},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, badViewColumn.GetRetInfo().GetCode())
+
+	goodViewColumn, err := svc.UpsertViewColumn(ctx, &pb.UpsertViewColumnReq{Column: &pb.ViewColumn{
+		SpaceId: "crypto", ViewId: "symbols_view", ColumnName: "symbols.symbol",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   "symbols.symbol", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING,
+		Attributes: map[string]string{"display_name": "交易对"},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, goodViewColumn.GetRetInfo().GetCode())
+}
+
 func TestServiceCreateRecordViewDefaultsGrainKeys(t *testing.T) {
 	ctx := context.Background()
 	svc := newAccessTestService(t)
@@ -346,7 +466,7 @@ func TestServiceCreateRecordViewDefaultsGrainKeys(t *testing.T) {
 	rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
 		SpaceId:          "crypto",
 		ViewId:           "symbols_view",
-		Name:             "Symbols View",
+		Name:             "交易视图",
 		PrimaryDatasetId: "symbols",
 		DatasetIds:       []string{"symbols"},
 		GrainKeys:        []string{"manual"},
@@ -368,9 +488,10 @@ func TestServiceCreateViewAllowsMixedDatasetKinds(t *testing.T) {
 	rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
 		SpaceId:          "crypto",
 		ViewId:           "bad_view",
-		Name:             "Bad View",
+		Name:             "混合视图",
 		PrimaryDatasetId: "kline",
 		DatasetIds:       []string{"kline", "news"},
+		FilterJson:       `{"freq":"1h"}`,
 		Engine:           "duckdb",
 		Status:           "active",
 	}})
@@ -380,24 +501,52 @@ func TestServiceCreateViewAllowsMixedDatasetKinds(t *testing.T) {
 	require.Equal(t, "duckdb", rsp.GetView().GetEngine())
 }
 
-func TestServiceCreateViewAllowsMismatchedTimeSeriesFreqs(t *testing.T) {
+func TestServiceCreateTimeSeriesViewRequiresSingleSupportedFreq(t *testing.T) {
 	ctx := context.Background()
 	svc := newAccessTestService(t)
 	seedDataset(t, ctx, svc, "kline_1h", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1h"}, []string{"close"})
 	seedDataset(t, ctx, svc, "factor_5m", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"5m"}, []string{"alpha"})
 
-	rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+	missingFreq, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
 		SpaceId:          "crypto",
-		ViewId:           "bad_freq_view",
-		Name:             "Bad Freq View",
+		ViewId:           "missing_freq_view",
+		Name:             "缺频视图",
 		PrimaryDatasetId: "kline_1h",
-		DatasetIds:       []string{"kline_1h", "factor_5m"},
+		DatasetIds:       []string{"kline_1h"},
 		Engine:           "duckdb",
 		Status:           "active",
 	}})
 	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, []string{"kline_1h", "factor_5m"}, rsp.GetView().GetDatasetIds())
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, missingFreq.GetRetInfo().GetCode())
+	require.Contains(t, missingFreq.GetRetInfo().GetMsg(), "freq")
+
+	rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "bad_freq_view",
+		Name:             "错频视图",
+		PrimaryDatasetId: "kline_1h",
+		DatasetIds:       []string{"kline_1h", "factor_5m"},
+		FilterJson:       `{"freq":"1h"}`,
+		Engine:           "duckdb",
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "factor_5m")
+
+	compatible, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "compatible_freq_view",
+		Name:             "同频视图",
+		PrimaryDatasetId: "kline_1h",
+		DatasetIds:       []string{"kline_1h"},
+		FilterJson:       `{"freq":"1h"}`,
+		Engine:           "duckdb",
+		Status:           "active",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, compatible.GetRetInfo().GetCode())
+	require.Equal(t, `{"freq":"1h"}`, compatible.GetView().GetFilterJson())
 }
 
 func TestServiceUpsertViewColumnRequiresQualifiedDatasetColumnName(t *testing.T) {
@@ -407,9 +556,10 @@ func TestServiceUpsertViewColumnRequiresQualifiedDatasetColumnName(t *testing.T)
 	rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
 		SpaceId:          "crypto",
 		ViewId:           "kline_view",
-		Name:             "Kline View",
+		Name:             "K线视图",
 		PrimaryDatasetId: "kline",
 		DatasetIds:       []string{"kline"},
+		FilterJson:       `{"freq":"1h"}`,
 		Status:           "active",
 	}})
 	require.NoError(t, err)
@@ -422,6 +572,7 @@ func TestServiceUpsertViewColumnRequiresQualifiedDatasetColumnName(t *testing.T)
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		OriginId:   "kline.close",
 		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		Attributes: map[string]string{"display_name": "收盘价"},
 	}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
@@ -433,72 +584,10 @@ func TestServiceUpsertViewColumnRequiresQualifiedDatasetColumnName(t *testing.T)
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		OriginId:   "kline.close",
 		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		Attributes: map[string]string{"display_name": "收盘价"},
 	}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, good.GetRetInfo().GetCode())
-}
-
-func TestServiceTimeSeriesEventConsumerWritesActiveAndBuildingResults(t *testing.T) {
-	ctx := context.Background()
-	bus := eventbus.NewMemoryBus()
-	svc := newAccessTestServiceWithEvents(t, bus)
-	seedDataset(t, ctx, svc, "kline", pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1m"}, []string{"close"})
-
-	activeResult := "ts_view_crypto_kline_active_test"
-	buildingResult := "ts_view_crypto_kline_building_test"
-	viewColumns := []*pb.ViewColumn{{
-		SpaceId:    "crypto",
-		ViewId:     "kline_view",
-		ColumnName: "close_alias",
-		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-		OriginId:   "kline.close",
-		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-	}}
-	_, err := svc.metadata.UpsertView(ctx, &pb.View{
-		SpaceId:             "crypto",
-		ViewId:              "kline_view",
-		Name:                "Kline View",
-		PrimaryDatasetId:    "kline",
-		DatasetIds:          []string{"kline"},
-		Engine:              "duckdb",
-		ViewVersion:         2,
-		ActiveViewVersion:   1,
-		ActiveResult:        activeResult,
-		BuildingViewVersion: 2,
-		BuildingResult:      buildingResult,
-		BuildStatus:         "building",
-		Status:              "active",
-		Columns:             viewColumns,
-	})
-	require.NoError(t, err)
-	viewStore, err := svc.viewStore()
-	require.NoError(t, err)
-	require.NoError(t, viewStore.CreateResultTable(ctx, activeResult, viewColumns))
-	require.NoError(t, viewStore.CreateResultTable(ctx, buildingResult, viewColumns))
-	require.NoError(t, svc.StartEventConsumers(ctx))
-
-	row := &pb.TimeSeriesRow{
-		Key:     &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m", DataTime: "2026-06-15T00:00:00Z"},
-		Columns: []*pb.ColumnValue{testutil.DoubleValue("close", 8.1)},
-	}
-	writeRsp, err := svc.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: []*pb.TimeSeriesRow{row}})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, writeRsp.GetRetInfo().GetCode())
-	require.NoError(t, bus.Wait(ctx))
-
-	assertViewResultRows := func(tableName string) {
-		t.Helper()
-		_, rows, _, err := viewStore.QueryTimeSeriesRows(ctx, tableName, &pb.QueryTimeSeriesRowsReq{
-			Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "kline", SubjectId: "APT-USDT", Freq: "1m"}},
-		})
-		require.NoError(t, err)
-		require.Len(t, rows, 1)
-		require.Equal(t, "2026-06-15T00:00:00.000000000Z", rows[0].GetKey().GetDataTime())
-		require.Len(t, rows[0].GetColumns(), 1)
-		require.Equal(t, "close_alias", rows[0].GetColumns()[0].GetColumnName())
-	}
-	assertViewResultRows(activeResult)
-	assertViewResultRows(buildingResult)
 }
 
 func TestServiceSearchRecordRowsReturnsColumnsAndFiltersKeyVersion(t *testing.T) {

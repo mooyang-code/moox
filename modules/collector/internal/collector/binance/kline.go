@@ -1,12 +1,9 @@
 package binance
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"net/http"
-	"strings"
 	"time"
 
 	"github.com/avast/retry-go"
@@ -15,6 +12,7 @@ import (
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/exchange/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/pkg/config"
+	"github.com/mooyang-code/moox/modules/collector/pkg/storage"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -23,6 +21,14 @@ const (
 	InstTypeSPOT = "SPOT" // 现货
 	InstTypeSWAP = "SWAP" // 永续合约
 )
+
+const (
+	klineFetchLimit         = 5
+	klineCloseRetryDelay    = 200 * time.Millisecond
+	klineCloseRetryAttempts = 3
+)
+
+var errKlineNotClosed = errors.New("K线尚未闭合")
 
 // KlineCollector K线数据采集器
 type KlineCollector struct {
@@ -34,7 +40,7 @@ type KlineCollector struct {
 // init 自注册到采集器注册中心
 func init() {
 	// 创建采集器实例
-	client := binanceapi.NewClient()
+	client := newConfiguredClient()
 	c := &KlineCollector{
 		client:  client,
 		spotAPI: binanceapi.NewSpotAPI(client),
@@ -68,25 +74,38 @@ func (c *KlineCollector) DataType() string {
 func (c *KlineCollector) Collect(ctx context.Context, params *collector.CollectParams) error {
 	log.InfoContextf(ctx, "K线采集开始: inst_type=%s, symbol=%s, interval=%s",
 		params.InstType, params.Symbol, params.Interval)
+	fmt.Printf("[kline] collect start inst_type=%s symbol=%s interval=%s\n", params.InstType, params.Symbol, params.Interval)
 
 	// 从币安 API 获取 K 线数据
+	fmt.Printf("[kline] fetch start inst_type=%s symbol=%s interval=%s spot_domain=%s swap_domain=%s\n",
+		params.InstType, params.Symbol, params.Interval, c.client.SpotDomain(), c.client.SwapDomain())
 	klines, err := c.fetchKlines(ctx, params)
 	if err != nil {
+		fmt.Printf("[kline] fetch error inst_type=%s symbol=%s interval=%s error=%v\n",
+			params.InstType, params.Symbol, params.Interval, err)
 		log.ErrorContextf(ctx, "K线采集失败: inst_type=%s, symbol=%s, interval=%s, error=%v",
 			params.InstType, params.Symbol, params.Interval, err)
 		return err
 	}
+	fmt.Printf("[kline] fetch done inst_type=%s symbol=%s interval=%s count=%d\n",
+		params.InstType, params.Symbol, params.Interval, len(klines))
 
 	if len(klines) > 0 {
 		log.InfoContextf(ctx, "K线采集完成: inst_type=%s, symbol=%s, interval=%s, count=%d, latest=%+v",
 			params.InstType, params.Symbol, params.Interval, len(klines), klines[0])
 	}
 
+	fmt.Printf("[kline] storage write start inst_type=%s symbol=%s interval=%s count=%d storage_url=%s\n",
+		params.InstType, params.Symbol, params.Interval, len(klines), config.GetStorageURL())
 	if err := c.reportKlines(ctx, params, klines); err != nil {
+		fmt.Printf("[kline] storage write error inst_type=%s symbol=%s interval=%s error=%v\n",
+			params.InstType, params.Symbol, params.Interval, err)
 		log.ErrorContextf(ctx, "K线写入存储失败: inst_type=%s, symbol=%s, interval=%s, error=%v",
 			params.InstType, params.Symbol, params.Interval, err)
 		return err
 	}
+	fmt.Printf("[kline] storage write done inst_type=%s symbol=%s interval=%s count=%d\n",
+		params.InstType, params.Symbol, params.Interval, len(klines))
 	log.InfoContextf(ctx, "K线写入存储完成: inst_type=%s, symbol=%s, interval=%s, count=%d",
 		params.InstType, params.Symbol, params.Interval, len(klines))
 	return nil
@@ -97,30 +116,62 @@ func (c *KlineCollector) fetchKlines(ctx context.Context, params *collector.Coll
 	req := &exchange.KlineRequest{
 		Symbol:   params.Symbol,
 		Interval: params.Interval,
-		Limit:    5, // 只获取最新的5根K线
+		Limit:    klineFetchLimit, // 只获取最新的5根K线
 	}
 
-	var exchangeKlines []*exchange.Kline
-	var err error
-
-	// 根据产品类型选择 API
-	switch params.InstType {
-	case InstTypeSPOT:
-		exchangeKlines, err = c.spotAPI.GetKline(ctx, req)
-	case InstTypeSWAP:
-		exchangeKlines, err = c.swapAPI.GetKline(ctx, req)
-	default:
-		return nil, fmt.Errorf("不支持的产品类型: %s", params.InstType)
-	}
-
+	var closedKlines []*market.Kline
+	err := retry.Do(
+		func() error {
+			exchangeKlines, err := c.fetchExchangeKlines(ctx, params, req)
+			if err != nil {
+				return err
+			}
+			klines := convertExchangeKlines(exchangeKlines, params.Symbol, params.Interval)
+			closed, skipped := filterClosedKlines(klines, time.Now())
+			if skipped > 0 {
+				log.InfoContextf(ctx, "跳过未闭合K线: inst_type=%s, symbol=%s, interval=%s, skipped=%d",
+					params.InstType, params.Symbol, params.Interval, skipped)
+			}
+			if len(klines) > 0 && len(closed) == 0 {
+				return fmt.Errorf("%w: inst_type=%s, symbol=%s, interval=%s, latest_close_time=%s",
+					errKlineNotClosed, params.InstType, params.Symbol, params.Interval, latestCloseTime(klines))
+			}
+			closedKlines = closed
+			return nil
+		},
+		retry.Attempts(klineCloseRetryAttempts),
+		retry.Delay(klineCloseRetryDelay),
+		retry.LastErrorOnly(true),
+		retry.RetryIf(func(err error) bool {
+			return errors.Is(err, errKlineNotClosed)
+		}),
+		retry.OnRetry(func(n uint, err error) {
+			log.WarnContextf(ctx, "K线尚未闭合，重新请求 #%d: inst_type=%s, symbol=%s, interval=%s, err=%v",
+				n+1, params.InstType, params.Symbol, params.Interval, err)
+		}),
+		retry.Context(ctx),
+	)
 	if err != nil {
 		return nil, err
 	}
+	return closedKlines, nil
+}
 
-	// 转换为 market.Kline 格式
+func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *collector.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+	switch params.InstType {
+	case InstTypeSPOT:
+		return c.spotAPI.GetKline(ctx, req)
+	case InstTypeSWAP:
+		return c.swapAPI.GetKline(ctx, req)
+	default:
+		return nil, fmt.Errorf("不支持的产品类型: %s", params.InstType)
+	}
+}
+
+func convertExchangeKlines(exchangeKlines []*exchange.Kline, symbol string, interval string) []*market.Kline {
 	klines := make([]*market.Kline, 0, len(exchangeKlines))
 	for _, ek := range exchangeKlines {
-		kline := market.NewKline("binance", params.Symbol, params.Interval)
+		kline := market.NewKline("binance", symbol, interval)
 		kline.OpenTime = ek.OpenTime
 		kline.CloseTime = ek.CloseTime
 		kline.Open = ek.Open
@@ -132,7 +183,7 @@ func (c *KlineCollector) fetchKlines(ctx context.Context, params *collector.Coll
 		kline.TradeCount = ek.TradeCount
 		klines = append(klines, kline)
 	}
-	return klines, nil
+	return klines
 }
 
 func (c *KlineCollector) reportKlines(ctx context.Context, params *collector.CollectParams, klines []*market.Kline) error {
@@ -152,28 +203,17 @@ func (c *KlineCollector) reportKlines(ctx context.Context, params *collector.Col
 		return err
 	}
 
-	datasetID, err := klineDataSetID(params.InstType, freq)
+	binding, err := ResolveStorageBinding(params.InstType)
 	if err != nil {
 		return err
 	}
 
-	rows, err := buildKlineRows(klines, params.Symbol, datasetID, freq)
+	rows, err := buildKlineRows(klines, params.Symbol, binding, freq)
 	if err != nil {
 		return err
 	}
 
-	return c.sendWriteRowsWithRetry(ctx, storageURL, rows)
-}
-
-func klineDataSetID(instType, freq string) (string, error) {
-	switch instType {
-	case InstTypeSWAP:
-		return "binance_swap_kline_" + strings.ToLower(freq), nil
-	case InstTypeSPOT:
-		return "binance_spot_kline_" + strings.ToLower(freq), nil
-	default:
-		return "", fmt.Errorf("不支持的产品类型: %s", instType)
-	}
+	return c.sendTimeSeriesRowsWithRetry(ctx, storageURL, binding, rows)
 }
 
 func normalizeFreq(interval string) (string, error) {
@@ -197,12 +237,15 @@ func normalizeFreq(interval string) (string, error) {
 	}
 }
 
-func buildKlineRows(klines []*market.Kline, symbol, datasetID, freq string) ([]DataRow, error) {
-	rows := make([]DataRow, 0, len(klines))
-	for _, kline := range klines {
-		openTime := formatKlineTime(kline.OpenTime)
-		closeTime := formatKlineTime(kline.CloseTime)
+func buildKlineRows(klines []*market.Kline, symbol string, binding StorageBinding, freq string) ([]storage.TimeSeriesRow, error) {
+	closedKlines, _ := filterClosedKlines(klines, time.Now())
+	if len(klines) > 0 && len(closedKlines) == 0 {
+		return nil, fmt.Errorf("%w: symbol=%s, freq=%s, latest_close_time=%s", errKlineNotClosed, symbol, freq, latestCloseTime(klines))
+	}
 
+	rows := make([]storage.TimeSeriesRow, 0, len(klines))
+	for _, kline := range closedKlines {
+		openTime := formatKlineTime(kline.OpenTime)
 		openValue, err := kline.Open.Float64()
 		if err != nil {
 			return nil, fmt.Errorf("解析开盘价失败: %w", err)
@@ -228,37 +271,73 @@ func buildKlineRows(klines []*market.Kline, symbol, datasetID, freq string) ([]D
 			return nil, fmt.Errorf("解析成交额失败: %w", err)
 		}
 
-		rows = append(rows, DataRow{
-			Slice: DataSlice{
-				DatasetID: datasetID,
+		rows = append(rows, storage.TimeSeriesRow{
+			Key: storage.TimeSeriesKey{
+				SpaceID:   binding.SpaceID,
+				DatasetID: binding.KlineDatasetID,
 				SubjectID: symbol,
 				Freq:      freq,
+				DataTime:  openTime,
 			},
-			DataTime: openTime,
-			Columns: []ColumnValue{
-				stringField("candle_begin_time", openTime),
-				stringField("candle_end_time", closeTime),
-				doubleField("open", openValue),
-				doubleField("high", highValue),
-				doubleField("low", lowValue),
-				doubleField("close", closeValue),
-				doubleField("volume", volumeValue),
-				doubleField("quote_volume", quoteVolumeValue),
-				intField("trade_num", kline.TradeCount),
+			Columns: []storage.ColumnValue{
+				storage.DoubleField("open", openValue),
+				storage.DoubleField("high", highValue),
+				storage.DoubleField("low", lowValue),
+				storage.DoubleField("close", closeValue),
+				storage.DoubleField("volume", volumeValue),
+				storage.DoubleField("quote_volume", quoteVolumeValue),
+				storage.IntField("trade_num", kline.TradeCount),
 			},
 		})
 	}
 	return rows, nil
 }
 
-func formatKlineTime(t time.Time) string {
-	return t.UTC().Format("2006-01-02 15:04:05")
+func filterClosedKlines(klines []*market.Kline, now time.Time) ([]*market.Kline, int) {
+	closed := make([]*market.Kline, 0, len(klines))
+	skipped := 0
+	for _, kline := range klines {
+		if isKlineClosed(kline, now) {
+			closed = append(closed, kline)
+			continue
+		}
+		skipped++
+	}
+	return closed, skipped
 }
 
-func (c *KlineCollector) sendWriteRowsWithRetry(ctx context.Context, storageURL string, rows []DataRow) error {
+func isKlineClosed(kline *market.Kline, now time.Time) bool {
+	if kline == nil || kline.CloseTime.IsZero() {
+		return false
+	}
+	return now.After(kline.CloseTime)
+}
+
+func latestCloseTime(klines []*market.Kline) string {
+	var latest time.Time
+	for _, kline := range klines {
+		if kline == nil || kline.CloseTime.IsZero() {
+			continue
+		}
+		if latest.IsZero() || kline.CloseTime.After(latest) {
+			latest = kline.CloseTime
+		}
+	}
+	if latest.IsZero() {
+		return ""
+	}
+	return latest.UTC().Format(time.RFC3339Nano)
+}
+
+func formatKlineTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func (c *KlineCollector) sendTimeSeriesRowsWithRetry(ctx context.Context, storageURL string, binding StorageBinding, rows []storage.TimeSeriesRow) error {
 	return retry.Do(
 		func() error {
-			return c.sendWriteRows(ctx, storageURL, rows, "kline-sync")
+			client := storage.NewClient(storageURL, storageAuthInfo(binding))
+			return client.WriteTimeSeriesRows(ctx, rows)
 		},
 		retry.Attempts(3),
 		retry.Delay(500*time.Millisecond),
@@ -268,107 +347,4 @@ func (c *KlineCollector) sendWriteRowsWithRetry(ctx context.Context, storageURL 
 		}),
 		retry.Context(ctx),
 	)
-}
-
-func (c *KlineCollector) sendWriteRows(ctx context.Context, storageURL string, rows []DataRow, appKey string) error {
-	request := &WriteRowsRequest{
-		AuthInfo: AuthInfo{
-			AppID:  "data-collector",
-			AppKey: appKey,
-		},
-		WriteMode: "WRITE_MODE_APPEND",
-		Rows:      rows,
-	}
-
-	data, err := json.Marshal(request)
-	if err != nil {
-		return fmt.Errorf("序列化失败: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/trpc.storage.data.DataService/WriteRows", storageURL)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
-	if err != nil {
-		return fmt.Errorf("创建请求失败: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("发送请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var respBody bytes.Buffer
-	_, _ = respBody.ReadFrom(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, respBody.String())
-	}
-
-	var writeResp WriteRowsResponse
-	if err := json.Unmarshal(respBody.Bytes(), &writeResp); err != nil {
-		return fmt.Errorf("解析响应失败: %w", err)
-	}
-
-	if writeResp.RetInfo.Code != 0 {
-		return fmt.Errorf("错误码 %d: %s", writeResp.RetInfo.Code, writeResp.RetInfo.Msg)
-	}
-
-	return nil
-}
-
-// WriteRowsRequest 表示 Binance K 线采集写入 Storage 的请求体。
-type WriteRowsRequest struct {
-	AuthInfo  AuthInfo  `json:"auth_info"`
-	WriteMode string    `json:"write_mode"`
-	Rows      []DataRow `json:"rows"`
-}
-
-// WriteRowsResponse 表示 Binance K 线采集写入 Storage 的响应体。
-type WriteRowsResponse struct {
-	RetInfo RetInfo `json:"ret_info"`
-}
-
-// DataSlice 表示一次写入请求中的数据切片。
-type DataSlice struct {
-	DatasetID  string            `json:"dataset_id"`
-	SubjectID  string            `json:"subject_id"`
-	Freq       string            `json:"freq,omitempty"`
-	Dimensions map[string]string `json:"dimensions,omitempty"`
-}
-
-// DataRow 表示采集器写入 Storage 的一行数据。
-type DataRow struct {
-	Slice    DataSlice         `json:"slice"`
-	DataTime string            `json:"data_time,omitempty"`
-	RowID    string            `json:"row_id,omitempty"`
-	Columns  []ColumnValue     `json:"columns"`
-	Attrs    map[string]string `json:"attrs,omitempty"`
-}
-
-// ColumnValue 表示采集器写入行中的一个列值。
-type ColumnValue struct {
-	ColumnName string     `json:"column_name"`
-	ValueType  string     `json:"value_type"`
-	Value      TypedValue `json:"value"`
-}
-
-// TypedValue 表示采集器写入列的类型化值。
-type TypedValue struct {
-	StringValue *string  `json:"string_value,omitempty"`
-	IntValue    *int64   `json:"int_value,omitempty"`
-	DoubleValue *float64 `json:"double_value,omitempty"`
-}
-
-func stringField(name, value string) ColumnValue {
-	return ColumnValue{ColumnName: name, ValueType: "FIELD_VALUE_TYPE_STRING", Value: TypedValue{StringValue: &value}}
-}
-
-func intField(name string, value int64) ColumnValue {
-	return ColumnValue{ColumnName: name, ValueType: "FIELD_VALUE_TYPE_INT", Value: TypedValue{IntValue: &value}}
-}
-
-func doubleField(name string, value float64) ColumnValue {
-	return ColumnValue{ColumnName: name, ValueType: "FIELD_VALUE_TYPE_DOUBLE", Value: TypedValue{DoubleValue: &value}}
 }

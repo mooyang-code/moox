@@ -3,6 +3,7 @@ package view
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/deriver"
+	searchsvc "github.com/mooyang-code/moox/modules/storage/internal/services/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
@@ -23,10 +26,21 @@ type FactReader interface {
 	ScanTimeSeriesRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange, columnNames []string, page *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult, error)
 }
 
+// RecordFactReader 定义 View 构建器读取主存 Record 行所需的接口。
+type RecordFactReader interface {
+	ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error)
+	ScanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error)
+}
+
 // ViewWriter 定义 View 构建器写入物化结果所需的接口。
 type ViewWriter interface {
 	CreateResultTable(ctx context.Context, tableName string, columns []*pb.ViewColumn) error
 	InsertRows(ctx context.Context, tableName string, rows []*pb.TimeSeriesRow) error
+}
+
+// RecordIndexer 定义 View 构建器写入 Record 搜索索引所需的接口。
+type RecordIndexer interface {
+	IndexRecordViewRows(ctx context.Context, resultName string, columns []*pb.ViewColumn, rows []*pb.RecordRow) error
 }
 
 // ViewCleaner 定义 View 构建器清理旧结果表所需的接口。
@@ -39,7 +53,9 @@ type ViewCleaner interface {
 type Options struct {
 	Metadata metadata.Store
 	Facts    FactReader
+	Records  RecordFactReader
 	Views    ViewWriter
+	Search   RecordIndexer
 	Now      func() time.Time
 
 	OnBuildStarted  func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string)
@@ -47,11 +63,13 @@ type Options struct {
 	OnBuildFinished func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string)
 }
 
-// Builder 负责把主存 TimeSeries 行构建为版本化 View 结果。
+// Builder 负责从主存事实行构建版本化 View 结果。
 type Builder struct {
 	metadata     metadata.Store
 	facts        FactReader
+	records      RecordFactReader
 	views        ViewWriter
+	search       RecordIndexer
 	now          func() time.Time
 	onStarted    func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string)
 	beforeDone   func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) error
@@ -65,10 +83,18 @@ func NewBuilder(opts Options) *Builder {
 	if now == nil {
 		now = time.Now
 	}
+	records := opts.Records
+	if records == nil {
+		if reader, ok := opts.Facts.(RecordFactReader); ok {
+			records = reader
+		}
+	}
 	return &Builder{
 		metadata:     opts.Metadata,
 		facts:        opts.Facts,
+		records:      records,
 		views:        opts.Views,
+		search:       opts.Search,
 		now:          now,
 		onStarted:    opts.OnBuildStarted,
 		beforeDone:   opts.BeforeComplete,
@@ -78,8 +104,8 @@ func NewBuilder(opts Options) *Builder {
 }
 
 func (b *Builder) Build(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
-	if b == nil || b.metadata == nil || b.facts == nil || b.views == nil {
-		return nil, errors.New("metadata, facts and views are required")
+	if b == nil || b.metadata == nil {
+		return nil, errors.New("metadata is required")
 	}
 	if spaceID == "" || viewID == "" {
 		return nil, errors.New("space_id and view_id are required")
@@ -96,6 +122,18 @@ func (b *Builder) buildLocked(ctx context.Context, spaceID string, viewID string
 	view, err := b.metadata.GetView(ctx, spaceID, viewID)
 	if err != nil {
 		return nil, err
+	}
+	if isBleveView(view) {
+		return b.buildRecordLocked(ctx, view)
+	}
+	return b.buildTimeSeriesLocked(ctx, view)
+}
+
+func (b *Builder) buildTimeSeriesLocked(ctx context.Context, view *pb.View) (*pb.View, error) {
+	spaceID := view.GetSpaceId()
+	viewID := view.GetViewId()
+	if b.facts == nil || b.views == nil {
+		return nil, errors.New("facts and views are required")
 	}
 	if !isDuckDBView(view) {
 		return nil, fmt.Errorf("view %s/%s engine %q is not supported by time series builder", spaceID, viewID, view.GetEngine())
@@ -163,6 +201,69 @@ func (b *Builder) buildLocked(ctx context.Context, spaceID string, viewID string
 	return b.metadata.GetView(ctx, spaceID, viewID)
 }
 
+func (b *Builder) buildRecordLocked(ctx context.Context, view *pb.View) (*pb.View, error) {
+	spaceID := view.GetSpaceId()
+	viewID := view.GetViewId()
+	if b.records == nil || b.search == nil {
+		return nil, errors.New("records and search are required")
+	}
+	if !isBleveView(view) {
+		return nil, fmt.Errorf("view %s/%s engine %q is not supported by record builder", spaceID, viewID, view.GetEngine())
+	}
+	primaryDatasetID := view.GetPrimaryDatasetId()
+	if primaryDatasetID == "" && len(view.GetDatasetIds()) > 0 {
+		primaryDatasetID = view.GetDatasetIds()[0]
+	}
+	if primaryDatasetID == "" {
+		return nil, errors.New("view primary_dataset_id is required")
+	}
+	dataset, err := b.metadata.GetDataset(ctx, spaceID, primaryDatasetID)
+	if err != nil {
+		return nil, err
+	}
+	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_RECORD {
+		return nil, fmt.Errorf("view %s/%s primary dataset %s is not record", spaceID, viewID, primaryDatasetID)
+	}
+	columns, _, err := b.metadata.ListViewColumns(ctx, spaceID, viewID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(columns) == 0 {
+		columns = view.GetColumns()
+	}
+	if len(columns) == 0 {
+		return nil, errors.New("view columns are required")
+	}
+	if !deriver.IsProjectableRecordView(view, columns) {
+		return nil, fmt.Errorf("record view %s/%s contains unsupported columns for bleve projection", spaceID, viewID)
+	}
+	targetVersion := view.GetViewVersion()
+	if targetVersion == 0 {
+		targetVersion = 1
+	}
+	resultName := searchsvc.RecordIndexName(spaceID, viewID, targetVersion, b.now().UTC())
+	if _, err := b.metadata.BeginViewBuild(ctx, spaceID, viewID, targetVersion, resultName); err != nil {
+		return nil, err
+	}
+	if err := b.search.IndexRecordViewRows(ctx, resultName, columns, nil); err != nil {
+		_ = b.metadata.FailViewBuild(ctx, spaceID, viewID, targetVersion, resultName, err)
+		return nil, err
+	}
+	rows, err := b.readRecordViewRows(ctx, view, primaryDatasetID, columns)
+	if err != nil {
+		_ = b.metadata.FailViewBuild(ctx, spaceID, viewID, targetVersion, resultName, err)
+		return nil, err
+	}
+	if err := b.search.IndexRecordViewRows(ctx, resultName, columns, rows); err != nil {
+		_ = b.metadata.FailViewBuild(ctx, spaceID, viewID, targetVersion, resultName, err)
+		return nil, err
+	}
+	if err := b.metadata.CompleteViewBuild(ctx, spaceID, viewID, targetVersion, resultName); err != nil {
+		return nil, err
+	}
+	return b.metadata.GetView(ctx, spaceID, viewID)
+}
+
 func (b *Builder) BuildView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
 	return b.Build(ctx, spaceID, viewID)
 }
@@ -209,7 +310,7 @@ func (b *Builder) rebuildViews(ctx context.Context, spaceID string, rebuildable 
 	}
 	var built []*pb.View
 	for _, view := range views {
-		if !isDuckDBView(view) {
+		if !isBuildableView(view) {
 			continue
 		}
 		if !rebuildable(view) {
@@ -235,6 +336,14 @@ func rebuildableBuildStatus(status string) bool {
 
 func isDuckDBView(view *pb.View) bool {
 	return view != nil && (strings.TrimSpace(view.GetEngine()) == "" || strings.EqualFold(view.GetEngine(), "duckdb"))
+}
+
+func isBleveView(view *pb.View) bool {
+	return view != nil && strings.EqualFold(strings.TrimSpace(view.GetEngine()), "bleve")
+}
+
+func isBuildableView(view *pb.View) bool {
+	return isDuckDBView(view) || isBleveView(view)
 }
 
 func (b *Builder) CleanupInactiveResults(ctx context.Context, spaceID string) (int, error) {
@@ -313,6 +422,52 @@ func (b *Builder) resultTablesInUse(ctx context.Context, spaceID string) (map[st
 	}
 }
 
+func (b *Builder) readRecordViewRows(ctx context.Context, view *pb.View, primaryDatasetID string, columns []*pb.ViewColumn) ([]*pb.RecordRow, error) {
+	sourceColumns := sourceColumnNamesByDataset(primaryDatasetID, columns)
+	var out []*pb.RecordRow
+	cursor := ""
+	for {
+		rows, page, err := b.records.ScanRecordRows(ctx, view.GetSpaceId(), primaryDatasetID, nil, sourceColumns[primaryDatasetID], &pb.Page{Size: rebuildViewPageSize, Cursor: cursor})
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) > 0 {
+			projected, ok, err := deriver.RecordRowsForView(ctx, view, columns, rows, b.readRecordProjectionRow)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, fmt.Errorf("record view %s/%s contains unsupported columns for bleve projection", view.GetSpaceId(), view.GetViewId())
+			}
+			out = append(out, projected...)
+		}
+		if page == nil || !page.GetHasMore() || page.GetNextCursor() == "" {
+			break
+		}
+		cursor = page.GetNextCursor()
+	}
+	return out, nil
+}
+
+func (b *Builder) readRecordProjectionRow(ctx context.Context, base *pb.RecordKey, datasetID string) (*pb.RecordRow, error) {
+	if base == nil {
+		return nil, nil
+	}
+	key := proto.Clone(base).(*pb.RecordKey)
+	key.DatasetId = datasetID
+	rsp, err := b.records.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: []*pb.RecordKey{key}})
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		return nil, errors.New(rsp.GetRetInfo().GetMsg())
+	}
+	if len(rsp.GetRows()) == 0 {
+		return nil, nil
+	}
+	return rsp.GetRows()[0], nil
+}
+
 func (b *Builder) readViewRows(ctx context.Context, view *pb.View, primaryDatasetID string, columns []*pb.ViewColumn) ([]*pb.TimeSeriesRow, error) {
 	spaceID := view.GetSpaceId()
 	datasetIDs := viewDatasetIDs(primaryDatasetID, view.GetDatasetIds(), columns)
@@ -327,6 +482,10 @@ func (b *Builder) readViewRows(ctx context.Context, view *pb.View, primaryDatase
 		datasetID := datasetID
 		group.Go(func() error {
 			rows, err := b.readAllRows(groupCtx, spaceID, datasetID, timeRange, sourceColumns[datasetID])
+			if err != nil {
+				return err
+			}
+			rows, err = filterRowsByViewJSON(view, rows)
 			if err != nil {
 				return err
 			}
@@ -368,13 +527,13 @@ func (b *Builder) readViewRows(ctx context.Context, view *pb.View, primaryDatase
 
 // viewBuildConcurrency 限制 View 构建时并行扫描 Dataset 数，避免压垮 PrimaryStore。
 const viewBuildConcurrency = 8
+const rebuildViewPageSize = uint32(1000)
 
 func (b *Builder) readAllRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange, columnNames []string) ([]*pb.TimeSeriesRow, error) {
-	const pageSize = uint32(1000)
 	var out []*pb.TimeSeriesRow
 	cursor := ""
 	for {
-		rows, page, err := b.facts.ScanTimeSeriesRows(ctx, spaceID, datasetID, timeRange, columnNames, &pb.Page{Size: pageSize, Cursor: cursor})
+		rows, page, err := b.facts.ScanTimeSeriesRows(ctx, spaceID, datasetID, timeRange, columnNames, &pb.Page{Size: rebuildViewPageSize, Cursor: cursor})
 		if err != nil {
 			return nil, err
 		}
@@ -385,6 +544,67 @@ func (b *Builder) readAllRows(ctx context.Context, spaceID string, datasetID str
 		cursor = page.GetNextCursor()
 	}
 	return out, nil
+}
+
+type fixedViewFilter struct {
+	SpaceID    string            `json:"space_id"`
+	SubjectID  string            `json:"subject_id"`
+	Freq       string            `json:"freq"`
+	Dimensions map[string]string `json:"dimensions"`
+}
+
+func parseFixedViewFilter(raw string) (*fixedViewFilter, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" {
+		return nil, nil
+	}
+	var filter fixedViewFilter
+	if err := json.Unmarshal([]byte(raw), &filter); err != nil {
+		return nil, fmt.Errorf("invalid view filter_json: %w", err)
+	}
+	if filter.SpaceID == "" && filter.SubjectID == "" && filter.Freq == "" && len(filter.Dimensions) == 0 {
+		return nil, nil
+	}
+	return &filter, nil
+}
+
+func filterRowsByViewJSON(view *pb.View, rows []*pb.TimeSeriesRow) ([]*pb.TimeSeriesRow, error) {
+	filter, err := parseFixedViewFilter(view.GetFilterJson())
+	if err != nil {
+		return nil, err
+	}
+	if filter == nil {
+		return rows, nil
+	}
+	out := make([]*pb.TimeSeriesRow, 0, len(rows))
+	for _, row := range rows {
+		if fixedViewFilterMatchesRow(filter, row) {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func fixedViewFilterMatchesRow(filter *fixedViewFilter, row *pb.TimeSeriesRow) bool {
+	if row == nil || row.GetKey() == nil {
+		return false
+	}
+	key := row.GetKey()
+	if filter.SpaceID != "" && filter.SpaceID != key.GetSpaceId() {
+		return false
+	}
+	if filter.SubjectID != "" && filter.SubjectID != key.GetSubjectId() {
+		return false
+	}
+	if filter.Freq != "" && filter.Freq != key.GetFreq() {
+		return false
+	}
+	for name, value := range filter.Dimensions {
+		if key.GetDimensions()[name] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *Builder) listAllActiveViews(ctx context.Context, spaceID string) ([]*pb.View, error) {

@@ -36,40 +36,9 @@ const systemColumnLabels: Record<string, string> = {
   version: '版本',
 };
 
-const commonColumnLabels: Record<string, string> = {
-  symbol: '交易对',
-  open: '开盘价',
-  high: '最高价',
-  low: '最低价',
-  close: '收盘价',
-  volume: '成交量',
-  quote_volume: '成交额',
-  trade_num: '成交笔数',
-  taker_buy_base_asset_volume: '主动买入成交量',
-  taker_buy_quote_asset_volume: '主动买入成交额',
-  avg_price_1m: '1分钟均价',
-  avg_price_5m: '5分钟均价',
-  fundingRate: '资金费率',
-  spread: '价差',
-  Spread: '价差',
-  ma20_close: '20周期收盘均线',
-  text_note: '备注',
-  trading_status: '交易状态',
-};
-
-const commonDatasetLabels: Record<string, string> = {
-  binance_spot_kline: '币安现货K线',
-  binance_spot_symbols: '币安现货交易对',
-  binance_swap_kline: '币安U本位合约K线',
-  eastmoney_daily_kline: '东方财富日线行情',
-  eastmoney_stock_profile: '东方财富股票资料',
-  akshare_financial_indicator: 'AKShare 财务指标',
-};
-
 export function datasetDisplayName(dataset?: Pick<Dataset, 'dataset_id' | 'name'> | null) {
   if (!dataset) return '';
-  if (dataset.name && containsCJK(dataset.name)) return dataset.name;
-  return commonDatasetLabels[dataset.dataset_id] || dataset.dataset_id || dataset.name || '';
+  return dataset.name || dataset.dataset_id || '';
 }
 
 export function adaptiveColumnWidth(columnName: string, label: string, rows: Array<Pick<BrowseTableRow, 'values'>>) {
@@ -117,6 +86,8 @@ function resolveColumnLabel(
   fieldByID: Map<string, Field>,
   factorByID: Map<string, Factor>,
 ) {
+  const columnDisplayName = displayName(column.attributes);
+  if (columnDisplayName) return columnDisplayName;
   if (isOriginType(column.origin_type, 'DATASET_COLUMN_ORIGIN_TYPE_FIELD', 1)) {
     return readableColumnLabel(
       column.column_name,
@@ -133,8 +104,11 @@ function resolveColumnLabel(
 }
 
 function readableColumnLabel(columnName: string, metadataName?: string) {
-  if (metadataName && containsCJK(metadataName)) return metadataName;
-  return commonColumnLabels[columnName] || metadataName || systemColumnLabels[columnName] || columnName;
+  return metadataName || systemColumnLabels[columnName] || columnName;
+}
+
+function displayName(attributes?: Record<string, string>) {
+  return attributes?.display_name?.trim() || '';
 }
 
 function containsCJK(value: string) {

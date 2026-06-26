@@ -20,8 +20,8 @@ const {
 } = await import(moduleUrl);
 
 assert.equal(
-  viewDisplayName({ view_id: 'binance_swap_kline_view', name: 'Binance Swap Kline View' }),
-  'Binance Swap Kline View',
+  viewDisplayName({ view_id: 'binance_swap_kline_view', name: '合约K线' }),
+  '合约K线',
 );
 assert.equal(
   viewDisplayName({ view_id: 'kline_view', name: 'K线视图' }),
@@ -49,7 +49,12 @@ const labels = buildViewColumnLabels(
     { column_name: 'close', origin_type: 'COLUMN_ORIGIN_TYPE_DATASET_COLUMN', origin_id: 'kline.close' },
     { column_name: 'ma20', origin_type: 'COLUMN_ORIGIN_TYPE_DATASET_COLUMN', origin_id: 'kline.ma20_close' },
     { column_name: 'subject_id', origin_type: 'COLUMN_ORIGIN_TYPE_SYSTEM', origin_id: 'subject_id' },
-    { column_name: 'spread', origin_type: 'COLUMN_ORIGIN_TYPE_EXPRESSION', origin_id: 'close-open' },
+    {
+      column_name: 'spread',
+      origin_type: 'COLUMN_ORIGIN_TYPE_EXPRESSION',
+      origin_id: 'close-open',
+      attributes: { display_name: '价差' },
+    },
   ],
   [
     { dataset_id: 'kline', column_name: 'close', origin_type: 'DATASET_COLUMN_ORIGIN_TYPE_FIELD', origin_id: 'close' },
@@ -67,6 +72,33 @@ assert.deepEqual(labels, {
   subject_id: '数据ID',
   spread: '价差',
 });
+assert.equal(
+  buildViewColumnLabels(
+    [{
+      column_name: 'close',
+      origin_type: 'COLUMN_ORIGIN_TYPE_DATASET_COLUMN',
+      origin_id: 'kline.close',
+      attributes: { display_name: '最新价' },
+    }],
+    [{ dataset_id: 'kline', column_name: 'close', origin_type: 'DATASET_COLUMN_ORIGIN_TYPE_FIELD', origin_id: 'close' }],
+    [{ field_id: 'close', name: '收盘价' }],
+    [],
+    [{ dataset_id: 'kline', name: 'K线' }],
+    { primary_dataset_id: 'kline', dataset_ids: ['kline'] },
+  ).close,
+  '最新价',
+);
+assert.equal(
+  buildViewColumnLabels(
+    [{ column_name: 'close', origin_type: 'COLUMN_ORIGIN_TYPE_DATASET_COLUMN', origin_id: 'kline.close' }],
+    [{ dataset_id: 'kline', column_name: 'close', origin_type: 'DATASET_COLUMN_ORIGIN_TYPE_FIELD', origin_id: 'close' }],
+    [{ field_id: 'close', name: 'Close Price' }],
+    [],
+    [{ dataset_id: 'kline', name: 'K线' }],
+    { primary_dataset_id: 'kline', dataset_ids: ['kline'] },
+  ).close,
+  'Close Price',
+);
 
 const joinedLabels = buildViewColumnLabels(
   [
@@ -111,6 +143,8 @@ assert.deepEqual(joinedLabels, {
   'binance_swap_kline.close': '收盘价（币安U本位合约K线）',
   'binance_spot_kline.close': '收盘价（币安现货K线）',
 });
+assert.equal(source.includes('commonViewLabels'), false);
+assert.equal(source.includes("open: '开盘价'"), false);
 
 assert.deepEqual(buildViewSorts({ fieldName: 'close', direction: 'asc' }), [{ field_name: 'close', desc: false }]);
 assert.deepEqual(buildViewSorts({ fieldName: 'volume', direction: 'desc' }), [{ field_name: 'volume', desc: true }]);

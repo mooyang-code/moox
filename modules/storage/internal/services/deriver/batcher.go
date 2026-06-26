@@ -86,6 +86,8 @@ func (b *batcher[T]) run(ctx context.Context, out chan<- []T) {
 	for {
 		select {
 		case <-ctx.Done():
+			// Close 取消 run context 后不再接收新任务，但已进入 batcher 的尾批次仍会
+			// flush 给 worker，保证关闭过程中已接收的派生任务至少执行一次。
 			for {
 				select {
 				case item := <-b.in:

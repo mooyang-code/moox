@@ -8,12 +8,14 @@ const (
 
 // FunctionCodeConfig 云函数代码配置
 type FunctionCodeConfig struct {
-	Runtime       string // 运行时环境（如 Go1, Python3.6 等）
-	Version       string // 代码版本号（用于描述信息）
-	ZipFileBase64 string // Base64编码的ZIP文件
-	COSBucket     string // COS桶名（优先使用COS）
-	COSPath       string // COS对象路径
-	COSRegion     string // COS区域
+	Runtime       string            // 运行时环境（如 Go1, Python3.6 等）
+	Handler       string            // 函数处理入口（如 main/bootstrap）
+	Environment   map[string]string // 函数环境变量
+	Version       string            // 代码版本号（用于描述信息）
+	ZipFileBase64 string            // Base64编码的ZIP文件
+	COSBucket     string            // COS桶名（优先使用COS）
+	COSPath       string            // COS对象路径
+	COSRegion     string            // COS区域
 }
 
 // InvokeFunctionResponse 云函数调用响应

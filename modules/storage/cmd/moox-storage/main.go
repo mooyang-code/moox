@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,17 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
+
+func init() {
+	registerStorageFlags(flag.CommandLine)
+}
+
+func registerStorageFlags(flags *flag.FlagSet) {
+	if flags == nil || flags.Lookup("storage-conf") != nil {
+		return
+	}
+	flags.String("storage-conf", "", "storage business config path")
+}
 
 func main() {
 	if metadataInitRequested(os.Args) {
@@ -62,6 +74,19 @@ func main() {
 		opts.Root = root
 	}
 	if needsRowsChangedBus(cfg.Storage) {
+		embeddedEventBus, err := eventbus.StartEmbeddedServer(cfg.Storage.EventBus)
+		if err != nil {
+			log.Errorf("启动内嵌 storage eventbus 失败: %v", err)
+			os.Exit(1)
+		}
+		if embeddedEventBus != nil {
+			defer func() {
+				if err := embeddedEventBus.Close(); err != nil {
+					log.Errorf("关闭内嵌 storage eventbus 失败: %v", err)
+				}
+			}()
+			log.Infof("Embedded storage eventbus initialized")
+		}
 		events, err := eventbus.NewRowsChangedBus(trpc.BackgroundContext(), cfg.Storage.EventBus)
 		if err != nil {
 			log.Errorf("初始化 storage eventbus 失败: %v", err)

@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestControlGatewayRewrite(t *testing.T) {
 	cases := []struct {
@@ -9,8 +13,8 @@ func TestControlGatewayRewrite(t *testing.T) {
 		wantService string
 		wantMethod  string
 	}{
-		{"/api/control/space/ListSpaces", "/gateway/space/ListSpaces", "space", "ListSpaces"},
-		{"/api/control/cloudnode/ListNodes", "/gateway/cloudnode/ListNodes", "cloudnode", "ListNodes"},
+		{"/api/control/space/ListSpaces", "/api/control/space/ListSpaces", "space", "ListSpaces"},
+		{"/api/control/cloudnode/ListNodes", "/api/control/cloudnode/ListNodes", "cloudnode", "ListNodes"},
 	}
 	for _, tc := range cases {
 		got, ok := resolveControlGatewayTarget(tc.path)
@@ -20,6 +24,41 @@ func TestControlGatewayRewrite(t *testing.T) {
 		if got.Path != tc.wantPath || got.Service != tc.wantService || got.Method != tc.wantMethod {
 			t.Fatalf("%s => %+v, want path=%s service=%s method=%s", tc.path, got, tc.wantPath, tc.wantService, tc.wantMethod)
 		}
+	}
+}
+
+func TestControlGatewayProxyKeepsAPIControlPath(t *testing.T) {
+	var gotRequestURI string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRequestURI = r.URL.RequestURI()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	proxy, err := newGatewayProxy(gatewayConfig{
+		ControlURL:  upstream.URL,
+		MetadataURL: "http://127.0.0.1:19101",
+		AccessURL:   "http://127.0.0.1:19104",
+		ViewURL:     "http://127.0.0.1:19105",
+	})
+	if err != nil {
+		t.Fatalf("newGatewayProxy returned error: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/control/foo/Bar?trace=1", nil)
+	target, ok := resolveControlGatewayTarget(req.URL.Path)
+	if !ok {
+		t.Fatalf("%s was not recognized as control gateway path", req.URL.Path)
+	}
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req, target)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("proxy returned status %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if gotRequestURI != "/api/control/foo/Bar?trace=1" {
+		t.Fatalf("upstream received %q, want /api/control/foo/Bar?trace=1", gotRequestURI)
 	}
 }
 

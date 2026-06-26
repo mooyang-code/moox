@@ -39,7 +39,14 @@ GOWORK=off go run ./cmd/moox-cli metadata import \
   --file ../../examples/metadata-crypto.seed.yaml \
   --metadata-url http://127.0.0.1:19101 \
   --if-not-exists
+
+GOWORK=off go run ./cmd/moox-cli metadata import \
+  --file ../../examples/metadata-crypto-binance-swap-kline.seed.yaml \
+  --metadata-url http://127.0.0.1:19101 \
+  --if-not-exists
 ```
+
+`metadata-crypto.seed.yaml` 会先登记 BTC/ETH/SOL/BNB 等基础 Subject，并把它们绑定到现货 K 线数据集；`metadata-crypto-binance-swap-kline.seed.yaml` 再登记合约 K 线数据集和 `合约现货视图`。这样导入合约与现货同一 Subject、同一时间点的数据后，可以直接验证两个 TimeSeries Dataset 的 View Join。
 
 试跑不写入：
 

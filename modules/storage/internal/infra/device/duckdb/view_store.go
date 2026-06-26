@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
@@ -29,7 +30,8 @@ type Options struct {
 
 // ViewStore 封装 TimeSeries 视图在 DuckDB 中的物化读写能力。
 type ViewStore struct {
-	db *sql.DB
+	db         *sql.DB
+	tableLocks sync.Map
 }
 
 var tableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -93,6 +95,8 @@ func (s *ViewStore) CreateResultTable(ctx context.Context, tableName string, col
 	if err != nil {
 		return err
 	}
+	unlock := s.lockResultTable(tableName)
+	defer unlock()
 	defs := []string{
 		"row_key VARCHAR NOT NULL",
 		"space_id VARCHAR NOT NULL",
@@ -229,6 +233,8 @@ func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb
 	if len(rows) == 0 {
 		return nil
 	}
+	unlock := s.lockResultTable(tableName)
+	defer unlock()
 	columns, err := s.loadColumns(ctx, tableName)
 	if err != nil {
 		return err
@@ -241,6 +247,13 @@ func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb
 		return s.insertRowsIntoEmptyTable(ctx, quoted, columns, rows)
 	}
 	return s.mergeRowsIntoTable(ctx, quoted, columns, rows)
+}
+
+func (s *ViewStore) lockResultTable(tableName string) func() {
+	actual, _ := s.tableLocks.LoadOrStore(tableName, &sync.Mutex{})
+	mu := actual.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 func (s *ViewStore) resultTableEmpty(ctx context.Context, quotedTableName string) (bool, error) {

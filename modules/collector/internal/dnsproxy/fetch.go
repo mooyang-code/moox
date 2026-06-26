@@ -1,7 +1,6 @@
 package dnsproxy
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/avast/retry-go"
+	"github.com/mooyang-code/moox/modules/collector/internal/controlapi"
 	"github.com/mooyang-code/moox/modules/collector/pkg/config"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -111,7 +111,7 @@ func fetchSingleDomainFromRemote(ctx context.Context, domain string) *DNSRecord 
 	}
 
 	// 构建请求 URL
-	url := fmt.Sprintf("http://%s:%d/gateway/dnsproxy/GetDNSRecordList", serverIP, serverPort)
+	url := controlapi.URL(serverIP, serverPort, "dnsproxy", "GetDNSRecordList")
 
 	// 发送 HTTP 请求
 	respData, err := fetchFromServer(ctx, url)
@@ -184,12 +184,12 @@ func fetchFromServer(ctx context.Context, url string) ([]byte, error) {
 
 // sendSingleRequest 发送单次 HTTP 请求
 func sendSingleRequest(ctx context.Context, url string, httpClient *http.Client, respData *[]byte) error {
+	body := []byte("{}")
 	// 创建 HTTP 请求
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer([]byte("{}")))
+	req, err := controlapi.NewSignedRequestWithContext(ctx, "POST", url, body, controlapi.DefaultAuthConfig())
 	if err != nil {
 		return fmt.Errorf("failed to create DNS fetch request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
 
 	// 发送请求
 	resp, err := httpClient.Do(req)

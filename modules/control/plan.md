@@ -210,21 +210,21 @@
 
      2.4 API 路由设计
 
-     // 通过 Gateway 代理的 REST API（端口 20103）
-     POST   /gateway/ssh/ListHosts           → 主机列表（分页）
-     POST   /gateway/ssh/CreateHost          → 创建主机
-     POST   /gateway/ssh/UpdateHost          → 更新主机
-     POST   /gateway/ssh/DeleteHost          → 删除主机
-     POST   /gateway/ssh/CreateSession       → 创建 SSH 会话（返回
+     // 通过 Control API 代理的 REST API（端口 20103）
+     POST   /api/control/ssh/ListHosts           → 主机列表（分页）
+     POST   /api/control/ssh/CreateHost          → 创建主机
+     POST   /api/control/ssh/UpdateHost          → 更新主机
+     POST   /api/control/ssh/DeleteHost          → 删除主机
+     POST   /api/control/ssh/CreateSession       → 创建 SSH 会话（返回
      session_id）
-     POST   /gateway/ssh/DisconnectSession   → 断开 SSH 会话
-     POST   /gateway/ssh/ResizeWindow        → 调整终端大小
-     POST   /gateway/ssh/ExecCommand         → 执行命令
-     POST   /gateway/ssh/SftpList            → SFTP 目录列表
-     POST   /gateway/ssh/SftpMkdir           → SFTP 创建目录
-     POST   /gateway/ssh/SftpDelete          → SFTP 删除
-     POST   /gateway/ssh/GetOnlineSessions   → 在线会话列表
-     POST   /gateway/ssh/ForceDisconnect     → 强制断开
+     POST   /api/control/ssh/DisconnectSession   → 断开 SSH 会话
+     POST   /api/control/ssh/ResizeWindow        → 调整终端大小
+     POST   /api/control/ssh/ExecCommand         → 执行命令
+     POST   /api/control/ssh/SftpList            → SFTP 目录列表
+     POST   /api/control/ssh/SftpMkdir           → SFTP 创建目录
+     POST   /api/control/ssh/SftpDelete          → SFTP 删除
+     POST   /api/control/ssh/GetOnlineSessions   → 在线会话列表
+     POST   /api/control/ssh/ForceDisconnect     → 强制断开
 
      // SSH 独立 HTTP 服务上的直连端点（端口 config 中配置，如 20180）
      GET    /api/ssh/conn?session_id=X&w=X&h=X    → WebSocket 终端连接

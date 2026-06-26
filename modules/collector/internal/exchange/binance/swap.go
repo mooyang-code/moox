@@ -27,6 +27,7 @@ func NewSwapAPI(client *Client) *SwapAPI {
 // API: GET https://fapi.binance.com/fapi/v1/klines
 func (api *SwapAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
 	params := url.Values{}
+	domain := api.client.SwapDomain()
 
 	// 转换交易对格式
 	symbol := FormatSymbol(req.Symbol)
@@ -52,22 +53,22 @@ func (api *SwapAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 	err := retry.Do(
 		func() error {
 			// 获取下一个可用的IP（排除已失败的IP）
-			currentIP := dnsproxy.GetNextAvailableIP(SwapDomain, triedIPs)
+			currentIP := dnsproxy.GetNextAvailableIP(domain, triedIPs)
 
-			// 如果没有可用的IP，直接返回失败，不再重试
+			// DNS proxy 记录可能尚未同步，允许降级为标准域名访问。
 			if currentIP == "" {
-				log.WarnContextf(ctx, "[SwapAPI] 无可用IP，symbol=%s, interval=%s, 已尝试IP: %v",
+				log.WarnContextf(ctx, "[SwapAPI] 无可用DNS优选IP，降级为域名直连, symbol=%s, interval=%s, 已尝试IP: %v",
 					symbol, req.Interval, triedIPs)
-				// 返回 retry.Unrecoverable 让重试立即停止
-				return retry.Unrecoverable(fmt.Errorf("无可用IP访问 %s", SwapDomain))
 			}
 
 			// 使用指定IP发送请求
-			err := api.client.GetWithIP(ctx, SwapDomain, SwapKlineEndpoint, params, &rawKlines, currentIP)
+			err := api.client.GetWithIP(ctx, domain, SwapKlineEndpoint, params, &rawKlines, currentIP)
 			if err != nil {
-				// 请求失败，记录这个IP
-				triedIPs = append(triedIPs, currentIP)
-				log.WarnContextf(ctx, "[SwapAPI] IP %s 请求失败，加入排除列表", currentIP)
+				if currentIP != "" {
+					// 请求失败，记录这个IP
+					triedIPs = append(triedIPs, currentIP)
+					log.WarnContextf(ctx, "[SwapAPI] IP %s 请求失败，加入排除列表", currentIP)
+				}
 				return err
 			}
 			return nil
@@ -103,19 +104,21 @@ func (api *SwapAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 func (api *SwapAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo, error) {
 	var result ExchangeInfoResponse
 	var triedIPs []string
+	domain := api.client.SwapDomain()
 
 	err := retry.Do(
 		func() error {
-			currentIP := dnsproxy.GetNextAvailableIP(SwapDomain, triedIPs)
+			currentIP := dnsproxy.GetNextAvailableIP(domain, triedIPs)
 			if currentIP == "" {
-				log.WarnContextf(ctx, "[SwapAPI] 无可用IP获取ExchangeInfo，已尝试IP: %v", triedIPs)
-				return retry.Unrecoverable(fmt.Errorf("无可用IP访问 %s", SwapDomain))
+				log.WarnContextf(ctx, "[SwapAPI] 无可用DNS优选IP获取ExchangeInfo，降级为域名直连, 已尝试IP: %v", triedIPs)
 			}
 
-			err := api.client.GetWithIP(ctx, SwapDomain, SwapExchangeInfoEndpoint, nil, &result, currentIP)
+			err := api.client.GetWithIP(ctx, domain, SwapExchangeInfoEndpoint, nil, &result, currentIP)
 			if err != nil {
-				triedIPs = append(triedIPs, currentIP)
-				log.WarnContextf(ctx, "[SwapAPI] IP %s 获取ExchangeInfo失败，加入排除列表", currentIP)
+				if currentIP != "" {
+					triedIPs = append(triedIPs, currentIP)
+					log.WarnContextf(ctx, "[SwapAPI] IP %s 获取ExchangeInfo失败，加入排除列表", currentIP)
+				}
 				return err
 			}
 			return nil

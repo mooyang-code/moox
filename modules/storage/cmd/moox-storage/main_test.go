@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,12 @@ func TestStorageConfigPathFromArgs(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_CONFIG", "/tmp/moox/storage.yaml")
 	if got := storageConfigPathFromArgs([]string{"moox-storage"}, frameworkPath); got != "/tmp/moox/storage.yaml" {
 		t.Fatalf("storageConfigPathFromArgs env = %q", got)
+	}
+}
+
+func TestStorageConfigFlagRegisteredForTRPC(t *testing.T) {
+	if flag.CommandLine.Lookup("storage-conf") == nil {
+		t.Fatalf("storage-conf flag must be registered before trpc.NewServer parses flags")
 	}
 }
 
@@ -252,6 +259,38 @@ func TestRepositoryConfigUsesUnifiedEventSubjectPrefix(t *testing.T) {
 	}
 	if cfg.Storage.EventBus.SubjectPrefix != "moox.storage" {
 		t.Fatalf("subject_prefix = %q", cfg.Storage.EventBus.SubjectPrefix)
+	}
+}
+
+func TestRepositoryConfigEnablesEmbeddedNATS(t *testing.T) {
+	cfg, ok := loadStorageConfig(filepath.Join("..", "..", "config", "storage.yaml"))
+	if !ok {
+		t.Fatalf("load repository config failed")
+	}
+	if cfg.Storage.EventBus.Type != "nats" {
+		t.Fatalf("eventbus type = %q", cfg.Storage.EventBus.Type)
+	}
+	if !cfg.Storage.EventBus.Embedded.Enabled {
+		t.Fatalf("repository storage config should enable embedded nats for local deployment")
+	}
+}
+
+func TestMainStartsEmbeddedEventBusBeforeConnecting(t *testing.T) {
+	content, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go failed: %v", err)
+	}
+	text := string(content)
+	start := strings.Index(text, "eventbus.StartEmbeddedServer")
+	connect := strings.Index(text, "eventbus.NewRowsChangedBus")
+	if start < 0 {
+		t.Fatalf("main.go should start embedded eventbus when configured")
+	}
+	if connect < 0 {
+		t.Fatalf("main.go should initialize rows changed bus")
+	}
+	if start > connect {
+		t.Fatalf("embedded eventbus should start before rows changed bus connects")
 	}
 }
 

@@ -25,7 +25,10 @@
       @page-size-change="onPageSizeChange"
     >
       <template #columns>
-        <a-table-column title="列名" data-index="column_name" :width="150" />
+        <a-table-column title="中文名" :width="120">
+          <template #cell="{ record }">{{ record.attributes?.display_name || '-' }}</template>
+        </a-table-column>
+        <a-table-column title="技术列名" data-index="column_name" :width="150" />
         <a-table-column title="来源类型" :width="130">
           <template #cell="{ record }">
             {{ optionLabel(viewColumnOriginOptions, record.origin_type) }}
@@ -51,6 +54,9 @@
 
     <a-modal v-model:visible="visible" width="720px" :title="modalTitle" @ok="submit">
       <a-form :model="form" auto-label-width>
+        <a-form-item field="display_name" label="中文名" required>
+          <a-input v-model="form.display_name" :max-length="10" show-word-limit placeholder="例如 收盘价" />
+        </a-form-item>
         <a-form-item field="column_name" label="列名" required>
           <a-input v-model="form.column_name" :disabled="editing" placeholder="例如 close" />
         </a-form-item>
@@ -89,6 +95,7 @@ import {
   fieldValueTypeOptions,
   formatTime,
   optionLabel,
+  validateChineseDisplayName,
   viewColumnOriginOptions,
 } from '@/views/data/shared/metadata-utils';
 
@@ -106,6 +113,7 @@ const editing = ref(false);
 const pagination = reactive(defaultPagination());
 
 const form = reactive({
+  display_name: '',
   column_name: '',
   origin_type: 'COLUMN_ORIGIN_TYPE_DATASET_COLUMN' as ViewColumn['origin_type'],
   origin_id: '',
@@ -137,6 +145,7 @@ async function load() {
 
 function resetForm() {
   Object.assign(form, {
+    display_name: '',
     column_name: '',
     origin_type: 'COLUMN_ORIGIN_TYPE_DATASET_COLUMN',
     origin_id: '',
@@ -155,6 +164,7 @@ function openCreate() {
 function openEdit(record: ViewColumn) {
   editing.value = true;
   Object.assign(form, {
+    display_name: record.attributes?.display_name || '',
     column_name: record.column_name,
     origin_type: record.origin_type || 'COLUMN_ORIGIN_TYPE_DATASET_COLUMN',
     origin_id: record.origin_id,
@@ -166,8 +176,13 @@ function openEdit(record: ViewColumn) {
 }
 
 async function submit() {
-  if (!props.spaceId || !props.viewId || !form.column_name || !form.origin_id) {
-    Message.warning('请补全列名、来源ID和视图');
+  if (!props.spaceId || !props.viewId || !form.display_name || !form.column_name || !form.origin_id) {
+    Message.warning('请补全中文名、列名、来源ID和视图');
+    return;
+  }
+  const nameError = validateChineseDisplayName(form.display_name);
+  if (nameError) {
+    Message.warning(nameError);
     return;
   }
   await upsertViewColumn({
@@ -179,6 +194,7 @@ async function submit() {
     value_type: form.value_type,
     online_time: form.online_time,
     sort_order: form.sort_order,
+    attributes: { display_name: form.display_name },
   });
   Message.success('结果列已保存');
   visible.value = false;

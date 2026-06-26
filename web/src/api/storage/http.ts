@@ -10,6 +10,26 @@ const storageClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+function readAccessToken(): string {
+  try {
+    const raw = localStorage.getItem('user-info');
+    if (!raw) return '';
+    const parsed = JSON.parse(raw) as { token?: string };
+    return parsed.token || '';
+  } catch {
+    return '';
+  }
+}
+
+function storageServiceID(group: 'metadata' | 'access' | 'view') {
+  const serviceIDs = {
+    metadata: 'storage_metadata',
+    access: 'storage_access',
+    view: 'storage_view',
+  } as const;
+  return serviceIDs[group];
+}
+
 function assertSuccess(retInfo?: RetInfo) {
   if (!retInfo) {
     throw new Error('storage response missing ret_info');
@@ -24,7 +44,7 @@ async function callStorage<TReq extends object, TRsp extends { ret_info?: RetInf
   method: string,
   req: TReq,
 ): Promise<TRsp> {
-  const rsp = await storageClient.post<TRsp>(`/api/storage/${group}/${method}`, {
+  const rsp = await storageClient.post<TRsp>(`/api/control/${storageServiceID(group)}/${method}`, {
     auth_info: getStorageAuthInfo(),
     ...req,
   });
@@ -46,6 +66,15 @@ export const callView = <TReq extends object, TRsp extends { ret_info?: RetInfo 
   method: string,
   req: TReq,
 ) => callStorage<TReq, TRsp>('view', method, req);
+
+storageClient.interceptors.request.use((config) => {
+  const token = readAccessToken();
+  if (token) {
+    config.headers.Authorization = token;
+    config.headers['X-Access-Token'] = token;
+  }
+  return config;
+});
 
 storageClient.interceptors.response.use(
   (rsp) => rsp,

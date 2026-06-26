@@ -30,9 +30,12 @@
     >
       <template #columns>
         <a-table-column title="视图ID" data-index="view_id" :width="170" />
-        <a-table-column title="名称" data-index="name" :width="160" />
+        <a-table-column title="中文名" data-index="name" :width="160" />
         <a-table-column title="引擎" data-index="engine" :width="100" />
         <a-table-column title="主数据集" data-index="primary_dataset_id" :width="150" />
+        <a-table-column title="频率" :width="90">
+          <template #cell="{ record }">{{ viewFreqLabel(record) }}</template>
+        </a-table-column>
         <a-table-column title="版本" :width="90">
           <template #cell="{ record }">{{ record.view_version || 0 }}</template>
         </a-table-column>
@@ -64,8 +67,8 @@
         <a-form-item field="view_id" label="视图ID" required>
           <a-input v-model="form.view_id" :disabled="editing" placeholder="例如 kline_view" />
         </a-form-item>
-        <a-form-item field="name" label="名称" required>
-          <a-input v-model="form.name" />
+        <a-form-item field="name" label="中文名" required>
+          <a-input v-model="form.name" :max-length="10" show-word-limit placeholder="例如 K线视图" />
         </a-form-item>
         <a-form-item field="description" label="描述">
           <a-textarea v-model="form.description" :auto-size="{ minRows: 3, maxRows: 5 }" />
@@ -75,6 +78,11 @@
             <a-option v-for="item in datasets" :key="item.dataset_id" :value="item.dataset_id">
               {{ item.name }} ({{ item.dataset_id }})
             </a-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item v-if="isTimeSeriesPrimaryDataset" field="view_freq" label="频率" required>
+          <a-select v-model="form.view_freq" allow-search placeholder="请选择频率">
+            <a-option v-for="freq in primaryFreqOptions" :key="freq" :value="freq">{{ freq }}</a-option>
           </a-select>
         </a-form-item>
         <a-form-item field="dataset_ids" label="包含数据集">
@@ -103,7 +111,10 @@
               :scroll="{ x: 'max-content', y: 260 }"
             >
               <template #columns>
-                <a-table-column title="列名" data-index="column_name" :width="170" />
+                <a-table-column title="中文名" :width="120">
+                  <template #cell="{ record }">{{ record.attributes?.display_name || '-' }}</template>
+                </a-table-column>
+                <a-table-column title="技术列名" data-index="column_name" :width="170" />
                 <a-table-column title="来源数据集" :width="180">
                   <template #cell="{ record }">{{ draftColumnDatasetName(record) }}</template>
                 </a-table-column>
@@ -158,25 +169,30 @@ import {
   defaultPagination,
   fieldValueTypeOptions,
   formatTime,
+  isTimeSeriesDataKind,
   jsonText,
   optionLabel,
   resolveViewRebuildKind,
   statusColor,
   statusOptions,
+  validateChineseDisplayName,
   validateLowerSnakeId
 } from "@/views/data/shared/metadata-utils";
 import {
   buildDraftViewColumns,
+  buildTimeSeriesViewFilterJSON,
   buildViewDatasetIds,
   availableIncludedDatasets,
   defaultViewEngine,
   defaultViewGrainKeys,
+  freqFromViewFilterJSON,
+  freqOptionsForPrimaryDataset,
   removePrimaryFromIncludes
 } from "./view-form-utils";
 
 defineOptions({ name: "DataViews" });
 
-type ViewForm = View;
+type ViewForm = View & { view_freq?: string };
 
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
@@ -201,13 +217,19 @@ const form = reactive<ViewForm>({
   dataset_ids: [],
   grain_keys: [],
   filter_json: "{}",
+  view_freq: "",
   engine: "",
   query_window: "",
   status: "active"
 });
 
 const modalTitle = computed(() => (editing.value ? "编辑视图" : "新增视图"));
-const includedDatasetOptions = computed(() => availableIncludedDatasets(datasets.value));
+const primaryDataset = computed(() => datasets.value.find(item => item.dataset_id === form.primary_dataset_id));
+const primaryFreqOptions = computed(() => freqOptionsForPrimaryDataset(datasets.value, form.primary_dataset_id));
+const isTimeSeriesPrimaryDataset = computed(() => isTimeSeriesDataKind(primaryDataset.value?.data_kind));
+const includedDatasetOptions = computed(() =>
+  availableIncludedDatasets(datasets.value, form.primary_dataset_id, form.view_freq || "")
+);
 
 async function loadDatasets() {
   if (!selectedSpaceId.value) {
@@ -247,6 +269,7 @@ function resetForm() {
     dataset_ids: [],
     grain_keys: [],
     filter_json: "{}",
+    view_freq: "",
     engine: "",
     query_window: "",
     status: "active"
@@ -266,8 +289,10 @@ function openEdit(record: View) {
     ...record,
     dataset_ids: (record.dataset_ids || []).filter(datasetId => datasetId !== record.primary_dataset_id),
     grain_keys: record.grain_keys || [],
-    filter_json: jsonText(record.filter_json)
+    filter_json: jsonText(record.filter_json),
+    view_freq: freqFromViewFilterJSON(record.filter_json)
   });
+  syncViewFreq();
   draftColumns.value = [];
   visible.value = true;
 }
@@ -280,13 +305,31 @@ function openColumns(record: View) {
 async function submit() {
   const spaceId = spaceStore.requireSpaceId();
   if (!form.view_id || !form.name || !form.primary_dataset_id) {
-    Message.warning("请补全视图ID、名称和主数据集");
+    Message.warning("请补全视图ID、中文名和主数据集");
+    return;
+  }
+  const nameError = validateChineseDisplayName(form.name);
+  if (nameError) {
+    Message.warning(nameError);
     return;
   }
   const idError = validateLowerSnakeId(form.view_id, 30);
   if (idError) {
     Message.warning(`视图${idError}`);
     return;
+  }
+  let filterJSON = jsonText(form.filter_json);
+  if (isTimeSeriesPrimaryDataset.value) {
+    if (!form.view_freq) {
+      Message.warning("请选择频率");
+      return;
+    }
+    try {
+      filterJSON = buildTimeSeriesViewFilterJSON(form.filter_json, form.view_freq);
+    } catch {
+      Message.warning("过滤JSON格式错误");
+      return;
+    }
   }
   const datasetIds = buildViewDatasetIds(form.primary_dataset_id, form.dataset_ids || []);
   const payload: View = {
@@ -297,7 +340,7 @@ async function submit() {
     primary_dataset_id: form.primary_dataset_id,
     dataset_ids: datasetIds,
     grain_keys: defaultViewGrainKeys(datasets.value, form.primary_dataset_id),
-    filter_json: jsonText(form.filter_json),
+    filter_json: filterJSON,
     engine: defaultViewEngine(datasets.value, form.primary_dataset_id),
     query_window: form.query_window,
     status: form.status
@@ -368,6 +411,10 @@ function draftColumnSourceName(record: ViewColumn) {
   return record.origin_id?.split(".").slice(1).join(".") || record.origin_id || "-";
 }
 
+function viewFreqLabel(record: View) {
+  return freqFromViewFilterJSON(record.filter_json) || "-";
+}
+
 async function rebuild(record: View) {
   const spaceId = spaceStore.requireSpaceId();
   const rebuildKind = resolveViewRebuildKind(datasets.value, record.primary_dataset_id);
@@ -397,14 +444,35 @@ function onPageSizeChange(pageSize: number) {
 
 function syncIncludedDatasets() {
   const next = removePrimaryFromIncludes(form.primary_dataset_id, form.dataset_ids || []);
-  if (next.join("|") !== (form.dataset_ids || []).join("|")) {
-    form.dataset_ids = next;
-    Message.warning("包含数据集不能与主数据集相同，已自动移除");
+  const allowed = new Set(includedDatasetOptions.value.map(item => item.dataset_id));
+  const filtered = next.filter(datasetId => allowed.has(datasetId));
+  if (filtered.join("|") !== (form.dataset_ids || []).join("|")) {
+    form.dataset_ids = filtered;
+    Message.warning("包含数据集已自动调整");
+  }
+}
+
+function syncViewFreq() {
+  if (!primaryFreqOptions.value.length) {
+    form.view_freq = "";
+    return;
+  }
+  if (!form.view_freq || !primaryFreqOptions.value.includes(form.view_freq)) {
+    form.view_freq = primaryFreqOptions.value[0];
   }
 }
 
 watch(
   () => form.primary_dataset_id,
+  () => {
+    syncViewFreq();
+    syncIncludedDatasets();
+    refreshDraftColumns();
+  }
+);
+
+watch(
+  () => form.view_freq,
   () => {
     syncIncludedDatasets();
     refreshDraftColumns();

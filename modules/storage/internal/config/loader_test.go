@@ -185,6 +185,9 @@ func TestStorageRuntimeConfigDefaultsRolesEventBusAndDeriver(t *testing.T) {
 	if cfg.Storage.EventBus.ConsumerName != "storage_deriver" {
 		t.Fatalf("eventbus consumer_name = %q", cfg.Storage.EventBus.ConsumerName)
 	}
+	if cfg.Storage.EventBus.Embedded.Enabled {
+		t.Fatalf("embedded nats should be opt-in by default")
+	}
 	if cfg.Storage.Deriver.AccessServiceName != "trpc.storage.access.AccessService" {
 		t.Fatalf("deriver access_service_name = %q", cfg.Storage.Deriver.AccessServiceName)
 	}
@@ -196,6 +199,54 @@ func TestStorageRuntimeConfigDefaultsRolesEventBusAndDeriver(t *testing.T) {
 	}
 	if cfg.Storage.Deriver.MaxWorkers != 4 {
 		t.Fatalf("deriver max_workers = %d", cfg.Storage.Deriver.MaxWorkers)
+	}
+}
+
+func TestStorageRuntimeConfigDefaultsEmbeddedNATS(t *testing.T) {
+	t.Parallel()
+
+	var cfg RuntimeConfig
+	cfg.Storage.Root = "/tmp/moox-storage"
+	cfg.Storage.EventBus.Type = "nats"
+	cfg.Storage.EventBus.Embedded.Enabled = true
+
+	cfg.ApplyDefaults()
+
+	if !cfg.Storage.EventBus.Embedded.Enabled {
+		t.Fatalf("embedded nats should stay enabled")
+	}
+	if cfg.Storage.EventBus.Embedded.Host != "127.0.0.1" {
+		t.Fatalf("embedded nats host = %q", cfg.Storage.EventBus.Embedded.Host)
+	}
+	if cfg.Storage.EventBus.Embedded.Port != 4222 {
+		t.Fatalf("embedded nats port = %d", cfg.Storage.EventBus.Embedded.Port)
+	}
+	if cfg.Storage.EventBus.Embedded.StoreDir != filepath.Join("/tmp/moox-storage", "nats") {
+		t.Fatalf("embedded nats store_dir = %q", cfg.Storage.EventBus.Embedded.StoreDir)
+	}
+	if cfg.Storage.EventBus.Embedded.StartupTimeoutMS != 10000 {
+		t.Fatalf("embedded nats startup_timeout_ms = %d", cfg.Storage.EventBus.Embedded.StartupTimeoutMS)
+	}
+}
+
+func TestStorageRuntimeConfigNormalizesNonPositiveDeriverBatchSettings(t *testing.T) {
+	t.Parallel()
+
+	cfg := RuntimeConfig{}
+	cfg.Storage.Deriver.BatchSize = -1
+	cfg.Storage.Deriver.BatchWaitMS = -10
+	cfg.Storage.Deriver.MaxWorkers = -2
+
+	cfg.ApplyDefaults()
+
+	if cfg.Storage.Deriver.BatchSize != 500 {
+		t.Fatalf("deriver batch_size = %d, want 500", cfg.Storage.Deriver.BatchSize)
+	}
+	if cfg.Storage.Deriver.BatchWaitMS != 200 {
+		t.Fatalf("deriver batch_wait_ms = %d, want 200", cfg.Storage.Deriver.BatchWaitMS)
+	}
+	if cfg.Storage.Deriver.MaxWorkers != 4 {
+		t.Fatalf("deriver max_workers = %d, want 4", cfg.Storage.Deriver.MaxWorkers)
 	}
 }
 

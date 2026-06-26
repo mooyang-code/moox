@@ -157,6 +157,7 @@ func showLogo() {
 	fmt.Println("    🗄️  db (数据库)         数据库初始化、删除、元数据表管理、数据查询操作")
 	fmt.Println("    📦 storage (存储)      高性能数据读写服务")
 	fmt.Println("    📨 msg (消息队列)       实时消息处理和队列管理")
+	fmt.Println("    🛠️  ops (云运维)        腾讯云轻量应用服务器防火墙管理")
 	fmt.Println()
 	fmt.Println("📖 使用帮助:")
 	fmt.Println("    📚 查看命令帮助       ./moox-cli --help")

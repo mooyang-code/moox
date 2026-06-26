@@ -106,3 +106,13 @@ func Internal(message string, err error) *AppError {
 		Err:        err,
 	}
 }
+
+// Conflict 资源状态冲突
+func Conflict(message string, err error) *AppError {
+	return &AppError{
+		Code:       CodeConflict,
+		Message:    message,
+		HTTPStatus: http.StatusConflict,
+		Err:        err,
+	}
+}

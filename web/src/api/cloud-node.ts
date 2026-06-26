@@ -11,6 +11,7 @@ export interface CloudNode {
   namespace: string;
   function_name: string;
   runtime: string;
+  handler?: string;
   status: string;
   status_desc: string;
   load_level: number;
@@ -20,6 +21,7 @@ export interface CloudNode {
   running_version?: string;
   memory_size?: number;
   timeout?: number;
+  config?: Record<string, string>;
   environment?: Record<string, string>;
   create_time?: string;
   update_time?: string;
@@ -47,9 +49,11 @@ export interface CreateNodeRequest {
   namespace: string;
   function_name: string;
   runtime: string;
+  handler?: string;
   package_id?: string; 
   memory_size?: number;
   timeout?: number;
+  config?: Record<string, string>;
   environment?: Record<string, string>;
   description?: string;
 }
@@ -71,6 +75,7 @@ export interface BatchCreateNodesRequest {
   namespace: string;
   function_name_prefix: string;
   runtime: string;
+  handler?: string;
   package_id?: string; 
   count: number;
   memory_size?: number;

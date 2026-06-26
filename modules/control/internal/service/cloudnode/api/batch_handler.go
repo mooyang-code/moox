@@ -33,6 +33,9 @@ type NodeCreateItem struct {
 	CloudAccountID string                 `json:"cloud_account_id" binding:"required"`
 	NodeType       string                 `json:"node_type" binding:"required"`
 	Runtime        string                 `json:"runtime"`
+	Handler        string                 `json:"handler"`
+	Config         map[string]string      `json:"config"`
+	Environment    map[string]string      `json:"environment"`
 	Region         string                 `json:"region" binding:"required"`
 	Namespace      string                 `json:"namespace"`
 	PackageID      string                 `json:"package_id"`

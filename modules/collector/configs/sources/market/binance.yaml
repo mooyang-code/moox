@@ -7,7 +7,9 @@ app:
 
 # API配置
 api:
-  base_url: "https://api.binance.com"
+  base_url: "https://data-api.binance.vision"
+  spot_base_url: "https://data-api.binance.vision"
+  swap_base_url: "https://fapi.binance.com"
   websocket_url: "wss://stream.binance.com:9443"
   timeout: 10
   rate_limit:
@@ -85,6 +87,34 @@ processing:
 
 # 存储配置（覆盖默认配置）
 storage:
+  bindings:
+    spot:
+      space_id: "crypto"
+      data_source_id: "binance"
+      subject_type: "crypto_pair"
+      subject_market: "spot"
+      record_dataset_id: "binance_spot_symbols"
+      kline_dataset_id: "binance_spot_kline"
+      bind_dataset_ids:
+        - "binance_spot_symbols"
+        - "binance_spot_kline"
+      auth_info:
+        app_id: "data-collector"
+        app_key: "binance-spot-collector"
+    swap:
+      space_id: "crypto"
+      data_source_id: "binance"
+      subject_type: "crypto_pair"
+      subject_market: "swap"
+      record_dataset_id: "binance_swap_symbols"
+      kline_dataset_id: "binance_swap_kline"
+      bind_dataset_ids:
+        - "binance_swap_symbols"
+        - "binance_swap_kline"
+      auth_info:
+        app_id: "data-collector"
+        app_key: "binance-swap-collector"
+
   kline:
     backend: "clickhouse"
     table: "klines_binance"

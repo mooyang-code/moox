@@ -98,7 +98,7 @@ datasets:
   - space_id: cn_stock
     dataset_id: ak_fin_indicator
     data_source_id: akshare
-    name: AKShare 财务指标
+    name: 财务指标
     description: Periodic financial indicators for listed companies
     data_kind: record
     freqs: []
@@ -285,6 +285,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_daily_kline
     column_name: open
+    attributes:
+      display_name: 开盘价
     origin_type: field
     origin_id: open
     value_type: double
@@ -293,6 +295,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_daily_kline
     column_name: high
+    attributes:
+      display_name: 最高价
     origin_type: field
     origin_id: high
     value_type: double
@@ -301,6 +305,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_daily_kline
     column_name: low
+    attributes:
+      display_name: 最低价
     origin_type: field
     origin_id: low
     value_type: double
@@ -309,6 +315,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_daily_kline
     column_name: close
+    attributes:
+      display_name: 收盘价
     origin_type: field
     origin_id: close
     value_type: double
@@ -317,6 +325,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_daily_kline
     column_name: volume
+    attributes:
+      display_name: 成交量
     origin_type: field
     origin_id: volume
     value_type: double
@@ -324,6 +334,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_daily_kline
     column_name: amount
+    attributes:
+      display_name: 成交额
     origin_type: field
     origin_id: amount
     value_type: double
@@ -331,6 +343,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_daily_kline
     column_name: pct_chg
+    attributes:
+      display_name: 涨跌幅
     origin_type: field
     origin_id: pct_chg
     value_type: double
@@ -338,6 +352,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_daily_kline
     column_name: ma20_close
+    attributes:
+      display_name: 20日均线
     origin_type: factor
     origin_id: ma20_close
     value_type: double
@@ -345,6 +361,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_daily_kline
     column_name: daily_return
+    attributes:
+      display_name: 日收益率
     origin_type: factor
     origin_id: daily_return
     value_type: double
@@ -352,6 +370,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_stock_profile
     column_name: symbol
+    attributes:
+      display_name: 证券代码
     origin_type: field
     origin_id: symbol
     value_type: string
@@ -361,6 +381,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_stock_profile
     column_name: stock_name
+    attributes:
+      display_name: 证券名称
     origin_type: field
     origin_id: stock_name
     value_type: string
@@ -369,6 +391,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_stock_profile
     column_name: industry
+    attributes:
+      display_name: 所属行业
     origin_type: field
     origin_id: industry
     value_type: string
@@ -376,6 +400,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: em_stock_profile
     column_name: list_date
+    attributes:
+      display_name: 上市日期
     origin_type: field
     origin_id: list_date
     value_type: time
@@ -383,6 +409,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: ak_fin_indicator
     column_name: report_period
+    attributes:
+      display_name: 报告期
     origin_type: field
     origin_id: report_period
     value_type: string
@@ -391,6 +419,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: ak_fin_indicator
     column_name: pe_ttm
+    attributes:
+      display_name: 市盈率
     origin_type: field
     origin_id: pe_ttm
     value_type: double
@@ -398,6 +428,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: ak_fin_indicator
     column_name: pb
+    attributes:
+      display_name: 市净率
     origin_type: field
     origin_id: pb
     value_type: double
@@ -405,6 +437,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: ak_fin_indicator
     column_name: roe
+    attributes:
+      display_name: 净资产收益
     origin_type: field
     origin_id: roe
     value_type: double
@@ -412,6 +446,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: ak_fin_indicator
     column_name: revenue
+    attributes:
+      display_name: 营业收入
     origin_type: field
     origin_id: revenue
     value_type: double
@@ -419,6 +455,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: ak_fin_indicator
     column_name: net_profit
+    attributes:
+      display_name: 归母净利润
     origin_type: field
     origin_id: net_profit
     value_type: double
@@ -426,6 +464,8 @@ dataset_columns:
   - space_id: cn_stock
     dataset_id: ak_fin_indicator
     column_name: roe_growth
+    attributes:
+      display_name: ROE同比
     origin_type: factor
     origin_id: roe_growth
     value_type: double

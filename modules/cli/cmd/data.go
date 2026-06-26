@@ -16,19 +16,23 @@ import (
 )
 
 var (
-	dataStorageURL string
-	dataSpaceID    string
-	dataSourceID   string
-	dataCSVFile    string
-	dataDatasetID  string
-	dataSubjectID  string
-	dataFreq       string
-	dataTimeColumn string
-	dataDimensions []string
-	dataOutputFile string
-	dataStartTime  string
-	dataEndTime    string
-	dataPageSize   uint32
+	dataStorageURL  string
+	dataSpaceID     string
+	dataSourceID    string
+	dataSourceName  string
+	dataCSVFile     string
+	dataDatasetID   string
+	dataDatasetName string
+	dataSubjectID   string
+	dataSubjectName string
+	dataFreq        string
+	dataTimeColumn  string
+	dataDimensions  []string
+	dataFieldConfig string
+	dataOutputFile  string
+	dataStartTime   string
+	dataEndTime     string
+	dataPageSize    uint32
 )
 
 var dataCmd = &cobra.Command{
@@ -48,13 +52,21 @@ var dataCSVImportCmd = &cobra.Command{
 		if dataCSVFile == "" {
 			return fmt.Errorf("必须指定 --file")
 		}
+		datasetID, err := requiredFlagValue(dataDatasetID, "--dataset")
+		if err != nil {
+			return err
+		}
+		dataSourceID, err := requiredFlagValue(dataSourceID, "--data-source")
+		if err != nil {
+			return err
+		}
 		subjectID := dataSubjectID
 		if subjectID == "" {
 			subjectID = strings.TrimSuffix(filepath.Base(dataCSVFile), filepath.Ext(dataCSVFile))
 		}
 		rows, err := readCSVRows(dataCSVFile, &pb.TimeSeriesKey{
 			SpaceId:    defaultFlag(dataSpaceID, "default"),
-			DatasetId:  defaultFlag(dataDatasetID, "binance_spot_kline_1m"),
+			DatasetId:  datasetID,
 			SubjectId:  subjectID,
 			Freq:       defaultFlag(dataFreq, "1m"),
 			Dimensions: parseDimensions(dataDimensions),
@@ -63,10 +75,20 @@ var dataCSVImportCmd = &cobra.Command{
 			return err
 		}
 		if dataStorageURL != "" {
-			if err := importCSVRowsRemote(context.Background(), dataStorageURL, defaultFlag(dataSpaceID, "default"), defaultFlag(dataSourceID, "binance"), defaultFlag(dataDatasetID, "binance_spot_kline_1m"), subjectID, defaultFlag(dataFreq, "1m"), rows); err != nil {
+			if err := importCSVRowsRemote(context.Background(), dataStorageURL, remoteImportOptions{
+				SpaceID:         defaultFlag(dataSpaceID, "default"),
+				DataSourceID:    dataSourceID,
+				DataSourceName:  dataSourceName,
+				DatasetID:       datasetID,
+				DatasetName:     dataDatasetName,
+				SubjectID:       subjectID,
+				SubjectName:     dataSubjectName,
+				Freq:            defaultFlag(dataFreq, "1m"),
+				FieldConfigPath: dataFieldConfig,
+			}, rows); err != nil {
 				return err
 			}
-			fmt.Printf("imported dataset=%s subject=%s rows=%d storage_url=%s\n", defaultFlag(dataDatasetID, "binance_spot_kline_1m"), subjectID, len(rows), dataStorageURL)
+			fmt.Printf("imported dataset=%s subject=%s rows=%d storage_url=%s\n", datasetID, subjectID, len(rows), dataStorageURL)
 			return nil
 		}
 		return fmt.Errorf("必须指定 --storage-url，通过 moox-storage Access Service 写入")
@@ -82,11 +104,15 @@ var dataRowsExportCmd = &cobra.Command{
 	Use:   "export",
 	Short: "导出 Dataset 行为 JSON",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		datasetID, err := requiredFlagValue(dataDatasetID, "--dataset")
+		if err != nil {
+			return err
+		}
 		if dataStorageURL != "" {
 			rsp, err := exportRowsRemote(context.Background(), dataStorageURL, &pb.ReadTimeSeriesRowsReq{
 				Keys: []*pb.TimeSeriesKey{{
 					SpaceId:    defaultFlag(dataSpaceID, "default"),
-					DatasetId:  defaultFlag(dataDatasetID, "binance_spot_kline_1m"),
+					DatasetId:  datasetID,
 					SubjectId:  dataSubjectID,
 					Freq:       dataFreq,
 					Dimensions: parseDimensions(dataDimensions),
@@ -100,7 +126,7 @@ var dataRowsExportCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			return writeRowsExport(rsp, dataOutputFile, dataStorageURL, defaultFlag(dataDatasetID, "binance_spot_kline_1m"), dataSubjectID)
+			return writeRowsExport(rsp, dataOutputFile, dataStorageURL, datasetID, dataSubjectID)
 		}
 		return fmt.Errorf("必须指定 --storage-url，通过 moox-storage Access Service 读取")
 	},
@@ -116,18 +142,22 @@ func init() {
 	dataCSVImportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:19104")
 	dataCSVImportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
 	dataCSVImportCmd.Flags().StringVar(&dataSpaceID, "workspace", "default", "Space ID，兼容旧参数名")
-	dataCSVImportCmd.Flags().StringVar(&dataSourceID, "data-source", "binance", "DataSource ID")
+	dataCSVImportCmd.Flags().StringVar(&dataSourceID, "data-source", "", "DataSource ID")
+	dataCSVImportCmd.Flags().StringVar(&dataSourceName, "data-source-name", "", "DataSource 中文名，留空默认使用“导入来源”")
 	dataCSVImportCmd.Flags().StringVar(&dataCSVFile, "file", "", "CSV 文件路径")
-	dataCSVImportCmd.Flags().StringVar(&dataDatasetID, "dataset", "binance_spot_kline_1m", "Dataset ID")
+	dataCSVImportCmd.Flags().StringVar(&dataDatasetID, "dataset", "", "Dataset ID")
+	dataCSVImportCmd.Flags().StringVar(&dataDatasetName, "dataset-name", "", "Dataset 中文名，留空默认使用“导入K线”")
 	dataCSVImportCmd.Flags().StringVar(&dataSubjectID, "subject", "", "Subject ID，默认取文件名")
+	dataCSVImportCmd.Flags().StringVar(&dataSubjectName, "subject-name", "", "Subject 中文名，留空默认使用“导入标的”")
 	dataCSVImportCmd.Flags().StringVar(&dataFreq, "freq", "1m", "K 线频率")
 	dataCSVImportCmd.Flags().StringVar(&dataTimeColumn, "time-column", "candle_begin_time", "时间列名")
 	dataCSVImportCmd.Flags().StringArrayVar(&dataDimensions, "dimension", nil, "自定义维度，格式 name=value，可重复")
+	dataCSVImportCmd.Flags().StringVar(&dataFieldConfig, "field-config", "", "字段展示名 YAML 配置路径，默认读取 config/fields.yaml")
 
 	dataRowsExportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:19104")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "workspace", "default", "Space ID，兼容旧参数名")
-	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset", "binance_spot_kline_1m", "Dataset ID")
+	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset", "", "Dataset ID")
 	dataRowsExportCmd.Flags().StringVar(&dataSubjectID, "subject", "", "Subject ID")
 	dataRowsExportCmd.Flags().StringVar(&dataFreq, "freq", "1m", "K 线频率")
 	dataRowsExportCmd.Flags().StringArrayVar(&dataDimensions, "dimension", nil, "自定义维度，格式 name=value，可重复")
@@ -276,4 +306,12 @@ func defaultFlag(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func requiredFlagValue(value string, flagName string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", fmt.Errorf("必须指定 %s", flagName)
+	}
+	return trimmed, nil
 }

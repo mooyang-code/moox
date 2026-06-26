@@ -32,7 +32,7 @@ message View {
   string space_id = 1;
   // view_id 是 Space 内唯一的查询视图 ID；必须为 lower_snake_case，最长 30 字符。
   string view_id = 2;
-  // name 是视图名称，通常用于管理台展示。
+  // name 是视图中文展示名，创建和更新时必须包含中文且不超过 10 个字符。
   string name = 3;
   // description 是说明文本。
   string description = 4;
@@ -84,7 +84,7 @@ message ViewColumn {
   string space_id = 1;
   // view_id 是查询视图 ID。
   string view_id = 2;
-  // column_name 是视图中对用户暴露的列名；DatasetColumn 来源必须使用 dataset_id.column_name。
+  // column_name 是视图内稳定技术列名；DatasetColumn 来源必须使用 dataset_id.column_name。
   string column_name = 3;
   // origin_type 表示列来源，可为 DatasetColumn、表达式或系统列。
   common.ColumnOriginType origin_type = 4;
@@ -100,7 +100,7 @@ message ViewColumn {
   string created_at = 9;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
   string updated_at = 10;
-  // attributes 是扩展属性，默认不作为索引字段使用。
+  // attributes 是扩展属性；display_name 是用户可见中文列名，创建和更新时必须包含中文且不超过 10 个字符。
   map<string, string> attributes = 11;
 }
 
@@ -184,7 +184,7 @@ message Dataset {
   string dataset_id = 2;
   // data_source_id 是该 Dataset 绑定的数据来源 ID；一个 Dataset 只绑定一个 DataSource。
   string data_source_id = 3;
-  // name 是数据集名称，通常用于管理台展示。
+  // name 是数据集中文展示名，创建和更新时必须包含中文且不超过 10 个字符。
   string name = 4;
   // description 是说明文本。
   string description = 5;
@@ -286,7 +286,7 @@ message DatasetColumn {
   string space_id = 1;
   // dataset_id 是数据集 ID。
   string dataset_id = 2;
-  // column_name 是数据集内稳定列名。
+  // column_name 是数据集内稳定技术列名。
   string column_name = 3;
   // origin_type 表示列来源，可为字段、因子或系统列。
   common.DatasetColumnOriginType origin_type = 4;
@@ -306,7 +306,7 @@ message DatasetColumn {
   string created_at = 11;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
   string updated_at = 12;
-  // attributes 是扩展属性，默认不作为索引字段使用。
+  // attributes 是扩展属性；display_name 是用户可见中文列名，创建和更新时必须包含中文且不超过 10 个字符。
   map<string, string> attributes = 13;
 }
 
@@ -688,6 +688,32 @@ message UpsertSubjectRsp {
   common.RetInfo ret_info = 1;
   // subject 是写入后的数据对象元数据。
   Subject subject = 2;
+}
+
+// RegisterDataSubjectReq 表示采集侧注册数据对象、外部代码映射和数据集绑定的请求。
+message RegisterDataSubjectReq {
+  // auth_info 是调用方身份和链路追踪信息。
+  common.AuthInfo auth_info = 1;
+  // space_id 是数据对象所属 Space。
+  string space_id = 2;
+  // data_source_id 是外部代码所属的数据来源 ID。
+  string data_source_id = 3;
+  // external_symbol 是数据来源使用的原始对象代码。
+  string external_symbol = 4;
+  // subject 是待注册的数据对象元数据；服务端会强制使用 space_id。
+  Subject subject = 5;
+  // dataset_bindings 是该对象要绑定的数据集关系；服务端会补齐 space_id 和 subject_id。
+  repeated DatasetSubject dataset_bindings = 6;
+}
+
+// RegisterDataSubjectRsp 表示采集侧注册数据对象后的响应。
+message RegisterDataSubjectRsp {
+  // ret_info 是接口返回状态。
+  common.RetInfo ret_info = 1;
+  // subject 是写入后的数据对象元数据。
+  Subject subject = 2;
+  // dataset_bindings 是最终写入的数据集绑定关系。
+  repeated DatasetSubject dataset_bindings = 3;
 }
 
 // GetSubjectReq 表示获取数据对象的请求。
@@ -1365,12 +1391,12 @@ service MetadataService {
 
   // 创建或更新数据对象。
   rpc UpsertSubject(UpsertSubjectReq) returns (UpsertSubjectRsp);
+  // 注册数据对象、来源侧代码映射和数据集绑定。
+  rpc RegisterDataSubject(RegisterDataSubjectReq) returns (RegisterDataSubjectRsp);
   // 按 ID 获取数据对象。
   rpc GetSubject(GetSubjectReq) returns (GetSubjectRsp);
   // 列出数据对象。
   rpc ListSubjects(ListSubjectsReq) returns (ListSubjectsRsp);
-  // 创建或更新数据对象的来源侧代码映射。
-  rpc UpsertSubjectSymbol(UpsertSubjectSymbolReq) returns (UpsertSubjectSymbolRsp);
   // 列出数据对象的来源侧代码映射。
   rpc ListSubjectSymbols(ListSubjectSymbolsReq) returns (ListSubjectSymbolsRsp);
 

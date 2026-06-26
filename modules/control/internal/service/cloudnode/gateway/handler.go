@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/control/internal/service/asynctask"
@@ -118,6 +119,10 @@ func (h *CloudNodeGatewayHandler) parseMethodToRoute(method string, body []byte)
 		route.Path = "/api/v1/cloud_node/update_function"
 		route.HTTPMethod = "PUT"
 		route.Body = body
+	case "InvokeFunction", "InvokeCloudFunction":
+		route.Path = "/api/v1/cloud_node/invoke"
+		route.HTTPMethod = "POST"
+		route.Body = body
 
 	case "BatchCreateCloudNodes":
 		route.Path = "/api/v1/cloud_node/batch/create"
@@ -150,7 +155,14 @@ func (h *CloudNodeGatewayHandler) parseMethodToRoute(method string, body []byte)
 	case "DeleteCloudAccount":
 		route.Path = "/api/v1/cloud_account/delete"
 		route.HTTPMethod = "DELETE"
-		route.Body = body
+		if len(body) > 0 {
+			var params map[string]interface{}
+			if err := json.Unmarshal(body, &params); err == nil {
+				if accountID, ok := params["account_id"].(string); ok && accountID != "" {
+					route.Path = fmt.Sprintf("%s?account_id=%s", route.Path, url.QueryEscape(accountID))
+				}
+			}
+		}
 
 	// Cloud Region methods
 	case "GetCloudRegionList", "ListCloudRegions", "ListRegions":
@@ -287,9 +299,13 @@ func (h *CloudNodeGatewayHandler) executeRequest(ctx context.Context, req *http.
 
 	log.DebugContextf(ctx, "[CloudNode Gateway] Response status: %d", statusCode)
 
-	// 检查状态码
-	if statusCode != http.StatusOK {
-		return nil, fmt.Errorf("request failed with status %d: %s", statusCode, string(respBody))
+	// 业务错误由内部 handler 以统一 JSON 响应表达，网关只负责透传。
+	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+		if len(respBody) > 0 {
+			log.WarnContextf(ctx, "[CloudNode Gateway] Forwarding non-2xx response: status=%d, body=%s", statusCode, string(respBody))
+			return respBody, nil
+		}
+		return nil, fmt.Errorf("request failed with status %d and empty body", statusCode)
 	}
 
 	// 处理空响应体

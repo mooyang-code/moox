@@ -86,8 +86,8 @@ func mockGatewayService() {
 		})
 	})
 
-	// 网关转发路由: /gateway/{service}/{method}
-	router.HandleFunc("/gateway/{service}/{method}", func(w http.ResponseWriter, r *http.Request) {
+	// 控制台 API 转发路由: /api/control/{service}/{method}
+	router.HandleFunc("/api/control/{service}/{method}", func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		service := vars["service"]
 		method := vars["method"]
@@ -172,7 +172,7 @@ func mockGatewayService() {
 	}).Methods("GET", "POST", "PUT", "DELETE")
 
 	// 健康检查接口
-	router.HandleFunc("/gateway/health", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/api/control/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":   "ok",
@@ -201,7 +201,7 @@ func main() {
 	fmt.Println("使用方式:")
 	fmt.Println("1. 获取项目列表:")
 	fmt.Printf(`
-curl -X POST http://localhost:18202/gateway/storage/ListProjects \
+curl -X POST http://localhost:18202/api/control/storage/ListProjects \
   -H "Content-Type: application/json" \
   -H "X-App-Id: test123" \
   -H "X-App-Key: test123" \
@@ -211,7 +211,7 @@ curl -X POST http://localhost:18202/gateway/storage/ListProjects \
 	fmt.Println("")
 	fmt.Println("2. 创建项目:")
 	fmt.Printf(`
-curl -X POST http://localhost:18202/gateway/storage/CreateProject \
+curl -X POST http://localhost:18202/api/control/storage/CreateProject \
   -H "Content-Type: application/json" \
   -H "X-App-Id: test123" \
   -H "X-App-Key: test123" \
@@ -223,7 +223,7 @@ curl -X POST http://localhost:18202/gateway/storage/CreateProject \
 `)
 	fmt.Println("")
 	fmt.Println("3. 健康检查:")
-	fmt.Println("curl http://localhost:18202/gateway/health")
+	fmt.Println("curl http://localhost:18202/api/control/health")
 	fmt.Println("")
 
 	// 启动网关服务

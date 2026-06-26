@@ -13,6 +13,10 @@ assert.equal(vueSource.includes('class="inline-freq"'), true);
 assert.equal(vueSource.includes(':width="150"'), false);
 assert.equal(vueSource.includes(':width="dynamicColumnWidth(column)"'), true);
 assert.equal((vueSource.match(/<a-table-column title="序号"[^>]*fixed="left"/g) || []).length, 2);
+assert.equal(vueSource.includes('.data-browse-page :deep(.arco-spin)'), true);
+assert.equal(vueSource.includes('box-sizing: border-box;'), true);
+assert.equal(vueSource.includes('<a-table-column title="记录ID" data-index="key" :width="180" fixed="left" />'), true);
+assert.equal(vueSource.includes('<a-table-column title="版本" data-index="version" :width="160" />'), true);
 
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: {
@@ -51,8 +55,8 @@ assert.deepEqual(dataIds, [
 ]);
 assert.equal(displayDataIdText(dataIds[0]), 'BTC-USDT');
 assert.equal(datasetDisplayName({ dataset_id: 'binance_swap_kline', name: '币安U本位合约K线' }), '币安U本位合约K线');
-assert.equal(datasetDisplayName({ dataset_id: 'binance_swap_kline', name: 'Binance Swap Kline' }), '币安U本位合约K线');
-assert.equal(datasetDisplayName({ dataset_id: 'custom_dataset', name: 'Custom Dataset' }), 'custom_dataset');
+assert.equal(datasetDisplayName({ dataset_id: 'binance_swap_kline', name: 'Binance Swap Kline' }), 'Binance Swap Kline');
+assert.equal(datasetDisplayName({ dataset_id: 'custom_dataset', name: 'Custom Dataset' }), 'Custom Dataset');
 assert.equal(adaptiveColumnWidth('close', '收盘价', []), 112);
 assert.equal(
   adaptiveColumnWidth('spread', '价差', [{ values: { spread: '0.0005441899222828894' } }]),
@@ -78,11 +82,24 @@ assert.deepEqual(columnLabels, {
 });
 assert.equal(
   buildColumnLabels(
+    [{
+      column_name: 'close',
+      origin_type: 'DATASET_COLUMN_ORIGIN_TYPE_FIELD',
+      origin_id: 'close',
+      attributes: { display_name: '最新价' },
+    }],
+    [{ field_id: 'close', name: '收盘价' }],
+    [],
+  ).close,
+  '最新价',
+);
+assert.equal(
+  buildColumnLabels(
     [{ column_name: 'close', origin_type: 'DATASET_COLUMN_ORIGIN_TYPE_FIELD', origin_id: 'close' }],
     [{ field_id: 'close', name: 'Close Price' }],
     [],
   ).close,
-  '收盘价',
+  'Close Price',
 );
 assert.equal(
   buildColumnLabels(
@@ -90,8 +107,10 @@ assert.equal(
     [{ field_id: 'trading_status', name: 'Trading Status' }],
     [],
   ).trading_status,
-  '交易状态',
+  'Trading Status',
 );
+assert.equal(source.includes('commonColumnLabels'), false);
+assert.equal(source.includes('commonDatasetLabels'), false);
 
 const tsRows = [
   {

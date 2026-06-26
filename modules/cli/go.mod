@@ -8,7 +8,10 @@ replace github.com/mooyang-code/moox/modules/control/proto/gen => ../control/pro
 
 replace github.com/mooyang-code/moox/modules/storage => ../storage
 
+replace github.com/mooyang-code/moox/modules/collector => ../collector
+
 require (
+	github.com/mooyang-code/moox/modules/collector v0.0.0
 	github.com/mooyang-code/moox/modules/control/proto/gen v0.0.0
 	github.com/mooyang-code/moox/modules/storage/proto/gen v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats.go v1.47.0

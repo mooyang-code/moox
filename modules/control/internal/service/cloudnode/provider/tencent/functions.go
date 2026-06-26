@@ -22,59 +22,9 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 		return nil, fmt.Errorf("failed to get SCF client for region: %s", req.Region)
 	}
 
-	// 构建请求
-	request := scf.NewCreateFunctionRequest()
-	request.FunctionName = common.StringPtr(req.FunctionName)
-	request.Runtime = common.StringPtr(req.Runtime)
-	request.Namespace = common.StringPtr(req.Namespace)
-	request.Description = common.StringPtr(req.Description)
-
-	// 设置函数类型（Event 或 HTTP）
-	if req.FunctionType != "" {
-		request.Type = common.StringPtr(req.FunctionType)
-	}
-
-	// 设置代码
-	request.Code = &scf.Code{}
-
-	// 优先使用COS部署，如果COS信息完整
-	if req.COSBucket != "" && req.COSPath != "" && req.COSRegion != "" {
-		request.Code.CosBucketName = common.StringPtr(req.COSBucket)
-		request.Code.CosObjectName = common.StringPtr(req.COSPath)
-		request.Code.CosBucketRegion = common.StringPtr(req.COSRegion)
-	} else if req.ZipFile != "" {
-		// 使用ZipFile本地上传
-		request.Code.ZipFile = common.StringPtr(req.ZipFile)
-	} else {
-		// 参数不完整，无法创建函数
-		return nil, fmt.Errorf("函数代码参数不完整：需要提供COS信息(COSBucket、COSPath、COSRegion)或ZipFile")
-	}
-
-	// 设置内存和超时
-	if req.MemorySize > 0 {
-		request.MemorySize = common.Int64Ptr(req.MemorySize)
-	} else {
-		request.MemorySize = common.Int64Ptr(DefaultMemorySize)
-	}
-
-	if req.Timeout > 0 {
-		request.Timeout = common.Int64Ptr(req.Timeout)
-	} else {
-		request.Timeout = common.Int64Ptr(DefaultTimeout)
-	}
-
-	// 设置环境变量
-	if len(req.Environment) > 0 {
-		var variables []*scf.Variable
-		for key, value := range req.Environment {
-			variables = append(variables, &scf.Variable{
-				Key:   common.StringPtr(key),
-				Value: common.StringPtr(value),
-			})
-		}
-		request.Environment = &scf.Environment{
-			Variables: variables,
-		}
+	request, err := buildCreateFunctionSDKRequest(req)
+	if err != nil {
+		return nil, err
 	}
 
 	// 调用API创建函数
@@ -82,8 +32,8 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 	if err != nil {
 		// 检查是否是函数已存在的错误
 		// 腾讯云可能返回 ResourceInUse.Function 或 ResourceInUse 或包含"已存在"字样
-		if strings.Contains(err.Error(), "ResourceInUse") || 
-		   strings.Contains(err.Error(), "已存在") {
+		if strings.Contains(err.Error(), "ResourceInUse") ||
+			strings.Contains(err.Error(), "已存在") {
 			log.InfoContextf(ctx, "[CloudNode-Tencent] Function already exists: %s, retrieving info...", req.FunctionName)
 			// 函数已存在，直接获取函数详情返回
 			return p.GetFunction(ctx, req.FunctionName, req.Namespace, req.Region)
@@ -102,6 +52,53 @@ func (p *Provider) CreateFunction(ctx context.Context, req *CreateFunctionReques
 	return p.GetFunction(ctx, req.FunctionName, req.Namespace, req.Region)
 }
 
+func buildCreateFunctionSDKRequest(req *CreateFunctionRequest) (*scf.CreateFunctionRequest, error) {
+	request := scf.NewCreateFunctionRequest()
+	request.FunctionName = common.StringPtr(req.FunctionName)
+	request.Runtime = common.StringPtr(req.Runtime)
+	request.Namespace = common.StringPtr(req.Namespace)
+	request.Description = common.StringPtr(req.Description)
+	if req.Handler != "" {
+		request.Handler = common.StringPtr(req.Handler)
+	}
+	if req.FunctionType != "" {
+		request.Type = common.StringPtr(req.FunctionType)
+	}
+
+	request.Code = &scf.Code{}
+	if req.COSBucket != "" && req.COSPath != "" && req.COSRegion != "" {
+		request.Code.CosBucketName = common.StringPtr(req.COSBucket)
+		request.Code.CosObjectName = common.StringPtr(req.COSPath)
+		request.Code.CosBucketRegion = common.StringPtr(req.COSRegion)
+	} else if req.ZipFile != "" {
+		request.Code.ZipFile = common.StringPtr(req.ZipFile)
+	} else {
+		return nil, fmt.Errorf("函数代码参数不完整：需要提供COS信息(COSBucket、COSPath、COSRegion)或ZipFile")
+	}
+
+	if req.MemorySize > 0 {
+		request.MemorySize = common.Int64Ptr(req.MemorySize)
+	} else {
+		request.MemorySize = common.Int64Ptr(DefaultMemorySize)
+	}
+	if req.Timeout > 0 {
+		request.Timeout = common.Int64Ptr(req.Timeout)
+	} else {
+		request.Timeout = common.Int64Ptr(DefaultTimeout)
+	}
+	if len(req.Environment) > 0 {
+		var variables []*scf.Variable
+		for key, value := range req.Environment {
+			variables = append(variables, &scf.Variable{
+				Key:   common.StringPtr(key),
+				Value: common.StringPtr(value),
+			})
+		}
+		request.Environment = &scf.Environment{Variables: variables}
+	}
+	return request, nil
+}
+
 // UpdateFunction 更新云函数
 func (p *Provider) UpdateFunction(ctx context.Context, req *UpdateFunctionRequest) error {
 	log.InfoContextf(ctx, "[CloudNode-Tencent] Updating function: %s in namespace: %s, region: %s", req.FunctionName, req.Namespace, req.Region)
@@ -117,6 +114,9 @@ func (p *Provider) UpdateFunction(ctx context.Context, req *UpdateFunctionReques
 		codeRequest := scf.NewUpdateFunctionCodeRequest()
 		codeRequest.FunctionName = common.StringPtr(req.FunctionName)
 		codeRequest.Namespace = common.StringPtr(req.Namespace)
+		if req.Handler != nil && *req.Handler != "" {
+			codeRequest.Handler = common.StringPtr(*req.Handler)
+		}
 
 		// 优先使用COS方式更新
 		if req.COSBucket != "" && req.COSPath != "" && req.COSRegion != "" {
@@ -290,8 +290,8 @@ func (p *Provider) CreateNamespace(ctx context.Context, namespace, description, 
 	if err != nil {
 		// 检查是否是命名空间已存在的错误
 		// 腾讯云可能返回 ResourceInUse.Namespace 或 ResourceInUse 或包含"已存在"字样
-		if strings.Contains(err.Error(), "ResourceInUse") || 
-		   strings.Contains(err.Error(), "已存在") {
+		if strings.Contains(err.Error(), "ResourceInUse") ||
+			strings.Contains(err.Error(), "已存在") {
 			log.InfoContextf(ctx, "[CloudNode-Tencent] Namespace already exists: %s", namespace)
 			return nil
 		}

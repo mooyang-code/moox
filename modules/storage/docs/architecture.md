@@ -77,7 +77,7 @@ tests/e2e/         # 端到端测试（本地部署整套服务驱动）
 
 默认角色是 `access + deriver`。如果 `access` 角色的 `storage.primary.service_name` 为空，进程也会暴露本地 `PrimaryStoreService`，用于单进程本地主存模式；如果该字段非空，Access 通过远程 PrimaryStore RPC 写读，除非同时显式启用 `primary` 角色。
 
-默认事件总线是 NATS。`memory` 只用于单进程开发和测试，且仍是异步总线，不提供写后立即可查派生结果的契约。Deriver 配置项包括：
+默认事件总线协议是 NATS。仓库默认配置启用 `eventbus.embedded.enabled: true`，在 storage 进程内启动 JetStream，本地无需额外启动 `nats-server`；分布式部署可关闭内嵌 broker，让多个节点连接同一个独立 NATS。`memory` 只用于极简单进程测试，且仍是异步总线，不提供写后立即可查派生结果的契约。Deriver 配置项包括：
 
 ViewService 只随 `deriver` 角色启动。`access` 角色不打开 DuckDB/Bleve View 存储，避免跨进程部署时与 deriver 争抢 DuckDB 文件锁，也避免 deriver 绕过 AccessService 理解 PrimaryStore 路由。
 
@@ -146,7 +146,7 @@ AccessService.WriteTimeSeriesRows / WriteRecordRows
 
 部署形态：
 
-- 默认 eventbus 为 NATS；`MemoryBus` 只支持单进程开发/测试订阅，且仍异步派生，**不提供写后立即可搜/可查 View 契约**。
+- 默认 eventbus 协议为 NATS；本地配置可通过 `eventbus.embedded.enabled: true` 内嵌 JetStream，`MemoryBus` 只支持单进程测试订阅，且仍异步派生，**不提供写后立即可搜/可查 View 契约**。
 - 生产环境使用 NATS 时，`infra/eventbus.SubscriberBus` 分别订阅 `${prefix}.time_series.rows_changed.v1` 与 `${prefix}.record.rows_changed.v1`。NATS transport 会基于 `consumer_name + subject kind` 派生不同 durable consumer，避免两个 subject 共用 durable 名冲突。
 - 事件 subject 统一前缀默认 `moox.storage`，时序行变更默认 `moox.storage.time_series.rows_changed.v1`，记录行变更默认 `moox.storage.record.rows_changed.v1`；NATS stream 可用 `moox.storage.>` 前缀通配，便于扩展 View/Archive 等派生事件。
 - Deriver handler 只有在 DuckDB/Bleve 派生写入成功后才返回 success。处理失败会向上传递错误，NATS transport 因此 `Nak` 消息并交给 JetStream 重试。
@@ -164,7 +164,7 @@ QueryTimeSeriesRows: Access -> View 物化结果（DuckDB active_result）
 - `ReadRecordRows` 使用 `RecordKey + VersionRange` 读取记录数据。`VersionRange` 是闭区间 `[start_version, end_version]`，两端为空表示无界。
 - `SearchRecordRows` 查询 Record View 的 active Bleve 索引，不走路由，也不 fan-out 到多个 Pebble 分片；支持全文 `text_query` 与结构化过滤。
 - `QueryTimeSeriesRows` 只查询 TimeSeries View 的 active DuckDB 结果；没有可用 `active_result` 时返回 `VIEW_NOT_FOUND`。DuckDB 结果表使用 UTC 固定 9 位纳秒时间字符串存储 `data_time`，因此 `time_range` 可以安全下推到 SQL；`subject_id`、`freq`、filter、sort 与分页也优先在 DuckDB 执行。
-- `RebuildTimeSeriesView` / `RebuildRecordView` 异步受理并返回 `rebuild_id`，后台按当前 `view_version` 从 PrimaryStore 全量扫描构建新结果；构建期间事件消费者会同时写 active 与 building 结果，切换前再 drain dirty key。
+- `RebuildTimeSeriesView` / `RebuildRecordView` 异步受理并返回 `rebuild_id`，后台按当前 `view_version` 从 PrimaryStore 全量扫描构建新结果；构建期间事件消费者会同时写 active 与 building 结果，确保切换后包含构建期增量。
 
 ## 元数据控制面与缓存
 
@@ -181,7 +181,7 @@ QueryTimeSeriesRows: Access -> View 物化结果（DuckDB active_result）
 
 | Timer | 调度器 | 行为 |
 | --- | --- | --- |
-| `trpc.storage.view.timer` | `viewBuilderSchedule` | 扫描 `view_version > active_view_version`、`pending`、残留 `building` 或 `failed` 的 View，构建并切换 `active_result` |
+| `trpc.storage.view.timer` | `viewBuilderSchedule` | 扫描 `view_version > active_view_version`、`pending`、残留 `building` 或 `failed` 的 View；TimeSeries View 构建 DuckDB 结果表，Record View 构建 Bleve 索引，成功后切换 `active_result` |
 | `trpc.storage.view.cleanup.timer` | `viewBuilderSchedule`（`op=cleanup`） | 清理不再被任何 active View 引用的旧 DuckDB 结果表 |
 | `trpc.storage.view.retry_failed.timer` | `viewBuilderSchedule`（`op=retry_failed`，默认关闭） | 显式重试 `failed` 的 View |
 | `trpc.storage.archive.timer` | `archiveSchedule` | 按 `space_id`/`dataset_id`/`partition_key`/`start_time`/`end_time` 触发 Parquet 归档并登记 ArchiveFile |
@@ -206,9 +206,10 @@ params_json = {"window":20,"price":"close"}
 
 ## 部署形态
 
-- 单进程开发/测试可显式启用 `roles: [access, primary, deriver]`，设置 `eventbus.type: memory`、`primary.service_name: ""`、`deriver.access_service_name: ""`。该模式不需要 NATS，但派生仍异步。
+- 单进程本地运行可使用默认 `roles: [access, deriver]`、`primary.service_name: ""` 与内嵌 NATS；`access` 会同时暴露本地 `PrimaryStoreService`，Deriver 通过 AccessService 回读并写 DuckDB/Bleve。
+- 极简单元测试可显式设置 `eventbus.type: memory`、`deriver.access_service_name: ""`。该模式不需要 NATS，但派生仍异步。
 - 分布式部署通常拆成 `primary`、`access`、`deriver` 三类节点。`access` 节点配置远程 `primary.service_name`，`deriver` 节点通过 `deriver.access_service_name` 回读 AccessService 并独占 DuckDB/Bleve View 写入。
-- 默认事件总线为 NATS；跨进程部署必须使用 NATS 或等价外部传输，不能使用 memory。
+- 默认事件总线为 NATS；跨进程部署必须使用 NATS 或等价外部传输，不能使用 memory。内嵌 NATS 只能由一个进程监听同一端口，多节点部署时应明确选择一台 broker 节点或独立 NATS。
 - 运行配置由 `internal/config.RuntimeConfig` 加载，覆盖角色、元数据路径、各设备目录、primary 服务名、eventbus 类型和 deriver 批处理参数。
 
 ## 测试

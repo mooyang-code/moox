@@ -18,3 +18,37 @@ func TestNewRowsChangedBusSupportsMemoryConfig(t *testing.T) {
 		t.Fatalf("bus type = %T", bus)
 	}
 }
+
+func TestStartEmbeddedServerSkipsWhenDisabled(t *testing.T) {
+	closer, err := eventbusbootstrap.StartEmbeddedServer(storageconfig.StorageEventBus{Type: "nats"})
+	if err != nil {
+		t.Fatalf("StartEmbeddedServer returned error: %v", err)
+	}
+	if closer != nil {
+		t.Fatalf("StartEmbeddedServer should return nil closer when embedded nats is disabled")
+	}
+}
+
+func TestStartEmbeddedServerStartsJetStream(t *testing.T) {
+	closer, err := eventbusbootstrap.StartEmbeddedServer(storageconfig.StorageEventBus{
+		Type: "nats",
+		Embedded: storageconfig.StorageEmbeddedEventBus{
+			Enabled:          true,
+			Host:             "127.0.0.1",
+			Port:             -1,
+			StoreDir:         t.TempDir(),
+			StartupTimeoutMS: 3000,
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartEmbeddedServer returned error: %v", err)
+	}
+	if closer == nil {
+		t.Fatalf("StartEmbeddedServer returned nil closer")
+	}
+	t.Cleanup(func() {
+		if err := closer.Close(); err != nil {
+			t.Fatalf("close embedded nats failed: %v", err)
+		}
+	})
+}

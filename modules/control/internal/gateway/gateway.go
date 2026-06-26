@@ -114,21 +114,41 @@ func RegisterGatewayHTTPHandlers(s *server.Server) {
 
 // setupRoutes 设置路由
 func (hr *HTTPRouter) setupRoutes(s *server.Server) {
-	router := mux.NewRouter()
-
-	// 注册网关转发路由: /gateway/{service}/{method}
-	router.HandleFunc(
-		"/gateway/{service}/{method}",
-		hr.handleGatewayRequest).
-		Methods("GET", "POST", "PUT", "DELETE")
-
-	// 健康检查接口
-	router.HandleFunc("/gateway/health", hr.handleHealthCheck).Methods("GET")
+	router := hr.buildRouter()
 	thttp.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.stdhttp"), router)
 }
 
-// handleGatewayRequest 处理网关请求(中间件authorize通过之后，执行流才到本函数)
-func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Request) {
+func (hr *HTTPRouter) buildRouter() *mux.Router {
+	router := mux.NewRouter()
+
+	// 注册新控制台 API 路由: /api/control/{service}/{method}
+	router.HandleFunc(
+		"/api/control/{service}/{method}",
+		hr.handleControlRequest).
+		Methods("GET", "POST", "PUT", "DELETE")
+
+	// 注册后台服务 API 路由: /api/service/{service}/{method}
+	router.HandleFunc(
+		"/api/service/{service}/{method}",
+		hr.handleServiceRequest).
+		Methods("GET", "POST", "PUT", "DELETE")
+
+	// 健康检查接口
+	router.HandleFunc("/api/control/health", hr.handleHealthCheck).Methods("GET")
+	return router
+}
+
+// handleControlRequest 处理管理台网关请求(中间件authorize通过之后，执行流才到本函数)
+func (hr *HTTPRouter) handleControlRequest(w http.ResponseWriter, r *http.Request) {
+	hr.handleGatewayRequest(w, r, false)
+}
+
+// handleServiceRequest 处理后台服务请求，使用 Auth HMAC 签名鉴权。
+func (hr *HTTPRouter) handleServiceRequest(w http.ResponseWriter, r *http.Request) {
+	hr.handleGatewayRequest(w, r, true)
+}
+
+func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Request, requireServiceAuth bool) {
 	ctx := r.Context()
 	handler := hr.gateway.requestHandler
 
@@ -144,11 +164,18 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 	headers := handler.extractGatewayHeaders(r)
 
 	// 读取请求体
-	body, err := handler.readRequestBody(r)
+	rawBody, body, err := handler.readRequestBodyWithRaw(r)
 	if err != nil {
 		log.ErrorContextf(ctx, "读取请求体失败: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if requireServiceAuth {
+		if err := handler.validateServiceAuth(r, rawBody); err != nil {
+			log.WarnContextf(ctx, "后台服务请求鉴权失败: %v", err)
+			http.Error(w, "service auth failed", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	// 获取服务处理器
@@ -211,20 +238,26 @@ func (h *HTTPRequestHandler) parseRequestParams(r *http.Request) (serviceID, met
 	return serviceID, method, nil
 }
 
-// readRequestBody 读取请求体，同时合并 URL query 参数
-// 优先级：body 中的参数 > URL query 参数
 func (h *HTTPRequestHandler) readRequestBody(r *http.Request) ([]byte, error) {
+	_, body, err := h.readRequestBodyWithRaw(r)
+	return body, err
+}
+
+// readRequestBodyWithRaw 读取原始请求体，同时返回合并 URL query 参数后的转发请求体。
+// 优先级：body 中的参数 > URL query 参数。
+func (h *HTTPRequestHandler) readRequestBodyWithRaw(r *http.Request) ([]byte, []byte, error) {
 	// 读取 body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		return nil, fmt.Errorf("读取请求体失败: %v", err)
+		return nil, nil, fmt.Errorf("读取请求体失败: %v", err)
 	}
 	defer r.Body.Close()
+	rawBody := append([]byte(nil), body...)
 
 	// 解析 URL query 参数
 	queryParams := r.URL.Query()
 	if len(queryParams) == 0 {
-		return body, nil
+		return rawBody, body, nil
 	}
 
 	// 将 query 参数转为 map
@@ -239,14 +272,15 @@ func (h *HTTPRequestHandler) readRequestBody(r *http.Request) ([]byte, error) {
 
 	// 如果 body 为空，直接使用 query 参数
 	if len(body) == 0 {
-		return json.Marshal(queryMap)
+		mergedBody, err := json.Marshal(queryMap)
+		return rawBody, mergedBody, err
 	}
 
 	// 如果 body 不为空，尝试合并
 	var bodyMap map[string]interface{}
 	if err := json.Unmarshal(body, &bodyMap); err != nil {
 		// body 不是有效 JSON，直接返回 body
-		return body, nil
+		return rawBody, body, nil
 	}
 
 	// 合并：body 参数优先（覆盖 query 参数）
@@ -254,7 +288,16 @@ func (h *HTTPRequestHandler) readRequestBody(r *http.Request) ([]byte, error) {
 		queryMap[key] = value
 	}
 
-	return json.Marshal(queryMap)
+	mergedBody, err := json.Marshal(queryMap)
+	return rawBody, mergedBody, err
+}
+
+func (h *HTTPRequestHandler) validateServiceAuth(r *http.Request, rawBody []byte) error {
+	cfg, err := currentServiceAuthConfig()
+	if err != nil {
+		return err
+	}
+	return validateServiceAuthHeader(r.Header.Get("Auth"), rawBody, time.Now(), cfg)
 }
 
 // extractGatewayHeaders 提取网关相关的HTTP头部信息
@@ -329,7 +372,7 @@ func (h *HTTPRequestHandler) writeResponse(w http.ResponseWriter, respBody []byt
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-App-Id, X-App-Key, X-Access-Token, X-Trace-Id")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Auth, X-App-Id, X-App-Key, X-Access-Token, X-Trace-Id")
 
 	// 设置追踪ID到响应头
 	if traceID := headers["trace_id"]; traceID != "" {

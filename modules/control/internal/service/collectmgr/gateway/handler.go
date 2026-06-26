@@ -277,6 +277,11 @@ func (h *CollectorGatewayHandler) parseMethodToRoute(method string, body []byte)
 			}
 		}
 
+	// Task Planner methods (任务规划器)
+	case "RecalculateAllTaskInstances":
+		route.Path = "/api/v1/task-planner/recalculate-all"
+		route.HTTPMethod = "POST"
+
 	default:
 		return nil, fmt.Errorf("unsupported method: %s", method)
 	}

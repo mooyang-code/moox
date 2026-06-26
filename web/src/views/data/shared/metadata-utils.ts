@@ -83,6 +83,14 @@ export function validateLowerSnakeId(value: string | undefined, maxLength: numbe
   return '';
 }
 
+export function validateChineseDisplayName(value: string | undefined, maxLength = 10) {
+  const name = (value || '').trim();
+  if (!name) return '中文名不能为空';
+  if ([...name].length > maxLength) return `中文名不能超过 ${maxLength} 个字符`;
+  if (!/\p{Script=Han}/u.test(name)) return '中文名必须包含中文';
+  return '';
+}
+
 export const statusOptions: SelectOption[] = [
   { label: '启用', value: 'active' },
   { label: '禁用', value: 'disabled' },

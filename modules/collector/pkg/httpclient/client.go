@@ -19,11 +19,13 @@ type HTTPClient struct {
 	httpClient *http.Client
 }
 
+const defaultRequestTimeout = 8 * time.Second
+
 // NewHTTPClient 创建通用 HTTP 客户端
 func NewHTTPClient() *HTTPClient {
 	return &HTTPClient{
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: defaultRequestTimeout,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{
 					// 跳过证书验证，提升性能
@@ -100,11 +102,15 @@ func (c *HTTPClient) doRequest(ctx context.Context, httpClient *http.Client, ful
 	req.Header.Set("User-Agent", "data-collector/1.0")
 
 	// 发送请求
+	start := time.Now()
+	fmt.Printf("[collector-http] GET start domain=%s url=%s timeout=%s\n", domain, fullURL, httpClient.Timeout)
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		fmt.Printf("[collector-http] GET error domain=%s duration=%s error=%v\n", domain, time.Since(start), err)
 		return fmt.Errorf("请求 %s 失败: %w", domain, err)
 	}
 	defer resp.Body.Close()
+	fmt.Printf("[collector-http] GET response domain=%s status=%d duration=%s\n", domain, resp.StatusCode, time.Since(start))
 
 	// 检查状态码
 	if resp.StatusCode != http.StatusOK {

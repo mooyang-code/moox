@@ -91,6 +91,7 @@ type CreateFunctionRequest struct {
 	Region       string            // 地区
 	FunctionName string            // 函数名称
 	Runtime      string            // 运行时环境
+	Handler      string            // 函数处理入口
 	Namespace    string            // 命名空间
 	Description  string            // 函数描述
 	FunctionType string            // 函数类型：Event（默认）或 HTTP
@@ -108,6 +109,7 @@ type UpdateFunctionRequest struct {
 	Region       string            // 地区
 	FunctionName string            // 函数名称
 	Namespace    string            // 命名空间
+	Handler      *string           // 函数处理入口
 	ZipFile      string            // 代码包（base64编码）
 	COSBucket    string            // COS桶名，用于COS方式更新
 	COSPath      string            // COS对象路径，用于COS方式更新
@@ -123,6 +125,7 @@ type FunctionInfo struct {
 	FunctionName string            // 函数名称
 	FunctionID   string            // 函数ID
 	Runtime      string            // 运行时环境
+	Handler      string            // 函数处理入口
 	Namespace    string            // 命名空间
 	Description  string            // 函数描述
 	Status       string            // 状态

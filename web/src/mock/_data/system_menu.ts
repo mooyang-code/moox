@@ -59,15 +59,15 @@ export const systemMenu = [
   menu("021003", "0210", "/data/datasets", "data-datasets", "data-datasets", "data/datasets/index", 3),
   menu("021004", "0210", "/data/fields", "data-fields", "data-fields", "data/fields/index", 4),
   menu("021005", "0210", "/data/factors", "data-factors", "data-factors", "data/factors/index", 5),
-  // 二级分组：查询视图
-  directory("0220", "02", "/data/views", "data-views", "data-views", 2),
-  menu("022001", "0220", "/data/views", "data-view-list", "data-view-list", "data/views/index", 1),
-  menu("022002", "0220", "/data/view-browse", "data-view-browse", "data-view-browse", "data/view-browse/index", 2),
   // 二级分组：数据管理
-  directory("0230", "02", "/data/overview", "data-mgmt", "data-mgmt", 3),
+  directory("0230", "02", "/data/overview", "data-mgmt", "data-mgmt", 2),
   menu("023001", "0230", "/data/overview", "data-overview", "data-overview", "data/overview/overview", 1),
   menu("023002", "0230", "/data/browse", "data-browse", "data-browse", "data/browse/index", 2),
   menu("023003", "0230", "/data/import", "data-import", "data-import", "data/import/index", 3),
+  // 二级分组：查询视图
+  directory("0220", "02", "/data/views", "data-views", "data-views", 3),
+  menu("022001", "0220", "/data/views", "data-view-list", "data-view-list", "data/views/index", 1),
+  menu("022002", "0220", "/data/view-browse", "data-view-browse", "data-view-browse", "data/view-browse/index", 2),
 
   directory("03", "0", "/collector/functions", "compute-collector", "compute-collector", 3, { svgIcon: "functions", icon: "" }),
   menu("0301", "03", "/collector/functions", "collector-functions", "collector-functions", "collector/cloud-function/cloud-function", 1),

@@ -37,9 +37,10 @@ func TestStorageAcceptance(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, readRsp.GetRetInfo().GetCode())
 	require.Len(t, readRsp.GetRows(), 1)
 
-	_, err = svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{SpaceId: "crypto_acceptance", ViewId: "kline_view", Name: "K线视图", PrimaryDatasetId: "binance_spot_kline", DatasetIds: []string{"binance_spot_kline"}, QueryWindow: "30d", Status: "active"}})
+	viewRsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{SpaceId: "crypto_acceptance", ViewId: "kline_view", Name: "K线视图", PrimaryDatasetId: "binance_spot_kline", DatasetIds: []string{"binance_spot_kline"}, FilterJson: `{"freq":"1m"}`, QueryWindow: "30d", Status: "active"}})
 	require.NoError(t, err)
-	_, err = svc.UpsertViewColumn(ctx, &pb.UpsertViewColumnReq{Column: &pb.ViewColumn{SpaceId: "crypto_acceptance", ViewId: "kline_view", ColumnName: "binance_spot_kline.close", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "binance_spot_kline.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}})
+	require.Equal(t, pb.ErrorCode_SUCCESS, viewRsp.GetRetInfo().GetCode())
+	_, err = svc.UpsertViewColumn(ctx, &pb.UpsertViewColumnReq{Column: &pb.ViewColumn{SpaceId: "crypto_acceptance", ViewId: "kline_view", ColumnName: "binance_spot_kline.close", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "binance_spot_kline.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Attributes: map[string]string{"display_name": "收盘价"}}})
 	require.NoError(t, err)
 	viewStore, err := svc.viewStore()
 	require.NoError(t, err)

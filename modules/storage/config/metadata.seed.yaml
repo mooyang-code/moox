@@ -4,7 +4,7 @@
 
 spaces:
   - space_id: crypto
-    name: Crypto Market Data
+    name: 加密交易空间
     description: Binance/OKX style crypto market data workspace
     owner: default
     status: active
@@ -12,7 +12,7 @@ spaces:
 data_sources:
   - space_id: crypto
     data_source_id: binance
-    name: Binance
+    name: 币安
     kind: exchange
     market: crypto
     timezone: UTC
@@ -22,7 +22,7 @@ subjects:
   - space_id: crypto
     subject_id: APT-USDT
     subject_type: crypto_pair
-    name: APT-USDT
+    name: APT币
     market: crypto
     currency: USDT
     timezone: UTC
@@ -30,7 +30,7 @@ subjects:
   - space_id: crypto
     subject_id: AR-USDT
     subject_type: crypto_pair
-    name: AR-USDT
+    name: AR币
     market: crypto
     currency: USDT
     timezone: UTC
@@ -52,7 +52,7 @@ datasets:
   - space_id: crypto
     dataset_id: binance_spot_kline
     data_source_id: binance
-    name: Binance Spot Kline
+    name: 币安现货K线
     description: Binance spot OHLCV kline facts
     data_kind: time_series
     freqs: ["1m", "1h", "1d"]
@@ -60,8 +60,16 @@ datasets:
   - space_id: crypto
     dataset_id: binance_spot_symbols
     data_source_id: binance
-    name: Binance Spot Symbols
+    name: 币安现货标的
     description: Binance spot symbol profile facts
+    data_kind: record
+    freqs: []
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    data_source_id: binance
+    name: 币安合约标的
+    description: Binance USDT-M swap symbol metadata records
     data_kind: record
     freqs: []
     status: active
@@ -87,71 +95,129 @@ dataset_subjects:
     subject_id: AR-USDT
     subject_role: normal
     status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    subject_id: APT-USDT
+    subject_role: record
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    subject_id: AR-USDT
+    subject_role: record
+    status: active
 
 fields:
   - space_id: crypto
     field_id: open
-    name: Open Price
+    name: 开盘价
     value_type: double
     unit: USDT
     write_example: "7.1200"
     status: active
   - space_id: crypto
     field_id: high
-    name: High Price
+    name: 最高价
     value_type: double
     unit: USDT
     write_example: "7.1800"
     status: active
   - space_id: crypto
     field_id: low
-    name: Low Price
+    name: 最低价
     value_type: double
     unit: USDT
     write_example: "7.0900"
     status: active
   - space_id: crypto
     field_id: close
-    name: Close Price
+    name: 收盘价
     value_type: double
     unit: USDT
     write_example: "7.1500"
     status: active
   - space_id: crypto
     field_id: volume
-    name: Base Asset Volume
+    name: 成交量
     value_type: double
     unit: base_asset
     write_example: "1250.5"
     status: active
   - space_id: crypto
     field_id: quote_volume
-    name: Quote Asset Volume
+    name: 成交额
     value_type: double
     unit: USDT
     write_example: "8941.075"
     status: active
   - space_id: crypto
     field_id: trade_num
-    name: Trade Count
+    name: 成交笔数
     value_type: int
     write_example: "123"
     status: active
   - space_id: crypto
     field_id: symbol
-    name: Exchange Symbol
+    name: 交易标的
     value_type: string
     write_example: APTUSDT
     status: active
   - space_id: crypto
+    field_id: external_symbol
+    name: 外部代码
+    value_type: string
+    write_example: APTUSDT
+    status: active
+  - space_id: crypto
+    field_id: base_asset
+    name: 基础资产
+    value_type: string
+    write_example: APT
+    status: active
+  - space_id: crypto
+    field_id: quote_asset
+    name: 计价资产
+    value_type: string
+    write_example: USDT
+    status: active
+  - space_id: crypto
     field_id: status
-    name: Trading Status
+    name: 交易状态
     value_type: string
     write_example: TRADING
     status: active
   - space_id: crypto
+    field_id: min_qty
+    name: 最小数量
+    value_type: double
+    write_example: "0.001"
+    status: active
+  - space_id: crypto
+    field_id: max_qty
+    name: 最大数量
+    value_type: double
+    write_example: "100000"
+    status: active
+  - space_id: crypto
+    field_id: tick_size
+    name: 价格步长
+    value_type: double
+    write_example: "0.01"
+    status: active
+  - space_id: crypto
+    field_id: lot_size
+    name: 数量步长
+    value_type: double
+    write_example: "0.001"
+    status: active
+  - space_id: crypto
+    field_id: filters_json
+    name: 过滤规则
+    value_type: json
+    write_example: '{"PRICE_FILTER":{"tickSize":"0.01"}}'
+    status: active
+  - space_id: crypto
     field_id: note
-    name: Text Note
+    name: 备注
     value_type: string
     write_example: actively traded pair
     status: active
@@ -160,6 +226,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_spot_kline
     column_name: open
+    attributes:
+      display_name: 开盘价
     origin_type: field
     origin_id: open
     value_type: double
@@ -168,6 +236,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_spot_kline
     column_name: high
+    attributes:
+      display_name: 最高价
     origin_type: field
     origin_id: high
     value_type: double
@@ -176,6 +246,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_spot_kline
     column_name: low
+    attributes:
+      display_name: 最低价
     origin_type: field
     origin_id: low
     value_type: double
@@ -184,6 +256,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_spot_kline
     column_name: close
+    attributes:
+      display_name: 收盘价
     origin_type: field
     origin_id: close
     value_type: double
@@ -192,6 +266,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_spot_kline
     column_name: volume
+    attributes:
+      display_name: 成交量
     origin_type: field
     origin_id: volume
     value_type: double
@@ -199,6 +275,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_spot_kline
     column_name: quote_volume
+    attributes:
+      display_name: 成交额
     origin_type: field
     origin_id: quote_volume
     value_type: double
@@ -206,6 +284,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_spot_kline
     column_name: trade_num
+    attributes:
+      display_name: 成交笔数
     origin_type: field
     origin_id: trade_num
     value_type: int
@@ -213,6 +293,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_spot_symbols
     column_name: symbol
+    attributes:
+      display_name: 交易标的
     origin_type: field
     origin_id: symbol
     value_type: string
@@ -221,6 +303,8 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_spot_symbols
     column_name: status
+    attributes:
+      display_name: 交易状态
     origin_type: field
     origin_id: status
     value_type: string
@@ -228,9 +312,103 @@ dataset_columns:
   - space_id: crypto
     dataset_id: binance_spot_symbols
     column_name: note
+    attributes:
+      display_name: 备注
     origin_type: field
     origin_id: note
     value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: symbol
+    attributes:
+      display_name: 交易标的
+    origin_type: field
+    origin_id: symbol
+    value_type: string
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: external_symbol
+    attributes:
+      display_name: 外部代码
+    origin_type: field
+    origin_id: external_symbol
+    value_type: string
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: base_asset
+    attributes:
+      display_name: 基础资产
+    origin_type: field
+    origin_id: base_asset
+    value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: quote_asset
+    attributes:
+      display_name: 计价资产
+    origin_type: field
+    origin_id: quote_asset
+    value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: status
+    attributes:
+      display_name: 交易状态
+    origin_type: field
+    origin_id: status
+    value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: min_qty
+    attributes:
+      display_name: 最小数量
+    origin_type: field
+    origin_id: min_qty
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: max_qty
+    attributes:
+      display_name: 最大数量
+    origin_type: field
+    origin_id: max_qty
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: tick_size
+    attributes:
+      display_name: 价格步长
+    origin_type: field
+    origin_id: tick_size
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: lot_size
+    attributes:
+      display_name: 数量步长
+    origin_type: field
+    origin_id: lot_size
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_swap_symbols
+    column_name: filters_json
+    attributes:
+      display_name: 过滤规则
+    origin_type: field
+    origin_id: filters_json
+    value_type: json
     status: active
 
 primary_store_nodes:
@@ -278,6 +456,14 @@ primary_store_routes:
   - space_id: crypto
     route_id: route-binance-spot-symbols
     dataset_id: binance_spot_symbols
+    subject_pattern: "*"
+    hash_rule: subject_id
+    node_id: local
+    priority: 100
+    status: active
+  - space_id: crypto
+    route_id: route-binance-swap-symbols
+    dataset_id: binance_swap_symbols
     subject_pattern: "*"
     hash_rule: subject_id
     node_id: local

@@ -55,4 +55,22 @@ assert.match(
   'query views group must include view browse',
 );
 
+assert.match(
+  systemMenu,
+  /directory\("0230",\s*"02",\s*"\/data\/overview",\s*"data-mgmt",\s*"data-mgmt",\s*2\)/,
+  'data management group must be a direct child of data assets and appear right after data modeling',
+);
+
+assert.doesNotMatch(
+  systemMenu,
+  /directory\("0230",\s*"0210",\s*"\/data\/overview",\s*"data-mgmt"/,
+  'data management group must not be nested under data modeling',
+);
+
+assert.match(
+  systemMenu,
+  /directory\("0210",\s*"02",[\s\S]*directory\("0230",\s*"02",[\s\S]*directory\("0220",\s*"02"/,
+  'data management group must be ordered between data modeling and query views',
+);
+
 console.log('route-output tests passed');

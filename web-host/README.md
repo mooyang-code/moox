@@ -51,7 +51,7 @@ web-host/
 
 Web Host 对浏览器只暴露两个短路径前缀：
 
-- `/api/control/{service}/{method}`：转发到 Control 网关 `/gateway/{service}/{method}`。
+- `/api/control/{service}/{method}`：转发到 Control API `/api/control/{service}/{method}`。
 - `/api/storage/{metadata|access|view}/{method}`：转发到 Storage tRPC HTTP 服务。
 
 默认目标地址：

@@ -57,6 +57,9 @@ type CloudNodeDAO interface {
 	// ListProbeEnabledNodes 获取开启探测的有效节点
 	ListProbeEnabledNodes(ctx context.Context) ([]*model.CloudNode, error)
 
+	// CountByCloudAccountID 统计引用指定云账户的有效节点数量
+	CountByCloudAccountID(ctx context.Context, accountID string) (int64, error)
+
 	// GetNamespaceStats 获取命名空间统计信息
 	GetNamespaceStats(ctx context.Context, region string) (map[string]int, error)
 
@@ -314,6 +317,19 @@ func (d *cloudNodeDaoImpl) ListProbeEnabledNodes(ctx context.Context) ([]*model.
 		return nil, fmt.Errorf("failed to list probe enabled nodes: %w", result.Error)
 	}
 	return nodes, nil
+}
+
+// CountByCloudAccountID 统计引用指定云账户的有效节点数量
+func (d *cloudNodeDaoImpl) CountByCloudAccountID(ctx context.Context, accountID string) (int64, error) {
+	var count int64
+	result := d.db.WithContext(ctx).
+		Model(&model.CloudNode{}).
+		Where("c_cloud_account_id = ? AND c_invalid = ?", accountID, 0).
+		Count(&count)
+	if result.Error != nil {
+		return 0, fmt.Errorf("failed to count nodes by cloud account: %w", result.Error)
+	}
+	return count, nil
 }
 
 // GetNamespaceStats 获取命名空间使用统计

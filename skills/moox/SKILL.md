@@ -1,3 +1,8 @@
+---
+name: moox
+description: Use when working in the MooX monorepo or operating moox-cli, including quant storage, collector cloud functions, deployment, Tencent Cloud Lighthouse firewall changes, or control-plane maintenance.
+---
+
 # MooX Quant Data System
 
 Use this skill when working inside the MooX monorepo, especially for quant data storage, protocol changes, collector integration, factor data, release, or deployment.
@@ -45,6 +50,32 @@ Protocol generation:
 ```bash
 make proto
 ```
+
+## MooX CLI Operations
+
+Prefer bundled scripts in this skill when a workflow needs deterministic parsing or repeated `moox-cli` argument assembly.
+
+### Tencent Lighthouse Firewall
+
+When the user provides a Tencent Cloud Lighthouse instance detail URL, use the bundled script to parse the instance ID and call `moox-cli`:
+
+```bash
+python3 skills/moox/scripts/tencent_lighthouse_firewall.py add \
+  --detail-url 'https://console.cloud.tencent.com/lighthouse/instance/detail?searchParams=rid%3D5&rid=1&id=lhins-a7yikq89' \
+  --ports 19104,19101,19105,20103,20180 \
+  --dry-run
+```
+
+After the dry run is correct, remove `--dry-run` to create the firewall rule. The script defaults to the MooX service ports `19104,19101,19105,20103,20180`, `TCP`, `0.0.0.0/0`, and `ap-guangzhou` when the console URL does not provide a region.
+
+Useful safe checks:
+
+```bash
+python3 skills/moox/scripts/tencent_lighthouse_firewall.py parse --detail-url '<console-detail-url>'
+python3 skills/moox/scripts/tencent_lighthouse_firewall.py add --detail-url '<console-detail-url>' --print-command
+```
+
+The script calls `bin/moox-cli` from the repository when present, or `moox-cli` from `PATH`. Tencent credentials should be supplied through `TENCENTCLOUD_SECRET_ID` and `TENCENTCLOUD_SECRET_KEY`; do not echo secrets in final responses or logs.
 
 CSV acceptance import:
 

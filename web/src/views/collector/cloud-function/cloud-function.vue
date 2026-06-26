@@ -282,6 +282,10 @@
           </a-select>
         </a-form-item>
 
+        <a-form-item field="handler" label="函数入口" required>
+          <a-input v-model="batchAddForm.handler" placeholder="main" />
+        </a-form-item>
+
         <a-form-item field="region" label="地区" required>
           <a-select v-model="batchAddForm.region" placeholder="请选择地区" style="width: 100%">
             <a-option :value="REGION_UNLIMITED">不限</a-option>
@@ -867,6 +871,7 @@ const batchAddForm = reactive({
   cloudAccountId: '',
   nodeType: 'scf-event', // 节点类型，默认为事件型云函数
   runtime: 'Go1', // 运行时环境，默认Go1
+  handler: 'main',
   region: 'ap-guangzhou',
   tag: '',
   packageId: '', // 代码包版本ID
@@ -875,7 +880,9 @@ const batchAddForm = reactive({
   // 新增心跳配置字段
   timeoutThreshold: 0,    // 超时阈值（秒），0表示使用全局默认值
   heartbeatInterval: 0,   // 心跳间隔（秒），0表示使用全局默认值
-  probeEnabled: true      // 是否启用探测，默认启用
+  probeEnabled: true,     // 是否启用探测，默认启用
+  config: {} as Record<string, string>,
+  environment: {} as Record<string, string>
 });
 
 const batchPlanVisible = ref(false);
@@ -1221,6 +1228,10 @@ const handleBatchAddOk = async () => {
   await executeBatchAddDirect();
 };
 
+const optionalRecord = (value: Record<string, string>) => (
+  Object.keys(value).length > 0 ? value : undefined
+);
+
 const buildCreateNodeTask = (region: string, index: number) => ({
   taskType: 'CREATE_NODE',
   requestParams: {
@@ -1228,10 +1239,13 @@ const buildCreateNodeTask = (region: string, index: number) => ({
     namespace: batchAddForm.namespace || undefined,
     node_type: batchAddForm.nodeType, // 使用表单中选择的节点类型
     runtime: batchAddForm.runtime, // 运行时环境
+    handler: batchAddForm.handler || 'main',
     biz_type: currentBizType.value, // 根据路由设置业务类型
     region,
     tag: getRegionTag(region) || batchAddForm.tag,
     package_id: batchAddForm.packageId,
+    config: optionalRecord(batchAddForm.config),
+    environment: optionalRecord(batchAddForm.environment),
     version: '1.0.0',
     capacity: '100',
     metadata: JSON.stringify({ env: 'prod', index }),

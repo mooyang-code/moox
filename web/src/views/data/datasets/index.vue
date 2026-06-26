@@ -30,7 +30,7 @@
     >
       <template #columns>
         <a-table-column title="数据集ID" data-index="dataset_id" :width="180" />
-        <a-table-column title="名称" data-index="name" :width="180" />
+        <a-table-column title="中文名" data-index="name" :width="180" />
         <a-table-column title="数据源" data-index="data_source_id" :width="150" />
         <a-table-column title="数据形态" :width="130">
           <template #cell="{ record }">{{ optionLabel(dataKindOptions, record.data_kind) }}</template>
@@ -69,8 +69,8 @@
             </a-option>
           </a-select>
         </a-form-item>
-        <a-form-item field="name" label="名称" required>
-          <a-input v-model="form.name" />
+        <a-form-item field="name" label="中文名" required>
+          <a-input v-model="form.name" :max-length="10" show-word-limit placeholder="例如 现货K线" />
         </a-form-item>
         <a-form-item field="description" label="描述">
           <a-textarea v-model="form.description" :auto-size="{ minRows: 3, maxRows: 5 }" />
@@ -123,6 +123,7 @@ import {
   splitList,
   statusColor,
   statusOptions,
+  validateChineseDisplayName,
   validateLowerSnakeId,
 } from '@/views/data/shared/metadata-utils';
 
@@ -228,7 +229,12 @@ function openManage(record: Dataset) {
 async function submit() {
   const spaceId = spaceStore.requireSpaceId();
   if (!form.dataset_id || !form.data_source_id || !form.name || !form.data_kind) {
-    Message.warning('请补全数据集ID、数据源、名称和数据形态');
+    Message.warning('请补全数据集ID、数据源、中文名和数据形态');
+    return;
+  }
+  const nameError = validateChineseDisplayName(form.name);
+  if (nameError) {
+    Message.warning(nameError);
     return;
   }
   const idError = validateLowerSnakeId(form.dataset_id, 20);

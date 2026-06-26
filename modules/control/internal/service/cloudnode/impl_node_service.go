@@ -137,6 +137,9 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 	if codeConfig == nil {
 		return nil, fmt.Errorf("code config is required")
 	}
+	if codeConfig.Runtime == "" {
+		return nil, fmt.Errorf("runtime is required")
+	}
 
 	// 验证代码配置：必须提供COS配置或ZipFile，优先使用COS
 	hasCOSConfig := codeConfig.COSBucket != "" && codeConfig.COSPath != "" && codeConfig.COSRegion != ""
@@ -191,36 +194,14 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 
 	// 调用云厂商API创建云函数（带重试机制）
 	// 优先使用COS方式，如果没有COS配置则使用ZipFile方式
-	runtime := codeConfig.Runtime
-	if runtime == "" {
-		runtime = "Go1" // 默认使用Go1
-		log.WarnContextf(ctx, "[CloudNode] Runtime not specified in codeConfig, using default: %s", runtime)
-	}
-
-	req := &provider.CreateFunctionRequest{
-		Region:       nodeModel.Region,
-		FunctionName: nodeModel.NodeID,
-		Runtime:      runtime,
-		Namespace:    nodeModel.Namespace,
-		Description:  "MooX Created",
-		FunctionType: model.SCFFunctionType(nodeModel.NodeType),
-		MemorySize:   128, // 默认128MB
-		Timeout:      30,  // 默认30秒
-		Environment:  map[string]string{},
-	}
+	req := buildCreateFunctionRequest(nodeModel, codeConfig)
 
 	if hasCOSConfig {
-		// 使用COS方式创建
-		req.COSBucket = codeConfig.COSBucket
-		req.COSPath = codeConfig.COSPath
-		req.COSRegion = codeConfig.COSRegion
 		log.InfoContextf(ctx, "[CloudNode] Creating function with COS: bucket=%s, path=%s, region=%s, runtime=%s",
-			codeConfig.COSBucket, codeConfig.COSPath, codeConfig.COSRegion, runtime)
+			codeConfig.COSBucket, codeConfig.COSPath, codeConfig.COSRegion, req.Runtime)
 	} else {
-		// 使用ZipFile方式创建
-		req.ZipFile = codeConfig.ZipFileBase64
 		log.InfoContextf(ctx, "[CloudNode] Creating function with ZipFile: base64_length=%d, runtime=%s",
-			len(codeConfig.ZipFileBase64), runtime)
+			len(codeConfig.ZipFileBase64), req.Runtime)
 	}
 
 	var funcInfo *provider.FunctionInfo
@@ -248,6 +229,40 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *CloudNodeDTO, codeCo
 	return s.ConvertToCloudNodeDTO(nodeModel), nil
 }
 
+func buildCreateFunctionRequest(node *model.CloudNode, codeConfig *FunctionCodeConfig) *provider.CreateFunctionRequest {
+	req := &provider.CreateFunctionRequest{
+		Region:       node.Region,
+		FunctionName: node.NodeID,
+		Runtime:      codeConfig.Runtime,
+		Handler:      codeConfig.Handler,
+		Namespace:    node.Namespace,
+		Description:  "MooX Created",
+		FunctionType: model.SCFFunctionType(node.NodeType),
+		MemorySize:   128,
+		Timeout:      30,
+		Environment:  cloneStringMap(codeConfig.Environment),
+	}
+	if codeConfig.COSBucket != "" && codeConfig.COSPath != "" && codeConfig.COSRegion != "" {
+		req.COSBucket = codeConfig.COSBucket
+		req.COSPath = codeConfig.COSPath
+		req.COSRegion = codeConfig.COSRegion
+	} else {
+		req.ZipFile = codeConfig.ZipFileBase64
+	}
+	return req
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return map[string]string{}
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
 // createFunctionURL 为scf-web类型函数创建函数URL触发器
 func (s *ServiceImpl) createFunctionURL(ctx context.Context, client provider.Client, node *model.CloudNode) error {
 	// 构建TriggerDesc JSON
@@ -256,8 +271,8 @@ func (s *ServiceImpl) createFunctionURL(ctx context.Context, client provider.Cli
 	req := &provider.CreateTriggerRequest{
 		Region:       node.Region,
 		FunctionName: node.NodeID,
-		TriggerName:  "func_url",  // 函数URL触发器固定名称
-		TriggerType:  "http",      // 函数URL类型
+		TriggerName:  "func_url", // 函数URL触发器固定名称
+		TriggerType:  "http",     // 函数URL类型
 		TriggerDesc:  triggerDesc,
 		Namespace:    node.Namespace,
 		Enable:       true,

@@ -264,7 +264,7 @@ func (h *CloudAccountHandler) DeleteCloudAccount(c *gin.Context) {
 	}
 
 	if err := h.service.DeleteAccount(ctx, accountID); err != nil {
-		c.JSON(500, gin.H{"code": 500, "message": err.Error()})
+		common.HandleAppError(c, err)
 		return
 	}
 	c.JSON(200, gin.H{"code": 200, "message": "success"})
