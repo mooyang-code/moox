@@ -72,3 +72,8 @@ cover.out.tmp
 # Local web-host build artifact (use web-host/release or ./bin)
 /web-host/web-host
 /web-host/moox-web-host
+
+# VitePress
+node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
