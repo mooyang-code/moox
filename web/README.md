@@ -140,7 +140,7 @@ pnpm install
 ```bash
 # 1. 启动 Control 服务，提供 Space 与管理台网关
 cd ../modules/admin
-go run ./cmd/moox-server -conf=config/trpc_go.yaml
+go run ./cmd/moox-admin -conf=config/trpc_go.yaml
 
 # 2. 启动 Storage 服务，提供 Metadata / Access / View tRPC HTTP 服务
 cd ../storage

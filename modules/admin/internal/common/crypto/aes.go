@@ -247,7 +247,7 @@ func getJWTIssuer() string {
 	if issuer := os.Getenv("MOOX_JWT_ISSUER"); issuer != "" {
 		return issuer
 	}
-	return "moox-server"
+	return "moox-admin"
 }
 
 // GenerateToken 生成统一JWT令牌

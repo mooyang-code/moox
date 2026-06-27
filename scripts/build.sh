@@ -59,7 +59,7 @@ build_storage() {
 case "${TARGET_MODULE}" in
   all)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
-    build_go modules/admin ./cmd/moox-server moox-server 0
+    build_go modules/admin ./cmd/moox-admin moox-admin 0
     build_go modules/collector ./cmd/moox-collector moox-collector 0
     build_go modules/factor ./cmd/moox-factor moox-factor 0
     build_go modules/order ./cmd/moox-order moox-order 0
@@ -70,7 +70,7 @@ case "${TARGET_MODULE}" in
     build_go modules/cli ./cmd/moox-cli moox-cli 0
     ;;
   admin)
-    build_go modules/admin ./cmd/moox-server moox-server 0
+    build_go modules/admin ./cmd/moox-admin moox-admin 0
     ;;
   collector)
     build_go modules/collector ./cmd/moox-collector moox-collector 0

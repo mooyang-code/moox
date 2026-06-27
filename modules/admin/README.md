@@ -54,9 +54,9 @@ make build-all VERSION=v1.0.0
 release/
 └── linux/              # Linux 平台
     ├── bin/            # 二进制文件目录
-    │   ├── moox-server-amd64
-    │   ├── moox-server-arm64
-    │   └── moox-server # 默认为 amd64 版本
+    │   ├── moox-admin-amd64
+    │   ├── moox-admin-arm64
+    │   └── moox-admin # 默认为 amd64 版本
     ├── config/         # 配置文件目录
     │   └── trpc_go.yaml
     ├── data/           # 数据目录

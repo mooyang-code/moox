@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	// MooxServerServiceName 服务名称常量
-	MooxServerServiceName = "moox-server"
+	// MooxAdminServiceName 服务名称常量
+	MooxAdminServiceName = "moox-admin"
 )
 
 // Config 全局配置结构

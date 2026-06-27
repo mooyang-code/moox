@@ -88,7 +88,7 @@ func (p *StorageSymbolProvider) fetchSymbolsFromStorage(ctx context.Context, dat
 	for {
 		request := &QueryRecordsRequest{
 			AuthInfo: AuthInfo{
-				AppID:  "moox-server",
+				AppID:  "moox-admin",
 				AppKey: "symbol-provider",
 			},
 			DataRef: DataRef{

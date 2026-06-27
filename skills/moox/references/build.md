@@ -11,7 +11,7 @@ make acceptance
 `make build` writes binaries to `bin/`:
 
 - `moox-cli`
-- `moox-server`
+- `moox-admin`
 - `moox-storage`
 - `moox-collector`
 - `moox-factor`

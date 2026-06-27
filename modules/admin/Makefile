@@ -6,7 +6,7 @@
 all: deps build
 
 # Variables
-APP_NAME=moox-server
+APP_NAME=moox-admin
 VERSION ?= dev
 BUILD_TIME=$(shell date +"%Y-%m-%d_%H:%M:%S")
 GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -76,7 +76,7 @@ test:
 build:
 	@echo "📦 正在构建 $(APP_NAME) (当前平台)..."
 	@mkdir -p $(BUILD_DIR)
-	@if $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(APP_NAME) ./cmd/moox-server; then \
+	@if $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(APP_NAME) ./cmd/moox-admin; then \
 		echo "✅ 构建完成: $(BUILD_DIR)/$(APP_NAME)"; \
 	else \
 		echo "❌ 构建失败"; \
@@ -96,7 +96,7 @@ build-linux:
 		echo "  架构: $$arch"; \
 		echo "  CGO: 已禁用"; \
 		if ! GOOS=linux GOARCH=$$arch $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" \
-			-o $(RELEASE_DIR)/linux/bin/$(APP_NAME)-$$arch ./cmd/moox-server; then \
+			-o $(RELEASE_DIR)/linux/bin/$(APP_NAME)-$$arch ./cmd/moox-admin; then \
 			echo "❌ Linux $$arch 构建失败"; \
 			BUILD_FAILED=true; \
 		else \
@@ -126,7 +126,7 @@ build-darwin:
 		echo "  架构: $$arch"; \
 		echo "  CGO: 已禁用"; \
 		if ! GOOS=darwin GOARCH=$$arch $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" \
-			-o $(RELEASE_DIR)/darwin/bin/$(APP_NAME)-$$arch ./cmd/moox-server; then \
+			-o $(RELEASE_DIR)/darwin/bin/$(APP_NAME)-$$arch ./cmd/moox-admin; then \
 			echo "❌ macOS $$arch 构建失败"; \
 			BUILD_FAILED=true; \
 		else \
@@ -159,7 +159,7 @@ build-windows:
 		echo "  架构: $$arch"; \
 		echo "  CGO: 已禁用"; \
 		if ! GOOS=windows GOARCH=$$arch $(CGO_FLAGS) go build -ldflags "$(LDFLAGS)" \
-			-o $(RELEASE_DIR)/windows/bin/$(APP_NAME)-$$arch.exe ./cmd/moox-server; then \
+			-o $(RELEASE_DIR)/windows/bin/$(APP_NAME)-$$arch.exe ./cmd/moox-admin; then \
 			echo "❌ Windows $$arch 构建失败"; \
 			BUILD_FAILED=true; \
 		else \
@@ -194,7 +194,7 @@ release: build-all
 create-unix-scripts:
 	@echo "#!/bin/bash" > $(PLATFORM_DIR)/start.sh
 	@echo "" >> $(PLATFORM_DIR)/start.sh
-	@echo "APP_NAME=\"moox-server\"" >> $(PLATFORM_DIR)/start.sh
+	@echo "APP_NAME=\"moox-admin\"" >> $(PLATFORM_DIR)/start.sh
 	@echo "PID_FILE=\"./\$$APP_NAME.pid\"" >> $(PLATFORM_DIR)/start.sh
 	@echo "SCRIPT_DIR=\$$(cd \"\$$(dirname \"\$$0\")\" && pwd)" >> $(PLATFORM_DIR)/start.sh
 	@echo "" >> $(PLATFORM_DIR)/start.sh
@@ -237,7 +237,7 @@ create-unix-scripts:
 	@echo "echo \"日志文件: log/app.log\"" >> $(PLATFORM_DIR)/start.sh
 	@echo "#!/bin/bash" > $(PLATFORM_DIR)/stop.sh
 	@echo "" >> $(PLATFORM_DIR)/stop.sh
-	@echo "APP_NAME=\"moox-server\"" >> $(PLATFORM_DIR)/stop.sh
+	@echo "APP_NAME=\"moox-admin\"" >> $(PLATFORM_DIR)/stop.sh
 	@echo "PID_FILE=\"./\$$APP_NAME.pid\"" >> $(PLATFORM_DIR)/stop.sh
 	@echo "" >> $(PLATFORM_DIR)/stop.sh
 	@echo "if [ ! -f \"\$$PID_FILE\" ]; then" >> $(PLATFORM_DIR)/stop.sh
@@ -267,10 +267,10 @@ create-unix-scripts:
 create-windows-scripts:
 	@echo '@echo off' > $(PLATFORM_DIR)/start.bat
 	@echo 'cd bin' >> $(PLATFORM_DIR)/start.bat
-	@echo 'start moox-server.exe' >> $(PLATFORM_DIR)/start.bat
+	@echo 'start moox-admin.exe' >> $(PLATFORM_DIR)/start.bat
 	@echo 'echo Service started' >> $(PLATFORM_DIR)/start.bat
 	@echo '@echo off' > $(PLATFORM_DIR)/stop.bat
-	@echo 'taskkill /F /IM moox-server.exe' >> $(PLATFORM_DIR)/stop.bat
+	@echo 'taskkill /F /IM moox-admin.exe' >> $(PLATFORM_DIR)/stop.bat
 	@echo 'echo Service stopped' >> $(PLATFORM_DIR)/stop.bat
 
 # Deploy to remote server
@@ -312,7 +312,7 @@ clean:
 # Development shortcuts
 dev:
 	@echo "🚀 开发模式启动..."
-	$(CGO_FLAGS) go run ./cmd/moox-server
+	$(CGO_FLAGS) go run ./cmd/moox-admin
 
 # Install to local bin
 install: build

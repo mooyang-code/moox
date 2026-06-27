@@ -324,7 +324,7 @@ start_storage() {
 
 start_admin() {
   start_service "admin" "${ROOT}/admin" \
-    "${ROOT}/bin/moox-server" -conf=config/trpc_go.yaml
+    "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
 }
 
 start_web_host() {
@@ -473,7 +473,7 @@ prepare_stage() {
     "${STAGE_DIR}/logs" \
     "${STAGE_DIR}/run"
 
-  copy_required_binary "moox-server"
+  copy_required_binary "moox-admin"
   copy_required_binary "moox-storage"
   copy_required_binary "moox-cli"
   copy_optional_web_host

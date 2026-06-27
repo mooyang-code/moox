@@ -42,7 +42,7 @@ assert_contains() {
   fi
 }
 
-assert_file "${DEPLOY_DIR}/bin/moox-server"
+assert_file "${DEPLOY_DIR}/bin/moox-admin"
 assert_file "${DEPLOY_DIR}/bin/moox-storage"
 assert_file "${DEPLOY_DIR}/bin/moox-cli"
 assert_file "${DEPLOY_DIR}/admin/config/trpc_go.yaml"
@@ -66,6 +66,6 @@ assert_contains "${DEPLOY_DIR}/storage/config/storage.yaml" "root: ../data/stora
 assert_contains "${DEPLOY_DIR}/storage/config/storage.yaml" "path: ../data/storage/metadata/storage_metadata.db"
 assert_contains "${DEPLOY_DIR}/storage/config/trpc_go.yaml" "log_path: ../logs/storage"
 assert_contains "${DEPLOY_DIR}/start.sh" "moox-storage"
-assert_contains "${DEPLOY_DIR}/start.sh" "moox-server"
+assert_contains "${DEPLOY_DIR}/start.sh" "moox-admin"
 
 echo "deploy-moox test passed: ${DEPLOY_DIR}"

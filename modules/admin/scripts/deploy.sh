@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# moox-server 发布脚本 - 支持多平台部署（包括本地）
+# moox-admin 发布脚本 - 支持多平台部署（包括本地）
 
 # 配置变量
 # 获取脚本所在目录的父目录（项目根目录）
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RELEASE_BASE_DIR="$PROJECT_DIR/release"
-PROJECT_NAME="moox-server"
+PROJECT_NAME="moox-admin"
 REMOTE_SERVER=""
 REMOTE_DIR=""
 PLATFORM=""

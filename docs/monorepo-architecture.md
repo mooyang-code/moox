@@ -69,7 +69,7 @@ moox/
 
 ```text
 modules/cli/cmd/moox-cli/main.go
-modules/admin/cmd/moox-server/main.go
+modules/admin/cmd/moox-admin/main.go
 modules/storage/cmd/moox-storage/main.go
 modules/collector/cmd/moox-collector/main.go
 modules/factor/cmd/moox-factor/main.go
@@ -232,7 +232,7 @@ make deploy
 推荐按风险从低到高迁移：
 
 1. 建立根目录骨架：`go.work`、`modules/`、`scripts/`、`skills/`、`configs/`、`deployments/`、`var/`。
-2. 迁移 `moox/server` 到 `modules/admin`，入口改为 `cmd/moox-server`。
+2. 迁移 `moox/server` 到 `modules/admin`，入口改为 `cmd/moox-admin`。
 3. 迁移 `moox/cli` 到 `modules/cli`，入口改为 `cmd/moox-cli`。
 4. 迁移 `xData-mini/storage` 到 `modules/storage`，入口改为 `cmd/moox-storage`。
 5. 迁移 `xData-mini/cli` 中仍有价值的命令到 `modules/cli`，避免保留两个 CLI。

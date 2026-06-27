@@ -31,7 +31,7 @@ mkdir -p \
   "${RELEASE_ROOT}/scripts"
 
 cp "${ROOT}/bin/moox-cli" "${RELEASE_ROOT}/cli/bin/"
-cp "${ROOT}/bin/moox-server" "${RELEASE_ROOT}/admin/bin/"
+cp "${ROOT}/bin/moox-admin" "${RELEASE_ROOT}/admin/bin/"
 cp "${ROOT}/bin/moox-collector" "${RELEASE_ROOT}/collector/bin/"
 cp "${ROOT}/bin/moox-factor" "${RELEASE_ROOT}/factor/bin/"
 cp "${ROOT}/bin/moox-order" "${RELEASE_ROOT}/order/bin/"
