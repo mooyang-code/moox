@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mooyang-code/moox/modules/account/internal/service"
+	"github.com/mooyang-code/moox/modules/trade/internal/service"
 )
 
 func main() {
-	payload, err := json.Marshal(service.New("account").Health())
+	payload, err := json.Marshal(service.New("trade").Health())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "{\"error\":\"marshal_failed\",\"message\":%q}\n", err.Error())
 		os.Exit(1)

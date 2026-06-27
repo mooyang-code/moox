@@ -1,13 +1,12 @@
 go 1.24.0
 
 use (
-	./modules/account
 	./modules/cli
 	./modules/collector
 	./modules/admin
 	./modules/admin/proto/admingen
 	./modules/factor
-	./modules/order
+	./modules/trade
 	./modules/storage
 	./modules/storage/proto/gen
 )
