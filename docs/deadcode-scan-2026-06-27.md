@@ -4,7 +4,13 @@
 - **工具**：`staticcheck 2024.1.1 (0.7.0)`，检查项 `U1000`（unused code）
 - **范围**：`modules/admin`、`modules/cli`、`modules/collector`、`modules/storage`、`modules/account`、`modules/factor`、`modules/order`、`web-host`
 - **已排除噪音**：proto 生成代码（`proto/admingen/`、`proto/gen/`、`*.pb.go`）
-- **状态**：仅清单，**暂未清理**。清理前需逐项确认（尤其 storage 的 view_* 整片代码）。
+- **状态**：已完成部分清理（admin / cli / collector / storage）。清理前后仍保留需确认项会在文末说明。  
+
+## 清理结果（本次更新）
+
+- ✅ 已确认清理：`admin` 的14处、`cli` 的1处、`collector` 的1处、`storage/cmd/moox-storage/main.go`、`storage/internal/infra/device/duckdb/view_store.go` 的15处。  
+- ✅ 已确认清理：`storage/internal/services/access` 中 `currentRecordRows`、`view_projection.go` 的记录投影/兼容包装函数、`view_dirty.go` 的 record 脏标记与 record脏构建路径。  
+- ⚠️ 保留项：`storage` 中时间序列增量构建相关链路（如 `drainTimeSeriesDirty` + `startViewDirtyTracking`/`stopViewDirtyTracking`）仍保留，未判定为“完全死代码”。  
 
 ---
 

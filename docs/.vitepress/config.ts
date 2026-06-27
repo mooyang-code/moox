@@ -4,6 +4,7 @@ export default defineConfig({
   title: 'MooX',
   description: '一站式量化金融数据平台',
   lang: 'zh-CN',
+  base: '/moox/',
   lastUpdated: true,
   cleanUrls: true,
   ignoreDeadLinks: true,
