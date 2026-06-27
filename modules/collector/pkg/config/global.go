@@ -5,11 +5,6 @@ import (
 	"sync"
 )
 
-const (
-	// MooxAdminServiceName 服务名称常量
-	MooxAdminServiceName = "moox-admin"
-)
-
 // Config 全局配置结构
 type Config struct {
 	Server   ServerConfig
