@@ -7,7 +7,6 @@
 package rpc
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -80,42 +79,6 @@ func structToInterface(s *structpb.Struct) interface{} {
 		return nil
 	}
 	return s.AsMap()
-}
-
-// interfaceToStruct 将任意 Go 值转为 google.protobuf.Struct。
-func interfaceToStruct(v interface{}) *structpb.Struct {
-	if v == nil {
-		return nil
-	}
-	if s, ok := v.(string); ok {
-		if s == "" {
-			return nil
-		}
-		var parsed interface{}
-		if err := json.Unmarshal([]byte(s), &parsed); err != nil {
-			return nil
-		}
-		if m, ok := parsed.(map[string]interface{}); ok {
-			st, err := structpb.NewStruct(m)
-			if err == nil {
-				return st
-			}
-		}
-		return nil
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil
-	}
-	st, err := structpb.NewStruct(m)
-	if err != nil {
-		return nil
-	}
-	return st
 }
 
 // reportHeartbeatReqToTypes 将 pb.ReportHeartbeatReq 转为内部 types.ReportHeartbeatRequest。

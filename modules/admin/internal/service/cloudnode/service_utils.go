@@ -367,23 +367,6 @@ func packageDetailModelToPB(pkg *model.FunctionPackage) *pb.PackageDetail {
 	}
 }
 
-// asMap 将任意值规整为 map[string]interface{}（用于构造 Struct）。
-func asMap(v interface{}) map[string]interface{} {
-	if m, ok := v.(map[string]interface{}); ok {
-		return m
-	}
-	// 通过 JSON 往返转换
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil
-	}
-	return m
-}
-
 // ========== 时间格式化辅助 ==========
 
 // formatTime 将 time.Time / *time.Time 转为 RFC3339 字符串，零值与 nil 返回空串。
@@ -414,6 +397,44 @@ func parseTime(s string) time.Time {
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
 		return time.Time{}
+	}
+	return t
+}
+
+// interfaceToStruct 将任意 Go 值转为 google.protobuf.Struct。
+func interfaceToStruct(v interface{}) *structpb.Struct {
+	if v == nil {
+		return nil
+	}
+	if s, ok := v.(string); ok {
+		if s == "" {
+			return nil
+		}
+		var parsed interface{}
+		if err := json.Unmarshal([]byte(s), &parsed); err != nil {
+			return nil
+		}
+		if m, ok := parsed.(map[string]interface{}); ok {
+			st, err := structpb.NewStruct(m)
+			if err == nil {
+				return st
+			}
+		}
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil
+	}
+	st, err := structpb.NewStruct(m)
+	if err != nil {
+		return nil
+	}
+	return st
 }
 
 // calcNodeStatusText 依据最近心跳与超时阈值计算状态文本。

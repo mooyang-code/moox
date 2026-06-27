@@ -2,8 +2,6 @@ package dnsproxy
 
 import (
 	"context"
-	"fmt"
-	"net"
 	"sort"
 	"sync"
 	"time"

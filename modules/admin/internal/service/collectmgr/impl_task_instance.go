@@ -2,7 +2,6 @@ package collectmgr
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -10,7 +9,6 @@ import (
 	cloudnodedao "github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/dao"
 	collectordao "github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/model"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/planner"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/spacecontext"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 

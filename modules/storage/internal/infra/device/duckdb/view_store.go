@@ -812,6 +812,69 @@ func buildFilterPredicates(filters []*pb.FilterExpr, columns []*pb.ResultColumn)
 	return clauses, args, nil
 }
 
+func parseSimpleFilter(expr string) (left, op, right string, ok bool) {
+	expr = strings.TrimSpace(expr)
+	for _, candidate := range []string{" contains ", "==", "!=", ">=", "<=", "=", ">", "<"} {
+		if idx := strings.Index(expr, candidate); idx >= 0 {
+			left = strings.TrimSpace(expr[:idx])
+			right = strings.TrimSpace(expr[idx+len(candidate):])
+			op = strings.TrimSpace(candidate)
+			if left == "" || right == "" {
+				return "", "", "", false
+			}
+			return left, op, right, true
+		}
+	}
+	return "", "", "", false
+}
+
+func parseFunctionFilter(expr string) (name, field, token string, ok bool) {
+	expr = strings.TrimSpace(expr)
+	open := strings.Index(expr, "(")
+	if open <= 0 || !strings.HasSuffix(expr, ")") {
+		return "", "", "", false
+	}
+	name = strings.TrimSpace(expr[:open])
+	body := strings.TrimSpace(strings.TrimSuffix(expr[open+1:], ")"))
+	if name == "" || body == "" {
+		return "", "", "", false
+	}
+	switch name {
+	case "is_empty", "is_not_empty":
+		if strings.Contains(body, ",") {
+			return "", "", "", false
+		}
+		return name, strings.TrimSpace(body), "", true
+	case "starts_with", "ends_with", "not_contains":
+		left, right, found := strings.Cut(body, ",")
+		if !found {
+			return "", "", "", false
+		}
+		field = strings.TrimSpace(left)
+		token = strings.TrimSpace(right)
+		if field == "" || token == "" {
+			return "", "", "", false
+		}
+		return name, field, token, true
+	default:
+		return "", "", "", false
+	}
+}
+
+func filterValue(token string, args map[string]*pb.TypedValue) *pb.TypedValue {
+	token = strings.TrimSpace(token)
+	if strings.HasPrefix(token, "$") {
+		return args[strings.TrimPrefix(token, "$")]
+	}
+	if strings.HasPrefix(token, "'") && strings.HasSuffix(token, "'") && len(token) >= 2 {
+		return &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: strings.Trim(token, "'")}}
+	}
+	if strings.HasPrefix(token, `"`) && strings.HasSuffix(token, `"`) && len(token) >= 2 {
+		return &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: strings.Trim(token, `"`)}}
+	}
+	return nil
+}
+
 func buildOrderBy(sorts []*pb.SortSpec, columns []*pb.ResultColumn) (string, error) {
 	if len(sorts) == 0 {
 		return "subject_id ASC, freq ASC, data_time ASC", nil
