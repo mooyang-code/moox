@@ -5,13 +5,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/controlclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/collector/pkg/packager"
 	"github.com/spf13/cobra"
 )
@@ -42,6 +43,36 @@ type collectorPublishOptions struct {
 	NodeType         string
 	Env              []string
 	Config           []string
+}
+
+type collectorDeployOptions struct {
+	collectorPackageOptions
+	ControlURL       string
+	ServiceAccessKey string
+	ServiceSecretKey string
+	CloudAccountID   string
+	NodeID           string
+	ZipPath          string
+	PackageName      string
+	PackageType      string
+	BizType          string
+	Runtime          string
+}
+
+var collectorDeployFlags collectorDeployOptions
+
+var collectorFunctionDeployCmd = &cobra.Command{
+	Use:   "deploy",
+	Short: "上传并部署数据采集器云函数到已有节点",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		summary, err := deployCollectorFunction(cmd.Context(), collectorDeployFlags)
+		if err != nil {
+			return err
+		}
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(summary)
+	},
 }
 
 var collectorPackageFlags collectorPackageOptions
@@ -95,15 +126,28 @@ type collectorPublishSummary struct {
 	UploadJobID string `json:"upload_job_id"`
 	PackageID   string `json:"package_id,omitempty"`
 	CreateJobID string `json:"create_job_id,omitempty"`
+	DeployJobID string `json:"deploy_job_id,omitempty"`
 }
 
 func init() {
 	rootCmd.AddCommand(collectorCmd)
 	collectorCmd.AddCommand(collectorFunctionCmd)
-	collectorFunctionCmd.AddCommand(collectorFunctionPackageCmd, collectorFunctionPublishCmd)
+	collectorFunctionCmd.AddCommand(collectorFunctionPackageCmd, collectorFunctionPublishCmd, collectorFunctionDeployCmd)
 
 	addCollectorPackageFlags(collectorFunctionPackageCmd, &collectorPackageFlags)
 	addCollectorPackageFlags(collectorFunctionPublishCmd, &collectorPublishFlags.collectorPackageOptions)
+	addCollectorPackageFlags(collectorFunctionDeployCmd, &collectorDeployFlags.collectorPackageOptions)
+
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ControlURL, "control-url", "", "Control service base URL")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 access_key")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.NodeID, "node-id", "", "existing cloud node id / function name")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ZipPath, "zip", "", "existing SCF zip path")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.PackageName, "package-name", "data-collector", "function package name")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.PackageType, "package-type", "data_collector", "function package type")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.BizType, "biz-type", "data_collector", "business type")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.Runtime, "runtime", "CustomRuntime", "SCF runtime")
 
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ControlURL, "control-url", "", "Control service base URL")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN (登录态, 不推荐)")
@@ -188,19 +232,8 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		return collectorPublishSummary{}, err
 	}
 
-	client := controlclient.New(opts.ControlURL)
-	client.AccessToken = defaultFlag(opts.AccessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
-	// 优先使用后台服务签名鉴权（/api/service 路由），避免依赖前端登录态。
-	accessKey := defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"))
-	secretKey := defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"))
-	if accessKey != "" && secretKey != "" {
-		client.ServiceAuth = &controlclient.ServiceAuthConfig{
-			AccessKey:  accessKey,
-			SecretKey:  secretKey,
-			ExpireSecs: 1800,
-		}
-	}
-	uploadResp, err := client.CreateUploadPackageJob(ctx, controlclient.UploadPackageJobRequest{
+	client := newCollectorAdminClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey)
+	uploadResp, err := client.CreateUploadPackageJob(ctx, adminclient.UploadPackageJobRequest{
 		PackageName:    defaultFlag(opts.PackageName, "data-collector"),
 		Version:        defaultFlag(opts.Version, "dev"),
 		Runtime:        defaultFlag(opts.Runtime, "CustomRuntime"),
@@ -223,7 +256,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	}
 	summary.PackageID = packageID
 
-	createResp, err := client.CreateNodeJob(ctx, controlclient.CreateNodeJobRequest{
+	createResp, err := client.CreateNodeJob(ctx, adminclient.CreateNodeJobRequest{
 		CloudAccountID: opts.CloudAccountID,
 		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
 		Runtime:        defaultFlag(opts.Runtime, "CustomRuntime"),
@@ -241,6 +274,111 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	return summary, nil
 }
 
+func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (collectorPublishSummary, error) {
+	if opts.ControlURL == "" {
+		return collectorPublishSummary{}, fmt.Errorf("--control-url is required")
+	}
+	if opts.CloudAccountID == "" {
+		return collectorPublishSummary{}, fmt.Errorf("--cloud-account-id is required")
+	}
+	if opts.NodeID == "" {
+		return collectorPublishSummary{}, fmt.Errorf("--node-id is required")
+	}
+	zipPath := opts.ZipPath
+	if zipPath == "" {
+		result, err := packageCollectorFunction(ctx, opts.collectorPackageOptions)
+		if err != nil {
+			return collectorPublishSummary{}, err
+		}
+		zipPath = result.Path
+	}
+	data, err := os.ReadFile(zipPath)
+	if err != nil {
+		return collectorPublishSummary{}, err
+	}
+
+	client := newCollectorAdminClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey)
+	uploadResp, err := client.CreateUploadPackageJob(ctx, adminclient.UploadPackageJobRequest{
+		PackageName:    defaultFlag(opts.PackageName, "data-collector"),
+		Version:        defaultFlag(opts.Version, "dev"),
+		Runtime:        defaultFlag(opts.Runtime, "CustomRuntime"),
+		PackageType:    defaultFlag(opts.PackageType, "data_collector"),
+		BizType:        defaultFlag(opts.BizType, "data_collector"),
+		CloudAccountID: opts.CloudAccountID,
+		FileContent:    base64.StdEncoding.EncodeToString(data),
+	})
+	if err != nil {
+		return collectorPublishSummary{}, err
+	}
+	summary := collectorPublishSummary{
+		ZipPath:     zipPath,
+		UploadJobID: uploadResp.JobID,
+	}
+
+	packageID, err := pollPackageID(ctx, client, uploadResp.JobID, 5*time.Minute)
+	if err != nil {
+		return summary, err
+	}
+	summary.PackageID = packageID
+
+	deployResp, err := client.CreateDeployNodeJob(ctx, adminclient.DeployNodeJobRequest{
+		NodeID:    opts.NodeID,
+		PackageID: packageID,
+	})
+	if err != nil {
+		return summary, err
+	}
+	summary.DeployJobID = deployResp.JobID
+	if err := pollJobSuccess(ctx, client, deployResp.JobID, 10*time.Minute); err != nil {
+		return summary, err
+	}
+	return summary, nil
+}
+
+func newCollectorAdminClient(controlURL, accessToken, serviceAccessKey, serviceSecretKey string) *adminclient.Client {
+	client := adminclient.New(controlURL)
+	client.HTTPClient = &http.Client{Timeout: 10 * time.Minute}
+	client.AccessToken = defaultFlag(accessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
+	accessKey := defaultFlag(serviceAccessKey, os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"))
+	secretKey := defaultFlag(serviceSecretKey, os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"))
+	if accessKey != "" && secretKey != "" {
+		client.ServiceAuth = &adminclient.ServiceAuthConfig{
+			AccessKey:  accessKey,
+			SecretKey:  secretKey,
+			ExpireSecs: 1800,
+		}
+	}
+	return client
+}
+
+func pollJobSuccess(ctx context.Context, client *adminclient.Client, jobID string, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	for {
+		job, err := client.QueryJob(ctx, jobID)
+		if err == nil {
+			if job.JobStatus == 3 {
+				return fmt.Errorf("job %s failed: %s", jobID, firstTaskError(job))
+			}
+			if job.JobStatus == 4 && job.FailedTaskCnt > 0 {
+				return fmt.Errorf("job %s failed: %s", jobID, firstTaskError(job))
+			}
+			if job.JobStatus == 2 && job.SuccessTaskCnt > 0 && job.FailedTaskCnt == 0 {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("timed out waiting for job %s to succeed", jobID)
+		case <-tick.C:
+		}
+	}
+}
+
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version string) error {
 	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-X main.AppVersion=%s", version), "-o", outPath, "./cmd/moox-collector/main.go")
 	cmd.Dir = collectorRoot
@@ -252,7 +390,7 @@ func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, vers
 	return nil
 }
 
-func pollPackageID(ctx context.Context, client *controlclient.Client, jobID string, timeout time.Duration) (string, error) {
+func pollPackageID(ctx context.Context, client *adminclient.Client, jobID string, timeout time.Duration) (string, error) {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	tick := time.NewTicker(2 * time.Second)
@@ -277,9 +415,9 @@ func pollPackageID(ctx context.Context, client *controlclient.Client, jobID stri
 	}
 }
 
-func packageIDFromJob(job *controlclient.JobQueryResult) string {
+func packageIDFromJob(job *adminclient.JobQueryResult) string {
 	for _, task := range job.Tasks {
-		if task.TaskType != controlclient.TaskTypeUploadFileToCOS || task.ResultData == "" {
+		if task.TaskType != adminclient.TaskTypeUploadFileToCOS || task.ResultData == "" {
 			continue
 		}
 		var result struct {
@@ -292,7 +430,7 @@ func packageIDFromJob(job *controlclient.JobQueryResult) string {
 	return ""
 }
 
-func firstTaskError(job *controlclient.JobQueryResult) string {
+func firstTaskError(job *adminclient.JobQueryResult) string {
 	for _, task := range job.Tasks {
 		if task.ErrorMessage != "" {
 			return task.ErrorMessage

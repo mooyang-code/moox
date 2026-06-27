@@ -230,12 +230,12 @@ copy_optional_web_host() {
 }
 
 patch_configs() {
-  perl -0pi -e 's#path:\s*\./data/moox\.db#path: ../data/moox.db#g; s#output_path:\s*\./log/moox\.log#output_path: ../logs/control/moox.log#g' \
-    "${STAGE_DIR}/control/config/app.yaml"
+  perl -0pi -e 's#path:\s*\./data/moox\.db#path: ../data/moox.db#g; s#output_path:\s*\./log/moox\.log#output_path: ../logs/admin/moox.log#g' \
+    "${STAGE_DIR}/admin/config/app.yaml"
   perl -0pi -e 's#dbname:\s*"\./data/moox\.db"#dbname: "../data/moox.db"#g; s#data_dir:\s*"\./data/badger"#data_dir: "../data/badger"#g' \
-    "${STAGE_DIR}/control/config/gateway.yaml"
-  perl -0pi -e 's#log_path:\s*\./log#log_path: ../logs/control#g' \
-    "${STAGE_DIR}/control/config/trpc_go.yaml"
+    "${STAGE_DIR}/admin/config/gateway.yaml"
+  perl -0pi -e 's#log_path:\s*\./log#log_path: ../logs/admin#g' \
+    "${STAGE_DIR}/admin/config/trpc_go.yaml"
 
   perl -0pi -e 's#root:\s*\./var/storage#root: ../data/storage#g; s#path:\s*\./var/storage/metadata/storage_metadata\.db#path: ../data/storage/metadata/storage_metadata.db#g; s#pebble_path:\s*\./var/storage/pebble#pebble_path: ../data/storage/pebble#g; s#duckdb_path:\s*\./var/storage/duckdb/views\.duckdb#duckdb_path: ../data/storage/duckdb/views.duckdb#g; s#bleve_path:\s*\./var/storage/bleve#bleve_path: ../data/storage/bleve#g; s#parquet_path:\s*\./var/storage/archive#parquet_path: ../data/storage/archive#g' \
     "${STAGE_DIR}/storage/config/storage.yaml"
@@ -250,7 +250,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
-mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/logs/control" "${ROOT}/logs/storage" "${ROOT}/logs/web-host"
+mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/logs/admin" "${ROOT}/logs/storage" "${ROOT}/logs/web-host"
 
 stop_if_running() {
   local name="$1"
@@ -304,36 +304,66 @@ STORAGE_ENV=(
   "STORAGE_SCHEMA_FILE=${ROOT}/storage/schema/metadata.sql"
 )
 
-echo "initializing storage metadata schema"
-(
-  cd "${ROOT}/storage"
-  env "${STORAGE_ENV[@]}" "${ROOT}/bin/moox-storage" \
-    -init-metadata \
-    -conf=config/trpc_go.yaml \
-    -storage-conf=config/storage.yaml >> "${ROOT}/logs/storage/stdout.log" 2>&1
-)
+init_storage_schema() {
+  echo "initializing storage metadata schema"
+  (
+    cd "${ROOT}/storage"
+    env "${STORAGE_ENV[@]}" "${ROOT}/bin/moox-storage" \
+      -init-metadata \
+      -conf=config/trpc_go.yaml \
+      -storage-conf=config/storage.yaml >> "${ROOT}/logs/storage/stdout.log" 2>&1
+  )
+}
 
-start_service "storage" "${ROOT}/storage" \
-  env "${STORAGE_ENV[@]}" "${ROOT}/bin/moox-storage" \
-    -conf=config/trpc_go.yaml \
-    -storage-conf=config/storage.yaml
+start_storage() {
+  start_service "storage" "${ROOT}/storage" \
+    env "${STORAGE_ENV[@]}" "${ROOT}/bin/moox-storage" \
+      -conf=config/trpc_go.yaml \
+      -storage-conf=config/storage.yaml
+}
 
-start_service "control" "${ROOT}/control" \
-  "${ROOT}/bin/moox-server" -conf=config/trpc_go.yaml
+start_admin() {
+  start_service "admin" "${ROOT}/admin" \
+    "${ROOT}/bin/moox-server" -conf=config/trpc_go.yaml
+}
 
-if [[ -x "${ROOT}/bin/moox-web-host" ]]; then
+start_web_host() {
+  if [[ ! -x "${ROOT}/bin/moox-web-host" ]]; then
+    echo "web-host binary missing; skip" >&2
+    return 1
+  fi
   start_service "web-host" "${ROOT}" \
     env \
-      "MOOX_CONTROL_GATEWAY_URL=${MOOX_CONTROL_GATEWAY_URL:-http://127.0.0.1:20103}" \
-      "MOOX_STORAGE_METADATA_URL=${MOOX_STORAGE_METADATA_URL:-http://127.0.0.1:19101}" \
-      "MOOX_STORAGE_ACCESS_URL=${MOOX_STORAGE_ACCESS_URL:-http://127.0.0.1:19104}" \
-      "MOOX_STORAGE_VIEW_URL=${MOOX_STORAGE_VIEW_URL:-http://127.0.0.1:19105}" \
-      "MOOX_WEB_HOST_ADDR=${MOOX_WEB_HOST_ADDR:-:19527}" \
+      "MOOX_ADMIN_GATEWAY_URL=${MOOX_ADMIN_GATEWAY_URL:-http://127.0.0.1:11000}" \
+      "MOOX_STORAGE_METADATA_URL=${MOOX_STORAGE_METADATA_URL:-http://127.0.0.1:20200}" \
+      "MOOX_STORAGE_ACCESS_URL=${MOOX_STORAGE_ACCESS_URL:-http://127.0.0.1:20201}" \
+      "MOOX_STORAGE_VIEW_URL=${MOOX_STORAGE_VIEW_URL:-http://127.0.0.1:20202}" \
+      "MOOX_WEB_HOST_ADDR=${MOOX_WEB_HOST_ADDR:-:10080}" \
       "${ROOT}/bin/moox-web-host"
-fi
+}
+
+SERVICE="${1:-}"
+case "${SERVICE}" in
+  "")
+    init_storage_schema
+    start_storage
+    start_admin
+    start_web_host
+    ;;
+  storage)
+    init_storage_schema
+    start_storage
+    ;;
+  admin) start_admin ;;
+  web-host) start_web_host ;;
+  *)
+    echo "unknown service: ${SERVICE}; valid: storage admin web-host" >&2
+    exit 2
+    ;;
+esac
 
 echo "MooX services started"
-echo "admin web: http://127.0.0.1:19527"
+echo "admin web: http://127.0.0.1:10080"
 EOF
 
   cat > "${STAGE_DIR}/stop.sh" <<'EOF'
@@ -374,9 +404,36 @@ stop_service() {
   rm -f "${pid_file}"
 }
 
-stop_service "web-host"
-stop_service "control"
-stop_service "storage"
+SERVICE="${1:-}"
+case "${SERVICE}" in
+  "")
+    stop_service "web-host"
+    stop_service "admin"
+    stop_service "storage"
+    ;;
+  storage|admin|web-host) stop_service "${SERVICE}" ;;
+  *)
+    echo "unknown service: ${SERVICE}; valid: storage admin web-host" >&2
+    exit 2
+    ;;
+esac
+EOF
+
+  cat > "${STAGE_DIR}/restart.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVICE="${1:-}"
+
+if [[ -n "${SERVICE}" ]]; then
+  echo "restarting ${SERVICE}"
+else
+  echo "restarting all MooX services"
+fi
+
+"${ROOT}/stop.sh" "${SERVICE}"
+"${ROOT}/start.sh" "${SERVICE}"
 EOF
 
   cat > "${STAGE_DIR}/status.sh" <<'EOF'
@@ -385,7 +442,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-for name in storage control web-host; do
+for name in storage admin web-host; do
   pid_file="${ROOT}/run/${name}.pid"
   if [[ ! -f "${pid_file}" ]]; then
     echo "${name}: stopped"
@@ -400,15 +457,15 @@ for name in storage control web-host; do
 done
 EOF
 
-  chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh"
+  chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh"
 }
 
 prepare_stage() {
   rm -rf "${STAGE_DIR}"
   mkdir -p \
     "${STAGE_DIR}/bin" \
-    "${STAGE_DIR}/control/config" \
-    "${STAGE_DIR}/control/schema" \
+    "${STAGE_DIR}/admin/config" \
+    "${STAGE_DIR}/admin/schema" \
     "${STAGE_DIR}/storage/config" \
     "${STAGE_DIR}/storage/schema" \
     "${STAGE_DIR}/examples" \
@@ -421,9 +478,9 @@ prepare_stage() {
   copy_required_binary "moox-cli"
   copy_optional_web_host
 
-  cp -R "${ROOT}/modules/control/config/." "${STAGE_DIR}/control/config/"
+  cp -R "${ROOT}/modules/admin/config/." "${STAGE_DIR}/admin/config/"
   cp -R "${ROOT}/modules/storage/config/." "${STAGE_DIR}/storage/config/"
-  cp "${ROOT}/modules/control/schema/admin.sql" "${STAGE_DIR}/control/schema/admin.sql"
+  cp "${ROOT}/modules/admin/schema/admin.sql" "${STAGE_DIR}/admin/schema/admin.sql"
   cp "${ROOT}/modules/storage/schema/metadata.sql" "${STAGE_DIR}/storage/schema/metadata.sql"
   cp -R "${ROOT}/examples/." "${STAGE_DIR}/examples/"
 

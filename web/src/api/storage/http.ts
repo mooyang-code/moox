@@ -44,7 +44,7 @@ async function callStorage<TReq extends object, TRsp extends { ret_info?: RetInf
   method: string,
   req: TReq,
 ): Promise<TRsp> {
-  const rsp = await storageClient.post<TRsp>(`/api/control/${storageServiceID(group)}/${method}`, {
+  const rsp = await storageClient.post<TRsp>(`/api/admin/${storageServiceID(group)}/${method}`, {
     auth_info: getStorageAuthInfo(),
     ...req,
   });
@@ -77,7 +77,15 @@ storageClient.interceptors.request.use((config) => {
 });
 
 storageClient.interceptors.response.use(
-  (rsp) => rsp,
+  (rsp) => {
+    // 框架错误：HTTP 200 但 trpc-ret != 0，body 为空，错误信息在 header。
+    const trpcRet = rsp.headers?.['trpc-ret'] ?? rsp.headers?.['Trpc-Ret'];
+    if (trpcRet !== undefined && trpcRet !== null && String(trpcRet) !== '0') {
+      const funcRet = rsp.headers?.['trpc-func-ret'] ?? '';
+      return Promise.reject(new Error(funcRet || `框架错误(${trpcRet})`));
+    }
+    return rsp;
+  },
   (error) => {
     Message.error(error?.message || 'Storage 请求失败');
     return Promise.reject(error);
