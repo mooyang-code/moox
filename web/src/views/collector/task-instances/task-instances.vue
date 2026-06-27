@@ -16,9 +16,9 @@
             <a-option :value="3">部分失败</a-option>
             <a-option :value="4">失败</a-option>
           </a-select>
-          <a-select placeholder="是否有效" v-model="form.invalid" style="width: 120px" allow-clear>
-            <a-option :value="0">有效</a-option>
-            <a-option :value="1">无效</a-option>
+          <a-select placeholder="是否有效" v-model="form.is_deleted" style="width: 120px" allow-clear>
+            <a-option value="false">有效</a-option>
+            <a-option value="true">无效</a-option>
           </a-select>
           <a-button type="primary" @click="search">
             <template #icon><icon-search /></template>
@@ -94,8 +94,8 @@
             </a-table-column>
             <a-table-column title="有效性" :width="80" align="center">
               <template #cell="{ record }">
-                <a-tag bordered size="small" :color="record.Invalid === 0 ? 'green' : 'red'">
-                  {{ record.Invalid === 0 ? '有效' : '无效' }}
+                <a-tag bordered size="small" :color="record.IsDeleted === 'false' ? 'green' : 'red'">
+                  {{ record.IsDeleted === 'false' ? '有效' : '无效' }}
                 </a-tag>
               </template>
             </a-table-column>
@@ -147,8 +147,8 @@
           </a-tag>
         </a-descriptions-item>
         <a-descriptions-item label="有效性">
-          <a-tag :color="detailData.Invalid === 0 ? 'green' : 'red'">
-            {{ detailData.Invalid === 0 ? '有效' : '无效' }}
+          <a-tag :color="detailData.IsDeleted === 'false' ? 'green' : 'red'">
+            {{ detailData.IsDeleted === 'false' ? '有效' : '无效' }}
           </a-tag>
         </a-descriptions-item>
         <a-descriptions-item label="最后执行时间">{{ formatDateTime(detailData.LastExecTime) }}</a-descriptions-item>
@@ -194,7 +194,7 @@ interface TaskInstance {
   TaskParams: string;
   LastExecTime: string | null;
   Result: string;
-  Invalid: number;
+  IsDeleted: string;
   CreateTime: string;
   ModifyTime: string;
 }
@@ -226,7 +226,7 @@ const form = ref({
   lastExecNode: '',         // v2.0: 执行节点
   symbol: '',
   lastExecStatus: null as number | null,  // v2.0: 执行状态
-  invalid: null as number | null
+  is_deleted: null as string | null
 });
 
 const pagination = ref({
@@ -346,7 +346,7 @@ const reset = () => {
     lastExecNode: '',         // v2.0: 执行节点
     symbol: '',
     lastExecStatus: null,     // v2.0: 执行状态
-    invalid: null
+    is_deleted: null
   };
   getInstanceList();
 };
@@ -375,7 +375,7 @@ const getInstanceList = async () => {
     if (form.value.lastExecNode) params.last_exec_node = form.value.lastExecNode;
     if (form.value.symbol) params.symbol = form.value.symbol;
     if (form.value.lastExecStatus !== null) params.last_exec_status = form.value.lastExecStatus;
-    if (form.value.invalid !== null) params.invalid = form.value.invalid;
+    if (form.value.is_deleted !== null) params.is_deleted = form.value.is_deleted;
 
     const response = await service.post('/api/admin/collectmgr/GetTaskInstanceList', params, {
       headers: appAuthHeaders()

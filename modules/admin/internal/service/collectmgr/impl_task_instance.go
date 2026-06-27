@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/common"
 	cloudnodedao "github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/dao"
 	collectordao "github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/dao"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/spacecontext"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
@@ -334,9 +334,8 @@ func pbFilterToDAOFilter(f *pb.TaskInstanceFilter, spaceID string) *collectordao
 		v := int(*f.LastExecStatus)
 		out.LastExecStatus = &v
 	}
-	if f.Invalid != nil {
-		v := int(*f.Invalid)
-		out.Invalid = &v
+	if f.IsDeleted != "" {
+		out.IsDeleted = f.IsDeleted
 	}
 	return out
 }
@@ -357,9 +356,8 @@ func daoFilterToPBFilter(f *collectordao.InstanceFilter) *pb.TaskInstanceFilter 
 		v := int32(*f.LastExecStatus)
 		out.LastExecStatus = &v
 	}
-	if f.Invalid != nil {
-		v := int32(*f.Invalid)
-		out.Invalid = &v
+	if f.IsDeleted != "" {
+		out.IsDeleted = f.IsDeleted
 	}
 	return out
 }
@@ -385,7 +383,7 @@ func normalizeTaskInstanceCacheFilter(filter *pb.TaskInstanceFilter) (*pb.TaskIn
 	if filter.GetTaskId() != "" || filter.GetRuleId() != "" || filter.GetPlannedExecNode() != "" || filter.GetLastExecNode() != "" || filter.GetSymbol() != "" {
 		return nil, fmt.Errorf("cache mode does not support fuzzy query")
 	}
-	if filter.Invalid != nil && *filter.Invalid != int32(model.InvalidNo) {
+	if filter.IsDeleted != "" && filter.IsDeleted != common.IsDeletedFalse {
 		return nil, fmt.Errorf("cache mode only supports valid data")
 	}
 
@@ -401,10 +399,9 @@ func normalizeTaskInstanceCacheFilter(filter *pb.TaskInstanceFilter) (*pb.TaskIn
 		pageSize = 100
 	}
 
-	valid := int32(model.InvalidNo)
 	normalized := &pb.TaskInstanceFilter{
 		LastExecStatus: filter.LastExecStatus,
-		Invalid:        &valid,
+		IsDeleted:      common.IsDeletedFalse,
 		Page:           int32(page),
 		PageSize:       int32(pageSize),
 	}

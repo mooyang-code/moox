@@ -38,8 +38,8 @@ type CollectorTaskInstanceCache struct {
 	NodeID string `json:"planned_exec_node"`
 	// TaskParams 任务执行参数（原始JSON字符串）
 	TaskParams string `json:"task_params"`
-	// Invalid 任务删除标记
-	Invalid int `json:"invalid"`
+	// IsDeleted 软删除标记（"false"=有效，"true"=已删除）
+	IsDeleted string `json:"is_deleted"`
 	// AccessUrl 访问该表的接口url
 	AccessUrl string
 
@@ -141,7 +141,7 @@ func GetTaskInstancesByNodeFromStore(nodeID string) []*CollectorTaskInstanceCach
 
 	var result []*CollectorTaskInstanceCache
 	taskInstanceStore.IterCb(func(key string, task *CollectorTaskInstanceCache) {
-		if task.NodeID == nodeID && task.Invalid == 0 {
+		if task.NodeID == nodeID && task.IsDeleted != "true" {
 			result = append(result, task)
 		}
 	})
@@ -155,10 +155,10 @@ func CalculateTasksMD5(tasks []*CollectorTaskInstanceCache) string {
 		return "empty"
 	}
 
-	// 提取所有有效任务的TaskID（过滤Invalid!=0的任务）
+	// 提取所有有效任务的TaskID（过滤已删除的任务）
 	taskIDs := make([]string, 0, len(tasks))
 	for _, task := range tasks {
-		if task.Invalid == 0 {
+		if task.IsDeleted != "true" {
 			taskIDs = append(taskIDs, task.TaskID)
 		}
 	}

@@ -224,7 +224,7 @@ func cloudNodePBToModel(p *pb.CloudNode) *model.CloudNode {
 		ProbeEnabled:        p.GetProbeEnabled(),
 		ProbeURL:            p.GetProbeUrl(),
 		RunningVersion:      p.GetRunningVersion(),
-		Invalid:             int(p.GetInvalid()),
+		IsDeleted:           p.GetIsDeleted(),
 		CreateTime:          parseTime(p.GetCreateTime()),
 		ModifyTime:          parseTime(p.GetModifyTime()),
 	}
@@ -246,7 +246,7 @@ func cloudAccountPBToModel(p *pb.CloudAccount) *model.CloudAccount {
 		COSRegion:   p.GetCosRegion(),
 		COSBucket:   p.GetCosBucket(),
 		ExtraConfig: p.GetExtraConfig(),
-		Invalid:     int(p.GetInvalid()),
+		IsDeleted:   p.GetIsDeleted(),
 	}
 }
 
@@ -274,7 +274,7 @@ func cloudNodeModelToPB(node *model.CloudNode) *pb.CloudNode {
 		HeartbeatInterval:   int32(node.HeartbeatInterval),
 		ProbeEnabled:        node.ProbeEnabled,
 		ProbeUrl:            node.ProbeURL,
-		Invalid:             int32(node.Invalid),
+		IsDeleted:           node.IsDeleted,
 		LastHeartbeat:       formatTime(node.LastHeartbeat),
 		CreateTime:          formatTime(node.CreateTime),
 		ModifyTime:          formatTime(node.ModifyTime),
@@ -295,7 +295,7 @@ func cloudAccountModelToPB(account *model.CloudAccount) *pb.CloudAccount {
 		CosRegion:   account.COSRegion,
 		CosBucket:   account.COSBucket,
 		ExtraConfig: account.ExtraConfig,
-		Invalid:     int32(account.Invalid),
+		IsDeleted:   account.IsDeleted,
 		CreateTime:  formatTime(account.CreateTime),
 		ModifyTime:  formatTime(account.ModifyTime),
 	}
@@ -361,7 +361,7 @@ func packageDetailModelToPB(pkg *model.FunctionPackage) *pb.PackageDetail {
 		UploadProgress:   int32(pkg.UploadProgress),
 		ErrorMessage:     pkg.ErrorMessage,
 		LastDeployTime:   formatTime(pkg.LastDeployTime),
-		Invalid:          int32(pkg.Invalid),
+		IsDeleted:        pkg.IsDeleted,
 		CreatedTime:      formatTime(pkg.CreateTime),
 		UpdatedTime:      formatTime(pkg.ModifyTime),
 	}
@@ -454,7 +454,6 @@ func calcNodeStatusText(lastHeartbeat *time.Time, timeoutThreshold int) string {
 	}
 	return "online"
 }
-
 
 // ========== 验证和生成工具方法 ==========
 

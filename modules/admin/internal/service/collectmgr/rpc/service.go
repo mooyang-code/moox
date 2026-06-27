@@ -136,8 +136,8 @@ func (s *Service) GetTaskInstanceListCache(ctx context.Context, req *pb.GetTaskI
 	if filter == nil {
 		filter = &pb.TaskInstanceFilter{}
 	}
-	// cache 模式仅支持精确条件、有效数据，filter.Invalid 强制 nil
-	filter.Invalid = nil
+	// cache 模式仅支持精确条件、有效数据，filter.IsDeleted 强制置空（不过滤）
+	filter.IsDeleted = ""
 	instances, total, err := s.taskInstanceSvc.GetTaskInstanceListCache(ctx, filter)
 	if err != nil {
 		log.ErrorContextf(ctx, "[CollectMgr] GetTaskInstanceListCache failed: %v", err)

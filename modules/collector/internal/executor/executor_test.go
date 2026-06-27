@@ -23,7 +23,7 @@ func TestExecuteDueTasksReportsStatusSynchronously(t *testing.T) {
 		TaskID:     "task-1",
 		NodeID:     "scf-node",
 		TaskParams: `{"data_type":"missing_type","data_source":"missing_source","inst_type":"SPOT","symbol":"BTC-USDT","intervals":["1m"]}`,
-		Invalid:    0,
+		IsDeleted: "false",
 	}})
 
 	var reports []struct {

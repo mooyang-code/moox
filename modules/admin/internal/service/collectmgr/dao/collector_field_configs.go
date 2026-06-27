@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/common"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/model"
 
 	"gorm.io/gorm"
@@ -35,7 +36,7 @@ func (dao *collectorFieldConfigsDAO) GetFieldConfigsByDataType(ctx context.Conte
 	var configs []*model.CollectorFieldConfig
 
 	err := dao.db.WithContext(ctx).
-		Where("c_data_type = ? AND c_invalid = ?", dataType, 0).
+		Where("c_data_type = ? AND c_is_deleted != ?", dataType, common.IsDeletedTrue).
 		Order("c_sort_order ASC, c_ctime ASC").
 		Find(&configs).Error
 
@@ -50,7 +51,7 @@ func (dao *collectorFieldConfigsDAO) GetFieldConfigByTypeAndKey(ctx context.Cont
 	var config model.CollectorFieldConfig
 
 	err := dao.db.WithContext(ctx).
-		Where("c_data_type = ? AND c_field_key = ? AND c_invalid = ?", dataType, fieldKey, 0).
+		Where("c_data_type = ? AND c_field_key = ? AND c_is_deleted != ?", dataType, fieldKey, common.IsDeletedTrue).
 		First(&config).Error
 
 	if err != nil {

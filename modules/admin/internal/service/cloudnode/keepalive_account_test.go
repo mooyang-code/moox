@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/admin/internal/common"
 	apperrors "github.com/mooyang-code/moox/modules/admin/internal/errors"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/model"
@@ -104,8 +105,8 @@ func TestDeleteAccountRejectsAccountReferencedByActiveNode(t *testing.T) {
 
 	account, err := service.accountDAO.GetCloudAccount(ctx, "acct-node-ref")
 	requireNoError(t, err)
-	if account.Invalid != model.InvalidNo {
-		t.Fatalf("expected account to remain valid after rejected delete, invalid=%d", account.Invalid)
+	if account.IsDeleted != common.IsDeletedFalse {
+		t.Fatalf("expected account to remain valid after rejected delete, is_deleted=%s", account.IsDeleted)
 	}
 }
 
@@ -144,8 +145,8 @@ func TestDeleteAccountRejectsAccountReferencedByActivePackage(t *testing.T) {
 
 	account, err := service.accountDAO.GetCloudAccount(ctx, "acct-package-ref")
 	requireNoError(t, err)
-	if account.Invalid != model.InvalidNo {
-		t.Fatalf("expected account to remain valid after rejected delete, invalid=%d", account.Invalid)
+	if account.IsDeleted != common.IsDeletedFalse {
+		t.Fatalf("expected account to remain valid after rejected delete, is_deleted=%s", account.IsDeleted)
 	}
 }
 

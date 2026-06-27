@@ -14,13 +14,13 @@ CREATE TABLE IF NOT EXISTS t_spaces (
     c_timezone TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'active',
     c_attributes TEXT NOT NULL DEFAULT '{}',
-    c_invalid INTEGER NOT NULL DEFAULT 0,
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_spaces_space_id_invalid
-ON t_spaces(c_space_id, c_invalid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_spaces_space_id_deleted
+ON t_spaces(c_space_id, c_is_deleted);
 
 CREATE TABLE IF NOT EXISTS t_space_members (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS t_users (
     c_last_password_change DATETIME DEFAULT CURRENT_TIMESTAMP, -- 最后密码修改时间
     c_login_attempts INTEGER DEFAULT 0,                       -- 登录尝试次数 (用于安全控制)
     c_locked_until DATETIME,                                   -- 锁定到期时间 
-    c_invalid INTEGER NOT NULL DEFAULT 0,                     -- 删除标记
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',                     -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,               -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                -- 修改时间
 );
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS t_active_tokens (
     c_expires_at DATETIME NOT NULL,                            -- 过期时间
     c_last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP,        -- 最后使用时间 
     c_revoked INTEGER NOT NULL DEFAULT 0,                     -- 是否已撤销 (用于主动登出)
-    c_invalid INTEGER NOT NULL DEFAULT 0,                     -- 删除标记
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',                     -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,               -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,               -- 修改时间
     
@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_accounts (
     c_cos_region TEXT NOT NULL DEFAULT '', -- COS区域
     c_cos_bucket TEXT NOT NULL DEFAULT '', -- COS桶名
     c_extra_config TEXT NOT NULL DEFAULT '{}', -- 额外配置（JSON格式，如region等）
-    c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
+    c_is_deleted TEXT NOT NULL DEFAULT 'false', -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP -- 修改时间
 );
@@ -191,7 +191,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_heartbeat_interval INTEGER DEFAULT 10, -- 心跳间隔（秒），0表示使用全局默认值
     c_probe_enabled BOOLEAN DEFAULT true, -- 是否启用探测
     c_probe_url TEXT DEFAULT '', -- 探测URL
-    c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记
+    c_is_deleted TEXT NOT NULL DEFAULT 'false', -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 修改时间
     
@@ -202,14 +202,14 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
 -- ************ 创建云函数采集器相关索引 ************
 -- 节点表索引
 CREATE INDEX IF NOT EXISTS idx_cloud_nodes_space_id ON t_cloud_nodes(c_space_id);
-CREATE INDEX IF NOT EXISTS idx_node_id_invalid ON t_cloud_nodes(c_node_id, c_invalid);
+CREATE INDEX IF NOT EXISTS idx_node_id_deleted ON t_cloud_nodes(c_node_id, c_is_deleted);
 CREATE INDEX IF NOT EXISTS idx_nodes_type ON t_cloud_nodes(c_node_type);
 
 -- ************ 创建云账户相关索引 ************
 CREATE INDEX IF NOT EXISTS idx_cloud_accounts_space_id ON t_cloud_accounts(c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_accounts_account_id_invalid ON t_cloud_accounts(c_account_id, c_invalid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_accounts_account_id_deleted ON t_cloud_accounts(c_account_id, c_is_deleted);
 CREATE INDEX IF NOT EXISTS idx_cloud_accounts_provider ON t_cloud_accounts(c_provider);
-CREATE INDEX IF NOT EXISTS idx_cloud_accounts_invalid ON t_cloud_accounts(c_invalid);
+CREATE INDEX IF NOT EXISTS idx_cloud_accounts_deleted ON t_cloud_accounts(c_is_deleted);
 
 -- ************ 创建云函数采集器相关触发器 ************
 -- 云账户表更新触发器
@@ -348,7 +348,7 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_last_exec_time DATETIME, -- 最后执行时间
     c_result TEXT NOT NULL DEFAULT '{}', -- 执行结果（JSON格式）
 
-    c_invalid INTEGER NOT NULL DEFAULT 0, -- 删除标记（软删除：0=有效，1=已删除）
+    c_is_deleted TEXT NOT NULL DEFAULT 'false', -- 软删除标记（'false'=有效，'true'=已删除）
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP -- 修改时间
 );
@@ -378,7 +378,7 @@ CREATE INDEX IF NOT EXISTS idx_collector_task_instances_rule_planned_node_symbol
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_planned_node ON t_collector_task_instances(c_planned_exec_node);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_planned_node_status ON t_collector_task_instances(c_planned_exec_node, c_last_exec_status);
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_planned_node_interval ON t_collector_task_instances(c_planned_exec_node, c_interval);
-CREATE INDEX IF NOT EXISTS idx_collector_task_instances_invalid ON t_collector_task_instances(c_invalid); -- 用于过滤软删除记录
+CREATE INDEX IF NOT EXISTS idx_collector_task_instances_deleted ON t_collector_task_instances(c_is_deleted); -- 用于过滤软删除记录
 CREATE INDEX IF NOT EXISTS idx_collector_task_instances_create_time ON t_collector_task_instances(c_ctime DESC);
 
 -- ************ 创建采集任务规则相关触发器 ************
@@ -429,7 +429,7 @@ CREATE TABLE IF NOT EXISTS t_function_packages (
     c_last_deploy_time DATETIME,                                   -- 最后部署时间
 
     -- 审计字段
-    c_invalid INTEGER NOT NULL DEFAULT 0,                          -- 删除标记
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',                          -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                    -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                     -- 修改时间
 );
@@ -442,7 +442,7 @@ CREATE INDEX IF NOT EXISTS idx_function_packages_status ON t_function_packages(c
 CREATE INDEX IF NOT EXISTS idx_function_packages_runtime ON t_function_packages(c_runtime);
 CREATE INDEX IF NOT EXISTS idx_function_packages_package_type ON t_function_packages(c_package_type);
 CREATE INDEX IF NOT EXISTS idx_function_packages_ctime ON t_function_packages(c_ctime);
-CREATE INDEX IF NOT EXISTS idx_function_packages_invalid ON t_function_packages(c_invalid);
+CREATE INDEX IF NOT EXISTS idx_function_packages_deleted ON t_function_packages(c_is_deleted);
 
 -- ************ 创建云函数代码包相关触发器 ************
 -- 代码包表更新触发器
@@ -461,7 +461,7 @@ CREATE TABLE IF NOT EXISTS t_collector_data_type_configs (
     c_data_source_options TEXT NOT NULL DEFAULT '{}',           -- 数据源选项 (JSON字符串，格式同c_field_options)
     c_sort_order INTEGER DEFAULT 0,                             -- 排序顺序
     c_version INTEGER NOT NULL DEFAULT 1,                       -- 配置版本号
-    c_invalid INTEGER NOT NULL DEFAULT 0,                       -- 删除标记
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',                       -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                 -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                  -- 修改时间
 );
@@ -478,22 +478,22 @@ CREATE TABLE IF NOT EXISTS t_collector_field_configs (
     c_field_options TEXT NOT NULL DEFAULT '',                   -- 字段选项 (JSON字符串)
     c_data_source_options TEXT NOT NULL DEFAULT '',             -- 数据源选项 (JSON字符串，格式同c_field_options)
     c_sort_order INTEGER DEFAULT 0,                             -- 字段排序
-    c_invalid INTEGER NOT NULL DEFAULT 0,                       -- 删除标记
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',                       -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                 -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                  -- 修改时间
 );
 
 -- ************ 采集器数据类型配置相关索引 ************
 -- 数据类型配置表索引
-CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_data_type_configs_data_type ON t_collector_data_type_configs(c_data_type, c_invalid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_data_type_configs_data_type ON t_collector_data_type_configs(c_data_type, c_is_deleted);
 CREATE INDEX IF NOT EXISTS idx_collector_data_type_configs_type_name ON t_collector_data_type_configs(c_type_name);
-CREATE INDEX IF NOT EXISTS idx_collector_data_type_configs_invalid ON t_collector_data_type_configs(c_invalid);
+CREATE INDEX IF NOT EXISTS idx_collector_data_type_configs_deleted ON t_collector_data_type_configs(c_is_deleted);
 
 -- 参数字段配置表索引
 CREATE INDEX IF NOT EXISTS idx_collector_field_configs_data_type ON t_collector_field_configs(c_data_type);
 CREATE INDEX IF NOT EXISTS idx_collector_field_configs_field_key ON t_collector_field_configs(c_field_key);
 CREATE INDEX IF NOT EXISTS idx_collector_field_configs_type_sort ON t_collector_field_configs(c_data_type, c_sort_order);
-CREATE INDEX IF NOT EXISTS idx_collector_field_configs_invalid ON t_collector_field_configs(c_invalid);
+CREATE INDEX IF NOT EXISTS idx_collector_field_configs_deleted ON t_collector_field_configs(c_is_deleted);
 
 -- ************ 采集器数据类型配置相关触发器 ************
 -- 数据类型配置表更新触发器
@@ -580,7 +580,7 @@ CREATE TABLE IF NOT EXISTS t_exchange_symbols (
     c_sync_time INTEGER NOT NULL,                          -- 同步时间戳（毫秒）
 
     -- 审计字段
-    c_invalid INTEGER NOT NULL DEFAULT 0,                  -- 删除标记
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',                  -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,            -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP             -- 修改时间
 );
@@ -588,17 +588,17 @@ CREATE TABLE IF NOT EXISTS t_exchange_symbols (
 -- ************ 创建交易所标的相关索引 ************
 -- 唯一索引：交易所+产品类型+标的
 CREATE INDEX IF NOT EXISTS idx_exchange_symbols_space_id ON t_exchange_symbols(c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_symbols_unique ON t_exchange_symbols(c_exchange, c_inst_type, c_symbol, c_invalid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_symbols_unique ON t_exchange_symbols(c_exchange, c_inst_type, c_symbol, c_is_deleted);
 
 -- 查询索引
 CREATE INDEX IF NOT EXISTS idx_exchange_symbols_exchange ON t_exchange_symbols(c_exchange);
 CREATE INDEX IF NOT EXISTS idx_exchange_symbols_inst_type ON t_exchange_symbols(c_inst_type);
 CREATE INDEX IF NOT EXISTS idx_exchange_symbols_status ON t_exchange_symbols(c_status);
 CREATE INDEX IF NOT EXISTS idx_exchange_symbols_sync_time ON t_exchange_symbols(c_sync_time);
-CREATE INDEX IF NOT EXISTS idx_exchange_symbols_invalid ON t_exchange_symbols(c_invalid);
+CREATE INDEX IF NOT EXISTS idx_exchange_symbols_deleted ON t_exchange_symbols(c_is_deleted);
 
 -- 联合查询索引
-CREATE INDEX IF NOT EXISTS idx_exchange_symbols_exchange_inst ON t_exchange_symbols(c_exchange, c_inst_type, c_status, c_invalid);
+CREATE INDEX IF NOT EXISTS idx_exchange_symbols_exchange_inst ON t_exchange_symbols(c_exchange, c_inst_type, c_status, c_is_deleted);
 
 -- ************ 创建交易所标的相关触发器 ************
 -- 标的表更新触发器

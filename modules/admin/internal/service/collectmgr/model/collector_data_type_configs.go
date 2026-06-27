@@ -20,8 +20,8 @@ type CollectorDataTypeConfig struct {
 	SortOrder int `gorm:"column:c_sort_order;not null;default:0" json:"sort_order"`
 	// Version 配置版本号
 	Version int `gorm:"column:c_version;not null;default:1" json:"version"`
-	// Invalid 删除标记
-	Invalid int `gorm:"column:c_invalid;not null;default:0" json:"invalid"`
+	// IsDeleted 软删除标记
+	IsDeleted string `gorm:"column:c_is_deleted;not null;default:'false'" json:"is_deleted"`
 	// CreateTime 创建时间
 	CreateTime time.Time `gorm:"column:c_ctime;type:datetime;default:CURRENT_TIMESTAMP" json:"create_time"`
 	// ModifyTime 修改时间

@@ -127,7 +127,7 @@ func reportHeartbeatRspToPB(resp *cloudnodetypes.ReportHeartbeatResponse) *pb.Re
 			Symbol:          t.Symbol,
 			Interval:        t.Interval,
 			TaskParams:      t.TaskParams,
-			Invalid:         int32(t.Invalid),
+			IsDeleted:       t.IsDeleted,
 		})
 	}
 	return &pb.ReportHeartbeatRsp{

@@ -106,13 +106,13 @@ message TaskInstance {
   string task_params = 12;     // JSON 字符串
   string last_exec_time = 13;  // RFC3339，可为空
   string result = 14;
-  int32 invalid = 15;
+  string is_deleted = 15;
   string create_time = 16;     // RFC3339
   string modify_time = 17;     // RFC3339
 }
 
 // TaskInstanceFilter 任务实例筛选条件。
-// last_exec_status / invalid 使用 proto3 optional 以区分未设置与 0 值。
+// last_exec_status 使用 proto3 optional 以区分未设置与 0 值；is_deleted 为字符串，空串表示不过滤。
 message TaskInstanceFilter {
   string biz_type = 1;
   string task_id = 2;
@@ -121,7 +121,7 @@ message TaskInstanceFilter {
   string last_exec_node = 5;
   optional int32 last_exec_status = 6;
   string symbol = 7;
-  optional int32 invalid = 8;
+  string is_deleted = 8;
   int32 page = 9;
   int32 page_size = 10;
 }
@@ -311,7 +311,7 @@ message CloudNode {
   string probe_url = 18;
   string status = 19;             // 计算得出的状态文本 online/offline
   string last_heartbeat = 20;     // RFC3339，可为空
-  int32 invalid = 21;
+  string is_deleted = 21;
   string create_time = 22;        // RFC3339
   string modify_time = 23;        // RFC3339
 }
@@ -475,7 +475,7 @@ message CloudAccount {
   string cos_region = 8;
   string cos_bucket = 9;
   string extra_config = 10;
-  int32 invalid = 11;
+  string is_deleted = 11;
   string create_time = 12;   // RFC3339
   string modify_time = 13;   // RFC3339
 }
@@ -633,7 +633,7 @@ message PackageDetail {
   int32 upload_progress = 19;
   string error_message = 20;
   string last_deploy_time = 21;  // RFC3339，可为空
-  int32 invalid = 22;
+  string is_deleted = 22;
   string created_time = 23;      // RFC3339
   string updated_time = 24;      // RFC3339
 }
@@ -727,7 +727,7 @@ message HeartbeatTaskInstance {
   string symbol = 6;
   string interval = 7;
   string task_params = 8;
-  int32 invalid = 9;
+  string is_deleted = 9;
 }
 
 // ReportHeartbeatRsp 心跳上报响应。

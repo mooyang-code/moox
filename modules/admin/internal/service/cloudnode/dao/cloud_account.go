@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/common"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/model"
 
 	"gorm.io/gorm"
@@ -51,7 +52,7 @@ func NewCloudAccountDAO(db *gorm.DB) CloudAccountDAO {
 func (d *cloudAccountDAOImpl) CreateCloudAccount(ctx context.Context, account *model.CloudAccount) error {
 	account.CreateTime = time.Now()
 	account.ModifyTime = time.Now()
-	account.Invalid = model.InvalidNo
+	account.IsDeleted = common.IsDeletedFalse
 
 	result := d.db.WithContext(ctx).Create(account)
 	if result.Error != nil {
@@ -117,10 +118,10 @@ func isMaskedSecret(value string) bool {
 func (d *cloudAccountDAOImpl) DeleteCloudAccount(ctx context.Context, accountID string) error {
 	result := d.db.WithContext(ctx).
 		Model(&model.CloudAccount{}).
-		Where("c_account_id = ? AND c_invalid = ?", accountID, model.InvalidNo).
+		Where("c_account_id = ? AND c_is_deleted != ?", accountID, common.IsDeletedTrue).
 		Updates(map[string]interface{}{
-			"c_invalid": model.InvalidYes,
-			"c_mtime":   time.Now(),
+			"c_is_deleted": common.IsDeletedTrue,
+			"c_mtime":      time.Now(),
 		})
 
 	if result.Error != nil {
@@ -137,7 +138,7 @@ func (d *cloudAccountDAOImpl) DeleteCloudAccount(ctx context.Context, accountID 
 func (d *cloudAccountDAOImpl) GetCloudAccount(ctx context.Context, accountID string) (*model.CloudAccount, error) {
 	var account model.CloudAccount
 	result := d.db.WithContext(ctx).
-		Where("c_account_id = ? AND c_invalid = ?", accountID, model.InvalidNo).
+		Where("c_account_id = ? AND c_is_deleted != ?", accountID, common.IsDeletedTrue).
 		First(&account)
 
 	if result.Error != nil {
@@ -153,7 +154,7 @@ func (d *cloudAccountDAOImpl) GetCloudAccount(ctx context.Context, accountID str
 func (d *cloudAccountDAOImpl) GetCloudAccountList(ctx context.Context) ([]*model.CloudAccount, error) {
 	var accounts []*model.CloudAccount
 	result := d.db.WithContext(ctx).
-		Where("c_invalid = ?", model.InvalidNo).
+		Where("c_is_deleted != ?", common.IsDeletedTrue).
 		Order("c_mtime DESC").
 		Find(&accounts)
 
@@ -167,7 +168,7 @@ func (d *cloudAccountDAOImpl) GetCloudAccountList(ctx context.Context) ([]*model
 func (d *cloudAccountDAOImpl) GetCloudAccountsByProvider(ctx context.Context, provider string) ([]*model.CloudAccount, error) {
 	var accounts []*model.CloudAccount
 	result := d.db.WithContext(ctx).
-		Where("c_provider = ? AND c_invalid = ?", provider, model.InvalidNo).
+		Where("c_provider = ? AND c_is_deleted != ?", provider, common.IsDeletedTrue).
 		Order("c_mtime DESC").
 		Find(&accounts)
 

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/common"
 	cloudnodedao "github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/dao"
 	cloudnodemodel "github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/dao"
@@ -154,7 +155,7 @@ func (s *TaskPlannerServiceImpl) createInstanceForObject(
 		Interval:        interval,
 		TaskParams:      params,
 		LastExecStatus:  model.InstanceStatusPending,
-		Invalid:         model.InvalidNo,
+		IsDeleted:       common.IsDeletedFalse,
 	}
 
 	return instance, nil

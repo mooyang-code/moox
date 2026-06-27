@@ -16,7 +16,7 @@ type CloudAccount struct {
 	// ID 自增主键
 	ID int `gorm:"primaryKey;column:c_id;autoIncrement" json:"id"`
 	// AccountID 账户唯一标识
-	AccountID string `gorm:"column:c_account_id;uniqueIndex:idx_account_invalid;size:100;not null" json:"account_id"`
+	AccountID string `gorm:"column:c_account_id;uniqueIndex:idx_account_deleted;size:100;not null" json:"account_id"`
 	// AccountName 账户名称
 	AccountName string `gorm:"column:c_account_name;size:200;not null" json:"account_name"`
 	// Provider 云厂商（tencent/aliyun/aws）
@@ -33,8 +33,8 @@ type CloudAccount struct {
 	COSBucket string `gorm:"column:c_cos_bucket;size:200;not null;default:''" json:"cos_bucket"`
 	// ExtraConfig 额外配置（JSON格式，如region等）
 	ExtraConfig string `gorm:"column:c_extra_config;type:text;not null;default:'{}'" json:"extra_config"`
-	// Invalid 删除标记
-	Invalid int `gorm:"column:c_invalid;uniqueIndex:idx_account_invalid;index:idx_invalid;not null;default:0" json:"invalid"`
+	// IsDeleted 软删除标记
+	IsDeleted string `gorm:"column:c_is_deleted;uniqueIndex:idx_account_deleted;index:idx_deleted;not null;default:'false'" json:"is_deleted"`
 	// CreateTime 创建时间
 	CreateTime time.Time `gorm:"column:c_ctime;type:datetime;default:CURRENT_TIMESTAMP" json:"create_time"`
 	// ModifyTime 修改时间

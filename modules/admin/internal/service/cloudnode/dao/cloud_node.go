@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/common"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/model"
 
 	"gorm.io/gorm"
@@ -81,7 +82,7 @@ type CloudNodeDAO interface {
 	// filter: 可选，传入则按状态过滤；不传或为nil则不过滤状态
 	GetNodesByIDs(ctx context.Context, nodeIDs []string, filter *NodeStatusFilter) ([]*model.CloudNode, error)
 
-	// GetAllNodes 获取所有有效节点（c_invalid=0）
+	// GetAllNodes 获取所有有效节点（c_is_deleted != 'true'）
 	GetAllNodes(ctx context.Context) ([]*model.CloudNode, error)
 
 	// ========== 节点管理 ==========
@@ -134,7 +135,7 @@ func (d *cloudNodeDaoImpl) GetCloudNodeList(ctx context.Context, query *NodeList
 	// 构建查询条件（不再 JOIN 心跳表）
 	db := d.db.WithContext(ctx).
 		Table("t_cloud_nodes cn").
-		Where("cn.c_invalid = ?", 0)
+		Where("cn.c_is_deleted != ?", common.IsDeletedTrue)
 
 	// 应用过滤条件
 	if query.CloudAccountID != "" {
@@ -204,7 +205,7 @@ func (d *cloudNodeDaoImpl) GetCloudNodeList(ctx context.Context, query *NodeList
 func (d *cloudNodeDaoImpl) GetCloudNode(ctx context.Context, nodeID string) (*model.CloudNode, error) {
 	var node model.CloudNode
 	result := d.db.WithContext(ctx).
-		Where("c_node_id = ? AND c_invalid = ?", nodeID, 0).
+		Where("c_node_id = ? AND c_is_deleted != ?", nodeID, common.IsDeletedTrue).
 		First(&node)
 
 	if result.Error != nil {
@@ -232,7 +233,7 @@ func (d *cloudNodeDaoImpl) UpdateCloudNode(ctx context.Context, node *model.Clou
 
 	result := d.db.WithContext(ctx).
 		Model(&model.CloudNode{}).
-		Where("c_node_id = ? AND c_invalid = ?", node.NodeID, 0).
+		Where("c_node_id = ? AND c_is_deleted != ?", node.NodeID, common.IsDeletedTrue).
 		Updates(map[string]interface{}{
 			"c_cloud_account_id":     node.CloudAccountID,
 			"c_namespace":            node.Namespace,
@@ -262,10 +263,10 @@ func (d *cloudNodeDaoImpl) UpdateCloudNode(ctx context.Context, node *model.Clou
 func (d *cloudNodeDaoImpl) DeleteCloudNode(ctx context.Context, nodeID string) error {
 	result := d.db.WithContext(ctx).
 		Model(&model.CloudNode{}).
-		Where("c_node_id = ? AND c_invalid = ?", nodeID, 0).
+		Where("c_node_id = ? AND c_is_deleted != ?", nodeID, common.IsDeletedTrue).
 		Updates(map[string]interface{}{
-			"c_invalid": 1,
-			"c_mtime":   time.Now(),
+			"c_is_deleted": "true",
+			"c_mtime":      time.Now(),
 		})
 
 	if result.Error != nil {
@@ -282,7 +283,7 @@ func (d *cloudNodeDaoImpl) DeleteCloudNode(ctx context.Context, nodeID string) e
 func (d *cloudNodeDaoImpl) GetCloudNodesByType(ctx context.Context, nodeType string) ([]*model.CloudNode, error) {
 	var nodes []*model.CloudNode
 	result := d.db.WithContext(ctx).
-		Where("c_node_type = ? AND c_invalid = ?", nodeType, 0).
+		Where("c_node_type = ? AND c_is_deleted != ?", nodeType, common.IsDeletedTrue).
 		Order("c_mtime DESC").
 		Find(&nodes)
 
@@ -296,7 +297,7 @@ func (d *cloudNodeDaoImpl) GetCloudNodesByType(ctx context.Context, nodeType str
 func (d *cloudNodeDaoImpl) GetCloudNodesByRegion(ctx context.Context, region string) ([]*model.CloudNode, error) {
 	var nodes []*model.CloudNode
 	result := d.db.WithContext(ctx).
-		Where("c_region = ? AND c_invalid = ?", region, 0).
+		Where("c_region = ? AND c_is_deleted != ?", region, common.IsDeletedTrue).
 		Order("c_mtime DESC").
 		Find(&nodes)
 
@@ -310,7 +311,7 @@ func (d *cloudNodeDaoImpl) GetCloudNodesByRegion(ctx context.Context, region str
 func (d *cloudNodeDaoImpl) ListProbeEnabledNodes(ctx context.Context) ([]*model.CloudNode, error) {
 	var nodes []*model.CloudNode
 	result := d.db.WithContext(ctx).
-		Where("c_invalid = ?", 0).
+		Where("c_is_deleted != ?", common.IsDeletedTrue).
 		Where("c_probe_enabled = ?", true).
 		Order("c_mtime DESC").
 		Find(&nodes)
@@ -326,7 +327,7 @@ func (d *cloudNodeDaoImpl) CountByCloudAccountID(ctx context.Context, accountID 
 	var count int64
 	result := d.db.WithContext(ctx).
 		Model(&model.CloudNode{}).
-		Where("c_cloud_account_id = ? AND c_invalid = ?", accountID, 0).
+		Where("c_cloud_account_id = ? AND c_is_deleted != ?", accountID, common.IsDeletedTrue).
 		Count(&count)
 	if result.Error != nil {
 		return 0, fmt.Errorf("failed to count nodes by cloud account: %w", result.Error)
@@ -348,7 +349,7 @@ func (d *cloudNodeDaoImpl) GetNamespaceStats(ctx context.Context, region string)
 	result := d.db.WithContext(ctx).
 		Model(&model.CloudNode{}).
 		Select("c_namespace as namespace, COUNT(*) as count").
-		Where("c_region = ? AND c_invalid = ?", region, 0).
+		Where("c_region = ? AND c_is_deleted != ?", region, common.IsDeletedTrue).
 		Group("c_namespace").
 		Scan(&stats)
 
@@ -369,7 +370,7 @@ func (d *cloudNodeDaoImpl) UpdateNodePackageID(ctx context.Context, nodeID strin
 	now := time.Now()
 	result := d.db.WithContext(ctx).
 		Model(&model.CloudNode{}).
-		Where("c_node_id = ? AND c_invalid = ?", nodeID, 0).
+		Where("c_node_id = ? AND c_is_deleted != ?", nodeID, common.IsDeletedTrue).
 		Updates(map[string]interface{}{
 			"c_package_id": packageID,
 			"c_mtime":      now,
@@ -391,7 +392,7 @@ func (d *cloudNodeDaoImpl) GetNodesBySupportedCollector(ctx context.Context, col
 	pattern := fmt.Sprintf("%%\"%s\"%%", collectorType)
 
 	query := d.db.WithContext(ctx).Table("t_cloud_nodes cn").
-		Where("cn.c_supported_collectors LIKE ? AND cn.c_invalid = ?", pattern, 0)
+		Where("cn.c_supported_collectors LIKE ? AND cn.c_is_deleted != ?", pattern, common.IsDeletedTrue)
 
 	// 如果需要按在线状态过滤，使用 OnlineNodeIDs 列表
 	if filter != nil && filter.Status != nil && len(filter.OnlineNodeIDs) > 0 {
@@ -430,7 +431,7 @@ func (d *cloudNodeDaoImpl) GetNodesByPattern(ctx context.Context, pattern string
 	}
 
 	query := d.db.WithContext(ctx).Table("t_cloud_nodes cn").
-		Where("cn.c_node_id LIKE ? AND cn.c_invalid = ?", sqlPattern, 0)
+		Where("cn.c_node_id LIKE ? AND cn.c_is_deleted != ?", sqlPattern, common.IsDeletedTrue)
 
 	// 如果需要按在线状态过滤，使用 OnlineNodeIDs 列表
 	if filter != nil && filter.Status != nil && len(filter.OnlineNodeIDs) > 0 {
@@ -464,7 +465,7 @@ func (d *cloudNodeDaoImpl) GetNodesByIDs(ctx context.Context, nodeIDs []string, 
 
 	var nodes []*model.CloudNode
 	query := d.db.WithContext(ctx).Table("t_cloud_nodes cn").
-		Where("cn.c_node_id IN ? AND cn.c_invalid = ?", nodeIDs, 0)
+		Where("cn.c_node_id IN ? AND cn.c_is_deleted != ?", nodeIDs, common.IsDeletedTrue)
 
 	// 如果需要按在线状态过滤，使用 OnlineNodeIDs 列表
 	if filter != nil && filter.Status != nil && len(filter.OnlineNodeIDs) > 0 {
@@ -489,11 +490,11 @@ func (d *cloudNodeDaoImpl) GetNodesByIDs(ctx context.Context, nodeIDs []string, 
 	return nodes, nil
 }
 
-// GetAllNodes 获取所有有效节点（c_invalid=0）
+// GetAllNodes 获取所有有效节点（c_is_deleted != 'true'）
 func (d *cloudNodeDaoImpl) GetAllNodes(ctx context.Context) ([]*model.CloudNode, error) {
 	var nodes []*model.CloudNode
 	result := d.db.WithContext(ctx).
-		Where("c_invalid = ?", 0).
+		Where("c_is_deleted != ?", common.IsDeletedTrue).
 		Order("c_mtime DESC").
 		Find(&nodes)
 
@@ -514,7 +515,7 @@ func (d *cloudNodeDaoImpl) UpdateSupportedCollectors(ctx context.Context, nodeID
 	// 更新数据库
 	result := d.db.WithContext(ctx).
 		Model(&model.CloudNode{}).
-		Where("c_node_id = ? AND c_invalid = ?", nodeID, 0).
+		Where("c_node_id = ? AND c_is_deleted != ?", nodeID, common.IsDeletedTrue).
 		Update("c_supported_collectors", string(collectorsJSON))
 
 	if result.Error != nil {
@@ -534,7 +535,7 @@ func (d *cloudNodeDaoImpl) UpdateSupportedCollectors(ctx context.Context, nodeID
 func (d *cloudNodeDaoImpl) UpdateRunningVersion(ctx context.Context, nodeID string, version string) error {
 	result := d.db.WithContext(ctx).
 		Model(&model.CloudNode{}).
-		Where("c_node_id = ? AND c_invalid = ?", nodeID, 0).
+		Where("c_node_id = ? AND c_is_deleted != ?", nodeID, common.IsDeletedTrue).
 		Update("c_running_version", version)
 
 	if result.Error != nil {

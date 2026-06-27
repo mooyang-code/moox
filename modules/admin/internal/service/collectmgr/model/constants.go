@@ -28,12 +28,6 @@ const (
 	InstanceStatusFailed     = 4 // 失败
 )
 
-// Invalid 常量
-const (
-	InvalidNo  = 0 // 有效
-	InvalidYes = 1 // 无效
-)
-
 // Enabled 常量
 const (
 	EnabledTrue  = "true"  // 启用

@@ -92,7 +92,7 @@ func runLighthouseFirewallOpen(cmd *cobra.Command, opts lighthouseFirewallOpenOp
 			return fmt.Errorf("list cloud accounts: %w", err)
 		}
 		for _, a := range accounts {
-			if a.Invalid == 0 && a.AccountID != "" {
+			if a.IsDeleted != "true" && a.AccountID != "" {
 				accountID = a.AccountID
 				break
 			}

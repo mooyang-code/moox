@@ -30,7 +30,7 @@ func TestServiceCreatesListsAndUpdatesSpaces(t *testing.T) {
 	require.NotZero(t, createRsp.GetSpace().GetId())
 
 	var rowCount int64
-	require.NoError(t, manager.GetDB().Table("t_spaces").Where("c_space_id = ? AND c_invalid = 0", "cn-stock").Count(&rowCount).Error)
+	require.NoError(t, manager.GetDB().Table("t_spaces").Where("c_space_id = ? AND c_is_deleted != 'true'", "cn-stock").Count(&rowCount).Error)
 	require.Equal(t, int64(1), rowCount)
 
 	listRsp, err := svc.ListSpaces(ctx, &pb.ListSpacesReq{

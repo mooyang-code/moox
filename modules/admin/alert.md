@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS t_alert_records (
     c_fingerprint TEXT DEFAULT '',                    -- 告警指纹(用于去重和聚合,基于告警特征生成的哈希值)
 
     -- 审计字段
-    c_invalid INTEGER NOT NULL DEFAULT 0,             -- 删除标记
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',             -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,       -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,       -- 修改时间
 
@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS t_alert_rules (
     -- 审计字段
     c_created_by TEXT DEFAULT '',                     -- 创建人
     c_updated_by TEXT DEFAULT '',                     -- 更新人
-    c_invalid INTEGER NOT NULL DEFAULT 0,             -- 删除标记
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',             -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,       -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,       -- 修改时间
 
@@ -243,7 +243,7 @@ CREATE TABLE IF NOT EXISTS t_alert_groups (
 
     -- 审计字段
     c_created_by TEXT DEFAULT '',                     -- 创建人
-    c_invalid INTEGER NOT NULL DEFAULT 0,             -- 删除标记
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',             -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,       -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,       -- 修改时间
 
@@ -279,7 +279,7 @@ CREATE TABLE IF NOT EXISTS t_alert_channels (
     -- 审计字段
     c_created_by TEXT DEFAULT '',                     -- 创建人
     c_updated_by TEXT DEFAULT '',                     -- 更新人
-    c_invalid INTEGER NOT NULL DEFAULT 0,             -- 删除标记
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',             -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,       -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,       -- 修改时间
 

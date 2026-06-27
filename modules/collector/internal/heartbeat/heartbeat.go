@@ -366,8 +366,8 @@ func processTaskInstances(ctx context.Context, taskInstances []map[string]interf
 
 	// 7. 打印每个任务的详细信息
 	for i, task := range tasks {
-		log.InfoContextf(ctx, "[Heartbeat] Task[%d]: ID=%d, TaskID=%s, RuleID=%s, PlannedExecNode=%s, DataType=%s, Symbol=%s, Interval=%s, TaskParams=%s, Invalid=%d",
-			i, task.ID, task.TaskID, task.RuleID, task.NodeID, task.DataType, task.Symbol, task.Interval, task.TaskParams, task.Invalid)
+		log.InfoContextf(ctx, "[Heartbeat] Task[%d]: ID=%d, TaskID=%s, RuleID=%s, PlannedExecNode=%s, DataType=%s, Symbol=%s, Interval=%s, TaskParams=%s, IsDeleted=%s",
+			i, task.ID, task.TaskID, task.RuleID, task.NodeID, task.DataType, task.Symbol, task.Interval, task.TaskParams, task.IsDeleted)
 	}
 
 	// 8. 更新任务实例

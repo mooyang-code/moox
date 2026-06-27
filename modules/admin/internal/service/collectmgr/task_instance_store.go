@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/common"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/model"
 
 	cmap "github.com/orcaman/concurrent-map/v2"
@@ -123,7 +124,7 @@ func (s *taskInstanceStoreImpl) GetByNodeID(nodeID string) []*model.CollectorTas
 
 	// 遍历所有实例，过滤出属于该节点的任务
 	s.store.IterCb(func(key string, inst *model.CollectorTaskInstance) {
-		if inst.PlannedExecNode == nodeID && inst.Invalid == model.InvalidNo {
+		if inst.PlannedExecNode == nodeID && inst.IsDeleted == common.IsDeletedFalse {
 			result = append(result, inst)
 		}
 	})
@@ -185,7 +186,7 @@ func (s *taskInstanceStoreImpl) GetSnapshot() []*model.CollectorTaskInstance {
 			TaskParams:      inst.TaskParams,
 			LastExecTime:    inst.LastExecTime,
 			Result:          inst.Result,
-			Invalid:         inst.Invalid,
+			IsDeleted:         inst.IsDeleted,
 			CreateTime:      inst.CreateTime,
 			ModifyTime:      inst.ModifyTime,
 		})

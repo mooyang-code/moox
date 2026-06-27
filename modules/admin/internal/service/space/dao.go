@@ -57,7 +57,7 @@ func (d *DAO) UpdateSpace(ctx context.Context, item *Space) error {
 		item.Attributes = "{}"
 	}
 	result := d.db.WithContext(ctx).Model(&Space{}).
-		Where("c_space_id = ? AND c_invalid = 0", item.SpaceID).
+		Where("c_space_id = ? AND c_is_deleted != 'true'", item.SpaceID).
 		Updates(map[string]interface{}{
 			"c_name":        item.Name,
 			"c_description": item.Description,
@@ -79,7 +79,7 @@ func (d *DAO) UpdateSpace(ctx context.Context, item *Space) error {
 
 // ListSpaces 按 owner/status 分页查询有效 Space。
 func (d *DAO) ListSpaces(ctx context.Context, owner string, status string, offset int, limit int) ([]Space, int64, error) {
-	query := d.db.WithContext(ctx).Model(&Space{}).Where("c_invalid = 0")
+	query := d.db.WithContext(ctx).Model(&Space{}).Where("c_is_deleted != 'true'")
 	if owner != "" {
 		query = query.Where("c_owner = ?", owner)
 	}
@@ -114,7 +114,7 @@ func (d *DAO) ListSpaceMembers(ctx context.Context, spaceID string, offset int, 
 func (d *DAO) spaceExists(ctx context.Context, spaceID string) (bool, error) {
 	var count int64
 	err := d.db.WithContext(ctx).Model(&Space{}).
-		Where("c_space_id = ? AND c_invalid = 0", spaceID).
+		Where("c_space_id = ? AND c_is_deleted != 'true'", spaceID).
 		Count(&count).Error
 	return count > 0, err
 }

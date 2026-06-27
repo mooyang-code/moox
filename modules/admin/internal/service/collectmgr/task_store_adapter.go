@@ -32,7 +32,7 @@ func (a *TaskStoreAdapter) GetByNodeID(nodeID string) []collectmgrtypes.TaskInst
 			Symbol:          inst.Symbol,
 			Interval:        inst.Interval,
 			TaskParams:      inst.TaskParams,
-			Invalid:         inst.Invalid,
+			IsDeleted:       inst.IsDeleted,
 		})
 	}
 

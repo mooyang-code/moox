@@ -43,7 +43,7 @@ func (d *UserDAO) CreateUser(ctx context.Context, user *model.User) error {
 func (d *UserDAO) GetUserByID(ctx context.Context, userID string) (*model.User, error) {
 	var user model.User
 	err := d.db.WithContext(ctx).
-		Where("c_user_id = ? AND c_invalid != 1", userID).
+		Where("c_user_id = ? AND c_is_deleted != 'true'", userID).
 		First(&user).Error
 
 	if err != nil {
@@ -57,7 +57,7 @@ func (d *UserDAO) GetUserByID(ctx context.Context, userID string) (*model.User, 
 func (d *UserDAO) GetUserByUsername(ctx context.Context, username string) (*model.User, error) {
 	var user model.User
 	if err := d.db.WithContext(ctx).
-		Where("c_username = ? AND c_invalid != 1", username).
+		Where("c_username = ? AND c_is_deleted != 'true'", username).
 		First(&user).Error; err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func (d *UserDAO) GetUserByUsername(ctx context.Context, username string) (*mode
 func (d *UserDAO) GetUserByEmail(ctx context.Context, email string) (*model.User, error) {
 	var user model.User
 	err := d.db.WithContext(ctx).
-		Where("c_email = ? AND c_invalid != 1", email).
+		Where("c_email = ? AND c_is_deleted != 'true'", email).
 		First(&user).Error
 
 	if err != nil {
@@ -84,7 +84,7 @@ func (d *UserDAO) UpdateUser(ctx context.Context, userID string, updates map[str
 
 	return d.db.WithContext(ctx).
 		Model(&model.User{}).
-		Where("c_user_id = ? AND c_invalid != 1", userID).
+		Where("c_user_id = ? AND c_is_deleted != 'true'", userID).
 		Updates(updates).Error
 }
 
@@ -99,7 +99,7 @@ func (d *UserDAO) UpdateUserPassword(ctx context.Context, userID, passwordHash, 
 
 	return d.db.WithContext(ctx).
 		Model(&model.User{}).
-		Where("c_user_id = ? AND c_invalid != 1", userID).
+		Where("c_user_id = ? AND c_is_deleted != 'true'", userID).
 		Updates(updates).Error
 }
 
@@ -116,7 +116,7 @@ func (d *UserDAO) UpdateUserLoginInfo(ctx context.Context, userID, clientIP stri
 
 	return d.db.WithContext(ctx).
 		Model(&model.User{}).
-		Where("c_user_id = ? AND c_invalid != 1", userID).
+		Where("c_user_id = ? AND c_is_deleted != 'true'", userID).
 		Updates(updates).Error
 }
 
@@ -133,20 +133,20 @@ func (d *UserDAO) IncrementLoginAttempts(ctx context.Context, userID string, loc
 
 	return d.db.WithContext(ctx).
 		Model(&model.User{}).
-		Where("c_user_id = ? AND c_invalid != 1", userID).
+		Where("c_user_id = ? AND c_is_deleted != 'true'", userID).
 		Updates(updates).Error
 }
 
 // DeleteUser 软删除用户
 func (d *UserDAO) DeleteUser(ctx context.Context, userID string) error {
 	updates := map[string]interface{}{
-		"c_invalid": 1,
-		"c_mtime":   time.Now(),
+		"c_is_deleted": "true",
+		"c_mtime":      time.Now(),
 	}
 
 	return d.db.WithContext(ctx).
 		Model(&model.User{}).
-		Where("c_user_id = ? AND c_invalid != 1", userID).
+		Where("c_user_id = ? AND c_is_deleted != 'true'", userID).
 		Updates(updates).Error
 }
 
@@ -164,7 +164,7 @@ func (d *UserDAO) CreateToken(ctx context.Context, token *model.ActiveToken) err
 func (d *UserDAO) GetTokenByJTI(ctx context.Context, jti string) (*model.ActiveToken, error) {
 	var token model.ActiveToken
 	err := d.db.WithContext(ctx).
-		Where("c_jti = ? AND c_invalid != 1 AND c_revoked = 0", jti).
+		Where("c_jti = ? AND c_is_deleted != 'true' AND c_revoked = 0", jti).
 		First(&token).Error
 
 	if err != nil {
@@ -183,7 +183,7 @@ func (d *UserDAO) UpdateTokenLastUsed(ctx context.Context, jti string) error {
 
 	return d.db.WithContext(ctx).
 		Model(&model.ActiveToken{}).
-		Where("c_jti = ? AND c_invalid != 1", jti).
+		Where("c_jti = ? AND c_is_deleted != 'true'", jti).
 		Updates(updates).Error
 }
 
@@ -196,7 +196,7 @@ func (d *UserDAO) RevokeToken(ctx context.Context, jti string) error {
 
 	return d.db.WithContext(ctx).
 		Model(&model.ActiveToken{}).
-		Where("c_jti = ? AND c_invalid != 1", jti).
+		Where("c_jti = ? AND c_is_deleted != 'true'", jti).
 		Updates(updates).Error
 }
 
@@ -209,20 +209,20 @@ func (d *UserDAO) RevokeUserTokens(ctx context.Context, userID string) error {
 
 	return d.db.WithContext(ctx).
 		Model(&model.ActiveToken{}).
-		Where("c_user_id = ? AND c_invalid != 1 AND c_revoked = 0", userID).
+		Where("c_user_id = ? AND c_is_deleted != 'true' AND c_revoked = 0", userID).
 		Updates(updates).Error
 }
 
 // CleanExpiredTokens 清理过期的令牌
 func (d *UserDAO) CleanExpiredTokens(ctx context.Context) error {
 	updates := map[string]interface{}{
-		"c_invalid": 1,
-		"c_mtime":   time.Now(),
+		"c_is_deleted": "true",
+		"c_mtime":      time.Now(),
 	}
 
 	return d.db.WithContext(ctx).
 		Model(&model.ActiveToken{}).
-		Where("c_expires_at < ? AND c_invalid != 1", time.Now()).
+		Where("c_expires_at < ? AND c_is_deleted != 'true'", time.Now()).
 		Updates(updates).Error
 }
 
@@ -379,7 +379,7 @@ func (d *UserDAO) DeleteLoginAttempt(ctx context.Context, username, ip string) e
 // CountUsers 统计用户数量
 func (d *UserDAO) CountUsers(ctx context.Context, status int32) (int64, error) {
 	var count int64
-	query := d.db.WithContext(ctx).Model(&model.User{}).Where("c_invalid != 1")
+	query := d.db.WithContext(ctx).Model(&model.User{}).Where("c_is_deleted != 'true'")
 
 	if status >= 0 {
 		query = query.Where("c_status = ?", status)
@@ -394,7 +394,7 @@ func (d *UserDAO) CountActiveTokens(ctx context.Context, userID string) (int64, 
 	var count int64
 	query := d.db.WithContext(ctx).
 		Model(&model.ActiveToken{}).
-		Where("c_invalid != 1 AND c_revoked = 0 AND c_expires_at > ?", time.Now())
+		Where("c_is_deleted != 'true' AND c_revoked = 0 AND c_expires_at > ?", time.Now())
 
 	if userID != "" {
 		query = query.Where("c_user_id = ?", userID)
@@ -409,7 +409,7 @@ func (d *UserDAO) GetUsersByRole(ctx context.Context, role int32, limit, offset 
 	var users []*model.User
 
 	query := d.db.WithContext(ctx).
-		Where("c_role = ? AND c_invalid != 1", role).
+		Where("c_role = ? AND c_is_deleted != 'true'", role).
 		Order("c_ctime DESC")
 
 	if limit > 0 {

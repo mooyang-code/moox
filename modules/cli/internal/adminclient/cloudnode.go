@@ -15,7 +15,7 @@ type CloudAccount struct {
 	AppID       string `json:"app_id"`
 	COSRegion   string `json:"cos_region"`
 	COSBucket   string `json:"cos_bucket"`
-	Invalid     int    `json:"invalid"`
+	IsDeleted   string `json:"is_deleted"`
 }
 
 // COSAccountInfo 云账户凭证信息（reveal=true 时含明文 secret_id/secret_key）。

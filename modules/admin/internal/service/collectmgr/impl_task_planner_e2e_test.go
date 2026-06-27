@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/admin/internal/common"
 	cloudnodedao "github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/dao"
 	cloudnodemodel "github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/dao"
@@ -132,12 +133,12 @@ func (f *e2eFixture) createNode(t *testing.T, spaceID, nodeID, bizType string, d
 	t.Helper()
 	collectors, _ := json.Marshal(dataTypes)
 	node := &cloudnodemodel.CloudNode{
-		SpaceID:            spaceID,
-		NodeID:             nodeID,
-		BizType:            bizType,
-		NodeType:           cloudnodemodel.NodeTypeSCFEvent,
+		SpaceID:             spaceID,
+		NodeID:              nodeID,
+		BizType:             bizType,
+		NodeType:            cloudnodemodel.NodeTypeSCFEvent,
 		SupportedCollectors: string(collectors),
-		ProbeEnabled:       true,
+		ProbeEnabled:        true,
 	}
 	if err := f.nodeDAO.CreateCloudNode(context.Background(), node); err != nil {
 		t.Fatalf("create node %s: %v", nodeID, err)
@@ -187,7 +188,7 @@ func (f *e2eFixture) dbInstances(t *testing.T) []*model.CollectorTaskInstance {
 	t.Helper()
 	time.Sleep(100 * time.Millisecond)
 	var instances []*model.CollectorTaskInstance
-	if err := f.db.Where("c_invalid = ?", model.InvalidNo).Find(&instances).Error; err != nil {
+	if err := f.db.Where("c_is_deleted != ?", common.IsDeletedTrue).Find(&instances).Error; err != nil {
 		t.Fatalf("query db instances: %v", err)
 	}
 	return instances

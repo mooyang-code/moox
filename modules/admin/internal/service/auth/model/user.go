@@ -21,7 +21,7 @@ type User struct {
 	LastPasswordChange time.Time  `gorm:"column:c_last_password_change;default:CURRENT_TIMESTAMP" json:"last_password_change"`
 	LoginAttempts      int        `gorm:"column:c_login_attempts;default:0" json:"login_attempts"`
 	LockedUntil        *time.Time `gorm:"column:c_locked_until" json:"locked_until"`
-	Invalid            int        `gorm:"column:c_invalid;not null;default:0" json:"-"`
+	IsDeleted          string     `gorm:"column:c_is_deleted;not null;default:'false'" json:"-"`
 	CreatedAt          time.Time  `gorm:"column:c_ctime;default:CURRENT_TIMESTAMP" json:"created_at"`
 	UpdatedAt          time.Time  `gorm:"column:c_mtime;default:CURRENT_TIMESTAMP" json:"updated_at"`
 }
@@ -44,7 +44,7 @@ type ActiveToken struct {
 	ExpiresAt  time.Time `gorm:"column:c_expires_at;not null;index" json:"expires_at"`
 	LastUsedAt time.Time `gorm:"column:c_last_used_at;default:CURRENT_TIMESTAMP" json:"last_used_at"`
 	Revoked    int       `gorm:"column:c_revoked;not null;default:0;index" json:"revoked"`
-	Invalid    int       `gorm:"column:c_invalid;not null;default:0" json:"-"`
+	IsDeleted  string    `gorm:"column:c_is_deleted;not null;default:'false'" json:"-"`
 	CreatedAt  time.Time `gorm:"column:c_ctime;default:CURRENT_TIMESTAMP" json:"created_at"`
 	UpdatedAt  time.Time `gorm:"column:c_mtime;default:CURRENT_TIMESTAMP" json:"updated_at"`
 }

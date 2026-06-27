@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/common"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/model"
 
 	"gorm.io/gorm"
@@ -95,11 +96,11 @@ type CollectorTaskInstanceDAO interface {
 	// ========== 任务规划器相关 ==========
 
 	// GetActiveInstancesByRule 获取规则的有效实例（用于增量更新）
-	// 只返回 c_invalid = 0 的实例
+	// 只返回 c_is_deleted != 'true' 的实例
 	GetActiveInstancesByRule(ctx context.Context, ruleID string) ([]*model.CollectorTaskInstance, error)
 
 	// InvalidateInstancesByRule 批量标记规则实例为无效
-	// 将 c_invalid 设置为 1
+	// 将 c_is_deleted 设置为 'true'
 	InvalidateInstancesByRule(ctx context.Context, ruleID string) error
 
 	// BatchUpdateParams 批量更新实例参数
@@ -129,7 +130,7 @@ type CollectorTaskInstanceDAO interface {
 	// ========== 差异更新相关（任务ID稳定化）==========
 
 	// GetAllTaskInstances 获取所有有效的任务实例
-	// 用于差异对比，只返回 c_invalid = 0 的实例
+	// 用于差异对比，只返回 c_is_deleted != 'true' 的实例
 	GetAllTaskInstances(ctx context.Context) ([]*model.CollectorTaskInstance, error)
 
 	// BatchDeleteByTaskIDs 批量删除指定task_id的任务实例
@@ -160,7 +161,7 @@ type InstanceFilter struct {
 	LastExecNode    string // 最后执行节点
 	LastExecStatus  *int   // 最后执行状态（使用指针以区分0值和未设置）
 	Symbol          string // 交易标的
-	Invalid         *int   // 是否有效（使用指针以区分0值和未设置）
+	IsDeleted       string // 软删除过滤：""=不过滤，"false"=有效，"true"=已删除
 	Page            int    // 页码（从1开始）
 	PageSize        int    // 每页数量
 }
@@ -570,7 +571,7 @@ func (d *collectorTaskInstanceDaoImpl) GetActiveInstancesByRule(ctx context.Cont
 
 	var instances []*model.CollectorTaskInstance
 	result := d.db.WithContext(ctx).
-		Where("c_rule_id = ? AND c_invalid = ?", ruleID, 0).
+		Where("c_rule_id = ? AND c_is_deleted != ?", ruleID, common.IsDeletedTrue).
 		Order("c_ctime DESC").
 		Find(&instances)
 
@@ -585,10 +586,10 @@ func (d *collectorTaskInstanceDaoImpl) InvalidateInstancesByRule(ctx context.Con
 
 	result := d.db.WithContext(ctx).
 		Model(&model.CollectorTaskInstance{}).
-		Where("c_rule_id = ? AND c_invalid = ?", ruleID, 0).
+		Where("c_rule_id = ? AND c_is_deleted != ?", ruleID, common.IsDeletedTrue).
 		Updates(map[string]interface{}{
-			"c_invalid": 1,
-			"c_mtime":   time.Now(),
+			"c_is_deleted": "true",
+			"c_mtime":      time.Now(),
 		})
 
 	if result.Error != nil {
@@ -633,8 +634,8 @@ func (d *collectorTaskInstanceDaoImpl) BatchInvalidate(ctx context.Context, task
 		Model(&model.CollectorTaskInstance{}).
 		Where("c_task_id IN ?", taskIDs).
 		Updates(map[string]interface{}{
-			"c_invalid": 1,
-			"c_mtime":   time.Now(),
+			"c_is_deleted": "true",
+			"c_mtime":      time.Now(),
 		})
 
 	if result.Error != nil {
@@ -649,8 +650,8 @@ func (d *collectorTaskInstanceDaoImpl) FindAllSuccessNodesByRule(ctx context.Con
 	var instances []model.CollectorTaskInstance
 	result := d.db.WithContext(ctx).
 		Select("DISTINCT c_last_exec_node").
-		Where("c_rule_id = ? AND c_last_exec_status = ? AND c_invalid = ? AND c_last_exec_node != ?",
-			ruleID, model.InstanceStatusSuccess, 0, excludeNodeID).
+		Where("c_rule_id = ? AND c_last_exec_status = ? AND c_is_deleted != ? AND c_last_exec_node != ?",
+			ruleID, model.InstanceStatusSuccess, common.IsDeletedTrue, excludeNodeID).
 		Order("c_mtime DESC").
 		Find(&instances)
 
@@ -719,7 +720,7 @@ func (d *collectorTaskInstanceDaoImpl) ListInstancesWithPagination(ctx context.C
 	var total int64
 
 	// 构建查询条件
-	query := d.db.WithContext(ctx).Model(&model.CollectorTaskInstance{}).Where("c_invalid = ?", 0)
+	query := d.db.WithContext(ctx).Model(&model.CollectorTaskInstance{}).Where("c_is_deleted != ?", common.IsDeletedTrue)
 
 	if nodeID != "" {
 		query = query.Where("c_planned_exec_node = ?", nodeID)
@@ -770,11 +771,11 @@ func (d *collectorTaskInstanceDaoImpl) ListInstancesWithFilter(ctx context.Conte
 		query = query.Where("c_space_id = ?", filter.SpaceID)
 	}
 
-	// 如果没有指定invalid，默认只查询有效的记录
-	if filter.Invalid != nil {
-		query = query.Where("c_invalid = ?", *filter.Invalid)
+	// 如果没有指定is_deleted，默认只查询有效的记录
+	if filter.IsDeleted != "" {
+		query = query.Where("c_is_deleted = ?", filter.IsDeleted)
 	} else {
-		query = query.Where("c_invalid = ?", 0)
+		query = query.Where("c_is_deleted != ?", common.IsDeletedTrue)
 	}
 
 	if filter.BizType != "" {
@@ -878,7 +879,7 @@ func (dao *collectorTaskInstanceDaoImpl) batchCreateInstancesWithoutLock(ctx con
 func (dao *collectorTaskInstanceDaoImpl) GetAllTaskInstances(ctx context.Context) ([]*model.CollectorTaskInstance, error) {
 	var instances []*model.CollectorTaskInstance
 	err := dao.db.WithContext(ctx).
-		Where("c_invalid = ?", model.InvalidNo).
+		Where("c_is_deleted != ?", common.IsDeletedTrue).
 		Find(&instances).Error
 
 	if err != nil {
@@ -939,7 +940,7 @@ func (dao *collectorTaskInstanceDaoImpl) BatchUpsertInstances(ctx context.Contex
 		} else {
 			// 记录存在，更新
 			if err := dao.db.WithContext(ctx).Model(&existing).Updates(map[string]interface{}{
-				"c_space_id":         instance.SpaceID,
+				"c_space_id":          instance.SpaceID,
 				"c_rule_id":           instance.RuleID,
 				"c_planned_exec_node": instance.PlannedExecNode,
 				"c_symbol":            instance.Symbol,

@@ -381,7 +381,7 @@ func (s *ServiceImpl) loadNodeTasksFromMemory(ctx context.Context, nodeID string
 			Symbol:          inst.Symbol,
 			Interval:        inst.Interval,
 			TaskParams:      inst.TaskParams,
-			Invalid:         inst.Invalid,
+			IsDeleted:       inst.IsDeleted,
 		})
 	}
 

@@ -190,7 +190,7 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *pb.CloudNode, codeCo
 	if nodeModel.NodeType == "" {
 		nodeModel.NodeType = model.NodeTypeSCFEvent
 	}
-	nodeModel.Invalid = model.InvalidNo
+	nodeModel.IsDeleted = common.IsDeletedFalse
 	if nodeModel.SupportedCollectors == "" {
 		nodeModel.SupportedCollectors = "[]"
 	}
@@ -555,10 +555,10 @@ func (s *ServiceImpl) InvokeFunction(ctx context.Context, nodeID string, eventDa
 	}
 
 	return &pb.InvokeFunctionRsp{
-		Code:        int32(resp.StatusCode),
-		Message:     resp.ErrorMessage,
-		RequestId:   resp.RequestID,
-		Result:      interfaceToStruct(resp.ReturnResult),
-		Duration:    resp.Duration,
+		Code:      int32(resp.StatusCode),
+		Message:   resp.ErrorMessage,
+		RequestId: resp.RequestID,
+		Result:    interfaceToStruct(resp.ReturnResult),
+		Duration:  resp.Duration,
 	}, nil
 }

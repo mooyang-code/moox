@@ -10,5 +10,5 @@ type TaskInstanceLite struct {
 	Symbol          string `json:"symbol"`            // 标的
 	Interval        string `json:"interval"`          // 执行周期
 	TaskParams      string `json:"task_params"`
-	Invalid         int    `json:"invalid"`
+	IsDeleted string    `json:"is_deleted"`
 }

@@ -78,7 +78,7 @@ func (d *FunctionPackageDAOImpl) Create(ctx context.Context, pkg *model.Function
 // GetByID 根据PackageID获取代码包
 func (d *FunctionPackageDAOImpl) GetByID(ctx context.Context, packageID string) (*model.FunctionPackage, error) {
 	var pkg model.FunctionPackage
-	err := d.db.WithContext(ctx).Where("c_package_id = ? AND c_invalid = 0", packageID).First(&pkg).Error
+	err := d.db.WithContext(ctx).Where("c_package_id = ? AND c_is_deleted != 'true'", packageID).First(&pkg).Error
 	if err != nil {
 		return nil, err
 	}
@@ -97,9 +97,9 @@ func (d *FunctionPackageDAOImpl) Delete(ctx context.Context, packageID string) e
 	return d.db.WithContext(ctx).Model(&model.FunctionPackage{}).
 		Where("c_package_id = ?", packageID).
 		Updates(map[string]interface{}{
-			"c_invalid": 1,
-			"c_status":  model.PackageStatusDeleted,
-			"c_mtime":   time.Now(),
+			"c_is_deleted": "true",
+			"c_status":     model.PackageStatusDeleted,
+			"c_mtime":      time.Now(),
 		}).Error
 }
 
@@ -108,7 +108,7 @@ func (d *FunctionPackageDAOImpl) List(ctx context.Context, req *ListRequest) ([]
 	var packages []model.FunctionPackage
 	var total int64
 
-	query := d.db.WithContext(ctx).Model(&model.FunctionPackage{}).Where("c_invalid = 0")
+	query := d.db.WithContext(ctx).Model(&model.FunctionPackage{}).Where("c_is_deleted != 'true'")
 
 	// 添加查询条件
 	if req.PackageName != "" {
@@ -154,7 +154,7 @@ func (d *FunctionPackageDAOImpl) CountByCloudAccountID(ctx context.Context, acco
 	var count int64
 	err := d.db.WithContext(ctx).
 		Model(&model.FunctionPackage{}).
-		Where("c_cloud_account_id = ? AND c_invalid = 0", accountID).
+		Where("c_cloud_account_id = ? AND c_is_deleted != 'true'", accountID).
 		Count(&count).Error
 	return count, err
 }
@@ -162,7 +162,7 @@ func (d *FunctionPackageDAOImpl) CountByCloudAccountID(ctx context.Context, acco
 // GetByNameAndVersion 根据包名和版本获取代码包
 func (d *FunctionPackageDAOImpl) GetByNameAndVersion(ctx context.Context, packageName, version string) (*model.FunctionPackage, error) {
 	var pkg model.FunctionPackage
-	err := d.db.WithContext(ctx).Where("c_package_name = ? AND c_version = ? AND c_invalid = 0",
+	err := d.db.WithContext(ctx).Where("c_package_name = ? AND c_version = ? AND c_is_deleted != 'true'",
 		packageName, version).First(&pkg).Error
 	if err != nil {
 		return nil, err
@@ -174,7 +174,7 @@ func (d *FunctionPackageDAOImpl) GetByNameAndVersion(ctx context.Context, packag
 func (d *FunctionPackageDAOImpl) CheckVersionExists(ctx context.Context, packageName, version string) (bool, error) {
 	var count int64
 	err := d.db.WithContext(ctx).Model(&model.FunctionPackage{}).
-		Where("c_package_name = ? AND c_version = ? AND c_invalid = 0", packageName, version).
+		Where("c_package_name = ? AND c_version = ? AND c_is_deleted != 'true'", packageName, version).
 		Count(&count).Error
 	return count > 0, err
 }
@@ -182,7 +182,7 @@ func (d *FunctionPackageDAOImpl) CheckVersionExists(ctx context.Context, package
 // GetOptions 获取代码包选项
 func (d *FunctionPackageDAOImpl) GetOptions(ctx context.Context, packageType, bizType string) ([]model.FunctionPackage, error) {
 	var packages []model.FunctionPackage
-	query := d.db.WithContext(ctx).Where("c_status = ? AND c_invalid = 0", model.PackageStatusAvailable)
+	query := d.db.WithContext(ctx).Where("c_status = ? AND c_is_deleted != 'true'", model.PackageStatusAvailable)
 
 	if packageType != "" {
 		query = query.Where("c_package_type = ?", packageType)

@@ -39,8 +39,8 @@ type CollectorTaskInstance struct {
 	LastExecTime *time.Time `gorm:"column:c_last_exec_time;type:datetime" json:"last_exec_time"`
 	// Result 执行结果（JSON格式）
 	Result string `gorm:"column:c_result;type:text;not null;default:'{}'" json:"result"`
-	// Invalid 删除标记（0=有效，1=无效）
-	Invalid int `gorm:"column:c_invalid;not null;default:0" json:"invalid"`
+	// IsDeleted 软删除标记（"false"=有效，"true"=已删除）
+	IsDeleted string `gorm:"column:c_is_deleted;not null;default:'false'" json:"is_deleted"`
 	// CreateTime 创建时间
 	CreateTime time.Time `gorm:"column:c_ctime;type:datetime;default:CURRENT_TIMESTAMP;index:idx_create_time" json:"create_time"`
 	// ModifyTime 修改时间

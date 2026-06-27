@@ -81,7 +81,7 @@ func taskInstanceModelToPB(i *model.CollectorTaskInstance) *pb.TaskInstance {
 		TaskParams:      i.TaskParams,
 		LastExecTime:    formatTimePtr(i.LastExecTime),
 		Result:          i.Result,
-		Invalid:         int32(i.Invalid),
+		IsDeleted:       i.IsDeleted,
 		CreateTime:      formatTime(i.CreateTime),
 		ModifyTime:      formatTime(i.ModifyTime),
 	}

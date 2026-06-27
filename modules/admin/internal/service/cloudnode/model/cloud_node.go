@@ -50,12 +50,6 @@ func BizTypeLabel(bizType string) string {
 	return b.String()
 }
 
-// Invalid常量
-const (
-	InvalidNo  = 0 // 有效
-	InvalidYes = 1 // 无效
-)
-
 // CloudNodeTableName 表名常量
 const CloudNodeTableName = "t_cloud_nodes"
 
@@ -99,8 +93,8 @@ type CloudNode struct {
 	ProbeURL string `gorm:"column:c_probe_url;default:''" json:"probe_url"`
 	// RunningVersion 当前运行版本（来自心跳上报）
 	RunningVersion string `gorm:"column:c_running_version;size:50;not null;default:''" json:"running_version"`
-	// Invalid 删除标记
-	Invalid int `gorm:"column:c_invalid;not null;default:0" json:"invalid"`
+	// IsDeleted 软删除标记
+	IsDeleted string `gorm:"column:c_is_deleted;not null;default:'false'" json:"is_deleted"`
 	// CreateTime 创建时间
 	CreateTime time.Time `gorm:"column:c_ctime;type:datetime;default:CURRENT_TIMESTAMP" json:"create_time"`
 	// ModifyTime 修改时间
