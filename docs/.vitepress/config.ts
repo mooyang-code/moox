@@ -53,7 +53,6 @@ export default defineConfig({
       {
         text: '开始',
         items: [
-          { text: '项目首页', link: '/' },
           { text: '前言', link: '/前言' },
         ],
       },
