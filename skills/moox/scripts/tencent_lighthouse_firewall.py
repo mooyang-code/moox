@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 
-DEFAULT_MOOX_PORTS = "19104,19101,19105,20103,20180"
+DEFAULT_MOOX_PORTS = "20201,20200,20202,11000"
 DEFAULT_REGION = "ap-guangzhou"
 
 RID_REGION_MAP = {

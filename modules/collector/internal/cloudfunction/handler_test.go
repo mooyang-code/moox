@@ -34,8 +34,8 @@ func TestHandleKeepaliveProbeReportsHeartbeatAfterProcessProbe(t *testing.T) {
 			t.Fatalf("node id before heartbeat = %q, want scf-test", nodeID)
 		}
 		serverIP, serverPort := config.GetServerInfo()
-		if serverIP != "127.0.0.1" || serverPort != 20103 {
-			t.Fatalf("server before heartbeat = %s:%d, want 127.0.0.1:20103", serverIP, serverPort)
+		if serverIP != "127.0.0.1" || serverPort != 11000 {
+			t.Fatalf("server before heartbeat = %s:%d, want 127.0.0.1:11000", serverIP, serverPort)
 		}
 		return nil
 	}
@@ -51,7 +51,7 @@ func TestHandleKeepaliveProbeReportsHeartbeatAfterProcessProbe(t *testing.T) {
 		Action:     model.EventActionKeepalive,
 		Source:     "keepalive_probe",
 		ServerIP:   "127.0.0.1",
-		ServerPort: 20103,
+		ServerPort: 11000,
 		RequestID:  "request-test",
 		Data: map[string]interface{}{
 			"node_id": "scf-test",
@@ -92,8 +92,8 @@ func TestHandleKeepaliveProbeRunsDueTasksAfterHeartbeat(t *testing.T) {
 			t.Fatalf("node id before execute = %q, want scf-test", nodeID)
 		}
 		serverIP, serverPort := config.GetServerInfo()
-		if serverIP != "127.0.0.1" || serverPort != 20103 {
-			t.Fatalf("server before execute = %s:%d, want 127.0.0.1:20103", serverIP, serverPort)
+		if serverIP != "127.0.0.1" || serverPort != 11000 {
+			t.Fatalf("server before execute = %s:%d, want 127.0.0.1:11000", serverIP, serverPort)
 		}
 		return nil
 	}
@@ -109,7 +109,7 @@ func TestHandleKeepaliveProbeRunsDueTasksAfterHeartbeat(t *testing.T) {
 		Action:     model.EventActionKeepalive,
 		Source:     "keepalive_probe",
 		ServerIP:   "127.0.0.1",
-		ServerPort: 20103,
+		ServerPort: 11000,
 		RequestID:  "request-test",
 		Data: map[string]interface{}{
 			"node_id": "scf-test",
@@ -142,7 +142,7 @@ func TestHandleRequestUpdatesRuntimeConfigForTaskEvent(t *testing.T) {
 	event := model.CloudFunctionEvent{
 		Action:     model.EventAction("unknown"),
 		ServerIP:   "10.0.0.8",
-		ServerPort: 20103,
+		ServerPort: 11000,
 		RequestID:  "request-task",
 		Data: map[string]interface{}{
 			"task_id": "task-1",
@@ -156,8 +156,8 @@ func TestHandleRequestUpdatesRuntimeConfigForTaskEvent(t *testing.T) {
 	_, _ = NewCloudFunctionHandler().HandleRequest(ctx, raw)
 
 	serverIP, serverPort := config.GetServerInfo()
-	if serverIP != "10.0.0.8" || serverPort != 20103 {
-		t.Fatalf("server = %s:%d, want 10.0.0.8:20103", serverIP, serverPort)
+	if serverIP != "10.0.0.8" || serverPort != 11000 {
+		t.Fatalf("server = %s:%d, want 10.0.0.8:11000", serverIP, serverPort)
 	}
 	nodeID, _ := config.GetNodeInfo()
 	if nodeID != "scf-task-node" {
@@ -173,12 +173,12 @@ func TestParseServerFromMooxURL(t *testing.T) {
 		wantPort int
 		wantOK  bool
 	}{
-		{"normal", "http://106.53.107.122:20103", "106.53.107.122", 20103, true},
+		{"normal", "http://106.53.107.122:11000", "106.53.107.122", 11000, true},
 		{"https", "https://10.0.0.8:443", "10.0.0.8", 443, true},
 		{"empty", "", "", 0, false},
 		{"no_port", "http://10.0.0.8", "", 0, false},
 		{"invalid_port", "http://10.0.0.8:abc", "", 0, false},
-		{"no_host", "http://:20103", "", 0, false},
+		{"no_host", "http://:11000", "", 0, false},
 		{"garbage", "not-a-url", "", 0, false},
 	}
 	for _, c := range cases {
@@ -207,8 +207,8 @@ func TestHandleKeepaliveProbeRecoversServerInfoFromMooxURL(t *testing.T) {
 	reportHeartbeatAfterProbe = func(ctx context.Context) error {
 		reported = true
 		serverIP, serverPort := config.GetServerInfo()
-		if serverIP != "106.53.107.122" || serverPort != 20103 {
-			t.Fatalf("server recovered from moox_server_url = %s:%d, want 106.53.107.122:20103", serverIP, serverPort)
+		if serverIP != "106.53.107.122" || serverPort != 11000 {
+			t.Fatalf("server recovered from moox_server_url = %s:%d, want 106.53.107.122:11000", serverIP, serverPort)
 		}
 		return nil
 	}
@@ -221,7 +221,7 @@ func TestHandleKeepaliveProbeRecoversServerInfoFromMooxURL(t *testing.T) {
 	event := model.CloudFunctionEvent{
 		Action:        model.EventActionKeepalive,
 		Source:        "keepalive_probe",
-		MooxServerURL: "http://106.53.107.122:20103",
+		MooxServerURL: "http://106.53.107.122:11000",
 		RequestID:     "request-coldstart",
 		Data: map[string]interface{}{
 			"node_id": "scf-coldstart-node",
@@ -259,12 +259,12 @@ func TestApplyRuntimeConfigPrefersServerIPOverMooxURL(t *testing.T) {
 	h := NewCloudFunctionHandler()
 	h.applyRuntimeConfig(context.Background(), model.CloudFunctionEvent{
 		ServerIP:      "10.0.0.8",
-		ServerPort:    20103,
+		ServerPort:    11000,
 		MooxServerURL: "http://106.53.107.122:9999",
 	}, nil)
 
 	ip, port := config.GetServerInfo()
-	if ip != "10.0.0.8" || port != 20103 {
-		t.Fatalf("server = %s:%d, want 10.0.0.8:20103 (server_ip should win)", ip, port)
+	if ip != "10.0.0.8" || port != 11000 {
+		t.Fatalf("server = %s:%d, want 10.0.0.8:11000 (server_ip should win)", ip, port)
 	}
 }

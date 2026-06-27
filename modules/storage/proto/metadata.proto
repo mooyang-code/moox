@@ -1356,8 +1356,8 @@ message ListArchiveFilesRsp {
   common.PageResult page_result = 3;
 }
 
-// MetadataService 管理量化存储系统的核心元数据。
-service MetadataService {
+// Metadata 管理量化存储系统的核心元数据。
+service Metadata {
   // 创建使用空间。
   rpc CreateSpace(CreateSpaceReq) returns (CreateSpaceRsp);
   // 更新使用空间。

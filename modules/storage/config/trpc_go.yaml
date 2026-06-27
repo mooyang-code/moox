@@ -8,88 +8,88 @@ server:
     - cors
   timeout: 5000
   admin:
-    port: 9000
+    port: 20000
     read_timeout: 5000   #ms. 请求被接受到请求信息被完全读取的超时时间设置，防止慢客户端
     write_timeout: 60000 #ms. 处理的超时时间
   service:
-    - name: trpc.storage.access.AccessService
+    - name: trpc.storage.access.Access
       #ip: 0.0.0.0
-      port: 18201
+      port: 20102
       network: tcp
       protocol: trpc
-    - name: trpc.storage.view.ViewService
+    - name: trpc.storage.view.DataView
       #ip: 0.0.0.0
-      port: 18202
+      port: 20103
       network: tcp
       protocol: trpc
-    - name: trpc.storage.store.PrimaryStoreService
+    - name: trpc.storage.store.PrimaryStore
       #ip: 0.0.0.0
-      port: 18101
+      port: 20101
       network: tcp # 注意：若是多机分布式部署，此处应改为tcp（单机也可设置tcp，只是unix域套接字本机通信效率更高）
       protocol: trpc
-    - name: trpc.storage.metadata.MetadataService
+    - name: trpc.storage.metadata.Metadata
       #ip: 0.0.0.0
-      port: 18001
+      port: 20100
       network: tcp
       protocol: trpc
     - name: trpc.storage.view.timer
-      port: 18009
+      port: 20300
       network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params="
       protocol: timer
       timeout: 60000
     - name: trpc.storage.view.cleanup.timer
-      port: 18010
+      port: 20301
       network: "0 0 * * * *?scheduler=viewBuilderSchedule&params=op=cleanup"
       protocol: timer
       timeout: 60000
     - name: trpc.storage.view.retry_failed.timer
-      port: 18012
+      port: 20303
       network: "0 */10 * * * *?disable=1&scheduler=viewBuilderSchedule&params=op=retry_failed"
       protocol: timer
       timeout: 60000
     - name: trpc.storage.archive.timer
-      port: 18011
+      port: 20302
       network: "0 0 * * * *?disable=1&scheduler=archiveSchedule&params=space_id=crypto;dataset_id=*"
       protocol: timer
       timeout: 60000
 
-    - name: trpc.storage.access.AccessService
+    - name: trpc.storage.access.Access
       #ip: 0.0.0.0
-      port: 19104
+      port: 20201
       network: tcp
       protocol: http
-    - name: trpc.storage.metadata.MetadataService
+    - name: trpc.storage.metadata.Metadata
       #ip: 0.0.0.0
-      port: 19101
+      port: 20200
       network: tcp
       protocol: http
-    - name: trpc.storage.view.ViewService
+    - name: trpc.storage.view.DataView
       #ip: 0.0.0.0
-      port: 19105
+      port: 20202
       network: tcp
       protocol: http
-      
+
 client:
   filter:
     - validation
   service:
-    - name: trpc.storage.store.PrimaryStoreService
-      target: ip://127.0.0.1:18101
+    - name: trpc.storage.store.PrimaryStore
+      target: ip://127.0.0.1:20101
       network: tcp
       protocol: trpc
       timeout: 3000
-    - name: trpc.storage.access.AccessService
-      target: ip://127.0.0.1:19104
+    - name: trpc.storage.access.Access
+      target: ip://127.0.0.1:20201
       network: tcp
       protocol: http
       timeout: 3000
-    - name: trpc.storage.metadata.MetadataService
-      target: ip://127.0.0.1:19101
+    - name: trpc.storage.metadata.Metadata
+      target: ip://127.0.0.1:20200
       network: tcp
       protocol: http
       timeout: 3000
-    - name: trpc.storage.view.ViewService
-      target: ip://127.0.0.1:19105
+    - name: trpc.storage.view.DataView
+      target: ip://127.0.0.1:20202
       network: tcp
       protocol: http
       timeout: 3000
@@ -104,7 +104,7 @@ plugins:
       server_validate_err_code: 100101
       client_validate_err_code: 100102
   log:
-    default: 
+    default:
       - writer: file                              #本地文件日志
         level: debug                               #本地文件滚动日志的级别
         writer_config:                            #本地文件输出具体配置

@@ -176,6 +176,7 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import service from '@/api/index';
+import { isRetInfoSuccess } from '@/api/ret-info';
 import { appAuthHeaders } from '@/api/storage/auth';
 import { useSpaceStore } from '@/store/modules/space';
 import { storeToRefs } from 'pinia';
@@ -376,16 +377,17 @@ const getInstanceList = async () => {
     if (form.value.lastExecStatus !== null) params.last_exec_status = form.value.lastExecStatus;
     if (form.value.invalid !== null) params.invalid = form.value.invalid;
 
-    const response = await service.post('/api/control/collectmgr/ListTaskInstances', params, {
+    const response = await service.post('/api/admin/collectmgr/GetTaskInstanceList', params, {
       headers: appAuthHeaders()
     });
 
+    // 新协议：ret_info.code 为成功标识，业务字段 instances/total 在顶层
     const data = response as any;
-    if (data.code === 200) {
-      instanceList.value = data.data || [];
-      pagination.value.total = data.total || (data.data ? data.data.length : 0);
+    if (isRetInfoSuccess(data?.ret_info?.code)) {
+      instanceList.value = data.instances || [];
+      pagination.value.total = Number(data.total) || (data.instances ? data.instances.length : 0);
     } else {
-      Message.error(data.message || '获取任务实例列表失败');
+      Message.error(data?.ret_info?.msg || '获取任务实例列表失败');
     }
   } catch (error) {
     console.error('获取任务实例列表失败:', error);

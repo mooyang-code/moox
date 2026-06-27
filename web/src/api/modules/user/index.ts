@@ -12,7 +12,7 @@ export const loginAPI = async (data: { username: string; password: string; verif
 export const getLoginSaltAPI = async (data: { username: string }) => {
   try {
     const response = await axios({
-      url: "/api/control/auth/GetLoginSalt",
+      url: "/api/admin/auth/GetLoginSalt",
       method: "post",
       data: {
         app_info: getAppInfo(),
@@ -48,7 +48,7 @@ export const getLoginSaltAPI = async (data: { username: string }) => {
 export const getUserInfoAPI = async (accessToken: string) => {
   try {
     const response = await axios({
-      url: "/api/control/auth/GetUserInfo",
+      url: "/api/admin/auth/GetUserInfo",
       method: "post",
       data: {
         app_info: getAppInfo(),

@@ -396,8 +396,8 @@ const fetchHosts = async () => {
       limit: pagination.value.pageSize,
     });
     const res = response.data;
-    if (res.code === 200) {
-      hostList.value = res.data;
+    if (res.ret_info?.code === 0) {
+      hostList.value = res.hosts ?? [];
       pagination.value.total = res.total || 0;
     }
   } catch (error) {
@@ -459,11 +459,11 @@ const onDelete = async (record: SSHHost) => {
   try {
     const response = await deleteSSHHost(record.id);
     const res = response.data;
-    if (res.code === 200) {
+    if (res.ret_info?.code === 0) {
       Message.success('删除成功');
       fetchHosts();
     } else {
-      Message.error(res.message || '删除失败');
+      Message.error(res.ret_info?.msg || '删除失败');
     }
   } catch (error) {
     console.error('删除主机失败:', error);
@@ -492,12 +492,12 @@ const handleSubmit = async (done: (closed: boolean) => void) => {
     }
 
     const res = response.data;
-    if (res.code === 200) {
+    if (res.ret_info?.code === 0) {
       Message.success(isEdit.value ? '更新成功' : '创建成功');
       done(true);
       fetchHosts();
     } else {
-      Message.error(res.message || (isEdit.value ? '更新失败' : '创建失败'));
+      Message.error(res.ret_info?.msg || (isEdit.value ? '更新失败' : '创建失败'));
       done(false);
     }
   } catch (error) {
@@ -536,7 +536,7 @@ const batchDelete = () => {
       for (const id of selectedKeys.value) {
         try {
           const response = await deleteSSHHost(id);
-          if (response.data?.code === 200) {
+          if (response.data?.ret_info?.code === 0) {
             successCount++;
           } else {
             failCount++;

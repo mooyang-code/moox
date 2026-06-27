@@ -13,7 +13,7 @@ TARGET_GOOS="${OS}" TARGET_GOARCH="${ARCH}" "${ROOT}/scripts/build.sh"
 rm -rf "${RELEASE_ROOT}"
 mkdir -p \
   "${RELEASE_ROOT}/cli/bin" \
-  "${RELEASE_ROOT}/control/bin" \
+  "${RELEASE_ROOT}/admin/bin" \
   "${RELEASE_ROOT}/collector/bin" \
   "${RELEASE_ROOT}/factor/bin" \
   "${RELEASE_ROOT}/order/bin" \
@@ -31,7 +31,7 @@ mkdir -p \
   "${RELEASE_ROOT}/scripts"
 
 cp "${ROOT}/bin/moox-cli" "${RELEASE_ROOT}/cli/bin/"
-cp "${ROOT}/bin/moox-server" "${RELEASE_ROOT}/control/bin/"
+cp "${ROOT}/bin/moox-server" "${RELEASE_ROOT}/admin/bin/"
 cp "${ROOT}/bin/moox-collector" "${RELEASE_ROOT}/collector/bin/"
 cp "${ROOT}/bin/moox-factor" "${RELEASE_ROOT}/factor/bin/"
 cp "${ROOT}/bin/moox-order" "${RELEASE_ROOT}/order/bin/"

@@ -103,7 +103,7 @@ import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { useRoutingMethod } from "@/hooks/useRoutingMethod";
 import { useThemeConfig } from "@/store/modules/theme-config";
 import { useSpaceStore } from "@/store/modules/space";
-import { createSpace } from "@/api/control/spaces";
+import { createSpace } from "@/api/admin/spaces";
 import { useMenuMethod } from "@/hooks/useMenuMethod";
 import { useDevicesSize } from "@/hooks/useDevicesSize";
 import { Message } from "@arco-design/web-vue";

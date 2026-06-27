@@ -21,7 +21,7 @@ storage:
     embedded:
       enabled: true
   deriver:
-    access_service_name: trpc.storage.access.AccessService
+    access_service_name: trpc.storage.access.Access
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 4

@@ -10,8 +10,8 @@ const config = loaded.config;
 const proxy = config.server?.proxy || {};
 
 const expectedTargets = new Map([
-  ['/api/control', 'http://106.53.107.122:20103'],
-  ['/trpc.moox.server', 'http://localhost:20102'],
+  ['/api/admin', 'http://106.53.107.122:11000'],
+  ['/trpc.moox.server', 'http://localhost:10080'],
 ]);
 
 const mismatches = [];

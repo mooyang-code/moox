@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/avast/retry-go"
-	"github.com/mooyang-code/moox/modules/collector/internal/controlapi"
+	"github.com/mooyang-code/moox/modules/collector/internal/adminapi"
 	"github.com/mooyang-code/moox/modules/collector/pkg/config"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -76,7 +76,7 @@ func ReportTaskStatus(ctx context.Context, taskID string, status int, result str
 
 // executeReport 执行上报请求
 func executeReport(ctx context.Context, taskID string, nodeID string, status int, result string, serverIP string, serverPort int) error {
-	url := controlapi.URL(serverIP, serverPort, "collectmgr", "ReportTaskStatus")
+	url := adminapi.URL(serverIP, serverPort, "collectmgr", "ReportTaskStatus")
 
 	// 构建请求体
 	reqBody := &ReportTaskStatusRequest{
@@ -119,7 +119,7 @@ func executeReport(ctx context.Context, taskID string, nodeID string, status int
 
 // sendRequest 发送单次请求
 func sendRequest(ctx context.Context, url string, data []byte, httpClient *http.Client) error {
-	req, err := controlapi.NewSignedRequestWithContext(ctx, "POST", url, data, controlapi.DefaultAuthConfig())
+	req, err := adminapi.NewSignedRequestWithContext(ctx, "POST", url, data, adminapi.DefaultAuthConfig())
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %w", err)
 	}

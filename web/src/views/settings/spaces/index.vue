@@ -86,8 +86,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { Message } from '@arco-design/web-vue';
-import { createSpace, listSpaces, updateSpace } from '@/api/control/spaces';
-import type { Space } from '@/api/control/types';
+import { createSpace, listSpaces, updateSpace } from '@/api/admin/spaces';
+import type { Space } from '@/api/admin/types';
 import { useSpaceStore } from '@/store/modules/space';
 import { applyPageResult, defaultPagination, formatTime, statusColor, statusOptions } from '@/views/data/shared/metadata-utils';
 

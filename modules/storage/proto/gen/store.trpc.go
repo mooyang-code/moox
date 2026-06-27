@@ -17,8 +17,8 @@ import (
 
 // START ======================================= Server Service Definition ======================================= START
 
-// PrimaryStoreServiceService defines service.
-type PrimaryStoreServiceService interface {
+// PrimaryStoreService defines service.
+type PrimaryStoreService interface {
 	// WritePrimaryRows WritePrimaryRows 将已完成路由的数据行写入在线主存。
 	WritePrimaryRows(ctx context.Context, req *WritePrimaryRowsReq) (*WritePrimaryRowsRsp, error)
 	// ReadPrimaryRows ReadPrimaryRows 从在线主存读取数据行。
@@ -27,14 +27,14 @@ type PrimaryStoreServiceService interface {
 	ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq) (*ScanPrimaryRowsRsp, error)
 }
 
-func PrimaryStoreServiceService_WritePrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func PrimaryStoreService_WritePrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &WritePrimaryRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreServiceService).WritePrimaryRows(ctx, reqbody.(*WritePrimaryRowsReq))
+		return svr.(PrimaryStoreService).WritePrimaryRows(ctx, reqbody.(*WritePrimaryRowsReq))
 	}
 
 	var rsp interface{}
@@ -45,14 +45,14 @@ func PrimaryStoreServiceService_WritePrimaryRows_Handler(svr interface{}, ctx co
 	return rsp, nil
 }
 
-func PrimaryStoreServiceService_ReadPrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func PrimaryStoreService_ReadPrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReadPrimaryRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreServiceService).ReadPrimaryRows(ctx, reqbody.(*ReadPrimaryRowsReq))
+		return svr.(PrimaryStoreService).ReadPrimaryRows(ctx, reqbody.(*ReadPrimaryRowsReq))
 	}
 
 	var rsp interface{}
@@ -63,14 +63,14 @@ func PrimaryStoreServiceService_ReadPrimaryRows_Handler(svr interface{}, ctx con
 	return rsp, nil
 }
 
-func PrimaryStoreServiceService_ScanPrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func PrimaryStoreService_ScanPrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ScanPrimaryRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreServiceService).ScanPrimaryRows(ctx, reqbody.(*ScanPrimaryRowsReq))
+		return svr.(PrimaryStoreService).ScanPrimaryRows(ctx, reqbody.(*ScanPrimaryRowsReq))
 	}
 
 	var rsp interface{}
@@ -81,50 +81,50 @@ func PrimaryStoreServiceService_ScanPrimaryRows_Handler(svr interface{}, ctx con
 	return rsp, nil
 }
 
-// PrimaryStoreServiceServer_ServiceDesc descriptor for server.RegisterService.
-var PrimaryStoreServiceServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.storage.store.PrimaryStoreService",
-	HandlerType: ((*PrimaryStoreServiceService)(nil)),
+// PrimaryStoreServer_ServiceDesc descriptor for server.RegisterService.
+var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.storage.store.PrimaryStore",
+	HandlerType: ((*PrimaryStoreService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.storage.store.PrimaryStoreService/WritePrimaryRows",
-			Func: PrimaryStoreServiceService_WritePrimaryRows_Handler,
+			Name: "/trpc.storage.store.PrimaryStore/WritePrimaryRows",
+			Func: PrimaryStoreService_WritePrimaryRows_Handler,
 		},
 		{
-			Name: "/trpc.storage.store.PrimaryStoreService/ReadPrimaryRows",
-			Func: PrimaryStoreServiceService_ReadPrimaryRows_Handler,
+			Name: "/trpc.storage.store.PrimaryStore/ReadPrimaryRows",
+			Func: PrimaryStoreService_ReadPrimaryRows_Handler,
 		},
 		{
-			Name: "/trpc.storage.store.PrimaryStoreService/ScanPrimaryRows",
-			Func: PrimaryStoreServiceService_ScanPrimaryRows_Handler,
+			Name: "/trpc.storage.store.PrimaryStore/ScanPrimaryRows",
+			Func: PrimaryStoreService_ScanPrimaryRows_Handler,
 		},
 	},
 }
 
-// RegisterPrimaryStoreServiceService registers service.
-func RegisterPrimaryStoreServiceService(s server.Service, svr PrimaryStoreServiceService) {
-	if err := s.Register(&PrimaryStoreServiceServer_ServiceDesc, svr); err != nil {
-		panic(fmt.Sprintf("PrimaryStoreService register error:%v", err))
+// RegisterPrimaryStoreService registers service.
+func RegisterPrimaryStoreService(s server.Service, svr PrimaryStoreService) {
+	if err := s.Register(&PrimaryStoreServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("PrimaryStore register error:%v", err))
 	}
 }
 
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
-type UnimplementedPrimaryStoreService struct{}
+type UnimplementedPrimaryStore struct{}
 
 // WritePrimaryRows WritePrimaryRows 将已完成路由的数据行写入在线主存。
-func (s *UnimplementedPrimaryStoreService) WritePrimaryRows(ctx context.Context, req *WritePrimaryRowsReq) (*WritePrimaryRowsRsp, error) {
-	return nil, errors.New("rpc WritePrimaryRows of service PrimaryStoreService is not implemented")
+func (s *UnimplementedPrimaryStore) WritePrimaryRows(ctx context.Context, req *WritePrimaryRowsReq) (*WritePrimaryRowsRsp, error) {
+	return nil, errors.New("rpc WritePrimaryRows of service PrimaryStore is not implemented")
 }
 
 // ReadPrimaryRows ReadPrimaryRows 从在线主存读取数据行。
-func (s *UnimplementedPrimaryStoreService) ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq) (*ReadPrimaryRowsRsp, error) {
-	return nil, errors.New("rpc ReadPrimaryRows of service PrimaryStoreService is not implemented")
+func (s *UnimplementedPrimaryStore) ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq) (*ReadPrimaryRowsRsp, error) {
+	return nil, errors.New("rpc ReadPrimaryRows of service PrimaryStore is not implemented")
 }
 
 // ScanPrimaryRows ScanPrimaryRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
-func (s *UnimplementedPrimaryStoreService) ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq) (*ScanPrimaryRowsRsp, error) {
-	return nil, errors.New("rpc ScanPrimaryRows of service PrimaryStoreService is not implemented")
+func (s *UnimplementedPrimaryStore) ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq) (*ScanPrimaryRowsRsp, error) {
+	return nil, errors.New("rpc ScanPrimaryRows of service PrimaryStore is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -133,8 +133,8 @@ func (s *UnimplementedPrimaryStoreService) ScanPrimaryRows(ctx context.Context, 
 
 // START ======================================= Client Service Definition ======================================= START
 
-// PrimaryStoreServiceClientProxy defines service client proxy
-type PrimaryStoreServiceClientProxy interface {
+// PrimaryStoreClientProxy defines service client proxy
+type PrimaryStoreClientProxy interface {
 	// WritePrimaryRows WritePrimaryRows 将已完成路由的数据行写入在线主存。
 	WritePrimaryRows(ctx context.Context, req *WritePrimaryRowsReq, opts ...client.Option) (rsp *WritePrimaryRowsRsp, err error)
 	// ReadPrimaryRows ReadPrimaryRows 从在线主存读取数据行。
@@ -143,23 +143,23 @@ type PrimaryStoreServiceClientProxy interface {
 	ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq, opts ...client.Option) (rsp *ScanPrimaryRowsRsp, err error)
 }
 
-type PrimaryStoreServiceClientProxyImpl struct {
+type PrimaryStoreClientProxyImpl struct {
 	client client.Client
 	opts   []client.Option
 }
 
-var NewPrimaryStoreServiceClientProxy = func(opts ...client.Option) PrimaryStoreServiceClientProxy {
-	return &PrimaryStoreServiceClientProxyImpl{client: client.DefaultClient, opts: opts}
+var NewPrimaryStoreClientProxy = func(opts ...client.Option) PrimaryStoreClientProxy {
+	return &PrimaryStoreClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *PrimaryStoreServiceClientProxyImpl) WritePrimaryRows(ctx context.Context, req *WritePrimaryRowsReq, opts ...client.Option) (*WritePrimaryRowsRsp, error) {
+func (c *PrimaryStoreClientProxyImpl) WritePrimaryRows(ctx context.Context, req *WritePrimaryRowsReq, opts ...client.Option) (*WritePrimaryRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.store.PrimaryStoreService/WritePrimaryRows")
-	msg.WithCalleeServiceName(PrimaryStoreServiceServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.storage.store.PrimaryStore/WritePrimaryRows")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("store")
-	msg.WithCalleeService("PrimaryStoreService")
+	msg.WithCalleeService("PrimaryStore")
 	msg.WithCalleeMethod("WritePrimaryRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -172,14 +172,14 @@ func (c *PrimaryStoreServiceClientProxyImpl) WritePrimaryRows(ctx context.Contex
 	return rsp, nil
 }
 
-func (c *PrimaryStoreServiceClientProxyImpl) ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq, opts ...client.Option) (*ReadPrimaryRowsRsp, error) {
+func (c *PrimaryStoreClientProxyImpl) ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq, opts ...client.Option) (*ReadPrimaryRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.store.PrimaryStoreService/ReadPrimaryRows")
-	msg.WithCalleeServiceName(PrimaryStoreServiceServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.storage.store.PrimaryStore/ReadPrimaryRows")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("store")
-	msg.WithCalleeService("PrimaryStoreService")
+	msg.WithCalleeService("PrimaryStore")
 	msg.WithCalleeMethod("ReadPrimaryRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -192,14 +192,14 @@ func (c *PrimaryStoreServiceClientProxyImpl) ReadPrimaryRows(ctx context.Context
 	return rsp, nil
 }
 
-func (c *PrimaryStoreServiceClientProxyImpl) ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq, opts ...client.Option) (*ScanPrimaryRowsRsp, error) {
+func (c *PrimaryStoreClientProxyImpl) ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq, opts ...client.Option) (*ScanPrimaryRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.store.PrimaryStoreService/ScanPrimaryRows")
-	msg.WithCalleeServiceName(PrimaryStoreServiceServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.storage.store.PrimaryStore/ScanPrimaryRows")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("store")
-	msg.WithCalleeService("PrimaryStoreService")
+	msg.WithCalleeService("PrimaryStore")
 	msg.WithCalleeMethod("ScanPrimaryRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))

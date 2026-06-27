@@ -22,7 +22,7 @@ const (
 )
 
 // TimeSeriesRowsChangedEvent 表示时序事实数据行变更事件。
-// 派生消费者应通过 AccessService 回读最新完整行，不应理解 PrimaryStore 分片和路由。
+// 派生消费者应通过 Access 回读最新完整行，不应理解 PrimaryStore 分片和路由。
 type TimeSeriesRowsChangedEvent struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -99,7 +99,7 @@ func (x *TimeSeriesRowsChangedEvent) GetAttributes() map[string]string {
 }
 
 // RecordRowsChangedEvent 表示记录事实数据行变更事件。
-// 派生消费者应通过 AccessService 回读最新完整行，不应理解 PrimaryStore 分片和路由。
+// 派生消费者应通过 Access 回读最新完整行，不应理解 PrimaryStore 分片和路由。
 type RecordRowsChangedEvent struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

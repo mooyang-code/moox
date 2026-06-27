@@ -4,9 +4,8 @@ use (
 	./modules/account
 	./modules/cli
 	./modules/collector
-	./modules/control
-	./modules/control/proto/controlgen
-	./modules/control/proto/gen
+	./modules/admin
+	./modules/admin/proto/admingen
 	./modules/factor
 	./modules/order
 	./modules/storage

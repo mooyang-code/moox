@@ -115,8 +115,8 @@ func main() {
 			log.Errorf("access role requires storage service")
 			os.Exit(1)
 		}
-		pb.RegisterMetadataServiceService(s, storageService)
-		pb.RegisterAccessServiceService(s, storageService)
+		pb.RegisterMetadataService(s, storageService)
+		pb.RegisterAccessService(s, storageService)
 	}
 
 	if cfg.Storage.HasRole("deriver") {
@@ -160,7 +160,7 @@ func main() {
 				log.Errorf("关闭 primary service 失败: %v", err)
 			}
 		}()
-		pb.RegisterPrimaryStoreServiceService(s, primaryService)
+		pb.RegisterPrimaryStoreService(s, primaryService)
 	}
 	// 启动trpc服务器
 	log.Infof("Storage roles %v serving", cfg.Storage.Roles)
@@ -177,7 +177,7 @@ func registerViewRole(s *server.Server, storageService *storagesvc.Service, acce
 	if err := storageService.InitViewBuilderWithFacts(accessReader); err != nil {
 		return err
 	}
-	pb.RegisterViewServiceService(s, storageService)
+	pb.RegisterDataViewService(s, storageService)
 	timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
 	registerTimerHandlerService("trpc.storage.view.timer", s.Service("trpc.storage.view.timer"), view.HandleSchedule)
 	registerTimerHandlerService("trpc.storage.view.cleanup.timer", s.Service("trpc.storage.view.cleanup.timer"), view.HandleSchedule)

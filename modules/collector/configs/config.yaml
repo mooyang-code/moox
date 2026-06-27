@@ -4,7 +4,7 @@ system:
   version: "v0.0.3"
   environment: "Production"
   timezone: "UTC"
-  storage_url: "http://106.53.107.122:19104"
+  storage_url: "http://106.53.107.122:20201"
   service_auth:
     version: "moox-auth-v1"
     access_key: "moox-service"

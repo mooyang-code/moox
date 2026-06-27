@@ -1,6 +1,6 @@
 # MooX storage metadata example for China A-share market.
 # Import with:
-#   modules/cli/cmd/moox-cli metadata import --file examples/metadata-cn-stock.seed.yaml --metadata-url http://127.0.0.1:19101 --if-not-exists
+#   modules/cli/cmd/moox-cli metadata import --file examples/metadata-cn-stock.seed.yaml --metadata-url http://127.0.0.1:20200 --if-not-exists
 
 spaces:
   - space_id: cn_stock

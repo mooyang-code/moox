@@ -96,12 +96,12 @@ func ensureRemoteDataset(ctx context.Context, storageURL string, options remoteI
 		{"CreatePrimaryStoreRoute", &pb.CreatePrimaryStoreRouteReq{PrimaryStoreRoute: &pb.PrimaryStoreRoute{SpaceId: options.SpaceID, RouteId: "route_" + options.DatasetID, DatasetId: options.DatasetID, SubjectPattern: "*", NodeId: "local", Priority: 100, Status: "active"}}, &pb.CreatePrimaryStoreRouteRsp{}},
 	}
 	for _, call := range calls {
-		if err := postStorage(ctx, storageURL, "trpc.storage.metadata.MetadataService", call.method, call.req, call.rsp); err != nil {
+		if err := postStorage(ctx, storageURL, "trpc.storage.metadata.Metadata", call.method, call.req, call.rsp); err != nil {
 			return err
 		}
 	}
 	for columnName, valueType := range inferColumnTypes(rows) {
-		if err := postStorage(ctx, storageURL, "trpc.storage.metadata.MetadataService", "UpsertDatasetColumn", &pb.UpsertDatasetColumnReq{Column: &pb.DatasetColumn{
+		if err := postStorage(ctx, storageURL, "trpc.storage.metadata.Metadata", "UpsertDatasetColumn", &pb.UpsertDatasetColumnReq{Column: &pb.DatasetColumn{
 			SpaceId:    options.SpaceID,
 			DatasetId:  options.DatasetID,
 			ColumnName: columnName,

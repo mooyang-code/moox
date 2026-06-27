@@ -1,11 +1,11 @@
 metadata_database: 
   storage_device: "sqlite:./data/moox.db"
 
-storage: 
-  target: "127.0.0.1:18201"
+storage:
+  target: "127.0.0.1:20102"
 
-moox: 
-  auth_target: "127.0.0.1:20001"
+moox:
+  auth_target: "127.0.0.1:11100"
 
 message:
   server: nats:localhost:4222   # NATS服务器地址

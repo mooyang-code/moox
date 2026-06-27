@@ -28,7 +28,7 @@ func NewAccessReader(local AccessReader, serviceName string) AccessReader {
 	serviceName = strings.TrimSpace(serviceName)
 	if serviceName != "" {
 		return &remoteAccessReader{
-			proxy: pb.NewAccessServiceClientProxy(client.WithServiceName(serviceName)),
+			proxy: pb.NewAccessClientProxy(client.WithServiceName(serviceName)),
 		}
 	}
 	if local != nil {
@@ -38,7 +38,7 @@ func NewAccessReader(local AccessReader, serviceName string) AccessReader {
 }
 
 type remoteAccessReader struct {
-	proxy pb.AccessServiceClientProxy
+	proxy pb.AccessClientProxy
 }
 
 func (r *remoteAccessReader) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {

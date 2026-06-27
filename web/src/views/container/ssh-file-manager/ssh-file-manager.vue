@@ -202,14 +202,13 @@ const loadDir = async (path: string) => {
   try {
     const response = await sftpList(resolvedSessionId.value, path);
     const res = response.data;
-    if (res.code === 200) {
-      const dirData = res.data?.[0] || {};
-      fileList.value = dirData.files || [];
-      breadcrumbs.value = dirData.paths || [];
-      currentDir.value = dirData.current_dir;
-      pathInput.value = dirData.current_dir;
+    if (res.ret_info?.code === 0) {
+      fileList.value = res.files || [];
+      breadcrumbs.value = res.paths || [];
+      currentDir.value = res.current_dir;
+      pathInput.value = res.current_dir;
     } else {
-      Message.error(res.message || '加载目录失败');
+      Message.error(res.ret_info?.msg || '加载目录失败');
     }
   } catch (error) {
     console.error('加载目录失败:', error);
@@ -263,12 +262,12 @@ const onMkdirConfirm = async () => {
       : `${currentDir.value}/${name}`;
     const response = await sftpMkdir(resolvedSessionId.value, targetPath);
     const res = response.data;
-    if (res.code === 200) {
+    if (res.ret_info?.code === 0) {
       Message.success('目录创建成功');
       mkdirModalVisible.value = false;
       refresh();
     } else {
-      Message.error(res.message || '创建目录失败');
+      Message.error(res.ret_info?.msg || '创建目录失败');
     }
   } catch (error) {
     console.error('创建目录失败:', error);
@@ -304,11 +303,11 @@ const deleteItem = async (record: SftpFileItem) => {
   try {
     const response = await sftpDelete(resolvedSessionId.value, record.path);
     const res = response.data;
-    if (res.code === 200) {
+    if (res.ret_info?.code === 0) {
       Message.success('删除成功');
       refresh();
     } else {
-      Message.error(res.message || '删除失败');
+      Message.error(res.ret_info?.msg || '删除失败');
     }
   } catch (error) {
     console.error('删除失败:', error);

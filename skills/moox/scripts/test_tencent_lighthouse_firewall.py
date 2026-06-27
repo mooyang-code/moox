@@ -70,7 +70,7 @@ class TencentLighthouseFirewallTest(unittest.TestCase):
             self.assertIn("--instance-id", argv)
             self.assertIn("lhins-a7yikq89", argv)
             self.assertIn("--ports", argv)
-            self.assertIn("19104,19101,19105,20103,20180", argv)
+            self.assertIn("20201,20200,20202,11000", argv)
 
     def test_add_can_print_command_without_executing(self):
         result = subprocess.run(
@@ -81,7 +81,7 @@ class TencentLighthouseFirewallTest(unittest.TestCase):
                 "--detail-url",
                 DETAIL_URL,
                 "--ports",
-                "19104",
+                "20201",
                 "--print-command",
             ],
             text=True,
@@ -94,7 +94,7 @@ class TencentLighthouseFirewallTest(unittest.TestCase):
         self.assertEqual(planned["will_execute"], False)
         self.assertEqual(planned["instance_id"], "lhins-a7yikq89")
         self.assertIn("--ports", planned["argv"])
-        self.assertIn("19104", planned["argv"])
+        self.assertIn("20201", planned["argv"])
 
 
 if __name__ == "__main__":

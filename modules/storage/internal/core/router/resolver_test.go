@@ -55,7 +55,7 @@ func TestResolverReturnsDeviceLocationForChosenNode(t *testing.T) {
 			{SpaceId: "crypto", RouteId: "apt", DatasetId: "kline", SubjectId: "APT-USDT", NodeId: "node-b", Priority: 10, Status: "active"},
 		},
 		nodes: map[string]*pb.PrimaryStoreNode{
-			"node-b": {NodeId: "node-b", Name: "primary-b", Endpoint: "127.0.0.1:18101", Status: "active"},
+			"node-b": {NodeId: "node-b", Name: "primary-b", Endpoint: "127.0.0.1:20101", Status: "active"},
 		},
 		devices: map[string][]*pb.Device{
 			"node-b": {
@@ -73,7 +73,7 @@ func TestResolverReturnsDeviceLocationForChosenNode(t *testing.T) {
 	require.Equal(t, "pebble", ref.GetEngine())
 	require.Equal(t, "kline", ref.GetDatasetId())
 	require.Equal(t, "crypto/kline", ref.GetDeviceTable())
-	require.Equal(t, "127.0.0.1:18101", ref.GetEndpoint())
+	require.Equal(t, "127.0.0.1:20101", ref.GetEndpoint())
 }
 
 func TestResolverReturnsDatasetTargetsOrderedAndDeduplicated(t *testing.T) {

@@ -13,7 +13,7 @@ assert.doesNotMatch(
 assert.match(
   source,
   /\/api\/control\/\$\{storageServiceID\(group\)\}\/\$\{method\}/,
-  'frontend storage APIs must go through /api/control/{service}/{method}',
+  'frontend storage APIs must go through /api/admin/{service}/{method}',
 );
 
 assert.match(source, /localStorage\.getItem\('user-info'\)/, 'storage APIs must read frontend login state');

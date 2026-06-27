@@ -19,7 +19,7 @@ import (
 
 type gatewayConfig struct {
 	ListenAddr  string
-	ControlURL  string
+	AdminURL  string
 	MetadataURL string
 	AccessURL   string
 	ViewURL     string
@@ -38,11 +38,11 @@ type gatewayProxy struct {
 
 func loadGatewayConfig() gatewayConfig {
 	return gatewayConfig{
-		ListenAddr:  envOr("MOOX_WEB_HOST_ADDR", ":19527"),
-		ControlURL:  strings.TrimRight(envOr("MOOX_CONTROL_GATEWAY_URL", "http://127.0.0.1:20103"), "/"),
-		MetadataURL: strings.TrimRight(envOr("MOOX_STORAGE_METADATA_URL", "http://127.0.0.1:19101"), "/"),
-		AccessURL:   strings.TrimRight(envOr("MOOX_STORAGE_ACCESS_URL", "http://127.0.0.1:19104"), "/"),
-		ViewURL:     strings.TrimRight(envOr("MOOX_STORAGE_VIEW_URL", "http://127.0.0.1:19105"), "/"),
+		ListenAddr:  envOr("MOOX_WEB_HOST_ADDR", ":10080"),
+		AdminURL:  strings.TrimRight(envOr("MOOX_ADMIN_GATEWAY_URL", "http://127.0.0.1:11000"), "/"),
+		MetadataURL: strings.TrimRight(envOr("MOOX_STORAGE_METADATA_URL", "http://127.0.0.1:20200"), "/"),
+		AccessURL:   strings.TrimRight(envOr("MOOX_STORAGE_ACCESS_URL", "http://127.0.0.1:20201"), "/"),
+		ViewURL:     strings.TrimRight(envOr("MOOX_STORAGE_VIEW_URL", "http://127.0.0.1:20202"), "/"),
 	}
 }
 
@@ -53,8 +53,8 @@ func envOr(key string, fallback string) string {
 	return fallback
 }
 
-func resolveControlGatewayTarget(path string) (gatewayTarget, bool) {
-	const prefix = "/api/control/"
+func resolveAdminGatewayTarget(path string) (gatewayTarget, bool) {
+	const prefix = "/api/admin/"
 	if !strings.HasPrefix(path, prefix) {
 		return gatewayTarget{}, false
 	}
@@ -64,7 +64,7 @@ func resolveControlGatewayTarget(path string) (gatewayTarget, bool) {
 		return gatewayTarget{}, false
 	}
 	return gatewayTarget{
-		Base:    "control",
+		Base:    "admin",
 		Service: parts[0],
 		Path:    prefix + parts[0] + "/" + parts[1],
 		Method:  parts[1],
@@ -83,11 +83,11 @@ func resolveStorageGatewayTarget(path string) (gatewayTarget, bool) {
 	}
 	switch parts[0] {
 	case "metadata":
-		return gatewayTarget{Base: "metadata", Path: "/trpc.storage.metadata.MetadataService/" + parts[1], Method: parts[1]}, true
+		return gatewayTarget{Base: "metadata", Path: "/trpc.storage.metadata.Metadata/" + parts[1], Method: parts[1]}, true
 	case "access":
-		return gatewayTarget{Base: "access", Path: "/trpc.storage.access.AccessService/" + parts[1], Method: parts[1]}, true
+		return gatewayTarget{Base: "access", Path: "/trpc.storage.access.Access/" + parts[1], Method: parts[1]}, true
 	case "view":
-		return gatewayTarget{Base: "view", Path: "/trpc.storage.view.ViewService/" + parts[1], Method: parts[1]}, true
+		return gatewayTarget{Base: "view", Path: "/trpc.storage.view.DataView/" + parts[1], Method: parts[1]}, true
 	default:
 		return gatewayTarget{}, false
 	}
@@ -95,7 +95,7 @@ func resolveStorageGatewayTarget(path string) (gatewayTarget, bool) {
 
 func newGatewayProxy(cfg gatewayConfig) (*gatewayProxy, error) {
 	baseURLs := map[string]string{
-		"control":  cfg.ControlURL,
+		"admin":   cfg.AdminURL,
 		"metadata": cfg.MetadataURL,
 		"access":   cfg.AccessURL,
 		"view":     cfg.ViewURL,
@@ -346,8 +346,8 @@ func main() {
 
 	// 设置路由
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if target, ok := resolveControlGatewayTarget(r.URL.Path); ok {
-			log.Printf("转发 Control 请求: %s -> %s", r.URL.Path, target.Path)
+		if target, ok := resolveAdminGatewayTarget(r.URL.Path); ok {
+			log.Printf("转发 Admin 请求: %s -> %s", r.URL.Path, target.Path)
 			proxy.ServeHTTP(w, r, target)
 			return
 		}
@@ -365,9 +365,9 @@ func main() {
 	// 启动服务器
 	log.Printf("服务器启动在 http://localhost%s", cfg.ListenAddr)
 	log.Println("静态文件服务: /")
-	log.Printf("Control API代理: /api/control/{service}/{method} -> %s/api/control/{service}/{method}", cfg.ControlURL)
-	log.Printf("Storage Metadata代理: /api/storage/metadata/{method} -> %s/trpc.storage.metadata.MetadataService/{method}", cfg.MetadataURL)
-	log.Printf("Storage Access代理: /api/storage/access/{method} -> %s/trpc.storage.access.AccessService/{method}", cfg.AccessURL)
-	log.Printf("Storage View代理: /api/storage/view/{method} -> %s/trpc.storage.view.ViewService/{method}", cfg.ViewURL)
+	log.Printf("Admin API代理: /api/admin/{service}/{method} -> %s/api/admin/{service}/{method}", cfg.AdminURL)
+	log.Printf("Storage Metadata代理: /api/storage/metadata/{method} -> %s/trpc.storage.metadata.Metadata/{method}", cfg.MetadataURL)
+	log.Printf("Storage Access代理: /api/storage/access/{method} -> %s/trpc.storage.access.Access/{method}", cfg.AccessURL)
+	log.Printf("Storage View代理: /api/storage/view/{method} -> %s/trpc.storage.view.DataView/{method}", cfg.ViewURL)
 	log.Fatal(http.ListenAndServe(cfg.ListenAddr, nil))
 }

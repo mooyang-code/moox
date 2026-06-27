@@ -69,7 +69,7 @@ moox/
 
 ```text
 modules/cli/cmd/moox-cli/main.go
-modules/control/cmd/moox-server/main.go
+modules/admin/cmd/moox-server/main.go
 modules/storage/cmd/moox-storage/main.go
 modules/collector/cmd/moox-collector/main.go
 modules/factor/cmd/moox-factor/main.go
@@ -219,7 +219,7 @@ make deploy
 
 | 模块 | 来源 | 职责 |
 | --- | --- | --- |
-| `modules/control` | `moox/server` | 控制面、管理台后端、Workspace、节点、任务和元数据编排 |
+| `modules/admin` | `moox/server` | 控制面、管理台后端、Workspace、节点、任务和元数据编排 |
 | `modules/cli` | `moox/cli` | 统一命令行入口，面向用户、脚本和 Agent |
 | `modules/storage` | `xData-mini/storage` | 数据事实面、在线写入、在线查询、存储引擎适配 |
 | `modules/collector` | `data-collector` + `data-miner` 有价值能力 | 在线数据采集、数据源接入、交易所连接、标的发现、调度限频、采集任务执行 |
@@ -232,7 +232,7 @@ make deploy
 推荐按风险从低到高迁移：
 
 1. 建立根目录骨架：`go.work`、`modules/`、`scripts/`、`skills/`、`configs/`、`deployments/`、`var/`。
-2. 迁移 `moox/server` 到 `modules/control`，入口改为 `cmd/moox-server`。
+2. 迁移 `moox/server` 到 `modules/admin`，入口改为 `cmd/moox-server`。
 3. 迁移 `moox/cli` 到 `modules/cli`，入口改为 `cmd/moox-cli`。
 4. 迁移 `xData-mini/storage` 到 `modules/storage`，入口改为 `cmd/moox-storage`。
 5. 迁移 `xData-mini/cli` 中仍有价值的命令到 `modules/cli`，避免保留两个 CLI。

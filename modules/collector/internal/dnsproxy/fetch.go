@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/avast/retry-go"
-	"github.com/mooyang-code/moox/modules/collector/internal/controlapi"
+	"github.com/mooyang-code/moox/modules/collector/internal/adminapi"
 	"github.com/mooyang-code/moox/modules/collector/pkg/config"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -18,10 +18,14 @@ import (
 
 // ServerResponse 服务端响应结构
 type ServerResponse struct {
-	Code    int               `json:"code"`
-	Message string            `json:"message"`
-	Data    []ServerDNSRecord `json:"data"`
-	Total   int               `json:"total"`
+	RetInfo *ServerRetInfo    `json:"ret_info"`
+	Records []ServerDNSRecord `json:"records"`
+}
+
+// ServerRetInfo 对应 common.RetInfo。
+type ServerRetInfo struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
 }
 
 // ServerDNSRecord 服务端 DNS 记录
@@ -111,7 +115,7 @@ func fetchSingleDomainFromRemote(ctx context.Context, domain string) *DNSRecord 
 	}
 
 	// 构建请求 URL
-	url := controlapi.URL(serverIP, serverPort, "dnsproxy", "GetDNSRecordList")
+	url := adminapi.URL(serverIP, serverPort, "dnsproxy", "ListDNSRecords")
 
 	// 发送 HTTP 请求
 	respData, err := fetchFromServer(ctx, url)
@@ -186,7 +190,7 @@ func fetchFromServer(ctx context.Context, url string) ([]byte, error) {
 func sendSingleRequest(ctx context.Context, url string, httpClient *http.Client, respData *[]byte) error {
 	body := []byte("{}")
 	// 创建 HTTP 请求
-	req, err := controlapi.NewSignedRequestWithContext(ctx, "POST", url, body, controlapi.DefaultAuthConfig())
+	req, err := adminapi.NewSignedRequestWithContext(ctx, "POST", url, body, adminapi.DefaultAuthConfig())
 	if err != nil {
 		return fmt.Errorf("failed to create DNS fetch request: %w", err)
 	}
@@ -220,12 +224,18 @@ func parseServerResponse(respData []byte) ([]ServerDNSRecord, error) {
 		return nil, fmt.Errorf("failed to parse server response: %w", err)
 	}
 
-	// 检查响应状态码
-	if serverResp.Code != 200 {
-		return nil, fmt.Errorf("server returned error code: %d, message: %s", serverResp.Code, serverResp.Message)
+	// 检查 ret_info.code（0=SUCCESS）
+	if serverResp.RetInfo == nil || serverResp.RetInfo.Code != 0 {
+		code := -1
+		msg := ""
+		if serverResp.RetInfo != nil {
+			code = serverResp.RetInfo.Code
+			msg = serverResp.RetInfo.Msg
+		}
+		return nil, fmt.Errorf("server returned error code: %d, message: %s", code, msg)
 	}
 
-	return serverResp.Data, nil
+	return serverResp.Records, nil
 }
 
 // parseBestIPs 解析 best_ips 字符串为 IP 列表

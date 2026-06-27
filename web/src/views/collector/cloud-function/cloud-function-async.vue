@@ -213,6 +213,8 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import { Message, Modal } from '@arco-design/web-vue';
 import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { api } from '@/api/config';
+import { isRetInfoSuccess } from '@/api/ret-info';
+import { getCloudAccountList, type CloudAccount } from '@/api/cloud-account';
 import { AsyncTaskManager, asyncTaskManager } from '@/utils/async-task';
 import type { TaskStatusResponse } from '@/utils/async-task';
 
@@ -232,18 +234,6 @@ interface CloudFunction {
   status: string;
   enabled: number;
   last_heartbeat?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface CloudAccount {
-  account_id: string;
-  account_name: string;
-  provider: string;
-  secret_id: string;
-  secret_key: string;
-  extra_config: string;
-  status: number;
   created_at: string;
   updated_at: string;
 }
@@ -477,39 +467,25 @@ const loadData = async (showEmptyTip = false) => {
   loading.value = true;
   try {
     const response = await api.post('/cloudnode/GetNodeList', {
-      node_id: form.nodeId,
-      cloud_account_id: form.cloudAccountId,
-      region: form.region,
-      node_type: form.nodeType,
-      status: form.status
-    });
-    
-    if (response.data?.code === 200) {
-      // 新格式：处理数组格式的响应
-      let data = response.data.data;
-      if (Array.isArray(data)) {
-        allFunctionList.value = data;
-      } else {
-        allFunctionList.value = [data].filter(Boolean);
+      query: {
+        node_id: form.nodeId,
+        cloud_account_id: form.cloudAccountId,
+        region: form.region,
+        node_type: form.nodeType,
+        status: form.status
       }
+    });
+
+    if (isRetInfoSuccess(response.data?.ret_info?.code)) {
+      let data = response.data.items || [];
+      allFunctionList.value = Array.isArray(data) ? data : [data].filter(Boolean);
       pagination.value.total = response.data.total || allFunctionList.value.length;
       updateCurrentPageData();
       if (showEmptyTip && allFunctionList.value.length === 0) {
         Message.info('查询结果为空');
       }
-    } else if (response.data?.ret_info?.code === 0) {
-      // 处理数组格式的响应：response.data.ret_info.data 可能是数组
-      let data = response.data.ret_info.data;
-      if (Array.isArray(data)) {
-        allFunctionList.value = data;
-      } else {
-        allFunctionList.value = [data].filter(Boolean);
-      }
-      pagination.value.total = allFunctionList.value.length;
-      updateCurrentPageData();
-      if (showEmptyTip && allFunctionList.value.length === 0) {
-        Message.info('查询结果为空');
-      }
+    } else {
+      Message.error(response.data?.ret_info?.msg || '加载数据失败');
     }
   } catch (error) {
     console.error('加载数据失败:', error);
@@ -522,16 +498,8 @@ const loadData = async (showEmptyTip = false) => {
 // 加载云账户列表
 const loadCloudAccounts = async () => {
   try {
-    const response = await api.post('/cloudnode/ListCloudAccounts', {});
-    if (response.data?.ret_info?.code === 0) {
-      // 处理数组格式的响应：response.data.ret_info.data 可能是数组
-      let data = response.data.ret_info.data;
-      if (Array.isArray(data)) {
-        cloudAccountOptions.value = data;
-      } else {
-        cloudAccountOptions.value = [data].filter(Boolean);
-      }
-    }
+    const accounts = await getCloudAccountList();
+    cloudAccountOptions.value = Array.isArray(accounts) ? accounts : [accounts].filter(Boolean);
   } catch (error) {
     console.error('加载云账户失败:', error);
   }
@@ -699,8 +667,8 @@ const onDelete = async (record: CloudFunction) => {
     const response = await api.post('/cloudnode/DeleteNode', {
       node_id: record.node_id
     });
-    
-    if (response.data?.ret_info?.code === 200) {
+
+    if (isRetInfoSuccess(response.data?.ret_info?.code)) {
       Message.success('删除成功');
       loadData();
     } else {

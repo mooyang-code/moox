@@ -111,8 +111,8 @@ const loadSessions = async () => {
   try {
     const response = await getOnlineSessions();
     const res = response.data;
-    if (res.code === 200) {
-      sessions.value = res.data || [];
+    if (res.ret_info?.code === 0) {
+      sessions.value = res.sessions || [];
     }
   } catch (error) {
     console.error('加载会话列表失败:', error);
@@ -127,11 +127,11 @@ const handleForceDisconnect = async (sessionId: string) => {
   try {
     const response = await forceDisconnect(sessionId);
     const res = response.data;
-    if (res.code === 200) {
+    if (res.ret_info?.code === 0) {
       Message.success('会话已断开');
       await loadSessions();
     } else {
-      Message.error(res.message || '断开会话失败');
+      Message.error(res.ret_info?.msg || '断开会话失败');
     }
   } catch (error) {
     console.error('断开会话失败:', error);

@@ -1,5 +1,14 @@
 import { api } from '@/api/config';
+import { isRetInfoSuccess } from '@/api/ret-info';
 export { withOptionalSpace } from '@/api/space-context';
+
+// 统一校验 ret_info 并提取业务数据；失败抛错。
+function unwrap<T = any>(rsp: any): T {
+  if (rsp?.ret_info && !isRetInfoSuccess(rsp.ret_info.code)) {
+    throw new Error(rsp.ret_info.msg || '请求失败');
+  }
+  return rsp as T;
+}
 
 
 // 云函数代码包接口定义
@@ -74,8 +83,7 @@ export interface PackageListResponse {
 
 // 代码包选项
 export interface PackageOption {
-  id: number;
-  package_id: string; 
+  package_id: string;
   label: string;
   package_name: string;
   version: string;
@@ -107,36 +115,50 @@ export const uploadFunctionPackage = async (data: UploadPackageRequest) => {
 };
 
 // 获取云函数代码包列表
-export const getFunctionPackageList = async (params: PackageListRequest = {}): Promise<any> => {
-  const response = await api.post('/cloudnode/GetPackageList', params);
-  return response.data;
+export const getFunctionPackageList = async (params: PackageListRequest = {}): Promise<PackageListResponse> => {
+  const response = await api.post('/cloudnode/GetPackageList', { query: params });
+  const rsp = unwrap<{ items?: FunctionPackage[]; total?: number }>(response.data);
+  return { total: rsp.total ?? 0, items: rsp.items ?? [] };
 };
 
 // 获取云函数代码包详情
-export const getFunctionPackageDetail = async (packageId: string): Promise<any> => {
+export const getFunctionPackageDetail = async (packageId: string): Promise<FunctionPackage | null> => {
   const response = await api.post('/cloudnode/GetPackageDetail', { package_id: packageId });
-  return response.data;
+  const rsp = unwrap<{ detail?: FunctionPackage }>(response.data);
+  return rsp.detail ?? null;
 };
 
 // 删除云函数代码包
-export const deleteFunctionPackage = async (packageId: string) => {
+export const deleteFunctionPackage = async (packageId: string): Promise<void> => {
   const response = await api.post('/cloudnode/DeletePackage', { package_id: packageId });
-  return response;
+  unwrap(response.data);
 };
 
 
 // 获取代码包下载URL（新方法）
-export const getPackageDownloadURL = async (packageId: string): Promise<any> => {
+export const getPackageDownloadURL = async (packageId: string): Promise<PackageDownloadURL | null> => {
   const response = await api.post('/cloudnode/GetPackageDownloadURL', { package_id: packageId });
-  return response.data;
+  const rsp = unwrap<{ url?: PackageDownloadURL }>(response.data);
+  return rsp.url ?? null;
 };
 
+// 代码包下载URL信息（对应 pb.PackageDownloadURL）
+export interface PackageDownloadURL {
+  package_id: string;
+  package_name: string;
+  version: string;
+  filename: string;
+  download_url: string;
+  file_size: number;
+  file_md5: string;
+}
 
 // 获取代码包选项（用于下拉选择）
-export const getFunctionPackageOptions = async (packageType?: string): Promise<any> => {
+export const getFunctionPackageOptions = async (packageType?: string): Promise<PackageOption[]> => {
   const params = packageType ? { package_type: packageType } : {};
   const response = await api.post('/cloudnode/GetPackageOptions', params);
-  return response.data;
+  const rsp = unwrap<{ options?: PackageOption[] }>(response.data);
+  return rsp.options ?? [];
 };
 
 
@@ -145,23 +167,18 @@ export const downloadPackageByURL = async (packageId: string): Promise<void> => 
   try {
     console.log(`开始获取代码包 ${packageId} 的下载URL...`);
 
-    // 1. 获取下载URL
-    const response = await getPackageDownloadURL(packageId);
-
-    if (response?.code !== 200 || !response?.data?.[0]) {
+    // 1. 获取下载URL（PB 响应：{ret_info, url:{download_url, filename, ...}}）
+    const downloadInfo = await getPackageDownloadURL(packageId);
+    if (!downloadInfo || !downloadInfo.download_url) {
       throw new Error('获取下载URL失败');
     }
 
-    const downloadInfo = response.data[0];
     const { download_url, filename } = downloadInfo;
-
     console.log(`获取到下载URL: ${download_url}, 文件名: ${filename}`);
 
-    // 2. 构建完整的下载URL
-    const currentURL = window.location.href;
-    const urlObj = new URL(currentURL);
-    const hostname = urlObj.hostname;
-    const fullDownloadURL = `http://${hostname}:18080${download_url}`;
+    // 2. download_url 已是相对网关路径（/api/admin/fileserver/download?file=...&token=...）
+    // 前端同源访问统一网关，无需拼接独立端口
+    const fullDownloadURL = download_url;
 
     console.log(`构建的完整下载URL: ${fullDownloadURL}`);
 

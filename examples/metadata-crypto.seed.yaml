@@ -1,5 +1,5 @@
 # MooX storage metadata seed sample.
-# This file is domain-oriented and should be imported through MetadataService,
+# This file is domain-oriented and should be imported through Metadata,
 # not by writing metadata tables directly.
 
 spaces:

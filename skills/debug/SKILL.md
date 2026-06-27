@@ -22,7 +22,7 @@ Use this skill for MooX production-like debugging that crosses local code, remot
 - Prefer `moox-cli` commands and bundled MooX scripts over manually repeating fragile Tencent API calls.
 - For destructive operations, confirm the target resource name, region, namespace, account, and package version before acting.
 - Treat `/data-collector` as old reference only; new collector logic lives under `modules/collector`.
-- For frontend requests, management APIs must go through `/api/control`; service-to-service callbacks should use `/api/service` with service auth.
+- For frontend requests, management APIs must go through `/api/admin`; service-to-service callbacks should use `/api/service` with service auth.
 
 ## Boundary Checklist
 
@@ -53,4 +53,4 @@ Use this order unless evidence points elsewhere:
 - Rebuilding collector code from the old `/data-collector` repository instead of `modules/collector`.
 - Looking only at DB task instances while the authoritative dispatch path is the in-memory task store after planner recalculation.
 - Treating an empty task list as initialization forever; after planner has completed, an empty list should clear downstream caches.
-- Debugging frontend 404s against service paths when the frontend must use `/api/control`.
+- Debugging frontend 404s against service paths when the frontend must use `/api/admin`.

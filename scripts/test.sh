@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${1:-all}"
-MODULES=(cli control collector factor order account storage)
+MODULES=(cli admin collector factor order account storage)
 SELECTED_MODULES=""
 
 check_workspace() {
@@ -25,7 +25,7 @@ run_module_tests() {
       echo "==> test modules/storage"
       (cd "${ROOT}/modules/storage" && make test)
       ;;
-    cli|control|collector|factor|order|account)
+    cli|admin|collector|factor|order|account)
       echo "==> test modules/${module}"
       (cd "${ROOT}/modules/${module}" && go test ./...)
       ;;
@@ -88,7 +88,7 @@ run_changed_tests() {
         module="${module%%/*}"
         add_selected_module "${module}"
         case "${file}" in
-          modules/control/proto/*)
+          modules/admin/proto/*)
             add_selected_module "cli"
             ;;
           modules/storage/proto/*)
@@ -130,13 +130,13 @@ case "${TARGET}" in
   boundaries)
     run_boundaries
     ;;
-  cli|control|collector|factor|order|account|storage)
+  cli|admin|collector|factor|order|account|storage)
     run_boundaries
     run_module_tests "${TARGET}"
     ;;
   *)
     echo "unknown test target: ${TARGET}" >&2
-    echo "usage: scripts/test.sh [all|changed|boundaries|cli|control|collector|factor|order|account|storage]" >&2
+    echo "usage: scripts/test.sh [all|changed|boundaries|cli|admin|collector|factor|order|account|storage]" >&2
     exit 1
     ;;
 esac

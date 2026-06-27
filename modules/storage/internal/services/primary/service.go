@@ -21,7 +21,7 @@ type Service struct {
 	client *LocalClient
 }
 
-var _ pb.PrimaryStoreServiceService = (*Service)(nil)
+var _ pb.PrimaryStoreService = (*Service)(nil)
 
 func NewService(opts Options) *Service {
 	return &Service{client: NewLocalClient(LocalClientOptions(opts))}

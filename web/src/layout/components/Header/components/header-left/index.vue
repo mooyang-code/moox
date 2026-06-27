@@ -60,9 +60,9 @@ import { onMounted, computed, reactive, ref } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import ButtonCollapsed from "@/layout/components/Header/components/button-collapsed/index.vue";
 import { useSpaceStore } from '@/store/modules/space';
-import { createSpace } from '@/api/control/spaces';
+import { createSpace } from '@/api/admin/spaces';
 import { storeToRefs } from 'pinia';
-import type { Space } from '@/api/control/types';
+import type { Space } from '@/api/admin/types';
 
 const spaceStore = useSpaceStore();
 const { spaces, selectedSpaceId, loading } = storeToRefs(spaceStore);

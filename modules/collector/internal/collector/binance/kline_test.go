@@ -163,7 +163,7 @@ func TestSendKlineRowsUsesConfiguredStorageAuth(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/trpc.storage.access.AccessService/WriteTimeSeriesRows" {
+		if r.URL.Path != "/trpc.storage.access.Access/WriteTimeSeriesRows" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		var req storage.WriteTimeSeriesRowsRequest

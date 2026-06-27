@@ -12,7 +12,7 @@ TARGET_MODULE="${1:-all}"
 
 if [[ "${TARGET_MODULE}" == "proto" ]]; then
   (cd "${ROOT}/modules/storage" && make proto)
-  (cd "${ROOT}/modules/control/proto" && make all)
+  (cd "${ROOT}/modules/admin/proto" && make all)
   exit 0
 fi
 
@@ -59,7 +59,7 @@ build_storage() {
 case "${TARGET_MODULE}" in
   all)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
-    build_go modules/control ./cmd/moox-server moox-server 0
+    build_go modules/admin ./cmd/moox-server moox-server 0
     build_go modules/collector ./cmd/moox-collector moox-collector 0
     build_go modules/factor ./cmd/moox-factor moox-factor 0
     build_go modules/order ./cmd/moox-order moox-order 0
@@ -69,8 +69,8 @@ case "${TARGET_MODULE}" in
   cli)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
     ;;
-  control)
-    build_go modules/control ./cmd/moox-server moox-server 0
+  admin)
+    build_go modules/admin ./cmd/moox-server moox-server 0
     ;;
   collector)
     build_go modules/collector ./cmd/moox-collector moox-collector 0

@@ -1,6 +1,7 @@
 import axios from "axios";
 import router from "@/router";
 import { Message } from "@arco-design/web-vue";
+import { isRetInfoSuccess, isAuthExpiredCode } from "@/api/ret-info";
 
 // 创建axios实例
 const service = axios.create({
@@ -51,23 +52,21 @@ service.interceptors.response.use(
     
     // 新协议格式：检查ret_info字段
     if (res.ret_info) {
-      // 处理新的ret_info协议格式
-      if (res.ret_info.code == 3) {
+      // 处理新的ret_info协议格式（code 为 0 / '0' / 200 / '200' / 'SUCCESS' 均为成功）
+      const code = res.ret_info.code;
+      if (isAuthExpiredCode(code)) {
         Message.error("登录状态已过期");
         // 清除本地存储，避免死循环
         localStorage.removeItem("user-info");
         // 使用replace避免在浏览器历史中留下记录，防止用户返回到错误页面
         router.replace("/login");
         return Promise.reject(res);
-      } else if (res.ret_info.code == 404) {
-        Message.error("请求连接超时");
-        return Promise.reject(res);
-      } else if (res.ret_info.code !== 0) {
-        // 如果不是成功状态码（0），才当作错误处理
+      } else if (!isRetInfoSuccess(code)) {
+        // 非成功状态码，当作错误处理
         Message.error(res.ret_info.msg || "请求失败");
         return Promise.reject(res);
       } else {
-        // 返回数据 - 成功情况（ret_info.code为0）
+        // 成功：返回完整响应体（业务字段在顶层，如 instances/rules/total 等）
         return Promise.resolve(res);
       }
     }

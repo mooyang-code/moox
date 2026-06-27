@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/controlclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 )
 
 func main() {
@@ -13,8 +13,8 @@ func main() {
 	if base == "" {
 		base = "http://106.53.107.122:18080"
 	}
-	c := controlclient.New(base)
-	c.ServiceAuth = &controlclient.ServiceAuthConfig{
+	c := adminclient.New(base)
+	c.ServiceAuth = &adminclient.ServiceAuthConfig{
 		Version:    "moox-auth-v1",
 		AccessKey:  "moox-service",
 		SecretKey:  "moox-service-secret-change-me",

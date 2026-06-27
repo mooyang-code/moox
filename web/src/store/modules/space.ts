@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
-import { listSpaces } from '@/api/control/spaces';
-import type { Space } from '@/api/control/types';
+import { listSpaces } from '@/api/admin/spaces';
+import type { Space } from '@/api/admin/types';
 
 export const useSpaceStore = defineStore(
   'spaceStore',

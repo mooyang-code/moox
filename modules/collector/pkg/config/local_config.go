@@ -23,7 +23,7 @@ type SystemConfig struct {
 	Environment   string            `json:"environment" yaml:"environment"`
 	Timezone      string            `json:"timezone" yaml:"timezone"`
 	MooxServerURL string            `json:"moox_server_url" yaml:"moox_server_url"` // Moox Server API 地址
-	StorageURL    string            `json:"storage_url" yaml:"storage_url"`         // 存储服务地址 (如 http://127.0.0.1:19104)
+	StorageURL    string            `json:"storage_url" yaml:"storage_url"`         // 存储服务地址 (如 http://127.0.0.1:20201)
 	ServiceAuth   ServiceAuthConfig `json:"service_auth" yaml:"service_auth"`       // 后台服务请求签名鉴权配置
 }
 

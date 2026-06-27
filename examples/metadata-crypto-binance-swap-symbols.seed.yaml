@@ -2,7 +2,7 @@
 # Import after platform-local.seed.yaml and metadata-crypto.seed.yaml:
 #   modules/cli/cmd/moox-cli metadata import \
 #     --file examples/metadata-crypto-binance-swap-symbols.seed.yaml \
-#     --metadata-url http://127.0.0.1:19101 \
+#     --metadata-url http://127.0.0.1:20200 \
 #     --if-not-exists
 
 datasets:

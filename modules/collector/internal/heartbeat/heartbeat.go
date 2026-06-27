@@ -11,7 +11,7 @@ import (
 
 	"github.com/avast/retry-go"
 	"github.com/mooyang-code/moox/modules/collector/internal/collector"
-	"github.com/mooyang-code/moox/modules/collector/internal/controlapi"
+	"github.com/mooyang-code/moox/modules/collector/internal/adminapi"
 	"github.com/mooyang-code/moox/modules/collector/internal/dnsproxy"
 	"github.com/mooyang-code/moox/modules/collector/pkg/config"
 	"github.com/mooyang-code/moox/modules/collector/pkg/model"
@@ -22,10 +22,16 @@ import (
 
 // ServerResponse 服务端响应结构
 type ServerResponse struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Data    []any  `json:"data"` // 统一响应格式中data为数组
-	Total   *int64 `json:"total,omitempty"`
+	RetInfo        *ServerRetInfo           `json:"ret_info"`
+	PackageVersion string                   `json:"package_version"`
+	TaskInstances  []map[string]interface{} `json:"task_instances"`
+	TasksMD5       string                   `json:"tasks_md5"`
+}
+
+// ServerRetInfo 对应 common.RetInfo。
+type ServerRetInfo struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
 }
 
 // HeartbeatResponseData 心跳响应数据结构
@@ -204,7 +210,7 @@ func sendToServer(ctx context.Context, payload *model.HeartbeatPayload, serverIP
 
 // executeReport 准备并发送心跳请求
 func executeReport(ctx context.Context, payload *model.HeartbeatPayload, serverIP string, serverPort int) (string, error) {
-	url := controlapi.URL(serverIP, serverPort, "cloudnode", "ReportHeartbeatInner")
+	url := adminapi.URL(serverIP, serverPort, "cloudnode", "ReportHeartbeat")
 
 	// 构建请求体
 	apiPayload := map[string]interface{}{
@@ -248,7 +254,7 @@ func executeReport(ctx context.Context, payload *model.HeartbeatPayload, serverI
 // sendSingleHeartbeat 发送单次心跳请求
 func sendSingleHeartbeat(ctx context.Context, url string, data []byte, httpClient *http.Client, packageVersion *string) error {
 	// 创建HTTP请求
-	req, err := controlapi.NewSignedRequestWithContext(ctx, "POST", url, data, controlapi.DefaultAuthConfig())
+	req, err := adminapi.NewSignedRequestWithContext(ctx, "POST", url, data, adminapi.DefaultAuthConfig())
 	if err != nil {
 		return fmt.Errorf("failed to create heartbeat request: %w", err)
 	}
@@ -282,7 +288,8 @@ func sendSingleHeartbeat(ctx context.Context, url string, data []byte, httpClien
 	return nil
 }
 
-// parseServerResponse 解析服务端响应，提取包版本信息和任务实例
+// parseServerResponse 解析服务端响应，提取包版本信息和任务实例。
+// 新协议响应为 ReportHeartbeatRsp（protojson）：{ret_info, package_version, task_instances, tasks_md5}。
 func parseServerResponse(ctx context.Context, respData []byte) (string, error) {
 	// 1. 解析响应体
 	var serverResp ServerResponse
@@ -290,84 +297,44 @@ func parseServerResponse(ctx context.Context, respData []byte) (string, error) {
 		return "", fmt.Errorf("failed to parse server response: %w", err)
 	}
 
-	// 2. 检查响应状态码（200表示成功）
-	if serverResp.Code != 200 {
-		return "", fmt.Errorf("server returned error code: %d, message: %s", serverResp.Code, serverResp.Message)
+	// 2. 检查 ret_info.code（0=SUCCESS）
+	if serverResp.RetInfo == nil || serverResp.RetInfo.Code != 0 {
+		code := -1
+		msg := ""
+		if serverResp.RetInfo != nil {
+			code = serverResp.RetInfo.Code
+			msg = serverResp.RetInfo.Msg
+		}
+		return "", fmt.Errorf("server returned error code: %d, message: %s", code, msg)
 	}
 
-	// 3. 检查数据数组
-	if len(serverResp.Data) == 0 {
-		return "", nil // 返回空版本而不是错误
-	}
+	// 3. 提取包版本
+	packageVersion := serverResp.PackageVersion
 
-	// 4. 获取并验证数据元素
-	dataMap, ok := serverResp.Data[0].(map[string]interface{})
-	if !ok {
-		return "", nil
-	}
+	// 4. 提取服务端 tasks_md5（用于区分 initializing / empty / 正常）
+	tasksMD5 := serverResp.TasksMD5
 
-	// 5. 提取包版本
-	packageVersion := extractPackageVersion(dataMap)
-
-	// 6. 提取服务端 tasks_md5（用于区分 initializing / empty / 正常）
-	tasksMD5 := extractTasksMD5(dataMap)
-
-	// 7. 处理任务实例列表
-	processTaskInstances(ctx, dataMap, tasksMD5)
+	// 5. 处理任务实例列表
+	processTaskInstances(ctx, serverResp.TaskInstances, tasksMD5)
 
 	return packageVersion, nil
 }
 
-// extractTasksMD5 提取服务端下发的 tasks_md5 标记
-// 取值含义：
-//
-//	"initializing"：服务端任务仓库尚未完成首次规划，客户端应保持本地任务不变
-//	"empty"       ：服务端已完成首次规划且结果为权威空列表，客户端应清空本地任务缓存
-//	其他          ：正常任务列表的 MD5
-func extractTasksMD5(dataMap map[string]interface{}) string {
-	raw, exists := dataMap["tasks_md5"]
-	if !exists || raw == nil {
-		return ""
-	}
-	str, ok := raw.(string)
-	if !ok {
-		return ""
-	}
-	return str
-}
-
-// extractPackageVersion 提取包版本信息
-func extractPackageVersion(dataMap map[string]interface{}) string {
-	pv, exists := dataMap["package_version"]
-	if !exists {
-		return ""
-	}
-
-	versionStr, ok := pv.(string)
-	if !ok {
-		return ""
-	}
-
-	return versionStr
-}
-
-// processTaskInstances 处理任务实例列表
+// processTaskInstances 处理任务实例列表。
 // tasksMD5 用于区分三种语义：
 //
-//	"initializing"：服务端未完成首次规划，字段缺失或为 nil，保持本地任务不变（不动作）
+//	"initializing"：服务端未完成首次规划，task_instances 缺失，保持本地任务不变（不动作）
 //	"empty"       ：服务端权威空列表，task_instances 为空数组，需清空本地任务缓存
 //	其他          ：正常下发，用 task_instances 覆盖本地缓存
-func processTaskInstances(ctx context.Context, dataMap map[string]interface{}, tasksMD5 string) {
+func processTaskInstances(ctx context.Context, taskInstances []map[string]interface{}, tasksMD5 string) {
 	// 1. 启动期：服务端尚未规划，保持本地任务不变
 	if tasksMD5 == "initializing" {
 		log.DebugContextf(ctx, "[Heartbeat] 服务端任务仓库未完成首次规划(initializing)，保持本地任务不变")
 		return
 	}
 
-	// 2. 检查任务实例字段是否存在
-	taskInstances, exists := dataMap["task_instances"]
-	if !exists || taskInstances == nil {
-		// tasksMD5 非 initializing 但字段缺失：保守起见不动作
+	// 2. 字段缺失（tasksMD5 非 initializing 但 task_instances 为 nil）：保守起见不动作
+	if taskInstances == nil {
 		log.DebugContextf(ctx, "[Heartbeat] 响应中无任务实例数据，tasks_md5=%s", tasksMD5)
 		return
 	}

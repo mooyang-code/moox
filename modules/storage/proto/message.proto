@@ -7,7 +7,7 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;stor
 import "access.proto";
 
 // TimeSeriesRowsChangedEvent 表示时序事实数据行变更事件。
-// 派生消费者应通过 AccessService 回读最新完整行，不应理解 PrimaryStore 分片和路由。
+// 派生消费者应通过 Access 回读最新完整行，不应理解 PrimaryStore 分片和路由。
 message TimeSeriesRowsChangedEvent {
   // event_id 是事件 ID。
   string event_id = 1;
@@ -20,7 +20,7 @@ message TimeSeriesRowsChangedEvent {
 }
 
 // RecordRowsChangedEvent 表示记录事实数据行变更事件。
-// 派生消费者应通过 AccessService 回读最新完整行，不应理解 PrimaryStore 分片和路由。
+// 派生消费者应通过 Access 回读最新完整行，不应理解 PrimaryStore 分片和路由。
 message RecordRowsChangedEvent {
   // event_id 是事件 ID。
   string event_id = 1;

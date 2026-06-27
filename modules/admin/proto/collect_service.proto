@@ -1,0 +1,806 @@
+syntax = "proto3";
+
+package trpc.moox.collect;
+
+import "moox_common.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;mooxpb";
+
+// CollectMgr 域合并采集管理（CollectMgr）与云节点（CloudNodeMgr）。
+// 纯 RPC 服务，由统一 HTTP 转发层调度：
+//   - /api/admin/collectmgr/{method}、/api/admin/cloudnode/{method}（JWT，面向前端）
+//   - /api/service/cloudnode/{method}（HMAC，面向 collector/外部工具）
+//
+// 响应设计参考 storage/access：每个响应首字段 common.RetInfo（code/msg），
+// code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。
+//
+// space_id 通过网关从 X-Space-Id 头注入到 ctx（spacecontext），业务层从 ctx 读取，
+// 请求体不携带 space_id，防止越权。
+
+// ========== 任务规则（CollectMgr）==========
+
+// TaskRule 任务规则。
+message TaskRule {
+  int32 id = 1;
+  string space_id = 2;
+  string rule_id = 3;
+  string biz_type = 4;
+  string data_type = 5;
+  string data_source = 6;
+  string collect_params = 7;   // JSON 字符串
+  string assignment_type = 8;
+  string assigned_nodes = 9;   // JSON 字符串
+  string node_pattern = 10;
+  string node_tags = 11;
+  string enabled = 12;
+  string creator = 13;
+  string create_time = 14;     // RFC3339
+  string modify_time = 15;     // RFC3339
+}
+
+message GetTaskRuleListReq {
+  string biz_type = 1;
+  string data_type = 2;
+  string data_source = 3;
+  string enabled = 4;
+}
+
+message GetTaskRuleListRsp {
+  common.RetInfo ret_info = 1;
+  repeated TaskRule rules = 2;
+  int64 total = 3;
+}
+
+message GetTaskRuleDetailReq {
+  string rule_id = 1;
+}
+
+message GetTaskRuleDetailRsp {
+  common.RetInfo ret_info = 1;
+  TaskRule rule = 2;
+}
+
+message CreateTaskRuleReq {
+  TaskRule rule = 1;
+}
+
+message CreateTaskRuleRsp {
+  common.RetInfo ret_info = 1;
+  string rule_id = 2;
+}
+
+message UpdateTaskRuleReq {
+  string rule_id = 1;
+  TaskRule rule = 2;
+}
+
+message UpdateTaskRuleRsp {
+  common.RetInfo ret_info = 1;
+  TaskRule rule = 2;
+}
+
+message DisableTaskRuleReq {
+  string rule_id = 1;
+}
+
+message DisableTaskRuleRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// ========== 任务实例 ==========
+
+// TaskInstance 任务实例。
+message TaskInstance {
+  int32 id = 1;
+  string space_id = 2;
+  string task_id = 3;
+  string rule_id = 4;
+  string biz_type = 5;
+  string planned_exec_node = 6;
+  string last_exec_node = 7;
+  int32 last_exec_status = 8;
+  string symbol = 9;
+  string collect_data_type = 10;
+  string data_type = 11;
+  string task_params = 12;     // JSON 字符串
+  string last_exec_time = 13;  // RFC3339，可为空
+  string result = 14;
+  int32 invalid = 15;
+  string create_time = 16;     // RFC3339
+  string modify_time = 17;     // RFC3339
+}
+
+// TaskInstanceFilter 任务实例筛选条件。
+// last_exec_status / invalid 使用 proto3 optional 以区分未设置与 0 值。
+message TaskInstanceFilter {
+  string biz_type = 1;
+  string task_id = 2;
+  string rule_id = 3;
+  string planned_exec_node = 4;
+  string last_exec_node = 5;
+  optional int32 last_exec_status = 6;
+  string symbol = 7;
+  optional int32 invalid = 8;
+  int32 page = 9;
+  int32 page_size = 10;
+}
+
+message GetTaskInstanceListReq {
+  TaskInstanceFilter filter = 1;
+}
+
+message GetTaskInstanceListRsp {
+  common.RetInfo ret_info = 1;
+  repeated TaskInstance instances = 2;
+  int64 total = 3;
+}
+
+message GetTaskInstanceListCacheReq {
+  TaskInstanceFilter filter = 1;
+}
+
+message GetTaskInstanceListCacheRsp {
+  common.RetInfo ret_info = 1;
+  repeated TaskInstance instances = 2;
+  int64 total = 3;
+}
+
+message GetTaskInstanceDetailReq {
+  string instance_id = 1;
+}
+
+message GetTaskInstanceDetailRsp {
+  common.RetInfo ret_info = 1;
+  TaskInstance instance = 2;
+}
+
+message CreateTaskInstanceReq {
+  TaskInstance instance = 1;
+}
+
+message CreateTaskInstanceRsp {
+  common.RetInfo ret_info = 1;
+  TaskInstance instance = 2;
+}
+
+message UpdateTaskInstanceReq {
+  string instance_id = 1;
+  TaskInstance instance = 2;
+}
+
+message UpdateTaskInstanceRsp {
+  common.RetInfo ret_info = 1;
+  TaskInstance instance = 2;
+}
+
+message DeleteTaskInstanceReq {
+  string instance_id = 1;
+}
+
+message DeleteTaskInstanceRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message StartTaskInstanceReq {
+  string instance_id = 1;
+}
+
+message StartTaskInstanceRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message StopTaskInstanceReq {
+  string instance_id = 1;
+}
+
+message StopTaskInstanceRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// ReportInstanceStatusReq 上报任务状态请求。
+message ReportInstanceStatusReq {
+  string instance_id = 1;
+  string node_id = 2;
+  int32 status = 3;     // 0=待执行 1=执行中 2=成功 3=部分失败 4=失败
+  string result = 4;
+}
+
+message ReportInstanceStatusRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message InvalidateTaskInstanceReq {
+  string task_id = 1;
+}
+
+message InvalidateTaskInstanceRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// ========== 数据类型配置 ==========
+
+// DataTypeConfig 数据类型配置。
+message DataTypeConfig {
+  int32 id = 1;
+  string data_type = 2;
+  string type_name = 3;
+  string type_desc = 4;
+  string data_source_options = 5;  // JSON 字符串
+  int32 sort_order = 6;
+  int32 version = 7;
+  string create_time = 8;          // RFC3339
+  string modify_time = 9;          // RFC3339
+}
+
+// DataTypeFieldConfig 字段配置。
+message DataTypeFieldConfig {
+  int32 id = 1;
+  string data_type = 2;
+  string field_key = 3;
+  string field_name = 4;
+  string field_type = 5;
+  bool is_required = 6;
+  string default_value = 7;
+  string field_options = 8;        // JSON 字符串
+  string data_source_options = 9;  // JSON 字符串
+  int32 sort_order = 10;
+  string create_time = 11;         // RFC3339
+  string modify_time = 12;         // RFC3339
+}
+
+// DataTypeConfigDetail 数据类型配置详情（含字段）。
+message DataTypeConfigDetail {
+  DataTypeConfig config = 1;
+  repeated DataTypeFieldConfig fields = 2;
+}
+
+message GetDataTypeConfigsReq {}
+
+message GetDataTypeConfigsRsp {
+  common.RetInfo ret_info = 1;
+  repeated DataTypeConfig configs = 2;
+}
+
+message GetDataTypeConfigWithFieldsReq {
+  string data_type = 1;
+}
+
+message GetDataTypeConfigWithFieldsRsp {
+  common.RetInfo ret_info = 1;
+  DataTypeConfigDetail detail = 2;
+}
+
+// ========== 任务规划器 ==========
+
+message RecalculateAllTaskInstancesReq {}
+
+message RecalculateAllTaskInstancesRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// ========== 云节点（CloudNodeMgr）==========
+
+// NodeStatus 节点状态（与 types.NodeStatus 对应）。
+enum NodeStatusCode {
+  NODE_STATUS_OFFLINE = 0;
+  NODE_STATUS_ONLINE = 1;
+  NODE_STATUS_TIMEOUT = 2;
+  NODE_STATUS_ABNORMAL = 3;
+}
+
+// CloudNode 云节点。
+message CloudNode {
+  int32 id = 1;
+  string node_id = 2;
+  string cloud_account_id = 3;
+  string package_id = 4;
+  string package_version = 5;
+  string running_version = 6;
+  string namespace = 7;
+  string node_type = 8;
+  string biz_type = 9;
+  string region = 10;
+  string tag = 11;
+  string ip_address = 12;
+  string supported_collectors = 13;
+  string metadata = 14;
+  int32 timeout_threshold = 15;
+  int32 heartbeat_interval = 16;
+  bool probe_enabled = 17;
+  string probe_url = 18;
+  string status = 19;             // 计算得出的状态文本 online/offline
+  string last_heartbeat = 20;     // RFC3339，可为空
+  int32 invalid = 21;
+  string create_time = 22;        // RFC3339
+  string modify_time = 23;        // RFC3339
+}
+
+// NodeListRequest 节点列表查询请求。
+message NodeListRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  string node_id = 3;
+  string cloud_account_id = 4;
+  string namespace = 5;
+  string region = 6;
+  string node_type = 7;
+  string biz_type = 8;
+  string tag = 9;
+  string status = 10;
+  string keyword = 11;
+}
+
+message GetNodeListReq {
+  NodeListRequest query = 1;
+}
+
+message GetNodeListRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudNode items = 2;
+  int64 total = 3;
+  int32 page = 4;
+  int32 size = 5;
+}
+
+message GetNodeDetailReq {
+  string node_id = 1;
+}
+
+message GetNodeDetailRsp {
+  common.RetInfo ret_info = 1;
+  CloudNode node = 2;
+}
+
+// SCFDeployInfo SCF 部署所需信息（供 scf-publish 等发布工具消费）。
+message SCFDeployInfo {
+  string node_id = 1;
+  string function_name = 2;
+  string namespace = 3;
+  string region = 4;
+  string node_type = 5;
+  string cloud_account_id = 6;
+}
+
+message GetSCFDeployInfoReq {
+  string node_id = 1;
+}
+
+message GetSCFDeployInfoRsp {
+  common.RetInfo ret_info = 1;
+  SCFDeployInfo info = 2;
+}
+
+message UpdateNodeReq {
+  CloudNode node = 1;
+}
+
+message UpdateNodeRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message DeleteNodeReq {
+  string node_id = 1;
+}
+
+message DeleteNodeRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// InvokeFunctionReq 调用云函数请求。
+message InvokeFunctionReq {
+  string node_id = 1;
+  string function_name = 2;
+  string namespace = 3;
+  string region = 4;
+  google.protobuf.Struct event_data = 5;  // 事件数据（任意 JSON）
+  string invoke_type = 6;                  // sync/async，默认 sync
+  string qualifier = 7;
+}
+
+// InvokeFunctionRsp 调用云函数响应。
+message InvokeFunctionRsp {
+  common.RetInfo ret_info = 1;
+  int32 code = 2;
+  string message = 3;
+  string request_id = 4;
+  google.protobuf.Struct result = 5;  // 函数返回结果（任意 JSON）
+  int64 duration = 6;
+  int64 bill_duration = 7;
+  int64 memory_usage = 8;
+}
+
+// UpdateNodeFunctionReq 更新节点代码包。
+message UpdateNodeFunctionReq {
+  string node_id = 1;
+  string package_id = 2;
+}
+
+message UpdateNodeFunctionRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// ========== 批量操作（提交异步任务） ==========
+
+// NodeCreateItem 批量创建节点项。
+message NodeCreateItem {
+  string cloud_account_id = 1;
+  string node_type = 2;
+  string runtime = 3;
+  string handler = 4;
+  map<string, string> config = 5;
+  map<string, string> environment = 6;
+  string region = 7;
+  string namespace = 8;
+  string package_id = 9;
+  google.protobuf.Struct metadata = 10;
+}
+
+message BatchCreateNodesReq {
+  repeated NodeCreateItem nodes = 1;
+}
+
+message BatchOperationRsp {
+  common.RetInfo ret_info = 1;
+  string job_id = 2;
+  int32 total_task_cnt = 3;
+  string message = 4;
+}
+
+message BatchDeleteNodesReq {
+  repeated string node_ids = 1;
+}
+
+// NodeDeployItem 批量部署节点项。
+message NodeDeployItem {
+  string node_id = 1;
+  string package_id = 2;
+}
+
+message BatchDeployNodesReq {
+  repeated NodeDeployItem deployments = 1;
+}
+
+// ========== 云账户 ==========
+
+// CloudAccount 云账户（SecretID/SecretKey 已脱敏）。
+message CloudAccount {
+  int32 id = 1;
+  string account_id = 2;
+  string account_name = 3;
+  string provider = 4;
+  string secret_id = 5;
+  string secret_key = 6;
+  string app_id = 7;
+  string cos_region = 8;
+  string cos_bucket = 9;
+  string extra_config = 10;
+  int32 invalid = 11;
+  string create_time = 12;   // RFC3339
+  string modify_time = 13;   // RFC3339
+}
+
+message ListCloudAccountsReq {
+  string provider = 1;  // 可选，按云厂商筛选
+}
+
+message ListCloudAccountsRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudAccount accounts = 2;
+  int64 total = 3;
+}
+
+message GetCloudAccountReq {
+  string account_id = 1;
+}
+
+message GetCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+  CloudAccount account = 2;
+}
+
+message CreateCloudAccountReq {
+  CloudAccount account = 1;
+}
+
+message CreateCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+  CloudAccount account = 2;
+}
+
+message UpdateCloudAccountReq {
+  CloudAccount account = 1;
+}
+
+message UpdateCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message DeleteCloudAccountReq {
+  string account_id = 1;
+}
+
+message DeleteCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// COSAccountInfo COS 账户信息（供外部工具消费，reveal=true 时含明文凭证）。
+message COSAccountInfo {
+  string account_id = 1;
+  string provider = 2;
+  string app_id = 3;
+  string cos_region = 4;
+  string cos_bucket = 5;
+  string secret_id = 6;
+  string secret_key = 7;
+}
+
+message GetCOSAccountInfoReq {
+  string account_id = 1;
+  bool reveal = 2;  // true 返回明文凭证（仅 /api/service/ HMAC 鉴权路径可用）
+}
+
+message GetCOSAccountInfoRsp {
+  common.RetInfo ret_info = 1;
+  COSAccountInfo info = 2;
+}
+
+// ========== 云地区 ==========
+
+// CloudRegion 云地区。
+message CloudRegion {
+  string code = 1;
+  string name = 2;
+  string tag = 3;
+  int32 max_nodes = 4;
+  int32 max_namespaces_per_region = 5;
+  int32 max_functions_per_namespace = 6;
+}
+
+message ListCloudRegionsReq {
+  string provider = 1;
+}
+
+message ListCloudRegionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudRegion regions = 2;
+  int64 total = 3;
+}
+
+// ========== 代码包 ==========
+
+// PackageListItem 代码包列表项。
+message PackageListItem {
+  string package_id = 1;
+  string package_name = 2;
+  string version = 3;
+  string description = 4;
+  string runtime = 5;
+  string package_type = 6;
+  string package_type_label = 7;
+  string biz_type = 8;
+  int64 file_size = 9;
+  string file_md5 = 10;
+  string cloud_account_id = 11;
+  string cos_region = 12;
+  int32 status = 13;
+  string status_label = 14;
+  string last_deploy_time = 15;  // RFC3339，可为空
+  string created_time = 16;      // RFC3339
+}
+
+// PackageListRequest 代码包列表请求。
+message PackageListRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  string package_name = 3;
+  string runtime = 4;
+  string package_type = 5;
+  string biz_type = 6;
+  optional int32 status = 7;
+}
+
+message GetPackageListReq {
+  PackageListRequest query = 1;
+}
+
+message GetPackageListRsp {
+  common.RetInfo ret_info = 1;
+  repeated PackageListItem items = 2;
+  int64 total = 3;
+}
+
+// PackageDetail 代码包详情。
+message PackageDetail {
+  int64 id = 1;
+  string package_id = 2;
+  string package_name = 3;
+  string version = 4;
+  string description = 5;
+  string runtime = 6;
+  string package_type = 7;
+  string package_type_label = 8;
+  string original_filename = 9;
+  int64 file_size = 10;
+  string file_md5 = 11;
+  string cloud_account_id = 12;
+  string cos_region = 13;
+  string cos_bucket = 14;
+  string cos_path = 15;
+  string cos_url = 16;
+  int32 status = 17;
+  string status_label = 18;
+  int32 upload_progress = 19;
+  string error_message = 20;
+  string last_deploy_time = 21;  // RFC3339，可为空
+  int32 invalid = 22;
+  string created_time = 23;      // RFC3339
+  string updated_time = 24;      // RFC3339
+}
+
+message GetPackageDetailReq {
+  string package_id = 1;
+}
+
+message GetPackageDetailRsp {
+  common.RetInfo ret_info = 1;
+  PackageDetail detail = 2;
+}
+
+message DeletePackageReq {
+  string package_id = 1;
+}
+
+message DeletePackageRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// PackageDownloadURL 代码包下载 URL。
+message PackageDownloadURL {
+  string package_id = 1;
+  string package_name = 2;
+  string version = 3;
+  string filename = 4;
+  string download_url = 5;
+  int64 file_size = 6;
+  string file_md5 = 7;
+}
+
+message GetPackageDownloadURLReq {
+  string package_id = 1;
+}
+
+message GetPackageDownloadURLRsp {
+  common.RetInfo ret_info = 1;
+  PackageDownloadURL url = 2;
+}
+
+// PackageOption 代码包选项（用于下拉选择）。
+message PackageOption {
+  string package_id = 1;
+  string label = 2;
+  string package_name = 3;
+  string version = 4;
+  string runtime = 5;
+  string package_type = 6;
+}
+
+message GetPackageOptionsReq {
+  string package_type = 1;
+}
+
+message GetPackageOptionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated PackageOption options = 2;
+}
+
+// ========== 心跳 ==========
+
+// LocalDNSReportItem 终端上报的 DNS 记录。
+message LocalDNSReportItem {
+  string domain = 1;
+  repeated string ip_list = 2;
+  string resolve_at = 3;  // RFC3339
+}
+
+// ReportHeartbeatReq 心跳上报请求。
+message ReportHeartbeatReq {
+  string node_id = 1;
+  string node_type = 2;
+  string running_version = 3;
+  string source_service = 4;
+  string timestamp = 5;  // RFC3339，可为空
+  google.protobuf.Struct metrics = 6;
+  google.protobuf.Struct metadata = 7;
+  repeated string supported_collectors = 8;
+  string tasks_md5 = 9;
+  repeated LocalDNSReportItem local_dns_records = 10;
+}
+
+// HeartbeatTaskInstance 心跳下发的任务实例轻量信息。
+message HeartbeatTaskInstance {
+  int32 id = 1;
+  string task_id = 2;
+  string rule_id = 3;
+  string planned_exec_node = 4;
+  string data_type = 5;
+  string symbol = 6;
+  string interval = 7;
+  string task_params = 8;
+  int32 invalid = 9;
+}
+
+// ReportHeartbeatRsp 心跳上报响应。
+message ReportHeartbeatRsp {
+  common.RetInfo ret_info = 1;
+  string package_version = 2;
+  repeated HeartbeatTaskInstance task_instances = 3;
+  string tasks_md5 = 4;
+}
+
+// ========== Services ==========
+
+service CollectMgr {
+  // ----- 任务规则 -----
+  rpc GetTaskRuleList(GetTaskRuleListReq) returns (GetTaskRuleListRsp);
+  rpc GetTaskRuleDetail(GetTaskRuleDetailReq) returns (GetTaskRuleDetailRsp);
+  rpc CreateTaskRule(CreateTaskRuleReq) returns (CreateTaskRuleRsp);
+  rpc UpdateTaskRule(UpdateTaskRuleReq) returns (UpdateTaskRuleRsp);
+  rpc DisableTaskRule(DisableTaskRuleReq) returns (DisableTaskRuleRsp);
+
+  // ----- 任务实例 -----
+  rpc GetTaskInstanceList(GetTaskInstanceListReq) returns (GetTaskInstanceListRsp);
+  rpc GetTaskInstanceListCache(GetTaskInstanceListCacheReq) returns (GetTaskInstanceListCacheRsp);
+  rpc GetTaskInstanceDetail(GetTaskInstanceDetailReq) returns (GetTaskInstanceDetailRsp);
+  rpc CreateTaskInstance(CreateTaskInstanceReq) returns (CreateTaskInstanceRsp);
+  rpc UpdateTaskInstance(UpdateTaskInstanceReq) returns (UpdateTaskInstanceRsp);
+  rpc DeleteTaskInstance(DeleteTaskInstanceReq) returns (DeleteTaskInstanceRsp);
+  rpc StartTaskInstance(StartTaskInstanceReq) returns (StartTaskInstanceRsp);
+  rpc StopTaskInstance(StopTaskInstanceReq) returns (StopTaskInstanceRsp);
+  rpc ReportTaskStatus(ReportInstanceStatusReq) returns (ReportInstanceStatusRsp);
+  rpc InvalidateTaskInstance(InvalidateTaskInstanceReq) returns (InvalidateTaskInstanceRsp);
+
+  // ----- 数据类型配置 -----
+  rpc GetDataTypeConfigs(GetDataTypeConfigsReq) returns (GetDataTypeConfigsRsp);
+  rpc GetDataTypeConfigWithFields(GetDataTypeConfigWithFieldsReq) returns (GetDataTypeConfigWithFieldsRsp);
+
+  // ----- 任务规划器 -----
+  rpc RecalculateAllTaskInstances(RecalculateAllTaskInstancesReq) returns (RecalculateAllTaskInstancesRsp);
+}
+
+service CloudNodeMgr {
+  // ----- 节点 -----
+  rpc GetNodeList(GetNodeListReq) returns (GetNodeListRsp);
+  rpc GetNodeDetail(GetNodeDetailReq) returns (GetNodeDetailRsp);
+  rpc GetSCFDeployInfo(GetSCFDeployInfoReq) returns (GetSCFDeployInfoRsp);
+  rpc UpdateNode(UpdateNodeReq) returns (UpdateNodeRsp);
+  rpc DeleteNode(DeleteNodeReq) returns (DeleteNodeRsp);
+  rpc InvokeFunction(InvokeFunctionReq) returns (InvokeFunctionRsp);
+  rpc UpdateNodeFunction(UpdateNodeFunctionReq) returns (UpdateNodeFunctionRsp);
+
+  // ----- 批量操作 -----
+  rpc BatchCreateNodes(BatchCreateNodesReq) returns (BatchOperationRsp);
+  rpc BatchDeleteNodes(BatchDeleteNodesReq) returns (BatchOperationRsp);
+  rpc BatchDeployNodes(BatchDeployNodesReq) returns (BatchOperationRsp);
+
+  // ----- 云账户 -----
+  rpc ListCloudAccounts(ListCloudAccountsReq) returns (ListCloudAccountsRsp);
+  rpc GetCloudAccount(GetCloudAccountReq) returns (GetCloudAccountRsp);
+  rpc CreateCloudAccount(CreateCloudAccountReq) returns (CreateCloudAccountRsp);
+  rpc UpdateCloudAccount(UpdateCloudAccountReq) returns (UpdateCloudAccountRsp);
+  rpc DeleteCloudAccount(DeleteCloudAccountReq) returns (DeleteCloudAccountRsp);
+  rpc GetCOSAccountInfo(GetCOSAccountInfoReq) returns (GetCOSAccountInfoRsp);
+
+  // ----- 云地区 -----
+  rpc ListCloudRegions(ListCloudRegionsReq) returns (ListCloudRegionsRsp);
+
+  // ----- 代码包 -----
+  rpc GetPackageList(GetPackageListReq) returns (GetPackageListRsp);
+  rpc GetPackageDetail(GetPackageDetailReq) returns (GetPackageDetailRsp);
+  rpc DeletePackage(DeletePackageReq) returns (DeletePackageRsp);
+  rpc GetPackageDownloadURL(GetPackageDownloadURLReq) returns (GetPackageDownloadURLRsp);
+  rpc GetPackageOptions(GetPackageOptionsReq) returns (GetPackageOptionsRsp);
+
+  // ----- 心跳 -----
+  rpc ReportHeartbeat(ReportHeartbeatReq) returns (ReportHeartbeatRsp);
+}

@@ -27,22 +27,22 @@ cd modules/cli
 
 GOWORK=off go run ./cmd/moox-cli metadata import \
   --file ../../examples/platform-local.seed.yaml \
-  --metadata-url http://127.0.0.1:19101 \
+  --metadata-url http://127.0.0.1:20200 \
   --if-not-exists
 
 GOWORK=off go run ./cmd/moox-cli metadata import \
   --file ../../examples/metadata-cn-stock.seed.yaml \
-  --metadata-url http://127.0.0.1:19101 \
+  --metadata-url http://127.0.0.1:20200 \
   --if-not-exists
 
 GOWORK=off go run ./cmd/moox-cli metadata import \
   --file ../../examples/metadata-crypto.seed.yaml \
-  --metadata-url http://127.0.0.1:19101 \
+  --metadata-url http://127.0.0.1:20200 \
   --if-not-exists
 
 GOWORK=off go run ./cmd/moox-cli metadata import \
   --file ../../examples/metadata-crypto-binance-swap-kline.seed.yaml \
-  --metadata-url http://127.0.0.1:19101 \
+  --metadata-url http://127.0.0.1:20200 \
   --if-not-exists
 ```
 
@@ -55,6 +55,6 @@ cd modules/cli
 
 GOWORK=off go run ./cmd/moox-cli metadata import \
   --file ../../examples/metadata-cn-stock.seed.yaml \
-  --metadata-url http://127.0.0.1:19101 \
+  --metadata-url http://127.0.0.1:20200 \
   --dry-run
 ```

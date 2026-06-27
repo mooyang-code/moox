@@ -352,7 +352,7 @@
         <!-- 时间信息 -->
         <a-descriptions title="时间信息" :column="2" bordered size="medium">
           <a-descriptions-item label="创建者">{{ packageDetail.created_by }}</a-descriptions-item>
-          <a-descriptions-item label="创建时间">{{ formatTime(packageDetail.created_at) }}</a-descriptions-item>
+          <a-descriptions-item label="创建时间">{{ formatTime(packageDetail.created_time) }}</a-descriptions-item>
           <a-descriptions-item label="最后部署时间" :span="2">
             {{ packageDetail.last_deploy_time ? formatTime(packageDetail.last_deploy_time) : '-' }}
           </a-descriptions-item>
@@ -404,6 +404,7 @@ import {
   type PackageListRequest
 } from '@/api/function-package';
 import { getCloudAccountList, type CloudAccount } from '@/api/cloud-account';
+import { isRetInfoSuccess } from '@/api/ret-info';
 import { asyncTaskManager } from '@/utils/async-task';
 
 // Props
@@ -520,11 +521,9 @@ const loadPackageList = async () => {
     // 构建查询参数，排除 package_type
     const { package_type, ...queryParams } = searchForm;
     const response = await getFunctionPackageList(queryParams);
-    console.log('代码包列表API响应:', response);
 
-    if (response?.code === 200 && response?.data) {
-      console.log('解析后的列表数据:', response);
-      packageList.value = response.data || [];
+    if (response?.items) {
+      packageList.value = response.items || [];
       total.value = response.total || 0;
     } else {
       packageList.value = [];
@@ -544,14 +543,8 @@ const loadPackageList = async () => {
 // 加载云账户列表
 const loadCloudAccounts = async () => {
   try {
-    const response = await getCloudAccountList();
-    console.log('云账户选项API响应:', response);
-    
-    if (response?.code === 200 && response?.data) {
-      cloudAccountOptions.value = response.data || [];
-    } else {
-      cloudAccountOptions.value = [];
-    }
+    const accounts = await getCloudAccountList();
+    cloudAccountOptions.value = accounts || [];
   } catch (error) {
     console.error('加载云账户列表失败:', error);
     cloudAccountOptions.value = [];
@@ -643,8 +636,8 @@ const checkVersionExists = async () => {
       page_size: 1000 // 获取所有匹配的包
     });
 
-    if (response?.code === 200 && response?.data) {
-      const existingPackages = response.data || [];
+    if (response?.items) {
+      const existingPackages = response.items || [];
       
       // 检查是否有相同版本的包（排除已删除的）
       const duplicatePackage = existingPackages.find((pkg: FunctionPackage) => 
@@ -915,23 +908,19 @@ const handleUpload = async () => {
   try {
     const response = await uploadFunctionPackage(uploadForm);
     console.log('异步任务创建响应:', response);
-    
-    if (response?.data?.code === 200) {
-      // 后端返回的data是数组格式，取第一个元素
-      const responseData = response.data.data;
-      const uploadResult = Array.isArray(responseData) ? responseData[0] : responseData;
-      console.log('解析后的任务创建结果:', uploadResult);
-      
-      // 新的异步任务模式：直接获取job_id
-      const jobId = uploadResult.job_id;
+
+    // 统一响应：ret_info.code === 'SUCCESS' 表示成功，业务字段在响应顶层
+    const rsp = response?.data;
+    if (isRetInfoSuccess(rsp?.ret_info?.code)) {
+      const jobId = rsp.job_id;
       if (jobId) {
         console.log('收到异步任务创建响应，JobID:', jobId);
         currentTaskId.value = jobId;
         uploadMessage.value = '文件上传任务已创建，正在后台处理...';
-        
+
         // 关闭上传弹窗
         uploadVisible.value = false;
-        
+
         // 使用统一的异步任务管理器开始轮询
         startTaskPolling(jobId);
       } else {
@@ -939,7 +928,7 @@ const handleUpload = async () => {
       }
     } else {
       // 处理业务错误
-      const errorMessage = response?.data?.message || '创建上传任务失败';
+      const errorMessage = rsp?.ret_info?.msg || '创建上传任务失败';
       throw new Error(errorMessage);
     }
   } catch (error: any) {
@@ -1087,15 +1076,11 @@ const onDownload = async (record: FunctionPackage) => {
 // 删除
 const onDelete = async (record: FunctionPackage) => {
   try {
-    const response = await deleteFunctionPackage(record.package_id);
-    if (response?.data?.code === 200) {
-      Message.success('删除成功');
-      // 刷新代码包列表
-      await loadPackageList();
-      emit('refresh');
-    } else {
-      throw new Error('删除失败');
-    }
+    await deleteFunctionPackage(record.package_id);
+    Message.success('删除成功');
+    // 刷新代码包列表
+    await loadPackageList();
+    emit('refresh');
   } catch (error) {
     console.error('删除代码包失败:', error);
     Message.error({
@@ -1116,11 +1101,9 @@ const onShowDetail = async (record: FunctionPackage) => {
   detailVisible.value = true;
 
   try {
-    const response = await getFunctionPackageDetail(record.package_id);
-    console.log('代码包详情API响应:', response);
-    
-    if (response?.code === 200 && response?.data && response.data.length > 0) {
-      packageDetail.value = response.data[0]; // 取数组第一个元素
+    const detail = await getFunctionPackageDetail(record.package_id);
+    if (detail) {
+      packageDetail.value = detail;
     } else {
       throw new Error('获取详情失败');
     }

@@ -1,0 +1,394 @@
+syntax = "proto3";
+
+package trpc.moox.ops;
+
+import "moox_common.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;mooxpb";
+
+// Ops 域合并 SSH 管理（Ssh）与监控（Monitor）。
+// 纯 RPC 服务，由统一 HTTP 转发层（/api/admin/ssh/{method}、/api/admin/monitor/{method}）调度。
+//
+// 响应设计参考 storage/access：每个响应首字段 common.RetInfo（code/msg），
+// code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。
+// 鉴权由网关 authorize filter 校验控制台 access_token 完成。
+//
+// 注意：WebSocket 终端、SFTP 流式上传/下载（multipart）不经本 RPC 服务，
+// 由统一网关 rawhandler 分派（session_id 鉴权），见 ssh/rpc/rawhandler。
+
+// ========== SSH 主机配置（Ssh）==========
+
+// SSHHost 主机配置（对应 t_ssh_host 表，敏感字段由 DAO 加解密）。
+message SSHHost {
+  int32 id = 1;
+  string name = 2;
+  string address = 3;
+  int32 port = 4;
+  string user = 5;
+  string password = 6;       // 敏感，DAO 层加解密
+  string auth_type = 7;      // pwd | cert
+  string net_type = 8;       // tcp4 | tcp6
+  string cert_data = 9;
+  string cert_pwd = 10;
+  int32 font_size = 11;
+  string background = 12;
+  string foreground = 13;
+  string cursor_color = 14;
+  string font_family = 15;
+  string cursor_style = 16;  // block | underline | bar
+  string shell = 17;
+  string pty_type = 18;
+  string init_cmd = 19;
+  string creator = 20;
+  string create_time = 21;   // 格式化时间字符串
+  string modify_time = 22;
+}
+
+message ListHostsReq {
+  string keyword = 1;
+  int32 offset = 2;
+  int32 limit = 3;
+}
+
+message ListHostsRsp {
+  common.RetInfo ret_info = 1;
+  repeated SSHHost hosts = 2;
+  int64 total = 3;
+}
+
+message CreateHostReq {
+  SSHHost host = 1;
+}
+
+message CreateHostRsp {
+  common.RetInfo ret_info = 1;
+  int32 id = 2;
+}
+
+message UpdateHostReq {
+  SSHHost host = 1;
+}
+
+message UpdateHostRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message DeleteHostReq {
+  int32 id = 1;
+}
+
+message DeleteHostRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message GetHostReq {
+  int32 id = 1;
+}
+
+message GetHostRsp {
+  common.RetInfo ret_info = 1;
+  SSHHost host = 2;
+}
+
+// ========== SSH 会话 ==========
+
+message CreateSessionReq {
+  int32 host_id = 1;
+}
+
+message CreateSessionRsp {
+  common.RetInfo ret_info = 1;
+  string session_id = 2;
+}
+
+message DisconnectSessionReq {
+  string session_id = 1;
+}
+
+message DisconnectSessionRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message ResizeWindowReq {
+  string session_id = 1;
+  int32 w = 2;
+  int32 h = 3;
+}
+
+message ResizeWindowRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message ExecCommandReq {
+  string session_id = 1;
+  string cmd = 2;
+}
+
+message ExecCommandRsp {
+  common.RetInfo ret_info = 1;
+  string output = 2;
+}
+
+// ========== SFTP 操作 ==========
+
+// SftpFileItem SFTP 目录条目。
+message SftpFileItem {
+  string path = 1;
+  string name = 2;
+  string mode = 3;
+  int64 size = 4;
+  string mod_time = 5;
+  string type = 6;  // d | f
+}
+
+// PathBreadcrumb 路径面包屑。
+message PathBreadcrumb {
+  string name = 1;
+  string dir = 2;
+}
+
+message SftpListReq {
+  string session_id = 1;
+  string path = 2;
+}
+
+message SftpListRsp {
+  common.RetInfo ret_info = 1;
+  repeated SftpFileItem files = 2;
+  int32 file_count = 3;
+  int32 dir_count = 4;
+  repeated PathBreadcrumb paths = 5;
+  string current_dir = 6;
+}
+
+message SftpMkdirReq {
+  string session_id = 1;
+  string path = 2;
+}
+
+message SftpMkdirRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message SftpDeleteReq {
+  string session_id = 1;
+  string path = 2;
+}
+
+message SftpDeleteRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// ========== SSH 会话管理 ==========
+
+// SessionInfo 在线会话信息。
+message SessionInfo {
+  string session_id = 1;
+  int32 host_id = 2;
+  string host_name = 3;
+  string address = 4;
+  int32 port = 5;
+  string user = 6;
+  string client_ip = 7;
+  string start_time = 8;
+  string last_active_time = 9;
+}
+
+message GetOnlineSessionsReq {}
+
+message GetOnlineSessionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated SessionInfo sessions = 2;
+}
+
+message ForceDisconnectReq {
+  string session_id = 1;
+}
+
+message ForceDisconnectRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// ========== 监控指标（Monitor）==========
+
+// CPUMetrics CPU 指标。
+message CPUMetrics {
+  double usage = 1;  // 使用率 0-100
+  int32 cores = 2;   // CPU 核心数
+}
+
+// MemoryMetrics 内存指标。
+message MemoryMetrics {
+  int64 total = 1;     // 总内存 bytes
+  int64 available = 2; // 可用内存
+  int64 used = 3;      // 已用内存
+  int64 free = 4;      // 空闲内存
+  int64 buffers = 5;   // 缓冲区
+  int64 cached = 6;    // 缓存
+  double percent = 7;  // 使用率
+}
+
+// DiskMetrics 磁盘指标。
+message DiskMetrics {
+  string device = 1;     // /dev/sda1
+  string mountpoint = 2; // /
+  string fstype = 3;     // ext4
+  int64 total = 4;       // 总容量 bytes
+  int64 used = 5;        // 已用空间
+  int64 available = 6;   // 可用空间
+  double percent = 7;    // 使用率
+}
+
+// NetworkSpeed 网络速率。
+message NetworkSpeed {
+  string device = 1;   // eth0
+  int64 rx_speed = 2;  // 接收速率 bytes/s
+  int64 tx_speed = 3;  // 发送速率 bytes/s
+}
+
+// LoadMetrics 系统负载。
+message LoadMetrics {
+  double load1 = 1;   // 1分钟负载
+  double load5 = 2;   // 5分钟负载
+  double load15 = 3;  // 15分钟负载
+}
+
+// HostMetrics 主机完整监控指标。
+message HostMetrics {
+  int32 host_id = 1;
+  string host_name = 2;
+  string address = 3;
+  string status = 4;     // online/offline/error
+  string timestamp = 5;  // RFC3339
+  string error_msg = 6;
+  CPUMetrics cpu = 7;
+  MemoryMetrics memory = 8;
+  repeated DiskMetrics disks = 9;
+  repeated NetworkSpeed networks = 10;
+  LoadMetrics load = 11;
+}
+
+// HistoryPoint 历史数据点（用于前端图表）。
+message HistoryPoint {
+  string timestamp = 1;       // RFC3339
+  double cpu_usage = 2;
+  double memory_percent = 3;
+  double disk_percent = 4;
+  int64 network_rx_speed = 5;
+  int64 network_tx_speed = 6;
+}
+
+// TestResult 连通性测试结果。
+message TestResult {
+  bool reachable = 1;
+  string message = 2;
+  int64 duration_ms = 3;
+  int32 metrics_count = 4;
+}
+
+// EnableMonitorReq 启用主机监控请求。
+message EnableMonitorReq {
+  int32 host_id = 1;
+}
+
+// EnableMonitorRsp 启用主机监控响应。
+message EnableMonitorRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// DisableMonitorReq 禁用主机监控请求。
+message DisableMonitorReq {
+  int32 host_id = 1;
+}
+
+// DisableMonitorRsp 禁用主机监控响应。
+message DisableMonitorRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// GetMonitorStatusReq 获取主机监控状态请求。
+message GetMonitorStatusReq {
+  int32 host_id = 1;
+}
+
+// GetMonitorStatusRsp 获取主机监控状态响应。
+message GetMonitorStatusRsp {
+  common.RetInfo ret_info = 1;
+  bool enabled = 2;
+}
+
+// GetCurrentMetricsReq 获取当前监控指标请求。
+// host_ids 为空时返回所有启用监控的主机；非空时为逗号分隔的 ID 字符串。
+message GetCurrentMetricsReq {
+  string host_ids = 1;
+}
+
+// GetCurrentMetricsRsp 获取当前监控指标响应。
+message GetCurrentMetricsRsp {
+  common.RetInfo ret_info = 1;
+  repeated HostMetrics metrics = 2;
+}
+
+// GetHistoryMetricsReq 获取历史监控数据请求。
+message GetHistoryMetricsReq {
+  string host_address = 1;
+  string duration = 2;  // 时间范围（如 "1h", "24h", "7d"）
+}
+
+// GetHistoryMetricsRsp 获取历史监控数据响应。
+message GetHistoryMetricsRsp {
+  common.RetInfo ret_info = 1;
+  repeated HistoryPoint history = 2;
+}
+
+// TestNodeExporterReq 测试 Node Exporter 连通性请求。
+message TestNodeExporterReq {
+  int32 host_id = 1;
+}
+
+// TestNodeExporterRsp 测试 Node Exporter 连通性响应。
+message TestNodeExporterRsp {
+  common.RetInfo ret_info = 1;
+  TestResult result = 2;
+}
+
+// ========== Services ==========
+
+service Ssh {
+  // 主机配置
+  rpc ListHosts(ListHostsReq) returns (ListHostsRsp);
+  rpc CreateHost(CreateHostReq) returns (CreateHostRsp);
+  rpc UpdateHost(UpdateHostReq) returns (UpdateHostRsp);
+  rpc DeleteHost(DeleteHostReq) returns (DeleteHostRsp);
+  rpc GetHost(GetHostReq) returns (GetHostRsp);
+
+  // SSH 会话
+  rpc CreateSession(CreateSessionReq) returns (CreateSessionRsp);
+  rpc DisconnectSession(DisconnectSessionReq) returns (DisconnectSessionRsp);
+  rpc ResizeWindow(ResizeWindowReq) returns (ResizeWindowRsp);
+  rpc ExecCommand(ExecCommandReq) returns (ExecCommandRsp);
+
+  // SFTP 操作
+  rpc SftpList(SftpListReq) returns (SftpListRsp);
+  rpc SftpMkdir(SftpMkdirReq) returns (SftpMkdirRsp);
+  rpc SftpDelete(SftpDeleteReq) returns (SftpDeleteRsp);
+
+  // 会话管理
+  rpc GetOnlineSessions(GetOnlineSessionsReq) returns (GetOnlineSessionsRsp);
+  rpc ForceDisconnect(ForceDisconnectReq) returns (ForceDisconnectRsp);
+}
+
+service Monitor {
+  // 启用主机监控
+  rpc EnableMonitor(EnableMonitorReq) returns (EnableMonitorRsp);
+  // 禁用主机监控
+  rpc DisableMonitor(DisableMonitorReq) returns (DisableMonitorRsp);
+  // 获取主机监控状态
+  rpc GetMonitorStatus(GetMonitorStatusReq) returns (GetMonitorStatusRsp);
+  // 获取当前监控指标
+  rpc GetCurrentMetrics(GetCurrentMetricsReq) returns (GetCurrentMetricsRsp);
+  // 获取历史监控数据
+  rpc GetHistoryMetrics(GetHistoryMetricsReq) returns (GetHistoryMetricsRsp);
+  // 测试 Node Exporter 连通性
+  rpc TestNodeExporter(TestNodeExporterReq) returns (TestNodeExporterRsp);
+}

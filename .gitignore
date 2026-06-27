@@ -65,3 +65,10 @@ cover.out.tmp
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Local debug screenshots at repo root
+/*.png
+
+# Local web-host build artifact (use web-host/release or ./bin)
+/web-host/web-host
+/web-host/moox-web-host

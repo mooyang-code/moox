@@ -1,0 +1,219 @@
+syntax = "proto3";
+
+package trpc.moox.admin;
+
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;mooxpb";
+
+import "moox_common.proto";
+
+// Admin 承载控制面工作空间与元数据编排逻辑。
+// 由 internal/service/admin 实现，当前未对外暴露 RPC 端口（无 trpc_go.yaml service 配置），
+// 仅作为 Go 接口契约与未来扩展预留。
+
+// ========== 工作空间与元数据（Control）==========
+
+message WorkspaceDefaults {
+  bool create_default_devices = 1;
+  bool create_default_routes = 2;
+  repeated string default_exchanges = 3;
+}
+
+message WorkspaceSummary {
+  string workspace_id = 1;
+  string name = 2;
+  string display_name = 3;
+  string owner = 4;
+}
+
+message DataSetConfig {
+  string workspace_id = 1;
+  string dataset_id = 2;
+  string name = 3;
+  string display_name = 4;
+  string data_kind = 5;
+  string data_domain = 6;
+  repeated string default_freqs = 7;
+  map<string, string> attributes = 8;
+}
+
+message FieldConfig {
+  string field_id = 1;
+  string dataset_id = 2;
+  string interface_name = 3;
+  string display_name = 4;
+  string value_type = 5;
+}
+
+message StorageRouteConfig {
+  string route_id = 1;
+  string workspace_id = 2;
+  string dataset_id = 3;
+  string field_id = 4;
+  string factor_instance_id = 5;
+  string device_id = 6;
+  string engine = 7;
+  uint32 priority = 8;
+}
+
+message CollectorBindingConfig {
+  string binding_id = 1;
+  string workspace_id = 2;
+  string dataset_id = 3;
+  string collector_id = 4;
+  string data_source = 5;
+  string exchange_id = 6;
+  map<string, string> params = 7;
+}
+
+message MetadataChange {
+  string change_id = 1;
+  string workspace_id = 2;
+  string resource_type = 3;
+  string resource_id = 4;
+  string action = 5;
+  string payload_json = 6;
+}
+
+message CreateWorkspaceWithDefaultsReq {
+  common.AuthInfo auth_info = 1;
+  WorkspaceSummary workspace = 2;
+  WorkspaceDefaults defaults = 3;
+}
+
+message CreateWorkspaceWithDefaultsRsp {
+  common.RetInfo ret_info = 1;
+  WorkspaceSummary workspace = 2;
+}
+
+message ConfigureDataSetReq {
+  common.AuthInfo auth_info = 1;
+  DataSetConfig dataset = 2;
+}
+
+message ConfigureDataSetRsp {
+  common.RetInfo ret_info = 1;
+  DataSetConfig dataset = 2;
+}
+
+message ConfigureFieldsReq {
+  common.AuthInfo auth_info = 1;
+  string workspace_id = 2;
+  string dataset_id = 3;
+  repeated FieldConfig fields = 4;
+}
+
+message ConfigureFieldsRsp {
+  common.RetInfo ret_info = 1;
+  repeated FieldConfig fields = 2;
+}
+
+message ConfigureStorageRoutesReq {
+  common.AuthInfo auth_info = 1;
+  repeated StorageRouteConfig routes = 2;
+}
+
+message ConfigureStorageRoutesRsp {
+  common.RetInfo ret_info = 1;
+  repeated StorageRouteConfig routes = 2;
+}
+
+message ConfigureCollectorBindingReq {
+  common.AuthInfo auth_info = 1;
+  CollectorBindingConfig binding = 2;
+}
+
+message ConfigureCollectorBindingRsp {
+  common.RetInfo ret_info = 1;
+  CollectorBindingConfig binding = 2;
+}
+
+message PublishMetadataChangeReq {
+  common.AuthInfo auth_info = 1;
+  MetadataChange change = 2;
+}
+
+message PublishMetadataChangeRsp {
+  common.RetInfo ret_info = 1;
+  MetadataChange change = 2;
+}
+
+// ========== 工作空间管理（SpaceMgr）==========
+// 对应 internal/service/space 的 t_spaces / t_space_members 表，
+// 由本进程 SpaceMgr 实现，经统一网关透传 /api/admin/space/{method}。
+
+message Space {
+  int64 id = 1;
+  string space_id = 2;
+  string name = 3;
+  string description = 4;
+  string owner = 5;
+  string market = 6;
+  string timezone = 7;
+  string status = 8;
+  string attributes = 9;
+  string created_at = 10;
+  string updated_at = 11;
+}
+
+message SpaceMember {
+  int64 id = 1;
+  string space_id = 2;
+  string user_id = 3;
+  string role = 4;
+  string status = 5;
+  string attributes = 6;
+  string created_at = 7;
+  string updated_at = 8;
+}
+
+message CreateSpaceReq {
+  Space space = 1;
+}
+message CreateSpaceRsp {
+  common.RetInfo ret_info = 1;
+  Space space = 2;
+}
+message UpdateSpaceReq {
+  Space space = 1;
+}
+message UpdateSpaceRsp {
+  common.RetInfo ret_info = 1;
+  Space space = 2;
+}
+message ListSpacesReq {
+  string owner = 1;
+  string status = 2;
+  common.Page page = 3;
+}
+message ListSpacesRsp {
+  common.RetInfo ret_info = 1;
+  repeated Space spaces = 2;
+  common.PageResult page_result = 3;
+}
+message ListSpaceMembersReq {
+  string space_id = 1;
+  common.Page page = 2;
+}
+message ListSpaceMembersRsp {
+  common.RetInfo ret_info = 1;
+  repeated SpaceMember members = 2;
+  common.PageResult page_result = 3;
+}
+
+// ========== Services ==========
+
+service Admin {
+  rpc CreateWorkspaceWithDefaults(CreateWorkspaceWithDefaultsReq) returns (CreateWorkspaceWithDefaultsRsp);
+  rpc ConfigureDataSet(ConfigureDataSetReq) returns (ConfigureDataSetRsp);
+  rpc ConfigureFields(ConfigureFieldsReq) returns (ConfigureFieldsRsp);
+  rpc ConfigureStorageRoutes(ConfigureStorageRoutesReq) returns (ConfigureStorageRoutesRsp);
+  rpc ConfigureCollectorBinding(ConfigureCollectorBindingReq) returns (ConfigureCollectorBindingRsp);
+  rpc PublishMetadataChange(PublishMetadataChangeReq) returns (PublishMetadataChangeRsp);
+}
+
+service SpaceMgr {
+  rpc CreateSpace(CreateSpaceReq) returns (CreateSpaceRsp);
+  rpc UpdateSpace(UpdateSpaceReq) returns (UpdateSpaceRsp);
+  rpc ListSpaces(ListSpacesReq) returns (ListSpacesRsp);
+  rpc ListSpaceMembers(ListSpaceMembersReq) returns (ListSpaceMembersRsp);
+}

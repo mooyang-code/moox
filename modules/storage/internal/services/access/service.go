@@ -74,9 +74,9 @@ type viewFactReadService interface {
 }
 
 var (
-	_ pb.MetadataServiceService = (*Service)(nil)
-	_ pb.AccessServiceService   = (*Service)(nil)
-	_ pb.ViewServiceService     = (*Service)(nil)
+	_ pb.MetadataService = (*Service)(nil)
+	_ pb.AccessService   = (*Service)(nil)
+	_ pb.DataViewService = (*Service)(nil)
 )
 
 func NewServiceWithOptions(opts Options) *Service {

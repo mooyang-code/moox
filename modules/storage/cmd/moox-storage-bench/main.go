@@ -211,9 +211,9 @@ func run(ctx context.Context) error {
 	}
 	defer func() { _ = env.Stop() }()
 
-	meta := pb.NewMetadataServiceClientProxy(targetOpts(env.ports.metadata)...)
-	data := pb.NewAccessServiceClientProxy(targetOpts(env.ports.data)...)
-	query := pb.NewViewServiceClientProxy(targetOpts(env.ports.query)...)
+	meta := pb.NewMetadataClientProxy(targetOpts(env.ports.metadata)...)
+	data := pb.NewAccessClientProxy(targetOpts(env.ports.data)...)
+	query := pb.NewDataViewClientProxy(targetOpts(env.ports.query)...)
 
 	if err := seedMetadata(ctx, meta, files, opts); err != nil {
 		return err
@@ -549,22 +549,22 @@ server:
     read_timeout: 5000
     write_timeout: 60000
   service:
-    - name: trpc.storage.access.AccessService
+    - name: trpc.storage.access.Access
       ip: 127.0.0.1
       port: %d
       network: tcp
       protocol: trpc
-    - name: trpc.storage.view.ViewService
+    - name: trpc.storage.view.DataView
       ip: 127.0.0.1
       port: %d
       network: tcp
       protocol: trpc
-    - name: trpc.storage.store.PrimaryStoreService
+    - name: trpc.storage.store.PrimaryStore
       ip: 127.0.0.1
       port: %d
       network: tcp
       protocol: trpc
-    - name: trpc.storage.metadata.MetadataService
+    - name: trpc.storage.metadata.Metadata
       ip: 127.0.0.1
       port: %d
       network: tcp
@@ -582,7 +582,7 @@ plugins:
         level: info
 `
 
-func seedMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy, files []bench.KlineFile, opts options) error {
+func seedMetadata(ctx context.Context, meta pb.MetadataClientProxy, files []bench.KlineFile, opts options) error {
 	if err := call("CreateSpace", func() (*pb.RetInfo, error) {
 		rsp, err := meta.CreateSpace(ctx, &pb.CreateSpaceReq{Space: &pb.Space{SpaceId: spaceID, Name: "Storage Bench", Status: "active"}})
 		return rsp.GetRetInfo(), err
@@ -673,7 +673,7 @@ func seedMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy, files
 	return nil
 }
 
-func seedRecordMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy) error {
+func seedRecordMetadata(ctx context.Context, meta pb.MetadataClientProxy) error {
 	if err := call("CreateDataset:"+recordDatasetID, func() (*pb.RetInfo, error) {
 		rsp, err := meta.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{SpaceId: spaceID, DatasetId: recordDatasetID, DataSourceId: dataSourceID, Name: "合成记录", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"}})
 		return rsp.GetRetInfo(), err
@@ -698,7 +698,7 @@ func seedRecordMetadata(ctx context.Context, meta pb.MetadataServiceClientProxy)
 	return nil
 }
 
-func waitMetadataReady(ctx context.Context, data pb.AccessServiceClientProxy, files []bench.KlineFile, opts options) (metadataReadyReport, error) {
+func waitMetadataReady(ctx context.Context, data pb.AccessClientProxy, files []bench.KlineFile, opts options) (metadataReadyReport, error) {
 	report := metadataReadyReport{
 		RefreshIntervalHint: metadataRefreshIntervalHint,
 		TimeoutSeconds:      opts.metadataWait.Seconds(),
@@ -751,7 +751,7 @@ func metadataReadyRecordRows(opts options) []*pb.RecordRow {
 	return syntheticRecordRows(1)
 }
 
-func runMetadataReadyProbe(ctx context.Context, data pb.AccessServiceClientProxy, timeSeriesRows []*pb.TimeSeriesRow, recordRows []*pb.RecordRow) error {
+func runMetadataReadyProbe(ctx context.Context, data pb.AccessClientProxy, timeSeriesRows []*pb.TimeSeriesRow, recordRows []*pb.RecordRow) error {
 	if len(timeSeriesRows) > 0 {
 		rsp, err := data.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: timeSeriesRows})
 		if err != nil {
@@ -773,7 +773,7 @@ func runMetadataReadyProbe(ctx context.Context, data pb.AccessServiceClientProxy
 	return nil
 }
 
-func writeKlines(ctx context.Context, data pb.AccessServiceClientProxy, files []bench.KlineFile, opts options) (writeReport, map[string]int, []querySample, error) {
+func writeKlines(ctx context.Context, data pb.AccessClientProxy, files []bench.KlineFile, opts options) (writeReport, map[string]int, []querySample, error) {
 	var report writeReport
 	var recorder bench.LatencyRecorder
 	var batchDurations []time.Duration
@@ -825,7 +825,7 @@ func writeKlines(ctx context.Context, data pb.AccessServiceClientProxy, files []
 	return report, datasetRows, samples, nil
 }
 
-func writeRecords(ctx context.Context, data pb.AccessServiceClientProxy, opts options) (writeReport, error) {
+func writeRecords(ctx context.Context, data pb.AccessClientProxy, opts options) (writeReport, error) {
 	var report writeReport
 	if opts.recordRows == 0 {
 		return report, nil
@@ -891,7 +891,7 @@ func finishWriteReport(report *writeReport, recorder bench.LatencyRecorder, batc
 	report.SteadyRowsPerSec = float64(steadyRows) / report.SteadySeconds
 }
 
-func createViews(ctx context.Context, meta pb.MetadataServiceClientProxy, datasetRows map[string]int) error {
+func createViews(ctx context.Context, meta pb.MetadataClientProxy, datasetRows map[string]int) error {
 	for datasetID := range datasetRows {
 		market := strings.TrimSuffix(strings.TrimPrefix(datasetID, "bench_binance_"), "_kline_1h")
 		viewID := viewID(market)
@@ -914,7 +914,7 @@ func createViews(ctx context.Context, meta pb.MetadataServiceClientProxy, datase
 	return nil
 }
 
-func waitViews(ctx context.Context, query pb.ViewServiceClientProxy, datasetRows map[string]int, timeout time.Duration) (map[string]uint64, error) {
+func waitViews(ctx context.Context, query pb.DataViewClientProxy, datasetRows map[string]int, timeout time.Duration) (map[string]uint64, error) {
 	out := make(map[string]uint64)
 	err := retry(timeout, 2*time.Second, func() error {
 		for datasetID, want := range datasetRows {
@@ -937,7 +937,7 @@ func waitViews(ctx context.Context, query pb.ViewServiceClientProxy, datasetRows
 	return out, err
 }
 
-func benchmarkPrimaryReads(ctx context.Context, data pb.AccessServiceClientProxy, files []bench.KlineFile, opts options) (operationReport, error) {
+func benchmarkPrimaryReads(ctx context.Context, data pb.AccessClientProxy, files []bench.KlineFile, opts options) (operationReport, error) {
 	return runConcurrentBenchmark(opts.readRequests, opts.concurrency, func(worker int, request int) (int, error) {
 		file := files[(worker+request)%len(files)]
 		rsp, err := data.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
@@ -960,7 +960,7 @@ func benchmarkPrimaryReads(ctx context.Context, data pb.AccessServiceClientProxy
 	}, opts.pageSize)
 }
 
-func benchmarkPrimaryKlinePoint(ctx context.Context, data pb.AccessServiceClientProxy, sample querySample, opts options) (operationReport, error) {
+func benchmarkPrimaryKlinePoint(ctx context.Context, data pb.AccessClientProxy, sample querySample, opts options) (operationReport, error) {
 	return runConcurrentBenchmark(opts.klinePointRequests, opts.concurrency, func(worker int, request int) (int, error) {
 		rsp, err := data.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
 			Keys: []*pb.TimeSeriesKey{{
@@ -986,7 +986,7 @@ func benchmarkPrimaryKlinePoint(ctx context.Context, data pb.AccessServiceClient
 	}, 1)
 }
 
-func benchmarkViewReads(ctx context.Context, query pb.ViewServiceClientProxy, files []bench.KlineFile, opts options) (operationReport, error) {
+func benchmarkViewReads(ctx context.Context, query pb.DataViewClientProxy, files []bench.KlineFile, opts options) (operationReport, error) {
 	return runConcurrentBenchmark(opts.viewRequests, opts.concurrency, func(worker int, request int) (int, error) {
 		file := files[(worker+request)%len(files)]
 		rsp, err := query.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{

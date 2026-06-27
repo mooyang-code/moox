@@ -144,8 +144,8 @@ message ReadRecordRowsRsp {
   common.PageResult page_result = 3;
 }
 
-// AccessService 是用户侧事实数据读写入口。
-service AccessService {
+// Access 是用户侧事实数据读写入口。
+service Access {
   // WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
   rpc WriteTimeSeriesRows(WriteTimeSeriesRowsReq) returns (WriteTimeSeriesRowsRsp);
   // ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。

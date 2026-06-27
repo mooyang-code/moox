@@ -455,9 +455,9 @@
                   {{ formatFileSize(record.file_size) }}
                 </template>
               </a-table-column>
-              <a-table-column title="创建时间" data-index="created_at" :width="150">
+              <a-table-column title="创建时间" data-index="create_time" :width="150">
                 <template #cell="{ record }">
-                  {{ formatTime(record.created_at) }}
+                  {{ formatTime(record.create_time) }}
                 </template>
               </a-table-column>
             </template>
@@ -524,9 +524,9 @@
                   {{ formatFileSize(record.file_size) }}
                 </template>
               </a-table-column>
-              <a-table-column title="创建时间" data-index="created_at" :width="150">
+              <a-table-column title="创建时间" data-index="create_time" :width="150">
                 <template #cell="{ record }">
-                  {{ formatTime(record.created_at) }}
+                  {{ formatTime(record.create_time) }}
                 </template>
               </a-table-column>
             </template>
@@ -587,7 +587,7 @@
             <span v-else>-</span>
           </a-descriptions-item>
           <a-descriptions-item label="版本">
-            {{ selectedNodeDetail.version || '-' }}
+            {{ selectedNodeDetail.package_version || selectedNodeDetail.running_version || '-' }}
           </a-descriptions-item>
           <a-descriptions-item label="容量">
             {{ selectedNodeDetail.capacity || '-' }}
@@ -618,10 +618,10 @@
             <span v-else>-</span>
           </a-descriptions-item>
           <a-descriptions-item label="创建时间">
-            {{ formatDateTime(selectedNodeDetail.created_at) }}
+            {{ formatDateTime(selectedNodeDetail.create_time) }}
           </a-descriptions-item>
           <a-descriptions-item label="更新时间">
-            {{ formatDateTime(selectedNodeDetail.updated_at) }}
+            {{ formatDateTime(selectedNodeDetail.modify_time) }}
           </a-descriptions-item>
         </a-descriptions>
       </div>
@@ -771,7 +771,9 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from 'v
 import { Message, Modal } from '@arco-design/web-vue';
 import { useRoute } from 'vue-router';
 import { api } from '@/api/config';
+import { isRetInfoSuccess } from '@/api/ret-info';
 import { getFunctionPackageList, getFunctionPackageDetail, downloadPackageByURL, type FunctionPackage } from '@/api/function-package';
+import { getCloudAccountList, type CloudAccount } from '@/api/cloud-account';
 import { AsyncTaskManager, asyncTaskManager, TaskStatus } from '@/utils/async-task';
 import type { TaskStatusResponse, TaskDetailItem } from '@/utils/async-task';
 import CloudAccountManage from '../cloud-account/cloud-account-manage.vue';
@@ -806,20 +808,12 @@ interface CloudFunction {
   probe_url?: string;           // 探测URL
   last_heartbeat?: string;
   created_at: string;
+  create_time?: string;
+  modify_time?: string;
   updated_at: string;
 }
 
-interface CloudAccount {
-  account_id: string;
-  account_name: string;
-  provider: string;
-  secret_id: string;
-  secret_key: string;
-  extra_config: string;
-  status: number;
-  created_at: string;
-  updated_at: string;
-}
+
 
 // 状态管理
 const loading = ref(false);
@@ -1346,22 +1340,20 @@ const executeBatchAddDirect = async () => {
 
 const fetchRegionUsage = async (regionCode: string, tag: string) => {
   const response = await api.post('/cloudnode/GetNodeList', {
-    region: regionCode,
-    tag,
-    node_type: batchAddForm.nodeType, // 使用当前选择的节点类型
-    page: 1,
-    page_size: 1
+    query: {
+      region: regionCode,
+      tag,
+      node_type: batchAddForm.nodeType,
+      page: 1,
+      page_size: 1
+    }
   });
 
-  if (response.data?.code === 200) {
+  if (isRetInfoSuccess(response.data?.ret_info?.code)) {
     return Number(response.data.total || 0);
   }
 
-  if (response.data?.ret_info?.code === 0) {
-    return Number(response.data.ret_info.total || 0);
-  }
-
-  throw new Error('获取地区占用失败');
+  throw new Error(response.data?.ret_info?.msg || '获取地区占用失败');
 };
 
 const prepareBatchPlan = async () => {
@@ -1504,15 +1496,15 @@ const loadAvailablePackages = async (page: number = 1) => {
       package_type: currentPackageType.value // 根据当前路由过滤代码包类型
     });
 
-    if (response?.code === 200 && response?.data) {
+    if (response?.items) {
       // 按时间倒序排列
-      availablePackages.value = (response.data || []).sort((a: any, b: any) => {
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      availablePackages.value = (response.items || []).sort((a: any, b: any) => {
+        return new Date(b.created_time).getTime() - new Date(a.created_time).getTime();
       });
 
       // 更新分页信息
       packagesPagination.value.current = page;
-      packagesPagination.value.total = response.total || response.data.length;
+      packagesPagination.value.total = response.total || response.items.length;
     } else {
       availablePackages.value = [];
       packagesPagination.value.total = 0;
@@ -1537,10 +1529,10 @@ const loadAvailablePackagesForCreation = async () => {
       package_type: currentPackageType.value // 根据当前路由过滤代码包类型
     });
 
-    if (response?.code === 200 && response?.data) {
+    if (response?.items) {
       // 按时间倒序排列
-      availablePackagesForCreation.value = (response.data || []).sort((a: any, b: any) => {
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      availablePackagesForCreation.value = (response.items || []).sort((a: any, b: any) => {
+        return new Date(b.created_time).getTime() - new Date(a.created_time).getTime();
       });
     } else {
       availablePackagesForCreation.value = [];
@@ -1634,42 +1626,27 @@ const loadData = async (showEmptyTip = false) => {
   loading.value = true;
   try {
     const response = await api.post('/cloudnode/GetNodeList', {
-      node_id: form.nodeId,
-      cloud_account_id: form.cloudAccountId,
-      region: form.region,
-      node_type: form.nodeType,
-      biz_type: currentBizType.value, // 根据路由添加业务类型过滤
-      status: form.status,
-      page: pagination.value.current,
-      page_size: pagination.value.pageSize
+      query: {
+        node_id: form.nodeId,
+        cloud_account_id: form.cloudAccountId,
+        region: form.region,
+        node_type: form.nodeType,
+        biz_type: currentBizType.value, // 根据路由添加业务类型过滤
+        status: form.status,
+        page: pagination.value.current,
+        page_size: pagination.value.pageSize
+      }
     });
 
-    // 兼容两种响应格式
-    if (response.data?.code === 200) {
-      // 新格式：处理数组格式的响应
-      let data = response.data.data;
-      if (Array.isArray(data)) {
-        functionList.value = data;
-      } else {
-        functionList.value = [data].filter(Boolean);
-      }
-      // 使用后端返回的 total
+    if (isRetInfoSuccess(response.data?.ret_info?.code)) {
+      let data = response.data.items || [];
+      functionList.value = Array.isArray(data) ? data : [data].filter(Boolean);
       pagination.value.total = response.data.total || functionList.value.length;
       if (showEmptyTip && functionList.value.length === 0) {
         Message.info('查询结果为空');
       }
-    } else if (response.data?.ret_info?.code === 0) {
-      // 旧格式
-      let data = response.data.ret_info.data;
-      if (Array.isArray(data)) {
-        functionList.value = data;
-      } else {
-        functionList.value = [data].filter(Boolean);
-      }
-      pagination.value.total = response.data.ret_info.total || functionList.value.length;
-      if (showEmptyTip && functionList.value.length === 0) {
-        Message.info('查询结果为空');
-      }
+    } else {
+      Message.error(response.data?.ret_info?.msg || '加载数据失败');
     }
   } catch (error) {
     console.error('加载数据失败:', error);
@@ -1682,26 +1659,9 @@ const loadData = async (showEmptyTip = false) => {
 // 加载云账户列表
 const loadCloudAccounts = async () => {
   try {
-    const response = await api.post('/cloudnode/ListCloudAccounts', {});
-    
-    // 兼容两种响应格式
-    if (response.data?.code === 200 && response.data?.data) {
-      // 新格式：处理数组格式的响应
-      let data = response.data.data;
-      if (Array.isArray(data)) {
-        cloudAccountOptions.value = data;
-      } else {
-        cloudAccountOptions.value = [data].filter(Boolean);
-      }
-    } else if (response.data?.ret_info?.code === 0) {
-      // 旧格式：ret_info 包装
-      let data = response.data.ret_info.data;
-      if (Array.isArray(data)) {
-        cloudAccountOptions.value = data;
-      } else {
-        cloudAccountOptions.value = [data].filter(Boolean);
-      }
-    } else {
+    const accounts = await getCloudAccountList();
+    cloudAccountOptions.value = Array.isArray(accounts) ? accounts : [accounts].filter(Boolean);
+    if (cloudAccountOptions.value.length === 0) {
       Message.error('加载云账户失败，请点击"云账户管理按钮"，新增云账户');
     }
   } catch (error) {
@@ -1716,17 +1676,12 @@ const loadRegions = async () => {
     const response = await api.post('/cloudnode/ListCloudRegions', {
       provider: 'tencent' // 目前只支持腾讯云
     });
-    
-    if (response.data?.code === 200 && response.data?.data) {
-      let data = response.data.data;
-      if (Array.isArray(data)) {
-        regionOptions.value = data;
-      } else {
-        regionOptions.value = [data].filter(Boolean);
-      }
+
+    if (isRetInfoSuccess(response.data?.ret_info?.code)) {
+      let data = response.data.regions || [];
+      regionOptions.value = Array.isArray(data) ? data : [data].filter(Boolean);
     } else {
       console.error('加载地区列表失败:', response);
-      // 失败时使用空数组
       regionOptions.value = [];
     }
   } catch (error) {
@@ -1810,30 +1765,30 @@ watch(
 );
 
 const getStatusColor = (status: string | number) => {
-  if (status === 'online') {
+  if (status === 'online' || status === 1) {
     return 'green';
   }
-  if (status === 'offline') {
+  if (status === 'offline' || status === 0) {
     return 'red';
   }
-  if (status === 1) {
-    return 'green';
+  if (status === 'timeout') {
+    return 'orange';
   }
-  if (status === 0) {
-    return 'red';
+  if (status === 'abnormal') {
+    return 'orangered';
   }
   return 'gray';
 };
 
 const getStatusText = (status: string | number) => {
   if (typeof status === 'string' && status) {
-    if (status === 'online') {
-      return '在线';
-    }
-    if (status === 'offline') {
-      return '离线';
-    }
-    return status;
+    const map: Record<string, string> = {
+      online: '在线',
+      offline: '离线',
+      timeout: '超时',
+      abnormal: '异常',
+    };
+    return map[status] || status;
   }
   if (status === 1) {
     return '在线';
@@ -1885,16 +1840,13 @@ const createAsyncJob = async (tasks: Array<{ taskType: string; requestParams: an
     timeout: 20000
   });
 
-  if (response.data?.code !== 200) {
-    throw new Error(response.data?.message || '创建任务失败');
+  // 统一响应：ret_info.code === 'SUCCESS' 表示成功，业务字段在响应顶层
+  const rsp = response.data;
+  if (!isRetInfoSuccess(rsp?.ret_info?.code)) {
+    throw new Error(rsp?.ret_info?.msg || '创建任务失败');
   }
 
-  let jobData = response.data?.data;
-  if (Array.isArray(jobData) && jobData.length > 0) {
-    jobData = jobData[0];
-  }
-
-  const jobId = jobData?.job_id;
+  const jobId = rsp?.job_id;
   if (!jobId) {
     throw new Error('服务器未返回job_id');
   }
@@ -1908,15 +1860,11 @@ const queryAsyncJob = async (jobId: string): Promise<TaskStatusResponse | null> 
       job_id: jobId
     });
 
-    if (response.data?.code !== 200) {
+    const jobData = response.data;
+    if (!isRetInfoSuccess(jobData?.ret_info?.code)) {
       // 请求成功但业务失败，返回null表示查询失败，继续重试
-      console.warn('queryAsyncJob 业务失败:', response.data?.message);
+      console.warn('queryAsyncJob 业务失败:', jobData?.ret_info?.msg);
       return null;
-    }
-
-    let jobData = response.data?.data;
-    if (Array.isArray(jobData) && jobData.length > 0) {
-      jobData = jobData[0];
     }
 
     return {
@@ -2100,7 +2048,7 @@ const formatTime = (time: string | undefined) => {
   });
 };
 
-const formatDateTime = (dateTime: string) => {
+const formatDateTime = (dateTime: string | undefined) => {
   if (!dateTime) return '-';
   try {
     return new Date(dateTime).toLocaleString('zh-CN', {
@@ -2268,11 +2216,9 @@ const onShowPackageDetail = async (record: CloudFunction) => {
   packageDetailVisible.value = true;
   
   try {
-    const response = await getFunctionPackageDetail(record.package_id);
-    console.log('代码包详情API响应:', response);
-    
-    if (response?.code === 200 && response?.data && response.data.length > 0) {
-      packageDetail.value = response.data[0]; // 取数组第一个元素
+    const detail = await getFunctionPackageDetail(record.package_id);
+    if (detail) {
+      packageDetail.value = detail;
     } else {
       throw new Error('获取详情失败');
     }
@@ -2421,8 +2367,8 @@ const loadSingleDeployPackages = async () => {
       package_type: currentPackageType.value // 根据当前路由过滤代码包类型
     });
 
-    if (response?.code === 200 && response?.data) {
-      singleDeployPackages.value = response.data || [];
+    if (response?.items) {
+      singleDeployPackages.value = response.items || [];
       singleDeployPackagesPagination.value.total = response.total || 0;
     }
   } catch (error) {
@@ -2529,22 +2475,24 @@ const handleEditNodeCancel = () => {
 // 确认编辑
 const handleEditNodeOk = async () => {
   try {
-    // 调用更新API
+    // 调用更新API（PB 请求：{node:{...}}）
     const response = await api.post('/cloudnode/UpdateNode', {
-      node_id: editNodeForm.nodeId,
-      timeout_threshold: editNodeForm.timeoutThreshold,
-      heartbeat_interval: editNodeForm.heartbeatInterval,
-      probe_enabled: editNodeForm.probeEnabled
+      node: {
+        node_id: editNodeForm.nodeId,
+        timeout_threshold: editNodeForm.timeoutThreshold,
+        heartbeat_interval: editNodeForm.heartbeatInterval,
+        probe_enabled: editNodeForm.probeEnabled
+      }
     });
-    
-    if (response.data?.code === 200 || response.data?.ret_info?.code === 0) {
+
+    if (isRetInfoSuccess(response.data?.ret_info?.code)) {
       Message.success('节点配置更新成功');
       editNodeVisible.value = false;
       handleEditNodeCancel();
       // 刷新数据
       await loadData();
     } else {
-      throw new Error(response.data?.message || response.data?.ret_info?.message || '更新失败');
+      throw new Error(response.data?.ret_info?.msg || '更新失败');
     }
   } catch (error: any) {
     console.error('更新节点配置失败:', error);

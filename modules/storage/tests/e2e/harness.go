@@ -221,20 +221,20 @@ func (h *Harness) tailLog() string {
 
 // ---- HTTP/tRPC 客户端 ----
 
-func (h *Harness) MetadataClient() pb.MetadataServiceClientProxy {
-	return pb.NewMetadataServiceClientProxy(httpTargetOpts(portMetadataHTTP)...)
+func (h *Harness) MetadataClient() pb.MetadataClientProxy {
+	return pb.NewMetadataClientProxy(httpTargetOpts(portMetadataHTTP)...)
 }
 
-func (h *Harness) DataClient() pb.AccessServiceClientProxy {
-	return pb.NewAccessServiceClientProxy(httpTargetOpts(portDataHTTP)...)
+func (h *Harness) DataClient() pb.AccessClientProxy {
+	return pb.NewAccessClientProxy(httpTargetOpts(portDataHTTP)...)
 }
 
-func (h *Harness) QueryClient() pb.ViewServiceClientProxy {
-	return pb.NewViewServiceClientProxy(targetOpts(portQuery)...)
+func (h *Harness) QueryClient() pb.DataViewClientProxy {
+	return pb.NewDataViewClientProxy(targetOpts(portQuery)...)
 }
 
-func (h *Harness) PrimaryClient() pb.PrimaryStoreServiceClientProxy {
-	return pb.NewPrimaryStoreServiceClientProxy(targetOpts(portPrimary)...)
+func (h *Harness) PrimaryClient() pb.PrimaryStoreClientProxy {
+	return pb.NewPrimaryStoreClientProxy(targetOpts(portPrimary)...)
 }
 
 func targetOpts(port int) []client.Option {

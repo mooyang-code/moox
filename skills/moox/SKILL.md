@@ -24,7 +24,7 @@ Core concepts:
 ## Repository Layout
 
 - `modules/cli`: `moox-cli`.
-- `modules/control`: control plane service and metadata orchestration.
+- `modules/admin`: control plane service and metadata orchestration.
 - `modules/storage`: storage service, protocol, access, primary store, view, search, archive, and device drivers.
 - `modules/collector`: market data collection. The former miner responsibility is folded into collector discovery/source/scheduler packages.
 - `modules/factor`: factor calculation module.
@@ -62,11 +62,11 @@ When the user provides a Tencent Cloud Lighthouse instance detail URL, use the b
 ```bash
 python3 skills/moox/scripts/tencent_lighthouse_firewall.py add \
   --detail-url 'https://console.cloud.tencent.com/lighthouse/instance/detail?searchParams=rid%3D5&rid=1&id=lhins-a7yikq89' \
-  --ports 19104,19101,19105,20103,20180 \
+  --ports 20201,20200,20202,11000 \
   --dry-run
 ```
 
-After the dry run is correct, remove `--dry-run` to create the firewall rule. The script defaults to the MooX service ports `19104,19101,19105,20103,20180`, `TCP`, `0.0.0.0/0`, and `ap-guangzhou` when the console URL does not provide a region.
+After the dry run is correct, remove `--dry-run` to create the firewall rule. The script defaults to the MooX service ports `20201,20200,20202,11000`, `TCP`, `0.0.0.0/0`, and `ap-guangzhou` when the console URL does not provide a region.
 
 Useful safe checks:
 
@@ -81,7 +81,7 @@ CSV acceptance import:
 
 ```bash
 bin/moox-cli data csv import \
-  --storage-url http://127.0.0.1:19104 \
+  --storage-url http://127.0.0.1:20201 \
   --space default \
   --data-source BINANCE \
   --dataset binance_spot_kline_1m \
@@ -92,7 +92,7 @@ bin/moox-cli data csv import \
 
 ## Development Rules
 
-- Prefer the new protocol under `modules/storage/proto/*.proto` and `modules/control/proto/*.proto`.
+- Prefer the new protocol under `modules/storage/proto/*.proto` and `modules/admin/proto/*.proto`.
 - Keep legacy proto files under `proto/legacy` until their old call paths are deleted.
 - Do not reintroduce `object_id` into public APIs. Use Space, DataSource, Subject, DataSet, View, Field, and Factor.
 - Use `subject_id` for normalized subject identity and `SubjectSymbol.external_symbol` for source-specific symbols.

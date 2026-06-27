@@ -57,9 +57,9 @@ var lighthouseFirewallAddCmd = &cobra.Command{
 	Long: `添加腾讯云轻量应用服务器防火墙规则。
 
 示例：
-  moox-cli ops tencent lighthouse firewall add --public-ip 106.53.107.122 --ports 19104,19101,20103
-  moox-cli ops tencent lighthouse firewall add --instance-id lhins-xxxx --ports 19104 --cidr 0.0.0.0/0 --description moox-storage
-  moox-cli ops tencent lighthouse firewall add --instance-id lhins-xxxx --ports 19104,19101 --dry-run`,
+  moox-cli ops tencent lighthouse firewall add --public-ip 106.53.107.122 --ports 20201,20200,11000
+  moox-cli ops tencent lighthouse firewall add --instance-id lhins-xxxx --ports 20201 --cidr 0.0.0.0/0 --description moox-storage
+  moox-cli ops tencent lighthouse firewall add --instance-id lhins-xxxx --ports 20201,20200 --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runLighthouseFirewallAdd(cmd, lighthouseFirewallAddFlags)
 	},
@@ -78,7 +78,7 @@ func init() {
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.Endpoint, "endpoint", "https://lighthouse.tencentcloudapi.com", "腾讯云 Lighthouse API endpoint")
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.InstanceID, "instance-id", "", "轻量应用服务器实例 ID；与 --public-ip 二选一")
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.PublicIP, "public-ip", "", "公网 IP；未传 --instance-id 时用 DescribeInstances 自动解析")
-	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.Ports, "ports", "", "端口：ALL、单端口、逗号分隔端口或范围，如 19104,19101,20103")
+	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.Ports, "ports", "", "端口：ALL、单端口、逗号分隔端口或范围，如 20201,20200,11000")
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.Protocol, "protocol", "TCP", "协议：TCP、UDP、ICMP、ICMPv6、ALL")
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.Cidr, "cidr", "0.0.0.0/0", "IPv4 CIDR 或 IP；与 --ipv6-cidr 互斥")
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.IPv6Cidr, "ipv6-cidr", "", "IPv6 CIDR 或 IP；与 --cidr 互斥")

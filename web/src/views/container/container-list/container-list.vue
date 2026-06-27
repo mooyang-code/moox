@@ -195,6 +195,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { api } from '@/api/config';
+import { isRetInfoSuccess } from '@/api/ret-info';
 import { asyncTaskManager } from '@/utils/async-task';
 
 // 状态管理
@@ -321,12 +322,10 @@ const loadData = async (showEmptyTip = false) => {
 
 const loadCloudAccounts = async () => {
   try {
-    const response = await api.post('/cloudaccount/GetAccountList', {
-      page: 1,
-      page_size: 100
-    });
-    if (response.data?.code === 200) {
-      cloudAccountOptions.value = response.data.data || [];
+    const response = await api.post('/cloudnode/ListCloudAccounts', {});
+    const rsp = response.data;
+    if (rsp?.ret_info && isRetInfoSuccess(rsp.ret_info.code)) {
+      cloudAccountOptions.value = rsp.accounts ?? [];
     }
   } catch (error) {
     console.error('加载云账户失败:', error);
@@ -335,9 +334,10 @@ const loadCloudAccounts = async () => {
 
 const loadRegions = async () => {
   try {
-    const response = await api.post('/cloudaccount/GetRegionList', {});
-    if (response.data?.code === 200) {
-      regionOptions.value = response.data.data || [];
+    const response = await api.post('/cloudnode/ListCloudRegions', {});
+    const rsp = response.data;
+    if (rsp?.ret_info && isRetInfoSuccess(rsp.ret_info.code)) {
+      regionOptions.value = rsp.regions ?? [];
     }
   } catch (error) {
     console.error('加载地区列表失败:', error);

@@ -105,7 +105,7 @@ export MOOX_CONFIG="/path/to/custom/config.yaml"
 ```bash
 ./moox-cli metadata import \
   --file ../storage/config/metadata.seed.yaml \
-  --metadata-url http://127.0.0.1:19101 \
+  --metadata-url http://127.0.0.1:20200 \
   --if-not-exists
 ```
 
@@ -126,7 +126,7 @@ export TENCENTCLOUD_SECRET_KEY="..."
 ./moox-cli ops tencent lighthouse firewall add \
   --region ap-guangzhou \
   --public-ip 106.53.107.122 \
-  --ports 19104,19101,20103 \
+  --ports 20201,20200,11000 \
   --protocol TCP \
   --cidr 0.0.0.0/0 \
   --description "moox services"
@@ -137,7 +137,7 @@ export TENCENTCLOUD_SECRET_KEY="..."
 ```bash
 ./moox-cli ops tencent lighthouse firewall add \
   --instance-id lhins-xxxx \
-  --ports 19104,19101,20103,20180 \
+  --ports 20201,20200,11000 \
   --dry-run
 ```
 
@@ -149,8 +149,8 @@ export TENCENTCLOUD_SECRET_KEY="..."
 ./moox-cli storage import \
   --format csv \
   --file ~/Downloads/ARB-USDT.csv \
-  --access-url http://127.0.0.1:19104 \
-  --metadata-url http://127.0.0.1:19101 \
+  --access-url http://127.0.0.1:20201 \
+  --metadata-url http://127.0.0.1:20200 \
   --space crypto \
   --view ar_usdt_close_view \
   --dataset binance_spot_kline_1h \

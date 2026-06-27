@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	registerDataSubjectPath = "/trpc.storage.metadata.MetadataService/RegisterDataSubject"
-	writeTimeSeriesRowsPath = "/trpc.storage.access.AccessService/WriteTimeSeriesRows"
-	writeRecordRowsPath     = "/trpc.storage.access.AccessService/WriteRecordRows"
+	registerDataSubjectPath = "/trpc.storage.metadata.Metadata/RegisterDataSubject"
+	writeTimeSeriesRowsPath = "/trpc.storage.access.Access/WriteTimeSeriesRows"
+	writeRecordRowsPath     = "/trpc.storage.access.Access/WriteRecordRows"
 	defaultClientTimeout    = 8 * time.Second
 )
 

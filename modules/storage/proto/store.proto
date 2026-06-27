@@ -121,8 +121,8 @@ message ScanPrimaryRowsRsp {
   common.PageResult page_result = 3;
 }
 
-// PrimaryStoreService 是 Access 调用在线事实主存的内部执行服务。
-service PrimaryStoreService {
+// PrimaryStore 是 Access 调用在线事实主存的内部执行服务。
+service PrimaryStore {
   // WritePrimaryRows 将已完成路由的数据行写入在线主存。
   rpc WritePrimaryRows(WritePrimaryRowsReq) returns (WritePrimaryRowsRsp);
   // ReadPrimaryRows 从在线主存读取数据行。

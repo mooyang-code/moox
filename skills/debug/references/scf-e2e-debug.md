@@ -35,8 +35,8 @@ bin/moox-cli collector function package \
   --collector-root modules/collector \
   --version vYYYYMMDDHHMM \
   --out /tmp/collector-scf-vYYYYMMDDHHMM.zip \
-  --set control.server_url=http://<control-host>:20103 \
-  --set storage.server_url=http://<storage-host>:19104
+  --set control.server_url=http://<control-host>:11000 \
+  --set storage.server_url=http://<storage-host>:20201
 ```
 
 Alternative module-local build:
@@ -84,7 +84,7 @@ Remote checks:
 ```bash
 ssh ubuntu@<remote-ip> '~/moox/status.sh'
 ssh ubuntu@<remote-ip> 'tail -n 200 ~/moox/log/trpc.log'
-ssh ubuntu@<remote-ip> 'ss -lntp | egrep ":(20103|19104|19105|19101|18201)"'
+ssh ubuntu@<remote-ip> 'ss -lntp | egrep ":(11000|20201|20202|20200|20102)"'
 ```
 
 If SCF cannot reach the host, open Tencent Lighthouse firewall ports with the MooX skill script:
@@ -92,7 +92,7 @@ If SCF cannot reach the host, open Tencent Lighthouse firewall ports with the Mo
 ```bash
 python3 skills/moox/scripts/tencent_lighthouse_firewall.py add \
   --detail-url '<tencent-lighthouse-instance-detail-url>' \
-  --ports 20103,19104,19105,19101,18201 \
+  --ports 11000,20201,20202,20200,20102 \
   --dry-run
 ```
 
@@ -104,7 +104,7 @@ One-step package upload and function creation:
 
 ```bash
 bin/moox-cli collector function publish \
-  --control-url http://<control-host>:20103 \
+  --control-url http://<control-host>:11000 \
   --cloud-account-id <cloud-account-id> \
   --region ap-guangzhou \
   --runtime CustomRuntime \
@@ -114,8 +114,8 @@ bin/moox-cli collector function publish \
   --package-type data_collector \
   --biz-type data_collector \
   --node-type scf-event \
-  --set control.server_url=http://<control-host>:20103 \
-  --set storage.server_url=http://<storage-host>:19104 \
+  --set control.server_url=http://<control-host>:11000 \
+  --set storage.server_url=http://<storage-host>:20201 \
   --function-config timeout=60 \
   --env MOOX_ENV=prod
 ```
@@ -126,7 +126,7 @@ Watch the returned `upload_job_id`, `package_id`, and `create_job_id`. If `packa
 
 ## Control Plane Checks
 
-Use `/api/control` for management calls and `/api/service` for service-to-service callbacks.
+Use `/api/admin` for management calls and `/api/service` for service-to-service callbacks.
 
 Useful log filters:
 

@@ -35,12 +35,12 @@ var storageImportCmd = &cobra.Command{
 
 示例:
   moox-cli storage import --format csv --file ~/Downloads/ARB-USDT.csv \
-    --access-url http://127.0.0.1:19104 --metadata-url http://127.0.0.1:19101 \
+    --access-url http://127.0.0.1:20201 --metadata-url http://127.0.0.1:20200 \
     --space crypto --dataset binance_spot_kline --subject ARB-USDT --freq 1m \
     --time-column candle_begin_time
 
   moox-cli storage import --file ~/Downloads/ARB-USDT.csv --dry-run \
-    --metadata-url http://127.0.0.1:19101 --space crypto --dataset binance_spot_kline \
+    --metadata-url http://127.0.0.1:20200 --space crypto --dataset binance_spot_kline \
     --subject ARB-USDT --freq 1m --time-column candle_begin_time
 
   moox-cli storage import --format csv --file ~/Downloads/ARB-USDT.csv \
@@ -752,8 +752,8 @@ func init() {
 	storageCmd.AddCommand(storageImportCmd)
 	storageImportCmd.Flags().StringVar(&storageImportFlags.Format, "format", defaultStorageImportFormat, "导入文件格式：auto/csv")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.File, "file", "", "本地数据文件路径")
-	storageImportCmd.Flags().StringVar(&storageImportFlags.AccessURL, "access-url", "", "moox-storage AccessService HTTP 地址，例如 http://127.0.0.1:19104")
-	storageImportCmd.Flags().StringVar(&storageImportFlags.MetadataURL, "metadata-url", "", "moox-storage MetadataService HTTP 地址，例如 http://127.0.0.1:19101")
+	storageImportCmd.Flags().StringVar(&storageImportFlags.AccessURL, "access-url", "", "moox-storage AccessService HTTP 地址，例如 http://127.0.0.1:20201")
+	storageImportCmd.Flags().StringVar(&storageImportFlags.MetadataURL, "metadata-url", "", "moox-storage MetadataService HTTP 地址，例如 http://127.0.0.1:20200")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.SpaceID, "space", "", "Space ID")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.ViewID, "view", "", "可选 View ID；传入时校验 dataset 属于该 view")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.DatasetID, "dataset", "", "Dataset ID")

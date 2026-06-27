@@ -75,18 +75,18 @@ func (c *RemoteClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarg
 	return rsp.GetRows(), rsp.GetPageResult(), nil
 }
 
-func (c *RemoteClient) proxyFor(target *pb.PrimaryStoreTarget) pb.PrimaryStoreServiceClientProxy {
+func (c *RemoteClient) proxyFor(target *pb.PrimaryStoreTarget) pb.PrimaryStoreClientProxy {
 	endpoint := ""
 	if target != nil {
 		endpoint = strings.TrimSpace(target.GetEndpoint())
 	}
 	key := c.serviceName + "|" + endpoint
 	if value, ok := c.proxies.Load(key); ok {
-		return value.(pb.PrimaryStoreServiceClientProxy)
+		return value.(pb.PrimaryStoreClientProxy)
 	}
-	proxy := pb.NewPrimaryStoreServiceClientProxy(remoteClientOptions(c.serviceName, endpoint)...)
+	proxy := pb.NewPrimaryStoreClientProxy(remoteClientOptions(c.serviceName, endpoint)...)
 	actual, _ := c.proxies.LoadOrStore(key, proxy)
-	return actual.(pb.PrimaryStoreServiceClientProxy)
+	return actual.(pb.PrimaryStoreClientProxy)
 }
 
 func remoteClientOptions(serviceName string, endpoint string) []client.Option {

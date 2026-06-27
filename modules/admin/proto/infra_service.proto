@@ -1,0 +1,286 @@
+syntax = "proto3";
+
+package trpc.moox.infra;
+
+import "moox_common.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;mooxpb";
+
+// Infra 域合并认证（Auth）、异步任务（AsyncTask）、DNS 代理（Dns）。
+// 纯 RPC 服务，由统一 HTTP 转发层（/api/admin/{auth|asynctask|dnsproxy}/{method}）调度。
+//
+// 响应设计参考 storage/access：每个响应首字段 common.RetInfo（code/msg），
+// code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。
+//
+// 未鉴权接口（auth 的 Register/GetLoginSalt/Login）由网关 no_auth_methods 配置放行；
+// 其余接口由网关 authorize filter 校验 JWT 并将 user_id/username/role 注入 ctx metadata。
+
+// ========== 认证（Auth）==========
+
+// AppInfo 应用信息（保留与旧协议一致的字段名）。
+message AppInfo {
+  string app_id = 1;
+  string app_key = 2;
+}
+
+// UserStatus 用户状态。
+enum UserStatus {
+  USER_STATUS_INACTIVE = 0;
+  USER_STATUS_ACTIVE = 1;
+  USER_STATUS_SUSPENDED = 2;
+  USER_STATUS_BANNED = 3;
+}
+
+// UserRole 用户角色。
+enum UserRole {
+  USER_ROLE_GUEST = 0;
+  USER_ROLE_USER = 1;
+  USER_ROLE_ADMIN = 2;
+  USER_ROLE_SUPER_ADMIN = 3;
+}
+
+// UserInfo 用户信息。
+message UserInfo {
+  string user_id = 1;
+  string username = 2;
+  string nickname = 3;
+  string email = 4;
+  string phone = 5;
+  string avatar = 6;
+  UserStatus status = 7;
+  UserRole role = 8;
+  int64 created_at = 9;     // 创建时间戳
+  int64 last_login_at = 10; // 最后登录时间戳
+  string last_login_ip = 11;
+}
+
+// ========== 注册 ==========
+
+message RegisterReq {
+  AppInfo app_info = 1;
+  string username = 2;
+  string password = 3;  // 明文密码（服务端会进行哈希处理）
+  string nickname = 4;  // 昵称（可选）
+  string email = 5;     // 邮箱（可选）
+}
+
+message RegisterRsp {
+  common.RetInfo ret_info = 1;
+  string user_id = 2;
+  UserInfo user_info = 3;
+}
+
+// ========== 登录盐值 ==========
+
+message GetLoginSaltReq {
+  AppInfo app_info = 1;
+  string username = 2;  // 用户名/邮箱/手机号
+}
+
+message GetLoginSaltRsp {
+  common.RetInfo ret_info = 1;
+  string salt = 2;       // 随机盐值
+  int64 timestamp = 3;   // 服务器时间戳
+  int64 expires_in = 4;  // 盐值过期时间（秒）
+}
+
+// ========== 登录 ==========
+
+message LoginReq {
+  AppInfo app_info = 1;
+  string username = 2;
+  string password_hash = 3;  // 密码哈希值
+  string salt = 4;           // 从 GetLoginSalt 获取的盐值
+  int64 timestamp = 5;       // 从 GetLoginSalt 获取的时间戳
+  string device_id = 6;
+  string user_agent = 7;
+  string client_ip = 8;
+}
+
+message LoginRsp {
+  common.RetInfo ret_info = 1;
+  string access_token = 2;  // 访问令牌
+  int64 expires_in = 3;     // 过期时间（秒）
+  UserInfo user_info = 4;
+}
+
+// ========== 修改密码盐值 ==========
+
+message GetChangePasswordSaltReq {
+  AppInfo app_info = 1;
+  string access_token = 2;
+}
+
+message GetChangePasswordSaltRsp {
+  common.RetInfo ret_info = 1;
+  string salt = 2;
+  int64 timestamp = 3;
+  int64 expires_in = 4;
+}
+
+// ========== 修改密码 ==========
+
+message ChangePasswordReq {
+  AppInfo app_info = 1;
+  string access_token = 2;
+  string old_password_hash = 3;  // 旧密码哈希值
+  string new_password_hash = 4;  // 新密码哈希值
+  string salt = 5;
+  int64 timestamp = 6;
+}
+
+message ChangePasswordRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// ========== 用户信息 ==========
+
+message GetUserInfoReq {
+  AppInfo app_info = 1;
+  string access_token = 2;
+  string user_id = 3;
+}
+
+message GetUserInfoRsp {
+  common.RetInfo ret_info = 1;
+  UserInfo user_info = 2;
+}
+
+message UpdateUserInfoReq {
+  AppInfo app_info = 1;
+  string access_token = 2;
+  string nick = 3;    // 昵称
+  string email = 4;
+  string avatar = 5;  // 头像URL
+}
+
+message UpdateUserInfoRsp {
+  common.RetInfo ret_info = 1;
+  UserInfo user_info = 2;
+}
+
+// ========== 异步任务（AsyncTask）==========
+
+// TaskRequestItem 单个任务请求项（前端提交）。
+message TaskRequestItem {
+  string task_type = 1;           // 任务类型
+  string request_params = 2;      // 请求参数（JSON 字符串，与 service 层 TaskRequest 一致）
+}
+
+// CreateAsyncJobReq 创建 Job 请求。
+message CreateAsyncJobReq {
+  repeated TaskRequestItem tasks = 1;
+}
+
+// CreateAsyncJobRsp 创建 Job 响应。
+message CreateAsyncJobRsp {
+  common.RetInfo ret_info = 1;
+  string job_id = 2;
+  int32 total_task_cnt = 3;
+}
+
+// QueryAsyncJobReq 查询 Job 状态请求。
+message QueryAsyncJobReq {
+  string job_id = 1;
+}
+
+// TaskQueryResult Task 查询结果。
+message TaskQueryResult {
+  string task_id = 1;
+  string job_id = 2;
+  string task_type = 3;
+  int32 task_status = 4;
+  string task_status_text = 5;
+  string request_params = 6;
+  string result_data = 7;
+  string error_message = 8;
+  string started_time = 9;
+  string completed_time = 10;
+  string created_at = 11;
+}
+
+// QueryAsyncJobRsp 查询 Job 状态响应。
+message QueryAsyncJobRsp {
+  common.RetInfo ret_info = 1;
+  string job_id = 2;
+  int32 total_task_cnt = 3;
+  int32 success_task_cnt = 4;
+  int32 failed_task_cnt = 5;
+  int32 is_started = 6;
+  int32 job_status = 7;
+  string job_status_text = 8;
+  int32 progress = 9;
+  string created_at = 10;
+  string updated_at = 11;
+  repeated TaskQueryResult tasks = 12;
+}
+
+// ========== DNS 代理（Dns）==========
+
+// IPInfo IP 地址及其延迟信息。
+message IPInfo {
+  string ip = 1;        // IP 地址
+  int64 latency = 2;    // 网络延迟（微秒）
+  bool available = 3;   // 是否可用
+}
+
+// DNSRecord DNS 解析记录。
+message DNSRecord {
+  string domain = 1;           // 解析的域名
+  repeated IPInfo ip_list = 2;  // IP 列表（按延迟排序）
+  string resolve_at = 3;       // 解析时间（RFC3339）
+  bool success = 4;            // 是否解析成功
+  string best_ips = 5;         // 所有有效 IP 按延迟排序后用 + 号连接
+}
+
+message ListDNSRecordsReq {}
+
+// ListDNSRecordsRsp 列出所有 DNS 解析记录响应。
+message ListDNSRecordsRsp {
+  common.RetInfo ret_info = 1;
+  repeated DNSRecord records = 2;
+  common.PageResult page_result = 3;
+}
+
+message GetDNSRecordReq {
+  string domain = 1;
+}
+
+// GetDNSRecordRsp 获取指定域名 DNS 解析记录详情响应。
+message GetDNSRecordRsp {
+  common.RetInfo ret_info = 1;
+  DNSRecord record = 2;
+}
+
+// ========== Services ==========
+
+service Auth {
+  // 用户注册
+  rpc Register(RegisterReq) returns (RegisterRsp);
+  // 获取登录盐值
+  rpc GetLoginSalt(GetLoginSaltReq) returns (GetLoginSaltRsp);
+  // 用户登录
+  rpc Login(LoginReq) returns (LoginRsp);
+  // 获取修改密码盐值
+  rpc GetChangePasswordSalt(GetChangePasswordSaltReq) returns (GetChangePasswordSaltRsp);
+  // 修改密码
+  rpc ChangePassword(ChangePasswordReq) returns (ChangePasswordRsp);
+  // 获取用户信息
+  rpc GetUserInfo(GetUserInfoReq) returns (GetUserInfoRsp);
+  // 更新用户信息
+  rpc UpdateUserInfo(UpdateUserInfoReq) returns (UpdateUserInfoRsp);
+}
+
+service AsyncTask {
+  // 创建异步 Job
+  rpc CreateAsyncJob(CreateAsyncJobReq) returns (CreateAsyncJobRsp);
+  // 查询 Job 状态
+  rpc QueryAsyncJob(QueryAsyncJobReq) returns (QueryAsyncJobRsp);
+}
+
+service Dns {
+  // 列出所有 DNS 解析记录
+  rpc ListDNSRecords(ListDNSRecordsReq) returns (ListDNSRecordsRsp);
+  // 获取指定域名的 DNS 解析记录详情
+  rpc GetDNSRecord(GetDNSRecordReq) returns (GetDNSRecordRsp);
+}

@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	accessServiceName   = "trpc.storage.access.AccessService"
-	metadataServiceName = "trpc.storage.metadata.MetadataService"
+	accessServiceName   = "trpc.storage.access.Access"
+	metadataServiceName = "trpc.storage.metadata.Metadata"
 )
 
 var (
@@ -36,7 +36,7 @@ var metadataImportCmd = &cobra.Command{
 	Long: `通过 moox-storage MetadataService 导入存储元数据 seed。
 
 示例:
-  moox-cli metadata import --file ../storage/config/metadata.seed.yaml --metadata-url http://127.0.0.1:19101
+  moox-cli metadata import --file ../storage/config/metadata.seed.yaml --metadata-url http://127.0.0.1:20200
   moox-cli metadata import --file seed.yaml --dry-run
   moox-cli metadata import --file seed.yaml --if-not-exists`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -528,7 +528,7 @@ func defaultMetadataImportURL(flagValue string) string {
 		value = strings.TrimSpace(os.Getenv("MOOX_METADATA_URL"))
 	}
 	if value == "" {
-		value = "http://127.0.0.1:19101"
+		value = "http://127.0.0.1:20200"
 	}
 	if !strings.Contains(value, "://") {
 		value = "http://" + value
@@ -750,7 +750,7 @@ func init() {
 	metadataCmd.AddCommand(metadataImportCmd)
 
 	metadataImportCmd.Flags().StringVarP(&metadataImportFile, "file", "f", "", "metadata seed YAML 文件路径")
-	metadataImportCmd.Flags().StringVar(&metadataImportURL, "metadata-url", "", "moox-storage MetadataService HTTP 地址，例如 http://127.0.0.1:19101")
+	metadataImportCmd.Flags().StringVar(&metadataImportURL, "metadata-url", "", "moox-storage MetadataService HTTP 地址，例如 http://127.0.0.1:20200")
 	metadataImportCmd.Flags().BoolVar(&metadataImportDryRun, "dry-run", false, "只解析并输出导入计划，不发送 RPC")
 	metadataImportCmd.Flags().BoolVar(&metadataImportIfNotExists, "if-not-exists", false, "资源已存在时跳过 create 类调用")
 }

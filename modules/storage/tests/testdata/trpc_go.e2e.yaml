@@ -16,12 +16,12 @@ server:
     read_timeout: 5000
     write_timeout: 60000
   service:
-    - name: trpc.storage.view.ViewService
+    - name: trpc.storage.view.DataView
       ip: 127.0.0.1
       port: 28202
       network: tcp
       protocol: trpc
-    - name: trpc.storage.store.PrimaryStoreService
+    - name: trpc.storage.store.PrimaryStore
       ip: 127.0.0.1
       port: 28101
       network: tcp
@@ -36,12 +36,12 @@ server:
       network: "*/20 * * * * *?scheduler=archiveSchedule&params=space_id=crypto;dataset_id=*"
       protocol: timer
       timeout: 60000
-    - name: trpc.storage.access.AccessService
+    - name: trpc.storage.access.Access
       ip: 127.0.0.1
       port: 29104
       network: tcp
       protocol: http
-    - name: trpc.storage.metadata.MetadataService
+    - name: trpc.storage.metadata.Metadata
       ip: 127.0.0.1
       port: 29101
       network: tcp

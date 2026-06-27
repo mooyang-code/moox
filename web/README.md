@@ -139,7 +139,7 @@ pnpm install
 
 ```bash
 # 1. 启动 Control 服务，提供 Space 与管理台网关
-cd ../modules/control
+cd ../modules/admin
 go run ./cmd/moox-server -conf=config/trpc_go.yaml
 
 # 2. 启动 Storage 服务，提供 Metadata / Access / View tRPC HTTP 服务
@@ -154,7 +154,7 @@ pnpm dev
 
 Vite 开发模式会代理以下浏览器路径：
 
-- `/api/control/{service}/{method}` -> Control API `/api/control/{service}/{method}`
+- `/api/admin/{service}/{method}` -> Control API `/api/admin/{service}/{method}`
 - `/api/storage/metadata/{method}` -> Storage MetadataService
 - `/api/storage/access/{method}` -> Storage AccessService
 - `/api/storage/view/{method}` -> Storage ViewService

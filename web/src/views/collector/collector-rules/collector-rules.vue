@@ -340,6 +340,7 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import service from '@/api/index';
+import { isRetInfoSuccess } from '@/api/ret-info';
 import { appAuthHeaders } from '@/api/storage/auth';
 import { useSpaceStore } from '@/store/modules/space';
 import { useUserInfoStore } from '@/store/modules/user-info';
@@ -719,16 +720,17 @@ const getTaskList = async () => {
     if (form.value.dataSource) params.data_source = form.value.dataSource;
     if (form.value.enabled !== null) params.enabled = form.value.enabled ? 'true' : 'false';
 
-    const response = await service.post('/api/control/collectmgr/ListTaskRules', params, {
+    const response = await service.post('/api/admin/collectmgr/GetTaskRuleList', params, {
       headers: appAuthHeaders()
     });
 
+    // 新协议：ret_info.code 为成功标识，业务字段 rules/total 在顶层
     const data = response as any;
-    if (data.code === 200) {
-      taskList.value = data.data || [];
-      pagination.value.total = data.data ? data.data.length : 0;
+    if (isRetInfoSuccess(data?.ret_info?.code)) {
+      taskList.value = data.rules || [];
+      pagination.value.total = Number(data.total) || (data.rules ? data.rules.length : 0);
     } else {
-      Message.error(data.message || '获取任务列表失败');
+      Message.error(data?.ret_info?.msg || '获取任务列表失败');
     }
   } catch (error) {
     console.error('获取任务列表失败:', error);
@@ -740,12 +742,14 @@ const getTaskList = async () => {
 
 const getNodeList = async () => {
   try {
-    const response = await service.post('/api/control/cloudnode/ListNodes', {}, {
+    const response = await service.post('/api/admin/cloudnode/GetNodeList', {}, {
       headers: appAuthHeaders()
     });
     const data = response as any;
-    if (data.code === 200) {
-      nodeOptions.value = data.data || [];
+    if (isRetInfoSuccess(data?.ret_info?.code)) {
+      nodeOptions.value = data.nodes || [];
+    } else {
+      Message.error(data?.ret_info?.msg || '获取节点列表失败');
     }
   } catch (error) {
     console.error('获取节点列表失败:', error);
@@ -755,14 +759,14 @@ const getNodeList = async () => {
 // 获取数据类型配置
 const getDataTypeConfigs = async () => {
   try {
-    const response = await service.post('/api/control/collectmgr/ListDataTypeConfigs', {}, {
+    const response = await service.post('/api/admin/collectmgr/GetDataTypeConfigs', {}, {
       headers: appAuthHeaders()
     });
     const data = response as any;
-    if (data.code === 200) {
-      dataTypeConfigs.value = data.data || [];
+    if (isRetInfoSuccess(data?.ret_info?.code)) {
+      dataTypeConfigs.value = data.configs || [];
     } else {
-      Message.error(data.message || '获取数据类型配置失败');
+      Message.error(data?.ret_info?.msg || '获取数据类型配置失败');
     }
   } catch (error) {
     console.error('获取数据类型配置失败:', error);
@@ -778,12 +782,12 @@ const getFieldConfigs = async (dataType: string) => {
   }
 
   try {
-    const response = await service.post('/api/control/collectmgr/GetDataTypeConfigWithFields', { data_type: dataType }, {
+    const response = await service.post('/api/admin/collectmgr/GetDataTypeConfigWithFields', { data_type: dataType }, {
       headers: appAuthHeaders()
     });
     const data = response as any;
-    if (data.code === 200) {
-      const detail = data.data && data.data.length > 0 ? data.data[0] : null;
+    if (isRetInfoSuccess(data?.ret_info?.code)) {
+      const detail = data.detail || null;
       if (detail) {
         currentFieldConfigs.value = detail.fields || [];
         // 注意：不在这里调用 initializeDynamicFormData，由调用方控制初始化
@@ -802,7 +806,7 @@ const getFieldConfigs = async (dataType: string) => {
         dataSourceOptions.value = [];
       }
     } else {
-      Message.error(data.message || '获取字段配置失败');
+      Message.error(data?.ret_info?.msg || '获取字段配置失败');
       currentFieldConfigs.value = [];
     }
   } catch (error) {
@@ -1139,7 +1143,7 @@ const handleOk = async (): Promise<boolean> => {
       requestData.rule_id = addForm.value.rule_id;
     }
 
-    const endpoint = title.value.includes('新建') ? '/api/control/collectmgr/CreateTaskRule' : '/api/control/collectmgr/UpdateTaskRule';
+    const endpoint = title.value.includes('新建') ? '/api/admin/collectmgr/CreateTaskRule' : '/api/admin/collectmgr/UpdateTaskRule';
 
     submitLoading.value = true;
     // 发送请求
@@ -1149,9 +1153,9 @@ const handleOk = async (): Promise<boolean> => {
 
     const data = response as any;
 
-    if (data.code === 200) {
+    if (isRetInfoSuccess(data?.ret_info?.code)) {
       if (title.value.includes('新建')) {
-        const ruleId = data.data && data.data.rule_id ? data.data.rule_id : '未知';
+        const ruleId = data.rule_id || '未知';
         Message.success(`创建成功，规则ID：${ruleId}`);
       } else {
         Message.success('更新成功');
@@ -1159,7 +1163,7 @@ const handleOk = async (): Promise<boolean> => {
       getTaskList();
       return true;
     } else {
-      Message.error(data.message || (title.value.includes('新建') ? '创建失败' : '更新失败'));
+      Message.error(data?.ret_info?.msg || (title.value.includes('新建') ? '创建失败' : '更新失败'));
       return false;
     }
   } catch (error) {
@@ -1180,7 +1184,7 @@ const handleOk = async (): Promise<boolean> => {
 
 const handleEnableChange = async (record: TaskConfig, value: boolean) => {
   try {
-    const response = await service.post('/api/control/collectmgr/UpdateTaskRule', {
+    const response = await service.post('/api/admin/collectmgr/UpdateTaskRule', {
       ...record,
       enabled: value ? 'true' : 'false'
     }, {
@@ -1188,11 +1192,11 @@ const handleEnableChange = async (record: TaskConfig, value: boolean) => {
     });
 
     const data = response as any;
-    if (data.code === 200) {
+    if (isRetInfoSuccess(data?.ret_info?.code)) {
       Message.success('状态更新成功');
       getTaskList();
     } else {
-      Message.error(data.message || '状态更新失败');
+      Message.error(data?.ret_info?.msg || '状态更新失败');
     }
   } catch (error) {
     console.error('状态更新失败:', error);

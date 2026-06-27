@@ -51,25 +51,25 @@ web-host/
 
 Web Host 对浏览器只暴露两个短路径前缀：
 
-- `/api/control/{service}/{method}`：转发到 Control API `/api/control/{service}/{method}`。
+- `/api/admin/{service}/{method}`：转发到 Control API `/api/admin/{service}/{method}`。
 - `/api/storage/{metadata|access|view}/{method}`：转发到 Storage tRPC HTTP 服务。
 
 默认目标地址：
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `MOOX_WEB_HOST_ADDR` | `:19527` | Web Host 监听地址 |
-| `MOOX_CONTROL_GATEWAY_URL` | `http://127.0.0.1:20103` | Control HTTP Gateway |
-| `MOOX_STORAGE_METADATA_URL` | `http://127.0.0.1:19101` | Storage MetadataService |
-| `MOOX_STORAGE_ACCESS_URL` | `http://127.0.0.1:19104` | Storage AccessService |
-| `MOOX_STORAGE_VIEW_URL` | `http://127.0.0.1:19105` | Storage ViewService |
+| `MOOX_WEB_HOST_ADDR` | `:10080` | Web Host 监听地址 |
+| `MOOX_ADMIN_GATEWAY_URL` | `http://127.0.0.1:11000` | Admin HTTP Gateway |
+| `MOOX_STORAGE_METADATA_URL` | `http://127.0.0.1:20200` | Storage Metadata |
+| `MOOX_STORAGE_ACCESS_URL` | `http://127.0.0.1:20201` | Storage Access |
+| `MOOX_STORAGE_VIEW_URL` | `http://127.0.0.1:20202` | Storage DataView |
 
 示例：
 
 ```bash
-MOOX_CONTROL_GATEWAY_URL=http://127.0.0.1:20103 \
-MOOX_STORAGE_METADATA_URL=http://127.0.0.1:19101 \
-MOOX_STORAGE_ACCESS_URL=http://127.0.0.1:19104 \
-MOOX_STORAGE_VIEW_URL=http://127.0.0.1:19105 \
+MOOX_ADMIN_GATEWAY_URL=http://127.0.0.1:11000 \
+MOOX_STORAGE_METADATA_URL=http://127.0.0.1:20200 \
+MOOX_STORAGE_ACCESS_URL=http://127.0.0.1:20201 \
+MOOX_STORAGE_VIEW_URL=http://127.0.0.1:20202 \
 make run
 ```

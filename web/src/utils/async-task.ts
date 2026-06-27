@@ -1,5 +1,6 @@
 import { Message } from '@arco-design/web-vue';
 import { api } from '@/api/config';
+import { isRetInfoSuccess } from '@/api/ret-info';
 import router from '@/router';
 
 // 任务状态枚举
@@ -85,7 +86,7 @@ export class AsyncTaskManager {
    */
   async createAsyncTask(taskType: string, requestParams: any): Promise<string> {
     try {
-      // 调用新的异步任务创建接口 - 使用Job-Task模型
+      // 调用异步任务创建接口 - Job-Task 模型（网关直接返回业务 PB JSON）
       const response = await api.post('/asynctask/CreateAsyncJob', {
         tasks: [{
           task_type: taskType,
@@ -94,29 +95,20 @@ export class AsyncTaskManager {
       }, {
         timeout: 20000 // 20秒超时
       });
-      
-      // 检查响应状态
-      if (response.data?.code !== 200) {
-        const errorMsg = response.data?.message || '创建任务失败';
-        throw new Error(errorMsg);
+
+      // 统一响应：ret_info.code === 'SUCCESS' 表示成功，业务字段在响应顶层
+      const rsp = response.data;
+      if (!isRetInfoSuccess(rsp?.ret_info?.code)) {
+        throw new Error(rsp?.ret_info?.msg || '创建任务失败');
       }
-      
-      // 从后台响应中获取job_id
-      // 处理数组格式的响应：response.data.data 可能是数组
-      let jobData = response.data?.data;
-      if (Array.isArray(jobData) && jobData.length > 0) {
-        jobData = jobData[0]; // 取数组第一个元素
-      }
-      
-      // 新接口返回的是job_id，我们需要将其作为task_id使用（保持前端兼容性）
-      const jobId = jobData?.job_id;
+      const jobId = rsp?.job_id;
       if (!jobId) {
         throw new Error('服务器未返回job_id');
       }
-      
+
       // 设置到URL
       AsyncTaskManager.setTaskIdToUrl(jobId);
-      
+
       return jobId;
     } catch (error: any) {
       Message.error(error.message || '创建任务失败');
@@ -129,7 +121,7 @@ export class AsyncTaskManager {
    */
   async createMultipleAsyncTasks(tasks: Array<{taskType: string, requestParams: any}>): Promise<string> {
     try {
-      // 调用新的异步任务创建接口 - 使用Job-Task模型
+      // 调用异步任务创建接口 - Job-Task 模型（网关直接返回业务 PB JSON）
       const response = await api.post('/asynctask/CreateAsyncJob', {
         tasks: tasks.map(task => ({
           task_type: task.taskType,
@@ -138,29 +130,19 @@ export class AsyncTaskManager {
       }, {
         timeout: 20000 // 20秒超时
       });
-      
-      // 检查响应状态
-      if (response.data?.code !== 200) {
-        const errorMsg = response.data?.message || '创建任务失败';
-        throw new Error(errorMsg);
+
+      const rsp = response.data;
+      if (!isRetInfoSuccess(rsp?.ret_info?.code)) {
+        throw new Error(rsp?.ret_info?.msg || '创建任务失败');
       }
-      
-      // 从后台响应中获取job_id
-      // 处理数组格式的响应：response.data.data 可能是数组
-      let jobData = response.data?.data;
-      if (Array.isArray(jobData) && jobData.length > 0) {
-        jobData = jobData[0]; // 取数组第一个元素
-      }
-      
-      // 新接口返回的是job_id，我们需要将其作为task_id使用（保持前端兼容性）
-      const jobId = jobData?.job_id;
+      const jobId = rsp?.job_id;
       if (!jobId) {
         throw new Error('服务器未返回job_id');
       }
-      
+
       // 设置到URL
       AsyncTaskManager.setTaskIdToUrl(jobId);
-      
+
       return jobId;
     } catch (error: any) {
       Message.error(error.message || '创建任务失败');
@@ -175,22 +157,15 @@ export class AsyncTaskManager {
    */
   async queryTaskStatus(taskId: string, silent: boolean = false): Promise<TaskStatusResponse> {
     try {
-      // 调用新的异步任务查询接口 - 使用Job-Task模型
+      // 调用异步任务查询接口 - Job-Task 模型（网关直接返回业务 PB JSON）
       const response = await api.post('/asynctask/QueryAsyncJob', {
         job_id: taskId
       });
 
-      // 检查响应状态
-      if (response.data?.code !== 200) {
-        const errorMsg = response.data?.message || '查询任务状态失败';
-        throw new Error(errorMsg);
-      }
-
-      // 从后台响应中获取任务数据
-      // 处理数组格式的响应：response.data.data 可能是数组
-      let jobData = response.data?.data;
-      if (Array.isArray(jobData) && jobData.length > 0) {
-        jobData = jobData[0]; // 取数组第一个元素
+      // 统一响应：ret_info.code === 'SUCCESS' 表示成功，业务字段在响应顶层
+      const jobData = response.data;
+      if (!isRetInfoSuccess(jobData?.ret_info?.code)) {
+        throw new Error(jobData?.ret_info?.msg || '查询任务状态失败');
       }
 
       // 将Job数据转换为TaskStatusResponse格式（保持前端兼容性）

@@ -247,16 +247,9 @@ watch(visible, (newVal) => {
 const loadAccountList = async () => {
   loading.value = true;
   try {
-    const response = await getCloudAccountList();
-    console.log('云账户列表API响应:', response);
-    
-    if (response?.code === 200 && response?.data) {
-      accountList.value = response.data || [];
-      total.value = response.total || 0;
-    } else {
-      accountList.value = [];
-      total.value = 0;
-    }
+    const accounts = await getCloudAccountList();
+    accountList.value = accounts || [];
+    total.value = accountList.value.length;
   } catch (error) {
     console.error('加载云账户列表失败:', error);
     Message.error('加载云账户列表失败');
@@ -304,14 +297,10 @@ const onEdit = (record: CloudAccount) => {
 // 删除
 const onDelete = async (record: CloudAccount) => {
   try {
-    const response = await deleteCloudAccount(record.account_id);
-    if (response?.data?.code === 200 || response?.data?.ret_info?.code === 0) {
-      Message.success('删除成功');
-      await loadAccountList();
-      emit('refresh');
-    } else {
-      throw new Error('删除失败');
-    }
+    await deleteCloudAccount(record.account_id);
+    Message.success('删除成功');
+    await loadAccountList();
+    emit('refresh');
   } catch (error) {
     console.error('删除云账户失败:', error);
     Message.error('删除云账户失败');
@@ -384,7 +373,6 @@ const handleFormOk = async () => {
   }
 
   try {
-    let response;
     if (isEdit.value) {
       // 编辑时,不传递secret_id和secret_key字段(不允许修改)
       const updateData: any = {
@@ -397,10 +385,10 @@ const handleFormOk = async () => {
         extra_config: form.extra_config || '{}'
       };
 
-      response = await updateCloudAccount(form.account_id, updateData);
+      await updateCloudAccount(form.account_id, updateData);
     } else {
       // 新增
-      response = await createCloudAccount({
+      await createCloudAccount({
         account_id: form.account_id,
         account_name: form.account_name,
         provider: form.provider,
@@ -413,14 +401,10 @@ const handleFormOk = async () => {
       });
     }
 
-    if (response?.data?.code === 200 || response?.data?.ret_info?.code === 0) {
-      Message.success(isEdit.value ? '编辑成功' : '新增成功');
-      formVisible.value = false;
-      await loadAccountList();
-      emit('refresh');
-    } else {
-      throw new Error(response?.data?.message || '操作失败');
-    }
+    Message.success(isEdit.value ? '编辑成功' : '新增成功');
+    formVisible.value = false;
+    await loadAccountList();
+    emit('refresh');
   } catch (error: any) {
     console.error('保存云账户失败:', error);
     Message.error(error?.message || '保存云账户失败');

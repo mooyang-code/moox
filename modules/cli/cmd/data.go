@@ -139,7 +139,7 @@ func init() {
 	dataCSVCmd.AddCommand(dataCSVImportCmd)
 	dataRowsCmd.AddCommand(dataRowsExportCmd)
 
-	dataCSVImportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:19104")
+	dataCSVImportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:20201")
 	dataCSVImportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
 	dataCSVImportCmd.Flags().StringVar(&dataSpaceID, "workspace", "default", "Space ID，兼容旧参数名")
 	dataCSVImportCmd.Flags().StringVar(&dataSourceID, "data-source", "", "DataSource ID")
@@ -154,7 +154,7 @@ func init() {
 	dataCSVImportCmd.Flags().StringArrayVar(&dataDimensions, "dimension", nil, "自定义维度，格式 name=value，可重复")
 	dataCSVImportCmd.Flags().StringVar(&dataFieldConfig, "field-config", "", "字段展示名 YAML 配置路径，默认读取 config/fields.yaml")
 
-	dataRowsExportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:19104")
+	dataRowsExportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:20201")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "workspace", "default", "Space ID，兼容旧参数名")
 	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset", "", "Dataset ID")

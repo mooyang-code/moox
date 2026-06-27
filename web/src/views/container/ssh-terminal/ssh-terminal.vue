@@ -157,7 +157,7 @@ const fetchHosts = async () => {
   hostsLoading.value = true;
   try {
     const res = await listSSHHosts({ limit: 200 });
-    hostList.value = res.data?.data ?? [];
+    hostList.value = res.data?.hosts ?? [];
   } catch {
     Message.error('获取主机列表失败');
   } finally {
@@ -261,7 +261,7 @@ const connectToHost = async (hostId: number) => {
   let sessionId: string;
   try {
     const sessionRes = await createSSHSession({ host_id: hostId });
-    sessionId = sessionRes.data?.data?.[0]?.session_id;
+    sessionId = sessionRes.data?.session_id;
     if (!sessionId) {
       Message.error('创建会话失败：无法获取 session_id');
       return;
@@ -533,7 +533,7 @@ onMounted(async () => {
   // Priority 2: Try to connect to the most recent active host (create new session)
   try {
     const sessionsRes = await getOnlineSessions();
-    const sessions = sessionsRes.data?.data as SessionInfo[] | undefined;
+    const sessions = sessionsRes.data?.sessions as SessionInfo[] | undefined;
 
     if (sessions && sessions.length > 0) {
       // Sort by last_active_time (most recent first)

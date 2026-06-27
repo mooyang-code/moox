@@ -29,7 +29,7 @@ package-skill:
 
 proto:
 	$(MAKE) -C modules/storage proto
-	$(MAKE) -C modules/control/proto all
+	$(MAKE) -C modules/admin/proto all
 
 clean:
 	rm -rf bin release dist coverage scripts/node_exporter/build

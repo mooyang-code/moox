@@ -123,7 +123,7 @@ storage:
     bleve_path: /data/bleve
     parquet_path: /data/archive
   primary:
-    service_name: trpc.storage.store.PrimaryStoreService
+    service_name: trpc.storage.store.PrimaryStore
   eventbus:
     type: nats
     nats_url: nats://127.0.0.1:4222
@@ -145,7 +145,7 @@ storage:
 	if opts.ParquetPath != "/data/archive" {
 		t.Fatalf("ParquetPath = %q", opts.ParquetPath)
 	}
-	if opts.PrimaryServiceName != "trpc.storage.store.PrimaryStoreService" {
+	if opts.PrimaryServiceName != "trpc.storage.store.PrimaryStore" {
 		t.Fatalf("PrimaryServiceName = %q", opts.PrimaryServiceName)
 	}
 	if opts.InitSchemaPath != "" {
@@ -200,7 +200,7 @@ func TestRoleHelpers(t *testing.T) {
 
 	remotePrimary := storageconfig.StorageConfig{
 		Roles:   []string{"access", "deriver"},
-		Primary: storageconfig.StoragePrimary{ServiceName: "trpc.storage.store.PrimaryStoreService"},
+		Primary: storageconfig.StoragePrimary{ServiceName: "trpc.storage.store.PrimaryStore"},
 	}
 	if shouldCreatePrimaryService(remotePrimary) {
 		t.Fatalf("access+deriver with remote primary should not create local primary service")

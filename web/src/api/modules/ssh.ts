@@ -56,14 +56,7 @@ export interface SftpListResult {
   current_dir: string;
 }
 
-// ========== 获取当前主机地址 ==========
-
-const getCurrentHost = () => {
-  return window.location.hostname;
-};
-
-// SSH 独立服务端口
-const SSH_DIRECT_PORT = 20180;
+// SSH 直连端点已并入统一网关 rawhandler，走同源 gateway（vite proxy 转发 /api/admin）
 
 // ========== 主机配置 ==========
 
@@ -80,7 +73,7 @@ export const deleteSSHHost = (id: number) =>
   api.post('/ssh/DeleteHost', { id });
 
 export const getSSHHostDetail = (id: number) =>
-  api.get('/ssh/GetHostDetail', { params: { id } });
+  api.post('/ssh/GetHost', { id });
 
 // ========== SSH 会话 ==========
 
@@ -107,16 +100,18 @@ export const sftpMkdir = (sessionId: string, path: string) =>
 export const sftpDelete = (sessionId: string, path: string) =>
   api.post('/ssh/SftpDelete', { session_id: sessionId, path });
 
-// 文件下载/上传走 SSH 独立端口（非 Gateway）
+// 文件下载/上传走统一网关 rawhandler（/api/admin/ssh/SftpDownload|SftpUpload）
 export const getSftpDownloadUrl = (sessionId: string, path: string) =>
-  `http://${getCurrentHost()}:${SSH_DIRECT_PORT}/api/sftp/download?session_id=${sessionId}&path=${encodeURIComponent(path)}`;
+  `/api/admin/ssh/SftpDownload?session_id=${sessionId}&path=${encodeURIComponent(path)}`;
 
 export const getSftpUploadUrl = () =>
-  `http://${getCurrentHost()}:${SSH_DIRECT_PORT}/api/sftp/upload`;
+  `/api/admin/ssh/SftpUpload`;
 
-// WebSocket 连接地址
-export const getSSHWebSocketUrl = (sessionId: string, w: number, h: number) =>
-  `ws://${getCurrentHost()}:${SSH_DIRECT_PORT}/api/ssh/conn?session_id=${sessionId}&w=${w}&h=${h}`;
+// WebSocket 连接地址（统一网关 rawhandler，ws 协议需用同源 host）
+export const getSSHWebSocketUrl = (sessionId: string, w: number, h: number) => {
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${proto}://${window.location.host}/api/admin/ssh/WsConnect?session_id=${sessionId}&w=${w}&h=${h}`;
+};
 
 // ========== 会话管理 ==========
 

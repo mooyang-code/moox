@@ -4,23 +4,24 @@ go 1.24.0
 
 replace github.com/mooyang-code/moox/modules/storage/proto/gen => ../storage/proto/gen
 
-replace github.com/mooyang-code/moox/modules/control/proto/gen => ../control/proto/gen
-
 replace github.com/mooyang-code/moox/modules/storage => ../storage
 
 replace github.com/mooyang-code/moox/modules/collector => ../collector
 
+replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/proto/admingen
+
 require (
+	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/collector v0.0.0
-	github.com/mooyang-code/moox/modules/control/proto/gen v0.0.0
 	github.com/mooyang-code/moox/modules/storage/proto/gen v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats.go v1.47.0
 	github.com/spf13/cobra v1.9.1
+	github.com/spf13/pflag v1.0.6
 	golang.org/x/term v0.38.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
-	modernc.org/sqlite v1.45.0
+	modernc.org/sqlite v1.34.5
 	trpc.group/trpc-go/trpc-go v1.0.3
 )
 
@@ -51,7 +52,6 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/spf13/cast v1.3.1 // indirect
-	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.43.0 // indirect
 	go.uber.org/atomic v1.9.0 // indirect

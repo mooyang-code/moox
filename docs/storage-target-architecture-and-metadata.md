@@ -508,7 +508,7 @@ flowchart LR
 
 ## 读写与查询协议
 
-### AccessService
+### Access
 
 用户写入和读取事实数据统一使用 Dataset 维度。
 
@@ -552,7 +552,7 @@ TimeRange 固定为闭区间 `[start_time, end_time]`，时间必须是 RFC3339/
 
 `ReadTimeSeriesRows` 使用 `TimeSeriesKey + TimeRange` 读取时序数据。`ReadRecordRows` 使用 `RecordKey + VersionRange` 读取记录数据。精确点查可让 range 的起止相同，读取最新版本可把 range 终点设置为业务需要的上界。
 
-### ViewService
+### DataView
 
 组合查询使用 View 维度。
 
@@ -578,7 +578,7 @@ Dataset 与 View 的维度不同是刻意设计：
 
 ### PrimaryStore 内部执行协议
 
-`PrimaryStoreService` 是在线事实主存的内部执行接口。View、Search 和 Archive 分别由独立内部服务承载。
+`PrimaryStore` 是在线事实主存的内部执行接口。View、Search 和 Archive 分别由独立内部服务承载。
 
 ```text
 WritePrimaryRows

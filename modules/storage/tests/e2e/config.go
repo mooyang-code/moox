@@ -39,13 +39,13 @@ func (h *Harness) writeConfig() error {
 	}
 	trpcContent := fmt.Sprintf(configTemplate,
 		portAdmin,        // admin.port
-		portQuery,        // ViewService
-		portPrimary,      // PrimaryStoreService
+		portQuery,        // DataView
+		portPrimary,      // PrimaryStore
 		portViewTimer,    // view.timer
 		portArchiveTimer, // archive.timer
 		e2eSpaceID,       // archive timer space_id
-		portDataHTTP,     // AccessService HTTP
-		portMetadataHTTP, // MetadataService HTTP
+		portDataHTTP,     // Access HTTP
+		portMetadataHTTP, // Metadata HTTP
 	)
 	if err := os.WriteFile(h.configPth, []byte(trpcContent), 0o644); err != nil {
 		return fmt.Errorf("写入 e2e 配置失败: %w", err)
@@ -91,12 +91,12 @@ server:
     read_timeout: 5000
     write_timeout: 60000
   service:
-    - name: trpc.storage.view.ViewService
+    - name: trpc.storage.view.DataView
       ip: 127.0.0.1
       port: %d
       network: tcp
       protocol: trpc
-    - name: trpc.storage.store.PrimaryStoreService
+    - name: trpc.storage.store.PrimaryStore
       ip: 127.0.0.1
       port: %d
       network: tcp
@@ -111,12 +111,12 @@ server:
       network: "*/20 * * * * *?scheduler=archiveSchedule&params=space_id=%s;dataset_id=*"
       protocol: timer
       timeout: 60000
-    - name: trpc.storage.access.AccessService
+    - name: trpc.storage.access.Access
       ip: 127.0.0.1
       port: %d
       network: tcp
       protocol: http
-    - name: trpc.storage.metadata.MetadataService
+    - name: trpc.storage.metadata.Metadata
       ip: 127.0.0.1
       port: %d
       network: tcp

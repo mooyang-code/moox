@@ -114,7 +114,7 @@ func TestStorageE2E(t *testing.T) {
 	t.Run("19_direct_storage_counts", func(t *testing.T) { testDirectStorageCounts(ctx, t) })
 }
 
-// ---------- 01 MetadataService CRUD ----------
+// ---------- 01 Metadata CRUD ----------
 
 func testMetadataCRUD(ctx context.Context, t *testing.T) {
 	meta := harness.MetadataClient()

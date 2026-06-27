@@ -97,7 +97,7 @@ func TestSQLTableDefinitionsLiveUnderStorageSchema(t *testing.T) {
 	storageRoot := moduleRoot(t)
 	repoRoot := filepath.Dir(filepath.Dir(storageRoot))
 	allowed := map[string]bool{
-		"modules/control/schema/admin.sql":    true,
+		"modules/admin/schema/admin.sql":    true,
 		"modules/storage/schema/metadata.sql": true,
 	}
 	err := filepath.WalkDir(repoRoot, func(path string, entry os.DirEntry, err error) error {

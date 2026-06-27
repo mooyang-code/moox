@@ -44,9 +44,9 @@ start_version <= version <= end_version
 
 Record 的 `version` 可以是业务版本字符串，也可以是 RFC3339/RFC3339Nano。时间型版本在底层会按同一规则归一化，保证范围比较稳定。
 
-## AccessService
+## Access
 
-AccessService 是唯一公开事实数据读写入口：
+Access 是唯一公开事实数据读写入口：
 
 ```text
 WriteTimeSeriesRows
@@ -73,9 +73,9 @@ RecordRow(key, columns, attributes)
 
 服务侧写入校验只要求 Dataset 存在、key 必填字段合法、携带列已登记且类型匹配。DatasetSubject 绑定关系由应用层、管理台或 CLI 独立维护，事实写入链路不自动写绑定，也不要求绑定先于数据写入。
 
-## PrimaryStoreService
+## PrimaryStore
 
-PrimaryStoreService 是内部执行协议，只在 Access 与主存节点之间使用：
+PrimaryStore 是内部执行协议，只在 Access 与主存节点之间使用：
 
 ```text
 WritePrimaryRows
@@ -99,9 +99,9 @@ t|space|dataset|subject|freq|version|dimhash
 r|space|dataset|record_id|version
 ```
 
-## ViewService
+## DataView
 
-ViewService 承载异步派生读模型：
+DataView 承载异步派生读模型：
 
 ```text
 QueryTimeSeriesRows
@@ -134,9 +134,9 @@ moox.storage.record.rows_changed.v1
 
 事件中的 rows 是变更提示，不要求携带完整行。派生消费者收到事件后通过 Access 读接口回读最新完整行，再覆盖写入 DuckDB、Bleve 或其他派生存储，使重放和重试保持幂等。
 
-## MetadataService
+## Metadata
 
-MetadataService 管理控制面元数据。底层可以使用 SQLite，但主服务和 CLI 只依赖 metadata store / service 抽象。
+Metadata 管理控制面元数据。底层可以使用 SQLite，但主服务和 CLI 只依赖 metadata store / service 抽象。
 
 主要拓扑对象：
 

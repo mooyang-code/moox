@@ -14,7 +14,7 @@ func TestBuildCreateFirewallRulesRequestUsesDocumentedFields(t *testing.T) {
 	req, err := NewCreateFirewallRulesRequest(CreateFirewallRulesOptions{
 		InstanceID:      "lhins-demo",
 		Protocol:        "tcp",
-		Ports:           "19104,19101,20103",
+		Ports:           "20201,20200,11000",
 		CidrBlock:       "0.0.0.0/0",
 		Action:          "accept",
 		Description:     "moox services",
@@ -33,7 +33,7 @@ func TestBuildCreateFirewallRulesRequestUsesDocumentedFields(t *testing.T) {
 		`"InstanceId":"lhins-demo"`,
 		`"FirewallVersion":5`,
 		`"Protocol":"TCP"`,
-		`"Port":"19104,19101,20103"`,
+		`"Port":"20201,20200,11000"`,
 		`"CidrBlock":"0.0.0.0/0"`,
 		`"Action":"ACCEPT"`,
 		`"FirewallRuleDescription":"moox services"`,
@@ -46,11 +46,11 @@ func TestBuildCreateFirewallRulesRequestUsesDocumentedFields(t *testing.T) {
 
 func TestBuildCreateFirewallRulesRequestRejectsInvalidInput(t *testing.T) {
 	for _, opts := range []CreateFirewallRulesOptions{
-		{InstanceID: "", Protocol: "TCP", Ports: "19104", CidrBlock: "0.0.0.0/0"},
-		{InstanceID: "lhins-demo", Protocol: "BAD", Ports: "19104", CidrBlock: "0.0.0.0/0"},
+		{InstanceID: "", Protocol: "TCP", Ports: "20201", CidrBlock: "0.0.0.0/0"},
+		{InstanceID: "lhins-demo", Protocol: "BAD", Ports: "20201", CidrBlock: "0.0.0.0/0"},
 		{InstanceID: "lhins-demo", Protocol: "TCP", Ports: "", CidrBlock: "0.0.0.0/0"},
 		{InstanceID: "lhins-demo", Protocol: "TCP", Ports: "abc", CidrBlock: "0.0.0.0/0"},
-		{InstanceID: "lhins-demo", Protocol: "TCP", Ports: "19104", CidrBlock: "0.0.0.0/0", IPv6CidrBlock: "::/0"},
+		{InstanceID: "lhins-demo", Protocol: "TCP", Ports: "20201", CidrBlock: "0.0.0.0/0", IPv6CidrBlock: "::/0"},
 	} {
 		if _, err := NewCreateFirewallRulesRequest(opts); err == nil {
 			t.Fatalf("NewCreateFirewallRulesRequest(%+v) should fail", opts)
@@ -85,7 +85,7 @@ func TestClientSendsTencentCloudHeadersAndParsesRequestID(t *testing.T) {
 		InstanceID: "lhins-demo",
 		FirewallRules: []FirewallRule{{
 			Protocol:  "TCP",
-			Port:      "19104",
+			Port:      "20201",
 			CidrBlock: "0.0.0.0/0",
 			Action:    "ACCEPT",
 		}},
@@ -102,7 +102,7 @@ func TestClientSendsTencentCloudHeadersAndParsesRequestID(t *testing.T) {
 	if !strings.Contains(gotAuth, "TC3-HMAC-SHA256") || !strings.Contains(gotAuth, "Credential=sid/") {
 		t.Fatalf("Authorization header not signed as TC3: %s", gotAuth)
 	}
-	if !strings.Contains(gotBody, `"InstanceId":"lhins-demo"`) || !strings.Contains(gotBody, `"Port":"19104"`) {
+	if !strings.Contains(gotBody, `"InstanceId":"lhins-demo"`) || !strings.Contains(gotBody, `"Port":"20201"`) {
 		t.Fatalf("unexpected body: %s", gotBody)
 	}
 }

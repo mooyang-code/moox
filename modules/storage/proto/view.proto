@@ -131,8 +131,8 @@ message RebuildRecordViewRsp {
   string rebuild_id = 2;
 }
 
-// ViewService 是用户侧 View 查询服务。
-service ViewService {
+// DataView 是用户侧 View 查询服务。
+service DataView {
   // QueryTimeSeriesRows 查询已登记 View 对应的 TimeSeries 读模型，默认使用 DuckDB。
   rpc QueryTimeSeriesRows(QueryTimeSeriesRowsReq) returns (QueryTimeSeriesRowsRsp);
   // SearchRecordRows 搜索已登记 View 对应的 Record 读模型，默认使用 Bleve。

@@ -284,8 +284,8 @@ func validStorageImportOptions(file string) storageImportOptions {
 	return storageImportOptions{
 		Format:       "csv",
 		File:         file,
-		AccessURL:    "http://127.0.0.1:19104",
-		MetadataURL:  "http://127.0.0.1:19101",
+		AccessURL:    "http://127.0.0.1:20201",
+		MetadataURL:  "http://127.0.0.1:20200",
 		SpaceID:      "crypto",
 		DatasetID:    "binance_spot_kline",
 		SubjectID:    "ARB-USDT",

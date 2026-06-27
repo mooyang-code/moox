@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/config"
-	pb "github.com/mooyang-code/moox/modules/control/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -33,7 +33,7 @@ func (a *AuthOperator) RegisterUser(ctx context.Context, username, password, nic
 	}
 
 	// 创建 tRPC 客户端代理
-	authClient := pb.NewAuthAPIClientProxy(client.WithTarget("ip://" + target))
+	authClient := pb.NewAuthClientProxy(client.WithTarget("ip://" + target))
 
 	// 构建注册请求
 	req := &pb.RegisterReq{

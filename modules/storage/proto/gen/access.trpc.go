@@ -17,8 +17,8 @@ import (
 
 // START ======================================= Server Service Definition ======================================= START
 
-// AccessServiceService defines service.
-type AccessServiceService interface {
+// AccessService defines service.
+type AccessService interface {
 	// WriteTimeSeriesRows WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
 	WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq) (*WriteTimeSeriesRowsRsp, error)
 	// ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
@@ -29,14 +29,14 @@ type AccessServiceService interface {
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error)
 }
 
-func AccessServiceService_WriteTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func AccessService_WriteTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &WriteTimeSeriesRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AccessServiceService).WriteTimeSeriesRows(ctx, reqbody.(*WriteTimeSeriesRowsReq))
+		return svr.(AccessService).WriteTimeSeriesRows(ctx, reqbody.(*WriteTimeSeriesRowsReq))
 	}
 
 	var rsp interface{}
@@ -47,14 +47,14 @@ func AccessServiceService_WriteTimeSeriesRows_Handler(svr interface{}, ctx conte
 	return rsp, nil
 }
 
-func AccessServiceService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func AccessService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReadTimeSeriesRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AccessServiceService).ReadTimeSeriesRows(ctx, reqbody.(*ReadTimeSeriesRowsReq))
+		return svr.(AccessService).ReadTimeSeriesRows(ctx, reqbody.(*ReadTimeSeriesRowsReq))
 	}
 
 	var rsp interface{}
@@ -65,14 +65,14 @@ func AccessServiceService_ReadTimeSeriesRows_Handler(svr interface{}, ctx contex
 	return rsp, nil
 }
 
-func AccessServiceService_WriteRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func AccessService_WriteRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &WriteRecordRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AccessServiceService).WriteRecordRows(ctx, reqbody.(*WriteRecordRowsReq))
+		return svr.(AccessService).WriteRecordRows(ctx, reqbody.(*WriteRecordRowsReq))
 	}
 
 	var rsp interface{}
@@ -83,14 +83,14 @@ func AccessServiceService_WriteRecordRows_Handler(svr interface{}, ctx context.C
 	return rsp, nil
 }
 
-func AccessServiceService_ReadRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func AccessService_ReadRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReadRecordRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AccessServiceService).ReadRecordRows(ctx, reqbody.(*ReadRecordRowsReq))
+		return svr.(AccessService).ReadRecordRows(ctx, reqbody.(*ReadRecordRowsReq))
 	}
 
 	var rsp interface{}
@@ -101,59 +101,59 @@ func AccessServiceService_ReadRecordRows_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
-// AccessServiceServer_ServiceDesc descriptor for server.RegisterService.
-var AccessServiceServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.storage.access.AccessService",
-	HandlerType: ((*AccessServiceService)(nil)),
+// AccessServer_ServiceDesc descriptor for server.RegisterService.
+var AccessServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.storage.access.Access",
+	HandlerType: ((*AccessService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.storage.access.AccessService/WriteTimeSeriesRows",
-			Func: AccessServiceService_WriteTimeSeriesRows_Handler,
+			Name: "/trpc.storage.access.Access/WriteTimeSeriesRows",
+			Func: AccessService_WriteTimeSeriesRows_Handler,
 		},
 		{
-			Name: "/trpc.storage.access.AccessService/ReadTimeSeriesRows",
-			Func: AccessServiceService_ReadTimeSeriesRows_Handler,
+			Name: "/trpc.storage.access.Access/ReadTimeSeriesRows",
+			Func: AccessService_ReadTimeSeriesRows_Handler,
 		},
 		{
-			Name: "/trpc.storage.access.AccessService/WriteRecordRows",
-			Func: AccessServiceService_WriteRecordRows_Handler,
+			Name: "/trpc.storage.access.Access/WriteRecordRows",
+			Func: AccessService_WriteRecordRows_Handler,
 		},
 		{
-			Name: "/trpc.storage.access.AccessService/ReadRecordRows",
-			Func: AccessServiceService_ReadRecordRows_Handler,
+			Name: "/trpc.storage.access.Access/ReadRecordRows",
+			Func: AccessService_ReadRecordRows_Handler,
 		},
 	},
 }
 
-// RegisterAccessServiceService registers service.
-func RegisterAccessServiceService(s server.Service, svr AccessServiceService) {
-	if err := s.Register(&AccessServiceServer_ServiceDesc, svr); err != nil {
-		panic(fmt.Sprintf("AccessService register error:%v", err))
+// RegisterAccessService registers service.
+func RegisterAccessService(s server.Service, svr AccessService) {
+	if err := s.Register(&AccessServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("Access register error:%v", err))
 	}
 }
 
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
-type UnimplementedAccessService struct{}
+type UnimplementedAccess struct{}
 
 // WriteTimeSeriesRows WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
-func (s *UnimplementedAccessService) WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq) (*WriteTimeSeriesRowsRsp, error) {
-	return nil, errors.New("rpc WriteTimeSeriesRows of service AccessService is not implemented")
+func (s *UnimplementedAccess) WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq) (*WriteTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc WriteTimeSeriesRows of service Access is not implemented")
 }
 
 // ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
-func (s *UnimplementedAccessService) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
-	return nil, errors.New("rpc ReadTimeSeriesRows of service AccessService is not implemented")
+func (s *UnimplementedAccess) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc ReadTimeSeriesRows of service Access is not implemented")
 }
 
 // WriteRecordRows WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
-func (s *UnimplementedAccessService) WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq) (*WriteRecordRowsRsp, error) {
-	return nil, errors.New("rpc WriteRecordRows of service AccessService is not implemented")
+func (s *UnimplementedAccess) WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq) (*WriteRecordRowsRsp, error) {
+	return nil, errors.New("rpc WriteRecordRows of service Access is not implemented")
 }
 
 // ReadRecordRows ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
-func (s *UnimplementedAccessService) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
-	return nil, errors.New("rpc ReadRecordRows of service AccessService is not implemented")
+func (s *UnimplementedAccess) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
+	return nil, errors.New("rpc ReadRecordRows of service Access is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -162,8 +162,8 @@ func (s *UnimplementedAccessService) ReadRecordRows(ctx context.Context, req *Re
 
 // START ======================================= Client Service Definition ======================================= START
 
-// AccessServiceClientProxy defines service client proxy
-type AccessServiceClientProxy interface {
+// AccessClientProxy defines service client proxy
+type AccessClientProxy interface {
 	// WriteTimeSeriesRows WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
 	WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq, opts ...client.Option) (rsp *WriteTimeSeriesRowsRsp, err error)
 	// ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
@@ -174,23 +174,23 @@ type AccessServiceClientProxy interface {
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (rsp *ReadRecordRowsRsp, err error)
 }
 
-type AccessServiceClientProxyImpl struct {
+type AccessClientProxyImpl struct {
 	client client.Client
 	opts   []client.Option
 }
 
-var NewAccessServiceClientProxy = func(opts ...client.Option) AccessServiceClientProxy {
-	return &AccessServiceClientProxyImpl{client: client.DefaultClient, opts: opts}
+var NewAccessClientProxy = func(opts ...client.Option) AccessClientProxy {
+	return &AccessClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *AccessServiceClientProxyImpl) WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq, opts ...client.Option) (*WriteTimeSeriesRowsRsp, error) {
+func (c *AccessClientProxyImpl) WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq, opts ...client.Option) (*WriteTimeSeriesRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.access.AccessService/WriteTimeSeriesRows")
-	msg.WithCalleeServiceName(AccessServiceServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.storage.access.Access/WriteTimeSeriesRows")
+	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("access")
-	msg.WithCalleeService("AccessService")
+	msg.WithCalleeService("Access")
 	msg.WithCalleeMethod("WriteTimeSeriesRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -203,14 +203,14 @@ func (c *AccessServiceClientProxyImpl) WriteTimeSeriesRows(ctx context.Context, 
 	return rsp, nil
 }
 
-func (c *AccessServiceClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (*ReadTimeSeriesRowsRsp, error) {
+func (c *AccessClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (*ReadTimeSeriesRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.access.AccessService/ReadTimeSeriesRows")
-	msg.WithCalleeServiceName(AccessServiceServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.storage.access.Access/ReadTimeSeriesRows")
+	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("access")
-	msg.WithCalleeService("AccessService")
+	msg.WithCalleeService("Access")
 	msg.WithCalleeMethod("ReadTimeSeriesRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -223,14 +223,14 @@ func (c *AccessServiceClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, r
 	return rsp, nil
 }
 
-func (c *AccessServiceClientProxyImpl) WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq, opts ...client.Option) (*WriteRecordRowsRsp, error) {
+func (c *AccessClientProxyImpl) WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq, opts ...client.Option) (*WriteRecordRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.access.AccessService/WriteRecordRows")
-	msg.WithCalleeServiceName(AccessServiceServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.storage.access.Access/WriteRecordRows")
+	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("access")
-	msg.WithCalleeService("AccessService")
+	msg.WithCalleeService("Access")
 	msg.WithCalleeMethod("WriteRecordRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -243,14 +243,14 @@ func (c *AccessServiceClientProxyImpl) WriteRecordRows(ctx context.Context, req 
 	return rsp, nil
 }
 
-func (c *AccessServiceClientProxyImpl) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (*ReadRecordRowsRsp, error) {
+func (c *AccessClientProxyImpl) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (*ReadRecordRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.access.AccessService/ReadRecordRows")
-	msg.WithCalleeServiceName(AccessServiceServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.storage.access.Access/ReadRecordRows")
+	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("storage")
 	msg.WithCalleeServer("access")
-	msg.WithCalleeService("AccessService")
+	msg.WithCalleeService("Access")
 	msg.WithCalleeMethod("ReadRecordRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))

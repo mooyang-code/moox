@@ -1,0 +1,143 @@
+# 网关服务配置 - 合并了认证服务配置
+# 配置文件包含：网关服务、认证服务、限流配置
+
+# 数据库配置（认证服务使用SQLite）
+database:
+  host: ""                    # SQLite不需要host
+  port: 0                     # SQLite不需要port
+  user: ""                    # SQLite不需要用户名
+  password: ""                # SQLite不需要密码
+  dbname: "./data/moox.db"    # SQLite数据库文件路径
+
+# 缓存配置（认证服务使用BadgerDB）
+cache:
+  data_dir: "./data/badger"   # BadgerDB数据存储目录
+  db: 0                       # 数据库编号（预留字段）
+
+# JWT配置（认证服务使用）
+jwt:
+  secret_key: "kJ8#3Lz!b1A6xQwP2dR9vM4nS7eT0uYpG5hZcV8jF2mB6sXlD3rWqN0tH9uK1oE4" # JWT密钥，从环境变量读取，生产环境请务必设置
+  access_expired: "24h"       # 访问令牌过期时间
+  refresh_expired: "168h"     # 刷新令牌过期时间（7天）
+
+# 安全配置（认证服务使用）
+security:
+  # 数据加密密钥（32字节，用于 AES-256）
+  # 生产环境必须设置环境变量 MOOX_ENCRYPTION_KEY
+  encryption_key: "moox-cloud-secret-key-32bytes"  # 开发环境默认值，生产环境请设置环境变量
+  salt_expired: "5m"          # 登录盐值过期时间
+  max_login_attempt: 5        # 最大登录尝试次数
+  lock_duration: "15m"        # 账户锁定时间
+
+# 网关服务配置
+gateway:
+  # 超时配置（毫秒）
+  timeout: 5000
+
+  # 是否开启调试模式
+  debug: true
+
+  # 后台服务对外接口签名鉴权配置
+  # 请求路径: /api/service/{service}/{method}
+  service_auth:
+    enabled: true
+    version: "moox-auth-v1"
+    access_key: "moox-service"
+    secret_key: "moox-service-secret-change-me"
+    max_expire_seconds: 1800
+    clock_skew_seconds: 300
+
+  # 不需要鉴权的接口列表
+  no_auth_methods:
+    - "/api/admin/health"
+    - "/api/admin/auth/Register"
+    - "/api/admin/auth/GetLoginSalt"
+    - "/api/admin/auth/Login"
+    # 文件下载由 fileserver 内部校验 file_download token，网关 authorize 放行
+    - "/api/admin/fileserver/download"
+    # SSH 直连端点由 rawhandler 内部校验 session_id，网关 authorize 放行
+    - "/api/admin/ssh/WsConnect"
+    - "/api/admin/ssh/SftpDownload"
+    - "/api/admin/ssh/SftpUpload"
+  # 服务配置映射：serviceID → address+path
+  # 网关 forwardHTTP 纯透传到目标有协议 http 端口（本进程 127.0.0.1:port，远端 storage host:port）。
+  # path 为 trpc 服务全名，URL = /{path}/{method}。
+  services:
+    auth:
+      address: "127.0.0.1:11100"
+      path: "trpc.moox.infra.Auth"
+    dnsproxy:
+      address: "127.0.0.1:11101"
+      path: "trpc.moox.infra.Dns"
+    asynctask:
+      address: "127.0.0.1:11102"
+      path: "trpc.moox.infra.AsyncTask"
+    monitor:
+      address: "127.0.0.1:11103"
+      path: "trpc.moox.ops.Monitor"
+    collectmgr:
+      address: "127.0.0.1:11104"
+      path: "trpc.moox.collect.CollectMgr"
+    cloudnode:
+      address: "127.0.0.1:11105"
+      path: "trpc.moox.collect.CloudNodeMgr"
+    ssh:
+      address: "127.0.0.1:11106"
+      path: "trpc.moox.ops.Ssh"
+    space:
+      address: "127.0.0.1:11107"
+      path: "trpc.moox.admin.SpaceMgr"
+    storage_metadata:
+      address: "127.0.0.1:20200"
+      path: "trpc.storage.metadata.Metadata"
+    storage_access:
+      address: "127.0.0.1:20201"
+      path: "trpc.storage.access.Access"
+    storage_view:
+      address: "127.0.0.1:20202"
+      path: "trpc.storage.view.DataView"
+
+
+
+# 限流配置
+rate_limit:
+  # 默认限流配置
+  default_qps: 2000      # 默认QPS限制
+  default_burst: 5000    # 默认突发流量
+
+  # 按接口配置限流
+  method_limits:
+    "/api/admin/auth/Login":
+      qps: 1
+      burst: 2
+    "/api/admin/auth/Register":
+      qps: 1
+      burst: 1
+    "/api/admin/auth/GetLoginSalt":
+      qps: 2
+      burst: 5
+    "/api/admin/auth/GetUserInfo":
+      qps: 2
+      burst: 5
+
+# 配置说明:
+# 时间格式支持: ns, us, ms, s, m, h
+# 例如: "30s" (30秒), "5m" (5分钟), "2h" (2小时), "24h" (24小时)
+#
+# 数据库支持:
+# 默认使用SQLite（无需额外安装数据库服务）
+# 如需PostgreSQL/MySQL，请参考相关配置
+#
+# 缓存目录:
+# 确保应用有权限在指定目录创建和写入文件
+# 数据库文件和缓存目录会自动创建
+#
+# 安全建议:
+# 1. JWT密钥请使用强随机字符串，至少32字符
+# 2. 生产环境建议缩短访问令牌过期时间
+# 3. 根据业务需求调整登录尝试次数和锁定时间
+#
+# 快速开始:
+# 1. 修改JWT密钥
+# 2. 确保 ./data 目录有写入权限
+# 3. 启动服务即可使用

@@ -188,7 +188,7 @@ func TestStorageRuntimeConfigDefaultsRolesEventBusAndDeriver(t *testing.T) {
 	if cfg.Storage.EventBus.Embedded.Enabled {
 		t.Fatalf("embedded nats should be opt-in by default")
 	}
-	if cfg.Storage.Deriver.AccessServiceName != "trpc.storage.access.AccessService" {
+	if cfg.Storage.Deriver.AccessServiceName != "trpc.storage.access.Access" {
 		t.Fatalf("deriver access_service_name = %q", cfg.Storage.Deriver.AccessServiceName)
 	}
 	if cfg.Storage.Deriver.BatchSize != 500 {
@@ -272,7 +272,7 @@ storage:
 	if cfg.Storage.EventBus.Type != "memory" {
 		t.Fatalf("eventbus type = %q", cfg.Storage.EventBus.Type)
 	}
-	if cfg.Storage.Deriver.AccessServiceName != "trpc.storage.access.AccessService" {
+	if cfg.Storage.Deriver.AccessServiceName != "trpc.storage.access.Access" {
 		t.Fatalf("deriver access_service_name = %q", cfg.Storage.Deriver.AccessServiceName)
 	}
 }

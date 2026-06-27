@@ -1,5 +1,5 @@
-import { createSpace, listSpaceMembers, listSpaces, updateSpace } from './control/spaces';
-import type { Space } from './control/types';
+import { createSpace, listSpaceMembers, listSpaces, updateSpace } from './admin/spaces';
+import type { Space } from './admin/types';
 import {
   bindDatasetSubject,
   createDataSource,
