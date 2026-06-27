@@ -266,21 +266,6 @@ func parseQueryJobResponse(raw []byte, jobID string) (*JobQueryResult, error) {
 		Tasks:          direct.Tasks,
 	}, nil
 }
-
-func (c *Client) doJSON(ctx context.Context, method, path string, body any, out any) error {
-	raw, err := c.postJSON(ctx, method, path, body)
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(raw, out); err != nil {
-		return err
-	}
-	if resp, ok := out.(*unifiedResponse); ok && resp.Code != 0 && resp.Code != 200 {
-		return fmt.Errorf("control returned code %d: %s", resp.Code, resp.Message)
-	}
-	return nil
-}
-
 func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([]byte, error) {
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("control url is required")

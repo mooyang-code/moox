@@ -198,11 +198,6 @@ func (h *HTTPRequestHandler) parseRequestParams(r *http.Request) (serviceID, met
 	return serviceID, method, nil
 }
 
-func (h *HTTPRequestHandler) readRequestBody(r *http.Request) ([]byte, error) {
-	_, body, err := h.readRequestBodyWithRaw(r)
-	return body, err
-}
-
 // readRequestBodyWithRaw 读取原始请求体，同时返回合并 URL query 参数后的转发请求体。
 // 优先级：body 中的参数 > URL query 参数。
 func (h *HTTPRequestHandler) readRequestBodyWithRaw(r *http.Request) ([]byte, []byte, error) {
@@ -227,8 +222,8 @@ func (h *HTTPRequestHandler) readRequestBodyWithRaw(r *http.Request) ([]byte, []
 			queryMap[key] = values[0]
 		} else {
 			queryMap[key] = values
-		}
 	}
+}
 
 	// 如果 body 为空，直接使用 query 参数
 	if len(body) == 0 {
@@ -329,19 +324,3 @@ func (h *HTTPRequestHandler) getClientIP(r *http.Request) string {
 	}
 	return remoteAddr
 }
-
-// writeResponse 写入响应
-func (h *HTTPRequestHandler) writeResponse(w http.ResponseWriter, respBody []byte, headers map[string]string) {
-	// 设置响应头
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Auth, X-App-Id, X-App-Key, X-Access-Token, X-Trace-Id")
-
-	// 设置追踪ID到响应头
-	if traceID := headers["trace_id"]; traceID != "" {
-		w.Header().Set("X-Trace-Id", traceID)
-	}
-	w.Write(respBody)
-}
-

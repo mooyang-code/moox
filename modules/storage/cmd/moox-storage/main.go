@@ -232,17 +232,6 @@ func registerTimerHandlerService(name string, service server.Service, handle fun
 	return true
 }
 
-func storageOptions() storagesvc.Options {
-	configPath := configPathFromArgs(os.Args)
-	storageConfigPath := storageConfigPathFromArgs(os.Args, configPath)
-	cfg := loadRuntimeConfig(storageConfigPath)
-	opts := storageOptionsFromConfig(cfg.Storage)
-	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
-		opts.Root = root
-	}
-	return opts
-}
-
 func needsRowsChangedBus(storage storageconfig.StorageConfig) bool {
 	return storage.HasRole("access") || storage.HasRole("deriver")
 }

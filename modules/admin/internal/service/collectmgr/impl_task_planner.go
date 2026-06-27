@@ -248,30 +248,6 @@ func (s *TaskPlannerServiceImpl) computeInstances(
 	return instances, nil
 }
 
-// selectLeastLoadedNode 选择任务最少的节点（负载观测，保留用于诊断/未来再均衡）
-// 当前任务分配以 Rendezvous + 保留旧分配为准，此方法不再用于实际分派。
-func (s *TaskPlannerServiceImpl) selectLeastLoadedNode(
-	nodes []*cloudnodemodel.CloudNode,
-	nodeTaskCount map[string]int,
-) string {
-	if len(nodes) == 0 {
-		return ""
-	}
-
-	minNode := nodes[0].NodeID
-	minCount := nodeTaskCount[minNode]
-
-	for _, node := range nodes[1:] {
-		count := nodeTaskCount[node.NodeID]
-		if count < minCount {
-			minCount = count
-			minNode = node.NodeID
-		}
-	}
-
-	return minNode
-}
-
 // ========== RecalculateAllTaskInstances 辅助方法 ==========
 
 // loadOnlineNodes 加载在线节点

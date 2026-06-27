@@ -461,24 +461,6 @@ func (s *Service) currentTimeSeriesRows(ctx context.Context, keys []*pb.TimeSeri
 	return out, nil
 }
 
-func (s *Service) currentRecordRows(ctx context.Context, keys []*pb.RecordKey) ([]*pb.RecordRow, error) {
-	if len(keys) == 0 {
-		return nil, nil
-	}
-	reader := s.factReader
-	if reader == nil {
-		reader = s
-	}
-	rsp, err := reader.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: keys})
-	if err != nil {
-		return nil, err
-	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		return nil, errText(rsp.GetRetInfo().GetMsg())
-	}
-	return rsp.GetRows(), nil
-}
-
 func (s *Service) waitForAsyncJobs() {
 	s.asyncWG.Wait()
 }

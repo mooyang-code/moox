@@ -27,31 +27,3 @@ func (s *Service) readTimeSeriesProjectionRow(ctx context.Context, base *pb.Time
 	}
 	return rsp.GetRows()[0], nil
 }
-
-func (s *Service) recordRowsForView(ctx context.Context, item *pb.View, columns []*pb.ViewColumn, rows []*pb.RecordRow) ([]*pb.RecordRow, bool, error) {
-	return deriver.RecordRowsForView(ctx, item, columns, rows, s.readRecordProjectionRow)
-}
-
-func (s *Service) readRecordProjectionRow(ctx context.Context, base *pb.RecordKey, datasetID string) (*pb.RecordRow, error) {
-	key := proto.Clone(base).(*pb.RecordKey)
-	key.DatasetId = datasetID
-	rsp, err := s.viewFactReaderOrDefault().ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: []*pb.RecordKey{key}})
-	if err != nil {
-		return nil, err
-	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		return nil, errText(rsp.GetRetInfo().GetMsg())
-	}
-	if len(rsp.GetRows()) == 0 {
-		return nil, nil
-	}
-	return rsp.GetRows()[0], nil
-}
-
-func isProjectableTimeSeriesView(item *pb.View, columns []*pb.ViewColumn) bool {
-	return deriver.IsProjectableTimeSeriesView(item, columns)
-}
-
-func isProjectableRecordView(item *pb.View, columns []*pb.ViewColumn) bool {
-	return deriver.IsProjectableRecordView(item, columns)
-}

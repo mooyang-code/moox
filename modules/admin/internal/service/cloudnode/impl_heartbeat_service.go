@@ -19,7 +19,6 @@ import (
 const (
 	supportedCollectorsCacheTTLSeconds int64 = 50
 	packageVersionCacheTTLSeconds      int64 = 30
-	nodeTasksCacheTTLSeconds           int64 = 60
 	runningVersionCacheTTLSeconds      int64 = 50
 )
 
@@ -296,10 +295,6 @@ func packageVersionCacheKey(nodeID string) string {
 	return "heartbeat:package_version:" + nodeID
 }
 
-func nodeTasksCacheKey(nodeID string) string {
-	return "heartbeat:node_tasks:" + nodeID
-}
-
 func runningVersionCacheKey(nodeID string) string {
 	return "heartbeat:running_version:" + nodeID
 }
@@ -350,35 +345,6 @@ func (s *ServiceImpl) getLatestPackageVersion(ctx context.Context, nodeID string
 
 // ========== 任务实例查询和MD5计算 ==========
 
-// getNodeTasksCached 获取节点任务列表（带缓存）
-func (s *ServiceImpl) getNodeTasksCached(ctx context.Context, nodeID string) ([]*types.TaskInstanceInfo, error) {
-	cacheKey := nodeTasksCacheKey(nodeID)
-	cached, err := localcache.GetWithLoad(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, error) {
-		return s.loadNodeTasks(ctx, nodeID)
-	}, nodeTasksCacheTTLSeconds)
-	if err != nil {
-		return nil, err
-	}
-
-	if cached == nil {
-		return nil, nil
-	}
-
-	tasks, ok := cached.([]*types.TaskInstanceInfo)
-	if ok {
-		return tasks, nil
-	}
-
-	// 缓存类型不匹配，清除缓存并重新加载
-	localcache.Del(cacheKey)
-	tasks, err = s.loadNodeTasks(ctx, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	localcache.Set(cacheKey, tasks, nodeTasksCacheTTLSeconds)
-	return tasks, nil
-}
-
 // loadNodeTasksFromMemory 从内存仓库加载节点任务（新版）
 func (s *ServiceImpl) loadNodeTasksFromMemory(ctx context.Context, nodeID string) []*types.TaskInstanceInfo {
 	// 从内存仓库获取该节点的任务实例
@@ -420,39 +386,6 @@ func (s *ServiceImpl) loadNodeTasksFromMemory(ctx context.Context, nodeID string
 	}
 
 	return tasks
-}
-
-// loadNodeTasks 从DB加载节点任务（旧版，保留用于兼容）
-func (s *ServiceImpl) loadNodeTasks(ctx context.Context, nodeID string) ([]*types.TaskInstanceInfo, error) {
-	// 获取节点的所有任务实例（不限制状态）
-	instances, err := s.taskInstanceDAO.GetTaskInstancesByNode(ctx, nodeID, nil)
-	if err != nil {
-		log.ErrorContextf(ctx, "[Heartbeat] 加载节点任务失败: nodeID=%s, error=%v", nodeID, err)
-		return nil, fmt.Errorf("load node tasks failed: %w", err)
-	}
-
-	// 转换为 TaskInstanceInfo，过滤掉 Invalid 的任务
-	var tasks []*types.TaskInstanceInfo
-	for _, instance := range instances {
-		// 跳过已标记为Invalid的任务
-		if instance.Invalid != 0 {
-			continue
-		}
-
-		tasks = append(tasks, &types.TaskInstanceInfo{
-			ID:              instance.ID,
-			TaskID:          instance.TaskID,
-			RuleID:          instance.RuleID,
-			PlannedExecNode: instance.PlannedExecNode,
-			DataType:        instance.CollectDataType,
-			Symbol:          instance.Symbol,
-			Interval:        instance.Interval,
-			TaskParams:      instance.TaskParams,
-			Invalid:         instance.Invalid,
-		})
-	}
-
-	return tasks, nil
 }
 
 // calculateTasksMD5 计算任务MD5值
@@ -506,4 +439,3 @@ func (s *ServiceImpl) handleNodeDNSRecords(ctx context.Context, nodeID string, r
 
 	return nil
 }
-

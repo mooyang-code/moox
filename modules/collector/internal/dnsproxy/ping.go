@@ -53,25 +53,3 @@ func probeAndSort(ctx context.Context, domain string, ips []string) []*IPInfo {
 
 	return ipInfoList
 }
-
-// pingIP 对单个 IP 进行 TCP 连接测试（端口 443）
-func pingIP(ctx context.Context, ip string) (latency int64, available bool) {
-	start := time.Now()
-	address := fmt.Sprintf("%s:443", ip)
-
-	// 创建带超时的 Context（2秒）
-	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	// 尝试建立 TCP 连接
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(timeoutCtx, "tcp", address)
-	if err != nil {
-		return 0, false
-	}
-	defer conn.Close()
-
-	// 计算延迟（微秒）
-	latency = time.Since(start).Microseconds()
-	return latency, true
-}

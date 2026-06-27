@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/constants"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/provider"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/types"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/fileserver"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
@@ -368,45 +367,6 @@ func packageDetailModelToPB(pkg *model.FunctionPackage) *pb.PackageDetail {
 	}
 }
 
-// ========== PB Struct 转换辅助 ==========
-
-// structToInterface 将 google.protobuf.Struct 转为 Go 任意值（nil 时返回 nil）。
-func structToInterface(s *structpb.Struct) interface{} {
-	if s == nil {
-		return nil
-	}
-	v := s.AsMap()
-	return v
-}
-
-// interfaceToStruct 将任意 Go 值转为 google.protobuf.Struct。
-// 支持 JSON 字符串（自动解析）、map、struct 等；失败或空值返回 nil。
-func interfaceToStruct(v interface{}) *structpb.Struct {
-	if v == nil {
-		return nil
-	}
-	// 字符串：尝试 JSON 解析为任意对象
-	if s, ok := v.(string); ok {
-		if s == "" {
-			return nil
-		}
-		var parsed interface{}
-		if err := json.Unmarshal([]byte(s), &parsed); err != nil {
-			return nil
-		}
-		st, err := structpb.NewStruct(parsed.(map[string]interface{}))
-		if err != nil {
-			return nil
-		}
-		return st
-	}
-	st, err := structpb.NewStruct(asMap(v))
-	if err != nil {
-		return nil
-	}
-	return st
-}
-
 // asMap 将任意值规整为 map[string]interface{}（用于构造 Struct）。
 func asMap(v interface{}) map[string]interface{} {
 	if m, ok := v.(map[string]interface{}); ok {
@@ -422,17 +382,6 @@ func asMap(v interface{}) map[string]interface{} {
 		return nil
 	}
 	return m
-}
-
-// maskSecret 对凭证做简单脱敏：长度<=8 全隐藏，否则保留首3尾3。
-func maskSecret(s string) string {
-	if s == "" {
-		return ""
-	}
-	if len(s) <= 8 {
-		return "********"
-	}
-	return s[:3] + "********" + s[len(s)-3:]
 }
 
 // ========== 时间格式化辅助 ==========
@@ -465,23 +414,6 @@ func parseTime(s string) time.Time {
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
 		return time.Time{}
-	}
-	return t
-}
-
-// nodeStatusToString 将 types.NodeStatus 转为前端可读字符串。
-func nodeStatusToString(status types.NodeStatus) string {
-	switch status {
-	case types.NodeStatusOnline:
-		return "online"
-	case types.NodeStatusOffline:
-		return "offline"
-	case types.NodeStatusTimeout:
-		return "timeout"
-	case types.NodeStatusAbnormal:
-		return "abnormal"
-	}
-	return "offline"
 }
 
 // calcNodeStatusText 依据最近心跳与超时阈值计算状态文本。

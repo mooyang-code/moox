@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
@@ -13,8 +12,7 @@ import (
 
 // CacheDB BadgerDB封装，提供缓存操作
 type CacheDB struct {
-	db    *badger.DB
-	locks sync.Map // 进程内锁管理
+	db *badger.DB
 }
 
 // NewCacheDB 创建BadgerDB实例
