@@ -16,7 +16,7 @@ cache:
 
 # JWT配置（认证服务使用）
 jwt:
-  # JWT 密钥。生产环境必须通过环境变量 JWT_SECRET 注入强随机值（>=32 字节）。
+  # JWT 密钥。生产环境请直接修改为强随机值（>=32 字节）。
   # 以下为开发占位符，请勿用于生产；更换密钥后已签发的 token 将失效，需重新登录。
   secret_key: "dev-only-set-JWT_SECRET-env"
   access_expired: "24h"       # 访问令牌过期时间
@@ -24,9 +24,8 @@ jwt:
 
 # 安全配置（认证服务使用）
 security:
-  # 数据加密密钥（AES-256）。生产环境必须通过环境变量 MOOX_ENCRYPTION_KEY 注入。
+  # 数据加密密钥（AES-256）。生产环境请直接修改为强随机值。
   # 注意：此密钥用于加密数据库中的云账户凭证，一旦更换将无法解密历史数据，请妥善保管。
-  # 未设环境变量时 crypto.GetEncryptionKey() 回退到以下开发默认值。
   encryption_key: "moox-cloud-secret-key-32bytes"
   salt_expired: "5m"          # 登录盐值过期时间
   max_login_attempt: 5        # 最大登录尝试次数
@@ -42,7 +41,7 @@ gateway:
 
   # 后台服务对外接口签名鉴权配置
   # 请求路径: /api/service/{service}/{method}
-  # 生产环境通过环境变量 MOOX_SERVICE_AUTH_ACCESS_KEY / MOOX_SERVICE_AUTH_SECRET_KEY 注入。
+  # 生产环境请直接修改 access_key / secret_key 为强随机值，并同步更新 SCF/cli 端。
   service_auth:
     enabled: true
     version: "moox-auth-v1"

@@ -324,12 +324,7 @@ start_storage() {
 
 start_admin() {
   start_service "admin" "${ROOT}/admin" \
-    env \
-      "JWT_SECRET=${JWT_SECRET:-}" \
-      "MOOX_ENCRYPTION_KEY=${MOOX_ENCRYPTION_KEY:-}" \
-      "MOOX_SERVICE_AUTH_ACCESS_KEY=${MOOX_SERVICE_AUTH_ACCESS_KEY:-}" \
-      "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-}" \
-      "${ROOT}/bin/moox-server" -conf=config/trpc_go.yaml
+    "${ROOT}/bin/moox-server" -conf=config/trpc_go.yaml
 }
 
 start_web_host() {
