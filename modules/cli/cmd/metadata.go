@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	accessServiceName   = "trpc.storage.access.Access"
-	metadataServiceName = "trpc.storage.metadata.Metadata"
+	accessServiceName   = "trpc.moox.storage.Access"
+	metadataServiceName = "trpc.moox.storage.Metadata"
 )
 
 var (

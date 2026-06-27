@@ -1003,203 +1003,203 @@ func MetadataService_ListArchiveFiles_Handler(svr interface{}, ctx context.Conte
 
 // MetadataServer_ServiceDesc descriptor for server.RegisterService.
 var MetadataServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.storage.metadata.Metadata",
+	ServiceName: "trpc.moox.storage.Metadata",
 	HandlerType: ((*MetadataService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.storage.metadata.Metadata/CreateSpace",
+			Name: "/trpc.moox.storage.Metadata/CreateSpace",
 			Func: MetadataService_CreateSpace_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/UpdateSpace",
+			Name: "/trpc.moox.storage.Metadata/UpdateSpace",
 			Func: MetadataService_UpdateSpace_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/GetSpace",
+			Name: "/trpc.moox.storage.Metadata/GetSpace",
 			Func: MetadataService_GetSpace_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListSpaces",
+			Name: "/trpc.moox.storage.Metadata/ListSpaces",
 			Func: MetadataService_ListSpaces_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/CreateView",
+			Name: "/trpc.moox.storage.Metadata/CreateView",
 			Func: MetadataService_CreateView_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/UpdateView",
+			Name: "/trpc.moox.storage.Metadata/UpdateView",
 			Func: MetadataService_UpdateView_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/GetView",
+			Name: "/trpc.moox.storage.Metadata/GetView",
 			Func: MetadataService_GetView_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListViews",
+			Name: "/trpc.moox.storage.Metadata/ListViews",
 			Func: MetadataService_ListViews_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/UpsertViewColumn",
+			Name: "/trpc.moox.storage.Metadata/UpsertViewColumn",
 			Func: MetadataService_UpsertViewColumn_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListViewColumns",
+			Name: "/trpc.moox.storage.Metadata/ListViewColumns",
 			Func: MetadataService_ListViewColumns_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/CreateDataSource",
+			Name: "/trpc.moox.storage.Metadata/CreateDataSource",
 			Func: MetadataService_CreateDataSource_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/UpdateDataSource",
+			Name: "/trpc.moox.storage.Metadata/UpdateDataSource",
 			Func: MetadataService_UpdateDataSource_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/GetDataSource",
+			Name: "/trpc.moox.storage.Metadata/GetDataSource",
 			Func: MetadataService_GetDataSource_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListDataSources",
+			Name: "/trpc.moox.storage.Metadata/ListDataSources",
 			Func: MetadataService_ListDataSources_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/UpsertSubject",
+			Name: "/trpc.moox.storage.Metadata/UpsertSubject",
 			Func: MetadataService_UpsertSubject_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/RegisterDataSubject",
+			Name: "/trpc.moox.storage.Metadata/RegisterDataSubject",
 			Func: MetadataService_RegisterDataSubject_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/GetSubject",
+			Name: "/trpc.moox.storage.Metadata/GetSubject",
 			Func: MetadataService_GetSubject_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListSubjects",
+			Name: "/trpc.moox.storage.Metadata/ListSubjects",
 			Func: MetadataService_ListSubjects_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListSubjectSymbols",
+			Name: "/trpc.moox.storage.Metadata/ListSubjectSymbols",
 			Func: MetadataService_ListSubjectSymbols_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/CreateDataset",
+			Name: "/trpc.moox.storage.Metadata/CreateDataset",
 			Func: MetadataService_CreateDataset_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/UpdateDataset",
+			Name: "/trpc.moox.storage.Metadata/UpdateDataset",
 			Func: MetadataService_UpdateDataset_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/GetDataset",
+			Name: "/trpc.moox.storage.Metadata/GetDataset",
 			Func: MetadataService_GetDataset_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListDatasets",
+			Name: "/trpc.moox.storage.Metadata/ListDatasets",
 			Func: MetadataService_ListDatasets_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/BindDatasetSubject",
+			Name: "/trpc.moox.storage.Metadata/BindDatasetSubject",
 			Func: MetadataService_BindDatasetSubject_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListDatasetSubjects",
+			Name: "/trpc.moox.storage.Metadata/ListDatasetSubjects",
 			Func: MetadataService_ListDatasetSubjects_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/CreateField",
+			Name: "/trpc.moox.storage.Metadata/CreateField",
 			Func: MetadataService_CreateField_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/UpdateField",
+			Name: "/trpc.moox.storage.Metadata/UpdateField",
 			Func: MetadataService_UpdateField_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/GetField",
+			Name: "/trpc.moox.storage.Metadata/GetField",
 			Func: MetadataService_GetField_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListFields",
+			Name: "/trpc.moox.storage.Metadata/ListFields",
 			Func: MetadataService_ListFields_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/CreateFactor",
+			Name: "/trpc.moox.storage.Metadata/CreateFactor",
 			Func: MetadataService_CreateFactor_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/UpdateFactor",
+			Name: "/trpc.moox.storage.Metadata/UpdateFactor",
 			Func: MetadataService_UpdateFactor_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/GetFactor",
+			Name: "/trpc.moox.storage.Metadata/GetFactor",
 			Func: MetadataService_GetFactor_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListFactors",
+			Name: "/trpc.moox.storage.Metadata/ListFactors",
 			Func: MetadataService_ListFactors_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/UpsertDatasetColumn",
+			Name: "/trpc.moox.storage.Metadata/UpsertDatasetColumn",
 			Func: MetadataService_UpsertDatasetColumn_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListDatasetColumns",
+			Name: "/trpc.moox.storage.Metadata/ListDatasetColumns",
 			Func: MetadataService_ListDatasetColumns_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/CreatePrimaryStoreNode",
+			Name: "/trpc.moox.storage.Metadata/CreatePrimaryStoreNode",
 			Func: MetadataService_CreatePrimaryStoreNode_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/UpdatePrimaryStoreNode",
+			Name: "/trpc.moox.storage.Metadata/UpdatePrimaryStoreNode",
 			Func: MetadataService_UpdatePrimaryStoreNode_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/GetPrimaryStoreNode",
+			Name: "/trpc.moox.storage.Metadata/GetPrimaryStoreNode",
 			Func: MetadataService_GetPrimaryStoreNode_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListPrimaryStoreNodes",
+			Name: "/trpc.moox.storage.Metadata/ListPrimaryStoreNodes",
 			Func: MetadataService_ListPrimaryStoreNodes_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/CreateDevice",
+			Name: "/trpc.moox.storage.Metadata/CreateDevice",
 			Func: MetadataService_CreateDevice_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/UpdateDevice",
+			Name: "/trpc.moox.storage.Metadata/UpdateDevice",
 			Func: MetadataService_UpdateDevice_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/GetDevice",
+			Name: "/trpc.moox.storage.Metadata/GetDevice",
 			Func: MetadataService_GetDevice_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListDevices",
+			Name: "/trpc.moox.storage.Metadata/ListDevices",
 			Func: MetadataService_ListDevices_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/CreatePrimaryStoreRoute",
+			Name: "/trpc.moox.storage.Metadata/CreatePrimaryStoreRoute",
 			Func: MetadataService_CreatePrimaryStoreRoute_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/UpdatePrimaryStoreRoute",
+			Name: "/trpc.moox.storage.Metadata/UpdatePrimaryStoreRoute",
 			Func: MetadataService_UpdatePrimaryStoreRoute_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/GetPrimaryStoreRoute",
+			Name: "/trpc.moox.storage.Metadata/GetPrimaryStoreRoute",
 			Func: MetadataService_GetPrimaryStoreRoute_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListPrimaryStoreRoutes",
+			Name: "/trpc.moox.storage.Metadata/ListPrimaryStoreRoutes",
 			Func: MetadataService_ListPrimaryStoreRoutes_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/RegisterArchiveFile",
+			Name: "/trpc.moox.storage.Metadata/RegisterArchiveFile",
 			Func: MetadataService_RegisterArchiveFile_Handler,
 		},
 		{
-			Name: "/trpc.storage.metadata.Metadata/ListArchiveFiles",
+			Name: "/trpc.moox.storage.Metadata/ListArchiveFiles",
 			Func: MetadataService_ListArchiveFiles_Handler,
 		},
 	},
@@ -1581,10 +1581,10 @@ var NewMetadataClientProxy = func(opts ...client.Option) MetadataClientProxy {
 func (c *MetadataClientProxyImpl) CreateSpace(ctx context.Context, req *CreateSpaceReq, opts ...client.Option) (*CreateSpaceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/CreateSpace")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateSpace")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("CreateSpace")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1601,10 +1601,10 @@ func (c *MetadataClientProxyImpl) CreateSpace(ctx context.Context, req *CreateSp
 func (c *MetadataClientProxyImpl) UpdateSpace(ctx context.Context, req *UpdateSpaceReq, opts ...client.Option) (*UpdateSpaceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/UpdateSpace")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateSpace")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("UpdateSpace")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1621,10 +1621,10 @@ func (c *MetadataClientProxyImpl) UpdateSpace(ctx context.Context, req *UpdateSp
 func (c *MetadataClientProxyImpl) GetSpace(ctx context.Context, req *GetSpaceReq, opts ...client.Option) (*GetSpaceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/GetSpace")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetSpace")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("GetSpace")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1641,10 +1641,10 @@ func (c *MetadataClientProxyImpl) GetSpace(ctx context.Context, req *GetSpaceReq
 func (c *MetadataClientProxyImpl) ListSpaces(ctx context.Context, req *ListSpacesReq, opts ...client.Option) (*ListSpacesRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListSpaces")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListSpaces")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListSpaces")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1661,10 +1661,10 @@ func (c *MetadataClientProxyImpl) ListSpaces(ctx context.Context, req *ListSpace
 func (c *MetadataClientProxyImpl) CreateView(ctx context.Context, req *CreateViewReq, opts ...client.Option) (*CreateViewRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/CreateView")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateView")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("CreateView")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1681,10 +1681,10 @@ func (c *MetadataClientProxyImpl) CreateView(ctx context.Context, req *CreateVie
 func (c *MetadataClientProxyImpl) UpdateView(ctx context.Context, req *UpdateViewReq, opts ...client.Option) (*UpdateViewRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/UpdateView")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateView")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("UpdateView")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1701,10 +1701,10 @@ func (c *MetadataClientProxyImpl) UpdateView(ctx context.Context, req *UpdateVie
 func (c *MetadataClientProxyImpl) GetView(ctx context.Context, req *GetViewReq, opts ...client.Option) (*GetViewRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/GetView")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetView")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("GetView")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1721,10 +1721,10 @@ func (c *MetadataClientProxyImpl) GetView(ctx context.Context, req *GetViewReq, 
 func (c *MetadataClientProxyImpl) ListViews(ctx context.Context, req *ListViewsReq, opts ...client.Option) (*ListViewsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListViews")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListViews")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListViews")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1741,10 +1741,10 @@ func (c *MetadataClientProxyImpl) ListViews(ctx context.Context, req *ListViewsR
 func (c *MetadataClientProxyImpl) UpsertViewColumn(ctx context.Context, req *UpsertViewColumnReq, opts ...client.Option) (*UpsertViewColumnRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/UpsertViewColumn")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpsertViewColumn")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("UpsertViewColumn")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1761,10 +1761,10 @@ func (c *MetadataClientProxyImpl) UpsertViewColumn(ctx context.Context, req *Ups
 func (c *MetadataClientProxyImpl) ListViewColumns(ctx context.Context, req *ListViewColumnsReq, opts ...client.Option) (*ListViewColumnsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListViewColumns")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListViewColumns")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListViewColumns")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1781,10 +1781,10 @@ func (c *MetadataClientProxyImpl) ListViewColumns(ctx context.Context, req *List
 func (c *MetadataClientProxyImpl) CreateDataSource(ctx context.Context, req *CreateDataSourceReq, opts ...client.Option) (*CreateDataSourceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/CreateDataSource")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateDataSource")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("CreateDataSource")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1801,10 +1801,10 @@ func (c *MetadataClientProxyImpl) CreateDataSource(ctx context.Context, req *Cre
 func (c *MetadataClientProxyImpl) UpdateDataSource(ctx context.Context, req *UpdateDataSourceReq, opts ...client.Option) (*UpdateDataSourceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/UpdateDataSource")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateDataSource")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("UpdateDataSource")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1821,10 +1821,10 @@ func (c *MetadataClientProxyImpl) UpdateDataSource(ctx context.Context, req *Upd
 func (c *MetadataClientProxyImpl) GetDataSource(ctx context.Context, req *GetDataSourceReq, opts ...client.Option) (*GetDataSourceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/GetDataSource")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetDataSource")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("GetDataSource")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1841,10 +1841,10 @@ func (c *MetadataClientProxyImpl) GetDataSource(ctx context.Context, req *GetDat
 func (c *MetadataClientProxyImpl) ListDataSources(ctx context.Context, req *ListDataSourcesReq, opts ...client.Option) (*ListDataSourcesRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListDataSources")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListDataSources")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListDataSources")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1861,10 +1861,10 @@ func (c *MetadataClientProxyImpl) ListDataSources(ctx context.Context, req *List
 func (c *MetadataClientProxyImpl) UpsertSubject(ctx context.Context, req *UpsertSubjectReq, opts ...client.Option) (*UpsertSubjectRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/UpsertSubject")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpsertSubject")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("UpsertSubject")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1881,10 +1881,10 @@ func (c *MetadataClientProxyImpl) UpsertSubject(ctx context.Context, req *Upsert
 func (c *MetadataClientProxyImpl) RegisterDataSubject(ctx context.Context, req *RegisterDataSubjectReq, opts ...client.Option) (*RegisterDataSubjectRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/RegisterDataSubject")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/RegisterDataSubject")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("RegisterDataSubject")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1901,10 +1901,10 @@ func (c *MetadataClientProxyImpl) RegisterDataSubject(ctx context.Context, req *
 func (c *MetadataClientProxyImpl) GetSubject(ctx context.Context, req *GetSubjectReq, opts ...client.Option) (*GetSubjectRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/GetSubject")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetSubject")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("GetSubject")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1921,10 +1921,10 @@ func (c *MetadataClientProxyImpl) GetSubject(ctx context.Context, req *GetSubjec
 func (c *MetadataClientProxyImpl) ListSubjects(ctx context.Context, req *ListSubjectsReq, opts ...client.Option) (*ListSubjectsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListSubjects")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListSubjects")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListSubjects")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1941,10 +1941,10 @@ func (c *MetadataClientProxyImpl) ListSubjects(ctx context.Context, req *ListSub
 func (c *MetadataClientProxyImpl) ListSubjectSymbols(ctx context.Context, req *ListSubjectSymbolsReq, opts ...client.Option) (*ListSubjectSymbolsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListSubjectSymbols")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListSubjectSymbols")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListSubjectSymbols")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1961,10 +1961,10 @@ func (c *MetadataClientProxyImpl) ListSubjectSymbols(ctx context.Context, req *L
 func (c *MetadataClientProxyImpl) CreateDataset(ctx context.Context, req *CreateDatasetReq, opts ...client.Option) (*CreateDatasetRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/CreateDataset")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateDataset")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("CreateDataset")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -1981,10 +1981,10 @@ func (c *MetadataClientProxyImpl) CreateDataset(ctx context.Context, req *Create
 func (c *MetadataClientProxyImpl) UpdateDataset(ctx context.Context, req *UpdateDatasetReq, opts ...client.Option) (*UpdateDatasetRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/UpdateDataset")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateDataset")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("UpdateDataset")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2001,10 +2001,10 @@ func (c *MetadataClientProxyImpl) UpdateDataset(ctx context.Context, req *Update
 func (c *MetadataClientProxyImpl) GetDataset(ctx context.Context, req *GetDatasetReq, opts ...client.Option) (*GetDatasetRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/GetDataset")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetDataset")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("GetDataset")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2021,10 +2021,10 @@ func (c *MetadataClientProxyImpl) GetDataset(ctx context.Context, req *GetDatase
 func (c *MetadataClientProxyImpl) ListDatasets(ctx context.Context, req *ListDatasetsReq, opts ...client.Option) (*ListDatasetsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListDatasets")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListDatasets")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListDatasets")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2041,10 +2041,10 @@ func (c *MetadataClientProxyImpl) ListDatasets(ctx context.Context, req *ListDat
 func (c *MetadataClientProxyImpl) BindDatasetSubject(ctx context.Context, req *BindDatasetSubjectReq, opts ...client.Option) (*BindDatasetSubjectRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/BindDatasetSubject")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/BindDatasetSubject")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("BindDatasetSubject")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2061,10 +2061,10 @@ func (c *MetadataClientProxyImpl) BindDatasetSubject(ctx context.Context, req *B
 func (c *MetadataClientProxyImpl) ListDatasetSubjects(ctx context.Context, req *ListDatasetSubjectsReq, opts ...client.Option) (*ListDatasetSubjectsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListDatasetSubjects")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListDatasetSubjects")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListDatasetSubjects")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2081,10 +2081,10 @@ func (c *MetadataClientProxyImpl) ListDatasetSubjects(ctx context.Context, req *
 func (c *MetadataClientProxyImpl) CreateField(ctx context.Context, req *CreateFieldReq, opts ...client.Option) (*CreateFieldRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/CreateField")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateField")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("CreateField")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2101,10 +2101,10 @@ func (c *MetadataClientProxyImpl) CreateField(ctx context.Context, req *CreateFi
 func (c *MetadataClientProxyImpl) UpdateField(ctx context.Context, req *UpdateFieldReq, opts ...client.Option) (*UpdateFieldRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/UpdateField")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateField")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("UpdateField")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2121,10 +2121,10 @@ func (c *MetadataClientProxyImpl) UpdateField(ctx context.Context, req *UpdateFi
 func (c *MetadataClientProxyImpl) GetField(ctx context.Context, req *GetFieldReq, opts ...client.Option) (*GetFieldRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/GetField")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetField")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("GetField")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2141,10 +2141,10 @@ func (c *MetadataClientProxyImpl) GetField(ctx context.Context, req *GetFieldReq
 func (c *MetadataClientProxyImpl) ListFields(ctx context.Context, req *ListFieldsReq, opts ...client.Option) (*ListFieldsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListFields")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListFields")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListFields")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2161,10 +2161,10 @@ func (c *MetadataClientProxyImpl) ListFields(ctx context.Context, req *ListField
 func (c *MetadataClientProxyImpl) CreateFactor(ctx context.Context, req *CreateFactorReq, opts ...client.Option) (*CreateFactorRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/CreateFactor")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateFactor")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("CreateFactor")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2181,10 +2181,10 @@ func (c *MetadataClientProxyImpl) CreateFactor(ctx context.Context, req *CreateF
 func (c *MetadataClientProxyImpl) UpdateFactor(ctx context.Context, req *UpdateFactorReq, opts ...client.Option) (*UpdateFactorRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/UpdateFactor")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateFactor")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("UpdateFactor")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2201,10 +2201,10 @@ func (c *MetadataClientProxyImpl) UpdateFactor(ctx context.Context, req *UpdateF
 func (c *MetadataClientProxyImpl) GetFactor(ctx context.Context, req *GetFactorReq, opts ...client.Option) (*GetFactorRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/GetFactor")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetFactor")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("GetFactor")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2221,10 +2221,10 @@ func (c *MetadataClientProxyImpl) GetFactor(ctx context.Context, req *GetFactorR
 func (c *MetadataClientProxyImpl) ListFactors(ctx context.Context, req *ListFactorsReq, opts ...client.Option) (*ListFactorsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListFactors")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListFactors")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListFactors")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2241,10 +2241,10 @@ func (c *MetadataClientProxyImpl) ListFactors(ctx context.Context, req *ListFact
 func (c *MetadataClientProxyImpl) UpsertDatasetColumn(ctx context.Context, req *UpsertDatasetColumnReq, opts ...client.Option) (*UpsertDatasetColumnRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/UpsertDatasetColumn")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpsertDatasetColumn")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("UpsertDatasetColumn")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2261,10 +2261,10 @@ func (c *MetadataClientProxyImpl) UpsertDatasetColumn(ctx context.Context, req *
 func (c *MetadataClientProxyImpl) ListDatasetColumns(ctx context.Context, req *ListDatasetColumnsReq, opts ...client.Option) (*ListDatasetColumnsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListDatasetColumns")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListDatasetColumns")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListDatasetColumns")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2281,10 +2281,10 @@ func (c *MetadataClientProxyImpl) ListDatasetColumns(ctx context.Context, req *L
 func (c *MetadataClientProxyImpl) CreatePrimaryStoreNode(ctx context.Context, req *CreatePrimaryStoreNodeReq, opts ...client.Option) (*CreatePrimaryStoreNodeRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/CreatePrimaryStoreNode")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreatePrimaryStoreNode")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("CreatePrimaryStoreNode")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2301,10 +2301,10 @@ func (c *MetadataClientProxyImpl) CreatePrimaryStoreNode(ctx context.Context, re
 func (c *MetadataClientProxyImpl) UpdatePrimaryStoreNode(ctx context.Context, req *UpdatePrimaryStoreNodeReq, opts ...client.Option) (*UpdatePrimaryStoreNodeRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/UpdatePrimaryStoreNode")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdatePrimaryStoreNode")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("UpdatePrimaryStoreNode")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2321,10 +2321,10 @@ func (c *MetadataClientProxyImpl) UpdatePrimaryStoreNode(ctx context.Context, re
 func (c *MetadataClientProxyImpl) GetPrimaryStoreNode(ctx context.Context, req *GetPrimaryStoreNodeReq, opts ...client.Option) (*GetPrimaryStoreNodeRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/GetPrimaryStoreNode")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetPrimaryStoreNode")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("GetPrimaryStoreNode")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2341,10 +2341,10 @@ func (c *MetadataClientProxyImpl) GetPrimaryStoreNode(ctx context.Context, req *
 func (c *MetadataClientProxyImpl) ListPrimaryStoreNodes(ctx context.Context, req *ListPrimaryStoreNodesReq, opts ...client.Option) (*ListPrimaryStoreNodesRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListPrimaryStoreNodes")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListPrimaryStoreNodes")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListPrimaryStoreNodes")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2361,10 +2361,10 @@ func (c *MetadataClientProxyImpl) ListPrimaryStoreNodes(ctx context.Context, req
 func (c *MetadataClientProxyImpl) CreateDevice(ctx context.Context, req *CreateDeviceReq, opts ...client.Option) (*CreateDeviceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/CreateDevice")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateDevice")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("CreateDevice")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2381,10 +2381,10 @@ func (c *MetadataClientProxyImpl) CreateDevice(ctx context.Context, req *CreateD
 func (c *MetadataClientProxyImpl) UpdateDevice(ctx context.Context, req *UpdateDeviceReq, opts ...client.Option) (*UpdateDeviceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/UpdateDevice")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateDevice")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("UpdateDevice")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2401,10 +2401,10 @@ func (c *MetadataClientProxyImpl) UpdateDevice(ctx context.Context, req *UpdateD
 func (c *MetadataClientProxyImpl) GetDevice(ctx context.Context, req *GetDeviceReq, opts ...client.Option) (*GetDeviceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/GetDevice")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetDevice")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("GetDevice")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2421,10 +2421,10 @@ func (c *MetadataClientProxyImpl) GetDevice(ctx context.Context, req *GetDeviceR
 func (c *MetadataClientProxyImpl) ListDevices(ctx context.Context, req *ListDevicesReq, opts ...client.Option) (*ListDevicesRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListDevices")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListDevices")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListDevices")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2441,10 +2441,10 @@ func (c *MetadataClientProxyImpl) ListDevices(ctx context.Context, req *ListDevi
 func (c *MetadataClientProxyImpl) CreatePrimaryStoreRoute(ctx context.Context, req *CreatePrimaryStoreRouteReq, opts ...client.Option) (*CreatePrimaryStoreRouteRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/CreatePrimaryStoreRoute")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreatePrimaryStoreRoute")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("CreatePrimaryStoreRoute")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2461,10 +2461,10 @@ func (c *MetadataClientProxyImpl) CreatePrimaryStoreRoute(ctx context.Context, r
 func (c *MetadataClientProxyImpl) UpdatePrimaryStoreRoute(ctx context.Context, req *UpdatePrimaryStoreRouteReq, opts ...client.Option) (*UpdatePrimaryStoreRouteRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/UpdatePrimaryStoreRoute")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdatePrimaryStoreRoute")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("UpdatePrimaryStoreRoute")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2481,10 +2481,10 @@ func (c *MetadataClientProxyImpl) UpdatePrimaryStoreRoute(ctx context.Context, r
 func (c *MetadataClientProxyImpl) GetPrimaryStoreRoute(ctx context.Context, req *GetPrimaryStoreRouteReq, opts ...client.Option) (*GetPrimaryStoreRouteRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/GetPrimaryStoreRoute")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetPrimaryStoreRoute")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("GetPrimaryStoreRoute")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2501,10 +2501,10 @@ func (c *MetadataClientProxyImpl) GetPrimaryStoreRoute(ctx context.Context, req 
 func (c *MetadataClientProxyImpl) ListPrimaryStoreRoutes(ctx context.Context, req *ListPrimaryStoreRoutesReq, opts ...client.Option) (*ListPrimaryStoreRoutesRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListPrimaryStoreRoutes")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListPrimaryStoreRoutes")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListPrimaryStoreRoutes")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2521,10 +2521,10 @@ func (c *MetadataClientProxyImpl) ListPrimaryStoreRoutes(ctx context.Context, re
 func (c *MetadataClientProxyImpl) RegisterArchiveFile(ctx context.Context, req *RegisterArchiveFileReq, opts ...client.Option) (*RegisterArchiveFileRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/RegisterArchiveFile")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/RegisterArchiveFile")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("RegisterArchiveFile")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -2541,10 +2541,10 @@ func (c *MetadataClientProxyImpl) RegisterArchiveFile(ctx context.Context, req *
 func (c *MetadataClientProxyImpl) ListArchiveFiles(ctx context.Context, req *ListArchiveFilesReq, opts ...client.Option) (*ListArchiveFilesRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.metadata.Metadata/ListArchiveFiles")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListArchiveFiles")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("metadata")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
 	msg.WithCalleeMethod("ListArchiveFiles")
 	msg.WithSerializationType(codec.SerializationTypePB)

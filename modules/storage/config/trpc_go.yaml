@@ -12,58 +12,58 @@ server:
     read_timeout: 5000   #ms. 请求被接受到请求信息被完全读取的超时时间设置，防止慢客户端
     write_timeout: 60000 #ms. 处理的超时时间
   service:
-    - name: trpc.storage.access.Access
+    - name: trpc.moox.storage.Access
       #ip: 0.0.0.0
       port: 20102
       network: tcp
       protocol: trpc
-    - name: trpc.storage.view.DataView
+    - name: trpc.moox.storage.DataView
       #ip: 0.0.0.0
       port: 20103
       network: tcp
       protocol: trpc
-    - name: trpc.storage.store.PrimaryStore
+    - name: trpc.moox.storage.PrimaryStore
       #ip: 0.0.0.0
       port: 20101
       network: tcp # 注意：若是多机分布式部署，此处应改为tcp（单机也可设置tcp，只是unix域套接字本机通信效率更高）
       protocol: trpc
-    - name: trpc.storage.metadata.Metadata
+    - name: trpc.moox.storage.Metadata
       #ip: 0.0.0.0
       port: 20100
       network: tcp
       protocol: trpc
-    - name: trpc.storage.view.timer
+    - name: trpc.moox.storage.view.timer
       port: 20300
       network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params="
       protocol: timer
       timeout: 60000
-    - name: trpc.storage.view.cleanup.timer
+    - name: trpc.moox.storage.view.cleanup.timer
       port: 20301
       network: "0 0 * * * *?scheduler=viewBuilderSchedule&params=op=cleanup"
       protocol: timer
       timeout: 60000
-    - name: trpc.storage.view.retry_failed.timer
+    - name: trpc.moox.storage.view.retry_failed.timer
       port: 20303
       network: "0 */10 * * * *?disable=1&scheduler=viewBuilderSchedule&params=op=retry_failed"
       protocol: timer
       timeout: 60000
-    - name: trpc.storage.archive.timer
+    - name: trpc.moox.storage.archive.timer
       port: 20302
       network: "0 0 * * * *?disable=1&scheduler=archiveSchedule&params=space_id=crypto;dataset_id=*"
       protocol: timer
       timeout: 60000
 
-    - name: trpc.storage.access.Access
+    - name: trpc.moox.storage.Access
       #ip: 0.0.0.0
       port: 20201
       network: tcp
       protocol: http
-    - name: trpc.storage.metadata.Metadata
+    - name: trpc.moox.storage.Metadata
       #ip: 0.0.0.0
       port: 20200
       network: tcp
       protocol: http
-    - name: trpc.storage.view.DataView
+    - name: trpc.moox.storage.DataView
       #ip: 0.0.0.0
       port: 20202
       network: tcp
@@ -73,22 +73,22 @@ client:
   filter:
     - validation
   service:
-    - name: trpc.storage.store.PrimaryStore
+    - name: trpc.moox.storage.PrimaryStore
       target: ip://127.0.0.1:20101
       network: tcp
       protocol: trpc
       timeout: 3000
-    - name: trpc.storage.access.Access
+    - name: trpc.moox.storage.Access
       target: ip://127.0.0.1:20201
       network: tcp
       protocol: http
       timeout: 3000
-    - name: trpc.storage.metadata.Metadata
+    - name: trpc.moox.storage.Metadata
       target: ip://127.0.0.1:20200
       network: tcp
       protocol: http
       timeout: 3000
-    - name: trpc.storage.view.DataView
+    - name: trpc.moox.storage.DataView
       target: ip://127.0.0.1:20202
       network: tcp
       protocol: http

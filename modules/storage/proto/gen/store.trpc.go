@@ -83,19 +83,19 @@ func PrimaryStoreService_ScanPrimaryRows_Handler(svr interface{}, ctx context.Co
 
 // PrimaryStoreServer_ServiceDesc descriptor for server.RegisterService.
 var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.storage.store.PrimaryStore",
+	ServiceName: "trpc.moox.storage.PrimaryStore",
 	HandlerType: ((*PrimaryStoreService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.storage.store.PrimaryStore/WritePrimaryRows",
+			Name: "/trpc.moox.storage.PrimaryStore/WritePrimaryRows",
 			Func: PrimaryStoreService_WritePrimaryRows_Handler,
 		},
 		{
-			Name: "/trpc.storage.store.PrimaryStore/ReadPrimaryRows",
+			Name: "/trpc.moox.storage.PrimaryStore/ReadPrimaryRows",
 			Func: PrimaryStoreService_ReadPrimaryRows_Handler,
 		},
 		{
-			Name: "/trpc.storage.store.PrimaryStore/ScanPrimaryRows",
+			Name: "/trpc.moox.storage.PrimaryStore/ScanPrimaryRows",
 			Func: PrimaryStoreService_ScanPrimaryRows_Handler,
 		},
 	},
@@ -155,10 +155,10 @@ var NewPrimaryStoreClientProxy = func(opts ...client.Option) PrimaryStoreClientP
 func (c *PrimaryStoreClientProxyImpl) WritePrimaryRows(ctx context.Context, req *WritePrimaryRowsReq, opts ...client.Option) (*WritePrimaryRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.store.PrimaryStore/WritePrimaryRows")
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/WritePrimaryRows")
 	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("store")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("PrimaryStore")
 	msg.WithCalleeMethod("WritePrimaryRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -175,10 +175,10 @@ func (c *PrimaryStoreClientProxyImpl) WritePrimaryRows(ctx context.Context, req 
 func (c *PrimaryStoreClientProxyImpl) ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq, opts ...client.Option) (*ReadPrimaryRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.store.PrimaryStore/ReadPrimaryRows")
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ReadPrimaryRows")
 	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("store")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("PrimaryStore")
 	msg.WithCalleeMethod("ReadPrimaryRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -195,10 +195,10 @@ func (c *PrimaryStoreClientProxyImpl) ReadPrimaryRows(ctx context.Context, req *
 func (c *PrimaryStoreClientProxyImpl) ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq, opts ...client.Option) (*ScanPrimaryRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.store.PrimaryStore/ScanPrimaryRows")
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ScanPrimaryRows")
 	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("store")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("PrimaryStore")
 	msg.WithCalleeMethod("ScanPrimaryRows")
 	msg.WithSerializationType(codec.SerializationTypePB)

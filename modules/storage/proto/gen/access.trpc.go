@@ -103,23 +103,23 @@ func AccessService_ReadRecordRows_Handler(svr interface{}, ctx context.Context, 
 
 // AccessServer_ServiceDesc descriptor for server.RegisterService.
 var AccessServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.storage.access.Access",
+	ServiceName: "trpc.moox.storage.Access",
 	HandlerType: ((*AccessService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.storage.access.Access/WriteTimeSeriesRows",
+			Name: "/trpc.moox.storage.Access/WriteTimeSeriesRows",
 			Func: AccessService_WriteTimeSeriesRows_Handler,
 		},
 		{
-			Name: "/trpc.storage.access.Access/ReadTimeSeriesRows",
+			Name: "/trpc.moox.storage.Access/ReadTimeSeriesRows",
 			Func: AccessService_ReadTimeSeriesRows_Handler,
 		},
 		{
-			Name: "/trpc.storage.access.Access/WriteRecordRows",
+			Name: "/trpc.moox.storage.Access/WriteRecordRows",
 			Func: AccessService_WriteRecordRows_Handler,
 		},
 		{
-			Name: "/trpc.storage.access.Access/ReadRecordRows",
+			Name: "/trpc.moox.storage.Access/ReadRecordRows",
 			Func: AccessService_ReadRecordRows_Handler,
 		},
 	},
@@ -186,10 +186,10 @@ var NewAccessClientProxy = func(opts ...client.Option) AccessClientProxy {
 func (c *AccessClientProxyImpl) WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq, opts ...client.Option) (*WriteTimeSeriesRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.access.Access/WriteTimeSeriesRows")
+	msg.WithClientRPCName("/trpc.moox.storage.Access/WriteTimeSeriesRows")
 	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("access")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Access")
 	msg.WithCalleeMethod("WriteTimeSeriesRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -206,10 +206,10 @@ func (c *AccessClientProxyImpl) WriteTimeSeriesRows(ctx context.Context, req *Wr
 func (c *AccessClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (*ReadTimeSeriesRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.access.Access/ReadTimeSeriesRows")
+	msg.WithClientRPCName("/trpc.moox.storage.Access/ReadTimeSeriesRows")
 	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("access")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Access")
 	msg.WithCalleeMethod("ReadTimeSeriesRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -226,10 +226,10 @@ func (c *AccessClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, req *Rea
 func (c *AccessClientProxyImpl) WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq, opts ...client.Option) (*WriteRecordRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.access.Access/WriteRecordRows")
+	msg.WithClientRPCName("/trpc.moox.storage.Access/WriteRecordRows")
 	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("access")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Access")
 	msg.WithCalleeMethod("WriteRecordRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -246,10 +246,10 @@ func (c *AccessClientProxyImpl) WriteRecordRows(ctx context.Context, req *WriteR
 func (c *AccessClientProxyImpl) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (*ReadRecordRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.access.Access/ReadRecordRows")
+	msg.WithClientRPCName("/trpc.moox.storage.Access/ReadRecordRows")
 	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("access")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Access")
 	msg.WithCalleeMethod("ReadRecordRows")
 	msg.WithSerializationType(codec.SerializationTypePB)

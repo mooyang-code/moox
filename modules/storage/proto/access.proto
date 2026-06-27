@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package trpc.storage.access;
+package trpc.moox.storage;
 
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
 
@@ -31,7 +31,7 @@ message TimeSeriesRow {
   TimeSeriesKey key = 1;
   // columns 是本次写入携带的列值。
   // 再次写入同一 key + data_time 时，只更新本次携带的列；未携带的旧列保留。
-  repeated common.ColumnValue columns = 2;
+  repeated ColumnValue columns = 2;
   // attributes 是附加属性，更新时按 key 覆盖。
   map<string, string> attributes = 3;
 }
@@ -57,7 +57,7 @@ message RecordRow {
   RecordKey key = 1;
   // columns 是本次写入携带的列值。
   // 再次写入同一 key + version 时，只更新本次携带的列；未携带的旧列保留。
-  repeated common.ColumnValue columns = 2;
+  repeated ColumnValue columns = 2;
   // attributes 是附加属性，更新时按 key 覆盖。
   map<string, string> attributes = 3;
 }
@@ -65,7 +65,7 @@ message RecordRow {
 // WriteTimeSeriesRowsReq 表示写入时序事实数据行。
 message WriteTimeSeriesRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
+  AuthInfo auth_info = 1;
   // rows 是待写入的时序数据行。
   repeated TimeSeriesRow rows = 2;
 }
@@ -73,39 +73,39 @@ message WriteTimeSeriesRowsReq {
 // WriteTimeSeriesRowsRsp 表示时序事实数据写入结果。
 message WriteTimeSeriesRowsRsp {
   // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
+  RetInfo ret_info = 1;
 }
 
 // ReadTimeSeriesRowsReq 表示读取时序事实数据。
 message ReadTimeSeriesRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
+  AuthInfo auth_info = 1;
   // keys 是查询 key；范围读时 key.data_time 可为空，实际版本集合由 time_range 表达。
   repeated TimeSeriesKey keys = 2;
   // time_range 是闭区间时间范围；精确读时 start_time=end_time。
-  common.TimeRange time_range = 3;
+  TimeRange time_range = 3;
   // order 表示按 data_time 返回的顺序，默认升序。
-  common.SortOrder order = 4;
+  SortOrder order = 4;
   // column_names 是要返回的列名；为空时返回整行。
   repeated string column_names = 5;
   // page 是分页参数。
-  common.Page page = 6;
+  Page page = 6;
 }
 
 // ReadTimeSeriesRowsRsp 表示时序事实数据读取结果。
 message ReadTimeSeriesRowsRsp {
   // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
+  RetInfo ret_info = 1;
   // rows 是读取到的时序数据行。
   repeated TimeSeriesRow rows = 2;
   // page_result 是分页结果。
-  common.PageResult page_result = 3;
+  PageResult page_result = 3;
 }
 
 // WriteRecordRowsReq 表示写入记录事实数据行。
 message WriteRecordRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
+  AuthInfo auth_info = 1;
   // rows 是待写入的记录数据行。
   repeated RecordRow rows = 2;
 }
@@ -113,7 +113,7 @@ message WriteRecordRowsReq {
 // WriteRecordRowsRsp 表示记录事实数据写入结果。
 message WriteRecordRowsRsp {
   // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
+  RetInfo ret_info = 1;
   // keys 是服务端最终写入的记录 key；当请求未传 version 时，这里返回补齐后的版本。
   repeated RecordKey keys = 2;
 }
@@ -121,27 +121,27 @@ message WriteRecordRowsRsp {
 // ReadRecordRowsReq 表示读取记录事实数据。
 message ReadRecordRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
+  AuthInfo auth_info = 1;
   // keys 是查询 key；范围读时 key.version 可为空，实际版本集合由 version_range 表达。
   repeated RecordKey keys = 2;
   // version_range 是闭区间版本范围；精确读时 start_version=end_version。
-  common.VersionRange version_range = 3;
+  VersionRange version_range = 3;
   // order 表示按 version 返回的顺序，默认升序。
-  common.SortOrder order = 4;
+  SortOrder order = 4;
   // column_names 是要返回的列名；为空时返回整行。
   repeated string column_names = 5;
   // page 是分页参数。
-  common.Page page = 6;
+  Page page = 6;
 }
 
 // ReadRecordRowsRsp 表示记录事实数据读取结果。
 message ReadRecordRowsRsp {
   // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
+  RetInfo ret_info = 1;
   // rows 是读取到的记录数据行。
   repeated RecordRow rows = 2;
   // page_result 是分页结果。
-  common.PageResult page_result = 3;
+  PageResult page_result = 3;
 }
 
 // Access 是用户侧事实数据读写入口。

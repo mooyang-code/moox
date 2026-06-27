@@ -16,7 +16,7 @@ func TestClientPostsNewStorageEndpointsAndReturnsRetInfoErrors(t *testing.T) {
 		paths = append(paths, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/trpc.storage.metadata.Metadata/RegisterDataSubject":
+		case "/trpc.moox.storage.Metadata/RegisterDataSubject":
 			var req RegisterDataSubjectRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode register request: %v", err)
@@ -25,7 +25,7 @@ func TestClientPostsNewStorageEndpointsAndReturnsRetInfoErrors(t *testing.T) {
 				t.Fatalf("unexpected register request: %+v", req)
 			}
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"}}`))
-		case "/trpc.storage.access.Access/WriteTimeSeriesRows":
+		case "/trpc.moox.storage.Access/WriteTimeSeriesRows":
 			var req WriteTimeSeriesRowsRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode time series request: %v", err)
@@ -34,7 +34,7 @@ func TestClientPostsNewStorageEndpointsAndReturnsRetInfoErrors(t *testing.T) {
 				t.Fatalf("unexpected data_time: %s", got)
 			}
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"}}`))
-		case "/trpc.storage.access.Access/WriteRecordRows":
+		case "/trpc.moox.storage.Access/WriteRecordRows":
 			var req WriteRecordRowsRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode record request: %v", err)
@@ -79,9 +79,9 @@ func TestClientPostsNewStorageEndpointsAndReturnsRetInfoErrors(t *testing.T) {
 	}
 
 	want := []string{
-		"/trpc.storage.metadata.Metadata/RegisterDataSubject",
-		"/trpc.storage.access.Access/WriteTimeSeriesRows",
-		"/trpc.storage.access.Access/WriteRecordRows",
+		"/trpc.moox.storage.Metadata/RegisterDataSubject",
+		"/trpc.moox.storage.Access/WriteTimeSeriesRows",
+		"/trpc.moox.storage.Access/WriteRecordRows",
 	}
 	if len(paths) != len(want) {
 		t.Fatalf("paths length = %d, want %d: %v", len(paths), len(want), paths)

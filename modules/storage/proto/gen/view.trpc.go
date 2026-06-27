@@ -103,23 +103,23 @@ func DataViewService_RebuildRecordView_Handler(svr interface{}, ctx context.Cont
 
 // DataViewServer_ServiceDesc descriptor for server.RegisterService.
 var DataViewServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.storage.view.DataView",
+	ServiceName: "trpc.moox.storage.DataView",
 	HandlerType: ((*DataViewService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.storage.view.DataView/QueryTimeSeriesRows",
+			Name: "/trpc.moox.storage.DataView/QueryTimeSeriesRows",
 			Func: DataViewService_QueryTimeSeriesRows_Handler,
 		},
 		{
-			Name: "/trpc.storage.view.DataView/SearchRecordRows",
+			Name: "/trpc.moox.storage.DataView/SearchRecordRows",
 			Func: DataViewService_SearchRecordRows_Handler,
 		},
 		{
-			Name: "/trpc.storage.view.DataView/RebuildTimeSeriesView",
+			Name: "/trpc.moox.storage.DataView/RebuildTimeSeriesView",
 			Func: DataViewService_RebuildTimeSeriesView_Handler,
 		},
 		{
-			Name: "/trpc.storage.view.DataView/RebuildRecordView",
+			Name: "/trpc.moox.storage.DataView/RebuildRecordView",
 			Func: DataViewService_RebuildRecordView_Handler,
 		},
 	},
@@ -186,10 +186,10 @@ var NewDataViewClientProxy = func(opts ...client.Option) DataViewClientProxy {
 func (c *DataViewClientProxyImpl) QueryTimeSeriesRows(ctx context.Context, req *QueryTimeSeriesRowsReq, opts ...client.Option) (*QueryTimeSeriesRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.view.DataView/QueryTimeSeriesRows")
+	msg.WithClientRPCName("/trpc.moox.storage.DataView/QueryTimeSeriesRows")
 	msg.WithCalleeServiceName(DataViewServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("view")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("DataView")
 	msg.WithCalleeMethod("QueryTimeSeriesRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -206,10 +206,10 @@ func (c *DataViewClientProxyImpl) QueryTimeSeriesRows(ctx context.Context, req *
 func (c *DataViewClientProxyImpl) SearchRecordRows(ctx context.Context, req *SearchRecordRowsReq, opts ...client.Option) (*SearchRecordRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.view.DataView/SearchRecordRows")
+	msg.WithClientRPCName("/trpc.moox.storage.DataView/SearchRecordRows")
 	msg.WithCalleeServiceName(DataViewServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("view")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("DataView")
 	msg.WithCalleeMethod("SearchRecordRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -226,10 +226,10 @@ func (c *DataViewClientProxyImpl) SearchRecordRows(ctx context.Context, req *Sea
 func (c *DataViewClientProxyImpl) RebuildTimeSeriesView(ctx context.Context, req *RebuildTimeSeriesViewReq, opts ...client.Option) (*RebuildTimeSeriesViewRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.view.DataView/RebuildTimeSeriesView")
+	msg.WithClientRPCName("/trpc.moox.storage.DataView/RebuildTimeSeriesView")
 	msg.WithCalleeServiceName(DataViewServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("view")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("DataView")
 	msg.WithCalleeMethod("RebuildTimeSeriesView")
 	msg.WithSerializationType(codec.SerializationTypePB)
@@ -246,10 +246,10 @@ func (c *DataViewClientProxyImpl) RebuildTimeSeriesView(ctx context.Context, req
 func (c *DataViewClientProxyImpl) RebuildRecordView(ctx context.Context, req *RebuildRecordViewReq, opts ...client.Option) (*RebuildRecordViewRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.storage.view.DataView/RebuildRecordView")
+	msg.WithClientRPCName("/trpc.moox.storage.DataView/RebuildRecordView")
 	msg.WithCalleeServiceName(DataViewServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("storage")
-	msg.WithCalleeServer("view")
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("DataView")
 	msg.WithCalleeMethod("RebuildRecordView")
 	msg.WithSerializationType(codec.SerializationTypePB)

@@ -199,9 +199,9 @@ func TestControlGatewayConfigIncludesStorageFacadeServices(t *testing.T) {
 	}
 
 	required := map[string]string{
-		"storage_metadata": "trpc.storage.metadata.Metadata",
-		"storage_access":   "trpc.storage.access.Access",
-		"storage_view":     "trpc.storage.view.DataView",
+		"storage_metadata": "trpc.moox.storage.Metadata",
+		"storage_access":   "trpc.moox.storage.Access",
+		"storage_view":     "trpc.moox.storage.DataView",
 	}
 	for serviceID, servicePath := range required {
 		if !strings.Contains(string(gatewayConfig), serviceID+":") {

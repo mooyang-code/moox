@@ -123,7 +123,7 @@ storage:
     bleve_path: /data/bleve
     parquet_path: /data/archive
   primary:
-    service_name: trpc.storage.store.PrimaryStore
+    service_name: trpc.moox.storage.PrimaryStore
   eventbus:
     type: nats
     nats_url: nats://127.0.0.1:4222
@@ -145,7 +145,7 @@ storage:
 	if opts.ParquetPath != "/data/archive" {
 		t.Fatalf("ParquetPath = %q", opts.ParquetPath)
 	}
-	if opts.PrimaryServiceName != "trpc.storage.store.PrimaryStore" {
+	if opts.PrimaryServiceName != "trpc.moox.storage.PrimaryStore" {
 		t.Fatalf("PrimaryServiceName = %q", opts.PrimaryServiceName)
 	}
 	if opts.InitSchemaPath != "" {
@@ -200,7 +200,7 @@ func TestRoleHelpers(t *testing.T) {
 
 	remotePrimary := storageconfig.StorageConfig{
 		Roles:   []string{"access", "deriver"},
-		Primary: storageconfig.StoragePrimary{ServiceName: "trpc.storage.store.PrimaryStore"},
+		Primary: storageconfig.StoragePrimary{ServiceName: "trpc.moox.storage.PrimaryStore"},
 	}
 	if shouldCreatePrimaryService(remotePrimary) {
 		t.Fatalf("access+deriver with remote primary should not create local primary service")
@@ -370,10 +370,10 @@ func TestRepositoryConfigDefinesStorageTimers(t *testing.T) {
 	}
 	text := string(content)
 	for _, want := range []string{
-		"name: trpc.storage.view.timer",
-		"name: trpc.storage.view.cleanup.timer",
-		"name: trpc.storage.view.retry_failed.timer",
-		"name: trpc.storage.archive.timer",
+		"name: trpc.moox.storage.view.timer",
+		"name: trpc.moox.storage.view.cleanup.timer",
+		"name: trpc.moox.storage.view.retry_failed.timer",
+		"name: trpc.moox.storage.archive.timer",
 		"protocol: timer",
 		"scheduler=viewBuilderSchedule&params=op=cleanup",
 		"scheduler=viewBuilderSchedule&params=op=retry_failed",
@@ -386,7 +386,7 @@ func TestRepositoryConfigDefinesStorageTimers(t *testing.T) {
 }
 
 func TestRegisterTimerHandlerServiceSkipsMissingService(t *testing.T) {
-	registered := registerTimerHandlerService("trpc.storage.missing.timer", nil, func(context.Context, string) error {
+	registered := registerTimerHandlerService("trpc.moox.storage.missing.timer", nil, func(context.Context, string) error {
 		return nil
 	})
 	if registered {

@@ -148,7 +148,7 @@ func TestSendSymbolBatchWritesRecordsBeforeRegisteringSubjects(t *testing.T) {
 		calls = append(calls, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/trpc.storage.access.Access/WriteRecordRows":
+		case "/trpc.moox.storage.Access/WriteRecordRows":
 			var req storage.WriteRecordRowsRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode write request: %v", err)
@@ -156,7 +156,7 @@ func TestSendSymbolBatchWritesRecordsBeforeRegisteringSubjects(t *testing.T) {
 			if req.AuthInfo.AppID != "collector-app" || req.AuthInfo.AppKey != "collector-key" {
 				t.Fatalf("unexpected write auth: %+v", req.AuthInfo)
 			}
-		case "/trpc.storage.metadata.Metadata/RegisterDataSubject":
+		case "/trpc.moox.storage.Metadata/RegisterDataSubject":
 			var req storage.RegisterDataSubjectRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode register request: %v", err)
@@ -198,8 +198,8 @@ func TestSendSymbolBatchWritesRecordsBeforeRegisteringSubjects(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("calls = %v, want write then register", calls)
 	}
-	if calls[0] != "/trpc.storage.access.Access/WriteRecordRows" ||
-		calls[1] != "/trpc.storage.metadata.Metadata/RegisterDataSubject" {
+	if calls[0] != "/trpc.moox.storage.Access/WriteRecordRows" ||
+		calls[1] != "/trpc.moox.storage.Metadata/RegisterDataSubject" {
 		t.Fatalf("calls = %v, want write before register", calls)
 	}
 }

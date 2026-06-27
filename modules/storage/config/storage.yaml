@@ -21,7 +21,7 @@ storage:
     embedded:
       enabled: true
   deriver:
-    access_service_name: trpc.storage.access.Access
+    access_service_name: trpc.moox.storage.Access
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 4

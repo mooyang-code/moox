@@ -132,7 +132,7 @@ func (c *StorageConfig) ApplyDefaults() {
 		}
 	}
 	if c.Deriver.AccessServiceName == "" {
-		c.Deriver.AccessServiceName = "trpc.storage.access.Access"
+		c.Deriver.AccessServiceName = "trpc.moox.storage.Access"
 	}
 	if c.Deriver.BatchSize <= 0 {
 		c.Deriver.BatchSize = 500

@@ -83,11 +83,11 @@ func resolveStorageGatewayTarget(path string) (gatewayTarget, bool) {
 	}
 	switch parts[0] {
 	case "metadata":
-		return gatewayTarget{Base: "metadata", Path: "/trpc.storage.metadata.Metadata/" + parts[1], Method: parts[1]}, true
+		return gatewayTarget{Base: "metadata", Path: "/trpc.moox.storage.Metadata/" + parts[1], Method: parts[1]}, true
 	case "access":
-		return gatewayTarget{Base: "access", Path: "/trpc.storage.access.Access/" + parts[1], Method: parts[1]}, true
+		return gatewayTarget{Base: "access", Path: "/trpc.moox.storage.Access/" + parts[1], Method: parts[1]}, true
 	case "view":
-		return gatewayTarget{Base: "view", Path: "/trpc.storage.view.DataView/" + parts[1], Method: parts[1]}, true
+		return gatewayTarget{Base: "view", Path: "/trpc.moox.storage.DataView/" + parts[1], Method: parts[1]}, true
 	default:
 		return gatewayTarget{}, false
 	}
@@ -366,8 +366,8 @@ func main() {
 	log.Printf("服务器启动在 http://localhost%s", cfg.ListenAddr)
 	log.Println("静态文件服务: /")
 	log.Printf("Admin API代理: /api/admin/{service}/{method} -> %s/api/admin/{service}/{method}", cfg.AdminURL)
-	log.Printf("Storage Metadata代理: /api/storage/metadata/{method} -> %s/trpc.storage.metadata.Metadata/{method}", cfg.MetadataURL)
-	log.Printf("Storage Access代理: /api/storage/access/{method} -> %s/trpc.storage.access.Access/{method}", cfg.AccessURL)
-	log.Printf("Storage View代理: /api/storage/view/{method} -> %s/trpc.storage.view.DataView/{method}", cfg.ViewURL)
+	log.Printf("Storage Metadata代理: /api/storage/metadata/{method} -> %s/trpc.moox.storage.Metadata/{method}", cfg.MetadataURL)
+	log.Printf("Storage Access代理: /api/storage/access/{method} -> %s/trpc.moox.storage.Access/{method}", cfg.AccessURL)
+	log.Printf("Storage View代理: /api/storage/view/{method} -> %s/trpc.moox.storage.DataView/{method}", cfg.ViewURL)
 	log.Fatal(http.ListenAndServe(cfg.ListenAddr, nil))
 }

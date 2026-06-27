@@ -147,7 +147,7 @@ func main() {
 			os.Exit(1)
 		}
 		timer.RegisterScheduler("archiveSchedule", &timer.DefaultScheduler{})
-		registerTimerHandlerService("trpc.storage.archive.timer", s.Service("trpc.storage.archive.timer"), archive.HandleSchedule)
+		registerTimerHandlerService("trpc.moox.storage.archive.timer", s.Service("trpc.moox.storage.archive.timer"), archive.HandleSchedule)
 	}
 
 	if shouldCreatePrimaryService(cfg.Storage) {
@@ -179,9 +179,9 @@ func registerViewRole(s *server.Server, storageService *storagesvc.Service, acce
 	}
 	pb.RegisterDataViewService(s, storageService)
 	timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
-	registerTimerHandlerService("trpc.storage.view.timer", s.Service("trpc.storage.view.timer"), view.HandleSchedule)
-	registerTimerHandlerService("trpc.storage.view.cleanup.timer", s.Service("trpc.storage.view.cleanup.timer"), view.HandleSchedule)
-	registerTimerHandlerService("trpc.storage.view.retry_failed.timer", s.Service("trpc.storage.view.retry_failed.timer"), view.HandleSchedule)
+	registerTimerHandlerService("trpc.moox.storage.view.timer", s.Service("trpc.moox.storage.view.timer"), view.HandleSchedule)
+	registerTimerHandlerService("trpc.moox.storage.view.cleanup.timer", s.Service("trpc.moox.storage.view.cleanup.timer"), view.HandleSchedule)
+	registerTimerHandlerService("trpc.moox.storage.view.retry_failed.timer", s.Service("trpc.moox.storage.view.retry_failed.timer"), view.HandleSchedule)
 	return nil
 }
 

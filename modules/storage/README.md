@@ -115,7 +115,7 @@ storage:
     embedded:
       enabled: true         # 本地默认内嵌 JetStream，无需单独启动 nats-server
   deriver:
-    access_service_name: trpc.storage.access.Access  # 留空=同进程本地 Access reader
+    access_service_name: trpc.moox.storage.Access  # 留空=同进程本地 Access reader
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 4
@@ -154,10 +154,10 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 
 | 计时器服务 | 作用 | 默认 |
 | --- | --- | --- |
-| `trpc.storage.view.timer` | 版本化 View 构建：TimeSeries 生成 DuckDB 结果表，Record 生成 Bleve 索引 | 开（每 30s） |
-| `trpc.storage.view.cleanup.timer` | 清理旧物化结果表 | 开（每小时） |
-| `trpc.storage.view.retry_failed.timer` | 重试失败视图 | 关 |
-| `trpc.storage.archive.timer` | Parquet 冷归档 | 关 |
+| `trpc.moox.storage.view.timer` | 版本化 View 构建：TimeSeries 生成 DuckDB 结果表，Record 生成 Bleve 索引 | 开（每 30s） |
+| `trpc.moox.storage.view.cleanup.timer` | 清理旧物化结果表 | 开（每小时） |
+| `trpc.moox.storage.view.retry_failed.timer` | 重试失败视图 | 关 |
+| `trpc.moox.storage.archive.timer` | Parquet 冷归档 | 关 |
 
 配置路径可被命令行参数或环境变量覆盖：
 
@@ -427,12 +427,12 @@ storage:
     - access
     - deriver
   primary:
-    service_name: trpc.storage.store.PrimaryStore   # 走远程主存
+    service_name: trpc.moox.storage.PrimaryStore   # 走远程主存
   eventbus:
     type: nats
     nats_url: nats://10.0.0.9:4222
   deriver:
-    access_service_name: trpc.storage.access.Access
+    access_service_name: trpc.moox.storage.Access
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 4
@@ -509,7 +509,7 @@ curl -s http://127.0.0.1:20000/cmds             # admin 管理端口，返回命
    或经 HTTP 调 Metadata（端口 20200）确认能列出 Space：
 
 ```bash
-curl -s -XPOST http://127.0.0.1:20200/trpc.storage.metadata.Metadata/ListSpaces \
+curl -s -XPOST http://127.0.0.1:20200/trpc.moox.storage.Metadata/ListSpaces \
   -H 'Content-Type: application/json' -d '{}'
 ```
 

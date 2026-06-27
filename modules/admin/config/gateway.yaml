@@ -93,13 +93,13 @@ gateway:
       path: "trpc.moox.admin.SpaceMgr"
     storage_metadata:
       address: "127.0.0.1:20200"
-      path: "trpc.storage.metadata.Metadata"
+      path: "trpc.moox.storage.Metadata"
     storage_access:
       address: "127.0.0.1:20201"
-      path: "trpc.storage.access.Access"
+      path: "trpc.moox.storage.Access"
     storage_view:
       address: "127.0.0.1:20202"
-      path: "trpc.storage.view.DataView"
+      path: "trpc.moox.storage.DataView"
 
 
 

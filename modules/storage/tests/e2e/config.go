@@ -91,32 +91,32 @@ server:
     read_timeout: 5000
     write_timeout: 60000
   service:
-    - name: trpc.storage.view.DataView
+    - name: trpc.moox.storage.DataView
       ip: 127.0.0.1
       port: %d
       network: tcp
       protocol: trpc
-    - name: trpc.storage.store.PrimaryStore
+    - name: trpc.moox.storage.PrimaryStore
       ip: 127.0.0.1
       port: %d
       network: tcp
       protocol: trpc
-    - name: trpc.storage.view.timer
+    - name: trpc.moox.storage.view.timer
       port: %d
       network: "*/5 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params="
       protocol: timer
       timeout: 60000
-    - name: trpc.storage.archive.timer
+    - name: trpc.moox.storage.archive.timer
       port: %d
       network: "*/20 * * * * *?scheduler=archiveSchedule&params=space_id=%s;dataset_id=*"
       protocol: timer
       timeout: 60000
-    - name: trpc.storage.access.Access
+    - name: trpc.moox.storage.Access
       ip: 127.0.0.1
       port: %d
       network: tcp
       protocol: http
-    - name: trpc.storage.metadata.Metadata
+    - name: trpc.moox.storage.Metadata
       ip: 127.0.0.1
       port: %d
       network: tcp

@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package trpc.storage.message;
+package trpc.moox.storage;
 
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
 
@@ -14,7 +14,7 @@ message TimeSeriesRowsChangedEvent {
   // event_time 是事件产生时间。
   string event_time = 2;
   // keys 是本次变更涉及的时序业务 key。
-  repeated access.TimeSeriesKey keys = 3;
+  repeated TimeSeriesKey keys = 3;
   // attributes 是附加事件属性。
   map<string, string> attributes = 4;
 }
@@ -27,7 +27,7 @@ message RecordRowsChangedEvent {
   // event_time 是事件产生时间。
   string event_time = 2;
   // keys 是本次变更涉及的记录业务 key。
-  repeated access.RecordKey keys = 3;
+  repeated RecordKey keys = 3;
   // attributes 是附加事件属性。
   map<string, string> attributes = 4;
 }

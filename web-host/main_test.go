@@ -69,9 +69,9 @@ func TestStorageGatewayRewrite(t *testing.T) {
 		wantRPC    string
 		wantMethod string
 	}{
-		{"/api/storage/metadata/ListDatasets", "metadata", "/trpc.storage.metadata.Metadata/ListDatasets", "ListDatasets"},
-		{"/api/storage/access/ReadTimeSeriesRows", "access", "/trpc.storage.access.Access/ReadTimeSeriesRows", "ReadTimeSeriesRows"},
-		{"/api/storage/view/QueryTimeSeriesRows", "view", "/trpc.storage.view.DataView/QueryTimeSeriesRows", "QueryTimeSeriesRows"},
+		{"/api/storage/metadata/ListDatasets", "metadata", "/trpc.moox.storage.Metadata/ListDatasets", "ListDatasets"},
+		{"/api/storage/access/ReadTimeSeriesRows", "access", "/trpc.moox.storage.Access/ReadTimeSeriesRows", "ReadTimeSeriesRows"},
+		{"/api/storage/view/QueryTimeSeriesRows", "view", "/trpc.moox.storage.DataView/QueryTimeSeriesRows", "QueryTimeSeriesRows"},
 	}
 	for _, tc := range cases {
 		got, ok := resolveStorageGatewayTarget(tc.path)

@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	registerDataSubjectPath = "/trpc.storage.metadata.Metadata/RegisterDataSubject"
-	writeTimeSeriesRowsPath = "/trpc.storage.access.Access/WriteTimeSeriesRows"
-	writeRecordRowsPath     = "/trpc.storage.access.Access/WriteRecordRows"
+	registerDataSubjectPath = "/trpc.moox.storage.Metadata/RegisterDataSubject"
+	writeTimeSeriesRowsPath = "/trpc.moox.storage.Access/WriteTimeSeriesRows"
+	writeRecordRowsPath     = "/trpc.moox.storage.Access/WriteRecordRows"
 	defaultClientTimeout    = 8 * time.Second
 )
 
