@@ -57,7 +57,7 @@
 - [ ] 8.3 创建 `scripts/test.sh`，按模块执行测试，storage 使用 `make test`，普通 Go 模块使用 `go test ./...`。
 - [ ] 8.4 创建 `scripts/release.sh`，服务端按目标平台构建，CLI 固定构建 Linux amd64、Darwin amd64、Darwin arm64、Windows amd64。
 - [ ] 8.5 创建 `scripts/package-skill.sh`，打包 `skills/moox` 和全平台 `moox-cli` 二进制。
-- [ ] 8.6 创建 `scripts/deploy.sh`，支持把 moox 各模块统一发布到 `43.132.204.177:~/moox`，并允许通过 `REMOTE_ROOT` 自定义远端发布根目录；脚本必须在远端解析 `~/moox`，不能把它展开成本机用户目录。
+- [ ] 8.6 创建 `scripts/deploy.sh`，支持把 moox 各模块统一发布到 `<deploy-host>:~/moox`（deploy host 由 `infra/infra.local.yaml#remote` 提供），并允许通过 `REMOTE_ROOT` 自定义远端发布根目录；脚本必须在远端解析 `~/moox`，不能把它展开成本机用户目录。
 - [ ] 8.7 创建 `scripts/acceptance.sh`，支持上传本机 `/Users/mooyang/Downloads/APT-USDT.csv` 和 `/Users/mooyang/Downloads/AR-USDT.csv` 到远端 `~/moox/var/storage/acceptance`，并写入 xData/storage 作为验收数据。
 
 ## 9. 建立 moox Agent 技能
@@ -73,7 +73,7 @@
 - [ ] 10.1 执行 `go work sync`，确认 workspace 没有无效模块路径。
 - [ ] 10.2 执行根 `make test`，确认所有已迁移模块测试通过或输出清晰的模块级失败原因。
 - [ ] 10.3 执行根 `make package-skill`，确认技能包包含 `SKILL.md`、references 和全平台 `moox-cli`。
-- [ ] 10.4 执行 `REMOTE_HOST=43.132.204.177 REMOTE_ROOT='~/moox' make deploy`，确认远端 `~/moox/bin`、`~/moox/configs`、`~/moox/var` 路径下存在发布产物，并按模块隔离配置、日志和运行时数据。
-- [ ] 10.5 执行 `REMOTE_HOST=43.132.204.177 REMOTE_ROOT='~/moox' APT_CSV=/Users/mooyang/Downloads/APT-USDT.csv AR_CSV=/Users/mooyang/Downloads/AR-USDT.csv make acceptance`，确认 APT-USDT 和 AR-USDT 两份 CSV 均上传到 `~/moox/var/storage/acceptance`、写入 xData/storage 且可查询。
+- [ ] 10.4 执行 `REMOTE_HOST=<deploy-host> REMOTE_ROOT='~/moox' make deploy`，确认远端 `~/moox/bin`、`~/moox/configs`、`~/moox/var` 路径下存在发布产物，并按模块隔离配置、日志和运行时数据。
+- [ ] 10.5 执行 `REMOTE_HOST=<deploy-host> REMOTE_ROOT='~/moox' APT_CSV=/Users/mooyang/Downloads/APT-USDT.csv AR_CSV=/Users/mooyang/Downloads/AR-USDT.csv make acceptance`，确认 APT-USDT 和 AR-USDT 两份 CSV 均上传到 `~/moox/var/storage/acceptance`、写入 xData/storage 且可查询。
 - [ ] 10.6 执行 `openspec validate adopt-modules-monorepo --strict`，确认 OpenSpec change 合法。
 - [ ] 10.7 更新 `docs/monorepo-architecture.md` 中的迁移状态，记录已完成模块和仍待迁移模块。

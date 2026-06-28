@@ -4,11 +4,11 @@
 //   eval "$(go run ./cmd/infra-export)"
 //   eval "$(go run ./cmd/infra-export -root /path/to/repo)"
 //
-// 输出示例：
-//   export REMOTE_HOST=43.132.204.177
-//   export REMOTE_SSH=ubuntu@43.132.204.177
-//   export STORAGE_URL=http://106.53.107.122:20201
-//   export XDATA_URL=http://106.53.107.122:20201
+// 输出示例（真实值来自 infra/infra.local.yaml，此处仅占位）：
+//   export REMOTE_HOST=<deploy-host>
+//   export REMOTE_SSH=ubuntu@<deploy-host>
+//   export STORAGE_URL=http://<storage-host>:20201
+//   export XDATA_URL=http://<xdata-host>:20201
 package main
 
 import (

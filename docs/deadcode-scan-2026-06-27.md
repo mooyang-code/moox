@@ -112,7 +112,7 @@
 
 | 路径 | 性质 | 建议 |
 |------|------|------|
-| `modules/cli/cmd/probe_svcauth` | 独立 main 包，不在 `build.sh`，硬编码 `http://106.53.107.122:18080` + secret，开发期 service-auth 探测脚本 | 疑似临时调试遗留，建议删除 |
+| `modules/cli/cmd/probe_svcauth` | 独立 main 包，不在 `build.sh`，硬编码 `http://<infra-host>:18080` + secret，开发期 service-auth 探测脚本 | 疑似临时调试遗留，建议删除 |
 | `modules/storage/cmd/moox-storage-bench` | bench 工具，不在 `build.sh` | 性能基准工具，**可能有意保留**，需确认 |
 
 ---

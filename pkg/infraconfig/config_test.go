@@ -56,16 +56,16 @@ remote:
   ssh:  "ubuntu@<deploy-host>"
 `, `
 services:
-  storage_access: { host: 106.53.107.122, port: 20201 }
+  storage_access: { host: 203.0.113.10, port: 20201 }
 remote:
-  host: 43.132.204.177
+  host: 203.0.113.99
 `)
-	// base 默认被 local 覆盖
-	if got := StorageAccessURL(); got != "http://106.53.107.122:20201" {
-		t.Fatalf("StorageAccessURL=%s want http://106.53.107.122:20201", got)
+	// base 默认被 local 覆盖（使用 RFC 5737 TEST-NET-3 保留地址，非真实 infra IP）
+	if got := StorageAccessURL(); got != "http://203.0.113.10:20201" {
+		t.Fatalf("StorageAccessURL=%s want http://203.0.113.10:20201", got)
 	}
-	if got := RemoteHost(); got != "43.132.204.177" {
-		t.Fatalf("RemoteHost=%s want 43.132.204.177", got)
+	if got := RemoteHost(); got != "203.0.113.99" {
+		t.Fatalf("RemoteHost=%s want 203.0.113.99", got)
 	}
 	// 未覆盖的字段沿用 base
 	if got := AdminGateway().Port; got != 11000 {

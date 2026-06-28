@@ -37,7 +37,7 @@ The repository SHALL provide a moox-specific Agent skill under root `skills/moox
 The repository SHALL provide a repeatable deployment and acceptance flow for the first-stage monorepo.
 
 #### Scenario: Deploy to acceptance host
-- **WHEN** `REMOTE_HOST=43.132.204.177 REMOTE_ROOT='~/moox' make deploy` is executed after release packaging
+- **WHEN** `REMOTE_HOST=<deploy-host> REMOTE_ROOT='~/moox' make deploy` is executed after release packaging（deploy host 见 `infra/infra.local.yaml#remote`）
 - **THEN** moox module binaries SHALL be published under `~/moox/bin`
 - **THEN** module configuration SHALL be published under `~/moox/configs/<module>`
 - **THEN** module runtime data SHALL be stored under `~/moox/var/<module>`
@@ -45,7 +45,7 @@ The repository SHALL provide a repeatable deployment and acceptance flow for the
 - **THEN** the deploy script SHALL resolve `~/moox` on the remote host rather than expanding it to the local user's home directory
 
 #### Scenario: CSV acceptance writes market data
-- **WHEN** `REMOTE_HOST=43.132.204.177 REMOTE_ROOT='~/moox' APT_CSV=/Users/mooyang/Downloads/APT-USDT.csv AR_CSV=/Users/mooyang/Downloads/AR-USDT.csv make acceptance` is executed
+- **WHEN** `REMOTE_HOST=<deploy-host> REMOTE_ROOT='~/moox' APT_CSV=/Users/mooyang/Downloads/APT-USDT.csv AR_CSV=/Users/mooyang/Downloads/AR-USDT.csv make acceptance` is executed（deploy host 见 `infra/infra.local.yaml#remote`）
 - **THEN** the acceptance flow SHALL upload both CSV files to `~/moox/var/storage/acceptance`
 - **THEN** the acceptance flow SHALL write APT-USDT and AR-USDT K-line rows into xData/storage
 - **THEN** the acceptance flow SHALL query both instruments back and fail if either imported row count or queried row count is zero
