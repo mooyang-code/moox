@@ -3,11 +3,13 @@ package cloudfunction
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/pkg/config"
 	"github.com/mooyang-code/moox/modules/collector/pkg/model"
+	"github.com/mooyang-code/moox/pkg/infraconfig"
 	"github.com/tencentyun/scf-go-lib/functioncontext"
 )
 
@@ -173,7 +175,7 @@ func TestParseServerFromMooxURL(t *testing.T) {
 		wantPort int
 		wantOK  bool
 	}{
-		{"normal", "http://106.53.107.122:11000", "106.53.107.122", 11000, true},
+		{"normal", "http://203.0.113.10:11000", "203.0.113.10", 11000, true},
 		{"https", "https://10.0.0.8:443", "10.0.0.8", 443, true},
 		{"empty", "", "", 0, false},
 		{"no_port", "http://10.0.0.8", "", 0, false},
@@ -203,12 +205,20 @@ func TestHandleKeepaliveProbeRecoversServerInfoFromMooxURL(t *testing.T) {
 		config.GlobalConfig = oldGlobalConfig
 	})
 
+	// 控制面地址从中央 infra 配置读取，避免硬编码真实 IP。
+	gw := infraconfig.AdminGateway()
+	if gw.Host == "" || gw.Port == 0 {
+		t.Fatalf("infraconfig.AdminGateway() 未返回有效端点，got %+v", gw)
+	}
+	wantIP := gw.Host
+	wantPort := gw.Port
+
 	reported := false
 	reportHeartbeatAfterProbe = func(ctx context.Context) error {
 		reported = true
 		serverIP, serverPort := config.GetServerInfo()
-		if serverIP != "106.53.107.122" || serverPort != 11000 {
-			t.Fatalf("server recovered from moox_server_url = %s:%d, want 106.53.107.122:11000", serverIP, serverPort)
+		if serverIP != wantIP || serverPort != wantPort {
+			t.Fatalf("server recovered from moox_server_url = %s:%d, want %s:%d", serverIP, serverPort, wantIP, wantPort)
 		}
 		return nil
 	}
@@ -221,7 +231,7 @@ func TestHandleKeepaliveProbeRecoversServerInfoFromMooxURL(t *testing.T) {
 	event := model.CloudFunctionEvent{
 		Action:        model.EventActionKeepalive,
 		Source:        "keepalive_probe",
-		MooxServerURL: "http://106.53.107.122:11000",
+		MooxServerURL: "http://" + wantIP + ":" + strconv.Itoa(wantPort),
 		RequestID:     "request-coldstart",
 		Data: map[string]interface{}{
 			"node_id": "scf-coldstart-node",
@@ -260,7 +270,7 @@ func TestApplyRuntimeConfigPrefersServerIPOverMooxURL(t *testing.T) {
 	h.applyRuntimeConfig(context.Background(), model.CloudFunctionEvent{
 		ServerIP:      "10.0.0.8",
 		ServerPort:    11000,
-		MooxServerURL: "http://106.53.107.122:9999",
+		MooxServerURL: "http://203.0.113.99:9999",
 	}, nil)
 
 	ip, port := config.GetServerInfo()

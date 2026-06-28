@@ -113,7 +113,7 @@ func TestResolveInstanceIDByPublicIPUsesDescribeInstancesFilter(t *testing.T) {
 		gotAction = r.Header.Get("X-TC-Action")
 		body, _ := io.ReadAll(r.Body)
 		gotBody = string(body)
-		_, _ = w.Write([]byte(`{"Response":{"TotalCount":1,"InstanceSet":[{"InstanceId":"lhins-from-ip","PublicAddresses":["106.53.107.122"]}],"RequestId":"req-describe"}}`))
+		_, _ = w.Write([]byte(`{"Response":{"TotalCount":1,"InstanceSet":[{"InstanceId":"lhins-from-ip","PublicAddresses":["203.0.113.10"]}],"RequestId":"req-describe"}}`))
 	}))
 	defer server.Close()
 
@@ -127,7 +127,7 @@ func TestResolveInstanceIDByPublicIPUsesDescribeInstancesFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	instanceID, err := client.ResolveInstanceIDByPublicIP(context.Background(), "106.53.107.122")
+	instanceID, err := client.ResolveInstanceIDByPublicIP(context.Background(), "203.0.113.10")
 	if err != nil {
 		t.Fatalf("ResolveInstanceIDByPublicIP returned error: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestResolveInstanceIDByPublicIPUsesDescribeInstancesFilter(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"Name":"public-ip-address"`,
-		`"106.53.107.122"`,
+		`"203.0.113.10"`,
 		`"Limit":1`,
 	} {
 		if !strings.Contains(gotBody, want) {
