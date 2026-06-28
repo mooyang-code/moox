@@ -4,7 +4,6 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -75,11 +74,6 @@ func (c *CollectorTaskInstanceCache) ParseTaskParams() error {
 
 	var params taskParamsJSON
 	if err := json.Unmarshal([]byte(c.TaskParams), &params); err != nil {
-		// #region agent log
-		// 使用 fmt.Printf 输出到标准输出（会被日志系统捕获）
-		fmt.Printf("[DEBUG_AGENT] parse_task_params_error: taskID=%s, taskParams=%s, error=%v\n",
-			c.TaskID, c.TaskParams, err)
-		// #endregion
 		return err
 	}
 
@@ -91,12 +85,7 @@ func (c *CollectorTaskInstanceCache) ParseTaskParams() error {
 	if len(c.Intervals) == 0 && c.Interval != "" {
 		c.Intervals = []string{c.Interval}
 	}
-	
-	// #region agent log
-	fmt.Printf("[DEBUG_AGENT] parse_task_params_success: taskID=%s, symbol=%s, taskParams=%s\n",
-		c.TaskID, c.Symbol, c.TaskParams)
-	// #endregion
-	
+
 	return nil
 }
 

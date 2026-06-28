@@ -76,7 +76,12 @@ func loadRateLimitConfig() *RateLimitConfig {
 		rateLimitConfig.DefaultBurst = defaultConfig.DefaultBurst
 	}
 	if rateLimitConfig.MethodLimits == nil {
-		rateLimitConfig.MethodLimits = defaultConfig.MethodLimits
+		rateLimitConfig.MethodLimits = make(map[string]MethodLimit)
+	}
+	for method, limit := range defaultConfig.MethodLimits {
+		if _, ok := rateLimitConfig.MethodLimits[method]; !ok {
+			rateLimitConfig.MethodLimits[method] = limit
+		}
 	}
 
 	log.Infof("加载流量控制配置成功，全局QPS: %d, 突发: %d, 接口配置数量: %d",

@@ -350,25 +350,6 @@ func (s *ServiceImpl) loadNodeTasksFromMemory(ctx context.Context, nodeID string
 	// 从内存仓库获取该节点的任务实例
 	instances := s.taskInstanceStore.GetByNodeID(nodeID)
 
-	// #region agent log
-	if len(instances) > 0 {
-		symbolsForLog := make([]string, 0, len(instances))
-		for _, inst := range instances {
-			symbolsForLog = append(symbolsForLog, inst.Symbol)
-		}
-		log.InfoContextf(ctx, "[DEBUG_AGENT] loadNodeTasksFromMemory: nodeID=%s, taskCount=%d, symbols=%v",
-			nodeID, len(instances), symbolsForLog)
-
-		// 详细日志：输出每个任务的 TaskParams
-		for i, inst := range instances {
-			if i < 3 { // 只输出前3个任务
-				log.InfoContextf(ctx, "[DEBUG_AGENT] Task[%d]: taskID=%s, symbol=%s, taskParams=%s",
-					i, inst.TaskID, inst.Symbol, inst.TaskParams)
-			}
-		}
-	}
-	// #endregion
-
 	// 转换为 TaskInstanceInfo
 	tasks := make([]*types.TaskInstanceInfo, 0, len(instances))
 	for _, inst := range instances {

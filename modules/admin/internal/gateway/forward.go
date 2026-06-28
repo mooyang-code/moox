@@ -18,12 +18,9 @@ import (
 )
 
 // setForwardCommonHeaders 设置透传响应的公共头（CORS + 暴露 trpc 错误头供前端读取）。
-func setForwardCommonHeaders(w http.ResponseWriter) {
+func setForwardCommonHeaders(w http.ResponseWriter, origin string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Auth, X-App-Id, X-App-Key, X-Access-Token, X-Trace-Id, X-Space-Id")
-	w.Header().Set("Access-Control-Expose-Headers", "trpc-ret, trpc-func-ret, X-Trace-Id")
+	applyCORSHeaders(w, origin)
 }
 
 // forwardHTTP 把统一网关请求纯透传到目标服务的有协议 http 端口。
@@ -97,7 +94,7 @@ func normalizeForwardMethod(serviceID, method string) string {
 
 // writeForwardResponse 写入透传成功响应（原样返回底层 http body，暴露 trpc-ret header 供前端读取）。
 func writeForwardResponse(w http.ResponseWriter, respBody []byte, headers map[string]string) {
-	setForwardCommonHeaders(w)
+	setForwardCommonHeaders(w, headers["origin"])
 	if traceID := headers["trace_id"]; traceID != "" {
 		w.Header().Set("X-Trace-Id", traceID)
 	}
@@ -108,7 +105,7 @@ func writeForwardResponse(w http.ResponseWriter, respBody []byte, headers map[st
 // 与 trpc-go 有协议 http 服务端错误协议一致：HTTP 200 + trpc-ret(框架码) + trpc-func-ret(业务码)，
 // 同时写入与业务错误同结构的 JSON body（ret_info），避免前端拿到空 body 无法识别错误。
 func writeForwardError(ctx context.Context, w http.ResponseWriter, err error, headers map[string]string) {
-	setForwardCommonHeaders(w)
+	setForwardCommonHeaders(w, headers["origin"])
 	if traceID := headers["trace_id"]; traceID != "" {
 		w.Header().Set("X-Trace-Id", traceID)
 	}

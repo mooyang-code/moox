@@ -108,7 +108,11 @@ func (s *ViewStore) CreateResultTable(ctx context.Context, tableName string, col
 		"row_json VARCHAR NOT NULL",
 	}
 	for _, def := range columnDefs {
-		defs = append(defs, quoteColumnNameMust(def.name)+" "+duckDBType(def.valueType))
+		quotedName, err := quoteColumnName(def.name)
+		if err != nil {
+			return err
+		}
+		defs = append(defs, quotedName+" "+duckDBType(def.valueType))
 	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
@@ -195,33 +199,58 @@ func createResultIndexStatements(tableName string, columns []resultColumnDef) ([
 	if err != nil {
 		return nil, err
 	}
+	keyTimeIndex, err := quoteIndexName(tableName, "key_time")
+	if err != nil {
+		return nil, err
+	}
+	subjectFreqIndex, err := quoteIndexName(tableName, "subject_freq_time")
+	if err != nil {
+		return nil, err
+	}
 	statements := []string{
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (row_key, data_time)`, quoteIndexNameMust(tableName, "key_time"), quotedTable),
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (subject_id, freq, data_time)`, quoteIndexNameMust(tableName, "subject_freq_time"), quotedTable),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (row_key, data_time)`, keyTimeIndex, quotedTable),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (subject_id, freq, data_time)`, subjectFreqIndex, quotedTable),
 	}
 	for _, column := range columns {
+		indexName, err := quoteIndexName(tableName, column.name)
+		if err != nil {
+			return nil, err
+		}
+		columnName, err := quoteColumnName(column.name)
+		if err != nil {
+			return nil, err
+		}
 		statements = append(statements, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (%s)`,
-			quoteIndexNameMust(tableName, column.name),
+			indexName,
 			quotedTable,
-			quoteColumnNameMust(column.name),
+			columnName,
 		))
 	}
 	return statements, nil
 }
 
-func dropResultIndexStatements(tableName string, columns []resultColumnDef) []string {
-	indexNames := []string{
-		quoteIndexNameMust(tableName, "key_time"),
-		quoteIndexNameMust(tableName, "subject_freq_time"),
+func dropResultIndexStatements(tableName string, columns []resultColumnDef) ([]string, error) {
+	keyTimeIndex, err := quoteIndexName(tableName, "key_time")
+	if err != nil {
+		return nil, err
 	}
+	subjectFreqIndex, err := quoteIndexName(tableName, "subject_freq_time")
+	if err != nil {
+		return nil, err
+	}
+	indexNames := []string{keyTimeIndex, subjectFreqIndex}
 	for _, column := range columns {
-		indexNames = append(indexNames, quoteIndexNameMust(tableName, column.name))
+		indexName, err := quoteIndexName(tableName, column.name)
+		if err != nil {
+			return nil, err
+		}
+		indexNames = append(indexNames, indexName)
 	}
 	statements := make([]string, 0, len(indexNames))
 	for _, indexName := range indexNames {
 		statements = append(statements, fmt.Sprintf(`DROP INDEX IF EXISTS %s`, indexName))
 	}
-	return statements
+	return statements, nil
 }
 
 func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb.TimeSeriesRow) error {
@@ -277,7 +306,11 @@ func (s *ViewStore) insertRowsIntoEmptyTable(ctx context.Context, quotedTableNam
 	if err != nil {
 		return err
 	}
-	for _, statement := range dropResultIndexStatements(tableName, columnDefs) {
+	dropStatements, err := dropResultIndexStatements(tableName, columnDefs)
+	if err != nil {
+		return err
+	}
+	for _, statement := range dropStatements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			_ = tx.Rollback()
 			return err
@@ -444,7 +477,11 @@ func buildInsertSQL(quotedTableName string, columns []*pb.ResultColumn) (string,
 	quotedNames := make([]string, 0, len(names))
 	placeholders := make([]string, 0, len(names))
 	for _, name := range names {
-		quotedNames = append(quotedNames, quoteColumnNameMust(name))
+		quotedName, err := quoteColumnName(name)
+		if err != nil {
+			return "", err
+		}
+		quotedNames = append(quotedNames, quotedName)
 		placeholders = append(placeholders, "?")
 	}
 	return fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s)`, quotedTableName, strings.Join(quotedNames, ","), strings.Join(placeholders, ",")), nil
@@ -698,17 +735,30 @@ func buildKeyPredicates(keys []*pb.TimeSeriesKey) (string, []any, error) {
 			continue
 		}
 		var parts []string
-		addString := func(column string, value string) {
+		addString := func(column string, value string) error {
 			if strings.TrimSpace(value) == "" {
-				return
+				return nil
 			}
-			parts = append(parts, quoteColumnNameMust(column)+" = ?")
+			quoted, err := quoteColumnName(column)
+			if err != nil {
+				return err
+			}
+			parts = append(parts, quoted+" = ?")
 			args = append(args, value)
+			return nil
 		}
-		addString("space_id", key.GetSpaceId())
-		addString("dataset_id", key.GetDatasetId())
-		addString("subject_id", key.GetSubjectId())
-		addString("freq", key.GetFreq())
+		if err := addString("space_id", key.GetSpaceId()); err != nil {
+			return "", nil, err
+		}
+		if err := addString("dataset_id", key.GetDatasetId()); err != nil {
+			return "", nil, err
+		}
+		if err := addString("subject_id", key.GetSubjectId()); err != nil {
+			return "", nil, err
+		}
+		if err := addString("freq", key.GetFreq()); err != nil {
+			return "", nil, err
+		}
 		if len(key.GetDimensions()) > 0 {
 			raw, err := json.Marshal(key.GetDimensions())
 			if err != nil {
@@ -750,7 +800,10 @@ func buildFilterPredicates(filters []*pb.FilterExpr, columns []*pb.ResultColumn)
 			if _, ok := columnTypes[field]; !ok {
 				return nil, nil, fmt.Errorf("unsupported filter field %q", field)
 			}
-			quoted := quoteColumnNameMust(field)
+			quoted, err := quoteColumnName(field)
+			if err != nil {
+				return nil, nil, err
+			}
 			switch fn {
 			case "is_empty":
 				clauses = append(clauses, fmt.Sprintf("(%s IS NULL OR CAST(%s AS VARCHAR) = '')", quoted, quoted))
@@ -793,7 +846,10 @@ func buildFilterPredicates(filters []*pb.FilterExpr, columns []*pb.ResultColumn)
 		if value == nil {
 			return nil, nil, fmt.Errorf("unsupported filter value %q", right)
 		}
-		quoted := quoteColumnNameMust(left)
+		quoted, err := quoteColumnName(left)
+		if err != nil {
+			return nil, nil, err
+		}
 		if op == "contains" {
 			clauses = append(clauses, fmt.Sprintf("CAST(%s AS VARCHAR) LIKE ?", quoted))
 			args = append(args, "%"+factvalue.String(value)+"%")
@@ -890,7 +946,11 @@ func buildOrderBy(sorts []*pb.SortSpec, columns []*pb.ResultColumn) (string, err
 		if spec.GetDesc() {
 			direction = "DESC"
 		}
-		parts = append(parts, quoteColumnNameMust(fieldName)+" "+direction)
+		quotedName, err := quoteColumnName(fieldName)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, quotedName+" "+direction)
 	}
 	parts = append(parts, "subject_id ASC", "freq ASC", "data_time ASC")
 	return strings.Join(parts, ", "), nil
@@ -909,7 +969,11 @@ func resultSelectColumns(columns []*pb.ResultColumn) ([]string, error) {
 	}
 	out := make([]string, 0, len(names))
 	for _, name := range names {
-		out = append(out, quoteColumnNameMust(name))
+		quotedName, err := quoteColumnName(name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, quotedName)
 	}
 	return out, nil
 }
@@ -1146,20 +1210,12 @@ func quoteColumnName(columnName string) (string, error) {
 	return `"` + columnName + `"`, nil
 }
 
-func quoteColumnNameMust(columnName string) string {
-	quoted, err := quoteColumnName(columnName)
-	if err != nil {
-		panic(err)
-	}
-	return quoted
-}
-
-func quoteIndexNameMust(tableName string, suffix string) string {
+func quoteIndexName(tableName string, suffix string) (string, error) {
 	name := "idx_" + tableName + "_" + safeIndexNamePart(suffix)
 	if !tableNamePattern.MatchString(name) {
-		panic(fmt.Sprintf("invalid duckdb index name %s", name))
+		return "", fmt.Errorf("invalid duckdb index name %s", name)
 	}
-	return `"` + name + `"`
+	return `"` + name + `"`, nil
 }
 
 func safeIndexNamePart(value string) string {

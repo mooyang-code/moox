@@ -37,6 +37,6 @@ features:
     details: Vue 3 + Arco Design + Pinia，三套 Axios 实例分层调用 Admin/Storage API。动态路由、Space 上下文切换、CodeMirror/xterm 富交互。
   - icon: 📦
     title: Go Monorepo
-    details: go.work 管理 9 个 Go Module，模块边界清晰，跨模块只允许 import proto 生成代码。统一 Makefile 构建入口。
+    details: go.work 管理 10 个 Go Module，模块边界清晰，跨模块只允许 import proto 生成代码。统一 Makefile 构建入口。
 
 ---

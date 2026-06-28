@@ -2,6 +2,8 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
@@ -50,6 +52,9 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 		return nil, err
 	}
 	gateway.SetConfig(gatewayCfg)
+	if strings.TrimSpace(gatewayCfg.JWT.SecretKey) == "" {
+		return nil, fmt.Errorf("jwt.secret_key must not be empty")
+	}
 	log.Info("网关配置加载成功")
 
 	// 5. 加载并注入DNSProxy配置

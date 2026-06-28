@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 const defaultMaxWorkers = 1
@@ -109,7 +110,7 @@ func (s *Service) Start(ctx context.Context) error {
 	s.recordBatcher = recordBatcher
 	timeSeriesOut := make(chan []timeSeriesDeriveItem, s.maxWorkers)
 	recordOut := make(chan []recordDeriveItem, s.maxWorkers)
-	processCtx := context.WithoutCancel(runCtx)
+	processCtx := trpc.CloneContext(runCtx)
 	s.wg.Add(2 + 2*s.maxWorkers)
 	s.mu.Unlock()
 

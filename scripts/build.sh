@@ -62,7 +62,7 @@ case "${TARGET_MODULE}" in
     build_go modules/admin ./cmd/moox-admin moox-admin 0
     build_go modules/collector ./cmd/moox-collector moox-collector 0
     build_go modules/factor ./cmd/moox-factor moox-factor 0
-    build_go modules/order ./cmd/moox-order moox-order 0
+    build_go modules/trade ./cmd/moox-trade moox-trade 0
     build_go modules/account ./cmd/moox-account moox-account 0
     build_storage
     ;;
@@ -78,8 +78,8 @@ case "${TARGET_MODULE}" in
   factor)
     build_go modules/factor ./cmd/moox-factor moox-factor 0
     ;;
-  order)
-    build_go modules/order ./cmd/moox-order moox-order 0
+  trade)
+    build_go modules/trade ./cmd/moox-trade moox-trade 0
     ;;
   account)
     build_go modules/account ./cmd/moox-account moox-account 0

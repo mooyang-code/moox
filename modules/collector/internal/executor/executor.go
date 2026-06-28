@@ -71,21 +71,11 @@ func executeDueTasksAt(ctx context.Context, now time.Time, reportStatus taskStat
 		return nil
 	}
 
-	// #region agent log
-	log.InfoContextf(ctx, "[DEBUG_AGENT] client_task_fetch: nodeID=%s, taskCount=%d, tasksMD5=%s, timestamp=%d",
-		nodeID, len(taskInstances), config.GetCurrentTasksMD5(), now.Unix())
-	// #endregion
-
 	log.InfoContextf(ctx, "[ScheduledExecute] 开始执行采集任务，当前时间: %s, 任务数: %d, nodeID=%s",
 		now.Format("15:04:05"), len(taskInstances), nodeID)
 
 	// 打印所有任务信息
 	for i, task := range taskInstances {
-		// #region agent log
-		log.InfoContextf(ctx, "[DEBUG_AGENT] client_task_detail: nodeID=%s, taskIndex=%d, taskID=%s, symbol=%s, intervals=%v, taskParams=%s",
-			nodeID, i, task.TaskID, task.Symbol, task.Intervals, task.TaskParams)
-		// #endregion
-
 		log.InfoContextf(ctx, "[ScheduledExecute] Task[%d]: TaskID=%s, DataType=%s, DataSource=%s, Symbol=%s, Intervals=%v",
 			i, task.TaskID, task.DataType, task.DataSource, task.Symbol, task.Intervals)
 	}

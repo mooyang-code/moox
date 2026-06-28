@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/rs/xid"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -116,8 +117,9 @@ func (s *Service) RebuildTimeSeriesView(ctx context.Context, req *pb.RebuildTime
 	s.asyncMu.Unlock()
 	go func() {
 		defer s.asyncWG.Done()
-		if err := s.rebuildTimeSeriesView(context.WithoutCancel(ctx), rebuildReq); err != nil {
-			s.reportViewError(ctx, "time_series_view_rebuild", err)
+		asyncCtx := trpc.CloneContext(ctx)
+		if err := s.rebuildTimeSeriesView(asyncCtx, rebuildReq); err != nil {
+			s.reportViewError(asyncCtx, "time_series_view_rebuild", err)
 		}
 	}()
 	return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Success("rebuild accepted"), RebuildId: rebuildID}, nil
@@ -145,8 +147,9 @@ func (s *Service) RebuildRecordView(ctx context.Context, req *pb.RebuildRecordVi
 	s.asyncMu.Unlock()
 	go func() {
 		defer s.asyncWG.Done()
-		if err := s.rebuildRecordView(context.WithoutCancel(ctx), rebuildReq); err != nil {
-			s.reportViewError(ctx, "record_view_rebuild", err)
+		asyncCtx := trpc.CloneContext(ctx)
+		if err := s.rebuildRecordView(asyncCtx, rebuildReq); err != nil {
+			s.reportViewError(asyncCtx, "record_view_rebuild", err)
 		}
 	}()
 	return &pb.RebuildRecordViewRsp{RetInfo: response.Success("rebuild accepted"), RebuildId: rebuildID}, nil

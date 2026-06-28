@@ -286,6 +286,9 @@ func (h *HTTPRequestHandler) extractGatewayHeaders(r *http.Request) map[string]s
 	if userAgent := r.Header.Get("User-Agent"); userAgent != "" {
 		headers["user_agent"] = userAgent
 	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		headers["origin"] = origin
+	}
 	// space_id：硬隔离维度，透传给已迁移的 RPC 服务（spacecontext 从 ctx 读取）
 	if spaceID := r.Header.Get("X-Space-Id"); spaceID != "" {
 		headers["space_id"] = spaceID

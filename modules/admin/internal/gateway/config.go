@@ -15,12 +15,18 @@ var (
 	configMutex   sync.RWMutex
 )
 
+// CORSConfig 跨域配置
+type CORSConfig struct {
+	AllowedOrigins []string `yaml:"allowed_origins"`
+}
+
 // Config 网关服务配置
 type Config struct {
 	JWT       JWTConfig       `yaml:"jwt"`        // JWT配置
 	Security  SecurityConfig  `yaml:"security"`   // 安全配置
 	Gateway   GatewayConfig   `yaml:"gateway"`    // 网关配置
 	RateLimit RateLimitConfig `yaml:"rate_limit"` // 限流配置
+	CORS      CORSConfig      `yaml:"cors"`       // 跨域配置
 }
 
 // JWTConfig JWT配置

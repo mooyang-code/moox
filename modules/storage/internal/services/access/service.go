@@ -59,6 +59,8 @@ type Service struct {
 	recordVersionMu      sync.Mutex
 	lastRecordVersion    time.Time
 	openedDuckDB         sync.Map
+	viewStoresMu         sync.Mutex
+	viewStores           map[string]*sharedViewStore
 }
 
 // factReadService 定义 Access 内部回读 Record 行所需的接口。
@@ -78,6 +80,10 @@ var (
 	_ pb.AccessService   = (*Service)(nil)
 	_ pb.DataViewService = (*Service)(nil)
 )
+
+func newServiceViewStores() map[string]*sharedViewStore {
+	return make(map[string]*sharedViewStore)
+}
 
 func NewServiceWithOptions(opts Options) *Service {
 	root := storageRoot(opts.Root)
@@ -130,6 +136,7 @@ func NewServiceWithOptions(opts Options) *Service {
 		}),
 		events: events,
 		report: reporter,
+		viewStores: newServiceViewStores(),
 	}
 	svc.factReader = svc
 	svc.timeSeriesFactReader = svc
@@ -146,16 +153,11 @@ func (s *Service) SetViewFactReader(reader viewFactReadService) {
 	s.viewFactReader = reader
 }
 
-// sharedViewStore 保存进程内共享 DuckDB ViewStore 及其引用计数。
+// sharedViewStore 保存 DuckDB ViewStore 及其引用计数。
 type sharedViewStore struct {
 	store *deviceduckdb.ViewStore
 	refs  int
 }
-
-var viewStores = struct {
-	sync.Mutex
-	items map[string]*sharedViewStore
-}{items: make(map[string]*sharedViewStore)}
 
 func (s *Service) viewStore() (*deviceduckdb.ViewStore, error) {
 	path := s.duckDBPath
@@ -163,9 +165,9 @@ func (s *Service) viewStore() (*deviceduckdb.ViewStore, error) {
 		path = filepath.Join(s.root, "duckdb", "views.duckdb")
 	}
 	if _, ok := s.openedDuckDB.Load(path); ok {
-		return getViewStore(path)
+		return s.getViewStore(path)
 	}
-	store, err := acquireViewStore(path)
+	store, err := s.acquireViewStore(path)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +213,7 @@ func (s *Service) Close() error {
 	s.waitForAsyncJobs()
 	s.openedDuckDB.Range(func(key, _ any) bool {
 		path, _ := key.(string)
-		if err := releaseViewStore(path); err != nil && firstErr == nil {
+		if err := s.releaseViewStore(path); err != nil && firstErr == nil {
 			firstErr = err
 		}
 		s.openedDuckDB.Delete(key)
@@ -245,15 +247,15 @@ func (s *Service) Close() error {
 	return firstErr
 }
 
-func acquireViewStore(path string) (*deviceduckdb.ViewStore, error) {
-	viewStores.Lock()
-	if shared := viewStores.items[path]; shared != nil {
+func (s *Service) acquireViewStore(path string) (*deviceduckdb.ViewStore, error) {
+	s.viewStoresMu.Lock()
+	if shared := s.viewStores[path]; shared != nil {
 		shared.refs++
 		store := shared.store
-		viewStores.Unlock()
+		s.viewStoresMu.Unlock()
 		return store, nil
 	}
-	viewStores.Unlock()
+	s.viewStoresMu.Unlock()
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -263,42 +265,42 @@ func acquireViewStore(path string) (*deviceduckdb.ViewStore, error) {
 		return nil, err
 	}
 
-	viewStores.Lock()
-	defer viewStores.Unlock()
-	if shared := viewStores.items[path]; shared != nil {
+	s.viewStoresMu.Lock()
+	defer s.viewStoresMu.Unlock()
+	if shared := s.viewStores[path]; shared != nil {
 		shared.refs++
 		_ = opened.Close()
 		return shared.store, nil
 	}
-	viewStores.items[path] = &sharedViewStore{store: opened, refs: 1}
+	s.viewStores[path] = &sharedViewStore{store: opened, refs: 1}
 	return opened, nil
 }
 
-func getViewStore(path string) (*deviceduckdb.ViewStore, error) {
-	viewStores.Lock()
-	if shared := viewStores.items[path]; shared != nil {
+func (s *Service) getViewStore(path string) (*deviceduckdb.ViewStore, error) {
+	s.viewStoresMu.Lock()
+	if shared := s.viewStores[path]; shared != nil {
 		store := shared.store
-		viewStores.Unlock()
+		s.viewStoresMu.Unlock()
 		return store, nil
 	}
-	viewStores.Unlock()
-	return acquireViewStore(path)
+	s.viewStoresMu.Unlock()
+	return s.acquireViewStore(path)
 }
 
-func releaseViewStore(path string) error {
-	viewStores.Lock()
-	shared := viewStores.items[path]
+func (s *Service) releaseViewStore(path string) error {
+	s.viewStoresMu.Lock()
+	shared := s.viewStores[path]
 	if shared == nil {
-		viewStores.Unlock()
+		s.viewStoresMu.Unlock()
 		return nil
 	}
 	shared.refs--
 	if shared.refs > 0 {
-		viewStores.Unlock()
+		s.viewStoresMu.Unlock()
 		return nil
 	}
-	delete(viewStores.items, path)
-	viewStores.Unlock()
+	delete(s.viewStores, path)
+	s.viewStoresMu.Unlock()
 	return shared.store.Close()
 }
 
@@ -392,7 +394,7 @@ func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.
 	}
 	created, err := s.metadata.UpsertSpace(ctx, space)
 	if err != nil {
-		return &pb.CreateSpaceRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateSpaceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.CreateSpaceRsp{RetInfo: response.Success("success"), Space: created}, nil
 }
@@ -407,7 +409,7 @@ func (s *Service) UpdateSpace(ctx context.Context, req *pb.UpdateSpaceReq) (*pb.
 	}
 	updated, err := s.metadata.UpsertSpace(ctx, space)
 	if err != nil {
-		return &pb.UpdateSpaceRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateSpaceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateSpaceRsp{RetInfo: response.Success("success"), Space: updated}, nil
 }
@@ -423,7 +425,7 @@ func (s *Service) GetSpace(ctx context.Context, req *pb.GetSpaceReq) (*pb.GetSpa
 func (s *Service) ListSpaces(ctx context.Context, req *pb.ListSpacesReq) (*pb.ListSpacesRsp, error) {
 	items, page, err := s.metadata.ListSpaces(ctx, req.GetOwner(), req.GetPage())
 	if err != nil {
-		return &pb.ListSpacesRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListSpacesRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListSpacesRsp{RetInfo: response.Success("success"), Spaces: items, PageResult: page}, nil
 }
@@ -437,20 +439,20 @@ func (s *Service) CreateView(ctx context.Context, req *pb.CreateViewReq) (*pb.Cr
 		view.ViewId = defaultID(view.GetName(), "view")
 	}
 	if err := validateChineseDisplayName("view name", view.GetName()); err != nil {
-		return &pb.CreateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateViewID(view.GetViewId()); err != nil {
-		return &pb.CreateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	if view.PrimaryDatasetId == "" && len(view.GetDatasetIds()) > 0 {
 		view.PrimaryDatasetId = view.GetDatasetIds()[0]
 	}
 	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
-		return &pb.CreateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	created, err := s.metadata.UpsertView(ctx, view)
 	if err != nil {
-		return &pb.CreateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.CreateViewRsp{RetInfo: response.Success("success"), View: created}, nil
 }
@@ -464,20 +466,20 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 		view.Name = view.GetViewId()
 	}
 	if err := validateChineseDisplayName("view name", view.GetName()); err != nil {
-		return &pb.UpdateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateViewID(view.GetViewId()); err != nil {
-		return &pb.UpdateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	if view.PrimaryDatasetId == "" && len(view.GetDatasetIds()) > 0 {
 		view.PrimaryDatasetId = view.GetDatasetIds()[0]
 	}
 	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
-		return &pb.UpdateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	updated, err := s.metadata.UpsertView(ctx, view)
 	if err != nil {
-		return &pb.UpdateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateViewRsp{RetInfo: response.Success("success"), View: updated}, nil
 }
@@ -678,7 +680,7 @@ func (s *Service) GetView(ctx context.Context, req *pb.GetViewReq) (*pb.GetViewR
 func (s *Service) ListViews(ctx context.Context, req *pb.ListViewsReq) (*pb.ListViewsRsp, error) {
 	items, page, err := s.metadata.ListViews(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetStatus(), req.GetPage())
 	if err != nil {
-		return &pb.ListViewsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListViewsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListViewsRsp{RetInfo: response.Success("success"), Views: items, PageResult: page}, nil
 }
@@ -689,14 +691,14 @@ func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumn
 		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, view_id and column_name are required"))}, nil
 	}
 	if err := validateColumnDisplayName("view column display_name", column.GetAttributes()); err != nil {
-		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateViewColumnName(column); err != nil {
-		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	created, err := s.metadata.UpsertViewColumn(ctx, column)
 	if err != nil {
-		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpsertViewColumnRsp{RetInfo: response.Success("success"), Column: created}, nil
 }
@@ -704,7 +706,7 @@ func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumn
 func (s *Service) ListViewColumns(ctx context.Context, req *pb.ListViewColumnsReq) (*pb.ListViewColumnsRsp, error) {
 	items, page, err := s.metadata.ListViewColumns(ctx, req.GetSpaceId(), req.GetViewId(), req.GetPage())
 	if err != nil {
-		return &pb.ListViewColumnsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListViewColumnsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListViewColumnsRsp{RetInfo: response.Success("success"), Columns: items, PageResult: page}, nil
 }
@@ -722,7 +724,7 @@ func (s *Service) CreateDataSource(ctx context.Context, req *pb.CreateDataSource
 	}
 	created, err := s.metadata.UpsertDataSource(ctx, item)
 	if err != nil {
-		return &pb.CreateDataSourceRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateDataSourceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.CreateDataSourceRsp{RetInfo: response.Success("success"), DataSource: created}, nil
 }
@@ -730,7 +732,7 @@ func (s *Service) CreateDataSource(ctx context.Context, req *pb.CreateDataSource
 func (s *Service) UpdateDataSource(ctx context.Context, req *pb.UpdateDataSourceReq) (*pb.UpdateDataSourceRsp, error) {
 	updated, err := s.metadata.UpsertDataSource(ctx, req.GetDataSource())
 	if err != nil {
-		return &pb.UpdateDataSourceRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateDataSourceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateDataSourceRsp{RetInfo: response.Success("success"), DataSource: updated}, nil
 }
@@ -738,7 +740,7 @@ func (s *Service) UpdateDataSource(ctx context.Context, req *pb.UpdateDataSource
 func (s *Service) GetDataSource(ctx context.Context, req *pb.GetDataSourceReq) (*pb.GetDataSourceRsp, error) {
 	item, err := s.metadata.GetDataSource(ctx, req.GetSpaceId(), req.GetDataSourceId())
 	if err != nil {
-		return &pb.GetDataSourceRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.GetDataSourceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.GetDataSourceRsp{RetInfo: response.Success("success"), DataSource: item}, nil
 }
@@ -746,7 +748,7 @@ func (s *Service) GetDataSource(ctx context.Context, req *pb.GetDataSourceReq) (
 func (s *Service) ListDataSources(ctx context.Context, req *pb.ListDataSourcesReq) (*pb.ListDataSourcesRsp, error) {
 	items, page, err := s.metadata.ListDataSources(ctx, req.GetSpaceId(), req.GetKind(), req.GetMarket(), req.GetPage())
 	if err != nil {
-		return &pb.ListDataSourcesRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListDataSourcesRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListDataSourcesRsp{RetInfo: response.Success("success"), DataSources: items, PageResult: page}, nil
 }
@@ -764,7 +766,7 @@ func (s *Service) UpsertSubject(ctx context.Context, req *pb.UpsertSubjectReq) (
 	}
 	created, err := s.metadata.UpsertSubject(ctx, item)
 	if err != nil {
-		return &pb.UpsertSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpsertSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpsertSubjectRsp{RetInfo: response.Success("success"), Subject: created}, nil
 }
@@ -788,7 +790,7 @@ func (s *Service) RegisterDataSubject(ctx context.Context, req *pb.RegisterDataS
 	}
 	created, err := s.metadata.UpsertSubject(ctx, item)
 	if err != nil {
-		return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	_, err = s.metadata.UpsertSubjectSymbol(ctx, &pb.SubjectSymbol{
 		SpaceId:        req.GetSpaceId(),
@@ -798,7 +800,7 @@ func (s *Service) RegisterDataSubject(ctx context.Context, req *pb.RegisterDataS
 		Status:         "active",
 	})
 	if err != nil {
-		return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 
 	bindings := make([]*pb.DatasetSubject, 0, len(req.GetDatasetBindings()))
@@ -813,7 +815,7 @@ func (s *Service) RegisterDataSubject(ctx context.Context, req *pb.RegisterDataS
 		}
 		createdBinding, err := s.metadata.BindDatasetSubject(ctx, binding)
 		if err != nil {
-			return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 		}
 		bindings = append(bindings, createdBinding)
 	}
@@ -831,7 +833,7 @@ func (s *Service) GetSubject(ctx context.Context, req *pb.GetSubjectReq) (*pb.Ge
 func (s *Service) ListSubjects(ctx context.Context, req *pb.ListSubjectsReq) (*pb.ListSubjectsRsp, error) {
 	items, page, err := s.metadata.ListSubjects(ctx, req.GetSpaceId(), req.GetSubjectType(), req.GetMarket(), req.GetSubjectIds(), req.GetPage())
 	if err != nil {
-		return &pb.ListSubjectsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListSubjectsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListSubjectsRsp{RetInfo: response.Success("success"), Subjects: items, PageResult: page}, nil
 }
@@ -843,7 +845,7 @@ func (s *Service) UpsertSubjectSymbol(ctx context.Context, req *pb.UpsertSubject
 	}
 	created, err := s.metadata.UpsertSubjectSymbol(ctx, item)
 	if err != nil {
-		return &pb.UpsertSubjectSymbolRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpsertSubjectSymbolRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpsertSubjectSymbolRsp{RetInfo: response.Success("success"), SubjectSymbol: created}, nil
 }
@@ -851,7 +853,7 @@ func (s *Service) UpsertSubjectSymbol(ctx context.Context, req *pb.UpsertSubject
 func (s *Service) ListSubjectSymbols(ctx context.Context, req *pb.ListSubjectSymbolsReq) (*pb.ListSubjectSymbolsRsp, error) {
 	items, page, err := s.metadata.ListSubjectSymbols(ctx, req.GetSpaceId(), req.GetSubjectId(), req.GetDataSourceId(), req.GetExternalSymbol(), req.GetPage())
 	if err != nil {
-		return &pb.ListSubjectSymbolsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListSubjectSymbolsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListSubjectSymbolsRsp{RetInfo: response.Success("success"), SubjectSymbols: items, PageResult: page}, nil
 }
@@ -865,14 +867,14 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 		item.DatasetId = defaultID(item.GetName(), "dataset")
 	}
 	if err := validateChineseDisplayName("dataset name", item.GetName()); err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateDatasetRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateDatasetRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	created, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateDatasetRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.CreateDatasetRsp{RetInfo: response.Success("success"), Dataset: created}, nil
 }
@@ -883,14 +885,14 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 		return &pb.UpdateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id is required"))}, nil
 	}
 	if err := validateChineseDisplayName("dataset name", item.GetName()); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateDatasetRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateDatasetRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	updated, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateDatasetRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateDatasetRsp{RetInfo: response.Success("success"), Dataset: updated}, nil
 }
@@ -906,7 +908,7 @@ func (s *Service) GetDataset(ctx context.Context, req *pb.GetDatasetReq) (*pb.Ge
 func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*pb.ListDatasetsRsp, error) {
 	items, page, err := s.metadata.ListDatasets(ctx, req.GetSpaceId(), req.GetDataSourceId(), req.GetDataKind(), req.GetFreq(), req.GetPage())
 	if err != nil {
-		return &pb.ListDatasetsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListDatasetsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListDatasetsRsp{RetInfo: response.Success("success"), Datasets: items, PageResult: page}, nil
 }
@@ -921,7 +923,7 @@ func (s *Service) BindDatasetSubject(ctx context.Context, req *pb.BindDatasetSub
 	}
 	created, err := s.metadata.BindDatasetSubject(ctx, item)
 	if err != nil {
-		return &pb.BindDatasetSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.BindDatasetSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.BindDatasetSubjectRsp{RetInfo: response.Success("success"), DatasetSubject: created}, nil
 }
@@ -929,7 +931,7 @@ func (s *Service) BindDatasetSubject(ctx context.Context, req *pb.BindDatasetSub
 func (s *Service) ListDatasetSubjects(ctx context.Context, req *pb.ListDatasetSubjectsReq) (*pb.ListDatasetSubjectsRsp, error) {
 	items, page, err := s.metadata.ListDatasetSubjects(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetSubjectId(), req.GetPage())
 	if err != nil {
-		return &pb.ListDatasetSubjectsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListDatasetSubjectsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListDatasetSubjectsRsp{RetInfo: response.Success("success"), DatasetSubjects: items, PageResult: page}, nil
 }
@@ -937,7 +939,7 @@ func (s *Service) ListDatasetSubjects(ctx context.Context, req *pb.ListDatasetSu
 func (s *Service) CreateField(ctx context.Context, req *pb.CreateFieldReq) (*pb.CreateFieldRsp, error) {
 	created, err := s.metadata.UpsertField(ctx, req.GetField())
 	if err != nil {
-		return &pb.CreateFieldRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateFieldRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.CreateFieldRsp{RetInfo: response.Success("success"), Field: created}, nil
 }
@@ -945,7 +947,7 @@ func (s *Service) CreateField(ctx context.Context, req *pb.CreateFieldReq) (*pb.
 func (s *Service) UpdateField(ctx context.Context, req *pb.UpdateFieldReq) (*pb.UpdateFieldRsp, error) {
 	updated, err := s.metadata.UpsertField(ctx, req.GetField())
 	if err != nil {
-		return &pb.UpdateFieldRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateFieldRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateFieldRsp{RetInfo: response.Success("success"), Field: updated}, nil
 }
@@ -961,7 +963,7 @@ func (s *Service) GetField(ctx context.Context, req *pb.GetFieldReq) (*pb.GetFie
 func (s *Service) ListFields(ctx context.Context, req *pb.ListFieldsReq) (*pb.ListFieldsRsp, error) {
 	items, page, err := s.metadata.ListFields(ctx, req.GetSpaceId(), req.GetValueType(), req.GetPage())
 	if err != nil {
-		return &pb.ListFieldsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListFieldsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListFieldsRsp{RetInfo: response.Success("success"), Fields: items, PageResult: page}, nil
 }
@@ -969,7 +971,7 @@ func (s *Service) ListFields(ctx context.Context, req *pb.ListFieldsReq) (*pb.Li
 func (s *Service) CreateFactor(ctx context.Context, req *pb.CreateFactorReq) (*pb.CreateFactorRsp, error) {
 	created, err := s.metadata.UpsertFactor(ctx, req.GetFactor())
 	if err != nil {
-		return &pb.CreateFactorRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateFactorRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.CreateFactorRsp{RetInfo: response.Success("success"), Factor: created}, nil
 }
@@ -977,7 +979,7 @@ func (s *Service) CreateFactor(ctx context.Context, req *pb.CreateFactorReq) (*p
 func (s *Service) UpdateFactor(ctx context.Context, req *pb.UpdateFactorReq) (*pb.UpdateFactorRsp, error) {
 	updated, err := s.metadata.UpsertFactor(ctx, req.GetFactor())
 	if err != nil {
-		return &pb.UpdateFactorRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateFactorRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateFactorRsp{RetInfo: response.Success("success"), Factor: updated}, nil
 }
@@ -993,7 +995,7 @@ func (s *Service) GetFactor(ctx context.Context, req *pb.GetFactorReq) (*pb.GetF
 func (s *Service) ListFactors(ctx context.Context, req *pb.ListFactorsReq) (*pb.ListFactorsRsp, error) {
 	items, page, err := s.metadata.ListFactors(ctx, req.GetSpaceId(), req.GetAlgorithm(), req.GetPage())
 	if err != nil {
-		return &pb.ListFactorsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListFactorsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListFactorsRsp{RetInfo: response.Success("success"), Factors: items, PageResult: page}, nil
 }
@@ -1004,11 +1006,11 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 		return &pb.UpsertDatasetColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and column_name are required"))}, nil
 	}
 	if err := validateColumnDisplayName("dataset column display_name", item.GetAttributes()); err != nil {
-		return &pb.UpsertDatasetColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpsertDatasetColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	created, err := s.metadata.UpsertDatasetColumn(ctx, item)
 	if err != nil {
-		return &pb.UpsertDatasetColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpsertDatasetColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpsertDatasetColumnRsp{RetInfo: response.Success("success"), Column: created}, nil
 }
@@ -1016,7 +1018,7 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 func (s *Service) ListDatasetColumns(ctx context.Context, req *pb.ListDatasetColumnsReq) (*pb.ListDatasetColumnsRsp, error) {
 	items, page, err := s.metadata.ListDatasetColumns(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetPage())
 	if err != nil {
-		return &pb.ListDatasetColumnsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListDatasetColumnsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListDatasetColumnsRsp{RetInfo: response.Success("success"), Columns: items, PageResult: page}, nil
 }
@@ -1034,7 +1036,7 @@ func (s *Service) CreatePrimaryStoreNode(ctx context.Context, req *pb.CreatePrim
 	}
 	created, err := s.metadata.UpsertPrimaryStoreNode(ctx, item)
 	if err != nil {
-		return &pb.CreatePrimaryStoreNodeRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreatePrimaryStoreNodeRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.CreatePrimaryStoreNodeRsp{RetInfo: response.Success("success"), Node: created}, nil
 }
@@ -1042,7 +1044,7 @@ func (s *Service) CreatePrimaryStoreNode(ctx context.Context, req *pb.CreatePrim
 func (s *Service) UpdatePrimaryStoreNode(ctx context.Context, req *pb.UpdatePrimaryStoreNodeReq) (*pb.UpdatePrimaryStoreNodeRsp, error) {
 	updated, err := s.metadata.UpsertPrimaryStoreNode(ctx, req.GetNode())
 	if err != nil {
-		return &pb.UpdatePrimaryStoreNodeRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdatePrimaryStoreNodeRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdatePrimaryStoreNodeRsp{RetInfo: response.Success("success"), Node: updated}, nil
 }
@@ -1050,7 +1052,7 @@ func (s *Service) UpdatePrimaryStoreNode(ctx context.Context, req *pb.UpdatePrim
 func (s *Service) GetPrimaryStoreNode(ctx context.Context, req *pb.GetPrimaryStoreNodeReq) (*pb.GetPrimaryStoreNodeRsp, error) {
 	item, err := s.metadata.GetPrimaryStoreNode(ctx, req.GetNodeId())
 	if err != nil {
-		return &pb.GetPrimaryStoreNodeRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.GetPrimaryStoreNodeRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.GetPrimaryStoreNodeRsp{RetInfo: response.Success("success"), Node: item}, nil
 }
@@ -1058,7 +1060,7 @@ func (s *Service) GetPrimaryStoreNode(ctx context.Context, req *pb.GetPrimarySto
 func (s *Service) ListPrimaryStoreNodes(ctx context.Context, req *pb.ListPrimaryStoreNodesReq) (*pb.ListPrimaryStoreNodesRsp, error) {
 	items, page, err := s.metadata.ListPrimaryStoreNodes(ctx, req.GetPage())
 	if err != nil {
-		return &pb.ListPrimaryStoreNodesRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListPrimaryStoreNodesRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListPrimaryStoreNodesRsp{RetInfo: response.Success("success"), Nodes: items, PageResult: page}, nil
 }
@@ -1076,7 +1078,7 @@ func (s *Service) CreateDevice(ctx context.Context, req *pb.CreateDeviceReq) (*p
 	}
 	created, err := s.metadata.UpsertDevice(ctx, item)
 	if err != nil {
-		return &pb.CreateDeviceRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreateDeviceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.CreateDeviceRsp{RetInfo: response.Success("success"), Device: created}, nil
 }
@@ -1084,7 +1086,7 @@ func (s *Service) CreateDevice(ctx context.Context, req *pb.CreateDeviceReq) (*p
 func (s *Service) UpdateDevice(ctx context.Context, req *pb.UpdateDeviceReq) (*pb.UpdateDeviceRsp, error) {
 	updated, err := s.metadata.UpsertDevice(ctx, req.GetDevice())
 	if err != nil {
-		return &pb.UpdateDeviceRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdateDeviceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateDeviceRsp{RetInfo: response.Success("success"), Device: updated}, nil
 }
@@ -1092,7 +1094,7 @@ func (s *Service) UpdateDevice(ctx context.Context, req *pb.UpdateDeviceReq) (*p
 func (s *Service) GetDevice(ctx context.Context, req *pb.GetDeviceReq) (*pb.GetDeviceRsp, error) {
 	item, err := s.metadata.GetDevice(ctx, req.GetDeviceId())
 	if err != nil {
-		return &pb.GetDeviceRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.GetDeviceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.GetDeviceRsp{RetInfo: response.Success("success"), Device: item}, nil
 }
@@ -1100,7 +1102,7 @@ func (s *Service) GetDevice(ctx context.Context, req *pb.GetDeviceReq) (*pb.GetD
 func (s *Service) ListDevices(ctx context.Context, req *pb.ListDevicesReq) (*pb.ListDevicesRsp, error) {
 	items, page, err := s.metadata.ListDevices(ctx, req.GetNodeId(), req.GetEngine(), req.GetPage())
 	if err != nil {
-		return &pb.ListDevicesRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListDevicesRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListDevicesRsp{RetInfo: response.Success("success"), Devices: items, PageResult: page}, nil
 }
@@ -1115,7 +1117,7 @@ func (s *Service) CreatePrimaryStoreRoute(ctx context.Context, req *pb.CreatePri
 	}
 	created, err := s.metadata.UpsertPrimaryStoreRoute(ctx, item)
 	if err != nil {
-		return &pb.CreatePrimaryStoreRouteRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.CreatePrimaryStoreRouteRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.CreatePrimaryStoreRouteRsp{RetInfo: response.Success("success"), PrimaryStoreRoute: created}, nil
 }
@@ -1123,7 +1125,7 @@ func (s *Service) CreatePrimaryStoreRoute(ctx context.Context, req *pb.CreatePri
 func (s *Service) UpdatePrimaryStoreRoute(ctx context.Context, req *pb.UpdatePrimaryStoreRouteReq) (*pb.UpdatePrimaryStoreRouteRsp, error) {
 	updated, err := s.metadata.UpsertPrimaryStoreRoute(ctx, req.GetPrimaryStoreRoute())
 	if err != nil {
-		return &pb.UpdatePrimaryStoreRouteRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.UpdatePrimaryStoreRouteRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdatePrimaryStoreRouteRsp{RetInfo: response.Success("success"), PrimaryStoreRoute: updated}, nil
 }
@@ -1139,7 +1141,7 @@ func (s *Service) GetPrimaryStoreRoute(ctx context.Context, req *pb.GetPrimarySt
 func (s *Service) ListPrimaryStoreRoutes(ctx context.Context, req *pb.ListPrimaryStoreRoutesReq) (*pb.ListPrimaryStoreRoutesRsp, error) {
 	items, page, err := s.metadata.ListPrimaryStoreRoutes(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetSubjectId(), req.GetNodeId(), req.GetPage())
 	if err != nil {
-		return &pb.ListPrimaryStoreRoutesRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListPrimaryStoreRoutesRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListPrimaryStoreRoutesRsp{RetInfo: response.Success("success"), PrimaryStoreRoutes: items, PageResult: page}, nil
 }
@@ -1154,7 +1156,7 @@ func (s *Service) RegisterArchiveFile(ctx context.Context, req *pb.RegisterArchi
 	}
 	created, err := s.metadata.RegisterArchiveFile(ctx, item)
 	if err != nil {
-		return &pb.RegisterArchiveFileRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.RegisterArchiveFileRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.RegisterArchiveFileRsp{RetInfo: response.Success("success"), ArchiveFile: created}, nil
 }
@@ -1162,7 +1164,7 @@ func (s *Service) RegisterArchiveFile(ctx context.Context, req *pb.RegisterArchi
 func (s *Service) ListArchiveFiles(ctx context.Context, req *pb.ListArchiveFilesReq) (*pb.ListArchiveFilesRsp, error) {
 	items, _, err := s.metadata.ListArchiveFiles(ctx, req.GetSpaceId(), req.GetDatasetId(), nil)
 	if err != nil {
-		return &pb.ListArchiveFilesRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ListArchiveFilesRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	filtered := items[:0]
 	for _, item := range items {

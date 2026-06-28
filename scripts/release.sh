@@ -16,7 +16,7 @@ mkdir -p \
   "${RELEASE_ROOT}/admin/bin" \
   "${RELEASE_ROOT}/collector/bin" \
   "${RELEASE_ROOT}/factor/bin" \
-  "${RELEASE_ROOT}/order/bin" \
+  "${RELEASE_ROOT}/trade/bin" \
   "${RELEASE_ROOT}/account/bin" \
   "${RELEASE_ROOT}/storage/bin" \
   "${RELEASE_ROOT}/storage/config" \
@@ -34,7 +34,7 @@ cp "${ROOT}/bin/moox-cli" "${RELEASE_ROOT}/cli/bin/"
 cp "${ROOT}/bin/moox-admin" "${RELEASE_ROOT}/admin/bin/"
 cp "${ROOT}/bin/moox-collector" "${RELEASE_ROOT}/collector/bin/"
 cp "${ROOT}/bin/moox-factor" "${RELEASE_ROOT}/factor/bin/"
-cp "${ROOT}/bin/moox-order" "${RELEASE_ROOT}/order/bin/"
+cp "${ROOT}/bin/moox-trade" "${RELEASE_ROOT}/trade/bin/"
 cp "${ROOT}/bin/moox-account" "${RELEASE_ROOT}/account/bin/"
 cp "${ROOT}/bin/moox-storage" "${RELEASE_ROOT}/storage/bin/"
 cp -R "${ROOT}/modules/storage/config/." "${RELEASE_ROOT}/storage/config/"

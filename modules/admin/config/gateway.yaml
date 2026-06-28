@@ -131,6 +131,11 @@ gateway:
 
 
 
+# CORS 跨域配置（生产环境请配置具体前端域名，避免使用 *）
+cors:
+  allowed_origins:
+    - "*"
+
 # 限流配置
 rate_limit:
   # 默认限流配置

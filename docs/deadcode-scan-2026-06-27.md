@@ -2,7 +2,7 @@
 
 - **扫描时间**：2026-06-27
 - **工具**：`staticcheck 2024.1.1 (0.7.0)`，检查项 `U1000`（unused code）
-- **范围**：`modules/admin`、`modules/cli`、`modules/collector`、`modules/storage`、`modules/account`、`modules/factor`、`modules/order`、`web-host`
+- **范围**：`modules/admin`、`modules/cli`、`modules/collector`、`modules/storage`、`modules/factor`、`modules/trade`、`web-host`
 - **已排除噪音**：proto 生成代码（`proto/admingen/`、`proto/gen/`、`*.pb.go`）
 - **状态**：已完成部分清理（admin / cli / collector / storage）。清理前后仍保留需确认项会在文末说明。  
 
@@ -104,7 +104,7 @@
 
 ## 5. 干净模块
 
-`modules/account`、`modules/factor`、`modules/order`、`web-host` —— 无 U1000。
+`modules/factor`、`modules/trade`、`web-host` —— 无 U1000。
 
 ---
 
