@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -124,6 +125,11 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 
 	// 提取HTTP头部信息
 	headers := handler.extractGatewayHeaders(r)
+	// user_id 由 authorize filter 从 JWT 解析后写入 ctx（model.CtxUserID），
+	// 这里取出透传给下游 trade 等需要按用户隔离的服务。
+	if uid, ok := ctx.Value(authmodel.CtxUserID).(string); ok && uid != "" {
+		headers["user_id"] = uid
+	}
 
 	// 裸 HTTP 处理器分派（用于 multipart/流式等不适合 PB RPC 的场景）。
 	// 必须在读取请求体之前分派，避免 multipart body 被网关读干。

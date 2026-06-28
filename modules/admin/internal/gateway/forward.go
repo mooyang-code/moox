@@ -75,6 +75,7 @@ func buildForwardHeaders(headers map[string]string) *thttp.ClientReqHeader {
 	addIfPresent(reqHead, headers, "user_agent", "User-Agent")
 	addIfPresent(reqHead, headers, "access_token", "X-Access-Token")
 	addIfPresent(reqHead, headers, "space_id", spacecontext.SpaceIDHeader)
+	addIfPresent(reqHead, headers, "user_id", "X-User-Id")
 	return reqHead
 }
 

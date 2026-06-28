@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package trpc.moox.common;
+
+option go_package = "github.com/mooyang-code/moox/modules/trade/proto/tradegen;mooxpb";
+
+message AuthInfo {
+  string app_id = 1;
+  string app_key = 2;
+  string operator = 3;
+  string request_id = 4;
+}
+
+message RetInfo {
+  ErrorCode code = 1;
+  string msg = 2;
+}
+
+message Page {
+  uint32 page = 1;
+  uint32 size = 2;
+}
+
+message PageResult {
+  uint32 page = 1;
+  uint32 size = 2;
+  // total 是结果总数；管理台 JSON 响应应输出为 number。
+  uint32 total = 3;
+  bool has_more = 4;
+}
+
+enum ErrorCode {
+  SUCCESS = 0;
+  INVALID_PARAM = 1;
+  NO_AUTH = 2;
+  NO_PERMISSION = 3;
+  INNER_ERR = 4;
+  NOT_FOUND = 5;
+}

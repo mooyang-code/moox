@@ -1,0 +1,22 @@
+# MooX Trade 服务应用配置
+# Trade 模块统一承载账户域与交易域，使用独立 SQLite 库。
+
+database:
+  type: sqlite
+  path: ./data/moox_trade.db
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 1h
+  conn_max_idle_time: 10m
+
+# 安全配置（API 凭证加解密）。生产环境请改为强随机 32 字节值，
+# 且需与 admin 网关的 security.encryption_key 一致（若共用凭证视图）。
+security:
+  encryption_key: "moox-cloud-secret-key-32bytes"
+
+log:
+  level: info
+  output_path: ./log/moox_trade.log
+  max_size: 100
+  max_backups: 10
+  max_age: 30

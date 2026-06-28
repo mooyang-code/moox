@@ -7,6 +7,7 @@ use (
 	./modules/admin/proto/admingen
 	./modules/factor
 	./modules/trade
+	./modules/trade/proto/tradegen
 	./modules/storage
 	./modules/storage/proto/gen
 )

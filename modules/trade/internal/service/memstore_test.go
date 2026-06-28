@@ -55,6 +55,7 @@ func (m *memStore) GetBalances(_ context.Context, _ string, _ string, _ []string
 	return nil, nil
 }
 func (m *memStore) UpsertBalances(_ context.Context, _ string, _ []*Balance) error { return nil }
+func (m *memStore) AdjustFrozen(_ context.Context, _ string, _, _, _ string) error  { return nil }
 
 func (m *memStore) ListFundFlows(_ context.Context, _ string, _ FundFlowFilter, _ Page) ([]*FundFlow, int, error) {
 	return m.flows, len(m.flows), nil
@@ -147,4 +148,11 @@ func (m *memStore) ListTrades(_ context.Context, _ string, _ TradeFilter, _ Page
 func (m *memStore) UpsertPositions(_ context.Context, _ string, _ []*Position) error { return nil }
 func (m *memStore) ListPositions(_ context.Context, _ string, _ string, _ string) ([]*Position, error) {
 	return nil, nil
+}
+
+func (m *memStore) AppendOrderOperation(_ context.Context, _ string, _ *OrderOperation) error {
+	return nil
+}
+func (m *memStore) UpdateOrderOperation(_ context.Context, _ string, _ *OrderOperation) error {
+	return nil
 }

@@ -100,6 +100,34 @@ gateway:
     storage_view:
       address: "127.0.0.1:20202"
       path: "trpc.moox.storage.DataView"
+    # ---- trade 模块（独立进程 moox-trade，端口 11200-11208）----
+    trade_account:
+      address: "127.0.0.1:11200"
+      path: "trpc.moox.trade.AccountSvc"
+    trade_balance:
+      address: "127.0.0.1:11201"
+      path: "trpc.moox.trade.BalanceSvc"
+    trade_fund:
+      address: "127.0.0.1:11202"
+      path: "trpc.moox.trade.FundSvc"
+    trade_apikey:
+      address: "127.0.0.1:11203"
+      path: "trpc.moox.trade.ApiKeySvc"
+    trade_channel:
+      address: "127.0.0.1:11204"
+      path: "trpc.moox.trade.ChannelSvc"
+    trade_tradeop:
+      address: "127.0.0.1:11205"
+      path: "trpc.moox.trade.TradeOpSvc"
+    trade_order:
+      address: "127.0.0.1:11206"
+      path: "trpc.moox.trade.OrderSvc"
+    trade_tradeq:
+      address: "127.0.0.1:11207"
+      path: "trpc.moox.trade.TradeQuerySvc"
+    trade_position:
+      address: "127.0.0.1:11208"
+      path: "trpc.moox.trade.PositionSvc"
 
 
 

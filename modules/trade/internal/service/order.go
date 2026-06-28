@@ -77,79 +77,14 @@ func (s *OrderService) TestChannel(ctx context.Context, spaceID, channelID strin
 
 // ---- 账户交易操作 ----
 
-// PlaceOrder 下单：解析通道 → 适配层下单 → 落库订单。
+// PlaceOrder 下单：委托 PlaceOrderExec 完成冻结→落库→适配层→审计编排。
 func (s *OrderService) PlaceOrder(ctx context.Context, spaceID string, channelID string, req *exchange.PlaceOrderReq) (*Order, error) {
-	if req == nil || channelID == "" || req.Symbol == "" || req.Quantity == "" && req.Amount == "" {
-		return nil, ErrInvalidParam
-	}
-	ch, err := s.store.GetChannel(ctx, spaceID, channelID)
-	if err != nil {
-		return nil, err
-	}
-	adapter, cred, err := s.adapterForChannel(ctx, spaceID, ch)
-	if err != nil {
-		return nil, err
-	}
-	if req.ClientOrderID == "" {
-		req.ClientOrderID = genID("ord")
-	}
-	res, err := adapter.PlaceOrder(ctx, cred, req)
-	if err != nil {
-		return nil, err
-	}
-	o := &Order{
-		OrderID:         genID("o"),
-		ClientOrderID:   req.ClientOrderID,
-		ExchangeOrderID: res.ExchangeOrderID,
-		AccountID:       ch.AccountID,
-		ChannelID:       ch.ChannelID,
-		Exchange:        ch.Exchange,
-		Symbol:          req.Symbol,
-		MarketType:      string(req.Market),
-		Side:            string(req.Side),
-		PosSide:         req.PosSide,
-		OrderType:       string(req.Type),
-		TimeInForce:     req.TimeInForce,
-		Price:           req.Price,
-		Quantity:        req.Quantity,
-		Amount:          req.Amount,
-		Status:          int(res.Status),
-		ReduceOnly:      req.ReduceOnly,
-		TriggerPrice:    req.TriggerPrice,
-		Source:          "api",
-	}
-	if err := s.store.SaveOrder(ctx, spaceID, o); err != nil {
-		return o, err
-	}
-	return o, nil
+	return s.PlaceOrderExec(ctx, spaceID, channelID, req, operatorFromContext(ctx))
 }
 
-// CancelOrder 撤单。
+// CancelOrder 撤单：委托 CancelOrderExec 完成适配层→解冻→审计编排。
 func (s *OrderService) CancelOrder(ctx context.Context, spaceID, channelID string, req *exchange.CancelOrderReq) (*Order, error) {
-	if req == nil || channelID == "" || req.OrderID == "" && req.ClientOrderID == "" {
-		return nil, ErrInvalidParam
-	}
-	ch, err := s.store.GetChannel(ctx, spaceID, channelID)
-	if err != nil {
-		return nil, err
-	}
-	adapter, cred, err := s.adapterForChannel(ctx, spaceID, ch)
-	if err != nil {
-		return nil, err
-	}
-	res, err := adapter.CancelOrder(ctx, cred, req)
-	if err != nil {
-		return nil, err
-	}
-	o, err := s.store.GetOrder(ctx, spaceID, req.OrderID, req.ClientOrderID)
-	if err != nil {
-		return nil, err
-	}
-	o.Status = int(res.Status)
-	if err := s.store.UpdateOrder(ctx, spaceID, o); err != nil {
-		return o, err
-	}
-	return o, nil
+	return s.CancelOrderExec(ctx, spaceID, channelID, req, operatorFromContext(ctx))
 }
 
 // CancelAllOrders 全撤（可按 symbol 过滤）。
@@ -168,38 +103,9 @@ func (s *OrderService) CancelAllOrders(ctx context.Context, spaceID, channelID, 
 	return adapter.CancelAllOrders(ctx, cred, exchange.MarketType(ch.MarketType), symbol)
 }
 
-// AmendOrder 改单。
+// AmendOrder 改单：委托 AmendOrderExec 完成适配层→更新→审计编排。
 func (s *OrderService) AmendOrder(ctx context.Context, spaceID, channelID string, req *exchange.AmendOrderReq) (*Order, error) {
-	if req == nil || channelID == "" || req.OrderID == "" && req.ClientOrderID == "" {
-		return nil, ErrInvalidParam
-	}
-	ch, err := s.store.GetChannel(ctx, spaceID, channelID)
-	if err != nil {
-		return nil, err
-	}
-	adapter, cred, err := s.adapterForChannel(ctx, spaceID, ch)
-	if err != nil {
-		return nil, err
-	}
-	res, err := adapter.AmendOrder(ctx, cred, req)
-	if err != nil {
-		return nil, err
-	}
-	o, err := s.store.GetOrder(ctx, spaceID, req.OrderID, req.ClientOrderID)
-	if err != nil {
-		return nil, err
-	}
-	o.Status = int(res.Status)
-	if req.NewPrice != "" {
-		o.Price = req.NewPrice
-	}
-	if req.NewQuantity != "" {
-		o.Quantity = req.NewQuantity
-	}
-	if err := s.store.UpdateOrder(ctx, spaceID, o); err != nil {
-		return o, err
-	}
-	return o, nil
+	return s.AmendOrderExec(ctx, spaceID, channelID, req, operatorFromContext(ctx))
 }
 
 // SetLeverage 调整杠杆。
@@ -270,4 +176,19 @@ func (s *OrderService) adapterForChannel(ctx context.Context, spaceID string, ch
 		cred = exchange.Credential{APIKey: k.APIKey, APISecret: k.APISecret, Passphrase: k.Passphrase}
 	}
 	return adapter, cred, nil
+}
+
+// ResolveAdapter 由 channel_id 解析出适配器、解密凭证与通道对象（供 RPC 层 SyncBalances 等使用）。
+func (s *OrderService) ResolveAdapter(ctx context.Context, spaceID, channelID string) (exchange.ExchangeAdapter, exchange.Credential, *TradeChannel, error) {
+	ch, err := s.store.GetChannel(ctx, spaceID, channelID)
+	if err != nil {
+		return nil, exchange.Credential{}, nil, err
+	}
+	adapter, cred, err := s.adapterForChannel(ctx, spaceID, ch)
+	return adapter, cred, ch, err
+}
+
+// NewAdapter 按交易所名创建适配器（供 RPC 层直接使用）。
+func (s *OrderService) NewAdapter(name string) (exchange.ExchangeAdapter, error) {
+	return s.exNew(name)
 }

@@ -16,6 +16,9 @@ type Store interface {
 
 	GetBalances(ctx context.Context, spaceID, accountID string, currencies []string) ([]*Balance, error)
 	UpsertBalances(ctx context.Context, spaceID string, balances []*Balance) error
+	// AdjustFrozen 调整某币种冻结额（delta>0 冻结：available→frozen；delta<0 解冻反向）。
+	// total 不变。乐观锁 c_version 防并发。供下单冻结/撤单解冻/成交结算使用。
+	AdjustFrozen(ctx context.Context, spaceID, accountID, currency, delta string) error
 
 	ListFundFlows(ctx context.Context, spaceID string, f FundFlowFilter, page Page) ([]*FundFlow, int, error)
 	// AppendFundFlows 追加流水（成对划转/成交结算），与余额更新应在同一事务内。
@@ -44,6 +47,13 @@ type Store interface {
 
 	UpsertPositions(ctx context.Context, spaceID string, positions []*Position) error
 	ListPositions(ctx context.Context, spaceID, accountID, symbol string) ([]*Position, error)
+
+	// ---- 操作审计 ----
+
+	// AppendOrderOperation 追加一次通道操作审计（下单/撤单/改单/查询等）。
+	AppendOrderOperation(ctx context.Context, spaceID string, op *OrderOperation) error
+	// UpdateOrderOperation 回填操作结果（状态/响应/耗时/错误）。
+	UpdateOrderOperation(ctx context.Context, spaceID string, op *OrderOperation) error
 }
 
 // AccountFilter 账户查询过滤。
