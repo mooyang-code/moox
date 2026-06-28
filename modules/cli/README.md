@@ -125,12 +125,14 @@ export TENCENTCLOUD_SECRET_KEY="..."
 
 ./moox-cli ops tencent lighthouse firewall add \
   --region ap-guangzhou \
-  --public-ip 106.53.107.122 \
+  --public-ip <lighthouse-public-ip> \
   --ports 20201,20200,11000 \
   --protocol TCP \
   --cidr 0.0.0.0/0 \
   --description "moox services"
 ```
+
+> `<lighthouse-public-ip>` 真实值见 `infra/infra.local.yaml`。
 
 也可以直接传实例 ID，并先用 `--dry-run` 预览请求：
 

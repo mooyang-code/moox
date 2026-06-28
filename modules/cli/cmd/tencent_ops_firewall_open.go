@@ -37,14 +37,16 @@ var lighthouseFirewallOpenCmd = &cobra.Command{
 
 示例：
   moox-cli ops tencent lighthouse firewall open \
-    --control-url http://106.53.107.122:11000 \
+    --control-url http://<control-host>:11000 \
     --service-access-key moox-service --service-secret-key moox-service-secret-change-me \
-    --public-ip 106.53.107.122 --ports 11000,10080,20200,20201,20202
+    --public-ip <lighthouse-public-ip> --ports 11000,10080,20200,20201,20202
 
   moox-cli ops tencent lighthouse firewall open \
-    --control-url http://106.53.107.122:11000 \
+    --control-url http://<control-host>:11000 \
     --service-access-key moox-service --service-secret-key <secret> \
-    --cloud-account-id account_xxx --public-ip 106.53.107.122 --ports 9527`,
+    --cloud-account-id account_xxx --public-ip <lighthouse-public-ip> --ports 9527
+
+提示：control-host / lighthouse-public-ip 真实值见 infra/infra.local.yaml。`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runLighthouseFirewallOpen(cmd, lighthouseFirewallOpenFlags)
 	},
