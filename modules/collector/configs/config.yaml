@@ -4,7 +4,7 @@ system:
   version: "v0.0.3"
   environment: "Production"
   timezone: "UTC"
-  storage_url: "http://106.53.107.122:20201"
+  storage_url: "http://127.0.0.1:20201"   # 真实值由 infra/infra.local.yaml 或部署时注入，见 pkg/infraconfig
   service_auth:
     version: "moox-auth-v1"
     access_key: "moox-service"

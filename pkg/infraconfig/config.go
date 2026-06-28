@@ -177,27 +177,71 @@ func mergeEndpoint(base *ServiceEndpoint, local ServiceEndpoint) {
 }
 
 // ===== 访问器 =====
+// 注意：访问器在 infra 配置缺失时返回零值（不 panic），以便部署环境下
+// 服务回退到自身 config.yaml 中的值（部署时由 deploy 脚本从 infra.local.yaml 渲染注入）。
 
-// StorageAccessURL 返回 storage access 服务 URL。
-func StorageAccessURL() string { return MustLoad().Services.StorageAccess.URL() }
+// StorageAccessURL 返回 storage access 服务 URL；infra 配置缺失时返回空串。
+func StorageAccessURL() string {
+	cfg, err := Load()
+	if err != nil || cfg == nil {
+		return ""
+	}
+	return cfg.Services.StorageAccess.URL()
+}
 
-// XDataURL 返回 xData 服务 URL。
-func XDataURL() string { return MustLoad().Services.XData.URL() }
+// XDataURL 返回 xData 服务 URL；infra 配置缺失时返回空串。
+func XDataURL() string {
+	cfg, err := Load()
+	if err != nil || cfg == nil {
+		return ""
+	}
+	return cfg.Services.XData.URL()
+}
 
-// AdminGateway 返回 admin 网关端点。
-func AdminGateway() ServiceEndpoint { return MustLoad().Services.AdminGateway }
+// AdminGateway 返回 admin 网关端点；infra 配置缺失时返回零值。
+func AdminGateway() ServiceEndpoint {
+	cfg, err := Load()
+	if err != nil || cfg == nil {
+		return ServiceEndpoint{}
+	}
+	return cfg.Services.AdminGateway
+}
 
-// WebHost 返回 web-host 端点。
-func WebHost() ServiceEndpoint { return MustLoad().Services.WebHost }
+// WebHost 返回 web-host 端点；infra 配置缺失时返回零值。
+func WebHost() ServiceEndpoint {
+	cfg, err := Load()
+	if err != nil || cfg == nil {
+		return ServiceEndpoint{}
+	}
+	return cfg.Services.WebHost
+}
 
-// Trade 返回 trade 服务端点。
-func Trade() ServiceEndpoint { return MustLoad().Services.Trade }
+// Trade 返回 trade 服务端点；infra 配置缺失时返回零值。
+func Trade() ServiceEndpoint {
+	cfg, err := Load()
+	if err != nil || cfg == nil {
+		return ServiceEndpoint{}
+	}
+	return cfg.Services.Trade
+}
 
-// RemoteHost 返回部署目标机 IP。
-func RemoteHost() string { return MustLoad().Remote.Host }
+// RemoteHost 返回部署目标机 IP；infra 配置缺失时返回空串。
+func RemoteHost() string {
+	cfg, err := Load()
+	if err != nil || cfg == nil {
+		return ""
+	}
+	return cfg.Remote.Host
+}
 
-// RemoteSSH 返回部署 SSH 目标。
-func RemoteSSH() string { return MustLoad().Remote.SSH }
+// RemoteSSH 返回部署 SSH 目标；infra 配置缺失时返回空串。
+func RemoteSSH() string {
+	cfg, err := Load()
+	if err != nil || cfg == nil {
+		return ""
+	}
+	return cfg.Remote.SSH
+}
 
 // BasePath 返回已加载的 infra.yaml 绝对路径（供调试/测试）。
 func BasePath() string {

@@ -14,7 +14,7 @@ storage:
   cos_region: ap-guangzhou
   cache_size: 100           # 缓存文件数量
   cache_expiry: 30          # 缓存过期时间（分钟）
-  xdata_url: "http://106.53.107.122:20201"
+  xdata_url: "http://127.0.0.1:20201"   # 真实值由 infra/infra.local.yaml 或部署时注入，见 pkg/infraconfig
 
 worker:
   async_task_worker_count: 3

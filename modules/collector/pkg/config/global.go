@@ -3,6 +3,8 @@ package config
 import (
 	"log"
 	"sync"
+
+	"github.com/mooyang-code/moox/pkg/infraconfig"
 )
 
 // Config 全局配置结构
@@ -109,8 +111,13 @@ func InitLocalAppConfig() {
 	})
 }
 
-// GetStorageURL 获取存储服务地址
+// GetStorageURL 获取存储服务地址。
+// 优先取中央基础设施配置 infra/infra*.yaml 的 storage_access 端点（dev/仓库内），
+// 缺失时回退到 config.yaml 的 system.storage_url（部署环境由 deploy 脚本渲染注入）。
 func GetStorageURL() string {
+	if url := infraconfig.StorageAccessURL(); url != "" {
+		return url
+	}
 	// 确保本地配置已初始化
 	if LocalAppConfig == nil {
 		InitLocalAppConfig()

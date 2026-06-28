@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/mooyang-code/moox/pkg/infraconfig"
 )
 
 // 全局配置实例
@@ -279,8 +281,13 @@ func GetGlobalConfig() *AppConfig {
 	return globalConfig
 }
 
-// GetXDataURL 获取 xData 存储服务地址
+// GetXDataURL 获取 xData 存储服务地址。
+// 优先取中央基础设施配置 infra/infra*.yaml 的 xdata 端点（dev/仓库内），
+// 缺失时回退到 app.yaml 的 storage.xdata_url（部署环境由 deploy 脚本渲染注入）。
 func GetXDataURL() string {
+	if url := infraconfig.XDataURL(); url != "" {
+		return url
+	}
 	cfg := GetGlobalConfig()
 	if cfg == nil || cfg.Storage.XDataURL == "" {
 		return ""

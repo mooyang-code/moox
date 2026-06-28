@@ -7,12 +7,15 @@ toolchain go1.24.10
 require (
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
+	github.com/mooyang-code/moox/pkg/infraconfig v0.0.0-00010101000000-000000000000
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/tencentyun/scf-go-lib v0.0.0-20230904103145-13c9a7eeca80
 	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-go v1.0.3
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
 )
+
+replace github.com/mooyang-code/moox/pkg/infraconfig => ../../pkg/infraconfig
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
