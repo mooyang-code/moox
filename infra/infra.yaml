@@ -1,0 +1,22 @@
+# MooX 基础设施唯一配置源（base，占位默认值）。
+# 真实部署值由同目录 infra.local.yaml 覆盖（该文件 gitignored，不入库）。
+# 所有服务运行时、部署脚本、CLI、测试、文档统一通过 pkg/infraconfig 读取此处。
+services:
+  storage_access:
+    host: 127.0.0.1
+    port: 20201
+  xdata:
+    host: 127.0.0.1
+    port: 20201
+  admin_gateway:
+    host: 127.0.0.1
+    port: 11000
+  web_host:
+    host: 127.0.0.1
+    port: 10080
+  trade:
+    host: 127.0.0.1
+    port: 11200
+remote:
+  host: ""        # 部署目标主机，占位；真实值见 infra.local.yaml
+  ssh: ""         # 形如 ubuntu@<deploy-host>

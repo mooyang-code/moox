@@ -10,4 +10,5 @@ use (
 	./modules/trade/proto/tradegen
 	./modules/storage
 	./modules/storage/proto/gen
+	./pkg/infraconfig
 )

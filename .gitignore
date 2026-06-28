@@ -30,6 +30,9 @@ go.work.sum
 # env file
 .env
 
+# infra 真实部署值覆盖文件（唯一存放真实 IP/凭证处），不入库
+infra/infra.local.yaml
+
 server/.claude/
 
 # Monorepo runtime/build artifacts. 真实运行数据应放到部署目录或 var，
