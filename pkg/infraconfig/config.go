@@ -1,19 +1,23 @@
-// Package infraconfig 提供 moox 基础设施配置的唯一读取入口。
+// Package infraconfig 提供 MooX 基础设施配置的唯一读取入口。
 //
-// 配置来源：infra/infra.yaml（base，入库占位）+ infra/infra.local.yaml（overlay，
-// gitignored，真实部署值）。所有服务运行时、部署脚本、CLI、测试、文档均通过本包
-// 读取 IP/端口，仓库内不再出现写死的真实 IP。
+// 配置来源（按优先级合并）：
+//  1. infra/infra.local.yaml  真实部署值（gitignored，可选）
+//  2. infra/infra.yaml        占位默认值（入库）
 //
-// 路径解析顺序：
-//  1. 环境变量 MOOX_INFRA_CONFIG 指向 infra.yaml 文件或其所在目录；
-//  2. 从当前工作目录向上回溯，定位 infra/infra.yaml；
-//  3. 失败则返回错误。
+// 配置目录解析顺序：
+//  1. 环境变量 MOOX_INFRA_CONFIG 指向的 infra.yaml 文件
+//  2. 从当前工作目录向上回溯，定位仓库根的 infra/infra.yaml
+//
+// 所有运行时服务、部署脚本、CLI、测试、文档统一通过本包读取 IP/端口，
+// 仓库其它位置不得硬编码真实 IP。
 package infraconfig
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -30,7 +34,12 @@ func (e ServiceEndpoint) URL() string {
 	return fmt.Sprintf("http://%s:%d", e.Host, e.Port)
 }
 
-// Config 是 infra 配置的顶层结构。
+// HostPort 返回 host:port 字符串。
+func (e ServiceEndpoint) HostPort() string {
+	return fmt.Sprintf("%s:%d", e.Host, e.Port)
+}
+
+// Config 是完整的基础设施配置。
 type Config struct {
 	Services struct {
 		StorageAccess ServiceEndpoint `yaml:"storage_access"`
@@ -38,72 +47,78 @@ type Config struct {
 		AdminGateway  ServiceEndpoint `yaml:"admin_gateway"`
 		WebHost       ServiceEndpoint `yaml:"web_host"`
 		Trade         ServiceEndpoint `yaml:"trade"`
+		Collector     ServiceEndpoint `yaml:"collector"`
 	} `yaml:"services"`
 	Remote struct {
 		Host string `yaml:"host"`
 		SSH  string `yaml:"ssh"`
 	} `yaml:"remote"`
+
+	basePath string `yaml:"-"`
 }
 
 var (
-	once   sync.Once
-	loaded *Config
-	loadErr error
+	mu       sync.Mutex
+	cached   *Config
+	loadErr  error
 )
 
-// Load 加载并缓存配置（base 合并 overlay）。多次调用返回同一结果。
+// Load 加载并缓存配置（合并 base + local）。重复调用返回同一实例。
 func Load() (*Config, error) {
-	once.Do(func() { loaded, loadErr = load() })
-	return loaded, loadErr
-}
-
-// Reset 重置缓存，仅供测试在切换 infra 路径后重新加载。
-func Reset() {
-	once = sync.Once{}
-	loaded = nil
-	loadErr = nil
-}
-
-// MustLoad 同 Load，出错时 panic。
-func MustLoad() *Config {
-	c, err := Load()
-	if err != nil {
-		panic(fmt.Errorf("infraconfig: %w", err))
+	mu.Lock()
+	defer mu.Unlock()
+	if cached != nil || loadErr != nil {
+		return cached, loadErr
 	}
-	return c
+	cached, loadErr = loadOnce()
+	return cached, loadErr
 }
 
-func load() (*Config, error) {
-	basePath, err := resolveInfraPath()
+// MustLoad 加载配置，失败时 panic。供命令行工具/main 使用。
+func MustLoad() *Config {
+	cfg, err := Load()
+	if err != nil {
+		panic(fmt.Sprintf("infraconfig load: %v", err))
+	}
+	return cfg
+}
+
+// Reset 重置缓存。仅测试使用。
+func Reset() {
+	mu.Lock()
+	defer mu.Unlock()
+	cached, loadErr = nil, nil
+}
+
+func loadOnce() (*Config, error) {
+	basePath, err := resolveBasePath()
 	if err != nil {
 		return nil, err
 	}
 	cfg, err := readYAML(basePath)
 	if err != nil {
-		return nil, fmt.Errorf("load base %s: %w", basePath, err)
+		return nil, fmt.Errorf("read base %s: %w", basePath, err)
 	}
+	cfg.basePath = basePath
+
 	localPath := filepath.Join(filepath.Dir(basePath), "infra.local.yaml")
 	if _, statErr := os.Stat(localPath); statErr == nil {
-		overlay, err := readYAML(localPath)
+		local, err := readYAML(localPath)
 		if err != nil {
-			return nil, fmt.Errorf("load local %s: %w", localPath, err)
+			return nil, fmt.Errorf("read local %s: %w", localPath, err)
 		}
-		merge(cfg, overlay)
+		merge(cfg, local)
 	}
 	return cfg, nil
 }
 
-// resolveInfraPath 解析 infra.yaml 的绝对路径。
-func resolveInfraPath() (string, error) {
-	if v := os.Getenv("MOOX_INFRA_CONFIG"); v != "" {
-		fi, err := os.Stat(v)
-		if err != nil {
-			return "", fmt.Errorf("MOOX_INFRA_CONFIG=%s 不可访问: %w", v, err)
+// resolveBasePath 解析 infra.yaml 的绝对路径。
+func resolveBasePath() (string, error) {
+	if p := strings.TrimSpace(os.Getenv("MOOX_INFRA_CONFIG")); p != "" {
+		if _, err := os.Stat(p); err != nil {
+			return "", fmt.Errorf("MOOX_INFRA_CONFIG=%s: %w", p, err)
 		}
-		if fi.IsDir() {
-			return filepath.Join(v, "infra.yaml"), nil
-		}
-		return v, nil
+		return p, nil
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -121,7 +136,7 @@ func resolveInfraPath() (string, error) {
 		}
 		dir = parent
 	}
-	return "", fmt.Errorf("未找到 infra/infra.yaml：请设置 MOOX_INFRA_CONFIG 指向 infra 目录或文件（当前工作目录=%s）", cwd)
+	return "", fmt.Errorf("infra/infra.yaml 未找到（cwd=%s，可用 MOOX_INFRA_CONFIG 指定）", cwd)
 }
 
 func readYAML(path string) (*Config, error) {
@@ -136,33 +151,32 @@ func readYAML(path string) (*Config, error) {
 	return &c, nil
 }
 
-// merge 用 overlay 覆盖 base 的非零值字段。
-func merge(base, overlay *Config) {
-	mergeEndpoint(&base.Services.StorageAccess, overlay.Services.StorageAccess)
-	mergeEndpoint(&base.Services.XData, overlay.Services.XData)
-	mergeEndpoint(&base.Services.AdminGateway, overlay.Services.AdminGateway)
-	mergeEndpoint(&base.Services.WebHost, overlay.Services.WebHost)
-	mergeEndpoint(&base.Services.Trade, overlay.Services.Trade)
-	if overlay.Remote.Host != "" {
-		base.Remote.Host = overlay.Remote.Host
+// merge 将 local 的非零值覆盖到 base（深度合并）。
+func merge(base, local *Config) {
+	mergeEndpoint(&base.Services.StorageAccess, local.Services.StorageAccess)
+	mergeEndpoint(&base.Services.XData, local.Services.XData)
+	mergeEndpoint(&base.Services.AdminGateway, local.Services.AdminGateway)
+	mergeEndpoint(&base.Services.WebHost, local.Services.WebHost)
+	mergeEndpoint(&base.Services.Trade, local.Services.Trade)
+	mergeEndpoint(&base.Services.Collector, local.Services.Collector)
+	if local.Remote.Host != "" {
+		base.Remote.Host = local.Remote.Host
 	}
-	if overlay.Remote.SSH != "" {
-		base.Remote.SSH = overlay.Remote.SSH
-	}
-}
-
-func mergeEndpoint(dst *ServiceEndpoint, src ServiceEndpoint) {
-	if src.Host != "" {
-		dst.Host = src.Host
-	}
-	if src.Port != 0 {
-		dst.Port = src.Port
+	if local.Remote.SSH != "" {
+		base.Remote.SSH = local.Remote.SSH
 	}
 }
 
-// ============================================================================
-// 访问器：供消费方按需取值，避免直接暴露内部结构。
-// ============================================================================
+func mergeEndpoint(base *ServiceEndpoint, local ServiceEndpoint) {
+	if local.Host != "" {
+		base.Host = local.Host
+	}
+	if local.Port != 0 {
+		base.Port = local.Port
+	}
+}
+
+// ===== 访问器 =====
 
 // StorageAccessURL 返回 storage access 服务 URL。
 func StorageAccessURL() string { return MustLoad().Services.StorageAccess.URL() }
@@ -170,23 +184,32 @@ func StorageAccessURL() string { return MustLoad().Services.StorageAccess.URL() 
 // XDataURL 返回 xData 服务 URL。
 func XDataURL() string { return MustLoad().Services.XData.URL() }
 
-// AdminGatewayHost 返回管理台网关 host。
-func AdminGatewayHost() string { return MustLoad().Services.AdminGateway.Host }
+// AdminGateway 返回 admin 网关端点。
+func AdminGateway() ServiceEndpoint { return MustLoad().Services.AdminGateway }
 
-// AdminGatewayPort 返回管理台网关端口。
-func AdminGatewayPort() int { return MustLoad().Services.AdminGateway.Port }
+// WebHost 返回 web-host 端点。
+func WebHost() ServiceEndpoint { return MustLoad().Services.WebHost }
 
-// WebHostPort 返回 web-host 端口。
-func WebHostPort() int { return MustLoad().Services.WebHost.Port }
+// Trade 返回 trade 服务端点。
+func Trade() ServiceEndpoint { return MustLoad().Services.Trade }
 
-// TradeHost 返回 trade 服务 host。
-func TradeHost() string { return MustLoad().Services.Trade.Host }
-
-// TradePort 返回 trade 服务端口。
-func TradePort() int { return MustLoad().Services.Trade.Port }
-
-// RemoteHost 返回部署目标主机。
+// RemoteHost 返回部署目标机 IP。
 func RemoteHost() string { return MustLoad().Remote.Host }
 
-// RemoteSSH 返回部署目标 SSH 目标（user@host）。
+// RemoteSSH 返回部署 SSH 目标。
 func RemoteSSH() string { return MustLoad().Remote.SSH }
+
+// BasePath 返回已加载的 infra.yaml 绝对路径（供调试/测试）。
+func BasePath() string {
+	cfg, err := Load()
+	if err != nil || cfg == nil {
+		return ""
+	}
+	return cfg.basePath
+}
+
+// Atoi 容错整数解析（供 shell 工具复用）。
+func Atoi(s string) int {
+	v, _ := strconv.Atoi(strings.TrimSpace(s))
+	return v
+}

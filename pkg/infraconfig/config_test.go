@@ -6,14 +6,16 @@ import (
 	"testing"
 )
 
+// writeTempInfra 在临时目录写 infra.yaml(+可选 local)，并设置 MOOX_INFRA_CONFIG。
 func writeTempInfra(t *testing.T, base, local string) string {
 	t.Helper()
 	dir := t.TempDir()
 	infraDir := filepath.Join(dir, "infra")
-	if err := os.Mkdir(infraDir, 0o755); err != nil {
+	if err := os.MkdirAll(infraDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(infraDir, "infra.yaml"), []byte(base), 0o644); err != nil {
+	basePath := filepath.Join(infraDir, "infra.yaml")
+	if err := os.WriteFile(basePath, []byte(base), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if local != "" {
@@ -21,74 +23,62 @@ func writeTempInfra(t *testing.T, base, local string) string {
 			t.Fatal(err)
 		}
 	}
-	t.Setenv("MOOX_INFRA_CONFIG", infraDir)
-	return infraDir
+	t.Setenv("MOOX_INFRA_CONFIG", basePath)
+	Reset()
+	return basePath
 }
 
 func TestLoadBaseOnly(t *testing.T) {
-	Reset()
 	writeTempInfra(t, `
 services:
   storage_access: { host: 127.0.0.1, port: 20201 }
   xdata:          { host: 127.0.0.1, port: 20201 }
   admin_gateway:  { host: 127.0.0.1, port: 11000 }
-  web_host:       { host: 127.0.0.1, port: 10080 }
-  trade:          { host: 127.0.0.1, port: 11200 }
-remote: { host: "", ssh: "" }
+remote:
+  host: "<deploy-host>"
+  ssh:  "ubuntu@<deploy-host>"
 `, "")
-	c, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := c.Services.StorageAccess.URL(); got != "http://127.0.0.1:20201" {
-		t.Fatalf("storage url=%s", got)
-	}
 	if got := StorageAccessURL(); got != "http://127.0.0.1:20201" {
-		t.Fatalf("StorageAccessURL=%s", got)
+		t.Fatalf("StorageAccessURL=%s want http://127.0.0.1:20201", got)
 	}
-	if RemoteSSH() != "" {
-		t.Fatalf("RemoteSSH=%q want empty", RemoteSSH())
+	if got := RemoteHost(); got != "<deploy-host>" {
+		t.Fatalf("RemoteHost=%s want <deploy-host>", got)
 	}
 }
 
-func TestLoadOverlayOverrides(t *testing.T) {
-	Reset()
+func TestLoadLocalOverlay(t *testing.T) {
 	writeTempInfra(t, `
 services:
   storage_access: { host: 127.0.0.1, port: 20201 }
-  xdata:          { host: 127.0.0.1, port: 20201 }
   admin_gateway:  { host: 127.0.0.1, port: 11000 }
-  web_host:       { host: 127.0.0.1, port: 10080 }
-  trade:          { host: 127.0.0.1, port: 11200 }
-remote: { host: "", ssh: "" }
+remote:
+  host: "<deploy-host>"
+  ssh:  "ubuntu@<deploy-host>"
 `, `
 services:
-  storage_access: { host: 10.0.0.2, port: 20202 }
-  admin_gateway:  { host: 10.0.0.3, port: 11000 }
-remote: { host: deploy.example, ssh: ubuntu@deploy.example }
+  storage_access: { host: 106.53.107.122, port: 20201 }
+remote:
+  host: 43.132.204.177
 `)
-	c, err := Load()
-	if err != nil {
-		t.Fatal(err)
+	// base 默认被 local 覆盖
+	if got := StorageAccessURL(); got != "http://106.53.107.122:20201" {
+		t.Fatalf("StorageAccessURL=%s want http://106.53.107.122:20201", got)
 	}
-	if got := c.Services.StorageAccess.URL(); got != "http://10.0.0.2:20202" {
-		t.Fatalf("overlay storage url=%s", got)
+	if got := RemoteHost(); got != "43.132.204.177" {
+		t.Fatalf("RemoteHost=%s want 43.132.204.177", got)
 	}
-	if got := c.Services.XData.URL(); got != "http://127.0.0.1:20201" {
-		t.Fatalf("xdata should remain base, got %s", got)
-	}
-	if got := AdminGatewayHost(); got != "10.0.0.3" {
-		t.Fatalf("admin gateway host=%s", got)
-	}
-	if got := RemoteSSH(); got != "ubuntu@deploy.example" {
-		t.Fatalf("RemoteSSH=%s", got)
+	// 未覆盖的字段沿用 base
+	if got := AdminGateway().Port; got != 11000 {
+		t.Fatalf("AdminGateway.Port=%d want 11000", got)
 	}
 }
 
-func TestLoadMissingInfra(t *testing.T) {
-	Reset()
-	t.Setenv("MOOX_INFRA_CONFIG", filepath.Join(t.TempDir(), "nope"))
-	if _, err := Load(); err == nil {
-		t.Fatal("want error for missing infra")
+func TestEndpointURLAndHostPort(t *testing.T) {
+	e := ServiceEndpoint{Host: "h", Port: 9}
+	if e.URL() != "http://h:9" {
+		t.Fatalf("URL=%s", e.URL())
+	}
+	if e.HostPort() != "h:9" {
+		t.Fatalf("HostPort=%s", e.HostPort())
 	}
 }

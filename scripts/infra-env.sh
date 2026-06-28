@@ -1,21 +1,25 @@
-#!/bin/bash
-# infra-env.sh：读取 infra 配置并 export 为 shell 变量，供部署脚本 source。
-# 用法：source scripts/infra-env.sh
-# 依赖：本机有 go（用 go run 解析配置，确保与运行时服务同一真相源）。
-# 真实值取自 infra/infra.local.yaml（gitignored）；无该文件则用 infra/infra.yaml 占位默认。
+#!/usr/bin/env bash
+# scripts/infra-env.sh —— source 此脚本即可从 infra/infra*.yaml 获取部署/服务变量。
+#   source scripts/infra-env.sh
+#
+# 导出变量（仅真实值，占位值不导出）：
+#   REMOTE_HOST REMOTE_SSH STORAGE_URL XDATA_URL
+#   ADMIN_GATEWAY_HOST ADMIN_GATEWAY_PORT WEB_HOST_HOST WEB_HOST_PORT
+#   TRADE_HOST TRADE_PORT
+#
+# 依赖：本仓库 pkg/infraconfig/cmd/infra-export（go run）。
 
-__infra_env_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-__infra_env_repo_root="$(cd "$__infra_env_script_dir/.." && pwd)"
+set -euo pipefail
 
-if ! command -v go >/dev/null 2>&1; then
-  echo "infra-env: 未找到 go，无法解析 infra 配置" >&2
-  return 1 2>/dev/null || exit 1
+# 解析仓库根目录（本脚本位于 <repo>/scripts/）。
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_REPO_ROOT="$(cd "$_SCRIPT_DIR/.." && pwd)"
+
+# 优先用已构建的 infra-export 二进制（若存在），否则 go run。
+if [ -x "$_REPO_ROOT/bin/infra-export" ]; then
+  eval "$("$_REPO_ROOT/bin/infra-export" -root "$_REPO_ROOT")"
+else
+  eval "$(cd "$_REPO_ROOT/pkg/infraconfig" && go run ./cmd/infra-export -root "$_REPO_ROOT")"
 fi
 
-__infra_export_out="$(cd "$__infra_env_repo_root" && go run ./pkg/infraconfig/cmd/infra-export 2>/dev/null)"
-if [ -z "$__infra_export_out" ]; then
-  echo "infra-env: 解析 infra 配置失败（检查 infra/infra.yaml 是否存在或 MOOX_INFRA_CONFIG 是否设置）" >&2
-  return 1 2>/dev/null || exit 1
-fi
-eval "$__infra_export_out"
-unset __infra_env_script_dir __infra_env_repo_root __infra_export_out
+unset _SCRIPT_DIR _REPO_ROOT

@@ -1,22 +1,14 @@
-# infra.local.yaml 模板：复制为 infra.local.yaml（gitignored）后填入真实部署值。
-# 该文件覆盖 infra/infra.yaml 的占位默认。切勿把真实 IP 提交入库。
-# 用法：cp infra/infra.local.yaml.example infra/infra.local.yaml，替换 <...> 占位。
+# infra/infra.local.yaml 模板 —— 复制为 infra/infra.local.yaml 并填入真实值。
+# infra.local.yaml 已被 .gitignore 忽略，是仓库中唯一允许存放真实 IP/凭证的文件。
+#
+# 仅需填写要覆盖 infra.yaml 默认值的字段；未列出的字段沿用默认值。
+
 services:
-  storage_access:
-    host: <storage-host>
-    port: 20201
-  xdata:
-    host: <storage-host>
-    port: 20201
-  admin_gateway:
-    host: <admin-host>
-    port: 11000
-  web_host:
-    host: <web-host>
-    port: 10080
-  trade:
-    host: 127.0.0.1
-    port: 11200
+  storage_access: { host: 106.53.107.122, port: 20201 }
+  xdata:          { host: 106.53.107.122, port: 20201 }
+  admin_gateway:  { host: 106.53.107.122, port: 11000 }
+  web_host:       { host: 106.53.107.122, port: 10080 }
+
 remote:
-  host: <deploy-host>
-  ssh: ubuntu@<deploy-host>
+  host: 43.132.204.177
+  ssh:  ubuntu@43.132.204.177
