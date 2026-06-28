@@ -73,10 +73,10 @@ release/
 
 ```bash
 # 自动检测远程服务器平台并部署
-make deploy SERVER=ubuntu@43.132.204.177
+make deploy SERVER=ubuntu@<deploy-host>
 
 # 指定部署 Linux 版本
-make deploy SERVER=ubuntu@43.132.204.177 PLATFORM=linux
+make deploy SERVER=ubuntu@<deploy-host> PLATFORM=linux
 
 # 指定部署 macOS 版本
 make deploy SERVER=user@192.168.1.100 PLATFORM=darwin

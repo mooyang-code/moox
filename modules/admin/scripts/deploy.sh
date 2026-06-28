@@ -83,6 +83,12 @@ fi
 
 REMOTE_SERVER="$1"
 
+# 从中央 infra 配置获取真实 URL（仓库内 config 为占位 127.0.0.1，部署时注入真实值）。
+# 仅当 infra/infra.local.yaml 存在时生效，不影响占位默认。
+if [ -f "$PROJECT_DIR/../../scripts/infra-env.sh" ]; then
+    . "$PROJECT_DIR/../../scripts/infra-env.sh" 2>/dev/null || true
+fi
+
 # 判断是本地还是远程部署
 if [ "$REMOTE_SERVER" = "localhost" ]; then
     IS_LOCAL=true
@@ -276,6 +282,12 @@ if [ -d data ]; then
     rm -rf data
 fi
 ln -s ~/moox/data data
+
+# 用 infra 真实值渲染 config（仓库内为占位 127.0.0.1，此处注入真实 URL）
+if [ -n "$XDATA_URL" ] && [ -f config/app.yaml ]; then
+    sed -i "s|http://127\.0\.0\.1:20201|$XDATA_URL|g" config/app.yaml
+    echo "已注入 xdata_url=$XDATA_URL"
+fi
 
 # 设置执行权限
 chmod +x bin/*

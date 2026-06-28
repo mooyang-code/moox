@@ -274,26 +274,35 @@ create-windows-scripts:
 	@echo 'echo Service stopped' >> $(PLATFORM_DIR)/stop.bat
 
 # Deploy to remote server
+# SERVER 可省略：未指定时从 infra/infra.local.yaml 读取 remote.ssh（见 scripts/infra-env.sh）。
 deploy:
-	@if [ -z "$(SERVER)" ]; then \
-		echo "❌ 请指定服务器地址"; \
+	@SERVER="$(SERVER)"; \
+	if [ -z "$$SERVER" ]; then \
+		if [ -f ../../scripts/infra-env.sh ]; then \
+			. ../../scripts/infra-env.sh 2>/dev/null; \
+			SERVER="$$REMOTE_SSH"; \
+		fi; \
+	fi; \
+	if [ -z "$$SERVER" ]; then \
+		echo "❌ 请指定服务器地址，或在 infra/infra.local.yaml 配置 remote.ssh"; \
 		echo "使用方法: make deploy SERVER=user@host [platform]"; \
 		echo "          平台参数可选: linux|darwin"; \
 		echo "示例:"; \
-		echo "  make deploy SERVER=ubuntu@43.132.204.177         # 自动检测平台"; \
-		echo "  make deploy SERVER=ubuntu@43.132.204.177 linux   # 指定Linux平台"; \
+		echo "  make deploy SERVER=ubuntu@<deploy-host>         # 自动检测平台"; \
+		echo "  make deploy SERVER=ubuntu@<deploy-host> linux   # 指定Linux平台"; \
+		echo "  make deploy                                    # 用 infra.local.yaml 的 remote.ssh"; \
 		exit 1; \
-	fi
-	@if [ ! -f "./scripts/deploy.sh" ]; then \
+	fi; \
+	if [ ! -f "./scripts/deploy.sh" ]; then \
 		echo "❌ 部署脚本 ./scripts/deploy.sh 不存在"; \
 		exit 1; \
-	fi
-	@if [ -n "$(filter linux darwin,$(word 2,$(MAKECMDGOALS)))" ]; then \
+	fi; \
+	if [ -n "$(filter linux darwin,$(word 2,$(MAKECMDGOALS)))" ]; then \
 		echo "📦 使用指定平台: $(word 2,$(MAKECMDGOALS))"; \
-		./scripts/deploy.sh $(SERVER) $(word 2,$(MAKECMDGOALS)); \
+		./scripts/deploy.sh $$SERVER $(word 2,$(MAKECMDGOALS)); \
 	else \
 		echo "📦 自动检测平台"; \
-		./scripts/deploy.sh $(SERVER); \
+		./scripts/deploy.sh $$SERVER; \
 	fi
 
 # 支持平台参数作为目标
