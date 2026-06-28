@@ -2,9 +2,11 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/spacecontext"
 	"trpc.group/trpc-go/trpc-go/errs"
@@ -102,19 +104,28 @@ func writeForwardResponse(w http.ResponseWriter, respBody []byte, headers map[st
 	w.Write(respBody)
 }
 
-// writeForwardError 把 trpc 框架错误转写为前端可读的 trpc-ret/trpc-func-ret 响应头。
-// 与 trpc-go 有协议 http 服务端直连错误协议一致：HTTP 200 + trpc-ret(框架码) + trpc-func-ret(业务码)，
-// body 可空；前端通过响应头识别错误。
+// writeForwardError 把 trpc 框架错误转写为前端可读的响应。
+// 与 trpc-go 有协议 http 服务端错误协议一致：HTTP 200 + trpc-ret(框架码) + trpc-func-ret(业务码)，
+// 同时写入与业务错误同结构的 JSON body（ret_info），避免前端拿到空 body 无法识别错误。
 func writeForwardError(ctx context.Context, w http.ResponseWriter, err error, headers map[string]string) {
 	setForwardCommonHeaders(w)
 	if traceID := headers["trace_id"]; traceID != "" {
 		w.Header().Set("X-Trace-Id", traceID)
 	}
 	code := errs.Code(err)
+	msg := errs.Msg(err)
 	w.Header().Set("trpc-ret", strconv.Itoa(int(code)))
-	if msg := errs.Msg(err); msg != "" {
-		w.Header().Set("trpc-func-ret", msg)
+	if msg != "" {
+		// trpc-func-ret 头不允许换行，扁平化
+		w.Header().Set("trpc-func-ret", strings.ReplaceAll(msg, "\n", " "))
 	}
-	log.WarnContextf(ctx, "forwardHTTP 错误: code=%d msg=%s err=%v", code, errs.Msg(err), err)
+	log.WarnContextf(ctx, "forwardHTTP 错误: code=%d msg=%s err=%v", code, msg, err)
 	w.WriteHeader(http.StatusOK)
+	// 写入与业务错误一致的 JSON 错误体，前端按 ret_info.code!=0 统一识别失败。
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ret_info": map[string]interface{}{
+			"code": code,
+			"msg":  msg,
+		},
+	})
 }
