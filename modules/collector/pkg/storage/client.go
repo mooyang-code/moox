@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -66,17 +68,17 @@ func (c *Client) post(ctx context.Context, path string, body any) error {
 	req.Header.Set("Content-Type", "application/json")
 
 	start := time.Now()
-	fmt.Printf("[storage-client] POST start url=%s path=%s timeout=%s bytes=%d\n", c.baseURL, path, c.httpClient.Timeout, len(data))
+	log.DebugContextf(ctx, "[storage-client] POST start url=%s path=%s timeout=%s bytes=%d", c.baseURL, path, c.httpClient.Timeout, len(data))
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		fmt.Printf("[storage-client] POST error url=%s path=%s duration=%s error=%v\n", c.baseURL, path, time.Since(start), err)
+		log.WarnContextf(ctx, "[storage-client] POST error url=%s path=%s duration=%s error=%v", c.baseURL, path, time.Since(start), err)
 		return fmt.Errorf("发送请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var respBody bytes.Buffer
 	_, _ = respBody.ReadFrom(resp.Body)
-	fmt.Printf("[storage-client] POST response url=%s path=%s status=%d duration=%s bytes=%d\n", c.baseURL, path, resp.StatusCode, time.Since(start), respBody.Len())
+	log.DebugContextf(ctx, "[storage-client] POST response url=%s path=%s status=%d duration=%s bytes=%d", c.baseURL, path, resp.StatusCode, time.Since(start), respBody.Len())
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, respBody.String())
 	}
@@ -87,7 +89,7 @@ func (c *Client) post(ctx context.Context, path string, body any) error {
 	if err := json.Unmarshal(respBody.Bytes(), &out); err != nil {
 		return fmt.Errorf("解析响应失败: %w", err)
 	}
-	fmt.Printf("[storage-client] POST ret_info url=%s path=%s code=%d msg=%s\n", c.baseURL, path, out.RetInfo.Code, out.RetInfo.Msg)
+	log.DebugContextf(ctx, "[storage-client] POST ret_info url=%s path=%s code=%d msg=%s", c.baseURL, path, out.RetInfo.Code, out.RetInfo.Msg)
 	if out.RetInfo.Code != 0 {
 		return fmt.Errorf("错误码 %d: %s", out.RetInfo.Code, out.RetInfo.Msg)
 	}

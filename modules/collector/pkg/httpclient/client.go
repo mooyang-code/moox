@@ -103,14 +103,14 @@ func (c *HTTPClient) doRequest(ctx context.Context, httpClient *http.Client, ful
 
 	// 发送请求
 	start := time.Now()
-	fmt.Printf("[collector-http] GET start domain=%s url=%s timeout=%s\n", domain, fullURL, httpClient.Timeout)
+	log.DebugContextf(ctx, "[collector-http] GET start domain=%s url=%s timeout=%s", domain, fullURL, httpClient.Timeout)
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		fmt.Printf("[collector-http] GET error domain=%s duration=%s error=%v\n", domain, time.Since(start), err)
+		log.WarnContextf(ctx, "[collector-http] GET error domain=%s duration=%s error=%v", domain, time.Since(start), err)
 		return fmt.Errorf("请求 %s 失败: %w", domain, err)
 	}
 	defer resp.Body.Close()
-	fmt.Printf("[collector-http] GET response domain=%s status=%d duration=%s\n", domain, resp.StatusCode, time.Since(start))
+	log.DebugContextf(ctx, "[collector-http] GET response domain=%s status=%d duration=%s", domain, resp.StatusCode, time.Since(start))
 
 	// 检查状态码
 	if resp.StatusCode != http.StatusOK {

@@ -8,6 +8,9 @@ import (
 
 // MetadataStoreCode maps metadata store errors to RPC error codes.
 // Validation-style messages stay INVALID_PARAM; persistence failures become INNER_ERR.
+//
+// NOTE: mapping relies on English error message substrings (e.g. " is required", " must ").
+// If validation messages change locale or wording, update this function or switch to typed errors.
 func MetadataStoreCode(err error) pb.ErrorCode {
 	if err == nil {
 		return pb.ErrorCode_SUCCESS

@@ -8,7 +8,7 @@ import (
 // applyCORSHeaders 根据配置白名单设置 CORS 响应头。
 func applyCORSHeaders(w http.ResponseWriter, origin string) {
 	cfg := GetConfig()
-	allowedOrigins := []string{"*"}
+	var allowedOrigins []string
 	if cfg != nil && len(cfg.CORS.AllowedOrigins) > 0 {
 		allowedOrigins = cfg.CORS.AllowedOrigins
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/spacecontext"
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/log"
 
@@ -118,11 +119,10 @@ func writeForwardError(ctx context.Context, w http.ResponseWriter, err error, he
 	}
 	log.WarnContextf(ctx, "forwardHTTP 错误: code=%d msg=%s err=%v", code, msg, err)
 	w.WriteHeader(http.StatusOK)
-	// 写入与业务错误一致的 JSON 错误体，前端按 ret_info.code!=0 统一识别失败。
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"ret_info": map[string]interface{}{
-			"code": code,
-			"msg":  msg,
+	_ = json.NewEncoder(w).Encode(middlewareResp{
+		RetInfo: &pb.RetInfo{
+			Code: pb.ErrorCode(code),
+			Msg:  msg,
 		},
 	})
 }

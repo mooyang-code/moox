@@ -74,38 +74,28 @@ func (c *KlineCollector) DataType() string {
 func (c *KlineCollector) Collect(ctx context.Context, params *collector.CollectParams) error {
 	log.InfoContextf(ctx, "K线采集开始: inst_type=%s, symbol=%s, interval=%s",
 		params.InstType, params.Symbol, params.Interval)
-	fmt.Printf("[kline] collect start inst_type=%s symbol=%s interval=%s\n", params.InstType, params.Symbol, params.Interval)
 
-	// 从币安 API 获取 K 线数据
-	fmt.Printf("[kline] fetch start inst_type=%s symbol=%s interval=%s spot_domain=%s swap_domain=%s\n",
+	log.DebugContextf(ctx, "K线拉取开始: inst_type=%s, symbol=%s, interval=%s, spot_domain=%s, swap_domain=%s",
 		params.InstType, params.Symbol, params.Interval, c.client.SpotDomain(), c.client.SwapDomain())
 	klines, err := c.fetchKlines(ctx, params)
 	if err != nil {
-		fmt.Printf("[kline] fetch error inst_type=%s symbol=%s interval=%s error=%v\n",
-			params.InstType, params.Symbol, params.Interval, err)
 		log.ErrorContextf(ctx, "K线采集失败: inst_type=%s, symbol=%s, interval=%s, error=%v",
 			params.InstType, params.Symbol, params.Interval, err)
 		return err
 	}
-	fmt.Printf("[kline] fetch done inst_type=%s symbol=%s interval=%s count=%d\n",
-		params.InstType, params.Symbol, params.Interval, len(klines))
 
 	if len(klines) > 0 {
 		log.InfoContextf(ctx, "K线采集完成: inst_type=%s, symbol=%s, interval=%s, count=%d, latest=%+v",
 			params.InstType, params.Symbol, params.Interval, len(klines), klines[len(klines)-1])
 	}
 
-	fmt.Printf("[kline] storage write start inst_type=%s symbol=%s interval=%s count=%d storage_url=%s\n",
+	log.DebugContextf(ctx, "K线写入存储开始: inst_type=%s, symbol=%s, interval=%s, count=%d, storage_url=%s",
 		params.InstType, params.Symbol, params.Interval, len(klines), config.GetStorageURL())
 	if err := c.reportKlines(ctx, params, klines); err != nil {
-		fmt.Printf("[kline] storage write error inst_type=%s symbol=%s interval=%s error=%v\n",
-			params.InstType, params.Symbol, params.Interval, err)
 		log.ErrorContextf(ctx, "K线写入存储失败: inst_type=%s, symbol=%s, interval=%s, error=%v",
 			params.InstType, params.Symbol, params.Interval, err)
 		return err
 	}
-	fmt.Printf("[kline] storage write done inst_type=%s symbol=%s interval=%s count=%d\n",
-		params.InstType, params.Symbol, params.Interval, len(klines))
 	log.InfoContextf(ctx, "K线写入存储完成: inst_type=%s, symbol=%s, interval=%s, count=%d",
 		params.InstType, params.Symbol, params.Interval, len(klines))
 	return nil

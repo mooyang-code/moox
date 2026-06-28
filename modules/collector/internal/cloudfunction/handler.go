@@ -59,8 +59,7 @@ func (h *CloudFunctionHandler) HandleRequest(ctx context.Context, event json.Raw
 	// 解析事件
 	var cfEvent model.CloudFunctionEvent
 	if err := json.Unmarshal(event, &cfEvent); err != nil {
-		// 解析失败，直接报错
-		fmt.Printf("解析云函数事件失败, error: %v, event: %s", err, string(event))
+		log.ErrorContextf(ctx, "[CloudFunction] 解析云函数事件失败: %v", err)
 		return h.errorResponse("invalid_event", fmt.Sprintf("failed to parse event: %v", err)), nil
 	}
 
@@ -127,7 +126,7 @@ func parseServerFromMooxURL(rawURL string) (string, int, bool) {
 
 // processCloudFunctionEvent 处理云函数事件
 func (h *CloudFunctionHandler) processCloudFunctionEvent(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
-	fmt.Printf("处理云函数事件, action: %s, data: %v", event.Action, event.Data)
+	log.DebugContextf(ctx, "[CloudFunction] 处理云函数事件, action=%s", event.Action)
 
 	// 根据事件类型处理
 	switch event.Action {
