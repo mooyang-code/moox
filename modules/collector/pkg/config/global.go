@@ -2,6 +2,9 @@ package config
 
 import (
 	"log"
+	"net"
+	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/mooyang-code/moox/pkg/infraconfig"
@@ -112,22 +115,43 @@ func InitLocalAppConfig() {
 }
 
 // GetStorageURL 获取存储服务地址。
-// 优先取中央基础设施配置 infra/infra*.yaml 的 storage_access 端点（dev/仓库内），
-// 缺失时回退到 config.yaml 的 system.storage_url（部署环境由 deploy 脚本渲染注入）。
+// 云函数/远程采集器在包内 config.yaml 注入公网 storage_url 时，应优先于 infra 占位 127.0.0.1。
+// 本地开发仍可通过 infra/infra.local.yaml 覆盖。
 func GetStorageURL() string {
-	if url := infraconfig.StorageAccessURL(); url != "" {
-		return url
-	}
-	// 确保本地配置已初始化
 	if LocalAppConfig == nil {
 		InitLocalAppConfig()
 	}
 
 	localAppConfigMu.RLock()
-	defer localAppConfigMu.RUnlock()
-
+	localURL := ""
 	if LocalAppConfig != nil && LocalAppConfig.System != nil {
-		return LocalAppConfig.System.StorageURL
+		localURL = strings.TrimSpace(LocalAppConfig.System.StorageURL)
 	}
-	return ""
+	localAppConfigMu.RUnlock()
+
+	infraURL := strings.TrimSpace(infraconfig.StorageAccessURL())
+
+	if localURL != "" && !isLoopbackStorageURL(localURL) {
+		return localURL
+	}
+	if infraURL != "" && !isLoopbackStorageURL(infraURL) {
+		return infraURL
+	}
+	if localURL != "" {
+		return localURL
+	}
+	return infraURL
+}
+
+func isLoopbackStorageURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return strings.Contains(raw, "127.0.0.1") || strings.Contains(raw, "localhost")
+	}
+	host := parsed.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

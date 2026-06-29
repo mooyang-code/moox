@@ -7,15 +7,12 @@ import (
 )
 
 // GetEncryptionKey 获取加密密钥
-// 优先级：环境变量 MOOX_ENCRYPTION_KEY > 配置文件 > 默认值
+// 优先级：环境变量 MOOX_ENCRYPTION_KEY > 默认开发密钥
+// 生产环境务必设置 MOOX_ENCRYPTION_KEY 环境变量。
 func GetEncryptionKey() string {
-	// 优先从环境变量获取
 	if key := os.Getenv("MOOX_ENCRYPTION_KEY"); key != "" {
 		return ensureKeyLength(key, 32)
 	}
-
-	// 如果没有设置环境变量，返回默认开发密钥
-	// 在生产环境中，应该设置环境变量
 	return ensureKeyLength("moox-cloud-secret-key-32bytes", 32)
 }
 

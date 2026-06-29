@@ -314,6 +314,7 @@ message CloudNode {
   string is_deleted = 21;
   string create_time = 22;        // RFC3339
   string modify_time = 23;        // RFC3339
+  string cls_topic_id = 24;       // CLS 日志主题 ID（来自 SCF GetFunction.ClsTopicId）
 }
 
 // NodeListRequest 节点列表查询请求。
@@ -360,6 +361,7 @@ message SCFDeployInfo {
   string region = 4;
   string node_type = 5;
   string cloud_account_id = 6;
+  string cls_topic_id = 7;        // CLS 日志主题 ID
 }
 
 message GetSCFDeployInfoReq {

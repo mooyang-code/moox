@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"trpc.group/trpc-go/trpc-go/log"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/msghub/types"
 	"sync"
 )
@@ -26,7 +27,7 @@ func initPublisherRegistry() {
 func RegisterPublisherType(publisherType types.PublisherType, constructor CreatePublisher) {
 	initPublisherRegistry()
 	publisherRegistry.registry[publisherType] = constructor
-	fmt.Printf("发布器类型已注册: %s\n", publisherType)
+	log.Infof("发布器类型已注册: %s\n", publisherType)
 }
 
 // GetPublisherConstructor 获取发布器构造函数

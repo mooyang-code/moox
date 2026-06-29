@@ -2,6 +2,7 @@ package nats
 
 import (
 	"fmt"
+	"trpc.group/trpc-go/trpc-go/log"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/msghub/server/registry"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/msghub/types"
 	"github.com/nats-io/nats-server/v2/server"
@@ -64,7 +65,7 @@ func (n *NATSServer) Start() error {
 	}
 
 	n.running = true
-	fmt.Printf("NATS服务器已启动: %s:%d (存储目录: %s)\n", n.options.Host, n.options.Port, n.options.StoreDir)
+	log.Infof("NATS服务器已启动: %s:%d (存储目录: %s)\n", n.options.Host, n.options.Port, n.options.StoreDir)
 	return nil
 }
 
@@ -80,7 +81,7 @@ func (n *NATSServer) Stop() error {
 	}
 
 	n.running = false
-	fmt.Println("NATS服务器已停止")
+	log.Info("NATS服务器已停止")
 	return nil
 }
 

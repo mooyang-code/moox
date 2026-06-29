@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"trpc.group/trpc-go/trpc-go/log"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/msghub"
@@ -34,7 +35,7 @@ func main() {
 		StreamSubjects: []string{"order.created", "order.updated"},
 		PrePublishHook: func(msg *types.Message) error {
 			// 发送前钩子：记录日志、验证、加密等
-			fmt.Printf("发送前钩子: 消息ID=%s, 主题=%s\n", msg.ID, msg.Subject)
+			log.Infof("发送前钩子: 消息ID=%s, 主题=%s\n", msg.ID, msg.Subject)
 			// 添加自定义消息头
 			msg.AddHeader("X-Source", "order-service")
 			msg.AddHeader("X-Timestamp", time.Now().Format(time.RFC3339))
@@ -56,7 +57,7 @@ func main() {
 		AckWait:        30 * time.Second,
 		PrePushHook: func(msg *types.Message) error {
 			// 推送前钩子：记录日志、过滤、解密等
-			fmt.Printf("推送前钩子: 消息ID=%s, 主题=%s\n", msg.ID, msg.Subject)
+			log.Infof("推送前钩子: 消息ID=%s, 主题=%s\n", msg.ID, msg.Subject)
 			// 验证消息头
 			if source := msg.GetHeader("X-Source"); source == "" {
 				return fmt.Errorf("缺少消息来源")
@@ -65,7 +66,7 @@ func main() {
 		},
 		Handler: func(msg *types.Message) error {
 			// 业务逻辑处理
-			fmt.Printf("处理订单消息: ID=%s, 数据=%s\n", msg.ID, string(msg.Data))
+			log.Infof("处理订单消息: ID=%s, 数据=%s\n", msg.ID, string(msg.Data))
 			// 这里可以调用业务逻辑处理订单
 			return nil
 		},
@@ -89,16 +90,16 @@ func main() {
 	for i := 1; i <= 5; i++ {
 		msg := msghub.NewMessage("order.created", []byte(fmt.Sprintf(`{"order_id": "%d", "amount": 100}`, i)))
 		if err := pub.PublishMsg(context.Background(), msg); err != nil {
-			fmt.Printf("发送消息失败: %v\n", err)
+			log.Errorf("发送消息失败: %v\n", err)
 		}
 		time.Sleep(1 * time.Second)
 	}
 
 	// 6. 等待消息处理
-	fmt.Println("等待消息处理...")
+	log.Info("等待消息处理...")
 	time.Sleep(10 * time.Second)
 
 	// 7. 查看状态
-	fmt.Printf("Publishers: %v\n", svc.ListPublishers())
-	fmt.Printf("Consumers: %v\n", svc.ListConsumers())
+	log.Infof("Publishers: %v\n", svc.ListPublishers())
+	log.Infof("Consumers: %v\n", svc.ListConsumers())
 }

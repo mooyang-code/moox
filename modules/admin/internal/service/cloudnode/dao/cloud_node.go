@@ -102,6 +102,9 @@ type CloudNodeDAO interface {
 	// UpdateSupportedCollectors 更新节点支持的采集器类型
 	UpdateSupportedCollectors(ctx context.Context, nodeID string, collectors []string) error
 
+	// UpdateClsTopicID 更新节点 CLS 日志主题 ID
+	UpdateClsTopicID(ctx context.Context, nodeID string, clsTopicID string) error
+
 	// UpdateRunningVersion 更新节点当前运行版本
 	UpdateRunningVersion(ctx context.Context, nodeID string, version string) error
 }
@@ -527,6 +530,23 @@ func (d *cloudNodeDaoImpl) UpdateSupportedCollectors(ctx context.Context, nodeID
 		log.WarnContextf(ctx, "[CloudNodeDAO] 节点 %s 不存在或已失效，跳过更新采集器类型", nodeID)
 	} else {
 		log.DebugContextf(ctx, "[CloudNodeDAO] 节点 %s 的采集器类型已更新: %v", nodeID, collectors)
+	}
+	return nil
+}
+
+// UpdateClsTopicID 更新节点的 CLS 日志主题 ID
+func (d *cloudNodeDaoImpl) UpdateClsTopicID(ctx context.Context, nodeID string, clsTopicID string) error {
+	now := time.Now()
+	result := d.db.WithContext(ctx).
+		Model(&model.CloudNode{}).
+		Where("c_node_id = ? AND c_is_deleted != ?", nodeID, common.IsDeletedTrue).
+		Updates(map[string]interface{}{
+			"c_cls_topic_id": clsTopicID,
+			"c_mtime":        now,
+		})
+
+	if result.Error != nil {
+		return fmt.Errorf("failed to update cls_topic_id: %w", result.Error)
 	}
 	return nil
 }

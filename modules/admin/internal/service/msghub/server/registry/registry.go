@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"trpc.group/trpc-go/trpc-go/log"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/msghub/types"
 	"sync"
 )
@@ -26,7 +27,7 @@ func initServerRegistry() {
 func RegisterServerType(serverType types.ServerType, constructor CreateMessageServer) {
 	initServerRegistry()
 	serverRegistry.registry[serverType] = constructor
-	fmt.Printf("服务器类型已注册: %s\n", serverType)
+	log.Infof("服务器类型已注册: %s\n", serverType)
 }
 
 // GetServerConstructor 获取服务器构造函数

@@ -605,6 +605,18 @@ dataset_columns:
 
 views:
   - space_id: crypto
+    view_id: spot_kline_1m_view
+    name: 现货1分钟K线视图
+    description: Binance spot 1m OHLCV klines collected by SCF collector
+    primary_dataset_id: binance_spot_kline
+    dataset_ids: ["binance_spot_kline"]
+    grain_keys: ["subject_id", "freq", "data_time"]
+    filter_json: '{"freq":"1m"}'
+    engine: duckdb
+    query_window: 30d
+    build_status: pending
+    status: active
+  - space_id: crypto
     view_id: spot_symbol_profile_view
     name: 现货标的视图
     description: Aggregate spot symbol status with symbol profile text for Bleve search
@@ -616,6 +628,69 @@ views:
     status: active
 
 view_columns:
+  - space_id: crypto
+    view_id: spot_kline_1m_view
+    column_name: binance_spot_kline.open
+    attributes:
+      display_name: 开盘价
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.open
+    value_type: double
+    sort_order: 1
+  - space_id: crypto
+    view_id: spot_kline_1m_view
+    column_name: binance_spot_kline.high
+    attributes:
+      display_name: 最高价
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.high
+    value_type: double
+    sort_order: 2
+  - space_id: crypto
+    view_id: spot_kline_1m_view
+    column_name: binance_spot_kline.low
+    attributes:
+      display_name: 最低价
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.low
+    value_type: double
+    sort_order: 3
+  - space_id: crypto
+    view_id: spot_kline_1m_view
+    column_name: binance_spot_kline.close
+    attributes:
+      display_name: 收盘价
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.close
+    value_type: double
+    sort_order: 4
+  - space_id: crypto
+    view_id: spot_kline_1m_view
+    column_name: binance_spot_kline.volume
+    attributes:
+      display_name: 成交量
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.volume
+    value_type: double
+    sort_order: 5
+  - space_id: crypto
+    view_id: spot_kline_1m_view
+    column_name: binance_spot_kline.quote_volume
+    attributes:
+      display_name: 成交额
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.quote_volume
+    value_type: double
+    sort_order: 6
+  - space_id: crypto
+    view_id: spot_kline_1m_view
+    column_name: binance_spot_kline.trade_num
+    attributes:
+      display_name: 成交笔数
+    origin_type: dataset_column
+    origin_id: binance_spot_kline.trade_num
+    value_type: int
+    sort_order: 7
   - space_id: crypto
     view_id: spot_symbol_profile_view
     column_name: binance_spot_symbols.symbol

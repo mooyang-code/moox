@@ -51,6 +51,7 @@ type FunctionInfo struct {
 	MemorySize   int64
 	Timeout      int64
 	Environment  map[string]string
+	ClsTopicID   string
 }
 
 // NamespaceInfo 命名空间信息

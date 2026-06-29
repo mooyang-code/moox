@@ -29,9 +29,11 @@ go.work.sum
 
 # env file
 .env
+skills/dev-helper/.env.local
 
 # infra 真实部署值覆盖文件（唯一存放真实 IP/凭证处），不入库
 infra/infra.local.yaml
+
 
 server/.claude/
 

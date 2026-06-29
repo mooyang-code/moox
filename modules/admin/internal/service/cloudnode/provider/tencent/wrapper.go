@@ -169,6 +169,7 @@ func (p *TencentWrapper) GetFunction(ctx context.Context, functionName, namespac
 		MemorySize:   resp.MemorySize,
 		Timeout:      resp.Timeout,
 		Environment:  resp.Environment,
+		ClsTopicID:   resp.ClsTopicID,
 	}, nil
 }
 
@@ -196,6 +197,7 @@ func (p *TencentWrapper) ListFunctions(ctx context.Context, namespace, region st
 			MemorySize:   fn.MemorySize,
 			Timeout:      fn.Timeout,
 			Environment:  fn.Environment,
+			ClsTopicID:   fn.ClsTopicID,
 		})
 	}
 

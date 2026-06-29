@@ -63,7 +63,6 @@ case "${TARGET_MODULE}" in
     build_go modules/collector ./cmd/moox-collector moox-collector 0
     build_go modules/factor ./cmd/moox-factor moox-factor 0
     build_go modules/trade ./cmd/moox-trade moox-trade 0
-    build_go modules/account ./cmd/moox-account moox-account 0
     build_storage
     ;;
   cli)
@@ -82,7 +81,7 @@ case "${TARGET_MODULE}" in
     build_go modules/trade ./cmd/moox-trade moox-trade 0
     ;;
   account)
-    build_go modules/account ./cmd/moox-account moox-account 0
+    echo "==> skip moox-account: modules/account not present in this repo" >&2
     ;;
   storage)
     build_storage

@@ -90,7 +90,7 @@ func (g *GormStore) AppendFundFlows(ctx context.Context, spaceID string, flows [
 				}
 				res := tx.Model(&service.Balance{}).
 					Where("c_id = ? AND c_version = ?", bal.ID, bal.Version).
-					Updates(map[string]interface{}{
+					Updates(map[string]any{
 						"c_available": nextAvail,
 						"c_total":     newTotal,
 						"c_version":   bal.Version + 1,
@@ -144,7 +144,7 @@ func (g *GormStore) adjustFrozen(ctx context.Context, spaceID, accountID, curren
 		// total 不变（frozen+available 总和不变）
 		res := tx.Model(&service.Balance{}).
 			Where("c_id = ? AND c_version = ?", bal.ID, bal.Version).
-			Updates(map[string]interface{}{
+			Updates(map[string]any{
 				"c_available": nextAvail,
 				"c_frozen":    nextFrozen,
 				"c_version":   bal.Version + 1,

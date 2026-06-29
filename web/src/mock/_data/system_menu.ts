@@ -96,7 +96,7 @@ export const systemMenu = [
 
   directory("07", "0", "/settings/spaces", "settings", "settings", 7, { svgIcon: "set", icon: "" }),
   menu("0701", "07", "/settings/spaces", "settings-spaces", "settings-spaces", "settings/spaces/index", 1),
-  menu("0702", "07", "/settings/permissions", "settings-permissions", "settings-permissions", "settings/permissions/index", 2)
+  menu("0702", "07", "/settings/secrets", "settings-secrets", "settings-secrets", "settings/secrets/index", 2)
 ];
 
 export const permissionData: any[] = [];

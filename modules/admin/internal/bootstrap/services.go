@@ -13,6 +13,8 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/monitor"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/secret"
+	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/space"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	sshdao "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/dao"
@@ -49,6 +51,9 @@ type Services struct {
 
 	// SSH 服务
 	SSHService ssh.Service
+
+	// 秘钥管理服务
+	SecretService secret.Service
 
 	// 监控服务
 	Monitor monitor.Service
@@ -170,6 +175,11 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	sshSessionDAO := sshdao.NewSSHSessionDAO(db)
 	sshService := ssh.NewService(sshHostDAO, sshSessionDAO)
 
+	// 创建秘钥管理服务
+	log.Info("[Bootstrap] 正在创建秘钥管理服务...")
+	secretDAO := secretdao.NewSecretDAO(db)
+	secretService := secret.NewService(secretDAO)
+
 	// 创建监控服务
 	log.Info("[Bootstrap] 正在创建监控服务...")
 	monitorService := monitor.NewService(dbManager)
@@ -186,6 +196,7 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 		DataTypeConfigService: dataTypeConfigService,
 		TaskPlannerService:    taskPlanner,
 		SSHService:            sshService,
+		SecretService:         secretService,
 		Monitor:        monitorService,
 	}
 

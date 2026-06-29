@@ -88,6 +88,9 @@ gateway:
     ssh:
       address: "127.0.0.1:11106"
       path: "trpc.moox.ops.Ssh"
+    secret:
+      address: "127.0.0.1:11108"
+      path: "trpc.moox.ops.SecretMgr"
     space:
       address: "127.0.0.1:11107"
       path: "trpc.moox.admin.SpaceMgr"

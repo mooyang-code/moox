@@ -2,7 +2,7 @@ package nats
 
 import (
 	"fmt"
-	"log"
+	"trpc.group/trpc-go/trpc-go/log"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -31,7 +31,7 @@ func NewNatsConsumer() MessageConsumer {
 
 // 默认消息处理函数
 func defaultMessageHandler(data []byte) error {
-	fmt.Printf("收到消息: %s\n", string(data))
+	log.Infof("收到消息: %s", string(data))
 	return nil
 }
 
@@ -52,7 +52,7 @@ func (nc *NatsConsumer) Connect(serverURL string) error {
 	}
 	nc.js = js
 
-	fmt.Println("已成功连接到NATS服务器")
+	log.Info("已成功连接到NATS服务器")
 	return nil
 }
 
@@ -60,7 +60,7 @@ func (nc *NatsConsumer) Connect(serverURL string) error {
 func (nc *NatsConsumer) Close() error {
 	if nc.conn != nil {
 		nc.conn.Close()
-		fmt.Println("已关闭NATS连接")
+		log.Info("已关闭NATS连接")
 	}
 	return nil
 }
@@ -98,7 +98,7 @@ func (nc *NatsConsumer) Subscribe(subject string) error {
 		return fmt.Errorf("创建消费者失败: %v", err)
 	}
 
-	fmt.Printf("已订阅主题: %s\n", subject)
+	log.Infof("已订阅主题: %s", subject)
 	return nil
 }
 
@@ -118,7 +118,7 @@ func (nc *NatsConsumer) Consume() error {
 		return fmt.Errorf("订阅失败: %v", err)
 	}
 
-	fmt.Println("开始消费消息...")
+	log.Info("开始消费消息...")
 
 	// 持续消费消息
 	for {
@@ -127,7 +127,7 @@ func (nc *NatsConsumer) Consume() error {
 		if err != nil {
 			if err == nats.ErrTimeout {
 				// 超时，继续尝试
-				fmt.Println("等待新消息中...")
+				log.Info("等待新消息中...")
 				continue
 			}
 			return fmt.Errorf("拉取消息失败: %v", err)
@@ -138,12 +138,12 @@ func (nc *NatsConsumer) Consume() error {
 			// 调用消息处理函数
 			err = nc.handler(m.Data)
 			if err != nil {
-				log.Printf("处理消息失败: %v", err)
+				log.Errorf("处理消息失败: %v", err)
 			} else {
 				// 确认消息
 				err = m.Ack()
 				if err != nil {
-					log.Printf("确认消息失败: %v", err)
+					log.Errorf("确认消息失败: %v", err)
 				}
 			}
 		}

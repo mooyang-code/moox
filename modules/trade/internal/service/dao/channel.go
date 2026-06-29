@@ -21,7 +21,7 @@ func (g *GormStore) UpdateChannel(ctx context.Context, spaceID string, c *servic
 	res := g.db.WithContext(ctx).
 		Model(&service.TradeChannel{}).
 		Where("c_space_id = ? AND c_channel_id = ? AND "+notDeleted(), spaceID, c.ChannelID).
-		Updates(map[string]interface{}{
+		Updates(map[string]any{
 			"c_channel_name": c.ChannelName,
 			"c_status":       c.Status,
 			"c_endpoint":     c.Endpoint,

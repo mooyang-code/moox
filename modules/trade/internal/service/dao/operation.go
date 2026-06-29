@@ -17,7 +17,7 @@ func (g *GormStore) UpdateOrderOperation(ctx context.Context, spaceID string, op
 	res := g.db.WithContext(ctx).
 		Model(&service.OrderOperation{}).
 		Where("c_space_id = ? AND c_op_id = ?", spaceID, op.OpID).
-		Updates(map[string]interface{}{
+		Updates(map[string]any{
 			"c_op_status":     op.OpStatus,
 			"c_response":      op.Response,
 			"c_error_code":    op.ErrorCode,

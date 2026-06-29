@@ -150,6 +150,6 @@ export default {
     ["ops-storage-archive"]: "归档文件",
     ["settings"]: "系统设置",
     ["settings-spaces"]: "空间管理",
-    ["settings-permissions"]: "用户权限"
+    ["settings-secrets"]: "秘钥管理"
   }
 };

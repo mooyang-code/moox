@@ -135,6 +135,7 @@ type FunctionInfo struct {
 	MemorySize   int64             // 内存大小（MB）
 	Timeout      int64             // 超时时间（秒）
 	Environment  map[string]string // 环境变量
+	ClsTopicID   string            // CLS 日志主题 ID
 }
 
 // NamespaceInfo 命名空间信息

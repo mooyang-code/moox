@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -293,6 +294,33 @@ func GetXDataURL() string {
 		return ""
 	}
 	return cfg.Storage.XDataURL
+}
+
+// GetMetadataURL 获取 storage Metadata 服务 HTTP 地址。
+// 优先从 storage access URL 推导（20201 -> 20200），否则回退默认本地端口。
+func GetMetadataURL() string {
+	if url := infraconfig.StorageAccessURL(); url != "" {
+		if metadataURL := metadataURLFromAccessURL(url); metadataURL != "" {
+			return metadataURL
+		}
+	}
+	if url := GetXDataURL(); url != "" {
+		if metadataURL := metadataURLFromAccessURL(url); metadataURL != "" {
+			return metadataURL
+		}
+	}
+	return "http://127.0.0.1:20200"
+}
+
+func metadataURLFromAccessURL(accessURL string) string {
+	accessURL = strings.TrimSpace(accessURL)
+	if accessURL == "" {
+		return ""
+	}
+	if strings.Contains(accessURL, ":20201") {
+		return strings.Replace(accessURL, ":20201", ":20200", 1)
+	}
+	return ""
 }
 
 // GetMonitorConfig 获取监控配置

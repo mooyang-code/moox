@@ -220,7 +220,12 @@ func (s *ServiceImpl) CreateNode(ctx context.Context, node *pb.CloudNode, codeCo
 		return nil, fmt.Errorf("failed to create function: %w", err)
 	}
 
-	log.InfoContextf(ctx, "[CloudNode] Successfully created cloud function: %s (ID: %s)", funcInfo.FunctionName, funcInfo.FunctionID)
+	log.InfoContextf(ctx, "[CloudNode] Successfully created cloud function: %s (ID: %s, cls_topic_id: %s)",
+		funcInfo.FunctionName, funcInfo.FunctionID, funcInfo.ClsTopicID)
+
+	if funcInfo.ClsTopicID != "" {
+		nodeModel.ClsTopicID = funcInfo.ClsTopicID
+	}
 
 	if nodeModel.NodeType == model.NodeTypeSCFWeb {
 		if err := s.createFunctionURL(ctx, client, nodeModel); err != nil {
@@ -525,7 +530,31 @@ func (s *ServiceImpl) DeployNode(ctx context.Context, nodeID string, codeConfig 
 		return fmt.Errorf("failed to deploy function: %w", err)
 	}
 
+	if err := s.syncClsTopicFromCloud(ctx, client, node); err != nil {
+		log.WarnContextf(ctx, "[CloudNode] Failed to sync cls_topic_id after deploy %s: %v", nodeID, err)
+	}
+
 	log.InfoContextf(ctx, "[CloudNode] Successfully deployed function to node: %s", nodeID)
+	return nil
+}
+
+// syncClsTopicFromCloud 从云厂商 GetFunction 同步 CLS TopicId 到本地节点记录。
+func (s *ServiceImpl) syncClsTopicFromCloud(ctx context.Context, client provider.Client, node *model.CloudNode) error {
+	if node == nil || client == nil {
+		return nil
+	}
+	info, err := client.GetFunction(ctx, node.NodeID, node.Namespace, node.Region)
+	if err != nil {
+		return fmt.Errorf("get function: %w", err)
+	}
+	if info == nil || info.ClsTopicID == "" {
+		return fmt.Errorf("cls_topic_id empty for function %s", node.NodeID)
+	}
+	if err := s.nodeDAO.UpdateClsTopicID(ctx, node.NodeID, info.ClsTopicID); err != nil {
+		return err
+	}
+	node.ClsTopicID = info.ClsTopicID
+	log.InfoContextf(ctx, "[CloudNode] Synced cls_topic_id for %s: %s", node.NodeID, info.ClsTopicID)
 	return nil
 }
 

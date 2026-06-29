@@ -85,6 +85,7 @@ func (s *Service) GetSCFDeployInfo(ctx context.Context, req *pb.GetSCFDeployInfo
 			Region:         node.GetRegion(),
 			NodeType:       node.GetNodeType(),
 			CloudAccountId: node.GetCloudAccountId(),
+			ClsTopicId:     node.GetClsTopicId(),
 		},
 	}, nil
 }

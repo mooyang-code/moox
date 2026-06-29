@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"trpc.group/trpc-go/trpc-go/log"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/msghub/types"
 	"sync"
 )
@@ -26,7 +27,7 @@ func initConsumerRegistry() {
 func RegisterConsumerType(consumerType types.ConsumerType, constructor CreateConsumer) {
 	initConsumerRegistry()
 	consumerRegistry.registry[consumerType] = constructor
-	fmt.Printf("消费者类型已注册: %s\n", consumerType)
+	log.Infof("消费者类型已注册: %s\n", consumerType)
 }
 
 // GetConsumerConstructor 获取消费者构造函数

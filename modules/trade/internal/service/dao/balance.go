@@ -39,7 +39,7 @@ func (g *GormStore) UpsertBalances(ctx context.Context, spaceID string, balances
 			// ON CONFLICT (c_account_id, c_currency, c_is_deleted) DO UPDATE
 			if err := tx.Clauses(clause.OnConflict{
 				Columns: []clause.Column{{Name: "c_account_id"}, {Name: "c_currency"}, {Name: "c_is_deleted"}},
-				DoUpdates: clause.Assignments(map[string]interface{}{
+				DoUpdates: clause.Assignments(map[string]any{
 					"c_available": gorm.Expr("excluded.c_available"),
 					"c_frozen":    gorm.Expr("excluded.c_frozen"),
 					"c_total":     gorm.Expr("excluded.c_total"),

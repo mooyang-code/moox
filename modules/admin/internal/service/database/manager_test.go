@@ -28,4 +28,5 @@ func TestEmbeddedAdminSchemaContainsCoreTables(t *testing.T) {
 	require.Contains(t, schema, "CREATE TABLE IF NOT EXISTS t_spaces")
 	require.Contains(t, schema, "CREATE TABLE IF NOT EXISTS t_users")
 	require.Contains(t, schema, "CREATE TABLE IF NOT EXISTS t_cloud_nodes")
+	require.Contains(t, schema, "c_cls_topic_id")
 }

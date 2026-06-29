@@ -188,31 +188,7 @@ func (p *Provider) GetFunction(ctx context.Context, functionName, namespace, reg
 	}
 
 	// 转换为通用函数信息
-	info := &FunctionInfo{
-		FunctionName: getString(response.Response.FunctionName),
-		FunctionID:   getString(response.Response.FunctionId),
-		Runtime:      getString(response.Response.Runtime),
-		Namespace:    getString(response.Response.Namespace),
-		Description:  getString(response.Response.Description),
-		Handler:      getString(response.Response.Handler),
-		Status:       getString(response.Response.Status),
-		StatusDesc:   getString(response.Response.StatusDesc),
-		CreateTime:   getString(response.Response.AddTime),
-		UpdateTime:   getString(response.Response.ModTime),
-		MemorySize:   getInt64(response.Response.MemorySize),
-		Timeout:      getInt64(response.Response.Timeout),
-	}
-
-	// 转换环境变量
-	if response.Response.Environment != nil && len(response.Response.Environment.Variables) > 0 {
-		info.Environment = make(map[string]string)
-		for _, v := range response.Response.Environment.Variables {
-			if v.Key != nil && v.Value != nil {
-				info.Environment[*v.Key] = *v.Value
-			}
-		}
-	}
-
+	info := buildFunctionInfoFromGetFunctionResponse(response)
 	return info, nil
 }
 
@@ -521,6 +497,37 @@ func (p *Provider) waitForFunctionReady(ctx context.Context, functionName, names
 		// 等待2秒后重试
 		time.Sleep(2 * time.Second)
 	}
+}
+
+func buildFunctionInfoFromGetFunctionResponse(response *scf.GetFunctionResponse) *FunctionInfo {
+	if response == nil || response.Response == nil {
+		return nil
+	}
+	resp := response.Response
+	info := &FunctionInfo{
+		FunctionName: getString(resp.FunctionName),
+		FunctionID:   getString(resp.FunctionId),
+		Runtime:      getString(resp.Runtime),
+		Namespace:    getString(resp.Namespace),
+		Description:  getString(resp.Description),
+		Handler:      getString(resp.Handler),
+		Status:       getString(resp.Status),
+		StatusDesc:   getString(resp.StatusDesc),
+		CreateTime:   getString(resp.AddTime),
+		UpdateTime:   getString(resp.ModTime),
+		MemorySize:   getInt64(resp.MemorySize),
+		Timeout:      getInt64(resp.Timeout),
+		ClsTopicID:   getString(resp.ClsTopicId),
+	}
+	if resp.Environment != nil && len(resp.Environment.Variables) > 0 {
+		info.Environment = make(map[string]string)
+		for _, v := range resp.Environment.Variables {
+			if v.Key != nil && v.Value != nil {
+				info.Environment[*v.Key] = *v.Value
+			}
+		}
+	}
+	return info
 }
 
 // 辅助函数：安全获取字符串指针的值

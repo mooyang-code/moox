@@ -2,13 +2,14 @@
 # infra.local.yaml 已被 .gitignore 忽略，是仓库中唯一允许存放真实 IP/凭证的文件。
 #
 # 仅需填写要覆盖 infra.yaml 默认值的字段；未列出的字段沿用默认值。
+# 切勿将本文件复制为 infra.local.yaml 后提交；切勿写入 SSH 密码。
 
 services:
-  storage_access: { host: 106.53.107.122, port: 20201 }
-  xdata:          { host: 106.53.107.122, port: 20201 }
-  admin_gateway:  { host: 106.53.107.122, port: 11000 }
-  web_host:       { host: 106.53.107.122, port: 10080 }
+  storage_access: { host: "<deploy-host>", port: 20201 }
+  xdata:          { host: "<deploy-host>", port: 20201 }
+  admin_gateway:  { host: "<deploy-host>", port: 11000 }
+  web_host:       { host: "<deploy-host>", port: 10080 }
 
 remote:
-  host: 43.132.204.177
-  ssh:  ubuntu@43.132.204.177
+  host: "<deploy-host>"
+  ssh:  "ubuntu@<deploy-host>"

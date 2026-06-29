@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"fmt"
+	"trpc.group/trpc-go/trpc-go/log"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/msghub/publisher/registry"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/msghub/types"
 	"github.com/nats-io/nats.go"
@@ -52,15 +53,15 @@ func (p *NATSPublisher) Connect(ctx context.Context) error {
 		nats.ReconnectWait(1 * time.Second),
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
 			if err != nil {
-				fmt.Printf("NATS连接断开: %v\n", err)
+				log.Warnf("NATS连接断开: %v\n", err)
 			}
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
-			fmt.Printf("NATS重新连接到: %s\n", nc.ConnectedUrl())
+			log.Infof("NATS重新连接到: %s\n", nc.ConnectedUrl())
 		}),
 		nats.ErrorHandler(func(nc *nats.Conn, sub *nats.Subscription, err error) {
 			if err != nil {
-				fmt.Printf("NATS错误: %v\n", err)
+				log.Errorf("NATS错误: %v\n", err)
 			}
 		}),
 	}
@@ -93,11 +94,11 @@ func (p *NATSPublisher) Connect(ctx context.Context) error {
 			nc.Close()
 			return fmt.Errorf("创建或更新流失败: %w", err)
 		}
-		fmt.Printf("NATS流已创建/更新: %s\n", p.options.StreamName)
+		log.Infof("NATS流已创建/更新: %s\n", p.options.StreamName)
 	}
 
 	p.connected = true
-	fmt.Printf("已连接到NATS服务器: %s\n", p.options.ServerURL)
+	log.Infof("已连接到NATS服务器: %s\n", p.options.ServerURL)
 	return nil
 }
 
@@ -114,7 +115,7 @@ func (p *NATSPublisher) Close() error {
 	}
 
 	p.connected = false
-	fmt.Println("NATS发布器已关闭")
+	log.Info("NATS发布器已关闭")
 	return nil
 }
 
@@ -130,7 +131,7 @@ func (p *NATSPublisher) Publish(ctx context.Context, subject string, data []byte
 		return "", fmt.Errorf("发布消息失败: %w", err)
 	}
 
-	fmt.Printf("消息已发布: 主题=%s, 序列号=%d\n", subject, ack.Sequence)
+	log.Infof("消息已发布: 主题=%s, 序列号=%d\n", subject, ack.Sequence)
 	return strconv.FormatUint(ack.Sequence, 10), nil
 }
 
@@ -175,7 +176,7 @@ func (p *NATSPublisher) PublishMsg(ctx context.Context, msg *types.Message) erro
 	// 更新消息序列号
 	msg.Sequence = ack.Sequence
 
-	fmt.Printf("消息已发布: ID=%s, 主题=%s, 序列号=%d\n", msg.ID, msg.Subject, ack.Sequence)
+	log.Infof("消息已发布: ID=%s, 主题=%s, 序列号=%d\n", msg.ID, msg.Subject, ack.Sequence)
 	return nil
 }
 

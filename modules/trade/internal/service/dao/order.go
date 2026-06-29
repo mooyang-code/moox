@@ -21,7 +21,7 @@ func (g *GormStore) UpdateOrder(ctx context.Context, spaceID string, o *service.
 	res := g.db.WithContext(ctx).
 		Model(&service.Order{}).
 		Where("c_space_id = ? AND c_order_id = ? AND "+notDeleted(), spaceID, o.OrderID).
-		Updates(map[string]interface{}{
+		Updates(map[string]any{
 			"c_exchange_order_id": o.ExchangeOrderID,
 			"c_status":            o.Status,
 			"c_filled_qty":        o.FilledQty,

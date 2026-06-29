@@ -43,10 +43,10 @@ export const staticRoutes = [
         meta: { title: "settings-spaces" }
       },
       {
-        path: "/settings/permissions",
-        name: "settings-permissions",
-        component: () => import("@/views/settings/permissions/index.vue"),
-        meta: { title: "settings-permissions" }
+        path: "/settings/secrets",
+        name: "settings-secrets",
+        component: () => import("@/views/settings/secrets/index.vue"),
+        meta: { title: "settings-secrets" }
       },
       {
         path: "/data/sources",

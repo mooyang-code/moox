@@ -3,6 +3,7 @@ package msghub
 import (
 	"context"
 	"fmt"
+	"trpc.group/trpc-go/trpc-go/log"
 	"sync"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/msghub/consumer"
@@ -66,7 +67,7 @@ func (s *serviceImpl) RegisterPublisher(name string, publisherType PublisherType
 		return err
 	}
 
-	fmt.Printf("Publisher已注册: %s (类型: %s)\n", name, publisherType)
+	log.Infof("Publisher已注册: %s (类型: %s)\n", name, publisherType)
 	return nil
 }
 
@@ -80,7 +81,7 @@ func (s *serviceImpl) UnregisterPublisher(name string) error {
 	if err := s.publisherReg.Unregister(name); err != nil {
 		return err
 	}
-	fmt.Printf("Publisher已注销: %s\n", name)
+	log.Infof("Publisher已注销: %s\n", name)
 	return nil
 }
 
@@ -108,7 +109,7 @@ func (s *serviceImpl) RegisterConsumer(name string, consumerType ConsumerType, o
 		return err
 	}
 
-	fmt.Printf("Consumer已注册: %s (类型: %s)\n", name, consumerType)
+	log.Infof("Consumer已注册: %s (类型: %s)\n", name, consumerType)
 	return nil
 }
 
@@ -128,7 +129,7 @@ func (s *serviceImpl) StartConsumer(name string) error {
 		return fmt.Errorf("启动Consumer失败: %w", err)
 	}
 
-	fmt.Printf("Consumer已启动: %s\n", name)
+	log.Infof("Consumer已启动: %s\n", name)
 	return nil
 }
 
@@ -143,7 +144,7 @@ func (s *serviceImpl) StopConsumer(name string) error {
 		return fmt.Errorf("停止Consumer失败: %w", err)
 	}
 
-	fmt.Printf("Consumer已停止: %s\n", name)
+	log.Infof("Consumer已停止: %s\n", name)
 	return nil
 }
 
@@ -152,7 +153,7 @@ func (s *serviceImpl) UnregisterConsumer(name string) error {
 	if err := s.consumerReg.Unregister(name); err != nil {
 		return err
 	}
-	fmt.Printf("Consumer已注销: %s\n", name)
+	log.Infof("Consumer已注销: %s\n", name)
 	return nil
 }
 
@@ -178,7 +179,7 @@ func (s *serviceImpl) Start(ctx context.Context) error {
 	}
 
 	s.running = true
-	fmt.Println("MsgHub服务已启动")
+	log.Info("MsgHub服务已启动")
 	return nil
 }
 
@@ -193,21 +194,21 @@ func (s *serviceImpl) Stop(ctx context.Context) error {
 
 	// 停止所有Consumer
 	if err := s.consumerReg.StopAll(); err != nil {
-		fmt.Printf("停止Consumer时发生错误: %v\n", err)
+		log.Errorf("停止Consumer时发生错误: %v\n", err)
 	}
 
 	// 关闭所有Publisher
 	if err := s.publisherReg.CloseAll(); err != nil {
-		fmt.Printf("关闭Publisher时发生错误: %v\n", err)
+		log.Errorf("关闭Publisher时发生错误: %v\n", err)
 	}
 
 	// 停止服务器
 	if err := s.server.Stop(); err != nil {
-		fmt.Printf("停止消息服务器时发生错误: %v\n", err)
+		log.Errorf("停止消息服务器时发生错误: %v\n", err)
 	}
 
 	s.running = false
-	fmt.Println("MsgHub服务已停止")
+	log.Info("MsgHub服务已停止")
 	return nil
 }
 

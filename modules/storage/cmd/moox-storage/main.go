@@ -125,6 +125,8 @@ func main() {
 			os.Exit(1)
 		}
 		log.Infof("ViewService role initialized")
+	} else {
+		registerNoopViewTimers(s)
 	}
 
 	if cfg.Storage.HasRole("deriver") {
@@ -221,6 +223,17 @@ func accessReaderForRuntime(storage storageconfig.StorageConfig, storageService 
 		accessServiceName = ""
 	}
 	return deriver.NewAccessReader(local, accessServiceName)
+}
+
+func registerNoopViewTimers(s *server.Server) {
+	noop := func(ctx context.Context, _ string) error { return nil }
+	for _, name := range []string{
+		"trpc.moox.storage.view.timer",
+		"trpc.moox.storage.view.cleanup.timer",
+		"trpc.moox.storage.view.retry_failed.timer",
+	} {
+		registerTimerHandlerService(name, s.Service(name), noop)
+	}
 }
 
 func registerTimerHandlerService(name string, service server.Service, handle func(context.Context, string) error) bool {

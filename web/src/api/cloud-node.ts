@@ -33,6 +33,7 @@ export interface CloudNode {
   heartbeat_interval?: number;
   probe_enabled?: boolean;
   probe_url?: string;
+  cls_topic_id?: string;
   last_heartbeat?: string;
   invalid?: number;
   create_time?: string;

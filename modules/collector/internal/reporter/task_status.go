@@ -25,10 +25,10 @@ const (
 
 // ReportTaskStatusRequest 上报任务状态请求
 type ReportTaskStatusRequest struct {
-	ID     string `json:"id"`      // 任务实例ID（TaskID）
-	NodeID string `json:"node_id"` // 执行节点ID
-	Status int    `json:"status"`  // 状态码
-	Result string `json:"result"`  // 执行结果（可选）
+	InstanceID string `json:"instance_id"` // 任务实例ID（TaskID）
+	NodeID     string `json:"node_id"`     // 执行节点ID
+	Status     int    `json:"status"`      // 状态码
+	Result     string `json:"result"`      // 执行结果（可选）
 }
 
 // ServerResponse 服务端响应结构
@@ -80,10 +80,10 @@ func executeReport(ctx context.Context, taskID string, nodeID string, status int
 
 	// 构建请求体
 	reqBody := &ReportTaskStatusRequest{
-		ID:     taskID,
-		NodeID: nodeID,
-		Status: status,
-		Result: result,
+		InstanceID: taskID,
+		NodeID:     nodeID,
+		Status:     status,
+		Result:     result,
 	}
 
 	data, err := json.Marshal(reqBody)

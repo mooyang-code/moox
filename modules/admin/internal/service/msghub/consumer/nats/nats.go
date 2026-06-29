@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"fmt"
+	"trpc.group/trpc-go/trpc-go/log"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/msghub/consumer/registry"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/msghub/types"
 	"github.com/nats-io/nats.go"
@@ -73,15 +74,15 @@ func (c *NATSConsumer) Subscribe(ctx context.Context) error {
 		nats.ReconnectWait(1 * time.Second),
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
 			if err != nil {
-				fmt.Printf("NATS消费者连接断开: %v\n", err)
+				log.Warnf("NATS消费者连接断开: %v\n", err)
 			}
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
-			fmt.Printf("NATS消费者重新连接到: %s\n", nc.ConnectedUrl())
+			log.Infof("NATS消费者重新连接到: %s\n", nc.ConnectedUrl())
 		}),
 		nats.ErrorHandler(func(nc *nats.Conn, sub *nats.Subscription, err error) {
 			if err != nil {
-				fmt.Printf("NATS消费者错误: %v\n", err)
+				log.Errorf("NATS消费者错误: %v\n", err)
 			}
 		}),
 	}
@@ -119,7 +120,7 @@ func (c *NATSConsumer) Subscribe(ctx context.Context) error {
 
 	c.subscription = sub
 
-	fmt.Printf("NATS消费者已订阅: 主题=%s, 消费者名=%s\n", c.options.Subject, c.options.ConsumerName)
+	log.Infof("NATS消费者已订阅: 主题=%s, 消费者名=%s\n", c.options.Subject, c.options.ConsumerName)
 	return nil
 }
 
@@ -164,7 +165,7 @@ func (c *NATSConsumer) messageCallback(natsMsg *nats.Msg) {
 	// 执行推送前钩子
 	if c.prePushHook != nil {
 		if err := c.prePushHook(message); err != nil {
-			fmt.Printf("推送前钩子执行失败: %v, 消息ID=%s\n", err, message.ID)
+			log.Errorf("推送前钩子执行失败: %v, 消息ID=%s\n", err, message.ID)
 			_ = natsMsg.Nak()
 			return
 		}
@@ -172,16 +173,16 @@ func (c *NATSConsumer) messageCallback(natsMsg *nats.Msg) {
 
 	// 调用业务处理器
 	if err := c.handler(message); err != nil {
-		fmt.Printf("消息处理失败: %v, 消息ID=%s\n", err, message.ID)
+		log.Errorf("消息处理失败: %v, 消息ID=%s\n", err, message.ID)
 		_ = natsMsg.Nak()
 		return
 	}
 
 	// 确认消息
 	if err := natsMsg.Ack(); err != nil {
-		fmt.Printf("消息确认失败: %v, 消息ID=%s\n", err, message.ID)
+		log.Errorf("消息确认失败: %v, 消息ID=%s\n", err, message.ID)
 	} else {
-		fmt.Printf("消息处理成功: ID=%s, 主题=%s, 序列号=%d\n", message.ID, message.Subject, message.Sequence)
+		log.Infof("消息处理成功: ID=%s, 主题=%s, 序列号=%d\n", message.ID, message.Subject, message.Sequence)
 	}
 }
 
@@ -205,7 +206,7 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 	}
 
 	c.running = true
-	fmt.Printf("NATS消费者已启动: %s\n", c.options.ConsumerName)
+	log.Infof("NATS消费者已启动: %s\n", c.options.ConsumerName)
 	return nil
 }
 
@@ -223,7 +224,7 @@ func (c *NATSConsumer) Stop() error {
 	// 关闭订阅
 	if c.subscription != nil {
 		if err := c.subscription.Drain(); err != nil {
-			fmt.Printf("关闭订阅失败: %v\n", err)
+			log.Errorf("关闭订阅失败: %v\n", err)
 		}
 		c.subscription = nil
 	}
@@ -235,7 +236,7 @@ func (c *NATSConsumer) Stop() error {
 		c.js = nil
 	}
 
-	fmt.Printf("NATS消费者已停止: %s\n", c.options.ConsumerName)
+	log.Infof("NATS消费者已停止: %s\n", c.options.ConsumerName)
 	return nil
 }
 

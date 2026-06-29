@@ -91,6 +91,8 @@ type CloudNode struct {
 	ProbeEnabled bool `gorm:"column:c_probe_enabled;default:true" json:"probe_enabled"`
 	// ProbeURL 探测URL
 	ProbeURL string `gorm:"column:c_probe_url;default:''" json:"probe_url"`
+	// ClsTopicID CLS 日志主题 ID（腾讯云 SCF GetFunction.ClsTopicId）
+	ClsTopicID string `gorm:"column:c_cls_topic_id;size:64;not null;default:''" json:"cls_topic_id"`
 	// RunningVersion 当前运行版本（来自心跳上报）
 	RunningVersion string `gorm:"column:c_running_version;size:50;not null;default:''" json:"running_version"`
 	// IsDeleted 软删除标记

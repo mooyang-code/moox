@@ -161,12 +161,9 @@
                 {{ formatDateTime(record.last_heartbeat) }}
               </template>
             </a-table-column>
-            <a-table-column title="当前运行版本" data-index="running_version" :width="120">
+            <a-table-column title="CLS 主题 ID" data-index="cls_topic_id" :width="180" :ellipsis="true" :tooltip="true">
               <template #cell="{ record }">
-                <a-tag v-if="record.running_version" size="small" color="arcoblue">
-                  {{ record.running_version }}
-                </a-tag>
-                <span v-else>-</span>
+                {{ record.cls_topic_id || '-' }}
               </template>
             </a-table-column>
             <a-table-column title="标签" data-index="tag" :width="80">
@@ -586,8 +583,8 @@
             </a-tag>
             <span v-else>-</span>
           </a-descriptions-item>
-          <a-descriptions-item label="版本">
-            {{ selectedNodeDetail.package_version || selectedNodeDetail.running_version || '-' }}
+          <a-descriptions-item label="代码包版本">
+            {{ selectedNodeDetail.package_version || '-' }}
           </a-descriptions-item>
           <a-descriptions-item label="容量">
             {{ selectedNodeDetail.capacity || '-' }}
@@ -612,6 +609,9 @@
             <a-tag bordered size="small" :color="selectedNodeDetail.probe_enabled ? 'green' : 'red'">
               {{ selectedNodeDetail.probe_enabled ? '是' : '否' }}
             </a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="CLS 主题 ID">
+            {{ selectedNodeDetail.cls_topic_id || '-' }}
           </a-descriptions-item>
           <a-descriptions-item label="元数据" :span="2">
             <div v-if="selectedNodeDetail.metadata" style="max-height: 200px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; background: #f6f8fa; padding: 8px; border-radius: 4px;">{{ formatMetadata(selectedNodeDetail.metadata) }}</div>
@@ -806,6 +806,7 @@ interface CloudFunction {
   heartbeat_interval: number;   // 心跳间隔（秒），0表示使用全局默认值
   probe_enabled: boolean;       // 是否启用探测
   probe_url?: string;           // 探测URL
+  cls_topic_id?: string;
   last_heartbeat?: string;
   created_at: string;
   create_time?: string;

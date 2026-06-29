@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_heartbeat_interval INTEGER DEFAULT 10, -- 心跳间隔（秒），0表示使用全局默认值
     c_probe_enabled BOOLEAN DEFAULT true, -- 是否启用探测
     c_probe_url TEXT DEFAULT '', -- 探测URL
+    c_cls_topic_id TEXT NOT NULL DEFAULT '', -- CLS 日志主题 ID（SCF 函数日志投递 TopicId）
     c_is_deleted TEXT NOT NULL DEFAULT 'false', -- 删除标记
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP, -- 修改时间
@@ -719,3 +720,47 @@ CREATE INDEX IF NOT EXISTS idx_host_monitor_history_address_time
     ON t_host_monitor_history(c_host_address, c_collect_time DESC);
 CREATE INDEX IF NOT EXISTS idx_host_monitor_history_collect_time
     ON t_host_monitor_history(c_collect_time DESC);
+
+
+-- ============ 秘钥管理系统表设计 ============
+
+-- ************ 秘钥管理表 ************
+CREATE TABLE IF NOT EXISTS t_secrets (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
+    c_space_id TEXT NOT NULL DEFAULT '',                        -- 空间ID
+    c_secret_id TEXT NOT NULL,                                  -- 秘钥唯一标识 (UUID)
+    c_name TEXT NOT NULL,                                       -- 秘钥名称
+    c_description TEXT NOT NULL DEFAULT '',                     -- 秘钥描述/备注
+    c_category TEXT NOT NULL,                                   -- 秘钥分类: cloud=云厂商, ssh=SSH凭证,
+                                                                --           exchange=交易所, database=数据库,
+                                                                --           jwt=系统令牌, other=其他
+    c_provider TEXT NOT NULL DEFAULT '',                        -- 提供方/来源 (tencent/aliyun/aws/binance/okx等)
+    c_secret_type TEXT NOT NULL DEFAULT 'api_key',              -- 秘钥类型: api_key=API密钥对, password=密码,
+                                                                --           token=访问令牌, certificate=证书,
+                                                                --           ssh_key=SSH密钥, other=其他
+    c_key_id TEXT NOT NULL DEFAULT '',                          -- 公开标识 (SecretId/AppId/Username/API Key)，不脱敏
+    c_secret_value TEXT NOT NULL,                               -- 秘钥值（AES加密存储，返回时脱敏）
+    c_extra_config TEXT NOT NULL DEFAULT '{}',                  -- 额外配置 (JSON: cert_pwd/passphrase/region/permissions等)
+    c_status TEXT NOT NULL DEFAULT 'active',                    -- 状态: active=启用, inactive=禁用
+    c_last_used_at DATETIME,                                    -- 最后使用时间
+    c_last_used_by TEXT NOT NULL DEFAULT '',                    -- 最后使用方（服务/模块名）
+    c_creator TEXT NOT NULL DEFAULT '',                         -- 创建人
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',                 -- 软删除标记
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                 -- 创建时间
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                  -- 修改时间
+);
+
+-- ************ 秘钥管理相关索引 ************
+CREATE INDEX IF NOT EXISTS idx_secrets_space_id ON t_secrets(c_space_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_secret_id_deleted ON t_secrets(c_secret_id, c_is_deleted);
+CREATE INDEX IF NOT EXISTS idx_secrets_category ON t_secrets(c_category);
+CREATE INDEX IF NOT EXISTS idx_secrets_provider ON t_secrets(c_provider);
+CREATE INDEX IF NOT EXISTS idx_secrets_status ON t_secrets(c_status);
+CREATE INDEX IF NOT EXISTS idx_secrets_name ON t_secrets(c_name);
+CREATE INDEX IF NOT EXISTS idx_secrets_deleted ON t_secrets(c_is_deleted);
+CREATE INDEX IF NOT EXISTS idx_secrets_ctime ON t_secrets(c_ctime DESC);
+
+-- ************ 秘钥管理触发器 ************
+DROP TRIGGER IF EXISTS update_secrets_mtime;
+CREATE TRIGGER IF NOT EXISTS update_secrets_mtime AFTER UPDATE ON t_secrets BEGIN
+    UPDATE t_secrets SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;

@@ -21,7 +21,7 @@ func (g *GormStore) UpsertPositions(ctx context.Context, spaceID string, positio
 	}
 	return g.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "c_account_id"}, {Name: "c_symbol"}, {Name: "c_pos_side"}, {Name: "c_is_deleted"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
+		DoUpdates: clause.Assignments(map[string]any{
 			"c_quantity":       gorm.Expr("excluded.c_quantity"),
 			"c_avg_price":      gorm.Expr("excluded.c_avg_price"),
 			"c_leverage":       gorm.Expr("excluded.c_leverage"),

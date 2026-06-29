@@ -101,3 +101,14 @@ bin/moox-cli data csv import \
 - Treat Pebble-backed PrimaryStore as the online ordered fact store. Treat DuckDB as analytical query and versioned wide view storage. Treat Parquet as cold archive. Treat Bleve as text search.
 
 See `references/` for more detailed notes.
+
+### moox-storage 远端 CGO 编译（内部）
+
+维护者专用，见 [skills/dev-helper/SKILL.md](../dev-helper/SKILL.md)。未配置 SSH 目标时脚本会交互提示；Agent 应在对话中向用户询问后以 `--target` 传入，勿写入仓库。
+
+```bash
+# 先配置 MOOX_DEV_SSH_TARGET 或 infra/infra.local.yaml（勿提交密码）
+./skills/dev-helper/scripts/storage-remote-build.sh \
+  --deploy-dir /home/ubuntu/moox \
+  --deploy
+```

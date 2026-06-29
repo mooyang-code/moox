@@ -22,7 +22,7 @@ func (g *GormStore) UpdateAccount(ctx context.Context, spaceID string, a *servic
 	res := g.db.WithContext(ctx).
 		Model(&service.Account{}).
 		Where("c_space_id = ? AND c_account_id = ? AND "+notDeleted(), spaceID, a.AccountID).
-		Updates(map[string]interface{}{
+		Updates(map[string]any{
 			"c_account_name":  a.AccountName,
 			"c_status":        a.Status,
 			"c_is_default":    a.IsDefault,
