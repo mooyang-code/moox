@@ -82,15 +82,15 @@
 
     <a-modal
       v-model:visible="visible"
-      width="820px"
+      width="760px"
       :title="modalTitle"
       :align-center="false"
       :top="'48px'"
       :modal-style="{ maxWidth: 'calc(100vw - 32px)' }"
-      :body-style="{ maxHeight: 'calc(100vh - 176px)', overflowY: 'auto', padding: '20px 24px 88px' }"
+      :body-style="{ maxHeight: 'calc(100vh - 176px)', overflowY: 'auto', padding: '18px 24px 14px' }"
       @ok="submit"
     >
-      <a-form class="deployment-form" :model="form" auto-label-width>
+      <a-form class="deployment-form" :model="form" layout="vertical">
         <a-form-item field="service_name" label="服务名" required>
           <a-input v-model="form.service_name" :disabled="editing" placeholder="例如 storage_access" />
         </a-form-item>
@@ -103,6 +103,12 @@
             <a-option value="internal">internal</a-option>
           </a-select>
         </a-form-item>
+        <a-form-item field="status" label="状态">
+          <a-select v-model="form.status">
+            <a-option value="active">active</a-option>
+            <a-option value="disabled">disabled</a-option>
+          </a-select>
+        </a-form-item>
         <a-form-item field="protocol" label="协议">
           <a-input v-model="form.protocol" placeholder="http" />
         </a-form-item>
@@ -112,26 +118,20 @@
         <a-form-item field="port" label="端口" required>
           <a-input-number v-model="form.port" :min="1" :max="65535" />
         </a-form-item>
-        <a-form-item field="base_url" label="Base URL">
+        <a-form-item class="form-span-2" field="base_url" label="Base URL">
           <a-input v-model="form.base_url" placeholder="留空时按 protocol://host:port 生成" />
         </a-form-item>
-        <a-form-item field="rpc_address" label="RPC 地址">
+        <a-form-item class="form-span-2" field="rpc_address" label="RPC 地址">
           <a-input v-model="form.rpc_address" placeholder="留空时按 host:port 生成" />
         </a-form-item>
-        <a-form-item field="gateway_path" label="网关/RPC Path">
+        <a-form-item class="form-span-2" field="gateway_path" label="网关/RPC Path">
           <a-input v-model="form.gateway_path" placeholder="例如 /api/service 或 trpc.moox.storage.Access" />
         </a-form-item>
-        <a-form-item field="status" label="状态">
-          <a-select v-model="form.status">
-            <a-option value="active">active</a-option>
-            <a-option value="disabled">disabled</a-option>
-          </a-select>
-        </a-form-item>
-        <a-form-item field="description" label="说明">
+        <a-form-item class="form-span-2" field="description" label="说明">
           <a-textarea v-model="form.description" :auto-size="{ minRows: 2, maxRows: 4 }" />
         </a-form-item>
-        <a-form-item field="extra_config" label="扩展 JSON">
-          <a-textarea v-model="form.extra_config" :auto-size="{ minRows: 3, maxRows: 6 }" />
+        <a-form-item class="form-span-2" field="extra_config" label="扩展 JSON">
+          <a-textarea v-model="form.extra_config" :auto-size="{ minRows: 2, maxRows: 5 }" />
         </a-form-item>
       </a-form>
     </a-modal>
@@ -173,7 +173,7 @@ const form = reactive<ServiceDeployment>({
   extra_config: '{}',
 });
 
-const modalTitle = computed(() => (editing.value ? '编辑服务部署信息' : '新增服务部署信息'));
+const modalTitle = computed(() => (editing.value ? '编辑服务部署' : '新增服务部署'));
 
 async function load() {
   loading.value = true;
@@ -308,7 +308,41 @@ onUnmounted(() => {
 }
 
 .deployment-form {
-  padding-bottom: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+  row-gap: 10px;
+  padding-bottom: 0;
+}
+
+.form-span-2 {
+  grid-column: 1 / -1;
+}
+
+.deployment-form :deep(.arco-form-item) {
+  margin-bottom: 0;
+}
+
+.deployment-form :deep(.arco-form-item-label-col) {
+  margin-bottom: 4px;
+}
+
+.deployment-form :deep(.arco-input-number) {
+  width: 100%;
+}
+
+.deployment-form :deep(.arco-textarea-wrapper textarea) {
+  resize: vertical;
+}
+
+@media (max-width: 768px) {
+  .deployment-form {
+    grid-template-columns: 1fr;
+  }
+
+  .form-span-2 {
+    grid-column: auto;
+  }
 }
 
 .filters {
