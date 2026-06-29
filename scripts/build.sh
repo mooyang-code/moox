@@ -56,6 +56,16 @@ build_storage() {
   )
 }
 
+build_web_host() {
+  echo "==> build moox-web-host"
+  (
+    cd "${ROOT}/web-host"
+    GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=0 go build \
+      -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+      -o "${BIN_DIR}/moox-web-host" .
+  )
+}
+
 case "${TARGET_MODULE}" in
   all)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
@@ -85,6 +95,9 @@ case "${TARGET_MODULE}" in
     ;;
   storage)
     build_storage
+    ;;
+  web-host)
+    build_web_host
     ;;
   *)
     echo "unknown build target: ${TARGET_MODULE}" >&2

@@ -44,6 +44,8 @@ message GetTaskRuleListReq {
   string data_type = 2;
   string data_source = 3;
   string enabled = 4;
+  string rule_id = 5;
+  string space_id = 6;
 }
 
 message GetTaskRuleListRsp {
@@ -124,6 +126,7 @@ message TaskInstanceFilter {
   string is_deleted = 8;
   int32 page = 9;
   int32 page_size = 10;
+  string space_id = 11;
 }
 
 message GetTaskInstanceListReq {

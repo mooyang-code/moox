@@ -43,7 +43,7 @@ func NewService(
 
 // GetTaskRuleList 获取任务规则列表。
 func (s *Service) GetTaskRuleList(ctx context.Context, req *pb.GetTaskRuleListReq) (*pb.GetTaskRuleListRsp, error) {
-	rules, err := s.taskRuleSvc.GetTaskRuleList(ctx, req.GetBizType(), req.GetDataType(), req.GetDataSource(), req.GetEnabled())
+	rules, err := s.taskRuleSvc.GetTaskRuleList(ctx, req.GetSpaceId(), req.GetBizType(), req.GetRuleId(), req.GetDataType(), req.GetDataSource(), req.GetEnabled())
 	if err != nil {
 		log.ErrorContextf(ctx, "[CollectMgr] GetTaskRuleList failed: %v", err)
 		return &pb.GetTaskRuleListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询失败")}, nil

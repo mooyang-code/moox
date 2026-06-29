@@ -220,8 +220,13 @@ func (s *TaskInstanceServiceImpl) ListTaskInstances(ctx context.Context, nodeID,
 
 // ListTaskInstancesWithFilter 带筛选条件的分页查询任务实例
 func (s *TaskInstanceServiceImpl) ListTaskInstancesWithFilter(ctx context.Context, filter *pb.TaskInstanceFilter) ([]*pb.TaskInstance, int64, error) {
-	// 空间硬隔离：以 ctx 注入的 space_id 为准，防止前端越权传其他空间
-	spaceID, _ := spacecontext.FromContext(ctx)
+	spaceID := ""
+	if filter != nil {
+		spaceID = filter.GetSpaceId()
+	}
+	if spaceID == "" {
+		spaceID, _ = spacecontext.FromContext(ctx)
+	}
 
 	// 转换 PB filter 为 DAO 过滤器
 	daoFilter := pbFilterToDAOFilter(filter, spaceID)

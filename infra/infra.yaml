@@ -1,16 +1,16 @@
-# MooX 基础设施配置（唯一真相源 - 占位默认值）
-# 真实部署值由 infra/infra.local.yaml 覆盖（gitignored，不入库）。
-# 所有运行时服务、部署脚本、CLI、测试、文档统一通过 pkg/infraconfig 读取此配置，
-# 仓库其它位置不得出现真实 IP/端口。
+# MooX legacy developer infrastructure placeholders.
+# Runtime service deployment topology lives in t_service_deployments and is managed by SysDeploy.
+# This file is retained only for old helper scripts and local placeholders; do not use it as
+# the source of service IP/port/base URL truth.
 
 services:
   storage_access: { host: 127.0.0.1, port: 20201 }   # moox-storage Access 服务
   xdata:          { host: 127.0.0.1, port: 20201 }     # xData 存储服务
   admin_gateway:  { host: 127.0.0.1, port: 11000 }     # moox-admin 网关
-  web_host:       { host: 127.0.0.1, port: 10080 }     # web-host 静态服务
+  web_host:       { host: 127.0.0.1, port: 9527 }      # web-host 静态服务
   trade:          { host: 127.0.0.1, port: 11200 }     # moox-trade 服务
   collector:      { host: 127.0.0.1, port: 0 }          # collector（无固定对外端口时填 0）
 
 remote:
-  host: "<deploy-host>"        # 部署目标机 IP，真实值见 infra.local.yaml
-  ssh:  "ubuntu@<deploy-host>" # 部署 SSH 目标
+  host: "<deploy-host>"        # legacy helper placeholder
+  ssh:  "ubuntu@<deploy-host>" # legacy developer SSH target

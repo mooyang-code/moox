@@ -76,7 +76,7 @@ moox_dev_prompt_ssh_target() {
 
   printf '\n[%s] 未配置 SSH 目标。\n' "${tag}"
   printf '  请使用 SSH 公钥登录；勿将密码写入仓库或脚本。\n'
-  printf '  也可预先设置: MOOX_DEV_SSH_TARGET / infra/infra.local.yaml / %s\n\n' "${MOOX_DEV_ENV_FILE}"
+  printf '  也可预先设置: MOOX_DEV_SSH_TARGET / %s（infra.local 仅 legacy 兼容）\n\n' "${MOOX_DEV_ENV_FILE}"
 
   local input=""
   read -r -p "SSH 目标 (user@host 或 ~/.ssh/config 别名): " input
@@ -87,7 +87,7 @@ moox_dev_prompt_ssh_target() {
   return 0
 }
 
-# 解析顺序: CLI > MOOX_DEV_SSH_TARGET > infra.local.yaml > 交互提示
+# 解析顺序: CLI > MOOX_DEV_SSH_TARGET > legacy infra.local.yaml remote.ssh > 交互提示
 moox_dev_resolve_ssh_target() {
   local root="${1:-}"
   local cli_target="${2:-}"

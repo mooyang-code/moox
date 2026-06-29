@@ -47,29 +47,24 @@ web-host/
 2. 前端构建完成后，在本目录运行 `make build`
 3. 生成的 `moox-web` 二进制文件包含了所有前端资源
 
-## 管理台 API 网关
+## API 访问方式
 
-Web Host 对浏览器只暴露两个短路径前缀：
+Web Host 只负责提供前端静态资源，不再代理 API 请求。浏览器访问管理台时，前端会从当前 URL 读取 hostname，并使用固定网关端口请求后台：
 
-- `/api/admin/{service}/{method}`：转发到 Control API `/api/admin/{service}/{method}`。
-- `/api/storage/{metadata|access|view}/{method}`：转发到 Storage tRPC HTTP 服务。
+- 管理台请求：`http(s)://{当前hostname}:11000/api/admin/{service}/{method}`
+- 后台服务请求：`/api/service/{service}/{method}`，由 SCF / collector 等后台组件调用
 
-默认目标地址：
+`web-host` 收到 `/api/*` 请求会返回 404，用于暴露错误的代理依赖。
+
+默认配置：
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `MOOX_WEB_HOST_ADDR` | `:10080` | Web Host 监听地址 |
-| `MOOX_ADMIN_GATEWAY_URL` | `http://127.0.0.1:11000` | Admin HTTP Gateway |
-| `MOOX_STORAGE_METADATA_URL` | `http://127.0.0.1:20200` | Storage Metadata |
-| `MOOX_STORAGE_ACCESS_URL` | `http://127.0.0.1:20201` | Storage Access |
-| `MOOX_STORAGE_VIEW_URL` | `http://127.0.0.1:20202` | Storage DataView |
 
 示例：
 
 ```bash
-MOOX_ADMIN_GATEWAY_URL=http://127.0.0.1:11000 \
-MOOX_STORAGE_METADATA_URL=http://127.0.0.1:20200 \
-MOOX_STORAGE_ACCESS_URL=http://127.0.0.1:20201 \
-MOOX_STORAGE_VIEW_URL=http://127.0.0.1:20202 \
+MOOX_WEB_HOST_ADDR=:10080 \
 make run
 ```

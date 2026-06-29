@@ -1,4 +1,5 @@
 import { api } from '@/api/config';
+import { gatewayURL, gatewayWebSocketURL } from '@/api/gateway';
 
 // ========== 类型定义 ==========
 
@@ -56,7 +57,7 @@ export interface SftpListResult {
   current_dir: string;
 }
 
-// SSH 直连端点已并入统一网关 rawhandler，走同源 gateway（vite proxy 转发 /api/admin）
+// SSH 直连端点已并入统一网关 rawhandler，前端直连固定网关端口。
 
 // ========== 主机配置 ==========
 
@@ -102,15 +103,14 @@ export const sftpDelete = (sessionId: string, path: string) =>
 
 // 文件下载/上传走统一网关 rawhandler（/api/admin/ssh/SftpDownload|SftpUpload）
 export const getSftpDownloadUrl = (sessionId: string, path: string) =>
-  `/api/admin/ssh/SftpDownload?session_id=${sessionId}&path=${encodeURIComponent(path)}`;
+  gatewayURL(`/api/admin/ssh/SftpDownload?session_id=${sessionId}&path=${encodeURIComponent(path)}`);
 
 export const getSftpUploadUrl = () =>
-  `/api/admin/ssh/SftpUpload`;
+  gatewayURL('/api/admin/ssh/SftpUpload');
 
-// WebSocket 连接地址（统一网关 rawhandler，ws 协议需用同源 host）
+// WebSocket 连接地址（统一网关 rawhandler，ws 协议使用固定网关端口）
 export const getSSHWebSocketUrl = (sessionId: string, w: number, h: number) => {
-  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${window.location.host}/api/admin/ssh/WsConnect?session_id=${sessionId}&w=${w}&h=${h}`;
+  return gatewayWebSocketURL(`/api/admin/ssh/WsConnect?session_id=${sessionId}&w=${w}&h=${h}`);
 };
 
 // ========== 会话管理 ==========

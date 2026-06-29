@@ -705,15 +705,9 @@ const getTaskList = async () => {
   loading.value = true;
   try {
     const params: any = {
-      page: pagination.value.current,
-      size: pagination.value.pageSize,
+      space_id: selectedSpaceId.value || '',
       biz_type: currentBizType.value
     };
-
-    // Always include the selected Space from the global header selector.
-    if (selectedSpaceId.value) {
-      params.space_id = selectedSpaceId.value;
-    }
 
     if (form.value.ruleId) params.rule_id = form.value.ruleId;
     if (form.value.dataType) params.data_type = form.value.dataType;

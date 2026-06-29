@@ -34,9 +34,7 @@ scripts/build.sh cli collector
 bin/moox-cli collector function package \
   --collector-root modules/collector \
   --version vYYYYMMDDHHMM \
-  --out /tmp/collector-scf-vYYYYMMDDHHMM.zip \
-  --set control.server_url=http://<control-host>:11000 \
-  --set storage.server_url=http://<storage-host>:20201
+  --out /tmp/collector-scf-vYYYYMMDDHHMM.zip
 ```
 
 Alternative module-local build:
@@ -114,13 +112,13 @@ bin/moox-cli collector function publish \
   --package-type data_collector \
   --biz-type data_collector \
   --node-type scf-event \
-  --set control.server_url=http://<control-host>:11000 \
-  --set storage.server_url=http://<storage-host>:20201 \
   --function-config timeout=60 \
   --env MOOX_ENV=prod
 ```
 
 If a zip already exists, pass `--zip /path/to/package.zip`.
+
+Storage/Admin runtime addresses are no longer injected at package time. They come from control-plane keepalive payload `service_deployments`; update `t_service_deployments` through the management console before probing SCF nodes.
 
 Watch the returned `upload_job_id`, `package_id`, and `create_job_id`. If `package_id` is missing after polling, inspect control-plane async task logs and `t_function_packages`.
 

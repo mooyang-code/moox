@@ -1,14 +1,14 @@
-# infra/infra.local.yaml 模板 —— 复制为 infra/infra.local.yaml 并填入真实值。
-# infra.local.yaml 已被 .gitignore 忽略，是仓库中唯一允许存放真实 IP/凭证的文件。
+# infra/infra.local.yaml legacy 模板。
+# infra.local.yaml 已被 .gitignore 忽略，仅用于兼容旧开发脚本的 SSH 目标。
 #
-# 仅需填写要覆盖 infra.yaml 默认值的字段；未列出的字段沿用默认值。
+# 不要把服务部署拓扑写到这里；服务 IP/port/base URL 统一写入 t_service_deployments。
 # 切勿将本文件复制为 infra.local.yaml 后提交；切勿写入 SSH 密码。
 
 services:
   storage_access: { host: "<deploy-host>", port: 20201 }
   xdata:          { host: "<deploy-host>", port: 20201 }
   admin_gateway:  { host: "<deploy-host>", port: 11000 }
-  web_host:       { host: "<deploy-host>", port: 10080 }
+  web_host:       { host: "<deploy-host>", port: 9527 }
 
 remote:
   host: "<deploy-host>"

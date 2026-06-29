@@ -1,11 +1,12 @@
 import axios from "axios";
 import router from "@/router";
 import { Message } from "@arco-design/web-vue";
+import { gatewayOrigin } from "@/api/gateway";
 import { isRetInfoSuccess, isAuthExpiredCode } from "@/api/ret-info";
 
 // 创建axios实例
 const service = axios.create({
-  baseURL: ""
+  baseURL: gatewayOrigin()
 });
 // 请求拦截器
 service.interceptors.request.use(

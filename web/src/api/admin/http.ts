@@ -1,10 +1,11 @@
 import axios from 'axios';
 import { Message } from '@arco-design/web-vue';
+import { gatewayOrigin } from '@/api/gateway';
 import { isRetInfoSuccess } from '../ret-info';
 import type { ControlResponse } from './types';
 
 const adminClient = axios.create({
-  baseURL: '',
+  baseURL: gatewayOrigin(),
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 });

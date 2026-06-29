@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { gatewayURL } from '@/api/gateway';
 import { isAuthExpiredCode, isRetInfoSuccess } from './ret-info';
 import { APP_AUTH_INFO, appAuthHeaders } from './storage/auth';
 
@@ -7,7 +8,7 @@ export const AUTH_INFO = APP_AUTH_INFO;
 
 // 创建axios实例
 export const api = axios.create({
-  baseURL: '/api/admin',
+  baseURL: gatewayURL('/api/admin'),
   timeout: 10000, // 10秒超时
   headers: {
     'Content-Type': 'application/json',

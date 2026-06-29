@@ -83,8 +83,7 @@ fi
 
 REMOTE_SERVER="$1"
 
-# 从中央 infra 配置获取真实 URL（仓库内 config 为占位 127.0.0.1，部署时注入真实值）。
-# 仅当 infra/infra.local.yaml 存在时生效，不影响占位默认。
+# Legacy helper: 仅为旧脚本导出 SSH/占位变量。服务部署拓扑以 t_service_deployments 为准。
 if [ -f "$PROJECT_DIR/../../scripts/infra-env.sh" ]; then
     . "$PROJECT_DIR/../../scripts/infra-env.sh" 2>/dev/null || true
 fi

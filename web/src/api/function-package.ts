@@ -1,4 +1,5 @@
 import { api } from '@/api/config';
+import { gatewayURL } from '@/api/gateway';
 import { isRetInfoSuccess } from '@/api/ret-info';
 export { withOptionalSpace } from '@/api/space-context';
 
@@ -176,9 +177,9 @@ export const downloadPackageByURL = async (packageId: string): Promise<void> => 
     const { download_url, filename } = downloadInfo;
     console.log(`获取到下载URL: ${download_url}, 文件名: ${filename}`);
 
-    // 2. download_url 已是相对网关路径（/api/admin/fileserver/download?file=...&token=...）
-    // 前端同源访问统一网关，无需拼接独立端口
-    const fullDownloadURL = download_url;
+    // 2. download_url 是网关路径（/api/admin/fileserver/download?file=...&token=...）
+    // 前端直连固定网关端口，不再经过 web-host 代理。
+    const fullDownloadURL = gatewayURL(download_url);
 
     console.log(`构建的完整下载URL: ${fullDownloadURL}`);
 

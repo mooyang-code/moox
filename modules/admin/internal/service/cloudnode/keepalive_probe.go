@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -72,7 +73,7 @@ func (s *ServiceImpl) RunKeepaliveProbe(ctx context.Context) error {
 				if node.NodeType == model.NodeTypeSCFWeb {
 					ok = s.probeHTTP(ctx, node, serverIP, serverPort)
 				} else {
-					eventData := buildKeepaliveEventData(serverIP, serverPort, node.NodeID)
+					eventData := s.buildKeepaliveEventData(ctx, serverIP, serverPort, node.NodeID)
 					ok = s.invokeKeepalive(ctx, node, eventData)
 				}
 				s.probeStore.UpdateProbe(node.NodeID, probeTime, ok)
@@ -145,26 +146,41 @@ func (s *ServiceImpl) updateSCFEventHeartbeatFromKeepalive(node *model.CloudNode
 	})
 }
 
+func (s *ServiceImpl) buildKeepaliveEventData(ctx context.Context, serverIP string, serverPort int, nodeID string) map[string]interface{} {
+	payload := buildKeepaliveEventData(serverIP, serverPort, nodeID)
+	if s == nil || s.deployments == nil {
+		return payload
+	}
+	deployments, err := s.deployments.GetServiceDeployments(ctx)
+	if err != nil {
+		log.WarnContextf(ctx, "[Keepalive] Load service deployments failed: %v", err)
+		return payload
+	}
+	if len(deployments) == 0 {
+		return payload
+	}
+	payload["service_deployments"] = deployments
+	applyRuntimeDeploymentOverrides(payload, deployments)
+	return payload
+}
+
 func buildKeepaliveEventData(serverIP string, serverPort int, nodeID string) map[string]interface{} {
 	timestamp := time.Now().Format(time.RFC3339)
 	requestID := fmt.Sprintf("keepalive_%d", time.Now().UnixNano())
 	internalIP := common.GetInternalIP()
-	xDataURL := config.GetXDataURL()
 	payload := map[string]interface{}{
-		"action":             keepaliveAction,
-		"timestamp":          timestamp,
-		"request_id":         requestID,
-		"source":             keepaliveSource,
+		"action":     keepaliveAction,
+		"timestamp":  timestamp,
+		"request_id": requestID,
+		"source":     keepaliveSource,
 		// 心跳回包通道：SCF collector 通过 server_ip/server_port 顶层字段更新本地
 		// ServerInfo，进而主动向控制面上报心跳拉取任务实例。历史故障：keepalive
 		// 事件只下发 moox_server_url（URL 字符串），collector 不解析，导致 SCF 冷
 		// 启动后 ServerInfo 为空、ReportHeartbeat 直接 return nil，任务列表永不
 		// 刷新，K线停采。此处与 task 事件字段保持一致，作为主通道。
-		"server_ip":          serverIP,
-		"server_port":        serverPort,
-		"moox_server_url":    fmt.Sprintf("http://%s:%d", serverIP, serverPort),
-		"storage_server_url": xDataURL,
-		"storage_server_rpc": buildStorageRPCTarget(xDataURL, 20102),
+		"server_ip":       serverIP,
+		"server_port":     serverPort,
+		"moox_server_url": fmt.Sprintf("http://%s:%d", serverIP, serverPort),
 	}
 	data := map[string]interface{}{
 		"internal_ip": internalIP,
@@ -179,6 +195,58 @@ func buildKeepaliveEventData(serverIP string, serverPort int, nodeID string) map
 	return payload
 }
 
+func applyRuntimeDeploymentOverrides(payload map[string]interface{}, deployments map[string]interface{}) {
+	if serviceGatewayURL := deploymentBaseURL(deployments, "service_gateway", "admin_gateway"); serviceGatewayURL != "" {
+		payload["moox_server_url"] = serviceGatewayURL
+		if host, port, ok := parseDeploymentURL(serviceGatewayURL); ok {
+			payload["server_ip"] = host
+			payload["server_port"] = port
+			if data, ok := payload["data"].(map[string]interface{}); ok {
+				data["public_ip"] = host
+			}
+		}
+	}
+	if storageURL := deploymentBaseURL(deployments, "storage_access"); storageURL != "" {
+		payload["storage_server_url"] = storageURL
+	}
+}
+
+func deploymentBaseURL(deployments map[string]interface{}, names ...string) string {
+	for _, name := range names {
+		raw, ok := deployments[name]
+		if !ok {
+			continue
+		}
+		switch item := raw.(type) {
+		case map[string]interface{}:
+			if baseURL, ok := item["base_url"].(string); ok && baseURL != "" {
+				return strings.TrimRight(baseURL, "/")
+			}
+		case map[string]string:
+			if baseURL := item["base_url"]; baseURL != "" {
+				return strings.TrimRight(baseURL, "/")
+			}
+		}
+	}
+	return ""
+}
+
+func parseDeploymentURL(raw string) (string, int, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return "", 0, false
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port <= 0 {
+		return "", 0, false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", 0, false
+	}
+	return host, port, true
+}
+
 func getServerAddress() (string, int) {
 	port := config.GetGatewayPort()
 	if port == 0 {
@@ -190,23 +258,6 @@ func getServerAddress() (string, int) {
 	return common.GetPublicIP(), port
 }
 
-// buildStorageRPCTarget 从 HTTP URL 提取 host IP，拼接为 ip://host:rpcPort
-// 输入 "http://10.0.0.1:8080", 20102 → 输出 "ip://10.0.0.1:20102"
-func buildStorageRPCTarget(httpURL string, rpcPort int) string {
-	if httpURL == "" {
-		return ""
-	}
-	u, err := url.Parse(httpURL)
-	if err != nil {
-		return ""
-	}
-	host := u.Hostname()
-	if host == "" {
-		return ""
-	}
-	return fmt.Sprintf("ip://%s:%d", host, rpcPort)
-}
-
 // probeHTTP 对 scf-web 节点发起 HTTP POST /probe 请求进行探测
 func (s *ServiceImpl) probeHTTP(ctx context.Context, node *model.CloudNode, serverIP string, serverPort int) bool {
 	probeURL, err := extractProbeURL(node)
@@ -216,7 +267,7 @@ func (s *ServiceImpl) probeHTTP(ctx context.Context, node *model.CloudNode, serv
 	}
 
 	// 构造与 factor-calculator /probe 接口兼容的请求体
-	eventData := buildKeepaliveEventData(serverIP, serverPort, node.NodeID)
+	eventData := s.buildKeepaliveEventData(ctx, serverIP, serverPort, node.NodeID)
 	body, err := json.Marshal(eventData)
 	if err != nil {
 		log.WarnContextf(ctx, "[Keepalive] HTTP probe marshal body failed: node_id=%s, error=%v", node.NodeID, err)

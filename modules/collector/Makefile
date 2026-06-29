@@ -360,7 +360,7 @@ build-scf:
 	@# 检查是否提供了版本号参数
 	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
 		echo "❌ 错误: 请提供版本号参数"; \
-		echo "使用方法: make build-scf v0.0.1"; \
+			echo "使用方法: make build-scf v0.0.1"; \
 		exit 1; \
 	fi
 	@# 获取版本号参数（第一个非目标参数）
@@ -385,11 +385,11 @@ build-scf:
 			/^[^[:space:]].*:/ && $$0 !~ /^system:/ { in_system=0 } \
 			in_system && !done && /^[[:space:]]+version:/ { sub(/version: .*/, "version: \"" v "\""); done=1 } \
 			{ print }' scf-build/config.yaml > scf-build/config.yaml.tmp; \
-		mv scf-build/config.yaml.tmp scf-build/config.yaml; \
-		echo "✅ 配置文件版本号已更新为: $$SCF_VERSION"; \
-	else \
-		echo "⚠️  警告: config.yaml 文件不存在"; \
-	fi; \
+			mv scf-build/config.yaml.tmp scf-build/config.yaml; \
+			echo "✅ 配置文件版本号已更新为: $$SCF_VERSION"; \
+		else \
+			echo "⚠️  警告: config.yaml 文件不存在"; \
+		fi; \
 	cp main scf-build/; \
 	echo "📦 打包云函数..."; \
 	cd scf-build && if [ -d sources ]; then zip -r ../collector-scf-$$SCF_VERSION.zip main *.yaml sources; else zip -r ../collector-scf-$$SCF_VERSION.zip main *.yaml; fi; \

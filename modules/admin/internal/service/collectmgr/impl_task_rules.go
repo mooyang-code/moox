@@ -27,9 +27,11 @@ func NewTaskRulesServiceImpl(
 	}
 }
 
-func (s *TaskRulesServiceImpl) GetTaskRuleList(ctx context.Context, bizType, dataType, dataSource, enabled string) ([]*pb.TaskRule, error) {
-	spaceID, _ := spacecontext.FromContext(ctx)
-	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, spaceID, bizType, dataType, dataSource, enabled)
+func (s *TaskRulesServiceImpl) GetTaskRuleList(ctx context.Context, spaceID, bizType, ruleID, dataType, dataSource, enabled string) ([]*pb.TaskRule, error) {
+	if spaceID == "" {
+		spaceID, _ = spacecontext.FromContext(ctx)
+	}
+	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, spaceID, bizType, ruleID, dataType, dataSource, enabled)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get task rules list: %w", err)
 	}

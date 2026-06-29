@@ -1,0 +1,35 @@
+-- Default system service deployments for the current bootstrap environment. Safe to replay.
+-- For a new host, update rows through SysDeploy/UI after admin is reachable; do not use infra.local.yaml.
+INSERT OR IGNORE INTO t_service_deployments
+(c_service_name, c_service_kind, c_protocol, c_host, c_port, c_base_url, c_rpc_address, c_gateway_path, c_scope, c_status, c_description, c_extra_config, c_is_deleted)
+VALUES
+('admin_gateway', 'gateway', 'http', '106.53.107.122', 11000, 'http://106.53.107.122:11000', '106.53.107.122:11000', '/api/admin', 'public', 'active', '管理台请求统一入口，前端直接访问 /api/admin/*', '{}', 'false'),
+('service_gateway', 'gateway', 'http', '106.53.107.122', 11000, 'http://106.53.107.122:11000', '106.53.107.122:11000', '/api/service', 'public', 'active', '后台/SCF 请求统一入口，使用 HMAC 鉴权访问 /api/service/*', '{}', 'false'),
+('web_host', 'frontend', 'http', '106.53.107.122', 9527, 'http://106.53.107.122:9527', '106.53.107.122:9527', '', 'public', 'active', '管理台静态资源服务，仅承载前端页面，不代理 API', '{}', 'false'),
+('storage_metadata', 'storage', 'http', '106.53.107.122', 20200, 'http://106.53.107.122:20200', '106.53.107.122:20200', 'trpc.moox.storage.Metadata', 'public', 'active', 'moox-storage 元数据 HTTP 服务', '{}', 'false'),
+('storage_access', 'storage', 'http', '106.53.107.122', 20201, 'http://106.53.107.122:20201', '106.53.107.122:20201', 'trpc.moox.storage.Access', 'public', 'active', 'moox-storage 数据写入/读取 HTTP 服务，SCF 采集写入优先直连', '{}', 'false'),
+('storage_view', 'storage', 'http', '106.53.107.122', 20202, 'http://106.53.107.122:20202', '106.53.107.122:20202', 'trpc.moox.storage.DataView', 'public', 'active', 'moox-storage 数据视图 HTTP 服务', '{}', 'false'),
+('storage_metadata_trpc', 'storage_rpc', 'trpc', '106.53.107.122', 20100, 'trpc://106.53.107.122:20100', '106.53.107.122:20100', 'trpc.moox.storage.Metadata', 'public', 'active', 'moox-storage 元数据 tRPC 服务', '{}', 'false'),
+('storage_primary_trpc', 'storage_rpc', 'trpc', '106.53.107.122', 20101, 'trpc://106.53.107.122:20101', '106.53.107.122:20101', 'trpc.moox.storage.PrimaryStore', 'public', 'active', 'moox-storage PrimaryStore tRPC 服务', '{}', 'false'),
+('storage_access_trpc', 'storage_rpc', 'trpc', '106.53.107.122', 20102, 'trpc://106.53.107.122:20102', '106.53.107.122:20102', 'trpc.moox.storage.Access', 'public', 'active', 'moox-storage Access tRPC 服务', '{}', 'false'),
+('storage_view_trpc', 'storage_rpc', 'trpc', '106.53.107.122', 20103, 'trpc://106.53.107.122:20103', '106.53.107.122:20103', 'trpc.moox.storage.DataView', 'public', 'active', 'moox-storage DataView tRPC 服务', '{}', 'false'),
+('collector_api', 'service_api', 'http', '127.0.0.1', 11001, 'http://127.0.0.1:11001', '127.0.0.1:11001', 'trpc.moox.api.stdhttp', 'internal', 'active', '采集控制 API 内部服务', '{}', 'false'),
+('admin_auth', 'admin_rpc', 'http', '127.0.0.1', 11100, 'http://127.0.0.1:11100', '127.0.0.1:11100', 'trpc.moox.infra.Auth', 'internal', 'active', '认证 RPC 服务', '{}', 'false'),
+('dnsproxy', 'admin_rpc', 'http', '127.0.0.1', 11101, 'http://127.0.0.1:11101', '127.0.0.1:11101', 'trpc.moox.infra.Dns', 'internal', 'active', 'DNS 代理 RPC 服务', '{}', 'false'),
+('asynctask', 'admin_rpc', 'http', '127.0.0.1', 11102, 'http://127.0.0.1:11102', '127.0.0.1:11102', 'trpc.moox.infra.AsyncTask', 'internal', 'active', '异步任务 RPC 服务', '{}', 'false'),
+('monitor', 'admin_rpc', 'http', '127.0.0.1', 11103, 'http://127.0.0.1:11103', '127.0.0.1:11103', 'trpc.moox.ops.Monitor', 'internal', 'active', '资源监控 RPC 服务', '{}', 'false'),
+('collectmgr', 'admin_rpc', 'http', '127.0.0.1', 11104, 'http://127.0.0.1:11104', '127.0.0.1:11104', 'trpc.moox.collect.CollectMgr', 'internal', 'active', '采集管理 RPC 服务', '{}', 'false'),
+('cloudnode', 'admin_rpc', 'http', '127.0.0.1', 11105, 'http://127.0.0.1:11105', '127.0.0.1:11105', 'trpc.moox.collect.CloudNodeMgr', 'internal', 'active', '云节点 RPC 服务', '{}', 'false'),
+('ssh', 'admin_rpc', 'http', '127.0.0.1', 11106, 'http://127.0.0.1:11106', '127.0.0.1:11106', 'trpc.moox.ops.Ssh', 'internal', 'active', 'SSH 管理 RPC 服务', '{}', 'false'),
+('space', 'admin_rpc', 'http', '127.0.0.1', 11107, 'http://127.0.0.1:11107', '127.0.0.1:11107', 'trpc.moox.admin.SpaceMgr', 'internal', 'active', '空间管理 RPC 服务', '{}', 'false'),
+('secret', 'admin_rpc', 'http', '127.0.0.1', 11108, 'http://127.0.0.1:11108', '127.0.0.1:11108', 'trpc.moox.ops.SecretMgr', 'internal', 'active', '秘钥管理 RPC 服务', '{}', 'false'),
+('sysdeploy', 'admin_rpc', 'http', '127.0.0.1', 11109, 'http://127.0.0.1:11109', '127.0.0.1:11109', 'trpc.moox.ops.SysDeploy', 'internal', 'active', '系统服务部署信息 RPC 服务', '{}', 'false'),
+('trade_account', 'trade', 'http', '127.0.0.1', 11200, 'http://127.0.0.1:11200', '127.0.0.1:11200', 'trpc.moox.trade.AccountSvc', 'internal', 'active', '交易账户服务', '{}', 'false'),
+('trade_balance', 'trade', 'http', '127.0.0.1', 11201, 'http://127.0.0.1:11201', '127.0.0.1:11201', 'trpc.moox.trade.BalanceSvc', 'internal', 'active', '交易余额服务', '{}', 'false'),
+('trade_fund', 'trade', 'http', '127.0.0.1', 11202, 'http://127.0.0.1:11202', '127.0.0.1:11202', 'trpc.moox.trade.FundSvc', 'internal', 'active', '交易资金服务', '{}', 'false'),
+('trade_apikey', 'trade', 'http', '127.0.0.1', 11203, 'http://127.0.0.1:11203', '127.0.0.1:11203', 'trpc.moox.trade.ApiKeySvc', 'internal', 'active', '交易 API Key 服务', '{}', 'false'),
+('trade_channel', 'trade', 'http', '127.0.0.1', 11204, 'http://127.0.0.1:11204', '127.0.0.1:11204', 'trpc.moox.trade.ChannelSvc', 'internal', 'active', '交易通道服务', '{}', 'false'),
+('trade_tradeop', 'trade', 'http', '127.0.0.1', 11205, 'http://127.0.0.1:11205', '127.0.0.1:11205', 'trpc.moox.trade.TradeOpSvc', 'internal', 'active', '交易操作服务', '{}', 'false'),
+('trade_order', 'trade', 'http', '127.0.0.1', 11206, 'http://127.0.0.1:11206', '127.0.0.1:11206', 'trpc.moox.trade.OrderSvc', 'internal', 'active', '订单服务', '{}', 'false'),
+('trade_tradeq', 'trade', 'http', '127.0.0.1', 11207, 'http://127.0.0.1:11207', '127.0.0.1:11207', 'trpc.moox.trade.TradeQuerySvc', 'internal', 'active', '交易查询服务', '{}', 'false'),
+('trade_position', 'trade', 'http', '127.0.0.1', 11208, 'http://127.0.0.1:11208', '127.0.0.1:11208', 'trpc.moox.trade.PositionSvc', 'internal', 'active', '持仓服务', '{}', 'false');

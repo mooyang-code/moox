@@ -11,19 +11,6 @@ export default defineConfig(({ mode }) => {
   const root = process.cwd();
   // 获取跟路径对应的文件
   const env: any = loadEnv(mode, root);
-  // 后端服务 IP 不写死：从浏览器访问 dev server 时的请求 Host 头取 hostname，
-  // 使 /api/admin（moox 控制面 11000）与 /trpc.moox.server（web-host 10080）保持同一 IP。
-  // 浏览器访问 localhost:9527 → 代理到 localhost:11000/10080；
-  // 浏览器访问 192.168.x.x:9527 → 代理到 192.168.x.x:11000/10080。
-  const browserHostName = (req: any) => {
-    const host = (req?.headers?.host || "").split(":")[0];
-    return host || "localhost";
-  };
-  // 动态代理目标：优先用 env 覆盖，否则用浏览器请求 host + 端口。
-  const dynamicRouter = (port: number, overrideKey: string) => (req: any) =>
-    env[overrideKey] || `http://${browserHostName(req)}:${port}`;
-  const controlTarget = env.VITE_CONTROL_API_TARGET || "http://localhost:11000";
-  const webHostTarget = env.VITE_WEB_HOST_TARGET || "http://localhost:10080";
 
   return {
     base: mode === 'production' ? './' : '/',
@@ -109,23 +96,7 @@ export default defineConfig(({ mode }) => {
     server: {
       // host: "0.0.0.0",
       port: 9527,
-      open: false,
-      // 为开发服务器配置管理台 API 代理规则。
-      proxy: {
-        "/api/admin": {
-          target: controlTarget,
-          changeOrigin: true,
-          secure: false,
-          ws: true,
-          router: dynamicRouter(11000, "VITE_CONTROL_API_TARGET")
-        },
-        "/trpc.moox.server": {
-          target: webHostTarget,
-          changeOrigin: true,
-          secure: false,
-          router: dynamicRouter(10080, "VITE_WEB_HOST_TARGET")
-        }
-      }
+      open: false
     }
   };
 });

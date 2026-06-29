@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/executor"
@@ -75,6 +76,13 @@ func (h *CloudFunctionHandler) HandleRequest(ctx context.Context, event json.Raw
 }
 
 func (h *CloudFunctionHandler) applyRuntimeConfig(ctx context.Context, event model.CloudFunctionEvent, funcCtx *functioncontext.FunctionContext) {
+	if serviceURL := deploymentBaseURL(event.ServiceDeployments, "service_gateway", "admin_gateway"); serviceURL != "" {
+		if ip, port, ok := parseServerFromMooxURL(serviceURL); ok {
+			config.UpdateServerInfo(ip, port)
+			log.DebugContextf(ctx, "[CloudFunction] runtime server updated from service_deployments: %s:%d", ip, port)
+		}
+	}
+
 	if event.ServerIP != "" && event.ServerPort > 0 {
 		config.UpdateServerInfo(event.ServerIP, event.ServerPort)
 		log.DebugContextf(ctx, "[CloudFunction] runtime server updated: %s:%d", event.ServerIP, event.ServerPort)
@@ -84,6 +92,14 @@ func (h *CloudFunctionHandler) applyRuntimeConfig(ctx context.Context, event mod
 		// 冷启动后 ServerInfo 为空导致 ReportHeartbeat 静默 return nil。
 		config.UpdateServerInfo(ip, port)
 		log.DebugContextf(ctx, "[CloudFunction] runtime server updated from moox_server_url: %s:%d", ip, port)
+	}
+
+	if storageURL := deploymentBaseURL(event.ServiceDeployments, "storage_access"); storageURL != "" {
+		config.UpdateStorageURL(storageURL)
+		log.DebugContextf(ctx, "[CloudFunction] runtime storage updated from service_deployments: %s", storageURL)
+	} else if event.StorageServerURL != "" {
+		config.UpdateStorageURL(event.StorageServerURL)
+		log.DebugContextf(ctx, "[CloudFunction] runtime storage updated from storage_server_url: %s", event.StorageServerURL)
 	}
 
 	nodeID := ""
@@ -100,6 +116,22 @@ func (h *CloudFunctionHandler) applyRuntimeConfig(ctx context.Context, event mod
 		config.UpdateNodeInfo(nodeID, version)
 		log.DebugContextf(ctx, "[CloudFunction] runtime node updated: nodeID=%s", nodeID)
 	}
+}
+
+func deploymentBaseURL(deployments map[string]model.ServiceDeployment, names ...string) string {
+	for _, name := range names {
+		item, ok := deployments[name]
+		if !ok {
+			continue
+		}
+		if item.BaseURL != "" {
+			return strings.TrimRight(item.BaseURL, "/")
+		}
+		if item.Protocol != "" && item.Host != "" && item.Port > 0 {
+			return fmt.Sprintf("%s://%s:%d", item.Protocol, item.Host, item.Port)
+		}
+	}
+	return ""
 }
 
 // parseServerFromMooxURL 从 moox_server_url（形如 http://ip:port）解析出 ip 和 port。

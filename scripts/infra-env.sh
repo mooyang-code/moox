@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# scripts/infra-env.sh —— source 此脚本即可从 infra/infra*.yaml 获取部署/服务变量。
+# scripts/infra-env.sh —— legacy helper: 从 infra/infra*.yaml 获取旧开发脚本变量。
 #   source scripts/infra-env.sh
 #
-# 导出变量（仅真实值，占位值不导出）：
+# 导出变量（仅真实值，占位值不导出）。运行时服务部署信息请使用 t_service_deployments/SysDeploy。
 #   REMOTE_HOST REMOTE_SSH STORAGE_URL XDATA_URL
 #   ADMIN_GATEWAY_HOST ADMIN_GATEWAY_PORT WEB_HOST_HOST WEB_HOST_PORT
 #   TRADE_HOST TRADE_PORT

@@ -2,8 +2,10 @@ package bootstrap
 
 import (
 	"context"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
+	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/asynctask"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode"
 	cloudnodedao "github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/dao"
@@ -18,6 +20,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/space"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	sshdao "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/dao"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -40,7 +43,7 @@ type Services struct {
 
 	// 各模块服务
 	SpaceMgr     space.Service
-	AsyncTask asynctask.Service
+	AsyncTask    asynctask.Service
 	CloudNodeMgr cloudnode.Service
 
 	// Collector服务实例
@@ -54,6 +57,9 @@ type Services struct {
 
 	// 秘钥管理服务
 	SecretService secret.Service
+
+	// 系统服务部署信息
+	SysDeploy sysdeploy.Service
 
 	// 监控服务
 	Monitor monitor.Service
@@ -71,7 +77,7 @@ func StartBackgroundServices(ctx context.Context, cfg *Config) (*Services, error
 	}
 
 	// 2. 创建核心服务（只创建，不启动）
-	services, err := createCoreServices(dbManager, cfg)
+	services, err := createCoreServices(ctx, dbManager, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +112,7 @@ func initializeDatabase(dbCfg *config.DatabaseConfig) (*database.Manager, error)
 }
 
 // createCoreServices 创建核心服务
-func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, error) {
+func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *Config) (*Services, error) {
 	log.Info("[Bootstrap] 正在创建核心服务...")
 
 	// 创建 Space 服务
@@ -123,6 +129,17 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	cloudNode := cloudnode.NewService(dbManager, asyncTask, cfg.CloudNode)
 	if err := cloudnode.InitKeepaliveInstance(cloudNode); err != nil {
 		return nil, err
+	}
+
+	// 创建系统服务部署信息服务，并写入缺失的默认部署记录。
+	log.Info("[Bootstrap] 正在创建服务部署信息服务...")
+	sysDeployService := sysdeploy.NewService(dbManager)
+	if err := sysDeployService.SeedDefaults(ctx); err != nil {
+		return nil, err
+	}
+	gateway.SetServiceDetailResolver(sysDeployService.ResolveGatewayServiceDetail)
+	if err := applyRuntimeDeploymentConfig(ctx, sysDeployService); err != nil {
+		log.WarnContextf(ctx, "[Bootstrap] 加载服务部署运行时配置失败，将使用本地默认值: %v", err)
 	}
 
 	// 创建Collector服务实例
@@ -163,6 +180,7 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	taskStoreAdapter := collectmgr.NewTaskStoreAdapter(memStore)
 	if serviceImpl, ok := cloudNode.(*cloudnode.ServiceImpl); ok {
 		serviceImpl.SetTaskInstanceStore(taskStoreAdapter)
+		serviceImpl.SetServiceDeploymentProvider(sysDeployService)
 	}
 
 	// 初始化DNSProxy实例（全局单例，供定时器使用）
@@ -188,22 +206,71 @@ func createCoreServices(dbManager *database.Manager, cfg *Config) (*Services, er
 	log.Info("[Bootstrap] 核心服务创建完成")
 	services := &Services{
 		DBManager:             dbManager,
-		SpaceMgr:          spaceService,
-		AsyncTask:      asyncTask,
-		CloudNodeMgr:      cloudNode,
+		SpaceMgr:              spaceService,
+		AsyncTask:             asyncTask,
+		CloudNodeMgr:          cloudNode,
 		TaskRuleService:       taskRuleService,
 		TaskInstanceService:   taskInstanceService,
 		DataTypeConfigService: dataTypeConfigService,
 		TaskPlannerService:    taskPlanner,
 		SSHService:            sshService,
 		SecretService:         secretService,
-		Monitor:        monitorService,
+		SysDeploy:             sysDeployService,
+		Monitor:               monitorService,
 	}
 
 	// 初始化 TaskPlanner 全局实例（供定时器使用）
 	log.Info("[Bootstrap] 正在初始化 TaskPlanner 全局实例...")
 	collectmgr.InitTaskPlannerInstance(taskPlanner)
 	return services, nil
+}
+
+type serviceDeploymentProvider interface {
+	GetServiceDeployments(ctx context.Context) (map[string]interface{}, error)
+}
+
+func applyRuntimeDeploymentConfig(ctx context.Context, provider serviceDeploymentProvider) error {
+	deployments, err := provider.GetServiceDeployments(ctx)
+	if err != nil {
+		return err
+	}
+	if metadataURL := deploymentBaseURL(deployments, "storage_metadata"); metadataURL != "" {
+		config.SetStorageMetadataURL(metadataURL)
+		return nil
+	}
+	if accessURL := deploymentBaseURL(deployments, "storage_access"); accessURL != "" {
+		if metadataURL := metadataURLFromStorageAccessURL(accessURL); metadataURL != "" {
+			config.SetStorageMetadataURL(metadataURL)
+		}
+	}
+	return nil
+}
+
+func deploymentBaseURL(deployments map[string]interface{}, serviceName string) string {
+	raw, ok := deployments[serviceName]
+	if !ok {
+		return ""
+	}
+	switch row := raw.(type) {
+	case map[string]interface{}:
+		if baseURL, ok := row["base_url"].(string); ok {
+			return strings.TrimRight(strings.TrimSpace(baseURL), "/")
+		}
+	case map[string]string:
+		return strings.TrimRight(strings.TrimSpace(row["base_url"]), "/")
+	}
+	return ""
+}
+
+func metadataURLFromStorageAccessURL(accessURL string) string {
+	accessURL = strings.TrimSpace(accessURL)
+	if accessURL == "" {
+		return ""
+	}
+	if strings.Contains(accessURL, ":20201") {
+		return strings.Replace(accessURL, ":20201", ":20200", 1)
+	}
+	return ""
 }
 
 // registerAsyncExecutors 注册所有模块的异步任务处理器
@@ -245,4 +312,3 @@ func startBackgroundWorkers(ctx context.Context, services *Services, workerCount
 
 // startSSHDirectServer 已废弃：SSH 直连端点（WebSocket/SFTP 上传下载）已并入统一网关 rawhandler，
 // 不再需要独立 HTTP 服务（端口 20180）。
-

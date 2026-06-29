@@ -24,6 +24,11 @@ type TaskInstanceStoreGetter interface {
 	IsPlanned() bool
 }
 
+// ServiceDeploymentProvider 提供发给 SCF runtime 的 active 服务部署信息。
+type ServiceDeploymentProvider interface {
+	GetServiceDeployments(ctx context.Context) (map[string]interface{}, error)
+}
+
 // ServiceImpl 实现云节点业务服务。
 type ServiceImpl struct {
 	config *config.Config
@@ -38,6 +43,7 @@ type ServiceImpl struct {
 	heartbeatStore    *HeartbeatStore         // 心跳内存存储
 	probeStore        *ProbeStore             // 保活探测内存存储
 	taskInstanceStore TaskInstanceStoreGetter // 任务实例内存仓库（新增）
+	deployments       ServiceDeploymentProvider
 }
 
 // init 初始化服务（延迟初始化）
@@ -51,6 +57,12 @@ func (s *ServiceImpl) init() {
 func (s *ServiceImpl) SetTaskInstanceStore(store TaskInstanceStoreGetter) {
 	s.taskInstanceStore = store
 	log.Info("[CloudNode] Task instance store injected")
+}
+
+// SetServiceDeploymentProvider 设置服务部署信息 provider，供 keepalive 下发给 SCF。
+func (s *ServiceImpl) SetServiceDeploymentProvider(provider ServiceDeploymentProvider) {
+	s.deployments = provider
+	log.Info("[CloudNode] Service deployment provider injected")
 }
 
 // NewService 创建云节点服务实例

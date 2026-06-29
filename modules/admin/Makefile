@@ -274,7 +274,7 @@ create-windows-scripts:
 	@echo 'echo Service stopped' >> $(PLATFORM_DIR)/stop.bat
 
 # Deploy to remote server
-# SERVER 可省略：未指定时从 infra/infra.local.yaml 读取 remote.ssh（见 scripts/infra-env.sh）。
+# SERVER 可省略：未指定时从 MOOX_DEV_SSH_TARGET 或 legacy infra.local remote.ssh 读取。
 deploy:
 	@SERVER="$(SERVER)"; \
 	if [ -z "$$SERVER" ]; then \
@@ -284,13 +284,13 @@ deploy:
 		fi; \
 	fi; \
 	if [ -z "$$SERVER" ]; then \
-		echo "❌ 请指定服务器地址，或在 infra/infra.local.yaml 配置 remote.ssh"; \
+		echo "❌ 请指定服务器地址，或设置 MOOX_DEV_SSH_TARGET"; \
 		echo "使用方法: make deploy SERVER=user@host [platform]"; \
 		echo "          平台参数可选: linux|darwin"; \
 		echo "示例:"; \
 		echo "  make deploy SERVER=ubuntu@<deploy-host>         # 自动检测平台"; \
 		echo "  make deploy SERVER=ubuntu@<deploy-host> linux   # 指定Linux平台"; \
-		echo "  make deploy                                    # 用 infra.local.yaml 的 remote.ssh"; \
+		echo "  MOOX_DEV_SSH_TARGET=ubuntu@<deploy-host> make deploy"; \
 		exit 1; \
 	fi; \
 	if [ ! -f "./scripts/deploy.sh" ]; then \

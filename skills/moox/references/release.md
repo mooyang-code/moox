@@ -14,10 +14,12 @@ make deploy
 
 Environment variables:
 
-- `REMOTE_HOST`: 部署目标机 IP，默认从 `infra/infra.local.yaml` 的 `remote.host` 读取（见 `scripts/infra-env.sh`）。
-- `REMOTE_SSH`: override full SSH target, 默认从 `infra/infra.local.yaml` 的 `remote.ssh` 读取。
+- `REMOTE_HOST`: 部署目标机 IP；新部署应由初始化流程询问获得。
+- `REMOTE_SSH`: override full SSH target；也可以直接使用 `scripts/deploy-moox.sh --target user@host`。
 - `REMOTE_ROOT`: default `~/moox`.
 - `CSV_DIR`: location of acceptance CSV files.
-- `STORAGE_URL`: moox-storage Access Service HTTP endpoint for acceptance writes, 默认从 `infra/infra.local.yaml` 的 `services.storage_access` 读取。
+- `STORAGE_URL`: moox-storage Access Service HTTP endpoint for acceptance writes；运行时服务部署信息以 `t_service_deployments` 为准。
 
 Deployment uploads binaries, docs, skills, build scripts, and sample CSV files when they exist. It then runs the CSV acceptance script on the remote host.
+
+`infra/infra.local.yaml` is not the source of service deployment topology. After the admin plane is reachable, write and update service host/port/base URL rows through SysDeploy (`t_service_deployments`).

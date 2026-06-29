@@ -2,16 +2,17 @@ package bootstrap
 
 import (
 	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	adminsvc "github.com/mooyang-code/moox/modules/admin/internal/service/admin"
 	asynctaskrpc "github.com/mooyang-code/moox/modules/admin/internal/service/asynctask/rpc"
 	authsvr "github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	cloudnoderpc "github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/rpc"
 	collectmgrrpc "github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/rpc"
-	adminsvc "github.com/mooyang-code/moox/modules/admin/internal/service/admin"
 	dnsproxyrpc "github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy/rpc"
 	fileserver "github.com/mooyang-code/moox/modules/admin/internal/service/fileserver"
 	monitorrpc "github.com/mooyang-code/moox/modules/admin/internal/service/monitor/rpc"
 	secretrpc "github.com/mooyang-code/moox/modules/admin/internal/service/secret/rpc"
 	sshrpc "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/rpc"
+	sysdeployrpc "github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy/rpc"
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -80,7 +81,11 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	secretSvc := secretrpc.NewService(services.SecretService)
 	adminpb.RegisterSecretMgrService(s.Service("trpc.moox.ops.SecretMgr"), secretSvc)
 
-	// 3.8 注册文件下载裸 HTTP 处理器（云函数包下载，经统一网关 rawhandler 分派）
+	// 3.8 服务部署信息
+	sysDeploySvc := sysdeployrpc.NewService(services.SysDeploy)
+	adminpb.RegisterSysDeployService(s.Service("trpc.moox.ops.SysDeploy"), sysDeploySvc)
+
+	// 3.9 注册文件下载裸 HTTP 处理器（云函数包下载，经统一网关 rawhandler 分派）
 	// 路由：/api/admin/fileserver/download?file={path}&token={file_download_jwt}
 	// 鉴权由 fileserver 内部校验 file_download token，网关 authorize 对该路径放行（no_auth_methods）
 	gateway.RegisterRawHandler("fileserver", "download", gateway.RawHandler(fileserver.DownloadHandler(fileserver.DefaultConfig)))

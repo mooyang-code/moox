@@ -328,7 +328,7 @@ func (s *TaskPlannerServiceImpl) loadEnabledRules(ctx context.Context) (
 	log.InfoContext(ctx, "[TaskPlanner] Step 3: Loading enabled rules...")
 
 	// 获取所有启用的规则（规划器全量重算：spaceID 传空，加载所有空间规则后再按 space 分组）
-	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, "", "", "", "", model.EnabledTrue)
+	rules, err := s.taskRulesDAO.GetTaskRulesList(ctx, "", "", "", "", "", model.EnabledTrue)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get enabled rules: %w", err)
 	}

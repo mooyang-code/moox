@@ -134,14 +134,30 @@ type LocalDNSReportItem struct {
 
 // CloudFunctionEvent 云函数事件
 type CloudFunctionEvent struct {
-	Action        EventAction            `json:"action,omitempty"`
-	Data          map[string]interface{} `json:"data,omitempty"`
-	Timestamp     string                 `json:"timestamp"` // 使用时间格式字符串（支持时区）
-	RequestID     string                 `json:"request_id,omitempty"`
-	Source        string                 `json:"source,omitempty"`     // 探测来源标识
-	ServerIP      string                 `json:"server_ip"`             // 服务端IP
-	ServerPort    int                    `json:"server_port"`           // 服务端心跳API端口
-	MooxServerURL string                 `json:"moox_server_url,omitempty"` // 控制面 URL（http://ip:port），作为 server_ip/server_port 缺失时的 fallback
+	Action             EventAction                  `json:"action,omitempty"`
+	Data               map[string]interface{}       `json:"data,omitempty"`
+	Timestamp          string                       `json:"timestamp"` // 使用时间格式字符串（支持时区）
+	RequestID          string                       `json:"request_id,omitempty"`
+	Source             string                       `json:"source,omitempty"`              // 探测来源标识
+	ServerIP           string                       `json:"server_ip"`                     // 服务端IP
+	ServerPort         int                          `json:"server_port"`                   // 服务端心跳API端口
+	MooxServerURL      string                       `json:"moox_server_url,omitempty"`     // 控制面 URL（http://ip:port），作为 server_ip/server_port 缺失时的 fallback
+	StorageServerURL   string                       `json:"storage_server_url,omitempty"`  // storage access 直连 URL，来自服务部署表
+	ServiceDeployments map[string]ServiceDeployment `json:"service_deployments,omitempty"` // 控制面下发的 active 服务部署信息
+}
+
+// ServiceDeployment 是控制面 keepalive 下发给 SCF runtime 的服务部署信息。
+type ServiceDeployment struct {
+	ServiceName string `json:"service_name,omitempty"`
+	ServiceKind string `json:"service_kind,omitempty"`
+	Protocol    string `json:"protocol,omitempty"`
+	Host        string `json:"host,omitempty"`
+	Port        int    `json:"port,omitempty"`
+	BaseURL     string `json:"base_url,omitempty"`
+	RPCAddress  string `json:"rpc_address,omitempty"`
+	GatewayPath string `json:"gateway_path,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	Status      string `json:"status,omitempty"`
 }
 
 // TaskExecuteEvent 任务立即执行事件（服务端触发）

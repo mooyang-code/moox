@@ -36,7 +36,7 @@ func forwardHTTP(ctx context.Context, serviceID, method string, body []byte, hea
 	if cfg == nil {
 		return nil, fmt.Errorf("网关配置未初始化")
 	}
-	detail, err := cfg.GetServiceDetail(serviceID)
+	detail, err := resolveServiceDetail(ctx, cfg, serviceID)
 	if err != nil {
 		return nil, err
 	}

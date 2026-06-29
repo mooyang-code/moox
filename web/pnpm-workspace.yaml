@@ -1,0 +1,11 @@
+packages:
+  - .
+
+overrides:
+  rollup: 4.24.0
+
+allowBuilds:
+  core-js: true
+  es5-ext: true
+  esbuild: true
+  vue-demi: true

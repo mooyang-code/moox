@@ -8,7 +8,10 @@ import _ "embed"
 //go:embed admin.sql
 var adminSQL string
 
+//go:embed service_deployments_seed.sql
+var serviceDeploymentsSeedSQL string
+
 // AdminSQL 返回内嵌的 Control/Admin SQLite schema。
 func AdminSQL() string {
-	return adminSQL
+	return adminSQL + "\n" + serviceDeploymentsSeedSQL
 }

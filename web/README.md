@@ -152,12 +152,12 @@ cd ../../web
 pnpm dev
 ```
 
-Vite 开发模式会代理以下浏览器路径：
+前端管理台不经过 `web-host` 或 Vite 代理 API。运行时从浏览器当前 URL 读取 hostname，并用固定网关端口 `11000`（可通过 `VITE_GATEWAY_PORT` 覆盖）直连：
 
-- `/api/admin/{service}/{method}` -> Control API `/api/admin/{service}/{method}`
-- `/api/storage/metadata/{method}` -> Storage MetadataService
-- `/api/storage/access/{method}` -> Storage AccessService
-- `/api/storage/view/{method}` -> Storage ViewService
+- 管理台请求：`http(s)://{当前hostname}:11000/api/admin/{service}/{method}`
+- 存储管理台请求：仍走 `/api/admin/storage_metadata|storage_access|storage_view/{method}`
+- 后台/SCF/collector 请求：走 `/api/service/{service}/{method}`，不由前端直接调用
+- `web-host` 只提供静态资源，不代理 `/api/*`
 
 手工验收重点：
 

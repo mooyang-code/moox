@@ -112,3 +112,28 @@ See `references/` for more detailed notes.
   --deploy-dir /home/ubuntu/moox \
   --deploy
 ```
+
+## System Initialization Deployment Flow
+
+When initializing a fresh MooX system, use a strict two-stage deployment flow. Do not ask for every service placement up front.
+
+1. Stage 1 starts with admin only.
+   Ask the user where to deploy the admin management plane. Collect only the target SSH host, admin gateway public IP, fixed admin gateway port, and admin frontend/web-host port needed to publish the management console.
+
+2. Deploy the admin backend and frontend before anything else.
+   Build and deploy the admin backend/gateway first, then deploy the admin frontend/web-host. The frontend must call the gateway directly through `/api/admin/*`; web-host only serves static files and must not proxy `/api/admin`, `/api/service`, or storage APIs.
+
+3. Stop if the admin management plane is not reachable.
+   Confirm that the admin page can be opened and that the gateway health endpoint answers from the expected gateway port. If either check fails, fix admin deployment first and do not ask about other services yet.
+
+4. Stage 2 starts only after admin succeeds.
+   After the admin backend and frontend are deployed and reachable, ask where to deploy the remaining services. Cover storage metadata/access/view, service gateway exposure, collector-related services, trade services, and any internal admin RPC ports that differ from defaults. Prefer explicit IP and port for every service.
+
+5. Write service deployment information through SysDeploy.
+   Use `t_service_deployments` via the admin `sysdeploy` API as the single source of truth for service IP/port/base URL. Do not read or derive deployment topology from `infra/infra.local.yaml`.
+
+6. Preserve the storage topology boundary.
+   `/#/ops/storage/nodes` remains the PrimaryStore topology. If a storage service deployment address changes, remind the user to inspect and update the storage topology endpoint separately; do not silently synchronize it.
+
+7. SCF runtime address propagation.
+   Do not inject storage/admin addresses while building SCF packages. The control plane keepalive probe must pass active `service_deployments` to SCF, and SCF should use `storage_access` directly for storage writes while using `/api/service/*` for backend gateway calls.

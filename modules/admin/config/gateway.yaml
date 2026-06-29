@@ -91,6 +91,9 @@ gateway:
     secret:
       address: "127.0.0.1:11108"
       path: "trpc.moox.ops.SecretMgr"
+    sysdeploy:
+      address: "127.0.0.1:11109"
+      path: "trpc.moox.ops.SysDeploy"
     space:
       address: "127.0.0.1:11107"
       path: "trpc.moox.admin.SpaceMgr"

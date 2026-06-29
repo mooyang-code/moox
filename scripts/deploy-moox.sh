@@ -7,6 +7,7 @@ DEPLOY_DIR="${MOOX_DEPLOY_DIR:-${HOME}/moox}"
 STAGE_DIR=""
 SKIP_BUILD=0
 NO_START=0
+WITH_STORAGE=1
 WITH_WEB_HOST=1
 BUILD_WEB_ASSETS=0
 TARGET_GOOS=""
@@ -25,6 +26,7 @@ Options:
   --stage <path>                  Local staging directory. Default: release/deploy-stage/moox.
   --skip-build                    Reuse binaries from ./bin.
   --no-start                      Deploy package only, do not start services.
+  --no-storage                    Do not package/stop/start moox-storage; preserve existing remote storage files.
   --no-web-host                   Do not package/start moox-web-host.
   --build-web-assets              Rebuild Vue dist and statik assets before building web-host.
   -h, --help                      Show this help.
@@ -73,6 +75,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-start)
       NO_START=1
+      shift
+      ;;
+    --no-storage)
+      WITH_STORAGE=0
       shift
       ;;
     --no-web-host)
@@ -167,6 +173,14 @@ build_core_binaries() {
   fi
 
   log "build core binaries (${TARGET_GOOS}/${TARGET_GOARCH})"
+  if [[ "${WITH_STORAGE}" -eq 0 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" cli
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" admin
+    return
+  fi
+
   if [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
     log "cross build detected; storage requires CGO-enabled DuckDB build"
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
@@ -187,19 +201,27 @@ build_web_host_binary() {
 
   if [[ "${BUILD_WEB_ASSETS}" -eq 1 ]]; then
     log "build web assets and web-host (${TARGET_GOOS}/${TARGET_GOARCH})"
-    case "${TARGET_GOOS}" in
-      linux) (cd "${ROOT}/web-host" && make build-linux VERSION="${VERSION:-dev}") ;;
-      darwin) (cd "${ROOT}/web-host" && make build-darwin VERSION="${VERSION:-dev}") ;;
-    esac
+    (
+      cd "${ROOT}/web"
+      if [[ ! -d node_modules ]]; then
+        CI=true pnpm install --no-frozen-lockfile --config.confirmModulesPurge=false
+      else
+        log "reuse existing web/node_modules"
+      fi
+      npm run build:prod
+    )
+    if ! command -v statik >/dev/null 2>&1; then
+      go install github.com/rakyll/statik@latest
+    fi
+    (cd "${ROOT}/web-host" && statik -src=../web/dist -dest=./internal)
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" web-host
     return
   fi
 
   log "build web-host with current embedded statik assets (${TARGET_GOOS}/${TARGET_GOARCH})"
-  (
-    cd "${ROOT}/web-host"
-    GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=0 \
-      go build -o "${ROOT}/bin/moox-web-host" .
-  )
+  TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+    "${ROOT}/scripts/build.sh" web-host
 }
 
 copy_required_binary() {
@@ -237,6 +259,7 @@ patch_configs() {
   perl -0pi -e 's#log_path:\s*\./log#log_path: ../logs/admin#g' \
     "${STAGE_DIR}/admin/config/trpc_go.yaml"
 
+  [[ "${WITH_STORAGE}" -eq 1 ]] || return 0
   perl -0pi -e 's#root:\s*\./var/storage#root: ../data/storage#g; s#path:\s*\./var/storage/metadata/storage_metadata\.db#path: ../data/storage/metadata/storage_metadata.db#g; s#pebble_path:\s*\./var/storage/pebble#pebble_path: ../data/storage/pebble#g; s#duckdb_path:\s*\./var/storage/duckdb/views\.duckdb#duckdb_path: ../data/storage/duckdb/views.duckdb#g; s#bleve_path:\s*\./var/storage/bleve#bleve_path: ../data/storage/bleve#g; s#parquet_path:\s*\./var/storage/archive#parquet_path: ../data/storage/archive#g' \
     "${STAGE_DIR}/storage/config/storage.yaml"
   perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage#g' \
@@ -249,6 +272,7 @@ write_runtime_scripts() {
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
 mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/logs/admin" "${ROOT}/logs/storage" "${ROOT}/logs/web-host"
 
@@ -334,23 +358,25 @@ start_web_host() {
   fi
   start_service "web-host" "${ROOT}" \
     env \
-      "MOOX_ADMIN_GATEWAY_URL=${MOOX_ADMIN_GATEWAY_URL:-http://127.0.0.1:11000}" \
-      "MOOX_STORAGE_METADATA_URL=${MOOX_STORAGE_METADATA_URL:-http://127.0.0.1:20200}" \
-      "MOOX_STORAGE_ACCESS_URL=${MOOX_STORAGE_ACCESS_URL:-http://127.0.0.1:20201}" \
-      "MOOX_STORAGE_VIEW_URL=${MOOX_STORAGE_VIEW_URL:-http://127.0.0.1:20202}" \
-      "MOOX_WEB_HOST_ADDR=${MOOX_WEB_HOST_ADDR:-:10080}" \
+      "MOOX_WEB_HOST_ADDR=${MOOX_WEB_HOST_ADDR:-:9527}" \
       "${ROOT}/bin/moox-web-host"
 }
 
 SERVICE="${1:-}"
 case "${SERVICE}" in
   "")
-    init_storage_schema
-    start_storage
+    if [[ "${WITH_STORAGE}" == "1" ]]; then
+      init_storage_schema
+      start_storage
+    fi
     start_admin
     start_web_host
     ;;
   storage)
+    if [[ "${WITH_STORAGE}" != "1" ]]; then
+      echo "storage is disabled in this deployment package" >&2
+      exit 2
+    fi
     init_storage_schema
     start_storage
     ;;
@@ -363,7 +389,7 @@ case "${SERVICE}" in
 esac
 
 echo "MooX services started"
-echo "admin web: http://127.0.0.1:10080"
+echo "admin web: http://127.0.0.1:9527"
 EOF
 
   cat > "${STAGE_DIR}/stop.sh" <<'EOF'
@@ -371,6 +397,7 @@ EOF
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
 
 stop_service() {
   local name="$1"
@@ -409,9 +436,18 @@ case "${SERVICE}" in
   "")
     stop_service "web-host"
     stop_service "admin"
-    stop_service "storage"
+    if [[ "${WITH_STORAGE}" == "1" ]]; then
+      stop_service "storage"
+    fi
     ;;
-  storage|admin|web-host) stop_service "${SERVICE}" ;;
+  storage)
+    if [[ "${WITH_STORAGE}" != "1" ]]; then
+      echo "storage is disabled in this deployment package" >&2
+      exit 2
+    fi
+    stop_service "${SERVICE}"
+    ;;
+  admin|web-host) stop_service "${SERVICE}" ;;
   *)
     echo "unknown service: ${SERVICE}; valid: storage admin web-host" >&2
     exit 2
@@ -441,8 +477,14 @@ EOF
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
 
-for name in storage admin web-host; do
+services=(admin web-host)
+if [[ "${WITH_STORAGE}" == "1" ]]; then
+  services=(storage "${services[@]}")
+fi
+
+for name in "${services[@]}"; do
   pid_file="${ROOT}/run/${name}.pid"
   if [[ ! -f "${pid_file}" ]]; then
     echo "${name}: stopped"
@@ -457,6 +499,8 @@ for name in storage admin web-host; do
 done
 EOF
 
+  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g" \
+    "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh"
 }
 
@@ -466,22 +510,28 @@ prepare_stage() {
     "${STAGE_DIR}/bin" \
     "${STAGE_DIR}/admin/config" \
     "${STAGE_DIR}/admin/schema" \
-    "${STAGE_DIR}/storage/config" \
-    "${STAGE_DIR}/storage/schema" \
     "${STAGE_DIR}/examples" \
     "${STAGE_DIR}/data" \
     "${STAGE_DIR}/logs" \
     "${STAGE_DIR}/run"
+  if [[ "${WITH_STORAGE}" -eq 1 ]]; then
+    mkdir -p "${STAGE_DIR}/storage/config" "${STAGE_DIR}/storage/schema"
+  fi
 
   copy_required_binary "moox-admin"
-  copy_required_binary "moox-storage"
   copy_required_binary "moox-cli"
+  if [[ "${WITH_STORAGE}" -eq 1 ]]; then
+    copy_required_binary "moox-storage"
+  fi
   copy_optional_web_host
 
   cp -R "${ROOT}/modules/admin/config/." "${STAGE_DIR}/admin/config/"
-  cp -R "${ROOT}/modules/storage/config/." "${STAGE_DIR}/storage/config/"
   cp "${ROOT}/modules/admin/schema/admin.sql" "${STAGE_DIR}/admin/schema/admin.sql"
-  cp "${ROOT}/modules/storage/schema/metadata.sql" "${STAGE_DIR}/storage/schema/metadata.sql"
+  cp "${ROOT}/modules/admin/schema/service_deployments_seed.sql" "${STAGE_DIR}/admin/schema/service_deployments_seed.sql"
+  if [[ "${WITH_STORAGE}" -eq 1 ]]; then
+    cp -R "${ROOT}/modules/storage/config/." "${STAGE_DIR}/storage/config/"
+    cp "${ROOT}/modules/storage/schema/metadata.sql" "${STAGE_DIR}/storage/schema/metadata.sql"
+  fi
   cp -R "${ROOT}/examples/." "${STAGE_DIR}/examples/"
 
   patch_configs
@@ -495,19 +545,32 @@ sync_local_stage() {
   mkdir -p "${deploy_dir}"
 
   if [[ -x "${deploy_dir}/stop.sh" && "${NO_START}" -eq 0 ]]; then
-    "${deploy_dir}/stop.sh" || true
+    if [[ "${WITH_STORAGE}" -eq 1 ]]; then
+      "${deploy_dir}/stop.sh" || true
+    else
+      "${deploy_dir}/stop.sh" web-host || true
+      "${deploy_dir}/stop.sh" admin || true
+    fi
   fi
 
   if command -v rsync >/dev/null 2>&1; then
+    local rsync_excludes=(--exclude '/data/' --exclude '/logs/' --exclude '/run/')
+    if [[ "${WITH_STORAGE}" -eq 0 ]]; then
+      rsync_excludes+=(--exclude '/storage/' --exclude '/bin/moox-storage')
+    fi
     rsync -a --delete \
-      --exclude '/data/' \
-      --exclude '/logs/' \
-      --exclude '/run/' \
+      "${rsync_excludes[@]}" \
       "${STAGE_DIR}/" "${deploy_dir}/"
   else
-    find "${deploy_dir}" -mindepth 1 -maxdepth 1 \
-      ! -name data ! -name logs ! -name run \
-      -exec rm -rf {} +
+    if [[ "${WITH_STORAGE}" -eq 1 ]]; then
+      find "${deploy_dir}" -mindepth 1 -maxdepth 1 \
+        ! -name data ! -name logs ! -name run \
+        -exec rm -rf {} +
+    else
+      rm -rf "${deploy_dir}/admin" "${deploy_dir}/examples" \
+        "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/restart.sh" "${deploy_dir}/status.sh"
+      rm -f "${deploy_dir}/bin/moox-admin" "${deploy_dir}/bin/moox-cli" "${deploy_dir}/bin/moox-web-host"
+    fi
     cp -R "${STAGE_DIR}/." "${deploy_dir}/"
   fi
 
@@ -528,27 +591,40 @@ sync_remote_stage() {
   log "upload ${archive} to ${TARGET}:${remote_archive}"
   scp "${archive}" "${TARGET}:${remote_archive}"
 
-  local quoted_dir quoted_archive quoted_no_start
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
+  quoted_with_storage="$(shell_quote "${WITH_STORAGE}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} bash -s" <<'EOF'
 set -euo pipefail
 
-case "${DEPLOY_DIR}" in
-  "~") DEPLOY_DIR="${HOME}" ;;
-  "~/"*) DEPLOY_DIR="${HOME}/${DEPLOY_DIR#~/}" ;;
-esac
+if [[ "${DEPLOY_DIR}" == "~" ]]; then
+  DEPLOY_DIR="${HOME}"
+elif [[ "${DEPLOY_DIR}" == "~/"* ]]; then
+  DEPLOY_DIR="${HOME}/${DEPLOY_DIR#\~/}"
+fi
 
 mkdir -p "${DEPLOY_DIR}"
 if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
-  "${DEPLOY_DIR}/stop.sh" || true
+  if [[ "${WITH_STORAGE}" == "1" ]]; then
+    "${DEPLOY_DIR}/stop.sh" || true
+  else
+    "${DEPLOY_DIR}/stop.sh" web-host || true
+    "${DEPLOY_DIR}/stop.sh" admin || true
+  fi
 fi
 
-find "${DEPLOY_DIR}" -mindepth 1 -maxdepth 1 \
-  ! -name data ! -name logs ! -name run \
-  -exec rm -rf {} +
+if [[ "${WITH_STORAGE}" == "1" ]]; then
+  find "${DEPLOY_DIR}" -mindepth 1 -maxdepth 1 \
+    ! -name data ! -name logs ! -name run \
+    -exec rm -rf {} +
+else
+  rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/examples" \
+    "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh"
+  rm -f "${DEPLOY_DIR}/bin/moox-admin" "${DEPLOY_DIR}/bin/moox-cli" "${DEPLOY_DIR}/bin/moox-web-host"
+fi
 tar -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 rm -f "${ARCHIVE}"
 chmod +x "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/bin/"*

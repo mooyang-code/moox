@@ -16,7 +16,6 @@ require (
 	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/pkg/infraconfig v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.12.1
 	github.com/nats-io/nats.go v1.47.0
 	github.com/orcaman/concurrent-map/v2 v2.0.1
@@ -42,8 +41,6 @@ require (
 )
 
 replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ./proto/admingen
-
-replace github.com/mooyang-code/moox/pkg/infraconfig => ../../pkg/infraconfig
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect

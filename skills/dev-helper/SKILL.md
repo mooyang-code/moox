@@ -27,11 +27,11 @@ description: >-
 |------|------|
 | 环境变量 `MOOX_DEV_SSH_TARGET` | 例如 `ubuntu@<deploy-host>` |
 | `~/.moox-dev.env` | 复制 `skills/dev-helper/env.example` 到用户目录后 `source` |
-| `infra/infra.local.yaml` | `remote.ssh` 字段（已 gitignore） |
+| `infra/infra.local.yaml` | legacy 兼容，仅允许读取 `remote.ssh` 作为开发 SSH 目标（已 gitignore） |
 | SSH config 别名 | `MOOX_DEV_SSH_TARGET=moox-dev`（`~/.ssh/config` 中配置 Host） |
 | **交互输入** | 未配置时脚本会在终端提示 `user@host`，可选保存到 `~/.moox-dev.env` |
 
-脚本 `storage-remote-build.sh` 按上述顺序解析目标；**不会**提示或保存 SSH 密码（请用公钥）。
+脚本 `storage-remote-build.sh` 按上述顺序解析 SSH 目标；**不会**提示或保存 SSH 密码（请用公钥）。`infra.local.yaml` 不再承载服务部署拓扑，服务 IP/port 以 `t_service_deployments` 为准。
 
 **Agent 注意**：在 Cursor/非 TTY 环境执行时，应先在对话里向用户询问 SSH 目标，再以 `--target` 传入；或使用 `--non-interactive` 并在缺少配置时明确报错，勿把目标或密码写进仓库。
 
@@ -66,7 +66,7 @@ description: >-
 | 组件 | CGO | 推荐方式 |
 |------|-----|----------|
 | `moox-admin` | 否 | 本地 `GOOS=linux GOARCH=amd64 go build` |
-| `moox-web-host` | 否 | 本地 `GOWORK=off GOOS=linux`（不在 go.work） |
+| `moox-web-host` | 否 | 本地 `go.work` + `GOOS=linux GOARCH=amd64` |
 | `moox-storage` | **是** | **dev-helper 远端编译** |
 | `moox-cli` / `collector` | 否 | 本地交叉编译 |
 

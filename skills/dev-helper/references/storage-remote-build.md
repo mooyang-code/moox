@@ -10,7 +10,7 @@
 
 **本地**：仓库根目录可执行；已安装 `zip`、`scp`、`ssh`。
 
-**凭证**：勿在仓库中写 SSH 密码。配置 `MOOX_DEV_SSH_TARGET`、`infra/infra.local.yaml`，或运行脚本时按提示输入 `user@host`（见 [SKILL.md](../SKILL.md)）。
+**凭证**：勿在仓库中写 SSH 密码。配置 `MOOX_DEV_SSH_TARGET`，或运行脚本时按提示输入 `user@host`（见 [SKILL.md](../SKILL.md)）。`infra/infra.local.yaml` 仅保留 legacy SSH 目标兼容，不再保存服务部署拓扑。
 
 **远端 Linux**（`$MOOX_DEV_SSH_TARGET` 或 SSH config 别名）：
 
@@ -22,7 +22,7 @@
 ## 一键脚本
 
 ```bash
-# 已 export MOOX_DEV_SSH_TARGET 或配置 infra.local.yaml 时无需 --target
+# 已 export MOOX_DEV_SSH_TARGET 时无需 --target
 ./skills/dev-helper/scripts/storage-remote-build.sh
 
 ./skills/dev-helper/scripts/storage-remote-build.sh \
@@ -32,7 +32,7 @@
 
 | 参数 | 默认 | 说明 |
 |------|------|------|
-| `--target` | 见环境 | SSH 目标；默认 `MOOX_DEV_SSH_TARGET` 或 `infra.local.yaml` `remote.ssh` |
+| `--target` | 见环境 | SSH 目标；默认 `MOOX_DEV_SSH_TARGET`，legacy 兼容 `infra.local.yaml` `remote.ssh` |
 | `--deploy-dir` | `/home/ubuntu/moox` | 远端部署根目录 |
 | `--remote-go` | `/home/ubuntu/.local/go1.24.0/bin/go` | 远端 Go |
 | `--remote-build-dir` | `/home/ubuntu/moox-build-remote` | 远端解压目录 |

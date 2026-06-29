@@ -14,6 +14,10 @@
       </a-space>
     </div>
 
+    <a-alert class="topology-alert" type="warning" show-icon>
+      主存节点是 storage 数据拓扑配置，不等同于系统服务部署信息。若在“系统设置 / 服务部署信息”修改了 storage_* 服务 IP/端口，请同步检查这里的 Endpoint。
+    </a-alert>
+
     <a-table
       row-key="node_id"
       size="small"
@@ -179,5 +183,9 @@ onMounted(load);
   margin: 0;
   font-size: 20px;
   font-weight: 600;
+}
+
+.topology-alert {
+  margin-bottom: 14px;
 }
 </style>

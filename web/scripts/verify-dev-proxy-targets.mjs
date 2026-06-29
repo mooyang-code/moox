@@ -1,4 +1,7 @@
 import { loadConfigFromFile } from 'vite';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const loaded = await loadConfigFromFile({ command: 'serve', mode: 'development' }, 'vite.config.ts');
 if (!loaded?.config) {
@@ -8,47 +11,15 @@ if (!loaded?.config) {
 
 const config = loaded.config;
 const proxy = config.server?.proxy || {};
+const gatewaySource = readFileSync(resolve('src/api/gateway.ts'), 'utf8');
 
-// 管理台 IP 不写死：由 vite.config.ts 的 dynamicRouter 取浏览器请求 Host 头 +
-// 固定端口动态拼装。这里只校验静态默认 target（localhost + 端口）与 router 函数存在，
-// 不再断言任何公网 IP，避免与“IP 随浏览器 URL”的设计冲突。
-const expectedTargets = new Map([
-  ['/api/admin', 'http://localhost:11000'],
-  ['/trpc.moox.server', 'http://localhost:10080'],
-]);
+assert.deepEqual(
+  Object.keys(proxy),
+  [],
+  'Vite dev server must not proxy API requests; frontend should call the gateway directly',
+);
+assert.match(gatewaySource, /DEFAULT_GATEWAY_PORT\s*=\s*'11000'/, 'gateway helper must default to port 11000');
+assert.match(gatewaySource, /window\.location\.hostname/, 'gateway helper must derive host from browser URL hostname');
+assert.doesNotMatch(gatewaySource, /window\.location\.host/, 'gateway helper must not reuse the web-host/dev-server port');
 
-const mismatches = [];
-for (const [proxyPath, expectedTarget] of expectedTargets) {
-  const entry = proxy[proxyPath];
-  const actualTarget = entry?.target || '';
-  if (actualTarget !== expectedTarget) {
-    mismatches.push({ proxyPath, expectedTarget, actualTarget: actualTarget || '<missing>' });
-  }
-  if (typeof entry?.router !== 'function') {
-    mismatches.push({
-      proxyPath,
-      expectedTarget: 'a dynamic router function',
-      actualTarget: typeof entry?.router === 'undefined' ? '<missing>' : `<${typeof entry?.router}>`,
-    });
-  }
-}
-
-for (const forbiddenPath of ['/api/storage/metadata', '/api/storage/access', '/api/storage/view']) {
-  if (proxy[forbiddenPath]) {
-    mismatches.push({
-      proxyPath: forbiddenPath,
-      expectedTarget: '<absent>',
-      actualTarget: proxy[forbiddenPath]?.target || '<configured>',
-    });
-  }
-}
-
-if (mismatches.length > 0) {
-  console.error('Unexpected Vite dev proxy target(s):');
-  for (const item of mismatches) {
-    console.error(`- ${item.proxyPath}: expected ${item.expectedTarget}, got ${item.actualTarget}`);
-  }
-  process.exit(1);
-}
-
-console.log(`Vite dev proxy targets verified: ${expectedTargets.size} route(s).`);
+console.log('Gateway direct mode verified: no Vite API proxy, default gateway port 11000.');

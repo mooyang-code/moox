@@ -11,4 +11,5 @@ use (
 	./modules/storage
 	./modules/storage/proto/gen
 	./pkg/infraconfig
+	./web-host
 )

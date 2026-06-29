@@ -2,18 +2,15 @@ package config
 
 import (
 	"log"
-	"net"
-	"net/url"
 	"strings"
 	"sync"
-
-	"github.com/mooyang-code/moox/pkg/infraconfig"
 )
 
 // Config 全局配置结构
 type Config struct {
-	Server   ServerConfig
-	NodeInfo NodeInfoConfig
+	Server     ServerConfig
+	NodeInfo   NodeInfoConfig
+	StorageURL string
 	// 后续扩展其他配置项
 	// Database DatabaseConfig
 	// Cache CacheConfig
@@ -54,6 +51,19 @@ func GetServerInfo() (string, int) {
 	configMu.RLock()
 	defer configMu.RUnlock()
 	return GlobalConfig.Server.IP, GlobalConfig.Server.Port
+}
+
+// UpdateStorageURL 更新 storage access 直连地址。
+func UpdateStorageURL(rawURL string) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	GlobalConfig.StorageURL = strings.TrimRight(strings.TrimSpace(rawURL), "/")
+}
+
+func getRuntimeStorageURL() string {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	return GlobalConfig.StorageURL
 }
 
 // UpdateNodeInfo 更新节点信息配置
@@ -115,9 +125,12 @@ func InitLocalAppConfig() {
 }
 
 // GetStorageURL 获取存储服务地址。
-// 云函数/远程采集器在包内 config.yaml 注入公网 storage_url 时，应优先于 infra 占位 127.0.0.1。
-// 本地开发仍可通过 infra/infra.local.yaml 覆盖。
+// SCF/远程采集器优先使用控制面 keepalive 下发的 service_deployments.storage_access。
+// 本地开发可继续使用 config.yaml 的 system.storage_url 默认值。
 func GetStorageURL() string {
+	if runtimeURL := getRuntimeStorageURL(); runtimeURL != "" {
+		return runtimeURL
+	}
 	if LocalAppConfig == nil {
 		InitLocalAppConfig()
 	}
@@ -129,29 +142,5 @@ func GetStorageURL() string {
 	}
 	localAppConfigMu.RUnlock()
 
-	infraURL := strings.TrimSpace(infraconfig.StorageAccessURL())
-
-	if localURL != "" && !isLoopbackStorageURL(localURL) {
-		return localURL
-	}
-	if infraURL != "" && !isLoopbackStorageURL(infraURL) {
-		return infraURL
-	}
-	if localURL != "" {
-		return localURL
-	}
-	return infraURL
-}
-
-func isLoopbackStorageURL(raw string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Host == "" {
-		return strings.Contains(raw, "127.0.0.1") || strings.Contains(raw, "localhost")
-	}
-	host := parsed.Hostname()
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return strings.TrimRight(localURL, "/")
 }

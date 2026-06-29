@@ -27,8 +27,8 @@ type collectorPackageOptions struct {
 
 type collectorPublishOptions struct {
 	collectorPackageOptions
-	ControlURL     string
-	AccessToken    string
+	ControlURL  string
+	AccessToken string
 	// 后台服务签名鉴权（推荐，取代登录态 AccessToken）
 	ServiceAccessKey string
 	ServiceSecretKey string

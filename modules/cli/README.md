@@ -132,7 +132,7 @@ export TENCENTCLOUD_SECRET_KEY="..."
   --description "moox services"
 ```
 
-> `<lighthouse-public-ip>` 真实值见 `infra/infra.local.yaml`。
+> `<lighthouse-public-ip>` 可从云厂商控制台获取；MooX 服务部署地址以管理台“服务部署信息”页为准。
 
 也可以直接传实例 ID，并先用 `--dry-run` 预览请求：
 

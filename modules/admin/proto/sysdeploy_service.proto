@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package trpc.moox.ops;
+
+import "moox_common.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;mooxpb";
+
+// SysDeploy 管理系统服务部署信息。
+// 管理台通过 /api/admin/sysdeploy/{method} 访问；后台/SCF 运行时通过 keepalive payload 获取 active 部署信息。
+message ServiceDeployment {
+  int64 id = 1;
+  string service_name = 2;
+  string service_kind = 3;
+  string protocol = 4;
+  string host = 5;
+  int32 port = 6;
+  string base_url = 7;
+  string rpc_address = 8;
+  string gateway_path = 9;
+  string scope = 10;
+  string status = 11;
+  string description = 12;
+  string extra_config = 13;
+  string created_at = 14;
+  string updated_at = 15;
+}
+
+message ServiceDeploymentEndpoint {
+  string service_name = 1;
+  string service_kind = 2;
+  string protocol = 3;
+  string host = 4;
+  int32 port = 5;
+  string base_url = 6;
+  string rpc_address = 7;
+  string gateway_path = 8;
+  string scope = 9;
+  string status = 10;
+}
+
+message ServiceDeploymentWarning {
+  string code = 1;
+  string message = 2;
+  string service_name = 3;
+  string related_endpoint = 4;
+}
+
+message ListServiceDeploymentsReq {
+  string service_name = 1;
+  string service_kind = 2;
+  string scope = 3;
+  string status = 4;
+  trpc.moox.common.Page page = 5;
+}
+
+message ListServiceDeploymentsRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  repeated ServiceDeployment deployments = 2;
+  trpc.moox.common.PageResult page_result = 3;
+  repeated ServiceDeploymentWarning warnings = 4;
+}
+
+message GetServiceDeploymentReq {
+  string service_name = 1;
+}
+
+message GetServiceDeploymentRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  ServiceDeployment deployment = 2;
+  repeated ServiceDeploymentWarning warnings = 3;
+}
+
+message CreateServiceDeploymentReq {
+  ServiceDeployment deployment = 1;
+  bool confirm_storage_topology_overlap = 2;
+}
+
+message CreateServiceDeploymentRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  ServiceDeployment deployment = 2;
+  repeated ServiceDeploymentWarning warnings = 3;
+}
+
+message UpdateServiceDeploymentReq {
+  string service_name = 1;
+  ServiceDeployment deployment = 2;
+  bool confirm_storage_topology_overlap = 3;
+}
+
+message UpdateServiceDeploymentRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  ServiceDeployment deployment = 2;
+  repeated ServiceDeploymentWarning warnings = 3;
+}
+
+message DeleteServiceDeploymentReq {
+  string service_name = 1;
+  bool confirm_storage_topology_overlap = 2;
+}
+
+message DeleteServiceDeploymentRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  repeated ServiceDeploymentWarning warnings = 2;
+}
+
+message ListActiveServiceDeploymentsReq {}
+
+message ListActiveServiceDeploymentsRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  repeated ServiceDeployment deployments = 2;
+  map<string, ServiceDeploymentEndpoint> deployment_map = 3;
+}
+
+service SysDeploy {
+  rpc ListServiceDeployments(ListServiceDeploymentsReq) returns (ListServiceDeploymentsRsp);
+  rpc GetServiceDeployment(GetServiceDeploymentReq) returns (GetServiceDeploymentRsp);
+  rpc CreateServiceDeployment(CreateServiceDeploymentReq) returns (CreateServiceDeploymentRsp);
+  rpc UpdateServiceDeployment(UpdateServiceDeploymentReq) returns (UpdateServiceDeploymentRsp);
+  rpc DeleteServiceDeployment(DeleteServiceDeploymentReq) returns (DeleteServiceDeploymentRsp);
+  rpc ListActiveServiceDeployments(ListActiveServiceDeploymentsReq) returns (ListActiveServiceDeploymentsRsp);
+}

@@ -49,6 +49,12 @@ export const staticRoutes = [
         meta: { title: "settings-secrets" }
       },
       {
+        path: "/settings/service-deployments",
+        name: "settings-service-deployments",
+        component: () => import("@/views/settings/service-deployments/index.vue"),
+        meta: { title: "settings-service-deployments" }
+      },
+      {
         path: "/data/sources",
         name: "data-sources",
         component: () => import("@/views/data/sources/index.vue"),

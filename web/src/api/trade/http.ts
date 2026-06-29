@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { Message } from '@arco-design/web-vue';
+import { gatewayOrigin } from '@/api/gateway';
 import { isRetInfoSuccess } from '../ret-info';
 import type { RetInfo } from './types';
 
@@ -17,7 +18,7 @@ const tradeServiceMap: Record<string, string> = {
 };
 
 const tradeClient = axios.create({
-  baseURL: '',
+  baseURL: gatewayOrigin(),
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 });

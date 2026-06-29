@@ -1,15 +1,17 @@
-// Package infraconfig 提供 MooX 基础设施配置的唯一读取入口。
+// Package infraconfig provides legacy developer helper configuration.
 //
-// 配置来源（按优先级合并）：
-//  1. infra/infra.local.yaml  真实部署值（gitignored，可选）
+// Service deployment topology is no longer read from this package. Runtime
+// service IP/port/base URL data must come from t_service_deployments/SysDeploy.
+//
+// Legacy 配置来源（按优先级合并）：
+//  1. infra/infra.local.yaml  旧开发脚本本地覆盖（gitignored，可选）
 //  2. infra/infra.yaml        占位默认值（入库）
 //
 // 配置目录解析顺序：
 //  1. 环境变量 MOOX_INFRA_CONFIG 指向的 infra.yaml 文件
 //  2. 从当前工作目录向上回溯，定位仓库根的 infra/infra.yaml
 //
-// 所有运行时服务、部署脚本、CLI、测试、文档统一通过本包读取 IP/端口，
-// 仓库其它位置不得硬编码真实 IP。
+// New code must not use this package for runtime service discovery.
 package infraconfig
 
 import (
@@ -176,9 +178,8 @@ func mergeEndpoint(base *ServiceEndpoint, local ServiceEndpoint) {
 	}
 }
 
-// ===== 访问器 =====
-// 注意：访问器在 infra 配置缺失时返回零值（不 panic），以便部署环境下
-// 服务回退到自身 config.yaml 中的值（部署时由 deploy 脚本从 infra.local.yaml 渲染注入）。
+// ===== legacy 访问器 =====
+// 注意：访问器仅保留给旧开发脚本。新运行时代码应通过 SysDeploy 查询服务部署信息。
 
 // StorageAccessURL 返回 storage access 服务 URL；infra 配置缺失时返回空串。
 func StorageAccessURL() string {

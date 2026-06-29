@@ -228,8 +228,8 @@ func (h *HTTPRequestHandler) readRequestBodyWithRaw(r *http.Request) ([]byte, []
 			queryMap[key] = values[0]
 		} else {
 			queryMap[key] = values
+		}
 	}
-}
 
 	// 如果 body 为空，直接使用 query 参数
 	if len(body) == 0 {

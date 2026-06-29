@@ -46,7 +46,7 @@ var lighthouseFirewallOpenCmd = &cobra.Command{
     --service-access-key moox-service --service-secret-key <secret> \
     --cloud-account-id account_xxx --public-ip <lighthouse-public-ip> --ports 9527
 
-提示：control-host / lighthouse-public-ip 真实值见 infra/infra.local.yaml。`,
+提示：control-host 可从管理台“服务部署信息”中的 admin_gateway/service_gateway 获取；lighthouse-public-ip 可从云厂商控制台获取。`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runLighthouseFirewallOpen(cmd, lighthouseFirewallOpenFlags)
 	},

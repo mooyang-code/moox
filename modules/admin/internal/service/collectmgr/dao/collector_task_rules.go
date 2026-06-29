@@ -27,7 +27,7 @@ type TaskRuleQuery struct {
 type CollectorTaskRulesDAO interface {
 	// GetTaskRulesList 获取任务规则列表
 	// spaceID 为空时返回所有空间的规则（仅规划器全量重算使用），非空时按空间过滤
-	GetTaskRulesList(ctx context.Context, spaceID, bizType, dataType, dataSource, enabled string) ([]*model.CollectorTaskRules, error)
+	GetTaskRulesList(ctx context.Context, spaceID, bizType, ruleID, dataType, dataSource, enabled string) ([]*model.CollectorTaskRules, error)
 
 	// GetTaskRule 获取单个任务规则
 	GetTaskRule(ctx context.Context, spaceID, ruleID string) (*model.CollectorTaskRules, error)
@@ -56,7 +56,7 @@ func NewCollectorTaskRulesDAO(db *gorm.DB) CollectorTaskRulesDAO {
 }
 
 // GetTaskRulesList 获取任务规则列表
-func (d *collectorTaskRulesDaoImpl) GetTaskRulesList(ctx context.Context, spaceID, bizType, dataType, dataSource, enabled string) ([]*model.CollectorTaskRules, error) {
+func (d *collectorTaskRulesDaoImpl) GetTaskRulesList(ctx context.Context, spaceID, bizType, ruleID, dataType, dataSource, enabled string) ([]*model.CollectorTaskRules, error) {
 	var rules []*model.CollectorTaskRules
 	query := d.db.WithContext(ctx).Where("1=1")
 
@@ -65,6 +65,9 @@ func (d *collectorTaskRulesDaoImpl) GetTaskRulesList(ctx context.Context, spaceI
 	}
 	if bizType != "" {
 		query = query.Where("c_biz_type = ?", bizType)
+	}
+	if ruleID != "" {
+		query = query.Where("c_rule_id = ?", ruleID)
 	}
 	if dataType != "" {
 		query = query.Where("c_data_type = ?", dataType)

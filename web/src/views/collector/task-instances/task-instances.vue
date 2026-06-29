@@ -358,26 +358,22 @@ const refreshList = () => {
 const getInstanceList = async () => {
   loading.value = true;
   try {
-    const params: any = {
+    const filter: any = {
+      space_id: selectedSpaceId.value || '',
       page: pagination.value.current,
-      size: pagination.value.pageSize,
+      page_size: pagination.value.pageSize,
       biz_type: currentBizType.value
     };
 
-    // Always include the selected Space from the global header selector.
-    if (selectedSpaceId.value) {
-      params.space_id = selectedSpaceId.value;
-    }
+    if (form.value.taskId) filter.task_id = form.value.taskId;
+    if (form.value.ruleId) filter.rule_id = form.value.ruleId;
+    if (form.value.plannedExecNode) filter.planned_exec_node = form.value.plannedExecNode;
+    if (form.value.lastExecNode) filter.last_exec_node = form.value.lastExecNode;
+    if (form.value.symbol) filter.symbol = form.value.symbol;
+    if (form.value.lastExecStatus !== null) filter.last_exec_status = form.value.lastExecStatus;
+    if (form.value.is_deleted !== null) filter.is_deleted = form.value.is_deleted;
 
-    if (form.value.taskId) params.task_id = form.value.taskId;
-    if (form.value.ruleId) params.rule_id = form.value.ruleId;
-    if (form.value.plannedExecNode) params.planned_exec_node = form.value.plannedExecNode;
-    if (form.value.lastExecNode) params.last_exec_node = form.value.lastExecNode;
-    if (form.value.symbol) params.symbol = form.value.symbol;
-    if (form.value.lastExecStatus !== null) params.last_exec_status = form.value.lastExecStatus;
-    if (form.value.is_deleted !== null) params.is_deleted = form.value.is_deleted;
-
-    const response = await service.post('/api/admin/collectmgr/GetTaskInstanceList', params, {
+    const response = await service.post('/api/admin/collectmgr/GetTaskInstanceList', { filter }, {
       headers: appAuthHeaders()
     });
 

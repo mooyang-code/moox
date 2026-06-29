@@ -10,9 +10,15 @@ assert.doesNotMatch(
   'frontend storage APIs must not call /api/storage directly',
 );
 
+assert.doesNotMatch(
+  source,
+  /\/api\/service\//,
+  'frontend storage APIs must not call backend /api/service directly',
+);
+
 assert.match(
   source,
-  /\/api\/control\/\$\{storageServiceID\(group\)\}\/\$\{method\}/,
+  /\/api\/admin\/\$\{storageServiceID\(group\)\}\/\$\{method\}/,
   'frontend storage APIs must go through /api/admin/{service}/{method}',
 );
 

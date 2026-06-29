@@ -3,13 +3,11 @@ package cloudfunction
 import (
 	"context"
 	"encoding/json"
-	"strconv"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/pkg/config"
 	"github.com/mooyang-code/moox/modules/collector/pkg/model"
-	"github.com/mooyang-code/moox/pkg/infraconfig"
 	"github.com/tencentyun/scf-go-lib/functioncontext"
 )
 
@@ -169,11 +167,11 @@ func TestHandleRequestUpdatesRuntimeConfigForTaskEvent(t *testing.T) {
 
 func TestParseServerFromMooxURL(t *testing.T) {
 	cases := []struct {
-		name    string
-		url     string
-		wantIP  string
+		name     string
+		url      string
+		wantIP   string
 		wantPort int
-		wantOK  bool
+		wantOK   bool
 	}{
 		{"normal", "http://203.0.113.10:11000", "203.0.113.10", 11000, true},
 		{"https", "https://10.0.0.8:443", "10.0.0.8", 443, true},
@@ -194,10 +192,10 @@ func TestParseServerFromMooxURL(t *testing.T) {
 	}
 }
 
-// TestHandleKeepaliveProbeRecoversServerInfoFromMooxURL 覆盖历史故障场景：
-// 控制面 keepalive 事件只下发 moox_server_url 而未带 server_ip/server_port，
-// SCF 冷启动后应从 moox_server_url 解析出控制面地址，恢复 ServerInfo 并完成心跳上报。
-func TestHandleKeepaliveProbeRecoversServerInfoFromMooxURL(t *testing.T) {
+// TestHandleKeepaliveProbeRecoversRuntimeInfoFromServiceDeployments 覆盖运行时配置场景：
+// 控制面 keepalive 事件下发 service_deployments，SCF 冷启动后应恢复 ServerInfo
+// 和 storage access URL，并完成心跳上报。
+func TestHandleKeepaliveProbeRecoversRuntimeInfoFromServiceDeployments(t *testing.T) {
 	oldReporter := reportHeartbeatAfterProbe
 	oldGlobalConfig := config.GlobalConfig
 	t.Cleanup(func() {
@@ -205,20 +203,19 @@ func TestHandleKeepaliveProbeRecoversServerInfoFromMooxURL(t *testing.T) {
 		config.GlobalConfig = oldGlobalConfig
 	})
 
-	// 控制面地址从中央 infra 配置读取，避免硬编码真实 IP。
-	gw := infraconfig.AdminGateway()
-	if gw.Host == "" || gw.Port == 0 {
-		t.Fatalf("infraconfig.AdminGateway() 未返回有效端点，got %+v", gw)
-	}
-	wantIP := gw.Host
-	wantPort := gw.Port
+	const wantIP = "106.53.107.122"
+	const wantPort = 11000
+	const wantStorageURL = "http://106.53.107.122:20201"
 
 	reported := false
 	reportHeartbeatAfterProbe = func(ctx context.Context) error {
 		reported = true
 		serverIP, serverPort := config.GetServerInfo()
 		if serverIP != wantIP || serverPort != wantPort {
-			t.Fatalf("server recovered from moox_server_url = %s:%d, want %s:%d", serverIP, serverPort, wantIP, wantPort)
+			t.Fatalf("server recovered from service_deployments = %s:%d, want %s:%d", serverIP, serverPort, wantIP, wantPort)
+		}
+		if storageURL := config.GetStorageURL(); storageURL != wantStorageURL {
+			t.Fatalf("storage url recovered from service_deployments = %s, want %s", storageURL, wantStorageURL)
 		}
 		return nil
 	}
@@ -226,13 +223,16 @@ func TestHandleKeepaliveProbeRecoversServerInfoFromMooxURL(t *testing.T) {
 	ctx := functioncontext.NewContext(context.Background(), &functioncontext.FunctionContext{
 		FunctionName: "scf-coldstart-node",
 	})
-	// 模拟冷启动后 ServerInfo 为空：仅带 moox_server_url，不带 server_ip/server_port。
-	// 走 HandleRequest 全链路，使 applyRuntimeConfig 的 fallback 生效。
+	// 模拟冷启动后 ServerInfo 为空：仅带 service_deployments，不带 server_ip/server_port。
+	// 走 HandleRequest 全链路，使 applyRuntimeConfig 的 runtime deployment 生效。
 	event := model.CloudFunctionEvent{
-		Action:        model.EventActionKeepalive,
-		Source:        "keepalive_probe",
-		MooxServerURL: "http://" + wantIP + ":" + strconv.Itoa(wantPort),
-		RequestID:     "request-coldstart",
+		Action:    model.EventActionKeepalive,
+		Source:    "keepalive_probe",
+		RequestID: "request-coldstart",
+		ServiceDeployments: map[string]model.ServiceDeployment{
+			"service_gateway": {BaseURL: "http://106.53.107.122:11000"},
+			"storage_access":  {BaseURL: wantStorageURL},
+		},
 		Data: map[string]interface{}{
 			"node_id": "scf-coldstart-node",
 		},
@@ -254,7 +254,7 @@ func TestHandleKeepaliveProbeRecoversServerInfoFromMooxURL(t *testing.T) {
 		t.Fatalf("HandleRequest response = %#v, want success", resp)
 	}
 	if !reported {
-		t.Fatalf("expected keepalive probe to report heartbeat after recovering server info from moox_server_url")
+		t.Fatalf("expected keepalive probe to report heartbeat after recovering runtime info from service_deployments")
 	}
 }
 

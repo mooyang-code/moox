@@ -7,8 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -18,31 +16,12 @@ import (
 )
 
 type gatewayConfig struct {
-	ListenAddr  string
-	AdminURL  string
-	MetadataURL string
-	AccessURL   string
-	ViewURL     string
-}
-
-type gatewayTarget struct {
-	Base    string
-	Service string
-	Path    string
-	Method  string
-}
-
-type gatewayProxy struct {
-	proxies map[string]*httputil.ReverseProxy
+	ListenAddr string
 }
 
 func loadGatewayConfig() gatewayConfig {
 	return gatewayConfig{
-		ListenAddr:  envOr("MOOX_WEB_HOST_ADDR", ":10080"),
-		AdminURL:  strings.TrimRight(envOr("MOOX_ADMIN_GATEWAY_URL", "http://127.0.0.1:11000"), "/"),
-		MetadataURL: strings.TrimRight(envOr("MOOX_STORAGE_METADATA_URL", "http://127.0.0.1:20200"), "/"),
-		AccessURL:   strings.TrimRight(envOr("MOOX_STORAGE_ACCESS_URL", "http://127.0.0.1:20201"), "/"),
-		ViewURL:     strings.TrimRight(envOr("MOOX_STORAGE_VIEW_URL", "http://127.0.0.1:20202"), "/"),
+		ListenAddr: envOr("MOOX_WEB_HOST_ADDR", ":10080"),
 	}
 }
 
@@ -53,86 +32,8 @@ func envOr(key string, fallback string) string {
 	return fallback
 }
 
-func resolveAdminGatewayTarget(path string) (gatewayTarget, bool) {
-	const prefix = "/api/admin/"
-	if !strings.HasPrefix(path, prefix) {
-		return gatewayTarget{}, false
-	}
-	rest := strings.TrimPrefix(path, prefix)
-	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return gatewayTarget{}, false
-	}
-	return gatewayTarget{
-		Base:    "admin",
-		Service: parts[0],
-		Path:    prefix + parts[0] + "/" + parts[1],
-		Method:  parts[1],
-	}, true
-}
-
-func resolveStorageGatewayTarget(path string) (gatewayTarget, bool) {
-	const prefix = "/api/storage/"
-	if !strings.HasPrefix(path, prefix) {
-		return gatewayTarget{}, false
-	}
-	rest := strings.TrimPrefix(path, prefix)
-	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || parts[1] == "" {
-		return gatewayTarget{}, false
-	}
-	switch parts[0] {
-	case "metadata":
-		return gatewayTarget{Base: "metadata", Path: "/trpc.moox.storage.Metadata/" + parts[1], Method: parts[1]}, true
-	case "access":
-		return gatewayTarget{Base: "access", Path: "/trpc.moox.storage.Access/" + parts[1], Method: parts[1]}, true
-	case "view":
-		return gatewayTarget{Base: "view", Path: "/trpc.moox.storage.DataView/" + parts[1], Method: parts[1]}, true
-	default:
-		return gatewayTarget{}, false
-	}
-}
-
-func newGatewayProxy(cfg gatewayConfig) (*gatewayProxy, error) {
-	baseURLs := map[string]string{
-		"admin":   cfg.AdminURL,
-		"metadata": cfg.MetadataURL,
-		"access":   cfg.AccessURL,
-		"view":     cfg.ViewURL,
-	}
-	proxies := make(map[string]*httputil.ReverseProxy, len(baseURLs))
-	for name, raw := range baseURLs {
-		baseURL, err := url.Parse(raw)
-		if err != nil {
-			return nil, fmt.Errorf("parse %s url %q: %w", name, raw, err)
-		}
-		proxies[name] = httputil.NewSingleHostReverseProxy(baseURL)
-	}
-	return &gatewayProxy{proxies: proxies}, nil
-}
-
-func (p *gatewayProxy) ServeHTTP(w http.ResponseWriter, r *http.Request, target gatewayTarget) {
-	proxy, ok := p.proxies[target.Base]
-	if !ok {
-		http.Error(w, "unknown gateway base: "+target.Base, http.StatusBadGateway)
-		return
-	}
-
-	proxyReq := r.Clone(r.Context())
-	proxyReq.URL = cloneURL(r.URL)
-	proxyReq.URL.Path = target.Path
-	proxyReq.URL.RawPath = ""
-	proxyReq.RequestURI = ""
-
-	proxy.ServeHTTP(w, proxyReq)
-}
-
-func cloneURL(source *url.URL) *url.URL {
-	if source == nil {
-		return &url.URL{}
-	}
-	copied := *source
-	return &copied
+func isAPIRequest(path string) bool {
+	return path == "/api" || strings.HasPrefix(path, "/api/")
 }
 
 // 优化的静态文件处理器，支持缓存和gzip压缩
@@ -339,22 +240,12 @@ func main() {
 	}
 
 	cfg := loadGatewayConfig()
-	proxy, err := newGatewayProxy(cfg)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	// 设置路由
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if target, ok := resolveAdminGatewayTarget(r.URL.Path); ok {
-			log.Printf("转发 Admin 请求: %s -> %s", r.URL.Path, target.Path)
-			proxy.ServeHTTP(w, r, target)
-			return
-		}
-
-		if target, ok := resolveStorageGatewayTarget(r.URL.Path); ok {
-			log.Printf("转发 Storage 请求: %s -> %s", r.URL.Path, target.Path)
-			proxy.ServeHTTP(w, r, target)
+		if isAPIRequest(r.URL.Path) {
+			log.Printf("拒绝 API 请求: %s（web-host 仅提供静态资源）", r.URL.Path)
+			http.NotFound(w, r)
 			return
 		}
 
@@ -365,9 +256,6 @@ func main() {
 	// 启动服务器
 	log.Printf("服务器启动在 http://localhost%s", cfg.ListenAddr)
 	log.Println("静态文件服务: /")
-	log.Printf("Admin API代理: /api/admin/{service}/{method} -> %s/api/admin/{service}/{method}", cfg.AdminURL)
-	log.Printf("Storage Metadata代理: /api/storage/metadata/{method} -> %s/trpc.moox.storage.Metadata/{method}", cfg.MetadataURL)
-	log.Printf("Storage Access代理: /api/storage/access/{method} -> %s/trpc.moox.storage.Access/{method}", cfg.AccessURL)
-	log.Printf("Storage View代理: /api/storage/view/{method} -> %s/trpc.moox.storage.DataView/{method}", cfg.ViewURL)
+	log.Println("API请求不经过web-host，请前端直连网关 /api/admin")
 	log.Fatal(http.ListenAndServe(cfg.ListenAddr, nil))
 }

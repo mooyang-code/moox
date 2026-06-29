@@ -37,7 +37,7 @@ type DataTypeConfigService interface {
 // TaskRuleService 任务规则服务接口
 type TaskRuleService interface {
 	// GetTaskRuleList 获取任务规则列表
-	GetTaskRuleList(ctx context.Context, bizType, dataType, dataSource, enabled string) ([]*pb.TaskRule, error)
+	GetTaskRuleList(ctx context.Context, spaceID, bizType, ruleID, dataType, dataSource, enabled string) ([]*pb.TaskRule, error)
 
 	// GetTaskRule 获取单个任务规则
 	GetTaskRule(ctx context.Context, ruleID string) (*pb.TaskRule, error)

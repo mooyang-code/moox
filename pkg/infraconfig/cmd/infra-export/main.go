@@ -1,10 +1,10 @@
-// cmd/infra-export 把 infra 配置导出为 shell `export` 行，供部署脚本 source。
+// cmd/infra-export 把 legacy infra 配置导出为 shell `export` 行，供旧开发脚本 source。
 //
 // 用法：
 //   eval "$(go run ./cmd/infra-export)"
 //   eval "$(go run ./cmd/infra-export -root /path/to/repo)"
 //
-// 输出示例（真实值来自 infra/infra.local.yaml，此处仅占位）：
+// 输出示例（legacy 本地覆盖来自 infra/infra.local.yaml，此处仅占位）：
 //   export REMOTE_HOST=<deploy-host>
 //   export REMOTE_SSH=ubuntu@<deploy-host>
 //   export STORAGE_URL=http://<storage-host>:20201

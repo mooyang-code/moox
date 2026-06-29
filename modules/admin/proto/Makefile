@@ -1,4 +1,4 @@
-PROTO_FILES := moox_common.proto admin_service.proto ops_service.proto collect_service.proto infra_service.proto secret_service.proto
+PROTO_FILES := moox_common.proto admin_service.proto ops_service.proto collect_service.proto infra_service.proto secret_service.proto sysdeploy_service.proto
 OUTPUT_DIR := ./admingen
 
 .PHONY: all clean

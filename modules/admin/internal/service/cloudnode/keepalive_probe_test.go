@@ -3,21 +3,14 @@ package cloudnode
 import (
 	"strconv"
 	"testing"
-
-	"github.com/mooyang-code/moox/pkg/infraconfig"
 )
 
 // TestBuildKeepaliveEventDataCarriesServerFields 覆盖历史故障回归：
 // keepalive 探测事件必须携带 server_ip/server_port 顶层字段，否则 SCF collector
 // 冷启动后无法建立心跳通道，导致任务不下发、K线停采。
 func TestBuildKeepaliveEventDataCarriesServerFields(t *testing.T) {
-	// server_ip/server_port 从中央 infra 配置读取，避免硬编码真实 IP。
-	gw := infraconfig.AdminGateway()
-	if gw.Host == "" || gw.Port == 0 {
-		t.Fatalf("infraconfig.AdminGateway() 未返回有效端点，got %+v", gw)
-	}
-	serverIP := gw.Host
-	serverPort := gw.Port
+	const serverIP = "106.53.107.122"
+	const serverPort = 11000
 	const nodeID = "scfh2jq-DataCollector-Master-1782437625"
 
 	event := buildKeepaliveEventData(serverIP, serverPort, nodeID)
@@ -38,6 +31,9 @@ func TestBuildKeepaliveEventDataCarriesServerFields(t *testing.T) {
 	if !ok || gotURL != wantURL {
 		t.Fatalf("event[moox_server_url] = %v, want %s", event["moox_server_url"], wantURL)
 	}
+	if _, ok := event["storage_server_rpc"]; ok {
+		t.Fatalf("event[storage_server_rpc] should not be emitted; collector storage calls use direct HTTP RPC config")
+	}
 
 	// data.node_id 必须回传，SCF 侧用于识别目标节点
 	data, ok := event["data"].(map[string]interface{})
@@ -46,5 +42,28 @@ func TestBuildKeepaliveEventDataCarriesServerFields(t *testing.T) {
 	}
 	if gotNodeID, _ := data["node_id"].(string); gotNodeID != nodeID {
 		t.Fatalf("event[data][node_id] = %q, want %q", gotNodeID, nodeID)
+	}
+}
+
+func TestApplyRuntimeDeploymentOverridesCarriesServiceDeployments(t *testing.T) {
+	payload := buildKeepaliveEventData("127.0.0.1", 11000, "node-1")
+	deployments := map[string]interface{}{
+		"service_gateway": map[string]interface{}{"base_url": "http://106.53.107.122:11000"},
+		"storage_access":  map[string]interface{}{"base_url": "http://106.53.107.122:20201"},
+	}
+
+	applyRuntimeDeploymentOverrides(payload, deployments)
+
+	if got := payload["moox_server_url"]; got != "http://106.53.107.122:11000" {
+		t.Fatalf("moox_server_url = %v, want service_gateway URL", got)
+	}
+	if got := payload["server_ip"]; got != "106.53.107.122" {
+		t.Fatalf("server_ip = %v, want service_gateway host", got)
+	}
+	if got := payload["server_port"]; got != 11000 {
+		t.Fatalf("server_port = %v, want service_gateway port", got)
+	}
+	if got := payload["storage_server_url"]; got != "http://106.53.107.122:20201" {
+		t.Fatalf("storage_server_url = %v, want storage_access URL", got)
 	}
 }

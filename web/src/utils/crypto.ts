@@ -4,6 +4,7 @@
  */
 import CryptoJS from 'crypto-js';
 import forge from 'node-forge';
+import { gatewayURL } from '@/api/gateway';
 import { getAppInfo } from '@/api/storage/auth';
 
 /**
@@ -247,7 +248,7 @@ export function generateDeviceId(): string {
     private async _fetchSalt(username: string): Promise<any> {
       console.log('🌐 请求新的登录盐值...', { username });
       
-      const response = await fetch(`/api/admin/auth/GetLoginSalt`, {
+      const response = await fetch(gatewayURL('/api/admin/auth/GetLoginSalt'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -315,7 +316,7 @@ export function generateDeviceId(): string {
         });
   
         // 4. 发送登录请求
-        const response = await fetch(`/api/admin/auth/Login`, {
+        const response = await fetch(gatewayURL('/api/admin/auth/Login'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(loginRequest)

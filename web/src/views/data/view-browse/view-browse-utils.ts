@@ -28,6 +28,26 @@ export interface ViewFilterState {
   valueType?: FieldValueType;
 }
 
+export interface KlineTableRow {
+  key: string;
+  version: string;
+  freq?: string;
+  values: Record<string, string>;
+}
+
+export interface KlineChartRecord {
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
+export const DEFAULT_KLINE_LIMIT = 200;
+export const MIN_KLINE_LIMIT = 1;
+export const MAX_KLINE_LIMIT = 5000;
+
 const systemViewLabels: Record<string, string> = {
   subject_id: '数据ID',
   record_id: '记录ID',
@@ -92,6 +112,16 @@ export function buildViewSorts(sort: ViewSortState): SortSpec[] {
   return [{ field_name: fieldName, desc: sort.direction === 'desc' }];
 }
 
+export function buildKlineQuerySorts(): SortSpec[] {
+  return [{ field_name: 'data_time', desc: true }];
+}
+
+export function normalizeKlineLimit(value: unknown) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_KLINE_LIMIT;
+  return Math.min(MAX_KLINE_LIMIT, Math.max(MIN_KLINE_LIMIT, parsed));
+}
+
 export function buildViewFilterExprs(filters: ViewFilterState[]): FilterExpr[] {
   const out: FilterExpr[] = [];
   for (const filter of filters) {
@@ -149,6 +179,22 @@ export function buildViewFilterExprs(filters: ViewFilterState[]): FilterExpr[] {
     out.push({ expr: `${fieldName} contains $${argName}`, args: { [argName]: typedValue } });
   }
   return out;
+}
+
+export function klineSubjectIdFromFilters(filters: ViewFilterState[]) {
+  const filter = filters.find((item) => item.fieldName.trim() === 'subject_id');
+  if (!filter || filter.operator === 'empty' || filter.operator === 'not_empty' || filter.operator === 'range') {
+    return '';
+  }
+  return (filter.value || '').trim();
+}
+
+export function klineRowsHaveFreq(rows: KlineTableRow[]) {
+  return rows.some((row) => isMeaningfulKlineText(row.freq));
+}
+
+export function buildKlineChartRecords(rows: KlineTableRow[], subjectId = ''): KlineChartRecord[] {
+  return buildKlineRecords(rows, subjectId).map((item) => item.record);
 }
 
 function readableViewColumnLabel(columnName: string) {
@@ -252,4 +298,68 @@ function typedFilterValue(value: string, valueType: FieldValueType): TypedValue 
 
 function isValueType(value: FieldValueType, name: string, alias: number) {
   return value === name || value === alias;
+}
+
+function isMeaningfulKlineText(value?: string) {
+  const text = (value || '').trim();
+  return Boolean(text && text !== '-');
+}
+
+function parseKlineTimestamp(value: string) {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function buildKlineRecords(rows: KlineTableRow[], subjectId = '') {
+  const exactRows = subjectId ? rows.filter((row) => row.key === subjectId) : [];
+  const fuzzyRows = subjectId ? rows.filter((row) => row.key.includes(subjectId)) : [];
+  const sourceRows = exactRows.length > 0 ? exactRows : fuzzyRows.length > 0 ? fuzzyRows : rows;
+  const recordsByTime = new Map<number, { record: KlineChartRecord }>();
+
+  for (const row of sourceRows) {
+    const timestamp = parseKlineTimestamp(row.version);
+    if (timestamp === undefined) continue;
+    const open = klineFieldNumber(row.values, 'open');
+    const high = klineFieldNumber(row.values, 'high');
+    const low = klineFieldNumber(row.values, 'low');
+    const close = klineFieldNumber(row.values, 'close');
+    if (open === undefined || high === undefined || low === undefined || close === undefined) continue;
+
+    const volume = klineFieldNumber(row.values, 'volume');
+    recordsByTime.set(timestamp, {
+      record: {
+        timestamp,
+        open,
+        high,
+        low,
+        close,
+        ...(volume === undefined ? {} : { volume }),
+      },
+    });
+  }
+
+  return Array.from(recordsByTime.values()).sort((a, b) => a.record.timestamp - b.record.timestamp);
+}
+
+function klineFieldNumber(values: Record<string, string>, fieldName: 'open' | 'high' | 'low' | 'close' | 'volume') {
+  const raw = klineFieldValue(values, fieldName);
+  if (!isMeaningfulKlineText(raw)) return undefined;
+  const parsed = Number.parseFloat(String(raw).replace(/,/g, ''));
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function klineFieldValue(values: Record<string, string>, fieldName: 'open' | 'high' | 'low' | 'close' | 'volume') {
+  const aliases = fieldName === 'volume' ? ['volume', 'vol'] : [fieldName];
+  for (const alias of aliases) {
+    const exact = values[alias];
+    if (exact !== undefined) return exact;
+
+    const lowerAlias = alias.toLowerCase();
+    const entry = Object.entries(values).find(([name]) => {
+      const lowerName = name.toLowerCase();
+      return lowerName === lowerAlias || lowerName.endsWith(`.${lowerAlias}`);
+    });
+    if (entry) return entry[1];
+  }
+  return undefined;
 }

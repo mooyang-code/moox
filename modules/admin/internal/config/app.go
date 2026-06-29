@@ -10,14 +10,13 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
-
-	"github.com/mooyang-code/moox/pkg/infraconfig"
 )
 
 // 全局配置实例
 var (
-	globalConfig *AppConfig
-	configMutex  sync.RWMutex
+	globalConfig              *AppConfig
+	runtimeStorageMetadataURL string
+	configMutex               sync.RWMutex
 )
 
 // AppConfig 应用配置（总配置）
@@ -282,13 +281,28 @@ func GetGlobalConfig() *AppConfig {
 	return globalConfig
 }
 
-// GetXDataURL 获取 xData 存储服务地址。
-// 优先取中央基础设施配置 infra/infra*.yaml 的 xdata 端点（dev/仓库内），
-// 缺失时回退到 app.yaml 的 storage.xdata_url（部署环境由 deploy 脚本渲染注入）。
-func GetXDataURL() string {
-	if url := infraconfig.XDataURL(); url != "" {
-		return url
+// SetStorageMetadataURL 设置运行时 storage Metadata 服务地址。
+// 服务部署信息来自 t_service_deployments，由 bootstrap 在 SysDeploy 初始化后注入。
+func SetStorageMetadataURL(rawURL string) {
+	rawURL = strings.TrimRight(strings.TrimSpace(rawURL), "/")
+	if rawURL == "" {
+		return
 	}
+	configMutex.Lock()
+	defer configMutex.Unlock()
+	runtimeStorageMetadataURL = rawURL
+}
+
+func getRuntimeStorageMetadataURL() string {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return runtimeStorageMetadataURL
+}
+
+// GetXDataURL 获取本地 bootstrap 默认的 xData/storage access 地址。
+// 运行时服务部署信息不从 infra.local.yaml 派生；需要真实部署地址时应通过
+// t_service_deployments/SysDeploy 注入或查询。
+func GetXDataURL() string {
 	cfg := GetGlobalConfig()
 	if cfg == nil || cfg.Storage.XDataURL == "" {
 		return ""
@@ -297,12 +311,11 @@ func GetXDataURL() string {
 }
 
 // GetMetadataURL 获取 storage Metadata 服务 HTTP 地址。
-// 优先从 storage access URL 推导（20201 -> 20200），否则回退默认本地端口。
+// 优先使用 SysDeploy 注入的 storage_metadata 地址，其次从本地 bootstrap
+// 默认 storage access URL 推导（20201 -> 20200），最后回退默认本地端口。
 func GetMetadataURL() string {
-	if url := infraconfig.StorageAccessURL(); url != "" {
-		if metadataURL := metadataURLFromAccessURL(url); metadataURL != "" {
-			return metadataURL
-		}
+	if url := getRuntimeStorageMetadataURL(); url != "" {
+		return url
 	}
 	if url := GetXDataURL(); url != "" {
 		if metadataURL := metadataURLFromAccessURL(url); metadataURL != "" {

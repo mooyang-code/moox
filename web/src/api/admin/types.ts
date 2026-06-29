@@ -40,3 +40,28 @@ export interface SpaceMember {
   role: string;
   status: string;
 }
+
+export interface ServiceDeployment {
+  id?: number;
+  service_name: string;
+  service_kind: string;
+  protocol: string;
+  host: string;
+  port: number;
+  base_url?: string;
+  rpc_address?: string;
+  gateway_path?: string;
+  scope: string;
+  status: string;
+  description?: string;
+  extra_config?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ServiceDeploymentWarning {
+  code: string;
+  message: string;
+  service_name?: string;
+  related_endpoint?: string;
+}

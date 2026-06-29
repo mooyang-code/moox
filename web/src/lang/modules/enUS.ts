@@ -144,6 +144,7 @@ export default {
     ["ops-storage-archive"]: "archive files",
     ["settings"]: "settings",
     ["settings-spaces"]: "spaces",
-    ["settings-secrets"]: "secrets"
+    ["settings-secrets"]: "secrets",
+    ["settings-service-deployments"]: "service deployments"
   }
 };

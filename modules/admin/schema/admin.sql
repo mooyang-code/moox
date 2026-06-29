@@ -38,6 +38,39 @@ ON t_space_members(c_space_id, c_user_id);
 CREATE INDEX IF NOT EXISTS idx_space_members_user_id
 ON t_space_members(c_user_id);
 
+-- ************ 系统服务部署信息表 ************
+CREATE TABLE IF NOT EXISTS t_service_deployments (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_service_name TEXT NOT NULL,
+    c_service_kind TEXT NOT NULL DEFAULT '',
+    c_protocol TEXT NOT NULL DEFAULT 'http',
+    c_host TEXT NOT NULL DEFAULT '',
+    c_port INTEGER NOT NULL DEFAULT 0,
+    c_base_url TEXT NOT NULL DEFAULT '',
+    c_rpc_address TEXT NOT NULL DEFAULT '',
+    c_gateway_path TEXT NOT NULL DEFAULT '',
+    c_scope TEXT NOT NULL DEFAULT 'public',
+    c_status TEXT NOT NULL DEFAULT 'active',
+    c_description TEXT NOT NULL DEFAULT '',
+    c_extra_config TEXT NOT NULL DEFAULT '{}',
+    c_is_deleted TEXT NOT NULL DEFAULT 'false',
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_service_deployments_name_deleted
+ON t_service_deployments(c_service_name, c_is_deleted);
+CREATE INDEX IF NOT EXISTS idx_service_deployments_kind
+ON t_service_deployments(c_service_kind);
+CREATE INDEX IF NOT EXISTS idx_service_deployments_scope
+ON t_service_deployments(c_scope);
+CREATE INDEX IF NOT EXISTS idx_service_deployments_status
+ON t_service_deployments(c_status);
+
+DROP TRIGGER IF EXISTS update_service_deployments_mtime;
+CREATE TRIGGER IF NOT EXISTS update_service_deployments_mtime AFTER UPDATE ON t_service_deployments BEGIN
+    UPDATE t_service_deployments SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+
 -- ************ 用户表 ************
 CREATE TABLE IF NOT EXISTS t_users (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 自增ID
