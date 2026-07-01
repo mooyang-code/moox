@@ -93,6 +93,30 @@ func applyBindingDefaults(binding *StorageBinding, subjectMarket string) {
 	if binding.SubjectMarket == "" {
 		binding.SubjectMarket = subjectMarket
 	}
+	binding.BindDatasetIDs = appendMissingDatasetIDs(binding.BindDatasetIDs, binding.RecordDatasetID, binding.KlineDatasetID)
+}
+
+func appendMissingDatasetIDs(ids []string, defaults ...string) []string {
+	out := make([]string, 0, len(ids)+len(defaults))
+	seen := make(map[string]struct{}, len(ids)+len(defaults))
+	appendID := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	for _, id := range ids {
+		appendID(id)
+	}
+	for _, id := range defaults {
+		appendID(id)
+	}
+	return out
 }
 
 func loadBinanceSourceConfig() (*binanceSourceConfig, error) {

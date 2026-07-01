@@ -199,9 +199,9 @@ interface TaskInstance {
   ModifyTime: string;
 }
 
-type TaskInstanceRecord = Partial<TaskInstance> & {
-  last_exec_node?: string;
-};
+type RawTaskInstance = Partial<TaskInstance> & Record<string, any>;
+
+type TaskInstanceRecord = Partial<TaskInstance>;
 
 const loading = ref(false);
 const route = useRoute();
@@ -278,7 +278,29 @@ const getStatusText = (status: number) => {
 
 const getLastExecNode = (record: TaskInstanceRecord) => {
   if (!record) return '-';
-  return record.LastExecNode || record.last_exec_node || '-';
+  return record.LastExecNode || '-';
+};
+
+const normalizeTaskInstance = (raw: RawTaskInstance): TaskInstance => {
+  const lastExecStatus = raw.LastExecStatus ?? raw.last_exec_status ?? 0;
+  const isDeleted = raw.IsDeleted ?? raw.is_deleted ?? 'false';
+  return {
+    ID: Number(raw.ID ?? raw.id ?? 0),
+    TaskID: raw.TaskID ?? raw.task_id ?? '',
+    RuleID: raw.RuleID ?? raw.rule_id ?? '',
+    PlannedExecNode: raw.PlannedExecNode ?? raw.planned_exec_node ?? '',
+    LastExecNode: raw.LastExecNode ?? raw.last_exec_node ?? '',
+    LastExecStatus: Number(lastExecStatus),
+    Symbol: raw.Symbol ?? raw.symbol ?? '',
+    CollectDataType: raw.CollectDataType ?? raw.collect_data_type ?? '',
+    DataType: raw.DataType ?? raw.data_type ?? raw.CollectDataType ?? raw.collect_data_type ?? '',
+    TaskParams: raw.TaskParams ?? raw.task_params ?? '{}',
+    LastExecTime: raw.LastExecTime ?? raw.last_exec_time ?? null,
+    Result: raw.Result ?? raw.result ?? '{}',
+    IsDeleted: String(isDeleted || 'false'),
+    CreateTime: raw.CreateTime ?? raw.create_time ?? '',
+    ModifyTime: raw.ModifyTime ?? raw.modify_time ?? ''
+  };
 };
 
 const formatJSON = (str: string) => {
@@ -380,7 +402,7 @@ const getInstanceList = async () => {
     // 新协议：ret_info.code 为成功标识，业务字段 instances/total 在顶层
     const data = response as any;
     if (isRetInfoSuccess(data?.ret_info?.code)) {
-      instanceList.value = data.instances || [];
+      instanceList.value = (data.instances || []).map(normalizeTaskInstance);
       pagination.value.total = Number(data.total) || (data.instances ? data.instances.length : 0);
     } else {
       Message.error(data?.ret_info?.msg || '获取任务实例列表失败');

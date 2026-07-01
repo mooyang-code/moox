@@ -82,14 +82,14 @@ func TestStorageConfigFlagRegisteredForTRPC(t *testing.T) {
 	}
 }
 
-func TestStorageRolesDefaultToAccessAndDeriver(t *testing.T) {
+func TestStorageRolesDefaultToAccessAndView(t *testing.T) {
 	var cfg storageconfig.RuntimeConfig
 	cfg.ApplyDefaults()
 	if !cfg.Storage.HasRole("access") {
 		t.Fatalf("default storage roles should include access")
 	}
-	if !cfg.Storage.HasRole("deriver") {
-		t.Fatalf("default storage roles should include deriver")
+	if !cfg.Storage.HasRole("view") {
+		t.Fatalf("default storage roles should include view")
 	}
 	if cfg.Storage.HasRole("primary") {
 		t.Fatalf("default storage roles should not include primary")
@@ -97,12 +97,12 @@ func TestStorageRolesDefaultToAccessAndDeriver(t *testing.T) {
 }
 
 func TestRoleEnabledIsCaseInsensitive(t *testing.T) {
-	cfg := storageconfig.StorageConfig{Roles: []string{" Access ", "DERIVER"}}
+	cfg := storageconfig.StorageConfig{Roles: []string{" Access ", "VIEW"}}
 	if !cfg.HasRole("access") {
 		t.Fatalf("HasRole(access) = false, want true")
 	}
-	if !cfg.HasRole("deriver") {
-		t.Fatalf("HasRole(deriver) = false, want true")
+	if !cfg.HasRole("view") {
+		t.Fatalf("HasRole(view) = false, want true")
 	}
 	if cfg.HasRole("primary") {
 		t.Fatalf("HasRole(primary) = true, want false")
@@ -187,23 +187,73 @@ func TestRoleHelpers(t *testing.T) {
 		t.Fatalf("primary-only role should create primary service")
 	}
 
-	accessDeriver := storageconfig.StorageConfig{Roles: []string{"access", "deriver"}}
-	if !needsRowsChangedBus(accessDeriver) {
-		t.Fatalf("access+deriver roles should need row changed eventbus")
+	accessView := storageconfig.StorageConfig{Roles: []string{"access", "view"}}
+	if !needsRowsChangedBus(accessView) {
+		t.Fatalf("access+view roles should need row changed eventbus")
 	}
-	if !shouldCreateStorageService(accessDeriver) {
-		t.Fatalf("access+deriver roles should create access storage service")
+	if !shouldCreateStorageService(accessView) {
+		t.Fatalf("access+view roles should create access storage service")
 	}
-	if !shouldCreatePrimaryService(accessDeriver) {
-		t.Fatalf("local access+deriver roles should create primary service")
+	if !shouldCreatePrimaryService(accessView) {
+		t.Fatalf("local access+view roles should create primary service")
 	}
 
 	remotePrimary := storageconfig.StorageConfig{
-		Roles:   []string{"access", "deriver"},
+		Roles:   []string{"access", "view"},
 		Primary: storageconfig.StoragePrimary{ServiceName: "trpc.moox.storage.PrimaryStore"},
 	}
 	if shouldCreatePrimaryService(remotePrimary) {
-		t.Fatalf("access+deriver with remote primary should not create local primary service")
+		t.Fatalf("access+view with remote primary should not create local primary service")
+	}
+
+	archiveOnly := storageconfig.StorageConfig{Roles: []string{"archive"}}
+	if !needsRowsChangedBus(archiveOnly) {
+		t.Fatalf("archive-only role should need row changed eventbus")
+	}
+	if shouldCreateStorageService(archiveOnly) {
+		t.Fatalf("archive-only role should not create access storage service")
+	}
+	if shouldCreatePrimaryService(archiveOnly) {
+		t.Fatalf("archive-only role should not create primary service")
+	}
+	if !shouldStartArchiveRole(archiveOnly) {
+		t.Fatalf("archive-only role should start archive runtime")
+	}
+
+	accessOnly := storageconfig.StorageConfig{Roles: []string{"access"}}
+	if shouldStartArchiveRole(accessOnly) {
+		t.Fatalf("access-only role should not start archive runtime")
+	}
+
+	viewOnly := storageconfig.StorageConfig{Roles: []string{"view"}}
+	if shouldStartArchiveRole(viewOnly) {
+		t.Fatalf("view-only role should not start archive runtime")
+	}
+}
+
+func TestStandaloneArchiveRoleRequiresNonMemoryEventBus(t *testing.T) {
+	err := validateStorageDeployment(storageconfig.StorageConfig{
+		Roles:    []string{"archive"},
+		EventBus: storageconfig.StorageEventBus{Type: "memory"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "archive role requires non-memory eventbus") {
+		t.Fatalf("standalone archive with memory eventbus error = %v", err)
+	}
+
+	err = validateStorageDeployment(storageconfig.StorageConfig{
+		Roles:    []string{"access", "archive"},
+		EventBus: storageconfig.StorageEventBus{Type: "memory"},
+	})
+	if err != nil {
+		t.Fatalf("access+archive with memory eventbus should be valid: %v", err)
+	}
+
+	err = validateStorageDeployment(storageconfig.StorageConfig{
+		Roles:    []string{"archive"},
+		EventBus: storageconfig.StorageEventBus{Type: "nats"},
+	})
+	if err != nil {
+		t.Fatalf("standalone archive with nats eventbus should be valid: %v", err)
 	}
 }
 
@@ -211,7 +261,7 @@ func TestDefaultAndRepositoryLocalAccessCreatePrimary(t *testing.T) {
 	var defaults storageconfig.RuntimeConfig
 	defaults.ApplyDefaults()
 	if !shouldCreatePrimaryService(defaults.Storage) {
-		t.Fatalf("default local access+deriver roles should create primary service")
+		t.Fatalf("default local access+view roles should create primary service")
 	}
 
 	cfg, ok := loadStorageConfig(filepath.Join("..", "..", "config", "storage.yaml"))
@@ -222,33 +272,33 @@ func TestDefaultAndRepositoryLocalAccessCreatePrimary(t *testing.T) {
 		t.Fatalf("repository primary service_name = %q, want empty local primary", cfg.Storage.Primary.ServiceName)
 	}
 	if !shouldCreatePrimaryService(cfg.Storage) {
-		t.Fatalf("repository local access+deriver roles should create primary service")
+		t.Fatalf("repository local access+view roles should create primary service")
 	}
 }
 
-func TestDeriverUsesLocalAccessReaderOnlyForInProcessMemoryAccess(t *testing.T) {
+func TestViewUsesLocalAccessReaderOnlyForInProcessMemoryAccess(t *testing.T) {
 	memoryAccess := storageconfig.StorageConfig{
-		Roles:    []string{"access", "deriver"},
+		Roles:    []string{"access", "view"},
 		EventBus: storageconfig.StorageEventBus{Type: "memory"},
 	}
 	if !shouldUseLocalAccessReader(memoryAccess) {
-		t.Fatalf("access+deriver with memory eventbus should use local access reader")
+		t.Fatalf("access+view with memory eventbus should use local access reader")
 	}
 
 	natsAccess := storageconfig.StorageConfig{
-		Roles:    []string{"access", "deriver"},
+		Roles:    []string{"access", "view"},
 		EventBus: storageconfig.StorageEventBus{Type: "nats"},
 	}
 	if shouldUseLocalAccessReader(natsAccess) {
-		t.Fatalf("access+deriver with nats eventbus should use remote access reader")
+		t.Fatalf("access+view with nats eventbus should use remote access reader")
 	}
 
-	memoryDeriverOnly := storageconfig.StorageConfig{
-		Roles:    []string{"deriver"},
+	memoryViewOnly := storageconfig.StorageConfig{
+		Roles:    []string{"view"},
 		EventBus: storageconfig.StorageEventBus{Type: "memory"},
 	}
-	if shouldUseLocalAccessReader(memoryDeriverOnly) {
-		t.Fatalf("deriver-only with memory eventbus should not use local access reader")
+	if shouldUseLocalAccessReader(memoryViewOnly) {
+		t.Fatalf("view-only with memory eventbus should not use local access reader")
 	}
 }
 
@@ -262,16 +312,16 @@ func TestRepositoryConfigUsesUnifiedEventSubjectPrefix(t *testing.T) {
 	}
 }
 
-func TestRepositoryConfigEnablesEmbeddedNATS(t *testing.T) {
+func TestRepositoryConfigUsesMemoryEventBusByDefault(t *testing.T) {
 	cfg, ok := loadStorageConfig(filepath.Join("..", "..", "config", "storage.yaml"))
 	if !ok {
 		t.Fatalf("load repository config failed")
 	}
-	if cfg.Storage.EventBus.Type != "nats" {
+	if cfg.Storage.EventBus.Type != "memory" {
 		t.Fatalf("eventbus type = %q", cfg.Storage.EventBus.Type)
 	}
-	if !cfg.Storage.EventBus.Embedded.Enabled {
-		t.Fatalf("repository storage config should enable embedded nats for local deployment")
+	if cfg.Storage.EventBus.Embedded.Enabled {
+		t.Fatalf("repository storage config should not enable embedded nats for memory eventbus")
 	}
 }
 

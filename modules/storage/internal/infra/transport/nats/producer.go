@@ -177,8 +177,8 @@ func (p *NATSProducer) Subscribe(ctx context.Context, subject string, handler tr
 			Data:    msg.Data,
 			Time:    time.Now(),
 		}
-		// handler 返回值直接决定 JetStream Ack/Nak。上层 deriver 会等待本事件对应的
-		// 批处理完成后再返回，因此批处理失败可以通过 Nak 触发 redelivery。
+		// handler 返回值直接决定 JetStream Ack/Nak。上层 view/archive 事件消费者会等待本事件
+		// 对应的批处理完成后再返回，因此批处理失败可以通过 Nak 触发 redelivery。
 		if err := handler(trpc.BackgroundContext(), event); err != nil {
 			_ = msg.Nak()
 			log.Errorf("处理NATS消息失败: %v", err)
@@ -187,7 +187,7 @@ func (p *NATSProducer) Subscribe(ctx context.Context, subject string, handler tr
 		if err := msg.Ack(); err != nil {
 			log.Errorf("确认NATS消息失败: %v", err)
 		}
-	}, nats.ManualAck(), nats.Durable(consumerName))
+	}, nats.ManualAck(), nats.Durable(consumerName), nats.DeliverNew())
 	if err != nil {
 		return nil, fmt.Errorf("订阅消息失败: %w", err)
 	}

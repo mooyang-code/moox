@@ -28,7 +28,7 @@ type StorageConfig struct {
 	Devices  StorageDevices  `yaml:"devices"`
 	Primary  StoragePrimary  `yaml:"primary"`
 	EventBus StorageEventBus `yaml:"eventbus"`
-	Deriver  StorageDeriver  `yaml:"deriver"`
+	View     StorageView     `yaml:"view"`
 }
 
 // StorageMetadata 保存元数据存储与种子数据配置。
@@ -63,12 +63,13 @@ type StorageEmbeddedEventBus struct {
 	StartupTimeoutMS int    `yaml:"startup_timeout_ms"`
 }
 
-// StorageDeriver 保存派生服务消费与批处理配置。
-type StorageDeriver struct {
-	AccessServiceName string `yaml:"access_service_name"`
-	BatchSize         int    `yaml:"batch_size"`
-	BatchWaitMS       int    `yaml:"batch_wait_ms"`
-	MaxWorkers        int    `yaml:"max_workers"`
+// StorageView 保存 View 服务消费与批处理配置。
+type StorageView struct {
+	MetadataServiceName string `yaml:"metadata_service_name"`
+	AccessServiceName   string `yaml:"access_service_name"`
+	BatchSize           int    `yaml:"batch_size"`
+	BatchWaitMS         int    `yaml:"batch_wait_ms"`
+	MaxWorkers          int    `yaml:"max_workers"`
 }
 
 // StoragePrimary 保存主存服务访问配置。
@@ -85,7 +86,7 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.Root = "./var/storage"
 	}
 	if len(c.Roles) == 0 {
-		c.Roles = []string{"access", "deriver"}
+		c.Roles = []string{"access", "view"}
 	}
 	if c.Metadata.Path == "" {
 		c.Metadata.Path = filepath.Join(c.Root, "metadata", "storage_metadata.db")
@@ -115,7 +116,7 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.EventBus.StreamName = "MOOX_STORAGE"
 	}
 	if c.EventBus.ConsumerName == "" {
-		c.EventBus.ConsumerName = "storage_deriver"
+		c.EventBus.ConsumerName = "storage_view"
 	}
 	if c.EventBus.Embedded.Enabled {
 		if c.EventBus.Embedded.Host == "" {
@@ -131,17 +132,20 @@ func (c *StorageConfig) ApplyDefaults() {
 			c.EventBus.Embedded.StartupTimeoutMS = 10000
 		}
 	}
-	if c.Deriver.AccessServiceName == "" {
-		c.Deriver.AccessServiceName = "trpc.moox.storage.Access"
+	if c.View.MetadataServiceName == "" {
+		c.View.MetadataServiceName = "trpc.moox.storage.Metadata"
 	}
-	if c.Deriver.BatchSize <= 0 {
-		c.Deriver.BatchSize = 500
+	if c.View.AccessServiceName == "" {
+		c.View.AccessServiceName = "trpc.moox.storage.Access"
 	}
-	if c.Deriver.BatchWaitMS <= 0 {
-		c.Deriver.BatchWaitMS = 200
+	if c.View.BatchSize <= 0 {
+		c.View.BatchSize = 500
 	}
-	if c.Deriver.MaxWorkers <= 0 {
-		c.Deriver.MaxWorkers = 4
+	if c.View.BatchWaitMS <= 0 {
+		c.View.BatchWaitMS = 200
+	}
+	if c.View.MaxWorkers <= 0 {
+		c.View.MaxWorkers = 4
 	}
 }
 

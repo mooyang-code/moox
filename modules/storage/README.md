@@ -96,7 +96,7 @@ storage:
   root: ./var/storage                                  # 数据根目录
   roles:                                              # 本进程承担的运行角色
     - access
-    - deriver
+    - view
   metadata:
     path: ./var/storage/metadata/storage_metadata.db   # 元数据 SQLite 文件
   devices:
@@ -111,10 +111,11 @@ storage:
     nats_url: nats://127.0.0.1:4222
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
-    consumer_name: storage_deriver
+    consumer_name: storage_view
     embedded:
       enabled: true         # 本地默认内嵌 JetStream，无需单独启动 nats-server
-  deriver:
+  view:
+    metadata_service_name: trpc.moox.storage.Metadata
     access_service_name: trpc.moox.storage.Access  # 留空=同进程本地 Access reader
     batch_size: 500
     batch_wait_ms: 200
@@ -129,16 +130,17 @@ storage:
 | --- | --- |
 | `access` | 面向用户的写入和权威读取入口；校验列契约、解析路由、写 PrimaryStore，并发布行变更事件。 |
 | `primary` | 拥有 Pebble PrimaryStore RPC；可按路由和配置部署多个 primary 服务。 |
-| `deriver` | 消费行变更事件、批量聚合 key、通过 Access 回读当前行；TimeSeries View 写入 DuckDB，Record View 写入 Bleve。 |
+| `view` | 消费行变更事件、批量聚合 key、通过 Access RPC 回读当前行；TimeSeries View 写入 DuckDB，Record View 写入 Bleve。 |
+| `archive` | 独立归档运行时；消费行变更事件，通过 Metadata/Access RPC 读取元数据与主存事实数据，后续将写入 Parquet 冷归档。 |
 
-默认运行角色是 `access + deriver`，不包含显式 `primary`。当 `access` 的 `primary.service_name` 为空时，进程会同时暴露本地 `PrimaryStore`，保持单进程/本地主存部署可用；当 `primary.service_name` 非空时，Access 走远程 PrimaryStore，除非显式加入 `primary` 角色。
+默认运行角色是 `access + view`，不包含显式 `primary`。当 `access` 的 `primary.service_name` 为空时，进程会同时暴露本地 `PrimaryStore`，保持单进程/本地主存部署可用；当 `primary.service_name` 非空时，Access 走远程 PrimaryStore，除非显式加入 `primary` 角色。
 
 默认事件总线是 NATS。仓库自带 `config/storage.yaml` 会在进程内启动一个内嵌 JetStream，因此本地运行不需要额外安装或启动 `nats-server`；分布式部署时可以关闭 `eventbus.embedded.enabled`，让各节点连接同一个独立 NATS。`memory` 只适合极简单进程测试；它仍然异步投递事件，不提供写后立即可查派生结果的契约。NATS 行变更 subject 使用 `eventbus.subject_prefix` 拼接：
 
 - `${prefix}.time_series.rows_changed.v1`
 - `${prefix}.record.rows_changed.v1`
 
-NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。Deriver 事件 handler 只有在派生写入成功后才返回 success；失败会向上传递错误，让 NATS `Nak` 并重试。Deriver 批处理参数为 `deriver.access_service_name`、`deriver.batch_size`、`deriver.batch_wait_ms`、`deriver.max_workers`。
+NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。实时事件消费者只处理启动后新产生的行变更；历史补仓、断档追数和读模型重建统一交给 View rebuild。View 事件 handler 只有在派生写入成功后才返回 success；失败会向上传递错误，让 NATS `Nak` 并重试。View 批处理参数为 `view.metadata_service_name`、`view.access_service_name`、`view.batch_size`、`view.batch_wait_ms`、`view.max_workers`。Archive 独立部署时也复用 `view.metadata_service_name` 和 `view.access_service_name` 连接 Metadata/Access RPC，并通过同一个 eventbus 订阅行变更事件；当前事件 handler 为占位 ack，Parquet 归档策略后续补齐。
 
 ### `config/trpc_go.yaml` 默认服务端口
 
@@ -157,7 +159,7 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 | `trpc.moox.storage.view.timer` | 版本化 View 构建：TimeSeries 生成 DuckDB 结果表，Record 生成 Bleve 索引 | 开（每 30s） |
 | `trpc.moox.storage.view.cleanup.timer` | 清理旧物化结果表 | 开（每小时） |
 | `trpc.moox.storage.view.retry_failed.timer` | 重试失败视图 | 关 |
-| `trpc.moox.storage.archive.timer` | Parquet 冷归档 | 关 |
+| `trpc.moox.storage.archive.timer` | Archive 角色的 Parquet 冷归档调度入口 | 关 |
 
 配置路径可被命令行参数或环境变量覆盖：
 
@@ -353,7 +355,7 @@ metadata seed 导入完成 (config/metadata.seed.yaml): spaces=1 data_sources=1 
 
 ### 单进程开发/测试部署
 
-单进程开发/测试模式下，使用仓库自带的 `config/storage.yaml` 即可：它启用 `access + deriver`，`primary.service_name` 留空时自动暴露同进程 `PrimaryStore`，并通过 `eventbus.embedded.enabled: true` 内嵌 JetStream，不需要单独启动 `nats-server`。
+单进程开发/测试模式下，使用仓库自带的 `config/storage.yaml` 即可：它启用 `access + view`，`primary.service_name` 留空时自动暴露同进程 `PrimaryStore`，并通过 `eventbus.embedded.enabled: true` 内嵌 JetStream，不需要单独启动 `nats-server`。
 
 如果只跑极简内存事件总线测试，可新建一份本地配置：
 
@@ -361,7 +363,7 @@ metadata seed 导入完成 (config/metadata.seed.yaml): spaces=1 data_sources=1 
 cat > config/storage.local.yaml <<'YAML'
 storage:
   root: ./var/storage
-  roles: [access, primary, deriver]
+  roles: [access, primary, view]
   metadata:
     path: ./var/storage/metadata/storage_metadata.db
   devices:
@@ -373,7 +375,8 @@ storage:
     service_name: ""
   eventbus:
     type: memory
-  deriver:
+  view:
+    metadata_service_name: trpc.moox.storage.Metadata
     access_service_name: ""
     batch_size: 100
     batch_wait_ms: 50
@@ -425,13 +428,14 @@ storage:
 storage:
   roles:
     - access
-    - deriver
+    - view
   primary:
     service_name: trpc.moox.storage.PrimaryStore   # 走远程主存
   eventbus:
     type: nats
     nats_url: nats://10.0.0.9:4222
-  deriver:
+  view:
+    metadata_service_name: trpc.moox.storage.Metadata
     access_service_name: trpc.moox.storage.Access
     batch_size: 500
     batch_wait_ms: 200
@@ -484,9 +488,9 @@ primary_store_routes:
 
 `moox-storage` 二进制只注册 `storage.roles` 启用的服务。常见拆分：
 
-- **物化/归档节点**：让该节点的 `view.timer` / `archive.timer` 在 `trpc_go.yaml` 中启用（去掉 `?disable=1`），其它节点把这些计时器 `disable`，避免重复物化。
-- **派生节点**：启用 `deriver` 角色，消费 NATS 行变更事件并写 DuckDB/Bleve；多副本时用独立 durable consumer 名或隔离结果目录。
-- 元数据 SQLite 是控制面单点，建议集中在 Access/控制节点；各数据面节点通过元数据快照缓存（默认 10s 刷新）读取路由与列契约。
+- **View 节点**：启用 `view` 角色，消费 NATS 行变更事件并写 DuckDB/Bleve；多副本时用独立 durable consumer 名或隔离结果目录。
+- **Archive 节点**：启用 `archive` 角色，消费 NATS 行变更事件，并通过 Metadata/Access RPC 读取元数据与主存事实数据；后续 Parquet 归档策略在该角色内补齐，不放在 view 进程中。
+- 元数据 SQLite 是控制面单点，建议集中在 Access/控制节点；独立 view/archive 节点通过 RPC 访问 Metadata/Access。
 
 ### 启动验证
 
@@ -577,7 +581,7 @@ internal/
   config/           运行配置加载
   core/             领域抽象（eventbus/metadata/router/schema/factvalue/response）
   infra/            底层实现（device/metadata/eventbus/transport）
-  services/         access / primary / deriver / search / view / archive
+  services/         access / primary / view / archive
 tests/e2e/          端到端测试
 docs/               架构与设计文档
 ```

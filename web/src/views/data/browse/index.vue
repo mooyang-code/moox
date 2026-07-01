@@ -487,8 +487,10 @@ watch(selectedSpaceId, () => {
 .data-browse-page {
   box-sizing: border-box;
   width: 100%;
+  height: 100%;
   min-width: 0;
-  padding: 20px;
+  padding: 20px 20px 72px;
+  overflow-y: auto;
 }
 
 .data-browse-page :deep(.arco-spin) {
@@ -552,6 +554,7 @@ watch(selectedSpaceId, () => {
 .browse-shell {
   display: grid;
   grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+  align-items: start;
   gap: 16px;
   min-height: 500px;
   height: calc(100vh - 246px);
@@ -571,6 +574,10 @@ watch(selectedSpaceId, () => {
 .data-id-pane {
   display: flex;
   flex-direction: column;
+  height: calc(100vh - 246px);
+  min-height: 560px;
+  max-height: 760px;
+  overflow: hidden;
   padding: 12px;
 }
 
@@ -588,12 +595,14 @@ watch(selectedSpaceId, () => {
 
 .data-id-list {
   display: flex;
-  flex: 1;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 4px;
+  height: 0;
   min-height: 0;
   margin-top: 10px;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .data-id-list.loading {
@@ -602,11 +611,14 @@ watch(selectedSpaceId, () => {
 }
 
 .data-id-item {
+  flex: 0 0 auto;
   width: 100%;
+  min-height: 36px;
   padding: 8px 9px;
   overflow: hidden;
   color: var(--color-text-1);
   font-weight: 500;
+  line-height: 20px;
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -687,7 +699,8 @@ watch(selectedSpaceId, () => {
   }
 
   .data-id-pane {
-    min-height: 260px;
+    height: clamp(520px, 68vh, 720px);
+    min-height: 520px;
   }
 }
 </style>

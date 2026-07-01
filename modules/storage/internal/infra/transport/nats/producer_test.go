@@ -1,9 +1,13 @@
 package nats
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/infra/transport"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 	natslib "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 )
@@ -50,6 +54,69 @@ func TestDurableConsumerNameSanitizesBaseAndSubject(t *testing.T) {
 		"storage_deriver_us_east_time_series_rows_changed_v1",
 		durableConsumerName(" storage-deriver.us/east ", "moox.storage.time_series.rows_changed.v1"),
 	)
+}
+
+func TestSubscriberConsumesOnlyEventsCreatedAfterSubscribe(t *testing.T) {
+	ctx := context.Background()
+	srv := startTestNATSServer(t)
+	producer, err := NewProducer(transport.ProducerOptions{
+		ServerURL:      srv.ClientURL(),
+		StreamName:     "MOOX_STORAGE",
+		StreamSubjects: []string{"moox.storage.>"},
+		ConsumerName:   "storage_view",
+	})
+	require.NoError(t, err)
+	require.NoError(t, producer.Connect(ctx))
+	t.Cleanup(func() {
+		require.NoError(t, producer.Close())
+	})
+
+	subject := "moox.storage.time_series.rows_changed.v1"
+	require.NoError(t, producer.Send(ctx, &transport.Message{Subject: subject, Data: []byte("historical")}))
+
+	received := make(chan string, 2)
+	sub, err := producer.(transport.Subscriber).Subscribe(ctx, subject, func(_ context.Context, msg *transport.Message) error {
+		received <- string(msg.Data)
+		return nil
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, sub.Close())
+	})
+
+	require.NoError(t, producer.Send(ctx, &transport.Message{Subject: subject, Data: []byte("new")}))
+
+	select {
+	case got := <-received:
+		require.Equal(t, "new", got)
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected new event after subscription")
+	}
+	select {
+	case got := <-received:
+		t.Fatalf("unexpected extra event: %s", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func startTestNATSServer(t *testing.T) *natsserver.Server {
+	t.Helper()
+	srv, err := natsserver.NewServer(&natsserver.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoSigs:    true,
+		NoLog:     true,
+	})
+	require.NoError(t, err)
+	go srv.Start()
+	require.True(t, srv.ReadyForConnections(3*time.Second))
+	t.Cleanup(func() {
+		srv.Shutdown()
+		srv.WaitForShutdown()
+	})
+	return srv
 }
 
 // fakeStreamManager 是 NATS 生产者测试使用的流管理桩。

@@ -174,7 +174,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, ColumnName: item.ColumnName,
 			OriginType: parseDatasetColumnOriginType(item.OriginType), OriginId: item.OriginID,
 			ValueType: parseValueType(item.ValueType), Required: item.Required, IsUnique: item.IsUnique,
-			Aliases: item.Aliases, Status: item.Status,
+			Aliases: item.Aliases, Attributes: item.Attributes, Status: item.Status,
 		}); err != nil {
 			return result, seedErr("dataset_column", item.DatasetID+"."+item.ColumnName, err)
 		}
@@ -420,16 +420,17 @@ type seedFactor struct {
 
 // seedDatasetColumn 描述 Dataset 中可写入的列定义。
 type seedDatasetColumn struct {
-	SpaceID    string   `yaml:"space_id"`
-	DatasetID  string   `yaml:"dataset_id"`
-	ColumnName string   `yaml:"column_name"`
-	OriginType string   `yaml:"origin_type"`
-	OriginID   string   `yaml:"origin_id"`
-	ValueType  string   `yaml:"value_type"`
-	Required   bool     `yaml:"required"`
-	IsUnique   bool     `yaml:"is_unique"`
-	Aliases    []string `yaml:"aliases"`
-	Status     string   `yaml:"status"`
+	SpaceID    string            `yaml:"space_id"`
+	DatasetID  string            `yaml:"dataset_id"`
+	ColumnName string            `yaml:"column_name"`
+	OriginType string            `yaml:"origin_type"`
+	OriginID   string            `yaml:"origin_id"`
+	ValueType  string            `yaml:"value_type"`
+	Required   bool              `yaml:"required"`
+	IsUnique   bool              `yaml:"is_unique"`
+	Aliases    []string          `yaml:"aliases"`
+	Attributes map[string]string `yaml:"attributes"`
+	Status     string            `yaml:"status"`
 }
 
 // seedView 描述待初始化的 View 定义。

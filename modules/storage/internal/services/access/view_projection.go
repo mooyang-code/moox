@@ -3,13 +3,13 @@ package access
 import (
 	"context"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/services/deriver"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
 )
 
 func (s *Service) timeSeriesRowsForView(ctx context.Context, item *pb.View, columns []*pb.ViewColumn, rows []*pb.TimeSeriesRow) ([]*pb.TimeSeriesRow, bool, error) {
-	return deriver.TimeSeriesRowsForView(ctx, item, columns, rows, s.readTimeSeriesProjectionRow)
+	return view.TimeSeriesRowsForView(ctx, item, columns, rows, s.readTimeSeriesProjectionRow)
 }
 
 func (s *Service) readTimeSeriesProjectionRow(ctx context.Context, base *pb.TimeSeriesKey, datasetID string) (*pb.TimeSeriesRow, error) {

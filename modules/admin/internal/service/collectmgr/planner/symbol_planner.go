@@ -60,14 +60,20 @@ func (d *SymbolPlanner) BuildTaskParams(ctx context.Context, rule *model.Collect
 	if err != nil {
 		return "{}", err
 	}
+	intervals := params.Intervals
+	if len(intervals) == 0 {
+		// Symbol 同步不是 K 线任务，但仍需要一个调度周期让 SCF 定期执行。
+		// 默认每天刷新一次，避免 default 周期被 executor 跳过，也避免每次心跳都拉全量交易对。
+		intervals = []string{"1d"}
+	}
 
 	// Symbol 任务的 object 是产品类型（SPOT/SWAP/FUTURES）
 	taskParams := TaskParams{
 		DataType:   rule.DataType,
 		DataSource: rule.DataSource,
-		InstType:   object,           // SPOT, SWAP, FUTURES
-		Symbol:     "",               // Symbol 任务不指定具体标的
-		Intervals:  params.Intervals, // 时间周期
+		InstType:   object,    // SPOT, SWAP, FUTURES
+		Symbol:     "",        // Symbol 任务不指定具体标的
+		Intervals:  intervals, // 时间周期
 	}
 
 	data, err := json.Marshal(taskParams)

@@ -516,8 +516,7 @@ function clearViewState() {
   tableRows.value = [];
   tableColumnNames.value = [];
   filters.value = [];
-  sortState.fieldName = '';
-  sortState.direction = '';
+  resetSortState();
   detailRow.value = undefined;
   closeKlineModal();
   queryError.value = '';
@@ -537,6 +536,7 @@ async function loadViewContext() {
     viewColumns.value = columnsRsp.columns || [];
     await loadDatasetColumns(space_id, view);
     resetFilterRows();
+    resetSortState();
     await reloadRows();
   } catch (error) {
     Message.error(error instanceof Error ? error.message : '加载视图上下文失败');
@@ -665,11 +665,20 @@ async function applyQueryControls() {
 
 async function resetQueryControls() {
   recordKeyword.value = '';
-  sortState.fieldName = '';
-  sortState.direction = '';
+  resetSortState();
   resetFilterRows();
   pagination.current = 1;
   await reloadRows();
+}
+
+function resetSortState() {
+  if (mode.value === 'time_series') {
+    sortState.fieldName = 'data_time';
+    sortState.direction = 'desc';
+    return;
+  }
+  sortState.fieldName = '';
+  sortState.direction = '';
 }
 
 function resetFilterRows() {

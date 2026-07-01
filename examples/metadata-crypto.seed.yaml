@@ -466,12 +466,85 @@ dataset_columns:
     status: active
   - space_id: crypto
     dataset_id: binance_spot_symbols
+    column_name: external_symbol
+    attributes:
+      display_name: 外部代码
+    origin_type: field
+    origin_id: external_symbol
+    value_type: string
+    required: true
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    column_name: base_asset
+    attributes:
+      display_name: 基础资产
+    origin_type: field
+    origin_id: base_asset
+    value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    column_name: quote_asset
+    attributes:
+      display_name: 计价资产
+    origin_type: field
+    origin_id: quote_asset
+    value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
     column_name: status
     attributes:
       display_name: 交易状态
     origin_type: field
     origin_id: status
     value_type: string
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    column_name: min_qty
+    attributes:
+      display_name: 最小数量
+    origin_type: field
+    origin_id: min_qty
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    column_name: max_qty
+    attributes:
+      display_name: 最大数量
+    origin_type: field
+    origin_id: max_qty
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    column_name: tick_size
+    attributes:
+      display_name: 价格步长
+    origin_type: field
+    origin_id: tick_size
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    column_name: lot_size
+    attributes:
+      display_name: 数量步长
+    origin_type: field
+    origin_id: lot_size
+    value_type: double
+    status: active
+  - space_id: crypto
+    dataset_id: binance_spot_symbols
+    column_name: filters_json
+    attributes:
+      display_name: 过滤规则
+    origin_type: field
+    origin_id: filters_json
+    value_type: json
     status: active
   - space_id: crypto
     dataset_id: binance_spot_symbols

@@ -153,7 +153,7 @@ storage:
 	}
 }
 
-func TestStorageRuntimeConfigDefaultsRolesEventBusAndDeriver(t *testing.T) {
+func TestStorageRuntimeConfigDefaultsRolesEventBusAndView(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -167,8 +167,8 @@ func TestStorageRuntimeConfigDefaultsRolesEventBusAndDeriver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfigWithDefaults returned error: %v", err)
 	}
-	if roles := strings.Join(cfg.Storage.Roles, ","); roles != "access,deriver" {
-		t.Fatalf("storage roles = %q, want access,deriver", roles)
+	if roles := strings.Join(cfg.Storage.Roles, ","); roles != "access,view" {
+		t.Fatalf("storage roles = %q, want access,view", roles)
 	}
 	if cfg.Storage.EventBus.Type != "nats" {
 		t.Fatalf("eventbus type = %q", cfg.Storage.EventBus.Type)
@@ -182,23 +182,26 @@ func TestStorageRuntimeConfigDefaultsRolesEventBusAndDeriver(t *testing.T) {
 	if cfg.Storage.EventBus.SubjectPrefix != "moox.storage" {
 		t.Fatalf("eventbus subject_prefix = %q", cfg.Storage.EventBus.SubjectPrefix)
 	}
-	if cfg.Storage.EventBus.ConsumerName != "storage_deriver" {
+	if cfg.Storage.EventBus.ConsumerName != "storage_view" {
 		t.Fatalf("eventbus consumer_name = %q", cfg.Storage.EventBus.ConsumerName)
 	}
 	if cfg.Storage.EventBus.Embedded.Enabled {
 		t.Fatalf("embedded nats should be opt-in by default")
 	}
-	if cfg.Storage.Deriver.AccessServiceName != "trpc.moox.storage.Access" {
-		t.Fatalf("deriver access_service_name = %q", cfg.Storage.Deriver.AccessServiceName)
+	if cfg.Storage.View.MetadataServiceName != "trpc.moox.storage.Metadata" {
+		t.Fatalf("view metadata_service_name = %q", cfg.Storage.View.MetadataServiceName)
 	}
-	if cfg.Storage.Deriver.BatchSize != 500 {
-		t.Fatalf("deriver batch_size = %d", cfg.Storage.Deriver.BatchSize)
+	if cfg.Storage.View.AccessServiceName != "trpc.moox.storage.Access" {
+		t.Fatalf("view access_service_name = %q", cfg.Storage.View.AccessServiceName)
 	}
-	if cfg.Storage.Deriver.BatchWaitMS != 200 {
-		t.Fatalf("deriver batch_wait_ms = %d", cfg.Storage.Deriver.BatchWaitMS)
+	if cfg.Storage.View.BatchSize != 500 {
+		t.Fatalf("view batch_size = %d", cfg.Storage.View.BatchSize)
 	}
-	if cfg.Storage.Deriver.MaxWorkers != 4 {
-		t.Fatalf("deriver max_workers = %d", cfg.Storage.Deriver.MaxWorkers)
+	if cfg.Storage.View.BatchWaitMS != 200 {
+		t.Fatalf("view batch_wait_ms = %d", cfg.Storage.View.BatchWaitMS)
+	}
+	if cfg.Storage.View.MaxWorkers != 4 {
+		t.Fatalf("view max_workers = %d", cfg.Storage.View.MaxWorkers)
 	}
 }
 
@@ -229,28 +232,28 @@ func TestStorageRuntimeConfigDefaultsEmbeddedNATS(t *testing.T) {
 	}
 }
 
-func TestStorageRuntimeConfigNormalizesNonPositiveDeriverBatchSettings(t *testing.T) {
+func TestStorageRuntimeConfigNormalizesNonPositiveViewBatchSettings(t *testing.T) {
 	t.Parallel()
 
 	cfg := RuntimeConfig{}
-	cfg.Storage.Deriver.BatchSize = -1
-	cfg.Storage.Deriver.BatchWaitMS = -10
-	cfg.Storage.Deriver.MaxWorkers = -2
+	cfg.Storage.View.BatchSize = -1
+	cfg.Storage.View.BatchWaitMS = -10
+	cfg.Storage.View.MaxWorkers = -2
 
 	cfg.ApplyDefaults()
 
-	if cfg.Storage.Deriver.BatchSize != 500 {
-		t.Fatalf("deriver batch_size = %d, want 500", cfg.Storage.Deriver.BatchSize)
+	if cfg.Storage.View.BatchSize != 500 {
+		t.Fatalf("view batch_size = %d, want 500", cfg.Storage.View.BatchSize)
 	}
-	if cfg.Storage.Deriver.BatchWaitMS != 200 {
-		t.Fatalf("deriver batch_wait_ms = %d, want 200", cfg.Storage.Deriver.BatchWaitMS)
+	if cfg.Storage.View.BatchWaitMS != 200 {
+		t.Fatalf("view batch_wait_ms = %d, want 200", cfg.Storage.View.BatchWaitMS)
 	}
-	if cfg.Storage.Deriver.MaxWorkers != 4 {
-		t.Fatalf("deriver max_workers = %d, want 4", cfg.Storage.Deriver.MaxWorkers)
+	if cfg.Storage.View.MaxWorkers != 4 {
+		t.Fatalf("view max_workers = %d, want 4", cfg.Storage.View.MaxWorkers)
 	}
 }
 
-func TestStorageRuntimeConfigDefaultsDeriverAccessServiceNameForMemoryEventBus(t *testing.T) {
+func TestStorageRuntimeConfigDefaultsViewAccessServiceNameForMemoryEventBus(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -272,20 +275,23 @@ storage:
 	if cfg.Storage.EventBus.Type != "memory" {
 		t.Fatalf("eventbus type = %q", cfg.Storage.EventBus.Type)
 	}
-	if cfg.Storage.Deriver.AccessServiceName != "trpc.moox.storage.Access" {
-		t.Fatalf("deriver access_service_name = %q", cfg.Storage.Deriver.AccessServiceName)
+	if cfg.Storage.View.MetadataServiceName != "trpc.moox.storage.Metadata" {
+		t.Fatalf("view metadata_service_name = %q", cfg.Storage.View.MetadataServiceName)
+	}
+	if cfg.Storage.View.AccessServiceName != "trpc.moox.storage.Access" {
+		t.Fatalf("view access_service_name = %q", cfg.Storage.View.AccessServiceName)
 	}
 }
 
 func TestStorageRuntimeConfigHasRole(t *testing.T) {
 	t.Parallel()
 
-	cfg := StorageConfig{Roles: []string{" Access ", "DERIVER"}}
+	cfg := StorageConfig{Roles: []string{" Access ", "VIEW"}}
 	if !cfg.HasRole("access") {
 		t.Fatalf("HasRole(access) = false, want true")
 	}
-	if !cfg.HasRole("deriver") {
-		t.Fatalf("HasRole(deriver) = false, want true")
+	if !cfg.HasRole("view") {
+		t.Fatalf("HasRole(view) = false, want true")
 	}
 	if cfg.HasRole("primary") {
 		t.Fatalf("HasRole(primary) = true, want false")
@@ -298,7 +304,7 @@ func TestStorageRuntimeConfigDefaultsNATSConsumerName(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.Storage.EventBus.Type = "nats"
 	cfg.ApplyDefaults()
-	if cfg.Storage.EventBus.ConsumerName != "storage_deriver" {
+	if cfg.Storage.EventBus.ConsumerName != "storage_view" {
 		t.Fatalf("eventbus consumer_name = %q", cfg.Storage.EventBus.ConsumerName)
 	}
 }

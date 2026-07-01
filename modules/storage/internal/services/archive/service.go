@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	deviceparquet "github.com/mooyang-code/moox/modules/storage/internal/infra/device/parquet"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
@@ -21,7 +20,7 @@ type FactReader interface {
 
 // Options 保存归档服务创建时的依赖与路径配置。
 type Options struct {
-	Metadata    metadata.Store
+	Metadata    Metadata
 	Facts       FactReader
 	ArchiveRoot string
 	DeviceID    string
@@ -30,7 +29,7 @@ type Options struct {
 
 // Service 实现主存数据到 Parquet 文件的归档流程。
 type Service struct {
-	metadata    metadata.Store
+	metadata    Metadata
 	facts       FactReader
 	archiveRoot string
 	deviceID    string

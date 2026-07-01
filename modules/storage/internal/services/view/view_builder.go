@@ -11,10 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
-	"github.com/mooyang-code/moox/modules/storage/internal/services/deriver"
-	searchsvc "github.com/mooyang-code/moox/modules/storage/internal/services/search"
+	searchsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
@@ -51,7 +49,7 @@ type ViewCleaner interface {
 
 // Options 保存 View 构建器创建时的依赖与并发配置。
 type Options struct {
-	Metadata metadata.Store
+	Metadata Metadata
 	Facts    FactReader
 	Records  RecordFactReader
 	Views    ViewWriter
@@ -65,7 +63,7 @@ type Options struct {
 
 // Builder 负责从主存事实行构建版本化 View 结果。
 type Builder struct {
-	metadata     metadata.Store
+	metadata     Metadata
 	facts        FactReader
 	records      RecordFactReader
 	views        ViewWriter
@@ -234,7 +232,7 @@ func (b *Builder) buildRecordLocked(ctx context.Context, view *pb.View) (*pb.Vie
 	if len(columns) == 0 {
 		return nil, errors.New("view columns are required")
 	}
-	if !deriver.IsProjectableRecordView(view, columns) {
+	if !IsProjectableRecordView(view, columns) {
 		return nil, fmt.Errorf("record view %s/%s contains unsupported columns for bleve projection", spaceID, viewID)
 	}
 	targetVersion := view.GetViewVersion()
@@ -432,7 +430,7 @@ func (b *Builder) readRecordViewRows(ctx context.Context, view *pb.View, primary
 			return nil, err
 		}
 		if len(rows) > 0 {
-			projected, ok, err := deriver.RecordRowsForView(ctx, view, columns, rows, b.readRecordProjectionRow)
+			projected, ok, err := RecordRowsForView(ctx, view, columns, rows, b.readRecordProjectionRow)
 			if err != nil {
 				return nil, err
 			}

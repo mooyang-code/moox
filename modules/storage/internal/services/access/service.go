@@ -19,8 +19,8 @@ import (
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/cache"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/primary"
-	"github.com/mooyang-code/moox/modules/storage/internal/services/search"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/view/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -126,8 +126,8 @@ func NewServiceWithOptions(opts Options) *Service {
 			BlevePath: opts.BlevePath,
 			Metadata:  reader,
 		}),
-		events: events,
-		report: reporter,
+		events:     events,
+		report:     reporter,
 		viewStores: newServiceViewStores(),
 	}
 	svc.factReader = svc

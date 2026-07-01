@@ -80,7 +80,7 @@ if [[ "${SKIP_PACK}" -eq 0 ]]; then
       -x "${REPO_NAME}/**/pebble/main/*" \
       >/dev/null
   )
-  unzip -l "${ZIP_LOCAL}" | grep -q pebble/store.go || fail "pebble/store.go missing in zip"
+  unzip -l "${ZIP_LOCAL}" | grep 'modules/storage/internal/infra/device/pebble/store.go' >/dev/null || fail "pebble/store.go missing in zip"
   ls -lh "${ZIP_LOCAL}"
 
   log "upload ${ZIP_LOCAL} -> ${TARGET}:${ZIP_REMOTE}"

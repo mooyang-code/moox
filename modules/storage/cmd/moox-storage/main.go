@@ -14,11 +14,13 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/bootstrap/eventbus"
 	"github.com/mooyang-code/moox/modules/storage/internal/bootstrap/metadata"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
+	deviceduckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/services/access"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/archive"
-	"github.com/mooyang-code/moox/modules/storage/internal/services/deriver"
 	primarysvc "github.com/mooyang-code/moox/modules/storage/internal/services/primary"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
+	viewbuilder "github.com/mooyang-code/moox/modules/storage/internal/services/view/builder"
+	searchsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	"trpc.group/trpc-go/trpc-go"
@@ -73,6 +75,10 @@ func main() {
 		cfg.Storage.Root = root
 		opts.Root = root
 	}
+	if err := validateStorageDeployment(cfg.Storage); err != nil {
+		log.Errorf("storage deployment config invalid: %v", err)
+		os.Exit(1)
+	}
 	if needsRowsChangedBus(cfg.Storage) {
 		embeddedEventBus, err := eventbus.StartEmbeddedServer(cfg.Storage.EventBus)
 		if err != nil {
@@ -104,9 +110,8 @@ func main() {
 			}
 		}()
 	}
-	var accessReader deriver.AccessReader
+	accessReader := accessReaderForRuntime(cfg.Storage, storageService)
 	if storageService != nil {
-		accessReader = accessReaderForRuntime(cfg.Storage, storageService)
 		storageService.SetViewFactReader(accessReader)
 	}
 
@@ -119,37 +124,36 @@ func main() {
 		pb.RegisterAccessService(s, storageService)
 	}
 
-	if cfg.Storage.HasRole("deriver") {
-		if err := registerViewRole(s, storageService, accessReader); err != nil {
+	if cfg.Storage.HasRole("view") {
+		viewRuntime, err := registerViewRole(s, cfg.Storage, opts, storageService, accessReader)
+		if err != nil {
 			log.Errorf("初始化 ViewService 失败: %v", err)
 			os.Exit(1)
 		}
-		log.Infof("ViewService role initialized")
+		log.Infof("View role initialized")
+		defer func() {
+			if err := viewRuntime.Close(); err != nil {
+				log.Errorf("关闭 view runtime 失败: %v", err)
+			}
+		}()
 	} else {
 		registerNoopViewTimers(s)
 	}
 
-	if cfg.Storage.HasRole("deriver") {
-		deriverService, err := startDeriverService(trpc.BackgroundContext(), cfg.Storage, opts, storageService, accessReader)
+	if shouldStartArchiveRole(cfg.Storage) {
+		archiveRuntime, err := registerArchiveRole(s, cfg.Storage, opts, storageService, accessReader)
 		if err != nil {
-			log.Errorf("启动 deriver service 失败: %v", err)
-			os.Exit(1)
-		}
-		log.Infof("Deriver role initialized")
-		defer func() {
-			if err := deriverService.Close(); err != nil {
-				log.Errorf("关闭 deriver service 失败: %v", err)
-			}
-		}()
-	}
-
-	if cfg.Storage.HasRole("access") {
-		if err := storageService.InitArchiveService(); err != nil {
 			log.Errorf("初始化 ArchiveService 失败: %v", err)
 			os.Exit(1)
 		}
-		timer.RegisterScheduler("archiveSchedule", &timer.DefaultScheduler{})
-		registerTimerHandlerService("trpc.moox.storage.archive.timer", s.Service("trpc.moox.storage.archive.timer"), archive.HandleSchedule)
+		log.Infof("Archive role initialized")
+		defer func() {
+			if err := archiveRuntime.Close(); err != nil {
+				log.Errorf("关闭 archive runtime 失败: %v", err)
+			}
+		}()
+	} else {
+		registerNoopArchiveTimers(s)
 	}
 
 	if shouldCreatePrimaryService(cfg.Storage) {
@@ -172,42 +176,118 @@ func main() {
 	log.Warnf("Storage roles %v stopped", cfg.Storage.Roles)
 }
 
-func registerViewRole(s *server.Server, storageService *storagesvc.Service, accessReader deriver.AccessReader) error {
-	if storageService == nil {
-		return errors.New("view role requires storage service")
+type viewRuntime struct {
+	service *view.Service
+	builder *viewbuilder.Service
+	views   *deviceduckdb.ViewStore
+	search  *searchsvc.Service
+}
+
+func (r *viewRuntime) Close() error {
+	if r == nil {
+		return nil
 	}
-	if err := storageService.InitViewBuilderWithFacts(accessReader); err != nil {
-		return err
+	var err error
+	if r.builder != nil {
+		err = errors.Join(err, r.builder.Close())
 	}
-	pb.RegisterDataViewService(s, storageService)
+	if r.service != nil {
+		err = errors.Join(err, r.service.Close())
+	}
+	if r.search != nil {
+		err = errors.Join(err, r.search.Close())
+	}
+	if r.views != nil {
+		err = errors.Join(err, r.views.Close())
+	}
+	return err
+}
+
+type archiveRuntime struct {
+	consumer *archive.EventConsumer
+}
+
+func (r *archiveRuntime) Close() error {
+	if r == nil {
+		return nil
+	}
+	archive.SetDefaultService(nil)
+	if r.consumer != nil {
+		return r.consumer.Close()
+	}
+	return nil
+}
+
+func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, opts storagesvc.Options, storageService *storagesvc.Service, accessReader viewbuilder.AccessReader) (*viewRuntime, error) {
+	viewStore, err := openViewStore(storage)
+	if err != nil {
+		return nil, err
+	}
+	viewMetadata := metadataForViewRuntime(storage, storageService)
+	searchService := searchsvc.NewService(searchsvc.Options{
+		Root:      storage.Root,
+		BlevePath: storage.Devices.BlevePath,
+		Metadata:  viewMetadata,
+	})
+	viewBuilder := view.NewBuilder(view.Options{
+		Metadata: viewMetadata,
+		Facts:    accessReader,
+		Records:  accessReader,
+		Views:    viewStore,
+		Search:   searchService,
+	})
+	view.SetDefaultBuilder(viewBuilder)
+	viewService := view.NewService(view.ServiceOptions{
+		Metadata: viewMetadata,
+		Views:    viewStore,
+		Search:   searchService,
+		Facts:    accessReader,
+		Records:  accessReader,
+		Builder:  viewBuilder,
+	})
+	pb.RegisterDataViewService(s, viewService)
 	timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
 	registerTimerHandlerService("trpc.moox.storage.view.timer", s.Service("trpc.moox.storage.view.timer"), view.HandleSchedule)
 	registerTimerHandlerService("trpc.moox.storage.view.cleanup.timer", s.Service("trpc.moox.storage.view.cleanup.timer"), view.HandleSchedule)
 	registerTimerHandlerService("trpc.moox.storage.view.retry_failed.timer", s.Service("trpc.moox.storage.view.retry_failed.timer"), view.HandleSchedule)
-	return nil
-}
 
-func startDeriverService(ctx context.Context, storage storageconfig.StorageConfig, opts storagesvc.Options, storageService *storagesvc.Service, accessReader deriver.AccessReader) (*deriver.Service, error) {
-	if storageService == nil {
-		return nil, errors.New("deriver role requires storage service")
-	}
-	views, err := storageService.ViewStore()
+	builderService, err := startViewBuilderService(trpc.BackgroundContext(), storage, opts, viewMetadata, viewStore, searchService, accessReader)
 	if err != nil {
+		_ = viewService.Close()
+		_ = searchService.Close()
+		_ = viewStore.Close()
 		return nil, err
 	}
-	if accessReader == nil {
-		accessReader = accessReaderForRuntime(storage, storageService)
+	return &viewRuntime{service: viewService, builder: builderService, views: viewStore, search: searchService}, nil
+}
+
+func registerArchiveRole(s *server.Server, storage storageconfig.StorageConfig, opts storagesvc.Options, storageService *storagesvc.Service, accessReader archive.FactReader) (*archiveRuntime, error) {
+	archive.SetDefaultService(archive.NewService(archive.Options{
+		Metadata:    metadataForArchiveRuntime(storage, storageService),
+		Facts:       accessReader,
+		ArchiveRoot: archiveRootForRuntime(storage),
+	}))
+	timer.RegisterScheduler("archiveSchedule", &timer.DefaultScheduler{})
+	registerTimerHandlerService("trpc.moox.storage.archive.timer", s.Service("trpc.moox.storage.archive.timer"), archive.HandleSchedule)
+
+	consumer := archive.NewEventConsumer(archive.EventConsumerOptions{Events: opts.Events})
+	if err := consumer.Start(trpc.BackgroundContext()); err != nil {
+		archive.SetDefaultService(nil)
+		return nil, err
 	}
-	service := deriver.NewService(deriver.Options{
-		Events:         opts.Events,
-		Reader:         accessReader,
-		Metadata:       storageService.MetadataStore(),
-		MetadataReader: storageService.MetadataReader(),
-		Views:          views,
-		Search:         storageService.SearchService(),
-		BatchSize:      storage.Deriver.BatchSize,
-		BatchWait:      time.Duration(storage.Deriver.BatchWaitMS) * time.Millisecond,
-		MaxWorkers:     storage.Deriver.MaxWorkers,
+	return &archiveRuntime{consumer: consumer}, nil
+}
+
+func startViewBuilderService(ctx context.Context, storage storageconfig.StorageConfig, opts storagesvc.Options, metadata view.Metadata, views *deviceduckdb.ViewStore, search *searchsvc.Service, accessReader viewbuilder.AccessReader) (*viewbuilder.Service, error) {
+	service := viewbuilder.NewService(viewbuilder.Options{
+		Events:     opts.Events,
+		Reader:     accessReader,
+		Metadata:   metadata,
+		Views:      views,
+		Search:     search,
+		BatchSize:  storage.View.BatchSize,
+		BatchWait:  time.Duration(storage.View.BatchWaitMS) * time.Millisecond,
+		MaxWorkers: storage.View.MaxWorkers,
 	})
 	if err := service.Start(ctx); err != nil {
 		return nil, err
@@ -215,14 +295,36 @@ func startDeriverService(ctx context.Context, storage storageconfig.StorageConfi
 	return service, nil
 }
 
-func accessReaderForRuntime(storage storageconfig.StorageConfig, storageService *storagesvc.Service) deriver.AccessReader {
-	var local deriver.AccessReader
-	accessServiceName := storage.Deriver.AccessServiceName
-	if storage.HasRole("access") || shouldUseLocalAccessReader(storage) {
-		local = storageService
-		accessServiceName = ""
+func metadataForViewRuntime(storage storageconfig.StorageConfig, storageService *storagesvc.Service) view.Metadata {
+	if storageService != nil {
+		return storageService.MetadataStore()
 	}
-	return deriver.NewAccessReader(local, accessServiceName)
+	return view.NewRemoteMetadata(storage.View.MetadataServiceName)
+}
+
+func metadataForArchiveRuntime(storage storageconfig.StorageConfig, storageService *storagesvc.Service) archive.Metadata {
+	if storageService != nil && storage.HasRole("access") {
+		return storageService.MetadataStore()
+	}
+	return archive.NewRemoteMetadata(storage.View.MetadataServiceName)
+}
+
+func openViewStore(storage storageconfig.StorageConfig) (*deviceduckdb.ViewStore, error) {
+	path := storage.Devices.DuckDBPath
+	if path == "" {
+		path = filepath.Join(storage.Root, "duckdb", "views.duckdb")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	return deviceduckdb.Open(deviceduckdb.Options{Path: path})
+}
+
+func archiveRootForRuntime(storage storageconfig.StorageConfig) string {
+	if storage.Devices.ParquetPath != "" {
+		return storage.Devices.ParquetPath
+	}
+	return filepath.Join(storage.Root, "archive")
 }
 
 func registerNoopViewTimers(s *server.Server) {
@@ -236,6 +338,11 @@ func registerNoopViewTimers(s *server.Server) {
 	}
 }
 
+func registerNoopArchiveTimers(s *server.Server) {
+	noop := func(ctx context.Context, _ string) error { return nil }
+	registerTimerHandlerService("trpc.moox.storage.archive.timer", s.Service("trpc.moox.storage.archive.timer"), noop)
+}
+
 func registerTimerHandlerService(name string, service server.Service, handle func(context.Context, string) error) bool {
 	if service == nil {
 		log.Warnf("timer service %s is not configured, skip register", name)
@@ -245,12 +352,22 @@ func registerTimerHandlerService(name string, service server.Service, handle fun
 	return true
 }
 
+func validateStorageDeployment(storage storageconfig.StorageConfig) error {
+	if storage.HasRole("view") && !storage.HasRole("access") && isMemoryRowsChangedBus(storage.EventBus) {
+		return errors.New("storage view role requires non-memory eventbus when access role is not in the same process")
+	}
+	if storage.HasRole("archive") && !storage.HasRole("access") && isMemoryRowsChangedBus(storage.EventBus) {
+		return errors.New("storage archive role requires non-memory eventbus when access role is not in the same process")
+	}
+	return nil
+}
+
 func needsRowsChangedBus(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("access") || storage.HasRole("deriver")
+	return storage.HasRole("access") || storage.HasRole("view") || storage.HasRole("archive")
 }
 
 func shouldCreateStorageService(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("access") || storage.HasRole("deriver")
+	return storage.HasRole("access")
 }
 
 func shouldCreatePrimaryService(storage storageconfig.StorageConfig) bool {
@@ -260,8 +377,22 @@ func shouldCreatePrimaryService(storage storageconfig.StorageConfig) bool {
 	return storage.HasRole("access") && strings.TrimSpace(storage.Primary.ServiceName) == ""
 }
 
+func shouldStartArchiveRole(storage storageconfig.StorageConfig) bool {
+	return storage.HasRole("archive")
+}
+
+func accessReaderForRuntime(storage storageconfig.StorageConfig, storageService *storagesvc.Service) viewbuilder.AccessReader {
+	var local viewbuilder.AccessReader
+	accessServiceName := storage.View.AccessServiceName
+	if storageService != nil && storage.HasRole("access") {
+		local = storageService
+		accessServiceName = ""
+	}
+	return viewbuilder.NewAccessReader(local, accessServiceName)
+}
+
 func shouldUseLocalAccessReader(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("access") && storage.HasRole("deriver") && isMemoryRowsChangedBus(storage.EventBus)
+	return storage.HasRole("access") && storage.HasRole("view") && isMemoryRowsChangedBus(storage.EventBus)
 }
 
 func isMemoryRowsChangedBus(cfg storageconfig.StorageEventBus) bool {

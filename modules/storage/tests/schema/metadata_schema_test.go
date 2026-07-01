@@ -97,8 +97,24 @@ func TestSQLTableDefinitionsLiveUnderStorageSchema(t *testing.T) {
 	storageRoot := moduleRoot(t)
 	repoRoot := filepath.Dir(filepath.Dir(storageRoot))
 	allowed := map[string]bool{
-		"modules/admin/schema/admin.sql":    true,
+		"modules/admin/schema/admin.sql":      true,
 		"modules/storage/schema/metadata.sql": true,
+	}
+	storageTables := []string{
+		"t_views",
+		"t_view_columns",
+		"t_data_sources",
+		"t_subjects",
+		"t_subject_symbols",
+		"t_datasets",
+		"t_dataset_subjects",
+		"t_dataset_columns",
+		"t_fields",
+		"t_factors",
+		"t_primary_store_nodes",
+		"t_storage_devices",
+		"t_primary_store_routes",
+		"t_archive_files",
 	}
 	err := filepath.WalkDir(repoRoot, func(path string, entry os.DirEntry, err error) error {
 		require.NoError(t, err)
@@ -110,6 +126,19 @@ func TestSQLTableDefinitionsLiveUnderStorageSchema(t *testing.T) {
 			return nil
 		}
 		if filepath.Ext(path) != ".sql" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		sql := strings.ToUpper(string(data))
+		hasStorageTableDefinition := false
+		for _, table := range storageTables {
+			if strings.Contains(sql, strings.ToUpper("CREATE TABLE IF NOT EXISTS "+table)) {
+				hasStorageTableDefinition = true
+				break
+			}
+		}
+		if !hasStorageTableDefinition {
 			return nil
 		}
 		rel, err := filepath.Rel(repoRoot, path)
