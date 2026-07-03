@@ -30,7 +30,7 @@ func InitAuthServiceImpl(cfg *config.Config, dbManager *database.Manager) (*Auth
 	if dbManager.GetCache() == nil {
 		cacheDir := cfg.Cache.DataDir
 		if cacheDir == "" {
-			cacheDir = "./data/cache"
+			cacheDir = "./data/badger"
 		}
 		if err := dbManager.InitializeCache(cacheDir); err != nil {
 			return nil, fmt.Errorf("初始化缓存失败: %w", err)

@@ -52,7 +52,6 @@ type TimeoutConfig struct {
 
 // PingConfig Ping检测配置
 type PingConfig struct {
-	PingPort    string   `yaml:"ping_port"`    // Ping端口
 	PingPorts   []string `yaml:"ping_ports"`   // 多个Ping端口
 	PingRetries int      `yaml:"ping_retries"` // Ping重试次数
 	PingDelay   int      `yaml:"ping_delay"`   // Ping重试延迟（毫秒）
@@ -184,11 +183,6 @@ func getPingPorts() []string {
 
 	if len(cfg.DNSProxy.Ping.PingPorts) > 0 {
 		return cfg.DNSProxy.Ping.PingPorts
-	}
-
-	// 默认返回单个Ping端口
-	if cfg.DNSProxy.Ping.PingPort != "" {
-		return []string{cfg.DNSProxy.Ping.PingPort}
 	}
 
 	// 默认端口

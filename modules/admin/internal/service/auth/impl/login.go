@@ -62,7 +62,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 			},
 		}, nil
 	}
-	log.InfoContextf(ctx, "[Auth] user Info:%+v", user)
+	log.InfoContextf(ctx, "[Auth] user loaded: user_id=%s username=%s", user.UserID, user.Username)
 
 	// 4. 验证密码哈希
 	if !crypto.ValidateEncryptedPassword(ctx, user.PasswordHash, user.Salt, req.Salt, req.Timestamp, req.PasswordHash) {
@@ -85,7 +85,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	s.recordLoginHistory(ctx, user, req, model.LoginResultSuccess, "")
 
 	// 生成API访问令牌
-	accessToken, err := authutils.GenerateAccessToken(
+	accessToken, err := crypto.GenerateAccessToken(
 		user.UserID,
 		user.Username,
 		user.Role,

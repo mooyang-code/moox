@@ -1,4 +1,4 @@
-import { api } from '@/api/config';
+import { callControl } from '@/api/admin/http';
 
 // ========== 类型定义 ==========
 
@@ -59,45 +59,7 @@ export interface HistoryPoint {
   network_tx_speed: number;
 }
 
-// 测试结果
-export interface TestResult {
-  reachable: boolean;
-  message: string;
-  duration_ms?: number;
-  metrics_count?: number;
-}
-
 // ========== API接口 ==========
-
-/**
- * 启用主机监控
- * @param hostId 主机ID
- */
-export const enableMonitor = (hostId: number) => {
-  return api.post('/monitor/EnableMonitor', {
-    host_id: hostId
-  });
-};
-
-/**
- * 禁用主机监控
- * @param hostId 主机ID
- */
-export const disableMonitor = (hostId: number) => {
-  return api.post('/monitor/DisableMonitor', {
-    host_id: hostId
-  });
-};
-
-/**
- * 获取主机监控状态
- * @param hostId 主机ID
- */
-export const getMonitorStatus = (hostId: number) => {
-  return api.post('/monitor/GetMonitorStatus', {
-    host_id: hostId
-  });
-};
 
 /**
  * 获取当前监控指标
@@ -108,7 +70,7 @@ export const getCurrentMetrics = (hostIds?: number[]) => {
   if (hostIds && hostIds.length > 0) {
     params.host_ids = hostIds.join(',');
   }
-  return api.post('/monitor/GetCurrentMetrics', params);
+  return callControl<typeof params, { metrics?: HostMetrics[] }>('monitor', 'GetCurrentMetrics', params);
 };
 
 /**
@@ -117,19 +79,9 @@ export const getCurrentMetrics = (hostIds?: number[]) => {
  * @param duration 时间范围（如 "1h", "24h", "7d"）
  */
 export const getHistoryMetrics = (hostAddress: string, duration: string = '1h') => {
-  return api.post('/monitor/GetHistoryMetrics', {
+  return callControl<{ host_address: string; duration: string }, { history?: HistoryPoint[] }>('monitor', 'GetHistoryMetrics', {
     host_address: hostAddress,
     duration: duration
-  });
-};
-
-/**
- * 测试 Node Exporter 连通性
- * @param hostId 主机ID
- */
-export const testNodeExporter = (hostId: number) => {
-  return api.post('/monitor/TestNodeExporter', {
-    host_id: hostId
   });
 };
 

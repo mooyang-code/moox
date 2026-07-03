@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package trpc.moox.common;
+
+option go_package = "github.com/mooyang-code/moox/packages/commonpb;commonpb";
+
+// AuthInfo 表示调用方身份和链路追踪信息。
+message AuthInfo {
+  // app_id 是调用方应用或服务 ID。
+  string app_id = 1;
+  // app_key 是调用方凭证，服务端应按敏感信息处理。
+  string app_key = 2;
+  // operator 是发起请求的用户、机器人或任务名。
+  string operator = 3;
+  // request_id 是调用方传入的链路追踪 ID，也可用于幂等检查。
+  string request_id = 4;
+}
+
+// RetInfo 表示通用接口返回状态。
+message RetInfo {
+  // code 是机器可读的返回码。
+  ErrorCode code = 1;
+  // msg 是面向人的返回说明。
+  string msg = 2;
+}
+
+// Page 表示分页请求参数。
+message Page {
+  // page 是页号，从 1 开始；为 0 时由服务端使用默认值。
+  uint32 page = 1;
+  // size 是每页条数；为 0 时由服务端使用默认值。
+  uint32 size = 2;
+  // cursor 是游标分页使用的上一页返回游标；普通分页可为空。
+  string cursor = 3;
+}
+
+// PageResult 表示分页返回结果。
+message PageResult {
+  // page 是本次返回对应的页号。
+  uint32 page = 1;
+  // size 是本次返回采用的每页条数。
+  uint32 size = 2;
+  // total 是结果总数；无法低成本计算时可为 0。使用 uint32 以保证 JSON 输出为数字。
+  uint32 total = 3;
+  // has_more 表示是否还有更多结果。
+  bool has_more = 4;
+  // next_cursor 是下一页游标；普通分页可为空。
+  string next_cursor = 5;
+}
+
+// ErrorCode 表示跨模块通用错误码。
+enum ErrorCode {
+  option allow_alias = true;
+
+  // SUCCESS 表示请求成功。
+  SUCCESS = 0;
+  // INVALID_PARAM 表示请求参数错误。
+  INVALID_PARAM = 1;
+  // NO_AUTH 表示未认证或认证失败。
+  NO_AUTH = 2;
+  // NO_PERMISSION 表示没有操作权限。
+  NO_PERMISSION = 3;
+  // INNER_ERR 表示服务内部错误。
+  INNER_ERR = 4;
+  // NOT_FOUND 表示通用资源不存在。
+  NOT_FOUND = 5;
+  // SPACE_NOT_FOUND 表示使用空间不存在。
+  SPACE_NOT_FOUND = 5;
+  // DATASET_NOT_FOUND 表示数据集不存在。
+  DATASET_NOT_FOUND = 6;
+  // SUBJECT_NOT_FOUND 表示数据对象不存在。
+  SUBJECT_NOT_FOUND = 7;
+  // FIELD_NOT_FOUND 表示字段不存在。
+  FIELD_NOT_FOUND = 8;
+  // FACTOR_NOT_FOUND 表示因子不存在。
+  FACTOR_NOT_FOUND = 9;
+  // VIEW_NOT_FOUND 表示查询视图不存在。
+  VIEW_NOT_FOUND = 10;
+  // VIEW_NOT_READY 表示查询视图尚未就绪。
+  VIEW_NOT_READY = 11;
+  // VIEW_COLUMN_NOT_FOUND 表示查询视图列不存在或无法解析。
+  VIEW_COLUMN_NOT_FOUND = 12;
+  // QUERY_SHAPE_UNSUPPORTED 表示不支持当前查询形态。
+  QUERY_SHAPE_UNSUPPORTED = 13;
+  // ROUTE_NOT_FOUND 表示未找到匹配的存储路由。
+  ROUTE_NOT_FOUND = 14;
+  // ROUTE_CROSS_DEVICE_UNSUPPORTED 表示不支持当前跨设备路由。
+  ROUTE_CROSS_DEVICE_UNSUPPORTED = 15;
+  // ENGINE_CAPABILITY_UNSUPPORTED 表示所选存储引擎不支持该能力。
+  ENGINE_CAPABILITY_UNSUPPORTED = 16;
+  // DIMENSION_VALUE_INVALID 表示业务维度取值不合法。
+  DIMENSION_VALUE_INVALID = 17;
+  // SUBJECT_NOT_IN_DATASET 表示数据对象未登记到目标数据集。
+  SUBJECT_NOT_IN_DATASET = 18;
+}

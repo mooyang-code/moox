@@ -8,46 +8,30 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/monitor/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/monitor/model"
-	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // serviceImpl 服务实现
 type serviceImpl struct {
-	sshHostDAO *dao.SSHHostDAO
-	historyDAO *dao.MonitorHistoryDAO
-	collector  *Collector
-	parser     *Parser
-	calculator *Calculator
+	sshHostDAO     *dao.SSHHostDAO
+	historyDAO     *dao.MonitorHistoryDAO
+	metricsScraper *MetricsScraper
+	parser         *Parser
+	calculator     *Calculator
 }
 
 // NewService 创建监控服务实例
 func NewService(dbManager *database.Manager) Service {
 	db := dbManager.GetDB()
 	svc := &serviceImpl{
-		sshHostDAO: dao.NewSSHHostDAO(db),
-		historyDAO: dao.NewMonitorHistoryDAO(db),
-		collector:  newCollector(),
-		parser:     &Parser{},
-		calculator: newCalculator(),
+		sshHostDAO:     dao.NewSSHHostDAO(db),
+		historyDAO:     dao.NewMonitorHistoryDAO(db),
+		metricsScraper: newMetricsScraper(),
+		parser:         &Parser{},
+		calculator:     newCalculator(),
 	}
 
 	return svc
-}
-
-// EnableMonitor 启用监控
-func (s *serviceImpl) EnableMonitor(ctx context.Context, hostID int) error {
-	return s.sshHostDAO.SetMonitorEnabled(ctx, hostID, true)
-}
-
-// DisableMonitor 禁用监控
-func (s *serviceImpl) DisableMonitor(ctx context.Context, hostID int) error {
-	return s.sshHostDAO.SetMonitorEnabled(ctx, hostID, false)
-}
-
-// IsMonitorEnabled 检查是否启用监控
-func (s *serviceImpl) IsMonitorEnabled(ctx context.Context, hostID int) (bool, error) {
-	return s.sshHostDAO.IsMonitorEnabled(ctx, hostID)
 }
 
 // GetCurrentMetrics 获取当前监控指标
@@ -63,7 +47,7 @@ func (s *serviceImpl) GetCurrentMetrics(ctx context.Context, hostIDs []int) ([]*
 	}
 
 	// 并发采集
-	rawMetricsMap := s.collector.CollectBatch(ctx, hosts)
+	rawMetricsMap := s.metricsScraper.CollectBatch(ctx, hosts)
 
 	// 处理指标
 	var results []*model.HostMetrics
@@ -124,33 +108,6 @@ func (s *serviceImpl) GetHistoryMetrics(ctx context.Context, hostAddress string,
 	return points, nil
 }
 
-// TestNodeExporter 测试连通性
-func (s *serviceImpl) TestNodeExporter(ctx context.Context, hostID int) (*pb.TestResult, error) {
-	host, err := s.sshHostDAO.GetHost(ctx, hostID)
-	if err != nil {
-		return nil, err
-	}
-
-	// 尝试采集
-	hosts := []*dao.MonitorHost{host}
-	rawMetricsMap := s.collector.CollectBatch(ctx, hosts)
-
-	raw, ok := rawMetricsMap[host.ID]
-	if !ok {
-		return &pb.TestResult{
-			Reachable: false,
-			Message:   "Connection failed or timeout",
-		}, nil
-	}
-
-	return &pb.TestResult{
-		Reachable:    true,
-		Message:      "Connected successfully",
-		DurationMs:   raw.Duration.Milliseconds(),
-		MetricsCount: int32(len(raw.MetricFamilies)),
-	}, nil
-}
-
 // CollectAll 执行完整采集（由定时器调用）
 func (s *serviceImpl) CollectAll(ctx context.Context) error {
 	startTime := time.Now()
@@ -169,7 +126,7 @@ func (s *serviceImpl) CollectAll(ctx context.Context) error {
 	log.InfoContextf(ctx, "[Monitor] Start collecting %d hosts", len(hosts))
 
 	// 2. 并发采集所有主机
-	rawMetricsMap := s.collector.CollectBatch(ctx, hosts)
+	rawMetricsMap := s.metricsScraper.CollectBatch(ctx, hosts)
 
 	// 3. 处理并存储每个主机的数据
 	successCount := 0

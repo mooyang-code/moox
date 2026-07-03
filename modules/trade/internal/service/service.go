@@ -22,7 +22,7 @@ type Option func(*Service)
 // WithStore 注入持久化实现。
 func WithStore(s Store) Option { return func(svc *Service) { svc.store = s } }
 
-// WithExchangeFactory 注入交易所适配器工厂（便于测试注入 mock）。
+// WithExchangeFactory 注入交易所适配器工厂（便于替换交易所适配实现）。
 func WithExchangeFactory(f ExchangeFactory) Option {
 	return func(svc *Service) { svc.exNew = f }
 }

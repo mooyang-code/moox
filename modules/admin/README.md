@@ -1,179 +1,105 @@
-# MooX Server
+# moox-admin
 
-MooX Server 是一个基于 tRPC-Go 框架的服务端应用，提供认证、API网关、数据采集等功能。
+MooX 管理入口：统一 HTTP 网关 + 认证、Space、运维等**本地基础服务**。采集规则、云节点、云账户等业务已拆到 `modules/collector` 与 `modules/cloudnode`，admin 仅做网关转发。
 
-## 构建说明
+## 职责
 
-本项目使用 Makefile 进行构建管理，不依赖 CGO，支持跨平台编译。
+| 类别 | 内容 |
+|------|------|
+| 网关 | JWT 鉴权、限流、CORS、`/api/admin/*` 与 `/api/service/*` 路由转发 |
+| 本进程服务 | Auth、SpaceMgr、Dns、Monitor、Ssh、SecretMgr、SysDeploy |
+| 转发目标 | collectmgr、cloudnode、storage、trade 等独立进程 |
+| 定时任务 | DNS 代理/探测、监控采集与历史清理 |
 
-### 查看帮助
-```bash
-make help
+## 目录结构
+
+```text
+cmd/moox-admin/           进程入口
+config/
+  trpc_go.yaml            tRPC 服务与定时器端口
+  gateway.yaml            网关 JWT、限流、CORS、后台签名与免鉴权配置
+  app.yaml                应用级配置
+internal/
+  bootstrap/              启动编排、TRPC 注册
+  gateway/                HTTP 网关（forward / rawhandler）
+  service/                本进程业务实现（见下文「本进程服务」）
+proto/                    admin/infra/ops/secret/sysdeploy proto
+schema/admin.sql          admin 本地 SQLite 表
 ```
 
-### 构建命令
-
-#### 构建当前平台版本
-```bash
-make build
-```
-
-#### 构建 Linux 版本
-```bash
-make build-linux VERSION=v1.0.0
-```
-- 支持在任何平台上交叉编译 Linux 二进制文件
-- 自动构建 amd64 和 arm64 两种架构
-- 输出目录：`release/linux/`
-
-#### 构建 macOS 版本
-```bash
-make build-darwin VERSION=v1.0.0
-# 或
-make build-macos VERSION=v1.0.0
-```
-- 支持在任何平台上交叉编译 macOS 二进制文件
-- 自动构建 amd64 和 arm64 两种架构
-- 输出目录：`release/darwin/`
-
-#### 构建 Windows 版本
-```bash
-make build-windows VERSION=v1.0.0
-```
-- 支持在任何平台上交叉编译 Windows 二进制文件
-- 自动构建 amd64 和 arm64 两种架构
-- 输出目录：`release/windows/`
-
-#### 构建所有平台版本
-```bash
-make build-all VERSION=v1.0.0
-```
-
-### 构建产物结构
-```
-release/
-└── linux/              # Linux 平台
-    ├── bin/            # 二进制文件目录
-    │   ├── moox-admin-amd64
-    │   ├── moox-admin-arm64
-    │   └── moox-admin # 默认为 amd64 版本
-    ├── config/         # 配置文件目录
-    │   └── trpc_go.yaml
-    ├── data/           # 数据目录
-    ├── log/            # 日志目录
-    ├── start.sh        # 启动脚本
-    └── stop.sh         # 停止脚本
-```
-
-## 部署说明
-
-### 自动部署
-
-使用 `make deploy` 命令可以自动部署到远程服务器：
+## 构建
 
 ```bash
-# 自动检测远程服务器平台并部署
-make deploy SERVER=ubuntu@<deploy-host>
+# 模块目录
+make build          # → ../../scripts/build.sh admin
+make build-linux
+make release        # 仓库级发布包
 
-# 指定部署 Linux 版本
-make deploy SERVER=ubuntu@<deploy-host> PLATFORM=linux
-
-# 指定部署 macOS 版本
-make deploy SERVER=user@192.168.1.100 PLATFORM=darwin
+# 仓库根目录
+./scripts/build.sh admin
+make deploy ARGS="--target localhost --dir ~/moox/dev"
 ```
 
-部署流程：
-1. 自动检测或使用指定的目标平台
-2. 打包对应平台的发布文件（排除 log 和 data 目录）
-3. 上传到远程服务器
-4. 自动停止旧服务（如果存在）
-5. 解压新版本
-6. 恢复旧版本的 data 和 log 目录
-7. 启动新服务
+admin 单独部署时可排除其他服务：
 
-### 手动部署
-
-1. 构建目标平台版本
 ```bash
-make build-linux VERSION=v1.0.0
+make deploy SERVER=user@host   # 等价于 deploy-moox.sh --no-storage --no-web-host --no-cloudnode --no-collector
 ```
 
-2. 将 `release/linux/` 目录下的文件上传到服务器
+## 端口
 
-3. 在服务器上执行
+| 端口 | 服务 | 网关路径示例 |
+|------|------|--------------|
+| 11000 | HTTP 网关 | `/api/admin/*` |
+| 11100 | Auth | `/api/admin/auth/*` |
+| 11101 | Dns | `/api/admin/dnsproxy/*` |
+| 11103 | Monitor | `/api/admin/monitor/*` |
+| 11106 | Ssh | `/api/admin/ssh/*`（WebSocket/SFTP 走 rawhandler） |
+| 11107 | SpaceMgr | `/api/admin/space/*` |
+| 11108 | SecretMgr | `/api/admin/secret/*` |
+| 11109 | SysDeploy | `/api/admin/sysdeploy/*` |
+| 11401 | moox-cloudnode（转发） | `/api/admin/cloudnode/*` |
+| 11402 | moox-collector（转发） | `/api/admin/collectmgr/*` |
+| 20200-20202 | moox-storage（转发） | `/api/admin/storage_*/*` |
+| 11200-11208 | moox-trade（转发） | `/api/admin/trade_*/*` |
+| 11300-11305 | 定时器 | dnsproxy / dnsprobe / monitor |
+
+转发映射以 `t_service_deployments` 中的 active 部署记录为准，`config/gateway.yaml` 不再维护服务地址。
+
+## 配置与数据
+
+- 主配置：`config/trpc_go.yaml`、`config/gateway.yaml`
+- SQLite：`./data/admin.db`（部署目录下为 `<deploy-dir>/data/admin.db`）
+- Badger 缓存：`./data/badger`（登录盐值等）
+- 日志：`./log/`
+
+开发模式：
+
 ```bash
-chmod +x start.sh stop.sh
-./start.sh
+make dev    # 或 go run ./cmd/moox-admin -conf=config/trpc_go.yaml
 ```
 
-## 开发命令
+## 本进程服务
 
-### 安装依赖
-```bash
-make deps
-```
+`internal/service/` 内实现的 RPC 服务。CollectMgr、CloudNodeMgr 已迁移到独立模块，不在此目录。
 
-### 运行测试
-```bash
-make test
-```
+| 目录 | RPC 服务 | 说明 |
+|------|----------|------|
+| `auth/` | `trpc.moox.infra.Auth` | 注册、登录、JWT、改密、用户信息 |
+| `space/` | `trpc.moox.admin.SpaceMgr` | Space 元数据管理 |
+| `dnsproxy/` | `trpc.moox.infra.Dns` | 交易所 DNS 代理与探测 |
+| `monitor/` | `trpc.moox.ops.Monitor` | 主机监控采集与指标查询 |
+| `ssh/` | `trpc.moox.ops.Ssh` | SSH 主机、会话、WebSocket 终端、SFTP |
+| `secret/` | `trpc.moox.ops.SecretMgr` | 密钥/凭证管理 |
+| `sysdeploy/` | `trpc.moox.ops.SysDeploy` | 各服务部署信息与网关解析 |
+| `database/` | — | 共享 SQLite + GORM 初始化 |
 
-### 代码检查
-```bash
-make lint
-```
+各业务包通常包含 `service.go` / `impl*.go`、`dao/`、`model/`、`rpc/`（部分服务）、`config/`（auth）。注册入口：`internal/bootstrap/trpc.go` → `RegisterTRPCServices`。
 
-### 开发模式运行
-```bash
-make dev
-```
+**认证要点**：客户端用「盐值 + 时间戳」派生 AES 密钥加密密码后提交；用户信息存 SQLite，盐值与登录尝试等存 BadgerDB。`/api/admin/auth/Register`、`GetLoginSalt`、`Login` 等路径免 JWT（见 `gateway.yaml` 的 `no_auth_methods`）。API 形态以 `proto/infra_service.proto` 为准。
 
-### 清理构建文件
-```bash
-make clean
-```
+**扩展新服务**：优先作为独立模块部署，并在 `t_service_deployments` 中登记 serviceID、地址和 tRPC 服务名；只有 admin 本地基础能力才放入 `internal/service/`、`bootstrap/services.go`、`bootstrap/trpc.go` 和 `trpc_go.yaml`。
 
-## 服务管理
+## 相关文档
 
-### 启动服务
-```bash
-./start.sh
-```
-- 自动检查并停止已有进程
-- 服务以后台方式运行
-- 日志输出到 `log/app.log`
-
-### 停止服务
-```bash
-./stop.sh
-```
-
-### 查看日志
-```bash
-tail -f log/app.log
-```
-
-## 配置说明
-
-主要配置文件：`config/trpc_go.yaml`
-
-服务端口说明（11xxx 段，详见 `config/trpc_go.yaml`）：
-- 11000: MooX HTTP 网关接口（/api/admin）
-- 11001: API 服务接口（trpc.moox.api.stdhttp）
-- 11100-11107: 各 RPC 服务 HTTP 端口（Auth/Dns/AsyncTask/Monitor/CollectMgr/CloudNodeMgr/Ssh/SpaceMgr）
-- 11300-11305: 定时任务端口（dnsproxy/dnsprobe/keepalive/collectmgr/monitor/monitor.cleanup）
-
-## 注意事项
-
-1. 部署时会自动备份和恢复 data 和 log 目录
-2. 默认数据库文件位置：`./data/moox.db`
-3. 日志文件位置：`./log/`
-4. 服务启动时会自动创建必要的目录
-
-## 故障排查
-
-### SQLite "out of memory" 错误
-如果遇到此错误，请检查：
-- data 目录是否有写入权限
-- 磁盘空间是否充足
-- 数据库文件路径是否正确
+- 架构总览：[docs/架构总览.md](../../docs/架构总览.md)

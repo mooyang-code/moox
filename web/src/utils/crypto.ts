@@ -2,7 +2,6 @@
  * 安全加密工具模块
  * 优先使用 Web Crypto API，HTTP 环境下降级为 node-forge
  */
-import CryptoJS from 'crypto-js';
 import forge from 'node-forge';
 import { gatewayURL } from '@/api/gateway';
 import { getAppInfo } from '@/api/storage/auth';
@@ -50,18 +49,11 @@ export function generateDeviceId(): string {
   /**
    * 从盐值和时间戳派生加密密钥材料
    */
-  async function deriveKeyMaterial(salt: string, timestamp: number): Promise<ArrayBuffer | string> {
+  async function deriveKeyMaterial(salt: string, timestamp: number): Promise<ArrayBuffer> {
     const keyMaterial = salt + timestamp.toString();
-    
-    if (isWebCryptoAvailable()) {
-      // Web Crypto API 方式
-      const encoder = new TextEncoder();
-      const data = encoder.encode(keyMaterial);
-      return await crypto.subtle.digest('SHA-256', data);
-    } else {
-      // CryptoJS 降级方式
-      return CryptoJS.SHA256(keyMaterial).toString();
-    }
+    const encoder = new TextEncoder();
+    const data = encoder.encode(keyMaterial);
+    return await crypto.subtle.digest('SHA-256', data);
   }
 
   /**
@@ -72,7 +64,7 @@ export function generateDeviceId(): string {
       throw new Error('Web Crypto API 不可用，请确保在 HTTPS 环境下运行');
     }
 
-    const hashBuffer = await deriveKeyMaterial(salt, timestamp) as ArrayBuffer;
+    const hashBuffer = await deriveKeyMaterial(salt, timestamp);
     
     // 导入为 AES-GCM 密钥
     return await crypto.subtle.importKey(
@@ -89,28 +81,17 @@ export function generateDeviceId(): string {
    * node-forge 降级加密实现（真正的 AES-GCM）
    */
   function encryptPasswordWithForge(password: string, salt: string, timestamp: number): string {
-    console.log('🔧 node-forge AES-GCM 加密');
-    console.log('🔧 加密参数:', { 
-      salt, 
-      timestamp, 
-      password: password.substring(0, 3) + '***',
-      passwordLength: password.length 
-    });
-    
     try {
       // 1. 密钥派生：与 Go 后端完全一致
       const keyMaterial = salt + timestamp.toString();
-      console.log('🔑 密钥材料:', keyMaterial);
       
       // 2. SHA256 生成 32 字节密钥
       const md = forge.md.sha256.create();
       md.update(keyMaterial);
       const keyBytes = md.digest().getBytes();
-      console.log('🔑 密钥长度:', keyBytes.length, '字节');
       
       // 3. 生成 12 字节随机 IV（GCM 标准）
       const iv = forge.random.getBytesSync(12);
-      console.log('🎲 IV 长度:', iv.length, '字节');
       
       // 4. 创建 AES-GCM 加密器
       const cipher = forge.cipher.createCipher('AES-GCM', keyBytes);
@@ -126,18 +107,11 @@ export function generateDeviceId(): string {
       const encrypted = cipher.output.getBytes();
       const tag = cipher.mode.tag.getBytes();
       
-      console.log('🔒 密文长度:', encrypted.length, '字节');
-      console.log('🏷️ 认证标签长度:', tag.length, '字节');
-      
       // 6. 按照 Go AES-GCM 格式组合：iv + ciphertext + tag
       const combined = iv + encrypted + tag;
-      console.log('📦 组合数据长度:', combined.length, '字节');
-      console.log('📦 格式: iv(12) + ciphertext + tag(16)');
       
       // 7. Base64 编码
       const result = forge.util.encode64(combined);
-      console.log('📦 最终 Base64 长度:', result.length);
-      console.log('📦 Base64 预览:', result.substring(0, 40) + '...');
       
       return result;
       
@@ -148,12 +122,10 @@ export function generateDeviceId(): string {
   }
 
   /**
-   * 使用 AES-GCM 加密密码（与后端兼容）
+   * 使用 AES-GCM 加密密码（与后端协议一致）。
    */
   export async function encryptPassword(password: string, salt: string, timestamp: number): Promise<string> {
     try {
-      console.log('🔐 开始AES-GCM加密...', { salt, timestamp });
-      
       if (isWebCryptoAvailable()) {
         // 使用 Web Crypto API
         const key = await deriveEncryptionKey(salt, timestamp);
@@ -180,24 +152,11 @@ export function generateDeviceId(): string {
         
         // Base64 编码
         const result = btoa(String.fromCharCode(...combined));
-        console.log('✅ Web Crypto API 加密成功', { 
-          passwordLength: password.length,
-          encryptedLength: result.length,
-          encrypted: result 
-        });
         
         return result;
       } else {
         // 降级使用 node-forge (真正的 AES-GCM)
-        console.log('🔄 降级使用 node-forge AES-GCM 加密...');
-        const result = encryptPasswordWithForge(password, salt, timestamp);
-        console.log('✅ node-forge AES-GCM 加密成功', { 
-          passwordLength: password.length,
-          encryptedLength: result.length,
-          encrypted: result 
-        });
-        
-        return result;
+        return encryptPasswordWithForge(password, salt, timestamp);
       }
     } catch (error) {
       console.error('❌ AES-GCM加密失败:', error);
@@ -227,7 +186,6 @@ export function generateDeviceId(): string {
         const expiresAt = this.saltCache.timestamp + this.saltCache.expires_in;
         
         if (now < expiresAt - 30) { // 提前30秒过期
-          console.log('📋 使用缓存的盐值');
           return this.saltCache;
         }
       }
@@ -238,7 +196,6 @@ export function generateDeviceId(): string {
       try {
         const saltData = await this.saltPromise;
         this.saltCache = { ...saltData, username };
-        console.log('🔄 获取新盐值成功', this.saltCache);
         return saltData;
       } finally {
         this.saltPromise = null;
@@ -246,8 +203,6 @@ export function generateDeviceId(): string {
     }
   
     private async _fetchSalt(username: string): Promise<any> {
-      console.log('🌐 请求新的登录盐值...', { username });
-      
       const response = await fetch(gatewayURL('/api/admin/auth/GetLoginSalt'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -280,20 +235,12 @@ export function generateDeviceId(): string {
      * 安全登录
      */
     async login(username: string, password: string): Promise<any> {
-      console.log('🚀 开始安全登录流程...', { username });
-      
       try {
         // 1. 获取动态盐值
         const saltData = await this.getLoginSalt(username);
-        console.log('📝 获取盐值:', {
-          salt: saltData.salt,
-          timestamp: saltData.timestamp,
-          expiresIn: saltData.expiresIn
-        });
   
         // 2. 加密密码
         const encryptedPassword = await encryptPassword(password, saltData.salt, saltData.timestamp);
-        console.log('🔒 密码加密完成');
   
         // 3. 构建登录请求（严格按照 LoginReq 协议）
         const loginRequest = {
@@ -307,13 +254,6 @@ export function generateDeviceId(): string {
           client_ip: getClientIP()
           // 注意：移除 verify_code 字段，因为后端协议中没有定义
         };
-  
-        console.log('📤 发送登录请求:', {
-          username: loginRequest.username,
-          salt: loginRequest.salt,
-          timestamp: loginRequest.timestamp,
-          device_id: loginRequest.device_id
-        });
   
         // 4. 发送登录请求
         const response = await fetch(gatewayURL('/api/admin/auth/Login'), {
@@ -338,7 +278,6 @@ export function generateDeviceId(): string {
           throw new Error(result.ret_info.msg || '登录失败');
         }
         
-        console.log('✅ 安全登录成功');
         return result;
         
       } catch (error: unknown) {

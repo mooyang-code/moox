@@ -31,18 +31,16 @@ export const currentlyRoute = (current: any) => {
     store.setTabs(routeList.value[0]);
   }
 
-  const staticRouteNames = ["home", "userinfo", "user-settings"];
+  const staticRouteNames = ["home"];
   
   // 跳转路由是有权限的，从有权限路由中匹配
   const { hasRoute } = useRoutingMethod();
   // 对于静态路由，跳过权限检查；其他路由进行正常权限检查
   const isStaticRoute = staticRouteNames.includes(route.name);
   if (!isStaticRoute && !hasRoute(route.name)) {
-    console.log('路由无权限，跳过状态更新:', route.name);
     return;
   }
 
-  console.log('更新路由状态:', route.name, '是否为静态路由:', isStaticRoute);
   // 存入当前路由-高亮
   store.setCurrentRoute(route);
 

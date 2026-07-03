@@ -9,7 +9,7 @@ Use this skill when working inside the MooX monorepo, especially for quant data 
 
 ## What MooX Is
 
-MooX is the unified repository for a personal quant data platform. It groups storage, collection, factor calculation, account, order, and control-plane modules in one Go workspace.
+MooX is the unified repository for a personal quant data platform. It groups storage, collection, cloud node execution, factor calculation, trade, and control-plane modules in one Go workspace.
 
 Core concepts:
 
@@ -26,21 +26,20 @@ Core concepts:
 - `modules/cli`: `moox-cli`.
 - `modules/admin`: control plane service and metadata orchestration.
 - `modules/storage`: storage service, protocol, access, primary store, view, search, archive, and device drivers.
-- `modules/collector`: market data collection. The former miner responsibility is folded into collector discovery/source/scheduler packages.
+- `modules/collector`: independent collection service with CollectMgr APIs, planner, executor, cloudruntime, source adapters, and SCF runtime entrypoints.
+- `modules/cloudnode`: cloud node, cloud account, SCF package, async work_item, and sync invocation service.
 - `modules/factor`: factor calculation module.
-- `modules/order`: order module.
-- `modules/account`: account module.
+- `modules/trade`: trade module.
 - `docs`: architecture, concept, and protocol documents.
-- `scripts`: root build, release, deploy, acceptance, and node_exporter operation scripts.
+- `scripts`: root build, release, deploy, collector SCF package, storage helper, and node_exporter operation scripts.
 
 ## Common Commands
 
 From the repository root:
 
 ```bash
-make test
 make build
-make acceptance
+make check-boundaries
 make release
 make deploy
 ```
@@ -77,23 +76,12 @@ python3 skills/moox/scripts/tencent_lighthouse_firewall.py add --detail-url '<co
 
 The script calls `bin/moox-cli` from the repository when present, or `moox-cli` from `PATH`. Tencent credentials should be supplied through `TENCENTCLOUD_SECRET_ID` and `TENCENTCLOUD_SECRET_KEY`; do not echo secrets in final responses or logs.
 
-CSV acceptance import:
-
-```bash
-bin/moox-cli data csv import \
-  --storage-url http://127.0.0.1:20201 \
-  --space default \
-  --data-source BINANCE \
-  --dataset binance_spot_kline_1m \
-  --subject APT-USDT \
-  --freq 1m \
-  --file ~/Downloads/APT-USDT.csv
-```
+Runtime data can be deleted and rebuilt from `examples/` and service flows. Do not reintroduce standalone acceptance CSV scripts.
 
 ## Development Rules
 
-- Prefer the new protocol under `modules/storage/proto/*.proto` and `modules/admin/proto/*.proto`.
-- Keep legacy proto files under `proto/legacy` until their old call paths are deleted.
+- Prefer the new protocol under `modules/storage/proto/*.proto`, `modules/admin/proto/*.proto`, `modules/collector/proto/*.proto`, and `modules/cloudnode/proto/*.proto`; shared response/auth/page types live in `packages/commonpb`.
+- Do not add new compatibility proto packages for deleted call paths; update callers to the current module proto instead.
 - Do not reintroduce `object_id` into public APIs. Use Space, DataSource, Subject, DataSet, View, Field, and Factor.
 - Use `subject_id` for normalized subject identity and `SubjectSymbol.external_symbol` for source-specific symbols.
 - Use `start_time`, `end_time`, and `snapshot_time`; avoid suffixes such as `_ms`.
@@ -107,7 +95,7 @@ See `references/` for more detailed notes.
 维护者专用，见 [skills/dev-helper/SKILL.md](../dev-helper/SKILL.md)。未配置 SSH 目标时脚本会交互提示；Agent 应在对话中向用户询问后以 `--target` 传入，勿写入仓库。
 
 ```bash
-# 先配置 MOOX_DEV_SSH_TARGET 或 infra/infra.local.yaml（勿提交密码）
+# 先配置 MOOX_DEV_SSH_TARGET（勿提交密码）
 ./skills/dev-helper/scripts/storage-remote-build.sh \
   --deploy-dir /home/ubuntu/moox \
   --deploy
@@ -130,7 +118,7 @@ When initializing a fresh MooX system, use a strict two-stage deployment flow. D
    After the admin backend and frontend are deployed and reachable, ask where to deploy the remaining services. Cover storage metadata/access/view, service gateway exposure, collector-related services, trade services, and any internal admin RPC ports that differ from defaults. Prefer explicit IP and port for every service.
 
 5. Write service deployment information through SysDeploy.
-   Use `t_service_deployments` via the admin `sysdeploy` API as the single source of truth for service IP/port/base URL. Do not read or derive deployment topology from `infra/infra.local.yaml`.
+   Use `t_service_deployments` via the admin `sysdeploy` API as the single source of truth for service IP/port/base URL. Do not derive deployment topology from local files.
 
 6. Preserve the storage topology boundary.
    `/#/ops/storage/nodes` remains the PrimaryStore topology. If a storage service deployment address changes, remind the user to inspect and update the storage topology endpoint separately; do not silently synchronize it.

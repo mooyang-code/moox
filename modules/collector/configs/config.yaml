@@ -1,10 +1,11 @@
 # 主配置文件
 system:
-  name: "multi-source-data-collector"
+  name: "moox-collector"
   version: "v0.0.3"
   environment: "Production"
   timezone: "UTC"
-  storage_url: "http://127.0.0.1:20201"   # 本地默认值；SCF 运行时由控制面 keepalive 下发 service_deployments.storage_access
+  storage_metadata_target: "127.0.0.1:20100" # 本地默认值；SCF 运行时由控制面 keepalive 下发 storage_metadata_trpc
+  storage_access_target: "127.0.0.1:20102"   # 本地默认值；SCF 运行时由控制面 keepalive 下发 storage_access_trpc
   service_auth:
     version: "moox-auth-v1"
     access_key: "moox-service"
@@ -60,18 +61,3 @@ sources:
     - name: "binance"
       enabled: true
       config: "configs/sources/market/binance.yaml"
-    - name: "okx"
-      enabled: false
-      config: "configs/sources/market/okx.yaml"
-  social:
-    - name: "twitter"
-      enabled: false
-      config: "configs/sources/social/twitter.yaml"
-  news:
-    - name: "coindesk"
-      enabled: false
-      config: "configs/sources/news/coindesk.yaml"
-  blockchain:
-    - name: "ethereum"
-      enabled: false
-      config: "configs/sources/blockchain/ethereum.yaml"

@@ -11,8 +11,7 @@ TARGET_GOARCH="${TARGET_GOARCH:-${GOARCH:-$(go env GOARCH)}}"
 TARGET_MODULE="${1:-all}"
 
 if [[ "${TARGET_MODULE}" == "proto" ]]; then
-  (cd "${ROOT}/modules/storage" && make proto)
-  (cd "${ROOT}/modules/admin/proto" && make all)
+  (cd "${ROOT}" && make proto)
   exit 0
 fi
 
@@ -44,12 +43,13 @@ build_storage() {
   echo "==> build moox-storage"
   (
     cd "${ROOT}/modules/storage"
+    local storage_cgo="${STORAGE_CGO_ENABLED:-${CGO_ENABLED:-1}}"
     if [[ -n "${STORAGE_BUILD_TAGS:-}" ]]; then
-      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=1 go build -tags "${STORAGE_BUILD_TAGS}" \
+      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build -tags "${STORAGE_BUILD_TAGS}" \
         -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
         -o "${BIN_DIR}/moox-storage" ./cmd/moox-storage
     else
-      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=1 go build \
+      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build \
         -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
         -o "${BIN_DIR}/moox-storage" ./cmd/moox-storage
     fi
@@ -70,7 +70,10 @@ case "${TARGET_MODULE}" in
   all)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
     build_go modules/admin ./cmd/moox-admin moox-admin 0
+    build_web_host
+    build_go modules/cloudnode ./cmd/moox-cloudnode moox-cloudnode 0
     build_go modules/collector ./cmd/moox-collector moox-collector 0
+    build_go modules/collector ./cmd/moox-collector-scf moox-collector-scf 0
     build_go modules/factor ./cmd/moox-factor moox-factor 0
     build_go modules/trade ./cmd/moox-trade moox-trade 0
     build_storage
@@ -81,17 +84,20 @@ case "${TARGET_MODULE}" in
   admin)
     build_go modules/admin ./cmd/moox-admin moox-admin 0
     ;;
+  cloudnode)
+    build_go modules/cloudnode ./cmd/moox-cloudnode moox-cloudnode 0
+    ;;
   collector)
     build_go modules/collector ./cmd/moox-collector moox-collector 0
+    ;;
+  collector-scf)
+    build_go modules/collector ./cmd/moox-collector-scf moox-collector-scf 0
     ;;
   factor)
     build_go modules/factor ./cmd/moox-factor moox-factor 0
     ;;
   trade)
     build_go modules/trade ./cmd/moox-trade moox-trade 0
-    ;;
-  account)
-    echo "==> skip moox-account: modules/account not present in this repo" >&2
     ;;
   storage)
     build_storage

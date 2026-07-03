@@ -71,13 +71,13 @@ export function createSecret(secret: Secret) {
 }
 
 export function updateSecret(req: UpdateSecretReq) {
-  return callControl<UpdateSecretReq, { ret_info?: { code?: number; msg?: string } }>('secret', 'UpdateSecret', req);
+  return callControl<UpdateSecretReq, Record<string, never>>('secret', 'UpdateSecret', req);
 }
 
 export function deleteSecret(secretId: string) {
-  return callControl<{ secret_id: string }, { ret_info?: { code?: number; msg?: string } }>('secret', 'DeleteSecret', { secret_id: secretId });
+  return callControl<{ secret_id: string }, Record<string, never>>('secret', 'DeleteSecret', { secret_id: secretId });
 }
 
 export function toggleSecretStatus(secretId: string, status: string) {
-  return callControl<ToggleSecretStatusReq, { ret_info?: { code?: number; msg?: string } }>('secret', 'ToggleSecretStatus', { secret_id: secretId, status });
+  return callControl<ToggleSecretStatusReq, Record<string, never>>('secret', 'ToggleSecretStatus', { secret_id: secretId, status });
 }

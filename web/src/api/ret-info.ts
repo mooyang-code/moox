@@ -1,15 +1,7 @@
-export type RetInfoCode = number | string | null | undefined;
+export type RetInfoCode = number | null | undefined;
 
-const successCodes = new Set<RetInfoCode>([0, '0', 200, '200', 'SUCCESS']);
-const authExpiredCodes = new Set<RetInfoCode>([
-  3,
-  '3',
-  401,
-  '401',
-  'TOKEN_EXPIRED',
-  'UNAUTHORIZED',
-  'AUTH_EXPIRED',
-]);
+const successCodes = new Set<RetInfoCode>([0]);
+const authExpiredCodes = new Set<RetInfoCode>([2]);
 
 export function isRetInfoSuccess(code: RetInfoCode): boolean {
   return successCodes.has(code);

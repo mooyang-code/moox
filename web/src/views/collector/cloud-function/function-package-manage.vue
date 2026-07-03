@@ -58,24 +58,6 @@
         </a-space>
       </a-row>
 
-      <!-- 上传状态提示 -->
-      <a-row v-if="isPolling" style="margin-bottom: 16px;">
-        <a-alert type="info" :closable="false" style="width: 100%;">
-          <template #icon><icon-loading class="spinning-icon" /></template>
-          <div style="display: flex; align-items: center; justify-content: space-between;">
-            <div>
-              <div style="font-weight: 500; margin-bottom: 4px;">{{ uploadMessage }}</div>
-              <div style="color: #86909c; font-size: 12px;">
-                任务ID: {{ currentTaskId }}
-              </div>
-            </div>
-            <div style="margin-left: 16px;">
-              <a-spin :size="20" :loading="true" />
-            </div>
-          </div>
-        </a-alert>
-      </a-row>
-      
       <a-table
         row-key="id"
         :data="packageList"
@@ -97,7 +79,7 @@
           <a-table-column title="类型" data-index="package_type_label" :width="150">
             <template #cell="{ record }">
               <a-tag :color="getPackageTypeColor(record.package_type)">
-                {{ record.package_type_label }}
+                {{ getPackageTypeLabel(record.package_type) }}
               </a-tag>
             </template>
           </a-table-column>
@@ -107,10 +89,10 @@
               {{ formatFileSize(record.file_size) }}
             </template>
           </a-table-column>
-          <a-table-column title="状态" data-index="status_label" :width="100">
+          <a-table-column title="状态" data-index="status" :width="100">
             <template #cell="{ record }">
               <a-tag :color="getStatusColor(record.status)">
-                {{ record.status_label }}
+                {{ getPackageStatusLabel(record.status) }}
               </a-tag>
             </template>
           </a-table-column>
@@ -235,7 +217,7 @@
           </a-select>
           <template #extra>
             <span style="color: #86909c; font-size: 12px;">
-              仅支持COS方式上传，请选择云账户。所有上传都为异步处理。
+              仅支持COS方式上传，请选择云账户。上传由独立 cloudnode 服务处理。
             </span>
           </template>
         </a-form-item>
@@ -307,14 +289,14 @@
           <a-descriptions-item label="版本">{{ packageDetail.version }}</a-descriptions-item>
           <a-descriptions-item label="类型">
             <a-tag :color="getPackageTypeColor(packageDetail.package_type)">
-              {{ packageDetail.package_type_label }}
+              {{ getPackageTypeLabel(packageDetail.package_type) }}
             </a-tag>
           </a-descriptions-item>
           <a-descriptions-item label="运行时环境">{{ packageDetail.runtime }}</a-descriptions-item>
           <a-descriptions-item label="文件大小">{{ formatFileSize(packageDetail.file_size) }}</a-descriptions-item>
           <a-descriptions-item label="状态">
             <a-tag :color="getStatusColor(packageDetail.status)">
-              {{ packageDetail.status_label }}
+              {{ getPackageStatusLabel(packageDetail.status) }}
             </a-tag>
           </a-descriptions-item>
           <a-descriptions-item label="文件MD5" :span="2">
@@ -389,7 +371,7 @@
 
 <script setup lang="ts">
 import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
-import { ref, watch, reactive, computed, onUnmounted } from 'vue';
+import { ref, watch, reactive, computed } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { 
   getFunctionPackageList, 
@@ -399,13 +381,14 @@ import {
   downloadPackageByURL,
   RUNTIME_OPTIONS,
   PACKAGE_TYPE_OPTIONS,
+  resolvePackageType,
   STATUS_OPTIONS,
+  PACKAGE_STATUS_LABEL,
+  PACKAGE_TYPE_LABEL,
   type FunctionPackage,
   type PackageListRequest
 } from '@/api/function-package';
 import { getCloudAccountList, type CloudAccount } from '@/api/cloud-account';
-import { isRetInfoSuccess } from '@/api/ret-info';
-import { asyncTaskManager } from '@/utils/async-task';
 
 // Props
 const props = defineProps<{
@@ -441,12 +424,6 @@ const versionValidationStatus = ref<'error' | 'warning' | 'success' | undefined>
 const versionFeedback = ref<string>('');
 const isCheckingVersion = ref(false);
 
-// 异步任务状态
-const currentTaskId = ref<string>('');
-const isPolling = ref(false);
-const uploadMessage = ref('');
-const pollingTimer = ref<number | null>(null);
-
 // 搜索表单
 const searchForm = reactive<PackageListRequest>({
   page: 1,
@@ -473,10 +450,9 @@ const defaultUploadForm = {
   version: '',
   description: '',
   runtime: 'Python3.9',
-  package_type: 'data_collector',
+  package_type: 1,
   biz_type: '',
-  cloud_account_id: '',
-  file_content: ''
+  cloud_account_id: ''
 };
 
 const uploadForm = reactive({ ...defaultUploadForm });
@@ -492,21 +468,6 @@ watch(() => props.modelValue, async (newVal) => {
     loadPackageList();
     loadCloudAccounts();
 
-    // 检查并恢复未完成的上传任务
-    try {
-      await asyncTaskManager.checkAndRestoreTask(async (taskData: any) => {
-        if (taskData.task_type === 'UPLOAD_FILE_TO_COS') {
-          console.log('恢复文件上传任务:', taskData.job_id);
-          currentTaskId.value = taskData.job_id;
-          uploadMessage.value = '检测到未完成的上传任务,正在恢复...';
-          startTaskPolling(taskData.job_id);
-          return true; // 表示成功处理了任务恢复
-        }
-        return false; // 不是我们处理的任务类型
-      });
-    } catch (error) {
-      console.warn('任务恢复失败:', error);
-    }
   }
 });
 
@@ -548,6 +509,7 @@ const loadCloudAccounts = async () => {
   } catch (error) {
     console.error('加载云账户列表失败:', error);
     cloudAccountOptions.value = [];
+    Message.error(error instanceof Error ? error.message : '加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署');
   }
 };
 
@@ -579,13 +541,13 @@ const handlePageSizeChange = (pageSize: number) => {
 // 新增
 const onAdd = () => {
   // 根据传入的 packageType 和 bizType 设置默认值
-  const defaultPackageType = props.packageType || 'data_collector';
+  const defaultPackageType = resolvePackageType(props.packageType);
   const defaultBizType = props.bizType || '';
   Object.assign(uploadForm, {
     ...defaultUploadForm,
     package_type: defaultPackageType,
     biz_type: defaultBizType,
-    package_name: defaultPackageType // 根据包类型自动设置包名
+    package_name: packageNameForType(defaultPackageType)
   });
   fileList.value = [];
   // 清除版本验证状态
@@ -595,13 +557,17 @@ const onAdd = () => {
 };
 
 // 包类型变化处理
-const onPackageTypeChange = (value: string) => {
-  // 根据包类型自动生成包名
-  const packageTypeNameMap: Record<string, string> = {
-    'data_collector': 'data_collector',
-    'factor_calculator': 'factor_calculator'
+const packageNameForType = (packageType: number) => {
+  const map: Record<number, string> = {
+    1: 'data_collector',
+    2: 'factor_calculator',
+    3: 'custom_package'
   };
-  uploadForm.package_name = packageTypeNameMap[value] || value;
+  return map[packageType] || 'data_collector';
+};
+
+const onPackageTypeChange = (value: number) => {
+  uploadForm.package_name = packageNameForType(value);
   
   // 包类型变化时重新检查版本
   if (uploadForm.version) {
@@ -643,7 +609,7 @@ const checkVersionExists = async () => {
       const duplicatePackage = existingPackages.find((pkg: FunctionPackage) => 
         pkg.version === uploadForm.version && 
         pkg.package_name === uploadForm.package_name &&
-        pkg.status !== 2 // 排除已删除状态
+        pkg.status !== 4 // 排除已删除状态
       );
 
       if (duplicatePackage) {
@@ -681,7 +647,6 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
         duration: 5000
       });
       fileList.value = [];
-      uploadForm.file_content = '';
       uploadForm.version = '';
       versionValidationStatus.value = undefined;
       versionFeedback.value = '';
@@ -696,7 +661,6 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
         duration: 5000
       });
       fileList.value = [];
-      uploadForm.file_content = '';
       uploadForm.version = '';
       versionValidationStatus.value = 'error';
       versionFeedback.value = '文件名格式不符合要求';
@@ -718,36 +682,12 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
         duration: 5000
       });
       fileList.value = [];
-      uploadForm.file_content = '';
       uploadForm.version = '';
       versionValidationStatus.value = undefined;
       versionFeedback.value = '';
       return;
     }
-
-    // 将文件转换为base64
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      if (e.target?.result) {
-        const base64 = (e.target.result as string).split(',')[1]; // 移除data:xxx;base64,前缀
-        uploadForm.file_content = base64;
-      }
-    };
-    reader.onerror = () => {
-      Message.error({
-        content: '文件读取失败',
-        duration: 5000
-      });
-      fileList.value = [];
-      uploadForm.file_content = '';
-      uploadForm.version = '';
-      versionValidationStatus.value = undefined;
-      versionFeedback.value = '';
-    };
-    reader.readAsDataURL(fileItem.file);
   } else {
-    // 文件被移除
-    uploadForm.file_content = '';
     uploadForm.version = '';
     versionValidationStatus.value = undefined;
     versionFeedback.value = '';
@@ -800,36 +740,22 @@ const validateUploadForm = () => {
     errors.push('请选择云账户，仅支持COS方式上传');
   }
 
-  // 验证文件
-  if (!uploadForm.file_content) {
-    errors.push('请选择要上传的ZIP文件');
-  }
-  
-  // 验证文件列表
   if (fileList.value.length === 0) {
-    errors.push('请选择要上传的文件');
+    errors.push('请选择要上传的ZIP文件');
   } else {
     const file = fileList.value[0];
-    // 验证文件存在
     if (!file.file) {
       errors.push('文件读取失败，请重新选择文件');
     } else {
-      // 验证文件类型
       if (!file.file.name.toLowerCase().endsWith('.zip')) {
         errors.push('只支持ZIP格式的文件');
       }
-      
-      // 验证文件大小（100MB限制）
       if (file.file.size > 100 * 1024 * 1024) {
         errors.push('文件大小不能超过100MB');
       }
-      
-      // 验证文件大小（不能为空）
       if (file.file.size === 0) {
         errors.push('文件不能为空');
       }
-      
-      // 验证文件名
       if (file.file.name.length > 255) {
         errors.push('文件名长度不能超过255个字符');
       }
@@ -903,137 +829,26 @@ const handleUploadOk = async () => {
   }
 };
 
-// 统一上传处理（使用异步任务）
+// 统一上传处理（独立 cloudnode 服务）
 const handleUpload = async () => {
   try {
-    const response = await uploadFunctionPackage(uploadForm);
-    console.log('异步任务创建响应:', response);
+    const originalFilename = fileList.value[0]?.file?.name || '';
+    await uploadFunctionPackage({
+      ...uploadForm,
+      original_filename: originalFilename
+    }, fileList.value[0].file);
 
-    // 统一响应：ret_info.code === 'SUCCESS' 表示成功，业务字段在响应顶层
-    const rsp = response?.data;
-    if (isRetInfoSuccess(rsp?.ret_info?.code)) {
-      const jobId = rsp.job_id;
-      if (jobId) {
-        console.log('收到异步任务创建响应，JobID:', jobId);
-        currentTaskId.value = jobId;
-        uploadMessage.value = '文件上传任务已创建，正在后台处理...';
-
-        // 关闭上传弹窗
-        uploadVisible.value = false;
-
-        // 使用统一的异步任务管理器开始轮询
-        startTaskPolling(jobId);
-      } else {
-        throw new Error('服务器未返回任务ID');
-      }
-    } else {
-      // 处理业务错误
-      const errorMessage = rsp?.ret_info?.msg || '创建上传任务失败';
-      throw new Error(errorMessage);
-    }
+    Message.success('上传成功！');
+    uploadVisible.value = false;
+    await loadPackageList();
+    emit('refresh');
   } catch (error: any) {
-    console.error('创建上传任务失败:', error);
+    console.error('上传代码包失败:', error);
     
-    // 简化错误消息提取（统一的异步任务接口应该有标准化的错误格式）
-    let errorMessage = '创建上传任务失败';
+    const errorMessage = error?.message || '上传代码包失败';
     
-    // 检查response.data中的错误信息
-    if (error?.response?.data?.message) {
-      errorMessage = error.response.data.message;
-    } else if (error?.message) {
-      errorMessage = error.message;
-    }
-    
-    console.log('错误消息:', errorMessage);
     Message.error(errorMessage);
     uploading.value = false;
-  }
-};
-
-// 开始任务轮询 - 使用统一的AsyncTaskManager
-const startTaskPolling = (taskId: string) => {
-  isPolling.value = true;
-  currentTaskId.value = taskId;
-  
-  console.log('开始轮询上传任务:', taskId);
-  console.log('AsyncTaskManager实例:', asyncTaskManager);
-  
-  try {
-    // 使用 AsyncTaskManager 进行轮询，与云函数创建保持一致
-    asyncTaskManager.startPolling(taskId, {
-      onProgress: (data: any) => {
-        console.log('Package upload progress:', data);
-        uploadMessage.value = data.message || '正在处理上传任务，请勿关闭本页面(需要几分钟)...';
-      },
-      onSuccess: (data: any) => {
-        console.log('Upload task success:', data);
-        handleTaskComplete(data, 'success');
-      },
-      onFailed: (data: any) => {
-        console.log('Upload task failed:', data);
-        handleTaskComplete(data, 'failed');
-      },
-      onPartialSuccess: (data: any) => {
-        console.log('Upload task partial success:', data);
-        handleTaskComplete(data, 'partial_success');
-      },
-      showLoading: false,
-      interval: 2000
-    });
-    console.log('AsyncTaskManager.startPolling 调用成功');
-  } catch (error) {
-    console.error('AsyncTaskManager.startPolling 调用失败:', error);
-  }
-};
-
-// 任务完成处理
-const handleTaskComplete = async (data: any, result: string) => {
-  console.log('任务完成:', { data, result });
-  
-  stopTaskPolling();
-  
-  if (result === 'success') {
-    Message.success('上传成功！');
-    // 刷新代码包列表
-    await loadPackageList();
-    emit('refresh');
-  } else if (result === 'failed') {
-    // 提取错误消息
-    let errorMessage = '上传失败';
-    if (data?.message) {
-      errorMessage = data.message;
-    } else if (data?.error_message) {
-      errorMessage = data.error_message;
-    }
-    Message.error({
-      content: errorMessage,
-      duration: 5000 // 错误消息显示5秒
-    });
-    // 失败后也刷新列表，显示失败状态
-    await loadPackageList();
-  } else if (result === 'partial_success') {
-    Message.warning('部分上传成功，请查看详情');
-    // 刷新代码包列表
-    await loadPackageList();
-    emit('refresh');
-  }
-};
-
-// 停止任务轮询
-const stopTaskPolling = () => {
-  isPolling.value = false;
-  
-  // 停止AsyncTaskManager轮询
-  asyncTaskManager.stopPolling();
-  
-  // 清除任务ID
-  currentTaskId.value = '';
-  
-  
-  // 清除备用定时器（如果有的话）
-  if (pollingTimer.value) {
-    clearInterval(pollingTimer.value);
-    pollingTimer.value = null;
   }
 };
 
@@ -1048,8 +863,6 @@ const onDownload = async (record: FunctionPackage) => {
     if (downloadProgress.value[record.package_id] !== undefined) {
       return;
     }
-
-    console.log(`开始下载代码包: ${record.package_name} v${record.version}`);
 
     // 显示下载状态
     downloadProgress.value[record.package_id] = 0;
@@ -1141,14 +954,41 @@ const getPackageTypeColor = (packageType: string) => {
   return colorMap[packageType] || 'gray';
 };
 
-const getStatusColor = (status: number) => {
+const getStatusColor = (status: number | string) => {
   const colorMap: Record<number, string> = {
-    0: 'blue',       // 上传中 - 蓝色
-    1: 'green',      // 可用 - 绿色
-    2: 'gray',       // 已删除 - 灰色
-    3: 'red'         // 上传失败 - 红色
+    1: 'blue',
+    2: 'green',
+    3: 'red',
+    4: 'gray'
   };
-  return colorMap[status] || 'gray';
+  const numeric = typeof status === 'number' ? status : Number(status);
+  return colorMap[numeric] || 'gray';
+};
+
+const getPackageStatusLabel = (status: number | string) => {
+  const numeric = typeof status === 'number' ? status : Number(status);
+  const enumMap: Record<number, string> = {
+    1: 'PACKAGE_STATUS_PENDING',
+    2: 'PACKAGE_STATUS_AVAILABLE',
+    3: 'PACKAGE_STATUS_FAILED',
+    4: 'PACKAGE_STATUS_DELETED'
+  };
+  const key = enumMap[numeric] || 'PACKAGE_STATUS_UNSPECIFIED';
+  return PACKAGE_STATUS_LABEL[key] || '未知';
+};
+
+const getPackageTypeLabel = (packageType: number | string) => {
+  if (typeof packageType === 'string' && PACKAGE_TYPE_LABEL[packageType]) {
+    return PACKAGE_TYPE_LABEL[packageType];
+  }
+  const numeric = typeof packageType === 'number' ? packageType : Number(packageType);
+  const enumMap: Record<number, string> = {
+    1: 'PACKAGE_TYPE_COLLECTOR',
+    2: 'PACKAGE_TYPE_FACTOR',
+    3: 'PACKAGE_TYPE_CUSTOM'
+  };
+  const key = enumMap[numeric] || 'PACKAGE_TYPE_UNSPECIFIED';
+  return PACKAGE_TYPE_LABEL[key] || String(packageType);
 };
 
 const formatFileSize = (size: number) => {
@@ -1170,11 +1010,6 @@ const formatTime = (time: string | undefined) => {
   });
 };
 
-
-// 组件卸载时清理轮询
-onUnmounted(() => {
-  stopTaskPolling();
-});
 </script>
 
 <style scoped>

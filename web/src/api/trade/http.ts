@@ -49,7 +49,7 @@ function assertSuccess(retInfo?: RetInfo) {
  * @param method RPC 方法名，如 ListAccounts
  * @param req    请求体
  */
-export async function callTrade<TReq extends object, TRsp extends { ret_info?: RetInfo }>(
+export async function callTrade<TReq extends object, TRsp extends { ret_info: RetInfo }>(
   group: keyof typeof tradeServiceMap,
   method: string,
   req: TReq,

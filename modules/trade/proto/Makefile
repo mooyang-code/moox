@@ -1,5 +1,6 @@
-PROTO_FILES := moox_common.proto trade_service.proto
+PROTO_FILES := trade_service.proto
 OUTPUT_DIR := ./tradegen
+COMMON_PROTO_DIR := ../../../packages/commonpb
 
 .PHONY: all clean
 
@@ -9,6 +10,8 @@ all:
 		echo "trpc-open create $$proto"; \
 		trpc-open create \
 			-p "./$$proto" \
+			--protodir . \
+			--protodir $(COMMON_PROTO_DIR) \
 			--rpconly \
 			--nogomod \
 			--mock=false \

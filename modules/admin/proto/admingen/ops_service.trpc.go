@@ -35,8 +35,6 @@ type SshService interface {
 	DisconnectSession(ctx context.Context, req *DisconnectSessionReq) (*DisconnectSessionRsp, error)
 
 	ResizeWindow(ctx context.Context, req *ResizeWindowReq) (*ResizeWindowRsp, error)
-
-	ExecCommand(ctx context.Context, req *ExecCommandReq) (*ExecCommandRsp, error)
 	// SftpList SFTP 操作
 	SftpList(ctx context.Context, req *SftpListReq) (*SftpListRsp, error)
 
@@ -193,24 +191,6 @@ func SshService_ResizeWindow_Handler(svr interface{}, ctx context.Context, f ser
 	return rsp, nil
 }
 
-func SshService_ExecCommand_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ExecCommandReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SshService).ExecCommand(ctx, reqbody.(*ExecCommandReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func SshService_SftpList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &SftpListReq{}
 	filters, err := f(req)
@@ -339,10 +319,6 @@ var SshServer_ServiceDesc = server.ServiceDesc{
 			Func: SshService_ResizeWindow_Handler,
 		},
 		{
-			Name: "/trpc.moox.ops.Ssh/ExecCommand",
-			Func: SshService_ExecCommand_Handler,
-		},
-		{
 			Name: "/trpc.moox.ops.Ssh/SftpList",
 			Func: SshService_SftpList_Handler,
 		},
@@ -374,72 +350,10 @@ func RegisterSshService(s server.Service, svr SshService) {
 
 // MonitorService defines service.
 type MonitorService interface {
-	// EnableMonitor 启用主机监控
-	EnableMonitor(ctx context.Context, req *EnableMonitorReq) (*EnableMonitorRsp, error)
-	// DisableMonitor 禁用主机监控
-	DisableMonitor(ctx context.Context, req *DisableMonitorReq) (*DisableMonitorRsp, error)
-	// GetMonitorStatus 获取主机监控状态
-	GetMonitorStatus(ctx context.Context, req *GetMonitorStatusReq) (*GetMonitorStatusRsp, error)
 	// GetCurrentMetrics 获取当前监控指标
 	GetCurrentMetrics(ctx context.Context, req *GetCurrentMetricsReq) (*GetCurrentMetricsRsp, error)
 	// GetHistoryMetrics 获取历史监控数据
 	GetHistoryMetrics(ctx context.Context, req *GetHistoryMetricsReq) (*GetHistoryMetricsRsp, error)
-	// TestNodeExporter 测试 Node Exporter 连通性
-	TestNodeExporter(ctx context.Context, req *TestNodeExporterReq) (*TestNodeExporterRsp, error)
-}
-
-func MonitorService_EnableMonitor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &EnableMonitorReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MonitorService).EnableMonitor(ctx, reqbody.(*EnableMonitorReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MonitorService_DisableMonitor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &DisableMonitorReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MonitorService).DisableMonitor(ctx, reqbody.(*DisableMonitorReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MonitorService_GetMonitorStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetMonitorStatusReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MonitorService).GetMonitorStatus(ctx, reqbody.(*GetMonitorStatusReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
 }
 
 func MonitorService_GetCurrentMetrics_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -478,41 +392,11 @@ func MonitorService_GetHistoryMetrics_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func MonitorService_TestNodeExporter_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &TestNodeExporterReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MonitorService).TestNodeExporter(ctx, reqbody.(*TestNodeExporterReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // MonitorServer_ServiceDesc descriptor for server.RegisterService.
 var MonitorServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.ops.Monitor",
 	HandlerType: ((*MonitorService)(nil)),
 	Methods: []server.Method{
-		{
-			Name: "/trpc.moox.ops.Monitor/EnableMonitor",
-			Func: MonitorService_EnableMonitor_Handler,
-		},
-		{
-			Name: "/trpc.moox.ops.Monitor/DisableMonitor",
-			Func: MonitorService_DisableMonitor_Handler,
-		},
-		{
-			Name: "/trpc.moox.ops.Monitor/GetMonitorStatus",
-			Func: MonitorService_GetMonitorStatus_Handler,
-		},
 		{
 			Name: "/trpc.moox.ops.Monitor/GetCurrentMetrics",
 			Func: MonitorService_GetCurrentMetrics_Handler,
@@ -520,10 +404,6 @@ var MonitorServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.ops.Monitor/GetHistoryMetrics",
 			Func: MonitorService_GetHistoryMetrics_Handler,
-		},
-		{
-			Name: "/trpc.moox.ops.Monitor/TestNodeExporter",
-			Func: MonitorService_TestNodeExporter_Handler,
 		},
 	},
 }
@@ -566,9 +446,6 @@ func (s *UnimplementedSsh) DisconnectSession(ctx context.Context, req *Disconnec
 func (s *UnimplementedSsh) ResizeWindow(ctx context.Context, req *ResizeWindowReq) (*ResizeWindowRsp, error) {
 	return nil, errors.New("rpc ResizeWindow of service Ssh is not implemented")
 }
-func (s *UnimplementedSsh) ExecCommand(ctx context.Context, req *ExecCommandReq) (*ExecCommandRsp, error) {
-	return nil, errors.New("rpc ExecCommand of service Ssh is not implemented")
-}
 
 // SftpList SFTP 操作
 func (s *UnimplementedSsh) SftpList(ctx context.Context, req *SftpListReq) (*SftpListRsp, error) {
@@ -591,21 +468,6 @@ func (s *UnimplementedSsh) ForceDisconnect(ctx context.Context, req *ForceDiscon
 
 type UnimplementedMonitor struct{}
 
-// EnableMonitor 启用主机监控
-func (s *UnimplementedMonitor) EnableMonitor(ctx context.Context, req *EnableMonitorReq) (*EnableMonitorRsp, error) {
-	return nil, errors.New("rpc EnableMonitor of service Monitor is not implemented")
-}
-
-// DisableMonitor 禁用主机监控
-func (s *UnimplementedMonitor) DisableMonitor(ctx context.Context, req *DisableMonitorReq) (*DisableMonitorRsp, error) {
-	return nil, errors.New("rpc DisableMonitor of service Monitor is not implemented")
-}
-
-// GetMonitorStatus 获取主机监控状态
-func (s *UnimplementedMonitor) GetMonitorStatus(ctx context.Context, req *GetMonitorStatusReq) (*GetMonitorStatusRsp, error) {
-	return nil, errors.New("rpc GetMonitorStatus of service Monitor is not implemented")
-}
-
 // GetCurrentMetrics 获取当前监控指标
 func (s *UnimplementedMonitor) GetCurrentMetrics(ctx context.Context, req *GetCurrentMetricsReq) (*GetCurrentMetricsRsp, error) {
 	return nil, errors.New("rpc GetCurrentMetrics of service Monitor is not implemented")
@@ -614,11 +476,6 @@ func (s *UnimplementedMonitor) GetCurrentMetrics(ctx context.Context, req *GetCu
 // GetHistoryMetrics 获取历史监控数据
 func (s *UnimplementedMonitor) GetHistoryMetrics(ctx context.Context, req *GetHistoryMetricsReq) (*GetHistoryMetricsRsp, error) {
 	return nil, errors.New("rpc GetHistoryMetrics of service Monitor is not implemented")
-}
-
-// TestNodeExporter 测试 Node Exporter 连通性
-func (s *UnimplementedMonitor) TestNodeExporter(ctx context.Context, req *TestNodeExporterReq) (*TestNodeExporterRsp, error) {
-	return nil, errors.New("rpc TestNodeExporter of service Monitor is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -645,8 +502,6 @@ type SshClientProxy interface {
 	DisconnectSession(ctx context.Context, req *DisconnectSessionReq, opts ...client.Option) (rsp *DisconnectSessionRsp, err error)
 
 	ResizeWindow(ctx context.Context, req *ResizeWindowReq, opts ...client.Option) (rsp *ResizeWindowRsp, err error)
-
-	ExecCommand(ctx context.Context, req *ExecCommandReq, opts ...client.Option) (rsp *ExecCommandRsp, err error)
 	// SftpList SFTP 操作
 	SftpList(ctx context.Context, req *SftpListReq, opts ...client.Option) (rsp *SftpListRsp, err error)
 
@@ -828,26 +683,6 @@ func (c *SshClientProxyImpl) ResizeWindow(ctx context.Context, req *ResizeWindow
 	return rsp, nil
 }
 
-func (c *SshClientProxyImpl) ExecCommand(ctx context.Context, req *ExecCommandReq, opts ...client.Option) (*ExecCommandRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Ssh/ExecCommand")
-	msg.WithCalleeServiceName(SshServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Ssh")
-	msg.WithCalleeMethod("ExecCommand")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ExecCommandRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *SshClientProxyImpl) SftpList(ctx context.Context, req *SftpListReq, opts ...client.Option) (*SftpListRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -950,18 +785,10 @@ func (c *SshClientProxyImpl) ForceDisconnect(ctx context.Context, req *ForceDisc
 
 // MonitorClientProxy defines service client proxy
 type MonitorClientProxy interface {
-	// EnableMonitor 启用主机监控
-	EnableMonitor(ctx context.Context, req *EnableMonitorReq, opts ...client.Option) (rsp *EnableMonitorRsp, err error)
-	// DisableMonitor 禁用主机监控
-	DisableMonitor(ctx context.Context, req *DisableMonitorReq, opts ...client.Option) (rsp *DisableMonitorRsp, err error)
-	// GetMonitorStatus 获取主机监控状态
-	GetMonitorStatus(ctx context.Context, req *GetMonitorStatusReq, opts ...client.Option) (rsp *GetMonitorStatusRsp, err error)
 	// GetCurrentMetrics 获取当前监控指标
 	GetCurrentMetrics(ctx context.Context, req *GetCurrentMetricsReq, opts ...client.Option) (rsp *GetCurrentMetricsRsp, err error)
 	// GetHistoryMetrics 获取历史监控数据
 	GetHistoryMetrics(ctx context.Context, req *GetHistoryMetricsReq, opts ...client.Option) (rsp *GetHistoryMetricsRsp, err error)
-	// TestNodeExporter 测试 Node Exporter 连通性
-	TestNodeExporter(ctx context.Context, req *TestNodeExporterReq, opts ...client.Option) (rsp *TestNodeExporterRsp, err error)
 }
 
 type MonitorClientProxyImpl struct {
@@ -971,66 +798,6 @@ type MonitorClientProxyImpl struct {
 
 var NewMonitorClientProxy = func(opts ...client.Option) MonitorClientProxy {
 	return &MonitorClientProxyImpl{client: client.DefaultClient, opts: opts}
-}
-
-func (c *MonitorClientProxyImpl) EnableMonitor(ctx context.Context, req *EnableMonitorReq, opts ...client.Option) (*EnableMonitorRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Monitor/EnableMonitor")
-	msg.WithCalleeServiceName(MonitorServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Monitor")
-	msg.WithCalleeMethod("EnableMonitor")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &EnableMonitorRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MonitorClientProxyImpl) DisableMonitor(ctx context.Context, req *DisableMonitorReq, opts ...client.Option) (*DisableMonitorRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Monitor/DisableMonitor")
-	msg.WithCalleeServiceName(MonitorServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Monitor")
-	msg.WithCalleeMethod("DisableMonitor")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &DisableMonitorRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MonitorClientProxyImpl) GetMonitorStatus(ctx context.Context, req *GetMonitorStatusReq, opts ...client.Option) (*GetMonitorStatusRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Monitor/GetMonitorStatus")
-	msg.WithCalleeServiceName(MonitorServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Monitor")
-	msg.WithCalleeMethod("GetMonitorStatus")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetMonitorStatusRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
 }
 
 func (c *MonitorClientProxyImpl) GetCurrentMetrics(ctx context.Context, req *GetCurrentMetricsReq, opts ...client.Option) (*GetCurrentMetricsRsp, error) {
@@ -1067,26 +834,6 @@ func (c *MonitorClientProxyImpl) GetHistoryMetrics(ctx context.Context, req *Get
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetHistoryMetricsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MonitorClientProxyImpl) TestNodeExporter(ctx context.Context, req *TestNodeExporterReq, opts ...client.Option) (*TestNodeExporterRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Monitor/TestNodeExporter")
-	msg.WithCalleeServiceName(MonitorServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Monitor")
-	msg.WithCalleeMethod("TestNodeExporter")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &TestNodeExporterRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

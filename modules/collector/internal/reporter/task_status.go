@@ -9,48 +9,52 @@ import (
 	"time"
 
 	"github.com/avast/retry-go"
-	"github.com/mooyang-code/moox/modules/collector/internal/adminapi"
-	"github.com/mooyang-code/moox/modules/collector/pkg/config"
+	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // TaskStatus 任务状态常量
 const (
-	StatusPending = 0 // 待执行
-	StatusRunning = 1 // 执行中
-	StatusSuccess = 2 // 成功
-	StatusPartial = 3 // 部分失败
-	StatusFailed  = 4 // 失败
+	StatusPending = 1 // 待执行
+	StatusRunning = 2 // 执行中
+	StatusSuccess = 3 // 成功
+	StatusPartial = 4 // 部分失败
+	StatusFailed  = 5 // 失败
 )
 
 // ReportTaskStatusRequest 上报任务状态请求
 type ReportTaskStatusRequest struct {
-	InstanceID string `json:"instance_id"` // 任务实例ID（TaskID）
-	NodeID     string `json:"node_id"`     // 执行节点ID
-	Status     int    `json:"status"`      // 状态码
-	Result     string `json:"result"`      // 执行结果（可选）
+	SpaceID string         `json:"space_id"`
+	TaskID  string         `json:"task_id"`
+	NodeID  string         `json:"node_id"`
+	Status  int            `json:"status"`
+	Result  map[string]any `json:"result"`
 }
 
-// ServerResponse 服务端响应结构
-type ServerResponse struct {
+// TaskStatusServerResponse 服务端响应结构
+type TaskStatusServerResponse struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Data    []any  `json:"data"`
+	RetInfo *struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	} `json:"ret_info"`
 }
 
 // ReportTaskStatusAsync 异步上报任务状态（失败只记录日志，不影响主流程）
-func ReportTaskStatusAsync(ctx context.Context, taskID string, status int, result string) {
+func ReportTaskStatusAsync(ctx context.Context, spaceID string, taskID string, status int, result string) {
 	go func() {
-		if err := ReportTaskStatus(ctx, taskID, status, result); err != nil {
+		if err := ReportTaskStatus(ctx, spaceID, taskID, status, result); err != nil {
 			log.WarnContextf(ctx, "任务状态上报失败: taskID=%s, status=%d, error=%v", taskID, status, err)
 		}
 	}()
 }
 
 // ReportTaskStatus 上报任务状态到服务端
-func ReportTaskStatus(ctx context.Context, taskID string, status int, result string) error {
-	serverIP, serverPort := config.GetServerInfo()
-	nodeID, _ := config.GetNodeInfo()
+func ReportTaskStatus(ctx context.Context, spaceID string, taskID string, status int, result string) error {
+	serverIP, serverPort := runtimeapp.GetServerInfo()
+	nodeID, _ := runtimeapp.GetNodeInfo()
 
 	// 检查服务端配置
 	if serverIP == "" || serverPort <= 0 {
@@ -64,26 +68,31 @@ func ReportTaskStatus(ctx context.Context, taskID string, status int, result str
 		return nil
 	}
 
+	if spaceID == "" {
+		return fmt.Errorf("space_id is required for task status report")
+	}
+
 	if nodeID == "" {
 		return fmt.Errorf("node_id is required for task status report")
 	}
 
-	log.DebugContextf(ctx, "开始上报任务状态: taskID=%s, nodeID=%s, status=%d, serverIP=%s:%d",
-		taskID, nodeID, status, serverIP, serverPort)
+	log.DebugContextf(ctx, "开始上报任务状态: spaceID=%s, taskID=%s, nodeID=%s, status=%d, serverIP=%s:%d",
+		spaceID, taskID, nodeID, status, serverIP, serverPort)
 
-	return executeReport(ctx, taskID, nodeID, status, result, serverIP, serverPort)
+	return executeTaskStatusReport(ctx, spaceID, taskID, nodeID, status, result, serverIP, serverPort)
 }
 
-// executeReport 执行上报请求
-func executeReport(ctx context.Context, taskID string, nodeID string, status int, result string, serverIP string, serverPort int) error {
-	url := adminapi.URL(serverIP, serverPort, "collectmgr", "ReportTaskStatus")
+// executeTaskStatusReport 执行上报请求
+func executeTaskStatusReport(ctx context.Context, spaceID string, taskID string, nodeID string, status int, result string, serverIP string, serverPort int) error {
+	url := runtimeapp.URL(serverIP, serverPort, "collectmgr", "ReportTaskStatus")
 
 	// 构建请求体
 	reqBody := &ReportTaskStatusRequest{
-		InstanceID: taskID,
-		NodeID:     nodeID,
-		Status:     status,
-		Result:     result,
+		SpaceID: spaceID,
+		TaskID:  taskID,
+		NodeID:  nodeID,
+		Status:  status,
+		Result:  resultMap(result),
 	}
 
 	data, err := json.Marshal(reqBody)
@@ -117,9 +126,20 @@ func executeReport(ctx context.Context, taskID string, nodeID string, status int
 	return nil
 }
 
+func resultMap(raw string) map[string]any {
+	if raw == "" {
+		return map[string]any{}
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(raw), &out); err == nil && out != nil {
+		return out
+	}
+	return map[string]any{"message": raw}
+}
+
 // sendRequest 发送单次请求
 func sendRequest(ctx context.Context, url string, data []byte, httpClient *http.Client) error {
-	req, err := adminapi.NewSignedRequestWithContext(ctx, "POST", url, data, adminapi.DefaultAuthConfig())
+	req, err := runtimeapp.NewSignedRequestWithContext(ctx, "POST", url, data, runtimeapp.DefaultAuthConfig())
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %w", err)
 	}
@@ -141,10 +161,21 @@ func sendRequest(ctx context.Context, url string, data []byte, httpClient *http.
 		return fmt.Errorf("读取响应失败: %w", err)
 	}
 
-	var serverResp ServerResponse
+	if len(respData) == 0 {
+		return nil
+	}
+
+	var serverResp TaskStatusServerResponse
 	if err := json.Unmarshal(respData, &serverResp); err != nil {
 		log.WarnContextf(ctx, "解析服务端响应失败: %v", err)
 		return nil // 不影响上报结果
+	}
+
+	if serverResp.RetInfo != nil {
+		if serverResp.RetInfo.Code != 0 {
+			return fmt.Errorf("服务端返回错误: code=%d, message=%s", serverResp.RetInfo.Code, serverResp.RetInfo.Msg)
+		}
+		return nil
 	}
 
 	if serverResp.Code != 200 {

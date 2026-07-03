@@ -59,39 +59,19 @@ const userInfoStore = () => {
         throw new Error("未找到访问令牌，请重新登录");
       }
       
-      console.log("setAccount: 开始获取用户信息，token:", token.value.substring(0, 20) + "...");
-      
-      let response = await getUserInfoAPI(token.value);
-      
-      console.log("setAccount: 后台响应:", response);
-      
-      // 使用新的ret_info协议格式
-      const data = response.data || response;
+      const data = await getUserInfoAPI(token.value);
       
       // 添加安全检查
       if (!data) {
         throw new Error('获取用户信息失败：响应数据为空');
       }
       
-      if (!data.ret_info) {
-        throw new Error('获取用户信息失败：响应格式错误，缺少ret_info字段');
-      }
-      
-      // 检查ret_info
-      if (data.ret_info.code === 0 && data.user_info) {
+      if (data.user_info) {
         const userInfo = data.user_info;
-        
-        console.log("setAccount: 用户信息:", userInfo);
         
         // 根据UserRole枚举值判断角色
         const roleStrings = mapUserRoleToString(userInfo.role);
         const isAdmin = isAdminRole(userInfo.role);
-        
-        console.log("setAccount: 用户角色映射", {
-          originalRole: userInfo.role,
-          mappedRoles: roleStrings,
-          isAdmin: isAdmin
-        });
         
         account.value = {
           user: {
@@ -112,15 +92,11 @@ const userInfoStore = () => {
           roles: roleStrings,
           permissions: isAdmin ? ["*:*:*"] : []
         };
-        
-        console.log("setAccount: 用户信息设置成功", account.value);
       } else {
-        const errorMessage = data.ret_info.msg || "获取用户信息失败：响应格式错误";
+        const errorMessage = "获取用户信息失败：响应格式错误";
         console.error("setAccount: API响应错误", {
-          code: data.ret_info.code,
-          message: data.ret_info.msg,
           hasUserInfo: !!data?.user_info,
-          response: response
+          response: data
         });
         throw new Error(errorMessage);
       }
@@ -135,13 +111,11 @@ const userInfoStore = () => {
       };
       
       // 关键修复：获取用户信息失败时，完全清除token状态，避免路由守卫死循环
-      console.log("setAccount: 获取用户信息失败，清除所有token和用户数据，避免死循环");
       token.value = "";
       
       // 同时清除localStorage中的持久化数据
       try {
         localStorage.removeItem('user-info');
-        console.log("setAccount: 已清除localStorage中的用户信息");
       } catch (storageError) {
         console.error("setAccount: 清除localStorage失败", storageError);
       }

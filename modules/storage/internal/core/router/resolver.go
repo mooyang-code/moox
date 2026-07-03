@@ -64,7 +64,7 @@ func (r *Resolver) Resolve(ctx context.Context, spaceID string, datasetID string
 }
 
 // ResolveDatasetTargets 返回某个 Dataset 所有 active 主存目标。
-// Access 用它做全量 scan/rebuild；deriver 仍只调用 Access，不理解这些路由细节。
+// Access 用它做全量 scan/rebuild；ViewBuilder 仍只调用 Access，不理解这些路由细节。
 func (r *Resolver) ResolveDatasetTargets(ctx context.Context, spaceID string, datasetID string) ([]*pb.PrimaryStoreTarget, error) {
 	if spaceID == "" || datasetID == "" {
 		return nil, fmt.Errorf("space_id and dataset_id are required")

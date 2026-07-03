@@ -1,0 +1,243 @@
+syntax = "proto3";
+
+package trpc.moox.collector;
+
+import "moox_common.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/collector/proto/collectorgen;collectorpb";
+
+// CollectMgr 管理采集规则、任务实例和任务规划。
+// 纯 RPC 服务，由统一 HTTP 转发层调度：
+//   - /api/admin/collectmgr/{method}（JWT，面向前端）
+//
+// 响应设计参考 storage/access：每个响应首字段 common.RetInfo（code/msg），
+// code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。
+//
+// space_id 由请求参数显式传入；服务端按 space_id 做租户隔离。
+
+enum TaskInstanceStatus {
+  TASK_INSTANCE_STATUS_UNSPECIFIED = 0;
+  TASK_INSTANCE_STATUS_PENDING = 1;
+  TASK_INSTANCE_STATUS_RUNNING = 2;
+  TASK_INSTANCE_STATUS_SUCCESS = 3;
+  TASK_INSTANCE_STATUS_PART_FAILED = 4;
+  TASK_INSTANCE_STATUS_FAILED = 5;
+}
+
+// TaskRule 任务规则。
+message TaskRule {
+  string space_id = 1;
+  string rule_id = 2;
+  string data_type = 3;
+  string exchange = 4;
+  google.protobuf.Struct collect_params = 5;
+  string assignment_type = 6;
+  repeated string assigned_nodes = 7;
+  string node_pattern = 8;
+  repeated string node_tags = 9;
+  optional bool enabled = 10;
+  string creator = 11;
+  string create_time = 12;     // RFC3339
+  string modify_time = 13;     // RFC3339
+}
+
+message GetTaskRuleListReq {
+  string space_id = 1;
+  string data_type = 2;
+  string exchange = 3;
+  optional bool enabled = 4;
+  string rule_id = 5;
+  common.Page page = 6;
+}
+
+message GetTaskRuleListRsp {
+  common.RetInfo ret_info = 1;
+  repeated TaskRule rules = 2;
+  common.PageResult page = 3;
+}
+
+message GetTaskRuleDetailReq {
+  string space_id = 1;
+  string rule_id = 2;
+}
+
+message GetTaskRuleDetailRsp {
+  common.RetInfo ret_info = 1;
+  TaskRule rule = 2;
+}
+
+message CreateTaskRuleReq {
+  TaskRule rule = 1;
+}
+
+message CreateTaskRuleRsp {
+  common.RetInfo ret_info = 1;
+  string rule_id = 2;
+}
+
+message UpdateTaskRuleReq {
+  string space_id = 1;
+  string rule_id = 2;
+  TaskRule rule = 3;
+}
+
+message UpdateTaskRuleRsp {
+  common.RetInfo ret_info = 1;
+  TaskRule rule = 2;
+}
+
+message DisableTaskRuleReq {
+  string space_id = 1;
+  string rule_id = 2;
+}
+
+message DisableTaskRuleRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// TaskInstance 任务实例。
+message TaskInstance {
+  string space_id = 1;
+  string task_id = 2;
+  string rule_id = 3;
+  string exchange = 4;
+  string market = 5;
+  string data_type = 6;
+  string dataset_id = 7;
+  string subject_id = 8;
+  string symbol = 9;
+  string interval = 10;
+  google.protobuf.Struct task_params = 11;
+  string planned_exec_node = 12;
+  string last_exec_node = 13;
+  TaskInstanceStatus last_exec_status = 14;
+  string last_exec_time = 15;  // RFC3339，可为空
+  google.protobuf.Struct result = 16;
+  bool is_deleted = 17;
+  string create_time = 18;     // RFC3339
+  string modify_time = 19;     // RFC3339
+}
+
+// TaskInstanceFilter 任务实例筛选条件。
+message TaskInstanceFilter {
+  string space_id = 1;
+  string rule_id = 2;
+  string task_id = 3;
+  string exchange = 4;
+  string market = 5;
+  string data_type = 6;
+  string dataset_id = 7;
+  string subject_id = 8;
+  string symbol = 9;
+  string interval = 10;
+  TaskInstanceStatus last_exec_status = 11;
+  string planned_exec_node = 12;
+  string last_exec_node = 13;
+  bool include_deleted = 14;
+  common.Page page = 15;
+}
+
+message GetTaskInstanceListReq {
+  TaskInstanceFilter filter = 1;
+}
+
+message GetTaskInstanceListRsp {
+  common.RetInfo ret_info = 1;
+  repeated TaskInstance instances = 2;
+  common.PageResult page = 3;
+}
+
+// ReportInstanceStatusReq 上报任务状态请求。
+message ReportInstanceStatusReq {
+  string space_id = 1;
+  string task_id = 2;
+  string node_id = 3;
+  TaskInstanceStatus status = 4;
+  google.protobuf.Struct result = 5;
+  string error_message = 6;
+  int64 duration_ms = 7;
+}
+
+message ReportInstanceStatusRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// DataTypeConfig 数据类型配置。
+message DataTypeConfig {
+  int32 id = 1;
+  string data_type = 2;
+  string type_name = 3;
+  string type_desc = 4;
+  google.protobuf.Struct data_source_options = 5;
+  int32 sort_order = 6;
+  int32 version = 7;
+  string create_time = 8;          // RFC3339
+  string modify_time = 9;          // RFC3339
+}
+
+// DataTypeFieldConfig 字段配置。
+message DataTypeFieldConfig {
+  int32 id = 1;
+  string data_type = 2;
+  string field_key = 3;
+  string field_name = 4;
+  string field_type = 5;
+  bool is_required = 6;
+  google.protobuf.Value default_value = 7;
+  google.protobuf.Struct field_options = 8;
+  google.protobuf.Struct data_source_options = 9;
+  int32 sort_order = 10;
+  string create_time = 11;         // RFC3339
+  string modify_time = 12;         // RFC3339
+}
+
+// DataTypeConfigDetail 数据类型配置详情（含字段）。
+message DataTypeConfigDetail {
+  DataTypeConfig config = 1;
+  repeated DataTypeFieldConfig fields = 2;
+}
+
+message GetDataTypeConfigsReq {}
+
+message GetDataTypeConfigsRsp {
+  common.RetInfo ret_info = 1;
+  repeated DataTypeConfig configs = 2;
+}
+
+message GetDataTypeConfigWithFieldsReq {
+  string data_type = 1;
+}
+
+message GetDataTypeConfigWithFieldsRsp {
+  common.RetInfo ret_info = 1;
+  DataTypeConfigDetail detail = 2;
+}
+
+message RecalculateAllTaskInstancesReq {
+  string space_id = 1;
+}
+
+message RecalculateAllTaskInstancesRsp {
+  common.RetInfo ret_info = 1;
+}
+
+service CollectMgr {
+  // ----- 任务规则 -----
+  rpc GetTaskRuleList(GetTaskRuleListReq) returns (GetTaskRuleListRsp);
+  rpc GetTaskRuleDetail(GetTaskRuleDetailReq) returns (GetTaskRuleDetailRsp);
+  rpc CreateTaskRule(CreateTaskRuleReq) returns (CreateTaskRuleRsp);
+  rpc UpdateTaskRule(UpdateTaskRuleReq) returns (UpdateTaskRuleRsp);
+  rpc DisableTaskRule(DisableTaskRuleReq) returns (DisableTaskRuleRsp);
+
+  // ----- 任务实例 -----
+  rpc GetTaskInstanceList(GetTaskInstanceListReq) returns (GetTaskInstanceListRsp);
+  rpc ReportTaskStatus(ReportInstanceStatusReq) returns (ReportInstanceStatusRsp);
+
+  // ----- 数据类型配置 -----
+  rpc GetDataTypeConfigs(GetDataTypeConfigsReq) returns (GetDataTypeConfigsRsp);
+  rpc GetDataTypeConfigWithFields(GetDataTypeConfigWithFieldsReq) returns (GetDataTypeConfigWithFieldsRsp);
+
+  // ----- 任务规划器 -----
+  rpc RecalculateAllTaskInstances(RecalculateAllTaskInstancesReq) returns (RecalculateAllTaskInstancesRsp);
+}

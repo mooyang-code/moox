@@ -1,22 +1,23 @@
-# Build And Test
+# Build
 
-Run all root-level validation from the monorepo root:
+Run root-level build and boundary checks from the monorepo root:
 
 ```bash
-make test
 make build
-make acceptance
+make check-boundaries
 ```
 
 `make build` writes binaries to `bin/`:
 
 - `moox-cli`
 - `moox-admin`
+- `moox-web-host`
+- `moox-cloudnode`
 - `moox-storage`
 - `moox-collector`
+- `moox-collector-scf`
 - `moox-factor`
-- `moox-order`
-- `moox-account`
+- `moox-trade`
 
 The default `moox-storage` binary builds the full storage service, including Access, PrimaryStore, view building, text indexing, and archive services.
 

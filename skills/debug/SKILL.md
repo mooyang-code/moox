@@ -21,7 +21,7 @@ Use this skill for MooX production-like debugging that crosses local code, remot
 - Do not print Tencent SecretKey, service access secret, SSH password, or signed headers in final answers.
 - Prefer `moox-cli` commands and bundled MooX scripts over manually repeating fragile Tencent API calls.
 - For destructive operations, confirm the target resource name, region, namespace, account, and package version before acting.
-- Treat `/data-collector` as old reference only; new collector logic lives under `modules/collector`.
+- Treat old standalone collector repository paths as historical only; current collector code and SCF package build logic live under `modules/collector`.
 - For frontend requests, management APIs must go through `/api/admin`; service-to-service callbacks should use `/api/service` with service auth.
 
 ## Boundary Checklist
@@ -32,9 +32,9 @@ Use this order unless evidence points elsewhere:
 2. Package upload: COS object exists, region/bucket/key match the publish request.
 3. SCF creation/update: function name, namespace, region, runtime, handler, environment, and code source match the package.
 4. Keepalive: control plane invokes SCF and records heartbeat online.
-5. Task dispatch: heartbeat response includes the expected `task_id`, `symbol`, `interval`, and `task_params`.
-6. Execution: SCF logs show due-task evaluation and collector execution.
-7. Callback: SCF reports task status to `/api/service/collectmgr/ReportTaskStatus`.
+5. Task dispatch: SCF polls CloudNode work_items from `/api/service/cloudnode/PollWorkItems`.
+6. Execution: SCF logs show collector workload execution.
+7. Callback: SCF reports CloudNode work_item status to `/api/service/cloudnode/ReportWorkItemStatus` and collector task-instance status to `/api/service/collectmgr/ReportTaskStatus`.
 8. Storage write: records appear in the target space, subject, dataset, freq, and view.
 
 ## Evidence To Preserve
@@ -49,8 +49,8 @@ Use this order unless evidence points elsewhere:
 
 ## Common Mistakes
 
-- Assuming a successful keepalive means task execution happened; verify task dispatch and due-task logs separately.
-- Rebuilding collector code from the old `/data-collector` repository instead of `modules/collector`.
+- Assuming a successful keepalive means task execution happened; verify CloudNode work_item lease and callback logs separately.
+- Rebuilding collector code from an old standalone collector checkout instead of `modules/collector`.
 - Looking only at DB task instances while the authoritative dispatch path is the in-memory task store after planner recalculation.
 - Treating an empty task list as initialization forever; after planner has completed, an empty list should clear downstream caches.
 - Debugging frontend 404s against service paths when the frontend must use `/api/admin`.

@@ -55,13 +55,6 @@
           <a-slider :default-value="gapInfo[0]" :min="0" :max="300" :style="{ width: '100px' }" @change="onWatermarkGap" />
         </div>
       </div>
-      <div>
-        <div class="title">系统设置</div>
-        <div class="flex-row">
-          <div>防调试</div>
-          <a-switch v-model="debugPrevention" />
-        </div>
-      </div>
     </div>
   </a-drawer>
 </template>
@@ -72,7 +65,6 @@ import { storeToRefs } from "pinia";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { useThemeConfig } from "@/store/modules/theme-config";
 import { currentlyRoute } from "@/router/route-output";
-import { DebugControl } from "@/utils/debug-prevention";
 const themeStore = useThemeConfig();
 const routerStore = useRoutesConfigStore();
 const {
@@ -85,8 +77,7 @@ const {
   watermarkStyle,
   watermarkRotate,
   watermarkGap,
-  darkMode,
-  debugPrevention
+  darkMode
 } = storeToRefs(themeStore);
 const { tabsList, cacheRoutes } = storeToRefs(routerStore);
 const route = useRoute();
@@ -115,22 +106,6 @@ const tabsChange = (e: boolean) => {
     currentlyRoute(route);
   }
 };
-
-// 监听debug开关;
-const debugControl = new DebugControl();
-watch(
-  () => debugPrevention.value,
-  newValue => {
-    if (newValue) {
-      debugControl.start();
-    } else {
-      debugControl.stop();
-    }
-  },
-  {
-    immediate: true
-  }
-);
 
 const emits = defineEmits(["systemCancel"]);
 const handleCancel = () => {

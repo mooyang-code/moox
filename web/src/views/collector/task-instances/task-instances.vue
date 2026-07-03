@@ -10,16 +10,13 @@
           <a-input v-model="form.lastExecNode" placeholder="最后执行节点" allow-clear style="width: 150px" />
           <a-input v-model="form.symbol" placeholder="请输入交易标的" allow-clear style="width: 150px" />
           <a-select placeholder="执行状态" v-model="form.lastExecStatus" style="width: 120px" allow-clear>
-            <a-option :value="0">待执行</a-option>
-            <a-option :value="1">执行中</a-option>
-            <a-option :value="2">成功</a-option>
-            <a-option :value="3">部分失败</a-option>
-            <a-option :value="4">失败</a-option>
+            <a-option :value="1">待执行</a-option>
+            <a-option :value="2">执行中</a-option>
+            <a-option :value="3">成功</a-option>
+            <a-option :value="4">部分失败</a-option>
+            <a-option :value="5">失败</a-option>
           </a-select>
-          <a-select placeholder="是否有效" v-model="form.is_deleted" style="width: 120px" allow-clear>
-            <a-option value="false">有效</a-option>
-            <a-option value="true">无效</a-option>
-          </a-select>
+          <a-switch v-model="form.includeDeleted" :checked-text="'含删除'" :unchecked-text="'仅有效'" />
           <a-button type="primary" @click="search">
             <template #icon><icon-search /></template>
             <span>查询</span>
@@ -44,7 +41,7 @@
           :data="instanceList"
           :bordered="{ cell: true }"
           :loading="loading"
-          :scroll="{ x: '100%', y: '100%', minWidth: 1600 }"
+          :scroll="{ x: '100%', y: '100%', minWidth: 1780 }"
           :pagination="paginationConfig"
           :row-selection="{ type: 'checkbox', showCheckedAll: true }"
           :selected-keys="selectedKeys"
@@ -94,8 +91,8 @@
             </a-table-column>
             <a-table-column title="有效性" :width="80" align="center">
               <template #cell="{ record }">
-                <a-tag bordered size="small" :color="record.IsDeleted === 'false' ? 'green' : 'red'">
-                  {{ record.IsDeleted === 'false' ? '有效' : '无效' }}
+                <a-tag bordered size="small" :color="record.IsDeleted ? 'red' : 'green'">
+                  {{ record.IsDeleted ? '无效' : '有效' }}
                 </a-tag>
               </template>
             </a-table-column>
@@ -133,9 +130,14 @@
     <a-modal v-model:visible="detailVisible" :footer="false" width="900px">
       <template #title>任务实例详情</template>
       <a-descriptions :column="2" bordered>
-        <a-descriptions-item label="ID">{{ detailData.ID }}</a-descriptions-item>
         <a-descriptions-item label="任务ID">{{ detailData.TaskID }}</a-descriptions-item>
         <a-descriptions-item label="规则ID">{{ detailData.RuleID }}</a-descriptions-item>
+        <a-descriptions-item label="交易所">{{ detailData.Exchange || '-' }}</a-descriptions-item>
+        <a-descriptions-item label="市场">{{ detailData.Market || '-' }}</a-descriptions-item>
+        <a-descriptions-item label="数据类型">{{ detailData.DataType || '-' }}</a-descriptions-item>
+        <a-descriptions-item label="周期">{{ detailData.Interval || '-' }}</a-descriptions-item>
+        <a-descriptions-item label="数据集">{{ detailData.DatasetID || '-' }}</a-descriptions-item>
+        <a-descriptions-item label="标的ID">{{ detailData.SubjectID || '-' }}</a-descriptions-item>
         <a-descriptions-item label="计划节点">{{ detailData.PlannedExecNode }}</a-descriptions-item>
         <a-descriptions-item label="最后执行节点">{{ getLastExecNode(detailData) }}</a-descriptions-item>
         <a-descriptions-item label="交易标的">
@@ -147,8 +149,8 @@
           </a-tag>
         </a-descriptions-item>
         <a-descriptions-item label="有效性">
-          <a-tag :color="detailData.IsDeleted === 'false' ? 'green' : 'red'">
-            {{ detailData.IsDeleted === 'false' ? '有效' : '无效' }}
+          <a-tag :color="detailData.IsDeleted ? 'red' : 'green'">
+            {{ detailData.IsDeleted ? '无效' : '有效' }}
           </a-tag>
         </a-descriptions-item>
         <a-descriptions-item label="最后执行时间">{{ formatDateTime(detailData.LastExecTime) }}</a-descriptions-item>
@@ -160,10 +162,10 @@
 
       <a-descriptions :column="1" bordered>
         <a-descriptions-item label="任务参数">
-          <pre class="detail-json">{{ formatJSON(detailData.TaskParams || '{}') }}</pre>
+          <pre class="detail-json">{{ formatJSON(detailData.TaskParams || {}) }}</pre>
         </a-descriptions-item>
         <a-descriptions-item label="执行结果">
-          <pre class="detail-json">{{ formatJSON(detailData.Result || '{}') }}</pre>
+          <pre class="detail-json">{{ formatJSON(detailData.Result || {}) }}</pre>
         </a-descriptions-item>
       </a-descriptions>
     </a-modal>
@@ -173,28 +175,28 @@
 <script setup lang="ts">
 import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, computed, onMounted, watch } from 'vue';
-import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
-import service from '@/api/index';
-import { isRetInfoSuccess } from '@/api/ret-info';
-import { appAuthHeaders } from '@/api/storage/auth';
+import { callControl } from '@/api/admin/http';
 import { useSpaceStore } from '@/store/modules/space';
 import { storeToRefs } from 'pinia';
 
 interface TaskInstance {
-  ID: number;
   TaskID: string;
   RuleID: string;
+  Exchange: string;
+  Market: string;
+  DataType: string;
+  DatasetID: string;
+  SubjectID: string;
+  Symbol: string;
+  Interval: string;
   PlannedExecNode: string;    // v2.0: 计划执行节点
   LastExecNode: string;       // v2.0: 最后执行节点
   LastExecStatus: number;     // v2.0: 最后执行状态
-  Symbol: string;
-  CollectDataType: string;
-  DataType: string;
-  TaskParams: string;
+  TaskParams: Record<string, any>;
   LastExecTime: string | null;
-  Result: string;
-  IsDeleted: string;
+  Result: Record<string, any>;
+  IsDeleted: boolean;
   CreateTime: string;
   ModifyTime: string;
 }
@@ -204,16 +206,6 @@ type RawTaskInstance = Partial<TaskInstance> & Record<string, any>;
 type TaskInstanceRecord = Partial<TaskInstance>;
 
 const loading = ref(false);
-const route = useRoute();
-
-// 根据路由路径判断当前的业务类型
-const currentBizType = computed(() => {
-  const path = route.path;
-  if (path.includes('/factor/')) {
-    return 'factor_calculator';
-  }
-  return 'data_collector';
-});
 const instanceList = ref<TaskInstance[]>([]);
 const selectedKeys = ref<string[]>([]);
 const detailVisible = ref(false);
@@ -226,7 +218,7 @@ const form = ref({
   lastExecNode: '',         // v2.0: 执行节点
   symbol: '',
   lastExecStatus: null as number | null,  // v2.0: 执行状态
-  is_deleted: null as string | null
+  includeDeleted: false
 });
 
 const pagination = ref({
@@ -256,22 +248,22 @@ const paginationConfig = computed(() => ({
 
 const getStatusColor = (status: number) => {
   const colors: { [key: number]: string } = {
-    0: 'gray',    // 待执行
-    1: 'blue',    // 执行中
-    2: 'green',   // 成功
-    3: 'orange',  // 部分失败
-    4: 'red'      // 失败
+    1: 'gray',    // 待执行
+    2: 'blue',    // 执行中
+    3: 'green',   // 成功
+    4: 'orange',  // 部分失败
+    5: 'red'      // 失败
   };
   return colors[status] || 'gray';
 };
 
 const getStatusText = (status: number) => {
   const texts: { [key: number]: string } = {
-    0: '待执行',
-    1: '执行中',
-    2: '成功',
-    3: '部分失败',
-    4: '失败'
+    1: '待执行',
+    2: '执行中',
+    3: '成功',
+    4: '部分失败',
+    5: '失败'
   };
   return texts[status] || '未知';
 };
@@ -283,33 +275,39 @@ const getLastExecNode = (record: TaskInstanceRecord) => {
 
 const normalizeTaskInstance = (raw: RawTaskInstance): TaskInstance => {
   const lastExecStatus = raw.LastExecStatus ?? raw.last_exec_status ?? 0;
-  const isDeleted = raw.IsDeleted ?? raw.is_deleted ?? 'false';
   return {
-    ID: Number(raw.ID ?? raw.id ?? 0),
     TaskID: raw.TaskID ?? raw.task_id ?? '',
     RuleID: raw.RuleID ?? raw.rule_id ?? '',
+    Exchange: raw.Exchange ?? raw.exchange ?? '',
+    Market: raw.Market ?? raw.market ?? '',
+    DataType: raw.DataType ?? raw.data_type ?? '',
+    DatasetID: raw.DatasetID ?? raw.dataset_id ?? '',
+    SubjectID: raw.SubjectID ?? raw.subject_id ?? '',
+    Symbol: raw.Symbol ?? raw.symbol ?? '',
+    Interval: raw.Interval ?? raw.interval ?? '',
     PlannedExecNode: raw.PlannedExecNode ?? raw.planned_exec_node ?? '',
     LastExecNode: raw.LastExecNode ?? raw.last_exec_node ?? '',
     LastExecStatus: Number(lastExecStatus),
-    Symbol: raw.Symbol ?? raw.symbol ?? '',
-    CollectDataType: raw.CollectDataType ?? raw.collect_data_type ?? '',
-    DataType: raw.DataType ?? raw.data_type ?? raw.CollectDataType ?? raw.collect_data_type ?? '',
-    TaskParams: raw.TaskParams ?? raw.task_params ?? '{}',
+    TaskParams: normalizeObject(raw.TaskParams ?? raw.task_params),
     LastExecTime: raw.LastExecTime ?? raw.last_exec_time ?? null,
-    Result: raw.Result ?? raw.result ?? '{}',
-    IsDeleted: String(isDeleted || 'false'),
+    Result: normalizeObject(raw.Result ?? raw.result),
+    IsDeleted: Boolean(raw.IsDeleted ?? raw.is_deleted ?? false),
     CreateTime: raw.CreateTime ?? raw.create_time ?? '',
     ModifyTime: raw.ModifyTime ?? raw.modify_time ?? ''
   };
 };
 
-const formatJSON = (str: string) => {
+const normalizeObject = (value: any): Record<string, any> => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
   try {
-    return JSON.stringify(JSON.parse(str || '{}'), null, 2);
+    return JSON.parse(String(value));
   } catch {
-    return str || '-';
+    return { raw: String(value) };
   }
 };
+
+const formatJSON = (value: any) => JSON.stringify(normalizeObject(value), null, 2);
 
 // 格式化时间为本地时间格式
 const formatDateTime = (dateTime: string | null | undefined) => {
@@ -368,7 +366,7 @@ const reset = () => {
     lastExecNode: '',         // v2.0: 执行节点
     symbol: '',
     lastExecStatus: null,     // v2.0: 执行状态
-    is_deleted: null
+    includeDeleted: false
   };
   getInstanceList();
 };
@@ -378,13 +376,21 @@ const refreshList = () => {
 };
 
 const getInstanceList = async () => {
+  const spaceId = selectedSpaceId.value || '';
+  if (!spaceId) {
+    instanceList.value = [];
+    pagination.value.total = 0;
+    loading.value = false;
+    return;
+  }
   loading.value = true;
   try {
     const filter: any = {
-      space_id: selectedSpaceId.value || '',
-      page: pagination.value.current,
-      page_size: pagination.value.pageSize,
-      biz_type: currentBizType.value
+      space_id: spaceId,
+      page: {
+        page: pagination.value.current,
+        size: pagination.value.pageSize
+      }
     };
 
     if (form.value.taskId) filter.task_id = form.value.taskId;
@@ -393,20 +399,15 @@ const getInstanceList = async () => {
     if (form.value.lastExecNode) filter.last_exec_node = form.value.lastExecNode;
     if (form.value.symbol) filter.symbol = form.value.symbol;
     if (form.value.lastExecStatus !== null) filter.last_exec_status = form.value.lastExecStatus;
-    if (form.value.is_deleted !== null) filter.is_deleted = form.value.is_deleted;
+    if (form.value.includeDeleted) filter.include_deleted = true;
 
-    const response = await service.post('/api/admin/collectmgr/GetTaskInstanceList', { filter }, {
-      headers: appAuthHeaders()
-    });
-
-    // 新协议：ret_info.code 为成功标识，业务字段 instances/total 在顶层
-    const data = response as any;
-    if (isRetInfoSuccess(data?.ret_info?.code)) {
-      instanceList.value = (data.instances || []).map(normalizeTaskInstance);
-      pagination.value.total = Number(data.total) || (data.instances ? data.instances.length : 0);
-    } else {
-      Message.error(data?.ret_info?.msg || '获取任务实例列表失败');
-    }
+    const data = await callControl<{ filter: typeof filter }, { instances?: RawTaskInstance[]; page?: { total?: number } }>(
+      'collectmgr',
+      'GetTaskInstanceList',
+      { filter }
+    );
+    instanceList.value = (data.instances || []).map(normalizeTaskInstance);
+    pagination.value.total = Number(data.page?.total) || (data.instances ? data.instances.length : 0);
   } catch (error) {
     console.error('获取任务实例列表失败:', error);
     Message.error('获取任务实例列表失败');

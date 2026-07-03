@@ -24,7 +24,7 @@ var (
 	gatewayHandleOnce     sync.Once
 )
 
-// GatewayHandle 网关处理器（保留单例以承载 HTTPRequestHandler 与健康检查服务列表）。
+// GatewayHandle 网关处理器（保留单例以承载 HTTPRequestHandler）。
 type GatewayHandle struct {
 	requestHandler *HTTPRequestHandler
 }
@@ -41,15 +41,6 @@ var NewGatewayHandle = func() *GatewayHandle {
 	return &GatewayHandle{
 		requestHandler: NewHTTPRequestHandler(),
 	}
-}
-
-// GetConfiguredServiceIDs 获取 gateway.yaml 配置的全部 serviceID（供健康检查展示）。
-func (g *GatewayHandle) GetConfiguredServiceIDs() []string {
-	cfg := GetConfig()
-	if cfg == nil {
-		return nil
-	}
-	return cfg.GetAllServiceIDs()
 }
 
 // ============================================================================
@@ -169,9 +160,8 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 func (hr *HTTPRouter) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":   "ok",
-		"time":     time.Now().Format("2006-01-02 15:04:05"),
-		"services": hr.gateway.GetConfiguredServiceIDs(),
+		"status": "ok",
+		"time":   time.Now().Format("2006-01-02 15:04:05"),
 	})
 }
 

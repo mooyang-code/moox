@@ -8,7 +8,6 @@ package rpc
 
 import (
 	"context"
-	"fmt"
 	"path"
 	"strings"
 	"time"
@@ -141,19 +140,6 @@ func (s *Service) ResizeWindow(ctx context.Context, req *pb.ResizeWindowReq) (*p
 		return &pb.ResizeWindowRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "调整窗口失败")}, nil
 	}
 	return &pb.ResizeWindowRsp{RetInfo: retOK()}, nil
-}
-
-// ExecCommand 执行命令。
-func (s *Service) ExecCommand(ctx context.Context, req *pb.ExecCommandReq) (*pb.ExecCommandRsp, error) {
-	if req.GetSessionId() == "" || req.GetCmd() == "" {
-		return &pb.ExecCommandRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "session_id/cmd不能为空")}, nil
-	}
-	output, err := s.svc.ExecCommand(ctx, req.GetSessionId(), req.GetCmd())
-	if err != nil {
-		log.ErrorContextf(ctx, "[SSH] ExecCommand failed: %v", err)
-		return &pb.ExecCommandRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "执行命令失败")}, nil
-	}
-	return &pb.ExecCommandRsp{RetInfo: retOK(), Output: output}, nil
 }
 
 // ========== SFTP 操作 ==========
@@ -315,7 +301,7 @@ func sessionInfoToPB(s *conn.SessionInfo) *pb.SessionInfo {
 }
 
 // sftpListResultToPB 将 SftpList 返回的 map[string]interface{} 转换为 PB。
-// service 层 SftpList 当前返回 map，此处做兼容性转换。
+// service 层 SftpList 当前返回 map，此处统一转换为 RPC 响应结构。
 func sftpListResultToPB(data interface{}, currentDir string) *pb.SftpListRsp {
 	rsp := &pb.SftpListRsp{RetInfo: retOK(), CurrentDir: currentDir}
 	m, ok := data.(map[string]interface{})
@@ -395,6 +381,3 @@ func formatTime(t time.Time) string {
 	}
 	return t.Format("2006-01-02 15:04:05")
 }
-
-// ensure fmt used (避免 import 未使用报错占位，后续若 extractClientIP 扩展可移除)
-var _ = fmt.Sprintf

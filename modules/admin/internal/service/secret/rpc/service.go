@@ -21,7 +21,6 @@ import (
 
 // 合法的秘钥分类
 var validCategories = map[string]bool{
-	"cloud":    true,
 	"ssh":      true,
 	"exchange": true,
 	"database": true,

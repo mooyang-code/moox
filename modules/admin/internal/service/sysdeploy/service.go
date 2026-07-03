@@ -148,7 +148,7 @@ func (s *ServiceImpl) GetServiceDeployments(ctx context.Context) (map[string]int
 }
 
 // ResolveGatewayServiceDetail resolves /api/admin and /api/service forwarding
-// targets from t_service_deployments. gateway.yaml remains a bootstrap fallback.
+// targets from active t_service_deployments records.
 func (s *ServiceImpl) ResolveGatewayServiceDetail(ctx context.Context, serviceID string) (gateway.ServiceDetail, bool) {
 	row, err := s.dao.Get(ctx, gatewayDeploymentName(serviceID))
 	if err != nil || row == nil || row.Status != "active" {
@@ -169,8 +169,10 @@ func gatewayDeploymentName(serviceID string) string {
 	switch serviceID {
 	case "auth":
 		return "admin_auth"
-	case "collector":
-		return "collector_api"
+	case "collector", "collectmgr":
+		return "moox_collector"
+	case "cloudnode":
+		return "moox_cloudnode"
 	default:
 		return serviceID
 	}

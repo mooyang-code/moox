@@ -1,7 +1,7 @@
 // Package database 提供 Trade 模块的 SQLite 持久化管理。
 //
-// Trade 模块账户域与交易域共用同一 SQLite 文件，启动时通过
-// schema.AllSQL() 一次性建表。DSN 带 WAL/busy_timeout 等 pragma，
+// Trade 模块账户域与交易域共用同一 SQLite 文件，启动时应用
+// schema.AllSQL() 提供的模块内嵌 schema。DSN 带 WAL/busy_timeout 等 pragma，
 // 与 admin 的 SQLite 配置风格一致。
 package database
 
@@ -42,15 +42,15 @@ func (dm *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
 	}
 	dm.db = db
 	applySQLitePoolConfig(dm.db, dbCfg)
-	if err := dm.ApplySchemaSQL("embedded trade schema", tradeschema.AllSQL()); err != nil {
+	if err := dm.applySchemaSQL("embedded trade schema", tradeschema.AllSQL()); err != nil {
 		return err
 	}
 	log.Infof("初始化Trade SQLite数据库: %s", dbPath)
 	return nil
 }
 
-// ApplySchemaSQL 应用给定 SQL 文本（建表/索引/触发器）。
-func (dm *Manager) ApplySchemaSQL(name, raw string) error {
+// applySchemaSQL 应用给定 SQL 文本（建表/索引/触发器）。
+func (dm *Manager) applySchemaSQL(name, raw string) error {
 	if dm.db == nil {
 		return fmt.Errorf("database is not initialized")
 	}

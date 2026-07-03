@@ -1,0 +1,14 @@
+# MooX CloudNode service configuration.
+
+database:
+  type: sqlite
+  path: ./data/moox_cloudnode.db
+  max_idle_conns: 10
+  max_open_conns: 50
+  conn_max_lifetime: 1h
+  conn_max_idle_time: 10m
+
+tencent_scf:
+  default_region: ap-guangzhou
+  default_namespace: default
+  default_runtime: Go1

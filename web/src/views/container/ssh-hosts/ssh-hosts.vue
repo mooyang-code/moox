@@ -29,21 +29,9 @@
             <template #icon><icon-plus /></template>
             <span>新增主机</span>
           </a-button>
-          <a-button type="primary" status="warning" @click="batchDeploy">
-            <template #icon><icon-upload /></template>
-            <span>批量部署</span>
-          </a-button>
           <a-button type="primary" status="danger" @click="batchDelete" :disabled="selectedKeys.length === 0">
             <template #icon><icon-delete /></template>
             <span>批量删除</span>
-          </a-button>
-          <a-button type="outline" @click="onCloudAccountManage">
-            <template #icon><icon-settings /></template>
-            <span>云账户管理</span>
-          </a-button>
-          <a-button type="outline" @click="onFunctionPackageManage">
-            <template #icon><icon-code-block /></template>
-            <span>代码包版本管理</span>
           </a-button>
         </a-space>
       </a-row>
@@ -250,18 +238,6 @@
         </a-collapse>
       </a-form>
     </a-modal>
-
-    <!-- 云账户管理弹窗 -->
-    <CloudAccountManage
-      v-model="cloudAccountManageVisible"
-    />
-
-    <!-- 代码包版本管理弹窗 -->
-    <FunctionPackageManage
-      v-model="functionPackageManageVisible"
-      package-type="data_collector"
-      biz-type="container"
-    />
   </div>
 </template>
 
@@ -272,8 +248,6 @@ import { useRouter } from 'vue-router';
 import { Message, Modal } from '@arco-design/web-vue';
 import { listSSHHosts, createSSHHost, updateSSHHost, deleteSSHHost, type SSHHost } from '@/api/modules/ssh';
 import PickColors from 'vue-pick-colors';
-import CloudAccountManage from '@/views/collector/cloud-account/cloud-account-manage.vue';
-import FunctionPackageManage from '@/views/collector/cloud-function/function-package-manage.vue';
 
 const router = useRouter();
 
@@ -329,10 +303,6 @@ const rowSelection = reactive({
   type: 'checkbox' as const,
   showCheckedAll: true,
 });
-
-// ---------- 云账户 / 代码包管理弹窗 ----------
-const cloudAccountManageVisible = ref(false);
-const functionPackageManageVisible = ref(false);
 
 // ---------- 弹窗状态 ----------
 const modalVisible = ref(false);
@@ -390,16 +360,13 @@ const certDataRules = [{ required: true, message: '请粘贴证书内容' }];
 const fetchHosts = async () => {
   loading.value = true;
   try {
-    const response = await listSSHHosts({
+    const res = await listSSHHosts({
       keyword: keyword.value || undefined,
       offset: (pagination.value.current - 1) * pagination.value.pageSize,
       limit: pagination.value.pageSize,
     });
-    const res = response.data;
-    if (res.ret_info?.code === 0) {
-      hostList.value = res.hosts ?? [];
-      pagination.value.total = res.total || 0;
-    }
+    hostList.value = res.hosts ?? [];
+    pagination.value.total = res.total || 0;
   } catch (error) {
     console.error('加载主机列表失败:', error);
     Message.error('加载主机列表失败');
@@ -457,14 +424,9 @@ const onEdit = (record: SSHHost) => {
 const onDelete = async (record: SSHHost) => {
   if (!record.id) return;
   try {
-    const response = await deleteSSHHost(record.id);
-    const res = response.data;
-    if (res.ret_info?.code === 0) {
-      Message.success('删除成功');
-      fetchHosts();
-    } else {
-      Message.error(res.ret_info?.msg || '删除失败');
-    }
+    await deleteSSHHost(record.id);
+    Message.success('删除成功');
+    fetchHosts();
   } catch (error) {
     console.error('删除主机失败:', error);
     Message.error('删除主机失败');
@@ -484,22 +446,15 @@ const handleSubmit = async (done: (closed: boolean) => void) => {
 
     const payload: Partial<SSHHost> = { ...formData.value };
 
-    let response;
     if (isEdit.value) {
-      response = await updateSSHHost(payload);
+      await updateSSHHost(payload);
     } else {
-      response = await createSSHHost(payload);
+      await createSSHHost(payload);
     }
 
-    const res = response.data;
-    if (res.ret_info?.code === 0) {
-      Message.success(isEdit.value ? '更新成功' : '创建成功');
-      done(true);
-      fetchHosts();
-    } else {
-      Message.error(res.ret_info?.msg || (isEdit.value ? '更新失败' : '创建失败'));
-      done(false);
-    }
+    Message.success(isEdit.value ? '更新成功' : '创建成功');
+    done(true);
+    fetchHosts();
   } catch (error) {
     console.error('提交失败:', error);
     Message.error('操作失败，请检查网络连接');
@@ -511,11 +466,6 @@ const handleSubmit = async (done: (closed: boolean) => void) => {
 
 const handleCancel = () => {
   formRef.value?.resetFields();
-};
-
-// ---------- 批量部署（占位） ----------
-const batchDeploy = () => {
-  Message.info('批量部署功能开发中');
 };
 
 // ---------- 批量删除 ----------
@@ -535,12 +485,8 @@ const batchDelete = () => {
       let failCount = 0;
       for (const id of selectedKeys.value) {
         try {
-          const response = await deleteSSHHost(id);
-          if (response.data?.ret_info?.code === 0) {
-            successCount++;
-          } else {
-            failCount++;
-          }
+          await deleteSSHHost(id);
+          successCount++;
         } catch {
           failCount++;
         }
@@ -554,16 +500,6 @@ const batchDelete = () => {
       fetchHosts();
     },
   });
-};
-
-// ---------- 云账户管理 ----------
-const onCloudAccountManage = () => {
-  cloudAccountManageVisible.value = true;
-};
-
-// ---------- 代码包版本管理 ----------
-const onFunctionPackageManage = () => {
-  functionPackageManageVisible.value = true;
 };
 
 // ---------- 初始化 ----------

@@ -1,31 +1,25 @@
 package main
 
 import (
-	"context"
-
-	"github.com/mooyang-code/moox/modules/collector/internal/bootstrap"
-	"github.com/mooyang-code/moox/modules/collector/internal/cloudfunction"
-	"github.com/mooyang-code/moox/modules/collector/pkg/config"
-	"trpc.group/trpc-go/trpc-go/log"
+	control "github.com/mooyang-code/moox/modules/collector/internal/app/control"
+	_ "trpc.group/trpc-go/trpc-filter/validation"
 	_ "trpc.group/trpc-go/trpc-log-cls"
+
+	"trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 func main() {
-	// 创建默认启动器配置
-	cfg := config.DefaultConfig()
+	ctx := trpc.BackgroundContext()
+	s := trpc.NewServer()
 
-	// 创建启动器
-	bs := bootstrap.New(cfg)
-
-	// 初始化启动器（统一初始化流程：配置加载 → 服务启动 → 服务注册 → 定时器注册）
-	if err := bs.Initialize(context.Background()); err != nil {
-		panic("failed to initialize bootstrap: " + err.Error())
+	server, err := control.Initialize(ctx, s)
+	if err != nil {
+		log.Fatalf("moox-collector 初始化失败: %v", err)
 	}
 
-	// 注册并启动云函数(云函数在这里，只是起到心跳保持的作用)，
-	cloudfunction.RegisterCloudFunction()
-
-	// 保持运行
-	log.Info("数据采集器 启动完成")
-	select {}
+	log.Info("启动 moox-collector tRPC 服务器...")
+	if err := server.Serve(); err != nil {
+		log.Fatalf("moox-collector 服务器出错: %v", err)
+	}
 }

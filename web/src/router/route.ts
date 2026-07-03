@@ -25,18 +25,6 @@ export const staticRoutes = [
         meta: { title: "home" }
       },
       {
-        path: "/personal/userinfo",
-        name: "userinfo",
-        component: () => import("@/views/personal/userinfo/userinfo.vue"),
-        meta: { title: "userinfo" }
-      },
-      {
-        path: "/personal/user-settings",
-        name: "user-settings",
-        component: () => import("@/views/personal/user-settings/user-settings.vue"),
-        meta: { title: "user-settings" }
-      },
-      {
         path: "/settings/spaces",
         name: "settings-spaces",
         component: () => import("@/views/settings/spaces/index.vue"),
@@ -144,12 +132,6 @@ export const staticRoutes = [
         meta: { title: "collector-tasks" }
       },
       {
-        path: "/strategy/list",
-        name: "strategy-list",
-        component: () => import("@/views/strategy/strategy-list/strategy-list.vue"),
-        meta: { title: "strategy-list" }
-      },
-      {
         path: "/trading/accounts",
         name: "trading-accounts",
         component: () => import("@/views/trading/account-overview/account-overview.vue"),
@@ -172,12 +154,6 @@ export const staticRoutes = [
         name: "ops-resource-monitor",
         component: () => import("@/views/container/resource-monitor/resource-monitor.vue"),
         meta: { title: "ops-resource-monitor" }
-      },
-      {
-        path: "/ops/service-status",
-        name: "ops-service-status",
-        component: () => import("@/views/container/service-status/service-status.vue"),
-        meta: { title: "ops-service-status" }
       },
       {
         path: "/ops/ssh-hosts",

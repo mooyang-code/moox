@@ -1,4 +1,4 @@
-import { api } from '@/api/config';
+import { callControl } from '@/api/admin/http';
 import { gatewayURL, gatewayWebSocketURL } from '@/api/gateway';
 
 // ========== 类型定义 ==========
@@ -49,12 +49,9 @@ export interface SftpFileItem {
   type: 'd' | 'f';
 }
 
-export interface SftpListResult {
-  files: SftpFileItem[];
-  file_count: number;
-  dir_count: number;
-  paths: { name: string; dir: string }[];
-  current_dir: string;
+export interface PathBreadcrumb {
+  name: string;
+  dir: string;
 }
 
 // SSH 直连端点已并入统一网关 rawhandler，前端直连固定网关端口。
@@ -62,44 +59,45 @@ export interface SftpListResult {
 // ========== 主机配置 ==========
 
 export const listSSHHosts = (params: { keyword?: string; offset?: number; limit?: number }) =>
-  api.post('/ssh/ListHosts', params);
+  callControl<typeof params, { hosts?: SSHHost[]; total?: number }>('ssh', 'ListHosts', params);
 
 export const createSSHHost = (data: Partial<SSHHost>) =>
-  api.post('/ssh/CreateHost', data);
+  callControl<{ host: Partial<SSHHost> }, { id?: number }>('ssh', 'CreateHost', { host: data });
 
 export const updateSSHHost = (data: Partial<SSHHost>) =>
-  api.post('/ssh/UpdateHost', data);
+  callControl<{ host: Partial<SSHHost> }, Record<string, never>>('ssh', 'UpdateHost', { host: data });
 
 export const deleteSSHHost = (id: number) =>
-  api.post('/ssh/DeleteHost', { id });
+  callControl<{ id: number }, Record<string, never>>('ssh', 'DeleteHost', { id });
 
 export const getSSHHostDetail = (id: number) =>
-  api.post('/ssh/GetHost', { id });
+  callControl<{ id: number }, { host?: SSHHost }>('ssh', 'GetHost', { id });
 
 // ========== SSH 会话 ==========
 
 export const createSSHSession = (data: { host_id: number }) =>
-  api.post('/ssh/CreateSession', data);
+  callControl<typeof data, { session_id?: string }>('ssh', 'CreateSession', data);
 
 export const disconnectSSHSession = (sessionId: string) =>
-  api.post('/ssh/DisconnectSession', { session_id: sessionId });
+  callControl<{ session_id: string }, Record<string, never>>('ssh', 'DisconnectSession', { session_id: sessionId });
 
 export const resizeSSHTerminal = (sessionId: string, w: number, h: number) =>
-  api.post('/ssh/ResizeWindow', { session_id: sessionId, w, h });
-
-export const execSSHCommand = (sessionId: string, cmd: string) =>
-  api.post('/ssh/ExecCommand', { session_id: sessionId, cmd });
+  callControl<{ session_id: string; w: number; h: number }, Record<string, never>>('ssh', 'ResizeWindow', { session_id: sessionId, w, h });
 
 // ========== SFTP ==========
 
 export const sftpList = (sessionId: string, path: string) =>
-  api.post('/ssh/SftpList', { session_id: sessionId, path });
+  callControl<{ session_id: string; path: string }, { files?: SftpFileItem[]; paths?: PathBreadcrumb[]; current_dir?: string }>(
+    'ssh',
+    'SftpList',
+    { session_id: sessionId, path }
+  );
 
 export const sftpMkdir = (sessionId: string, path: string) =>
-  api.post('/ssh/SftpMkdir', { session_id: sessionId, path });
+  callControl<{ session_id: string; path: string }, Record<string, never>>('ssh', 'SftpMkdir', { session_id: sessionId, path });
 
 export const sftpDelete = (sessionId: string, path: string) =>
-  api.post('/ssh/SftpDelete', { session_id: sessionId, path });
+  callControl<{ session_id: string; path: string }, Record<string, never>>('ssh', 'SftpDelete', { session_id: sessionId, path });
 
 // 文件下载/上传走统一网关 rawhandler（/api/admin/ssh/SftpDownload|SftpUpload）
 export const getSftpDownloadUrl = (sessionId: string, path: string) =>
@@ -116,7 +114,7 @@ export const getSSHWebSocketUrl = (sessionId: string, w: number, h: number) => {
 // ========== 会话管理 ==========
 
 export const getOnlineSessions = () =>
-  api.post('/ssh/GetOnlineSessions', {});
+  callControl<Record<string, never>, { sessions?: SessionInfo[] }>('ssh', 'GetOnlineSessions', {});
 
 export const forceDisconnect = (sessionId: string) =>
-  api.post('/ssh/ForceDisconnect', { session_id: sessionId });
+  callControl<{ session_id: string }, Record<string, never>>('ssh', 'ForceDisconnect', { session_id: sessionId });

@@ -119,16 +119,6 @@ message ResizeWindowRsp {
   common.RetInfo ret_info = 1;
 }
 
-message ExecCommandReq {
-  string session_id = 1;
-  string cmd = 2;
-}
-
-message ExecCommandRsp {
-  common.RetInfo ret_info = 1;
-  string output = 2;
-}
-
 // ========== SFTP 操作 ==========
 
 // SftpFileItem SFTP 目录条目。
@@ -278,45 +268,6 @@ message HistoryPoint {
   int64 network_tx_speed = 6;
 }
 
-// TestResult 连通性测试结果。
-message TestResult {
-  bool reachable = 1;
-  string message = 2;
-  int64 duration_ms = 3;
-  int32 metrics_count = 4;
-}
-
-// EnableMonitorReq 启用主机监控请求。
-message EnableMonitorReq {
-  int32 host_id = 1;
-}
-
-// EnableMonitorRsp 启用主机监控响应。
-message EnableMonitorRsp {
-  common.RetInfo ret_info = 1;
-}
-
-// DisableMonitorReq 禁用主机监控请求。
-message DisableMonitorReq {
-  int32 host_id = 1;
-}
-
-// DisableMonitorRsp 禁用主机监控响应。
-message DisableMonitorRsp {
-  common.RetInfo ret_info = 1;
-}
-
-// GetMonitorStatusReq 获取主机监控状态请求。
-message GetMonitorStatusReq {
-  int32 host_id = 1;
-}
-
-// GetMonitorStatusRsp 获取主机监控状态响应。
-message GetMonitorStatusRsp {
-  common.RetInfo ret_info = 1;
-  bool enabled = 2;
-}
-
 // GetCurrentMetricsReq 获取当前监控指标请求。
 // host_ids 为空时返回所有启用监控的主机；非空时为逗号分隔的 ID 字符串。
 message GetCurrentMetricsReq {
@@ -341,17 +292,6 @@ message GetHistoryMetricsRsp {
   repeated HistoryPoint history = 2;
 }
 
-// TestNodeExporterReq 测试 Node Exporter 连通性请求。
-message TestNodeExporterReq {
-  int32 host_id = 1;
-}
-
-// TestNodeExporterRsp 测试 Node Exporter 连通性响应。
-message TestNodeExporterRsp {
-  common.RetInfo ret_info = 1;
-  TestResult result = 2;
-}
-
 // ========== Services ==========
 
 service Ssh {
@@ -366,7 +306,6 @@ service Ssh {
   rpc CreateSession(CreateSessionReq) returns (CreateSessionRsp);
   rpc DisconnectSession(DisconnectSessionReq) returns (DisconnectSessionRsp);
   rpc ResizeWindow(ResizeWindowReq) returns (ResizeWindowRsp);
-  rpc ExecCommand(ExecCommandReq) returns (ExecCommandRsp);
 
   // SFTP 操作
   rpc SftpList(SftpListReq) returns (SftpListRsp);
@@ -379,16 +318,8 @@ service Ssh {
 }
 
 service Monitor {
-  // 启用主机监控
-  rpc EnableMonitor(EnableMonitorReq) returns (EnableMonitorRsp);
-  // 禁用主机监控
-  rpc DisableMonitor(DisableMonitorReq) returns (DisableMonitorRsp);
-  // 获取主机监控状态
-  rpc GetMonitorStatus(GetMonitorStatusReq) returns (GetMonitorStatusRsp);
   // 获取当前监控指标
   rpc GetCurrentMetrics(GetCurrentMetricsReq) returns (GetCurrentMetricsRsp);
   // 获取历史监控数据
   rpc GetHistoryMetrics(GetHistoryMetricsReq) returns (GetHistoryMetricsRsp);
-  // 测试 Node Exporter 连通性
-  rpc TestNodeExporter(TestNodeExporterReq) returns (TestNodeExporterRsp);
 }

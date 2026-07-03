@@ -4,8 +4,6 @@ import (
 	"context"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/monitor"
 
@@ -38,9 +36,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 
-	// 3.5 注入依赖（避免循环依赖）
-	dnsproxy.GetActiveNodeIDsFunc = cloudnode.GetActiveNodeIDs
-
 	// 4. 注册定时器
 	// DNS探测定时器（本地DNS解析）
 	timer.RegisterScheduler("dnsproxySchedule", &timer.DefaultScheduler{})
@@ -48,12 +43,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	// DNS探测定时器（合并终端+本地DNS并探测）
 	timer.RegisterScheduler("dnsProbeSchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service("trpc.dnsprobe.timer"), dnsproxy.HandleDNSProbeSchedule)
-	// 云节点保活定时器
-	timer.RegisterScheduler("keepaliveSchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.keepalive.timer"), cloudnode.HandleKeepaliveSchedule)
-	// 任务实例重算定时器
-	timer.RegisterScheduler("taskPlannerSchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.collectmgr.timer"), collectmgr.HandleTaskPlannerSchedule)
 	// 监控数据采集定时器
 	timer.RegisterScheduler("monitorSchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service("trpc.monitor.timer"), monitor.HandleMonitorSchedule)

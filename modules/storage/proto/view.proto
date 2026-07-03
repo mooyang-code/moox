@@ -5,6 +5,7 @@ package trpc.moox.storage;
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
 
 import "access.proto";
+import "moox_common.proto";
 import "common.proto";
 
 // ResultColumn 表示 View 查询结果返回的一列。
@@ -25,7 +26,7 @@ message ResultColumn {
 // 该接口通过 View 元数据查询 TimeSeries 读模型，默认目标为 DuckDB。
 message QueryTimeSeriesRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
-  AuthInfo auth_info = 1;
+  common.AuthInfo auth_info = 1;
   // space_id 是 View 所属空间 ID。
   string space_id = 2;
   // view_id 是已登记的查询入口。
@@ -41,26 +42,26 @@ message QueryTimeSeriesRowsReq {
   // sorts 是排序条件列表。
   repeated SortSpec sorts = 8;
   // page 是分页参数。
-  Page page = 9;
+  common.Page page = 9;
 }
 
 // QueryTimeSeriesRowsRsp 表示时序 View 数据查询结果。
 message QueryTimeSeriesRowsRsp {
   // ret_info 是接口返回状态。
-  RetInfo ret_info = 1;
+  common.RetInfo ret_info = 1;
   // columns 是返回列定义。
   repeated ResultColumn columns = 2;
   // rows 是读取到的时序数据行。
   repeated TimeSeriesRow rows = 3;
   // page_result 是分页结果。
-  PageResult page_result = 4;
+  common.PageResult page_result = 4;
 }
 
 // SearchRecordRowsReq 表示搜索记录 View 数据。
 // 该接口通过 View 元数据搜索 Record 读模型，默认目标为 Bleve。
 message SearchRecordRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
-  AuthInfo auth_info = 1;
+  common.AuthInfo auth_info = 1;
   // space_id 是 View 所属空间 ID。
   string space_id = 2;
   // view_id 是已登记的搜索入口。
@@ -78,26 +79,26 @@ message SearchRecordRowsReq {
   // column_names 是要返回的列名；为空时返回 View 默认列。
   repeated string column_names = 9;
   // page 是分页参数。
-  Page page = 10;
+  common.Page page = 10;
 }
 
 // SearchRecordRowsRsp 表示记录 View 数据搜索结果。
 message SearchRecordRowsRsp {
   // ret_info 是接口返回状态。
-  RetInfo ret_info = 1;
+  common.RetInfo ret_info = 1;
   // columns 是返回列定义。
   repeated ResultColumn columns = 2;
   // rows 是匹配的记录事实数据行。
   repeated RecordRow rows = 3;
   // page_result 是分页结果。
-  PageResult page_result = 4;
+  common.PageResult page_result = 4;
 }
 
 // RebuildTimeSeriesViewReq 表示异步重建时序 View 数据的请求。
 // 重建总是基于当前 View 定义版本从 PrimaryStore 全量扫描构建新 DuckDB 结果。
 message RebuildTimeSeriesViewReq {
   // auth_info 是调用方身份和链路追踪信息。
-  AuthInfo auth_info = 1;
+  common.AuthInfo auth_info = 1;
   // space_id 是 View 所属空间 ID。
   string space_id = 2;
   // view_id 是要重建的 TimeSeries + DuckDB 查询入口。
@@ -107,7 +108,7 @@ message RebuildTimeSeriesViewReq {
 // RebuildTimeSeriesViewRsp 表示异步重建时序 View 数据的受理结果。
 message RebuildTimeSeriesViewRsp {
   // ret_info 是接口返回状态。
-  RetInfo ret_info = 1;
+  common.RetInfo ret_info = 1;
   // rebuild_id 是本次异步重建任务 ID。
   string rebuild_id = 2;
 }
@@ -116,7 +117,7 @@ message RebuildTimeSeriesViewRsp {
 // 重建总是基于当前 View 定义版本从 PrimaryStore 全量扫描构建新 Bleve 索引。
 message RebuildRecordViewReq {
   // auth_info 是调用方身份和链路追踪信息。
-  AuthInfo auth_info = 1;
+  common.AuthInfo auth_info = 1;
   // space_id 是 View 所属空间 ID。
   string space_id = 2;
   // view_id 是要重建的 Record + Bleve 搜索入口。
@@ -126,7 +127,7 @@ message RebuildRecordViewReq {
 // RebuildRecordViewRsp 表示异步重建记录 View 数据的受理结果。
 message RebuildRecordViewRsp {
   // ret_info 是接口返回状态。
-  RetInfo ret_info = 1;
+  common.RetInfo ret_info = 1;
   // rebuild_id 是本次异步重建任务 ID。
   string rebuild_id = 2;
 }

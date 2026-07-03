@@ -34,8 +34,6 @@ const themeConfig = () => {
   const watermarkRotate = ref<number>(330);
   // 水印间隙
   const watermarkGap = ref<[number, number]>([100, 100]);
-  // 防止调试
-  const debugPrevention = ref<boolean>(false);
   // 布局模式：layoutDefaults、layoutHead、layoutMixing
   const layoutType = ref<string>("layoutDefaults");
   // 色弱模式
@@ -94,7 +92,6 @@ const themeConfig = () => {
     watermarkStyle,
     watermarkRotate,
     watermarkGap,
-    debugPrevention,
     layoutType,
     colorWeakMode,
     grayMode,

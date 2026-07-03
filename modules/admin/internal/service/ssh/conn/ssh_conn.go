@@ -189,21 +189,6 @@ func (s *SSHConn) ResizeWindow(w, h int) error {
 	return s.sshSession.WindowChange(h, w)
 }
 
-// ExecCommand 执行命令（创建新 session 执行）
-func (s *SSHConn) ExecCommand(cmd string) (string, error) {
-	session, err := s.sshClient.NewSession()
-	if err != nil {
-		return "", fmt.Errorf("创建 SSH session 失败: %w", err)
-	}
-	defer session.Close()
-
-	out, err := session.CombinedOutput(cmd)
-	if err != nil {
-		return string(out), fmt.Errorf("执行命令失败: %w", err)
-	}
-	return string(out), nil
-}
-
 // RefreshActiveTime 刷新活跃时间
 func (s *SSHConn) RefreshActiveTime() {
 	s.LastActiveTime = time.Now()

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/common/crypto"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
 	"trpc.group/trpc-go/trpc-go"
@@ -128,7 +128,7 @@ func getAccessTokenFromRequest(ctx context.Context, header *thttp.Header, req in
 }
 
 // validateAccessToken 验证访问令牌并返回用户信息
-func validateAccessToken(ctx context.Context, accessToken string) (*utils.UnifiedClaims, bool) {
+func validateAccessToken(ctx context.Context, accessToken string) (*crypto.UnifiedClaims, bool) {
 	// 获取JWT密钥（带缓存）
 	secretKey := getJWTSecretKey()
 	if secretKey == "" {
@@ -137,7 +137,7 @@ func validateAccessToken(ctx context.Context, accessToken string) (*utils.Unifie
 	}
 
 	// 验证API访问令牌
-	claims, err := utils.ValidateAccessToken(accessToken, secretKey)
+	claims, err := crypto.ValidateAccessToken(accessToken, secretKey)
 	if err != nil {
 		log.ErrorContextf(ctx, "JWT令牌验证失败: %v", err)
 		return nil, false

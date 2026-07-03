@@ -66,8 +66,7 @@ dnsproxy:
 
   # Ping检测配置
   ping:
-    ping_port: "80"           # 主要Ping端口
-    ping_ports:               # 多个Ping端口（优先使用）
+    ping_ports:               # 多个Ping端口，会依次尝试
       - "80"                  # HTTP
       - "443"                 # HTTPS
     ping_retries: 2           # 重试次数
@@ -101,7 +100,6 @@ dnsproxy:
 # - concurrent_limit: 并发连接数，建议3-10个
 #
 # Ping检测 (ping):
-# - ping_port: 单个Ping端口（向后兼容）
 # - ping_ports: 多个Ping端口，会依次尝试
 # - ping_retries: 失败重试次数，建议1-3次
 # - ping_delay: 重试间隔，建议50-500毫秒

@@ -5,7 +5,7 @@
 spaces:
   - space_id: crypto
     name: 加密交易空间
-    description: Binance/OKX style crypto market data workspace
+    description: Binance crypto market data space
     owner: default
     status: active
 

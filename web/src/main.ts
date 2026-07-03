@@ -19,13 +19,6 @@ import i18n from "@/lang/index";
 import "@/assets/fonts/fonts.scss";
 // 引入自定义指令
 import directives from "@/directives/index";
-// 动态加载工具
-import { preloadResource, prefetchResource, setupLazyImages } from "@/utils/dynamic-loader";
-
-// 预加载关键资源
-preloadResource('https://unpkg.com/@visactor/vchart@latest/build/index.min.js');
-prefetchResource('https://unpkg.com/@wangeditor/editor@latest/dist/index.min.js');
-prefetchResource('https://unpkg.com/xgplayer@latest/dist/index.min.js');
 
 // vchart黑暗模式 - 延迟初始化，避免阻塞主线程
 let vchartThemeInitialized = false;
@@ -72,14 +65,3 @@ app.use(directives);
 
 // 挂载应用
 app.mount("#app");
-
-// 在应用挂载后设置懒加载
-setupLazyImages();
-
-// 使用 requestIdleCallback 在浏览器空闲时预加载非关键资源
-if ('requestIdleCallback' in window) {
-  requestIdleCallback(() => {
-    // 预获取其他可能用到的资源
-    prefetchResource('https://unpkg.com/lightweight-charts@latest/dist/lightweight-charts.standalone.production.js');
-  });
-}

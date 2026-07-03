@@ -39,15 +39,15 @@
 
         <a-row>
           <a-space wrap>
-            <a-button type="primary" status="success" @click="onBatchAdd" :disabled="taskPolling">
+            <a-button type="primary" status="success" @click="onBatchAdd" :disabled="batchChangeProcessing">
               <template #icon><icon-plus-circle /></template>
               <span>批量新增</span>
             </a-button>
-            <a-button type="primary" status="warning" @click="batchDeploy" :disabled="taskPolling">
+            <a-button type="primary" status="warning" @click="batchDeploy" :disabled="batchChangeProcessing">
               <template #icon><icon-upload /></template>
               <span>批量部署</span>
             </a-button>
-            <a-button type="primary" status="danger" @click="batchDelete" :disabled="taskPolling">
+            <a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">
               <template #icon><icon-delete /></template>
               <span>批量删除</span>
             </a-button>
@@ -62,52 +62,52 @@
           </a-space>
         </a-row>
 
-        <!-- 任务进度提示 -->
+        <!-- 批量变更进度提示 -->
         <a-alert
-          v-if="batchJobStatuses.length > 0"
+          v-if="batchChangeStatuses.length > 0"
           type="info"
           style="margin: 16px 0;"
           closable
-          @close="handleCloseTaskAlert"
+          @close="handleCloseBatchChangeAlert"
         >
           <template #title>
             <a-space>
               <icon-loading spin />
-              <span>任务执行中</span>
+              <span>云节点批量变更处理中</span>
             </a-space>
           </template>
-          <div v-for="(job, index) in batchJobStatuses" :key="job.task_id || index" style="margin-bottom: 12px;">
-            <div>批次 {{ index + 1 }}：{{ getTaskTypeText(job.task_type) }}</div>
-            <div>处理进度：{{ job.success_count + job.failed_count }} / {{ job.total_count }}</div>
-            <div>成功：{{ job.success_count }}，失败：{{ job.failed_count }}</div>
+          <div v-for="(batchChange, index) in batchChangeStatuses" :key="batchChange.batch_id || index" style="margin-bottom: 12px;">
+            <div>批次 {{ index + 1 }}：{{ getBatchChangeTypeText(batchChange.batch_change_type) }}</div>
+            <div>处理进度：{{ batchChange.success_count + batchChange.failed_count }} / {{ batchChange.total_count }}</div>
+            <div>成功：{{ batchChange.success_count }}，失败：{{ batchChange.failed_count }}</div>
             <a-progress 
-              :percent="(Number(job.progress) || 0) / 100" 
-              :status="job.failed_count > 0 ? 'warning' : 'normal'"
+              :percent="(Number(batchChange.progress) || 0) / 100" 
+              :status="batchChange.failed_count > 0 ? 'warning' : 'normal'"
               :stroke-width="8"
               style="margin-top: 8px"
             />
           </div>
         </a-alert>
         <a-alert
-          v-else-if="currentTaskStatus && currentTaskStatus.task_status === 1"
+          v-else-if="currentBatchChangeStatus && currentBatchChangeStatus.batch_change_status === 1"
           type="info"
           style="margin: 16px 0;"
           closable
-          @close="handleCloseTaskAlert"
+          @close="handleCloseBatchChangeAlert"
         >
           <template #title>
             <a-space>
               <icon-loading spin />
-              <span>任务执行中</span>
+              <span>云节点批量变更处理中</span>
             </a-space>
           </template>
           <div>
-            <div>任务类型：{{ getTaskTypeText(currentTaskStatus.task_type) }}</div>
-            <div>处理进度：{{ currentTaskStatus.success_count + currentTaskStatus.failed_count }} / {{ currentTaskStatus.total_count }}</div>
-            <div>成功：{{ currentTaskStatus.success_count }}，失败：{{ currentTaskStatus.failed_count }}</div>
+            <div>变更类型：{{ getBatchChangeTypeText(currentBatchChangeStatus.batch_change_type) }}</div>
+            <div>处理进度：{{ currentBatchChangeStatus.success_count + currentBatchChangeStatus.failed_count }} / {{ currentBatchChangeStatus.total_count }}</div>
+            <div>成功：{{ currentBatchChangeStatus.success_count }}，失败：{{ currentBatchChangeStatus.failed_count }}</div>
             <a-progress 
-              :percent="(Number(currentTaskStatus.progress) || 0) / 100" 
-              :status="currentTaskStatus.failed_count > 0 ? 'warning' : 'normal'"
+              :percent="(Number(currentBatchChangeStatus.progress) || 0) / 100" 
+              :status="currentBatchChangeStatus.failed_count > 0 ? 'warning' : 'normal'"
               :stroke-width="8"
               style="margin-top: 8px"
             />
@@ -116,7 +116,7 @@
 
         <!-- 选择状态提示 -->
         <a-alert
-          v-if="selectedKeys.length > 0 && !taskPolling"
+          v-if="selectedKeys.length > 0 && !batchChangeProcessing"
           type="info"
           style="margin: 16px 0;"
           :closable="true"
@@ -137,7 +137,7 @@
           :loading="loading"
           :scroll="{ x: '100%', y: '100%', minWidth: 1200 }"
           :pagination="paginationConfig"
-          :row-selection="taskPolling ? undefined : { type: 'checkbox', showCheckedAll: true }"
+          :row-selection="batchChangeProcessing ? undefined : { type: 'checkbox', showCheckedAll: true }"
           :selected-keys="selectedKeys"
           @select="select"
           @select-all="selectAll"
@@ -174,16 +174,16 @@
                 <span v-else>-</span>
               </template>
             </a-table-column>
-            <a-table-column title="支持的采集器" data-index="supported_collectors" :width="150">
+            <a-table-column title="支持的工作负载" data-index="supported_workloads" :width="150">
               <template #cell="{ record }">
-                <div v-if="getSupportedCollectors(record.supported_collectors).length > 0" style="display: flex; flex-wrap: wrap; gap: 4px;">
+                <div v-if="getSupportedWorkloads(record.supported_workloads).length > 0" style="display: flex; flex-wrap: wrap; gap: 4px;">
                   <a-tag
-                    v-for="(collector, index) in getSupportedCollectors(record.supported_collectors)"
+                    v-for="(workload, index) in getSupportedWorkloads(record.supported_workloads)"
                     :key="index"
                     size="small"
-                    :color="getCollectorColor(collector)"
+                    :color="getCollectorColor(workload)"
                   >
-                    {{ getCollectorName(collector) }}
+                    {{ getCollectorName(workload) }}
                   </a-tag>
                 </div>
                 <span v-else>-</span>
@@ -212,7 +212,7 @@
             <a-table-column title="操作" :width="170" align="center" fixed="right">
               <template #cell="{ record }">
                 <a-space>
-                  <a-button type="outline" size="mini" @click="onEdit(record)" :disabled="taskPolling">
+                  <a-button type="outline" size="mini" @click="onEdit(record)" :disabled="batchChangeProcessing">
                     <template #icon><icon-edit /></template>
                     <span>编辑</span>
                   </a-button>
@@ -227,7 +227,7 @@
                       type="primary"
                       size="mini"
                       status="danger"
-                      :disabled="taskPolling"
+                      :disabled="batchChangeProcessing"
                     >
                       <template #icon><icon-delete /></template>
                       <span>删除</span>
@@ -439,10 +439,10 @@
             <template #columns>
               <a-table-column title="代码包名称" data-index="package_name" :width="140"></a-table-column>
               <a-table-column title="版本" data-index="version" :width="100"></a-table-column>
-              <a-table-column title="类型" data-index="package_type_label" :width="120">
+              <a-table-column title="类型" data-index="package_type" :width="120">
                 <template #cell="{ record }">
                   <a-tag :color="getPackageTypeColor(record.package_type)" size="small">
-                    {{ record.package_type_label }}
+                    {{ getPackageTypeLabel(record.package_type) }}
                   </a-tag>
                 </template>
               </a-table-column>
@@ -452,9 +452,9 @@
                   {{ formatFileSize(record.file_size) }}
                 </template>
               </a-table-column>
-              <a-table-column title="创建时间" data-index="create_time" :width="150">
+              <a-table-column title="创建时间" data-index="created_time" :width="150">
                 <template #cell="{ record }">
-                  {{ formatTime(record.create_time) }}
+                  {{ formatTime(record.created_time) }}
                 </template>
               </a-table-column>
             </template>
@@ -508,10 +508,10 @@
             <template #columns>
               <a-table-column title="代码包名称" data-index="package_name" :width="140"></a-table-column>
               <a-table-column title="版本" data-index="version" :width="100"></a-table-column>
-              <a-table-column title="类型" data-index="package_type_label" :width="120">
+              <a-table-column title="类型" data-index="package_type" :width="120">
                 <template #cell="{ record }">
                   <a-tag :color="getPackageTypeColor(record.package_type)" size="small">
-                    {{ record.package_type_label }}
+                    {{ getPackageTypeLabel(record.package_type) }}
                   </a-tag>
                 </template>
               </a-table-column>
@@ -521,9 +521,9 @@
                   {{ formatFileSize(record.file_size) }}
                 </template>
               </a-table-column>
-              <a-table-column title="创建时间" data-index="create_time" :width="150">
+              <a-table-column title="创建时间" data-index="created_time" :width="150">
                 <template #cell="{ record }">
-                  {{ formatTime(record.create_time) }}
+                  {{ formatTime(record.created_time) }}
                 </template>
               </a-table-column>
             </template>
@@ -643,14 +643,14 @@
           <a-descriptions-item label="版本">{{ packageDetail.version }}</a-descriptions-item>
           <a-descriptions-item label="类型">
             <a-tag :color="getPackageTypeColor(packageDetail.package_type)">
-              {{ packageDetail.package_type_label }}
+              {{ getPackageTypeLabel(packageDetail.package_type) }}
             </a-tag>
           </a-descriptions-item>
           <a-descriptions-item label="运行时环境">{{ packageDetail.runtime }}</a-descriptions-item>
           <a-descriptions-item label="文件大小">{{ formatFileSize(packageDetail.file_size) }}</a-descriptions-item>
           <a-descriptions-item label="状态">
             <a-tag :color="getPackageStatusColor(packageDetail.status)">
-              {{ packageDetail.status_label }}
+              {{ getPackageStatusLabel(packageDetail.status) }}
             </a-tag>
           </a-descriptions-item>
           <a-descriptions-item label="文件MD5" :span="2">
@@ -673,7 +673,7 @@
         <!-- 审计信息 -->
         <a-descriptions title="审计信息" :column="2" bordered size="medium" style="margin-bottom: 16px;">
           <a-descriptions-item label="创建者">{{ packageDetail.created_by }}</a-descriptions-item>
-          <a-descriptions-item label="创建时间">{{ formatDateTime(packageDetail.created_at) }}</a-descriptions-item>
+          <a-descriptions-item label="创建时间">{{ formatDateTime(packageDetail.created_time) }}</a-descriptions-item>
           <a-descriptions-item label="最后部署时间" :span="2">
             {{ packageDetail.last_deploy_time ? formatDateTime(packageDetail.last_deploy_time) : '-' }}
           </a-descriptions-item>
@@ -686,7 +686,7 @@
               type="primary"
               status="success"
               @click="onDownloadPackage(packageDetail)" 
-              :disabled="packageDetail.status !== 1"
+              :disabled="packageDetail.status !== 2"
               :loading="downloadProgress[packageDetail.id] !== undefined && downloadProgress[packageDetail.id] < 100"
             >
               <template #icon>
@@ -769,18 +769,15 @@
 import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from 'vue';
 import { Message, Modal } from '@arco-design/web-vue';
-import { useRoute } from 'vue-router';
-import { api } from '@/api/config';
-import { isRetInfoSuccess } from '@/api/ret-info';
-import { getFunctionPackageList, getFunctionPackageDetail, downloadPackageByURL, type FunctionPackage } from '@/api/function-package';
+import { getFunctionPackageList, getFunctionPackageDetail, downloadPackageByURL, PACKAGE_STATUS_LABEL, PACKAGE_TYPE_LABEL, type FunctionPackage } from '@/api/function-package';
 import { getCloudAccountList, type CloudAccount } from '@/api/cloud-account';
-import { AsyncTaskManager, asyncTaskManager, TaskStatus } from '@/utils/async-task';
-import type { TaskStatusResponse, TaskDetailItem } from '@/utils/async-task';
+import { batchCreateNodes, batchDeleteNodes, batchDeployNodes, getNodeList, listCloudRegions, updateNode, NODE_STATUS_LABEL } from '@/api/cloud-node';
+import { BatchChangeStatus } from '@/utils/cloud-node-batch-change';
+import type { BatchChangeStatusResponse, BatchChangeDetailItem } from '@/utils/cloud-node-batch-change';
 import CloudAccountManage from '../cloud-account/cloud-account-manage.vue';
 import FunctionPackageManage from './function-package-manage.vue';
 
 // 获取当前路由
-const route = useRoute();
 
 // 接口定义
 interface CloudFunction {
@@ -795,7 +792,7 @@ interface CloudFunction {
   package_id?: string;
   package_version?: string; // 代码包版本（包名-版本号）
   running_version?: string; // 当前运行版本（来自心跳上报）
-  supported_collectors: string; // 支持的采集器类型（JSON数组格式）
+  supported_workloads: string[] | string;
   capacity: string;
   current_load: string;
   metadata: string;
@@ -814,13 +811,45 @@ interface CloudFunction {
   updated_at: string;
 }
 
+const normalizeCloudFunctions = (items: Array<Partial<CloudFunction> & Record<string, any>>): CloudFunction[] => {
+  return items.map((item) => ({
+    node_id: item.node_id || '',
+    cloud_account_id: item.cloud_account_id || '',
+    namespace: item.namespace || '',
+    node_type: item.node_type || '',
+    region: item.region || '',
+    tag: item.tag || '',
+    ip_address: item.ip_address || '',
+    version: item.version || item.package_version || item.running_version || '',
+    package_id: item.package_id || '',
+    package_version: item.package_version || '',
+    running_version: item.running_version || '',
+    supported_workloads: normalizeSupportedWorkloads(item.supported_workloads),
+    capacity: item.capacity || '',
+    current_load: item.current_load || '',
+    metadata: item.metadata || '',
+    status: item.status || 'offline',
+    enabled: item.enabled ?? 1,
+    timeout_threshold: item.timeout_threshold || 0,
+    heartbeat_interval: item.heartbeat_interval || 0,
+    probe_enabled: item.probe_enabled ?? false,
+    probe_url: item.probe_url || '',
+    cls_topic_id: item.cls_topic_id || '',
+    last_heartbeat: item.last_heartbeat || '',
+    created_at: item.created_at || item.create_time || '',
+    create_time: item.create_time || '',
+    modify_time: item.modify_time || '',
+    updated_at: item.updated_at || item.modify_time || ''
+  }));
+};
+
 
 
 // 状态管理
 const loading = ref(false);
-const taskPolling = ref(false);
-const currentTaskStatus = ref<TaskStatusResponse | null>(null);
-const taskCompleteHandled = ref(false); // 防止重复处理任务完成
+const batchChangeProcessing = ref(false);
+const currentBatchChangeStatus = ref<BatchChangeStatusResponse | null>(null);
+const batchChangeCompleteHandled = ref(false); // 防止重复处理提交完成
 
 const form = reactive({
   cloudAccountId: '',
@@ -848,7 +877,7 @@ interface BatchPlanItem {
   planCount: number;
 }
 
-type BatchJobStatus = TaskStatusResponse & {
+type BatchChangeViewStatus = BatchChangeStatusResponse & {
   batchIndex: number;
 };
 
@@ -886,8 +915,7 @@ const batchPlanItems = ref<BatchPlanItem[]>([]);
 const batchPlanNotice = ref('');
 const batchPlanRequested = ref(0);
 const batchPlanTag = ref('');
-const batchJobStatuses = ref<BatchJobStatus[]>([]);
-let batchJobTimer: number | null = null;
+const batchChangeStatuses = ref<BatchChangeViewStatus[]>([]);
 
 // 批量部署相关
 const batchDeployVisible = ref(false);
@@ -955,43 +983,19 @@ const batchPlanPlannedTotal = computed(() => batchPlanItems.value.reduce((sum, i
 const batchPlanTotalAvailable = computed(() => batchPlanItems.value.reduce((sum, item) => sum + (Number(item.availableNodes) || 0), 0));
 const batchPlanTarget = computed(() => Math.min(batchPlanRequested.value, batchPlanTotalAvailable.value));
 
-// 根据路由路径判断当前的 package_type
-const currentPackageType = computed(() => {
-  const path = route.path;
-  if (path.includes('/collector/cloud-function')) {
-    return 'data_collector';
-  } else if (path.includes('/factor/cloud-function')) {
-    return 'factor_calculator';
-  }
-  return undefined;
-});
+// 当前页面是采集云节点管理页，代码包固定按采集器类型过滤。
+const currentPackageType = computed(() => 1);
 
 // 根据路由路径判断默认的节点类型
 const defaultNodeType = computed(() => {
   return ''; // 搜索框节点类型不设默认值
 });
 
-// 根据路由路径判断默认的运行时
-const defaultRuntime = computed(() => {
-  const path = route.path;
-  if (path.includes('/collector/cloud-function')) {
-    return 'Go1'; // 数据采集默认 Go1
-  } else if (path.includes('/factor/cloud-function')) {
-    return 'Python3.9'; // 因子计算默认 Python3.9
-  }
-  return 'Go1'; // 兜底默认值
-});
+// 采集 SCF runtime 默认使用 Go1。
+const defaultRuntime = computed(() => 'Go1');
 
-// 根据路由路径判断当前的业务类型
-const currentBizType = computed(() => {
-  const path = route.path;
-  if (path.includes('/collector/cloud-function')) {
-    return 'data_collector'; // 数据采集
-  } else if (path.includes('/factor/cloud-function')) {
-    return 'factor_calculator'; // 因子计算
-  }
-  return 'data_collector'; // 兜底默认值
-});
+// 当前页面的业务类型固定为数据采集。
+const currentBizType = computed(() => 'data_collector');
 
 // 生命周期钩子
 onMounted(async () => {
@@ -1001,102 +1005,51 @@ onMounted(async () => {
   await loadData();
   await loadCloudAccounts();
   await loadRegions(); // 加载地区列表
-
-  // 检查并恢复任务状态
-  await asyncTaskManager.checkAndRestoreTask(handleTaskRestore);
 });
 
 onBeforeUnmount(() => {
-  // 清理轮询
-  asyncTaskManager.stopPolling();
-  stopBatchJobPolling();
+  batchChangeStatuses.value = [];
+  currentBatchChangeStatus.value = null;
 });
 
-// 检查任务恢复
-const handleTaskRestore = (taskId: string, status: TaskStatusResponse) => {
-  // 检查任务是否已完成
-  if (status.task_status !== 1) { // Not PROCESSING
-    // 任务已完成，直接处理结果
-    handleTaskComplete(status);
-  } else {
-    // 任务还在处理中，继续轮询
-    taskPolling.value = true;
-    taskCompleteHandled.value = false; // 重置任务完成处理标志
-    currentTaskStatus.value = status;
-    
-    asyncTaskManager.startPolling(taskId, {
-      onProgress: (data) => {
-        console.log('Task progress data:', {
-          total_count: data.total_count,
-          success_count: data.success_count,
-          failed_count: data.failed_count,
-          progress: data.progress,
-          calculated: data.total_count > 0 ? Math.round(((data.success_count + data.failed_count) / data.total_count) * 100) : 0
-        });
-        currentTaskStatus.value = data;
-      },
-      onSuccess: (data) => {
-        handleTaskComplete(data);
-      },
-      onFailed: (data) => {
-        handleTaskComplete(data);
-      },
-      onPartialSuccess: (data) => {
-        handleTaskComplete(data);
-      },
-      showLoading: false
-    });
-  }
-};
-
-// 任务完成处理
-const handleTaskComplete = async (data: TaskStatusResponse) => {
-  stopBatchJobPolling();
-  batchJobStatuses.value = [];
-  console.log('handleTaskComplete called with data:', data);
-  console.log('Task status:', data.task_status, 'Failed count:', data.failed_count);
+// 批量变更完成处理
+const handleBatchChangeComplete = async (data: BatchChangeStatusResponse) => {
+  batchChangeStatuses.value = [];
   
   // 防止重复处理
-  if (taskCompleteHandled.value) {
-    console.log('Task completion already handled, skipping...');
+  if (batchChangeCompleteHandled.value) {
     return;
   }
-  taskCompleteHandled.value = true;
+  batchChangeCompleteHandled.value = true;
   
   // 先更新状态为完成状态，让用户看到100%的进度
-  currentTaskStatus.value = data;
+  currentBatchChangeStatus.value = data;
   
   // 延迟1秒后再清理
   setTimeout(async () => {
-    taskPolling.value = false;
-    currentTaskStatus.value = null;
+    batchChangeProcessing.value = false;
+    currentBatchChangeStatus.value = null;
     
     // 清空选中项
-    selectedKeys.value = [];
-    
-    // 移除URL中的任务ID
-    AsyncTaskManager.removeTaskIdFromUrl();
-    
+    selectedKeys.value = [];    
     // 刷新数据
     await loadData();
   }, 1000);
   
   // 延迟显示结果弹窗，让用户先看到完成的进度
   setTimeout(() => {
-    console.log('Showing result modal, failed_count:', data.failed_count);
     // 检查是否有失败项（通过failed_count判断）
     if (data.failed_count > 0) {
     // 有失败项，使用 Modal.error 显示失败详情
     const failedItems = data.failed_items || [];
-    console.log('Failed items:', failedItems);
     
     // 创建 Vue 渲染函数
     const content = () => h('div', { style: { maxHeight: '400px', overflowY: 'auto' } }, [
       h('div', { style: { marginBottom: '12px' } }, [
-        h('div', `任务类型：${getTaskTypeText(data.task_type)}`),
-        h('div', `总任务数：${data.total_count}`),
-        h('div', `成功数：${data.success_count}`),
-        h('div', { style: { color: '#ff4d4f' } }, `失败数：${data.failed_count}`)
+        h('div', `变更类型：${getBatchChangeTypeText(data.batch_change_type)}`),
+        h('div', `总数量：${data.total_count}`),
+        h('div', `成功数量：${data.success_count}`),
+        h('div', { style: { color: '#ff4d4f' } }, `失败数量：${data.failed_count}`)
       ]),
       failedItems.length > 0 && h('div', { style: { marginTop: '16px' } }, [
         h('strong', '失败详情：'),
@@ -1121,24 +1074,23 @@ const handleTaskComplete = async (data: TaskStatusResponse) => {
     ]);
     
     Modal.error({
-      title: '任务执行失败',
+      title: '批量变更失败',
       content,
       width: 700,
       maskClosable: false
     });
     } else {
       // 全部成功，显示成功提示
-      Message.success(`${getTaskTypeText(data.task_type)}成功！共处理 ${data.total_count} 个节点`);
+      Message.success(`${getBatchChangeTypeText(data.batch_change_type)}成功！共处理 ${data.total_count} 个节点`);
     }
   }, 1200); // 稍微延迟比进度条消失时间长一点，避免冲突
 };
 
-// 关闭任务提示
-const handleCloseTaskAlert = () => {
-  stopBatchJobPolling();
-  batchJobStatuses.value = [];
-  currentTaskStatus.value = null;
-  AsyncTaskManager.removeTaskIdFromUrl();
+// 关闭批量变更提示
+const handleCloseBatchChangeAlert = () => {
+  batchChangeStatuses.value = [];
+  currentBatchChangeStatus.value = null;
+  batchChangeProcessing.value = false;
 };
 
 // 批量新增
@@ -1227,9 +1179,9 @@ const optionalRecord = (value: Record<string, string>) => (
   Object.keys(value).length > 0 ? value : undefined
 );
 
-const buildCreateNodeTask = (region: string, index: number) => ({
-  taskType: 'CREATE_NODE',
-  requestParams: {
+const buildCreateNodeBatchChange = (region: string, index: number) => ({
+  batchChangeType: 'CREATE_NODE',
+  requestPayload: {
     cloud_account_id: batchAddForm.cloudAccountId,
     namespace: batchAddForm.namespace || undefined,
     node_type: batchAddForm.nodeType, // 使用表单中选择的节点类型
@@ -1251,21 +1203,21 @@ const buildCreateNodeTask = (region: string, index: number) => ({
   }
 });
 
-const buildTasksForRegion = (region: string, count: number, startIndex: number) => (
-  Array(count).fill(null).map((_, index) => buildCreateNodeTask(region, startIndex + index))
+const buildBatchChangesForRegion = (region: string, count: number, startIndex: number) => (
+  Array(count).fill(null).map((_, index) => buildCreateNodeBatchChange(region, startIndex + index))
 );
 
-const buildTasksFromPlan = (items: BatchPlanItem[]) => {
-  const tasks: Array<{ taskType: string; requestParams: any }> = [];
+const buildBatchChangesFromPlan = (items: BatchPlanItem[]) => {
+  const batchChanges: Array<{ batchChangeType: string; requestPayload: any }> = [];
   let index = 0;
   items.forEach(item => {
     const count = Number(item.planCount) || 0;
     for (let i = 0; i < count; i += 1) {
-      tasks.push(buildCreateNodeTask(item.regionCode, index));
+      batchChanges.push(buildCreateNodeBatchChange(item.regionCode, index));
       index += 1;
     }
   });
-  return tasks;
+  return batchChanges;
 };
 
 const chunkTasks = <T,>(items: T[], size: number): T[][] => {
@@ -1276,85 +1228,90 @@ const chunkTasks = <T,>(items: T[], size: number): T[][] => {
   return chunks;
 };
 
-const executeBatchAddTasks = async (tasks: Array<{ taskType: string; requestParams: any }>) => {
-  if (tasks.length === 0) {
-    Message.warning('没有可执行的任务');
+const executeBatchAddChanges = async (batchChanges: Array<{ batchChangeType: string; requestPayload: any }>) => {
+  if (batchChanges.length === 0) {
+    Message.warning('没有可执行的批量变更');
     return;
   }
 
-  const chunks = chunkTasks(tasks, 100);
+  const chunks = chunkTasks(batchChanges, 100);
 
-  taskPolling.value = true;
-  taskCompleteHandled.value = false;
-  currentTaskStatus.value = null;
+  batchChangeProcessing.value = true;
+  batchChangeCompleteHandled.value = false;
+  currentBatchChangeStatus.value = null;
 
-  const initialStatuses: BatchJobStatus[] = chunks.map((chunk, index) => ({
+  const initialStatuses: BatchChangeViewStatus[] = chunks.map((chunk, index) => ({
     batchIndex: index,
-    task_id: '',
-    task_type: 'CREATE_NODE',
-    task_status: TaskStatus.PROCESSING,
+    batch_id: '',
+    batch_change_type: 'CREATE_NODE',
+    batch_change_status: BatchChangeStatus.PROCESSING,
     total_count: chunk.length,
     success_count: 0,
     failed_count: 0,
     progress: 0,
     created_at: new Date().toISOString()
   }));
-  batchJobStatuses.value = initialStatuses;
+  batchChangeStatuses.value = initialStatuses;
 
-  const jobIds: string[] = [];
+  const batchIds: string[] = [];
 
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
     try {
-      const jobId = await createAsyncJob(chunk);
-      jobIds.push(jobId);
-      batchJobStatuses.value = batchJobStatuses.value.map(item => (
-        item.batchIndex === i ? { ...item, task_id: jobId } : item
+      const batchId = await submitCloudNodeBatchChange(chunk);
+      batchIds.push(batchId);
+      batchChangeStatuses.value = batchChangeStatuses.value.map(item => (
+        item.batchIndex === i ? { ...item, batch_id: batchId } : item
       ));
     } catch (error: any) {
-      batchJobStatuses.value = batchJobStatuses.value.map(item => (
+      batchChangeStatuses.value = batchChangeStatuses.value.map(item => (
         item.batchIndex === i ? {
           ...item,
-          task_status: TaskStatus.FAILED,
+          batch_change_status: BatchChangeStatus.FAILED,
           failed_count: item.total_count,
           progress: 100,
-          error_message: error?.message || '创建任务失败'
+          error_message: error?.message || '创建批量变更失败'
         } : item
       ));
     }
   }
 
-  if (jobIds.length === 0) {
-    const finalStatus = computeAggregateStatus(batchJobStatuses.value);
-    batchJobStatuses.value = [];
-    handleTaskComplete(finalStatus);
+  if (batchIds.length === 0) {
+    const finalStatus = computeAggregateStatus(batchChangeStatuses.value);
+    batchChangeStatuses.value = [];
+    handleBatchChangeComplete(finalStatus);
     return;
   }
 
-  startBatchJobPolling(jobIds);
+  batchChangeStatuses.value = batchChangeStatuses.value.map(item => (
+    item.batch_id ? {
+      ...item,
+      batch_change_status: BatchChangeStatus.SUCCESS,
+      success_count: item.total_count,
+      failed_count: 0,
+      progress: 100,
+      completed_time: new Date().toISOString()
+    } : item
+  ));
+  const finalStatus = computeAggregateStatus(batchChangeStatuses.value);
+  batchChangeStatuses.value = [];
+  handleBatchChangeComplete(finalStatus);
 };
 
 const executeBatchAddDirect = async () => {
-  const tasks = buildTasksForRegion(batchAddForm.region, batchAddForm.nodeCount, 0);
-  await executeBatchAddTasks(tasks);
+  const batchChanges = buildBatchChangesForRegion(batchAddForm.region, batchAddForm.nodeCount, 0);
+  await executeBatchAddChanges(batchChanges);
 };
 
 const fetchRegionUsage = async (regionCode: string, tag: string) => {
-  const response = await api.post('/cloudnode/GetNodeList', {
-    query: {
-      region: regionCode,
-      tag,
-      node_type: batchAddForm.nodeType,
-      page: 1,
-      page_size: 1
-    }
+  const response = await getNodeList({
+    region: regionCode,
+    tag,
+    node_type: batchAddForm.nodeType,
+    page: 1,
+    page_size: 1
   });
-
-  if (isRetInfoSuccess(response.data?.ret_info?.code)) {
-    return Number(response.data.total || 0);
-  }
-
-  throw new Error(response.data?.ret_info?.msg || '获取地区占用失败');
+  return Number(response.total || 0);
 };
 
 const prepareBatchPlan = async () => {
@@ -1462,9 +1419,9 @@ const handleBatchPlanOk = async () => {
     Message.warning('计划数量少于可创建数量，将按当前计划创建');
   }
 
-  const tasks = buildTasksFromPlan(batchPlanItems.value);
+  const batchChanges = buildBatchChangesFromPlan(batchPlanItems.value);
   batchPlanVisible.value = false;
-  await executeBatchAddTasks(tasks);
+  await executeBatchAddChanges(batchChanges);
 };
 
 // 批量部署
@@ -1493,7 +1450,7 @@ const loadAvailablePackages = async (page: number = 1) => {
     const response = await getFunctionPackageList({
       page: page,
       page_size: packagesPagination.value.pageSize,
-      status: 1, // 只获取可用状态的代码包
+      status: 2, // PACKAGE_STATUS_AVAILABLE
       package_type: currentPackageType.value // 根据当前路由过滤代码包类型
     });
 
@@ -1526,7 +1483,7 @@ const loadAvailablePackagesForCreation = async () => {
     const response = await getFunctionPackageList({
       page: 1,
       page_size: 100, // 获取较多数据
-      status: 1, // 只获取可用状态的代码包
+      status: 2, // PACKAGE_STATUS_AVAILABLE
       package_type: currentPackageType.value // 根据当前路由过滤代码包类型
     });
 
@@ -1578,47 +1535,19 @@ const batchDelete = () => {
 
 // 执行批量删除
 const executeBatchDelete = async () => {
-  // 准备多个独立任务的数据
-  const tasks = selectedKeys.value.map(nodeId => ({
-    taskType: 'DELETE_NODE',
-    requestParams: {
-      node_id: nodeId
-    }
-  }));
-
   try {
-    // 创建多个独立任务的异步任务
-    const taskId = await asyncTaskManager.createMultipleAsyncTasks(tasks);
+    const total = selectedKeys.value.length;
+    const rsp = await batchDeleteNodes({ node_ids: selectedKeys.value });
+    if (!rsp.batch_id) {
+      throw new Error('cloudnode 未返回 batch_id');
+    }
 
-    taskPolling.value = true;
-    taskCompleteHandled.value = false; // 重置任务完成处理标志
-    
-    // 开始轮询任务状态
-    asyncTaskManager.startPolling(taskId, {
-      onProgress: (data) => {
-        console.log('Task progress data:', {
-          total_count: data.total_count,
-          success_count: data.success_count,
-          failed_count: data.failed_count,
-          progress: data.progress,
-          calculated: data.total_count > 0 ? Math.round(((data.success_count + data.failed_count) / data.total_count) * 100) : 0
-        });
-        currentTaskStatus.value = data;
-      },
-      onSuccess: (data) => {
-        handleTaskComplete(data);
-      },
-      onFailed: (data) => {
-        handleTaskComplete(data);
-      },
-      onPartialSuccess: (data) => {
-        handleTaskComplete(data);
-      },
-      showLoading: false
-    });
+    batchChangeProcessing.value = true;
+    batchChangeCompleteHandled.value = false; // 重置批量变更完成处理标志
+    completeCloudNodeBatchChange(rsp.batch_id, 'DELETE_NODE', total);
     
   } catch (error) {
-    console.error('创建批量删除任务失败:', error);
+    console.error('创建批量删除变更失败:', error);
   }
 };
 
@@ -1626,28 +1555,22 @@ const executeBatchDelete = async () => {
 const loadData = async (showEmptyTip = false) => {
   loading.value = true;
   try {
-    const response = await api.post('/cloudnode/GetNodeList', {
-      query: {
-        node_id: form.nodeId,
-        cloud_account_id: form.cloudAccountId,
-        region: form.region,
-        node_type: form.nodeType,
-        biz_type: currentBizType.value, // 根据路由添加业务类型过滤
-        status: form.status,
-        page: pagination.value.current,
-        page_size: pagination.value.pageSize
-      }
+    const response = await getNodeList({
+      node_id: form.nodeId,
+      cloud_account_id: form.cloudAccountId,
+      region: form.region,
+      node_type: form.nodeType,
+      biz_type: currentBizType.value, // 根据路由添加业务类型过滤
+      status: form.status,
+      page: pagination.value.current,
+      page_size: pagination.value.pageSize
     });
 
-    if (isRetInfoSuccess(response.data?.ret_info?.code)) {
-      let data = response.data.items || [];
-      functionList.value = Array.isArray(data) ? data : [data].filter(Boolean);
-      pagination.value.total = response.data.total || functionList.value.length;
-      if (showEmptyTip && functionList.value.length === 0) {
-        Message.info('查询结果为空');
-      }
-    } else {
-      Message.error(response.data?.ret_info?.msg || '加载数据失败');
+    const data = response.items || [];
+    functionList.value = normalizeCloudFunctions(Array.isArray(data) ? data : [data].filter(Boolean));
+    pagination.value.total = response.total || functionList.value.length;
+    if (showEmptyTip && functionList.value.length === 0) {
+      Message.info('查询结果为空');
     }
   } catch (error) {
     console.error('加载数据失败:', error);
@@ -1662,29 +1585,17 @@ const loadCloudAccounts = async () => {
   try {
     const accounts = await getCloudAccountList();
     cloudAccountOptions.value = Array.isArray(accounts) ? accounts : [accounts].filter(Boolean);
-    if (cloudAccountOptions.value.length === 0) {
-      Message.error('加载云账户失败，请点击"云账户管理按钮"，新增云账户');
-    }
   } catch (error) {
     console.error('加载云账户失败:', error);
-    Message.error('加载云账户失败，请检查网络连接');
+    Message.error(error instanceof Error ? error.message : '加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署');
   }
 };
 
 // 加载地区列表
 const loadRegions = async () => {
   try {
-    const response = await api.post('/cloudnode/ListCloudRegions', {
-      provider: 'tencent' // 目前只支持腾讯云
-    });
-
-    if (isRetInfoSuccess(response.data?.ret_info?.code)) {
-      let data = response.data.regions || [];
-      regionOptions.value = Array.isArray(data) ? data : [data].filter(Boolean);
-    } else {
-      console.error('加载地区列表失败:', response);
-      regionOptions.value = [];
-    }
+    const data = await listCloudRegions('tencent');
+    regionOptions.value = Array.isArray(data) ? data : [data].filter(Boolean);
   } catch (error) {
     console.error('加载地区列表失败:', error);
     // 失败时使用空数组
@@ -1693,14 +1604,14 @@ const loadRegions = async () => {
 };
 
 // 工具函数
-const getTaskTypeText = (taskType: string) => {
+const getBatchChangeTypeText = (batchChangeType: string) => {
   const typeMap: Record<string, string> = {
     'CREATE_NODE': '批量创建节点',
     'BATCH_UPDATE_NODE': '批量更新节点',
     'DELETE_NODE': '批量删除节点',
     'DEPLOY_NODE': '批量部署节点'
   };
-  return typeMap[taskType] || taskType;
+  return typeMap[batchChangeType] || batchChangeType;
 };
 
 const getProviderName = (provider: string) => {
@@ -1766,136 +1677,153 @@ watch(
 );
 
 const getStatusColor = (status: string | number) => {
-  if (status === 'online' || status === 1) {
-    return 'green';
-  }
-  if (status === 'offline' || status === 0) {
-    return 'red';
-  }
-  if (status === 'timeout') {
-    return 'orange';
-  }
-  if (status === 'abnormal') {
-    return 'orangered';
-  }
-  return 'gray';
+  const numeric = typeof status === 'number' ? status : Number(status);
+  const colorMap: Record<number, string> = {
+    2: 'green',
+    1: 'red',
+    3: 'orange',
+    4: 'orangered'
+  };
+  if (status === 'online') return 'green';
+  if (status === 'offline') return 'red';
+  if (status === 'timeout') return 'orange';
+  if (status === 'abnormal') return 'orangered';
+  return colorMap[numeric] || 'gray';
 };
 
 const getStatusText = (status: string | number) => {
   if (typeof status === 'string' && status) {
-    const map: Record<string, string> = {
+    const legacyMap: Record<string, string> = {
       online: '在线',
       offline: '离线',
       timeout: '超时',
       abnormal: '异常',
     };
-    return map[status] || status;
+    if (legacyMap[status]) return legacyMap[status];
+    if (NODE_STATUS_LABEL[status]) return NODE_STATUS_LABEL[status];
+    return status;
   }
-  if (status === 1) {
-    return '在线';
-  }
-  if (status === 0) {
-    return '离线';
-  }
-  return '未知';
+  const enumMap: Record<number, string> = {
+    1: 'NODE_STATUS_OFFLINE',
+    2: 'NODE_STATUS_ONLINE',
+    3: 'NODE_STATUS_TIMEOUT',
+    4: 'NODE_STATUS_ABNORMAL'
+  };
+  const key = enumMap[Number(status)] || 'NODE_STATUS_UNSPECIFIED';
+  return NODE_STATUS_LABEL[key] || '未知';
 };
 
-const mapJobStatusToTaskStatus = (jobStatus: number): TaskStatus => {
-  switch (jobStatus) {
-    case 0:
-      return TaskStatus.PROCESSING;
-    case 1:
-      return TaskStatus.PROCESSING;
-    case 2:
-      return TaskStatus.SUCCESS;
-    case 3:
-      return TaskStatus.FAILED;
-    case 4:
-      return TaskStatus.PARTIAL;
-    default:
-      return TaskStatus.PROCESSING;
+const parseMetadata = (value: unknown): Record<string, unknown> => {
+  if (!value) {
+    return {};
   }
-};
-
-const extractFailedItems = (tasks: any[]): TaskDetailItem[] => {
-  if (!Array.isArray(tasks)) {
-    return [];
-  }
-  return tasks
-    .filter(task => task.task_status === 3)
-    .map(task => ({
-      item_id: task.task_id,
-      item_name: task.task_type,
-      status: task.task_status,
-      error_message: task.error_message
-    }));
-};
-
-const createAsyncJob = async (tasks: Array<{ taskType: string; requestParams: any }>) => {
-  const response = await api.post('/asynctask/CreateAsyncJob', {
-    tasks: tasks.map(task => ({
-      task_type: task.taskType,
-      request_params: task.requestParams
-    }))
-  }, {
-    timeout: 20000
-  });
-
-  // 统一响应：ret_info.code === 'SUCCESS' 表示成功，业务字段在响应顶层
-  const rsp = response.data;
-  if (!isRetInfoSuccess(rsp?.ret_info?.code)) {
-    throw new Error(rsp?.ret_info?.msg || '创建任务失败');
-  }
-
-  const jobId = rsp?.job_id;
-  if (!jobId) {
-    throw new Error('服务器未返回job_id');
-  }
-
-  return jobId as string;
-};
-
-const queryAsyncJob = async (jobId: string): Promise<TaskStatusResponse | null> => {
-  try {
-    const response = await api.post('/asynctask/QueryAsyncJob', {
-      job_id: jobId
-    });
-
-    const jobData = response.data;
-    if (!isRetInfoSuccess(jobData?.ret_info?.code)) {
-      // 请求成功但业务失败，返回null表示查询失败，继续重试
-      console.warn('queryAsyncJob 业务失败:', jobData?.ret_info?.msg);
-      return null;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
     }
-
-    return {
-      task_id: jobData?.job_id || jobId,
-      task_type: jobData?.tasks?.[0]?.task_type || 'UNKNOWN',
-      task_status: mapJobStatusToTaskStatus(jobData?.job_status),
-      total_count: jobData?.total_task_cnt || 0,
-      success_count: jobData?.success_task_cnt || 0,
-      failed_count: jobData?.failed_task_cnt || 0,
-      progress: jobData?.progress || 0,
-      error_message: jobData?.tasks?.[0]?.error_message,
-      created_at: jobData?.created_at || new Date().toISOString(),
-      completed_time: jobData?.updated_at,
-      failed_items: extractFailedItems(jobData?.tasks)
-    };
-  } catch (error: any) {
-    // 网络超时或请求失败，返回null继续重试，不弹窗
-    console.warn('queryAsyncJob 请求失败，将继续重试:', error?.message);
-    return null;
   }
+  return typeof value === 'object' ? value as Record<string, unknown> : {};
 };
 
-const stopBatchJobPolling = () => {
-  if (batchJobTimer) {
-    clearInterval(batchJobTimer);
-    batchJobTimer = null;
-  }
+const makeCompletedBatchChangeStatus = (batchId: string, batchChangeType: string, total: number): BatchChangeStatusResponse => ({
+  batch_id: batchId,
+  batch_change_type: batchChangeType,
+  batch_change_status: BatchChangeStatus.SUCCESS,
+  total_count: total,
+  success_count: total,
+  failed_count: 0,
+  progress: 100,
+  created_at: new Date().toISOString(),
+  completed_time: new Date().toISOString(),
+  failed_items: []
+});
+
+const completeCloudNodeBatchChange = (batchId: string, batchChangeType: string, total: number) => {
+  handleBatchChangeComplete(makeCompletedBatchChangeStatus(batchId, batchChangeType, total));
 };
 
-const computeAggregateStatus = (statuses: BatchJobStatus[]): TaskStatusResponse => {
+const submitCloudNodeBatchChange = async (batchChanges: Array<{ batchChangeType: string; requestPayload: any }>) => {
+  if (batchChanges.length === 0) {
+    throw new Error('没有可提交的云节点批量变更');
+  }
+  const batchChangeType = batchChanges[0].batchChangeType;
+  const first = batchChanges[0].requestPayload || {};
+
+  if (batchChangeType === 'CREATE_NODE') {
+    const nodes = batchChanges.map((batchChange, index) => {
+      const params = batchChange.requestPayload || {};
+      const functionNamePrefix = params.function_name_prefix || params.function_name || first.function_name_prefix || first.function_name || 'moox-cloudnode';
+      return {
+        cloud_account_id: params.cloud_account_id,
+        node_type: params.node_type,
+        region: params.region,
+        namespace: params.namespace || first.namespace || 'default',
+        runtime: params.runtime || first.runtime || 'Go1',
+        handler: params.handler || first.handler || 'main',
+        package_id: params.package_id || first.package_id,
+        config: params.config,
+        environment: params.environment,
+        metadata: {
+          ...parseMetadata(params.metadata),
+          biz_type: params.biz_type,
+          tag: params.tag,
+          function_name_prefix: functionNamePrefix,
+          timeout_threshold: params.timeout_threshold,
+          heartbeat_interval: params.heartbeat_interval,
+          probe_enabled: params.probe_enabled,
+          index
+        }
+      };
+    });
+    const rsp = await batchCreateNodes({
+      nodes,
+      cloud_account_id: first.cloud_account_id,
+      region: first.region,
+      namespace: first.namespace || 'default',
+      node_type: first.node_type,
+      function_name_prefix: first.function_name_prefix || first.function_name || 'moox-cloudnode',
+      runtime: first.runtime || 'Go1',
+      handler: first.handler || 'main',
+      package_id: first.package_id,
+      count: batchChanges.length,
+      config: first.config,
+      environment: first.environment
+    });
+    if (!rsp.batch_id) {
+      throw new Error('cloudnode 未返回 batch_id');
+    }
+    return rsp.batch_id;
+  }
+
+  if (batchChangeType === 'DELETE_NODE') {
+    const rsp = await batchDeleteNodes({
+      node_ids: batchChanges.map(batchChange => batchChange.requestPayload?.node_id).filter(Boolean)
+    });
+    if (!rsp.batch_id) {
+      throw new Error('cloudnode 未返回 batch_id');
+    }
+    return rsp.batch_id;
+  }
+
+  if (batchChangeType === 'DEPLOY_NODE') {
+    const rsp = await batchDeployNodes({
+      node_ids: batchChanges.map(batchChange => batchChange.requestPayload?.node_id).filter(Boolean),
+      package_id: first.package_id
+    });
+    if (!rsp.batch_id) {
+      throw new Error('cloudnode 未返回 batch_id');
+    }
+    return rsp.batch_id;
+  }
+
+  throw new Error(`unsupported cloud node batch change type: ${batchChangeType}`);
+};
+
+
+const computeAggregateStatus = (statuses: BatchChangeViewStatus[]): BatchChangeStatusResponse => {
   const totals = statuses.reduce((acc, item) => {
     acc.total += item.total_count || 0;
     acc.success += item.success_count || 0;
@@ -1908,18 +1836,18 @@ const computeAggregateStatus = (statuses: BatchJobStatus[]): TaskStatusResponse 
     total: 0,
     success: 0,
     failed: 0,
-    failedItems: [] as TaskDetailItem[]
+    failedItems: [] as BatchChangeDetailItem[]
   });
 
-  let status = TaskStatus.SUCCESS;
+  let status = BatchChangeStatus.SUCCESS;
   if (totals.failed > 0) {
-    status = totals.success > 0 ? TaskStatus.PARTIAL : TaskStatus.FAILED;
+    status = totals.success > 0 ? BatchChangeStatus.PARTIAL : BatchChangeStatus.FAILED;
   }
 
   return {
-    task_id: '',
-    task_type: 'CREATE_NODE',
-    task_status: status,
+    batch_id: '',
+    batch_change_type: 'CREATE_NODE',
+    batch_change_status: status,
     total_count: totals.total,
     success_count: totals.success,
     failed_count: totals.failed,
@@ -1930,61 +1858,21 @@ const computeAggregateStatus = (statuses: BatchJobStatus[]): TaskStatusResponse 
   };
 };
 
-const startBatchJobPolling = (_jobIds: string[]) => {
-  stopBatchJobPolling();
 
-  const pollOnce = async () => {
-    const pendingJobs = batchJobStatuses.value.filter(job => job.task_status === TaskStatus.PROCESSING && job.task_id);
-    if (pendingJobs.length === 0) {
-      stopBatchJobPolling();
-      const finalStatus = computeAggregateStatus(batchJobStatuses.value);
-      batchJobStatuses.value = [];
-      handleTaskComplete(finalStatus);
-      return;
-    }
-
-    const updates = await Promise.all(pendingJobs.map(async (job) => {
-      const status = await queryAsyncJob(job.task_id);
-      // 如果查询失败（返回null），保持原状态继续轮询
-      if (status === null) {
-        return { batchIndex: job.batchIndex, status: null };
-      }
-      return { batchIndex: job.batchIndex, status };
-    }));
-
-    const nextStatuses = batchJobStatuses.value.map(job => {
-      const update = updates.find(item => item.batchIndex === job.batchIndex);
-      // 如果没有更新或状态为null，保持原状态
-      if (!update || update.status === null) {
-        return job;
-      }
-      return {
-        ...job,
-        ...update.status,
-        batchIndex: job.batchIndex
-      };
-    });
-
-    batchJobStatuses.value = nextStatuses;
-  };
-
-  pollOnce();
-  batchJobTimer = window.setInterval(pollOnce, 2000);
-};
-
-// 解析支持的采集器列表
-const getSupportedCollectors = (supportedCollectorsStr: string): string[] => {
-  if (!supportedCollectorsStr || supportedCollectorsStr === '[]') {
-    return [];
-  }
+// 解析支持的工作负载列表
+const normalizeSupportedWorkloads = (value: string[] | string | undefined): string[] => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (value === '[]') return [];
   try {
-    const collectors = JSON.parse(supportedCollectorsStr);
-    return Array.isArray(collectors) ? collectors : [];
-  } catch (error) {
-    console.error('解析 supported_collectors 失败:', error);
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
     return [];
   }
 };
+
+const getSupportedWorkloads = (value: string[] | string | undefined): string[] => normalizeSupportedWorkloads(value);
 
 // 获取采集器名称
 const getCollectorName = (collector: string) => {
@@ -2020,14 +1908,41 @@ const getPackageTypeColor = (packageType: string) => {
   return colorMap[packageType] || 'gray';
 };
 
-const getPackageStatusColor = (status: number) => {
+const getPackageStatusColor = (status: number | string) => {
+  const numeric = typeof status === 'number' ? status : Number(status);
   const colorMap: Record<number, string> = {
-    0: 'blue',       // 上传中 - 蓝色
-    1: 'green',      // 可用 - 绿色
-    2: 'gray',       // 已删除 - 灰色
-    3: 'red'         // 上传失败 - 红色
+    1: 'blue',
+    2: 'green',
+    3: 'red',
+    4: 'gray'
   };
-  return colorMap[status] || 'gray';
+  return colorMap[numeric] || 'gray';
+};
+
+const getPackageStatusLabel = (status: number | string) => {
+  const numeric = typeof status === 'number' ? status : Number(status);
+  const enumMap: Record<number, string> = {
+    1: 'PACKAGE_STATUS_PENDING',
+    2: 'PACKAGE_STATUS_AVAILABLE',
+    3: 'PACKAGE_STATUS_FAILED',
+    4: 'PACKAGE_STATUS_DELETED'
+  };
+  const key = enumMap[numeric] || 'PACKAGE_STATUS_UNSPECIFIED';
+  return PACKAGE_STATUS_LABEL[key] || '未知';
+};
+
+const getPackageTypeLabel = (packageType: number | string) => {
+  if (typeof packageType === 'string' && PACKAGE_TYPE_LABEL[packageType]) {
+    return PACKAGE_TYPE_LABEL[packageType];
+  }
+  const numeric = typeof packageType === 'number' ? packageType : Number(packageType);
+  const enumMap: Record<number, string> = {
+    1: 'PACKAGE_TYPE_COLLECTOR',
+    2: 'PACKAGE_TYPE_FACTOR',
+    3: 'PACKAGE_TYPE_CUSTOM'
+  };
+  const key = enumMap[numeric] || 'PACKAGE_TYPE_UNSPECIFIED';
+  return PACKAGE_TYPE_LABEL[key] || String(packageType);
 };
 
 const formatFileSize = (size: number) => {
@@ -2130,37 +2045,14 @@ const selectAll = (checked: boolean) => {
 
 const onDelete = async (record: CloudFunction) => {
   try {
-    // 创建单个删除的异步任务
-    const taskId = await asyncTaskManager.createAsyncTask('DELETE_NODE', {
-      node_id: record.node_id
-    });
+    const rsp = await batchDeleteNodes({ node_ids: [record.node_id] });
+    if (!rsp.batch_id) {
+      throw new Error('cloudnode 未返回 batch_id');
+    }
 
-    taskPolling.value = true;
-    taskCompleteHandled.value = false; // 重置任务完成处理标志
-    
-    // 开始轮询任务状态
-    asyncTaskManager.startPolling(taskId, {
-      onProgress: (data) => {
-        console.log('Task progress data:', {
-          total_count: data.total_count,
-          success_count: data.success_count,
-          failed_count: data.failed_count,
-          progress: data.progress,
-          calculated: data.total_count > 0 ? Math.round(((data.success_count + data.failed_count) / data.total_count) * 100) : 0
-        });
-        currentTaskStatus.value = data;
-      },
-      onSuccess: (data) => {
-        handleTaskComplete(data);
-      },
-      onFailed: (data) => {
-        handleTaskComplete(data);
-      },
-      onPartialSuccess: (data) => {
-        handleTaskComplete(data);
-      },
-      showLoading: false
-    });
+    batchChangeProcessing.value = true;
+    batchChangeCompleteHandled.value = false; // 重置批量变更完成处理标志
+    completeCloudNodeBatchChange(rsp.batch_id, 'DELETE_NODE', 1);
   } catch (error: any) {
     Message.error('删除失败: ' + (error?.message || '未知错误'));
   }
@@ -2241,7 +2133,7 @@ const handlePackageDetailCancel = () => {
 
 // 下载代码包
 const onDownloadPackage = async (pkg: FunctionPackage) => {
-  if (pkg.status !== 1) {
+  if (pkg.status !== 2) {
     Message.warning('只能下载可用状态的代码包');
     return;
   }
@@ -2307,52 +2199,26 @@ const handleBatchDeployOk = async () => {
 // 执行批量部署
 const executeBatchDeploy = async () => {
   try {
-    // 准备多个独立任务的数据
-    const tasks = selectedKeys.value.map(nodeId => ({
-      taskType: 'DEPLOY_NODE',
-      requestParams: {
-        node_id: nodeId,
-        package_id: batchDeployForm.selectedPackageId
-      }
-    }));
-    
-    // 创建多个独立任务的异步任务
-    const taskId = await asyncTaskManager.createMultipleAsyncTasks(tasks);
-    
-    taskPolling.value = true;
-    taskCompleteHandled.value = false; // 重置任务完成处理标志
-    
-    // 开始轮询任务状态
-    asyncTaskManager.startPolling(taskId, {
-      onProgress: (data) => {
-        console.log('Task progress data:', {
-          total_count: data.total_count,
-          success_count: data.success_count,
-          failed_count: data.failed_count,
-          progress: data.progress,
-          calculated: data.total_count > 0 ? Math.round(((data.success_count + data.failed_count) / data.total_count) * 100) : 0
-        });
-        currentTaskStatus.value = data;
-      },
-      onSuccess: (data) => {
-        handleTaskComplete(data);
-      },
-      onFailed: (data) => {
-        handleTaskComplete(data);
-      },
-      onPartialSuccess: (data) => {
-        handleTaskComplete(data);
-      },
-      showLoading: false
+    const total = selectedKeys.value.length;
+    const rsp = await batchDeployNodes({
+      node_ids: selectedKeys.value,
+      package_id: batchDeployForm.selectedPackageId
     });
+    if (!rsp.batch_id) {
+      throw new Error('cloudnode 未返回 batch_id');
+    }
+    
+    batchChangeProcessing.value = true;
+    batchChangeCompleteHandled.value = false; // 重置批量变更完成处理标志
+    completeCloudNodeBatchChange(rsp.batch_id, 'DEPLOY_NODE', total);
     
     // 清理表单
     batchDeployForm.selectedPackageId = '';
     batchDeployForm.deployConfig = {};
     
   } catch (error: any) {
-    console.error('创建批量部署任务失败:', error);
-    Message.error('创建批量部署任务失败: ' + (error?.message || '未知错误'));
+    console.error('创建批量部署变更失败:', error);
+    Message.error('创建批量部署变更失败: ' + (error?.message || '未知错误'));
   }
 };
 
@@ -2364,7 +2230,7 @@ const loadSingleDeployPackages = async () => {
     const response = await getFunctionPackageList({
       page: singleDeployPackagesPagination.value.current,
       page_size: singleDeployPackagesPagination.value.pageSize,
-      status: 1, // 只获取可用状态的包
+      status: 2, // PACKAGE_STATUS_AVAILABLE
       package_type: currentPackageType.value // 根据当前路由过滤代码包类型
     });
 
@@ -2412,38 +2278,24 @@ const handleSingleDeployOk = async () => {
   singleDeployVisible.value = false;
   
   try {
-    // 创建单个部署的异步任务
-    const taskId = await asyncTaskManager.createAsyncTask('DEPLOY_NODE', {
-      node_id: singleDeployForm.nodeId,
+    const rsp = await batchDeployNodes({
+      node_ids: [singleDeployForm.nodeId],
       package_id: singleDeployForm.selectedPackageId
     });
+    if (!rsp.batch_id) {
+      throw new Error('cloudnode 未返回 batch_id');
+    }
     
-    taskPolling.value = true;
-    taskCompleteHandled.value = false; // 重置任务完成处理标志
-    
-    // 开始轮询任务状态
-    asyncTaskManager.startPolling(taskId, {
-      onProgress: (data) => {
-        currentTaskStatus.value = data;
-      },
-      onSuccess: (data) => {
-        handleTaskComplete(data);
-      },
-      onFailed: (data) => {
-        handleTaskComplete(data);
-      },
-      onPartialSuccess: (data) => {
-        handleTaskComplete(data);
-      },
-      showLoading: false
-    });
+    batchChangeProcessing.value = true;
+    batchChangeCompleteHandled.value = false; // 重置批量变更完成处理标志
+    completeCloudNodeBatchChange(rsp.batch_id, 'DEPLOY_NODE', 1);
     
     // 清理表单
     singleDeployForm.selectedPackageId = '';
     
   } catch (error: any) {
-    console.error('创建部署任务失败:', error);
-    Message.error('创建部署任务失败: ' + (error?.message || '未知错误'));
+    console.error('创建部署变更失败:', error);
+    Message.error('创建部署变更失败: ' + (error?.message || '未知错误'));
   }
 };
 
@@ -2476,25 +2328,22 @@ const handleEditNodeCancel = () => {
 // 确认编辑
 const handleEditNodeOk = async () => {
   try {
-    // 调用更新API（PB 请求：{node:{...}}）
-    const response = await api.post('/cloudnode/UpdateNode', {
-      node: {
-        node_id: editNodeForm.nodeId,
+    await updateNode({
+      node_id: editNodeForm.nodeId,
+      timeout_threshold: editNodeForm.timeoutThreshold,
+      heartbeat_interval: editNodeForm.heartbeatInterval,
+      probe_enabled: editNodeForm.probeEnabled,
+      metadata: JSON.stringify({
         timeout_threshold: editNodeForm.timeoutThreshold,
         heartbeat_interval: editNodeForm.heartbeatInterval,
         probe_enabled: editNodeForm.probeEnabled
-      }
+      })
     });
 
-    if (isRetInfoSuccess(response.data?.ret_info?.code)) {
-      Message.success('节点配置更新成功');
-      editNodeVisible.value = false;
-      handleEditNodeCancel();
-      // 刷新数据
-      await loadData();
-    } else {
-      throw new Error(response.data?.ret_info?.msg || '更新失败');
-    }
+    Message.success('节点配置更新成功');
+    editNodeVisible.value = false;
+    handleEditNodeCancel();
+    await loadData();
   } catch (error: any) {
     console.error('更新节点配置失败:', error);
     Message.error('更新节点配置失败: ' + (error?.message || '未知错误'));

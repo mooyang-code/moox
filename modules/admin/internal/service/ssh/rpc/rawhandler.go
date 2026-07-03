@@ -1,5 +1,5 @@
 // Package rpc 提供 ssh 直连端点（WebSocket 终端、SFTP 流式上传/下载）的裸 HTTP 处理器，
-// 经统一 HTTP 转发层 rawhandler 分派，废弃原 SSH 独立 HTTP 服务（端口 20180）。
+// 经统一 HTTP 转发层 rawhandler 分派。
 //
 // 鉴权由 session_id 完成（session 由 CreateSession RPC 创建时已校验登录态），
 // 网关 authorize 对这些路径放行（no_auth_methods），rawhandler 内部校验 session_id 有效性。

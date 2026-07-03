@@ -32,8 +32,7 @@ var lighthouseFirewallOpenCmd = &cobra.Command{
 	Use:   "open",
 	Short: "通过控制面云账户凭证开放轻量防火墙端口",
 	Long: `通过控制面后台 API 获取云账户明文凭证（reveal），自动调用 firewall add 开放端口。
-替代独立工具 admin/cmd/open-lighthouse-firewall：凭证不再从本地 SQLite DB 解密，
-而是走 /api/service/cloudnode/* 的 HMAC 签名鉴权从控制面获取。
+云账户归属独立 moox-cloudnode 服务，命令通过 /api/service/cloudnode/* 的 HMAC 签名鉴权从控制面获取凭证。
 
 示例：
   moox-cli ops tencent lighthouse firewall open \
@@ -83,7 +82,7 @@ func runLighthouseFirewallOpen(cmd *cobra.Command, opts lighthouseFirewallOpenOp
 		return fmt.Errorf("--service-access-key and --service-secret-key are required")
 	}
 
-	client := newCollectorAdminClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey)
+	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey)
 	ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 	defer cancel()
 
@@ -94,7 +93,7 @@ func runLighthouseFirewallOpen(cmd *cobra.Command, opts lighthouseFirewallOpenOp
 			return fmt.Errorf("list cloud accounts: %w", err)
 		}
 		for _, a := range accounts {
-			if a.IsDeleted != "true" && a.AccountID != "" {
+			if !a.IsDeleted && a.AccountID != "" {
 				accountID = a.AccountID
 				break
 			}

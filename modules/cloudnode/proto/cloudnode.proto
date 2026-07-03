@@ -1,0 +1,558 @@
+syntax = "proto3";
+
+package trpc.moox.cloudnode;
+
+import "moox_common.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen;cloudnodepb";
+
+// CloudNodeMgr 管理云节点、云函数代码包、异步 work_item 队列和同步调用。
+// 纯 RPC 服务，由统一 HTTP 转发层调度：
+//   - /api/admin/cloudnode/{method}（JWT，面向前端；space_id 由网关 X-Space-Id 注入 ctx）
+//   - /api/service/cloudnode/{method}（HMAC，面向 collector/外部工具；space_id 在 body）
+//
+// 响应设计：每个响应首字段 common.RetInfo（code/msg），code=SUCCESS(0) 表示成功。
+
+enum NodeStatusCode {
+  NODE_STATUS_UNSPECIFIED = 0;
+  NODE_STATUS_OFFLINE = 1;
+  NODE_STATUS_ONLINE = 2;
+  NODE_STATUS_TIMEOUT = 3;
+  NODE_STATUS_ABNORMAL = 4;
+}
+
+enum PackageStatus {
+  PACKAGE_STATUS_UNSPECIFIED = 0;
+  PACKAGE_STATUS_PENDING = 1;
+  PACKAGE_STATUS_AVAILABLE = 2;
+  PACKAGE_STATUS_FAILED = 3;
+  PACKAGE_STATUS_DELETED = 4;
+}
+
+enum PackageType {
+  PACKAGE_TYPE_UNSPECIFIED = 0;
+  PACKAGE_TYPE_COLLECTOR = 1;
+  PACKAGE_TYPE_FACTOR = 2;
+  PACKAGE_TYPE_CUSTOM = 3;
+}
+
+enum WorkItemStatus {
+  WORK_ITEM_STATUS_UNSPECIFIED = 0;
+  WORK_ITEM_STATUS_PENDING = 1;
+  WORK_ITEM_STATUS_LEASED = 2;
+  WORK_ITEM_STATUS_RUNNING = 3;
+  WORK_ITEM_STATUS_SUCCESS = 4;
+  WORK_ITEM_STATUS_FAILED = 5;
+}
+
+enum InvocationStatus {
+  INVOCATION_STATUS_UNSPECIFIED = 0;
+  INVOCATION_STATUS_SUCCESS = 1;
+  INVOCATION_STATUS_PARTIAL_FAILED = 2;
+  INVOCATION_STATUS_FAILED = 3;
+}
+
+enum ScfInvokeType {
+  SCF_INVOKE_TYPE_UNSPECIFIED = 0;
+  SCF_INVOKE_TYPE_REQUEST_RESPONSE = 1;
+  SCF_INVOKE_TYPE_EVENT = 2;
+}
+
+// CloudNode 云节点。
+message CloudNode {
+  int32 id = 1;
+  string space_id = 2;
+  string node_id = 3;
+  string cloud_account_id = 4;
+  string package_id = 5;
+  string package_version = 6;
+  string deployment_id = 7;
+  string running_version = 8;
+  string namespace = 9;
+  string node_type = 10;
+  string provider = 11;
+  string function_name = 12;
+  string biz_type = 13;
+  string region = 14;
+  string tag = 15;
+  string ip_address = 16;
+  repeated string supported_workloads = 17;
+  google.protobuf.Struct metadata = 18;
+  int32 timeout_threshold = 19;
+  int32 heartbeat_interval = 20;
+  bool probe_enabled = 21;
+  string probe_url = 22;
+  NodeStatusCode status = 23;
+  string last_heartbeat = 24;  // RFC3339，可为空
+  bool is_deleted = 25;
+  string create_time = 26;     // RFC3339
+  string modify_time = 27;     // RFC3339
+  string cls_topic_id = 28;
+}
+
+message GetNodeListReq {
+  string node_id = 1;
+  string cloud_account_id = 2;
+  string namespace = 3;
+  string region = 4;
+  string node_type = 5;
+  string biz_type = 6;
+  string tag = 7;
+  NodeStatusCode status = 8;
+  string keyword = 9;
+  common.Page page = 10;
+}
+
+message GetNodeListRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudNode items = 2;
+  common.PageResult page = 3;
+}
+
+message UpdateNodeReq {
+  CloudNode node = 1;
+}
+
+message UpdateNodeRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message InvokeFunctionReq {
+  string node_id = 1;
+  google.protobuf.Struct event_data = 2;
+  ScfInvokeType scf_invoke_type = 3;
+  string qualifier = 4;
+}
+
+message ScfInvokeResult {
+  int32 code = 1;
+  string message = 2;
+  string request_id = 3;
+  google.protobuf.Struct result = 4;
+  int64 duration = 5;
+  int64 bill_duration = 6;
+  int64 memory_usage = 7;
+}
+
+message InvokeFunctionRsp {
+  common.RetInfo ret_info = 1;
+  ScfInvokeResult scf = 2;
+}
+
+message NodeCreateItem {
+  string cloud_account_id = 1;
+  string node_type = 2;
+  string runtime = 3;
+  string handler = 4;
+  map<string, string> config = 5;
+  map<string, string> environment = 6;
+  string region = 7;
+  string namespace = 8;
+  string package_id = 9;
+  string deployment_id = 10;
+  google.protobuf.Struct metadata = 11;
+}
+
+message BatchCreateNodesReq {
+  repeated NodeCreateItem nodes = 1;
+}
+
+message BatchChangeResult {
+  common.RetInfo ret_info = 1;
+  string batch_id = 2;
+  int32 processed_count = 3;
+}
+
+message BatchDeleteNodesReq {
+  repeated string node_ids = 1;
+}
+
+message NodeDeployItem {
+  string node_id = 1;
+  string package_id = 2;
+}
+
+message BatchDeployNodesReq {
+  repeated NodeDeployItem deployments = 1;
+}
+
+message CloudAccountSummary {
+  int32 id = 1;
+  string account_id = 2;
+  string account_name = 3;
+  string provider = 4;
+  string app_id = 5;
+  string cos_region = 6;
+  string cos_bucket = 7;
+  string extra_config = 8;
+  bool is_deleted = 9;
+  string create_time = 10;
+  string modify_time = 11;
+}
+
+message CloudAccountInput {
+  string account_id = 1;
+  string account_name = 2;
+  string provider = 3;
+  string secret_id = 4;
+  string secret_key = 5;
+  string app_id = 6;
+  string cos_region = 7;
+  string cos_bucket = 8;
+  string extra_config = 9;
+}
+
+message ListCloudAccountsReq {
+  string provider = 1;
+}
+
+message ListCloudAccountsRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudAccountSummary accounts = 2;
+  int64 total = 3;
+}
+
+message CreateCloudAccountReq {
+  CloudAccountInput account = 1;
+}
+
+message CreateCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+  CloudAccountSummary account = 2;
+}
+
+message UpdateCloudAccountReq {
+  CloudAccountInput account = 1;
+}
+
+message UpdateCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message DeleteCloudAccountReq {
+  string account_id = 1;
+}
+
+message DeleteCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message CloudAccountSecret {
+  string account_id = 1;
+  string provider = 2;
+  string app_id = 3;
+  string cos_region = 4;
+  string cos_bucket = 5;
+  string secret_id = 6;
+  string secret_key = 7;
+}
+
+message GetCOSAccountInfoReq {
+  string account_id = 1;
+  bool reveal = 2;
+}
+
+message GetCOSAccountInfoRsp {
+  common.RetInfo ret_info = 1;
+  CloudAccountSecret secret = 2;
+}
+
+message CloudRegion {
+  string code = 1;
+  string name = 2;
+  string tag = 3;
+  int32 max_nodes = 4;
+  int32 max_namespaces_per_region = 5;
+  int32 max_functions_per_namespace = 6;
+}
+
+message ListCloudRegionsReq {
+  string provider = 1;
+}
+
+message ListCloudRegionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudRegion regions = 2;
+  int64 total = 3;
+}
+
+message PackageListItem {
+  string package_id = 1;
+  string package_name = 2;
+  string version = 3;
+  string description = 4;
+  string runtime = 5;
+  PackageType package_type = 6;
+  string biz_type = 7;
+  int64 file_size = 8;
+  string file_md5 = 9;
+  string cloud_account_id = 10;
+  string cos_region = 11;
+  PackageStatus status = 12;
+  string last_deploy_time = 13;
+  string created_time = 14;
+}
+
+message GetPackageListReq {
+  string package_name = 1;
+  string runtime = 2;
+  PackageType package_type = 3;
+  string biz_type = 4;
+  optional PackageStatus status = 5;
+  common.Page page = 6;
+}
+
+message GetPackageListRsp {
+  common.RetInfo ret_info = 1;
+  repeated PackageListItem items = 2;
+  common.PageResult page = 3;
+}
+
+message PackageDetail {
+  int64 id = 1;
+  string space_id = 2;
+  string package_id = 3;
+  string package_name = 4;
+  string version = 5;
+  string description = 6;
+  string runtime = 7;
+  PackageType package_type = 8;
+  string original_filename = 9;
+  int64 file_size = 10;
+  string file_md5 = 11;
+  string cloud_account_id = 12;
+  string cos_region = 13;
+  string cos_bucket = 14;
+  string cos_path = 15;
+  string cos_url = 16;
+  PackageStatus status = 17;
+  int32 upload_progress = 18;
+  string error_message = 19;
+  string last_deploy_time = 20;
+  bool is_deleted = 21;
+  string created_time = 22;
+  string updated_time = 23;
+}
+
+message GetPackageDetailReq {
+  string package_id = 1;
+}
+
+message GetPackageDetailRsp {
+  common.RetInfo ret_info = 1;
+  PackageDetail detail = 2;
+}
+
+message DeletePackageReq {
+  string package_id = 1;
+}
+
+message DeletePackageRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message PackageDownloadURL {
+  string package_id = 1;
+  string package_name = 2;
+  string version = 3;
+  string filename = 4;
+  string download_url = 5;
+  int64 file_size = 6;
+  string file_md5 = 7;
+}
+
+message GetPackageDownloadURLReq {
+  string package_id = 1;
+}
+
+message GetPackageDownloadURLRsp {
+  common.RetInfo ret_info = 1;
+  PackageDownloadURL url = 2;
+}
+
+message InitPackageUploadReq {
+  string package_name = 1;
+  string version = 2;
+  string description = 3;
+  string runtime = 4;
+  PackageType package_type = 5;
+  string biz_type = 6;
+  string original_filename = 7;
+  string cloud_account_id = 8;
+}
+
+message InitPackageUploadRsp {
+  common.RetInfo ret_info = 1;
+  string package_id = 2;
+  string upload_url = 3;
+  string cos_path = 4;
+  int64 expires_at = 5;
+}
+
+message CompletePackageUploadReq {
+  string package_id = 1;
+  string file_md5 = 2;
+  int64 file_size = 3;
+}
+
+message CompletePackageUploadRsp {
+  common.RetInfo ret_info = 1;
+  PackageDetail detail = 2;
+}
+
+message LocalDNSReportItem {
+  string domain = 1;
+  repeated string ip_list = 2;
+  string resolve_at = 3;
+}
+
+message ReportHeartbeatReq {
+  string space_id = 1;
+  string node_id = 2;
+  string node_type = 3;
+  string running_version = 4;
+  string source_service = 5;
+  string timestamp = 6;
+  google.protobuf.Struct metrics = 7;
+  google.protobuf.Struct metadata = 8;
+  repeated string supported_workloads = 9;
+  repeated LocalDNSReportItem local_dns_records = 10;
+}
+
+message ReportHeartbeatRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message CloudWorkItem {
+  string space_id = 1;
+  string owner_service = 2;
+  string owner_ref = 3;
+  string workload_type = 4;
+  string deployment_id = 5;
+  google.protobuf.Struct payload = 6;
+  int32 priority = 7;
+  int64 lease_timeout_ms = 8;
+}
+
+message SubmitWorkItemsReq {
+  repeated CloudWorkItem work_items = 1;
+}
+
+message CloudWorkItemAck {
+  string work_item_id = 1;
+  string owner_ref = 2;
+  WorkItemStatus status = 3;
+}
+
+message SubmitWorkItemsRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudWorkItemAck work_items = 2;
+  int32 submitted = 3;
+}
+
+message PollWorkItemsReq {
+  string space_id = 1;
+  string node_id = 2;
+  repeated string supported_workloads = 3;
+  int32 limit = 4;
+}
+
+message CloudWorkItemLease {
+  string work_item_id = 1;
+  string owner_service = 2;
+  string owner_ref = 3;
+  string workload_type = 4;
+  string deployment_id = 5;
+  google.protobuf.Struct payload = 6;
+  int32 priority = 7;
+  int32 attempt_no = 8;
+  string lease_deadline = 9;
+}
+
+message PollWorkItemsRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudWorkItemLease work_items = 2;
+  string poll_time = 3;
+}
+
+message ReportWorkItemStatusReq {
+  string space_id = 1;
+  string work_item_id = 2;
+  string node_id = 3;
+  WorkItemStatus status = 4;
+  google.protobuf.Struct result = 5;
+  string error_message = 6;
+  int64 duration_ms = 7;
+}
+
+message ReportWorkItemStatusRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message InvokeSyncPayload {
+  string request_id = 1;
+  string payload = 2;
+}
+
+message InvokeSyncReq {
+  string space_id = 1;
+  string owner_service = 2;
+  string workload_type = 3;
+  string deployment_id = 4;
+  repeated InvokeSyncPayload payloads = 5;
+  int32 max_parallelism = 6;
+  int64 timeout_ms = 7;
+  bool record_detail = 8;
+}
+
+message InvokeSyncResult {
+  string request_id = 1;
+  InvocationStatus status = 2;
+  string payload = 3;
+  string error_message = 4;
+  int64 duration_ms = 5;
+}
+
+message InvokeSyncRsp {
+  common.RetInfo ret_info = 1;
+  string invocation_id = 2;
+  InvocationStatus status = 3;
+  int32 success_count = 4;
+  int32 failed_count = 5;
+  int32 timeout_count = 6;
+  int64 duration_ms = 7;
+  repeated InvokeSyncResult results = 8;
+}
+
+service CloudNodeMgr {
+  rpc GetNodeList(GetNodeListReq) returns (GetNodeListRsp);
+  rpc UpdateNode(UpdateNodeReq) returns (UpdateNodeRsp);
+  rpc InvokeFunction(InvokeFunctionReq) returns (InvokeFunctionRsp);
+
+  rpc BatchCreateNodes(BatchCreateNodesReq) returns (BatchChangeResult);
+  rpc BatchDeleteNodes(BatchDeleteNodesReq) returns (BatchChangeResult);
+  rpc BatchDeployNodes(BatchDeployNodesReq) returns (BatchChangeResult);
+
+  rpc ListCloudAccounts(ListCloudAccountsReq) returns (ListCloudAccountsRsp);
+  rpc CreateCloudAccount(CreateCloudAccountReq) returns (CreateCloudAccountRsp);
+  rpc UpdateCloudAccount(UpdateCloudAccountReq) returns (UpdateCloudAccountRsp);
+  rpc DeleteCloudAccount(DeleteCloudAccountReq) returns (DeleteCloudAccountRsp);
+  rpc GetCOSAccountInfo(GetCOSAccountInfoReq) returns (GetCOSAccountInfoRsp);
+
+  rpc ListCloudRegions(ListCloudRegionsReq) returns (ListCloudRegionsRsp);
+
+  rpc GetPackageList(GetPackageListReq) returns (GetPackageListRsp);
+  rpc GetPackageDetail(GetPackageDetailReq) returns (GetPackageDetailRsp);
+  rpc DeletePackage(DeletePackageReq) returns (DeletePackageRsp);
+  rpc GetPackageDownloadURL(GetPackageDownloadURLReq) returns (GetPackageDownloadURLRsp);
+  rpc InitPackageUpload(InitPackageUploadReq) returns (InitPackageUploadRsp);
+  rpc CompletePackageUpload(CompletePackageUploadReq) returns (CompletePackageUploadRsp);
+
+  rpc ReportHeartbeat(ReportHeartbeatReq) returns (ReportHeartbeatRsp);
+
+  rpc SubmitWorkItems(SubmitWorkItemsReq) returns (SubmitWorkItemsRsp);
+  rpc PollWorkItems(PollWorkItemsReq) returns (PollWorkItemsRsp);
+  rpc ReportWorkItemStatus(ReportWorkItemStatusReq) returns (ReportWorkItemStatusRsp);
+  rpc InvokeSync(InvokeSyncReq) returns (InvokeSyncRsp);
+}

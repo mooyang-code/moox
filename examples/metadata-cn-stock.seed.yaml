@@ -5,7 +5,7 @@
 spaces:
   - space_id: cn_stock
     name: A股交易空间
-    description: A-share market data, factors, and research workspace
+    description: A-share market data, factors, and research space
     owner: default
     status: active
 

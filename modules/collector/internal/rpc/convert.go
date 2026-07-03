@@ -1,0 +1,182 @@
+package rpc
+
+import (
+	"encoding/json"
+	"strings"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	"google.golang.org/protobuf/types/known/structpb"
+)
+
+func toPBRule(rule domain.TaskRule) *pb.TaskRule {
+	enabled := rule.Enabled
+	return &pb.TaskRule{
+		SpaceId:        rule.SpaceID,
+		RuleId:         rule.RuleID,
+		DataType:       rule.DataType,
+		Exchange:       rule.Exchange,
+		CollectParams:  structFromJSONString(rule.CollectParams),
+		AssignmentType: rule.AssignmentType,
+		AssignedNodes:  stringsFromJSONString(rule.AssignedNodes),
+		NodePattern:    rule.NodePattern,
+		NodeTags:       stringsFromJSONString(rule.NodeTags),
+		Enabled:        &enabled,
+		Creator:        rule.Creator,
+		CreateTime:     formatTime(rule.CreateTime),
+		ModifyTime:     formatTime(rule.ModifyTime),
+	}
+}
+
+func fromPBRule(rule *pb.TaskRule) domain.TaskRule {
+	if rule == nil {
+		return domain.TaskRule{}
+	}
+	return domain.TaskRule{
+		SpaceID:        rule.GetSpaceId(),
+		RuleID:         rule.GetRuleId(),
+		DataType:       rule.GetDataType(),
+		Exchange:       rule.GetExchange(),
+		CollectParams:  jsonStringFromStruct(rule.GetCollectParams()),
+		AssignmentType: rule.GetAssignmentType(),
+		AssignedNodes:  jsonStringFromStrings(rule.GetAssignedNodes()),
+		NodePattern:    rule.GetNodePattern(),
+		NodeTags:       jsonStringFromStrings(rule.GetNodeTags()),
+		Enabled:        taskRuleEnabled(rule),
+		Creator:        rule.GetCreator(),
+	}
+}
+
+func taskRuleEnabled(rule *pb.TaskRule) bool {
+	if rule.Enabled == nil {
+		return true
+	}
+	return rule.GetEnabled()
+}
+
+func toPBInstance(instance domain.TaskInstance) *pb.TaskInstance {
+	return &pb.TaskInstance{
+		SpaceId:         instance.SpaceID,
+		TaskId:          instance.TaskID,
+		RuleId:          instance.RuleID,
+		Exchange:        instance.Exchange,
+		Market:          instance.Market,
+		DataType:        instance.DataType,
+		DatasetId:       instance.DatasetID,
+		SubjectId:       instance.SubjectID,
+		Symbol:          instance.Symbol,
+		Interval:        instance.Interval,
+		TaskParams:      structFromJSONString(instance.TaskParams),
+		PlannedExecNode: instance.PlannedExecNode,
+		LastExecNode:    instance.LastExecNode,
+		LastExecStatus:  toPBStatus(instance.LastExecStatus),
+		LastExecTime:    formatPtrTime(instance.LastExecTime),
+		Result:          structFromJSONString(instance.Result),
+		IsDeleted:       instance.IsDeleted,
+		CreateTime:      formatTime(instance.CreateTime),
+		ModifyTime:      formatTime(instance.ModifyTime),
+	}
+}
+
+func toPBStatus(status int) pb.TaskInstanceStatus {
+	switch status {
+	case domain.InstanceStatusPending:
+		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PENDING
+	case domain.InstanceStatusRunning:
+		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_RUNNING
+	case domain.InstanceStatusSuccess:
+		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS
+	case domain.InstanceStatusPartFailed:
+		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PART_FAILED
+	case domain.InstanceStatusFailed:
+		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED
+	default:
+		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_UNSPECIFIED
+	}
+}
+
+func fromPBStatus(status pb.TaskInstanceStatus) int {
+	switch status {
+	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PENDING:
+		return domain.InstanceStatusPending
+	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_RUNNING:
+		return domain.InstanceStatusRunning
+	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS:
+		return domain.InstanceStatusSuccess
+	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PART_FAILED:
+		return domain.InstanceStatusPartFailed
+	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED:
+		return domain.InstanceStatusFailed
+	default:
+		return 0
+	}
+}
+
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func formatPtrTime(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return formatTime(*t)
+}
+
+func structFromJSONString(raw string) *structpb.Struct {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return &structpb.Struct{Fields: map[string]*structpb.Value{}}
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		out, _ := structpb.NewStruct(map[string]any{"raw": raw})
+		return out
+	}
+	if fields, ok := decoded.(map[string]any); ok {
+		out, err := structpb.NewStruct(fields)
+		if err == nil {
+			return out
+		}
+	}
+	out, _ := structpb.NewStruct(map[string]any{"value": decoded})
+	return out
+}
+
+func jsonStringFromStruct(value *structpb.Struct) string {
+	if value == nil {
+		return "{}"
+	}
+	raw, err := json.Marshal(value.AsMap())
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func stringsFromJSONString(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil
+	}
+	return values
+}
+
+func jsonStringFromStrings(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
+	}
+	return string(raw)
+}

@@ -14,12 +14,18 @@ make deploy
 
 Environment variables:
 
-- `REMOTE_HOST`: 部署目标机 IP；新部署应由初始化流程询问获得。
-- `REMOTE_SSH`: override full SSH target；也可以直接使用 `scripts/deploy-moox.sh --target user@host`。
+- `MOOX_DEV_SSH_TARGET`: optional SSH target for developer scripts.
+- `scripts/deploy-moox.sh --target user@host`: preferred explicit deploy target.
 - `REMOTE_ROOT`: default `~/moox`.
-- `CSV_DIR`: location of acceptance CSV files.
-- `STORAGE_URL`: moox-storage Access Service HTTP endpoint for acceptance writes；运行时服务部署信息以 `t_service_deployments` 为准。
+- `MOOX_COLLECTOR_ADMIN_GATEWAY_URL`: optional override for Collector SysDeploy dependency discovery; deploy defaults to `http://127.0.0.1:11000`.
+- `MOOX_SERVICE_AUTH_ACCESS_KEY` / `MOOX_SERVICE_AUTH_SECRET_KEY`: backend service auth used by Collector when calling `/api/service/sysdeploy/*`; deploy defaults mirror `modules/admin/config/gateway.yaml` development values unless overridden.
 
-Deployment uploads binaries, docs, skills, build scripts, and sample CSV files when they exist. It then runs the CSV acceptance script on the remote host.
+`make release` creates a binary archive with binaries, docs, configs, schemas, and examples.
 
-`infra/infra.local.yaml` is not the source of service deployment topology. After the admin plane is reachable, write and update service host/port/base URL rows through SysDeploy (`t_service_deployments`).
+`make deploy` creates or syncs a runnable deployment directory with binaries, configs, schemas, examples, and runtime helper scripts such as `start.sh`, `stop.sh`, and `status.sh`.
+
+Runtime data can be deleted and rebuilt from `examples/` and service flows after deployment.
+
+Source-only developer assets such as build/release/boundary-check scripts, SCF package builders, and repository skills stay in the source tree. They are not copied into binary release packages because they require repository context.
+
+After the admin plane is reachable, write and update service host/port/base URL rows through SysDeploy (`t_service_deployments`).

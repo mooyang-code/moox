@@ -4,6 +4,7 @@ package trpc.moox.storage;
 
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
 
+import "moox_common.proto";
 import "common.proto";
 
 // PrimaryStoreKey 是在线主存内部统一键模型，不作为用户侧 API 暴露。
@@ -52,7 +53,7 @@ message PrimaryStoreTarget {
 // WritePrimaryRowsReq 表示写入在线主存行的内部请求。
 message WritePrimaryRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
-  AuthInfo auth_info = 1;
+  common.AuthInfo auth_info = 1;
   // target 是在线主存目标位置。
   PrimaryStoreTarget target = 2;
   // rows 是已完成路由的数据行。
@@ -62,13 +63,13 @@ message WritePrimaryRowsReq {
 // WritePrimaryRowsRsp 表示在线主存行写入结果。
 message WritePrimaryRowsRsp {
   // ret_info 是接口返回状态。
-  RetInfo ret_info = 1;
+  common.RetInfo ret_info = 1;
 }
 
 // ReadPrimaryRowsReq 表示读取在线主存行的内部请求。
 message ReadPrimaryRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
-  AuthInfo auth_info = 1;
+  common.AuthInfo auth_info = 1;
   // target 是在线主存目标位置。
   PrimaryStoreTarget target = 2;
   // keys 是内部数据 key；范围读时 key.version 可为空，实际版本集合由 version_range 表达。
@@ -80,23 +81,23 @@ message ReadPrimaryRowsReq {
   // column_names 是要返回的列名；为空时返回整行。
   repeated string column_names = 6;
   // page 是分页参数。
-  Page page = 7;
+  common.Page page = 7;
 }
 
 // ReadPrimaryRowsRsp 表示在线主存行读取结果。
 message ReadPrimaryRowsRsp {
   // ret_info 是接口返回状态。
-  RetInfo ret_info = 1;
+  common.RetInfo ret_info = 1;
   // rows 是读取到的数据行。
   repeated PrimaryStoreRow rows = 2;
   // page_result 是分页结果。
-  PageResult page_result = 3;
+  common.PageResult page_result = 3;
 }
 
 // ScanPrimaryRowsReq 表示按 PrimaryStore 目标和数据形态扫描在线主存行的内部请求。
 message ScanPrimaryRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
-  AuthInfo auth_info = 1;
+  common.AuthInfo auth_info = 1;
   // target 是在线主存目标位置。
   PrimaryStoreTarget target = 2;
   // data_kind 标识要扫描的物理键空间。
@@ -108,17 +109,17 @@ message ScanPrimaryRowsReq {
   // column_names 是要返回的列名；为空时返回整行。
   repeated string column_names = 6;
   // page 是分页参数，推荐使用 cursor 做大批量扫描。
-  Page page = 7;
+  common.Page page = 7;
 }
 
 // ScanPrimaryRowsRsp 表示在线主存扫描结果。
 message ScanPrimaryRowsRsp {
   // ret_info 是接口返回状态。
-  RetInfo ret_info = 1;
+  common.RetInfo ret_info = 1;
   // rows 是扫描到的数据行。
   repeated PrimaryStoreRow rows = 2;
   // page_result 是分页结果。
-  PageResult page_result = 3;
+  common.PageResult page_result = 3;
 }
 
 // PrimaryStore 是 Access 调用在线事实主存的内部执行服务。

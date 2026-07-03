@@ -1,5 +1,6 @@
-PROTO_FILES := moox_common.proto admin_service.proto ops_service.proto collect_service.proto infra_service.proto secret_service.proto sysdeploy_service.proto
+PROTO_FILES := admin_service.proto ops_service.proto infra_service.proto secret_service.proto sysdeploy_service.proto
 OUTPUT_DIR := ./admingen
+COMMON_PROTO_DIR := ../../../packages/commonpb
 
 .PHONY: all clean
 
@@ -9,6 +10,8 @@ all:
 		echo "trpc-open create $$proto"; \
 		trpc-open create \
 			-p "./$$proto" \
+			--protodir . \
+			--protodir $(COMMON_PROTO_DIR) \
 			--rpconly \
 			--nogomod \
 			--mock=false \

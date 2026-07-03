@@ -1,13 +1,9 @@
-export interface ControlResponse<T> {
-  code?: number | string;
-  message?: string;
-  msg?: string;
-  ret_info?: {
-    code?: number | string;
+export type ControlResponse<T> = T & {
+  ret_info: {
+    code?: number;
     msg?: string;
   };
-  data?: T;
-}
+};
 
 export interface PageReq {
   page?: number;

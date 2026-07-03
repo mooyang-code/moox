@@ -1,0 +1,29 @@
+# MooX Collector control-plane service configuration.
+
+database:
+  type: sqlite
+  path: ./data/moox_collector.db
+  max_idle_conns: 10
+  max_open_conns: 50
+  conn_max_lifetime: 1h
+  conn_max_idle_time: 10m
+
+cloudnode:
+  # 本地开发默认值；生产部署应通过 t_service_deployments / SysDeploy active 部署信息解析依赖服务。
+  address: 127.0.0.1:11401
+  service_path: trpc.moox.cloudnode.CloudNodeMgr
+
+storage:
+  # 本地开发默认值；生产部署应通过 t_service_deployments / SysDeploy active 部署信息解析依赖服务。
+  metadata_target: 127.0.0.1:20100
+  access_target: 127.0.0.1:20102
+
+sysdeploy:
+  # Collector 控制面通过 admin 网关 /api/service/cloudnode/* 提交 work_item。
+  # 本地开发默认指向 moox-admin gateway（11000）；生产环境应配置实际 admin 网关地址。
+  admin_gateway_url: "http://127.0.0.1:11000"
+  service_auth:
+    version: "moox-auth-v1"
+    access_key: "moox-service"
+    secret_key: "moox-service-secret-change-me"
+    expire_seconds: 1800

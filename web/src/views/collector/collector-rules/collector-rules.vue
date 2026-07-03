@@ -337,16 +337,15 @@
 <script setup lang="ts">
 import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, computed, onMounted, watch } from 'vue';
-import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
-import service from '@/api/index';
-import { isRetInfoSuccess } from '@/api/ret-info';
-import { appAuthHeaders } from '@/api/storage/auth';
+import { callControl } from '@/api/admin/http';
+import { getNodeList as fetchCloudNodeList } from '@/api/cloud-node';
 import { useSpaceStore } from '@/store/modules/space';
 import { useUserInfoStore } from '@/store/modules/user-info';
 import { storeToRefs } from 'pinia';
 
 interface TaskConfig {
+  id?: number;
   rule_id: string;
   space_id: string;
   data_type: string;
@@ -367,7 +366,7 @@ interface DataTypeConfig {
   data_type: string;
   type_name: string;
   type_desc: string;
-  data_source_options: string;
+  data_source_options: Record<string, any>;
   sort_order: number;
   version: number;
   create_time: string;
@@ -380,10 +379,10 @@ interface FieldConfig {
   field_key: string;
   field_name: string;
   field_type: string;
-  required_flag: number;
-  default_value: string;
-  field_options: string;
-  data_source_options: string;
+  is_required: boolean;
+  default_value: any;
+  field_options: Record<string, any>;
+  data_source_options: Record<string, any>;
   sort_order: number;
   create_time: string;
   modify_time: string;
@@ -395,16 +394,6 @@ interface FieldConfig {
 // }
 
 const loading = ref(false);
-const route = useRoute();
-
-// 根据路由路径判断当前的业务类型
-const currentBizType = computed(() => {
-  const path = route.path;
-  if (path.includes('/factor/')) {
-    return 'factor_calculator';
-  }
-  return 'data_collector';
-});
 const submitLoading = ref(false);
 const taskList = ref<TaskConfig[]>([]);
 const selectedKeys = ref<string[]>([]);
@@ -530,6 +519,61 @@ const hasField = (fieldKey: string) => {
   return allowedFields.includes(fieldKey);
 };
 
+const normalizeCollectToken = (value: any, fallback = '') => {
+  const text = String(value || '').trim().toLowerCase();
+  return text || fallback;
+};
+
+const inferCollectMarket = (instTypeValue: any) => {
+  const instType = String(instTypeValue || '').trim().toUpperCase();
+  if (instType === 'SWAP' || instType === 'FUTURES') {
+    return 'swap';
+  }
+  return 'spot';
+};
+
+const inferCollectDatasetId = (exchange: string, market: string, dataType: string) => {
+  return `${exchange || 'binance'}_${market || 'spot'}_${dataType || 'kline'}`;
+};
+
+const buildStandardCollectParams = () => {
+  const dataType = normalizeCollectToken(addForm.value.data_type, 'kline');
+  const exchange = normalizeCollectToken(addForm.value.data_source, 'binance');
+  const instTypesValue = getDynamicFieldValue('inst_types');
+  const instTypes = Array.isArray(instTypesValue) ? instTypesValue : [];
+  const market = inferCollectMarket(getDynamicFieldValue('inst_type') || instTypes[0]);
+  const intervalsValue = getDynamicFieldValue('intervals');
+  const intervals = (Array.isArray(intervalsValue) ? intervalsValue : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+  const normalizedIntervals = dataType === 'symbol' ? [] : (intervals.length > 0 ? intervals : ['1m']);
+  const datasetId = inferCollectDatasetId(exchange, market, dataType);
+  const workloadType = `collector.${exchange}.${market}.${dataType}`;
+
+  return {
+    source: {
+      kind: dataType === 'symbol' ? 'none' : 'dataset_subjects',
+      dataset_id: datasetId
+    },
+    collector: {
+      exchange,
+      market,
+      data_type: dataType,
+      intervals: normalizedIntervals
+    },
+    target: {
+      dataset_id: datasetId,
+      workload_type: workloadType,
+      deployment_id: `collector-${exchange}-${dataType}-v1`
+    },
+    schedule: {
+      interval: '30m',
+      timezone: 'Asia/Shanghai',
+      intervals: normalizedIntervals
+    }
+  };
+};
+
 // K线周期选项（常量，避免每次渲染重新创建）
 const INTERVAL_OPTIONS = [
   { label: '1分钟', value: '1m' },
@@ -591,6 +635,82 @@ const getDataSourceLabel = (value: string) => {
   return labels[value] || value;
 };
 
+// 当前 collector 只内置 Binance 实现。不要在管理台暴露尚未实现的数据源，
+// 避免生成无法执行的采集规则。
+const supportedDataSourceOptions = [
+  { label: '币安 (Binance)', value: 'binance' }
+];
+
+const supportedDataSourceValues = new Set(supportedDataSourceOptions.map((option) => option.value));
+
+const toSupportedDataSourceOptions = (options: Array<{ label?: string; value?: string }>) => {
+  const normalized = options
+    .filter((option) => option.value && supportedDataSourceValues.has(option.value))
+    .map((option) => ({
+      label: option.label || getDataSourceLabel(option.value as string),
+      value: option.value as string
+    }));
+  return normalized.length > 0 ? normalized : supportedDataSourceOptions;
+};
+
+const normalizeObject = (value: any): Record<string, any> => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' ? parsed : { value: parsed };
+  } catch {
+    return { raw: String(value) };
+  }
+};
+
+const normalizeArray = (value: any): string[] => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item));
+  }
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(String(value));
+    return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [];
+  } catch {
+    return [];
+  }
+};
+
+const normalizeTaskConfig = (raw: any): TaskConfig => ({
+  id: raw.id,
+  rule_id: raw.rule_id || '',
+  space_id: raw.space_id || '',
+  data_type: raw.data_type || '',
+  data_source: raw.exchange || raw.data_source || '',
+  assignment_type: raw.assignment_type || 'auto',
+  assigned_nodes: JSON.stringify(normalizeArray(raw.assigned_nodes)),
+  node_pattern: raw.node_pattern || '',
+  node_tags: JSON.stringify(normalizeArray(raw.node_tags)),
+  collect_params: JSON.stringify(normalizeObject(raw.collect_params)),
+  enabled: (raw.enabled ?? true) ? 'true' : 'false',
+  creator: raw.creator || '',
+  create_time: raw.create_time || '',
+  modify_time: raw.modify_time || ''
+});
+
+const dataSourceOptionsFromConfig = (value: any) => {
+  const config = normalizeObject(value);
+  if (config.options && Array.isArray(config.options)) {
+    return toSupportedDataSourceOptions(config.options.map((option: any) => ({
+      label: option.label || getDataSourceLabel(option.value),
+      value: option.value
+    })));
+  }
+  if (Array.isArray(value)) {
+    return toSupportedDataSourceOptions(value.map((source: string) => ({
+      label: getDataSourceLabel(source),
+      value: source
+    })));
+  }
+  return [];
+};
+
 // 获取搜索用的数据源选项
 const getSearchDataSourceOptions = () => {
   if (!form.value.dataType) {
@@ -603,37 +723,10 @@ const getSearchDataSourceOptions = () => {
     return [];
   }
   
-  try {
-    const config = JSON.parse(selectedConfig.data_source_options);
-    
-    // 处理对象格式 {"options": [{"value": "binance", "label": "币安"}]}
-    if (config.options && Array.isArray(config.options)) {
-      return config.options.map((option: any) => ({
-        label: option.label || getDataSourceLabel(option.value),
-        value: option.value
-      }));
-    } 
-    // 处理数组格式 ["binance", "okx"]
-    else if (Array.isArray(config)) {
-      return config.map((source: string) => ({
-        label: getDataSourceLabel(source),
-        value: source
-      }));
-    }
-  } catch (error) {
-    console.error('解析数据源配置失败:', error);
-  }
-  
-  return [];
+  return dataSourceOptionsFromConfig(selectedConfig.data_source_options);
 };
 
-const formatJSON = (str: string) => {
-  try {
-    return JSON.stringify(JSON.parse(str || '{}'), null, 2);
-  } catch {
-    return str || '-';
-  }
-};
+const formatJSON = (value: any) => JSON.stringify(normalizeObject(value), null, 2);
 
 // 格式化时间为本地时间格式
 const formatDateTime = (dateTime: string) => {
@@ -685,9 +778,8 @@ const search = () => {
   getTaskList();
 };
 
-const onEnabledChange = (value: boolean) => {
+const onEnabledChange = () => {
   // 当启用状态开关变化时，重新查询列表
-  console.log('启用状态变化为:', value ? '启用' : '禁用');
   search();
 };
 
@@ -702,30 +794,31 @@ const reset = () => {
 };
 
 const getTaskList = async () => {
+  const spaceId = selectedSpaceId.value || '';
+  if (!spaceId) {
+    taskList.value = [];
+    pagination.value.total = 0;
+    loading.value = false;
+    return;
+  }
   loading.value = true;
   try {
     const params: any = {
-      space_id: selectedSpaceId.value || '',
-      biz_type: currentBizType.value
+      space_id: spaceId,
+      page: {
+        page: pagination.value.current,
+        size: pagination.value.pageSize
+      }
     };
 
     if (form.value.ruleId) params.rule_id = form.value.ruleId;
     if (form.value.dataType) params.data_type = form.value.dataType;
-    if (form.value.dataSource) params.data_source = form.value.dataSource;
-    if (form.value.enabled !== null) params.enabled = form.value.enabled ? 'true' : 'false';
+    if (form.value.dataSource) params.exchange = form.value.dataSource;
+    if (form.value.enabled !== null) params.enabled = form.value.enabled;
 
-    const response = await service.post('/api/admin/collectmgr/GetTaskRuleList', params, {
-      headers: appAuthHeaders()
-    });
-
-    // 新协议：ret_info.code 为成功标识，业务字段 rules/total 在顶层
-    const data = response as any;
-    if (isRetInfoSuccess(data?.ret_info?.code)) {
-      taskList.value = data.rules || [];
-      pagination.value.total = Number(data.total) || (data.rules ? data.rules.length : 0);
-    } else {
-      Message.error(data?.ret_info?.msg || '获取任务列表失败');
-    }
+    const data = await callControl<typeof params, { rules?: any[]; page?: { total?: number } }>('collectmgr', 'GetTaskRuleList', params);
+    taskList.value = (data.rules || []).map(normalizeTaskConfig);
+    pagination.value.total = Number(data.page?.total) || (data.rules ? data.rules.length : 0);
   } catch (error) {
     console.error('获取任务列表失败:', error);
     Message.error('获取任务列表失败');
@@ -736,15 +829,8 @@ const getTaskList = async () => {
 
 const getNodeList = async () => {
   try {
-    const response = await service.post('/api/admin/cloudnode/GetNodeList', {}, {
-      headers: appAuthHeaders()
-    });
-    const data = response as any;
-    if (isRetInfoSuccess(data?.ret_info?.code)) {
-      nodeOptions.value = data.nodes || [];
-    } else {
-      Message.error(data?.ret_info?.msg || '获取节点列表失败');
-    }
+    const data = await fetchCloudNodeList();
+    nodeOptions.value = data.items || [];
   } catch (error) {
     console.error('获取节点列表失败:', error);
   }
@@ -753,15 +839,8 @@ const getNodeList = async () => {
 // 获取数据类型配置
 const getDataTypeConfigs = async () => {
   try {
-    const response = await service.post('/api/admin/collectmgr/GetDataTypeConfigs', {}, {
-      headers: appAuthHeaders()
-    });
-    const data = response as any;
-    if (isRetInfoSuccess(data?.ret_info?.code)) {
-      dataTypeConfigs.value = data.configs || [];
-    } else {
-      Message.error(data?.ret_info?.msg || '获取数据类型配置失败');
-    }
+    const data = await callControl<Record<string, never>, { configs?: DataTypeConfig[] }>('collectmgr', 'GetDataTypeConfigs', {});
+    dataTypeConfigs.value = data.configs || [];
   } catch (error) {
     console.error('获取数据类型配置失败:', error);
     Message.error('获取数据类型配置失败');
@@ -776,32 +855,28 @@ const getFieldConfigs = async (dataType: string) => {
   }
 
   try {
-    const response = await service.post('/api/admin/collectmgr/GetDataTypeConfigWithFields', { data_type: dataType }, {
-      headers: appAuthHeaders()
-    });
-    const data = response as any;
-    if (isRetInfoSuccess(data?.ret_info?.code)) {
-      const detail = data.detail || null;
-      if (detail) {
-        currentFieldConfigs.value = detail.fields || [];
-        // 注意：不在这里调用 initializeDynamicFormData，由调用方控制初始化
-        // 加载数据源选项，优先使用数据类型配置中的数据源选项
-        if (detail.config?.data_source_options) {
-          loadDataSourceOptions(detail.config.data_source_options);
-        } else if (detail.fields && detail.fields.length > 0 && detail.fields[0].data_source_options) {
-          // 如果数据类型配置中没有，尝试使用字段配置中的数据源选项
-          loadDataSourceOptions(detail.fields[0].data_source_options);
-        } else {
-          // 如果都没有，使用默认选项
-          loadDataSourceOptions();
-        }
+    const data = await callControl<{ data_type: string }, { detail?: { config?: DataTypeConfig; fields?: FieldConfig[] } }>(
+      'collectmgr',
+      'GetDataTypeConfigWithFields',
+      { data_type: dataType }
+    );
+    const detail = data.detail || null;
+    if (detail) {
+      currentFieldConfigs.value = detail.fields || [];
+      // 注意：不在这里调用 initializeDynamicFormData，由调用方控制初始化
+      // 加载数据源选项，优先使用数据类型配置中的数据源选项
+      if (detail.config?.data_source_options) {
+        loadDataSourceOptions(detail.config.data_source_options);
+      } else if (detail.fields && detail.fields.length > 0 && detail.fields[0].data_source_options) {
+        // 如果数据类型配置中没有，尝试使用字段配置中的数据源选项
+        loadDataSourceOptions(detail.fields[0].data_source_options);
       } else {
-        currentFieldConfigs.value = [];
-        dataSourceOptions.value = [];
+        // 如果都没有，使用默认选项
+        loadDataSourceOptions();
       }
     } else {
-      Message.error(data?.ret_info?.msg || '获取字段配置失败');
       currentFieldConfigs.value = [];
+      dataSourceOptions.value = [];
     }
   } catch (error) {
     console.error('获取字段配置失败:', error);
@@ -977,57 +1052,16 @@ const onDataTypeChange = (value: string) => {
 };
 
 // 加载数据源选项
-const loadDataSourceOptions = (dataSources?: string) => {
+const loadDataSourceOptions = (dataSources?: any) => {
   loadingDataSources.value = true;
   dataSourceOptions.value = [];
   
   if (dataSources) {
-    try {
-      // 解析数据源配置
-      const config = JSON.parse(dataSources);
-      
-      // 处理对象格式 {"options": [{"value": "binance", "label": "币安"}]}
-      if (config.options && Array.isArray(config.options)) {
-        dataSourceOptions.value = config.options.map((option: any) => ({
-          label: option.label || getDataSourceLabel(option.value),
-          value: option.value
-        }));
-      } 
-      // 处理数组格式 ["binance", "okx"]
-      else if (Array.isArray(config)) {
-        dataSourceOptions.value = config.map((source: string) => ({
-          label: getDataSourceLabel(source),
-          value: source
-        }));
-      }
-      else {
-        console.warn('未知的数据源配置格式:', config);
-        // 格式不匹配时提供默认选项
-        dataSourceOptions.value = [
-          { label: '币安 (Binance)', value: 'binance' },
-          { label: 'OKX', value: 'okx' },
-          { label: '火币 (Huobi)', value: 'huobi' },
-          { label: 'Bybit', value: 'bybit' }
-        ];
-      }
-    } catch (error) {
-      console.error('解析数据源配置失败:', error);
-      // 解析失败时提供默认选项
-      dataSourceOptions.value = [
-        { label: '币安 (Binance)', value: 'binance' },
-        { label: 'OKX', value: 'okx' },
-        { label: '火币 (Huobi)', value: 'huobi' },
-        { label: 'Bybit', value: 'bybit' }
-      ];
-    }
+    const options = dataSourceOptionsFromConfig(dataSources);
+    dataSourceOptions.value = options.length > 0 ? options : supportedDataSourceOptions;
   } else {
-    // 如果没有提供数据源配置，提供默认选项
-    dataSourceOptions.value = [
-      { label: '币安 (Binance)', value: 'binance' },
-      { label: 'OKX', value: 'okx' },
-      { label: '火币 (Huobi)', value: 'huobi' },
-      { label: 'Bybit', value: 'bybit' }
-    ];
+    // 如果没有提供数据源配置，仅提供当前已实现的数据源
+    dataSourceOptions.value = supportedDataSourceOptions;
   }
   
   loadingDataSources.value = false;
@@ -1079,6 +1113,11 @@ const handleOk = async (): Promise<boolean> => {
       Message.error('请选择数据源');
       return false;
     }
+    const spaceId = addForm.value.space_id || selectedSpaceId.value || '';
+    if (!spaceId) {
+      Message.error('请选择空间');
+      return false;
+    }
 
     // 验证交易标的（当数据类型需要 objects 字段时）
     if (hasField('objects') && (!objectsValue.value || objectsValue.value.length === 0)) {
@@ -1094,41 +1133,20 @@ const handleOk = async (): Promise<boolean> => {
       addForm.value.node_tags = JSON.stringify(nodeTagsList.value || []);
     }
 
-    // 处理采集参数 - 只提取当前数据类型允许的字段
-    const dataType = addForm.value.data_type?.toLowerCase() || '';
-    const allowedFields = COLLECT_PARAMS_FIELDS[dataType] || COLLECT_PARAMS_FIELDS['default'];
-    const filteredParams: { [key: string]: any } = {
-      // 添加数据类型信息
-      data_type: addForm.value.data_type,
-      data_source: addForm.value.data_source
-    };
-    for (const field of allowedFields) {
-      const value = getDynamicFieldValue(field);
-      if (value !== undefined && value !== null) {
-        // 数组字段：如果不是空数组才添加
-        if (Array.isArray(value)) {
-          if (value.length > 0) {
-            filteredParams[field] = value;
-          }
-        } else {
-          filteredParams[field] = value;
-        }
-      }
-    }
-    addForm.value.collect_params = JSON.stringify(filteredParams);
+    addForm.value.collect_params = JSON.stringify(buildStandardCollectParams());
+    const collectParams = normalizeObject(addForm.value.collect_params);
 
     // 准备请求数据
     const requestData: any = {
-      biz_type: currentBizType.value,
-      space_id: addForm.value.space_id || selectedSpaceId.value || '',
+      space_id: spaceId,
       data_type: addForm.value.data_type,
-      data_source: addForm.value.data_source,
+      exchange: addForm.value.data_source,
       assignment_type: addForm.value.assignment_type,
-      assigned_nodes: addForm.value.assigned_nodes || '[]',
+      assigned_nodes: normalizeArray(addForm.value.assigned_nodes),
       node_pattern: addForm.value.node_pattern || '',
-      node_tags: addForm.value.node_tags || '[]',
-      collect_params: addForm.value.collect_params,
-      enabled: addForm.value.enabled || 'true',
+      node_tags: normalizeArray(addForm.value.node_tags),
+      collect_params: collectParams,
+      enabled: addForm.value.enabled !== 'false',
       creator: addForm.value.creator || account.value.user?.userName || ''
     };
 
@@ -1137,29 +1155,21 @@ const handleOk = async (): Promise<boolean> => {
       requestData.rule_id = addForm.value.rule_id;
     }
 
-    const endpoint = title.value.includes('新建') ? '/api/admin/collectmgr/CreateTaskRule' : '/api/admin/collectmgr/UpdateTaskRule';
+    const method = title.value.includes('新建') ? 'CreateTaskRule' : 'UpdateTaskRule';
 
     submitLoading.value = true;
-    // 发送请求
-    const response = await service.post(endpoint, requestData, {
-      headers: appAuthHeaders()
-    });
-
-    const data = response as any;
-
-    if (isRetInfoSuccess(data?.ret_info?.code)) {
-      if (title.value.includes('新建')) {
-        const ruleId = data.rule_id || '未知';
-        Message.success(`创建成功，规则ID：${ruleId}`);
-      } else {
-        Message.success('更新成功');
-      }
-      getTaskList();
-      return true;
+    const payload = title.value.includes('新建')
+      ? { rule: requestData }
+      : { space_id: requestData.space_id, rule_id: requestData.rule_id, rule: requestData };
+    const data = await callControl<typeof payload, { rule_id?: string }>('collectmgr', method, payload);
+    if (title.value.includes('新建')) {
+      const ruleId = data.rule_id || '未知';
+      Message.success(`创建成功，规则ID：${ruleId}`);
     } else {
-      Message.error(data?.ret_info?.msg || (title.value.includes('新建') ? '创建失败' : '更新失败'));
-      return false;
+      Message.success('更新成功');
     }
+    getTaskList();
+    return true;
   } catch (error) {
     if (error && typeof error === 'object' && (error as any).message) {
       Message.error(`网络请求失败: ${(error as any).message}`);
@@ -1178,20 +1188,31 @@ const handleOk = async (): Promise<boolean> => {
 
 const handleEnableChange = async (record: TaskConfig, value: boolean) => {
   try {
-    const response = await service.post('/api/admin/collectmgr/UpdateTaskRule', {
-      ...record,
-      enabled: value ? 'true' : 'false'
-    }, {
-      headers: appAuthHeaders()
-    });
-
-    const data = response as any;
-    if (isRetInfoSuccess(data?.ret_info?.code)) {
-      Message.success('状态更新成功');
-      getTaskList();
-    } else {
-      Message.error(data?.ret_info?.msg || '状态更新失败');
+    const spaceId = record.space_id || selectedSpaceId.value || '';
+    if (!spaceId) {
+      Message.error('请选择空间');
+      return;
     }
+    const rule = {
+      space_id: spaceId,
+      rule_id: record.rule_id,
+      data_type: record.data_type,
+      exchange: record.data_source,
+      assignment_type: record.assignment_type,
+      assigned_nodes: normalizeArray(record.assigned_nodes),
+      node_pattern: record.node_pattern || '',
+      node_tags: normalizeArray(record.node_tags),
+      collect_params: normalizeObject(record.collect_params),
+      enabled: value,
+      creator: record.creator || account.value.user?.userName || ''
+    };
+    await callControl<Record<string, any>, Record<string, never>>('collectmgr', 'UpdateTaskRule', {
+      space_id: spaceId,
+      rule_id: record.rule_id,
+      rule
+    });
+    Message.success('状态更新成功');
+    getTaskList();
   } catch (error) {
     console.error('状态更新失败:', error);
     Message.error('状态更新失败');

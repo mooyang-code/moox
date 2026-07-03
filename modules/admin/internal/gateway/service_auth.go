@@ -102,8 +102,3 @@ func hmacSha256Hex(key string, data string) string {
 	_, _ = mac.Write([]byte(data))
 	return hex.EncodeToString(mac.Sum(nil))
 }
-
-func GenerateServiceAuthHeaderForTest(version string, accessKey string, secretKey string, body string, timestamp int64, expireSeconds int64) string {
-	prefix := fmt.Sprintf("%s/%s/%d/%d", version, accessKey, timestamp, expireSeconds)
-	return fmt.Sprintf("%s/%s", prefix, generateServiceAuthSignature(secretKey, prefix, body))
-}

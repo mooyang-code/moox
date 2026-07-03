@@ -147,7 +147,7 @@ import { applyPageResult, defaultPagination, formatTime, statusColor } from '@/v
 
 defineOptions({ name: 'SettingsServiceDeployments' });
 
-const kindOptions = ['gateway', 'frontend', 'storage', 'storage_rpc', 'admin_rpc', 'service_api', 'trade'];
+const kindOptions = ['gateway', 'frontend', 'storage', 'storage_rpc', 'admin_rpc', 'collector', 'cloudnode', 'trade'];
 const rows = ref<ServiceDeployment[]>([]);
 const loading = ref(false);
 const visible = ref(false);

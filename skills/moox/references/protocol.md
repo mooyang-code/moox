@@ -2,22 +2,27 @@
 
 Use these names in new APIs:
 
-- Workspace
-- Exchange
-- Instrument
-- InstrumentAlias
-- DataSet
+- Space
+- DataSource
+- Subject
+- SubjectSymbol
+- Dataset
+- DatasetSubject
 - Field
-- FactorDef
-- FactorInstance
-- DataView
+- Factor
+- View
 - StorageDevice
-- StorageRoute
-- CollectorDataSetBinding
+- PrimaryStoreNode
+- PrimaryStoreRoute
+- ArchiveFile
 
 Avoid these public API concepts:
 
 - Project
+- Workspace as a business domain alias
+- Exchange as a public data-source concept
+- Instrument as a public subject concept
+- object aliases outside SubjectSymbol
 - object_id
 - partition_key
 - DataAddress
@@ -32,6 +37,6 @@ Time fields should be named by meaning:
 - `observed_time`
 - `updated_time`
 
-`DataRef` describes a logical data location. It should include workspace, dataset, exchange, instrument, frequency, and dimensions. Physical path or table details belong to StorageRoute and storage engine config.
+`DataRef` describes a logical data location. It should include space, dataset, data source, subject, frequency, and dimensions. Physical path or table details belong to StorageRoute and storage engine config.
 
 `DataView` is the query composition layer. It can include base fields, factor instances, expressions, and system columns. Query callers should not choose view policy details; the control plane should resolve the active view version and storage route.

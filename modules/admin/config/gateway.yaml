@@ -1,41 +1,25 @@
 # 网关服务配置 - 合并了认证服务配置
 # 配置文件包含：网关服务、认证服务、限流配置
 
-# 数据库配置（认证服务使用SQLite）
-database:
-  host: ""                    # SQLite不需要host
-  port: 0                     # SQLite不需要port
-  user: ""                    # SQLite不需要用户名
-  password: ""                # SQLite不需要密码
-  dbname: "./data/moox.db"    # SQLite数据库文件路径
-
 # 缓存配置（认证服务使用BadgerDB）
 cache:
   data_dir: "./data/badger"   # BadgerDB数据存储目录
-  db: 0                       # 数据库编号（预留字段）
 
 # JWT配置（认证服务使用）
 jwt:
   # JWT 密钥。生产环境请直接修改为强随机值（>=32 字节）。
   # 以下为开发占位符，请勿用于生产；更换密钥后已签发的 token 将失效，需重新登录。
-  secret_key: "dev-only-set-JWT_SECRET-env"
+  secret_key: "dev-only-change-me"
   access_expired: "24h"       # 访问令牌过期时间
-  refresh_expired: "168h"     # 刷新令牌过期时间（7天）
 
 # 安全配置（认证服务使用）
 security:
-  # 数据加密密钥（AES-256）。生产环境请直接修改为强随机值。
-  # 注意：此密钥用于加密数据库中的云账户凭证，一旦更换将无法解密历史数据，请妥善保管。
-  encryption_key: "moox-cloud-secret-key-32bytes"
   salt_expired: "5m"          # 登录盐值过期时间
   max_login_attempt: 5        # 最大登录尝试次数
   lock_duration: "15m"        # 账户锁定时间
 
 # 网关服务配置
 gateway:
-  # 超时配置（毫秒）
-  timeout: 5000
-
   # 是否开启调试模式
   debug: true
 
@@ -57,85 +41,13 @@ gateway:
     - "/api/admin/auth/Register"
     - "/api/admin/auth/GetLoginSalt"
     - "/api/admin/auth/Login"
-    # 文件下载由 fileserver 内部校验 file_download token，网关 authorize 放行
-    - "/api/admin/fileserver/download"
     # SSH 直连端点由 rawhandler 内部校验 session_id，网关 authorize 放行
     - "/api/admin/ssh/WsConnect"
     - "/api/admin/ssh/SftpDownload"
     - "/api/admin/ssh/SftpUpload"
-  # 服务配置映射：serviceID → address+path
-  # 网关 forwardHTTP 纯透传到目标有协议 http 端口（本进程 127.0.0.1:port，远端 storage host:port）。
-  # path 为 trpc 服务全名，URL = /{path}/{method}。
-  services:
-    auth:
-      address: "127.0.0.1:11100"
-      path: "trpc.moox.infra.Auth"
-    dnsproxy:
-      address: "127.0.0.1:11101"
-      path: "trpc.moox.infra.Dns"
-    asynctask:
-      address: "127.0.0.1:11102"
-      path: "trpc.moox.infra.AsyncTask"
-    monitor:
-      address: "127.0.0.1:11103"
-      path: "trpc.moox.ops.Monitor"
-    collectmgr:
-      address: "127.0.0.1:11104"
-      path: "trpc.moox.collect.CollectMgr"
-    cloudnode:
-      address: "127.0.0.1:11105"
-      path: "trpc.moox.collect.CloudNodeMgr"
-    ssh:
-      address: "127.0.0.1:11106"
-      path: "trpc.moox.ops.Ssh"
-    secret:
-      address: "127.0.0.1:11108"
-      path: "trpc.moox.ops.SecretMgr"
-    sysdeploy:
-      address: "127.0.0.1:11109"
-      path: "trpc.moox.ops.SysDeploy"
-    space:
-      address: "127.0.0.1:11107"
-      path: "trpc.moox.admin.SpaceMgr"
-    storage_metadata:
-      address: "127.0.0.1:20200"
-      path: "trpc.moox.storage.Metadata"
-    storage_access:
-      address: "127.0.0.1:20201"
-      path: "trpc.moox.storage.Access"
-    storage_view:
-      address: "127.0.0.1:20202"
-      path: "trpc.moox.storage.DataView"
-    # ---- trade 模块（独立进程 moox-trade，端口 11200-11208）----
-    trade_account:
-      address: "127.0.0.1:11200"
-      path: "trpc.moox.trade.AccountSvc"
-    trade_balance:
-      address: "127.0.0.1:11201"
-      path: "trpc.moox.trade.BalanceSvc"
-    trade_fund:
-      address: "127.0.0.1:11202"
-      path: "trpc.moox.trade.FundSvc"
-    trade_apikey:
-      address: "127.0.0.1:11203"
-      path: "trpc.moox.trade.ApiKeySvc"
-    trade_channel:
-      address: "127.0.0.1:11204"
-      path: "trpc.moox.trade.ChannelSvc"
-    trade_tradeop:
-      address: "127.0.0.1:11205"
-      path: "trpc.moox.trade.TradeOpSvc"
-    trade_order:
-      address: "127.0.0.1:11206"
-      path: "trpc.moox.trade.OrderSvc"
-    trade_tradeq:
-      address: "127.0.0.1:11207"
-      path: "trpc.moox.trade.TradeQuerySvc"
-    trade_position:
-      address: "127.0.0.1:11208"
-      path: "trpc.moox.trade.PositionSvc"
-
-
+  # 网关不在本地 YAML 中维护服务地址。
+  # /api/admin/* 与 /api/service/* 的转发目标统一来自 t_service_deployments。
+  # 缺失 active 部署记录时请求会直接失败，避免 gateway.yaml 与系统服务部署表出现双来源。
 
 # CORS 跨域配置（生产环境请配置具体前端域名，避免使用 *）
 cors:
@@ -167,9 +79,9 @@ rate_limit:
 # 时间格式支持: ns, us, ms, s, m, h
 # 例如: "30s" (30秒), "5m" (5分钟), "2h" (2小时), "24h" (24小时)
 #
-# 数据库支持:
-# 默认使用SQLite（无需额外安装数据库服务）
-# 如需PostgreSQL/MySQL，请参考相关配置
+# 数据库说明:
+# admin 当前只使用 SQLite，数据库路径由 app.yaml 的 database.path 配置。
+# gateway.yaml 只保留网关、认证缓存、JWT、后台服务签名、CORS 与限流配置。
 #
 # 缓存目录:
 # 确保应用有权限在指定目录创建和写入文件

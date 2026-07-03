@@ -16,19 +16,6 @@ moox_dev_load_local_env() {
   fi
 }
 
-moox_dev_ssh_from_infra_local() {
-  local root="${1:-}"
-  local local_yaml="${root}/infra/infra.local.yaml"
-  local ssh_line target
-
-  [[ -f "${local_yaml}" ]] || return 1
-  ssh_line="$(grep -E '^\s*ssh:\s*' "${local_yaml}" | head -1 || true)"
-  [[ -n "${ssh_line}" ]] || return 1
-  target="$(echo "${ssh_line}" | sed -E 's/^\s*ssh:\s*"?([^"#]+)"?.*/\1/' | tr -d ' ')"
-  [[ -n "${target}" && "${target}" != *"<"* ]] || return 1
-  printf '%s' "${target}"
-}
-
 moox_dev_save_ssh_target() {
   local target="${1:-}"
   local choice line
@@ -76,7 +63,7 @@ moox_dev_prompt_ssh_target() {
 
   printf '\n[%s] 未配置 SSH 目标。\n' "${tag}"
   printf '  请使用 SSH 公钥登录；勿将密码写入仓库或脚本。\n'
-  printf '  也可预先设置: MOOX_DEV_SSH_TARGET / %s（infra.local 仅 legacy 兼容）\n\n' "${MOOX_DEV_ENV_FILE}"
+  printf '  也可预先设置: MOOX_DEV_SSH_TARGET / %s\n\n' "${MOOX_DEV_ENV_FILE}"
 
   local input=""
   read -r -p "SSH 目标 (user@host 或 ~/.ssh/config 别名): " input
@@ -87,14 +74,12 @@ moox_dev_prompt_ssh_target() {
   return 0
 }
 
-# 解析顺序: CLI > MOOX_DEV_SSH_TARGET > legacy infra.local.yaml remote.ssh > 交互提示
+# 解析顺序: CLI > MOOX_DEV_SSH_TARGET > 交互提示
 moox_dev_resolve_ssh_target() {
   local root="${1:-}"
   local cli_target="${2:-}"
   local __var="${3:-TARGET}"
   local non_interactive="${4:-0}"
-  local resolved=""
-
   if [[ -n "${cli_target}" ]]; then
     printf -v "${__var}" '%s' "${cli_target}"
     return 0
@@ -102,12 +87,6 @@ moox_dev_resolve_ssh_target() {
 
   if [[ -n "${MOOX_DEV_SSH_TARGET:-}" ]]; then
     printf -v "${__var}" '%s' "${MOOX_DEV_SSH_TARGET}"
-    return 0
-  fi
-
-  resolved="$(moox_dev_ssh_from_infra_local "${root}" || true)"
-  if [[ -n "${resolved}" ]]; then
-    printf -v "${__var}" '%s' "${resolved}"
     return 0
   fi
 

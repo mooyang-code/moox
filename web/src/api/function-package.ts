@@ -1,231 +1,174 @@
-import { api } from '@/api/config';
+import { callControl } from '@/api/admin/http';
 import { gatewayURL } from '@/api/gateway';
-import { isRetInfoSuccess } from '@/api/ret-info';
+import forge from 'node-forge';
 export { withOptionalSpace } from '@/api/space-context';
 
-// 统一校验 ret_info 并提取业务数据；失败抛错。
-function unwrap<T = any>(rsp: any): T {
-  if (rsp?.ret_info && !isRetInfoSuccess(rsp.ret_info.code)) {
-    throw new Error(rsp.ret_info.msg || '请求失败');
-  }
-  return rsp as T;
-}
+export type PackageStatus = 'PACKAGE_STATUS_UNSPECIFIED' | 'PACKAGE_STATUS_PENDING' | 'PACKAGE_STATUS_AVAILABLE' | 'PACKAGE_STATUS_FAILED' | 'PACKAGE_STATUS_DELETED';
+export type PackageType = 'PACKAGE_TYPE_UNSPECIFIED' | 'PACKAGE_TYPE_COLLECTOR' | 'PACKAGE_TYPE_FACTOR' | 'PACKAGE_TYPE_CUSTOM';
 
-
-// 云函数代码包接口定义
 export interface FunctionPackage {
   id: number;
+  space_id?: string;
   package_id: string;
   package_name: string;
   version: string;
   description: string;
   runtime: string;
-  package_type: string;
-  package_type_label: string;
+  package_type: PackageType | number;
   biz_type: string;
-
-  // 文件信息
   original_filename?: string;
   file_size: number;
   file_md5: string;
-
-  // COS存储信息
   cloud_account_id: string;
   cos_region: string;
   cos_bucket: string;
   cos_path: string;
   cos_url?: string;
-
-  // 状态管理
-  status: number;
-  status_label: string;
+  status: PackageStatus | number;
   upload_progress?: number;
   error_message?: string;
-
-  // 使用统计
   last_deploy_time?: string;
-
-  // 审计字段
-  created_by: string;
-  invalid?: number;
-  created_at: string;
-  created_time?: string; // 从后端返回的创建时间
-  updated_at?: string;
+  is_deleted?: boolean;
+  created_time?: string;
+  updated_time?: string;
 }
 
-// 上传代码包请求
 export interface UploadPackageRequest {
   package_name: string;
   version: string;
   description?: string;
   runtime: string;
-  package_type: string;
+  package_type: PackageType | number;
   biz_type?: string;
-  file_content: string; // base64编码的文件内容
-  cloud_account_id?: string; // 云账户ID，可选
+  original_filename?: string;
+  cloud_account_id?: string;
 }
 
-// 代码包列表请求
 export interface PackageListRequest {
-  page?: number;
-  page_size?: number;
   package_name?: string;
   runtime?: string;
-  package_type?: string;
+  package_type?: PackageType | number;
   biz_type?: string;
-  status?: number;
+  status?: PackageStatus | number;
+  page?: { page?: number; size?: number };
 }
 
-// 代码包列表响应
-export interface PackageListResponse {
-  total: number;
-  items: FunctionPackage[];
-}
-
-// 代码包选项
-export interface PackageOption {
+export interface InitPackageUploadResponse {
   package_id: string;
-  label: string;
-  package_name: string;
-  version: string;
-  runtime: string;
-  package_type: string;
+  upload_url: string;
+  cos_path: string;
+  expires_at: number;
 }
 
-// 异步上传响应（使用统一的异步任务响应格式）
-export interface UploadPackageAsyncResponse {
-  job_id: string;
-  package_name: string;
-  version: string;
-  status: number;
-  message: string;
-}
-
-// 上传云函数代码包（通过异步任务）
-export const uploadFunctionPackage = async (data: UploadPackageRequest) => {
-  // 使用统一的异步任务创建接口
-  const response = await api.post('/asynctask/CreateAsyncJob', {
-    tasks: [{
-      task_type: 'UPLOAD_FILE_TO_COS',
-      request_params: data
-    }]
-  }, {
-    timeout: 30000 // 上传代码包超时设置为30秒
-  });
-  return response;
+export const PACKAGE_STATUS_LABEL: Record<string, string> = {
+  PACKAGE_STATUS_PENDING: '待上传',
+  PACKAGE_STATUS_AVAILABLE: '可用',
+  PACKAGE_STATUS_FAILED: '失败',
+  PACKAGE_STATUS_DELETED: '已删除',
+  PACKAGE_STATUS_UNSPECIFIED: '未知'
 };
 
-// 获取云函数代码包列表
-export const getFunctionPackageList = async (params: PackageListRequest = {}): Promise<PackageListResponse> => {
-  const response = await api.post('/cloudnode/GetPackageList', { query: params });
-  const rsp = unwrap<{ items?: FunctionPackage[]; total?: number }>(response.data);
-  return { total: rsp.total ?? 0, items: rsp.items ?? [] };
+export const PACKAGE_TYPE_LABEL: Record<string, string> = {
+  PACKAGE_TYPE_COLLECTOR: '采集器',
+  PACKAGE_TYPE_FACTOR: '因子',
+  PACKAGE_TYPE_CUSTOM: '自定义',
+  PACKAGE_TYPE_UNSPECIFIED: '未指定'
 };
 
-// 获取云函数代码包详情
-export const getFunctionPackageDetail = async (packageId: string): Promise<FunctionPackage | null> => {
-  const response = await api.post('/cloudnode/GetPackageDetail', { package_id: packageId });
-  const rsp = unwrap<{ detail?: FunctionPackage }>(response.data);
+export const RUNTIME_OPTIONS = [
+  { label: 'Python3.9', value: 'Python3.9' },
+  { label: 'Python3.10', value: 'Python3.10' },
+  { label: 'CustomRuntime', value: 'CustomRuntime' }
+];
+
+export const PACKAGE_TYPE_OPTIONS = [
+  { label: '采集器', value: 1 },
+  { label: '因子', value: 2 },
+  { label: '自定义', value: 3 }
+];
+
+export const LEGACY_PACKAGE_TYPE: Record<string, number> = {
+  data_collector: 1,
+  factor_calculator: 2,
+  collector: 1,
+  factor: 2,
+  custom: 3
+};
+
+export const resolvePackageType = (value?: string | number): number => {
+  if (typeof value === 'number' && value > 0) {
+    return value;
+  }
+  if (typeof value === 'string' && value) {
+    const numeric = Number(value);
+    if (!Number.isNaN(numeric) && numeric > 0) {
+      return numeric;
+    }
+    return LEGACY_PACKAGE_TYPE[value] ?? 1;
+  }
+  return 1;
+};
+
+export const STATUS_OPTIONS = [
+  { label: '待上传', value: 1 },
+  { label: '可用', value: 2 },
+  { label: '失败', value: 3 },
+  { label: '已删除', value: 4 }
+];
+
+export const initPackageUpload = async (data: UploadPackageRequest): Promise<InitPackageUploadResponse> => {
+  return callControl<UploadPackageRequest, InitPackageUploadResponse>('cloudnode', 'InitPackageUpload', data);
+};
+
+export const completePackageUpload = async (packageId: string, fileMd5: string, fileSize: number): Promise<FunctionPackage | null> => {
+  const rsp = await callControl<{ package_id: string; file_md5: string; file_size: number }, { detail?: FunctionPackage }>(
+    'cloudnode',
+    'CompletePackageUpload',
+    { package_id: packageId, file_md5: fileMd5, file_size: fileSize }
+  );
   return rsp.detail ?? null;
 };
 
-// 删除云函数代码包
-export const deleteFunctionPackage = async (packageId: string): Promise<void> => {
-  const response = await api.post('/cloudnode/DeletePackage', { package_id: packageId });
-  unwrap(response.data);
-};
-
-
-// 获取代码包下载URL（新方法）
-export const getPackageDownloadURL = async (packageId: string): Promise<PackageDownloadURL | null> => {
-  const response = await api.post('/cloudnode/GetPackageDownloadURL', { package_id: packageId });
-  const rsp = unwrap<{ url?: PackageDownloadURL }>(response.data);
-  return rsp.url ?? null;
-};
-
-// 代码包下载URL信息（对应 pb.PackageDownloadURL）
-export interface PackageDownloadURL {
-  package_id: string;
-  package_name: string;
-  version: string;
-  filename: string;
-  download_url: string;
-  file_size: number;
-  file_md5: string;
-}
-
-// 获取代码包选项（用于下拉选择）
-export const getFunctionPackageOptions = async (packageType?: string): Promise<PackageOption[]> => {
-  const params = packageType ? { package_type: packageType } : {};
-  const response = await api.post('/cloudnode/GetPackageOptions', params);
-  const rsp = unwrap<{ options?: PackageOption[] }>(response.data);
-  return rsp.options ?? [];
-};
-
-
-// 简单的URL下载（新的推荐方式）
-export const downloadPackageByURL = async (packageId: string): Promise<void> => {
-  try {
-    console.log(`开始获取代码包 ${packageId} 的下载URL...`);
-
-    // 1. 获取下载URL（PB 响应：{ret_info, url:{download_url, filename, ...}}）
-    const downloadInfo = await getPackageDownloadURL(packageId);
-    if (!downloadInfo || !downloadInfo.download_url) {
-      throw new Error('获取下载URL失败');
-    }
-
-    const { download_url, filename } = downloadInfo;
-    console.log(`获取到下载URL: ${download_url}, 文件名: ${filename}`);
-
-    // 2. download_url 是网关路径（/api/admin/fileserver/download?file=...&token=...）
-    // 前端直连固定网关端口，不再经过 web-host 代理。
-    const fullDownloadURL = gatewayURL(download_url);
-
-    console.log(`构建的完整下载URL: ${fullDownloadURL}`);
-
-    // 3. 使用隐藏的 <a> 标签触发下载（在当前页面弹出下载框）
-    // 后端已设置 Content-Disposition: attachment，浏览器会自动下载而不是导航
-    const link = document.createElement('a');
-    link.href = fullDownloadURL;
-    link.style.display = 'none';
-
-    document.body.appendChild(link);
-    link.click();
-
-    // 延迟移除，确保下载已触发
-    setTimeout(() => {
-      document.body.removeChild(link);
-    }, 100);
-
-    console.log(`✓ 下载已触发: ${filename}`);
-
-  } catch (error) {
-    console.error('URL下载失败:', error);
-    throw error;
+export const uploadFunctionPackage = async (data: UploadPackageRequest, file: File) => {
+  const initRsp = await initPackageUpload({ ...data, original_filename: file.name });
+  const putResp = await fetch(initRsp.upload_url, { method: 'PUT', body: file });
+  if (!putResp.ok) {
+    throw new Error(`COS upload failed: ${putResp.status}`);
   }
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  const md5Hex = forge.md.md5.create().update(binary).digest().toHex();
+  const detail = await completePackageUpload(initRsp.package_id, md5Hex, file.size);
+  return { package_id: initRsp.package_id, detail };
 };
 
+export const getFunctionPackageList = async (params: PackageListRequest & { page?: number | { page?: number; size?: number }; page_size?: number } = {}): Promise<{ total: number; items: FunctionPackage[] }> => {
+  const raw = params as PackageListRequest & { page?: number; page_size?: number };
+  const normalized: PackageListRequest = { ...raw };
+  if (!normalized.page && (raw.page !== undefined || raw.page_size !== undefined)) {
+    const pageNum = typeof raw.page === 'number' ? raw.page : 1;
+    normalized.page = { page: pageNum, size: raw.page_size ?? 10 };
+  }
+  const rsp = await callControl<PackageListRequest, { items?: FunctionPackage[]; page?: { total?: number } }>('cloudnode', 'GetPackageList', normalized);
+  return { total: rsp.page?.total ?? 0, items: rsp.items ?? [] };
+};
 
+export const getFunctionPackageDetail = async (packageId: string): Promise<FunctionPackage | null> => {
+  const rsp = await callControl<{ package_id: string }, { detail?: FunctionPackage }>('cloudnode', 'GetPackageDetail', { package_id: packageId });
+  return rsp.detail ?? null;
+};
 
-// 运行时环境选项
-export const RUNTIME_OPTIONS = [
-  { label: 'Go1', value: 'Go1' },
-  { label: 'Python 3.7', value: 'Python3.7' },
-  { label: 'Python 3.9', value: 'Python3.9' },
-  { label: 'Node.js 14.18', value: 'Nodejs14.18' },
-  { label: 'Node.js 16.13', value: 'Nodejs16.13' }
-];
+export const deleteFunctionPackage = async (packageId: string): Promise<void> => {
+  await callControl<{ package_id: string }, Record<string, never>>('cloudnode', 'DeletePackage', { package_id: packageId });
+};
 
-// 函数包类型选项
-export const PACKAGE_TYPE_OPTIONS = [
-  { label: '数据采集类型', value: 'data_collector' },
-  { label: '因子计算类型', value: 'factor_calculator' }
-];
+export const getPackageDownloadURL = async (packageId: string) => {
+  const rsp = await callControl<{ package_id: string }, { url?: { download_url?: string } }>('cloudnode', 'GetPackageDownloadURL', { package_id: packageId });
+  return rsp.url;
+};
 
-// 状态选项
-export const STATUS_OPTIONS = [
-  { label: '上传中', value: 0 },
-  { label: '可用', value: 1 },
-  { label: '已删除', value: 2 },
-  { label: '上传失败', value: 3 }
-];
+export const getPackageDownloadLink = (packageId: string) => gatewayURL('cloudnode', 'GetPackageDownloadURL');

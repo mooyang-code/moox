@@ -126,15 +126,6 @@ func (s *ServiceImpl) ResizeWindow(ctx context.Context, sessionID string, w, h i
 	return conn.ResizeWindow(w, h)
 }
 
-func (s *ServiceImpl) ExecCommand(ctx context.Context, sessionID string, cmd string) (string, error) {
-	conn, ok := s.sessionMgr.Load(sessionID)
-	if !ok {
-		return "", fmt.Errorf("会话不存在: %s", sessionID)
-	}
-	conn.RefreshActiveTime()
-	return conn.ExecCommand(cmd)
-}
-
 func (s *ServiceImpl) GetSessionConn(sessionID string) (*conn.SSHConn, bool) {
 	return s.sessionMgr.Load(sessionID)
 }

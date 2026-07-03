@@ -7,22 +7,11 @@ export {}
 
 declare module 'vue' {
   export interface GlobalComponents {
-    BarcodeDraw: typeof import('./components/barcode-draw/index.vue')['default']
-    CodeView: typeof import('./components/code-view/index.vue')['default']
-    ErrorBoundary: typeof import('./components/error-boundary/index.vue')['default']
-    ExternalLinkPage: typeof import('./components/external-link-page/index.vue')['default']
-    FillPage: typeof import('./components/fill-page/index.vue')['default']
-    InternalLinkPage: typeof import('./components/internal-link-page/index.vue')['default']
     LangProvider: typeof import('./components/lang-provider/index.vue')['default']
     MainTransition: typeof import('./components/main-transition/index.vue')['default']
-    PageWrapper: typeof import('./components/page-wrapper/index.vue')['default']
-    PinyinPro: typeof import('./components/pinyin-pro/index.vue')['default']
-    QrcodeDraw: typeof import('./components/qrcode-draw/index.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
-    SelectIcon: typeof import('./components/select-icon/index.vue')['default']
     SpaceContextBar: typeof import('./components/SpaceContextBar/index.vue')['default']
-    SvgAndIcon: typeof import('./components/svg-and-icon/index.vue')['default']
     SvgIcon: typeof import('./components/svg-icon/index.vue')['default']
     VerifyCode: typeof import('./components/verify-code/index.vue')['default']
   }

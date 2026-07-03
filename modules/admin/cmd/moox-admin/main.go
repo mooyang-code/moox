@@ -3,7 +3,6 @@ package main
 import (
 	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
 	_ "github.com/mooyang-code/moox/modules/admin/internal/gateway"
-	_ "github.com/mooyang-code/moox/modules/admin/internal/service/cloudnode/provider/tencent"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	_ "trpc.group/trpc-go/trpc-log-cls"
 

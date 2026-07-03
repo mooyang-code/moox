@@ -26,43 +26,6 @@ func NewService(svc monitor.Service) *Service {
 	return &Service{svc: svc}
 }
 
-// EnableMonitor 启用主机监控。
-func (s *Service) EnableMonitor(ctx context.Context, req *pb.EnableMonitorReq) (*pb.EnableMonitorRsp, error) {
-	if req.GetHostId() == 0 {
-		return &pb.EnableMonitorRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid host_id")}, nil
-	}
-	if err := s.svc.EnableMonitor(ctx, int(req.GetHostId())); err != nil {
-		log.ErrorContextf(ctx, "[Monitor] EnableMonitor failed: %v", err)
-		return &pb.EnableMonitorRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "enable monitor failed")}, nil
-	}
-	return &pb.EnableMonitorRsp{RetInfo: retOK()}, nil
-}
-
-// DisableMonitor 禁用主机监控。
-func (s *Service) DisableMonitor(ctx context.Context, req *pb.DisableMonitorReq) (*pb.DisableMonitorRsp, error) {
-	if req.GetHostId() == 0 {
-		return &pb.DisableMonitorRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid host_id")}, nil
-	}
-	if err := s.svc.DisableMonitor(ctx, int(req.GetHostId())); err != nil {
-		log.ErrorContextf(ctx, "[Monitor] DisableMonitor failed: %v", err)
-		return &pb.DisableMonitorRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "disable monitor failed")}, nil
-	}
-	return &pb.DisableMonitorRsp{RetInfo: retOK()}, nil
-}
-
-// GetMonitorStatus 获取主机监控状态。
-func (s *Service) GetMonitorStatus(ctx context.Context, req *pb.GetMonitorStatusReq) (*pb.GetMonitorStatusRsp, error) {
-	if req.GetHostId() == 0 {
-		return &pb.GetMonitorStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid host_id")}, nil
-	}
-	enabled, err := s.svc.IsMonitorEnabled(ctx, int(req.GetHostId()))
-	if err != nil {
-		log.ErrorContextf(ctx, "[Monitor] GetMonitorStatus failed: %v", err)
-		return &pb.GetMonitorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "get monitor status failed")}, nil
-	}
-	return &pb.GetMonitorStatusRsp{RetInfo: retOK(), Enabled: enabled}, nil
-}
-
 // GetCurrentMetrics 获取当前监控指标。
 func (s *Service) GetCurrentMetrics(ctx context.Context, req *pb.GetCurrentMetricsReq) (*pb.GetCurrentMetricsRsp, error) {
 	hostIDs := parseHostIDs(req.GetHostIds())
@@ -97,19 +60,6 @@ func (s *Service) GetHistoryMetrics(ctx context.Context, req *pb.GetHistoryMetri
 		pbHistory = append(pbHistory, toHistoryPoint(h))
 	}
 	return &pb.GetHistoryMetricsRsp{RetInfo: retOK(), History: pbHistory}, nil
-}
-
-// TestNodeExporter 测试 Node Exporter 连通性。
-func (s *Service) TestNodeExporter(ctx context.Context, req *pb.TestNodeExporterReq) (*pb.TestNodeExporterRsp, error) {
-	if req.GetHostId() == 0 {
-		return &pb.TestNodeExporterRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid host_id")}, nil
-	}
-	result, err := s.svc.TestNodeExporter(ctx, int(req.GetHostId()))
-	if err != nil {
-		log.ErrorContextf(ctx, "[Monitor] TestNodeExporter failed: %v", err)
-		return &pb.TestNodeExporterRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "test failed")}, nil
-	}
-	return &pb.TestNodeExporterRsp{RetInfo: retOK(), Result: result}, nil
 }
 
 // parseHostIDs 解析逗号分隔的 host_ids 字符串为 ID 列表。

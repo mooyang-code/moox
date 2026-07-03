@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/spacecontext"
+	"github.com/mooyang-code/moox/modules/admin/internal/gateway/spacecontext"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -25,7 +25,7 @@ func setForwardCommonHeaders(w http.ResponseWriter, origin string) {
 }
 
 // forwardHTTP 把统一网关请求纯透传到目标服务的有协议 http 端口。
-// 目标服务由 gateway.yaml 的 services.{serviceID}.{address,path} 决定：
+// 目标服务由 t_service_deployments 中的 active 部署记录决定：
 //   - address: 目标 host:port（本进程 127.0.0.1:port，远端 storage host:port）
 //   - path:    trpc 服务全名（如 trpc.moox.infra.Auth）
 //
@@ -36,7 +36,7 @@ func forwardHTTP(ctx context.Context, serviceID, method string, body []byte, hea
 	if cfg == nil {
 		return nil, fmt.Errorf("网关配置未初始化")
 	}
-	detail, err := resolveServiceDetail(ctx, cfg, serviceID)
+	detail, err := resolveServiceDetail(ctx, serviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -44,13 +44,8 @@ func forwardHTTP(ctx context.Context, serviceID, method string, body []byte, hea
 		return nil, fmt.Errorf("服务 '%s' 配置缺失 address/path", serviceID)
 	}
 	target := fmt.Sprintf("ip://%s", detail.Address)
-	forwardMethod := normalizeForwardMethod(serviceID, method)
-	targetURL := fmt.Sprintf("/%s/%s", detail.Path, forwardMethod)
-	if forwardMethod != method {
-		log.InfoContextf(ctx, "forwardHTTP: %s/%s -> %s (alias %s)", serviceID, method, targetURL, forwardMethod)
-	} else {
-		log.InfoContextf(ctx, "forwardHTTP: %s/%s -> %s", serviceID, method, targetURL)
-	}
+	targetURL := fmt.Sprintf("/%s/%s", detail.Path, method)
+	log.InfoContextf(ctx, "forwardHTTP: %s/%s -> %s", serviceID, method, targetURL)
 
 	opts := []client.Option{
 		client.WithTarget(target),
@@ -83,14 +78,6 @@ func addIfPresent(reqHead *thttp.ClientReqHeader, headers map[string]string, key
 	if v, ok := headers[key]; ok && v != "" {
 		reqHead.AddHeader(headerName, v)
 	}
-}
-
-// normalizeForwardMethod 将历史/兼容方法名映射到当前 trpc RPC 方法名。
-func normalizeForwardMethod(serviceID, method string) string {
-	if serviceID == "cloudnode" && method == "ReportHeartbeatInner" {
-		return "ReportHeartbeat"
-	}
-	return method
 }
 
 // writeForwardResponse 写入透传成功响应（原样返回底层 http body，暴露 trpc-ret header 供前端读取）。

@@ -151,10 +151,7 @@ const loginLoading = ref(false);
 
 // 提交表单
 const onSubmit = async ({ errors, values }: any) => {
-  console.log('📝 表单提交验证:', { errors, values });
-  
   if (errors) {
-    console.log('❌ 表单验证失败:', errors);
     Message.error("请修正表单中的错误后重试");
     return;
   }
@@ -178,7 +175,6 @@ const onLogin = async () => {
     // 首先进行表单验证
     const validateResult = await formRef.value?.validate();
     if (validateResult) {
-      console.log('❌ 表单验证失败:', validateResult);
       Message.error("请修正输入格式错误");
       return;
     }
@@ -202,16 +198,12 @@ const onLogin = async () => {
       return;
     }
     
-    console.log('🚀 开始登录...', { username: form.value.username });
-    
     // 使用新的安全登录方法
     let res = await loginAPI({
       username: form.value.username,
       password: form.value.password,
       verifyCode: form.value.verifyCode
     });
-    
-    console.log('✅ 登录响应:', res);
     
     // 检查登录是否成功 - 使用新的ret_info协议格式
     if (res.ret_info.code !== 0) {
@@ -223,20 +215,16 @@ const onLogin = async () => {
       throw new Error("登录响应中缺少访问令牌");
     }
     
-    console.log('🔐 设置访问令牌:', res.access_token.substring(0, 20) + "...");
     await userStores.setToken(res.access_token);
     
-    console.log('👤 开始获取用户信息...');
     // 加载用户信息
     await userStores.setAccount();
     
-    console.log('🗂️ 开始初始化路由...');
     // 加载路由信息
     await routeStore.initSetRouter();
 
     Message.success("登录成功");
     
-    console.log('🏠 跳转到首页...');
     // 跳转首页
     router.replace("/home");
     

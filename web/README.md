@@ -124,8 +124,6 @@ pnpm install
   "build:dev": "vue-tsc && vite build --mode development",
   // 生产环境构建
   "build:prod": "vue-tsc && vite build --mode production",
-  // 测试环境构建
-  "build:test": "vue-tsc && vite build --mode test",
   // 预览环境启动
   "preview": "vite preview"
 }
@@ -185,7 +183,6 @@ MooX
 │  ├─ hooks               # 常用 Hooks 封装
 │  ├─ lang                # 语言国际化 i18n
 │  ├─ layout              # 框架布局模块
-│  ├─ mock                # 本地数据mock
 │  ├─ router              # 路由管理
 │  ├─ store               # pinia store
 │  ├─ style               # 全局样式文件
@@ -199,7 +196,6 @@ MooX
 ├─ .env                   # 通用环境配置
 ├─ .env.development       # 开发环境配置
 ├─ .env.production        # 生产环境配置
-├─ .env.test              # 测试环境配置
 ├─ .eslintignore          # 忽略 Eslint 校验
 ├─ .eslintrc.cjs          # Eslint 校验配置文件
 ├─ .gitignore             # 忽略 git 提交
@@ -211,7 +207,7 @@ MooX
 ├─ index.html             # 入口 html
 ├─ LICENSE                # 开源协议
 ├─ lint-staged.config.cjs # lint-staged 配置文件
-├─ package-lock.json      # 依赖包包版本锁
+├─ pnpm-lock.yaml         # pnpm 依赖版本锁
 ├─ package.json           # 依赖包管理
 ├─ pnpm-lock.yaml         # 依赖包包版本锁
 ├─ README.md              # README 介绍

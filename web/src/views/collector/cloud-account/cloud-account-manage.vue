@@ -252,7 +252,7 @@ const loadAccountList = async () => {
     total.value = accountList.value.length;
   } catch (error) {
     console.error('加载云账户列表失败:', error);
-    Message.error('加载云账户列表失败');
+    Message.error(error instanceof Error ? error.message : '加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署');
   } finally {
     loading.value = false;
   }

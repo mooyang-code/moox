@@ -25,7 +25,7 @@ Usage: $(basename "$0") --target user@host [options]
 Internal dev-helper: build moox-storage on remote Linux (CGO).
 
 Options:
-  --target HOST           SSH target (or MOOX_DEV_SSH_TARGET / infra.local.yaml)
+  --target HOST           SSH target (or MOOX_DEV_SSH_TARGET)
   --deploy-dir PATH       Remote MooX deploy root (default: ${DEPLOY_DIR})
   --remote-go PATH        Remote go binary (default: ${REMOTE_GO})
   --remote-build-dir DIR  Remote unpack/build dir (default: ${REMOTE_BUILD_DIR})
@@ -60,7 +60,7 @@ source "${ROOT}/scripts/lib/dev-ssh-target.sh"
 moox_dev_load_local_env
 
 if ! moox_dev_resolve_ssh_target "${ROOT}" "${TARGET}" TARGET "${NON_INTERACTIVE}"; then
-  fail "SSH target required: --target, MOOX_DEV_SSH_TARGET, infra/infra.local.yaml, or interactive input (use SSH keys; never commit passwords)"
+  fail "SSH target required: --target, MOOX_DEV_SSH_TARGET, or interactive input (use SSH keys; never commit passwords)"
 fi
 
 log "using SSH target: ${TARGET}"

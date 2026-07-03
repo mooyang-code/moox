@@ -4,22 +4,10 @@ import (
 	"context"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/monitor/model"
-	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 )
 
 // Service 监控服务接口
 type Service interface {
-	// ========== 主机监控配置 ==========
-
-	// EnableMonitor 启用主机监控
-	EnableMonitor(ctx context.Context, hostID int) error
-
-	// DisableMonitor 禁用主机监控
-	DisableMonitor(ctx context.Context, hostID int) error
-
-	// IsMonitorEnabled 检查主机是否启用监控
-	IsMonitorEnabled(ctx context.Context, hostID int) (bool, error)
-
 	// ========== 监控数据查询 ==========
 
 	// GetCurrentMetrics 获取指定主机的当前监控指标
@@ -29,9 +17,6 @@ type Service interface {
 	// GetHistoryMetrics 获取主机历史监控数据
 	// duration: 时间范围（如 "1h", "24h", "7d"）
 	GetHistoryMetrics(ctx context.Context, hostAddress string, duration string) ([]*model.HistoryPoint, error)
-
-	// TestNodeExporter 测试 Node Exporter 连通性
-	TestNodeExporter(ctx context.Context, hostID int) (*pb.TestResult, error)
 
 	// ========== 内部方法（供定时器调用） ==========
 

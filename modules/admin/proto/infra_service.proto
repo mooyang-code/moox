@@ -6,8 +6,8 @@ import "moox_common.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;mooxpb";
 
-// Infra 域合并认证（Auth）、异步任务（AsyncTask）、DNS 代理（Dns）。
-// 纯 RPC 服务，由统一 HTTP 转发层（/api/admin/{auth|asynctask|dnsproxy}/{method}）调度。
+// Infra 域合并认证（Auth）与 DNS 代理（Dns）。
+// 纯 RPC 服务，由统一 HTTP 转发层（/api/admin/{auth|dnsproxy}/{method}）调度。
 //
 // 响应设计参考 storage/access：每个响应首字段 common.RetInfo（code/msg），
 // code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。
@@ -17,7 +17,7 @@ option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;m
 
 // ========== 认证（Auth）==========
 
-// AppInfo 应用信息（保留与旧协议一致的字段名）。
+// AppInfo 应用信息。
 message AppInfo {
   string app_id = 1;
   string app_key = 2;
@@ -159,62 +159,6 @@ message UpdateUserInfoRsp {
   UserInfo user_info = 2;
 }
 
-// ========== 异步任务（AsyncTask）==========
-
-// TaskRequestItem 单个任务请求项（前端提交）。
-message TaskRequestItem {
-  string task_type = 1;           // 任务类型
-  string request_params = 2;      // 请求参数（JSON 字符串，与 service 层 TaskRequest 一致）
-}
-
-// CreateAsyncJobReq 创建 Job 请求。
-message CreateAsyncJobReq {
-  repeated TaskRequestItem tasks = 1;
-}
-
-// CreateAsyncJobRsp 创建 Job 响应。
-message CreateAsyncJobRsp {
-  common.RetInfo ret_info = 1;
-  string job_id = 2;
-  int32 total_task_cnt = 3;
-}
-
-// QueryAsyncJobReq 查询 Job 状态请求。
-message QueryAsyncJobReq {
-  string job_id = 1;
-}
-
-// TaskQueryResult Task 查询结果。
-message TaskQueryResult {
-  string task_id = 1;
-  string job_id = 2;
-  string task_type = 3;
-  int32 task_status = 4;
-  string task_status_text = 5;
-  string request_params = 6;
-  string result_data = 7;
-  string error_message = 8;
-  string started_time = 9;
-  string completed_time = 10;
-  string created_at = 11;
-}
-
-// QueryAsyncJobRsp 查询 Job 状态响应。
-message QueryAsyncJobRsp {
-  common.RetInfo ret_info = 1;
-  string job_id = 2;
-  int32 total_task_cnt = 3;
-  int32 success_task_cnt = 4;
-  int32 failed_task_cnt = 5;
-  int32 is_started = 6;
-  int32 job_status = 7;
-  string job_status_text = 8;
-  int32 progress = 9;
-  string created_at = 10;
-  string updated_at = 11;
-  repeated TaskQueryResult tasks = 12;
-}
-
 // ========== DNS 代理（Dns）==========
 
 // IPInfo IP 地址及其延迟信息。
@@ -269,13 +213,6 @@ service Auth {
   rpc GetUserInfo(GetUserInfoReq) returns (GetUserInfoRsp);
   // 更新用户信息
   rpc UpdateUserInfo(UpdateUserInfoReq) returns (UpdateUserInfoRsp);
-}
-
-service AsyncTask {
-  // 创建异步 Job
-  rpc CreateAsyncJob(CreateAsyncJobReq) returns (CreateAsyncJobRsp);
-  // 查询 Job 状态
-  rpc QueryAsyncJob(QueryAsyncJobReq) returns (QueryAsyncJobRsp);
 }
 
 service Dns {

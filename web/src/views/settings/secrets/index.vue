@@ -3,7 +3,7 @@
     <div class="page-head">
       <div>
         <h2>秘钥管理</h2>
-        <span>统一管理系统中的各类秘钥（云厂商、SSH、交易所等）</span>
+        <span>统一管理 admin 本地秘钥（SSH、交易所、数据库、系统令牌等）</span>
       </div>
       <a-space>
         <a-button type="primary" @click="openCreate">
@@ -101,7 +101,7 @@
     <a-modal v-model:visible="visible" width="720px" :title="modalTitle" @before-ok="submit" @cancel="visible = false">
       <a-form :model="form" auto-label-width>
         <a-form-item field="name" label="名称" required>
-          <a-input v-model="form.name" placeholder="例如：腾讯云-生产环境" />
+          <a-input v-model="form.name" placeholder="例如：交易所-生产环境" />
         </a-form-item>
         <a-form-item field="category" label="分类" required>
           <a-select v-model="form.category" placeholder="选择分类">
@@ -109,7 +109,7 @@
           </a-select>
         </a-form-item>
         <a-form-item field="provider" label="提供方">
-          <a-input v-model="form.provider" placeholder="例如：tencent / aliyun / binance" />
+          <a-input v-model="form.provider" placeholder="例如：binance / okx / mysql" />
         </a-form-item>
         <a-form-item field="secret_type" label="类型">
           <a-select v-model="form.secret_type" placeholder="选择类型">
@@ -174,7 +174,6 @@ const filters = reactive({
 });
 
 const categoryOptions = [
-  { label: '云厂商', value: 'cloud' },
   { label: 'SSH 凭证', value: 'ssh' },
   { label: '交易所', value: 'exchange' },
   { label: '数据库', value: 'database' },
@@ -188,7 +187,6 @@ function categoryLabel(value: string) {
 
 function categoryColor(value: string) {
   const map: Record<string, string> = {
-    cloud: 'blue',
     ssh: 'cyan',
     exchange: 'orange',
     database: 'purple',
@@ -202,7 +200,7 @@ const form = reactive({
   secret_id: '',
   name: '',
   description: '',
-  category: 'cloud',
+  category: 'ssh',
   provider: '',
   secret_type: 'api_key',
   key_id: '',
@@ -239,7 +237,7 @@ function resetForm() {
     secret_id: '',
     name: '',
     description: '',
-    category: 'cloud',
+    category: 'ssh',
     provider: '',
     secret_type: 'api_key',
     key_id: '',
@@ -260,7 +258,7 @@ function openEdit(record: Secret) {
     secret_id: record.secret_id || '',
     name: record.name || '',
     description: record.description || '',
-    category: record.category || 'cloud',
+    category: record.category || 'ssh',
     provider: record.provider || '',
     secret_type: record.secret_type || 'api_key',
     key_id: record.key_id || '',

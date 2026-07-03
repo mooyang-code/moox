@@ -6,7 +6,7 @@
 
 ```
 web-host/
-├── main.go             # 静态资源与管理台 API 网关入口
+├── main.go             # 前端静态资源入口
 ├── internal/
 │   └── statik/         # statik 生成的静态资源
 ├── go.mod              # Go 模块定义
@@ -22,19 +22,24 @@ web-host/
    npm run build
    ```
 
-2. 构建 Web Host：
+2. 重新生成嵌入静态资源：
+   ```bash
+   make statik
+   ```
+
+3. 构建 Web Host：
    ```bash
    make build
    ```
 
-3. 运行服务器：
+4. 运行服务器：
    ```bash
    make run
    ```
 
 ## Makefile 命令
 
-- `make build` - 生成 statik 文件并构建 Go 二进制文件
+- `make build` - 使用当前已嵌入的 statik 文件构建 Go 二进制文件
 - `make statik` - 仅生成 statik 文件（前端更新后使用）
 - `make clean` - 清理构建产物
 - `make run` - 构建并运行服务器
@@ -44,8 +49,9 @@ web-host/
 ## 开发流程
 
 1. 前端开发时在 `web` 目录进行
-2. 前端构建完成后，在本目录运行 `make build`
-3. 生成的 `moox-web` 二进制文件包含了所有前端资源
+2. 前端构建完成后，在本目录运行 `make statik`
+3. 再运行 `make build`
+4. 生成的 `moox-web` 二进制文件包含了所有前端资源
 
 ## API 访问方式
 

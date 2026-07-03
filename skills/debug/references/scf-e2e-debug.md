@@ -18,9 +18,9 @@ Never paste SecretKey, service auth secret, SSH password, signed `Auth` headers,
 
 1. Confirm whether the failure is before or after SCF invocation.
    - No package: local build or package upload failed.
-   - No function: create-node job or Tencent SCF API failed.
+   - No function: CloudNode batch_change or Tencent SCF API failed.
    - Function offline: keepalive or heartbeat failed.
-   - Task pending: task planner, heartbeat response, or collector local task cache failed.
+   - Task pending: task planner, CloudNode work_item polling, or collector task status report failed.
    - Task success but no data: collector execution or storage write failed.
 2. Preserve `git status --short` before touching code.
 3. Use narrow commands and logs; avoid broad log dumps.
@@ -108,7 +108,7 @@ bin/moox-cli collector function publish \
   --runtime CustomRuntime \
   --handler main \
   --version vYYYYMMDDHHMM \
-  --package-name data-collector \
+  --package-name moox-collector \
   --package-type data_collector \
   --biz-type data_collector \
   --node-type scf-event \
@@ -117,10 +117,11 @@ bin/moox-cli collector function publish \
 ```
 
 If a zip already exists, pass `--zip /path/to/package.zip`.
+`--function-config` and `--env` are submitted to cloudnode as node runtime metadata; they do not mutate the SCF zip `config.yaml`.
 
 Storage/Admin runtime addresses are no longer injected at package time. They come from control-plane keepalive payload `service_deployments`; update `t_service_deployments` through the management console before probing SCF nodes.
 
-Watch the returned `upload_job_id`, `package_id`, and `create_job_id`. If `package_id` is missing after polling, inspect control-plane async task logs and `t_function_packages`.
+Watch the returned `package_id` and create-node `batch_id`. If `package_id` is missing, inspect `moox-cloudnode` logs and `t_cloud_function_packages`.
 
 ## Control Plane Checks
 
@@ -129,7 +130,7 @@ Use `/api/admin` for management calls and `/api/service` for service-to-service 
 Useful log filters:
 
 ```bash
-rg -n "UploadPackage|CreateNode|CreateFunction|UpdateFunction|Invoke keepalive|ReportHeartbeat|TaskPlanner|ReportTaskStatus|storage" ~/moox/log/trpc.log
+rg -n "InitPackageUpload|CompletePackageUpload|CreateNode|CreateFunction|UpdateFunction|Invoke keepalive|ReportHeartbeat|PollWorkItems|ReportWorkItemStatus|SubmitWorkItems|TaskPlanner|ReportTaskStatus|storage" ~/moox/log/trpc.log
 ```
 
 Check these boundaries:
@@ -148,19 +149,21 @@ Use the `cls-query` skill when available. Query a narrow time range first, then 
 Search patterns:
 
 - Function entry: `handleKeepalive`, `ProcessProbe`, `ReportHeartbeat`.
-- Task download: `收到任务实例更新`, `Task[`, `parse_task_params_success`.
+- CloudNode work_item poll: `PollWorkItems`, `CloudWorkItemLease`, `collector.binance.spot.kline`.
+- Legacy/direct task download: `收到任务实例更新`, `Task[`, `parse_task_params_success`.
 - Due-task decision: `client_task_fetch`, `client_task_detail`, `shouldExecute`, `Will execute`.
 - Collector execution: `执行采集`, `采集成功`, `采集失败`.
 - Storage write: `WriteRecordRows`, `UpsertSubject`, `BindDatasetSubject`, `key.data_time`.
-- Status callback: `ReportTaskStatus`, `任务状态上报成功`, `status=2`.
+- CloudNode work_item callback: `ReportWorkItemStatus`.
+- Collector task callback: `ReportTaskStatus`, `任务状态上报成功`, `status=2`.
 
 Evidence table:
 
 | Observation | Boundary |
 | --- | --- |
 | No `handleKeepalive` | control did not invoke SCF, or SCF trigger/API failed |
-| `ProcessProbe` ok but no `ReportHeartbeat` | SCF cannot reach control `/api/service/cloudnode/ReportHeartbeatInner` |
-| Heartbeat ok but no task list | planner/store/node assignment issue |
+| `ProcessProbe` ok but no `ReportHeartbeat` | SCF cannot reach control `/api/service/cloudnode/ReportHeartbeat` |
+| Heartbeat ok but no CloudNode work_item lease | planner/store/node assignment issue |
 | Task list ok but `shouldExecute=false` | interval/time scheduling issue |
 | `采集成功` but status callback fails | service auth/path/firewall issue |
 | Status success but no view rows | storage write, subject binding, dataset, freq, or view materialization issue |
@@ -188,10 +191,10 @@ If the view is empty but raw records exist, inspect view definition, freq select
 
 ## Common Root Causes
 
-- SCF package contains stale YAML pointing at local endpoints.
+- Keepalive did not include active `service_deployments`, or the SCF runtime did not apply them before callback/storage writes.
 - Remote firewall allows storage port but not control gateway port.
 - Management API path was used by SCF callback, causing login-state auth failure.
-- Task planner store was empty and treated as `initializing`, leaving old collector task cache intact.
+- Task planner store is empty, so collector did not submit CloudNode work_items for the expected dataset subjects.
 - Rule or node lacks matching `space_id`, `biz_type`, supported collector type, or online heartbeat status.
 - Fixed node assignment points at an offline or incompatible node.
 - Function runtime/handler differs from the zip layout.

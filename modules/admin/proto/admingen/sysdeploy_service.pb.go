@@ -10,6 +10,7 @@ import (
 	reflect "reflect"
 	sync "sync"
 
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
@@ -377,11 +378,11 @@ type ListServiceDeploymentsReq struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	ServiceName string `protobuf:"bytes,1,opt,name=service_name,json=serviceName,proto3" json:"service_name,omitempty"`
-	ServiceKind string `protobuf:"bytes,2,opt,name=service_kind,json=serviceKind,proto3" json:"service_kind,omitempty"`
-	Scope       string `protobuf:"bytes,3,opt,name=scope,proto3" json:"scope,omitempty"`
-	Status      string `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
-	Page        *Page  `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
+	ServiceName string         `protobuf:"bytes,1,opt,name=service_name,json=serviceName,proto3" json:"service_name,omitempty"`
+	ServiceKind string         `protobuf:"bytes,2,opt,name=service_kind,json=serviceKind,proto3" json:"service_kind,omitempty"`
+	Scope       string         `protobuf:"bytes,3,opt,name=scope,proto3" json:"scope,omitempty"`
+	Status      string         `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	Page        *commonpb.Page `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListServiceDeploymentsReq) Reset() {
@@ -444,7 +445,7 @@ func (x *ListServiceDeploymentsReq) GetStatus() string {
 	return ""
 }
 
-func (x *ListServiceDeploymentsReq) GetPage() *Page {
+func (x *ListServiceDeploymentsReq) GetPage() *commonpb.Page {
 	if x != nil {
 		return x.Page
 	}
@@ -456,9 +457,9 @@ type ListServiceDeploymentsRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo     *RetInfo                    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo     *commonpb.RetInfo           `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 	Deployments []*ServiceDeployment        `protobuf:"bytes,2,rep,name=deployments,proto3" json:"deployments,omitempty"`
-	PageResult  *PageResult                 `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	PageResult  *commonpb.PageResult        `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 	Warnings    []*ServiceDeploymentWarning `protobuf:"bytes,4,rep,name=warnings,proto3" json:"warnings,omitempty"`
 }
 
@@ -494,7 +495,7 @@ func (*ListServiceDeploymentsRsp) Descriptor() ([]byte, []int) {
 	return file_sysdeploy_service_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *ListServiceDeploymentsRsp) GetRetInfo() *RetInfo {
+func (x *ListServiceDeploymentsRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -508,7 +509,7 @@ func (x *ListServiceDeploymentsRsp) GetDeployments() []*ServiceDeployment {
 	return nil
 }
 
-func (x *ListServiceDeploymentsRsp) GetPageResult() *PageResult {
+func (x *ListServiceDeploymentsRsp) GetPageResult() *commonpb.PageResult {
 	if x != nil {
 		return x.PageResult
 	}
@@ -574,7 +575,7 @@ type GetServiceDeploymentRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo                    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo    *commonpb.RetInfo           `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 	Deployment *ServiceDeployment          `protobuf:"bytes,2,opt,name=deployment,proto3" json:"deployment,omitempty"`
 	Warnings   []*ServiceDeploymentWarning `protobuf:"bytes,3,rep,name=warnings,proto3" json:"warnings,omitempty"`
 }
@@ -611,7 +612,7 @@ func (*GetServiceDeploymentRsp) Descriptor() ([]byte, []int) {
 	return file_sysdeploy_service_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *GetServiceDeploymentRsp) GetRetInfo() *RetInfo {
+func (x *GetServiceDeploymentRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -692,7 +693,7 @@ type CreateServiceDeploymentRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo                    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo    *commonpb.RetInfo           `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 	Deployment *ServiceDeployment          `protobuf:"bytes,2,opt,name=deployment,proto3" json:"deployment,omitempty"`
 	Warnings   []*ServiceDeploymentWarning `protobuf:"bytes,3,rep,name=warnings,proto3" json:"warnings,omitempty"`
 }
@@ -729,7 +730,7 @@ func (*CreateServiceDeploymentRsp) Descriptor() ([]byte, []int) {
 	return file_sysdeploy_service_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *CreateServiceDeploymentRsp) GetRetInfo() *RetInfo {
+func (x *CreateServiceDeploymentRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -818,7 +819,7 @@ type UpdateServiceDeploymentRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo                    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo    *commonpb.RetInfo           `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 	Deployment *ServiceDeployment          `protobuf:"bytes,2,opt,name=deployment,proto3" json:"deployment,omitempty"`
 	Warnings   []*ServiceDeploymentWarning `protobuf:"bytes,3,rep,name=warnings,proto3" json:"warnings,omitempty"`
 }
@@ -855,7 +856,7 @@ func (*UpdateServiceDeploymentRsp) Descriptor() ([]byte, []int) {
 	return file_sysdeploy_service_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *UpdateServiceDeploymentRsp) GetRetInfo() *RetInfo {
+func (x *UpdateServiceDeploymentRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -936,7 +937,7 @@ type DeleteServiceDeploymentRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo                    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo  *commonpb.RetInfo           `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 	Warnings []*ServiceDeploymentWarning `protobuf:"bytes,2,rep,name=warnings,proto3" json:"warnings,omitempty"`
 }
 
@@ -972,7 +973,7 @@ func (*DeleteServiceDeploymentRsp) Descriptor() ([]byte, []int) {
 	return file_sysdeploy_service_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *DeleteServiceDeploymentRsp) GetRetInfo() *RetInfo {
+func (x *DeleteServiceDeploymentRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -1029,7 +1030,7 @@ type ListActiveServiceDeploymentsRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo       *RetInfo                              `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo       *commonpb.RetInfo                     `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 	Deployments   []*ServiceDeployment                  `protobuf:"bytes,2,rep,name=deployments,proto3" json:"deployments,omitempty"`
 	DeploymentMap map[string]*ServiceDeploymentEndpoint `protobuf:"bytes,3,rep,name=deployment_map,json=deploymentMap,proto3" json:"deployment_map,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
@@ -1066,7 +1067,7 @@ func (*ListActiveServiceDeploymentsRsp) Descriptor() ([]byte, []int) {
 	return file_sysdeploy_service_proto_rawDescGZIP(), []int{14}
 }
 
-func (x *ListActiveServiceDeploymentsRsp) GetRetInfo() *RetInfo {
+func (x *ListActiveServiceDeploymentsRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -1373,9 +1374,9 @@ var file_sysdeploy_service_proto_goTypes = []interface{}{
 	(*ListActiveServiceDeploymentsReq)(nil), // 13: trpc.moox.ops.ListActiveServiceDeploymentsReq
 	(*ListActiveServiceDeploymentsRsp)(nil), // 14: trpc.moox.ops.ListActiveServiceDeploymentsRsp
 	nil,                                     // 15: trpc.moox.ops.ListActiveServiceDeploymentsRsp.DeploymentMapEntry
-	(*Page)(nil),                            // 16: trpc.moox.common.Page
-	(*RetInfo)(nil),                         // 17: trpc.moox.common.RetInfo
-	(*PageResult)(nil),                      // 18: trpc.moox.common.PageResult
+	(*commonpb.Page)(nil),                   // 16: trpc.moox.common.Page
+	(*commonpb.RetInfo)(nil),                // 17: trpc.moox.common.RetInfo
+	(*commonpb.PageResult)(nil),             // 18: trpc.moox.common.PageResult
 }
 var file_sysdeploy_service_proto_depIdxs = []int32{
 	16, // 0: trpc.moox.ops.ListServiceDeploymentsReq.page:type_name -> trpc.moox.common.Page
@@ -1424,7 +1425,6 @@ func file_sysdeploy_service_proto_init() {
 	if File_sysdeploy_service_proto != nil {
 		return
 	}
-	file_moox_common_proto_init()
 	if !protoimpl.UnsafeEnabled {
 		file_sysdeploy_service_proto_msgTypes[0].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ServiceDeployment); i {

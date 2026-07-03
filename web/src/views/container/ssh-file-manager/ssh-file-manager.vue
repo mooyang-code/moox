@@ -200,16 +200,11 @@ const loadDir = async (path: string) => {
   }
   loading.value = true;
   try {
-    const response = await sftpList(resolvedSessionId.value, path);
-    const res = response.data;
-    if (res.ret_info?.code === 0) {
-      fileList.value = res.files || [];
-      breadcrumbs.value = res.paths || [];
-      currentDir.value = res.current_dir;
-      pathInput.value = res.current_dir;
-    } else {
-      Message.error(res.ret_info?.msg || '加载目录失败');
-    }
+    const res = await sftpList(resolvedSessionId.value, path);
+    fileList.value = res.files || [];
+    breadcrumbs.value = res.paths || [];
+    currentDir.value = res.current_dir || '/';
+    pathInput.value = res.current_dir || '/';
   } catch (error) {
     console.error('加载目录失败:', error);
     Message.error('加载目录失败');
@@ -260,15 +255,10 @@ const onMkdirConfirm = async () => {
     const targetPath = currentDir.value === '/'
       ? `/${name}`
       : `${currentDir.value}/${name}`;
-    const response = await sftpMkdir(resolvedSessionId.value, targetPath);
-    const res = response.data;
-    if (res.ret_info?.code === 0) {
-      Message.success('目录创建成功');
-      mkdirModalVisible.value = false;
-      refresh();
-    } else {
-      Message.error(res.ret_info?.msg || '创建目录失败');
-    }
+    await sftpMkdir(resolvedSessionId.value, targetPath);
+    Message.success('目录创建成功');
+    mkdirModalVisible.value = false;
+    refresh();
   } catch (error) {
     console.error('创建目录失败:', error);
     Message.error('创建目录失败');
@@ -301,14 +291,9 @@ const downloadFile = (record: SftpFileItem) => {
 // ---------- 删除 ----------
 const deleteItem = async (record: SftpFileItem) => {
   try {
-    const response = await sftpDelete(resolvedSessionId.value, record.path);
-    const res = response.data;
-    if (res.ret_info?.code === 0) {
-      Message.success('删除成功');
-      refresh();
-    } else {
-      Message.error(res.ret_info?.msg || '删除失败');
-    }
+    await sftpDelete(resolvedSessionId.value, record.path);
+    Message.success('删除成功');
+    refresh();
   } catch (error) {
     console.error('删除失败:', error);
     Message.error('删除失败');

@@ -4,6 +4,8 @@
 
 这些文件导入的是 moox-storage 的元数据。管理台顶部空间选择器来自 Control 服务；如果页面里尚未出现同名空间，请先在管理台空间设置中创建同名空间，或后续接入 Control 侧空间导入。
 
+删库后重建端到端演示环境的流程见 [e2e/README.md](./e2e/README.md)。该流程只通过服务 API/CLI 导入示例数据，不直接写 SQLite 表。
+
 ## 文件
 
 - `platform-local.seed.yaml`：本地开发和演示用的平台级默认存储拓扑，包含 `local` 主存节点以及 Pebble、DuckDB、Bleve、Parquet 设备。

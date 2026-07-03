@@ -49,6 +49,8 @@ type MetadataService interface {
 	ListDataSources(ctx context.Context, req *ListDataSourcesReq) (*ListDataSourcesRsp, error)
 	// UpsertSubject 创建或更新数据对象。
 	UpsertSubject(ctx context.Context, req *UpsertSubjectReq) (*UpsertSubjectRsp, error)
+	// UpsertSubjectSymbol 创建或更新数据对象的来源侧代码映射。
+	UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq) (*UpsertSubjectSymbolRsp, error)
 	// RegisterDataSubject 注册数据对象、来源侧代码映射和数据集绑定。
 	RegisterDataSubject(ctx context.Context, req *RegisterDataSubjectReq) (*RegisterDataSubjectRsp, error)
 	// GetSubject 按 ID 获取数据对象。
@@ -379,6 +381,24 @@ func MetadataService_UpsertSubject_Handler(svr interface{}, ctx context.Context,
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).UpsertSubject(ctx, reqbody.(*UpsertSubjectReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_UpsertSubjectSymbol_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertSubjectSymbolReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).UpsertSubjectSymbol(ctx, reqbody.(*UpsertSubjectSymbolReq))
 	}
 
 	var rsp interface{}
@@ -1067,6 +1087,10 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_UpsertSubject_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/UpsertSubjectSymbol",
+			Func: MetadataService_UpsertSubjectSymbol_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/RegisterDataSubject",
 			Func: MetadataService_RegisterDataSubject_Handler,
 		},
@@ -1291,6 +1315,11 @@ func (s *UnimplementedMetadata) UpsertSubject(ctx context.Context, req *UpsertSu
 	return nil, errors.New("rpc UpsertSubject of service Metadata is not implemented")
 }
 
+// UpsertSubjectSymbol 创建或更新数据对象的来源侧代码映射。
+func (s *UnimplementedMetadata) UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq) (*UpsertSubjectSymbolRsp, error) {
+	return nil, errors.New("rpc UpsertSubjectSymbol of service Metadata is not implemented")
+}
+
 // RegisterDataSubject 注册数据对象、来源侧代码映射和数据集绑定。
 func (s *UnimplementedMetadata) RegisterDataSubject(ctx context.Context, req *RegisterDataSubjectReq) (*RegisterDataSubjectRsp, error) {
 	return nil, errors.New("rpc RegisterDataSubject of service Metadata is not implemented")
@@ -1499,6 +1528,8 @@ type MetadataClientProxy interface {
 	ListDataSources(ctx context.Context, req *ListDataSourcesReq, opts ...client.Option) (rsp *ListDataSourcesRsp, err error)
 	// UpsertSubject 创建或更新数据对象。
 	UpsertSubject(ctx context.Context, req *UpsertSubjectReq, opts ...client.Option) (rsp *UpsertSubjectRsp, err error)
+	// UpsertSubjectSymbol 创建或更新数据对象的来源侧代码映射。
+	UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq, opts ...client.Option) (rsp *UpsertSubjectSymbolRsp, err error)
 	// RegisterDataSubject 注册数据对象、来源侧代码映射和数据集绑定。
 	RegisterDataSubject(ctx context.Context, req *RegisterDataSubjectReq, opts ...client.Option) (rsp *RegisterDataSubjectRsp, err error)
 	// GetSubject 按 ID 获取数据对象。
@@ -1872,6 +1903,26 @@ func (c *MetadataClientProxyImpl) UpsertSubject(ctx context.Context, req *Upsert
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpsertSubjectRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq, opts ...client.Option) (*UpsertSubjectSymbolRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpsertSubjectSymbol")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("UpsertSubjectSymbol")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpsertSubjectSymbolRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

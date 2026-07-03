@@ -1,7 +1,5 @@
 import { App, Directive } from "vue";
-import antiShake from "@/directives/modules/global/anti-shake";
 import throttle from "@/directives/modules/global/throttle";
-import custom from "@/directives/modules/global/custom";
 import hasPerm from "@/directives/modules/permission/has-perm";
 import hasRole from "@/directives/modules/permission/has-role";
 
@@ -11,9 +9,7 @@ import hasRole from "@/directives/modules/permission/has-role";
 // install 方法的定义就插件对象，install 方法会在引入插件时自动被 vue 调用，并传参 vue 实例和 options
 
 const group: { [key: string]: Directive } = {
-  antiShake,
   throttle,
-  custom,
   hasPerm,
   hasRole
 };

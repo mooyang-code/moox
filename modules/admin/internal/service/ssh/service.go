@@ -22,7 +22,6 @@ type Service interface {
 	CreateSession(ctx context.Context, hostID int, clientIP string) (string, error)
 	DisconnectSession(ctx context.Context, sessionID string) error
 	ResizeWindow(ctx context.Context, sessionID string, w, h int) error
-	ExecCommand(ctx context.Context, sessionID string, cmd string) (string, error)
 	GetSessionConn(sessionID string) (*conn.SSHConn, bool)
 
 	// SFTP

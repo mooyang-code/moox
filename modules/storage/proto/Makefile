@@ -1,5 +1,6 @@
 PROTO_FILES := common.proto metadata.proto access.proto store.proto view.proto message.proto
 OUTPUT_DIR := ./gen
+COMMON_PROTO_DIR := ../../../packages/commonpb
 
 .PHONY: all clean
 
@@ -9,6 +10,8 @@ all:
 		echo "trpc-open create $$proto"; \
 		trpc-open create \
 			-p "./$$proto" \
+			--protodir . \
+			--protodir $(COMMON_PROTO_DIR) \
 			--rpconly \
 			--nogomod \
 			--mock=false \

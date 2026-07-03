@@ -1,720 +1,311 @@
 <template>
-  <div class="moox-page">
-    <!-- 如果有选中空间，显示量化交易首页 -->
-    <div v-if="selectedSpaceId" class="trading-dashboard">
-      <!-- 核心指标卡片 -->
-      <div class="metrics-grid">
-        <a-card class="metric-card" hoverable>
-          <div class="metric-content">
-            <div class="metric-icon">
-              <icon-dashboard :size="32" style="color: #1677ff;" />
-            </div>
-            <div class="metric-info">
-              <p class="metric-label">总资产</p>
-              <p class="metric-value">¥{{ formatNumber(totalAssets) }}</p>
-              <p class="metric-change positive">
-                <icon-arrow-up :size="16" />
-                +{{ assetChange.rate }}% (+¥{{ formatNumber(assetChange.amount) }})
-              </p>
-            </div>
-          </div>
-        </a-card>
-
-        <a-card class="metric-card" hoverable>
-          <div class="metric-content">
-            <div class="metric-icon">
-              <icon-heart-fill :size="32" style="color: #52c41a;" />
-            </div>
-            <div class="metric-info">
-              <p class="metric-label">运行策略</p>
-              <p class="metric-value">{{ runningStrategies }}</p>
-              <p class="metric-detail">{{ pausedStrategies }}个暂停</p>
-            </div>
-          </div>
-        </a-card>
-
-        <a-card class="metric-card" hoverable>
-          <div class="metric-content">
-            <div class="metric-icon">
-              <icon-bar-chart :size="32" style="color: #722ed1;" />
-            </div>
-            <div class="metric-info">
-              <p class="metric-label">今日交易</p>
-              <p class="metric-value">{{ todayTrades }}</p>
-              <p class="metric-detail positive">盈利: {{ profitableTrades }}笔</p>
-            </div>
-          </div>
-        </a-card>
-
-        <a-card class="metric-card" hoverable>
-          <div class="metric-content">
-            <div class="metric-icon">
-              <icon-exclamation-circle-fill :size="32" style="color: #fa8c16;" />
-            </div>
-            <div class="metric-info">
-              <p class="metric-label">风险等级</p>
-              <p class="metric-value risk-medium">中等</p>
-              <p class="metric-detail">最大回撤: {{ maxDrawdown }}%</p>
-            </div>
-          </div>
-        </a-card>
+  <div class="home-workbench">
+    <section class="hero-card">
+      <div>
+        <p class="eyebrow">MooX Control Plane</p>
+        <h1>{{ selectedSpaceId ? '当前空间工作台' : '欢迎使用 MooX' }}</h1>
+        <p class="hero-copy">
+          {{ selectedSpaceId
+            ? `当前空间：${selectedSpaceId}。从这里进入数据、采集、云节点和部署配置。`
+            : '请先创建或选择一个空间。空间是数据、采集、交易和运维资源的业务隔离边界。' }}
+        </p>
       </div>
+      <div class="hero-actions">
+        <a-button type="primary" @click="goSpaceSettings">
+          {{ selectedSpaceId ? '切换/管理空间' : '创建空间' }}
+        </a-button>
+        <a-button v-if="selectedSpaceId" type="outline" @click="goServiceDeployments">
+          服务部署
+        </a-button>
+      </div>
+    </section>
 
-      <!-- 收益曲线和策略表现 -->
-      <div class="main-content">
-        <!-- 收益曲线 -->
-        <div class="chart-section">
-          <a-card class="revenue-chart" title="收益曲线">
-            <template #extra>
-              <a-button-group>
-                <a-button 
-                  :type="timeRange === '30d' ? 'primary' : 'outline'" 
-                  size="small"
-                  @click="changeTimeRange('30d')"
-                >
-                  30天
-                </a-button>
-                <a-button 
-                  :type="timeRange === '3m' ? 'primary' : 'outline'" 
-                  size="small"
-                  @click="changeTimeRange('3m')"
-                >
-                  3个月
-                </a-button>
-                <a-button 
-                  :type="timeRange === '1y' ? 'primary' : 'outline'" 
-                  size="small"
-                  @click="changeTimeRange('1y')"
-                >
-                  1年
-                </a-button>
-              </a-button-group>
-            </template>
-            <div ref="revenueChartRef" class="chart-container"></div>
-          </a-card>
+    <a-alert v-if="!selectedSpaceId" class="space-alert" type="info" title="还没有选中空间">
+      创建空间后，再配置数据源、数据集、采集规则和云节点。系统运行数据可以按 examples/e2e 流程重建。
+    </a-alert>
+
+    <section class="quick-grid">
+      <a-card
+        v-for="item in quickEntries"
+        :key="item.path"
+        class="quick-card"
+        hoverable
+        @click="go(item.path)"
+      >
+        <div class="quick-index">{{ item.index }}</div>
+        <div>
+          <h3>{{ item.title }}</h3>
+          <p>{{ item.description }}</p>
         </div>
+      </a-card>
+    </section>
 
-        <!-- 策略表现 -->
-        <div class="strategy-section">
-          <a-card title="策略表现">
-            <template #extra>
-              <a-button type="text" @click="viewAllStrategies">查看全部</a-button>
-            </template>
-            <div class="strategy-list">
-              <div 
-                v-for="(strategy, index) in strategyData" 
-                :key="index" 
-                class="strategy-item"
-              >
-                <div class="strategy-info">
-                  <p class="strategy-name">{{ strategy.name }}</p>
-                  <div class="strategy-stats">
-                    <span 
-                      :class="['strategy-return', strategy.return > 0 ? 'positive' : 'negative']"
-                    >
-                      {{ strategy.return > 0 ? '+' : '' }}{{ strategy.return }}%
-                    </span>
-                    <a-tag 
-                      :color="getStrategyStatusColor(strategy.status)"
-                      size="small"
-                    >
-                      {{ getStrategyStatusText(strategy.status) }}
-                    </a-tag>
-                  </div>
-                </div>
-                <div class="strategy-actions">
-                  <a-button 
-                    type="text" 
-                    size="small"
-                    @click="toggleStrategy(strategy)"
-                  >
-                    <icon-pause v-if="strategy.status === 'running'" :size="16" />
-                    <icon-play-arrow v-else :size="16" />
-                  </a-button>
-                </div>
-              </div>
-            </div>
-          </a-card>
+    <section class="flow-card">
+      <div class="section-heading">
+        <p class="eyebrow">Recommended setup flow</p>
+        <h2>从空库重建系统数据</h2>
+      </div>
+      <div class="flow-list">
+        <div v-for="step in setupSteps" :key="step.title" class="flow-step">
+          <span class="flow-dot"></span>
+          <div>
+            <h4>{{ step.title }}</h4>
+            <p>{{ step.description }}</p>
+          </div>
         </div>
       </div>
-
-      <!-- 快捷操作和交易日志 -->
-      <div class="bottom-content">
-        <!-- 快捷操作 -->
-        <div class="shortcuts-section">
-          <a-card title="快捷操作">
-            <div class="shortcuts-grid">
-              <div class="shortcut-item" @click="createStrategy">
-                <div class="shortcut-icon create">
-                  <icon-plus :size="24" />
-                </div>
-                <span class="shortcut-label">创建策略</span>
-              </div>
-              <div class="shortcut-item" @click="backtest">
-                <div class="shortcut-icon">
-                  <icon-bar-chart :size="24" />
-                </div>
-                <span class="shortcut-label">回测分析</span>
-              </div>
-              <div class="shortcut-item" @click="viewPositions">
-                <div class="shortcut-icon">
-                  <icon-heart-fill :size="24" />
-                </div>
-                <span class="shortcut-label">查看持仓</span>
-              </div>
-              <div class="shortcut-item" @click="riskCheck">
-                <div class="shortcut-icon">
-                  <icon-exclamation-circle-fill :size="24" />
-                </div>
-                <span class="shortcut-label">风险检查</span>
-              </div>
-            </div>
-          </a-card>
-        </div>
-
-        <!-- 交易日志 -->
-        <div class="trades-section">
-          <a-card title="最近交易">
-            <template #extra>
-              <a-button type="text" @click="viewAllTrades">查看全部</a-button>
-            </template>
-            <div class="trades-list">
-              <div 
-                v-for="(trade, index) in tradeLog" 
-                :key="index" 
-                class="trade-item"
-              >
-                <div class="trade-info">
-                  <a-tag 
-                    :color="trade.action === '买入' ? 'red' : 'green'"
-                    size="small"
-                  >
-                    {{ trade.action }}
-                  </a-tag>
-                  <span class="trade-symbol">{{ trade.symbol }}</span>
-                </div>
-                <div class="trade-details">
-                  <p class="trade-price">{{ trade.price }}</p>
-                  <p class="trade-time">{{ trade.time }}</p>
-                </div>
-              </div>
-            </div>
-          </a-card>
-        </div>
-      </div>
-    </div>
-
-    <!-- 如果没有选中空间，显示默认首页 -->
-    <div v-else class="home-page">
-      <a-alert class="space-empty-state" type="info" title="请选择或创建空间">
-        空间是 MooX 的最大业务隔离上下文。容器、采集、数据资产、策略和交易模块会逐步围绕当前空间工作。
-        <template #action>
-          <a-button type="primary" size="small" @click="goSpaceSettings">创建空间</a-button>
-        </template>
-      </a-alert>
-      <!-- 常用功能 -->
-      <Shortcut />
-      <!-- 第三板指标 -->
-      <TargetBox />
-      <!-- 财务指标 -->
-      <Finance />
-      <!-- 数据图 -->
-      <DataBox />
-    </div>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts" name="Home">
-import { ref, onMounted, watch, nextTick, onUnmounted } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import VChart from '@visactor/vchart';
-import { useSpaceStore } from '@/store/modules/space';
+import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useRouter } from 'vue-router';
-import Shortcut from "@/views/home/components/shortcut.vue";
-import TargetBox from "@/views/home/components/target-box.vue";
-import Finance from "@/views/home/components/finance.vue";
-import DataBox from "@/views/home/components/data-box.vue";
-
+import { useSpaceStore } from '@/store/modules/space';
 
 const router = useRouter();
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
 
-// 图表实例
-const revenueChartRef = ref<HTMLElement>();
-let revenueChart: VChart | null = null;
-
-// 时间范围
-const timeRange = ref('30d');
-
-// 模拟数据
-const totalAssets = ref(1150000);
-const assetChange = ref({ rate: 15.6, amount: 15000 });
-const runningStrategies = ref(8);
-const pausedStrategies = ref(3);
-const todayTrades = ref(24);
-const profitableTrades = ref(18);
-const maxDrawdown = ref(5.2);
-
-const strategyData = ref([
-  { name: '均线策略A', return: 15.6, status: 'running' },
-  { name: '网格交易B', return: 12.3, status: 'running' },
-  { name: '动量策略C', return: 8.9, status: 'paused' },
-  { name: '套利策略D', return: 6.7, status: 'running' },
-  { name: '量化选股E', return: 4.2, status: 'stopped' },
+const quickEntries = computed(() => [
+  {
+    index: '01',
+    title: '数据资产',
+    description: '维护数据源、Subject、Dataset、字段和视图元数据。',
+    path: '/data/datasets',
+  },
+  {
+    index: '02',
+    title: '视图浏览',
+    description: '查询已经构建的 View，检查 K 线等数据是否写入成功。',
+    path: '/data/view-browse',
+  },
+  {
+    index: '03',
+    title: '采集规则',
+    description: '根据数据集对象生成采集任务，并提交给云节点执行。',
+    path: '/collector/rules',
+  },
+  {
+    index: '04',
+    title: '云节点',
+    description: '管理云账户、SCF 节点和采集运行时代码包。',
+    path: '/collector/functions',
+  },
+  {
+    index: '05',
+    title: '服务部署',
+    description: '查看 admin、cloudnode、collector、storage 等独立服务地址。',
+    path: '/settings/service-deployments',
+  },
+  {
+    index: '06',
+    title: '存储拓扑',
+    description: '维护 storage primary/access/view/archive 的部署与路由。',
+    path: '/ops/storage/nodes',
+  },
 ]);
 
-const tradeLog = ref([
-  { time: '14:30:25', action: '买入', symbol: 'AAPL', price: '150.25', qty: '100' },
-  { time: '14:28:12', action: '卖出', symbol: 'TSLA', price: '245.80', qty: '50' },
-  { time: '14:25:33', action: '买入', symbol: '000001', price: '12.45', qty: '1000' },
-  { time: '14:22:18', action: '卖出', symbol: '600036', price: '35.67', qty: '200' },
-]);
+const setupSteps = [
+  {
+    title: '1. 选择空间',
+    description: '空间是所有管理台请求的上下文，也是数据资产和采集配置的隔离边界。',
+  },
+  {
+    title: '2. 配置服务部署',
+    description: 'admin 只做管理台入口和网关转发；cloudnode、collector、storage 独立部署。',
+  },
+  {
+    title: '3. 初始化数据资产',
+    description: '从 examples/e2e 导入数据源、Subject、Dataset、字段和 View 定义。',
+  },
+  {
+    title: '4. 生成采集任务',
+    description: 'collector 根据 DatasetSubject 生成任务实例，并通过 cloudnode 下发到 SCF。',
+  },
+];
 
-// 收益数据
-const revenueData = ref([
-  { date: '01-01', value: 100000, benchmark: 100000 },
-  { date: '01-08', value: 102000, benchmark: 101000 },
-  { date: '01-15', value: 105000, benchmark: 102500 },
-  { date: '01-22', value: 103000, benchmark: 103000 },
-  { date: '01-29', value: 108000, benchmark: 104000 },
-  { date: '02-05', value: 112000, benchmark: 105500 },
-  { date: '02-12', value: 115000, benchmark: 106000 },
-]);
-
-// 格式化数字
-const formatNumber = (num: number) => {
-  return num.toLocaleString();
-};
-
-// 获取策略状态颜色
-const getStrategyStatusColor = (status: string) => {
-  switch (status) {
-    case 'running':
-      return 'green';
-    case 'paused':
-      return 'orange';
-    case 'stopped':
-      return 'gray';
-    default:
-      return 'gray';
-  }
-};
-
-// 获取策略状态文本
-const getStrategyStatusText = (status: string) => {
-  switch (status) {
-    case 'running':
-      return '运行中';
-    case 'paused':
-      return '暂停';
-    case 'stopped':
-      return '停止';
-    default:
-      return '未知';
-  }
-};
-
-// 切换时间范围
-const changeTimeRange = (range: string) => {
-  timeRange.value = range;
-  // 这里可以根据时间范围更新数据
-  updateChartData();
-};
-
-// 更新图表数据
-const updateChartData = () => {
-  if (revenueChart) {
-    // 根据时间范围生成不同的数据
-    const newData = generateDataByTimeRange(timeRange.value);
-    revenueChart.updateData('revenue', newData);
-  }
-};
-
-// 根据时间范围生成数据
-const generateDataByTimeRange = (range: string) => {
-  console.log('时间范围:', range);
-  // 这里可以根据实际需求生成不同时间范围的数据
-  return revenueData.value;
-};
-
-// 初始化收益图表
-const initRevenueChart = () => {
-  if (!revenueChartRef.value) return;
-
-  const spec = {
-    type: 'line',
-    data: {
-      values: revenueData.value.map(item => ({
-        date: item.date,
-        value: item.value,
-        type: '我的收益'
-      })).concat(revenueData.value.map(item => ({
-        date: item.date,
-        value: item.benchmark,
-        type: '基准'
-      })))
-    },
-    xField: 'date',
-    yField: 'value',
-    seriesField: 'type',
-    color: ['#1677ff', '#6B7280']
-  };
-
-  revenueChart = new VChart(spec as any, {
-    dom: revenueChartRef.value
-  });
-  revenueChart.renderSync();
-};
-
-// 切换策略状态
-const toggleStrategy = (strategy: any) => {
-  if (strategy.status === 'running') {
-    strategy.status = 'paused';
-    Message.success(`已暂停策略: ${strategy.name}`);
-  } else {
-    strategy.status = 'running';
-    Message.success(`已启动策略: ${strategy.name}`);
-  }
-};
-
-// 快捷操作方法
-const createStrategy = () => {
-  Message.info('跳转到创建策略页面');
-};
-
-const backtest = () => {
-  Message.info('跳转到回测分析页面');
-};
-
-const viewPositions = () => {
-  Message.info('跳转到持仓查看页面');
-};
-
-const riskCheck = () => {
-  Message.info('跳转到风险检查页面');
-};
-
-const viewAllStrategies = () => {
-  Message.info('跳转到策略管理页面');
-};
-
-const viewAllTrades = () => {
-  Message.info('跳转到交易记录页面');
-};
-
-// 监听空间ID变化
-watch(selectedSpaceId, (newSpaceId) => {
-  if (newSpaceId) {
-    loadSpaceData(newSpaceId);
-  }
-});
-
-// 加载空间数据
-const loadSpaceData = async (spaceId: string) => {
-  try {
-    console.log('加载空间数据:', spaceId);
-    
-    // 初始化图表
-    await nextTick();
-    if (selectedSpaceId.value) {
-      initRevenueChart();
-    }
-  } catch (error) {
-    console.error('加载空间数据失败:', error);
-    Message.error('加载空间数据失败');
-  }
+const go = (path: string) => {
+  router.push(path);
 };
 
 const goSpaceSettings = () => {
-  router.push('/settings/spaces');
+  go('/settings/spaces');
 };
 
-onMounted(async () => {
-  if (!selectedSpaceId.value) {
-    await spaceStore.loadSpaces();
-  }
-
-  if (selectedSpaceId.value) {
-    await loadSpaceData(selectedSpaceId.value);
-  }
-});
-
-// 组件销毁时清理图表
-onUnmounted(() => {
-  if (revenueChart) {
-    revenueChart.release();
-    revenueChart = null;
-  }
-});
+const goServiceDeployments = () => {
+  go('/settings/service-deployments');
+};
 </script>
 
 <style lang="scss" scoped>
-.home-page {
-  padding: $padding;
-  background: $color-bg-1;
+.home-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
 
-.space-empty-state {
-  margin-bottom: 16px;
+.hero-card,
+.flow-card {
+  position: relative;
+  overflow: hidden;
+  padding: 28px;
+  border: 1px solid rgba(20, 43, 82, 8%);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top right, rgba(20, 118, 255, 18%), transparent 34%),
+    linear-gradient(135deg, #f8fbff 0%, #eef5ff 48%, #f7f2e9 100%);
+  box-shadow: 0 18px 45px rgba(29, 54, 91, 8%);
 }
 
-.trading-dashboard {
-  padding: 24px;
-  background: $color-bg-1;
-  min-height: calc(100vh - 120px);
-}
-
-/* 指标卡片网格 */
-.metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 24px;
-  margin-bottom: 24px;
-}
-
-.metric-card {
-  .metric-content {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
-
-  .metric-icon {
-    flex-shrink: 0;
-    width: 48px;
-    height: 48px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 8px;
-    background: rgba(22, 119, 255, 0.1);
-  }
-
-  .metric-info {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .metric-label {
-    font-size: 14px;
-    color: $color-text-2;
-    margin: 0 0 4px 0;
-  }
-
-  .metric-value {
-    font-size: 24px;
-    font-weight: 600;
-    color: $color-text-1;
-    margin: 0 0 4px 0;
-    
-    &.risk-medium {
-      color: #fa8c16;
-    }
-  }
-
-  .metric-change, .metric-detail {
-    font-size: 12px;
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    
-    &.positive {
-      color: #52c41a;
-    }
-    
-    &.negative {
-      color: #ff4d4f;
-    }
-  }
-}
-
-/* 主要内容区域 */
-.main-content {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 24px;
-  margin-bottom: 24px;
-}
-
-.chart-section, .strategy-section {
-  .chart-container {
-    height: 300px;
-    width: 100%;
-  }
-}
-
-/* 策略列表 */
-.strategy-list {
-  .strategy-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 0;
-    border-bottom: 1px solid $color-border-2;
-    
-    &:last-child {
-      border-bottom: none;
-    }
-  }
-
-  .strategy-info {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .strategy-name {
-    font-size: 14px;
-    font-weight: 500;
-    color: $color-text-1;
-    margin: 0 0 8px 0;
-  }
-
-  .strategy-stats {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .strategy-return {
-    font-size: 13px;
-    font-weight: 500;
-    
-    &.positive {
-      color: #52c41a;
-    }
-    
-    &.negative {
-      color: #ff4d4f;
-    }
-  }
-
-  .strategy-actions {
-    flex-shrink: 0;
-  }
-}
-
-/* 底部内容区域 */
-.bottom-content {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+.hero-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 24px;
 }
 
-/* 快捷操作 */
-.shortcuts-grid {
+.eyebrow {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #37618f;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 1.08;
+  color: #142136;
+}
+
+.hero-copy {
+  max-width: 720px;
+  margin-top: 14px;
+  font-size: 15px;
+  line-height: 1.8;
+  color: #4e6178;
+}
+
+.hero-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.space-alert {
+  border-radius: 14px;
+}
+
+.quick-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 
-.shortcut-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 24px 16px;
-  border: 2px dashed $color-border-3;
-  border-radius: 8px;
+.quick-card {
   cursor: pointer;
-  transition: all 0.3s ease;
-  
-  &:hover {
-    border-color: #1677ff;
-    background: rgba(22, 119, 255, 0.05);
+  border-radius: 18px;
+
+  :deep(.arco-card-body) {
+    display: flex;
+    min-height: 132px;
+    gap: 18px;
+    padding: 22px;
+  }
+
+  h3 {
+    font-size: 18px;
+    color: #182235;
+  }
+
+  p {
+    margin-top: 10px;
+    line-height: 1.7;
+    color: #657489;
   }
 }
 
-.shortcut-icon {
-  width: 48px;
-  height: 48px;
+.quick-index {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 28px;
+  font-weight: 700;
+  color: #2b74d7;
+}
+
+.section-heading {
+  margin-bottom: 18px;
+
+  h2 {
+    font-size: 24px;
+    color: #17233c;
+  }
+}
+
+.flow-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.flow-step {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  background: $color-bg-3;
-  margin-bottom: 12px;
-  color: $color-text-2;
-  
-  &.create {
-    border: 2px dashed #1677ff;
-    background: rgba(22, 119, 255, 0.1);
-    color: #1677ff;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(54, 97, 143, 12%);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 62%);
+
+  h4 {
+    font-size: 15px;
+    color: #1d2a3d;
+  }
+
+  p {
+    margin-top: 6px;
+    line-height: 1.7;
+    color: #607086;
   }
 }
 
-.shortcut-label {
-  font-size: 14px;
-  font-weight: 500;
-  color: $color-text-1;
+.flow-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: #2b74d7;
+  box-shadow: 0 0 0 6px rgba(43, 116, 215, 12%);
 }
 
-/* 交易列表 */
-.trades-list {
-  .trade-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 0;
-    border-bottom: 1px solid $color-border-2;
-    
-    &:last-child {
-      border-bottom: none;
-    }
-  }
-
-  .trade-info {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .trade-symbol {
-    font-size: 14px;
-    font-weight: 500;
-    color: $color-text-1;
-  }
-
-  .trade-details {
-    text-align: right;
-  }
-
-  .trade-price {
-    font-size: 14px;
-    color: $color-text-1;
-    margin: 0 0 4px 0;
-  }
-
-  .trade-time {
-    font-size: 12px;
-    color: $color-text-3;
-    margin: 0;
+@media (max-width: 1080px) {
+  .quick-grid,
+  .flow-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-/* 响应式设计 */
-@media (max-width: 1200px) {
-  .main-content {
-    grid-template-columns: 1fr;
+@media (max-width: 720px) {
+  .hero-card {
+    flex-direction: column;
   }
-  
-  .bottom-content {
-    grid-template-columns: 1fr;
-  }
-}
 
-@media (max-width: 768px) {
-  .trading-dashboard {
-    padding: 16px;
+  .hero-actions {
+    width: 100%;
+    flex-wrap: wrap;
   }
-  
-  .metrics-grid {
-    grid-template-columns: 1fr;
-    gap: 16px;
-  }
-  
-  .shortcuts-grid {
+
+  .quick-grid,
+  .flow-list {
     grid-template-columns: 1fr;
   }
 }

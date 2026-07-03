@@ -24,7 +24,7 @@ async function buildProduction() {
             manualChunks: {
               'vendor': ['vue', 'vue-router', 'pinia'],
               'ui': ['@arco-design/web-vue'],
-              'utils': ['axios', 'js-yaml', 'codemirror']
+              'utils': ['axios']
             }
           }
         }

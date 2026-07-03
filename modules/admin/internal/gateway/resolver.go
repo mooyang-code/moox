@@ -2,11 +2,12 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"sync"
 )
 
-// ServiceDetailResolver allows runtime service deployment records to override
-// static gateway.yaml service addresses without adding per-endpoint gateway logic.
+// ServiceDetailResolver resolves gateway forwarding targets from runtime service
+// deployment records without adding per-endpoint gateway logic.
 type ServiceDetailResolver func(ctx context.Context, serviceID string) (ServiceDetail, bool)
 
 var (
@@ -21,7 +22,7 @@ func SetServiceDetailResolver(resolver ServiceDetailResolver) {
 	serviceDetailResolver = resolver
 }
 
-func resolveServiceDetail(ctx context.Context, cfg *Config, serviceID string) (ServiceDetail, error) {
+func resolveServiceDetail(ctx context.Context, serviceID string) (ServiceDetail, error) {
 	serviceDetailResolverMu.RLock()
 	resolver := serviceDetailResolver
 	serviceDetailResolverMu.RUnlock()
@@ -30,5 +31,5 @@ func resolveServiceDetail(ctx context.Context, cfg *Config, serviceID string) (S
 			return detail, nil
 		}
 	}
-	return cfg.GetServiceDetail(serviceID)
+	return ServiceDetail{}, fmt.Errorf("服务 '%s' 未在 t_service_deployments 中找到 active 部署记录", serviceID)
 }

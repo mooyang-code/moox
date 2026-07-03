@@ -32,7 +32,6 @@ go.work.sum
 skills/dev-helper/.env.local
 
 # infra 真实部署值覆盖文件（唯一存放真实 IP/凭证处），不入库
-infra/infra.local.yaml
 
 
 server/.claude/
@@ -46,6 +45,7 @@ server/.claude/
 /var/
 /release/
 /dist/
+/web/dist/
 /coverage/
 /modules/*/bin/
 /modules/*/data/
@@ -57,11 +57,19 @@ server/.claude/
 /modules/*/coverage/
 /modules/*/.cache/
 /modules/*/scf-build/
+/modules/collector/collector-scf-*.zip
 /modules/storage/.deps/
-/web-host/release/
 /scripts/node_exporter/build/
 cover.out
 cover.out.tmp
+
+# Runtime SQLite artifacts. Schema SQL belongs in module schema directories;
+# runtime database files are rebuilt from service startup and examples flows.
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 
 *.log
 
@@ -74,7 +82,7 @@ cover.out.tmp
 # Local debug screenshots at repo root
 /*.png
 
-# Local web-host build artifact (use web-host/release or ./bin)
+# Local web-host build artifact (use ./bin)
 /web-host/web-host
 /web-host/moox-web-host
 

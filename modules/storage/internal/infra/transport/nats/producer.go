@@ -219,7 +219,7 @@ func (p *NATSProducer) Options() transport.ProducerOptions {
 func durableConsumerName(base string, subject string) string {
 	base = sanitizeDurableName(base)
 	if base == "" {
-		base = "storage_deriver"
+		base = "storage_view_builder"
 	}
 	kind := sanitizeDurableName(subjectKind(subject))
 	if kind == "" {

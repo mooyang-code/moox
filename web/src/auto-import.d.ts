@@ -6,14 +6,11 @@
 export {}
 declare global {
   const EffectScope: typeof import('vue')['EffectScope']
-  const Message: (typeof import("./globals/index"))["Message"]
-  const arcoMessage: typeof import('./globals/index')['arcoMessage']
   const computed: typeof import('vue')['computed']
   const createApp: typeof import('vue')['createApp']
   const customRef: typeof import('vue')['customRef']
   const defineAsyncComponent: typeof import('vue')['defineAsyncComponent']
   const defineComponent: typeof import('vue')['defineComponent']
-  const dictFilter: typeof import('./globals/index')['dictFilter']
   const effectScope: typeof import('vue')['effectScope']
   const getCurrentInstance: typeof import('vue')['getCurrentInstance']
   const getCurrentScope: typeof import('vue')['getCurrentScope']

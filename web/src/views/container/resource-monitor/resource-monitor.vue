@@ -217,7 +217,6 @@ import {
   type HistoryPoint,
   formatBytesPerSecond
 } from '@/api/modules/host-monitor';
-import { isRetInfoSuccess } from '@/api/ret-info';
 
 // 状态管理
 const loading = ref(false);
@@ -314,15 +313,10 @@ const getProgressColor = (value: number) => {
 const refreshData = async (silent = false) => {
   loading.value = true;
   try {
-    const response = await getCurrentMetrics();
-    const res = response.data;
-    if (isRetInfoSuccess(res?.ret_info?.code)) {
-      hostMetrics.value = res.metrics || [];
-      if (!silent) {
-        Message.success('资源数据已刷新');
-      }
-    } else if (!silent) {
-      Message.error(res?.ret_info?.msg || '获取监控数据失败');
+    const res = await getCurrentMetrics();
+    hostMetrics.value = res.metrics || [];
+    if (!silent) {
+      Message.success('资源数据已刷新');
     }
   } catch (error) {
     console.error('获取监控数据失败:', error);
@@ -370,13 +364,10 @@ const loadHistory = async () => {
 
   historyLoading.value = true;
   try {
-    const response = await getHistoryMetrics(selectedHostAddress.value, historyDuration.value);
-    const res = response.data;
-    if (isRetInfoSuccess(res?.ret_info?.code)) {
-      historyData.value = res.history || [];
-      await nextTick();
-      renderTrendChart();
-    }
+    const res = await getHistoryMetrics(selectedHostAddress.value, historyDuration.value);
+    historyData.value = res.history || [];
+    await nextTick();
+    renderTrendChart();
   } catch (error) {
     console.error('获取历史数据失败:', error);
   } finally {

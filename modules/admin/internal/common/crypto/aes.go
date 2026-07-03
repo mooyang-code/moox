@@ -124,13 +124,6 @@ func VerifyPasswordHash(password, salt, hash string) bool {
 	return HashPassword(password, salt) == hash
 }
 
-// ValidateHash 验证客户端提交的哈希值
-func ValidateHash(password, salt string, timestamp int64, providedHash string) bool {
-	expectedHash := sha256.Sum256([]byte(password + salt + fmt.Sprint(timestamp)))
-	expectedHashStr := hex.EncodeToString(expectedHash[:])
-	return expectedHashStr == providedHash
-}
-
 // DeriveEncryptionKey 从盐值和时间戳派生加密密钥
 func DeriveEncryptionKey(salt string, timestamp int64) []byte {
 	// 使用盐值和时间戳生成32字节的密钥
@@ -183,7 +176,6 @@ func ValidateEncryptedPassword(ctx context.Context, storedPasswordHash, userStor
 		log.ErrorContextf(ctx, "[Auth] 密码解密失败: %v", err)
 		return false
 	}
-	log.InfoContextf(ctx, "[Auth] 解密得到的密码: %s", password)
 
 	// 3. 使用用户存储的盐值验证密码哈希
 	return VerifyPasswordHash(password, userStoredSalt, storedPasswordHash)
@@ -204,9 +196,7 @@ func DecryptPassword(encryptedPassword, salt string, timestamp int64) (string, e
 type TokenType string
 
 const (
-	TokenTypeAccess       TokenType = "access"        // 用户API访问token
-	TokenTypeRefresh      TokenType = "refresh"       // 刷新token
-	TokenTypeFileDownload TokenType = "file_download" // 文件下载token
+	TokenTypeAccess TokenType = "access" // 用户API访问token
 )
 
 // UnifiedClaims 统一的JWT声明
@@ -221,25 +211,12 @@ type UnifiedClaims struct {
 
 // JWTConfig JWT配置
 type JWTConfig struct {
-	SecretKey string
-	Issuer    string
+	Issuer string
 }
 
 // DefaultJWTConfig 默认JWT配置
 var DefaultJWTConfig = JWTConfig{
-	SecretKey: getJWTSecretKey(),
-	Issuer:    getJWTIssuer(),
-}
-
-// getJWTSecretKey 获取JWT密钥
-func getJWTSecretKey() string {
-	// 优先从环境变量读取
-	if secretKey := os.Getenv("MOOX_JWT_SECRET_KEY"); secretKey != "" {
-		return secretKey
-	}
-
-	// 兜底：使用默认值（仅用于开发环境）
-	return "kJ8#3Lz!b1A6xQwP2dR9vM4nS7eT0uYpG5hZcV8jF2mB6sXlD3rWqN0tH9uK1oE4"
+	Issuer: getJWTIssuer(),
 }
 
 // getJWTIssuer 获取JWT颁发者

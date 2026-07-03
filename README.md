@@ -1,9 +1,14 @@
 # moox
 一站式量化平台（web端/命令行）
 
-## 打包发布
+## 打包与部署
 
-统一发布入口位于 `scripts/deploy-moox.sh`，支持发布到本机目录或远端机器目录。发布包会包含核心二进制、Control/Storage 配置、Storage schema、`examples/` 示例元数据，并在发布目录内生成 `start.sh`、`stop.sh`、`status.sh`。
+仓库有两个入口：
+
+- `make release`：生成二进制归档包，包含核心二进制、各模块配置、Storage schema、docs 和 `examples/` 示例元数据；不包含源码开发脚本或 Agent skills。
+- `make deploy`：通过 `scripts/deploy-moox.sh` 生成可运行部署目录并同步到本机或远端，包含核心二进制、各模块配置、Storage schema、`examples` 示例元数据，以及 `start.sh`、`stop.sh`、`status.sh`。
+
+Admin、CloudNode、Collector 的 SQLite schema 已内嵌进各自二进制，启动时自动应用；部署包只保留 Storage metadata 初始化所需的 `storage/schema/metadata.sql`。
 
 本机发布并拉起：
 
@@ -31,4 +36,4 @@ make deploy ARGS="--target user@host --dir ~/moox/prod --goos linux --goarch amd
 <deploy-dir>/run
 ```
 
-因此 Control 的 SQLite 数据库会写到 `<deploy-dir>/data/moox.db`，Storage 的 Pebble/DuckDB/Bleve 等文件会写到 `<deploy-dir>/data/storage`，不会再落到源码目录。
+因此 Admin 的 SQLite 数据库会写到 `<deploy-dir>/data/admin.db`，Storage 的 Pebble/DuckDB/Bleve 等文件会写到 `<deploy-dir>/data/storage`，不会再落到源码目录。

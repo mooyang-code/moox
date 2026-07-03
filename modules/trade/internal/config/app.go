@@ -96,10 +96,10 @@ func Load(configPath string) (*AppConfig, error) {
 }
 
 func (c *AppConfig) applyEnv() {
-	if v := os.Getenv("DB_PATH"); v != "" {
+	if v := os.Getenv("MOOX_TRADE_DB_PATH"); v != "" {
 		c.Database.Path = v
 	}
-	if v := os.Getenv("MOOX_ENCRYPTION_KEY"); v != "" {
+	if v := os.Getenv("MOOX_TRADE_ENCRYPTION_KEY"); v != "" {
 		c.Security.EncryptionKey = v
 	}
 }

@@ -4,15 +4,14 @@ Storage components have different jobs:
 
 - Pebble: online, ordered, low-latency time-series writes and range reads.
 - DuckDB: analytical query, dynamic factor exploration, versioned wide table materialization.
-- CSV: cold backup, offline export, and disaster recovery data.
+- Parquet: cold archive, offline export, and disaster recovery data.
 - Bleve: text search for documents, announcements, news, notes, and metadata.
-- File-backed quant store: development and acceptance implementation for protocol paths.
 
 Factor values should be stored as long-form records keyed by:
 
-- workspace
-- exchange
-- instrument
+- space
+- data source
+- subject
 - dataset
 - time
 - factor instance

@@ -41,18 +41,11 @@ router.beforeEach(async (to: any, from: any, next: any) => {
   NProgress.start(); // 开启进度条
   const store = useUserInfoStore(pinia);
   const loadingStore = useLoadingStore(pinia);
-  const routeStore = useRoutesConfigStore(pinia);
   const { token, account } = storeToRefs(store);
 
   // 显示路由加载状态
   loadingStore.showRouteLoading();
 
-  // 如果从任务管理页面切换到其他页面，清理该组件的缓存
-  if (from.name === 'step-form' && to.name !== 'step-form') {
-    routeStore.removeRouteName('StepForm');
-    console.log('清理任务管理组件缓存');
-  }
-  // console.log("去", to, "来自", from);
   // next()内部加了path等于跳转指定路由会再次触发router.beforeEach，内部无参数等于放行，不会触发router.beforeEach
   if (to.path === "/login" && !token.value) {
     // 1、去登录页，无token，放行
@@ -64,7 +57,6 @@ router.beforeEach(async (to: any, from: any, next: any) => {
     // 3、去登录页，有token，检查token是否有效
     // 如果用户信息为空，说明token可能无效，允许进入登录页
     if (isEmptyObject(account.value.user)) {
-      console.log("路由守卫: 虽然有token但用户信息为空，允许进入登录页");
       next();
       return;
     }
@@ -98,7 +90,6 @@ router.beforeEach(async (to: any, from: any, next: any) => {
         await store.logOut();
         
         // 直接跳转到登录页，不做任何其他检查
-        console.log("路由守卫: 用户认证失败，强制跳转登录页");
         next('/login');
         return;
       }
@@ -106,7 +97,6 @@ router.beforeEach(async (to: any, from: any, next: any) => {
       // 检查路由是否存在，如果不存在则重新初始化路由
       if (!router.hasRoute(to.name as string) && to.name !== 'not-found') {
         try {
-          console.log("路由不存在，重新初始化路由:", to.name);
           await routeStore.initSetRouter();
           // 使用setTimeout确保路由已经添加完成
           setTimeout(() => {

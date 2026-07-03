@@ -2,7 +2,7 @@
 
 MooX Storage 是面向量化金融场景的统一数据存储服务。它在**同一套元数据和同一个访问入口**下，承接时序行情、静态资料、因子结果、文本与冷归档等多种数据形态，对外只暴露 Space / Dataset / Subject / View 等业务概念，屏蔽底层物理表、分片与存储引擎细节。
 
-> 架构细节见 [`docs/architecture.md`](docs/architecture.md)；概念与协议设计见仓库根目录 `docs/storage-*.md`。
+> 架构细节见仓库 [`docs/存储引擎架构.md`](../../docs/存储引擎架构.md)、[`docs/存储概念与设计意图.md`](../../docs/存储概念与设计意图.md)。
 
 ## 能力一览
 
@@ -517,11 +517,7 @@ curl -s -XPOST http://127.0.0.1:20200/trpc.moox.storage.Metadata/ListSpaces \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-3. **读写链路**：写一行再读回，或直接跑端到端测试（最稳妥）：
-
-```bash
-make e2e   # 本地拉起整套服务并用 K 线数据驱动写入/读取/搜索/视图
-```
+3. **读写链路**：通过 Access 写一行再读回，必要时再触发 View rebuild 后查询 DataView。
 
 4. **分布式额外检查**：Access 节点日志无"primary store"连接错误；主存节点 `PrimaryStore` 端口可被 Access 节点 `telnet`/`nc` 通；NATS 上能看到 `moox.storage.time_series.rows_changed.v1` / `moox.storage.record.rows_changed.v1` 主题有消息。
 
@@ -560,14 +556,15 @@ Space、View（+ViewColumn）、DataSource、Subject（+SubjectSymbol）、Datas
 
 `SUCCESS` / `INVALID_PARAM` / `ROUTE_NOT_FOUND` / `SPACE_NOT_FOUND` / `DATASET_NOT_FOUND` / `SUBJECT_NOT_FOUND` / `VIEW_NOT_FOUND` / `ENGINE_CAPABILITY_UNSUPPORTED` / `INNER_ERR`。
 
-## 测试
+## 开发入口
+
+storage 模块由仓库根脚本统一构建和发布：
 
 ```bash
-make test    # 单元测试（CGO 开启）
-make e2e     # 端到端测试：本地部署整套服务并用 K 线数据驱动各接口
+make build
+make check-boundaries
+make release
 ```
-
-端到端测试详见 [`tests/README.md`](tests/README.md)。
 
 ## 目录结构
 
@@ -582,6 +579,5 @@ internal/
   core/             领域抽象（eventbus/metadata/router/schema/factvalue/response）
   infra/            底层实现（device/metadata/eventbus/transport）
   services/         access / primary / view / archive
-tests/e2e/          端到端测试
 docs/               架构与设计文档
 ```

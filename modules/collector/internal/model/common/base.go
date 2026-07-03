@@ -8,15 +8,15 @@ import (
 // DataPoint 数据点接口
 type DataPoint interface {
 	// 数据源信息
-	Source() string      // 数据来源
-	SourceType() string  // 来源类型
-	
+	Source() string     // 数据来源
+	SourceType() string // 来源类型
+
 	// 时间信息
 	Timestamp() time.Time
-	
+
 	// 数据验证
 	Validate() error
-	
+
 	// 序列化
 	Marshal() ([]byte, error)
 	Unmarshal([]byte) error

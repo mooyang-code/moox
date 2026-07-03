@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/collectmgr/spacecontext"
+	"github.com/mooyang-code/moox/modules/admin/internal/gateway/spacecontext"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -47,7 +47,7 @@ func LookupRawHandler(serviceID, method string) (RawHandler, bool) {
 }
 
 // rawAndServe 分派裸 HTTP 处理器。
-// 返回 true 表示已处理（命中裸处理器），false 表示未命中、调用方应继续走 RPC dispatcher。
+// 返回 true 表示已处理（命中裸处理器），false 表示未命中、调用方应继续走 forwardHTTP 纯转发。
 // 注意：调用方应在读取请求体之前调用本函数，避免 multipart body 被网关读干。
 // 鉴权（JWT/HMAC）由调用方在调用本函数之前完成；space_id/trace_id 在此注入 ctx。
 func rawAndServe(ctx context.Context, w http.ResponseWriter, r *http.Request, serviceID, method string, headers map[string]string) bool {

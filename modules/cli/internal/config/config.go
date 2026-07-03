@@ -8,33 +8,18 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// MessageConfig 消息服务配置
-type MessageConfig struct {
-	Server      string `yaml:"server"`        // 消息服务器连接信息，例如: nats:localhost:4222
-	Stream      string `yaml:"stream"`        // 流名称
-	Consumer    string `yaml:"consumer"`      // 消费者名称
-	Subject     string `yaml:"subject"`       // 主题
-	MaxWaitTime int    `yaml:"max_wait_time"` // 最大等待时间(毫秒)
-}
-
 // MooxConfig moox服务配置
 type MooxConfig struct {
 	AuthTarget string `yaml:"auth_target"` // 认证服务地址
 }
 
-// Config 元数据服务配置
+// Config CLI 配置。
 type Config struct {
-	MetadataDatabase struct {
-		StorageDevice string `yaml:"storage_device"`
-	} `yaml:"metadata_database"`
-
 	Storage struct {
 		Target string `yaml:"target"`
 	} `yaml:"storage"`
 
 	MooX *MooxConfig `yaml:"moox"` // moox服务配置
-
-	Message *MessageConfig `yaml:"message"` // 消息服务配置
 }
 
 // getConfigPaths 获取可能的配置文件路径列表

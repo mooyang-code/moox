@@ -19,8 +19,6 @@ type User struct {
 	LastLoginAt        *time.Time `gorm:"column:c_last_login_at" json:"last_login_at"`
 	LastLoginIP        string     `gorm:"column:c_last_login_ip;default:''" json:"last_login_ip"`
 	LastPasswordChange time.Time  `gorm:"column:c_last_password_change;default:CURRENT_TIMESTAMP" json:"last_password_change"`
-	LoginAttempts      int        `gorm:"column:c_login_attempts;default:0" json:"login_attempts"`
-	LockedUntil        *time.Time `gorm:"column:c_locked_until" json:"locked_until"`
 	IsDeleted          string     `gorm:"column:c_is_deleted;not null;default:'false'" json:"-"`
 	CreatedAt          time.Time  `gorm:"column:c_ctime;default:CURRENT_TIMESTAMP" json:"created_at"`
 	UpdatedAt          time.Time  `gorm:"column:c_mtime;default:CURRENT_TIMESTAMP" json:"updated_at"`
@@ -29,29 +27,6 @@ type User struct {
 // TableName 表名
 func (u *User) TableName() string {
 	return "t_users"
-}
-
-// ActiveToken 活跃令牌模型 (对应 t_active_tokens 表)
-type ActiveToken struct {
-	ID         int64     `gorm:"column:c_id;primaryKey;autoIncrement" json:"id"`
-	JTI        string    `gorm:"column:c_jti;uniqueIndex;not null" json:"jti"`
-	UserID     string    `gorm:"column:c_user_id;not null;index" json:"user_id"`
-	TokenType  string    `gorm:"column:c_token_type;not null;default:'access';index" json:"token_type"`
-	DeviceID   string    `gorm:"column:c_device_id;default:'';index" json:"device_id"`
-	UserAgent  string    `gorm:"column:c_user_agent;default:''" json:"user_agent"`
-	ClientIP   string    `gorm:"column:c_client_ip;default:''" json:"client_ip"`
-	IssuedAt   time.Time `gorm:"column:c_issued_at;not null" json:"issued_at"`
-	ExpiresAt  time.Time `gorm:"column:c_expires_at;not null;index" json:"expires_at"`
-	LastUsedAt time.Time `gorm:"column:c_last_used_at;default:CURRENT_TIMESTAMP" json:"last_used_at"`
-	Revoked    int       `gorm:"column:c_revoked;not null;default:0;index" json:"revoked"`
-	IsDeleted  string    `gorm:"column:c_is_deleted;not null;default:'false'" json:"-"`
-	CreatedAt  time.Time `gorm:"column:c_ctime;default:CURRENT_TIMESTAMP" json:"created_at"`
-	UpdatedAt  time.Time `gorm:"column:c_mtime;default:CURRENT_TIMESTAMP" json:"updated_at"`
-}
-
-// TableName 表名
-func (t *ActiveToken) TableName() string {
-	return "t_active_tokens"
 }
 
 // LoginHistory 登录历史模型 (对应 t_login_history 表)
@@ -126,25 +101,9 @@ const (
 	UserStatusBanned    = 3 // 封禁
 )
 
-// 用户角色枚举
-const (
-	UserRoleGuest      = 0 // 游客
-	UserRoleUser       = 1 // 普通用户
-	UserRoleAdmin      = 2 // 管理员
-	UserRoleSuperAdmin = 3 // 超级管理员
-)
-
-// 令牌类型枚举
-const (
-	TokenTypeAccess  = "access"
-	TokenTypeRefresh = "refresh"
-)
-
 // 登录结果枚举
 const (
 	LoginResultSuccess = "success"
-	LoginResultFailed  = "failed"
-	LoginResultLocked  = "locked"
 )
 
 // 操作类型枚举

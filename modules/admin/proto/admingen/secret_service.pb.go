@@ -10,6 +10,7 @@ import (
 	reflect "reflect"
 	sync "sync"
 
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
@@ -31,7 +32,7 @@ type Secret struct {
 	SecretId    string `protobuf:"bytes,2,opt,name=secret_id,json=secretId,proto3" json:"secret_id,omitempty"`           // 唯一标识
 	Name        string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`                                   // 名称
 	Description string `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`                     // 描述
-	Category    string `protobuf:"bytes,5,opt,name=category,proto3" json:"category,omitempty"`                           // 分类: cloud/ssh/exchange/database/jwt/other
+	Category    string `protobuf:"bytes,5,opt,name=category,proto3" json:"category,omitempty"`                           // 分类: ssh/exchange/database/jwt/other
 	Provider    string `protobuf:"bytes,6,opt,name=provider,proto3" json:"provider,omitempty"`                           // 提供方
 	SecretType  string `protobuf:"bytes,7,opt,name=secret_type,json=secretType,proto3" json:"secret_type,omitempty"`     // 类型: api_key/password/token/certificate/ssh_key/other
 	KeyId       string `protobuf:"bytes,8,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`                    // 公开标识，不脱敏
@@ -281,9 +282,9 @@ type ListSecretsRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo  `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Secrets []*Secret `protobuf:"bytes,2,rep,name=secrets,proto3" json:"secrets,omitempty"`
-	Total   int64     `protobuf:"varint,3,opt,name=total,proto3" json:"total,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Secrets []*Secret         `protobuf:"bytes,2,rep,name=secrets,proto3" json:"secrets,omitempty"`
+	Total   int64             `protobuf:"varint,3,opt,name=total,proto3" json:"total,omitempty"`
 }
 
 func (x *ListSecretsRsp) Reset() {
@@ -318,7 +319,7 @@ func (*ListSecretsRsp) Descriptor() ([]byte, []int) {
 	return file_secret_service_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *ListSecretsRsp) GetRetInfo() *RetInfo {
+func (x *ListSecretsRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -391,8 +392,8 @@ type GetSecretRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Secret  *Secret  `protobuf:"bytes,2,opt,name=secret,proto3" json:"secret,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Secret  *Secret           `protobuf:"bytes,2,opt,name=secret,proto3" json:"secret,omitempty"`
 }
 
 func (x *GetSecretRsp) Reset() {
@@ -427,7 +428,7 @@ func (*GetSecretRsp) Descriptor() ([]byte, []int) {
 	return file_secret_service_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *GetSecretRsp) GetRetInfo() *RetInfo {
+func (x *GetSecretRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -493,8 +494,8 @@ type CreateSecretRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	SecretId string   `protobuf:"bytes,2,opt,name=secret_id,json=secretId,proto3" json:"secret_id,omitempty"`
+	RetInfo  *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	SecretId string            `protobuf:"bytes,2,opt,name=secret_id,json=secretId,proto3" json:"secret_id,omitempty"`
 }
 
 func (x *CreateSecretRsp) Reset() {
@@ -529,7 +530,7 @@ func (*CreateSecretRsp) Descriptor() ([]byte, []int) {
 	return file_secret_service_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *CreateSecretRsp) GetRetInfo() *RetInfo {
+func (x *CreateSecretRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -659,7 +660,7 @@ type UpdateSecretRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 }
 
 func (x *UpdateSecretRsp) Reset() {
@@ -694,7 +695,7 @@ func (*UpdateSecretRsp) Descriptor() ([]byte, []int) {
 	return file_secret_service_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *UpdateSecretRsp) GetRetInfo() *RetInfo {
+func (x *UpdateSecretRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -753,7 +754,7 @@ type DeleteSecretRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 }
 
 func (x *DeleteSecretRsp) Reset() {
@@ -788,7 +789,7 @@ func (*DeleteSecretRsp) Descriptor() ([]byte, []int) {
 	return file_secret_service_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *DeleteSecretRsp) GetRetInfo() *RetInfo {
+func (x *DeleteSecretRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -855,7 +856,7 @@ type ToggleSecretStatusRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 }
 
 func (x *ToggleSecretStatusRsp) Reset() {
@@ -890,7 +891,7 @@ func (*ToggleSecretStatusRsp) Descriptor() ([]byte, []int) {
 	return file_secret_service_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *ToggleSecretStatusRsp) GetRetInfo() *RetInfo {
+func (x *ToggleSecretStatusRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -1079,7 +1080,7 @@ var file_secret_service_proto_goTypes = []interface{}{
 	(*DeleteSecretRsp)(nil),       // 10: trpc.moox.ops.DeleteSecretRsp
 	(*ToggleSecretStatusReq)(nil), // 11: trpc.moox.ops.ToggleSecretStatusReq
 	(*ToggleSecretStatusRsp)(nil), // 12: trpc.moox.ops.ToggleSecretStatusRsp
-	(*RetInfo)(nil),               // 13: trpc.moox.common.RetInfo
+	(*commonpb.RetInfo)(nil),      // 13: trpc.moox.common.RetInfo
 }
 var file_secret_service_proto_depIdxs = []int32{
 	13, // 0: trpc.moox.ops.ListSecretsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
@@ -1115,7 +1116,6 @@ func file_secret_service_proto_init() {
 	if File_secret_service_proto != nil {
 		return
 	}
-	file_moox_common_proto_init()
 	if !protoimpl.UnsafeEnabled {
 		file_secret_service_proto_msgTypes[0].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*Secret); i {

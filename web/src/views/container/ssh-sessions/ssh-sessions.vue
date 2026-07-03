@@ -109,11 +109,8 @@ const AUTO_REFRESH_INTERVAL = 10000; // 10 seconds
 const loadSessions = async () => {
   loading.value = true;
   try {
-    const response = await getOnlineSessions();
-    const res = response.data;
-    if (res.ret_info?.code === 0) {
-      sessions.value = res.sessions || [];
-    }
+    const res = await getOnlineSessions();
+    sessions.value = res.sessions || [];
   } catch (error) {
     console.error('加载会话列表失败:', error);
     Message.error('加载会话列表失败');
@@ -125,14 +122,9 @@ const loadSessions = async () => {
 // 强制断开会话
 const handleForceDisconnect = async (sessionId: string) => {
   try {
-    const response = await forceDisconnect(sessionId);
-    const res = response.data;
-    if (res.ret_info?.code === 0) {
-      Message.success('会话已断开');
-      await loadSessions();
-    } else {
-      Message.error(res.ret_info?.msg || '断开会话失败');
-    }
+    await forceDisconnect(sessionId);
+    Message.success('会话已断开');
+    await loadSessions();
   } catch (error) {
     console.error('断开会话失败:', error);
     Message.error('断开会话失败');

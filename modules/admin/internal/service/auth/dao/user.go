@@ -64,20 +64,6 @@ func (d *UserDAO) GetUserByUsername(ctx context.Context, username string) (*mode
 	return &user, nil
 }
 
-// GetUserByEmail 根据邮箱获取用户信息
-func (d *UserDAO) GetUserByEmail(ctx context.Context, email string) (*model.User, error) {
-	var user model.User
-	err := d.db.WithContext(ctx).
-		Where("c_email = ? AND c_is_deleted != 'true'", email).
-		First(&user).Error
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &user, nil
-}
-
 // UpdateUser 更新用户信息
 func (d *UserDAO) UpdateUser(ctx context.Context, userID string, updates map[string]interface{}) error {
 	updates["c_mtime"] = time.Now()
@@ -107,122 +93,14 @@ func (d *UserDAO) UpdateUserPassword(ctx context.Context, userID, passwordHash, 
 func (d *UserDAO) UpdateUserLoginInfo(ctx context.Context, userID, clientIP string) error {
 	now := time.Now()
 	updates := map[string]interface{}{
-		"c_last_login_at":  &now,
-		"c_last_login_ip":  clientIP,
-		"c_login_attempts": 0,   // 成功登录后重置尝试次数
-		"c_locked_until":   nil, // 清除锁定状态
-		"c_mtime":          now,
+		"c_last_login_at": &now,
+		"c_last_login_ip": clientIP,
+		"c_mtime":         now,
 	}
 
 	return d.db.WithContext(ctx).
 		Model(&model.User{}).
 		Where("c_user_id = ? AND c_is_deleted != 'true'", userID).
-		Updates(updates).Error
-}
-
-// IncrementLoginAttempts 增加登录尝试次数
-func (d *UserDAO) IncrementLoginAttempts(ctx context.Context, userID string, lockUntil *time.Time) error {
-	updates := map[string]interface{}{
-		"c_login_attempts": gorm.Expr("c_login_attempts + 1"),
-		"c_mtime":          time.Now(),
-	}
-
-	if lockUntil != nil {
-		updates["c_locked_until"] = lockUntil
-	}
-
-	return d.db.WithContext(ctx).
-		Model(&model.User{}).
-		Where("c_user_id = ? AND c_is_deleted != 'true'", userID).
-		Updates(updates).Error
-}
-
-// DeleteUser 软删除用户
-func (d *UserDAO) DeleteUser(ctx context.Context, userID string) error {
-	updates := map[string]interface{}{
-		"c_is_deleted": "true",
-		"c_mtime":      time.Now(),
-	}
-
-	return d.db.WithContext(ctx).
-		Model(&model.User{}).
-		Where("c_user_id = ? AND c_is_deleted != 'true'", userID).
-		Updates(updates).Error
-}
-
-// ===== 令牌操作 =====
-
-// CreateToken 创建令牌记录
-func (d *UserDAO) CreateToken(ctx context.Context, token *model.ActiveToken) error {
-	token.CreatedAt = time.Now()
-	token.UpdatedAt = time.Now()
-
-	return d.db.WithContext(ctx).Create(token).Error
-}
-
-// GetTokenByJTI 根据JTI获取令牌信息
-func (d *UserDAO) GetTokenByJTI(ctx context.Context, jti string) (*model.ActiveToken, error) {
-	var token model.ActiveToken
-	err := d.db.WithContext(ctx).
-		Where("c_jti = ? AND c_is_deleted != 'true' AND c_revoked = 0", jti).
-		First(&token).Error
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &token, nil
-}
-
-// UpdateTokenLastUsed 更新令牌最后使用时间
-func (d *UserDAO) UpdateTokenLastUsed(ctx context.Context, jti string) error {
-	updates := map[string]interface{}{
-		"c_last_used_at": time.Now(),
-		"c_mtime":        time.Now(),
-	}
-
-	return d.db.WithContext(ctx).
-		Model(&model.ActiveToken{}).
-		Where("c_jti = ? AND c_is_deleted != 'true'", jti).
-		Updates(updates).Error
-}
-
-// RevokeToken 撤销令牌
-func (d *UserDAO) RevokeToken(ctx context.Context, jti string) error {
-	updates := map[string]interface{}{
-		"c_revoked": 1,
-		"c_mtime":   time.Now(),
-	}
-
-	return d.db.WithContext(ctx).
-		Model(&model.ActiveToken{}).
-		Where("c_jti = ? AND c_is_deleted != 'true'", jti).
-		Updates(updates).Error
-}
-
-// RevokeUserTokens 撤销用户的所有令牌
-func (d *UserDAO) RevokeUserTokens(ctx context.Context, userID string) error {
-	updates := map[string]interface{}{
-		"c_revoked": 1,
-		"c_mtime":   time.Now(),
-	}
-
-	return d.db.WithContext(ctx).
-		Model(&model.ActiveToken{}).
-		Where("c_user_id = ? AND c_is_deleted != 'true' AND c_revoked = 0", userID).
-		Updates(updates).Error
-}
-
-// CleanExpiredTokens 清理过期的令牌
-func (d *UserDAO) CleanExpiredTokens(ctx context.Context) error {
-	updates := map[string]interface{}{
-		"c_is_deleted": "true",
-		"c_mtime":      time.Now(),
-	}
-
-	return d.db.WithContext(ctx).
-		Model(&model.ActiveToken{}).
-		Where("c_expires_at < ? AND c_is_deleted != 'true'", time.Now()).
 		Updates(updates).Error
 }
 
@@ -235,22 +113,6 @@ func (d *UserDAO) CreateLoginHistory(ctx context.Context, history *model.LoginHi
 	return d.db.WithContext(ctx).Create(history).Error
 }
 
-// GetLoginHistoryByUser 获取用户登录历史
-func (d *UserDAO) GetLoginHistoryByUser(ctx context.Context, userID string, limit int) ([]*model.LoginHistory, error) {
-	var histories []*model.LoginHistory
-
-	query := d.db.WithContext(ctx).
-		Where("c_user_id = ?", userID).
-		Order("c_ctime DESC")
-
-	if limit > 0 {
-		query = query.Limit(limit)
-	}
-
-	err := query.Find(&histories).Error
-	return histories, err
-}
-
 // ===== 用户操作日志 =====
 
 // CreateUserAction 创建用户操作日志
@@ -258,22 +120,6 @@ func (d *UserDAO) CreateUserAction(ctx context.Context, action *model.UserAction
 	action.CreatedAt = time.Now()
 
 	return d.db.WithContext(ctx).Create(action).Error
-}
-
-// GetUserActionsByUser 获取用户操作日志
-func (d *UserDAO) GetUserActionsByUser(ctx context.Context, userID string, limit int) ([]*model.UserAction, error) {
-	var actions []*model.UserAction
-
-	query := d.db.WithContext(ctx).
-		Where("c_user_id = ?", userID).
-		Order("c_ctime DESC")
-
-	if limit > 0 {
-		query = query.Limit(limit)
-	}
-
-	err := query.Find(&actions).Error
-	return actions, err
 }
 
 // ===== 缓存操作 =====
@@ -372,85 +218,4 @@ func (d *UserDAO) GetLoginAttempt(ctx context.Context, username, ip string) (*mo
 func (d *UserDAO) DeleteLoginAttempt(ctx context.Context, username, ip string) error {
 	key := fmt.Sprintf("login_attempt:%s:%s", username, ip)
 	return d.cache.Del(ctx, key)
-}
-
-// ===== 统计查询 =====
-
-// CountUsers 统计用户数量
-func (d *UserDAO) CountUsers(ctx context.Context, status int32) (int64, error) {
-	var count int64
-	query := d.db.WithContext(ctx).Model(&model.User{}).Where("c_is_deleted != 'true'")
-
-	if status >= 0 {
-		query = query.Where("c_status = ?", status)
-	}
-
-	err := query.Count(&count).Error
-	return count, err
-}
-
-// CountActiveTokens 统计活跃令牌数量
-func (d *UserDAO) CountActiveTokens(ctx context.Context, userID string) (int64, error) {
-	var count int64
-	query := d.db.WithContext(ctx).
-		Model(&model.ActiveToken{}).
-		Where("c_is_deleted != 'true' AND c_revoked = 0 AND c_expires_at > ?", time.Now())
-
-	if userID != "" {
-		query = query.Where("c_user_id = ?", userID)
-	}
-
-	err := query.Count(&count).Error
-	return count, err
-}
-
-// GetUsersByRole 根据角色获取用户列表
-func (d *UserDAO) GetUsersByRole(ctx context.Context, role int32, limit, offset int) ([]*model.User, error) {
-	var users []*model.User
-
-	query := d.db.WithContext(ctx).
-		Where("c_role = ? AND c_is_deleted != 'true'", role).
-		Order("c_ctime DESC")
-
-	if limit > 0 {
-		query = query.Limit(limit)
-	}
-
-	if offset > 0 {
-		query = query.Offset(offset)
-	}
-
-	err := query.Find(&users).Error
-	return users, err
-}
-
-// ===== 初始化方法 =====
-
-// AutoMigrate 自动迁移表结构
-//
-// 作用：根据 Go struct 定义自动创建或更新数据库表结构
-//
-// 功能：
-//   - 首次运行：如果表不存在，自动创建表
-//   - 字段新增：如果 struct 新增字段，自动添加列到表中
-//   - 字段修改：如果字段类型改变，尝试修改列类型
-//   - 索引创建：根据 struct tag 自动创建索引
-//   - 安全保护：不会删除表中已存在但 struct 中不存在的列
-//
-// 注意：这不是数据迁移，而是表结构（schema）的自动管理
-func (d *UserDAO) AutoMigrate() error {
-	return d.db.AutoMigrate(
-		&model.User{},
-		&model.ActiveToken{},
-		&model.LoginHistory{},
-		&model.UserAction{},
-	)
-}
-
-// Close 关闭连接
-func (d *UserDAO) Close() error {
-	if d.cache != nil {
-		return d.cache.Close()
-	}
-	return nil
 }

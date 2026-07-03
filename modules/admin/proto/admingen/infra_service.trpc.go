@@ -204,73 +204,6 @@ func RegisterAuthService(s server.Service, svr AuthService) {
 	}
 }
 
-// AsyncTaskService defines service.
-type AsyncTaskService interface {
-	// CreateAsyncJob 创建异步 Job
-	CreateAsyncJob(ctx context.Context, req *CreateAsyncJobReq) (*CreateAsyncJobRsp, error)
-	// QueryAsyncJob 查询 Job 状态
-	QueryAsyncJob(ctx context.Context, req *QueryAsyncJobReq) (*QueryAsyncJobRsp, error)
-}
-
-func AsyncTaskService_CreateAsyncJob_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateAsyncJobReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AsyncTaskService).CreateAsyncJob(ctx, reqbody.(*CreateAsyncJobReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func AsyncTaskService_QueryAsyncJob_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &QueryAsyncJobReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AsyncTaskService).QueryAsyncJob(ctx, reqbody.(*QueryAsyncJobReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-// AsyncTaskServer_ServiceDesc descriptor for server.RegisterService.
-var AsyncTaskServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.moox.infra.AsyncTask",
-	HandlerType: ((*AsyncTaskService)(nil)),
-	Methods: []server.Method{
-		{
-			Name: "/trpc.moox.infra.AsyncTask/CreateAsyncJob",
-			Func: AsyncTaskService_CreateAsyncJob_Handler,
-		},
-		{
-			Name: "/trpc.moox.infra.AsyncTask/QueryAsyncJob",
-			Func: AsyncTaskService_QueryAsyncJob_Handler,
-		},
-	},
-}
-
-// RegisterAsyncTaskService registers service.
-func RegisterAsyncTaskService(s server.Service, svr AsyncTaskService) {
-	if err := s.Register(&AsyncTaskServer_ServiceDesc, svr); err != nil {
-		panic(fmt.Sprintf("AsyncTask register error:%v", err))
-	}
-}
-
 // DnsService defines service.
 type DnsService interface {
 	// ListDNSRecords 列出所有 DNS 解析记录
@@ -375,18 +308,6 @@ func (s *UnimplementedAuth) GetUserInfo(ctx context.Context, req *GetUserInfoReq
 // UpdateUserInfo 更新用户信息
 func (s *UnimplementedAuth) UpdateUserInfo(ctx context.Context, req *UpdateUserInfoReq) (*UpdateUserInfoRsp, error) {
 	return nil, errors.New("rpc UpdateUserInfo of service Auth is not implemented")
-}
-
-type UnimplementedAsyncTask struct{}
-
-// CreateAsyncJob 创建异步 Job
-func (s *UnimplementedAsyncTask) CreateAsyncJob(ctx context.Context, req *CreateAsyncJobReq) (*CreateAsyncJobRsp, error) {
-	return nil, errors.New("rpc CreateAsyncJob of service AsyncTask is not implemented")
-}
-
-// QueryAsyncJob 查询 Job 状态
-func (s *UnimplementedAsyncTask) QueryAsyncJob(ctx context.Context, req *QueryAsyncJobReq) (*QueryAsyncJobRsp, error) {
-	return nil, errors.New("rpc QueryAsyncJob of service AsyncTask is not implemented")
 }
 
 type UnimplementedDns struct{}
@@ -568,63 +489,6 @@ func (c *AuthClientProxyImpl) UpdateUserInfo(ctx context.Context, req *UpdateUse
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpdateUserInfoRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-// AsyncTaskClientProxy defines service client proxy
-type AsyncTaskClientProxy interface {
-	// CreateAsyncJob 创建异步 Job
-	CreateAsyncJob(ctx context.Context, req *CreateAsyncJobReq, opts ...client.Option) (rsp *CreateAsyncJobRsp, err error)
-	// QueryAsyncJob 查询 Job 状态
-	QueryAsyncJob(ctx context.Context, req *QueryAsyncJobReq, opts ...client.Option) (rsp *QueryAsyncJobRsp, err error)
-}
-
-type AsyncTaskClientProxyImpl struct {
-	client client.Client
-	opts   []client.Option
-}
-
-var NewAsyncTaskClientProxy = func(opts ...client.Option) AsyncTaskClientProxy {
-	return &AsyncTaskClientProxyImpl{client: client.DefaultClient, opts: opts}
-}
-
-func (c *AsyncTaskClientProxyImpl) CreateAsyncJob(ctx context.Context, req *CreateAsyncJobReq, opts ...client.Option) (*CreateAsyncJobRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.infra.AsyncTask/CreateAsyncJob")
-	msg.WithCalleeServiceName(AsyncTaskServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("infra")
-	msg.WithCalleeService("AsyncTask")
-	msg.WithCalleeMethod("CreateAsyncJob")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &CreateAsyncJobRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *AsyncTaskClientProxyImpl) QueryAsyncJob(ctx context.Context, req *QueryAsyncJobReq, opts ...client.Option) (*QueryAsyncJobRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.infra.AsyncTask/QueryAsyncJob")
-	msg.WithCalleeServiceName(AsyncTaskServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("infra")
-	msg.WithCalleeService("AsyncTask")
-	msg.WithCalleeMethod("QueryAsyncJob")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &QueryAsyncJobRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

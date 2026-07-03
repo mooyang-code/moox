@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,7 +12,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	"github.com/mooyang-code/moox/modules/collector/pkg/packager"
+	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
 	"github.com/spf13/cobra"
 )
 
@@ -22,7 +21,6 @@ type collectorPackageOptions struct {
 	Version       string
 	Out           string
 	ConfigDir     string
-	Overrides     []string
 }
 
 type collectorPublishOptions struct {
@@ -122,11 +120,12 @@ var collectorFunctionPublishCmd = &cobra.Command{
 }
 
 type collectorPublishSummary struct {
-	ZipPath     string `json:"zip_path"`
-	UploadJobID string `json:"upload_job_id"`
-	PackageID   string `json:"package_id,omitempty"`
-	CreateJobID string `json:"create_job_id,omitempty"`
-	DeployJobID string `json:"deploy_job_id,omitempty"`
+	ZipPath              string `json:"zip_path"`
+	PackageID            string `json:"package_id,omitempty"`
+	CreateBatchID        string `json:"create_batch_id,omitempty"`
+	DeployBatchID        string `json:"deploy_batch_id,omitempty"`
+	CreateProcessedCount int    `json:"create_processed_count,omitempty"`
+	DeployProcessedCount int    `json:"deploy_processed_count,omitempty"`
 }
 
 func init() {
@@ -144,7 +143,7 @@ func init() {
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.NodeID, "node-id", "", "existing cloud node id / function name")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ZipPath, "zip", "", "existing SCF zip path")
-	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.PackageName, "package-name", "data-collector", "function package name")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.PackageName, "package-name", "moox-collector", "function package name")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.PackageType, "package-type", "data_collector", "function package type")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.BizType, "biz-type", "data_collector", "business type")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.Runtime, "runtime", "CustomRuntime", "SCF runtime")
@@ -158,12 +157,12 @@ func init() {
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.Handler, "handler", "main", "SCF handler")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.Region, "region", "", "cloud region")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ZipPath, "zip", "", "existing SCF zip path")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.PackageName, "package-name", "data-collector", "function package name")
+	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.PackageName, "package-name", "moox-collector", "function package name")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.PackageType, "package-type", "data_collector", "function package type")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.BizType, "biz-type", "data_collector", "business type")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.NodeType, "node-type", "scf-event", "cloud node type")
 	collectorFunctionPublishCmd.Flags().StringArrayVar(&collectorPublishFlags.Env, "env", nil, "SCF environment variable as KEY=VALUE")
-	collectorFunctionPublishCmd.Flags().StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "SCF config value as KEY=VALUE")
+	collectorFunctionPublishCmd.Flags().StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; not written into SCF package config.yaml")
 }
 
 func addCollectorPackageFlags(cmd *cobra.Command, opts *collectorPackageOptions) {
@@ -171,10 +170,9 @@ func addCollectorPackageFlags(cmd *cobra.Command, opts *collectorPackageOptions)
 	cmd.Flags().StringVar(&opts.Version, "version", "dev", "collector package version")
 	cmd.Flags().StringVar(&opts.Out, "out", "", "output zip path")
 	cmd.Flags().StringVar(&opts.ConfigDir, "config", "", "collector config directory")
-	cmd.Flags().StringArrayVar(&opts.Overrides, "set", nil, "config override as dotted.path=value")
 }
 
-func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions) (*packager.BuildSCFPackageResult, error) {
+func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions) (*collectorpackager.BuildSCFPackageResult, error) {
 	collectorRoot, err := resolveCollectorRoot(opts.CollectorRoot)
 	if err != nil {
 		return nil, err
@@ -200,12 +198,10 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 	if err := buildCollectorLinuxBinary(ctx, collectorRoot, binaryPath, version); err != nil {
 		return nil, err
 	}
-	return packager.BuildSCFPackage(packager.BuildSCFPackageOptions{
+	return collectorpackager.BuildSCFPackage(collectorpackager.BuildSCFPackageOptions{
 		BinaryPath: binaryPath,
 		ConfigDir:  configDir,
 		OutPath:    outPath,
-		Version:    version,
-		Overrides:  parseCollectorOverrides(opts.Overrides),
 	})
 }
 
@@ -232,45 +228,39 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		return collectorPublishSummary{}, err
 	}
 
-	client := newCollectorAdminClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey)
-	uploadResp, err := client.CreateUploadPackageJob(ctx, adminclient.UploadPackageJobRequest{
-		PackageName:    defaultFlag(opts.PackageName, "data-collector"),
-		Version:        defaultFlag(opts.Version, "dev"),
-		Runtime:        defaultFlag(opts.Runtime, "CustomRuntime"),
-		PackageType:    defaultFlag(opts.PackageType, "data_collector"),
-		BizType:        defaultFlag(opts.BizType, "data_collector"),
-		CloudAccountID: opts.CloudAccountID,
-		FileContent:    base64.StdEncoding.EncodeToString(data),
-	})
+	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey)
+	uploadResp, err := client.UploadPackage(ctx, adminclient.UploadPackageRequest{
+		PackageName:      defaultFlag(opts.PackageName, "moox-collector"),
+		Version:          defaultFlag(opts.Version, "dev"),
+		Runtime:          defaultFlag(opts.Runtime, "CustomRuntime"),
+		PackageType:      adminclient.ResolvePackageType(defaultFlag(opts.PackageType, "data_collector")),
+		BizType:          defaultFlag(opts.BizType, "data_collector"),
+		CloudAccountID:   opts.CloudAccountID,
+		OriginalFilename: filepath.Base(zipPath),
+	}, data)
 	if err != nil {
 		return collectorPublishSummary{}, err
 	}
 	summary := collectorPublishSummary{
-		ZipPath:     zipPath,
-		UploadJobID: uploadResp.JobID,
+		ZipPath:   zipPath,
+		PackageID: uploadResp.PackageID,
 	}
 
-	packageID, err := pollPackageID(ctx, client, uploadResp.JobID, 5*time.Minute)
-	if err != nil {
-		return summary, err
-	}
-	summary.PackageID = packageID
-
-	createResp, err := client.CreateNodeJob(ctx, adminclient.CreateNodeJobRequest{
+	createResp, err := client.BatchCreateNodes(ctx, []adminclient.NodeCreateItem{{
 		CloudAccountID: opts.CloudAccountID,
 		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
 		Runtime:        defaultFlag(opts.Runtime, "CustomRuntime"),
 		Handler:        defaultFlag(opts.Handler, "main"),
-		BizType:        defaultFlag(opts.BizType, "data_collector"),
 		Config:         parseCollectorOverrides(opts.Config),
 		Environment:    parseCollectorOverrides(opts.Env),
 		Region:         opts.Region,
-		PackageID:      packageID,
-	})
+		PackageID:      uploadResp.PackageID,
+	}})
 	if err != nil {
 		return summary, err
 	}
-	summary.CreateJobID = createResp.JobID
+	summary.CreateBatchID = createResp.BatchID
+	summary.CreateProcessedCount = createResp.ProcessedCount
 	return summary, nil
 }
 
@@ -297,45 +287,37 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 		return collectorPublishSummary{}, err
 	}
 
-	client := newCollectorAdminClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey)
-	uploadResp, err := client.CreateUploadPackageJob(ctx, adminclient.UploadPackageJobRequest{
-		PackageName:    defaultFlag(opts.PackageName, "data-collector"),
-		Version:        defaultFlag(opts.Version, "dev"),
-		Runtime:        defaultFlag(opts.Runtime, "CustomRuntime"),
-		PackageType:    defaultFlag(opts.PackageType, "data_collector"),
-		BizType:        defaultFlag(opts.BizType, "data_collector"),
-		CloudAccountID: opts.CloudAccountID,
-		FileContent:    base64.StdEncoding.EncodeToString(data),
-	})
+	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey)
+	uploadResp, err := client.UploadPackage(ctx, adminclient.UploadPackageRequest{
+		PackageName:      defaultFlag(opts.PackageName, "moox-collector"),
+		Version:          defaultFlag(opts.Version, "dev"),
+		Runtime:          defaultFlag(opts.Runtime, "CustomRuntime"),
+		PackageType:      adminclient.ResolvePackageType(defaultFlag(opts.PackageType, "data_collector")),
+		BizType:          defaultFlag(opts.BizType, "data_collector"),
+		CloudAccountID:   opts.CloudAccountID,
+		OriginalFilename: filepath.Base(zipPath),
+	}, data)
 	if err != nil {
 		return collectorPublishSummary{}, err
 	}
 	summary := collectorPublishSummary{
-		ZipPath:     zipPath,
-		UploadJobID: uploadResp.JobID,
+		ZipPath:   zipPath,
+		PackageID: uploadResp.PackageID,
 	}
 
-	packageID, err := pollPackageID(ctx, client, uploadResp.JobID, 5*time.Minute)
-	if err != nil {
-		return summary, err
-	}
-	summary.PackageID = packageID
-
-	deployResp, err := client.CreateDeployNodeJob(ctx, adminclient.DeployNodeJobRequest{
+	deployResp, err := client.BatchDeployNodes(ctx, []adminclient.NodeDeployItem{{
 		NodeID:    opts.NodeID,
-		PackageID: packageID,
-	})
+		PackageID: uploadResp.PackageID,
+	}})
 	if err != nil {
 		return summary, err
 	}
-	summary.DeployJobID = deployResp.JobID
-	if err := pollJobSuccess(ctx, client, deployResp.JobID, 10*time.Minute); err != nil {
-		return summary, err
-	}
+	summary.DeployBatchID = deployResp.BatchID
+	summary.DeployProcessedCount = deployResp.ProcessedCount
 	return summary, nil
 }
 
-func newCollectorAdminClient(controlURL, accessToken, serviceAccessKey, serviceSecretKey string) *adminclient.Client {
+func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKey string) *adminclient.Client {
 	client := adminclient.New(controlURL)
 	client.HTTPClient = &http.Client{Timeout: 10 * time.Minute}
 	client.AccessToken = defaultFlag(accessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
@@ -351,34 +333,6 @@ func newCollectorAdminClient(controlURL, accessToken, serviceAccessKey, serviceS
 	return client
 }
 
-func pollJobSuccess(ctx context.Context, client *adminclient.Client, jobID string, timeout time.Duration) error {
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
-	tick := time.NewTicker(2 * time.Second)
-	defer tick.Stop()
-	for {
-		job, err := client.QueryJob(ctx, jobID)
-		if err == nil {
-			if job.JobStatus == 3 {
-				return fmt.Errorf("job %s failed: %s", jobID, firstTaskError(job))
-			}
-			if job.JobStatus == 4 && job.FailedTaskCnt > 0 {
-				return fmt.Errorf("job %s failed: %s", jobID, firstTaskError(job))
-			}
-			if job.JobStatus == 2 && job.SuccessTaskCnt > 0 && job.FailedTaskCnt == 0 {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-deadline.C:
-			return fmt.Errorf("timed out waiting for job %s to succeed", jobID)
-		case <-tick.C:
-		}
-	}
-}
-
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version string) error {
 	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-X main.AppVersion=%s", version), "-o", outPath, "./cmd/moox-collector/main.go")
 	cmd.Dir = collectorRoot
@@ -388,55 +342,6 @@ func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, vers
 		return fmt.Errorf("build collector linux/amd64 binary: %w\n%s", err, output)
 	}
 	return nil
-}
-
-func pollPackageID(ctx context.Context, client *adminclient.Client, jobID string, timeout time.Duration) (string, error) {
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
-	tick := time.NewTicker(2 * time.Second)
-	defer tick.Stop()
-	for {
-		job, err := client.QueryJob(ctx, jobID)
-		if err == nil {
-			if packageID := packageIDFromJob(job); packageID != "" {
-				return packageID, nil
-			}
-			if job.JobStatus == 3 || job.JobStatus == 4 {
-				return "", fmt.Errorf("upload job %s failed: %s", jobID, firstTaskError(job))
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-deadline.C:
-			return "", fmt.Errorf("timed out waiting for package_id from upload job %s", jobID)
-		case <-tick.C:
-		}
-	}
-}
-
-func packageIDFromJob(job *adminclient.JobQueryResult) string {
-	for _, task := range job.Tasks {
-		if task.TaskType != adminclient.TaskTypeUploadFileToCOS || task.ResultData == "" {
-			continue
-		}
-		var result struct {
-			PackageID string `json:"package_id"`
-		}
-		if err := json.Unmarshal([]byte(task.ResultData), &result); err == nil && result.PackageID != "" {
-			return result.PackageID
-		}
-	}
-	return ""
-}
-
-func firstTaskError(job *adminclient.JobQueryResult) string {
-	for _, task := range job.Tasks {
-		if task.ErrorMessage != "" {
-			return task.ErrorMessage
-		}
-	}
-	return job.JobStatusText
 }
 
 func resolveCollectorRoot(explicit string) (string, error) {

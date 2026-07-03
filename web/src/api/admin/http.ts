@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { AxiosRequestConfig } from 'axios';
 import { Message } from '@arco-design/web-vue';
 import { gatewayOrigin } from '@/api/gateway';
 import { isRetInfoSuccess } from '../ret-info';
@@ -21,26 +22,32 @@ function readAccessToken(): string {
   }
 }
 
+function readAccessTokenFromConfig(config?: AxiosRequestConfig): string {
+  const headers = (config?.headers || {}) as Record<string, string | undefined>;
+  return headers.Authorization || headers['X-Access-Token'] || '';
+}
+
 function assertControlSuccess<T>(rsp: ControlResponse<T>): T {
-  if (rsp.ret_info) {
-    const retCode = rsp.ret_info.code;
-    if (!isRetInfoSuccess(retCode)) {
-      throw new Error(rsp.ret_info.msg || `control request failed: ${retCode}`);
-    }
+  if (!rsp.ret_info) {
+    throw new Error('control response missing ret_info');
   }
-  const code = rsp.code;
-  if (code !== undefined && code !== null && !isRetInfoSuccess(code)) {
-    throw new Error(rsp.message || rsp.msg || `control request failed: ${code}`);
+  const retCode = rsp.ret_info.code;
+  if (!isRetInfoSuccess(retCode)) {
+    throw new Error(rsp.ret_info.msg || `control request failed: ${retCode}`);
   }
-  return (rsp.data ?? rsp) as T;
+  return rsp as T;
 }
 
 export async function callControl<TReq extends object, TRsp>(
   service: string,
   method: string,
   req: TReq,
+  config?: AxiosRequestConfig,
 ): Promise<TRsp> {
-  const rsp = await adminClient.post<ControlResponse<TRsp>>(`/api/admin/${service}/${method}`, req);
+  if (!readAccessToken() && !readAccessTokenFromConfig(config)) {
+    throw new Error('未登录或登录态已失效，请重新登录后再访问管理接口');
+  }
+  const rsp = await adminClient.post<ControlResponse<TRsp>>(`/api/admin/${service}/${method}`, req, config);
   return assertControlSuccess<TRsp>(rsp.data);
 }
 
@@ -64,7 +71,9 @@ adminClient.interceptors.response.use(
     return rsp;
   },
   (error) => {
-    Message.error(error?.message || 'Control 请求失败');
-    return Promise.reject(error);
+    const data = error?.response?.data as ControlResponse<unknown> | undefined;
+    const message = data?.ret_info?.msg || error?.message || 'Control 请求失败';
+    Message.error(message);
+    return Promise.reject(new Error(message));
   },
 );

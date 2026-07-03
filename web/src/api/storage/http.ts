@@ -40,7 +40,7 @@ function assertSuccess(retInfo?: RetInfo) {
   }
 }
 
-async function callStorage<TReq extends object, TRsp extends { ret_info?: RetInfo }>(
+async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo }>(
   group: 'metadata' | 'access' | 'view',
   method: string,
   req: TReq,
@@ -53,17 +53,17 @@ async function callStorage<TReq extends object, TRsp extends { ret_info?: RetInf
   return rsp.data;
 }
 
-export const callMetadata = <TReq extends object, TRsp extends { ret_info?: RetInfo }>(
+export const callMetadata = <TReq extends object, TRsp extends { ret_info: RetInfo }>(
   method: string,
   req: TReq,
 ) => callStorage<TReq, TRsp>('metadata', method, req);
 
-export const callAccess = <TReq extends object, TRsp extends { ret_info?: RetInfo }>(
+export const callAccess = <TReq extends object, TRsp extends { ret_info: RetInfo }>(
   method: string,
   req: TReq,
 ) => callStorage<TReq, TRsp>('access', method, req);
 
-export const callView = <TReq extends object, TRsp extends { ret_info?: RetInfo }>(
+export const callView = <TReq extends object, TRsp extends { ret_info: RetInfo }>(
   method: string,
   req: TReq,
 ) => callStorage<TReq, TRsp>('view', method, req);

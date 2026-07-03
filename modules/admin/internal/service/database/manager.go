@@ -27,7 +27,7 @@ func NewManager() *Manager {
 
 // Initialize 初始化数据库连接
 func (dm *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
-	dbPath := "./data/moox.db"
+	dbPath := "./data/admin.db"
 	if dbCfg != nil && dbCfg.Path != "" {
 		dbPath = dbCfg.Path
 	}
@@ -56,28 +56,12 @@ func (dm *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
 // ApplyAdminSchema 应用 Control/Admin schema。
 //
 // 默认使用编译进二进制的 schema，避免部署时依赖工作目录或源码路径。
-// 如确需临时覆盖，可通过 MOOX_CONTROL_ADMIN_SCHEMA_FILE 指向外部 SQL 文件。
 func (dm *Manager) ApplyAdminSchema() error {
-	if path := strings.TrimSpace(os.Getenv("MOOX_CONTROL_ADMIN_SCHEMA_FILE")); path != "" {
-		return dm.ApplySchema(path)
-	}
-	return dm.ApplySchemaSQL("embedded admin.sql", adminSchemaSQL())
+	return dm.applySchemaSQL("embedded admin.sql", adminSchemaSQL())
 }
 
-// ApplySchema 应用 Control/Admin 的权威 SQL schema。
-func (dm *Manager) ApplySchema(schemaPath string) error {
-	if dm.db == nil {
-		return fmt.Errorf("database is not initialized")
-	}
-	raw, err := os.ReadFile(schemaPath)
-	if err != nil {
-		return fmt.Errorf("read schema %s: %w", schemaPath, err)
-	}
-	return dm.ApplySchemaSQL(schemaPath, string(raw))
-}
-
-// ApplySchemaSQL 应用给定 SQL 文本。
-func (dm *Manager) ApplySchemaSQL(schemaName string, raw string) error {
+// applySchemaSQL 应用给定 SQL 文本。
+func (dm *Manager) applySchemaSQL(schemaName string, raw string) error {
 	if dm.db == nil {
 		return fmt.Errorf("database is not initialized")
 	}
@@ -90,7 +74,7 @@ func (dm *Manager) ApplySchemaSQL(schemaName string, raw string) error {
 // InitializeCache 初始化缓存（BadgerDB）
 func (dm *Manager) InitializeCache(cacheDir string) error {
 	if cacheDir == "" {
-		cacheDir = "./data/cache"
+		cacheDir = "./data/badger"
 	}
 
 	// 确保目录存在
@@ -120,11 +104,6 @@ func (dm *Manager) GetDB() *gorm.DB {
 // GetCache 获取缓存连接
 func (dm *Manager) GetCache() *badger.DB {
 	return dm.cache
-}
-
-// CreateInstance 创建新的数据库实例（用于某些需要独立连接的场景）
-func (dm *Manager) CreateInstance() *gorm.DB {
-	return dm.db
 }
 
 // Close 关闭数据库连接和缓存

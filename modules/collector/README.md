@@ -1,183 +1,90 @@
-# 量化数据采集器
+# moox-collector
 
-## 项目概述
+独立采集控制面与 SCF 运行时模块。
 
-一个高性能、可扩展的多源数据采集系统，支持市场数据、社交媒体、新闻、链上数据等多种数据源。
+## 职责边界
 
-## 特性
+| 组件 | 职责 |
+|------|------|
+| `moox-collector` | 采集规则、任务实例、任务规划、状态上报（CollectMgr RPC） |
+| `moox-collector-scf` | 腾讯云 SCF 入口，执行 CloudNode 下发的采集 work_item |
+| `modules/cloudnode` | 云账户、代码包、异步 work_item、同步 invocation |
+| `modules/admin` | 网关转发 `/api/admin/collectmgr/*`，不承载采集业务表 |
 
-- 🚀 **高性能**：支持并发采集、批量处理、缓存优化
-- 🔌 **插件化架构**：新数据源和采集器可作为插件动态加入
-- 📡 **事件驱动**：基于事件总线的松耦合架构
-- ⚙️ **配置驱动**：通过配置文件控制系统行为
-- 📊 **多源数据采集**：支持市场、社交、新闻、链上等多种数据源
-- 🔧 **易于扩展**：清晰的接口定义，方便添加新的数据源
+## 目录结构
 
-## 架构概览
-
+```text
+cmd/
+  moox-collector/         独立采集管理服务
+  moox-collector-scf/     SCF 运行时
+config/                   moox-collector 服务配置
+configs/                  SCF 运行时本地默认配置
+schema/                   collector SQLite schema
+internal/
+  app/control/            独立服务启动、配置、数据库和依赖发现
+  app/runtime/            SCF runtime 配置、后台服务鉴权和 URL helper
+  app/runtimeboot/        SCF runtime 启动装配与定时器注册
+  rpc/                    CollectMgr RPC 实现
+  planner/                规则 + dataset subjects → 任务实例
+  taskrunner/             CloudNode work_item 到采集任务的 poll/execute 适配
+  serverless/             SCF runtime 事件入口
+  sources/                采集器注册、交易所客户端与执行
+  planner/storagesource/  从 moox-storage metadata tRPC 加载规划输入
+  taskpublisher/          调用 moox-cloudnode 提交 work_item
+  reporter/               任务状态与心跳上报
+  model/                  SCF 运行时事件、心跳和采集结果模型
+  httpclient/             Collector 内部 HTTP 客户端与 DNS 优选
 ```
-data-collector/
-├── cmd/collector/          # 主程序入口
-├── configs/               # 配置文件
-├── internal/
-│   ├── core/             # 核心框架
-│   │   ├── app/         # App层（数据源应用）
-│   │   ├── collector/   # 采集器层
-│   │   └── event/       # 事件系统
-│   ├── model/           # 数据模型
-│   │   ├── common/      # 通用模型
-│   │   └── market/      # 市场数据模型
-│   ├── source/          # 数据源实现
-│   │   └── market/      # 市场数据源
-│   │       └── binance/ # 币安交易所
-│   └── storage/         # 存储层
-└── pkg/                 # 公共包
-```
 
-## 快速开始
-
-### 1. 安装依赖
+## 构建
 
 ```bash
-go mod download
+make build              # moox-collector
+make build-linux
+make build-scf          # SCF 运行时
+make package-scf        # 打包 SCF 部署 zip
+
+# 或仓库根目录
+./scripts/build.sh collector
+./scripts/build.sh collector-scf
+./scripts/build-collector-scf-package.sh
 ```
 
-### 2. 编译项目
+## 端口与网关
 
-```bash
-go build -o bin/collector cmd/collector/main.go
+- CollectMgr HTTP：`:11402`（`config/trpc_go.yaml`）
+- 管理台路径：`/api/admin/collectmgr/{Method}`（admin 网关 JWT）
+- CloudNode work_item 提交：`/api/service/cloudnode/SubmitWorkItems`（Collector 控制面，经 admin 网关 HMAC 鉴权）
+- CloudNode work_item 运行时：`/api/service/cloudnode/PollWorkItems`、`/api/service/cloudnode/ReportWorkItemStatus`
+- 采集任务实例状态：`/api/service/collectmgr/ReportTaskStatus`（HMAC，经网关）
+
+## 部署关系
+
+典型链路：
+
+```text
+admin 网关
+  → moox-collector（规划任务）
+  → moox-admin `/api/service/cloudnode/SubmitWorkItems`（HMAC 鉴权）
+  → moox-cloudnode（提交 work_item / 调用 SCF）
+  → moox-collector-scf（执行采集）
+  → moox-storage Access（写入 K 线等）
+  → 回报 cloudnode ReportWorkItemStatus + collectmgr ReportTaskStatus
 ```
 
-### 3. 配置文件
+`moox-collector` 通常与 `moox-cloudnode` 同机或同发布包部署。协议定义见 `modules/collector/proto/`。
 
-创建或修改 `configs/config.yaml`：
+本地直接运行时数据文件默认：`./data/moox_collector.db`（以 `config/app.yaml` 为准）。
+通过 `scripts/deploy-moox.sh` 发布时，配置会被改写到部署目录的 `../data/collector/moox_collector.db`。
 
-```yaml
-# 主配置文件
-system:
-  name: "multi-source-data-collector"
-  version: "2.0.0"
-  environment: "development"
-  timezone: "UTC"
+环境变量：
 
-# 日志配置
-logging:
-  level: "info"
-  format: "json"
-  output: 
-    - type: "console"
-      level: "info"
+- `MOOX_COLLECTOR_DB_PATH` — 覆盖 Collector SQLite 路径
+- `MOOX_COLLECTOR_ADMIN_GATEWAY_URL` — 配置后优先从 Admin SysDeploy active 部署记录解析 CloudNode/Storage 依赖
+- `MOOX_COLLECTOR_STORAGE_METADATA_TARGET` / `MOOX_COLLECTOR_STORAGE_ACCESS_TARGET` — 覆盖 storage tRPC 直连 target
+- `MOOX_SERVICE_AUTH_ACCESS_KEY` / `MOOX_SERVICE_AUTH_SECRET_KEY` — Collector 调用 `/api/service/sysdeploy/*` 时使用的后台签名密钥
 
-# 事件总线配置
-event_bus:
-  type: "memory"
-  buffer_size: 10000
-  workers: 10
+## 相关文档
 
-# 数据源配置
-sources:
-  market:
-    - name: "binance"
-      enabled: true
-      config: "configs/sources/market/binance.yaml"
-```
-
-数据源配置文件 `configs/sources/market/binance.yaml`：
-
-```yaml
-# Binance数据源配置
-app:
-  id: "binance"
-  name: "币安交易所"
-  description: "币安现货市场数据采集"
-  type: "market"
-
-# API配置
-api:
-  base_url: "https://api.binance.com"
-
-# 采集器配置
-collectors:
-  kline:
-    enabled: true
-    symbols: 
-      - "BTCUSDT"
-      - "ETHUSDT"
-    intervals:
-      - "1m"
-      - "5m"
-```
-
-### 4. 运行采集器
-
-```bash
-./bin/collector --config configs/config.yaml
-```
-
-## 开发指南
-
-### 添加新的数据源
-
-1. 在 `internal/source/{category}/{name}/` 创建数据源目录
-2. 实现 App 接口
-3. 实现采集器
-4. 使用 `init()` 函数自注册
-
-示例：
-```go
-// internal/source/market/newexchange/app.go
-func init() {
-    app.RegisterCreator("newexchange", "新交易所", "描述", 
-        app.SourceTypeMarket, NewApp)
-}
-```
-
-### 添加新的采集器
-
-1. 实现 Collector 接口
-2. 使用构建器模式注册
-
-示例：
-```go
-func init() {
-    collector.NewBuilder().
-        Source("binance", "币安").
-        DataType("kline", "K线").
-        MarketType("spot", "现货").
-        Creator(NewKlineCollector).
-        Register()
-}
-```
-
-## 架构文档
-
-详细的架构设计文档请参考：[docs/architecture.md](docs/architecture.md)
-
-## 构建与部署
-
-### 构建
-
-```bash
-make build
-```
-
-### 测试
-
-```bash
-make test
-```
-
-### Docker 部署
-
-```bash
-docker build -t data-collector .
-docker run -v ./configs:/app/configs data-collector
-```
-
-## 贡献指南
-
-欢迎提交 Pull Request 或创建 Issue。
-
-## 许可证
-
-MIT License
+- [docs/采集任务管理.md](../../docs/采集任务管理.md)
+- [docs/云节点管理.md](../../docs/云节点管理.md)

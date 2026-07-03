@@ -1,7 +1,6 @@
 import { defineConfig, loadEnv } from "vite";
 import path from "path";
 import { resolve } from "path";
-import { include } from "./build/optimize";
 import postcssPresetEnv from "postcss-preset-env";
 import { createVitePlugins } from "./build/vite-plugin";
 
@@ -31,12 +30,6 @@ export default defineConfig(({ mode }) => {
           additionalData: `@use "@/style/var/index.scss" as *; `
         }
       }
-    },
-    // 依赖预加载 https://cn.vitejs.dev/config/dep-optimization-options.html#dep-optimization-options
-    optimizeDeps: {
-      include,
-      // 强制预构建链接的包
-      force: true
     },
     build: {
       outDir: "dist", // 指定打包路径，默认为项目根目录下的dist目录
@@ -68,27 +61,12 @@ export default defineConfig(({ mode }) => {
             
             // 工具库 - 最基础的
             'utils-core': ['axios'],
-            'utils-crypto': ['crypto-js', 'node-forge'],
-            'utils-misc': ['js-yaml', 'qrcode', 'jsbarcode', 'print-js'],
-            
-            // 代码编辑器相关 - 按需加载
-            'editor-core': ['codemirror'],
-            'editor-vue': ['vue-codemirror', 'vue-codemirror6'],
-            'editor-langs': ['@codemirror/lang-javascript', '@codemirror/lang-json', '@codemirror/lang-vue', '@codemirror/lang-yaml'],
-            'editor-themes': ['@codemirror/theme-one-dark'],
+            'utils-crypto': ['node-forge'],
             
             // 终端相关 - 按需加载
             'terminal-core': ['@xterm/xterm'],
             'terminal-addons': ['@xterm/addon-attach', '@xterm/addon-fit'],
             
-            // 交互相关
-            'interaction': ['vuedraggable', 'sortablejs', 'driver.js'],
-            
-            // 指纹和识别
-            'fingerprint': ['fingerprintjs2', '@fingerprintjs/fingerprintjs'],
-            
-            // 其他工具
-            'pinyin': ['pinyin-pro']
           }
         }
       }

@@ -10,6 +10,7 @@ import (
 	reflect "reflect"
 	sync "sync"
 
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
@@ -931,9 +932,9 @@ type CreateAccountRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo   *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	AccountId string   `protobuf:"bytes,2,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
-	Account   *Account `protobuf:"bytes,3,opt,name=account,proto3" json:"account,omitempty"`
+	RetInfo   *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	AccountId string            `protobuf:"bytes,2,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	Account   *Account          `protobuf:"bytes,3,opt,name=account,proto3" json:"account,omitempty"`
 }
 
 func (x *CreateAccountRsp) Reset() {
@@ -968,7 +969,7 @@ func (*CreateAccountRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *CreateAccountRsp) GetRetInfo() *RetInfo {
+func (x *CreateAccountRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -1073,8 +1074,8 @@ type UpdateAccountRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Account *Account `protobuf:"bytes,2,opt,name=account,proto3" json:"account,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Account *Account          `protobuf:"bytes,2,opt,name=account,proto3" json:"account,omitempty"`
 }
 
 func (x *UpdateAccountRsp) Reset() {
@@ -1109,7 +1110,7 @@ func (*UpdateAccountRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *UpdateAccountRsp) GetRetInfo() *RetInfo {
+func (x *UpdateAccountRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -1175,7 +1176,7 @@ type DeleteAccountRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 }
 
 func (x *DeleteAccountRsp) Reset() {
@@ -1210,7 +1211,7 @@ func (*DeleteAccountRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *DeleteAccountRsp) GetRetInfo() *RetInfo {
+func (x *DeleteAccountRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -1269,8 +1270,8 @@ type GetAccountRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Account *Account `protobuf:"bytes,2,opt,name=account,proto3" json:"account,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Account *Account          `protobuf:"bytes,2,opt,name=account,proto3" json:"account,omitempty"`
 }
 
 func (x *GetAccountRsp) Reset() {
@@ -1305,7 +1306,7 @@ func (*GetAccountRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{11}
 }
 
-func (x *GetAccountRsp) GetRetInfo() *RetInfo {
+func (x *GetAccountRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -1324,10 +1325,10 @@ type ListAccountsReq struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	UserId      string      `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                                  // 可空，默认当前登录用户
-	AccountType AccountType `protobuf:"varint,2,opt,name=account_type,json=accountType,proto3,enum=trpc.moox.trade.AccountType" json:"account_type,omitempty"` // 可空过滤
-	Keyword     string      `protobuf:"bytes,3,opt,name=keyword,proto3" json:"keyword,omitempty"`
-	Page        *Page       `protobuf:"bytes,4,opt,name=page,proto3" json:"page,omitempty"`
+	UserId      string         `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                                  // 可空，默认当前登录用户
+	AccountType AccountType    `protobuf:"varint,2,opt,name=account_type,json=accountType,proto3,enum=trpc.moox.trade.AccountType" json:"account_type,omitempty"` // 可空过滤
+	Keyword     string         `protobuf:"bytes,3,opt,name=keyword,proto3" json:"keyword,omitempty"`
+	Page        *commonpb.Page `protobuf:"bytes,4,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListAccountsReq) Reset() {
@@ -1383,7 +1384,7 @@ func (x *ListAccountsReq) GetKeyword() string {
 	return ""
 }
 
-func (x *ListAccountsReq) GetPage() *Page {
+func (x *ListAccountsReq) GetPage() *commonpb.Page {
 	if x != nil {
 		return x.Page
 	}
@@ -1395,9 +1396,9 @@ type ListAccountsRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Accounts   []*Account  `protobuf:"bytes,2,rep,name=accounts,proto3" json:"accounts,omitempty"`
-	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	RetInfo    *commonpb.RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Accounts   []*Account           `protobuf:"bytes,2,rep,name=accounts,proto3" json:"accounts,omitempty"`
+	PageResult *commonpb.PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListAccountsRsp) Reset() {
@@ -1432,7 +1433,7 @@ func (*ListAccountsRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{13}
 }
 
-func (x *ListAccountsRsp) GetRetInfo() *RetInfo {
+func (x *ListAccountsRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -1446,7 +1447,7 @@ func (x *ListAccountsRsp) GetAccounts() []*Account {
 	return nil
 }
 
-func (x *ListAccountsRsp) GetPageResult() *PageResult {
+func (x *ListAccountsRsp) GetPageResult() *commonpb.PageResult {
 	if x != nil {
 		return x.PageResult
 	}
@@ -1513,8 +1514,8 @@ type GetBalancesRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo   `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Balances []*Balance `protobuf:"bytes,2,rep,name=balances,proto3" json:"balances,omitempty"`
+	RetInfo  *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Balances []*Balance        `protobuf:"bytes,2,rep,name=balances,proto3" json:"balances,omitempty"`
 }
 
 func (x *GetBalancesRsp) Reset() {
@@ -1549,7 +1550,7 @@ func (*GetBalancesRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{15}
 }
 
-func (x *GetBalancesRsp) GetRetInfo() *RetInfo {
+func (x *GetBalancesRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -1616,8 +1617,8 @@ type SyncBalancesRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo   `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Balances []*Balance `protobuf:"bytes,2,rep,name=balances,proto3" json:"balances,omitempty"`
+	RetInfo  *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Balances []*Balance        `protobuf:"bytes,2,rep,name=balances,proto3" json:"balances,omitempty"`
 }
 
 func (x *SyncBalancesRsp) Reset() {
@@ -1652,7 +1653,7 @@ func (*SyncBalancesRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{17}
 }
 
-func (x *SyncBalancesRsp) GetRetInfo() *RetInfo {
+func (x *SyncBalancesRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -1671,12 +1672,12 @@ type ListFundFlowsReq struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AccountId string `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
-	Currency  string `protobuf:"bytes,2,opt,name=currency,proto3" json:"currency,omitempty"`                     // 可空
-	BizType   string `protobuf:"bytes,3,opt,name=biz_type,json=bizType,proto3" json:"biz_type,omitempty"`        // 可空
-	StartTime int64  `protobuf:"varint,4,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"` // 可空
-	EndTime   int64  `protobuf:"varint,5,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`       // 可空
-	Page      *Page  `protobuf:"bytes,6,opt,name=page,proto3" json:"page,omitempty"`
+	AccountId string         `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	Currency  string         `protobuf:"bytes,2,opt,name=currency,proto3" json:"currency,omitempty"`                     // 可空
+	BizType   string         `protobuf:"bytes,3,opt,name=biz_type,json=bizType,proto3" json:"biz_type,omitempty"`        // 可空
+	StartTime int64          `protobuf:"varint,4,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"` // 可空
+	EndTime   int64          `protobuf:"varint,5,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`       // 可空
+	Page      *commonpb.Page `protobuf:"bytes,6,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListFundFlowsReq) Reset() {
@@ -1746,7 +1747,7 @@ func (x *ListFundFlowsReq) GetEndTime() int64 {
 	return 0
 }
 
-func (x *ListFundFlowsReq) GetPage() *Page {
+func (x *ListFundFlowsReq) GetPage() *commonpb.Page {
 	if x != nil {
 		return x.Page
 	}
@@ -1758,9 +1759,9 @@ type ListFundFlowsRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Flows      []*FundFlow `protobuf:"bytes,2,rep,name=flows,proto3" json:"flows,omitempty"`
-	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	RetInfo    *commonpb.RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Flows      []*FundFlow          `protobuf:"bytes,2,rep,name=flows,proto3" json:"flows,omitempty"`
+	PageResult *commonpb.PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListFundFlowsRsp) Reset() {
@@ -1795,7 +1796,7 @@ func (*ListFundFlowsRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{19}
 }
 
-func (x *ListFundFlowsRsp) GetRetInfo() *RetInfo {
+func (x *ListFundFlowsRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -1809,7 +1810,7 @@ func (x *ListFundFlowsRsp) GetFlows() []*FundFlow {
 	return nil
 }
 
-func (x *ListFundFlowsRsp) GetPageResult() *PageResult {
+func (x *ListFundFlowsRsp) GetPageResult() *commonpb.PageResult {
 	if x != nil {
 		return x.PageResult
 	}
@@ -1901,9 +1902,9 @@ type TransferRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo   *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	OutFlowId string   `protobuf:"bytes,2,opt,name=out_flow_id,json=outFlowId,proto3" json:"out_flow_id,omitempty"`
-	InFlowId  string   `protobuf:"bytes,3,opt,name=in_flow_id,json=inFlowId,proto3" json:"in_flow_id,omitempty"`
+	RetInfo   *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	OutFlowId string            `protobuf:"bytes,2,opt,name=out_flow_id,json=outFlowId,proto3" json:"out_flow_id,omitempty"`
+	InFlowId  string            `protobuf:"bytes,3,opt,name=in_flow_id,json=inFlowId,proto3" json:"in_flow_id,omitempty"`
 }
 
 func (x *TransferRsp) Reset() {
@@ -1938,7 +1939,7 @@ func (*TransferRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{21}
 }
 
-func (x *TransferRsp) GetRetInfo() *RetInfo {
+func (x *TransferRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -2051,8 +2052,8 @@ type CreateApiKeyRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo  *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	ApiKeyId string   `protobuf:"bytes,2,opt,name=api_key_id,json=apiKeyId,proto3" json:"api_key_id,omitempty"`
+	RetInfo  *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	ApiKeyId string            `protobuf:"bytes,2,opt,name=api_key_id,json=apiKeyId,proto3" json:"api_key_id,omitempty"`
 }
 
 func (x *CreateApiKeyRsp) Reset() {
@@ -2087,7 +2088,7 @@ func (*CreateApiKeyRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{23}
 }
 
-func (x *CreateApiKeyRsp) GetRetInfo() *RetInfo {
+func (x *CreateApiKeyRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -2153,7 +2154,7 @@ type DeleteApiKeyRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 }
 
 func (x *DeleteApiKeyRsp) Reset() {
@@ -2188,7 +2189,7 @@ func (*DeleteApiKeyRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{25}
 }
 
-func (x *DeleteApiKeyRsp) GetRetInfo() *RetInfo {
+func (x *DeleteApiKeyRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -2247,8 +2248,8 @@ type ListApiKeysRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo  `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	ApiKeys []*ApiKey `protobuf:"bytes,2,rep,name=api_keys,json=apiKeys,proto3" json:"api_keys,omitempty"` // 敏感字段脱敏
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	ApiKeys []*ApiKey         `protobuf:"bytes,2,rep,name=api_keys,json=apiKeys,proto3" json:"api_keys,omitempty"` // 敏感字段脱敏
 }
 
 func (x *ListApiKeysRsp) Reset() {
@@ -2283,7 +2284,7 @@ func (*ListApiKeysRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{27}
 }
 
-func (x *ListApiKeysRsp) GetRetInfo() *RetInfo {
+func (x *ListApiKeysRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -3149,8 +3150,8 @@ type CreateChannelRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo   *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	ChannelId string   `protobuf:"bytes,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	RetInfo   *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	ChannelId string            `protobuf:"bytes,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
 }
 
 func (x *CreateChannelRsp) Reset() {
@@ -3185,7 +3186,7 @@ func (*CreateChannelRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{33}
 }
 
-func (x *CreateChannelRsp) GetRetInfo() *RetInfo {
+func (x *CreateChannelRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -3283,7 +3284,7 @@ type UpdateChannelRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 }
 
 func (x *UpdateChannelRsp) Reset() {
@@ -3318,7 +3319,7 @@ func (*UpdateChannelRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{35}
 }
 
-func (x *UpdateChannelRsp) GetRetInfo() *RetInfo {
+func (x *UpdateChannelRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -3377,7 +3378,7 @@ type DeleteChannelRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 }
 
 func (x *DeleteChannelRsp) Reset() {
@@ -3412,7 +3413,7 @@ func (*DeleteChannelRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{37}
 }
 
-func (x *DeleteChannelRsp) GetRetInfo() *RetInfo {
+func (x *DeleteChannelRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -3424,9 +3425,9 @@ type ListChannelsReq struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AccountId string `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"` // 可空
-	Exchange  string `protobuf:"bytes,2,opt,name=exchange,proto3" json:"exchange,omitempty"`                    // 可空
-	Page      *Page  `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
+	AccountId string         `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"` // 可空
+	Exchange  string         `protobuf:"bytes,2,opt,name=exchange,proto3" json:"exchange,omitempty"`                    // 可空
+	Page      *commonpb.Page `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListChannelsReq) Reset() {
@@ -3475,7 +3476,7 @@ func (x *ListChannelsReq) GetExchange() string {
 	return ""
 }
 
-func (x *ListChannelsReq) GetPage() *Page {
+func (x *ListChannelsReq) GetPage() *commonpb.Page {
 	if x != nil {
 		return x.Page
 	}
@@ -3487,9 +3488,9 @@ type ListChannelsRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo        `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Channels   []*TradeChannel `protobuf:"bytes,2,rep,name=channels,proto3" json:"channels,omitempty"`
-	PageResult *PageResult     `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	RetInfo    *commonpb.RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Channels   []*TradeChannel      `protobuf:"bytes,2,rep,name=channels,proto3" json:"channels,omitempty"`
+	PageResult *commonpb.PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListChannelsRsp) Reset() {
@@ -3524,7 +3525,7 @@ func (*ListChannelsRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{39}
 }
 
-func (x *ListChannelsRsp) GetRetInfo() *RetInfo {
+func (x *ListChannelsRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -3538,7 +3539,7 @@ func (x *ListChannelsRsp) GetChannels() []*TradeChannel {
 	return nil
 }
 
-func (x *ListChannelsRsp) GetPageResult() *PageResult {
+func (x *ListChannelsRsp) GetPageResult() *commonpb.PageResult {
 	if x != nil {
 		return x.PageResult
 	}
@@ -3598,9 +3599,9 @@ type TestChannelRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo   *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Reachable bool     `protobuf:"varint,2,opt,name=reachable,proto3" json:"reachable,omitempty"`
-	LatencyMs int32    `protobuf:"varint,3,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
+	RetInfo   *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Reachable bool              `protobuf:"varint,2,opt,name=reachable,proto3" json:"reachable,omitempty"`
+	LatencyMs int32             `protobuf:"varint,3,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
 }
 
 func (x *TestChannelRsp) Reset() {
@@ -3635,7 +3636,7 @@ func (*TestChannelRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{41}
 }
 
-func (x *TestChannelRsp) GetRetInfo() *RetInfo {
+func (x *TestChannelRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -3829,10 +3830,10 @@ type PlaceOrderRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo         *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	OrderId         string      `protobuf:"bytes,2,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
-	ExchangeOrderId string      `protobuf:"bytes,3,opt,name=exchange_order_id,json=exchangeOrderId,proto3" json:"exchange_order_id,omitempty"`
-	Status          OrderStatus `protobuf:"varint,4,opt,name=status,proto3,enum=trpc.moox.trade.OrderStatus" json:"status,omitempty"`
+	RetInfo         *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	OrderId         string            `protobuf:"bytes,2,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	ExchangeOrderId string            `protobuf:"bytes,3,opt,name=exchange_order_id,json=exchangeOrderId,proto3" json:"exchange_order_id,omitempty"`
+	Status          OrderStatus       `protobuf:"varint,4,opt,name=status,proto3,enum=trpc.moox.trade.OrderStatus" json:"status,omitempty"`
 }
 
 func (x *PlaceOrderRsp) Reset() {
@@ -3867,7 +3868,7 @@ func (*PlaceOrderRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{43}
 }
 
-func (x *PlaceOrderRsp) GetRetInfo() *RetInfo {
+func (x *PlaceOrderRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -3972,8 +3973,8 @@ type CancelOrderRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Status  OrderStatus `protobuf:"varint,2,opt,name=status,proto3,enum=trpc.moox.trade.OrderStatus" json:"status,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Status  OrderStatus       `protobuf:"varint,2,opt,name=status,proto3,enum=trpc.moox.trade.OrderStatus" json:"status,omitempty"`
 }
 
 func (x *CancelOrderRsp) Reset() {
@@ -4008,7 +4009,7 @@ func (*CancelOrderRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{45}
 }
 
-func (x *CancelOrderRsp) GetRetInfo() *RetInfo {
+func (x *CancelOrderRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -4091,8 +4092,8 @@ type CancelAllOrdersRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo       *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	CanceledCount int32    `protobuf:"varint,2,opt,name=canceled_count,json=canceledCount,proto3" json:"canceled_count,omitempty"`
+	RetInfo       *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	CanceledCount int32             `protobuf:"varint,2,opt,name=canceled_count,json=canceledCount,proto3" json:"canceled_count,omitempty"`
 }
 
 func (x *CancelAllOrdersRsp) Reset() {
@@ -4127,7 +4128,7 @@ func (*CancelAllOrdersRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{47}
 }
 
-func (x *CancelAllOrdersRsp) GetRetInfo() *RetInfo {
+func (x *CancelAllOrdersRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -4226,8 +4227,8 @@ type AmendOrderRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Status  OrderStatus `protobuf:"varint,2,opt,name=status,proto3,enum=trpc.moox.trade.OrderStatus" json:"status,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Status  OrderStatus       `protobuf:"varint,2,opt,name=status,proto3,enum=trpc.moox.trade.OrderStatus" json:"status,omitempty"`
 }
 
 func (x *AmendOrderRsp) Reset() {
@@ -4262,7 +4263,7 @@ func (*AmendOrderRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{49}
 }
 
-func (x *AmendOrderRsp) GetRetInfo() *RetInfo {
+func (x *AmendOrderRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -4353,7 +4354,7 @@ type SetLeverageRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 }
 
 func (x *SetLeverageRsp) Reset() {
@@ -4388,7 +4389,7 @@ func (*SetLeverageRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{51}
 }
 
-func (x *SetLeverageRsp) GetRetInfo() *RetInfo {
+func (x *SetLeverageRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -4455,8 +4456,8 @@ type GetOrderRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Order   *Order   `protobuf:"bytes,2,opt,name=order,proto3" json:"order,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Order   *Order            `protobuf:"bytes,2,opt,name=order,proto3" json:"order,omitempty"`
 }
 
 func (x *GetOrderRsp) Reset() {
@@ -4491,7 +4492,7 @@ func (*GetOrderRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{53}
 }
 
-func (x *GetOrderRsp) GetRetInfo() *RetInfo {
+func (x *GetOrderRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -4510,14 +4511,14 @@ type ListOrdersReq struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AccountId string      `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
-	ChannelId string      `protobuf:"bytes,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`            // 可空
-	Symbol    string      `protobuf:"bytes,3,opt,name=symbol,proto3" json:"symbol,omitempty"`                                   // 可空
-	Status    OrderStatus `protobuf:"varint,4,opt,name=status,proto3,enum=trpc.moox.trade.OrderStatus" json:"status,omitempty"` // 可空过滤
-	OnlyOpen  bool        `protobuf:"varint,5,opt,name=only_open,json=onlyOpen,proto3" json:"only_open,omitempty"`              // 仅未结订单
-	StartTime int64       `protobuf:"varint,6,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
-	EndTime   int64       `protobuf:"varint,7,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
-	Page      *Page       `protobuf:"bytes,8,opt,name=page,proto3" json:"page,omitempty"`
+	AccountId string         `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	ChannelId string         `protobuf:"bytes,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`            // 可空
+	Symbol    string         `protobuf:"bytes,3,opt,name=symbol,proto3" json:"symbol,omitempty"`                                   // 可空
+	Status    OrderStatus    `protobuf:"varint,4,opt,name=status,proto3,enum=trpc.moox.trade.OrderStatus" json:"status,omitempty"` // 可空过滤
+	OnlyOpen  bool           `protobuf:"varint,5,opt,name=only_open,json=onlyOpen,proto3" json:"only_open,omitempty"`              // 仅未结订单
+	StartTime int64          `protobuf:"varint,6,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
+	EndTime   int64          `protobuf:"varint,7,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
+	Page      *commonpb.Page `protobuf:"bytes,8,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListOrdersReq) Reset() {
@@ -4601,7 +4602,7 @@ func (x *ListOrdersReq) GetEndTime() int64 {
 	return 0
 }
 
-func (x *ListOrdersReq) GetPage() *Page {
+func (x *ListOrdersReq) GetPage() *commonpb.Page {
 	if x != nil {
 		return x.Page
 	}
@@ -4613,9 +4614,9 @@ type ListOrdersRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Orders     []*Order    `protobuf:"bytes,2,rep,name=orders,proto3" json:"orders,omitempty"`
-	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	RetInfo    *commonpb.RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Orders     []*Order             `protobuf:"bytes,2,rep,name=orders,proto3" json:"orders,omitempty"`
+	PageResult *commonpb.PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListOrdersRsp) Reset() {
@@ -4650,7 +4651,7 @@ func (*ListOrdersRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{55}
 }
 
-func (x *ListOrdersRsp) GetRetInfo() *RetInfo {
+func (x *ListOrdersRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -4664,7 +4665,7 @@ func (x *ListOrdersRsp) GetOrders() []*Order {
 	return nil
 }
 
-func (x *ListOrdersRsp) GetPageResult() *PageResult {
+func (x *ListOrdersRsp) GetPageResult() *commonpb.PageResult {
 	if x != nil {
 		return x.PageResult
 	}
@@ -4676,12 +4677,12 @@ type ListTradesReq struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AccountId string `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
-	OrderId   string `protobuf:"bytes,2,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"` // 可空，按订单过滤
-	Symbol    string `protobuf:"bytes,3,opt,name=symbol,proto3" json:"symbol,omitempty"`                  // 可空
-	StartTime int64  `protobuf:"varint,4,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
-	EndTime   int64  `protobuf:"varint,5,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
-	Page      *Page  `protobuf:"bytes,6,opt,name=page,proto3" json:"page,omitempty"`
+	AccountId string         `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	OrderId   string         `protobuf:"bytes,2,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"` // 可空，按订单过滤
+	Symbol    string         `protobuf:"bytes,3,opt,name=symbol,proto3" json:"symbol,omitempty"`                  // 可空
+	StartTime int64          `protobuf:"varint,4,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
+	EndTime   int64          `protobuf:"varint,5,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
+	Page      *commonpb.Page `protobuf:"bytes,6,opt,name=page,proto3" json:"page,omitempty"`
 }
 
 func (x *ListTradesReq) Reset() {
@@ -4751,7 +4752,7 @@ func (x *ListTradesReq) GetEndTime() int64 {
 	return 0
 }
 
-func (x *ListTradesReq) GetPage() *Page {
+func (x *ListTradesReq) GetPage() *commonpb.Page {
 	if x != nil {
 		return x.Page
 	}
@@ -4763,9 +4764,9 @@ type ListTradesRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo    *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Trades     []*Trade    `protobuf:"bytes,2,rep,name=trades,proto3" json:"trades,omitempty"`
-	PageResult *PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
+	RetInfo    *commonpb.RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Trades     []*Trade             `protobuf:"bytes,2,rep,name=trades,proto3" json:"trades,omitempty"`
+	PageResult *commonpb.PageResult `protobuf:"bytes,3,opt,name=page_result,json=pageResult,proto3" json:"page_result,omitempty"`
 }
 
 func (x *ListTradesRsp) Reset() {
@@ -4800,7 +4801,7 @@ func (*ListTradesRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{57}
 }
 
-func (x *ListTradesRsp) GetRetInfo() *RetInfo {
+func (x *ListTradesRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -4814,7 +4815,7 @@ func (x *ListTradesRsp) GetTrades() []*Trade {
 	return nil
 }
 
-func (x *ListTradesRsp) GetPageResult() *PageResult {
+func (x *ListTradesRsp) GetPageResult() *commonpb.PageResult {
 	if x != nil {
 		return x.PageResult
 	}
@@ -4881,8 +4882,8 @@ type ListPositionsRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo   *RetInfo    `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Positions []*Position `protobuf:"bytes,2,rep,name=positions,proto3" json:"positions,omitempty"`
+	RetInfo   *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Positions []*Position       `protobuf:"bytes,2,rep,name=positions,proto3" json:"positions,omitempty"`
 }
 
 func (x *ListPositionsRsp) Reset() {
@@ -4917,7 +4918,7 @@ func (*ListPositionsRsp) Descriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{59}
 }
 
-func (x *ListPositionsRsp) GetRetInfo() *RetInfo {
+func (x *ListPositionsRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
@@ -5845,76 +5846,76 @@ func file_trade_service_proto_rawDescGZIP() []byte {
 var file_trade_service_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
 var file_trade_service_proto_msgTypes = make([]protoimpl.MessageInfo, 60)
 var file_trade_service_proto_goTypes = []interface{}{
-	(AccountType)(0),           // 0: trpc.moox.trade.AccountType
-	(AccountStatus)(0),         // 1: trpc.moox.trade.AccountStatus
-	(MarketType)(0),            // 2: trpc.moox.trade.MarketType
-	(OrderSide)(0),             // 3: trpc.moox.trade.OrderSide
-	(OrderType)(0),             // 4: trpc.moox.trade.OrderType
-	(OrderStatus)(0),           // 5: trpc.moox.trade.OrderStatus
-	(ChannelStatus)(0),         // 6: trpc.moox.trade.ChannelStatus
-	(*Account)(nil),            // 7: trpc.moox.trade.Account
-	(*Balance)(nil),            // 8: trpc.moox.trade.Balance
-	(*FundFlow)(nil),           // 9: trpc.moox.trade.FundFlow
-	(*ApiKey)(nil),             // 10: trpc.moox.trade.ApiKey
-	(*CreateAccountReq)(nil),   // 11: trpc.moox.trade.CreateAccountReq
-	(*CreateAccountRsp)(nil),   // 12: trpc.moox.trade.CreateAccountRsp
-	(*UpdateAccountReq)(nil),   // 13: trpc.moox.trade.UpdateAccountReq
-	(*UpdateAccountRsp)(nil),   // 14: trpc.moox.trade.UpdateAccountRsp
-	(*DeleteAccountReq)(nil),   // 15: trpc.moox.trade.DeleteAccountReq
-	(*DeleteAccountRsp)(nil),   // 16: trpc.moox.trade.DeleteAccountRsp
-	(*GetAccountReq)(nil),      // 17: trpc.moox.trade.GetAccountReq
-	(*GetAccountRsp)(nil),      // 18: trpc.moox.trade.GetAccountRsp
-	(*ListAccountsReq)(nil),    // 19: trpc.moox.trade.ListAccountsReq
-	(*ListAccountsRsp)(nil),    // 20: trpc.moox.trade.ListAccountsRsp
-	(*GetBalancesReq)(nil),     // 21: trpc.moox.trade.GetBalancesReq
-	(*GetBalancesRsp)(nil),     // 22: trpc.moox.trade.GetBalancesRsp
-	(*SyncBalancesReq)(nil),    // 23: trpc.moox.trade.SyncBalancesReq
-	(*SyncBalancesRsp)(nil),    // 24: trpc.moox.trade.SyncBalancesRsp
-	(*ListFundFlowsReq)(nil),   // 25: trpc.moox.trade.ListFundFlowsReq
-	(*ListFundFlowsRsp)(nil),   // 26: trpc.moox.trade.ListFundFlowsRsp
-	(*TransferReq)(nil),        // 27: trpc.moox.trade.TransferReq
-	(*TransferRsp)(nil),        // 28: trpc.moox.trade.TransferRsp
-	(*CreateApiKeyReq)(nil),    // 29: trpc.moox.trade.CreateApiKeyReq
-	(*CreateApiKeyRsp)(nil),    // 30: trpc.moox.trade.CreateApiKeyRsp
-	(*DeleteApiKeyReq)(nil),    // 31: trpc.moox.trade.DeleteApiKeyReq
-	(*DeleteApiKeyRsp)(nil),    // 32: trpc.moox.trade.DeleteApiKeyRsp
-	(*ListApiKeysReq)(nil),     // 33: trpc.moox.trade.ListApiKeysReq
-	(*ListApiKeysRsp)(nil),     // 34: trpc.moox.trade.ListApiKeysRsp
-	(*TradeChannel)(nil),       // 35: trpc.moox.trade.TradeChannel
-	(*Order)(nil),              // 36: trpc.moox.trade.Order
-	(*Trade)(nil),              // 37: trpc.moox.trade.Trade
-	(*Position)(nil),           // 38: trpc.moox.trade.Position
-	(*CreateChannelReq)(nil),   // 39: trpc.moox.trade.CreateChannelReq
-	(*CreateChannelRsp)(nil),   // 40: trpc.moox.trade.CreateChannelRsp
-	(*UpdateChannelReq)(nil),   // 41: trpc.moox.trade.UpdateChannelReq
-	(*UpdateChannelRsp)(nil),   // 42: trpc.moox.trade.UpdateChannelRsp
-	(*DeleteChannelReq)(nil),   // 43: trpc.moox.trade.DeleteChannelReq
-	(*DeleteChannelRsp)(nil),   // 44: trpc.moox.trade.DeleteChannelRsp
-	(*ListChannelsReq)(nil),    // 45: trpc.moox.trade.ListChannelsReq
-	(*ListChannelsRsp)(nil),    // 46: trpc.moox.trade.ListChannelsRsp
-	(*TestChannelReq)(nil),     // 47: trpc.moox.trade.TestChannelReq
-	(*TestChannelRsp)(nil),     // 48: trpc.moox.trade.TestChannelRsp
-	(*PlaceOrderReq)(nil),      // 49: trpc.moox.trade.PlaceOrderReq
-	(*PlaceOrderRsp)(nil),      // 50: trpc.moox.trade.PlaceOrderRsp
-	(*CancelOrderReq)(nil),     // 51: trpc.moox.trade.CancelOrderReq
-	(*CancelOrderRsp)(nil),     // 52: trpc.moox.trade.CancelOrderRsp
-	(*CancelAllOrdersReq)(nil), // 53: trpc.moox.trade.CancelAllOrdersReq
-	(*CancelAllOrdersRsp)(nil), // 54: trpc.moox.trade.CancelAllOrdersRsp
-	(*AmendOrderReq)(nil),      // 55: trpc.moox.trade.AmendOrderReq
-	(*AmendOrderRsp)(nil),      // 56: trpc.moox.trade.AmendOrderRsp
-	(*SetLeverageReq)(nil),     // 57: trpc.moox.trade.SetLeverageReq
-	(*SetLeverageRsp)(nil),     // 58: trpc.moox.trade.SetLeverageRsp
-	(*GetOrderReq)(nil),        // 59: trpc.moox.trade.GetOrderReq
-	(*GetOrderRsp)(nil),        // 60: trpc.moox.trade.GetOrderRsp
-	(*ListOrdersReq)(nil),      // 61: trpc.moox.trade.ListOrdersReq
-	(*ListOrdersRsp)(nil),      // 62: trpc.moox.trade.ListOrdersRsp
-	(*ListTradesReq)(nil),      // 63: trpc.moox.trade.ListTradesReq
-	(*ListTradesRsp)(nil),      // 64: trpc.moox.trade.ListTradesRsp
-	(*ListPositionsReq)(nil),   // 65: trpc.moox.trade.ListPositionsReq
-	(*ListPositionsRsp)(nil),   // 66: trpc.moox.trade.ListPositionsRsp
-	(*RetInfo)(nil),            // 67: trpc.moox.common.RetInfo
-	(*Page)(nil),               // 68: trpc.moox.common.Page
-	(*PageResult)(nil),         // 69: trpc.moox.common.PageResult
+	(AccountType)(0),            // 0: trpc.moox.trade.AccountType
+	(AccountStatus)(0),          // 1: trpc.moox.trade.AccountStatus
+	(MarketType)(0),             // 2: trpc.moox.trade.MarketType
+	(OrderSide)(0),              // 3: trpc.moox.trade.OrderSide
+	(OrderType)(0),              // 4: trpc.moox.trade.OrderType
+	(OrderStatus)(0),            // 5: trpc.moox.trade.OrderStatus
+	(ChannelStatus)(0),          // 6: trpc.moox.trade.ChannelStatus
+	(*Account)(nil),             // 7: trpc.moox.trade.Account
+	(*Balance)(nil),             // 8: trpc.moox.trade.Balance
+	(*FundFlow)(nil),            // 9: trpc.moox.trade.FundFlow
+	(*ApiKey)(nil),              // 10: trpc.moox.trade.ApiKey
+	(*CreateAccountReq)(nil),    // 11: trpc.moox.trade.CreateAccountReq
+	(*CreateAccountRsp)(nil),    // 12: trpc.moox.trade.CreateAccountRsp
+	(*UpdateAccountReq)(nil),    // 13: trpc.moox.trade.UpdateAccountReq
+	(*UpdateAccountRsp)(nil),    // 14: trpc.moox.trade.UpdateAccountRsp
+	(*DeleteAccountReq)(nil),    // 15: trpc.moox.trade.DeleteAccountReq
+	(*DeleteAccountRsp)(nil),    // 16: trpc.moox.trade.DeleteAccountRsp
+	(*GetAccountReq)(nil),       // 17: trpc.moox.trade.GetAccountReq
+	(*GetAccountRsp)(nil),       // 18: trpc.moox.trade.GetAccountRsp
+	(*ListAccountsReq)(nil),     // 19: trpc.moox.trade.ListAccountsReq
+	(*ListAccountsRsp)(nil),     // 20: trpc.moox.trade.ListAccountsRsp
+	(*GetBalancesReq)(nil),      // 21: trpc.moox.trade.GetBalancesReq
+	(*GetBalancesRsp)(nil),      // 22: trpc.moox.trade.GetBalancesRsp
+	(*SyncBalancesReq)(nil),     // 23: trpc.moox.trade.SyncBalancesReq
+	(*SyncBalancesRsp)(nil),     // 24: trpc.moox.trade.SyncBalancesRsp
+	(*ListFundFlowsReq)(nil),    // 25: trpc.moox.trade.ListFundFlowsReq
+	(*ListFundFlowsRsp)(nil),    // 26: trpc.moox.trade.ListFundFlowsRsp
+	(*TransferReq)(nil),         // 27: trpc.moox.trade.TransferReq
+	(*TransferRsp)(nil),         // 28: trpc.moox.trade.TransferRsp
+	(*CreateApiKeyReq)(nil),     // 29: trpc.moox.trade.CreateApiKeyReq
+	(*CreateApiKeyRsp)(nil),     // 30: trpc.moox.trade.CreateApiKeyRsp
+	(*DeleteApiKeyReq)(nil),     // 31: trpc.moox.trade.DeleteApiKeyReq
+	(*DeleteApiKeyRsp)(nil),     // 32: trpc.moox.trade.DeleteApiKeyRsp
+	(*ListApiKeysReq)(nil),      // 33: trpc.moox.trade.ListApiKeysReq
+	(*ListApiKeysRsp)(nil),      // 34: trpc.moox.trade.ListApiKeysRsp
+	(*TradeChannel)(nil),        // 35: trpc.moox.trade.TradeChannel
+	(*Order)(nil),               // 36: trpc.moox.trade.Order
+	(*Trade)(nil),               // 37: trpc.moox.trade.Trade
+	(*Position)(nil),            // 38: trpc.moox.trade.Position
+	(*CreateChannelReq)(nil),    // 39: trpc.moox.trade.CreateChannelReq
+	(*CreateChannelRsp)(nil),    // 40: trpc.moox.trade.CreateChannelRsp
+	(*UpdateChannelReq)(nil),    // 41: trpc.moox.trade.UpdateChannelReq
+	(*UpdateChannelRsp)(nil),    // 42: trpc.moox.trade.UpdateChannelRsp
+	(*DeleteChannelReq)(nil),    // 43: trpc.moox.trade.DeleteChannelReq
+	(*DeleteChannelRsp)(nil),    // 44: trpc.moox.trade.DeleteChannelRsp
+	(*ListChannelsReq)(nil),     // 45: trpc.moox.trade.ListChannelsReq
+	(*ListChannelsRsp)(nil),     // 46: trpc.moox.trade.ListChannelsRsp
+	(*TestChannelReq)(nil),      // 47: trpc.moox.trade.TestChannelReq
+	(*TestChannelRsp)(nil),      // 48: trpc.moox.trade.TestChannelRsp
+	(*PlaceOrderReq)(nil),       // 49: trpc.moox.trade.PlaceOrderReq
+	(*PlaceOrderRsp)(nil),       // 50: trpc.moox.trade.PlaceOrderRsp
+	(*CancelOrderReq)(nil),      // 51: trpc.moox.trade.CancelOrderReq
+	(*CancelOrderRsp)(nil),      // 52: trpc.moox.trade.CancelOrderRsp
+	(*CancelAllOrdersReq)(nil),  // 53: trpc.moox.trade.CancelAllOrdersReq
+	(*CancelAllOrdersRsp)(nil),  // 54: trpc.moox.trade.CancelAllOrdersRsp
+	(*AmendOrderReq)(nil),       // 55: trpc.moox.trade.AmendOrderReq
+	(*AmendOrderRsp)(nil),       // 56: trpc.moox.trade.AmendOrderRsp
+	(*SetLeverageReq)(nil),      // 57: trpc.moox.trade.SetLeverageReq
+	(*SetLeverageRsp)(nil),      // 58: trpc.moox.trade.SetLeverageRsp
+	(*GetOrderReq)(nil),         // 59: trpc.moox.trade.GetOrderReq
+	(*GetOrderRsp)(nil),         // 60: trpc.moox.trade.GetOrderRsp
+	(*ListOrdersReq)(nil),       // 61: trpc.moox.trade.ListOrdersReq
+	(*ListOrdersRsp)(nil),       // 62: trpc.moox.trade.ListOrdersRsp
+	(*ListTradesReq)(nil),       // 63: trpc.moox.trade.ListTradesReq
+	(*ListTradesRsp)(nil),       // 64: trpc.moox.trade.ListTradesRsp
+	(*ListPositionsReq)(nil),    // 65: trpc.moox.trade.ListPositionsReq
+	(*ListPositionsRsp)(nil),    // 66: trpc.moox.trade.ListPositionsRsp
+	(*commonpb.RetInfo)(nil),    // 67: trpc.moox.common.RetInfo
+	(*commonpb.Page)(nil),       // 68: trpc.moox.common.Page
+	(*commonpb.PageResult)(nil), // 69: trpc.moox.common.PageResult
 }
 var file_trade_service_proto_depIdxs = []int32{
 	0,  // 0: trpc.moox.trade.Account.account_type:type_name -> trpc.moox.trade.AccountType
@@ -6051,7 +6052,6 @@ func file_trade_service_proto_init() {
 	if File_trade_service_proto != nil {
 		return
 	}
-	file_moox_common_proto_init()
 	if !protoimpl.UnsafeEnabled {
 		file_trade_service_proto_msgTypes[0].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*Account); i {

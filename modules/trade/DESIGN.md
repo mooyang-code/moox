@@ -121,6 +121,6 @@ t_users (admin)
 
 1. 生成 PB：参照 `modules/admin/proto/Makefile` 增加 `modules/trade/proto/Makefile`。
 2. DAO 层：API Key/Secret/Passphrase 落库前加密（参考 admin 的 SSH 凭证加解密）。
-3. 启动注入 schema：在 bootstrap 中调用 `schema.AllSQL()`（或分别 `AccountSQL()`/`OrderSQL()`）建表。
+3. Schema 初始化：`database.Manager.Initialize(&cfg.Database)` 内部读取模块内嵌 `schema.AllSQL()` 建表；bootstrap 只负责加载配置并传入数据库配置，不直接注入 SQL 文本。
 4. 成交回填：交易所成交推送 → 写 `t_trades` → 更新 `t_orders` 累计成交 → 生成 `t_account_fund_flows`
    → 刷新 `t_account_balances`，全部置于同一本地事务保证强一致。
