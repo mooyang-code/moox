@@ -53,12 +53,12 @@ func ReportTaskStatusAsync(ctx context.Context, spaceID string, taskID string, s
 
 // ReportTaskStatus 上报任务状态到服务端
 func ReportTaskStatus(ctx context.Context, spaceID string, taskID string, status int, result string) error {
-	serverIP, serverPort := runtimeapp.GetServerInfo()
+	serviceGatewayTarget := runtimeapp.GetServiceGatewayTarget()
 	nodeID, _ := runtimeapp.GetNodeInfo()
 
 	// 检查服务端配置
-	if serverIP == "" || serverPort <= 0 {
-		log.DebugContextf(ctx, "服务端地址未配置，跳过任务状态上报: taskID=%s", taskID)
+	if serviceGatewayTarget == "" {
+		log.DebugContextf(ctx, "service gateway target 未配置，跳过任务状态上报: taskID=%s", taskID)
 		return nil
 	}
 
@@ -76,15 +76,15 @@ func ReportTaskStatus(ctx context.Context, spaceID string, taskID string, status
 		return fmt.Errorf("node_id is required for task status report")
 	}
 
-	log.DebugContextf(ctx, "开始上报任务状态: spaceID=%s, taskID=%s, nodeID=%s, status=%d, serverIP=%s:%d",
-		spaceID, taskID, nodeID, status, serverIP, serverPort)
+	log.DebugContextf(ctx, "开始上报任务状态: spaceID=%s, taskID=%s, nodeID=%s, status=%d, service_gateway_target=%s",
+		spaceID, taskID, nodeID, status, serviceGatewayTarget)
 
-	return executeTaskStatusReport(ctx, spaceID, taskID, nodeID, status, result, serverIP, serverPort)
+	return executeTaskStatusReport(ctx, spaceID, taskID, nodeID, status, result, serviceGatewayTarget)
 }
 
 // executeTaskStatusReport 执行上报请求
-func executeTaskStatusReport(ctx context.Context, spaceID string, taskID string, nodeID string, status int, result string, serverIP string, serverPort int) error {
-	url := runtimeapp.URL(serverIP, serverPort, "collectmgr", "ReportTaskStatus")
+func executeTaskStatusReport(ctx context.Context, spaceID string, taskID string, nodeID string, status int, result string, serviceGatewayTarget string) error {
+	url := runtimeapp.ServiceURL(serviceGatewayTarget, "collectmgr", "ReportTaskStatus")
 
 	// 构建请求体
 	reqBody := &ReportTaskStatusRequest{

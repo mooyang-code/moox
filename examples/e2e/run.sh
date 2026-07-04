@@ -145,7 +145,7 @@ run_scf_once() {
     "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=1800"
   )
   local cmd
-  cmd="env ${envs[*]} ./bin/moox-collector-scf -once -server-ip 127.0.0.1 -server-port 11000 -node-id ${NODE_ID} -storage-metadata-target 127.0.0.1:20100 -storage-access-target 127.0.0.1:20102 -timeout ${timeout}"
+  cmd="env ${envs[*]} ./bin/moox-collector-scf -once -service-gateway-target http://127.0.0.1:11000 -node-id ${NODE_ID} -storage-metadata-target 127.0.0.1:20100 -storage-access-target 127.0.0.1:20102 -timeout ${timeout}"
   if is_local_target; then
     local deploy_dir
     deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"

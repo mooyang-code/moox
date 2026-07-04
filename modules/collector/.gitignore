@@ -1,5 +1,5 @@
 
-serverless
+/serverless
 main
 scf-build/
 data-collector

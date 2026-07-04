@@ -35,6 +35,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	svc := collectsvc.New(dbm.DB(), collectsvc.Dependencies{
 		AdminGatewayURL:       deps.AdminGatewayURL,
+		ServiceGatewayTarget:  deps.ServiceGatewayTarget,
 		ServiceAuth:           taskpublisherAuth(deps.ServiceAuth),
 		StorageMetadataTarget: deps.StorageMetadataTarget,
 		StorageAccessTarget:   deps.StorageAccessTarget,

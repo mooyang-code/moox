@@ -20,8 +20,7 @@ import (
 var Version string
 
 type onceOptions struct {
-	ServerIP              string
-	ServerPort            int
+	ServiceGatewayTarget  string
 	NodeID                string
 	StorageMetadataTarget string
 	StorageAccessTarget   string
@@ -31,8 +30,7 @@ type onceOptions struct {
 func main() {
 	once := flag.Bool("once", false, "poll and execute CloudNode JobItems once, then exit")
 	opts := onceOptionsFromEnv()
-	flag.StringVar(&opts.ServerIP, "server-ip", opts.ServerIP, "admin gateway host for CloudRuntime callbacks")
-	flag.IntVar(&opts.ServerPort, "server-port", opts.ServerPort, "admin gateway port for CloudRuntime callbacks")
+	flag.StringVar(&opts.ServiceGatewayTarget, "service-gateway-target", opts.ServiceGatewayTarget, "service gateway target for CloudRuntime callbacks")
 	flag.StringVar(&opts.NodeID, "node-id", opts.NodeID, "runtime node id")
 	flag.StringVar(&opts.StorageMetadataTarget, "storage-metadata-target", opts.StorageMetadataTarget, "storage metadata tRPC target")
 	flag.StringVar(&opts.StorageAccessTarget, "storage-access-target", opts.StorageAccessTarget, "storage access tRPC target")
@@ -88,14 +86,21 @@ func initializeServerlessRuntime(ctx context.Context, cfg *runtimeapp.AppConfig)
 }
 
 func onceOptionsFromEnv() onceOptions {
-	return onceOptions{
-		ServerIP:              strings.TrimSpace(os.Getenv("MOOX_RUNTIME_SERVER_IP")),
-		ServerPort:            intEnv("MOOX_RUNTIME_SERVER_PORT"),
+	opts := onceOptions{
+		ServiceGatewayTarget:  strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_TARGET")),
 		NodeID:                strings.TrimSpace(os.Getenv("MOOX_RUNTIME_NODE_ID")),
 		StorageMetadataTarget: strings.TrimSpace(os.Getenv("MOOX_STORAGE_METADATA_TARGET")),
 		StorageAccessTarget:   strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_TARGET")),
 		Timeout:               durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", 90*time.Second),
 	}
+	if opts.ServiceGatewayTarget == "" {
+		serverIP := strings.TrimSpace(os.Getenv("MOOX_RUNTIME_SERVER_IP"))
+		serverPort := intEnv("MOOX_RUNTIME_SERVER_PORT")
+		if serverIP != "" && serverPort > 0 {
+			opts.ServiceGatewayTarget = fmt.Sprintf("http://%s:%d", serverIP, serverPort)
+		}
+	}
+	return opts
 }
 
 func intEnv(key string) int {
@@ -123,14 +128,14 @@ func durationEnv(key string, fallback time.Duration) time.Duration {
 }
 
 func runOnce(ctx context.Context, opts onceOptions) error {
-	if strings.TrimSpace(opts.ServerIP) == "" || opts.ServerPort <= 0 {
-		return fmt.Errorf("server-ip and server-port are required")
+	if strings.TrimSpace(opts.ServiceGatewayTarget) == "" {
+		return fmt.Errorf("service-gateway-target is required")
 	}
 	if strings.TrimSpace(opts.NodeID) == "" {
 		return fmt.Errorf("node-id is required")
 	}
 	_, version := runtimeapp.GetNodeInfo()
-	runtimeapp.UpdateServerInfo(opts.ServerIP, opts.ServerPort)
+	runtimeapp.UpdateServiceGatewayTarget(opts.ServiceGatewayTarget)
 	runtimeapp.UpdateNodeInfo(opts.NodeID, version)
 	runtimeapp.UpdateStorageTargets(opts.StorageMetadataTarget, opts.StorageAccessTarget)
 	return taskrunner.PollAndExecuteJobItems(ctx)

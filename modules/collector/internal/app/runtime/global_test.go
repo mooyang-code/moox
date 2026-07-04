@@ -30,6 +30,20 @@ func TestStorageRuntimeTargetsOverrideEnvironment(t *testing.T) {
 	}
 }
 
+func TestServiceGatewayTargetUpdatesRuntimeServerInfo(t *testing.T) {
+	resetStorageTargetState(t)
+
+	UpdateServiceGatewayTarget("http://gateway.example.com:11000/")
+
+	if got := GetServiceGatewayTarget(); got != "http://gateway.example.com:11000" {
+		t.Fatalf("GetServiceGatewayTarget() = %q", got)
+	}
+	host, port := GetServerInfo()
+	if host != "gateway.example.com" || port != 11000 {
+		t.Fatalf("GetServerInfo() = %s:%d, want gateway.example.com:11000", host, port)
+	}
+}
+
 func resetStorageTargetState(t *testing.T) {
 	t.Helper()
 

@@ -8,10 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -33,7 +30,9 @@ type AuthConfig struct {
 
 // Config configures the CloudNode gateway client.
 type Config struct {
-	GatewayURL            string
+	// ServiceGatewayTarget is the public /api/service gateway used by collector and SCF callbacks.
+	ServiceGatewayTarget  string
+	GatewayURL            string // Deprecated: use ServiceGatewayTarget.
 	StorageMetadataTarget string
 	StorageAccessTarget   string
 	Auth                  AuthConfig
@@ -41,7 +40,7 @@ type Config struct {
 
 // Client submits collector work to CloudNode through the admin service gateway.
 type Client struct {
-	gatewayURL            string
+	serviceGatewayTarget  string
 	storageMetadataTarget string
 	storageAccessTarget   string
 	auth                  AuthConfig
@@ -56,8 +55,12 @@ type WakeOptions struct {
 
 // New creates a CloudNode client.
 func New(cfg Config) *Client {
+	target := strings.TrimSpace(cfg.ServiceGatewayTarget)
+	if target == "" {
+		target = strings.TrimSpace(cfg.GatewayURL)
+	}
 	return &Client{
-		gatewayURL:            strings.TrimRight(strings.TrimSpace(cfg.GatewayURL), "/"),
+		serviceGatewayTarget:  normalizeGatewayTarget(target),
 		storageMetadataTarget: strings.TrimSpace(cfg.StorageMetadataTarget),
 		storageAccessTarget:   strings.TrimSpace(cfg.StorageAccessTarget),
 		auth:                  cfg.Auth,
@@ -155,10 +158,10 @@ func (c *Client) postService(ctx context.Context, service string, method string,
 }
 
 func (c *Client) postServiceWithHeaders(ctx context.Context, service string, method string, body []byte, out proto.Message, headers map[string]string) error {
-	if c.gatewayURL == "" {
-		return fmt.Errorf("admin gateway url is required")
+	if c.serviceGatewayTarget == "" {
+		return fmt.Errorf("service gateway target is required")
 	}
-	url := fmt.Sprintf("%s/api/service/%s/%s", c.gatewayURL, service, method)
+	url := fmt.Sprintf("%s/api/service/%s/%s", c.serviceGatewayTarget, service, method)
 	req, err := runtimeapp.NewSignedRequestWithContext(ctx, http.MethodPost, url, body, runtimeapp.AuthConfig{
 		Version:   c.auth.Version,
 		AccessKey: c.auth.AccessKey,
@@ -198,16 +201,14 @@ func (c *Client) postServiceWithHeaders(ctx context.Context, service string, met
 }
 
 func (c *Client) buildWakeEvent() (map[string]any, error) {
-	host, port, err := c.gatewayHostPort()
-	if err != nil {
-		return nil, err
+	if c.serviceGatewayTarget == "" {
+		return nil, fmt.Errorf("service gateway target is required")
 	}
 	return map[string]any{
 		"action":                  "keepalive",
 		"source":                  "collector_schedule",
 		"timestamp":               time.Now().UTC().Format(time.RFC3339),
-		"server_ip":               host,
-		"server_port":             port,
+		"service_gateway_target":  c.serviceGatewayTarget,
 		"storage_metadata_target": c.storageMetadataTarget,
 		"storage_access_target":   c.storageAccessTarget,
 		"data": map[string]any{
@@ -216,38 +217,15 @@ func (c *Client) buildWakeEvent() (map[string]any, error) {
 	}, nil
 }
 
-func (c *Client) gatewayHostPort() (string, int, error) {
-	rawURL := strings.TrimSpace(c.gatewayURL)
-	if rawURL == "" {
-		return "", 0, fmt.Errorf("admin gateway url is required")
+func normalizeGatewayTarget(raw string) string {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return ""
 	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", 0, fmt.Errorf("parse admin gateway url: %w", err)
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return raw
 	}
-	host := parsed.Hostname()
-	if host == "" {
-		host, _, _ = net.SplitHostPort(rawURL)
-	}
-	if host == "" {
-		return "", 0, fmt.Errorf("admin gateway host is required")
-	}
-	port := 0
-	if parsed.Port() != "" {
-		port, err = strconv.Atoi(parsed.Port())
-		if err != nil {
-			return "", 0, fmt.Errorf("parse admin gateway port: %w", err)
-		}
-	}
-	if port == 0 {
-		switch parsed.Scheme {
-		case "https":
-			port = 443
-		default:
-			port = 80
-		}
-	}
-	return host, port, nil
+	return "http://" + raw
 }
 
 func spaceHeaders(spaceID string) map[string]string {

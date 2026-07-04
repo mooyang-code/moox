@@ -8,18 +8,14 @@ import (
 )
 
 func TestOnceOptionsFromEnv(t *testing.T) {
-	t.Setenv("MOOX_RUNTIME_SERVER_IP", "127.0.0.1")
-	t.Setenv("MOOX_RUNTIME_SERVER_PORT", "11000")
+	t.Setenv("MOOX_SERVICE_GATEWAY_TARGET", "http://127.0.0.1:11000")
 	t.Setenv("MOOX_RUNTIME_NODE_ID", "e2e-scf-node")
 	t.Setenv("MOOX_STORAGE_METADATA_TARGET", "127.0.0.1:20100")
 	t.Setenv("MOOX_STORAGE_ACCESS_TARGET", "127.0.0.1:20102")
 
 	opts := onceOptionsFromEnv()
-	if opts.ServerIP != "127.0.0.1" {
-		t.Fatalf("ServerIP = %q, want 127.0.0.1", opts.ServerIP)
-	}
-	if opts.ServerPort != 11000 {
-		t.Fatalf("ServerPort = %d, want 11000", opts.ServerPort)
+	if opts.ServiceGatewayTarget != "http://127.0.0.1:11000" {
+		t.Fatalf("ServiceGatewayTarget = %q, want http://127.0.0.1:11000", opts.ServiceGatewayTarget)
 	}
 	if opts.NodeID != "e2e-scf-node" {
 		t.Fatalf("NodeID = %q, want e2e-scf-node", opts.NodeID)

@@ -23,6 +23,7 @@ import (
 // Dependencies contains external service endpoints used by CollectMgr.
 type Dependencies struct {
 	AdminGatewayURL       string
+	ServiceGatewayTarget  string
 	ServiceAuth           taskpublisher.AuthConfig
 	StorageMetadataTarget string
 	StorageAccessTarget   string
@@ -46,6 +47,7 @@ func New(db *gorm.DB, deps Dependencies) *Service {
 		builder:      planner.NewTaskBuilder(),
 		datasetSrc:   storagesource.NewDatasetSource(deps.StorageMetadataTarget),
 		cloudJobs: taskpublisher.New(taskpublisher.Config{
+			ServiceGatewayTarget:  deps.ServiceGatewayTarget,
 			GatewayURL:            deps.AdminGatewayURL,
 			StorageMetadataTarget: deps.StorageMetadataTarget,
 			StorageAccessTarget:   deps.StorageAccessTarget,

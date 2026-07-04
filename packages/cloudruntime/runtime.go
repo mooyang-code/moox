@@ -30,16 +30,17 @@ const (
 
 // Config describes the MooX control plane and node capabilities for an SCF runtime.
 type Config struct {
-	ServerIP          string
-	ServerPort        int
-	SpaceID           string
-	NodeID            string
-	SupportedJobTypes []string
-	Limit             int
-	RuntimeVersion    string
-	ProtocolVersion   string
-	Auth              AuthConfig
-	HTTPTimeout       time.Duration
+	ServiceGatewayTarget string
+	ServerIP             string
+	ServerPort           int
+	SpaceID              string
+	NodeID               string
+	SupportedJobTypes    []string
+	Limit                int
+	RuntimeVersion       string
+	ProtocolVersion      string
+	Auth                 AuthConfig
+	HTTPTimeout          time.Duration
 }
 
 // JobItem is a CloudNode async execution unit.
@@ -208,11 +209,15 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 func (cfg *Config) validate() error {
+	cfg.ServiceGatewayTarget = normalizeGatewayTarget(cfg.ServiceGatewayTarget)
 	cfg.ServerIP = strings.TrimSpace(cfg.ServerIP)
 	cfg.SpaceID = strings.TrimSpace(cfg.SpaceID)
 	cfg.NodeID = strings.TrimSpace(cfg.NodeID)
-	if cfg.ServerIP == "" || cfg.ServerPort <= 0 || cfg.SpaceID == "" || cfg.NodeID == "" {
-		return fmt.Errorf("cloud runtime requires server_ip, server_port, space_id and node_id")
+	if cfg.ServiceGatewayTarget == "" && cfg.ServerIP != "" && cfg.ServerPort > 0 {
+		cfg.ServiceGatewayTarget = fmt.Sprintf("http://%s:%d", cfg.ServerIP, cfg.ServerPort)
+	}
+	if cfg.ServiceGatewayTarget == "" || cfg.SpaceID == "" || cfg.NodeID == "" {
+		return fmt.Errorf("cloud runtime requires service_gateway_target, space_id and node_id")
 	}
 	cfg.SupportedJobTypes = compactStrings(cfg.SupportedJobTypes)
 	if len(cfg.SupportedJobTypes) == 0 {
@@ -332,7 +337,7 @@ func postService(ctx context.Context, cfg Config, module string, method string, 
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("http://%s:%d/api/service/%s/%s", cfg.ServerIP, cfg.ServerPort, module, method)
+	url := fmt.Sprintf("%s/api/service/%s/%s", cfg.ServiceGatewayTarget, module, method)
 	req, err := newSignedRequestWithContext(ctx, http.MethodPost, url, raw, cfg.Auth)
 	if err != nil {
 		return err
@@ -354,6 +359,17 @@ func postService(ctx context.Context, cfg Config, module string, method string, 
 		return nil
 	}
 	return json.Unmarshal(respBody, out)
+}
+
+func normalizeGatewayTarget(raw string) string {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return raw
+	}
+	return "http://" + raw
 }
 
 func normalizeErrorCode(code string, fallback string) string {

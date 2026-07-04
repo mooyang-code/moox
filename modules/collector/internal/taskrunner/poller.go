@@ -22,10 +22,10 @@ var registerHandlersOnce sync.Once
 
 // PollAndExecuteJobItems polls CloudNode JobItems and executes them in the current runtime.
 func PollAndExecuteJobItems(ctx context.Context) error {
-	serverIP, serverPort := runtimeapp.GetServerInfo()
+	serviceGatewayTarget := runtimeapp.GetServiceGatewayTarget()
 	nodeID, _ := runtimeapp.GetNodeInfo()
-	if serverIP == "" || serverPort <= 0 || nodeID == "" {
-		log.DebugContextf(ctx, "[CloudRuntime] skip poll job items server=%s:%d node_id=%s", serverIP, serverPort, nodeID)
+	if serviceGatewayTarget == "" || nodeID == "" {
+		log.DebugContextf(ctx, "[CloudRuntime] skip poll job items service_gateway_target=%s node_id=%s", serviceGatewayTarget, nodeID)
 		return nil
 	}
 	spaceID := runtimeSpaceID()
@@ -36,10 +36,9 @@ func PollAndExecuteJobItems(ctx context.Context) error {
 	auth := runtimeapp.GetServiceAuthConfig()
 	registerCollectorHandlers()
 	return nodeRuntime.Run(ctx, nodeRuntime.Config{
-		ServerIP:   serverIP,
-		ServerPort: serverPort,
-		SpaceID:    spaceID,
-		NodeID:     nodeID,
+		ServiceGatewayTarget: serviceGatewayTarget,
+		SpaceID:              spaceID,
+		NodeID:               nodeID,
 		SupportedJobTypes: []string{
 			jobs.JobTypeCollectKline,
 			jobs.JobTypeCollectSymbol,

@@ -6,8 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strconv"
 	"testing"
 )
 
@@ -54,13 +52,11 @@ func TestRunPollsJobItemsAndDispatchesRegisteredHandler(t *testing.T) {
 	}))
 	defer server.Close()
 
-	host, port := testServerAddress(t, server.URL)
 	if err := Run(context.Background(), Config{
-		ServerIP:          host,
-		ServerPort:        port,
-		SpaceID:           "crypto",
-		NodeID:            "node-a",
-		SupportedJobTypes: []string{"collect.kline"},
+		ServiceGatewayTarget: server.URL,
+		SpaceID:              "crypto",
+		NodeID:               "node-a",
+		SupportedJobTypes:    []string{"collect.kline"},
 		Auth: AuthConfig{
 			AccessKey: "test-ak",
 			SecretKey: "test-sk",
@@ -123,13 +119,11 @@ func TestRunReportsPermanentFailureWhenHandlerMissing(t *testing.T) {
 	}))
 	defer server.Close()
 
-	host, port := testServerAddress(t, server.URL)
 	if err := Run(context.Background(), Config{
-		ServerIP:          host,
-		ServerPort:        port,
-		SpaceID:           "crypto",
-		NodeID:            "node-a",
-		SupportedJobTypes: []string{"collect.unknown"},
+		ServiceGatewayTarget: server.URL,
+		SpaceID:              "crypto",
+		NodeID:               "node-a",
+		SupportedJobTypes:    []string{"collect.unknown"},
 		Auth: AuthConfig{
 			AccessKey: "test-ak",
 			SecretKey: "test-sk",
@@ -176,13 +170,11 @@ func TestRunReportsRetryableErrorKind(t *testing.T) {
 	}))
 	defer server.Close()
 
-	host, port := testServerAddress(t, server.URL)
 	if err := Run(context.Background(), Config{
-		ServerIP:          host,
-		ServerPort:        port,
-		SpaceID:           "crypto",
-		NodeID:            "node-a",
-		SupportedJobTypes: []string{"collect.kline"},
+		ServiceGatewayTarget: server.URL,
+		SpaceID:              "crypto",
+		NodeID:               "node-a",
+		SupportedJobTypes:    []string{"collect.kline"},
 		Auth: AuthConfig{
 			AccessKey: "test-ak",
 			SecretKey: "test-sk",
@@ -216,17 +208,4 @@ func TestRegisterRejectsDuplicateJobType(t *testing.T) {
 	Register("collect.kline", HandlerFunc(func(context.Context, JobItem) (Result, error) {
 		return Result{}, nil
 	}))
-}
-
-func testServerAddress(t *testing.T, rawURL string) (string, int) {
-	t.Helper()
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		t.Fatalf("parse test server URL: %v", err)
-	}
-	port, err := strconv.Atoi(parsed.Port())
-	if err != nil {
-		t.Fatalf("parse test server port: %v", err)
-	}
-	return parsed.Hostname(), port
 }

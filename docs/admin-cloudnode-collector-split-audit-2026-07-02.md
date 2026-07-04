@@ -536,7 +536,7 @@ Stale `modules/account` / `moox-account` and `modules/order` / `moox-order` refe
 
 ### SCF runtime deployment payload
 
-SCF collector events now treat `service_deployments` as the primary runtime routing payload. `service_gateway` is parsed and written back into `ServerIP` / `ServerPort` before keepalive handling, and `storage_access` updates the direct storage write URL. The old `moox_server_url` event fallback was removed from `CloudFunctionEvent`.
+SCF collector events now use `service_gateway_target` as the primary runtime callback target. Collector resolves the target from the active `service_gateway` row in `t_service_deployments`, and storage writes use the active storage tRPC targets.
 
 ### Legacy infra.local deployment helpers removed
 

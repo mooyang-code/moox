@@ -107,14 +107,14 @@ func resolveSingleDomain(ctx context.Context, domain string) *DNSRecord {
 // fetchSingleDomainFromRemote 从远端获取单个域名的 DNS 记录
 func fetchSingleDomainFromRemote(ctx context.Context, domain string) *DNSRecord {
 	// 获取服务端地址
-	serverIP, serverPort := runtimeapp.GetServerInfo()
-	if serverIP == "" {
-		log.DebugContext(ctx, "no server IP configured, skipping remote DNS fetch")
+	serviceGatewayTarget := runtimeapp.GetServiceGatewayTarget()
+	if serviceGatewayTarget == "" {
+		log.DebugContext(ctx, "no service gateway target configured, skipping remote DNS fetch")
 		return nil
 	}
 
 	// 构建请求 URL
-	url := runtimeapp.URL(serverIP, serverPort, "dnsproxy", "ListDNSRecords")
+	url := runtimeapp.ServiceURL(serviceGatewayTarget, "dnsproxy", "ListDNSRecords")
 
 	// 发送 HTTP 请求
 	respData, err := fetchFromServer(ctx, url)

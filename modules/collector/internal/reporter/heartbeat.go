@@ -50,17 +50,17 @@ func ScheduledHeartbeat(c context.Context, _ string) error {
 
 // ReportHeartbeat 发送心跳上报服务端
 func ReportHeartbeat(ctx context.Context) error {
-	serverIP, serverPort := runtimeapp.GetServerInfo()
+	serviceGatewayTarget := runtimeapp.GetServiceGatewayTarget()
 	nodeID, localVersion := runtimeapp.GetNodeInfo()
-	log.DebugContextf(ctx, "ReportHeartbeat 开始: serverIP=%s:%d, nodeID=%s, version=%s", serverIP, serverPort, nodeID, localVersion)
+	log.DebugContextf(ctx, "ReportHeartbeat 开始: service_gateway_target=%s, nodeID=%s, version=%s", serviceGatewayTarget, nodeID, localVersion)
 
 	// 检查NodeID是否配置
 	if nodeID == "" {
 		log.WarnContextf(ctx, "NodeID 为空，跳过心跳上报。请确保服务端探测请求已触发 ProcessProbe")
 		return nil
 	}
-	if serverIP == "" {
-		log.WarnContextf(ctx, "服务端 IP 未配置，跳过心跳上报")
+	if serviceGatewayTarget == "" {
+		log.WarnContextf(ctx, "service gateway target 未配置，跳过心跳上报")
 		return nil
 	}
 
@@ -71,7 +71,7 @@ func ReportHeartbeat(ctx context.Context) error {
 		return fmt.Errorf("failed to build heartbeat payload: %w", err)
 	}
 
-	if err := sendToServer(ctx, payload, serverIP, serverPort); err != nil {
+	if err := sendToServer(ctx, payload, serviceGatewayTarget); err != nil {
 		log.ErrorContextf(ctx, "failed to send heartbeat: %v", err)
 		return fmt.Errorf("failed to send heartbeat: %w", err)
 	}
@@ -93,17 +93,21 @@ func ProcessProbe(ctx context.Context, event model.CloudFunctionEvent) (*model.R
 		log.WarnContextf(ctx, "[ProcessProbe] 无法从上下文获取云函数信息, ok=%v", ok)
 	}
 
-	// 更新服务端连接信息的配置（用于本节点 主动上报心跳和拉取配置）
-	log.DebugContextf(ctx, "[ProcessProbe] event.ServerIP=%s, event.ServerPort=%d", event.ServerIP, event.ServerPort)
-	if event.ServerIP != "" && event.ServerPort > 0 {
-		log.DebugContextf(ctx, "[ProcessProbe] 更新服务端地址 %s:%d", event.ServerIP, event.ServerPort)
+	// 更新 service gateway 配置（用于本节点主动上报心跳和拉取任务）。
+	log.DebugContextf(ctx, "[ProcessProbe] event.ServiceGatewayTarget=%s", event.ServiceGatewayTarget)
+	if event.ServiceGatewayTarget != "" {
+		log.DebugContextf(ctx, "[ProcessProbe] 更新 service gateway target %s", event.ServiceGatewayTarget)
+		runtimeapp.UpdateServiceGatewayTarget(event.ServiceGatewayTarget)
+		verifyIP, verifyPort := runtimeapp.GetServerInfo()
+		log.DebugContextf(ctx, "[ProcessProbe] 验证更新后的服务端地址: %s:%d", verifyIP, verifyPort)
+	} else if event.ServerIP != "" && event.ServerPort > 0 {
+		log.DebugContextf(ctx, "[ProcessProbe] 更新兼容服务端地址 %s:%d", event.ServerIP, event.ServerPort)
 		runtimeapp.UpdateServerInfo(event.ServerIP, event.ServerPort)
-		// 验证更新是否成功
 		verifyIP, verifyPort := runtimeapp.GetServerInfo()
 		log.DebugContextf(ctx, "[ProcessProbe] 验证更新后的服务端地址: %s:%d", verifyIP, verifyPort)
 	} else {
-		log.WarnContextf(ctx, "[ProcessProbe] 服务端地址信息缺失 ServerIP=%s, ServerPort=%d",
-			event.ServerIP, event.ServerPort)
+		log.WarnContextf(ctx, "[ProcessProbe] service gateway 信息缺失 ServiceGatewayTarget=%s ServerIP=%s ServerPort=%d",
+			event.ServiceGatewayTarget, event.ServerIP, event.ServerPort)
 	}
 
 	// 构建响应数据
@@ -181,22 +185,22 @@ func collectNodeMetrics() *model.NodeMetrics {
 	}
 }
 
-func sendToServer(ctx context.Context, payload *model.HeartbeatPayload, serverIP string, serverPort int) error {
+func sendToServer(ctx context.Context, payload *model.HeartbeatPayload, serviceGatewayTarget string) error {
 	log.DebugContextf(ctx, "sending heartbeat, node_id: %s", payload.NodeID)
 	// 检查必要参数
-	if serverIP == "" || serverPort <= 0 {
-		return fmt.Errorf("invalid server address: %s:%d", serverIP, serverPort)
+	if serviceGatewayTarget == "" {
+		return fmt.Errorf("invalid service gateway target")
 	}
 
-	if err := executeReport(ctx, payload, serverIP, serverPort); err != nil {
+	if err := executeReport(ctx, payload, serviceGatewayTarget); err != nil {
 		return fmt.Errorf("failed to send heartbeat: %w", err)
 	}
 	return nil
 }
 
 // executeReport 准备并发送心跳请求
-func executeReport(ctx context.Context, payload *model.HeartbeatPayload, serverIP string, serverPort int) error {
-	url := runtimeapp.URL(serverIP, serverPort, "cloudnode", "ReportHeartbeat")
+func executeReport(ctx context.Context, payload *model.HeartbeatPayload, serviceGatewayTarget string) error {
+	url := runtimeapp.ServiceURL(serviceGatewayTarget, "cloudnode", "ReportHeartbeat")
 
 	// 构建请求体
 	apiPayload := map[string]interface{}{
@@ -438,14 +442,16 @@ func getTaskStatistics() model.TaskStatsInfo {
 func getHeartbeatInfo(probeConfig *ProbeResponseConfig) model.HeartbeatInfo {
 	// 从全局配置获取服务器信息
 	serverIP, serverPort := runtimeapp.GetServerInfo()
+	serviceGatewayTarget := runtimeapp.GetServiceGatewayTarget()
 
 	return model.HeartbeatInfo{
-		LastReport:  time.Now(),
-		ReportCount: probeConfig.ReportCount,
-		ErrorCount:  probeConfig.ErrorCount,
-		Interval:    probeConfig.Interval,
-		ServerIP:    serverIP,
-		ServerPort:  serverPort,
+		LastReport:           time.Now(),
+		ReportCount:          probeConfig.ReportCount,
+		ErrorCount:           probeConfig.ErrorCount,
+		Interval:             probeConfig.Interval,
+		ServiceGatewayTarget: serviceGatewayTarget,
+		ServerIP:             serverIP,
+		ServerPort:           serverPort,
 	}
 }
 

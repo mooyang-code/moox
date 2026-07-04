@@ -16,6 +16,7 @@ import (
 // Dependencies contains the service endpoints used by CollectMgr.
 type Dependencies struct {
 	AdminGatewayURL       string
+	ServiceGatewayTarget  string
 	ServiceAuth           ServiceAuthConfig
 	StorageMetadataTarget string
 	StorageAccessTarget   string
@@ -52,6 +53,7 @@ type activeDeploymentsRsp struct {
 func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	deps := Dependencies{
 		AdminGatewayURL:       defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
+		ServiceGatewayTarget:  defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
 		ServiceAuth:           cfg.SysDeploy.ServiceAuth,
 		StorageMetadataTarget: cfg.Storage.MetadataTarget,
 		StorageAccessTarget:   cfg.Storage.AccessTarget,
@@ -65,6 +67,9 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	}
 	if v := endpointAddress(active, "moox_cloudnode", "cloudnode"); v != "" {
 		_ = v // cloudnode RPC address is resolved for runtime deployments; control plane uses admin gateway.
+	}
+	if v := endpointGatewayTarget(active, "service_gateway"); v != "" {
+		deps.ServiceGatewayTarget = v
 	}
 	if v := endpointTRPCTarget(active, "storage_metadata_trpc", "moox_storage_metadata_trpc", "moox-storage-metadata-trpc"); v != "" {
 		deps.StorageMetadataTarget = v
@@ -137,6 +142,27 @@ func endpointAddress(items map[string]endpoint, names ...string) string {
 		if strings.TrimSpace(item.Host) != "" && item.Port > 0 {
 			return fmt.Sprintf("%s:%d", item.Host, item.Port)
 		}
+	}
+	return ""
+}
+
+func endpointGatewayTarget(items map[string]endpoint, names ...string) string {
+	for _, name := range names {
+		item, ok := findEndpoint(items, name)
+		if !ok {
+			continue
+		}
+		if value := strings.TrimSpace(item.BaseURL); value != "" {
+			return strings.TrimRight(value, "/")
+		}
+		if strings.TrimSpace(item.Host) == "" || item.Port <= 0 {
+			continue
+		}
+		protocol := strings.TrimSpace(item.Protocol)
+		if protocol == "" {
+			protocol = "http"
+		}
+		return fmt.Sprintf("%s://%s:%d", protocol, item.Host, item.Port)
 	}
 	return ""
 }

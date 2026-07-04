@@ -76,8 +76,9 @@ type CloudFunctionEvent struct {
 	Timestamp             string                       `json:"timestamp"` // 使用时间格式字符串（支持时区）
 	RequestID             string                       `json:"request_id,omitempty"`
 	Source                string                       `json:"source,omitempty"`                  // 探测来源标识
-	ServerIP              string                       `json:"server_ip"`                         // 服务端IP
-	ServerPort            int                          `json:"server_port"`                       // 服务端心跳API端口
+	ServiceGatewayTarget  string                       `json:"service_gateway_target,omitempty"`  // /api/service gateway target
+	ServerIP              string                       `json:"server_ip,omitempty"`               // Deprecated: use service_gateway_target.
+	ServerPort            int                          `json:"server_port,omitempty"`             // Deprecated: use service_gateway_target.
 	StorageMetadataTarget string                       `json:"storage_metadata_target,omitempty"` // storage metadata tRPC target
 	StorageAccessTarget   string                       `json:"storage_access_target,omitempty"`   // storage access tRPC target
 	StorageServerURL      string                       `json:"storage_server_url,omitempty"`      // Deprecated: storage access 直连 URL
@@ -151,12 +152,13 @@ type SystemInfo struct {
 
 // HeartbeatInfo 心跳统计信息
 type HeartbeatInfo struct {
-	LastReport  time.Time `json:"last_report"`
-	ReportCount int64     `json:"report_count"`
-	ErrorCount  int64     `json:"error_count"`
-	Interval    string    `json:"interval"`
-	ServerIP    string    `json:"server_ip"`
-	ServerPort  int       `json:"server_port"`
+	LastReport           time.Time `json:"last_report"`
+	ReportCount          int64     `json:"report_count"`
+	ErrorCount           int64     `json:"error_count"`
+	Interval             string    `json:"interval"`
+	ServiceGatewayTarget string    `json:"service_gateway_target,omitempty"`
+	ServerIP             string    `json:"server_ip,omitempty"`
+	ServerPort           int       `json:"server_port,omitempty"`
 }
 
 // Response 通用响应

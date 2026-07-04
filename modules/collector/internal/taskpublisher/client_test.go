@@ -5,8 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -114,8 +112,8 @@ func TestJobItemIDsByTaskIDUsesAckedJobItemID(t *testing.T) {
 
 func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) {
 	var invoked bool
-	serverPort := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Space-Id") != "crypto" {
 			t.Fatalf("X-Space-Id = %q, want crypto", r.Header.Get("X-Space-Id"))
 		}
@@ -141,8 +139,14 @@ func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) 
 				t.Fatalf("invoke type = %v, want event", req.GetScfInvokeType())
 			}
 			event := req.GetEventData().AsMap()
-			if event["server_ip"] != "127.0.0.1" || int(event["server_port"].(float64)) != serverPort {
-				t.Fatalf("event server = %#v:%#v, want 127.0.0.1:%d", event["server_ip"], event["server_port"], serverPort)
+			if event["service_gateway_target"] != server.URL {
+				t.Fatalf("event service_gateway_target = %#v, want %s", event["service_gateway_target"], server.URL)
+			}
+			if _, ok := event["server_ip"]; ok {
+				t.Fatalf("event should not include server_ip: %#v", event)
+			}
+			if _, ok := event["server_port"]; ok {
+				t.Fatalf("event should not include server_port: %#v", event)
 			}
 			if event["storage_metadata_target"] != "127.0.0.1:20100" || event["storage_access_target"] != "127.0.0.1:20102" {
 				t.Fatalf("event storage targets = %#v", event)
@@ -156,17 +160,8 @@ func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) 
 		}
 	}))
 	defer server.Close()
-	serverURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	serverPort, err = strconv.Atoi(serverURL.Port())
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	client := New(Config{
-		GatewayURL:            server.URL,
+		ServiceGatewayTarget:  server.URL,
 		StorageMetadataTarget: "127.0.0.1:20100",
 		StorageAccessTarget:   "127.0.0.1:20102",
 		Auth: AuthConfig{
@@ -222,7 +217,7 @@ func TestWakeCollectorNodesContinuesAfterFailedNode(t *testing.T) {
 	defer server.Close()
 
 	client := New(Config{
-		GatewayURL: server.URL,
+		ServiceGatewayTarget: server.URL,
 		Auth: AuthConfig{
 			AccessKey: "ak",
 			SecretKey: "sk",
