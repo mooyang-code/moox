@@ -9,7 +9,7 @@ MooX 后端 Go 模块目录，由仓库根目录 `go.work` 统一管理。各模
 | [admin](./admin/) | `moox-admin` | 统一 HTTP 网关 + 认证、Space、运维等本地基础服务 |
 | [storage](./storage/) | `moox-storage` | 统一数据存储引擎（元数据 + 事实主存 + 派生视图） |
 | [collector](./collector/) | `moox-collector`、`moox-collector-scf` | 采集控制面与 SCF 运行时 |
-| [cloudnode](./cloudnode/) | `moox-cloudnode` | 云账户、代码包、异步 JobItem、SCF 下发 |
+| [cloudnode](./cloudnode/) | `moox-cloudnode` | 云账户、代码包、异步 JobItem、SCF 唤醒/直调 |
 | [trade](./trade/) | `moox-trade` | 账户、订单、成交、持仓与交易所适配 |
 | [cli](./cli/) | `moox-cli` | 命令行工具（元数据导入、数据导入、运维辅助） |
 | [factor](./factor/) | `moox-factor` | 因子计算（占位，待扩展） |
@@ -37,15 +37,25 @@ SCF 采集运行时通过 `/api/service/*`（HMAC 签名）回调后台，不经
 
 ## 构建与发布
 
-模块级 `Makefile` 均代理到仓库根脚本：
+有独立 `Makefile` 的模块会代理到仓库根脚本；没有模块级 `Makefile` 时直接使用根脚本：
 
 ```bash
-# 构建全部或指定模块
+# 构建全部
 make build
-./scripts/build.sh admin storage collector cloudnode trade cli
+
+# 构建单个模块；build.sh 每次只接收一个 target
+./scripts/build.sh admin
+./scripts/build.sh storage
+./scripts/build.sh collector
+./scripts/build.sh cloudnode
+./scripts/build.sh trade
+./scripts/build.sh cli
+./scripts/build.sh factor
 
 # 本机/远端一键发布
 make deploy ARGS="--target localhost --dir ~/moox/dev"
 ```
+
+`scripts/deploy-moox.sh` 当前部署 admin、web-host、cloudnode、collector、storage；trade/factor 已可构建，但不在一键部署脚本的启动范围内。
 
 详细架构见仓库 [`docs/架构总览.md`](../docs/架构总览.md)。

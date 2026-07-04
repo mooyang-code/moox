@@ -1,284 +1,93 @@
-# MooX
+# MooX Web
 
-<div>
-	<p>
-                <a href="" target="_blank">
-		  <img src="https://img.shields.io/badge/License-MIT-%2343aefc" alt="License">
-		</a>
-		<a href="" target="_blank">
-		  <img src="https://img.shields.io/badge/vue_.js-vue3_.x-%2300b42a" alt="Vue">
-		</a>
-                <a href="" target="_blank">
-		  <img src="https://img.shields.io/badge/Vite-6x-%2311B337" alt="Vite">
-		</a>
-                <a href="" target="_blank">
-		  <img src="https://img.shields.io/badge/Arco_Design-2.56.3-%2310b236" alt="Arco-Design">
-		</a>
-	</p>
-</div>
+MooX 管理台前端，基于 Vue 3、Vite 5、TypeScript、Pinia 与 Arco Design。它负责登录、Space 上下文、数据资产、采集与云函数、交易、运维等管理页面。
 
-### 介绍 📖
+## 运行环境
 
-MooX 是一个清新优雅、高颜值且功能强大的后台管理模板，基于最新的前端技术栈，包括 Vue3, Vite6, TypeScript, Pinia。它内置了丰富的主题配置和组件，代码规范严谨，实现了自动化的文件路由系统。MooX 为您提供了一站式的后台管理解决方案，无需额外配置，开箱即用。同样是一个快速学习前沿技术的最佳实践。
+- Node.js >= 18.12.0
+- pnpm >= 8.7.0
 
-### 版本 📦
-
-**预览及文档**
-
-项目预览地址：[MooX](http://101.126.93.137/#/login)
-
-项目文档地址：[MooX-开发指南](http://101.126.93.137:81/)
-
-**代码仓库**
-
-| 平台   | 仓库地址                                                 |
-| ------ | -------------------------------------------------------- |
-| GitHub | [Github 仓库]() |
-| Gitee  | [Gitee 仓库]()     |
-
-> ⚠️主要的维护在github上，提issue/pr请认准github主战场
-> 
-> 大家也可以进wx群交流，二维码在介绍末尾
-
-
-### 先行预览
-
-![登录页](https://ooo.0x0.ooo/2025/04/11/O0lhbG.png)
-
-![首页](https://ooo.0x0.ooo/2025/04/11/O0lnVI.png)
-
-![文件库](https://ooo.0x0.ooo/2025/04/11/O0l7qD.png)
-
-![国际化](https://ooo.0x0.ooo/2025/04/11/O0lNAF.png)
-
-![横向布局](https://ooo.0x0.ooo/2025/04/11/O0leQ6.png)
-
-![混合布局](https://ooo.0x0.ooo/2025/04/11/O0lrCP.png)
-
-![主题配置](https://ooo.0x0.ooo/2025/04/11/O0lKnb.png)
-
-![黑暗模式-1](https://ooo.0x0.ooo/2025/04/11/O0lZ4l.png)
-
-![黑暗模式-2](https://ooo.0x0.ooo/2025/04/11/O0lv6g.png)
-
-![黑暗模式-3](https://ooo.0x0.ooo/2025/04/11/O0lgkB.png)
-
-### 项目功能 🔨
-
-- 清晰的项目架构：结构清晰，优雅易懂，代码全注释
-- 前沿技术应用：采用 Vue3, Vite6, TypeScript等最新流行的技术栈
-- 内置RBAC角色权限模型，实现路由、角色、按钮权限访问控制
-- 使用 Pinia 替代 Vuex，轻量、简单、易用，集成 Pinia 持久化插件
-- 支持 Arco-Design 组件大小切换、多主题布局、暗黑模式、i18n 国际化
-- 使用 VueRouter 配置动态路由权限拦截、路由懒加载，支持页面按钮权限控制
-- 使用 KeepAlive 对页面进行缓存，支持多级嵌套路由缓存
-- 使用 Prettier 统一格式化代码，集成 ESLint、Stylelint 代码校验规范
-- 使用 husky、lint-staged、commitlint等插件，规范提交信息
-- 丰富的页面组件：内置多样页面和组件，包括 401、404、500 页面，以及布局组件、标签组件、主题配置组件等
-
-### 环境准备 🏝️
-
-确保你的环境满足以下要求（重要）：
-
-- **git**: 你需要 git 来克隆和管理项目版本。
-- **NodeJS**: >=18.12.0，推荐 20.12.0 或更高。
-- **pnpm**: >= 8.7.0，推荐最新版本。
-
-### 安装使用步骤 📔
-
-### 从 GitHub 获取代码 🔗
-
-```bash
-# 克隆代码
-git clone .git
-```
-
-### 从 Gitee 获取代码 🔗
-
-```bash
-# 克隆代码
-git clone .git
-```
-
-### 安装依赖 📌
-
-安装项目依赖
+## 常用命令
 
 ```bash
 pnpm install
+pnpm dev
+pnpm build:dev
+pnpm build:prod
+pnpm preview
 ```
 
-### 插件配置 🛠️
+仓库根目录的 `./scripts/build.sh web-host` 只构建当前已嵌入 statik 资源的 `moox-web-host` 二进制。需要重建前端资源时，先运行 `pnpm build:prod`，再到 `web-host` 目录执行 `make statik`；也可以直接使用 `./scripts/deploy-moox.sh --build-web-assets`。
 
-安装 Vue - Official，禁用 Vetur
+## 本地联调
 
-- [Vue - Official](https://marketplace.visualstudio.com/items?itemName=Vue.volar) - Vue 服务插件
-
-### 项目启动 🚀
-
-```json
-{
-  // 开发环境启动
-  "dev": "vite",
-  // 开发环境构建
-  "build:dev": "vue-tsc && vite build --mode development",
-  // 生产环境构建
-  "build:prod": "vue-tsc && vite build --mode production",
-  // 预览环境启动
-  "preview": "vite preview"
-}
-```
-
-### MooX 管理台本地联调
-
-当前管理台以 Space 作为全局业务上下文。顶部选择框维护当前空间，数据资产、计算与采集、策略管理、交易管理、资源与运维等页面都在当前 Space 下工作。
-
-本地联调建议按以下顺序启动：
+前端不通过 Vite 代理或 `web-host` 转发 API。运行时从浏览器当前 URL 读取 hostname，并使用 `VITE_GATEWAY_PORT` 指定的网关端口，默认 `11000`。
 
 ```bash
-# 1. 启动 Control 服务，提供 Space 与管理台网关
+# 1. 启动管理网关
 cd ../modules/admin
 go run ./cmd/moox-admin -conf=config/trpc_go.yaml
 
-# 2. 启动 Storage 服务，提供 Metadata / Access / View tRPC HTTP 服务
+# 2. 按需启动后端模块
 cd ../storage
 MOOX_STORAGE_CONFIG=config/storage.yaml go run ./cmd/moox-storage -init-metadata -conf=config/trpc_go.yaml
 MOOX_STORAGE_CONFIG=config/storage.yaml go run ./cmd/moox-storage -conf=config/trpc_go.yaml
 
-# 3. 启动前端开发服务器
+cd ../cloudnode
+go run ./cmd/moox-cloudnode -conf=config/trpc_go.yaml
+
+cd ../collector
+go run ./cmd/moox-collector -conf=config/trpc_go.yaml
+
+# 3. 启动前端
 cd ../../web
 pnpm dev
 ```
 
-前端管理台不经过 `web-host` 或 Vite 代理 API。运行时从浏览器当前 URL 读取 hostname，并用固定网关端口 `11000`（可通过 `VITE_GATEWAY_PORT` 覆盖）直连：
+请求路径：
 
 - 管理台请求：`http(s)://{当前hostname}:11000/api/admin/{service}/{method}`
-- 存储管理台请求：仍走 `/api/admin/storage_metadata|storage_access|storage_view/{method}`
-- 后台/SCF/collector 请求：走 `/api/service/{service}/{method}`，不由前端直接调用
-- `web-host` 只提供静态资源，不代理 `/api/*`
+- Storage 管理请求：`/api/admin/storage_metadata|storage_access|storage_view/{method}`
+- Trade 管理请求：`/api/admin/trade_*/*`
+- SCF / collector 等后台服务请求：`/api/service/{service}/{method}`，前端不直接调用
 
-手工验收重点：
+`web-host` 只提供静态资源，收到 `/api/*` 会返回 404，用来暴露错误的代理依赖。
 
-1. 进入「系统设置 / 空间管理」创建空间，并在顶部选择框切换，刷新后仍保持选中空间。
-2. 在「数据资产」下创建数据来源、数据对象、数据集、字段、因子和查询视图，确认请求都携带当前 `space_id`。
-3. 在「数据同步」执行 CSV dry-run 与导入；导入只写数据，不自动创建或绑定 DatasetSubject。
-4. 在「数据列表」分别验证 TimeSeries / Record 主存查询，以及 TimeSeries View / Record View 查询。
-5. 打开云函数、SSH 终端、策略列表、账户总览等非存储页面，确认页面仍可在顶部 Space 上下文下渲染。
-
-### 文件资源目录 📚
+## 目录结构
 
 ```text
-MooX
-├─ .husky                 # husky 配置文件
-├─ .vscode                # VSCode 推荐配置
-├─ build                  # vite项目配置目录
-├─ public                 # 静态资源文件（该文件夹不会被打包）
-├─ src
-│  ├─ api                 # API 接口管理
-│  ├─ assets              # 静态资源文件
-│  ├─ components          # 全局组件
-│  ├─ config              # 全局配置项
-│  ├─ directives          # 全局自定义指令文件
-│  ├─ globals             # 全局函数
-│  ├─ hooks               # 常用 Hooks 封装
-│  ├─ lang                # 语言国际化 i18n
-│  ├─ layout              # 框架布局模块
-│  ├─ router              # 路由管理
-│  ├─ store               # pinia store
-│  ├─ style               # 全局样式文件
-│  ├─ typings             # 全局 ts 声明
-│  ├─ utils               # 常用工具库
-│  ├─ views               # 项目所有页面
-│  ├─ App.vue             # 项目主组件
-│  ├─ main.ts             # 项目入口文件
-│  └─ vite-env.d.ts       # 指定 ts 识别 vue
-├─ .editorconfig          # 代码编辑器配置文件
-├─ .env                   # 通用环境配置
-├─ .env.development       # 开发环境配置
-├─ .env.production        # 生产环境配置
-├─ .eslintignore          # 忽略 Eslint 校验
-├─ .eslintrc.cjs          # Eslint 校验配置文件
-├─ .gitignore             # 忽略 git 提交
-├─ .prettierignore        # 忽略 Prettier 格式化
-├─ .prettierrc.cjs        # Prettier 格式化配置
-├─ .stylelintignore       # 忽略 Stylelint 校验
-├─ .stylelintrc.cjs       # Stylelint 格式化配置
-├─ commitlint.config.cjs  # git 提交规范配置
-├─ index.html             # 入口 html
-├─ LICENSE                # 开源协议
-├─ lint-staged.config.cjs # lint-staged 配置文件
-├─ pnpm-lock.yaml         # pnpm 依赖版本锁
-├─ package.json           # 依赖包管理
-├─ pnpm-lock.yaml         # 依赖包包版本锁
-├─ README.md              # README 介绍
-├─ tsconfig.json          # typescript 全局配置
-└─ vite.config.ts         # vite 全局配置文件
+build/            Vite 构建配置
+public/           静态资源
+src/api/          后端 API 封装
+src/assets/       前端静态资源
+src/components/   通用组件
+src/config/       全局配置
+src/hooks/        组合式函数
+src/layout/       管理台布局
+src/router/       路由
+src/store/        Pinia 状态
+src/style/        全局样式
+src/utils/        工具函数
+src/views/        页面
 ```
 
-### 浏览器支持 🌎
+## 主要页面
 
-- 本地开发推荐使用 Chrome 最新版浏览器 [Download](https://www.google.com/intl/zh-CN/chrome/)。
-- 生产环境支持现代浏览器，不再支持 IE 浏览器，更多浏览器可以查看 [Can I Use Es Module](https://caniuse.com/?search=ESModule)。
+- 登录与用户认证
+- 系统设置：空间、密钥、服务部署信息
+- 数据资产：数据源、数据对象、数据集、字段、因子、查询视图
+- 数据同步与数据列表
+- 采集任务、任务实例、云函数、代码包版本
+- 交易账户、订单、持仓、流水
+- SSH 终端与主机监控
 
-| ![IE](https://i.imgtg.com/2023/04/11/8z7ot.png) | ![Edge](https://i.imgtg.com/2023/04/11/8zr3p.png) | ![Firefox](https://i.imgtg.com/2023/04/11/8zKiU.png) | ![Chrome](https://i.imgtg.com/2023/04/11/8zNrx.png) | ![Safari](https://i.imgtg.com/2023/04/11/8zeGj.png) |
-| :---------------------------------------------: | :-----------------------------------------------: | :--------------------------------------------------: | :-------------------------------------------------: | :-------------------------------------------------: |
-|                   not support                   |                  last 2 versions                  |                   last 2 versions                    |                   last 2 versions                   |                   last 2 versions                   |
+## 配置
 
-### 鸣谢列表 🧩
+`web/.env.development`：
 
-- [vue：https://v3.cn.vuejs.org/](https://v3.cn.vuejs.org/)
-- [axios：https://github.com/axios/axios](https://github.com/axios/axios)
-- [nprogress：https://github.com/rstacruz/nprogress](https://github.com/rstacruz/nprogress)
-- [sortablejs：https://github.com/SortableJS/Sortabl](https://github.com/SortableJS/Sortable)
-- [sass：https://github.com/sass/sass](https://github.com/sass/sass)
-- [typescript：https://github.com/microsoft/TypeScript](https://github.com/microsoft/TypeScript)
-- [vite：https://github.com/vitejs/vite](https://github.com/vitejs/vite)
-- [wangeditor：https://github.com/wangeditor-team/wangEditor](https://github.com/wangeditor-team/wangEditor)
-- [qrcodejs：https://github.com/davidshimjs/qrcodejs](https://github.com/davidshimjs/qrcodejs)
-- [print-js：https://github.com/crabbly/Print.js](https://github.com/crabbly/Print.js)
-- [eslint：https://github.com/eslint/eslint](https://github.com/eslint/eslint)
-- [prettier：https://github.com/prettier/prettier](https://github.com/prettier/prettier)
-- [arco.design：https://arco.design/](https://arco.design/)
-- [pinyin-pro：https://github.com/zh-lx/pinyin-pro](https://github.com/zh-lx/pinyin-pro)
-- [qrcode：https://www.npmjs.com/package/qrcode](https://www.npmjs.com/package/qrcode)
-- [jsbarcode：https://github.com/lindell/JsBarcode/wiki/Options](https://github.com/lindell/JsBarcode/wiki/Options)
-- [fingerprintjs2：https://www.npmjs.com/package/fingerprintjs2](https://www.npmjs.com/package/fingerprintjs2)
+```dotenv
+VITE_GLOB_APP_TITLE=MooX
+VITE_GATEWAY_PORT=11000
+```
 
-### 特别鸣谢 🎉
-
-- [vue-next-admin：http://vuenextadmin.ccfast.cc/](http://vuenextadmin.ccfast.cc/)
-- [Gi-admin：https://lin-97.github.io/gi-demo/](https://lin-97.github.io/gi-demo/#/home)
-- [Geeker-Admin：https://admin.spicyboy.cn/](https://admin.spicyboy.cn/#/home/index)
-
-感谢以上框架为本项目提供了帮助，项目中的很多设计思想值得参考和学习，再次感谢。
-
-### 学习 & 交流
-
-使用过程中有各种问题也可以进群交流，欢迎大家积极参与
-
-> ![snowadmin](https://github.com/user-attachments/assets/941bbd90-2ac7-4ea9-a1c3-0fd63a04f44b)
-
-
-### 支持作者 🌟
-
-如果觉得框架不错，或者已经在使用了，希望你可以去 [GitHub]() ⭐ Star，这将是对我极大的鼓励与支持。
-
-### 免责条款 📫
-
-您充分了解并同意，您必须为自己使用本服务及注册帐号下的一切行为负责，包括您所发表的任何内容以及由此产生的任何后果。您应对本服务中的内容自行加以判断，并自行承担因使用内容而引起的所有风险。
-
-`MooX` 对网站上所显示的信息或资料的准确性、内容、完整性、合法性、可靠性、可操作性或可用性不承担任何责任。
-
-`MooX` 二次开发使用者因为违法而触犯中华人民共和国法律的，一切后果自己负责，`MooX` 作者不承担任何责任。
-
-本声明未涉及的问题参见国家有关法律法规，当本声明与国家法律法规冲突时，以国家法律法规为准。
-
-### 学习 & 商用 🌈
-
-`MooX` 是免费和开源的，可免费用于学习、商业使用 。
-
-### 捐赠
-
-|                                      微信                                      |                                      支付宝                                      |
-| :----------------------------------------------------------------------------: | :------------------------------------------------------------------------------: |
-| ![微信](https://gitee.com/wang_fan_w/moox-image/raw/main/introduce/Wechat.jpg) | ![支付宝](https://gitee.com/wang_fan_w/moox-image/raw/main/introduce/alipay.jpg) |
+`web/.env.production` 保持同样的运行时网关模型，通过当前访问域名和 `VITE_GATEWAY_PORT` 拼出后端地址；未配置 `VITE_GATEWAY_PORT` 时默认使用 `11000`。

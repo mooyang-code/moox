@@ -13,7 +13,7 @@ type Space struct {
 	Timezone    string    `gorm:"column:c_timezone;not null;default:''" json:"timezone"`
 	Status      string    `gorm:"column:c_status;not null;default:'active'" json:"status"`
 	Attributes  string    `gorm:"column:c_attributes;not null;default:'{}'" json:"attributes"`
-	IsDeleted   string    `gorm:"column:c_is_deleted;not null;default:'false';uniqueIndex:idx_spaces_space_id_deleted" json:"-"`
+	IsDeleted   bool      `gorm:"column:c_is_deleted;not null;default:false;uniqueIndex:idx_spaces_space_id_deleted" json:"-"`
 	CreatedAt   time.Time `gorm:"column:c_ctime;default:CURRENT_TIMESTAMP" json:"created_at"`
 	UpdatedAt   time.Time `gorm:"column:c_mtime;default:CURRENT_TIMESTAMP" json:"updated_at"`
 }

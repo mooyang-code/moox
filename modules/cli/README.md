@@ -13,7 +13,7 @@ moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署�
 moox-cli ops tencent lighthouse ... # 腾讯云 Lighthouse 防火墙规则
 ```
 
-中文别名：`认证`、`元数据`、`存储` 等（见各子命令 `--help`）。
+中文别名：`认证`、`注册`、`存储`（见各子命令 `--help`）。
 
 ## 构建
 
@@ -36,7 +36,9 @@ go run ./cmd/moox-cli --help
 
 1. 环境变量 `MOOX_CONFIG`
 2. `./config/cli.yaml`、`./cli.yaml`
-3. `~/.moox/cli.yaml`、`/etc/moox/cli.yaml`
+3. `../config/cli.yaml`
+4. `/etc/moox/cli.yaml`
+5. `~/.moox/cli.yaml`
 
 示例 `config/cli.yaml`：
 
@@ -82,6 +84,8 @@ moox-cli storage import \
 
 ### 腾讯云防火墙（开放 MooX 端口）
 
+直接使用本地腾讯云密钥：
+
 ```bash
 export TENCENTCLOUD_SECRET_ID="..."
 export TENCENTCLOUD_SECRET_KEY="..."
@@ -94,6 +98,20 @@ moox-cli ops tencent lighthouse firewall add \
   --dry-run
 ```
 
+通过控制面读取云账户凭证：
+
+```bash
+moox-cli ops tencent lighthouse firewall open \
+  --control-url http://<control-host>:11000 \
+  --service-access-key moox-service \
+  --service-secret-key <secret> \
+  --public-ip <lighthouse-ip> \
+  --ports 11000,10080,20200,20201,20202 \
+  --dry-run
+```
+
+`open` 命令会通过 `/api/service/cloudnode/*` 读取云账户凭证，再复用 `firewall add` 的腾讯云调用逻辑。
+
 ## 目录结构
 
 ```text
@@ -105,7 +123,7 @@ cmd/
   storage_import.go     CSV 导入
   data.go               行导出
   collector.go          采集代码包
-  tencent_ops*.go       腾讯云运维
+  tencent_ops*.go       腾讯云运维与控制面凭证模式
 internal/
   config/               配置加载
   adminclient/          Admin / CloudNode HTTP 客户端

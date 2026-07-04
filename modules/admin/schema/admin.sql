@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS t_spaces (
     c_timezone TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'active',
     c_attributes TEXT NOT NULL DEFAULT '{}',
-    c_is_deleted TEXT NOT NULL DEFAULT 'false',
+    c_is_deleted INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS t_service_deployments (
     c_status TEXT NOT NULL DEFAULT 'active',
     c_description TEXT NOT NULL DEFAULT '',
     c_extra_config TEXT NOT NULL DEFAULT '{}',
-    c_is_deleted TEXT NOT NULL DEFAULT 'false',
+    c_is_deleted INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS t_users (
     c_last_login_at DATETIME,                                  -- 最后登录时间 
     c_last_login_ip TEXT DEFAULT '',                           -- 最后登录IP 
     c_last_password_change DATETIME DEFAULT CURRENT_TIMESTAMP, -- 最后密码修改时间
-    c_is_deleted TEXT NOT NULL DEFAULT 'false',                     -- 删除标记
+    c_is_deleted INTEGER NOT NULL DEFAULT 0,                    -- 删除标记: 0=有效,1=删除
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,               -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                -- 修改时间
 );
@@ -284,7 +284,7 @@ CREATE TABLE IF NOT EXISTS t_secrets (
     c_last_used_at DATETIME,                                    -- 最后使用时间
     c_last_used_by TEXT NOT NULL DEFAULT '',                    -- 最后使用方（服务/模块名）
     c_creator TEXT NOT NULL DEFAULT '',                         -- 创建人
-    c_is_deleted TEXT NOT NULL DEFAULT 'false',                 -- 软删除标记
+    c_is_deleted INTEGER NOT NULL DEFAULT 0,                    -- 软删除标记: 0=有效,1=删除
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                 -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                  -- 修改时间
 );

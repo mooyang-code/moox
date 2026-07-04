@@ -1,7 +1,7 @@
 
 -- ============ MooX Trade 模块 - 账户域（Account）表设计 ============
 -- 风格约定（与 admin.sql 一致）：
---   表名 t_xxx / 列名 c_xxx；软删除 c_is_deleted（'false'=有效,'true'=删除）；
+--   表名 t_xxx / 列名 c_xxx；软删除 c_is_deleted（0=有效,1=删除）；
 --   多空间隔离 c_space_id；时间 c_ctime/c_mtime + 触发器自动更新 mtime；
 --   金额/数量等高精度数值统一用 TEXT 存 decimal 字符串，避免浮点精度丢失。
 
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS t_accounts (
     c_is_default INTEGER NOT NULL DEFAULT 0,                   -- 是否用户默认账户: 0=否,1=是
     c_remark TEXT NOT NULL DEFAULT '',                         -- 备注
     c_attributes TEXT NOT NULL DEFAULT '{}',                   -- 扩展属性（JSON）
-    c_is_deleted TEXT NOT NULL DEFAULT 'false',                      -- 删除标记
+    c_is_deleted INTEGER NOT NULL DEFAULT 0,                    -- 删除标记: 0=有效,1=删除
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS t_account_balances (
     c_frozen TEXT NOT NULL DEFAULT '0',                        -- 冻结金额（挂单/出金占用）
     c_total TEXT NOT NULL DEFAULT '0',                         -- 总额 = available + frozen（冗余便于查询）
     c_version INTEGER NOT NULL DEFAULT 0,                       -- 乐观锁版本号（并发扣减用）
-    c_is_deleted TEXT NOT NULL DEFAULT 'false',                      -- 删除标记
+    c_is_deleted INTEGER NOT NULL DEFAULT 0,                    -- 删除标记: 0=有效,1=删除
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS t_account_api_keys (
     c_passphrase TEXT NOT NULL DEFAULT '',                     -- Passphrase（部分交易所需要，加密存储）
     c_permissions TEXT NOT NULL DEFAULT '[]',                  -- 权限范围（JSON数组: ["read","trade","withdraw"]）
     c_status INTEGER NOT NULL DEFAULT 1,                       -- 状态: 0=禁用, 1=可用, 2=已失效
-    c_is_deleted TEXT NOT NULL DEFAULT 'false',                      -- 删除标记
+    c_is_deleted INTEGER NOT NULL DEFAULT 0,                    -- 删除标记: 0=有效,1=删除
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );

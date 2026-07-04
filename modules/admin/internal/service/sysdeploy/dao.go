@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/common"
 	"gorm.io/gorm"
 )
 
@@ -51,7 +52,7 @@ func (d *DAO) Update(ctx context.Context, serviceName string, item *Deployment) 
 	item.ServiceName = serviceName
 	normalizeDeployment(item)
 	result := d.db.WithContext(ctx).Model(&Deployment{}).
-		Where("c_service_name = ? AND c_is_deleted != 'true'", serviceName).
+		Where("c_service_name = ? AND c_is_deleted = ?", serviceName, common.IsDeletedFalse).
 		Updates(map[string]interface{}{
 			"c_service_kind": item.ServiceKind,
 			"c_protocol":     item.Protocol,
@@ -81,9 +82,9 @@ func (d *DAO) Delete(ctx context.Context, serviceName string) error {
 		return fmt.Errorf("service_name is required")
 	}
 	result := d.db.WithContext(ctx).Model(&Deployment{}).
-		Where("c_service_name = ? AND c_is_deleted != 'true'", serviceName).
+		Where("c_service_name = ? AND c_is_deleted = ?", serviceName, common.IsDeletedFalse).
 		Updates(map[string]interface{}{
-			"c_is_deleted": "true",
+			"c_is_deleted": common.IsDeletedTrue,
 			"c_mtime":      time.Now(),
 		})
 	if result.Error != nil {
@@ -101,7 +102,7 @@ func (d *DAO) Get(ctx context.Context, serviceName string) (*Deployment, error) 
 		return nil, fmt.Errorf("service_name is required")
 	}
 	var row Deployment
-	err := d.db.WithContext(ctx).Where("c_service_name = ? AND c_is_deleted != 'true'", serviceName).First(&row).Error
+	err := d.db.WithContext(ctx).Where("c_service_name = ? AND c_is_deleted = ?", serviceName, common.IsDeletedFalse).First(&row).Error
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +110,7 @@ func (d *DAO) Get(ctx context.Context, serviceName string) (*Deployment, error) 
 }
 
 func (d *DAO) List(ctx context.Context, filter ListFilter, offset int, limit int) ([]Deployment, int64, error) {
-	query := d.db.WithContext(ctx).Model(&Deployment{}).Where("c_is_deleted != 'true'")
+	query := d.db.WithContext(ctx).Model(&Deployment{}).Where("c_is_deleted = ?", common.IsDeletedFalse)
 	if filter.ServiceName != "" {
 		query = query.Where("c_service_name LIKE ?", "%"+filter.ServiceName+"%")
 	}
@@ -136,7 +137,7 @@ func (d *DAO) List(ctx context.Context, filter ListFilter, offset int, limit int
 func (d *DAO) ListActive(ctx context.Context) ([]Deployment, error) {
 	var rows []Deployment
 	err := d.db.WithContext(ctx).
-		Where("c_is_deleted != 'true' AND c_status = 'active'").
+		Where("c_is_deleted = ? AND c_status = ?", common.IsDeletedFalse, "active").
 		Order("c_scope DESC, c_service_kind ASC, c_service_name ASC").
 		Find(&rows).Error
 	return rows, err
@@ -166,7 +167,7 @@ func (d *DAO) SeedDefaults(ctx context.Context, rows []Deployment) error {
 func (d *DAO) exists(ctx context.Context, serviceName string) (bool, error) {
 	var count int64
 	err := d.db.WithContext(ctx).Model(&Deployment{}).
-		Where("c_service_name = ? AND c_is_deleted != 'true'", serviceName).
+		Where("c_service_name = ? AND c_is_deleted = ?", serviceName, common.IsDeletedFalse).
 		Count(&count).Error
 	return count > 0, err
 }
@@ -210,9 +211,6 @@ func normalizeDeployment(item *Deployment) {
 	}
 	if item.BaseURL == "" && item.Protocol != "" && item.Host != "" && item.Port > 0 {
 		item.BaseURL = fmt.Sprintf("%s://%s:%d", item.Protocol, item.Host, item.Port)
-	}
-	if item.IsDeleted == "" {
-		item.IsDeleted = "false"
 	}
 }
 

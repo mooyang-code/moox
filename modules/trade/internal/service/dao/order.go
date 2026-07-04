@@ -10,9 +10,6 @@ import (
 // SaveOrder 插入订单。
 func (g *GormStore) SaveOrder(ctx context.Context, spaceID string, o *service.Order) error {
 	o.SpaceID = spaceID
-	if o.IsDeleted == "" {
-		o.IsDeleted = service.IsDeletedFalse
-	}
 	return g.db.WithContext(ctx).Create(o).Error
 }
 

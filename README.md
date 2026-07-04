@@ -5,10 +5,12 @@
 
 仓库有两个入口：
 
-- `make release`：生成二进制归档包，包含核心二进制、各模块配置、Storage schema、docs 和 `examples/` 示例元数据；不包含源码开发脚本或 Agent skills。
-- `make deploy`：通过 `scripts/deploy-moox.sh` 生成可运行部署目录并同步到本机或远端，包含核心二进制、各模块配置、Storage schema、`examples` 示例元数据，以及 `start.sh`、`stop.sh`、`status.sh`。
+- `make release`：生成二进制归档包，包含核心二进制、admin/cloudnode/collector/storage 配置、Storage schema、docs 和 `examples/` 示例元数据；不包含源码开发脚本或 Agent skills。
+- `make deploy`：通过 `scripts/deploy-moox.sh` 生成可运行部署目录并同步到本机或远端，包含 admin/cli/web-host 以及按开关启用的 cloudnode/collector/storage，附带配置、Storage schema、`examples` 示例元数据，以及 `start.sh`、`stop.sh`、`status.sh`。
 
-Admin、CloudNode、Collector 的 SQLite schema 已内嵌进各自二进制，启动时自动应用；部署包只保留 Storage metadata 初始化所需的 `storage/schema/metadata.sql`。
+`make release` 会打包 `cli/admin/web-host/cloudnode/collector/collector-scf/factor/trade/storage` 二进制；配置目录当前随包包含 admin、cloudnode、collector、storage。`make deploy` 当前负责 admin、web-host、cloudnode、collector、storage 的可运行部署，不启动 trade/factor；trade/factor 需要按模块 README 独立运行。
+
+Admin、CloudNode、Collector、Trade 的 SQLite schema 已内嵌进各自二进制，启动时自动应用；部署包只保留 Storage metadata 初始化所需的 `storage/schema/metadata.sql`。
 
 本机发布并拉起：
 

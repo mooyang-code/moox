@@ -19,7 +19,7 @@ type User struct {
 	LastLoginAt        *time.Time `gorm:"column:c_last_login_at" json:"last_login_at"`
 	LastLoginIP        string     `gorm:"column:c_last_login_ip;default:''" json:"last_login_ip"`
 	LastPasswordChange time.Time  `gorm:"column:c_last_password_change;default:CURRENT_TIMESTAMP" json:"last_password_change"`
-	IsDeleted          string     `gorm:"column:c_is_deleted;not null;default:'false'" json:"-"`
+	IsDeleted          bool       `gorm:"column:c_is_deleted;not null;default:false" json:"-"`
 	CreatedAt          time.Time  `gorm:"column:c_ctime;default:CURRENT_TIMESTAMP" json:"created_at"`
 	UpdatedAt          time.Time  `gorm:"column:c_mtime;default:CURRENT_TIMESTAMP" json:"updated_at"`
 }

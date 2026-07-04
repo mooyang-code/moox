@@ -107,13 +107,13 @@ storage:
   primary:
     service_name: ""        # 留空=同进程内嵌主存；填服务名=走远程 PrimaryStore（分布式）
   eventbus:
-    type: nats              # 默认 nats；memory 只用于极简单进程测试，仍是异步总线
+    type: memory            # 仓库默认 memory，适合单进程开发/个人部署
     nats_url: nats://127.0.0.1:4222
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
     consumer_name: storage_view
     embedded:
-      enabled: true         # 本地默认内嵌 JetStream，无需单独启动 nats-server
+      enabled: false        # type=nats 时可显式开启内嵌 JetStream
   view:
     metadata_service_name: trpc.moox.storage.Metadata
     access_service_name: trpc.moox.storage.Access  # 留空=同进程本地 Access reader
@@ -135,7 +135,7 @@ storage:
 
 默认运行角色是 `access + view`，不包含显式 `primary`。当 `access` 的 `primary.service_name` 为空时，进程会同时暴露本地 `PrimaryStore`，保持单进程/本地主存部署可用；当 `primary.service_name` 非空时，Access 走远程 PrimaryStore，除非显式加入 `primary` 角色。
 
-默认事件总线是 NATS。仓库自带 `config/storage.yaml` 会在进程内启动一个内嵌 JetStream，因此本地运行不需要额外安装或启动 `nats-server`；分布式部署时可以关闭 `eventbus.embedded.enabled`，让各节点连接同一个独立 NATS。`memory` 只适合极简单进程测试；它仍然异步投递事件，不提供写后立即可查派生结果的契约。NATS 行变更 subject 使用 `eventbus.subject_prefix` 拼接：
+仓库默认事件总线是 `memory`，适合单进程开发和个人部署；它仍然异步投递事件，不提供写后立即可查派生结果的契约。分布式部署或希望持久化事件时，把 `eventbus.type` 改为 `nats`，可连接独立 NATS，也可显式开启 `eventbus.embedded.enabled` 使用内嵌 JetStream。NATS 行变更 subject 使用 `eventbus.subject_prefix` 拼接：
 
 - `${prefix}.time_series.rows_changed.v1`
 - `${prefix}.record.rows_changed.v1`

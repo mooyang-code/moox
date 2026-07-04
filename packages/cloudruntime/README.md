@@ -22,7 +22,18 @@
 ## 目标使用方式
 
 ```go
-runtime.Register("collect.kline", klineHandler)
-runtime.Register("collect.symbol", symbolHandler)
-runtime.Run(ctx)
+cloudruntime.Register("collect.kline", cloudruntime.HandlerFunc(klineHandler))
+cloudruntime.Register("collect.symbol", cloudruntime.HandlerFunc(symbolHandler))
+
+err := cloudruntime.Run(ctx, cloudruntime.Config{
+    ServiceGatewayTarget: "http://127.0.0.1:11000",
+    SpaceID:              "crypto",
+    NodeID:               "collector-node-1",
+    SupportedJobTypes:    []string{"collect.kline", "collect.symbol"},
+    RuntimeVersion:       "dev",
+    Auth: cloudruntime.AuthConfig{
+        AccessKey: "moox-service",
+        SecretKey: "moox-service-secret-change-me",
+    },
+})
 ```

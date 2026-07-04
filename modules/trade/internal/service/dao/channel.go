@@ -10,9 +10,6 @@ import (
 // CreateChannel 插入交易通道。
 func (g *GormStore) CreateChannel(ctx context.Context, spaceID string, c *service.TradeChannel) error {
 	c.SpaceID = spaceID
-	if c.IsDeleted == "" {
-		c.IsDeleted = service.IsDeletedFalse
-	}
 	return g.db.WithContext(ctx).Create(c).Error
 }
 

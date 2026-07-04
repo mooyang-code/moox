@@ -1,7 +1,7 @@
 
 -- ============ MooX Trade 模块 - 交易域（Order）表设计 ============
 -- 风格约定（与 admin.sql / account.sql 一致）：
---   表名 t_xxx / 列名 c_xxx；软删除 c_is_deleted（'false'=有效,'true'=删除）；多空间隔离 c_space_id；
+--   表名 t_xxx / 列名 c_xxx；软删除 c_is_deleted（0=有效,1=删除）；多空间隔离 c_space_id；
 --   c_ctime/c_mtime + mtime 触发器；金额/数量用 TEXT 存 decimal 字符串。
 
 PRAGMA foreign_keys = ON;
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS t_trade_channels (
     c_rate_limit INTEGER NOT NULL DEFAULT 0,                   -- 下单限速（次/秒，0=不限）
     c_last_heartbeat DATETIME,                                 -- 最后心跳时间
     c_config TEXT NOT NULL DEFAULT '{}',                       -- 通道额外配置（JSON）
-    c_is_deleted TEXT NOT NULL DEFAULT 'false',                      -- 删除标记
+    c_is_deleted INTEGER NOT NULL DEFAULT 0,                    -- 删除标记: 0=有效,1=删除
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );
@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS t_orders (
     c_submitted_at DATETIME,                                   -- 提交到交易所时间
     c_finished_at DATETIME,                                    -- 终态时间（成交完/撤销）
     c_extra TEXT NOT NULL DEFAULT '{}',                        -- 扩展字段（JSON）
-    c_is_deleted TEXT NOT NULL DEFAULT 'false',                      -- 删除标记
+    c_is_deleted INTEGER NOT NULL DEFAULT 0,                    -- 删除标记: 0=有效,1=删除
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );
@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS t_positions (
     c_liq_price TEXT NOT NULL DEFAULT '0',                     -- 预估强平价
     c_unrealized_pnl TEXT NOT NULL DEFAULT '0',                -- 未实现盈亏
     c_realized_pnl TEXT NOT NULL DEFAULT '0',                  -- 已实现盈亏
-    c_is_deleted TEXT NOT NULL DEFAULT 'false',                      -- 删除标记
+    c_is_deleted INTEGER NOT NULL DEFAULT 0,                    -- 删除标记: 0=有效,1=删除
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );

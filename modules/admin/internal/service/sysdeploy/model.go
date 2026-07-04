@@ -17,7 +17,7 @@ type Deployment struct {
 	Status      string    `gorm:"column:c_status;not null;default:'active'" json:"status"`
 	Description string    `gorm:"column:c_description;not null;default:''" json:"description"`
 	ExtraConfig string    `gorm:"column:c_extra_config;not null;default:'{}'" json:"extra_config"`
-	IsDeleted   string    `gorm:"column:c_is_deleted;not null;default:'false';uniqueIndex:idx_service_deployments_name_deleted" json:"-"`
+	IsDeleted   bool      `gorm:"column:c_is_deleted;not null;default:false;uniqueIndex:idx_service_deployments_name_deleted" json:"-"`
 	CreatedAt   time.Time `gorm:"column:c_ctime;default:CURRENT_TIMESTAMP" json:"created_at"`
 	UpdatedAt   time.Time `gorm:"column:c_mtime;default:CURRENT_TIMESTAMP" json:"updated_at"`
 }

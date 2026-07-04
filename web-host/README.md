@@ -1,6 +1,6 @@
 # MooX Web Host
 
-这是 MooX 项目的 Web 静态文件服务器，使用 Go 和 statik 将前端构建产物嵌入到单个二进制文件中。
+MooX 管理台静态文件服务器。它使用 Go + statik 将 `web/dist` 嵌入到 `moox-web-host` 单个二进制中，只负责前端静态资源和 SPA 路由回退，不代理 `/api/*`。
 
 ## 项目结构
 
@@ -16,14 +16,15 @@ web-host/
 
 ## 构建步骤
 
-1. 首先确保前端已构建完成：
+1. 先构建前端：
    ```bash
    cd ../web
-   npm run build
+   pnpm build:prod
    ```
 
 2. 重新生成嵌入静态资源：
    ```bash
+   cd ../web-host
    make statik
    ```
 
@@ -34,24 +35,32 @@ web-host/
 
 4. 运行服务器：
    ```bash
-   make run
+   MOOX_WEB_HOST_ADDR=:10080 ../bin/moox-web-host
    ```
 
 ## Makefile 命令
 
 - `make build` - 使用当前已嵌入的 statik 文件构建 Go 二进制文件
 - `make statik` - 仅生成 statik 文件（前端更新后使用）
+- `make build-linux` / `make build-darwin` - 交叉构建到仓库根目录 `bin/moox-web-host`
 - `make clean` - 清理构建产物
-- `make run` - 构建并运行服务器
 - `make deps` - 下载和整理依赖
-- `make install-statik` - 安装 statik 工具
+- `make lint` - `go vet ./...`
+- `make deploy SERVER=user@host` - 通过 `scripts/deploy-moox.sh` 发布 web-host
 
 ## 开发流程
 
 1. 前端开发时在 `web` 目录进行
 2. 前端构建完成后，在本目录运行 `make statik`
 3. 再运行 `make build`
-4. 生成的 `moox-web` 二进制文件包含了所有前端资源
+4. 生成在仓库根目录的 `bin/moox-web-host` 二进制文件包含了所有前端资源
+
+仓库发布脚本默认会重新构建前端并生成 statik 资源：
+
+```bash
+cd ..
+./scripts/deploy-moox.sh --target user@host --build-web-assets
+```
 
 ## API 访问方式
 
@@ -68,9 +77,8 @@ Web Host 只负责提供前端静态资源，不再代理 API 请求。浏览器
 | --- | --- | --- |
 | `MOOX_WEB_HOST_ADDR` | `:10080` | Web Host 监听地址 |
 
-示例：
+仓库根目录运行示例：
 
 ```bash
-MOOX_WEB_HOST_ADDR=:10080 \
-make run
+MOOX_WEB_HOST_ADDR=:10080 ./bin/moox-web-host
 ```

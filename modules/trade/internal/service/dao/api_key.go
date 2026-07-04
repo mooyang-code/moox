@@ -34,9 +34,6 @@ func (g *GormStore) CreateAPIKey(ctx context.Context, spaceID string, k *service
 		return err
 	}
 	k.SpaceID = spaceID
-	if k.IsDeleted == "" {
-		k.IsDeleted = service.IsDeletedFalse
-	}
 	row := &service.APIKey{
 		SpaceID:     spaceID,
 		APIKeyID:    k.APIKeyID,
@@ -47,7 +44,6 @@ func (g *GormStore) CreateAPIKey(ctx context.Context, spaceID string, k *service
 		Passphrase:  encPass,
 		Permissions: string(permJSON),
 		Status:      k.Status,
-		IsDeleted:   service.IsDeletedFalse,
 	}
 	return g.db.WithContext(ctx).Create(row).Error
 }

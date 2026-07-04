@@ -15,7 +15,7 @@
 
 - **表名** `t_xxx`，**列名** `c_xxx`。
 - **多空间隔离**：业务表含 `c_space_id`，唯一索引一般为 `(c_space_id, c_xxx_id)`。
-- **软删除**：`c_is_deleted`（'false'=有效，'true'=已删除），流水/成交等不可变表不带软删除。
+- **软删除**：`c_is_deleted`（`false`/`0`=有效，`true`/`1`=已删除），流水/成交等不可变表不带软删除。
 - **时间**：`c_ctime` / `c_mtime`，可变表配 `update_xxx_mtime` 触发器自动刷新 `c_mtime`。
 - **金额/数量**：统一用 `TEXT` 存 decimal 字符串（proto 中为 `string`），避免浮点精度丢失。
 - **接口响应**：每个 Rsp 首字段为 `common.RetInfo`，`code=SUCCESS(0)` 成功；分页用 `common.Page` / `common.PageResult`。

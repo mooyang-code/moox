@@ -15,9 +15,6 @@ func (g *GormStore) UpsertPositions(ctx context.Context, spaceID string, positio
 	}
 	for _, p := range positions {
 		p.SpaceID = spaceID
-		if p.IsDeleted == "" {
-			p.IsDeleted = service.IsDeletedFalse
-		}
 	}
 	return g.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "c_account_id"}, {Name: "c_symbol"}, {Name: "c_pos_side"}, {Name: "c_is_deleted"}},

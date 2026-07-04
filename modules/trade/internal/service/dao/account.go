@@ -11,9 +11,6 @@ import (
 // CreateAccount 插入账户。
 func (g *GormStore) CreateAccount(ctx context.Context, spaceID string, a *service.Account) error {
 	a.SpaceID = spaceID
-	if a.IsDeleted == "" {
-		a.IsDeleted = service.IsDeletedFalse
-	}
 	return g.db.WithContext(ctx).Create(a).Error
 }
 

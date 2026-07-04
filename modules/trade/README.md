@@ -16,7 +16,8 @@ internal/service/               AccountService / OrderService 编排
 internal/exchange/              交易所适配（binance / okx）
 internal/rpc/                   9 个 tRPC handler
 proto/                          trade_service.proto + tradegen/
-schema/trade.sql                账户与交易表
+schema/account.sql              账户、余额、资金流水、API 凭证表
+schema/order.sql                交易通道、订单、成交、持仓、操作日志表
 config/                         app.yaml + trpc_go.yaml
 ```
 
@@ -63,7 +64,13 @@ mkdir -p data log
 ./bin/moox-trade -conf=config/trpc_go.yaml
 ```
 
-仓库根目录：`./scripts/build.sh trade`。
+仓库根目录：
+
+```bash
+./scripts/build.sh trade
+```
+
+`modules/trade` 当前没有独立 Makefile。
 
 ## 交易执行（OrderService）
 

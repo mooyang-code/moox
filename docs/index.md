@@ -28,7 +28,7 @@ features:
     details: 时序数据与记录数据的统一存储与查询。Pebble 在线事实主存 + DuckDB OLAP 物化视图 + Bleve 全文索引 + Parquet 冷归档。
   - icon: 🔄
     title: 异步派生视图
-    details: CQRS 架构，写入主存后通过 NATS 事件总线异步构建物化视图和全文索引。Blue-Green 模式管理视图版本切换。
+    details: CQRS 架构，写入主存后通过 MemoryBus/NATS 事件总线异步构建物化视图和全文索引。Blue-Green 模式管理视图版本切换。
   - icon: 🖥️
     title: 管理控制台
     details: 用户管理、JWT 鉴权、服务部署信息、运维监控，以及采集/云节点独立服务的统一 HTTP 网关转发。

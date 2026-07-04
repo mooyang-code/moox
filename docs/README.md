@@ -16,7 +16,7 @@ MooX 是一个面向量化金融场景的一站式数据平台，涵盖从多源
 
 ## 技术栈
 
-- **后端**：Go 1.24 + tRPC-Go + Pebble + DuckDB + Bleve + NATS + SQLite + GORM
+- **后端**：Go 1.24 + tRPC-Go + Pebble + DuckDB + Bleve + SQLite + GORM + MemoryBus/NATS
 - **前端**：Vue 3.5 + TypeScript + Vite 5 + Arco Design Vue + Pinia
 - **部署**：腾讯云 SCF（采集器）+ 单机/分布式 Go 服务
 

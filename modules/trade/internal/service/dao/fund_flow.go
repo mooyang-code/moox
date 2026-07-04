@@ -70,7 +70,6 @@ func (g *GormStore) AppendFundFlows(ctx context.Context, spaceID string, flows [
 					Frozen:    "0",
 					Total:     newTotal,
 					Version:   1,
-					IsDeleted: service.IsDeletedFalse,
 				}
 				if err := tx.Create(&bal).Error; err != nil {
 					return err

@@ -30,9 +30,6 @@ func (g *GormStore) UpsertBalances(ctx context.Context, spaceID string, balances
 	}
 	for _, b := range balances {
 		b.SpaceID = spaceID
-		if b.IsDeleted == "" {
-			b.IsDeleted = service.IsDeletedFalse
-		}
 	}
 	return g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, b := range balances {

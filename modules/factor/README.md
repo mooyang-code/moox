@@ -5,9 +5,12 @@
 ## 现状
 
 ```bash
-./scripts/build.sh factor   # 若脚本已支持；或
+# 仓库根目录
+./scripts/build.sh factor
+
+# 模块目录
 go run ./cmd/moox-factor
-# {"service":"factor","status":"ok"}
+# {"module":"factor","ready":true}
 ```
 
 ## 目录结构
