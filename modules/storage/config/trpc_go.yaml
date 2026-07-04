@@ -12,12 +12,12 @@ server:
     read_timeout: 5000   #ms. 请求被接受到请求信息被完全读取的超时时间设置，防止慢客户端
     write_timeout: 60000 #ms. 处理的超时时间
   service:
-    - name: trpc.moox.storage.Access
+    - name: trpc.moox.storage.Access.trpc
       #ip: 0.0.0.0
       port: 20102
       network: tcp
       protocol: trpc
-    - name: trpc.moox.storage.DataView
+    - name: trpc.moox.storage.DataView.trpc
       #ip: 0.0.0.0
       port: 20103
       network: tcp
@@ -27,7 +27,7 @@ server:
       port: 20101
       network: tcp # 注意：若是多机分布式部署，此处应改为tcp（单机也可设置tcp，只是unix域套接字本机通信效率更高）
       protocol: trpc
-    - name: trpc.moox.storage.Metadata
+    - name: trpc.moox.storage.Metadata.trpc
       #ip: 0.0.0.0
       port: 20100
       network: tcp
@@ -53,17 +53,17 @@ server:
       protocol: timer
       timeout: 60000
 
-    - name: trpc.moox.storage.Access
+    - name: trpc.moox.storage.Access.http
       #ip: 0.0.0.0
       port: 20201
       network: tcp
       protocol: http
-    - name: trpc.moox.storage.Metadata
+    - name: trpc.moox.storage.Metadata.http
       #ip: 0.0.0.0
       port: 20200
       network: tcp
       protocol: http
-    - name: trpc.moox.storage.DataView
+    - name: trpc.moox.storage.DataView.http
       #ip: 0.0.0.0
       port: 20202
       network: tcp

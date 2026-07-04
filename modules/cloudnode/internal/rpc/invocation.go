@@ -2,6 +2,8 @@ package rpc
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,8 +52,20 @@ func (s *Service) InvokeSync(ctx context.Context, req *pb.InvokeSyncReq) (*pb.In
 			Status:  pb.InvocationStatus_INVOCATION_STATUS_FAILED,
 		}, nil
 	}
+	if len(req.GetPayloads()) == 0 {
+		return &pb.InvokeSyncRsp{
+			RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "payloads is required"),
+			Status:  pb.InvocationStatus_INVOCATION_STATUS_FAILED,
+		}, nil
+	}
 	start := time.Now()
-	invocationID := "inv_" + fmt.Sprintf("%d", start.UnixNano())
+	invocationID, err := newInvocationID(start)
+	if err != nil {
+		return &pb.InvokeSyncRsp{
+			RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error()),
+			Status:  pb.InvocationStatus_INVOCATION_STATUS_FAILED,
+		}, nil
+	}
 	invokeCtx := ctx
 	cancel := func() {}
 	if req.GetTimeoutMs() > 0 {
@@ -250,6 +264,14 @@ func timeoutSyncResult(requestID string, err error) *pb.InvokeSyncResult {
 
 func isTimeoutSyncResult(result *pb.InvokeSyncResult) bool {
 	return strings.HasPrefix(result.GetErrorMessage(), "timeout:")
+}
+
+func newInvocationID(start time.Time) (string, error) {
+	var entropy [8]byte
+	if _, err := rand.Read(entropy[:]); err != nil {
+		return "", fmt.Errorf("read invocation entropy: %w", err)
+	}
+	return fmt.Sprintf("inv_%d_%s", start.UTC().UnixNano(), hex.EncodeToString(entropy[:])), nil
 }
 
 func returnResultStruct(raw string) *structpb.Struct {

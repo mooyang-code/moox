@@ -117,6 +117,7 @@ message TaskInstance {
   bool is_deleted = 17;
   string create_time = 18;     // RFC3339
   string modify_time = 19;     // RFC3339
+  string cloud_job_item_id = 20;
 }
 
 // TaskInstanceFilter 任务实例筛选条件。

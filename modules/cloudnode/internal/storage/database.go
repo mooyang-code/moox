@@ -42,9 +42,6 @@ func (m *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
 	if err := m.applySchemaSQL("embedded cloudnode schema", cloudnodeschema.AllSQL()); err != nil {
 		return err
 	}
-	if err := m.applyMigrations(); err != nil {
-		return err
-	}
 	log.Infof("初始化 CloudNode SQLite 数据库: %s", dbPath)
 	return nil
 }

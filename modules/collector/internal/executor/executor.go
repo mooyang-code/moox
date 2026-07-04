@@ -36,6 +36,8 @@ type executeResult struct {
 
 type taskStatusReporter func(ctx context.Context, spaceID string, taskID string, status int, result string)
 
+var reportTaskStatus = reporter.ReportTaskStatus
+
 // buildCollectHandler 构建单个采集任务的处理函数
 // reportOnError: 是否在错误时上报状态（定时任务场景使用，立即执行场景不在此上报）
 func buildCollectHandler(
@@ -172,7 +174,9 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 	if len(collectTasks) == 0 {
 		errMsg := "没有需要执行的interval"
 		log.WarnContextf(ctx, "[ExecuteTaskImmediately] %s", errMsg)
-		reportImmediateTaskStatus(ctx, taskEvent.SpaceID, taskEvent.TaskID, reporter.StatusFailed, errMsg)
+		if err := reportImmediateTaskStatus(ctx, taskEvent.SpaceID, taskEvent.TaskID, reporter.StatusFailed, errMsg); err != nil {
+			return "", err
+		}
 		return "", errors.New(errMsg)
 	}
 
@@ -194,7 +198,12 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 	log.InfoContextf(ctx, "[ExecuteTaskImmediately] 任务执行完成: taskID=%s, status=%d, result=%s",
 		taskEvent.TaskID, status, resultMsg)
 
-	reportImmediateTaskStatus(ctx, taskEvent.SpaceID, taskEvent.TaskID, status, resultMsg)
+	if err := reportImmediateTaskStatus(ctx, taskEvent.SpaceID, taskEvent.TaskID, status, resultMsg); err != nil {
+		return resultMsg, err
+	}
+	if result.HasError {
+		return resultMsg, errors.New(resultMsg)
+	}
 
 	return resultMsg, nil
 }
@@ -214,9 +223,11 @@ func normalizeMarket(taskEvent *model.TaskExecuteEvent) string {
 	}
 }
 
-func reportImmediateTaskStatus(ctx context.Context, spaceID string, taskID string, status int, result string) {
-	if err := reporter.ReportTaskStatus(ctx, spaceID, taskID, status, result); err != nil {
+func reportImmediateTaskStatus(ctx context.Context, spaceID string, taskID string, status int, result string) error {
+	if err := reportTaskStatus(ctx, spaceID, taskID, status, result); err != nil {
 		log.WarnContextf(ctx, "[ExecuteTaskImmediately] 任务状态上报失败: taskID=%s, status=%d, error=%v",
 			taskID, status, err)
+		return err
 	}
+	return nil
 }

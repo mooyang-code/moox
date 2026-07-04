@@ -63,9 +63,10 @@ export interface GetNodeListRequest {
   node_type?: string;
   biz_type?: string;
   tag?: string;
-  status?: NodeStatusCode | number;
+  status?: NodeStatusCode | number | string;
   keyword?: string;
-  page?: Page;
+  page?: Page | number;
+  page_size?: number;
 }
 
 export interface UpdateNodeRequest {
@@ -76,7 +77,11 @@ export interface UpdateNodeRequest {
   package_version?: string;
   deployment_id?: string;
   supported_workloads?: string[];
-  metadata?: Record<string, unknown>;
+  timeout_threshold?: number;
+  heartbeat_interval?: number;
+  probe_enabled?: boolean;
+  probe_url?: string;
+  metadata?: Record<string, unknown> | string;
 }
 
 export interface BatchCreateNodesRequest {
@@ -132,8 +137,23 @@ export const NODE_STATUS_LABEL: Record<string, string> = {
   NODE_STATUS_UNSPECIFIED: '未知'
 };
 
+function normalizePageParams<T extends { page?: Page | number; page_size?: number; status?: unknown }>(params: T): T & { page?: Page } {
+  const normalized = { ...params } as T & { page?: Page };
+  if (typeof params.page === 'number' || params.page_size !== undefined) {
+    normalized.page = {
+      page: typeof params.page === 'number' ? params.page : params.page?.page,
+      size: params.page_size ?? (typeof params.page === 'object' ? params.page?.size : undefined)
+    };
+  }
+  delete (normalized as { page_size?: number }).page_size;
+  if (normalized.status === '') {
+    delete (normalized as { status?: unknown }).status;
+  }
+  return normalized;
+}
+
 export const getNodeList = async (params: GetNodeListRequest = {}): Promise<{ items: CloudNode[]; total: number; page?: PageResult }> => {
-  const rsp = await callControl<GetNodeListRequest, { items?: CloudNode[]; page?: PageResult }>('cloudnode', 'GetNodeList', params);
+  const rsp = await callControl<GetNodeListRequest, { items?: CloudNode[]; page?: PageResult }>('cloudnode', 'GetNodeList', normalizePageParams(params));
   return { items: rsp.items ?? [], total: rsp.page?.total ?? 0, page: rsp.page };
 };
 

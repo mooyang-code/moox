@@ -6,6 +6,8 @@ export interface CloudAccountSummary {
   account_id: string;
   account_name: string;
   provider: string;
+  secret_id?: string;
+  secret_key?: string;
   app_id: string;
   cos_region: string;
   cos_bucket: string;

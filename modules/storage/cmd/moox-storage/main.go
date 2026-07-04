@@ -328,6 +328,7 @@ func archiveRootForRuntime(storage storageconfig.StorageConfig) string {
 }
 
 func registerNoopViewTimers(s *server.Server) {
+	timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
 	noop := func(ctx context.Context, _ string) error { return nil }
 	for _, name := range []string{
 		"trpc.moox.storage.view.timer",
@@ -339,6 +340,7 @@ func registerNoopViewTimers(s *server.Server) {
 }
 
 func registerNoopArchiveTimers(s *server.Server) {
+	timer.RegisterScheduler("archiveSchedule", &timer.DefaultScheduler{})
 	noop := func(ctx context.Context, _ string) error { return nil }
 	registerTimerHandlerService("trpc.moox.storage.archive.timer", s.Service("trpc.moox.storage.archive.timer"), noop)
 }

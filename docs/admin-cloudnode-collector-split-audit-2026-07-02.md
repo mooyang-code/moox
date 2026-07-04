@@ -3487,7 +3487,7 @@ Findings:
 Changes:
 
 - Updated the Trade database manager comment to describe applying the embedded module schema, not a one-off table migration.
-- Updated CloudNode async execution documentation and comments to describe the runtime queue as `work_item` while preserving the existing `SubmitJobs` / `PollJobs` / `ReportJobStatus` protocol names and `job_id` wire fields.
+- Updated CloudNode async execution documentation and comments to describe the runtime queue as `job_item` while preserving the existing `SubmitJobs` / `PollJobs` / `ReportJobStatus` protocol names and `job_id` wire fields.
 - Removed a duplicate stale `云执行 job 队列` sentence from `docs/云节点执行平台架构.md`.
 
 No build, deployment, git operation, or runtime validation was run in this step.
@@ -3632,7 +3632,7 @@ Found that `modules/collector/internal/cloudruntime` imported `github.com/mooyan
 Change:
 
 - Added root shared module `packages/cloudruntime`.
-- Moved the generic CloudNode SCF work_item runtime and HMAC service-auth helper from `modules/cloudnode/scf/runtime` to `packages/cloudruntime`.
+- Moved the generic CloudNode SCF job_item runtime and HMAC service-auth helper from `modules/cloudnode/scf/runtime` to `packages/cloudruntime`.
 - Updated `modules/collector/internal/cloudruntime/poller.go` to import `github.com/mooyang-code/moox/packages/cloudruntime`.
 - Updated `modules/collector/go.mod` and `go.work` for the new shared module.
 - Removed the old `modules/cloudnode/scf/runtime` files.
@@ -3647,7 +3647,7 @@ Changes:
 
 - Added `packages/cloudruntime/README.md` to define the shared package responsibilities and boundaries.
 - Updated `docs/大仓架构.md` so root-level `packages/` is documented as an active shared-code location, not a future possibility.
-- Updated the CloudNode batch-change plan glossary so `work_item` runtime ownership points to `packages/cloudruntime`.
+- Updated the CloudNode batch-change plan glossary so `job_item` runtime ownership points to `packages/cloudruntime`.
 - Updated the completion matrix with the root-level shared package boundary evidence.
 
 Historical audit entries that described the earlier `modules/cloudnode/scf/runtime` state were left intact as history.
@@ -3665,7 +3665,7 @@ Findings:
 
 Changes:
 
-- Updated two collector error messages from `cloud jobs` to `cloud work items`.
+- Updated two collector error messages from `cloud jobs` to `cloud JobItems`.
 - Clarified `docs/云节点执行平台架构.md` so the `modules/cloudnode/internal/providers/tencent-scf` import alias is explicitly for `modules/cloudnode` internal code only.
 - Updated the completion matrix to state collector uses the root-level runtime package rather than the cloudnode module.
 
@@ -3679,8 +3679,8 @@ Changes:
 - Added `modules/cloudnode` and `packages/cloudruntime` to the `go.work` module list in `docs/大仓架构.md`.
 - Updated the repository tree to include `modules/cloudnode`, `modules/collect`, and `packages/cloudruntime`.
 - Removed the stale `modules/account` tree entry.
-- Updated the CloudNode responsibility wording from async `job` to async `work_item`.
-- Added `packages/cloudruntime` to the module responsibility table as the root-level shared CloudNode work_item runtime package.
+- Updated the CloudNode responsibility wording from async `job` to async `job_item`.
+- Added `packages/cloudruntime` to the module responsibility table as the root-level shared CloudNode job_item runtime package.
 
 No build, deployment, git operation, or runtime validation was run in this step.
 ### 2026-07-03 packages boundary checker enhancement
@@ -3771,16 +3771,16 @@ Changes:
 - Updated `docs/大仓架构.md` wording and fixed the `packages/cloudruntime` table row.
 
 No build, release command, deployment, git operation, or runtime validation was run in this step.
-### 2026-07-03 stale module and work_item wording cleanup
+### 2026-07-03 stale module and job_item wording cleanup
 
 Checked docs and repository skills for stale module and CloudNode async execution wording.
 
 Changes:
 
 - Updated `docs/大仓架构.md` so old account/order source systems are described as capabilities now folded into `modules/trade`, not as current standalone modules.
-- Updated `docs/架构总览.md` from CloudNode `job` wording to `work_item` wording.
+- Updated `docs/架构总览.md` from CloudNode `job` wording to `job_item` wording.
 - Updated `skills/moox/SKILL.md` from account/order module wording to current cloudnode/trade module wording.
-- Updated debug skill references from CloudNode job wording to CloudNode work_item wording.
+- Updated debug skill references from CloudNode job wording to CloudNode job_item wording.
 - Replaced stale `create_job_id` debug wording with create-node `batch_id`, matching the current BatchCreateNodes result semantics.
 
 No build, release command, deployment, git operation, or runtime validation was run in this step.
@@ -3857,15 +3857,15 @@ Cleanup performed:
 - Updated `docs/大仓架构.md` to describe `data-collector`, `moox/server`, `xData-mini/*`, and `data-miner` as pre-merge source modules, while the current repository is organized by `modules/*` and root-level `packages/*`.
 - Did not run build, release, deploy, git, gofmt, or runtime validation commands.
 
-### 2026-07-03 continuation cleanup: work_item wording in deployment metadata
+### 2026-07-03 continuation cleanup: job_item wording in deployment metadata
 
 Continued the active split/dead-code objective by checking current deployment defaults and architecture docs for stale CloudNode async execution wording.
 
 Cleanup performed:
 
-- Updated `modules/admin/schema/service_deployments_seed.sql` and `modules/admin/internal/service/sysdeploy/defaults.go` so the default `moox_cloudnode` deployment description says `异步 work_item 队列` instead of generic `异步执行队列`.
-- Updated `docs/云节点执行平台架构.md` and `docs/采集任务管理.md` from CloudNode async `job` wording to CloudNode `work_item` wording.
-- Updated the collector CloudNode client comment so it describes the returned value as a work_item id, while keeping the current protocol field names unchanged.
+- Updated `modules/admin/schema/service_deployments_seed.sql` and `modules/admin/internal/service/sysdeploy/defaults.go` so the default `moox_cloudnode` deployment description says `异步 job_item 队列` instead of generic `异步执行队列`.
+- Updated `docs/云节点执行平台架构.md` and `docs/采集任务管理.md` from CloudNode async `job` wording to CloudNode `job_item` wording.
+- Updated the collector CloudNode client comment so it describes the returned value as a job_item id, while keeping the current protocol field names unchanged.
 
 Notes:
 
@@ -3910,7 +3910,7 @@ Continued the active split/dead-code objective by checking repository module ove
 
 Cleanup performed:
 
-- Updated `modules/README.md` so CloudNode is described as owning async `work_item` execution, not generic async jobs.
+- Updated `modules/README.md` so CloudNode is described as owning async `job_item` execution, not generic async jobs.
 - Updated `modules/README.md` so admin gateway forwarding is documented as resolving targets from `t_service_deployments` active deployment records; `config/gateway.yaml` no longer owns service addresses.
 
 Notes:
@@ -4102,7 +4102,7 @@ Changes:
 - Kept backend request semantics unchanged; these are still CloudNode management `BatchCreateNodes`, `BatchDeleteNodes`, and `BatchDeployNodes` calls.
 - Reworded the CloudNode service clock helper comment so it no longer references package-level tests as a reason for existing.
 
-This further separates CloudNode management `batch_change` terminology from SCF runtime `work_item` / job execution terminology.
+This further separates CloudNode management `batch_change` terminology from SCF runtime `job_item` / job execution terminology.
 
 ## 2026-07-03 continuation cleanup: current docs old-name wording
 
@@ -4141,7 +4141,7 @@ Changes:
 - Added a runtime data ownership table for admin, cloudnode, collector, storage, and trade data after deleting local runtime files.
 - Clarified that `examples/` only owns reusable storage metadata/platform seeds and does not maintain SQLite seed data for admin/cloudnode/collector/trade tables.
 - Added the Binance spot 1m view seed import to the minimal crypto metadata rebuild path.
-- Added a minimal end-to-end demo loop: admin service deployments, storage metadata import, cloud account recreation, collector SCF package/node deployment, collector rule generation, SCF work_item execution, storage write, and view browsing.
+- Added a minimal end-to-end demo loop: admin service deployments, storage metadata import, cloud account recreation, collector SCF package/node deployment, collector rule generation, SCF job_item execution, storage write, and view browsing.
 - Documented that failures should be debugged through service boundaries rather than manual SQLite writes.
 
 No E2E commands were run in this continuation; runtime verification still requires explicit build/start/reset authorization.
@@ -4253,10 +4253,10 @@ Cleanup performed:
 docs/采集任务管理.md
 ```
 
-- Reworded `采集 job 下发到 SCF 云节点` to `采集 work_item 下发到 SCF 云节点`.
-- Reworded `cloudnode job 协议` to `CloudNode work_item 协议`.
+- Reworded `采集 job 下发到 SCF 云节点` to `采集 job_item 下发到 SCF 云节点`.
+- Reworded `cloudnode job 协议` to `CloudNode job_item 协议`.
 
-This keeps collector task-instance terminology separate from CloudNode runtime work_item terminology while preserving the current wire RPC names such as `SubmitJobs`, `PollJobs`, and `ReportJobStatus`.
+This keeps collector task-instance terminology separate from CloudNode runtime job_item terminology while preserving the current wire RPC names such as `SubmitJobs`, `PollJobs`, and `ReportJobStatus`.
 
 No build, gofmt, test, deployment, git, or E2E command was run in this continuation.
 
@@ -4428,8 +4428,8 @@ Findings:
 - `t_cloud_nodes` is used by cloudnode catalog, heartbeat, node management, polling filters, and sync invocation node selection.
 - `t_cloud_accounts` is used by cloud account CRUD, COS package upload, and SCF invocation credentials.
 - `t_cloud_function_packages` is used by package upload/list/detail/delete and node deployment projection.
-- `t_cloud_async_jobs` is used by `AsyncJobRepository` for CloudNode async work_item submit/poll/report.
-- `t_cloud_job_attempts` is used by work_item lease attempts and status reporting.
+- `t_cloud_async_jobs` is used by `AsyncJobRepository` for CloudNode async job_item submit/poll/report.
+- `t_cloud_job_attempts` is used by job_item lease attempts and status reporting.
 - `t_cloud_invocations` and `t_cloud_invocation_results` are used by sync invocation summary/detail persistence.
 - `cloudnode.sql` contains no `INSERT` runtime seed rows.
 - No reviewed cloudnode table belongs in admin schema; cloud account data remains owned by the independent `moox-cloudnode` service.
@@ -4446,7 +4446,7 @@ docs/admin-cloudnode-collector-split-completion-matrix-2026-07-03.md
 
 Notes:
 
-- Schema/table/field names still use `job` where the current wire protocol uses `SubmitJobs`, `PollJobs`, `ReportJobStatus`, and `job_id`. Documentation continues to describe the runtime entity as CloudNode `work_item` to avoid confusing it with collector `task_instance`.
+- Schema/table/field names still use `job` where the current wire protocol uses `SubmitJobs`, `PollJobs`, `ReportJobStatus`, and `job_id`. Documentation continues to describe the runtime entity as CloudNode `job_item` to avoid confusing it with collector `task_instance`.
 
 No build, gofmt, test, deployment, git, or E2E command was run in this continuation.
 
@@ -4702,7 +4702,7 @@ Evidence:
 
 - `modules/collect/proto/collect_service.proto` and `modules/cloudnode/internal/service/cloudnode/service.go` currently expose and implement the same CloudNodeMgr RPC set.
 - `BatchCreateNodes`、`BatchDeleteNodes`、`BatchDeployNodes` are active CloudNode control-plane `batch_change` APIs and return `batch_id`.
-- `SubmitJobs`、`PollJobs`、`ReportJobStatus` remain active SCF runtime work_item APIs; these should not be removed as old admin logic.
+- `SubmitJobs`、`PollJobs`、`ReportJobStatus` remain active SCF runtime job_item APIs; these should not be removed as old admin logic.
 - `GetCOSAccountInfo` is used by `modules/cli/cmd/tencent_ops_firewall_open.go` through `modules/cli/internal/adminclient/cloudnode.go`, so it is not dead code.
 - `UpdateNode` has a frontend API wrapper in `web/src/api/cloud-node.ts`, so it is not currently a proven dead RPC.
 - `InvokeSync` has no current frontend call but is part of the agreed CloudNode platform capability for synchronous fan-out/fan-in workloads such as future factor calculation, so it should not be removed in this cleanup pass.
@@ -4746,7 +4746,7 @@ to the current split architecture:
 
 ```text
 Admin Gateway -> moox-collector control plane: /api/admin/collectmgr/*
-moox-collector control plane -> moox-cloudnode: submit work_item
+moox-collector control plane -> moox-cloudnode: submit job_item
 SCF runtime -> Admin Gateway: /api/service/cloudnode/* and /api/service/collectmgr/*
 SCF runtime -> Storage Access: direct HTTP/tRPC JSON writes
 ```
@@ -4855,7 +4855,7 @@ Rechecked Admin, CloudNode, and Collector schema SQL boundaries.
 
 Findings:
 
-- `modules/admin/schema/admin.sql` does not define CloudNode, cloud function package, collector task rule, collector task instance, or CloudNode async work_item business tables.
+- `modules/admin/schema/admin.sql` does not define CloudNode, cloud function package, collector task rule, collector task instance, or CloudNode async job_item business tables.
 - `modules/admin/schema/service_deployments_seed.sql` contains `moox_cloudnode` and `moox_collector` only as service deployment discovery records for gateway forwarding.
 - `modules/cloudnode/schema/cloudnode.sql` and `modules/collector/schema/collector.sql` contain table/index/trigger definitions only; no runtime seed `INSERT` rows were found.
 
@@ -4946,7 +4946,7 @@ Storage 的 `./var/storage` 示例路径仍保留在配置和文档中，实际�
 
 原因：
 
-- 该包不是通用 SCF runtime，而是 collector 侧把 CloudNode work_item 转换为采集 `TaskExecuteEvent` 的适配层。
+- 该包不是通用 SCF runtime，而是 collector 侧把 CloudNode job_item 转换为采集 `TaskExecuteEvent` 的适配层。
 - 根级 `packages/cloudruntime` 才是跨业务复用的通用 runtime。
 - 收窄命名可以避免后续误以为通用 runtime 仍归 collector 或 cloudnode 私有。
 
@@ -5101,7 +5101,7 @@ Storage 的 `./var/storage` 示例路径仍保留在配置和文档中，实际�
 变更：
 
 - 更新 `docs/架构总览.md` 中 Collector 目录树，将 `cloudruntime/` 改为 `cloudnodepoller/`。
-- 更新 `modules/collector/README.md` 中 Collector 目录说明，将该包描述为 CloudNode work_item 到采集任务的 poll/execute 适配。
+- 更新 `modules/collector/README.md` 中 Collector 目录说明，将该包描述为 CloudNode job_item 到采集任务的 poll/execute 适配。
 
 结论：文档中的 Collector SCF 适配层命名与当前代码目录保持一致，避免和根级 `packages/cloudruntime` 混淆。
 
@@ -5203,12 +5203,12 @@ Storage 的 `./var/storage` 示例路径仍保留在配置和文档中，实际�
 
 变更：
 
-- 将 `modules/collector/internal/scf/handler.go` 中的 `executeDueTasksAfterHeartbeat` 重命名为 `pollWorkItemsAfterHeartbeat`。
-- 将 keepalive 后的日志从“任务执行调度”改为 “CloudNode work_item 拉取/执行”。
-- 更新 `skills/debug/references/scf-e2e-debug.md`，移除 “collector local task cache” 和 create-node job 旧说法，改为 CloudNode `batch_change` / `work_item` 语义。
+- 将 `modules/collector/internal/scf/handler.go` 中的 `executeDueTasksAfterHeartbeat` 重命名为 `pollJobItemsAfterHeartbeat`。
+- 将 keepalive 后的日志从“任务执行调度”改为 “CloudNode job_item 拉取/执行”。
+- 更新 `skills/debug/references/scf-e2e-debug.md`，移除 “collector local task cache” 和 create-node job 旧说法，改为 CloudNode `batch_change` / `job_item` 语义。
 - 更新 `docs/架构总览.md`，将 collector `heartbeat/` 说明改为心跳与服务部署探测，将 `pkg/` 说明中的“打包工具”移除。
 
-结论：SCF keepalive 后执行路径的命名与当前 CloudNode work_item 租约模型一致，不再暗示旧本地任务缓存或到期任务调度器。
+结论：SCF keepalive 后执行路径的命名与当前 CloudNode job_item 租约模型一致，不再暗示旧本地任务缓存或到期任务调度器。
 
 ### 2026-07-03 Admin schema 旧业务表残留复核
 
@@ -5290,7 +5290,7 @@ Storage 的 `./var/storage` 示例路径仍保留在配置和文档中，实际�
 
 ### 2026-07-03 Collector 旧空 cloudruntime 目录清理
 
-迁移 CloudNode work_item runtime 后，复核 collector 内部旧目录。
+迁移 CloudNode job_item runtime 后，复核 collector 内部旧目录。
 
 结果：
 
@@ -5305,53 +5305,53 @@ Storage 的 `./var/storage` 示例路径仍保留在配置和文档中，实际�
 
 结论：Collector 目录结构与当前 runtime 分层一致，不再保留旧命名空壳。
 
-### 2026-07-03 CloudNode 异步执行队列 work_item 命名收敛
+### 2026-07-03 CloudNode 异步执行队列 job_item 命名收敛
 
-根据云节点命名讨论，批量节点管理使用 `batch_change/batch_id`，云函数异步执行队列使用更具体的 `work_item/work_item_id`，不继续使用宽泛的 `job/job_id`。
+根据云节点命名讨论，批量节点管理使用 `batch_change/batch_id`，云函数异步执行队列使用更具体的 `job_item/job_item_id`，不继续使用宽泛的 `job/job_id`。
 
 变更：
 
 - 更新 `modules/collect/proto/collect_service.proto`：
-  - `CloudJob` -> `CloudWorkItem`
-  - `SubmitJobs` -> `SubmitWorkItems`
-  - `PollJobs` -> `PollWorkItems`
-  - `ReportJobStatus` -> `ReportWorkItemStatus`
-  - `job_id` -> `work_item_id`
-  - `jobs` -> `work_items`
+  - `CloudJob` -> `CloudJobItem`
+  - `SubmitJobs` -> `SubmitJobItems`
+  - `PollJobs` -> `PollJobItems`
+  - `ReportJobStatus` -> `ReportJobItemStatus`
+  - `job_id` -> `job_item_id`
+  - `jobs` -> `job_items`
 - 通过 `modules/collect/proto/Makefile` 重新生成 `modules/collect/proto/collectgen`。
 - 更新 `modules/cloudnode/internal/service/cloudnode` 和 repository：
-  - `AsyncJobRepository` -> `WorkItemRepository`
-  - `AsyncJob` -> `WorkItem`
-  - `JobAttempt` -> `WorkItemAttempt`
+  - `AsyncJobRepository` -> `JobItemRepository`
+  - `AsyncJob` -> `JobItem`
+  - `JobAttempt` -> `JobItemAttempt`
 - 更新 `modules/cloudnode/schema/cloudnode.sql`：
-  - `t_cloud_async_jobs` -> `t_cloud_work_items`
-  - `t_cloud_job_attempts` -> `t_cloud_work_item_attempts`
-  - `c_job_id` -> `c_work_item_id`
+  - `t_cloud_async_jobs` -> `t_cloud_job_items`
+  - `t_cloud_job_attempts` -> `t_cloud_job_item_attempts`
+  - `c_job_id` -> `c_job_item_id`
 - 更新 collector 提交端和运行端：
-  - `SubmitCollectorJobs` -> `SubmitCollectorWorkItems`
-  - task instance / execution log 字段从 `cloud_job_id` 改为 `cloud_work_item_id`
-  - `cloudnodepoller.PollAndExecuteJobs` -> `PollAndExecuteWorkItems`
+  - `SubmitCollectorJobs` -> `SubmitCollectorJobItems`
+  - task instance / execution log 字段从 `cloud_job_id` 改为 `cloud_job_item_id`
+  - `cloudnodepoller.PollAndExecuteJobs` -> `PollAndExecuteJobItems`
 - 更新 `packages/cloudruntime`：
-  - runtime lease 结构和 JSON 字段使用 `work_item_id` / `work_items`
-  - 轮询和上报方法改为 `PollWorkItems` / `ReportWorkItemStatus`
+  - runtime lease 结构和 JSON 字段使用 `job_item_id` / `job_items`
+  - 轮询和上报方法改为 `PollJobItems` / `ReportJobItemStatus`
 - 更新云节点架构文档、cloudruntime README 和完成度矩阵。
 
-结论：CloudNode 异步执行队列的协议、表结构、运行时和 collector 集成路径已统一为 `work_item` 语义。
+结论：CloudNode 异步执行队列的协议、表结构、运行时和 collector 集成路径已统一为 `job_item` 语义。
 
-### 2026-07-03 CloudNode work_item 文档与调试 skill 同步
+### 2026-07-03 CloudNode job_item 文档与调试 skill 同步
 
 同步上一条 CloudNode 异步执行队列重命名后的面向用户文档和调试指引。
 
 变更：
 
 - 更新 `docs/云节点管理.md`：
-  - CloudNode 表归属改为 `t_cloud_work_items` / `t_cloud_work_item_attempts`。
-  - 后台接口改为 `SubmitWorkItems`、`PollWorkItems`、`ReportWorkItemStatus`。
+  - CloudNode 表归属改为 `t_cloud_job_items` / `t_cloud_job_item_attempts`。
+  - 后台接口改为 `SubmitJobItems`、`PollJobItems`、`ReportJobItemStatus`。
 - 更新 `docs/采集任务管理.md`：
-  - 采集任务提交流程改为 `SubmitWorkItems`。
-  - 后台/SCF 路径改为 `PollWorkItems` / `ReportWorkItemStatus`。
+  - 采集任务提交流程改为 `SubmitJobItems`。
+  - 后台/SCF 路径改为 `PollJobItems` / `ReportJobItemStatus`。
 - 更新 `examples/e2e/README.md`：
-  - 删库重建链路和最小 E2E 流程改为新的 work_item RPC。
+  - 删库重建链路和最小 E2E 流程改为新的 job_item RPC。
   - 删除“协议名暂保留 SubmitJobs/PollJobs/ReportJobStatus 和 job_id wire 字段”的过时说明。
 - 更新 `skills/debug/SKILL.md` 和 `skills/debug/references/scf-e2e-debug.md`：
   - 调试检查项和日志过滤关键字改为新 RPC/类型名。
@@ -5359,7 +5359,7 @@ Storage 的 `./var/storage` 示例路径仍保留在配置和文档中，实际�
 结果：
 
 - 除历史审计/计划记录外，当前活跃源码和面向用户/运维文档不再暴露旧 `SubmitJobs`、`PollJobs`、`ReportJobStatus`、`CloudJob`、`job_id` 命名。
-- `modules/storage/internal/services/access.waitForAsyncJobs` 是 Storage Access 内部异步写队列命名，和 CloudNode work_item 无关，本轮保留。
+- `modules/storage/internal/services/access.waitForAsyncJobs` 是 Storage Access 内部异步写队列命名，和 CloudNode job_item 无关，本轮保留。
 
 ### 2026-07-03 CloudNode 旧私有 SCF runtime 空目录清理
 
@@ -5373,26 +5373,26 @@ modules/cloudnode/scf/runtime
 
 - 通用 CloudNode SCF runtime 位于根级 `packages/cloudruntime`。
 - collector 业务 SCF 入口位于 `modules/collector/internal/scf`。
-- cloudnode 只负责云节点控制面、云厂商 provider、work_item 队列和同步 invocation。
+- cloudnode 只负责云节点控制面、云厂商 provider、job_item 队列和同步 invocation。
 
 变更：
 
 - 删除空目录 `modules/cloudnode/scf/runtime` 及其父空目录 `modules/cloudnode/scf`。
-- 更新 `docs/云节点执行平台架构.md` 中的 cloudnode 目录树，移除旧私有 proto/runtime 描述，改为当前 `collect/proto` 共享协议和 `work_item_repo.go`。
+- 更新 `docs/云节点执行平台架构.md` 中的 cloudnode 目录树，移除旧私有 proto/runtime 描述，改为当前 `collect/proto` 共享协议和 `job_item_repo.go`。
 - 更新完成度矩阵，记录 cloudnode 旧私有 SCF runtime 空壳已清理。
 
 结论：CloudNode 目录结构与当前“控制面 + provider，不私有承载 runtime”的边界一致。
 
 ### 2026-07-03 Admin/CloudNode/Collector 边界静态复核
 
-继续复核拆分后的活跃路径，重点检查旧数据库名、admin 旧业务表/RPC、CloudNode work_item 旧命名和跨模块依赖表述。
+继续复核拆分后的活跃路径，重点检查旧数据库名、admin 旧业务表/RPC、CloudNode job_item 旧命名和跨模块依赖表述。
 
 结果：
 
 - 活跃源码、脚本、examples 和当前用户文档中未发现 `data/moox.db` 或 `moox.db` 引用。
 - `modules/admin/schema`、`modules/admin/internal/service`、`modules/admin/proto` 未发现云节点、云函数代码包、采集规则或采集任务实例业务表/RPC 实现。
 - admin 命中的 `collectmgr` / `cloudnode` 仅位于 `sysdeploy` 默认服务部署记录、resolver 别名和网关注释，属于转发与服务发现边界。
-- 活跃路径中未发现旧 CloudNode 异步执行队列命名 `SubmitJobs`、`PollJobs`、`ReportJobStatus`、`CloudJob`、`job_id`；Storage Access 内部 `waitForAsyncJobs` 是 storage 自身异步写队列，不属于 CloudNode work_item。
+- 活跃路径中未发现旧 CloudNode 异步执行队列命名 `SubmitJobs`、`PollJobs`、`ReportJobStatus`、`CloudJob`、`job_id`；Storage Access 内部 `waitForAsyncJobs` 是 storage 自身异步写队列，不属于 CloudNode job_item。
 - 前端仍有 `collector/cloud-function` 页面路径和组件名，但未发现旧 `/api/admin/cloudfunction` 网关路径；当前是云函数节点管理 UI 命名，不是 admin 后端旧逻辑回流。
 
 变更：
@@ -5455,19 +5455,19 @@ modules/cloudnode/scf/runtime
 
 结论：CLI 管理与后台辅助调用继续走 admin/service 网关和独立 `moox-cloudnode`，不再暴露旧 batch operation 或 admin 内置云函数专名。
 
-### 2026-07-03 Collector task_instance 暴露 CloudNode work_item ID
+### 2026-07-03 Collector task_instance 暴露 CloudNode job_item ID
 
-复核 `work_item` 命名收敛后，发现 collector 数据库已保存 `c_cloud_work_item_id`，但 CollectMgr `TaskInstance` proto 和管理台任务实例页面未返回/展示该字段。
+复核 `job_item` 命名收敛后，发现 collector 数据库已保存 `c_cloud_job_item_id`，但 CollectMgr `TaskInstance` proto 和管理台任务实例页面未返回/展示该字段。
 
 变更：
 
 - 更新 `modules/collect/proto/collect_service.proto`：
-  - `TaskInstance` 新增 `cloud_work_item_id = 18`。
+  - `TaskInstance` 新增 `cloud_job_item_id = 18`。
 - 通过 `modules/collect/proto/Makefile` 重新生成 `modules/collect/proto/collectgen`。
-- 更新 `modules/collector/internal/service/collectmgr/convert.go`，将 `domain.TaskInstance.CloudWorkItemID` 返回到 proto。
+- 更新 `modules/collector/internal/service/collectmgr/convert.go`，将 `domain.TaskInstance.CloudJobItemID` 返回到 proto。
 - 更新 `web/src/views/collector/task-instances/task-instances.vue`：
-  - `TaskInstance` 类型新增 `CloudWorkItemID`。
-  - normalize 兼容 `CloudWorkItemID` 和 `cloud_work_item_id`。
-  - 列表和详情增加 `WorkItem ID` 展示列。
+  - `TaskInstance` 类型新增 `CloudJobItemID`。
+  - normalize 兼容 `CloudJobItemID` 和 `cloud_job_item_id`。
+  - 列表和详情增加 `JobItem ID` 展示列。
 
-结论：管理台任务实例现在可以直接关联 CloudNode work_item，方便排查 planner 生成、CloudNode 下发、SCF 执行和任务状态回写之间的链路。
+结论：管理台任务实例现在可以直接关联 CloudNode job_item，方便排查 planner 生成、CloudNode 下发、SCF 执行和任务状态回写之间的链路。

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"log"
+	"os"
 	"strings"
 	"sync"
 )
@@ -140,6 +141,9 @@ func GetStorageMetadataTarget() string {
 	if runtimeMetadata != "" {
 		return runtimeMetadata
 	}
+	if envTarget := strings.TrimSpace(os.Getenv("MOOX_STORAGE_METADATA_TARGET")); IsStorageTRPCTarget(envTarget) {
+		return trimTarget(envTarget)
+	}
 	if LocalAppConfig == nil {
 		InitLocalAppConfig()
 	}
@@ -163,6 +167,9 @@ func GetStorageAccessTarget() string {
 	_, runtimeAccess := getRuntimeStorageTargets()
 	if runtimeAccess != "" {
 		return runtimeAccess
+	}
+	if envTarget := strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_TARGET")); IsStorageTRPCTarget(envTarget) {
+		return trimTarget(envTarget)
 	}
 	if LocalAppConfig == nil {
 		InitLocalAppConfig()

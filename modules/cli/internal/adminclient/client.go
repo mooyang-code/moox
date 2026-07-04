@@ -15,6 +15,7 @@ import (
 type Client struct {
 	BaseURL     string
 	AccessToken string
+	SpaceID     string
 	// ServiceAuth 后台服务签名鉴权配置。设置后请求走 /api/service/{service}/{method}
 	// 路由并使用 HMAC Auth 头，不再依赖用户登录态 X-Access-Token。
 	ServiceAuth *ServiceAuthConfig
@@ -77,6 +78,9 @@ func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([
 	}
 	if c.AccessToken != "" {
 		req.Header.Set("X-Access-Token", c.AccessToken)
+	}
+	if c.SpaceID != "" {
+		req.Header.Set("X-Space-Id", c.SpaceID)
 	}
 	client := c.HTTPClient
 	if client == nil {

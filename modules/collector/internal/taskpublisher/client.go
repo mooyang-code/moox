@@ -5,14 +5,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
-	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -29,50 +33,128 @@ type AuthConfig struct {
 
 // Config configures the CloudNode gateway client.
 type Config struct {
-	GatewayURL string
-	Auth       AuthConfig
+	GatewayURL            string
+	StorageMetadataTarget string
+	StorageAccessTarget   string
+	Auth                  AuthConfig
 }
 
 // Client submits collector work to CloudNode through the admin service gateway.
 type Client struct {
-	gatewayURL string
-	auth       AuthConfig
-	httpClient *http.Client
+	gatewayURL            string
+	storageMetadataTarget string
+	storageAccessTarget   string
+	auth                  AuthConfig
+	httpClient            *http.Client
+}
+
+// WakeOptions describes which Collector runtime nodes should be nudged to poll queued work.
+type WakeOptions struct {
+	SpaceID  string
+	JobTypes []string
 }
 
 // New creates a CloudNode client.
 func New(cfg Config) *Client {
 	return &Client{
-		gatewayURL: strings.TrimRight(strings.TrimSpace(cfg.GatewayURL), "/"),
-		auth:       cfg.Auth,
-		httpClient: &http.Client{Timeout: 8 * time.Second},
+		gatewayURL:            strings.TrimRight(strings.TrimSpace(cfg.GatewayURL), "/"),
+		storageMetadataTarget: strings.TrimSpace(cfg.StorageMetadataTarget),
+		storageAccessTarget:   strings.TrimSpace(cfg.StorageAccessTarget),
+		auth:                  cfg.Auth,
+		httpClient:            &http.Client{Timeout: 8 * time.Second},
 	}
 }
 
-// SubmitCollectorWorkItems submits task instances as async CloudNode work items.
-func (c *Client) SubmitCollectorWorkItems(ctx context.Context, instances []domain.TaskInstance) error {
-	workItems := make([]*pb.CloudWorkItem, 0, len(instances))
+// SubmitCollectorJobItems submits task instances as async CloudNode JobItems.
+func (c *Client) SubmitCollectorJobItems(ctx context.Context, instances []domain.TaskInstance) (map[string]string, error) {
+	jobItems := make([]*pb.JobItem, 0, len(instances))
 	for _, instance := range instances {
-		workItems = append(workItems, buildCloudWorkItem(instance))
+		jobItems = append(jobItems, buildJobItem(instance))
 	}
-	if len(workItems) == 0 {
-		return nil
+	if len(jobItems) == 0 {
+		return map[string]string{}, nil
 	}
-	raw, err := protojson.Marshal(&pb.SubmitWorkItemsReq{WorkItems: workItems})
+	raw, err := protojson.Marshal(&pb.SubmitJobItemsReq{Items: jobItems})
 	if err != nil {
-		return fmt.Errorf("marshal submit work items request: %w", err)
+		return nil, fmt.Errorf("marshal submit job items request: %w", err)
 	}
-	var rsp pb.SubmitWorkItemsRsp
-	if err := c.postService(ctx, "cloudnode", "SubmitWorkItems", raw, &rsp); err != nil {
-		return fmt.Errorf("submit cloud work items: %w", err)
+	var rsp pb.SubmitJobItemsRsp
+	if err := c.postService(ctx, "cloudnode", "SubmitJobItems", raw, &rsp); err != nil {
+		return nil, fmt.Errorf("submit cloud job items: %w", err)
 	}
 	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		return fmt.Errorf("submit cloud work items: %s", rsp.GetRetInfo().GetMsg())
+		return nil, fmt.Errorf("submit cloud job items: %s", rsp.GetRetInfo().GetMsg())
 	}
-	return nil
+	return jobItemIDsByTaskID(jobItems, rsp.GetAcks()), nil
+}
+
+// WakeCollectorNodes invokes matching Collector SCF nodes so they poll queued JobItems.
+func (c *Client) WakeCollectorNodes(ctx context.Context, opts WakeOptions) (int, error) {
+	spaceID := strings.TrimSpace(opts.SpaceID)
+	if spaceID == "" {
+		return 0, fmt.Errorf("space_id is required")
+	}
+	body, err := protojson.Marshal(&pb.GetNodeListReq{})
+	if err != nil {
+		return 0, fmt.Errorf("marshal get node list request: %w", err)
+	}
+	var nodes pb.GetNodeListRsp
+	if err := c.postServiceWithHeaders(ctx, "cloudnode", "GetNodeList", body, &nodes, spaceHeaders(spaceID)); err != nil {
+		return 0, fmt.Errorf("list cloud nodes: %w", err)
+	}
+	if nodes.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		return 0, fmt.Errorf("list cloud nodes: %s", nodes.GetRetInfo().GetMsg())
+	}
+	wakeEvent, err := c.buildWakeEvent()
+	if err != nil {
+		return 0, err
+	}
+	wakeStruct, err := structpb.NewStruct(wakeEvent)
+	if err != nil {
+		return 0, fmt.Errorf("build wake event: %w", err)
+	}
+	woken := 0
+	var wakeErrors []error
+	for _, node := range nodes.GetItems() {
+		if !supportsAnyJobType(node.GetSupportedWorkloads(), opts.JobTypes) {
+			continue
+		}
+		req := &pb.InvokeFunctionReq{
+			NodeId:        node.GetNodeId(),
+			EventData:     wakeStruct,
+			ScfInvokeType: pb.ScfInvokeType_SCF_INVOKE_TYPE_EVENT,
+		}
+		raw, err := protojson.Marshal(req)
+		if err != nil {
+			wakeErrors = append(wakeErrors, fmt.Errorf("marshal invoke function request for %s: %w", node.GetNodeId(), err))
+			continue
+		}
+		var rsp pb.InvokeFunctionRsp
+		if err := c.postServiceWithHeaders(ctx, "cloudnode", "InvokeFunction", raw, &rsp, spaceHeaders(spaceID)); err != nil {
+			wakeErrors = append(wakeErrors, fmt.Errorf("invoke collector node %s: %w", node.GetNodeId(), err))
+			continue
+		}
+		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			wakeErrors = append(wakeErrors, fmt.Errorf("invoke collector node %s: %s", node.GetNodeId(), rsp.GetRetInfo().GetMsg()))
+			continue
+		}
+		if rsp.GetScf().GetCode() != 0 {
+			wakeErrors = append(wakeErrors, fmt.Errorf("invoke collector node %s: %s", node.GetNodeId(), rsp.GetScf().GetMessage()))
+			continue
+		}
+		woken++
+	}
+	if woken == 0 && len(wakeErrors) > 0 {
+		return 0, errors.Join(wakeErrors...)
+	}
+	return woken, nil
 }
 
 func (c *Client) postService(ctx context.Context, service string, method string, body []byte, out proto.Message) error {
+	return c.postServiceWithHeaders(ctx, service, method, body, out, nil)
+}
+
+func (c *Client) postServiceWithHeaders(ctx context.Context, service string, method string, body []byte, out proto.Message, headers map[string]string) error {
 	if c.gatewayURL == "" {
 		return fmt.Errorf("admin gateway url is required")
 	}
@@ -85,6 +167,11 @@ func (c *Client) postService(ctx context.Context, service string, method string,
 	})
 	if err != nil {
 		return err
+	}
+	for key, value := range headers {
+		if strings.TrimSpace(key) != "" && strings.TrimSpace(value) != "" {
+			req.Header.Set(key, value)
+		}
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -110,22 +197,181 @@ func (c *Client) postService(ctx context.Context, service string, method string,
 	return nil
 }
 
-func buildCloudWorkItem(instance domain.TaskInstance) *pb.CloudWorkItem {
+func (c *Client) buildWakeEvent() (map[string]any, error) {
+	host, port, err := c.gatewayHostPort()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"action":                  "keepalive",
+		"source":                  "collector_schedule",
+		"timestamp":               time.Now().UTC().Format(time.RFC3339),
+		"server_ip":               host,
+		"server_port":             port,
+		"storage_metadata_target": c.storageMetadataTarget,
+		"storage_access_target":   c.storageAccessTarget,
+		"data": map[string]any{
+			"wake_reason": "collector_job_items",
+		},
+	}, nil
+}
+
+func (c *Client) gatewayHostPort() (string, int, error) {
+	rawURL := strings.TrimSpace(c.gatewayURL)
+	if rawURL == "" {
+		return "", 0, fmt.Errorf("admin gateway url is required")
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", 0, fmt.Errorf("parse admin gateway url: %w", err)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		host, _, _ = net.SplitHostPort(rawURL)
+	}
+	if host == "" {
+		return "", 0, fmt.Errorf("admin gateway host is required")
+	}
+	port := 0
+	if parsed.Port() != "" {
+		port, err = strconv.Atoi(parsed.Port())
+		if err != nil {
+			return "", 0, fmt.Errorf("parse admin gateway port: %w", err)
+		}
+	}
+	if port == 0 {
+		switch parsed.Scheme {
+		case "https":
+			port = 443
+		default:
+			port = 80
+		}
+	}
+	return host, port, nil
+}
+
+func spaceHeaders(spaceID string) map[string]string {
+	return map[string]string{"X-Space-Id": strings.TrimSpace(spaceID)}
+}
+
+func supportsAnyJobType(supported []string, required []string) bool {
+	required = compactStrings(required)
+	if len(required) == 0 {
+		return true
+	}
+	allowed := make(map[string]struct{}, len(supported))
+	for _, value := range supported {
+		if value = normalizeJobType(value); value != "" {
+			allowed[value] = struct{}{}
+		}
+	}
+	for _, value := range required {
+		if _, ok := allowed[normalizeJobType(value)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeJobType(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "collect.") {
+		return strings.TrimPrefix(value, "collect.")
+	}
+	return value
+}
+
+func compactStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func buildJobItem(instance domain.TaskInstance) *pb.JobItem {
 	payload := parsePayload(instance.TaskParams)
 	payload["space_id"] = instance.SpaceID
 	payload["task_id"] = instance.TaskID
-	payload["schedule_window"] = scheduleWindow(time.Now().UTC(), valueString(payload, "schedule_interval", "30m"))
+	window := scheduleWindow(time.Now().UTC(), valueString(payload, "schedule_interval", "30m"))
+	payload["schedule_window"] = window
 	payloadStruct, _ := structpb.NewStruct(payload)
-	return &pb.CloudWorkItem{
-		SpaceId:        instance.SpaceID,
-		OwnerService:   "collector",
-		OwnerRef:       instance.TaskID,
-		WorkloadType:   valueString(payload, "workload_type", "collector.binance.spot.kline"),
-		DeploymentId:   valueString(payload, "deployment_id", "collector-binance-kline-v1"),
-		Payload:        payloadStruct,
-		Priority:       100,
-		LeaseTimeoutMs: int64((10 * time.Minute) / time.Millisecond),
+	return &pb.JobItem{
+		SpaceId:       instance.SpaceID,
+		JobId:         instance.RuleID,
+		JobItemId:     windowedJobItemID(instance.TaskID, window),
+		JobType:       jobType(payload),
+		CodePackageId: valueString(payload, "code_package_id", defaultCodePackageID(payload)),
+		Params:        payloadStruct,
+		Priority:      100,
 	}
+}
+
+func jobItemIDsByTaskID(items []*pb.JobItem, acks []*pb.JobItemAck) map[string]string {
+	taskByItemID := make(map[string]string, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		taskByItemID[strings.TrimSpace(item.GetJobItemId())] = taskIDFromJobItem(item)
+	}
+	out := make(map[string]string, len(acks))
+	for _, ack := range acks {
+		if ack == nil {
+			continue
+		}
+		switch ack.GetStatus() {
+		case pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED,
+			pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_DEDUPLICATED:
+		default:
+			continue
+		}
+		jobItemID := strings.TrimSpace(ack.GetJobItemId())
+		taskID := taskByItemID[jobItemID]
+		if taskID == "" || jobItemID == "" {
+			continue
+		}
+		out[taskID] = jobItemID
+	}
+	return out
+}
+
+func taskIDFromJobItem(item *pb.JobItem) string {
+	if item == nil {
+		return ""
+	}
+	if params := item.GetParams(); params != nil {
+		if value := params.GetFields()["task_id"].GetStringValue(); strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return strings.TrimSpace(item.GetJobItemId())
+}
+
+func windowedJobItemID(taskID string, window string) string {
+	taskID = strings.TrimSpace(taskID)
+	window = strings.TrimSpace(window)
+	if taskID == "" || window == "" {
+		return taskID
+	}
+	return taskID + ":" + window
+}
+
+func jobType(payload map[string]any) string {
+	if value := valueString(payload, "job_type", ""); value != "" {
+		return value
+	}
+	dataType := valueString(payload, "data_type", "kline")
+	return "collect." + dataType
+}
+
+func defaultCodePackageID(_ map[string]any) string {
+	return domain.DefaultCollectorCodePackageID
 }
 
 func parsePayload(raw string) map[string]any {

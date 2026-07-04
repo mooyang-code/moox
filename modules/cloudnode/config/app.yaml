@@ -8,6 +8,12 @@ database:
   conn_max_lifetime: 1h
   conn_max_idle_time: 10m
 
+job_item:
+  default_limit: 10
+  max_limit: 100
+  recover_after_millis: 600000
+  default_max_attempts: 3
+
 tencent_scf:
   default_region: ap-guangzhou
   default_namespace: default

@@ -25,12 +25,18 @@ func (s *Service) CreateDataSource(ctx context.Context, req *pb.CreateDataSource
 	if err != nil {
 		return &pb.CreateDataSourceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.CreateDataSourceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
 	return &pb.CreateDataSourceRsp{RetInfo: response.Success("success"), DataSource: created}, nil
 }
 
 func (s *Service) UpdateDataSource(ctx context.Context, req *pb.UpdateDataSourceReq) (*pb.UpdateDataSourceRsp, error) {
 	updated, err := s.metadata.UpsertDataSource(ctx, req.GetDataSource())
 	if err != nil {
+		return &pb.UpdateDataSourceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpdateDataSourceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateDataSourceRsp{RetInfo: response.Success("success"), DataSource: updated}, nil
@@ -65,6 +71,9 @@ func (s *Service) UpsertSubject(ctx context.Context, req *pb.UpsertSubjectReq) (
 	}
 	created, err := s.metadata.UpsertSubject(ctx, item)
 	if err != nil {
+		return &pb.UpsertSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpsertSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpsertSubjectRsp{RetInfo: response.Success("success"), Subject: created}, nil
@@ -118,6 +127,9 @@ func (s *Service) RegisterDataSubject(ctx context.Context, req *pb.RegisterDataS
 		}
 		bindings = append(bindings, createdBinding)
 	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
 	return &pb.RegisterDataSubjectRsp{RetInfo: response.Success("success"), Subject: created, DatasetBindings: bindings}, nil
 }
 
@@ -144,6 +156,9 @@ func (s *Service) UpsertSubjectSymbol(ctx context.Context, req *pb.UpsertSubject
 	}
 	created, err := s.metadata.UpsertSubjectSymbol(ctx, item)
 	if err != nil {
+		return &pb.UpsertSubjectSymbolRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpsertSubjectSymbolRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpsertSubjectSymbolRsp{RetInfo: response.Success("success"), SubjectSymbol: created}, nil
@@ -175,6 +190,9 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	if err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.CreateDatasetRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
 	return &pb.CreateDatasetRsp{RetInfo: response.Success("success"), Dataset: created}, nil
 }
 
@@ -191,6 +209,9 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 	}
 	updated, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
+		return &pb.UpdateDatasetRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateDatasetRsp{RetInfo: response.Success("success"), Dataset: updated}, nil
@@ -224,6 +245,9 @@ func (s *Service) BindDatasetSubject(ctx context.Context, req *pb.BindDatasetSub
 	if err != nil {
 		return &pb.BindDatasetSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.BindDatasetSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
 	return &pb.BindDatasetSubjectRsp{RetInfo: response.Success("success"), DatasetSubject: created}, nil
 }
 
@@ -240,12 +264,18 @@ func (s *Service) CreateField(ctx context.Context, req *pb.CreateFieldReq) (*pb.
 	if err != nil {
 		return &pb.CreateFieldRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.CreateFieldRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
 	return &pb.CreateFieldRsp{RetInfo: response.Success("success"), Field: created}, nil
 }
 
 func (s *Service) UpdateField(ctx context.Context, req *pb.UpdateFieldReq) (*pb.UpdateFieldRsp, error) {
 	updated, err := s.metadata.UpsertField(ctx, req.GetField())
 	if err != nil {
+		return &pb.UpdateFieldRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpdateFieldRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateFieldRsp{RetInfo: response.Success("success"), Field: updated}, nil
@@ -272,12 +302,18 @@ func (s *Service) CreateFactor(ctx context.Context, req *pb.CreateFactorReq) (*p
 	if err != nil {
 		return &pb.CreateFactorRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.CreateFactorRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
 	return &pb.CreateFactorRsp{RetInfo: response.Success("success"), Factor: created}, nil
 }
 
 func (s *Service) UpdateFactor(ctx context.Context, req *pb.UpdateFactorReq) (*pb.UpdateFactorRsp, error) {
 	updated, err := s.metadata.UpsertFactor(ctx, req.GetFactor())
 	if err != nil {
+		return &pb.UpdateFactorRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpdateFactorRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateFactorRsp{RetInfo: response.Success("success"), Factor: updated}, nil
@@ -309,6 +345,9 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 	}
 	created, err := s.metadata.UpsertDatasetColumn(ctx, item)
 	if err != nil {
+		return &pb.UpsertDatasetColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpsertDatasetColumnRsp{RetInfo: response.Success("success"), Column: created}, nil

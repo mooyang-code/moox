@@ -19,7 +19,7 @@ storage:
   access_target: 127.0.0.1:20102
 
 sysdeploy:
-  # Collector 控制面通过 admin 网关 /api/service/cloudnode/* 提交 work_item。
+  # Collector 控制面通过 admin 网关 /api/service/cloudnode/* 提交 JobItem。
   # 本地开发默认指向 moox-admin gateway（11000）；生产环境应配置实际 admin 网关地址。
   admin_gateway_url: "http://127.0.0.1:11000"
   service_auth:

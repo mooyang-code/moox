@@ -59,6 +59,7 @@ func toPBInstance(instance domain.TaskInstance) *pb.TaskInstance {
 	return &pb.TaskInstance{
 		SpaceId:         instance.SpaceID,
 		TaskId:          instance.TaskID,
+		CloudJobItemId:  instance.CloudJobItemID,
 		RuleId:          instance.RuleID,
 		Exchange:        instance.Exchange,
 		Market:          instance.Market,

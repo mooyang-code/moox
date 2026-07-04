@@ -29,6 +29,9 @@ func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.
 	if err != nil {
 		return &pb.CreateSpaceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.CreateSpaceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
 	return &pb.CreateSpaceRsp{RetInfo: response.Success("success"), Space: created}, nil
 }
 
@@ -42,6 +45,9 @@ func (s *Service) UpdateSpace(ctx context.Context, req *pb.UpdateSpaceReq) (*pb.
 	}
 	updated, err := s.metadata.UpsertSpace(ctx, space)
 	if err != nil {
+		return &pb.UpdateSpaceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpdateSpaceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateSpaceRsp{RetInfo: response.Success("success"), Space: updated}, nil
@@ -87,6 +93,9 @@ func (s *Service) CreateView(ctx context.Context, req *pb.CreateViewReq) (*pb.Cr
 	if err != nil {
 		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
 	return &pb.CreateViewRsp{RetInfo: response.Success("success"), View: created}, nil
 }
 
@@ -99,6 +108,9 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 	if existingErr == nil && isViewBuildStateOnlyUpdate(existing, view) {
 		updated, err := s.metadata.UpsertView(ctx, view)
 		if err != nil {
+			return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		}
+		if err := s.refreshMetadataCache(ctx); err != nil {
 			return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 		}
 		return &pb.UpdateViewRsp{RetInfo: response.Success("success"), View: updated}, nil
@@ -120,6 +132,9 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 	}
 	updated, err := s.metadata.UpsertView(ctx, view)
 	if err != nil {
+		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateViewRsp{RetInfo: response.Success("success"), View: updated}, nil
@@ -254,6 +269,9 @@ func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumn
 	}
 	created, err := s.metadata.UpsertViewColumn(ctx, column)
 	if err != nil {
+		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpsertViewColumnRsp{RetInfo: response.Success("success"), Column: created}, nil

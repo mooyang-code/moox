@@ -37,7 +37,7 @@ moox-trade      -> modules/trade/schema
 | Storage 平台拓扑和业务元数据 | `moox-storage` | `examples/*.seed.yaml` 通过 `moox-cli metadata import` 导入 |
 | 云账户、云节点、函数包 | `moox-cloudnode` | 管理台或 `/api/admin/cloudnode/*` API 创建 |
 | 采集规则、任务实例、执行日志 | `moox-collector` | 管理台或 `/api/admin/collectmgr/*` API 创建规则，再由 collector 生成 |
-| SCF 异步 work_item、同步 invocation | `moox-cloudnode` | 由 collector/factor/trade 等业务服务通过 `/api/service/cloudnode/*` 提交 |
+| SCF 异步 JobItem、同步 invocation | `moox-cloudnode` | 由 collector/factor/trade 等业务服务通过 `/api/service/cloudnode/*` 提交 |
 | K 线、标的、视图数据 | `moox-storage` | collector/SCF 通过 storage RPC 写入，view/archive 通过 rebuild 或事件更新 |
 
 这些数据如果被删除，不需要旧库迁移，也不应该通过手工 SQL 恢复；按上表重新走模块入口即可。
@@ -51,8 +51,8 @@ moox-trade      -> modules/trade/schema
 5. 在管理台创建演示用 Space，例如 `crypto`。
 6. 使用 `moox-cli metadata import` 导入平台拓扑和业务元数据。
 7. 在管理台或通过 cloudnode API 创建云账户、两阶段上传 collector SCF 代码包（`InitPackageUpload` → COS 直传 → `CompletePackageUpload`）、部署云节点。
-8. 在采集规则页面创建规则，由 `moox-collector` 根据 dataset subjects 生成 task instances，并提交给 `moox-cloudnode` 的 work_item 队列。
-9. SCF runtime 通过 `/api/service/cloudnode/PollWorkItems` 获取 work_item，执行采集并写入 storage。
+8. 在采集规则页面创建规则，由 `moox-collector` 根据 dataset subjects 生成 task instances，并提交给 `moox-cloudnode` 的 JobItem 队列。
+9. SCF runtime 通过 `/api/service/cloudnode/PollJobItems` 获取 JobItem，执行采集并写入 storage。
 10. 如果 view/archive 需要历史重建，使用 storage view rebuild，而不是依赖事件回放历史。
 
 ## Metadata seed 导入
@@ -110,7 +110,7 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
     "biz_type": "data_collector",
     "data_type": "kline",
     "data_source": "binance",
-    "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_kline\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1m\"]},\"target\":{\"dataset_id\":\"binance_spot_kline\",\"workload_type\":\"collector.binance.spot.kline\",\"deployment_id\":\"collector-binance-kline-v1\"},\"schedule\":{\"interval\":\"30m\",\"timezone\":\"Asia/Shanghai\"}}",
+    "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_kline\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1m\"]},\"target\":{\"dataset_id\":\"binance_spot_kline\",\"job_type\":\"collect.kline\",\"code_package_id\":\"moox-collector_dev\"},\"schedule\":{\"interval\":\"1m\",\"timezone\":\"Asia/Shanghai\"}}",
     "assignment_type": "auto",
     "assigned_nodes": "[]",
     "node_pattern": "",
@@ -121,7 +121,7 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
 }
 ```
 
-创建规则后，调用 `/api/admin/collectmgr/RecalculateAllTaskInstances`，由 `moox-collector` 从 storage metadata 读取 `binance_spot_kline` 数据集的 subjects，生成 task instances，并通过 `moox-cloudnode` 提交 CloudNode work_item。
+创建规则后，调用 `/api/admin/collectmgr/RecalculateAllTaskInstances`，由 `moox-collector` 从 storage metadata 读取 `binance_spot_kline` 数据集的 subjects，生成 task instances，并通过 `moox-cloudnode` 提交 CloudNode JobItem。
 
 ## 最小可演示闭环
 
@@ -132,15 +132,52 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
 3. `moox-cloudnode` 启动后，通过云账户页面重新创建 Tencent Cloud 账号；密钥不进入 examples。
 4. 使用 collector 打包/发布流程上传 `moox-collector` SCF 包，并通过 cloudnode 批量创建/部署云节点。
 5. `moox-collector` 启动后，在采集规则页面创建 Binance 现货 K 线规则，规则根据 `binance_spot_kline` 数据集里的 subject 生成 task instances。
-6. SCF runtime 通过 `/api/service/cloudnode/PollWorkItems` 获取 work_item，执行后通过 storage Access RPC 写入 K 线，并通过 `/api/service/collectmgr/ReportTaskStatus` 回写任务状态。
+6. SCF runtime 通过 `/api/service/cloudnode/PollJobItems` 获取 JobItem，执行后通过 storage Access RPC 写入 K 线，并通过 `/api/service/collectmgr/ReportTaskStatus` 回写任务状态。
 7. 通过数据浏览或视图浏览页面确认 `spot_kline_1m_view` 能看到最新现货 K 线。
 
-如果第 7 步没有数据，不要回写 SQLite。按链路依次检查：服务部署地址、SCF 心跳、collector 任务实例、CloudNode work_item、storage 写入、view rebuild/事件更新。
+如果第 7 步没有数据，不要回写 SQLite。按链路依次检查：服务部署地址、SCF 心跳、collector 任务实例、CloudNode JobItem、storage 写入、view rebuild/事件更新。
+
+## 一键端到端验证
+
+本目录提供可重复执行的最小闭环脚本：
+
+```bash
+examples/e2e/run.sh --target localhost --dir /tmp/moox-e2e
+```
+
+脚本默认会调用 `scripts/deploy-moox.sh --reset-data`，然后导入：
+
+```text
+examples/platform-local.seed.yaml
+examples/metadata-crypto.seed.yaml
+examples/metadata-crypto-spot-kline-1m-view.seed.yaml
+```
+
+随后通过管理台同一套 HTTP 网关完成注册/登录、修正 public service deployments、创建 `crypto` Space、登记一个本地逻辑 SCF 节点、创建 Binance 现货 1m K 线规则、触发 collector 重算任务实例，再运行一次 `moox-collector-scf -once` 拉取 JobItem 并执行采集。最后断言：
+
+- `9527` 管理台静态页面可访问；
+- `11000` admin gateway health 可访问；
+- 管理台 JWT 请求能访问 space、sysdeploy、cloudnode、collector、storage metadata；
+- collector 生成 task instances 且写入 `cloud_job_item_id`；
+- cloudnode JobItems 全部成功；
+- collector task instances 全部成功；
+- storage access 中能扫描到 `binance_spot_kline` 时序 K 线数据。
+
+远端发布并验证示例：
+
+```bash
+examples/e2e/run.sh \
+  --target root@106.53.107.122 \
+  --dir ~/moox/prod \
+  --host 106.53.107.122
+```
+
+如果远端使用 `~/.ssh/config` 别名，`--host` 需要填写浏览器和网关可访问的公网主机名或 IP。需要复用已启动服务时可传 `--skip-deploy`；需要保留已有运行数据时可传 `--preserve-data`。
 
 ## 边界说明
 
 - `examples/*.seed.yaml` 只表达 Storage 元数据和存储拓扑，不直接写 admin/cloudnode/collector/trade 表。
 - 云账户和真实云厂商密钥不进入 examples，需要通过管理台或 cloudnode API 重新创建。
 - 采集任务实例不是 seed 数据，应由 collector 规则和 dataset subjects 重新生成。
-- CloudNode 批量创建/部署节点返回 `batch_id`，这是控制面 `batch_change`，不是 collector `task_instance`，也不是 SCF runtime `work_item`。
-- SCF 异步执行协议统一使用 `SubmitWorkItems`、`PollWorkItems`、`ReportWorkItemStatus` 和 `work_item_id` 字段。
+- CloudNode 批量创建/部署节点返回 `batch_id`，这是控制面 `batch_change`，不是 collector `task_instance`，也不是 SCF runtime `JobItem`。
+- SCF 异步执行协议统一使用 `SubmitJobItems`、`PollJobItems`、`ReportJobItemStatus` 和 `job_item_id` 字段。

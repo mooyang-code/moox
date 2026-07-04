@@ -11,7 +11,7 @@
 - 新项目，**不考虑向后兼容**；凡是不合理的字段/结构均可删除或重写。
 - **保留** `package_id` / `package_version`（不合并为 `deployment_id`）。
 - `InvokeSync` **保持扁平字段**，不引入 `fanout` / `trace` 嵌套结构。
-- **`CloudWorkItem` 不提供 `max_attempts`**：重试次数完全由 CloudNode 服务端默认策略控制（当前默认 3 次），调用方不可覆盖。
+- **`JobItem` 不提供 `max_attempts`**：重试次数完全由 CloudNode 服务端默认策略控制（当前默认 3 次），调用方不可覆盖。
 - `function_name` / `provider` **保留为一等字段**（SCF 调用与多厂商扩展需要，不长期塞 metadata）。
 
 **Architecture:** CloudNode 是独立 RPC 服务（`trpc.moox.cloudnode.CloudNodeMgr`），经 admin 网关暴露为 `/api/admin/cloudnode/*`（JWT）与 `/api/service/cloudnode/*`（HMAC）。控制面与执行面语义分离。响应统一首字段 `common.RetInfo`。
@@ -24,14 +24,14 @@
 
 | 概念 | 含义 | 出现位置 |
 |---|---|---|
-| `space_id` | 租户隔离主键 | 节点、代码包、work item、invocation、心跳 |
+| `space_id` | 租户隔离主键 | 节点、代码包、JobItem、invocation、心跳 |
 | `package_id` | 代码包目录 ID | `CloudNode`、`NodeDeployItem` |
 | `package_version` | 当前节点部署的代码包版本号 | `CloudNode` |
-| `deployment_id` | 工作负载部署标识 | `CloudNode`、`CloudWorkItem`、`InvokeSync` |
+| `code_package_id` | JobItem 使用的代码包 ID | `JobItem` |
 | `function_name` | SCF 函数名（一等字段） | `CloudNode`、DB `c_function_name` |
 | `provider` | 云厂商（默认 `tencent-scf`） | `CloudNode`、DB `c_provider` |
 | `supported_workloads` | 节点支持的工作负载类型列表 | 节点、心跳、Poll |
-| `work_item` | 异步执行单元 | Submit / Poll / Report |
+| `job_item` | 异步执行单元 | Submit / Poll / Report |
 | `invocation` | 同步扇出调用 | `InvokeSync` |
 | `batch_change` | 控制面批量变更 | BatchCreate / Delete / Deploy |
 
@@ -48,7 +48,7 @@
 | 路径 | space_id 来源 | 适用 RPC |
 |---|---|---|
 | `/api/admin/cloudnode/*`（管理面） | 网关 `X-Space-Id` → trpc `spacectx` filter → `ctx`；**不信任 body** | `GetNodeList`、`BatchCreateNodes`、`UpdateNode`、代码包 CRUD、账户 CRUD |
-| `/api/service/cloudnode/*`（执行面） | 请求 body 显式 `space_id`（HMAC 签名） | `SubmitWorkItems`、`PollWorkItems`、`ReportWorkItemStatus`、`InvokeSync`、`ReportHeartbeat` |
+| `/api/service/cloudnode/*`（执行面） | 请求 body 显式 `space_id`（HMAC 签名） | `SubmitJobItems`、`PollJobItems`、`ReportJobItemStatus`、`InvokeSync`、`ReportHeartbeat` |
 
 - `NodeCreateItem` **不加** `space_id`；`BatchCreateNodes` 从 `ctx` 注入。
 - cloudnode 新增 `internal/spacecontext`（对齐 trade 模块）并在 `trpc_go.yaml` 注册 `spacectx` filter。
@@ -59,10 +59,10 @@
 
 ```text
 CloudRetryPolicy
-CloudWorkItem.max_attempts
+JobItem.max_attempts
 NodeListRequest / PackageListRequest 包装层
 GetNodeListReq.query / GetPackageListReq.query
-PollWorkItemsReq.node_pool_id
+PollJobItemsReq.node_pool_id
 t_cloud_nodes.c_pool_id 列 + idx_cloud_nodes_pool 索引
 packages/cloudruntime.Config.NodePoolID
 BatchChangeResult.message
@@ -84,7 +84,7 @@ CloudAccount 合一 message → 拆分为 Summary / Input / Secret
 enum NodeStatusCode { NODE_STATUS_UNSPECIFIED=0; NODE_STATUS_OFFLINE=1; NODE_STATUS_ONLINE=2; NODE_STATUS_TIMEOUT=3; NODE_STATUS_ABNORMAL=4; }
 enum PackageStatus { PACKAGE_STATUS_UNSPECIFIED=0; PACKAGE_STATUS_PENDING=1; PACKAGE_STATUS_AVAILABLE=2; PACKAGE_STATUS_FAILED=3; PACKAGE_STATUS_DELETED=4; }
 enum PackageType { PACKAGE_TYPE_UNSPECIFIED=0; PACKAGE_TYPE_COLLECTOR=1; PACKAGE_TYPE_FACTOR=2; PACKAGE_TYPE_CUSTOM=3; }
-enum WorkItemStatus { WORK_ITEM_STATUS_UNSPECIFIED=0; ... PENDING=1; LEASED=2; RUNNING=3; SUCCESS=4; FAILED=5; }
+enum JobItemStatus { JOB_ITEM_STATUS_UNSPECIFIED=0; ... PENDING=1; LEASED=2; RUNNING=3; SUCCESS=4; FAILED=5; }
 enum InvocationStatus { INVOCATION_STATUS_UNSPECIFIED=0; SUCCESS=1; PARTIAL_FAILED=2; FAILED=3; }
 enum ScfInvokeType { SCF_INVOKE_TYPE_UNSPECIFIED=0; REQUEST_RESPONSE=1; EVENT=2; }
 ```
@@ -159,10 +159,10 @@ message NodeCreateItem {
 }
 ```
 
-### CloudWorkItem / InvokeSync（含 InvocationStatus）
+### JobItem / InvokeSync（含 InvocationStatus）
 
 ```protobuf
-message CloudWorkItem {
+message JobItem {
   string space_id = 1;
   string owner_service = 2;
   string owner_ref = 3;
@@ -222,7 +222,7 @@ rpc CompletePackageUpload(CompletePackageUploadReq) returns (CompletePackageUplo
 | `t_cloud_nodes` | 新增 `c_package_id`、`c_package_version`；删 `c_pool_id` 及索引；`c_is_deleted` → INTEGER 0/1 |
 | `t_cloud_accounts` | `c_is_deleted` → INTEGER 0/1 |
 | `t_cloud_function_packages` | `c_is_deleted` → INTEGER 0/1；`c_status` 对齐 `PackageStatus` |
-| `t_cloud_work_items` | 新增 `c_lease_timeout_ms` |
+| `t_cloud_job_items` | 新增 `c_lease_timeout_ms` |
 
 ---
 
@@ -246,7 +246,7 @@ admin 网关为 **通配转发**（`/api/admin/{service}/{method}`），无 clou
 | `modules/cloudnode/config/trpc_go.yaml` | 注册 `spacectx` filter |
 | `modules/cloudnode/internal/rpc/proto_contract_test.go` | 新增契约测试 |
 | `modules/cloudnode/internal/repository/node_mapping_test.go` | 三分字段表驱动单测 |
-| `modules/cloudnode/internal/repository/work_item_test.go` | lease / 重试表驱动单测 |
+| `modules/cloudnode/internal/repository/job_item_test.go` | lease / 重试表驱动单测 |
 
 ---
 
@@ -272,7 +272,7 @@ Task 1 → 2 → 3 → 4 → 5 **严格串行**。
 
 - [x] 更新 `cloudnode.sql`（三分列、删 pool、lease_timeout_ms、is_deleted INTEGER）
 - [x] 更新 models（三分字段、`IsDeleted bool`、删 `PoolID`）
-- [x] `work_item.go`：lease 消费、固定 max_attempts=3、删 pool 过滤
+- [x] `job_item.go`：lease 消费、固定 max_attempts=3、删 pool 过滤
 - [x] `node.go`：space_id 过滤、`common.Page`、`UpdateNodeDeployment` 写 package_id+version
 - [x] `UpsertHeartbeat` 增加 space_id 参数
 - [x] 表驱动单测 + `go test ./internal/repository/...`
@@ -284,7 +284,7 @@ Task 1 → 2 → 3 → 4 → 5 **严格串行**。
 - [x] `spacecontext` + trpc filter
 - [x] 管理面 RPC 从 ctx 取 space_id
 - [x] `node.go` 三分映射 + `function_name`/`provider`/`supported_workloads`
-- [x] `workitem.go` Struct payload + WorkItemStatus
+- [x] `job_item.go` Struct params + JobItemStatus
 - [x] `invocation.go` ScfInvokeResult + InvocationStatus
 - [x] `account.go` Summary/Input/Secret
 - [x] `proto_contract_test.go`
@@ -301,7 +301,7 @@ Task 1 → 2 → 3 → 4 → 5 **严格串行**。
 
 ### Task 5：Collector + CloudRuntime
 
-- [x] `taskpublisher`：Struct payload，删 RetryPolicy；改走 `/api/service/cloudnode/SubmitWorkItems`（HMAC）
+- [x] `taskpublisher`：Struct params，删 RetryPolicy；改走 `/api/service/cloudnode/SubmitJobItems`（HMAC）
 - [x] `heartbeat`：space_id + supported_workloads
 - [x] `cloudruntime`：删 NodePoolID
 

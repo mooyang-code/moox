@@ -40,6 +40,7 @@ type TaskInstance struct {
 	ID              int        `gorm:"column:c_id;primaryKey;autoIncrement"`
 	SpaceID         string     `gorm:"column:c_space_id"`
 	TaskID          string     `gorm:"column:c_task_id"`
+	CloudJobItemID  string     `gorm:"column:c_cloud_job_item_id"`
 	RuleID          string     `gorm:"column:c_rule_id"`
 	Exchange        string     `gorm:"column:c_exchange"`
 	Market          string     `gorm:"column:c_market"`

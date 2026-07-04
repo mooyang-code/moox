@@ -1,4 +1,4 @@
-// Package taskrunner adapts CloudNode work items to collector workloads.
+// Package taskrunner adapts CloudNode JobItems to collector workloads.
 package taskrunner
 
 import (
@@ -7,39 +7,42 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/executor"
+	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// PollAndExecuteWorkItems leases CloudNode work items and executes them in the current runtime.
-func PollAndExecuteWorkItems(ctx context.Context) error {
+var registerHandlersOnce sync.Once
+
+// PollAndExecuteJobItems polls CloudNode JobItems and executes them in the current runtime.
+func PollAndExecuteJobItems(ctx context.Context) error {
 	serverIP, serverPort := runtimeapp.GetServerInfo()
 	nodeID, _ := runtimeapp.GetNodeInfo()
 	if serverIP == "" || serverPort <= 0 || nodeID == "" {
-		log.DebugContextf(ctx, "[CloudRuntime] skip poll work items server=%s:%d node_id=%s", serverIP, serverPort, nodeID)
+		log.DebugContextf(ctx, "[CloudRuntime] skip poll job items server=%s:%d node_id=%s", serverIP, serverPort, nodeID)
 		return nil
 	}
 	spaceID := runtimeSpaceID()
 	if spaceID == "" {
-		log.DebugContextf(ctx, "[CloudRuntime] skip poll work items: space_id is empty")
+		log.DebugContextf(ctx, "[CloudRuntime] skip poll job items: space_id is empty")
 		return nil
 	}
 	auth := runtimeapp.GetServiceAuthConfig()
-	return nodeRuntime.PollAndExecuteWorkItems(ctx, nodeRuntime.Config{
+	registerCollectorHandlers()
+	return nodeRuntime.Run(ctx, nodeRuntime.Config{
 		ServerIP:   serverIP,
 		ServerPort: serverPort,
 		SpaceID:    spaceID,
 		NodeID:     nodeID,
-		SupportedWorkloads: []string{
-			"collector.binance.spot.kline",
-			"collector.binance.swap.kline",
-			"collector.binance.spot.symbol",
-			"collector.binance.swap.symbol",
+		SupportedJobTypes: []string{
+			jobs.JobTypeCollectKline,
+			jobs.JobTypeCollectSymbol,
 		},
 		Limit: 8,
 		Auth: nodeRuntime.AuthConfig{
@@ -48,7 +51,14 @@ func PollAndExecuteWorkItems(ctx context.Context) error {
 			SecretKey: auth.SecretKey,
 			ExpireSec: auth.ExpireSec,
 		},
-	}, executeCollectorWorkItem)
+	})
+}
+
+func registerCollectorHandlers() {
+	registerHandlersOnce.Do(func() {
+		nodeRuntime.Register(jobs.JobTypeCollectKline, nodeRuntime.HandlerFunc(executeCollectorJobItem))
+		nodeRuntime.Register(jobs.JobTypeCollectSymbol, nodeRuntime.HandlerFunc(executeCollectorJobItem))
+	})
 }
 
 func runtimeSpaceID() string {
@@ -62,20 +72,25 @@ func runtimeSpaceID() string {
 	return strings.TrimSpace(binding.SpaceID)
 }
 
-func executeCollectorWorkItem(ctx context.Context, item nodeRuntime.WorkItemLease) (string, error) {
-	taskEvent, err := taskEventFromWorkItem(item)
+func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nodeRuntime.Result, error) {
+	taskEvent, err := taskEventFromJobItem(item)
 	if err != nil {
-		return "", err
+		return nodeRuntime.Result{}, nodeRuntime.Permanent(err, "INVALID_JOB_ITEM")
 	}
-	return executor.ExecuteTaskImmediately(ctx, taskEvent)
+	result, err := executor.ExecuteTaskImmediately(ctx, taskEvent)
+	summary := map[string]any{}
+	if strings.TrimSpace(result) != "" {
+		_ = json.Unmarshal([]byte(result), &summary)
+	}
+	if err != nil {
+		return nodeRuntime.Result{Summary: summary}, nodeRuntime.Retryable(err, "COLLECT_FAILED")
+	}
+	return nodeRuntime.Result{Summary: summary}, nil
 }
 
-func taskEventFromWorkItem(item nodeRuntime.WorkItemLease) (*model.TaskExecuteEvent, error) {
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(item.Payload), &payload); err != nil {
-		return nil, fmt.Errorf("parse work item payload: %w", err)
-	}
-	taskID := firstString(item.OwnerRef, stringValue(payload, "task_id"))
+func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, error) {
+	payload := item.Params
+	taskID := firstString(stringValue(payload, "task_id"), item.JobItemID)
 	dataType := strings.ToLower(firstString(stringValue(payload, "data_type"), "kline"))
 	market := strings.ToLower(firstString(stringValue(payload, "market"), "spot"))
 	symbol := stringValue(payload, "symbol")

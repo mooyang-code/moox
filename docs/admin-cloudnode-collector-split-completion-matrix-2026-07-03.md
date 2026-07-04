@@ -38,9 +38,9 @@
 | --- | --- | --- |
 | cloudnode 独立模块 | `modules/cloudnode` 拥有独立入口、配置、schema、service 和 repository。 | 源码证据充分 |
 | 云账户归 cloudnode | `modules/cloudnode/schema/cloudnode.sql` 拥有 `t_cloud_accounts`；admin secrets 不再作为 cloud account 存储。 | 源码证据充分 |
-| CloudNodeMgr 协议暴露面有归属 | `GetNodeList`、`UpdateNode`、批量节点变更、云账户、代码包、`SubmitWorkItems/PollWorkItems/ReportWorkItemStatus`、`InvokeSync` 均由独立 `modules/cloudnode` 实现；其中 `GetCOSAccountInfo` 被 CLI 腾讯云防火墙辅助命令使用，`InvokeSync` 是因子等业务复用云节点同步 fan-out/fan-in 的平台能力。 | 源码证据增强 |
-| 云执行队列命名收敛为 work_item | collect proto、cloudnode service/repository、`packages/cloudruntime`、collector 提交端和 schema 均从 `job/job_id` 收敛为 `work_item/work_item_id`；批量节点管理仍使用 `batch_change/batch_id`。 | 源码证据增强 |
-| 通用 SCF runtime 不归 cloudnode 私有 | `packages/cloudruntime` 承载跨业务复用的 CloudNode work_item runtime；collector 只依赖该根级 package 和 collect proto，不再直接 import `modules/cloudnode/...`。 | 源码证据充分 |
+| CloudNodeMgr 协议暴露面有归属 | `GetNodeList`、`UpdateNode`、批量节点变更、云账户、代码包、`SubmitJobItems/PollJobItems/ReportJobItemStatus`、`InvokeSync` 均由独立 `modules/cloudnode` 实现；其中 `GetCOSAccountInfo` 被 CLI 腾讯云防火墙辅助命令使用，`InvokeSync` 是因子等业务复用云节点同步 fan-out/fan-in 的平台能力。 | 源码证据增强 |
+| 云执行队列命名收敛为 JobItem | cloudnode service/repository、`packages/cloudruntime`、collector 提交端和 schema 均使用 `JobItem/job_item_id`；批量节点管理仍使用 `batch_change/batch_id`。 | 源码证据增强 |
+| 通用 SCF runtime 不归 cloudnode 私有 | `packages/cloudruntime` 承载跨业务复用的 CloudNode JobItem runtime；collector 只依赖该根级 package 和 collect proto，不再直接 import `modules/cloudnode/...`。 | 源码证据充分 |
 | 删除 cloudnode 私有 SCF runtime 空壳 | `modules/cloudnode/scf/runtime` 已是空目录，通用 runtime 归根级 `packages/cloudruntime`，旧空目录已删除。 | 源码证据增强 |
 | 共享包边界可检查 | `scripts/check-module-boundaries.sh` 禁止 `packages/*` 反向 import `modules/*`，防止共享 runtime 重新耦合业务模块。 | 脚本证据充分 |
 | 独立发布 | `scripts/deploy-moox.sh` 支持 `--no-cloudnode`，复制 `moox-cloudnode` 二进制和 cloudnode config，并生成 `start_cloudnode`；CloudNode schema 已内嵌，不再随部署包复制。 | 脚本证据增强 |
@@ -62,7 +62,7 @@
 | admin 默认服务部署记录可随删库重建 | `modules/admin/internal/service/sysdeploy.SeedDefaults` 在 Admin 启动创建 SysDeploy 服务时补齐缺失的默认 `t_service_deployments` 记录，不覆盖用户已修改记录。 | 源码证据增强 |
 | admin schema 注释与当前边界一致 | `modules/admin/schema/admin.sql` 顶部说明已从旧“认证系统”改为 “Admin 本地基础数据库”，避免误导为 auth-only 或旧单体 schema。 | 源码证据增强 |
 | schema 目录不混运行数据 seed | Admin 的 `service_deployments_seed.sql` 已删除；当前模块 schema SQL 未发现数据 `INSERT` seed，命中 `UPDATE` 均为 mtime 触发器或外键动作。 | 源码证据增强 |
-| cloudnode 表归 cloudnode | `modules/cloudnode/schema/cloudnode.sql` 拥有 `t_cloud_nodes`、`t_cloud_accounts`、`t_cloud_function_packages`、`t_cloud_work_items`、`t_cloud_work_item_attempts`、`t_cloud_invocations`、`t_cloud_invocation_results`。这些表均由 cloudnode repository/service 当前路径使用。 | 源码证据增强 |
+| cloudnode 表归 cloudnode | `modules/cloudnode/schema/cloudnode.sql` 拥有 `t_cloud_nodes`、`t_cloud_accounts`、`t_cloud_function_packages`、`t_cloud_job_items`、`t_cloud_job_item_attempts`、`t_cloud_invocations`、`t_cloud_invocation_results`。这些表均由 cloudnode repository/service 当前路径使用。 | 源码证据增强 |
 | collector 表归 collector | `modules/collector/schema/collector.sql` 是 collector 独立 schema，只保留表/索引/触发器，不再内置默认采集规则运行态 seed。 | 源码证据增强 |
 | 模块 schema 初始化不再由 bootstrap 注入任意 SQL | Admin、CloudNode、Collector 的数据库 Manager 均从各自模块 `schema` 包读取内嵌 SQL；bootstrap 只传数据库配置，不再传 `schemaSQL` 文本。 | 源码证据增强 |
 | 模块 override 不共用旧全局名 | Admin 使用 `MOOX_ADMIN_DB_PATH` / `MOOX_ADMIN_ENCRYPTION_KEY`，CloudNode 使用 `MOOX_CLOUDNODE_DB_PATH`，Collector 使用 `MOOX_COLLECTOR_DB_PATH`，Trade 使用 `MOOX_TRADE_DB_PATH` / `MOOX_TRADE_ENCRYPTION_KEY`；不再共用泛化 `DB_PATH` / `MOOX_ENCRYPTION_KEY` 表达模块数据库和敏感密钥路径。 | 源码证据增强 |
@@ -98,7 +98,7 @@
 仍需证明：
 
 - 实际执行一次删库重建。
-- 导入 examples seed 后，Storage metadata、collector rule、task instance、SCF work_item、K 线写入和 view 查询链路都可跑通。
+- 导入 examples seed 后，Storage metadata、collector rule、task instance、SCF JobItem、K 线写入和 view 查询链路都可跑通。
 
 ## 目标 5：删除无用死代码，尤其迁移、功能单测、一次性代码
 
@@ -114,15 +114,15 @@
 | 删除 collector 孤儿 logger 包 | `modules/collector/pkg/logger` 未被 collector 或其他模块 import，且仍带旧 `DATA-COLLECTOR` 运行前缀；该包已删除。 | 源码证据增强 |
 | 删除 collector 剩余公共 `pkg` 实现包 | `pkg/config`、`pkg/model`、`pkg/httpclient`、`pkg/storage` 均只被 collector 自身使用，已迁入 `internal/config`、`internal/model`、`internal/httpclient`、`internal/storageclient`。 | 源码证据增强 |
 | 删除 collector 旧空目录 | `modules/collector/internal/cloudruntime` 已无文件，实际能力已拆为根级 `packages/cloudruntime` 和 collector 内部 `cloudnodepoller`，空目录已删除。 | 源码证据增强 |
-| 删除云执行队列旧 job 语义 | CloudNode 异步执行 RPC 已改为 `SubmitWorkItems/PollWorkItems/ReportWorkItemStatus`，CloudNode 表改为 `t_cloud_work_items` / `t_cloud_work_item_attempts`，collector 任务实例字段改为 `cloud_work_item_id`。 | 源码证据增强 |
-| 任务实例可关联 CloudNode work_item | CollectMgr `TaskInstance` proto 新增 `cloud_work_item_id`，collector 转换层返回该字段，管理台任务实例列表和详情展示 WorkItem ID。 | 源码证据增强 |
+| 删除云执行队列旧语义 | CloudNode 异步执行 RPC 已改为 `SubmitJobItems/PollJobItems/ReportJobItemStatus`，CloudNode 表改为 `t_cloud_job_items` / `t_cloud_job_item_attempts`，collector 任务实例字段改为 `cloud_job_item_id`。 | 源码证据增强 |
+| 任务实例可关联 CloudNode JobItem | CollectMgr `TaskInstance` proto 新增 `cloud_job_item_id`，collector 转换层返回该字段，管理台任务实例列表和详情展示 JobItem ID。 | 源码证据增强 |
 | 删除 cloudnode 旧 SCF runtime 空目录 | `modules/cloudnode/scf/runtime` 不再承载任何代码，已删除；SCF 通用 runtime 在 `packages/cloudruntime`，collector 业务入口在 `modules/collector/internal/scf`。 | 源码证据增强 |
 | 清理 CLI 旧 collector/admin 专名 | CLI 控制面 client helper 已从 `newCollectorAdminClient` 改为 `newControlClient`，避免腾讯云运维和 cloudnode 后台调用继续挂在 collector/admin 专名上。 | 源码证据增强 |
-| CloudNodeMgr 未发现可直接删除的无主 RPC | `UpdateNode` 有前端 API 入口，`GetCOSAccountInfo` 被 CLI 运维命令使用，`InvokeSync` 是已确认的平台同步调用能力；`SubmitWorkItems/PollWorkItems/ReportWorkItemStatus` 是 SCF runtime 活跃链路。 | 源码证据增强 |
+| CloudNodeMgr 未发现可直接删除的无主 RPC | `UpdateNode` 有前端 API 入口，`GetCOSAccountInfo` 被 CLI 运维命令使用，`InvokeSync` 是已确认的平台同步调用能力；`SubmitJobItems/PollJobItems/ReportJobItemStatus` 是 SCF runtime 活跃链路。 | 源码证据增强 |
 | 清理旧项目运行标识 | collector active 默认运行标识、CLI 默认函数包名、日志 component、HTTP User-Agent 和数据源 app_id 已从旧 collector 运行标识改为 `moox-collector`。 | 源码证据增强 |
-| 清理旧本地任务缓存语义 | SCF keepalive 后的执行入口已命名为 `pollWorkItemsAfterHeartbeat`，日志明确为 CloudNode `work_item` 拉取/执行；调试文档不再引用旧 collector local task cache。 | 源码证据增强 |
+| 清理旧本地任务缓存语义 | SCF keepalive 后的执行入口已命名为 `pollJobItemsAfterHeartbeat`，日志明确为 CloudNode JobItem 拉取/执行；调试文档不再引用旧 collector local task cache。 | 源码证据增强 |
 | 清理调试/旧配置提示 | admin 登录链路不再打印明文密码或完整用户对象；`gateway.yaml` 不再提示旧 `JWT_SECRET` 环境变量。 | 源码证据增强 |
-| 保留仍活跃链路 | SCF keepalive 的 `ProcessProbe -> ReportHeartbeat -> PollWorkItems` 仍是运行态链路，不应删除。 | 保留有依据 |
+| 保留仍活跃链路 | SCF keepalive 的 `ProcessProbe -> ReportHeartbeat -> PollJobItems` 仍是运行态链路，不应删除。 | 保留有依据 |
 
 仍需证明：
 
@@ -146,4 +146,13 @@
 scripts/deploy-moox.sh --target localhost --dir /tmp/moox-e2e --reset-data
 ```
 
-然后按 `examples/e2e/README.md` 导入 metadata seed，创建云账户/云节点/采集规则，生成 task instances，并验证 SCF work_item 写入 storage 与 view 查询。
+然后按 `examples/e2e/README.md` 导入 metadata seed，创建云账户/云节点/采集规则，生成 task instances，并验证 SCF JobItem 写入 storage 与 view 查询。
+
+## 2026-07-04 continuation: active proto and cleanup
+
+- Confirmed active RPC protocol ownership is per independent service: `modules/cloudnode/proto/cloudnodegen` and `modules/collector/proto/collectorgen`.
+- Removed the stale aggregate `modules/collect` protocol module; current CloudNode and Collector binaries do not import it.
+- Collector task instances now persist and expose `cloud_job_item_id`, populated from CloudNode `SubmitJobItems` acknowledgements.
+- CloudNode schema now relies on the embedded final schema only; one-off additive SQLite migration code was removed.
+- Removed CloudNode/Collector unit and functional test files per the current cleanup policy.
+- Admin runtime configuration remains on `data/admin.db`; CloudNode and Collector state are owned by their independent module databases.

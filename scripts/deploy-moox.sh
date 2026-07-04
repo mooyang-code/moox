@@ -614,10 +614,11 @@ prepare_stage() {
   rm -rf "${STAGE_DIR}"
   mkdir -p \
     "${STAGE_DIR}/bin" \
-    "${STAGE_DIR}/admin/config" \
-    "${STAGE_DIR}/cloudnode/config" \
-    "${STAGE_DIR}/collector/config" \
-    "${STAGE_DIR}/examples" \
+	    "${STAGE_DIR}/admin/config" \
+	    "${STAGE_DIR}/cloudnode/config" \
+	    "${STAGE_DIR}/collector/config" \
+	    "${STAGE_DIR}/collector/configs" \
+	    "${STAGE_DIR}/examples" \
     "${STAGE_DIR}/data" \
     "${STAGE_DIR}/logs" \
     "${STAGE_DIR}/run"
@@ -643,9 +644,10 @@ prepare_stage() {
   if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/cloudnode/config/." "${STAGE_DIR}/cloudnode/config/"
   fi
-  if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
-    cp -R "${ROOT}/modules/collector/config/." "${STAGE_DIR}/collector/config/"
-  fi
+	  if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
+	    cp -R "${ROOT}/modules/collector/config/." "${STAGE_DIR}/collector/config/"
+	    cp -R "${ROOT}/modules/collector/configs/." "${STAGE_DIR}/collector/configs/"
+	  fi
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/storage/config/." "${STAGE_DIR}/storage/config/"
     cp "${ROOT}/modules/storage/schema/metadata.sql" "${STAGE_DIR}/storage/schema/metadata.sql"

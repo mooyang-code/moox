@@ -11,7 +11,7 @@ Date: 2026-07-03
 - 契约"谁实现谁拥有"：`collector` 自持 `CollectMgr` 契约，`cloudnode` 自持 `CloudNodeMgr` 契约，公共类型下沉为独立最小包。
 - 全仓重复的公共 proto 结构统一收敛到 `packages/commonpb`，避免 admin/trade/collector/cloudnode/storage 各自维护 `AuthInfo/RetInfo/Page/PageResult/ErrorCode`。
 - 删除 `modules/collect`。
-- 顺带清理运行时坏味道：cloudnode god-service 拆分、collector 采集器抽象收敛、目录合并与规范命名。通用 CloudNode SCF work_item runtime 继续使用 `packages/cloudruntime` 命名。
+- 顺带清理运行时坏味道：cloudnode god-service 拆分、collector 采集器抽象收敛、目录合并与规范命名。通用 CloudNode SCF JobItem runtime 继续使用 `packages/cloudruntime` 命名。
 
 ## 2. 目标依赖架构
 
@@ -23,7 +23,7 @@ flowchart TD
   storagepb["modules/storage/proto/gen\n(Access/Metadata ClientProxy)"]
   collector["collector 实现"]
   cloudnode["cloudnode 实现"]
-  cloudrt["packages/cloudruntime\n通用 CloudNode SCF work_item 循环"]
+  cloudrt["packages/cloudruntime\n通用 CloudNode SCF JobItem 循环"]
 
   collectorpb --> common
   cloudnodepb --> common
@@ -58,7 +58,7 @@ proto 文件名去 `_service` 后缀；公共文件仍为 `moox_common.proto`。
 | `collector/`（Collector 接口 + registry + binance 实现） | `sources/` | 改名；执行层，统一 `Collect`，单一 registry 按 exchange+market+data_type 路由 |
 | `exchange/`（交易所 HTTP SDK） | `sources/binance/client/` + `sources/exchangetypes/` | 移入 sources；按交易所聚合（方案2） |
 | `adapters/`（按交易所 BuildTaskSpecs） | 删除，逻辑上移 `planner/` | 任务展开改为按 data_type（交易所无关） |
-| `cloudnodepoller/` | `taskrunner/` | 改名（去 cloudnode 语义；运行时拉取并执行 work_item） |
+| `cloudnodepoller/` | `taskrunner/` | 改名（去 cloudnode 语义；运行时拉取并执行 JobItem） |
 | `cloudnodeclient/` | `taskpublisher/` | 改名；派发任务到 cloudnode，import `cloudnodepb` |
 | `scf/` | `serverless/` | 改名（Serverless 入口 handler） |
 | `heartbeat/` | 并入 `reporter/` | 运行时回调合并（上报心跳 + 上报任务状态） |
@@ -87,7 +87,7 @@ modules/collector/internal/
   taskpublisher/ 派发任务到 cloudnode（import cloudnodepb）
   serverless/    云函数入口 handler
   executor/      执行采集任务
-  taskrunner/    拉取并执行 work_item（依赖 cloudruntime + cloudnodepb 契约）
+  taskrunner/    拉取并执行 JobItem（依赖 cloudruntime + cloudnodepb 契约）
   sources/       执行层：统一 Collect
     interface.go registry.go exchangetypes/
     binance/ { client/(client.go spot.go swap.go types.go)  symbol.go kline.go api_config.go storage_config.go }
@@ -102,17 +102,17 @@ modules/collector/internal/
 |----|----|------|
 | `service/cloudnode/service.go`（1189 行） | `rpc/` | 扁平化 + 改名 + 按能力拆分 |
 | — | `rpc/register.go server.go convert.go` | trpc 入口装配 + 通用依赖 + 转换 |
-| — | `rpc/node.go account.go package.go workitem.go invocation.go` | 按能力拆分 handler |
+| — | `rpc/node.go account.go package.go job_item.go invocation.go` | 按能力拆分 handler |
 | `repository/catalog.go`（大杂烩） | `repository/models.go node.go account.go package.go invocation.go` | 拆分，去 catalog 统称，去 _repo 后缀 |
-| `repository/work_item_repo.go` | `repository/work_item.go` | 去 _repo 后缀，改 import cloudnodepb |
+| `repository/job_item_repo.go` | `repository/job_item.go` | 去 _repo 后缀，改 import cloudnodepb |
 | `providers/tencent-scf/` `bootstrap/` `config/` `storage/` | 保留 | 单进程，无需 app/{control,runtime} 拆分 |
 
 cloudnode/internal 目标布局：
 
 ```text
 modules/cloudnode/internal/
-  rpc/           CloudNodeMgr trpc 入口：register.go server.go convert.go node.go account.go package.go workitem.go invocation.go
-  repository/    models.go node.go account.go package.go invocation.go work_item.go
+  rpc/           CloudNodeMgr trpc 入口：register.go server.go convert.go node.go account.go package.go job_item.go invocation.go
+  repository/    models.go node.go account.go package.go invocation.go job_item.go
   providers/tencent-scf/   bootstrap/   config/   storage/
 ```
 
@@ -125,7 +125,7 @@ modules/cloudnode/internal/
   - `modules/admin/proto/*.proto`、`modules/trade/proto/*.proto`、`modules/storage/proto/*.proto`、`modules/collector/proto/*.proto`、`modules/cloudnode/proto/*.proto` 均 import commonpb 的 `moox_common.proto`，不再生成本地重复 common 类型。
 - 为避免 protobuf descriptor 重复注册，`packages/commonpb` 落地后必须同一阶段移除 admin/trade/collect/storage 生成包中的重复 common 生成物；不能让两个不同 Go 包同时注册 `trpc.moox.common.*`。
 - `modules/collector/proto/collector.proto`（`trpc.moox.collector`）：`CollectMgr` service + 采集 message（TaskRule / TaskInstance / DataTypeConfig 系列）；生成 `collectorgen`（go 包 `collectorpb`，require commonpb）。
-- `modules/cloudnode/proto/cloudnode.proto`（`trpc.moox.cloudnode`）：`CloudNodeMgr` service + 节点/账户/代码包/CloudWorkItem/Submit·Poll·ReportWorkItem/InvokeSync/心跳 message；生成 `cloudnodegen`（go 包 `cloudnodepb`，require commonpb）。
+- `modules/cloudnode/proto/cloudnode.proto`（`trpc.moox.cloudnode`）：`CloudNodeMgr` service + 节点/账户/代码包/JobItem/Submit·Poll·ReportJobItem/InvokeSync/心跳 message；生成 `cloudnodegen`（go 包 `cloudnodepb`，require commonpb）。
 - 引用切换：collector `rpc` import `collectorpb`；collector `taskpublisher` import `cloudnodepb`；cloudnode 全量 import `cloudnodepb`；admin/trade/storage/collector/cloudnode 的公共类型 import `commonpb`。
 - proto Makefile 需要新增 commonpb import path。生成顺序为：`packages/commonpb` -> `modules/storage/proto` -> `modules/admin/proto` -> `modules/trade/proto` -> `modules/collector/proto` -> `modules/cloudnode/proto`。
 
@@ -166,7 +166,7 @@ modules/cloudnode/internal/
   - `trpc.moox.collect.CollectMgr` → `trpc.moox.collector.CollectMgr`
   - `trpc.moox.collect.CloudNodeMgr` → `trpc.moox.cloudnode.CloudNodeMgr`
 - admin 网关 resolver（`collectmgr`/`cloudnode` service-id → 新全名）。
-- `taskpublisher` 提交路径（原 `/trpc.moox.collect.CloudNodeMgr/SubmitWorkItems` → 新全名）。
+- `taskpublisher` 提交路径（原 `/trpc.moox.collect.CloudNodeMgr/SubmitJobItems` → 新全名）。
 - `cloudruntime` 的 `/api/service/cloudnode/*` HTTP 路由段**保持不变**（后台服务路由，不是 trpc 全名）。
 - `go.work`：
   - 移除 `./modules/collect/proto/collectgen`
@@ -193,7 +193,7 @@ modules/cloudnode/internal/
 8. 删除 `modules/collect`。
 
 ### 阶段 B：cloudnode 运行时清理
-9. `service/cloudnode/service.go` → `rpc/`（register/server/convert + node/account/package/workitem/invocation）。
+9. `service/cloudnode/service.go` → `rpc/`（register/server/convert + node/account/package/job_item/invocation）。
 10. `repository/catalog.go` → models.go + 按域拆分（去 _repo 后缀）。
 
 ### 阶段 C：cloudruntime 与 storage tRPC 访问

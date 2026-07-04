@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencent-scf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -80,6 +81,9 @@ func (s *Service) BatchCreateNodes(ctx context.Context, req *pb.BatchCreateNodes
 		if node.Region == "" {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes.region is required")}, nil
 		}
+		if err := s.ensureSCFFunction(ctx, &node, item); err != nil {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
 		if err := s.catalog.UpsertNode(ctx, node); err != nil {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
@@ -128,11 +132,24 @@ func (s *Service) BatchDeployNodes(ctx context.Context, req *pb.BatchDeployNodes
 		if item.GetNodeId() == "" || item.GetPackageId() == "" {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "deployments.node_id and package_id are required")}, nil
 		}
-		pkgVersion := ""
-		if pkg, err := s.catalog.GetPackage(ctx, spaceID, item.GetPackageId()); err == nil && pkg != nil {
-			pkgVersion = pkg.Version
+		node, err := s.catalog.GetNode(ctx, spaceID, item.GetNodeId())
+		if err != nil {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
-		if err := s.catalog.UpdateNodeDeployment(ctx, spaceID, item.GetNodeId(), item.GetPackageId(), pkgVersion); err != nil {
+		if node == nil {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node not found")}, nil
+		}
+		pkg, err := s.catalog.GetPackage(ctx, spaceID, item.GetPackageId())
+		if err != nil {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
+		if pkg == nil {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "package not found")}, nil
+		}
+		if err := s.updateSCFFunctionCode(ctx, *node, *pkg); err != nil {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
+		if err := s.catalog.UpdateNodeDeployment(ctx, spaceID, item.GetNodeId(), item.GetPackageId(), pkg.Version); err != nil {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
 		updated++
@@ -162,6 +179,159 @@ func (s *Service) ReportHeartbeat(ctx context.Context, req *pb.ReportHeartbeatRe
 		}
 	}
 	return &pb.ReportHeartbeatRsp{RetInfo: retOK()}, nil
+}
+
+func (s *Service) ensureSCFFunction(ctx context.Context, node *repository.CloudNode, item *pb.NodeCreateItem) error {
+	pkg, account, err := s.packageAndAccount(ctx, node.SpaceID, node.PackageID, node.CloudAccountID)
+	if err != nil {
+		return err
+	}
+	if pkg.Status != "available" {
+		return fmt.Errorf("package %s is not available", pkg.PackageID)
+	}
+	node.PackageVersion = pkg.Version
+	metadata := parseJSONMap(node.Metadata)
+	config := item.GetConfig()
+	if clsTopicID := strings.TrimSpace(config["cls_topic_id"]); clsTopicID != "" {
+		metadata["cls_topic_id"] = clsTopicID
+	}
+	if clsLogsetID := strings.TrimSpace(config["cls_logset_id"]); clsLogsetID != "" {
+		metadata["cls_logset_id"] = clsLogsetID
+	}
+	metadata["runtime"] = firstString(item.GetRuntime(), pkg.Runtime, metadataString(metadata, "runtime"))
+	metadata["handler"] = firstString(item.GetHandler(), metadataString(metadata, "handler"), "main")
+	node.Metadata = jsonString(metadata)
+
+	client := s.scfClient(*account)
+	ref := tencentscf.FunctionRef{
+		Region:       node.Region,
+		FunctionName: firstString(node.FunctionName, node.NodeID),
+		Namespace:    firstString(node.Namespace, "default"),
+	}
+	_, err = client.GetFunction(ctx, ref)
+	if err == nil {
+		return s.updateSCFFunctionCode(ctx, *node, *pkg)
+	}
+	if !isSCFNotFound(err) {
+		return fmt.Errorf("get scf function %s: %w", ref.FunctionName, err)
+	}
+	_, err = client.CreateFunction(ctx, tencentscf.CreateFunctionRequest{
+		FunctionRef: ref,
+		Runtime:     firstString(item.GetRuntime(), pkg.Runtime, "CustomRuntime"),
+		Handler:     firstString(item.GetHandler(), "main"),
+		Description: fmt.Sprintf("MooX cloud function node %s", node.NodeID),
+		MemorySize:  configInt64(config, "memory_size", 256),
+		Timeout:     configInt64(config, "timeout", 60),
+		Environment: copyStringMap(item.GetEnvironment()),
+		COSBucket:   pkg.COSBucket,
+		COSRegion:   firstString(pkg.COSRegion, account.COSRegion),
+		COSObject:   strings.TrimPrefix(pkg.COSPath, "/"),
+		ClsLogsetID: strings.TrimSpace(config["cls_logset_id"]),
+		ClsTopicID:  strings.TrimSpace(config["cls_topic_id"]),
+		Type:        firstString(config["function_type"], "Event"),
+	})
+	if err != nil {
+		return fmt.Errorf("create scf function %s: %w", ref.FunctionName, err)
+	}
+	return nil
+}
+
+func (s *Service) updateSCFFunctionCode(ctx context.Context, node repository.CloudNode, pkg repository.FunctionPackage) error {
+	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
+	if err != nil {
+		return err
+	}
+	if account == nil {
+		return fmt.Errorf("cloud account not found: %s", node.CloudAccountID)
+	}
+	if !isTencentProvider(account.Provider) {
+		return fmt.Errorf("unsupported cloud provider: %s", account.Provider)
+	}
+	metadata := parseJSONMap(node.Metadata)
+	_, err = s.scfClient(*account).UpdateFunctionCode(ctx, tencentscf.UpdateFunctionCodeRequest{
+		FunctionRef: tencentscf.FunctionRef{
+			Region:       node.Region,
+			FunctionName: firstString(node.FunctionName, node.NodeID),
+			Namespace:    firstString(node.Namespace, "default"),
+		},
+		Handler:   firstString(metadataString(metadata, "handler"), "main"),
+		COSBucket: pkg.COSBucket,
+		COSRegion: firstString(pkg.COSRegion, account.COSRegion),
+		COSObject: strings.TrimPrefix(pkg.COSPath, "/"),
+	})
+	if err != nil {
+		return fmt.Errorf("update scf function %s: %w", firstString(node.FunctionName, node.NodeID), err)
+	}
+	return nil
+}
+
+func (s *Service) packageAndAccount(ctx context.Context, spaceID string, packageID string, accountID string) (*repository.FunctionPackage, *repository.CloudAccount, error) {
+	pkg, err := s.catalog.GetPackage(ctx, spaceID, packageID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if pkg == nil {
+		return nil, nil, fmt.Errorf("package not found: %s", packageID)
+	}
+	account, err := s.catalog.GetAccount(ctx, accountID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if account == nil {
+		return nil, nil, fmt.Errorf("cloud account not found: %s", accountID)
+	}
+	if !isTencentProvider(account.Provider) {
+		return nil, nil, fmt.Errorf("unsupported cloud provider: %s", account.Provider)
+	}
+	return pkg, account, nil
+}
+
+func (s *Service) scfClient(account repository.CloudAccount) scfProvisioner {
+	factory := s.scfClientFactory
+	if factory == nil {
+		factory = defaultSCFClientFactory
+	}
+	return factory(account)
+}
+
+func isTencentProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "tencent", "tencent-scf":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSCFNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "resourcenotfound") || strings.Contains(msg, "not found")
+}
+
+func configInt64(values map[string]string, key string, fallback int64) int64 {
+	raw := strings.TrimSpace(values[key])
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
+}
+
+func copyStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int) repository.CloudNode {
@@ -264,34 +434,34 @@ func toPBNode(node repository.CloudNode) *pb.CloudNode {
 		st = &structpb.Struct{}
 	}
 	return &pb.CloudNode{
-		Id:                  int32(node.ID),
-		SpaceId:             node.SpaceID,
-		NodeId:              node.NodeID,
-		CloudAccountId:      node.CloudAccountID,
-		PackageId:           node.PackageID,
-		PackageVersion:      node.PackageVersion,
-		DeploymentId:        node.DeploymentID,
-		RunningVersion:      node.RunningVersion,
-		Namespace:           node.Namespace,
-		NodeType:            node.NodeType,
-		Provider:            node.Provider,
-		FunctionName:        node.FunctionName,
-		BizType:             metadataString(metadata, "biz_type"),
-		Region:              node.Region,
-		Tag:                 metadataString(metadata, "tag"),
-		IpAddress:           metadataString(metadata, "ip_address"),
-		SupportedWorkloads:  parseStringSliceJSON(node.SupportedWorkloads),
-		Metadata:            st,
-		TimeoutThreshold:    metadataInt32(metadata, "timeout_threshold"),
-		HeartbeatInterval:   metadataInt32(metadata, "heartbeat_interval"),
-		ProbeEnabled:        metadataBool(metadata, "probe_enabled"),
-		ProbeUrl:            metadataString(metadata, "probe_url"),
-		Status:              nodeStatusToPB(node.Status),
-		LastHeartbeat:       lastHeartbeat,
-		IsDeleted:           node.IsDeleted,
-		CreateTime:          formatTime(node.CreateTime),
-		ModifyTime:          formatTime(node.ModifyTime),
-		ClsTopicId:          metadataString(metadata, "cls_topic_id"),
+		Id:                 int32(node.ID),
+		SpaceId:            node.SpaceID,
+		NodeId:             node.NodeID,
+		CloudAccountId:     node.CloudAccountID,
+		PackageId:          node.PackageID,
+		PackageVersion:     node.PackageVersion,
+		DeploymentId:       node.DeploymentID,
+		RunningVersion:     node.RunningVersion,
+		Namespace:          node.Namespace,
+		NodeType:           node.NodeType,
+		Provider:           node.Provider,
+		FunctionName:       node.FunctionName,
+		BizType:            metadataString(metadata, "biz_type"),
+		Region:             node.Region,
+		Tag:                metadataString(metadata, "tag"),
+		IpAddress:          metadataString(metadata, "ip_address"),
+		SupportedWorkloads: parseStringSliceJSON(node.SupportedWorkloads),
+		Metadata:           st,
+		TimeoutThreshold:   metadataInt32(metadata, "timeout_threshold"),
+		HeartbeatInterval:  metadataInt32(metadata, "heartbeat_interval"),
+		ProbeEnabled:       metadataBool(metadata, "probe_enabled"),
+		ProbeUrl:           metadataString(metadata, "probe_url"),
+		Status:             nodeStatusToPB(node.Status),
+		LastHeartbeat:      lastHeartbeat,
+		IsDeleted:          node.IsDeleted,
+		CreateTime:         formatTime(node.CreateTime),
+		ModifyTime:         formatTime(node.ModifyTime),
+		ClsTopicId:         metadataString(metadata, "cls_topic_id"),
 	}
 }
 

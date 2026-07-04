@@ -1,12 +1,12 @@
 # moox-cloudnode
 
-独立云节点服务：云账户、云函数代码包、异步 work_item 队列与 SCF 同步/异步调用。协议为 `trpc.moox.cloudnode.CloudNodeMgr`（定义在 `modules/cloudnode/proto`）。
+独立云节点服务：云账户、云函数代码包、异步 JobItem 队列与 SCF 同步/异步调用。协议为 `trpc.moox.cloudnode.CloudNodeMgr`（定义在 `modules/cloudnode/proto`）。
 
 ## 职责
 
 - 云账户与节点 catalog 管理
 - 函数代码包上传（COS）与版本管理
-- 异步 work_item 创建、轮询、状态更新
+- 异步 JobItem 创建、轮询、状态更新
 - 向腾讯云 SCF 下发 invocation
 - 供 `moox-collector` planner 与 `moox-cli collector function` 调用
 
@@ -22,12 +22,12 @@ config/
   trpc_go.yaml            CloudNodeMgr :11401
 internal/
   bootstrap/              启动与 TRPC 注册
-  rpc/                    CloudNodeMgr RPC 实现，按 node/account/package/workitem/invocation 拆分
-  repository/             异步 work_item、节点、账户、代码包和 invocation 持久化
+  rpc/                    CloudNodeMgr RPC 实现，按 node/account/package/job_item/invocation 拆分
+  repository/             异步 JobItem、节点、账户、代码包和 invocation 持久化
   providers/tencent-scf/  腾讯云 SCF 客户端
   storage/                SQLite 连接
 schema/                   cloudnode.sql
-../../packages/cloudruntime/ 通用 SCF work_item runtime 共享逻辑
+../../packages/cloudruntime/ 通用 SCF JobItem runtime 共享逻辑
 ```
 
 ## 构建与运行
@@ -52,11 +52,11 @@ mkdir -p data log
 
 ```text
 moox-collector（CollectMgr）
-  → 创建/查询 work_item、上传包元数据
+  → 创建/查询 JobItem、上传包元数据
 moox-cloudnode（CloudNodeMgr）
   → COS + SCF API
 moox-collector-scf
-  → 执行 work_item，ReportHeartbeat → /api/service/cloudnode/*
+  → 执行 JobItem，ReportHeartbeat → /api/service/cloudnode/*
 ```
 
 本地直接运行时数据文件默认：`./data/moox_cloudnode.db`（以 `config/app.yaml` 为准）。

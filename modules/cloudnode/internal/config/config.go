@@ -12,6 +12,7 @@ import (
 // Config is the root moox-cloudnode configuration.
 type Config struct {
 	Database   DatabaseConfig   `yaml:"database"`
+	JobItem    JobItemConfig    `yaml:"job_item"`
 	TencentSCF TencentSCFConfig `yaml:"tencent_scf"`
 }
 
@@ -23,6 +24,14 @@ type DatabaseConfig struct {
 	MaxOpenConns    int           `yaml:"max_open_conns"`
 	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"`
 	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
+}
+
+// JobItemConfig controls the async JobItem queue.
+type JobItemConfig struct {
+	DefaultLimit       int   `yaml:"default_limit"`
+	MaxLimit           int   `yaml:"max_limit"`
+	RecoverAfterMillis int64 `yaml:"recover_after_millis"`
+	DefaultMaxAttempts int   `yaml:"default_max_attempts"`
 }
 
 // TencentSCFConfig stores defaults for the Tencent SCF provider.
@@ -64,6 +73,12 @@ func Default() *Config {
 			MaxOpenConns:    50,
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
+		},
+		JobItem: JobItemConfig{
+			DefaultLimit:       10,
+			MaxLimit:           100,
+			RecoverAfterMillis: int64(10 * time.Minute / time.Millisecond),
+			DefaultMaxAttempts: 3,
 		},
 		TencentSCF: TencentSCFConfig{
 			DefaultRegion:    "ap-guangzhou",

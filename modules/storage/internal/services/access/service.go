@@ -188,6 +188,13 @@ func (s *Service) MetadataReader() metadata.Reader {
 	return s.metadataReader
 }
 
+func (s *Service) refreshMetadataCache(ctx context.Context) error {
+	if s == nil || s.metadataCache == nil {
+		return nil
+	}
+	return s.metadataCache.Refresh(ctx)
+}
+
 func (s *Service) SearchService() *search.Service {
 	if s == nil {
 		return nil

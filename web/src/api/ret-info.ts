@@ -1,7 +1,7 @@
-export type RetInfoCode = number | null | undefined;
+export type RetInfoCode = number | string | null | undefined;
 
-const successCodes = new Set<RetInfoCode>([0]);
-const authExpiredCodes = new Set<RetInfoCode>([2]);
+const successCodes = new Set<RetInfoCode>([0, '0', 'SUCCESS']);
+const authExpiredCodes = new Set<RetInfoCode>([2, '2', 'NO_AUTH']);
 
 export function isRetInfoSuccess(code: RetInfoCode): boolean {
   return successCodes.has(code);

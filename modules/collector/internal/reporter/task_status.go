@@ -167,8 +167,7 @@ func sendRequest(ctx context.Context, url string, data []byte, httpClient *http.
 
 	var serverResp TaskStatusServerResponse
 	if err := json.Unmarshal(respData, &serverResp); err != nil {
-		log.WarnContextf(ctx, "解析服务端响应失败: %v", err)
-		return nil // 不影响上报结果
+		return fmt.Errorf("解析服务端响应失败: %w", err)
 	}
 
 	if serverResp.RetInfo != nil {

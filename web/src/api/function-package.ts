@@ -1,5 +1,4 @@
 import { callControl } from '@/api/admin/http';
-import { gatewayURL } from '@/api/gateway';
 import forge from 'node-forge';
 export { withOptionalSpace } from '@/api/space-context';
 
@@ -28,6 +27,7 @@ export interface FunctionPackage {
   upload_progress?: number;
   error_message?: string;
   last_deploy_time?: string;
+  created_by?: string;
   is_deleted?: boolean;
   created_time?: string;
   updated_time?: string;
@@ -50,7 +50,8 @@ export interface PackageListRequest {
   package_type?: PackageType | number;
   biz_type?: string;
   status?: PackageStatus | number;
-  page?: { page?: number; size?: number };
+  page?: number | { page?: number; size?: number };
+  page_size?: number;
 }
 
 export interface InitPackageUploadResponse {
@@ -146,13 +147,14 @@ export const uploadFunctionPackage = async (data: UploadPackageRequest, file: Fi
   return { package_id: initRsp.package_id, detail };
 };
 
-export const getFunctionPackageList = async (params: PackageListRequest & { page?: number | { page?: number; size?: number }; page_size?: number } = {}): Promise<{ total: number; items: FunctionPackage[] }> => {
-  const raw = params as PackageListRequest & { page?: number; page_size?: number };
+export const getFunctionPackageList = async (params: PackageListRequest = {}): Promise<{ total: number; items: FunctionPackage[] }> => {
+  const raw = params;
   const normalized: PackageListRequest = { ...raw };
-  if (!normalized.page && (raw.page !== undefined || raw.page_size !== undefined)) {
+  if (typeof raw.page === 'number' || raw.page_size !== undefined) {
     const pageNum = typeof raw.page === 'number' ? raw.page : 1;
     normalized.page = { page: pageNum, size: raw.page_size ?? 10 };
   }
+  delete normalized.page_size;
   const rsp = await callControl<PackageListRequest, { items?: FunctionPackage[]; page?: { total?: number } }>('cloudnode', 'GetPackageList', normalized);
   return { total: rsp.page?.total ?? 0, items: rsp.items ?? [] };
 };
@@ -171,4 +173,21 @@ export const getPackageDownloadURL = async (packageId: string) => {
   return rsp.url;
 };
 
-export const getPackageDownloadLink = (packageId: string) => gatewayURL('cloudnode', 'GetPackageDownloadURL');
+export const getPackageDownloadLink = async (packageId: string) => {
+  const url = await getPackageDownloadURL(packageId);
+  return url?.download_url || '';
+};
+
+export const downloadPackageByURL = async (packageId: string): Promise<void> => {
+  const downloadURL = await getPackageDownloadLink(packageId);
+  if (!downloadURL) {
+    throw new Error('下载地址为空');
+  }
+  const link = document.createElement('a');
+  link.href = downloadURL;
+  link.download = '';
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};

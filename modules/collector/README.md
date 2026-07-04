@@ -7,8 +7,8 @@
 | 组件 | 职责 |
 |------|------|
 | `moox-collector` | 采集规则、任务实例、任务规划、状态上报（CollectMgr RPC） |
-| `moox-collector-scf` | 腾讯云 SCF 入口，执行 CloudNode 下发的采集 work_item |
-| `modules/cloudnode` | 云账户、代码包、异步 work_item、同步 invocation |
+| `moox-collector-scf` | 腾讯云 SCF 入口，执行 CloudNode 下发的采集 JobItem |
+| `modules/cloudnode` | 云账户、代码包、异步 JobItem、同步 invocation |
 | `modules/admin` | 网关转发 `/api/admin/collectmgr/*`，不承载采集业务表 |
 
 ## 目录结构
@@ -26,11 +26,11 @@ internal/
   app/runtimeboot/        SCF runtime 启动装配与定时器注册
   rpc/                    CollectMgr RPC 实现
   planner/                规则 + dataset subjects → 任务实例
-  taskrunner/             CloudNode work_item 到采集任务的 poll/execute 适配
+  taskrunner/             CloudNode JobItem 到采集任务的 poll/execute 适配
   serverless/             SCF runtime 事件入口
   sources/                采集器注册、交易所客户端与执行
   planner/storagesource/  从 moox-storage metadata tRPC 加载规划输入
-  taskpublisher/          调用 moox-cloudnode 提交 work_item
+  taskpublisher/          调用 moox-cloudnode 提交 JobItem
   reporter/               任务状态与心跳上报
   model/                  SCF 运行时事件、心跳和采集结果模型
   httpclient/             Collector 内部 HTTP 客户端与 DNS 优选
@@ -54,8 +54,8 @@ make package-scf        # 打包 SCF 部署 zip
 
 - CollectMgr HTTP：`:11402`（`config/trpc_go.yaml`）
 - 管理台路径：`/api/admin/collectmgr/{Method}`（admin 网关 JWT）
-- CloudNode work_item 提交：`/api/service/cloudnode/SubmitWorkItems`（Collector 控制面，经 admin 网关 HMAC 鉴权）
-- CloudNode work_item 运行时：`/api/service/cloudnode/PollWorkItems`、`/api/service/cloudnode/ReportWorkItemStatus`
+- CloudNode JobItem 提交：`/api/service/cloudnode/SubmitJobItems`（Collector 控制面，经 admin 网关 HMAC 鉴权）
+- CloudNode JobItem 运行时：`/api/service/cloudnode/PollJobItems`、`/api/service/cloudnode/ReportJobItemStatus`
 - 采集任务实例状态：`/api/service/collectmgr/ReportTaskStatus`（HMAC，经网关）
 
 ## 部署关系
@@ -65,11 +65,11 @@ make package-scf        # 打包 SCF 部署 zip
 ```text
 admin 网关
   → moox-collector（规划任务）
-  → moox-admin `/api/service/cloudnode/SubmitWorkItems`（HMAC 鉴权）
-  → moox-cloudnode（提交 work_item / 调用 SCF）
+  → moox-admin `/api/service/cloudnode/SubmitJobItems`（HMAC 鉴权）
+  → moox-cloudnode（提交 JobItem / 调用 SCF）
   → moox-collector-scf（执行采集）
   → moox-storage Access（写入 K 线等）
-  → 回报 cloudnode ReportWorkItemStatus + collectmgr ReportTaskStatus
+  → 回报 cloudnode ReportJobItemStatus + collectmgr ReportTaskStatus
 ```
 
 `moox-collector` 通常与 `moox-cloudnode` 同机或同发布包部署。协议定义见 `modules/collector/proto/`。

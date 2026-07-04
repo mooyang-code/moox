@@ -37,7 +37,7 @@ const router = createRouter({
  * 全局routeTree不能持久化缓存
  * 页面刷新会导致addRoute动态添加的路由失效，需要重新初始化路由
  */
-router.beforeEach(async (to: any, from: any, next: any) => {
+router.beforeEach(async (to: any, _from: any, next: any) => {
   NProgress.start(); // 开启进度条
   const store = useUserInfoStore(pinia);
   const loadingStore = useLoadingStore(pinia);

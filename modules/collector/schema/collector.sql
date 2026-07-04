@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
     c_task_id TEXT NOT NULL,
+    c_cloud_job_item_id TEXT NOT NULL DEFAULT '',
     c_rule_id TEXT NOT NULL,
     c_exchange TEXT NOT NULL DEFAULT '',
     c_market TEXT NOT NULL DEFAULT '',
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_instances_space_task ON t_collector_task_instances(c_space_id, c_task_id);
+CREATE INDEX IF NOT EXISTS idx_collector_instances_job_item ON t_collector_task_instances(c_space_id, c_cloud_job_item_id);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_rule ON t_collector_task_instances(c_space_id, c_rule_id);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_subject ON t_collector_task_instances(c_space_id, c_dataset_id, c_subject_id);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_exec ON t_collector_task_instances(c_planned_exec_node, c_last_exec_status);

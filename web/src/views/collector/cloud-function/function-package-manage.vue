@@ -1,10 +1,8 @@
 <template>
-  <a-modal
-    v-model:visible="visible"
-    title="代码包版本管理"
-    :width="1200"
-    :mask-closable="false"
-    :footer="false"
+  <component
+    :is="packageManageContainer"
+    v-bind="packageManageContainerProps"
+    @update:visible="handlePackageManageVisibleChange"
     @cancel="handleCancel"
   >
     <div class="function-package-manage">
@@ -366,13 +364,13 @@
         <div style="margin-top: 16px;">加载中...</div>
       </div>
     </a-modal>
-  </a-modal>
+  </component>
 </template>
 
 <script setup lang="ts">
 import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
-import { ref, watch, reactive, computed } from 'vue';
-import { Message } from '@arco-design/web-vue';
+import { ref, watch, reactive, computed, onMounted } from 'vue';
+import { Message, Modal } from '@arco-design/web-vue';
 import { 
   getFunctionPackageList, 
   getFunctionPackageDetail,
@@ -392,8 +390,9 @@ import { getCloudAccountList, type CloudAccount } from '@/api/cloud-account';
 
 // Props
 const props = defineProps<{
-  modelValue: boolean;
-  packageType?: string; // 用于过滤代码包类型
+  modelValue?: boolean;
+  mode?: 'page' | 'modal';
+  packageType?: string | number; // 用于过滤代码包类型
   bizType?: string; // 用于过滤业务类型
 }>();
 
@@ -405,7 +404,25 @@ const emit = defineEmits<{
 
 
 // 响应式数据
-const visible = ref(props.modelValue);
+const packageManageMode = computed(() => props.mode || 'page');
+const standalone = computed(() => packageManageMode.value === 'page');
+const visible = ref(standalone.value ? true : props.modelValue);
+const packageManageContainer = computed(() => standalone.value ? 'div' : Modal);
+const packageManageContainerProps = computed(() => {
+  if (standalone.value) {
+    return {
+      class: 'function-package-page'
+    };
+  }
+
+  return {
+    visible: visible.value,
+    title: '代码包版本管理',
+    width: 1200,
+    maskClosable: false,
+    footer: false
+  };
+});
 const loading = ref(false);
 const packageList = ref<FunctionPackage[]>([]);
 const cloudAccountOptions = ref<CloudAccount[]>([]);
@@ -446,8 +463,8 @@ const total = ref(0);
 
 // 上传表单数据
 const defaultUploadForm = {
-  package_name: 'data_collector', // 根据默认包类型设置
-  version: '',
+  package_name: 'moox-collector',
+  version: 'dev',
   description: '',
   runtime: 'Python3.9',
   package_type: 1,
@@ -459,21 +476,35 @@ const uploadForm = reactive({ ...defaultUploadForm });
 
 // 监听属性变化
 watch(() => props.modelValue, async (newVal) => {
+  if (standalone.value) return;
   visible.value = newVal;
   if (newVal) {
-    // 根据传入的 bizType 设置搜索条件
-    if (props.bizType) {
-      searchForm.biz_type = props.bizType;
-    }
-    loadPackageList();
-    loadCloudAccounts();
-
+    await initializePackageManage();
   }
 });
 
 watch(visible, (newVal) => {
-  emit('update:modelValue', newVal);
+  if (!standalone.value) {
+    emit('update:modelValue', newVal);
+  }
 });
+
+const handlePackageManageVisibleChange = (newVal: boolean) => {
+  visible.value = newVal;
+};
+
+onMounted(async () => {
+  if (standalone.value) {
+    await initializePackageManage();
+  }
+});
+
+const initializePackageManage = async () => {
+  if (props.bizType) {
+    searchForm.biz_type = props.bizType;
+  }
+  await Promise.all([loadPackageList(), loadCloudAccounts()]);
+};
 
 // 加载代码包列表
 const loadPackageList = async () => {
@@ -559,11 +590,11 @@ const onAdd = () => {
 // 包类型变化处理
 const packageNameForType = (packageType: number) => {
   const map: Record<number, string> = {
-    1: 'data_collector',
+    1: 'moox-collector',
     2: 'factor_calculator',
     3: 'custom_package'
   };
-  return map[packageType] || 'data_collector';
+  return map[packageType] || 'moox-collector';
 };
 
 const onPackageTypeChange = (value: number) => {
@@ -946,12 +977,19 @@ const getProviderName = (provider: string) => {
   return providerMap[provider] || provider;
 };
 
-const getPackageTypeColor = (packageType: string) => {
+const getPackageTypeColor = (packageType: number | string) => {
+  const normalized = String(packageType);
   const colorMap: Record<string, string> = {
+    '1': 'blue',
+    '2': 'green',
+    '3': 'gray',
+    'PACKAGE_TYPE_COLLECTOR': 'blue',
+    'PACKAGE_TYPE_FACTOR': 'green',
+    'PACKAGE_TYPE_CUSTOM': 'gray',
     'data_collector': 'blue',
     'factor_calculator': 'green'
   };
-  return colorMap[packageType] || 'gray';
+  return colorMap[normalized] || 'gray';
 };
 
 const getStatusColor = (status: number | string) => {
@@ -1013,6 +1051,12 @@ const formatTime = (time: string | undefined) => {
 </script>
 
 <style scoped>
+.function-package-page {
+  padding: 16px;
+  min-height: 100%;
+  background: #fff;
+}
+
 .function-package-manage {
   min-height: 600px;
 }

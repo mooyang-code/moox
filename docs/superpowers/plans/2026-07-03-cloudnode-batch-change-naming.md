@@ -4,7 +4,7 @@
 
 **Goal:** Rename CloudNode batch management result semantics from generic `job` / `operation` / `submission` wording to `batch_change`, while keeping method names `BatchCreateNodes`, `BatchDeleteNodes`, and `BatchDeployNodes`.
 
-**Architecture:** CloudNode control-plane batch management is distinct from collector `task_instance` and SCF async `work_item` execution. The RPC method names stay action-oriented and short; the result entity becomes `BatchChangeResult` with `batch_id` and `processed_count`. Frontend and CLI should expose `batch_change` wording to users and keep `job` reserved for real async execution work.
+**Architecture:** CloudNode control-plane batch management is distinct from collector `task_instance` and SCF async `JobItem` execution. The RPC method names stay action-oriented and short; the result entity becomes `BatchChangeResult` with `batch_id` and `processed_count`. Frontend and CLI should expose `batch_change` wording to users and keep `job` reserved for real async execution work.
 
 **Tech Stack:** Protocol Buffers under `modules/collect/proto`, Go services in `modules/cloudnode` and `modules/cli`, Vue/TypeScript admin UI under `web/src`, docs under `docs`.
 
@@ -19,8 +19,8 @@ Use these terms consistently:
 | `task_rule` | Collector rule that describes what data should be collected | `modules/collector` |
 | `task_instance` | Concrete collector business task generated from a rule and dataset subject | `modules/collector` |
 | `batch_change` | CloudNode control-plane batch management change, such as create/delete/deploy nodes | `modules/cloudnode` |
-| `work_item` | Async execution item leased by SCF runtime | `packages/cloudruntime` |
-| `execution` | One runtime attempt/result for a `work_item` | `modules/cloudnode` |
+| `job_item` | Async execution item leased by SCF runtime | `packages/cloudruntime` |
+| `execution` | One runtime attempt/result for a `job_item` | `modules/cloudnode` |
 | `invocation` | Synchronous cloud function call | `modules/cloudnode` |
 
 Do not use `job`, `task`, `operation`, or `submission` for CloudNode node-management batch create/delete/deploy results.
@@ -141,7 +141,7 @@ Expected after implementation:
 
 ```text
 No management batch create/delete/deploy code path should expose job_id, total_task_cnt, operation_id, or submission_id.
-Real CloudNode async execution code may still use job/work-item terminology until the separate work_item rename is planned.
+Real CloudNode async execution code should use JobItem terminology after the async execution rename is complete.
 ```
 
 ---
@@ -193,7 +193,7 @@ func newDirectBatchID(action string) string {
 }
 ```
 
-Do not rename real async CloudNode job queue types in this task. The `work_item` rename is separate.
+Do not rename real async CloudNode JobItem queue types in this task. The async execution rename is separate.
 
 - [x] **Step 4: Format changed Go files**
 
@@ -373,8 +373,8 @@ Add or update a glossary with this content:
 task_rule      = 采集规则
 task_instance  = 采集任务实例
 batch_change   = 云节点批量管理变更
-work_item      = SCF 异步执行待处理工作项
-execution      = work_item 的一次执行记录
+job_item       = SCF 异步执行待处理项
+execution      = job_item 的一次执行记录
 invocation     = 同步云函数调用
 ```
 
@@ -388,7 +388,7 @@ BatchDeleteNodes -> batch_id
 BatchDeployNodes -> batch_id
 ```
 
-Also document that these are not collector task instances and not SCF work items.
+Also document that these are not collector task instances and not SCF JobItems.
 
 - [x] **Step 3: Append audit record**
 
@@ -414,7 +414,7 @@ batch_id
 processed_count
 ```
 
-Reserved `task_instance` for collector business tasks and `work_item` for SCF async execution items.
+Reserved `task_instance` for collector business tasks and `job_item` for SCF async execution items.
 ```
 
 ---
@@ -437,7 +437,7 @@ Expected:
 
 ```text
 No hits for CloudNode node-management batch create/delete/deploy UI, CLI, or API paths.
-Hits are acceptable only for real CloudNode async execution queue records until the separate work_item rename is implemented.
+Hits are acceptable only for real CloudNode async execution queue records until the separate JobItem rename is implemented.
 ```
 
 - [ ] **Step 2: Run targeted builds only when user authorizes validation**

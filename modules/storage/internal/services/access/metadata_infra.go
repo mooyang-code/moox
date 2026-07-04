@@ -27,12 +27,18 @@ func (s *Service) CreatePrimaryStoreNode(ctx context.Context, req *pb.CreatePrim
 	if err != nil {
 		return &pb.CreatePrimaryStoreNodeRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.CreatePrimaryStoreNodeRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
 	return &pb.CreatePrimaryStoreNodeRsp{RetInfo: response.Success("success"), Node: created}, nil
 }
 
 func (s *Service) UpdatePrimaryStoreNode(ctx context.Context, req *pb.UpdatePrimaryStoreNodeReq) (*pb.UpdatePrimaryStoreNodeRsp, error) {
 	updated, err := s.metadata.UpsertPrimaryStoreNode(ctx, req.GetNode())
 	if err != nil {
+		return &pb.UpdatePrimaryStoreNodeRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpdatePrimaryStoreNodeRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdatePrimaryStoreNodeRsp{RetInfo: response.Success("success"), Node: updated}, nil
@@ -69,12 +75,18 @@ func (s *Service) CreateDevice(ctx context.Context, req *pb.CreateDeviceReq) (*p
 	if err != nil {
 		return &pb.CreateDeviceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.CreateDeviceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
 	return &pb.CreateDeviceRsp{RetInfo: response.Success("success"), Device: created}, nil
 }
 
 func (s *Service) UpdateDevice(ctx context.Context, req *pb.UpdateDeviceReq) (*pb.UpdateDeviceRsp, error) {
 	updated, err := s.metadata.UpsertDevice(ctx, req.GetDevice())
 	if err != nil {
+		return &pb.UpdateDeviceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpdateDeviceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateDeviceRsp{RetInfo: response.Success("success"), Device: updated}, nil
@@ -108,12 +120,18 @@ func (s *Service) CreatePrimaryStoreRoute(ctx context.Context, req *pb.CreatePri
 	if err != nil {
 		return &pb.CreatePrimaryStoreRouteRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.CreatePrimaryStoreRouteRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
 	return &pb.CreatePrimaryStoreRouteRsp{RetInfo: response.Success("success"), PrimaryStoreRoute: created}, nil
 }
 
 func (s *Service) UpdatePrimaryStoreRoute(ctx context.Context, req *pb.UpdatePrimaryStoreRouteReq) (*pb.UpdatePrimaryStoreRouteRsp, error) {
 	updated, err := s.metadata.UpsertPrimaryStoreRoute(ctx, req.GetPrimaryStoreRoute())
 	if err != nil {
+		return &pb.UpdatePrimaryStoreRouteRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpdatePrimaryStoreRouteRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdatePrimaryStoreRouteRsp{RetInfo: response.Success("success"), PrimaryStoreRoute: updated}, nil
@@ -145,6 +163,9 @@ func (s *Service) RegisterArchiveFile(ctx context.Context, req *pb.RegisterArchi
 	}
 	created, err := s.metadata.RegisterArchiveFile(ctx, item)
 	if err != nil {
+		return &pb.RegisterArchiveFileRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.RegisterArchiveFileRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.RegisterArchiveFileRsp{RetInfo: response.Success("success"), ArchiveFile: created}, nil

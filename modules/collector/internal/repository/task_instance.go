@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -108,6 +109,32 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 			"c_mtime",
 		}),
 	}).Create(&instances).Error
+}
+
+// UpdateCloudJobItemIDs stores CloudNode JobItem IDs returned by SubmitJobItems.
+func (r *TaskInstanceRepository) UpdateCloudJobItemIDs(ctx context.Context, spaceID string, idsByTaskID map[string]string) error {
+	if len(idsByTaskID) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for taskID, jobItemID := range idsByTaskID {
+			taskID = strings.TrimSpace(taskID)
+			jobItemID = strings.TrimSpace(jobItemID)
+			if taskID == "" || jobItemID == "" {
+				continue
+			}
+			if err := tx.Model(&domain.TaskInstance{}).
+				Where("c_space_id = ? AND c_task_id = ?", spaceID, taskID).
+				Updates(map[string]any{
+					"c_cloud_job_item_id": jobItemID,
+					"c_mtime":             now,
+				}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // UpdateStatus updates a task instance by Collector task id.

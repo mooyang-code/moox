@@ -9,7 +9,7 @@ MooX 后端 Go 模块目录，由仓库根目录 `go.work` 统一管理。各模
 | [admin](./admin/) | `moox-admin` | 统一 HTTP 网关 + 认证、Space、运维等本地基础服务 |
 | [storage](./storage/) | `moox-storage` | 统一数据存储引擎（元数据 + 事实主存 + 派生视图） |
 | [collector](./collector/) | `moox-collector`、`moox-collector-scf` | 采集控制面与 SCF 运行时 |
-| [cloudnode](./cloudnode/) | `moox-cloudnode` | 云账户、代码包、异步 work_item、SCF 下发 |
+| [cloudnode](./cloudnode/) | `moox-cloudnode` | 云账户、代码包、异步 JobItem、SCF 下发 |
 | [trade](./trade/) | `moox-trade` | 账户、订单、成交、持仓与交易所适配 |
 | [cli](./cli/) | `moox-cli` | 命令行工具（元数据导入、数据导入、运维辅助） |
 | [factor](./factor/) | `moox-factor` | 因子计算（占位，待扩展） |

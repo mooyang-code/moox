@@ -541,6 +541,7 @@
     <!-- 代码包版本管理弹窗 -->
     <FunctionPackageManage
       v-model="functionPackageManageVisible"
+      mode="modal"
       :package-type="currentPackageType"
       :biz-type="currentBizType"
       @refresh="loadData"
@@ -768,10 +769,12 @@
 <script setup lang="ts">
 import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from 'vue';
+import { storeToRefs } from 'pinia';
 import { Message, Modal } from '@arco-design/web-vue';
 import { getFunctionPackageList, getFunctionPackageDetail, downloadPackageByURL, PACKAGE_STATUS_LABEL, PACKAGE_TYPE_LABEL, type FunctionPackage } from '@/api/function-package';
 import { getCloudAccountList, type CloudAccount } from '@/api/cloud-account';
 import { batchCreateNodes, batchDeleteNodes, batchDeployNodes, getNodeList, listCloudRegions, updateNode, NODE_STATUS_LABEL } from '@/api/cloud-node';
+import { useSpaceStore } from '@/store/modules/space';
 import { BatchChangeStatus } from '@/utils/cloud-node-batch-change';
 import type { BatchChangeStatusResponse, BatchChangeDetailItem } from '@/utils/cloud-node-batch-change';
 import CloudAccountManage from '../cloud-account/cloud-account-manage.vue';
@@ -795,8 +798,8 @@ interface CloudFunction {
   supported_workloads: string[] | string;
   capacity: string;
   current_load: string;
-  metadata: string;
-  status: string;
+  metadata: string | Record<string, unknown>;
+  status: string | number;
   enabled: number;
   // 新增心跳配置字段
   timeout_threshold: number;    // 超时阈值（秒），0表示使用全局默认值
@@ -846,6 +849,8 @@ const normalizeCloudFunctions = (items: Array<Partial<CloudFunction> & Record<st
 
 
 // 状态管理
+const spaceStore = useSpaceStore();
+const { selectedSpaceId } = storeToRefs(spaceStore);
 const loading = ref(false);
 const batchChangeProcessing = ref(false);
 const currentBatchChangeStatus = ref<BatchChangeStatusResponse | null>(null);
@@ -1002,9 +1007,26 @@ onMounted(async () => {
   // 根据路由设置默认的节点类型筛选条件
   form.nodeType = defaultNodeType.value;
 
-  await loadData();
+  await spaceStore.loadSpaces();
+  if (selectedSpaceId.value) {
+    await loadData();
+  } else {
+    Message.warning('请先选择空间');
+  }
   await loadCloudAccounts();
   await loadRegions(); // 加载地区列表
+});
+
+watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
+  if (spaceId === oldSpaceId) return;
+  pagination.value.current = 1;
+  selectedKeys.value = [];
+  if (!spaceId) {
+    functionList.value = [];
+    pagination.value.total = 0;
+    return;
+  }
+  await loadData();
 });
 
 onBeforeUnmount(() => {
@@ -1553,6 +1575,11 @@ const executeBatchDelete = async () => {
 
 // 加载数据（使用后端分页）
 const loadData = async (showEmptyTip = false) => {
+  if (!selectedSpaceId.value) {
+    functionList.value = [];
+    pagination.value.total = 0;
+    return;
+  }
   loading.value = true;
   try {
     const response = await getNodeList({
@@ -1900,12 +1927,19 @@ const getCollectorColor = (collector: string) => {
   return colorMap[collector] || 'gray';
 };
 
-const getPackageTypeColor = (packageType: string) => {
+const getPackageTypeColor = (packageType: number | string) => {
+  const normalized = String(packageType);
   const colorMap: Record<string, string> = {
+    '1': 'blue',
+    '2': 'green',
+    '3': 'gray',
+    'PACKAGE_TYPE_COLLECTOR': 'blue',
+    'PACKAGE_TYPE_FACTOR': 'green',
+    'PACKAGE_TYPE_CUSTOM': 'gray',
     'data_collector': 'blue',
     'factor_calculator': 'green'
   };
-  return colorMap[packageType] || 'gray';
+  return colorMap[normalized] || 'gray';
 };
 
 const getPackageStatusColor = (status: number | string) => {
@@ -1980,8 +2014,11 @@ const formatDateTime = (dateTime: string | undefined) => {
   }
 };
 
-const formatMetadata = (metadata: string) => {
+const formatMetadata = (metadata: string | Record<string, unknown>) => {
   if (!metadata) return '-';
+  if (typeof metadata === 'object') {
+    return JSON.stringify(metadata, null, 2);
+  }
   try {
     const parsed = JSON.parse(metadata);
     return JSON.stringify(parsed, null, 2);
@@ -2333,11 +2370,11 @@ const handleEditNodeOk = async () => {
       timeout_threshold: editNodeForm.timeoutThreshold,
       heartbeat_interval: editNodeForm.heartbeatInterval,
       probe_enabled: editNodeForm.probeEnabled,
-      metadata: JSON.stringify({
+      metadata: {
         timeout_threshold: editNodeForm.timeoutThreshold,
         heartbeat_interval: editNodeForm.heartbeatInterval,
         probe_enabled: editNodeForm.probeEnabled
-      })
+      }
     });
 
     Message.success('节点配置更新成功');

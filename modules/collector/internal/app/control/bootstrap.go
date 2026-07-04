@@ -4,6 +4,7 @@ package control
 import (
 	"context"
 
+	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
@@ -32,14 +33,28 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.WarnContextf(ctx, "[Collector] resolve dependencies from sysdeploy failed, use local defaults: %v", err)
 	}
 
-	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), collectsvc.New(dbm.DB(), collectsvc.Dependencies{
+	svc := collectsvc.New(dbm.DB(), collectsvc.Dependencies{
 		AdminGatewayURL:       deps.AdminGatewayURL,
 		ServiceAuth:           taskpublisherAuth(deps.ServiceAuth),
 		StorageMetadataTarget: deps.StorageMetadataTarget,
-	}))
+		StorageAccessTarget:   deps.StorageAccessTarget,
+	})
+	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
+	collectsvc.SetDefaultService(svc)
+	registerCollectorSchedule(s)
 
 	log.InfoContextf(ctx, "moox-collector 初始化完成")
 	return s, nil
+}
+
+func registerCollectorSchedule(s *server.Server) {
+	timer.RegisterScheduler("collectorSchedule", &timer.DefaultScheduler{})
+	service := s.Service("trpc.moox.collector.schedule.timer")
+	if service == nil {
+		log.Warn("collector schedule timer service is not configured, skip register")
+		return
+	}
+	timer.RegisterHandlerService(service, collectsvc.HandleSchedule)
 }
 
 func taskpublisherAuth(cfg ServiceAuthConfig) taskpublisher.AuthConfig {

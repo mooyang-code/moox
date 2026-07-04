@@ -185,7 +185,7 @@ func relativeConfigCandidates(candidate string) []string {
 	}
 	var out []string
 	for dir := cwd; ; dir = filepath.Dir(dir) {
-		for _, prefix := range []string{"", "modules/collector", "modules/collector/configs"} {
+		for _, prefix := range []string{"", "collector", "collector/configs", "modules/collector", "modules/collector/configs"} {
 			out = append(out, filepath.Clean(filepath.Join(dir, prefix, candidate)))
 		}
 		parent := filepath.Dir(dir)

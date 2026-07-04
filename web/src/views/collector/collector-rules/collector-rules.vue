@@ -532,11 +532,24 @@ const inferCollectMarket = (instTypeValue: any) => {
   return 'spot';
 };
 
+const instTypeFromMarket = (marketValue: any) => {
+  const market = String(marketValue || '').trim().toLowerCase();
+  if (market === 'swap' || market === 'futures') {
+    return 'SWAP';
+  }
+  return 'SPOT';
+};
+
 const inferCollectDatasetId = (exchange: string, market: string, dataType: string) => {
   return `${exchange || 'binance'}_${market || 'spot'}_${dataType || 'kline'}`;
 };
 
 const buildStandardCollectParams = () => {
+  const existingParams = normalizeObject(addForm.value.collect_params);
+  const existingSource = normalizeObject(existingParams.source);
+  const existingCollector = normalizeObject(existingParams.collector);
+  const existingTarget = normalizeObject(existingParams.target);
+  const existingSchedule = normalizeObject(existingParams.schedule);
   const dataType = normalizeCollectToken(addForm.value.data_type, 'kline');
   const exchange = normalizeCollectToken(addForm.value.data_source, 'binance');
   const instTypesValue = getDynamicFieldValue('inst_types');
@@ -547,12 +560,30 @@ const buildStandardCollectParams = () => {
     .map((item) => String(item || '').trim())
     .filter(Boolean);
   const normalizedIntervals = dataType === 'symbol' ? [] : (intervals.length > 0 ? intervals : ['1m']);
-  const datasetId = inferCollectDatasetId(exchange, market, dataType);
-  const workloadType = `collector.${exchange}.${market}.${dataType}`;
+  const defaultDatasetId = inferCollectDatasetId(exchange, market, dataType);
+  const defaultJobType = `collect.${dataType}`;
+  const defaultCodePackageId = 'moox-collector_dev';
+  const sameCollectShape = (
+    normalizeCollectToken(existingCollector.exchange, exchange) === exchange &&
+    normalizeCollectToken(existingCollector.market, market) === market &&
+    normalizeCollectToken(existingCollector.data_type, dataType) === dataType
+  );
+  const datasetId = sameCollectShape
+    ? String(existingSource.dataset_id || existingTarget.dataset_id || defaultDatasetId)
+    : defaultDatasetId;
+  const sourceKind = dataType === 'symbol'
+    ? 'none'
+    : (sameCollectShape ? normalizeCollectToken(existingSource.kind, 'dataset_subjects') : 'dataset_subjects');
+  const jobType = sameCollectShape
+    ? String(existingTarget.job_type || defaultJobType)
+    : defaultJobType;
+  const codePackageId = sameCollectShape
+    ? String(existingTarget.code_package_id || defaultCodePackageId)
+    : defaultCodePackageId;
 
   return {
     source: {
-      kind: dataType === 'symbol' ? 'none' : 'dataset_subjects',
+      kind: sourceKind,
       dataset_id: datasetId
     },
     collector: {
@@ -563,12 +594,12 @@ const buildStandardCollectParams = () => {
     },
     target: {
       dataset_id: datasetId,
-      workload_type: workloadType,
-      deployment_id: `collector-${exchange}-${dataType}-v1`
+      job_type: jobType,
+      code_package_id: codePackageId
     },
     schedule: {
-      interval: '30m',
-      timezone: 'Asia/Shanghai',
+      interval: sameCollectShape ? String(existingSchedule.interval || '30m') : '30m',
+      timezone: sameCollectShape ? String(existingSchedule.timezone || 'Asia/Shanghai') : 'Asia/Shanghai',
       intervals: normalizedIntervals
     }
   };
@@ -888,10 +919,14 @@ const getFieldConfigs = async (dataType: string) => {
 // 初始化动态表单数据（使用独立的 ref 变量）
 const initializeDynamicFormData = (existingParams?: { [key: string]: any }) => {
   objectsSelectAll.value = false;
+  const collectorParams = normalizeObject(existingParams?.collector);
+  const scheduleParams = normalizeObject(existingParams?.schedule);
+  const instType = existingParams?.inst_type ?? instTypeFromMarket(collectorParams.market);
+  const intervalParams = existingParams?.intervals ?? collectorParams.intervals ?? scheduleParams.intervals;
 
   // 解析并设置 inst_type（产品类型）
-  if (existingParams?.inst_type !== undefined) {
-    instTypeValue.value = existingParams.inst_type || 'SPOT';
+  if (instType !== undefined) {
+    instTypeValue.value = instType || 'SPOT';
   } else {
     instTypeValue.value = 'SPOT';
   }
@@ -900,6 +935,8 @@ const initializeDynamicFormData = (existingParams?: { [key: string]: any }) => {
   if (existingParams?.inst_types !== undefined) {
     const instTypesVal = existingParams.inst_types;
     instTypesValue.value = Array.isArray(instTypesVal) ? instTypesVal : (instTypesVal ? [instTypesVal] : ['SPOT']);
+  } else if (collectorParams.market !== undefined) {
+    instTypesValue.value = [instTypeFromMarket(collectorParams.market)];
   } else {
     instTypesValue.value = ['SPOT'];
   }
@@ -917,8 +954,8 @@ const initializeDynamicFormData = (existingParams?: { [key: string]: any }) => {
   }
 
   // 解析并设置 intervals
-  if (existingParams?.intervals !== undefined) {
-    const intVal = existingParams.intervals;
+  if (intervalParams !== undefined) {
+    const intVal = intervalParams;
     intervalsValue.value = Array.isArray(intVal) ? intVal : (intVal ? [intVal] : []);
   } else {
     intervalsValue.value = [];

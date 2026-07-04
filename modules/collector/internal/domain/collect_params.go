@@ -15,6 +15,8 @@ type CollectParams struct {
 	Schedule  CollectSchedule `json:"schedule"`
 }
 
+const DefaultCollectorCodePackageID = "moox-collector_dev"
+
 // CollectSource describes where target objects come from.
 type CollectSource struct {
 	Kind      string `json:"kind"`
@@ -31,9 +33,9 @@ type CollectorSpec struct {
 
 // CollectTarget describes where collected rows should be written.
 type CollectTarget struct {
-	DatasetID    string `json:"dataset_id"`
-	WorkloadType string `json:"workload_type"`
-	DeploymentID string `json:"deployment_id"`
+	DatasetID     string `json:"dataset_id"`
+	JobType       string `json:"job_type"`
+	CodePackageID string `json:"code_package_id"`
 }
 
 // CollectSchedule describes task frequency dimensions.
@@ -95,8 +97,11 @@ func (p *CollectParams) Normalize(fallbackExchange string, fallbackDataType stri
 	if p.Target.DatasetID == "" {
 		p.Target.DatasetID = p.Source.DatasetID
 	}
-	if p.Target.WorkloadType == "" {
-		p.Target.WorkloadType = "collector." + p.Collector.Exchange + "." + p.Collector.Market + "." + p.Collector.DataType
+	if p.Target.JobType == "" {
+		p.Target.JobType = "collect." + p.Collector.DataType
+	}
+	if p.Target.CodePackageID == "" {
+		p.Target.CodePackageID = DefaultCollectorCodePackageID
 	}
 	if p.Schedule.Interval == "" {
 		p.Schedule.Interval = "30m"

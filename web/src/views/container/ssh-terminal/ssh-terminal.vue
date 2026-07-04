@@ -141,7 +141,6 @@ import {
   getSSHHostDetail,
   getOnlineSessions,
   type SSHHost,
-  type SessionInfo,
 } from '@/api/modules/ssh';
 import SshFileManager from '@/views/container/ssh-file-manager/ssh-file-manager.vue';
 

@@ -3,6 +3,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,6 +25,7 @@ type Dependencies struct {
 	AdminGatewayURL       string
 	ServiceAuth           taskpublisher.AuthConfig
 	StorageMetadataTarget string
+	StorageAccessTarget   string
 }
 
 // Service implements the independent CollectMgr RPC service.
@@ -44,8 +46,10 @@ func New(db *gorm.DB, deps Dependencies) *Service {
 		builder:      planner.NewTaskBuilder(),
 		datasetSrc:   storagesource.NewDatasetSource(deps.StorageMetadataTarget),
 		cloudJobs: taskpublisher.New(taskpublisher.Config{
-			GatewayURL: deps.AdminGatewayURL,
-			Auth:       deps.ServiceAuth,
+			GatewayURL:            deps.AdminGatewayURL,
+			StorageMetadataTarget: deps.StorageMetadataTarget,
+			StorageAccessTarget:   deps.StorageAccessTarget,
+			Auth:                  deps.ServiceAuth,
 		}),
 	}
 }
@@ -318,10 +322,51 @@ func (s *Service) recalculateRule(ctx context.Context, rule *domain.TaskRule) (i
 	if err := s.instanceRepo.UpsertMany(ctx, instances); err != nil {
 		return 0, fmt.Errorf("upsert instances for rule %s: %w", rule.RuleID, err)
 	}
-	if err := s.cloudJobs.SubmitCollectorWorkItems(ctx, instances); err != nil {
-		return 0, fmt.Errorf("submit cloud work items for rule %s: %w", rule.RuleID, err)
+	jobItemIDs, err := s.cloudJobs.SubmitCollectorJobItems(ctx, instances)
+	if err != nil {
+		return 0, fmt.Errorf("submit cloud job items for rule %s: %w", rule.RuleID, err)
+	}
+	if err := s.instanceRepo.UpdateCloudJobItemIDs(ctx, rule.SpaceID, jobItemIDs); err != nil {
+		return 0, fmt.Errorf("record cloud job items for rule %s: %w", rule.RuleID, err)
+	}
+	if len(jobItemIDs) > 0 {
+		woken, err := s.cloudJobs.WakeCollectorNodes(ctx, taskpublisher.WakeOptions{
+			SpaceID:  rule.SpaceID,
+			JobTypes: jobTypesFromInstances(instances),
+		})
+		if err != nil {
+			log.WarnContextf(ctx, "[Collector] wake collector nodes failed rule_id=%s: %v", rule.RuleID, err)
+		} else if woken == 0 {
+			log.WarnContextf(ctx, "[Collector] no collector nodes woken rule_id=%s", rule.RuleID)
+		} else {
+			log.InfoContextf(ctx, "[Collector] woken collector nodes rule_id=%s count=%d", rule.RuleID, woken)
+		}
 	}
 	return len(instances), nil
+}
+
+func jobTypesFromInstances(instances []domain.TaskInstance) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(instances))
+	for _, instance := range instances {
+		payload := map[string]any{}
+		_ = json.Unmarshal([]byte(instance.TaskParams), &payload)
+		jobType, _ := payload["job_type"].(string)
+		jobType = strings.TrimSpace(jobType)
+		if jobType == "" {
+			dataType, _ := payload["data_type"].(string)
+			jobType = "collect." + strings.TrimSpace(dataType)
+		}
+		if jobType == "collect." || jobType == "" {
+			continue
+		}
+		if _, ok := seen[jobType]; ok {
+			continue
+		}
+		seen[jobType] = struct{}{}
+		out = append(out, jobType)
+	}
+	return out
 }
 
 // GetDataTypeConfigs returns the currently supported collector rule data types.

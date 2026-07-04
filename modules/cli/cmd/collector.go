@@ -27,6 +27,7 @@ type collectorPublishOptions struct {
 	collectorPackageOptions
 	ControlURL  string
 	AccessToken string
+	SpaceID     string
 	// 后台服务签名鉴权（推荐，取代登录态 AccessToken）
 	ServiceAccessKey string
 	ServiceSecretKey string
@@ -48,6 +49,7 @@ type collectorDeployOptions struct {
 	ControlURL       string
 	ServiceAccessKey string
 	ServiceSecretKey string
+	SpaceID          string
 	CloudAccountID   string
 	NodeID           string
 	ZipPath          string
@@ -140,20 +142,22 @@ func init() {
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ControlURL, "control-url", "", "Control service base URL")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 access_key")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.NodeID, "node-id", "", "existing cloud node id / function name")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ZipPath, "zip", "", "existing SCF zip path")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.PackageName, "package-name", "moox-collector", "function package name")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.PackageType, "package-type", "data_collector", "function package type")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.BizType, "biz-type", "data_collector", "business type")
-	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.Runtime, "runtime", "CustomRuntime", "SCF runtime")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.Runtime, "runtime", "Go1", "SCF runtime")
 
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ControlURL, "control-url", "", "Control service base URL")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN (登录态, 不推荐)")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 access_key; 默认取 MOOX_SERVICE_AUTH_ACCESS_KEY (推荐, 走 /api/service 后台接口)")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_SERVICE_AUTH_SECRET_KEY (推荐, 走 /api/service 后台接口)")
+	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.Runtime, "runtime", "CustomRuntime", "SCF runtime")
+	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.Runtime, "runtime", "Go1", "SCF runtime")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.Handler, "handler", "main", "SCF handler")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.Region, "region", "", "cloud region")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ZipPath, "zip", "", "existing SCF zip path")
@@ -228,11 +232,11 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		return collectorPublishSummary{}, err
 	}
 
-	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey)
+	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, opts.SpaceID)
 	uploadResp, err := client.UploadPackage(ctx, adminclient.UploadPackageRequest{
 		PackageName:      defaultFlag(opts.PackageName, "moox-collector"),
 		Version:          defaultFlag(opts.Version, "dev"),
-		Runtime:          defaultFlag(opts.Runtime, "CustomRuntime"),
+		Runtime:          defaultFlag(opts.Runtime, "Go1"),
 		PackageType:      adminclient.ResolvePackageType(defaultFlag(opts.PackageType, "data_collector")),
 		BizType:          defaultFlag(opts.BizType, "data_collector"),
 		CloudAccountID:   opts.CloudAccountID,
@@ -246,22 +250,58 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		PackageID: uploadResp.PackageID,
 	}
 
-	createResp, err := client.BatchCreateNodes(ctx, []adminclient.NodeCreateItem{{
-		CloudAccountID: opts.CloudAccountID,
-		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
-		Runtime:        defaultFlag(opts.Runtime, "CustomRuntime"),
-		Handler:        defaultFlag(opts.Handler, "main"),
-		Config:         parseCollectorOverrides(opts.Config),
-		Environment:    parseCollectorOverrides(opts.Env),
-		Region:         opts.Region,
-		PackageID:      uploadResp.PackageID,
-	}})
+	createResp, err := client.BatchCreateNodes(ctx, []adminclient.NodeCreateItem{
+		buildCollectorCreateNodeItem(opts, uploadResp.PackageID),
+	})
 	if err != nil {
 		return summary, err
 	}
 	summary.CreateBatchID = createResp.BatchID
 	summary.CreateProcessedCount = createResp.ProcessedCount
 	return summary, nil
+}
+
+func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string) adminclient.NodeCreateItem {
+	packageName := defaultFlag(opts.PackageName, "moox-collector")
+	bizType := defaultFlag(opts.BizType, "data_collector")
+	return adminclient.NodeCreateItem{
+		CloudAccountID: opts.CloudAccountID,
+		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
+		Runtime:        defaultFlag(opts.Runtime, "Go1"),
+		Handler:        defaultFlag(opts.Handler, "main"),
+		Config:         parseCollectorOverrides(opts.Config),
+		Environment:    collectorFunctionEnvironment(opts),
+		Region:         opts.Region,
+		PackageID:      packageID,
+		Metadata: map[string]any{
+			"function_name_prefix": packageName,
+			"biz_type":             bizType,
+			"supported_workloads":  []string{"collect.kline", "collect.symbol"},
+		},
+	}
+}
+
+func collectorFunctionEnvironment(opts collectorPublishOptions) map[string]string {
+	env := map[string]string{}
+	setDefaultEnv(env, "MOOX_SPACE_ID", defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
+	setDefaultEnv(env, "MOOX_SERVICE_AUTH_VERSION", "moox-auth-v1")
+	setDefaultEnv(env, "MOOX_SERVICE_AUTH_ACCESS_KEY", defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY")))
+	setDefaultEnv(env, "MOOX_SERVICE_AUTH_SECRET_KEY", defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY")))
+	setDefaultEnv(env, "MOOX_SERVICE_AUTH_EXPIRE_SECONDS", "1800")
+	for key, value := range parseCollectorOverrides(opts.Env) {
+		env[key] = value
+	}
+	if len(env) == 0 {
+		return nil
+	}
+	return env
+}
+
+func setDefaultEnv(env map[string]string, key string, value string) {
+	if strings.TrimSpace(value) == "" {
+		return
+	}
+	env[key] = value
 }
 
 func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (collectorPublishSummary, error) {
@@ -287,11 +327,11 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 		return collectorPublishSummary{}, err
 	}
 
-	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey)
+	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey, opts.SpaceID)
 	uploadResp, err := client.UploadPackage(ctx, adminclient.UploadPackageRequest{
 		PackageName:      defaultFlag(opts.PackageName, "moox-collector"),
 		Version:          defaultFlag(opts.Version, "dev"),
-		Runtime:          defaultFlag(opts.Runtime, "CustomRuntime"),
+		Runtime:          defaultFlag(opts.Runtime, "Go1"),
 		PackageType:      adminclient.ResolvePackageType(defaultFlag(opts.PackageType, "data_collector")),
 		BizType:          defaultFlag(opts.BizType, "data_collector"),
 		CloudAccountID:   opts.CloudAccountID,
@@ -317,10 +357,11 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 	return summary, nil
 }
 
-func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKey string) *adminclient.Client {
+func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKey string, spaceID string) *adminclient.Client {
 	client := adminclient.New(controlURL)
 	client.HTTPClient = &http.Client{Timeout: 10 * time.Minute}
 	client.AccessToken = defaultFlag(accessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
+	client.SpaceID = defaultFlag(spaceID, os.Getenv("MOOX_SPACE_ID"))
 	accessKey := defaultFlag(serviceAccessKey, os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"))
 	secretKey := defaultFlag(serviceSecretKey, os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"))
 	if accessKey != "" && secretKey != "" {
@@ -334,7 +375,7 @@ func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKe
 }
 
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version string) error {
-	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-X main.AppVersion=%s", version), "-o", outPath, "./cmd/moox-collector/main.go")
+	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-X main.Version=%s", version), "-o", outPath, "./cmd/moox-collector-scf")
 	cmd.Dir = collectorRoot
 	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
 	output, err := cmd.CombinedOutput()
@@ -355,7 +396,7 @@ func resolveCollectorRoot(explicit string) (string, error) {
 		if candidate == "" {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(candidate, "cmd", "moox-collector", "main.go")); err == nil {
+		if _, err := os.Stat(filepath.Join(candidate, "cmd", "moox-collector-scf", "main.go")); err == nil {
 			return filepath.Abs(candidate)
 		}
 	}

@@ -82,7 +82,7 @@ func runLighthouseFirewallOpen(cmd *cobra.Command, opts lighthouseFirewallOpenOp
 		return fmt.Errorf("--service-access-key and --service-secret-key are required")
 	}
 
-	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey)
+	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey, "")
 	ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 	defer cancel()
 

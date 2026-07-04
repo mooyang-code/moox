@@ -200,10 +200,10 @@ func executeReport(ctx context.Context, payload *model.HeartbeatPayload, serverI
 
 	// 构建请求体
 	apiPayload := map[string]interface{}{
-		"space_id":             payload.SpaceID,
-		"node_id":              payload.NodeID,
-		"node_type":            payload.NodeType,
-		"metadata":             payload.Metadata,
+		"space_id":            payload.SpaceID,
+		"node_id":             payload.NodeID,
+		"node_type":           payload.NodeType,
+		"metadata":            payload.Metadata,
 		"supported_workloads": payload.SupportedCollectors,
 	}
 
@@ -269,7 +269,7 @@ func sendSingleHeartbeat(ctx context.Context, url string, data []byte, httpClien
 }
 
 // parseServerResponse 解析服务端响应。
-// CloudNode work_item 由 PollWorkItems/ReportWorkItemStatus 维护，心跳不再下发 task_instances。
+// CloudNode JobItem is maintained by PollJobItems/ReportJobItemStatus, so heartbeat no longer carries task_instances.
 func parseServerResponse(respData []byte) error {
 	// 1. 解析响应体
 	var serverResp ServerResponse

@@ -4,6 +4,7 @@ import { Message } from '@arco-design/web-vue';
 import { gatewayOrigin } from '@/api/gateway';
 import { isRetInfoSuccess } from '../ret-info';
 import type { ControlResponse } from './types';
+import { withSelectedSpaceHeader } from './space-header';
 
 const adminClient = axios.create({
   baseURL: gatewayOrigin(),
@@ -53,6 +54,8 @@ export async function callControl<TReq extends object, TRsp>(
 
 adminClient.interceptors.request.use((config) => {
   const token = readAccessToken();
+  const headers = withSelectedSpaceHeader((config.headers || {}) as Record<string, string | undefined>);
+  config.headers = headers as typeof config.headers;
   if (token) {
     config.headers.Authorization = token;
     config.headers['X-Access-Token'] = token;

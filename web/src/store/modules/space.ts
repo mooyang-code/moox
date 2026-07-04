@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { listSpaces } from '@/api/admin/spaces';
+import { setSelectedSpaceIdCache } from '@/api/admin/space-header';
 import type { Space } from '@/api/admin/types';
 
 export const useSpaceStore = defineStore(
@@ -24,6 +25,7 @@ export const useSpaceStore = defineStore(
         if (selectedSpaceId.value && !spaces.value.some((item) => item.space_id === selectedSpaceId.value)) {
           selectedSpaceId.value = spaces.value[0]?.space_id || '';
         }
+        setSelectedSpaceIdCache(selectedSpaceId.value);
       } finally {
         loading.value = false;
       }
@@ -31,6 +33,7 @@ export const useSpaceStore = defineStore(
 
     function setSelectedSpace(spaceId: string) {
       selectedSpaceId.value = spaceId;
+      setSelectedSpaceIdCache(spaceId);
     }
 
     function requireSpaceId() {

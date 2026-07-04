@@ -1,6 +1,8 @@
 package response
 
 import (
+	"database/sql"
+	"errors"
 	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -15,8 +17,14 @@ func MetadataStoreCode(err error) pb.ErrorCode {
 	if err == nil {
 		return pb.ErrorCode_SUCCESS
 	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return pb.ErrorCode_NOT_FOUND
+	}
 	msg := strings.ToLower(err.Error())
 	switch {
+	case strings.Contains(msg, "not found"),
+		strings.Contains(msg, "不存在"):
+		return pb.ErrorCode_NOT_FOUND
 	case strings.Contains(msg, " is required"),
 		strings.Contains(msg, "invalid "),
 		strings.Contains(msg, " must "),
