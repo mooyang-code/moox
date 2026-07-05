@@ -36,6 +36,7 @@ export default {
     ["data-view-list"]: "view list",
     ["data-view-browse"]: "view browse",
     ["compute-collector"]: "compute and collection",
+    ["collector-cloudnodes"]: "cloud nodes",
     ["collector-functions"]: "cloud nodes",
     ["collector-packages"]: "code packages",
     ["collector-rules"]: "collection rules",

@@ -36,6 +36,7 @@ export default {
     ["data-browse"]: "数据浏览",
     ["data-import"]: "数据导入",
     ["compute-collector"]: "计算与采集",
+    ["collector-cloudnodes"]: "云节点",
     ["collector-functions"]: "云节点",
     ["collector-packages"]: "代码包",
     ["collector-rules"]: "采集规则",

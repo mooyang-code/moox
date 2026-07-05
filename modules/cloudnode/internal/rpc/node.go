@@ -171,6 +171,17 @@ func (s *Service) ReportHeartbeat(ctx context.Context, req *pb.ReportHeartbeatRe
 	spaceID := req.GetSpaceId()
 	log.InfoContextf(ctx, "[CloudNode] heartbeat space=%s node_id=%s node_type=%s source=%s version=%s",
 		spaceID, req.GetNodeId(), req.GetNodeType(), req.GetSourceService(), req.GetRunningVersion())
+	directives, err := s.heartbeatDirectives(ctx, spaceID, req.GetNodeId())
+	if err != nil {
+		log.WarnContextf(ctx, "[CloudNode] heartbeat directives query failed: %v", err)
+	}
+	if s.heartbeatSink != nil {
+		if err := s.heartbeatSink.Enqueue(req); err != nil {
+			log.WarnContextf(ctx, "[CloudNode] heartbeat enqueue failed: %v", err)
+			return &pb.ReportHeartbeatRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
+		return &pb.ReportHeartbeatRsp{RetInfo: retOK(), Directives: directives}, nil
+	}
 	if req.GetNodeId() != "" {
 		supported, _ := json.Marshal(req.GetSupportedWorkloads())
 		metadata, _ := json.Marshal(req.GetMetadata().AsMap())
@@ -178,7 +189,14 @@ func (s *Service) ReportHeartbeat(ctx context.Context, req *pb.ReportHeartbeatRe
 			log.WarnContextf(ctx, "[CloudNode] heartbeat upsert node failed: %v", err)
 		}
 	}
-	return &pb.ReportHeartbeatRsp{RetInfo: retOK()}, nil
+	return &pb.ReportHeartbeatRsp{RetInfo: retOK(), Directives: directives}, nil
+}
+
+func (s *Service) heartbeatDirectives(ctx context.Context, spaceID string, nodeID string) ([]*pb.ControlDirective, error) {
+	if s.projectionRepo == nil {
+		return nil, nil
+	}
+	return s.projectionRepo.ListCancelDirectives(ctx, spaceID, nodeID, 20)
 }
 
 func (s *Service) ensureSCFFunction(ctx context.Context, node *repository.CloudNode, item *pb.NodeCreateItem) error {
@@ -208,8 +226,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *repository.CloudN
 		FunctionName: firstString(node.FunctionName, node.NodeID),
 		Namespace:    firstString(node.Namespace, "default"),
 	}
-	_, err = client.GetFunction(ctx, ref)
+	info, err := client.GetFunction(ctx, ref)
 	if err == nil {
+		mergeSCFFunctionMetadata(node, info)
 		return s.updateSCFFunctionCode(ctx, *node, *pkg)
 	}
 	if !isSCFNotFound(err) {
@@ -233,7 +252,33 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *repository.CloudN
 	if err != nil {
 		return fmt.Errorf("create scf function %s: %w", ref.FunctionName, err)
 	}
+	info, err = client.GetFunction(ctx, ref)
+	if err != nil {
+		log.WarnContextf(ctx, "[CloudNode] get scf function metadata after create failed, function=%s namespace=%s region=%s err=%v",
+			ref.FunctionName, ref.Namespace, ref.Region, err)
+		return nil
+	}
+	mergeSCFFunctionMetadata(node, info)
 	return nil
+}
+
+func mergeSCFFunctionMetadata(node *repository.CloudNode, info *tencentscf.FunctionInfo) {
+	if node == nil || info == nil {
+		return
+	}
+	metadata := parseJSONMap(node.Metadata)
+	changed := false
+	if clsLogsetID := strings.TrimSpace(info.ClsLogsetID); clsLogsetID != "" {
+		metadata["cls_logset_id"] = clsLogsetID
+		changed = true
+	}
+	if clsTopicID := strings.TrimSpace(info.ClsTopicID); clsTopicID != "" {
+		metadata["cls_topic_id"] = clsTopicID
+		changed = true
+	}
+	if changed {
+		node.Metadata = jsonString(metadata)
+	}
 }
 
 func (s *Service) updateSCFFunctionCode(ctx context.Context, node repository.CloudNode, pkg repository.FunctionPackage) error {

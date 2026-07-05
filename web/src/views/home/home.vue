@@ -91,7 +91,7 @@ const quickEntries = computed(() => [
     index: '04',
     title: '云节点',
     description: '管理云账户、SCF 节点和采集运行时代码包。',
-    path: '/collector/functions',
+    path: '/collector/cloudnodes',
   },
   {
     index: '05',

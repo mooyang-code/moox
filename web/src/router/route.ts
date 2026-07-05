@@ -109,14 +109,19 @@ export const staticRoutes = [
       },
       {
         path: "/collector/functions",
-        name: "collector-functions",
-        component: () => import("@/views/collector/cloud-function/cloud-function.vue"),
-        meta: { title: "collector-functions" }
+        redirect: "/collector/cloudnodes",
+        meta: { title: "collector-cloudnodes", hide: true }
+      },
+      {
+        path: "/collector/cloudnodes",
+        name: "collector-cloudnodes",
+        component: () => import("@/views/collector/cloud-node/cloud-node.vue"),
+        meta: { title: "collector-cloudnodes" }
       },
       {
         path: "/collector/packages",
         name: "collector-packages",
-        component: () => import("@/views/collector/cloud-function/function-package-manage.vue"),
+        component: () => import("@/views/collector/cloud-node/function-package-manage.vue"),
         meta: { title: "collector-packages" }
       },
       {

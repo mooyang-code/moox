@@ -91,16 +91,18 @@ CREATE TABLE IF NOT EXISTS t_cloud_job_items (
     c_last_error_kind TEXT NOT NULL DEFAULT '',
     c_last_error_code TEXT NOT NULL DEFAULT '',
     c_last_error_message TEXT NOT NULL DEFAULT '',
+    c_queue_subject TEXT NOT NULL DEFAULT '',
+    c_queue_msg_id TEXT NOT NULL DEFAULT '',
+    c_stream_seq INTEGER NOT NULL DEFAULT 0,
+    c_ack_subject TEXT NOT NULL DEFAULT '',
+    c_enqueue_status TEXT NOT NULL DEFAULT 'queued',
+    c_control_version INTEGER NOT NULL DEFAULT 0,
+    c_cancel_reason TEXT NOT NULL DEFAULT '',
     c_start_time DATETIME,
     c_finish_time DATETIME,
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_job_items_space_item ON t_cloud_job_items(c_space_id, c_job_item_id);
-CREATE INDEX IF NOT EXISTS idx_cloud_job_items_poll ON t_cloud_job_items(c_space_id, c_status, c_priority, c_ctime);
-CREATE INDEX IF NOT EXISTS idx_cloud_job_items_recover ON t_cloud_job_items(c_space_id, c_status, c_recover_at);
-CREATE INDEX IF NOT EXISTS idx_cloud_job_items_job ON t_cloud_job_items(c_space_id, c_job_id);
 
 CREATE TABLE IF NOT EXISTS t_cloud_job_item_attempts (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
