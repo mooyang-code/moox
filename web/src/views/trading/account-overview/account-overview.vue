@@ -28,8 +28,16 @@
         </a-space>
       </div>
 
-      <a-spin :loading="loading" class="account-spin">
-        <div v-if="accounts.length" class="account-card-grid">
+      <div class="account-spin">
+        <div v-if="loading && !accounts.length" class="account-card-grid">
+          <section v-for="index in 4" :key="index" class="account-card account-card-skeleton">
+            <div class="account-card-topline" />
+            <a-skeleton :animation="true">
+              <a-skeleton-line :rows="6" :widths="['58%', '82%', '42%', '70%', '96%', '64%']" />
+            </a-skeleton>
+          </section>
+        </div>
+        <div v-else-if="accounts.length" class="account-card-grid">
           <section v-for="record in accounts" :key="record.account_id" class="account-card">
             <div class="account-card-topline" />
             <div class="account-card-header">
@@ -93,7 +101,7 @@
           </section>
         </div>
         <a-empty v-else />
-      </a-spin>
+      </div>
 
       <div class="account-pagination">
         <a-pagination
@@ -419,19 +427,28 @@ const keyword = ref('');
 const pagination = reactive(defaultPagination());
 const accountBalanceMap = reactive<Record<string, Balance[]>>({});
 const balancePreviewLoading = reactive<Record<string, boolean>>({});
+let accountLoadSeq = 0;
 
 async function loadAccounts() {
+  const loadSeq = ++accountLoadSeq;
   loading.value = true;
+  let shouldLoadBalances = false;
   try {
     const rsp = await listAccounts({
       keyword: keyword.value || undefined,
       page: { page: pagination.current, size: pagination.pageSize },
     });
+    if (loadSeq !== accountLoadSeq) return;
     accounts.value = rsp.accounts || [];
     applyPageResult(pagination, rsp.page_result);
-    await loadBalancePreviews();
+    shouldLoadBalances = true;
   } finally {
-    loading.value = false;
+    if (loadSeq === accountLoadSeq) {
+      loading.value = false;
+    }
+  }
+  if (shouldLoadBalances && loadSeq === accountLoadSeq) {
+    void loadBalancePreviews(loadSeq);
   }
 }
 
@@ -457,18 +474,21 @@ async function onSyncExchangeAccounts() {
   }
 }
 
-async function loadBalancePreviews() {
-  await Promise.allSettled(accounts.value.map((account) => loadBalancePreview(account.account_id)));
+async function loadBalancePreviews(loadSeq = accountLoadSeq) {
+  await Promise.allSettled(accounts.value.map((account) => loadBalancePreview(account.account_id, loadSeq)));
 }
 
-async function loadBalancePreview(accountID: string) {
+async function loadBalancePreview(accountID: string, loadSeq = accountLoadSeq) {
   if (!accountID) return;
   balancePreviewLoading[accountID] = true;
   try {
     const rsp = await getBalances(accountID);
+    if (loadSeq !== accountLoadSeq) return;
     accountBalanceMap[accountID] = rsp.balances || [];
   } finally {
-    balancePreviewLoading[accountID] = false;
+    if (loadSeq === accountLoadSeq) {
+      balancePreviewLoading[accountID] = false;
+    }
   }
 }
 
@@ -1023,6 +1043,14 @@ onMounted(loadAccounts);
     linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(250, 251, 253, 0.98)),
     repeating-linear-gradient(135deg, rgba(29, 33, 41, 0.025) 0, rgba(29, 33, 41, 0.025) 1px, transparent 1px, transparent 12px);
   box-shadow: 0 8px 22px rgba(29, 33, 41, 0.06);
+}
+
+.account-card-skeleton {
+  padding-bottom: 16px;
+}
+
+.account-card-skeleton :deep(.arco-skeleton) {
+  padding: 18px 16px 0;
 }
 
 .account-card-topline {

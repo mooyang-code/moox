@@ -2,6 +2,7 @@ package taskpublisher
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -151,6 +153,10 @@ func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) 
 			if event["storage_metadata_target"] != "127.0.0.1:20100" || event["storage_access_target"] != "127.0.0.1:20102" {
 				t.Fatalf("event storage targets = %#v", event)
 			}
+			data, ok := event["data"].(map[string]any)
+			if !ok || data["node_id"] != "node-a" {
+				t.Fatalf("event data.node_id = %#v, want node-a", event["data"])
+			}
 			writeProtoJSON(t, w, &cloudnodepb.InvokeFunctionRsp{
 				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
 				Scf:     &cloudnodepb.ScfInvokeResult{},
@@ -179,6 +185,77 @@ func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) 
 	}
 	if count != 1 || !invoked {
 		t.Fatalf("wake count=%d invoked=%v, want one invoke", count, invoked)
+	}
+}
+
+func TestWakeCollectorNodesPaginatesNodeList(t *testing.T) {
+	pages := []uint32{}
+	invoked := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/service/cloudnode/GetNodeList":
+			var req cloudnodepb.GetNodeListReq
+			if err := protojson.Unmarshal(readRequestBody(t, r), &req); err != nil {
+				t.Fatal(err)
+			}
+			page := req.GetPage().GetPage()
+			pages = append(pages, page)
+			if page == 1 {
+				writeProtoJSON(t, w, &cloudnodepb.GetNodeListRsp{
+					RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
+					Items: []*cloudnodepb.CloudNode{
+						{NodeId: "node-a", SupportedWorkloads: []string{"collect.kline"}},
+					},
+					Page: &commonpb.PageResult{Page: 1, Size: wakeNodeListPageSize, Total: 2, HasMore: true},
+				})
+				return
+			}
+			writeProtoJSON(t, w, &cloudnodepb.GetNodeListRsp{
+				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
+				Items: []*cloudnodepb.CloudNode{
+					{NodeId: "node-b", SupportedWorkloads: []string{"collect.kline"}},
+				},
+				Page: &commonpb.PageResult{Page: 2, Size: wakeNodeListPageSize, Total: 2, HasMore: false},
+			})
+		case "/api/service/cloudnode/InvokeFunction":
+			var req cloudnodepb.InvokeFunctionReq
+			if err := protojson.Unmarshal(readRequestBody(t, r), &req); err != nil {
+				t.Fatal(err)
+			}
+			invoked = append(invoked, req.GetNodeId())
+			writeProtoJSON(t, w, &cloudnodepb.InvokeFunctionRsp{
+				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
+				Scf:     &cloudnodepb.ScfInvokeResult{},
+			})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := New(Config{
+		ServiceGatewayTarget: server.URL,
+		Auth: AuthConfig{
+			AccessKey: "ak",
+			SecretKey: "sk",
+		},
+	})
+
+	count, err := client.WakeCollectorNodes(context.Background(), WakeOptions{
+		SpaceID:  "crypto",
+		JobTypes: []string{"collect.kline"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("wake count=%d, want 2", count)
+	}
+	if strings.Join(invoked, ",") != "node-a,node-b" {
+		t.Fatalf("invoked=%v, want both pages", invoked)
+	}
+	if len(pages) != 2 || strings.Join([]string{fmt.Sprint(pages[0]), fmt.Sprint(pages[1])}, ",") != "1,2" {
+		t.Fatalf("pages=%v, want 1,2", pages)
 	}
 }
 

@@ -15,10 +15,13 @@ import (
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+const wakeNodeListPageSize uint32 = 200
 
 // AuthConfig describes HMAC auth for /api/service/cloudnode/* calls.
 type AuthConfig struct {
@@ -97,29 +100,23 @@ func (c *Client) WakeCollectorNodes(ctx context.Context, opts WakeOptions) (int,
 	if spaceID == "" {
 		return 0, fmt.Errorf("space_id is required")
 	}
-	body, err := protojson.Marshal(&pb.GetNodeListReq{})
+	nodes, err := c.listCloudNodes(ctx, spaceID)
 	if err != nil {
-		return 0, fmt.Errorf("marshal get node list request: %w", err)
-	}
-	var nodes pb.GetNodeListRsp
-	if err := c.postServiceWithHeaders(ctx, "cloudnode", "GetNodeList", body, &nodes, spaceHeaders(spaceID)); err != nil {
-		return 0, fmt.Errorf("list cloud nodes: %w", err)
-	}
-	if nodes.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		return 0, fmt.Errorf("list cloud nodes: %s", nodes.GetRetInfo().GetMsg())
+		return 0, err
 	}
 	wakeEvent, err := c.buildWakeEvent()
 	if err != nil {
 		return 0, err
 	}
-	wakeStruct, err := structpb.NewStruct(wakeEvent)
-	if err != nil {
-		return 0, fmt.Errorf("build wake event: %w", err)
-	}
 	woken := 0
 	var wakeErrors []error
-	for _, node := range nodes.GetItems() {
+	for _, node := range nodes {
 		if !supportsAnyJobType(node.GetSupportedWorkloads(), opts.JobTypes) {
+			continue
+		}
+		wakeStruct, err := structpb.NewStruct(wakeEventWithNodeID(wakeEvent, node.GetNodeId()))
+		if err != nil {
+			wakeErrors = append(wakeErrors, fmt.Errorf("build wake event for %s: %w", node.GetNodeId(), err))
 			continue
 		}
 		req := &pb.InvokeFunctionReq{
@@ -151,6 +148,47 @@ func (c *Client) WakeCollectorNodes(ctx context.Context, opts WakeOptions) (int,
 		return 0, errors.Join(wakeErrors...)
 	}
 	return woken, nil
+}
+
+func wakeEventWithNodeID(base map[string]any, nodeID string) map[string]any {
+	out := make(map[string]any, len(base))
+	for key, value := range base {
+		out[key] = value
+	}
+	data := map[string]any{}
+	if raw, ok := base["data"].(map[string]any); ok {
+		for key, value := range raw {
+			data[key] = value
+		}
+	}
+	data["node_id"] = strings.TrimSpace(nodeID)
+	out["data"] = data
+	return out
+}
+
+func (c *Client) listCloudNodes(ctx context.Context, spaceID string) ([]*pb.CloudNode, error) {
+	nodes := []*pb.CloudNode{}
+	for page := uint32(1); ; page++ {
+		body, err := protojson.Marshal(&pb.GetNodeListReq{
+			Page: &commonpb.Page{Page: page, Size: wakeNodeListPageSize},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("marshal get node list request: %w", err)
+		}
+		var rsp pb.GetNodeListRsp
+		if err := c.postServiceWithHeaders(ctx, "cloudnode", "GetNodeList", body, &rsp, spaceHeaders(spaceID)); err != nil {
+			return nil, fmt.Errorf("list cloud nodes: %w", err)
+		}
+		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return nil, fmt.Errorf("list cloud nodes: %s", rsp.GetRetInfo().GetMsg())
+		}
+		items := rsp.GetItems()
+		nodes = append(nodes, items...)
+		if len(items) == 0 || !rsp.GetPage().GetHasMore() {
+			break
+		}
+	}
+	return nodes, nil
 }
 
 func (c *Client) postService(ctx context.Context, service string, method string, body []byte, out proto.Message) error {

@@ -136,7 +136,7 @@ func LoadConfigs(cfg *AppConfig) (*AppConfig, error) {
 
 // loadConfigFile 加载配置文件
 func loadConfigFile(cfg *AppConfig) error {
-	data, err := os.ReadFile("./yaml")
+	data, err := os.ReadFile("./config.yaml")
 	if err != nil {
 		return err
 	}
