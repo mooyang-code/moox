@@ -9,7 +9,24 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestInitializeMigratesExistingJobItemProjectionColumns(t *testing.T) {
+func TestInitializeDoesNotCreateSchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cloudnode.db")
+	mgr := NewManager()
+	if err := mgr.Initialize(&config.DatabaseConfig{Path: dbPath}); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	defer mgr.Close()
+
+	var count int64
+	if err := mgr.DB().Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 't_cloud_%'").Scan(&count).Error; err != nil {
+		t.Fatalf("query table count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("Initialize() created %d cloudnode tables, want 0", count)
+	}
+}
+
+func TestInitializeDoesNotMutateExistingSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "cloudnode.db")
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	if err != nil {
@@ -36,8 +53,8 @@ CREATE TABLE t_cloud_job_items (
 	}
 	defer mgr.Close()
 	for _, column := range []string{"c_queue_subject", "c_enqueue_status", "c_cancel_reason"} {
-		if !mgr.DB().Migrator().HasColumn("t_cloud_job_items", column) {
-			t.Fatalf("column %s was not migrated", column)
+		if mgr.DB().Migrator().HasColumn("t_cloud_job_items", column) {
+			t.Fatalf("Initialize() added column %s, want schema unchanged", column)
 		}
 	}
 }
