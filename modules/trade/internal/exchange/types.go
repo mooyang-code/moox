@@ -68,6 +68,7 @@ type Instrument struct {
 	LotSize     string // 数量精度
 	MinNotional string // 最小名义价值
 	MinQty      string // 最小下单量
+	LastPrice   string // 最新成交价/标记价，用于本地校验最小名义价值
 	Status      string // 交易对状态
 }
 
@@ -181,6 +182,50 @@ type TransferReq struct {
 // TransferResult 划转结果。
 type TransferResult struct {
 	TransferID string
+}
+
+// DustTransferReq 小额资产转换请求。Binance 现货会转换为 BNB。
+type DustTransferReq struct {
+	Assets      []string
+	AccountType string
+}
+
+// DustConvertibleReq 查询可转换为 BNB 的小额资产。
+type DustConvertibleReq struct {
+	AccountType string
+}
+
+// DustConvertibleAsset 描述交易所当前允许转换的小额资产。
+type DustConvertibleAsset struct {
+	Asset            string
+	AssetFullName    string
+	AmountFree       string
+	ToBTC            string
+	ToBNB            string
+	ToBNBOffExchange string
+	Exchange         string
+}
+
+// DustTransferResult 小额资产转换结果。
+type DustTransferResult struct {
+	TotalServiceCharge string
+	TotalTransfered    string
+	Results            []DustTransferItem
+	Skipped            []DustTransferSkippedItem
+}
+
+type DustTransferItem struct {
+	Asset               string
+	Amount              string
+	OperateTime         int64
+	ServiceChargeAmount string
+	TranID              int64
+	TransferedAmount    string
+}
+
+type DustTransferSkippedItem struct {
+	Asset  string
+	Reason string
 }
 
 // FundFlowQuery 资金流水查询。

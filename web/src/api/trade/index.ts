@@ -5,6 +5,7 @@ import type {
   DeleteAccountReq, DeleteAccountRsp,
   GetAccountReq, GetAccountRsp,
   ListAccountsReq, ListAccountsRsp,
+  SyncExchangeAccountsReq, SyncExchangeAccountsRsp,
   GetBalancesReq, GetBalancesRsp,
   SyncBalancesReq, SyncBalancesRsp,
   ListFundFlowsReq, ListFundFlowsRsp,
@@ -17,15 +18,20 @@ import type {
   DeleteChannelReq, DeleteChannelRsp,
   ListChannelsReq, ListChannelsRsp,
   TestChannelReq, TestChannelRsp,
+  ListInstrumentsReq, ListInstrumentsRsp,
   PlaceOrderReq, PlaceOrderRsp,
   CancelOrderReq, CancelOrderRsp,
   CancelAllOrdersReq, CancelAllOrdersRsp,
   AmendOrderReq, AmendOrderRsp,
   SetLeverageReq, SetLeverageRsp,
+  ConvertDustReq, ConvertDustRsp,
   GetOrderReq, GetOrderRsp,
   ListOrdersReq, ListOrdersRsp,
+  SyncOrdersReq, SyncOrdersRsp,
   ListTradesReq, ListTradesRsp,
+  SyncTradesReq, SyncTradesRsp,
   ListPositionsReq, ListPositionsRsp,
+  SyncPositionsReq, SyncPositionsRsp,
 } from './types';
 
 // ========== AccountSvc ==========
@@ -48,6 +54,10 @@ export function getAccount(account_id: string) {
 
 export function listAccounts(params: ListAccountsReq) {
   return callTrade<ListAccountsReq, ListAccountsRsp>('account', 'ListAccounts', params);
+}
+
+export function syncExchangeAccounts(req: SyncExchangeAccountsReq = {}) {
+  return callTrade<SyncExchangeAccountsReq, SyncExchangeAccountsRsp>('account', 'SyncExchangeAccounts', req);
 }
 
 // ========== BalanceSvc ==========
@@ -106,6 +116,10 @@ export function testChannel(channel_id: string) {
   return callTrade<TestChannelReq, TestChannelRsp>('channel', 'TestChannel', { channel_id });
 }
 
+export function listInstruments(channel_id: string, market_type?: ListInstrumentsReq['market_type']) {
+  return callTrade<ListInstrumentsReq, ListInstrumentsRsp>('channel', 'ListInstruments', { channel_id, market_type });
+}
+
 // ========== TradeOpSvc ==========
 
 export function placeOrder(req: PlaceOrderReq) {
@@ -128,6 +142,10 @@ export function setLeverage(req: SetLeverageReq) {
   return callTrade<SetLeverageReq, SetLeverageRsp>('tradeop', 'SetLeverage', req);
 }
 
+export function convertDust(req: ConvertDustReq) {
+  return callTrade<ConvertDustReq, ConvertDustRsp>('tradeop', 'ConvertDust', req);
+}
+
 // ========== OrderSvc ==========
 
 export function getOrder(order_id: string) {
@@ -138,16 +156,28 @@ export function listOrders(params: ListOrdersReq) {
   return callTrade<ListOrdersReq, ListOrdersRsp>('order', 'ListOrders', params);
 }
 
+export function syncOrders(params: SyncOrdersReq) {
+  return callTrade<SyncOrdersReq, SyncOrdersRsp>('order', 'SyncOrders', params);
+}
+
 // ========== TradeQuerySvc ==========
 
 export function listTrades(params: ListTradesReq) {
   return callTrade<ListTradesReq, ListTradesRsp>('tradeq', 'ListTrades', params);
 }
 
+export function syncTrades(params: SyncTradesReq) {
+  return callTrade<SyncTradesReq, SyncTradesRsp>('tradeq', 'SyncTrades', params);
+}
+
 // ========== PositionSvc ==========
 
 export function listPositions(account_id: string, symbol?: string) {
   return callTrade<ListPositionsReq, ListPositionsRsp>('position', 'ListPositions', { account_id, symbol });
+}
+
+export function syncPositions(account_id: string, symbol?: string) {
+  return callTrade<SyncPositionsReq, SyncPositionsRsp>('position', 'SyncPositions', { account_id, symbol });
 }
 
 // ========== 枚举标签映射 ==========

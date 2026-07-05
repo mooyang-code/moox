@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	mooxpb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
@@ -269,6 +270,39 @@ func channelToPB(c *service.TradeChannel) *mooxpb.TradeChannel {
 	}
 }
 
+func instrumentToPB(ins exchange.Instrument) *mooxpb.Instrument {
+	return &mooxpb.Instrument{
+		Symbol:      ins.Symbol,
+		MarketType:  marketTypeToPB(string(ins.Market)),
+		BaseCcy:     ins.BaseCcy,
+		QuoteCcy:    ins.QuoteCcy,
+		TickSize:    ins.TickSize,
+		LotSize:     ins.LotSize,
+		MinNotional: ins.MinNotional,
+		MinQty:      ins.MinQty,
+		LastPrice:   ins.LastPrice,
+		Status:      ins.Status,
+	}
+}
+
+func dustTransferItemToPB(item exchange.DustTransferItem) *mooxpb.DustTransferItem {
+	return &mooxpb.DustTransferItem{
+		Asset:               item.Asset,
+		Amount:              item.Amount,
+		OperateTime:         item.OperateTime,
+		ServiceChargeAmount: item.ServiceChargeAmount,
+		TranId:              item.TranID,
+		TransferedAmount:    item.TransferedAmount,
+	}
+}
+
+func dustTransferSkippedItemToPB(item exchange.DustTransferSkippedItem) *mooxpb.DustTransferSkippedItem {
+	return &mooxpb.DustTransferSkippedItem{
+		Asset:  item.Asset,
+		Reason: item.Reason,
+	}
+}
+
 func orderToPB(o *service.Order) *mooxpb.Order {
 	if o == nil {
 		return nil
@@ -362,19 +396,19 @@ func positionToPB(p *service.Position) *mooxpb.Position {
 		return nil
 	}
 	return &mooxpb.Position{
-		PositionId:     p.PositionID,
-		AccountId:      p.AccountID,
-		ChannelId:      p.ChannelID,
-		Exchange:       p.Exchange,
-		Symbol:         p.Symbol,
-		PosSide:        p.PosSide,
-		Quantity:       p.Quantity,
-		AvgPrice:       p.AvgPrice,
-		Leverage:       p.Leverage,
-		Margin:         p.Margin,
-		LiqPrice:       p.LiqPrice,
-		UnrealizedPnl:  p.UnrealizedPnl,
-		RealizedPnl:    p.RealizedPnl,
-		UpdatedAt:      unixOrZero(p.UpdatedAt),
+		PositionId:    p.PositionID,
+		AccountId:     p.AccountID,
+		ChannelId:     p.ChannelID,
+		Exchange:      p.Exchange,
+		Symbol:        p.Symbol,
+		PosSide:       p.PosSide,
+		Quantity:      p.Quantity,
+		AvgPrice:      p.AvgPrice,
+		Leverage:      p.Leverage,
+		Margin:        p.Margin,
+		LiqPrice:      p.LiqPrice,
+		UnrealizedPnl: p.UnrealizedPnl,
+		RealizedPnl:   p.RealizedPnl,
+		UpdatedAt:     unixOrZero(p.UpdatedAt),
 	}
 }

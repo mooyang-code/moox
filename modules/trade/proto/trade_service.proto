@@ -129,7 +129,7 @@ message GetAccountRsp {
 
 message ListAccountsReq {
   string user_id = 1;          // 可空，默认当前登录用户
-  AccountType account_type = 2; // 可空过滤
+  optional AccountType account_type = 2; // 可空过滤
   string keyword = 3;
   common.Page page = 4;
 }
@@ -137,6 +137,16 @@ message ListAccountsRsp {
   common.RetInfo ret_info = 1;
   repeated Account accounts = 2;
   common.PageResult page_result = 3;
+}
+
+// SyncExchangeAccounts 从后台秘钥管理导入交易所账户/API Key/默认通道。
+message SyncExchangeAccountsReq {
+  string provider = 1;      // 默认 binance
+  string market_type = 2;   // 可填 spot/margin/swap/futures；为空时自动探测可用市场
+}
+message SyncExchangeAccountsRsp {
+  common.RetInfo ret_info = 1;
+  repeated Account accounts = 2;
 }
 
 // ========== 余额（BalanceSvc）==========
@@ -281,6 +291,20 @@ message TradeChannel {
   int64 updated_at = 13;
 }
 
+// Instrument 交易规则（交易对精度/最小下单量）。
+message Instrument {
+  string symbol = 1;
+  MarketType market_type = 2;
+  string base_ccy = 3;
+  string quote_ccy = 4;
+  string tick_size = 5;
+  string lot_size = 6;
+  string min_notional = 7;
+  string min_qty = 8;
+  string status = 9;
+  string last_price = 10;
+}
+
 // Order 订单（对应 t_orders）。
 message Order {
   string order_id = 1;
@@ -401,6 +425,15 @@ message TestChannelRsp {
   int32 latency_ms = 3;
 }
 
+message ListInstrumentsReq {
+  string channel_id = 1;
+  optional MarketType market_type = 2;
+}
+message ListInstrumentsRsp {
+  common.RetInfo ret_info = 1;
+  repeated Instrument instruments = 2;
+}
+
 // ========== 账户交易操作（TradeOpSvc）==========
 
 // PlaceOrder 下单。client_order_id 作为业务幂等键。
@@ -474,6 +507,32 @@ message SetLeverageReq {
 }
 message SetLeverageRsp { common.RetInfo ret_info = 1; }
 
+// ConvertDust 将现货小额资产转换为交易所支持的目标资产。Binance 现货目标为 BNB。
+message DustTransferItem {
+  string asset = 1;
+  string amount = 2;
+  int64 operate_time = 3;
+  string service_charge_amount = 4;
+  int64 tran_id = 5;
+  string transfered_amount = 6;
+}
+message DustTransferSkippedItem {
+  string asset = 1;
+  string reason = 2;
+}
+message ConvertDustReq {
+  string account_id = 1;
+  string channel_id = 2;
+  repeated string assets = 3;
+}
+message ConvertDustRsp {
+  common.RetInfo ret_info = 1;
+  string total_service_charge = 2;
+  string total_transfered = 3;
+  repeated DustTransferItem results = 4;
+  repeated DustTransferSkippedItem skipped_results = 5;
+}
+
 // ========== 订单查询（OrderSvc）==========
 
 message GetOrderReq {
@@ -500,6 +559,19 @@ message ListOrdersRsp {
   repeated Order orders = 2;
   common.PageResult page_result = 3;
 }
+message SyncOrdersReq {
+  string account_id = 1;
+  string symbol = 2;      // 历史订单必填；only_open=true 时可空查询当前挂单
+  bool only_open = 3;
+  int64 start_time = 4;
+  int64 end_time = 5;
+  common.Page page = 6;
+}
+message SyncOrdersRsp {
+  common.RetInfo ret_info = 1;
+  repeated Order orders = 2;
+  common.PageResult page_result = 3;
+}
 
 // ========== 成交查询（TradeQuerySvc）==========
 
@@ -516,6 +588,19 @@ message ListTradesRsp {
   repeated Trade trades = 2;
   common.PageResult page_result = 3;
 }
+message SyncTradesReq {
+  string account_id = 1;
+  string order_id = 2;   // 可空，按订单过滤
+  string symbol = 3;     // 必填
+  int64 start_time = 4;
+  int64 end_time = 5;
+  common.Page page = 6;
+}
+message SyncTradesRsp {
+  common.RetInfo ret_info = 1;
+  repeated Trade trades = 2;
+  common.PageResult page_result = 3;
+}
 
 // ========== 持仓查询（PositionSvc）==========
 
@@ -524,6 +609,16 @@ message ListPositionsReq {
   string symbol = 2;     // 可空
 }
 message ListPositionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated Position positions = 2;
+}
+
+// SyncPositions 从交易所拉取并刷新本地持仓快照。
+message SyncPositionsReq {
+  string account_id = 1;
+  string symbol = 2;     // 可空
+}
+message SyncPositionsRsp {
   common.RetInfo ret_info = 1;
   repeated Position positions = 2;
 }
@@ -540,6 +635,7 @@ service AccountSvc {
   rpc DeleteAccount(DeleteAccountReq) returns (DeleteAccountRsp);
   rpc GetAccount(GetAccountReq) returns (GetAccountRsp);
   rpc ListAccounts(ListAccountsReq) returns (ListAccountsRsp);
+  rpc SyncExchangeAccounts(SyncExchangeAccountsReq) returns (SyncExchangeAccountsRsp);
 }
 
 service BalanceSvc {
@@ -566,6 +662,7 @@ service ChannelSvc {
   rpc DeleteChannel(DeleteChannelReq) returns (DeleteChannelRsp);
   rpc ListChannels(ListChannelsReq) returns (ListChannelsRsp);
   rpc TestChannel(TestChannelReq) returns (TestChannelRsp);
+  rpc ListInstruments(ListInstrumentsReq) returns (ListInstrumentsRsp);
 }
 
 service TradeOpSvc {
@@ -574,17 +671,21 @@ service TradeOpSvc {
   rpc CancelAllOrders(CancelAllOrdersReq) returns (CancelAllOrdersRsp);
   rpc AmendOrder(AmendOrderReq) returns (AmendOrderRsp);
   rpc SetLeverage(SetLeverageReq) returns (SetLeverageRsp);
+  rpc ConvertDust(ConvertDustReq) returns (ConvertDustRsp);
 }
 
 service OrderSvc {
   rpc GetOrder(GetOrderReq) returns (GetOrderRsp);
   rpc ListOrders(ListOrdersReq) returns (ListOrdersRsp);
+  rpc SyncOrders(SyncOrdersReq) returns (SyncOrdersRsp);
 }
 
 service TradeQuerySvc {
   rpc ListTrades(ListTradesReq) returns (ListTradesRsp);
+  rpc SyncTrades(SyncTradesReq) returns (SyncTradesRsp);
 }
 
 service PositionSvc {
   rpc ListPositions(ListPositionsReq) returns (ListPositionsRsp);
+  rpc SyncPositions(SyncPositionsReq) returns (SyncPositionsRsp);
 }

@@ -3,7 +3,6 @@
     <div class="page-head">
       <div>
         <h2>数据概览</h2>
-        <span>当前空间：{{ spaceStore.selectedSpace?.name || '未选择' }}</span>
       </div>
       <a-button :disabled="!selectedSpaceId" :loading="loading" @click="load">
         <template #icon><icon-refresh /></template>

@@ -5,9 +5,11 @@ package bootstrap
 import (
 	"context"
 
+	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	_ "github.com/mooyang-code/moox/modules/trade/internal/exchange/all" // 注册 binance/okx 适配器
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
+	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"github.com/mooyang-code/moox/modules/trade/internal/service/dao"
 	"github.com/mooyang-code/moox/modules/trade/internal/service/database"
@@ -38,11 +40,32 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	store := dao.New(dm.GetDB(), appCfg.Security.EncryptionKey)
 
 	// 3. 装配领域服务
-	svc := service.New("trade", service.WithStore(store))
+	secretSource := secretclient.New(secretclient.Config{
+		GatewayBaseURL: appCfg.ControlGateway.BaseURL,
+		ServiceAuth: secretclient.ServiceAuthConfig{
+			Version:    appCfg.ControlGateway.ServiceAuth.Version,
+			AccessKey:  appCfg.ControlGateway.ServiceAuth.AccessKey,
+			SecretKey:  appCfg.ControlGateway.ServiceAuth.SecretKey,
+			ExpireSecs: appCfg.ControlGateway.ServiceAuth.ExpireSeconds,
+		},
+	})
+	svc := service.New("trade", service.WithStore(store), service.WithExchangeSecretSource(secretSource))
 
 	// 4. 注册 9 个 tRPC service
 	rpc.RegisterAll(s, svc)
+	rpc.SetDefaultSyncService(svc)
+	registerTradeSyncSchedule(s)
 
-	log.InfoContextf(ctx, "moox-trade 初始化完成，已注册 9 个 service")
+	log.InfoContextf(ctx, "moox-trade 初始化完成，已注册 9 个 RPC service 和定时同步 service")
 	return s, nil
+}
+
+func registerTradeSyncSchedule(s *server.Server) {
+	timer.RegisterScheduler("tradeSyncSchedule", &timer.DefaultScheduler{})
+	service := s.Service("trpc.moox.trade.sync.timer")
+	if service == nil {
+		log.Warn("trade sync timer service is not configured, skip register")
+		return
+	}
+	timer.RegisterHandlerService(service, rpc.HandleSyncSchedule)
 }

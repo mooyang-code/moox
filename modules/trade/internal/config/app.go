@@ -22,9 +22,11 @@ var (
 
 // AppConfig Trade 应用配置。
 type AppConfig struct {
-	Database DatabaseConfig `yaml:"database"`
-	Security SecurityConfig `yaml:"security"`
-	Log      LogConfig      `yaml:"log"`
+	Database       DatabaseConfig       `yaml:"database"`
+	Security       SecurityConfig       `yaml:"security"`
+	ControlGateway ControlGatewayConfig `yaml:"control_gateway"`
+	Sync           SyncConfig           `yaml:"sync"`
+	Log            LogConfig            `yaml:"log"`
 }
 
 // DatabaseConfig 数据库配置（当前仅支持 sqlite）。
@@ -40,6 +42,32 @@ type DatabaseConfig struct {
 // SecurityConfig 安全配置（API 凭证加解密密钥）。
 type SecurityConfig struct {
 	EncryptionKey string `yaml:"encryption_key"`
+}
+
+// ControlGatewayConfig 配置 trade 调用 admin 网关的后台服务地址。
+type ControlGatewayConfig struct {
+	BaseURL     string            `yaml:"base_url"`
+	ServiceAuth ServiceAuthConfig `yaml:"service_auth"`
+}
+
+// ServiceAuthConfig 与 admin gateway.service_auth 保持一致。
+type ServiceAuthConfig struct {
+	Version       string `yaml:"version"`
+	AccessKey     string `yaml:"access_key"`
+	SecretKey     string `yaml:"secret_key"`
+	ExpireSeconds int64  `yaml:"expire_seconds"`
+}
+
+// SyncConfig 定时同步配置。
+type SyncConfig struct {
+	Enabled          bool `yaml:"enabled"`
+	SyncBalances     bool `yaml:"sync_balances"`
+	SyncPositions    bool `yaml:"sync_positions"`
+	SyncOrders       bool `yaml:"sync_orders"`
+	SyncTrades       bool `yaml:"sync_trades"`
+	WindowHours      int  `yaml:"window_hours"`
+	PageSize         int  `yaml:"page_size"`
+	MaxSymbolsPerRun int  `yaml:"max_symbols_per_run"`
 }
 
 // LogConfig 日志配置。
@@ -64,6 +92,25 @@ func DefaultConfig() *AppConfig {
 		},
 		Security: SecurityConfig{
 			EncryptionKey: "moox-cloud-secret-key-32bytes",
+		},
+		ControlGateway: ControlGatewayConfig{
+			BaseURL: "http://106.53.107.122:11000",
+			ServiceAuth: ServiceAuthConfig{
+				Version:       "moox-auth-v1",
+				AccessKey:     "moox-service",
+				SecretKey:     "moox-service-secret-change-me",
+				ExpireSeconds: 1800,
+			},
+		},
+		Sync: SyncConfig{
+			Enabled:          true,
+			SyncBalances:     true,
+			SyncPositions:    true,
+			SyncOrders:       true,
+			SyncTrades:       true,
+			WindowHours:      24,
+			PageSize:         500,
+			MaxSymbolsPerRun: 10,
 		},
 		Log: LogConfig{
 			Level:      "info",
@@ -102,6 +149,15 @@ func (c *AppConfig) applyEnv() {
 	if v := os.Getenv("MOOX_TRADE_ENCRYPTION_KEY"); v != "" {
 		c.Security.EncryptionKey = v
 	}
+	if v := os.Getenv("MOOX_TRADE_CONTROL_GATEWAY"); v != "" {
+		c.ControlGateway.BaseURL = v
+	}
+	if v := os.Getenv("MOOX_TRADE_SERVICE_AUTH_ACCESS_KEY"); v != "" {
+		c.ControlGateway.ServiceAuth.AccessKey = v
+	}
+	if v := os.Getenv("MOOX_TRADE_SERVICE_AUTH_SECRET_KEY"); v != "" {
+		c.ControlGateway.ServiceAuth.SecretKey = v
+	}
 }
 
 // Validate 校验配置并创建所需目录。
@@ -119,6 +175,15 @@ func (c *AppConfig) Validate() error {
 		if err := os.MkdirAll(filepath.Dir(c.Log.OutputPath), 0o755); err != nil {
 			return fmt.Errorf("failed to create log directory: %w", err)
 		}
+	}
+	if c.Sync.WindowHours <= 0 {
+		c.Sync.WindowHours = 24
+	}
+	if c.Sync.PageSize <= 0 || c.Sync.PageSize > 1000 {
+		c.Sync.PageSize = 500
+	}
+	if c.Sync.MaxSymbolsPerRun <= 0 {
+		c.Sync.MaxSymbolsPerRun = 10
 	}
 	return nil
 }

@@ -144,8 +144,10 @@ func setCacheHeaders(w http.ResponseWriter, path, etag string) {
 		// 静态资源（JS、CSS、图片等）缓存1年
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else if strings.HasSuffix(path, ".html") || path == "/" {
-		// HTML文件缓存1小时，但允许重新验证
-		w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate")
+		// SPA 入口不能长缓存，否则发布后旧 index.html 会继续引用已不存在的 hash chunk。
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
 	} else {
 		// 其他文件缓存1天
 		w.Header().Set("Cache-Control", "public, max-age=86400")

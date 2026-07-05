@@ -5,12 +5,54 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // SaveOrder 插入订单。
 func (g *GormStore) SaveOrder(ctx context.Context, spaceID string, o *service.Order) error {
 	o.SpaceID = spaceID
 	return g.db.WithContext(ctx).Create(o).Error
+}
+
+// UpsertOrders 批量写入交易所订单快照，按系统订单 ID 幂等更新。
+func (g *GormStore) UpsertOrders(ctx context.Context, spaceID string, orders []*service.Order) error {
+	if len(orders) == 0 {
+		return nil
+	}
+	for _, o := range orders {
+		o.SpaceID = spaceID
+	}
+	return g.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_client_order_id"}, {Name: "c_is_deleted"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"c_exchange_order_id",
+			"c_account_id",
+			"c_channel_id",
+			"c_exchange",
+			"c_symbol",
+			"c_market_type",
+			"c_side",
+			"c_pos_side",
+			"c_order_type",
+			"c_time_in_force",
+			"c_price",
+			"c_quantity",
+			"c_amount",
+			"c_filled_qty",
+			"c_filled_amount",
+			"c_avg_price",
+			"c_fee",
+			"c_fee_currency",
+			"c_status",
+			"c_reduce_only",
+			"c_trigger_price",
+			"c_source",
+			"c_reject_reason",
+			"c_submitted_at",
+			"c_finished_at",
+			"c_extra",
+		}),
+	}).Create(orders).Error
 }
 
 // UpdateOrder 更新订单（成交回填/状态推进/改单）。

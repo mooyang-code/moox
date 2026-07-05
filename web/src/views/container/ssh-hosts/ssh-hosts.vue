@@ -1,7 +1,6 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-      <SpaceContextBar />
       <!-- 筛选区域 -->
       <a-space wrap>
         <a-input
@@ -242,7 +241,6 @@
 </template>
 
 <script setup lang="ts">
-import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, reactive, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { Message, Modal } from '@arco-design/web-vue';

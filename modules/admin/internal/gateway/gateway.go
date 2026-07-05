@@ -144,6 +144,7 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 			http.Error(w, "service auth failed", http.StatusUnauthorized)
 			return
 		}
+		headers["service_auth"] = "true"
 	}
 
 	// 纯透传到目标服务的有协议 http 端口（本进程服务 / 远端 storage），

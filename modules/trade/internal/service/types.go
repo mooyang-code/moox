@@ -271,6 +271,61 @@ type OrderOperation struct {
 	UpdatedAt    time.Time `gorm:"column:c_mtime;type:datetime;default:CURRENT_TIMESTAMP" json:"-"`
 }
 
+// SyncType 定时同步游标类型。
+type SyncType string
+
+const (
+	SyncTypeBalances  SyncType = "balances"
+	SyncTypePositions SyncType = "positions"
+	SyncTypeOrders    SyncType = "orders"
+	SyncTypeTrades    SyncType = "trades"
+)
+
+// SyncCursorTableName 表名常量。
+const SyncCursorTableName = "t_trade_sync_cursors"
+
+// SyncCursor 记录定时同步增量游标。
+type SyncCursor struct {
+	ID            int64     `gorm:"primaryKey;column:c_id;autoIncrement" json:"-"`
+	SpaceID       string    `gorm:"column:c_space_id;not null;default:''" json:"space_id"`
+	AccountID     string    `gorm:"column:c_account_id;not null" json:"account_id"`
+	ChannelID     string    `gorm:"column:c_channel_id;not null;default:''" json:"channel_id"`
+	Exchange      string    `gorm:"column:c_exchange;not null;default:''" json:"exchange"`
+	MarketType    string    `gorm:"column:c_market_type;not null;default:''" json:"market_type"`
+	SyncType      SyncType  `gorm:"column:c_sync_type;not null" json:"sync_type"`
+	Symbol        string    `gorm:"column:c_symbol;not null;default:''" json:"symbol"`
+	CursorStartMS int64     `gorm:"column:c_cursor_start_ms;not null;default:0" json:"cursor_start_ms"`
+	CursorEndMS   int64     `gorm:"column:c_cursor_end_ms;not null;default:0" json:"cursor_end_ms"`
+	LastSuccessAt time.Time `gorm:"column:c_last_success_at;type:datetime" json:"last_success_at"`
+	LastError     string    `gorm:"column:c_last_error;not null;default:''" json:"last_error"`
+	IsEnabled     bool      `gorm:"column:c_is_enabled;not null;default:true" json:"is_enabled"`
+	CreatedAt     time.Time `gorm:"column:c_ctime;type:datetime;default:CURRENT_TIMESTAMP" json:"created_at"`
+	UpdatedAt     time.Time `gorm:"column:c_mtime;type:datetime;default:CURRENT_TIMESTAMP" json:"updated_at"`
+}
+
+// SyncOptions 控制定时同步的一次执行范围。
+type SyncOptions struct {
+	SpaceID          string
+	AccountID        string
+	Sections         map[SyncType]bool
+	WindowHours      int
+	PageSize         int
+	MaxSymbolsPerRun int
+	Now              time.Time
+}
+
+// SyncReport 汇总一次定时同步执行结果。
+type SyncReport struct {
+	SpaceID         string
+	AccountsScanned int
+	BalancesSynced  int
+	PositionsSynced int
+	OrdersSynced    int
+	TradesSynced    int
+	SkippedAccounts int
+	Errors          []string
+}
+
 // Page 分页入参。
 type Page struct {
 	PageNo   int
@@ -282,7 +337,7 @@ func (p Page) Normalize() Page {
 	if p.PageNo <= 0 {
 		p.PageNo = 1
 	}
-	if p.PageSize <= 0 || p.PageSize > 200 {
+	if p.PageSize <= 0 || p.PageSize > 1000 {
 		p.PageSize = 20
 	}
 	return p
@@ -302,3 +357,4 @@ func (Order) TableName() string          { return OrderTableName }
 func (Trade) TableName() string          { return TradeTableName }
 func (Position) TableName() string       { return PositionTableName }
 func (OrderOperation) TableName() string { return OrderOperationTableName }
+func (SyncCursor) TableName() string     { return SyncCursorTableName }

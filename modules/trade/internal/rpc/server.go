@@ -83,9 +83,11 @@ func (h *Server) GetAccount(ctx context.Context, req *mooxpb.GetAccountReq) (*mo
 func (h *Server) ListAccounts(ctx context.Context, req *mooxpb.ListAccountsReq) (*mooxpb.ListAccountsRsp, error) {
 	sid := spaceID(ctx)
 	f := service.AccountFilter{
-		UserID:      req.GetUserId(),
-		AccountType: accountTypeToDomain(req.GetAccountType()),
-		Keyword:     req.GetKeyword(),
+		UserID:  req.GetUserId(),
+		Keyword: req.GetKeyword(),
+	}
+	if req.AccountType != nil {
+		f.AccountType = accountTypeToDomain(req.GetAccountType())
 	}
 	page := pageFromPB(req.GetPage()).Normalize()
 	list, total, err := h.svc.Account.ListAccounts(ctx, sid, f, page)
@@ -97,6 +99,23 @@ func (h *Server) ListAccounts(ctx context.Context, req *mooxpb.ListAccountsReq) 
 		out = append(out, accountToPB(a))
 	}
 	return &mooxpb.ListAccountsRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Accounts: out, PageResult: pageResult(page, total)}, nil
+}
+
+func (h *Server) SyncExchangeAccounts(ctx context.Context, req *mooxpb.SyncExchangeAccountsReq) (*mooxpb.SyncExchangeAccountsRsp, error) {
+	sid := spaceID(ctx)
+	list, err := h.svc.SyncExchangeAccountsWithSnapshots(ctx, sid, service.SyncExchangeAccountsOptions{
+		UserID:     userID(ctx),
+		Provider:   req.GetProvider(),
+		MarketType: req.GetMarketType(),
+	})
+	if err != nil {
+		return &mooxpb.SyncExchangeAccountsRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	out := make([]*mooxpb.Account, 0, len(list))
+	for _, a := range list {
+		out = append(out, accountToPB(a))
+	}
+	return &mooxpb.SyncExchangeAccountsRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Accounts: out}, nil
 }
 
 // ===== BalanceSvc =====
@@ -116,42 +135,7 @@ func (h *Server) GetBalances(ctx context.Context, req *mooxpb.GetBalancesReq) (*
 
 func (h *Server) SyncBalances(ctx context.Context, req *mooxpb.SyncBalancesReq) (*mooxpb.SyncBalancesRsp, error) {
 	sid := spaceID(ctx)
-	accountID := req.GetAccountId()
-	a, err := h.svc.Account.GetAccount(ctx, sid, accountID)
-	if err != nil {
-		return &mooxpb.SyncBalancesRsp{RetInfo: errToRetInfo(err)}, nil
-	}
-	if a.ChannelID == "" {
-		// 未绑定通道：直接返回本地余额快照
-		return h.localBalances(ctx, sid, accountID)
-	}
-	adapter, cred, ch, err := h.svc.Order.ResolveAdapter(ctx, sid, a.ChannelID)
-	if err != nil {
-		return &mooxpb.SyncBalancesRsp{RetInfo: errToRetInfo(err)}, nil
-	}
-	market := exchange.MarketType(ch.MarketType)
-	exBs, err := adapter.GetBalances(ctx, cred, market, nil)
-	if err != nil {
-		return &mooxpb.SyncBalancesRsp{RetInfo: errToRetInfo(err)}, nil
-	}
-	domain := make([]*service.Balance, 0, len(exBs))
-	for _, b := range exBs {
-		domain = append(domain, &service.Balance{
-			AccountID: accountID,
-			Currency:  b.Currency,
-			Available: b.Available,
-			Frozen:    b.Frozen,
-			Total:     b.Total,
-		})
-	}
-	if err := h.svc.Account.UpsertBalances(ctx, sid, domain); err != nil {
-		return &mooxpb.SyncBalancesRsp{RetInfo: errToRetInfo(err)}, nil
-	}
-	return h.localBalances(ctx, sid, accountID)
-}
-
-func (h *Server) localBalances(ctx context.Context, sid, accountID string) (*mooxpb.SyncBalancesRsp, error) {
-	bs, err := h.svc.Account.GetBalances(ctx, sid, accountID, nil)
+	bs, err := h.svc.Account.SyncBalances(ctx, sid, req.GetAccountId())
 	if err != nil {
 		return &mooxpb.SyncBalancesRsp{RetInfo: errToRetInfo(err)}, nil
 	}
@@ -302,6 +286,23 @@ func (h *Server) TestChannel(ctx context.Context, req *mooxpb.TestChannelReq) (*
 	return &mooxpb.TestChannelRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Reachable: reachable, LatencyMs: int32(latency)}, nil
 }
 
+func (h *Server) ListInstruments(ctx context.Context, req *mooxpb.ListInstrumentsReq) (*mooxpb.ListInstrumentsRsp, error) {
+	sid := spaceID(ctx)
+	var market exchange.MarketType
+	if req.MarketType != nil {
+		market = exchange.MarketType(marketTypeToDomain(req.GetMarketType()))
+	}
+	list, err := h.svc.Order.ListInstruments(ctx, sid, req.GetChannelId(), market)
+	if err != nil {
+		return &mooxpb.ListInstrumentsRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	out := make([]*mooxpb.Instrument, 0, len(list))
+	for _, ins := range list {
+		out = append(out, instrumentToPB(ins))
+	}
+	return &mooxpb.ListInstrumentsRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Instruments: out}, nil
+}
+
 // ===== TradeOpSvc =====
 
 func (h *Server) PlaceOrder(ctx context.Context, req *mooxpb.PlaceOrderReq) (*mooxpb.PlaceOrderRsp, error) {
@@ -355,9 +356,9 @@ func (h *Server) AmendOrder(ctx context.Context, req *mooxpb.AmendOrderReq) (*mo
 	sid := spaceID(ctx)
 	ctx = service.WithOperator(ctx, userID(ctx))
 	xreq := &exchange.AmendOrderReq{
-		OrderID:       req.GetOrderId(),
-		NewPrice:      req.GetNewPrice(),
-		NewQuantity:   req.GetNewQuantity(),
+		OrderID:     req.GetOrderId(),
+		NewPrice:    req.GetNewPrice(),
+		NewQuantity: req.GetNewQuantity(),
 	}
 	o, err := h.svc.Order.AmendOrder(ctx, sid, req.GetChannelId(), xreq)
 	if err != nil {
@@ -372,6 +373,32 @@ func (h *Server) SetLeverage(ctx context.Context, req *mooxpb.SetLeverageReq) (*
 		return &mooxpb.SetLeverageRsp{RetInfo: errToRetInfo(err)}, nil
 	}
 	return &mooxpb.SetLeverageRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, "")}, nil
+}
+
+func (h *Server) ConvertDust(ctx context.Context, req *mooxpb.ConvertDustReq) (*mooxpb.ConvertDustRsp, error) {
+	sid := spaceID(ctx)
+	out, err := h.svc.Order.ConvertDust(ctx, sid, req.GetChannelId(), req.GetAssets())
+	if err != nil {
+		return &mooxpb.ConvertDustRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	if req.GetAccountId() != "" {
+		_, _ = h.svc.Account.SyncBalances(ctx, sid, req.GetAccountId())
+	}
+	rsp := &mooxpb.ConvertDustRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, "")}
+	if out == nil {
+		return rsp, nil
+	}
+	rsp.TotalServiceCharge = out.TotalServiceCharge
+	rsp.TotalTransfered = out.TotalTransfered
+	rsp.Results = make([]*mooxpb.DustTransferItem, 0, len(out.Results))
+	for _, item := range out.Results {
+		rsp.Results = append(rsp.Results, dustTransferItemToPB(item))
+	}
+	rsp.SkippedResults = make([]*mooxpb.DustTransferSkippedItem, 0, len(out.Skipped))
+	for _, item := range out.Skipped {
+		rsp.SkippedResults = append(rsp.SkippedResults, dustTransferSkippedItemToPB(item))
+	}
+	return rsp, nil
 }
 
 // ===== OrderSvc =====
@@ -408,6 +435,20 @@ func (h *Server) ListOrders(ctx context.Context, req *mooxpb.ListOrdersReq) (*mo
 	return &mooxpb.ListOrdersRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Orders: out, PageResult: pageResult(page, total)}, nil
 }
 
+func (h *Server) SyncOrders(ctx context.Context, req *mooxpb.SyncOrdersReq) (*mooxpb.SyncOrdersRsp, error) {
+	sid := spaceID(ctx)
+	page := pageFromPB(req.GetPage()).Normalize()
+	list, total, err := h.svc.Order.SyncOrders(ctx, sid, req.GetAccountId(), req.GetSymbol(), req.GetOnlyOpen(), req.GetStartTime(), req.GetEndTime(), page)
+	if err != nil {
+		return &mooxpb.SyncOrdersRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	out := make([]*mooxpb.Order, 0, len(list))
+	for _, o := range list {
+		out = append(out, orderToPB(o))
+	}
+	return &mooxpb.SyncOrdersRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Orders: out, PageResult: pageResult(page, total)}, nil
+}
+
 // ===== TradeQuerySvc =====
 
 func (h *Server) ListTrades(ctx context.Context, req *mooxpb.ListTradesReq) (*mooxpb.ListTradesRsp, error) {
@@ -431,6 +472,20 @@ func (h *Server) ListTrades(ctx context.Context, req *mooxpb.ListTradesReq) (*mo
 	return &mooxpb.ListTradesRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Trades: out, PageResult: pageResult(page, total)}, nil
 }
 
+func (h *Server) SyncTrades(ctx context.Context, req *mooxpb.SyncTradesReq) (*mooxpb.SyncTradesRsp, error) {
+	sid := spaceID(ctx)
+	page := pageFromPB(req.GetPage()).Normalize()
+	list, total, err := h.svc.Order.SyncTrades(ctx, sid, req.GetAccountId(), req.GetSymbol(), req.GetOrderId(), req.GetStartTime(), req.GetEndTime(), page)
+	if err != nil {
+		return &mooxpb.SyncTradesRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	out := make([]*mooxpb.Trade, 0, len(list))
+	for _, tr := range list {
+		out = append(out, tradeToPB(tr))
+	}
+	return &mooxpb.SyncTradesRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Trades: out, PageResult: pageResult(page, total)}, nil
+}
+
 // ===== PositionSvc =====
 
 func (h *Server) ListPositions(ctx context.Context, req *mooxpb.ListPositionsReq) (*mooxpb.ListPositionsRsp, error) {
@@ -444,4 +499,17 @@ func (h *Server) ListPositions(ctx context.Context, req *mooxpb.ListPositionsReq
 		out = append(out, positionToPB(p))
 	}
 	return &mooxpb.ListPositionsRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Positions: out}, nil
+}
+
+func (h *Server) SyncPositions(ctx context.Context, req *mooxpb.SyncPositionsReq) (*mooxpb.SyncPositionsRsp, error) {
+	sid := spaceID(ctx)
+	list, err := h.svc.Order.SyncPositions(ctx, sid, req.GetAccountId(), req.GetSymbol())
+	if err != nil {
+		return &mooxpb.SyncPositionsRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	out := make([]*mooxpb.Position, 0, len(list))
+	for _, p := range list {
+		out = append(out, positionToPB(p))
+	}
+	return &mooxpb.SyncPositionsRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Positions: out}, nil
 }

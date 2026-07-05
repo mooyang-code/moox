@@ -94,6 +94,19 @@ export interface TradeChannel {
   updated_at: number;
 }
 
+export interface Instrument {
+  symbol: string;
+  market_type: MarketType;
+  base_ccy: string;
+  quote_ccy: string;
+  tick_size: string;
+  lot_size: string;
+  min_notional: string;
+  min_qty: string;
+  last_price: string;
+  status: string;
+}
+
 export interface Order {
   order_id: string;
   client_order_id: string;
@@ -209,6 +222,15 @@ export interface ListAccountsRsp {
   page_result: PageResult;
 }
 
+export interface SyncExchangeAccountsReq {
+  provider?: string;
+  market_type?: string;
+}
+export interface SyncExchangeAccountsRsp {
+  ret_info: RetInfo;
+  accounts: Account[];
+}
+
 // BalanceSvc
 export interface GetBalancesReq {
   account_id: string;
@@ -322,6 +344,15 @@ export interface TestChannelRsp {
   latency_ms: number;
 }
 
+export interface ListInstrumentsReq {
+  channel_id: string;
+  market_type?: MarketType;
+}
+export interface ListInstrumentsRsp {
+  ret_info: RetInfo;
+  instruments: Instrument[];
+}
+
 // TradeOpSvc
 export interface PlaceOrderReq {
   account_id: string;
@@ -389,6 +420,33 @@ export interface SetLeverageReq {
 }
 export interface SetLeverageRsp { ret_info: RetInfo; }
 
+export interface DustTransferItem {
+  asset: string;
+  amount: string;
+  operate_time: number;
+  service_charge_amount: string;
+  tran_id: number;
+  transfered_amount: string;
+}
+
+export interface DustTransferSkippedItem {
+  asset: string;
+  reason: string;
+}
+
+export interface ConvertDustReq {
+  account_id: string;
+  channel_id: string;
+  assets: string[];
+}
+export interface ConvertDustRsp {
+  ret_info: RetInfo;
+  total_service_charge: string;
+  total_transfered: string;
+  results: DustTransferItem[];
+  skipped_results?: DustTransferSkippedItem[];
+}
+
 // OrderSvc
 export interface GetOrderReq {
   order_id?: string;
@@ -414,6 +472,19 @@ export interface ListOrdersRsp {
   orders: Order[];
   page_result: PageResult;
 }
+export interface SyncOrdersReq {
+  account_id: string;
+  symbol?: string;
+  only_open?: boolean;
+  start_time?: number;
+  end_time?: number;
+  page?: Page;
+}
+export interface SyncOrdersRsp {
+  ret_info: RetInfo;
+  orders: Order[];
+  page_result: PageResult;
+}
 
 // TradeQuerySvc
 export interface ListTradesReq {
@@ -429,6 +500,19 @@ export interface ListTradesRsp {
   trades: Trade[];
   page_result: PageResult;
 }
+export interface SyncTradesReq {
+  account_id: string;
+  order_id?: string;
+  symbol: string;
+  start_time?: number;
+  end_time?: number;
+  page?: Page;
+}
+export interface SyncTradesRsp {
+  ret_info: RetInfo;
+  trades: Trade[];
+  page_result: PageResult;
+}
 
 // PositionSvc
 export interface ListPositionsReq {
@@ -436,6 +520,15 @@ export interface ListPositionsReq {
   symbol?: string;
 }
 export interface ListPositionsRsp {
+  ret_info: RetInfo;
+  positions: Position[];
+}
+
+export interface SyncPositionsReq {
+  account_id: string;
+  symbol?: string;
+}
+export interface SyncPositionsRsp {
   ret_info: RetInfo;
   positions: Position[];
 }

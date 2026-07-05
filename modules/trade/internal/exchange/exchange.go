@@ -25,6 +25,10 @@ type ExchangeAdapter interface {
 
 	ListFundFlows(ctx context.Context, cred Credential, req *FundFlowQuery) ([]FundFlow, error)
 	Transfer(ctx context.Context, cred Credential, req *TransferReq) (*TransferResult, error)
+	// ListConvertibleDustAssets 查询当前可转换为目标资产的小额资产。
+	ListConvertibleDustAssets(ctx context.Context, cred Credential, req *DustConvertibleReq) ([]DustConvertibleAsset, error)
+	// ConvertDust 将小额资产转换为交易所支持的目标资产。Binance 现货目标为 BNB。
+	ConvertDust(ctx context.Context, cred Credential, req *DustTransferReq) (*DustTransferResult, error)
 
 	// ---- 下单 / 撤单 / 改单 / 杠杆 ----
 

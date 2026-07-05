@@ -30,6 +30,26 @@ func (g *GormStore) UpsertPositions(ctx context.Context, spaceID string, positio
 	}).Create(positions).Error
 }
 
+// ReplacePositions 删除账户当前持仓快照后写入新的交易所快照。
+func (g *GormStore) ReplacePositions(ctx context.Context, spaceID, accountID, symbol string, positions []*service.Position) error {
+	return g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		q := tx.Where("c_space_id = ? AND c_account_id = ?", spaceID, accountID)
+		if symbol != "" {
+			q = q.Where("c_symbol = ?", symbol)
+		}
+		if err := q.Delete(&service.Position{}).Error; err != nil {
+			return err
+		}
+		if len(positions) == 0 {
+			return nil
+		}
+		for _, p := range positions {
+			p.SpaceID = spaceID
+		}
+		return tx.Create(positions).Error
+	})
+}
+
 // ListPositions 查询持仓（可按 symbol 过滤）。
 func (g *GormStore) ListPositions(ctx context.Context, spaceID, accountID, symbol string) ([]*service.Position, error) {
 	q := g.db.WithContext(ctx).

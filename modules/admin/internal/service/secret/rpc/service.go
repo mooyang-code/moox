@@ -16,6 +16,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"gorm.io/gorm"
 
+	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -89,6 +90,28 @@ func (s *Service) GetSecret(ctx context.Context, req *pb.GetSecretReq) (*pb.GetS
 		return &pb.GetSecretRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询秘钥失败")}, nil
 	}
 	return &pb.GetSecretRsp{RetInfo: retOK(), Secret: secretModelToPB(secretRecord)}, nil
+}
+
+// RevealSecret 返回明文 secret_value，仅允许后台服务签名路径调用。
+func (s *Service) RevealSecret(ctx context.Context, req *pb.RevealSecretReq) (*pb.RevealSecretRsp, error) {
+	if !isServiceAuthCall(ctx) {
+		return &pb.RevealSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "RevealSecret仅允许后台服务调用")}, nil
+	}
+	if req.GetSecretId() == "" {
+		return &pb.RevealSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
+	}
+	secretRecord, err := s.svc.GetSecret(ctx, req.GetSecretId())
+	if err != nil {
+		log.ErrorContextf(ctx, "[Secret] RevealSecret failed: %v", err)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &pb.RevealSecretRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "秘钥不存在")}, nil
+		}
+		return &pb.RevealSecretRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询秘钥失败")}, nil
+	}
+	if secretRecord.Status != "" && secretRecord.Status != "active" {
+		return &pb.RevealSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥未启用")}, nil
+	}
+	return &pb.RevealSecretRsp{RetInfo: retOK(), Secret: secretModelToPlainPB(secretRecord)}, nil
 }
 
 // CreateSecret 创建秘钥。
@@ -280,6 +303,21 @@ func secretModelToPB(s *model.Secret) *pb.Secret {
 		CreateTime:  formatTime(s.CreateTime),
 		ModifyTime:  formatTime(s.ModifyTime),
 	}
+}
+
+func secretModelToPlainPB(s *model.Secret) *pb.Secret {
+	p := secretModelToPB(s)
+	if p != nil {
+		p.SecretValue = s.SecretValue
+	}
+	return p
+}
+
+func isServiceAuthCall(ctx context.Context) bool {
+	if r := thttp.Request(ctx); r != nil {
+		return strings.EqualFold(r.Header.Get("X-Moox-Service-Auth"), "true")
+	}
+	return false
 }
 
 // secretPBToModel pb.Secret → model.Secret（创建时用，不含 ID/时间戳）。

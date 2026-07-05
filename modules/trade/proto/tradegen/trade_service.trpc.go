@@ -28,6 +28,8 @@ type AccountSvcService interface {
 	GetAccount(ctx context.Context, req *GetAccountReq) (*GetAccountRsp, error)
 
 	ListAccounts(ctx context.Context, req *ListAccountsReq) (*ListAccountsRsp, error)
+
+	SyncExchangeAccounts(ctx context.Context, req *SyncExchangeAccountsReq) (*SyncExchangeAccountsRsp, error)
 }
 
 func AccountSvcService_CreateAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -120,6 +122,24 @@ func AccountSvcService_ListAccounts_Handler(svr interface{}, ctx context.Context
 	return rsp, nil
 }
 
+func AccountSvcService_SyncExchangeAccounts_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SyncExchangeAccountsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(AccountSvcService).SyncExchangeAccounts(ctx, reqbody.(*SyncExchangeAccountsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // AccountSvcServer_ServiceDesc descriptor for server.RegisterService.
 var AccountSvcServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.trade.AccountSvc",
@@ -144,6 +164,10 @@ var AccountSvcServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.trade.AccountSvc/ListAccounts",
 			Func: AccountSvcService_ListAccounts_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.AccountSvc/SyncExchangeAccounts",
+			Func: AccountSvcService_SyncExchangeAccounts_Handler,
 		},
 	},
 }
@@ -388,6 +412,8 @@ type ChannelSvcService interface {
 	ListChannels(ctx context.Context, req *ListChannelsReq) (*ListChannelsRsp, error)
 
 	TestChannel(ctx context.Context, req *TestChannelReq) (*TestChannelRsp, error)
+
+	ListInstruments(ctx context.Context, req *ListInstrumentsReq) (*ListInstrumentsRsp, error)
 }
 
 func ChannelSvcService_CreateChannel_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -480,6 +506,24 @@ func ChannelSvcService_TestChannel_Handler(svr interface{}, ctx context.Context,
 	return rsp, nil
 }
 
+func ChannelSvcService_ListInstruments_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListInstrumentsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(ChannelSvcService).ListInstruments(ctx, reqbody.(*ListInstrumentsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // ChannelSvcServer_ServiceDesc descriptor for server.RegisterService.
 var ChannelSvcServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.trade.ChannelSvc",
@@ -505,6 +549,10 @@ var ChannelSvcServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.trade.ChannelSvc/TestChannel",
 			Func: ChannelSvcService_TestChannel_Handler,
 		},
+		{
+			Name: "/trpc.moox.trade.ChannelSvc/ListInstruments",
+			Func: ChannelSvcService_ListInstruments_Handler,
+		},
 	},
 }
 
@@ -526,6 +574,8 @@ type TradeOpSvcService interface {
 	AmendOrder(ctx context.Context, req *AmendOrderReq) (*AmendOrderRsp, error)
 
 	SetLeverage(ctx context.Context, req *SetLeverageReq) (*SetLeverageRsp, error)
+
+	ConvertDust(ctx context.Context, req *ConvertDustReq) (*ConvertDustRsp, error)
 }
 
 func TradeOpSvcService_PlaceOrder_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -618,6 +668,24 @@ func TradeOpSvcService_SetLeverage_Handler(svr interface{}, ctx context.Context,
 	return rsp, nil
 }
 
+func TradeOpSvcService_ConvertDust_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ConvertDustReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeOpSvcService).ConvertDust(ctx, reqbody.(*ConvertDustReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // TradeOpSvcServer_ServiceDesc descriptor for server.RegisterService.
 var TradeOpSvcServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.trade.TradeOpSvc",
@@ -643,6 +711,10 @@ var TradeOpSvcServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.trade.TradeOpSvc/SetLeverage",
 			Func: TradeOpSvcService_SetLeverage_Handler,
 		},
+		{
+			Name: "/trpc.moox.trade.TradeOpSvc/ConvertDust",
+			Func: TradeOpSvcService_ConvertDust_Handler,
+		},
 	},
 }
 
@@ -658,6 +730,8 @@ type OrderSvcService interface {
 	GetOrder(ctx context.Context, req *GetOrderReq) (*GetOrderRsp, error)
 
 	ListOrders(ctx context.Context, req *ListOrdersReq) (*ListOrdersRsp, error)
+
+	SyncOrders(ctx context.Context, req *SyncOrdersReq) (*SyncOrdersRsp, error)
 }
 
 func OrderSvcService_GetOrder_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -696,6 +770,24 @@ func OrderSvcService_ListOrders_Handler(svr interface{}, ctx context.Context, f 
 	return rsp, nil
 }
 
+func OrderSvcService_SyncOrders_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SyncOrdersReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(OrderSvcService).SyncOrders(ctx, reqbody.(*SyncOrdersReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // OrderSvcServer_ServiceDesc descriptor for server.RegisterService.
 var OrderSvcServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.trade.OrderSvc",
@@ -708,6 +800,10 @@ var OrderSvcServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.trade.OrderSvc/ListOrders",
 			Func: OrderSvcService_ListOrders_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.OrderSvc/SyncOrders",
+			Func: OrderSvcService_SyncOrders_Handler,
 		},
 	},
 }
@@ -722,6 +818,8 @@ func RegisterOrderSvcService(s server.Service, svr OrderSvcService) {
 // TradeQuerySvcService defines service.
 type TradeQuerySvcService interface {
 	ListTrades(ctx context.Context, req *ListTradesReq) (*ListTradesRsp, error)
+
+	SyncTrades(ctx context.Context, req *SyncTradesReq) (*SyncTradesRsp, error)
 }
 
 func TradeQuerySvcService_ListTrades_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -742,6 +840,24 @@ func TradeQuerySvcService_ListTrades_Handler(svr interface{}, ctx context.Contex
 	return rsp, nil
 }
 
+func TradeQuerySvcService_SyncTrades_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SyncTradesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeQuerySvcService).SyncTrades(ctx, reqbody.(*SyncTradesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // TradeQuerySvcServer_ServiceDesc descriptor for server.RegisterService.
 var TradeQuerySvcServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.trade.TradeQuerySvc",
@@ -750,6 +866,10 @@ var TradeQuerySvcServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.trade.TradeQuerySvc/ListTrades",
 			Func: TradeQuerySvcService_ListTrades_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeQuerySvc/SyncTrades",
+			Func: TradeQuerySvcService_SyncTrades_Handler,
 		},
 	},
 }
@@ -764,6 +884,8 @@ func RegisterTradeQuerySvcService(s server.Service, svr TradeQuerySvcService) {
 // PositionSvcService defines service.
 type PositionSvcService interface {
 	ListPositions(ctx context.Context, req *ListPositionsReq) (*ListPositionsRsp, error)
+
+	SyncPositions(ctx context.Context, req *SyncPositionsReq) (*SyncPositionsRsp, error)
 }
 
 func PositionSvcService_ListPositions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -784,6 +906,24 @@ func PositionSvcService_ListPositions_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
+func PositionSvcService_SyncPositions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SyncPositionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PositionSvcService).SyncPositions(ctx, reqbody.(*SyncPositionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // PositionSvcServer_ServiceDesc descriptor for server.RegisterService.
 var PositionSvcServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.trade.PositionSvc",
@@ -792,6 +932,10 @@ var PositionSvcServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.trade.PositionSvc/ListPositions",
 			Func: PositionSvcService_ListPositions_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.PositionSvc/SyncPositions",
+			Func: PositionSvcService_SyncPositions_Handler,
 		},
 	},
 }
@@ -821,6 +965,9 @@ func (s *UnimplementedAccountSvc) GetAccount(ctx context.Context, req *GetAccoun
 }
 func (s *UnimplementedAccountSvc) ListAccounts(ctx context.Context, req *ListAccountsReq) (*ListAccountsRsp, error) {
 	return nil, errors.New("rpc ListAccounts of service AccountSvc is not implemented")
+}
+func (s *UnimplementedAccountSvc) SyncExchangeAccounts(ctx context.Context, req *SyncExchangeAccountsReq) (*SyncExchangeAccountsRsp, error) {
+	return nil, errors.New("rpc SyncExchangeAccounts of service AccountSvc is not implemented")
 }
 
 type UnimplementedBalanceSvc struct{}
@@ -870,6 +1017,9 @@ func (s *UnimplementedChannelSvc) ListChannels(ctx context.Context, req *ListCha
 func (s *UnimplementedChannelSvc) TestChannel(ctx context.Context, req *TestChannelReq) (*TestChannelRsp, error) {
 	return nil, errors.New("rpc TestChannel of service ChannelSvc is not implemented")
 }
+func (s *UnimplementedChannelSvc) ListInstruments(ctx context.Context, req *ListInstrumentsReq) (*ListInstrumentsRsp, error) {
+	return nil, errors.New("rpc ListInstruments of service ChannelSvc is not implemented")
+}
 
 type UnimplementedTradeOpSvc struct{}
 
@@ -888,6 +1038,9 @@ func (s *UnimplementedTradeOpSvc) AmendOrder(ctx context.Context, req *AmendOrde
 func (s *UnimplementedTradeOpSvc) SetLeverage(ctx context.Context, req *SetLeverageReq) (*SetLeverageRsp, error) {
 	return nil, errors.New("rpc SetLeverage of service TradeOpSvc is not implemented")
 }
+func (s *UnimplementedTradeOpSvc) ConvertDust(ctx context.Context, req *ConvertDustReq) (*ConvertDustRsp, error) {
+	return nil, errors.New("rpc ConvertDust of service TradeOpSvc is not implemented")
+}
 
 type UnimplementedOrderSvc struct{}
 
@@ -897,17 +1050,26 @@ func (s *UnimplementedOrderSvc) GetOrder(ctx context.Context, req *GetOrderReq) 
 func (s *UnimplementedOrderSvc) ListOrders(ctx context.Context, req *ListOrdersReq) (*ListOrdersRsp, error) {
 	return nil, errors.New("rpc ListOrders of service OrderSvc is not implemented")
 }
+func (s *UnimplementedOrderSvc) SyncOrders(ctx context.Context, req *SyncOrdersReq) (*SyncOrdersRsp, error) {
+	return nil, errors.New("rpc SyncOrders of service OrderSvc is not implemented")
+}
 
 type UnimplementedTradeQuerySvc struct{}
 
 func (s *UnimplementedTradeQuerySvc) ListTrades(ctx context.Context, req *ListTradesReq) (*ListTradesRsp, error) {
 	return nil, errors.New("rpc ListTrades of service TradeQuerySvc is not implemented")
 }
+func (s *UnimplementedTradeQuerySvc) SyncTrades(ctx context.Context, req *SyncTradesReq) (*SyncTradesRsp, error) {
+	return nil, errors.New("rpc SyncTrades of service TradeQuerySvc is not implemented")
+}
 
 type UnimplementedPositionSvc struct{}
 
 func (s *UnimplementedPositionSvc) ListPositions(ctx context.Context, req *ListPositionsReq) (*ListPositionsRsp, error) {
 	return nil, errors.New("rpc ListPositions of service PositionSvc is not implemented")
+}
+func (s *UnimplementedPositionSvc) SyncPositions(ctx context.Context, req *SyncPositionsReq) (*SyncPositionsRsp, error) {
+	return nil, errors.New("rpc SyncPositions of service PositionSvc is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -927,6 +1089,8 @@ type AccountSvcClientProxy interface {
 	GetAccount(ctx context.Context, req *GetAccountReq, opts ...client.Option) (rsp *GetAccountRsp, err error)
 
 	ListAccounts(ctx context.Context, req *ListAccountsReq, opts ...client.Option) (rsp *ListAccountsRsp, err error)
+
+	SyncExchangeAccounts(ctx context.Context, req *SyncExchangeAccountsReq, opts ...client.Option) (rsp *SyncExchangeAccountsRsp, err error)
 }
 
 type AccountSvcClientProxyImpl struct {
@@ -1032,6 +1196,26 @@ func (c *AccountSvcClientProxyImpl) ListAccounts(ctx context.Context, req *ListA
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListAccountsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *AccountSvcClientProxyImpl) SyncExchangeAccounts(ctx context.Context, req *SyncExchangeAccountsReq, opts ...client.Option) (*SyncExchangeAccountsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.AccountSvc/SyncExchangeAccounts")
+	msg.WithCalleeServiceName(AccountSvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("AccountSvc")
+	msg.WithCalleeMethod("SyncExchangeAccounts")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SyncExchangeAccountsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1239,6 +1423,8 @@ type ChannelSvcClientProxy interface {
 	ListChannels(ctx context.Context, req *ListChannelsReq, opts ...client.Option) (rsp *ListChannelsRsp, err error)
 
 	TestChannel(ctx context.Context, req *TestChannelReq, opts ...client.Option) (rsp *TestChannelRsp, err error)
+
+	ListInstruments(ctx context.Context, req *ListInstrumentsReq, opts ...client.Option) (rsp *ListInstrumentsRsp, err error)
 }
 
 type ChannelSvcClientProxyImpl struct {
@@ -1350,6 +1536,26 @@ func (c *ChannelSvcClientProxyImpl) TestChannel(ctx context.Context, req *TestCh
 	return rsp, nil
 }
 
+func (c *ChannelSvcClientProxyImpl) ListInstruments(ctx context.Context, req *ListInstrumentsReq, opts ...client.Option) (*ListInstrumentsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.ChannelSvc/ListInstruments")
+	msg.WithCalleeServiceName(ChannelSvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("ChannelSvc")
+	msg.WithCalleeMethod("ListInstruments")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListInstrumentsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // TradeOpSvcClientProxy defines service client proxy
 type TradeOpSvcClientProxy interface {
 	PlaceOrder(ctx context.Context, req *PlaceOrderReq, opts ...client.Option) (rsp *PlaceOrderRsp, err error)
@@ -1361,6 +1567,8 @@ type TradeOpSvcClientProxy interface {
 	AmendOrder(ctx context.Context, req *AmendOrderReq, opts ...client.Option) (rsp *AmendOrderRsp, err error)
 
 	SetLeverage(ctx context.Context, req *SetLeverageReq, opts ...client.Option) (rsp *SetLeverageRsp, err error)
+
+	ConvertDust(ctx context.Context, req *ConvertDustReq, opts ...client.Option) (rsp *ConvertDustRsp, err error)
 }
 
 type TradeOpSvcClientProxyImpl struct {
@@ -1472,11 +1680,33 @@ func (c *TradeOpSvcClientProxyImpl) SetLeverage(ctx context.Context, req *SetLev
 	return rsp, nil
 }
 
+func (c *TradeOpSvcClientProxyImpl) ConvertDust(ctx context.Context, req *ConvertDustReq, opts ...client.Option) (*ConvertDustRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeOpSvc/ConvertDust")
+	msg.WithCalleeServiceName(TradeOpSvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeOpSvc")
+	msg.WithCalleeMethod("ConvertDust")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ConvertDustRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // OrderSvcClientProxy defines service client proxy
 type OrderSvcClientProxy interface {
 	GetOrder(ctx context.Context, req *GetOrderReq, opts ...client.Option) (rsp *GetOrderRsp, err error)
 
 	ListOrders(ctx context.Context, req *ListOrdersReq, opts ...client.Option) (rsp *ListOrdersRsp, err error)
+
+	SyncOrders(ctx context.Context, req *SyncOrdersReq, opts ...client.Option) (rsp *SyncOrdersRsp, err error)
 }
 
 type OrderSvcClientProxyImpl struct {
@@ -1528,9 +1758,31 @@ func (c *OrderSvcClientProxyImpl) ListOrders(ctx context.Context, req *ListOrder
 	return rsp, nil
 }
 
+func (c *OrderSvcClientProxyImpl) SyncOrders(ctx context.Context, req *SyncOrdersReq, opts ...client.Option) (*SyncOrdersRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.OrderSvc/SyncOrders")
+	msg.WithCalleeServiceName(OrderSvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("OrderSvc")
+	msg.WithCalleeMethod("SyncOrders")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SyncOrdersRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // TradeQuerySvcClientProxy defines service client proxy
 type TradeQuerySvcClientProxy interface {
 	ListTrades(ctx context.Context, req *ListTradesReq, opts ...client.Option) (rsp *ListTradesRsp, err error)
+
+	SyncTrades(ctx context.Context, req *SyncTradesReq, opts ...client.Option) (rsp *SyncTradesRsp, err error)
 }
 
 type TradeQuerySvcClientProxyImpl struct {
@@ -1562,9 +1814,31 @@ func (c *TradeQuerySvcClientProxyImpl) ListTrades(ctx context.Context, req *List
 	return rsp, nil
 }
 
+func (c *TradeQuerySvcClientProxyImpl) SyncTrades(ctx context.Context, req *SyncTradesReq, opts ...client.Option) (*SyncTradesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeQuerySvc/SyncTrades")
+	msg.WithCalleeServiceName(TradeQuerySvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeQuerySvc")
+	msg.WithCalleeMethod("SyncTrades")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SyncTradesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // PositionSvcClientProxy defines service client proxy
 type PositionSvcClientProxy interface {
 	ListPositions(ctx context.Context, req *ListPositionsReq, opts ...client.Option) (rsp *ListPositionsRsp, err error)
+
+	SyncPositions(ctx context.Context, req *SyncPositionsReq, opts ...client.Option) (rsp *SyncPositionsRsp, err error)
 }
 
 type PositionSvcClientProxyImpl struct {
@@ -1590,6 +1864,26 @@ func (c *PositionSvcClientProxyImpl) ListPositions(ctx context.Context, req *Lis
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListPositionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PositionSvcClientProxyImpl) SyncPositions(ctx context.Context, req *SyncPositionsReq, opts ...client.Option) (*SyncPositionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.PositionSvc/SyncPositions")
+	msg.WithCalleeServiceName(PositionSvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("PositionSvc")
+	msg.WithCalleeMethod("SyncPositions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SyncPositionsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

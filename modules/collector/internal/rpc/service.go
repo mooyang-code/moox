@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/repository"
@@ -373,87 +374,30 @@ func jobTypesFromInstances(instances []domain.TaskInstance) []string {
 
 // GetDataTypeConfigs returns the currently supported collector rule data types.
 func (s *Service) GetDataTypeConfigs(ctx context.Context, req *pb.GetDataTypeConfigsReq) (*pb.GetDataTypeConfigsRsp, error) {
+	definitions := jobs.ListDefinitions()
+	configs := make([]*pb.DataTypeConfig, 0, len(definitions))
+	for _, definition := range definitions {
+		configs = append(configs, dataTypeConfigFromDefinition(definition))
+	}
 	return &pb.GetDataTypeConfigsRsp{
 		RetInfo: retOK(),
-		Configs: []*pb.DataTypeConfig{
-			klineDataTypeConfig(),
-			symbolDataTypeConfig(),
-		},
+		Configs: configs,
 	}, nil
 }
 
 // GetDataTypeConfigWithFields returns field metadata for the rule form.
 func (s *Service) GetDataTypeConfigWithFields(ctx context.Context, req *pb.GetDataTypeConfigWithFieldsReq) (*pb.GetDataTypeConfigWithFieldsRsp, error) {
-	switch req.GetDataType() {
-	case "kline":
-		return &pb.GetDataTypeConfigWithFieldsRsp{
-			RetInfo: retOK(),
-			Detail: &pb.DataTypeConfigDetail{
-				Config: klineDataTypeConfig(),
-				Fields: []*pb.DataTypeFieldConfig{
-					{
-						Id:                1,
-						DataType:          "kline",
-						FieldKey:          "inst_type",
-						FieldName:         "产品类型",
-						FieldType:         "select",
-						IsRequired:        true,
-						DefaultValue:      valueFromAny("SPOT"),
-						FieldOptions:      structFromJSONString(`{"options":[{"value":"SPOT","label":"现货"},{"value":"SWAP","label":"永续合约"}]}`),
-						DataSourceOptions: supportedDataSourceOptions(),
-						SortOrder:         1,
-					},
-					{
-						Id:                2,
-						DataType:          "kline",
-						FieldKey:          "objects",
-						FieldName:         "交易标的",
-						FieldType:         "multi_input",
-						IsRequired:        true,
-						DefaultValue:      valueFromAny([]any{"*"}),
-						FieldOptions:      structFromJSONString(`{"placeholder":"输入交易标的，例如 BTCUSDT；选择全部时使用 *"}`),
-						DataSourceOptions: supportedDataSourceOptions(),
-						SortOrder:         2,
-					},
-					{
-						Id:                3,
-						DataType:          "kline",
-						FieldKey:          "intervals",
-						FieldName:         "K线周期",
-						FieldType:         "multi_select",
-						IsRequired:        true,
-						DefaultValue:      valueFromAny([]any{"1m"}),
-						FieldOptions:      structFromJSONString(`{"options":[{"value":"1m","label":"1分钟"},{"value":"3m","label":"3分钟"},{"value":"5m","label":"5分钟"},{"value":"15m","label":"15分钟"},{"value":"30m","label":"30分钟"},{"value":"1h","label":"1小时"},{"value":"2h","label":"2小时"},{"value":"4h","label":"4小时"},{"value":"6h","label":"6小时"},{"value":"12h","label":"12小时"},{"value":"1d","label":"1天"},{"value":"1w","label":"1周"},{"value":"1M","label":"1月"}]}`),
-						DataSourceOptions: supportedDataSourceOptions(),
-						SortOrder:         3,
-					},
-				},
-			},
-		}, nil
-	case "symbol":
-		return &pb.GetDataTypeConfigWithFieldsRsp{
-			RetInfo: retOK(),
-			Detail: &pb.DataTypeConfigDetail{
-				Config: symbolDataTypeConfig(),
-				Fields: []*pb.DataTypeFieldConfig{
-					{
-						Id:                4,
-						DataType:          "symbol",
-						FieldKey:          "inst_type",
-						FieldName:         "产品类型",
-						FieldType:         "select",
-						IsRequired:        true,
-						DefaultValue:      valueFromAny("SPOT"),
-						FieldOptions:      structFromJSONString(`{"options":[{"value":"SPOT","label":"现货"},{"value":"SWAP","label":"永续合约"}]}`),
-						DataSourceOptions: supportedDataSourceOptions(),
-						SortOrder:         1,
-					},
-				},
-			},
-		}, nil
-	default:
+	definition, ok := jobs.DefinitionByDataType(req.GetDataType())
+	if !ok {
 		return &pb.GetDataTypeConfigWithFieldsRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "unsupported data_type")}, nil
 	}
+	return &pb.GetDataTypeConfigWithFieldsRsp{
+		RetInfo: retOK(),
+		Detail: &pb.DataTypeConfigDetail{
+			Config: dataTypeConfigFromDefinition(definition),
+			Fields: dataTypeFieldsFromDefinition(definition),
+		},
+	}, nil
 }
 
 func normalizeTaskRule(rule domain.TaskRule) domain.TaskRule {
@@ -495,32 +439,43 @@ func validateTaskRule(rule domain.TaskRule) error {
 	return nil
 }
 
-func klineDataTypeConfig() *pb.DataTypeConfig {
+func dataTypeConfigFromDefinition(definition jobs.Definition) *pb.DataTypeConfig {
 	return &pb.DataTypeConfig{
-		Id:                1,
-		DataType:          "kline",
-		TypeName:          "K线",
-		TypeDesc:          "交易所K线行情采集",
-		DataSourceOptions: supportedDataSourceOptions(),
-		SortOrder:         1,
-		Version:           1,
+		Id:                definition.ID,
+		DataType:          definition.DataType,
+		TypeName:          definition.TypeName,
+		TypeDesc:          definition.TypeDesc,
+		DataSourceOptions: structFromAny(definition.DataSourceOptions),
+		SortOrder:         definition.SortOrder,
+		Version:           definition.Version,
 	}
 }
 
-func symbolDataTypeConfig() *pb.DataTypeConfig {
-	return &pb.DataTypeConfig{
-		Id:                2,
-		DataType:          "symbol",
-		TypeName:          "标的",
-		TypeDesc:          "交易所标的元数据同步",
-		DataSourceOptions: supportedDataSourceOptions(),
-		SortOrder:         2,
-		Version:           1,
+func dataTypeFieldsFromDefinition(definition jobs.Definition) []*pb.DataTypeFieldConfig {
+	fields := make([]*pb.DataTypeFieldConfig, 0, len(definition.Fields))
+	for _, field := range definition.Fields {
+		fields = append(fields, &pb.DataTypeFieldConfig{
+			Id:                field.ID,
+			DataType:          field.DataType,
+			FieldKey:          field.FieldKey,
+			FieldName:         field.FieldName,
+			FieldType:         field.FieldType,
+			IsRequired:        field.IsRequired,
+			DefaultValue:      valueFromAny(field.DefaultValue),
+			FieldOptions:      structFromJSONString(field.FieldOptionsJSON),
+			DataSourceOptions: structFromAny(field.DataSourceOptions),
+			SortOrder:         field.SortOrder,
+		})
 	}
+	return fields
 }
 
-func supportedDataSourceOptions() *structpb.Struct {
-	return structFromJSONString(`{"options":[{"value":"binance","label":"币安"}]}`)
+func structFromAny(value any) *structpb.Struct {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return &structpb.Struct{Fields: map[string]*structpb.Value{}}
+	}
+	return structFromJSONString(string(raw))
 }
 
 func valueFromAny(value any) *structpb.Value {

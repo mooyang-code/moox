@@ -1,16 +1,21 @@
 package service
 
-import "github.com/mooyang-code/moox/modules/trade/internal/exchange"
+import (
+	"context"
+
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+)
 
 // Service 是 Trade 模块的服务聚合入口。
 // Trade 模块统一承载账户（account）与订单（order）两条交易链路，
 // 内部按域拆分为 AccountService 与 OrderService，共享同一 Store 与交易所适配层。
 type Service struct {
-	module  string
-	store   Store
-	exNew   ExchangeFactory
-	Account *AccountService
-	Order   *OrderService
+	module       string
+	store        Store
+	exNew        ExchangeFactory
+	secretSource ExchangeSecretSource
+	Account      *AccountService
+	Order        *OrderService
 }
 
 // ExchangeFactory 按交易所名创建适配器，默认使用 exchange.New。
@@ -27,6 +32,11 @@ func WithExchangeFactory(f ExchangeFactory) Option {
 	return func(svc *Service) { svc.exNew = f }
 }
 
+// WithExchangeSecretSource 注入后台秘钥来源，用于从 admin 秘钥管理同步交易账户。
+func WithExchangeSecretSource(src ExchangeSecretSource) Option {
+	return func(svc *Service) { svc.secretSource = src }
+}
+
 // New 创建 Trade 服务聚合。
 func New(module string, opts ...Option) *Service {
 	if module == "" {
@@ -36,7 +46,7 @@ func New(module string, opts ...Option) *Service {
 	for _, opt := range opts {
 		opt(svc)
 	}
-	svc.Account = &AccountService{store: svc.store}
+	svc.Account = &AccountService{store: svc.store, secretSource: svc.secretSource, exNew: svc.exNew}
 	svc.Order = &OrderService{store: svc.store, exNew: svc.exNew}
 	return svc
 }
@@ -50,4 +60,23 @@ type Health struct {
 // Health 返回健康状态。
 func (s *Service) Health() Health {
 	return Health{Module: s.module, Ready: true}
+}
+
+// SyncExchangeAccountsWithSnapshots 导入后台秘钥账户，并刷新账户余额与合约持仓快照。
+func (s *Service) SyncExchangeAccountsWithSnapshots(ctx context.Context, spaceID string, opts SyncExchangeAccountsOptions) ([]*Account, error) {
+	accounts, err := s.Account.SyncExchangeAccounts(ctx, spaceID, opts)
+	if err != nil {
+		return nil, err
+	}
+	for _, account := range accounts {
+		if _, err := s.Account.SyncBalances(ctx, spaceID, account.AccountID); err != nil {
+			return nil, err
+		}
+		if account.AccountType == AccountSwap {
+			if _, err := s.Order.SyncPositions(ctx, spaceID, account.AccountID, ""); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return accounts, nil
 }

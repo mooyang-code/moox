@@ -20,3 +20,16 @@ func TestTradeSchemaUsesBoolSoftDelete(t *testing.T) {
 		t.Fatalf("expected 6 bool soft-delete columns, got %d", got)
 	}
 }
+
+func TestAllSQLIncludesTradeSyncCursorSchema(t *testing.T) {
+	sql := AllSQL()
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS t_trade_sync_cursors",
+		"idx_trade_sync_cursors_unique",
+		"idx_trade_sync_cursors_account",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("AllSQL() missing %q", want)
+		}
+	}
+}

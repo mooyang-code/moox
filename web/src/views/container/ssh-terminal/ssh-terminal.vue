@@ -1,6 +1,5 @@
 <template>
   <div class="ssh-terminal-page">
-    <SpaceContextBar />
     <!-- Tab bar -->
     <div class="tab-bar">
       <div class="tab-list">
@@ -124,7 +123,6 @@
 </template>
 
 <script setup lang="ts">
-import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';

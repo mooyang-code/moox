@@ -13,6 +13,24 @@ database:
 security:
   encryption_key: "moox-cloud-secret-key-32bytes"
 
+control_gateway:
+  base_url: "http://106.53.107.122:11000"
+  service_auth:
+    version: "moox-auth-v1"
+    access_key: "moox-service"
+    secret_key: "moox-service-secret-change-me"
+    expire_seconds: 1800
+
+sync:
+  enabled: true
+  sync_balances: true
+  sync_positions: true
+  sync_orders: true
+  sync_trades: true
+  window_hours: 24
+  page_size: 500
+  max_symbols_per_run: 10
+
 log:
   level: info
   output_path: ./log/moox_trade.log

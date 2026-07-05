@@ -38,6 +38,7 @@ type Store interface {
 	ListChannels(ctx context.Context, spaceID string, f ChannelFilter, page Page) ([]*TradeChannel, int, error)
 
 	SaveOrder(ctx context.Context, spaceID string, o *Order) error
+	UpsertOrders(ctx context.Context, spaceID string, orders []*Order) error
 	UpdateOrder(ctx context.Context, spaceID string, o *Order) error
 	GetOrder(ctx context.Context, spaceID, orderID, clientOrderID string) (*Order, error)
 	ListOrders(ctx context.Context, spaceID string, f OrderFilter, page Page) ([]*Order, int, error)
@@ -46,6 +47,7 @@ type Store interface {
 	ListTrades(ctx context.Context, spaceID string, f TradeFilter, page Page) ([]*Trade, int, error)
 
 	UpsertPositions(ctx context.Context, spaceID string, positions []*Position) error
+	ReplacePositions(ctx context.Context, spaceID, accountID, symbol string, positions []*Position) error
 	ListPositions(ctx context.Context, spaceID, accountID, symbol string) ([]*Position, error)
 
 	// ---- 操作审计 ----
@@ -54,6 +56,12 @@ type Store interface {
 	AppendOrderOperation(ctx context.Context, spaceID string, op *OrderOperation) error
 	// UpdateOrderOperation 回填操作结果（状态/响应/耗时/错误）。
 	UpdateOrderOperation(ctx context.Context, spaceID string, op *OrderOperation) error
+
+	// ---- 定时同步游标 ----
+
+	GetSyncCursor(ctx context.Context, spaceID, accountID string, syncType SyncType, symbol string) (*SyncCursor, error)
+	UpsertSyncCursor(ctx context.Context, spaceID string, cursor *SyncCursor) error
+	ListSyncCursors(ctx context.Context, spaceID, accountID string, syncType SyncType) ([]*SyncCursor, error)
 }
 
 // AccountFilter 账户查询过滤。

@@ -4,8 +4,6 @@
       <h2>主机监控</h2>
       <p>实时监控主机资源使用情况</p>
     </div>
-    <SpaceContextBar />
-
     <div class="page-content">
       <a-row :gutter="20">
         <!-- 总览卡片 -->
@@ -206,7 +204,6 @@
 </template>
 
 <script setup lang="ts">
-import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { default as VChart } from '@visactor/vchart';

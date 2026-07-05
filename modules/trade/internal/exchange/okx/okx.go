@@ -146,6 +146,11 @@ type okxInstrument struct {
 	State    string `json:"state"`
 }
 
+type okxTicker struct {
+	InstID string `json:"instId"`
+	Last   string `json:"last"`
+}
+
 func (a *Adapter) GetInstruments(ctx context.Context, market exchange.MarketType) ([]exchange.Instrument, error) {
 	a.insMu.RLock()
 	if a.ins != nil && time.Now().Before(a.insExp) {
@@ -166,11 +171,15 @@ func (a *Adapter) GetInstruments(ctx context.Context, market exchange.MarketType
 	if err := httpclient.DecodeJSON(data, &arr); err != nil {
 		return nil, err
 	}
+	prices, err := loadTickerPrices(ctx, market)
+	if err != nil {
+		return nil, err
+	}
 	m := make(map[string]exchange.Instrument, len(arr))
 	for _, it := range arr {
 		m[it.InstID] = exchange.Instrument{
 			Symbol: it.InstID, Market: market, BaseCcy: it.BaseCcy, QuoteCcy: it.QuoteCcy,
-			TickSize: it.TickSz, LotSize: it.LotSz, MinQty: it.MinSz, Status: it.State,
+			TickSize: it.TickSz, LotSize: it.LotSz, MinQty: it.MinSz, LastPrice: prices[it.InstID], Status: it.State,
 		}
 	}
 	a.insMu.Lock()
@@ -184,13 +193,29 @@ func (a *Adapter) GetInstruments(ctx context.Context, market exchange.MarketType
 	return out, nil
 }
 
+func loadTickerPrices(ctx context.Context, market exchange.MarketType) (map[string]string, error) {
+	data, err := doPublic(ctx, "GET", "/api/v5/market/tickers", url.Values{"instType": []string{instType(market)}})
+	if err != nil {
+		return nil, err
+	}
+	var arr []okxTicker
+	if err := httpclient.DecodeJSON(data, &arr); err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(arr))
+	for _, item := range arr {
+		out[item.InstID] = item.Last
+	}
+	return out, nil
+}
+
 // ---- 账户 / 余额 ----
 
 type okxBalance struct {
-	Ccy     string `json:"ccy"`
-	AvailBal string `json:"availBal"`
+	Ccy       string `json:"ccy"`
+	AvailBal  string `json:"availBal"`
 	FrozenBal string `json:"frozenBal"`
-	Eq      string `json:"eq"`
+	Eq        string `json:"eq"`
 }
 
 func (a *Adapter) GetBalances(ctx context.Context, cred exchange.Credential, market exchange.MarketType, currencies []string) ([]exchange.Balance, error) {
@@ -436,21 +461,21 @@ func (a *Adapter) ClosePosition(ctx context.Context, cred exchange.Credential, m
 // ---- 查询 ----
 
 type okxOrderInfo struct {
-	OrdID    string `json:"ordId"`
-	ClOrdID  string `json:"clOrdId"`
-	InstID   string `json:"instId"`
-	Side     string `json:"side"`
-	OrdType  string `json:"ordType"`
-	Px       string `json:"px"`
-	Sz       string `json:"sz"`
-	FillSz   string `json:"fillSz"`
-	FillPx   string `json:"fillPx"`
-	AvgPx    string `json:"avgPx"`
-	State    string `json:"state"`
-	Fee      string `json:"fee"`
-	FeeCcy   string `json:"feeCcy"`
-	CTime    string `json:"cTime"`
-	UTime    string `json:"uTime"`
+	OrdID   string `json:"ordId"`
+	ClOrdID string `json:"clOrdId"`
+	InstID  string `json:"instId"`
+	Side    string `json:"side"`
+	OrdType string `json:"ordType"`
+	Px      string `json:"px"`
+	Sz      string `json:"sz"`
+	FillSz  string `json:"fillSz"`
+	FillPx  string `json:"fillPx"`
+	AvgPx   string `json:"avgPx"`
+	State   string `json:"state"`
+	Fee     string `json:"fee"`
+	FeeCcy  string `json:"feeCcy"`
+	CTime   string `json:"cTime"`
+	UTime   string `json:"uTime"`
 }
 
 func okxOrderToDomain(o *okxOrderInfo, market exchange.MarketType) *exchange.Order {
@@ -658,11 +683,11 @@ func (a *Adapter) Transfer(ctx context.Context, cred exchange.Credential, req *e
 		return nil, errInvalidParam
 	}
 	body := map[string]string{
-		"ccy":   strings.ToUpper(req.Currency),
-		"amt":   req.Amount,
-		"from":  okxAccountType(req.From),
-		"to":    okxAccountType(req.To),
-		"type":  "0",
+		"ccy":  strings.ToUpper(req.Currency),
+		"amt":  req.Amount,
+		"from": okxAccountType(req.From),
+		"to":   okxAccountType(req.To),
+		"type": "0",
 	}
 	bodyStr := jsonMarshal(body)
 	data, err := doSign(ctx, cred, "POST", "/api/v5/asset/transfer", nil, bodyStr)
@@ -679,6 +704,14 @@ func (a *Adapter) Transfer(ctx context.Context, cred exchange.Credential, req *e
 		return nil, errors.New("okx: empty transfer response")
 	}
 	return &exchange.TransferResult{TransferID: arr[0].TransID}, nil
+}
+
+func (a *Adapter) ListConvertibleDustAssets(ctx context.Context, cred exchange.Credential, req *exchange.DustConvertibleReq) ([]exchange.DustConvertibleAsset, error) {
+	return nil, errNotImplemented
+}
+
+func (a *Adapter) ConvertDust(ctx context.Context, cred exchange.Credential, req *exchange.DustTransferReq) (*exchange.DustTransferResult, error) {
+	return nil, errNotImplemented
 }
 
 // ---- 辅助 ----

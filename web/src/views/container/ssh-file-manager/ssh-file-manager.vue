@@ -1,6 +1,5 @@
 <template>
   <div class="ssh-file-manager-page">
-    <SpaceContextBar />
     <!-- 路径输入框 -->
     <div class="path-input-bar">
       <a-input
@@ -60,9 +59,17 @@
       <template #columns>
         <a-table-column title="名称" data-index="name" :width="240">
           <template #cell="{ record }">
-            <a-space>
-              <icon-folder v-if="record.type === 'd'" style="color: #ffb84d; font-size: 18px;" />
-              <icon-file v-else style="color: #4080ff; font-size: 18px;" />
+            <a-space
+              class="file-entry"
+              :class="{ 'file-entry-directory': record.type === 'd' }"
+              :role="record.type === 'd' ? 'button' : undefined"
+              :tabindex="record.type === 'd' ? 0 : undefined"
+              @click.stop="record.type === 'd' && openDirectory(record)"
+              @keydown.enter.stop.prevent="record.type === 'd' && openDirectory(record)"
+              @keydown.space.stop.prevent="record.type === 'd' && openDirectory(record)"
+            >
+              <icon-folder v-if="record.type === 'd'" class="file-entry-icon file-entry-icon-folder" />
+              <icon-file v-else class="file-entry-icon file-entry-icon-file" />
               <span class="file-name">{{ record.name }}</span>
             </a-space>
           </template>
@@ -145,7 +152,6 @@
 import { ref, computed, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
-import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import {
   sftpList,
   sftpMkdir,
@@ -160,14 +166,15 @@ const props = defineProps<{
 }>();
 
 const route = useRoute();
+const DEFAULT_SFTP_DIR = '/home';
 
 // ---------- 状态 ----------
 const resolvedSessionId = computed(() => props.sessionId || (route.query.sessionId as string) || '');
 const loading = ref(false);
 const fileList = ref<SftpFileItem[]>([]);
 const breadcrumbs = ref<{ name: string; dir: string }[]>([]);
-const currentDir = ref('/');
-const pathInput = ref('/');
+const currentDir = ref(DEFAULT_SFTP_DIR);
+const pathInput = ref(DEFAULT_SFTP_DIR);
 
 // 新建目录相关
 const mkdirModalVisible = ref(false);
@@ -232,10 +239,14 @@ const onPathInputEnter = () => {
   loadDir(target);
 };
 
-const onRowDblClick = (record: SftpFileItem) => {
+const openDirectory = (record: SftpFileItem) => {
   if (record.type === 'd') {
     loadDir(record.path);
   }
+};
+
+const onRowDblClick = (record: SftpFileItem) => {
+  openDirectory(record);
 };
 
 // ---------- 新建目录 ----------
@@ -301,12 +312,12 @@ const deleteItem = async (record: SftpFileItem) => {
 };
 
 // ---------- 初始化 & 监听 ----------
-// 当 sessionId 变化时（包括首次传入），重新加载根目录
+// 当 sessionId 变化时（包括首次传入），重新加载默认目录
 watch(resolvedSessionId, (id) => {
   if (id) {
-    currentDir.value = '/';
-    pathInput.value = '/';
-    loadDir('/');
+    currentDir.value = DEFAULT_SFTP_DIR;
+    pathInput.value = DEFAULT_SFTP_DIR;
+    loadDir(DEFAULT_SFTP_DIR);
   }
 }, { immediate: true });
 </script>
@@ -328,19 +339,65 @@ watch(resolvedSessionId, (id) => {
   }
 
   :deep(.arco-table-tbody .arco-table-tr) {
-    cursor: pointer;
-
     &:hover {
       background-color: var(--color-fill-1);
     }
+  }
 
-    .file-name {
-      transition: color 0.15s;
-    }
+  .file-entry {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    padding: 4px 8px;
+    margin-left: -8px;
+    color: var(--color-text-1);
+    border-radius: 4px;
+    outline: none;
+    transition: color 0.15s ease, background-color 0.15s ease;
+  }
 
-    &:hover .file-name {
-      color: rgb(var(--primary-6, 22, 93, 255));
-    }
+  .file-entry-icon {
+    flex: 0 0 auto;
+    font-size: 18px;
+    transition: color 0.15s ease;
+  }
+
+  .file-entry-icon-folder {
+    color: #ffb84d;
+  }
+
+  .file-entry-icon-file {
+    color: #4080ff;
+  }
+
+  .file-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: color 0.15s ease;
+  }
+
+  .file-entry-directory {
+    cursor: pointer;
+  }
+
+  .file-entry-directory:hover,
+  .file-entry-directory:focus-visible {
+    color: rgb(var(--primary-6));
+    background: rgba(var(--primary-6), 0.08);
+  }
+
+  .file-entry-directory:hover .file-name,
+  .file-entry-directory:focus-visible .file-name {
+    color: rgb(var(--primary-6));
+  }
+
+  .file-entry-directory:hover .file-entry-icon-folder,
+  .file-entry-directory:focus-visible .file-entry-icon-folder {
+    color: rgb(var(--primary-6));
+  }
+
+  .file-entry-directory:focus-visible {
+    box-shadow: 0 0 0 2px rgba(var(--primary-6), 0.18);
   }
 }
 </style>

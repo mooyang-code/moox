@@ -3,10 +3,10 @@
     <section class="hero-card">
       <div>
         <p class="eyebrow">MooX Control Plane</p>
-        <h1>{{ selectedSpaceId ? '当前空间工作台' : '欢迎使用 MooX' }}</h1>
+        <h1>{{ selectedSpaceId ? 'MooX 工作台' : '欢迎使用 MooX' }}</h1>
         <p class="hero-copy">
           {{ selectedSpaceId
-            ? `当前空间：${selectedSpaceId}。从这里进入数据、采集、云节点和部署配置。`
+            ? '从这里进入数据、采集、云节点和部署配置。'
             : '请先创建或选择一个空间。空间是数据、采集、交易和运维资源的业务隔离边界。' }}
         </p>
       </div>

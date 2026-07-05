@@ -23,6 +23,8 @@ type SecretMgrService interface {
 
 	GetSecret(ctx context.Context, req *GetSecretReq) (*GetSecretRsp, error)
 
+	RevealSecret(ctx context.Context, req *RevealSecretReq) (*RevealSecretRsp, error)
+
 	CreateSecret(ctx context.Context, req *CreateSecretReq) (*CreateSecretRsp, error)
 
 	UpdateSecret(ctx context.Context, req *UpdateSecretReq) (*UpdateSecretRsp, error)
@@ -58,6 +60,24 @@ func SecretMgrService_GetSecret_Handler(svr interface{}, ctx context.Context, f 
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(SecretMgrService).GetSecret(ctx, reqbody.(*GetSecretReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func SecretMgrService_RevealSecret_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RevealSecretReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SecretMgrService).RevealSecret(ctx, reqbody.(*RevealSecretReq))
 	}
 
 	var rsp interface{}
@@ -154,6 +174,10 @@ var SecretMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: SecretMgrService_GetSecret_Handler,
 		},
 		{
+			Name: "/trpc.moox.ops.SecretMgr/RevealSecret",
+			Func: SecretMgrService_RevealSecret_Handler,
+		},
+		{
 			Name: "/trpc.moox.ops.SecretMgr/CreateSecret",
 			Func: SecretMgrService_CreateSecret_Handler,
 		},
@@ -189,6 +213,9 @@ func (s *UnimplementedSecretMgr) ListSecrets(ctx context.Context, req *ListSecre
 func (s *UnimplementedSecretMgr) GetSecret(ctx context.Context, req *GetSecretReq) (*GetSecretRsp, error) {
 	return nil, errors.New("rpc GetSecret of service SecretMgr is not implemented")
 }
+func (s *UnimplementedSecretMgr) RevealSecret(ctx context.Context, req *RevealSecretReq) (*RevealSecretRsp, error) {
+	return nil, errors.New("rpc RevealSecret of service SecretMgr is not implemented")
+}
 func (s *UnimplementedSecretMgr) CreateSecret(ctx context.Context, req *CreateSecretReq) (*CreateSecretRsp, error) {
 	return nil, errors.New("rpc CreateSecret of service SecretMgr is not implemented")
 }
@@ -213,6 +240,8 @@ type SecretMgrClientProxy interface {
 	ListSecrets(ctx context.Context, req *ListSecretsReq, opts ...client.Option) (rsp *ListSecretsRsp, err error)
 
 	GetSecret(ctx context.Context, req *GetSecretReq, opts ...client.Option) (rsp *GetSecretRsp, err error)
+
+	RevealSecret(ctx context.Context, req *RevealSecretReq, opts ...client.Option) (rsp *RevealSecretRsp, err error)
 
 	CreateSecret(ctx context.Context, req *CreateSecretReq, opts ...client.Option) (rsp *CreateSecretRsp, err error)
 
@@ -266,6 +295,26 @@ func (c *SecretMgrClientProxyImpl) GetSecret(ctx context.Context, req *GetSecret
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetSecretRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SecretMgrClientProxyImpl) RevealSecret(ctx context.Context, req *RevealSecretReq, opts ...client.Option) (*RevealSecretRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SecretMgr/RevealSecret")
+	msg.WithCalleeServiceName(SecretMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SecretMgr")
+	msg.WithCalleeMethod("RevealSecret")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RevealSecretRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -3,7 +3,6 @@
     <div class="page-head">
       <div>
         <h2>归档文件</h2>
-        <span>当前空间：{{ spaceStore.selectedSpace?.name || '未选择' }}</span>
       </div>
       <a-space>
         <a-input v-model="datasetFilter" allow-clear placeholder="dataset_id" style="width: 180px" />

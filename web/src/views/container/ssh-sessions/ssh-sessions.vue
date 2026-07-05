@@ -1,6 +1,5 @@
 <template>
   <div class="ssh-sessions-page">
-    <SpaceContextBar />
     <div class="page-content">
       <a-card :bordered="false">
         <template #title>
@@ -92,7 +91,6 @@
 </template>
 
 <script setup lang="ts">
-import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { getOnlineSessions, forceDisconnect, type SessionInfo } from '@/api/modules/ssh';

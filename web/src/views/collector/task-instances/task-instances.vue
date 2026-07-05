@@ -2,7 +2,6 @@
   <div class="moox-page">
     <a-spin :loading="loading">
       <div class="moox-inner">
-        <SpaceContextBar />
         <a-space wrap>
           <a-input v-model="form.taskId" placeholder="请输入任务ID" allow-clear style="width: 200px" />
           <a-input v-model="form.ruleId" placeholder="请输入规则ID" allow-clear style="width: 200px" />
@@ -173,7 +172,6 @@
 </template>
 
 <script setup lang="ts">
-import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, computed, onMounted, watch } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { callControl } from '@/api/admin/http';

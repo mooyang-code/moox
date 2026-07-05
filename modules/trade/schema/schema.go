@@ -14,6 +14,11 @@ var accountSQL string
 //go:embed order.sql
 var orderSQL string
 
+// syncSQL 是 Trade 模块定时同步游标的 SQLite schema。
+//
+//go:embed sync.sql
+var syncSQL string
+
 // AccountSQL 返回账户域（账户/余额/流水/凭证）的 SQLite schema。
 func AccountSQL() string {
 	return accountSQL
@@ -26,5 +31,5 @@ func OrderSQL() string {
 
 // AllSQL 返回 Trade 模块全部 schema（账户域 + 交易域），用于启动建表。
 func AllSQL() string {
-	return accountSQL + "\n" + orderSQL
+	return accountSQL + "\n" + orderSQL + "\n" + syncSQL
 }

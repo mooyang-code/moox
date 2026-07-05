@@ -6,10 +6,9 @@
     @cancel="handleCancel"
   >
     <div class="function-package-manage">
-      <SpaceContextBar />
       <!-- 搜索区域 -->
-      <a-row style="margin-bottom: 16px;">
-        <a-space wrap>
+      <div class="package-toolbar">
+        <a-space class="package-filters" wrap>
           <a-input
             v-model="searchForm.package_name"
             placeholder="搜索代码包名称"
@@ -45,16 +44,11 @@
             重置
           </a-button>
         </a-space>
-      </a-row>
-
-      <a-row style="margin-bottom: 16px;">
-        <a-space>
-          <a-button type="primary" @click="onAdd">
-            <template #icon><icon-plus /></template>
-            上传代码包
-          </a-button>
-        </a-space>
-      </a-row>
+        <a-button class="package-upload-button" type="primary" @click="onAdd">
+          <template #icon><icon-plus /></template>
+          上传代码包
+        </a-button>
+      </div>
 
       <a-table
         row-key="id"
@@ -368,7 +362,6 @@
 </template>
 
 <script setup lang="ts">
-import SpaceContextBar from '@/components/SpaceContextBar/index.vue';
 import { ref, watch, reactive, computed, onMounted } from 'vue';
 import { Message, Modal } from '@arco-design/web-vue';
 import { 
@@ -1059,6 +1052,23 @@ const formatTime = (time: string | undefined) => {
 
 .function-package-manage {
   min-height: 600px;
+}
+
+.package-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.package-filters {
+  flex: 1 1 auto;
+}
+
+.package-upload-button {
+  flex: 0 0 auto;
 }
 
 .upload-area {

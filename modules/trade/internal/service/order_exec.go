@@ -109,6 +109,16 @@ func (s *OrderService) PlaceOrderExec(ctx context.Context, spaceID, channelID st
 	if err != nil {
 		return nil, err
 	}
+	req.Market = exchangeMarketType(ch.MarketType)
+	if req.Quantity != "" && req.Quantity != "0" {
+		instruments, err := adapter.GetInstruments(ctx, req.Market)
+		if err != nil {
+			return nil, fmt.Errorf("load instruments: %w", err)
+		}
+		if err := normalizePlaceOrderQuantity(req, instruments); err != nil {
+			return nil, err
+		}
+	}
 	if req.ClientOrderID == "" {
 		req.ClientOrderID = genID("ord")
 	}

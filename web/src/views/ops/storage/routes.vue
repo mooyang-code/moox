@@ -3,7 +3,6 @@
     <div class="page-head">
       <div>
         <h2>主存路由</h2>
-        <span>当前空间：{{ spaceStore.selectedSpace?.name || '未选择' }}</span>
       </div>
       <a-space>
         <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">

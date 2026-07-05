@@ -30,6 +30,7 @@ modules/trade/
   internal/service/service.go         # 服务骨架（Health）
   schema/account.sql                  # 账户域表（4 张）
   schema/order.sql                    # 交易域表（5 张）
+  schema/sync.sql                     # 定时同步游标表
   schema/schema.go                    # 内嵌 AccountSQL()/OrderSQL()/AllSQL()
   proto/trade_service.proto           # package trpc.moox.trade，含 9 个 service
   DESIGN.md                           # 本文档
@@ -74,6 +75,7 @@ HTTP 转发路径：`/api/trade/{account|balance|fund|apikey}/{method}`。
 | `t_trades` | 成交明细（fill），一笔订单对应多笔成交，不可变 |
 | `t_positions` | 合约/杠杆持仓快照（数量/均价/杠杆/保证金/盈亏） |
 | `t_order_operations` | 账户交易操作审计（下单/撤单/改单/全撤/查询/调杠杆）含请求、响应、耗时 |
+| `t_trade_sync_cursors` | 定时同步游标，记录每个账户/交易对的订单与成交增量同步进度 |
 
 关键设计点：
 
@@ -97,7 +99,40 @@ HTTP 转发路径：`/api/trade/{channel|order|trade|position}/{method}`。
 
 ---
 
-## 三、模块内/外关系
+## 三、交易写路径
+
+MooX 交易 API 是用户和后台服务发起交易的主写路径。管理台和后台服务应调用 MooX API，不应绕过 MooX 直接调用交易所 API。
+
+执行顺序：
+
+1. 创建本地订单意图和操作审计。
+2. 保留 `client_order_id` 作为业务幂等键。
+3. 现货下单按需预冻结余额。
+4. 通过交易所 adapter 调用交易所 API。
+5. 立即更新本地订单状态、交易所订单号、拒绝原因和操作结果。
+6. 定时同步随后对账交易所最终状态。
+
+定时同步不能替代交易主链路。它只负责修复漂移和补齐最终状态，尤其是成交、最终订单状态、余额和持仓。
+
+---
+
+## 四、定时同步
+
+`moox-trade` 通过 tRPC timer 注册 `trpc.moox.trade.sync.timer`。
+
+定时任务周期性同步：
+
+1. 账户余额快照到 `t_account_balances`。
+2. 合约/永续持仓快照到 `t_positions`。
+3. 订单快照到 `t_orders`。
+4. 成交明细到 `t_trades`。
+5. 每个账户/交易对的同步游标到 `t_trade_sync_cursors`。
+
+第一版不把 `t_account_fund_flows` 当作完整交易所账本同步。充值、提现、资金费、划转等流水的交易所 API 差异较大，应单独做领域映射。
+
+---
+
+## 五、模块内/外关系
 
 ```
 t_users (admin)
@@ -110,6 +145,7 @@ t_users (admin)
                   ├─ t_trades              成交明细
                   ├─ t_positions           持仓
                   └─ t_order_operations    操作审计
+        └─ t_trade_sync_cursors            定时同步进度
 ```
 
 跨模块仅通过 `c_user_id` 等字符串引用，不做物理外键（与 collector 跨域引用风格一致）。
@@ -117,7 +153,7 @@ t_users (admin)
 
 ---
 
-## 四、后续落地建议
+## 六、后续落地建议
 
 1. 生成 PB：参照 `modules/admin/proto/Makefile` 增加 `modules/trade/proto/Makefile`。
 2. DAO 层：API Key/Secret/Passphrase 落库前加密（参考 admin 的 SSH 凭证加解密）。
