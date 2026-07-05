@@ -21,7 +21,14 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 	db := newNodeSCFTestDB(t)
 	catalog := repository.NewCatalogRepository(db)
 	seedSCFAccountAndPackage(t, catalog)
-	fake := &fakeSCFClient{getErr: errors.New("ResourceNotFound.FunctionName")}
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
+		{err: errors.New("ResourceNotFound.FunctionName")},
+		{info: &tencentscf.FunctionInfo{
+			Status:      "Active",
+			ClsLogsetID: "logset-created",
+			ClsTopicID:  "topic-created",
+		}},
+	}}
 	svc := &Service{
 		catalog: catalog,
 		scfClientFactory: func(account repository.CloudAccount) scfProvisioner {
@@ -48,8 +55,8 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 			Config: map[string]string{
 				"timeout":       "60",
 				"memory_size":   "256",
-				"cls_logset_id": "logset-a",
-				"cls_topic_id":  "topic-a",
+				"cls_logset_id": "logset-config",
+				"cls_topic_id":  "topic-config",
 			},
 			Environment: map[string]string{"MOOX_ENV": "prod"},
 			Region:      "ap-guangzhou",
@@ -77,7 +84,7 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 	if create.Runtime != "CustomRuntime" || create.Handler != "main" || create.Timeout != 60 || create.MemorySize != 256 {
 		t.Fatalf("runtime config = %#v", create)
 	}
-	if create.ClsLogsetID != "logset-a" || create.ClsTopicID != "topic-a" {
+	if create.ClsLogsetID != "logset-config" || create.ClsTopicID != "topic-config" {
 		t.Fatalf("cls config = %q/%q", create.ClsLogsetID, create.ClsTopicID)
 	}
 	if create.Environment["MOOX_ENV"] != "prod" {
@@ -93,6 +100,20 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 	}
 	if got := parseStringSliceJSON(node.SupportedWorkloads); strings.Join(got, ",") != "collect.kline,collect.symbol" {
 		t.Fatalf("supported workloads = %#v", got)
+	}
+	nodeMetadata := parseJSONMap(node.Metadata)
+	if got := metadataString(nodeMetadata, "cls_logset_id"); got != "logset-created" {
+		t.Fatalf("metadata cls_logset_id = %q, want logset-created", got)
+	}
+	if got := metadataString(nodeMetadata, "cls_topic_id"); got != "topic-created" {
+		t.Fatalf("metadata cls_topic_id = %q, want topic-created", got)
+	}
+	listRsp, err := svc.GetNodeList(spacecontext.WithSpaceID(context.Background(), "crypto"), &pb.GetNodeListReq{})
+	if err != nil {
+		t.Fatalf("GetNodeList transport error = %v", err)
+	}
+	if len(listRsp.GetItems()) != 1 || listRsp.GetItems()[0].GetClsTopicId() != "topic-created" {
+		t.Fatalf("list cls_topic_id = %#v", listRsp.GetItems())
 	}
 }
 
@@ -151,12 +172,26 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 }
 
 type fakeSCFClient struct {
-	getErr  error
-	created []tencentscf.CreateFunctionRequest
-	updated []tencentscf.UpdateFunctionCodeRequest
+	getErr     error
+	getResults []fakeSCFGetResult
+	created    []tencentscf.CreateFunctionRequest
+	updated    []tencentscf.UpdateFunctionCodeRequest
+}
+
+type fakeSCFGetResult struct {
+	info *tencentscf.FunctionInfo
+	err  error
 }
 
 func (f *fakeSCFClient) GetFunction(context.Context, tencentscf.FunctionRef) (*tencentscf.FunctionInfo, error) {
+	if len(f.getResults) > 0 {
+		result := f.getResults[0]
+		f.getResults = f.getResults[1:]
+		if result.err != nil {
+			return nil, result.err
+		}
+		return result.info, nil
+	}
 	if f.getErr != nil {
 		return nil, f.getErr
 	}

@@ -17,11 +17,12 @@ import (
 )
 
 const (
-	JobItemStatusPending  = "pending"
-	JobItemStatusRunning  = "running"
-	JobItemStatusSuccess  = "success"
-	JobItemStatusFailed   = "failed"
-	JobItemStatusCanceled = "canceled"
+	JobItemStatusPending       = "pending"
+	JobItemStatusRunning       = "running"
+	JobItemStatusSuccess       = "success"
+	JobItemStatusFailed        = "failed"
+	JobItemStatusCanceled      = "canceled"
+	JobItemStatusEnqueueFailed = "enqueue_failed"
 
 	JobItemAttemptStatusRunning = "running"
 	JobItemAttemptStatusSuccess = "success"
@@ -581,6 +582,8 @@ func jobItemStatusToDB(status pb.JobItemStatus) string {
 		return JobItemStatusFailed
 	case pb.JobItemStatus_JOB_ITEM_STATUS_CANCELED:
 		return JobItemStatusCanceled
+	case pb.JobItemStatus_JOB_ITEM_STATUS_ENQUEUE_FAILED:
+		return JobItemStatusEnqueueFailed
 	default:
 		return ""
 	}
@@ -598,6 +601,8 @@ func jobItemStatusToPB(status string) pb.JobItemStatus {
 		return pb.JobItemStatus_JOB_ITEM_STATUS_FAILED
 	case JobItemStatusCanceled:
 		return pb.JobItemStatus_JOB_ITEM_STATUS_CANCELED
+	case JobItemStatusEnqueueFailed:
+		return pb.JobItemStatus_JOB_ITEM_STATUS_ENQUEUE_FAILED
 	default:
 		return pb.JobItemStatus_JOB_ITEM_STATUS_UNSPECIFIED
 	}

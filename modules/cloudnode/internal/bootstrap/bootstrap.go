@@ -3,8 +3,15 @@ package bootstrap
 
 import (
 	"context"
+	"net/http"
+	"net/http/pprof"
+	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/storage"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -22,6 +29,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	config.SetGlobalConfig(cfg)
+	startDebugServer(ctx, cfg.Debug.PprofAddr)
 
 	dbm := storage.NewManager()
 	if err := dbm.Initialize(&cfg.Database); err != nil {
@@ -29,9 +37,84 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 
-	svc := cloudnoderpc.New(dbm)
+	opts := []cloudnoderpc.Option{}
+	if cfg.Queue.Backend == "jetstream" && cfg.JetStream.Enabled {
+		rt, err := jobqueue.Connect(ctx, cfg.JetStream)
+		if err != nil {
+			log.ErrorContextf(ctx, "初始化 cloudnode JetStream 失败: %v", err)
+			return nil, err
+		}
+		if err := rt.EnsureStreams(cfg.JetStream); err != nil {
+			log.ErrorContextf(ctx, "初始化 cloudnode JetStream stream 失败: %v", err)
+			_ = rt.Close()
+			return nil, err
+		}
+		projectionRepo := projection.NewRepository(dbm.DB(), projection.RepositoryOptions{
+			RecoverAfterMillis: cfg.JobItem.RecoverAfterMillis,
+			DefaultMaxAttempts: cfg.JobItem.DefaultMaxAttempts,
+		})
+		execQueue := jobqueue.NewJetStreamQueue(rt, jobqueue.QueueConfig{
+			Naming:          jobqueue.NamingConfig{SubjectPrefix: cfg.JetStream.SubjectPrefix},
+			ExecStream:      cfg.JetStream.ExecStream,
+			AckWait:         time.Duration(cfg.JetStream.AckWaitMillis) * time.Millisecond,
+			MaxDeliver:      cfg.JetStream.MaxDeliver,
+			FetchMaxWait:    time.Duration(cfg.JetStream.FetchMaxWaitMs) * time.Millisecond,
+			DefaultMaxBatch: cfg.JobItem.MaxLimit,
+		})
+		projector := projection.NewProjector(rt.JetStream(), projectionRepo, projection.ProjectorOptions{
+			Naming:           jobqueue.NamingConfig{SubjectPrefix: cfg.JetStream.SubjectPrefix},
+			ProjectionStream: cfg.JetStream.ProjectionStream,
+			BatchSize:        100,
+			MaxWait:          500 * time.Millisecond,
+		})
+		go projector.Run(context.Background())
+		reconciler := projection.NewEnqueueReconciler(projectionRepo, execQueue, 10*time.Second, 100)
+		go reconciler.Run(context.Background())
+		catalog := repository.NewCatalogRepository(dbm.DB())
+		heartbeatSink := projection.NewHeartbeatBuffer(catalog, projection.HeartbeatBufferOptions{
+			MaxKeys:       2048,
+			FlushInterval: time.Second,
+		})
+		opts = append(opts,
+			cloudnoderpc.WithExecutionQueue(execQueue),
+			cloudnoderpc.WithProjectionRepository(projectionRepo),
+			cloudnoderpc.WithProjector(projector),
+			cloudnoderpc.WithHeartbeatSink(heartbeatSink),
+		)
+		log.InfoContextf(ctx, "cloudnode JetStream 已启用: exec_stream=%s projection_stream=%s nats_url=%s",
+			cfg.JetStream.ExecStream, cfg.JetStream.ProjectionStream, cfg.JetStream.NATSURL)
+	}
+
+	svc := cloudnoderpc.New(dbm, opts...)
 	cloudnodepb.RegisterCloudNodeMgrService(s.Service("trpc.moox.cloudnode.CloudNodeMgr"), svc)
 
 	log.InfoContextf(ctx, "moox-cloudnode 初始化完成")
 	return s, nil
+}
+
+func startDebugServer(ctx context.Context, addr string) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	mux.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
+	mux.Handle("/debug/pprof/block", pprof.Handler("block"))
+	mux.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+	mux.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+	mux.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
+	mux.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
+
+	server := &http.Server{Addr: addr, Handler: mux}
+	go func() {
+		log.InfoContextf(ctx, "cloudnode pprof listening on %s", addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.ErrorContextf(ctx, "cloudnode pprof server failed: %v", err)
+		}
+	}()
 }

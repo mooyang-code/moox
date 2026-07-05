@@ -24,13 +24,22 @@ import (
 
 // ServerResponse 服务端响应结构
 type ServerResponse struct {
-	RetInfo *ServerRetInfo `json:"ret_info"`
+	RetInfo    *ServerRetInfo     `json:"ret_info"`
+	Directives []ControlDirective `json:"directives"`
 }
 
 // ServerRetInfo 对应 common.RetInfo。
 type ServerRetInfo struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
+}
+
+// ControlDirective is returned by CloudNode heartbeat responses.
+type ControlDirective struct {
+	Type      int    `json:"type"`
+	JobItemID string `json:"job_item_id"`
+	AttemptNo int    `json:"attempt_no"`
+	Reason    string `json:"reason"`
 }
 
 // ScheduledHeartbeat 框架定时器入口函数 - 定时心跳
@@ -291,8 +300,22 @@ func parseServerResponse(respData []byte) error {
 		}
 		return fmt.Errorf("server returned error code: %d, message: %s", code, msg)
 	}
+	for _, directive := range serverResp.Directives {
+		handleControlDirective(directive)
+	}
 
 	return nil
+}
+
+func handleControlDirective(directive ControlDirective) {
+	switch directive.Type {
+	case 2:
+		log.Warnf("[Heartbeat] received cancel directive job_item_id=%s attempt_no=%d reason=%s", directive.JobItemID, directive.AttemptNo, directive.Reason)
+	case 3:
+		log.Warnf("[Heartbeat] received pause-after-current directive reason=%s", directive.Reason)
+	case 4:
+		log.Warnf("[Heartbeat] received reduce-rate directive reason=%s", directive.Reason)
+	}
 }
 
 // BuildProbeResponseOptions 构建探测响应的选项

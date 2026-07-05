@@ -407,7 +407,9 @@ start_cloudnode() {
     exit 2
   fi
   start_service "cloudnode" "${ROOT}/cloudnode" \
-    "${ROOT}/bin/moox-cloudnode" -conf=config/trpc_go.yaml
+    env \
+      "MOOX_CLOUDNODE_PPROF_ADDR=${MOOX_CLOUDNODE_PPROF_ADDR:-127.0.0.1:16001}" \
+      "${ROOT}/bin/moox-cloudnode" -conf=config/trpc_go.yaml
 }
 
 start_collector() {
@@ -440,10 +442,10 @@ case "${SERVICE}" in
     if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
       start_cloudnode
     fi
+    start_admin
     if [[ "${WITH_COLLECTOR}" == "1" ]]; then
       start_collector
     fi
-    start_admin
     start_web_host
     ;;
   storage)
@@ -605,9 +607,76 @@ for name in "${services[@]}"; do
 done
 EOF
 
+  cat > "${STAGE_DIR}/healthcheck.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
+WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
+WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
+LOG_FILE="${ROOT}/logs/healthcheck.log"
+
+mkdir -p "${ROOT}/run" "$(dirname "${LOG_FILE}")"
+
+default_services=()
+if [[ "${WITH_STORAGE}" == "1" ]]; then
+  default_services+=(storage)
+fi
+if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
+  default_services+=(cloudnode)
+fi
+default_services+=(admin)
+if [[ "${WITH_COLLECTOR}" == "1" ]]; then
+  default_services+=(collector)
+fi
+default_services+=(web-host)
+
+services=("${default_services[@]}")
+if [[ "$#" -gt 0 ]]; then
+  services=("$@")
+fi
+
+log_line() {
+  echo "$(date -Is) $*" >> "${LOG_FILE}"
+}
+
+ensure_service() {
+  local name="$1"
+  local pid_file="${ROOT}/run/${name}.pid"
+  local pid=""
+  if [[ -f "${pid_file}" ]]; then
+    pid="$(cat "${pid_file}" 2>/dev/null || true)"
+  fi
+
+  if [[ -n "${pid}" ]] && ps -p "${pid}" >/dev/null 2>&1; then
+    echo "${name}: running pid=${pid}"
+    return 0
+  fi
+
+  log_line "${name}: stopped or stale pid=${pid:-none}; restarting"
+  echo "${name}: stopped; restarting"
+  if STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}" "${ROOT}/start.sh" "${name}" >> "${LOG_FILE}" 2>&1; then
+    log_line "${name}: restart success"
+    return 0
+  fi
+  log_line "${name}: restart failed"
+  return 1
+}
+
+(
+  flock -n 9 || exit 0
+  failed=0
+  for name in "${services[@]}"; do
+    ensure_service "${name}" || failed=1
+  done
+  exit "${failed}"
+) 9>"${ROOT}/run/healthcheck.lock"
+EOF
+
   perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g" \
-    "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh"
-  chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh"
+    "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
+  chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
 
 prepare_stage() {
@@ -699,14 +768,14 @@ sync_local_stage() {
     else
       rm -rf "${deploy_dir}/admin" "${deploy_dir}/examples" \
         "${deploy_dir}/cloudnode" "${deploy_dir}/collector" \
-        "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/restart.sh" "${deploy_dir}/status.sh"
+        "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/restart.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh"
       rm -f "${deploy_dir}/bin/moox-admin" "${deploy_dir}/bin/moox-cli" "${deploy_dir}/bin/moox-web-host" \
         "${deploy_dir}/bin/moox-cloudnode" "${deploy_dir}/bin/moox-collector" "${deploy_dir}/bin/moox-collector-scf"
     fi
     cp -R "${STAGE_DIR}/." "${deploy_dir}/"
   fi
 
-  chmod +x "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/status.sh" "${deploy_dir}/bin/"*
+  chmod +x "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh" "${deploy_dir}/bin/"*
   log "deployed to ${deploy_dir}"
 
   if [[ "${NO_START}" -eq 0 ]]; then
@@ -768,13 +837,13 @@ if [[ "${WITH_STORAGE}" == "1" ]]; then
 else
   rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/examples" \
     "${DEPLOY_DIR}/cloudnode" "${DEPLOY_DIR}/collector" \
-    "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh"
+    "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh"
   rm -f "${DEPLOY_DIR}/bin/moox-admin" "${DEPLOY_DIR}/bin/moox-cli" "${DEPLOY_DIR}/bin/moox-web-host" \
     "${DEPLOY_DIR}/bin/moox-cloudnode" "${DEPLOY_DIR}/bin/moox-collector" "${DEPLOY_DIR}/bin/moox-collector-scf"
 fi
 tar -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 rm -f "${ARCHIVE}"
-chmod +x "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/bin/"*
+chmod +x "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh" "${DEPLOY_DIR}/bin/"*
 
 if [[ "${NO_START}" -eq 0 ]]; then
   "${DEPLOY_DIR}/start.sh"

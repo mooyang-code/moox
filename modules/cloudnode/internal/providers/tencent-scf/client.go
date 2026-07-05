@@ -29,11 +29,13 @@ type FunctionRef struct {
 
 // FunctionInfo describes the current Tencent SCF function state.
 type FunctionInfo struct {
-	RequestID string
-	Status    string
-	Runtime   string
-	ModTime   string
-	CodeSize  int64
+	RequestID   string
+	Status      string
+	Runtime     string
+	ModTime     string
+	CodeSize    int64
+	ClsLogsetID string
+	ClsTopicID  string
 }
 
 // CreateFunctionRequest creates a Tencent SCF function from a COS package.
@@ -121,6 +123,8 @@ func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInf
 	out.Status = deref(response.Response.Status)
 	out.Runtime = deref(response.Response.Runtime)
 	out.ModTime = deref(response.Response.ModTime)
+	out.ClsLogsetID = deref(response.Response.ClsLogsetId)
+	out.ClsTopicID = deref(response.Response.ClsTopicId)
 	if response.Response.CodeSize != nil {
 		out.CodeSize = int64(*response.Response.CodeSize)
 	}

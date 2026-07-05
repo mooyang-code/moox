@@ -131,7 +131,7 @@
 
         <a-table
           row-key="node_id"
-          :data="functionList"
+          :data="cloudNodeList"
           :bordered="{ cell: true }"
           :loading="loading"
           :scroll="{ x: '100%', y: '100%', minWidth: 1200 }"
@@ -781,7 +781,7 @@ import FunctionPackageManage from './function-package-manage.vue';
 // 获取当前路由
 
 // 接口定义
-interface CloudFunction {
+interface CloudNode {
   node_id: string;
   cloud_account_id: string;
   namespace: string;
@@ -812,7 +812,7 @@ interface CloudFunction {
   updated_at: string;
 }
 
-const normalizeCloudFunctions = (items: Array<Partial<CloudFunction> & Record<string, any>>): CloudFunction[] => {
+const normalizeCloudNodes = (items: Array<Partial<CloudNode> & Record<string, any>>): CloudNode[] => {
   return items.map((item) => ({
     node_id: item.node_id || '',
     cloud_account_id: item.cloud_account_id || '',
@@ -885,7 +885,7 @@ type BatchChangeViewStatus = BatchChangeStatusResponse & {
 };
 
 // 数据列表
-const functionList = ref<CloudFunction[]>([]);
+const cloudNodeList = ref<CloudNode[]>([]);
 const selectedKeys = ref<string[]>([]);
 const cloudAccountOptions = ref<CloudAccount[]>([]);
 const regionOptions = ref<RegionInfo[]>([]); // 地区选项
@@ -1020,7 +1020,7 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   pagination.value.current = 1;
   selectedKeys.value = [];
   if (!spaceId) {
-    functionList.value = [];
+    cloudNodeList.value = [];
     pagination.value.total = 0;
     return;
   }
@@ -1574,7 +1574,7 @@ const executeBatchDelete = async () => {
 // 加载数据（使用后端分页）
 const loadData = async (showEmptyTip = false) => {
   if (!selectedSpaceId.value) {
-    functionList.value = [];
+    cloudNodeList.value = [];
     pagination.value.total = 0;
     return;
   }
@@ -1592,9 +1592,9 @@ const loadData = async (showEmptyTip = false) => {
     });
 
     const data = response.items || [];
-    functionList.value = normalizeCloudFunctions(Array.isArray(data) ? data : [data].filter(Boolean));
-    pagination.value.total = response.total || functionList.value.length;
-    if (showEmptyTip && functionList.value.length === 0) {
+    cloudNodeList.value = normalizeCloudNodes(Array.isArray(data) ? data : [data].filter(Boolean));
+    pagination.value.total = response.total || cloudNodeList.value.length;
+    if (showEmptyTip && cloudNodeList.value.length === 0) {
       Message.info('查询结果为空');
     }
   } catch (error) {
@@ -2064,21 +2064,21 @@ const select = (_rowKeys: string[], rowKey: string) => {
 
 const selectAll = (checked: boolean) => {
   if (checked) {
-    const currentPageKeys = functionList.value.map(item => item.node_id);
+    const currentPageKeys = cloudNodeList.value.map(item => item.node_id);
     currentPageKeys.forEach(key => {
       if (!selectedKeys.value.includes(key)) {
         selectedKeys.value.push(key);
       }
     });
   } else {
-    const currentPageKeys = functionList.value.map(item => item.node_id);
+    const currentPageKeys = cloudNodeList.value.map(item => item.node_id);
     selectedKeys.value = selectedKeys.value.filter(key => !currentPageKeys.includes(key));
   }
 };
 
 // 单个操作（保留原有实现）
 
-const onDelete = async (record: CloudFunction) => {
+const onDelete = async (record: CloudNode) => {
   try {
     const rsp = await batchDeleteNodes({ node_ids: [record.node_id] });
     if (!rsp.batch_id) {
@@ -2093,7 +2093,7 @@ const onDelete = async (record: CloudFunction) => {
   }
 };
 
-const onViewNodeDetail = (record: CloudFunction) => {
+const onViewNodeDetail = (record: CloudNode) => {
   selectedNodeDetail.value = record;
   nodeDetailVisible.value = true;
 };
@@ -2114,7 +2114,7 @@ const onFunctionPackageManage = () => {
 
 // 节点详情
 const nodeDetailVisible = ref(false);
-const selectedNodeDetail = ref<CloudFunction | null>(null);
+const selectedNodeDetail = ref<CloudNode | null>(null);
 
 // 代码包详情
 const packageDetailVisible = ref(false);
@@ -2133,7 +2133,7 @@ const editNodeForm = reactive({
 });
 
 // 显示代码包详情
-const onShowPackageDetail = async (record: CloudFunction) => {
+const onShowPackageDetail = async (record: CloudNode) => {
   // 如果没有package_id，则不显示
   if (!record.package_id) {
     Message.warning('该节点未关联代码包');
@@ -2335,7 +2335,7 @@ const handleSingleDeployOk = async () => {
 };
 
 // 编辑节点
-const onEdit = (record: CloudFunction) => {
+const onEdit = (record: CloudNode) => {
   // 填充表单
   editNodeForm.nodeId = record.node_id;
   editNodeForm.namespace = record.namespace;

@@ -12,8 +12,11 @@ import (
 // Config is the root moox-cloudnode configuration.
 type Config struct {
 	Database   DatabaseConfig   `yaml:"database"`
+	Queue      QueueConfig      `yaml:"queue"`
+	JetStream  JetStreamConfig  `yaml:"jetstream"`
 	JobItem    JobItemConfig    `yaml:"job_item"`
 	TencentSCF TencentSCFConfig `yaml:"tencent_scf"`
+	Debug      DebugConfig      `yaml:"debug"`
 }
 
 // DatabaseConfig describes SQLite settings.
@@ -34,11 +37,43 @@ type JobItemConfig struct {
 	DefaultMaxAttempts int   `yaml:"default_max_attempts"`
 }
 
+// QueueConfig selects the CloudNode JobItem execution queue backend.
+type QueueConfig struct {
+	Backend string `yaml:"backend"`
+}
+
+// JetStreamConfig controls the CloudNode JetStream execution queue.
+type JetStreamConfig struct {
+	Enabled          bool                    `yaml:"enabled"`
+	NATSURL          string                  `yaml:"nats_url"`
+	SubjectPrefix    string                  `yaml:"subject_prefix"`
+	ExecStream       string                  `yaml:"exec_stream"`
+	ProjectionStream string                  `yaml:"projection_stream"`
+	Embedded         EmbeddedJetStreamConfig `yaml:"embedded"`
+	AckWaitMillis    int64                   `yaml:"ack_wait_millis"`
+	MaxDeliver       int                     `yaml:"max_deliver"`
+	FetchMaxWaitMs   int64                   `yaml:"fetch_max_wait_ms"`
+}
+
+// EmbeddedJetStreamConfig starts a local private NATS JetStream for CloudNode.
+type EmbeddedJetStreamConfig struct {
+	Enabled          bool   `yaml:"enabled"`
+	Host             string `yaml:"host"`
+	Port             int    `yaml:"port"`
+	StoreDir         string `yaml:"store_dir"`
+	StartupTimeoutMS int64  `yaml:"startup_timeout_ms"`
+}
+
 // TencentSCFConfig stores defaults for the Tencent SCF provider.
 type TencentSCFConfig struct {
 	DefaultRegion    string `yaml:"default_region"`
 	DefaultNamespace string `yaml:"default_namespace"`
 	DefaultRuntime   string `yaml:"default_runtime"`
+}
+
+// DebugConfig controls local diagnostics endpoints.
+type DebugConfig struct {
+	PprofAddr string `yaml:"pprof_addr"`
 }
 
 var globalConfig *Config
@@ -61,6 +96,9 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_CLOUDNODE_DB_PATH"); v != "" {
 		c.Database.Path = v
 	}
+	if v := os.Getenv("MOOX_CLOUDNODE_PPROF_ADDR"); v != "" {
+		c.Debug.PprofAddr = v
+	}
 }
 
 // Default returns safe local defaults.
@@ -69,10 +107,30 @@ func Default() *Config {
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/moox_cloudnode.db",
-			MaxIdleConns:    10,
-			MaxOpenConns:    50,
+			MaxIdleConns:    1,
+			MaxOpenConns:    1,
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
+		},
+		Queue: QueueConfig{
+			Backend: "jetstream",
+		},
+		JetStream: JetStreamConfig{
+			Enabled:          true,
+			NATSURL:          "nats://127.0.0.1:4223",
+			SubjectPrefix:    "moox.cloudnode",
+			ExecStream:       "MOOX_CLOUDNODE_EXEC",
+			ProjectionStream: "MOOX_CLOUDNODE_PROJECTION",
+			AckWaitMillis:    int64(2 * time.Minute / time.Millisecond),
+			MaxDeliver:       3,
+			FetchMaxWaitMs:   500,
+			Embedded: EmbeddedJetStreamConfig{
+				Enabled:          true,
+				Host:             "127.0.0.1",
+				Port:             4223,
+				StoreDir:         "../data/cloudnode/nats",
+				StartupTimeoutMS: 10000,
+			},
 		},
 		JobItem: JobItemConfig{
 			DefaultLimit:       10,
@@ -85,6 +143,7 @@ func Default() *Config {
 			DefaultNamespace: "default",
 			DefaultRuntime:   "Go1",
 		},
+		Debug: DebugConfig{},
 	}
 }
 
