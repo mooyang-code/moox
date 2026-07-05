@@ -20,8 +20,9 @@ import (
 const (
 	// batchSize 每批最多上报的标的数量
 	batchSize = 25
-	// maxConcurrency 最大并发请求数
-	maxConcurrency = 20
+	// maxConcurrency 最大并发请求数。
+	// RegisterDataSubject 会触发 metadata snapshot refresh，串行上报避免并发刷新冲突。
+	maxConcurrency = 1
 	// symbolRecordVersionLatest is the fixed symbol record version.
 	symbolRecordVersionLatest = "latest"
 )
