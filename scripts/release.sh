@@ -36,13 +36,18 @@ copy_binary() {
 
 copy_binary moox-cli "${RELEASE_ROOT}/cli/bin"
 copy_binary moox-admin "${RELEASE_ROOT}/admin/bin"
+copy_binary moox-admin-cli "${RELEASE_ROOT}/admin/bin"
 copy_binary moox-web-host "${RELEASE_ROOT}/web-host/bin"
 copy_binary moox-cloudnode "${RELEASE_ROOT}/cloudnode/bin"
+copy_binary moox-cloudnode-cli "${RELEASE_ROOT}/cloudnode/bin"
 copy_binary moox-collector "${RELEASE_ROOT}/collector/bin"
+copy_binary moox-collector-cli "${RELEASE_ROOT}/collector/bin"
 copy_binary moox-collector-scf "${RELEASE_ROOT}/collector/bin"
 copy_binary moox-factor "${RELEASE_ROOT}/factor/bin"
 copy_binary moox-trade "${RELEASE_ROOT}/trade/bin"
+copy_binary moox-trade-cli "${RELEASE_ROOT}/trade/bin"
 copy_binary moox-storage "${RELEASE_ROOT}/storage/bin"
+copy_binary moox-storage-cli "${RELEASE_ROOT}/storage/bin"
 
 cp -R "${ROOT}/modules/admin/config/." "${RELEASE_ROOT}/admin/config/"
 cp -R "${ROOT}/modules/cloudnode/config/." "${RELEASE_ROOT}/cloudnode/config/"

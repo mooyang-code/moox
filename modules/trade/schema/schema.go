@@ -1,4 +1,4 @@
-// Package schema embeds the Trade module SQLite schema used during service startup.
+// Package schema embeds the Trade module SQLite schema for explicit initialization flows.
 // Trade 模块统一承载账户域（account.sql）与交易域（order.sql）两套表。
 package schema
 
@@ -29,7 +29,7 @@ func OrderSQL() string {
 	return orderSQL
 }
 
-// AllSQL 返回 Trade 模块全部 schema（账户域 + 交易域），用于启动建表。
+// AllSQL 返回 Trade 模块全部 schema（账户域 + 交易域）。
 func AllSQL() string {
 	return accountSQL + "\n" + orderSQL + "\n" + syncSQL
 }

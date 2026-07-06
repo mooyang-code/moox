@@ -5,7 +5,8 @@
 ## 架构
 
 ```text
-cmd/moox-trade/main.go          进程入口
+cmd/server/main.go              服务入口
+cmd/cli/main.go                 模块 CLI（init）
 internal/bootstrap/             配置 → DB/DAO → service → 注册 9 个 tRPC service
 internal/config/                app.yaml
 internal/spacecontext/          X-Space-Id 注入 + spacectx filter
@@ -58,9 +59,11 @@ config/                         app.yaml + trpc_go.yaml
 
 ```bash
 make -C proto all                 # proto 变更后
-go build -o bin/moox-trade ./cmd/moox-trade
+go build -o bin/moox-trade ./cmd/server
+go build -o bin/moox-trade-cli ./cmd/cli
 
 mkdir -p data log
+./bin/moox-trade-cli init --db-path ./data/moox_trade.db
 ./bin/moox-trade -conf=config/trpc_go.yaml
 ```
 

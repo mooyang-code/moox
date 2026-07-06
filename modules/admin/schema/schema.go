@@ -1,4 +1,4 @@
-// Package schema embeds the Control/Admin SQLite schema used during service startup.
+// Package schema embeds the Control/Admin SQLite schema for explicit initialization flows.
 package schema
 
 import _ "embed"

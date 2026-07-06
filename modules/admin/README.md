@@ -14,7 +14,8 @@ MooX 管理入口：统一 HTTP 网关 + 认证、Space、运维等**本地基�
 ## 目录结构
 
 ```text
-cmd/moox-admin/           进程入口
+cmd/server/               服务入口
+cmd/cli/                  模块 CLI（init）
 config/
   trpc_go.yaml            tRPC 服务与定时器端口
   gateway.yaml            网关 JWT、限流、CORS、后台签名与免鉴权配置
@@ -77,7 +78,7 @@ make deploy SERVER=user@host   # 等价于 deploy-moox.sh --no-storage --no-web-
 开发模式：
 
 ```bash
-go run ./cmd/moox-admin -conf=config/trpc_go.yaml
+go run ./cmd/server -conf=config/trpc_go.yaml
 ```
 
 ## 本进程服务

@@ -9,7 +9,6 @@ import (
 	"github.com/dgraph-io/badger/v4"
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
-	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -46,28 +45,7 @@ func (dm *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
 
 	dm.db = db
 	applySQLitePoolConfig(dm.db, dbCfg)
-	if err := dm.ApplyAdminSchema(); err != nil {
-		return err
-	}
 	log.Infof("初始化SQLite数据库连接: %s", dbPath)
-	return nil
-}
-
-// ApplyAdminSchema 应用 Control/Admin schema。
-//
-// 默认使用编译进二进制的 schema，避免部署时依赖工作目录或源码路径。
-func (dm *Manager) ApplyAdminSchema() error {
-	return dm.applySchemaSQL("embedded admin.sql", adminSchemaSQL())
-}
-
-// applySchemaSQL 应用给定 SQL 文本。
-func (dm *Manager) applySchemaSQL(schemaName string, raw string) error {
-	if dm.db == nil {
-		return fmt.Errorf("database is not initialized")
-	}
-	if err := dm.db.Exec(raw).Error; err != nil {
-		return fmt.Errorf("apply schema %s: %w", schemaName, err)
-	}
 	return nil
 }
 
@@ -165,8 +143,4 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func adminSchemaSQL() string {
-	return adminschema.AdminSQL()
 }

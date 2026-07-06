@@ -380,12 +380,39 @@ COLLECTOR_ENV=(
 
 init_storage_schema() {
   echo "initializing storage metadata schema"
+  mkdir -p "${ROOT}/logs/storage"
   (
     cd "${ROOT}/storage"
-    env "${STORAGE_ENV[@]}" "${ROOT}/bin/moox-storage" \
-      -init-metadata \
-      -conf=config/trpc_go.yaml \
-      -storage-conf=config/storage.yaml >> "${ROOT}/logs/storage/stdout.log" 2>&1
+    env "${STORAGE_ENV[@]}" "${ROOT}/bin/moox-storage-cli" init \
+      --storage-conf=config/storage.yaml \
+      --schema-path=schema/metadata.sql >> "${ROOT}/logs/storage/stdout.log" 2>&1
+  )
+}
+
+init_admin_schema() {
+  echo "initializing admin schema"
+  mkdir -p "${ROOT}/logs/admin"
+  (
+    cd "${ROOT}/admin"
+    "${ROOT}/bin/moox-admin-cli" init --db-path ../data/admin.db >> "${ROOT}/logs/admin/stdout.log" 2>&1
+  )
+}
+
+init_cloudnode_schema() {
+  echo "initializing cloudnode schema"
+  mkdir -p "${ROOT}/logs/cloudnode"
+  (
+    cd "${ROOT}/cloudnode"
+    "${ROOT}/bin/moox-cloudnode-cli" init --db-path ../data/cloudnode/moox_cloudnode.db >> "${ROOT}/logs/cloudnode/stdout.log" 2>&1
+  )
+}
+
+init_collector_schema() {
+  echo "initializing collector schema"
+  mkdir -p "${ROOT}/logs/collector"
+  (
+    cd "${ROOT}/collector"
+    "${ROOT}/bin/moox-collector-cli" init --db-path ../data/collector/moox_collector.db >> "${ROOT}/logs/collector/stdout.log" 2>&1
   )
 }
 
@@ -397,6 +424,7 @@ start_storage() {
 }
 
 start_admin() {
+  init_admin_schema
   start_service "admin" "${ROOT}/admin" \
     "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
 }
@@ -406,6 +434,7 @@ start_cloudnode() {
     echo "cloudnode is disabled in this deployment package" >&2
     exit 2
   fi
+  init_cloudnode_schema
   start_service "cloudnode" "${ROOT}/cloudnode" \
     env \
       "MOOX_CLOUDNODE_PPROF_ADDR=${MOOX_CLOUDNODE_PPROF_ADDR:-127.0.0.1:16001}" \
@@ -417,6 +446,7 @@ start_collector() {
     echo "collector is disabled in this deployment package" >&2
     exit 2
   fi
+  init_collector_schema
   start_service "collector" "${ROOT}/collector" \
     env "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
 }
@@ -683,11 +713,11 @@ prepare_stage() {
   rm -rf "${STAGE_DIR}"
   mkdir -p \
     "${STAGE_DIR}/bin" \
-	    "${STAGE_DIR}/admin/config" \
-	    "${STAGE_DIR}/cloudnode/config" \
-	    "${STAGE_DIR}/collector/config" \
-	    "${STAGE_DIR}/collector/configs" \
-	    "${STAGE_DIR}/examples" \
+    "${STAGE_DIR}/admin/config" \
+    "${STAGE_DIR}/cloudnode/config" \
+    "${STAGE_DIR}/collector/config" \
+    "${STAGE_DIR}/collector/configs" \
+    "${STAGE_DIR}/examples" \
     "${STAGE_DIR}/data" \
     "${STAGE_DIR}/logs" \
     "${STAGE_DIR}/run"
@@ -696,16 +726,20 @@ prepare_stage() {
   fi
 
   copy_required_binary "moox-admin"
+  copy_required_binary "moox-admin-cli"
   copy_required_binary "moox-cli"
   if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
     copy_required_binary "moox-cloudnode"
+    copy_required_binary "moox-cloudnode-cli"
   fi
   if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
     copy_required_binary "moox-collector"
+    copy_required_binary "moox-collector-cli"
     copy_required_binary "moox-collector-scf"
   fi
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     copy_required_binary "moox-storage"
+    copy_required_binary "moox-storage-cli"
   fi
   copy_optional_web_host
 
@@ -713,10 +747,10 @@ prepare_stage() {
   if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/cloudnode/config/." "${STAGE_DIR}/cloudnode/config/"
   fi
-	  if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
-	    cp -R "${ROOT}/modules/collector/config/." "${STAGE_DIR}/collector/config/"
-	    cp -R "${ROOT}/modules/collector/configs/." "${STAGE_DIR}/collector/configs/"
-	  fi
+  if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
+    cp -R "${ROOT}/modules/collector/config/." "${STAGE_DIR}/collector/config/"
+    cp -R "${ROOT}/modules/collector/configs/." "${STAGE_DIR}/collector/configs/"
+  fi
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/storage/config/." "${STAGE_DIR}/storage/config/"
     cp "${ROOT}/modules/storage/schema/metadata.sql" "${STAGE_DIR}/storage/schema/metadata.sql"
@@ -755,7 +789,7 @@ sync_local_stage() {
   if command -v rsync >/dev/null 2>&1; then
     local rsync_excludes=(--exclude '/data/' --exclude '/logs/' --exclude '/run/')
     if [[ "${WITH_STORAGE}" -eq 0 ]]; then
-      rsync_excludes+=(--exclude '/storage/' --exclude '/bin/moox-storage')
+      rsync_excludes+=(--exclude '/storage/' --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli')
     fi
     rsync -a --delete \
       "${rsync_excludes[@]}" \
@@ -769,8 +803,11 @@ sync_local_stage() {
       rm -rf "${deploy_dir}/admin" "${deploy_dir}/examples" \
         "${deploy_dir}/cloudnode" "${deploy_dir}/collector" \
         "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/restart.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh"
-      rm -f "${deploy_dir}/bin/moox-admin" "${deploy_dir}/bin/moox-cli" "${deploy_dir}/bin/moox-web-host" \
-        "${deploy_dir}/bin/moox-cloudnode" "${deploy_dir}/bin/moox-collector" "${deploy_dir}/bin/moox-collector-scf"
+      rm -f "${deploy_dir}/bin/moox-admin" "${deploy_dir}/bin/moox-admin-cli" \
+        "${deploy_dir}/bin/moox-cli" "${deploy_dir}/bin/moox-web-host" \
+        "${deploy_dir}/bin/moox-cloudnode" "${deploy_dir}/bin/moox-cloudnode-cli" \
+        "${deploy_dir}/bin/moox-collector" "${deploy_dir}/bin/moox-collector-cli" \
+        "${deploy_dir}/bin/moox-collector-scf" "${deploy_dir}/bin/moox-storage-cli"
     fi
     cp -R "${STAGE_DIR}/." "${deploy_dir}/"
   fi
@@ -838,8 +875,11 @@ else
   rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/examples" \
     "${DEPLOY_DIR}/cloudnode" "${DEPLOY_DIR}/collector" \
     "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh"
-  rm -f "${DEPLOY_DIR}/bin/moox-admin" "${DEPLOY_DIR}/bin/moox-cli" "${DEPLOY_DIR}/bin/moox-web-host" \
-    "${DEPLOY_DIR}/bin/moox-cloudnode" "${DEPLOY_DIR}/bin/moox-collector" "${DEPLOY_DIR}/bin/moox-collector-scf"
+  rm -f "${DEPLOY_DIR}/bin/moox-admin" "${DEPLOY_DIR}/bin/moox-admin-cli" \
+    "${DEPLOY_DIR}/bin/moox-cli" "${DEPLOY_DIR}/bin/moox-web-host" \
+    "${DEPLOY_DIR}/bin/moox-cloudnode" "${DEPLOY_DIR}/bin/moox-cloudnode-cli" \
+    "${DEPLOY_DIR}/bin/moox-collector" "${DEPLOY_DIR}/bin/moox-collector-cli" \
+    "${DEPLOY_DIR}/bin/moox-collector-scf" "${DEPLOY_DIR}/bin/moox-storage-cli"
 fi
 tar -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 rm -f "${ARCHIVE}"

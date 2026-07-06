@@ -29,7 +29,6 @@ type RateLimitManager struct {
 func init() {
 	// 注册流量控制 trpc 中间件
 	filter.Register("ratelimit", RateLimit(), nil)
-	log.Infof("流量控制中间件注册成功")
 }
 
 // getRateLimitManager 获取流量控制管理器实例（单例模式）

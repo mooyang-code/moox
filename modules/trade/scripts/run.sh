@@ -12,7 +12,7 @@ if [ ! -d proto/tradegen ] || [ -z "$(ls -A proto/tradegen 2>/dev/null)" ]; then
 fi
 
 echo "[run.sh] 构建 moox-trade ..."
-go build -o bin/moox-trade ./cmd/moox-trade
+go build -o bin/moox-trade ./cmd/server
 
 mkdir -p data log
 

@@ -17,7 +17,8 @@ admin 不实现云节点业务，仅网关转发 `/api/admin/cloudnode/*`。
 
 ```text
 cmd/
-  moox-cloudnode/         主服务
+  server/                 主服务
+  cli/                    模块 CLI（init）
 config/
   app.yaml                数据库、JobItem 队列参数、腾讯云 SCF 默认值
   trpc_go.yaml            CloudNodeMgr :11401
@@ -41,9 +42,11 @@ schema/                   cloudnode.sql
 
 # 模块目录当前没有独立 Makefile，可直接 go build
 cd modules/cloudnode
-go build -o ../../bin/moox-cloudnode ./cmd/moox-cloudnode
+go build -o ../../bin/moox-cloudnode ./cmd/server
+go build -o ../../bin/moox-cloudnode-cli ./cmd/cli
 
 mkdir -p data log
+../../bin/moox-cloudnode-cli init --db-path ./data/moox_cloudnode.db
 ../../bin/moox-cloudnode -conf=config/trpc_go.yaml
 ```
 

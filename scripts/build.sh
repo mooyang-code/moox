@@ -47,13 +47,17 @@ build_storage() {
     if [[ -n "${STORAGE_BUILD_TAGS:-}" ]]; then
       GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build -tags "${STORAGE_BUILD_TAGS}" \
         -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-        -o "${BIN_DIR}/moox-storage" ./cmd/moox-storage
+        -o "${BIN_DIR}/moox-storage" ./cmd/server
     else
       GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build \
         -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-        -o "${BIN_DIR}/moox-storage" ./cmd/moox-storage
+        -o "${BIN_DIR}/moox-storage" ./cmd/server
     fi
   )
+}
+
+build_storage_cli() {
+  build_go modules/storage ./cmd/cli moox-storage-cli 1
 }
 
 build_web_host() {
@@ -69,38 +73,63 @@ build_web_host() {
 case "${TARGET_MODULE}" in
   all)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
-    build_go modules/admin ./cmd/moox-admin moox-admin 0
+    build_go modules/admin ./cmd/server moox-admin 0
+    build_go modules/admin ./cmd/cli moox-admin-cli 0
     build_web_host
-    build_go modules/cloudnode ./cmd/moox-cloudnode moox-cloudnode 0
-    build_go modules/collector ./cmd/moox-collector moox-collector 0
-    build_go modules/collector ./cmd/moox-collector-scf moox-collector-scf 0
+    build_go modules/cloudnode ./cmd/server moox-cloudnode 0
+    build_go modules/cloudnode ./cmd/cli moox-cloudnode-cli 0
+    build_go modules/collector ./cmd/server moox-collector 0
+    build_go modules/collector ./cmd/cli moox-collector-cli 0
+    build_go modules/collector ./cmd/scf moox-collector-scf 0
     build_go modules/factor ./cmd/moox-factor moox-factor 0
-    build_go modules/trade ./cmd/moox-trade moox-trade 0
+    build_go modules/trade ./cmd/server moox-trade 0
+    build_go modules/trade ./cmd/cli moox-trade-cli 0
     build_storage
+    build_storage_cli
     ;;
   cli)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
     ;;
   admin)
-    build_go modules/admin ./cmd/moox-admin moox-admin 0
+    build_go modules/admin ./cmd/server moox-admin 0
+    build_go modules/admin ./cmd/cli moox-admin-cli 0
+    ;;
+  admin-cli)
+    build_go modules/admin ./cmd/cli moox-admin-cli 0
     ;;
   cloudnode)
-    build_go modules/cloudnode ./cmd/moox-cloudnode moox-cloudnode 0
+    build_go modules/cloudnode ./cmd/server moox-cloudnode 0
+    build_go modules/cloudnode ./cmd/cli moox-cloudnode-cli 0
+    ;;
+  cloudnode-cli)
+    build_go modules/cloudnode ./cmd/cli moox-cloudnode-cli 0
     ;;
   collector)
-    build_go modules/collector ./cmd/moox-collector moox-collector 0
+    build_go modules/collector ./cmd/server moox-collector 0
+    build_go modules/collector ./cmd/cli moox-collector-cli 0
+    ;;
+  collector-cli)
+    build_go modules/collector ./cmd/cli moox-collector-cli 0
     ;;
   collector-scf)
-    build_go modules/collector ./cmd/moox-collector-scf moox-collector-scf 0
+    build_go modules/collector ./cmd/scf moox-collector-scf 0
     ;;
   factor)
     build_go modules/factor ./cmd/moox-factor moox-factor 0
     ;;
   trade)
-    build_go modules/trade ./cmd/moox-trade moox-trade 0
+    build_go modules/trade ./cmd/server moox-trade 0
+    build_go modules/trade ./cmd/cli moox-trade-cli 0
+    ;;
+  trade-cli)
+    build_go modules/trade ./cmd/cli moox-trade-cli 0
     ;;
   storage)
     build_storage
+    build_storage_cli
+    ;;
+  storage-cli)
+    build_storage_cli
     ;;
   web-host)
     build_web_host

@@ -59,6 +59,7 @@ type options struct {
 type serviceEnv struct {
 	workDir    string
 	binPath    string
+	cliPath    string
 	configPath string
 	storageCfg string
 	logPath    string
@@ -401,6 +402,7 @@ func newServiceEnv(opts options) (*serviceEnv, error) {
 	return &serviceEnv{
 		workDir:    workDir,
 		binPath:    filepath.Join(workDir, "moox-storage"),
+		cliPath:    filepath.Join(workDir, "moox-storage-cli"),
 		configPath: filepath.Join(workDir, "trpc_go.yaml"),
 		storageCfg: filepath.Join(workDir, "storage.yaml"),
 		logPath:    filepath.Join(workDir, "server.log"),
@@ -417,13 +419,19 @@ func (e *serviceEnv) Start(ctx context.Context, moduleDir string) error {
 	if err := e.writeConfig(); err != nil {
 		return err
 	}
-	build := exec.CommandContext(ctx, "go", "build", "-o", e.binPath, "./cmd/moox-storage")
+	build := exec.CommandContext(ctx, "go", "build", "-o", e.binPath, "./cmd/server")
 	build.Dir = moduleDir
 	build.Env = append(os.Environ(), "CGO_ENABLED=1")
 	if out, err := build.CombinedOutput(); err != nil {
 		return fmt.Errorf("build moox-storage failed: %w\n%s", err, out)
 	}
-	initCmd := exec.CommandContext(ctx, e.binPath, "-conf="+e.configPath, "-init-metadata")
+	buildCLI := exec.CommandContext(ctx, "go", "build", "-o", e.cliPath, "./cmd/cli")
+	buildCLI.Dir = moduleDir
+	buildCLI.Env = append(os.Environ(), "CGO_ENABLED=1")
+	if out, err := buildCLI.CombinedOutput(); err != nil {
+		return fmt.Errorf("build moox-storage-cli failed: %w\n%s", err, out)
+	}
+	initCmd := exec.CommandContext(ctx, e.cliPath, "init", "--storage-conf="+e.storageCfg, "--schema-path="+filepath.Join(moduleDir, "schema", "metadata.sql"))
 	initCmd.Dir = e.workDir
 	initCmd.Env = e.childEnv(moduleDir)
 	if out, err := initCmd.CombinedOutput(); err != nil {
@@ -1496,7 +1504,7 @@ func locateModuleDir() (string, error) {
 	}
 	for {
 		if _, err := os.Stat(filepath.Join(wd, "go.mod")); err == nil {
-			if _, err := os.Stat(filepath.Join(wd, "cmd", "moox-storage")); err == nil {
+			if _, err := os.Stat(filepath.Join(wd, "cmd", "server")); err == nil {
 				return wd, nil
 			}
 		}

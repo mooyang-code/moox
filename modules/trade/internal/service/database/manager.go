@@ -1,8 +1,7 @@
 // Package database 提供 Trade 模块的 SQLite 持久化管理。
 //
-// Trade 模块账户域与交易域共用同一 SQLite 文件，启动时应用
-// schema.AllSQL() 提供的模块内嵌 schema。DSN 带 WAL/busy_timeout 等 pragma，
-// 与 admin 的 SQLite 配置风格一致。
+// Trade 模块账户域与交易域共用同一 SQLite 文件。Schema 初始化由服务启动前
+// 的独立流程保证；本包只负责打开连接和配置 SQLite pragma。
 package database
 
 import (
@@ -13,7 +12,6 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
-	tradeschema "github.com/mooyang-code/moox/modules/trade/schema"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -26,7 +24,7 @@ type Manager struct {
 // NewManager 创建数据库管理器。
 func NewManager() *Manager { return &Manager{} }
 
-// Initialize 打开 SQLite 并应用 schema（建表）。
+// Initialize 打开 SQLite。表结构由服务启动前的独立 schema 初始化流程保证。
 func (dm *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
 	dbPath := "./data/moox_trade.db"
 	if dbCfg != nil && dbCfg.Path != "" {
@@ -42,21 +40,7 @@ func (dm *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
 	}
 	dm.db = db
 	applySQLitePoolConfig(dm.db, dbCfg)
-	if err := dm.applySchemaSQL("embedded trade schema", tradeschema.AllSQL()); err != nil {
-		return err
-	}
 	log.Infof("初始化Trade SQLite数据库: %s", dbPath)
-	return nil
-}
-
-// applySchemaSQL 应用给定 SQL 文本（建表/索引/触发器）。
-func (dm *Manager) applySchemaSQL(name, raw string) error {
-	if dm.db == nil {
-		return fmt.Errorf("database is not initialized")
-	}
-	if err := dm.db.Exec(raw).Error; err != nil {
-		return fmt.Errorf("apply schema %s: %w", name, err)
-	}
 	return nil
 }
 

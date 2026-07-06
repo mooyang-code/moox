@@ -65,7 +65,7 @@ TimeSeries View 的 DuckDB 结果表按 `ViewColumn` 展开为真实物理列，
 cd modules/storage
 
 make deps         # 下载依赖
-make build        # 构建当前平台二进制到 ./bin/moox-storage
+make build        # 构建当前平台 moox-storage 与 moox-storage-cli
 
 # 交叉/发布构建
 make build-linux  # Linux amd64 -> ./release/linux
@@ -76,7 +76,8 @@ make release      # 按当前平台打包（含 bin/config/schema/start.sh/stop.
 也可直接用 go：
 
 ```bash
-CGO_ENABLED=1 go build -o bin/moox-storage ./cmd/moox-storage
+CGO_ENABLED=1 go build -o bin/moox-storage ./cmd/server
+CGO_ENABLED=1 go build -o bin/moox-storage-cli ./cmd/cli
 ```
 
 ## 配置文件
@@ -333,23 +334,26 @@ primary_store_routes:
 
 ```bash
 # 一条命令完成：确保 schema 存在 + 导入 metadata.seed.yaml
-./bin/moox-storage -import-metadata \
-  -conf=config/trpc_go.yaml \
-  -storage-conf=config/storage.yaml
+./bin/moox-storage-cli import-seed \
+  --storage-conf=config/storage.yaml \
+  --schema-path=schema/metadata.sql
 
 # 指定自定义种子文件（默认取业务配置同目录下的 metadata.seed.yaml）
-./bin/moox-storage -import-metadata -storage-conf=config/storage.yaml -seed=/path/to/my.seed.yaml
+./bin/moox-storage-cli import-seed \
+  --storage-conf=config/storage.yaml \
+  --schema-path=schema/metadata.sql \
+  --seed=/path/to/my.seed.yaml
 ```
 
-导入成功会打印各类实体数量，例如：
+导入成功会在 stdout 打印 JSON，包含各类实体数量，例如：
 
-```text
-metadata seed 导入完成 (config/metadata.seed.yaml): spaces=1 data_sources=1 subjects=2 ... primary_store_routes=2
+```json
+{"module":"storage","action":"import-seed","status":"ok","summary":{"spaces":1,"data_sources":1,"subjects":2,"primary_store_routes":2}}
 ```
 
-种子文件路径解析顺序：`-seed=<file>` → 环境变量 `STORAGE_SEED_FILE` → 业务配置同目录下的 `metadata.seed.yaml` → `config/metadata.seed.yaml`。
+种子文件路径解析顺序：`--seed=<file>` → 环境变量 `STORAGE_SEED_FILE` → 业务配置同目录下的 `metadata.seed.yaml` → `config/metadata.seed.yaml`。
 
-> 若只想初始化空 schema 而不导入数据，用 `./bin/moox-storage -init-metadata ...`。`-import-metadata` 已隐含 schema 初始化。
+> 若只想初始化空 schema 而不导入数据，用 `./bin/moox-storage-cli init --storage-conf=config/storage.yaml --schema-path=schema/metadata.sql`。`import-seed` 已隐含 schema 初始化。
 
 ## 部署
 
@@ -388,7 +392,7 @@ YAML
 
 ```bash
 # 1. 初始化 schema 并导入元数据
-./bin/moox-storage -import-metadata -conf=config/trpc_go.yaml -storage-conf=config/storage.local.yaml
+./bin/moox-storage-cli import-seed --storage-conf=config/storage.local.yaml --schema-path=schema/metadata.sql
 
 # 2. 启动服务
 ./bin/moox-storage -conf=config/trpc_go.yaml -storage-conf=config/storage.local.yaml
@@ -506,8 +510,8 @@ curl -s http://127.0.0.1:20000/cmds             # admin 管理端口，返回命
 2. **元数据已导入**：重跑一次导入命令，数量应与种子文件一致（幂等校验）：
 
 ```bash
-./bin/moox-storage -import-metadata -storage-conf=config/storage.yaml
-# -> spaces=1 ... primary_store_routes=2
+./bin/moox-storage-cli import-seed --storage-conf=config/storage.yaml --schema-path=schema/metadata.sql
+# -> {"module":"storage","action":"import-seed","status":"ok",...}
 ```
 
    或经 HTTP 调 Metadata（端口 20200）确认能列出 Space：
@@ -530,7 +534,7 @@ curl -s -XPOST http://127.0.0.1:20200/trpc.moox.storage.Metadata/ListSpaces \
 对以下实体提供 Create/Update/Get/List（部分为 Upsert）：
 Space、View（+ViewColumn）、DataSource、Subject（+SubjectSymbol）、Dataset（+DatasetSubject 绑定）、Field、Factor、DatasetColumn、PrimaryStoreNode、Device、PrimaryStoreRoute、ArchiveFile。
 
-> CLI `-import-metadata` 即是对这些接口的批量封装。
+> `moox-storage-cli import-seed` 即是对这些接口的批量封装。
 
 ### Access — 事实数据读写（端口 20102 / HTTP 20201）
 
@@ -569,7 +573,9 @@ make release
 ## 目录结构
 
 ```text
-cmd/moox-storage/   服务入口（含 -init-metadata / -import-metadata）
+cmd/server/         服务入口
+cmd/cli/            模块 CLI（init / import-seed）
+cmd/bench/          本地压测工具
 config/             部署配置 + 元数据种子文件
 schema/             元数据 SQL 表定义
 proto/              协议定义与生成代码

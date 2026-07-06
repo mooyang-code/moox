@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
 	"github.com/mooyang-code/moox/modules/storage/internal/bootstrap/eventbus"
-	"github.com/mooyang-code/moox/modules/storage/internal/bootstrap/metadata"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	deviceduckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/services/access"
@@ -40,27 +39,6 @@ func registerStorageFlags(flags *flag.FlagSet) {
 }
 
 func main() {
-	if metadataInitRequested(os.Args) {
-		frameworkConfigPath := configPathFromArgs(os.Args)
-		storageConfigPath := storageConfigPathFromArgs(os.Args, frameworkConfigPath)
-		if err := initMetadataSchema(trpc.BackgroundContext(), frameworkConfigPath, storageConfigPath); err != nil {
-			log.Errorf("初始化 metadata schema 失败: %v", err)
-			os.Exit(1)
-		}
-		log.Infof("metadata schema 初始化完成")
-		return
-	}
-
-	if metadataImportRequested(os.Args) {
-		frameworkConfigPath := configPathFromArgs(os.Args)
-		storageConfigPath := storageConfigPathFromArgs(os.Args, frameworkConfigPath)
-		if err := importMetadataSeed(trpc.BackgroundContext(), frameworkConfigPath, storageConfigPath); err != nil {
-			log.Errorf("导入 metadata seed 失败: %v", err)
-			os.Exit(1)
-		}
-		return
-	}
-
 	// 清除unix域套接字文件，避免内部使用unix域套接字的服务启动失败
 	clearSocketFiles()
 
@@ -450,104 +428,6 @@ func storageConfigPathFromArgs(args []string, frameworkConfigPath string) string
 		return filepath.Join(filepath.Dir(frameworkConfigPath), "storage.yaml")
 	}
 	return filepath.Join("config", "storage.yaml")
-}
-
-func metadataInitRequested(args []string) bool {
-	for _, arg := range args {
-		if arg == "-init-metadata" || arg == "--init-metadata" {
-			return true
-		}
-	}
-	return false
-}
-
-func initMetadataSchema(ctx context.Context, frameworkConfigPath string, storageConfigPath string) error {
-	var storage storageconfig.StorageConfig
-	if cfg, ok := loadStorageConfig(storageConfigPath); ok {
-		storage = cfg.Storage
-	}
-	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
-		storage.Root = root
-	}
-	return metadata.InitSchema(ctx, metadata.SchemaOptions{
-		Storage:    storage,
-		SchemaPath: metadataSchemaPath(frameworkConfigPath),
-	})
-}
-
-func metadataImportRequested(args []string) bool {
-	for _, arg := range args {
-		if arg == "-import-metadata" || arg == "--import-metadata" {
-			return true
-		}
-	}
-	return false
-}
-
-func importMetadataSeed(ctx context.Context, frameworkConfigPath string, storageConfigPath string) error {
-	var storage storageconfig.StorageConfig
-	if cfg, ok := loadStorageConfig(storageConfigPath); ok {
-		storage = cfg.Storage
-	}
-	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
-		storage.Root = root
-	}
-	seedPath := seedPathFromArgs(os.Args, storageConfigPath)
-	result, err := metadata.ImportSeed(ctx, metadata.SeedOptions{
-		Storage:    storage,
-		SchemaPath: metadataSchemaPath(frameworkConfigPath),
-		SeedPath:   seedPath,
-	})
-	if err != nil {
-		return err
-	}
-	log.Infof("metadata seed 导入完成 (%s): spaces=%d data_sources=%d subjects=%d subject_symbols=%d datasets=%d dataset_subjects=%d fields=%d factors=%d dataset_columns=%d views=%d view_columns=%d primary_store_nodes=%d devices=%d primary_store_routes=%d",
-		seedPath, result.Spaces, result.DataSources, result.Subjects, result.SubjectSymbols, result.Datasets,
-		result.DatasetSubjects, result.Fields, result.Factors, result.DatasetColumns, result.Views,
-		result.ViewColumns, result.PrimaryStoreNodes, result.Devices, result.PrimaryStoreRoutes)
-	return nil
-}
-
-func seedPathFromArgs(args []string, storageConfigPath string) string {
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if strings.HasPrefix(arg, "-seed=") {
-			return strings.TrimPrefix(arg, "-seed=")
-		}
-		if strings.HasPrefix(arg, "--seed=") {
-			return strings.TrimPrefix(arg, "--seed=")
-		}
-		if (arg == "-seed" || arg == "--seed") && i+1 < len(args) {
-			return args[i+1]
-		}
-	}
-	if path := os.Getenv("STORAGE_SEED_FILE"); path != "" {
-		return path
-	}
-	if storageConfigPath != "" {
-		return filepath.Join(filepath.Dir(storageConfigPath), "metadata.seed.yaml")
-	}
-	return filepath.Join("config", "metadata.seed.yaml")
-}
-
-func metadataSchemaPath(configPath string) string {
-	if path := os.Getenv("STORAGE_SCHEMA_FILE"); path != "" {
-		return path
-	}
-	candidates := []string{}
-	if configPath != "" {
-		candidates = append(candidates, filepath.Clean(filepath.Join(filepath.Dir(configPath), "..", "schema", "metadata.sql")))
-	}
-	candidates = append(candidates,
-		filepath.Join("schema", "metadata.sql"),
-		filepath.Join("modules", "storage", "schema", "metadata.sql"),
-	)
-	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return candidates[0]
 }
 
 func loadStorageOptions(configPath string) storagesvc.Options {

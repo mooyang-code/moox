@@ -15,8 +15,9 @@
 
 ```text
 cmd/
-  moox-collector/         独立采集管理服务
-  moox-collector-scf/     SCF 运行时
+  server/                 独立采集管理服务
+  cli/                    模块 CLI（init）
+  scf/                    SCF 运行时
 config/                   moox-collector 服务配置
 configs/                  SCF 运行时本地默认配置
 schema/                   collector SQLite schema

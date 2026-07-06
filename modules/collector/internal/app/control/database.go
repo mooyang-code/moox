@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/glebarez/sqlite"
-	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -23,7 +22,7 @@ func NewManager() *Manager {
 	return &Manager{}
 }
 
-// Initialize opens SQLite and applies the embedded Collector schema.
+// Initialize opens SQLite. Schema creation is handled before service startup.
 func (m *Manager) Initialize(dbCfg *DatabaseConfig) error {
 	dbPath := "./data/moox_collector.db"
 	if dbCfg != nil && dbCfg.Path != "" {
@@ -38,21 +37,7 @@ func (m *Manager) Initialize(dbCfg *DatabaseConfig) error {
 	}
 	m.db = db
 	applySQLitePoolConfig(m.db, dbCfg)
-	if err := m.applySchemaSQL("embedded collector schema", collectorschema.AllSQL()); err != nil {
-		return err
-	}
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
-	return nil
-}
-
-// applySchemaSQL applies the given schema text.
-func (m *Manager) applySchemaSQL(name string, raw string) error {
-	if m.db == nil {
-		return fmt.Errorf("database is not initialized")
-	}
-	if err := m.db.Exec(raw).Error; err != nil {
-		return fmt.Errorf("apply schema %s: %w", name, err)
-	}
 	return nil
 }
 

@@ -375,7 +375,7 @@ func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKe
 }
 
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version string) error {
-	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-X main.Version=%s", version), "-o", outPath, "./cmd/moox-collector-scf")
+	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-X main.Version=%s", version), "-o", outPath, "./cmd/scf")
 	cmd.Dir = collectorRoot
 	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
 	output, err := cmd.CombinedOutput()
@@ -396,7 +396,7 @@ func resolveCollectorRoot(explicit string) (string, error) {
 		if candidate == "" {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(candidate, "cmd", "moox-collector-scf", "main.go")); err == nil {
+		if _, err := os.Stat(filepath.Join(candidate, "cmd", "scf", "main.go")); err == nil {
 			return filepath.Abs(candidate)
 		}
 	}

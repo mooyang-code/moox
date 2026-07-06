@@ -19,7 +19,7 @@ echo "==> build moox-collector-scf for linux/amd64"
   cd "${ROOT}/modules/collector"
   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
     -ldflags "-X main.Version=${VERSION}" \
-    -o "${BUILD_DIR}/package/main" ./cmd/moox-collector-scf
+    -o "${BUILD_DIR}/package/main" ./cmd/scf
 )
 
 echo "==> copy SCF runtime configs"
