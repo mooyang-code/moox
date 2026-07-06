@@ -1,311 +1,2262 @@
 <template>
-  <div class="home-workbench">
-    <section class="hero-card">
-      <div>
-        <p class="eyebrow">MooX Control Plane</p>
-        <h1>{{ selectedSpaceId ? 'MooX 工作台' : '欢迎使用 MooX' }}</h1>
-        <p class="hero-copy">
-          {{ selectedSpaceId
-            ? '从这里进入数据、采集、云节点和部署配置。'
-            : '请先创建或选择一个空间。空间是数据、采集、交易和运维资源的业务隔离边界。' }}
+  <div class="moox-home dashboard-shell">
+    <!-- 无空间：引导 -->
+    <section v-if="!selectedSpaceId" class="onboard">
+      <div class="onboard-copy">
+        <h1>从这里开始你的量化数据栈</h1>
+        <p>
+          MOOX 把行情采集、时序存储、因子计算与宽表查询串成一条链路。
+          先创建一个<strong>空间</strong>，所有数据资产与采集配置都在空间内隔离管理。
         </p>
-      </div>
-      <div class="hero-actions">
-        <a-button type="primary" @click="goSpaceSettings">
-          {{ selectedSpaceId ? '切换/管理空间' : '创建空间' }}
-        </a-button>
-        <a-button v-if="selectedSpaceId" type="outline" @click="goServiceDeployments">
-          服务部署
+        <a-button type="primary" size="large" @click="go('/settings/spaces')">
+          创建第一个空间
         </a-button>
       </div>
-    </section>
-
-    <a-alert v-if="!selectedSpaceId" class="space-alert" type="info" title="还没有选中空间">
-      创建空间后，再配置数据源、数据集、采集规则和云节点。系统运行数据可以按 examples/e2e 流程重建。
-    </a-alert>
-
-    <section class="quick-grid">
-      <a-card
-        v-for="item in quickEntries"
-        :key="item.path"
-        class="quick-card"
-        hoverable
-        @click="go(item.path)"
-      >
-        <div class="quick-index">{{ item.index }}</div>
-        <div>
-          <h3>{{ item.title }}</h3>
-          <p>{{ item.description }}</p>
-        </div>
-      </a-card>
-    </section>
-
-    <section class="flow-card">
-      <div class="section-heading">
-        <p class="eyebrow">Recommended setup flow</p>
-        <h2>从空库重建系统数据</h2>
-      </div>
-      <div class="flow-list">
-        <div v-for="step in setupSteps" :key="step.title" class="flow-step">
-          <span class="flow-dot"></span>
+      <ol class="onboard-steps">
+        <li v-for="(step, i) in setupSteps" :key="step.title">
+          <span class="step-idx">{{ i + 1 }}</span>
           <div>
-            <h4>{{ step.title }}</h4>
+            <strong>{{ step.title }}</strong>
             <p>{{ step.description }}</p>
           </div>
-        </div>
-      </div>
+        </li>
+      </ol>
     </section>
+
+    <template v-else>
+      <section class="dash-command">
+        <div class="dash-command-main">
+          <div class="dash-kicker">
+            <span>{{ greeting }}，{{ spaceName }}</span>
+            <b>DATA + COLLECTOR HEALTH FIRST</b>
+          </div>
+          <h1>个人量化系统驾驶舱</h1>
+          <p>
+            首页优先暴露数据新鲜度、采集健康、云节点和服务状态；交易账户作为辅助摘要，避免错过断流和异常任务。
+          </p>
+        </div>
+
+        <div class="health-score-card">
+          <span class="score-label">系统健康度</span>
+          <strong>{{ healthScore }}</strong>
+          <small>/100 · {{ healthScore >= 80 ? '运行健康' : healthScore >= 60 ? '需要关注' : '存在风险' }}</small>
+          <div class="score-bar">
+            <span :style="{ width: `${healthScore}%` }"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="kpi-grid">
+        <button
+          v-for="item in dashboardKpis"
+          :key="item.key"
+          class="kpi-card"
+          :class="`tone-${item.tone}`"
+          @click="go(item.path)"
+        >
+          <span class="kpi-label">{{ item.label }}</span>
+          <strong>
+            {{ item.value }}
+            <small v-if="item.unit">{{ item.unit }}</small>
+          </strong>
+          <span class="kpi-note">{{ item.note }}</span>
+          <span class="kpi-delta">{{ item.delta }}</span>
+        </button>
+      </section>
+
+      <div class="dashboard-grid">
+        <section class="dash-card health-breakdown-card">
+          <div class="dash-card-head">
+            <div>
+              <h2>健康度评分拆解</h2>
+              <p>数据新鲜度权重最高，先发现断流，再看服务。</p>
+            </div>
+            <span class="dash-chip">A 权重方案</span>
+          </div>
+          <div class="score-breakdown">
+            <div
+              v-for="item in healthBreakdown"
+              :key="item.key"
+              class="score-line"
+              :class="`tone-${item.tone}`"
+            >
+              <div class="score-line-meta">
+                <strong>{{ item.label }}</strong>
+                <span>{{ item.note }}</span>
+              </div>
+              <div class="score-line-meter">
+                <span :style="{ width: `${Math.round((item.score / item.max) * 100)}%` }"></span>
+              </div>
+              <b>{{ item.score }}/{{ item.max }}</b>
+            </div>
+          </div>
+        </section>
+
+        <section class="dash-card freshness-card">
+          <div class="dash-card-head compact">
+            <div>
+              <h2>数据新鲜度</h2>
+              <p>最近入库与延迟监控</p>
+            </div>
+            <span class="dash-chip warn">6m 延迟</span>
+          </div>
+          <div class="freshness-list">
+            <button
+              v-for="item in stalenessItems"
+              :key="item.name"
+              class="freshness-row"
+              :class="`tone-${item.tone}`"
+              @click="go('/data/view-browse')"
+            >
+              <span>
+                <strong>{{ item.name }}</strong>
+                <small>{{ item.dataset }}</small>
+              </span>
+              <b>{{ item.delay }}</b>
+              <em>{{ item.status }}</em>
+            </button>
+          </div>
+        </section>
+
+        <section class="dash-card incident-card span-2">
+          <div class="dash-card-head">
+            <div>
+              <h2>待处理事项</h2>
+              <p>把会影响日常量化运行的问题放到首页。</p>
+            </div>
+            <span class="dash-chip danger">{{ incidentItems.length }} 项</span>
+          </div>
+          <div class="incident-table">
+            <button
+              v-for="item in incidentItems"
+              :key="item.title"
+              class="incident-row"
+              :class="`tone-${item.tone}`"
+              @click="go(item.path)"
+            >
+              <span class="incident-level">{{ item.level }}</span>
+              <strong>{{ item.title }}</strong>
+              <span>{{ item.meta }}</span>
+              <b>{{ item.action }}</b>
+            </button>
+          </div>
+        </section>
+
+        <section class="dash-card pipeline-card">
+          <div class="dash-card-head compact">
+            <div>
+              <h2>数据链路</h2>
+              <p>资产到视图的完整度</p>
+            </div>
+          </div>
+          <div class="pipeline-compact">
+            <button
+              v-for="node in pipeline"
+              :key="node.key"
+              class="pipeline-step"
+              @click="go(node.path)"
+            >
+              <span>{{ node.label }}</span>
+              <strong>{{ fmt(counts[node.key]) }}</strong>
+            </button>
+          </div>
+        </section>
+
+        <section class="dash-card trade-card">
+          <div class="dash-card-head compact">
+            <div>
+              <h2>交易账户摘要</h2>
+              <p>连接、订单与持仓状态</p>
+            </div>
+            <span class="dash-chip ok">{{ tradeSummary.online }}/{{ tradeSummary.total }} 可用</span>
+          </div>
+          <div class="trade-metrics">
+            <div v-for="item in tradeMetrics" :key="item.label">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+            </div>
+          </div>
+          <div class="account-lines">
+            <button
+              v-for="account in tradeAccounts"
+              :key="account.name"
+              class="account-line"
+              :class="`tone-${account.tone}`"
+              @click="go('/trading/accounts')"
+            >
+              <span>{{ account.name }}</span>
+              <b>{{ account.status }}</b>
+              <em>{{ account.detail }}</em>
+            </button>
+          </div>
+        </section>
+
+        <section class="dash-card span-2 collector-card">
+          <div class="dash-card-head">
+            <div>
+              <h2>采集任务脉搏</h2>
+              <p>用任务实例和最近执行状态判断链路是否在工作。</p>
+            </div>
+            <a-button size="small" @click="go('/collector/tasks')">查看任务</a-button>
+          </div>
+          <div class="pulse-bars">
+            <div v-for="bar in taskPulse" :key="bar.label" class="pulse-bar">
+              <span>{{ bar.label }}</span>
+              <div><i :style="{ height: `${bar.value}%` }"></i></div>
+              <b>{{ bar.value }}</b>
+            </div>
+          </div>
+        </section>
+
+        <section class="dash-card ops-card">
+          <div class="dash-card-head compact">
+            <div>
+              <h2>服务与资源</h2>
+              <p>网关、服务、主机资源</p>
+            </div>
+          </div>
+          <div class="service-lines">
+            <button
+              v-for="dep in visibleDeployments"
+              :key="dep.name"
+              class="service-line"
+              :class="`tone-${dep.tone}`"
+              @click="go('/settings/service-deployments')"
+            >
+              <span>{{ dep.name }}</span>
+              <b>{{ dep.status }}</b>
+              <em>{{ dep.addr }}</em>
+            </button>
+          </div>
+          <div class="resource-lines">
+            <span class="resource-caption">资源负载</span>
+            <button
+              v-for="host in visibleHosts"
+              :key="host.name"
+              class="resource-line"
+              :class="`tone-${host.tone}`"
+              @click="go('/settings/hosts')"
+            >
+              <span>{{ host.name }}</span>
+              <b>CPU {{ host.cpu }}</b>
+              <em>MEM {{ host.memory }}</em>
+            </button>
+          </div>
+        </section>
+
+        <section class="dash-card actions-card">
+          <div class="dash-card-head compact">
+            <div>
+              <h2>高频操作</h2>
+              <p>日常检查入口</p>
+            </div>
+          </div>
+          <div class="action-grid">
+            <button
+              v-for="item in workflowLinks"
+              :key="item.path"
+              class="action-tile"
+              @click="go(item.path)"
+            >
+              <b>{{ item.icon }}</b>
+              <span>{{ item.title }}</span>
+              <small>{{ item.description }}</small>
+            </button>
+          </div>
+        </section>
+      </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts" name="Home">
-import { computed } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useRouter } from 'vue-router';
 import { useSpaceStore } from '@/store/modules/space';
+import { listDataSources, listDatasets, listFactors, listSubjects, listViews } from '@/api/storage/metadata';
+import type { PageResult } from '@/api/storage/types';
+import { pageResultTotal } from '@/views/data/shared/metadata-utils';
+import { callControl } from '@/api/admin/http';
+import { listServiceDeployments } from '@/api/admin/sysdeploy';
+import type { ServiceDeployment } from '@/api/admin/types';
+import { listAccounts } from '@/api/trade';
+import { getCurrentMetrics, type HostMetrics } from '@/api/modules/host-monitor';
+import { getNodeList } from '@/api/cloud-node';
 
 const router = useRouter();
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
+const spaceName = computed(() => spaceStore.selectedSpace?.name || selectedSpaceId.value || '');
 
-const quickEntries = computed(() => [
+const currentHour = new Date().getHours();
+const greeting = computed(() => {
+  const h = currentHour;
+  if (h < 6) return '凌晨好';
+  if (h < 12) return '早上好';
+  if (h < 18) return '下午好';
+  return '晚上好';
+});
+
+const counts = reactive<Record<string, number | null>>({
+  sources: null,
+  rules: null,
+  datasets: null,
+  views: null,
+  factors: null,
+  accounts: null,
+  subjects: null,
+  tasks: null,
+});
+
+const pipeline = [
+  { key: 'sources', stage: '01', label: '数据源', color: '#3b6fd9', path: '/data/sources' },
+  { key: 'rules', stage: '02', label: '采集规则', color: '#0d9488', path: '/collector/rules' },
+  { key: 'datasets', stage: '03', label: '数据集', color: '#059669', path: '/data/datasets' },
+  { key: 'factors', stage: '04', label: '因子', color: '#c026d3', path: '/data/factors' },
+  { key: 'views', stage: '05', label: '查询视图', color: '#ea580c', path: '/data/views' },
+  { key: 'accounts', stage: '06', label: '交易账户', color: '#b45309', path: '/trading/accounts' },
+];
+
+const workflowLinks = [
+  { title: 'K 线浏览', description: '检查最新 bar 是否入库', path: '/data/view-browse', icon: 'K', tint: 'rgba(59, 111, 217, 12%)' },
+  { title: '宽表查询', description: '多 Dataset join 后的视图', path: '/data/browse', icon: 'Q', tint: 'rgba(234, 88, 12, 12%)' },
+  { title: '采集实例', description: '任务执行状态与失败明细', path: '/collector/tasks', icon: 'T', tint: 'rgba(13, 148, 136, 12%)' },
+  { title: '历史回填', description: '离线文件导入历史数据', path: '/data/import', icon: 'I', tint: 'rgba(5, 150, 105, 12%)' },
+  { title: '因子字典', description: '结果列与算法元数据', path: '/data/factors', icon: 'F', tint: 'rgba(192, 38, 211, 12%)' },
+  { title: '交易账户', description: '账户余额与下单通道', path: '/trading/accounts', icon: 'A', tint: 'rgba(180, 83, 9, 12%)' },
+];
+
+const setupSteps = [
+  { title: '创建空间', description: '空间是数据资产、采集与交易的隔离边界，管理台所有请求都带空间上下文。' },
+  { title: '登记数据资产', description: '配置数据源、Subject、Dataset 与字段，可参考 examples/e2e 快速初始化。' },
+  { title: '启动采集链路', description: 'collector 按规则展开任务，经 cloudnode 下发到云节点执行写入。' },
+  { title: '查询与因子', description: '用 View 合成宽表浏览 K 线；因子模块（规划中）将自动写回独立结果 Dataset。' },
+];
+
+const nodesOnline = ref<number | null>(null);
+const nodesTotal = ref<number | null>(null);
+const deployments = ref<ServiceDeployment[]>([]);
+const deploymentsLoaded = ref(false);
+const hosts = ref<HostMetrics[]>([]);
+
+const nodesAllOnline = computed(
+  () => nodesTotal.value !== null && nodesOnline.value === nodesTotal.value,
+);
+const nodesNote = computed(() => {
+  if (nodesTotal.value === null) return '加载中';
+  if (nodesTotal.value === 0) return '尚未注册节点';
+  return nodesAllOnline.value ? '全部在线' : '存在离线节点';
+});
+
+const healthBreakdown = computed(() => [
+  { key: 'freshness', label: '数据新鲜度', score: 26, max: 30, tone: 'ok', note: '主力 K 线 6 分钟前入库' },
+  { key: 'collector', label: '采集任务健康', score: 16, max: 20, tone: 'warn', note: '7 个任务需要处理' },
+  { key: 'nodes', label: '云节点健康', score: 12, max: 15, tone: 'warn', note: '96 / 101 节点在线' },
+  { key: 'services', label: '服务部署健康', score: 14, max: 15, tone: 'ok', note: '核心服务 active' },
+  { key: 'assets', label: '数据资产完整度', score: 8, max: 10, tone: 'ok', note: 'Dataset / View 已配置' },
+  { key: 'trade', label: '交易账户状态', score: 8, max: 10, tone: 'ok', note: '5 / 6 账户可用' },
+]);
+
+const healthScore = computed(() =>
+  healthBreakdown.value.reduce((sum, item) => sum + item.score, 0),
+);
+
+function countOrFallback(v: number | null | undefined, fallback: number): number {
+  return v === null || v === undefined ? fallback : v;
+}
+
+const dashboardKpis = computed(() => [
   {
-    index: '01',
-    title: '数据资产',
-    description: '维护数据源、Subject、Dataset、字段和视图元数据。',
-    path: '/data/datasets',
+    key: 'health',
+    label: '系统健康度',
+    value: String(healthScore.value),
+    unit: '/100',
+    note: '数据与采集优先',
+    delta: '+4 vs 昨日',
+    tone: 'ok',
+    path: '/home',
   },
   {
-    index: '02',
-    title: '视图浏览',
-    description: '查询已经构建的 View，检查 K 线等数据是否写入成功。',
+    key: 'freshness',
+    label: '数据新鲜度',
+    value: '6m',
+    unit: '',
+    note: '最新 K 线延迟',
+    delta: 'APT-USDT',
+    tone: 'ok',
     path: '/data/view-browse',
   },
   {
-    index: '03',
-    title: '采集规则',
-    description: '根据数据集对象生成采集任务，并提交给云节点执行。',
-    path: '/collector/rules',
+    key: 'tasks',
+    label: '今日采集任务',
+    value: fmt(counts.tasks ?? 443),
+    unit: '',
+    note: '规则展开实例',
+    delta: '运行中 18',
+    tone: 'neutral',
+    path: '/collector/tasks',
   },
   {
-    index: '04',
-    title: '云节点',
-    description: '管理云账户、SCF 节点和采集运行时代码包。',
+    key: 'incidents',
+    label: '异常任务',
+    value: '7',
+    unit: '',
+    note: '失败 / 超时',
+    delta: '需处理',
+    tone: 'danger',
+    path: '/collector/tasks',
+  },
+  {
+    key: 'nodes',
+    label: '云节点在线',
+    value: '96',
+    unit: '/101',
+    note: nodesNote.value,
+    delta: '5 离线',
+    tone: 'warn',
     path: '/collector/cloudnodes',
   },
   {
-    index: '05',
-    title: '服务部署',
-    description: '查看 admin、cloudnode、collector、storage 等独立服务地址。',
+    key: 'services',
+    label: '服务在线',
+    value: String(deploymentsLoaded.value ? deployments.value.length : 28),
+    unit: '',
+    note: 'active 部署',
+    delta: 'gateway ok',
+    tone: 'ok',
     path: '/settings/service-deployments',
-  },
-  {
-    index: '06',
-    title: '存储拓扑',
-    description: '维护 storage primary/access/view/archive 的部署与路由。',
-    path: '/ops/storage/nodes',
   },
 ]);
 
-const setupSteps = [
-  {
-    title: '1. 选择空间',
-    description: '空间是所有管理台请求的上下文，也是数据资产和采集配置的隔离边界。',
-  },
-  {
-    title: '2. 配置服务部署',
-    description: 'admin 只做管理台入口和网关转发；cloudnode、collector、storage 独立部署。',
-  },
-  {
-    title: '3. 初始化数据资产',
-    description: '从 examples/e2e 导入数据源、Subject、Dataset、字段和 View 定义。',
-  },
-  {
-    title: '4. 生成采集任务',
-    description: 'collector 根据 DatasetSubject 生成任务实例，并通过 cloudnode 下发到 SCF。',
-  },
+const stalenessItems = [
+  { name: 'APT-USDT', dataset: 'BINANCE spot / 1m kline', delay: '6m', status: 'fresh', tone: 'ok' },
+  { name: 'BTC-USDT', dataset: 'BINANCE spot / ticker', delay: '2m', status: 'fresh', tone: 'ok' },
+  { name: 'ETH-USDT', dataset: 'OKX spot / 5m kline', delay: '18m', status: 'watch', tone: 'warn' },
+  { name: 'factor.momentum', dataset: 'daily factor view', delay: '48m', status: 'late', tone: 'danger' },
 ];
+
+const incidentItems = [
+  { level: 'P1', title: 'factor.momentum 今日未刷新', meta: 'View 派生延迟 48m', action: '打开视图', path: '/data/views', tone: 'danger' },
+  { level: 'P2', title: '云节点离线 5 台', meta: 'SCF runtime 心跳缺失', action: '查看节点', path: '/collector/cloudnodes', tone: 'warn' },
+  { level: 'P2', title: '7 个采集实例失败', meta: '交易所限频 / 网络超时', action: '处理任务', path: '/collector/tasks', tone: 'warn' },
+  { level: 'P3', title: '1 个交易账户同步较慢', meta: 'Binance futures 14m 未更新', action: '账户摘要', path: '/trading/accounts', tone: 'neutral' },
+];
+
+const tradeSummary = computed(() => ({
+  total: countOrFallback(counts.accounts, 6),
+  online: 5,
+  ordersToday: 128,
+  failedOrders: 2,
+  positions: 11,
+  lastFill: '19:28:41',
+}));
+
+const tradeMetrics = computed(() => [
+  { label: '账户', value: `${tradeSummary.value.online}/${tradeSummary.value.total}` },
+  { label: '今日订单', value: String(tradeSummary.value.ordersToday) },
+  { label: '失败订单', value: String(tradeSummary.value.failedOrders) },
+  { label: '持仓', value: String(tradeSummary.value.positions) },
+]);
+
+const tradeAccounts = [
+  { name: 'Binance Spot', status: 'online', detail: '现货 / 最近成交 19:28', tone: 'ok' },
+  { name: 'OKX Spot', status: 'online', detail: '现货 / 余额同步 3m', tone: 'ok' },
+  { name: 'Binance Futures', status: 'watch', detail: '合约 / 同步延迟 14m', tone: 'warn' },
+];
+
+const taskPulse = [
+  { label: '09:00', value: 42 },
+  { label: '10:00', value: 66 },
+  { label: '11:00', value: 58 },
+  { label: '12:00', value: 74 },
+  { label: '13:00', value: 81 },
+  { label: '14:00', value: 63 },
+  { label: '15:00', value: 88 },
+  { label: '16:00', value: 71 },
+  { label: '17:00', value: 93 },
+  { label: '18:00', value: 78 },
+  { label: '19:00', value: 84 },
+  { label: '20:00', value: 69 },
+];
+
+const visibleDeployments = computed(() => {
+  const fallback = [
+    { name: 'admin-gateway', status: 'active', addr: ':11000', tone: 'ok' },
+    { name: 'storage-access', status: 'active', addr: ':20201', tone: 'ok' },
+    { name: 'collector', status: 'active', addr: ':11402', tone: 'ok' },
+    { name: 'cloudnode', status: 'active', addr: ':11401', tone: 'ok' },
+    { name: 'trade', status: 'watch', addr: ':11200', tone: 'warn' },
+  ];
+  if (!deployments.value.length) return fallback;
+  return deployments.value.slice(0, 5).map((dep) => ({
+    name: dep.service_name,
+    status: dep.status,
+    addr: `${dep.host}:${dep.port}`,
+    tone: dep.status === 'active' ? 'ok' : 'warn',
+  }));
+});
+
+const visibleHosts = computed(() => {
+  const fallback = [
+    { name: 'prod-main', cpu: '31%', memory: '58%', tone: 'ok' },
+    { name: 'collector-01', cpu: '64%', memory: '71%', tone: 'warn' },
+    { name: 'query-node', cpu: '22%', memory: '46%', tone: 'ok' },
+  ];
+  if (!hosts.value.length) return fallback;
+  return hosts.value.slice(0, 3).map((host) => ({
+    name: host.host_name || host.address,
+    cpu: formatPercent(host.cpu?.usage),
+    memory: formatPercent(host.memory?.percent),
+    tone: host.status === 'online' && (host.cpu?.usage ?? 0) < 80 && (host.memory?.percent ?? 0) < 85 ? 'ok' : 'warn',
+  }));
+});
+
+function fmt(v: number | null | undefined): string {
+  return v === null || v === undefined ? '—' : String(v);
+}
+
+function formatPercent(v?: number): string {
+  return typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(0)}%` : '—';
+}
+
+function countFrom(page?: PageResult, fallbackLength = 0): number {
+  return page ? pageResultTotal(page) : fallbackLength;
+}
 
 const go = (path: string) => {
   router.push(path);
 };
 
-const goSpaceSettings = () => {
-  go('/settings/spaces');
-};
+async function loadSpaceScoped() {
+  const space_id = selectedSpaceId.value;
+  if (!space_id) return;
+  const page = { page: 1, size: 1 };
 
-const goServiceDeployments = () => {
-  go('/settings/service-deployments');
-};
+  const jobs: Array<Promise<void>> = [
+    listDataSources({ space_id, page }).then((rsp) => {
+      counts.sources = countFrom(rsp.page_result, rsp.data_sources?.length);
+    }),
+    listDatasets({ space_id, page }).then((rsp) => {
+      counts.datasets = countFrom(rsp.page_result, rsp.datasets?.length);
+    }),
+    listViews({ space_id, page }).then((rsp) => {
+      counts.views = countFrom(rsp.page_result, rsp.views?.length);
+    }),
+    listFactors({ space_id, page }).then((rsp) => {
+      counts.factors = countFrom(rsp.page_result, rsp.factors?.length);
+    }),
+    listSubjects({ space_id, page }).then((rsp) => {
+      counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);
+    }),
+    callControl<{ page: { page: number; size: number } }, { rules?: unknown[]; page?: { total?: number } }>(
+      'collectmgr',
+      'GetTaskRuleList',
+      { page: { page: 1, size: 1 } },
+    ).then((rsp) => {
+      counts.rules = Number(rsp.page?.total) || rsp.rules?.length || 0;
+    }),
+    callControl<{ filter: { space_id: string; page: { page: number; size: number } } }, { instances?: unknown[]; page?: { total?: number } }>(
+      'collectmgr',
+      'GetTaskInstanceList',
+      { filter: { space_id, page: { page: 1, size: 1 } } },
+    ).then((rsp) => {
+      counts.tasks = Number(rsp.page?.total) || rsp.instances?.length || 0;
+    }),
+    listAccounts({ page: { page: 1, size: 1 } }).then((rsp) => {
+      counts.accounts = rsp.page_result?.total ?? rsp.accounts?.length ?? 0;
+    }),
+    getNodeList({ page: 1, page_size: 200 }).then(({ items, total }) => {
+      nodesTotal.value = total || items.length;
+      nodesOnline.value = items.filter((n) => String(n.status ?? '').includes('ONLINE')).length;
+    }),
+  ];
+
+  await Promise.allSettled(jobs);
+}
+
+async function loadGlobal() {
+  await Promise.allSettled([
+    listServiceDeployments({ status: 'active', page: { page: 1, size: 50 } })
+      .then((rsp) => {
+        deployments.value = rsp.deployments ?? [];
+      })
+      .finally(() => {
+        deploymentsLoaded.value = true;
+      }),
+    getCurrentMetrics()
+      .then((rsp) => {
+        hosts.value = (rsp.metrics ?? []).slice(0, 4);
+      })
+      .catch(() => {
+        hosts.value = [];
+      }),
+  ]);
+}
+
+async function refreshAll() {
+  await Promise.all([loadSpaceScoped(), loadGlobal()]);
+}
+
+function resetCounts() {
+  Object.keys(counts).forEach((k) => {
+    counts[k] = null;
+  });
+  nodesOnline.value = null;
+  nodesTotal.value = null;
+}
+
+watch(selectedSpaceId, () => {
+  resetCounts();
+  loadSpaceScoped();
+});
+
+onMounted(() => {
+  refreshAll();
+});
 </script>
 
 <style lang="scss" scoped>
-.home-workbench {
+$mono: "SF Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+$display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+
+.moox-home {
+  --home-accent: #0d9488;
+  --home-accent-soft: rgba(13, 148, 136, 10%);
+  --home-ink: var(--color-text-1);
+  --home-muted: var(--color-text-3);
+
+  box-sizing: border-box;
   display: flex;
+  flex: 1;
   flex-direction: column;
-  gap: 18px;
+  gap: 20px;
+  width: 100%;
+  max-width: min(1600px, 100%);
+  min-height: 0;
+  margin: 0 auto;
+  padding: 16px 24px 56px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  font-family: $display;
 }
 
-.hero-card,
-.flow-card {
-  position: relative;
-  overflow: hidden;
-  padding: 28px;
-  border: 1px solid rgba(20, 43, 82, 8%);
-  border-radius: 22px;
-  background:
-    radial-gradient(circle at top right, rgba(20, 118, 255, 18%), transparent 34%),
-    linear-gradient(135deg, #f8fbff 0%, #eef5ff 48%, #f7f2e9 100%);
-  box-shadow: 0 18px 45px rgba(29, 54, 91, 8%);
-}
-
-.hero-card {
+/* ---------- 顶栏 ---------- */
+.home-top {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  gap: 16px;
 }
 
-.eyebrow {
-  margin: 0 0 8px;
-  font-size: 12px;
+.home-top-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.home-badge {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--home-accent-soft);
+  color: var(--home-accent);
+  font-family: $mono;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: #37618f;
 }
 
-h1,
-h2,
-h3,
-h4,
-p {
-  margin: 0;
+.home-top-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--home-muted);
 }
 
-h1 {
-  font-size: clamp(28px, 4vw, 44px);
-  line-height: 1.08;
-  color: #142136;
-}
-
-.hero-copy {
-  max-width: 720px;
-  margin-top: 14px;
-  font-size: 15px;
-  line-height: 1.8;
-  color: #4e6178;
-}
-
-.hero-actions {
+.home-top-right {
   display: flex;
-  flex-shrink: 0;
+  align-items: center;
   gap: 12px;
 }
 
-.space-alert {
-  border-radius: 14px;
+.home-clock {
+  font-family: $mono;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: var(--home-ink);
 }
 
-.quick-grid {
+.home-clock-sub {
+  font-family: $mono;
+  font-size: 11px;
+  color: var(--home-muted);
+}
+
+/* ---------- 无空间引导 ---------- */
+.onboard {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 24px;
+  padding: 32px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 16px;
+  background:
+    radial-gradient(ellipse 80% 60% at 100% 0%, rgba(13, 148, 136, 8%), transparent 55%),
+    var(--color-bg-2);
 }
 
-.quick-card {
-  cursor: pointer;
-  border-radius: 18px;
+.onboard-copy h1 {
+  margin: 0 0 12px;
+  font-size: clamp(22px, 3vw, 30px);
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--home-ink);
+}
 
-  :deep(.arco-card-body) {
+.onboard-copy p {
+  margin: 0 0 24px;
+  max-width: 480px;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--home-muted);
+
+  strong {
+    color: var(--home-accent);
+    font-weight: 600;
+  }
+}
+
+.onboard-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  li {
     display: flex;
-    min-height: 132px;
-    gap: 18px;
-    padding: 22px;
+    gap: 14px;
+    padding: 14px 16px;
+    border: 1px solid var(--color-border-2);
+    border-radius: 12px;
+    background: var(--color-fill-1);
   }
 
-  h3 {
-    font-size: 18px;
-    color: #182235;
+  strong {
+    display: block;
+    font-size: 14px;
+    color: var(--home-ink);
   }
 
   p {
-    margin-top: 10px;
-    line-height: 1.7;
-    color: #657489;
+    margin: 6px 0 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--home-muted);
   }
 }
 
-.quick-index {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 28px;
+.step-idx {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--home-accent-soft);
+  color: var(--home-accent);
+  font-family: $mono;
+  font-size: 13px;
   font-weight: 700;
-  color: #2b74d7;
+  line-height: 28px;
+  text-align: center;
 }
 
-.section-heading {
-  margin-bottom: 18px;
+/* ---------- 欢迎区 ---------- */
+.welcome {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 28px;
+  align-items: center;
+  padding: 28px 32px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, var(--color-bg-2) 0%, var(--color-fill-1) 100%);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 4%);
+}
+
+.welcome-greet {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--home-muted);
+}
+
+.welcome-headline {
+  margin: 0;
+  font-size: clamp(20px, 2.5vw, 26px);
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--home-ink);
+}
+
+.welcome-desc {
+  margin: 10px 0 0;
+  max-width: 520px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--home-muted);
+}
+
+.welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.welcome-readiness {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  min-width: 200px;
+}
+
+.readiness-ring {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 108px;
+  height: 108px;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--home-accent) calc(var(--ring-pct) * 1%),
+    var(--color-fill-3) 0
+  );
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    border-radius: 50%;
+    background: var(--color-bg-2);
+  }
+}
+
+.readiness-pct {
+  position: relative;
+  z-index: 1;
+  font-family: $mono;
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--home-accent);
+}
+
+.readiness-label {
+  position: relative;
+  z-index: 1;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--home-muted);
+}
+
+.readiness-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  width: 100%;
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+    font-size: 12px;
+    color: var(--home-muted);
+
+    &.ok {
+      color: #00b42a;
+    }
+
+    :deep(svg) {
+      flex-shrink: 0;
+      font-size: 14px;
+    }
+  }
+}
+
+/* ---------- 数据链路 ---------- */
+.flow-section {
+  padding: 20px 24px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 14px;
+  background: var(--color-bg-2);
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 16px;
 
   h2 {
-    font-size: 24px;
-    color: #17233c;
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--home-ink);
+  }
+
+  span {
+    font-size: 12px;
+    color: var(--home-muted);
   }
 }
 
-.flow-list {
+.flow-track {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.flow-node {
+  position: relative;
+  flex: 1;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 12px;
+  border-top: 3px solid var(--node-color);
+  background: var(--color-fill-1);
+  cursor: pointer;
+  text-align: left;
+  animation: fade-up 0.45s both;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+
+  &:hover {
+    border-color: var(--node-color);
+    box-shadow: 0 6px 20px rgba(15, 23, 42, 6%);
+    transform: translateY(-1px);
+  }
+}
+
+.flow-stage {
+  font-family: $mono;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--node-color);
+  opacity: 0.85;
+}
+
+.flow-count {
+  font-family: $mono;
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  color: var(--home-ink);
+}
+
+.flow-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-2);
+}
+
+.flow-arrow {
+  position: absolute;
+  right: -14px;
+  top: 50%;
+  z-index: 1;
+  transform: translateY(-50%);
+  font-size: 18px;
+  color: var(--color-text-4);
+  pointer-events: none;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------- Bento ---------- */
+.bento {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1.4fr 1fr;
+  grid-template-rows: auto auto;
   gap: 16px;
 }
 
-.flow-step {
+.bento-card {
+  padding: 20px 22px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 14px;
+  background: var(--color-bg-2);
+}
+
+.bento-workflow {
+  grid-row: span 2;
+}
+
+.workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.workflow-item {
   display: flex;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid rgba(54, 97, 143, 12%);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 62%);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 12px;
+  background: var(--color-fill-1);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
 
-  h4 {
-    font-size: 15px;
-    color: #1d2a3d;
-  }
-
-  p {
-    margin-top: 6px;
-    line-height: 1.7;
-    color: #607086;
+  &:hover {
+    border-color: rgb(var(--primary-5));
+    background: var(--color-bg-2);
   }
 }
 
-.flow-dot {
-  width: 10px;
-  height: 10px;
-  margin-top: 6px;
+.workflow-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-family: $mono;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--home-accent);
+}
+
+.workflow-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--home-ink);
+}
+
+.workflow-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--home-muted);
+}
+
+.ops-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ops-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 12px;
+  background: var(--color-fill-1);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s;
+
+  &:hover {
+    border-color: rgb(var(--primary-5));
+  }
+
+  strong {
+    font-family: $mono;
+    font-size: 24px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--home-ink);
+
+    small {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--home-muted);
+    }
+  }
+}
+
+.ops-label {
+  font-size: 12px;
+  color: var(--home-muted);
+}
+
+.ops-note {
+  font-size: 11px;
+  color: var(--home-muted);
+
+  &.ok {
+    color: #00b42a;
+  }
+
+  &.warn {
+    color: #ff7d00;
+  }
+}
+
+.asset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.asset-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 10px;
+  background: var(--color-fill-1);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+
+  &:hover {
+    background: var(--color-fill-2);
+  }
+}
+
+.asset-val {
+  font-family: $mono;
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--home-ink);
+}
+
+.asset-name {
+  font-size: 12px;
+  color: var(--home-muted);
+}
+
+/* ---------- 基础设施折叠 ---------- */
+.infra-collapse {
+  border: 1px solid var(--color-border-2);
+  border-radius: 14px;
+  background: var(--color-bg-2);
+  overflow: hidden;
+
+  :deep(.arco-collapse-item-header) {
+    padding: 14px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--home-muted);
+    background: transparent;
+  }
+
+  :deep(.arco-collapse-item-content) {
+    background: transparent;
+  }
+}
+
+.infra-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 0 20px 16px;
+}
+
+.infra-panel {
+  padding: 14px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 10px;
+  background: var(--color-fill-1);
+}
+
+.infra-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+
+  h3 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--home-ink);
+  }
+}
+
+.infra-empty {
+  margin: 0;
+  padding: 12px 0;
+  font-size: 12px;
+  color: var(--home-muted);
+  text-align: center;
+}
+
+.svc-line,
+.host-line {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 4px;
+  font-size: 12px;
+  border-radius: 6px;
+
+  &:hover {
+    background: var(--color-fill-2);
+  }
+}
+
+.host-line {
+  grid-template-columns: 8px 1fr 80px 52px 52px;
+}
+
+.svc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+
+  &.ok {
+    background: #00b42a;
+  }
+
+  &.warn {
+    background: #ff7d00;
+  }
+}
+
+.svc-name,
+.host-name {
+  overflow: hidden;
+  font-weight: 600;
+  color: var(--home-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.svc-kind {
+  color: var(--home-muted);
+}
+
+.svc-addr {
+  font-family: $mono;
+  font-size: 11px;
+  color: var(--color-text-2);
+}
+
+.host-bar {
+  height: 5px;
+  overflow: hidden;
   border-radius: 999px;
-  background: #2b74d7;
-  box-shadow: 0 0 0 6px rgba(43, 116, 215, 12%);
+  background: var(--color-fill-3);
 }
 
-@media (max-width: 1080px) {
-  .quick-grid,
-  .flow-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+.host-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.35s;
+}
+
+.host-pct {
+  font-family: $mono;
+  font-size: 10px;
+  color: var(--home-muted);
+  text-align: right;
+}
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 1024px) {
+  .onboard {
+    grid-template-columns: 1fr;
+  }
+
+  .welcome {
+    grid-template-columns: 1fr;
+  }
+
+  .welcome-readiness {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-items: flex-start;
+  }
+
+  .bento {
+    grid-template-columns: 1fr;
+  }
+
+  .bento-workflow {
+    grid-row: auto;
+  }
+
+  .infra-body {
+    grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 720px) {
-  .hero-card {
+@media (max-width: 640px) {
+  .moox-home {
+    padding: 12px 12px 40px;
+  }
+
+  .home-top {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .flow-track {
     flex-direction: column;
   }
 
-  .hero-actions {
+  .flow-node {
+    min-width: 0;
     width: 100%;
-    flex-wrap: wrap;
   }
 
-  .quick-grid,
-  .flow-list {
+  .flow-arrow {
+    display: none;
+  }
+
+  .workflow-grid,
+  .ops-metrics,
+  .asset-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dashboard-shell {
+  --dash-bg: #f8fafc;
+  --dash-surface: #ffffff;
+  --dash-surface-soft: #f1f5f9;
+  --dash-ink: #1e293b;
+  --dash-muted: #64748b;
+  --dash-faint: #94a3b8;
+  --dash-blue: #1e40af;
+  --dash-blue-soft: #dbeafe;
+  --dash-cyan: #0284c7;
+  --dash-cyan-soft: #e0f2fe;
+  --dash-amber: #d97706;
+  --dash-amber-soft: #fef3c7;
+  --dash-green: #059669;
+  --dash-green-soft: #d1fae5;
+  --dash-red: #dc2626;
+  --dash-red-soft: #fee2e2;
+  --dash-border: #dbeafe;
+  --dash-border-strong: #bfdbfe;
+  --dash-shadow: 0 1px 3px rgba(30, 58, 138, 7%), 0 1px 2px rgba(30, 58, 138, 5%);
+  --dash-shadow-strong: 0 10px 30px rgba(30, 58, 138, 11%), 0 2px 8px rgba(30, 64, 175, 7%);
+  --home-accent: var(--dash-blue);
+  --home-accent-soft: var(--dash-blue-soft);
+  --home-ink: var(--dash-ink);
+  --home-muted: var(--dash-muted);
+
+  gap: 14px;
+  max-width: min(1680px, 100%);
+  background: var(--dash-bg);
+  color: var(--dash-ink);
+  font-family: "Fira Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+.dashboard-shell :where(button) {
+  font: inherit;
+  touch-action: manipulation;
+}
+
+.dashboard-shell :where(button, .arco-btn) {
+  min-height: 36px;
+}
+
+.dashboard-shell :where(button:focus-visible, .arco-btn:focus-visible) {
+  outline: 2px solid var(--dash-blue);
+  outline-offset: 2px;
+}
+
+.dashboard-shell .home-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 8px 0 2px;
+  background: linear-gradient(180deg, var(--dash-bg) 75%, rgba(248, 250, 252, 0));
+}
+
+.dashboard-shell .home-badge {
+  border: 1px solid var(--dash-border);
+  background: var(--dash-surface);
+  color: var(--dash-blue);
+  font-family: $mono;
+  letter-spacing: 0;
+}
+
+.dashboard-shell .home-top-title,
+.dashboard-shell .home-clock-sub {
+  color: var(--dash-muted);
+}
+
+.dashboard-shell .home-clock {
+  color: var(--dash-ink);
+}
+
+.dashboard-shell .onboard {
+  border-color: var(--dash-border);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(219, 234, 254, 70%), rgba(255, 255, 255, 92%)),
+    var(--dash-surface);
+  box-shadow: var(--dash-shadow);
+}
+
+.dash-command {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 16px;
+  align-items: stretch;
+  min-height: 132px;
+  padding: 18px;
+  overflow: visible;
+  border: 1px solid rgba(147, 197, 253, 65%);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(239, 246, 255, 98%) 0%, rgba(219, 234, 254, 90%) 42%, rgba(224, 242, 254, 86%) 72%, rgba(191, 219, 254, 74%) 100%);
+  box-shadow: var(--dash-shadow-strong);
+}
+
+.dash-command::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, rgba(30, 64, 175, 8%) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(30, 64, 175, 7%) 1px, transparent 1px);
+  background-size: 34px 34px;
+  clip-path: inset(0 round 8px);
+  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 62%), rgba(0, 0, 0, 12%) 70%, transparent);
+}
+
+.dash-command::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  border-radius: 8px 0 0 8px;
+  background: linear-gradient(180deg, var(--dash-blue), var(--dash-cyan), var(--dash-green));
+}
+
+.dash-command-main {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  align-content: center;
+  min-width: 0;
+}
+
+.dash-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  color: var(--dash-muted);
+  font-size: 13px;
+}
+
+.dash-kicker b {
+  padding: 3px 7px;
+  border: 1px solid rgba(2, 132, 199, 24%);
+  border-radius: 999px;
+  background: rgba(224, 242, 254, 72%);
+  color: var(--dash-cyan);
+  font-family: $mono;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.dash-command h1 {
+  margin: 0;
+  color: var(--dash-ink);
+  font-size: 30px;
+  font-weight: 750;
+  line-height: 1.18;
+}
+
+.dash-command p {
+  max-width: 760px;
+  margin: 10px 0 0;
+  color: var(--dash-muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.health-score-card {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(30, 64, 175, 18%);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 88%), rgba(248, 250, 252, 76%));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 82%);
+}
+
+.score-label {
+  grid-column: 1 / -1;
+  color: var(--dash-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.health-score-card strong {
+  color: var(--dash-blue);
+  font-family: $mono;
+  font-size: 38px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 0.92;
+}
+
+.health-score-card small {
+  align-self: end;
+  overflow: hidden;
+  padding-bottom: 3px;
+  color: var(--dash-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.score-bar {
+  grid-column: 1 / -1;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(191, 219, 254, 68%);
+}
+
+.score-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--dash-blue), var(--dash-cyan), var(--dash-green));
+  box-shadow: 0 0 12px rgba(2, 132, 199, 24%);
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.kpi-card {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  min-width: 0;
+  min-height: 116px;
+  padding: 13px 14px;
+  overflow: hidden;
+  border: 1px solid rgba(191, 219, 254, 86%);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 100%), rgba(248, 250, 252, 92%));
+  box-shadow: var(--dash-shadow);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.kpi-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: var(--tone, var(--dash-blue));
+}
+
+.kpi-card::after {
+  content: "";
+  position: absolute;
+  right: -26px;
+  bottom: -38px;
+  z-index: -1;
+  width: 96px;
+  height: 96px;
+  border: 1px solid var(--tone, var(--dash-blue));
+  border-radius: 50%;
+  opacity: 0.08;
+}
+
+.kpi-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.kpi-card:hover {
+  border-color: var(--tone, var(--dash-blue));
+  box-shadow: var(--dash-shadow-strong);
+  transform: translateY(-1px);
+}
+
+.kpi-label,
+.kpi-note,
+.kpi-delta {
+  display: block;
+  min-width: 0;
+}
+
+.kpi-label {
+  color: var(--dash-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.kpi-card strong {
+  align-self: center;
+  color: var(--dash-ink);
+  font-family: $mono;
+  font-size: 32px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.kpi-card strong small {
+  color: var(--dash-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.kpi-note {
+  color: var(--dash-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.kpi-delta {
+  justify-self: start;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(30, 64, 175, 7%);
+  color: var(--tone, var(--dash-blue));
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tone-ok {
+  --tone: var(--dash-green);
+  --tone-soft: var(--dash-green-soft);
+}
+
+.tone-warn {
+  --tone: var(--dash-amber);
+  --tone-soft: var(--dash-amber-soft);
+}
+
+.tone-danger {
+  --tone: var(--dash-red);
+  --tone-soft: var(--dash-red-soft);
+}
+
+.tone-neutral {
+  --tone: var(--dash-blue);
+  --tone-soft: var(--dash-blue-soft);
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.dash-card {
+  position: relative;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--dash-border);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 100%), rgba(248, 250, 252, 70%));
+  box-shadow: var(--dash-shadow);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.dash-card:hover {
+  border-color: rgba(147, 197, 253, 88%);
+  box-shadow: var(--dash-shadow-strong);
+}
+
+.dash-card.span-2 {
+  grid-column: span 2;
+}
+
+.dash-card-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.dash-card-head.compact {
+  margin-bottom: 10px;
+}
+
+.dash-card-head h2 {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+  color: var(--dash-ink);
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.dash-card-head h2::before {
+  content: "";
+  width: 4px;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--dash-blue), var(--dash-cyan));
+}
+
+.dash-card-head p {
+  margin: 4px 0 0;
+  color: var(--dash-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.dash-chip {
+  flex: none;
+  padding: 4px 7px;
+  border: 1px solid var(--dash-border-strong);
+  border-radius: 999px;
+  background: var(--dash-blue-soft);
+  color: var(--dash-blue);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.dash-chip.ok {
+  border-color: rgba(5, 150, 105, 28%);
+  background: var(--dash-green-soft);
+  color: var(--dash-green);
+}
+
+.dash-chip.warn {
+  border-color: rgba(217, 119, 6, 28%);
+  background: var(--dash-amber-soft);
+  color: var(--dash-amber);
+}
+
+.dash-chip.danger {
+  border-color: rgba(220, 38, 38, 24%);
+  background: var(--dash-red-soft);
+  color: var(--dash-red);
+}
+
+.score-breakdown,
+.freshness-list,
+.incident-table,
+.account-lines,
+.service-lines,
+.resource-lines {
+  display: grid;
+  gap: 8px;
+}
+
+.score-line {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(86px, 0.8fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(219, 234, 254, 65%);
+}
+
+.score-line:last-child {
+  border-bottom: 0;
+}
+
+.score-line-meta {
+  min-width: 0;
+}
+
+.score-line-meta strong,
+.freshness-row strong,
+.incident-row strong {
+  display: block;
+  overflow: hidden;
+  color: var(--dash-ink);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.score-line-meta span,
+.freshness-row small {
+  display: block;
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--dash-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.score-line-meter {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--dash-surface-soft);
+}
+
+.score-line-meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--tone, var(--dash-blue));
+}
+
+.score-line b {
+  color: var(--tone, var(--dash-blue));
+  font-family: $mono;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.freshness-row,
+.incident-row,
+.account-line,
+.service-line,
+.resource-line {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  min-height: 44px;
+  padding: 9px 10px;
+  border: 1px solid rgba(219, 234, 254, 70%);
+  border-radius: 7px;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 70%), rgba(255, 255, 255, 100%));
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.freshness-row {
+  grid-template-columns: minmax(0, 1fr) 46px 54px;
+}
+
+.freshness-row:hover,
+.incident-row:hover,
+.account-line:hover,
+.service-line:hover,
+.resource-line:hover,
+.action-tile:hover,
+.pipeline-step:hover {
+  border-color: var(--tone, var(--dash-blue));
+  background: var(--tone-soft, var(--dash-blue-soft));
+}
+
+.freshness-row b,
+.incident-row b,
+.account-line b,
+.service-line b,
+.resource-line b {
+  color: var(--tone, var(--dash-blue));
+  font-family: $mono;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.freshness-row em,
+.account-line em,
+.service-line em,
+.resource-line em {
+  overflow: hidden;
+  color: var(--dash-muted);
+  font-size: 11px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.incident-row {
+  grid-template-columns: 44px minmax(160px, 1fr) minmax(140px, 0.8fr) 74px;
+}
+
+.incident-level {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-height: 24px;
+  border-radius: 6px;
+  background: var(--tone-soft, var(--dash-blue-soft));
+  color: var(--tone, var(--dash-blue));
+  font-family: $mono;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.incident-row > span:not(.incident-level) {
+  overflow: hidden;
+  color: var(--dash-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipeline-compact {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pipeline-step,
+.action-tile {
+  min-width: 0;
+  border: 1px solid rgba(219, 234, 254, 75%);
+  border-radius: 7px;
+  background: var(--dash-surface);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.pipeline-step {
+  display: grid;
+  gap: 5px;
+  min-height: 68px;
+  padding: 10px;
+}
+
+.pipeline-step span {
+  color: var(--dash-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pipeline-step strong {
+  color: var(--dash-ink);
+  font-family: $mono;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.trade-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.trade-metrics div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(219, 234, 254, 72%);
+  border-radius: 7px;
+  background: var(--dash-surface-soft);
+}
+
+.trade-metrics span {
+  overflow: hidden;
+  color: var(--dash-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-metrics strong {
+  color: var(--dash-ink);
+  font-family: $mono;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-line,
+.service-line,
+.resource-line {
+  grid-template-columns: minmax(0, 1fr) 58px minmax(0, 1fr);
+}
+
+.account-line span,
+.service-line span,
+.resource-line span {
+  overflow: hidden;
+  color: var(--dash-ink);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pulse-bars {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+  min-height: 176px;
+  padding: 8px 2px 0;
+}
+
+.pulse-bar {
+  display: grid;
+  gap: 6px;
+  align-items: end;
+  justify-items: center;
+  min-width: 0;
+}
+
+.pulse-bar span,
+.pulse-bar b {
+  color: var(--dash-muted);
+  font-family: $mono;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pulse-bar div {
+  position: relative;
+  width: 100%;
+  max-width: 28px;
+  height: 112px;
+  overflow: hidden;
+  border-radius: 6px 6px 3px 3px;
+  background:
+    linear-gradient(180deg, rgba(219, 234, 254, 42%) 0 1px, transparent 1px 25%),
+    var(--dash-surface-soft);
+}
+
+.pulse-bar i {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, var(--dash-blue), var(--dash-green));
+}
+
+.resource-lines {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(219, 234, 254, 72%);
+}
+
+.resource-caption {
+  color: var(--dash-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.action-tile {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 2px 8px;
+  min-height: 64px;
+  padding: 10px;
+}
+
+.action-tile b {
+  grid-row: span 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--dash-blue-soft);
+  color: var(--dash-blue);
+  font-family: $mono;
+  font-size: 12px;
+}
+
+.action-tile span,
+.action-tile small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-tile span {
+  color: var(--dash-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.action-tile small {
+  color: var(--dash-muted);
+  font-size: 11px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kpi-card,
+  .freshness-row,
+  .incident-row,
+  .account-line,
+  .service-line,
+  .resource-line,
+  .pipeline-step,
+  .action-tile {
+    transition: none;
+  }
+}
+
+@media (max-width: 1280px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .kpi-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .dash-command {
+    grid-template-columns: 1fr;
+  }
+
+  .health-score-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .health-score-card strong {
+    grid-column: auto;
+  }
+
+  .score-bar {
+    grid-column: 1 / -1;
+  }
+
+  .dashboard-grid,
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dash-card.span-2 {
+    grid-column: auto;
+  }
+
+  .incident-row {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .incident-row > span:not(.incident-level),
+  .incident-row b {
+    grid-column: 2;
+  }
+
+  .pulse-bars {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-shell {
+    gap: 12px;
+    padding: 10px 10px 32px;
+  }
+
+  .dashboard-shell .home-top {
+    gap: 8px;
+    padding-top: 4px;
+  }
+
+  .dashboard-shell .home-top-right {
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .dash-command,
+  .dash-card {
+    padding: 12px;
+  }
+
+  .dash-command h1 {
+    font-size: 24px;
+  }
+
+  .health-score-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .health-score-card strong {
+    grid-column: auto;
+    font-size: 36px;
+  }
+
+  .freshness-row,
+  .account-line,
+  .service-line,
+  .resource-line {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .freshness-row em,
+  .account-line em,
+  .service-line em,
+  .resource-line em {
+    grid-column: 1 / -1;
+  }
+
+  .score-line {
+    grid-template-columns: 1fr auto;
+  }
+
+  .score-line-meter {
+    grid-column: 1 / -1;
+  }
+
+  .trade-metrics,
+  .pipeline-compact,
+  .action-grid {
     grid-template-columns: 1fr;
   }
 }
