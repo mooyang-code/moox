@@ -81,7 +81,8 @@ case "${TARGET_MODULE}" in
     build_go modules/collector ./cmd/server moox-collector 0
     build_go modules/collector ./cmd/cli moox-collector-cli 0
     build_go modules/collector ./cmd/scf moox-collector-scf 0
-    build_go modules/factor ./cmd/moox-factor moox-factor 0
+    build_go modules/factor ./cmd/server moox-factor 0
+    build_go modules/factor ./cmd/cli moox-factor-cli 0
     build_go modules/trade ./cmd/server moox-trade 0
     build_go modules/trade ./cmd/cli moox-trade-cli 0
     build_storage
@@ -115,7 +116,8 @@ case "${TARGET_MODULE}" in
     build_go modules/collector ./cmd/scf moox-collector-scf 0
     ;;
   factor)
-    build_go modules/factor ./cmd/moox-factor moox-factor 0
+    build_go modules/factor ./cmd/server moox-factor 0
+    build_go modules/factor ./cmd/cli moox-factor-cli 0
     ;;
   trade)
     build_go modules/trade ./cmd/server moox-trade 0

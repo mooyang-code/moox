@@ -73,6 +73,24 @@ export const staticRoutes = [
         meta: { title: "data-factors" }
       },
       {
+        path: "/factor/definitions",
+        name: "factor-definitions",
+        component: () => import("@/views/factor/definitions/index.vue"),
+        meta: { title: "factor-definitions" }
+      },
+      {
+        path: "/factor/bindings",
+        name: "factor-bindings",
+        component: () => import("@/views/factor/bindings/index.vue"),
+        meta: { title: "factor-bindings" }
+      },
+      {
+        path: "/factor/runs",
+        name: "factor-runs",
+        component: () => import("@/views/factor/runs/index.vue"),
+        meta: { title: "factor-runs" }
+      },
+      {
         path: "/data/views",
         name: "data-views",
         component: () => import("@/views/data/views/index.vue"),

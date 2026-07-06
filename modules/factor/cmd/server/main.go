@@ -1,0 +1,25 @@
+package main
+
+import (
+	control "github.com/mooyang-code/moox/modules/factor/internal/app/control"
+	_ "trpc.group/trpc-go/trpc-filter/validation"
+	_ "trpc.group/trpc-go/trpc-log-cls"
+
+	"trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/log"
+)
+
+func main() {
+	ctx := trpc.BackgroundContext()
+	s := trpc.NewServer()
+
+	server, err := control.Initialize(ctx, s)
+	if err != nil {
+		log.Fatalf("moox-factor 初始化失败: %v", err)
+	}
+
+	log.Info("启动 moox-factor tRPC 服务器...")
+	if err := server.Serve(); err != nil {
+		log.Fatalf("moox-factor 服务器出错: %v", err)
+	}
+}

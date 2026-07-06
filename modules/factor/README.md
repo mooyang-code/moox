@@ -1,6 +1,6 @@
 # moox-factor
 
-因子计算模块（**早期占位**）。当前 `moox-factor` 二进制仅输出 health JSON，尚未接入 Storage 或独立 RPC 服务。
+因子计算模块。`moox-factor` 是独立 tRPC 服务进程，负责后续因子定义管理、事件触发计算、Python worker 执行和 Storage 结果写回。
 
 ## 现状
 
@@ -9,26 +9,38 @@
 ./scripts/build.sh factor
 
 # 模块目录
-go run ./cmd/moox-factor
-# {"module":"factor","ready":true}
+go run ./cmd/server
+
+# CLI 初始化、导入和单次计算
+go run ./cmd/cli init --db ./data/factor/factor.db
+go run ./cmd/cli import --db ./data/factor/factor.db --factors-dir ./factors --default-params 20,96
+go run ./cmd/cli run-once --space crypto --dataset binance_spot_kline --subject BTC-USDT --freq 1m --bar-time 2026-07-06T09:15:00Z
 ```
 
 ## 目录结构
 
 ```text
-cmd/moox-factor/main.go
-internal/service/service.go   占位 Health 响应
+cmd/server/main.go
+config/app.yaml
+config/trpc_go.yaml
+internal/app/control/
+internal/engine/
+internal/registry/
+internal/repository/
+internal/storageio/
+pyworker/
+examples/run-once/
 ```
 
 ## 规划方向
 
-因子定义与结果列已可在 Storage 元数据（`Factor`、`DatasetColumn.origin_type=factor`）中登记；本模块后续可承担：
+因子定义与结果列已可在 Storage 元数据（`Factor`、`DatasetColumn.origin_type=factor`）中登记；本模块承担：
 
 - 因子任务调度与参数化计算
 - 结果写回 Storage Access（列级更新）
 - 与 View 物化链路集成
 
-详细存储模型见 [docs/存储概念与设计意图.md](../../docs/存储概念与设计意图.md)。
+详细存储模型见 [docs/存储概念与设计意图.md](../../docs/存储概念与设计意图.md)。`run-once` 自测流程见 [examples/run-once](./examples/run-once/)。
 
 ## 相关模块
 

@@ -1,0 +1,47 @@
+database:
+  type: sqlite
+  path: ./data/factor/factor.db
+  max_idle_conns: 10
+  max_open_conns: 30
+  conn_max_lifetime: 1h
+  conn_max_idle_time: 10m
+
+storage:
+  metadata_target: "127.0.0.1:20100"
+  access_target: "127.0.0.1:20102"
+
+nats:
+  url: nats://127.0.0.1:4222
+  stream: MOOX_STORAGE
+  consumer: factor_calc
+  subject: moox.storage.time_series.rows_changed.v1
+
+engine:
+  python_bin: python3
+  factors_dir: ./factors
+  sections_dir: ./sections
+  workers: 8
+  task_timeout_ms: 30000
+  encoding: auto
+  arrow_row_threshold: 50000
+  shm_dir: ""
+
+scheduler:
+  debounce_window_ms: 2000
+  max_retry: 3
+  reconcile_interval_min: 10
+  runs_retention_days: 7
+
+instance:
+  instance_id: factor-01
+  role: primary
+  primary_target: ""
+  heartbeat_interval_ms: 5000
+
+sysdeploy:
+  admin_gateway_url: http://127.0.0.1:11000
+  service_auth:
+    version: moox-auth-v1
+    access_key: moox-service
+    secret_key: moox-service-secret-change-me
+    expire_seconds: 1800

@@ -21,6 +21,7 @@ proto:
 	$(MAKE) -C modules/admin/proto all
 	$(MAKE) -C modules/trade/proto all
 	$(MAKE) -C modules/collector/proto all
+	$(MAKE) -C modules/factor/proto all
 	$(MAKE) -C modules/cloudnode/proto all
 
 clean:
