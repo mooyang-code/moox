@@ -224,3 +224,19 @@ func (m metadataAdapter) GetDataset(ctx context.Context, req *storagepb.GetDatas
 func (m metadataAdapter) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error) {
 	return m.proxy.ListDatasetColumns(ctx, req)
 }
+
+func (m metadataAdapter) ListDatasetSubjects(ctx context.Context, req *storagepb.ListDatasetSubjectsReq) (*storagepb.ListDatasetSubjectsRsp, error) {
+	return m.proxy.ListDatasetSubjects(ctx, req)
+}
+
+func (m metadataAdapter) BindDatasetSubject(ctx context.Context, req *storagepb.BindDatasetSubjectReq) (*storagepb.BindDatasetSubjectRsp, error) {
+	return m.proxy.BindDatasetSubject(ctx, req)
+}
+
+func (m metadataAdapter) ListPrimaryStoreRoutes(ctx context.Context, req *storagepb.ListPrimaryStoreRoutesReq) (*storagepb.ListPrimaryStoreRoutesRsp, error) {
+	return m.proxy.ListPrimaryStoreRoutes(ctx, req)
+}
+
+func (m metadataAdapter) CreatePrimaryStoreRoute(ctx context.Context, req *storagepb.CreatePrimaryStoreRouteReq) (*storagepb.CreatePrimaryStoreRouteRsp, error) {
+	return m.proxy.CreatePrimaryStoreRoute(ctx, req)
+}

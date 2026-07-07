@@ -309,6 +309,9 @@ patch_configs() {
   if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/moox_collector\.db#path: ../data/collector/moox_collector.db#g' \
       "${STAGE_DIR}/collector/config/app.yaml"
+    # Local collector config disables the timer for dev runs; deployments need it on.
+    perl -0pi -e 's#scheduler=collectorSchedule&disable=1&params=[^"]*#scheduler=collectorSchedule&disable=0&params=space_id=crypto#g; s#scheduler=collectorSchedule&disable=0&params=(?=")#scheduler=collectorSchedule&disable=0&params=space_id=crypto#g' \
+      "${STAGE_DIR}/collector/config/trpc_go.yaml"
   fi
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/factor/factor\.db#path: ../data/factor/factor.db#g' \
@@ -318,7 +321,10 @@ patch_configs() {
   [[ "${WITH_STORAGE}" -eq 1 ]] || return 0
   perl -0pi -e 's#root:\s*\./var/storage#root: ../data/storage#g; s#path:\s*\./var/storage/metadata/storage_metadata\.db#path: ../data/storage/metadata/storage_metadata.db#g; s#pebble_path:\s*\./var/storage/pebble#pebble_path: ../data/storage/pebble#g; s#duckdb_path:\s*\./var/storage/duckdb/views\.duckdb#duckdb_path: ../data/storage/duckdb/views.duckdb#g; s#bleve_path:\s*\./var/storage/bleve#bleve_path: ../data/storage/bleve#g; s#parquet_path:\s*\./var/storage/archive#parquet_path: ../data/storage/archive#g' \
     "${STAGE_DIR}/storage/config/storage.yaml"
-  perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage#g' \
+  # Production factor/view pipelines depend on Storage's embedded NATS/JetStream bus.
+  perl -0pi -e 's#type:\s*memory#type: nats#g; s#enabled:\s*false#enabled: true#g' \
+    "${STAGE_DIR}/storage/config/storage.yaml"
+  perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage#g; s#network:\s*"0 \*/10 \* \* \* \*\?disable=1&scheduler=viewBuilderSchedule&params=op=retry_failed"#network: "0 */10 * * * *?disable=0&scheduler=viewBuilderSchedule&params=op=retry_failed"#g' \
     "${STAGE_DIR}/storage/config/trpc_go.yaml"
 }
 
@@ -338,7 +344,9 @@ mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/cloudnode" "${ROOT}/data/col
 stop_if_running() {
   local name="$1"
   local pid_file="${ROOT}/run/${name}.pid"
+  local pattern="${ROOT}/bin/moox-${name}([[:space:]]|$)"
   if [[ ! -f "${pid_file}" ]]; then
+    pkill -f -- "${pattern}" 2>/dev/null || true
     return
   fi
   local pid
@@ -351,6 +359,7 @@ stop_if_running() {
   if [[ -n "${pid}" ]] && ps -p "${pid}" >/dev/null 2>&1; then
     kill -9 "${pid}" 2>/dev/null || true
   fi
+  pkill -f -- "${pattern}" 2>/dev/null || true
   rm -f "${pid_file}"
 }
 
@@ -398,7 +407,7 @@ COLLECTOR_ENV=(
 FACTOR_ENV=(
   "MOOX_FACTOR_ADMIN_GATEWAY_URL=${MOOX_FACTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11000}"
   "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-../data/factor/factor.db}"
-  "MOOX_FACTOR_NATS_URL=${MOOX_FACTOR_NATS_URL:-}"
+  "MOOX_FACTOR_NATS_URL=${MOOX_FACTOR_NATS_URL:-nats://127.0.0.1:4222}"
   "MOOX_SERVICE_AUTH_VERSION=${MOOX_SERVICE_AUTH_VERSION:-moox-auth-v1}"
   "MOOX_SERVICE_AUTH_ACCESS_KEY=${MOOX_SERVICE_AUTH_ACCESS_KEY:-moox-service}"
   "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-moox-service-secret-change-me}"
@@ -422,6 +431,34 @@ PY
     "${python_bin}" -m pip install -r "${ROOT}/factor/pyworker/runtime-requirements.txt"
   fi
   FACTOR_ENV+=("MOOX_FACTOR_ENGINE_PYTHON_BIN=${python_bin}")
+}
+
+factor_nats_endpoint() {
+  local url="${MOOX_FACTOR_NATS_URL:-nats://127.0.0.1:4222}"
+  url="${url#nats://}"
+  url="${url%%,*}"
+  url="${url%%/*}"
+  local host="${url%%:*}"
+  local port="${url##*:}"
+  if [[ "${host}" == "${port}" ]]; then
+    port="4222"
+  fi
+  printf '%s %s\n' "${host}" "${port}"
+}
+
+wait_factor_nats() {
+  local host port
+  read -r host port < <(factor_nats_endpoint)
+  local attempts="${MOOX_WAIT_FACTOR_NATS_SECONDS:-60}"
+  echo "waiting for factor NATS ${host}:${port}"
+  for _ in $(seq 1 "${attempts}"); do
+    if bash -c ":</dev/tcp/${host}/${port}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "factor NATS ${host}:${port} not ready after ${attempts}s" >&2
+  return 1
 }
 
 init_storage_schema() {
@@ -502,6 +539,7 @@ start_factor() {
     echo "factor is disabled in this deployment package" >&2
     exit 2
   fi
+  wait_factor_nats
   ensure_factor_python
   start_service "factor" "${ROOT}/factor" \
     env "${FACTOR_ENV[@]}" "${ROOT}/bin/moox-factor" -conf=config/trpc_go.yaml
@@ -573,15 +611,24 @@ WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 stop_service() {
   local name="$1"
   local pid_file="${ROOT}/run/${name}.pid"
+  local pattern="${ROOT}/bin/moox-${name}([[:space:]]|$)"
   if [[ ! -f "${pid_file}" ]]; then
-    echo "${name}: not running"
+    if pkill -f -- "${pattern}" 2>/dev/null; then
+      echo "${name}: stopped stale process without pid file"
+    else
+      echo "${name}: not running"
+    fi
     return
   fi
   local pid
   pid="$(cat "${pid_file}" 2>/dev/null || true)"
   if [[ -z "${pid}" ]]; then
     rm -f "${pid_file}"
-    echo "${name}: empty pid file removed"
+    if pkill -f -- "${pattern}" 2>/dev/null; then
+      echo "${name}: stopped stale process with empty pid file"
+    else
+      echo "${name}: empty pid file removed"
+    fi
     return
   fi
   if ps -p "${pid}" >/dev/null 2>&1; then
@@ -599,6 +646,7 @@ stop_service() {
   else
     echo "${name}: stale pid ${pid}"
   fi
+  pkill -f -- "${pattern}" 2>/dev/null || true
   rm -f "${pid_file}"
 }
 

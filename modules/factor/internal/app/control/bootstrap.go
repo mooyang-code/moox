@@ -175,6 +175,22 @@ func (c *metadataClientAdapter) ListDatasetColumns(ctx context.Context, req *sto
 	return c.client.ListDatasetColumns(ctx, req)
 }
 
+func (c *metadataClientAdapter) ListDatasetSubjects(ctx context.Context, req *storagepb.ListDatasetSubjectsReq) (*storagepb.ListDatasetSubjectsRsp, error) {
+	return c.client.ListDatasetSubjects(ctx, req)
+}
+
+func (c *metadataClientAdapter) BindDatasetSubject(ctx context.Context, req *storagepb.BindDatasetSubjectReq) (*storagepb.BindDatasetSubjectRsp, error) {
+	return c.client.BindDatasetSubject(ctx, req)
+}
+
+func (c *metadataClientAdapter) ListPrimaryStoreRoutes(ctx context.Context, req *storagepb.ListPrimaryStoreRoutesReq) (*storagepb.ListPrimaryStoreRoutesRsp, error) {
+	return c.client.ListPrimaryStoreRoutes(ctx, req)
+}
+
+func (c *metadataClientAdapter) CreatePrimaryStoreRoute(ctx context.Context, req *storagepb.CreatePrimaryStoreRouteReq) (*storagepb.CreatePrimaryStoreRouteRsp, error) {
+	return c.client.CreatePrimaryStoreRoute(ctx, req)
+}
+
 type realtimeLoopDeps struct {
 	consumer       interface{ Close() error }
 	debounce       *trigger.Debouncer

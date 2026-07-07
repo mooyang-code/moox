@@ -104,6 +104,15 @@ CREATE TABLE IF NOT EXISTS t_cloud_job_items (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_job_items_space_item ON t_cloud_job_items(c_space_id, c_job_item_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_job_items_poll ON t_cloud_job_items(c_space_id, c_status, c_priority, c_ctime);
+CREATE INDEX IF NOT EXISTS idx_cloud_job_items_recover ON t_cloud_job_items(c_space_id, c_status, c_recover_at);
+CREATE INDEX IF NOT EXISTS idx_cloud_job_items_job ON t_cloud_job_items(c_space_id, c_job_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_job_items_enqueue ON t_cloud_job_items(c_space_id, c_enqueue_status, c_status, c_ctime);
+CREATE INDEX IF NOT EXISTS idx_cloud_job_items_running ON t_cloud_job_items(c_space_id, c_status, c_running_node, c_recover_at);
+CREATE INDEX IF NOT EXISTS idx_cloud_job_items_enqueue_retry ON t_cloud_job_items(c_status, c_enqueue_status, c_ctime);
+CREATE INDEX IF NOT EXISTS idx_cloud_job_items_stream_retry ON t_cloud_job_items(c_status, c_stream_seq, c_ctime);
+
 CREATE TABLE IF NOT EXISTS t_cloud_job_item_attempts (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',

@@ -56,6 +56,8 @@ func Open(opts Options) (*ViewStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -285,11 +287,12 @@ func (s *ViewStore) lockResultTable(tableName string) func() {
 }
 
 func (s *ViewStore) resultTableEmpty(ctx context.Context, quotedTableName string) (bool, error) {
-	var count uint64
-	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s`, quotedTableName)).Scan(&count); err != nil {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT 1 FROM %s LIMIT 1`, quotedTableName))
+	if err != nil {
 		return false, err
 	}
-	return count == 0, nil
+	defer rows.Close()
+	return !rows.Next(), rows.Err()
 }
 
 func (s *ViewStore) insertRowsIntoEmptyTable(ctx context.Context, quotedTableName string, columns []*pb.ResultColumn, rows []*pb.TimeSeriesRow) error {
@@ -368,22 +371,23 @@ func mergeRowsByPrimaryKey(rows []*pb.TimeSeriesRow) []*pb.TimeSeriesRow {
 }
 
 func (s *ViewStore) mergeRowsIntoTable(ctx context.Context, quotedTableName string, columns []*pb.ResultColumn, rows []*pb.TimeSeriesRow) error {
+	mergedRows := mergeRowsByPrimaryKey(rows)
+	if len(mergedRows) == 0 {
+		return nil
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	selectStmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`SELECT row_json FROM %s WHERE row_key = ? AND data_time = ? LIMIT 1`, quotedTableName))
+	existing, err := loadExistingRows(ctx, tx, quotedTableName, mergedRows)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	defer selectStmt.Close()
-	deleteStmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE row_key = ? AND data_time = ?`, quotedTableName))
-	if err != nil {
+	if err := deleteRowsByPrimaryKey(ctx, tx, quotedTableName, mergedRows); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	defer deleteStmt.Close()
 	insertSQL, err := buildInsertSQL(quotedTableName, columns)
 	if err != nil {
 		_ = tx.Rollback()
@@ -395,28 +399,18 @@ func (s *ViewStore) mergeRowsIntoTable(ctx context.Context, quotedTableName stri
 		return err
 	}
 	defer insertStmt.Close()
-	for _, row := range rows {
-		rowKey := timeSeriesRowKey(row)
-		dataTime := normalizeRowDataTime(row)
+	for _, row := range mergedRows {
 		merged := row
-		var existingRaw string
-		if err := selectStmt.QueryRowContext(ctx, rowKey, dataTime).Scan(&existingRaw); err == nil {
-			existing := &pb.TimeSeriesRow{}
-			if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(existingRaw), existing); err != nil {
+		if existingRaw := existing[rowPrimaryKey(row)]; existingRaw != "" {
+			base := &pb.TimeSeriesRow{}
+			if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(existingRaw), base); err != nil {
 				_ = tx.Rollback()
 				return err
 			}
-			merged = mergeTimeSeriesRow(existing, row)
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			_ = tx.Rollback()
-			return err
+			merged = mergeTimeSeriesRow(base, row)
 		}
 		args, err := resultRowArgs(merged, columns)
 		if err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		if _, err := deleteStmt.ExecContext(ctx, rowKey, dataTime); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -428,9 +422,79 @@ func (s *ViewStore) mergeRowsIntoTable(ctx context.Context, quotedTableName stri
 	return tx.Commit()
 }
 
+const rowKeyPredicateChunkSize = 200
+
+func loadExistingRows(ctx context.Context, tx *sql.Tx, quotedTableName string, rows []*pb.TimeSeriesRow) (map[string]string, error) {
+	out := make(map[string]string, len(rows))
+	for start := 0; start < len(rows); start += rowKeyPredicateChunkSize {
+		end := start + rowKeyPredicateChunkSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		where, args := rowKeyPredicate(rows[start:end])
+		if where == "" {
+			continue
+		}
+		query := fmt.Sprintf(`SELECT row_key, data_time, row_json FROM %s WHERE %s`, quotedTableName, where)
+		resultRows, err := tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		for resultRows.Next() {
+			var rowKey, dataTime, raw string
+			if err := resultRows.Scan(&rowKey, &dataTime, &raw); err != nil {
+				_ = resultRows.Close()
+				return nil, err
+			}
+			out[rowKey+"|"+dataTime] = raw
+		}
+		if err := resultRows.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func deleteRowsByPrimaryKey(ctx context.Context, tx *sql.Tx, quotedTableName string, rows []*pb.TimeSeriesRow) error {
+	for start := 0; start < len(rows); start += rowKeyPredicateChunkSize {
+		end := start + rowKeyPredicateChunkSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		where, args := rowKeyPredicate(rows[start:end])
+		if where == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE %s`, quotedTableName, where), args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rowKeyPredicate(rows []*pb.TimeSeriesRow) (string, []any) {
+	var b strings.Builder
+	args := make([]any, 0, len(rows)*2)
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString(" OR ")
+		}
+		b.WriteString("(row_key = ? AND data_time = ?)")
+		args = append(args, timeSeriesRowKey(row), normalizeRowDataTime(row))
+	}
+	return b.String(), args
+}
+
 func timeSeriesRowKey(row *pb.TimeSeriesRow) string {
 	key := row.GetKey()
 	return key.GetDatasetId() + "|" + factkey.BuildTimeSeriesDataKey(key.GetSubjectId(), key.GetFreq(), key.GetDimensions())
+}
+
+func rowPrimaryKey(row *pb.TimeSeriesRow) string {
+	return timeSeriesRowKey(row) + "|" + normalizeRowDataTime(row)
 }
 
 func mergeTimeSeriesRow(base *pb.TimeSeriesRow, patch *pb.TimeSeriesRow) *pb.TimeSeriesRow {
