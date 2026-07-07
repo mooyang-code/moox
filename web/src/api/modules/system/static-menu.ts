@@ -59,11 +59,6 @@ export const systemMenu = [
   menu("021003", "0210", "/data/datasets", "data-datasets", "data-datasets", "data/datasets/index", 3),
   menu("021004", "0210", "/data/fields", "data-fields", "data-fields", "data/fields/index", 4),
   menu("021005", "0210", "/data/factors", "data-factors", "data-factors", "data/factors/index", 5),
-  // 二级分组：生产因子计算
-  directory("0240", "02", "/factor/definitions", "factor-compute", "factor-compute", 4),
-  menu("024001", "0240", "/factor/definitions", "factor-definitions", "factor-definitions", "factor/definitions/index", 1),
-  menu("024002", "0240", "/factor/bindings", "factor-bindings", "factor-bindings", "factor/bindings/index", 2),
-  menu("024003", "0240", "/factor/runs", "factor-runs", "factor-runs", "factor/runs/index", 3),
   // 二级分组：数据管理
   directory("0230", "02", "/data/overview", "data-mgmt", "data-mgmt", 2),
   menu("023001", "0230", "/data/overview", "data-overview", "data-overview", "data/overview/overview", 1),
@@ -79,6 +74,11 @@ export const systemMenu = [
   menu("0302", "03", "/collector/packages", "collector-packages", "collector-packages", "collector/cloud-node/function-package-manage", 2),
   menu("0303", "03", "/collector/rules", "collector-rules", "collector-rules", "collector/collector-rules/collector-rules", 3),
   menu("0304", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-instances/task-instances", 4),
+
+  directory("0240", "0", "/factor/definitions", "factor-compute", "factor-compute", 4, { svgIcon: "functions", icon: "" }),
+  menu("024001", "0240", "/factor/definitions", "factor-definitions", "factor-definitions", "factor/definitions/index", 1),
+  menu("024002", "0240", "/factor/bindings", "factor-bindings", "factor-bindings", "factor/bindings/index", 2),
+  menu("024003", "0240", "/factor/runs", "factor-runs", "factor-runs", "factor/runs/index", 3),
 
   directory("05", "0", "/trading/accounts", "trading", "trading", 5, { svgIcon: "balance-inquiry", icon: "" }),
   menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-overview/account-overview", 1),

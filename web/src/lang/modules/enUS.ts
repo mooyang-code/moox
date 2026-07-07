@@ -39,7 +39,7 @@ export default {
     ["data-views"]: "views",
     ["data-view-list"]: "view list",
     ["data-view-browse"]: "view browse",
-    ["compute-collector"]: "compute and collection",
+    ["compute-collector"]: "data collection",
     ["collector-cloudnodes"]: "cloud nodes",
     ["collector-functions"]: "cloud nodes",
     ["collector-packages"]: "code packages",
