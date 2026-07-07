@@ -1,0 +1,30 @@
+global:
+  namespace: Development
+  env_name: dev
+
+server:
+  filter:
+    - validation
+  timeout: 5000
+  service:
+    - name: trpc.moox.cloudnode.CloudNodeMgr
+      port: 11401
+      network: tcp
+      protocol: http
+      timeout: 30000
+    - name: trpc.moox.cloudnode.jobhistory.timer
+      port: 11406
+      network: "0 5 0 * * *?scheduler=cloudnodeJobHistorySchedule&disable=0&location=Asia/Shanghai&params="
+      protocol: timer
+      timeout: 60000
+
+plugins:
+  auth:
+    validation:
+      enable_error_log: true
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  log:
+    default:
+      - writer: console
+        level: info

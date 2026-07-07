@@ -6,7 +6,9 @@ toolchain go1.24.1
 
 require (
 	github.com/glebarez/sqlite v1.11.0
+	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
 	github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.3
 	github.com/nats-io/nats.go v1.47.0
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.1.26
@@ -24,11 +26,9 @@ require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
-	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
-	github.com/go-playground/assert/v2 v2.2.0 // indirect
 	github.com/go-playground/form/v4 v4.2.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
@@ -42,14 +42,12 @@ require (
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
 	github.com/lestrrat-go/strftime v1.0.6 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/minio/highwayhash v1.0.3 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mozillazg/go-httpheader v0.2.1 // indirect
 	github.com/nats-io/jwt/v2 v2.7.4 // indirect
 	github.com/nats-io/nkeys v0.4.11 // indirect
@@ -58,12 +56,10 @@ require (
 	github.com/panjf2000/ants/v2 v2.4.6 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/rogpeppe/go-internal v1.14.1 // indirect
+	github.com/robfig/cron v1.2.0 // indirect
 	github.com/smartystreets/goconvey v1.7.2 // indirect
 	github.com/spf13/cast v1.3.1 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.43.0 // indirect
@@ -78,7 +74,6 @@ require (
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

@@ -31,10 +31,14 @@ type DatabaseConfig struct {
 
 // JobItemConfig controls the async JobItem queue.
 type JobItemConfig struct {
-	DefaultLimit       int   `yaml:"default_limit"`
-	MaxLimit           int   `yaml:"max_limit"`
-	RecoverAfterMillis int64 `yaml:"recover_after_millis"`
-	DefaultMaxAttempts int   `yaml:"default_max_attempts"`
+	DefaultLimit         int    `yaml:"default_limit"`
+	MaxLimit             int    `yaml:"max_limit"`
+	RecoverAfterMillis   int64  `yaml:"recover_after_millis"`
+	DefaultMaxAttempts   int    `yaml:"default_max_attempts"`
+	ActiveKVBucket       string `yaml:"active_kv_bucket"`
+	ActiveTTLHours       int    `yaml:"active_ttl_hours"`
+	HistoryDir           string `yaml:"history_dir"`
+	HistoryRetentionDays int    `yaml:"history_retention_days"`
 }
 
 // QueueConfig selects the CloudNode JobItem execution queue backend.
@@ -44,15 +48,14 @@ type QueueConfig struct {
 
 // JetStreamConfig controls the CloudNode JetStream execution queue.
 type JetStreamConfig struct {
-	Enabled          bool                    `yaml:"enabled"`
-	NATSURL          string                  `yaml:"nats_url"`
-	SubjectPrefix    string                  `yaml:"subject_prefix"`
-	ExecStream       string                  `yaml:"exec_stream"`
-	ProjectionStream string                  `yaml:"projection_stream"`
-	Embedded         EmbeddedJetStreamConfig `yaml:"embedded"`
-	AckWaitMillis    int64                   `yaml:"ack_wait_millis"`
-	MaxDeliver       int                     `yaml:"max_deliver"`
-	FetchMaxWaitMs   int64                   `yaml:"fetch_max_wait_ms"`
+	Enabled        bool                    `yaml:"enabled"`
+	NATSURL        string                  `yaml:"nats_url"`
+	SubjectPrefix  string                  `yaml:"subject_prefix"`
+	ExecStream     string                  `yaml:"exec_stream"`
+	Embedded       EmbeddedJetStreamConfig `yaml:"embedded"`
+	AckWaitMillis  int64                   `yaml:"ack_wait_millis"`
+	MaxDeliver     int                     `yaml:"max_deliver"`
+	FetchMaxWaitMs int64                   `yaml:"fetch_max_wait_ms"`
 }
 
 // EmbeddedJetStreamConfig starts a local private NATS JetStream for CloudNode.
@@ -116,14 +119,13 @@ func Default() *Config {
 			Backend: "jetstream",
 		},
 		JetStream: JetStreamConfig{
-			Enabled:          true,
-			NATSURL:          "nats://127.0.0.1:4223",
-			SubjectPrefix:    "moox.cloudnode",
-			ExecStream:       "MOOX_CLOUDNODE_EXEC",
-			ProjectionStream: "MOOX_CLOUDNODE_PROJECTION",
-			AckWaitMillis:    int64(2 * time.Minute / time.Millisecond),
-			MaxDeliver:       3,
-			FetchMaxWaitMs:   500,
+			Enabled:        true,
+			NATSURL:        "nats://127.0.0.1:4223",
+			SubjectPrefix:  "moox.cloudnode",
+			ExecStream:     "MOOX_CLOUDNODE_EXEC",
+			AckWaitMillis:  int64(2 * time.Minute / time.Millisecond),
+			MaxDeliver:     3,
+			FetchMaxWaitMs: 500,
 			Embedded: EmbeddedJetStreamConfig{
 				Enabled:          true,
 				Host:             "127.0.0.1",
@@ -133,10 +135,14 @@ func Default() *Config {
 			},
 		},
 		JobItem: JobItemConfig{
-			DefaultLimit:       10,
-			MaxLimit:           100,
-			RecoverAfterMillis: int64(10 * time.Minute / time.Millisecond),
-			DefaultMaxAttempts: 3,
+			DefaultLimit:         10,
+			MaxLimit:             100,
+			RecoverAfterMillis:   int64(10 * time.Minute / time.Millisecond),
+			DefaultMaxAttempts:   3,
+			ActiveKVBucket:       "MOOX_CLOUDNODE_JOB_ACTIVE",
+			ActiveTTLHours:       48,
+			HistoryDir:           "../data/cloudnode/jobs",
+			HistoryRetentionDays: 2,
 		},
 		TencentSCF: TencentSCFConfig{
 			DefaultRegion:    "ap-guangzhou",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 )
@@ -11,11 +12,10 @@ import (
 func TestEmbeddedJetStreamCreatesCloudNodeStreams(t *testing.T) {
 	port := freeTCPPort(t)
 	cfg := config.JetStreamConfig{
-		Enabled:          true,
-		NATSURL:          "nats://127.0.0.1:" + port,
-		SubjectPrefix:    DefaultSubjectPrefix,
-		ExecStream:       DefaultExecStream,
-		ProjectionStream: DefaultProjectionStream,
+		Enabled:       true,
+		NATSURL:       "nats://127.0.0.1:" + port,
+		SubjectPrefix: DefaultSubjectPrefix,
+		ExecStream:    DefaultExecStream,
 		Embedded: config.EmbeddedJetStreamConfig{
 			Enabled:          true,
 			Host:             "127.0.0.1",
@@ -31,7 +31,7 @@ func TestEmbeddedJetStreamCreatesCloudNodeStreams(t *testing.T) {
 	}
 	defer rt.Close()
 
-	if err := rt.EnsureStreams(cfg); err != nil {
+	if err := rt.EnsureStreams(cfg, config.Default().JobItem); err != nil {
 		t.Fatalf("EnsureStreams() error = %v", err)
 	}
 
@@ -43,12 +43,43 @@ func TestEmbeddedJetStreamCreatesCloudNodeStreams(t *testing.T) {
 		t.Fatalf("exec subjects = %v, want %v", got, want)
 	}
 
-	projectionInfo, err := rt.JetStream().StreamInfo(DefaultProjectionStream)
-	if err != nil {
-		t.Fatalf("projection stream missing: %v", err)
+	if _, err := rt.JetStream().StreamInfo("MOOX_CLOUDNODE_PROJECTION"); err == nil {
+		t.Fatalf("legacy projection stream must not be created")
 	}
-	if got, want := projectionInfo.Config.Subjects, []string{"moox.cloudnode.projection.v1.>"}; len(got) != 1 || got[0] != want[0] {
-		t.Fatalf("projection subjects = %v, want %v", got, want)
+}
+
+func TestEnsureStreamsCreatesActiveKVBucket(t *testing.T) {
+	port := freeTCPPort(t)
+	cfg := config.Default().JetStream
+	cfg.NATSURL = "nats://127.0.0.1:" + port
+	cfg.Embedded = config.EmbeddedJetStreamConfig{
+		Enabled:          true,
+		Host:             "127.0.0.1",
+		Port:             mustAtoi(t, port),
+		StoreDir:         t.TempDir(),
+		StartupTimeoutMS: 5000,
+	}
+	jobCfg := config.Default().JobItem
+
+	rt, err := StartEmbedded(context.Background(), cfg.Embedded)
+	if err != nil {
+		t.Fatalf("StartEmbedded() error = %v", err)
+	}
+	defer rt.Close()
+
+	if err := rt.EnsureStreams(cfg, jobCfg); err != nil {
+		t.Fatalf("EnsureStreams() error = %v", err)
+	}
+
+	if _, err := rt.JetStream().KeyValue(jobCfg.ActiveKVBucket); err != nil {
+		t.Fatalf("active kv bucket missing: %v", err)
+	}
+	info, err := rt.JetStream().StreamInfo("KV_" + jobCfg.ActiveKVBucket)
+	if err != nil {
+		t.Fatalf("kv backing stream missing: %v", err)
+	}
+	if got, want := info.Config.MaxAge, 48*time.Hour; got != want {
+		t.Fatalf("MaxAge = %v, want %v", got, want)
 	}
 }
 

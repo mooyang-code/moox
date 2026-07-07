@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencent-scf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
@@ -18,10 +19,9 @@ import (
 type Service struct {
 	pb.UnimplementedCloudNodeMgr
 	dbm              *storage.Manager
-	jobItemRepo      repository.QueueStore
+	jobState         jobstate.Store
+	history          *jobhistory.Store
 	executionQueue   jobqueue.ExecutionQueue
-	projectionRepo   *projection.Repository
-	projector        *projection.Projector
 	heartbeatSink    projection.HeartbeatSink
 	catalog          *repository.CatalogRepository
 	scfClientFactory func(repository.CloudAccount) scfProvisioner
@@ -39,12 +39,12 @@ func WithExecutionQueue(queue jobqueue.ExecutionQueue) Option {
 	return func(s *Service) { s.executionQueue = queue }
 }
 
-func WithProjectionRepository(repo *projection.Repository) Option {
-	return func(s *Service) { s.projectionRepo = repo }
+func WithJobStateStore(store jobstate.Store) Option {
+	return func(s *Service) { s.jobState = store }
 }
 
-func WithProjector(projector *projection.Projector) Option {
-	return func(s *Service) { s.projector = projector }
+func WithJobHistoryStore(store *jobhistory.Store) Option {
+	return func(s *Service) { s.history = store }
 }
 
 func WithHeartbeatSink(sink projection.HeartbeatSink) Option {
@@ -53,11 +53,8 @@ func WithHeartbeatSink(sink projection.HeartbeatSink) Option {
 
 // New creates a cloudnode RPC service.
 func New(dbm *storage.Manager, opts ...Option) *Service {
-	cfg := config.Global()
 	svc := &Service{
 		dbm:              dbm,
-		jobItemRepo:      newConfiguredJobItemRepository(dbm.DB(), cfg.JobItem),
-		projectionRepo:   projection.NewRepository(dbm.DB(), projection.RepositoryOptions{RecoverAfterMillis: cfg.JobItem.RecoverAfterMillis, DefaultMaxAttempts: cfg.JobItem.DefaultMaxAttempts}),
 		catalog:          repository.NewCatalogRepository(dbm.DB()),
 		scfClientFactory: defaultSCFClientFactory,
 	}
@@ -69,15 +66,6 @@ func New(dbm *storage.Manager, opts ...Option) *Service {
 
 func defaultSCFClientFactory(account repository.CloudAccount) scfProvisioner {
 	return tencentscf.New(account.SecretID, account.SecretKey)
-}
-
-func newConfiguredJobItemRepository(db *gorm.DB, cfg config.JobItemConfig) repository.QueueStore {
-	return repository.NewJobItemRepositoryWithOptions(db, repository.JobItemRepositoryOptions{
-		DefaultLimit:       cfg.DefaultLimit,
-		MaxLimit:           cfg.MaxLimit,
-		RecoverAfterMillis: cfg.RecoverAfterMillis,
-		DefaultMaxAttempts: cfg.DefaultMaxAttempts,
-	})
 }
 
 func retOK() *pb.RetInfo {
@@ -92,18 +80,16 @@ func retFromError(err error) *pb.RetInfo {
 	switch {
 	case errors.Is(err, repository.ErrPollingNodeNotFound):
 		return retErr(pb.ErrorCode_NOT_FOUND, "cloud node not found")
-	case errors.Is(err, repository.ErrStaleJobItemAttempt):
-		return retErr(pb.ErrorCode_INVALID_PARAM, "conflict: job item attempt is stale")
-	case errors.Is(err, repository.ErrJobItemInactive):
-		return retErr(pb.ErrorCode_INVALID_PARAM, "conflict: job item is not running")
-	case errors.Is(err, repository.ErrJobItemConflict):
+	case errors.Is(err, jobstate.ErrConflict):
 		return retErr(pb.ErrorCode_INVALID_PARAM, "conflict: job item state does not allow this operation")
-	case errors.Is(err, projection.ErrConflict):
-		return retErr(pb.ErrorCode_INVALID_PARAM, "conflict: job item state does not allow this operation")
-	case errors.Is(err, projection.ErrStaleAttempt):
+	case errors.Is(err, jobstate.ErrStaleAttempt):
 		return retErr(pb.ErrorCode_INVALID_PARAM, "conflict: job item attempt is stale")
-	case errors.Is(err, projection.ErrInactive):
+	case errors.Is(err, jobstate.ErrInactive):
 		return retErr(pb.ErrorCode_INVALID_PARAM, "conflict: job item is not running")
+	case errors.Is(err, jobstate.ErrNotFound):
+		return retErr(pb.ErrorCode_NOT_FOUND, "job item not found")
+	case errors.Is(err, jobstate.ErrInvalid):
+		return retErr(pb.ErrorCode_INVALID_PARAM, "invalid job item")
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		return retErr(pb.ErrorCode_NOT_FOUND, "resource not found")
 	default:

@@ -339,7 +339,7 @@ WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
-mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/cloudnode" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/logs/admin" "${ROOT}/logs/storage" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor"
+mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/logs/admin" "${ROOT}/logs/storage" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor"
 
 stop_if_running() {
   local name="$1"

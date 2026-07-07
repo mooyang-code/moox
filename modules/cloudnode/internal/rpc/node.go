@@ -193,10 +193,10 @@ func (s *Service) ReportHeartbeat(ctx context.Context, req *pb.ReportHeartbeatRe
 }
 
 func (s *Service) heartbeatDirectives(ctx context.Context, spaceID string, nodeID string) ([]*pb.ControlDirective, error) {
-	if s.projectionRepo == nil {
-		return nil, nil
+	if s.jobState != nil {
+		return s.jobState.ListCancelDirectives(ctx, spaceID, nodeID, 20)
 	}
-	return s.projectionRepo.ListCancelDirectives(ctx, spaceID, nodeID, 20)
+	return nil, nil
 }
 
 func (s *Service) ensureSCFFunction(ctx context.Context, node *repository.CloudNode, item *pb.NodeCreateItem) error {

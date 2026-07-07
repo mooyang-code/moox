@@ -6,11 +6,11 @@
 SCF runtime -> /api/service/cloudnode/PollJobItems
 CloudNode -> MOOX_CLOUDNODE_EXEC pull consumer
 SCF runtime -> /api/service/cloudnode/ReportJobItemStatus
-CloudNode -> MOOX_CLOUDNODE_PROJECTION reported event
-Projector -> SQLite t_cloud_job_items / t_cloud_job_item_attempts
+CloudNode -> MOOX_CLOUDNODE_JOB_ACTIVE active KV
+CloudNode -> data/cloudnode/jobs/YYYYMMDD.db terminal history
 ```
 
-SCF 不直接连接 NATS，也不直接写 CloudNode SQLite。
+SCF 不直接连接 NATS，也不直接写 CloudNode SQLite。管理台读取 active KV；历史日库只用于本机排障和短期审计。
 
 ## 本地检查
 
@@ -53,7 +53,7 @@ rm -rf /home/ubuntu/moox/prod/data/cloudnode/nats
 /home/ubuntu/moox/prod/start.sh cloudnode
 ```
 
-这会清空 CloudNode 队列和管理台 JobItem 投影，不影响 storage 中已经写入的行情数据。
+这会清空 CloudNode 队列和管理台 active JobItem 状态，不影响 storage 中已经写入的行情数据。
 
 ## 管理台验证
 

@@ -24,3 +24,23 @@ func TestAllSQLDropsLegacyInvocationTables(t *testing.T) {
 		}
 	}
 }
+
+func TestAllSQLDropsLegacyOnlineJobItemTables(t *testing.T) {
+	sql := AllSQL()
+	for _, forbidden := range []string{
+		"CREATE TABLE IF NOT EXISTS t_cloud_job_items",
+		"CREATE TABLE IF NOT EXISTS t_cloud_job_item_attempts",
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("cloudnode schema must not recreate %s", forbidden)
+		}
+	}
+	for _, want := range []string{
+		"DROP TABLE IF EXISTS t_cloud_job_item_attempts",
+		"DROP TABLE IF EXISTS t_cloud_job_items",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("cloudnode schema must include %q", want)
+		}
+	}
+}

@@ -77,8 +77,6 @@ cover.out.tmp
 
 *.log
 
-**/trpc_go.yaml
-
 # Editor/IDE
 # .idea/
 # .vscode/

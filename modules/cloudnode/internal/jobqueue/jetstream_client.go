@@ -72,8 +72,8 @@ func (r *Runtime) Conn() *nats.Conn {
 	return r.nc
 }
 
-// EnsureStreams creates or updates the CloudNode execution and projection streams.
-func (r *Runtime) EnsureStreams(cfg config.JetStreamConfig) error {
+// EnsureStreams creates or updates CloudNode JetStream streams and active state KV bucket.
+func (r *Runtime) EnsureStreams(cfg config.JetStreamConfig, jobCfg config.JobItemConfig) error {
 	if r == nil || r.js == nil {
 		return fmt.Errorf("jetstream runtime is not initialized")
 	}
@@ -86,9 +86,6 @@ func (r *Runtime) EnsureStreams(cfg config.JetStreamConfig) error {
 	if cfg.ExecStream == "" {
 		cfg.ExecStream = DefaultExecStream
 	}
-	if cfg.ProjectionStream == "" {
-		cfg.ProjectionStream = DefaultProjectionStream
-	}
 	if err := ensureStream(r.js, &nats.StreamConfig{
 		Name:      cfg.ExecStream,
 		Subjects:  []string{ExecStreamSubject(NamingConfig{SubjectPrefix: cfg.SubjectPrefix})},
@@ -100,16 +97,49 @@ func (r *Runtime) EnsureStreams(cfg config.JetStreamConfig) error {
 	}); err != nil {
 		return fmt.Errorf("ensure exec stream: %w", err)
 	}
-	if err := ensureStream(r.js, &nats.StreamConfig{
-		Name:      cfg.ProjectionStream,
-		Subjects:  []string{ProjectionStreamSubject(NamingConfig{SubjectPrefix: cfg.SubjectPrefix})},
-		Retention: nats.LimitsPolicy,
-		Storage:   nats.FileStorage,
-		Replicas:  1,
-		MaxAge:    168 * time.Hour,
-		Discard:   nats.DiscardOld,
-	}); err != nil {
-		return fmt.Errorf("ensure projection stream: %w", err)
+	if err := ensureActiveKVBucket(r.js, jobCfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureActiveKVBucket(js nats.JetStreamContext, cfg config.JobItemConfig) error {
+	bucket := strings.TrimSpace(cfg.ActiveKVBucket)
+	if bucket == "" {
+		bucket = "MOOX_CLOUDNODE_JOB_ACTIVE"
+	}
+	ttl := time.Duration(cfg.ActiveTTLHours) * time.Hour
+	if ttl <= 0 {
+		ttl = 48 * time.Hour
+	}
+	if _, err := js.KeyValue(bucket); err != nil {
+		if !errors.Is(err, nats.ErrBucketNotFound) {
+			return fmt.Errorf("open active job kv bucket: %w", err)
+		}
+		if _, err := js.CreateKeyValue(&nats.KeyValueConfig{
+			Bucket:  bucket,
+			Storage: nats.FileStorage,
+			History: 1,
+			TTL:     ttl,
+		}); err != nil {
+			return fmt.Errorf("create active job kv bucket: %w", err)
+		}
+		return nil
+	}
+
+	info, err := js.StreamInfo("KV_" + bucket)
+	if err != nil {
+		return fmt.Errorf("inspect active job kv stream: %w", err)
+	}
+	if info.Config.MaxAge == ttl && info.Config.MaxMsgsPerSubject == 1 && info.Config.Storage == nats.FileStorage {
+		return nil
+	}
+	next := info.Config
+	next.MaxAge = ttl
+	next.MaxMsgsPerSubject = 1
+	next.Storage = nats.FileStorage
+	if _, err := js.UpdateStream(&next); err != nil {
+		return fmt.Errorf("update active job kv stream: %w", err)
 	}
 	return nil
 }

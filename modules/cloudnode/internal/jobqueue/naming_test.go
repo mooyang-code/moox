@@ -18,19 +18,6 @@ func TestExecSubjectUsesCloudNodePrefix(t *testing.T) {
 	}
 }
 
-func TestProjectionSubjectUsesCloudNodePrefix(t *testing.T) {
-	cfg := NamingConfig{SubjectPrefix: "moox.cloudnode"}
-
-	got := ProjectionSubject(cfg, ProjectionEventJobItemReported)
-	want := "moox.cloudnode.projection.v1.jobitem.reported"
-	if got != want {
-		t.Fatalf("ProjectionSubject() = %q, want %q", got, want)
-	}
-	if strings.HasPrefix(got, "moox.storage.") {
-		t.Fatalf("projection subject must not use storage prefix: %s", got)
-	}
-}
-
 func TestTokenFallsBackToHashWhenTooLong(t *testing.T) {
 	raw := strings.Repeat("A", 80)
 

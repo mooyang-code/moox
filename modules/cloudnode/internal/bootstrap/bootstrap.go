@@ -8,8 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
@@ -37,6 +40,13 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 
+	historyStore := jobhistory.NewStore(jobhistory.StoreOptions{
+		Dir:           cfg.JobItem.HistoryDir,
+		RetentionDays: cfg.JobItem.HistoryRetentionDays,
+	})
+	cloudnoderpc.SetDefaultJobHistoryMaintainer(historyStore)
+	registerJobHistorySchedule(s)
+
 	opts := []cloudnoderpc.Option{}
 	if cfg.Queue.Backend == "jetstream" && cfg.JetStream.Enabled {
 		rt, err := jobqueue.Connect(ctx, cfg.JetStream)
@@ -44,12 +54,18 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			log.ErrorContextf(ctx, "初始化 cloudnode JetStream 失败: %v", err)
 			return nil, err
 		}
-		if err := rt.EnsureStreams(cfg.JetStream); err != nil {
+		if err := rt.EnsureStreams(cfg.JetStream, cfg.JobItem); err != nil {
 			log.ErrorContextf(ctx, "初始化 cloudnode JetStream stream 失败: %v", err)
 			_ = rt.Close()
 			return nil, err
 		}
-		projectionRepo := projection.NewRepository(dbm.DB(), projection.RepositoryOptions{
+		kv, err := rt.JetStream().KeyValue(cfg.JobItem.ActiveKVBucket)
+		if err != nil {
+			log.ErrorContextf(ctx, "打开 cloudnode JobItem active KV 失败: %v", err)
+			_ = rt.Close()
+			return nil, err
+		}
+		stateStore := jobstate.NewKVStore(kv, jobstate.Options{
 			RecoverAfterMillis: cfg.JobItem.RecoverAfterMillis,
 			DefaultMaxAttempts: cfg.JobItem.DefaultMaxAttempts,
 		})
@@ -61,15 +77,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			FetchMaxWait:    time.Duration(cfg.JetStream.FetchMaxWaitMs) * time.Millisecond,
 			DefaultMaxBatch: cfg.JobItem.MaxLimit,
 		})
-		projector := projection.NewProjector(rt.JetStream(), projectionRepo, projection.ProjectorOptions{
-			Naming:           jobqueue.NamingConfig{SubjectPrefix: cfg.JetStream.SubjectPrefix},
-			ProjectionStream: cfg.JetStream.ProjectionStream,
-			BatchSize:        100,
-			MaxWait:          500 * time.Millisecond,
-		})
-		go projector.Run(context.Background())
-		reconciler := projection.NewEnqueueReconciler(projectionRepo, execQueue, 10*time.Second, 100)
-		go reconciler.Run(context.Background())
 		catalog := repository.NewCatalogRepository(dbm.DB())
 		heartbeatSink := projection.NewHeartbeatBuffer(catalog, projection.HeartbeatBufferOptions{
 			MaxKeys:       2048,
@@ -77,12 +84,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		})
 		opts = append(opts,
 			cloudnoderpc.WithExecutionQueue(execQueue),
-			cloudnoderpc.WithProjectionRepository(projectionRepo),
-			cloudnoderpc.WithProjector(projector),
+			cloudnoderpc.WithJobStateStore(stateStore),
+			cloudnoderpc.WithJobHistoryStore(historyStore),
 			cloudnoderpc.WithHeartbeatSink(heartbeatSink),
 		)
-		log.InfoContextf(ctx, "cloudnode JetStream 已启用: exec_stream=%s projection_stream=%s nats_url=%s",
-			cfg.JetStream.ExecStream, cfg.JetStream.ProjectionStream, cfg.JetStream.NATSURL)
+		log.InfoContextf(ctx, "cloudnode JetStream 已启用: exec_stream=%s active_kv=%s nats_url=%s",
+			cfg.JetStream.ExecStream, cfg.JobItem.ActiveKVBucket, cfg.JetStream.NATSURL)
 	}
 
 	svc := cloudnoderpc.New(dbm, opts...)
@@ -90,6 +97,16 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-cloudnode 初始化完成")
 	return s, nil
+}
+
+func registerJobHistorySchedule(s *server.Server) {
+	timer.RegisterScheduler("cloudnodeJobHistorySchedule", &timer.DefaultScheduler{})
+	service := s.Service("trpc.moox.cloudnode.jobhistory.timer")
+	if service == nil {
+		log.Warn("cloudnode job history timer service is not configured, skip register")
+		return
+	}
+	timer.RegisterHandlerService(service, cloudnoderpc.HandleJobHistorySchedule)
 }
 
 func startDebugServer(ctx context.Context, addr string) {

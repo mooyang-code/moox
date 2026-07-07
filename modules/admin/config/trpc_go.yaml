@@ -1,0 +1,84 @@
+global:
+  namespace: Development
+  env_name: dev
+
+server:
+  filter:
+    - validation
+    - cors
+  timeout: 5000
+  service:
+    - name: trpc.moox.gateway.stdhttp
+      port: 11000
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 30000
+    - name: trpc.moox.infra.Auth
+      port: 11100
+      network: tcp
+      protocol: http
+      timeout: 10000
+    - name: trpc.moox.infra.Dns
+      port: 11101
+      network: tcp
+      protocol: http
+      timeout: 10000
+    - name: trpc.moox.ops.Monitor
+      port: 11103
+      network: tcp
+      protocol: http
+      timeout: 10000
+    - name: trpc.moox.ops.Ssh
+      port: 11106
+      network: tcp
+      protocol: http
+      timeout: 30000
+    - name: trpc.moox.admin.SpaceMgr
+      port: 11107
+      network: tcp
+      protocol: http
+      timeout: 10000
+    - name: trpc.moox.ops.SecretMgr
+      port: 11108
+      network: tcp
+      protocol: http
+      timeout: 10000
+    - name: trpc.moox.ops.SysDeploy
+      port: 11109
+      network: tcp
+      protocol: http
+      timeout: 10000
+    - name: trpc.dnsproxy.timer
+      port: 11301
+      network: "0 */5 * * * *?scheduler=dnsproxySchedule&disable=1&params="
+      protocol: timer
+      timeout: 60000
+    - name: trpc.dnsprobe.timer
+      port: 11302
+      network: "0 */5 * * * *?scheduler=dnsProbeSchedule&disable=1&params="
+      protocol: timer
+      timeout: 60000
+    - name: trpc.monitor.timer
+      port: 11303
+      network: "0 */1 * * * *?scheduler=monitorSchedule&disable=1&params="
+      protocol: timer
+      timeout: 60000
+    - name: trpc.monitor.cleanup.timer
+      port: 11304
+      network: "0 0 0 * * *?scheduler=monitorCleanupSchedule&disable=1&params="
+      protocol: timer
+      timeout: 60000
+
+plugins:
+  auth:
+    cors:
+      apply_to_all_path:
+        - insecure_allow_all
+    validation:
+      enable_error_log: true
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  log:
+    default:
+      - writer: console
+        level: info
