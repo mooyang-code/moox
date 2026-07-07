@@ -209,6 +209,10 @@ func (m metadataAdapter) CreateDataset(ctx context.Context, req *storagepb.Creat
 	return m.proxy.CreateDataset(ctx, req)
 }
 
+func (m metadataAdapter) UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
+	return m.proxy.UpdateDataset(ctx, req)
+}
+
 func (m metadataAdapter) UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
 	return m.proxy.UpsertDatasetColumn(ctx, req)
 }

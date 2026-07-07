@@ -157,6 +157,22 @@ func TestMetadataSyncOrderAndPayload(t *testing.T) {
 	if got := client.datasetReqs[0].GetDataset().GetName(); got == "" || got == "因子结果" || len([]rune(got)) > 10 || !strings.Contains(got, "因子") {
 		t.Fatalf("dataset name = %q", got)
 	}
+	datasetAttrs := client.datasetReqs[0].GetDataset().GetAttributes()
+	if datasetAttrs["owner_module"] != "factor" {
+		t.Fatalf("owner_module = %q, want factor", datasetAttrs["owner_module"])
+	}
+	if datasetAttrs["dataset_role"] != "factor_result" {
+		t.Fatalf("dataset_role = %q, want factor_result", datasetAttrs["dataset_role"])
+	}
+	if datasetAttrs["managed_by"] != "factor" {
+		t.Fatalf("managed_by = %q, want factor", datasetAttrs["managed_by"])
+	}
+	if datasetAttrs["source_dataset_id"] != "binance_spot_kline" {
+		t.Fatalf("source_dataset_id = %q, want binance_spot_kline", datasetAttrs["source_dataset_id"])
+	}
+	if datasetAttrs["source_freq"] != "1m" {
+		t.Fatalf("source_freq = %q, want 1m", datasetAttrs["source_freq"])
+	}
 	if len(client.routeReqs) != 1 {
 		t.Fatalf("route calls = %d, want 1", len(client.routeReqs))
 	}
@@ -256,6 +272,140 @@ func TestMetadataSyncUsesSourceDatasetDataSourceID(t *testing.T) {
 	}
 }
 
+func TestMetadataSyncBackfillsFactorDatasetAttributionOnDuplicate(t *testing.T) {
+	ctx := context.Background()
+	client := &recordingMetadataClient{
+		sourceDatasets: map[string]string{"binance_spot_kline": "binance"},
+		storedDatasets: map[string]*storagepb.Dataset{
+			"binance_spot_factor": {
+				SpaceId:      "crypto",
+				DatasetId:    "binance_spot_factor",
+				DataSourceId: "binance",
+				Name:         "因子abc",
+				DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
+				Freqs:        []string{"1m"},
+				Status:       "active",
+				Attributes:   map[string]string{"legacy": "keep"},
+			},
+		},
+		datasetRet: &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "UNIQUE constraint failed: t_datasets.c_space_id, t_datasets.c_dataset_id"},
+	}
+	syncer := NewMetadataSync(client, nil)
+	factors := []domain.FactorDef{{
+		FactorID:      "bias",
+		Name:          "Bias",
+		ParamsJSON:    "[20]",
+		LookbackBars:  288,
+		WritebackBars: 5,
+		Status:        domain.FactorStatusEnabled,
+	}}
+
+	if err := syncer.SyncResultDataset(ctx, "crypto", "binance_spot_kline", "1m", factors); err != nil {
+		t.Fatalf("SyncResultDataset() error = %v", err)
+	}
+	if len(client.updateDatasetReqs) != 1 {
+		t.Fatalf("update dataset calls = %d, want 1", len(client.updateDatasetReqs))
+	}
+	if len(client.datasetReqs) != 0 {
+		t.Fatalf("create dataset calls = %d, want 0", len(client.datasetReqs))
+	}
+	updated := client.updateDatasetReqs[0].GetDataset()
+	if updated.GetDatasetId() != "binance_spot_factor" || updated.GetName() != "因子abc" {
+		t.Fatalf("updated dataset identity not preserved: %+v", updated)
+	}
+	attrs := updated.GetAttributes()
+	if attrs["legacy"] != "keep" {
+		t.Fatalf("legacy attribute was not preserved: %+v", attrs)
+	}
+	if attrs["owner_module"] != "factor" || attrs["dataset_role"] != "factor_result" || attrs["managed_by"] != "factor" {
+		t.Fatalf("factor attribution missing: %+v", attrs)
+	}
+	if attrs["source_dataset_id"] != "binance_spot_kline" || attrs["source_freq"] != "1m" {
+		t.Fatalf("source attribution missing: %+v", attrs)
+	}
+}
+
+func TestMetadataSyncMergesFreqOnExistingFactorDataset(t *testing.T) {
+	ctx := context.Background()
+	client := &recordingMetadataClient{
+		sourceDatasets: map[string]string{"binance_spot_kline": "binance"},
+		storedDatasets: map[string]*storagepb.Dataset{
+			"binance_spot_factor": {
+				SpaceId:      "crypto",
+				DatasetId:    "binance_spot_factor",
+				DataSourceId: "binance",
+				Name:         "因子abc",
+				DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
+				Freqs:        []string{"1m"},
+				Status:       "active",
+				Attributes:   factorResultDatasetAttributes("binance_spot_kline", "1m"),
+			},
+		},
+	}
+	syncer := NewMetadataSync(client, nil)
+	factors := []domain.FactorDef{{
+		FactorID:      "bias",
+		Name:          "Bias",
+		ParamsJSON:    "[20]",
+		LookbackBars:  288,
+		WritebackBars: 5,
+		Status:        domain.FactorStatusEnabled,
+	}}
+
+	if err := syncer.SyncResultDataset(ctx, "crypto", "binance_spot_kline", "1h", factors); err != nil {
+		t.Fatalf("SyncResultDataset() error = %v", err)
+	}
+	if len(client.updateDatasetReqs) != 1 {
+		t.Fatalf("update dataset calls = %d, want 1", len(client.updateDatasetReqs))
+	}
+	if len(client.datasetReqs) != 0 {
+		t.Fatalf("create dataset calls = %d, want 0", len(client.datasetReqs))
+	}
+	if got := client.updateDatasetReqs[0].GetDataset().GetFreqs(); !reflect.DeepEqual(got, []string{"1m", "1h"}) {
+		t.Fatalf("freqs = %#v, want [1m 1h]", got)
+	}
+	if got := client.updateDatasetReqs[0].GetDataset().GetAttributes()["source_freq"]; got != "1m" {
+		t.Fatalf("source_freq = %q, want first synced freq 1m", got)
+	}
+}
+
+func TestMetadataSyncRejectsAttributionConflictOnDuplicate(t *testing.T) {
+	ctx := context.Background()
+	client := &recordingMetadataClient{
+		sourceDatasets: map[string]string{"binance_spot_kline": "binance"},
+		storedDatasets: map[string]*storagepb.Dataset{
+			"manual_target": {
+				SpaceId:      "crypto",
+				DatasetId:    "manual_target",
+				DataSourceId: "binance",
+				Name:         "人工集",
+				DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
+				Freqs:        []string{"1m"},
+				Status:       "active",
+				Attributes:   map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"},
+			},
+		},
+		datasetRet: &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "dataset already exists"},
+	}
+	syncer := NewMetadataSync(client, nil)
+	factors := []domain.FactorDef{{
+		FactorID:      "bias",
+		Name:          "Bias",
+		ParamsJSON:    "[20]",
+		LookbackBars:  288,
+		WritebackBars: 5,
+		Status:        domain.FactorStatusEnabled,
+	}}
+
+	err := syncer.SyncTargetDataset(ctx, "crypto", "binance_spot_kline", "manual_target", "1m", factors)
+	if err == nil || !strings.Contains(err.Error(), "attribute conflict") {
+		t.Fatalf("SyncTargetDataset() error = %v, want attribute conflict", err)
+	}
+	if len(client.updateDatasetReqs) != 0 {
+		t.Fatalf("update dataset calls = %d, want 0", len(client.updateDatasetReqs))
+	}
+}
+
 func TestMetadataSyncTreatsConcurrentRouteRefreshAsBound(t *testing.T) {
 	ctx := context.Background()
 	client := &recordingMetadataClient{
@@ -321,15 +471,18 @@ func TestMetadataSyncTreatsConcurrentMetadataRefreshAsApplied(t *testing.T) {
 type recordingMetadataClient struct {
 	calls              []string
 	sourceDatasets     map[string]string
+	storedDatasets     map[string]*storagepb.Dataset
 	sourceSubjects     map[string][]string
 	sourceSubjectItems map[string][]*storagepb.DatasetSubject
 	sourceRoutes       map[string][]*storagepb.PrimaryStoreRoute
 	factorRet          *commonpb.RetInfo
 	datasetRet         *commonpb.RetInfo
+	updateDatasetRet   *commonpb.RetInfo
 	columnRet          *commonpb.RetInfo
 	bindRet            *commonpb.RetInfo
 	factorReqs         []*storagepb.CreateFactorReq
 	datasetReqs        []*storagepb.CreateDatasetReq
+	updateDatasetReqs  []*storagepb.UpdateDatasetReq
 	columnReqs         []*storagepb.UpsertDatasetColumnReq
 	bindReqs           []*storagepb.BindDatasetSubjectReq
 	routeReqs          []*storagepb.CreatePrimaryStoreRouteReq
@@ -353,6 +506,22 @@ func (c *recordingMetadataClient) CreateDataset(_ context.Context, req *storagep
 		ret = successRet()
 	}
 	return &storagepb.CreateDatasetRsp{RetInfo: ret, Dataset: req.GetDataset()}, nil
+}
+
+func (c *recordingMetadataClient) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
+	c.calls = append(c.calls, "UpdateDataset:"+req.GetDataset().GetDatasetId())
+	c.updateDatasetReqs = append(c.updateDatasetReqs, req)
+	ret := c.updateDatasetRet
+	if ret == nil {
+		ret = successRet()
+	}
+	if c.storedDatasets == nil {
+		c.storedDatasets = map[string]*storagepb.Dataset{}
+	}
+	copied := *req.GetDataset()
+	copied.Attributes = cloneStringMap(req.GetDataset().GetAttributes())
+	c.storedDatasets[req.GetDataset().GetDatasetId()] = &copied
+	return &storagepb.UpdateDatasetRsp{RetInfo: ret, Dataset: req.GetDataset()}, nil
 }
 
 func (c *recordingMetadataClient) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
@@ -415,7 +584,20 @@ func (c *recordingMetadataClient) CreatePrimaryStoreRoute(_ context.Context, req
 }
 
 func (c *recordingMetadataClient) GetDataset(_ context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
-	dataSourceID := c.sourceDatasets[req.GetDatasetId()]
+	if dataset := c.storedDatasets[req.GetDatasetId()]; dataset != nil {
+		copied := *dataset
+		if copied.SpaceId == "" {
+			copied.SpaceId = req.GetSpaceId()
+		}
+		copied.Attributes = cloneStringMap(dataset.GetAttributes())
+		return &storagepb.GetDatasetRsp{RetInfo: successRet(), Dataset: &copied}, nil
+	}
+	dataSourceID, ok := c.sourceDatasets[req.GetDatasetId()]
+	if !ok {
+		return &storagepb.GetDatasetRsp{
+			RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND, Msg: "dataset not found"},
+		}, nil
+	}
 	return &storagepb.GetDatasetRsp{
 		RetInfo: successRet(),
 		Dataset: &storagepb.Dataset{

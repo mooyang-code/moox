@@ -159,6 +159,10 @@ func (c *metadataClientAdapter) CreateDataset(ctx context.Context, req *storagep
 	return c.client.CreateDataset(ctx, req)
 }
 
+func (c *metadataClientAdapter) UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
+	return c.client.UpdateDataset(ctx, req)
+}
+
 func (c *metadataClientAdapter) UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
 	return c.client.UpsertDatasetColumn(ctx, req)
 }

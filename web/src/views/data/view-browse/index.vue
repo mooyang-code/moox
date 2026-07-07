@@ -2,7 +2,7 @@
   <div class="view-browse-page">
     <div class="page-head">
       <div>
-        <h2>视图浏览</h2>
+        <h2>{{ props.pageTitle }}</h2>
       </div>
       <a-space>
         <a-button :disabled="!selectedSpaceId" :loading="metaLoading || contextLoading" @click="loadMeta">
@@ -23,12 +23,12 @@
     <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
     <a-spin v-else :loading="metaLoading">
-      <a-empty v-if="views.length === 0" description="暂无查询视图" />
+      <a-empty v-if="visibleViews.length === 0" :description="props.emptyDescription" />
 
       <template v-else>
         <section class="view-tabs-row">
           <a-tabs v-model:active-key="activeViewId" type="rounded" size="medium" class="view-tabs" @change="onViewChange">
-            <a-tab-pane v-for="view in views" :key="view.view_id" :title="viewDisplayName(view)" />
+            <a-tab-pane v-for="view in visibleViews" :key="view.view_id" :title="viewDisplayName(view)" />
           </a-tabs>
         </section>
 
@@ -314,8 +314,35 @@ import {
   type ViewFilterState,
   type ViewSortDirection,
 } from './view-browse-utils';
+import {
+  isLikelyFactorResultDataset,
+  isLikelyFactorResultDatasetId,
+  viewMatchesAttribution,
+  type OwnerModule,
+  type ViewRole,
+} from '@/views/data/shared/module-attribution';
 
 defineOptions({ name: 'DataViewBrowse' });
+
+const props = withDefaults(defineProps<{
+  pageTitle?: string;
+  emptyDescription?: string;
+  allowedPrimaryDatasetIds?: string[];
+  excludedPrimaryDatasetIds?: string[];
+  viewOwnerModules?: OwnerModule[];
+  viewRoles?: ViewRole[];
+  includeUnowned?: boolean;
+  excludeLikelyFactorDatasets?: boolean;
+}>(), {
+  pageTitle: '视图数据浏览',
+  emptyDescription: '暂无查询视图',
+  allowedPrimaryDatasetIds: undefined,
+  excludedPrimaryDatasetIds: undefined,
+  viewOwnerModules: undefined,
+  viewRoles: undefined,
+  includeUnowned: false,
+  excludeLikelyFactorDatasets: false,
+});
 
 type ViewBrowseTableRow = BrowseTableRow & { freq?: string };
 type FilterFieldOption = { label: string; value: string; valueType: FieldValueType };
@@ -325,6 +352,33 @@ const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 
 const views = ref<View[]>([]);
 const datasets = ref<Dataset[]>([]);
+const datasetById = computed(() => new Map(datasets.value.map((item) => [item.dataset_id, item])));
+const visibleViews = computed(() => {
+  const allowedPrimaryDatasetIds = props.allowedPrimaryDatasetIds || [];
+  const allowedPrimary = new Set(allowedPrimaryDatasetIds.filter(Boolean));
+  const excludedPrimary = new Set((props.excludedPrimaryDatasetIds || []).filter(Boolean));
+  return views.value.filter((view) => {
+    const matchedByDataset = allowedPrimary.size > 0 && allowedPrimary.has(view.primary_dataset_id);
+    if (!matchedByDataset && excludedPrimary.has(view.primary_dataset_id)) {
+      return false;
+    }
+    if (props.excludeLikelyFactorDatasets && !matchedByDataset && viewUsesLikelyFactorDataset(view)) {
+      return false;
+    }
+    const matchedByAttrs = viewMatchesAttribution(view, {
+      ownerModules: props.viewOwnerModules,
+      viewRoles: props.viewRoles,
+      includeUnowned: props.includeUnowned,
+    });
+    if (allowedPrimary.size > 0 && (props.viewOwnerModules?.length || props.viewRoles?.length)) {
+      return matchedByDataset || matchedByAttrs;
+    }
+    if (allowedPrimary.size > 0) {
+      return matchedByDataset;
+    }
+    return matchedByAttrs;
+  });
+});
 const viewColumns = ref<ViewColumn[]>([]);
 const datasetColumns = ref<DatasetColumn[]>([]);
 const fields = ref<Field[]>([]);
@@ -388,7 +442,7 @@ const filterOperatorSymbols: Record<ViewFilterOperator, string> = {
   not_empty: 'Ø',
 };
 
-const activeView = computed(() => views.value.find((item) => item.view_id === activeViewId.value));
+const activeView = computed(() => visibleViews.value.find((item) => item.view_id === activeViewId.value));
 const primaryDataset = computed(() => datasets.value.find((item) => item.dataset_id === activeView.value?.primary_dataset_id));
 const currentDatasetName = computed(() => {
   const dataset = primaryDataset.value;
@@ -476,14 +530,14 @@ async function loadMeta() {
   metaLoading.value = true;
   try {
     const page = { page: 1, size: 1000 };
-    const [viewRsp, datasetRsp, fieldRsp, factorRsp] = await Promise.all([
-      listViews({ space_id, page }),
-      listDatasets({ space_id, page }),
+    const [viewItems, datasetItems, fieldRsp, factorRsp] = await Promise.all([
+      listAllViews(space_id),
+      listAllDatasets(space_id),
       listFields({ space_id, page }),
       listFactors({ space_id, page }),
     ]);
-    views.value = viewRsp.views || [];
-    datasets.value = datasetRsp.datasets || [];
+    views.value = viewItems;
+    datasets.value = datasetItems;
     fields.value = fieldRsp.fields || [];
     factors.value = factorRsp.factors || [];
     ensureSelectedView();
@@ -495,15 +549,59 @@ async function loadMeta() {
   }
 }
 
+async function listAllViews(spaceId: string) {
+  const views: View[] = [];
+  const size = 500;
+  for (let pageNo = 1; ; pageNo += 1) {
+    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size } });
+    views.push(...(rsp.views || []));
+    if (!rsp.page_result?.has_more || (rsp.views || []).length === 0) {
+      return views;
+    }
+  }
+}
+
+async function listAllDatasets(spaceId: string) {
+  const datasets: Dataset[] = [];
+  const size = 500;
+  for (let pageNo = 1; ; pageNo += 1) {
+    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size } });
+    datasets.push(...(rsp.datasets || []));
+    if (!rsp.page_result?.has_more || (rsp.datasets || []).length === 0) {
+      return datasets;
+    }
+  }
+}
+
+function viewUsesLikelyFactorDataset(view: View) {
+  const dataset = datasetById.value.get(view.primary_dataset_id);
+  if (dataset) {
+    return isLikelyFactorResultDataset(dataset);
+  }
+  return isLikelyFactorResultDatasetId(view.primary_dataset_id);
+}
+
 function ensureSelectedView() {
-  if (!views.value.length) {
+  if (!visibleViews.value.length) {
     activeViewId.value = '';
     return;
   }
-  if (!activeViewId.value || !views.value.some((item) => item.view_id === activeViewId.value)) {
-    activeViewId.value = views.value[0].view_id;
+  if (!activeViewId.value || !visibleViews.value.some((item) => item.view_id === activeViewId.value)) {
+    activeViewId.value = visibleViews.value[0].view_id;
   }
 }
+
+watch(
+  () => visibleViews.value.map((item) => item.view_id).join('|'),
+  async () => {
+    const current = activeViewId.value;
+    ensureSelectedView();
+    if (activeViewId.value !== current) {
+      clearViewState();
+      await loadViewContext();
+    }
+  },
+);
 
 async function onViewChange() {
   clearViewState();

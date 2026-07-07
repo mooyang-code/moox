@@ -16,15 +16,13 @@ import (
 type MetadataClient interface {
 	CreateFactor(ctx context.Context, req *storagepb.CreateFactorReq) (*storagepb.CreateFactorRsp, error)
 	CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error)
+	UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error)
+	GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error)
 	UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
 }
 
 type factorGetter interface {
 	GetFactor(ctx context.Context, req *storagepb.GetFactorReq) (*storagepb.GetFactorRsp, error)
-}
-
-type datasetGetter interface {
-	GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error)
 }
 
 type columnLister interface {
@@ -301,6 +299,13 @@ func (s *MetadataSync) createFactor(ctx context.Context, spaceID string, factor 
 }
 
 func (s *MetadataSync) createDataset(ctx context.Context, spaceID string, sourceDataset string, datasetID string, dataSourceID string, freq string) error {
+	exists, err := s.ensureExistingFactorDataset(ctx, spaceID, datasetID, sourceDataset, freq)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
 	req := &storagepb.CreateDatasetReq{
 		AuthInfo: s.auth,
 		Dataset: &storagepb.Dataset{
@@ -312,6 +317,7 @@ func (s *MetadataSync) createDataset(ctx context.Context, spaceID string, source
 			DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			Freqs:        []string{freq},
 			Status:       "active",
+			Attributes:   factorResultDatasetAttributes(sourceDataset, freq),
 		},
 	}
 	rsp, err := s.client.CreateDataset(ctx, req)
@@ -325,7 +331,7 @@ func (s *MetadataSync) createDataset(ctx context.Context, spaceID string, source
 		return nil
 	}
 	if isDuplicateRet(rsp.GetRetInfo()) {
-		return s.confirmDatasetExists(ctx, spaceID, datasetID)
+		return s.ensureFactorDatasetAttribution(ctx, spaceID, datasetID, sourceDataset, freq)
 	}
 	return retInfoError("CreateDataset", rsp.GetRetInfo())
 }
@@ -380,19 +386,75 @@ func (s *MetadataSync) confirmFactorExists(ctx context.Context, spaceID string, 
 	return retInfoError("GetFactor", rsp.GetRetInfo())
 }
 
-func (s *MetadataSync) confirmDatasetExists(ctx context.Context, spaceID string, datasetID string) error {
-	getter, ok := s.client.(datasetGetter)
-	if !ok {
-		return fmt.Errorf("CreateDataset duplicate for %s but MetadataClient cannot confirm existence", datasetID)
+func (s *MetadataSync) getDataset(ctx context.Context, spaceID string, datasetID string) (*storagepb.Dataset, error) {
+	rsp, err := s.client.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: s.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		return nil, err
 	}
-	rsp, err := getter.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: s.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if retOK(rsp.GetRetInfo()) && rsp.GetDataset() != nil {
+		return rsp.GetDataset(), nil
+	}
+	return nil, retInfoError("GetDataset", rsp.GetRetInfo())
+}
+
+func (s *MetadataSync) ensureFactorDatasetAttribution(ctx context.Context, spaceID string, datasetID string, sourceDataset string, freq string) error {
+	dataset, err := s.getDataset(ctx, spaceID, datasetID)
 	if err != nil {
 		return err
 	}
+	return s.updateFactorDatasetAttribution(ctx, dataset, datasetID, sourceDataset, freq)
+}
+
+func (s *MetadataSync) ensureExistingFactorDataset(ctx context.Context, spaceID string, datasetID string, sourceDataset string, freq string) (bool, error) {
+	dataset, found, err := s.findDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	return true, s.updateFactorDatasetAttribution(ctx, dataset, datasetID, sourceDataset, freq)
+}
+
+func (s *MetadataSync) findDataset(ctx context.Context, spaceID string, datasetID string) (*storagepb.Dataset, bool, error) {
+	rsp, err := s.client.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: s.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		return nil, false, err
+	}
 	if retOK(rsp.GetRetInfo()) && rsp.GetDataset() != nil {
+		return rsp.GetDataset(), true, nil
+	}
+	if isDatasetNotFoundRet(rsp.GetRetInfo()) {
+		return nil, false, nil
+	}
+	return nil, false, retInfoError("GetDataset", rsp.GetRetInfo())
+}
+
+func (s *MetadataSync) updateFactorDatasetAttribution(ctx context.Context, dataset *storagepb.Dataset, datasetID string, sourceDataset string, freq string) error {
+	nextAttrs, err := mergeFactorResultDatasetAttributes(datasetID, dataset.GetAttributes(), sourceDataset, freq)
+	if err != nil {
+		return err
+	}
+	if stringMapsEqual(dataset.GetAttributes(), nextAttrs) {
+		nextFreqs := mergeDatasetFreq(dataset.GetFreqs(), freq)
+		if stringSlicesEqual(dataset.GetFreqs(), nextFreqs) {
+			return nil
+		}
+	}
+	next := *dataset
+	next.Attributes = nextAttrs
+	next.Freqs = mergeDatasetFreq(dataset.GetFreqs(), freq)
+	rsp, err := s.client.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{
+		AuthInfo: s.auth,
+		Dataset:  &next,
+	})
+	if err != nil {
+		return err
+	}
+	if retOK(rsp.GetRetInfo()) || isRefreshInProgressRet(rsp.GetRetInfo()) || isDuplicateRet(rsp.GetRetInfo()) {
 		return nil
 	}
-	return retInfoError("GetDataset", rsp.GetRetInfo())
+	return retInfoError("UpdateDataset", rsp.GetRetInfo())
 }
 
 func (s *MetadataSync) confirmColumnExists(ctx context.Context, spaceID string, datasetID string, columnName string) error {
@@ -416,11 +478,7 @@ func (s *MetadataSync) confirmColumnExists(ctx context.Context, spaceID string, 
 }
 
 func (s *MetadataSync) sourceDataSourceID(ctx context.Context, spaceID string, sourceDataset string) string {
-	getter, ok := s.client.(datasetGetter)
-	if !ok {
-		return DataSourceIDFromDataset(sourceDataset)
-	}
-	rsp, err := getter.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: s.auth, SpaceId: spaceID, DatasetId: sourceDataset})
+	rsp, err := s.client.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: s.auth, SpaceId: spaceID, DatasetId: sourceDataset})
 	if err == nil && rsp != nil && retOK(rsp.GetRetInfo()) && rsp.GetDataset().GetDataSourceId() != "" {
 		return rsp.GetDataset().GetDataSourceId()
 	}
@@ -465,6 +523,48 @@ func datasetDisplayName(datasetID string) string {
 	return fmt.Sprintf("因子%x", sum[:3])
 }
 
+func factorResultDatasetAttributes(sourceDataset string, freq string) map[string]string {
+	return map[string]string{
+		"owner_module":      "factor",
+		"dataset_role":      "factor_result",
+		"managed_by":        "factor",
+		"source_dataset_id": strings.TrimSpace(sourceDataset),
+		"source_freq":       strings.TrimSpace(freq),
+	}
+}
+
+func mergeFactorResultDatasetAttributes(datasetID string, existing map[string]string, sourceDataset string, freq string) (map[string]string, error) {
+	next := cloneStringMap(existing)
+	if next == nil {
+		next = map[string]string{}
+	}
+	for key, value := range factorResultDatasetAttributes(sourceDataset, freq) {
+		current := strings.TrimSpace(next[key])
+		if current != "" && current != value {
+			if key == "source_freq" {
+				continue
+			}
+			return nil, fmt.Errorf("dataset %s attribute conflict: %s=%q cannot be overwritten with %q", datasetID, key, current, value)
+		}
+		next[key] = value
+	}
+	return next, nil
+}
+
+func mergeDatasetFreq(freqs []string, freq string) []string {
+	normalized := strings.TrimSpace(freq)
+	out := append([]string(nil), freqs...)
+	if normalized == "" {
+		return out
+	}
+	for _, item := range out {
+		if strings.TrimSpace(item) == normalized {
+			return out
+		}
+	}
+	return append(out, normalized)
+}
+
 func factorColumnOriginID(factorID string, param int) string {
 	return fmt.Sprintf("%s_%d", strings.TrimSpace(factorID), param)
 }
@@ -481,6 +581,14 @@ func isDuplicateRet(ret *commonpb.RetInfo) bool {
 	return strings.Contains(msg, "duplicate") ||
 		strings.Contains(msg, "already exists") ||
 		strings.Contains(msg, "unique constraint")
+}
+
+func isDatasetNotFoundRet(ret *commonpb.RetInfo) bool {
+	if ret == nil || ret.GetCode() == commonpb.ErrorCode_SUCCESS {
+		return false
+	}
+	return ret.GetCode() == commonpb.ErrorCode_DATASET_NOT_FOUND ||
+		strings.Contains(strings.ToLower(ret.GetMsg()), "dataset not found")
 }
 
 func isRefreshInProgressRet(ret *commonpb.RetInfo) bool {
@@ -513,4 +621,28 @@ func cloneStringMap(values map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
+}
+
+func stringMapsEqual(left map[string]string, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		if right[key] != leftValue {
+			return false
+		}
+	}
+	return true
+}
+
+func stringSlicesEqual(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }

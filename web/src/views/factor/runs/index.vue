@@ -39,39 +39,41 @@
         <a-button @click="reloadFirstPage">查询</a-button>
       </a-space>
 
-      <a-table
-        row-key="run_id"
-        size="small"
-        :bordered="{ cell: true }"
-        :loading="loading"
-        :data="rows"
-        :pagination="pagination"
-        :scroll="{ x: 'max-content' }"
-        @page-change="onPageChange"
-        @page-size-change="onPageSizeChange"
-      >
-        <template #columns>
-          <a-table-column title="触发" data-index="trigger_type" :width="100" />
-          <a-table-column title="源数据集" data-index="source_dataset" :width="180" />
-          <a-table-column title="目标数据集" data-index="target_dataset" :width="180" />
-          <a-table-column title="标的" data-index="subject_id" :width="150" />
-          <a-table-column title="频率" data-index="freq" :width="80" />
-          <a-table-column title="Bar时间" :width="180">
-            <template #cell="{ record }">{{ formatTime(record.bar_time) }}</template>
-          </a-table-column>
-          <a-table-column title="因子数" data-index="factor_count" :width="90" />
-          <a-table-column title="耗时(ms)" data-index="elapsed_ms" :width="100" />
-          <a-table-column title="状态" :width="110">
-            <template #cell="{ record }">
-              <a-tag size="small" :color="runStatusColor(record.status)">{{ record.status }}</a-tag>
-            </template>
-          </a-table-column>
-          <a-table-column title="错误" data-index="error" :width="280" :ellipsis="true" :tooltip="true" />
-          <a-table-column title="记录时间" :width="180">
-            <template #cell="{ record }">{{ formatTime(record.created_at) }}</template>
-          </a-table-column>
-        </template>
-      </a-table>
+      <div class="runs-table-shell">
+        <a-table
+          row-key="run_id"
+          size="small"
+          :bordered="{ cell: true }"
+          :loading="loading"
+          :data="rows"
+          :pagination="pagination"
+          :scroll="tableScroll"
+          @page-change="onPageChange"
+          @page-size-change="onPageSizeChange"
+        >
+          <template #columns>
+            <a-table-column title="触发" data-index="trigger_type" :width="100" />
+            <a-table-column title="源数据集" data-index="source_dataset" :width="180" />
+            <a-table-column title="目标数据集" data-index="target_dataset" :width="180" />
+            <a-table-column title="标的" data-index="subject_id" :width="150" />
+            <a-table-column title="频率" data-index="freq" :width="80" />
+            <a-table-column title="Bar时间" :width="180">
+              <template #cell="{ record }">{{ formatTime(record.bar_time) }}</template>
+            </a-table-column>
+            <a-table-column title="因子数" data-index="factor_count" :width="90" />
+            <a-table-column title="耗时(ms)" data-index="elapsed_ms" :width="100" />
+            <a-table-column title="状态" :width="110">
+              <template #cell="{ record }">
+                <a-tag size="small" :color="runStatusColor(record.status)">{{ record.status }}</a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="错误" data-index="error" :width="280" :ellipsis="true" :tooltip="true" />
+            <a-table-column title="记录时间" :width="180">
+              <template #cell="{ record }">{{ formatTime(record.created_at) }}</template>
+            </a-table-column>
+          </template>
+        </a-table>
+      </div>
     </template>
 
     <a-modal
@@ -143,6 +145,10 @@ const recalcForm = reactive<RecalcFactorReq>({
 });
 
 const factorOptions = computed(() => factors.value);
+const tableScroll = computed(() => ({
+  x: 'max-content',
+  y: 'calc(100vh - 360px)',
+}));
 
 async function load() {
   if (!selectedSpaceId.value) {
@@ -226,7 +232,12 @@ onMounted(load);
 
 <style scoped>
 .factor-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
   padding: 20px;
+  overflow: hidden;
 }
 
 .page-head {
@@ -266,6 +277,16 @@ onMounted(load);
   font-size: 13px;
   line-height: 30px;
   padding: 0 12px;
+}
+
+.runs-table-shell {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.runs-table-shell :deep(.arco-table-container) {
+  min-height: 0;
 }
 
 .recalc-form {

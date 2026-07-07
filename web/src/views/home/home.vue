@@ -106,7 +106,7 @@
               :key="item.name"
               class="freshness-row"
               :class="`tone-${item.tone}`"
-              @click="go('/data/view-browse')"
+              @click="go('/collector/views?tab=browse')"
             >
               <span>
                 <strong>{{ item.name }}</strong>
@@ -275,8 +275,14 @@ import { storeToRefs } from 'pinia';
 import { useRouter } from 'vue-router';
 import { useSpaceStore } from '@/store/modules/space';
 import { listDataSources, listDatasets, listFactors, listSubjects, listViews } from '@/api/storage/metadata';
-import type { PageResult } from '@/api/storage/types';
+import type { Dataset, PageResult, View } from '@/api/storage/types';
 import { pageResultTotal } from '@/views/data/shared/metadata-utils';
+import {
+  datasetMatchesAttribution,
+  isLikelyFactorResultDataset,
+  isLikelyFactorResultDatasetId,
+  viewMatchesAttribution,
+} from '@/views/data/shared/module-attribution';
 import { callControl } from '@/api/admin/http';
 import { listServiceDeployments } from '@/api/admin/sysdeploy';
 import type { ServiceDeployment } from '@/api/admin/types';
@@ -312,26 +318,26 @@ const counts = reactive<Record<string, number | null>>({
 const pipeline = [
   { key: 'sources', stage: '01', label: '数据源', color: '#3b6fd9', path: '/data/sources' },
   { key: 'rules', stage: '02', label: '采集规则', color: '#0d9488', path: '/collector/rules' },
-  { key: 'datasets', stage: '03', label: '数据集', color: '#059669', path: '/data/datasets' },
-  { key: 'factors', stage: '04', label: '因子', color: '#c026d3', path: '/data/factors' },
-  { key: 'views', stage: '05', label: '查询视图', color: '#ea580c', path: '/data/views' },
+  { key: 'datasets', stage: '03', label: '数据集合', color: '#059669', path: '/collector/datasets' },
+  { key: 'factors', stage: '04', label: '因子定义', color: '#c026d3', path: '/factor/definitions' },
+  { key: 'views', stage: '05', label: '数据视图', color: '#ea580c', path: '/collector/views' },
   { key: 'accounts', stage: '06', label: '交易账户', color: '#b45309', path: '/trading/accounts' },
 ];
 
 const workflowLinks = [
-  { title: 'K 线浏览', description: '检查最新 bar 是否入库', path: '/data/view-browse', icon: 'K', tint: 'rgba(59, 111, 217, 12%)' },
-  { title: '宽表查询', description: '多 Dataset join 后的视图', path: '/data/browse', icon: 'Q', tint: 'rgba(234, 88, 12, 12%)' },
+  { title: 'K 线浏览', description: '检查最新 bar 是否入库', path: '/collector/views?tab=browse', icon: 'K', tint: 'rgba(59, 111, 217, 12%)' },
+  { title: '视图查询', description: '查看数据集合生成的视图', path: '/collector/views?tab=browse', icon: 'Q', tint: 'rgba(234, 88, 12, 12%)' },
   { title: '采集实例', description: '任务执行状态与失败明细', path: '/collector/tasks', icon: 'T', tint: 'rgba(13, 148, 136, 12%)' },
-  { title: '历史回填', description: '离线文件导入历史数据', path: '/data/import', icon: 'I', tint: 'rgba(5, 150, 105, 12%)' },
-  { title: '因子字典', description: '结果列与算法元数据', path: '/data/factors', icon: 'F', tint: 'rgba(192, 38, 211, 12%)' },
+  { title: '数据集合', description: '定义采集写入的数据契约', path: '/collector/datasets', icon: 'D', tint: 'rgba(5, 150, 105, 12%)' },
+  { title: '因子结果', description: '查看因子计算写回结果', path: '/factor/results', icon: 'F', tint: 'rgba(192, 38, 211, 12%)' },
   { title: '交易账户', description: '账户余额与下单通道', path: '/trading/accounts', icon: 'A', tint: 'rgba(180, 83, 9, 12%)' },
 ];
 
 const setupSteps = [
   { title: '创建空间', description: '空间是数据资产、采集与交易的隔离边界，管理台所有请求都带空间上下文。' },
-  { title: '登记数据资产', description: '配置数据源、Subject、Dataset 与字段，可参考 examples/e2e 快速初始化。' },
+  { title: '登记数据资产', description: '配置数据源、数据对象、字段，再到数据采集里定义数据集合与视图。' },
   { title: '启动采集链路', description: 'collector 按规则展开任务，经 cloudnode 下发到云节点执行写入。' },
-  { title: '查询与因子', description: '用 View 合成宽表浏览 K 线；因子模块（规划中）将自动写回独立结果 Dataset。' },
+  { title: '查询与因子', description: '用数据视图浏览 K 线；因子模块自动写回独立结果数据集合。' },
 ];
 
 const nodesOnline = ref<number | null>(null);
@@ -385,7 +391,7 @@ const dashboardKpis = computed(() => [
     note: '最新 K 线延迟',
     delta: 'APT-USDT',
     tone: 'ok',
-    path: '/data/view-browse',
+    path: '/collector/views?tab=browse',
   },
   {
     key: 'tasks',
@@ -437,7 +443,7 @@ const stalenessItems = [
 ];
 
 const incidentItems = [
-  { level: 'P1', title: 'factor.momentum 今日未刷新', meta: 'View 派生延迟 48m', action: '打开视图', path: '/data/views', tone: 'danger' },
+  { level: 'P1', title: 'factor.momentum 今日未刷新', meta: '因子结果延迟 48m', action: '打开结果', path: '/factor/results', tone: 'danger' },
   { level: 'P2', title: '云节点离线 5 台', meta: 'SCF runtime 心跳缺失', action: '查看节点', path: '/collector/cloudnodes', tone: 'warn' },
   { level: 'P2', title: '7 个采集实例失败', meta: '交易所限频 / 网络超时', action: '处理任务', path: '/collector/tasks', tone: 'warn' },
   { level: 'P3', title: '1 个交易账户同步较慢', meta: 'Binance futures 14m 未更新', action: '账户摘要', path: '/trading/accounts', tone: 'neutral' },
@@ -537,12 +543,7 @@ async function loadSpaceScoped() {
     listDataSources({ space_id, page }).then((rsp) => {
       counts.sources = countFrom(rsp.page_result, rsp.data_sources?.length);
     }),
-    listDatasets({ space_id, page }).then((rsp) => {
-      counts.datasets = countFrom(rsp.page_result, rsp.datasets?.length);
-    }),
-    listViews({ space_id, page }).then((rsp) => {
-      counts.views = countFrom(rsp.page_result, rsp.views?.length);
-    }),
+    loadCollectorAssetCounts(space_id),
     listFactors({ space_id, page }).then((rsp) => {
       counts.factors = countFrom(rsp.page_result, rsp.factors?.length);
     }),
@@ -573,6 +574,59 @@ async function loadSpaceScoped() {
   ];
 
   await Promise.allSettled(jobs);
+}
+
+async function loadCollectorAssetCounts(spaceId: string) {
+  const [datasetItems, viewItems] = await Promise.all([listAllDatasets(spaceId), listAllViews(spaceId)]);
+  const datasetById = new Map(datasetItems.map((item) => [item.dataset_id, item]));
+  counts.datasets = datasetItems.filter((item) =>
+    !isLikelyFactorResultDataset(item) &&
+      datasetMatchesAttribution(item, {
+        ownerModules: ['collector'],
+        datasetRoles: ['raw_collection', 'import'],
+        includeUnowned: true,
+      }),
+  ).length;
+  counts.views = viewItems.filter((item) =>
+    !viewUsesLikelyFactorDataset(item, datasetById) &&
+      viewMatchesAttribution(item, {
+        ownerModules: ['collector'],
+        viewRoles: ['collection_browse', 'analysis'],
+        includeUnowned: true,
+      }),
+  ).length;
+}
+
+async function listAllDatasets(spaceId: string) {
+  const items: Dataset[] = [];
+  const size = 500;
+  for (let pageNo = 1; ; pageNo += 1) {
+    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size } });
+    items.push(...(rsp.datasets || []));
+    if (!rsp.page_result?.has_more || (rsp.datasets || []).length === 0) {
+      return items;
+    }
+  }
+}
+
+async function listAllViews(spaceId: string) {
+  const items: View[] = [];
+  const size = 500;
+  for (let pageNo = 1; ; pageNo += 1) {
+    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size } });
+    items.push(...(rsp.views || []));
+    if (!rsp.page_result?.has_more || (rsp.views || []).length === 0) {
+      return items;
+    }
+  }
+}
+
+function viewUsesLikelyFactorDataset(view: View, datasetById: Map<string, Dataset>) {
+  const dataset = datasetById.get(view.primary_dataset_id);
+  if (dataset) {
+    return isLikelyFactorResultDataset(dataset);
+  }
+  return isLikelyFactorResultDatasetId(view.primary_dataset_id);
 }
 
 async function loadGlobal() {

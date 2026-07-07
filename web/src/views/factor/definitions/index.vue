@@ -18,7 +18,7 @@
     </div>
 
     <a-alert class="top-alert" type="info" show-icon>
-      本页管理的是 factor 服务自己的计算定义；数据资产里的“因子字典”用于 Storage 元数据列契约。
+      本页管理的是 factor 服务自己的计算定义；因子结果列会同步到 Storage 元数据字段契约。
     </a-alert>
 
     <a-space class="filters" wrap>
