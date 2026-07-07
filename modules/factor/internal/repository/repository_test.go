@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -158,71 +157,6 @@ func TestBindingRepositoryUpsertByBindingIDCanChangeNaturalKey(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].BindingID != "bind-a" || rows[0].FactorID != "cci" {
 		t.Fatalf("binding not updated by id: %+v", rows)
-	}
-}
-
-func TestRunRepositoryInsertListAndDeleteBefore(t *testing.T) {
-	ctx := context.Background()
-	db := openTestDB(t)
-	repo := NewRunRepository(db)
-
-	old := domain.FactorRun{
-		RunID:         "run-old",
-		TriggerType:   "manual",
-		SpaceID:       "crypto",
-		SourceDataset: "binance_spot_kline",
-		TargetDataset: "binance_spot_factor",
-		SubjectID:     "BTC-USDT",
-		Freq:          "1m",
-		BarTime:       "2026-07-06T09:14:00Z",
-		FactorCount:   2,
-		Status:        domain.RunStatusSucceeded,
-		ElapsedMS:     12,
-		CreateTime:    time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
-	}
-	newer := old
-	newer.RunID = "run-new"
-	newer.BarTime = "2026-07-06T09:15:00Z"
-	newer.CreateTime = time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
-
-	if err := repo.Insert(ctx, old); err != nil {
-		t.Fatalf("Insert(old) error = %v", err)
-	}
-	if err := repo.Insert(ctx, newer); err != nil {
-		t.Fatalf("Insert(new) error = %v", err)
-	}
-
-	rows, err := repo.ListByScope(ctx, RunScopeFilter{
-		SpaceID:       "crypto",
-		SourceDataset: "binance_spot_kline",
-		SubjectID:     "BTC-USDT",
-		Freq:          "1m",
-	}, Page{Page: 1, PageSize: 10})
-	if err != nil {
-		t.Fatalf("ListByScope() error = %v", err)
-	}
-	if len(rows) != 2 || rows[0].RunID != "run-new" || rows[1].RunID != "run-old" {
-		t.Fatalf("runs not ordered by bar time desc: %+v", rows)
-	}
-
-	deleted, err := repo.DeleteRunsBefore(ctx, time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatalf("DeleteRunsBefore() error = %v", err)
-	}
-	if deleted != 1 {
-		t.Fatalf("deleted = %d, want 1", deleted)
-	}
-	rows, err = repo.ListByScope(ctx, RunScopeFilter{
-		SpaceID:       "crypto",
-		SourceDataset: "binance_spot_kline",
-		SubjectID:     "BTC-USDT",
-		Freq:          "1m",
-	}, Page{Page: 1, PageSize: 10})
-	if err != nil {
-		t.Fatalf("ListByScope(after delete) error = %v", err)
-	}
-	if len(rows) != 1 || rows[0].RunID != "run-new" {
-		t.Fatalf("remaining runs = %+v", rows)
 	}
 }
 

@@ -21,6 +21,6 @@ go run ./cmd/cli run-once --space crypto --dataset binance_spot_kline --subject 
 
 ## Acceptance
 
-- `t_factor_runs` contains one `succeeded` row.
+- Local logs contain one `factor_run_done` line with `status=succeeded`.
 - Storage `binance_spot_factor` has `Bias_20` and `Bias_96` values for the requested tail bars.
 - After View columns are added, Storage View can join K-line rows with the factor result Dataset.

@@ -1,5 +1,7 @@
 PRAGMA foreign_keys = ON;
 
+DROP TABLE IF EXISTS t_factor_runs;
+
 CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_factor_id TEXT PRIMARY KEY,
     c_name TEXT NOT NULL,
@@ -37,28 +39,6 @@ ON t_factor_bindings(c_factor_id, c_space_id, c_source_dataset, c_freq);
 
 CREATE INDEX IF NOT EXISTS idx_factor_bindings_source
 ON t_factor_bindings(c_space_id, c_source_dataset, c_freq, c_status);
-
-CREATE TABLE IF NOT EXISTS t_factor_runs (
-    c_run_id TEXT PRIMARY KEY,
-    c_trigger_type TEXT NOT NULL,
-    c_space_id TEXT NOT NULL,
-    c_source_dataset TEXT NOT NULL,
-    c_target_dataset TEXT NOT NULL DEFAULT '',
-    c_subject_id TEXT NOT NULL,
-    c_freq TEXT NOT NULL,
-    c_bar_time TEXT NOT NULL,
-    c_factor_count INTEGER NOT NULL DEFAULT 0,
-    c_status TEXT NOT NULL CHECK (c_status IN ('succeeded', 'failed', 'superseded')),
-    c_error TEXT NOT NULL DEFAULT '',
-    c_elapsed_ms INTEGER NOT NULL DEFAULT 0,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_factor_runs_scope_time
-ON t_factor_runs(c_space_id, c_source_dataset, c_subject_id, c_freq, c_bar_time DESC);
-
-CREATE INDEX IF NOT EXISTS idx_factor_runs_status_time
-ON t_factor_runs(c_status, c_ctime DESC);
 
 CREATE TRIGGER IF NOT EXISTS update_factor_defs_mtime AFTER UPDATE ON t_factor_defs
 WHEN NEW.c_mtime = OLD.c_mtime

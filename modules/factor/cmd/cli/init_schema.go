@@ -28,7 +28,7 @@ func runInit(_ context.Context, cfg cliConfig, out io.Writer) error {
 	return json.NewEncoder(out).Encode(map[string]any{
 		"ok":       true,
 		"database": cfg.DBPath,
-		"tables":   []string{"t_factor_defs", "t_factor_bindings", "t_factor_runs"},
+		"tables":   []string{"t_factor_defs", "t_factor_bindings"},
 	})
 }
 

@@ -20,4 +20,4 @@
 
 - A 500-symbol event storm produces 500 debounced tasks, not more.
 - Scheduler drains deterministic 5ms tasks within one bar budget in test mode.
-- `t_factor_runs` records success, failed, and superseded terminal rows.
+- Local service logs contain `factor_run_done` lines for success, failed, and superseded terminal states.

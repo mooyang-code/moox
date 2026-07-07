@@ -67,8 +67,7 @@ export const systemMenu = [
   directory("0240", "0", "/factor/definitions", "factor-compute", "factor-compute", 4, { svgIcon: "functions", icon: "" }),
   menu("024001", "0240", "/factor/definitions", "factor-definitions", "factor-definitions", "factor/definitions/index", 1),
   menu("024002", "0240", "/factor/bindings", "factor-bindings", "factor-bindings", "factor/bindings/index", 2),
-  menu("024003", "0240", "/factor/runs", "factor-runs", "factor-runs", "factor/runs/index", 3),
-  menu("024004", "0240", "/factor/results", "factor-results", "factor-results", "factor/results/index", 4),
+  menu("024004", "0240", "/factor/results", "factor-results", "factor-results", "factor/results/index", 3),
 
   directory("05", "0", "/trading/accounts", "trading", "trading", 5, { svgIcon: "balance-inquiry", icon: "" }),
   menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-overview/account-overview", 1),

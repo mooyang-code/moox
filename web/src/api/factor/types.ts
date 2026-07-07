@@ -33,22 +33,6 @@ export interface FactorBinding {
   updated_at?: string;
 }
 
-export interface FactorRun {
-  run_id: string;
-  trigger_type: string;
-  space_id: string;
-  source_dataset: string;
-  target_dataset: string;
-  subject_id: string;
-  freq: string;
-  bar_time: string;
-  factor_count: number;
-  status: string;
-  error?: string;
-  elapsed_ms: number;
-  created_at?: string;
-}
-
 export interface WorkerStatus {
   worker_id: string;
   state: string;
@@ -106,18 +90,4 @@ export interface ListBindingsReq {
 export interface ListBindingsRsp {
   bindings: FactorBinding[];
   page_result: PageResult;
-}
-
-export interface ListRunsReq {
-  space_id?: string;
-  source_dataset?: string;
-  subject_id?: string;
-  freq?: string;
-  status?: string;
-  page?: Page;
-}
-
-export interface ListRunsRsp {
-  runs: FactorRun[];
-  page_result?: PageResult;
 }

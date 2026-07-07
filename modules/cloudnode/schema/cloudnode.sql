@@ -1,5 +1,8 @@
 PRAGMA foreign_keys = ON;
 
+DROP TABLE IF EXISTS t_cloud_invocation_results;
+DROP TABLE IF EXISTS t_cloud_invocations;
+
 CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
@@ -133,41 +136,6 @@ CREATE TABLE IF NOT EXISTS t_cloud_job_item_attempts (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_job_item_attempts_unique ON t_cloud_job_item_attempts(c_space_id, c_job_item_id, c_attempt_no);
 CREATE INDEX IF NOT EXISTS idx_cloud_job_item_attempts_item ON t_cloud_job_item_attempts(c_space_id, c_job_item_id);
 
-CREATE TABLE IF NOT EXISTS t_cloud_invocations (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_invocation_id TEXT NOT NULL,
-    c_owner_service TEXT NOT NULL DEFAULT '',
-    c_workload_type TEXT NOT NULL DEFAULT '',
-    c_deployment_id TEXT NOT NULL DEFAULT '',
-    c_status TEXT NOT NULL DEFAULT 'pending',
-    c_request_count INTEGER NOT NULL DEFAULT 0,
-    c_success_count INTEGER NOT NULL DEFAULT 0,
-    c_failed_count INTEGER NOT NULL DEFAULT 0,
-    c_timeout_count INTEGER NOT NULL DEFAULT 0,
-    c_duration_ms INTEGER NOT NULL DEFAULT 0,
-    c_error_summary TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_invocations_space_invocation ON t_cloud_invocations(c_space_id, c_invocation_id);
-CREATE INDEX IF NOT EXISTS idx_cloud_invocations_owner ON t_cloud_invocations(c_owner_service, c_workload_type);
-
-CREATE TABLE IF NOT EXISTS t_cloud_invocation_results (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_invocation_id TEXT NOT NULL,
-    c_request_id TEXT NOT NULL,
-    c_status TEXT NOT NULL DEFAULT '',
-    c_payload TEXT NOT NULL DEFAULT '{}',
-    c_error_message TEXT NOT NULL DEFAULT '',
-    c_duration_ms INTEGER NOT NULL DEFAULT 0,
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_cloud_invocation_results_invocation ON t_cloud_invocation_results(c_space_id, c_invocation_id);
-
 CREATE TRIGGER IF NOT EXISTS update_cloud_nodes_mtime AFTER UPDATE ON t_cloud_nodes BEGIN
     UPDATE t_cloud_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 CREATE TRIGGER IF NOT EXISTS update_cloud_accounts_mtime AFTER UPDATE ON t_cloud_accounts BEGIN
@@ -178,5 +146,3 @@ CREATE TRIGGER IF NOT EXISTS update_cloud_job_items_mtime AFTER UPDATE ON t_clou
     UPDATE t_cloud_job_items SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 CREATE TRIGGER IF NOT EXISTS update_cloud_job_item_attempts_mtime AFTER UPDATE ON t_cloud_job_item_attempts BEGIN
     UPDATE t_cloud_job_item_attempts SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
-CREATE TRIGGER IF NOT EXISTS update_cloud_invocations_mtime AFTER UPDATE ON t_cloud_invocations BEGIN
-    UPDATE t_cloud_invocations SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;

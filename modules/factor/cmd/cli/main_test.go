@@ -4,7 +4,23 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 )
+
+func TestRunOnceSuccessPayloadKeepsRunIDCompatibility(t *testing.T) {
+	task := &engine.FactorTask{TaskID: "manual-123"}
+
+	payload := runOncePayload(task, domain.RunStatusSucceeded, 2, 7)
+
+	if payload["task_id"] != "manual-123" {
+		t.Fatalf("task_id = %v", payload["task_id"])
+	}
+	if payload["run_id"] != "manual-123-succeeded" {
+		t.Fatalf("run_id = %v", payload["run_id"])
+	}
+}
 
 func TestParseInitArgs(t *testing.T) {
 	cfg, err := parseArgs([]string{"init", "--db", "./tmp/factor.db"})

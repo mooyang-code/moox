@@ -14,8 +14,7 @@ func TestSchedulerLoadDrainsSyntheticEventStorm(t *testing.T) {
 	ctx := context.Background()
 	storage := &testkit.FakeStorage{}
 	exec := &testkit.FakeExecutor{Latency: 5 * time.Millisecond}
-	runs := &recordingRuns{}
-	svc := NewService(Config{Workers: 8, MaxRetry: 1}, storage, exec, runs)
+	svc := NewService(Config{Workers: 8, MaxRetry: 1}, storage, exec)
 	barTime := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
 	for i, symbol := range testkit.Symbols(120) {
 		task := taskAt(barTime)

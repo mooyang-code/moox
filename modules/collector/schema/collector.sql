@@ -1,5 +1,7 @@
 PRAGMA foreign_keys = ON;
 
+DROP TABLE IF EXISTS t_collector_execution_logs;
+
 CREATE TABLE IF NOT EXISTS t_collector_task_rules (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
@@ -54,21 +56,6 @@ CREATE INDEX IF NOT EXISTS idx_collector_instances_subject ON t_collector_task_i
 CREATE INDEX IF NOT EXISTS idx_collector_instances_exec ON t_collector_task_instances(c_planned_exec_node, c_last_exec_status);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_deleted ON t_collector_task_instances(c_is_deleted);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_ctime ON t_collector_task_instances(c_ctime DESC);
-
-CREATE TABLE IF NOT EXISTS t_collector_execution_logs (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_task_id TEXT NOT NULL DEFAULT '',
-    c_node_id TEXT NOT NULL DEFAULT '',
-    c_status INTEGER NOT NULL DEFAULT 1,
-    c_result TEXT NOT NULL DEFAULT '{}',
-    c_error_message TEXT NOT NULL DEFAULT '',
-    c_started_at DATETIME,
-    c_finished_at DATETIME,
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_collector_execution_logs_task ON t_collector_execution_logs(c_space_id, c_task_id);
 
 CREATE TRIGGER IF NOT EXISTS update_collector_rules_mtime AFTER UPDATE ON t_collector_task_rules BEGIN
     UPDATE t_collector_task_rules SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;

@@ -133,7 +133,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	}
 
 	// 记录操作日志
-	s.recordUserAction(ctx, user.UserID, model.ActionChangePassword, "", "密码修改成功", "", "", "success")
+	s.logUserAction(ctx, user.UserID, model.ActionChangePassword, "", "密码修改成功", "", "", "success")
 
 	return &pb.ChangePasswordRsp{
 		RetInfo: &pb.RetInfo{

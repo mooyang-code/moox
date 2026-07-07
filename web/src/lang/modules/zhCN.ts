@@ -33,7 +33,6 @@ export default {
     ["factor-compute"]: "因子计算",
     ["factor-definitions"]: "因子定义",
     ["factor-bindings"]: "计算绑定",
-    ["factor-runs"]: "运行记录",
     ["factor-results"]: "因子结果",
     ["data-views"]: "查询视图",
     ["data-view-list"]: "视图列表",

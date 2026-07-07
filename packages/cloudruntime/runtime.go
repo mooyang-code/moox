@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -112,6 +113,10 @@ type registry struct {
 }
 
 var globalRegistry = &registry{handlers: map[string]Handler{}}
+
+var logCompletion = func(ctx context.Context, line string) {
+	log.InfoContextf(ctx, "%s", line)
+}
 
 // Register adds a JobItem handler for jobType.
 func Register(jobType string, handler Handler) {
@@ -272,20 +277,106 @@ func pollJobItems(ctx context.Context, cfg Config) ([]JobItem, error) {
 
 func executeJobItem(ctx context.Context, cfg Config, item JobItem) {
 	start := time.Now()
+	var result Result
+	var execErr error
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			execErr = Permanent(fmt.Errorf("panic: %v", recovered), "HANDLER_PANIC")
+		}
+		duration := time.Since(start)
+		status := jobItemReportStatusSuccess
+		if execErr != nil {
+			status = jobItemReportStatusFailed
+		}
+		logCompletion(ctx, jobCompletionLogLine(cfg, item, status, duration, execErr))
+		reportJobItem(ctx, cfg, item, result, execErr, duration)
+	}()
 	handler, ok := globalRegistry.get(item.JobType)
 	if !ok {
-		err := Permanent(fmt.Errorf("handler not found for job_type %s", item.JobType), "HANDLER_NOT_FOUND")
-		reportJobItem(ctx, cfg, item, Result{}, err, time.Since(start))
+		execErr = Permanent(fmt.Errorf("handler not found for job_type %s", item.JobType), "HANDLER_NOT_FOUND")
 		return
 	}
-	result, err := handler.Execute(ctx, item)
-	duration := time.Since(start)
-	if err != nil {
-		reportJobItem(ctx, cfg, item, result, err, duration)
-		return
+	result, execErr = handler.Execute(ctx, item)
+}
+
+func jobCompletionLogLine(cfg Config, item JobItem, status int, duration time.Duration, execErr error) string {
+	errorMessage := ""
+	if execErr != nil {
+		errorMessage = execErr.Error()
 	}
-	log.InfoContextf(ctx, "[CloudRuntime] job item success job_item_id=%s job_type=%s duration=%s", item.JobItemID, item.JobType, duration)
-	reportJobItem(ctx, cfg, item, result, nil, duration)
+	fields := []struct {
+		key   string
+		value string
+		quote bool
+	}{
+		{key: "space_id", value: firstNonEmpty(item.SpaceID, cfg.SpaceID)},
+		{key: "task_id", value: firstNonEmpty(stringParam(item.Params, "task_id"), taskIDFromJobItemID(item.JobItemID))},
+		{key: "job_item_id", value: item.JobItemID},
+		{key: "node_id", value: cfg.NodeID},
+		{key: "job_type", value: item.JobType},
+		{key: "attempt_no", value: strconv.Itoa(item.AttemptNo)},
+		{key: "symbol", value: stringParam(item.Params, "symbol")},
+		{key: "interval", value: stringParam(item.Params, "interval")},
+		{key: "status", value: jobItemStatusText(status)},
+		{key: "duration_ms", value: strconv.FormatInt(duration.Milliseconds(), 10)},
+		{key: "error", value: errorMessage, quote: true},
+	}
+	var b strings.Builder
+	b.WriteString("collector_job_done")
+	for _, field := range fields {
+		b.WriteByte(' ')
+		b.WriteString(field.key)
+		b.WriteByte('=')
+		if field.quote {
+			b.WriteString(strconv.Quote(field.value))
+			continue
+		}
+		b.WriteString(logValue(field.value))
+	}
+	return b.String()
+}
+
+func jobItemStatusText(status int) string {
+	if status == jobItemReportStatusFailed {
+		return "failed"
+	}
+	return "success"
+}
+
+func taskIDFromJobItemID(jobItemID string) string {
+	jobItemID = strings.TrimSpace(jobItemID)
+	if jobItemID == "" {
+		return ""
+	}
+	if before, _, ok := strings.Cut(jobItemID, ":"); ok {
+		return strings.TrimSpace(before)
+	}
+	return jobItemID
+}
+
+func stringParam(params map[string]any, key string) string {
+	if len(params) == 0 {
+		return ""
+	}
+	raw, ok := params[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case fmt.Stringer:
+		return strings.TrimSpace(v.String())
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+}
+
+func logValue(value string) string {
+	if value == "" || strings.ContainsAny(value, " \t\r\n\"") {
+		return strconv.Quote(value)
+	}
+	return value
 }
 
 func reportJobItem(ctx context.Context, cfg Config, item JobItem, result Result, execErr error, duration time.Duration) {

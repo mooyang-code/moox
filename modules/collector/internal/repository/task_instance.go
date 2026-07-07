@@ -35,25 +35,6 @@ type TaskInstanceFilter struct {
 	PageSize        int
 }
 
-// ExecutionLog records task status reports.
-type ExecutionLog struct {
-	ID           int        `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID      string     `gorm:"column:c_space_id"`
-	TaskID       string     `gorm:"column:c_task_id"`
-	NodeID       string     `gorm:"column:c_node_id"`
-	Status       int        `gorm:"column:c_status"`
-	Result       string     `gorm:"column:c_result"`
-	ErrorMessage string     `gorm:"column:c_error_message"`
-	StartedAt    *time.Time `gorm:"column:c_started_at"`
-	FinishedAt   *time.Time `gorm:"column:c_finished_at"`
-	CreateTime   time.Time  `gorm:"column:c_ctime"`
-}
-
-// TableName returns the execution log table.
-func (l *ExecutionLog) TableName() string {
-	return "t_collector_execution_logs"
-}
-
 // TaskInstanceRepository persists executable task instances.
 type TaskInstanceRepository struct {
 	db *gorm.DB
@@ -158,27 +139,6 @@ func (r *TaskInstanceRepository) UpdateStatus(ctx context.Context, spaceID strin
 		return gorm.ErrRecordNotFound
 	}
 	return nil
-}
-
-// AddExecutionLog appends a status report log row.
-func (r *TaskInstanceRepository) AddExecutionLog(ctx context.Context, spaceID string, taskID string, nodeID string, status int, result string, errorMessage string, duration time.Duration) error {
-	now := time.Now().UTC()
-	startedAt := now.Add(-duration)
-	log := ExecutionLog{
-		SpaceID:      spaceID,
-		TaskID:       taskID,
-		NodeID:       nodeID,
-		Status:       status,
-		Result:       normalizeJSON(result),
-		ErrorMessage: errorMessage,
-		StartedAt:    &startedAt,
-		FinishedAt:   &now,
-		CreateTime:   now,
-	}
-	if duration <= 0 {
-		log.StartedAt = nil
-	}
-	return r.db.WithContext(ctx).Create(&log).Error
 }
 
 func (r *TaskInstanceRepository) applyFilter(q *gorm.DB, filter TaskInstanceFilter) *gorm.DB {

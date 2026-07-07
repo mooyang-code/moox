@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"trpc.group/trpc-go/trpc-go/http"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // validateLoginSalt 验证登录盐值
@@ -84,19 +85,10 @@ func (s *AuthServiceImpl) recordLoginHistory(ctx context.Context, user *model.Us
 	s.userDAO.CreateLoginHistory(ctx, history)
 }
 
-// recordUserAction 记录用户操作日志
-func (s *AuthServiceImpl) recordUserAction(ctx context.Context, userID, action, resource, details, clientIP, userAgent, result string) {
-	userAction := &model.UserAction{
-		UserID:    userID,
-		Action:    action,
-		Resource:  resource,
-		Details:   details,
-		ClientIP:  clientIP,
-		UserAgent: userAgent,
-		Result:    result,
-	}
-
-	s.userDAO.CreateUserAction(ctx, userAction)
+// logUserAction 记录本地用户操作日志
+func (s *AuthServiceImpl) logUserAction(ctx context.Context, userID, action, resource, details, clientIP, userAgent, result string) {
+	log.InfoContextf(ctx, "admin_user_action user_id=%s action=%s resource=%s result=%s client_ip=%s details=%q user_agent=%q",
+		userID, action, resource, result, clientIP, details, userAgent)
 }
 
 // extractClientIPFromContext 从上下文中提取真实客户端IP

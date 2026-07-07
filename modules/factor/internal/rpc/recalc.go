@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -43,12 +44,14 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 		return &factorpb.RecalcFactorRsp{RetInfo: invalid(err)}, nil
 	}
 	recalcID := fmt.Sprintf("recalc-%d", time.Now().UnixNano())
+	results := make(chan scheduler.TaskResult, len(tasks))
 	s.setRecalcState(&recalcState{RecalcID: recalcID, Status: "queued", Total: int32(len(tasks))})
 	for i := range tasks {
 		tasks[i].TaskID = fmt.Sprintf("%s-%d", recalcID, i+1)
+		tasks[i].Completion = results
 		s.scheduler.Enqueue(ctx, tasks[i])
 	}
-	go s.drainRecalc(recalcID)
+	go s.drainRecalc(recalcID, results, len(tasks))
 	return &factorpb.RecalcFactorRsp{RetInfo: success(), RecalcId: recalcID}, nil
 }
 
@@ -187,38 +190,39 @@ func (s *Service) targetDatasetForFactor(ctx context.Context, spaceID string, so
 	return registry.ResultDataset(sourceDataset), nil
 }
 
-func (s *Service) drainRecalc(recalcID string) {
+func (s *Service) drainRecalc(recalcID string, results <-chan scheduler.TaskResult, total int) {
 	s.updateRecalcState(recalcID, func(state *recalcState) {
 		state.Status = "running"
 	})
-	err := s.scheduler.Drain(context.Background())
-	s.updateRecalcState(recalcID, func(state *recalcState) {
-		state.Finished = state.Total
-		if err != nil {
-			state.Status = "failed"
-			state.Error = err.Error()
-			return
+	_ = s.scheduler.Drain(context.Background())
+	failures := make([]string, 0)
+	for i := 0; i < total; i++ {
+		result := <-results
+		if result.Status == domain.RunStatusFailed {
+			failures = append(failures, resultErrorMessage(result))
 		}
-		if failed, countErr := s.countFailedRecalcRuns(context.Background(), recalcID); countErr != nil {
+		s.updateRecalcState(recalcID, func(state *recalcState) {
+			state.Finished++
+		})
+	}
+	s.updateRecalcState(recalcID, func(state *recalcState) {
+		if len(failures) > 0 {
 			state.Status = "failed"
-			state.Error = countErr.Error()
-			return
-		} else if failed > 0 {
-			state.Status = "failed"
-			state.Error = fmt.Sprintf("%d task(s) failed", failed)
+			state.Error = strings.Join(failures, "; ")
 			return
 		}
 		state.Status = "succeeded"
 	})
 }
 
-func (s *Service) countFailedRecalcRuns(ctx context.Context, recalcID string) (int64, error) {
-	var failed int64
-	err := s.db.WithContext(ctx).
-		Model(&domain.FactorRun{}).
-		Where("c_run_id LIKE ? AND c_status = ?", recalcID+"-%", domain.RunStatusFailed).
-		Count(&failed).Error
-	return failed, err
+func resultErrorMessage(result scheduler.TaskResult) string {
+	if result.Error != nil {
+		return result.Error.Error()
+	}
+	if result.ErrorMessage != "" {
+		return result.ErrorMessage
+	}
+	return fmt.Sprintf("task %s failed", result.TaskID)
 }
 
 func (s *Service) setRecalcState(state *recalcState) {

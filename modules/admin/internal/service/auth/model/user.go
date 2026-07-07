@@ -50,24 +50,6 @@ func (h *LoginHistory) TableName() string {
 	return "t_login_history"
 }
 
-// UserAction 用户操作日志模型 (对应 t_user_actions 表)
-type UserAction struct {
-	ID        int64     `gorm:"column:c_id;primaryKey;autoIncrement" json:"id"`
-	UserID    string    `gorm:"column:c_user_id;not null;index" json:"user_id"`
-	Action    string    `gorm:"column:c_action;not null;index" json:"action"`
-	Resource  string    `gorm:"column:c_resource;default:''" json:"resource"`
-	Details   string    `gorm:"column:c_details;default:''" json:"details"`
-	ClientIP  string    `gorm:"column:c_client_ip;default:''" json:"client_ip"`
-	UserAgent string    `gorm:"column:c_user_agent;default:''" json:"user_agent"`
-	Result    string    `gorm:"column:c_result;not null;default:'success'" json:"result"`
-	CreatedAt time.Time `gorm:"column:c_ctime;default:CURRENT_TIMESTAMP;index" json:"created_at"`
-}
-
-// TableName 表名
-func (a *UserAction) TableName() string {
-	return "t_user_actions"
-}
-
 // LoginSalt 登录盐值缓存 (用于BadgerDB)
 type LoginSalt struct {
 	Username  string    `json:"username"`

@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,8 +26,8 @@ func TestHashSubjectKeepsSameSubjectOnSameShard(t *testing.T) {
 
 func TestQueueSupersedesPendingTaskByNewerBarTime(t *testing.T) {
 	ctx := context.Background()
-	runs := &recordingRuns{}
-	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, &fakeExecutor{}, runs)
+	logs := captureRunLogs(t)
+	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, &fakeExecutor{})
 	t0 := time.Date(2026, 7, 6, 9, 14, 0, 0, time.UTC)
 
 	svc.Enqueue(ctx, taskAt(t0))
@@ -35,22 +36,22 @@ func TestQueueSupersedesPendingTaskByNewerBarTime(t *testing.T) {
 		t.Fatalf("Drain() error = %v", err)
 	}
 
-	if len(runs.rows) != 2 {
-		t.Fatalf("run rows = %+v", runs.rows)
+	if len(*logs) != 2 {
+		t.Fatalf("run logs = %+v", *logs)
 	}
-	if runs.rows[0].Status != domain.RunStatusSuperseded || runs.rows[0].BarTime != t0.Format(time.RFC3339) {
-		t.Fatalf("first row should supersede old task: %+v", runs.rows[0])
+	if !strings.Contains((*logs)[0], "status="+domain.RunStatusSuperseded) || !strings.Contains((*logs)[0], "bar_time="+t0.Format(time.RFC3339)) {
+		t.Fatalf("first log should supersede old task: %s", (*logs)[0])
 	}
-	if runs.rows[1].Status != domain.RunStatusSucceeded || runs.rows[1].BarTime != t0.Add(time.Minute).Format(time.RFC3339) {
-		t.Fatalf("second row should execute newest task: %+v", runs.rows[1])
+	if !strings.Contains((*logs)[1], "status="+domain.RunStatusSucceeded) || !strings.Contains((*logs)[1], "bar_time="+t0.Add(time.Minute).Format(time.RFC3339)) {
+		t.Fatalf("second log should execute newest task: %s", (*logs)[1])
 	}
 }
 
 func TestQueueKeepsDifferentTargetDatasetsSeparate(t *testing.T) {
 	ctx := context.Background()
-	runs := &recordingRuns{}
+	logs := captureRunLogs(t)
 	exec := &fakeExecutor{}
-	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec, runs)
+	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
 	t0 := time.Date(2026, 7, 6, 9, 14, 0, 0, time.UTC)
 
 	first := taskAt(t0)
@@ -65,54 +66,54 @@ func TestQueueKeepsDifferentTargetDatasetsSeparate(t *testing.T) {
 	if exec.calls != 2 {
 		t.Fatalf("executor calls = %d, want 2", exec.calls)
 	}
-	if len(runs.rows) != 2 {
-		t.Fatalf("run rows = %+v", runs.rows)
+	if len(*logs) != 2 {
+		t.Fatalf("run logs = %+v", *logs)
 	}
 }
 
 func TestRetryableErrorsRetryAtMostMaxRetry(t *testing.T) {
 	ctx := context.Background()
 	exec := &fakeExecutor{retryFailures: 4}
-	runs := &recordingRuns{}
-	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec, runs)
+	logs := captureRunLogs(t)
+	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
 
 	svc.Enqueue(ctx, taskAt(time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)))
-	if err := svc.Drain(ctx); err != nil {
-		t.Fatalf("Drain() error = %v", err)
+	if err := svc.Drain(ctx); err == nil {
+		t.Fatal("Drain() error = nil, want failed task error")
 	}
 
 	if exec.calls != 4 {
 		t.Fatalf("executor calls = %d, want initial + 3 retries", exec.calls)
 	}
-	if runs.rows[len(runs.rows)-1].Status != domain.RunStatusFailed {
-		t.Fatalf("final run = %+v", runs.rows[len(runs.rows)-1])
+	if len(*logs) == 0 || !strings.Contains((*logs)[len(*logs)-1], "status="+domain.RunStatusFailed) {
+		t.Fatalf("final log = %+v", *logs)
 	}
 }
 
 func TestNonRetryableErrorRecordsFailureAndNextTaskContinues(t *testing.T) {
 	ctx := context.Background()
 	exec := &fakeExecutor{nonRetryableOnce: true}
-	runs := &recordingRuns{}
-	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec, runs)
+	logs := captureRunLogs(t)
+	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
 	t0 := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
 
 	svc.Enqueue(ctx, taskAt(t0))
-	if err := svc.Drain(ctx); err != nil {
-		t.Fatalf("Drain(first) error = %v", err)
+	if err := svc.Drain(ctx); err == nil {
+		t.Fatal("Drain(first) error = nil, want failed task error")
 	}
 	svc.Enqueue(ctx, taskAt(t0.Add(time.Minute)))
 	if err := svc.Drain(ctx); err != nil {
 		t.Fatalf("Drain(second) error = %v", err)
 	}
 
-	if len(runs.rows) != 2 {
-		t.Fatalf("run rows = %+v", runs.rows)
+	if len(*logs) != 2 {
+		t.Fatalf("run logs = %+v", *logs)
 	}
-	if runs.rows[0].Status != domain.RunStatusFailed {
-		t.Fatalf("first row = %+v", runs.rows[0])
+	if !strings.Contains((*logs)[0], "status="+domain.RunStatusFailed) {
+		t.Fatalf("first log = %s", (*logs)[0])
 	}
-	if runs.rows[1].Status != domain.RunStatusSucceeded {
-		t.Fatalf("second row = %+v", runs.rows[1])
+	if !strings.Contains((*logs)[1], "status="+domain.RunStatusSucceeded) {
+		t.Fatalf("second log = %s", (*logs)[1])
 	}
 }
 
@@ -120,7 +121,7 @@ func TestDrainStopsBeforeNextTaskWhenContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	exec := &cancelOnFirstExecutor{cancel: cancel}
-	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec, &recordingRuns{})
+	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
 	t0 := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
 
 	first := taskAt(t0)
@@ -149,7 +150,7 @@ func TestConcurrentDrainWaitRespectsContext(t *testing.T) {
 		started: make(chan struct{}, 1),
 		release: make(chan struct{}),
 	}
-	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec, &recordingRuns{})
+	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
 	svc.Enqueue(ctx, taskAt(time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)))
 
 	firstDone := make(chan error, 1)
@@ -263,11 +264,15 @@ func (f *blockingExecutor) Execute(ctx context.Context, task *engine.FactorTask,
 
 func (f *blockingExecutor) Close() error { return nil }
 
-type recordingRuns struct {
-	rows []domain.FactorRun
-}
-
-func (r *recordingRuns) Insert(_ context.Context, run domain.FactorRun) error {
-	r.rows = append(r.rows, run)
-	return nil
+func captureRunLogs(t *testing.T) *[]string {
+	t.Helper()
+	var lines []string
+	old := logRun
+	logRun = func(_ context.Context, line string) {
+		lines = append(lines, line)
+	}
+	t.Cleanup(func() {
+		logRun = old
+	})
+	return &lines
 }

@@ -30,7 +30,6 @@ scheduler:
   debounce_window_ms: 2000
   max_retry: 3
   reconcile_interval_min: 10
-  runs_retention_days: 7
 
 instance:
   instance_id: factor-01

@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Config controls scheduler execution.
@@ -25,11 +26,6 @@ type StorageIO interface {
 	WriteFactorPatch(ctx context.Context, task *engine.FactorTask, frame *engine.DataFrame, result *engine.FactorResult) error
 }
 
-// RunRecorder stores terminal run records.
-type RunRecorder interface {
-	Insert(ctx context.Context, run domain.FactorRun) error
-}
-
 // Status is a lightweight runtime snapshot for RPC/management pages.
 type Status struct {
 	QueueDepth        int
@@ -42,7 +38,6 @@ type Service struct {
 	cfg               Config
 	storage           StorageIO
 	exec              engine.Executor
-	runs              RunRecorder
 	drainMu           sync.Mutex
 	mu                sync.Mutex
 	queues            [][]queueItem
@@ -51,8 +46,12 @@ type Service struct {
 	writebackFailures atomic.Int64
 }
 
+var logRun = func(ctx context.Context, line string) {
+	log.InfoContextf(ctx, "%s", line)
+}
+
 // NewService creates a scheduler.
-func NewService(cfg Config, storage StorageIO, exec engine.Executor, runs RunRecorder) *Service {
+func NewService(cfg Config, storage StorageIO, exec engine.Executor) *Service {
 	if cfg.Workers <= 0 {
 		cfg.Workers = 1
 	}
@@ -63,7 +62,6 @@ func NewService(cfg Config, storage StorageIO, exec engine.Executor, runs RunRec
 		cfg:     cfg,
 		storage: storage,
 		exec:    exec,
-		runs:    runs,
 		queues:  make([][]queueItem, cfg.Workers),
 		pending: map[taskKey]Task{},
 	}
@@ -77,14 +75,14 @@ func (s *Service) Enqueue(ctx context.Context, task Task) {
 	if old, ok := s.pending[key]; ok {
 		if task.BarTime.After(old.BarTime) || task.BarTime.Equal(old.BarTime) {
 			s.supersedeCount.Add(1)
-			_ = s.record(ctx, old, domain.RunStatusSuperseded, "superseded by newer bar", 0)
+			_ = s.record(ctx, old, domain.RunStatusSuperseded, "superseded by newer bar", 0, nil)
 			s.pending[key] = task
 			shard := HashSubject(task.SubjectID, s.cfg.Workers)
 			s.queues[shard] = append(s.queues[shard], queueItem{task: task})
 			return
 		}
 		s.supersedeCount.Add(1)
-		_ = s.record(ctx, task, domain.RunStatusSuperseded, "older than pending task", 0)
+		_ = s.record(ctx, task, domain.RunStatusSuperseded, "older than pending task", 0, nil)
 		return
 	}
 	s.pending[key] = task
@@ -100,13 +98,21 @@ func (s *Service) Drain(ctx context.Context) error {
 	}
 	defer s.drainMu.Unlock()
 
+	failed := 0
+	var firstErr error
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		item, ok := s.popNext()
 		if !ok {
-			return nil
+			if failed == 0 {
+				return nil
+			}
+			if failed == 1 {
+				return firstErr
+			}
+			return fmt.Errorf("%d factor task(s) failed: %w", failed, firstErr)
 		}
 		key := keyOf(item.task)
 		s.mu.Lock()
@@ -117,7 +123,12 @@ func (s *Service) Drain(ctx context.Context) error {
 		}
 		delete(s.pending, key)
 		s.mu.Unlock()
-		s.executeWithRetry(ctx, item.task)
+		if err := s.executeWithRetry(ctx, item.task); err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -156,20 +167,28 @@ func (s *Service) popNext() (queueItem, bool) {
 	return queueItem{}, false
 }
 
-func (s *Service) executeWithRetry(ctx context.Context, task Task) {
+func (s *Service) executeWithRetry(ctx context.Context, task Task) error {
 	var lastErr error
 	for attempt := 0; attempt <= s.cfg.MaxRetry; attempt++ {
 		elapsed, err := s.executeOnce(ctx, task)
 		if err == nil {
-			_ = s.record(ctx, task, domain.RunStatusSucceeded, "", elapsed)
-			return
+			_ = s.record(ctx, task, domain.RunStatusSucceeded, "", elapsed, nil)
+			return nil
 		}
 		lastErr = err
 		if !isRetryable(err) {
 			break
 		}
 	}
-	_ = s.record(ctx, task, domain.RunStatusFailed, lastErr.Error(), 0)
+	errMsg := ""
+	if lastErr != nil {
+		errMsg = lastErr.Error()
+	}
+	_ = s.record(ctx, task, domain.RunStatusFailed, errMsg, 0, lastErr)
+	if lastErr == nil {
+		return fmt.Errorf("factor task %s failed", task.TaskID)
+	}
+	return fmt.Errorf("factor task %s failed: %w", task.TaskID, lastErr)
 }
 
 func (s *Service) executeOnce(ctx context.Context, task Task) (int64, error) {
@@ -236,24 +255,29 @@ func (s *Service) Status() Status {
 	}
 }
 
-func (s *Service) record(ctx context.Context, task Task, status string, errMsg string, elapsedMS int64) error {
-	if s.runs == nil {
-		return nil
-	}
-	return s.runs.Insert(ctx, domain.FactorRun{
-		RunID:         fmt.Sprintf("%s-%s-%d", task.TaskID, status, time.Now().UnixNano()),
-		TriggerType:   task.TriggerType,
-		SpaceID:       task.SpaceID,
-		SourceDataset: task.SourceDataset,
-		TargetDataset: task.TargetDataset,
-		SubjectID:     task.SubjectID,
-		Freq:          task.Freq,
-		BarTime:       task.BarTime.UTC().Format(time.RFC3339),
-		FactorCount:   len(task.Factors),
-		Status:        status,
-		Error:         errMsg,
-		ElapsedMS:     elapsedMS,
+func (s *Service) record(ctx context.Context, task Task, status string, errMsg string, elapsedMS int64, err error) error {
+	logRun(ctx, fmt.Sprintf("factor_run_done task_id=%s trigger_type=%s space_id=%s source_dataset=%s target_dataset=%s subject_id=%s freq=%s bar_time=%s factor_count=%d status=%s elapsed_ms=%d error=%q",
+		task.TaskID, task.TriggerType, task.SpaceID, task.SourceDataset, task.TargetDataset, task.SubjectID, task.Freq,
+		task.BarTime.UTC().Format(time.RFC3339), len(task.Factors), status, elapsedMS, errMsg))
+	s.notifyCompletion(ctx, task, TaskResult{
+		TaskID:       task.TaskID,
+		Status:       status,
+		Error:        err,
+		ErrorMessage: errMsg,
+		ElapsedMS:    elapsedMS,
 	})
+	return nil
+}
+
+func (s *Service) notifyCompletion(ctx context.Context, task Task, result TaskResult) {
+	if task.Completion == nil {
+		return
+	}
+	select {
+	case task.Completion <- result:
+	default:
+		log.WarnContextf(ctx, "factor task completion dropped task_id=%s status=%s", result.TaskID, result.Status)
+	}
 }
 
 func isRetryable(err error) bool {

@@ -75,24 +75,6 @@ func bindingFromPB(pb *factorpb.FactorBinding) domain.FactorBinding {
 	}
 }
 
-func runToPB(r domain.FactorRun) *factorpb.FactorRun {
-	return &factorpb.FactorRun{
-		RunId:         r.RunID,
-		TriggerType:   r.TriggerType,
-		SpaceId:       r.SpaceID,
-		SourceDataset: r.SourceDataset,
-		TargetDataset: r.TargetDataset,
-		SubjectId:     r.SubjectID,
-		Freq:          r.Freq,
-		BarTime:       r.BarTime,
-		FactorCount:   int32(r.FactorCount),
-		Status:        r.Status,
-		Error:         r.Error,
-		ElapsedMs:     r.ElapsedMS,
-		CreatedAt:     formatTime(r.CreateTime),
-	}
-}
-
 func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""

@@ -91,13 +91,11 @@ assert(collectorViews.sort < collectorRules.sort, 'data views must appear before
 
 const factorDefinitions = findMenu('factor-definitions');
 const factorBindings = findMenu('factor-bindings');
-const factorRuns = findMenu('factor-runs');
 const factorResults = findMenu('factor-results');
 assert(factorDefinitions.parentId === factorCompute.id, 'factor-definitions must be under factor compute');
 assert(factorBindings.parentId === factorCompute.id, 'factor-bindings must be under factor compute');
-assert(factorRuns.parentId === factorCompute.id, 'factor-runs must be under factor compute');
 assert(factorResults.parentId === factorCompute.id, 'factor-results must be under factor compute');
-assert(factorRuns.sort < factorResults.sort, 'factor results must appear after run records');
+assert(factorBindings.sort < factorResults.sort, 'factor results must appear after factor bindings');
 
 assertNotVisible('data-modeling');
 assertNotVisible('data-mgmt');

@@ -48,7 +48,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	authInfo := factorAuthInfo(cfg)
 	factorRepo := repository.NewFactorRepository(dbm.DB())
-	runRepo := repository.NewRunRepository(dbm.DB())
 	meta := registry.NewMetadataSync(newMetadataClient(cfg.Storage.MetadataTarget), authInfo)
 	_ = registry.NewService(factorRepo, meta, registry.Options{FactorsDir: cfg.Engine.FactorsDir})
 
@@ -71,7 +70,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	sched := scheduler.NewService(scheduler.Config{
 		Workers:  cfg.Engine.Workers,
 		MaxRetry: cfg.Scheduler.MaxRetry,
-	}, storage, pool, runRepo)
+	}, storage, pool)
 
 	bindings, err := listEnabledBindings(ctx, dbm.DB())
 	if err != nil {
@@ -104,7 +103,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			debounceWindow: time.Duration(cfg.Scheduler.DebounceWindowMS) * time.Millisecond,
 		})
 	}
-	startRunsRetentionLoop(ctx, runRepo, cfg.Scheduler.RunsRetentionDays)
 	registerReconcileSchedule(s, sched)
 
 	service := s.Service("trpc.moox.factor.FactorMgr")
@@ -353,29 +351,4 @@ func paramsFromJSON(raw string) ([]int, error) {
 		return nil, err
 	}
 	return params, nil
-}
-
-func startRunsRetentionLoop(ctx context.Context, cleaner scheduler.RunCleaner, retentionDays int) {
-	if retentionDays <= 0 {
-		return
-	}
-	go func() {
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case now := <-ticker.C:
-				deleted, err := scheduler.CleanupRuns(ctx, cleaner, now, retentionDays)
-				if err != nil {
-					log.WarnContextf(ctx, "清理 factor run 记录失败: %v", err)
-					continue
-				}
-				if deleted > 0 {
-					log.InfoContextf(ctx, "已清理 factor run 记录: %d", deleted)
-				}
-			}
-		}
-	}()
 }

@@ -78,7 +78,7 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 	}
 
 	// 6. 记录操作日志
-	s.recordUserAction(ctx, userID, model.ActionRegister, "", "用户注册成功", "", "", "success")
+	s.logUserAction(ctx, userID, model.ActionRegister, "", "用户注册成功", "", "", "success")
 
 	log.InfoContextf(ctx, "[Auth] 用户注册成功: %s", userID)
 	return &pb.RegisterRsp{
@@ -133,7 +133,7 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 	}
 
 	// 记录操作日志
-	s.recordUserAction(ctx, currentUserID, model.ActionGetUserInfo, targetUserID, "获取用户信息", "", "", "success")
+	s.logUserAction(ctx, currentUserID, model.ActionGetUserInfo, targetUserID, "获取用户信息", "", "", "success")
 
 	// 构造用户信息（安全转义）
 	userInfo := authutils.BuildSafeUserInfo(user)
@@ -221,7 +221,7 @@ func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUser
 	}
 
 	// 记录操作日志
-	s.recordUserAction(ctx, user.UserID, model.ActionUpdateProfile, "", "更新用户信息", "", "", "success")
+	s.logUserAction(ctx, user.UserID, model.ActionUpdateProfile, "", "更新用户信息", "", "", "success")
 
 	return &pb.UpdateUserInfoRsp{
 		RetInfo: &pb.RetInfo{

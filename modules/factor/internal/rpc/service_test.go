@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
@@ -117,25 +117,9 @@ func TestUpsertBindingSuccess(t *testing.T) {
 	}
 }
 
-func TestListFactorRunsReturnsPageResult(t *testing.T) {
+func TestListFactorRunsReturnsEmptyPageWithoutPersistentRunStore(t *testing.T) {
 	ctx := context.Background()
-	svc := newRPCTestService(t)
-	for i := 0; i < 2; i++ {
-		if err := svc.runs.Insert(ctx, domain.FactorRun{
-			RunID:         "run-" + string(rune('a'+i)),
-			TriggerType:   "event",
-			SpaceID:       "crypto",
-			SourceDataset: "binance_spot_kline",
-			TargetDataset: "binance_spot_factor",
-			SubjectID:     "BTC-USDT",
-			Freq:          "1m",
-			BarTime:       time.Date(2026, 7, 6, 9, 15+i, 0, 0, time.UTC).Format(time.RFC3339),
-			FactorCount:   1,
-			Status:        domain.RunStatusSucceeded,
-		}); err != nil {
-			t.Fatalf("insert run: %v", err)
-		}
-	}
+	svc := New(openEmptyRPCTestDB(t))
 
 	rsp, err := svc.ListFactorRuns(ctx, &factorpb.ListFactorRunsReq{
 		SpaceId:       "crypto",
@@ -145,9 +129,21 @@ func TestListFactorRunsReturnsPageResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListFactorRuns() error = %v", err)
 	}
-	if len(rsp.GetRuns()) != 1 || rsp.GetPageResult().GetTotal() != 2 || !rsp.GetPageResult().GetHasMore() {
+	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("ret = %+v", rsp.GetRetInfo())
+	}
+	if len(rsp.GetRuns()) != 0 || rsp.GetPageResult().GetTotal() != 0 || rsp.GetPageResult().GetHasMore() {
 		t.Fatalf("runs/page = %d/%+v", len(rsp.GetRuns()), rsp.GetPageResult())
 	}
+}
+
+func openEmptyRPCTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open empty db: %v", err)
+	}
+	return db
 }
 
 func TestRecalcFactorEnqueuesSchedulerTask(t *testing.T) {
@@ -215,6 +211,67 @@ func TestRecalcFactorEnqueuesSchedulerTask(t *testing.T) {
 	}
 }
 
+func TestRecalcProgressUsesOwnTaskResultsWhenAnotherDrainRuns(t *testing.T) {
+	ctx := context.Background()
+	sched := newExternallyDrainedScheduler(fmt.Errorf("external task failed"))
+	externalDone := make(chan error, 1)
+	go func() {
+		externalDone <- sched.Drain(ctx)
+	}()
+	select {
+	case <-sched.externalStarted:
+	case <-time.After(time.Second):
+		t.Fatal("external drain did not start")
+	}
+
+	svc := NewWithRuntime(openRPCTestDB(t), sched, nil, WithFactorsDir(t.TempDir()))
+	_, err := svc.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
+		FactorId:      "bias",
+		Name:          "Bias",
+		SourceCode:    "def signal(df, n, column): return df\n",
+		ParamsJson:    "[20]",
+		LookbackBars:  200,
+		WritebackBars: 5,
+		Status:        "enabled",
+	}})
+	if err != nil {
+		t.Fatalf("CreateFactor() error = %v", err)
+	}
+	_, err = svc.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: &factorpb.FactorBinding{
+		FactorId:      "bias",
+		SpaceId:       "crypto",
+		SourceDataset: "binance_spot_kline",
+		Freq:          "1m",
+		TargetDataset: "binance_spot_factor",
+		Status:        "enabled",
+	}})
+	if err != nil {
+		t.Fatalf("UpsertBinding() error = %v", err)
+	}
+
+	rsp, err := svc.RecalcFactor(ctx, &factorpb.RecalcFactorReq{
+		SpaceId:       "crypto",
+		SourceDataset: "binance_spot_kline",
+		SubjectId:     "BTC-USDT",
+		Freq:          "1m",
+		EndTime:       "2026-07-06T09:15:00Z",
+	})
+	if err != nil {
+		t.Fatalf("RecalcFactor() error = %v", err)
+	}
+	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("ret = %+v", rsp.GetRetInfo())
+	}
+	close(sched.releaseExternal)
+	if err := <-externalDone; err == nil {
+		t.Fatal("external Drain() error = nil, want failure")
+	}
+	progress := waitRecalcProgress(t, ctx, svc, rsp.GetRecalcId())
+	if progress.GetStatus() != "failed: external task failed" || progress.GetFinished() != 1 {
+		t.Fatalf("progress = %+v", progress)
+	}
+}
+
 func TestRecalcFactorRejectsStartTimeRange(t *testing.T) {
 	svc := NewWithRuntime(openRPCTestDB(t), newFakeRPCScheduler(), nil, WithFactorsDir(t.TempDir()))
 
@@ -261,10 +318,90 @@ func (f *fakeRPCScheduler) Enqueue(_ context.Context, task scheduler.Task) {
 }
 
 func (f *fakeRPCScheduler) Drain(context.Context) error {
+	f.mu.Lock()
+	tasks := append([]scheduler.Task(nil), f.tasks...)
+	f.mu.Unlock()
+	for _, task := range tasks {
+		if task.Completion != nil {
+			task.Completion <- scheduler.TaskResult{TaskID: task.TaskID, Status: "succeeded"}
+		}
+	}
 	f.once.Do(func() {
 		close(f.done)
 	})
 	return nil
+}
+
+type externallyDrainedScheduler struct {
+	mu              sync.Mutex
+	drainMu         sync.Mutex
+	externalStarted chan struct{}
+	releaseExternal chan struct{}
+	failErr         error
+	tasks           []scheduler.Task
+	drains          int
+}
+
+func newExternallyDrainedScheduler(failErr error) *externallyDrainedScheduler {
+	return &externallyDrainedScheduler{
+		externalStarted: make(chan struct{}),
+		releaseExternal: make(chan struct{}),
+		failErr:         failErr,
+	}
+}
+
+func (s *externallyDrainedScheduler) Status() scheduler.Status {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return scheduler.Status{QueueDepth: len(s.tasks)}
+}
+
+func (s *externallyDrainedScheduler) Enqueue(_ context.Context, task scheduler.Task) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tasks = append(s.tasks, task)
+}
+
+func (s *externallyDrainedScheduler) Drain(context.Context) error {
+	s.drainMu.Lock()
+	defer s.drainMu.Unlock()
+	s.drains++
+	if s.drains == 1 {
+		close(s.externalStarted)
+		<-s.releaseExternal
+		s.mu.Lock()
+		tasks := append([]scheduler.Task(nil), s.tasks...)
+		s.tasks = nil
+		s.mu.Unlock()
+		for _, task := range tasks {
+			if task.Completion != nil {
+				task.Completion <- scheduler.TaskResult{TaskID: task.TaskID, Status: "failed", Error: s.failErr}
+			}
+		}
+		return s.failErr
+	}
+	return nil
+}
+
+func waitRecalcProgress(t *testing.T, ctx context.Context, svc *Service, recalcID string) *factorpb.GetRecalcProgressRsp {
+	t.Helper()
+	deadline := time.After(time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		progress, err := svc.GetRecalcProgress(ctx, &factorpb.GetRecalcProgressReq{RecalcId: recalcID})
+		if err != nil {
+			t.Fatalf("GetRecalcProgress() error = %v", err)
+		}
+		if progress.GetStatus() != "running" && progress.GetStatus() != "queued" {
+			return progress
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("recalc progress did not finish: %+v", progress)
+		case <-tick.C:
+		}
+	}
 }
 
 func openRPCTestDB(t *testing.T) *gorm.DB {

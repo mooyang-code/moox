@@ -83,12 +83,6 @@ export const staticRoutes = [
         meta: { title: "factor-bindings" }
       },
       {
-        path: "/factor/runs",
-        name: "factor-runs",
-        component: () => import("@/views/factor/runs/index.vue"),
-        meta: { title: "factor-runs" }
-      },
-      {
         path: "/factor/results",
         name: "factor-results",
         component: () => import("@/views/factor/results/index.vue"),

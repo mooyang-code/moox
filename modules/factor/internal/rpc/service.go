@@ -60,7 +60,6 @@ type Service struct {
 	db         *gorm.DB
 	factors    *repository.FactorRepository
 	bindings   *repository.BindingRepository
-	runs       *repository.RunRepository
 	scheduler  schedulerRuntime
 	engine     engineStatusProvider
 	factorsDir string
@@ -80,7 +79,6 @@ func NewWithRuntime(db *gorm.DB, sched schedulerRuntime, eng engineStatusProvide
 		db:         db,
 		factors:    repository.NewFactorRepository(db),
 		bindings:   repository.NewBindingRepository(db),
-		runs:       repository.NewRunRepository(db),
 		scheduler:  sched,
 		engine:     eng,
 		factorsDir: "./factors",
@@ -242,33 +240,8 @@ func (s *Service) DeleteBinding(ctx context.Context, req *factorpb.DeleteBinding
 }
 
 func (s *Service) ListFactorRuns(ctx context.Context, req *factorpb.ListFactorRunsReq) (*factorpb.ListFactorRunsRsp, error) {
-	filter := repository.RunScopeFilter{
-		SpaceID:       req.GetSpaceId(),
-		SourceDataset: req.GetSourceDataset(),
-		SubjectID:     req.GetSubjectId(),
-		Freq:          req.GetFreq(),
-		Status:        req.GetStatus(),
-	}
 	page, size := pageParams(req.GetPage())
-	rows, err := s.runs.ListByScope(ctx, repository.RunScopeFilter{
-		SpaceID:       filter.SpaceID,
-		SourceDataset: filter.SourceDataset,
-		SubjectID:     filter.SubjectID,
-		Freq:          filter.Freq,
-		Status:        filter.Status,
-	}, repository.Page{Page: int(page), PageSize: int(size)})
-	if err != nil {
-		return &factorpb.ListFactorRunsRsp{RetInfo: inner(err)}, nil
-	}
-	total, err := s.runs.CountByScope(ctx, filter)
-	if err != nil {
-		return &factorpb.ListFactorRunsRsp{RetInfo: inner(err)}, nil
-	}
-	out := make([]*factorpb.FactorRun, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, runToPB(row))
-	}
-	return &factorpb.ListFactorRunsRsp{RetInfo: success(), Runs: out, PageResult: pageResult(page, size, total)}, nil
+	return &factorpb.ListFactorRunsRsp{RetInfo: success(), Runs: []*factorpb.FactorRun{}, PageResult: pageResult(page, size, 0)}, nil
 }
 
 func (s *Service) GetEngineStatus(context.Context, *factorpb.GetEngineStatusReq) (*factorpb.GetEngineStatusRsp, error) {

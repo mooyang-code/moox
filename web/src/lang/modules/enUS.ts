@@ -35,7 +35,6 @@ export default {
     ["factor-compute"]: "factor compute",
     ["factor-definitions"]: "factor definitions",
     ["factor-bindings"]: "bindings",
-    ["factor-runs"]: "runs",
     ["factor-results"]: "factor results",
     ["data-views"]: "views",
     ["data-view-list"]: "view list",

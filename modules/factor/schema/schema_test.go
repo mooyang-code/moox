@@ -11,15 +11,23 @@ func TestAllSQLContainsFactorSchemaObjects(t *testing.T) {
 	for _, want := range []string{
 		"CREATE TABLE IF NOT EXISTS t_factor_defs",
 		"CREATE TABLE IF NOT EXISTS t_factor_bindings",
-		"CREATE TABLE IF NOT EXISTS t_factor_runs",
 		"idx_factor_bindings_unique",
 		"idx_factor_bindings_source",
-		"idx_factor_runs_scope_time",
 		"update_factor_defs_mtime",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("AllSQL() missing %q", want)
 		}
+	}
+}
+
+func TestAllSQLDropsLegacyFactorRunTable(t *testing.T) {
+	sql := AllSQL()
+	if strings.Contains(sql, "CREATE TABLE IF NOT EXISTS t_factor_runs") {
+		t.Fatal("factor schema must not recreate t_factor_runs")
+	}
+	if !strings.Contains(sql, "DROP TABLE IF EXISTS t_factor_runs") {
+		t.Fatal("factor schema must drop legacy t_factor_runs")
 	}
 }
 

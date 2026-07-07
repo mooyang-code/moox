@@ -64,7 +64,6 @@ type SchedulerConfig struct {
 	DebounceWindowMS     int `yaml:"debounce_window_ms"`
 	MaxRetry             int `yaml:"max_retry"`
 	ReconcileIntervalMin int `yaml:"reconcile_interval_min"`
-	RunsRetentionDays    int `yaml:"runs_retention_days"`
 }
 
 // InstanceConfig identifies a factor process in multi-instance deployments.
@@ -144,7 +143,6 @@ func Default() *Config {
 			DebounceWindowMS:     2000,
 			MaxRetry:             3,
 			ReconcileIntervalMin: 10,
-			RunsRetentionDays:    7,
 		},
 		Instance: InstanceConfig{
 			InstanceID:          "factor-01",
@@ -227,9 +225,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Scheduler.ReconcileIntervalMin == 0 {
 		c.Scheduler.ReconcileIntervalMin = 10
-	}
-	if c.Scheduler.RunsRetentionDays == 0 {
-		c.Scheduler.RunsRetentionDays = 7
 	}
 	if c.Instance.InstanceID == "" {
 		c.Instance.InstanceID = "factor-01"

@@ -8,8 +8,6 @@ import type {
   ListBindingsRsp,
   ListFactorsReq,
   ListFactorsRsp,
-  ListRunsReq,
-  ListRunsRsp,
   RecalcFactorReq,
   RecalcProgress,
 } from './types';
@@ -50,10 +48,6 @@ export function listFactorBindings(params: ListBindingsReq) {
 
 export function deleteFactorBinding(binding_id: string) {
   return callFactor<{ binding_id: string }, FactorRetRsp>('DeleteBinding', { binding_id });
-}
-
-export function listFactorRuns(params: ListRunsReq) {
-  return callFactor<ListRunsReq, FactorRetRsp<ListRunsRsp>>('ListFactorRuns', params);
 }
 
 export function recalcFactor(params: RecalcFactorReq) {

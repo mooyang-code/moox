@@ -18,6 +18,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
@@ -37,7 +38,6 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	}
 
 	factorRepo := repository.NewFactorRepository(db)
-	runRepo := repository.NewRunRepository(db)
 	factors, err := factorRepo.ListEnabledTimeseries(ctx)
 	if err != nil {
 		return err
@@ -64,7 +64,7 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		Freq:          cfg.Freq,
 	}, task.LookbackBars, cfg.BarTime, inputColumns(task.Factors))
 	if err != nil {
-		_, _ = insertRun(ctx, runRepo, task, domain.RunStatusFailed, err.Error(), 0)
+		logRunOnce(ctx, task, domain.RunStatusFailed, err.Error(), 0)
 		return err
 	}
 
@@ -78,25 +78,22 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		MaxFrameBytes: 64 << 20,
 	})
 	if err != nil {
-		_, _ = insertRun(ctx, runRepo, task, domain.RunStatusFailed, err.Error(), 0)
+		logRunOnce(ctx, task, domain.RunStatusFailed, err.Error(), 0)
 		return err
 	}
 	defer exec.Close()
 
 	result, err := exec.Execute(ctx, task, frame)
 	if err != nil {
-		_, _ = insertRun(ctx, runRepo, task, domain.RunStatusFailed, err.Error(), 0)
+		logRunOnce(ctx, task, domain.RunStatusFailed, err.Error(), 0)
 		return err
 	}
 	if err := storageClient.WriteFactorPatch(ctx, task, frame, result); err != nil {
-		_, _ = insertRun(ctx, runRepo, task, domain.RunStatusFailed, err.Error(), result.ElapsedMS)
+		logRunOnce(ctx, task, domain.RunStatusFailed, err.Error(), result.ElapsedMS)
 		return err
 	}
-	runID, err := insertRun(ctx, runRepo, task, domain.RunStatusSucceeded, "", result.ElapsedMS)
-	if err != nil {
-		return err
-	}
-	return json.NewEncoder(out).Encode(map[string]any{"ok": true, "run_id": runID, "factor_count": len(factors), "elapsed_ms": result.ElapsedMS})
+	logRunOnce(ctx, task, domain.RunStatusSucceeded, "", result.ElapsedMS)
+	return json.NewEncoder(out).Encode(runOncePayload(task, domain.RunStatusSucceeded, len(factors), result.ElapsedMS))
 }
 
 func buildTask(cfg cliConfig, factors []domain.FactorDef) *engine.FactorTask {
@@ -170,22 +167,20 @@ func mustParseParams(raw string) []int {
 	return params
 }
 
-func insertRun(ctx context.Context, repo *repository.RunRepository, task *engine.FactorTask, status string, errMsg string, elapsedMS int64) (string, error) {
-	runID := fmt.Sprintf("%s-%s", task.TaskID, status)
-	return runID, repo.Insert(ctx, domain.FactorRun{
-		RunID:         runID,
-		TriggerType:   "manual",
-		SpaceID:       task.SpaceID,
-		SourceDataset: task.SourceDataset,
-		TargetDataset: task.TargetDataset,
-		SubjectID:     task.SubjectID,
-		Freq:          task.Freq,
-		BarTime:       task.BarTime.UTC().Format(time.RFC3339),
-		FactorCount:   len(task.Factors),
-		Status:        status,
-		Error:         errMsg,
-		ElapsedMS:     elapsedMS,
-	})
+func logRunOnce(ctx context.Context, task *engine.FactorTask, status string, errMsg string, elapsedMS int64) {
+	log.InfoContextf(ctx, "factor_run_done task_id=%s trigger_type=manual space_id=%s source_dataset=%s target_dataset=%s subject_id=%s freq=%s bar_time=%s factor_count=%d status=%s elapsed_ms=%d error=%q",
+		task.TaskID, task.SpaceID, task.SourceDataset, task.TargetDataset, task.SubjectID, task.Freq,
+		task.BarTime.UTC().Format(time.RFC3339), len(task.Factors), status, elapsedMS, errMsg)
+}
+
+func runOncePayload(task *engine.FactorTask, status string, factorCount int, elapsedMS int64) map[string]any {
+	return map[string]any{
+		"ok":           status == domain.RunStatusSucceeded,
+		"task_id":      task.TaskID,
+		"run_id":       fmt.Sprintf("%s-%s", task.TaskID, status),
+		"factor_count": factorCount,
+		"elapsed_ms":   elapsedMS,
+	}
 }
 
 func serviceAuth(cfg *control.Config) *commonpb.AuthInfo {
