@@ -127,6 +127,9 @@ func TestMetadataSyncOrderAndPayload(t *testing.T) {
 	if got := client.datasetReqs[0].GetDataset().GetDataSourceId(); got != "binance" {
 		t.Fatalf("data source id = %q", got)
 	}
+	if got := client.factorReqs[0].GetFactor().GetStatus(); got != "active" {
+		t.Fatalf("factor metadata status = %q, want active", got)
+	}
 	if got := client.datasetReqs[0].GetDataset().GetName(); got == "" || got == "因子结果" || len([]rune(got)) > 10 || !strings.Contains(got, "因子") {
 		t.Fatalf("dataset name = %q", got)
 	}
@@ -145,6 +148,45 @@ func TestMetadataSyncOrderAndPayload(t *testing.T) {
 		if col.GetAttributes()["display_name"] == "" {
 			t.Fatalf("missing display name: %+v", col.GetAttributes())
 		}
+	}
+}
+
+func TestMetadataSyncOnlyTreatsDuplicateConstraintAsDuplicate(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want bool
+	}{
+		{name: "unique constraint", msg: "UNIQUE constraint failed: t_factors.c_space_id, t_factors.c_factor_id", want: true},
+		{name: "already exists", msg: "dataset already exists", want: true},
+		{name: "check constraint", msg: "constraint failed: CHECK constraint failed: c_status IN ('active', 'disabled')", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ret := &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: tt.msg}
+			if got := isDuplicateRet(ret); got != tt.want {
+				t.Fatalf("isDuplicateRet(%q) = %v, want %v", tt.msg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStorageFactorStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+		want   string
+	}{
+		{name: "enabled", status: domain.FactorStatusEnabled, want: "active"},
+		{name: "disabled", status: domain.FactorStatusDisabled, want: "disabled"},
+		{name: "empty", status: "", want: "active"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := storageFactorStatus(tt.status); got != tt.want {
+				t.Fatalf("storageFactorStatus(%q) = %q, want %q", tt.status, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -172,12 +214,14 @@ func TestMetadataSyncUsesSourceDatasetDataSourceID(t *testing.T) {
 type recordingMetadataClient struct {
 	calls          []string
 	sourceDatasets map[string]string
+	factorReqs     []*storagepb.CreateFactorReq
 	datasetReqs    []*storagepb.CreateDatasetReq
 	columnReqs     []*storagepb.UpsertDatasetColumnReq
 }
 
 func (c *recordingMetadataClient) CreateFactor(_ context.Context, req *storagepb.CreateFactorReq) (*storagepb.CreateFactorRsp, error) {
 	c.calls = append(c.calls, "CreateFactor:"+req.GetFactor().GetFactorId())
+	c.factorReqs = append(c.factorReqs, req)
 	return &storagepb.CreateFactorRsp{RetInfo: successRet(), Factor: req.GetFactor()}, nil
 }
 

@@ -89,7 +89,7 @@ func (s *MetadataSync) createFactor(ctx context.Context, spaceID string, factor 
 			Algorithm:  factor.Name,
 			ParamsJson: factor.ParamsJSON,
 			ValueType:  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-			Status:     "enabled",
+			Status:     storageFactorStatus(factor.Status),
 		},
 	}
 	rsp, err := s.client.CreateFactor(ctx, req)
@@ -279,8 +279,7 @@ func isDuplicateRet(ret *commonpb.RetInfo) bool {
 	msg := strings.ToLower(ret.GetMsg())
 	return strings.Contains(msg, "duplicate") ||
 		strings.Contains(msg, "already exists") ||
-		strings.Contains(msg, "unique constraint") ||
-		strings.Contains(msg, "constraint failed")
+		strings.Contains(msg, "unique constraint")
 }
 
 func retInfoError(op string, ret *commonpb.RetInfo) error {
@@ -288,4 +287,11 @@ func retInfoError(op string, ret *commonpb.RetInfo) error {
 		return nil
 	}
 	return fmt.Errorf("%s failed: code=%d msg=%s", op, ret.GetCode(), ret.GetMsg())
+}
+
+func storageFactorStatus(status string) string {
+	if strings.TrimSpace(status) == domain.FactorStatusDisabled {
+		return "disabled"
+	}
+	return "active"
 }
