@@ -58,7 +58,7 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 		PasswordHash: passwordHash,
 		Salt:         passwordSalt,
 		Status:       int32(pb.UserStatus_USER_STATUS_ACTIVE), // 默认激活状态
-		Role:         int32(pb.UserRole_USER_ROLE_ADMIN),    // 默认管理员角色
+		Role:         int32(pb.UserRole_USER_ROLE_ADMIN),      // 默认管理员角色
 	}
 
 	// 如果没有提供昵称，使用用户名作为昵称
@@ -95,8 +95,8 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoReq) (*pb.GetUserInfoRsp, error) {
 	log.InfoContextf(ctx, "[Auth] # GetUserInfo enter:%+v", req)
 
-	// 从HTTP header获取用户信息（网关中间件已验证）
-	currentUserID, _, role, err := authutils.GetUserInfoFromCtx(ctx)
+	// 优先使用网关注入的用户上下文；兼容网关纯 HTTP 转发时仅在请求体传入 access_token 的场景。
+	currentUserID, _, role, err := s.getUserInfoCaller(ctx, req)
 	if err != nil {
 		return &pb.GetUserInfoRsp{
 			RetInfo: &pb.RetInfo{
@@ -145,6 +145,27 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 		},
 		UserInfo: userInfo,
 	}, nil
+}
+
+func (s *AuthServiceImpl) getUserInfoCaller(ctx context.Context, req *pb.GetUserInfoReq) (userID string, username string, role int32, err error) {
+	userID, username, role, err = authutils.GetUserInfoFromCtx(ctx)
+	if err == nil {
+		return userID, username, role, nil
+	}
+	if req.GetAccessToken() == "" {
+		return "", "", 0, err
+	}
+	if s == nil || s.cfg == nil || s.cfg.JWT.SecretKey == "" {
+		return "", "", 0, err
+	}
+	claims, tokenErr := crypto.ValidateAccessToken(req.GetAccessToken(), s.cfg.JWT.SecretKey)
+	if tokenErr != nil {
+		return "", "", 0, tokenErr
+	}
+	if claims.UserID == "" {
+		return "", "", 0, err
+	}
+	return claims.UserID, claims.Username, claims.Role, nil
 }
 
 // UpdateUserInfo 更新用户信息
