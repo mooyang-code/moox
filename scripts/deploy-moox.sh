@@ -935,24 +935,38 @@ sync_local_stage() {
     if [[ "${WITH_STORAGE}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/storage/' --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli')
     fi
+    if [[ "${WITH_CLOUDNODE}" -eq 0 ]]; then
+      rsync_excludes+=(--exclude '/cloudnode/' --exclude '/bin/moox-cloudnode' --exclude '/bin/moox-cloudnode-cli')
+    fi
+    if [[ "${WITH_COLLECTOR}" -eq 0 ]]; then
+      rsync_excludes+=(--exclude '/collector/' --exclude '/bin/moox-collector' --exclude '/bin/moox-collector-cli' --exclude '/bin/moox-collector-scf')
+    fi
+    if [[ "${WITH_FACTOR}" -eq 0 ]]; then
+      rsync_excludes+=(--exclude '/factor/' --exclude '/bin/moox-factor' --exclude '/bin/moox-factor-cli')
+    fi
     rsync -a --delete \
       "${rsync_excludes[@]}" \
       "${STAGE_DIR}/" "${deploy_dir}/"
   else
+    rm -rf "${deploy_dir}/admin" "${deploy_dir}/examples" \
+      "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/restart.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh"
+    rm -f "${deploy_dir}/bin/moox-admin" "${deploy_dir}/bin/moox-admin-cli" \
+      "${deploy_dir}/bin/moox-cli" "${deploy_dir}/bin/moox-web-host"
+    if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
+      rm -rf "${deploy_dir}/cloudnode"
+      rm -f "${deploy_dir}/bin/moox-cloudnode" "${deploy_dir}/bin/moox-cloudnode-cli"
+    fi
+    if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
+      rm -rf "${deploy_dir}/collector"
+      rm -f "${deploy_dir}/bin/moox-collector" "${deploy_dir}/bin/moox-collector-cli" "${deploy_dir}/bin/moox-collector-scf"
+    fi
+    if [[ "${WITH_FACTOR}" -eq 1 ]]; then
+      rm -rf "${deploy_dir}/factor"
+      rm -f "${deploy_dir}/bin/moox-factor" "${deploy_dir}/bin/moox-factor-cli"
+    fi
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
-      find "${deploy_dir}" -mindepth 1 -maxdepth 1 \
-        ! -name data ! -name logs ! -name run \
-        -exec rm -rf {} +
-    else
-      rm -rf "${deploy_dir}/admin" "${deploy_dir}/examples" \
-        "${deploy_dir}/cloudnode" "${deploy_dir}/collector" \
-        "${deploy_dir}/factor" \
-        "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/restart.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh"
-      rm -f "${deploy_dir}/bin/moox-admin" "${deploy_dir}/bin/moox-admin-cli" \
-        "${deploy_dir}/bin/moox-cli" "${deploy_dir}/bin/moox-web-host" \
-        "${deploy_dir}/bin/moox-cloudnode" "${deploy_dir}/bin/moox-cloudnode-cli" \
-        "${deploy_dir}/bin/moox-collector" "${deploy_dir}/bin/moox-collector-cli" \
-        "${deploy_dir}/bin/moox-collector-scf" "${deploy_dir}/bin/moox-factor" "${deploy_dir}/bin/moox-factor-cli" "${deploy_dir}/bin/moox-storage-cli"
+      rm -rf "${deploy_dir}/storage"
+      rm -f "${deploy_dir}/bin/moox-storage" "${deploy_dir}/bin/moox-storage-cli"
     fi
     cp -R "${STAGE_DIR}/." "${deploy_dir}/"
   fi
@@ -1016,19 +1030,25 @@ if [[ "${RESET_DATA}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/data"
 fi
 
+rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/examples" \
+  "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh"
+rm -f "${DEPLOY_DIR}/bin/moox-admin" "${DEPLOY_DIR}/bin/moox-admin-cli" \
+  "${DEPLOY_DIR}/bin/moox-cli" "${DEPLOY_DIR}/bin/moox-web-host"
+if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
+  rm -rf "${DEPLOY_DIR}/cloudnode"
+  rm -f "${DEPLOY_DIR}/bin/moox-cloudnode" "${DEPLOY_DIR}/bin/moox-cloudnode-cli"
+fi
+if [[ "${WITH_COLLECTOR}" == "1" ]]; then
+  rm -rf "${DEPLOY_DIR}/collector"
+  rm -f "${DEPLOY_DIR}/bin/moox-collector" "${DEPLOY_DIR}/bin/moox-collector-cli" "${DEPLOY_DIR}/bin/moox-collector-scf"
+fi
+if [[ "${WITH_FACTOR}" == "1" ]]; then
+  rm -rf "${DEPLOY_DIR}/factor"
+  rm -f "${DEPLOY_DIR}/bin/moox-factor" "${DEPLOY_DIR}/bin/moox-factor-cli"
+fi
 if [[ "${WITH_STORAGE}" == "1" ]]; then
-  find "${DEPLOY_DIR}" -mindepth 1 -maxdepth 1 \
-    ! -name data ! -name logs ! -name run \
-    -exec rm -rf {} +
-else
-  rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/examples" \
-    "${DEPLOY_DIR}/cloudnode" "${DEPLOY_DIR}/collector" "${DEPLOY_DIR}/factor" \
-    "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh"
-  rm -f "${DEPLOY_DIR}/bin/moox-admin" "${DEPLOY_DIR}/bin/moox-admin-cli" \
-    "${DEPLOY_DIR}/bin/moox-cli" "${DEPLOY_DIR}/bin/moox-web-host" \
-    "${DEPLOY_DIR}/bin/moox-cloudnode" "${DEPLOY_DIR}/bin/moox-cloudnode-cli" \
-    "${DEPLOY_DIR}/bin/moox-collector" "${DEPLOY_DIR}/bin/moox-collector-cli" \
-    "${DEPLOY_DIR}/bin/moox-collector-scf" "${DEPLOY_DIR}/bin/moox-factor" "${DEPLOY_DIR}/bin/moox-factor-cli" "${DEPLOY_DIR}/bin/moox-storage-cli"
+  rm -rf "${DEPLOY_DIR}/storage"
+  rm -f "${DEPLOY_DIR}/bin/moox-storage" "${DEPLOY_DIR}/bin/moox-storage-cli"
 fi
 tar -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 rm -f "${ARCHIVE}"
