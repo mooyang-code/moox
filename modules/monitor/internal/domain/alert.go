@@ -7,9 +7,10 @@ const (
 	AlertStatusFiring   = "firing"
 	AlertStatusResolved = "resolved"
 
-	AlertEventTriggered = "triggered"
-	AlertEventReminder  = "reminder"
-	AlertEventResolved  = "resolved"
+	AlertEventTriggered  = "triggered"
+	AlertEventReminder   = "reminder"
+	AlertEventResolved   = "resolved"
+	AlertEventSendFailed = "send_failed"
 )
 
 type WebhookChannel struct {

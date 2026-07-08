@@ -19,6 +19,7 @@ import (
 type Options struct {
 	InstanceID string
 	Runner     probe.Runner
+	OnResult   func(context.Context, domain.Check, domain.CheckResult)
 }
 
 type Service struct {
@@ -27,6 +28,7 @@ type Service struct {
 	alerts   *repository.AlertRepository
 	peers    *repository.PeerRepository
 	runner   probe.Runner
+	onResult func(context.Context, domain.Check, domain.CheckResult)
 	instance string
 }
 
@@ -45,6 +47,7 @@ func New(db *gorm.DB, opts Options) *Service {
 		alerts:   repository.NewAlertRepository(db),
 		peers:    repository.NewPeerRepository(db),
 		runner:   runner,
+		onResult: opts.OnResult,
 		instance: instance,
 	}
 }
@@ -136,6 +139,9 @@ func (s *Service) RunCheckOnce(ctx context.Context, req *monitorpb.RunCheckOnceR
 	normalizeResult(&result, *check, s.instance)
 	if err := s.results.Insert(ctx, &result); err != nil {
 		return &monitorpb.RunCheckOnceRsp{RetInfo: inner(err)}, nil
+	}
+	if s.onResult != nil {
+		s.onResult(ctx, *check, result)
 	}
 	return &monitorpb.RunCheckOnceRsp{RetInfo: success(), Result: resultToPB(result)}, nil
 }

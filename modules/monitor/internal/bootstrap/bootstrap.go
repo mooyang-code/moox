@@ -5,7 +5,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
@@ -42,8 +44,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	defaultManager = mgr
 	startHealthServer(ctx, cfg, mgr)
-	registerMonitorService(s, cfg, mgr)
-	startScheduler(ctx, cfg, mgr)
+	resultHook := monitorResultHook(cfg, mgr)
+	registerMonitorService(s, cfg, mgr, resultHook)
+	startScheduler(ctx, cfg, mgr, resultHook)
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
@@ -62,7 +65,7 @@ func startHealthServer(ctx context.Context, cfg *config.Config, mgr *monstorage.
 	}
 }
 
-func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorage.Manager) {
+func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorage.Manager, hook func(context.Context, domain.Check, domain.CheckResult)) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
@@ -70,16 +73,27 @@ func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorag
 	}
 	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(mgr.DB(), monitorrpc.Options{
 		InstanceID: cfg.Instance.InstanceID,
+		OnResult:   hook,
 	}))
 }
 
-func startScheduler(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) {
+func startScheduler(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager, hook func(context.Context, domain.Check, domain.CheckResult)) {
 	defaultScheduler = scheduler.New(mgr.DB(), scheduler.Options{
 		InstanceID:     cfg.Instance.InstanceID,
 		ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second,
 		MaxConcurrency: cfg.Scheduler.MaxConcurrency,
+		OnResult:       hook,
 	})
 	defaultScheduler.Start(ctx)
+}
+
+func monitorResultHook(cfg *config.Config, mgr *monstorage.Manager) func(context.Context, domain.Check, domain.CheckResult) {
+	evaluator := alerting.NewEvaluator(mgr.DB(), alerting.Options{InstanceID: cfg.Instance.InstanceID})
+	return func(ctx context.Context, check domain.Check, result domain.CheckResult) {
+		if err := evaluator.Evaluate(ctx, check, result, nil); err != nil {
+			log.ErrorContextf(ctx, "monitor alert evaluation failed: %v", err)
+		}
+	}
 }
 
 func monitorHealthSnapshot(cfg *config.Config, mgr *monstorage.Manager) healthz.SnapshotFunc {

@@ -43,6 +43,17 @@ func (r *AlertRepository) ListWebhooks(ctx context.Context, spaceID string) ([]d
 	return webhooks, err
 }
 
+func (r *AlertRepository) GetWebhook(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) {
+	var webhook domain.WebhookChannel
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_webhook_id = ? AND c_is_deleted = 0", spaceID, webhookID).
+		First(&webhook).Error
+	if err != nil {
+		return nil, err
+	}
+	return &webhook, nil
+}
+
 func (r *AlertRepository) DeleteWebhook(ctx context.Context, spaceID, webhookID string) error {
 	return r.db.WithContext(ctx).
 		Model(&domain.WebhookChannel{}).
@@ -137,7 +148,7 @@ func (r *AlertRepository) ListEvents(ctx context.Context, spaceID string, limit 
 	var events []domain.AlertEvent
 	err := r.db.WithContext(ctx).
 		Where("c_space_id = ?", spaceID).
-		Order("c_created_at DESC").
+		Order("c_created_at DESC, c_id DESC").
 		Limit(limit).
 		Find(&events).Error
 	return events, err
