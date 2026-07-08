@@ -4,6 +4,8 @@ go 1.24.0
 
 require (
 	github.com/glebarez/sqlite v1.11.0
+	github.com/mooyang-code/moox/modules/monitor/proto/monitorgen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
@@ -55,5 +57,9 @@ require (
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
+
+replace github.com/mooyang-code/moox/modules/monitor/proto/monitorgen => ./proto/monitorgen
+
+replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz

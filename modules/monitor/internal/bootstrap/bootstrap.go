@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -38,6 +40,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	defaultManager = mgr
 	startHealthServer(ctx, cfg)
+	registerMonitorService(s, cfg, mgr)
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
@@ -54,6 +57,17 @@ func startHealthServer(ctx context.Context, cfg *config.Config) {
 	if _, err := healthz.Start(ctx, cfg.Health.Addr, monitorHealthSnapshot(cfg)); err != nil {
 		log.ErrorContextf(ctx, "monitor health server failed to start: %v", err)
 	}
+}
+
+func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorage.Manager) {
+	service := s.Service("trpc.moox.monitor.MonitorMgr")
+	if service == nil {
+		log.Warn("MonitorMgr service is not configured, skip register")
+		return
+	}
+	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(mgr.DB(), monitorrpc.Options{
+		InstanceID: cfg.Instance.InstanceID,
+	}))
 }
 
 func monitorHealthSnapshot(cfg *config.Config) healthz.SnapshotFunc {

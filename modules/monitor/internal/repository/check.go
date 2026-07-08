@@ -43,7 +43,28 @@ func (r *CheckRepository) Update(ctx context.Context, check *domain.Check) error
 	return r.db.WithContext(ctx).
 		Model(&domain.Check{}).
 		Where("c_space_id = ? AND c_check_id = ? AND c_is_deleted = 0", check.SpaceID, check.CheckID).
-		Updates(check).Error
+		Updates(map[string]any{
+			"c_name":             check.Name,
+			"c_group_name":       check.GroupName,
+			"c_kind":             check.Kind,
+			"c_url":              check.URL,
+			"c_method":           check.Method,
+			"c_headers":          check.Headers,
+			"c_body":             check.Body,
+			"c_tcp_host":         check.TCPHost,
+			"c_tcp_port":         check.TCPPort,
+			"c_interval_seconds": check.IntervalSeconds,
+			"c_timeout_ms":       check.TimeoutMS,
+			"c_expected_status":  check.ExpectedStatus,
+			"c_max_response_ms":  check.MaxResponseMS,
+			"c_body_contains":    check.BodyContains,
+			"c_enabled":          check.Enabled,
+			"c_source":           check.Source,
+			"c_labels":           check.Labels,
+			"c_description":      check.Description,
+			"c_last_checked_at":  check.LastCheckedAt,
+			"c_next_check_at":    check.NextCheckAt,
+		}).Error
 }
 
 func (r *CheckRepository) Delete(ctx context.Context, spaceID, checkID string) error {

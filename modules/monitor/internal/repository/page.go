@@ -6,6 +6,10 @@ type Page struct {
 }
 
 func (p Page) limit() int {
+	return p.Limit()
+}
+
+func (p Page) Limit() int {
 	if p.PageSize <= 0 {
 		return 50
 	}
@@ -19,5 +23,5 @@ func (p Page) offset() int {
 	if p.Page <= 1 {
 		return 0
 	}
-	return (p.Page - 1) * p.limit()
+	return (p.Page - 1) * p.Limit()
 }

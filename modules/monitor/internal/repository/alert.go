@@ -20,6 +20,20 @@ func (r *AlertRepository) CreateWebhook(ctx context.Context, webhook *domain.Web
 	return r.db.WithContext(ctx).Create(webhook).Error
 }
 
+func (r *AlertRepository) UpdateWebhook(ctx context.Context, webhook *domain.WebhookChannel) error {
+	return r.db.WithContext(ctx).
+		Model(&domain.WebhookChannel{}).
+		Where("c_space_id = ? AND c_webhook_id = ? AND c_is_deleted = 0", webhook.SpaceID, webhook.WebhookID).
+		Updates(map[string]any{
+			"c_name":          webhook.Name,
+			"c_url":           webhook.URL,
+			"c_method":        webhook.Method,
+			"c_headers":       webhook.Headers,
+			"c_body_template": webhook.BodyTemplate,
+			"c_enabled":       webhook.Enabled,
+		}).Error
+}
+
 func (r *AlertRepository) ListWebhooks(ctx context.Context, spaceID string) ([]domain.WebhookChannel, error) {
 	var webhooks []domain.WebhookChannel
 	err := r.db.WithContext(ctx).
@@ -38,6 +52,22 @@ func (r *AlertRepository) DeleteWebhook(ctx context.Context, spaceID, webhookID 
 
 func (r *AlertRepository) CreateRule(ctx context.Context, rule *domain.AlertRule) error {
 	return r.db.WithContext(ctx).Create(rule).Error
+}
+
+func (r *AlertRepository) UpdateRule(ctx context.Context, rule *domain.AlertRule) error {
+	return r.db.WithContext(ctx).
+		Model(&domain.AlertRule{}).
+		Where("c_space_id = ? AND c_rule_id = ? AND c_is_deleted = 0", rule.SpaceID, rule.RuleID).
+		Updates(map[string]any{
+			"c_check_id":                          rule.CheckID,
+			"c_webhook_id":                        rule.WebhookID,
+			"c_failure_threshold":                 rule.FailureThreshold,
+			"c_success_threshold":                 rule.SuccessThreshold,
+			"c_minimum_reminder_interval_seconds": rule.MinimumReminderIntervalSeconds,
+			"c_send_on_resolved":                  rule.SendOnResolved,
+			"c_enabled":                           rule.Enabled,
+			"c_description":                       rule.Description,
+		}).Error
 }
 
 func (r *AlertRepository) ListRules(ctx context.Context, spaceID string) ([]domain.AlertRule, error) {

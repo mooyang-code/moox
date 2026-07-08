@@ -11,6 +11,7 @@ use (
 	./modules/factor
 	./modules/factor/proto/factorgen
 	./modules/monitor
+	./modules/monitor/proto/monitorgen
 	./modules/storage
 	./modules/storage/proto/gen
 	./modules/trade
