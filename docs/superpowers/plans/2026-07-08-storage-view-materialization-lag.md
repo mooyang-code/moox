@@ -1,5 +1,9 @@
 # Storage View Materialization Lag Implementation Plan
 
+> **SUPERSEDED (2026-07-08):** Do **not** implement this plan. Architecture replaced by
+> [`2026-07-08-storage-view-write-journal-materialization.md`](./2026-07-08-storage-view-write-journal-materialization.md)
+> (write journal + no steady-state reread + backfill_window). Keep this file as diagnosis archive only.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Reduce `binance_spot_kline -> spot_kline_1m_view` materialization lag from tens of minutes to near-real-time, and add a periodic catch-up path that can repair missed or delayed incremental events.
