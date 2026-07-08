@@ -11,7 +11,7 @@ import type {
   WebhookChannel,
 } from './types';
 
-const service = 'monitor';
+const service = 'moox_monitor';
 
 export const monitorApi = {
   listChecks(req: { space_id?: string; group_name?: string; source?: string; page?: PageReq } = {}) {

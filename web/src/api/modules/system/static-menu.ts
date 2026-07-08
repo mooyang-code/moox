@@ -74,8 +74,9 @@ export const systemMenu = [
   menu("0502", "05", "/trading/positions", "trading-positions", "trading-positions", "trading/position-detail/position-detail", 2),
   menu("0503", "05", "/trading/orders", "trading-orders", "trading-orders", "trading/trade-record/trade-record", 3),
 
-  directory("06", "0", "/ops/resource-monitor", "ops", "ops", 6, { svgIcon: "defend", icon: "" }),
-  menu("0601", "06", "/ops/resource-monitor", "ops-resource-monitor", "ops-resource-monitor", "container/resource-monitor/resource-monitor", 1),
+  directory("06", "0", "/ops/service-monitor", "ops", "ops", 6, { svgIcon: "defend", icon: "" }),
+  menu("0600", "06", "/ops/service-monitor", "ops-service-monitor", "ops-service-monitor", "ops/service-monitor/index", 1),
+  menu("0601", "06", "/ops/resource-monitor", "ops-resource-monitor", "ops-resource-monitor", "container/resource-monitor/resource-monitor", 2),
   menu("0603", "06", "/ops/ssh-hosts", "ops-ssh-hosts", "ops-ssh-hosts", "container/ssh-hosts/ssh-hosts", 3),
   menu("0604", "06", "/ops/ssh-terminal", "ops-ssh-terminal", "ops-ssh-terminal", "container/ssh-terminal/ssh-terminal", 4, { keepAlive: false }),
   menu("0605", "06", "/ops/ssh-sessions", "ops-ssh-sessions", "ops-ssh-sessions", "container/ssh-sessions/ssh-sessions", 5),
