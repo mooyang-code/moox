@@ -6,19 +6,65 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
-func TestOpenConstrainsDuckDBToSingleConnection(t *testing.T) {
+func TestOpenAllowsSpareConnectionsForConcurrentReads(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer store.Close()
 
-	if got := store.db.Stats().MaxOpenConnections; got != 1 {
-		t.Fatalf("MaxOpenConnections = %d, want 1", got)
+	if got := store.db.Stats().MaxOpenConnections; got != defaultMaxOpenConns {
+		t.Fatalf("MaxOpenConnections = %d, want %d", got, defaultMaxOpenConns)
+	}
+}
+
+func TestDropResultTableWaitsForResultTableLock(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	const tableName = "test_view_drop_lock"
+	if err := store.CreateResultTable(ctx, tableName, []*pb.ViewColumn{
+		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+	}); err != nil {
+		t.Fatalf("CreateResultTable: %v", err)
+	}
+
+	unlock := store.lockResultTable(tableName)
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		done <- store.DropResultTable(ctx, tableName)
+	}()
+	<-started
+
+	select {
+	case err := <-done:
+		unlock()
+		if err != nil {
+			t.Fatalf("DropResultTable returned error while lock held: %v", err)
+		}
+		t.Fatalf("DropResultTable returned while table lock was held")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("DropResultTable after unlock: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("DropResultTable did not finish after table lock was released")
 	}
 }
 

@@ -24,7 +24,8 @@ import (
 
 // Options 保存 DuckDB 视图存储打开配置。
 type Options struct {
-	Path string
+	Path         string
+	MaxOpenConns int
 }
 
 // ViewStore 封装 TimeSeries 视图在 DuckDB 中的物化读写能力。
@@ -48,6 +49,8 @@ var resultBaseColumns = []string{
 	"row_json",
 }
 
+const defaultMaxOpenConns = 4
+
 func Open(opts Options) (*ViewStore, error) {
 	if opts.Path == "" {
 		return nil, errors.New("duckdb path is required")
@@ -56,8 +59,12 @@ func Open(opts Options) (*ViewStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	maxOpenConns := opts.MaxOpenConns
+	if maxOpenConns <= 0 {
+		maxOpenConns = defaultMaxOpenConns
+	}
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(maxOpenConns)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -677,6 +684,8 @@ func (s *ViewStore) DropResultTable(ctx context.Context, tableName string) error
 	if err != nil {
 		return err
 	}
+	unlock := s.lockResultTable(tableName)
+	defer unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
