@@ -4,12 +4,6 @@
       <div class="moox-inner">
         <div class="page-head">
           <h2>任务实例</h2>
-          <div class="page-actions">
-            <a-button type="primary" @click="refreshList">
-              <template #icon><icon-sync /></template>
-              <span>刷新</span>
-            </a-button>
-          </div>
         </div>
 
         <section class="task-query-panel">
@@ -372,10 +366,6 @@ const reset = () => {
   getInstanceList();
 };
 
-const refreshList = () => {
-  getInstanceList();
-};
-
 const getInstanceList = async () => {
   const spaceId = selectedSpaceId.value || "";
   if (!spaceId) {
@@ -465,12 +455,6 @@ onMounted(() => {
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-}
-
-.page-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
 }
 
 .task-query-panel {
