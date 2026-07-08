@@ -39,91 +39,91 @@
         </section>
 
         <section class="task-result-pane">
-        <a-table
-          row-key="TaskID"
-          size="small"
-          :data="instanceList"
-          :bordered="{ cell: true }"
-          :loading="loading"
-          :scroll="{ x: 'max-content', y: 500 }"
-          :pagination="paginationConfig"
-          :row-selection="{ type: 'checkbox', showCheckedAll: true }"
-          :selected-keys="selectedKeys"
-          @select="select"
-          @select-all="selectAll"
-          @page-change="onPageChange"
-          @page-size-change="onPageSizeChange"
-        >
-          <template #columns>
-            <a-table-column title="任务ID" data-index="TaskID" :width="200">
-              <template #cell="{ record }">
-                <a-link @click="onViewDetails(record)">{{ record.TaskID }}</a-link>
-              </template>
-            </a-table-column>
-            <a-table-column title="规则ID" data-index="RuleID" :width="120">
-              <template #cell="{ record }">
-                <a-tooltip :content="record.RuleID">
-                  <span class="ellipsis-text">{{ record.RuleID }}</span>
-                </a-tooltip>
-              </template>
-            </a-table-column>
-            <a-table-column title="交易标的" data-index="Symbol" :width="180">
-              <template #cell="{ record }">
-                <a-tag color="arcoblue" size="small">{{ record.Symbol }}</a-tag>
-              </template>
-            </a-table-column>
-            <a-table-column title="计划节点" data-index="PlannedExecNode" :width="120">
-              <template #cell="{ record }">
-                <a-tooltip :content="record.PlannedExecNode">
-                  <span class="ellipsis-text">{{ record.PlannedExecNode }}</span>
-                </a-tooltip>
-              </template>
-            </a-table-column>
-            <a-table-column title="最后执行节点" data-index="LastExecNode" :width="120">
-              <template #cell="{ record }">
-                <a-tooltip :content="getLastExecNode(record)">
-                  <span class="ellipsis-text">{{ getLastExecNode(record) }}</span>
-                </a-tooltip>
-              </template>
-            </a-table-column>
-            <a-table-column title="执行状态" :width="100" align="center">
-              <template #cell="{ record }">
-                <a-tag bordered size="small" :color="getStatusColor(record.LastExecStatus)">
-                  {{ getStatusText(record.LastExecStatus) }}
-                </a-tag>
-              </template>
-            </a-table-column>
-            <a-table-column title="有效性" :width="80" align="center">
-              <template #cell="{ record }">
-                <a-tag bordered size="small" :color="record.IsDeleted ? 'red' : 'green'">
-                  {{ record.IsDeleted ? '无效' : '有效' }}
-                </a-tag>
-              </template>
-            </a-table-column>
-            <a-table-column title="数据类型" :width="100" align="center">
-              <template #cell="{ record }">
-                <a-tag color="purple" size="small">{{ record.DataType || '-' }}</a-tag>
-              </template>
-            </a-table-column>
-            <a-table-column title="最后执行时间" :width="170">
-              <template #cell="{ record }">
-                {{ formatDateTime(record.LastExecTime) }}
-              </template>
-            </a-table-column>
-            <a-table-column title="任务创建时间" :width="170">
-              <template #cell="{ record }">
-                {{ formatDateTime(record.CreateTime) }}
-              </template>
-            </a-table-column>
-            <a-table-column title="操作" :width="100" align="center" fixed="right">
-              <template #cell="{ record }">
-                <a-space>
-                  <a-button type="text" size="mini" @click="onViewDetails(record)">查看</a-button>
-                </a-space>
-              </template>
-            </a-table-column>
-          </template>
-        </a-table>
+          <a-table
+            row-key="TaskID"
+            size="small"
+            :data="instanceList"
+            :bordered="{ cell: true }"
+            :loading="loading"
+            :scroll="{ x: 1810, y: 500 }"
+            :pagination="paginationConfig"
+            :row-selection="{ type: 'checkbox', showCheckedAll: true }"
+            :selected-keys="selectedKeys"
+            @select="select"
+            @select-all="selectAll"
+            @page-change="onPageChange"
+            @page-size-change="onPageSizeChange"
+          >
+            <template #columns>
+              <a-table-column title="任务ID" data-index="TaskID" :width="200">
+                <template #cell="{ record }">
+                  <a-link @click="onViewDetails(record)">{{ record.TaskID }}</a-link>
+                </template>
+              </a-table-column>
+              <a-table-column title="规则ID" data-index="RuleID" :width="190">
+                <template #cell="{ record }">
+                  <a-tooltip :content="record.RuleID">
+                    <span class="ellipsis-text">{{ record.RuleID }}</span>
+                  </a-tooltip>
+                </template>
+              </a-table-column>
+              <a-table-column title="交易标的" data-index="Symbol" :width="180">
+                <template #cell="{ record }">
+                  <a-tag color="arcoblue" size="small">{{ record.Symbol }}</a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="计划节点" data-index="PlannedExecNode" :width="160">
+                <template #cell="{ record }">
+                  <a-tooltip :content="record.PlannedExecNode">
+                    <span class="ellipsis-text">{{ record.PlannedExecNode }}</span>
+                  </a-tooltip>
+                </template>
+              </a-table-column>
+              <a-table-column title="最后执行节点" data-index="LastExecNode" :width="300">
+                <template #cell="{ record }">
+                  <a-tooltip :content="getLastExecNode(record)">
+                    <span class="ellipsis-text">{{ getLastExecNode(record) }}</span>
+                  </a-tooltip>
+                </template>
+              </a-table-column>
+              <a-table-column title="执行状态" :width="100" align="center">
+                <template #cell="{ record }">
+                  <a-tag bordered size="small" :color="getStatusColor(record.LastExecStatus)">
+                    {{ getStatusText(record.LastExecStatus) }}
+                  </a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="有效性" :width="80" align="center">
+                <template #cell="{ record }">
+                  <a-tag bordered size="small" :color="record.IsDeleted ? 'red' : 'green'">
+                    {{ record.IsDeleted ? "无效" : "有效" }}
+                  </a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="数据类型" :width="100" align="center">
+                <template #cell="{ record }">
+                  <a-tag color="purple" size="small">{{ record.DataType || "-" }}</a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="最后执行时间" :width="180">
+                <template #cell="{ record }">
+                  {{ formatDateTime(record.LastExecTime) }}
+                </template>
+              </a-table-column>
+              <a-table-column title="任务创建时间" :width="180">
+                <template #cell="{ record }">
+                  {{ formatDateTime(record.CreateTime) }}
+                </template>
+              </a-table-column>
+              <a-table-column title="操作" :width="100" align="center" fixed="right">
+                <template #cell="{ record }">
+                  <a-space>
+                    <a-button type="text" size="mini" @click="onViewDetails(record)">查看</a-button>
+                  </a-space>
+                </template>
+              </a-table-column>
+            </template>
+          </a-table>
         </section>
       </div>
     </a-spin>
@@ -134,12 +134,12 @@
       <a-descriptions :column="2" bordered>
         <a-descriptions-item label="任务ID">{{ detailData.TaskID }}</a-descriptions-item>
         <a-descriptions-item label="规则ID">{{ detailData.RuleID }}</a-descriptions-item>
-        <a-descriptions-item label="交易所">{{ detailData.Exchange || '-' }}</a-descriptions-item>
-        <a-descriptions-item label="市场">{{ detailData.Market || '-' }}</a-descriptions-item>
-        <a-descriptions-item label="数据类型">{{ detailData.DataType || '-' }}</a-descriptions-item>
-        <a-descriptions-item label="周期">{{ detailData.Interval || '-' }}</a-descriptions-item>
-        <a-descriptions-item label="数据集">{{ detailData.DatasetID || '-' }}</a-descriptions-item>
-        <a-descriptions-item label="标的ID">{{ detailData.SubjectID || '-' }}</a-descriptions-item>
+        <a-descriptions-item label="交易所">{{ detailData.Exchange || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="市场">{{ detailData.Market || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="数据类型">{{ detailData.DataType || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="周期">{{ detailData.Interval || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="数据集">{{ detailData.DatasetID || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="标的ID">{{ detailData.SubjectID || "-" }}</a-descriptions-item>
         <a-descriptions-item label="计划节点">{{ detailData.PlannedExecNode }}</a-descriptions-item>
         <a-descriptions-item label="最后执行节点">{{ getLastExecNode(detailData) }}</a-descriptions-item>
         <a-descriptions-item label="交易标的">
@@ -152,7 +152,7 @@
         </a-descriptions-item>
         <a-descriptions-item label="有效性">
           <a-tag :color="detailData.IsDeleted ? 'red' : 'green'">
-            {{ detailData.IsDeleted ? '无效' : '有效' }}
+            {{ detailData.IsDeleted ? "无效" : "有效" }}
           </a-tag>
         </a-descriptions-item>
         <a-descriptions-item label="最后执行时间">{{ formatDateTime(detailData.LastExecTime) }}</a-descriptions-item>
@@ -175,11 +175,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import { callControl } from '@/api/admin/http';
-import { useSpaceStore } from '@/store/modules/space';
-import { storeToRefs } from 'pinia';
+import { ref, computed, onMounted, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
+import { callControl } from "@/api/admin/http";
+import { useSpaceStore } from "@/store/modules/space";
+import { storeToRefs } from "pinia";
 
 interface TaskInstance {
   TaskID: string;
@@ -191,9 +191,9 @@ interface TaskInstance {
   SubjectID: string;
   Symbol: string;
   Interval: string;
-  PlannedExecNode: string;    // v2.0: 计划执行节点
-  LastExecNode: string;       // v2.0: 最后执行节点
-  LastExecStatus: number;     // v2.0: 最后执行状态
+  PlannedExecNode: string; // v2.0: 计划执行节点
+  LastExecNode: string; // v2.0: 最后执行节点
+  LastExecStatus: number; // v2.0: 最后执行状态
   TaskParams: Record<string, any>;
   LastExecTime: string | null;
   Result: Record<string, any>;
@@ -213,12 +213,12 @@ const detailVisible = ref(false);
 const detailData = ref<Partial<TaskInstance>>({});
 
 const form = ref({
-  taskId: '',
-  ruleId: '',
-  plannedExecNode: '',      // v2.0: 计划节点
-  lastExecNode: '',         // v2.0: 执行节点
-  symbol: '',
-  lastExecStatus: null as number | null,  // v2.0: 执行状态
+  taskId: "",
+  ruleId: "",
+  plannedExecNode: "", // v2.0: 计划节点
+  lastExecNode: "", // v2.0: 执行节点
+  symbol: "",
+  lastExecStatus: null as number | null, // v2.0: 执行状态
   includeDeleted: false
 });
 
@@ -249,58 +249,58 @@ const paginationConfig = computed(() => ({
 
 const getStatusColor = (status: number) => {
   const colors: { [key: number]: string } = {
-    1: 'gray',    // 待执行
-    2: 'blue',    // 执行中
-    3: 'green',   // 成功
-    4: 'orange',  // 部分失败
-    5: 'red'      // 失败
+    1: "gray", // 待执行
+    2: "blue", // 执行中
+    3: "green", // 成功
+    4: "orange", // 部分失败
+    5: "red" // 失败
   };
-  return colors[status] || 'gray';
+  return colors[status] || "gray";
 };
 
 const getStatusText = (status: number) => {
   const texts: { [key: number]: string } = {
-    1: '待执行',
-    2: '执行中',
-    3: '成功',
-    4: '部分失败',
-    5: '失败'
+    1: "待执行",
+    2: "执行中",
+    3: "成功",
+    4: "部分失败",
+    5: "失败"
   };
-  return texts[status] || '未知';
+  return texts[status] || "未知";
 };
 
 const getLastExecNode = (record: TaskInstanceRecord) => {
-  if (!record) return '-';
-  return record.LastExecNode || '-';
+  if (!record) return "-";
+  return record.LastExecNode || "-";
 };
 
 const normalizeTaskInstance = (raw: RawTaskInstance): TaskInstance => {
   const lastExecStatus = raw.LastExecStatus ?? raw.last_exec_status ?? 0;
   return {
-    TaskID: raw.TaskID ?? raw.task_id ?? '',
-    RuleID: raw.RuleID ?? raw.rule_id ?? '',
-    Exchange: raw.Exchange ?? raw.exchange ?? '',
-    Market: raw.Market ?? raw.market ?? '',
-    DataType: raw.DataType ?? raw.data_type ?? '',
-    DatasetID: raw.DatasetID ?? raw.dataset_id ?? '',
-    SubjectID: raw.SubjectID ?? raw.subject_id ?? '',
-    Symbol: raw.Symbol ?? raw.symbol ?? '',
-    Interval: raw.Interval ?? raw.interval ?? '',
-    PlannedExecNode: raw.PlannedExecNode ?? raw.planned_exec_node ?? '',
-    LastExecNode: raw.LastExecNode ?? raw.last_exec_node ?? '',
+    TaskID: raw.TaskID ?? raw.task_id ?? "",
+    RuleID: raw.RuleID ?? raw.rule_id ?? "",
+    Exchange: raw.Exchange ?? raw.exchange ?? "",
+    Market: raw.Market ?? raw.market ?? "",
+    DataType: raw.DataType ?? raw.data_type ?? "",
+    DatasetID: raw.DatasetID ?? raw.dataset_id ?? "",
+    SubjectID: raw.SubjectID ?? raw.subject_id ?? "",
+    Symbol: raw.Symbol ?? raw.symbol ?? "",
+    Interval: raw.Interval ?? raw.interval ?? "",
+    PlannedExecNode: raw.PlannedExecNode ?? raw.planned_exec_node ?? "",
+    LastExecNode: raw.LastExecNode ?? raw.last_exec_node ?? "",
     LastExecStatus: Number(lastExecStatus),
     TaskParams: normalizeObject(raw.TaskParams ?? raw.task_params),
     LastExecTime: raw.LastExecTime ?? raw.last_exec_time ?? null,
     Result: normalizeObject(raw.Result ?? raw.result),
     IsDeleted: Boolean(raw.IsDeleted ?? raw.is_deleted ?? false),
-    CreateTime: raw.CreateTime ?? raw.create_time ?? '',
-    ModifyTime: raw.ModifyTime ?? raw.modify_time ?? ''
+    CreateTime: raw.CreateTime ?? raw.create_time ?? "",
+    ModifyTime: raw.ModifyTime ?? raw.modify_time ?? ""
   };
 };
 
 const normalizeObject = (value: any): Record<string, any> => {
   if (!value) return {};
-  if (typeof value === 'object') return value;
+  if (typeof value === "object") return value;
   try {
     return JSON.parse(String(value));
   } catch {
@@ -312,26 +312,26 @@ const formatJSON = (value: any) => JSON.stringify(normalizeObject(value), null, 
 
 // 格式化时间为本地时间格式
 const formatDateTime = (dateTime: string | null | undefined) => {
-  if (!dateTime) return '-';
+  if (!dateTime) return "-";
 
   try {
     const date = new Date(dateTime);
     // 检查日期是否有效
     if (isNaN(date.getTime())) {
-      return '-';
+      return "-";
     }
 
     // 格式化日期为 YYYY-MM-DD HH:mm:ss
     const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    const seconds = String(date.getSeconds()).padStart(2, "0");
 
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   } catch {
-    return '-';
+    return "-";
   }
 };
 
@@ -361,12 +361,12 @@ const search = () => {
 
 const reset = () => {
   form.value = {
-    taskId: '',
-    ruleId: '',
-    plannedExecNode: '',      // v2.0: 计划节点
-    lastExecNode: '',         // v2.0: 执行节点
-    symbol: '',
-    lastExecStatus: null,     // v2.0: 执行状态
+    taskId: "",
+    ruleId: "",
+    plannedExecNode: "", // v2.0: 计划节点
+    lastExecNode: "", // v2.0: 执行节点
+    symbol: "",
+    lastExecStatus: null, // v2.0: 执行状态
     includeDeleted: false
   };
   getInstanceList();
@@ -377,7 +377,7 @@ const refreshList = () => {
 };
 
 const getInstanceList = async () => {
-  const spaceId = selectedSpaceId.value || '';
+  const spaceId = selectedSpaceId.value || "";
   if (!spaceId) {
     instanceList.value = [];
     pagination.value.total = 0;
@@ -403,15 +403,15 @@ const getInstanceList = async () => {
     if (form.value.includeDeleted) filter.include_deleted = true;
 
     const data = await callControl<{ filter: typeof filter }, { instances?: RawTaskInstance[]; page?: { total?: number } }>(
-      'collectmgr',
-      'GetTaskInstanceList',
+      "collectmgr",
+      "GetTaskInstanceList",
       { filter }
     );
     instanceList.value = (data.instances || []).map(normalizeTaskInstance);
     pagination.value.total = Number(data.page?.total) || (data.instances ? data.instances.length : 0);
   } catch (error) {
-    console.error('获取任务实例列表失败:', error);
-    Message.error('获取任务实例列表失败');
+    console.error("获取任务实例列表失败:", error);
+    Message.error("获取任务实例列表失败");
   } finally {
     loading.value = false;
   }
@@ -501,7 +501,8 @@ onMounted(() => {
 }
 
 .ellipsis-text {
-  display: inline-block;
+  display: block;
+  width: 100%;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
