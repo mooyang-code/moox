@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	monitorpeer "github.com/mooyang-code/moox/modules/monitor/internal/peer"
 	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
@@ -50,6 +51,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	syncSystem := monitorSyncFunc(ctx, cfg, mgr)
 	registerMonitorService(s, cfg, mgr, resultHook, syncSystem)
 	startScheduler(ctx, cfg, mgr, resultHook)
+	startPeerPuller(ctx, cfg, mgr)
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
@@ -63,7 +65,12 @@ func startHealthServer(ctx context.Context, cfg *config.Config, mgr *monstorage.
 	if cfg == nil {
 		return
 	}
-	if _, err := healthz.Start(ctx, cfg.Health.Addr, monitorHealthSnapshot(cfg, mgr)); err != nil {
+	handler := monitorpeer.NewHTTPHandler(monitorpeer.HTTPOptions{
+		Token:    cfg.Peer.Token,
+		Health:   healthz.Handler(monitorHealthSnapshot(cfg, mgr)),
+		Snapshot: monitorSnapshot(cfg),
+	})
+	if _, err := healthz.StartWithHandler(ctx, cfg.Health.Addr, handler); err != nil {
 		log.ErrorContextf(ctx, "monitor health server failed to start: %v", err)
 	}
 }
@@ -124,17 +131,64 @@ func monitorSyncFunc(ctx context.Context, cfg *config.Config, mgr *monstorage.Ma
 	return syncer.Sync
 }
 
+func startPeerPuller(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) {
+	if !cfg.Peer.Enabled || len(cfg.Peer.Peers) == 0 {
+		return
+	}
+	remotes := make([]monitorpeer.Remote, 0, len(cfg.Peer.Peers))
+	for _, item := range cfg.Peer.Peers {
+		remotes = append(remotes, monitorpeer.Remote{
+			InstanceID: item.InstanceID,
+			BaseURL:    item.BaseURL,
+			Token:      item.Token,
+		})
+	}
+	puller := monitorpeer.NewPuller(repository.NewPeerRepository(mgr.DB()), monitorpeer.PullerOptions{
+		Peers:   remotes,
+		Timeout: time.Duration(cfg.Peer.TimeoutSeconds) * time.Second,
+	})
+	go func() {
+		ticker := time.NewTicker(time.Duration(cfg.Peer.PullIntervalSeconds) * time.Second)
+		defer ticker.Stop()
+		for {
+			if err := puller.PullOnce(ctx); err != nil {
+				log.WarnContextf(ctx, "monitor peer pull failed: %v", err)
+			}
+			_ = puller.MarkStale(ctx, time.Now(), time.Duration(cfg.Peer.TimeoutSeconds)*time.Second)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func monitorSnapshot(cfg *config.Config) func(context.Context) monitorpeer.Snapshot {
+	return func(ctx context.Context) monitorpeer.Snapshot {
+		return monitorpeer.Snapshot{
+			InstanceID: cfg.Instance.InstanceID,
+			BaseURL:    cfg.Instance.BaseURL,
+			ObservedAt: time.Now().UTC(),
+		}
+	}
+}
+
 func monitorHealthSnapshot(cfg *config.Config, mgr *monstorage.Manager) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		var activeChecks int64
+		var activePeers int64
 		if mgr != nil && mgr.DB() != nil {
 			_ = mgr.DB().WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_checks WHERE c_is_deleted = 0 AND c_enabled = 1").Scan(&activeChecks).Error
+			_ = mgr.DB().WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_instances WHERE c_status = ?", domain.InstanceStatusActive).Scan(&activePeers).Error
 		}
 		rsp := healthz.Base("monitor", cfg.Instance.InstanceID, "", "", monitorStartedAt, true)
 		rsp.Details = map[string]any{
 			"database":          "ok",
 			"scheduler_ok":      defaultScheduler != nil,
 			"active_checks":     activeChecks,
+			"peer_count":        len(cfg.Peer.Peers),
+			"active_peer_count": activePeers,
 			"peer_enabled":      cfg.Peer.Enabled,
 			"sysdeploy_enabled": cfg.SysDeploy.Enabled,
 		}

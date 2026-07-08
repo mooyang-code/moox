@@ -66,14 +66,18 @@ func (e *Evaluator) Evaluate(ctx context.Context, check domain.Check, result dom
 		return err
 	}
 	for _, rule := range rules {
-		if err := e.evaluateRule(ctx, check, result, rule); err != nil {
+		if err := e.evaluateRule(ctx, check, result, rule, activeInstanceIDs); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (e *Evaluator) evaluateRule(ctx context.Context, check domain.Check, result domain.CheckResult, rule domain.AlertRule) error {
+func (e *Evaluator) evaluateRule(ctx context.Context, check domain.Check, result domain.CheckResult, rule domain.AlertRule, activeInstanceIDs []string) error {
+	owner := Owner(check.CheckID, rule.RuleID, activeInstanceIDs)
+	if owner != "" && owner != e.instance {
+		return nil
+	}
 	state, err := e.alerts.GetState(ctx, rule.SpaceID, rule.RuleID, rule.CheckID)
 	if err != nil {
 		if err != gorm.ErrRecordNotFound {

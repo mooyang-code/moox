@@ -67,12 +67,16 @@ func Handler(snapshot SnapshotFunc) http.Handler {
 
 // Start serves the shared health handler on addr. An empty addr disables it.
 func Start(ctx context.Context, addr string, snapshot SnapshotFunc) (*http.Server, error) {
+	return StartWithHandler(ctx, addr, Handler(snapshot))
+}
+
+func StartWithHandler(ctx context.Context, addr string, handler http.Handler) (*http.Server, error) {
 	if addr == "" {
 		return nil, nil
 	}
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: Handler(snapshot),
+		Handler: handler,
 	}
 	go func() {
 		<-ctx.Done()
