@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
+	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -18,6 +19,7 @@ import (
 var (
 	monitorStartedAt = time.Now()
 	defaultManager   *monstorage.Manager
+	defaultScheduler *scheduler.Scheduler
 )
 
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
@@ -39,8 +41,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	defaultManager = mgr
-	startHealthServer(ctx, cfg)
+	startHealthServer(ctx, cfg, mgr)
 	registerMonitorService(s, cfg, mgr)
+	startScheduler(ctx, cfg, mgr)
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
@@ -50,11 +53,11 @@ func Manager() *monstorage.Manager {
 	return defaultManager
 }
 
-func startHealthServer(ctx context.Context, cfg *config.Config) {
+func startHealthServer(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) {
 	if cfg == nil {
 		return
 	}
-	if _, err := healthz.Start(ctx, cfg.Health.Addr, monitorHealthSnapshot(cfg)); err != nil {
+	if _, err := healthz.Start(ctx, cfg.Health.Addr, monitorHealthSnapshot(cfg, mgr)); err != nil {
 		log.ErrorContextf(ctx, "monitor health server failed to start: %v", err)
 	}
 }
@@ -70,12 +73,26 @@ func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorag
 	}))
 }
 
-func monitorHealthSnapshot(cfg *config.Config) healthz.SnapshotFunc {
+func startScheduler(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) {
+	defaultScheduler = scheduler.New(mgr.DB(), scheduler.Options{
+		InstanceID:     cfg.Instance.InstanceID,
+		ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second,
+		MaxConcurrency: cfg.Scheduler.MaxConcurrency,
+	})
+	defaultScheduler.Start(ctx)
+}
+
+func monitorHealthSnapshot(cfg *config.Config, mgr *monstorage.Manager) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
+		var activeChecks int64
+		if mgr != nil && mgr.DB() != nil {
+			_ = mgr.DB().WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_checks WHERE c_is_deleted = 0 AND c_enabled = 1").Scan(&activeChecks).Error
+		}
 		rsp := healthz.Base("monitor", cfg.Instance.InstanceID, "", "", monitorStartedAt, true)
 		rsp.Details = map[string]any{
 			"database":          "ok",
-			"scheduler":         "configured",
+			"scheduler_ok":      defaultScheduler != nil,
+			"active_checks":     activeChecks,
 			"peer_enabled":      cfg.Peer.Enabled,
 			"sysdeploy_enabled": cfg.SysDeploy.Enabled,
 		}

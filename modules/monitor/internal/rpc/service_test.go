@@ -4,7 +4,9 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -97,6 +99,10 @@ func TestMonitorRPCCRUD(t *testing.T) {
 	if update.GetCheck().GetName() != "API Health Updated" {
 		t.Fatalf("updated name = %q", update.GetCheck().GetName())
 	}
+	run, err := svc.RunCheckOnce(ctx, &monitorpb.RunCheckOnceReq{SpaceId: "space-a", CheckId: "api-health"})
+	if err != nil || run.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS || !run.GetResult().GetSuccess() {
+		t.Fatalf("run ret=%+v result=%+v err=%v", run.GetRetInfo(), run.GetResult(), err)
+	}
 	del, err := svc.DeleteCheck(ctx, &monitorpb.DeleteCheckReq{SpaceId: "space-a", CheckId: "api-health"})
 	if err != nil || del.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 		t.Fatalf("delete ret=%+v err=%v", del.GetRetInfo(), err)
@@ -151,5 +157,22 @@ func newTestService(t *testing.T) *Service {
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}
-	return New(mgr.DB(), Options{InstanceID: "monitor-test"})
+	return New(mgr.DB(), Options{
+		InstanceID: "monitor-test",
+		Runner: runnerFunc(func(ctx context.Context, check domain.Check) domain.CheckResult {
+			return domain.CheckResult{
+				SpaceID:   check.SpaceID,
+				CheckID:   check.CheckID,
+				Success:   true,
+				Status:    domain.CheckStatusOK,
+				CheckedAt: time.Now().UTC(),
+			}
+		}),
+	})
+}
+
+type runnerFunc func(context.Context, domain.Check) domain.CheckResult
+
+func (f runnerFunc) Run(ctx context.Context, check domain.Check) domain.CheckResult {
+	return f(ctx, check)
 }

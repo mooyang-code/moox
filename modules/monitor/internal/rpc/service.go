@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -17,6 +18,7 @@ import (
 
 type Options struct {
 	InstanceID string
+	Runner     probe.Runner
 }
 
 type Service struct {
@@ -24,6 +26,7 @@ type Service struct {
 	results  *repository.ResultRepository
 	alerts   *repository.AlertRepository
 	peers    *repository.PeerRepository
+	runner   probe.Runner
 	instance string
 }
 
@@ -32,11 +35,16 @@ func New(db *gorm.DB, opts Options) *Service {
 	if instance == "" {
 		instance = "monitor"
 	}
+	runner := opts.Runner
+	if runner == nil {
+		runner = probe.DefaultRunner()
+	}
 	return &Service{
 		checks:   repository.NewCheckRepository(db),
 		results:  repository.NewResultRepository(db),
 		alerts:   repository.NewAlertRepository(db),
 		peers:    repository.NewPeerRepository(db),
+		runner:   runner,
 		instance: instance,
 	}
 }
@@ -114,7 +122,22 @@ func (s *Service) DeleteCheck(ctx context.Context, req *monitorpb.DeleteCheckReq
 }
 
 func (s *Service) RunCheckOnce(ctx context.Context, req *monitorpb.RunCheckOnceReq) (*monitorpb.RunCheckOnceRsp, error) {
-	return &monitorpb.RunCheckOnceRsp{RetInfo: retInfo(commonpb.ErrorCode_INNER_ERR, "probe runtime is not configured")}, nil
+	if req.GetCheckId() == "" {
+		return &monitorpb.RunCheckOnceRsp{RetInfo: invalid(fmt.Errorf("check_id is required"))}, nil
+	}
+	check, err := s.checks.Get(ctx, req.GetSpaceId(), req.GetCheckId())
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return &monitorpb.RunCheckOnceRsp{RetInfo: notFound("check not found")}, nil
+		}
+		return &monitorpb.RunCheckOnceRsp{RetInfo: inner(err)}, nil
+	}
+	result := s.runner.Run(ctx, *check)
+	normalizeResult(&result, *check, s.instance)
+	if err := s.results.Insert(ctx, &result); err != nil {
+		return &monitorpb.RunCheckOnceRsp{RetInfo: inner(err)}, nil
+	}
+	return &monitorpb.RunCheckOnceRsp{RetInfo: success(), Result: resultToPB(result)}, nil
 }
 
 func (s *Service) ListResults(ctx context.Context, req *monitorpb.ListResultsReq) (*monitorpb.ListResultsRsp, error) {
@@ -464,4 +487,29 @@ func newID(prefix string) string {
 		return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 	}
 	return prefix + "-" + hex.EncodeToString(b[:])
+}
+
+func normalizeResult(result *domain.CheckResult, check domain.Check, instanceID string) {
+	if result.ResultID == "" {
+		result.ResultID = newID("result")
+	}
+	if result.SpaceID == "" {
+		result.SpaceID = check.SpaceID
+	}
+	if result.CheckID == "" {
+		result.CheckID = check.CheckID
+	}
+	if result.InstanceID == "" {
+		result.InstanceID = instanceID
+	}
+	if result.CheckedAt.IsZero() {
+		result.CheckedAt = time.Now().UTC()
+	}
+	if result.Status == "" {
+		if result.Success {
+			result.Status = domain.CheckStatusOK
+		} else {
+			result.Status = domain.CheckStatusDown
+		}
+	}
 }

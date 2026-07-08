@@ -100,11 +100,32 @@ func (r *CheckRepository) ListDue(ctx context.Context, now time.Time, limit int)
 	if limit <= 0 {
 		limit = 100
 	}
-	var checks []domain.Check
+	var candidates []domain.Check
 	err := r.db.WithContext(ctx).
-		Where("c_is_deleted = 0 AND c_enabled = 1 AND (c_next_check_at IS NULL OR c_next_check_at <= ?)", now).
+		Where("c_is_deleted = 0 AND c_enabled = 1").
 		Order("c_next_check_at ASC, c_id ASC").
-		Limit(limit).
-		Find(&checks).Error
-	return checks, err
+		Find(&candidates).Error
+	if err != nil {
+		return nil, err
+	}
+	checks := make([]domain.Check, 0, min(limit, len(candidates)))
+	for _, check := range candidates {
+		if check.NextCheckAt == nil || !check.NextCheckAt.After(now) {
+			checks = append(checks, check)
+			if len(checks) >= limit {
+				break
+			}
+		}
+	}
+	return checks, nil
+}
+
+func (r *CheckRepository) MarkChecked(ctx context.Context, spaceID, checkID string, checkedAt, nextAt time.Time) error {
+	return r.db.WithContext(ctx).
+		Model(&domain.Check{}).
+		Where("c_space_id = ? AND c_check_id = ? AND c_is_deleted = 0", spaceID, checkID).
+		Updates(map[string]any{
+			"c_last_checked_at": checkedAt,
+			"c_next_check_at":   nextAt,
+		}).Error
 }
