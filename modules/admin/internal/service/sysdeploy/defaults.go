@@ -27,7 +27,7 @@ func DefaultDeployments() []Deployment {
 		deployment("space", "admin_rpc", "http", "127.0.0.1", 11107, "trpc.moox.admin.SpaceMgr", "internal", "空间管理 RPC 服务"),
 		deployment("secret", "admin_rpc", "http", "127.0.0.1", 11108, "trpc.moox.ops.SecretMgr", "internal", "秘钥管理 RPC 服务"),
 		deployment("sysdeploy", "admin_rpc", "http", "127.0.0.1", 11109, "trpc.moox.ops.SysDeploy", "internal", "系统服务部署信息 RPC 服务"),
-		withExtra(deployment("trade_account", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.AccountSvc", "internal", "交易账户服务"), `{"health_url":"http://127.0.0.1:11210/healthz","monitor_enabled":true}`),
+		deployment("trade_account", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.AccountSvc", "internal", "交易账户服务"),
 		deployment("trade_balance", "trade", "http", "127.0.0.1", 11201, "trpc.moox.trade.BalanceSvc", "internal", "交易余额服务"),
 		deployment("trade_fund", "trade", "http", "127.0.0.1", 11202, "trpc.moox.trade.FundSvc", "internal", "交易资金服务"),
 		deployment("trade_apikey", "trade", "http", "127.0.0.1", 11203, "trpc.moox.trade.ApiKeySvc", "internal", "交易 API Key 服务"),

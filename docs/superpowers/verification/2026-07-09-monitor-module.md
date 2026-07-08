@@ -72,7 +72,7 @@ Verified:
 Target: `ubuntu@106.53.107.122`
 Deploy dir: `/home/ubuntu/moox/prod`
 
-Final successful deploy:
+Final successful deploy for admin/monitor/web-host:
 
 ```bash
 ./scripts/deploy-moox.sh \
@@ -88,6 +88,28 @@ Final successful deploy:
 
 Result: PASS. Started `admin`, `monitor`, and `web-host`; previously running `cloudnode`, `collector`, and `factor` remained up.
 
+Storage was then rebuilt on the Linux target because macOS cross-compiling the CGO DuckDB binary is not reliable:
+
+```bash
+ssh ubuntu@106.53.107.122 '$HOME/.local/go1.24.7/bin/go version'
+rsync -az --delete ... /tmp/moox-build/
+ssh ubuntu@106.53.107.122 'cd /tmp/moox-build && PATH=$HOME/.local/go1.24.7/bin:$PATH GOFLAGS=-buildvcs=false ./scripts/build.sh storage'
+rsync -avP ubuntu@106.53.107.122:/tmp/moox-build/bin/moox-storage \
+  ubuntu@106.53.107.122:/tmp/moox-build/bin/moox-storage-cli ./bin/
+./scripts/deploy-moox.sh \
+  --target ubuntu@106.53.107.122 \
+  --dir /home/ubuntu/moox/prod \
+  --skip-build \
+  --goos linux \
+  --goarch amd64 \
+  --no-cloudnode \
+  --no-collector \
+  --no-factor \
+  --reuse-web-assets
+```
+
+Result: PASS. Started `storage`, `admin`, `monitor`, and `web-host`; previously running `cloudnode`, `collector`, and `factor` remained up.
+
 Remote health checks:
 
 ```bash
@@ -97,7 +119,7 @@ curl -fsS http://106.53.107.122:9527/healthz
 ssh ubuntu@106.53.107.122 'curl -fsS http://127.0.0.1:11409/healthz'
 ```
 
-Result: PASS. `admin`, `monitor`, and `web-host` were running and healthy. Additional checks confirmed `cloudnode`, `collector`, and `factor` health endpoints were healthy.
+Result: PASS. `storage`, `admin`, `monitor`, and `web-host` were running and healthy. Additional checks confirmed `cloudnode`, `collector`, and `factor` health endpoints were healthy.
 
 Remote monitor SysDeploy sync:
 
@@ -134,6 +156,7 @@ Result: PASS. Returned HTTP 200 and the SPA shell.
 - `result_retention_days` was loaded but unused. Fixed by adding result and alert-event pruning.
 - Per-check alert rule listing originally hid disabled rules. Fixed so the management API returns all non-deleted rules for that check while alert evaluation still uses only enabled rules.
 - Existing Admin DB rows did not automatically receive newly added default health metadata. Fixed by making SysDeploy default seeding backfill missing `extra_config` keys without overwriting explicit user values.
+- The existing remote `trade_account` row had been backfilled with a local `127.0.0.1:11210/healthz` URL even though trade is not deployed on this host. Fixed by removing the default trade health backfill and clearing the remote row back to TCP probing.
 
 ## Residual Risks
 

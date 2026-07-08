@@ -27,6 +27,9 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if healthURL(byName["storage_metadata"].ExtraConfig) != "http://127.0.0.1:20210/healthz" {
 		t.Fatalf("storage_metadata extra_config = %s", byName["storage_metadata"].ExtraConfig)
 	}
+	if healthURL(byName["trade_account"].ExtraConfig) != "" {
+		t.Fatalf("trade_account should not default to local health_url: %s", byName["trade_account"].ExtraConfig)
+	}
 }
 
 func TestMergeDefaultExtraConfigBackfillsMissingFields(t *testing.T) {
