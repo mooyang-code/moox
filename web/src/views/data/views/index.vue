@@ -22,7 +22,7 @@
       size="small"
       :bordered="{ cell: true }"
       :loading="loading"
-      :data="rows"
+      :data="visibleRows"
       :pagination="pagination"
       :scroll="{ x: 'max-content' }"
       @page-change="onPageChange"
@@ -75,7 +75,7 @@
         </a-form-item>
         <a-form-item field="primary_dataset_id" label="主数据集" required>
           <a-select v-model="form.primary_dataset_id" allow-search placeholder="选择主数据集">
-            <a-option v-for="item in datasets" :key="item.dataset_id" :value="item.dataset_id">
+            <a-option v-for="item in selectableDatasets" :key="item.dataset_id" :value="item.dataset_id">
               {{ item.name }} ({{ item.dataset_id }})
             </a-option>
           </a-select>
@@ -179,6 +179,16 @@ import {
   validateLowerSnakeId
 } from "@/views/data/shared/metadata-utils";
 import {
+  mergeViewAttribution,
+  datasetMatchesAttribution,
+  isLikelyFactorResultDataset,
+  isLikelyFactorResultDatasetId,
+  viewMatchesAttribution,
+  type DatasetRole,
+  type OwnerModule,
+  type ViewRole
+} from "@/views/data/shared/module-attribution";
+import {
   buildDraftViewColumns,
   buildTimeSeriesViewFilterJSON,
   buildViewDatasetIds,
@@ -192,12 +202,104 @@ import {
 
 defineOptions({ name: "DataViews" });
 
+const props = withDefaults(defineProps<{
+  ownerModule?: OwnerModule;
+  viewRole?: ViewRole;
+  filterOwnerModules?: OwnerModule[];
+  filterDatasetRoles?: DatasetRole[];
+  filterViewRoles?: ViewRole[];
+  includeUnowned?: boolean;
+  managedBy?: string;
+  allowedPrimaryDatasetIds?: string[];
+  excludedPrimaryDatasetIds?: string[];
+  excludeLikelyFactorDatasets?: boolean;
+}>(), {
+  ownerModule: undefined,
+  viewRole: undefined,
+  filterOwnerModules: undefined,
+  filterDatasetRoles: undefined,
+  filterViewRoles: undefined,
+  includeUnowned: false,
+  managedBy: undefined,
+  allowedPrimaryDatasetIds: undefined,
+  excludedPrimaryDatasetIds: undefined,
+  excludeLikelyFactorDatasets: false,
+});
+
 type ViewForm = View & { view_freq?: string };
 
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const rows = ref<View[]>([]);
+const allowedPrimaryDatasetIdSet = computed(() => new Set((props.allowedPrimaryDatasetIds || []).filter(Boolean)));
+const excludedPrimaryDatasetIdSet = computed(() => new Set((props.excludedPrimaryDatasetIds || []).filter(Boolean)));
+const hasViewAttributionFilter = computed(() =>
+  Boolean(props.filterOwnerModules?.length || props.filterViewRoles?.length || props.includeUnowned),
+);
+const hasDatasetAttributionFilter = computed(() =>
+  Boolean(props.filterOwnerModules?.length || props.filterDatasetRoles?.length || props.includeUnowned),
+);
+const datasetById = computed(() => new Map(datasets.value.map((item) => [item.dataset_id, item])));
+const visibleRows = computed(() =>
+  rows.value.filter((item) => {
+    const matchedByDataset =
+      allowedPrimaryDatasetIdSet.value.size > 0 && allowedPrimaryDatasetIdSet.value.has(item.primary_dataset_id);
+    if (!matchedByDataset && excludedPrimaryDatasetIdSet.value.has(item.primary_dataset_id)) {
+      return false;
+    }
+    if (props.excludeLikelyFactorDatasets && !matchedByDataset && viewUsesLikelyFactorDataset(item)) {
+      return false;
+    }
+    const matchedByAttrs = viewMatchesAttribution(item, {
+      ownerModules: props.filterOwnerModules,
+      viewRoles: props.filterViewRoles,
+      includeUnowned: props.includeUnowned,
+    });
+    if (allowedPrimaryDatasetIdSet.value.size > 0 && hasViewAttributionFilter.value) {
+      return matchedByDataset || matchedByAttrs;
+    }
+    if (allowedPrimaryDatasetIdSet.value.size > 0) {
+      return matchedByDataset;
+    }
+    return matchedByAttrs;
+  }),
+);
 const datasets = ref<Dataset[]>([]);
+const selectableDatasets = computed(() =>
+  datasets.value.filter((item) => {
+    const matchedByAllowedId =
+      allowedPrimaryDatasetIdSet.value.size > 0 && allowedPrimaryDatasetIdSet.value.has(item.dataset_id);
+    if (!matchedByAllowedId && excludedPrimaryDatasetIdSet.value.has(item.dataset_id)) {
+      return false;
+    }
+    if (props.excludeLikelyFactorDatasets && !matchedByAllowedId && isLikelyFactorResultDataset(item)) {
+      return false;
+    }
+    const matchedByAttrs = datasetMatchesAttribution(item, {
+      ownerModules: props.filterOwnerModules,
+      datasetRoles: props.filterDatasetRoles,
+      includeUnowned: props.includeUnowned,
+    });
+    if (allowedPrimaryDatasetIdSet.value.size > 0 && hasDatasetAttributionFilter.value) {
+      return matchedByAllowedId || matchedByAttrs;
+    }
+    if (allowedPrimaryDatasetIdSet.value.size > 0) {
+      return matchedByAllowedId;
+    }
+    return matchedByAttrs;
+  }),
+);
+const hasAttributionFilter = computed(() =>
+  Boolean(
+    props.filterOwnerModules?.length ||
+      props.filterViewRoles?.length ||
+      props.filterDatasetRoles?.length ||
+      props.includeUnowned ||
+      props.allowedPrimaryDatasetIds?.length ||
+      props.excludedPrimaryDatasetIds?.length ||
+      props.excludeLikelyFactorDatasets,
+  ),
+);
 const draftColumns = ref<ViewColumn[]>([]);
 const loading = ref(false);
 const columnsLoading = ref(false);
@@ -220,7 +322,8 @@ const form = reactive<ViewForm>({
   view_freq: "",
   engine: "",
   query_window: "",
-  status: "active"
+  status: "active",
+  attributes: {}
 });
 
 const modalTitle = computed(() => (editing.value ? "编辑视图" : "新增视图"));
@@ -228,7 +331,7 @@ const primaryDataset = computed(() => datasets.value.find(item => item.dataset_i
 const primaryFreqOptions = computed(() => freqOptionsForPrimaryDataset(datasets.value, form.primary_dataset_id));
 const isTimeSeriesPrimaryDataset = computed(() => isTimeSeriesDataKind(primaryDataset.value?.data_kind));
 const includedDatasetOptions = computed(() =>
-  availableIncludedDatasets(datasets.value, form.primary_dataset_id, form.view_freq || "")
+  availableIncludedDatasets(selectableDatasets.value, form.primary_dataset_id, form.view_freq || "")
 );
 
 async function loadDatasets() {
@@ -236,8 +339,7 @@ async function loadDatasets() {
     datasets.value = [];
     return;
   }
-  const rsp = await listDatasets({ space_id: selectedSpaceId.value, page: { page: 1, size: 500 } });
-  datasets.value = rsp.datasets || [];
+  datasets.value = await listAllDatasets(selectedSpaceId.value);
 }
 
 async function load() {
@@ -248,6 +350,11 @@ async function load() {
   loading.value = true;
   try {
     await loadDatasets();
+    if (hasAttributionFilter.value) {
+      rows.value = await listAllViews(selectedSpaceId.value);
+      pagination.total = visibleRows.value.length;
+      return;
+    }
     const rsp = await listViews({
       space_id: selectedSpaceId.value,
       page: { page: pagination.current, size: pagination.pageSize }
@@ -257,6 +364,38 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+async function listAllDatasets(spaceId: string) {
+  const datasets: Dataset[] = [];
+  const size = 500;
+  for (let pageNo = 1; ; pageNo += 1) {
+    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size } });
+    datasets.push(...(rsp.datasets || []));
+    if (!rsp.page_result?.has_more || (rsp.datasets || []).length === 0) {
+      return datasets;
+    }
+  }
+}
+
+async function listAllViews(spaceId: string) {
+  const views: View[] = [];
+  const size = 500;
+  for (let pageNo = 1; ; pageNo += 1) {
+    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size } });
+    views.push(...(rsp.views || []));
+    if (!rsp.page_result?.has_more || (rsp.views || []).length === 0) {
+      return views;
+    }
+  }
+}
+
+function viewUsesLikelyFactorDataset(view: View) {
+  const dataset = datasetById.value.get(view.primary_dataset_id);
+  if (dataset) {
+    return isLikelyFactorResultDataset(dataset);
+  }
+  return isLikelyFactorResultDatasetId(view.primary_dataset_id);
 }
 
 function resetForm() {
@@ -272,7 +411,8 @@ function resetForm() {
     view_freq: "",
     engine: "",
     query_window: "",
-    status: "active"
+    status: "active",
+    attributes: {}
   });
   draftColumns.value = [];
 }
@@ -343,7 +483,13 @@ async function submit() {
     filter_json: filterJSON,
     engine: defaultViewEngine(datasets.value, form.primary_dataset_id),
     query_window: form.query_window,
-    status: form.status
+    status: form.status,
+    attributes: mergeViewAttribution(form.attributes, {
+      ownerModule: props.ownerModule,
+      viewRole: props.viewRole,
+      managedBy: props.managedBy,
+      primaryDatasetRole: primaryDataset.value?.attributes?.dataset_role as DatasetRole | undefined,
+    })
   };
   if (editing.value) {
     await updateView(payload);
@@ -497,7 +643,10 @@ onMounted(load);
 
 <style scoped>
 .metadata-page {
-  padding: 20px;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 20px 20px 72px;
+  overflow-y: auto;
 }
 
 .page-head {

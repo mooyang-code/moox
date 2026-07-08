@@ -171,13 +171,12 @@ func startQueueTestRuntime(t *testing.T) (*Runtime, config.JetStreamConfig) {
 	t.Helper()
 	port := freeTCPPort(t)
 	cfg := config.JetStreamConfig{
-		Enabled:          true,
-		NATSURL:          "nats://127.0.0.1:" + port,
-		SubjectPrefix:    DefaultSubjectPrefix,
-		ExecStream:       DefaultExecStream,
-		ProjectionStream: DefaultProjectionStream,
-		AckWaitMillis:    200,
-		MaxDeliver:       3,
+		Enabled:       true,
+		NATSURL:       "nats://127.0.0.1:" + port,
+		SubjectPrefix: DefaultSubjectPrefix,
+		ExecStream:    DefaultExecStream,
+		AckWaitMillis: 200,
+		MaxDeliver:    3,
 		Embedded: config.EmbeddedJetStreamConfig{
 			Enabled:          true,
 			Host:             "127.0.0.1",
@@ -191,7 +190,7 @@ func startQueueTestRuntime(t *testing.T) (*Runtime, config.JetStreamConfig) {
 		t.Fatalf("StartEmbedded() error = %v", err)
 	}
 	t.Cleanup(func() { _ = rt.Close() })
-	if err := rt.EnsureStreams(cfg); err != nil {
+	if err := rt.EnsureStreams(cfg, config.Default().JobItem); err != nil {
 		t.Fatalf("EnsureStreams() error = %v", err)
 	}
 	return rt, cfg

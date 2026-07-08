@@ -287,15 +287,36 @@ func (b *Builder) tryLockView(spaceID string, viewID string) (func(), bool) {
 }
 
 func (b *Builder) RebuildPendingViews(ctx context.Context, spaceID string) ([]*pb.View, error) {
-	return b.rebuildViews(ctx, spaceID, func(view *pb.View) bool {
-		return view.GetViewVersion() > view.GetActiveViewVersion() || rebuildableBuildStatus(view.GetBuildStatus())
-	})
+	return b.rebuildViews(ctx, spaceID, b.rebuildableByPendingSchedule)
 }
 
 func (b *Builder) RebuildFailedViews(ctx context.Context, spaceID string) ([]*pb.View, error) {
 	return b.rebuildViews(ctx, spaceID, func(view *pb.View) bool {
 		return view.GetBuildStatus() == "failed"
 	})
+}
+
+func (b *Builder) rebuildableByPendingSchedule(view *pb.View) bool {
+	switch view.GetBuildStatus() {
+	case "failed":
+		return false
+	case "building":
+		return view.GetViewVersion() > view.GetActiveViewVersion() && b.buildingViewStale(view)
+	default:
+		return view.GetViewVersion() > view.GetActiveViewVersion() || rebuildableBuildStatus(view.GetBuildStatus())
+	}
+}
+
+func (b *Builder) buildingViewStale(view *pb.View) bool {
+	startedAt := strings.TrimSpace(view.GetBuildStartedAt())
+	if startedAt == "" {
+		return false
+	}
+	started, err := time.Parse(time.RFC3339Nano, startedAt)
+	if err != nil {
+		return false
+	}
+	return b.now().UTC().Sub(started.UTC()) >= staleBuildingViewAfter
 }
 
 func (b *Builder) rebuildViews(ctx context.Context, spaceID string, rebuildable func(*pb.View) bool) ([]*pb.View, error) {
@@ -307,6 +328,7 @@ func (b *Builder) rebuildViews(ctx context.Context, spaceID string, rebuildable 
 		return nil, err
 	}
 	var built []*pb.View
+	var buildErr error
 	for _, view := range views {
 		if !isBuildableView(view) {
 			continue
@@ -321,15 +343,16 @@ func (b *Builder) rebuildViews(ctx context.Context, spaceID string, rebuildable 
 		item, err := b.buildLocked(ctx, view.GetSpaceId(), view.GetViewId())
 		unlock()
 		if err != nil {
-			return nil, err
+			buildErr = errors.Join(buildErr, fmt.Errorf("build view %s/%s: %w", view.GetSpaceId(), view.GetViewId(), err))
+			continue
 		}
 		built = append(built, item)
 	}
-	return built, nil
+	return built, buildErr
 }
 
 func rebuildableBuildStatus(status string) bool {
-	return status == "" || status == "pending" || status == "building" || status == "failed"
+	return status == "" || status == "pending"
 }
 
 func isDuckDBView(view *pb.View) bool {
@@ -526,6 +549,7 @@ func (b *Builder) readViewRows(ctx context.Context, view *pb.View, primaryDatase
 // viewBuildConcurrency 限制 View 构建时并行扫描 Dataset 数，避免压垮 PrimaryStore。
 const viewBuildConcurrency = 8
 const rebuildViewPageSize = uint32(1000)
+const staleBuildingViewAfter = 10 * time.Minute
 
 func (b *Builder) readAllRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange, columnNames []string) ([]*pb.TimeSeriesRow, error) {
 	var out []*pb.TimeSeriesRow

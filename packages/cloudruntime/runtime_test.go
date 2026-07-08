@@ -6,7 +6,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunPollsJobItemsAndDispatchesRegisteredHandler(t *testing.T) {
@@ -193,6 +195,92 @@ func TestRunReportsRetryableErrorKind(t *testing.T) {
 	}
 }
 
+func TestRunReportsPermanentFailureAndCompletionLogWhenHandlerPanics(t *testing.T) {
+	resetRegistryForTest()
+	defer resetRegistryForTest()
+
+	var completionLines []string
+	oldCompletionLogger := logCompletion
+	logCompletion = func(ctx context.Context, line string) {
+		completionLines = append(completionLines, line)
+	}
+	defer func() { logCompletion = oldCompletionLogger }()
+
+	var reportReq reportJobItemStatusRequest
+	Register("collect.kline", HandlerFunc(func(context.Context, JobItem) (Result, error) {
+		panic("collector exploded")
+	}))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/service/cloudnode/PollJobItems":
+			_ = json.NewEncoder(w).Encode(pollJobItemsResponse{
+				RetInfo: &retInfo{Code: 0, Msg: "ok"},
+				Items: []polledJobItem{{
+					SpaceID:   "crypto",
+					JobItemID: "task-1:2026-07-07T10:01:00Z",
+					JobType:   "collect.kline",
+					Params: map[string]any{
+						"task_id":  "task-1",
+						"symbol":   "BTCUSDT",
+						"interval": "1m",
+					},
+					AttemptNo: 1,
+				}},
+			})
+		case "/api/service/cloudnode/ReportJobItemStatus":
+			if err := json.NewDecoder(r.Body).Decode(&reportReq); err != nil {
+				t.Fatalf("decode report request: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(struct {
+				RetInfo *retInfo `json:"ret_info"`
+			}{RetInfo: &retInfo{Code: 0, Msg: "ok"}})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	if err := Run(context.Background(), Config{
+		ServiceGatewayTarget: server.URL,
+		SpaceID:              "crypto",
+		NodeID:               "node-a",
+		SupportedJobTypes:    []string{"collect.kline"},
+		Auth: AuthConfig{
+			AccessKey: "test-ak",
+			SecretKey: "test-sk",
+		},
+	}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if reportReq.Status != jobItemReportStatusFailed {
+		t.Fatalf("status = %d, want failed", reportReq.Status)
+	}
+	if reportReq.ErrorKind != jobItemErrorKindPermanent {
+		t.Fatalf("error_kind = %d, want permanent", reportReq.ErrorKind)
+	}
+	if reportReq.ErrorCode != "HANDLER_PANIC" {
+		t.Fatalf("error_code = %q, want HANDLER_PANIC", reportReq.ErrorCode)
+	}
+	if len(completionLines) != 1 {
+		t.Fatalf("completion log count = %d, want 1: %#v", len(completionLines), completionLines)
+	}
+	for _, want := range []string{
+		"collector_job_done",
+		"space_id=crypto",
+		"task_id=task-1",
+		"job_item_id=task-1:2026-07-07T10:01:00Z",
+		"node_id=node-a",
+		"symbol=BTCUSDT",
+		"interval=1m",
+		"status=failed",
+		"error=\"panic: collector exploded\"",
+	} {
+		if !strings.Contains(completionLines[0], want) {
+			t.Fatalf("completion log line missing %q: %s", want, completionLines[0])
+		}
+	}
+}
+
 func TestRegisterRejectsDuplicateJobType(t *testing.T) {
 	resetRegistryForTest()
 	defer resetRegistryForTest()
@@ -208,4 +296,40 @@ func TestRegisterRejectsDuplicateJobType(t *testing.T) {
 	Register("collect.kline", HandlerFunc(func(context.Context, JobItem) (Result, error) {
 		return Result{}, nil
 	}))
+}
+
+func TestJobCompletionLogLineIncludesCollectorLookupFields(t *testing.T) {
+	line := jobCompletionLogLine(Config{
+		SpaceID: "crypto",
+		NodeID:  "node-a",
+	}, JobItem{
+		SpaceID:   "crypto",
+		JobItemID: "task-1:2026-07-07T10:01:00Z",
+		JobType:   "collect.kline",
+		AttemptNo: 2,
+		Params: map[string]any{
+			"task_id":  "task-1",
+			"symbol":   "BTCUSDT",
+			"interval": "1m",
+		},
+	}, jobItemReportStatusFailed, 1532*time.Millisecond, errors.New("upstream unavailable"))
+
+	for _, want := range []string{
+		"collector_job_done",
+		"space_id=crypto",
+		"task_id=task-1",
+		"job_item_id=task-1:2026-07-07T10:01:00Z",
+		"node_id=node-a",
+		"job_type=collect.kline",
+		"attempt_no=2",
+		"symbol=BTCUSDT",
+		"interval=1m",
+		"status=failed",
+		"duration_ms=1532",
+		"error=\"upstream unavailable\"",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("completion log line missing %q: %s", want, line)
+		}
+	}
 }

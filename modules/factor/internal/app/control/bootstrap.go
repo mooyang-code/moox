@@ -1,0 +1,354 @@
+package control
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/mooyang-code/go-commlib/trpc-database/timer"
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/engine"
+	"github.com/mooyang-code/moox/modules/factor/internal/registry"
+	"github.com/mooyang-code/moox/modules/factor/internal/repository"
+	factorsvc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
+	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/mooyang-code/moox/packages/commonpb"
+	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/log"
+	"trpc.group/trpc-go/trpc-go/server"
+)
+
+// Initialize loads config and prepares the factor service runtime.
+func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
+	log.InfoContextf(ctx, "开始初始化 moox-factor...")
+
+	cfg, err := Load("./config/app.yaml")
+	if err != nil {
+		log.ErrorContextf(ctx, "加载 factor 配置失败: %v", err)
+		return nil, err
+	}
+	SetGlobalConfig(cfg)
+
+	dbm := NewManager()
+	if err := dbm.Initialize(&cfg.Database); err != nil {
+		log.ErrorContextf(ctx, "初始化 factor 数据库失败: %v", err)
+		return nil, err
+	}
+	if err := dbm.DB().Exec(factorschema.AllSQL()).Error; err != nil {
+		log.ErrorContextf(ctx, "初始化 factor schema 失败: %v", err)
+		return nil, err
+	}
+
+	authInfo := factorAuthInfo(cfg)
+	factorRepo := repository.NewFactorRepository(dbm.DB())
+	meta := registry.NewMetadataSync(newMetadataClient(cfg.Storage.MetadataTarget), authInfo)
+	_ = registry.NewService(factorRepo, meta, registry.Options{FactorsDir: cfg.Engine.FactorsDir})
+
+	storage := storageio.NewClient(cfg.Storage.AccessTarget, authInfo)
+	pool, err := engine.NewWorkerPool(engine.WorkerPoolConfig{
+		Workers: cfg.Engine.Workers,
+		Stdio: engine.StdioConfig{
+			PythonBin:   cfg.Engine.PythonBin,
+			WorkerPath:  "./pyworker/worker.py",
+			FactorsDir:  cfg.Engine.FactorsDir,
+			SectionsDir: cfg.Engine.SectionsDir,
+			Encoding:    cfg.Engine.Encoding,
+			TaskTimeout: time.Duration(cfg.Engine.TaskTimeoutMS) * time.Millisecond,
+		},
+	})
+	if err != nil {
+		log.ErrorContextf(ctx, "启动 factor Python worker 失败: %v", err)
+		return nil, err
+	}
+	sched := scheduler.NewService(scheduler.Config{
+		Workers:  cfg.Engine.Workers,
+		MaxRetry: cfg.Scheduler.MaxRetry,
+	}, storage, pool)
+
+	bindings, err := listEnabledBindings(ctx, dbm.DB())
+	if err != nil {
+		_ = pool.Close()
+		log.ErrorContextf(ctx, "加载 factor binding 快照失败: %v", err)
+		return nil, err
+	}
+	debounce := trigger.NewDebouncer(time.Duration(cfg.Scheduler.DebounceWindowMS)*time.Millisecond, bindings)
+	if cfg.NATS.URL == "" {
+		log.WarnContextf(ctx, "factor nats.url is empty, realtime trigger startup skipped")
+	} else {
+		consumer := trigger.NewNATSConsumer(trigger.NATSConfig{
+			URL:      cfg.NATS.URL,
+			Stream:   cfg.NATS.Stream,
+			Consumer: cfg.NATS.Consumer,
+			Subject:  cfg.NATS.Subject,
+		}, debounce)
+		if err := consumer.Start(ctx); err != nil {
+			_ = pool.Close()
+			log.ErrorContextf(ctx, "启动 factor NATS trigger 失败: %v", err)
+			return nil, err
+		}
+		startRealtimeLoop(ctx, realtimeLoopDeps{
+			consumer:       consumer,
+			debounce:       debounce,
+			scheduler:      sched,
+			factors:        factorRepo,
+			meta:           meta,
+			db:             dbm.DB(),
+			debounceWindow: time.Duration(cfg.Scheduler.DebounceWindowMS) * time.Millisecond,
+		})
+	}
+	registerReconcileSchedule(s, sched)
+
+	service := s.Service("trpc.moox.factor.FactorMgr")
+	if service == nil {
+		log.WarnContextf(ctx, "FactorMgr service is not configured, skip register")
+	} else {
+		factorpb.RegisterFactorMgrService(service, factorsvc.NewWithRuntime(
+			dbm.DB(),
+			sched,
+			pool,
+			factorsvc.WithFactorsDir(cfg.Engine.FactorsDir),
+			factorsvc.WithMetadataSync(meta),
+		))
+	}
+
+	log.InfoContextf(ctx, "moox-factor 初始化完成")
+	return s, nil
+}
+
+func registerReconcileSchedule(s *server.Server, sched *scheduler.Service) {
+	timer.RegisterScheduler("factorReconcileSchedule", &timer.DefaultScheduler{})
+	service := s.Service("trpc.moox.factor.reconcile.timer")
+	if service == nil {
+		log.Warn("factor reconcile timer service is not configured, skip register")
+		return
+	}
+	if sched == nil {
+		log.Warn("factor scheduler is nil, skip reconcile timer handler register")
+		return
+	}
+	timer.RegisterHandlerService(service, func(ctx context.Context, rawParams string) error {
+		log.InfoContextf(ctx, "factor reconcile schedule triggered params=%s", rawParams)
+		return sched.Drain(ctx)
+	})
+}
+
+type metadataClientAdapter struct {
+	client storagepb.MetadataClientProxy
+}
+
+func newMetadataClient(target string) *metadataClientAdapter {
+	return &metadataClientAdapter{
+		client: storagepb.NewMetadataClientProxy(client.WithTarget(storageio.NormalizeStorageTarget(target, "20100"))),
+	}
+}
+
+func (c *metadataClientAdapter) CreateFactor(ctx context.Context, req *storagepb.CreateFactorReq) (*storagepb.CreateFactorRsp, error) {
+	return c.client.CreateFactor(ctx, req)
+}
+
+func (c *metadataClientAdapter) CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
+	return c.client.CreateDataset(ctx, req)
+}
+
+func (c *metadataClientAdapter) UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
+	return c.client.UpdateDataset(ctx, req)
+}
+
+func (c *metadataClientAdapter) UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
+	return c.client.UpsertDatasetColumn(ctx, req)
+}
+
+func (c *metadataClientAdapter) GetFactor(ctx context.Context, req *storagepb.GetFactorReq) (*storagepb.GetFactorRsp, error) {
+	return c.client.GetFactor(ctx, req)
+}
+
+func (c *metadataClientAdapter) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
+	return c.client.GetDataset(ctx, req)
+}
+
+func (c *metadataClientAdapter) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error) {
+	return c.client.ListDatasetColumns(ctx, req)
+}
+
+func (c *metadataClientAdapter) ListDatasetSubjects(ctx context.Context, req *storagepb.ListDatasetSubjectsReq) (*storagepb.ListDatasetSubjectsRsp, error) {
+	return c.client.ListDatasetSubjects(ctx, req)
+}
+
+func (c *metadataClientAdapter) BindDatasetSubject(ctx context.Context, req *storagepb.BindDatasetSubjectReq) (*storagepb.BindDatasetSubjectRsp, error) {
+	return c.client.BindDatasetSubject(ctx, req)
+}
+
+func (c *metadataClientAdapter) ListPrimaryStoreRoutes(ctx context.Context, req *storagepb.ListPrimaryStoreRoutesReq) (*storagepb.ListPrimaryStoreRoutesRsp, error) {
+	return c.client.ListPrimaryStoreRoutes(ctx, req)
+}
+
+func (c *metadataClientAdapter) CreatePrimaryStoreRoute(ctx context.Context, req *storagepb.CreatePrimaryStoreRouteReq) (*storagepb.CreatePrimaryStoreRouteRsp, error) {
+	return c.client.CreatePrimaryStoreRoute(ctx, req)
+}
+
+type realtimeLoopDeps struct {
+	consumer       interface{ Close() error }
+	debounce       *trigger.Debouncer
+	scheduler      *scheduler.Service
+	factors        *repository.FactorRepository
+	meta           *registry.MetadataSync
+	db             *gorm.DB
+	debounceWindow time.Duration
+}
+
+func factorAuthInfo(cfg *Config) *commonpb.AuthInfo {
+	return &commonpb.AuthInfo{
+		AppId:     "moox-factor",
+		AppKey:    cfg.SysDeploy.ServiceAuth.AccessKey,
+		Operator:  "moox-factor",
+		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
+	}
+}
+
+func listEnabledBindings(ctx context.Context, db *gorm.DB) ([]domain.FactorBinding, error) {
+	var rows []domain.FactorBinding
+	if err := db.WithContext(ctx).
+		Where("c_status = ?", domain.BindingStatusEnabled).
+		Order("c_space_id ASC, c_source_dataset ASC, c_freq ASC, c_factor_id ASC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func startRealtimeLoop(ctx context.Context, deps realtimeLoopDeps) {
+	interval := deps.debounceWindow / 2
+	if interval <= 0 {
+		interval = time.Second
+	}
+	if interval < 200*time.Millisecond {
+		interval = 200 * time.Millisecond
+	}
+	go func() {
+		flushTicker := time.NewTicker(interval)
+		reloadTicker := time.NewTicker(30 * time.Second)
+		defer flushTicker.Stop()
+		defer reloadTicker.Stop()
+		defer deps.consumer.Close()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-flushTicker.C:
+				drainDebounced(ctx, deps)
+			case <-reloadTicker.C:
+				bindings, err := listEnabledBindings(ctx, deps.db)
+				if err != nil {
+					log.WarnContextf(ctx, "刷新 factor binding 快照失败: %v", err)
+					continue
+				}
+				deps.debounce.SetBindings(bindings)
+			}
+		}
+	}()
+}
+
+func drainDebounced(ctx context.Context, deps realtimeLoopDeps) {
+	for _, task := range deps.debounce.Flush(time.Now()) {
+		schedTask, err := buildSchedulerTask(ctx, deps.factors, task)
+		if err != nil {
+			log.WarnContextf(ctx, "构造 factor 调度任务失败: %v", err)
+			continue
+		}
+		if err := syncTaskMetadata(ctx, deps.meta, schedTask, deps.factors); err != nil {
+			log.WarnContextf(ctx, "同步 factor metadata 失败: %v", err)
+			continue
+		}
+		deps.scheduler.Enqueue(ctx, schedTask)
+	}
+	if err := deps.scheduler.Drain(ctx); err != nil {
+		log.WarnContextf(ctx, "drain factor scheduler failed: %v", err)
+	}
+}
+
+func buildSchedulerTask(ctx context.Context, repo *repository.FactorRepository, task trigger.Task) (scheduler.Task, error) {
+	specs := make([]engine.FactorSpec, 0, len(task.FactorIDs))
+	lookback := 0
+	for _, factorID := range task.FactorIDs {
+		factor, err := repo.Get(ctx, factorID)
+		if err != nil {
+			return scheduler.Task{}, fmt.Errorf("load factor %s: %w", factorID, err)
+		}
+		params, err := paramsFromJSON(factor.ParamsJSON)
+		if err != nil {
+			return scheduler.Task{}, fmt.Errorf("parse params for factor %s: %w", factor.FactorID, err)
+		}
+		specs = append(specs, engine.FactorSpec{
+			FactorID:      factor.FactorID,
+			Name:          factor.Name,
+			Params:        params,
+			WritebackBars: factor.WritebackBars,
+			ExtraColumns:  registry.ExtraColumnsFromFactors([]domain.FactorDef{*factor}),
+		})
+		if factor.LookbackBars > lookback {
+			lookback = factor.LookbackBars
+		}
+	}
+	if len(specs) == 0 {
+		return scheduler.Task{}, fmt.Errorf("no factor specs for task %s/%s/%s", task.SpaceID, task.SourceDataset, task.SubjectID)
+	}
+	if lookback <= 0 {
+		lookback = registry.DefaultLookback(nil)
+	}
+	return scheduler.Task{
+		FactorTask: engine.FactorTask{
+			TaskID:        fmt.Sprintf("ft-%d", time.Now().UnixNano()),
+			Kind:          domain.FactorKindTimeseries,
+			SpaceID:       task.SpaceID,
+			SourceDataset: task.SourceDataset,
+			TargetDataset: task.TargetDataset,
+			SubjectID:     task.SubjectID,
+			Freq:          task.Freq,
+			BarTime:       task.BarTime,
+			LookbackBars:  lookback,
+			Factors:       specs,
+		},
+		TriggerType: "event",
+		FactorIDs:   append([]string(nil), task.FactorIDs...),
+	}, nil
+}
+
+func syncTaskMetadata(ctx context.Context, meta *registry.MetadataSync, task scheduler.Task, repo *repository.FactorRepository) error {
+	if meta == nil {
+		return nil
+	}
+	factors := make([]domain.FactorDef, 0, len(task.FactorIDs))
+	for _, factorID := range task.FactorIDs {
+		factor, err := repo.Get(ctx, factorID)
+		if err != nil {
+			return fmt.Errorf("load factor %s: %w", factorID, err)
+		}
+		if factor.Status != domain.FactorStatusEnabled {
+			continue
+		}
+		factors = append(factors, *factor)
+	}
+	if len(factors) == 0 {
+		return nil
+	}
+	targetDataset := task.TargetDataset
+	if targetDataset == "" {
+		targetDataset = registry.ResultDataset(task.SourceDataset)
+	}
+	return meta.SyncTargetDataset(ctx, task.SpaceID, task.SourceDataset, targetDataset, task.Freq, factors)
+}
+
+func paramsFromJSON(raw string) ([]int, error) {
+	var params []int
+	if err := json.Unmarshal([]byte(raw), &params); err != nil {
+		return nil, err
+	}
+	return params, nil
+}

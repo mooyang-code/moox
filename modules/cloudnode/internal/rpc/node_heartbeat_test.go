@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -31,37 +33,42 @@ func TestReportHeartbeatEnqueuesHeartbeatSink(t *testing.T) {
 	}
 }
 
-func TestReportHeartbeatReturnsCancelDirective(t *testing.T) {
+func TestReportHeartbeatReturnsCancelDirectiveFromActiveKV(t *testing.T) {
 	ctx := context.Background()
-	db := newNodeSCFTestDB(t)
-	repo := projection.NewRepository(db, projection.RepositoryOptions{
+	rt, _ := startRPCQueueRuntime(t)
+	kv, err := rt.JetStream().KeyValue(config.Default().JobItem.ActiveKVBucket)
+	if err != nil {
+		t.Fatalf("KeyValue() error = %v", err)
+	}
+	stateStore := jobstate.NewKVStore(kv, jobstate.Options{
 		RecoverAfterMillis: int64(time.Minute / time.Millisecond),
 		DefaultMaxAttempts: 3,
 	})
 	params, _ := structpb.NewStruct(map[string]any{"symbol": "BTCUSDT"})
-	if _, err := repo.CreatePending(ctx, &pb.JobItem{
+	if _, err := stateStore.CreatePending(ctx, &pb.JobItem{
 		SpaceId:       "crypto",
 		JobId:         "job-1",
-		JobItemId:     "ji-directive",
+		JobItemId:     "ji-kv-directive",
 		JobType:       "collect.kline",
 		CodePackageId: "collector-scf",
 		Params:        params,
-	}, projection.QueueMeta{}); err != nil {
+	}, jobstate.QueueMeta{}); err != nil {
 		t.Fatalf("CreatePending() error = %v", err)
 	}
-	if ok, _, err := repo.TryMarkRunning(ctx, projection.RunningRequest{
+	if ok, _, err := stateStore.TryMarkRunning(ctx, jobstate.RunningRequest{
 		SpaceID:    "crypto",
-		JobItemID:  "ji-directive",
+		JobItemID:  "ji-kv-directive",
 		NodeID:     "node-1",
 		AckSubject: "$JS.ACK.directive",
 		StreamSeq:  1,
 	}); err != nil || !ok {
 		t.Fatalf("TryMarkRunning() ok=%v err=%v", ok, err)
 	}
-	if err := repo.MarkCanceled(ctx, "crypto", "ji-directive", "user canceled"); err != nil {
+	if err := stateStore.MarkCanceled(ctx, "crypto", "ji-kv-directive", "user canceled"); err != nil {
 		t.Fatalf("MarkCanceled() error = %v", err)
 	}
-	svc := &Service{projectionRepo: repo, heartbeatSink: &fakeHeartbeatSink{}}
+	catalog := repository.NewCatalogRepository(newNodeSCFTestDB(t))
+	svc := &Service{catalog: catalog, jobState: stateStore}
 
 	rsp, err := svc.ReportHeartbeat(ctx, &pb.ReportHeartbeatReq{
 		SpaceId: "crypto",
@@ -73,8 +80,56 @@ func TestReportHeartbeatReturnsCancelDirective(t *testing.T) {
 	if len(rsp.GetDirectives()) != 1 || rsp.GetDirectives()[0].GetType() != pb.ControlDirectiveType_CONTROL_DIRECTIVE_CANCEL {
 		t.Fatalf("directives = %+v", rsp.GetDirectives())
 	}
-	if rsp.GetDirectives()[0].GetJobItemId() != "ji-directive" || rsp.GetDirectives()[0].GetAttemptNo() != 1 {
+	if rsp.GetDirectives()[0].GetJobItemId() != "ji-kv-directive" || rsp.GetDirectives()[0].GetAttemptNo() != 1 {
 		t.Fatalf("directive = %+v", rsp.GetDirectives()[0])
+	}
+}
+
+func TestReportHeartbeatWithSinkSkipsCancelDirectiveScan(t *testing.T) {
+	ctx := context.Background()
+	rt, _ := startRPCQueueRuntime(t)
+	kv, err := rt.JetStream().KeyValue(config.Default().JobItem.ActiveKVBucket)
+	if err != nil {
+		t.Fatalf("KeyValue() error = %v", err)
+	}
+	stateStore := jobstate.NewKVStore(kv, jobstate.Options{
+		RecoverAfterMillis: int64(time.Minute / time.Millisecond),
+		DefaultMaxAttempts: 3,
+	})
+	params, _ := structpb.NewStruct(map[string]any{"symbol": "BTCUSDT"})
+	if _, err := stateStore.CreatePending(ctx, &pb.JobItem{
+		SpaceId:       "crypto",
+		JobId:         "job-1",
+		JobItemId:     "ji-kv-directive-sink",
+		JobType:       "collect.kline",
+		CodePackageId: "collector-scf",
+		Params:        params,
+	}, jobstate.QueueMeta{}); err != nil {
+		t.Fatalf("CreatePending() error = %v", err)
+	}
+	if ok, _, err := stateStore.TryMarkRunning(ctx, jobstate.RunningRequest{
+		SpaceID:    "crypto",
+		JobItemID:  "ji-kv-directive-sink",
+		NodeID:     "node-1",
+		AckSubject: "$JS.ACK.directive",
+		StreamSeq:  1,
+	}); err != nil || !ok {
+		t.Fatalf("TryMarkRunning() ok=%v err=%v", ok, err)
+	}
+	if err := stateStore.MarkCanceled(ctx, "crypto", "ji-kv-directive-sink", "user canceled"); err != nil {
+		t.Fatalf("MarkCanceled() error = %v", err)
+	}
+	svc := &Service{jobState: stateStore, heartbeatSink: &fakeHeartbeatSink{}}
+
+	rsp, err := svc.ReportHeartbeat(ctx, &pb.ReportHeartbeatReq{
+		SpaceId: "crypto",
+		NodeId:  "node-1",
+	})
+	if err != nil {
+		t.Fatalf("ReportHeartbeat transport error = %v", err)
+	}
+	if len(rsp.GetDirectives()) != 0 {
+		t.Fatalf("directives = %+v, want none when heartbeat sink is enabled", rsp.GetDirectives())
 	}
 }
 

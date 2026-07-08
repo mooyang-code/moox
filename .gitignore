@@ -24,6 +24,10 @@ profile.cov
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
+# Python bytecode/cache artifacts
+__pycache__/
+*.py[cod]
+
 # Go workspace file
 go.work.sum
 
@@ -72,8 +76,6 @@ cover.out.tmp
 *.sqlite3
 
 *.log
-
-**/trpc_go.yaml
 
 # Editor/IDE
 # .idea/

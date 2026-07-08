@@ -225,7 +225,10 @@ onMounted(load);
 
 <style scoped>
 .ops-page {
-  padding: 20px;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 20px 20px 72px;
+  overflow-y: auto;
 }
 
 .page-head {

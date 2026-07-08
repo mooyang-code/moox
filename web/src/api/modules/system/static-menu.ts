@@ -51,29 +51,23 @@ const directory = (
 export const systemMenu = [
   menu("01", "0", "/home", "home", "home", "home/home", 1, { affix: true, svgIcon: "home", icon: "" }),
 
-  directory("02", "0", "/data/overview", "data-assets", "data-assets", 2, { svgIcon: "folder-menu", icon: "" }),
-  // 二级分组：数据建模
-  directory("0210", "02", "/data/sources", "data-modeling", "data-modeling", 1),
-  menu("021001", "0210", "/data/sources", "data-sources", "data-sources", "data/sources/index", 1),
-  menu("021002", "0210", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 2),
-  menu("021003", "0210", "/data/datasets", "data-datasets", "data-datasets", "data/datasets/index", 3),
-  menu("021004", "0210", "/data/fields", "data-fields", "data-fields", "data/fields/index", 4),
-  menu("021005", "0210", "/data/factors", "data-factors", "data-factors", "data/factors/index", 5),
-  // 二级分组：数据管理
-  directory("0230", "02", "/data/overview", "data-mgmt", "data-mgmt", 2),
-  menu("023001", "0230", "/data/overview", "data-overview", "data-overview", "data/overview/overview", 1),
-  menu("023002", "0230", "/data/browse", "data-browse", "data-browse", "data/browse/index", 2),
-  menu("023003", "0230", "/data/import", "data-import", "data-import", "data/import/index", 3),
-  // 二级分组：查询视图
-  directory("0220", "02", "/data/views", "data-views", "data-views", 3),
-  menu("022001", "0220", "/data/views", "data-view-list", "data-view-list", "data/views/index", 1),
-  menu("022002", "0220", "/data/view-browse", "data-view-browse", "data-view-browse", "data/view-browse/index", 2),
+  directory("02", "0", "/data/sources", "data-assets", "data-assets", 2, { svgIcon: "folder-menu", icon: "" }),
+  menu("0201", "02", "/data/sources", "data-sources", "data-sources", "data/sources/index", 1),
+  menu("0202", "02", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 2),
+  menu("0203", "02", "/data/fields", "data-fields", "data-fields", "data/fields/index", 3),
 
-  directory("03", "0", "/collector/cloudnodes", "compute-collector", "compute-collector", 3, { svgIcon: "functions", icon: "" }),
-  menu("0301", "03", "/collector/cloudnodes", "collector-cloudnodes", "collector-cloudnodes", "collector/cloud-node/cloud-node", 1),
-  menu("0302", "03", "/collector/packages", "collector-packages", "collector-packages", "collector/cloud-node/function-package-manage", 2),
+  directory("03", "0", "/collector/datasets", "compute-collector", "compute-collector", 3, { svgIcon: "functions", icon: "" }),
+  menu("0305", "03", "/collector/datasets", "collector-datasets", "collector-datasets", "collector/datasets/index", 1),
+  menu("0306", "03", "/collector/views", "collector-views", "collector-views", "collector/views/index", 2),
   menu("0303", "03", "/collector/rules", "collector-rules", "collector-rules", "collector/collector-rules/collector-rules", 3),
   menu("0304", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-instances/task-instances", 4),
+  menu("0301", "03", "/collector/cloudnodes", "collector-cloudnodes", "collector-cloudnodes", "collector/cloud-node/cloud-node", 5),
+  menu("0302", "03", "/collector/packages", "collector-packages", "collector-packages", "collector/cloud-node/function-package-manage", 6),
+
+  directory("0240", "0", "/factor/definitions", "factor-compute", "factor-compute", 4, { svgIcon: "functions", icon: "" }),
+  menu("024001", "0240", "/factor/definitions", "factor-definitions", "factor-definitions", "factor/definitions/index", 1),
+  menu("024002", "0240", "/factor/bindings", "factor-bindings", "factor-bindings", "factor/bindings/index", 2),
+  menu("024004", "0240", "/factor/results", "factor-results", "factor-results", "factor/results/index", 3),
 
   directory("05", "0", "/trading/accounts", "trading", "trading", 5, { svgIcon: "balance-inquiry", icon: "" }),
   menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-overview/account-overview", 1),

@@ -114,15 +114,6 @@ func (d *UserDAO) CreateLoginHistory(ctx context.Context, history *model.LoginHi
 	return d.db.WithContext(ctx).Create(history).Error
 }
 
-// ===== 用户操作日志 =====
-
-// CreateUserAction 创建用户操作日志
-func (d *UserDAO) CreateUserAction(ctx context.Context, action *model.UserAction) error {
-	action.CreatedAt = time.Now()
-
-	return d.db.WithContext(ctx).Create(action).Error
-}
-
 // ===== 缓存操作 =====
 
 // SetLoginSalt 设置登录盐值

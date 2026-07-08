@@ -273,10 +273,6 @@ func (s *Service) ReportTaskStatus(ctx context.Context, req *pb.ReportInstanceSt
 		}
 		return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	duration := time.Duration(req.GetDurationMs()) * time.Millisecond
-	if err := s.instanceRepo.AddExecutionLog(ctx, spaceID, taskID, nodeID, status, result, req.GetErrorMessage(), duration); err != nil {
-		log.WarnContextf(ctx, "[Collector] add execution log failed: %v", err)
-	}
 	log.InfoContextf(ctx, "[Collector] task status space_id=%s task_id=%s node_id=%s status=%d",
 		spaceID, taskID, nodeID, status)
 	return &pb.ReportInstanceStatusRsp{RetInfo: retOK()}, nil

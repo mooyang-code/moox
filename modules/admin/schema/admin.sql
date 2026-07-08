@@ -3,6 +3,8 @@
 
 PRAGMA foreign_keys = ON;
 
+DROP TABLE IF EXISTS t_user_actions;
+
 -- ************ 平台空间表 ************
 CREATE TABLE IF NOT EXISTS t_spaces (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -109,21 +111,6 @@ CREATE TABLE IF NOT EXISTS t_login_history (
     FOREIGN KEY (c_user_id) REFERENCES t_users(c_user_id) ON DELETE CASCADE
 );
 
--- ************ 用户操作日志表 (可选，用于审计) ************
-CREATE TABLE IF NOT EXISTS t_user_actions (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 自增ID
-    c_user_id TEXT NOT NULL,                                   -- 用户UUID
-    c_action TEXT NOT NULL,                                    -- 操作类型: login, logout, change_password, update_profile
-    c_resource TEXT DEFAULT '',                                -- 操作资源
-    c_details TEXT DEFAULT '',                                 -- 操作详情 (JSON格式)
-    c_client_ip TEXT DEFAULT '',                               -- 客户端IP
-    c_user_agent TEXT DEFAULT '',                              -- 用户代理
-    c_result TEXT NOT NULL DEFAULT 'success',                 -- 操作结果: success, failed
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,               -- 操作时间
-    
-    FOREIGN KEY (c_user_id) REFERENCES t_users(c_user_id) ON DELETE CASCADE
-);
-
 -- ************ 创建索引 ************
 -- 用户表索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_user_id ON t_users(c_user_id);
@@ -138,11 +125,6 @@ CREATE INDEX IF NOT EXISTS idx_login_history_user_id ON t_login_history(c_user_i
 CREATE INDEX IF NOT EXISTS idx_login_history_ip ON t_login_history(c_client_ip);
 CREATE INDEX IF NOT EXISTS idx_login_history_time ON t_login_history(c_ctime);
 CREATE INDEX IF NOT EXISTS idx_login_history_result ON t_login_history(c_login_result);
-
--- 操作日志索引
-CREATE INDEX IF NOT EXISTS idx_user_actions_user_id ON t_user_actions(c_user_id);
-CREATE INDEX IF NOT EXISTS idx_user_actions_action ON t_user_actions(c_action);
-CREATE INDEX IF NOT EXISTS idx_user_actions_time ON t_user_actions(c_ctime);
 
 -- ************ 创建触发器，自动更新修改时间 ************
 -- 用户表触发器 - 更新时间

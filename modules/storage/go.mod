@@ -15,6 +15,7 @@ require (
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
 	github.com/mooyang-code/moox/modules/storage/proto/gen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/snapshotcache v0.1.1
+	github.com/nats-io/nats-server/v2 v2.11.3
 	github.com/nats-io/nats.go v1.47.0
 	github.com/parquet-go/parquet-go v0.25.1
 	github.com/rs/xid v1.6.0
@@ -72,7 +73,7 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
-	github.com/google/go-tpm v0.9.3 // indirect
+	github.com/google/go-tpm v0.9.6 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
@@ -92,7 +93,6 @@ require (
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/jwt/v2 v2.7.4 // indirect
-	github.com/nats-io/nats-server/v2 v2.11.3 // indirect
 	github.com/nats-io/nkeys v0.4.11 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
@@ -124,7 +124,7 @@ require (
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/telemetry v0.0.0-20251111182119-bc8e575c7b54 // indirect
 	golang.org/x/text v0.32.0 // indirect
-	golang.org/x/time v0.11.0 // indirect
+	golang.org/x/time v0.14.0 // indirect
 	golang.org/x/tools v0.39.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

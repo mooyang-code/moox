@@ -36,7 +36,7 @@ moox-trade      -> modules/trade/schema
 | 服务部署信息 | `moox-admin` | SysDeploy 启动补齐默认部署记录，再通过管理台 `/settings/service-deployments` 调整 |
 | Storage 平台拓扑和业务元数据 | `moox-storage` | `examples/*.seed.yaml` 通过 `moox-cli metadata import` 导入 |
 | 云账户、云节点、函数包 | `moox-cloudnode` | 管理台或 `/api/admin/cloudnode/*` API 创建 |
-| 采集规则、任务实例、执行日志 | `moox-collector` | 管理台或 `/api/admin/collectmgr/*` API 创建规则，再由 collector 生成 |
+| 采集规则、任务实例 | `moox-collector` | 管理台或 `/api/admin/collectmgr/*` API 创建规则，再由 collector 生成；采集执行日志由 SCF/CLS 承载 |
 | SCF 异步 JobItem、同步 invocation | `moox-cloudnode` | 由 collector/factor/trade 等业务服务通过 `/api/service/cloudnode/*` 提交 |
 | K 线、标的、视图数据 | `moox-storage` | collector/SCF 通过 storage RPC 写入，view/archive 通过 rebuild 或事件更新 |
 

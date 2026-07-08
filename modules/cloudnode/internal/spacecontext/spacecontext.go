@@ -4,6 +4,7 @@ package spacecontext
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/filter"
@@ -42,10 +43,15 @@ func WithSpaceID(ctx context.Context, spaceID string) context.Context {
 // FromContext reads space_id from context.
 func FromContext(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(ctxKey{}).(string)
-	if !ok {
-		return "", false
+	if ok {
+		spaceID := strings.TrimSpace(v)
+		return spaceID, spaceID != ""
 	}
-	return v, v != ""
+	if r := thttp.Request(ctx); r != nil {
+		spaceID := strings.TrimSpace(r.Header.Get(SpaceIDHeader))
+		return spaceID, spaceID != ""
+	}
+	return "", false
 }
 
 // MustFromContext reads space_id or returns an error.

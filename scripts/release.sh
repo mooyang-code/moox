@@ -8,6 +8,21 @@ ARCH="${TARGET_GOARCH:-${GOARCH:-$(go env GOARCH)}}"
 RELEASE_ROOT="${ROOT}/release/moox-${VERSION}-${OS}-${ARCH}"
 ARCHIVE="${RELEASE_ROOT}.tar.gz"
 
+build_web_assets() {
+  (
+    cd "${ROOT}/web"
+    if [[ ! -d node_modules ]]; then
+      CI=true pnpm install --no-frozen-lockfile --config.confirmModulesPurge=false
+    fi
+    npm run build:prod
+  )
+  if ! command -v statik >/dev/null 2>&1; then
+    go install github.com/rakyll/statik@latest
+  fi
+  (cd "${ROOT}/web-host" && statik -src=../web/dist -dest=./internal)
+}
+
+build_web_assets
 TARGET_GOOS="${OS}" TARGET_GOARCH="${ARCH}" "${ROOT}/scripts/build.sh"
 
 rm -rf "${RELEASE_ROOT}"
@@ -21,6 +36,9 @@ mkdir -p \
   "${RELEASE_ROOT}/collector/bin" \
   "${RELEASE_ROOT}/collector/config" \
   "${RELEASE_ROOT}/factor/bin" \
+  "${RELEASE_ROOT}/factor/config" \
+  "${RELEASE_ROOT}/factor/factors" \
+  "${RELEASE_ROOT}/factor/sections" \
   "${RELEASE_ROOT}/trade/bin" \
   "${RELEASE_ROOT}/storage/bin" \
   "${RELEASE_ROOT}/storage/config" \
@@ -44,6 +62,7 @@ copy_binary moox-collector "${RELEASE_ROOT}/collector/bin"
 copy_binary moox-collector-cli "${RELEASE_ROOT}/collector/bin"
 copy_binary moox-collector-scf "${RELEASE_ROOT}/collector/bin"
 copy_binary moox-factor "${RELEASE_ROOT}/factor/bin"
+copy_binary moox-factor-cli "${RELEASE_ROOT}/factor/bin"
 copy_binary moox-trade "${RELEASE_ROOT}/trade/bin"
 copy_binary moox-trade-cli "${RELEASE_ROOT}/trade/bin"
 copy_binary moox-storage "${RELEASE_ROOT}/storage/bin"
@@ -52,6 +71,11 @@ copy_binary moox-storage-cli "${RELEASE_ROOT}/storage/bin"
 cp -R "${ROOT}/modules/admin/config/." "${RELEASE_ROOT}/admin/config/"
 cp -R "${ROOT}/modules/cloudnode/config/." "${RELEASE_ROOT}/cloudnode/config/"
 cp -R "${ROOT}/modules/collector/config/." "${RELEASE_ROOT}/collector/config/"
+cp -R "${ROOT}/modules/factor/config/." "${RELEASE_ROOT}/factor/config/"
+cp -R "${ROOT}/modules/factor/factors/." "${RELEASE_ROOT}/factor/factors/"
+cp -R "${ROOT}/modules/factor/sections/." "${RELEASE_ROOT}/factor/sections/"
+cp -R "${ROOT}/modules/factor/pyworker" "${RELEASE_ROOT}/factor/pyworker"
+find "${RELEASE_ROOT}/factor/pyworker" -type d -name __pycache__ -prune -exec rm -rf {} +
 cp -R "${ROOT}/modules/storage/config/." "${RELEASE_ROOT}/storage/config/"
 cp -R "${ROOT}/modules/storage/schema/." "${RELEASE_ROOT}/storage/schema/"
 cp "${ROOT}/scripts/storage-start.sh" "${RELEASE_ROOT}/storage/start.sh"

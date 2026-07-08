@@ -70,37 +70,3 @@ type FunctionPackage struct {
 }
 
 func (*FunctionPackage) TableName() string { return "t_cloud_function_packages" }
-
-type Invocation struct {
-	ID           int       `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID      string    `gorm:"column:c_space_id"`
-	InvocationID string    `gorm:"column:c_invocation_id"`
-	OwnerService string    `gorm:"column:c_owner_service"`
-	WorkloadType string    `gorm:"column:c_workload_type"`
-	DeploymentID string    `gorm:"column:c_deployment_id"`
-	Status       string    `gorm:"column:c_status"`
-	RequestCount int       `gorm:"column:c_request_count"`
-	SuccessCount int       `gorm:"column:c_success_count"`
-	FailedCount  int       `gorm:"column:c_failed_count"`
-	TimeoutCount int       `gorm:"column:c_timeout_count"`
-	DurationMS   int64     `gorm:"column:c_duration_ms"`
-	ErrorSummary string    `gorm:"column:c_error_summary"`
-	CreateTime   time.Time `gorm:"column:c_ctime"`
-	ModifyTime   time.Time `gorm:"column:c_mtime"`
-}
-
-func (*Invocation) TableName() string { return "t_cloud_invocations" }
-
-type InvocationResult struct {
-	ID           int       `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID      string    `gorm:"column:c_space_id"`
-	InvocationID string    `gorm:"column:c_invocation_id"`
-	RequestID    string    `gorm:"column:c_request_id"`
-	Status       string    `gorm:"column:c_status"`
-	Payload      string    `gorm:"column:c_payload"`
-	ErrorMessage string    `gorm:"column:c_error_message"`
-	DurationMS   int64     `gorm:"column:c_duration_ms"`
-	CreateTime   time.Time `gorm:"column:c_ctime"`
-}
-
-func (*InvocationResult) TableName() string { return "t_cloud_invocation_results" }

@@ -1,9 +1,13 @@
 package repository
 
 import (
+	"errors"
+
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"gorm.io/gorm"
 )
+
+var ErrPollingNodeNotFound = errors.New("polling node not found")
 
 type CatalogRepository struct{ db *gorm.DB }
 

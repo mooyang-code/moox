@@ -172,21 +172,23 @@ func (p *NATSProducer) Subscribe(ctx context.Context, subject string, handler tr
 	}
 	consumerName := durableConsumerName(p.options.ConsumerName, subject)
 	subscription, err := p.js.Subscribe(subject, func(msg *nats.Msg) {
-		event := &transport.Message{
-			Subject: msg.Subject,
-			Data:    msg.Data,
-			Time:    time.Now(),
-		}
-		// handler 返回值直接决定 JetStream Ack/Nak。上层 view/archive 事件消费者会等待本事件
-		// 对应的批处理完成后再返回，因此批处理失败可以通过 Nak 触发 redelivery。
-		if err := handler(trpc.BackgroundContext(), event); err != nil {
-			_ = msg.Nak()
-			log.Errorf("处理NATS消息失败: %v", err)
-			return
-		}
-		if err := msg.Ack(); err != nil {
-			log.Errorf("确认NATS消息失败: %v", err)
-		}
+		go func(msg *nats.Msg) {
+			event := &transport.Message{
+				Subject: msg.Subject,
+				Data:    msg.Data,
+				Time:    time.Now(),
+			}
+			// handler 返回值直接决定 JetStream Ack/Nak。上层 view/archive 事件消费者会等待本事件
+			// 对应的批处理完成后再返回，因此批处理失败可以通过 Nak 触发 redelivery。
+			if err := handler(trpc.BackgroundContext(), event); err != nil {
+				_ = msg.Nak()
+				log.Errorf("处理NATS消息失败: %v", err)
+				return
+			}
+			if err := msg.Ack(); err != nil {
+				log.Errorf("确认NATS消息失败: %v", err)
+			}
+		}(msg)
 	}, nats.ManualAck(), nats.Durable(consumerName), nats.DeliverNew())
 	if err != nil {
 		return nil, fmt.Errorf("订阅消息失败: %w", err)

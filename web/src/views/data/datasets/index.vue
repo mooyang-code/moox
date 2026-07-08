@@ -22,7 +22,7 @@
       size="small"
       :bordered="{ cell: true }"
       :loading="loading"
-      :data="rows"
+      :data="visibleRows"
       :pagination="pagination"
       :scroll="{ x: 'max-content' }"
       @page-change="onPageChange"
@@ -126,14 +126,48 @@ import {
   validateChineseDisplayName,
   validateLowerSnakeId,
 } from '@/views/data/shared/metadata-utils';
+import {
+  datasetMatchesAttribution,
+  mergeDatasetAttribution,
+  type DatasetRole,
+  type OwnerModule,
+} from '@/views/data/shared/module-attribution';
 
 defineOptions({ name: 'DataDatasets' });
+
+const props = withDefaults(defineProps<{
+  ownerModule?: OwnerModule;
+  datasetRole?: DatasetRole;
+  filterOwnerModules?: OwnerModule[];
+  filterDatasetRoles?: DatasetRole[];
+  includeUnowned?: boolean;
+  managedBy?: string;
+}>(), {
+  ownerModule: undefined,
+  datasetRole: undefined,
+  filterOwnerModules: undefined,
+  filterDatasetRoles: undefined,
+  includeUnowned: false,
+  managedBy: undefined,
+});
 
 type DatasetForm = Dataset & { freqsText?: string };
 
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const rows = ref<Dataset[]>([]);
+const visibleRows = computed(() =>
+  rows.value.filter((item) =>
+    datasetMatchesAttribution(item, {
+      ownerModules: props.filterOwnerModules,
+      datasetRoles: props.filterDatasetRoles,
+      includeUnowned: props.includeUnowned,
+    }),
+  ),
+);
+const hasAttributionFilter = computed(() =>
+  Boolean(props.filterOwnerModules?.length || props.filterDatasetRoles?.length || props.includeUnowned),
+);
 const dataSources = ref<DataSource[]>([]);
 const loading = ref(false);
 const visible = ref(false);
@@ -152,6 +186,7 @@ const form = reactive<DatasetForm>({
   freqs: [],
   freqsText: '',
   status: 'active',
+  attributes: {},
 });
 
 const freqTags = computed({
@@ -180,6 +215,11 @@ async function load() {
   loading.value = true;
   try {
     await loadDataSources();
+    if (hasAttributionFilter.value) {
+      rows.value = await listAllDatasets(selectedSpaceId.value);
+      pagination.total = visibleRows.value.length;
+      return;
+    }
     const rsp = await listDatasets({
       space_id: selectedSpaceId.value,
       page: { page: pagination.current, size: pagination.pageSize },
@@ -188,6 +228,18 @@ async function load() {
     applyPageResult(pagination, rsp.page_result);
   } finally {
     loading.value = false;
+  }
+}
+
+async function listAllDatasets(spaceId: string) {
+  const datasets: Dataset[] = [];
+  const size = 500;
+  for (let pageNo = 1; ; pageNo += 1) {
+    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size } });
+    datasets.push(...(rsp.datasets || []));
+    if (!rsp.page_result?.has_more || (rsp.datasets || []).length === 0) {
+      return datasets;
+    }
   }
 }
 
@@ -202,6 +254,7 @@ function resetForm() {
     freqs: [],
     freqsText: '',
     status: 'active',
+    attributes: {},
   });
 }
 
@@ -251,6 +304,11 @@ async function submit() {
     data_kind: form.data_kind,
     freqs: splitList(form.freqs),
     status: form.status,
+    attributes: mergeDatasetAttribution(form.attributes, {
+      ownerModule: props.ownerModule,
+      datasetRole: props.datasetRole,
+      managedBy: props.managedBy,
+    }),
   };
   if (editing.value) await updateDataset(payload);
   else await createDataset(payload);
@@ -279,7 +337,10 @@ onMounted(load);
 
 <style scoped>
 .metadata-page {
-  padding: 20px;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 20px 20px 72px;
+  overflow-y: auto;
 }
 
 .page-head {

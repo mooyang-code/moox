@@ -13,12 +13,12 @@
     <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
     <a-spin v-else :loading="metaLoading">
-      <a-empty v-if="datasets.length === 0" description="暂无数据集" />
+      <a-empty v-if="visibleDatasets.length === 0" description="暂无数据集" />
 
       <template v-else>
         <section class="dataset-tabs-row">
           <a-tabs v-model:active-key="activeDatasetId" type="rounded" size="medium" class="dataset-tabs" @change="onDatasetChange">
-            <a-tab-pane v-for="dataset in datasets" :key="dataset.dataset_id" :title="datasetDisplayName(dataset)" />
+            <a-tab-pane v-for="dataset in visibleDatasets" :key="dataset.dataset_id" :title="datasetDisplayName(dataset)" />
           </a-tabs>
 
           <a-tabs
@@ -192,6 +192,11 @@ import {
 import { readRecordRows, readTimeSeriesRows } from '@/api/storage/access';
 import type { Dataset, DatasetColumn, Factor, Field, RecordRow, SortOrder } from '@/api/storage/types';
 import { isTimeSeriesDataKind } from '@/views/data/shared/metadata-utils';
+import {
+  datasetMatchesAttribution,
+  type DatasetRole,
+  type OwnerModule,
+} from '@/views/data/shared/module-attribution';
 import { useSpaceStore } from '@/store/modules/space';
 import {
   adaptiveColumnWidth,
@@ -208,11 +213,33 @@ import {
 
 defineOptions({ name: 'DataBrowse' });
 
+const props = withDefaults(defineProps<{
+  datasetOwnerModules?: OwnerModule[];
+  datasetRoles?: DatasetRole[];
+  includeUnowned?: boolean;
+}>(), {
+  datasetOwnerModules: undefined,
+  datasetRoles: undefined,
+  includeUnowned: false,
+});
+
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 
 const activeDatasetId = ref('');
 const datasets = ref<Dataset[]>([]);
+const visibleDatasets = computed(() =>
+  datasets.value.filter((item) =>
+    datasetMatchesAttribution(item, {
+      ownerModules: props.datasetOwnerModules,
+      datasetRoles: props.datasetRoles,
+      includeUnowned: props.includeUnowned,
+    }),
+  ),
+);
+const hasAttributionFilter = computed(() =>
+  Boolean(props.datasetOwnerModules?.length || props.datasetRoles?.length || props.includeUnowned),
+);
 const datasetColumns = ref<DatasetColumn[]>([]);
 const fields = ref<Field[]>([]);
 const factors = ref<Factor[]>([]);
@@ -234,7 +261,7 @@ const pagination = reactive({
   total: 0,
 });
 
-const currentDataset = computed(() => datasets.value.find((item) => item.dataset_id === activeDatasetId.value));
+const currentDataset = computed(() => visibleDatasets.value.find((item) => item.dataset_id === activeDatasetId.value));
 
 const mode = computed<'none' | 'time_series' | 'record' | 'missing'>(() => {
   const dataset = currentDataset.value;
@@ -279,12 +306,12 @@ async function loadMeta() {
   metaLoading.value = true;
   try {
     const page = { page: 1, size: 1000 };
-    const [dsRsp, fieldRsp, factorRsp] = await Promise.all([
-      listDatasets({ space_id, page }),
+    const [datasetItems, fieldRsp, factorRsp] = await Promise.all([
+      hasAttributionFilter.value ? listAllDatasets(space_id) : listDatasets({ space_id, page }).then((rsp) => rsp.datasets || []),
       listFields({ space_id, page }),
       listFactors({ space_id, page }),
     ]);
-    datasets.value = dsRsp.datasets || [];
+    datasets.value = datasetItems;
     fields.value = fieldRsp.fields || [];
     factors.value = factorRsp.factors || [];
     ensureSelectedDataset();
@@ -296,13 +323,25 @@ async function loadMeta() {
   }
 }
 
+async function listAllDatasets(spaceId: string) {
+  const datasets: Dataset[] = [];
+  const size = 500;
+  for (let pageNo = 1; ; pageNo += 1) {
+    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size } });
+    datasets.push(...(rsp.datasets || []));
+    if (!rsp.page_result?.has_more || (rsp.datasets || []).length === 0) {
+      return datasets;
+    }
+  }
+}
+
 function ensureSelectedDataset() {
-  if (!datasets.value.length) {
+  if (!visibleDatasets.value.length) {
     activeDatasetId.value = '';
     return;
   }
-  if (!activeDatasetId.value || !datasets.value.some((item) => item.dataset_id === activeDatasetId.value)) {
-    activeDatasetId.value = datasets.value[0].dataset_id;
+  if (!activeDatasetId.value || !visibleDatasets.value.some((item) => item.dataset_id === activeDatasetId.value)) {
+    activeDatasetId.value = visibleDatasets.value[0].dataset_id;
   }
 }
 

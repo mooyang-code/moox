@@ -56,9 +56,8 @@ export const staticRoutes = [
       },
       {
         path: "/data/datasets",
-        name: "data-datasets",
-        component: () => import("@/views/data/datasets/index.vue"),
-        meta: { title: "data-datasets" }
+        redirect: { path: "/collector/datasets", query: { tab: "definitions" } },
+        meta: { title: "collector-datasets", hide: true }
       },
       {
         path: "/data/fields",
@@ -68,38 +67,51 @@ export const staticRoutes = [
       },
       {
         path: "/data/factors",
-        name: "data-factors",
-        component: () => import("@/views/data/factors/index.vue"),
-        meta: { title: "data-factors" }
+        redirect: "/factor/definitions",
+        meta: { title: "factor-definitions", hide: true }
+      },
+      {
+        path: "/factor/definitions",
+        name: "factor-definitions",
+        component: () => import("@/views/factor/definitions/index.vue"),
+        meta: { title: "factor-definitions" }
+      },
+      {
+        path: "/factor/bindings",
+        name: "factor-bindings",
+        component: () => import("@/views/factor/bindings/index.vue"),
+        meta: { title: "factor-bindings" }
+      },
+      {
+        path: "/factor/results",
+        name: "factor-results",
+        component: () => import("@/views/factor/results/index.vue"),
+        meta: { title: "factor-results" }
       },
       {
         path: "/data/views",
-        name: "data-views",
-        component: () => import("@/views/data/views/index.vue"),
-        meta: { title: "data-view-list" }
+        redirect: { path: "/collector/views", query: { tab: "definitions" } },
+        meta: { title: "collector-views", hide: true }
       },
       {
         path: "/data/view-browse",
-        name: "data-view-browse",
-        component: () => import("@/views/data/view-browse/index.vue"),
-        meta: { title: "data-view-browse" }
+        redirect: { path: "/collector/views", query: { tab: "browse" } },
+        meta: { title: "collector-views", hide: true }
       },
       {
         path: "/data/overview",
-        name: "data-overview",
-        component: () => import("@/views/data/overview/overview.vue"),
-        meta: { title: "data-overview" }
+        redirect: "/collector/datasets",
+        meta: { title: "collector-datasets", hide: true }
       },
       {
         path: "/data/list",
-        redirect: "/data/browse",
-        meta: { title: "data-browse", hide: true }
+        redirect: { path: "/collector/datasets", query: { tab: "browse" } },
+        meta: { title: "collector-datasets", hide: true }
       },
       {
         path: "/data/browse",
-        name: "data-browse",
-        component: () => import("@/views/data/browse/index.vue"),
-        meta: { title: "data-browse" }
+        redirect: { path: "/collector/datasets", query: { tab: "browse" } },
+        meta: { title: "collector-datasets", hide: true }
       },
       {
         path: "/data/import",
@@ -111,6 +123,18 @@ export const staticRoutes = [
         path: "/collector/functions",
         redirect: "/collector/cloudnodes",
         meta: { title: "collector-cloudnodes", hide: true }
+      },
+      {
+        path: "/collector/datasets",
+        name: "collector-datasets",
+        component: () => import("@/views/collector/datasets/index.vue"),
+        meta: { title: "collector-datasets" }
+      },
+      {
+        path: "/collector/views",
+        name: "collector-views",
+        component: () => import("@/views/collector/views/index.vue"),
+        meta: { title: "collector-views" }
       },
       {
         path: "/collector/cloudnodes",

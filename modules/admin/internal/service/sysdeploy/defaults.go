@@ -21,6 +21,7 @@ func DefaultDeployments() []Deployment {
 		deployment("monitor", "admin_rpc", "http", "127.0.0.1", 11103, "trpc.moox.ops.Monitor", "internal", "资源监控 RPC 服务"),
 		deployment("moox_collector", "collector", "http", "127.0.0.1", 11402, "trpc.moox.collector.CollectMgr", "internal", "独立采集管理服务，承载采集规则、任务实例和 planner"),
 		deployment("moox_cloudnode", "cloudnode", "http", "127.0.0.1", 11401, "trpc.moox.cloudnode.CloudNodeMgr", "internal", "独立云节点执行平台，承载云节点、代码包、异步 JobItem 队列和同步调用"),
+		deployment("moox_factor", "factor", "http", "127.0.0.1", 11404, "trpc.moox.factor.FactorMgr", "internal", "因子计算服务，承载因子定义、绑定、补算与结果写回"),
 		deployment("ssh", "admin_rpc", "http", "127.0.0.1", 11106, "trpc.moox.ops.Ssh", "internal", "SSH 管理 RPC 服务"),
 		deployment("space", "admin_rpc", "http", "127.0.0.1", 11107, "trpc.moox.admin.SpaceMgr", "internal", "空间管理 RPC 服务"),
 		deployment("secret", "admin_rpc", "http", "127.0.0.1", 11108, "trpc.moox.ops.SecretMgr", "internal", "秘钥管理 RPC 服务"),

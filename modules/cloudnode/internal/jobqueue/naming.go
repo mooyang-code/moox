@@ -10,15 +10,8 @@ import (
 )
 
 const (
-	DefaultSubjectPrefix    = "moox.cloudnode"
-	DefaultExecStream       = "MOOX_CLOUDNODE_EXEC"
-	DefaultProjectionStream = "MOOX_CLOUDNODE_PROJECTION"
-
-	ProjectionEventJobItemSubmitted = "jobitem.submitted"
-	ProjectionEventJobItemRunning   = "jobitem.running"
-	ProjectionEventJobItemReported  = "jobitem.reported"
-	ProjectionEventJobItemCanceled  = "jobitem.canceled"
-	ProjectionEventNodeHeartbeat    = "node.heartbeat"
+	DefaultSubjectPrefix = "moox.cloudnode"
+	DefaultExecStream    = "MOOX_CLOUDNODE_EXEC"
 )
 
 // NamingConfig controls stream and subject names.
@@ -80,16 +73,6 @@ func ExecFilterSubject(cfg NamingConfig, spaceID, codePackageID, jobType string)
 // ExecStreamSubject returns the wildcard subject configured on the execution stream.
 func ExecStreamSubject(cfg NamingConfig) string {
 	return subjectPrefix(cfg) + ".exec.v1.>"
-}
-
-// ProjectionSubject returns the subject for a CloudNode projection event.
-func ProjectionSubject(cfg NamingConfig, event string) string {
-	return subjectPrefix(cfg) + ".projection.v1." + strings.Trim(event, ".")
-}
-
-// ProjectionStreamSubject returns the wildcard subject configured on the projection stream.
-func ProjectionStreamSubject(cfg NamingConfig) string {
-	return subjectPrefix(cfg) + ".projection.v1.>"
 }
 
 // ConsumerName returns a durable consumer name for a specific executable route.

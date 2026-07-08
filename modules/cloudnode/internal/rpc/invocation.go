@@ -95,38 +95,15 @@ func (s *Service) InvokeSync(ctx context.Context, req *pb.InvokeSyncReq) (*pb.In
 		status = pb.InvocationStatus_INVOCATION_STATUS_FAILED
 	}
 	duration := time.Since(start).Milliseconds()
-	var details []repository.InvocationResult
+	log.InfoContextf(ctx, "cloudnode_invocation_done space_id=%s invocation_id=%s owner_service=%s workload_type=%s deployment_id=%s status=%s request_count=%d success_count=%d failed_count=%d timeout_count=%d duration_ms=%d",
+		req.GetSpaceId(), invocationID, req.GetOwnerService(), req.GetWorkloadType(), req.GetDeploymentId(), invocationStatusText(status),
+		len(req.GetPayloads()), success, failed, timeoutCount, duration)
 	if req.GetRecordDetail() {
-		details = make([]repository.InvocationResult, 0, len(results))
 		for _, result := range results {
-			details = append(details, repository.InvocationResult{
-				SpaceID:      req.GetSpaceId(),
-				InvocationID: invocationID,
-				RequestID:    result.GetRequestId(),
-				Status:       invocationResultStatusToDB(result.GetStatus()),
-				Payload:      result.GetPayload(),
-				ErrorMessage: result.GetErrorMessage(),
-				DurationMS:   result.GetDurationMs(),
-				CreateTime:   time.Now().UTC(),
-			})
+			log.InfoContextf(ctx, "cloudnode_invocation_result space_id=%s invocation_id=%s request_id=%s status=%s duration_ms=%d error=%q payload=%q",
+				req.GetSpaceId(), invocationID, result.GetRequestId(), invocationStatusText(result.GetStatus()),
+				result.GetDurationMs(), result.GetErrorMessage(), result.GetPayload())
 		}
-	}
-	if err := s.catalog.SaveInvocation(ctx, repository.Invocation{
-		SpaceID:      req.GetSpaceId(),
-		InvocationID: invocationID,
-		OwnerService: req.GetOwnerService(),
-		WorkloadType: req.GetWorkloadType(),
-		DeploymentID: req.GetDeploymentId(),
-		Status:       invocationStatusToDB(status),
-		RequestCount: len(req.GetPayloads()),
-		SuccessCount: int(success),
-		FailedCount:  int(failed),
-		TimeoutCount: int(timeoutCount),
-		DurationMS:   duration,
-		CreateTime:   time.Now().UTC(),
-		ModifyTime:   time.Now().UTC(),
-	}, details); err != nil {
-		log.WarnContextf(ctx, "[CloudNode] save invocation failed: %v", err)
 	}
 	return &pb.InvokeSyncRsp{
 		RetInfo:      retOK(),
@@ -298,7 +275,7 @@ func scfInvokeTypeToString(t pb.ScfInvokeType) string {
 	}
 }
 
-func invocationStatusToDB(status pb.InvocationStatus) string {
+func invocationStatusText(status pb.InvocationStatus) string {
 	switch status {
 	case pb.InvocationStatus_INVOCATION_STATUS_SUCCESS:
 		return "success"
@@ -308,14 +285,5 @@ func invocationStatusToDB(status pb.InvocationStatus) string {
 		return "failed"
 	default:
 		return "pending"
-	}
-}
-
-func invocationResultStatusToDB(status pb.InvocationStatus) string {
-	switch status {
-	case pb.InvocationStatus_INVOCATION_STATUS_SUCCESS:
-		return "success"
-	default:
-		return "failed"
 	}
 }

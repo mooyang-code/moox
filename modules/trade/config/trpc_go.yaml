@@ -1,0 +1,106 @@
+global: #全局配置
+  namespace: Production            #环境类型
+  env_name: dev                    #环境名称
+
+server:
+  filter:
+    - validation
+    - cors
+    - spacectx
+  timeout: 10000
+  service:
+      ######## 账户域 RPC 服务（http 协议，经 admin 网关透传 /api/trade/account/{method}） ########
+    - name: trpc.moox.trade.AccountSvc
+      port: 11200
+      network: tcp
+      protocol: http
+      timeout: 5000
+
+      ######## 余额服务 /api/trade/balance/{method} ########
+    - name: trpc.moox.trade.BalanceSvc
+      port: 11201
+      network: tcp
+      protocol: http
+      timeout: 10000
+
+      ######## 资金流水服务 /api/trade/fund/{method} ########
+    - name: trpc.moox.trade.FundSvc
+      port: 11202
+      network: tcp
+      protocol: http
+      timeout: 10000
+
+      ######## API 凭证服务 /api/trade/apikey/{method} ########
+    - name: trpc.moox.trade.ApiKeySvc
+      port: 11203
+      network: tcp
+      protocol: http
+      timeout: 5000
+
+      ######## 交易通道服务 /api/trade/channel/{method} ########
+    - name: trpc.moox.trade.ChannelSvc
+      port: 11204
+      network: tcp
+      protocol: http
+      timeout: 10000
+
+      ######## 交易操作服务 /api/trade/tradeop/{method} ########
+    - name: trpc.moox.trade.TradeOpSvc
+      port: 11205
+      network: tcp
+      protocol: http
+      timeout: 15000
+
+      ######## 订单查询服务 /api/trade/order/{method} ########
+    - name: trpc.moox.trade.OrderSvc
+      port: 11206
+      network: tcp
+      protocol: http
+      timeout: 5000
+
+      ######## 成交查询服务 /api/trade/tradeq/{method} ########
+    - name: trpc.moox.trade.TradeQuerySvc
+      port: 11207
+      network: tcp
+      protocol: http
+      timeout: 5000
+
+      ######## 持仓查询服务 /api/trade/position/{method} ########
+    - name: trpc.moox.trade.PositionSvc
+      port: 11208
+      network: tcp
+      protocol: http
+      timeout: 5000
+
+      ######## 定时同步服务：余额/持仓/订单/成交增量同步 ########
+    - name: trpc.moox.trade.sync.timer
+      port: 11209
+      network: "0 */5 * * * *?scheduler=tradeSyncSchedule&startAtOnce=1&params=space_id=crypto;sections=balances,positions,orders,trades;window_hours=24;page_size=500;max_symbols=10"
+      protocol: timer
+      timeout: 60000
+
+client:
+  filter:
+    - validation
+
+plugins:
+  auth:
+    cors:
+      apply_to_all_path:
+        - insecure_allow_all
+    validation:
+      enable_error_log: true
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  log:
+    default:
+      - writer: file
+        level: debug
+        writer_config:
+          log_path: ./log
+          filename: trpc_trade.log
+          roll_type: size
+          max_age: 7
+          max_size: 10
+          max_backups: 10
+          compress: false

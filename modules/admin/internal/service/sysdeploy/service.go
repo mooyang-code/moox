@@ -173,6 +173,8 @@ func gatewayDeploymentName(serviceID string) string {
 		return "moox_collector"
 	case "cloudnode":
 		return "moox_cloudnode"
+	case "factor", "factormgr":
+		return "moox_factor"
 	default:
 		return serviceID
 	}

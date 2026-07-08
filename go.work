@@ -1,19 +1,20 @@
 go 1.24.0
 
 use (
+	./modules/admin
+	./modules/admin/proto/admingen
 	./modules/cli
 	./modules/cloudnode
 	./modules/cloudnode/proto/cloudnodegen
 	./modules/collector
 	./modules/collector/proto/collectorgen
-	./modules/admin
-	./modules/admin/proto/admingen
 	./modules/factor
-	./modules/trade
-	./modules/trade/proto/tradegen
+	./modules/factor/proto/factorgen
 	./modules/storage
 	./modules/storage/proto/gen
-	./packages/commonpb
+	./modules/trade
+	./modules/trade/proto/tradegen
 	./packages/cloudruntime
+	./packages/commonpb
 	./web-host
 )

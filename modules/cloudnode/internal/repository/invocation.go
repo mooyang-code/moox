@@ -28,15 +28,3 @@ func (r *CatalogRepository) FindNodeForInvocation(ctx context.Context, spaceID s
 	}
 	return &node, nil
 }
-
-func (r *CatalogRepository) SaveInvocation(ctx context.Context, summary Invocation, details []InvocationResult) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&summary).Error; err != nil {
-			return err
-		}
-		if len(details) > 0 {
-			return tx.Create(&details).Error
-		}
-		return nil
-	})
-}
