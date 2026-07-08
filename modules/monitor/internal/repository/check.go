@@ -75,7 +75,23 @@ func (r *CheckRepository) Delete(ctx context.Context, spaceID, checkID string) e
 }
 
 func (r *CheckRepository) List(ctx context.Context, opts ListChecksOptions) ([]domain.Check, error) {
-	q := r.db.WithContext(ctx).Where("c_is_deleted = 0")
+	q := r.applyFilters(r.db.WithContext(ctx), opts)
+	var checks []domain.Check
+	err := q.Order("c_group_name ASC, c_name ASC").
+		Limit(opts.Page.limit()).
+		Offset(opts.Page.offset()).
+		Find(&checks).Error
+	return checks, err
+}
+
+func (r *CheckRepository) Count(ctx context.Context, opts ListChecksOptions) (int64, error) {
+	var total int64
+	err := r.applyFilters(r.db.WithContext(ctx).Model(&domain.Check{}), opts).Count(&total).Error
+	return total, err
+}
+
+func (r *CheckRepository) applyFilters(q *gorm.DB, opts ListChecksOptions) *gorm.DB {
+	q = q.Where("c_is_deleted = 0")
 	if opts.SpaceID != "" {
 		q = q.Where("c_space_id = ?", opts.SpaceID)
 	}
@@ -88,12 +104,7 @@ func (r *CheckRepository) List(ctx context.Context, opts ListChecksOptions) ([]d
 	if opts.Enabled != nil {
 		q = q.Where("c_enabled = ?", *opts.Enabled)
 	}
-	var checks []domain.Check
-	err := q.Order("c_group_name ASC, c_name ASC").
-		Limit(opts.Page.limit()).
-		Offset(opts.Page.offset()).
-		Find(&checks).Error
-	return checks, err
+	return q
 }
 
 func (r *CheckRepository) ListDue(ctx context.Context, now time.Time, limit int) ([]domain.Check, error) {

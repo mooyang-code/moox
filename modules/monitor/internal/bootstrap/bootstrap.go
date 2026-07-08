@@ -100,11 +100,40 @@ func startScheduler(ctx context.Context, cfg *config.Config, mgr *monstorage.Man
 
 func monitorResultHook(cfg *config.Config, mgr *monstorage.Manager) func(context.Context, domain.Check, domain.CheckResult) {
 	evaluator := alerting.NewEvaluator(mgr.DB(), alerting.Options{InstanceID: cfg.Instance.InstanceID})
+	peers := repository.NewPeerRepository(mgr.DB())
 	return func(ctx context.Context, check domain.Check, result domain.CheckResult) {
-		if err := evaluator.Evaluate(ctx, check, result, nil); err != nil {
+		activeInstanceIDs := activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, peers)
+		if err := evaluator.Evaluate(ctx, check, result, activeInstanceIDs); err != nil {
 			log.ErrorContextf(ctx, "monitor alert evaluation failed: %v", err)
 		}
 	}
+}
+
+func activeMonitorInstanceIDs(ctx context.Context, localID string, peers *repository.PeerRepository) []string {
+	seen := map[string]struct{}{}
+	var ids []string
+	if localID != "" {
+		ids = append(ids, localID)
+		seen[localID] = struct{}{}
+	}
+	if peers == nil {
+		return ids
+	}
+	instances, err := peers.ListInstances(ctx)
+	if err != nil {
+		return ids
+	}
+	for _, instance := range instances {
+		if instance.Status != domain.InstanceStatusActive || instance.InstanceID == "" {
+			continue
+		}
+		if _, ok := seen[instance.InstanceID]; ok {
+			continue
+		}
+		ids = append(ids, instance.InstanceID)
+		seen[instance.InstanceID] = struct{}{}
+	}
+	return ids
 }
 
 func monitorSyncFunc(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) func(context.Context) (int, error) {

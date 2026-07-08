@@ -100,12 +100,17 @@ func (s *Service) GetCheck(ctx context.Context, req *monitorpb.GetCheckReq) (*mo
 
 func (s *Service) ListChecks(ctx context.Context, req *monitorpb.ListChecksReq) (*monitorpb.ListChecksRsp, error) {
 	page := pageFromPB(req.GetPage())
-	checks, err := s.checks.List(ctx, repository.ListChecksOptions{
+	opts := repository.ListChecksOptions{
 		SpaceID:   req.GetSpaceId(),
 		GroupName: req.GetGroupName(),
 		Source:    req.GetSource(),
 		Page:      page,
-	})
+	}
+	total, err := s.checks.Count(ctx, opts)
+	if err != nil {
+		return &monitorpb.ListChecksRsp{RetInfo: inner(err)}, nil
+	}
+	checks, err := s.checks.List(ctx, opts)
 	if err != nil {
 		return &monitorpb.ListChecksRsp{RetInfo: inner(err)}, nil
 	}
@@ -116,7 +121,7 @@ func (s *Service) ListChecks(ctx context.Context, req *monitorpb.ListChecksReq) 
 	return &monitorpb.ListChecksRsp{
 		RetInfo:    success(),
 		Checks:     out,
-		PageResult: pageResult(page, len(out)),
+		PageResult: pageResult(page, int(total)),
 	}, nil
 }
 
@@ -208,10 +213,21 @@ func (s *Service) GetOverview(ctx context.Context, req *monitorpb.GetOverviewReq
 	sort.Slice(overview.Groups, func(i, j int) bool { return overview.Groups[i].GroupName < overview.Groups[j].GroupName })
 	overview.SuccessRate_24H, overview.P95LatencyMs = s.resultStats(ctx, req.GetSpaceId(), time.Now().Add(-24*time.Hour))
 	var firing int64
-	_ = s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_alert_states WHERE c_space_id = ? AND c_status = ?", req.GetSpaceId(), domain.AlertStatusFiring).Scan(&firing).Error
+	firingQuery := s.db.WithContext(ctx).Table("t_monitor_alert_states").Where("c_status = ?", domain.AlertStatusFiring)
+	if req.GetSpaceId() != "" {
+		firingQuery = firingQuery.Where("c_space_id = ?", req.GetSpaceId())
+	}
+	_ = firingQuery.Count(&firing).Error
 	overview.FiringAlerts = int32(firing)
 	var activeInstances int64
 	_ = s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_instances WHERE c_status = ?", domain.InstanceStatusActive).Scan(&activeInstances).Error
+	if s.instance != "" {
+		var localActive int64
+		_ = s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_instances WHERE c_instance_id = ? AND c_status = ?", s.instance, domain.InstanceStatusActive).Scan(&localActive).Error
+		if localActive == 0 {
+			activeInstances++
+		}
+	}
 	overview.ActiveInstances = int32(activeInstances)
 	return &monitorpb.GetOverviewRsp{
 		RetInfo:  success(),
@@ -221,9 +237,11 @@ func (s *Service) GetOverview(ctx context.Context, req *monitorpb.GetOverviewReq
 
 func (s *Service) resultStats(ctx context.Context, spaceID string, since time.Time) (float64, int64) {
 	var results []domain.CheckResult
-	if err := s.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_checked_at >= ?", spaceID, since).
-		Find(&results).Error; err != nil || len(results) == 0 {
+	query := s.db.WithContext(ctx).Where("c_checked_at >= ?", since)
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	if err := query.Find(&results).Error; err != nil || len(results) == 0 {
 		return 0, 0
 	}
 	successes := 0

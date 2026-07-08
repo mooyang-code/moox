@@ -79,6 +79,9 @@ func TestMonitorRPCCRUD(t *testing.T) {
 	if err != nil || list.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS || len(list.GetChecks()) != 1 {
 		t.Fatalf("list len=%d ret=%+v err=%v", len(list.GetChecks()), list.GetRetInfo(), err)
 	}
+	if list.GetPageResult().GetTotal() != 1 {
+		t.Fatalf("list total = %d", list.GetPageResult().GetTotal())
+	}
 	get, err := svc.GetCheck(ctx, &monitorpb.GetCheckReq{SpaceId: "space-a", CheckId: "api-health"})
 	if err != nil || get.GetCheck().GetName() != "API Health" {
 		t.Fatalf("get=%+v err=%v", get.GetCheck(), err)
@@ -181,6 +184,29 @@ func TestGetOverview(t *testing.T) {
 	}
 	if !foundSystem {
 		t.Fatalf("moox-system group missing: %+v", overview.GetGroups())
+	}
+
+	create, err := svc.CreateCheck(ctx, &monitorpb.CreateCheckReq{Check: &monitorpb.MonitorCheck{
+		SpaceId: "space-b", CheckId: "other-ok", Name: "other ok", GroupName: "other",
+		Kind: monitorpb.CheckKind_CHECK_KIND_HTTP, Url: "http://other", IntervalSeconds: 30, TimeoutMs: 1000,
+	}})
+	if err != nil || create.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("create space-b ret=%+v err=%v", create.GetRetInfo(), err)
+	}
+	_ = svc.results.Insert(ctx, &domain.CheckResult{ResultID: "r3", SpaceID: "space-b", CheckID: "other-ok", InstanceID: "monitor-test", Success: true, Status: domain.CheckStatusOK, LatencyMS: 100, CheckedAt: now})
+	all, err := svc.GetOverview(ctx, &monitorpb.GetOverviewReq{})
+	if err != nil || all.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("all overview ret=%+v err=%v", all.GetRetInfo(), err)
+	}
+	allOverview := all.GetOverview()
+	if allOverview.GetTotalChecks() != 3 || allOverview.GetHealthyChecks() != 2 || allOverview.GetDownChecks() != 1 {
+		t.Fatalf("all overview = %+v", allOverview)
+	}
+	if allOverview.GetSuccessRate_24H() != float64(2)/float64(3) {
+		t.Fatalf("all overview success rate = %v", allOverview.GetSuccessRate_24H())
+	}
+	if allOverview.GetActiveInstances() != 1 {
+		t.Fatalf("all overview active instances = %d", allOverview.GetActiveInstances())
 	}
 }
 
