@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 
 	blevelib "github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/mapping"
 	blevequery "github.com/blevesearch/bleve/v2/search/query"
+	bleveindex "github.com/blevesearch/bleve_index_api"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // Options 保存 Bleve 索引打开与初始化配置。
@@ -22,6 +25,7 @@ type Options struct {
 // Index 封装 Record 视图的 Bleve 索引读写能力。
 type Index struct {
 	index blevelib.Index
+	mu    sync.Mutex
 }
 
 // SearchRequest 描述一次 Bleve 复合检索请求。
@@ -90,13 +94,22 @@ func (i *Index) Close() error {
 
 func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexedColumns map[string]bool) error {
 	_ = ctx
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	batch := i.index.NewBatch()
 	for _, row := range rows {
-		raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(row)
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		merged, err := i.mergeExistingRecordPatch(row)
 		if err != nil {
 			return err
 		}
-		key := row.GetKey()
+		raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(merged)
+		if err != nil {
+			return err
+		}
+		key := merged.GetKey()
 		doc := map[string]any{
 			"space_id":   key.GetSpaceId(),
 			"dataset_id": key.GetDatasetId(),
@@ -104,16 +117,94 @@ func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexed
 			"version":    key.GetVersion(),
 			"_row_json":  string(raw),
 		}
-		for _, column := range row.GetColumns() {
+		for _, column := range merged.GetColumns() {
 			if textIndexedColumns[column.GetColumnName()] {
 				doc[column.GetColumnName()] = factvalue.String(column.GetValue())
 			}
 		}
-		if err := batch.Index(documentID(row), doc); err != nil {
+		if err := batch.Index(documentID(merged), doc); err != nil {
 			return err
 		}
 	}
 	return i.index.Batch(batch)
+}
+
+func (i *Index) mergeExistingRecordPatch(patch *pb.RecordRow) (*pb.RecordRow, error) {
+	if patch == nil {
+		return nil, nil
+	}
+	existing, err := i.loadStoredRecordRow(documentID(patch))
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return proto.Clone(patch).(*pb.RecordRow), nil
+	}
+	merged := proto.Clone(existing).(*pb.RecordRow)
+	merged.Key = proto.Clone(patch.GetKey()).(*pb.RecordKey)
+	merged.Attributes = mergeRecordAttributes(merged.GetAttributes(), patch.GetAttributes())
+	merged.Columns = mergeRecordColumns(merged.GetColumns(), patch.GetColumns())
+	return merged, nil
+}
+
+func (i *Index) loadStoredRecordRow(id string) (*pb.RecordRow, error) {
+	doc, err := i.index.Document(id)
+	if err != nil || doc == nil {
+		return nil, err
+	}
+	var raw []byte
+	doc.VisitFields(func(field bleveindex.Field) {
+		if field.Name() == "_row_json" {
+			raw = append([]byte(nil), field.Value()...)
+		}
+	})
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	row := &pb.RecordRow{}
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, row); err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+func mergeRecordAttributes(base map[string]string, patch map[string]string) map[string]string {
+	if len(base) == 0 && len(patch) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(patch))
+	for key, value := range base {
+		out[key] = value
+	}
+	for key, value := range patch {
+		out[key] = value
+	}
+	return out
+}
+
+func mergeRecordColumns(base []*pb.ColumnValue, patch []*pb.ColumnValue) []*pb.ColumnValue {
+	out := make([]*pb.ColumnValue, 0, len(base)+len(patch))
+	positions := make(map[string]int, len(base)+len(patch))
+	for _, column := range base {
+		if column == nil {
+			continue
+		}
+		positions[column.GetColumnName()] = len(out)
+		out = append(out, proto.Clone(column).(*pb.ColumnValue))
+	}
+	for _, column := range patch {
+		if column == nil {
+			continue
+		}
+		copied := proto.Clone(column).(*pb.ColumnValue)
+		if idx, ok := positions[column.GetColumnName()]; ok {
+			out[idx] = copied
+			continue
+		}
+		positions[column.GetColumnName()] = len(out)
+		out = append(out, copied)
+	}
+	return out
 }
 
 func (i *Index) SearchRecordRows(ctx context.Context, req SearchRequest) ([]*pb.RecordRow, *pb.PageResult, error) {

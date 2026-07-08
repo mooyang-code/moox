@@ -8,13 +8,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type TimeSeriesRowsChangedHandler func(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error
-type RecordRowsChangedHandler func(ctx context.Context, event *pb.RecordRowsChangedEvent) error
+type TimeSeriesRowsUpdatedHandler func(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error
+type RecordRowsUpdatedHandler func(ctx context.Context, event *pb.RecordRowsUpdated) error
 
-// Bus 是 storage 领域事件总线，负责发布主存行变更事件。
+// Bus 是 storage 领域事件总线，负责发布主存写入流水。
 type Bus interface {
-	PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error
-	PublishRecordRowsChanged(ctx context.Context, event *pb.RecordRowsChangedEvent) error
+	PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error
+	PublishRecordRowsUpdated(ctx context.Context, event *pb.RecordRowsUpdated) error
 }
 
 // Subscription 表示一个已建立的事件订阅。
@@ -22,20 +22,20 @@ type Subscription interface {
 	Close() error
 }
 
-// Subscriber 是可订阅行变更事件的总线扩展能力。实现该接口的总线支持异步派生消费者。
+// Subscriber 是可订阅写入流水的总线扩展能力。实现该接口的总线支持异步派生消费者。
 type Subscriber interface {
-	SubscribeTimeSeriesRowsChanged(ctx context.Context, handler TimeSeriesRowsChangedHandler) (Subscription, error)
-	SubscribeRecordRowsChanged(ctx context.Context, handler RecordRowsChangedHandler) (Subscription, error)
+	SubscribeTimeSeriesRowsUpdated(ctx context.Context, handler TimeSeriesRowsUpdatedHandler) (Subscription, error)
+	SubscribeRecordRowsUpdated(ctx context.Context, handler RecordRowsUpdatedHandler) (Subscription, error)
 }
 
 // MemoryBus 是进程内事件总线实现，用于测试和单进程部署。
 type MemoryBus struct {
 	mu                 sync.Mutex
-	timeSeriesEvents   []*pb.TimeSeriesRowsChangedEvent
-	recordEvents       []*pb.RecordRowsChangedEvent
+	timeSeriesEvents   []*pb.TimeSeriesRowsUpdated
+	recordEvents       []*pb.RecordRowsUpdated
 	nextID             uint64
-	timeSeriesHandlers map[uint64]TimeSeriesRowsChangedHandler
-	recordHandlers     map[uint64]RecordRowsChangedHandler
+	timeSeriesHandlers map[uint64]TimeSeriesRowsUpdatedHandler
+	recordHandlers     map[uint64]RecordRowsUpdatedHandler
 	inFlight           int
 	idle               chan struct{}
 }
@@ -44,20 +44,20 @@ func NewMemoryBus() *MemoryBus {
 	idle := make(chan struct{})
 	close(idle)
 	return &MemoryBus{
-		timeSeriesHandlers: make(map[uint64]TimeSeriesRowsChangedHandler),
-		recordHandlers:     make(map[uint64]RecordRowsChangedHandler),
+		timeSeriesHandlers: make(map[uint64]TimeSeriesRowsUpdatedHandler),
+		recordHandlers:     make(map[uint64]RecordRowsUpdatedHandler),
 		idle:               idle,
 	}
 }
 
-func (b *MemoryBus) SubscribeTimeSeriesRowsChanged(ctx context.Context, handler TimeSeriesRowsChangedHandler) (Subscription, error) {
+func (b *MemoryBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, handler TimeSeriesRowsUpdatedHandler) (Subscription, error) {
 	_ = ctx
 	if handler == nil {
 		return noopSubscription{}, nil
 	}
 	b.mu.Lock()
 	if b.timeSeriesHandlers == nil {
-		b.timeSeriesHandlers = make(map[uint64]TimeSeriesRowsChangedHandler)
+		b.timeSeriesHandlers = make(map[uint64]TimeSeriesRowsUpdatedHandler)
 	}
 	b.nextID++
 	id := b.nextID
@@ -66,14 +66,14 @@ func (b *MemoryBus) SubscribeTimeSeriesRowsChanged(ctx context.Context, handler 
 	return &memorySubscription{close: func() { b.deleteTimeSeriesHandler(id) }}, nil
 }
 
-func (b *MemoryBus) SubscribeRecordRowsChanged(ctx context.Context, handler RecordRowsChangedHandler) (Subscription, error) {
+func (b *MemoryBus) SubscribeRecordRowsUpdated(ctx context.Context, handler RecordRowsUpdatedHandler) (Subscription, error) {
 	_ = ctx
 	if handler == nil {
 		return noopSubscription{}, nil
 	}
 	b.mu.Lock()
 	if b.recordHandlers == nil {
-		b.recordHandlers = make(map[uint64]RecordRowsChangedHandler)
+		b.recordHandlers = make(map[uint64]RecordRowsUpdatedHandler)
 	}
 	b.nextID++
 	id := b.nextID
@@ -82,20 +82,20 @@ func (b *MemoryBus) SubscribeRecordRowsChanged(ctx context.Context, handler Reco
 	return &memorySubscription{close: func() { b.deleteRecordHandler(id) }}, nil
 }
 
-func (b *MemoryBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
-	stored := cloneTimeSeriesRowsChangedEvent(event)
+func (b *MemoryBus) PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
+	stored := cloneTimeSeriesRowsUpdated(event)
 	b.mu.Lock()
 	b.timeSeriesEvents = append(b.timeSeriesEvents, stored)
-	handlers := make([]TimeSeriesRowsChangedHandler, 0, len(b.timeSeriesHandlers))
+	handlers := make([]TimeSeriesRowsUpdatedHandler, 0, len(b.timeSeriesHandlers))
 	for _, handler := range b.timeSeriesHandlers {
 		handlers = append(handlers, handler)
 	}
 	b.addInFlightLocked(len(handlers))
 	b.mu.Unlock()
 	for _, handler := range handlers {
-		eventCopy := cloneTimeSeriesRowsChangedEvent(event)
-		// 内存总线不阻塞发布者；测试或单进程部署需要等待派生完成时显式调用 Wait。
-		go func(handler TimeSeriesRowsChangedHandler, event *pb.TimeSeriesRowsChangedEvent) {
+		eventCopy := cloneTimeSeriesRowsUpdated(event)
+		// 内存总线按发布顺序同步完成 handler 入队，避免同 key 流水乱序。
+		func(handler TimeSeriesRowsUpdatedHandler, event *pb.TimeSeriesRowsUpdated) {
 			defer b.finishHandler()
 			_ = handler(ctx, event)
 		}(handler, eventCopy)
@@ -103,20 +103,20 @@ func (b *MemoryBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.
 	return nil
 }
 
-func (b *MemoryBus) PublishRecordRowsChanged(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
-	stored := cloneRecordRowsChangedEvent(event)
+func (b *MemoryBus) PublishRecordRowsUpdated(ctx context.Context, event *pb.RecordRowsUpdated) error {
+	stored := cloneRecordRowsUpdated(event)
 	b.mu.Lock()
 	b.recordEvents = append(b.recordEvents, stored)
-	handlers := make([]RecordRowsChangedHandler, 0, len(b.recordHandlers))
+	handlers := make([]RecordRowsUpdatedHandler, 0, len(b.recordHandlers))
 	for _, handler := range b.recordHandlers {
 		handlers = append(handlers, handler)
 	}
 	b.addInFlightLocked(len(handlers))
 	b.mu.Unlock()
 	for _, handler := range handlers {
-		eventCopy := cloneRecordRowsChangedEvent(event)
-		// 内存总线不阻塞发布者；测试或单进程部署需要等待派生完成时显式调用 Wait。
-		go func(handler RecordRowsChangedHandler, event *pb.RecordRowsChangedEvent) {
+		eventCopy := cloneRecordRowsUpdated(event)
+		// 内存总线按发布顺序同步完成 handler 入队，避免同 key 流水乱序。
+		func(handler RecordRowsUpdatedHandler, event *pb.RecordRowsUpdated) {
 			defer b.finishHandler()
 			_ = handler(ctx, event)
 		}(handler, eventCopy)
@@ -145,22 +145,22 @@ func (b *MemoryBus) Close() error {
 	return b.Wait(context.Background())
 }
 
-func (b *MemoryBus) TimeSeriesEvents() []*pb.TimeSeriesRowsChangedEvent {
+func (b *MemoryBus) TimeSeriesEvents() []*pb.TimeSeriesRowsUpdated {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := make([]*pb.TimeSeriesRowsChangedEvent, len(b.timeSeriesEvents))
+	out := make([]*pb.TimeSeriesRowsUpdated, len(b.timeSeriesEvents))
 	for i, event := range b.timeSeriesEvents {
-		out[i] = cloneTimeSeriesRowsChangedEvent(event)
+		out[i] = cloneTimeSeriesRowsUpdated(event)
 	}
 	return out
 }
 
-func (b *MemoryBus) RecordEvents() []*pb.RecordRowsChangedEvent {
+func (b *MemoryBus) RecordEvents() []*pb.RecordRowsUpdated {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := make([]*pb.RecordRowsChangedEvent, len(b.recordEvents))
+	out := make([]*pb.RecordRowsUpdated, len(b.recordEvents))
 	for i, event := range b.recordEvents {
-		out[i] = cloneRecordRowsChangedEvent(event)
+		out[i] = cloneRecordRowsUpdated(event)
 	}
 	return out
 }
@@ -205,18 +205,18 @@ func (b *MemoryBus) ensureIdleLocked() {
 	close(b.idle)
 }
 
-func cloneTimeSeriesRowsChangedEvent(event *pb.TimeSeriesRowsChangedEvent) *pb.TimeSeriesRowsChangedEvent {
+func cloneTimeSeriesRowsUpdated(event *pb.TimeSeriesRowsUpdated) *pb.TimeSeriesRowsUpdated {
 	if event == nil {
 		return nil
 	}
-	return proto.Clone(event).(*pb.TimeSeriesRowsChangedEvent)
+	return proto.Clone(event).(*pb.TimeSeriesRowsUpdated)
 }
 
-func cloneRecordRowsChangedEvent(event *pb.RecordRowsChangedEvent) *pb.RecordRowsChangedEvent {
+func cloneRecordRowsUpdated(event *pb.RecordRowsUpdated) *pb.RecordRowsUpdated {
 	if event == nil {
 		return nil
 	}
-	return proto.Clone(event).(*pb.RecordRowsChangedEvent)
+	return proto.Clone(event).(*pb.RecordRowsUpdated)
 }
 
 // memorySubscription 表示 MemoryBus 返回的订阅句柄。

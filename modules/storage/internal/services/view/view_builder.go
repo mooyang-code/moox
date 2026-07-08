@@ -49,12 +49,13 @@ type ViewCleaner interface {
 
 // Options 保存 View 构建器创建时的依赖与并发配置。
 type Options struct {
-	Metadata Metadata
-	Facts    FactReader
-	Records  RecordFactReader
-	Views    ViewWriter
-	Search   RecordIndexer
-	Now      func() time.Time
+	Metadata       Metadata
+	Facts          FactReader
+	Records        RecordFactReader
+	Views          ViewWriter
+	Search         RecordIndexer
+	BackfillWindow string
+	Now            func() time.Time
 
 	OnBuildStarted  func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string)
 	BeforeComplete  func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) error
@@ -63,17 +64,18 @@ type Options struct {
 
 // Builder 负责从主存事实行构建版本化 View 结果。
 type Builder struct {
-	metadata     Metadata
-	facts        FactReader
-	records      RecordFactReader
-	views        ViewWriter
-	search       RecordIndexer
-	now          func() time.Time
-	onStarted    func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string)
-	beforeDone   func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) error
-	onFinished   func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string)
-	buildMu      sync.Mutex
-	activeBuilds map[string]struct{}
+	metadata       Metadata
+	facts          FactReader
+	records        RecordFactReader
+	views          ViewWriter
+	search         RecordIndexer
+	backfillWindow string
+	now            func() time.Time
+	onStarted      func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string)
+	beforeDone     func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) error
+	onFinished     func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string)
+	buildMu        sync.Mutex
+	activeBuilds   map[string]struct{}
 }
 
 func NewBuilder(opts Options) *Builder {
@@ -88,16 +90,17 @@ func NewBuilder(opts Options) *Builder {
 		}
 	}
 	return &Builder{
-		metadata:     opts.Metadata,
-		facts:        opts.Facts,
-		records:      records,
-		views:        opts.Views,
-		search:       opts.Search,
-		now:          now,
-		onStarted:    opts.OnBuildStarted,
-		beforeDone:   opts.BeforeComplete,
-		onFinished:   opts.OnBuildFinished,
-		activeBuilds: make(map[string]struct{}),
+		metadata:       opts.Metadata,
+		facts:          opts.Facts,
+		records:        records,
+		views:          opts.Views,
+		search:         opts.Search,
+		backfillWindow: opts.BackfillWindow,
+		now:            now,
+		onStarted:      opts.OnBuildStarted,
+		beforeDone:     opts.BeforeComplete,
+		onFinished:     opts.OnBuildFinished,
+		activeBuilds:   make(map[string]struct{}),
 	}
 }
 
@@ -445,10 +448,11 @@ func (b *Builder) resultTablesInUse(ctx context.Context, spaceID string) (map[st
 
 func (b *Builder) readRecordViewRows(ctx context.Context, view *pb.View, primaryDatasetID string, columns []*pb.ViewColumn) ([]*pb.RecordRow, error) {
 	sourceColumns := sourceColumnNamesByDataset(primaryDatasetID, columns)
+	versionRange := buildVersionRange(b.now(), effectiveViewWindow(view.GetQueryWindow(), b.backfillWindow))
 	var out []*pb.RecordRow
 	cursor := ""
 	for {
-		rows, page, err := b.records.ScanRecordRows(ctx, view.GetSpaceId(), primaryDatasetID, nil, sourceColumns[primaryDatasetID], &pb.Page{Size: rebuildViewPageSize, Cursor: cursor})
+		rows, page, err := b.records.ScanRecordRows(ctx, view.GetSpaceId(), primaryDatasetID, versionRange, sourceColumns[primaryDatasetID], &pb.Page{Size: rebuildViewPageSize, Cursor: cursor})
 		if err != nil {
 			return nil, err
 		}
@@ -493,7 +497,7 @@ func (b *Builder) readViewRows(ctx context.Context, view *pb.View, primaryDatase
 	spaceID := view.GetSpaceId()
 	datasetIDs := viewDatasetIDs(primaryDatasetID, view.GetDatasetIds(), columns)
 	sourceColumns := sourceColumnNamesByDataset(primaryDatasetID, columns)
-	timeRange := buildTimeRange(b.now(), view.GetQueryWindow())
+	timeRange := buildTimeRange(b.now(), effectiveViewWindow(view.GetQueryWindow(), b.backfillWindow))
 
 	rowsByDataset := make(map[string][]*pb.TimeSeriesRow, len(datasetIDs))
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -795,6 +799,22 @@ func buildTimeRange(now time.Time, queryWindow string) *pb.TimeRange {
 	}
 	start := now.Add(-duration).UTC().Format(time.RFC3339)
 	return &pb.TimeRange{StartTime: start}
+}
+
+func buildVersionRange(now time.Time, queryWindow string) *pb.VersionRange {
+	duration, ok := parseWindow(queryWindow)
+	if !ok {
+		return nil
+	}
+	start := now.Add(-duration).UTC().Format(time.RFC3339)
+	return &pb.VersionRange{StartVersion: start}
+}
+
+func effectiveViewWindow(queryWindow string, backfillWindow string) string {
+	if strings.TrimSpace(queryWindow) != "" {
+		return queryWindow
+	}
+	return backfillWindow
 }
 
 func parseWindow(value string) (time.Duration, bool) {

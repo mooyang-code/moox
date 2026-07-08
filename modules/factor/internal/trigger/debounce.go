@@ -12,7 +12,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
-// Task is a debounced event-derived scheduler request.
+// Task is a debounced write-journal-derived scheduler request.
 type Task struct {
 	SpaceID       string
 	SourceDataset string
@@ -23,7 +23,7 @@ type Task struct {
 	FactorIDs     []string
 }
 
-// Debouncer merges Storage row-change events into per-symbol task requests.
+// Debouncer merges Storage row-update journals into per-symbol task requests.
 type Debouncer struct {
 	mu       sync.Mutex
 	window   time.Duration
@@ -57,11 +57,15 @@ func (d *Debouncer) SetBindings(bindings []domain.FactorBinding) {
 	d.bindings = append([]domain.FactorBinding(nil), bindings...)
 }
 
-// Ingest adds one Storage rows_changed event into debounce buckets.
-func (d *Debouncer) Ingest(event *storagepb.TimeSeriesRowsChangedEvent, now time.Time) {
+// Ingest adds one Storage rows_updated journal into debounce buckets.
+func (d *Debouncer) Ingest(event *storagepb.TimeSeriesRowsUpdated, now time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for _, key := range event.GetKeys() {
+	for _, row := range event.GetRows() {
+		key := row.GetKey()
+		if key == nil {
+			continue
+		}
 		dataTime, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
 		if err != nil {
 			continue

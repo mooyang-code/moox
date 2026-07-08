@@ -12,7 +12,7 @@
 1. Start Storage, NATS, Admin, and Factor.
 2. Import or create factors, then create bindings for `binance_spot_kline` to `binance_spot_factor`.
 3. Let collector write new 1m K-line rows.
-4. Confirm Factor consumes `moox.storage.time_series.rows_changed.v1`.
+4. Confirm Factor consumes `moox.storage.time_series.rows_updated.v1`.
 5. Confirm Storage receives tail writes in `binance_spot_factor`.
 6. Confirm Factor does not loop on its own writes because realtime trigger only whitelists source datasets from enabled bindings.
 

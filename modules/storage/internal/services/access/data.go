@@ -20,18 +20,13 @@ func (s *Service) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeri
 	if err != nil {
 		return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
 	}
-	var written []*pb.TimeSeriesKey
 	for _, group := range groups {
 		if err := s.primary.WriteRows(ctx, group.target, group.rows); err != nil {
-			if publishErr := s.publishTimeSeriesRowsChanged(ctx, written); publishErr != nil {
-				s.reportViewError(ctx, "time_series_rows_changed_event", publishErr)
-			}
 			return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
 		}
-		written = append(written, group.timeSeriesKeys...)
-	}
-	if err := s.publishTimeSeriesRowsChanged(ctx, written); err != nil {
-		s.reportViewError(ctx, "time_series_rows_changed_event", err)
+		if err := s.publishTimeSeriesRowsUpdated(ctx, group.timeSeriesRows); err != nil {
+			s.reportViewError(ctx, "time_series_rows_updated_journal", err)
+		}
 	}
 	return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Success("success")}, nil
 }
@@ -156,15 +151,12 @@ func (s *Service) WriteRecordRows(ctx context.Context, req *pb.WriteRecordRowsRe
 	var written []*pb.RecordKey
 	for _, group := range groups {
 		if err := s.primary.WriteRows(ctx, group.target, group.rows); err != nil {
-			if publishErr := s.publishRecordRowsChanged(ctx, written); publishErr != nil {
-				s.reportViewError(ctx, "record_rows_changed_event", publishErr)
-			}
 			return &pb.WriteRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
 		}
 		written = append(written, group.recordKeys...)
-	}
-	if err := s.publishRecordRowsChanged(ctx, written); err != nil {
-		s.reportViewError(ctx, "record_rows_changed_event", err)
+		if err := s.publishRecordRowsUpdated(ctx, group.recordRows); err != nil {
+			s.reportViewError(ctx, "record_rows_updated_journal", err)
+		}
 	}
 	return &pb.WriteRecordRowsRsp{RetInfo: response.Success("success"), Keys: cloneRecordKeys(written)}, nil
 }
@@ -343,7 +335,9 @@ type routedRows struct {
 	target         *pb.PrimaryStoreTarget
 	rows           []*pb.PrimaryStoreRow
 	timeSeriesKeys []*pb.TimeSeriesKey
+	timeSeriesRows []*pb.TimeSeriesRow
 	recordKeys     []*pb.RecordKey
+	recordRows     []*pb.RecordRow
 }
 
 func (s *Service) groupTimeSeriesRowsByPrimaryStoreTarget(ctx context.Context, rows []*pb.TimeSeriesRow) ([]*routedRows, error) {
@@ -375,6 +369,7 @@ func (s *Service) groupTimeSeriesRowsByPrimaryStoreTarget(ctx context.Context, r
 		}
 		group.rows = append(group.rows, converted)
 		group.timeSeriesKeys = append(group.timeSeriesKeys, proto.Clone(key).(*pb.TimeSeriesKey))
+		group.timeSeriesRows = append(group.timeSeriesRows, proto.Clone(row).(*pb.TimeSeriesRow))
 	}
 	out := make([]*routedRows, 0, len(groups))
 	for _, key := range order {
@@ -412,6 +407,7 @@ func (s *Service) groupRecordRowsByPrimaryStoreTarget(ctx context.Context, rows 
 		}
 		group.rows = append(group.rows, converted)
 		group.recordKeys = append(group.recordKeys, proto.Clone(key).(*pb.RecordKey))
+		group.recordRows = append(group.recordRows, proto.Clone(row).(*pb.RecordRow))
 	}
 	out := make([]*routedRows, 0, len(groups))
 	for _, key := range order {
@@ -420,26 +416,40 @@ func (s *Service) groupRecordRowsByPrimaryStoreTarget(ctx context.Context, rows 
 	return out, nil
 }
 
-func (s *Service) publishTimeSeriesRowsChanged(ctx context.Context, keys []*pb.TimeSeriesKey) error {
-	if len(keys) == 0 || s.events == nil {
+func (s *Service) publishTimeSeriesRowsUpdated(ctx context.Context, rows []*pb.TimeSeriesRow) error {
+	if len(rows) == 0 || s.events == nil {
 		return nil
 	}
-	return s.events.PublishTimeSeriesRowsChanged(ctx, &pb.TimeSeriesRowsChangedEvent{
-		EventId:   xid.New().String(),
-		EventTime: time.Now().Format(time.RFC3339Nano),
-		Keys:      cloneTimeSeriesKeys(keys),
-	})
+	for _, group := range groupTimeSeriesRowsForJournal(rows) {
+		if err := s.events.PublishTimeSeriesRowsUpdated(ctx, &pb.TimeSeriesRowsUpdated{
+			MessageId: xid.New().String(),
+			WrittenAt: time.Now().UTC().Format(time.RFC3339Nano),
+			SpaceId:   group.spaceID,
+			DatasetId: group.datasetID,
+			Rows:      cloneTimeSeriesRows(group.rows),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (s *Service) publishRecordRowsChanged(ctx context.Context, keys []*pb.RecordKey) error {
-	if len(keys) == 0 || s.events == nil {
+func (s *Service) publishRecordRowsUpdated(ctx context.Context, rows []*pb.RecordRow) error {
+	if len(rows) == 0 || s.events == nil {
 		return nil
 	}
-	return s.events.PublishRecordRowsChanged(ctx, &pb.RecordRowsChangedEvent{
-		EventId:   xid.New().String(),
-		EventTime: time.Now().Format(time.RFC3339Nano),
-		Keys:      cloneRecordKeys(keys),
-	})
+	for _, group := range groupRecordRowsForJournal(rows) {
+		if err := s.events.PublishRecordRowsUpdated(ctx, &pb.RecordRowsUpdated{
+			MessageId: xid.New().String(),
+			WrittenAt: time.Now().UTC().Format(time.RFC3339Nano),
+			SpaceId:   group.spaceID,
+			DatasetId: group.datasetID,
+			Rows:      cloneRecordRows(group.rows),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) currentTimeSeriesRows(ctx context.Context, keys []*pb.TimeSeriesKey) ([]*pb.TimeSeriesRow, error) {
@@ -484,6 +494,80 @@ func cloneRecordKeys(keys []*pb.RecordKey) []*pb.RecordKey {
 	out := make([]*pb.RecordKey, 0, len(keys))
 	for _, key := range keys {
 		out = append(out, proto.Clone(key).(*pb.RecordKey))
+	}
+	return out
+}
+
+type timeSeriesJournalGroup struct {
+	spaceID   string
+	datasetID string
+	rows      []*pb.TimeSeriesRow
+}
+
+func groupTimeSeriesRowsForJournal(rows []*pb.TimeSeriesRow) []timeSeriesJournalGroup {
+	positions := make(map[string]int)
+	groups := make([]timeSeriesJournalGroup, 0)
+	for _, row := range rows {
+		key := row.GetKey()
+		if key == nil {
+			continue
+		}
+		groupKey := key.GetSpaceId() + "|" + key.GetDatasetId()
+		idx, ok := positions[groupKey]
+		if !ok {
+			idx = len(groups)
+			positions[groupKey] = idx
+			groups = append(groups, timeSeriesJournalGroup{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()})
+		}
+		groups[idx].rows = append(groups[idx].rows, row)
+	}
+	return groups
+}
+
+type recordJournalGroup struct {
+	spaceID   string
+	datasetID string
+	rows      []*pb.RecordRow
+}
+
+func groupRecordRowsForJournal(rows []*pb.RecordRow) []recordJournalGroup {
+	positions := make(map[string]int)
+	groups := make([]recordJournalGroup, 0)
+	for _, row := range rows {
+		key := row.GetKey()
+		if key == nil {
+			continue
+		}
+		groupKey := key.GetSpaceId() + "|" + key.GetDatasetId()
+		idx, ok := positions[groupKey]
+		if !ok {
+			idx = len(groups)
+			positions[groupKey] = idx
+			groups = append(groups, recordJournalGroup{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()})
+		}
+		groups[idx].rows = append(groups[idx].rows, row)
+	}
+	return groups
+}
+
+func cloneTimeSeriesRows(rows []*pb.TimeSeriesRow) []*pb.TimeSeriesRow {
+	out := make([]*pb.TimeSeriesRow, 0, len(rows))
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		out = append(out, proto.Clone(row).(*pb.TimeSeriesRow))
+	}
+	return out
+}
+
+func cloneRecordRows(rows []*pb.RecordRow) []*pb.RecordRow {
+	out := make([]*pb.RecordRow, 0, len(rows))
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		out = append(out, proto.Clone(row).(*pb.RecordRow))
 	}
 	return out
 }

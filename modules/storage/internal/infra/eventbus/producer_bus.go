@@ -14,18 +14,18 @@ import (
 
 const (
 	DefaultSubjectPrefix                  = "moox.storage"
-	DefaultTimeSeriesRowsChangedSubject   = "moox.storage.time_series.rows_changed.v1"
-	DefaultRecordRowsChangedSubject       = "moox.storage.record.rows_changed.v1"
-	defaultTimeSeriesRowsChangedSuffix    = "time_series.rows_changed.v1"
-	defaultRecordRowsChangedSubjectSuffix = "record.rows_changed.v1"
+	DefaultTimeSeriesRowsUpdatedSubject   = "moox.storage.time_series.rows_updated.v1"
+	DefaultRecordRowsUpdatedSubject       = "moox.storage.record.rows_updated.v1"
+	defaultTimeSeriesRowsUpdatedSuffix    = "time_series.rows_updated.v1"
+	defaultRecordRowsUpdatedSubjectSuffix = "record.rows_updated.v1"
 )
 
-func TimeSeriesRowsChangedSubject(prefix string) string {
-	return normalizeSubjectPrefix(prefix) + "." + defaultTimeSeriesRowsChangedSuffix
+func TimeSeriesRowsUpdatedSubject(prefix string) string {
+	return normalizeSubjectPrefix(prefix) + "." + defaultTimeSeriesRowsUpdatedSuffix
 }
 
-func RecordRowsChangedSubject(prefix string) string {
-	return normalizeSubjectPrefix(prefix) + "." + defaultRecordRowsChangedSubjectSuffix
+func RecordRowsUpdatedSubject(prefix string) string {
+	return normalizeSubjectPrefix(prefix) + "." + defaultRecordRowsUpdatedSubjectSuffix
 }
 
 func SubjectPrefixWildcard(prefix string) string {
@@ -50,12 +50,12 @@ type ProducerBus struct {
 func NewProducerBus(producer transport.Producer, prefix string) *ProducerBus {
 	return &ProducerBus{
 		producer:          producer,
-		timeSeriesSubject: TimeSeriesRowsChangedSubject(prefix),
-		recordSubject:     RecordRowsChangedSubject(prefix),
+		timeSeriesSubject: TimeSeriesRowsUpdatedSubject(prefix),
+		recordSubject:     RecordRowsUpdatedSubject(prefix),
 	}
 }
 
-func (b *ProducerBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
+func (b *ProducerBus) PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
 	data, err := protojson.MarshalOptions{EmitUnpopulated: false}.Marshal(event)
 	if err != nil {
 		return err
@@ -63,12 +63,12 @@ func (b *ProducerBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *p
 	return b.producer.Send(ctx, &transport.Message{
 		Subject: b.timeSeriesSubject,
 		Data:    data,
-		ID:      event.GetEventId(),
+		ID:      event.GetMessageId(),
 		Time:    time.Now(),
 	})
 }
 
-func (b *ProducerBus) PublishRecordRowsChanged(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
+func (b *ProducerBus) PublishRecordRowsUpdated(ctx context.Context, event *pb.RecordRowsUpdated) error {
 	data, err := protojson.MarshalOptions{EmitUnpopulated: false}.Marshal(event)
 	if err != nil {
 		return err
@@ -76,7 +76,7 @@ func (b *ProducerBus) PublishRecordRowsChanged(ctx context.Context, event *pb.Re
 	return b.producer.Send(ctx, &transport.Message{
 		Subject: b.recordSubject,
 		Data:    data,
-		ID:      event.GetEventId(),
+		ID:      event.GetMessageId(),
 		Time:    time.Now(),
 	})
 }
@@ -100,8 +100,8 @@ type SubscriberBus struct {
 	subscriber             transport.Subscriber
 	mu                     sync.Mutex
 	nextID                 uint64
-	timeSeriesHandlers     map[uint64]coreeventbus.TimeSeriesRowsChangedHandler
-	recordHandlers         map[uint64]coreeventbus.RecordRowsChangedHandler
+	timeSeriesHandlers     map[uint64]coreeventbus.TimeSeriesRowsUpdatedHandler
+	recordHandlers         map[uint64]coreeventbus.RecordRowsUpdatedHandler
 	timeSeriesSubscription transport.Subscription
 	recordSubscription     transport.Subscription
 	subscribeClosed        bool
@@ -112,12 +112,12 @@ func NewSubscriberBus(pubsub PubSub, prefix string) *SubscriberBus {
 	return &SubscriberBus{
 		ProducerBus:        base,
 		subscriber:         pubsub,
-		timeSeriesHandlers: make(map[uint64]coreeventbus.TimeSeriesRowsChangedHandler),
-		recordHandlers:     make(map[uint64]coreeventbus.RecordRowsChangedHandler),
+		timeSeriesHandlers: make(map[uint64]coreeventbus.TimeSeriesRowsUpdatedHandler),
+		recordHandlers:     make(map[uint64]coreeventbus.RecordRowsUpdatedHandler),
 	}
 }
 
-func (b *SubscriberBus) SubscribeTimeSeriesRowsChanged(ctx context.Context, handler coreeventbus.TimeSeriesRowsChangedHandler) (coreeventbus.Subscription, error) {
+func (b *SubscriberBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, handler coreeventbus.TimeSeriesRowsUpdatedHandler) (coreeventbus.Subscription, error) {
 	if handler == nil {
 		return noopSubscription{}, nil
 	}
@@ -141,7 +141,7 @@ func (b *SubscriberBus) SubscribeTimeSeriesRowsChanged(ctx context.Context, hand
 	return &subscriberBusSubscription{close: func() error { return b.closeTimeSeriesSubscription(id) }}, nil
 }
 
-func (b *SubscriberBus) SubscribeRecordRowsChanged(ctx context.Context, handler coreeventbus.RecordRowsChangedHandler) (coreeventbus.Subscription, error) {
+func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler coreeventbus.RecordRowsUpdatedHandler) (coreeventbus.Subscription, error) {
 	if handler == nil {
 		return noopSubscription{}, nil
 	}
@@ -166,12 +166,12 @@ func (b *SubscriberBus) SubscribeRecordRowsChanged(ctx context.Context, handler 
 }
 
 func (b *SubscriberBus) handleTimeSeriesMessage(ctx context.Context, msg *transport.Message) error {
-	event := &pb.TimeSeriesRowsChangedEvent{}
+	event := &pb.TimeSeriesRowsUpdated{}
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(msg.Data, event); err != nil {
 		return err
 	}
 	b.mu.Lock()
-	handlers := make([]coreeventbus.TimeSeriesRowsChangedHandler, 0, len(b.timeSeriesHandlers))
+	handlers := make([]coreeventbus.TimeSeriesRowsUpdatedHandler, 0, len(b.timeSeriesHandlers))
 	for _, handler := range b.timeSeriesHandlers {
 		handlers = append(handlers, handler)
 	}
@@ -185,12 +185,12 @@ func (b *SubscriberBus) handleTimeSeriesMessage(ctx context.Context, msg *transp
 }
 
 func (b *SubscriberBus) handleRecordMessage(ctx context.Context, msg *transport.Message) error {
-	event := &pb.RecordRowsChangedEvent{}
+	event := &pb.RecordRowsUpdated{}
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(msg.Data, event); err != nil {
 		return err
 	}
 	b.mu.Lock()
-	handlers := make([]coreeventbus.RecordRowsChangedHandler, 0, len(b.recordHandlers))
+	handlers := make([]coreeventbus.RecordRowsUpdatedHandler, 0, len(b.recordHandlers))
 	for _, handler := range b.recordHandlers {
 		handlers = append(handlers, handler)
 	}
