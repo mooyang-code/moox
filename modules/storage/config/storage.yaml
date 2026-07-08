@@ -23,6 +23,7 @@ storage:
   view:
     metadata_service_name: trpc.moox.storage.Metadata
     access_service_name: trpc.moox.storage.Access
+    backfill_window: 90d
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 4

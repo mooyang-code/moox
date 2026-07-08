@@ -57,7 +57,7 @@ func main() {
 		log.Errorf("storage deployment config invalid: %v", err)
 		os.Exit(1)
 	}
-	if needsRowsChangedBus(cfg.Storage) {
+	if needsRowsUpdatedBus(cfg.Storage) {
 		embeddedEventBus, err := eventbus.StartEmbeddedServer(cfg.Storage.EventBus)
 		if err != nil {
 			log.Errorf("启动内嵌 storage eventbus 失败: %v", err)
@@ -71,7 +71,7 @@ func main() {
 			}()
 			log.Infof("Embedded storage eventbus initialized")
 		}
-		events, err := eventbus.NewRowsChangedBus(trpc.BackgroundContext(), cfg.Storage.EventBus)
+		events, err := eventbus.NewRowsUpdatedBus(trpc.BackgroundContext(), cfg.Storage.EventBus)
 		if err != nil {
 			log.Errorf("初始化 storage eventbus 失败: %v", err)
 			os.Exit(1)
@@ -208,11 +208,12 @@ func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, opt
 		Metadata:  viewMetadata,
 	})
 	viewBuilder := view.NewBuilder(view.Options{
-		Metadata: viewMetadata,
-		Facts:    accessReader,
-		Records:  accessReader,
-		Views:    viewStore,
-		Search:   searchService,
+		Metadata:       viewMetadata,
+		Facts:          accessReader,
+		Records:        accessReader,
+		Views:          viewStore,
+		Search:         searchService,
+		BackfillWindow: storage.View.BackfillWindow,
 	})
 	view.SetDefaultBuilder(viewBuilder)
 	viewService := view.NewService(view.ServiceOptions{
@@ -333,16 +334,21 @@ func registerTimerHandlerService(name string, service server.Service, handle fun
 }
 
 func validateStorageDeployment(storage storageconfig.StorageConfig) error {
-	if storage.HasRole("view") && !storage.HasRole("access") && isMemoryRowsChangedBus(storage.EventBus) {
+	if storage.HasRole("view") && !storage.HasRole("access") && isMemoryRowsUpdatedBus(storage.EventBus) {
 		return errors.New("storage view role requires non-memory eventbus when access role is not in the same process")
 	}
-	if storage.HasRole("archive") && !storage.HasRole("access") && isMemoryRowsChangedBus(storage.EventBus) {
+	if storage.HasRole("archive") && !storage.HasRole("access") && isMemoryRowsUpdatedBus(storage.EventBus) {
 		return errors.New("storage archive role requires non-memory eventbus when access role is not in the same process")
+	}
+	if storage.HasRole("view") {
+		if _, err := storageconfig.ParseWindow(storage.View.BackfillWindow); err != nil {
+			return errors.New("storage.view.backfill_window is required and must use a positive d/h/m window")
+		}
 	}
 	return nil
 }
 
-func needsRowsChangedBus(storage storageconfig.StorageConfig) bool {
+func needsRowsUpdatedBus(storage storageconfig.StorageConfig) bool {
 	return storage.HasRole("access") || storage.HasRole("view") || storage.HasRole("archive")
 }
 
@@ -372,10 +378,10 @@ func accessReaderForRuntime(storage storageconfig.StorageConfig, storageService 
 }
 
 func shouldUseLocalAccessReader(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("access") && storage.HasRole("view") && isMemoryRowsChangedBus(storage.EventBus)
+	return storage.HasRole("access") && storage.HasRole("view") && isMemoryRowsUpdatedBus(storage.EventBus)
 }
 
-func isMemoryRowsChangedBus(cfg storageconfig.StorageEventBus) bool {
+func isMemoryRowsUpdatedBus(cfg storageconfig.StorageEventBus) bool {
 	kind := strings.ToLower(strings.TrimSpace(cfg.Type))
 	return kind == "" || kind == "memory"
 }

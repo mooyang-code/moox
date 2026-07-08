@@ -116,6 +116,58 @@ func TestRebuildPendingViewsContinuesAfterBuildFailure(t *testing.T) {
 	}
 }
 
+func TestBuildUsesBackfillWindowWhenQueryWindowEmpty(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	meta := newBuilderTestMetadata(testView("crypto", "spot", "kline", "pending", 1, 0))
+	facts := &builderTestFacts{
+		scanRows: map[string][]*pb.TimeSeriesRow{
+			"kline": {testTimeSeriesRow("crypto", "kline", "BTC-USDT", "1m", "2026-07-07T04:18:00Z")},
+		},
+	}
+	builder := NewBuilder(Options{
+		Metadata:       meta,
+		Facts:          facts,
+		Views:          &builderTestViewWriter{},
+		BackfillWindow: "30d",
+		Now:            func() time.Time { return now },
+	})
+
+	if _, err := builder.Build(ctx, "crypto", "spot"); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got, want := facts.scanRanges["kline"].GetStartTime(), "2026-06-08T10:00:00Z"; got != want {
+		t.Fatalf("scan start_time = %q, want backfill window %q", got, want)
+	}
+}
+
+func TestBuildQueryWindowOverridesBackfillWindow(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	view := testView("crypto", "spot", "kline", "pending", 1, 0)
+	view.QueryWindow = "7d"
+	meta := newBuilderTestMetadata(view)
+	facts := &builderTestFacts{
+		scanRows: map[string][]*pb.TimeSeriesRow{
+			"kline": {testTimeSeriesRow("crypto", "kline", "BTC-USDT", "1m", "2026-07-07T04:18:00Z")},
+		},
+	}
+	builder := NewBuilder(Options{
+		Metadata:       meta,
+		Facts:          facts,
+		Views:          &builderTestViewWriter{},
+		BackfillWindow: "30d",
+		Now:            func() time.Time { return now },
+	})
+
+	if _, err := builder.Build(ctx, "crypto", "spot"); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got, want := facts.scanRanges["kline"].GetStartTime(), "2026-07-01T10:00:00Z"; got != want {
+		t.Fatalf("scan start_time = %q, want query window %q", got, want)
+	}
+}
+
 type builderTestMetadata struct {
 	views []*pb.View
 	byID  map[string]*pb.View
@@ -205,6 +257,7 @@ func (m *builderTestMetadata) FailViewBuild(_ context.Context, _ string, viewID 
 type builderTestFacts struct {
 	scanErrByDataset map[string]error
 	scanRows         map[string][]*pb.TimeSeriesRow
+	scanRanges       map[string]*pb.TimeRange
 	scanned          map[string]bool
 }
 
@@ -212,11 +265,17 @@ func (f *builderTestFacts) ReadTimeSeriesRows(context.Context, *pb.ReadTimeSerie
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
 
-func (f *builderTestFacts) ScanTimeSeriesRows(_ context.Context, _ string, datasetID string, _ *pb.TimeRange, _ []string, _ *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult, error) {
+func (f *builderTestFacts) ScanTimeSeriesRows(_ context.Context, _ string, datasetID string, timeRange *pb.TimeRange, _ []string, _ *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult, error) {
 	if f.scanned == nil {
 		f.scanned = make(map[string]bool)
 	}
+	if f.scanRanges == nil {
+		f.scanRanges = make(map[string]*pb.TimeRange)
+	}
 	f.scanned[datasetID] = true
+	if timeRange != nil {
+		f.scanRanges[datasetID] = proto.Clone(timeRange).(*pb.TimeRange)
+	}
 	if err := f.scanErrByDataset[datasetID]; err != nil {
 		return nil, nil, err
 	}

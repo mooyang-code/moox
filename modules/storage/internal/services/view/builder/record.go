@@ -5,24 +5,17 @@ import (
 	"errors"
 	"strings"
 
-	viewsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
-	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
-func (s *Service) processRecordBatch(ctx context.Context, keys []*pb.RecordKey) error {
-	if len(keys) == 0 {
-		return nil
-	}
-	if s == nil || s.reader == nil || s.metadata == nil || s.search == nil {
-		return errors.New("view builder record processor requires reader, metadata client and record indexer")
-	}
-	rows, err := s.currentRecordRows(ctx, keys)
-	if err != nil {
-		return err
-	}
+func (s *Service) processRecordBatch(ctx context.Context, rows []*pb.RecordRow) error {
+	rows = mergeRecordRowsLatestWins(rows)
 	if len(rows) == 0 {
 		return nil
+	}
+	if s == nil || s.metadata == nil || s.search == nil {
+		return errors.New("view builder record processor requires metadata client and record indexer")
 	}
 	grouped := make(map[projectionDatasetKey][]*pb.RecordRow)
 	for _, row := range rows {
@@ -46,73 +39,28 @@ func (s *Service) processRecordBatch(ctx context.Context, keys []*pb.RecordKey) 
 			if err != nil {
 				return err
 			}
-			projected, ok, err := viewsvc.RecordRowsForView(ctx, item, columns, datasetRows, s.readRecordProjectionRow)
-			if err != nil {
-				return err
-			}
-			if !ok {
+			projected := MapRecordColumnsToView(item, columns, key.datasetID, datasetRows)
+			if len(projected) == 0 {
 				if err := markPending(ctx, s.metadata, item); err != nil {
 					return err
 				}
 				continue
 			}
+			writtenViews := 0
 			if item.GetActiveResult() != "" {
 				if err := s.search.IndexRecordViewRows(ctx, item.GetActiveResult(), columns, projected); err != nil {
 					return err
 				}
+				writtenViews++
 			}
 			if item.GetBuildingResult() != "" {
 				if err := s.search.IndexRecordViewRows(ctx, item.GetBuildingResult(), columns, projected); err != nil {
 					return err
 				}
+				writtenViews++
 			}
+			log.InfoContextf(ctx, "[ViewBuilder] record journal applied dataset=%s/%s views=%d input_rows=%d merged_rows=%d", key.spaceID, key.datasetID, writtenViews, len(datasetRows), len(projected))
 		}
 	}
 	return nil
-}
-
-func (s *Service) currentRecordRows(ctx context.Context, keys []*pb.RecordKey) ([]*pb.RecordRow, error) {
-	queryKeys := make([]*pb.RecordKey, 0, len(keys))
-	for _, key := range keys {
-		if key == nil {
-			continue
-		}
-		queryKeys = append(queryKeys, proto.Clone(key).(*pb.RecordKey))
-	}
-	if len(queryKeys) == 0 {
-		return nil, nil
-	}
-	rsp, err := s.reader.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: queryKeys})
-	if err != nil {
-		return nil, err
-	}
-	if rsp == nil {
-		return nil, errors.New("read record rows returned nil response")
-	}
-	if err := retInfoError(rsp.GetRetInfo()); err != nil {
-		return nil, err
-	}
-	return rsp.GetRows(), nil
-}
-
-func (s *Service) readRecordProjectionRow(ctx context.Context, base *pb.RecordKey, datasetID string) (*pb.RecordRow, error) {
-	if base == nil {
-		return nil, nil
-	}
-	key := proto.Clone(base).(*pb.RecordKey)
-	key.DatasetId = datasetID
-	rsp, err := s.reader.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: []*pb.RecordKey{key}})
-	if err != nil {
-		return nil, err
-	}
-	if rsp == nil {
-		return nil, errors.New("read record projection row returned nil response")
-	}
-	if err := retInfoError(rsp.GetRetInfo()); err != nil {
-		return nil, err
-	}
-	if len(rsp.GetRows()) == 0 {
-		return nil, nil
-	}
-	return rsp.GetRows()[0], nil
 }

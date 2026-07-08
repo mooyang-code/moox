@@ -13,7 +13,7 @@ import (
 	_ "github.com/mooyang-code/moox/modules/storage/internal/infra/transport/nats"
 )
 
-func NewRowsChangedBus(ctx context.Context, cfg storageconfig.StorageEventBus) (coreeventbus.Bus, error) {
+func NewRowsUpdatedBus(ctx context.Context, cfg storageconfig.StorageEventBus) (coreeventbus.Bus, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Type)) {
 	case "", "memory":
 		return coreeventbus.NewMemoryBus(), nil

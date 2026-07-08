@@ -10,19 +10,21 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
 	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const defaultMaxWorkers = 1
 
-// Service consumes storage row-change events and updates derived view stores.
+// Service consumes storage row-update events and updates derived view stores.
 type Service struct {
-	events     eventbus.Bus
-	reader     FactReader
-	metadata   viewsvc.Metadata
-	views      TimeSeriesViewWriter
-	search     RecordViewIndexer
-	batchOpts  BatchOptions
-	maxWorkers int
+	events      eventbus.Bus
+	reader      FactReader
+	metadata    viewsvc.Metadata
+	views       TimeSeriesViewWriter
+	search      RecordViewIndexer
+	batchOpts   BatchOptions
+	maxWorkers  int
+	viewWriters *viewWriterPool
 
 	mu                sync.Mutex
 	runCtx            context.Context
@@ -35,13 +37,11 @@ type Service struct {
 }
 
 type timeSeriesDeriveItem struct {
-	key  *pb.TimeSeriesKey
-	done chan error
+	journal *pb.TimeSeriesRowsUpdated
 }
 
 type recordDeriveItem struct {
-	key  *pb.RecordKey
-	done chan error
+	journal *pb.RecordRowsUpdated
 }
 
 // NewService creates a standalone view builder service.
@@ -55,17 +55,18 @@ func NewService(opts Options) *Service {
 		maxWorkers = defaultMaxWorkers
 	}
 	return &Service{
-		events:     opts.Events,
-		reader:     opts.Reader,
-		metadata:   opts.Metadata,
-		views:      opts.Views,
-		search:     opts.Search,
-		batchOpts:  batchOpts,
-		maxWorkers: maxWorkers,
+		events:      opts.Events,
+		reader:      opts.Reader,
+		metadata:    opts.Metadata,
+		views:       opts.Views,
+		search:      opts.Search,
+		batchOpts:   batchOpts,
+		maxWorkers:  maxWorkers,
+		viewWriters: newViewWriterPool(opts.Views),
 	}
 }
 
-// Start subscribes the view builder service to row-change events.
+// Start subscribes the view builder service to row-update events.
 func (s *Service) Start(ctx context.Context) error {
 	if s == nil {
 		return errors.New("view builder service is nil")
@@ -102,6 +103,7 @@ func (s *Service) Start(ctx context.Context) error {
 	s.runCtx = runCtx
 	s.timeSeriesBatcher = timeSeriesBatcher
 	s.recordBatcher = recordBatcher
+	s.viewWriters = newViewWriterPool(s.views)
 	timeSeriesOut := make(chan []timeSeriesDeriveItem, s.maxWorkers)
 	recordOut := make(chan []recordDeriveItem, s.maxWorkers)
 	processCtx := trpc.CloneContext(runCtx)
@@ -133,12 +135,12 @@ func (s *Service) Start(ctx context.Context) error {
 		}()
 	}
 
-	timeSeriesSub, err := subscriber.SubscribeTimeSeriesRowsChanged(ctx, s.enqueueTimeSeries)
+	timeSeriesSub, err := subscriber.SubscribeTimeSeriesRowsUpdated(ctx, s.enqueueTimeSeries)
 	if err != nil {
 		s.clearStartedState(cancel)
 		return err
 	}
-	recordSub, err := subscriber.SubscribeRecordRowsChanged(ctx, s.enqueueRecord)
+	recordSub, err := subscriber.SubscribeRecordRowsUpdated(ctx, s.enqueueRecord)
 	if err != nil {
 		_ = timeSeriesSub.Close()
 		s.clearStartedState(cancel)
@@ -176,6 +178,9 @@ func (s *Service) Close() error {
 	}
 	cancel()
 	s.wg.Wait()
+	if s.viewWriters != nil {
+		s.viewWriters.close()
+	}
 
 	s.mu.Lock()
 	s.cancel = nil
@@ -184,15 +189,23 @@ func (s *Service) Close() error {
 	s.recordSub = nil
 	s.timeSeriesBatcher = nil
 	s.recordBatcher = nil
+	s.viewWriters = nil
 	s.mu.Unlock()
 	return err
 }
 
-func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
+func (s *Service) insertTimeSeriesRows(ctx context.Context, tableName string, rows []*pb.TimeSeriesRow) error {
+	if s.viewWriters == nil {
+		s.viewWriters = newViewWriterPool(s.views)
+	}
+	return s.viewWriters.insert(ctx, tableName, rows)
+}
+
+func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if event == nil {
+	if event == nil || len(event.GetRows()) == 0 {
 		return nil
 	}
 	s.mu.Lock()
@@ -205,28 +218,16 @@ func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRow
 	if addCtx == nil {
 		addCtx = ctx
 	}
-	var done []chan error
-	for _, key := range event.GetKeys() {
-		if key == nil {
-			continue
-		}
-		item := timeSeriesDeriveItem{
-			key:  proto.Clone(key).(*pb.TimeSeriesKey),
-			done: make(chan error, 1),
-		}
-		if err := batcher.add(addCtx, item); err != nil {
-			return err
-		}
-		done = append(done, item.done)
-	}
-	return waitDeriveResults(ctx, done)
+	return batcher.add(addCtx, timeSeriesDeriveItem{
+		journal: proto.Clone(event).(*pb.TimeSeriesRowsUpdated),
+	})
 }
 
-func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
+func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsUpdated) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if event == nil {
+	if event == nil || len(event.GetRows()) == 0 {
 		return nil
 	}
 	s.mu.Lock()
@@ -239,21 +240,9 @@ func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsChanged
 	if addCtx == nil {
 		addCtx = ctx
 	}
-	var done []chan error
-	for _, key := range event.GetKeys() {
-		if key == nil {
-			continue
-		}
-		item := recordDeriveItem{
-			key:  proto.Clone(key).(*pb.RecordKey),
-			done: make(chan error, 1),
-		}
-		if err := batcher.add(addCtx, item); err != nil {
-			return err
-		}
-		done = append(done, item.done)
-	}
-	return waitDeriveResults(ctx, done)
+	return batcher.add(addCtx, recordDeriveItem{
+		journal: proto.Clone(event).(*pb.RecordRowsUpdated),
+	})
 }
 
 func (s *Service) clearStartedState(cancel context.CancelFunc) {
@@ -268,53 +257,27 @@ func (s *Service) clearStartedState(cancel context.CancelFunc) {
 }
 
 func (s *Service) processTimeSeriesItemBatch(ctx context.Context, items []timeSeriesDeriveItem) {
-	keys := make([]*pb.TimeSeriesKey, 0, len(items))
+	rows := make([]*pb.TimeSeriesRow, 0, len(items))
 	for _, item := range items {
-		if item.key != nil {
-			keys = append(keys, item.key)
+		if item.journal != nil {
+			rows = append(rows, item.journal.GetRows()...)
 		}
 	}
-	err := s.processTimeSeriesBatch(ctx, keys)
-	for _, item := range items {
-		completeDeriveItem(item.done, err)
+	if err := s.processTimeSeriesBatch(ctx, rows); err != nil {
+		log.ErrorContextf(ctx, "[ViewBuilder] apply time-series write journal failed: %v", err)
 	}
 }
 
 func (s *Service) processRecordItemBatch(ctx context.Context, items []recordDeriveItem) {
-	keys := make([]*pb.RecordKey, 0, len(items))
+	rows := make([]*pb.RecordRow, 0, len(items))
 	for _, item := range items {
-		if item.key != nil {
-			keys = append(keys, item.key)
+		if item.journal != nil {
+			rows = append(rows, item.journal.GetRows()...)
 		}
 	}
-	err := s.processRecordBatch(ctx, keys)
-	for _, item := range items {
-		completeDeriveItem(item.done, err)
+	if err := s.processRecordBatch(ctx, rows); err != nil {
+		log.ErrorContextf(ctx, "[ViewBuilder] apply record write journal failed: %v", err)
 	}
-}
-
-func completeDeriveItem(done chan error, err error) {
-	if done == nil {
-		return
-	}
-	done <- err
-}
-
-func waitDeriveResults(ctx context.Context, results []chan error) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	for _, result := range results {
-		select {
-		case err := <-result:
-			if err != nil {
-				return err
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return nil
 }
 
 type projectionDatasetKey struct {

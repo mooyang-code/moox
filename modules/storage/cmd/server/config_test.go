@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"gopkg.in/yaml.v2"
 )
 
@@ -33,5 +34,25 @@ func TestStorageTRPCConfigServiceNamesAreUnique(t *testing.T) {
 			t.Fatalf("duplicate server service name %q shadows an earlier listener", service.Name)
 		}
 		seen[service.Name] = true
+	}
+}
+
+func TestValidateStorageDeploymentRequiresBackfillWindowForViewRole(t *testing.T) {
+	cfg := storageconfig.StorageConfig{
+		Roles: []string{"view"},
+		EventBus: storageconfig.StorageEventBus{
+			Type: "nats",
+		},
+	}
+	if err := validateStorageDeployment(cfg); err == nil {
+		t.Fatalf("validateStorageDeployment error = nil, want missing backfill_window rejected")
+	}
+	cfg.View.BackfillWindow = "bad"
+	if err := validateStorageDeployment(cfg); err == nil {
+		t.Fatalf("validateStorageDeployment error = nil, want invalid backfill_window rejected")
+	}
+	cfg.View.BackfillWindow = "90d"
+	if err := validateStorageDeployment(cfg); err != nil {
+		t.Fatalf("validateStorageDeployment with backfill_window: %v", err)
 	}
 }

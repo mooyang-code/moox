@@ -2,10 +2,12 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v2"
 )
@@ -67,6 +69,7 @@ type StorageEmbeddedEventBus struct {
 type StorageView struct {
 	MetadataServiceName string `yaml:"metadata_service_name"`
 	AccessServiceName   string `yaml:"access_service_name"`
+	BackfillWindow      string `yaml:"backfill_window"`
 	BatchSize           int    `yaml:"batch_size"`
 	BatchWaitMS         int    `yaml:"batch_wait_ms"`
 	MaxWorkers          int    `yaml:"max_workers"`
@@ -146,6 +149,29 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.View.MaxWorkers <= 0 {
 		c.View.MaxWorkers = 4
+	}
+}
+
+func ParseWindow(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, errors.New("window is required")
+	}
+	unit := value[len(value)-1:]
+	number := strings.TrimSpace(value[:len(value)-1])
+	var count int
+	if _, err := fmt.Sscanf(number, "%d", &count); err != nil || count <= 0 {
+		return 0, fmt.Errorf("invalid window %q", value)
+	}
+	switch unit {
+	case "d", "D":
+		return time.Duration(count) * 24 * time.Hour, nil
+	case "h", "H":
+		return time.Duration(count) * time.Hour, nil
+	case "m", "M":
+		return time.Duration(count) * time.Minute, nil
+	default:
+		return 0, fmt.Errorf("invalid window unit %q", unit)
 	}
 }
 

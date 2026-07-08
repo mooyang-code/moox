@@ -129,19 +129,19 @@ storage:
 
 | 角色 | 职责 |
 | --- | --- |
-| `access` | 面向用户的写入和权威读取入口；校验列契约、解析路由、写 PrimaryStore，并发布行变更事件。 |
+| `access` | 面向用户的写入和权威读取入口；校验列契约、解析路由、写 PrimaryStore，并发布携带 rows 的写入流水。 |
 | `primary` | 拥有 Pebble PrimaryStore RPC；可按路由和配置部署多个 primary 服务。 |
-| `view` | 消费行变更事件、批量聚合 key、通过 Access RPC 回读当前行；TimeSeries View 写入 DuckDB，Record View 写入 Bleve。 |
-| `archive` | 独立归档运行时；消费行变更事件，通过 Metadata/Access RPC 读取元数据与主存事实数据，后续将写入 Parquet 冷归档。 |
+| `view` | 消费写入流水、批量合并 rows、按本 dataset 贡献列 patch；TimeSeries View 写入 DuckDB，Record View 写入 Bleve。 |
+| `archive` | 独立归档运行时；消费写入流水，通过 Metadata/Access RPC 读取元数据与主存事实数据，后续将写入 Parquet 冷归档。 |
 
 默认运行角色是 `access + view`，不包含显式 `primary`。当 `access` 的 `primary.service_name` 为空时，进程会同时暴露本地 `PrimaryStore`，保持单进程/本地主存部署可用；当 `primary.service_name` 非空时，Access 走远程 PrimaryStore，除非显式加入 `primary` 角色。
 
-仓库默认事件总线是 `memory`，适合单进程开发和个人部署；它仍然异步投递事件，不提供写后立即可查派生结果的契约。分布式部署或希望持久化事件时，把 `eventbus.type` 改为 `nats`，可连接独立 NATS，也可显式开启 `eventbus.embedded.enabled` 使用内嵌 JetStream。NATS 行变更 subject 使用 `eventbus.subject_prefix` 拼接：
+仓库默认事件总线是 `memory`，适合单进程开发和个人部署；它仍然异步投递流水，不提供写后立即可查派生结果的契约。分布式部署或希望持久化流水时，把 `eventbus.type` 改为 `nats`，可连接独立 NATS，也可显式开启 `eventbus.embedded.enabled` 使用内嵌 JetStream。NATS 写入流水 subject 使用 `eventbus.subject_prefix` 拼接：
 
-- `${prefix}.time_series.rows_changed.v1`
-- `${prefix}.record.rows_changed.v1`
+- `${prefix}.time_series.rows_updated.v1`
+- `${prefix}.record.rows_updated.v1`
 
-NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。实时事件消费者只处理启动后新产生的行变更；历史补仓、断档追数和读模型重建统一交给 View rebuild。View 事件 handler 只有在派生写入成功后才返回 success；失败会向上传递错误，让 NATS `Nak` 并重试。View 批处理参数为 `view.metadata_service_name`、`view.access_service_name`、`view.batch_size`、`view.batch_wait_ms`、`view.max_workers`。Archive 独立部署时也复用 `view.metadata_service_name` 和 `view.access_service_name` 连接 Metadata/Access RPC，并通过同一个 eventbus 订阅行变更事件；当前事件 handler 为占位 ack，Parquet 归档策略后续补齐。
+流水字段包括 `message_id`、`written_at` 和 `rows`；稳态 View 物化只使用本 dataset rows patch 贡献列，不按 key 回读 PrimaryStore，join 视图允许先插入半行再由另一侧 dataset 流水补齐。NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。实时消费者只处理启动后新产生的写入流水；历史补仓、断档追数和读模型重建统一交给 View rebuild。View handler 解析并入队成功后立即返回 success，物化失败通过日志/指标暴露并依赖 backfill/Rebuild 修复。View 批处理参数为 `view.metadata_service_name`、`view.access_service_name`、必填 `view.backfill_window`、`view.batch_size`、`view.batch_wait_ms`、`view.max_workers`。Archive 独立部署时也复用 `view.metadata_service_name` 和 `view.access_service_name` 连接 Metadata/Access RPC，并通过同一个 eventbus 订阅写入流水；当前事件 handler 为占位 ack，Parquet 归档策略后续补齐。
 
 ### `config/trpc_go.yaml` 默认服务端口
 
@@ -382,6 +382,7 @@ storage:
   view:
     metadata_service_name: trpc.moox.storage.Metadata
     access_service_name: ""
+    backfill_window: 90d
     batch_size: 100
     batch_wait_ms: 50
     max_workers: 1
@@ -523,7 +524,7 @@ curl -s -XPOST http://127.0.0.1:20200/trpc.moox.storage.Metadata/ListSpaces \
 
 3. **读写链路**：通过 Access 写一行再读回，必要时再触发 View rebuild 后查询 DataView。
 
-4. **分布式额外检查**：Access 节点日志无"primary store"连接错误；主存节点 `PrimaryStore` 端口可被 Access 节点 `telnet`/`nc` 通；NATS 上能看到 `moox.storage.time_series.rows_changed.v1` / `moox.storage.record.rows_changed.v1` 主题有消息。
+4. **分布式额外检查**：Access 节点日志无"primary store"连接错误；主存节点 `PrimaryStore` 端口可被 Access 节点 `telnet`/`nc` 通；NATS 上能看到 `moox.storage.time_series.rows_updated.v1` / `moox.storage.record.rows_updated.v1` 主题有消息。
 
 ## 提供的接口
 
