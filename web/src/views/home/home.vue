@@ -27,13 +27,15 @@
       <section class="dash-command">
         <div class="dash-command-main">
           <div class="dash-kicker">
-            <span>{{ greeting }}，{{ spaceName }}</span>
-            <b>DATA + COLLECTOR HEALTH FIRST</b>
+            <span>{{ greeting }}，{{ displayUserName }}</span>
+            <transition name="banner-slogan" mode="out-in">
+              <b :key="activeSlogan.headline">{{ activeSlogan.headline }}</b>
+            </transition>
           </div>
-          <h1>个人量化系统驾驶舱</h1>
-          <p>
-            首页优先暴露数据新鲜度、采集健康、云节点和服务状态；交易账户作为辅助摘要，避免错过断流和异常任务。
-          </p>
+          <h1>量化驾驶舱</h1>
+          <transition name="banner-slogan" mode="out-in">
+            <p :key="activeSlogan.subtitle">{{ activeSlogan.subtitle }}</p>
+          </transition>
         </div>
 
         <div class="health-score-card">
@@ -270,10 +272,11 @@
 </template>
 
 <script setup lang="ts" name="Home">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useRouter } from 'vue-router';
 import { useSpaceStore } from '@/store/modules/space';
+import { useUserInfoStore } from '@/store/modules/user-info';
 import { listDataSources, listDatasets, listFactors, listSubjects, listViews } from '@/api/storage/metadata';
 import type { PageResult } from '@/api/storage/types';
 import { pageResultTotal } from '@/views/data/shared/metadata-utils';
@@ -286,8 +289,12 @@ import { getNodeList } from '@/api/cloud-node';
 
 const router = useRouter();
 const spaceStore = useSpaceStore();
+const userInfoStore = useUserInfoStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
-const spaceName = computed(() => spaceStore.selectedSpace?.name || selectedSpaceId.value || '');
+const { account } = storeToRefs(userInfoStore);
+const displayUserName = computed(() =>
+  account.value.user?.userName || account.value.user?.nickName || 'Trader',
+);
 
 const currentHour = new Date().getHours();
 const greeting = computed(() => {
@@ -297,6 +304,41 @@ const greeting = computed(() => {
   if (h < 18) return '下午好';
   return '晚上好';
 });
+
+const bannerSlogans = [
+  { headline: 'Quant. Trade. Win.', subtitle: '数字背后是逻辑，逻辑背后是优势' },
+  { headline: 'Code. Backtest. Deploy.', subtitle: '每一行策略代码，都是对市场的一次深刻理解' },
+  { headline: 'Signal. Edge. Alpha.', subtitle: '在噪声中寻找信号，在混沌中建立优势' },
+  { headline: 'Think. Model. Execute.', subtitle: '用系统的力量，对抗市场的随机性' },
+  { headline: 'Data. Strategy. Freedom.', subtitle: '让算法替你工作，让数据为你决策' },
+  { headline: 'Logic. Risk. Reward.', subtitle: '控制好每一次回撤，才能守住每一分收益' },
+  { headline: 'Predict. Position. Profit.', subtitle: '预测不是玄学，是概率与模型的艺术' },
+  { headline: 'Noise. Filter. Clarity.', subtitle: '过滤市场的喧嚣，只追踪真正有效的信号' },
+  { headline: 'Pattern. Probability. Edge.', subtitle: '重复出现的规律，就是可以被利用的优势' },
+  { headline: 'Market. Math. Mastery.', subtitle: '用数学丈量市场，用逻辑掌控交易' },
+  { headline: 'Build. Test. Evolve.', subtitle: '策略不是一成不变的，进化才是长期生存之道' },
+  { headline: 'Price. Volume. Truth.', subtitle: '价格和成交量，是市场留下的唯一真相' },
+  { headline: 'Entropy. Order. Profit.', subtitle: '在市场的混沌中，寻找短暂却真实的秩序' },
+  { headline: 'Asymmetry. Leverage. Compound.', subtitle: '寻找不对称的赔率，是量化交易最迷人的地方' },
+  { headline: 'Flow. Trend. Ride.', subtitle: '顺势而为不是妥协，是对市场规律最深的尊重' },
+];
+
+function pickRandomSloganIndex(currentIndex?: number) {
+  if (bannerSlogans.length <= 1) {
+    return 0;
+  }
+
+  if (currentIndex === undefined) {
+    return Math.floor(Math.random() * bannerSlogans.length);
+  }
+
+  const nextIndex = Math.floor(Math.random() * (bannerSlogans.length - 1));
+  return nextIndex >= currentIndex ? nextIndex + 1 : nextIndex;
+}
+
+const activeSloganIndex = ref(pickRandomSloganIndex());
+const activeSlogan = computed(() => bannerSlogans[activeSloganIndex.value]);
+let bannerTimer: ReturnType<typeof setInterval> | null = null;
 
 const counts = reactive<Record<string, number | null>>({
   sources: null,
@@ -613,6 +655,16 @@ watch(selectedSpaceId, () => {
 
 onMounted(() => {
   refreshAll();
+  bannerTimer = setInterval(() => {
+    activeSloganIndex.value = pickRandomSloganIndex(activeSloganIndex.value);
+  }, 15000);
+});
+
+onBeforeUnmount(() => {
+  if (bannerTimer) {
+    clearInterval(bannerTimer);
+    bannerTimer = null;
+  }
 });
 </script>
 
@@ -1447,11 +1499,17 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   z-index: -1;
   border-radius: inherit;
   background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='176' viewBox='0 0 520 176'%3E%3Cg id='volume-bars' fill='%230f172a' fill-opacity='.08'%3E%3Crect x='300' y='148' width='8' height='10' rx='2'/%3E%3Crect x='312' y='145' width='8' height='13' rx='2'/%3E%3Crect x='324' y='150' width='8' height='8' rx='2'/%3E%3Crect x='336' y='142' width='8' height='16' rx='2'/%3E%3Crect x='348' y='136' width='8' height='22' rx='2'/%3E%3Crect x='360' y='144' width='8' height='14' rx='2'/%3E%3Crect x='372' y='130' width='8' height='28' rx='2'/%3E%3Crect x='384' y='126' width='8' height='32' rx='2'/%3E%3Crect x='396' y='118' width='8' height='40' rx='2'/%3E%3Crect x='408' y='122' width='8' height='36' rx='2'/%3E%3Crect x='420' y='110' width='8' height='48' rx='2'/%3E%3Crect x='432' y='116' width='8' height='42' rx='2'/%3E%3C/g%3E%3Cg id='candlestick-45-layer' stroke='%230f172a' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath id='angle-45-guide' d='M304 150 L434 20' fill='none' stroke='%230f172a' stroke-width='1' stroke-opacity='.16' stroke-dasharray='4 8'/%3E%3Cpath d='M304 154V116 M316 144V104 M328 148V96 M340 134V84 M352 120V72 M364 126V62 M376 108V52 M388 100V44 M400 92V36 M412 82V28 M424 72V20 M436 64V14' stroke-width='1' stroke-opacity='.25'/%3E%3Crect class='candle-body' x='300' y='128' width='8' height='18' rx='2' fill='%23059669' fill-opacity='.14' stroke='%230f172a' stroke-opacity='.25'/%3E%3Crect class='candle-body' x='312' y='112' width='8' height='24' rx='2' fill='%230f172a' fill-opacity='.13' stroke='%230f172a' stroke-opacity='.23'/%3E%3Crect class='candle-body' x='324' y='104' width='8' height='34' rx='2' fill='%23059669' fill-opacity='.12' stroke='%230f172a' stroke-opacity='.24'/%3E%3Crect class='candle-body' x='336' y='92' width='8' height='30' rx='2' fill='%23059669' fill-opacity='.14' stroke='%230f172a' stroke-opacity='.25'/%3E%3Crect class='candle-body' x='348' y='78' width='8' height='34' rx='2' fill='%23059669' fill-opacity='.15' stroke='%230f172a' stroke-opacity='.26'/%3E%3Crect class='candle-body' x='360' y='76' width='8' height='40' rx='2' fill='%23d97706' fill-opacity='.10' stroke='%230f172a' stroke-opacity='.22'/%3E%3Crect class='candle-body' x='372' y='62' width='8' height='34' rx='2' fill='%23059669' fill-opacity='.15' stroke='%230f172a' stroke-opacity='.27'/%3E%3Crect class='candle-body' x='384' y='54' width='8' height='34' rx='2' fill='%23059669' fill-opacity='.14' stroke='%230f172a' stroke-opacity='.25'/%3E%3Crect class='candle-body' x='396' y='46' width='8' height='30' rx='2' fill='%23059669' fill-opacity='.15' stroke='%230f172a' stroke-opacity='.26'/%3E%3Crect class='candle-body' x='408' y='40' width='8' height='32' rx='2' fill='%23d97706' fill-opacity='.10' stroke='%230f172a' stroke-opacity='.22'/%3E%3Crect class='candle-body' x='420' y='30' width='8' height='28' rx='2' fill='%23059669' fill-opacity='.16' stroke='%230f172a' stroke-opacity='.28'/%3E%3Crect class='candle-body' x='432' y='22' width='8' height='28' rx='2' fill='%23059669' fill-opacity='.15' stroke='%230f172a' stroke-opacity='.27'/%3E%3C/g%3E%3C/svg%3E"),
+    repeating-linear-gradient(118deg, transparent 0 11px, rgba(15, 23, 42, 7%) 12px 13px, transparent 14px 27px),
     linear-gradient(90deg, rgba(30, 64, 175, 8%) 1px, transparent 1px),
     linear-gradient(180deg, rgba(30, 64, 175, 7%) 1px, transparent 1px);
-  background-size: 34px 34px;
+  background-position: right clamp(128px, 12vw, 180px) center, 0 0, 0 0, 0 0;
+  background-repeat: no-repeat, repeat, repeat, repeat;
+  background-size: min(58vw, 620px) auto, 36px 36px, 34px 34px, 34px 34px;
   clip-path: inset(0 round 8px);
-  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 62%), rgba(0, 0, 0, 12%) 70%, transparent);
+  mix-blend-mode: multiply;
+  opacity: 0.72;
+  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 52%), rgba(0, 0, 0, 34%) 58%, rgba(0, 0, 0, 12%) 88%, transparent);
 }
 
 .dash-command::after {
@@ -1491,6 +1549,21 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
+}
+
+.banner-slogan-enter-active,
+.banner-slogan-leave-active {
+  transition: opacity 0.24s ease, transform 0.24s ease;
+}
+
+.banner-slogan-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.banner-slogan-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 .dash-command h1 {
@@ -2143,6 +2216,11 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   .resource-line,
   .pipeline-step,
   .action-tile {
+    transition: none;
+  }
+
+  .banner-slogan-enter-active,
+  .banner-slogan-leave-active {
     transition: none;
   }
 }
