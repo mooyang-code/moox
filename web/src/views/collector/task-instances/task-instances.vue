@@ -2,45 +2,50 @@
   <div class="moox-page">
     <a-spin :loading="loading">
       <div class="moox-inner">
-        <a-space wrap>
-          <a-input v-model="form.taskId" placeholder="请输入任务ID" allow-clear style="width: 200px" />
-          <a-input v-model="form.ruleId" placeholder="请输入规则ID" allow-clear style="width: 200px" />
-          <a-input v-model="form.plannedExecNode" placeholder="计划节点" allow-clear style="width: 150px" />
-          <a-input v-model="form.lastExecNode" placeholder="最后执行节点" allow-clear style="width: 150px" />
-          <a-input v-model="form.symbol" placeholder="请输入交易标的" allow-clear style="width: 150px" />
-          <a-select placeholder="执行状态" v-model="form.lastExecStatus" style="width: 120px" allow-clear>
-            <a-option :value="1">待执行</a-option>
-            <a-option :value="2">执行中</a-option>
-            <a-option :value="3">成功</a-option>
-            <a-option :value="4">部分失败</a-option>
-            <a-option :value="5">失败</a-option>
-          </a-select>
-          <a-switch v-model="form.includeDeleted" :checked-text="'含删除'" :unchecked-text="'仅有效'" />
-          <a-button type="primary" @click="search">
-            <template #icon><icon-search /></template>
-            <span>查询</span>
-          </a-button>
-          <a-button @click="reset">
-            <template #icon><icon-refresh /></template>
-            <span>重置</span>
-          </a-button>
-        </a-space>
-
-        <a-row>
-          <a-space wrap>
+        <div class="page-head">
+          <h2>任务实例</h2>
+          <div class="page-actions">
             <a-button type="primary" @click="refreshList">
               <template #icon><icon-sync /></template>
               <span>刷新</span>
             </a-button>
-          </a-space>
-        </a-row>
+          </div>
+        </div>
 
+        <section class="task-query-panel">
+          <a-space wrap class="task-filter-row">
+            <a-input v-model="form.taskId" placeholder="请输入任务ID" allow-clear style="width: 200px" />
+            <a-input v-model="form.ruleId" placeholder="请输入规则ID" allow-clear style="width: 200px" />
+            <a-input v-model="form.plannedExecNode" placeholder="计划节点" allow-clear style="width: 150px" />
+            <a-input v-model="form.lastExecNode" placeholder="最后执行节点" allow-clear style="width: 150px" />
+            <a-input v-model="form.symbol" placeholder="请输入交易标的" allow-clear style="width: 150px" />
+            <a-select placeholder="执行状态" v-model="form.lastExecStatus" style="width: 120px" allow-clear>
+              <a-option :value="1">待执行</a-option>
+              <a-option :value="2">执行中</a-option>
+              <a-option :value="3">成功</a-option>
+              <a-option :value="4">部分失败</a-option>
+              <a-option :value="5">失败</a-option>
+            </a-select>
+            <a-switch v-model="form.includeDeleted" :checked-text="'含删除'" :unchecked-text="'仅有效'" />
+            <a-button type="primary" @click="search">
+              <template #icon><icon-search /></template>
+              <span>查询</span>
+            </a-button>
+            <a-button @click="reset">
+              <template #icon><icon-refresh /></template>
+              <span>重置</span>
+            </a-button>
+          </a-space>
+        </section>
+
+        <section class="task-result-pane">
         <a-table
           row-key="TaskID"
+          size="small"
           :data="instanceList"
           :bordered="{ cell: true }"
           :loading="loading"
-          :scroll="{ x: '100%', y: '100%', minWidth: 1780 }"
+          :scroll="{ x: 'max-content', y: 500 }"
           :pagination="paginationConfig"
           :row-selection="{ type: 'checkbox', showCheckedAll: true }"
           :selected-keys="selectedKeys"
@@ -113,15 +118,13 @@
             <a-table-column title="操作" :width="100" align="center" fixed="right">
               <template #cell="{ record }">
                 <a-space>
-                  <a-button type="primary" size="mini" @click="onViewDetails(record)">
-                    <template #icon><icon-eye /></template>
-                    详情
-                  </a-button>
+                  <a-button type="text" size="mini" @click="onViewDetails(record)">查看</a-button>
                 </a-space>
               </template>
             </a-table-column>
           </template>
         </a-table>
+        </section>
       </div>
     </a-spin>
 
@@ -431,23 +434,70 @@ onMounted(() => {
 
 <style scoped>
 .moox-page {
-  padding: 16px;
+  width: 100%;
   height: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 20px 20px 72px;
+  overflow-y: auto;
 }
 
 .moox-inner {
-  height: 100%;
-  background: #fff;
-  padding: 16px;
-  border-radius: 4px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
-.moox-inner .a-row {
-  margin-top: 16px;
+.moox-page :deep(.arco-spin) {
+  display: block;
+  width: 100%;
+  min-width: 0;
 }
 
-.moox-inner .a-table {
-  margin-top: 16px;
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.page-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.page-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.task-query-panel {
+  margin-bottom: 12px;
+  padding: 18px 20px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-bg-2);
+}
+
+.task-filter-row {
+  width: 100%;
+}
+
+.task-result-pane {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-bg-2);
+}
+
+.task-result-pane :deep(.arco-pagination) {
+  margin-top: 12px;
 }
 
 .ellipsis-text {
