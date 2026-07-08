@@ -6,9 +6,9 @@ const defaultPublicHost = "106.53.107.122"
 
 func DefaultDeployments() []Deployment {
 	rows := []Deployment{
-		deployment("admin_gateway", "gateway", "http", defaultPublicHost, 11000, "/api/admin", "public", "管理台请求统一入口，前端直接访问 /api/admin/*"),
+		withExtra(deployment("admin_gateway", "gateway", "http", defaultPublicHost, 11000, "/api/admin", "public", "管理台请求统一入口，前端直接访问 /api/admin/*"), `{"health_url":"http://106.53.107.122:11000/healthz","monitor_enabled":true}`),
 		deployment("service_gateway", "gateway", "http", defaultPublicHost, 11000, "/api/service", "public", "后台/SCF 请求统一入口，使用 HMAC 鉴权访问 /api/service/*"),
-		deployment("web_host", "frontend", "http", defaultPublicHost, 9527, "", "public", "管理台静态资源服务，仅承载前端页面，不代理 API"),
+		withExtra(deployment("web_host", "frontend", "http", defaultPublicHost, 9527, "", "public", "管理台静态资源服务，仅承载前端页面，不代理 API"), `{"health_url":"http://106.53.107.122:9527/healthz","monitor_enabled":true}`),
 		deployment("storage_metadata", "storage", "http", defaultPublicHost, 20200, "trpc.moox.storage.Metadata", "public", "moox-storage 元数据 HTTP 服务"),
 		deployment("storage_access", "storage", "http", defaultPublicHost, 20201, "trpc.moox.storage.Access", "public", "moox-storage 数据写入/读取 HTTP 服务，SCF 采集写入优先直连"),
 		deployment("storage_view", "storage", "http", defaultPublicHost, 20202, "trpc.moox.storage.DataView", "public", "moox-storage 数据视图 HTTP 服务"),
@@ -19,14 +19,15 @@ func DefaultDeployments() []Deployment {
 		deployment("admin_auth", "admin_rpc", "http", "127.0.0.1", 11100, "trpc.moox.infra.Auth", "internal", "认证 RPC 服务"),
 		deployment("dnsproxy", "admin_rpc", "http", "127.0.0.1", 11101, "trpc.moox.infra.Dns", "internal", "DNS 代理 RPC 服务"),
 		deployment("monitor", "admin_rpc", "http", "127.0.0.1", 11103, "trpc.moox.ops.Monitor", "internal", "资源监控 RPC 服务"),
-		deployment("moox_collector", "collector", "http", "127.0.0.1", 11402, "trpc.moox.collector.CollectMgr", "internal", "独立采集管理服务，承载采集规则、任务实例和 planner"),
-		deployment("moox_cloudnode", "cloudnode", "http", "127.0.0.1", 11401, "trpc.moox.cloudnode.CloudNodeMgr", "internal", "独立云节点执行平台，承载云节点、代码包、异步 JobItem 队列和同步调用"),
-		deployment("moox_factor", "factor", "http", "127.0.0.1", 11404, "trpc.moox.factor.FactorMgr", "internal", "因子计算服务，承载因子定义、绑定、补算与结果写回"),
+		withExtra(deployment("moox_monitor", "monitor", "http", "127.0.0.1", 11410, "trpc.moox.monitor.MonitorMgr", "internal", "独立服务监控模块，承载 HTTP/TCP 探测、告警和多实例协同"), `{"health_url":"http://127.0.0.1:11409/healthz","monitor_enabled":true}`),
+		withExtra(deployment("moox_collector", "collector", "http", "127.0.0.1", 11402, "trpc.moox.collector.CollectMgr", "internal", "独立采集管理服务，承载采集规则、任务实例和 planner"), `{"health_url":"http://127.0.0.1:11412/healthz","monitor_enabled":true}`),
+		withExtra(deployment("moox_cloudnode", "cloudnode", "http", "127.0.0.1", 11401, "trpc.moox.cloudnode.CloudNodeMgr", "internal", "独立云节点执行平台，承载云节点、代码包、异步 JobItem 队列和同步调用"), `{"health_url":"http://127.0.0.1:11411/healthz","monitor_enabled":true}`),
+		withExtra(deployment("moox_factor", "factor", "http", "127.0.0.1", 11404, "trpc.moox.factor.FactorMgr", "internal", "因子计算服务，承载因子定义、绑定、补算与结果写回"), `{"health_url":"http://127.0.0.1:11414/healthz","monitor_enabled":true}`),
 		deployment("ssh", "admin_rpc", "http", "127.0.0.1", 11106, "trpc.moox.ops.Ssh", "internal", "SSH 管理 RPC 服务"),
 		deployment("space", "admin_rpc", "http", "127.0.0.1", 11107, "trpc.moox.admin.SpaceMgr", "internal", "空间管理 RPC 服务"),
 		deployment("secret", "admin_rpc", "http", "127.0.0.1", 11108, "trpc.moox.ops.SecretMgr", "internal", "秘钥管理 RPC 服务"),
 		deployment("sysdeploy", "admin_rpc", "http", "127.0.0.1", 11109, "trpc.moox.ops.SysDeploy", "internal", "系统服务部署信息 RPC 服务"),
-		deployment("trade_account", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.AccountSvc", "internal", "交易账户服务"),
+		withExtra(deployment("trade_account", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.AccountSvc", "internal", "交易账户服务"), `{"health_url":"http://127.0.0.1:11210/healthz","monitor_enabled":true}`),
 		deployment("trade_balance", "trade", "http", "127.0.0.1", 11201, "trpc.moox.trade.BalanceSvc", "internal", "交易余额服务"),
 		deployment("trade_fund", "trade", "http", "127.0.0.1", 11202, "trpc.moox.trade.FundSvc", "internal", "交易资金服务"),
 		deployment("trade_apikey", "trade", "http", "127.0.0.1", 11203, "trpc.moox.trade.ApiKeySvc", "internal", "交易 API Key 服务"),
@@ -37,6 +38,12 @@ func DefaultDeployments() []Deployment {
 		deployment("trade_position", "trade", "http", "127.0.0.1", 11208, "trpc.moox.trade.PositionSvc", "internal", "持仓服务"),
 	}
 	return rows
+}
+
+func withExtra(item Deployment, extra string) Deployment {
+	item.ExtraConfig = extra
+	normalizeDeployment(&item)
+	return item
 }
 
 func deployment(name, kind, protocol, host string, port int32, gatewayPath, scope, description string) Deployment {

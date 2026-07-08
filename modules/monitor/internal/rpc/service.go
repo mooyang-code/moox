@@ -20,16 +20,18 @@ type Options struct {
 	InstanceID string
 	Runner     probe.Runner
 	OnResult   func(context.Context, domain.Check, domain.CheckResult)
+	SyncSystem func(context.Context) (int, error)
 }
 
 type Service struct {
-	checks   *repository.CheckRepository
-	results  *repository.ResultRepository
-	alerts   *repository.AlertRepository
-	peers    *repository.PeerRepository
-	runner   probe.Runner
-	onResult func(context.Context, domain.Check, domain.CheckResult)
-	instance string
+	checks     *repository.CheckRepository
+	results    *repository.ResultRepository
+	alerts     *repository.AlertRepository
+	peers      *repository.PeerRepository
+	runner     probe.Runner
+	onResult   func(context.Context, domain.Check, domain.CheckResult)
+	syncSystem func(context.Context) (int, error)
+	instance   string
 }
 
 func New(db *gorm.DB, opts Options) *Service {
@@ -42,13 +44,14 @@ func New(db *gorm.DB, opts Options) *Service {
 		runner = probe.DefaultRunner()
 	}
 	return &Service{
-		checks:   repository.NewCheckRepository(db),
-		results:  repository.NewResultRepository(db),
-		alerts:   repository.NewAlertRepository(db),
-		peers:    repository.NewPeerRepository(db),
-		runner:   runner,
-		onResult: opts.OnResult,
-		instance: instance,
+		checks:     repository.NewCheckRepository(db),
+		results:    repository.NewResultRepository(db),
+		alerts:     repository.NewAlertRepository(db),
+		peers:      repository.NewPeerRepository(db),
+		runner:     runner,
+		onResult:   opts.OnResult,
+		syncSystem: opts.SyncSystem,
+		instance:   instance,
 	}
 }
 
@@ -293,7 +296,14 @@ func (s *Service) ListMonitorInstances(ctx context.Context, req *monitorpb.ListM
 }
 
 func (s *Service) SyncSystemChecks(ctx context.Context, req *monitorpb.SyncSystemChecksReq) (*monitorpb.SyncSystemChecksRsp, error) {
-	return &monitorpb.SyncSystemChecksRsp{RetInfo: success(), Synced: 0}, nil
+	if s.syncSystem == nil {
+		return &monitorpb.SyncSystemChecksRsp{RetInfo: success(), Synced: 0}, nil
+	}
+	n, err := s.syncSystem(ctx)
+	if err != nil {
+		return &monitorpb.SyncSystemChecksRsp{RetInfo: inner(err)}, nil
+	}
+	return &monitorpb.SyncSystemChecksRsp{RetInfo: success(), Synced: int32(n)}, nil
 }
 
 func normalizeCheck(in *monitorpb.MonitorCheck, create bool) (*domain.Check, error) {

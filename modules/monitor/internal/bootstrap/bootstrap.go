@@ -8,9 +8,11 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
@@ -45,7 +47,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	defaultManager = mgr
 	startHealthServer(ctx, cfg, mgr)
 	resultHook := monitorResultHook(cfg, mgr)
-	registerMonitorService(s, cfg, mgr, resultHook)
+	syncSystem := monitorSyncFunc(ctx, cfg, mgr)
+	registerMonitorService(s, cfg, mgr, resultHook, syncSystem)
 	startScheduler(ctx, cfg, mgr, resultHook)
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
@@ -65,7 +68,7 @@ func startHealthServer(ctx context.Context, cfg *config.Config, mgr *monstorage.
 	}
 }
 
-func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorage.Manager, hook func(context.Context, domain.Check, domain.CheckResult)) {
+func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorage.Manager, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error)) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
@@ -74,6 +77,7 @@ func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorag
 	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(mgr.DB(), monitorrpc.Options{
 		InstanceID: cfg.Instance.InstanceID,
 		OnResult:   hook,
+		SyncSystem: syncSystem,
 	}))
 }
 
@@ -94,6 +98,30 @@ func monitorResultHook(cfg *config.Config, mgr *monstorage.Manager) func(context
 			log.ErrorContextf(ctx, "monitor alert evaluation failed: %v", err)
 		}
 	}
+}
+
+func monitorSyncFunc(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) func(context.Context) (int, error) {
+	if !cfg.SysDeploy.Enabled {
+		return nil
+	}
+	syncer := monitorsysdeploy.NewSyncer(repository.NewCheckRepository(mgr.DB()), monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target))
+	go func() {
+		ticker := time.NewTicker(time.Duration(cfg.SysDeploy.SyncIntervalSeconds) * time.Second)
+		defer ticker.Stop()
+		for {
+			if n, err := syncer.Sync(ctx); err != nil {
+				log.WarnContextf(ctx, "monitor sysdeploy sync failed: %v", err)
+			} else if n > 0 {
+				log.InfoContextf(ctx, "monitor sysdeploy sync updated %d checks", n)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return syncer.Sync
 }
 
 func monitorHealthSnapshot(cfg *config.Config, mgr *monstorage.Manager) healthz.SnapshotFunc {
