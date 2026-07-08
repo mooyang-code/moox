@@ -1314,6 +1314,9 @@ watch(klineVisible, (visible) => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  max-height: min(680px, calc(100vh - 220px));
+  padding-right: 4px;
+  overflow-y: auto;
 }
 
 .detail-table {

@@ -89,10 +89,37 @@ onMounted(loadBindings);
 
 <style scoped>
 .factor-results-workbench {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.factor-results-workbench :deep(.arco-tabs) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   min-height: 0;
 }
 
 .factor-results-workbench :deep(.arco-tabs-content) {
+  flex: 1;
+  min-height: 0;
   padding-top: 0;
+  overflow: hidden;
+}
+
+.factor-results-workbench :deep(.arco-tabs-content-list) {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.factor-results-workbench :deep(.arco-tabs-pane) {
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 </style>
