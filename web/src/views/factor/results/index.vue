@@ -93,7 +93,10 @@ onMounted(loadBindings);
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  overflow: hidden;
+  box-sizing: border-box;
+  padding-bottom: 72px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .factor-results-workbench :deep(.arco-tabs) {
