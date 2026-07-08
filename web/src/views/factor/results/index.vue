@@ -113,7 +113,7 @@ onMounted(loadBindings);
 .factor-results-workbench :deep(.arco-tabs-content-list) {
   height: 100%;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .factor-results-workbench :deep(.arco-tabs-pane) {

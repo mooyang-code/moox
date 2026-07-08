@@ -121,7 +121,7 @@ onMounted(loadBindings);
 .collector-workbench :deep(.arco-tabs-content-list) {
   height: 100%;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .collector-workbench :deep(.arco-tabs-pane) {
