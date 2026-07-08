@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"gorm.io/gorm"
@@ -90,6 +91,15 @@ func (r *AlertRepository) ListRules(ctx context.Context, spaceID string) ([]doma
 	return rules, err
 }
 
+func (r *AlertRepository) ListRulesForCheck(ctx context.Context, spaceID, checkID string) ([]domain.AlertRule, error) {
+	var rules []domain.AlertRule
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_check_id = ? AND c_is_deleted = 0", spaceID, checkID).
+		Order("c_ctime ASC").
+		Find(&rules).Error
+	return rules, err
+}
+
 func (r *AlertRepository) ListEnabledRulesForCheck(ctx context.Context, spaceID, checkID string) ([]domain.AlertRule, error) {
 	var rules []domain.AlertRule
 	err := r.db.WithContext(ctx).
@@ -152,4 +162,11 @@ func (r *AlertRepository) ListEvents(ctx context.Context, spaceID string, limit 
 		Limit(limit).
 		Find(&events).Error
 	return events, err
+}
+
+func (r *AlertRepository) DeleteEventsOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	tx := r.db.WithContext(ctx).
+		Where("c_created_at < ?", cutoff).
+		Delete(&domain.AlertEvent{})
+	return tx.RowsAffected, tx.Error
 }

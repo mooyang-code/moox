@@ -65,11 +65,13 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 
 func (s *Syncer) SyncDeployments(ctx context.Context, deployments []*adminpb.ServiceDeployment) (int, error) {
 	synced := 0
+	activeIDs := map[string]struct{}{}
 	for _, deployment := range deployments {
 		check, ok := checkFromDeployment(deployment)
 		if !ok {
 			continue
 		}
+		activeIDs[check.CheckID] = struct{}{}
 		existing, err := s.checks.Get(ctx, check.SpaceID, check.CheckID)
 		if err == nil {
 			if existing.Source != domain.CheckSourceSysDeploy {
@@ -86,6 +88,11 @@ func (s *Syncer) SyncDeployments(ctx context.Context, deployments []*adminpb.Ser
 		}
 		synced++
 	}
+	disabled, err := s.checks.DisableSysDeployChecksExcept(ctx, "", activeIDs)
+	if err != nil {
+		return synced, err
+	}
+	synced += int(disabled)
 	return synced, nil
 }
 

@@ -2,6 +2,7 @@ package sysdeploy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -155,6 +156,9 @@ func (d *DAO) SeedDefaults(ctx context.Context, rows []Deployment) error {
 			return err
 		}
 		if exists {
+			if err := d.backfillDefaultExtraConfig(ctx, &item); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := d.Create(ctx, &item); err != nil {
@@ -162,6 +166,55 @@ func (d *DAO) SeedDefaults(ctx context.Context, rows []Deployment) error {
 		}
 	}
 	return nil
+}
+
+func (d *DAO) backfillDefaultExtraConfig(ctx context.Context, item *Deployment) error {
+	row, err := d.Get(ctx, item.ServiceName)
+	if err != nil {
+		return err
+	}
+	next, changed := mergeDefaultExtraConfig(row.ExtraConfig, item.ExtraConfig)
+	if !changed {
+		return nil
+	}
+	return d.db.WithContext(ctx).Model(&Deployment{}).
+		Where("c_service_name = ? AND c_is_deleted = ?", item.ServiceName, common.IsDeletedFalse).
+		Updates(map[string]interface{}{
+			"c_extra_config": next,
+			"c_mtime":        time.Now(),
+		}).Error
+}
+
+func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
+	defaultRaw = strings.TrimSpace(defaultRaw)
+	if defaultRaw == "" || defaultRaw == "{}" {
+		return existingRaw, false
+	}
+	defaults := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(defaultRaw), &defaults); err != nil || len(defaults) == 0 {
+		return existingRaw, false
+	}
+	existing := map[string]interface{}{}
+	existingRaw = strings.TrimSpace(existingRaw)
+	if existingRaw != "" {
+		_ = json.Unmarshal([]byte(existingRaw), &existing)
+	}
+	changed := false
+	for key, value := range defaults {
+		if _, ok := existing[key]; ok {
+			continue
+		}
+		existing[key] = value
+		changed = true
+	}
+	if !changed {
+		return existingRaw, false
+	}
+	raw, err := json.Marshal(existing)
+	if err != nil {
+		return existingRaw, false
+	}
+	return string(raw), true
 }
 
 func (d *DAO) exists(ctx context.Context, serviceName string) (bool, error) {

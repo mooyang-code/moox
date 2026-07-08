@@ -83,6 +83,37 @@ func TestSyncDeploymentsDoesNotTouchManualCheck(t *testing.T) {
 	}
 }
 
+func TestSyncDeploymentsDisablesRemovedSystemChecks(t *testing.T) {
+	ctx := context.Background()
+	mgr := openSyncDB(t)
+	checks := repository.NewCheckRepository(mgr.DB())
+	syncer := NewSyncer(checks, nil)
+	if _, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{
+		{ServiceName: "moox_cloudnode", Protocol: "http", Host: "127.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:11411/healthz","monitor_enabled":true}`},
+		{ServiceName: "moox_collector", Protocol: "http", Host: "127.0.0.1", Port: 11402, Status: "active", ExtraConfig: `{}`},
+	}); err != nil {
+		t.Fatalf("initial sync: %v", err)
+	}
+	n, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{
+		{ServiceName: "moox_cloudnode", Protocol: "http", Host: "127.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:11411/healthz","monitor_enabled":false}`},
+	})
+	if err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("synced = %d, want update count including two disables", n)
+	}
+	for _, checkID := range []string{"moox_cloudnode", "moox_collector"} {
+		got, err := checks.Get(ctx, "", checkID)
+		if err != nil {
+			t.Fatalf("get %s: %v", checkID, err)
+		}
+		if got.Enabled {
+			t.Fatalf("%s still enabled after removal/monitor disable: %+v", checkID, got)
+		}
+	}
+}
+
 func TestSyncKeepsExistingChecksWhenAdminFails(t *testing.T) {
 	ctx := context.Background()
 	mgr := openSyncDB(t)

@@ -98,6 +98,40 @@ func TestPullerStoresSnapshotsAndMarksStale(t *testing.T) {
 	}
 }
 
+func TestPullerContinuesAfterPeerFailure(t *testing.T) {
+	ctx := context.Background()
+	mgr := openPeerDB(t)
+	repo := repository.NewPeerRepository(mgr.DB())
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	defer bad.Close()
+	good := httptest.NewServer(NewHTTPHandler(HTTPOptions{
+		Snapshot: func(ctx context.Context) Snapshot {
+			return Snapshot{InstanceID: "monitor-good", BaseURL: "http://monitor-good", ObservedAt: time.Now()}
+		},
+	}))
+	defer good.Close()
+
+	puller := NewPuller(repo, PullerOptions{
+		Peers: []Remote{
+			{InstanceID: "monitor-bad", BaseURL: bad.URL},
+			{InstanceID: "monitor-good", BaseURL: good.URL},
+		},
+		Timeout: 100 * time.Millisecond,
+	})
+	if err := puller.PullOnce(ctx); err == nil {
+		t.Fatal("PullOnce error = nil, want partial peer failure")
+	}
+	instances, err := repo.ListInstances(ctx)
+	if err != nil {
+		t.Fatalf("list instances: %v", err)
+	}
+	if len(instances) != 1 || instances[0].InstanceID != "monitor-good" || instances[0].Status != domain.InstanceStatusActive {
+		t.Fatalf("healthy peer was not refreshed after bad peer failed: %+v", instances)
+	}
+}
+
 func statusOf(rsp *http.Response) int {
 	if rsp == nil {
 		return 0

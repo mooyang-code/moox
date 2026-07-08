@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -72,6 +73,22 @@ func (r *CheckRepository) Delete(ctx context.Context, spaceID, checkID string) e
 		Model(&domain.Check{}).
 		Where("c_space_id = ? AND c_check_id = ? AND c_is_deleted = 0", spaceID, checkID).
 		Updates(map[string]any{"c_is_deleted": true}).Error
+}
+
+func (r *CheckRepository) DisableSysDeployChecksExcept(ctx context.Context, spaceID string, keepIDs map[string]struct{}) (int64, error) {
+	q := r.db.WithContext(ctx).
+		Model(&domain.Check{}).
+		Where("c_space_id = ? AND c_source = ? AND c_is_deleted = 0 AND c_enabled = 1", spaceID, domain.CheckSourceSysDeploy)
+	if len(keepIDs) > 0 {
+		ids := make([]string, 0, len(keepIDs))
+		for id := range keepIDs {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
+		q = q.Where("c_check_id NOT IN ?", ids)
+	}
+	tx := q.Update("c_enabled", false)
+	return tx.RowsAffected, tx.Error
 }
 
 func (r *CheckRepository) List(ctx context.Context, opts ListChecksOptions) ([]domain.Check, error) {

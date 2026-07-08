@@ -59,22 +59,30 @@ func renderTemplate(tpl string, event Event) string {
 		tpl = `{"check_id":"{{check_id}}","status":"{{status}}","event_type":"{{event_type}}","error_message":"{{error_message}}"}`
 	}
 	replacements := map[string]string{
-		"{{check_id}}":      event.Check.CheckID,
-		"{{check_name}}":    event.Check.Name,
-		"{{group_name}}":    event.Check.GroupName,
-		"{{status}}":        event.Status,
-		"{{event_type}}":    event.EventType,
-		"{{target}}":        eventTarget(event.Check),
+		"{{check_id}}":      jsonStringValue(event.Check.CheckID),
+		"{{check_name}}":    jsonStringValue(event.Check.Name),
+		"{{group_name}}":    jsonStringValue(event.Check.GroupName),
+		"{{status}}":        jsonStringValue(event.Status),
+		"{{event_type}}":    jsonStringValue(event.EventType),
+		"{{target}}":        jsonStringValue(eventTarget(event.Check)),
 		"{{latency_ms}}":    fmt.Sprintf("%d", event.Result.LatencyMS),
-		"{{error_message}}": event.Result.ErrorMessage,
-		"{{dedupe_key}}":    event.DedupeKey,
-		"{{instance_id}}":   event.OwnerInstanceID,
-		"{{checked_at}}":    event.Result.CheckedAt.UTC().Format(time.RFC3339Nano),
+		"{{error_message}}": jsonStringValue(event.Result.ErrorMessage),
+		"{{dedupe_key}}":    jsonStringValue(event.DedupeKey),
+		"{{instance_id}}":   jsonStringValue(event.OwnerInstanceID),
+		"{{checked_at}}":    jsonStringValue(event.Result.CheckedAt.UTC().Format(time.RFC3339Nano)),
 	}
 	for old, newValue := range replacements {
 		tpl = strings.ReplaceAll(tpl, old, newValue)
 	}
 	return tpl
+}
+
+func jsonStringValue(value string) string {
+	raw, err := json.Marshal(value)
+	if err != nil || len(raw) < 2 {
+		return value
+	}
+	return string(raw[1 : len(raw)-1])
 }
 
 func parseHeaders(raw string) map[string]string {

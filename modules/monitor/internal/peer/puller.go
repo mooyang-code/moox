@@ -3,6 +3,7 @@ package peer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -44,12 +45,13 @@ func NewPuller(repo *repository.PeerRepository, opts PullerOptions) *Puller {
 }
 
 func (p *Puller) PullOnce(ctx context.Context) error {
+	var joined error
 	for _, remote := range p.peers {
 		if err := p.pullRemote(ctx, remote); err != nil {
-			return err
+			joined = errors.Join(joined, fmt.Errorf("pull peer %s: %w", remote.InstanceID, err))
 		}
 	}
-	return nil
+	return joined
 }
 
 func (p *Puller) MarkStale(ctx context.Context, now time.Time, timeout time.Duration) error {

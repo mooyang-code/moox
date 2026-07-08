@@ -143,9 +143,23 @@ func TestMonitorRPCWebhookAndRuleCRUD(t *testing.T) {
 	if err != nil || rule.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 		t.Fatalf("rule ret=%+v err=%v", rule.GetRetInfo(), err)
 	}
+	disabledRule, err := svc.CreateAlertRule(ctx, &monitorpb.CreateAlertRuleReq{Rule: &monitorpb.AlertRule{
+		SpaceId:   "space-a",
+		RuleId:    "rule-disabled",
+		CheckId:   "api-health",
+		WebhookId: "ops",
+		Enabled:   false,
+	}})
+	if err != nil || disabledRule.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("disabled rule ret=%+v err=%v", disabledRule.GetRetInfo(), err)
+	}
 	rules, _ := svc.ListAlertRules(ctx, &monitorpb.ListAlertRulesReq{SpaceId: "space-a"})
-	if len(rules.GetRules()) != 1 {
+	if len(rules.GetRules()) != 2 {
 		t.Fatalf("rules len = %d", len(rules.GetRules()))
+	}
+	rulesByCheck, _ := svc.ListAlertRules(ctx, &monitorpb.ListAlertRulesReq{SpaceId: "space-a", CheckId: "api-health"})
+	if len(rulesByCheck.GetRules()) != 2 {
+		t.Fatalf("rules by check len = %d", len(rulesByCheck.GetRules()))
 	}
 }
 

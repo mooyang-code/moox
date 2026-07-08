@@ -333,7 +333,7 @@ func (s *Service) ListAlertRules(ctx context.Context, req *monitorpb.ListAlertRu
 		err   error
 	)
 	if req.GetCheckId() != "" {
-		rules, err = s.alerts.ListEnabledRulesForCheck(ctx, req.GetSpaceId(), req.GetCheckId())
+		rules, err = s.alerts.ListRulesForCheck(ctx, req.GetSpaceId(), req.GetCheckId())
 	} else {
 		rules, err = s.alerts.ListRules(ctx, req.GetSpaceId())
 	}

@@ -51,6 +51,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	syncSystem := monitorSyncFunc(ctx, cfg, mgr)
 	registerMonitorService(s, cfg, mgr, resultHook, syncSystem)
 	startScheduler(ctx, cfg, mgr, resultHook)
+	startRetentionCleaner(ctx, cfg, mgr)
 	startPeerPuller(ctx, cfg, mgr)
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
@@ -101,30 +102,38 @@ func startScheduler(ctx context.Context, cfg *config.Config, mgr *monstorage.Man
 func monitorResultHook(cfg *config.Config, mgr *monstorage.Manager) func(context.Context, domain.Check, domain.CheckResult) {
 	evaluator := alerting.NewEvaluator(mgr.DB(), alerting.Options{InstanceID: cfg.Instance.InstanceID})
 	peers := repository.NewPeerRepository(mgr.DB())
+	maxPeerAge := time.Duration(0)
+	if cfg.Peer.Enabled && len(cfg.Peer.Peers) > 0 {
+		maxPeerAge = 3 * time.Duration(cfg.Peer.TimeoutSeconds) * time.Second
+	}
 	return func(ctx context.Context, check domain.Check, result domain.CheckResult) {
-		activeInstanceIDs := activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, peers)
+		activeInstanceIDs := activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, peers, maxPeerAge)
 		if err := evaluator.Evaluate(ctx, check, result, activeInstanceIDs); err != nil {
 			log.ErrorContextf(ctx, "monitor alert evaluation failed: %v", err)
 		}
 	}
 }
 
-func activeMonitorInstanceIDs(ctx context.Context, localID string, peers *repository.PeerRepository) []string {
+func activeMonitorInstanceIDs(ctx context.Context, localID string, peers *repository.PeerRepository, maxPeerAge time.Duration) []string {
 	seen := map[string]struct{}{}
 	var ids []string
 	if localID != "" {
 		ids = append(ids, localID)
 		seen[localID] = struct{}{}
 	}
-	if peers == nil {
+	if peers == nil || maxPeerAge <= 0 {
 		return ids
 	}
 	instances, err := peers.ListInstances(ctx)
 	if err != nil {
 		return ids
 	}
+	cutoff := time.Now().UTC().Add(-maxPeerAge)
 	for _, instance := range instances {
 		if instance.Status != domain.InstanceStatusActive || instance.InstanceID == "" {
+			continue
+		}
+		if instance.LastSeenAt == nil || instance.LastSeenAt.Before(cutoff) {
 			continue
 		}
 		if _, ok := seen[instance.InstanceID]; ok {
@@ -134,6 +143,41 @@ func activeMonitorInstanceIDs(ctx context.Context, localID string, peers *reposi
 		seen[instance.InstanceID] = struct{}{}
 	}
 	return ids
+}
+
+func startRetentionCleaner(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) {
+	retention := time.Duration(cfg.Scheduler.ResultRetentionDays) * 24 * time.Hour
+	if retention <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			if err := pruneMonitorHistory(ctx, mgr, retention); err != nil {
+				log.WarnContextf(ctx, "monitor retention prune failed: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func pruneMonitorHistory(ctx context.Context, mgr *monstorage.Manager, retention time.Duration) error {
+	if mgr == nil || mgr.DB() == nil || retention <= 0 {
+		return nil
+	}
+	cutoff := time.Now().UTC().Add(-retention)
+	if _, err := repository.NewResultRepository(mgr.DB()).DeleteOlderThan(ctx, cutoff); err != nil {
+		return err
+	}
+	if _, err := repository.NewAlertRepository(mgr.DB()).DeleteEventsOlderThan(ctx, cutoff); err != nil {
+		return err
+	}
+	return nil
 }
 
 func monitorSyncFunc(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) func(context.Context) (int, error) {
@@ -161,7 +205,7 @@ func monitorSyncFunc(ctx context.Context, cfg *config.Config, mgr *monstorage.Ma
 }
 
 func startPeerPuller(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) {
-	if !cfg.Peer.Enabled || len(cfg.Peer.Peers) == 0 {
+	if !cfg.Peer.Enabled {
 		return
 	}
 	remotes := make([]monitorpeer.Remote, 0, len(cfg.Peer.Peers))

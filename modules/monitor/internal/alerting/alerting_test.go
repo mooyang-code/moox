@@ -2,6 +2,7 @@ package alerting
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -123,6 +124,33 @@ func TestAlertEvaluatorSendOnResolvedFalseAndSendFailure(t *testing.T) {
 	events, _ = alerts.ListEvents(ctx, "space-a", 10)
 	if events[0].EventType != domain.AlertEventResolved {
 		t.Fatalf("latest event = %+v", events[0])
+	}
+}
+
+func TestRenderTemplateEscapesJSONValues(t *testing.T) {
+	body := renderTemplate("", Event{
+		EventType: domain.AlertEventTriggered,
+		Status:    domain.AlertStatusFiring,
+		Check: domain.Check{
+			CheckID: "check-a",
+			Name:    "API \"prod\"",
+			Kind:    domain.CheckKindHTTP,
+			URL:     "http://example.com/healthz?name=\"api\"",
+		},
+		Result: domain.CheckResult{
+			ErrorMessage: "failed with \"quote\"\nand newline",
+			CheckedAt:    time.Now(),
+		},
+	})
+	if !json.Valid([]byte(body)) {
+		t.Fatalf("rendered body is invalid JSON: %s", body)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("unmarshal rendered body: %v", err)
+	}
+	if payload["error_message"] != "failed with \"quote\"\nand newline" {
+		t.Fatalf("error_message = %q", payload["error_message"])
 	}
 }
 

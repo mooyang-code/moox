@@ -113,6 +113,21 @@ func TestRepositoriesRoundTrip(t *testing.T) {
 	if err != nil || len(rules) != 1 {
 		t.Fatalf("rules len=%d err=%v", len(rules), err)
 	}
+	if err := alerts.CreateRule(ctx, &domain.AlertRule{
+		SpaceID:          "space-a",
+		RuleID:           "rule-disabled",
+		CheckID:          "check-a",
+		WebhookID:        "webhook-a",
+		FailureThreshold: 3,
+		SuccessThreshold: 2,
+		Enabled:          false,
+	}); err != nil {
+		t.Fatalf("create disabled rule: %v", err)
+	}
+	allRulesForCheck, err := alerts.ListRulesForCheck(ctx, "space-a", "check-a")
+	if err != nil || len(allRulesForCheck) != 2 {
+		t.Fatalf("all rules for check len=%d err=%v", len(allRulesForCheck), err)
+	}
 	if err := alerts.UpsertState(ctx, &domain.AlertState{
 		SpaceID:         "space-a",
 		RuleID:          "rule-a",
@@ -127,6 +142,37 @@ func TestRepositoriesRoundTrip(t *testing.T) {
 	state, err := alerts.GetState(ctx, "space-a", "rule-a", "check-a")
 	if err != nil || state.Status != domain.AlertStatusFiring {
 		t.Fatalf("state=%+v err=%v", state, err)
+	}
+	old := now.Add(-48 * time.Hour)
+	if err := results.Insert(ctx, &domain.CheckResult{
+		ResultID:   "result-old",
+		SpaceID:    "space-a",
+		CheckID:    "check-a",
+		InstanceID: "monitor-a",
+		Success:    true,
+		Status:     domain.CheckStatusOK,
+		CheckedAt:  old,
+	}); err != nil {
+		t.Fatalf("insert old result: %v", err)
+	}
+	removedResults, err := results.DeleteOlderThan(ctx, now.Add(-24*time.Hour))
+	if err != nil || removedResults != 1 {
+		t.Fatalf("removed results=%d err=%v", removedResults, err)
+	}
+	if err := alerts.CreateEvent(ctx, &domain.AlertEvent{
+		EventID:   "event-old",
+		SpaceID:   "space-a",
+		RuleID:    "rule-a",
+		CheckID:   "check-a",
+		EventType: domain.AlertEventTriggered,
+		Status:    domain.AlertStatusFiring,
+		CreatedAt: old,
+	}); err != nil {
+		t.Fatalf("create old event: %v", err)
+	}
+	removedEvents, err := alerts.DeleteEventsOlderThan(ctx, now.Add(-24*time.Hour))
+	if err != nil || removedEvents != 1 {
+		t.Fatalf("removed events=%d err=%v", removedEvents, err)
 	}
 
 	seenAt := time.Now()
