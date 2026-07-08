@@ -28,7 +28,7 @@ internal/service/service.go   占位 Health 响应
 - 结果写回 Storage Access（列级更新）
 - 与 View 物化链路集成
 
-详细存储模型见 [docs/存储概念与设计意图.md](../../docs/存储概念与设计意图.md)。
+详细存储模型见 [docs/存储概念与设计意图.md](../../docs/存储概念与设计意图.md)；模块整体落地方案见 [docs/因子计算模块设计.md](../../docs/因子计算模块设计.md)。
 
 ## 相关模块
 
