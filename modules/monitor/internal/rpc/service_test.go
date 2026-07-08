@@ -146,6 +146,44 @@ func TestMonitorRPCWebhookAndRuleCRUD(t *testing.T) {
 	}
 }
 
+func TestGetOverview(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	for _, check := range []*monitorpb.MonitorCheck{
+		{SpaceId: "space-a", CheckId: "sys-ok", Name: "sys ok", GroupName: "moox-system", Kind: monitorpb.CheckKind_CHECK_KIND_HTTP, Url: "http://ok", IntervalSeconds: 30, TimeoutMs: 1000},
+		{SpaceId: "space-a", CheckId: "api-down", Name: "api down", GroupName: "api", Kind: monitorpb.CheckKind_CHECK_KIND_HTTP, Url: "http://down", IntervalSeconds: 30, TimeoutMs: 1000},
+	} {
+		rsp, err := svc.CreateCheck(ctx, &monitorpb.CreateCheckReq{Check: check})
+		if err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+			t.Fatalf("create check ret=%+v err=%v", rsp.GetRetInfo(), err)
+		}
+	}
+	now := time.Now()
+	_ = svc.results.Insert(ctx, &domain.CheckResult{ResultID: "r1", SpaceID: "space-a", CheckID: "sys-ok", InstanceID: "monitor-test", Success: true, Status: domain.CheckStatusOK, LatencyMS: 10, CheckedAt: now})
+	_ = svc.results.Insert(ctx, &domain.CheckResult{ResultID: "r2", SpaceID: "space-a", CheckID: "api-down", InstanceID: "monitor-test", Success: false, Status: domain.CheckStatusDown, LatencyMS: 50, CheckedAt: now})
+
+	rsp, err := svc.GetOverview(ctx, &monitorpb.GetOverviewReq{SpaceId: "space-a"})
+	if err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("overview ret=%+v err=%v", rsp.GetRetInfo(), err)
+	}
+	overview := rsp.GetOverview()
+	if overview.GetTotalChecks() != 2 || overview.GetHealthyChecks() != 1 || overview.GetDownChecks() != 1 {
+		t.Fatalf("overview = %+v", overview)
+	}
+	if overview.GetSuccessRate_24H() != 0.5 || overview.GetP95LatencyMs() != 10 {
+		t.Fatalf("overview stats = %+v", overview)
+	}
+	foundSystem := false
+	for _, group := range overview.GetGroups() {
+		if group.GetGroupName() == "moox-system" {
+			foundSystem = true
+		}
+	}
+	if !foundSystem {
+		t.Fatalf("moox-system group missing: %+v", overview.GetGroups())
+	}
+}
+
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 

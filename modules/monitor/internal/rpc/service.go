@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ type Service struct {
 	results    *repository.ResultRepository
 	alerts     *repository.AlertRepository
 	peers      *repository.PeerRepository
+	db         *gorm.DB
 	runner     probe.Runner
 	onResult   func(context.Context, domain.Check, domain.CheckResult)
 	syncSystem func(context.Context) (int, error)
@@ -48,6 +50,7 @@ func New(db *gorm.DB, opts Options) *Service {
 		results:    repository.NewResultRepository(db),
 		alerts:     repository.NewAlertRepository(db),
 		peers:      repository.NewPeerRepository(db),
+		db:         db,
 		runner:     runner,
 		onResult:   opts.OnResult,
 		syncSystem: opts.SyncSystem,
@@ -166,13 +169,78 @@ func (s *Service) GetOverview(ctx context.Context, req *monitorpb.GetOverviewReq
 	if err != nil {
 		return &monitorpb.GetOverviewRsp{RetInfo: inner(err)}, nil
 	}
+	overview := &monitorpb.Overview{TotalChecks: int32(len(checks))}
+	groups := map[string]*monitorpb.GroupSummary{}
+	for _, check := range checks {
+		groupName := check.GroupName
+		if groupName == "" {
+			groupName = "default"
+		}
+		group := groups[groupName]
+		if group == nil {
+			group = &monitorpb.GroupSummary{GroupName: groupName}
+			groups[groupName] = group
+		}
+		group.TotalChecks++
+		results, err := s.results.Recent(ctx, check.SpaceID, check.CheckID, 1)
+		if err != nil {
+			return &monitorpb.GetOverviewRsp{RetInfo: inner(err)}, nil
+		}
+		status := domain.CheckStatusDegraded
+		if len(results) > 0 {
+			status = results[0].Status
+		}
+		switch status {
+		case domain.CheckStatusOK:
+			overview.HealthyChecks++
+			group.HealthyChecks++
+		case domain.CheckStatusDegraded:
+			overview.DegradedChecks++
+			group.DegradedChecks++
+		default:
+			overview.DownChecks++
+			group.DownChecks++
+		}
+	}
+	for _, group := range groups {
+		overview.Groups = append(overview.Groups, group)
+	}
+	sort.Slice(overview.Groups, func(i, j int) bool { return overview.Groups[i].GroupName < overview.Groups[j].GroupName })
+	overview.SuccessRate_24H, overview.P95LatencyMs = s.resultStats(ctx, req.GetSpaceId(), time.Now().Add(-24*time.Hour))
+	var firing int64
+	_ = s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_alert_states WHERE c_space_id = ? AND c_status = ?", req.GetSpaceId(), domain.AlertStatusFiring).Scan(&firing).Error
+	overview.FiringAlerts = int32(firing)
+	var activeInstances int64
+	_ = s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_instances WHERE c_status = ?", domain.InstanceStatusActive).Scan(&activeInstances).Error
+	overview.ActiveInstances = int32(activeInstances)
 	return &monitorpb.GetOverviewRsp{
-		RetInfo: success(),
-		Overview: &monitorpb.Overview{
-			TotalChecks:   int32(len(checks)),
-			HealthyChecks: int32(len(checks)),
-		},
+		RetInfo:  success(),
+		Overview: overview,
 	}, nil
+}
+
+func (s *Service) resultStats(ctx context.Context, spaceID string, since time.Time) (float64, int64) {
+	var results []domain.CheckResult
+	if err := s.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_checked_at >= ?", spaceID, since).
+		Find(&results).Error; err != nil || len(results) == 0 {
+		return 0, 0
+	}
+	successes := 0
+	latencies := make([]int64, 0, len(results))
+	for _, result := range results {
+		if result.Success {
+			successes++
+			latencies = append(latencies, result.LatencyMS)
+		}
+	}
+	var p95 int64
+	if len(latencies) > 0 {
+		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+		idx := int(float64(len(latencies)-1) * 0.95)
+		p95 = latencies[idx]
+	}
+	return float64(successes) / float64(len(results)), p95
 }
 
 func (s *Service) CreateWebhookChannel(ctx context.Context, req *monitorpb.CreateWebhookChannelReq) (*monitorpb.CreateWebhookChannelRsp, error) {
