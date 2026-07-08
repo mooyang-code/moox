@@ -16,5 +16,6 @@ use (
 	./modules/trade/proto/tradegen
 	./packages/cloudruntime
 	./packages/commonpb
+	./packages/healthz
 	./web-host
 )

@@ -1,0 +1,134 @@
+package healthz
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
+
+func TestHealthzResponseIncludesStableFields(t *testing.T) {
+	start := time.Date(2026, 7, 9, 10, 0, 0, 0, time.UTC)
+
+	rsp := Base("monitor", "monitor-local-1", "dev", "abc1234", start, true)
+
+	if rsp.Module != "monitor" {
+		t.Fatalf("Module = %q, want monitor", rsp.Module)
+	}
+	if rsp.InstanceID != "monitor-local-1" {
+		t.Fatalf("InstanceID = %q, want monitor-local-1", rsp.InstanceID)
+	}
+	if !rsp.Ready {
+		t.Fatal("Ready = false, want true")
+	}
+	if rsp.Status != "ok" {
+		t.Fatalf("Status = %q, want ok", rsp.Status)
+	}
+	if rsp.Version != "dev" {
+		t.Fatalf("Version = %q, want dev", rsp.Version)
+	}
+	if rsp.GitCommit != "abc1234" {
+		t.Fatalf("GitCommit = %q, want abc1234", rsp.GitCommit)
+	}
+	if !rsp.StartTime.Equal(start) {
+		t.Fatalf("StartTime = %s, want %s", rsp.StartTime, start)
+	}
+	if rsp.Time.IsZero() {
+		t.Fatal("Time is zero")
+	}
+
+	body, err := json.Marshal(rsp)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	for _, field := range []string{
+		`"module"`,
+		`"instance_id"`,
+		`"ready"`,
+		`"status"`,
+		`"version"`,
+		`"git_commit"`,
+		`"start_time"`,
+		`"time"`,
+	} {
+		if !jsonContains(body, field) {
+			t.Fatalf("response JSON %s missing %s", body, field)
+		}
+	}
+}
+
+func TestHealthzHandlerReturns200WhenReady(t *testing.T) {
+	handler := Handler(func(context.Context) Response {
+		return Response{Module: "admin", Ready: true, Status: "ok"}
+	})
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if got := rr.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+}
+
+func TestHealthzHandlerReturns503WhenNotReady(t *testing.T) {
+	handler := Handler(func(context.Context) Response {
+		return Response{Module: "storage", Ready: false}
+	})
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusServiceUnavailable)
+	}
+
+	var rsp Response
+	if err := json.Unmarshal(rr.Body.Bytes(), &rsp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if rsp.Status != "degraded" {
+		t.Fatalf("Status = %q, want degraded", rsp.Status)
+	}
+}
+
+func TestHealthzHandlerPreservesDetails(t *testing.T) {
+	handler := Handler(func(context.Context) Response {
+		return Response{
+			Module: "monitor",
+			Ready:  true,
+			Status: "ok",
+			Details: map[string]any{
+				"db_ok":        true,
+				"scheduler_ok": true,
+			},
+		}
+	})
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	var rsp Response
+	if err := json.Unmarshal(rr.Body.Bytes(), &rsp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if rsp.Details["db_ok"] != true {
+		t.Fatalf("db_ok = %#v, want true", rsp.Details["db_ok"])
+	}
+	if rsp.Details["scheduler_ok"] != true {
+		t.Fatalf("scheduler_ok = %#v, want true", rsp.Details["scheduler_ok"])
+	}
+}
+
+func jsonContains(body []byte, field string) bool {
+	for i := 0; i+len(field) <= len(body); i++ {
+		if string(body[i:i+len(field)]) == field {
+			return true
+		}
+	}
+	return false
+}
