@@ -84,10 +84,17 @@ func TestPullerStoresSnapshotsAndMarksStale(t *testing.T) {
 		t.Fatalf("MarkStale: %v", err)
 	}
 	instances, _ = repo.ListInstances(ctx)
+	remoteActive := false
 	for _, item := range instances {
+		if item.InstanceID == "monitor-b" && item.Status == domain.InstanceStatusActive {
+			remoteActive = true
+		}
 		if item.InstanceID == "stale" && item.Status != domain.InstanceStatusDown {
 			t.Fatalf("stale instance not marked down: %+v", item)
 		}
+	}
+	if !remoteActive {
+		t.Fatalf("fresh remote instance not active: %+v", instances)
 	}
 }
 

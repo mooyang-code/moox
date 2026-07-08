@@ -38,10 +38,22 @@ func (r *PeerRepository) ListInstances(ctx context.Context) ([]domain.MonitorIns
 }
 
 func (r *PeerRepository) MarkStale(ctx context.Context, before time.Time) error {
-	return r.db.WithContext(ctx).
-		Model(&domain.MonitorInstance{}).
-		Where("c_last_seen_at IS NOT NULL AND c_last_seen_at < ? AND c_status = ?", before, domain.InstanceStatusActive).
-		Updates(map[string]any{"c_status": domain.InstanceStatusDown}).Error
+	instances, err := r.ListInstances(ctx)
+	if err != nil {
+		return err
+	}
+	for _, instance := range instances {
+		if instance.Status != domain.InstanceStatusActive || instance.LastSeenAt == nil || !instance.LastSeenAt.Before(before) {
+			continue
+		}
+		if err := r.db.WithContext(ctx).
+			Model(&domain.MonitorInstance{}).
+			Where("c_instance_id = ? AND c_status = ?", instance.InstanceID, domain.InstanceStatusActive).
+			Updates(map[string]any{"c_status": domain.InstanceStatusDown}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *PeerRepository) UpsertSnapshot(ctx context.Context, snapshot *domain.PeerSnapshot) error {
