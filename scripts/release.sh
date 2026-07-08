@@ -40,6 +40,8 @@ mkdir -p \
   "${RELEASE_ROOT}/factor/factors" \
   "${RELEASE_ROOT}/factor/sections" \
   "${RELEASE_ROOT}/trade/bin" \
+  "${RELEASE_ROOT}/monitor/bin" \
+  "${RELEASE_ROOT}/monitor/config" \
   "${RELEASE_ROOT}/storage/bin" \
   "${RELEASE_ROOT}/storage/config" \
   "${RELEASE_ROOT}/storage/schema" \
@@ -65,6 +67,8 @@ copy_binary moox-factor "${RELEASE_ROOT}/factor/bin"
 copy_binary moox-factor-cli "${RELEASE_ROOT}/factor/bin"
 copy_binary moox-trade "${RELEASE_ROOT}/trade/bin"
 copy_binary moox-trade-cli "${RELEASE_ROOT}/trade/bin"
+copy_binary moox-monitor "${RELEASE_ROOT}/monitor/bin"
+copy_binary moox-monitor-cli "${RELEASE_ROOT}/monitor/bin"
 copy_binary moox-storage "${RELEASE_ROOT}/storage/bin"
 copy_binary moox-storage-cli "${RELEASE_ROOT}/storage/bin"
 
@@ -77,6 +81,7 @@ cp -R "${ROOT}/modules/factor/sections/." "${RELEASE_ROOT}/factor/sections/"
 cp -R "${ROOT}/modules/factor/pyworker" "${RELEASE_ROOT}/factor/pyworker"
 find "${RELEASE_ROOT}/factor/pyworker" -type d -name __pycache__ -prune -exec rm -rf {} +
 cp -R "${ROOT}/modules/storage/config/." "${RELEASE_ROOT}/storage/config/"
+cp -R "${ROOT}/modules/monitor/config/." "${RELEASE_ROOT}/monitor/config/"
 cp -R "${ROOT}/modules/storage/schema/." "${RELEASE_ROOT}/storage/schema/"
 cp "${ROOT}/scripts/storage-start.sh" "${RELEASE_ROOT}/storage/start.sh"
 cp "${ROOT}/scripts/storage-stop.sh" "${RELEASE_ROOT}/storage/stop.sh"

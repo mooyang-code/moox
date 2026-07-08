@@ -11,6 +11,7 @@ MooX 后端 Go 模块目录，由仓库根目录 `go.work` 统一管理。各模
 | [collector](./collector/) | `moox-collector`、`moox-collector-scf` | 采集控制面与 SCF 运行时 |
 | [cloudnode](./cloudnode/) | `moox-cloudnode` | 云账户、代码包、异步 JobItem、SCF 唤醒/直调 |
 | [trade](./trade/) | `moox-trade` | 账户、订单、成交、持仓与交易所适配 |
+| [monitor](./monitor/) | `moox-monitor` | 独立 HTTP/TCP 服务可用性监控、告警和多实例协同 |
 | [cli](./cli/) | `moox-cli` | 命令行工具（元数据导入、数据导入、运维辅助） |
 | [factor](./factor/) | `moox-factor` | 因子计算（占位，待扩展） |
 
@@ -31,6 +32,7 @@ MooX 后端 Go 模块目录，由仓库根目录 `go.work` 统一管理。各模
 :11401        moox-cloudnode
 :11402        moox-collector
 :11200-11208  moox-trade
+:11409/:11410 moox-monitor（/healthz + MonitorMgr）
 ```
 
 SCF 采集运行时通过 `/api/service/*`（HMAC 签名）回调后台，不经 JWT 用户鉴权。
@@ -51,11 +53,12 @@ make build
 ./scripts/build.sh trade
 ./scripts/build.sh cli
 ./scripts/build.sh factor
+./scripts/build.sh monitor
 
 # 本机/远端一键发布
 make deploy ARGS="--target localhost --dir ~/moox/dev"
 ```
 
-`scripts/deploy-moox.sh` 当前部署 admin、web-host、cloudnode、collector、storage；trade/factor 已可构建，但不在一键部署脚本的启动范围内。
+`scripts/deploy-moox.sh` 当前部署 admin、web-host、cloudnode、collector、factor、monitor、storage；各独立模块可用 `--no-<module>` 关闭。
 
 详细架构见仓库 [`docs/架构总览.md`](../docs/架构总览.md)。
