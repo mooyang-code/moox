@@ -1,6 +1,6 @@
 <template>
   <div class="factor-results-workbench">
-    <a-tabs v-model:active-key="activeTab" type="rounded" size="medium" @change="syncRoute">
+    <a-tabs v-model:active-key="activeTab" type="rounded" size="medium" lazy-load destroy-on-hide @change="syncRoute">
       <a-tab-pane key="definitions" title="结果视图">
         <ViewDefinitions
           owner-module="factor"

@@ -1,6 +1,6 @@
 <template>
   <div class="collector-workbench">
-    <a-tabs v-model:active-key="activeTab" type="rounded" size="medium" @change="syncRoute">
+    <a-tabs v-model:active-key="activeTab" type="rounded" size="medium" lazy-load destroy-on-hide @change="syncRoute">
       <a-tab-pane key="definitions" title="视图定义">
         <ViewDefinitions
           owner-module="collector"

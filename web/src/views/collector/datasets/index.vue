@@ -1,6 +1,6 @@
 <template>
   <div class="collector-workbench">
-    <a-tabs v-model:active-key="activeTab" type="rounded" size="medium" @change="syncRoute">
+    <a-tabs v-model:active-key="activeTab" type="rounded" size="medium" lazy-load destroy-on-hide @change="syncRoute">
       <a-tab-pane key="definitions" title="集合定义">
         <DatasetDefinitions
           owner-module="collector"
