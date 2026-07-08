@@ -46,3 +46,28 @@ func TestMemoryBusPublishesTimeSeriesRowsUpdatedWithRows(t *testing.T) {
 		t.Fatalf("stored events = %+v, want one rows-updated journal", bus.TimeSeriesEvents())
 	}
 }
+
+func TestMemoryBusDeliversRowsUpdatedInPublishOrder(t *testing.T) {
+	ctx := context.Background()
+	bus := NewMemoryBus()
+	var received []string
+
+	if _, err := bus.SubscribeTimeSeriesRowsUpdated(ctx, func(_ context.Context, event *pb.TimeSeriesRowsUpdated) error {
+		received = append(received, event.GetMessageId())
+		return nil
+	}); err != nil {
+		t.Fatalf("SubscribeTimeSeriesRowsUpdated: %v", err)
+	}
+
+	for _, id := range []string{"first", "second"} {
+		if err := bus.PublishTimeSeriesRowsUpdated(ctx, &pb.TimeSeriesRowsUpdated{MessageId: id}); err != nil {
+			t.Fatalf("PublishTimeSeriesRowsUpdated %s: %v", id, err)
+		}
+	}
+	if err := bus.Wait(ctx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if len(received) != 2 || received[0] != "first" || received[1] != "second" {
+		t.Fatalf("received order = %v, want [first second]", received)
+	}
+}

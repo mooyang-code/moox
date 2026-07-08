@@ -148,7 +148,7 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.View.BatchWaitMS = 200
 	}
 	if c.View.MaxWorkers <= 0 {
-		c.View.MaxWorkers = 4
+		c.View.MaxWorkers = 1
 	}
 }
 

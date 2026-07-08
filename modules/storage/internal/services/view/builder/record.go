@@ -39,22 +39,24 @@ func (s *Service) processRecordBatch(ctx context.Context, rows []*pb.RecordRow) 
 			if err != nil {
 				return err
 			}
-			projected := MapRecordColumnsToView(item, columns, key.datasetID, datasetRows)
-			if len(projected) == 0 {
+			if hasUnsupportedSteadyColumns(columns) {
 				if err := markPending(ctx, s.metadata, item); err != nil {
 					return err
 				}
+			}
+			projected := MapRecordColumnsToView(item, columns, key.datasetID, datasetRows)
+			if len(projected) == 0 {
 				continue
 			}
 			writtenViews := 0
 			if item.GetActiveResult() != "" {
-				if err := s.search.IndexRecordViewRows(ctx, item.GetActiveResult(), columns, projected); err != nil {
+				if err := s.indexRecordRows(ctx, item.GetActiveResult(), columns, projected); err != nil {
 					return err
 				}
 				writtenViews++
 			}
 			if item.GetBuildingResult() != "" {
-				if err := s.search.IndexRecordViewRows(ctx, item.GetBuildingResult(), columns, projected); err != nil {
+				if err := s.indexRecordRows(ctx, item.GetBuildingResult(), columns, projected); err != nil {
 					return err
 				}
 				writtenViews++

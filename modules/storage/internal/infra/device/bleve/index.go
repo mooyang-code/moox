@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 
 	blevelib "github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/mapping"
@@ -24,6 +25,7 @@ type Options struct {
 // Index 封装 Record 视图的 Bleve 索引读写能力。
 type Index struct {
 	index blevelib.Index
+	mu    sync.Mutex
 }
 
 // SearchRequest 描述一次 Bleve 复合检索请求。
@@ -92,6 +94,8 @@ func (i *Index) Close() error {
 
 func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexedColumns map[string]bool) error {
 	_ = ctx
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	batch := i.index.NewBatch()
 	for _, row := range rows {
 		if row == nil || row.GetKey() == nil {

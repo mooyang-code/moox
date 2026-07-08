@@ -94,9 +94,104 @@ func TestProcessRecordBatchPatchesViewWithoutFactReader(t *testing.T) {
 	}
 }
 
+func TestProcessTimeSeriesBatchNoopsWhenJournalHasNoMappedColumns(t *testing.T) {
+	ctx := context.Background()
+	writer := &capturingTimeSeriesWriter{}
+	meta := newBuilderServiceMetadata(builderTestView(), builderTestViewColumns())
+	service := &Service{
+		metadata: meta,
+		views:    writer,
+	}
+
+	if err := service.processTimeSeriesBatch(ctx, []*pb.TimeSeriesRow{
+		builderTestTSRow("crypto", "kline", "BTC-USDT", "2026-07-08T10:00:00Z", builderTestValue("ignored", 1)),
+	}); err != nil {
+		t.Fatalf("processTimeSeriesBatch: %v", err)
+	}
+	if len(writer.rows) != 0 {
+		t.Fatalf("written rows = %v, want no-op", writer.rows)
+	}
+	if meta.upserts != 0 {
+		t.Fatalf("metadata upserts = %d, want no pending rebuild for no-op journal", meta.upserts)
+	}
+}
+
+func TestProcessTimeSeriesBatchMarksUnsupportedSteadyColumnsPending(t *testing.T) {
+	ctx := context.Background()
+	writer := &capturingTimeSeriesWriter{}
+	columns := append(builderTestViewColumns(), &pb.ViewColumn{
+		ColumnName: "spread",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION,
+		OriginId:   "close - open",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	})
+	meta := newBuilderServiceMetadata(builderTestView(), columns)
+	service := &Service{
+		metadata: meta,
+		views:    writer,
+	}
+
+	if err := service.processTimeSeriesBatch(ctx, []*pb.TimeSeriesRow{
+		builderTestTSRow("crypto", "kline", "BTC-USDT", "2026-07-08T10:00:00Z", builderTestValue("close", 1)),
+	}); err != nil {
+		t.Fatalf("processTimeSeriesBatch: %v", err)
+	}
+	if meta.upserts != 1 {
+		t.Fatalf("metadata upserts = %d, want pending rebuild signal for unsupported steady columns", meta.upserts)
+	}
+}
+
+func TestProcessRecordBatchNoopsWhenJournalHasNoMappedColumns(t *testing.T) {
+	ctx := context.Background()
+	indexer := &capturingRecordIndexer{}
+	meta := newBuilderServiceMetadata(builderTestRecordView(), builderTestViewColumns())
+	service := &Service{
+		metadata: meta,
+		search:   indexer,
+	}
+
+	if err := service.processRecordBatch(ctx, []*pb.RecordRow{
+		builderTestRecordRow("crypto", "funding", "BTC-USDT", "v1", builderTestValue("ignored", 1)),
+	}); err != nil {
+		t.Fatalf("processRecordBatch: %v", err)
+	}
+	if len(indexer.rows) != 0 {
+		t.Fatalf("indexed rows = %v, want no-op", indexer.rows)
+	}
+	if meta.upserts != 0 {
+		t.Fatalf("metadata upserts = %d, want no pending rebuild for no-op journal", meta.upserts)
+	}
+}
+
+func TestProcessRecordBatchMarksUnsupportedSteadyColumnsPending(t *testing.T) {
+	ctx := context.Background()
+	indexer := &capturingRecordIndexer{}
+	columns := append(builderTestViewColumns(), &pb.ViewColumn{
+		ColumnName: "spread",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION,
+		OriginId:   "close - open",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	})
+	meta := newBuilderServiceMetadata(builderTestRecordView(), columns)
+	service := &Service{
+		metadata: meta,
+		search:   indexer,
+	}
+
+	if err := service.processRecordBatch(ctx, []*pb.RecordRow{
+		builderTestRecordRow("crypto", "funding", "BTC-USDT", "v1", builderTestValue("rate", 1)),
+	}); err != nil {
+		t.Fatalf("processRecordBatch: %v", err)
+	}
+	if meta.upserts != 1 {
+		t.Fatalf("metadata upserts = %d, want pending rebuild signal for unsupported steady columns", meta.upserts)
+	}
+}
+
 type builderServiceMetadata struct {
 	view    *pb.View
 	columns []*pb.ViewColumn
+	upserts int
 }
 
 func newBuilderServiceMetadata(view *pb.View, columns []*pb.ViewColumn) *builderServiceMetadata {
@@ -145,6 +240,7 @@ func (m *builderServiceMetadata) GetDataset(context.Context, string, string) (*p
 }
 
 func (m *builderServiceMetadata) UpsertView(context.Context, *pb.View) (*pb.View, error) {
+	m.upserts++
 	return proto.Clone(m.view).(*pb.View), nil
 }
 

@@ -39,11 +39,13 @@ func (s *Service) processTimeSeriesBatch(ctx context.Context, rows []*pb.TimeSer
 			if err != nil {
 				return err
 			}
-			mapped := MapDatasetColumnsToView(item, columns, key.datasetID, datasetRows)
-			if len(mapped) == 0 {
+			if hasUnsupportedSteadyColumns(columns) {
 				if err := markPending(ctx, s.metadata, item); err != nil {
 					return err
 				}
+			}
+			mapped := MapDatasetColumnsToView(item, columns, key.datasetID, datasetRows)
+			if len(mapped) == 0 {
 				continue
 			}
 			writtenViews := 0

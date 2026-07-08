@@ -19,7 +19,7 @@ type NATSConfig struct {
 	Subject  string
 }
 
-// NATSConsumer consumes Storage rows_changed events and feeds a Debouncer.
+// NATSConsumer consumes Storage rows_updated journals and feeds a Debouncer.
 type NATSConsumer struct {
 	cfg       NATSConfig
 	debounce  *Debouncer
@@ -103,7 +103,7 @@ func (c *NATSConsumer) loop(ctx context.Context) {
 			continue
 		}
 		for _, msg := range msgs {
-			event := &storagepb.TimeSeriesRowsChangedEvent{}
+			event := &storagepb.TimeSeriesRowsUpdated{}
 			if err := protojson.Unmarshal(msg.Data, event); err == nil && c.debounce != nil {
 				c.debounce.Ingest(event, time.Now())
 			}

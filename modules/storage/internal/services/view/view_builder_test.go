@@ -168,6 +168,60 @@ func TestBuildQueryWindowOverridesBackfillWindow(t *testing.T) {
 	}
 }
 
+func TestRecordBuildUsesBackfillWindowWhenQueryWindowEmpty(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	meta := newBuilderTestMetadata(testRecordView("crypto", "records_view", "records", "pending", 1, 0))
+	facts := &builderTestFacts{
+		scanRecordRows: map[string][]*pb.RecordRow{
+			"records": {testRecordRow("crypto", "records", "BTC-USDT", "2026-07-07T04:18:00Z")},
+		},
+	}
+	builder := NewBuilder(Options{
+		Metadata:       meta,
+		Facts:          facts,
+		Records:        facts,
+		Search:         &builderTestRecordIndexer{},
+		BackfillWindow: "30d",
+		Now:            func() time.Time { return now },
+	})
+
+	if _, err := builder.Build(ctx, "crypto", "records_view"); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got, want := facts.scanRecordRanges["records"].GetStartVersion(), "2026-06-08T10:00:00Z"; got != want {
+		t.Fatalf("scan start_version = %q, want backfill window %q", got, want)
+	}
+}
+
+func TestRecordBuildQueryWindowOverridesBackfillWindow(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	view := testRecordView("crypto", "records_view", "records", "pending", 1, 0)
+	view.QueryWindow = "7d"
+	meta := newBuilderTestMetadata(view)
+	facts := &builderTestFacts{
+		scanRecordRows: map[string][]*pb.RecordRow{
+			"records": {testRecordRow("crypto", "records", "BTC-USDT", "2026-07-07T04:18:00Z")},
+		},
+	}
+	builder := NewBuilder(Options{
+		Metadata:       meta,
+		Facts:          facts,
+		Records:        facts,
+		Search:         &builderTestRecordIndexer{},
+		BackfillWindow: "30d",
+		Now:            func() time.Time { return now },
+	})
+
+	if _, err := builder.Build(ctx, "crypto", "records_view"); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got, want := facts.scanRecordRanges["records"].GetStartVersion(), "2026-07-01T10:00:00Z"; got != want {
+		t.Fatalf("scan start_version = %q, want query window %q", got, want)
+	}
+}
+
 type builderTestMetadata struct {
 	views []*pb.View
 	byID  map[string]*pb.View
@@ -202,15 +256,27 @@ func (m *builderTestMetadata) ListViewsByDataset(context.Context, string, string
 	return nil, nil
 }
 
-func (m *builderTestMetadata) ListViewColumns(context.Context, string, string, *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {
-	return []*pb.ViewColumn{{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}, &pb.PageResult{}, nil
+func (m *builderTestMetadata) ListViewColumns(_ context.Context, _ string, viewID string, _ *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {
+	datasetID := "kline"
+	if view := m.byID[viewID]; view != nil && view.GetPrimaryDatasetId() != "" {
+		datasetID = view.GetPrimaryDatasetId()
+	}
+	return []*pb.ViewColumn{{
+		ColumnName: "close",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   datasetID + ".close",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	}}, &pb.PageResult{}, nil
 }
 
 func (m *builderTestMetadata) ListSpaces(context.Context, string, *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 
-func (m *builderTestMetadata) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
+func (m *builderTestMetadata) GetDataset(_ context.Context, _ string, datasetID string) (*pb.Dataset, error) {
+	if datasetID == "records" {
+		return &pb.Dataset{DataKind: pb.DataKind_DATA_KIND_RECORD}, nil
+	}
 	return &pb.Dataset{DataKind: pb.DataKind_DATA_KIND_TIME_SERIES}, nil
 }
 
@@ -258,11 +324,17 @@ type builderTestFacts struct {
 	scanErrByDataset map[string]error
 	scanRows         map[string][]*pb.TimeSeriesRow
 	scanRanges       map[string]*pb.TimeRange
+	scanRecordRows   map[string][]*pb.RecordRow
+	scanRecordRanges map[string]*pb.VersionRange
 	scanned          map[string]bool
 }
 
 func (f *builderTestFacts) ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
+}
+
+func (f *builderTestFacts) ReadRecordRows(context.Context, *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error) {
+	return &pb.ReadRecordRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
 
 func (f *builderTestFacts) ScanTimeSeriesRows(_ context.Context, _ string, datasetID string, timeRange *pb.TimeRange, _ []string, _ *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult, error) {
@@ -287,6 +359,28 @@ func (f *builderTestFacts) ScanTimeSeriesRows(_ context.Context, _ string, datas
 	return out, &pb.PageResult{}, nil
 }
 
+func (f *builderTestFacts) ScanRecordRows(_ context.Context, _ string, datasetID string, versionRange *pb.VersionRange, _ []string, _ *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
+	if f.scanned == nil {
+		f.scanned = make(map[string]bool)
+	}
+	if f.scanRecordRanges == nil {
+		f.scanRecordRanges = make(map[string]*pb.VersionRange)
+	}
+	f.scanned[datasetID] = true
+	if versionRange != nil {
+		f.scanRecordRanges[datasetID] = proto.Clone(versionRange).(*pb.VersionRange)
+	}
+	if err := f.scanErrByDataset[datasetID]; err != nil {
+		return nil, nil, err
+	}
+	rows := f.scanRecordRows[datasetID]
+	out := make([]*pb.RecordRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, proto.Clone(row).(*pb.RecordRow))
+	}
+	return out, &pb.PageResult{}, nil
+}
+
 type builderTestViewWriter struct{}
 
 func (builderTestViewWriter) CreateResultTable(context.Context, string, []*pb.ViewColumn) error {
@@ -294,6 +388,12 @@ func (builderTestViewWriter) CreateResultTable(context.Context, string, []*pb.Vi
 }
 
 func (builderTestViewWriter) InsertRows(context.Context, string, []*pb.TimeSeriesRow) error {
+	return nil
+}
+
+type builderTestRecordIndexer struct{}
+
+func (builderTestRecordIndexer) IndexRecordViewRows(context.Context, string, []*pb.ViewColumn, []*pb.RecordRow) error {
 	return nil
 }
 
@@ -311,9 +411,26 @@ func testView(spaceID string, viewID string, datasetID string, buildStatus strin
 	}
 }
 
+func testRecordView(spaceID string, viewID string, datasetID string, buildStatus string, viewVersion uint64, activeVersion uint64) *pb.View {
+	view := testView(spaceID, viewID, datasetID, buildStatus, viewVersion, activeVersion)
+	view.Engine = "bleve"
+	return view
+}
+
 func testTimeSeriesRow(spaceID string, datasetID string, subjectID string, freq string, dataTime string) *pb.TimeSeriesRow {
 	return &pb.TimeSeriesRow{
 		Key: &pb.TimeSeriesKey{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subjectID, Freq: freq, DataTime: dataTime},
+		Columns: []*pb.ColumnValue{{
+			ColumnName: "close",
+			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			Value:      &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.23}},
+		}},
+	}
+}
+
+func testRecordRow(spaceID string, datasetID string, recordID string, version string) *pb.RecordRow {
+	return &pb.RecordRow{
+		Key: &pb.RecordKey{SpaceId: spaceID, DatasetId: datasetID, RecordId: recordID, Version: version},
 		Columns: []*pb.ColumnValue{{
 			ColumnName: "close",
 			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,

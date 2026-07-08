@@ -54,4 +54,3 @@ func builderRecordColumnDouble(row *pb.RecordRow, name string) float64 {
 	}
 	return 0
 }
-

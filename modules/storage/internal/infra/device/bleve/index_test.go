@@ -3,6 +3,7 @@ package bleve
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -24,6 +25,50 @@ func TestIndexRowsMergesPartialRecordPatches(t *testing.T) {
 	if err := index.IndexRows(ctx, []*pb.RecordRow{volumePatch}, map[string]bool{"close": true, "volume": true}); err != nil {
 		t.Fatalf("IndexRows volume: %v", err)
 	}
+
+	rows, _, err := index.SearchRecordRows(ctx, SearchRequest{
+		SpaceID:   "crypto",
+		DatasetID: "kline",
+		RecordIDs: []string{"BTC-USDT"},
+	})
+	if err != nil {
+		t.Fatalf("SearchRecordRows: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if got := bleveColumnDouble(rows[0], "close"); got != 12 {
+		t.Fatalf("close = %v, want 12", got)
+	}
+	if got := bleveColumnDouble(rows[0], "volume"); got != 99 {
+		t.Fatalf("volume = %v, want 99", got)
+	}
+}
+
+func TestIndexRowsMergesConcurrentPartialRecordPatches(t *testing.T) {
+	ctx := context.Background()
+	index, err := Open(Options{Path: filepath.Join(t.TempDir(), "records.bleve")})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer index.Close()
+
+	patches := []*pb.RecordRow{
+		bleveTestRecordRow("crypto", "kline", "BTC-USDT", "v1", bleveTestValue("close", 12)),
+		bleveTestRecordRow("crypto", "kline", "BTC-USDT", "v1", bleveTestValue("volume", 99)),
+	}
+	var wg sync.WaitGroup
+	for _, patch := range patches {
+		patch := patch
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := index.IndexRows(ctx, []*pb.RecordRow{patch}, map[string]bool{"close": true, "volume": true}); err != nil {
+				t.Errorf("IndexRows: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
 
 	rows, _, err := index.SearchRecordRows(ctx, SearchRequest{
 		SpaceID:   "crypto",

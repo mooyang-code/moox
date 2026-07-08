@@ -94,8 +94,8 @@ func (b *MemoryBus) PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.
 	b.mu.Unlock()
 	for _, handler := range handlers {
 		eventCopy := cloneTimeSeriesRowsUpdated(event)
-		// 内存总线不阻塞发布者；测试或单进程部署需要等待派生完成时显式调用 Wait。
-		go func(handler TimeSeriesRowsUpdatedHandler, event *pb.TimeSeriesRowsUpdated) {
+		// 内存总线按发布顺序同步完成 handler 入队，避免同 key 流水乱序。
+		func(handler TimeSeriesRowsUpdatedHandler, event *pb.TimeSeriesRowsUpdated) {
 			defer b.finishHandler()
 			_ = handler(ctx, event)
 		}(handler, eventCopy)
@@ -115,8 +115,8 @@ func (b *MemoryBus) PublishRecordRowsUpdated(ctx context.Context, event *pb.Reco
 	b.mu.Unlock()
 	for _, handler := range handlers {
 		eventCopy := cloneRecordRowsUpdated(event)
-		// 内存总线不阻塞发布者；测试或单进程部署需要等待派生完成时显式调用 Wait。
-		go func(handler RecordRowsUpdatedHandler, event *pb.RecordRowsUpdated) {
+		// 内存总线按发布顺序同步完成 handler 入队，避免同 key 流水乱序。
+		func(handler RecordRowsUpdatedHandler, event *pb.RecordRowsUpdated) {
 			defer b.finishHandler()
 			_ = handler(ctx, event)
 		}(handler, eventCopy)

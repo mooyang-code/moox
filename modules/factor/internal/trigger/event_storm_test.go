@@ -23,7 +23,7 @@ func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
 		Status:        domain.BindingStatusEnabled,
 	}})
 
-	d.Ingest(testkit.RowsChangedEvent("crypto", "binance_spot_kline", "1m", now, symbols), now)
+	d.Ingest(testkit.RowsUpdatedEvent("crypto", "binance_spot_kline", "1m", now, symbols), now)
 	tasks := d.Flush(now.Add(time.Second))
 	if len(tasks) != len(symbols) {
 		t.Fatalf("tasks = %d, want %d", len(tasks), len(symbols))
@@ -67,7 +67,7 @@ func TestDebouncerSplitsTasksByTargetDataset(t *testing.T) {
 		},
 	})
 
-	d.Ingest(testkit.RowsChangedEvent("crypto", "binance_spot_kline", "1m", now, []string{"BTC-USDT"}), now)
+	d.Ingest(testkit.RowsUpdatedEvent("crypto", "binance_spot_kline", "1m", now, []string{"BTC-USDT"}), now)
 	tasks := d.Flush(now.Add(time.Second))
 	if len(tasks) != 2 {
 		t.Fatalf("tasks = %d, want 2: %+v", len(tasks), tasks)

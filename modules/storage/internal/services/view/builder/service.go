@@ -14,17 +14,19 @@ import (
 )
 
 const defaultMaxWorkers = 1
+const journalProcessorWorkers = 1
 
 // Service consumes storage row-update events and updates derived view stores.
 type Service struct {
-	events      eventbus.Bus
-	reader      FactReader
-	metadata    viewsvc.Metadata
-	views       TimeSeriesViewWriter
-	search      RecordViewIndexer
-	batchOpts   BatchOptions
-	maxWorkers  int
-	viewWriters *viewWriterPool
+	events        eventbus.Bus
+	reader        FactReader
+	metadata      viewsvc.Metadata
+	views         TimeSeriesViewWriter
+	search        RecordViewIndexer
+	batchOpts     BatchOptions
+	maxWorkers    int
+	viewWriters   *viewWriterPool
+	recordWriters *recordWriterPool
 
 	mu                sync.Mutex
 	runCtx            context.Context
@@ -55,14 +57,15 @@ func NewService(opts Options) *Service {
 		maxWorkers = defaultMaxWorkers
 	}
 	return &Service{
-		events:      opts.Events,
-		reader:      opts.Reader,
-		metadata:    opts.Metadata,
-		views:       opts.Views,
-		search:      opts.Search,
-		batchOpts:   batchOpts,
-		maxWorkers:  maxWorkers,
-		viewWriters: newViewWriterPool(opts.Views),
+		events:        opts.Events,
+		reader:        opts.Reader,
+		metadata:      opts.Metadata,
+		views:         opts.Views,
+		search:        opts.Search,
+		batchOpts:     batchOpts,
+		maxWorkers:    maxWorkers,
+		viewWriters:   newViewWriterPool(opts.Views),
+		recordWriters: newRecordWriterPool(opts.Search),
 	}
 }
 
@@ -104,10 +107,11 @@ func (s *Service) Start(ctx context.Context) error {
 	s.timeSeriesBatcher = timeSeriesBatcher
 	s.recordBatcher = recordBatcher
 	s.viewWriters = newViewWriterPool(s.views)
+	s.recordWriters = newRecordWriterPool(s.search)
 	timeSeriesOut := make(chan []timeSeriesDeriveItem, s.maxWorkers)
 	recordOut := make(chan []recordDeriveItem, s.maxWorkers)
 	processCtx := trpc.CloneContext(runCtx)
-	s.wg.Add(2 + 2*s.maxWorkers)
+	s.wg.Add(2 + 2*journalProcessorWorkers)
 	s.mu.Unlock()
 
 	go func() {
@@ -120,7 +124,7 @@ func (s *Service) Start(ctx context.Context) error {
 		defer close(recordOut)
 		recordBatcher.run(runCtx, recordOut)
 	}()
-	for i := 0; i < s.maxWorkers; i++ {
+	for i := 0; i < journalProcessorWorkers; i++ {
 		go func() {
 			defer s.wg.Done()
 			for batch := range timeSeriesOut {
@@ -181,6 +185,9 @@ func (s *Service) Close() error {
 	if s.viewWriters != nil {
 		s.viewWriters.close()
 	}
+	if s.recordWriters != nil {
+		s.recordWriters.close()
+	}
 
 	s.mu.Lock()
 	s.cancel = nil
@@ -190,6 +197,7 @@ func (s *Service) Close() error {
 	s.timeSeriesBatcher = nil
 	s.recordBatcher = nil
 	s.viewWriters = nil
+	s.recordWriters = nil
 	s.mu.Unlock()
 	return err
 }
@@ -199,6 +207,13 @@ func (s *Service) insertTimeSeriesRows(ctx context.Context, tableName string, ro
 		s.viewWriters = newViewWriterPool(s.views)
 	}
 	return s.viewWriters.insert(ctx, tableName, rows)
+}
+
+func (s *Service) indexRecordRows(ctx context.Context, resultName string, columns []*pb.ViewColumn, rows []*pb.RecordRow) error {
+	if s.recordWriters == nil {
+		s.recordWriters = newRecordWriterPool(s.search)
+	}
+	return s.recordWriters.index(ctx, resultName, columns, rows)
 }
 
 func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
@@ -253,6 +268,14 @@ func (s *Service) clearStartedState(cancel context.CancelFunc) {
 	s.runCtx = nil
 	s.timeSeriesBatcher = nil
 	s.recordBatcher = nil
+	if s.viewWriters != nil {
+		s.viewWriters.close()
+	}
+	if s.recordWriters != nil {
+		s.recordWriters.close()
+	}
+	s.viewWriters = nil
+	s.recordWriters = nil
 	s.mu.Unlock()
 }
 

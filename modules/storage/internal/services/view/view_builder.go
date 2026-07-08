@@ -448,10 +448,11 @@ func (b *Builder) resultTablesInUse(ctx context.Context, spaceID string) (map[st
 
 func (b *Builder) readRecordViewRows(ctx context.Context, view *pb.View, primaryDatasetID string, columns []*pb.ViewColumn) ([]*pb.RecordRow, error) {
 	sourceColumns := sourceColumnNamesByDataset(primaryDatasetID, columns)
+	versionRange := buildVersionRange(b.now(), effectiveViewWindow(view.GetQueryWindow(), b.backfillWindow))
 	var out []*pb.RecordRow
 	cursor := ""
 	for {
-		rows, page, err := b.records.ScanRecordRows(ctx, view.GetSpaceId(), primaryDatasetID, nil, sourceColumns[primaryDatasetID], &pb.Page{Size: rebuildViewPageSize, Cursor: cursor})
+		rows, page, err := b.records.ScanRecordRows(ctx, view.GetSpaceId(), primaryDatasetID, versionRange, sourceColumns[primaryDatasetID], &pb.Page{Size: rebuildViewPageSize, Cursor: cursor})
 		if err != nil {
 			return nil, err
 		}
@@ -798,6 +799,15 @@ func buildTimeRange(now time.Time, queryWindow string) *pb.TimeRange {
 	}
 	start := now.Add(-duration).UTC().Format(time.RFC3339)
 	return &pb.TimeRange{StartTime: start}
+}
+
+func buildVersionRange(now time.Time, queryWindow string) *pb.VersionRange {
+	duration, ok := parseWindow(queryWindow)
+	if !ok {
+		return nil
+	}
+	start := now.Add(-duration).UTC().Format(time.RFC3339)
+	return &pb.VersionRange{StartVersion: start}
 }
 
 func effectiveViewWindow(queryWindow string, backfillWindow string) string {

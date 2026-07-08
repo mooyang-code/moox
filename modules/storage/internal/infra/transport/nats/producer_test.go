@@ -11,7 +11,7 @@ import (
 	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 
-func TestSubscribeDoesNotSerializeBlockedHandlers(t *testing.T) {
+func TestSubscribeProcessesHandlersInDeliveryOrder(t *testing.T) {
 	srv, url := startTestNATSServer(t)
 	defer srv.Shutdown()
 
@@ -49,7 +49,6 @@ func TestSubscribeDoesNotSerializeBlockedHandlers(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Close()
-	defer close(releaseFirst)
 
 	if err := producer.Send(ctx, &transport.Message{Subject: "moox.storage.test.rows_updated", Data: []byte("first")}); err != nil {
 		t.Fatalf("Send first: %v", err)
@@ -63,11 +62,13 @@ func TestSubscribeDoesNotSerializeBlockedHandlers(t *testing.T) {
 	}
 	select {
 	case got := <-started:
-		if got != "second" {
-			t.Fatalf("second handler started with %q", got)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("second handler did not start while first handler was blocked")
+		t.Fatalf("second handler started before first acked: %q", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	if got := waitStarted(t, started); got != "second" {
+		t.Fatalf("second handler started with %q", got)
 	}
 }
 

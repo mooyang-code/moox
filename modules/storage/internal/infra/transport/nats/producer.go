@@ -172,23 +172,21 @@ func (p *NATSProducer) Subscribe(ctx context.Context, subject string, handler tr
 	}
 	consumerName := durableConsumerName(p.options.ConsumerName, subject)
 	subscription, err := p.js.Subscribe(subject, func(msg *nats.Msg) {
-		go func(msg *nats.Msg) {
-			event := &transport.Message{
-				Subject: msg.Subject,
-				Data:    msg.Data,
-				Time:    time.Now(),
-			}
-			// handler 返回值直接决定 JetStream Ack/Nak。上层消费者应在解析并入队成功后返回；
-			// 后续派生写入失败由内部日志/指标和 rebuild 修复，避免用 Ack 背压热路径。
-			if err := handler(trpc.BackgroundContext(), event); err != nil {
-				_ = msg.Nak()
-				log.Errorf("处理NATS消息失败: %v", err)
-				return
-			}
-			if err := msg.Ack(); err != nil {
-				log.Errorf("确认NATS消息失败: %v", err)
-			}
-		}(msg)
+		event := &transport.Message{
+			Subject: msg.Subject,
+			Data:    msg.Data,
+			Time:    time.Now(),
+		}
+		// handler 返回值直接决定 JetStream Ack/Nak。上层消费者应在解析并入队成功后返回；
+		// 后续派生写入失败由内部日志/指标和 rebuild 修复，避免用 Ack 背压热路径。
+		if err := handler(trpc.BackgroundContext(), event); err != nil {
+			_ = msg.Nak()
+			log.Errorf("处理NATS消息失败: %v", err)
+			return
+		}
+		if err := msg.Ack(); err != nil {
+			log.Errorf("确认NATS消息失败: %v", err)
+		}
 	}, nats.ManualAck(), nats.Durable(consumerName), nats.DeliverNew())
 	if err != nil {
 		return nil, fmt.Errorf("订阅消息失败: %w", err)

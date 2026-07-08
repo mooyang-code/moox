@@ -114,6 +114,15 @@ func timeSeriesColumnMappings(primaryDatasetID string, columns []*pb.ViewColumn,
 	return out
 }
 
+func hasUnsupportedSteadyColumns(columns []*pb.ViewColumn) bool {
+	for _, column := range columns {
+		if column.GetOriginType() != pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
+			return true
+		}
+	}
+	return false
+}
+
 func columnValuesByName(columns []*pb.ColumnValue) map[string]*pb.ColumnValue {
 	out := make(map[string]*pb.ColumnValue, len(columns))
 	for _, column := range columns {
