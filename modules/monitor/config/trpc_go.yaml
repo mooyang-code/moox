@@ -3,8 +3,6 @@ global:
   env_name: dev
 
 server:
-  filter:
-    - validation
   timeout: 5000
   service:
     - name: trpc.moox.monitor.MonitorMgr
@@ -14,11 +12,6 @@ server:
       timeout: 30000
 
 plugins:
-  auth:
-    validation:
-      enable_error_log: true
-      server_validate_err_code: 100101
-      client_validate_err_code: 100102
   log:
     default:
       - writer: console
