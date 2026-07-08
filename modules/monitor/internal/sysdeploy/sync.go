@@ -25,7 +25,11 @@ type ClientSource struct {
 }
 
 func NewClientSource(target string) *ClientSource {
-	return &ClientSource{client: adminpb.NewSysDeployClientProxy(client.WithTarget(target))}
+	return &ClientSource{client: adminpb.NewSysDeployClientProxy(
+		client.WithTarget(target),
+		client.WithProtocol("http"),
+		client.WithNetwork("tcp"),
+	)}
 }
 
 func (s *ClientSource) ActiveDeployments(ctx context.Context) ([]*adminpb.ServiceDeployment, error) {
