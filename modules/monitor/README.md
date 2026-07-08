@@ -39,3 +39,23 @@ peer:
 Admin 只作为网关和 SysDeploy 注册中心。Monitor 会周期性读取 SysDeploy active 部署，生成 `moox-system` 内置检查；探测时不依赖 Admin。
 
 所有独立部署进程都提供 `/healthz`，monitor 自己也提供，可用于多实例互相监控。
+
+## 管理接口
+
+管理 API 通过 `trpc.moox.monitor.MonitorMgr` 暴露，可由 Admin 网关转发：
+
+```text
+/api/admin/moox_monitor/ListChecks
+/api/admin/moox_monitor/GetOverview
+/api/admin/moox_monitor/RunCheckOnce
+```
+
+SysDeploy 同步可手动触发 `SyncSystemChecks`；同步后的内置检查使用 `source=sysdeploy` 和 `group_name=moox-system`。
+
+## 验证
+
+本模块的实现验证记录见：
+
+```text
+docs/superpowers/verification/2026-07-09-monitor-module.md
+```
