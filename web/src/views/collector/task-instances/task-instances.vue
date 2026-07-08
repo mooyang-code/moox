@@ -475,10 +475,6 @@ onMounted(() => {
 
 .task-query-panel {
   margin-bottom: 12px;
-  padding: 18px 20px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: var(--color-bg-2);
 }
 
 .task-filter-row {
