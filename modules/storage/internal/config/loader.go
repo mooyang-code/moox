@@ -29,6 +29,7 @@ type StorageConfig struct {
 	Primary  StoragePrimary  `yaml:"primary"`
 	EventBus StorageEventBus `yaml:"eventbus"`
 	View     StorageView     `yaml:"view"`
+	Health   StorageHealth   `yaml:"health"`
 }
 
 // StorageMetadata 保存元数据存储与种子数据配置。
@@ -75,6 +76,11 @@ type StorageView struct {
 // StoragePrimary 保存主存服务访问配置。
 type StoragePrimary struct {
 	ServiceName string `yaml:"service_name"`
+}
+
+// StorageHealth controls the lightweight HTTP health endpoint.
+type StorageHealth struct {
+	Addr string `yaml:"addr"`
 }
 
 func (c *RuntimeConfig) ApplyDefaults() {
@@ -146,6 +152,9 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.View.MaxWorkers <= 0 {
 		c.View.MaxWorkers = 4
+	}
+	if c.Health.Addr == "" {
+		c.Health.Addr = ":20210"
 	}
 }
 

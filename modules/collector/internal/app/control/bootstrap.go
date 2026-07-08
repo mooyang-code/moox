@@ -3,14 +3,18 @@ package control
 
 import (
 	"context"
+	"time"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
+
+var collectorStartedAt = time.Now()
 
 // Initialize loads config, initializes persistence, and registers RPC services.
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
@@ -28,6 +32,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 collector 数据库失败: %v", err)
 		return nil, err
 	}
+	startHealthServer(ctx, cfg)
 	deps, err := Resolve(ctx, cfg)
 	if err != nil {
 		log.WarnContextf(ctx, "[Collector] resolve dependencies from sysdeploy failed, use local defaults: %v", err)
@@ -46,6 +51,28 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-collector 初始化完成")
 	return s, nil
+}
+
+func startHealthServer(ctx context.Context, cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	if _, err := healthz.Start(ctx, cfg.Health.Addr, collectorHealthSnapshot(cfg)); err != nil {
+		log.ErrorContextf(ctx, "collector health server failed to start: %v", err)
+	}
+}
+
+func collectorHealthSnapshot(cfg *Config) healthz.SnapshotFunc {
+	return func(ctx context.Context) healthz.Response {
+		rsp := healthz.Base("collector", "collector", "", "", collectorStartedAt, true)
+		rsp.Details = map[string]any{
+			"database":                "ok",
+			"cloudnode_address":       cfg.CloudNode.Address,
+			"storage_metadata_target": cfg.Storage.MetadataTarget,
+			"storage_access_target":   cfg.Storage.AccessTarget,
+		}
+		return rsp
+	}
 }
 
 func registerCollectorSchedule(s *server.Server) {

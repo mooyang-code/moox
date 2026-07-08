@@ -21,11 +21,14 @@ import (
 	viewbuilder "github.com/mooyang-code/moox/modules/storage/internal/services/view/builder"
 	searchsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/mooyang-code/moox/packages/healthz"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
+
+var storageStartedAt = time.Now()
 
 func init() {
 	registerStorageFlags(flag.CommandLine)
@@ -146,6 +149,7 @@ func main() {
 		}()
 		pb.RegisterPrimaryStoreService(s, primaryService)
 	}
+	startStorageHealthServer(trpc.BackgroundContext(), cfg.Storage)
 	// 启动trpc服务器
 	log.Infof("Storage roles %v serving", cfg.Storage.Roles)
 	if err := s.Serve(); err != nil {
@@ -194,6 +198,27 @@ func (r *archiveRuntime) Close() error {
 		return r.consumer.Close()
 	}
 	return nil
+}
+
+func startStorageHealthServer(ctx context.Context, storage storageconfig.StorageConfig) {
+	if _, err := healthz.Start(ctx, storage.Health.Addr, storageHealthSnapshot(storage)); err != nil {
+		log.Errorf("storage health server failed to start: %v", err)
+	}
+}
+
+func storageHealthSnapshot(storage storageconfig.StorageConfig) healthz.SnapshotFunc {
+	return func(ctx context.Context) healthz.Response {
+		rsp := healthz.Base("storage", "storage", "", "", storageStartedAt, true)
+		rsp.Details = map[string]any{
+			"roles":            strings.Join(storage.Roles, ","),
+			"root":             storage.Root,
+			"eventbus_type":    storage.EventBus.Type,
+			"metadata_path":    storage.Metadata.Path,
+			"view_max_workers": storage.View.MaxWorkers,
+			"primary_service":  storage.Primary.ServiceName,
+		}
+		return rsp
+	}
 }
 
 func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, opts storagesvc.Options, storageService *storagesvc.Service, accessReader viewbuilder.AccessReader) (*viewRuntime, error) {

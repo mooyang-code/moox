@@ -14,6 +14,7 @@ require (
 	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.67.5
@@ -29,7 +30,10 @@ require (
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
 )
 
-replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ./proto/admingen
+replace (
+	github.com/mooyang-code/moox/modules/admin/proto/admingen => ./proto/admingen
+	github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
+)
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect

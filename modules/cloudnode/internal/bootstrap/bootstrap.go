@@ -18,9 +18,12 @@ import (
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/storage"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
+
+var cloudnodeStartedAt = time.Now()
 
 // Initialize loads config, initializes persistence, and registers tRPC services.
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
@@ -39,6 +42,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 cloudnode 数据库失败: %v", err)
 		return nil, err
 	}
+	startHealthServer(ctx, cfg)
 
 	historyStore := jobhistory.NewStore(jobhistory.StoreOptions{
 		Dir:           cfg.JobItem.HistoryDir,
@@ -97,6 +101,27 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-cloudnode 初始化完成")
 	return s, nil
+}
+
+func startHealthServer(ctx context.Context, cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	if _, err := healthz.Start(ctx, cfg.Health.Addr, cloudnodeHealthSnapshot(cfg)); err != nil {
+		log.ErrorContextf(ctx, "cloudnode health server failed to start: %v", err)
+	}
+}
+
+func cloudnodeHealthSnapshot(cfg *config.Config) healthz.SnapshotFunc {
+	return func(ctx context.Context) healthz.Response {
+		rsp := healthz.Base("cloudnode", "cloudnode", "", "", cloudnodeStartedAt, true)
+		rsp.Details = map[string]any{
+			"database":          "ok",
+			"queue_backend":     cfg.Queue.Backend,
+			"jetstream_enabled": cfg.JetStream.Enabled,
+		}
+		return rsp
+	}
 }
 
 func registerJobHistorySchedule(s *server.Server) {

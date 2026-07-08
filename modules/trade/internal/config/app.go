@@ -27,6 +27,7 @@ type AppConfig struct {
 	ControlGateway ControlGatewayConfig `yaml:"control_gateway"`
 	Sync           SyncConfig           `yaml:"sync"`
 	Log            LogConfig            `yaml:"log"`
+	Health         HealthConfig         `yaml:"health"`
 }
 
 // DatabaseConfig 数据库配置（当前仅支持 sqlite）。
@@ -79,6 +80,11 @@ type LogConfig struct {
 	MaxAge     int    `yaml:"max_age"`
 }
 
+// HealthConfig controls the lightweight HTTP health endpoint.
+type HealthConfig struct {
+	Addr string `yaml:"addr"`
+}
+
 // DefaultConfig 返回默认配置。
 func DefaultConfig() *AppConfig {
 	return &AppConfig{
@@ -119,6 +125,9 @@ func DefaultConfig() *AppConfig {
 			MaxBackups: 10,
 			MaxAge:     30,
 		},
+		Health: HealthConfig{
+			Addr: ":11210",
+		},
 	}
 }
 
@@ -158,6 +167,9 @@ func (c *AppConfig) applyEnv() {
 	if v := os.Getenv("MOOX_TRADE_SERVICE_AUTH_SECRET_KEY"); v != "" {
 		c.ControlGateway.ServiceAuth.SecretKey = v
 	}
+	if v := os.Getenv("MOOX_TRADE_HEALTH_ADDR"); v != "" {
+		c.Health.Addr = v
+	}
 }
 
 // Validate 校验配置并创建所需目录。
@@ -184,6 +196,9 @@ func (c *AppConfig) Validate() error {
 	}
 	if c.Sync.MaxSymbolsPerRun <= 0 {
 		c.Sync.MaxSymbolsPerRun = 10
+	}
+	if c.Health.Addr == "" {
+		c.Health.Addr = ":11210"
 	}
 	return nil
 }

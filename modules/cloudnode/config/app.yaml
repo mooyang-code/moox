@@ -40,3 +40,6 @@ tencent_scf:
   default_region: ap-guangzhou
   default_namespace: default
   default_runtime: Go1
+
+health:
+  addr: ":11411"

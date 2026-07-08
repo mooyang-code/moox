@@ -17,6 +17,7 @@ type Config struct {
 	JobItem    JobItemConfig    `yaml:"job_item"`
 	TencentSCF TencentSCFConfig `yaml:"tencent_scf"`
 	Debug      DebugConfig      `yaml:"debug"`
+	Health     HealthConfig     `yaml:"health"`
 }
 
 // DatabaseConfig describes SQLite settings.
@@ -79,6 +80,11 @@ type DebugConfig struct {
 	PprofAddr string `yaml:"pprof_addr"`
 }
 
+// HealthConfig controls the lightweight HTTP health endpoint.
+type HealthConfig struct {
+	Addr string `yaml:"addr"`
+}
+
 var globalConfig *Config
 
 // Load reads YAML config from path.
@@ -101,6 +107,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_CLOUDNODE_PPROF_ADDR"); v != "" {
 		c.Debug.PprofAddr = v
+	}
+	if v := os.Getenv("MOOX_CLOUDNODE_HEALTH_ADDR"); v != "" {
+		c.Health.Addr = v
 	}
 }
 
@@ -150,6 +159,9 @@ func Default() *Config {
 			DefaultRuntime:   "Go1",
 		},
 		Debug: DebugConfig{},
+		Health: HealthConfig{
+			Addr: ":11411",
+		},
 	}
 }
 

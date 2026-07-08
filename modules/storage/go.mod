@@ -5,6 +5,7 @@ go 1.24.0
 replace (
 	github.com/mooyang-code/moox/modules/storage => ./
 	github.com/mooyang-code/moox/modules/storage/proto/gen => ./proto/gen
+	github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 )
 
 require (
@@ -14,6 +15,7 @@ require (
 	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
 	github.com/mooyang-code/moox/modules/storage/proto/gen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/snapshotcache v0.1.1
 	github.com/nats-io/nats-server/v2 v2.11.3
 	github.com/nats-io/nats.go v1.47.0

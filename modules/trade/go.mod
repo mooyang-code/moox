@@ -10,6 +10,7 @@ require (
 	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
 	github.com/mooyang-code/moox/modules/trade/proto/tradegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
@@ -73,3 +74,5 @@ require (
 replace github.com/mooyang-code/moox/modules/trade/proto/tradegen => ./proto/tradegen
 
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
+
+replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
