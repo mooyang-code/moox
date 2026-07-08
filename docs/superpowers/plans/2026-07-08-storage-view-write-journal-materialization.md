@@ -4,7 +4,7 @@
 
 **Goal:** Rebuild TimeSeries（及对齐的 Record）视图物化链路：主存写入后发布携带完整行的**写入流水**；稳态增量只 patch 本 dataset 贡献列、不回读 PrimaryStore；仅在新建/形状变更时用 `query_window`（默认 `backfill_window`）回扫。
 
-**Architecture:** PrimaryStore 仍是事实源，DuckDB/Bleve 为可重建读模型。将 `*RowsChangedEvent`（仅 keys）改为 `*RowsUpdated` 写入流水（`batch_id` + `written_at` + `rows`）。NATS 入队后立即 Ack，内部按 view 合并批处理。稳态路径去掉重型 `ProjectRows`/回读；join 视图依赖各 dataset 各自流水 patch 列。Backfill 仅由 CreateView / view_version bump / 手动 Rebuild 触发，与热路径分离。
+**Architecture:** PrimaryStore 仍是事实源，DuckDB/Bleve 为可重建读模型。将 `*RowsChangedEvent`（仅 keys）改为 `*RowsUpdated` 写入流水（`message_id` + `written_at` + `rows`）。NATS 入队后立即 Ack，内部按 view 合并批处理。稳态路径去掉重型 `ProjectRows`/回读；join 视图依赖各 dataset 各自流水 patch 列。Backfill 仅由 CreateView / view_version bump / 手动 Rebuild 触发，与热路径分离。
 
 **Tech Stack:** Go, tRPC-Go, NATS JetStream, Pebble PrimaryStore, DuckDB CGO, SQLite metadata, existing `go test`。
 
@@ -16,7 +16,7 @@
 
 | # | Decision |
 |---|----------|
-| D1 | 流水类型名：`TimeSeriesRowsUpdated` / `RecordRowsUpdated`；字段 `batch_id`、`written_at`、`rows`（禁止再用 EventId/EventTime 话术） |
+| D1 | 流水类型名：`TimeSeriesRowsUpdated` / `RecordRowsUpdated`；字段 `message_id`、`written_at`、`rows`（禁止再用 EventId/EventTime 话术） |
 | D2 | 一次 `Write*Rows` RPC → 一条流水；允许同批多标的（如 SCF 一次写多币种 K 线） |
 | D3 | 系统默认回拉窗口配置名：`storage.view.backfill_window`（必填）；视图实例优先 `query_window` |
 | D4 | 稳态增量：只改本 dataset 贡献列，不读其他 dataset；允许「半行先插入」 |
@@ -45,7 +45,7 @@
 ```text
 WriteTimeSeriesRows (多标的一批)
   → PrimaryStore write
-  → publish TimeSeriesRowsUpdated{batch_id, written_at, rows}
+  → publish TimeSeriesRowsUpdated{message_id, written_at, rows}
   → NATS: enqueue → Ack immediately
   → coalesce by merge key
   → for each view bound to dataset:
@@ -107,8 +107,8 @@ CreateView / column|join shape change / Rebuild
 // TimeSeriesRowsUpdated 表示一次时序主存写入成功后的更新流水。
 // 派生消费者应使用 rows 直接物化，不应再按 key 回读 PrimaryStore。
 message TimeSeriesRowsUpdated {
-  // batch_id 是本批写入流水 ID。
-  string batch_id = 1;
+  // message_id 是本条写入流水的消息 ID。
+  string message_id = 1;
   // written_at 是主存写入成功时间（RFC3339Nano）。
   string written_at = 2;
   // space_id / dataset_id 便于路由到关联 View（可与 rows[].key 一致，避免解析每行）。
@@ -122,7 +122,7 @@ message TimeSeriesRowsUpdated {
 
 // RecordRowsUpdated 表示一次记录主存写入成功后的更新流水。
 message RecordRowsUpdated {
-  string batch_id = 1;
+  string message_id = 1;
   string written_at = 2;
   string space_id = 3;
   string dataset_id = 4;
@@ -196,7 +196,7 @@ EOF
 
 `WriteTimeSeriesRows` 成功后，MemoryBus 上出现一条 `TimeSeriesRowsUpdated`：
 
-- `batch_id` 非空
+- `message_id` 非空
 - `written_at` 非空
 - `space_id`/`dataset_id` 与写入一致（同批同 dataset；跨 dataset 则按写路径分组发多条流水，每条只含该 dataset 的 rows）
 - `len(rows)` 等于该组写入行数（含多 subject）
@@ -211,7 +211,7 @@ func (s *Service) publishTimeSeriesRowsUpdated(ctx context.Context, spaceID, dat
 		return nil
 	}
 	return s.events.PublishTimeSeriesRowsUpdated(ctx, &pb.TimeSeriesRowsUpdated{
-		BatchId:   xid.New().String(),
+		MessageId: xid.New().String(),
 		WrittenAt: time.Now().UTC().Format(time.RFC3339Nano),
 		SpaceId:   spaceID,
 		DatasetId: datasetID,
@@ -529,7 +529,7 @@ EOF
 
 写清：
 
-- 写入流水 ≠ 事件；字段 `batch_id`/`written_at`/`rows`
+- 写入流水 ≠ 事件；字段 `message_id`/`written_at`/`rows`
 - 稳态不回读；join 靠各 dataset 流水 patch
 - backfill 仅版本构建；默认窗口 `backfill_window`
 - subject：`rows_updated.v1`
