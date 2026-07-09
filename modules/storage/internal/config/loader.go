@@ -72,11 +72,37 @@ type StorageEmbeddedEventBus struct {
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	MetadataServiceName string `yaml:"metadata_service_name"`
-	AccessServiceName   string `yaml:"access_service_name"`
-	BatchSize           int    `yaml:"batch_size"`
-	BatchWaitMS         int    `yaml:"batch_wait_ms"`
-	MaxWorkers          int    `yaml:"max_workers"`
+	MetadataServiceName string              `yaml:"metadata_service_name"`
+	AccessServiceName   string              `yaml:"access_service_name"`
+	BatchSize           int                 `yaml:"batch_size"`
+	BatchWaitMS         int                 `yaml:"batch_wait_ms"`
+	MaxWorkers          int                 `yaml:"max_workers"`
+	Rotation            StorageViewRotation `yaml:"rotation"`
+}
+
+type StorageViewRotation struct {
+	Enabled               *bool                         `yaml:"enabled"`
+	MaxEntries            int                           `yaml:"max_entries"`
+	MinReadyEntries       int                           `yaml:"min_ready_entries"`
+	OverlapWindow         string                        `yaml:"overlap_window"`
+	DefaultBackfillWindow string                        `yaml:"default_backfill_window"`
+	AllowedLag            string                        `yaml:"allowed_lag"`
+	RemoveGraceMS         int                           `yaml:"remove_grace_ms"`
+	TimeSeries            StorageTimeSeriesViewRotation `yaml:"time_series"`
+	Record                StorageRecordViewRotation     `yaml:"record"`
+}
+
+type StorageTimeSeriesViewRotation struct {
+	FreqBackfillWindow map[string]string `yaml:"freq_backfill_window"`
+}
+
+type StorageRecordViewRotation struct {
+	DefaultVersionWindow string `yaml:"default_version_window"`
+	MaxBackfillEntries   int    `yaml:"max_backfill_entries"`
+}
+
+func (r StorageViewRotation) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
 }
 
 // StoragePrimary 保存主存服务访问配置。
@@ -176,6 +202,46 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.View.MaxWorkers <= 0 {
 		c.View.MaxWorkers = 4
+	}
+	if c.View.Rotation.Enabled == nil {
+		enabled := true
+		c.View.Rotation.Enabled = &enabled
+	}
+	if c.View.Rotation.MaxEntries <= 0 {
+		c.View.Rotation.MaxEntries = 200000
+	}
+	if c.View.Rotation.MinReadyEntries <= 0 {
+		c.View.Rotation.MinReadyEntries = 50000
+	}
+	if c.View.Rotation.OverlapWindow == "" {
+		c.View.Rotation.OverlapWindow = "30m"
+	}
+	if c.View.Rotation.DefaultBackfillWindow == "" {
+		c.View.Rotation.DefaultBackfillWindow = "1d"
+	}
+	if c.View.Rotation.AllowedLag == "" {
+		c.View.Rotation.AllowedLag = "2m"
+	}
+	if c.View.Rotation.RemoveGraceMS <= 0 {
+		c.View.Rotation.RemoveGraceMS = 60000
+	}
+	if c.View.Rotation.TimeSeries.FreqBackfillWindow == nil {
+		c.View.Rotation.TimeSeries.FreqBackfillWindow = map[string]string{}
+	}
+	if c.View.Rotation.TimeSeries.FreqBackfillWindow["1m"] == "" {
+		c.View.Rotation.TimeSeries.FreqBackfillWindow["1m"] = "6h"
+	}
+	if c.View.Rotation.TimeSeries.FreqBackfillWindow["1h"] == "" {
+		c.View.Rotation.TimeSeries.FreqBackfillWindow["1h"] = "30d"
+	}
+	if c.View.Rotation.TimeSeries.FreqBackfillWindow["1d"] == "" {
+		c.View.Rotation.TimeSeries.FreqBackfillWindow["1d"] = "730d"
+	}
+	if c.View.Rotation.Record.DefaultVersionWindow == "" {
+		c.View.Rotation.Record.DefaultVersionWindow = "30d"
+	}
+	if c.View.Rotation.Record.MaxBackfillEntries <= 0 {
+		c.View.Rotation.Record.MaxBackfillEntries = 200000
 	}
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":20210"

@@ -32,5 +32,21 @@ storage:
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 2
+    rotation:
+      enabled: true
+      max_entries: 200000
+      min_ready_entries: 50000
+      overlap_window: 30m
+      default_backfill_window: 1d
+      allowed_lag: 2m
+      remove_grace_ms: 60000
+      time_series:
+        freq_backfill_window:
+          1m: 6h
+          1h: 30d
+          1d: 730d
+      record:
+        default_version_window: 30d
+        max_backfill_entries: 200000
   health:
     addr: ":20210"

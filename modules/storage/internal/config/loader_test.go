@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"testing"
+
+	"gopkg.in/yaml.v2"
+)
 
 func TestStorageConfigAppliesHealthDefault(t *testing.T) {
 	var cfg RuntimeConfig
@@ -156,5 +160,85 @@ func TestStorageSplitConfigFilesLoadRolesAndHealth(t *testing.T) {
 				t.Fatalf("Health.Addr = %q, want %q", cfg.Storage.Health.Addr, tt.wantHealth)
 			}
 		})
+	}
+}
+
+func TestStorageViewRotationDefaults(t *testing.T) {
+	var cfg StorageConfig
+	cfg.ApplyDefaults()
+
+	rotation := cfg.View.Rotation
+	if !rotation.IsEnabled() {
+		t.Fatal("rotation enabled = false, want true")
+	}
+	if rotation.MaxEntries != 200000 {
+		t.Fatalf("max entries = %d, want 200000", rotation.MaxEntries)
+	}
+	if rotation.MinReadyEntries != 50000 {
+		t.Fatalf("min ready entries = %d, want 50000", rotation.MinReadyEntries)
+	}
+	if rotation.OverlapWindow != "30m" {
+		t.Fatalf("overlap window = %q, want 30m", rotation.OverlapWindow)
+	}
+	if rotation.TimeSeries.FreqBackfillWindow["1d"] != "730d" {
+		t.Fatalf("1d backfill window = %q, want 730d", rotation.TimeSeries.FreqBackfillWindow["1d"])
+	}
+	if rotation.Record.DefaultVersionWindow != "30d" {
+		t.Fatalf("record version window = %q, want 30d", rotation.Record.DefaultVersionWindow)
+	}
+}
+
+func TestStorageViewRotationYAMLOverrides(t *testing.T) {
+	raw := []byte(`
+storage:
+  view:
+    rotation:
+      enabled: true
+      max_entries: 300000
+      min_ready_entries: 80000
+      overlap_window: 45m
+      default_backfill_window: 2d
+      allowed_lag: 5m
+      remove_grace_ms: 120000
+      time_series:
+        freq_backfill_window:
+          1h: 60d
+          1d: 1095d
+      record:
+        default_version_window: 45d
+        max_backfill_entries: 300000
+`)
+	var cfg RuntimeConfig
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	cfg.ApplyDefaults()
+
+	rotation := cfg.Storage.View.Rotation
+	if rotation.MaxEntries != 300000 {
+		t.Fatalf("max entries = %d, want 300000", rotation.MaxEntries)
+	}
+	if rotation.TimeSeries.FreqBackfillWindow["1h"] != "60d" {
+		t.Fatalf("1h window = %q, want 60d", rotation.TimeSeries.FreqBackfillWindow["1h"])
+	}
+	if rotation.Record.DefaultVersionWindow != "45d" {
+		t.Fatalf("record version window = %q, want 45d", rotation.Record.DefaultVersionWindow)
+	}
+}
+
+func TestStorageViewRotationYAMLDisableKillSwitch(t *testing.T) {
+	raw := []byte(`
+storage:
+  view:
+    rotation:
+      enabled: false
+`)
+	var cfg RuntimeConfig
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	cfg.ApplyDefaults()
+	if cfg.Storage.View.Rotation.IsEnabled() {
+		t.Fatal("rotation enabled = true after explicit false, want false")
 	}
 }
