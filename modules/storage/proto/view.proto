@@ -43,6 +43,10 @@ message QueryTimeSeriesRowsReq {
   repeated SortSpec sorts = 8;
   // page 是分页参数。
   common.Page page = 9;
+  // limit 是预览/TopN 模式的返回上限。大于 0 时忽略 page offset，最多返回 limit 行。
+  uint32 limit = 10;
+  // total_mode 控制是否计算精确总数。
+  common.TotalMode total_mode = 11;
 }
 
 // QueryTimeSeriesRowsRsp 表示时序 View 数据查询结果。

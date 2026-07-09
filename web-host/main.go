@@ -2,6 +2,7 @@ package main
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/md5"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/healthz"
 	_ "github.com/mooyang-code/moox/web-host/internal/statik" // 导入生成的静态资源包
 	"github.com/rakyll/statik/fs"
 )
@@ -18,6 +20,8 @@ import (
 type gatewayConfig struct {
 	ListenAddr string
 }
+
+var webHostStartedAt = time.Now()
 
 func loadGatewayConfig() gatewayConfig {
 	return gatewayConfig{
@@ -200,6 +204,24 @@ func shouldCompress(r *http.Request, path string) bool {
 	return false
 }
 
+func newHTTPHandler(statikFS http.FileSystem) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/healthz", healthz.Handler(func(ctx context.Context) healthz.Response {
+		return healthz.Base("web-host", "web-host", "", "", webHostStartedAt, true)
+	}))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if isAPIRequest(r.URL.Path) {
+			log.Printf("拒绝 API 请求: %s（web-host 仅提供静态资源）", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+
+		// 否则提供静态文件服务，添加缓存和压缩
+		optimizedStaticHandler(statikFS, w, r)
+	})
+	return mux
+}
+
 // 设置正确的Content-Type
 func setContentType(w http.ResponseWriter, path string) {
 	contentTypes := map[string]string{
@@ -243,21 +265,9 @@ func main() {
 
 	cfg := loadGatewayConfig()
 
-	// 设置路由
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if isAPIRequest(r.URL.Path) {
-			log.Printf("拒绝 API 请求: %s（web-host 仅提供静态资源）", r.URL.Path)
-			http.NotFound(w, r)
-			return
-		}
-
-		// 否则提供静态文件服务，添加缓存和压缩
-		optimizedStaticHandler(statikFS, w, r)
-	})
-
 	// 启动服务器
 	log.Printf("服务器启动在 http://localhost%s", cfg.ListenAddr)
 	log.Println("静态文件服务: /")
 	log.Println("API请求不经过web-host，请前端直连网关 /api/admin")
-	log.Fatal(http.ListenAndServe(cfg.ListenAddr, nil))
+	log.Fatal(http.ListenAndServe(cfg.ListenAddr, newHTTPHandler(statikFS)))
 }

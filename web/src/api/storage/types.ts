@@ -35,6 +35,18 @@ export type ColumnOriginType =
 
 export type SortOrder = 'SORT_ORDER_ASC' | 'SORT_ORDER_DESC' | number;
 
+export type TotalMode =
+  | 'AUTO'
+  | 'NONE'
+  | 'FORCE_EXACT'
+  | number;
+
+export type TotalState =
+  | 'UNKNOWN'
+  | 'EXACT'
+  | 'SKIPPED'
+  | number;
+
 export interface RetInfo {
   code: number | string;
   msg: string;
@@ -52,6 +64,7 @@ export interface PageResult {
   total: number;
   has_more: boolean;
   next_cursor: string;
+  total_state?: TotalState;
 }
 
 export interface TimeRange {

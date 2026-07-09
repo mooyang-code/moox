@@ -13,6 +13,20 @@ func TestLoadAppliesPprofAddrFromEnv(t *testing.T) {
 	}
 }
 
+func TestDefaultHealthConfigAndEnvOverride(t *testing.T) {
+	t.Setenv("MOOX_CLOUDNODE_HEALTH_ADDR", "127.0.0.1:16011")
+
+	cfg := Default()
+	if cfg.Health.Addr != ":11411" {
+		t.Fatalf("Health.Addr = %q, want %q", cfg.Health.Addr, ":11411")
+	}
+
+	cfg.applyEnv()
+	if cfg.Health.Addr != "127.0.0.1:16011" {
+		t.Fatalf("Health.Addr = %q, want %q", cfg.Health.Addr, "127.0.0.1:16011")
+	}
+}
+
 func TestDefaultJobItemActiveKVAndHistoryConfig(t *testing.T) {
 	cfg := Default()
 

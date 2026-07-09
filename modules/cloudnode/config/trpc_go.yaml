@@ -6,6 +6,11 @@ server:
   filter:
     - validation
   timeout: 5000
+  admin:
+    ip: 127.0.0.1
+    port: 11941
+    read_timeout: 3000
+    write_timeout: 60000
   service:
     - name: trpc.moox.cloudnode.CloudNodeMgr
       port: 11401

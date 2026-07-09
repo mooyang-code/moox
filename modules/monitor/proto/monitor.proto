@@ -1,0 +1,235 @@
+syntax = "proto3";
+
+package trpc.moox.monitor;
+
+import "moox_common.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen;monitorpb";
+
+enum CheckKind {
+  CHECK_KIND_UNSPECIFIED = 0;
+  CHECK_KIND_HTTP = 1;
+  CHECK_KIND_TCP = 2;
+}
+
+enum CheckStatus {
+  CHECK_STATUS_UNSPECIFIED = 0;
+  CHECK_STATUS_OK = 1;
+  CHECK_STATUS_DEGRADED = 2;
+  CHECK_STATUS_DOWN = 3;
+}
+
+enum AlertStatus {
+  ALERT_STATUS_UNSPECIFIED = 0;
+  ALERT_STATUS_OK = 1;
+  ALERT_STATUS_FIRING = 2;
+  ALERT_STATUS_RESOLVED = 3;
+}
+
+enum AlertEventType {
+  ALERT_EVENT_TYPE_UNSPECIFIED = 0;
+  ALERT_EVENT_TYPE_TRIGGERED = 1;
+  ALERT_EVENT_TYPE_REMINDER = 2;
+  ALERT_EVENT_TYPE_RESOLVED = 3;
+}
+
+message MonitorCheck {
+  string space_id = 1;
+  string check_id = 2;
+  string name = 3;
+  string group_name = 4;
+  CheckKind kind = 5;
+  string url = 6;
+  string method = 7;
+  string headers_json = 8;
+  string body = 9;
+  string tcp_host = 10;
+  int32 tcp_port = 11;
+  int32 interval_seconds = 12;
+  int32 timeout_ms = 13;
+  string expected_status = 14;
+  int32 max_response_ms = 15;
+  string body_contains = 16;
+  bool enabled = 17;
+  string source = 18;
+  string labels_json = 19;
+  string description = 20;
+  string last_checked_at = 21;
+  string next_check_at = 22;
+  string created_at = 23;
+  string updated_at = 24;
+}
+
+message CheckResult {
+  string result_id = 1;
+  string space_id = 2;
+  string check_id = 3;
+  string instance_id = 4;
+  bool success = 5;
+  CheckStatus status = 6;
+  int32 http_status = 7;
+  bool connected = 8;
+  int64 latency_ms = 9;
+  string error_message = 10;
+  string body_excerpt = 11;
+  string checked_at = 12;
+}
+
+message WebhookChannel {
+  string space_id = 1;
+  string webhook_id = 2;
+  string name = 3;
+  string url = 4;
+  string method = 5;
+  string headers_json = 6;
+  string body_template = 7;
+  bool enabled = 8;
+  string created_at = 9;
+  string updated_at = 10;
+}
+
+message AlertRule {
+  string space_id = 1;
+  string rule_id = 2;
+  string check_id = 3;
+  string webhook_id = 4;
+  int32 failure_threshold = 5;
+  int32 success_threshold = 6;
+  int32 minimum_reminder_interval_seconds = 7;
+  bool send_on_resolved = 8;
+  bool enabled = 9;
+  string description = 10;
+  string created_at = 11;
+  string updated_at = 12;
+}
+
+message AlertState {
+  string space_id = 1;
+  string rule_id = 2;
+  string check_id = 3;
+  AlertStatus status = 4;
+  int32 failure_count = 5;
+  int32 success_count = 6;
+  string owner_instance_id = 7;
+  string triggered_at = 8;
+  string resolved_at = 9;
+  string last_reminder_at = 10;
+  string dedupe_key = 11;
+}
+
+message AlertEvent {
+  string event_id = 1;
+  string space_id = 2;
+  string rule_id = 3;
+  string check_id = 4;
+  AlertEventType event_type = 5;
+  AlertStatus status = 6;
+  string owner_instance_id = 7;
+  string message = 8;
+  string payload_json = 9;
+  string created_at = 10;
+}
+
+message MonitorInstance {
+  string instance_id = 1;
+  string base_url = 2;
+  string status = 3;
+  string last_seen_at = 4;
+  string snapshot_json = 5;
+  bool is_local = 6;
+}
+
+message GroupSummary {
+  string group_name = 1;
+  int32 total_checks = 2;
+  int32 healthy_checks = 3;
+  int32 degraded_checks = 4;
+  int32 down_checks = 5;
+}
+
+message Overview {
+  int32 total_checks = 1;
+  int32 healthy_checks = 2;
+  int32 degraded_checks = 3;
+  int32 down_checks = 4;
+  int32 firing_alerts = 5;
+  int32 active_instances = 6;
+  double success_rate_24h = 7;
+  int64 p95_latency_ms = 8;
+  repeated GroupSummary groups = 9;
+}
+
+message ListChecksReq {
+  string space_id = 1;
+  string group_name = 2;
+  string source = 3;
+  common.Page page = 4;
+}
+message ListChecksRsp {
+  common.RetInfo ret_info = 1;
+  repeated MonitorCheck checks = 2;
+  common.PageResult page_result = 3;
+}
+
+message GetCheckReq { string space_id = 1; string check_id = 2; }
+message GetCheckRsp { common.RetInfo ret_info = 1; MonitorCheck check = 2; }
+message CreateCheckReq { MonitorCheck check = 1; }
+message CreateCheckRsp { common.RetInfo ret_info = 1; MonitorCheck check = 2; }
+message UpdateCheckReq { MonitorCheck check = 1; }
+message UpdateCheckRsp { common.RetInfo ret_info = 1; MonitorCheck check = 2; }
+message DeleteCheckReq { string space_id = 1; string check_id = 2; }
+message DeleteCheckRsp { common.RetInfo ret_info = 1; }
+message RunCheckOnceReq { string space_id = 1; string check_id = 2; }
+message RunCheckOnceRsp { common.RetInfo ret_info = 1; CheckResult result = 2; }
+
+message ListResultsReq { string space_id = 1; string check_id = 2; int32 limit = 3; }
+message ListResultsRsp { common.RetInfo ret_info = 1; repeated CheckResult results = 2; }
+message GetOverviewReq { string space_id = 1; }
+message GetOverviewRsp { common.RetInfo ret_info = 1; Overview overview = 2; }
+
+message ListWebhookChannelsReq { string space_id = 1; }
+message ListWebhookChannelsRsp { common.RetInfo ret_info = 1; repeated WebhookChannel channels = 2; }
+message CreateWebhookChannelReq { WebhookChannel channel = 1; }
+message CreateWebhookChannelRsp { common.RetInfo ret_info = 1; WebhookChannel channel = 2; }
+message UpdateWebhookChannelReq { WebhookChannel channel = 1; }
+message UpdateWebhookChannelRsp { common.RetInfo ret_info = 1; WebhookChannel channel = 2; }
+message DeleteWebhookChannelReq { string space_id = 1; string webhook_id = 2; }
+message DeleteWebhookChannelRsp { common.RetInfo ret_info = 1; }
+
+message ListAlertRulesReq { string space_id = 1; string check_id = 2; }
+message ListAlertRulesRsp { common.RetInfo ret_info = 1; repeated AlertRule rules = 2; }
+message CreateAlertRuleReq { AlertRule rule = 1; }
+message CreateAlertRuleRsp { common.RetInfo ret_info = 1; AlertRule rule = 2; }
+message UpdateAlertRuleReq { AlertRule rule = 1; }
+message UpdateAlertRuleRsp { common.RetInfo ret_info = 1; AlertRule rule = 2; }
+message DeleteAlertRuleReq { string space_id = 1; string rule_id = 2; }
+message DeleteAlertRuleRsp { common.RetInfo ret_info = 1; }
+
+message ListAlertEventsReq { string space_id = 1; int32 limit = 2; }
+message ListAlertEventsRsp { common.RetInfo ret_info = 1; repeated AlertEvent events = 2; }
+message ListMonitorInstancesReq {}
+message ListMonitorInstancesRsp { common.RetInfo ret_info = 1; repeated MonitorInstance instances = 2; }
+message SyncSystemChecksReq {}
+message SyncSystemChecksRsp { common.RetInfo ret_info = 1; int32 synced = 2; }
+
+service MonitorMgr {
+  rpc ListChecks(ListChecksReq) returns (ListChecksRsp);
+  rpc GetCheck(GetCheckReq) returns (GetCheckRsp);
+  rpc CreateCheck(CreateCheckReq) returns (CreateCheckRsp);
+  rpc UpdateCheck(UpdateCheckReq) returns (UpdateCheckRsp);
+  rpc DeleteCheck(DeleteCheckReq) returns (DeleteCheckRsp);
+  rpc RunCheckOnce(RunCheckOnceReq) returns (RunCheckOnceRsp);
+  rpc ListResults(ListResultsReq) returns (ListResultsRsp);
+  rpc GetOverview(GetOverviewReq) returns (GetOverviewRsp);
+  rpc ListWebhookChannels(ListWebhookChannelsReq) returns (ListWebhookChannelsRsp);
+  rpc CreateWebhookChannel(CreateWebhookChannelReq) returns (CreateWebhookChannelRsp);
+  rpc UpdateWebhookChannel(UpdateWebhookChannelReq) returns (UpdateWebhookChannelRsp);
+  rpc DeleteWebhookChannel(DeleteWebhookChannelReq) returns (DeleteWebhookChannelRsp);
+  rpc ListAlertRules(ListAlertRulesReq) returns (ListAlertRulesRsp);
+  rpc CreateAlertRule(CreateAlertRuleReq) returns (CreateAlertRuleRsp);
+  rpc UpdateAlertRule(UpdateAlertRuleReq) returns (UpdateAlertRuleRsp);
+  rpc DeleteAlertRule(DeleteAlertRuleReq) returns (DeleteAlertRuleRsp);
+  rpc ListAlertEvents(ListAlertEventsReq) returns (ListAlertEventsRsp);
+  rpc ListMonitorInstances(ListMonitorInstancesReq) returns (ListMonitorInstancesRsp);
+  rpc SyncSystemChecks(SyncSystemChecksReq) returns (SyncSystemChecksRsp);
+}

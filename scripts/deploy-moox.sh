@@ -12,6 +12,7 @@ WITH_WEB_HOST=1
 WITH_CLOUDNODE=1
 WITH_COLLECTOR=1
 WITH_FACTOR=1
+WITH_MONITOR=1
 BUILD_WEB_ASSETS=1
 RESET_DATA=0
 TARGET_GOOS=""
@@ -35,6 +36,7 @@ Options:
   --no-cloudnode                  Do not package/start moox-cloudnode.
   --no-collector                  Do not package/start moox-collector.
   --no-factor                     Do not package/start moox-factor.
+  --no-monitor                    Do not package/start moox-monitor.
   --build-web-assets              Rebuild Vue dist and statik assets before building web-host. Default when web-host is enabled.
   --reuse-web-assets              Reuse current embedded statik assets when building web-host.
   --reset-data                    Remove target data directory before deploying. Use when rebuilding from examples.
@@ -104,6 +106,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-factor)
       WITH_FACTOR=0
+      shift
+      ;;
+    --no-monitor)
+      WITH_MONITOR=0
       shift
       ;;
     --build-web-assets)
@@ -221,6 +227,10 @@ build_core_binaries() {
       TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
         "${ROOT}/scripts/build.sh" factor
     fi
+    if [[ "${WITH_MONITOR}" -eq 1 ]]; then
+      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+        "${ROOT}/scripts/build.sh" monitor
+    fi
     return
   fi
 
@@ -317,6 +327,10 @@ patch_configs() {
     perl -0pi -e 's#path:\s*\./data/factor/factor\.db#path: ../data/factor/factor.db#g' \
       "${STAGE_DIR}/factor/config/app.yaml"
   fi
+  if [[ "${WITH_MONITOR}" -eq 1 ]]; then
+    perl -0pi -e 's#path:\s*\./data/monitor/monitor\.db#path: ../data/monitor/monitor.db#g' \
+      "${STAGE_DIR}/monitor/config/app.yaml"
+  fi
 
   [[ "${WITH_STORAGE}" -eq 1 ]] || return 0
   perl -0pi -e 's#root:\s*\./var/storage#root: ../data/storage#g; s#path:\s*\./var/storage/metadata/storage_metadata\.db#path: ../data/storage/metadata/storage_metadata.db#g; s#pebble_path:\s*\./var/storage/pebble#pebble_path: ../data/storage/pebble#g; s#duckdb_path:\s*\./var/storage/duckdb/views\.duckdb#duckdb_path: ../data/storage/duckdb/views.duckdb#g; s#bleve_path:\s*\./var/storage/bleve#bleve_path: ../data/storage/bleve#g; s#parquet_path:\s*\./var/storage/archive#parquet_path: ../data/storage/archive#g' \
@@ -338,8 +352,10 @@ WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
+WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
+WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
-mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/logs/admin" "${ROOT}/logs/storage" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor"
+mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/storage" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/monitor"
 
 stop_if_running() {
   local name="$1"
@@ -408,6 +424,13 @@ FACTOR_ENV=(
   "MOOX_FACTOR_ADMIN_GATEWAY_URL=${MOOX_FACTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11000}"
   "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-../data/factor/factor.db}"
   "MOOX_FACTOR_NATS_URL=${MOOX_FACTOR_NATS_URL:-nats://127.0.0.1:4222}"
+  "MOOX_SERVICE_AUTH_VERSION=${MOOX_SERVICE_AUTH_VERSION:-moox-auth-v1}"
+  "MOOX_SERVICE_AUTH_ACCESS_KEY=${MOOX_SERVICE_AUTH_ACCESS_KEY:-moox-service}"
+  "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-moox-service-secret-change-me}"
+  "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-1800}"
+)
+
+MONITOR_ENV=(
   "MOOX_SERVICE_AUTH_VERSION=${MOOX_SERVICE_AUTH_VERSION:-moox-auth-v1}"
   "MOOX_SERVICE_AUTH_ACCESS_KEY=${MOOX_SERVICE_AUTH_ACCESS_KEY:-moox-service}"
   "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-moox-service-secret-change-me}"
@@ -499,6 +522,15 @@ init_collector_schema() {
   )
 }
 
+init_monitor_schema() {
+  echo "initializing monitor schema"
+  mkdir -p "${ROOT}/logs/monitor"
+  (
+    cd "${ROOT}/monitor"
+    "${ROOT}/bin/moox-monitor-cli" init --db-path ../data/monitor/monitor.db >> "${ROOT}/logs/monitor/stdout.log" 2>&1
+  )
+}
+
 start_storage() {
   start_service "storage" "${ROOT}/storage" \
     env "${STORAGE_ENV[@]}" "${ROOT}/bin/moox-storage" \
@@ -545,7 +577,21 @@ start_factor() {
     env "${FACTOR_ENV[@]}" "${ROOT}/bin/moox-factor" -conf=config/trpc_go.yaml
 }
 
+start_monitor() {
+  if [[ "${WITH_MONITOR}" != "1" ]]; then
+    echo "monitor is disabled in this deployment package" >&2
+    exit 2
+  fi
+  init_monitor_schema
+  start_service "monitor" "${ROOT}/monitor" \
+    env "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
+}
+
 start_web_host() {
+  if [[ "${WITH_WEB_HOST}" != "1" ]]; then
+    echo "web-host is disabled in this deployment package" >&2
+    exit 2
+  fi
   if [[ ! -x "${ROOT}/bin/moox-web-host" ]]; then
     echo "web-host binary missing; skip" >&2
     return 1
@@ -567,13 +613,18 @@ case "${SERVICE}" in
       start_cloudnode
     fi
     start_admin
+    if [[ "${WITH_MONITOR}" == "1" ]]; then
+      start_monitor
+    fi
     if [[ "${WITH_COLLECTOR}" == "1" ]]; then
       start_collector
     fi
     if [[ "${WITH_FACTOR}" == "1" ]]; then
       start_factor
     fi
-    start_web_host
+    if [[ "${WITH_WEB_HOST}" == "1" ]]; then
+      start_web_host
+    fi
     ;;
   storage)
     if [[ "${WITH_STORAGE}" != "1" ]]; then
@@ -586,10 +637,11 @@ case "${SERVICE}" in
   cloudnode) start_cloudnode ;;
   collector) start_collector ;;
   factor) start_factor ;;
+  monitor) start_monitor ;;
   admin) start_admin ;;
   web-host) start_web_host ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: storage cloudnode collector factor admin web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: storage cloudnode collector factor monitor admin web-host" >&2
     exit 2
     ;;
 esac
@@ -607,6 +659,8 @@ WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
+WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
+WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 
 stop_service() {
   local name="$1"
@@ -653,7 +707,12 @@ stop_service() {
 SERVICE="${1:-}"
 case "${SERVICE}" in
   "")
-    stop_service "web-host"
+    if [[ "${WITH_WEB_HOST}" == "1" ]]; then
+      stop_service "web-host"
+    fi
+    if [[ "${WITH_MONITOR}" == "1" ]]; then
+      stop_service "monitor"
+    fi
     stop_service "admin"
     if [[ "${WITH_COLLECTOR}" == "1" ]]; then
       stop_service "collector"
@@ -675,7 +734,14 @@ case "${SERVICE}" in
     fi
     stop_service "${SERVICE}"
     ;;
-  admin|web-host) stop_service "${SERVICE}" ;;
+  admin) stop_service "${SERVICE}" ;;
+  web-host)
+    if [[ "${WITH_WEB_HOST}" != "1" ]]; then
+      echo "web-host is disabled in this deployment package" >&2
+      exit 2
+    fi
+    stop_service "${SERVICE}"
+    ;;
   cloudnode)
     if [[ "${WITH_CLOUDNODE}" != "1" ]]; then
       echo "cloudnode is disabled in this deployment package" >&2
@@ -697,8 +763,15 @@ case "${SERVICE}" in
     fi
     stop_service "${SERVICE}"
     ;;
+  monitor)
+    if [[ "${WITH_MONITOR}" != "1" ]]; then
+      echo "monitor is disabled in this deployment package" >&2
+      exit 2
+    fi
+    stop_service "${SERVICE}"
+    ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: storage cloudnode collector factor admin web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: storage cloudnode collector factor monitor admin web-host" >&2
     exit 2
     ;;
 esac
@@ -730,8 +803,16 @@ WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
+WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
+WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 
-services=(admin web-host)
+services=(admin)
+if [[ "${WITH_WEB_HOST}" == "1" ]]; then
+  services+=(web-host)
+fi
+if [[ "${WITH_MONITOR}" == "1" ]]; then
+  services=(monitor "${services[@]}")
+fi
 if [[ "${WITH_STORAGE}" == "1" ]]; then
   services=(storage "${services[@]}")
 fi
@@ -769,6 +850,8 @@ WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
+WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
+WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 LOG_FILE="${ROOT}/logs/healthcheck.log"
 
 mkdir -p "${ROOT}/run" "$(dirname "${LOG_FILE}")"
@@ -781,13 +864,18 @@ if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
   default_services+=(cloudnode)
 fi
 default_services+=(admin)
+if [[ "${WITH_MONITOR}" == "1" ]]; then
+  default_services+=(monitor)
+fi
 if [[ "${WITH_COLLECTOR}" == "1" ]]; then
   default_services+=(collector)
 fi
 if [[ "${WITH_FACTOR}" == "1" ]]; then
   default_services+=(factor)
 fi
-default_services+=(web-host)
+if [[ "${WITH_WEB_HOST}" == "1" ]]; then
+  default_services+=(web-host)
+fi
 
 services=("${default_services[@]}")
 if [[ "$#" -gt 0 ]]; then
@@ -831,7 +919,7 @@ ensure_service() {
 ) 9>"${ROOT}/run/healthcheck.lock"
 EOF
 
-  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g" \
+  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
@@ -847,6 +935,7 @@ prepare_stage() {
     "${STAGE_DIR}/factor/config" \
     "${STAGE_DIR}/factor/factors" \
     "${STAGE_DIR}/factor/sections" \
+    "${STAGE_DIR}/monitor/config" \
     "${STAGE_DIR}/examples" \
     "${STAGE_DIR}/data" \
     "${STAGE_DIR}/logs" \
@@ -871,6 +960,10 @@ prepare_stage() {
     copy_required_binary "moox-factor"
     copy_required_binary "moox-factor-cli"
   fi
+  if [[ "${WITH_MONITOR}" -eq 1 ]]; then
+    copy_required_binary "moox-monitor"
+    copy_required_binary "moox-monitor-cli"
+  fi
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     copy_required_binary "moox-storage"
     copy_required_binary "moox-storage-cli"
@@ -891,6 +984,9 @@ prepare_stage() {
     cp -R "${ROOT}/modules/factor/sections/." "${STAGE_DIR}/factor/sections/"
     cp -R "${ROOT}/modules/factor/pyworker" "${STAGE_DIR}/factor/pyworker"
     find "${STAGE_DIR}/factor/pyworker" -type d -name __pycache__ -prune -exec rm -rf {} +
+  fi
+  if [[ "${WITH_MONITOR}" -eq 1 ]]; then
+    cp -R "${ROOT}/modules/monitor/config/." "${STAGE_DIR}/monitor/config/"
   fi
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/storage/config/." "${STAGE_DIR}/storage/config/"
@@ -918,10 +1014,15 @@ sync_local_stage() {
       if [[ "${WITH_FACTOR}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" factor || true
       fi
+      if [[ "${WITH_MONITOR}" -eq 1 ]]; then
+        "${deploy_dir}/stop.sh" monitor || true
+      fi
       if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" cloudnode || true
       fi
-      "${deploy_dir}/stop.sh" web-host || true
+      if [[ "${WITH_WEB_HOST}" -eq 1 ]]; then
+        "${deploy_dir}/stop.sh" web-host || true
+      fi
       "${deploy_dir}/stop.sh" admin || true
     fi
   fi
@@ -944,6 +1045,12 @@ sync_local_stage() {
     if [[ "${WITH_FACTOR}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/factor/' --exclude '/bin/moox-factor' --exclude '/bin/moox-factor-cli')
     fi
+    if [[ "${WITH_MONITOR}" -eq 0 ]]; then
+      rsync_excludes+=(--exclude '/monitor/' --exclude '/bin/moox-monitor' --exclude '/bin/moox-monitor-cli')
+    fi
+    if [[ "${WITH_WEB_HOST}" -eq 0 ]]; then
+      rsync_excludes+=(--exclude '/bin/moox-web-host')
+    fi
     rsync -a --delete \
       "${rsync_excludes[@]}" \
       "${STAGE_DIR}/" "${deploy_dir}/"
@@ -951,7 +1058,10 @@ sync_local_stage() {
     rm -rf "${deploy_dir}/admin" "${deploy_dir}/examples" \
       "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/restart.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh"
     rm -f "${deploy_dir}/bin/moox-admin" "${deploy_dir}/bin/moox-admin-cli" \
-      "${deploy_dir}/bin/moox-cli" "${deploy_dir}/bin/moox-web-host"
+      "${deploy_dir}/bin/moox-cli"
+    if [[ "${WITH_WEB_HOST}" -eq 1 ]]; then
+      rm -f "${deploy_dir}/bin/moox-web-host"
+    fi
     if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/cloudnode"
       rm -f "${deploy_dir}/bin/moox-cloudnode" "${deploy_dir}/bin/moox-cloudnode-cli"
@@ -963,6 +1073,10 @@ sync_local_stage() {
     if [[ "${WITH_FACTOR}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/factor"
       rm -f "${deploy_dir}/bin/moox-factor" "${deploy_dir}/bin/moox-factor-cli"
+    fi
+    if [[ "${WITH_MONITOR}" -eq 1 ]]; then
+      rm -rf "${deploy_dir}/monitor"
+      rm -f "${deploy_dir}/bin/moox-monitor" "${deploy_dir}/bin/moox-monitor-cli"
     fi
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/storage"
@@ -988,7 +1102,7 @@ sync_remote_stage() {
   log "upload ${archive} to ${TARGET}:${remote_archive}"
   scp "${archive}" "${TARGET}:${remote_archive}"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_reset_data
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_reset_data
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -996,9 +1110,11 @@ sync_remote_stage() {
   quoted_with_cloudnode="$(shell_quote "${WITH_CLOUDNODE}")"
   quoted_with_collector="$(shell_quote "${WITH_COLLECTOR}")"
   quoted_with_factor="$(shell_quote "${WITH_FACTOR}")"
+  quoted_with_monitor="$(shell_quote "${WITH_MONITOR}")"
+  quoted_with_web_host="$(shell_quote "${WITH_WEB_HOST}")"
   quoted_reset_data="$(shell_quote "${RESET_DATA}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} RESET_DATA=${quoted_reset_data} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} RESET_DATA=${quoted_reset_data} bash -s" <<'EOF'
 set -euo pipefail
 
 if [[ "${DEPLOY_DIR}" == "~" ]]; then
@@ -1018,10 +1134,15 @@ if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
     if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_FACTOR}" == "1" ]]; then
       "${DEPLOY_DIR}/stop.sh" factor || true
     fi
+    if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_MONITOR}" == "1" ]]; then
+      "${DEPLOY_DIR}/stop.sh" monitor || true
+    fi
     if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_CLOUDNODE}" == "1" ]]; then
       "${DEPLOY_DIR}/stop.sh" cloudnode || true
     fi
-    "${DEPLOY_DIR}/stop.sh" web-host || true
+    if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_WEB_HOST}" == "1" ]]; then
+      "${DEPLOY_DIR}/stop.sh" web-host || true
+    fi
     "${DEPLOY_DIR}/stop.sh" admin || true
   fi
 fi
@@ -1033,7 +1154,14 @@ fi
 rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/examples" \
   "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh"
 rm -f "${DEPLOY_DIR}/bin/moox-admin" "${DEPLOY_DIR}/bin/moox-admin-cli" \
-  "${DEPLOY_DIR}/bin/moox-cli" "${DEPLOY_DIR}/bin/moox-web-host"
+  "${DEPLOY_DIR}/bin/moox-cli"
+if [[ "${WITH_WEB_HOST}" == "1" ]]; then
+  rm -f "${DEPLOY_DIR}/bin/moox-web-host"
+fi
+if [[ "${WITH_MONITOR}" == "1" ]]; then
+  rm -rf "${DEPLOY_DIR}/monitor"
+  rm -f "${DEPLOY_DIR}/bin/moox-monitor" "${DEPLOY_DIR}/bin/moox-monitor-cli"
+fi
 if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/cloudnode"
   rm -f "${DEPLOY_DIR}/bin/moox-cloudnode" "${DEPLOY_DIR}/bin/moox-cloudnode-cli"

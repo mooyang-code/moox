@@ -21,12 +21,16 @@ func TestDefaultFactorConfig(t *testing.T) {
 	if cfg.Engine.Workers <= 0 {
 		t.Fatalf("engine workers = %d, want > 0", cfg.Engine.Workers)
 	}
+	if cfg.Health.Addr != ":11414" {
+		t.Fatalf("health addr = %q", cfg.Health.Addr)
+	}
 }
 
 func TestLoadAppliesFactorEnvOverrides(t *testing.T) {
 	t.Setenv("MOOX_FACTOR_DB_PATH", "./override/factor.db")
 	t.Setenv("MOOX_FACTOR_NATS_URL", "")
 	t.Setenv("MOOX_FACTOR_ENGINE_PYTHON_BIN", "/tmp/factor-python")
+	t.Setenv("MOOX_FACTOR_HEALTH_ADDR", "127.0.0.1:16014")
 
 	path := writeConfig(t, `
 database:
@@ -47,6 +51,9 @@ nats:
 	}
 	if cfg.Engine.PythonBin != "/tmp/factor-python" {
 		t.Fatalf("python bin = %q", cfg.Engine.PythonBin)
+	}
+	if cfg.Health.Addr != "127.0.0.1:16014" {
+		t.Fatalf("health addr = %q", cfg.Health.Addr)
 	}
 }
 

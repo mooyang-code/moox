@@ -12,8 +12,8 @@ import (
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 )
 
-func TestQueryTimeSeriesRowsUsesSpareConnectionWhenOneConnectionIsBusy(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+func TestQueryTimeSeriesRowsUsesExplicitSpareConnectionWhenOneConnectionIsBusy(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb"), MaxOpenConns: 2})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

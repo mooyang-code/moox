@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gorilla/mux"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/packages/healthz"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -22,6 +24,7 @@ import (
 var (
 	gatewayHandleInstance *GatewayHandle
 	gatewayHandleOnce     sync.Once
+	gatewayStartedAt      = time.Now()
 )
 
 // GatewayHandle 网关处理器（保留单例以承载 HTTPRequestHandler）。
@@ -89,6 +92,7 @@ func (hr *HTTPRouter) buildRouter() *mux.Router {
 
 	// 健康检查接口
 	router.HandleFunc("/api/admin/health", hr.handleHealthCheck).Methods("GET")
+	router.HandleFunc("/healthz", hr.handleHealthCheck).Methods("GET")
 	return router
 }
 
@@ -159,11 +163,9 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 
 // handleHealthCheck 处理健康检查请求
 func (hr *HTTPRouter) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "ok",
-		"time":   time.Now().Format("2006-01-02 15:04:05"),
-	})
+	healthz.Handler(func(ctx context.Context) healthz.Response {
+		return healthz.Base("admin", "admin-gateway", "", "", gatewayStartedAt, true)
+	}).ServeHTTP(w, r)
 }
 
 // ============================================================================
@@ -279,6 +281,9 @@ func (h *HTTPRequestHandler) extractGatewayHeaders(r *http.Request) map[string]s
 	}
 	if origin := r.Header.Get("Origin"); origin != "" {
 		headers["origin"] = origin
+	}
+	if acceptEncoding := r.Header.Get("Accept-Encoding"); acceptEncoding != "" {
+		headers["accept_encoding"] = acceptEncoding
 	}
 	// space_id：硬隔离维度，透传给已迁移的 RPC 服务（spacecontext 从 ctx 读取）
 	if spaceID := r.Header.Get("X-Space-Id"); spaceID != "" {

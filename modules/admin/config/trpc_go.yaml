@@ -7,6 +7,11 @@ server:
     - validation
     - cors
   timeout: 5000
+  admin:
+    ip: 127.0.0.1
+    port: 11900
+    read_timeout: 3000
+    write_timeout: 60000
   service:
     - name: trpc.moox.gateway.stdhttp
       port: 11000

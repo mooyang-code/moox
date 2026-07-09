@@ -19,11 +19,14 @@ import (
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
+
+var factorStartedAt = time.Now()
 
 // Initialize loads config and prepares the factor service runtime.
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
@@ -117,9 +120,33 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			factorsvc.WithMetadataSync(meta),
 		))
 	}
+	startHealthServer(ctx, cfg)
 
 	log.InfoContextf(ctx, "moox-factor 初始化完成")
 	return s, nil
+}
+
+func startHealthServer(ctx context.Context, cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	if _, err := healthz.Start(ctx, cfg.Health.Addr, factorHealthSnapshot(cfg)); err != nil {
+		log.ErrorContextf(ctx, "factor health server failed to start: %v", err)
+	}
+}
+
+func factorHealthSnapshot(cfg *Config) healthz.SnapshotFunc {
+	return func(ctx context.Context) healthz.Response {
+		rsp := healthz.Base("factor", cfg.Instance.InstanceID, "", "", factorStartedAt, true)
+		rsp.Details = map[string]any{
+			"database":       "ok",
+			"role":           cfg.Instance.Role,
+			"worker_count":   cfg.Engine.Workers,
+			"nats_enabled":   cfg.NATS.URL != "",
+			"storage_access": cfg.Storage.AccessTarget,
+		}
+		return rsp
+	}
 }
 
 func registerReconcileSchedule(s *server.Server, sched *scheduler.Service) {

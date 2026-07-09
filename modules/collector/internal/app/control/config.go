@@ -17,6 +17,7 @@ type Config struct {
 	CloudNode CloudNodeConfig `yaml:"cloudnode"`
 	Storage   StorageConfig   `yaml:"storage"`
 	SysDeploy SysDeployConfig `yaml:"sysdeploy"`
+	Health    HealthConfig    `yaml:"health"`
 }
 
 // DatabaseConfig describes SQLite settings.
@@ -57,6 +58,11 @@ type ServiceAuthConfig struct {
 	ExpireSeconds int64  `yaml:"expire_seconds"`
 }
 
+// HealthConfig controls the lightweight HTTP health endpoint.
+type HealthConfig struct {
+	Addr string `yaml:"addr"`
+}
+
 var globalConfig *Config
 
 // Load reads YAML config from path.
@@ -88,6 +94,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_ACCESS_TARGET"); v != "" {
 		c.Storage.AccessTarget = v
+	}
+	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
+		c.Health.Addr = v
 	}
 	if v := os.Getenv("MOOX_SERVICE_AUTH_VERSION"); v != "" {
 		c.SysDeploy.ServiceAuth.Version = v
@@ -144,6 +153,9 @@ func Default() *Config {
 				Version:       "moox-auth-v1",
 				ExpireSeconds: 1800,
 			},
+		},
+		Health: HealthConfig{
+			Addr: ":11412",
 		},
 	}
 }

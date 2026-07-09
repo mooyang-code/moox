@@ -39,6 +39,9 @@
             {{ activeView?.active_result ? '已构建' : '未构建' }}
           </a-tag>
           <span v-if="activeView?.active_view_version">活跃版本 {{ activeView.active_view_version }}</span>
+          <span v-if="mode === 'time_series' && hasQueried">
+            已加载 {{ tableRows.length }} 条<span v-if="previewHasMore">+</span>
+          </span>
         </section>
 
         <a-alert v-if="queryError" class="query-alert" type="error" show-icon>{{ queryError }}</a-alert>
@@ -113,7 +116,7 @@
             :bordered="{ cell: true }"
             :loading="loading || contextLoading"
             :data="tableRows"
-            :pagination="tablePagination"
+            :pagination="timeSeriesTablePagination"
             :scroll="{ x: 'max-content', y: 500 }"
             @page-change="onPageChange"
             @page-size-change="onPageSizeChange"
@@ -156,6 +159,34 @@
               </a-table-column>
             </template>
           </a-table>
+          <div v-if="timeSeriesUsesPreviewPager" class="preview-pager">
+            <span class="preview-pager__hint">{{ previewPagerText(VIEW_BROWSE_PREVIEW_LIMIT) }}</span>
+            <div class="preview-pager__actions">
+              <a-tooltip content="上一页">
+                <a-button
+                  size="small"
+                  shape="circle"
+                  :disabled="pagination.current <= 1 || loading || contextLoading"
+                  aria-label="上一页"
+                  @click="onPreviewPrevPage"
+                >
+                  <template #icon><icon-left /></template>
+                </a-button>
+              </a-tooltip>
+              <span class="preview-pager__page">第 {{ pagination.current }} 页</span>
+              <a-tooltip content="下一页">
+                <a-button
+                  size="small"
+                  shape="circle"
+                  :disabled="!previewHasMore || loading || contextLoading"
+                  aria-label="下一页"
+                  @click="onPreviewNextPage"
+                >
+                  <template #icon><icon-right /></template>
+                </a-button>
+              </a-tooltip>
+            </div>
+          </div>
         </section>
 
         <section v-else-if="mode === 'record'" class="result-pane">
@@ -286,7 +317,7 @@ import { TooltipShowRule, TooltipShowType, dispose as disposeKlineChartInstance,
 import type { Chart } from 'klinecharts';
 import { listDatasetColumns, listDatasets, listFactors, listFields, listViewColumns, listViews } from '@/api/storage/metadata';
 import { queryTimeSeriesRows, rebuildRecordView, rebuildTimeSeriesView, searchRecordRows } from '@/api/storage/view';
-import type { Dataset, DatasetColumn, Factor, Field, FieldValueType, RecordRow, View, ViewColumn } from '@/api/storage/types';
+import type { Dataset, DatasetColumn, Factor, Field, FieldValueType, PageResult, RecordRow, TimeSeriesRow, View, ViewColumn } from '@/api/storage/types';
 import { useSpaceStore } from '@/store/modules/space';
 import {
   adaptiveColumnWidth,
@@ -307,7 +338,9 @@ import {
   MAX_KLINE_LIMIT,
   MIN_KLINE_LIMIT,
   normalizeKlineLimit,
+  previewPagerText,
   type KlineChartRecord,
+  usesPreviewPager,
   viewDisplayName,
   viewModeFromPrimaryDataset,
   type ViewFilterOperator,
@@ -397,6 +430,8 @@ const loading = ref(false);
 const rebuildLoading = ref(false);
 const queryError = ref('');
 const hasQueried = ref(false);
+const previewHasMore = ref(false);
+const timeSeriesPageResult = ref<PageResult>();
 const klineVisible = ref(false);
 const klineChartHost = ref<HTMLElement>();
 const klineSubjectId = ref('');
@@ -410,10 +445,14 @@ let klineChart: Chart | null = null;
 let klineResizeObserver: ResizeObserver | null = null;
 let klinePlaybackTimer: ReturnType<typeof setInterval> | null = null;
 const KLINE_PLAYBACK_INTERVAL_MS = 320;
+const VIEW_BROWSE_PREVIEW_LIMIT = 1000;
+const VIEW_BROWSE_PREVIEW_WINDOW_DAYS = 7;
+const DEFAULT_VIEW_PAGE_SIZE = 25;
+const KLINE_COLUMN_BASENAMES = ['open_time', 'open', 'high', 'low', 'close', 'volume'];
 
 const pagination = reactive({
   current: 1,
-  pageSize: 50,
+  pageSize: DEFAULT_VIEW_PAGE_SIZE,
   total: 0,
 });
 
@@ -465,10 +504,22 @@ const tablePagination = computed(() => ({
   showPageSize: true,
   showJumper: true,
   hideOnSinglePage: false,
-  pageSizeOptions: [20, 50, 100, 200],
+  pageSizeOptions: [25, 50, 100, 200],
 }));
 
+const timeSeriesUsesPreviewPager = computed(() => usesPreviewPager(timeSeriesPageResult.value));
+const timeSeriesTablePagination = computed(() => (timeSeriesUsesPreviewPager.value ? false : tablePagination.value));
+
 const preferredColumnNames = computed(() => viewColumns.value.map((item) => item.column_name).filter(Boolean));
+const klineColumnNames = computed(() => {
+  const names = preferredColumnNames.value;
+  const out: string[] = [];
+  for (const basename of KLINE_COLUMN_BASENAMES) {
+    const matched = names.find((name) => name === basename || name.endsWith(`.${basename}`));
+    if (matched) out.push(matched);
+  }
+  return out;
+});
 const columnLabels = computed(() =>
   buildViewColumnLabels(viewColumns.value, datasetColumns.value, fields.value, factors.value, datasets.value, activeView.value),
 );
@@ -619,6 +670,8 @@ function clearViewState() {
   closeKlineModal();
   queryError.value = '';
   hasQueried.value = false;
+  previewHasMore.value = false;
+  timeSeriesPageResult.value = undefined;
   pagination.current = 1;
   pagination.total = 0;
 }
@@ -672,12 +725,17 @@ async function loadTimeSeriesViewRows() {
   loading.value = true;
   queryError.value = '';
   try {
+    const timeRange = defaultTimeSeriesPreviewRange();
     const rsp = await queryTimeSeriesRows({
       space_id,
       view_id: view.view_id,
+      ...(timeRange ? { time_range: timeRange } : {}),
+      ...(preferredColumnNames.value.length > 0 ? { column_names: preferredColumnNames.value } : {}),
       filters: activeFilterExprs(),
       sorts: buildViewSorts(sortState),
+      limit: VIEW_BROWSE_PREVIEW_LIMIT,
       page: { page: pagination.current, size: pagination.pageSize },
+      total_mode: 'NONE',
     });
     const rows = rsp.rows || [];
     tableRows.value = timeSeriesRowsToTableRows(rows).map((row, index) => ({
@@ -685,12 +743,16 @@ async function loadTimeSeriesViewRows() {
       freq: rows[index]?.key?.freq || '-',
     }));
     tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
-    pagination.total = rsp.page_result?.total || rows.length;
+    timeSeriesPageResult.value = rsp.page_result;
+    previewHasMore.value = !!rsp.page_result?.has_more;
+    pagination.total = usesPreviewPager(rsp.page_result) ? 0 : (rsp.page_result?.total ?? rows.length);
     hasQueried.value = true;
   } catch (error) {
     queryError.value = error instanceof Error ? error.message : '查询时序视图失败';
     tableRows.value = [];
     pagination.total = 0;
+    previewHasMore.value = false;
+    timeSeriesPageResult.value = undefined;
     hasQueried.value = true;
     Message.error(queryError.value);
   } finally {
@@ -716,12 +778,16 @@ async function loadRecordViewRows() {
     const rows = rsp.rows || [];
     tableRows.value = recordRowsToTableRows(rows);
     tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
-    pagination.total = rsp.page_result?.total || rows.length;
+    pagination.total = rsp.page_result?.total ?? rows.length;
+    previewHasMore.value = false;
+    timeSeriesPageResult.value = undefined;
     hasQueried.value = true;
   } catch (error) {
     queryError.value = error instanceof Error ? error.message : '查询记录视图失败';
     tableRows.value = [];
     pagination.total = 0;
+    previewHasMore.value = false;
+    timeSeriesPageResult.value = undefined;
     hasQueried.value = true;
     Message.error(queryError.value);
   } finally {
@@ -770,11 +836,6 @@ async function resetQueryControls() {
 }
 
 function resetSortState() {
-  if (mode.value === 'time_series') {
-    sortState.fieldName = 'data_time';
-    sortState.direction = 'desc';
-    return;
-  }
   sortState.fieldName = '';
   sortState.direction = '';
 }
@@ -835,6 +896,30 @@ function activeFilterExprs() {
   );
 }
 
+function defaultTimeSeriesPreviewRange() {
+  if (hasActiveDataTimeFilter()) return undefined;
+  const end = new Date(Date.now() + 5 * 60 * 1000);
+  const start = new Date(end.getTime() - VIEW_BROWSE_PREVIEW_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  return {
+    start_time: start.toISOString(),
+    end_time: end.toISOString(),
+  };
+}
+
+function hasActiveDataTimeFilter() {
+  return filters.value.some((filter) => filter.fieldName.trim() === 'data_time' && hasFilterInput(filter));
+}
+
+function hasFilterInput(filter: ViewFilterState) {
+  if (filter.operator === 'empty' || filter.operator === 'not_empty') {
+    return true;
+  }
+  if (filter.operator === 'range') {
+    return !!(filter.startValue || '').trim() || !!(filter.endValue || '').trim();
+  }
+  return !!(filter.value || '').trim();
+}
+
 function filterValueType(fieldName: string): FieldValueType {
   return filterFieldOptions.value.find((item) => item.value === fieldName)?.valueType || 'FIELD_VALUE_TYPE_STRING';
 }
@@ -847,6 +932,18 @@ async function onPageChange(page: number) {
 async function onPageSizeChange(pageSize: number) {
   pagination.pageSize = pageSize;
   pagination.current = 1;
+  await reloadRows();
+}
+
+async function onPreviewPrevPage() {
+  if (pagination.current <= 1 || loading.value || contextLoading.value) return;
+  pagination.current -= 1;
+  await reloadRows();
+}
+
+async function onPreviewNextPage() {
+  if (!previewHasMore.value || loading.value || contextLoading.value) return;
+  pagination.current += 1;
   await reloadRows();
 }
 
@@ -942,14 +1039,25 @@ async function loadKlineRecords(subjectId: string) {
 
 async function fetchKlineTableRows(viewId: string): Promise<ViewBrowseTableRow[]> {
   const space_id = spaceStore.requireSpaceId();
-  const rsp = await queryTimeSeriesRows({
-    space_id,
-    view_id: viewId,
-    filters: activeFilterExprs(),
-    sorts: buildKlineQuerySorts(),
-    page: { page: 1, size: normalizedKlineLimit.value },
-  });
-  const rows = rsp.rows || [];
+  const timeRange = defaultTimeSeriesPreviewRange();
+  const rows: TimeSeriesRow[] = [];
+  const limit = normalizedKlineLimit.value;
+  for (let pageNo = 1; rows.length < limit; pageNo += 1) {
+    const rsp = await queryTimeSeriesRows({
+      space_id,
+      view_id: viewId,
+      ...(timeRange ? { time_range: timeRange } : {}),
+      ...(klineColumnNames.value.length > 0 ? { column_names: klineColumnNames.value } : {}),
+      filters: activeFilterExprs(),
+      sorts: buildKlineQuerySorts(),
+      limit,
+      page: { page: pageNo, size: DEFAULT_VIEW_PAGE_SIZE },
+      total_mode: 'NONE',
+    });
+    const pageRows = rsp.rows || [];
+    rows.push(...pageRows);
+    if (!rsp.page_result?.has_more || pageRows.length === 0) break;
+  }
   return timeSeriesRowsToTableRows(rows).map((row, index) => ({
     ...row,
     freq: rows[index]?.key?.freq || '-',
@@ -1303,6 +1411,34 @@ watch(klineVisible, (visible) => {
 
 .result-pane :deep(.arco-pagination) {
   margin-top: 12px;
+}
+
+.preview-pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 12px;
+  color: var(--color-text-2);
+  font-size: 13px;
+}
+
+.preview-pager__hint {
+  min-width: 0;
+}
+
+.preview-pager__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.preview-pager__page {
+  min-width: 58px;
+  text-align: center;
+  color: var(--color-text-1);
+  font-weight: 600;
 }
 
 .record-search-bar {

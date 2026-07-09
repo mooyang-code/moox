@@ -179,6 +179,12 @@ export const staticRoutes = [
         meta: { title: "trading-orders" }
       },
       {
+        path: "/ops/service-monitor",
+        name: "ops-service-monitor",
+        component: () => import("@/views/ops/service-monitor/index.vue"),
+        meta: { title: "ops-service-monitor" }
+      },
+      {
         path: "/ops/resource-monitor",
         name: "ops-resource-monitor",
         component: () => import("@/views/container/resource-monitor/resource-monitor.vue"),

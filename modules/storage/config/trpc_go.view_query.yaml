@@ -1,0 +1,62 @@
+global:
+  namespace: Development
+  env_name: test
+
+server:
+  filter:
+    - validation
+    - cors
+  timeout: 5000
+  admin:
+    ip: 127.0.0.1
+    port: 20002
+    read_timeout: 3000
+    write_timeout: 60000
+  service:
+    - name: trpc.moox.storage.DataView.trpc
+      port: 20103
+      network: tcp
+      protocol: trpc
+      timeout: 30000
+    - name: trpc.moox.storage.DataView.http
+      port: 20202
+      network: tcp
+      protocol: http
+      timeout: 30000
+
+client:
+  filter:
+    - validation
+  service:
+    - name: trpc.moox.storage.Access
+      target: ip://127.0.0.1:20201
+      network: tcp
+      protocol: http
+      timeout: 3000
+    - name: trpc.moox.storage.Metadata
+      target: ip://127.0.0.1:20200
+      network: tcp
+      protocol: http
+      timeout: 3000
+
+plugins:
+  auth:
+    cors:
+      apply_to_all_path:
+        - insecure_allow_all
+    validation:
+      enable_error_log: true
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  log:
+    default:
+      - writer: file
+        level: info
+        writer_config:
+          log_path: ./logs
+          filename: trpc.log
+          roll_type: size
+          max_age: 7
+          max_size: 10
+          max_backups: 5
+          compress: false

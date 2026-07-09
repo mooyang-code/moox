@@ -10,11 +10,14 @@ use (
 	./modules/collector/proto/collectorgen
 	./modules/factor
 	./modules/factor/proto/factorgen
+	./modules/monitor
+	./modules/monitor/proto/monitorgen
 	./modules/storage
 	./modules/storage/proto/gen
 	./modules/trade
 	./modules/trade/proto/tradegen
 	./packages/cloudruntime
 	./packages/commonpb
+	./packages/healthz
 	./web-host
 )

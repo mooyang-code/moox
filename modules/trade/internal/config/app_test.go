@@ -16,4 +16,17 @@ func TestDefaultConfigIncludesSyncDefaults(t *testing.T) {
 	if cfg.Sync.MaxSymbolsPerRun != 10 {
 		t.Fatalf("MaxSymbolsPerRun=%d, want 10", cfg.Sync.MaxSymbolsPerRun)
 	}
+	if cfg.Health.Addr != ":11210" {
+		t.Fatalf("Health.Addr=%q, want :11210", cfg.Health.Addr)
+	}
+}
+
+func TestLoadAppliesHealthAddrFromEnv(t *testing.T) {
+	t.Setenv("MOOX_TRADE_HEALTH_ADDR", "127.0.0.1:16210")
+
+	cfg := DefaultConfig()
+	cfg.applyEnv()
+	if cfg.Health.Addr != "127.0.0.1:16210" {
+		t.Fatalf("Health.Addr=%q, want 127.0.0.1:16210", cfg.Health.Addr)
+	}
 }

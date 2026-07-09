@@ -22,6 +22,9 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if req.GetViewId() == "" {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, errText("view_id is required"))}, nil
 	}
+	if err := view.ValidateTimeSeriesQueryOptions(req); err != nil {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	view, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil

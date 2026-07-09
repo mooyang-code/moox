@@ -1,0 +1,159 @@
+package repository
+
+import (
+	"context"
+	"slices"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"gorm.io/gorm"
+)
+
+type CheckRepository struct {
+	db *gorm.DB
+}
+
+type ListChecksOptions struct {
+	SpaceID   string
+	GroupName string
+	Source    string
+	Enabled   *bool
+	Page      Page
+}
+
+func NewCheckRepository(db *gorm.DB) *CheckRepository {
+	return &CheckRepository{db: db}
+}
+
+func (r *CheckRepository) Create(ctx context.Context, check *domain.Check) error {
+	return r.db.WithContext(ctx).Create(check).Error
+}
+
+func (r *CheckRepository) Get(ctx context.Context, spaceID, checkID string) (*domain.Check, error) {
+	var check domain.Check
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_check_id = ? AND c_is_deleted = 0", spaceID, checkID).
+		First(&check).Error
+	if err != nil {
+		return nil, err
+	}
+	return &check, nil
+}
+
+func (r *CheckRepository) Update(ctx context.Context, check *domain.Check) error {
+	return r.db.WithContext(ctx).
+		Model(&domain.Check{}).
+		Where("c_space_id = ? AND c_check_id = ? AND c_is_deleted = 0", check.SpaceID, check.CheckID).
+		Updates(map[string]any{
+			"c_name":             check.Name,
+			"c_group_name":       check.GroupName,
+			"c_kind":             check.Kind,
+			"c_url":              check.URL,
+			"c_method":           check.Method,
+			"c_headers":          check.Headers,
+			"c_body":             check.Body,
+			"c_tcp_host":         check.TCPHost,
+			"c_tcp_port":         check.TCPPort,
+			"c_interval_seconds": check.IntervalSeconds,
+			"c_timeout_ms":       check.TimeoutMS,
+			"c_expected_status":  check.ExpectedStatus,
+			"c_max_response_ms":  check.MaxResponseMS,
+			"c_body_contains":    check.BodyContains,
+			"c_enabled":          check.Enabled,
+			"c_source":           check.Source,
+			"c_labels":           check.Labels,
+			"c_description":      check.Description,
+			"c_last_checked_at":  check.LastCheckedAt,
+			"c_next_check_at":    check.NextCheckAt,
+		}).Error
+}
+
+func (r *CheckRepository) Delete(ctx context.Context, spaceID, checkID string) error {
+	return r.db.WithContext(ctx).
+		Model(&domain.Check{}).
+		Where("c_space_id = ? AND c_check_id = ? AND c_is_deleted = 0", spaceID, checkID).
+		Updates(map[string]any{"c_is_deleted": true}).Error
+}
+
+func (r *CheckRepository) DisableSysDeployChecksExcept(ctx context.Context, spaceID string, keepIDs map[string]struct{}) (int64, error) {
+	q := r.db.WithContext(ctx).
+		Model(&domain.Check{}).
+		Where("c_space_id = ? AND c_source = ? AND c_is_deleted = 0 AND c_enabled = 1", spaceID, domain.CheckSourceSysDeploy)
+	if len(keepIDs) > 0 {
+		ids := make([]string, 0, len(keepIDs))
+		for id := range keepIDs {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
+		q = q.Where("c_check_id NOT IN ?", ids)
+	}
+	tx := q.Update("c_enabled", false)
+	return tx.RowsAffected, tx.Error
+}
+
+func (r *CheckRepository) List(ctx context.Context, opts ListChecksOptions) ([]domain.Check, error) {
+	q := r.applyFilters(r.db.WithContext(ctx), opts)
+	var checks []domain.Check
+	err := q.Order("c_group_name ASC, c_name ASC").
+		Limit(opts.Page.limit()).
+		Offset(opts.Page.offset()).
+		Find(&checks).Error
+	return checks, err
+}
+
+func (r *CheckRepository) Count(ctx context.Context, opts ListChecksOptions) (int64, error) {
+	var total int64
+	err := r.applyFilters(r.db.WithContext(ctx).Model(&domain.Check{}), opts).Count(&total).Error
+	return total, err
+}
+
+func (r *CheckRepository) applyFilters(q *gorm.DB, opts ListChecksOptions) *gorm.DB {
+	q = q.Where("c_is_deleted = 0")
+	if opts.SpaceID != "" {
+		q = q.Where("c_space_id = ?", opts.SpaceID)
+	}
+	if opts.GroupName != "" {
+		q = q.Where("c_group_name = ?", opts.GroupName)
+	}
+	if opts.Source != "" {
+		q = q.Where("c_source = ?", opts.Source)
+	}
+	if opts.Enabled != nil {
+		q = q.Where("c_enabled = ?", *opts.Enabled)
+	}
+	return q
+}
+
+func (r *CheckRepository) ListDue(ctx context.Context, now time.Time, limit int) ([]domain.Check, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var candidates []domain.Check
+	err := r.db.WithContext(ctx).
+		Where("c_is_deleted = 0 AND c_enabled = 1").
+		Order("c_next_check_at ASC, c_id ASC").
+		Find(&candidates).Error
+	if err != nil {
+		return nil, err
+	}
+	checks := make([]domain.Check, 0, min(limit, len(candidates)))
+	for _, check := range candidates {
+		if check.NextCheckAt == nil || !check.NextCheckAt.After(now) {
+			checks = append(checks, check)
+			if len(checks) >= limit {
+				break
+			}
+		}
+	}
+	return checks, nil
+}
+
+func (r *CheckRepository) MarkChecked(ctx context.Context, spaceID, checkID string, checkedAt, nextAt time.Time) error {
+	return r.db.WithContext(ctx).
+		Model(&domain.Check{}).
+		Where("c_space_id = ? AND c_check_id = ? AND c_is_deleted = 0", spaceID, checkID).
+		Updates(map[string]any{
+			"c_last_checked_at": checkedAt,
+			"c_next_check_at":   nextAt,
+		}).Error
+}

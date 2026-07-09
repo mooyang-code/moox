@@ -21,6 +21,7 @@ type Config struct {
 	Scheduler SchedulerConfig `yaml:"scheduler"`
 	Instance  InstanceConfig  `yaml:"instance"`
 	SysDeploy SysDeployConfig `yaml:"sysdeploy"`
+	Health    HealthConfig    `yaml:"health"`
 }
 
 // DatabaseConfig describes local SQLite settings.
@@ -86,6 +87,11 @@ type ServiceAuthConfig struct {
 	AccessKey     string `yaml:"access_key"`
 	SecretKey     string `yaml:"secret_key"`
 	ExpireSeconds int64  `yaml:"expire_seconds"`
+}
+
+// HealthConfig controls the lightweight HTTP health endpoint.
+type HealthConfig struct {
+	Addr string `yaml:"addr"`
 }
 
 var globalConfig *Config
@@ -155,6 +161,9 @@ func Default() *Config {
 				Version:       "moox-auth-v1",
 				ExpireSeconds: 1800,
 			},
+		},
+		Health: HealthConfig{
+			Addr: ":11414",
 		},
 	}
 }
@@ -244,6 +253,9 @@ func (c *Config) applyDefaults() {
 	if c.SysDeploy.ServiceAuth.ExpireSeconds == 0 {
 		c.SysDeploy.ServiceAuth.ExpireSeconds = 1800
 	}
+	if c.Health.Addr == "" {
+		c.Health.Addr = ":11414"
+	}
 }
 
 func (c *Config) applyEnv() {
@@ -275,6 +287,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_FACTOR_ADMIN_GATEWAY_URL"); v != "" {
 		c.SysDeploy.AdminGatewayURL = v
+	}
+	if v := os.Getenv("MOOX_FACTOR_HEALTH_ADDR"); v != "" {
+		c.Health.Addr = v
 	}
 	if v := os.Getenv("MOOX_SERVICE_AUTH_VERSION"); v != "" {
 		c.SysDeploy.ServiceAuth.Version = v

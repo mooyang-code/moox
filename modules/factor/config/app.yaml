@@ -44,3 +44,6 @@ sysdeploy:
     access_key: moox-service
     secret_key: moox-service-secret-change-me
     expire_seconds: 1800
+
+health:
+  addr: ":11414"

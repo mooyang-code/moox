@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/codec"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 )
+
+const minGzipForwardResponseBytes = 1024
 
 // setForwardCommonHeaders 设置透传响应的公共头（CORS + 暴露 trpc 错误头供前端读取）。
 func setForwardCommonHeaders(w http.ResponseWriter, origin string) {
@@ -87,7 +90,41 @@ func writeForwardResponse(w http.ResponseWriter, respBody []byte, headers map[st
 	if traceID := headers["trace_id"]; traceID != "" {
 		w.Header().Set("X-Trace-Id", traceID)
 	}
+	if shouldGzipForwardResponse(respBody, headers["accept_encoding"]) {
+		w.Header().Set("Content-Encoding", "gzip")
+		addVaryHeader(w, "Accept-Encoding")
+		zw := gzip.NewWriter(w)
+		_, _ = zw.Write(respBody)
+		_ = zw.Close()
+		return
+	}
 	w.Write(respBody)
+}
+
+func shouldGzipForwardResponse(respBody []byte, acceptEncoding string) bool {
+	if len(respBody) < minGzipForwardResponseBytes {
+		return false
+	}
+	for _, encoding := range strings.Split(acceptEncoding, ",") {
+		if strings.EqualFold(strings.TrimSpace(strings.SplitN(encoding, ";", 2)[0]), "gzip") {
+			return true
+		}
+	}
+	return false
+}
+
+func addVaryHeader(w http.ResponseWriter, value string) {
+	current := w.Header().Get("Vary")
+	if current == "" {
+		w.Header().Set("Vary", value)
+		return
+	}
+	for _, part := range strings.Split(current, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), value) {
+			return
+		}
+	}
+	w.Header().Set("Vary", current+", "+value)
 }
 
 // writeForwardError 把 trpc 框架错误转写为前端可读的响应。

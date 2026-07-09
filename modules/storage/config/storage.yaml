@@ -18,6 +18,12 @@ storage:
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
     consumer_name: storage_view
+    max_age_hours: 24
+    max_msgs: 500000
+    max_bytes: 268435456
+    max_in_flight: 128
+    ack_wait_ms: 120000
+    max_deliver: 10
     embedded:
       enabled: false
   view:
@@ -25,4 +31,6 @@ storage:
     access_service_name: trpc.moox.storage.Access
     batch_size: 500
     batch_wait_ms: 200
-    max_workers: 4
+    max_workers: 2
+  health:
+    addr: ":20210"

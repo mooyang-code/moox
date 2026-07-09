@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"gopkg.in/yaml.v2"
 )
 
@@ -33,5 +34,35 @@ func TestStorageTRPCConfigServiceNamesAreUnique(t *testing.T) {
 			t.Fatalf("duplicate server service name %q shadows an earlier listener", service.Name)
 		}
 		seen[service.Name] = true
+	}
+}
+
+func storageConfigWithRoles(roles ...string) storageconfig.StorageConfig {
+	return storageconfig.StorageConfig{Roles: roles}
+}
+
+func TestStorageSplitViewRolePredicates(t *testing.T) {
+	tests := []struct {
+		name        string
+		roles       []string
+		wantQuery   bool
+		wantBuilder bool
+	}{
+		{name: "legacy view", roles: []string{"view"}, wantQuery: true, wantBuilder: true},
+		{name: "query only", roles: []string{"view_query"}, wantQuery: true},
+		{name: "builder only", roles: []string{"view_builder"}, wantBuilder: true},
+		{name: "access only", roles: []string{"access"}},
+		{name: "all", roles: []string{"all"}, wantQuery: true, wantBuilder: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := storageConfigWithRoles(tt.roles...)
+			if got := shouldRegisterViewQueryRole(cfg); got != tt.wantQuery {
+				t.Fatalf("shouldRegisterViewQueryRole = %v, want %v", got, tt.wantQuery)
+			}
+			if got := shouldStartViewBuilderRole(cfg); got != tt.wantBuilder {
+				t.Fatalf("shouldStartViewBuilderRole = %v, want %v", got, tt.wantBuilder)
+			}
+		})
 	}
 }

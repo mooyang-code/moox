@@ -6,9 +6,19 @@ type AuthInfo = commonpb.AuthInfo
 type RetInfo = commonpb.RetInfo
 type Page = commonpb.Page
 type PageResult = commonpb.PageResult
+type TotalMode = commonpb.TotalMode
+type TotalState = commonpb.TotalState
 type ErrorCode = commonpb.ErrorCode
 
 const (
+	TotalMode_AUTO        = commonpb.TotalMode_AUTO
+	TotalMode_NONE        = commonpb.TotalMode_NONE
+	TotalMode_FORCE_EXACT = commonpb.TotalMode_FORCE_EXACT
+
+	TotalState_UNKNOWN = commonpb.TotalState_UNKNOWN
+	TotalState_EXACT   = commonpb.TotalState_EXACT
+	TotalState_SKIPPED = commonpb.TotalState_SKIPPED
+
 	ErrorCode_SUCCESS                        = commonpb.ErrorCode_SUCCESS
 	ErrorCode_INVALID_PARAM                  = commonpb.ErrorCode_INVALID_PARAM
 	ErrorCode_NO_AUTH                        = commonpb.ErrorCode_NO_AUTH

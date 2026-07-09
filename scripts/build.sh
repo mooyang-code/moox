@@ -85,6 +85,8 @@ case "${TARGET_MODULE}" in
     build_go modules/factor ./cmd/cli moox-factor-cli 0
     build_go modules/trade ./cmd/server moox-trade 0
     build_go modules/trade ./cmd/cli moox-trade-cli 0
+    build_go modules/monitor ./cmd/server moox-monitor 0
+    build_go modules/monitor ./cmd/cli moox-monitor-cli 0
     build_storage
     build_storage_cli
     ;;
@@ -132,6 +134,13 @@ case "${TARGET_MODULE}" in
     ;;
   storage-cli)
     build_storage_cli
+    ;;
+  monitor)
+    build_go modules/monitor ./cmd/server moox-monitor 0
+    build_go modules/monitor ./cmd/cli moox-monitor-cli 0
+    ;;
+  monitor-cli)
+    build_go modules/monitor ./cmd/cli moox-monitor-cli 0
     ;;
   web-host)
     build_web_host

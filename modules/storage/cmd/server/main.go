@@ -21,11 +21,14 @@ import (
 	viewbuilder "github.com/mooyang-code/moox/modules/storage/internal/services/view/builder"
 	searchsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/mooyang-code/moox/packages/healthz"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
+
+var storageStartedAt = time.Now()
 
 func init() {
 	registerStorageFlags(flag.CommandLine)
@@ -48,11 +51,10 @@ func main() {
 	frameworkConfigPath := configPathFromArgs(os.Args)
 	storageConfigPath := storageConfigPathFromArgs(os.Args, frameworkConfigPath)
 	cfg := loadRuntimeConfig(storageConfigPath)
-	opts := storageOptionsFromConfig(cfg.Storage)
 	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
-		cfg.Storage.Root = root
-		opts.Root = root
+		cfg.Storage.ApplyHomeRoot(root)
 	}
+	opts := storageOptionsFromConfig(cfg.Storage)
 	if err := validateStorageDeployment(cfg.Storage); err != nil {
 		log.Errorf("storage deployment config invalid: %v", err)
 		os.Exit(1)
@@ -102,7 +104,7 @@ func main() {
 		pb.RegisterAccessService(s, storageService)
 	}
 
-	if cfg.Storage.HasRole("view") {
+	if shouldRegisterViewQueryRole(cfg.Storage) || shouldStartViewBuilderRole(cfg.Storage) {
 		viewRuntime, err := registerViewRole(s, cfg.Storage, opts, storageService, accessReader)
 		if err != nil {
 			log.Errorf("初始化 ViewService 失败: %v", err)
@@ -146,6 +148,7 @@ func main() {
 		}()
 		pb.RegisterPrimaryStoreService(s, primaryService)
 	}
+	startStorageHealthServer(trpc.BackgroundContext(), cfg.Storage)
 	// 启动trpc服务器
 	log.Infof("Storage roles %v serving", cfg.Storage.Roles)
 	if err := s.Serve(); err != nil {
@@ -196,6 +199,55 @@ func (r *archiveRuntime) Close() error {
 	return nil
 }
 
+func startStorageHealthServer(ctx context.Context, storage storageconfig.StorageConfig) {
+	if _, err := healthz.Start(ctx, storage.Health.Addr, storageHealthSnapshot(storage)); err != nil {
+		log.Errorf("storage health server failed to start: %v", err)
+	}
+}
+
+func storageHealthSnapshot(storage storageconfig.StorageConfig) healthz.SnapshotFunc {
+	return func(ctx context.Context) healthz.Response {
+		serviceName := storageServiceName(storage)
+		roleSummary := storageRoleSummary(storage)
+		rsp := healthz.Base("storage", serviceName, "", "", storageStartedAt, true)
+		rsp.Service = serviceName
+		rsp.Details = map[string]any{
+			"service":          serviceName,
+			"role":             roleSummary,
+			"roles":            roleSummary,
+			"root":             storage.Root,
+			"eventbus_type":    storage.EventBus.Type,
+			"metadata_path":    storage.Metadata.Path,
+			"view_max_workers": storage.View.MaxWorkers,
+			"primary_service":  storage.Primary.ServiceName,
+		}
+		return rsp
+	}
+}
+
+func storageServiceName(storage storageconfig.StorageConfig) string {
+	roleSummary := storageRoleSummary(storage)
+	switch roleSummary {
+	case "view_query":
+		return "storage-view-query"
+	case "view_builder":
+		return "storage-view-builder"
+	case "access":
+		return "storage-access"
+	case "access,view", "view":
+		return "storage"
+	default:
+		if roleSummary == "" {
+			return "storage"
+		}
+		return "storage-" + strings.ReplaceAll(strings.ReplaceAll(roleSummary, "_", "-"), ",", "-")
+	}
+}
+
+func storageRoleSummary(storage storageconfig.StorageConfig) string {
+	return strings.Join(storage.Roles, ",")
+}
+
 func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, opts storagesvc.Options, storageService *storagesvc.Service, accessReader viewbuilder.AccessReader) (*viewRuntime, error) {
 	viewStore, err := openViewStore(storage)
 	if err != nil {
@@ -207,34 +259,48 @@ func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, opt
 		BlevePath: storage.Devices.BlevePath,
 		Metadata:  viewMetadata,
 	})
-	viewBuilder := view.NewBuilder(view.Options{
-		Metadata: viewMetadata,
-		Facts:    accessReader,
-		Records:  accessReader,
-		Views:    viewStore,
-		Search:   searchService,
-	})
-	view.SetDefaultBuilder(viewBuilder)
-	viewService := view.NewService(view.ServiceOptions{
-		Metadata: viewMetadata,
-		Views:    viewStore,
-		Search:   searchService,
-		Facts:    accessReader,
-		Records:  accessReader,
-		Builder:  viewBuilder,
-	})
-	pb.RegisterDataViewService(s, viewService)
-	timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
-	registerTimerHandlerService("trpc.moox.storage.view.timer", s.Service("trpc.moox.storage.view.timer"), view.HandleSchedule)
-	registerTimerHandlerService("trpc.moox.storage.view.cleanup.timer", s.Service("trpc.moox.storage.view.cleanup.timer"), view.HandleSchedule)
-	registerTimerHandlerService("trpc.moox.storage.view.retry_failed.timer", s.Service("trpc.moox.storage.view.retry_failed.timer"), view.HandleSchedule)
-
-	builderService, err := startViewBuilderService(trpc.BackgroundContext(), storage, opts, viewMetadata, viewStore, searchService, accessReader)
-	if err != nil {
-		_ = viewService.Close()
-		_ = searchService.Close()
-		_ = viewStore.Close()
-		return nil, err
+	var viewBuilder *view.Builder
+	if shouldStartViewBuilderRole(storage) {
+		viewBuilder = view.NewBuilder(view.Options{
+			Metadata: viewMetadata,
+			Facts:    accessReader,
+			Records:  accessReader,
+			Views:    viewStore,
+			Search:   searchService,
+		})
+		view.SetDefaultBuilder(viewBuilder)
+	}
+	var viewService *view.Service
+	if shouldRegisterViewQueryRole(storage) {
+		viewService = view.NewService(view.ServiceOptions{
+			Metadata:       viewMetadata,
+			Views:          viewStore,
+			Search:         searchService,
+			Facts:          accessReader,
+			Records:        accessReader,
+			Builder:        viewBuilder,
+			DisableRebuild: !shouldStartViewBuilderRole(storage),
+		})
+		pb.RegisterDataViewService(s, viewService)
+	}
+	var builderService *viewbuilder.Service
+	if shouldStartViewBuilderRole(storage) {
+		timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
+		registerTimerHandlerService("trpc.moox.storage.view.timer", s.Service("trpc.moox.storage.view.timer"), view.HandleSchedule)
+		registerTimerHandlerService("trpc.moox.storage.view.cleanup.timer", s.Service("trpc.moox.storage.view.cleanup.timer"), view.HandleSchedule)
+		registerTimerHandlerService("trpc.moox.storage.view.retry_failed.timer", s.Service("trpc.moox.storage.view.retry_failed.timer"), view.HandleSchedule)
+		var err error
+		builderService, err = startViewBuilderService(trpc.BackgroundContext(), storage, opts, viewMetadata, viewStore, searchService, accessReader)
+		if err != nil {
+			if viewService != nil {
+				_ = viewService.Close()
+			}
+			_ = searchService.Close()
+			_ = viewStore.Close()
+			return nil, err
+		}
+	} else {
+		registerNoopViewTimers(s)
 	}
 	return &viewRuntime{service: viewService, builder: builderService, views: viewStore, search: searchService}, nil
 }
@@ -333,8 +399,8 @@ func registerTimerHandlerService(name string, service server.Service, handle fun
 }
 
 func validateStorageDeployment(storage storageconfig.StorageConfig) error {
-	if storage.HasRole("view") && !storage.HasRole("access") && isMemoryRowsChangedBus(storage.EventBus) {
-		return errors.New("storage view role requires non-memory eventbus when access role is not in the same process")
+	if shouldStartViewBuilderRole(storage) && !storage.HasRole("access") && isMemoryRowsChangedBus(storage.EventBus) {
+		return errors.New("storage view builder role requires non-memory eventbus when access role is not in the same process")
 	}
 	if storage.HasRole("archive") && !storage.HasRole("access") && isMemoryRowsChangedBus(storage.EventBus) {
 		return errors.New("storage archive role requires non-memory eventbus when access role is not in the same process")
@@ -343,7 +409,15 @@ func validateStorageDeployment(storage storageconfig.StorageConfig) error {
 }
 
 func needsRowsChangedBus(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("access") || storage.HasRole("view") || storage.HasRole("archive")
+	return storage.HasRole("access") || shouldStartViewBuilderRole(storage) || storage.HasRole("archive")
+}
+
+func shouldRegisterViewQueryRole(storage storageconfig.StorageConfig) bool {
+	return storage.HasRole("view") || storage.HasRole("view_query")
+}
+
+func shouldStartViewBuilderRole(storage storageconfig.StorageConfig) bool {
+	return storage.HasRole("view") || storage.HasRole("view_builder")
 }
 
 func shouldCreateStorageService(storage storageconfig.StorageConfig) bool {
@@ -372,7 +446,7 @@ func accessReaderForRuntime(storage storageconfig.StorageConfig, storageService 
 }
 
 func shouldUseLocalAccessReader(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("access") && storage.HasRole("view") && isMemoryRowsChangedBus(storage.EventBus)
+	return storage.HasRole("access") && shouldStartViewBuilderRole(storage) && isMemoryRowsChangedBus(storage.EventBus)
 }
 
 func isMemoryRowsChangedBus(cfg storageconfig.StorageEventBus) bool {

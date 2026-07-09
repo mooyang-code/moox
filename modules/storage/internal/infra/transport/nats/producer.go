@@ -40,6 +40,15 @@ func NewProducer(opts transport.ProducerOptions) (transport.Producer, error) {
 	if opts.ConnectTimeout == 0 {
 		opts.ConnectTimeout = 10 * time.Second // 默认连接超时
 	}
+	if opts.MaxInFlight <= 0 {
+		opts.MaxInFlight = 32
+	}
+	if opts.AckWait <= 0 {
+		opts.AckWait = 2 * time.Minute
+	}
+	if opts.MaxDeliver <= 0 {
+		opts.MaxDeliver = 10
+	}
 
 	return &NATSProducer{
 		options:   opts,
@@ -88,11 +97,7 @@ func (p *NATSProducer) Connect(ctx context.Context) error {
 
 	// 如果提供了StreamName，则创建或更新流
 	if p.options.StreamName != "" && len(p.options.StreamSubjects) > 0 {
-		err = ensureStream(js, &nats.StreamConfig{
-			Name:     p.options.StreamName,
-			Subjects: p.options.StreamSubjects,
-			Storage:  nats.FileStorage, // 使用文件存储以实现持久化
-		})
+		err = ensureStream(js, streamConfigFromOptions(p.options))
 		if err != nil {
 			p.nc.Close()
 			return fmt.Errorf("无法创建流: %w", err)
@@ -103,6 +108,25 @@ func (p *NATSProducer) Connect(ctx context.Context) error {
 	p.connected = true
 	log.Infof("已连接到NATS服务器: %s", p.options.ServerURL)
 	return nil
+}
+
+func streamConfigFromOptions(opts transport.ProducerOptions) *nats.StreamConfig {
+	cfg := &nats.StreamConfig{
+		Name:     opts.StreamName,
+		Subjects: opts.StreamSubjects,
+		Storage:  nats.FileStorage,
+		Discard:  nats.DiscardOld,
+	}
+	if opts.MaxAge > 0 {
+		cfg.MaxAge = opts.MaxAge
+	}
+	if opts.MaxMsgs > 0 {
+		cfg.MaxMsgs = opts.MaxMsgs
+	}
+	if opts.MaxBytes > 0 {
+		cfg.MaxBytes = opts.MaxBytes
+	}
+	return cfg
 }
 
 // streamManager 定义 NATS JetStream 流声明所需的接口。
@@ -150,11 +174,12 @@ func (p *NATSProducer) Send(ctx context.Context, msg *transport.Message) error {
 		msg.Time = time.Now()
 	}
 
+	start := time.Now()
 	ack, err := p.js.Publish(msg.Subject, msg.Data)
 	if err != nil {
 		return fmt.Errorf("发布消息失败: %w", err)
 	}
-	log.Debugf("消息已发布: 主题=%s, 序列号=%d", msg.Subject, ack.Sequence)
+	log.Debugf("消息已发布 topic=%s sequence=%d duration=%s", msg.Subject, ack.Sequence, time.Since(start))
 	return nil
 }
 
@@ -171,8 +196,15 @@ func (p *NATSProducer) Subscribe(ctx context.Context, subject string, handler tr
 		return nil, fmt.Errorf("消息处理器不能为空")
 	}
 	consumerName := durableConsumerName(p.options.ConsumerName, subject)
-	subscription, err := p.js.Subscribe(subject, func(msg *nats.Msg) {
+	maxInFlight := p.options.MaxInFlight
+	if maxInFlight <= 0 {
+		maxInFlight = 32
+	}
+	sem := make(chan struct{}, maxInFlight)
+	callback := func(msg *nats.Msg) {
+		sem <- struct{}{}
 		go func(msg *nats.Msg) {
+			defer func() { <-sem }()
 			event := &transport.Message{
 				Subject: msg.Subject,
 				Data:    msg.Data,
@@ -189,11 +221,82 @@ func (p *NATSProducer) Subscribe(ctx context.Context, subject string, handler tr
 				log.Errorf("确认NATS消息失败: %v", err)
 			}
 		}(msg)
-	}, nats.ManualAck(), nats.Durable(consumerName), nats.DeliverNew())
+	}
+	if err := p.reconcileDurableConsumerConfig(ctx, subject, consumerName, maxInFlight); err != nil {
+		log.Warnf("同步NATS durable consumer %s 配置失败，继续按订阅流程处理: %v", consumerName, err)
+	}
+	subscription, err := p.js.Subscribe(subject, callback, nats.ManualAck(), nats.Durable(consumerName), nats.DeliverNew(),
+		nats.AckWait(p.options.AckWait),
+		nats.MaxAckPending(maxInFlight),
+		nats.MaxDeliver(p.options.MaxDeliver),
+	)
+	if err != nil && p.options.StreamName != "" {
+		bound, bindErr := p.js.Subscribe(subject, callback, nats.ManualAck(), nats.Bind(p.options.StreamName, consumerName))
+		if bindErr == nil {
+			log.Warnf("绑定已存在的NATS durable consumer %s，使用既有consumer配置: %v", consumerName, err)
+			subscription = bound
+			err = nil
+		} else {
+			err = fmt.Errorf("%w; bind existing durable consumer failed: %v", err, bindErr)
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("订阅消息失败: %w", err)
 	}
 	return natsSubscription{subscription: subscription}, nil
+}
+
+func (p *NATSProducer) reconcileDurableConsumerConfig(ctx context.Context, subject string, consumerName string, maxInFlight int) error {
+	if p.js == nil || p.options.StreamName == "" || consumerName == "" {
+		return nil
+	}
+	info, err := p.js.ConsumerInfo(p.options.StreamName, consumerName, natsContextOpt(ctx)...)
+	if err != nil {
+		if errors.Is(err, nats.ErrConsumerNotFound) || errors.Is(err, nats.ErrStreamNotFound) {
+			return nil
+		}
+		return err
+	}
+	desired := info.Config
+	desired.AckWait = p.options.AckWait
+	desired.MaxAckPending = maxInFlight
+	desired.MaxDeliver = p.options.MaxDeliver
+	if desired.FilterSubject == "" {
+		desired.FilterSubject = subject
+	}
+	if !durableConsumerConfigNeedsUpdate(info.Config, desired) {
+		return nil
+	}
+	updated, err := p.js.UpdateConsumer(p.options.StreamName, &desired, natsContextOpt(ctx)...)
+	if err != nil {
+		return err
+	}
+	if refreshed, refreshErr := p.js.ConsumerInfo(p.options.StreamName, consumerName, natsContextOpt(ctx)...); refreshErr == nil {
+		updated = refreshed
+	}
+	log.Infof("已更新NATS durable consumer %s 配置: ack_wait=%s max_ack_pending=%d max_deliver=%d pending=%d redelivered=%d",
+		consumerName,
+		updated.Config.AckWait,
+		updated.Config.MaxAckPending,
+		updated.Config.MaxDeliver,
+		updated.NumPending,
+		updated.NumRedelivered,
+	)
+	return nil
+}
+
+func durableConsumerConfigNeedsUpdate(current nats.ConsumerConfig, desired nats.ConsumerConfig) bool {
+	return current.AckWait != desired.AckWait ||
+		current.MaxAckPending != desired.MaxAckPending ||
+		current.MaxDeliver != desired.MaxDeliver ||
+		current.FilterSubject != desired.FilterSubject
+}
+
+func natsContextOpt(ctx context.Context) []nats.JSOpt {
+	if ctx == nil {
+		return nil
+	}
+	return []nats.JSOpt{nats.Context(ctx)}
 }
 
 // natsSubscription 表示 NATS 消费者订阅句柄。

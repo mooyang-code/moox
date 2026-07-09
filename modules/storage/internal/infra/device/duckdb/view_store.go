@@ -8,10 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
@@ -30,8 +33,10 @@ type Options struct {
 
 // ViewStore 封装 TimeSeries 视图在 DuckDB 中的物化读写能力。
 type ViewStore struct {
-	db         *sql.DB
-	tableLocks sync.Map
+	db            *sql.DB
+	tableLocks    sync.Map
+	indexedTables sync.Map
+	writeMu       sync.Mutex
 }
 
 var tableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -49,13 +54,26 @@ var resultBaseColumns = []string{
 	"row_json",
 }
 
-const defaultMaxOpenConns = 4
+const (
+	defaultMaxOpenConns             = 1
+	defaultDuckDBMemoryLimit        = "512MB"
+	defaultDuckDBThreads            = "1"
+	defaultDuckDBMaxTempDirSize     = "2GB"
+	duckDBMemoryLimitEnv            = "MOOX_DUCKDB_MEMORY_LIMIT"
+	duckDBThreadsEnv                = "MOOX_DUCKDB_THREADS"
+	duckDBMaxTempDirectorySizeEnv   = "MOOX_DUCKDB_MAX_TEMP_DIRECTORY_SIZE"
+	duckDBMemoryLimitParam          = "memory_limit"
+	duckDBThreadsParam              = "threads"
+	duckDBMaxTempDirectorySizeParam = "max_temp_directory_size"
+	latestResultTableSuffix         = "__latest"
+	latestHelperMaxRows             = 10000
+)
 
 func Open(opts Options) (*ViewStore, error) {
 	if opts.Path == "" {
 		return nil, errors.New("duckdb path is required")
 	}
-	db, err := sql.Open("duckdb", opts.Path)
+	db, err := sql.Open("duckdb", duckDBDSN(opts.Path))
 	if err != nil {
 		return nil, err
 	}
@@ -75,6 +93,51 @@ func Open(opts Options) (*ViewStore, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func duckDBDSN(path string) string {
+	return appendDuckDBParams(path, map[string]string{
+		duckDBMemoryLimitParam:          duckDBConfigValue(duckDBMemoryLimitEnv, defaultDuckDBMemoryLimit),
+		duckDBThreadsParam:              duckDBConfigValue(duckDBThreadsEnv, defaultDuckDBThreads),
+		duckDBMaxTempDirectorySizeParam: duckDBConfigValue(duckDBMaxTempDirectorySizeEnv, defaultDuckDBMaxTempDirSize),
+	})
+}
+
+func appendDuckDBParams(dsn string, params map[string]string) string {
+	out := dsn
+	for _, key := range []string{duckDBMemoryLimitParam, duckDBThreadsParam, duckDBMaxTempDirectorySizeParam} {
+		value := strings.TrimSpace(params[key])
+		if value == "" || duckDBDSNHasParam(out, key) {
+			continue
+		}
+		separator := "?"
+		if strings.Contains(out, "?") {
+			separator = "&"
+		}
+		out += separator + key + "=" + url.QueryEscape(value)
+	}
+	return out
+}
+
+func duckDBConfigValue(envKey string, defaultValue string) string {
+	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func duckDBDSNHasParam(dsn string, name string) bool {
+	queryStart := strings.Index(dsn, "?")
+	if queryStart < 0 {
+		return false
+	}
+	for _, part := range strings.Split(dsn[queryStart+1:], "&") {
+		key, _, _ := strings.Cut(part, "=")
+		if key == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ViewStore) Close() error {
@@ -105,6 +168,8 @@ func (s *ViewStore) CreateResultTable(ctx context.Context, tableName string, col
 	}
 	unlock := s.lockResultTable(tableName)
 	defer unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	defs := []string{
 		"row_key VARCHAR NOT NULL",
 		"space_id VARCHAR NOT NULL",
@@ -133,6 +198,7 @@ func (s *ViewStore) CreateResultTable(ctx context.Context, tableName string, col
 	if err := s.createResultIndexes(ctx, tableName, columnDefs); err != nil {
 		return err
 	}
+	s.indexedTables.Store(tableName, struct{}{})
 	encoded, err := encodeColumns(columns)
 	if err != nil {
 		return err
@@ -203,6 +269,28 @@ func (s *ViewStore) createResultIndexes(ctx context.Context, tableName string, c
 	return nil
 }
 
+func (s *ViewStore) ensureResultIndexes(ctx context.Context, tableName string, columns []*pb.ResultColumn) error {
+	if _, ok := s.indexedTables.Load(tableName); ok {
+		return nil
+	}
+	columnDefs, err := resultColumnDefsFromResultColumns(columns)
+	if err != nil {
+		return err
+	}
+	unlock := s.lockResultTable(tableName)
+	defer unlock()
+	if _, ok := s.indexedTables.Load(tableName); ok {
+		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.createResultIndexes(ctx, tableName, columnDefs); err != nil {
+		return err
+	}
+	s.indexedTables.Store(tableName, struct{}{})
+	return nil
+}
+
 func createResultIndexStatements(tableName string, columns []resultColumnDef) ([]string, error) {
 	quotedTable, err := quoteTableName(tableName)
 	if err != nil {
@@ -216,9 +304,14 @@ func createResultIndexStatements(tableName string, columns []resultColumnDef) ([
 	if err != nil {
 		return nil, err
 	}
+	dataTimeIndex, err := quoteIndexName(tableName, "data_time")
+	if err != nil {
+		return nil, err
+	}
 	statements := []string{
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (row_key, data_time)`, keyTimeIndex, quotedTable),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (subject_id, freq, data_time)`, subjectFreqIndex, quotedTable),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (data_time)`, dataTimeIndex, quotedTable),
 	}
 	for _, column := range columns {
 		indexName, err := quoteIndexName(tableName, column.name)
@@ -247,7 +340,11 @@ func dropResultIndexStatements(tableName string, columns []resultColumnDef) ([]s
 	if err != nil {
 		return nil, err
 	}
-	indexNames := []string{keyTimeIndex, subjectFreqIndex}
+	dataTimeIndex, err := quoteIndexName(tableName, "data_time")
+	if err != nil {
+		return nil, err
+	}
+	indexNames := []string{keyTimeIndex, subjectFreqIndex, dataTimeIndex}
 	for _, column := range columns {
 		indexName, err := quoteIndexName(tableName, column.name)
 		if err != nil {
@@ -272,6 +369,8 @@ func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb
 	}
 	unlock := s.lockResultTable(tableName)
 	defer unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	columns, err := s.loadColumns(ctx, tableName)
 	if err != nil {
 		return err
@@ -280,10 +379,16 @@ func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb
 	if err != nil {
 		return err
 	}
+	var syncedRows []*pb.TimeSeriesRow
 	if empty {
-		return s.insertRowsIntoEmptyTable(ctx, quoted, columns, rows)
+		syncedRows, err = s.insertRowsIntoEmptyTable(ctx, quoted, columns, rows)
+	} else {
+		syncedRows, err = s.mergeRowsIntoTable(ctx, quoted, columns, rows)
 	}
-	return s.mergeRowsIntoTable(ctx, quoted, columns, rows)
+	if err != nil {
+		return err
+	}
+	return s.syncLatestRowsLocked(ctx, tableName, columns, syncedRows)
 }
 
 func (s *ViewStore) lockResultTable(tableName string) func() {
@@ -302,64 +407,67 @@ func (s *ViewStore) resultTableEmpty(ctx context.Context, quotedTableName string
 	return !rows.Next(), rows.Err()
 }
 
-func (s *ViewStore) insertRowsIntoEmptyTable(ctx context.Context, quotedTableName string, columns []*pb.ResultColumn, rows []*pb.TimeSeriesRow) error {
+func (s *ViewStore) insertRowsIntoEmptyTable(ctx context.Context, quotedTableName string, columns []*pb.ResultColumn, rows []*pb.TimeSeriesRow) ([]*pb.TimeSeriesRow, error) {
 	merged := mergeRowsByPrimaryKey(rows)
 	tableName, err := unquoteTableName(quotedTableName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	columnDefs, err := resultColumnDefsFromResultColumns(columns)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	dropStatements, err := dropResultIndexStatements(tableName, columnDefs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, statement := range dropStatements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			_ = tx.Rollback()
-			return err
+			return nil, err
 		}
 	}
 	insertSQL, err := buildInsertSQL(quotedTableName, columns)
 	if err != nil {
 		_ = tx.Rollback()
-		return err
+		return nil, err
 	}
 	insertStmt, err := tx.PrepareContext(ctx, insertSQL)
 	if err != nil {
 		_ = tx.Rollback()
-		return err
+		return nil, err
 	}
 	defer insertStmt.Close()
 	for _, row := range merged {
 		args, err := resultRowArgs(row, columns)
 		if err != nil {
 			_ = tx.Rollback()
-			return err
+			return nil, err
 		}
 		if _, err := insertStmt.ExecContext(ctx, args...); err != nil {
 			_ = tx.Rollback()
-			return err
+			return nil, err
 		}
 	}
 	indexStatements, err := createResultIndexStatements(tableName, columnDefs)
 	if err != nil {
 		_ = tx.Rollback()
-		return err
+		return nil, err
 	}
 	for _, statement := range indexStatements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			_ = tx.Rollback()
-			return err
+			return nil, err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return merged, nil
 }
 
 func mergeRowsByPrimaryKey(rows []*pb.TimeSeriesRow) []*pb.TimeSeriesRow {
@@ -377,56 +485,61 @@ func mergeRowsByPrimaryKey(rows []*pb.TimeSeriesRow) []*pb.TimeSeriesRow {
 	return out
 }
 
-func (s *ViewStore) mergeRowsIntoTable(ctx context.Context, quotedTableName string, columns []*pb.ResultColumn, rows []*pb.TimeSeriesRow) error {
+func (s *ViewStore) mergeRowsIntoTable(ctx context.Context, quotedTableName string, columns []*pb.ResultColumn, rows []*pb.TimeSeriesRow) ([]*pb.TimeSeriesRow, error) {
 	mergedRows := mergeRowsByPrimaryKey(rows)
 	if len(mergedRows) == 0 {
-		return nil
+		return nil, nil
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	existing, err := loadExistingRows(ctx, tx, quotedTableName, mergedRows)
 	if err != nil {
 		_ = tx.Rollback()
-		return err
+		return nil, err
 	}
 	if err := deleteRowsByPrimaryKey(ctx, tx, quotedTableName, mergedRows); err != nil {
 		_ = tx.Rollback()
-		return err
+		return nil, err
 	}
 	insertSQL, err := buildInsertSQL(quotedTableName, columns)
 	if err != nil {
 		_ = tx.Rollback()
-		return err
+		return nil, err
 	}
 	insertStmt, err := tx.PrepareContext(ctx, insertSQL)
 	if err != nil {
 		_ = tx.Rollback()
-		return err
+		return nil, err
 	}
 	defer insertStmt.Close()
+	syncedRows := make([]*pb.TimeSeriesRow, 0, len(mergedRows))
 	for _, row := range mergedRows {
 		merged := row
 		if existingRaw := existing[rowPrimaryKey(row)]; existingRaw != "" {
 			base := &pb.TimeSeriesRow{}
 			if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(existingRaw), base); err != nil {
 				_ = tx.Rollback()
-				return err
+				return nil, err
 			}
 			merged = mergeTimeSeriesRow(base, row)
 		}
 		args, err := resultRowArgs(merged, columns)
 		if err != nil {
 			_ = tx.Rollback()
-			return err
+			return nil, err
 		}
 		if _, err := insertStmt.ExecContext(ctx, args...); err != nil {
 			_ = tx.Rollback()
-			return err
+			return nil, err
 		}
+		syncedRows = append(syncedRows, normalizeTimeSeriesRow(merged))
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return syncedRows, nil
 }
 
 const rowKeyPredicateChunkSize = 200
@@ -658,7 +771,8 @@ func (s *ViewStore) ListResultTables(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT table_name
 		FROM information_schema.tables
-		WHERE table_name LIKE 'ts_view_%' OR table_name LIKE 'view_result_%'
+		WHERE (table_name LIKE 'ts_view_%' OR table_name LIKE 'view_result_%')
+		  AND table_name NOT LIKE '%__latest'
 		ORDER BY table_name
 	`)
 	if err != nil {
@@ -686,6 +800,8 @@ func (s *ViewStore) DropResultTable(ctx context.Context, tableName string) error
 	}
 	unlock := s.lockResultTable(tableName)
 	defer unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -694,11 +810,25 @@ func (s *ViewStore) DropResultTable(ctx context.Context, tableName string) error
 		_ = tx.Rollback()
 		return err
 	}
+	latestQuoted, err := quoteTableName(latestResultTableName(tableName))
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, latestQuoted)); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM moox_view_columns WHERE table_name = ?`, tableName); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.indexedTables.Delete(tableName)
+	s.indexedTables.Delete(latestResultTableName(tableName))
+	return nil
 }
 
 func (s *ViewStore) QueryTimeSeriesRows(ctx context.Context, tableName string, req *pb.QueryTimeSeriesRowsReq) ([]*pb.ResultColumn, []*pb.TimeSeriesRow, *pb.PageResult, error) {
@@ -710,58 +840,478 @@ func (s *ViewStore) QueryTimeSeriesRows(ctx context.Context, tableName string, r
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	if err := s.ensureResultIndexes(ctx, tableName, columns); err != nil {
+		return nil, nil, nil, err
+	}
+	if latestHelperCandidate(req) {
+		if projectedColumns, projectedRows, page, ok, err := s.queryLatestTimeSeriesRows(ctx, tableName, columns, req); err != nil {
+			return nil, nil, nil, err
+		} else if ok {
+			return projectedColumns, projectedRows, page, nil
+		}
+	}
 
-	sqlText, countSQL, args, pageNo, size, err := buildTimeSeriesQuery(quoted, columns, req)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	var total uint64
-	if err := s.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
-		return nil, nil, nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, sqlText, args...)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	defer rows.Close()
-	out, err := scanResultRows(rows, columns)
+	plan, err := buildTimeSeriesQuery(quoted, columns, req)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	projectedColumns := projectColumns(columns, req.GetColumnNames())
-	projectedRows := projectRows(out, req.GetColumnNames())
-	return projectedColumns, projectedRows, &pb.PageResult{
-		Page:    pageNo,
-		Size:    size,
-		Total:   uint32(total),
-		HasMore: uint64(pageNo*size) < total,
+	var total uint64
+	if plan.countSQL != "" {
+		if err := s.db.QueryRowContext(ctx, plan.countSQL, plan.args...).Scan(&total); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, plan.sqlText, plan.args...)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer rows.Close()
+	out, err := scanResultRows(rows, projectedColumns)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	hasMore := uint64(plan.pageNo*plan.size) < total
+	if plan.countSQL == "" {
+		total = 0
+		if uint32(len(out)) > plan.size {
+			hasMore = true
+			out = out[:plan.size]
+		} else {
+			hasMore = false
+		}
+	}
+	return projectedColumns, out, &pb.PageResult{
+		Page:       plan.pageNo,
+		Size:       plan.size,
+		Total:      uint32(total),
+		HasMore:    hasMore,
+		TotalState: plan.totalState,
 	}, nil
 }
 
-func buildTimeSeriesQuery(quotedTableName string, columns []*pb.ResultColumn, req *pb.QueryTimeSeriesRowsReq) (string, string, []any, uint32, uint32, error) {
+func (s *ViewStore) queryLatestTimeSeriesRows(ctx context.Context, tableName string, columns []*pb.ResultColumn, req *pb.QueryTimeSeriesRowsReq) ([]*pb.ResultColumn, []*pb.TimeSeriesRow, *pb.PageResult, bool, error) {
+	if err := s.ensureLatestResultTable(ctx, tableName, columns); err != nil {
+		return nil, nil, nil, false, err
+	}
+	quotedLatest, err := quoteTableName(latestResultTableName(tableName))
+	if err != nil {
+		return nil, nil, nil, false, err
+	}
+	plan, err := buildTimeSeriesQuery(quotedLatest, columns, req)
+	if err != nil {
+		return nil, nil, nil, false, err
+	}
+	projectedColumns := projectColumns(columns, req.GetColumnNames())
+	rows, err := s.db.QueryContext(ctx, plan.sqlText, plan.args...)
+	if err != nil {
+		return nil, nil, nil, false, err
+	}
+	defer rows.Close()
+	out, err := scanResultRows(rows, projectedColumns)
+	if err != nil {
+		return nil, nil, nil, false, err
+	}
+	hasMore := false
+	if uint32(len(out)) > plan.size {
+		hasMore = true
+		out = out[:plan.size]
+	}
+	return projectedColumns, out, &pb.PageResult{
+		Page:       plan.pageNo,
+		Size:       plan.size,
+		Total:      0,
+		HasMore:    hasMore,
+		TotalState: pb.TotalState_SKIPPED,
+	}, true, nil
+}
+
+func (s *ViewStore) ensureLatestResultTable(ctx context.Context, tableName string, columns []*pb.ResultColumn) error {
+	latestTable := latestResultTableName(tableName)
+	if _, ok := s.indexedTables.Load(latestTable); ok {
+		return nil
+	}
+	quotedBase, err := quoteTableName(tableName)
+	if err != nil {
+		return err
+	}
+	quotedLatest, err := quoteTableName(latestTable)
+	if err != nil {
+		return err
+	}
+	columnDefs, err := resultColumnDefsFromResultColumns(columns)
+	if err != nil {
+		return err
+	}
+	unlock := s.lockResultTable(tableName)
+	defer unlock()
+	if _, ok := s.indexedTables.Load(latestTable); ok {
+		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	exists, err := s.tableExists(ctx, latestTable)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if err := s.createResultIndexes(ctx, latestTable, columnDefs); err != nil {
+			return err
+		}
+		s.indexedTables.Store(latestTable, struct{}{})
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, quotedLatest)); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(
+		`CREATE TABLE %s AS SELECT * FROM %s ORDER BY data_time DESC LIMIT %d`,
+		quotedLatest,
+		quotedBase,
+		latestHelperMaxRows,
+	)); err != nil {
+		return err
+	}
+	if err := s.createResultIndexes(ctx, latestTable, columnDefs); err != nil {
+		return err
+	}
+	s.indexedTables.Store(latestTable, struct{}{})
+	return nil
+}
+
+func (s *ViewStore) syncLatestRowsLocked(ctx context.Context, tableName string, columns []*pb.ResultColumn, rows []*pb.TimeSeriesRow) error {
+	latestTable := latestResultTableName(tableName)
+	if len(rows) == 0 {
+		return nil
+	}
+	if _, ok := s.indexedTables.Load(latestTable); !ok {
+		exists, err := s.tableExists(ctx, latestTable)
+		if err != nil || !exists {
+			return err
+		}
+		s.indexedTables.Store(latestTable, struct{}{})
+	}
+	quotedLatest, err := quoteTableName(latestTable)
+	if err != nil {
+		return err
+	}
+	where, args := rowKeyPredicate(rows)
+	if where == "" {
+		return nil
+	}
+	stats, err := s.loadLatestHelperStatsLocked(ctx, quotedLatest, rows)
+	if err != nil {
+		return err
+	}
+	if !latestRowsNeedSync(stats, latestHelperMaxRows, rows) {
+		if stats.rowCount > latestHelperMaxRows {
+			return s.pruneLatestRowsLocked(ctx, quotedLatest, latestHelperMaxRows)
+		}
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE %s`, quotedLatest, where), args...); err != nil {
+		return err
+	}
+	if err := insertLatestRowsLocked(ctx, s.db, quotedLatest, columns, rows); err != nil {
+		return err
+	}
+	return s.pruneLatestRowsLocked(ctx, quotedLatest, latestHelperMaxRows)
+}
+
+func insertLatestRowsLocked(ctx context.Context, db *sql.DB, quotedLatest string, columns []*pb.ResultColumn, rows []*pb.TimeSeriesRow) error {
+	insertSQL, err := buildInsertSQL(quotedLatest, columns)
+	if err != nil {
+		return err
+	}
+	insertStmt, err := db.PrepareContext(ctx, insertSQL)
+	if err != nil {
+		return err
+	}
+	defer insertStmt.Close()
+	for _, row := range rows {
+		args, err := resultRowArgs(row, columns)
+		if err != nil {
+			return err
+		}
+		if _, err := insertStmt.ExecContext(ctx, args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type latestHelperStats struct {
+	rowCount       int
+	cutoffDataTime string
+	existingKeys   map[string]struct{}
+}
+
+func (s *ViewStore) loadLatestHelperStatsLocked(ctx context.Context, quotedLatest string, rows []*pb.TimeSeriesRow) (latestHelperStats, error) {
+	stats := latestHelperStats{existingKeys: make(map[string]struct{}, len(rows))}
+	var cutoff sql.NullString
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*), MIN(data_time) FROM %s`, quotedLatest)).
+		Scan(&stats.rowCount, &cutoff); err != nil {
+		return stats, err
+	}
+	if cutoff.Valid {
+		stats.cutoffDataTime = normalizeDataTimeString(cutoff.String)
+	}
+	for start := 0; start < len(rows); start += rowKeyPredicateChunkSize {
+		end := start + rowKeyPredicateChunkSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		where, args := rowKeyPredicate(rows[start:end])
+		if where == "" {
+			continue
+		}
+		resultRows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT row_key, data_time FROM %s WHERE %s`, quotedLatest, where), args...)
+		if err != nil {
+			return stats, err
+		}
+		for resultRows.Next() {
+			var rowKey string
+			var dataTime string
+			if err := resultRows.Scan(&rowKey, &dataTime); err != nil {
+				_ = resultRows.Close()
+				return stats, err
+			}
+			stats.existingKeys[rowKey+"|"+normalizeDataTimeString(dataTime)] = struct{}{}
+		}
+		if err := resultRows.Close(); err != nil {
+			return stats, err
+		}
+	}
+	return stats, nil
+}
+
+func latestRowsNeedSync(stats latestHelperStats, maxRows int, rows []*pb.TimeSeriesRow) bool {
+	if len(rows) == 0 {
+		return false
+	}
+	if maxRows <= 0 || stats.rowCount < maxRows || stats.cutoffDataTime == "" {
+		return true
+	}
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		if _, ok := stats.existingKeys[rowPrimaryKey(row)]; ok {
+			return true
+		}
+		if compareDataTime(normalizeRowDataTime(row), stats.cutoffDataTime) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *ViewStore) pruneLatestRowsLocked(ctx context.Context, quotedLatest string, maxRows int) error {
+	if maxRows <= 0 {
+		return nil
+	}
+	var count int
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s`, quotedLatest)).Scan(&count); err != nil {
+		return err
+	}
+	if count <= maxRows {
+		return nil
+	}
+	var cutoff sql.NullString
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(
+		`SELECT data_time FROM %s ORDER BY data_time DESC LIMIT 1 OFFSET %d`,
+		quotedLatest,
+		maxRows-1,
+	)).Scan(&cutoff); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if !cutoff.Valid || strings.TrimSpace(cutoff.String) == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE data_time < ?`, quotedLatest), normalizeDataTimeString(cutoff.String))
+	return err
+}
+
+func normalizeDataTimeString(value string) string {
+	if normalized, err := factkey.NormalizeTimeVersion(value); err == nil {
+		return normalized
+	}
+	return value
+}
+
+func compareDataTime(left string, right string) int {
+	left = normalizeDataTimeString(left)
+	right = normalizeDataTimeString(right)
+	leftTime, leftErr := time.Parse(time.RFC3339Nano, left)
+	rightTime, rightErr := time.Parse(time.RFC3339Nano, right)
+	if leftErr == nil && rightErr == nil {
+		return leftTime.Compare(rightTime)
+	}
+	return strings.Compare(left, right)
+}
+
+func (s *ViewStore) tableExists(ctx context.Context, tableName string) (bool, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM information_schema.tables
+		WHERE table_name = ?
+	`, tableName).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func latestResultTableName(tableName string) string {
+	return tableName + latestResultTableSuffix
+}
+
+type timeSeriesQueryPlan struct {
+	sqlText    string
+	countSQL   string
+	args       []any
+	pageNo     uint32
+	size       uint32
+	preview    bool
+	totalState pb.TotalState
+}
+
+func buildTimeSeriesQuery(quotedTableName string, columns []*pb.ResultColumn, req *pb.QueryTimeSeriesRowsReq) (*timeSeriesQueryPlan, error) {
 	where, args, err := buildSQLPredicates(req, columns)
 	if err != nil {
-		return "", "", nil, 0, 0, err
+		return nil, err
 	}
-	selectColumns, err := resultSelectColumns(columns)
+	selectColumns, err := resultSelectColumnsForRequest(columns, req.GetColumnNames())
 	if err != nil {
-		return "", "", nil, 0, 0, err
+		return nil, err
 	}
 	orderBy, err := buildOrderBy(req.GetSorts(), columns)
 	if err != nil {
-		return "", "", nil, 0, 0, err
+		return nil, err
 	}
-	pageNo, size := normalizePage(req.GetPage())
-	offset := (pageNo - 1) * size
-	sqlText := fmt.Sprintf(`SELECT %s FROM %s`, strings.Join(selectColumns, ","), quotedTableName)
+	pageNo, size, preview := queryWindow(req)
+	baseSQL := fmt.Sprintf(`SELECT %s FROM %s`, strings.Join(selectColumns, ","), quotedTableName)
+	countBaseSQL := fmt.Sprintf(`SELECT 1 FROM %s`, quotedTableName)
 	countSQL := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, quotedTableName)
 	if where != "" {
-		sqlText += " WHERE " + where
+		baseSQL += " WHERE " + where
+		countBaseSQL += " WHERE " + where
 		countSQL += " WHERE " + where
 	}
-	sqlText += " ORDER BY " + orderBy
-	sqlText += fmt.Sprintf(" LIMIT %d OFFSET %d", size, offset)
-	return sqlText, countSQL, args, pageNo, size, nil
+	if orderBy != "" {
+		baseSQL += " ORDER BY " + orderBy
+	}
+	totalState := pb.TotalState_EXACT
+	if !shouldCountTimeSeries(req, preview, where != "") {
+		countSQL = ""
+		totalState = pb.TotalState_SKIPPED
+	}
+	sqlText := baseSQL
+	if req.GetLimit() > 0 && timeSeriesRequestHasPaging(req.GetPage()) {
+		sqlText = fmt.Sprintf("SELECT * FROM (%s LIMIT %d) AS moox_limited", baseSQL, req.GetLimit())
+		if countSQL != "" {
+			countSQL = fmt.Sprintf("SELECT COUNT(*) FROM (%s LIMIT %d) AS moox_limited_count", countBaseSQL, req.GetLimit())
+		}
+	}
+	limit := size
+	if countSQL == "" {
+		limit = size + 1
+	}
+	offset := uint32(0)
+	if !preview {
+		offset = (pageNo - 1) * size
+	}
+	sqlText += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+	return &timeSeriesQueryPlan{
+		sqlText:    sqlText,
+		countSQL:   countSQL,
+		args:       args,
+		pageNo:     pageNo,
+		size:       size,
+		preview:    preview,
+		totalState: totalState,
+	}, nil
+}
+
+const defaultTimeSeriesViewPageSize uint32 = 25
+
+func queryWindow(req *pb.QueryTimeSeriesRowsReq) (uint32, uint32, bool) {
+	if req.GetLimit() > 0 && !timeSeriesRequestHasPaging(req.GetPage()) {
+		return 1, req.GetLimit(), true
+	}
+	pageNo, size := normalizePage(req.GetPage())
+	return pageNo, size, false
+}
+
+func shouldCountTimeSeries(req *pb.QueryTimeSeriesRowsReq, preview bool, hasPredicate bool) bool {
+	switch req.GetTotalMode() {
+	case pb.TotalMode_NONE:
+		return false
+	case pb.TotalMode_FORCE_EXACT:
+		return true
+	default:
+		if preview {
+			return false
+		}
+		return hasPredicate
+	}
+}
+
+func latestHelperCandidate(req *pb.QueryTimeSeriesRowsReq) bool {
+	if req == nil || req.GetLimit() == 0 {
+		return false
+	}
+	if req.GetPage().GetCursor() != "" {
+		return false
+	}
+	if req.GetTotalMode() == pb.TotalMode_FORCE_EXACT {
+		return false
+	}
+	if hasEffectiveTimeSeriesKey(req.GetKeys()) || len(req.GetFilters()) > 0 {
+		return false
+	}
+	sorts := req.GetSorts()
+	if len(sorts) == 0 {
+		return false
+	}
+	first := sorts[0]
+	if !strings.EqualFold(strings.TrimSpace(first.GetFieldName()), "data_time") || !first.GetDesc() {
+		return false
+	}
+	for _, spec := range sorts[1:] {
+		field := strings.TrimSpace(spec.GetFieldName())
+		if spec.GetDesc() || (field != "subject_id" && field != "freq") {
+			return false
+		}
+	}
+	return true
+}
+
+func timeSeriesRequestHasPaging(page *pb.Page) bool {
+	if page == nil {
+		return false
+	}
+	return page.GetPage() > 0 || page.GetSize() > 0 || page.GetCursor() != ""
+}
+
+func hasEffectiveTimeSeriesKey(keys []*pb.TimeSeriesKey) bool {
+	for _, key := range keys {
+		if key == nil {
+			continue
+		}
+		if strings.TrimSpace(key.GetSpaceId()) != "" ||
+			strings.TrimSpace(key.GetDatasetId()) != "" ||
+			strings.TrimSpace(key.GetSubjectId()) != "" ||
+			strings.TrimSpace(key.GetFreq()) != "" ||
+			strings.TrimSpace(key.GetDataTime()) != "" ||
+			len(key.GetDimensions()) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func buildSQLPredicates(req *pb.QueryTimeSeriesRowsReq, columns []*pb.ResultColumn) (string, []any, error) {
@@ -1006,7 +1556,7 @@ func filterValue(token string, args map[string]*pb.TypedValue) *pb.TypedValue {
 
 func buildOrderBy(sorts []*pb.SortSpec, columns []*pb.ResultColumn) (string, error) {
 	if len(sorts) == 0 {
-		return "subject_id ASC, freq ASC, data_time ASC", nil
+		return "", nil
 	}
 	columnTypes := resultColumnTypes(columns)
 	parts := make([]string, 0, len(sorts)+3)
@@ -1051,6 +1601,10 @@ func resultSelectColumns(columns []*pb.ResultColumn) ([]string, error) {
 	return out, nil
 }
 
+func resultSelectColumnsForRequest(columns []*pb.ResultColumn, includes []string) ([]string, error) {
+	return resultSelectColumns(projectColumns(columns, includes))
+}
+
 func resultColumnTypes(columns []*pb.ResultColumn) map[string]pb.FieldValueType {
 	out := map[string]pb.FieldValueType{
 		"space_id":   pb.FieldValueType_FIELD_VALUE_TYPE_STRING,
@@ -1067,7 +1621,7 @@ func resultColumnTypes(columns []*pb.ResultColumn) map[string]pb.FieldValueType 
 
 func normalizePage(page *pb.Page) (uint32, uint32) {
 	pageNo := uint32(1)
-	size := uint32(1000)
+	size := defaultTimeSeriesViewPageSize
 	if page != nil {
 		if page.GetPage() > 0 {
 			pageNo = page.GetPage()
