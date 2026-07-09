@@ -280,7 +280,9 @@ func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, opt
 				"duckdb": viewStore,
 				"bleve":  searchService,
 			},
-			Config: rotationConfigFromStorage(storage.View.Rotation),
+			Config:  rotationConfigFromStorage(storage.View.Rotation),
+			Facts:   accessReader,
+			Records: accessReader,
 		})
 		view.SetDefaultRotation(rotationManager)
 		timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})

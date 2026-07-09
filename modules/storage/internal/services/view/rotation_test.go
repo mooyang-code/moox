@@ -52,6 +52,23 @@ func (f *fakeEngine) Write(ctx context.Context, indexID string, batch viewindex.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.writeCalls++
+	stat, ok := f.stats[indexID]
+	if !ok {
+		stat = &viewindex.ViewIndexStats{}
+		f.stats[indexID] = stat
+	}
+	stat.Exists = true
+	stat.EntryCount += int64(len(batch.TimeSeriesRows) + len(batch.RecordRows))
+	for _, row := range batch.TimeSeriesRows {
+		if v := row.GetKey().GetDataTime(); v > stat.MaxVersion {
+			stat.MaxVersion = v
+		}
+	}
+	for _, row := range batch.RecordRows {
+		if v := row.GetKey().GetVersion(); v > stat.MaxVersion {
+			stat.MaxVersion = v
+		}
+	}
 	return nil
 }
 
@@ -108,13 +125,24 @@ func containsString(values []string, target string) bool {
 // rotation tests exercise the same claim contract RotateViewIndexes relies
 // on in production.
 type fakeMetadata struct {
-	mu      sync.Mutex
-	views   map[string]*pb.View
-	columns map[string][]*pb.ViewColumn
+	mu       sync.Mutex
+	views    map[string]*pb.View
+	columns  map[string][]*pb.ViewColumn
+	datasets map[string]*pb.Dataset
 }
 
 func newFakeMetadata() *fakeMetadata {
-	return &fakeMetadata{views: map[string]*pb.View{}, columns: map[string][]*pb.ViewColumn{}}
+	return &fakeMetadata{views: map[string]*pb.View{}, columns: map[string][]*pb.ViewColumn{}, datasets: map[string]*pb.Dataset{}}
+}
+
+// putDataset registers a Dataset (e.g. with Freqs) used by
+// primaryStoreBackfill.timeSeriesBackfillWindow. Views without a
+// registered Dataset fall back to the default TimeSeries dataset used by
+// the rest of this test file.
+func (m *fakeMetadata) putDataset(ds *pb.Dataset) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.datasets[fakeViewKey(ds.GetSpaceId(), ds.GetDatasetId())] = proto.Clone(ds).(*pb.Dataset)
 }
 
 func fakeViewKey(spaceID, viewID string) string { return spaceID + "|" + viewID }
@@ -208,6 +236,11 @@ func (m *fakeMetadata) ListSpaces(ctx context.Context, owner string, page *pb.Pa
 }
 
 func (m *fakeMetadata) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ds, ok := m.datasets[fakeViewKey(spaceID, datasetID)]; ok {
+		return proto.Clone(ds).(*pb.Dataset), nil
+	}
 	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES}, nil
 }
 
@@ -761,5 +794,154 @@ func TestRotation_DisabledIsFullKillSwitch(t *testing.T) {
 	}
 	if len(engine.removed) != 0 {
 		t.Fatalf("expected no Remove calls while rotation is disabled, removed=%v", engine.removed)
+	}
+}
+
+// cancelAfterNGetView wraps fakeMetadata to simulate a concurrent
+// cancellation of an in-progress warming claim (e.g. another rotate pass
+// clearing a stale/obsolete building pointer) exactly after `remaining`
+// GetView calls for the target View. primaryStoreBackfill.buildingStillValid
+// calls GetView once per page before writing, so this lets Task 7
+// cancellation tests deterministically cancel mid-backfill.
+type cancelAfterNGetView struct {
+	*fakeMetadata
+	spaceID string
+	viewID  string
+
+	mu        sync.Mutex
+	remaining int
+}
+
+func (c *cancelAfterNGetView) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
+	item, err := c.fakeMetadata.GetView(ctx, spaceID, viewID)
+	if err != nil {
+		return nil, err
+	}
+	if spaceID != c.spaceID || viewID != c.viewID {
+		return item, nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.remaining <= 0 {
+		return item, nil
+	}
+	c.remaining--
+	if c.remaining > 0 {
+		return item, nil
+	}
+	// Simulate a concurrent rotate pass invalidating this claim mid-scan
+	// (e.g. a schema bump or stale-claim cleanup on another replica).
+	cleared := proto.Clone(item).(*pb.View)
+	cleared.BuildStatus = "failed"
+	c.fakeMetadata.putView(cleared)
+	return cleared, nil
+}
+
+func TestRotation_CancellationMidBackfillDoesNotSwitch(t *testing.T) {
+	ctx := context.Background()
+	spaceID, viewID := "space1", "view_cancel"
+	activeSlot := viewindex.ViewIndexID(spaceID, viewID, "a")
+
+	base := newFakeMetadata()
+	base.putView(&pb.View{
+		SpaceId: spaceID, ViewId: viewID, Engine: "duckdb", PrimaryDatasetId: "ds1",
+		ViewVersion: 2, ActiveViewVersion: 1, ActiveResult: activeSlot,
+		Status: "active", BuildStatus: "active",
+	})
+	base.putColumns(spaceID, viewID, sampleViewColumns())
+	// Cancel exactly on the buildingStillValid check before the second
+	// page, after the first page has already been written.
+	metadata := &cancelAfterNGetView{fakeMetadata: base, spaceID: spaceID, viewID: viewID, remaining: 2}
+
+	facts := newFakeFactReader()
+	facts.pageSize = 1
+	facts.setRows("ds1", []*pb.TimeSeriesRow{
+		tsRow("ds1", "sub1", "2026-07-09T00:00:00Z"),
+		tsRow("ds1", "sub1", "2026-07-09T00:01:00Z"),
+		tsRow("ds1", "sub1", "2026-07-09T00:02:00Z"),
+	})
+
+	engine := newFakeEngine("duckdb")
+	engine.setStat(activeSlot, viewindex.ViewIndexStats{Exists: true, EntryCount: 3})
+
+	mgr := NewRotationManager(RotationOptions{
+		Metadata: metadata,
+		Engines:  map[string]viewindex.ViewIndexEngine{"duckdb": engine},
+		Config:   RotationConfig{Enabled: true, MaxEntries: 1_000_000, MinReadyEntries: 0, DefaultBackfillWindow: 24 * time.Hour},
+		Facts:    facts,
+	})
+
+	rotated, err := mgr.RotateViewIndexes(ctx, spaceID)
+	if err != nil {
+		t.Fatalf("RotateViewIndexes returned error: %v", err)
+	}
+	if rotated != 0 {
+		t.Fatalf("expected mid-backfill cancellation to prevent the switch, got rotated=%d", rotated)
+	}
+	updated, err := metadata.fakeMetadata.GetView(ctx, spaceID, viewID)
+	if err != nil {
+		t.Fatalf("GetView failed: %v", err)
+	}
+	if updated.GetActiveResult() != activeSlot {
+		t.Fatalf("expected active_result to remain %s after cancellation, got %q", activeSlot, updated.GetActiveResult())
+	}
+	if engine.writeCalls == 0 {
+		t.Fatalf("expected at least one page to be written before cancellation was detected")
+	}
+	if engine.writeCalls >= 3 {
+		t.Fatalf("expected cancellation to stop before all 3 rows were written, got %d write calls", engine.writeCalls)
+	}
+}
+
+func TestRotation_SmallViewSwitchesAfterScanCompleteBelowMinReadyEntries(t *testing.T) {
+	ctx := context.Background()
+	spaceID, viewID := "space1", "view_small_real_backfill"
+	activeSlot := viewindex.ViewIndexID(spaceID, viewID, "a")
+	warmingSlot := viewindex.ViewIndexID(spaceID, viewID, "b")
+
+	metadata := newFakeMetadata()
+	metadata.putView(&pb.View{
+		SpaceId: spaceID, ViewId: viewID, Engine: "duckdb",
+		PrimaryDatasetId: "ds1", ViewVersion: 2, ActiveViewVersion: 1,
+		ActiveResult: activeSlot, Status: "active", BuildStatus: "active",
+	})
+	metadata.putColumns(spaceID, viewID, sampleViewColumns())
+
+	engine := newFakeEngine("duckdb")
+	// Both the active index and the real PrimaryStore backfill scan are
+	// tiny (3 and 5 rows), far below min_ready_entries (1000); the
+	// small-view guard should still let the switch happen once the real
+	// backfill scan completes.
+	engine.setStat(activeSlot, viewindex.ViewIndexStats{Exists: true, EntryCount: 3})
+
+	facts := newFakeFactReader()
+	facts.setRows("ds1", []*pb.TimeSeriesRow{
+		tsRow("ds1", "sub1", "2026-07-09T00:00:00Z"),
+		tsRow("ds1", "sub1", "2026-07-09T00:01:00Z"),
+		tsRow("ds1", "sub1", "2026-07-09T00:02:00Z"),
+		tsRow("ds1", "sub1", "2026-07-09T00:03:00Z"),
+		tsRow("ds1", "sub1", "2026-07-09T00:04:00Z"),
+	})
+
+	mgr := NewRotationManager(RotationOptions{
+		Metadata: metadata,
+		Engines:  map[string]viewindex.ViewIndexEngine{"duckdb": engine},
+		Config:   RotationConfig{Enabled: true, MaxEntries: 1_000_000, MinReadyEntries: 1000, RemoveGrace: 0, DefaultBackfillWindow: 24 * time.Hour},
+		Facts:    facts,
+	})
+
+	rotated, err := mgr.RotateViewIndexes(ctx, spaceID)
+	if err != nil {
+		t.Fatalf("RotateViewIndexes returned error: %v", err)
+	}
+	if rotated != 1 {
+		t.Fatalf("expected small view to switch after the real backfill scan completes, got %d", rotated)
+	}
+	updated, err := metadata.GetView(ctx, spaceID, viewID)
+	if err != nil {
+		t.Fatalf("GetView failed: %v", err)
+	}
+	if updated.GetActiveResult() != warmingSlot {
+		t.Fatalf("expected active_result to switch to %s, got %s", warmingSlot, updated.GetActiveResult())
 	}
 }

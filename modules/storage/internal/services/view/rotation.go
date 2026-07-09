@@ -75,10 +75,19 @@ type RotationOptions struct {
 	Config RotationConfig
 	// Now returns the current time; defaults to time.Now.
 	Now func() time.Time
-	// Backfill backfills a warming index from PrimaryStore. When nil,
-	// stubBackfill is used and warming indexes never complete (Task 6
-	// default; Task 7 replaces this with a real implementation).
+	// Backfill backfills a warming index from PrimaryStore. When nil and
+	// Facts/Records are provided, NewRotationManager builds a real
+	// PrimaryStoreBackfill (Task 7) from them; when nil and neither is
+	// set, stubBackfill is used and warming indexes never complete.
 	Backfill BackfillFunc
+	// Facts backfills TimeSeries Views from PrimaryStore when Backfill is
+	// not explicitly set. Production wiring (cmd/server/main.go) passes
+	// the shared Access/FactReader here.
+	Facts FactReader
+	// Records backfills Record Views from PrimaryStore when Backfill is
+	// not explicitly set. Production wiring (cmd/server/main.go) passes
+	// the shared Access/FactReader here.
+	Records RecordFactReader
 }
 
 // RotationManager implements the unified op=rotate View index lifecycle:
@@ -112,20 +121,30 @@ func NewRotationManager(opts RotationOptions) *RotationManager {
 	if cfg.StaleBuildingAfter <= 0 {
 		cfg.StaleBuildingAfter = defaultStaleBuildingAfter
 	}
+	backfill := opts.Backfill
+	if backfill == nil && (opts.Facts != nil || opts.Records != nil) {
+		backfill = NewPrimaryStoreBackfill(PrimaryStoreBackfillOptions{
+			Metadata: opts.Metadata,
+			Facts:    opts.Facts,
+			Records:  opts.Records,
+			Config:   cfg,
+			Now:      now,
+		})
+	}
 	return &RotationManager{
 		metadata: opts.Metadata,
 		engines:  engines,
 		cfg:      cfg,
 		now:      now,
-		backfill: opts.Backfill,
+		backfill: backfill,
 		claims:   make(map[string]bool),
 		removals: make(map[string]time.Time),
 	}
 }
 
-// stubBackfill is the Task 6 placeholder backfill hook. It never reports
-// completion, so production RotateViewIndexes never calls CompleteViewBuild
-// until Task 7 wires real PrimaryStore backfill.
+// stubBackfill is the placeholder backfill hook used only when neither an
+// explicit Backfill nor Facts/Records are configured. It never reports
+// completion, so RotateViewIndexes never calls CompleteViewBuild.
 func stubBackfill(context.Context, viewindex.ViewIndexEngine, *pb.View, string) (bool, error) {
 	return false, nil
 }

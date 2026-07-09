@@ -11,11 +11,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	searchsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // FactReader 定义 View 构建器读取主存 TimeSeries 行所需的接口。
@@ -690,4 +692,316 @@ func sanitizeResultTableName(raw string) string {
 		name = "view_result_" + name
 	}
 	return name
+}
+
+// ---------------------------------------------------------------------------
+// Task 7: PrimaryStore backfill for warming View indexes.
+//
+// NewPrimaryStoreBackfill implements the BackfillFunc seam declared in
+// rotation.go with a real PrimaryStore-backed backfill: it scans bounded
+// windows via ScanTimeSeriesRows/ScanRecordRows, projects each page through
+// the same TimeSeriesRowsForView/RecordRowsForView helpers used by the
+// incremental dual-write path (builder/time_series.go, builder/record.go),
+// and writes pages straight into the warming ViewIndexEngine. The full
+// backfill window is never accumulated in memory.
+// ---------------------------------------------------------------------------
+
+// backfillPageSize bounds the PrimaryStore scan page size used per
+// engine.Write call during PrimaryStore backfill.
+const backfillPageSize = uint32(1000)
+
+// PrimaryStoreBackfillOptions configures NewPrimaryStoreBackfill.
+type PrimaryStoreBackfillOptions struct {
+	// Metadata re-checks building validity before each page write and
+	// resolves View columns and Dataset freqs.
+	Metadata Metadata
+	// Facts backfills TimeSeries Views from PrimaryStore.
+	Facts FactReader
+	// Records backfills Record Views from PrimaryStore.
+	Records RecordFactReader
+	// Config controls backfill window and safety-cap thresholds.
+	Config RotationConfig
+	// Now returns the current time; defaults to time.Now.
+	Now func() time.Time
+}
+
+// NewPrimaryStoreBackfill returns a BackfillFunc that backfills a warming
+// View index from PrimaryStore. It is the Task 7 production replacement
+// for rotation.go's stubBackfill.
+func NewPrimaryStoreBackfill(opts PrimaryStoreBackfillOptions) BackfillFunc {
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+	b := &primaryStoreBackfill{
+		metadata: opts.Metadata,
+		facts:    opts.Facts,
+		records:  opts.Records,
+		cfg:      opts.Config,
+		now:      now,
+	}
+	return b.backfill
+}
+
+// primaryStoreBackfill implements the Task 7 PrimaryStore backfill for both
+// TimeSeries (DuckDB) and Record (Bleve) warming View indexes.
+type primaryStoreBackfill struct {
+	metadata Metadata
+	facts    FactReader
+	records  RecordFactReader
+	cfg      RotationConfig
+	now      func() time.Time
+}
+
+func (b *primaryStoreBackfill) backfill(ctx context.Context, engine viewindex.ViewIndexEngine, item *pb.View, indexID string) (bool, error) {
+	if item == nil || indexID == "" {
+		return false, nil
+	}
+	if isBleveView(item) {
+		return b.backfillRecordView(ctx, engine, item, indexID)
+	}
+	return b.backfillTimeSeriesView(ctx, engine, item, indexID)
+}
+
+// backfillTimeSeriesView scans the effective TimeSeries backfill window
+// from PrimaryStore page by page and writes each projected page directly
+// into the warming DuckDB index, without ever holding the full window in
+// memory. Before each page write it re-checks the View's building pointer
+// so a concurrent schema bump, capacity restart, or stale-claim cleanup
+// stops the backfill without ever completing.
+func (b *primaryStoreBackfill) backfillTimeSeriesView(ctx context.Context, engine viewindex.ViewIndexEngine, item *pb.View, indexID string) (bool, error) {
+	if b.facts == nil {
+		return false, errors.New("primary store backfill requires a FactReader for time series views")
+	}
+	spaceID, viewID := item.GetSpaceId(), item.GetViewId()
+	targetVersion := item.GetBuildingViewVersion()
+	primaryDatasetID := primaryDatasetIDOf(item)
+	if primaryDatasetID == "" {
+		return false, errors.New("view primary_dataset_id is required for backfill")
+	}
+	columns, err := b.viewColumns(ctx, item)
+	if err != nil {
+		return false, err
+	}
+	window := b.timeSeriesBackfillWindow(ctx, item, primaryDatasetID)
+	timeRange := &pb.TimeRange{StartTime: b.now().Add(-window).UTC().Format(time.RFC3339)}
+	sourceColumns := sourceColumnNamesByDataset(primaryDatasetID, columns)[primaryDatasetID]
+
+	cursor := ""
+	for {
+		if !b.buildingStillValid(ctx, spaceID, viewID, targetVersion, indexID) {
+			return false, nil
+		}
+		rows, page, err := b.facts.ScanTimeSeriesRows(ctx, spaceID, primaryDatasetID, timeRange, sourceColumns, &pb.Page{Size: backfillPageSize, Cursor: cursor})
+		if err != nil {
+			return false, err
+		}
+		if len(rows) > 0 {
+			projected, ok, err := TimeSeriesRowsForView(ctx, item, columns, rows, b.readTimeSeriesProjectionRow)
+			if err != nil {
+				return false, err
+			}
+			if ok && len(projected) > 0 {
+				if err := engine.Write(ctx, indexID, viewindex.ViewIndexBatch{TimeSeriesRows: projected, Columns: columns}); err != nil {
+					return false, err
+				}
+			}
+		}
+		if page == nil || !page.GetHasMore() || page.GetNextCursor() == "" {
+			return true, nil
+		}
+		cursor = page.GetNextCursor()
+	}
+}
+
+func (b *primaryStoreBackfill) readTimeSeriesProjectionRow(ctx context.Context, base *pb.TimeSeriesKey, datasetID string) (*pb.TimeSeriesRow, error) {
+	if base == nil {
+		return nil, nil
+	}
+	key := proto.Clone(base).(*pb.TimeSeriesKey)
+	key.DatasetId = datasetID
+	rsp, err := b.facts.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{Keys: []*pb.TimeSeriesKey{key}})
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		return nil, errors.New(rsp.GetRetInfo().GetMsg())
+	}
+	if len(rsp.GetRows()) == 0 {
+		return nil, nil
+	}
+	return rsp.GetRows()[0], nil
+}
+
+// timeSeriesBackfillWindow computes the effective TimeSeries backfill
+// window: max(view.query_window, rotation.default_backfill_window,
+// rotation.time_series.freq_backfill_window[freq] for each Dataset freq,
+// rotation.overlap_window).
+func (b *primaryStoreBackfill) timeSeriesBackfillWindow(ctx context.Context, item *pb.View, primaryDatasetID string) time.Duration {
+	window := maxDuration(parseWindowOrZero(item.GetQueryWindow()), b.cfg.DefaultBackfillWindow)
+	for _, freq := range b.datasetFreqs(ctx, item.GetSpaceId(), primaryDatasetID) {
+		if d, ok := b.cfg.TimeSeriesFreqBackfillWindow[freq]; ok {
+			window = maxDuration(window, d)
+		}
+	}
+	return maxDuration(window, b.cfg.OverlapWindow)
+}
+
+func (b *primaryStoreBackfill) datasetFreqs(ctx context.Context, spaceID string, datasetID string) []string {
+	if b.metadata == nil {
+		return nil
+	}
+	dataset, err := b.metadata.GetDataset(ctx, spaceID, datasetID)
+	if err != nil || dataset == nil {
+		return nil
+	}
+	return dataset.GetFreqs()
+}
+
+// backfillRecordView scans the effective Record backfill version window
+// from PrimaryStore page by page and writes each projected page directly
+// into the warming Bleve index. Non-timestamp Record versions cannot be
+// windowed reliably by a version range filter, so the scan is additionally
+// capped at record.max_backfill_entries with a warning log instead of
+// trying to infer full history from Bleve.
+func (b *primaryStoreBackfill) backfillRecordView(ctx context.Context, engine viewindex.ViewIndexEngine, item *pb.View, indexID string) (bool, error) {
+	if b.records == nil {
+		return false, errors.New("primary store backfill requires a RecordFactReader for record views")
+	}
+	spaceID, viewID := item.GetSpaceId(), item.GetViewId()
+	targetVersion := item.GetBuildingViewVersion()
+	primaryDatasetID := primaryDatasetIDOf(item)
+	if primaryDatasetID == "" {
+		return false, errors.New("view primary_dataset_id is required for backfill")
+	}
+	columns, err := b.viewColumns(ctx, item)
+	if err != nil {
+		return false, err
+	}
+	window := b.recordBackfillWindow(item)
+	now := b.now().UTC()
+	versionRange := &pb.VersionRange{
+		StartVersion: now.Add(-window).Format(time.RFC3339),
+		EndVersion:   now.Format(time.RFC3339),
+	}
+	sourceColumns := sourceColumnNamesByDataset(primaryDatasetID, columns)[primaryDatasetID]
+
+	maxEntries := b.cfg.RecordMaxBackfillEntries
+	var scanned int64
+	cursor := ""
+	for {
+		if !b.buildingStillValid(ctx, spaceID, viewID, targetVersion, indexID) {
+			return false, nil
+		}
+		rows, page, err := b.records.ScanRecordRows(ctx, spaceID, primaryDatasetID, versionRange, sourceColumns, &pb.Page{Size: backfillPageSize, Cursor: cursor})
+		if err != nil {
+			return false, err
+		}
+		scanned += int64(len(rows))
+		if len(rows) > 0 {
+			projected, ok, err := RecordRowsForView(ctx, item, columns, rows, b.readRecordProjectionRow)
+			if err != nil {
+				return false, err
+			}
+			if ok && len(projected) > 0 {
+				if err := engine.Write(ctx, indexID, viewindex.ViewIndexBatch{RecordRows: projected, Columns: columns}); err != nil {
+					return false, err
+				}
+			}
+		}
+		if maxEntries > 0 && scanned >= maxEntries {
+			log.WarnContextf(ctx, "[ViewBuilder] record view %s/%s backfill hit record.max_backfill_entries=%d before the scan completed; treating as done and assuming non-timestamp record versions instead of inferring full history from Bleve", spaceID, viewID, maxEntries)
+			return true, nil
+		}
+		if page == nil || !page.GetHasMore() || page.GetNextCursor() == "" {
+			return true, nil
+		}
+		cursor = page.GetNextCursor()
+	}
+}
+
+func (b *primaryStoreBackfill) readRecordProjectionRow(ctx context.Context, base *pb.RecordKey, datasetID string) (*pb.RecordRow, error) {
+	if base == nil {
+		return nil, nil
+	}
+	key := proto.Clone(base).(*pb.RecordKey)
+	key.DatasetId = datasetID
+	rsp, err := b.records.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: []*pb.RecordKey{key}})
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		return nil, errors.New(rsp.GetRetInfo().GetMsg())
+	}
+	if len(rsp.GetRows()) == 0 {
+		return nil, nil
+	}
+	return rsp.GetRows()[0], nil
+}
+
+// recordBackfillWindow computes the effective Record backfill window:
+// max(view.query_window, rotation.record.default_version_window,
+// rotation.overlap_window).
+func (b *primaryStoreBackfill) recordBackfillWindow(item *pb.View) time.Duration {
+	window := maxDuration(parseWindowOrZero(item.GetQueryWindow()), b.cfg.RecordDefaultVersionWindow)
+	return maxDuration(window, b.cfg.OverlapWindow)
+}
+
+// buildingStillValid re-checks the View's building pointer immediately
+// before each page write so a concurrent schema bump, capacity restart, or
+// stale-claim cleanup stops this backfill claim without ever calling
+// CompleteViewBuild on a pointer that no longer matches.
+func (b *primaryStoreBackfill) buildingStillValid(ctx context.Context, spaceID string, viewID string, targetVersion uint64, indexID string) bool {
+	if b.metadata == nil {
+		return true
+	}
+	current, err := b.metadata.GetView(ctx, spaceID, viewID)
+	if err != nil || current == nil {
+		return false
+	}
+	return current.GetBuildingResult() == indexID &&
+		current.GetBuildingViewVersion() == targetVersion &&
+		current.GetViewVersion() == targetVersion &&
+		current.GetBuildStatus() == "building"
+}
+
+func (b *primaryStoreBackfill) viewColumns(ctx context.Context, item *pb.View) ([]*pb.ViewColumn, error) {
+	if b.metadata == nil {
+		return item.GetColumns(), nil
+	}
+	columns, _, err := b.metadata.ListViewColumns(ctx, item.GetSpaceId(), item.GetViewId(), &pb.Page{Size: 10000})
+	if err != nil {
+		return nil, err
+	}
+	if len(columns) == 0 {
+		columns = item.GetColumns()
+	}
+	return columns, nil
+}
+
+// primaryDatasetIDOf resolves a View's primary Dataset ID, falling back to
+// the first entry of dataset_ids when primary_dataset_id is unset.
+func primaryDatasetIDOf(item *pb.View) string {
+	if item.GetPrimaryDatasetId() != "" {
+		return item.GetPrimaryDatasetId()
+	}
+	if len(item.GetDatasetIds()) > 0 {
+		return item.GetDatasetIds()[0]
+	}
+	return ""
+}
+
+func parseWindowOrZero(value string) time.Duration {
+	d, ok := parseWindow(value)
+	if !ok {
+		return 0
+	}
+	return d
+}
+
+func maxDuration(a time.Duration, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
 }
