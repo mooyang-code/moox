@@ -23,21 +23,44 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if err := view.ValidateTimeSeriesQueryOptions(req); err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	view, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+	viewMeta, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
 	}
-	if err := s.validateTimeSeriesView(ctx, view); err != nil {
+	if err := s.validateTimeSeriesView(ctx, viewMeta); err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	if view.GetActiveResult() == "" {
+	if viewMeta.GetActiveResult() == "" {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, errText("view active_result is empty"))}, nil
 	}
 	viewStore, err := s.viewStore()
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	columns, rows, page, err := viewStore.QueryTimeSeriesRows(ctx, view.GetActiveResult(), req)
+	if view.NeedsActiveSchemaValidation(viewMeta, req.GetColumnNames()) {
+		latestColumns, _, err := s.metadataReader.ListViewColumns(ctx, req.GetSpaceId(), req.GetViewId(), &pb.Page{Size: 10000})
+		if err != nil {
+			return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		}
+		activeNames := view.ViewColumnNames(viewMeta.GetColumns())
+		if len(activeNames) == 0 {
+			activeColumns, _, _, err := viewStore.QueryTimeSeriesRows(ctx, viewMeta.GetActiveResult(), &pb.QueryTimeSeriesRowsReq{
+				Limit:     1,
+				TotalMode: pb.TotalMode_NONE,
+			})
+			if err != nil {
+				return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+			}
+			activeNames = view.ResultColumnNames(activeColumns)
+		}
+		if err := view.ValidateRequestedColumnsAgainstActiveSchema(viewMeta, req.GetColumnNames(), activeNames, latestColumns); err != nil {
+			if view.IsViewNotReadyError(err) {
+				return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_READY, err)}, nil
+			}
+			return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		}
+	}
+	columns, rows, page, err := viewStore.QueryTimeSeriesRows(ctx, viewMeta.GetActiveResult(), req)
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
@@ -48,23 +71,44 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 	if strings.TrimSpace(req.GetViewId()) == "" {
 		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view_id is required"))}, nil
 	}
-	view, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+	viewMeta, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
 	if err != nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
 	}
-	if err := s.validateRecordView(ctx, view); err != nil {
+	if err := s.validateRecordView(ctx, viewMeta); err != nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	if view.GetActiveResult() == "" {
+	if viewMeta.GetActiveResult() == "" {
 		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, errors.New("view active_result is empty"))}, nil
 	}
-	datasetID := view.GetPrimaryDatasetId()
+	datasetID := viewMeta.GetPrimaryDatasetId()
 	if strings.TrimSpace(datasetID) == "" {
 		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view primary_dataset_id is required"))}, nil
 	}
 	viewColumns, _, err := s.metadataReader.ListViewColumns(ctx, req.GetSpaceId(), req.GetViewId(), &pb.Page{Size: 10000})
 	if err != nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	if view.NeedsActiveSchemaValidation(viewMeta, req.GetColumnNames()) {
+		activeNames := view.ViewColumnNames(viewMeta.GetColumns())
+		if len(activeNames) == 0 {
+			activeRows, _, err := s.search.SearchRecordRows(ctx, searchsvc.SearchRequest{
+				ResultName: viewMeta.GetActiveResult(),
+				SpaceID:    req.GetSpaceId(),
+				DatasetID:  datasetID,
+				Page:       &pb.Page{Page: 1, Size: 10000},
+			})
+			if err != nil {
+				return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+			}
+			activeNames = view.RecordRowsColumnNames(activeRows)
+		}
+		if err := view.ValidateRequestedColumnsAgainstActiveSchema(viewMeta, req.GetColumnNames(), activeNames, viewColumns); err != nil {
+			if view.IsViewNotReadyError(err) {
+				return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_READY, err)}, nil
+			}
+			return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		}
 	}
 	keys, err := normalizeRecordSearchKeys(req.GetSpaceId(), datasetID, req.GetKeys())
 	if err != nil {
@@ -75,7 +119,7 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 		recordIDs = append(recordIDs, key.GetRecordId())
 	}
 	rows, _, err := s.search.SearchRecordRows(ctx, searchsvc.SearchRequest{
-		ResultName:   view.GetActiveResult(),
+		ResultName:   viewMeta.GetActiveResult(),
 		SpaceID:      req.GetSpaceId(),
 		DatasetID:    datasetID,
 		RecordIDs:    recordIDs,
