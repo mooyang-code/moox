@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	devicebleve "github.com/mooyang-code/moox/modules/storage/internal/infra/device/bleve"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
@@ -29,6 +30,8 @@ type Service struct {
 	openMu    sync.Mutex
 	indexes   sync.Map
 }
+
+var _ viewindex.ViewIndexEngine = (*Service)(nil)
 
 // SearchRequest 描述一次 Record 视图检索请求。
 type SearchRequest struct {
@@ -67,6 +70,66 @@ func (s *Service) IndexRecordViewRows(ctx context.Context, resultName string, co
 		return nil
 	}
 	return index.IndexRows(ctx, rows, indexed)
+}
+
+func (s *Service) Engine() string {
+	return "bleve"
+}
+
+func (s *Service) Prepare(ctx context.Context, indexID string, schema viewindex.ViewIndexSchema) error {
+	_ = schema
+	if indexID == "" {
+		return errors.New("index_id is required")
+	}
+	if err := s.Remove(ctx, indexID); err != nil {
+		return err
+	}
+	_, err := s.searchIndex(indexID, true)
+	return err
+}
+
+func (s *Service) Write(ctx context.Context, indexID string, batch viewindex.ViewIndexBatch) error {
+	if indexID == "" {
+		return errors.New("index_id is required")
+	}
+	if len(batch.TimeSeriesRows) > 0 {
+		return errors.New("bleve view index rejects time series rows")
+	}
+	return s.IndexRecordViewRows(ctx, indexID, batch.Columns, batch.RecordRows)
+}
+
+func (s *Service) Stat(ctx context.Context, indexID string) (viewindex.ViewIndexStats, error) {
+	if indexID == "" {
+		return viewindex.ViewIndexStats{}, errors.New("index_id is required")
+	}
+	index, err := s.searchIndex(indexID, false)
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	return index.Stat(ctx)
+}
+
+func (s *Service) Remove(ctx context.Context, indexID string) error {
+	_ = ctx
+	if indexID == "" {
+		return errors.New("index_id is required")
+	}
+	path := s.indexPath(indexID)
+	s.openMu.Lock()
+	defer s.openMu.Unlock()
+
+	var firstErr error
+	if loaded, ok := s.indexes.LoadAndDelete(path); ok {
+		if index, ok := loaded.(*devicebleve.Index); ok {
+			if err := index.Close(); err != nil {
+				firstErr = err
+			}
+		}
+	}
+	if err := os.RemoveAll(path); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
 }
 
 func (s *Service) SearchRecordRows(ctx context.Context, req SearchRequest) ([]*pb.RecordRow, *pb.PageResult, error) {
@@ -111,11 +174,10 @@ func (s *Service) Close() error {
 }
 
 func (s *Service) searchIndex(resultName string, createIfMissing bool) (*devicebleve.Index, error) {
-	resultName = sanitizeRecordIndexName(resultName)
-	path := filepath.Join(s.root, "bleve", resultName)
-	if s.blevePath != "" {
-		path = filepath.Join(s.blevePath, resultName)
+	if resultName == "" {
+		return nil, errors.New("result_name is required")
 	}
+	path := s.indexPath(resultName)
 	if value, ok := s.indexes.Load(path); ok {
 		return value.(*devicebleve.Index), nil
 	}
@@ -141,6 +203,15 @@ func (s *Service) searchIndex(resultName string, createIfMissing bool) (*deviceb
 	}
 	s.indexes.Store(path, index)
 	return index, nil
+}
+
+func (s *Service) indexPath(indexID string) string {
+	indexID = sanitizeRecordIndexName(indexID)
+	path := filepath.Join(s.root, "bleve", indexID)
+	if s.blevePath != "" {
+		path = filepath.Join(s.blevePath, indexID)
+	}
+	return path
 }
 
 var invalidRecordIndexChar = regexp.MustCompile(`[^A-Za-z0-9_]+`)

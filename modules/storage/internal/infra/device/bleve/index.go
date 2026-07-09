@@ -2,13 +2,16 @@ package bleve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
 	blevelib "github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/mapping"
 	blevequery "github.com/blevesearch/bleve/v2/search/query"
+	"github.com/blevesearch/bleve_index_api"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -35,6 +38,14 @@ type SearchRequest struct {
 }
 
 const searchBatchSize = 10000
+
+const statsDocumentID = "__moox_view_index_stats"
+
+type indexStatsDocument struct {
+	EntryCount int64  `json:"entry_count"`
+	MinVersion string `json:"min_version"`
+	MaxVersion string `json:"max_version"`
+}
 
 func Open(opts Options) (*Index, error) {
 	if opts.Path == "" {
@@ -70,6 +81,11 @@ func buildIndexMapping() mapping.IndexMapping {
 	rowMapping.Index = false
 	docMapping.AddFieldMappingsAt("_row_json", rowMapping)
 
+	statsMapping := blevelib.NewTextFieldMapping()
+	statsMapping.Store = true
+	statsMapping.Index = false
+	docMapping.AddFieldMappingsAt("_stats_json", statsMapping)
+
 	for _, field := range []string{"space_id", "dataset_id", "record_id", "version"} {
 		kw := blevelib.NewKeywordFieldMapping()
 		kw.Store = false
@@ -90,7 +106,15 @@ func (i *Index) Close() error {
 
 func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexedColumns map[string]bool) error {
 	_ = ctx
+	if len(rows) == 0 {
+		return nil
+	}
+	stats, err := i.readStats()
+	if err != nil {
+		return err
+	}
 	batch := i.index.NewBatch()
+	seenDocs := make(map[string]bool, len(rows))
 	for _, row := range rows {
 		raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(row)
 		if err != nil {
@@ -109,11 +133,49 @@ func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexed
 				doc[column.GetColumnName()] = factvalue.String(column.GetValue())
 			}
 		}
-		if err := batch.Index(documentID(row), doc); err != nil {
+		docID := documentID(row)
+		if !seenDocs[docID] {
+			exists, err := i.documentExists(docID)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				stats.EntryCount++
+			}
+			seenDocs[docID] = true
+		}
+		updateStatsVersion(&stats, key.GetVersion())
+		if err := batch.Index(docID, doc); err != nil {
 			return err
 		}
 	}
+	if err := batch.Index(statsDocumentID, stats.toDocument()); err != nil {
+		return err
+	}
 	return i.index.Batch(batch)
+}
+
+func (i *Index) Stat(ctx context.Context) (viewindex.ViewIndexStats, error) {
+	_ = ctx
+	stats, err := i.readStats()
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	if stats.EntryCount == 0 {
+		count, err := i.index.DocCount()
+		if err != nil {
+			return viewindex.ViewIndexStats{}, err
+		}
+		if count > 0 {
+			stats.EntryCount = int64(count)
+		}
+	}
+	return viewindex.ViewIndexStats{
+		Exists:     true,
+		EntryCount: stats.EntryCount,
+		MinVersion: stats.MinVersion,
+		MaxVersion: stats.MaxVersion,
+	}, nil
 }
 
 func (i *Index) SearchRecordRows(ctx context.Context, req SearchRequest) ([]*pb.RecordRow, *pb.PageResult, error) {
@@ -211,6 +273,52 @@ func documentID(row *pb.RecordRow) string {
 		key.GetRecordId(),
 		key.GetVersion(),
 	}, "/")
+}
+
+func (i *Index) readStats() (indexStatsDocument, error) {
+	doc, err := i.index.Document(statsDocumentID)
+	if err != nil || doc == nil {
+		return indexStatsDocument{}, err
+	}
+	var raw string
+	doc.VisitFields(func(field index.Field) {
+		if field.Name() == "_stats_json" {
+			raw = string(field.Value())
+		}
+	})
+	if raw == "" {
+		return indexStatsDocument{}, nil
+	}
+	var stats indexStatsDocument
+	if err := json.Unmarshal([]byte(raw), &stats); err != nil {
+		return indexStatsDocument{}, err
+	}
+	return stats, nil
+}
+
+func (i *Index) documentExists(docID string) (bool, error) {
+	doc, err := i.index.Document(docID)
+	if err != nil {
+		return false, err
+	}
+	return doc != nil, nil
+}
+
+func (s indexStatsDocument) toDocument() map[string]any {
+	raw, _ := json.Marshal(s)
+	return map[string]any{"_stats_json": string(raw)}
+}
+
+func updateStatsVersion(stats *indexStatsDocument, version string) {
+	if version == "" {
+		return
+	}
+	if stats.MinVersion == "" || version < stats.MinVersion {
+		stats.MinVersion = version
+	}
+	if stats.MaxVersion == "" || version > stats.MaxVersion {
+		stats.MaxVersion = version
+	}
 }
 
 func versionInRange(version string, versionRange *pb.VersionRange) bool {
