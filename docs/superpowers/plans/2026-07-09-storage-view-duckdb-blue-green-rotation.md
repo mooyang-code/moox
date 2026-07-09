@@ -1,10 +1,12 @@
 # Storage View Index Blue-Green Rotation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Status (2026-07-09):** Plan locked and implementation approved. Implement task-by-task from this document; do not revive deleted rebuild/cleanup/Rebuild* paths or `__latest` removal in v1.
 
 **Goal:** Unify TimeSeries DuckDB Views and Record/Bleve Views under one bounded, blue-green View index lifecycle so PrimaryStore remains the only complete fact store and all derived View indexes can rotate, rebuild, and switch safely.
 
-**Architecture:** Introduce a single `ViewIndexEngine` abstraction with `Prepare`, `Write`, `Stat`, and `Remove` methods. View metadata continues to own the read pointer through `active_result` and the warming pointer through `building_result`; the rotation manager decides whether to rebuild because the View definition changed or rotate because the active index exceeded capacity. DuckDB and Bleve implement the same lifecycle while keeping their existing query APIs separate.
+**Architecture:** Introduce a single `ViewIndexEngine` abstraction with `Prepare`, `Write`, `Stat`, and `Remove` methods in `internal/core/viewindex`. View metadata owns the read pointer through `active_result` and the warming pointer through `building_result`. One scheduler entry `op=rotate` owns schema rebuild, capacity rotation, stale cleanup, ready-switch, and orphan remove. DuckDB and Bleve implement the same lifecycle while keeping their existing query APIs separate.
 
 **Tech Stack:** Go 1.24, tRPC-Go timers, SQLite metadata, Pebble PrimaryStore, DuckDB CGO, Bleve, Storage ViewBuilder, NATS/memory eventbus, `go test`.
 
@@ -16,22 +18,60 @@
 |---|---|
 | Derived index semantics | DuckDB and Bleve are bounded derived View indexes. PrimaryStore KV/Pebble is the only complete and authoritative fact store. |
 | Unified lifecycle | TimeSeries and Record Views both use `active_result` and `building_result` as View index instance IDs. |
+| Single scheduler entry | All View index lifecycle work goes through `RotateViewIndexes` via timer `op=rotate`. Delete `RebuildPendingViews`, `RebuildFailedViews`, `CleanupInactiveResults`, and their schedule ops (`cleanup`, `retry_failed`, default pending rebuild). |
+| Manual rebuild RPCs | Delete `RebuildTimeSeriesView` / `RebuildRecordView` RPC handlers and proto methods. Operators rely on schema version bumps + `op=rotate`, or capacity rotation. No separate rebuild API. |
+| Zero read gap | Old `active_result` keeps serving reads until warming passes ready checks and `CompleteViewBuild` switches the pointer. Never clear `active_result` before the new index is ready. |
 | Interface name | Use `ViewIndexEngine`. |
+| Interface package | Put shared types in `modules/storage/internal/core/viewindex` so DuckDB/Bleve infra never imports `services/view`. |
 | Physical index identifier | Use `indexID`, not `resultID`, `generation`, or `versionID`. |
+| Index naming | Use deterministic dual slots `a` / `b` only. Timestamp-suffixed names are obsolete derived junk and may be discarded. |
+| Legacy derived indexes | No compatibility migration and no copy from old indexes. On first rotate after this change, rebuild from PrimaryStore into an `a`/`b` slot; remove any non-slot or unreferenced physical indexes via `Remove`. |
 | Engine methods | Use `Prepare`, `Write`, `Stat`, `Remove`. Do not use `CreateOrReplace`, `Inspect`, `Retire`, or `GetStats`. |
 | Query path | Query APIs stay engine-specific: `QueryTimeSeriesRows` for DuckDB and `SearchRecordRows` for Bleve. The lifecycle interface does not contain a generic `Query` method. |
-| Default schema rebuild | Schema/view definition changes are always preemptive. No config switch is needed. If `view_version > active_view_version`, the next timer run rebuilds a new warming index immediately. |
-| Warming validity | A warming index is writable only when `building_result != ""` and `building_view_version == view_version`. Otherwise it is obsolete and must not receive new writes. |
+| Default schema rebuild | Schema/view definition changes are always preemptive. No config switch is needed. If `view_version > active_view_version`, the next `op=rotate` run starts a new warming index immediately. |
+| Warming validity | A warming index is writable only when `building_result != ""`, `building_view_version == view_version`, and `build_status == "building"`. Failed/pending leftovers must not receive writes. |
+| Build / backfill order | Hard sequence: `Prepare(indexID)` → conditional `BeginViewBuild` (set building pointer) → incremental dual-write becomes active → page backfill from PrimaryStore → ready check → `CompleteViewBuild` → wait `remove_grace` → `Remove(old active)`. Never backfill before the building pointer is published. |
+| Switch readiness | Prefer “backfill scan finished”. `min_ready_entries` is only a large-View guard: require `EntryCount >= min(min_ready_entries, expected_or_active_count)`, so small Views can switch as soon as backfill completes. Timestamp-like versions also require `allowed_lag`; non-timestamp Record versions rely on scan-complete + `max_backfill_entries` only. |
 | Active schema | New fields become queryable only after the new warming index switches to active. Until then, reads continue to use `active_result` and `active_view_version`. |
-| Obsolete warming | If a ViewColumn or View definition changes while a warming index is building, clear `building_result`, stop writing to the old warming index, and remove it asynchronously. |
+| Obsolete warming | If a ViewColumn or View definition changes while a warming index is building, clear `building_result`, stop writing to the old warming index, and remove it asynchronously after grace. |
 | Backfill source | Never copy from the old DuckDB table or old Bleve index. Warming indexes are backfilled from PrimaryStore via Access/FactReader so rows are complete. |
 | Backfill window | `overlap_window=30m` is only late-arrival/disorder protection. TimeSeries backfill also considers `query_window` and `freq_backfill_window`; Record backfill uses `version_window` semantics. |
-| Cleanup | Remove obsolete/old indexes as complete physical objects. Do not rely on periodic row/document deletes to keep derived indexes healthy. |
-| Latest helper | Remove the DuckDB `__latest` helper table path. Bounded active indexes make that special path unnecessary. |
+| Cleanup | Orphan/old index removal is part of `op=rotate` (`Remove` after grace, plus sweep of unreferenced physical indexes). Do not keep a separate cleanup timer path. Do not rely on periodic row/document deletes. |
+| List/Remove correctness | Fix DuckDB `ListResultTables` to discover real `view_*` tables (current `ts_view_%` / `view_result_%` filters are wrong). Bleve must implement directory `Remove`. |
+| Concurrency | Register `op=rotate` only on the view_builder role. Keep in-process `activeBuilds`. Make `BeginViewBuild` a conditional claim so multi-replica view_builder does not start two warmings for the same View. |
+| Schema hash | `HashViewIndexSchema` hashes engine + column shape only. Do **not** include `ViewVersion`; compare version separately. |
+| Latest helper | Keep DuckDB `__latest` in this plan. Delete it only as a follow-up after rotation is live, active indexes are bounded, and K-line query performance is re-verified. |
+| `backfill_done` placement | Do **not** add a durable metadata column for `backfill_done`. Prefer finishing warming in one successful rotate claim: local/in-memory `backfill_done` in that run, then ready check + `CompleteViewBuild` before releasing the claim. If the process crashes mid-warming, treat the building index as stale after timeout and restart from PrimaryStore (derived indexes are disposable). Optional resume cursor may later live in `View.attributes`, but is out of scope for v1. |
+| `rotation.enabled` semantics | `enabled=false` is a **full kill switch** for `RotateViewIndexes`: no schema warming, no capacity warming, no ready-switch, no orphan sweep. Incremental dual-write to an already-published `building_result` still follows `BuildingIndexWritable` rules, but no new lifecycle transitions run. Schema bumps while disabled leave `view_version` ahead of `active_view_version`; old active keeps serving until rotation is re-enabled and warming completes. Do not add a separate `capacity_enabled` flag in v1. |
+
+## Review Revisions (2026-07-09)
+
+This plan was revised after review. Keep these outcomes when implementing; do not reintroduce the rejected paths.
+
+| Topic | Outcome |
+|---|---|
+| Compatibility / migration | New project: no historical index migration. Discard non-`a`/`b` derived indexes and rebuild from PrimaryStore. |
+| Scheduler | Merge pending rebuild into `op=rotate`. Delete `RebuildPendingViews`, `RebuildFailedViews`, `CleanupInactiveResults`, and cleanup/retry_failed timers. |
+| Manual Rebuild RPCs | Delete `RebuildTimeSeriesView` / `RebuildRecordView`. |
+| Read gap | Accept zero-gap: old `active_result` serves until warming Complete. |
+| Switch ready | Backfill scan-complete first; `min_ready_entries` is a large-View guard only. |
+| Dual-write gate | Require `build_status == "building"` plus matching `building_view_version`. |
+| Package | `ViewIndexEngine` lives in `internal/core/viewindex`, not `services/view`. |
+| Schema hash | Exclude `ViewVersion`. |
+| `__latest` | Keep in this plan; remove only as a verified follow-up. |
+| `backfill_done` | Local to one rotate claim in v1; no durable metadata column. Crash → stale restart. |
+| `rotation.enabled` | Full kill switch for the entire rotate pass. |
+
+## Out Of Scope / Follow-ups
+
+- Delete DuckDB `__latest` helper after rotation is live and K-line query performance is re-checked.
+- Durable warming resume cursor in `View.attributes` (optional later).
+- Separate `capacity_enabled` vs schema-enabled flags.
+- Copying rows/documents from an old derived index into a new slot.
 
 ## Target Interface
 
-Create the common lifecycle interface in `modules/storage/internal/services/view/index_engine.go`:
+Create the common lifecycle interface in `modules/storage/internal/core/viewindex/engine.go`:
 
 ```go
 type ViewIndexEngine interface {
@@ -72,7 +112,7 @@ Mapping:
 - Bleve `indexID` is the physical index directory name.
 - `EntryCount` means row count for DuckDB and document count for Bleve.
 - `MinVersion` / `MaxVersion` means `data_time` for DuckDB and record `version` for Bleve.
-- `SchemaHash` is computed from View definition and ViewColumn shape, not from user display-only text.
+- `SchemaHash` is computed from engine + ViewColumn shape only (not `ViewVersion`, not display-only text).
 
 ## Target Configuration
 
@@ -104,30 +144,53 @@ storage:
 
 Interpretation:
 
+- `enabled`: full kill switch for `RotateViewIndexes`. When false, skip the entire rotate pass.
 - `max_entries`: capacity threshold for active indexes.
-- `min_ready_entries`: minimum warming index entry count before switch.
+- `min_ready_entries`: large-View guard only; small Views switch when backfill completes even if below this number.
 - `overlap_window`: late-arrival/disorder safety buffer.
 - `default_backfill_window`: fallback backfill window.
 - `allowed_lag`: warming `MaxVersion` may lag active/latest by at most this duration when versions are parseable timestamps.
-- `remove_grace_ms`: delay before removing old active or obsolete warming indexes.
+- `remove_grace_ms`: delay before removing old active or obsolete warming indexes after switch/cancel.
 - `time_series.freq_backfill_window`: frequency-aware minimum windows for K-line Views.
 - `record.default_version_window`: default Record View version range when versions are timestamp-like.
 - `record.max_backfill_entries`: safety cap for Record View backfill pages.
 
-No `rebuild_on_schema_change` config exists. Schema changes always rebuild preemptively.
+No `rebuild_on_schema_change` config exists. Schema changes always rebuild preemptively when rotation is enabled.
+
+## Rotate Decision Order
+
+```text
+if !rotation.enabled:
+  return  // full kill switch; leave active/building pointers untouched
+
+for each View:
+  1. if view_version > active_view_version:
+       start schema warming on inactive a/b slot (or continue if already building current version)
+  2. else if building pointer is stale/failed/obsolete:
+       clear building metadata and Remove physical warming index after grace
+  3. else if BuildingIndexWritable(view):
+       // v1: warming work should finish inside the same claim when possible.
+       // local backfill_done → ready check → CompleteViewBuild
+       // old active keeps serving until Complete
+       // schedule Remove(old active) after remove_grace
+       // do NOT start another capacity rotate while warming is in progress
+  4. else if active Stat.EntryCount > max_entries:
+       start capacity warming on inactive a/b slot
+  5. sweep unreferenced physical indexes (non a/b leftovers, dropped building, expired grace queue)
+```
 
 ## File Structure
 
 ### New files
 
-- `modules/storage/internal/services/view/index_engine.go`  
+- `modules/storage/internal/core/viewindex/engine.go`  
   Defines `ViewIndexEngine`, `ViewIndexSchema`, `ViewIndexBatch`, `ViewIndexStats`, schema hash helpers, and index ID helpers.
-- `modules/storage/internal/services/view/index_engine_test.go`  
+- `modules/storage/internal/core/viewindex/engine_test.go`  
   Tests schema hash stability, index ID naming, and active/building version guards.
 - `modules/storage/internal/services/view/rotation.go`  
   Unified rotation manager for DuckDB and Bleve View indexes.
 - `modules/storage/internal/services/view/rotation_test.go`  
-  Tests schema-preemptive rebuild, capacity rotation, stale warming cleanup, and switch readiness.
+  Tests schema-preemptive rebuild, capacity rotation, stale warming cleanup, switch readiness, and zero-gap active retention.
 
 ### Modified files
 
@@ -139,34 +202,40 @@ No `rebuild_on_schema_change` config exists. Schema changes always rebuild preem
   Add `storage.view.rotation`.
 - `modules/storage/config/storage.view_builder.yaml`  
   Add the same defaults for independent view-builder deployment.
+- `modules/storage/config/trpc_go.yaml` / `trpc_go.view_builder.yaml`  
+  Replace pending/cleanup/retry_failed timers with a single `op=rotate` timer on view_builder.
 - `modules/storage/internal/infra/device/duckdb/view_store.go`  
-  Implement DuckDB index lifecycle primitives and remove latest-helper behavior.
+  Implement DuckDB index lifecycle primitives; fix `ListResultTables` naming; keep `__latest` for now.
 - `modules/storage/internal/infra/device/duckdb/view_store_nocgo.go`  
   Keep no-cgo API parity.
 - `modules/storage/internal/infra/device/duckdb/view_store_test.go`  
-  Cover `Prepare`, `Write`, `Stat`, `Remove`, and no `__latest`.
+  Cover `Prepare`, `Write`, `Stat`, `Remove`, and list/remove of real `view_*` tables.
 - `modules/storage/internal/services/view/search/service.go`  
-  Implement Bleve index lifecycle primitives.
+  Implement Bleve index lifecycle primitives including `Remove`.
 - `modules/storage/internal/infra/device/bleve/index.go`  
-  Add document count/version stats and remove-index support if missing.
+  Add document count/version stats and remove-index support.
 - `modules/storage/internal/services/view/search/service_test.go`  
   Cover Bleve `Prepare`, `Write`, `Stat`, and `Remove`.
 - `modules/storage/internal/infra/metadata/sqlite/crud.go`  
-  Preserve `active_result`; clear obsolete `building_result` on View shape changes; keep compare-and-switch semantics.
+  Preserve `active_result` until Complete; clear obsolete `building_result` on View shape changes; make `BeginViewBuild` a conditional claim; keep compare-and-switch semantics.
 - `modules/storage/internal/infra/metadata/sqlite/crud_test.go`  
-  Cover ViewColumn changes bump version and clear building pointers.
+  Cover ViewColumn changes bump version and clear building pointers; Begin claim races; Complete keeps previous active until switch.
 - `modules/storage/internal/services/view/view_builder.go`  
-  Use deterministic index IDs for both DuckDB and Bleve builds and stream backfill pages.
+  Delete `RebuildPendingViews` / `RebuildFailedViews` / `CleanupInactiveResults` paths; reuse helpers only from rotation/backfill.
 - `modules/storage/internal/services/view/schedule.go`  
-  Add timer operation `op=rotate`.
+  Keep only `op=rotate` (delete cleanup/retry_failed/pending branches).
 - `modules/storage/internal/services/view/builder/time_series.go`  
-  Write active plus valid building index only.
+  Write active plus valid building index only (`build_status == building`).
 - `modules/storage/internal/services/view/builder/record.go`  
   Write active plus valid building index only.
 - `modules/storage/internal/services/view/service.go`  
-  Validate requested columns against active schema/version.
+  Validate requested columns against active schema/version; delete Rebuild* RPC handlers.
+- `modules/storage/internal/services/access/query.go`  
+  Delete Rebuild* access wrappers if present.
+- `modules/storage/proto/view.proto`  
+  Remove Rebuild* RPCs/messages; update query comments.
 - `modules/storage/cmd/server/main.go`  
-  Wire rotation config and register the rotate timer.
+  Wire rotation config and register the rotate timer only on view_builder.
 - `docs/存储目标架构与元数据.md`  
   Document unified View index semantics.
 - `docs/存储服务架构与部署.md`  
@@ -194,7 +263,7 @@ func TestStorageViewRotationDefaults(t *testing.T) {
 	cfg.ApplyDefaults()
 
 	rotation := cfg.View.Rotation
-	if !rotation.Enabled {
+	if !rotation.IsEnabled() {
 		t.Fatal("rotation enabled = false, want true")
 	}
 	if rotation.MaxEntries != 200000 {
@@ -251,6 +320,23 @@ storage:
 		t.Fatalf("record version window = %q, want 45d", rotation.Record.DefaultVersionWindow)
 	}
 }
+
+func TestStorageViewRotationYAMLDisableKillSwitch(t *testing.T) {
+	raw := []byte(`
+storage:
+  view:
+    rotation:
+      enabled: false
+`)
+	var cfg RuntimeConfig
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	cfg.ApplyDefaults()
+	if cfg.Storage.View.Rotation.IsEnabled() {
+		t.Fatal("rotation enabled = true after explicit false, want false")
+	}
+}
 ```
 
 - [ ] **Step 2: Run focused config tests and verify failure**
@@ -279,7 +365,7 @@ type StorageView struct {
 }
 
 type StorageViewRotation struct {
-	Enabled               bool                          `yaml:"enabled"`
+	Enabled               *bool                         `yaml:"enabled"`
 	MaxEntries            int                           `yaml:"max_entries"`
 	MinReadyEntries       int                           `yaml:"min_ready_entries"`
 	OverlapWindow         string                        `yaml:"overlap_window"`
@@ -302,8 +388,13 @@ type StorageRecordViewRotation struct {
 
 Add defaults inside `StorageConfig.ApplyDefaults()`:
 
+Use `Enabled *bool` (or an equivalent omit-detection pattern already used in this loader) so YAML `enabled: false` is preserved while omitted config defaults to true.
+
 ```go
-c.View.Rotation.Enabled = true
+if c.View.Rotation.Enabled == nil {
+	enabled := true
+	c.View.Rotation.Enabled = &enabled
+}
 if c.View.Rotation.MaxEntries <= 0 {
 	c.View.Rotation.MaxEntries = 200000
 }
@@ -339,6 +430,14 @@ if c.View.Rotation.Record.DefaultVersionWindow == "" {
 }
 if c.View.Rotation.Record.MaxBackfillEntries <= 0 {
 	c.View.Rotation.Record.MaxBackfillEntries = 200000
+}
+```
+
+Helper used by rotate:
+
+```go
+func (r StorageViewRotation) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
 }
 ```
 
@@ -388,15 +487,15 @@ git commit -m "feat(storage): add view index rotation config"
 ### Task 2: Define ViewIndexEngine And Shared Naming
 
 **Files:**
-- Create: `modules/storage/internal/services/view/index_engine.go`
-- Create: `modules/storage/internal/services/view/index_engine_test.go`
+- Create: `modules/storage/internal/core/viewindex/engine.go`
+- Create: `modules/storage/internal/core/viewindex/engine_test.go`
 
 - [ ] **Step 1: Write failing interface helper tests**
 
-Create `index_engine_test.go`:
+Create `engine_test.go`:
 
 ```go
-package view
+package viewindex
 
 import (
 	"testing"
@@ -414,10 +513,15 @@ func TestViewIndexIDAlternatesBetweenSlots(t *testing.T) {
 	}
 }
 
-func TestViewIndexSchemaHashChangesWhenColumnAdded(t *testing.T) {
+func TestViewIndexSchemaHashIgnoresViewVersion(t *testing.T) {
 	base := ViewIndexSchema{
 		SpaceID: "crypto", ViewID: "spot", ViewVersion: 1, Engine: "duckdb",
 		Columns: []*pb.ViewColumn{{ColumnName: "close", OriginId: "binance_spot_kline.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+	}
+	bumped := base
+	bumped.ViewVersion = 2
+	if HashViewIndexSchema(base) != HashViewIndexSchema(bumped) {
+		t.Fatal("schema hash changed after version-only bump")
 	}
 	withVolume := base
 	withVolume.Columns = append(withVolume.Columns, &pb.ViewColumn{ColumnName: "volume", OriginId: "binance_spot_kline.volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
@@ -426,14 +530,21 @@ func TestViewIndexSchemaHashChangesWhenColumnAdded(t *testing.T) {
 	}
 }
 
-func TestBuildingIndexWritableRequiresCurrentViewVersion(t *testing.T) {
-	view := &pb.View{ViewVersion: 3, BuildingViewVersion: 2, BuildingResult: "view_crypto_spot_b"}
+func TestBuildingIndexWritableRequiresBuildingStatusAndCurrentVersion(t *testing.T) {
+	view := &pb.View{
+		ViewVersion: 3, BuildingViewVersion: 3, BuildingResult: "view_crypto_spot_b",
+		BuildStatus: "failed",
+	}
+	if BuildingIndexWritable(view) {
+		t.Fatal("building index writable for failed status, want false")
+	}
+	view.BuildStatus = "building"
+	if !BuildingIndexWritable(view) {
+		t.Fatal("building index not writable for current building version, want true")
+	}
+	view.BuildingViewVersion = 2
 	if BuildingIndexWritable(view) {
 		t.Fatal("building index writable for stale version, want false")
-	}
-	view.BuildingViewVersion = 3
-	if !BuildingIndexWritable(view) {
-		t.Fatal("building index not writable for current version, want true")
 	}
 }
 ```
@@ -444,17 +555,17 @@ Run:
 
 ```bash
 cd modules/storage
-go test -count=1 ./internal/services/view -run 'TestViewIndex|TestBuildingIndexWritable'
+go test -count=1 ./internal/core/viewindex -run 'TestViewIndex|TestBuildingIndexWritable'
 ```
 
 Expected: fails because helpers and types do not exist.
 
 - [ ] **Step 3: Implement common types and helpers**
 
-Create `index_engine.go` with:
+Create `engine.go` with:
 
 ```go
-package view
+package viewindex
 
 import (
 	"context"
@@ -515,7 +626,10 @@ func InactiveViewIndexID(spaceID string, viewID string, activeIndexID string) st
 }
 
 func BuildingIndexWritable(view *pb.View) bool {
-	return view != nil && view.GetBuildingResult() != "" && view.GetBuildingViewVersion() == view.GetViewVersion()
+	return view != nil &&
+		view.GetBuildingResult() != "" &&
+		view.GetBuildingViewVersion() == view.GetViewVersion() &&
+		view.GetBuildStatus() == "building"
 }
 
 func HashViewIndexSchema(schema ViewIndexSchema) string {
@@ -527,12 +641,11 @@ func HashViewIndexSchema(schema ViewIndexSchema) string {
 		SortOrder  uint32 `json:"sort_order"`
 	}
 	shape := struct {
-		SpaceID     string        `json:"space_id"`
-		ViewID      string        `json:"view_id"`
-		ViewVersion uint64        `json:"view_version"`
-		Engine      string        `json:"engine"`
-		Columns     []columnShape `json:"columns"`
-	}{SpaceID: schema.SpaceID, ViewID: schema.ViewID, ViewVersion: schema.ViewVersion, Engine: schema.Engine}
+		SpaceID string        `json:"space_id"`
+		ViewID  string        `json:"view_id"`
+		Engine  string        `json:"engine"`
+		Columns []columnShape `json:"columns"`
+	}{SpaceID: schema.SpaceID, ViewID: schema.ViewID, Engine: schema.Engine}
 	for _, column := range schema.Columns {
 		shape.Columns = append(shape.Columns, columnShape{
 			Name: column.GetColumnName(), OriginID: column.GetOriginId(),
@@ -546,13 +659,15 @@ func HashViewIndexSchema(schema ViewIndexSchema) string {
 }
 ```
 
+Move or duplicate `sanitizeResultTableName` into this package so naming stays shared.
+
 - [ ] **Step 4: Run tests**
 
 Run:
 
 ```bash
 cd modules/storage
-go test -count=1 ./internal/services/view -run 'TestViewIndex|TestBuildingIndexWritable'
+go test -count=1 ./internal/core/viewindex -run 'TestViewIndex|TestBuildingIndexWritable'
 ```
 
 Expected: pass.
@@ -560,7 +675,7 @@ Expected: pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add modules/storage/internal/services/view/index_engine.go modules/storage/internal/services/view/index_engine_test.go
+git add modules/storage/internal/core/viewindex/engine.go modules/storage/internal/core/viewindex/engine_test.go
 git commit -m "feat(storage): define view index engine abstraction"
 ```
 
@@ -590,6 +705,7 @@ func TestUpsertViewColumnBumpsVersionAndClearsBuildingIndex(t *testing.T) {
 	view.ActiveResult = "view_crypto_spot_kline_1m_view_a"
 	view.BuildingViewVersion = 1
 	view.BuildingResult = "view_crypto_spot_kline_1m_view_b"
+	view.BuildStatus = "building"
 	if _, err := store.UpsertView(ctx, view); err != nil {
 		t.Fatalf("UpsertView: %v", err)
 	}
@@ -613,6 +729,14 @@ func TestUpsertViewColumnBumpsVersionAndClearsBuildingIndex(t *testing.T) {
 	if got.GetActiveResult() != "view_crypto_spot_kline_1m_view_a" {
 		t.Fatalf("active result changed to %q", got.GetActiveResult())
 	}
+}
+
+func TestBeginViewBuildConditionalClaim(t *testing.T) {
+	// First claim succeeds; second concurrent claim for another indexID fails while building is fresh.
+}
+
+func TestCompleteViewBuildKeepsPreviousActiveUntilSwitch(t *testing.T) {
+	// Before Complete, queries still see old active_result; after Complete, active flips atomically.
 }
 ```
 
@@ -641,7 +765,7 @@ Expected: metadata may already pass if existing behavior is correct; builder tes
 
 - [ ] **Step 4: Guard building writes**
 
-In both `time_series.go` and `record.go`, write active unconditionally when non-empty, and write building only through `viewsvc.BuildingIndexWritable(item)`:
+In both `time_series.go` and `record.go`, write active unconditionally when non-empty, and write building only through `viewindex.BuildingIndexWritable(item)` (requires `build_status == "building"` and matching version):
 
 ```go
 if item.GetActiveResult() != "" {
@@ -649,14 +773,14 @@ if item.GetActiveResult() != "" {
 		return err
 	}
 }
-if viewsvc.BuildingIndexWritable(item) {
+if viewindex.BuildingIndexWritable(item) {
 	if err := s.views.InsertRows(ctx, item.GetBuildingResult(), mapped); err != nil {
 		return err
 	}
 }
 ```
 
-For Record/Bleve use `s.search.IndexRecordViewRows` with the same guard.
+For Record/Bleve use `s.search.IndexRecordViewRows` with the same guard. Failed building leftovers must receive no writes.
 
 - [ ] **Step 5: Run tests**
 
@@ -689,13 +813,13 @@ git commit -m "fix(storage): stop writing stale warming view indexes"
 
 Add tests covering:
 
-- `Prepare` creates an empty table with the requested schema.
-- `Write` upserts TimeSeries rows.
+- `Prepare` creates an empty table with the requested schema and refuses `indexID == current active` callers from rotation tests.
+- `Write` upserts TimeSeries rows; rejects Record batches.
 - `Stat` returns `EntryCount`, `MinVersion`, and `MaxVersion`.
 - `Remove` drops the table and column metadata.
-- latest-preview queries do not create `__latest`.
+- `ListResultTables` returns real `view_*` tables (not only `ts_view_%` / `view_result_%`).
 
-Use existing `duckDBTestRow` and `duckDBTestValue` helpers.
+Use existing `duckDBTestRow` and `duckDBTestValue` helpers. Keep `__latest` behavior unchanged in this task.
 
 - [ ] **Step 2: Run tests and verify failure**
 
@@ -703,35 +827,38 @@ Run:
 
 ```bash
 cd modules/storage
-CGO_ENABLED=1 go test -count=1 ./internal/infra/device/duckdb -run 'TestDuckDBViewIndex|TestLatestPreviewDoesNotCreateLatestHelper'
+CGO_ENABLED=1 go test -count=1 ./internal/infra/device/duckdb -run 'TestDuckDBViewIndex|TestListResultTablesIncludesViewPrefix'
 ```
 
-Expected: fail until lifecycle methods exist and latest helper path is removed.
+Expected: fail until lifecycle methods exist and list filter is fixed.
 
 - [ ] **Step 3: Implement lifecycle methods**
 
-Add methods to `ViewStore`:
+Add methods to `ViewStore` using `modules/storage/internal/core/viewindex`:
 
 ```go
 func (s *ViewStore) Engine() string { return "duckdb" }
 
-func (s *ViewStore) Prepare(ctx context.Context, indexID string, schema viewsvc.ViewIndexSchema) error {
+func (s *ViewStore) Prepare(ctx context.Context, indexID string, schema viewindex.ViewIndexSchema) error {
 	if err := s.DropResultTable(ctx, indexID); err != nil {
 		return err
 	}
 	return s.CreateResultTable(ctx, indexID, schema.Columns)
 }
 
-func (s *ViewStore) Write(ctx context.Context, indexID string, batch viewsvc.ViewIndexBatch) error {
+func (s *ViewStore) Write(ctx context.Context, indexID string, batch viewindex.ViewIndexBatch) error {
+	if len(batch.RecordRows) > 0 {
+		return fmt.Errorf("duckdb view index rejects record rows")
+	}
 	return s.InsertRows(ctx, indexID, batch.TimeSeriesRows)
 }
 
-func (s *ViewStore) Stat(ctx context.Context, indexID string) (viewsvc.ViewIndexStats, error) {
+func (s *ViewStore) Stat(ctx context.Context, indexID string) (viewindex.ViewIndexStats, error) {
 	stats, err := s.resultTableStats(ctx, indexID)
 	if err != nil {
-		return viewsvc.ViewIndexStats{}, err
+		return viewindex.ViewIndexStats{}, err
 	}
-	return viewsvc.ViewIndexStats{
+	return viewindex.ViewIndexStats{
 		Exists: true, EntryCount: int64(stats.RowCount),
 		MinVersion: stats.MinDataTime, MaxVersion: stats.MaxDataTime,
 	}, nil
@@ -742,21 +869,11 @@ func (s *ViewStore) Remove(ctx context.Context, indexID string) error {
 }
 ```
 
-Use package names that avoid import cycles. If `duckdb` cannot import `services/view`, move common `ViewIndexEngine` types to `modules/storage/internal/core/viewindex`.
+Fix `ListResultTables` so orphan `view_*` tables are discoverable for rotate sweeps.
 
-- [ ] **Step 4: Remove latest helper code**
+- [ ] **Step 4: Keep `__latest` for now**
 
-Remove the `__latest` helper path:
-
-- `latestResultTableSuffix`
-- `latestHelperMaxRows`
-- `queryLatestTimeSeriesRows`
-- `ensureLatestResultTable`
-- `syncLatestRowsLocked`
-- `latestHelperCandidate`
-- helper stats/prune functions only used by latest helper
-
-`QueryTimeSeriesRows` should query the active bounded table directly.
+Do not delete the `__latest` helper in this plan. Follow-up after rotation is verified and K-line query performance remains acceptable.
 
 - [ ] **Step 5: Update no-cgo stub**
 
@@ -814,12 +931,12 @@ Expected: fail until lifecycle and stats methods exist.
 
 - [ ] **Step 3: Add Bleve lifecycle methods**
 
-In `search.Service`, add:
+In `search.Service`, add methods using `viewindex`:
 
 ```go
 func (s *Service) Engine() string { return "bleve" }
 
-func (s *Service) Prepare(ctx context.Context, indexID string, schema viewsvc.ViewIndexSchema) error {
+func (s *Service) Prepare(ctx context.Context, indexID string, schema viewindex.ViewIndexSchema) error {
 	if err := s.Remove(ctx, indexID); err != nil {
 		return err
 	}
@@ -827,14 +944,17 @@ func (s *Service) Prepare(ctx context.Context, indexID string, schema viewsvc.Vi
 	return err
 }
 
-func (s *Service) Write(ctx context.Context, indexID string, batch viewsvc.ViewIndexBatch) error {
+func (s *Service) Write(ctx context.Context, indexID string, batch viewindex.ViewIndexBatch) error {
+	if len(batch.TimeSeriesRows) > 0 {
+		return fmt.Errorf("bleve view index rejects time series rows")
+	}
 	return s.IndexRecordViewRows(ctx, indexID, batch.Columns, batch.RecordRows)
 }
 
-func (s *Service) Stat(ctx context.Context, indexID string) (viewsvc.ViewIndexStats, error) {
+func (s *Service) Stat(ctx context.Context, indexID string) (viewindex.ViewIndexStats, error) {
 	index, err := s.searchIndex(indexID, false)
 	if err != nil {
-		return viewsvc.ViewIndexStats{}, err
+		return viewindex.ViewIndexStats{}, err
 	}
 	return index.Stat(ctx)
 }
@@ -878,27 +998,36 @@ git commit -m "refactor(storage): implement bleve view index engine"
 
 ---
 
-### Task 6: Add Unified Rotation Manager
+### Task 6: Add Unified Rotation Manager And Delete Old Rebuild Paths
 
 **Files:**
 - Create: `modules/storage/internal/services/view/rotation.go`
 - Create: `modules/storage/internal/services/view/rotation_test.go`
 - Modify: `modules/storage/internal/services/view/schedule.go`
+- Modify: `modules/storage/internal/services/view/view_builder.go`
+- Modify: `modules/storage/internal/services/view/service.go`
+- Modify: `modules/storage/internal/services/access/query.go`
+- Modify: `modules/storage/proto/view.proto`
+- Modify: `modules/storage/config/trpc_go.yaml`
+- Modify: `modules/storage/config/trpc_go.view_builder.yaml`
 - Modify: `modules/storage/cmd/server/main.go`
 
-- [ ] **Step 1: Add failing rotation tests**
+- [x] **Step 1: Add failing rotation tests**
 
 Create tests for:
 
-- schema gap triggers rebuild even when active index is below `max_entries`,
-- capacity triggers rotation only when `view_version == active_view_version`,
-- stale building index is removed and replaced,
+- schema gap triggers warming even when active index is below `max_entries`,
+- capacity triggers rotation only when `view_version == active_view_version` and no valid warming exists,
+- stale/failed building index is removed and cleared,
+- ready switch keeps old `active_result` readable until `CompleteViewBuild`,
+- small View with `EntryCount < min_ready_entries` still switches after backfill_done,
 - TimeSeries Views use DuckDB engine,
-- Record Views use Bleve engine.
+- Record Views use Bleve engine,
+- `BeginViewBuild` conditional claim prevents a second replica from starting another warming.
 
 Use fake `ViewIndexEngine` implementations that record calls to `Prepare`, `Write`, `Stat`, and `Remove`.
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run:
 
@@ -909,46 +1038,81 @@ go test -count=1 ./internal/services/view -run 'TestRotation'
 
 Expected: fail until rotation manager exists.
 
-- [ ] **Step 3: Implement rotation manager**
+- [x] **Step 3: Implement rotation manager**
 
-Implement `RotateViewIndexes(ctx, spaceID)` on `Builder` or a small `RotationManager`. The decision order must be:
+Implement `RotateViewIndexes(ctx, spaceID)` as the only lifecycle entry. Decision order must match the Locked Decisions / Rotate Decision Order section:
 
 ```text
-for each active View:
-  if view_version > active_view_version:
-      rebuild latest schema now
-      continue
-  if building_result is stale:
-      remove stale building index
-      clear building metadata if still present
-      continue
-  if active Stat.EntryCount > max_entries:
-      rotate capacity
-      continue
+if !rotation.IsEnabled():
+  return
+
+for each View:
+  1. schema gap → start/continue warming
+  2. stale/failed building → clear + Remove
+  3. valid warming → (Task 7 backfill +) ready check → Complete (zero gap) → grace Remove old active
+  4. else capacity overflow → start warming
+  5. sweep unreferenced physical indexes
 ```
 
-The selected inactive index ID is:
+Task 6 may land the decision skeleton and delete old rebuild paths first. Do **not** call `CompleteViewBuild` in production until Task 7 provides real PrimaryStore backfill and local `backfill_done`. Tests may stub backfill completion.
+
+Warming start sequence is mandatory and should complete inside one successful claim when possible:
+
+```text
+Prepare(indexID)
+→ BeginViewBuild(conditional claim)
+→ dual-write enabled
+→ page backfill from PrimaryStore
+→ local backfill_done = true
+→ ready check
+→ CompleteViewBuild   // old active serves until here
+→ grace Remove(old active)
+```
+
+Do not persist `backfill_done` as a metadata column in v1. If the claim crashes mid-warming, stale timeout clears/restarts the building index from PrimaryStore.
+
+If `rotation.enabled == false`, `RotateViewIndexes` returns immediately without starting, switching, or sweeping.
+
+Selected inactive index ID:
 
 ```go
-indexID := InactiveViewIndexID(view.GetSpaceId(), view.GetViewId(), view.GetActiveResult())
+indexID := viewindex.InactiveViewIndexID(view.GetSpaceId(), view.GetViewId(), view.GetActiveResult())
 ```
 
-- [ ] **Step 4: Add timer operation**
+If `active_result` is empty or not an a/b slot, treat slot `a` as the first warming target and discard any non-slot leftovers during sweep.
 
-In `HandleSchedule`, add:
+- [x] **Step 4: Replace schedule ops with rotate only**
+
+In `HandleSchedule`, keep only:
 
 ```go
 case "rotate":
 	rotated, err := builder.RotateViewIndexes(ctx, spaceID)
-	if err != nil {
-		log.ErrorContextf(ctx, "[ViewBuilder] rotate schedule failed: %v", err)
-		return err
-	}
-	log.InfoContextf(ctx, "[ViewBuilder] rotate handled %d view index(es)", rotated)
-	return nil
+	...
 ```
 
-- [ ] **Step 5: Wire engines**
+Delete branches for default pending rebuild, `cleanup`, and `retry_failed`.
+
+Update `trpc_go.yaml` and `trpc_go.view_builder.yaml`:
+
+- replace `view.timer` params with `op=rotate`
+- remove or disable `view.cleanup.timer` and `view.retry_failed.timer`
+- register the timer only for view_builder role wiring in `main.go`
+
+- [x] **Step 5: Delete old rebuild/cleanup code and RPCs**
+
+Delete or stop exporting:
+
+- `Builder.RebuildPendingViews` / `RebuildPendingViewsInAllSpaces`
+- `Builder.RebuildFailedViews`
+- `Builder.CleanupInactiveResults`
+- `DataView.RebuildTimeSeriesView` / `RebuildRecordView` handlers
+- matching access-layer wrappers
+- proto RPCs/messages for Rebuild*
+
+Regenerate protobuf after proto edits.
+
+- [x] **Step 6: Wire engines**
 
 In `cmd/server/main.go`, register engine implementations for the View builder:
 
@@ -957,22 +1121,22 @@ In `cmd/server/main.go`, register engine implementations for the View builder:
 
 Do not add engine-specific rotation code to `schedule.go`.
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 7: Run tests**
 
 Run:
 
 ```bash
 cd modules/storage
-go test -count=1 ./internal/services/view ./cmd/server
+go test -count=1 ./internal/services/view ./internal/services/access ./cmd/server
 ```
 
-Expected: pass.
+Expected: pass; no remaining references to deleted rebuild/cleanup entry points except historical docs if any.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
-git add modules/storage/internal/services/view/rotation.go modules/storage/internal/services/view/rotation_test.go modules/storage/internal/services/view/schedule.go modules/storage/cmd/server/main.go
-git commit -m "feat(storage): add unified view index rotation"
+git add modules/storage/internal/services/view/rotation.go modules/storage/internal/services/view/rotation_test.go modules/storage/internal/services/view/schedule.go modules/storage/internal/services/view/view_builder.go modules/storage/internal/services/view/service.go modules/storage/internal/services/access/query.go modules/storage/proto/view.proto modules/storage/proto/gen modules/storage/config/trpc_go.yaml modules/storage/config/trpc_go.view_builder.yaml modules/storage/cmd/server/main.go
+git commit -m "feat(storage): unify view index lifecycle under rotate"
 ```
 
 ---
@@ -1024,7 +1188,7 @@ max(view.query_window, rotation.record.default_version_window, rotation.overlap_
 
 When versions are not parseable as timestamps, cap by `record.max_backfill_entries` and log a warning. Do not try to infer full history from Bleve.
 
-- [ ] **Step 6: Add cancellation guard before each page write**
+- [ ] **Step 6: Add cancellation guard and ready marking**
 
 Before each warming write, reload or re-check metadata:
 
@@ -1032,9 +1196,24 @@ Before each warming write, reload or re-check metadata:
 building_result == current indexID
 building_view_version == target view_version
 view_version == target view_version
+build_status == building
 ```
 
 If any check fails, stop the backfill without switching.
+
+When the final page completes (or Record hits `max_backfill_entries` with a logged warning), set local `backfill_done=true` for this claim and evaluate ready in-process:
+
+```text
+local backfill_done
+AND BuildingIndexWritable
+AND EntryCount >= min(min_ready_entries, expected_or_active_count)  // small Views: scan-complete wins
+AND (timestamp versions ⇒ lag <= allowed_lag; else skip lag)
+→ CompleteViewBuild
+→ keep serving until pointer flips
+→ grace Remove(old active)
+```
+
+Do not write `backfill_done` into SQLite/metadata in v1. Crash recovery is stale-building restart, not resume.
 
 - [ ] **Step 7: Run tests**
 
@@ -1136,19 +1315,22 @@ For `SearchRecordRows`, add equivalent wording for Bleve active View indexes.
 Add:
 
 ```markdown
-View 派生索引统一使用 active/building 双索引生命周期。`active_result` 是当前可读索引 ID，`building_result` 是正在构建或 warming 的索引 ID。DuckDB 表和 Bleve 索引目录都实现 `ViewIndexEngine`，上层只调用 `Prepare`、`Write`、`Stat`、`Remove`。
+View 派生索引统一使用 active/building 双索引生命周期。`active_result` 是当前可读索引 ID，`building_result` 是正在构建或 warming 的索引 ID。DuckDB 表和 Bleve 索引目录都实现 `ViewIndexEngine`（`internal/core/viewindex`），上层只调用 `Prepare`、`Write`、`Stat`、`Remove`。
 
-字段、列来源、过滤条件、粒度、查询窗口等 View 定义变化会递增 `view_version`。系统默认抢占式重建新 building 索引；旧 active 继续服务旧 schema。新字段只有在 building 索引切换为 active 后才可查询。
+唯一调度入口是 `op=rotate`：负责 schema 抢占重建、容量轮换、stale/failed warming 清理、ready switch，以及未引用物理索引删除。已删除独立的 pending rebuild / cleanup / retry_failed 路径，也删除手动 Rebuild* RPC。
+
+字段、列来源、过滤条件、粒度、查询窗口等 View 定义变化会递增 `view_version`。系统默认抢占式重建新 building 索引；旧 active 继续服务直到 warming Complete 切换指针。新字段只有在 building 索引切换为 active 后才可查询。旧 timestamp 命名的派生索引可直接丢弃并从 PrimaryStore 重建到 a/b slot。
 ```
 
 - [ ] **Step 3: Update deployment docs**
 
 Document:
 
-- `op=rotate` timer,
+- single `op=rotate` timer on view_builder only,
 - `storage.view.rotation` config,
 - remote verification through admin gateway `11000`,
-- no unbounded production scans.
+- no unbounded production scans,
+- `__latest` still present until a follow-up removal after performance verification.
 
 - [ ] **Step 4: Regenerate protobuf code**
 
@@ -1181,7 +1363,7 @@ Run:
 
 ```bash
 cd modules/storage
-CGO_ENABLED=1 go test -count=1 ./internal/config ./internal/infra/device/duckdb ./internal/infra/device/bleve ./internal/infra/metadata/sqlite ./internal/services/view ./internal/services/view/builder ./internal/services/view/search ./cmd/server
+CGO_ENABLED=1 go test -count=1 ./internal/config ./internal/core/viewindex ./internal/infra/device/duckdb ./internal/infra/device/bleve ./internal/infra/metadata/sqlite ./internal/services/view ./internal/services/view/builder ./internal/services/view/search ./cmd/server
 ```
 
 Expected: pass.
@@ -1202,7 +1384,7 @@ Expected: pass. If an unrelated pre-existing failure appears, record the exact p
 Run:
 
 ```bash
-gofmt -w modules/storage/internal/config modules/storage/internal/infra/device/duckdb modules/storage/internal/infra/device/bleve modules/storage/internal/services/view
+gofmt -w modules/storage/internal/config modules/storage/internal/core/viewindex modules/storage/internal/infra/device/duckdb modules/storage/internal/infra/device/bleve modules/storage/internal/services/view
 git diff --check
 ```
 
@@ -1292,6 +1474,8 @@ Expected:
 - no new `lock held by current process`,
 - no OOM-kill in system logs.
 
+Optional stronger check when safe: temporarily lower `max_entries` for one View, confirm warming → Complete while queries still hit old `active_result`, then grace Remove of the previous slot.
+
 - [ ] **Step 7: Record verification**
 
 Append a short verification note under `docs/superpowers/verification/` and commit it:
@@ -1305,7 +1489,7 @@ git commit -m "docs(storage): record view index rotation verification"
 
 ## Rollback Plan
 
-1. Disable rotation in production config:
+1. Disable the full rotate kill switch in production config:
 
 ```yaml
 storage:
@@ -1314,22 +1498,28 @@ storage:
       enabled: false
 ```
 
-2. Restart storage.
-3. Existing `active_result` indexes remain readable because query paths still use active pointers.
-4. If a warming index was being built, clear `building_result` via the existing failed-build path or let the cleanup timer remove it.
-5. Do not remove `active_result` during rollback.
-6. If a View index is corrupt, run `RebuildTimeSeriesView` or `RebuildRecordView` for the affected View to rebuild from PrimaryStore.
+2. Restart storage / view_builder.
+3. `RotateViewIndexes` becomes a no-op: no schema warming, no capacity warming, no switch, no orphan sweep.
+4. Existing `active_result` indexes remain readable; never clear active during rollback.
+5. If a warming index was mid-build, clear `building_result` / `build_status` via metadata repair after disable; physical orphan removal waits until rotation is re-enabled (or manual engine `Remove`).
+6. After re-enabling rotation, corrupt or empty Views recover by schema/capacity-driven warming from PrimaryStore (no Rebuild* RPC). Schema gaps accumulated while disabled are drained on later rotate passes.
 
 ## Success Criteria
 
-- `ViewIndexEngine` exists with methods `Prepare`, `Write`, `Stat`, `Remove`.
-- The physical index identifier is consistently called `indexID`.
+- `ViewIndexEngine` lives in `internal/core/viewindex` with methods `Prepare`, `Write`, `Stat`, `Remove`.
+- The physical index identifier is consistently called `indexID` and uses deterministic `a`/`b` slots.
 - TimeSeries DuckDB and Record/Bleve Views use the same active/building lifecycle.
-- Schema changes always trigger preemptive rebuilding without a config toggle.
-- Stale warming indexes are not written after `view_version` changes.
+- `op=rotate` is the only scheduler entry; `RebuildPendingViews` / `RebuildFailedViews` / `CleanupInactiveResults` and Rebuild* RPCs are gone.
+- Schema changes always trigger preemptive warming when rotation is enabled.
+- `rotation.enabled=false` stops the entire rotate pass, not only capacity rotation.
+- Old `active_result` keeps serving until warming Complete (zero read gap).
+- Warming prefers one-claim backfill + local `backfill_done`; no durable backfill metadata column in v1.
+- Stale/failed warming indexes are not written after version/status changes.
 - New fields are queryable only after the new index becomes active.
-- DuckDB latest-preview queries do not create `__latest` tables.
+- Small Views can switch after backfill completes even when below `min_ready_entries`.
+- Non-slot / unreferenced derived indexes are removable (DuckDB list filter fixed; Bleve Remove exists).
 - Each View normally has at most two live index instances.
 - TimeSeries daily/hourly windows are protected by `freq_backfill_window`, not only `overlap_window`.
 - Record View backfill uses bounded version-window semantics.
+- `__latest` remains until a verified follow-up removal.
 - Production verification uses admin gateway port `11000` and avoids unbounded scans.

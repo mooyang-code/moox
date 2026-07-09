@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
 	"github.com/mooyang-code/moox/modules/storage/internal/bootstrap/eventbus"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	deviceduckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/services/access"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/archive"
@@ -259,36 +261,30 @@ func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, opt
 		BlevePath: storage.Devices.BlevePath,
 		Metadata:  viewMetadata,
 	})
-	var viewBuilder *view.Builder
-	if shouldStartViewBuilderRole(storage) {
-		viewBuilder = view.NewBuilder(view.Options{
-			Metadata: viewMetadata,
-			Facts:    accessReader,
-			Records:  accessReader,
-			Views:    viewStore,
-			Search:   searchService,
-		})
-		view.SetDefaultBuilder(viewBuilder)
-	}
 	var viewService *view.Service
 	if shouldRegisterViewQueryRole(storage) {
 		viewService = view.NewService(view.ServiceOptions{
-			Metadata:       viewMetadata,
-			Views:          viewStore,
-			Search:         searchService,
-			Facts:          accessReader,
-			Records:        accessReader,
-			Builder:        viewBuilder,
-			DisableRebuild: !shouldStartViewBuilderRole(storage),
+			Metadata: viewMetadata,
+			Views:    viewStore,
+			Search:   searchService,
+			Facts:    accessReader,
+			Records:  accessReader,
 		})
 		pb.RegisterDataViewService(s, viewService)
 	}
 	var builderService *viewbuilder.Service
 	if shouldStartViewBuilderRole(storage) {
+		rotationManager := view.NewRotationManager(view.RotationOptions{
+			Metadata: viewMetadata,
+			Engines: map[string]viewindex.ViewIndexEngine{
+				"duckdb": viewStore,
+				"bleve":  searchService,
+			},
+			Config: rotationConfigFromStorage(storage.View.Rotation),
+		})
+		view.SetDefaultRotation(rotationManager)
 		timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
 		registerTimerHandlerService("trpc.moox.storage.view.timer", s.Service("trpc.moox.storage.view.timer"), view.HandleSchedule)
-		registerTimerHandlerService("trpc.moox.storage.view.cleanup.timer", s.Service("trpc.moox.storage.view.cleanup.timer"), view.HandleSchedule)
-		registerTimerHandlerService("trpc.moox.storage.view.retry_failed.timer", s.Service("trpc.moox.storage.view.retry_failed.timer"), view.HandleSchedule)
 		var err error
 		builderService, err = startViewBuilderService(trpc.BackgroundContext(), storage, opts, viewMetadata, viewStore, searchService, accessReader)
 		if err != nil {
@@ -371,16 +367,71 @@ func archiveRootForRuntime(storage storageconfig.StorageConfig) string {
 	return filepath.Join(storage.Root, "archive")
 }
 
+// rotationConfigFromStorage converts the YAML rotation config (plain
+// strings/ints) into the parsed view.RotationConfig used by
+// RotateViewIndexes.
+func rotationConfigFromStorage(raw storageconfig.StorageViewRotation) view.RotationConfig {
+	cfg := view.RotationConfig{
+		Enabled:                  raw.IsEnabled(),
+		MaxEntries:               int64(raw.MaxEntries),
+		MinReadyEntries:          int64(raw.MinReadyEntries),
+		RemoveGrace:              time.Duration(raw.RemoveGraceMS) * time.Millisecond,
+		RecordMaxBackfillEntries: int64(raw.Record.MaxBackfillEntries),
+	}
+	if d, ok := parseStorageDuration(raw.OverlapWindow); ok {
+		cfg.OverlapWindow = d
+	}
+	if d, ok := parseStorageDuration(raw.DefaultBackfillWindow); ok {
+		cfg.DefaultBackfillWindow = d
+	}
+	if d, ok := parseStorageDuration(raw.AllowedLag); ok {
+		cfg.AllowedLag = d
+	}
+	if d, ok := parseStorageDuration(raw.Record.DefaultVersionWindow); ok {
+		cfg.RecordDefaultVersionWindow = d
+	}
+	if len(raw.TimeSeries.FreqBackfillWindow) > 0 {
+		cfg.TimeSeriesFreqBackfillWindow = make(map[string]time.Duration, len(raw.TimeSeries.FreqBackfillWindow))
+		for freq, window := range raw.TimeSeries.FreqBackfillWindow {
+			if d, ok := parseStorageDuration(window); ok {
+				cfg.TimeSeriesFreqBackfillWindow[freq] = d
+			}
+		}
+	}
+	return cfg
+}
+
+// parseStorageDuration parses durations from storage.yaml, which uses
+// standard Go duration suffixes (h/m/s) plus "d" for days (e.g. "30d",
+// "730d") that time.ParseDuration does not support natively.
+func parseStorageDuration(raw string) (time.Duration, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	if d, err := time.ParseDuration(raw); err == nil {
+		return d, true
+	}
+	unit := raw[len(raw)-1:]
+	numberPart := raw[:len(raw)-1]
+	count, err := strconv.ParseFloat(numberPart, 64)
+	if err != nil {
+		return 0, false
+	}
+	switch unit {
+	case "d", "D":
+		return time.Duration(count * 24 * float64(time.Hour)), true
+	case "w", "W":
+		return time.Duration(count * 7 * 24 * float64(time.Hour)), true
+	default:
+		return 0, false
+	}
+}
+
 func registerNoopViewTimers(s *server.Server) {
 	timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
 	noop := func(ctx context.Context, _ string) error { return nil }
-	for _, name := range []string{
-		"trpc.moox.storage.view.timer",
-		"trpc.moox.storage.view.cleanup.timer",
-		"trpc.moox.storage.view.retry_failed.timer",
-	} {
-		registerTimerHandlerService(name, s.Service(name), noop)
-	}
+	registerTimerHandlerService("trpc.moox.storage.view.timer", s.Service("trpc.moox.storage.view.timer"), noop)
 }
 
 func registerNoopArchiveTimers(s *server.Server) {

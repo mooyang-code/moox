@@ -41,12 +41,6 @@ type RecordIndexer interface {
 	IndexRecordViewRows(ctx context.Context, resultName string, columns []*pb.ViewColumn, rows []*pb.RecordRow) error
 }
 
-// ViewCleaner 定义 View 构建器清理旧结果表所需的接口。
-type ViewCleaner interface {
-	ListResultTables(ctx context.Context) ([]string, error)
-	DropResultTable(ctx context.Context, tableName string) error
-}
-
 // Options 保存 View 构建器创建时的依赖与并发配置。
 type Options struct {
 	Metadata Metadata
@@ -62,6 +56,10 @@ type Options struct {
 }
 
 // Builder 负责从主存事实行构建版本化 View 结果。
+//
+// RotateViewIndexes (rotation.go) is the sole scheduled entry for the View
+// index lifecycle; Builder.Build/BuildView remain available for direct,
+// single-View on-demand use but are no longer wired to any RPC or schedule.
 type Builder struct {
 	metadata     Metadata
 	facts        FactReader
@@ -286,161 +284,12 @@ func (b *Builder) tryLockView(spaceID string, viewID string) (func(), bool) {
 	}, true
 }
 
-func (b *Builder) RebuildPendingViews(ctx context.Context, spaceID string) ([]*pb.View, error) {
-	return b.rebuildViews(ctx, spaceID, b.rebuildableByPendingSchedule)
-}
-
-func (b *Builder) RebuildFailedViews(ctx context.Context, spaceID string) ([]*pb.View, error) {
-	return b.rebuildViews(ctx, spaceID, func(view *pb.View) bool {
-		return view.GetBuildStatus() == "failed"
-	})
-}
-
-func (b *Builder) rebuildableByPendingSchedule(view *pb.View) bool {
-	switch view.GetBuildStatus() {
-	case "failed":
-		return false
-	case "building":
-		return view.GetViewVersion() > view.GetActiveViewVersion() && b.buildingViewStale(view)
-	default:
-		return view.GetViewVersion() > view.GetActiveViewVersion() || rebuildableBuildStatus(view.GetBuildStatus())
-	}
-}
-
-func (b *Builder) buildingViewStale(view *pb.View) bool {
-	startedAt := strings.TrimSpace(view.GetBuildStartedAt())
-	if startedAt == "" {
-		return false
-	}
-	started, err := time.Parse(time.RFC3339Nano, startedAt)
-	if err != nil {
-		return false
-	}
-	return b.now().UTC().Sub(started.UTC()) >= staleBuildingViewAfter
-}
-
-func (b *Builder) rebuildViews(ctx context.Context, spaceID string, rebuildable func(*pb.View) bool) ([]*pb.View, error) {
-	if b == nil || b.metadata == nil {
-		return nil, errMetadataRequired()
-	}
-	views, err := b.listAllActiveViews(ctx, spaceID)
-	if err != nil {
-		return nil, err
-	}
-	var built []*pb.View
-	var buildErr error
-	for _, view := range views {
-		if !isBuildableView(view) {
-			continue
-		}
-		if !rebuildable(view) {
-			continue
-		}
-		unlock, ok := b.tryLockView(view.GetSpaceId(), view.GetViewId())
-		if !ok {
-			continue
-		}
-		item, err := b.buildLocked(ctx, view.GetSpaceId(), view.GetViewId())
-		unlock()
-		if err != nil {
-			buildErr = errors.Join(buildErr, fmt.Errorf("build view %s/%s: %w", view.GetSpaceId(), view.GetViewId(), err))
-			continue
-		}
-		built = append(built, item)
-	}
-	return built, buildErr
-}
-
-func rebuildableBuildStatus(status string) bool {
-	return status == "" || status == "pending"
-}
-
 func isDuckDBView(view *pb.View) bool {
 	return view != nil && (strings.TrimSpace(view.GetEngine()) == "" || strings.EqualFold(view.GetEngine(), "duckdb"))
 }
 
 func isBleveView(view *pb.View) bool {
 	return view != nil && strings.EqualFold(strings.TrimSpace(view.GetEngine()), "bleve")
-}
-
-func isBuildableView(view *pb.View) bool {
-	return isDuckDBView(view) || isBleveView(view)
-}
-
-func (b *Builder) CleanupInactiveResults(ctx context.Context, spaceID string) (int, error) {
-	if b == nil || b.metadata == nil {
-		return 0, errMetadataRequired()
-	}
-	cleaner, ok := b.views.(ViewCleaner)
-	if !ok {
-		return 0, errors.New("view cleaner is required")
-	}
-	active, err := b.resultTablesInUse(ctx, "")
-	if err != nil {
-		return 0, err
-	}
-	tables, err := cleaner.ListResultTables(ctx)
-	if err != nil {
-		return 0, err
-	}
-	prefixes := resultTablePrefixes(spaceID)
-	var dropped int
-	for _, tableName := range tables {
-		if !hasAnyPrefix(tableName, prefixes) {
-			continue
-		}
-		if active[tableName] {
-			continue
-		}
-		if err := cleaner.DropResultTable(ctx, tableName); err != nil {
-			return dropped, err
-		}
-		dropped++
-	}
-	return dropped, nil
-}
-
-func (b *Builder) resultTablesInUse(ctx context.Context, spaceID string) (map[string]bool, error) {
-	active := make(map[string]bool)
-	if spaceID != "" {
-		views, err := b.listAllActiveViews(ctx, spaceID)
-		if err != nil {
-			return nil, err
-		}
-		for _, view := range views {
-			if view.GetActiveResult() != "" {
-				active[view.GetActiveResult()] = true
-			}
-			if view.GetBuildingResult() != "" {
-				active[view.GetBuildingResult()] = true
-			}
-		}
-		return active, nil
-	}
-	const pageSize = uint32(1000)
-	for pageNo := uint32(1); ; pageNo++ {
-		spaces, page, err := b.metadata.ListSpaces(ctx, "", &pb.Page{Page: pageNo, Size: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		for _, space := range spaces {
-			views, err := b.listAllActiveViews(ctx, space.GetSpaceId())
-			if err != nil {
-				return nil, err
-			}
-			for _, view := range views {
-				if view.GetActiveResult() != "" {
-					active[view.GetActiveResult()] = true
-				}
-				if view.GetBuildingResult() != "" {
-					active[view.GetBuildingResult()] = true
-				}
-			}
-		}
-		if page == nil || !page.GetHasMore() {
-			return active, nil
-		}
-	}
 }
 
 func (b *Builder) readRecordViewRows(ctx context.Context, view *pb.View, primaryDatasetID string, columns []*pb.ViewColumn) ([]*pb.RecordRow, error) {
@@ -549,7 +398,6 @@ func (b *Builder) readViewRows(ctx context.Context, view *pb.View, primaryDatase
 // viewBuildConcurrency 限制 View 构建时并行扫描 Dataset 数，避免压垮 PrimaryStore。
 const viewBuildConcurrency = 8
 const rebuildViewPageSize = uint32(1000)
-const staleBuildingViewAfter = 10 * time.Minute
 
 func (b *Builder) readAllRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange, columnNames []string) ([]*pb.TimeSeriesRow, error) {
 	var out []*pb.TimeSeriesRow
@@ -627,21 +475,6 @@ func fixedViewFilterMatchesRow(filter *fixedViewFilter, row *pb.TimeSeriesRow) b
 		}
 	}
 	return true
-}
-
-func (b *Builder) listAllActiveViews(ctx context.Context, spaceID string) ([]*pb.View, error) {
-	const pageSize = uint32(1000)
-	var out []*pb.View
-	for pageNo := uint32(1); ; pageNo++ {
-		views, page, err := b.metadata.ListViews(ctx, spaceID, "", "active", &pb.Page{Page: pageNo, Size: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, views...)
-		if page == nil || !page.GetHasMore() {
-			return out, nil
-		}
-	}
 }
 
 func mapViewValues(rowsByDataset map[string]*pb.TimeSeriesRow, primaryDatasetID string, columns []*pb.ViewColumn) []*pb.ColumnValue {
@@ -839,29 +672,12 @@ func resultTableName(spaceID string, viewID string, viewVersion uint64, now time
 	return name
 }
 
-func resultTablePrefix(spaceID string) string {
-	return "view_"
-}
-
-func resultTablePrefixes(spaceID string) []string {
-	return []string{resultTablePrefix(spaceID)}
-}
-
 func encodeResultTablePart(value string) string {
 	encoded := hex.EncodeToString([]byte(value))
 	if encoded == "" {
 		return "00"
 	}
 	return encoded
-}
-
-func hasAnyPrefix(value string, prefixes []string) bool {
-	for _, prefix := range prefixes {
-		if prefix == "" || strings.HasPrefix(value, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func sanitizeResultTableName(raw string) string {

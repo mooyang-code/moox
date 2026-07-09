@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
@@ -13,36 +12,29 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/view/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
-	"github.com/rs/xid"
 	"google.golang.org/protobuf/proto"
-	trpc "trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var _ pb.DataViewService = (*Service)(nil)
 
 // Service implements DataView RPC APIs for materialized View stores.
+//
+// View 索引是可从 PrimaryStore 重建的有界派生结果；索引生命周期统一由
+// view_builder 角色的 op=rotate 调度驱动，Service 只负责查询 active_result。
 type Service struct {
 	metadata Metadata
 	views    *deviceduckdb.ViewStore
 	search   *search.Service
 	facts    FactReader
 	records  RecordFactReader
-	builder  *Builder
-
-	asyncMu sync.Mutex
-	asyncWG sync.WaitGroup
-	closing bool
 }
 
 type ServiceOptions struct {
-	Metadata       Metadata
-	Views          *deviceduckdb.ViewStore
-	Search         *search.Service
-	Facts          FactReader
-	Records        RecordFactReader
-	Builder        *Builder
-	DisableRebuild bool
+	Metadata Metadata
+	Views    *deviceduckdb.ViewStore
+	Search   *search.Service
+	Facts    FactReader
+	Records  RecordFactReader
 }
 
 func NewService(opts ServiceOptions) *Service {
@@ -52,21 +44,10 @@ func NewService(opts ServiceOptions) *Service {
 			records = reader
 		}
 	}
-	builder := opts.Builder
-	if builder == nil && !opts.DisableRebuild {
-		builder = NewBuilder(Options{Metadata: opts.Metadata, Facts: opts.Facts, Records: records, Views: opts.Views, Search: opts.Search})
-	}
-	return &Service{metadata: opts.Metadata, views: opts.Views, search: opts.Search, facts: opts.Facts, records: records, builder: builder}
+	return &Service{metadata: opts.Metadata, views: opts.Views, search: opts.Search, facts: opts.Facts, records: records}
 }
 
 func (s *Service) Close() error {
-	if s == nil {
-		return nil
-	}
-	s.asyncMu.Lock()
-	s.closing = true
-	s.asyncMu.Unlock()
-	s.asyncWG.Wait()
 	return nil
 }
 
@@ -150,74 +131,6 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 	sortSearchRecordRows(matched, req.GetSorts())
 	paged, page := pageRecordRows(matched, req.GetPage())
 	return &pb.SearchRecordRowsRsp{RetInfo: response.Success("success"), Columns: projectResultColumns(viewColumns, req.GetColumnNames()), Rows: paged, PageResult: page}, nil
-}
-
-func (s *Service) RebuildTimeSeriesView(ctx context.Context, req *pb.RebuildTimeSeriesViewReq) (*pb.RebuildTimeSeriesViewRsp, error) {
-	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
-		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
-	}
-	viewMeta, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
-	if err != nil {
-		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
-	}
-	if err := s.validateTimeSeriesView(ctx, viewMeta); err != nil {
-		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	if s.builder == nil {
-		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view builder is disabled in this storage role"))}, nil
-	}
-	rebuildID := xid.New().String()
-	rebuildReq := proto.Clone(req).(*pb.RebuildTimeSeriesViewReq)
-	if !s.acceptAsync() {
-		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("service is closing"))}, nil
-	}
-	go func() {
-		defer s.asyncWG.Done()
-		asyncCtx := trpc.CloneContext(ctx)
-		if _, err := s.builder.Build(asyncCtx, rebuildReq.GetSpaceId(), rebuildReq.GetViewId()); err != nil {
-			log.ErrorContextf(asyncCtx, "[ViewService] time_series_view_rebuild failed: %v", err)
-		}
-	}()
-	return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Success("rebuild accepted"), RebuildId: rebuildID}, nil
-}
-
-func (s *Service) RebuildRecordView(ctx context.Context, req *pb.RebuildRecordViewReq) (*pb.RebuildRecordViewRsp, error) {
-	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
-		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
-	}
-	viewMeta, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
-	if err != nil {
-		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
-	}
-	if err := s.validateRecordView(ctx, viewMeta); err != nil {
-		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	if s.builder == nil {
-		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view builder is disabled in this storage role"))}, nil
-	}
-	rebuildID := xid.New().String()
-	rebuildReq := proto.Clone(req).(*pb.RebuildRecordViewReq)
-	if !s.acceptAsync() {
-		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("service is closing"))}, nil
-	}
-	go func() {
-		defer s.asyncWG.Done()
-		asyncCtx := trpc.CloneContext(ctx)
-		if _, err := s.builder.Build(asyncCtx, rebuildReq.GetSpaceId(), rebuildReq.GetViewId()); err != nil {
-			log.ErrorContextf(asyncCtx, "[ViewService] record_view_rebuild failed: %v", err)
-		}
-	}()
-	return &pb.RebuildRecordViewRsp{RetInfo: response.Success("rebuild accepted"), RebuildId: rebuildID}, nil
-}
-
-func (s *Service) acceptAsync() bool {
-	s.asyncMu.Lock()
-	defer s.asyncMu.Unlock()
-	if s.closing {
-		return false
-	}
-	s.asyncWG.Add(1)
-	return true
 }
 
 func (s *Service) validateTimeSeriesView(ctx context.Context, viewMeta *pb.View) error {

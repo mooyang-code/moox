@@ -98,52 +98,16 @@ message SearchRecordRowsRsp {
   common.PageResult page_result = 4;
 }
 
-// RebuildTimeSeriesViewReq 表示异步重建时序 View 数据的请求。
-// 重建总是基于当前 View 定义版本从 PrimaryStore 全量扫描构建新 DuckDB 结果。
-message RebuildTimeSeriesViewReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是 View 所属空间 ID。
-  string space_id = 2;
-  // view_id 是要重建的 TimeSeries + DuckDB 查询入口。
-  string view_id = 3;
-}
-
-// RebuildTimeSeriesViewRsp 表示异步重建时序 View 数据的受理结果。
-message RebuildTimeSeriesViewRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // rebuild_id 是本次异步重建任务 ID。
-  string rebuild_id = 2;
-}
-
-// RebuildRecordViewReq 表示异步重建记录 View 数据的请求。
-// 重建总是基于当前 View 定义版本从 PrimaryStore 全量扫描构建新 Bleve 索引。
-message RebuildRecordViewReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是 View 所属空间 ID。
-  string space_id = 2;
-  // view_id 是要重建的 Record + Bleve 搜索入口。
-  string view_id = 3;
-}
-
-// RebuildRecordViewRsp 表示异步重建记录 View 数据的受理结果。
-message RebuildRecordViewRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // rebuild_id 是本次异步重建任务 ID。
-  string rebuild_id = 2;
-}
-
 // DataView 是用户侧 View 查询服务。
+// View 索引是可从 PrimaryStore 重建的有界派生结果，不是完整事实存储；
+// 完整历史以 PrimaryStore KV/Pebble 为准。索引生命周期统一由 view_builder
+// 角色的 op=rotate 调度驱动（schema 抢占重建、容量轮换、ready switch、
+// 陈旧清理），不提供手动重建 RPC。
 service DataView {
-  // QueryTimeSeriesRows 查询已登记 View 对应的 TimeSeries 读模型，默认使用 DuckDB。
+  // QueryTimeSeriesRows 查询已登记 View 对应的 TimeSeries 读模型（DuckDB），
+  // 始终读取当前 active View 索引。
   rpc QueryTimeSeriesRows(QueryTimeSeriesRowsReq) returns (QueryTimeSeriesRowsRsp);
-  // SearchRecordRows 搜索已登记 View 对应的 Record 读模型，默认使用 Bleve。
+  // SearchRecordRows 搜索已登记 View 对应的 Record 读模型（Bleve），
+  // 始终读取当前 active View 索引。
   rpc SearchRecordRows(SearchRecordRowsReq) returns (SearchRecordRowsRsp);
-  // RebuildTimeSeriesView 异步从 PrimaryStore 全量扫描并重建 TimeSeries View。
-  rpc RebuildTimeSeriesView(RebuildTimeSeriesViewReq) returns (RebuildTimeSeriesViewRsp);
-  // RebuildRecordView 异步从 PrimaryStore 全量扫描并重建 Record View。
-  rpc RebuildRecordView(RebuildRecordViewReq) returns (RebuildRecordViewRsp);
 }

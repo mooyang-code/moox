@@ -2,96 +2,68 @@ package view
 
 import (
 	"context"
-	"errors"
 	"net/url"
 	"strings"
 	"sync"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
+
+var defaultRotation struct {
+	sync.RWMutex
+	value *RotationManager
+}
+
+// SetDefaultRotation registers the RotationManager used by HandleSchedule.
+// It should only be called by the view_builder role.
+func SetDefaultRotation(rotation *RotationManager) {
+	defaultRotation.Lock()
+	defer defaultRotation.Unlock()
+	defaultRotation.value = rotation
+}
+
+func currentDefaultRotation() *RotationManager {
+	defaultRotation.RLock()
+	defer defaultRotation.RUnlock()
+	return defaultRotation.value
+}
 
 var defaultBuilder struct {
 	sync.RWMutex
 	value *Builder
 }
 
+// SetDefaultBuilder registers the legacy single-view Builder. It is kept
+// for callers that still construct a Builder directly; the scheduled View
+// index lifecycle now runs exclusively through RotateViewIndexes.
 func SetDefaultBuilder(builder *Builder) {
 	defaultBuilder.Lock()
 	defer defaultBuilder.Unlock()
 	defaultBuilder.value = builder
 }
 
+// HandleSchedule is the single scheduler entry for the View index
+// lifecycle. It only supports op=rotate (default when op is omitted); all
+// other schedule ops are unsupported and are skipped with a warning.
 func HandleSchedule(ctx context.Context, params string) error {
-	builder := currentDefaultBuilder()
-	if builder == nil {
-		log.WarnContext(ctx, "[ViewBuilder] default builder is not initialized, skip schedule")
+	op := scheduleOperation(params)
+	if op != "" && op != "rotate" {
+		log.WarnContextf(ctx, "[ViewBuilder] unsupported schedule op %q, skip", op)
+		return nil
+	}
+	rotation := currentDefaultRotation()
+	if rotation == nil {
+		log.WarnContext(ctx, "[ViewBuilder] rotation manager is not initialized, skip schedule")
 		return nil
 	}
 	spaceID := scheduleSpaceID(params)
-	switch scheduleOperation(params) {
-	case "cleanup":
-		dropped, err := builder.CleanupInactiveResults(ctx, spaceID)
-		if err != nil {
-			log.ErrorContextf(ctx, "[ViewBuilder] cleanup schedule failed: %v", err)
-			return err
-		}
-		log.InfoContextf(ctx, "[ViewBuilder] cleanup dropped %d inactive result table(s)", dropped)
-		return nil
-	case "retry_failed":
-		built, err := builder.RebuildFailedViews(ctx, spaceID)
-		if err != nil {
-			log.ErrorContextf(ctx, "[ViewBuilder] retry failed schedule failed: %v", err)
-			return err
-		}
-		log.InfoContextf(ctx, "[ViewBuilder] retry failed schedule rebuilt %d view(s)", len(built))
-		return nil
-	}
-	var (
-		built []*pb.View
-		err   error
-	)
-	if spaceID != "" {
-		built, err = builder.RebuildPendingViews(ctx, spaceID)
-	} else {
-		built, err = builder.RebuildPendingViewsInAllSpaces(ctx)
-	}
+	rotated, err := rotation.RotateViewIndexes(ctx, spaceID)
 	if err != nil {
-		log.ErrorContextf(ctx, "[ViewBuilder] schedule failed: %v", err)
+		log.ErrorContextf(ctx, "[ViewBuilder] rotate schedule failed: %v", err)
 		return err
 	}
-	log.InfoContextf(ctx, "[ViewBuilder] schedule rebuilt %d view(s)", len(built))
+	log.InfoContextf(ctx, "[ViewBuilder] rotate schedule updated %d view(s)", rotated)
 	return nil
-}
-
-func currentDefaultBuilder() *Builder {
-	defaultBuilder.RLock()
-	defer defaultBuilder.RUnlock()
-	return defaultBuilder.value
-}
-
-func (b *Builder) RebuildPendingViewsInAllSpaces(ctx context.Context) ([]*pb.View, error) {
-	if b == nil || b.metadata == nil {
-		return nil, errMetadataRequired()
-	}
-	const pageSize = uint32(1000)
-	var built []*pb.View
-	for pageNo := uint32(1); ; pageNo++ {
-		spaces, page, err := b.metadata.ListSpaces(ctx, "", &pb.Page{Page: pageNo, Size: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		for _, space := range spaces {
-			items, err := b.RebuildPendingViews(ctx, space.GetSpaceId())
-			if err != nil {
-				return nil, err
-			}
-			built = append(built, items...)
-		}
-		if page == nil || !page.GetHasMore() {
-			return built, nil
-		}
-	}
 }
 
 func scheduleSpaceID(params string) string {
@@ -106,9 +78,6 @@ func scheduleSpaceID(params string) string {
 		}
 	}
 	if !strings.Contains(params, "=") {
-		if strings.EqualFold(params, "cleanup") {
-			return ""
-		}
 		return params
 	}
 	return ""
@@ -128,12 +97,5 @@ func scheduleOperation(params string) string {
 			return strings.ToLower(action)
 		}
 	}
-	if !strings.Contains(params, "=") && strings.EqualFold(params, "cleanup") {
-		return "cleanup"
-	}
 	return ""
-}
-
-func errMetadataRequired() error {
-	return errors.New("metadata is required")
 }

@@ -19,14 +19,12 @@ import (
 
 // DataViewService defines service.
 type DataViewService interface {
-	// QueryTimeSeriesRows QueryTimeSeriesRows 查询已登记 View 对应的 TimeSeries 读模型，默认使用 DuckDB。
+	// QueryTimeSeriesRows QueryTimeSeriesRows 查询已登记 View 对应的 TimeSeries 读模型（DuckDB），
+	//  始终读取当前 active View 索引。
 	QueryTimeSeriesRows(ctx context.Context, req *QueryTimeSeriesRowsReq) (*QueryTimeSeriesRowsRsp, error)
-	// SearchRecordRows SearchRecordRows 搜索已登记 View 对应的 Record 读模型，默认使用 Bleve。
+	// SearchRecordRows SearchRecordRows 搜索已登记 View 对应的 Record 读模型（Bleve），
+	//  始终读取当前 active View 索引。
 	SearchRecordRows(ctx context.Context, req *SearchRecordRowsReq) (*SearchRecordRowsRsp, error)
-	// RebuildTimeSeriesView RebuildTimeSeriesView 异步从 PrimaryStore 全量扫描并重建 TimeSeries View。
-	RebuildTimeSeriesView(ctx context.Context, req *RebuildTimeSeriesViewReq) (*RebuildTimeSeriesViewRsp, error)
-	// RebuildRecordView RebuildRecordView 异步从 PrimaryStore 全量扫描并重建 Record View。
-	RebuildRecordView(ctx context.Context, req *RebuildRecordViewReq) (*RebuildRecordViewRsp, error)
 }
 
 func DataViewService_QueryTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -65,42 +63,6 @@ func DataViewService_SearchRecordRows_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func DataViewService_RebuildTimeSeriesView_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &RebuildTimeSeriesViewReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataViewService).RebuildTimeSeriesView(ctx, reqbody.(*RebuildTimeSeriesViewReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func DataViewService_RebuildRecordView_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &RebuildRecordViewReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataViewService).RebuildRecordView(ctx, reqbody.(*RebuildRecordViewReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // DataViewServer_ServiceDesc descriptor for server.RegisterService.
 var DataViewServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.DataView",
@@ -113,14 +75,6 @@ var DataViewServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.DataView/SearchRecordRows",
 			Func: DataViewService_SearchRecordRows_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.DataView/RebuildTimeSeriesView",
-			Func: DataViewService_RebuildTimeSeriesView_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.DataView/RebuildRecordView",
-			Func: DataViewService_RebuildRecordView_Handler,
 		},
 	},
 }
@@ -136,24 +90,18 @@ func RegisterDataViewService(s server.Service, svr DataViewService) {
 
 type UnimplementedDataView struct{}
 
-// QueryTimeSeriesRows QueryTimeSeriesRows 查询已登记 View 对应的 TimeSeries 读模型，默认使用 DuckDB。
+// QueryTimeSeriesRows QueryTimeSeriesRows 查询已登记 View 对应的 TimeSeries 读模型（DuckDB），
+//
+//	始终读取当前 active View 索引。
 func (s *UnimplementedDataView) QueryTimeSeriesRows(ctx context.Context, req *QueryTimeSeriesRowsReq) (*QueryTimeSeriesRowsRsp, error) {
 	return nil, errors.New("rpc QueryTimeSeriesRows of service DataView is not implemented")
 }
 
-// SearchRecordRows SearchRecordRows 搜索已登记 View 对应的 Record 读模型，默认使用 Bleve。
+// SearchRecordRows SearchRecordRows 搜索已登记 View 对应的 Record 读模型（Bleve），
+//
+//	始终读取当前 active View 索引。
 func (s *UnimplementedDataView) SearchRecordRows(ctx context.Context, req *SearchRecordRowsReq) (*SearchRecordRowsRsp, error) {
 	return nil, errors.New("rpc SearchRecordRows of service DataView is not implemented")
-}
-
-// RebuildTimeSeriesView RebuildTimeSeriesView 异步从 PrimaryStore 全量扫描并重建 TimeSeries View。
-func (s *UnimplementedDataView) RebuildTimeSeriesView(ctx context.Context, req *RebuildTimeSeriesViewReq) (*RebuildTimeSeriesViewRsp, error) {
-	return nil, errors.New("rpc RebuildTimeSeriesView of service DataView is not implemented")
-}
-
-// RebuildRecordView RebuildRecordView 异步从 PrimaryStore 全量扫描并重建 Record View。
-func (s *UnimplementedDataView) RebuildRecordView(ctx context.Context, req *RebuildRecordViewReq) (*RebuildRecordViewRsp, error) {
-	return nil, errors.New("rpc RebuildRecordView of service DataView is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -164,14 +112,12 @@ func (s *UnimplementedDataView) RebuildRecordView(ctx context.Context, req *Rebu
 
 // DataViewClientProxy defines service client proxy
 type DataViewClientProxy interface {
-	// QueryTimeSeriesRows QueryTimeSeriesRows 查询已登记 View 对应的 TimeSeries 读模型，默认使用 DuckDB。
+	// QueryTimeSeriesRows QueryTimeSeriesRows 查询已登记 View 对应的 TimeSeries 读模型（DuckDB），
+	//  始终读取当前 active View 索引。
 	QueryTimeSeriesRows(ctx context.Context, req *QueryTimeSeriesRowsReq, opts ...client.Option) (rsp *QueryTimeSeriesRowsRsp, err error)
-	// SearchRecordRows SearchRecordRows 搜索已登记 View 对应的 Record 读模型，默认使用 Bleve。
+	// SearchRecordRows SearchRecordRows 搜索已登记 View 对应的 Record 读模型（Bleve），
+	//  始终读取当前 active View 索引。
 	SearchRecordRows(ctx context.Context, req *SearchRecordRowsReq, opts ...client.Option) (rsp *SearchRecordRowsRsp, err error)
-	// RebuildTimeSeriesView RebuildTimeSeriesView 异步从 PrimaryStore 全量扫描并重建 TimeSeries View。
-	RebuildTimeSeriesView(ctx context.Context, req *RebuildTimeSeriesViewReq, opts ...client.Option) (rsp *RebuildTimeSeriesViewRsp, err error)
-	// RebuildRecordView RebuildRecordView 异步从 PrimaryStore 全量扫描并重建 Record View。
-	RebuildRecordView(ctx context.Context, req *RebuildRecordViewReq, opts ...client.Option) (rsp *RebuildRecordViewRsp, err error)
 }
 
 type DataViewClientProxyImpl struct {
@@ -217,46 +163,6 @@ func (c *DataViewClientProxyImpl) SearchRecordRows(ctx context.Context, req *Sea
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SearchRecordRowsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *DataViewClientProxyImpl) RebuildTimeSeriesView(ctx context.Context, req *RebuildTimeSeriesViewReq, opts ...client.Option) (*RebuildTimeSeriesViewRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataView/RebuildTimeSeriesView")
-	msg.WithCalleeServiceName(DataViewServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataView")
-	msg.WithCalleeMethod("RebuildTimeSeriesView")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &RebuildTimeSeriesViewRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *DataViewClientProxyImpl) RebuildRecordView(ctx context.Context, req *RebuildRecordViewReq, opts ...client.Option) (*RebuildRecordViewRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataView/RebuildRecordView")
-	msg.WithCalleeServiceName(DataViewServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataView")
-	msg.WithCalleeMethod("RebuildRecordView")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &RebuildRecordViewRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

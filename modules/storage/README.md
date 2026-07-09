@@ -558,8 +558,8 @@ Space、View（+ViewColumn）、DataSource、Subject（+SubjectSymbol）、Datas
 | --- | --- |
 | `QueryTimeSeriesRows` | 查询 TimeSeries + DuckDB 派生 View；不存在返回 `VIEW_NOT_FOUND` |
 | `SearchRecordRows` | 搜索 Record + Bleve 派生 View，支持全文 + 结构化过滤 |
-| `RebuildTimeSeriesView` | 异步重建 TimeSeries 派生 View，返回 `rebuild_id` |
-| `RebuildRecordView` | 异步重建全文索引，返回 `rebuild_id` |
+
+View 索引生命周期（schema 抢占重建、容量轮换、ready switch、陈旧清理）统一由 `view_builder` 角色的 `op=rotate` 调度驱动，不再提供手动重建 RPC。
 
 ### PrimaryStore — 在线主存（端口 20101，内部服务）
 

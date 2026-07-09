@@ -36,17 +36,7 @@ server:
       protocol: trpc
     - name: trpc.moox.storage.view.timer
       port: 20300
-      network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params="
-      protocol: timer
-      timeout: 60000
-    - name: trpc.moox.storage.view.cleanup.timer
-      port: 20301
-      network: "0 0 * * * *?scheduler=viewBuilderSchedule&params=op=cleanup"
-      protocol: timer
-      timeout: 60000
-    - name: trpc.moox.storage.view.retry_failed.timer
-      port: 20303
-      network: "0 */10 * * * *?disable=1&scheduler=viewBuilderSchedule&params=op=retry_failed"
+      network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params=op=rotate"
       protocol: timer
       timeout: 60000
     - name: trpc.moox.storage.archive.timer

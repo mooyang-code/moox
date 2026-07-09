@@ -13,9 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	searchsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
-	"github.com/rs/xid"
 	"google.golang.org/protobuf/proto"
-	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
@@ -96,106 +94,6 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 	sortSearchRecordRows(matched, req.GetSorts())
 	paged, page := pageRecordRows(matched, req.GetPage())
 	return &pb.SearchRecordRowsRsp{RetInfo: response.Success("success"), Columns: projectResultColumns(viewColumns, req.GetColumnNames()), Rows: paged, PageResult: page}, nil
-}
-
-func (s *Service) RebuildTimeSeriesView(ctx context.Context, req *pb.RebuildTimeSeriesViewReq) (*pb.RebuildTimeSeriesViewRsp, error) {
-	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
-		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
-	}
-	viewMeta, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
-	if err != nil {
-		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
-	}
-	if err := s.validateTimeSeriesView(ctx, viewMeta); err != nil {
-		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	rebuildID := xid.New().String()
-	rebuildReq := proto.Clone(req).(*pb.RebuildTimeSeriesViewReq)
-	s.asyncMu.Lock()
-	if s.closing {
-		s.asyncMu.Unlock()
-		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("service is closing"))}, nil
-	}
-	s.asyncWG.Add(1)
-	s.asyncMu.Unlock()
-	go func() {
-		defer s.asyncWG.Done()
-		asyncCtx := trpc.CloneContext(ctx)
-		if err := s.rebuildTimeSeriesView(asyncCtx, rebuildReq); err != nil {
-			s.reportViewError(asyncCtx, "time_series_view_rebuild", err)
-		}
-	}()
-	return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Success("rebuild accepted"), RebuildId: rebuildID}, nil
-}
-
-func (s *Service) RebuildRecordView(ctx context.Context, req *pb.RebuildRecordViewReq) (*pb.RebuildRecordViewRsp, error) {
-	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
-		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
-	}
-	viewMeta, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
-	if err != nil {
-		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
-	}
-	if err := s.validateRecordView(ctx, viewMeta); err != nil {
-		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	rebuildID := xid.New().String()
-	rebuildReq := proto.Clone(req).(*pb.RebuildRecordViewReq)
-	s.asyncMu.Lock()
-	if s.closing {
-		s.asyncMu.Unlock()
-		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("service is closing"))}, nil
-	}
-	s.asyncWG.Add(1)
-	s.asyncMu.Unlock()
-	go func() {
-		defer s.asyncWG.Done()
-		asyncCtx := trpc.CloneContext(ctx)
-		if err := s.rebuildRecordView(asyncCtx, rebuildReq); err != nil {
-			s.reportViewError(asyncCtx, "record_view_rebuild", err)
-		}
-	}()
-	return &pb.RebuildRecordViewRsp{RetInfo: response.Success("rebuild accepted"), RebuildId: rebuildID}, nil
-}
-
-func (s *Service) rebuildTimeSeriesView(ctx context.Context, req *pb.RebuildTimeSeriesViewReq) error {
-	views, err := s.viewStore()
-	if err != nil {
-		return err
-	}
-	builder := view.NewBuilder(view.Options{
-		Metadata: s.metadata,
-		Facts:    s.timeSeriesFactReaderOrDefault(),
-		Views:    views,
-		OnBuildStarted: func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) {
-			s.startViewDirtyTracking(pb.DataKind_DATA_KIND_TIME_SERIES, item, targetVersion, resultName)
-		},
-		BeforeComplete: func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) error {
-			return s.drainTimeSeriesDirty(ctx, viewDirtyHandle(pb.DataKind_DATA_KIND_TIME_SERIES, item.GetSpaceId(), item.GetViewId(), targetVersion, resultName))
-		},
-		OnBuildFinished: func(ctx context.Context, item *pb.View, targetVersion uint64, resultName string) {
-			s.stopViewDirtyTracking(viewDirtyHandle(pb.DataKind_DATA_KIND_TIME_SERIES, item.GetSpaceId(), item.GetViewId(), targetVersion, resultName))
-		},
-	})
-	_, err = builder.BuildView(ctx, req.GetSpaceId(), req.GetViewId())
-	return err
-}
-
-func (s *Service) rebuildRecordView(ctx context.Context, req *pb.RebuildRecordViewReq) error {
-	viewMeta, err := s.metadataReader.GetView(ctx, req.GetSpaceId(), req.GetViewId())
-	if err != nil {
-		return err
-	}
-	if err := s.validateRecordView(ctx, viewMeta); err != nil {
-		return err
-	}
-	builder := view.NewBuilder(view.Options{
-		Metadata: s.metadata,
-		Records:  s.viewFactReaderOrDefault(),
-		Search:   s.search,
-	})
-	_, err = builder.BuildView(ctx, req.GetSpaceId(), req.GetViewId())
-	return err
 }
 
 func (s *Service) validateTimeSeriesView(ctx context.Context, view *pb.View) error {

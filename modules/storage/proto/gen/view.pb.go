@@ -530,258 +530,6 @@ func (x *SearchRecordRowsRsp) GetPageResult() *commonpb.PageResult {
 	return nil
 }
 
-// RebuildTimeSeriesViewReq 表示异步重建时序 View 数据的请求。
-// 重建总是基于当前 View 定义版本从 PrimaryStore 全量扫描构建新 DuckDB 结果。
-type RebuildTimeSeriesViewReq struct {
-	state         protoimpl.MessageState
-	sizeCache     protoimpl.SizeCache
-	unknownFields protoimpl.UnknownFields
-
-	// auth_info 是调用方身份和链路追踪信息。
-	AuthInfo *commonpb.AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	// space_id 是 View 所属空间 ID。
-	SpaceId string `protobuf:"bytes,2,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
-	// view_id 是要重建的 TimeSeries + DuckDB 查询入口。
-	ViewId string `protobuf:"bytes,3,opt,name=view_id,json=viewId,proto3" json:"view_id,omitempty"`
-}
-
-func (x *RebuildTimeSeriesViewReq) Reset() {
-	*x = RebuildTimeSeriesViewReq{}
-	if protoimpl.UnsafeEnabled {
-		mi := &file_view_proto_msgTypes[5]
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		ms.StoreMessageInfo(mi)
-	}
-}
-
-func (x *RebuildTimeSeriesViewReq) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RebuildTimeSeriesViewReq) ProtoMessage() {}
-
-func (x *RebuildTimeSeriesViewReq) ProtoReflect() protoreflect.Message {
-	mi := &file_view_proto_msgTypes[5]
-	if protoimpl.UnsafeEnabled && x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RebuildTimeSeriesViewReq.ProtoReflect.Descriptor instead.
-func (*RebuildTimeSeriesViewReq) Descriptor() ([]byte, []int) {
-	return file_view_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *RebuildTimeSeriesViewReq) GetAuthInfo() *commonpb.AuthInfo {
-	if x != nil {
-		return x.AuthInfo
-	}
-	return nil
-}
-
-func (x *RebuildTimeSeriesViewReq) GetSpaceId() string {
-	if x != nil {
-		return x.SpaceId
-	}
-	return ""
-}
-
-func (x *RebuildTimeSeriesViewReq) GetViewId() string {
-	if x != nil {
-		return x.ViewId
-	}
-	return ""
-}
-
-// RebuildTimeSeriesViewRsp 表示异步重建时序 View 数据的受理结果。
-type RebuildTimeSeriesViewRsp struct {
-	state         protoimpl.MessageState
-	sizeCache     protoimpl.SizeCache
-	unknownFields protoimpl.UnknownFields
-
-	// ret_info 是接口返回状态。
-	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	// rebuild_id 是本次异步重建任务 ID。
-	RebuildId string `protobuf:"bytes,2,opt,name=rebuild_id,json=rebuildId,proto3" json:"rebuild_id,omitempty"`
-}
-
-func (x *RebuildTimeSeriesViewRsp) Reset() {
-	*x = RebuildTimeSeriesViewRsp{}
-	if protoimpl.UnsafeEnabled {
-		mi := &file_view_proto_msgTypes[6]
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		ms.StoreMessageInfo(mi)
-	}
-}
-
-func (x *RebuildTimeSeriesViewRsp) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RebuildTimeSeriesViewRsp) ProtoMessage() {}
-
-func (x *RebuildTimeSeriesViewRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_view_proto_msgTypes[6]
-	if protoimpl.UnsafeEnabled && x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RebuildTimeSeriesViewRsp.ProtoReflect.Descriptor instead.
-func (*RebuildTimeSeriesViewRsp) Descriptor() ([]byte, []int) {
-	return file_view_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *RebuildTimeSeriesViewRsp) GetRetInfo() *commonpb.RetInfo {
-	if x != nil {
-		return x.RetInfo
-	}
-	return nil
-}
-
-func (x *RebuildTimeSeriesViewRsp) GetRebuildId() string {
-	if x != nil {
-		return x.RebuildId
-	}
-	return ""
-}
-
-// RebuildRecordViewReq 表示异步重建记录 View 数据的请求。
-// 重建总是基于当前 View 定义版本从 PrimaryStore 全量扫描构建新 Bleve 索引。
-type RebuildRecordViewReq struct {
-	state         protoimpl.MessageState
-	sizeCache     protoimpl.SizeCache
-	unknownFields protoimpl.UnknownFields
-
-	// auth_info 是调用方身份和链路追踪信息。
-	AuthInfo *commonpb.AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
-	// space_id 是 View 所属空间 ID。
-	SpaceId string `protobuf:"bytes,2,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
-	// view_id 是要重建的 Record + Bleve 搜索入口。
-	ViewId string `protobuf:"bytes,3,opt,name=view_id,json=viewId,proto3" json:"view_id,omitempty"`
-}
-
-func (x *RebuildRecordViewReq) Reset() {
-	*x = RebuildRecordViewReq{}
-	if protoimpl.UnsafeEnabled {
-		mi := &file_view_proto_msgTypes[7]
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		ms.StoreMessageInfo(mi)
-	}
-}
-
-func (x *RebuildRecordViewReq) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RebuildRecordViewReq) ProtoMessage() {}
-
-func (x *RebuildRecordViewReq) ProtoReflect() protoreflect.Message {
-	mi := &file_view_proto_msgTypes[7]
-	if protoimpl.UnsafeEnabled && x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RebuildRecordViewReq.ProtoReflect.Descriptor instead.
-func (*RebuildRecordViewReq) Descriptor() ([]byte, []int) {
-	return file_view_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *RebuildRecordViewReq) GetAuthInfo() *commonpb.AuthInfo {
-	if x != nil {
-		return x.AuthInfo
-	}
-	return nil
-}
-
-func (x *RebuildRecordViewReq) GetSpaceId() string {
-	if x != nil {
-		return x.SpaceId
-	}
-	return ""
-}
-
-func (x *RebuildRecordViewReq) GetViewId() string {
-	if x != nil {
-		return x.ViewId
-	}
-	return ""
-}
-
-// RebuildRecordViewRsp 表示异步重建记录 View 数据的受理结果。
-type RebuildRecordViewRsp struct {
-	state         protoimpl.MessageState
-	sizeCache     protoimpl.SizeCache
-	unknownFields protoimpl.UnknownFields
-
-	// ret_info 是接口返回状态。
-	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	// rebuild_id 是本次异步重建任务 ID。
-	RebuildId string `protobuf:"bytes,2,opt,name=rebuild_id,json=rebuildId,proto3" json:"rebuild_id,omitempty"`
-}
-
-func (x *RebuildRecordViewRsp) Reset() {
-	*x = RebuildRecordViewRsp{}
-	if protoimpl.UnsafeEnabled {
-		mi := &file_view_proto_msgTypes[8]
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		ms.StoreMessageInfo(mi)
-	}
-}
-
-func (x *RebuildRecordViewRsp) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RebuildRecordViewRsp) ProtoMessage() {}
-
-func (x *RebuildRecordViewRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_view_proto_msgTypes[8]
-	if protoimpl.UnsafeEnabled && x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RebuildRecordViewRsp.ProtoReflect.Descriptor instead.
-func (*RebuildRecordViewRsp) Descriptor() ([]byte, []int) {
-	return file_view_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *RebuildRecordViewRsp) GetRetInfo() *commonpb.RetInfo {
-	if x != nil {
-		return x.RetInfo
-	}
-	return nil
-}
-
-func (x *RebuildRecordViewRsp) GetRebuildId() string {
-	if x != nil {
-		return x.RebuildId
-	}
-	return ""
-}
-
 var File_view_proto protoreflect.FileDescriptor
 
 var file_view_proto_rawDesc = []byte{
@@ -898,70 +646,26 @@ var file_view_proto_rawDesc = []byte{
 	0x3d, 0x0a, 0x0b, 0x70, 0x61, 0x67, 0x65, 0x5f, 0x72, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x18, 0x04,
 	0x20, 0x01, 0x28, 0x0b, 0x32, 0x1c, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
 	0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x50, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75,
-	0x6c, 0x74, 0x52, 0x0a, 0x70, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x22, 0x87,
-	0x01, 0x0a, 0x18, 0x52, 0x65, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x54, 0x69, 0x6d, 0x65, 0x53, 0x65,
-	0x72, 0x69, 0x65, 0x73, 0x56, 0x69, 0x65, 0x77, 0x52, 0x65, 0x71, 0x12, 0x37, 0x0a, 0x09, 0x61,
-	0x75, 0x74, 0x68, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a,
-	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f,
-	0x6e, 0x2e, 0x41, 0x75, 0x74, 0x68, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x08, 0x61, 0x75, 0x74, 0x68,
-	0x49, 0x6e, 0x66, 0x6f, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64,
-	0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12,
-	0x17, 0x0a, 0x07, 0x76, 0x69, 0x65, 0x77, 0x5f, 0x69, 0x64, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09,
-	0x52, 0x06, 0x76, 0x69, 0x65, 0x77, 0x49, 0x64, 0x22, 0x6f, 0x0a, 0x18, 0x52, 0x65, 0x62, 0x75,
-	0x69, 0x6c, 0x64, 0x54, 0x69, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x56, 0x69, 0x65,
-	0x77, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f,
-	0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
-	0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66,
-	0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x1d, 0x0a, 0x0a, 0x72, 0x65,
-	0x62, 0x75, 0x69, 0x6c, 0x64, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09,
-	0x72, 0x65, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x49, 0x64, 0x22, 0x83, 0x01, 0x0a, 0x14, 0x52, 0x65,
-	0x62, 0x75, 0x69, 0x6c, 0x64, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x56, 0x69, 0x65, 0x77, 0x52,
-	0x65, 0x71, 0x12, 0x37, 0x0a, 0x09, 0x61, 0x75, 0x74, 0x68, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18,
-	0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
-	0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x41, 0x75, 0x74, 0x68, 0x49, 0x6e, 0x66,
-	0x6f, 0x52, 0x08, 0x61, 0x75, 0x74, 0x68, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x19, 0x0a, 0x08, 0x73,
-	0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73,
-	0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x17, 0x0a, 0x07, 0x76, 0x69, 0x65, 0x77, 0x5f, 0x69,
-	0x64, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x76, 0x69, 0x65, 0x77, 0x49, 0x64, 0x22,
-	0x6b, 0x0a, 0x14, 0x52, 0x65, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64,
-	0x56, 0x69, 0x65, 0x77, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69,
-	0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63,
-	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74,
-	0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x1d, 0x0a,
-	0x0a, 0x72, 0x65, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28,
-	0x09, 0x52, 0x09, 0x72, 0x65, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x49, 0x64, 0x32, 0xb5, 0x03, 0x0a,
-	0x08, 0x44, 0x61, 0x74, 0x61, 0x56, 0x69, 0x65, 0x77, 0x12, 0x6b, 0x0a, 0x13, 0x51, 0x75, 0x65,
-	0x72, 0x79, 0x54, 0x69, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x52, 0x6f, 0x77, 0x73,
-	0x12, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f,
-	0x72, 0x61, 0x67, 0x65, 0x2e, 0x51, 0x75, 0x65, 0x72, 0x79, 0x54, 0x69, 0x6d, 0x65, 0x53, 0x65,
-	0x72, 0x69, 0x65, 0x73, 0x52, 0x6f, 0x77, 0x73, 0x52, 0x65, 0x71, 0x1a, 0x29, 0x2e, 0x74, 0x72,
-	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e,
-	0x51, 0x75, 0x65, 0x72, 0x79, 0x54, 0x69, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x52,
-	0x6f, 0x77, 0x73, 0x52, 0x73, 0x70, 0x12, 0x62, 0x0a, 0x10, 0x53, 0x65, 0x61, 0x72, 0x63, 0x68,
-	0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x52, 0x6f, 0x77, 0x73, 0x12, 0x26, 0x2e, 0x74, 0x72, 0x70,
-	0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x53,
-	0x65, 0x61, 0x72, 0x63, 0x68, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x52, 0x6f, 0x77, 0x73, 0x52,
-	0x65, 0x71, 0x1a, 0x26, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73,
-	0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x53, 0x65, 0x61, 0x72, 0x63, 0x68, 0x52, 0x65, 0x63,
-	0x6f, 0x72, 0x64, 0x52, 0x6f, 0x77, 0x73, 0x52, 0x73, 0x70, 0x12, 0x71, 0x0a, 0x15, 0x52, 0x65,
-	0x62, 0x75, 0x69, 0x6c, 0x64, 0x54, 0x69, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x56,
-	0x69, 0x65, 0x77, 0x12, 0x2b, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
-	0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x52, 0x65, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x54,
-	0x69, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x56, 0x69, 0x65, 0x77, 0x52, 0x65, 0x71,
-	0x1a, 0x2b, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f,
-	0x72, 0x61, 0x67, 0x65, 0x2e, 0x52, 0x65, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x54, 0x69, 0x6d, 0x65,
-	0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x56, 0x69, 0x65, 0x77, 0x52, 0x73, 0x70, 0x12, 0x65, 0x0a,
-	0x11, 0x52, 0x65, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x56, 0x69,
-	0x65, 0x77, 0x12, 0x27, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73,
-	0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x52, 0x65, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x52, 0x65,
-	0x63, 0x6f, 0x72, 0x64, 0x56, 0x69, 0x65, 0x77, 0x52, 0x65, 0x71, 0x1a, 0x27, 0x2e, 0x74, 0x72,
-	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e,
-	0x52, 0x65, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x56, 0x69, 0x65,
-	0x77, 0x52, 0x73, 0x70, 0x42, 0x42, 0x5a, 0x40, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63,
-	0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f,
-	0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x73, 0x74, 0x6f,
-	0x72, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x67, 0x65, 0x6e, 0x3b, 0x73,
-	0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x6c, 0x74, 0x52, 0x0a, 0x70, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x32, 0xdb,
+	0x01, 0x0a, 0x08, 0x44, 0x61, 0x74, 0x61, 0x56, 0x69, 0x65, 0x77, 0x12, 0x6b, 0x0a, 0x13, 0x51,
+	0x75, 0x65, 0x72, 0x79, 0x54, 0x69, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x52, 0x6f,
+	0x77, 0x73, 0x12, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73,
+	0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x51, 0x75, 0x65, 0x72, 0x79, 0x54, 0x69, 0x6d, 0x65,
+	0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x52, 0x6f, 0x77, 0x73, 0x52, 0x65, 0x71, 0x1a, 0x29, 0x2e,
+	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67,
+	0x65, 0x2e, 0x51, 0x75, 0x65, 0x72, 0x79, 0x54, 0x69, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x69, 0x65,
+	0x73, 0x52, 0x6f, 0x77, 0x73, 0x52, 0x73, 0x70, 0x12, 0x62, 0x0a, 0x10, 0x53, 0x65, 0x61, 0x72,
+	0x63, 0x68, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x52, 0x6f, 0x77, 0x73, 0x12, 0x26, 0x2e, 0x74,
+	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65,
+	0x2e, 0x53, 0x65, 0x61, 0x72, 0x63, 0x68, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x52, 0x6f, 0x77,
+	0x73, 0x52, 0x65, 0x71, 0x1a, 0x26, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
+	0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x53, 0x65, 0x61, 0x72, 0x63, 0x68, 0x52,
+	0x65, 0x63, 0x6f, 0x72, 0x64, 0x52, 0x6f, 0x77, 0x73, 0x52, 0x73, 0x70, 0x42, 0x42, 0x5a, 0x40,
+	0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61,
+	0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64,
+	0x75, 0x6c, 0x65, 0x73, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x72, 0x6f,
+	0x74, 0x6f, 0x2f, 0x67, 0x65, 0x6e, 0x3b, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x70, 0x62,
+	0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -976,74 +680,62 @@ func file_view_proto_rawDescGZIP() []byte {
 	return file_view_proto_rawDescData
 }
 
-var file_view_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_view_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_view_proto_goTypes = []interface{}{
-	(*ResultColumn)(nil),             // 0: trpc.moox.storage.ResultColumn
-	(*QueryTimeSeriesRowsReq)(nil),   // 1: trpc.moox.storage.QueryTimeSeriesRowsReq
-	(*QueryTimeSeriesRowsRsp)(nil),   // 2: trpc.moox.storage.QueryTimeSeriesRowsRsp
-	(*SearchRecordRowsReq)(nil),      // 3: trpc.moox.storage.SearchRecordRowsReq
-	(*SearchRecordRowsRsp)(nil),      // 4: trpc.moox.storage.SearchRecordRowsRsp
-	(*RebuildTimeSeriesViewReq)(nil), // 5: trpc.moox.storage.RebuildTimeSeriesViewReq
-	(*RebuildTimeSeriesViewRsp)(nil), // 6: trpc.moox.storage.RebuildTimeSeriesViewRsp
-	(*RebuildRecordViewReq)(nil),     // 7: trpc.moox.storage.RebuildRecordViewReq
-	(*RebuildRecordViewRsp)(nil),     // 8: trpc.moox.storage.RebuildRecordViewRsp
-	(FieldValueType)(0),              // 9: trpc.moox.storage.FieldValueType
-	(ColumnOriginType)(0),            // 10: trpc.moox.storage.ColumnOriginType
-	(*commonpb.AuthInfo)(nil),        // 11: trpc.moox.common.AuthInfo
-	(*TimeSeriesKey)(nil),            // 12: trpc.moox.storage.TimeSeriesKey
-	(*TimeRange)(nil),                // 13: trpc.moox.storage.TimeRange
-	(*FilterExpr)(nil),               // 14: trpc.moox.storage.FilterExpr
-	(*SortSpec)(nil),                 // 15: trpc.moox.storage.SortSpec
-	(*commonpb.Page)(nil),            // 16: trpc.moox.common.Page
-	(commonpb.TotalMode)(0),          // 17: trpc.moox.common.TotalMode
-	(*commonpb.RetInfo)(nil),         // 18: trpc.moox.common.RetInfo
-	(*TimeSeriesRow)(nil),            // 19: trpc.moox.storage.TimeSeriesRow
-	(*commonpb.PageResult)(nil),      // 20: trpc.moox.common.PageResult
-	(*RecordKey)(nil),                // 21: trpc.moox.storage.RecordKey
-	(*VersionRange)(nil),             // 22: trpc.moox.storage.VersionRange
-	(*RecordRow)(nil),                // 23: trpc.moox.storage.RecordRow
+	(*ResultColumn)(nil),           // 0: trpc.moox.storage.ResultColumn
+	(*QueryTimeSeriesRowsReq)(nil), // 1: trpc.moox.storage.QueryTimeSeriesRowsReq
+	(*QueryTimeSeriesRowsRsp)(nil), // 2: trpc.moox.storage.QueryTimeSeriesRowsRsp
+	(*SearchRecordRowsReq)(nil),    // 3: trpc.moox.storage.SearchRecordRowsReq
+	(*SearchRecordRowsRsp)(nil),    // 4: trpc.moox.storage.SearchRecordRowsRsp
+	(FieldValueType)(0),            // 5: trpc.moox.storage.FieldValueType
+	(ColumnOriginType)(0),          // 6: trpc.moox.storage.ColumnOriginType
+	(*commonpb.AuthInfo)(nil),      // 7: trpc.moox.common.AuthInfo
+	(*TimeSeriesKey)(nil),          // 8: trpc.moox.storage.TimeSeriesKey
+	(*TimeRange)(nil),              // 9: trpc.moox.storage.TimeRange
+	(*FilterExpr)(nil),             // 10: trpc.moox.storage.FilterExpr
+	(*SortSpec)(nil),               // 11: trpc.moox.storage.SortSpec
+	(*commonpb.Page)(nil),          // 12: trpc.moox.common.Page
+	(commonpb.TotalMode)(0),        // 13: trpc.moox.common.TotalMode
+	(*commonpb.RetInfo)(nil),       // 14: trpc.moox.common.RetInfo
+	(*TimeSeriesRow)(nil),          // 15: trpc.moox.storage.TimeSeriesRow
+	(*commonpb.PageResult)(nil),    // 16: trpc.moox.common.PageResult
+	(*RecordKey)(nil),              // 17: trpc.moox.storage.RecordKey
+	(*VersionRange)(nil),           // 18: trpc.moox.storage.VersionRange
+	(*RecordRow)(nil),              // 19: trpc.moox.storage.RecordRow
 }
 var file_view_proto_depIdxs = []int32{
-	9,  // 0: trpc.moox.storage.ResultColumn.value_type:type_name -> trpc.moox.storage.FieldValueType
-	10, // 1: trpc.moox.storage.ResultColumn.origin_type:type_name -> trpc.moox.storage.ColumnOriginType
-	11, // 2: trpc.moox.storage.QueryTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	12, // 3: trpc.moox.storage.QueryTimeSeriesRowsReq.keys:type_name -> trpc.moox.storage.TimeSeriesKey
-	13, // 4: trpc.moox.storage.QueryTimeSeriesRowsReq.time_range:type_name -> trpc.moox.storage.TimeRange
-	14, // 5: trpc.moox.storage.QueryTimeSeriesRowsReq.filters:type_name -> trpc.moox.storage.FilterExpr
-	15, // 6: trpc.moox.storage.QueryTimeSeriesRowsReq.sorts:type_name -> trpc.moox.storage.SortSpec
-	16, // 7: trpc.moox.storage.QueryTimeSeriesRowsReq.page:type_name -> trpc.moox.common.Page
-	17, // 8: trpc.moox.storage.QueryTimeSeriesRowsReq.total_mode:type_name -> trpc.moox.common.TotalMode
-	18, // 9: trpc.moox.storage.QueryTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	5,  // 0: trpc.moox.storage.ResultColumn.value_type:type_name -> trpc.moox.storage.FieldValueType
+	6,  // 1: trpc.moox.storage.ResultColumn.origin_type:type_name -> trpc.moox.storage.ColumnOriginType
+	7,  // 2: trpc.moox.storage.QueryTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	8,  // 3: trpc.moox.storage.QueryTimeSeriesRowsReq.keys:type_name -> trpc.moox.storage.TimeSeriesKey
+	9,  // 4: trpc.moox.storage.QueryTimeSeriesRowsReq.time_range:type_name -> trpc.moox.storage.TimeRange
+	10, // 5: trpc.moox.storage.QueryTimeSeriesRowsReq.filters:type_name -> trpc.moox.storage.FilterExpr
+	11, // 6: trpc.moox.storage.QueryTimeSeriesRowsReq.sorts:type_name -> trpc.moox.storage.SortSpec
+	12, // 7: trpc.moox.storage.QueryTimeSeriesRowsReq.page:type_name -> trpc.moox.common.Page
+	13, // 8: trpc.moox.storage.QueryTimeSeriesRowsReq.total_mode:type_name -> trpc.moox.common.TotalMode
+	14, // 9: trpc.moox.storage.QueryTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	0,  // 10: trpc.moox.storage.QueryTimeSeriesRowsRsp.columns:type_name -> trpc.moox.storage.ResultColumn
-	19, // 11: trpc.moox.storage.QueryTimeSeriesRowsRsp.rows:type_name -> trpc.moox.storage.TimeSeriesRow
-	20, // 12: trpc.moox.storage.QueryTimeSeriesRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	11, // 13: trpc.moox.storage.SearchRecordRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	21, // 14: trpc.moox.storage.SearchRecordRowsReq.keys:type_name -> trpc.moox.storage.RecordKey
-	22, // 15: trpc.moox.storage.SearchRecordRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
-	14, // 16: trpc.moox.storage.SearchRecordRowsReq.filters:type_name -> trpc.moox.storage.FilterExpr
-	15, // 17: trpc.moox.storage.SearchRecordRowsReq.sorts:type_name -> trpc.moox.storage.SortSpec
-	16, // 18: trpc.moox.storage.SearchRecordRowsReq.page:type_name -> trpc.moox.common.Page
-	18, // 19: trpc.moox.storage.SearchRecordRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	15, // 11: trpc.moox.storage.QueryTimeSeriesRowsRsp.rows:type_name -> trpc.moox.storage.TimeSeriesRow
+	16, // 12: trpc.moox.storage.QueryTimeSeriesRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	7,  // 13: trpc.moox.storage.SearchRecordRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	17, // 14: trpc.moox.storage.SearchRecordRowsReq.keys:type_name -> trpc.moox.storage.RecordKey
+	18, // 15: trpc.moox.storage.SearchRecordRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
+	10, // 16: trpc.moox.storage.SearchRecordRowsReq.filters:type_name -> trpc.moox.storage.FilterExpr
+	11, // 17: trpc.moox.storage.SearchRecordRowsReq.sorts:type_name -> trpc.moox.storage.SortSpec
+	12, // 18: trpc.moox.storage.SearchRecordRowsReq.page:type_name -> trpc.moox.common.Page
+	14, // 19: trpc.moox.storage.SearchRecordRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	0,  // 20: trpc.moox.storage.SearchRecordRowsRsp.columns:type_name -> trpc.moox.storage.ResultColumn
-	23, // 21: trpc.moox.storage.SearchRecordRowsRsp.rows:type_name -> trpc.moox.storage.RecordRow
-	20, // 22: trpc.moox.storage.SearchRecordRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	11, // 23: trpc.moox.storage.RebuildTimeSeriesViewReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	18, // 24: trpc.moox.storage.RebuildTimeSeriesViewRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	11, // 25: trpc.moox.storage.RebuildRecordViewReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	18, // 26: trpc.moox.storage.RebuildRecordViewRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	1,  // 27: trpc.moox.storage.DataView.QueryTimeSeriesRows:input_type -> trpc.moox.storage.QueryTimeSeriesRowsReq
-	3,  // 28: trpc.moox.storage.DataView.SearchRecordRows:input_type -> trpc.moox.storage.SearchRecordRowsReq
-	5,  // 29: trpc.moox.storage.DataView.RebuildTimeSeriesView:input_type -> trpc.moox.storage.RebuildTimeSeriesViewReq
-	7,  // 30: trpc.moox.storage.DataView.RebuildRecordView:input_type -> trpc.moox.storage.RebuildRecordViewReq
-	2,  // 31: trpc.moox.storage.DataView.QueryTimeSeriesRows:output_type -> trpc.moox.storage.QueryTimeSeriesRowsRsp
-	4,  // 32: trpc.moox.storage.DataView.SearchRecordRows:output_type -> trpc.moox.storage.SearchRecordRowsRsp
-	6,  // 33: trpc.moox.storage.DataView.RebuildTimeSeriesView:output_type -> trpc.moox.storage.RebuildTimeSeriesViewRsp
-	8,  // 34: trpc.moox.storage.DataView.RebuildRecordView:output_type -> trpc.moox.storage.RebuildRecordViewRsp
-	31, // [31:35] is the sub-list for method output_type
-	27, // [27:31] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	19, // 21: trpc.moox.storage.SearchRecordRowsRsp.rows:type_name -> trpc.moox.storage.RecordRow
+	16, // 22: trpc.moox.storage.SearchRecordRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	1,  // 23: trpc.moox.storage.DataView.QueryTimeSeriesRows:input_type -> trpc.moox.storage.QueryTimeSeriesRowsReq
+	3,  // 24: trpc.moox.storage.DataView.SearchRecordRows:input_type -> trpc.moox.storage.SearchRecordRowsReq
+	2,  // 25: trpc.moox.storage.DataView.QueryTimeSeriesRows:output_type -> trpc.moox.storage.QueryTimeSeriesRowsRsp
+	4,  // 26: trpc.moox.storage.DataView.SearchRecordRows:output_type -> trpc.moox.storage.SearchRecordRowsRsp
+	25, // [25:27] is the sub-list for method output_type
+	23, // [23:25] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_view_proto_init() }
@@ -1114,54 +806,6 @@ func file_view_proto_init() {
 				return nil
 			}
 		}
-		file_view_proto_msgTypes[5].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RebuildTimeSeriesViewReq); i {
-			case 0:
-				return &v.state
-			case 1:
-				return &v.sizeCache
-			case 2:
-				return &v.unknownFields
-			default:
-				return nil
-			}
-		}
-		file_view_proto_msgTypes[6].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RebuildTimeSeriesViewRsp); i {
-			case 0:
-				return &v.state
-			case 1:
-				return &v.sizeCache
-			case 2:
-				return &v.unknownFields
-			default:
-				return nil
-			}
-		}
-		file_view_proto_msgTypes[7].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RebuildRecordViewReq); i {
-			case 0:
-				return &v.state
-			case 1:
-				return &v.sizeCache
-			case 2:
-				return &v.unknownFields
-			default:
-				return nil
-			}
-		}
-		file_view_proto_msgTypes[8].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RebuildRecordViewRsp); i {
-			case 0:
-				return &v.state
-			case 1:
-				return &v.sizeCache
-			case 2:
-				return &v.unknownFields
-			default:
-				return nil
-			}
-		}
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1169,7 +813,7 @@ func file_view_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_view_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
