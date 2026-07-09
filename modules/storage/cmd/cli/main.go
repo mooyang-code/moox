@@ -170,7 +170,7 @@ func loadStorage(configPath string) (storageconfig.StorageConfig, error) {
 		cfg.ApplyDefaults()
 	}
 	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
-		cfg.Storage.Root = root
+		cfg.Storage.ApplyHomeRoot(root)
 	}
 	return cfg.Storage, nil
 }

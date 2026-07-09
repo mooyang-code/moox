@@ -24,6 +24,26 @@ message RetInfo {
   string msg = 2;
 }
 
+// TotalMode 控制接口是否计算精确总数。
+enum TotalMode {
+  // AUTO 表示由服务端按查询形态决定是否计算精确总数。
+  AUTO = 0;
+  // NONE 表示跳过精确总数计算。
+  NONE = 1;
+  // FORCE_EXACT 表示调用方要求计算精确总数。
+  FORCE_EXACT = 2;
+}
+
+// TotalState 表示 PageResult.total 的可信状态。
+enum TotalState {
+  // UNKNOWN 表示旧接口或未设置 total 状态。
+  UNKNOWN = 0;
+  // EXACT 表示 total 是精确总数。
+  EXACT = 1;
+  // SKIPPED 表示服务端有意跳过了精确总数计算。
+  SKIPPED = 2;
+}
+
 // Page 表示分页请求参数。
 message Page {
   // page 是页号，从 1 开始；为 0 时由服务端使用默认值。
@@ -46,6 +66,8 @@ message PageResult {
   bool has_more = 4;
   // next_cursor 是下一页游标；普通分页可为空。
   string next_cursor = 5;
+  // total_state 表示 total 是否为精确总数。
+  TotalState total_state = 6;
 }
 
 // ErrorCode 表示跨模块通用错误码。

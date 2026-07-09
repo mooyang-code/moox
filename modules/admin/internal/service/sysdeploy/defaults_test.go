@@ -27,6 +27,21 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if healthURL(byName["storage_metadata"].ExtraConfig) != "http://127.0.0.1:20210/healthz" {
 		t.Fatalf("storage_metadata extra_config = %s", byName["storage_metadata"].ExtraConfig)
 	}
+	if healthURL(byName["storage_access"].ExtraConfig) != "http://127.0.0.1:20210/healthz" {
+		t.Fatalf("storage_access extra_config = %s", byName["storage_access"].ExtraConfig)
+	}
+	if healthURL(byName["storage_view"].ExtraConfig) != "http://127.0.0.1:20210/healthz" {
+		t.Fatalf("storage_view extra_config = %s", byName["storage_view"].ExtraConfig)
+	}
+	if healthURL(byName["storage_view_builder"].ExtraConfig) != "http://127.0.0.1:20211/healthz" {
+		t.Fatalf("storage_view_builder extra_config = %s", byName["storage_view_builder"].ExtraConfig)
+	}
+	if healthURL(byName["storage_view_query"].ExtraConfig) != "http://127.0.0.1:20212/healthz" {
+		t.Fatalf("storage_view_query extra_config = %s", byName["storage_view_query"].ExtraConfig)
+	}
+	if byName["storage_view_query"].Port != 20202 {
+		t.Fatalf("storage_view_query port = %d, want DataView HTTP 20202", byName["storage_view_query"].Port)
+	}
 	if healthURL(byName["trade_account"].ExtraConfig) != "" {
 		t.Fatalf("trade_account should not default to local health_url: %s", byName["trade_account"].ExtraConfig)
 	}

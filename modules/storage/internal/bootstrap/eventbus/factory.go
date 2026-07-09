@@ -25,6 +25,12 @@ func NewRowsChangedBus(ctx context.Context, cfg storageconfig.StorageEventBus) (
 			StreamName:     cfg.StreamName,
 			StreamSubjects: []string{streamSubject},
 			ConsumerName:   cfg.ConsumerName,
+			MaxAge:         time.Duration(cfg.MaxAgeHours) * time.Hour,
+			MaxMsgs:        cfg.MaxMsgs,
+			MaxBytes:       cfg.MaxBytes,
+			MaxInFlight:    cfg.MaxInFlight,
+			AckWait:        time.Duration(cfg.AckWaitMS) * time.Millisecond,
+			MaxDeliver:     cfg.MaxDeliver,
 		})
 		if err != nil {
 			return nil, err

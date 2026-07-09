@@ -52,6 +52,12 @@ type StorageEventBus struct {
 	StreamName    string                  `yaml:"stream_name"`
 	SubjectPrefix string                  `yaml:"subject_prefix"`
 	ConsumerName  string                  `yaml:"consumer_name"`
+	MaxAgeHours   int                     `yaml:"max_age_hours"`
+	MaxMsgs       int64                   `yaml:"max_msgs"`
+	MaxBytes      int64                   `yaml:"max_bytes"`
+	MaxInFlight   int                     `yaml:"max_in_flight"`
+	AckWaitMS     int                     `yaml:"ack_wait_ms"`
+	MaxDeliver    int                     `yaml:"max_deliver"`
 	Embedded      StorageEmbeddedEventBus `yaml:"embedded"`
 }
 
@@ -124,6 +130,24 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.EventBus.ConsumerName == "" {
 		c.EventBus.ConsumerName = "storage_view"
 	}
+	if c.EventBus.MaxAgeHours <= 0 {
+		c.EventBus.MaxAgeHours = 24
+	}
+	if c.EventBus.MaxMsgs <= 0 {
+		c.EventBus.MaxMsgs = 500000
+	}
+	if c.EventBus.MaxBytes <= 0 {
+		c.EventBus.MaxBytes = 256 * 1024 * 1024
+	}
+	if c.EventBus.MaxInFlight <= 0 {
+		c.EventBus.MaxInFlight = 128
+	}
+	if c.EventBus.AckWaitMS <= 0 {
+		c.EventBus.AckWaitMS = 120000
+	}
+	if c.EventBus.MaxDeliver <= 0 {
+		c.EventBus.MaxDeliver = 10
+	}
 	if c.EventBus.Embedded.Enabled {
 		if c.EventBus.Embedded.Host == "" {
 			c.EventBus.Embedded.Host = "127.0.0.1"
@@ -158,13 +182,71 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 }
 
+// ApplyHomeRoot rebases standard local storage paths when deployment overrides
+// the storage home directory.
+func (c *StorageConfig) ApplyHomeRoot(root string) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return
+	}
+	oldRoot := c.Root
+	if oldRoot == "" {
+		oldRoot = "./var/storage"
+	}
+	c.Root = root
+	c.Metadata.Path = rebaseStoragePath(c.Metadata.Path, oldRoot, root, filepath.Join("metadata", "storage_metadata.db"))
+	c.Devices.PebblePath = rebaseStoragePath(c.Devices.PebblePath, oldRoot, root, "pebble")
+	c.Devices.DuckDBPath = rebaseStoragePath(c.Devices.DuckDBPath, oldRoot, root, filepath.Join("duckdb", "views.duckdb"))
+	c.Devices.BlevePath = rebaseStoragePath(c.Devices.BlevePath, oldRoot, root, "bleve")
+	c.Devices.ParquetPath = rebaseStoragePath(c.Devices.ParquetPath, oldRoot, root, "archive")
+	if c.EventBus.Embedded.StoreDir != "" {
+		c.EventBus.Embedded.StoreDir = rebaseStoragePath(c.EventBus.Embedded.StoreDir, oldRoot, root, "nats")
+	}
+}
+
+func rebaseStoragePath(path string, oldRoot string, newRoot string, defaultRel string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return filepath.Join(newRoot, defaultRel)
+	}
+	if filepath.IsAbs(path) {
+		if filepath.IsAbs(oldRoot) {
+			if rebased, ok := rebasePathWithinRoot(path, oldRoot, newRoot); ok {
+				return rebased
+			}
+		}
+		return path
+	}
+	if filepath.IsAbs(oldRoot) {
+		return path
+	}
+	if rebased, ok := rebasePathWithinRoot(path, oldRoot, newRoot); ok {
+		return rebased
+	}
+	return path
+}
+
+func rebasePathWithinRoot(path string, oldRoot string, newRoot string) (string, bool) {
+	cleanPath := filepath.Clean(path)
+	cleanOldRoot := filepath.Clean(oldRoot)
+	if cleanPath == cleanOldRoot {
+		return newRoot, true
+	}
+	rel, err := filepath.Rel(cleanOldRoot, cleanPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.Join(newRoot, rel), true
+}
+
 func (c *StorageConfig) HasRole(role string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(role))
 	if normalized == "" {
 		return false
 	}
 	for _, candidate := range c.Roles {
-		if strings.ToLower(strings.TrimSpace(candidate)) == normalized {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate == "all" || candidate == normalized {
 			return true
 		}
 	}

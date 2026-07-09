@@ -4,6 +4,11 @@ global: #全局配置
 
 server:
   timeout: 5000
+  admin:
+    ip: 127.0.0.1
+    port: 11943
+    read_timeout: 3000
+    write_timeout: 60000
   service:
       ######## 定时任务 ########
     - name: trpc.heartbeat.timer

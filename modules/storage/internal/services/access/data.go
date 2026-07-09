@@ -2,6 +2,7 @@ package access
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/rs/xid"
 	"google.golang.org/protobuf/proto"
 )
+
+const maxDatasetScanRows = 10000
 
 func (s *Service) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeriesRowsReq) (*pb.WriteTimeSeriesRowsRsp, error) {
 	if err := s.validator.ValidateWriteTimeSeriesRows(ctx, req.GetRows()); err != nil {
@@ -306,6 +309,9 @@ func (s *Service) scanAllPrimaryRows(ctx context.Context, auth *pb.AuthInfo, tar
 			return nil, err
 		}
 		out = append(out, rows...)
+		if len(out) > maxDatasetScanRows {
+			return nil, fmt.Errorf("dataset scan exceeds safe limit %d rows; add subject/freq/time range or query a view", maxDatasetScanRows)
+		}
 		if page == nil || !page.GetHasMore() || page.GetNextCursor() == "" {
 			break
 		}

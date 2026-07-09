@@ -1,8 +1,7 @@
 storage:
   root: ./var/storage
   roles:
-    - access
-    - view
+    - view_query
   metadata:
     path: ./var/storage/metadata/storage_metadata.db
   devices:
@@ -11,13 +10,13 @@ storage:
     bleve_path: ./var/storage/bleve
     parquet_path: ./var/storage/archive
   primary:
-    service_name: ""
+    service_name: trpc.moox.storage.PrimaryStore
   eventbus:
-    type: memory
+    type: nats
     nats_url: nats://127.0.0.1:4222
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
-    consumer_name: storage_view
+    consumer_name: storage_view_query
     max_age_hours: 24
     max_msgs: 500000
     max_bytes: 268435456
@@ -33,4 +32,4 @@ storage:
     batch_wait_ms: 200
     max_workers: 2
   health:
-    addr: ":20210"
+    addr: ":20212"

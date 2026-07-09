@@ -10,6 +10,7 @@ import (
 // Response is the shared process-level health payload exposed by MooX services.
 type Response struct {
 	Module     string         `json:"module"`
+	Service    string         `json:"service,omitempty"`
 	InstanceID string         `json:"instance_id,omitempty"`
 	Ready      bool           `json:"ready"`
 	Status     string         `json:"status"`
@@ -31,6 +32,7 @@ func Base(module, instanceID, version, gitCommit string, start time.Time, ready 
 	}
 	return Response{
 		Module:     module,
+		Service:    module,
 		InstanceID: instanceID,
 		Ready:      ready,
 		Status:     status,

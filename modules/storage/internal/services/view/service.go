@@ -36,12 +36,13 @@ type Service struct {
 }
 
 type ServiceOptions struct {
-	Metadata Metadata
-	Views    *deviceduckdb.ViewStore
-	Search   *search.Service
-	Facts    FactReader
-	Records  RecordFactReader
-	Builder  *Builder
+	Metadata       Metadata
+	Views          *deviceduckdb.ViewStore
+	Search         *search.Service
+	Facts          FactReader
+	Records        RecordFactReader
+	Builder        *Builder
+	DisableRebuild bool
 }
 
 func NewService(opts ServiceOptions) *Service {
@@ -52,7 +53,7 @@ func NewService(opts ServiceOptions) *Service {
 		}
 	}
 	builder := opts.Builder
-	if builder == nil {
+	if builder == nil && !opts.DisableRebuild {
 		builder = NewBuilder(Options{Metadata: opts.Metadata, Facts: opts.Facts, Records: records, Views: opts.Views, Search: opts.Search})
 	}
 	return &Service{metadata: opts.Metadata, views: opts.Views, search: opts.Search, facts: opts.Facts, records: records, builder: builder}
@@ -72,6 +73,9 @@ func (s *Service) Close() error {
 func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
 	if strings.TrimSpace(req.GetViewId()) == "" {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, errors.New("view_id is required"))}, nil
+	}
+	if err := ValidateTimeSeriesQueryOptions(req); err != nil {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	viewMeta, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
 	if err != nil {
@@ -159,6 +163,9 @@ func (s *Service) RebuildTimeSeriesView(ctx context.Context, req *pb.RebuildTime
 	if err := s.validateTimeSeriesView(ctx, viewMeta); err != nil {
 		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
+	if s.builder == nil {
+		return &pb.RebuildTimeSeriesViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view builder is disabled in this storage role"))}, nil
+	}
 	rebuildID := xid.New().String()
 	rebuildReq := proto.Clone(req).(*pb.RebuildTimeSeriesViewReq)
 	if !s.acceptAsync() {
@@ -184,6 +191,9 @@ func (s *Service) RebuildRecordView(ctx context.Context, req *pb.RebuildRecordVi
 	}
 	if err := s.validateRecordView(ctx, viewMeta); err != nil {
 		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	if s.builder == nil {
+		return &pb.RebuildRecordViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view builder is disabled in this storage role"))}, nil
 	}
 	rebuildID := xid.New().String()
 	rebuildReq := proto.Clone(req).(*pb.RebuildRecordViewReq)

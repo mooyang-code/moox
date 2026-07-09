@@ -11,6 +11,7 @@ import type {
   TimeRange,
   TimeSeriesKey,
   TimeSeriesRow,
+  TotalMode,
   VersionRange,
 } from './types';
 
@@ -23,6 +24,8 @@ export interface QueryTimeSeriesRowsReq {
   filters?: FilterExpr[];
   sorts?: SortSpec[];
   page?: Page;
+  limit?: number;
+  total_mode?: TotalMode;
 }
 
 export interface SearchRecordRowsReq {

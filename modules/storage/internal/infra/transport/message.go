@@ -21,6 +21,12 @@ type ProducerOptions struct {
 	StreamName     string        // 消息流名称
 	StreamSubjects []string      // 订阅主题列表
 	ConsumerName   string        // 消费者名称
+	MaxAge         time.Duration // 消息流最大保留时间
+	MaxMsgs        int64         // 消息流最大消息数
+	MaxBytes       int64         // 消息流最大字节数
+	MaxInFlight    int           // 单订阅最大并发处理数
+	AckWait        time.Duration // 消费者 Ack 等待时间
+	MaxDeliver     int           // 最大投递次数
 }
 
 // MessageHandler 处理一条底层消息。

@@ -1,4 +1,4 @@
-import type { Dataset, DatasetColumn, Factor, Field, FieldValueType, FilterExpr, SortSpec, TypedValue, View, ViewColumn } from '@/api/storage/types';
+import type { Dataset, DatasetColumn, Factor, Field, FieldValueType, FilterExpr, PageResult, SortSpec, TypedValue, View, ViewColumn } from '@/api/storage/types';
 
 export type ViewBrowseMode = 'none' | 'time_series' | 'record' | 'missing';
 export type ViewSortDirection = '' | 'asc' | 'desc';
@@ -120,6 +120,18 @@ export function normalizeKlineLimit(value: unknown) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isFinite(parsed)) return DEFAULT_KLINE_LIMIT;
   return Math.min(MAX_KLINE_LIMIT, Math.max(MIN_KLINE_LIMIT, parsed));
+}
+
+export function isSkippedTotalState(value: unknown) {
+  return value === 2 || value === 'SKIPPED' || value === 'TOTAL_STATE_SKIPPED';
+}
+
+export function usesPreviewPager(pageResult?: Pick<PageResult, 'total_state'> | null) {
+  return isSkippedTotalState(pageResult?.total_state);
+}
+
+export function previewPagerText(limit: number) {
+  return `仅展示前${limit}条数据`;
 }
 
 export function buildViewFilterExprs(filters: ViewFilterState[]): FilterExpr[] {

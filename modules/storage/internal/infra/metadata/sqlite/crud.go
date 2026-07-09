@@ -187,18 +187,20 @@ func (s *Store) UpsertSubjectSymbol(ctx context.Context, item *pb.SubjectSymbol)
 }
 
 func (s *Store) ListSubjectSymbols(ctx context.Context, spaceID string, subjectID string, dataSourceID string, externalSymbol string, page *pb.Page) ([]*pb.SubjectSymbol, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_subject_symbols
+	const where = `
+		FROM t_subject_symbols
 		WHERE (? = '' OR c_space_id = ?)
 		  AND (? = '' OR c_subject_id = ?)
 		  AND (? = '' OR c_data_source_id = ?)
-		  AND (? = '' OR c_external_symbol = ?)
-		ORDER BY c_space_id, c_data_source_id, c_external_symbol
-	`, []any{spaceID, spaceID, subjectID, subjectID, dataSourceID, dataSourceID, externalSymbol, externalSymbol}, func() *pb.SubjectSymbol { return &pb.SubjectSymbol{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+		  AND (? = '' OR c_external_symbol = ?)`
+	args := []any{spaceID, spaceID, subjectID, subjectID, dataSourceID, dataSourceID, externalSymbol, externalSymbol}
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_data_source_id, c_external_symbol`,
+		`SELECT COUNT(1) `+where,
+		args,
+		page,
+		func() *pb.SubjectSymbol { return &pb.SubjectSymbol{} },
+	)
 }
 
 func (s *Store) UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error) {
@@ -285,17 +287,19 @@ func (s *Store) BindDatasetSubject(ctx context.Context, item *pb.DatasetSubject)
 }
 
 func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_dataset_subjects
+	const where = `
+		FROM t_dataset_subjects
 		WHERE (? = '' OR c_space_id = ?)
 		  AND (? = '' OR c_dataset_id = ?)
-		  AND (? = '' OR c_subject_id = ?)
-		ORDER BY c_space_id, c_dataset_id, c_subject_id
-	`, []any{spaceID, spaceID, datasetID, datasetID, subjectID, subjectID}, func() *pb.DatasetSubject { return &pb.DatasetSubject{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+		  AND (? = '' OR c_subject_id = ?)`
+	args := []any{spaceID, spaceID, datasetID, datasetID, subjectID, subjectID}
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_dataset_id, c_subject_id`,
+		`SELECT COUNT(1) `+where,
+		args,
+		page,
+		func() *pb.DatasetSubject { return &pb.DatasetSubject{} },
+	)
 }
 
 func (s *Store) UpsertField(ctx context.Context, item *pb.Field) (*pb.Field, error) {
@@ -1030,6 +1034,56 @@ func queryMessages[T proto.Message](ctx context.Context, db *sql.DB, query strin
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func queryPagedMessages[T proto.Message](ctx context.Context, db *sql.DB, query string, countQuery string, args []any, page *pb.Page, newMessage func() T) ([]T, *pb.PageResult, error) {
+	pageNo, size, offset := normalizePage(page)
+	limit := int(size)
+	pagedArgs := append([]any{}, args...)
+	pagedArgs = append(pagedArgs, limit, offset)
+	items, err := queryMessages(ctx, db, query+` LIMIT ? OFFSET ?`, pagedArgs, newMessage)
+	if err != nil {
+		return nil, nil, err
+	}
+	total, err := countRows(ctx, db, countQuery, args)
+	if err != nil {
+		return nil, nil, err
+	}
+	hasMore := uint64(offset)+uint64(len(items)) < uint64(total)
+	return items, &pb.PageResult{Page: pageNo, Size: size, Total: total, HasMore: hasMore}, nil
+}
+
+func countRows(ctx context.Context, db *sql.DB, query string, args []any) (uint32, error) {
+	var total int64
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&total); err != nil {
+		return 0, err
+	}
+	if total < 0 {
+		return 0, nil
+	}
+	if total > int64(^uint32(0)) {
+		return ^uint32(0), nil
+	}
+	return uint32(total), nil
+}
+
+func normalizePage(page *pb.Page) (pageNo uint32, size uint32, offset int) {
+	pageNo = 1
+	size = 1000
+	if page != nil {
+		if page.GetPage() > 0 {
+			pageNo = page.GetPage()
+		}
+		if page.GetSize() > 0 {
+			size = page.GetSize()
+		}
+	}
+	offset64 := uint64(pageNo-1) * uint64(size)
+	maxInt := int(^uint(0) >> 1)
+	if offset64 > uint64(maxInt) {
+		return pageNo, size, maxInt
+	}
+	return pageNo, size, int(offset64)
 }
 
 func scanMessage[T proto.Message](row rowScanner, newMessage func() T) (T, error) {

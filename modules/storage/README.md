@@ -113,6 +113,12 @@ storage:
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
     consumer_name: storage_view
+    max_age_hours: 24      # JetStream 最长保留 24 小时事件
+    max_msgs: 500000       # JetStream 最多保留消息数
+    max_bytes: 268435456   # JetStream 最多保留 256MiB 数据
+    max_in_flight: 32      # 单个订阅的最大并发处理消息数
+    ack_wait_ms: 120000    # 消费者 Ack 等待时间
+    max_deliver: 10        # 单条消息最大投递次数
     embedded:
       enabled: false        # type=nats 时可显式开启内嵌 JetStream
   view:
@@ -120,8 +126,10 @@ storage:
     access_service_name: trpc.moox.storage.Access  # 留空=同进程本地 Access reader
     batch_size: 500
     batch_wait_ms: 200
-    max_workers: 4
+    max_workers: 2
 ```
+
+DuckDB 视图库默认会在 DSN 上追加资源限制，避免浏览页无过滤查询触发 DuckDB 按物理内存比例预留过多缓存：`memory_limit=512MB`、`threads=1`、`max_temp_directory_size=2GB`。如需在大规格机器上调高，可通过 `MOOX_DUCKDB_MEMORY_LIMIT`、`MOOX_DUCKDB_THREADS`、`MOOX_DUCKDB_MAX_TEMP_DIRECTORY_SIZE` 覆盖；若 `duckdb_path` 自身已带同名 query 参数，则以显式参数为准。
 
 ### Runtime Roles
 
@@ -141,7 +149,7 @@ storage:
 - `${prefix}.time_series.rows_changed.v1`
 - `${prefix}.record.rows_changed.v1`
 
-NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。实时事件消费者只处理启动后新产生的行变更；历史补仓、断档追数和读模型重建统一交给 View rebuild。View 事件 handler 只有在派生写入成功后才返回 success；失败会向上传递错误，让 NATS `Nak` 并重试。View 批处理参数为 `view.metadata_service_name`、`view.access_service_name`、`view.batch_size`、`view.batch_wait_ms`、`view.max_workers`。Archive 独立部署时也复用 `view.metadata_service_name` 和 `view.access_service_name` 连接 Metadata/Access RPC，并通过同一个 eventbus 订阅行变更事件；当前事件 handler 为占位 ack，Parquet 归档策略后续补齐。
+NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。实时事件消费者只处理启动后新产生的行变更；历史补仓、断档追数和读模型重建统一交给 View rebuild。为了避免内嵌 JetStream 在小规格机器上无限堆积事件，`max_age_hours`、`max_msgs`、`max_bytes` 会限制 stream 保留窗口；消费者通过 `max_in_flight`、`ack_wait_ms`、`max_deliver` 控制并发、Ack 等待和重试上限。View 事件 handler 只有在派生写入成功后才返回 success；失败会向上传递错误，让 NATS `Nak` 并重试。View 批处理参数为 `view.metadata_service_name`、`view.access_service_name`、`view.batch_size`、`view.batch_wait_ms`、`view.max_workers`。Archive 独立部署时也复用 `view.metadata_service_name` 和 `view.access_service_name` 连接 Metadata/Access RPC，并通过同一个 eventbus 订阅行变更事件；当前事件 handler 为占位 ack，Parquet 归档策略后续补齐。
 
 ### `config/trpc_go.yaml` 默认服务端口
 
@@ -151,7 +159,7 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 | PrimaryStore | 20101 | - | 在线主存（内部服务） |
 | Access | 20102 | 20201 | 事实数据读写 |
 | DataView | 20103 | 20202 | 视图/检索查询 |
-| admin | 20000 | - | tRPC 管理端口（健康检查） |
+| admin | 20000 | - | tRPC 管理端口（`/cmds`、`/debug/pprof/*`，仅绑定本机） |
 
 后台计时器（在 `config/trpc_go.yaml` 的 `service` 段，通过 cron 串里的 `?disable=1` 开关、`*/30 * * * * *` 调频）：
 
@@ -443,7 +451,7 @@ storage:
     access_service_name: trpc.moox.storage.Access
     batch_size: 500
     batch_wait_ms: 200
-    max_workers: 4
+    max_workers: 2
 ```
 
 并在元数据种子里把每个分片节点写成真实地址、用路由把 subject 分到不同节点：
@@ -505,6 +513,7 @@ primary_store_routes:
 ```bash
 lsof -i :20100 -i :20101 -i :20102 -i :20103   # 各服务端口
 curl -s http://127.0.0.1:20000/cmds             # admin 管理端口，返回命令列表即存活
+curl -s http://127.0.0.1:20000/debug/pprof/heap > heap.pprof
 ```
 
 2. **元数据已导入**：重跑一次导入命令，数量应与种子文件一致（幂等校验）：

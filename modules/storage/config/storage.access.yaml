@@ -2,7 +2,6 @@ storage:
   root: ./var/storage
   roles:
     - access
-    - view
   metadata:
     path: ./var/storage/metadata/storage_metadata.db
   devices:
@@ -13,11 +12,11 @@ storage:
   primary:
     service_name: ""
   eventbus:
-    type: memory
+    type: nats
     nats_url: nats://127.0.0.1:4222
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
-    consumer_name: storage_view
+    consumer_name: storage_access
     max_age_hours: 24
     max_msgs: 500000
     max_bytes: 268435456
