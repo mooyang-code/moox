@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	viewsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
@@ -64,7 +65,7 @@ func (s *Service) processTimeSeriesBatch(ctx context.Context, keys []*pb.TimeSer
 					return err
 				}
 			}
-			if item.GetBuildingResult() != "" {
+			if viewindex.BuildingIndexWritable(item) {
 				if err := s.views.InsertRows(ctx, item.GetBuildingResult(), mapped); err != nil {
 					return err
 				}

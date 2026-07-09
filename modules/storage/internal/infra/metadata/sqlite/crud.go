@@ -745,8 +745,36 @@ func (s *Store) BeginViewBuild(ctx context.Context, spaceID string, viewID strin
 	view.BuildError = ""
 	view.BuildStartedAt = metadataNow()
 	view.BuildFinishedAt = ""
-	if err := s.updateViewBuildFields(ctx, view); err != nil {
+	raw, err := marshal(view)
+	if err != nil {
 		return nil, err
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE t_views
+		SET c_active_result = ?,
+			c_build_status = ?,
+			c_view_version = ?,
+			c_active_view_version = ?,
+			c_building_view_version = ?,
+			c_building_result = ?,
+			c_build_error = ?,
+			c_build_started_at = ?,
+			c_build_finished_at = ?,
+			c_attrs_json = ?
+		WHERE c_space_id = ? AND c_view_id = ?
+		  AND c_view_version >= ?
+		  AND NOT (
+			c_build_status = 'building'
+			AND c_building_result <> ''
+			AND c_building_view_version = ?
+			AND c_building_result <> ?
+		  )
+	`, view.GetActiveResult(), view.GetBuildStatus(), view.GetViewVersion(), view.GetActiveViewVersion(), view.GetBuildingViewVersion(), view.GetBuildingResult(), view.GetBuildError(), view.GetBuildStartedAt(), view.GetBuildFinishedAt(), raw, view.GetSpaceId(), view.GetViewId(), targetVersion, targetVersion, resultName)
+	if err != nil {
+		return nil, err
+	}
+	if rows, err := res.RowsAffected(); err == nil && rows == 0 {
+		return nil, fmt.Errorf("view %s/%s building target already claimed", spaceID, viewID)
 	}
 	return s.GetView(ctx, spaceID, viewID)
 }

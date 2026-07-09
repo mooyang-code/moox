@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	viewsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
@@ -61,7 +62,7 @@ func (s *Service) processRecordBatch(ctx context.Context, keys []*pb.RecordKey) 
 					return err
 				}
 			}
-			if item.GetBuildingResult() != "" {
+			if viewindex.BuildingIndexWritable(item) {
 				if err := s.search.IndexRecordViewRows(ctx, item.GetBuildingResult(), columns, projected); err != nil {
 					return err
 				}

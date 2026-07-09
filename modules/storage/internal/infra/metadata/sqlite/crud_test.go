@@ -50,6 +50,105 @@ func TestListSubjectSymbolsPagesInSQL(t *testing.T) {
 	}
 }
 
+func TestUpsertViewColumnBumpsVersionAndClearsBuildingIndex(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedSQLiteViewDataset(t, ctx, store, "crypto")
+	view := sqliteTestView("crypto", "spot_kline_1m_view")
+	view.ViewVersion = 1
+	view.ActiveViewVersion = 1
+	view.ActiveResult = "view_crypto_spot_kline_1m_view_a"
+	view.BuildingViewVersion = 1
+	view.BuildingResult = "view_crypto_spot_kline_1m_view_b"
+	view.BuildStatus = "building"
+	if _, err := store.UpsertView(ctx, view); err != nil {
+		t.Fatalf("UpsertView: %v", err)
+	}
+
+	_, err := store.UpsertViewColumn(ctx, &pb.ViewColumn{
+		SpaceId:    "crypto",
+		ViewId:     "spot_kline_1m_view",
+		ColumnName: "volume",
+		OriginId:   "binance_spot_kline.volume",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	})
+	if err != nil {
+		t.Fatalf("UpsertViewColumn: %v", err)
+	}
+
+	got, err := store.GetView(ctx, "crypto", "spot_kline_1m_view")
+	if err != nil {
+		t.Fatalf("GetView: %v", err)
+	}
+	if got.GetViewVersion() != 2 {
+		t.Fatalf("view version = %d, want 2", got.GetViewVersion())
+	}
+	if got.GetBuildingResult() != "" || got.GetBuildingViewVersion() != 0 {
+		t.Fatalf("building pointer = %q/%d, want cleared", got.GetBuildingResult(), got.GetBuildingViewVersion())
+	}
+	if got.GetActiveResult() != "view_crypto_spot_kline_1m_view_a" {
+		t.Fatalf("active result changed to %q", got.GetActiveResult())
+	}
+}
+
+func TestBeginViewBuildConditionalClaim(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedSQLiteViewDataset(t, ctx, store, "crypto")
+	view := sqliteTestView("crypto", "spot_kline_1m_view")
+	view.ViewVersion = 2
+	view.ActiveViewVersion = 1
+	view.ActiveResult = "view_crypto_spot_kline_1m_view_a"
+	if _, err := store.UpsertView(ctx, view); err != nil {
+		t.Fatalf("UpsertView: %v", err)
+	}
+
+	if _, err := store.BeginViewBuild(ctx, "crypto", "spot_kline_1m_view", 2, "view_crypto_spot_kline_1m_view_b"); err != nil {
+		t.Fatalf("first BeginViewBuild: %v", err)
+	}
+	if _, err := store.BeginViewBuild(ctx, "crypto", "spot_kline_1m_view", 2, "view_crypto_spot_kline_1m_view_c"); err == nil {
+		t.Fatalf("second BeginViewBuild error = nil, want claim conflict")
+	}
+	got, err := store.GetView(ctx, "crypto", "spot_kline_1m_view")
+	if err != nil {
+		t.Fatalf("GetView: %v", err)
+	}
+	if got.GetBuildingResult() != "view_crypto_spot_kline_1m_view_b" {
+		t.Fatalf("building result = %q, want first claim", got.GetBuildingResult())
+	}
+}
+
+func TestCompleteViewBuildKeepsPreviousActiveUntilSwitch(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedSQLiteViewDataset(t, ctx, store, "crypto")
+	view := sqliteTestView("crypto", "spot_kline_1m_view")
+	view.ViewVersion = 2
+	view.ActiveViewVersion = 1
+	view.ActiveResult = "view_crypto_spot_kline_1m_view_a"
+	if _, err := store.UpsertView(ctx, view); err != nil {
+		t.Fatalf("UpsertView: %v", err)
+	}
+
+	building, err := store.BeginViewBuild(ctx, "crypto", "spot_kline_1m_view", 2, "view_crypto_spot_kline_1m_view_b")
+	if err != nil {
+		t.Fatalf("BeginViewBuild: %v", err)
+	}
+	if building.GetActiveResult() != "view_crypto_spot_kline_1m_view_a" {
+		t.Fatalf("active before complete = %q, want old active", building.GetActiveResult())
+	}
+	if err := store.CompleteViewBuild(ctx, "crypto", "spot_kline_1m_view", 2, "view_crypto_spot_kline_1m_view_b"); err != nil {
+		t.Fatalf("CompleteViewBuild: %v", err)
+	}
+	got, err := store.GetView(ctx, "crypto", "spot_kline_1m_view")
+	if err != nil {
+		t.Fatalf("GetView: %v", err)
+	}
+	if got.GetActiveResult() != "view_crypto_spot_kline_1m_view_b" || got.GetActiveViewVersion() != 2 {
+		t.Fatalf("active after complete = %q/%d, want building result/version 2", got.GetActiveResult(), got.GetActiveViewVersion())
+	}
+}
+
 func openTestStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 	store, err := Open(ctx, Options{
@@ -68,6 +167,45 @@ func openTestStore(t *testing.T, ctx context.Context) *Store {
 		t.Fatalf("InitSchema: %v", err)
 	}
 	return store
+}
+
+func sqliteTestView(spaceID string, viewID string) *pb.View {
+	return &pb.View{
+		SpaceId:          spaceID,
+		ViewId:           viewID,
+		Name:             viewID,
+		PrimaryDatasetId: "dataset",
+		DatasetIds:       []string{"dataset"},
+		Engine:           "duckdb",
+		Status:           "active",
+		BuildStatus:      "active",
+	}
+}
+
+func seedSQLiteViewDataset(t *testing.T, ctx context.Context, store *Store, spaceID string) {
+	t.Helper()
+	if _, err := store.UpsertSpace(ctx, &pb.Space{SpaceId: spaceID, Name: "Space", Status: "active"}); err != nil {
+		t.Fatalf("UpsertSpace: %v", err)
+	}
+	if _, err := store.UpsertDataSource(ctx, &pb.DataSource{
+		SpaceId:      spaceID,
+		DataSourceId: "source",
+		Name:         "Source",
+		Kind:         "exchange",
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("UpsertDataSource: %v", err)
+	}
+	if _, err := store.UpsertDataset(ctx, &pb.Dataset{
+		SpaceId:      spaceID,
+		DatasetId:    "dataset",
+		DataSourceId: "source",
+		Name:         "Dataset",
+		DataKind:     pb.DataKind_DATA_KIND_TIME_SERIES,
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("UpsertDataset: %v", err)
+	}
 }
 
 func seedDatasetSubjects(t *testing.T, ctx context.Context, store *Store, subjectIDs ...string) {
