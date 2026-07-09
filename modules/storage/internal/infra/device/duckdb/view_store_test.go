@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
@@ -139,6 +140,122 @@ func TestInsertRowsMergesExistingAndDuplicateBatchRows(t *testing.T) {
 	}
 	if count != 1 || closeValue != 2 || volumeValue != 11 {
 		t.Fatalf("merged row = count:%d close:%v volume:%v, want count:1 close:2 volume:11", count, closeValue, volumeValue)
+	}
+}
+
+func TestDuckDBViewIndexPrepareWriteStatRemove(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	if got := store.Engine(); got != "duckdb" {
+		t.Fatalf("Engine() = %q, want duckdb", got)
+	}
+	indexID := "view_crypto_spot_kline_1m_view_a"
+	schema := viewindex.ViewIndexSchema{
+		SpaceID: "crypto",
+		ViewID:  "spot_kline_1m_view",
+		Engine:  "duckdb",
+		Columns: []*pb.ViewColumn{
+			{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+			{ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		},
+	}
+	if err := store.CreateResultTable(ctx, indexID, schema.Columns[:1]); err != nil {
+		t.Fatalf("CreateResultTable stale: %v", err)
+	}
+	if err := store.InsertRows(ctx, indexID, []*pb.TimeSeriesRow{
+		duckDBTestRow("BTC-USDT", "2026-07-07T04:49:00Z", duckDBTestValue("close", 1)),
+	}); err != nil {
+		t.Fatalf("InsertRows stale: %v", err)
+	}
+
+	if err := store.Prepare(ctx, indexID, schema); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	stats, err := store.Stat(ctx, indexID)
+	if err != nil {
+		t.Fatalf("Stat after Prepare: %v", err)
+	}
+	if !stats.Exists || stats.EntryCount != 0 || stats.MinVersion != "" || stats.MaxVersion != "" {
+		t.Fatalf("stats after Prepare = %+v, want empty existing table", stats)
+	}
+
+	err = store.Write(ctx, indexID, viewindex.ViewIndexBatch{RecordRows: []*pb.RecordRow{{}}})
+	if err == nil || !strings.Contains(err.Error(), "rejects record rows") {
+		t.Fatalf("Write record rows error = %v, want rejection", err)
+	}
+	if err := store.Write(ctx, indexID, viewindex.ViewIndexBatch{TimeSeriesRows: []*pb.TimeSeriesRow{
+		duckDBTestRow("BTC-USDT", "2026-07-07T04:50:00Z", duckDBTestValue("close", 2), duckDBTestValue("volume", 20)),
+		duckDBTestRow("ETH-USDT", "2026-07-07T04:51:00Z", duckDBTestValue("close", 3), duckDBTestValue("volume", 30)),
+	}}); err != nil {
+		t.Fatalf("Write time series rows: %v", err)
+	}
+	stats, err = store.Stat(ctx, indexID)
+	if err != nil {
+		t.Fatalf("Stat after Write: %v", err)
+	}
+	if !stats.Exists || stats.EntryCount != 2 {
+		t.Fatalf("stats after Write = %+v, want 2 rows", stats)
+	}
+	if stats.MinVersion != "2026-07-07T04:50:00.000000000Z" || stats.MaxVersion != "2026-07-07T04:51:00.000000000Z" {
+		t.Fatalf("version range = %q/%q, want normalized min/max", stats.MinVersion, stats.MaxVersion)
+	}
+
+	if err := store.Remove(ctx, indexID); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	stats, err = store.Stat(ctx, indexID)
+	if err != nil {
+		t.Fatalf("Stat after Remove: %v", err)
+	}
+	if stats.Exists {
+		t.Fatalf("stats after Remove = %+v, want missing table", stats)
+	}
+	var metadataRows int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM moox_view_columns WHERE table_name = ?`, indexID).Scan(&metadataRows); err != nil {
+		t.Fatalf("query column metadata: %v", err)
+	}
+	if metadataRows != 0 {
+		t.Fatalf("column metadata rows = %d, want 0", metadataRows)
+	}
+}
+
+func TestListResultTablesIncludesViewPrefix(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	const tableName = "view_crypto_spot_kline_1m_view_a"
+	if err := store.CreateResultTable(ctx, tableName, []*pb.ViewColumn{
+		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+	}); err != nil {
+		t.Fatalf("CreateResultTable: %v", err)
+	}
+	if err := store.InsertRows(ctx, tableName, []*pb.TimeSeriesRow{
+		duckDBTestRow("BTC-USDT", "2026-07-07T04:49:00Z", duckDBTestValue("close", 1)),
+	}); err != nil {
+		t.Fatalf("InsertRows: %v", err)
+	}
+	if _, _, _, err := store.QueryTimeSeriesRows(ctx, tableName, latestPreviewRequest(1)); err != nil {
+		t.Fatalf("QueryTimeSeriesRows latest: %v", err)
+	}
+
+	tables, err := store.ListResultTables(ctx)
+	if err != nil {
+		t.Fatalf("ListResultTables: %v", err)
+	}
+	if !hasString(tables, tableName) {
+		t.Fatalf("ListResultTables = %v, want %s", tables, tableName)
+	}
+	if hasString(tables, latestResultTableName(tableName)) {
+		t.Fatalf("ListResultTables = %v, should exclude latest helper", tables)
 	}
 }
 
@@ -662,6 +779,15 @@ func latestPreviewRequest(limit uint32) *pb.QueryTimeSeriesRowsReq {
 		TotalMode:   pb.TotalMode_NONE,
 		Sorts:       []*pb.SortSpec{{FieldName: "data_time", Desc: true}},
 	}
+}
+
+func hasString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func quoteIdentForTest(name string) string {

@@ -18,6 +18,7 @@ import (
 
 	_ "github.com/marcboeker/go-duckdb/v2"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/factvalue"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -145,6 +146,41 @@ func (s *ViewStore) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+func (s *ViewStore) Engine() string {
+	return "duckdb"
+}
+
+func (s *ViewStore) Prepare(ctx context.Context, indexID string, schema viewindex.ViewIndexSchema) error {
+	if err := s.DropResultTable(ctx, indexID); err != nil {
+		return err
+	}
+	return s.CreateResultTable(ctx, indexID, schema.Columns)
+}
+
+func (s *ViewStore) Write(ctx context.Context, indexID string, batch viewindex.ViewIndexBatch) error {
+	if len(batch.RecordRows) > 0 {
+		return fmt.Errorf("duckdb view index rejects record rows")
+	}
+	return s.InsertRows(ctx, indexID, batch.TimeSeriesRows)
+}
+
+func (s *ViewStore) Stat(ctx context.Context, indexID string) (viewindex.ViewIndexStats, error) {
+	stats, err := s.resultTableStats(ctx, indexID)
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	return viewindex.ViewIndexStats{
+		Exists:     stats.Exists,
+		EntryCount: stats.RowCount,
+		MinVersion: stats.MinDataTime,
+		MaxVersion: stats.MaxDataTime,
+	}, nil
+}
+
+func (s *ViewStore) Remove(ctx context.Context, indexID string) error {
+	return s.DropResultTable(ctx, indexID)
 }
 
 func (s *ViewStore) init(ctx context.Context) error {
@@ -405,6 +441,39 @@ func (s *ViewStore) resultTableEmpty(ctx context.Context, quotedTableName string
 	}
 	defer rows.Close()
 	return !rows.Next(), rows.Err()
+}
+
+type resultTableStats struct {
+	Exists      bool
+	RowCount    int64
+	MinDataTime string
+	MaxDataTime string
+}
+
+func (s *ViewStore) resultTableStats(ctx context.Context, tableName string) (resultTableStats, error) {
+	quoted, err := quoteTableName(tableName)
+	if err != nil {
+		return resultTableStats{}, err
+	}
+	exists, err := s.tableExists(ctx, tableName)
+	if err != nil || !exists {
+		return resultTableStats{Exists: exists}, err
+	}
+	var stats resultTableStats
+	var minDataTime sql.NullString
+	var maxDataTime sql.NullString
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*), MIN(data_time), MAX(data_time) FROM %s`, quoted)).
+		Scan(&stats.RowCount, &minDataTime, &maxDataTime); err != nil {
+		return resultTableStats{}, err
+	}
+	stats.Exists = true
+	if minDataTime.Valid {
+		stats.MinDataTime = normalizeDataTimeString(minDataTime.String)
+	}
+	if maxDataTime.Valid {
+		stats.MaxDataTime = normalizeDataTimeString(maxDataTime.String)
+	}
+	return stats, nil
 }
 
 func (s *ViewStore) insertRowsIntoEmptyTable(ctx context.Context, quotedTableName string, columns []*pb.ResultColumn, rows []*pb.TimeSeriesRow) ([]*pb.TimeSeriesRow, error) {
@@ -771,7 +840,7 @@ func (s *ViewStore) ListResultTables(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT table_name
 		FROM information_schema.tables
-		WHERE (table_name LIKE 'ts_view_%' OR table_name LIKE 'view_result_%')
+		WHERE table_name LIKE 'view_%'
 		  AND table_name NOT LIKE '%__latest'
 		ORDER BY table_name
 	`)

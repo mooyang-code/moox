@@ -6,12 +6,14 @@ import (
 	"context"
 	"errors"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
 // Options 保存 DuckDB 视图存储打开配置。
 type Options struct {
-	Path string
+	Path         string
+	MaxOpenConns int
 }
 
 // ViewStore 是 no-cgo 构建下的占位类型；真实 DuckDB 视图存储必须启用 CGO。
@@ -28,6 +30,26 @@ func Open(opts Options) (*ViewStore, error) {
 
 func (s *ViewStore) Close() error {
 	return nil
+}
+
+func (s *ViewStore) Engine() string {
+	return "duckdb"
+}
+
+func (s *ViewStore) Prepare(ctx context.Context, indexID string, schema viewindex.ViewIndexSchema) error {
+	return errDuckDBRequiresCGO
+}
+
+func (s *ViewStore) Write(ctx context.Context, indexID string, batch viewindex.ViewIndexBatch) error {
+	return errDuckDBRequiresCGO
+}
+
+func (s *ViewStore) Stat(ctx context.Context, indexID string) (viewindex.ViewIndexStats, error) {
+	return viewindex.ViewIndexStats{}, errDuckDBRequiresCGO
+}
+
+func (s *ViewStore) Remove(ctx context.Context, indexID string) error {
+	return errDuckDBRequiresCGO
 }
 
 func (s *ViewStore) CreateResultTable(ctx context.Context, tableName string, columns []*pb.ViewColumn) error {
