@@ -19,11 +19,13 @@ import (
 
 // DataViewService defines service.
 type DataViewService interface {
-	// QueryTimeSeriesRows QueryTimeSeriesRows 查询已登记 View 对应的 TimeSeries 读模型（DuckDB），
-	//  始终读取当前 active View 索引。
+	// QueryTimeSeriesRows QueryTimeSeriesRows 查询 DuckDB 中当前 active View 索引。
+	//  View 索引是可重建的近期派生结果，不是完整事实存储。
+	//  完整历史以 PrimaryStore KV/Pebble 为准。
 	QueryTimeSeriesRows(ctx context.Context, req *QueryTimeSeriesRowsReq) (*QueryTimeSeriesRowsRsp, error)
-	// SearchRecordRows SearchRecordRows 搜索已登记 View 对应的 Record 读模型（Bleve），
-	//  始终读取当前 active View 索引。
+	// SearchRecordRows SearchRecordRows 搜索 Bleve 中当前 active View 索引。
+	//  View 索引是可重建的近期派生结果，不是完整事实存储。
+	//  完整历史以 PrimaryStore KV/Pebble 为准。
 	SearchRecordRows(ctx context.Context, req *SearchRecordRowsReq) (*SearchRecordRowsRsp, error)
 }
 
@@ -90,16 +92,18 @@ func RegisterDataViewService(s server.Service, svr DataViewService) {
 
 type UnimplementedDataView struct{}
 
-// QueryTimeSeriesRows QueryTimeSeriesRows 查询已登记 View 对应的 TimeSeries 读模型（DuckDB），
+// QueryTimeSeriesRows QueryTimeSeriesRows 查询 DuckDB 中当前 active View 索引。
 //
-//	始终读取当前 active View 索引。
+//	View 索引是可重建的近期派生结果，不是完整事实存储。
+//	完整历史以 PrimaryStore KV/Pebble 为准。
 func (s *UnimplementedDataView) QueryTimeSeriesRows(ctx context.Context, req *QueryTimeSeriesRowsReq) (*QueryTimeSeriesRowsRsp, error) {
 	return nil, errors.New("rpc QueryTimeSeriesRows of service DataView is not implemented")
 }
 
-// SearchRecordRows SearchRecordRows 搜索已登记 View 对应的 Record 读模型（Bleve），
+// SearchRecordRows SearchRecordRows 搜索 Bleve 中当前 active View 索引。
 //
-//	始终读取当前 active View 索引。
+//	View 索引是可重建的近期派生结果，不是完整事实存储。
+//	完整历史以 PrimaryStore KV/Pebble 为准。
 func (s *UnimplementedDataView) SearchRecordRows(ctx context.Context, req *SearchRecordRowsReq) (*SearchRecordRowsRsp, error) {
 	return nil, errors.New("rpc SearchRecordRows of service DataView is not implemented")
 }
@@ -112,11 +116,13 @@ func (s *UnimplementedDataView) SearchRecordRows(ctx context.Context, req *Searc
 
 // DataViewClientProxy defines service client proxy
 type DataViewClientProxy interface {
-	// QueryTimeSeriesRows QueryTimeSeriesRows 查询已登记 View 对应的 TimeSeries 读模型（DuckDB），
-	//  始终读取当前 active View 索引。
+	// QueryTimeSeriesRows QueryTimeSeriesRows 查询 DuckDB 中当前 active View 索引。
+	//  View 索引是可重建的近期派生结果，不是完整事实存储。
+	//  完整历史以 PrimaryStore KV/Pebble 为准。
 	QueryTimeSeriesRows(ctx context.Context, req *QueryTimeSeriesRowsReq, opts ...client.Option) (rsp *QueryTimeSeriesRowsRsp, err error)
-	// SearchRecordRows SearchRecordRows 搜索已登记 View 对应的 Record 读模型（Bleve），
-	//  始终读取当前 active View 索引。
+	// SearchRecordRows SearchRecordRows 搜索 Bleve 中当前 active View 索引。
+	//  View 索引是可重建的近期派生结果，不是完整事实存储。
+	//  完整历史以 PrimaryStore KV/Pebble 为准。
 	SearchRecordRows(ctx context.Context, req *SearchRecordRowsReq, opts ...client.Option) (rsp *SearchRecordRowsRsp, err error)
 }
 

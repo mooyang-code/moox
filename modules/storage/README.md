@@ -8,8 +8,8 @@ MooX Storage 是面向量化金融场景的统一数据存储服务。它在**�
 
 - **统一写入与读取**：所有数据访问都经由 Access 入口；时序数据使用 `TimeSeriesKey + TimeRange`，记录数据使用 `RecordKey + VersionRange`，写入按事实键做列级更新。
 - **多形态数据**：时序（K 线/tick/快照）、记录（公司/交易对资料）、事件、文档、通用表格，以及参数化因子结果。
-- **Record 全文检索**：登记 Record View 后由 Bleve 维护版本化索引，支持 `text_query` 与结构化过滤。
-- **TimeSeries 物化视图**：登记 TimeSeries View 后由 DuckDB 维护版本化结果，`QueryTimeSeriesRows` 直接读取 active 版本。
+- **Record 全文检索**：登记 Record View 后由 Bleve 维护 active/building 双索引，支持 `text_query` 与结构化过滤。
+- **TimeSeries 物化视图**：登记 TimeSeries View 后由 DuckDB 维护 active/building 双索引，`QueryTimeSeriesRows` 直接读取 active 版本。
 - **冷归档**：定时把在线主存数据归档为 Parquet 并登记归档文件。
 - **可水平扩展**：通过路由规则把事实数据分片到多个在线主存节点；主存可同进程内嵌，也可独立部署。
 
@@ -34,7 +34,7 @@ Storage 的事实主存统一按 `key + version` 定位一行数据，Access 对
 
 ### View 版本与切换
 
-View 是用户可查询的派生读模型：TimeSeries View 由 DuckDB 维护版本化结果表，Record View 由 Bleve 维护版本化索引。只要 View 定义变化，例如新增查询列，`view_version` 就会递增；后台构建新版本，成功后再把读取切到新 active 版本。
+View 是用户可查询的派生读模型：TimeSeries View 由 DuckDB 维护结果表，Record View 由 Bleve 维护索引目录。两者统一使用 active/building 双索引生命周期；只要 View 定义变化，例如新增查询列，`view_version` 就会递增，view_builder 通过 `op=rotate` 抢占式构建新 building 索引，成功后再把读取切到新 active 版本。
 
 TimeSeries View 的 DuckDB 结果表按 `ViewColumn` 展开为真实物理列，不再以 `row_json` 作为查询主路径。物理表名以 `view_{view_id}` 开头；视图字段统一使用 `dataset_id.column_name`，并为 `(subject_id, freq, data_time)`、内部行键与每个视图字段创建索引；`QueryTimeSeriesRows` 会把 `subject_id`、`freq`、`time_range`、结构化 filter、sort 和分页尽量下推到 DuckDB SQL 执行。
 
@@ -51,7 +51,7 @@ TimeSeries View 的 DuckDB 结果表按 `ViewColumn` 展开为真实物理列，
 | `build_error` | 最近一次失败原因 |
 | `build_started_at` / `build_finished_at` | 最近一次构建开始 / 结束时间 |
 
-构建期间的新增写入会先落主存，再由 View 消费者同步到相关 active/building 结果；重建也会在完成前补刷构建期间的增量，切换后查询只读 `active_result`。
+构建期间的新增写入会先落 PrimaryStore，再由 View 消费者同步到 active 和合法 building 索引；重建从 PrimaryStore 回扫完整事实行，不从旧 DuckDB 表或旧 Bleve 索引复制。旧 active 会一直服务到 `CompleteViewBuild` 切换完成，因此没有读空窗；新字段只有在 building 切成 active 后才可查询。非 a/b slot 的旧派生索引可被 rotate 丢弃并重建；DuckDB `__latest` helper 仍保留，待后续性能复核后再删除。
 
 ## 环境要求
 
@@ -127,6 +127,22 @@ storage:
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 2
+    rotation:
+      enabled: true       # false 是完整 kill switch，跳过整个 rotate pass
+      max_entries: 200000
+      min_ready_entries: 50000
+      overlap_window: 30m
+      default_backfill_window: 1d
+      allowed_lag: 2m
+      remove_grace_ms: 60000
+      time_series:
+        freq_backfill_window:
+          1m: 6h
+          1h: 30d
+          1d: 730d
+      record:
+        default_version_window: 30d
+        max_backfill_entries: 200000
 ```
 
 DuckDB 视图库默认会在 DSN 上追加资源限制，避免浏览页无过滤查询触发 DuckDB 按物理内存比例预留过多缓存：`memory_limit=512MB`、`threads=1`、`max_temp_directory_size=2GB`。如需在大规格机器上调高，可通过 `MOOX_DUCKDB_MEMORY_LIMIT`、`MOOX_DUCKDB_THREADS`、`MOOX_DUCKDB_MAX_TEMP_DIRECTORY_SIZE` 覆盖；若 `duckdb_path` 自身已带同名 query 参数，则以显式参数为准。
@@ -149,7 +165,7 @@ DuckDB 视图库默认会在 DSN 上追加资源限制，避免浏览页无过�
 - `${prefix}.time_series.rows_changed.v1`
 - `${prefix}.record.rows_changed.v1`
 
-NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。实时事件消费者只处理启动后新产生的行变更；历史补仓、断档追数和读模型重建统一交给 View rebuild。为了避免内嵌 JetStream 在小规格机器上无限堆积事件，`max_age_hours`、`max_msgs`、`max_bytes` 会限制 stream 保留窗口；消费者通过 `max_in_flight`、`ack_wait_ms`、`max_deliver` 控制并发、Ack 等待和重试上限。View 事件 handler 只有在派生写入成功后才返回 success；失败会向上传递错误，让 NATS `Nak` 并重试。View 批处理参数为 `view.metadata_service_name`、`view.access_service_name`、`view.batch_size`、`view.batch_wait_ms`、`view.max_workers`。Archive 独立部署时也复用 `view.metadata_service_name` 和 `view.access_service_name` 连接 Metadata/Access RPC，并通过同一个 eventbus 订阅行变更事件；当前事件 handler 为占位 ack，Parquet 归档策略后续补齐。
+NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。实时事件消费者只处理启动后新产生的行变更；历史补仓、断档追数和读模型重建统一交给 view_builder 的 `op=rotate`。为了避免内嵌 JetStream 在小规格机器上无限堆积事件，`max_age_hours`、`max_msgs`、`max_bytes` 会限制 stream 保留窗口；消费者通过 `max_in_flight`、`ack_wait_ms`、`max_deliver` 控制并发、Ack 等待和重试上限。View 事件 handler 只有在派生写入成功后才返回 success；失败会向上传递错误，让 NATS `Nak` 并重试。View 批处理参数为 `view.metadata_service_name`、`view.access_service_name`、`view.batch_size`、`view.batch_wait_ms`、`view.max_workers`，生命周期参数位于 `view.rotation`。Archive 独立部署时也复用 `view.metadata_service_name` 和 `view.access_service_name` 连接 Metadata/Access RPC，并通过同一个 eventbus 订阅行变更事件；当前事件 handler 为占位 ack，Parquet 归档策略后续补齐。
 
 ### `config/trpc_go.yaml` 默认服务端口
 
@@ -165,9 +181,7 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 
 | 计时器服务 | 作用 | 默认 |
 | --- | --- | --- |
-| `trpc.moox.storage.view.timer` | 版本化 View 构建：TimeSeries 生成 DuckDB 结果表，Record 生成 Bleve 索引 | 开（每 30s） |
-| `trpc.moox.storage.view.cleanup.timer` | 清理旧物化结果表 | 开（每小时） |
-| `trpc.moox.storage.view.retry_failed.timer` | 重试失败视图 | 关 |
+| `trpc.moox.storage.view.timer` | 统一 View 索引轮换：schema warming、容量轮换、ready switch、stale/orphan 清理；参数为 `op=rotate`，只在 view_builder 注册 | 开（每 30s） |
 | `trpc.moox.storage.archive.timer` | Archive 角色的 Parquet 冷归档调度入口 | 关 |
 
 配置路径可被命令行参数或环境变量覆盖：
@@ -530,9 +544,11 @@ curl -s -XPOST http://127.0.0.1:20200/trpc.moox.storage.Metadata/ListSpaces \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-3. **读写链路**：通过 Access 写一行再读回，必要时再触发 View rebuild 后查询 DataView。
+3. **读写链路**：通过 Access 写一行再读回，必要时等待 `op=rotate` 完成 warming 后查询 DataView。
 
 4. **分布式额外检查**：Access 节点日志无"primary store"连接错误；主存节点 `PrimaryStore` 端口可被 Access 节点 `telnet`/`nc` 通；NATS 上能看到 `moox.storage.time_series.rows_changed.v1` / `moox.storage.record.rows_changed.v1` 主题有消息。
+
+5. **远程 View 验证**：线上或远程发布后通过 admin gateway `11000` 调用 `/api/admin/storage_view/QueryTimeSeriesRows` 或 `/api/admin/storage_view/SearchRecordRows`，请求必须使用小 `limit` / 小分页并跳过精确总数（例如 `total_mode=NONE`），不要做无界生产扫描。
 
 ## 提供的接口
 
@@ -559,7 +575,7 @@ Space、View（+ViewColumn）、DataSource、Subject（+SubjectSymbol）、Datas
 | `QueryTimeSeriesRows` | 查询 TimeSeries + DuckDB 派生 View；不存在返回 `VIEW_NOT_FOUND` |
 | `SearchRecordRows` | 搜索 Record + Bleve 派生 View，支持全文 + 结构化过滤 |
 
-View 索引生命周期（schema 抢占重建、容量轮换、ready switch、陈旧清理）统一由 `view_builder` 角色的 `op=rotate` 调度驱动，不再提供手动重建 RPC。
+View 索引生命周期（schema 抢占重建、容量轮换、ready switch、陈旧清理）统一由 `view_builder` 角色的 `op=rotate` 调度驱动，不再提供手动重建 RPC。`QueryTimeSeriesRows` / `SearchRecordRows` 始终读当前 active 索引；完整历史以 PrimaryStore KV/Pebble 为准。
 
 ### PrimaryStore — 在线主存（端口 20101，内部服务）
 

@@ -108,7 +108,9 @@ func (x *ResultColumn) GetOriginId() string {
 }
 
 // QueryTimeSeriesRowsReq 表示查询时序 View 数据。
-// 该接口通过 View 元数据查询 TimeSeries 读模型，默认目标为 DuckDB。
+// 该接口查询 DuckDB 中当前 active View 索引。
+// View 索引是可重建的近期派生结果，不是完整事实存储。
+// 完整历史以 PrimaryStore KV/Pebble 为准。
 type QueryTimeSeriesRowsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -324,7 +326,9 @@ func (x *QueryTimeSeriesRowsRsp) GetPageResult() *commonpb.PageResult {
 }
 
 // SearchRecordRowsReq 表示搜索记录 View 数据。
-// 该接口通过 View 元数据搜索 Record 读模型，默认目标为 Bleve。
+// 该接口搜索 Bleve 中当前 active View 索引。
+// View 索引是可重建的近期派生结果，不是完整事实存储。
+// 完整历史以 PrimaryStore KV/Pebble 为准。
 type SearchRecordRowsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
