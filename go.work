@@ -12,6 +12,8 @@ use (
 	./modules/factor/proto/factorgen
 	./modules/monitor
 	./modules/monitor/proto/monitorgen
+	./modules/eventbus
+	./modules/eventbus/proto/eventbusgen
 	./modules/storage
 	./modules/storage/proto/gen
 	./modules/trade

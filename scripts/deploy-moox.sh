@@ -8,6 +8,7 @@ STAGE_DIR=""
 SKIP_BUILD=0
 NO_START=0
 WITH_STORAGE=1
+WITH_EVENTBUS=1
 WITH_WEB_HOST=1
 WITH_CLOUDNODE=1
 WITH_COLLECTOR=1
@@ -32,6 +33,7 @@ Options:
   --skip-build                    Reuse binaries from ./bin.
   --no-start                      Deploy package only, do not start services.
   --no-storage                    Do not package/stop/start moox-storage; preserve existing remote storage files.
+  --no-eventbus                   Do not package/stop/start moox-eventbus; preserve existing remote EventBus files.
   --no-web-host                   Do not package/start moox-web-host.
   --no-cloudnode                  Do not package/start moox-cloudnode.
   --no-collector                  Do not package/start moox-collector.
@@ -90,6 +92,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-storage)
       WITH_STORAGE=0
+      shift
+      ;;
+    --no-eventbus)
+      WITH_EVENTBUS=0
       shift
       ;;
     --no-web-host)
@@ -217,6 +223,10 @@ build_core_binaries() {
       TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
         "${ROOT}/scripts/build.sh" cloudnode
     fi
+    if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
+      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+        "${ROOT}/scripts/build.sh" eventbus
+    fi
     if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
       TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
         "${ROOT}/scripts/build.sh" collector
@@ -331,6 +341,10 @@ patch_configs() {
     perl -0pi -e 's#path:\s*\./data/monitor/monitor\.db#path: ../data/monitor/monitor.db#g' \
       "${STAGE_DIR}/monitor/config/app.yaml"
   fi
+  if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
+    perl -0pi -e 's#store_dir:\s*\./data/eventbus/jetstream#store_dir: ../data/eventbus/jetstream#g' \
+      "${STAGE_DIR}/eventbus/config/app.yaml"
+  fi
 
   [[ "${WITH_STORAGE}" -eq 1 ]] || return 0
   for conf in "${STAGE_DIR}"/storage/config/storage*.yaml; do
@@ -362,13 +376,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
+WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
-mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/storage" "${ROOT}/logs/storage-access" "${ROOT}/logs/storage-view-index" "${ROOT}/logs/storage-view-builder" "${ROOT}/logs/storage-view-query" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/monitor"
+mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-access" "${ROOT}/logs/storage-view-index" "${ROOT}/logs/storage-view-builder" "${ROOT}/logs/storage-view-query" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/monitor"
 
 stop_if_running() {
   local name="$1"
@@ -589,6 +604,16 @@ start_storage_process() {
       -storage-conf="config/${storage_conf}"
 }
 
+start_eventbus() {
+  if [[ "${WITH_EVENTBUS}" != "1" ]]; then
+    echo "eventbus is disabled in this deployment package" >&2
+    exit 2
+  fi
+  start_service "eventbus" "${ROOT}/eventbus" \
+    "${ROOT}/bin/moox-eventbus" -conf=config/trpc_go.yaml
+  wait_http http://127.0.0.1:11419/readyz "${MOOX_WAIT_EVENTBUS_SECONDS:-60}"
+}
+
 start_storage_access() {
   start_storage_process "storage-access" "moox-storage-access" "trpc_go.access.yaml" "storage.access.yaml"
 }
@@ -687,6 +712,9 @@ start_web_host() {
 SERVICE="${1:-}"
 case "${SERVICE}" in
   "")
+    if [[ "${WITH_EVENTBUS}" == "1" ]]; then
+      start_eventbus
+    fi
     if [[ "${WITH_STORAGE}" == "1" ]]; then
       init_storage_schema
       start_storage
@@ -716,6 +744,7 @@ case "${SERVICE}" in
     init_storage_schema
     start_storage
     ;;
+  eventbus) start_eventbus ;;
   storage-access)
     if [[ "${WITH_STORAGE}" != "1" ]]; then
       echo "storage is disabled in this deployment package" >&2
@@ -755,7 +784,7 @@ case "${SERVICE}" in
   admin) start_admin ;;
   web-host) start_web_host ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor monitor admin web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor monitor admin web-host" >&2
     exit 2
     ;;
 esac
@@ -844,6 +873,9 @@ case "${SERVICE}" in
       stop_service "storage-access"
       stop_service "storage"
     fi
+    if [[ "${WITH_EVENTBUS}" == "1" ]]; then
+      stop_service "eventbus"
+    fi
     ;;
   storage)
     if [[ "${WITH_STORAGE}" != "1" ]]; then
@@ -855,6 +887,13 @@ case "${SERVICE}" in
     stop_service "storage-view-index"
     stop_service "storage-access"
     stop_service "storage"
+    ;;
+  eventbus)
+    if [[ "${WITH_EVENTBUS}" != "1" ]]; then
+      echo "eventbus is disabled in this deployment package" >&2
+      exit 2
+    fi
+    stop_service "eventbus"
     ;;
   storage-access|storage-view-index|storage-view-builder|storage-view-query)
     if [[ "${WITH_STORAGE}" != "1" ]]; then
@@ -900,7 +939,7 @@ case "${SERVICE}" in
     stop_service "${SERVICE}"
     ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor monitor admin web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor monitor admin web-host" >&2
     exit 2
     ;;
 esac
@@ -929,6 +968,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
+WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
@@ -936,6 +976,9 @@ WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 
 services=(admin)
+if [[ "${WITH_EVENTBUS}" == "1" ]]; then
+  services=(eventbus "${services[@]}")
+fi
 if [[ "${WITH_WEB_HOST}" == "1" ]]; then
   services+=(web-host)
 fi
@@ -976,6 +1019,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
+WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
@@ -986,6 +1030,9 @@ LOG_FILE="${ROOT}/logs/healthcheck.log"
 mkdir -p "${ROOT}/run" "$(dirname "${LOG_FILE}")"
 
 default_services=()
+if [[ "${WITH_EVENTBUS}" == "1" ]]; then
+  default_services+=(eventbus)
+fi
 if [[ "${WITH_STORAGE}" == "1" ]]; then
   default_services+=(storage-access storage-view-index storage-view-builder storage-view-query)
 fi
@@ -1048,7 +1095,7 @@ ensure_service() {
 ) 9>"${ROOT}/run/healthcheck.lock"
 EOF
 
-  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g" \
+  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
@@ -1058,6 +1105,7 @@ prepare_stage() {
   mkdir -p \
     "${STAGE_DIR}/bin" \
     "${STAGE_DIR}/admin/config" \
+    "${STAGE_DIR}/eventbus/config" \
     "${STAGE_DIR}/cloudnode/config" \
     "${STAGE_DIR}/collector/config" \
     "${STAGE_DIR}/collector/configs" \
@@ -1076,6 +1124,9 @@ prepare_stage() {
   copy_required_binary "moox-admin"
   copy_required_binary "moox-admin-cli"
   copy_required_binary "moox-cli"
+  if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
+    copy_required_binary "moox-eventbus"
+  fi
   if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
     copy_required_binary "moox-cloudnode"
     copy_required_binary "moox-cloudnode-cli"
@@ -1104,6 +1155,9 @@ prepare_stage() {
   copy_optional_web_host
 
   cp -R "${ROOT}/modules/admin/config/." "${STAGE_DIR}/admin/config/"
+  if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
+    cp -R "${ROOT}/modules/eventbus/config/." "${STAGE_DIR}/eventbus/config/"
+  fi
   if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/cloudnode/config/." "${STAGE_DIR}/cloudnode/config/"
   fi
@@ -1145,7 +1199,7 @@ sync_local_stage() {
 
   if [[ -x "${deploy_dir}/stop.sh" && "${NO_START}" -eq 0 ]]; then
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
-      "${deploy_dir}/stop.sh" || true
+      MOOX_WITH_EVENTBUS="${WITH_EVENTBUS}" "${deploy_dir}/stop.sh" || true
     else
       if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" collector || true
@@ -1158,6 +1212,9 @@ sync_local_stage() {
       fi
       if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" cloudnode || true
+      fi
+      if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
+        "${deploy_dir}/stop.sh" eventbus || true
       fi
       if [[ "${WITH_WEB_HOST}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" web-host || true
@@ -1174,6 +1231,9 @@ sync_local_stage() {
     local rsync_excludes=(--exclude '/data/' --exclude '/logs/' --exclude '/run/')
     if [[ "${WITH_STORAGE}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/storage/' --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli' --exclude '/bin/moox-storage-access' --exclude '/bin/moox-storage-view' --exclude '/bin/moox-storage-view-builder' --exclude '/bin/moox-storage-view-query')
+    fi
+    if [[ "${WITH_EVENTBUS}" -eq 0 ]]; then
+      rsync_excludes+=(--exclude '/eventbus/' --exclude '/bin/moox-eventbus')
     fi
     if [[ "${WITH_CLOUDNODE}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/cloudnode/' --exclude '/bin/moox-cloudnode' --exclude '/bin/moox-cloudnode-cli')
@@ -1198,6 +1258,10 @@ sync_local_stage() {
       "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/restart.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh"
     rm -f "${deploy_dir}/bin/moox-admin" "${deploy_dir}/bin/moox-admin-cli" \
       "${deploy_dir}/bin/moox-cli"
+    if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
+      rm -rf "${deploy_dir}/eventbus"
+      rm -f "${deploy_dir}/bin/moox-eventbus"
+    fi
     if [[ "${WITH_WEB_HOST}" -eq 1 ]]; then
       rm -f "${deploy_dir}/bin/moox-web-host"
     fi
@@ -1245,11 +1309,12 @@ sync_remote_stage() {
   log "upload ${archive} to ${TARGET}:${remote_archive}"
   scp "${archive}" "${TARGET}:${remote_archive}"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_reset_data
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_reset_data
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
   quoted_with_storage="$(shell_quote "${WITH_STORAGE}")"
+  quoted_with_eventbus="$(shell_quote "${WITH_EVENTBUS}")"
   quoted_with_cloudnode="$(shell_quote "${WITH_CLOUDNODE}")"
   quoted_with_collector="$(shell_quote "${WITH_COLLECTOR}")"
   quoted_with_factor="$(shell_quote "${WITH_FACTOR}")"
@@ -1257,7 +1322,7 @@ sync_remote_stage() {
   quoted_with_web_host="$(shell_quote "${WITH_WEB_HOST}")"
   quoted_reset_data="$(shell_quote "${RESET_DATA}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} RESET_DATA=${quoted_reset_data} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} RESET_DATA=${quoted_reset_data} bash -s" <<'EOF'
 set -euo pipefail
 
 if [[ "${DEPLOY_DIR}" == "~" ]]; then
@@ -1269,7 +1334,7 @@ fi
 mkdir -p "${DEPLOY_DIR}"
 if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
   if [[ "${WITH_STORAGE}" == "1" ]]; then
-    "${DEPLOY_DIR}/stop.sh" || true
+    MOOX_WITH_EVENTBUS="${WITH_EVENTBUS}" "${DEPLOY_DIR}/stop.sh" || true
   else
     if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_COLLECTOR}" == "1" ]]; then
       "${DEPLOY_DIR}/stop.sh" collector || true
@@ -1282,6 +1347,9 @@ if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
     fi
     if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_CLOUDNODE}" == "1" ]]; then
       "${DEPLOY_DIR}/stop.sh" cloudnode || true
+    fi
+    if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_EVENTBUS}" == "1" ]]; then
+      "${DEPLOY_DIR}/stop.sh" eventbus || true
     fi
     if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_WEB_HOST}" == "1" ]]; then
       "${DEPLOY_DIR}/stop.sh" web-host || true
@@ -1298,6 +1366,10 @@ rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/examples" \
   "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh"
 rm -f "${DEPLOY_DIR}/bin/moox-admin" "${DEPLOY_DIR}/bin/moox-admin-cli" \
   "${DEPLOY_DIR}/bin/moox-cli"
+if [[ "${WITH_EVENTBUS}" == "1" ]]; then
+  rm -rf "${DEPLOY_DIR}/eventbus"
+  rm -f "${DEPLOY_DIR}/bin/moox-eventbus"
+fi
 if [[ "${WITH_WEB_HOST}" == "1" ]]; then
   rm -f "${DEPLOY_DIR}/bin/moox-web-host"
 fi

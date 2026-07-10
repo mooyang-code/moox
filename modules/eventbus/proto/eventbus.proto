@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package trpc.moox.eventbus;
+
+import "moox_common.proto";
+import "moox_message.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen;eventbuspb";
+
+message GetOverviewReq {}
+message GetOverviewRsp {
+  common.RetInfo ret_info = 1;
+  Overview overview = 2;
+}
+
+message ListTopicsReq { common.Page page = 1; }
+message ListTopicsRsp {
+  common.RetInfo ret_info = 1;
+  repeated TopicInfo topics = 2;
+  common.PageResult page_result = 3;
+}
+
+message ListStreamsReq { common.Page page = 1; }
+message ListStreamsRsp {
+  common.RetInfo ret_info = 1;
+  repeated StreamInfo streams = 2;
+  common.PageResult page_result = 3;
+}
+
+message ListConsumersReq {
+  string stream = 1;
+  common.Page page = 2;
+}
+message ListConsumersRsp {
+  common.RetInfo ret_info = 1;
+  repeated ConsumerInfo consumers = 2;
+  common.PageResult page_result = 3;
+}
+
+message GetConsumerReq {
+  string stream = 1;
+  string name = 2;
+}
+message GetConsumerRsp {
+  common.RetInfo ret_info = 1;
+  ConsumerInfo consumer = 2;
+}
+
+message TopicInfo {
+  string topic = 1;
+  string stream = 2;
+  trpc.moox.message.MessageKind kind = 3;
+  string payload_content_type = 4;
+  uint32 payload_version = 5;
+  bool enabled = 6;
+}
+
+message StreamInfo {
+  string name = 1;
+  repeated string subjects = 2;
+  string retention = 3;
+  string storage = 4;
+  uint64 messages = 5;
+  uint64 bytes = 6;
+  string first_time = 7;
+  string last_time = 8;
+}
+
+message ConsumerInfo {
+  string stream = 1;
+  string name = 2;
+  string filter_subject = 3;
+  uint64 pending = 4;
+  uint64 ack_pending = 5;
+  uint64 redelivered = 6;
+  string last_delivered_at = 7;
+}
+
+message Overview {
+  bool jetstream_ready = 1;
+  uint32 connections = 2;
+  uint32 streams = 3;
+  uint32 consumers = 4;
+  uint64 messages = 5;
+  uint64 bytes = 6;
+  uint64 total_pending = 7;
+}
+
+service EventBusMgr {
+  rpc GetOverview(GetOverviewReq) returns (GetOverviewRsp);
+  rpc ListTopics(ListTopicsReq) returns (ListTopicsRsp);
+  rpc ListStreams(ListStreamsReq) returns (ListStreamsRsp);
+  rpc ListConsumers(ListConsumersReq) returns (ListConsumersRsp);
+  rpc GetConsumer(GetConsumerReq) returns (GetConsumerRsp);
+}

@@ -1,0 +1,70 @@
+# MooX EventBus owns the single embedded NATS JetStream runtime.
+broker:
+  host: 0.0.0.0
+  port: 4222
+  server_name: eventbus-dev-1
+  store_dir: ./data/eventbus/jetstream
+  startup_timeout: 10s
+  max_payload_bytes: 8388608
+  cluster:
+    enabled: false
+    name: MOOX_EVENTBUS
+    host: 0.0.0.0
+    port: 6222
+    routes: []
+  auth:
+    enabled: false
+    username: ""
+    password: ""
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+    ca_file: ""
+
+health:
+  addr: ":11419"
+
+streams:
+  - name: MOOX_STORAGE
+    subjects: ["moox.storage.>"]
+    retention: limits
+    storage: file
+    replicas: 1
+    max_age: 72h
+    max_bytes: 21474836480
+  - name: MOOX_METRICS
+    subjects: ["moox.metrics.>"]
+    retention: limits
+    storage: file
+    replicas: 1
+    max_age: 24h
+    max_bytes: 10737418240
+  - name: MOOX_CLOUDNODE_EXEC
+    subjects: ["moox.cloudnode.job.requested.v1"]
+    retention: work_queue
+    storage: file
+    replicas: 1
+    max_age: 72h
+    max_bytes: 10737418240
+  - name: MOOX_DLQ
+    subjects: ["moox.dlq.>"]
+    retention: limits
+    storage: file
+    replicas: 1
+    max_age: 720h
+    max_bytes: 2147483648
+
+topics:
+  - {topic: moox.storage.time_series.rows_updated.v1, stream: MOOX_STORAGE, kind: 1, payload_content_type: application/x-protobuf, payload_version: 1, enabled: true}
+  - {topic: moox.storage.record.rows_updated.v1, stream: MOOX_STORAGE, kind: 1, payload_content_type: application/x-protobuf, payload_version: 1, enabled: true}
+  - {topic: moox.metrics.snapshot.reported.v1, stream: MOOX_METRICS, kind: 3, payload_content_type: application/x-protobuf, payload_version: 1, enabled: true}
+  - {topic: moox.cloudnode.job.requested.v1, stream: MOOX_CLOUDNODE_EXEC, kind: 2, payload_content_type: application/x-protobuf, payload_version: 1, enabled: true}
+  - {topic: moox.dlq.message.rejected.v1, stream: MOOX_DLQ, kind: 1, payload_content_type: application/x-protobuf, payload_version: 1, enabled: true}
+
+kv:
+  - bucket: MOOX_CLOUDNODE_JOB_ACTIVE
+    max_age: 48h
+    history: 1
+    storage: file
+    replicas: 1

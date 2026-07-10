@@ -14,6 +14,13 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if _, ok := byName["monitor"]; !ok {
 		t.Fatal("existing resource monitor deployment row missing")
 	}
+	eventbus, ok := byName["eventbus"]
+	if !ok {
+		t.Fatal("eventbus deployment row missing")
+	}
+	if eventbus.GatewayPath != "trpc.moox.eventbus.EventBusMgr" || eventbus.Port != 11420 || healthURL(eventbus.ExtraConfig) != "http://127.0.0.1:11419/healthz" {
+		t.Fatalf("eventbus deployment = %#v", eventbus)
+	}
 	monitor, ok := byName["moox_monitor"]
 	if !ok {
 		t.Fatal("moox_monitor deployment row missing")

@@ -25,6 +25,7 @@ proto:
 	$(MAKE) -C modules/factor/proto all
 	$(MAKE) -C modules/cloudnode/proto all
 	$(MAKE) -C modules/monitor/proto all
+	$(MAKE) -C modules/eventbus/proto all
 
 clean:
 	rm -rf bin release dist scripts/node_exporter/build

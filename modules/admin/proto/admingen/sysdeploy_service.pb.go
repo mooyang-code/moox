@@ -29,7 +29,8 @@ type ServiceDeployment struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Id          int64  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Id int64 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	// service_name is the stable deployment key (for example, "eventbus").
 	ServiceName string `protobuf:"bytes,2,opt,name=service_name,json=serviceName,proto3" json:"service_name,omitempty"`
 	ServiceKind string `protobuf:"bytes,3,opt,name=service_kind,json=serviceKind,proto3" json:"service_kind,omitempty"`
 	Protocol    string `protobuf:"bytes,4,opt,name=protocol,proto3" json:"protocol,omitempty"`

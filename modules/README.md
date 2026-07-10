@@ -12,6 +12,7 @@ MooX 后端 Go 模块目录，由仓库根目录 `go.work` 统一管理。各模
 | [cloudnode](./cloudnode/) | `moox-cloudnode` | 云账户、代码包、异步 JobItem、SCF 唤醒/直调 |
 | [trade](./trade/) | `moox-trade` | 账户、订单、成交、持仓与交易所适配 |
 | [monitor](./monitor/) | `moox-monitor` | 独立 HTTP/TCP 服务可用性监控、告警和多实例协同 |
+| [eventbus](./eventbus/) | `moox-eventbus` | 统一 NATS JetStream broker、Stream/KV 拓扑与只读管理面 |
 | [cli](./cli/) | `moox-cli` | 命令行工具（元数据导入、数据导入、运维辅助） |
 | [factor](./factor/) | `moox-factor` | 因子计算（占位，待扩展） |
 
@@ -27,12 +28,14 @@ MooX 后端 Go 模块目录，由仓库根目录 `go.work` 统一管理。各模
   ├─ /api/admin/cloudnode/*   → moox-cloudnode :11401
   ├─ /api/admin/trade_*/*     → moox-trade :11200-11208
   └─ /api/admin/storage_*/*   → moox-storage :20200-20202
+  └─ /api/admin/eventbus/*    → moox-eventbus :11420
 
 :20100-20202  moox-storage（Metadata / Access / DataView）
 :11401        moox-cloudnode
 :11402        moox-collector
 :11200-11208  moox-trade
 :11409/:11410 moox-monitor（/healthz + MonitorMgr）
+:11419/:11420 moox-eventbus（/readyz + EventBusMgr）
 ```
 
 SCF 采集运行时通过 `/api/service/*`（HMAC 签名）回调后台，不经 JWT 用户鉴权。
@@ -54,11 +57,12 @@ make build
 ./scripts/build.sh cli
 ./scripts/build.sh factor
 ./scripts/build.sh monitor
+./scripts/build.sh eventbus
 
 # 本机/远端一键发布
 make deploy ARGS="--target localhost --dir ~/moox/dev"
 ```
 
-`scripts/deploy-moox.sh` 当前部署 admin、web-host、cloudnode、collector、factor、monitor、storage；各独立模块可用 `--no-<module>` 关闭。
+`scripts/deploy-moox.sh` 当前部署 admin、web-host、eventbus、cloudnode、collector、factor、monitor、storage；各独立模块可用 `--no-<module>` 关闭。
 
 详细架构见仓库 [`docs/架构总览.md`](../docs/架构总览.md)。

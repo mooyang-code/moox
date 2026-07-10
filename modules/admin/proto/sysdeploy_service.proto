@@ -10,6 +10,7 @@ option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;m
 // 管理台通过 /api/admin/sysdeploy/{method} 访问；后台/SCF 运行时通过 keepalive payload 获取 active 部署信息。
 message ServiceDeployment {
   int64 id = 1;
+  // service_name is the stable deployment key (for example, "eventbus").
   string service_name = 2;
   string service_kind = 3;
   string protocol = 4;
