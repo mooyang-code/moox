@@ -1,0 +1,42 @@
+spaces:
+  - space_id: moox_system
+    name: MooX System
+    description: MooX internal platform data
+    owner: moox
+    status: active
+    attributes:
+      scope: internal
+      owner_module: monitor
+      managed_by: moox-cli
+
+data_sources:
+  - space_id: moox_system
+    data_source_id: moox_monitor
+    name: MooX Monitor
+    kind: internal
+    timezone: UTC
+    status: active
+
+datasets:
+  - space_id: moox_system
+    dataset_id: moox_service_metrics
+    data_source_id: moox_monitor
+    name: MooX Service Metrics
+    description: Historical tRPC application and business metrics
+    data_kind: time_series
+    freqs: ["30s"]
+    status: active
+
+fields:
+  - {space_id: moox_system, field_id: monitor_metric_value, name: Metric value, value_type: double, status: active}
+  - {space_id: moox_system, field_id: monitor_metric_labels, name: Canonical labels, value_type: json, status: active}
+  - {space_id: moox_system, field_id: monitor_metric_producer_node_id, name: Producer node ID, value_type: string, status: active}
+  - {space_id: moox_system, field_id: monitor_metric_producer_version, name: Producer version, value_type: string, status: active}
+  - {space_id: moox_system, field_id: monitor_metric_message_id, name: Message ID, value_type: string, status: active}
+
+dataset_columns:
+  - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: value, origin_type: field, origin_id: monitor_metric_value, value_type: double, required: true, status: active}
+  - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: labels_json, origin_type: field, origin_id: monitor_metric_labels, value_type: json, required: true, status: active}
+  - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: producer_node_id, origin_type: field, origin_id: monitor_metric_producer_node_id, value_type: string, status: active}
+  - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: producer_version, origin_type: field, origin_id: monitor_metric_producer_version, value_type: string, status: active}
+  - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: message_id, origin_type: field, origin_id: monitor_metric_message_id, value_type: string, required: true, status: active}

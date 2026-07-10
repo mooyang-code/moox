@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
+	"slices"
 	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v3"
@@ -23,6 +26,9 @@ var (
 	metadataImportURL         string
 	metadataImportDryRun      bool
 	metadataImportIfNotExists bool
+	metadataApplyFile         string
+	metadataApplyURL          string
+	metadataApplyDryRun       bool
 )
 
 var metadataCmd = &cobra.Command{
@@ -62,6 +68,36 @@ var metadataImportCmd = &cobra.Command{
 			})
 		}
 		summary, err := runMetadataImport(cmd.Context(), url, calls, metadataImportIfNotExists)
+		if err != nil {
+			return err
+		}
+		return writeMetadataImportSummary(summary)
+	},
+}
+
+var metadataApplyCmd = &cobra.Command{
+	Use:   "apply",
+	Short: "创建并校验存储元数据 seed",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(metadataApplyFile) == "" {
+			return fmt.Errorf("必须指定 --file")
+		}
+		seed, err := loadMetadataSeed(metadataApplyFile)
+		if err != nil {
+			return err
+		}
+		if err := validateReservedInternalSpaces(seed); err != nil {
+			return err
+		}
+		calls, err := buildMetadataImportCalls(seed)
+		if err != nil {
+			return err
+		}
+		url := defaultMetadataImportURL(metadataApplyURL)
+		if metadataApplyDryRun {
+			return writeMetadataImportSummary(metadataImportSummary{Status: "dry_run", DryRun: true, MetadataURL: url, Planned: len(calls), Resources: countMetadataCalls(calls)})
+		}
+		summary, err := runMetadataApply(cmd.Context(), url, calls)
 		if err != nil {
 			return err
 		}
@@ -270,6 +306,36 @@ type metadataImportCall struct {
 	Exists   *metadataExistsProbe
 }
 
+func validateReservedInternalSpaces(seed metadataSeed) error {
+	for _, item := range seed.Spaces {
+		if !strings.HasPrefix(item.SpaceID, "moox_") {
+			continue
+		}
+		if item.Attributes["scope"] != "internal" || item.Attributes["owner_module"] == "" || item.Attributes["managed_by"] == "" {
+			return fmt.Errorf("reserved internal space %q requires attributes scope=internal, owner_module, and managed_by", item.SpaceID)
+		}
+	}
+	for _, item := range seed.DataSources {
+		if strings.HasPrefix(item.SpaceID, "moox_") && !hasInternalSpace(seed, item.SpaceID) {
+			return fmt.Errorf("seed cannot claim reserved space %q", item.SpaceID)
+		}
+	}
+	for _, item := range seed.Datasets {
+		if strings.HasPrefix(item.SpaceID, "moox_") && !hasInternalSpace(seed, item.SpaceID) {
+			return fmt.Errorf("seed cannot claim reserved space %q", item.SpaceID)
+		}
+	}
+	return nil
+}
+func hasInternalSpace(seed metadataSeed, id string) bool {
+	for _, s := range seed.Spaces {
+		if s.SpaceID == id && s.Attributes["scope"] == "internal" {
+			return true
+		}
+	}
+	return false
+}
+
 // metadataExistsProbe 封装一次元数据是否存在的探测调用。
 type metadataExistsProbe struct {
 	Method   string
@@ -285,6 +351,7 @@ type metadataImportSummary struct {
 	Planned     int            `json:"planned"`
 	Applied     int            `json:"applied"`
 	Skipped     int            `json:"skipped"`
+	Unchanged   int            `json:"unchanged,omitempty"`
 	Resources   map[string]int `json:"resources"`
 }
 
@@ -487,6 +554,145 @@ func runMetadataImport(ctx context.Context, metadataURL string, calls []metadata
 		summary.Applied++
 	}
 	return summary, nil
+}
+
+func runMetadataApply(ctx context.Context, metadataURL string, calls []metadataImportCall) (metadataImportSummary, error) {
+	summary := metadataImportSummary{Status: "ok", MetadataURL: metadataURL, Planned: len(calls), Resources: countMetadataCalls(calls)}
+	for _, call := range calls {
+		probe := call.Exists
+		if call.Resource == "dataset_columns" {
+			column, ok := call.Request.(*pb.UpsertDatasetColumnReq)
+			if !ok || column.GetColumn() == nil {
+				return summary, fmt.Errorf("invalid dataset column apply call")
+			}
+			probe = &metadataExistsProbe{Method: "ListDatasetColumns", Request: &pb.ListDatasetColumnsReq{SpaceId: column.GetColumn().GetSpaceId(), DatasetId: column.GetColumn().GetDatasetId(), Page: &commonpb.Page{Page: 1, Size: 500}}, Response: &pb.ListDatasetColumnsRsp{}}
+		}
+		if probe == nil {
+			return summary, fmt.Errorf("apply does not support resource %s without read probe", call.Resource)
+		}
+		if err := postStorageRaw(ctx, metadataURL, metadataServiceName, probe.Method, probe.Request, probe.Response); err != nil {
+			return summary, err
+		}
+		found, actual := applyProbeResult(call.Resource, probe, call.Request)
+		if !found {
+			if err := postStorage(ctx, metadataURL, metadataServiceName, call.Method, call.Request, call.Response); err != nil {
+				return summary, err
+			}
+			summary.Applied++
+			continue
+		}
+		if err := verifyMetadataResource(call.Resource, call.Request, actual); err != nil {
+			return summary, err
+		}
+		summary.Skipped++
+		summary.Unchanged++
+	}
+	return summary, nil
+}
+
+func applyProbeResult(resource string, probe *metadataExistsProbe, expectedRequest proto.Message) (bool, proto.Message) {
+	if resource == "dataset_columns" {
+		rsp, _ := probe.Response.(*pb.ListDatasetColumnsRsp)
+		if rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return false, nil
+		}
+		req := probe.Request.(*pb.ListDatasetColumnsReq)
+		expected := expectedRequest.(*pb.UpsertDatasetColumnReq).GetColumn()
+		for _, c := range rsp.GetColumns() {
+			if c.GetColumnName() == expected.GetColumnName() && c.GetSpaceId() == req.GetSpaceId() && c.GetDatasetId() == req.GetDatasetId() {
+				return true, c
+			}
+		}
+		return false, nil
+	}
+	ret, ok := responseRetInfo(probe.Response)
+	if !ok || ret == nil || ret.GetCode() != pb.ErrorCode_SUCCESS {
+		return false, nil
+	}
+	switch rsp := probe.Response.(type) {
+	case *pb.GetSpaceRsp:
+		return true, rsp.GetSpace()
+	case *pb.GetDataSourceRsp:
+		return true, rsp.GetDataSource()
+	case *pb.GetDatasetRsp:
+		return true, rsp.GetDataset()
+	case *pb.GetFieldRsp:
+		return true, rsp.GetField()
+	case *pb.GetPrimaryStoreRouteRsp:
+		return true, rsp.GetPrimaryStoreRoute()
+	case *pb.GetFactorRsp:
+		return true, rsp.GetFactor()
+	case *pb.GetPrimaryStoreNodeRsp:
+		return true, rsp.GetNode()
+	case *pb.GetDeviceRsp:
+		return true, rsp.GetDevice()
+	case *pb.GetViewRsp:
+		return true, rsp.GetView()
+	}
+	return true, nil
+}
+
+func verifyMetadataResource(resource string, request, actual proto.Message) error {
+	if actual == nil {
+		return fmt.Errorf("%s exists but response omitted resource", resource)
+	}
+	var expected proto.Message
+	switch req := request.(type) {
+	case *pb.CreateSpaceReq:
+		expected = req.GetSpace()
+	case *pb.CreateDataSourceReq:
+		expected = req.GetDataSource()
+	case *pb.CreateDatasetReq:
+		expected = req.GetDataset()
+	case *pb.CreateFieldReq:
+		expected = req.GetField()
+	case *pb.UpsertDatasetColumnReq:
+		expected = req.GetColumn()
+	case *pb.CreatePrimaryStoreRouteReq:
+		expected = req.GetPrimaryStoreRoute()
+	case *pb.CreateFactorReq:
+		expected = req.GetFactor()
+	case *pb.CreatePrimaryStoreNodeReq:
+		expected = req.GetNode()
+	case *pb.CreateDeviceReq:
+		expected = req.GetDevice()
+	case *pb.CreateViewReq:
+		expected = req.GetView()
+	default:
+		return fmt.Errorf("unsupported apply resource request %T", request)
+	}
+	if !metadataContractsEqual(resource, expected, actual) {
+		return fmt.Errorf("metadata %s exists but contract differs", resource)
+	}
+	return nil
+}
+
+func metadataContractsEqual(resource string, a, b proto.Message) bool {
+	if resource == "spaces" {
+		x, y := a.(*pb.Space), b.(*pb.Space)
+		return x.GetSpaceId() == y.GetSpaceId() && x.GetName() == y.GetName() && x.GetDescription() == y.GetDescription() && x.GetOwner() == y.GetOwner() && x.GetStatus() == y.GetStatus() && reflect.DeepEqual(x.GetAttributes(), y.GetAttributes())
+	}
+	if resource == "data_sources" {
+		x, y := a.(*pb.DataSource), b.(*pb.DataSource)
+		return x.GetSpaceId() == y.GetSpaceId() && x.GetDataSourceId() == y.GetDataSourceId() && x.GetName() == y.GetName() && x.GetKind() == y.GetKind() && x.GetTimezone() == y.GetTimezone() && x.GetStatus() == y.GetStatus() && reflect.DeepEqual(x.GetAttributes(), y.GetAttributes())
+	}
+	if resource == "datasets" {
+		x, y := a.(*pb.Dataset), b.(*pb.Dataset)
+		return x.GetSpaceId() == y.GetSpaceId() && x.GetDatasetId() == y.GetDatasetId() && x.GetDataSourceId() == y.GetDataSourceId() && x.GetDataKind() == y.GetDataKind() && slices.Equal(x.GetFreqs(), y.GetFreqs()) && x.GetStatus() == y.GetStatus()
+	}
+	if resource == "fields" {
+		x, y := a.(*pb.Field), b.(*pb.Field)
+		return x.GetSpaceId() == y.GetSpaceId() && x.GetFieldId() == y.GetFieldId() && x.GetValueType() == y.GetValueType() && x.GetStatus() == y.GetStatus()
+	}
+	if resource == "dataset_columns" {
+		x, y := a.(*pb.DatasetColumn), b.(*pb.DatasetColumn)
+		return x.GetSpaceId() == y.GetSpaceId() && x.GetDatasetId() == y.GetDatasetId() && x.GetColumnName() == y.GetColumnName() && x.GetOriginType() == y.GetOriginType() && x.GetOriginId() == y.GetOriginId() && x.GetValueType() == y.GetValueType() && x.GetRequired() == y.GetRequired() && x.GetStatus() == y.GetStatus()
+	}
+	if resource == "primary_store_routes" {
+		x, y := a.(*pb.PrimaryStoreRoute), b.(*pb.PrimaryStoreRoute)
+		return x.GetSpaceId() == y.GetSpaceId() && x.GetRouteId() == y.GetRouteId() && x.GetDatasetId() == y.GetDatasetId() && x.GetSubjectPattern() == y.GetSubjectPattern() && x.GetHashRule() == y.GetHashRule() && x.GetNodeId() == y.GetNodeId() && x.GetPriority() == y.GetPriority() && x.GetStatus() == y.GetStatus()
+	}
+	return proto.Equal(a, b)
 }
 
 func metadataResourceExists(ctx context.Context, metadataURL string, probe *metadataExistsProbe) (bool, error) {
@@ -746,9 +952,13 @@ func normalizeEnum(value string) string {
 func init() {
 	rootCmd.AddCommand(metadataCmd)
 	metadataCmd.AddCommand(metadataImportCmd)
+	metadataCmd.AddCommand(metadataApplyCmd)
 
 	metadataImportCmd.Flags().StringVarP(&metadataImportFile, "file", "f", "", "metadata seed YAML 文件路径")
 	metadataImportCmd.Flags().StringVar(&metadataImportURL, "metadata-url", "", "moox-storage MetadataService HTTP 地址，例如 http://127.0.0.1:20200")
 	metadataImportCmd.Flags().BoolVar(&metadataImportDryRun, "dry-run", false, "只解析并输出导入计划，不发送 RPC")
 	metadataImportCmd.Flags().BoolVar(&metadataImportIfNotExists, "if-not-exists", false, "资源已存在时跳过 create 类调用")
+	metadataApplyCmd.Flags().StringVarP(&metadataApplyFile, "file", "f", "", "metadata seed YAML 文件路径")
+	metadataApplyCmd.Flags().StringVar(&metadataApplyURL, "metadata-url", "", "moox-storage MetadataService HTTP 地址")
+	metadataApplyCmd.Flags().BoolVar(&metadataApplyDryRun, "dry-run", false, "只解析并输出应用计划，不发送 RPC")
 }

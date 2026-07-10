@@ -1,0 +1,9 @@
+primary_store_routes:
+  - space_id: moox_system
+    route_id: route-monitor-metrics-local
+    dataset_id: moox_service_metrics
+    subject_pattern: "*"
+    hash_rule: subject_id
+    node_id: local
+    priority: 100
+    status: active

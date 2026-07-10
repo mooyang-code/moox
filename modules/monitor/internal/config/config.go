@@ -18,6 +18,7 @@ type Config struct {
 	SysDeploy SysDeployConfig `yaml:"sysdeploy"`
 	Peer      PeerConfig      `yaml:"peer"`
 	Alert     AlertConfig     `yaml:"alert"`
+	Metrics   MetricsConfig   `yaml:"metrics"`
 }
 
 type DatabaseConfig struct {
@@ -76,6 +77,29 @@ type AlertConfig struct {
 	SendTimeoutSeconds int `yaml:"send_timeout_seconds"`
 }
 
+type MetricsConfig struct {
+	Enabled         bool                 `yaml:"enabled"`
+	Stream          string               `yaml:"stream"`
+	Topic           string               `yaml:"topic"`
+	Consumer        string               `yaml:"consumer"`
+	FetchBatchSize  int                  `yaml:"fetch_batch_size"`
+	FetchMaxWait    time.Duration        `yaml:"fetch_max_wait"`
+	AckWait         time.Duration        `yaml:"ack_wait"`
+	MaxAckPending   int                  `yaml:"max_ack_pending"`
+	NoDataIntervals int                  `yaml:"no_data_intervals"`
+	Storage         MetricsStorageConfig `yaml:"storage"`
+}
+type MetricsStorageConfig struct {
+	AccessTarget               string        `yaml:"access_target"`
+	MetadataTarget             string        `yaml:"metadata_target"`
+	SpaceID                    string        `yaml:"space_id"`
+	DatasetID                  string        `yaml:"dataset_id"`
+	Frequency                  string        `yaml:"frequency"`
+	MetadataValidationInterval time.Duration `yaml:"metadata_validation_interval"`
+	WriteBatchSize             int           `yaml:"write_batch_size"`
+	HistoryRetentionDays       int           `yaml:"history_retention_days"`
+}
+
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -132,6 +156,7 @@ func Default() *Config {
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
+		Metrics: MetricsConfig{Enabled: true, Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000, HistoryRetentionDays: 30}},
 	}
 }
 
@@ -193,6 +218,55 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Alert.SendTimeoutSeconds == 0 {
 		c.Alert.SendTimeoutSeconds = defaults.Alert.SendTimeoutSeconds
+	}
+	metricsDefaults := Default().Metrics
+	if c.Metrics.Stream == "" {
+		c.Metrics.Stream = metricsDefaults.Stream
+	}
+	if c.Metrics.Topic == "" {
+		c.Metrics.Topic = metricsDefaults.Topic
+	}
+	if c.Metrics.Consumer == "" {
+		c.Metrics.Consumer = metricsDefaults.Consumer
+	}
+	if c.Metrics.FetchBatchSize == 0 {
+		c.Metrics.FetchBatchSize = metricsDefaults.FetchBatchSize
+	}
+	if c.Metrics.FetchMaxWait == 0 {
+		c.Metrics.FetchMaxWait = metricsDefaults.FetchMaxWait
+	}
+	if c.Metrics.AckWait == 0 {
+		c.Metrics.AckWait = metricsDefaults.AckWait
+	}
+	if c.Metrics.MaxAckPending == 0 {
+		c.Metrics.MaxAckPending = metricsDefaults.MaxAckPending
+	}
+	if c.Metrics.NoDataIntervals == 0 {
+		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
+	}
+	if c.Metrics.Storage.AccessTarget == "" {
+		c.Metrics.Storage.AccessTarget = metricsDefaults.Storage.AccessTarget
+	}
+	if c.Metrics.Storage.MetadataTarget == "" {
+		c.Metrics.Storage.MetadataTarget = metricsDefaults.Storage.MetadataTarget
+	}
+	if c.Metrics.Storage.SpaceID == "" {
+		c.Metrics.Storage.SpaceID = metricsDefaults.Storage.SpaceID
+	}
+	if c.Metrics.Storage.DatasetID == "" {
+		c.Metrics.Storage.DatasetID = metricsDefaults.Storage.DatasetID
+	}
+	if c.Metrics.Storage.Frequency == "" {
+		c.Metrics.Storage.Frequency = metricsDefaults.Storage.Frequency
+	}
+	if c.Metrics.Storage.MetadataValidationInterval == 0 {
+		c.Metrics.Storage.MetadataValidationInterval = metricsDefaults.Storage.MetadataValidationInterval
+	}
+	if c.Metrics.Storage.WriteBatchSize == 0 {
+		c.Metrics.Storage.WriteBatchSize = metricsDefaults.Storage.WriteBatchSize
+	}
+	if c.Metrics.Storage.HistoryRetentionDays == 0 {
+		c.Metrics.Storage.HistoryRetentionDays = metricsDefaults.Storage.HistoryRetentionDays
 	}
 }
 

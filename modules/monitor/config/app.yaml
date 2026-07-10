@@ -39,3 +39,23 @@ peer:
 
 alert:
   send_timeout_seconds: 10
+
+metrics:
+  enabled: true
+  stream: MOOX_METRICS
+  topic: moox.metrics.snapshot.reported.v1
+  consumer: monitor_metrics_ingest_v1
+  fetch_batch_size: 64
+  fetch_max_wait: 1s
+  ack_wait: 60s
+  max_ack_pending: 256
+  no_data_intervals: 2
+  storage:
+    access_target: ip://127.0.0.1:20102
+    metadata_target: ip://127.0.0.1:20100
+    space_id: moox_system
+    dataset_id: moox_service_metrics
+    frequency: 30s
+    metadata_validation_interval: 30s
+    write_batch_size: 1000
+    history_retention_days: 30
