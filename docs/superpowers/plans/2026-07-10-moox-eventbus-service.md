@@ -4,7 +4,7 @@
 
 **Goal:** Build `moox-eventbus` as the single MooX-owned NATS JetStream service, define the common `MooxMessage` wire contract, provide a reusable JetStream client package, and migrate Storage, CloudNode, and existing consumers away from private embedded brokers.
 
-**Architecture:** `modules/eventbus` embeds `nats-server/v2` and owns broker lifecycle, Stream/KV reconciliation, health, metrics, and a read-only tRPC management plane. Business processes connect directly to its NATS port through `packages/jetstream`; there is no tRPC/HTTP publish proxy. Every MooX application message is an individually acknowledged protobuf `MooxMessage`, while domain payloads remain opaque and versioned by Topic.
+**Architecture:** `modules/eventbus` embeds `nats-server/v2` and owns broker lifecycle, Stream/KV/declared-consumer reconciliation, health, metrics, and a read-only tRPC management plane. Business processes connect directly to its NATS port through `packages/jetstream`; there is no tRPC/HTTP publish proxy. Every MooX application message is an individually acknowledged protobuf `MooxMessage`, while domain payloads remain opaque and versioned by Topic. Public Host Agent connections use private-CA TLS and role-scoped credentials; Host Agent publication is best effort before PubAck, while EventBus-to-Monitor delivery remains durable and at least once after PubAck.
 
 **Tech Stack:** Go 1.24, tRPC-Go, Protocol Buffers, `github.com/nats-io/nats-server/v2` v2.11.3, `github.com/nats-io/nats.go` v1.47.0, Prometheus client library, existing Admin gateway/SysDeploy conventions, and existing build/release scripts.
 
@@ -19,6 +19,7 @@
 - `go.work` treats each module and shared package as a separate Go module. The new protocol, client package, EventBus service, and generated tRPC package must each be wired explicitly.
 - The existing Storage write path commits PrimaryStore data before publishing its event. This plan replaces that non-atomic gap with a local durable outbox on each PrimaryStore shard and an asynchronous relay to the central EventBus.
 - The existing `docs/superpowers/plans/2026-07-08-storage-view-write-journal-materialization.md` still governs View hot-path materialization. This plan owns the common message protocol, central JetStream topology, Storage outbox, and transport migration; it must preserve that plan's `RowsUpdated` payload semantics.
+- `docs/superpowers/plans/2026-07-10-host-agent-admin-secrets-resource-monitoring.md` is the companion Host Agent plan. It owns the `HostMetric` payload, Linux collectors, Admin `t_secrets` material, Monitor projection, and Skill-driven deployment; this plan owns their EventBus Topic, TLS, ACL, Stream, and durable-consumer prerequisites.
 
 ## Locked Decisions
 
@@ -27,14 +28,20 @@
 | D1 | The internal protocol is solely **MooX Message Protocol v1**; core code, configuration, and documentation use MooX protocol terminology. |
 | D2 | The single common protobuf type is `MooxMessage`; do not introduce an alternate wrapper type. |
 | D3 | `MooxMessage` does not contain `resource_key`, `partition_key`, `correlation_id`, or `causation_id`. Business identifiers stay in domain payloads; transport ordering is a `PublishOption`. |
-| D4 | `topic` is both the concrete NATS Subject and the versioned payload contract. One Topic major version maps to exactly one payload schema. |
-| D5 | Services publish directly to the NATS listener embedded in `moox-eventbus`. There is no generic Publish RPC or HTTP endpoint. |
+| D4 | `topic` is both the concrete NATS Subject and the versioned payload contract. One Topic major version maps to exactly one payload schema. The registry may declare a versioned Topic family pattern for routed subjects, but every `MooxMessage.topic` still equals its concrete publish Subject. |
+| D5 | Services publish directly to the NATS listener embedded in `moox-eventbus` through `packages/jetstream`. There is no generic or Host-Agent-specific Publish RPC/HTTP endpoint; Admin exposes read-only EventBus management only. |
 | D6 | `modules/eventbus` is the only production owner of `nats-server/v2`; Storage and CloudNode stop starting embedded servers. Tests may start an in-process NATS server. |
-| D7 | `modules/eventbus` owns Stream and KV definitions. Business clients may publish and create/bind durable consumers but may not mutate Stream/KV retention configuration. |
-| D8 | Delivery is at least once. Publisher retries reuse `message_id`; consumers remain idempotent even beyond the broker deduplication window. |
+| D7 | `modules/eventbus` owns Stream, KV, and declared durable-consumer definitions. Business clients may publish and bind or create only consumers explicitly allowed by the registry and ACL; they may not mutate Stream/KV retention configuration. |
+| D8 | Messages accepted by JetStream and consumer redelivery are at least once. Retrying publishers reuse `message_id`, and consumers remain idempotent beyond the broker deduplication window. Host Agent is the explicit publisher-side exception: one bounded attempt per sample, no outbox/replay, and drop on failure. |
 | D9 | Batch throughput uses asynchronous publication of multiple independent NATS messages. Do not combine unrelated logical messages into a transport-level batch with one ACK. |
 | D10 | Callback subscriptions are not implemented in V1. `MooxMessage`, durable pull consumers, and the management model must allow a future callback-delivery worker without changing publishers. |
-| D11 | The logical EventBus supports standalone and clustered deployment. Repository defaults use one node/one replica; production may run three `moox-eventbus` instances with three Stream replicas without changing client or message protocols. |
+| D11 | V1 production runs one standalone `moox-eventbus` node with one Stream replica. Configuration keeps a future cluster shape, but non-loopback cluster routes fail validation until dedicated route TLS/auth and per-node certificates are implemented in a later plan; client and message protocols will not need to change. |
+| D12 | Host resource samples use exactly `moox.metrics.host.reported.v1`; it maps only to `trpc.moox.hostagent.HostMetric` and belongs to `MOOX_METRICS`. |
+| D13 | Any NATS listener reachable beyond loopback requires TLS and authentication. Production uses a long-lived private CA, a server certificate containing every advertised public IP plus `127.0.0.1`/`::1` in IP SAN, and normal certificate verification. Plaintext public NATS, insecure verification, TOFU, and server-name overrides are forbidden. |
+| D14 | Host monitoring uses two separate roles: all Host Agents share NATS user `hostagent-publisher` and one `eventbus_token`; Monitor uses `monitor-hostmetrics-consumer` and `monitor_eventbus_token`. Publisher can only publish the fixed Host Topic and receive PubAck; Monitor can only pull/ACK its fixed durable and publish DLQ. Storage, CloudNode, and Factor use the four separate identities and ACLs locked by their migration tasks below. |
+| D15 | Deployment creates all six role tokens and both TLS bundles through the single Admin credential CLI, stores their encrypted values in `t_secrets`, and renders deployment-user-owned runtime files. Normal upgrades reuse them; release archives and checked-in YAML contain no credential or private key. |
+| D16 | Host Agent never persists unsent samples and never replays old samples. Storage's transactional outbox is a separate business guarantee and remains unchanged. |
+| D17 | Production users file also contains isolated `eventbus-internal-admin`, `storage-eventbus`, `cloudnode-eventbus`, and `factor-eventbus` identities. Each has one permanent token in Admin `t_secrets` and only the subjects/JetStream APIs needed by its owner; business services never receive the internal-admin token. |
 
 ## Protocol Contract
 
@@ -82,6 +89,17 @@ message MooxMessage {
   TraceContext trace = 12;
   map<string, string> attributes = 13;
 }
+
+message RejectedMessage {
+  string source_stream = 1;
+  uint64 source_stream_sequence = 2;
+  string source_topic = 3;
+  string source_message_id = 4;
+  string reason_code = 5;
+  string reason = 6;
+  google.protobuf.Timestamp rejected_at = 7;
+  string payload_sha256 = 8;
+}
 ```
 
 ### Field Semantics
@@ -106,10 +124,18 @@ Initial Topic catalog:
 ```text
 moox.storage.time_series.rows_updated.v1
 moox.storage.record.rows_updated.v1
-moox.metrics.snapshot.reported.v1
-moox.cloudnode.job.requested.v1
+moox.metrics.host.reported.v1
+moox.cloudnode.exec.v1.jobitem.s.<space>.pkg.<package>.type.<job_type>
 moox.dlq.message.rejected.v1
 ```
+
+`moox.metrics.host.reported.v1` has kind `MESSAGE_KIND_SNAPSHOT` and payload content type `application/x-protobuf; message=trpc.moox.hostagent.HostMetric`. A different metrics payload uses a different versioned Topic; it must not reuse the Host Topic.
+
+`moox.storage.time_series.rows_updated.v1` and `moox.storage.record.rows_updated.v1` have kind `MESSAGE_KIND_EVENT` and payload types `trpc.moox.storage.TimeSeriesRowsUpdated` and `trpc.moox.storage.RecordRowsUpdated`. View Builder and Factor bind independent predeclared durables; they do not create consumers at startup. V1 标准部署不启动独立 Archive consumer；以后启用时必须先在 EventBus registry 增加两个 exact durables，不能复用 View Builder durable。
+
+`moox.dlq.message.rejected.v1` has kind `MESSAGE_KIND_EVENT` and payload content type `application/x-protobuf; message=trpc.moox.message.RejectedMessage`. Its bounded `reason` is sanitized, and it records only the source payload SHA-256 rather than copying the rejected raw payload.
+
+The `moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*` Topic family has kind `MESSAGE_KIND_COMMAND` and one `JobItem` payload schema. Space/package/job-type tokens remain in the concrete Subject so WorkQueue consumers keep non-overlapping exact filters and durable names.
 
 Compatible protobuf field additions retain the Topic version. Field renumbering, meaning changes, or incompatible payload replacement require a new `.v2` Topic and a parallel migration period.
 
@@ -119,7 +145,7 @@ Compatible protobuf field additions retain the Topic version. Field renumbering,
 |---|---|---|---|
 | `MOOX_STORAGE` | `moox.storage.>` | Limits/File/DiscardOld | 72h, 20 GiB |
 | `MOOX_METRICS` | `moox.metrics.>` | Limits/File/DiscardOld | 24h, 10 GiB |
-| `MOOX_CLOUDNODE_EXEC` | `moox.cloudnode.job.requested.v1` | WorkQueue/File/DiscardOld | 72h, 10 GiB |
+| `MOOX_CLOUDNODE_EXEC` | `moox.cloudnode.exec.v1.>` | WorkQueue/File/DiscardOld | 72h, 10 GiB |
 | `MOOX_DLQ` | `moox.dlq.>` | Limits/File/DiscardOld | 30d, 2 GiB |
 
 `MOOX_CLOUDNODE_JOB_ACTIVE` remains a JetStream KV bucket with one value per key and a configurable 48h TTL. These defaults are explicit YAML values, not hidden constants, and production sizing is changed through EventBus configuration only.
@@ -154,6 +180,7 @@ Compatible protobuf field additions retain the Topic version. Field renumbering,
 ### Product And Operations
 
 - Modify `modules/admin/proto/sysdeploy_service.proto`, `modules/admin/internal/service/sysdeploy/defaults.go`, `modules/admin/internal/service/sysdeploy/defaults_test.go`, `scripts/build.sh`, `scripts/release.sh`, `scripts/deploy-moox.sh`, root `Makefile`, `go.work`, `modules/README.md`, and root `README.md`.
+- Modify Admin EventBus credential provisioning from the companion Host Agent plan and add `skills/moox/scripts/eventbus-credentials.sh`; release artifacts remain credential-free.
 - Add deployment regression coverage for `moox-eventbus`, its data directory, and disabled-component preservation.
 
 ## Delivery Order
@@ -166,6 +193,8 @@ Compatible protobuf field additions retain the Topic version. Field renumbering,
 | M4 Storage migration | 8-9 | PrimaryStore commits data plus outbox atomically and relays versioned Storage messages asynchronously to the central EventBus. |
 | M5 Remaining migration | 10-11 | CloudNode and Factor use the central EventBus; production modules contain no embedded NATS server. |
 | M6 Verification | 12 | Failure, restart, load, dedupe, and deployment checks pass end to end. |
+
+Cross-plan order is fixed: EventBus Tasks 1-6 -> Host companion Tasks 2-3 -> EventBus Task 7 -> Host companion Task 4 gate. EventBus Tasks 1-6 own all EventBus/shared-package source and do not depend on Host credential code. Task 7 has a hard dependency only on Host Task 3, which is the single owner of the Admin credential DAO/service/CLI, all six role-token records, and both TLS bundles; Task 7 invokes it and must not create a second provisioning path. EventBus Tasks 8-12 then continue from Task 7 under this plan's ownership.
 
 ---
 
@@ -182,7 +211,7 @@ Compatible protobuf field additions retain the Topic version. Field renumbering,
 
 - [ ] **Step 1: Write the descriptor contract test**
 
-Create a test that loads `(&messagepb.MooxMessage{}).ProtoReflect().Descriptor()` and asserts field numbers/names, `MessageKind` values, and the absence of `resource_key`, `partition_key`, `correlation_id`, and `causation_id`.
+Create a test that loads `(&messagepb.MooxMessage{}).ProtoReflect().Descriptor()` and asserts field numbers/names, `MessageKind` values, and the absence of `resource_key`, `partition_key`, `correlation_id`, and `causation_id`. Add a second descriptor assertion for all eight `RejectedMessage` fields and verify it has no raw-payload field.
 
 ```go
 func TestMooxMessageContract(t *testing.T) {
@@ -203,7 +232,7 @@ func TestMooxMessageContract(t *testing.T) {
 
 - [ ] **Step 2: Define the complete protobuf contract**
 
-Write `moox_message.proto` exactly as shown in **Protocol Contract**. Do not add `google.protobuf.Any`; the EventBus treats domain payloads as opaque bytes.
+Write `moox_message.proto` exactly as shown in **Protocol Contract**, including `RejectedMessage`. Do not add `google.protobuf.Any`; the EventBus treats domain payloads as opaque bytes.
 
 - [ ] **Step 3: Add generation and workspace wiring**
 
@@ -239,10 +268,13 @@ git commit -m "feat(eventbus): define moox message protocol"
 - Create: `packages/jetstream/publisher.go`
 - Create: `packages/jetstream/consumer.go`
 - Create: `packages/jetstream/delivery.go`
+- Create: `packages/jetstream/kv.go`
 - Create: `packages/jetstream/errors.go`
 - Create: `packages/jetstream/client_test.go`
 - Create: `packages/jetstream/publisher_test.go`
 - Create: `packages/jetstream/consumer_test.go`
+- Create: `packages/jetstream/delivery_test.go`
+- Create: `packages/jetstream/kv_test.go`
 - Modify: `go.work`
 
 - [ ] **Step 1: Write validation and codec tests**
@@ -253,18 +285,19 @@ Test rejection of protocol version zero, empty IDs, invalid Topics, Topic/Subjec
 
 ```go
 type Config struct {
-    URLs           []string
-    Name           string
-    Username       string
-    Password       string
-    Credentials    string
-    TLSCAFile      string
-    TLSCertFile    string
-    TLSKeyFile     string
-    ConnectTimeout time.Duration
-    ReconnectWait  time.Duration
-    MaxReconnects  int
-    MaxPayload     int
+    URLs                 []string
+    Name                 string
+    Username             string
+    Password             string
+    Credentials          string
+    TLSCAFile            string
+    TLSCertFile          string
+    TLSKeyFile           string
+    ConnectTimeout       time.Duration
+    ReconnectWait        time.Duration
+    MaxReconnects        int
+    ReconnectBufferBytes int
+    MaxPayload           int
 }
 
 type PublishOption func(*publishOptions)
@@ -277,14 +310,41 @@ type PublishAck struct {
     Duplicate bool
 }
 
+type ConsumerRef struct {
+    Stream  string
+    Durable string
+}
+
+type KVEntry struct {
+    Value    []byte
+    Revision uint64
+}
+
+type KVStore interface {
+    Create(ctx context.Context, key string, value []byte) (uint64, error)
+    Get(ctx context.Context, key string) (*KVEntry, error)
+    Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error)
+    Keys(ctx context.Context) ([]string, error)
+}
+
 func Connect(ctx context.Context, cfg Config) (*Client, error)
 func (c *Client) Publish(ctx context.Context, msg *messagepb.MooxMessage, opts ...PublishOption) (*PublishAck, error)
 func (c *Client) PublishBatch(ctx context.Context, messages []*messagepb.MooxMessage, opts ...PublishOption) []PublishResult
-func (c *Client) NewPullConsumer(ctx context.Context, cfg ConsumerConfig) (*PullConsumer, error)
+func (c *Client) BindPullConsumer(ctx context.Context, ref ConsumerRef) (*PullConsumer, error)
+func (c *Client) EnsurePullConsumer(ctx context.Context, cfg ConsumerConfig) (*PullConsumer, error)
+func (c *Client) BindKV(ctx context.Context, bucket string) (KVStore, error)
+func (c *Client) AckToken(ctx context.Context, token string) error
+func (c *Client) NakToken(ctx context.Context, token string, delay time.Duration) error
+func (c *Client) InProgressToken(ctx context.Context, token string) error
+func (c *Client) TermToken(ctx context.Context, token string) error
 func (c *Client) Close() error
 ```
 
 `PublishBatch` must issue independent async JetStream publications and return one result per input message in input order. It must not create a transport batch with one ACK.
+
+`BindPullConsumer` is strictly bind-only: it returns a typed not-found/config-mismatch error and never creates or updates a consumer. Monitor uses this method for `monitor_hostmetrics_ingest_v1`, so its token needs no consumer-create permission. `EnsurePullConsumer` is reserved for callers whose registry and ACL explicitly permit consumer creation. `BindKV` only opens an existing bucket and exposes the four operations CloudNode currently needs; it never creates or reconfigures KV.
+
+Exactly one authentication form is configured. Host Agent uses username `hostagent-publisher`; Monitor uses `monitor-hostmetrics-consumer`. Their permanent tokens are passed as `Password` from a `0600` credential file, never through command arguments. Non-loopback URLs require `tls://` plus `TLSCAFile`; certificate verification cannot be disabled. Host Agent sets `ReconnectBufferBytes=0`, so disconnected samples cannot become a hidden replay queue.
 
 - [ ] **Step 3: Implement message transport mapping**
 
@@ -312,6 +372,7 @@ type Delivery struct {
     StreamSeq    uint64
     ConsumerSeq  uint64
     DeliveryCount uint64
+    PersistentToken string
 }
 
 func (d *Delivery) Ack(ctx context.Context) error
@@ -322,11 +383,17 @@ func (d *Delivery) Term(ctx context.Context) error
 
 `Fetch` returns deliveries without auto-ACK. Domain code decides when durable work has completed.
 
-- [ ] **Step 5: Add integration tests with a test-only embedded server**
+`PersistentToken` is an opaque, bounded encoding of the broker ACK subject plus parsed stream/consumer identity. CloudNode may persist it in its existing active-job KV and call the client-level token methods after an RPC round trip or process reconnect. Token methods must parse strictly, reject a stream/consumer mismatch inside the encoded value, reject non-`$JS.ACK` subjects and oversize/control-character input, and then rely on the role ACL for final authorization. Normal in-process consumers use the `Delivery` methods instead.
 
-Cover PubAck, `Nats-Msg-Id` duplicate detection, redelivery after NAK, redelivery after `AckWait`, `AckSync`, reconnect, malformed body rejection, and batch partial failure. The embedded NATS dependency belongs in test imports only.
+- [ ] **Step 5: Implement bind-only KV and restart-safe token control**
 
-- [ ] **Step 6: Run tests and commit**
+Map not-found, key-exists, revision-conflict, timeout, and permission errors to typed package errors; copy all returned byte slices. Test KV Create/Get/Update/Keys CAS behavior. Fetch a message, persist `PersistentToken`, close/reconnect the client, ACK through `AckToken`, and prove the message is not redelivered; repeat NAK, InProgress, Term, malformed token, wrong stream/consumer, and unauthorized role cases.
+
+- [ ] **Step 6: Add integration tests with a test-only embedded server**
+
+Cover PubAck, `Nats-Msg-Id` duplicate detection, redelivery after NAK, redelivery after `AckWait`, `AckSync`, reconnect, disabled reconnect buffering, malformed body rejection, and batch partial failure. Prove a token without consumer-create permission can `BindPullConsumer`/fetch/ACK an existing durable and cannot create a missing one. Add private-CA tests for correct public IP SAN, wrong IP SAN, unknown CA, and expired certificate. The embedded NATS dependency belongs in test imports only.
+
+- [ ] **Step 7: Run tests and commit**
 
 ```bash
 go test -count=1 ./packages/messagepb ./packages/jetstream
@@ -390,14 +457,15 @@ git commit -m "feat(eventbus): define management protocol"
 
 - [ ] **Step 1: Write configuration tests**
 
-Cover defaults, YAML overrides, environment overrides, duplicate Stream names, overlapping exact Topics, invalid Topic versions, Stream subject coverage, unsafe root StoreDir, incomplete TLS configuration, and authentication enabled without credentials.
+Cover defaults, YAML overrides, environment overrides, duplicate Stream names, overlapping exact Topics/Topic families, invalid Topic versions, routed family token counts, Stream subject coverage, unsafe root StoreDir, incomplete TLS configuration, and authentication enabled without credentials. Assert the complete concrete-consumer set is exactly two Storage View Builder durables, `factor_calc`, and `monitor_hostmetrics_ingest_v1`, plus the CloudNode template. Add fail-closed cases for undeclared durable bindings, non-loopback bind without TLS/auth, users file not owned by the process or not `0600`, symlinks, wrong/expired IP SAN, duplicate roles, and ACLs broader than their fixed contract.
 
 - [ ] **Step 2: Add explicit default configuration**
 
 ```yaml
 broker:
-  host: 0.0.0.0
+  host: 127.0.0.1
   port: 4222
+  client_advertise: ""
   server_name: eventbus-dev-1
   store_dir: ./data/eventbus/jetstream
   startup_timeout: 10s
@@ -405,21 +473,24 @@ broker:
   cluster:
     enabled: false
     name: MOOX_EVENTBUS
-    host: 0.0.0.0
+    host: 127.0.0.1
     port: 6222
     routes: []
   auth:
     enabled: false
-    username: ""
-    password: ""
+    users_file: ""
   tls:
     enabled: false
     cert_file: ""
     key_file: ""
     ca_file: ""
 
+internal_client:
+  credential_file: ""
+  tls_ca_file: ""
+
 health:
-  addr: ":11419"
+  addr: "127.0.0.1:11419"
 
 streams:
   - name: MOOX_STORAGE
@@ -435,7 +506,7 @@ streams:
     max_age: 24h
     max_bytes: 10737418240
   - name: MOOX_CLOUDNODE_EXEC
-    subjects: ["moox.cloudnode.job.requested.v1"]
+    subjects: ["moox.cloudnode.exec.v1.>"]
     retention: work_queue
     replicas: 1
     max_age: 72h
@@ -448,11 +519,106 @@ streams:
     max_bytes: 2147483648
 ```
 
-Add the Topic registry and CloudNode KV bucket in the same file with explicit values.
+Add the Topic registry, declared durable consumers, and CloudNode KV bucket in the same file with explicit values. At minimum:
+
+```yaml
+topics:
+  - topic: moox.storage.time_series.rows_updated.v1
+    stream: MOOX_STORAGE
+    kind: event
+    payload_content_type: application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated
+    payload_version: 1
+    enabled: true
+  - topic: moox.storage.record.rows_updated.v1
+    stream: MOOX_STORAGE
+    kind: event
+    payload_content_type: application/x-protobuf; message=trpc.moox.storage.RecordRowsUpdated
+    payload_version: 1
+    enabled: true
+  - topic: moox.metrics.host.reported.v1
+    stream: MOOX_METRICS
+    kind: snapshot
+    payload_content_type: application/x-protobuf; message=trpc.moox.hostagent.HostMetric
+    payload_version: 1
+    enabled: true
+  - topic: moox.dlq.message.rejected.v1
+    stream: MOOX_DLQ
+    kind: event
+    payload_content_type: application/x-protobuf; message=trpc.moox.message.RejectedMessage
+    payload_version: 1
+    enabled: true
+
+topic_families:
+  - pattern: moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*
+    stream: MOOX_CLOUDNODE_EXEC
+    kind: command
+    payload_content_type: application/x-protobuf; message=trpc.moox.cloudnode.JobItem
+    payload_version: 1
+    enabled: true
+
+consumers:
+  - stream: MOOX_STORAGE
+    durable: storage_view_builder_time_series_rows_updated_v1
+    filter_subject: moox.storage.time_series.rows_updated.v1
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 120s
+    max_ack_pending: 128
+    max_deliver: -1
+  - stream: MOOX_STORAGE
+    durable: storage_view_builder_record_rows_updated_v1
+    filter_subject: moox.storage.record.rows_updated.v1
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 120s
+    max_ack_pending: 128
+    max_deliver: -1
+  - stream: MOOX_STORAGE
+    durable: factor_calc
+    filter_subject: moox.storage.time_series.rows_updated.v1
+    ack_policy: explicit
+    deliver_policy: new
+    replay_policy: instant
+    ack_wait: 60s
+    max_ack_pending: 1000
+    max_deliver: 5
+  - stream: MOOX_METRICS
+    durable: monitor_hostmetrics_ingest_v1
+    filter_subject: moox.metrics.host.reported.v1
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 60s
+    max_ack_pending: 256
+    max_deliver: -1
+
+consumer_templates:
+  - stream: MOOX_CLOUDNODE_EXEC
+    durable_prefix: cn_exec_
+    filter_pattern: moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 60s
+    max_ack_pending: 256
+    max_deliver: -1
+```
+
+`storage-eventbus` may publish only the two exact Storage Topics, receive PubAck replies, and pull/ACK only the two `storage_view_builder_*` durables above. `factor-eventbus` may pull/ACK only `factor_calc`. Both are bind-only and have no consumer create/update/delete, Stream, KV, Host, CloudNode, or DLQ permission. `eventbus-internal-admin` remains the only identity that reconciles concrete declared consumers.
+
+`cloudnode-eventbus` is the one deliberate wider business role: it may publish `moox.cloudnode.exec.v1.>`, receive PubAck, manage consumers only in `MOOX_CLOUDNODE_EXEC`, pull/ACK those consumers, and access only `MOOX_CLOUDNODE_JOB_ACTIVE` KV. Static NATS users-file ACL can isolate the Stream/bucket but cannot inspect a legacy consumer-create request body or reliably enforce the `cn_exec_` prefix/filter as a security boundary. Therefore `packages/jetstream.EnsurePullConsumer` still validates the declared template to prevent application bugs, while the documented security boundary is the entire CloudNode Stream/KV, not one route. Tests must prove it cannot access Storage, Metrics, DLQ, other Streams/KV, or global JetStream management.
+
+NATS ACL 生成器必须把“pull/ACK”展开为 exact consumer INFO/NEXT/ACK API subjects；不能发放 `$JS.API.CONSUMER.>` 或 `$JS.ACK.MOOX_STORAGE.>`。`storage-eventbus` 只获得两个 View Builder durable 的 INFO/NEXT/ACK subjects，`factor-eventbus` 只获得 `factor_calc` 的 INFO/NEXT/ACK subjects；两者都只 subscribe 自己请求使用的 `_INBOX.>` replies。
+
+Checked-in broker, cluster, and health defaults stay loopback-only. Any client bind/advertise address outside loopback requires `auth.enabled`, `tls.enabled`, a `0600` users file, cert/key/CA, and a server certificate containing the advertised IP SAN. Production rendering sets `host: 0.0.0.0`, `client_advertise: <public-ip>:4222`, `internal_client.credential_file: $HOME/.config/moox/eventbus/internal-admin.yaml`, and the deployment CA path; there is no `allow_insecure` escape hatch. When broker auth is enabled, a missing/unsafe internal-client file fails startup before reconciliation. V1 rejects non-loopback cluster routes.
 
 - [ ] **Step 3: Implement broker ownership**
 
-`broker.Server` creates `natsserver.Options`, starts the server, waits for `ReadyForConnections`, exposes a local client URL, and shuts down only after clients and management workers have drained. When clustering is enabled, require a unique `server_name`, configure cluster host/port/routes, and reject Stream replica counts greater than the reachable cluster size. Do not enable the NATS HTTP monitoring port; MooX exposes curated status through its own health/metrics server.
+`broker.Server` creates `natsserver.Options`, starts the server, waits for `ReadyForConnections`, exposes a local client URL, and shuts down only after clients and management workers have drained. It loads the deployment-rendered users file and requires `eventbus-internal-admin`, `hostagent-publisher`, `monitor-hostmetrics-consumer`, `storage-eventbus`, `cloudnode-eventbus`, and `factor-eventbus`. The embedded reconciliation client alone uses `eventbus-internal-admin`; business services never receive it. Each other identity gets the exact ACL defined by its owning migration task. V1 rejects non-loopback cluster routes and Stream replicas greater than one. Do not enable the NATS HTTP monitoring port; MooX exposes curated status through its own loopback health/metrics server.
+
+The Host publisher is allowed only the exact Host Topic and its `_INBOX.>` PubAck replies. Monitor is allowed only fixed durable info/pull/ACK requests, its `_INBOX.>` replies, and `moox.dlq.message.rejected.v1`. Neither role receives `$JS.API.>` or `moox.>` wildcard management access. Start a real test broker and prove allow/deny cases for all six identities. Include Storage publication plus its two bind-only durables, Factor's one bind-only durable, the Host publisher, Monitor's durable/DLQ, and CloudNode's domain-scoped Stream/KV permissions. Prove that only internal admin can reconcile Streams/KV/concrete declared consumers outside the explicitly allowed CloudNode consumer lifecycle, and that cross-role Topic, durable, KV, and management access is denied.
 
 - [ ] **Step 4: Add tRPC service configuration**
 
@@ -475,19 +641,22 @@ git commit -m "feat(eventbus): own embedded jetstream lifecycle"
 - Create: `modules/eventbus/internal/registry/stream.go`
 - Create: `modules/eventbus/internal/registry/kv.go`
 - Create: `modules/eventbus/internal/registry/topic.go`
+- Create: `modules/eventbus/internal/registry/consumer.go`
 - Create: `modules/eventbus/internal/registry/registry_test.go`
 
 - [ ] **Step 1: Write reconciliation tests**
 
-Start a test broker and verify create, no-op restart, safe limit updates, rejection of subject removal with stored messages, rejection of retention-policy changes, KV TTL reconciliation, Topic-to-Stream validation, and preservation of consumer state.
+Start a test broker and verify create, no-op restart, safe limit updates, rejection of subject removal with stored messages, rejection of retention-policy changes, KV TTL reconciliation, exact Topic/Topic-family-to-Stream validation, declared durable-consumer/template reconciliation, and preservation of consumer state. Assert all four concrete consumers exactly match the registry, including Factor's `deliver_policy=new`/`max_deliver=5` and Monitor's `deliver_policy=all`/`max_deliver=-1`. Assert the Host Topic is covered only by `MOOX_METRICS`, its payload type exactly matches `HostMetric`, and CloudNode route filters generated from different space/package/type tuples never overlap.
 
 - [ ] **Step 2: Implement safe reconciliation**
 
 Allow updates to `MaxAge`, `MaxBytes`, `MaxMsgs`, replicas, and description. Reject automatic changes to retention kind, storage kind, and subject removal when they can orphan existing messages. Return an error before readiness rather than silently accepting partial configuration.
 
+For declared durable consumers, `stream`, durable name, filter subject, configured deliver policy (`all` except Factor's explicit `new`), `replay_policy=instant`, and `ack_policy=explicit` are immutable; a mismatch fails readiness and never deletes/recreates the consumer. `ack_wait`, `max_ack_pending`, and the configured `max_deliver` may update in place only when NATS confirms the existing delivery position is preserved. No implicit finite `max_deliver` is allowed for Monitor host metrics.
+
 - [ ] **Step 3: Make readiness depend on reconciliation**
 
-The service reports ready only after all configured Streams and KV buckets exist and every enabled Topic is covered by exactly one Stream.
+The service reports ready only after all configured Streams, KV buckets, and declared durable consumers exist and every enabled exact Topic/family is covered by exactly one Stream. Consumer templates are validated but create no consumer until an authorized business client supplies a concrete non-overlapping route.
 
 - [ ] **Step 4: Run and commit**
 
@@ -554,33 +723,43 @@ git commit -m "feat(eventbus): expose management and health surfaces"
 - Regenerate: `modules/admin/proto/admingen`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
+- Use (created by companion Host Agent Task 3): `modules/admin/cmd/cli/eventbus_credentials.go`
+- Create: `skills/moox/scripts/eventbus-credentials.sh`
 - Modify: `modules/README.md`
 - Modify: `README.md`
 - Create: `scripts/test-deploy-moox-eventbus.sh`
 
 - [ ] **Step 1: Add failing deploy-package assertions**
 
-The script must assert the presence of `bin/moox-eventbus`, `eventbus/config/app.yaml`, `data/eventbus/jetstream`, `logs/eventbus`, start-before-Storage ordering, stop-after-consumers ordering, and preservation under `--no-eventbus`.
+The script must assert the presence of `bin/moox-eventbus`, `eventbus/config/app.yaml`, `data/eventbus/jetstream`, `logs/eventbus`, start-before-Storage ordering, stop-after-consumers ordering, and preservation under `--no-eventbus`. It must also scan release/stage/process arguments/logs for token and private-key leakage.
 
 - [ ] **Step 2: Wire build and release**
 
-Add `eventbus` to `scripts/build.sh`, release directories, binary copy, configuration copy, and the all-components build. Do not package JetStream runtime data.
+Add `eventbus` to `scripts/build.sh`, release directories, binary copy, configuration copy, and the all-components build. Do not package JetStream runtime data, users files, Admin encryption keys, tokens, CA private keys, or server private keys.
 
-- [ ] **Step 3: Wire deployment lifecycle**
+- [ ] **Step 3: Provision EventBus security material before startup**
 
-Add `--no-eventbus`, stage path rewrites for `store_dir`, readiness waiting on `/readyz`, and start EventBus before Storage/CloudNode/Factor/Monitor. Stop publishers/consumers before stopping EventBus.
+On a fresh install, invoke the companion credential CLI under `umask 077` to generate the Admin encryption key, a 10-year private CA, a 5-year server certificate with the configured public IP plus `127.0.0.1` and `::1` in IP SAN, and independent 256-bit tokens for `eventbus-internal-admin`, `hostagent-publisher`, `monitor-hostmetrics-consumer`, `storage-eventbus`, `cloudnode-eventbus`, and `factor-eventbus`. The CLI stores all token values and both certificate/private-key bundles encrypted in Admin `t_secrets` and exports runtime files with mode `0600`; this task never prints or regenerates values itself.
 
-- [ ] **Step 4: Register the service in SysDeploy**
+The six client outputs are exactly `$HOME/.config/moox/eventbus/internal-admin.yaml`, `$HOME/.config/moox/credentials/hostagent-publisher.yaml`, `$HOME/.config/moox/monitor/eventbus.yaml`, `$HOME/.config/moox/storage/eventbus.yaml`, `$HOME/.config/moox/cloudnode/eventbus.yaml`, and `$HOME/.config/moox/factor/eventbus.yaml`. The broker separately reads `$HOME/.config/moox/eventbus/users.yaml`; TLS files live under `$HOME/.config/moox/eventbus/tls/`. EventBus reads internal-admin, Monitor/Storage/CloudNode/Factor read only their own file, and the Host Agent file is only an input to the Skill's remote deploy. Formats and token field names are owned by Host plan section 9.1.
 
-Add the deployment key `eventbus`, service name `trpc.moox.eventbus.EventBusMgr`, and Admin gateway route `/api/admin/eventbus/{method}` using the existing generated deployment model.
+Normal deployments reuse all material. Existing Admin DB plus a missing encryption key fails closed. A changed public IP explicitly reissues only the server certificate under the same CA. Token or CA rotation requires a dedicated maintenance command and confirmation; it never happens during ordinary upgrade.
 
-- [ ] **Step 5: Verify and commit**
+- [ ] **Step 4: Wire deployment lifecycle**
+
+Add `--eventbus-public-ip`, `--no-eventbus`, stage path rewrites for `store_dir`, readiness waiting on `/readyz`, and this fixed order: Admin schema/encryption key ready -> reconcile `t_secrets` -> atomically render the six exact role files, broker users file, and TLS material -> render production broker config (`host: 0.0.0.0`, `client_advertise: <public-ip>:4222`, auth/TLS enabled and absolute runtime paths) -> start EventBus -> wait ready -> start Storage and then dependent consumers. Host companion Task 12 inserts its metadata apply/schema gate before Monitor host ingestion. Stop publishers/consumers before stopping EventBus. Reset and `--no-eventbus` preserve JetStream data and all credential files.
+
+- [ ] **Step 5: Register the service in SysDeploy**
+
+Add the deployment key `eventbus`, service name `trpc.moox.eventbus.EventBusMgr`, and Admin gateway route `/api/admin/eventbus/{method}` using the existing generated deployment model. The gateway allowlist contains only read-only management methods; there is no Publish route.
+
+- [ ] **Step 6: Verify and commit**
 
 ```bash
 ./scripts/build.sh eventbus
 ./scripts/test-deploy-moox-eventbus.sh
 go test -count=1 ./modules/admin/...
-git add scripts modules/admin modules/README.md README.md
+git add scripts skills/moox/scripts/eventbus-credentials.sh modules/admin modules/README.md README.md
 git commit -m "feat(eventbus): package and deploy eventbus service"
 ```
 
@@ -589,6 +768,7 @@ git commit -m "feat(eventbus): package and deploy eventbus service"
 ### Task 8: Migrate Storage Messages To `MooxMessage`
 
 **Files:**
+- Use (declared by Task 4): `modules/eventbus/config/app.yaml`
 - Modify: `modules/storage/proto/message.proto`
 - Modify: `modules/storage/proto/store.proto`
 - Regenerate: `modules/storage/proto/gen`
@@ -614,7 +794,7 @@ Add `bytes outbox_message = 4` to `WritePrimaryRowsReq`. Access constructs one s
 
 - [ ] **Step 3: Replace the private transport implementation**
 
-Keep the domain `eventbus.Publisher/Subscriber` interfaces but implement them using `packages/jetstream`. Decode and validate `MooxMessage`, then unmarshal its domain payload. Remove Stream mutation from Storage startup because `moox-eventbus` owns `MOOX_STORAGE`.
+Keep the domain `eventbus.Publisher/Subscriber` interfaces but implement them using `packages/jetstream`. Decode and validate `MooxMessage`, then unmarshal its domain payload. Remove Stream/consumer mutation from Storage startup because `moox-eventbus` owns `MOOX_STORAGE` and the two View Builder durables. Storage must use `BindPullConsumer`, never `EnsurePullConsumer`.
 
 - [ ] **Step 4: Change configuration to the central endpoint**
 
@@ -623,17 +803,19 @@ Replace `embedded` settings with shared client configuration:
 ```yaml
 eventbus:
   type: jetstream
-  urls: ["nats://127.0.0.1:4222"]
+  urls: ["tls://127.0.0.1:4222"]
+  credential_file: "$HOME/.config/moox/storage/eventbus.yaml"
+  tls_ca_file: "$HOME/.config/moox/eventbus/tls/ca.pem"
   stream_name: MOOX_STORAGE
   subject_prefix: moox.storage
-  consumer_name: storage_view
+  consumer_name: storage_view_builder
 ```
 
-Retain `type: memory` only for explicitly single-process tests; production split-role configs use JetStream.
+Retain `type: memory` only for explicitly single-process tests; production split-role configs use JetStream. `storage-access` is publisher-only and has no `consumer_name`; `storage-view-builder` derives exactly `storage_view_builder_time_series_rows_updated_v1` and `storage_view_builder_record_rows_updated_v1`; `storage-view-query` and `storage-view-index` do not initialize EventBus. V1 standard deployment rejects an independent `archive` role until its two exact durables are added to the EventBus registry.
 
 - [ ] **Step 5: Verify message interoperability**
 
-Publish through Storage Access, fetch through a durable test consumer, assert Topic/body/content type/producer identity, and confirm duplicate delivery does not duplicate View effects.
+Publish through Storage Access, bind both predeclared View Builder durables, assert Topic/body/content type/producer identity, and confirm duplicate delivery does not duplicate View effects. Against a real role-authenticated broker, prove `storage-eventbus` can publish/bind/pull/ACK only those exact resources and cannot create/update/delete a consumer or bind `factor_calc`.
 
 - [ ] **Step 6: Run and commit**
 
@@ -713,9 +895,17 @@ git commit -m "feat(storage): relay durable outbox to eventbus"
 ### Task 10: Migrate CloudNode To The Central EventBus
 
 **Files:**
+- Use (created by Task 2): `packages/jetstream/delivery.go`
+- Use (created by Task 2): `packages/jetstream/kv.go`
+- Modify: `modules/cloudnode/internal/jobqueue/queue.go`
 - Modify: `modules/cloudnode/internal/jobqueue/jetstream_client.go`
 - Modify: `modules/cloudnode/internal/jobqueue/jetstream_queue.go`
+- Modify: `modules/cloudnode/internal/jobqueue/payload.go`
 - Modify: `modules/cloudnode/internal/jobstate/kv_store.go`
+- Modify: `modules/cloudnode/internal/jobstate/types.go`
+- Modify: `modules/cloudnode/internal/rpc/job_item.go`
+- Modify: `modules/cloudnode/internal/bootstrap/bootstrap.go`
+- Modify: `modules/cloudnode/internal/bootstrap/bootstrap_test.go`
 - Delete: `modules/cloudnode/internal/jobqueue/embedded.go`
 - Modify: `modules/cloudnode/internal/config/config.go`
 - Modify: `modules/cloudnode/config/app.yaml`
@@ -724,20 +914,28 @@ git commit -m "feat(storage): relay durable outbox to eventbus"
 
 - [ ] **Step 1: Write central-runtime compatibility tests**
 
-Create `MOOX_CLOUDNODE_EXEC` and the active KV bucket through the EventBus registry fixture, then verify publish, poll, report/ACK, stale lease, redelivery, deduplication, and restart behavior through `packages/jetstream`.
+Create `MOOX_CLOUDNODE_EXEC` and the active KV bucket through the EventBus registry fixture, then verify publish, poll, report/ACK, stale lease, redelivery, deduplication, and restart behavior through `packages/jetstream`. The restart case must persist a delivery token in job state, close/reconnect the shared client, then ACK/NAK/Term from `ReportJobItemStatus` without retaining an in-memory NATS message.
 
 - [ ] **Step 2: Wrap job payloads in `MooxMessage`**
 
-Use Topic `moox.cloudnode.job.requested.v1`, Kind `COMMAND`, Job ID as the stable message ID, the existing `JobItem` protobuf as payload, and `space_id` from the job. Preserve current attempt/lease checks above the transport.
+Preserve the current route naming contract:
+
+```text
+moox.cloudnode.exec.v1.jobitem.s.<space>.pkg.<package>.type.<job_type>
+```
+
+Set `MooxMessage.topic` to the exact routed Subject, Kind to `COMMAND`, Job ID as the stable message ID, the existing `JobItem` protobuf as payload, and `space_id` from the job. Preserve current attempt/lease checks above the transport. Add a Topic-family registry entry that binds the full pattern to the one `JobItem` schema. Replace persisted raw `AckSubject` with the shared package's bounded opaque `PersistentToken`; `ExecutionQueue` exposes token-based ACK/NAK/InProgress/Term without importing `nats.go`.
 
 - [ ] **Step 3: Remove embedded-server ownership**
 
-Replace `nats_url` plus `embedded` with a shared list of EventBus URLs and credentials/TLS fields. CloudNode may ensure/bind its durable consumer but must not create/update the Stream or KV bucket.
+Replace `nats_url` plus `embedded` with `tls://127.0.0.1:4222`, `$HOME/.config/moox/cloudnode/eventbus.yaml`, and the deployment CA path. Remove `EnsureStreams`; CloudNode binds the precreated KV through `BindKV` and adapts `jobstate.KVStore` to the shared `KVStore` Create/Get/Update/Keys contract. It may ensure consumers only through the validated `cn_exec_` template and must not create/update the Stream or KV bucket.
+
+The users-file ACL intentionally grants this role consumer lifecycle only inside `MOOX_CLOUDNODE_EXEC` and KV operations only for `MOOX_CLOUDNODE_JOB_ACTIVE`; prefix/filter validation is an application correctness check, not a broker security boundary. Real-broker tests allow valid CloudNode route consumers but deny every Storage/Metrics/DLQ subject, other Stream/KV, and global management API.
 
 - [ ] **Step 4: Verify and commit**
 
 ```bash
-go test -count=1 ./modules/cloudnode/internal/jobqueue ./modules/cloudnode/internal/jobstate ./modules/cloudnode/internal/bootstrap
+go test -count=1 ./packages/jetstream ./modules/cloudnode/internal/jobqueue ./modules/cloudnode/internal/jobstate ./modules/cloudnode/internal/rpc ./modules/cloudnode/internal/bootstrap
 git add modules/cloudnode
 git commit -m "refactor(cloudnode): use central moox eventbus"
 ```
@@ -747,8 +945,10 @@ git commit -m "refactor(cloudnode): use central moox eventbus"
 ### Task 11: Migrate Factor And Remove Private NATS Implementations
 
 **Files:**
+- Use (declared by Task 4): `modules/eventbus/config/app.yaml`
 - Modify: `modules/factor/internal/trigger/nats.go`
-- Modify: `modules/factor/internal/config/config.go`
+- Modify: `modules/factor/internal/app/control/config.go`
+- Modify: `modules/factor/internal/app/control/bootstrap.go`
 - Modify: `modules/factor/config/app.yaml`
 - Modify: `modules/factor/go.mod`
 - Delete: `modules/storage/internal/bootstrap/eventbus/embedded_nats.go`
@@ -758,7 +958,7 @@ git commit -m "refactor(cloudnode): use central moox eventbus"
 
 - [ ] **Step 1: Migrate Factor's Storage consumer**
 
-Bind a durable pull consumer to the relevant `moox.storage.>` Topics, decode `MooxMessage`, validate payload content type, and retain the current idempotent factor-run trigger behavior.
+Load `$HOME/.config/moox/factor/eventbus.yaml` and use `BindPullConsumer` for the predeclared `MOOX_STORAGE/factor_calc` durable filtered to `moox.storage.time_series.rows_updated.v1`; decode `MooxMessage`, validate the `trpc.moox.storage.TimeSeriesRowsUpdated` content type, and retain the current idempotent factor-run trigger behavior. Preserve `deliver_policy=new`, `ack_wait=60s`, `max_ack_pending=1000`, and `max_deliver=5`. Against a real role-authenticated broker, prove `factor-eventbus` can bind/pull/ACK only `factor_calc` and cannot publish Storage data, create/update/delete consumers, or bind either View Builder durable.
 
 - [ ] **Step 2: Prove every production module uses the shared package**
 
@@ -795,19 +995,23 @@ git commit -m "refactor(eventbus): remove module-private nats runtimes"
 
 - [ ] **Step 1: Add end-to-end integration coverage**
 
-Start EventBus with a temporary persistent StoreDir, publish Storage/metrics/CloudNode messages, bind independent durable consumers, restart EventBus, and verify Stream contents, consumer positions, KV state, PubAck, redelivery, and DLQ publication.
+Start standalone EventBus with a temporary persistent StoreDir, private CA, IP SAN, and all six production-equivalent identities. Publish Storage/Host metrics/CloudNode messages, bind independent durable consumers, restart EventBus, and verify Stream contents, consumer positions, KV CAS state, persistent-token ACK after reconnect, PubAck, redelivery, typed `RejectedMessage` DLQ publication, and all ACL deny cases. CloudNode allow tests use only its Stream/KV domain; deny tests prove it cannot cross into Storage, Metrics, DLQ, or global management.
 
-Start a three-node test cluster on loopback with three replicas, kill the current Stream leader, and verify publication, consumption, management status, and recovery continue without changing client configuration.
+Attempt a non-loopback cluster configuration and a Stream replica count greater than one; both must fail validation in V1. Standalone restart is the only production availability test in this plan.
 
-- [ ] **Step 2: Add bounded load checks**
+- [ ] **Step 2: Verify Host Agent best-effort versus durable consumption**
 
-Publish at least 100,000 independent 1 KiB messages through `PublishBatch`, maintain multiple durable consumers, and record throughput, p95 PubAck latency, process RSS, disk growth, pending counts, and recovery time after a 30-second broker outage. The test must enforce a temporary-directory byte cap and must not scan production data.
+Stop EventBus for three Host Agent sampling periods. The Host-Agent-style publisher records three failed attempts, retains no disk or memory replay queue, and publishes only a new sample after recovery. Then keep EventBus running, stop the Monitor-style consumer, publish samples with PubAck, restart Monitor, and prove the fixed durable delivers all accepted samples. This test makes the pre-PubAck/post-PubAck reliability boundary explicit.
 
-- [ ] **Step 3: Verify Storage outbox recovery**
+- [ ] **Step 3: Add bounded load checks**
+
+Publish at least 100,000 independent 1 KiB messages through `PublishBatch`, maintain multiple durable consumers, and record throughput, TLS overhead, p95 PubAck latency, process RSS, disk growth, pending counts, and recovery time after a 30-second broker outage. The test uses the production-style private CA and role ACLs, enforces a temporary-directory byte cap, and never scans production data.
+
+- [ ] **Step 4: Verify Storage outbox recovery**
 
 Write while EventBus is unavailable, restart Storage, restore EventBus, and verify outbox depth returns to zero without missing logical IDs. Repeat a crash after PubAck and prove consumer idempotency.
 
-- [ ] **Step 4: Verify packaged deployment**
+- [ ] **Step 5: Verify packaged deployment**
 
 Run:
 
@@ -818,11 +1022,11 @@ Run:
 go test -count=1 ./modules/eventbus/... ./packages/messagepb ./packages/jetstream
 ```
 
-Expected: all commands pass, the release contains no runtime JetStream data, and EventBus readiness succeeds before dependent services start.
+Expected: all commands pass; the release contains no runtime JetStream data, token, users file, Admin encryption key, CA private key, or server private key; non-loopback plaintext/insecure startup fails; EventBus readiness succeeds before dependent services start.
 
-- [ ] **Step 5: Document operations and commit**
+- [ ] **Step 6: Document operations and commit**
 
-Document backup/restore of `data/eventbus/jetstream`, capacity alerts, consumer-lag diagnosis, credential rotation, Stream change policy, and the rule that callbacks are asynchronous durable consumers rather than part of the publish path.
+Document backup/restore of `data/eventbus/jetstream`, Admin root key and EventBus secret rows, private CA/server certificate reissue, public-IP change, capacity alerts, consumer-lag diagnosis, maintenance-window token rotation, ACL diagnosis, and the rule that callbacks are asynchronous durable consumers rather than part of the publish path.
 
 ```bash
 git add modules/eventbus docs/运维 README.md
@@ -836,10 +1040,19 @@ git commit -m "docs(eventbus): add verification and operations guide"
 - All production MooX application messages use `MooxMessage` and a versioned Topic.
 - `topic` exactly equals the NATS Subject; `Nats-Msg-Id` equals `message_id`.
 - No production module except `moox-eventbus` embeds `nats-server/v2`.
+- No production module outside `packages/jetstream`/`modules/eventbus` imports `nats.go`; CloudNode KV CAS and reconnect-safe ACK use the shared API.
 - Storage writes wait only for data plus local outbox durability, not EventBus PubAck.
 - Storage Relay batches independent async publications and deletes only PubAcked entries.
 - EventBus owns all Stream/KV retention configuration and refuses unsafe automatic changes.
 - The management plane is read-only and cannot publish messages.
+- Host metrics use only `moox.metrics.host.reported.v1` with `trpc.moox.hostagent.HostMetric`; no HTTP/tRPC publish path exists.
+- DLQ uses only `moox.dlq.message.rejected.v1` with `trpc.moox.message.RejectedMessage` and never copies rejected raw payloads.
+- Every non-loopback NATS connection verifies the deployment private CA and advertised IP SAN; plaintext and insecure verification are impossible by configuration.
+- Host Agents share only the scoped publisher token, and Monitor uses a distinct scoped consumer token; real allow/deny ACL tests pass.
+- Storage/Factor are exact bind-only roles; CloudNode's explicitly documented security boundary is its entire Stream/KV and all cross-domain requests are denied.
+- Deployment creates/reuses all six role tokens and both TLS bundles in Admin `t_secrets`; release artifacts contain no token or private key.
+- All six client runtime files, broker users file, and TLS paths match the fixed deployment-user layout and reader ownership.
+- Host Agent has no outbox or replay queue: failed pre-PubAck samples are dropped, while PubAcked samples remain durably consumable by Monitor.
 - JetStream restart preserves messages, durable positions, and KV state.
 - Consumers tolerate duplicate and redelivered messages.
 - Build, release, deploy, unit, integration, outage, and bounded load checks pass.

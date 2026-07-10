@@ -500,6 +500,7 @@ metrics:
     frequency: 30s
     metadata_validation_interval: 30s
     write_batch_size: 1000
+    history_retention_days: 30
 ```
 
 - [ ] **Step 5: Implement read-only validation, history write, and query**
