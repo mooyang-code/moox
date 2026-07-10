@@ -203,3 +203,122 @@ FOR EACH ROW WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
   UPDATE t_monitor_peer_snapshots SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
+
+-- Application metrics catalog and ingestion state. Historical samples are kept
+-- in Storage; SQLite deliberately stores only bounded catalog/latest metadata.
+CREATE TABLE IF NOT EXISTS t_monitor_metric_services (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_service_name TEXT NOT NULL,
+  c_instance_id TEXT NOT NULL,
+  c_boot_id TEXT NOT NULL DEFAULT '',
+  c_node_id TEXT NOT NULL DEFAULT '',
+  c_version TEXT NOT NULL DEFAULT '',
+  c_last_seen_at DATETIME NOT NULL,
+  c_is_stale INTEGER NOT NULL DEFAULT 0,
+  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_services_key
+  ON t_monitor_metric_services(c_service_name, c_instance_id, c_boot_id);
+
+CREATE TABLE IF NOT EXISTS t_monitor_metric_series (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_service_name TEXT NOT NULL,
+  c_instance_id TEXT NOT NULL,
+  c_series_id TEXT NOT NULL,
+  c_metric_name TEXT NOT NULL,
+  c_metric_type TEXT NOT NULL,
+  c_labels_json TEXT NOT NULL DEFAULT '{}',
+  c_last_seen_at DATETIME NOT NULL,
+  c_is_stale INTEGER NOT NULL DEFAULT 0,
+  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_series_key
+  ON t_monitor_metric_series(c_service_name, c_instance_id, c_series_id);
+CREATE INDEX IF NOT EXISTS idx_monitor_metric_series_name
+  ON t_monitor_metric_series(c_service_name, c_metric_name, c_is_stale);
+
+CREATE TABLE IF NOT EXISTS t_monitor_metric_latest (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_series_id TEXT NOT NULL,
+  c_service_name TEXT NOT NULL,
+  c_instance_id TEXT NOT NULL,
+  c_metric_name TEXT NOT NULL,
+  c_metric_type TEXT NOT NULL,
+  c_labels_json TEXT NOT NULL DEFAULT '{}',
+  c_value REAL NOT NULL,
+  c_observed_at DATETIME NOT NULL,
+  c_interval_seconds INTEGER NOT NULL DEFAULT 0,
+  c_message_id TEXT NOT NULL DEFAULT '',
+  c_producer_node_id TEXT NOT NULL DEFAULT '',
+  c_producer_version TEXT NOT NULL DEFAULT '',
+  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_latest_series ON t_monitor_metric_latest(c_series_id);
+CREATE INDEX IF NOT EXISTS idx_monitor_metric_latest_name ON t_monitor_metric_latest(c_service_name, c_metric_name, c_observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS t_monitor_metric_ingest_messages (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_message_id TEXT NOT NULL,
+  c_service_name TEXT NOT NULL DEFAULT '',
+  c_instance_id TEXT NOT NULL DEFAULT '',
+  c_occurred_at DATETIME,
+  c_processed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  c_expires_at DATETIME NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_ingest_message ON t_monitor_metric_ingest_messages(c_message_id);
+CREATE INDEX IF NOT EXISTS idx_monitor_metric_ingest_expiry ON t_monitor_metric_ingest_messages(c_expires_at);
+
+CREATE TABLE IF NOT EXISTS t_monitor_metric_rules (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_space_id TEXT NOT NULL DEFAULT '',
+  c_rule_id TEXT NOT NULL,
+  c_name TEXT NOT NULL DEFAULT '',
+  c_definition_json TEXT NOT NULL DEFAULT '{}',
+  c_enabled INTEGER NOT NULL DEFAULT 1,
+  c_is_deleted INTEGER NOT NULL DEFAULT 0,
+  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_rules_key ON t_monitor_metric_rules(c_space_id, c_rule_id, c_is_deleted);
+
+CREATE TABLE IF NOT EXISTS t_monitor_metric_rule_states (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_space_id TEXT NOT NULL DEFAULT '',
+  c_rule_id TEXT NOT NULL,
+  c_status TEXT NOT NULL DEFAULT 'ok',
+  c_trigger_count INTEGER NOT NULL DEFAULT 0,
+  c_recovery_count INTEGER NOT NULL DEFAULT 0,
+  c_last_evaluated_at DATETIME,
+  c_last_triggered_at DATETIME,
+  c_last_recovered_at DATETIME,
+  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_rule_states_key ON t_monitor_metric_rule_states(c_space_id, c_rule_id);
+
+CREATE TABLE IF NOT EXISTS t_monitor_metric_rule_evaluations (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_space_id TEXT NOT NULL DEFAULT '',
+  c_rule_id TEXT NOT NULL,
+  c_evaluated_at DATETIME NOT NULL,
+  c_status TEXT NOT NULL,
+  c_result_json TEXT NOT NULL DEFAULT '{}',
+  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_monitor_metric_rule_evaluations_recent ON t_monitor_metric_rule_evaluations(c_space_id, c_rule_id, c_evaluated_at DESC);
+
+CREATE TABLE IF NOT EXISTS t_monitor_metric_rule_channels (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_space_id TEXT NOT NULL DEFAULT '',
+  c_rule_id TEXT NOT NULL,
+  c_webhook_id TEXT NOT NULL,
+  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_rule_channels_key ON t_monitor_metric_rule_channels(c_space_id, c_rule_id, c_webhook_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_monitor_metric_services_mtime AFTER UPDATE ON t_monitor_metric_services FOR EACH ROW WHEN NEW.c_mtime = OLD.c_mtime BEGIN UPDATE t_monitor_metric_services SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id; END;
+CREATE TRIGGER IF NOT EXISTS trg_monitor_metric_series_mtime AFTER UPDATE ON t_monitor_metric_series FOR EACH ROW WHEN NEW.c_mtime = OLD.c_mtime BEGIN UPDATE t_monitor_metric_series SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id; END;
+CREATE TRIGGER IF NOT EXISTS trg_monitor_metric_latest_mtime AFTER UPDATE ON t_monitor_metric_latest FOR EACH ROW WHEN NEW.c_mtime = OLD.c_mtime BEGIN UPDATE t_monitor_metric_latest SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id; END;

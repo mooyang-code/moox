@@ -195,7 +195,7 @@ func ParseSnapshot(snapshot *metricspb.MetricSnapshot, env Envelope, limits Limi
 			if len(labels) > limits.MaxLabelsPerSample {
 				return nil, fmt.Errorf("metric %s label limit exceeded", name)
 			}
-			if err := appendMetricSamples(&out, family, metric, name, typeName, labels, env, interval, limits.MaxSamples); err != nil {
+			if err := appendMetricSamples(&out, family, metric, name, typeName, labels, env, interval, limits.MaxSamples, limits.MaxLabelsPerSample); err != nil {
 				return nil, err
 			}
 		}
@@ -229,7 +229,7 @@ func metricTypeName(t dto.MetricType) string {
 	}
 }
 
-func appendMetricSamples(out *[]Sample, family *dto.MetricFamily, metric *dto.Metric, name, typeName string, labels map[string]string, env Envelope, interval time.Duration, max int) error {
+func appendMetricSamples(out *[]Sample, family *dto.MetricFamily, metric *dto.Metric, name, typeName string, labels map[string]string, env Envelope, interval time.Duration, max, maxLabels int) error {
 	add := func(value float64, suffix string, extra map[string]string) error {
 		if math.IsNaN(value) || math.IsInf(value, 0) {
 			return fmt.Errorf("metric %s contains non-finite value", name)
@@ -243,6 +243,9 @@ func appendMetricSamples(out *[]Sample, family *dto.MetricFamily, metric *dto.Me
 				return fmt.Errorf("metric %s duplicate generated label %q", name, k)
 			}
 			merged[k] = v
+		}
+		if len(merged) > maxLabels {
+			return fmt.Errorf("metric %s label limit exceeded", name)
 		}
 		lj, err := CanonicalLabelsJSON(merged)
 		if err != nil {
@@ -315,7 +318,19 @@ func EncodeSnapshot(raw []byte, interval time.Duration, gzipLevel int, limits Li
 	}
 	count := 0
 	for _, f := range fams {
-		count += len(f.GetMetric())
+		for _, m := range f.GetMetric() {
+			if m == nil {
+				continue
+			}
+			switch f.GetType() {
+			case dto.MetricType_HISTOGRAM:
+				count += 2 + len(m.GetHistogram().GetBucket())
+			case dto.MetricType_SUMMARY:
+				count += 2 + len(m.GetSummary().GetQuantile())
+			default:
+				count++
+			}
+		}
 	}
 	var compressed bytes.Buffer
 	zw, err := gzip.NewWriterLevel(&compressed, gzipLevel)
