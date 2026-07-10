@@ -88,6 +88,7 @@ message SearchRecordRowsReq {
   repeated string column_names = 9;
   // page 是分页参数。
   common.Page page = 10;
+  RevisionRange revision_range = 11;
 }
 
 // SearchRecordRowsRsp 表示记录 View 数据搜索结果。

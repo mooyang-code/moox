@@ -22,6 +22,56 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// RecordViewMode 表示 Record View 的物化模式。
+type RecordViewMode int32
+
+const (
+	RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED RecordViewMode = 0
+	RecordViewMode_RECORD_VIEW_MODE_CURRENT     RecordViewMode = 1
+	RecordViewMode_RECORD_VIEW_MODE_HISTORY     RecordViewMode = 2
+)
+
+// Enum value maps for RecordViewMode.
+var (
+	RecordViewMode_name = map[int32]string{
+		0: "RECORD_VIEW_MODE_UNSPECIFIED",
+		1: "RECORD_VIEW_MODE_CURRENT",
+		2: "RECORD_VIEW_MODE_HISTORY",
+	}
+	RecordViewMode_value = map[string]int32{
+		"RECORD_VIEW_MODE_UNSPECIFIED": 0,
+		"RECORD_VIEW_MODE_CURRENT":     1,
+		"RECORD_VIEW_MODE_HISTORY":     2,
+	}
+)
+
+func (x RecordViewMode) Enum() *RecordViewMode {
+	p := new(RecordViewMode)
+	*p = x
+	return p
+}
+
+func (x RecordViewMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RecordViewMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_metadata_proto_enumTypes[0].Descriptor()
+}
+
+func (RecordViewMode) Type() protoreflect.EnumType {
+	return &file_metadata_proto_enumTypes[0]
+}
+
+func (x RecordViewMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RecordViewMode.Descriptor instead.
+func (RecordViewMode) EnumDescriptor() ([]byte, []int) {
+	return file_metadata_proto_rawDescGZIP(), []int{0}
+}
+
 // State 表示双库切换构建所处的阶段。
 type ViewIndexBuild_State int32
 
@@ -32,6 +82,8 @@ const (
 	ViewIndexBuild_CATCHING_UP ViewIndexBuild_State = 3
 	ViewIndexBuild_READY       ViewIndexBuild_State = 4
 	ViewIndexBuild_FAILED      ViewIndexBuild_State = 5
+	ViewIndexBuild_BASELINING  ViewIndexBuild_State = 6
+	ViewIndexBuild_ACTIVATING  ViewIndexBuild_State = 7
 )
 
 // Enum value maps for ViewIndexBuild_State.
@@ -43,6 +95,8 @@ var (
 		3: "CATCHING_UP",
 		4: "READY",
 		5: "FAILED",
+		6: "BASELINING",
+		7: "ACTIVATING",
 	}
 	ViewIndexBuild_State_value = map[string]int32{
 		"UNSPECIFIED": 0,
@@ -51,6 +105,8 @@ var (
 		"CATCHING_UP": 3,
 		"READY":       4,
 		"FAILED":      5,
+		"BASELINING":  6,
+		"ACTIVATING":  7,
 	}
 )
 
@@ -65,11 +121,11 @@ func (x ViewIndexBuild_State) String() string {
 }
 
 func (ViewIndexBuild_State) Descriptor() protoreflect.EnumDescriptor {
-	return file_metadata_proto_enumTypes[0].Descriptor()
+	return file_metadata_proto_enumTypes[1].Descriptor()
 }
 
 func (ViewIndexBuild_State) Type() protoreflect.EnumType {
-	return &file_metadata_proto_enumTypes[0]
+	return &file_metadata_proto_enumTypes[1]
 }
 
 func (x ViewIndexBuild_State) Number() protoreflect.EnumNumber {
@@ -199,26 +255,35 @@ type ViewIndexBuild struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	SpaceId           string               `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
-	ViewId            string               `protobuf:"bytes,2,opt,name=view_id,json=viewId,proto3" json:"view_id,omitempty"`
-	BuildId           string               `protobuf:"bytes,3,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
-	IndexId           string               `protobuf:"bytes,4,opt,name=index_id,json=indexId,proto3" json:"index_id,omitempty"`
-	Engine            string               `protobuf:"bytes,5,opt,name=engine,proto3" json:"engine,omitempty"`
-	TargetViewVersion uint64               `protobuf:"varint,6,opt,name=target_view_version,json=targetViewVersion,proto3" json:"target_view_version,omitempty"`
-	State             ViewIndexBuild_State `protobuf:"varint,7,opt,name=state,proto3,enum=trpc.moox.storage.ViewIndexBuild_State" json:"state,omitempty"`
-	OwnerId           string               `protobuf:"bytes,8,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
-	LeaseExpiresAt    string               `protobuf:"bytes,9,opt,name=lease_expires_at,json=leaseExpiresAt,proto3" json:"lease_expires_at,omitempty"`
-	CursorJson        string               `protobuf:"bytes,10,opt,name=cursor_json,json=cursorJson,proto3" json:"cursor_json,omitempty"`
-	SnapshotEnd       string               `protobuf:"bytes,11,opt,name=snapshot_end,json=snapshotEnd,proto3" json:"snapshot_end,omitempty"`
-	CoverageStart     string               `protobuf:"bytes,12,opt,name=coverage_start,json=coverageStart,proto3" json:"coverage_start,omitempty"`
-	CoverageEnd       string               `protobuf:"bytes,13,opt,name=coverage_end,json=coverageEnd,proto3" json:"coverage_end,omitempty"`
-	EntriesWritten    uint64               `protobuf:"varint,14,opt,name=entries_written,json=entriesWritten,proto3" json:"entries_written,omitempty"`
-	SchemaHash        string               `protobuf:"bytes,15,opt,name=schema_hash,json=schemaHash,proto3" json:"schema_hash,omitempty"`
-	Columns           []*ViewColumn        `protobuf:"bytes,16,rep,name=columns,proto3" json:"columns,omitempty"`
-	StartedAt         string               `protobuf:"bytes,17,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	UpdatedAt         string               `protobuf:"bytes,18,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	FinishedAt        string               `protobuf:"bytes,19,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
-	Error             string               `protobuf:"bytes,20,opt,name=error,proto3" json:"error,omitempty"`
+	SpaceId                string               `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	ViewId                 string               `protobuf:"bytes,2,opt,name=view_id,json=viewId,proto3" json:"view_id,omitempty"`
+	BuildId                string               `protobuf:"bytes,3,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	IndexId                string               `protobuf:"bytes,4,opt,name=index_id,json=indexId,proto3" json:"index_id,omitempty"`
+	Engine                 string               `protobuf:"bytes,5,opt,name=engine,proto3" json:"engine,omitempty"`
+	TargetViewVersion      uint64               `protobuf:"varint,6,opt,name=target_view_version,json=targetViewVersion,proto3" json:"target_view_version,omitempty"`
+	State                  ViewIndexBuild_State `protobuf:"varint,7,opt,name=state,proto3,enum=trpc.moox.storage.ViewIndexBuild_State" json:"state,omitempty"`
+	OwnerId                string               `protobuf:"bytes,8,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
+	LeaseExpiresAt         string               `protobuf:"bytes,9,opt,name=lease_expires_at,json=leaseExpiresAt,proto3" json:"lease_expires_at,omitempty"`
+	CursorJson             string               `protobuf:"bytes,10,opt,name=cursor_json,json=cursorJson,proto3" json:"cursor_json,omitempty"`
+	SnapshotEnd            string               `protobuf:"bytes,11,opt,name=snapshot_end,json=snapshotEnd,proto3" json:"snapshot_end,omitempty"`
+	CoverageStart          string               `protobuf:"bytes,12,opt,name=coverage_start,json=coverageStart,proto3" json:"coverage_start,omitempty"`
+	CoverageEnd            string               `protobuf:"bytes,13,opt,name=coverage_end,json=coverageEnd,proto3" json:"coverage_end,omitempty"`
+	EntriesWritten         uint64               `protobuf:"varint,14,opt,name=entries_written,json=entriesWritten,proto3" json:"entries_written,omitempty"`
+	SchemaHash             string               `protobuf:"bytes,15,opt,name=schema_hash,json=schemaHash,proto3" json:"schema_hash,omitempty"`
+	Columns                []*ViewColumn        `protobuf:"bytes,16,rep,name=columns,proto3" json:"columns,omitempty"`
+	StartedAt              string               `protobuf:"bytes,17,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	UpdatedAt              string               `protobuf:"bytes,18,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	FinishedAt             string               `protobuf:"bytes,19,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	Error                  string               `protobuf:"bytes,20,opt,name=error,proto3" json:"error,omitempty"`
+	SnapshotId             string               `protobuf:"bytes,21,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
+	SnapshotCommitSeq      uint64               `protobuf:"varint,22,opt,name=snapshot_commit_seq,json=snapshotCommitSeq,proto3" json:"snapshot_commit_seq,omitempty"`
+	ReplayThroughCommitSeq uint64               `protobuf:"varint,23,opt,name=replay_through_commit_seq,json=replayThroughCommitSeq,proto3" json:"replay_through_commit_seq,omitempty"`
+	ReplayedCommitSeq      uint64               `protobuf:"varint,24,opt,name=replayed_commit_seq,json=replayedCommitSeq,proto3" json:"replayed_commit_seq,omitempty"`
+	SourceRowsSeen         uint64               `protobuf:"varint,25,opt,name=source_rows_seen,json=sourceRowsSeen,proto3" json:"source_rows_seen,omitempty"`
+	ExpectedVisibleRows    uint64               `protobuf:"varint,26,opt,name=expected_visible_rows,json=expectedVisibleRows,proto3" json:"expected_visible_rows,omitempty"`
+	AcceptedMutations      uint64               `protobuf:"varint,27,opt,name=accepted_mutations,json=acceptedMutations,proto3" json:"accepted_mutations,omitempty"`
+	RecordSourceId         string               `protobuf:"bytes,28,opt,name=record_source_id,json=recordSourceId,proto3" json:"record_source_id,omitempty"`
+	RetentionCutoffAt      string               `protobuf:"bytes,29,opt,name=retention_cutoff_at,json=retentionCutoffAt,proto3" json:"retention_cutoff_at,omitempty"`
 }
 
 func (x *ViewIndexBuild) Reset() {
@@ -393,6 +458,69 @@ func (x *ViewIndexBuild) GetError() string {
 	return ""
 }
 
+func (x *ViewIndexBuild) GetSnapshotId() string {
+	if x != nil {
+		return x.SnapshotId
+	}
+	return ""
+}
+
+func (x *ViewIndexBuild) GetSnapshotCommitSeq() uint64 {
+	if x != nil {
+		return x.SnapshotCommitSeq
+	}
+	return 0
+}
+
+func (x *ViewIndexBuild) GetReplayThroughCommitSeq() uint64 {
+	if x != nil {
+		return x.ReplayThroughCommitSeq
+	}
+	return 0
+}
+
+func (x *ViewIndexBuild) GetReplayedCommitSeq() uint64 {
+	if x != nil {
+		return x.ReplayedCommitSeq
+	}
+	return 0
+}
+
+func (x *ViewIndexBuild) GetSourceRowsSeen() uint64 {
+	if x != nil {
+		return x.SourceRowsSeen
+	}
+	return 0
+}
+
+func (x *ViewIndexBuild) GetExpectedVisibleRows() uint64 {
+	if x != nil {
+		return x.ExpectedVisibleRows
+	}
+	return 0
+}
+
+func (x *ViewIndexBuild) GetAcceptedMutations() uint64 {
+	if x != nil {
+		return x.AcceptedMutations
+	}
+	return 0
+}
+
+func (x *ViewIndexBuild) GetRecordSourceId() string {
+	if x != nil {
+		return x.RecordSourceId
+	}
+	return ""
+}
+
+func (x *ViewIndexBuild) GetRetentionCutoffAt() string {
+	if x != nil {
+		return x.RetentionCutoffAt
+	}
+	return ""
+}
+
 // View 是 Space 内的用户查询入口，也是可异步构建的近期派生索引定义。
 type View struct {
 	state         protoimpl.MessageState
@@ -445,6 +573,8 @@ type View struct {
 	ActiveCoverageEnd string `protobuf:"bytes,22,opt,name=active_coverage_end,json=activeCoverageEnd,proto3" json:"active_coverage_end,omitempty"`
 	// index_build 是当前持久化构建状态的只读投影。
 	IndexBuild *ViewIndexBuild `protobuf:"bytes,23,opt,name=index_build,json=indexBuild,proto3" json:"index_build,omitempty"`
+	// record_view_mode 表示 Record View 的 CURRENT/HISTORY 物化模式。
+	RecordViewMode RecordViewMode `protobuf:"varint,24,opt,name=record_view_mode,json=recordViewMode,proto3,enum=trpc.moox.storage.RecordViewMode" json:"record_view_mode,omitempty"`
 }
 
 func (x *View) Reset() {
@@ -638,6 +768,13 @@ func (x *View) GetIndexBuild() *ViewIndexBuild {
 		return x.IndexBuild
 	}
 	return nil
+}
+
+func (x *View) GetRecordViewMode() RecordViewMode {
+	if x != nil {
+		return x.RecordViewMode
+	}
+	return RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED
 }
 
 // ViewColumn 定义 View 对用户暴露的一列。
@@ -9598,7 +9735,7 @@ var file_metadata_proto_rawDesc = []byte{
 	0x74, 0x65, 0x73, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x12, 0x10, 0x0a, 0x03, 0x6b, 0x65, 0x79, 0x18,
 	0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x6b, 0x65, 0x79, 0x12, 0x14, 0x0a, 0x05, 0x76, 0x61,
 	0x6c, 0x75, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65,
-	0x3a, 0x02, 0x38, 0x01, 0x22, 0xab, 0x06, 0x0a, 0x0e, 0x56, 0x69, 0x65, 0x77, 0x49, 0x6e, 0x64,
+	0x3a, 0x02, 0x38, 0x01, 0x22, 0xee, 0x09, 0x0a, 0x0e, 0x56, 0x69, 0x65, 0x77, 0x49, 0x6e, 0x64,
 	0x65, 0x78, 0x42, 0x75, 0x69, 0x6c, 0x64, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65,
 	0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65,
 	0x49, 0x64, 0x12, 0x17, 0x0a, 0x07, 0x76, 0x69, 0x65, 0x77, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20,
@@ -9643,72 +9780,105 @@ var file_metadata_proto_rawDesc = []byte{
 	0x66, 0x69, 0x6e, 0x69, 0x73, 0x68, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18, 0x13, 0x20, 0x01, 0x28,
 	0x09, 0x52, 0x0a, 0x66, 0x69, 0x6e, 0x69, 0x73, 0x68, 0x65, 0x64, 0x41, 0x74, 0x12, 0x14, 0x0a,
 	0x05, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x18, 0x14, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x65, 0x72,
-	0x72, 0x6f, 0x72, 0x22, 0x5d, 0x0a, 0x05, 0x53, 0x74, 0x61, 0x74, 0x65, 0x12, 0x0f, 0x0a, 0x0b,
-	0x55, 0x4e, 0x53, 0x50, 0x45, 0x43, 0x49, 0x46, 0x49, 0x45, 0x44, 0x10, 0x00, 0x12, 0x0d, 0x0a,
-	0x09, 0x50, 0x52, 0x45, 0x50, 0x41, 0x52, 0x49, 0x4e, 0x47, 0x10, 0x01, 0x12, 0x0c, 0x0a, 0x08,
-	0x42, 0x55, 0x49, 0x4c, 0x44, 0x49, 0x4e, 0x47, 0x10, 0x02, 0x12, 0x0f, 0x0a, 0x0b, 0x43, 0x41,
-	0x54, 0x43, 0x48, 0x49, 0x4e, 0x47, 0x5f, 0x55, 0x50, 0x10, 0x03, 0x12, 0x09, 0x0a, 0x05, 0x52,
-	0x45, 0x41, 0x44, 0x59, 0x10, 0x04, 0x12, 0x0a, 0x0a, 0x06, 0x46, 0x41, 0x49, 0x4c, 0x45, 0x44,
-	0x10, 0x05, 0x22, 0xf0, 0x07, 0x0a, 0x04, 0x56, 0x69, 0x65, 0x77, 0x12, 0x19, 0x0a, 0x08, 0x73,
-	0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73,
-	0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x17, 0x0a, 0x07, 0x76, 0x69, 0x65, 0x77, 0x5f, 0x69,
-	0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x76, 0x69, 0x65, 0x77, 0x49, 0x64, 0x12,
-	0x12, 0x0a, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6e,
-	0x61, 0x6d, 0x65, 0x12, 0x20, 0x0a, 0x0b, 0x64, 0x65, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74, 0x69,
-	0x6f, 0x6e, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x64, 0x65, 0x73, 0x63, 0x72, 0x69,
-	0x70, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x2c, 0x0a, 0x12, 0x70, 0x72, 0x69, 0x6d, 0x61, 0x72, 0x79,
-	0x5f, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x05, 0x20, 0x01, 0x28,
-	0x09, 0x52, 0x10, 0x70, 0x72, 0x69, 0x6d, 0x61, 0x72, 0x79, 0x44, 0x61, 0x74, 0x61, 0x73, 0x65,
-	0x74, 0x49, 0x64, 0x12, 0x1f, 0x0a, 0x0b, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x5f, 0x69,
-	0x64, 0x73, 0x18, 0x06, 0x20, 0x03, 0x28, 0x09, 0x52, 0x0a, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65,
-	0x74, 0x49, 0x64, 0x73, 0x12, 0x1d, 0x0a, 0x0a, 0x67, 0x72, 0x61, 0x69, 0x6e, 0x5f, 0x6b, 0x65,
-	0x79, 0x73, 0x18, 0x07, 0x20, 0x03, 0x28, 0x09, 0x52, 0x09, 0x67, 0x72, 0x61, 0x69, 0x6e, 0x4b,
-	0x65, 0x79, 0x73, 0x12, 0x1f, 0x0a, 0x0b, 0x66, 0x69, 0x6c, 0x74, 0x65, 0x72, 0x5f, 0x6a, 0x73,
-	0x6f, 0x6e, 0x18, 0x08, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x66, 0x69, 0x6c, 0x74, 0x65, 0x72,
-	0x4a, 0x73, 0x6f, 0x6e, 0x12, 0x16, 0x0a, 0x06, 0x65, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x18, 0x09,
-	0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x65, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x12, 0x29, 0x0a, 0x10,
-	0x72, 0x65, 0x74, 0x65, 0x6e, 0x74, 0x69, 0x6f, 0x6e, 0x5f, 0x77, 0x69, 0x6e, 0x64, 0x6f, 0x77,
-	0x18, 0x0a, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0f, 0x72, 0x65, 0x74, 0x65, 0x6e, 0x74, 0x69, 0x6f,
-	0x6e, 0x57, 0x69, 0x6e, 0x64, 0x6f, 0x77, 0x12, 0x26, 0x0a, 0x0f, 0x61, 0x63, 0x74, 0x69, 0x76,
-	0x65, 0x5f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x5f, 0x69, 0x64, 0x18, 0x0b, 0x20, 0x01, 0x28, 0x09,
-	0x52, 0x0d, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x49, 0x6e, 0x64, 0x65, 0x78, 0x49, 0x64, 0x12,
-	0x16, 0x0a, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x18, 0x0c, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x37, 0x0a, 0x07, 0x63, 0x6f, 0x6c, 0x75, 0x6d,
-	0x6e, 0x73, 0x18, 0x0d, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x1d, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e,
-	0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x56, 0x69, 0x65,
-	0x77, 0x43, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x52, 0x07, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73,
-	0x12, 0x1d, 0x0a, 0x0a, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18, 0x0e,
-	0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x41, 0x74, 0x12,
-	0x1d, 0x0a, 0x0a, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18, 0x0f, 0x20,
-	0x01, 0x28, 0x09, 0x52, 0x09, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x41, 0x74, 0x12, 0x47,
-	0x0a, 0x0a, 0x61, 0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x73, 0x18, 0x10, 0x20, 0x03,
-	0x28, 0x0b, 0x32, 0x27, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73,
-	0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x56, 0x69, 0x65, 0x77, 0x2e, 0x41, 0x74, 0x74, 0x72,
-	0x69, 0x62, 0x75, 0x74, 0x65, 0x73, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x52, 0x0a, 0x61, 0x74, 0x74,
-	0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x73, 0x12, 0x21, 0x0a, 0x0c, 0x76, 0x69, 0x65, 0x77, 0x5f,
-	0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x18, 0x11, 0x20, 0x01, 0x28, 0x04, 0x52, 0x0b, 0x76,
-	0x69, 0x65, 0x77, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x2e, 0x0a, 0x13, 0x61, 0x63,
-	0x74, 0x69, 0x76, 0x65, 0x5f, 0x76, 0x69, 0x65, 0x77, 0x5f, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f,
-	0x6e, 0x18, 0x12, 0x20, 0x01, 0x28, 0x04, 0x52, 0x11, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x56,
-	0x69, 0x65, 0x77, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x44, 0x0a, 0x0e, 0x61, 0x63,
-	0x74, 0x69, 0x76, 0x65, 0x5f, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73, 0x18, 0x13, 0x20, 0x03,
-	0x28, 0x0b, 0x32, 0x1d, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73,
-	0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x56, 0x69, 0x65, 0x77, 0x43, 0x6f, 0x6c, 0x75, 0x6d,
-	0x6e, 0x52, 0x0d, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x43, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73,
-	0x12, 0x2c, 0x0a, 0x12, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x5f, 0x73, 0x63, 0x68, 0x65, 0x6d,
-	0x61, 0x5f, 0x68, 0x61, 0x73, 0x68, 0x18, 0x14, 0x20, 0x01, 0x28, 0x09, 0x52, 0x10, 0x61, 0x63,
-	0x74, 0x69, 0x76, 0x65, 0x53, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x48, 0x61, 0x73, 0x68, 0x12, 0x32,
-	0x0a, 0x15, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x5f, 0x63, 0x6f, 0x76, 0x65, 0x72, 0x61, 0x67,
-	0x65, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x18, 0x15, 0x20, 0x01, 0x28, 0x09, 0x52, 0x13, 0x61,
-	0x63, 0x74, 0x69, 0x76, 0x65, 0x43, 0x6f, 0x76, 0x65, 0x72, 0x61, 0x67, 0x65, 0x53, 0x74, 0x61,
-	0x72, 0x74, 0x12, 0x2e, 0x0a, 0x13, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x5f, 0x63, 0x6f, 0x76,
-	0x65, 0x72, 0x61, 0x67, 0x65, 0x5f, 0x65, 0x6e, 0x64, 0x18, 0x16, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x11, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x43, 0x6f, 0x76, 0x65, 0x72, 0x61, 0x67, 0x65, 0x45,
-	0x6e, 0x64, 0x12, 0x42, 0x0a, 0x0b, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x5f, 0x62, 0x75, 0x69, 0x6c,
-	0x64, 0x18, 0x17, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x21, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d,
-	0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x56, 0x69, 0x65, 0x77,
-	0x49, 0x6e, 0x64, 0x65, 0x78, 0x42, 0x75, 0x69, 0x6c, 0x64, 0x52, 0x0a, 0x69, 0x6e, 0x64, 0x65,
-	0x78, 0x42, 0x75, 0x69, 0x6c, 0x64, 0x1a, 0x3d, 0x0a, 0x0f, 0x41, 0x74, 0x74, 0x72, 0x69, 0x62,
+	0x72, 0x6f, 0x72, 0x12, 0x1f, 0x0a, 0x0b, 0x73, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x5f,
+	0x69, 0x64, 0x18, 0x15, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x73, 0x6e, 0x61, 0x70, 0x73, 0x68,
+	0x6f, 0x74, 0x49, 0x64, 0x12, 0x2e, 0x0a, 0x13, 0x73, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74,
+	0x5f, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x5f, 0x73, 0x65, 0x71, 0x18, 0x16, 0x20, 0x01, 0x28,
+	0x04, 0x52, 0x11, 0x73, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x69,
+	0x74, 0x53, 0x65, 0x71, 0x12, 0x39, 0x0a, 0x19, 0x72, 0x65, 0x70, 0x6c, 0x61, 0x79, 0x5f, 0x74,
+	0x68, 0x72, 0x6f, 0x75, 0x67, 0x68, 0x5f, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x5f, 0x73, 0x65,
+	0x71, 0x18, 0x17, 0x20, 0x01, 0x28, 0x04, 0x52, 0x16, 0x72, 0x65, 0x70, 0x6c, 0x61, 0x79, 0x54,
+	0x68, 0x72, 0x6f, 0x75, 0x67, 0x68, 0x43, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x53, 0x65, 0x71, 0x12,
+	0x2e, 0x0a, 0x13, 0x72, 0x65, 0x70, 0x6c, 0x61, 0x79, 0x65, 0x64, 0x5f, 0x63, 0x6f, 0x6d, 0x6d,
+	0x69, 0x74, 0x5f, 0x73, 0x65, 0x71, 0x18, 0x18, 0x20, 0x01, 0x28, 0x04, 0x52, 0x11, 0x72, 0x65,
+	0x70, 0x6c, 0x61, 0x79, 0x65, 0x64, 0x43, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x53, 0x65, 0x71, 0x12,
+	0x28, 0x0a, 0x10, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x5f, 0x72, 0x6f, 0x77, 0x73, 0x5f, 0x73,
+	0x65, 0x65, 0x6e, 0x18, 0x19, 0x20, 0x01, 0x28, 0x04, 0x52, 0x0e, 0x73, 0x6f, 0x75, 0x72, 0x63,
+	0x65, 0x52, 0x6f, 0x77, 0x73, 0x53, 0x65, 0x65, 0x6e, 0x12, 0x32, 0x0a, 0x15, 0x65, 0x78, 0x70,
+	0x65, 0x63, 0x74, 0x65, 0x64, 0x5f, 0x76, 0x69, 0x73, 0x69, 0x62, 0x6c, 0x65, 0x5f, 0x72, 0x6f,
+	0x77, 0x73, 0x18, 0x1a, 0x20, 0x01, 0x28, 0x04, 0x52, 0x13, 0x65, 0x78, 0x70, 0x65, 0x63, 0x74,
+	0x65, 0x64, 0x56, 0x69, 0x73, 0x69, 0x62, 0x6c, 0x65, 0x52, 0x6f, 0x77, 0x73, 0x12, 0x2d, 0x0a,
+	0x12, 0x61, 0x63, 0x63, 0x65, 0x70, 0x74, 0x65, 0x64, 0x5f, 0x6d, 0x75, 0x74, 0x61, 0x74, 0x69,
+	0x6f, 0x6e, 0x73, 0x18, 0x1b, 0x20, 0x01, 0x28, 0x04, 0x52, 0x11, 0x61, 0x63, 0x63, 0x65, 0x70,
+	0x74, 0x65, 0x64, 0x4d, 0x75, 0x74, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x12, 0x28, 0x0a, 0x10,
+	0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x5f, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x5f, 0x69, 0x64,
+	0x18, 0x1c, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0e, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x53, 0x6f,
+	0x75, 0x72, 0x63, 0x65, 0x49, 0x64, 0x12, 0x2e, 0x0a, 0x13, 0x72, 0x65, 0x74, 0x65, 0x6e, 0x74,
+	0x69, 0x6f, 0x6e, 0x5f, 0x63, 0x75, 0x74, 0x6f, 0x66, 0x66, 0x5f, 0x61, 0x74, 0x18, 0x1d, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x11, 0x72, 0x65, 0x74, 0x65, 0x6e, 0x74, 0x69, 0x6f, 0x6e, 0x43, 0x75,
+	0x74, 0x6f, 0x66, 0x66, 0x41, 0x74, 0x22, 0x7d, 0x0a, 0x05, 0x53, 0x74, 0x61, 0x74, 0x65, 0x12,
+	0x0f, 0x0a, 0x0b, 0x55, 0x4e, 0x53, 0x50, 0x45, 0x43, 0x49, 0x46, 0x49, 0x45, 0x44, 0x10, 0x00,
+	0x12, 0x0d, 0x0a, 0x09, 0x50, 0x52, 0x45, 0x50, 0x41, 0x52, 0x49, 0x4e, 0x47, 0x10, 0x01, 0x12,
+	0x0c, 0x0a, 0x08, 0x42, 0x55, 0x49, 0x4c, 0x44, 0x49, 0x4e, 0x47, 0x10, 0x02, 0x12, 0x0f, 0x0a,
+	0x0b, 0x43, 0x41, 0x54, 0x43, 0x48, 0x49, 0x4e, 0x47, 0x5f, 0x55, 0x50, 0x10, 0x03, 0x12, 0x09,
+	0x0a, 0x05, 0x52, 0x45, 0x41, 0x44, 0x59, 0x10, 0x04, 0x12, 0x0a, 0x0a, 0x06, 0x46, 0x41, 0x49,
+	0x4c, 0x45, 0x44, 0x10, 0x05, 0x12, 0x0e, 0x0a, 0x0a, 0x42, 0x41, 0x53, 0x45, 0x4c, 0x49, 0x4e,
+	0x49, 0x4e, 0x47, 0x10, 0x06, 0x12, 0x0e, 0x0a, 0x0a, 0x41, 0x43, 0x54, 0x49, 0x56, 0x41, 0x54,
+	0x49, 0x4e, 0x47, 0x10, 0x07, 0x22, 0xbd, 0x08, 0x0a, 0x04, 0x56, 0x69, 0x65, 0x77, 0x12, 0x19,
+	0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x17, 0x0a, 0x07, 0x76, 0x69, 0x65,
+	0x77, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x76, 0x69, 0x65, 0x77,
+	0x49, 0x64, 0x12, 0x12, 0x0a, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x12, 0x20, 0x0a, 0x0b, 0x64, 0x65, 0x73, 0x63, 0x72, 0x69,
+	0x70, 0x74, 0x69, 0x6f, 0x6e, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x64, 0x65, 0x73,
+	0x63, 0x72, 0x69, 0x70, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x2c, 0x0a, 0x12, 0x70, 0x72, 0x69, 0x6d,
+	0x61, 0x72, 0x79, 0x5f, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x05,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x10, 0x70, 0x72, 0x69, 0x6d, 0x61, 0x72, 0x79, 0x44, 0x61, 0x74,
+	0x61, 0x73, 0x65, 0x74, 0x49, 0x64, 0x12, 0x1f, 0x0a, 0x0b, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65,
+	0x74, 0x5f, 0x69, 0x64, 0x73, 0x18, 0x06, 0x20, 0x03, 0x28, 0x09, 0x52, 0x0a, 0x64, 0x61, 0x74,
+	0x61, 0x73, 0x65, 0x74, 0x49, 0x64, 0x73, 0x12, 0x1d, 0x0a, 0x0a, 0x67, 0x72, 0x61, 0x69, 0x6e,
+	0x5f, 0x6b, 0x65, 0x79, 0x73, 0x18, 0x07, 0x20, 0x03, 0x28, 0x09, 0x52, 0x09, 0x67, 0x72, 0x61,
+	0x69, 0x6e, 0x4b, 0x65, 0x79, 0x73, 0x12, 0x1f, 0x0a, 0x0b, 0x66, 0x69, 0x6c, 0x74, 0x65, 0x72,
+	0x5f, 0x6a, 0x73, 0x6f, 0x6e, 0x18, 0x08, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x66, 0x69, 0x6c,
+	0x74, 0x65, 0x72, 0x4a, 0x73, 0x6f, 0x6e, 0x12, 0x16, 0x0a, 0x06, 0x65, 0x6e, 0x67, 0x69, 0x6e,
+	0x65, 0x18, 0x09, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x65, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x12,
+	0x29, 0x0a, 0x10, 0x72, 0x65, 0x74, 0x65, 0x6e, 0x74, 0x69, 0x6f, 0x6e, 0x5f, 0x77, 0x69, 0x6e,
+	0x64, 0x6f, 0x77, 0x18, 0x0a, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0f, 0x72, 0x65, 0x74, 0x65, 0x6e,
+	0x74, 0x69, 0x6f, 0x6e, 0x57, 0x69, 0x6e, 0x64, 0x6f, 0x77, 0x12, 0x26, 0x0a, 0x0f, 0x61, 0x63,
+	0x74, 0x69, 0x76, 0x65, 0x5f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x5f, 0x69, 0x64, 0x18, 0x0b, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x0d, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x49, 0x6e, 0x64, 0x65, 0x78,
+	0x49, 0x64, 0x12, 0x16, 0x0a, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x18, 0x0c, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x37, 0x0a, 0x07, 0x63, 0x6f,
+	0x6c, 0x75, 0x6d, 0x6e, 0x73, 0x18, 0x0d, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x1d, 0x2e, 0x74, 0x72,
+	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e,
+	0x56, 0x69, 0x65, 0x77, 0x43, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x52, 0x07, 0x63, 0x6f, 0x6c, 0x75,
+	0x6d, 0x6e, 0x73, 0x12, 0x1d, 0x0a, 0x0a, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x61,
+	0x74, 0x18, 0x0e, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64,
+	0x41, 0x74, 0x12, 0x1d, 0x0a, 0x0a, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74,
+	0x18, 0x0f, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x41,
+	0x74, 0x12, 0x47, 0x0a, 0x0a, 0x61, 0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x73, 0x18,
+	0x10, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x27, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
+	0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x56, 0x69, 0x65, 0x77, 0x2e, 0x41,
+	0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x73, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x52, 0x0a,
+	0x61, 0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x73, 0x12, 0x21, 0x0a, 0x0c, 0x76, 0x69,
+	0x65, 0x77, 0x5f, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x18, 0x11, 0x20, 0x01, 0x28, 0x04,
+	0x52, 0x0b, 0x76, 0x69, 0x65, 0x77, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x2e, 0x0a,
+	0x13, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x5f, 0x76, 0x69, 0x65, 0x77, 0x5f, 0x76, 0x65, 0x72,
+	0x73, 0x69, 0x6f, 0x6e, 0x18, 0x12, 0x20, 0x01, 0x28, 0x04, 0x52, 0x11, 0x61, 0x63, 0x74, 0x69,
+	0x76, 0x65, 0x56, 0x69, 0x65, 0x77, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x44, 0x0a,
+	0x0e, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x5f, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73, 0x18,
+	0x13, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x1d, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
+	0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x56, 0x69, 0x65, 0x77, 0x43, 0x6f,
+	0x6c, 0x75, 0x6d, 0x6e, 0x52, 0x0d, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x43, 0x6f, 0x6c, 0x75,
+	0x6d, 0x6e, 0x73, 0x12, 0x2c, 0x0a, 0x12, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x5f, 0x73, 0x63,
+	0x68, 0x65, 0x6d, 0x61, 0x5f, 0x68, 0x61, 0x73, 0x68, 0x18, 0x14, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x10, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x53, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x48, 0x61, 0x73,
+	0x68, 0x12, 0x32, 0x0a, 0x15, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x5f, 0x63, 0x6f, 0x76, 0x65,
+	0x72, 0x61, 0x67, 0x65, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x18, 0x15, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x13, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x43, 0x6f, 0x76, 0x65, 0x72, 0x61, 0x67, 0x65,
+	0x53, 0x74, 0x61, 0x72, 0x74, 0x12, 0x2e, 0x0a, 0x13, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x5f,
+	0x63, 0x6f, 0x76, 0x65, 0x72, 0x61, 0x67, 0x65, 0x5f, 0x65, 0x6e, 0x64, 0x18, 0x16, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x11, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x43, 0x6f, 0x76, 0x65, 0x72, 0x61,
+	0x67, 0x65, 0x45, 0x6e, 0x64, 0x12, 0x42, 0x0a, 0x0b, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x5f, 0x62,
+	0x75, 0x69, 0x6c, 0x64, 0x18, 0x17, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x21, 0x2e, 0x74, 0x72, 0x70,
+	0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x56,
+	0x69, 0x65, 0x77, 0x49, 0x6e, 0x64, 0x65, 0x78, 0x42, 0x75, 0x69, 0x6c, 0x64, 0x52, 0x0a, 0x69,
+	0x6e, 0x64, 0x65, 0x78, 0x42, 0x75, 0x69, 0x6c, 0x64, 0x12, 0x4b, 0x0a, 0x10, 0x72, 0x65, 0x63,
+	0x6f, 0x72, 0x64, 0x5f, 0x76, 0x69, 0x65, 0x77, 0x5f, 0x6d, 0x6f, 0x64, 0x65, 0x18, 0x18, 0x20,
+	0x01, 0x28, 0x0e, 0x32, 0x21, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x56, 0x69,
+	0x65, 0x77, 0x4d, 0x6f, 0x64, 0x65, 0x52, 0x0e, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x56, 0x69,
+	0x65, 0x77, 0x4d, 0x6f, 0x64, 0x65, 0x1a, 0x3d, 0x0a, 0x0f, 0x41, 0x74, 0x74, 0x72, 0x69, 0x62,
 	0x75, 0x74, 0x65, 0x73, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x12, 0x10, 0x0a, 0x03, 0x6b, 0x65, 0x79,
 	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x6b, 0x65, 0x79, 0x12, 0x14, 0x0a, 0x05, 0x76,
 	0x61, 0x6c, 0x75, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x76, 0x61, 0x6c, 0x75,
@@ -11212,7 +11382,14 @@ var file_metadata_proto_rawDesc = []byte{
 	0x6e, 0x66, 0x6f, 0x12, 0x37, 0x0a, 0x05, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x18, 0x02, 0x20, 0x01,
 	0x28, 0x0b, 0x32, 0x21, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73,
 	0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x56, 0x69, 0x65, 0x77, 0x49, 0x6e, 0x64, 0x65, 0x78,
-	0x42, 0x75, 0x69, 0x6c, 0x64, 0x52, 0x05, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x32, 0xc1, 0x28, 0x0a,
+	0x42, 0x75, 0x69, 0x6c, 0x64, 0x52, 0x05, 0x62, 0x75, 0x69, 0x6c, 0x64, 0x2a, 0x6e, 0x0a, 0x0e,
+	0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x56, 0x69, 0x65, 0x77, 0x4d, 0x6f, 0x64, 0x65, 0x12, 0x20,
+	0x0a, 0x1c, 0x52, 0x45, 0x43, 0x4f, 0x52, 0x44, 0x5f, 0x56, 0x49, 0x45, 0x57, 0x5f, 0x4d, 0x4f,
+	0x44, 0x45, 0x5f, 0x55, 0x4e, 0x53, 0x50, 0x45, 0x43, 0x49, 0x46, 0x49, 0x45, 0x44, 0x10, 0x00,
+	0x12, 0x1c, 0x0a, 0x18, 0x52, 0x45, 0x43, 0x4f, 0x52, 0x44, 0x5f, 0x56, 0x49, 0x45, 0x57, 0x5f,
+	0x4d, 0x4f, 0x44, 0x45, 0x5f, 0x43, 0x55, 0x52, 0x52, 0x45, 0x4e, 0x54, 0x10, 0x01, 0x12, 0x1c,
+	0x0a, 0x18, 0x52, 0x45, 0x43, 0x4f, 0x52, 0x44, 0x5f, 0x56, 0x49, 0x45, 0x57, 0x5f, 0x4d, 0x4f,
+	0x44, 0x45, 0x5f, 0x48, 0x49, 0x53, 0x54, 0x4f, 0x52, 0x59, 0x10, 0x02, 0x32, 0xc1, 0x28, 0x0a,
 	0x08, 0x4d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x12, 0x53, 0x0a, 0x0b, 0x43, 0x72, 0x65,
 	0x61, 0x74, 0x65, 0x53, 0x70, 0x61, 0x63, 0x65, 0x12, 0x21, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e,
 	0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x43, 0x72, 0x65,
@@ -11556,526 +11733,528 @@ func file_metadata_proto_rawDescGZIP() []byte {
 	return file_metadata_proto_rawDescData
 }
 
-var file_metadata_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_metadata_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_metadata_proto_msgTypes = make([]protoimpl.MessageInfo, 139)
 var file_metadata_proto_goTypes = []interface{}{
-	(ViewIndexBuild_State)(0),          // 0: trpc.moox.storage.ViewIndexBuild.State
-	(*Space)(nil),                      // 1: trpc.moox.storage.Space
-	(*ViewIndexBuild)(nil),             // 2: trpc.moox.storage.ViewIndexBuild
-	(*View)(nil),                       // 3: trpc.moox.storage.View
-	(*ViewColumn)(nil),                 // 4: trpc.moox.storage.ViewColumn
-	(*DataSource)(nil),                 // 5: trpc.moox.storage.DataSource
-	(*Subject)(nil),                    // 6: trpc.moox.storage.Subject
-	(*SubjectSymbol)(nil),              // 7: trpc.moox.storage.SubjectSymbol
-	(*Dataset)(nil),                    // 8: trpc.moox.storage.Dataset
-	(*DatasetSubject)(nil),             // 9: trpc.moox.storage.DatasetSubject
-	(*Field)(nil),                      // 10: trpc.moox.storage.Field
-	(*Factor)(nil),                     // 11: trpc.moox.storage.Factor
-	(*DatasetColumn)(nil),              // 12: trpc.moox.storage.DatasetColumn
-	(*PrimaryStoreNode)(nil),           // 13: trpc.moox.storage.PrimaryStoreNode
-	(*Device)(nil),                     // 14: trpc.moox.storage.Device
-	(*PrimaryStoreRoute)(nil),          // 15: trpc.moox.storage.PrimaryStoreRoute
-	(*ArchiveFile)(nil),                // 16: trpc.moox.storage.ArchiveFile
-	(*CreateSpaceReq)(nil),             // 17: trpc.moox.storage.CreateSpaceReq
-	(*CreateSpaceRsp)(nil),             // 18: trpc.moox.storage.CreateSpaceRsp
-	(*UpdateSpaceReq)(nil),             // 19: trpc.moox.storage.UpdateSpaceReq
-	(*UpdateSpaceRsp)(nil),             // 20: trpc.moox.storage.UpdateSpaceRsp
-	(*GetSpaceReq)(nil),                // 21: trpc.moox.storage.GetSpaceReq
-	(*GetSpaceRsp)(nil),                // 22: trpc.moox.storage.GetSpaceRsp
-	(*ListSpacesReq)(nil),              // 23: trpc.moox.storage.ListSpacesReq
-	(*ListSpacesRsp)(nil),              // 24: trpc.moox.storage.ListSpacesRsp
-	(*CreateViewReq)(nil),              // 25: trpc.moox.storage.CreateViewReq
-	(*CreateViewRsp)(nil),              // 26: trpc.moox.storage.CreateViewRsp
-	(*UpdateViewReq)(nil),              // 27: trpc.moox.storage.UpdateViewReq
-	(*UpdateViewRsp)(nil),              // 28: trpc.moox.storage.UpdateViewRsp
-	(*GetViewReq)(nil),                 // 29: trpc.moox.storage.GetViewReq
-	(*GetViewRsp)(nil),                 // 30: trpc.moox.storage.GetViewRsp
-	(*ListViewsReq)(nil),               // 31: trpc.moox.storage.ListViewsReq
-	(*ListViewsRsp)(nil),               // 32: trpc.moox.storage.ListViewsRsp
-	(*UpsertViewColumnReq)(nil),        // 33: trpc.moox.storage.UpsertViewColumnReq
-	(*UpsertViewColumnRsp)(nil),        // 34: trpc.moox.storage.UpsertViewColumnRsp
-	(*ListViewColumnsReq)(nil),         // 35: trpc.moox.storage.ListViewColumnsReq
-	(*ListViewColumnsRsp)(nil),         // 36: trpc.moox.storage.ListViewColumnsRsp
-	(*CreateDataSourceReq)(nil),        // 37: trpc.moox.storage.CreateDataSourceReq
-	(*CreateDataSourceRsp)(nil),        // 38: trpc.moox.storage.CreateDataSourceRsp
-	(*UpdateDataSourceReq)(nil),        // 39: trpc.moox.storage.UpdateDataSourceReq
-	(*UpdateDataSourceRsp)(nil),        // 40: trpc.moox.storage.UpdateDataSourceRsp
-	(*GetDataSourceReq)(nil),           // 41: trpc.moox.storage.GetDataSourceReq
-	(*GetDataSourceRsp)(nil),           // 42: trpc.moox.storage.GetDataSourceRsp
-	(*ListDataSourcesReq)(nil),         // 43: trpc.moox.storage.ListDataSourcesReq
-	(*ListDataSourcesRsp)(nil),         // 44: trpc.moox.storage.ListDataSourcesRsp
-	(*UpsertSubjectReq)(nil),           // 45: trpc.moox.storage.UpsertSubjectReq
-	(*UpsertSubjectRsp)(nil),           // 46: trpc.moox.storage.UpsertSubjectRsp
-	(*RegisterDataSubjectReq)(nil),     // 47: trpc.moox.storage.RegisterDataSubjectReq
-	(*RegisterDataSubjectRsp)(nil),     // 48: trpc.moox.storage.RegisterDataSubjectRsp
-	(*GetSubjectReq)(nil),              // 49: trpc.moox.storage.GetSubjectReq
-	(*GetSubjectRsp)(nil),              // 50: trpc.moox.storage.GetSubjectRsp
-	(*ListSubjectsReq)(nil),            // 51: trpc.moox.storage.ListSubjectsReq
-	(*ListSubjectsRsp)(nil),            // 52: trpc.moox.storage.ListSubjectsRsp
-	(*UpsertSubjectSymbolReq)(nil),     // 53: trpc.moox.storage.UpsertSubjectSymbolReq
-	(*UpsertSubjectSymbolRsp)(nil),     // 54: trpc.moox.storage.UpsertSubjectSymbolRsp
-	(*ListSubjectSymbolsReq)(nil),      // 55: trpc.moox.storage.ListSubjectSymbolsReq
-	(*ListSubjectSymbolsRsp)(nil),      // 56: trpc.moox.storage.ListSubjectSymbolsRsp
-	(*CreateDatasetReq)(nil),           // 57: trpc.moox.storage.CreateDatasetReq
-	(*CreateDatasetRsp)(nil),           // 58: trpc.moox.storage.CreateDatasetRsp
-	(*UpdateDatasetReq)(nil),           // 59: trpc.moox.storage.UpdateDatasetReq
-	(*UpdateDatasetRsp)(nil),           // 60: trpc.moox.storage.UpdateDatasetRsp
-	(*GetDatasetReq)(nil),              // 61: trpc.moox.storage.GetDatasetReq
-	(*GetDatasetRsp)(nil),              // 62: trpc.moox.storage.GetDatasetRsp
-	(*ListDatasetsReq)(nil),            // 63: trpc.moox.storage.ListDatasetsReq
-	(*ListDatasetsRsp)(nil),            // 64: trpc.moox.storage.ListDatasetsRsp
-	(*BindDatasetSubjectReq)(nil),      // 65: trpc.moox.storage.BindDatasetSubjectReq
-	(*BindDatasetSubjectRsp)(nil),      // 66: trpc.moox.storage.BindDatasetSubjectRsp
-	(*ListDatasetSubjectsReq)(nil),     // 67: trpc.moox.storage.ListDatasetSubjectsReq
-	(*ListDatasetSubjectsRsp)(nil),     // 68: trpc.moox.storage.ListDatasetSubjectsRsp
-	(*CreateFieldReq)(nil),             // 69: trpc.moox.storage.CreateFieldReq
-	(*CreateFieldRsp)(nil),             // 70: trpc.moox.storage.CreateFieldRsp
-	(*UpdateFieldReq)(nil),             // 71: trpc.moox.storage.UpdateFieldReq
-	(*UpdateFieldRsp)(nil),             // 72: trpc.moox.storage.UpdateFieldRsp
-	(*GetFieldReq)(nil),                // 73: trpc.moox.storage.GetFieldReq
-	(*GetFieldRsp)(nil),                // 74: trpc.moox.storage.GetFieldRsp
-	(*ListFieldsReq)(nil),              // 75: trpc.moox.storage.ListFieldsReq
-	(*ListFieldsRsp)(nil),              // 76: trpc.moox.storage.ListFieldsRsp
-	(*CreateFactorReq)(nil),            // 77: trpc.moox.storage.CreateFactorReq
-	(*CreateFactorRsp)(nil),            // 78: trpc.moox.storage.CreateFactorRsp
-	(*UpdateFactorReq)(nil),            // 79: trpc.moox.storage.UpdateFactorReq
-	(*UpdateFactorRsp)(nil),            // 80: trpc.moox.storage.UpdateFactorRsp
-	(*GetFactorReq)(nil),               // 81: trpc.moox.storage.GetFactorReq
-	(*GetFactorRsp)(nil),               // 82: trpc.moox.storage.GetFactorRsp
-	(*ListFactorsReq)(nil),             // 83: trpc.moox.storage.ListFactorsReq
-	(*ListFactorsRsp)(nil),             // 84: trpc.moox.storage.ListFactorsRsp
-	(*UpsertDatasetColumnReq)(nil),     // 85: trpc.moox.storage.UpsertDatasetColumnReq
-	(*UpsertDatasetColumnRsp)(nil),     // 86: trpc.moox.storage.UpsertDatasetColumnRsp
-	(*ListDatasetColumnsReq)(nil),      // 87: trpc.moox.storage.ListDatasetColumnsReq
-	(*ListDatasetColumnsRsp)(nil),      // 88: trpc.moox.storage.ListDatasetColumnsRsp
-	(*CreatePrimaryStoreNodeReq)(nil),  // 89: trpc.moox.storage.CreatePrimaryStoreNodeReq
-	(*CreatePrimaryStoreNodeRsp)(nil),  // 90: trpc.moox.storage.CreatePrimaryStoreNodeRsp
-	(*UpdatePrimaryStoreNodeReq)(nil),  // 91: trpc.moox.storage.UpdatePrimaryStoreNodeReq
-	(*UpdatePrimaryStoreNodeRsp)(nil),  // 92: trpc.moox.storage.UpdatePrimaryStoreNodeRsp
-	(*GetPrimaryStoreNodeReq)(nil),     // 93: trpc.moox.storage.GetPrimaryStoreNodeReq
-	(*GetPrimaryStoreNodeRsp)(nil),     // 94: trpc.moox.storage.GetPrimaryStoreNodeRsp
-	(*ListPrimaryStoreNodesReq)(nil),   // 95: trpc.moox.storage.ListPrimaryStoreNodesReq
-	(*ListPrimaryStoreNodesRsp)(nil),   // 96: trpc.moox.storage.ListPrimaryStoreNodesRsp
-	(*CreateDeviceReq)(nil),            // 97: trpc.moox.storage.CreateDeviceReq
-	(*CreateDeviceRsp)(nil),            // 98: trpc.moox.storage.CreateDeviceRsp
-	(*UpdateDeviceReq)(nil),            // 99: trpc.moox.storage.UpdateDeviceReq
-	(*UpdateDeviceRsp)(nil),            // 100: trpc.moox.storage.UpdateDeviceRsp
-	(*GetDeviceReq)(nil),               // 101: trpc.moox.storage.GetDeviceReq
-	(*GetDeviceRsp)(nil),               // 102: trpc.moox.storage.GetDeviceRsp
-	(*ListDevicesReq)(nil),             // 103: trpc.moox.storage.ListDevicesReq
-	(*ListDevicesRsp)(nil),             // 104: trpc.moox.storage.ListDevicesRsp
-	(*CreatePrimaryStoreRouteReq)(nil), // 105: trpc.moox.storage.CreatePrimaryStoreRouteReq
-	(*CreatePrimaryStoreRouteRsp)(nil), // 106: trpc.moox.storage.CreatePrimaryStoreRouteRsp
-	(*UpdatePrimaryStoreRouteReq)(nil), // 107: trpc.moox.storage.UpdatePrimaryStoreRouteReq
-	(*UpdatePrimaryStoreRouteRsp)(nil), // 108: trpc.moox.storage.UpdatePrimaryStoreRouteRsp
-	(*GetPrimaryStoreRouteReq)(nil),    // 109: trpc.moox.storage.GetPrimaryStoreRouteReq
-	(*GetPrimaryStoreRouteRsp)(nil),    // 110: trpc.moox.storage.GetPrimaryStoreRouteRsp
-	(*ListPrimaryStoreRoutesReq)(nil),  // 111: trpc.moox.storage.ListPrimaryStoreRoutesReq
-	(*ListPrimaryStoreRoutesRsp)(nil),  // 112: trpc.moox.storage.ListPrimaryStoreRoutesRsp
-	(*RegisterArchiveFileReq)(nil),     // 113: trpc.moox.storage.RegisterArchiveFileReq
-	(*RegisterArchiveFileRsp)(nil),     // 114: trpc.moox.storage.RegisterArchiveFileRsp
-	(*ListArchiveFilesReq)(nil),        // 115: trpc.moox.storage.ListArchiveFilesReq
-	(*ListArchiveFilesRsp)(nil),        // 116: trpc.moox.storage.ListArchiveFilesRsp
-	(*ClaimViewIndexBuildReq)(nil),     // 117: trpc.moox.storage.ClaimViewIndexBuildReq
-	(*ClaimViewIndexBuildRsp)(nil),     // 118: trpc.moox.storage.ClaimViewIndexBuildRsp
-	(*UpdateViewIndexBuildReq)(nil),    // 119: trpc.moox.storage.UpdateViewIndexBuildReq
-	(*UpdateViewIndexBuildRsp)(nil),    // 120: trpc.moox.storage.UpdateViewIndexBuildRsp
-	(*ActivateViewIndexReq)(nil),       // 121: trpc.moox.storage.ActivateViewIndexReq
-	(*ActivateViewIndexRsp)(nil),       // 122: trpc.moox.storage.ActivateViewIndexRsp
-	(*FailViewIndexBuildReq)(nil),      // 123: trpc.moox.storage.FailViewIndexBuildReq
-	(*FailViewIndexBuildRsp)(nil),      // 124: trpc.moox.storage.FailViewIndexBuildRsp
-	nil,                                // 125: trpc.moox.storage.Space.AttributesEntry
-	nil,                                // 126: trpc.moox.storage.View.AttributesEntry
-	nil,                                // 127: trpc.moox.storage.ViewColumn.AttributesEntry
-	nil,                                // 128: trpc.moox.storage.DataSource.AttributesEntry
-	nil,                                // 129: trpc.moox.storage.Subject.AttributesEntry
-	nil,                                // 130: trpc.moox.storage.SubjectSymbol.AttributesEntry
-	nil,                                // 131: trpc.moox.storage.Dataset.AttributesEntry
-	nil,                                // 132: trpc.moox.storage.DatasetSubject.AttributesEntry
-	nil,                                // 133: trpc.moox.storage.Field.AttributesEntry
-	nil,                                // 134: trpc.moox.storage.Factor.AttributesEntry
-	nil,                                // 135: trpc.moox.storage.DatasetColumn.AttributesEntry
-	nil,                                // 136: trpc.moox.storage.PrimaryStoreNode.AttributesEntry
-	nil,                                // 137: trpc.moox.storage.Device.AttributesEntry
-	nil,                                // 138: trpc.moox.storage.PrimaryStoreRoute.AttributesEntry
-	nil,                                // 139: trpc.moox.storage.ArchiveFile.AttributesEntry
-	(ColumnOriginType)(0),              // 140: trpc.moox.storage.ColumnOriginType
-	(FieldValueType)(0),                // 141: trpc.moox.storage.FieldValueType
-	(DataKind)(0),                      // 142: trpc.moox.storage.DataKind
-	(DatasetColumnOriginType)(0),       // 143: trpc.moox.storage.DatasetColumnOriginType
-	(*commonpb.AuthInfo)(nil),          // 144: trpc.moox.common.AuthInfo
-	(*commonpb.RetInfo)(nil),           // 145: trpc.moox.common.RetInfo
-	(*commonpb.Page)(nil),              // 146: trpc.moox.common.Page
-	(*commonpb.PageResult)(nil),        // 147: trpc.moox.common.PageResult
-	(*TimeRange)(nil),                  // 148: trpc.moox.storage.TimeRange
+	(RecordViewMode)(0),                // 0: trpc.moox.storage.RecordViewMode
+	(ViewIndexBuild_State)(0),          // 1: trpc.moox.storage.ViewIndexBuild.State
+	(*Space)(nil),                      // 2: trpc.moox.storage.Space
+	(*ViewIndexBuild)(nil),             // 3: trpc.moox.storage.ViewIndexBuild
+	(*View)(nil),                       // 4: trpc.moox.storage.View
+	(*ViewColumn)(nil),                 // 5: trpc.moox.storage.ViewColumn
+	(*DataSource)(nil),                 // 6: trpc.moox.storage.DataSource
+	(*Subject)(nil),                    // 7: trpc.moox.storage.Subject
+	(*SubjectSymbol)(nil),              // 8: trpc.moox.storage.SubjectSymbol
+	(*Dataset)(nil),                    // 9: trpc.moox.storage.Dataset
+	(*DatasetSubject)(nil),             // 10: trpc.moox.storage.DatasetSubject
+	(*Field)(nil),                      // 11: trpc.moox.storage.Field
+	(*Factor)(nil),                     // 12: trpc.moox.storage.Factor
+	(*DatasetColumn)(nil),              // 13: trpc.moox.storage.DatasetColumn
+	(*PrimaryStoreNode)(nil),           // 14: trpc.moox.storage.PrimaryStoreNode
+	(*Device)(nil),                     // 15: trpc.moox.storage.Device
+	(*PrimaryStoreRoute)(nil),          // 16: trpc.moox.storage.PrimaryStoreRoute
+	(*ArchiveFile)(nil),                // 17: trpc.moox.storage.ArchiveFile
+	(*CreateSpaceReq)(nil),             // 18: trpc.moox.storage.CreateSpaceReq
+	(*CreateSpaceRsp)(nil),             // 19: trpc.moox.storage.CreateSpaceRsp
+	(*UpdateSpaceReq)(nil),             // 20: trpc.moox.storage.UpdateSpaceReq
+	(*UpdateSpaceRsp)(nil),             // 21: trpc.moox.storage.UpdateSpaceRsp
+	(*GetSpaceReq)(nil),                // 22: trpc.moox.storage.GetSpaceReq
+	(*GetSpaceRsp)(nil),                // 23: trpc.moox.storage.GetSpaceRsp
+	(*ListSpacesReq)(nil),              // 24: trpc.moox.storage.ListSpacesReq
+	(*ListSpacesRsp)(nil),              // 25: trpc.moox.storage.ListSpacesRsp
+	(*CreateViewReq)(nil),              // 26: trpc.moox.storage.CreateViewReq
+	(*CreateViewRsp)(nil),              // 27: trpc.moox.storage.CreateViewRsp
+	(*UpdateViewReq)(nil),              // 28: trpc.moox.storage.UpdateViewReq
+	(*UpdateViewRsp)(nil),              // 29: trpc.moox.storage.UpdateViewRsp
+	(*GetViewReq)(nil),                 // 30: trpc.moox.storage.GetViewReq
+	(*GetViewRsp)(nil),                 // 31: trpc.moox.storage.GetViewRsp
+	(*ListViewsReq)(nil),               // 32: trpc.moox.storage.ListViewsReq
+	(*ListViewsRsp)(nil),               // 33: trpc.moox.storage.ListViewsRsp
+	(*UpsertViewColumnReq)(nil),        // 34: trpc.moox.storage.UpsertViewColumnReq
+	(*UpsertViewColumnRsp)(nil),        // 35: trpc.moox.storage.UpsertViewColumnRsp
+	(*ListViewColumnsReq)(nil),         // 36: trpc.moox.storage.ListViewColumnsReq
+	(*ListViewColumnsRsp)(nil),         // 37: trpc.moox.storage.ListViewColumnsRsp
+	(*CreateDataSourceReq)(nil),        // 38: trpc.moox.storage.CreateDataSourceReq
+	(*CreateDataSourceRsp)(nil),        // 39: trpc.moox.storage.CreateDataSourceRsp
+	(*UpdateDataSourceReq)(nil),        // 40: trpc.moox.storage.UpdateDataSourceReq
+	(*UpdateDataSourceRsp)(nil),        // 41: trpc.moox.storage.UpdateDataSourceRsp
+	(*GetDataSourceReq)(nil),           // 42: trpc.moox.storage.GetDataSourceReq
+	(*GetDataSourceRsp)(nil),           // 43: trpc.moox.storage.GetDataSourceRsp
+	(*ListDataSourcesReq)(nil),         // 44: trpc.moox.storage.ListDataSourcesReq
+	(*ListDataSourcesRsp)(nil),         // 45: trpc.moox.storage.ListDataSourcesRsp
+	(*UpsertSubjectReq)(nil),           // 46: trpc.moox.storage.UpsertSubjectReq
+	(*UpsertSubjectRsp)(nil),           // 47: trpc.moox.storage.UpsertSubjectRsp
+	(*RegisterDataSubjectReq)(nil),     // 48: trpc.moox.storage.RegisterDataSubjectReq
+	(*RegisterDataSubjectRsp)(nil),     // 49: trpc.moox.storage.RegisterDataSubjectRsp
+	(*GetSubjectReq)(nil),              // 50: trpc.moox.storage.GetSubjectReq
+	(*GetSubjectRsp)(nil),              // 51: trpc.moox.storage.GetSubjectRsp
+	(*ListSubjectsReq)(nil),            // 52: trpc.moox.storage.ListSubjectsReq
+	(*ListSubjectsRsp)(nil),            // 53: trpc.moox.storage.ListSubjectsRsp
+	(*UpsertSubjectSymbolReq)(nil),     // 54: trpc.moox.storage.UpsertSubjectSymbolReq
+	(*UpsertSubjectSymbolRsp)(nil),     // 55: trpc.moox.storage.UpsertSubjectSymbolRsp
+	(*ListSubjectSymbolsReq)(nil),      // 56: trpc.moox.storage.ListSubjectSymbolsReq
+	(*ListSubjectSymbolsRsp)(nil),      // 57: trpc.moox.storage.ListSubjectSymbolsRsp
+	(*CreateDatasetReq)(nil),           // 58: trpc.moox.storage.CreateDatasetReq
+	(*CreateDatasetRsp)(nil),           // 59: trpc.moox.storage.CreateDatasetRsp
+	(*UpdateDatasetReq)(nil),           // 60: trpc.moox.storage.UpdateDatasetReq
+	(*UpdateDatasetRsp)(nil),           // 61: trpc.moox.storage.UpdateDatasetRsp
+	(*GetDatasetReq)(nil),              // 62: trpc.moox.storage.GetDatasetReq
+	(*GetDatasetRsp)(nil),              // 63: trpc.moox.storage.GetDatasetRsp
+	(*ListDatasetsReq)(nil),            // 64: trpc.moox.storage.ListDatasetsReq
+	(*ListDatasetsRsp)(nil),            // 65: trpc.moox.storage.ListDatasetsRsp
+	(*BindDatasetSubjectReq)(nil),      // 66: trpc.moox.storage.BindDatasetSubjectReq
+	(*BindDatasetSubjectRsp)(nil),      // 67: trpc.moox.storage.BindDatasetSubjectRsp
+	(*ListDatasetSubjectsReq)(nil),     // 68: trpc.moox.storage.ListDatasetSubjectsReq
+	(*ListDatasetSubjectsRsp)(nil),     // 69: trpc.moox.storage.ListDatasetSubjectsRsp
+	(*CreateFieldReq)(nil),             // 70: trpc.moox.storage.CreateFieldReq
+	(*CreateFieldRsp)(nil),             // 71: trpc.moox.storage.CreateFieldRsp
+	(*UpdateFieldReq)(nil),             // 72: trpc.moox.storage.UpdateFieldReq
+	(*UpdateFieldRsp)(nil),             // 73: trpc.moox.storage.UpdateFieldRsp
+	(*GetFieldReq)(nil),                // 74: trpc.moox.storage.GetFieldReq
+	(*GetFieldRsp)(nil),                // 75: trpc.moox.storage.GetFieldRsp
+	(*ListFieldsReq)(nil),              // 76: trpc.moox.storage.ListFieldsReq
+	(*ListFieldsRsp)(nil),              // 77: trpc.moox.storage.ListFieldsRsp
+	(*CreateFactorReq)(nil),            // 78: trpc.moox.storage.CreateFactorReq
+	(*CreateFactorRsp)(nil),            // 79: trpc.moox.storage.CreateFactorRsp
+	(*UpdateFactorReq)(nil),            // 80: trpc.moox.storage.UpdateFactorReq
+	(*UpdateFactorRsp)(nil),            // 81: trpc.moox.storage.UpdateFactorRsp
+	(*GetFactorReq)(nil),               // 82: trpc.moox.storage.GetFactorReq
+	(*GetFactorRsp)(nil),               // 83: trpc.moox.storage.GetFactorRsp
+	(*ListFactorsReq)(nil),             // 84: trpc.moox.storage.ListFactorsReq
+	(*ListFactorsRsp)(nil),             // 85: trpc.moox.storage.ListFactorsRsp
+	(*UpsertDatasetColumnReq)(nil),     // 86: trpc.moox.storage.UpsertDatasetColumnReq
+	(*UpsertDatasetColumnRsp)(nil),     // 87: trpc.moox.storage.UpsertDatasetColumnRsp
+	(*ListDatasetColumnsReq)(nil),      // 88: trpc.moox.storage.ListDatasetColumnsReq
+	(*ListDatasetColumnsRsp)(nil),      // 89: trpc.moox.storage.ListDatasetColumnsRsp
+	(*CreatePrimaryStoreNodeReq)(nil),  // 90: trpc.moox.storage.CreatePrimaryStoreNodeReq
+	(*CreatePrimaryStoreNodeRsp)(nil),  // 91: trpc.moox.storage.CreatePrimaryStoreNodeRsp
+	(*UpdatePrimaryStoreNodeReq)(nil),  // 92: trpc.moox.storage.UpdatePrimaryStoreNodeReq
+	(*UpdatePrimaryStoreNodeRsp)(nil),  // 93: trpc.moox.storage.UpdatePrimaryStoreNodeRsp
+	(*GetPrimaryStoreNodeReq)(nil),     // 94: trpc.moox.storage.GetPrimaryStoreNodeReq
+	(*GetPrimaryStoreNodeRsp)(nil),     // 95: trpc.moox.storage.GetPrimaryStoreNodeRsp
+	(*ListPrimaryStoreNodesReq)(nil),   // 96: trpc.moox.storage.ListPrimaryStoreNodesReq
+	(*ListPrimaryStoreNodesRsp)(nil),   // 97: trpc.moox.storage.ListPrimaryStoreNodesRsp
+	(*CreateDeviceReq)(nil),            // 98: trpc.moox.storage.CreateDeviceReq
+	(*CreateDeviceRsp)(nil),            // 99: trpc.moox.storage.CreateDeviceRsp
+	(*UpdateDeviceReq)(nil),            // 100: trpc.moox.storage.UpdateDeviceReq
+	(*UpdateDeviceRsp)(nil),            // 101: trpc.moox.storage.UpdateDeviceRsp
+	(*GetDeviceReq)(nil),               // 102: trpc.moox.storage.GetDeviceReq
+	(*GetDeviceRsp)(nil),               // 103: trpc.moox.storage.GetDeviceRsp
+	(*ListDevicesReq)(nil),             // 104: trpc.moox.storage.ListDevicesReq
+	(*ListDevicesRsp)(nil),             // 105: trpc.moox.storage.ListDevicesRsp
+	(*CreatePrimaryStoreRouteReq)(nil), // 106: trpc.moox.storage.CreatePrimaryStoreRouteReq
+	(*CreatePrimaryStoreRouteRsp)(nil), // 107: trpc.moox.storage.CreatePrimaryStoreRouteRsp
+	(*UpdatePrimaryStoreRouteReq)(nil), // 108: trpc.moox.storage.UpdatePrimaryStoreRouteReq
+	(*UpdatePrimaryStoreRouteRsp)(nil), // 109: trpc.moox.storage.UpdatePrimaryStoreRouteRsp
+	(*GetPrimaryStoreRouteReq)(nil),    // 110: trpc.moox.storage.GetPrimaryStoreRouteReq
+	(*GetPrimaryStoreRouteRsp)(nil),    // 111: trpc.moox.storage.GetPrimaryStoreRouteRsp
+	(*ListPrimaryStoreRoutesReq)(nil),  // 112: trpc.moox.storage.ListPrimaryStoreRoutesReq
+	(*ListPrimaryStoreRoutesRsp)(nil),  // 113: trpc.moox.storage.ListPrimaryStoreRoutesRsp
+	(*RegisterArchiveFileReq)(nil),     // 114: trpc.moox.storage.RegisterArchiveFileReq
+	(*RegisterArchiveFileRsp)(nil),     // 115: trpc.moox.storage.RegisterArchiveFileRsp
+	(*ListArchiveFilesReq)(nil),        // 116: trpc.moox.storage.ListArchiveFilesReq
+	(*ListArchiveFilesRsp)(nil),        // 117: trpc.moox.storage.ListArchiveFilesRsp
+	(*ClaimViewIndexBuildReq)(nil),     // 118: trpc.moox.storage.ClaimViewIndexBuildReq
+	(*ClaimViewIndexBuildRsp)(nil),     // 119: trpc.moox.storage.ClaimViewIndexBuildRsp
+	(*UpdateViewIndexBuildReq)(nil),    // 120: trpc.moox.storage.UpdateViewIndexBuildReq
+	(*UpdateViewIndexBuildRsp)(nil),    // 121: trpc.moox.storage.UpdateViewIndexBuildRsp
+	(*ActivateViewIndexReq)(nil),       // 122: trpc.moox.storage.ActivateViewIndexReq
+	(*ActivateViewIndexRsp)(nil),       // 123: trpc.moox.storage.ActivateViewIndexRsp
+	(*FailViewIndexBuildReq)(nil),      // 124: trpc.moox.storage.FailViewIndexBuildReq
+	(*FailViewIndexBuildRsp)(nil),      // 125: trpc.moox.storage.FailViewIndexBuildRsp
+	nil,                                // 126: trpc.moox.storage.Space.AttributesEntry
+	nil,                                // 127: trpc.moox.storage.View.AttributesEntry
+	nil,                                // 128: trpc.moox.storage.ViewColumn.AttributesEntry
+	nil,                                // 129: trpc.moox.storage.DataSource.AttributesEntry
+	nil,                                // 130: trpc.moox.storage.Subject.AttributesEntry
+	nil,                                // 131: trpc.moox.storage.SubjectSymbol.AttributesEntry
+	nil,                                // 132: trpc.moox.storage.Dataset.AttributesEntry
+	nil,                                // 133: trpc.moox.storage.DatasetSubject.AttributesEntry
+	nil,                                // 134: trpc.moox.storage.Field.AttributesEntry
+	nil,                                // 135: trpc.moox.storage.Factor.AttributesEntry
+	nil,                                // 136: trpc.moox.storage.DatasetColumn.AttributesEntry
+	nil,                                // 137: trpc.moox.storage.PrimaryStoreNode.AttributesEntry
+	nil,                                // 138: trpc.moox.storage.Device.AttributesEntry
+	nil,                                // 139: trpc.moox.storage.PrimaryStoreRoute.AttributesEntry
+	nil,                                // 140: trpc.moox.storage.ArchiveFile.AttributesEntry
+	(ColumnOriginType)(0),              // 141: trpc.moox.storage.ColumnOriginType
+	(FieldValueType)(0),                // 142: trpc.moox.storage.FieldValueType
+	(DataKind)(0),                      // 143: trpc.moox.storage.DataKind
+	(DatasetColumnOriginType)(0),       // 144: trpc.moox.storage.DatasetColumnOriginType
+	(*commonpb.AuthInfo)(nil),          // 145: trpc.moox.common.AuthInfo
+	(*commonpb.RetInfo)(nil),           // 146: trpc.moox.common.RetInfo
+	(*commonpb.Page)(nil),              // 147: trpc.moox.common.Page
+	(*commonpb.PageResult)(nil),        // 148: trpc.moox.common.PageResult
+	(*TimeRange)(nil),                  // 149: trpc.moox.storage.TimeRange
 }
 var file_metadata_proto_depIdxs = []int32{
-	125, // 0: trpc.moox.storage.Space.attributes:type_name -> trpc.moox.storage.Space.AttributesEntry
-	0,   // 1: trpc.moox.storage.ViewIndexBuild.state:type_name -> trpc.moox.storage.ViewIndexBuild.State
-	4,   // 2: trpc.moox.storage.ViewIndexBuild.columns:type_name -> trpc.moox.storage.ViewColumn
-	4,   // 3: trpc.moox.storage.View.columns:type_name -> trpc.moox.storage.ViewColumn
-	126, // 4: trpc.moox.storage.View.attributes:type_name -> trpc.moox.storage.View.AttributesEntry
-	4,   // 5: trpc.moox.storage.View.active_columns:type_name -> trpc.moox.storage.ViewColumn
-	2,   // 6: trpc.moox.storage.View.index_build:type_name -> trpc.moox.storage.ViewIndexBuild
-	140, // 7: trpc.moox.storage.ViewColumn.origin_type:type_name -> trpc.moox.storage.ColumnOriginType
-	141, // 8: trpc.moox.storage.ViewColumn.value_type:type_name -> trpc.moox.storage.FieldValueType
-	127, // 9: trpc.moox.storage.ViewColumn.attributes:type_name -> trpc.moox.storage.ViewColumn.AttributesEntry
-	128, // 10: trpc.moox.storage.DataSource.attributes:type_name -> trpc.moox.storage.DataSource.AttributesEntry
-	129, // 11: trpc.moox.storage.Subject.attributes:type_name -> trpc.moox.storage.Subject.AttributesEntry
-	130, // 12: trpc.moox.storage.SubjectSymbol.attributes:type_name -> trpc.moox.storage.SubjectSymbol.AttributesEntry
-	142, // 13: trpc.moox.storage.Dataset.data_kind:type_name -> trpc.moox.storage.DataKind
-	131, // 14: trpc.moox.storage.Dataset.attributes:type_name -> trpc.moox.storage.Dataset.AttributesEntry
-	132, // 15: trpc.moox.storage.DatasetSubject.attributes:type_name -> trpc.moox.storage.DatasetSubject.AttributesEntry
-	141, // 16: trpc.moox.storage.Field.value_type:type_name -> trpc.moox.storage.FieldValueType
-	133, // 17: trpc.moox.storage.Field.attributes:type_name -> trpc.moox.storage.Field.AttributesEntry
-	141, // 18: trpc.moox.storage.Factor.value_type:type_name -> trpc.moox.storage.FieldValueType
-	134, // 19: trpc.moox.storage.Factor.attributes:type_name -> trpc.moox.storage.Factor.AttributesEntry
-	143, // 20: trpc.moox.storage.DatasetColumn.origin_type:type_name -> trpc.moox.storage.DatasetColumnOriginType
-	141, // 21: trpc.moox.storage.DatasetColumn.value_type:type_name -> trpc.moox.storage.FieldValueType
-	135, // 22: trpc.moox.storage.DatasetColumn.attributes:type_name -> trpc.moox.storage.DatasetColumn.AttributesEntry
-	136, // 23: trpc.moox.storage.PrimaryStoreNode.attributes:type_name -> trpc.moox.storage.PrimaryStoreNode.AttributesEntry
-	137, // 24: trpc.moox.storage.Device.attributes:type_name -> trpc.moox.storage.Device.AttributesEntry
-	138, // 25: trpc.moox.storage.PrimaryStoreRoute.attributes:type_name -> trpc.moox.storage.PrimaryStoreRoute.AttributesEntry
-	139, // 26: trpc.moox.storage.ArchiveFile.attributes:type_name -> trpc.moox.storage.ArchiveFile.AttributesEntry
-	144, // 27: trpc.moox.storage.CreateSpaceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	1,   // 28: trpc.moox.storage.CreateSpaceReq.space:type_name -> trpc.moox.storage.Space
-	145, // 29: trpc.moox.storage.CreateSpaceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	1,   // 30: trpc.moox.storage.CreateSpaceRsp.space:type_name -> trpc.moox.storage.Space
-	144, // 31: trpc.moox.storage.UpdateSpaceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	1,   // 32: trpc.moox.storage.UpdateSpaceReq.space:type_name -> trpc.moox.storage.Space
-	145, // 33: trpc.moox.storage.UpdateSpaceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	1,   // 34: trpc.moox.storage.UpdateSpaceRsp.space:type_name -> trpc.moox.storage.Space
-	144, // 35: trpc.moox.storage.GetSpaceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	145, // 36: trpc.moox.storage.GetSpaceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	1,   // 37: trpc.moox.storage.GetSpaceRsp.space:type_name -> trpc.moox.storage.Space
-	144, // 38: trpc.moox.storage.ListSpacesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	146, // 39: trpc.moox.storage.ListSpacesReq.page:type_name -> trpc.moox.common.Page
-	145, // 40: trpc.moox.storage.ListSpacesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	1,   // 41: trpc.moox.storage.ListSpacesRsp.spaces:type_name -> trpc.moox.storage.Space
-	147, // 42: trpc.moox.storage.ListSpacesRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 43: trpc.moox.storage.CreateViewReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	3,   // 44: trpc.moox.storage.CreateViewReq.view:type_name -> trpc.moox.storage.View
-	145, // 45: trpc.moox.storage.CreateViewRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,   // 46: trpc.moox.storage.CreateViewRsp.view:type_name -> trpc.moox.storage.View
-	144, // 47: trpc.moox.storage.UpdateViewReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	3,   // 48: trpc.moox.storage.UpdateViewReq.view:type_name -> trpc.moox.storage.View
-	145, // 49: trpc.moox.storage.UpdateViewRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,   // 50: trpc.moox.storage.UpdateViewRsp.view:type_name -> trpc.moox.storage.View
-	144, // 51: trpc.moox.storage.GetViewReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	145, // 52: trpc.moox.storage.GetViewRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,   // 53: trpc.moox.storage.GetViewRsp.view:type_name -> trpc.moox.storage.View
-	144, // 54: trpc.moox.storage.ListViewsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	146, // 55: trpc.moox.storage.ListViewsReq.page:type_name -> trpc.moox.common.Page
-	145, // 56: trpc.moox.storage.ListViewsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,   // 57: trpc.moox.storage.ListViewsRsp.views:type_name -> trpc.moox.storage.View
-	147, // 58: trpc.moox.storage.ListViewsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 59: trpc.moox.storage.UpsertViewColumnReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	4,   // 60: trpc.moox.storage.UpsertViewColumnReq.column:type_name -> trpc.moox.storage.ViewColumn
-	145, // 61: trpc.moox.storage.UpsertViewColumnRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	4,   // 62: trpc.moox.storage.UpsertViewColumnRsp.column:type_name -> trpc.moox.storage.ViewColumn
-	144, // 63: trpc.moox.storage.ListViewColumnsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	146, // 64: trpc.moox.storage.ListViewColumnsReq.page:type_name -> trpc.moox.common.Page
-	145, // 65: trpc.moox.storage.ListViewColumnsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	4,   // 66: trpc.moox.storage.ListViewColumnsRsp.columns:type_name -> trpc.moox.storage.ViewColumn
-	147, // 67: trpc.moox.storage.ListViewColumnsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 68: trpc.moox.storage.CreateDataSourceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	5,   // 69: trpc.moox.storage.CreateDataSourceReq.data_source:type_name -> trpc.moox.storage.DataSource
-	145, // 70: trpc.moox.storage.CreateDataSourceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	5,   // 71: trpc.moox.storage.CreateDataSourceRsp.data_source:type_name -> trpc.moox.storage.DataSource
-	144, // 72: trpc.moox.storage.UpdateDataSourceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	5,   // 73: trpc.moox.storage.UpdateDataSourceReq.data_source:type_name -> trpc.moox.storage.DataSource
-	145, // 74: trpc.moox.storage.UpdateDataSourceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	5,   // 75: trpc.moox.storage.UpdateDataSourceRsp.data_source:type_name -> trpc.moox.storage.DataSource
-	144, // 76: trpc.moox.storage.GetDataSourceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	145, // 77: trpc.moox.storage.GetDataSourceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	5,   // 78: trpc.moox.storage.GetDataSourceRsp.data_source:type_name -> trpc.moox.storage.DataSource
-	144, // 79: trpc.moox.storage.ListDataSourcesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	146, // 80: trpc.moox.storage.ListDataSourcesReq.page:type_name -> trpc.moox.common.Page
-	145, // 81: trpc.moox.storage.ListDataSourcesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	5,   // 82: trpc.moox.storage.ListDataSourcesRsp.data_sources:type_name -> trpc.moox.storage.DataSource
-	147, // 83: trpc.moox.storage.ListDataSourcesRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 84: trpc.moox.storage.UpsertSubjectReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	6,   // 85: trpc.moox.storage.UpsertSubjectReq.subject:type_name -> trpc.moox.storage.Subject
-	145, // 86: trpc.moox.storage.UpsertSubjectRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	6,   // 87: trpc.moox.storage.UpsertSubjectRsp.subject:type_name -> trpc.moox.storage.Subject
-	144, // 88: trpc.moox.storage.RegisterDataSubjectReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	6,   // 89: trpc.moox.storage.RegisterDataSubjectReq.subject:type_name -> trpc.moox.storage.Subject
-	9,   // 90: trpc.moox.storage.RegisterDataSubjectReq.dataset_bindings:type_name -> trpc.moox.storage.DatasetSubject
-	145, // 91: trpc.moox.storage.RegisterDataSubjectRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	6,   // 92: trpc.moox.storage.RegisterDataSubjectRsp.subject:type_name -> trpc.moox.storage.Subject
-	9,   // 93: trpc.moox.storage.RegisterDataSubjectRsp.dataset_bindings:type_name -> trpc.moox.storage.DatasetSubject
-	144, // 94: trpc.moox.storage.GetSubjectReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	145, // 95: trpc.moox.storage.GetSubjectRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	6,   // 96: trpc.moox.storage.GetSubjectRsp.subject:type_name -> trpc.moox.storage.Subject
-	144, // 97: trpc.moox.storage.ListSubjectsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	146, // 98: trpc.moox.storage.ListSubjectsReq.page:type_name -> trpc.moox.common.Page
-	145, // 99: trpc.moox.storage.ListSubjectsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	6,   // 100: trpc.moox.storage.ListSubjectsRsp.subjects:type_name -> trpc.moox.storage.Subject
-	147, // 101: trpc.moox.storage.ListSubjectsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 102: trpc.moox.storage.UpsertSubjectSymbolReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	7,   // 103: trpc.moox.storage.UpsertSubjectSymbolReq.subject_symbol:type_name -> trpc.moox.storage.SubjectSymbol
-	145, // 104: trpc.moox.storage.UpsertSubjectSymbolRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	7,   // 105: trpc.moox.storage.UpsertSubjectSymbolRsp.subject_symbol:type_name -> trpc.moox.storage.SubjectSymbol
-	144, // 106: trpc.moox.storage.ListSubjectSymbolsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	146, // 107: trpc.moox.storage.ListSubjectSymbolsReq.page:type_name -> trpc.moox.common.Page
-	145, // 108: trpc.moox.storage.ListSubjectSymbolsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	7,   // 109: trpc.moox.storage.ListSubjectSymbolsRsp.subject_symbols:type_name -> trpc.moox.storage.SubjectSymbol
-	147, // 110: trpc.moox.storage.ListSubjectSymbolsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 111: trpc.moox.storage.CreateDatasetReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	8,   // 112: trpc.moox.storage.CreateDatasetReq.dataset:type_name -> trpc.moox.storage.Dataset
-	145, // 113: trpc.moox.storage.CreateDatasetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	8,   // 114: trpc.moox.storage.CreateDatasetRsp.dataset:type_name -> trpc.moox.storage.Dataset
-	144, // 115: trpc.moox.storage.UpdateDatasetReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	8,   // 116: trpc.moox.storage.UpdateDatasetReq.dataset:type_name -> trpc.moox.storage.Dataset
-	145, // 117: trpc.moox.storage.UpdateDatasetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	8,   // 118: trpc.moox.storage.UpdateDatasetRsp.dataset:type_name -> trpc.moox.storage.Dataset
-	144, // 119: trpc.moox.storage.GetDatasetReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	145, // 120: trpc.moox.storage.GetDatasetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	8,   // 121: trpc.moox.storage.GetDatasetRsp.dataset:type_name -> trpc.moox.storage.Dataset
-	144, // 122: trpc.moox.storage.ListDatasetsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	142, // 123: trpc.moox.storage.ListDatasetsReq.data_kind:type_name -> trpc.moox.storage.DataKind
-	146, // 124: trpc.moox.storage.ListDatasetsReq.page:type_name -> trpc.moox.common.Page
-	145, // 125: trpc.moox.storage.ListDatasetsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	8,   // 126: trpc.moox.storage.ListDatasetsRsp.datasets:type_name -> trpc.moox.storage.Dataset
-	147, // 127: trpc.moox.storage.ListDatasetsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 128: trpc.moox.storage.BindDatasetSubjectReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	9,   // 129: trpc.moox.storage.BindDatasetSubjectReq.dataset_subject:type_name -> trpc.moox.storage.DatasetSubject
-	145, // 130: trpc.moox.storage.BindDatasetSubjectRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	9,   // 131: trpc.moox.storage.BindDatasetSubjectRsp.dataset_subject:type_name -> trpc.moox.storage.DatasetSubject
-	144, // 132: trpc.moox.storage.ListDatasetSubjectsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	146, // 133: trpc.moox.storage.ListDatasetSubjectsReq.page:type_name -> trpc.moox.common.Page
-	145, // 134: trpc.moox.storage.ListDatasetSubjectsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	9,   // 135: trpc.moox.storage.ListDatasetSubjectsRsp.dataset_subjects:type_name -> trpc.moox.storage.DatasetSubject
-	147, // 136: trpc.moox.storage.ListDatasetSubjectsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 137: trpc.moox.storage.CreateFieldReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	10,  // 138: trpc.moox.storage.CreateFieldReq.field:type_name -> trpc.moox.storage.Field
-	145, // 139: trpc.moox.storage.CreateFieldRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	10,  // 140: trpc.moox.storage.CreateFieldRsp.field:type_name -> trpc.moox.storage.Field
-	144, // 141: trpc.moox.storage.UpdateFieldReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	10,  // 142: trpc.moox.storage.UpdateFieldReq.field:type_name -> trpc.moox.storage.Field
-	145, // 143: trpc.moox.storage.UpdateFieldRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	10,  // 144: trpc.moox.storage.UpdateFieldRsp.field:type_name -> trpc.moox.storage.Field
-	144, // 145: trpc.moox.storage.GetFieldReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	145, // 146: trpc.moox.storage.GetFieldRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	10,  // 147: trpc.moox.storage.GetFieldRsp.field:type_name -> trpc.moox.storage.Field
-	144, // 148: trpc.moox.storage.ListFieldsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	141, // 149: trpc.moox.storage.ListFieldsReq.value_type:type_name -> trpc.moox.storage.FieldValueType
-	146, // 150: trpc.moox.storage.ListFieldsReq.page:type_name -> trpc.moox.common.Page
-	145, // 151: trpc.moox.storage.ListFieldsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	10,  // 152: trpc.moox.storage.ListFieldsRsp.fields:type_name -> trpc.moox.storage.Field
-	147, // 153: trpc.moox.storage.ListFieldsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 154: trpc.moox.storage.CreateFactorReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	11,  // 155: trpc.moox.storage.CreateFactorReq.factor:type_name -> trpc.moox.storage.Factor
-	145, // 156: trpc.moox.storage.CreateFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	11,  // 157: trpc.moox.storage.CreateFactorRsp.factor:type_name -> trpc.moox.storage.Factor
-	144, // 158: trpc.moox.storage.UpdateFactorReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	11,  // 159: trpc.moox.storage.UpdateFactorReq.factor:type_name -> trpc.moox.storage.Factor
-	145, // 160: trpc.moox.storage.UpdateFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	11,  // 161: trpc.moox.storage.UpdateFactorRsp.factor:type_name -> trpc.moox.storage.Factor
-	144, // 162: trpc.moox.storage.GetFactorReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	145, // 163: trpc.moox.storage.GetFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	11,  // 164: trpc.moox.storage.GetFactorRsp.factor:type_name -> trpc.moox.storage.Factor
-	144, // 165: trpc.moox.storage.ListFactorsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	146, // 166: trpc.moox.storage.ListFactorsReq.page:type_name -> trpc.moox.common.Page
-	145, // 167: trpc.moox.storage.ListFactorsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	11,  // 168: trpc.moox.storage.ListFactorsRsp.factors:type_name -> trpc.moox.storage.Factor
-	147, // 169: trpc.moox.storage.ListFactorsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 170: trpc.moox.storage.UpsertDatasetColumnReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	12,  // 171: trpc.moox.storage.UpsertDatasetColumnReq.column:type_name -> trpc.moox.storage.DatasetColumn
-	145, // 172: trpc.moox.storage.UpsertDatasetColumnRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	12,  // 173: trpc.moox.storage.UpsertDatasetColumnRsp.column:type_name -> trpc.moox.storage.DatasetColumn
-	144, // 174: trpc.moox.storage.ListDatasetColumnsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	146, // 175: trpc.moox.storage.ListDatasetColumnsReq.page:type_name -> trpc.moox.common.Page
-	145, // 176: trpc.moox.storage.ListDatasetColumnsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	12,  // 177: trpc.moox.storage.ListDatasetColumnsRsp.columns:type_name -> trpc.moox.storage.DatasetColumn
-	147, // 178: trpc.moox.storage.ListDatasetColumnsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 179: trpc.moox.storage.CreatePrimaryStoreNodeReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	13,  // 180: trpc.moox.storage.CreatePrimaryStoreNodeReq.node:type_name -> trpc.moox.storage.PrimaryStoreNode
-	145, // 181: trpc.moox.storage.CreatePrimaryStoreNodeRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	13,  // 182: trpc.moox.storage.CreatePrimaryStoreNodeRsp.node:type_name -> trpc.moox.storage.PrimaryStoreNode
-	144, // 183: trpc.moox.storage.UpdatePrimaryStoreNodeReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	13,  // 184: trpc.moox.storage.UpdatePrimaryStoreNodeReq.node:type_name -> trpc.moox.storage.PrimaryStoreNode
-	145, // 185: trpc.moox.storage.UpdatePrimaryStoreNodeRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	13,  // 186: trpc.moox.storage.UpdatePrimaryStoreNodeRsp.node:type_name -> trpc.moox.storage.PrimaryStoreNode
-	144, // 187: trpc.moox.storage.GetPrimaryStoreNodeReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	145, // 188: trpc.moox.storage.GetPrimaryStoreNodeRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	13,  // 189: trpc.moox.storage.GetPrimaryStoreNodeRsp.node:type_name -> trpc.moox.storage.PrimaryStoreNode
-	144, // 190: trpc.moox.storage.ListPrimaryStoreNodesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	146, // 191: trpc.moox.storage.ListPrimaryStoreNodesReq.page:type_name -> trpc.moox.common.Page
-	145, // 192: trpc.moox.storage.ListPrimaryStoreNodesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	13,  // 193: trpc.moox.storage.ListPrimaryStoreNodesRsp.nodes:type_name -> trpc.moox.storage.PrimaryStoreNode
-	147, // 194: trpc.moox.storage.ListPrimaryStoreNodesRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 195: trpc.moox.storage.CreateDeviceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	14,  // 196: trpc.moox.storage.CreateDeviceReq.device:type_name -> trpc.moox.storage.Device
-	145, // 197: trpc.moox.storage.CreateDeviceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	14,  // 198: trpc.moox.storage.CreateDeviceRsp.device:type_name -> trpc.moox.storage.Device
-	144, // 199: trpc.moox.storage.UpdateDeviceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	14,  // 200: trpc.moox.storage.UpdateDeviceReq.device:type_name -> trpc.moox.storage.Device
-	145, // 201: trpc.moox.storage.UpdateDeviceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	14,  // 202: trpc.moox.storage.UpdateDeviceRsp.device:type_name -> trpc.moox.storage.Device
-	144, // 203: trpc.moox.storage.GetDeviceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	145, // 204: trpc.moox.storage.GetDeviceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	14,  // 205: trpc.moox.storage.GetDeviceRsp.device:type_name -> trpc.moox.storage.Device
-	144, // 206: trpc.moox.storage.ListDevicesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	146, // 207: trpc.moox.storage.ListDevicesReq.page:type_name -> trpc.moox.common.Page
-	145, // 208: trpc.moox.storage.ListDevicesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	14,  // 209: trpc.moox.storage.ListDevicesRsp.devices:type_name -> trpc.moox.storage.Device
-	147, // 210: trpc.moox.storage.ListDevicesRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 211: trpc.moox.storage.CreatePrimaryStoreRouteReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	15,  // 212: trpc.moox.storage.CreatePrimaryStoreRouteReq.primary_store_route:type_name -> trpc.moox.storage.PrimaryStoreRoute
-	145, // 213: trpc.moox.storage.CreatePrimaryStoreRouteRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	15,  // 214: trpc.moox.storage.CreatePrimaryStoreRouteRsp.primary_store_route:type_name -> trpc.moox.storage.PrimaryStoreRoute
-	144, // 215: trpc.moox.storage.UpdatePrimaryStoreRouteReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	15,  // 216: trpc.moox.storage.UpdatePrimaryStoreRouteReq.primary_store_route:type_name -> trpc.moox.storage.PrimaryStoreRoute
-	145, // 217: trpc.moox.storage.UpdatePrimaryStoreRouteRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	15,  // 218: trpc.moox.storage.UpdatePrimaryStoreRouteRsp.primary_store_route:type_name -> trpc.moox.storage.PrimaryStoreRoute
-	144, // 219: trpc.moox.storage.GetPrimaryStoreRouteReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	145, // 220: trpc.moox.storage.GetPrimaryStoreRouteRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	15,  // 221: trpc.moox.storage.GetPrimaryStoreRouteRsp.primary_store_route:type_name -> trpc.moox.storage.PrimaryStoreRoute
-	144, // 222: trpc.moox.storage.ListPrimaryStoreRoutesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	146, // 223: trpc.moox.storage.ListPrimaryStoreRoutesReq.page:type_name -> trpc.moox.common.Page
-	145, // 224: trpc.moox.storage.ListPrimaryStoreRoutesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	15,  // 225: trpc.moox.storage.ListPrimaryStoreRoutesRsp.primary_store_routes:type_name -> trpc.moox.storage.PrimaryStoreRoute
-	147, // 226: trpc.moox.storage.ListPrimaryStoreRoutesRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 227: trpc.moox.storage.RegisterArchiveFileReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	16,  // 228: trpc.moox.storage.RegisterArchiveFileReq.archive_file:type_name -> trpc.moox.storage.ArchiveFile
-	145, // 229: trpc.moox.storage.RegisterArchiveFileRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	16,  // 230: trpc.moox.storage.RegisterArchiveFileRsp.archive_file:type_name -> trpc.moox.storage.ArchiveFile
-	144, // 231: trpc.moox.storage.ListArchiveFilesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	148, // 232: trpc.moox.storage.ListArchiveFilesReq.time_range:type_name -> trpc.moox.storage.TimeRange
-	146, // 233: trpc.moox.storage.ListArchiveFilesReq.page:type_name -> trpc.moox.common.Page
-	145, // 234: trpc.moox.storage.ListArchiveFilesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	16,  // 235: trpc.moox.storage.ListArchiveFilesRsp.archive_files:type_name -> trpc.moox.storage.ArchiveFile
-	147, // 236: trpc.moox.storage.ListArchiveFilesRsp.page_result:type_name -> trpc.moox.common.PageResult
-	144, // 237: trpc.moox.storage.ClaimViewIndexBuildReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	4,   // 238: trpc.moox.storage.ClaimViewIndexBuildReq.columns:type_name -> trpc.moox.storage.ViewColumn
-	145, // 239: trpc.moox.storage.ClaimViewIndexBuildRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,   // 240: trpc.moox.storage.ClaimViewIndexBuildRsp.view:type_name -> trpc.moox.storage.View
-	2,   // 241: trpc.moox.storage.ClaimViewIndexBuildRsp.build:type_name -> trpc.moox.storage.ViewIndexBuild
-	144, // 242: trpc.moox.storage.UpdateViewIndexBuildReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	0,   // 243: trpc.moox.storage.UpdateViewIndexBuildReq.expected_state:type_name -> trpc.moox.storage.ViewIndexBuild.State
-	0,   // 244: trpc.moox.storage.UpdateViewIndexBuildReq.next_state:type_name -> trpc.moox.storage.ViewIndexBuild.State
-	145, // 245: trpc.moox.storage.UpdateViewIndexBuildRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	2,   // 246: trpc.moox.storage.UpdateViewIndexBuildRsp.build:type_name -> trpc.moox.storage.ViewIndexBuild
-	144, // 247: trpc.moox.storage.ActivateViewIndexReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	145, // 248: trpc.moox.storage.ActivateViewIndexRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,   // 249: trpc.moox.storage.ActivateViewIndexRsp.view:type_name -> trpc.moox.storage.View
-	144, // 250: trpc.moox.storage.FailViewIndexBuildReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	145, // 251: trpc.moox.storage.FailViewIndexBuildRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	2,   // 252: trpc.moox.storage.FailViewIndexBuildRsp.build:type_name -> trpc.moox.storage.ViewIndexBuild
-	17,  // 253: trpc.moox.storage.Metadata.CreateSpace:input_type -> trpc.moox.storage.CreateSpaceReq
-	19,  // 254: trpc.moox.storage.Metadata.UpdateSpace:input_type -> trpc.moox.storage.UpdateSpaceReq
-	21,  // 255: trpc.moox.storage.Metadata.GetSpace:input_type -> trpc.moox.storage.GetSpaceReq
-	23,  // 256: trpc.moox.storage.Metadata.ListSpaces:input_type -> trpc.moox.storage.ListSpacesReq
-	25,  // 257: trpc.moox.storage.Metadata.CreateView:input_type -> trpc.moox.storage.CreateViewReq
-	27,  // 258: trpc.moox.storage.Metadata.UpdateView:input_type -> trpc.moox.storage.UpdateViewReq
-	29,  // 259: trpc.moox.storage.Metadata.GetView:input_type -> trpc.moox.storage.GetViewReq
-	31,  // 260: trpc.moox.storage.Metadata.ListViews:input_type -> trpc.moox.storage.ListViewsReq
-	33,  // 261: trpc.moox.storage.Metadata.UpsertViewColumn:input_type -> trpc.moox.storage.UpsertViewColumnReq
-	35,  // 262: trpc.moox.storage.Metadata.ListViewColumns:input_type -> trpc.moox.storage.ListViewColumnsReq
-	117, // 263: trpc.moox.storage.Metadata.ClaimViewIndexBuild:input_type -> trpc.moox.storage.ClaimViewIndexBuildReq
-	119, // 264: trpc.moox.storage.Metadata.UpdateViewIndexBuild:input_type -> trpc.moox.storage.UpdateViewIndexBuildReq
-	121, // 265: trpc.moox.storage.Metadata.ActivateViewIndex:input_type -> trpc.moox.storage.ActivateViewIndexReq
-	123, // 266: trpc.moox.storage.Metadata.FailViewIndexBuild:input_type -> trpc.moox.storage.FailViewIndexBuildReq
-	37,  // 267: trpc.moox.storage.Metadata.CreateDataSource:input_type -> trpc.moox.storage.CreateDataSourceReq
-	39,  // 268: trpc.moox.storage.Metadata.UpdateDataSource:input_type -> trpc.moox.storage.UpdateDataSourceReq
-	41,  // 269: trpc.moox.storage.Metadata.GetDataSource:input_type -> trpc.moox.storage.GetDataSourceReq
-	43,  // 270: trpc.moox.storage.Metadata.ListDataSources:input_type -> trpc.moox.storage.ListDataSourcesReq
-	45,  // 271: trpc.moox.storage.Metadata.UpsertSubject:input_type -> trpc.moox.storage.UpsertSubjectReq
-	53,  // 272: trpc.moox.storage.Metadata.UpsertSubjectSymbol:input_type -> trpc.moox.storage.UpsertSubjectSymbolReq
-	47,  // 273: trpc.moox.storage.Metadata.RegisterDataSubject:input_type -> trpc.moox.storage.RegisterDataSubjectReq
-	49,  // 274: trpc.moox.storage.Metadata.GetSubject:input_type -> trpc.moox.storage.GetSubjectReq
-	51,  // 275: trpc.moox.storage.Metadata.ListSubjects:input_type -> trpc.moox.storage.ListSubjectsReq
-	55,  // 276: trpc.moox.storage.Metadata.ListSubjectSymbols:input_type -> trpc.moox.storage.ListSubjectSymbolsReq
-	57,  // 277: trpc.moox.storage.Metadata.CreateDataset:input_type -> trpc.moox.storage.CreateDatasetReq
-	59,  // 278: trpc.moox.storage.Metadata.UpdateDataset:input_type -> trpc.moox.storage.UpdateDatasetReq
-	61,  // 279: trpc.moox.storage.Metadata.GetDataset:input_type -> trpc.moox.storage.GetDatasetReq
-	63,  // 280: trpc.moox.storage.Metadata.ListDatasets:input_type -> trpc.moox.storage.ListDatasetsReq
-	65,  // 281: trpc.moox.storage.Metadata.BindDatasetSubject:input_type -> trpc.moox.storage.BindDatasetSubjectReq
-	67,  // 282: trpc.moox.storage.Metadata.ListDatasetSubjects:input_type -> trpc.moox.storage.ListDatasetSubjectsReq
-	69,  // 283: trpc.moox.storage.Metadata.CreateField:input_type -> trpc.moox.storage.CreateFieldReq
-	71,  // 284: trpc.moox.storage.Metadata.UpdateField:input_type -> trpc.moox.storage.UpdateFieldReq
-	73,  // 285: trpc.moox.storage.Metadata.GetField:input_type -> trpc.moox.storage.GetFieldReq
-	75,  // 286: trpc.moox.storage.Metadata.ListFields:input_type -> trpc.moox.storage.ListFieldsReq
-	77,  // 287: trpc.moox.storage.Metadata.CreateFactor:input_type -> trpc.moox.storage.CreateFactorReq
-	79,  // 288: trpc.moox.storage.Metadata.UpdateFactor:input_type -> trpc.moox.storage.UpdateFactorReq
-	81,  // 289: trpc.moox.storage.Metadata.GetFactor:input_type -> trpc.moox.storage.GetFactorReq
-	83,  // 290: trpc.moox.storage.Metadata.ListFactors:input_type -> trpc.moox.storage.ListFactorsReq
-	85,  // 291: trpc.moox.storage.Metadata.UpsertDatasetColumn:input_type -> trpc.moox.storage.UpsertDatasetColumnReq
-	87,  // 292: trpc.moox.storage.Metadata.ListDatasetColumns:input_type -> trpc.moox.storage.ListDatasetColumnsReq
-	89,  // 293: trpc.moox.storage.Metadata.CreatePrimaryStoreNode:input_type -> trpc.moox.storage.CreatePrimaryStoreNodeReq
-	91,  // 294: trpc.moox.storage.Metadata.UpdatePrimaryStoreNode:input_type -> trpc.moox.storage.UpdatePrimaryStoreNodeReq
-	93,  // 295: trpc.moox.storage.Metadata.GetPrimaryStoreNode:input_type -> trpc.moox.storage.GetPrimaryStoreNodeReq
-	95,  // 296: trpc.moox.storage.Metadata.ListPrimaryStoreNodes:input_type -> trpc.moox.storage.ListPrimaryStoreNodesReq
-	97,  // 297: trpc.moox.storage.Metadata.CreateDevice:input_type -> trpc.moox.storage.CreateDeviceReq
-	99,  // 298: trpc.moox.storage.Metadata.UpdateDevice:input_type -> trpc.moox.storage.UpdateDeviceReq
-	101, // 299: trpc.moox.storage.Metadata.GetDevice:input_type -> trpc.moox.storage.GetDeviceReq
-	103, // 300: trpc.moox.storage.Metadata.ListDevices:input_type -> trpc.moox.storage.ListDevicesReq
-	105, // 301: trpc.moox.storage.Metadata.CreatePrimaryStoreRoute:input_type -> trpc.moox.storage.CreatePrimaryStoreRouteReq
-	107, // 302: trpc.moox.storage.Metadata.UpdatePrimaryStoreRoute:input_type -> trpc.moox.storage.UpdatePrimaryStoreRouteReq
-	109, // 303: trpc.moox.storage.Metadata.GetPrimaryStoreRoute:input_type -> trpc.moox.storage.GetPrimaryStoreRouteReq
-	111, // 304: trpc.moox.storage.Metadata.ListPrimaryStoreRoutes:input_type -> trpc.moox.storage.ListPrimaryStoreRoutesReq
-	113, // 305: trpc.moox.storage.Metadata.RegisterArchiveFile:input_type -> trpc.moox.storage.RegisterArchiveFileReq
-	115, // 306: trpc.moox.storage.Metadata.ListArchiveFiles:input_type -> trpc.moox.storage.ListArchiveFilesReq
-	18,  // 307: trpc.moox.storage.Metadata.CreateSpace:output_type -> trpc.moox.storage.CreateSpaceRsp
-	20,  // 308: trpc.moox.storage.Metadata.UpdateSpace:output_type -> trpc.moox.storage.UpdateSpaceRsp
-	22,  // 309: trpc.moox.storage.Metadata.GetSpace:output_type -> trpc.moox.storage.GetSpaceRsp
-	24,  // 310: trpc.moox.storage.Metadata.ListSpaces:output_type -> trpc.moox.storage.ListSpacesRsp
-	26,  // 311: trpc.moox.storage.Metadata.CreateView:output_type -> trpc.moox.storage.CreateViewRsp
-	28,  // 312: trpc.moox.storage.Metadata.UpdateView:output_type -> trpc.moox.storage.UpdateViewRsp
-	30,  // 313: trpc.moox.storage.Metadata.GetView:output_type -> trpc.moox.storage.GetViewRsp
-	32,  // 314: trpc.moox.storage.Metadata.ListViews:output_type -> trpc.moox.storage.ListViewsRsp
-	34,  // 315: trpc.moox.storage.Metadata.UpsertViewColumn:output_type -> trpc.moox.storage.UpsertViewColumnRsp
-	36,  // 316: trpc.moox.storage.Metadata.ListViewColumns:output_type -> trpc.moox.storage.ListViewColumnsRsp
-	118, // 317: trpc.moox.storage.Metadata.ClaimViewIndexBuild:output_type -> trpc.moox.storage.ClaimViewIndexBuildRsp
-	120, // 318: trpc.moox.storage.Metadata.UpdateViewIndexBuild:output_type -> trpc.moox.storage.UpdateViewIndexBuildRsp
-	122, // 319: trpc.moox.storage.Metadata.ActivateViewIndex:output_type -> trpc.moox.storage.ActivateViewIndexRsp
-	124, // 320: trpc.moox.storage.Metadata.FailViewIndexBuild:output_type -> trpc.moox.storage.FailViewIndexBuildRsp
-	38,  // 321: trpc.moox.storage.Metadata.CreateDataSource:output_type -> trpc.moox.storage.CreateDataSourceRsp
-	40,  // 322: trpc.moox.storage.Metadata.UpdateDataSource:output_type -> trpc.moox.storage.UpdateDataSourceRsp
-	42,  // 323: trpc.moox.storage.Metadata.GetDataSource:output_type -> trpc.moox.storage.GetDataSourceRsp
-	44,  // 324: trpc.moox.storage.Metadata.ListDataSources:output_type -> trpc.moox.storage.ListDataSourcesRsp
-	46,  // 325: trpc.moox.storage.Metadata.UpsertSubject:output_type -> trpc.moox.storage.UpsertSubjectRsp
-	54,  // 326: trpc.moox.storage.Metadata.UpsertSubjectSymbol:output_type -> trpc.moox.storage.UpsertSubjectSymbolRsp
-	48,  // 327: trpc.moox.storage.Metadata.RegisterDataSubject:output_type -> trpc.moox.storage.RegisterDataSubjectRsp
-	50,  // 328: trpc.moox.storage.Metadata.GetSubject:output_type -> trpc.moox.storage.GetSubjectRsp
-	52,  // 329: trpc.moox.storage.Metadata.ListSubjects:output_type -> trpc.moox.storage.ListSubjectsRsp
-	56,  // 330: trpc.moox.storage.Metadata.ListSubjectSymbols:output_type -> trpc.moox.storage.ListSubjectSymbolsRsp
-	58,  // 331: trpc.moox.storage.Metadata.CreateDataset:output_type -> trpc.moox.storage.CreateDatasetRsp
-	60,  // 332: trpc.moox.storage.Metadata.UpdateDataset:output_type -> trpc.moox.storage.UpdateDatasetRsp
-	62,  // 333: trpc.moox.storage.Metadata.GetDataset:output_type -> trpc.moox.storage.GetDatasetRsp
-	64,  // 334: trpc.moox.storage.Metadata.ListDatasets:output_type -> trpc.moox.storage.ListDatasetsRsp
-	66,  // 335: trpc.moox.storage.Metadata.BindDatasetSubject:output_type -> trpc.moox.storage.BindDatasetSubjectRsp
-	68,  // 336: trpc.moox.storage.Metadata.ListDatasetSubjects:output_type -> trpc.moox.storage.ListDatasetSubjectsRsp
-	70,  // 337: trpc.moox.storage.Metadata.CreateField:output_type -> trpc.moox.storage.CreateFieldRsp
-	72,  // 338: trpc.moox.storage.Metadata.UpdateField:output_type -> trpc.moox.storage.UpdateFieldRsp
-	74,  // 339: trpc.moox.storage.Metadata.GetField:output_type -> trpc.moox.storage.GetFieldRsp
-	76,  // 340: trpc.moox.storage.Metadata.ListFields:output_type -> trpc.moox.storage.ListFieldsRsp
-	78,  // 341: trpc.moox.storage.Metadata.CreateFactor:output_type -> trpc.moox.storage.CreateFactorRsp
-	80,  // 342: trpc.moox.storage.Metadata.UpdateFactor:output_type -> trpc.moox.storage.UpdateFactorRsp
-	82,  // 343: trpc.moox.storage.Metadata.GetFactor:output_type -> trpc.moox.storage.GetFactorRsp
-	84,  // 344: trpc.moox.storage.Metadata.ListFactors:output_type -> trpc.moox.storage.ListFactorsRsp
-	86,  // 345: trpc.moox.storage.Metadata.UpsertDatasetColumn:output_type -> trpc.moox.storage.UpsertDatasetColumnRsp
-	88,  // 346: trpc.moox.storage.Metadata.ListDatasetColumns:output_type -> trpc.moox.storage.ListDatasetColumnsRsp
-	90,  // 347: trpc.moox.storage.Metadata.CreatePrimaryStoreNode:output_type -> trpc.moox.storage.CreatePrimaryStoreNodeRsp
-	92,  // 348: trpc.moox.storage.Metadata.UpdatePrimaryStoreNode:output_type -> trpc.moox.storage.UpdatePrimaryStoreNodeRsp
-	94,  // 349: trpc.moox.storage.Metadata.GetPrimaryStoreNode:output_type -> trpc.moox.storage.GetPrimaryStoreNodeRsp
-	96,  // 350: trpc.moox.storage.Metadata.ListPrimaryStoreNodes:output_type -> trpc.moox.storage.ListPrimaryStoreNodesRsp
-	98,  // 351: trpc.moox.storage.Metadata.CreateDevice:output_type -> trpc.moox.storage.CreateDeviceRsp
-	100, // 352: trpc.moox.storage.Metadata.UpdateDevice:output_type -> trpc.moox.storage.UpdateDeviceRsp
-	102, // 353: trpc.moox.storage.Metadata.GetDevice:output_type -> trpc.moox.storage.GetDeviceRsp
-	104, // 354: trpc.moox.storage.Metadata.ListDevices:output_type -> trpc.moox.storage.ListDevicesRsp
-	106, // 355: trpc.moox.storage.Metadata.CreatePrimaryStoreRoute:output_type -> trpc.moox.storage.CreatePrimaryStoreRouteRsp
-	108, // 356: trpc.moox.storage.Metadata.UpdatePrimaryStoreRoute:output_type -> trpc.moox.storage.UpdatePrimaryStoreRouteRsp
-	110, // 357: trpc.moox.storage.Metadata.GetPrimaryStoreRoute:output_type -> trpc.moox.storage.GetPrimaryStoreRouteRsp
-	112, // 358: trpc.moox.storage.Metadata.ListPrimaryStoreRoutes:output_type -> trpc.moox.storage.ListPrimaryStoreRoutesRsp
-	114, // 359: trpc.moox.storage.Metadata.RegisterArchiveFile:output_type -> trpc.moox.storage.RegisterArchiveFileRsp
-	116, // 360: trpc.moox.storage.Metadata.ListArchiveFiles:output_type -> trpc.moox.storage.ListArchiveFilesRsp
-	307, // [307:361] is the sub-list for method output_type
-	253, // [253:307] is the sub-list for method input_type
-	253, // [253:253] is the sub-list for extension type_name
-	253, // [253:253] is the sub-list for extension extendee
-	0,   // [0:253] is the sub-list for field type_name
+	126, // 0: trpc.moox.storage.Space.attributes:type_name -> trpc.moox.storage.Space.AttributesEntry
+	1,   // 1: trpc.moox.storage.ViewIndexBuild.state:type_name -> trpc.moox.storage.ViewIndexBuild.State
+	5,   // 2: trpc.moox.storage.ViewIndexBuild.columns:type_name -> trpc.moox.storage.ViewColumn
+	5,   // 3: trpc.moox.storage.View.columns:type_name -> trpc.moox.storage.ViewColumn
+	127, // 4: trpc.moox.storage.View.attributes:type_name -> trpc.moox.storage.View.AttributesEntry
+	5,   // 5: trpc.moox.storage.View.active_columns:type_name -> trpc.moox.storage.ViewColumn
+	3,   // 6: trpc.moox.storage.View.index_build:type_name -> trpc.moox.storage.ViewIndexBuild
+	0,   // 7: trpc.moox.storage.View.record_view_mode:type_name -> trpc.moox.storage.RecordViewMode
+	141, // 8: trpc.moox.storage.ViewColumn.origin_type:type_name -> trpc.moox.storage.ColumnOriginType
+	142, // 9: trpc.moox.storage.ViewColumn.value_type:type_name -> trpc.moox.storage.FieldValueType
+	128, // 10: trpc.moox.storage.ViewColumn.attributes:type_name -> trpc.moox.storage.ViewColumn.AttributesEntry
+	129, // 11: trpc.moox.storage.DataSource.attributes:type_name -> trpc.moox.storage.DataSource.AttributesEntry
+	130, // 12: trpc.moox.storage.Subject.attributes:type_name -> trpc.moox.storage.Subject.AttributesEntry
+	131, // 13: trpc.moox.storage.SubjectSymbol.attributes:type_name -> trpc.moox.storage.SubjectSymbol.AttributesEntry
+	143, // 14: trpc.moox.storage.Dataset.data_kind:type_name -> trpc.moox.storage.DataKind
+	132, // 15: trpc.moox.storage.Dataset.attributes:type_name -> trpc.moox.storage.Dataset.AttributesEntry
+	133, // 16: trpc.moox.storage.DatasetSubject.attributes:type_name -> trpc.moox.storage.DatasetSubject.AttributesEntry
+	142, // 17: trpc.moox.storage.Field.value_type:type_name -> trpc.moox.storage.FieldValueType
+	134, // 18: trpc.moox.storage.Field.attributes:type_name -> trpc.moox.storage.Field.AttributesEntry
+	142, // 19: trpc.moox.storage.Factor.value_type:type_name -> trpc.moox.storage.FieldValueType
+	135, // 20: trpc.moox.storage.Factor.attributes:type_name -> trpc.moox.storage.Factor.AttributesEntry
+	144, // 21: trpc.moox.storage.DatasetColumn.origin_type:type_name -> trpc.moox.storage.DatasetColumnOriginType
+	142, // 22: trpc.moox.storage.DatasetColumn.value_type:type_name -> trpc.moox.storage.FieldValueType
+	136, // 23: trpc.moox.storage.DatasetColumn.attributes:type_name -> trpc.moox.storage.DatasetColumn.AttributesEntry
+	137, // 24: trpc.moox.storage.PrimaryStoreNode.attributes:type_name -> trpc.moox.storage.PrimaryStoreNode.AttributesEntry
+	138, // 25: trpc.moox.storage.Device.attributes:type_name -> trpc.moox.storage.Device.AttributesEntry
+	139, // 26: trpc.moox.storage.PrimaryStoreRoute.attributes:type_name -> trpc.moox.storage.PrimaryStoreRoute.AttributesEntry
+	140, // 27: trpc.moox.storage.ArchiveFile.attributes:type_name -> trpc.moox.storage.ArchiveFile.AttributesEntry
+	145, // 28: trpc.moox.storage.CreateSpaceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	2,   // 29: trpc.moox.storage.CreateSpaceReq.space:type_name -> trpc.moox.storage.Space
+	146, // 30: trpc.moox.storage.CreateSpaceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	2,   // 31: trpc.moox.storage.CreateSpaceRsp.space:type_name -> trpc.moox.storage.Space
+	145, // 32: trpc.moox.storage.UpdateSpaceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	2,   // 33: trpc.moox.storage.UpdateSpaceReq.space:type_name -> trpc.moox.storage.Space
+	146, // 34: trpc.moox.storage.UpdateSpaceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	2,   // 35: trpc.moox.storage.UpdateSpaceRsp.space:type_name -> trpc.moox.storage.Space
+	145, // 36: trpc.moox.storage.GetSpaceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	146, // 37: trpc.moox.storage.GetSpaceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	2,   // 38: trpc.moox.storage.GetSpaceRsp.space:type_name -> trpc.moox.storage.Space
+	145, // 39: trpc.moox.storage.ListSpacesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	147, // 40: trpc.moox.storage.ListSpacesReq.page:type_name -> trpc.moox.common.Page
+	146, // 41: trpc.moox.storage.ListSpacesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	2,   // 42: trpc.moox.storage.ListSpacesRsp.spaces:type_name -> trpc.moox.storage.Space
+	148, // 43: trpc.moox.storage.ListSpacesRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 44: trpc.moox.storage.CreateViewReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	4,   // 45: trpc.moox.storage.CreateViewReq.view:type_name -> trpc.moox.storage.View
+	146, // 46: trpc.moox.storage.CreateViewRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	4,   // 47: trpc.moox.storage.CreateViewRsp.view:type_name -> trpc.moox.storage.View
+	145, // 48: trpc.moox.storage.UpdateViewReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	4,   // 49: trpc.moox.storage.UpdateViewReq.view:type_name -> trpc.moox.storage.View
+	146, // 50: trpc.moox.storage.UpdateViewRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	4,   // 51: trpc.moox.storage.UpdateViewRsp.view:type_name -> trpc.moox.storage.View
+	145, // 52: trpc.moox.storage.GetViewReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	146, // 53: trpc.moox.storage.GetViewRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	4,   // 54: trpc.moox.storage.GetViewRsp.view:type_name -> trpc.moox.storage.View
+	145, // 55: trpc.moox.storage.ListViewsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	147, // 56: trpc.moox.storage.ListViewsReq.page:type_name -> trpc.moox.common.Page
+	146, // 57: trpc.moox.storage.ListViewsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	4,   // 58: trpc.moox.storage.ListViewsRsp.views:type_name -> trpc.moox.storage.View
+	148, // 59: trpc.moox.storage.ListViewsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 60: trpc.moox.storage.UpsertViewColumnReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	5,   // 61: trpc.moox.storage.UpsertViewColumnReq.column:type_name -> trpc.moox.storage.ViewColumn
+	146, // 62: trpc.moox.storage.UpsertViewColumnRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	5,   // 63: trpc.moox.storage.UpsertViewColumnRsp.column:type_name -> trpc.moox.storage.ViewColumn
+	145, // 64: trpc.moox.storage.ListViewColumnsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	147, // 65: trpc.moox.storage.ListViewColumnsReq.page:type_name -> trpc.moox.common.Page
+	146, // 66: trpc.moox.storage.ListViewColumnsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	5,   // 67: trpc.moox.storage.ListViewColumnsRsp.columns:type_name -> trpc.moox.storage.ViewColumn
+	148, // 68: trpc.moox.storage.ListViewColumnsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 69: trpc.moox.storage.CreateDataSourceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	6,   // 70: trpc.moox.storage.CreateDataSourceReq.data_source:type_name -> trpc.moox.storage.DataSource
+	146, // 71: trpc.moox.storage.CreateDataSourceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	6,   // 72: trpc.moox.storage.CreateDataSourceRsp.data_source:type_name -> trpc.moox.storage.DataSource
+	145, // 73: trpc.moox.storage.UpdateDataSourceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	6,   // 74: trpc.moox.storage.UpdateDataSourceReq.data_source:type_name -> trpc.moox.storage.DataSource
+	146, // 75: trpc.moox.storage.UpdateDataSourceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	6,   // 76: trpc.moox.storage.UpdateDataSourceRsp.data_source:type_name -> trpc.moox.storage.DataSource
+	145, // 77: trpc.moox.storage.GetDataSourceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	146, // 78: trpc.moox.storage.GetDataSourceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	6,   // 79: trpc.moox.storage.GetDataSourceRsp.data_source:type_name -> trpc.moox.storage.DataSource
+	145, // 80: trpc.moox.storage.ListDataSourcesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	147, // 81: trpc.moox.storage.ListDataSourcesReq.page:type_name -> trpc.moox.common.Page
+	146, // 82: trpc.moox.storage.ListDataSourcesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	6,   // 83: trpc.moox.storage.ListDataSourcesRsp.data_sources:type_name -> trpc.moox.storage.DataSource
+	148, // 84: trpc.moox.storage.ListDataSourcesRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 85: trpc.moox.storage.UpsertSubjectReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	7,   // 86: trpc.moox.storage.UpsertSubjectReq.subject:type_name -> trpc.moox.storage.Subject
+	146, // 87: trpc.moox.storage.UpsertSubjectRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	7,   // 88: trpc.moox.storage.UpsertSubjectRsp.subject:type_name -> trpc.moox.storage.Subject
+	145, // 89: trpc.moox.storage.RegisterDataSubjectReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	7,   // 90: trpc.moox.storage.RegisterDataSubjectReq.subject:type_name -> trpc.moox.storage.Subject
+	10,  // 91: trpc.moox.storage.RegisterDataSubjectReq.dataset_bindings:type_name -> trpc.moox.storage.DatasetSubject
+	146, // 92: trpc.moox.storage.RegisterDataSubjectRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	7,   // 93: trpc.moox.storage.RegisterDataSubjectRsp.subject:type_name -> trpc.moox.storage.Subject
+	10,  // 94: trpc.moox.storage.RegisterDataSubjectRsp.dataset_bindings:type_name -> trpc.moox.storage.DatasetSubject
+	145, // 95: trpc.moox.storage.GetSubjectReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	146, // 96: trpc.moox.storage.GetSubjectRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	7,   // 97: trpc.moox.storage.GetSubjectRsp.subject:type_name -> trpc.moox.storage.Subject
+	145, // 98: trpc.moox.storage.ListSubjectsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	147, // 99: trpc.moox.storage.ListSubjectsReq.page:type_name -> trpc.moox.common.Page
+	146, // 100: trpc.moox.storage.ListSubjectsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	7,   // 101: trpc.moox.storage.ListSubjectsRsp.subjects:type_name -> trpc.moox.storage.Subject
+	148, // 102: trpc.moox.storage.ListSubjectsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 103: trpc.moox.storage.UpsertSubjectSymbolReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	8,   // 104: trpc.moox.storage.UpsertSubjectSymbolReq.subject_symbol:type_name -> trpc.moox.storage.SubjectSymbol
+	146, // 105: trpc.moox.storage.UpsertSubjectSymbolRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	8,   // 106: trpc.moox.storage.UpsertSubjectSymbolRsp.subject_symbol:type_name -> trpc.moox.storage.SubjectSymbol
+	145, // 107: trpc.moox.storage.ListSubjectSymbolsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	147, // 108: trpc.moox.storage.ListSubjectSymbolsReq.page:type_name -> trpc.moox.common.Page
+	146, // 109: trpc.moox.storage.ListSubjectSymbolsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	8,   // 110: trpc.moox.storage.ListSubjectSymbolsRsp.subject_symbols:type_name -> trpc.moox.storage.SubjectSymbol
+	148, // 111: trpc.moox.storage.ListSubjectSymbolsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 112: trpc.moox.storage.CreateDatasetReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	9,   // 113: trpc.moox.storage.CreateDatasetReq.dataset:type_name -> trpc.moox.storage.Dataset
+	146, // 114: trpc.moox.storage.CreateDatasetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	9,   // 115: trpc.moox.storage.CreateDatasetRsp.dataset:type_name -> trpc.moox.storage.Dataset
+	145, // 116: trpc.moox.storage.UpdateDatasetReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	9,   // 117: trpc.moox.storage.UpdateDatasetReq.dataset:type_name -> trpc.moox.storage.Dataset
+	146, // 118: trpc.moox.storage.UpdateDatasetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	9,   // 119: trpc.moox.storage.UpdateDatasetRsp.dataset:type_name -> trpc.moox.storage.Dataset
+	145, // 120: trpc.moox.storage.GetDatasetReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	146, // 121: trpc.moox.storage.GetDatasetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	9,   // 122: trpc.moox.storage.GetDatasetRsp.dataset:type_name -> trpc.moox.storage.Dataset
+	145, // 123: trpc.moox.storage.ListDatasetsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	143, // 124: trpc.moox.storage.ListDatasetsReq.data_kind:type_name -> trpc.moox.storage.DataKind
+	147, // 125: trpc.moox.storage.ListDatasetsReq.page:type_name -> trpc.moox.common.Page
+	146, // 126: trpc.moox.storage.ListDatasetsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	9,   // 127: trpc.moox.storage.ListDatasetsRsp.datasets:type_name -> trpc.moox.storage.Dataset
+	148, // 128: trpc.moox.storage.ListDatasetsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 129: trpc.moox.storage.BindDatasetSubjectReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	10,  // 130: trpc.moox.storage.BindDatasetSubjectReq.dataset_subject:type_name -> trpc.moox.storage.DatasetSubject
+	146, // 131: trpc.moox.storage.BindDatasetSubjectRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	10,  // 132: trpc.moox.storage.BindDatasetSubjectRsp.dataset_subject:type_name -> trpc.moox.storage.DatasetSubject
+	145, // 133: trpc.moox.storage.ListDatasetSubjectsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	147, // 134: trpc.moox.storage.ListDatasetSubjectsReq.page:type_name -> trpc.moox.common.Page
+	146, // 135: trpc.moox.storage.ListDatasetSubjectsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	10,  // 136: trpc.moox.storage.ListDatasetSubjectsRsp.dataset_subjects:type_name -> trpc.moox.storage.DatasetSubject
+	148, // 137: trpc.moox.storage.ListDatasetSubjectsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 138: trpc.moox.storage.CreateFieldReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	11,  // 139: trpc.moox.storage.CreateFieldReq.field:type_name -> trpc.moox.storage.Field
+	146, // 140: trpc.moox.storage.CreateFieldRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	11,  // 141: trpc.moox.storage.CreateFieldRsp.field:type_name -> trpc.moox.storage.Field
+	145, // 142: trpc.moox.storage.UpdateFieldReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	11,  // 143: trpc.moox.storage.UpdateFieldReq.field:type_name -> trpc.moox.storage.Field
+	146, // 144: trpc.moox.storage.UpdateFieldRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	11,  // 145: trpc.moox.storage.UpdateFieldRsp.field:type_name -> trpc.moox.storage.Field
+	145, // 146: trpc.moox.storage.GetFieldReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	146, // 147: trpc.moox.storage.GetFieldRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	11,  // 148: trpc.moox.storage.GetFieldRsp.field:type_name -> trpc.moox.storage.Field
+	145, // 149: trpc.moox.storage.ListFieldsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	142, // 150: trpc.moox.storage.ListFieldsReq.value_type:type_name -> trpc.moox.storage.FieldValueType
+	147, // 151: trpc.moox.storage.ListFieldsReq.page:type_name -> trpc.moox.common.Page
+	146, // 152: trpc.moox.storage.ListFieldsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	11,  // 153: trpc.moox.storage.ListFieldsRsp.fields:type_name -> trpc.moox.storage.Field
+	148, // 154: trpc.moox.storage.ListFieldsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 155: trpc.moox.storage.CreateFactorReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	12,  // 156: trpc.moox.storage.CreateFactorReq.factor:type_name -> trpc.moox.storage.Factor
+	146, // 157: trpc.moox.storage.CreateFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	12,  // 158: trpc.moox.storage.CreateFactorRsp.factor:type_name -> trpc.moox.storage.Factor
+	145, // 159: trpc.moox.storage.UpdateFactorReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	12,  // 160: trpc.moox.storage.UpdateFactorReq.factor:type_name -> trpc.moox.storage.Factor
+	146, // 161: trpc.moox.storage.UpdateFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	12,  // 162: trpc.moox.storage.UpdateFactorRsp.factor:type_name -> trpc.moox.storage.Factor
+	145, // 163: trpc.moox.storage.GetFactorReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	146, // 164: trpc.moox.storage.GetFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	12,  // 165: trpc.moox.storage.GetFactorRsp.factor:type_name -> trpc.moox.storage.Factor
+	145, // 166: trpc.moox.storage.ListFactorsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	147, // 167: trpc.moox.storage.ListFactorsReq.page:type_name -> trpc.moox.common.Page
+	146, // 168: trpc.moox.storage.ListFactorsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	12,  // 169: trpc.moox.storage.ListFactorsRsp.factors:type_name -> trpc.moox.storage.Factor
+	148, // 170: trpc.moox.storage.ListFactorsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 171: trpc.moox.storage.UpsertDatasetColumnReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	13,  // 172: trpc.moox.storage.UpsertDatasetColumnReq.column:type_name -> trpc.moox.storage.DatasetColumn
+	146, // 173: trpc.moox.storage.UpsertDatasetColumnRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	13,  // 174: trpc.moox.storage.UpsertDatasetColumnRsp.column:type_name -> trpc.moox.storage.DatasetColumn
+	145, // 175: trpc.moox.storage.ListDatasetColumnsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	147, // 176: trpc.moox.storage.ListDatasetColumnsReq.page:type_name -> trpc.moox.common.Page
+	146, // 177: trpc.moox.storage.ListDatasetColumnsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	13,  // 178: trpc.moox.storage.ListDatasetColumnsRsp.columns:type_name -> trpc.moox.storage.DatasetColumn
+	148, // 179: trpc.moox.storage.ListDatasetColumnsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 180: trpc.moox.storage.CreatePrimaryStoreNodeReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	14,  // 181: trpc.moox.storage.CreatePrimaryStoreNodeReq.node:type_name -> trpc.moox.storage.PrimaryStoreNode
+	146, // 182: trpc.moox.storage.CreatePrimaryStoreNodeRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	14,  // 183: trpc.moox.storage.CreatePrimaryStoreNodeRsp.node:type_name -> trpc.moox.storage.PrimaryStoreNode
+	145, // 184: trpc.moox.storage.UpdatePrimaryStoreNodeReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	14,  // 185: trpc.moox.storage.UpdatePrimaryStoreNodeReq.node:type_name -> trpc.moox.storage.PrimaryStoreNode
+	146, // 186: trpc.moox.storage.UpdatePrimaryStoreNodeRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	14,  // 187: trpc.moox.storage.UpdatePrimaryStoreNodeRsp.node:type_name -> trpc.moox.storage.PrimaryStoreNode
+	145, // 188: trpc.moox.storage.GetPrimaryStoreNodeReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	146, // 189: trpc.moox.storage.GetPrimaryStoreNodeRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	14,  // 190: trpc.moox.storage.GetPrimaryStoreNodeRsp.node:type_name -> trpc.moox.storage.PrimaryStoreNode
+	145, // 191: trpc.moox.storage.ListPrimaryStoreNodesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	147, // 192: trpc.moox.storage.ListPrimaryStoreNodesReq.page:type_name -> trpc.moox.common.Page
+	146, // 193: trpc.moox.storage.ListPrimaryStoreNodesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	14,  // 194: trpc.moox.storage.ListPrimaryStoreNodesRsp.nodes:type_name -> trpc.moox.storage.PrimaryStoreNode
+	148, // 195: trpc.moox.storage.ListPrimaryStoreNodesRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 196: trpc.moox.storage.CreateDeviceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	15,  // 197: trpc.moox.storage.CreateDeviceReq.device:type_name -> trpc.moox.storage.Device
+	146, // 198: trpc.moox.storage.CreateDeviceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	15,  // 199: trpc.moox.storage.CreateDeviceRsp.device:type_name -> trpc.moox.storage.Device
+	145, // 200: trpc.moox.storage.UpdateDeviceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	15,  // 201: trpc.moox.storage.UpdateDeviceReq.device:type_name -> trpc.moox.storage.Device
+	146, // 202: trpc.moox.storage.UpdateDeviceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	15,  // 203: trpc.moox.storage.UpdateDeviceRsp.device:type_name -> trpc.moox.storage.Device
+	145, // 204: trpc.moox.storage.GetDeviceReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	146, // 205: trpc.moox.storage.GetDeviceRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	15,  // 206: trpc.moox.storage.GetDeviceRsp.device:type_name -> trpc.moox.storage.Device
+	145, // 207: trpc.moox.storage.ListDevicesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	147, // 208: trpc.moox.storage.ListDevicesReq.page:type_name -> trpc.moox.common.Page
+	146, // 209: trpc.moox.storage.ListDevicesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	15,  // 210: trpc.moox.storage.ListDevicesRsp.devices:type_name -> trpc.moox.storage.Device
+	148, // 211: trpc.moox.storage.ListDevicesRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 212: trpc.moox.storage.CreatePrimaryStoreRouteReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	16,  // 213: trpc.moox.storage.CreatePrimaryStoreRouteReq.primary_store_route:type_name -> trpc.moox.storage.PrimaryStoreRoute
+	146, // 214: trpc.moox.storage.CreatePrimaryStoreRouteRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	16,  // 215: trpc.moox.storage.CreatePrimaryStoreRouteRsp.primary_store_route:type_name -> trpc.moox.storage.PrimaryStoreRoute
+	145, // 216: trpc.moox.storage.UpdatePrimaryStoreRouteReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	16,  // 217: trpc.moox.storage.UpdatePrimaryStoreRouteReq.primary_store_route:type_name -> trpc.moox.storage.PrimaryStoreRoute
+	146, // 218: trpc.moox.storage.UpdatePrimaryStoreRouteRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	16,  // 219: trpc.moox.storage.UpdatePrimaryStoreRouteRsp.primary_store_route:type_name -> trpc.moox.storage.PrimaryStoreRoute
+	145, // 220: trpc.moox.storage.GetPrimaryStoreRouteReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	146, // 221: trpc.moox.storage.GetPrimaryStoreRouteRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	16,  // 222: trpc.moox.storage.GetPrimaryStoreRouteRsp.primary_store_route:type_name -> trpc.moox.storage.PrimaryStoreRoute
+	145, // 223: trpc.moox.storage.ListPrimaryStoreRoutesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	147, // 224: trpc.moox.storage.ListPrimaryStoreRoutesReq.page:type_name -> trpc.moox.common.Page
+	146, // 225: trpc.moox.storage.ListPrimaryStoreRoutesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	16,  // 226: trpc.moox.storage.ListPrimaryStoreRoutesRsp.primary_store_routes:type_name -> trpc.moox.storage.PrimaryStoreRoute
+	148, // 227: trpc.moox.storage.ListPrimaryStoreRoutesRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 228: trpc.moox.storage.RegisterArchiveFileReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	17,  // 229: trpc.moox.storage.RegisterArchiveFileReq.archive_file:type_name -> trpc.moox.storage.ArchiveFile
+	146, // 230: trpc.moox.storage.RegisterArchiveFileRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	17,  // 231: trpc.moox.storage.RegisterArchiveFileRsp.archive_file:type_name -> trpc.moox.storage.ArchiveFile
+	145, // 232: trpc.moox.storage.ListArchiveFilesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	149, // 233: trpc.moox.storage.ListArchiveFilesReq.time_range:type_name -> trpc.moox.storage.TimeRange
+	147, // 234: trpc.moox.storage.ListArchiveFilesReq.page:type_name -> trpc.moox.common.Page
+	146, // 235: trpc.moox.storage.ListArchiveFilesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	17,  // 236: trpc.moox.storage.ListArchiveFilesRsp.archive_files:type_name -> trpc.moox.storage.ArchiveFile
+	148, // 237: trpc.moox.storage.ListArchiveFilesRsp.page_result:type_name -> trpc.moox.common.PageResult
+	145, // 238: trpc.moox.storage.ClaimViewIndexBuildReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	5,   // 239: trpc.moox.storage.ClaimViewIndexBuildReq.columns:type_name -> trpc.moox.storage.ViewColumn
+	146, // 240: trpc.moox.storage.ClaimViewIndexBuildRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	4,   // 241: trpc.moox.storage.ClaimViewIndexBuildRsp.view:type_name -> trpc.moox.storage.View
+	3,   // 242: trpc.moox.storage.ClaimViewIndexBuildRsp.build:type_name -> trpc.moox.storage.ViewIndexBuild
+	145, // 243: trpc.moox.storage.UpdateViewIndexBuildReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	1,   // 244: trpc.moox.storage.UpdateViewIndexBuildReq.expected_state:type_name -> trpc.moox.storage.ViewIndexBuild.State
+	1,   // 245: trpc.moox.storage.UpdateViewIndexBuildReq.next_state:type_name -> trpc.moox.storage.ViewIndexBuild.State
+	146, // 246: trpc.moox.storage.UpdateViewIndexBuildRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	3,   // 247: trpc.moox.storage.UpdateViewIndexBuildRsp.build:type_name -> trpc.moox.storage.ViewIndexBuild
+	145, // 248: trpc.moox.storage.ActivateViewIndexReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	146, // 249: trpc.moox.storage.ActivateViewIndexRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	4,   // 250: trpc.moox.storage.ActivateViewIndexRsp.view:type_name -> trpc.moox.storage.View
+	145, // 251: trpc.moox.storage.FailViewIndexBuildReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	146, // 252: trpc.moox.storage.FailViewIndexBuildRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	3,   // 253: trpc.moox.storage.FailViewIndexBuildRsp.build:type_name -> trpc.moox.storage.ViewIndexBuild
+	18,  // 254: trpc.moox.storage.Metadata.CreateSpace:input_type -> trpc.moox.storage.CreateSpaceReq
+	20,  // 255: trpc.moox.storage.Metadata.UpdateSpace:input_type -> trpc.moox.storage.UpdateSpaceReq
+	22,  // 256: trpc.moox.storage.Metadata.GetSpace:input_type -> trpc.moox.storage.GetSpaceReq
+	24,  // 257: trpc.moox.storage.Metadata.ListSpaces:input_type -> trpc.moox.storage.ListSpacesReq
+	26,  // 258: trpc.moox.storage.Metadata.CreateView:input_type -> trpc.moox.storage.CreateViewReq
+	28,  // 259: trpc.moox.storage.Metadata.UpdateView:input_type -> trpc.moox.storage.UpdateViewReq
+	30,  // 260: trpc.moox.storage.Metadata.GetView:input_type -> trpc.moox.storage.GetViewReq
+	32,  // 261: trpc.moox.storage.Metadata.ListViews:input_type -> trpc.moox.storage.ListViewsReq
+	34,  // 262: trpc.moox.storage.Metadata.UpsertViewColumn:input_type -> trpc.moox.storage.UpsertViewColumnReq
+	36,  // 263: trpc.moox.storage.Metadata.ListViewColumns:input_type -> trpc.moox.storage.ListViewColumnsReq
+	118, // 264: trpc.moox.storage.Metadata.ClaimViewIndexBuild:input_type -> trpc.moox.storage.ClaimViewIndexBuildReq
+	120, // 265: trpc.moox.storage.Metadata.UpdateViewIndexBuild:input_type -> trpc.moox.storage.UpdateViewIndexBuildReq
+	122, // 266: trpc.moox.storage.Metadata.ActivateViewIndex:input_type -> trpc.moox.storage.ActivateViewIndexReq
+	124, // 267: trpc.moox.storage.Metadata.FailViewIndexBuild:input_type -> trpc.moox.storage.FailViewIndexBuildReq
+	38,  // 268: trpc.moox.storage.Metadata.CreateDataSource:input_type -> trpc.moox.storage.CreateDataSourceReq
+	40,  // 269: trpc.moox.storage.Metadata.UpdateDataSource:input_type -> trpc.moox.storage.UpdateDataSourceReq
+	42,  // 270: trpc.moox.storage.Metadata.GetDataSource:input_type -> trpc.moox.storage.GetDataSourceReq
+	44,  // 271: trpc.moox.storage.Metadata.ListDataSources:input_type -> trpc.moox.storage.ListDataSourcesReq
+	46,  // 272: trpc.moox.storage.Metadata.UpsertSubject:input_type -> trpc.moox.storage.UpsertSubjectReq
+	54,  // 273: trpc.moox.storage.Metadata.UpsertSubjectSymbol:input_type -> trpc.moox.storage.UpsertSubjectSymbolReq
+	48,  // 274: trpc.moox.storage.Metadata.RegisterDataSubject:input_type -> trpc.moox.storage.RegisterDataSubjectReq
+	50,  // 275: trpc.moox.storage.Metadata.GetSubject:input_type -> trpc.moox.storage.GetSubjectReq
+	52,  // 276: trpc.moox.storage.Metadata.ListSubjects:input_type -> trpc.moox.storage.ListSubjectsReq
+	56,  // 277: trpc.moox.storage.Metadata.ListSubjectSymbols:input_type -> trpc.moox.storage.ListSubjectSymbolsReq
+	58,  // 278: trpc.moox.storage.Metadata.CreateDataset:input_type -> trpc.moox.storage.CreateDatasetReq
+	60,  // 279: trpc.moox.storage.Metadata.UpdateDataset:input_type -> trpc.moox.storage.UpdateDatasetReq
+	62,  // 280: trpc.moox.storage.Metadata.GetDataset:input_type -> trpc.moox.storage.GetDatasetReq
+	64,  // 281: trpc.moox.storage.Metadata.ListDatasets:input_type -> trpc.moox.storage.ListDatasetsReq
+	66,  // 282: trpc.moox.storage.Metadata.BindDatasetSubject:input_type -> trpc.moox.storage.BindDatasetSubjectReq
+	68,  // 283: trpc.moox.storage.Metadata.ListDatasetSubjects:input_type -> trpc.moox.storage.ListDatasetSubjectsReq
+	70,  // 284: trpc.moox.storage.Metadata.CreateField:input_type -> trpc.moox.storage.CreateFieldReq
+	72,  // 285: trpc.moox.storage.Metadata.UpdateField:input_type -> trpc.moox.storage.UpdateFieldReq
+	74,  // 286: trpc.moox.storage.Metadata.GetField:input_type -> trpc.moox.storage.GetFieldReq
+	76,  // 287: trpc.moox.storage.Metadata.ListFields:input_type -> trpc.moox.storage.ListFieldsReq
+	78,  // 288: trpc.moox.storage.Metadata.CreateFactor:input_type -> trpc.moox.storage.CreateFactorReq
+	80,  // 289: trpc.moox.storage.Metadata.UpdateFactor:input_type -> trpc.moox.storage.UpdateFactorReq
+	82,  // 290: trpc.moox.storage.Metadata.GetFactor:input_type -> trpc.moox.storage.GetFactorReq
+	84,  // 291: trpc.moox.storage.Metadata.ListFactors:input_type -> trpc.moox.storage.ListFactorsReq
+	86,  // 292: trpc.moox.storage.Metadata.UpsertDatasetColumn:input_type -> trpc.moox.storage.UpsertDatasetColumnReq
+	88,  // 293: trpc.moox.storage.Metadata.ListDatasetColumns:input_type -> trpc.moox.storage.ListDatasetColumnsReq
+	90,  // 294: trpc.moox.storage.Metadata.CreatePrimaryStoreNode:input_type -> trpc.moox.storage.CreatePrimaryStoreNodeReq
+	92,  // 295: trpc.moox.storage.Metadata.UpdatePrimaryStoreNode:input_type -> trpc.moox.storage.UpdatePrimaryStoreNodeReq
+	94,  // 296: trpc.moox.storage.Metadata.GetPrimaryStoreNode:input_type -> trpc.moox.storage.GetPrimaryStoreNodeReq
+	96,  // 297: trpc.moox.storage.Metadata.ListPrimaryStoreNodes:input_type -> trpc.moox.storage.ListPrimaryStoreNodesReq
+	98,  // 298: trpc.moox.storage.Metadata.CreateDevice:input_type -> trpc.moox.storage.CreateDeviceReq
+	100, // 299: trpc.moox.storage.Metadata.UpdateDevice:input_type -> trpc.moox.storage.UpdateDeviceReq
+	102, // 300: trpc.moox.storage.Metadata.GetDevice:input_type -> trpc.moox.storage.GetDeviceReq
+	104, // 301: trpc.moox.storage.Metadata.ListDevices:input_type -> trpc.moox.storage.ListDevicesReq
+	106, // 302: trpc.moox.storage.Metadata.CreatePrimaryStoreRoute:input_type -> trpc.moox.storage.CreatePrimaryStoreRouteReq
+	108, // 303: trpc.moox.storage.Metadata.UpdatePrimaryStoreRoute:input_type -> trpc.moox.storage.UpdatePrimaryStoreRouteReq
+	110, // 304: trpc.moox.storage.Metadata.GetPrimaryStoreRoute:input_type -> trpc.moox.storage.GetPrimaryStoreRouteReq
+	112, // 305: trpc.moox.storage.Metadata.ListPrimaryStoreRoutes:input_type -> trpc.moox.storage.ListPrimaryStoreRoutesReq
+	114, // 306: trpc.moox.storage.Metadata.RegisterArchiveFile:input_type -> trpc.moox.storage.RegisterArchiveFileReq
+	116, // 307: trpc.moox.storage.Metadata.ListArchiveFiles:input_type -> trpc.moox.storage.ListArchiveFilesReq
+	19,  // 308: trpc.moox.storage.Metadata.CreateSpace:output_type -> trpc.moox.storage.CreateSpaceRsp
+	21,  // 309: trpc.moox.storage.Metadata.UpdateSpace:output_type -> trpc.moox.storage.UpdateSpaceRsp
+	23,  // 310: trpc.moox.storage.Metadata.GetSpace:output_type -> trpc.moox.storage.GetSpaceRsp
+	25,  // 311: trpc.moox.storage.Metadata.ListSpaces:output_type -> trpc.moox.storage.ListSpacesRsp
+	27,  // 312: trpc.moox.storage.Metadata.CreateView:output_type -> trpc.moox.storage.CreateViewRsp
+	29,  // 313: trpc.moox.storage.Metadata.UpdateView:output_type -> trpc.moox.storage.UpdateViewRsp
+	31,  // 314: trpc.moox.storage.Metadata.GetView:output_type -> trpc.moox.storage.GetViewRsp
+	33,  // 315: trpc.moox.storage.Metadata.ListViews:output_type -> trpc.moox.storage.ListViewsRsp
+	35,  // 316: trpc.moox.storage.Metadata.UpsertViewColumn:output_type -> trpc.moox.storage.UpsertViewColumnRsp
+	37,  // 317: trpc.moox.storage.Metadata.ListViewColumns:output_type -> trpc.moox.storage.ListViewColumnsRsp
+	119, // 318: trpc.moox.storage.Metadata.ClaimViewIndexBuild:output_type -> trpc.moox.storage.ClaimViewIndexBuildRsp
+	121, // 319: trpc.moox.storage.Metadata.UpdateViewIndexBuild:output_type -> trpc.moox.storage.UpdateViewIndexBuildRsp
+	123, // 320: trpc.moox.storage.Metadata.ActivateViewIndex:output_type -> trpc.moox.storage.ActivateViewIndexRsp
+	125, // 321: trpc.moox.storage.Metadata.FailViewIndexBuild:output_type -> trpc.moox.storage.FailViewIndexBuildRsp
+	39,  // 322: trpc.moox.storage.Metadata.CreateDataSource:output_type -> trpc.moox.storage.CreateDataSourceRsp
+	41,  // 323: trpc.moox.storage.Metadata.UpdateDataSource:output_type -> trpc.moox.storage.UpdateDataSourceRsp
+	43,  // 324: trpc.moox.storage.Metadata.GetDataSource:output_type -> trpc.moox.storage.GetDataSourceRsp
+	45,  // 325: trpc.moox.storage.Metadata.ListDataSources:output_type -> trpc.moox.storage.ListDataSourcesRsp
+	47,  // 326: trpc.moox.storage.Metadata.UpsertSubject:output_type -> trpc.moox.storage.UpsertSubjectRsp
+	55,  // 327: trpc.moox.storage.Metadata.UpsertSubjectSymbol:output_type -> trpc.moox.storage.UpsertSubjectSymbolRsp
+	49,  // 328: trpc.moox.storage.Metadata.RegisterDataSubject:output_type -> trpc.moox.storage.RegisterDataSubjectRsp
+	51,  // 329: trpc.moox.storage.Metadata.GetSubject:output_type -> trpc.moox.storage.GetSubjectRsp
+	53,  // 330: trpc.moox.storage.Metadata.ListSubjects:output_type -> trpc.moox.storage.ListSubjectsRsp
+	57,  // 331: trpc.moox.storage.Metadata.ListSubjectSymbols:output_type -> trpc.moox.storage.ListSubjectSymbolsRsp
+	59,  // 332: trpc.moox.storage.Metadata.CreateDataset:output_type -> trpc.moox.storage.CreateDatasetRsp
+	61,  // 333: trpc.moox.storage.Metadata.UpdateDataset:output_type -> trpc.moox.storage.UpdateDatasetRsp
+	63,  // 334: trpc.moox.storage.Metadata.GetDataset:output_type -> trpc.moox.storage.GetDatasetRsp
+	65,  // 335: trpc.moox.storage.Metadata.ListDatasets:output_type -> trpc.moox.storage.ListDatasetsRsp
+	67,  // 336: trpc.moox.storage.Metadata.BindDatasetSubject:output_type -> trpc.moox.storage.BindDatasetSubjectRsp
+	69,  // 337: trpc.moox.storage.Metadata.ListDatasetSubjects:output_type -> trpc.moox.storage.ListDatasetSubjectsRsp
+	71,  // 338: trpc.moox.storage.Metadata.CreateField:output_type -> trpc.moox.storage.CreateFieldRsp
+	73,  // 339: trpc.moox.storage.Metadata.UpdateField:output_type -> trpc.moox.storage.UpdateFieldRsp
+	75,  // 340: trpc.moox.storage.Metadata.GetField:output_type -> trpc.moox.storage.GetFieldRsp
+	77,  // 341: trpc.moox.storage.Metadata.ListFields:output_type -> trpc.moox.storage.ListFieldsRsp
+	79,  // 342: trpc.moox.storage.Metadata.CreateFactor:output_type -> trpc.moox.storage.CreateFactorRsp
+	81,  // 343: trpc.moox.storage.Metadata.UpdateFactor:output_type -> trpc.moox.storage.UpdateFactorRsp
+	83,  // 344: trpc.moox.storage.Metadata.GetFactor:output_type -> trpc.moox.storage.GetFactorRsp
+	85,  // 345: trpc.moox.storage.Metadata.ListFactors:output_type -> trpc.moox.storage.ListFactorsRsp
+	87,  // 346: trpc.moox.storage.Metadata.UpsertDatasetColumn:output_type -> trpc.moox.storage.UpsertDatasetColumnRsp
+	89,  // 347: trpc.moox.storage.Metadata.ListDatasetColumns:output_type -> trpc.moox.storage.ListDatasetColumnsRsp
+	91,  // 348: trpc.moox.storage.Metadata.CreatePrimaryStoreNode:output_type -> trpc.moox.storage.CreatePrimaryStoreNodeRsp
+	93,  // 349: trpc.moox.storage.Metadata.UpdatePrimaryStoreNode:output_type -> trpc.moox.storage.UpdatePrimaryStoreNodeRsp
+	95,  // 350: trpc.moox.storage.Metadata.GetPrimaryStoreNode:output_type -> trpc.moox.storage.GetPrimaryStoreNodeRsp
+	97,  // 351: trpc.moox.storage.Metadata.ListPrimaryStoreNodes:output_type -> trpc.moox.storage.ListPrimaryStoreNodesRsp
+	99,  // 352: trpc.moox.storage.Metadata.CreateDevice:output_type -> trpc.moox.storage.CreateDeviceRsp
+	101, // 353: trpc.moox.storage.Metadata.UpdateDevice:output_type -> trpc.moox.storage.UpdateDeviceRsp
+	103, // 354: trpc.moox.storage.Metadata.GetDevice:output_type -> trpc.moox.storage.GetDeviceRsp
+	105, // 355: trpc.moox.storage.Metadata.ListDevices:output_type -> trpc.moox.storage.ListDevicesRsp
+	107, // 356: trpc.moox.storage.Metadata.CreatePrimaryStoreRoute:output_type -> trpc.moox.storage.CreatePrimaryStoreRouteRsp
+	109, // 357: trpc.moox.storage.Metadata.UpdatePrimaryStoreRoute:output_type -> trpc.moox.storage.UpdatePrimaryStoreRouteRsp
+	111, // 358: trpc.moox.storage.Metadata.GetPrimaryStoreRoute:output_type -> trpc.moox.storage.GetPrimaryStoreRouteRsp
+	113, // 359: trpc.moox.storage.Metadata.ListPrimaryStoreRoutes:output_type -> trpc.moox.storage.ListPrimaryStoreRoutesRsp
+	115, // 360: trpc.moox.storage.Metadata.RegisterArchiveFile:output_type -> trpc.moox.storage.RegisterArchiveFileRsp
+	117, // 361: trpc.moox.storage.Metadata.ListArchiveFiles:output_type -> trpc.moox.storage.ListArchiveFilesRsp
+	308, // [308:362] is the sub-list for method output_type
+	254, // [254:308] is the sub-list for method input_type
+	254, // [254:254] is the sub-list for extension type_name
+	254, // [254:254] is the sub-list for extension extendee
+	0,   // [0:254] is the sub-list for field type_name
 }
 
 func init() { file_metadata_proto_init() }
@@ -13579,7 +13758,7 @@ func file_metadata_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_metadata_proto_rawDesc,
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   139,
 			NumExtensions: 0,
 			NumServices:   1,

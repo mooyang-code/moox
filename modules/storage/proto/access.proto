@@ -61,6 +61,33 @@ message RecordRow {
   repeated ColumnValue columns = 2;
   // attributes 是附加属性，更新时按 key 覆盖。
   map<string, string> attributes = 3;
+  // revision 是服务端分配的不可变记录版本。
+  uint64 revision = 4;
+  // updated_at 是服务端提交时间。
+  string updated_at = 5;
+  // commit_seq 是 PrimaryStore 的单调提交序号。
+  uint64 commit_seq = 6;
+}
+
+// RecordMutation 表示对一个逻辑 Record 的补丁写入。
+message RecordMutation {
+  RecordKey key = 1;
+  repeated ColumnValue columns = 2;
+  map<string, string> attributes = 3;
+  optional uint64 expected_revision = 4;
+}
+
+// UpsertRecordRowsReq 表示使用服务端 revision 写入 Record。
+message UpsertRecordRowsReq {
+  common.AuthInfo auth_info = 1;
+  repeated RecordMutation mutations = 2;
+  string request_id = 3;
+}
+
+// UpsertRecordRowsRsp 返回已经提交的完整 Record 行。
+message UpsertRecordRowsRsp {
+  common.RetInfo ret_info = 1;
+  repeated RecordRow rows = 2;
 }
 
 // WriteTimeSeriesRowsReq 表示写入时序事实数据行。
@@ -133,6 +160,8 @@ message ReadRecordRowsReq {
   repeated string column_names = 5;
   // page 是分页参数。
   common.Page page = 6;
+  RecordReadMode mode = 7;
+  RevisionRange revision_range = 8;
 }
 
 // ReadRecordRowsRsp 表示记录事实数据读取结果。

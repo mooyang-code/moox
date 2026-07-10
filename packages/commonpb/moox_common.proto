@@ -114,4 +114,6 @@ enum ErrorCode {
   DIMENSION_VALUE_INVALID = 17;
   // SUBJECT_NOT_IN_DATASET 表示数据对象未登记到目标数据集。
   SUBJECT_NOT_IN_DATASET = 18;
+  // REVISION_CONFLICT 表示 Record 的并发版本前置条件不满足。
+  REVISION_CONFLICT = 19;
 }

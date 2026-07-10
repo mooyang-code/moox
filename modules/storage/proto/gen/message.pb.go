@@ -175,6 +175,86 @@ func (x *RecordRowsChangedEvent) GetAttributes() map[string]string {
 	return nil
 }
 
+// RecordRowsCommittedEvent 表示 PrimaryStore 已经原子提交的完整 Record 行。
+type RecordRowsCommittedEvent struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	EventId     string       `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	SourceId    string       `protobuf:"bytes,2,opt,name=source_id,json=sourceId,proto3" json:"source_id,omitempty"`
+	CommitSeq   uint64       `protobuf:"varint,3,opt,name=commit_seq,json=commitSeq,proto3" json:"commit_seq,omitempty"`
+	CommittedAt string       `protobuf:"bytes,4,opt,name=committed_at,json=committedAt,proto3" json:"committed_at,omitempty"`
+	Rows        []*RecordRow `protobuf:"bytes,5,rep,name=rows,proto3" json:"rows,omitempty"`
+}
+
+func (x *RecordRowsCommittedEvent) Reset() {
+	*x = RecordRowsCommittedEvent{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_message_proto_msgTypes[2]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *RecordRowsCommittedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordRowsCommittedEvent) ProtoMessage() {}
+
+func (x *RecordRowsCommittedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_message_proto_msgTypes[2]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordRowsCommittedEvent.ProtoReflect.Descriptor instead.
+func (*RecordRowsCommittedEvent) Descriptor() ([]byte, []int) {
+	return file_message_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *RecordRowsCommittedEvent) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *RecordRowsCommittedEvent) GetSourceId() string {
+	if x != nil {
+		return x.SourceId
+	}
+	return ""
+}
+
+func (x *RecordRowsCommittedEvent) GetCommitSeq() uint64 {
+	if x != nil {
+		return x.CommitSeq
+	}
+	return 0
+}
+
+func (x *RecordRowsCommittedEvent) GetCommittedAt() string {
+	if x != nil {
+		return x.CommittedAt
+	}
+	return ""
+}
+
+func (x *RecordRowsCommittedEvent) GetRows() []*RecordRow {
+	if x != nil {
+		return x.Rows
+	}
+	return nil
+}
+
 var File_message_proto protoreflect.FileDescriptor
 
 var file_message_proto_rawDesc = []byte{
@@ -217,12 +297,25 @@ var file_message_proto_rawDesc = []byte{
 	0x3d, 0x0a, 0x0f, 0x41, 0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x73, 0x45, 0x6e, 0x74,
 	0x72, 0x79, 0x12, 0x10, 0x0a, 0x03, 0x6b, 0x65, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52,
 	0x03, 0x6b, 0x65, 0x79, 0x12, 0x14, 0x0a, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x18, 0x02, 0x20,
-	0x01, 0x28, 0x09, 0x52, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x3a, 0x02, 0x38, 0x01, 0x42, 0x42,
-	0x5a, 0x40, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f,
-	0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d,
-	0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2f, 0x70,
-	0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x67, 0x65, 0x6e, 0x3b, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65,
-	0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x01, 0x28, 0x09, 0x52, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x3a, 0x02, 0x38, 0x01, 0x22, 0xc6,
+	0x01, 0x0a, 0x18, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x52, 0x6f, 0x77, 0x73, 0x43, 0x6f, 0x6d,
+	0x6d, 0x69, 0x74, 0x74, 0x65, 0x64, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x12, 0x19, 0x0a, 0x08, 0x65,
+	0x76, 0x65, 0x6e, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x65,
+	0x76, 0x65, 0x6e, 0x74, 0x49, 0x64, 0x12, 0x1b, 0x0a, 0x09, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65,
+	0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x73, 0x6f, 0x75, 0x72, 0x63,
+	0x65, 0x49, 0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x5f, 0x73, 0x65,
+	0x71, 0x18, 0x03, 0x20, 0x01, 0x28, 0x04, 0x52, 0x09, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x53,
+	0x65, 0x71, 0x12, 0x21, 0x0a, 0x0c, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x74, 0x65, 0x64, 0x5f,
+	0x61, 0x74, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74,
+	0x74, 0x65, 0x64, 0x41, 0x74, 0x12, 0x30, 0x0a, 0x04, 0x72, 0x6f, 0x77, 0x73, 0x18, 0x05, 0x20,
+	0x03, 0x28, 0x0b, 0x32, 0x1c, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x52, 0x6f,
+	0x77, 0x52, 0x04, 0x72, 0x6f, 0x77, 0x73, 0x42, 0x42, 0x5a, 0x40, 0x67, 0x69, 0x74, 0x68, 0x75,
+	0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f,
+	0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f,
+	0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x67, 0x65,
+	0x6e, 0x3b, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f,
+	0x74, 0x6f, 0x33,
 }
 
 var (
@@ -237,25 +330,28 @@ func file_message_proto_rawDescGZIP() []byte {
 	return file_message_proto_rawDescData
 }
 
-var file_message_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_message_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_message_proto_goTypes = []interface{}{
 	(*TimeSeriesRowsChangedEvent)(nil), // 0: trpc.moox.storage.TimeSeriesRowsChangedEvent
 	(*RecordRowsChangedEvent)(nil),     // 1: trpc.moox.storage.RecordRowsChangedEvent
-	nil,                                // 2: trpc.moox.storage.TimeSeriesRowsChangedEvent.AttributesEntry
-	nil,                                // 3: trpc.moox.storage.RecordRowsChangedEvent.AttributesEntry
-	(*TimeSeriesKey)(nil),              // 4: trpc.moox.storage.TimeSeriesKey
-	(*RecordKey)(nil),                  // 5: trpc.moox.storage.RecordKey
+	(*RecordRowsCommittedEvent)(nil),   // 2: trpc.moox.storage.RecordRowsCommittedEvent
+	nil,                                // 3: trpc.moox.storage.TimeSeriesRowsChangedEvent.AttributesEntry
+	nil,                                // 4: trpc.moox.storage.RecordRowsChangedEvent.AttributesEntry
+	(*TimeSeriesKey)(nil),              // 5: trpc.moox.storage.TimeSeriesKey
+	(*RecordKey)(nil),                  // 6: trpc.moox.storage.RecordKey
+	(*RecordRow)(nil),                  // 7: trpc.moox.storage.RecordRow
 }
 var file_message_proto_depIdxs = []int32{
-	4, // 0: trpc.moox.storage.TimeSeriesRowsChangedEvent.keys:type_name -> trpc.moox.storage.TimeSeriesKey
-	2, // 1: trpc.moox.storage.TimeSeriesRowsChangedEvent.attributes:type_name -> trpc.moox.storage.TimeSeriesRowsChangedEvent.AttributesEntry
-	5, // 2: trpc.moox.storage.RecordRowsChangedEvent.keys:type_name -> trpc.moox.storage.RecordKey
-	3, // 3: trpc.moox.storage.RecordRowsChangedEvent.attributes:type_name -> trpc.moox.storage.RecordRowsChangedEvent.AttributesEntry
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	5, // 0: trpc.moox.storage.TimeSeriesRowsChangedEvent.keys:type_name -> trpc.moox.storage.TimeSeriesKey
+	3, // 1: trpc.moox.storage.TimeSeriesRowsChangedEvent.attributes:type_name -> trpc.moox.storage.TimeSeriesRowsChangedEvent.AttributesEntry
+	6, // 2: trpc.moox.storage.RecordRowsChangedEvent.keys:type_name -> trpc.moox.storage.RecordKey
+	4, // 3: trpc.moox.storage.RecordRowsChangedEvent.attributes:type_name -> trpc.moox.storage.RecordRowsChangedEvent.AttributesEntry
+	7, // 4: trpc.moox.storage.RecordRowsCommittedEvent.rows:type_name -> trpc.moox.storage.RecordRow
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_message_proto_init() }
@@ -289,6 +385,18 @@ func file_message_proto_init() {
 				return nil
 			}
 		}
+		file_message_proto_msgTypes[2].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*RecordRowsCommittedEvent); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -296,7 +404,7 @@ func file_message_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_message_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -31,3 +31,12 @@ message RecordRowsChangedEvent {
   // attributes 是附加事件属性。
   map<string, string> attributes = 4;
 }
+
+// RecordRowsCommittedEvent 表示 PrimaryStore 已经原子提交的完整 Record 行。
+message RecordRowsCommittedEvent {
+  string event_id = 1;
+  string source_id = 2;
+  uint64 commit_seq = 3;
+  string committed_at = 4;
+  repeated RecordRow rows = 5;
+}

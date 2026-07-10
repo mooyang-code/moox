@@ -17,6 +17,20 @@ message ViewIndexSchema {
   string engine = 4;
   repeated ViewColumn columns = 5;
   string schema_hash = 6;
+  RecordViewMode record_view_mode = 7;
+  uint32 layout_revision = 8;
+  string primary_dataset_id = 9;
+  repeated string dataset_ids = 10;
+  repeated string grain_keys = 11;
+  string filter_json = 12;
+  string record_source_id = 13;
+}
+
+// RecordIndexMutation 表示一个已经完成投影的 Record 索引写入。
+message RecordIndexMutation {
+  RecordRow row = 1;
+  uint64 order_commit_seq = 2;
+  string source_id = 3;
 }
 
 // ViewIndexBatch 是写入一个派生索引的同构批次。
@@ -27,6 +41,10 @@ message ViewIndexBatch {
   // view_version and schema_hash fence stale event consumers after a schema switch.
   uint64 view_version = 4;
   string schema_hash = 5;
+  repeated RecordIndexMutation record_mutations = 6;
+  string replay_source_id = 7;
+  uint64 replay_from_commit_seq = 8;
+  uint64 replay_through_commit_seq = 9;
 }
 
 // ViewIndexStats 是无需扫描完整索引即可读取的持久化统计信息。
@@ -42,6 +60,13 @@ message ViewIndexStats {
   uint64 free_disk_bytes = 8;
   // view_version is persisted with the physical index and survives owner restarts.
   uint64 view_version = 9;
+  uint64 min_revision = 10;
+  uint64 max_revision = 11;
+  string applied_source_id = 12;
+  uint64 applied_through_commit_seq = 13;
+  uint64 visible_entry_count = 14;
+  RecordViewMode record_view_mode = 15;
+  uint32 layout_revision = 16;
 }
 
 message ViewIndexDescriptor {
@@ -126,6 +151,7 @@ message SearchRecordIndexReq {
   string index_id = 2;
   string dataset_id = 3;
   SearchRecordRowsReq query = 4;
+  RecordViewMode record_view_mode = 5;
 }
 
 message SearchRecordIndexRsp {

@@ -39,4 +39,5 @@ const (
 	ErrorCode_ENGINE_CAPABILITY_UNSUPPORTED  = commonpb.ErrorCode_ENGINE_CAPABILITY_UNSUPPORTED
 	ErrorCode_DIMENSION_VALUE_INVALID        = commonpb.ErrorCode_DIMENSION_VALUE_INVALID
 	ErrorCode_SUBJECT_NOT_IN_DATASET         = commonpb.ErrorCode_SUBJECT_NOT_IN_DATASET
+	ErrorCode_REVISION_CONFLICT              = commonpb.ErrorCode_REVISION_CONFLICT
 )

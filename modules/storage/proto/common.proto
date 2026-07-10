@@ -36,6 +36,20 @@ message VersionRange {
   string end_version = 2;
 }
 
+// RevisionRange 表示闭区间数字 revision 条件：[start_revision, end_revision]。
+// 0 表示对应方向无界；具体请求的边界语义由 RecordReadMode 约束。
+message RevisionRange {
+  uint64 start_revision = 1;
+  uint64 end_revision = 2;
+}
+
+// RecordReadMode 表示 Record 主存读取模式。
+enum RecordReadMode {
+  RECORD_READ_MODE_UNSPECIFIED = 0;
+  RECORD_READ_MODE_CURRENT = 1;
+  RECORD_READ_MODE_HISTORY = 2;
+}
+
 // ValueList 表示有序类型值列表。
 message ValueList {
   // values 是列表中的值。

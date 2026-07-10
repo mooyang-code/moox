@@ -6,6 +6,8 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;stor
 
 import "moox_common.proto";
 import "common.proto";
+import "access.proto";
+import "message.proto";
 
 // PrimaryStoreKey 是在线主存内部统一键模型，不作为用户侧 API 暴露。
 // 用户侧应使用 TimeSeriesKey 或 RecordKey。
@@ -120,6 +122,93 @@ message ScanPrimaryRowsRsp {
   repeated PrimaryStoreRow rows = 2;
   // page_result 是分页结果。
   common.PageResult page_result = 3;
+}
+
+message ApplyPrimaryRecordMutationsReq {
+  common.AuthInfo auth_info = 1;
+  PrimaryStoreTarget source_target = 2;
+  repeated RecordMutation mutations = 3;
+  string request_id = 4;
+}
+
+message ApplyPrimaryRecordMutationsRsp {
+  common.RetInfo ret_info = 1;
+  RecordRowsCommittedEvent commit = 2;
+}
+
+message OpenRecordSnapshotReq {
+  common.AuthInfo auth_info = 1;
+  PrimaryStoreTarget source_target = 2;
+  RecordReadMode mode = 3;
+  TimeRange updated_time_range = 4;
+}
+
+message OpenRecordSnapshotRsp {
+  common.RetInfo ret_info = 1;
+  string snapshot_id = 2;
+  uint64 commit_seq = 3;
+  string source_id = 4;
+}
+
+message ReadRecordSnapshotReq {
+  common.AuthInfo auth_info = 1;
+  string snapshot_id = 2;
+  PrimaryStoreTarget target = 3;
+  repeated string record_ids = 4;
+}
+
+message ReadRecordSnapshotRsp {
+  common.RetInfo ret_info = 1;
+  repeated RecordRow rows = 2;
+}
+
+message ScanRecordSnapshotReq {
+  common.AuthInfo auth_info = 1;
+  string snapshot_id = 2;
+  PrimaryStoreTarget target = 3;
+  common.Page page = 4;
+}
+
+message ScanRecordSnapshotRsp {
+  common.RetInfo ret_info = 1;
+  repeated RecordRow rows = 2;
+  common.PageResult page_result = 3;
+}
+
+message RenewRecordSnapshotReq {
+  common.AuthInfo auth_info = 1;
+  string snapshot_id = 2;
+}
+
+message CloseRecordSnapshotReq {
+  common.AuthInfo auth_info = 1;
+  string snapshot_id = 2;
+}
+
+message GetRecordWatermarkReq {
+  common.AuthInfo auth_info = 1;
+  PrimaryStoreTarget target = 2;
+}
+
+message GetRecordWatermarkRsp {
+  common.RetInfo ret_info = 1;
+  string source_id = 2;
+  uint64 commit_seq = 3;
+}
+
+message ScanRecordJournalReq {
+  common.AuthInfo auth_info = 1;
+  PrimaryStoreTarget target = 2;
+  uint64 after_commit_seq = 3;
+  uint64 through_commit_seq = 4;
+  common.Page page = 5;
+}
+
+message ScanRecordJournalRsp {
+  common.RetInfo ret_info = 1;
+  repeated RecordRowsCommittedEvent events = 2;
+  uint64 scanned_through_commit_seq = 3;
+  common.PageResult page_result = 4;
 }
 
 // PrimaryStore 是 Access 调用在线事实主存的内部执行服务。
