@@ -147,11 +147,11 @@ func (s *Service) InitPackageUpload(ctx context.Context, req *pb.InitPackageUplo
 		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	return &pb.InitPackageUploadRsp{
-		RetInfo:    retOK(),
-		PackageId:  packageID,
-		UploadUrl:  uploadURL,
-		CosPath:    cosPath,
-		ExpiresAt:  expires.Unix(),
+		RetInfo:   retOK(),
+		PackageId: packageID,
+		UploadUrl: uploadURL,
+		CosPath:   cosPath,
+		ExpiresAt: expires.Unix(),
 	}, nil
 }
 

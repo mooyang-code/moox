@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
@@ -464,10 +465,7 @@ func startRPCQueueRuntime(t *testing.T) (*jobqueue.Runtime, config.JetStreamConf
 			StartupTimeoutMS: 5000,
 		},
 	}
-	rt, err := jobqueue.StartEmbedded(context.Background(), cfg.Embedded)
-	if err != nil {
-		t.Fatalf("StartEmbedded() error = %v", err)
-	}
+	rt := testfixture.StartRuntime(t, cfg)
 	t.Cleanup(func() { _ = rt.Close() })
 	if err := rt.EnsureStreams(cfg, config.Default().JobItem); err != nil {
 		t.Fatalf("EnsureStreams() error = %v", err)

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
+	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 

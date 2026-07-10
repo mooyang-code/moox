@@ -12,7 +12,7 @@ require (
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
-	github.com/nats-io/nats.go v1.47.0
+	github.com/nats-io/nats.go v1.47.0 // test fixture only
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.1.26
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf v1.1.0
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.70

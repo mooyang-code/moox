@@ -3,6 +3,7 @@ package jetstream
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nats-io/nats.go"
 )
@@ -67,6 +68,20 @@ func (c *Client) KeyValue(bucket string) (KeyValue, error) {
 		return nil, err
 	}
 	kv, err := c.js.KeyValue(bucket)
+	if err != nil {
+		return nil, err
+	}
+	return keyValueAdapter{kv: kv}, nil
+}
+
+func (c *Client) CreateKeyValue(bucket string, ttl time.Duration) (KeyValue, error) {
+	if err := c.alive(); err != nil {
+		return nil, err
+	}
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	kv, err := c.js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket, Storage: nats.FileStorage, History: 1, TTL: ttl})
 	if err != nil {
 		return nil, err
 	}

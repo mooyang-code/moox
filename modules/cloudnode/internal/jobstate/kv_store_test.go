@@ -8,9 +8,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
-	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -136,18 +135,10 @@ func newTestKVStore(t *testing.T, ttl time.Duration) *KVStore {
 		StoreDir:         t.TempDir(),
 		StartupTimeoutMS: 5000,
 	}
-	rt, err := jobqueue.StartEmbedded(context.Background(), cfg.Embedded)
-	if err != nil {
-		t.Fatalf("StartEmbedded() error = %v", err)
-	}
+	rt := testfixture.StartRuntime(t, cfg)
 	t.Cleanup(func() { _ = rt.Close() })
 	bucket := fmt.Sprintf("TEST_JOB_ACTIVE_%d", time.Now().UnixNano())
-	kv, err := rt.JetStream().CreateKeyValue(&nats.KeyValueConfig{
-		Bucket:  bucket,
-		Storage: nats.FileStorage,
-		History: 1,
-		TTL:     ttl,
-	})
+	kv, err := rt.Client().CreateKeyValue(bucket, ttl)
 	if err != nil {
 		t.Fatalf("CreateKeyValue() error = %v", err)
 	}

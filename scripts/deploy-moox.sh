@@ -351,10 +351,6 @@ patch_configs() {
     perl -0pi -e 's#root:\s*\./var/storage#root: ../data/storage#g; s#path:\s*\./var/storage/metadata/storage_metadata\.db#path: ../data/storage/metadata/storage_metadata.db#g; s#pebble_path:\s*\./var/storage/pebble#pebble_path: ../data/storage/pebble#g; s#view_index_root:\s*\./var/storage/view-indexes#view_index_root: ../data/storage/view-indexes#g; s#parquet_path:\s*\./var/storage/archive#parquet_path: ../data/storage/archive#g' \
       "${conf}"
   done
-  # The split access process owns the embedded NATS/JetStream bus used by writers and view builders.
-  perl -0pi -e 's#type:\s*memory#type: nats#g; s#enabled:\s*false#enabled: true#g' \
-    "${STAGE_DIR}/storage/config/storage.yaml" \
-    "${STAGE_DIR}/storage/config/storage.access.yaml"
   perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage#g' \
     "${STAGE_DIR}/storage/config/trpc_go.yaml"
   perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage-access#g' \

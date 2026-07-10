@@ -11,7 +11,9 @@ storage:
   primary:
     service_name: trpc.moox.storage.PrimaryStore
   eventbus:
-    type: nats
+    type: jetstream
+    urls:
+      - nats://127.0.0.1:4222
     nats_url: nats://127.0.0.1:4222
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
@@ -22,8 +24,6 @@ storage:
     max_in_flight: 128
     ack_wait_ms: 120000
     max_deliver: -1
-    embedded:
-      enabled: false
   view:
     metadata_service_name: trpc.moox.storage.Metadata
     access_service_name: trpc.moox.storage.Access

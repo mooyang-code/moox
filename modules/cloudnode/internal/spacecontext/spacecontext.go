@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/filter"
+	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
 const (
