@@ -85,6 +85,10 @@ func (b *ProducerBus) publish(ctx context.Context, topic, id, spaceID, datasetID
 		return errors.New("storage update message_id is required")
 	}
 	now := timestamppb.Now()
+	contentType := "application/x-protobuf; message=trpc.moox.storage.RecordRowsUpdated"
+	if strings.HasSuffix(topic, defaultTimeSeriesRowsUpdatedSuffix) {
+		contentType = "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated"
+	}
 	msg := &messagepb.MooxMessage{
 		ProtocolVersion: jetstream.ProtocolVersion,
 		MessageId:       id,
@@ -94,7 +98,7 @@ func (b *ProducerBus) publish(ctx context.Context, topic, id, spaceID, datasetID
 		SpaceId:         spaceID,
 		OccurredAt:      now,
 		PublishedAt:     now,
-		ContentType:     "application/protobuf",
+		ContentType:     contentType,
 		Payload:         data,
 		Attributes:      map[string]string{"dataset_id": datasetID},
 	}
@@ -178,7 +182,7 @@ func (b *SubscriberBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, hand
 		return nil, context.Canceled
 	}
 	if b.timeSeriesConsumer == nil {
-		consumer, err := b.client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "storage_view_time_series", FilterSubject: b.timeSeriesSubject, AckWait: 2 * time.Minute, MaxDeliver: -1, MaxAckPending: 128})
+		consumer, err := b.client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_time_series_rows_updated_v1", FilterSubject: b.timeSeriesSubject, AckWait: 2 * time.Minute, MaxDeliver: -1, MaxAckPending: 128})
 		if err != nil {
 			return nil, err
 		}
@@ -201,7 +205,7 @@ func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler 
 		return nil, context.Canceled
 	}
 	if b.recordConsumer == nil {
-		consumer, err := b.client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "storage_view_record", FilterSubject: b.recordSubject, AckWait: 2 * time.Minute, MaxDeliver: -1, MaxAckPending: 128})
+		consumer, err := b.client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_record_rows_updated_v1", FilterSubject: b.recordSubject, AckWait: 2 * time.Minute, MaxDeliver: -1, MaxAckPending: 128})
 		if err != nil {
 			return nil, err
 		}

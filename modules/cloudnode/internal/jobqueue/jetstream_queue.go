@@ -15,7 +15,10 @@ import (
 )
 
 const defaultFetchMaxWait = 500 * time.Millisecond
-const JobRequestedTopic = "moox.cloudnode.job.requested.v1"
+
+// JobRequestedTopic is retained as a compatibility label; routed publishes
+// use ExecSubject so every concrete message topic carries its route identity.
+const JobRequestedTopic = "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*"
 
 // JetStreamQueue implements ExecutionQueue on the centrally managed stream.
 type JetStreamQueue struct {
@@ -66,19 +69,20 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*Publis
 	if strings.TrimSpace(messageID) == "" {
 		messageID = item.GetJobItemId()
 	}
-	msg := &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: messageID, Topic: JobRequestedTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_COMMAND, Producer: &messagepb.Producer{ServiceName: "moox-cloudnode", InstanceId: "cloudnode"}, SpaceId: item.GetSpaceId(), OccurredAt: now, PublishedAt: now, ContentType: "application/protobuf", Payload: data}
+	topic := ExecSubject(q.cfg.Naming, item.GetSpaceId(), item.GetCodePackageId(), item.GetJobType())
+	msg := &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: messageID, Topic: topic, Kind: messagepb.MessageKind_MESSAGE_KIND_COMMAND, Producer: &messagepb.Producer{ServiceName: "moox-cloudnode", InstanceId: "cloudnode"}, SpaceId: item.GetSpaceId(), OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.cloudnode.JobItem", Payload: data}
 	ack, err := q.client.Publish(ctx, msg)
 	if err != nil {
 		return nil, err
 	}
-	return &PublishResult{Created: !ack.Duplicate, Duplicate: ack.Duplicate, Subject: JobRequestedTopic, Stream: ack.Stream, Sequence: ack.Sequence}, nil
+	return &PublishResult{Created: !ack.Duplicate, Duplicate: ack.Duplicate, Subject: topic, Stream: ack.Stream, Sequence: ack.Sequence}, nil
 }
 
 func (q *JetStreamQueue) ensureConsumer(ctx context.Context) error {
 	if q.consumer != nil {
 		return nil
 	}
-	consumer, err := q.client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: q.cfg.ExecStream, Durable: "cloudnode_exec", FilterSubject: JobRequestedTopic, AckWait: q.cfg.AckWait, MaxDeliver: q.cfg.MaxDeliver, MaxAckPending: q.cfg.DefaultMaxBatch, FetchMaxWait: q.cfg.FetchMaxWait})
+	consumer, err := q.client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: q.cfg.ExecStream, Durable: "cn_exec_all", FilterSubject: JobRequestedTopic, AckWait: q.cfg.AckWait, MaxDeliver: q.cfg.MaxDeliver, MaxAckPending: q.cfg.DefaultMaxBatch, FetchMaxWait: q.cfg.FetchMaxWait})
 	if err != nil {
 		return err
 	}

@@ -44,7 +44,7 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	consumer, err := client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: c.cfg.Stream, Durable: c.cfg.Consumer, FilterSubject: c.cfg.Subject, AckWait: 60 * time.Second, MaxDeliver: 5, FetchMaxWait: time.Second})
+	consumer, err := client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: c.cfg.Stream, Durable: c.cfg.Consumer, FilterSubject: c.cfg.Subject, AckWait: 60 * time.Second, MaxDeliver: 5, MaxAckPending: 1000, FetchMaxWait: time.Second})
 	if err != nil {
 		_ = client.Close()
 		return err
@@ -89,7 +89,7 @@ func (c *NATSConsumer) loop(ctx context.Context) {
 		}
 		for _, delivery := range deliveries {
 			event := &storagepb.TimeSeriesRowsUpdated{}
-			if delivery.Message.GetContentType() != "application/protobuf" {
+			if delivery.Message.GetContentType() != "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated" {
 				_ = delivery.Term(context.Background())
 				continue
 			}
