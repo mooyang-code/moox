@@ -102,10 +102,6 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	mode := viewMeta.GetRecordViewMode()
-	legacyVersionQuery := false
-	for _, key := range req.GetKeys() {
-		legacyVersionQuery = legacyVersionQuery || key.GetVersion() != ""
-	}
 	if mode == pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
 		mode = pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT
 	}
@@ -134,10 +130,8 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	query := proto.Clone(req).(*pb.SearchRecordRowsReq)
-	if !legacyVersionQuery || viewMeta.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
-		query.RecordViewMode = mode
-	}
-	query.Keys, err = normalizeRecordSearchKeys(req.GetSpaceId(), datasetID, req.GetKeys(), legacyVersionQuery && viewMeta.GetRecordViewMode() == pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED)
+	query.RecordViewMode = mode
+	query.Keys, err = normalizeRecordSearchKeys(req.GetSpaceId(), datasetID, req.GetKeys())
 	if err != nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
@@ -279,7 +273,7 @@ func (s *Service) validateRecordView(ctx context.Context, viewMeta *pb.View) err
 	return nil
 }
 
-func normalizeRecordSearchKeys(spaceID string, datasetID string, keys []*pb.RecordKey, allowLegacyVersion bool) ([]*pb.RecordKey, error) {
+func normalizeRecordSearchKeys(spaceID string, datasetID string, keys []*pb.RecordKey) ([]*pb.RecordKey, error) {
 	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
 		return nil, errors.New("space_id and dataset_id are required")
 	}
@@ -297,9 +291,6 @@ func normalizeRecordSearchKeys(spaceID string, datasetID string, keys []*pb.Reco
 		}
 		if copied.GetSpaceId() != spaceID || copied.GetDatasetId() != datasetID {
 			return nil, errors.New("record key must belong to the query view primary dataset")
-		}
-		if copied.GetVersion() != "" && !allowLegacyVersion {
-			return nil, errors.New("record key.version is not accepted; use revision_range")
 		}
 		if copied.GetRecordId() != "" {
 			out = append(out, copied)

@@ -5,6 +5,9 @@ import type {
   PageResult,
   RecordKey,
   RecordRow,
+  RevisionRange,
+  RecordReadMode,
+  RecordViewMode,
   ResultColumn,
   RetInfo,
   SortSpec,
@@ -12,7 +15,6 @@ import type {
   TimeSeriesKey,
   TimeSeriesRow,
   TotalMode,
-  VersionRange,
 } from './types';
 
 export interface QueryTimeSeriesRowsReq {
@@ -33,7 +35,9 @@ export interface SearchRecordRowsReq {
   view_id: string;
   keys?: RecordKey[];
   text_query?: string;
-  version_range?: VersionRange;
+  revision_range?: RevisionRange;
+  record_view_mode?: RecordViewMode;
+  mode?: RecordReadMode;
   filters?: FilterExpr[];
   sorts?: SortSpec[];
   column_names?: string[];

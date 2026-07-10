@@ -37,9 +37,7 @@ message TimeSeriesRow {
   map<string, string> attributes = 3;
 }
 
-// RecordKey 表示记录数据行的业务主键。
-// 非固定 subject + freq 的数据都归为记录数据，即使其具备时间线，也通过 version 表达。
-// 服务端内部将其归一为 PrimaryStoreKey(key=record_id, version=version)。
+// RecordKey 表示记录数据行的业务主键。修订号由服务端分配，不属于调用方身份。
 message RecordKey {
   // space_id 是使用空间 ID。
   string space_id = 1;
@@ -47,9 +45,8 @@ message RecordKey {
   string dataset_id = 2;
   // record_id 是记录唯一 ID，例如 news_id、profile_id、ranking_id。
   string record_id = 3;
-  // version 是该 record_id 下的版本；写入为空时服务端按当前 UTC 时间戳生成默认版本。
-  // 范围读取时可为空，实际版本集合由 version_range 表达。
-  string version = 4;
+  reserved 4;
+  reserved "version";
 }
 
 // RecordRow 表示一行记录事实数据。
@@ -139,30 +136,14 @@ message ReadTimeSeriesRowsRsp {
   common.PageResult page_result = 3;
 }
 
-// WriteRecordRowsReq 表示写入记录事实数据行。
-message WriteRecordRowsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // rows 是待写入的记录数据行。
-  repeated RecordRow rows = 2;
-}
-
-// WriteRecordRowsRsp 表示记录事实数据写入结果。
-message WriteRecordRowsRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // keys 是服务端最终写入的记录 key；当请求未传 version 时，这里返回补齐后的版本。
-  repeated RecordKey keys = 2;
-}
-
 // ReadRecordRowsReq 表示读取记录事实数据。
 message ReadRecordRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
   common.AuthInfo auth_info = 1;
-  // keys 是查询 key；范围读时 key.version 可为空，实际版本集合由 version_range 表达。
+  // keys 是查询 key；范围读时 record_id 可为空。
   repeated RecordKey keys = 2;
-  // version_range 是闭区间版本范围；精确读时 start_version=end_version。
-  VersionRange version_range = 3;
+  reserved 3;
+  reserved "version_range";
   // order 表示按 version 返回的顺序，默认升序。
   SortOrder order = 4;
   // column_names 是要返回的列名；为空时返回整行。
@@ -310,9 +291,7 @@ service Access {
   rpc WriteTimeSeriesRows(WriteTimeSeriesRowsReq) returns (WriteTimeSeriesRowsRsp);
   // ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
-  // WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
-  rpc WriteRecordRows(WriteRecordRowsReq) returns (WriteRecordRowsRsp);
-  // ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
+  // ReadRecordRows 按记录 ID 读取当前或历史修订。
   rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
   rpc UpsertRecordRows(UpsertRecordRowsReq) returns (UpsertRecordRowsRsp);
 }

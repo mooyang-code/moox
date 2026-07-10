@@ -13,6 +13,7 @@ import (
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchangetypes"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/rs/xid"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -23,8 +24,6 @@ const (
 	// maxConcurrency 最大并发请求数。
 	// RegisterDataSubject 会触发 metadata snapshot refresh，串行上报避免并发刷新冲突。
 	maxConcurrency = 1
-	// symbolRecordVersionLatest is the fixed symbol record version.
-	symbolRecordVersionLatest = "latest"
 )
 
 // SymbolCollector 标的同步采集器
@@ -218,10 +217,11 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 
 // sendWithRetry 发送单个批次请求（带重试）
 func (c *SymbolCollector) sendSymbolBatchWithRetry(ctx context.Context, metadataTarget string, accessTarget string, binding StorageBinding, symbols []*exchange.SymbolInfo, rows []*storagepb.RecordRow, batchIdx, totalBatches int) error {
+	requestID := xid.New().String()
 	return retry.Do(
 		func() error {
 			writer := newStorageWriter(accessTarget, metadataTarget, storageAuthInfo(binding))
-			if err := writer.WriteRecordRows(ctx, rows); err != nil {
+			if err := writer.UpsertRecordRows(ctx, rows, requestID); err != nil {
 				return err
 			}
 			for _, symbol := range symbols {
@@ -312,7 +312,6 @@ func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, binding StorageBindin
 				SpaceId:   binding.SpaceID,
 				DatasetId: binding.RecordDatasetID,
 				RecordId:  subjectID,
-				Version:   symbolRecordVersionLatest,
 			},
 			Columns: columns,
 		}

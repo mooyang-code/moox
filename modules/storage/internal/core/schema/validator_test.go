@@ -2,36 +2,26 @@ package schema
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
-func TestValidateWriteRecordRowsRequiresTimestampVersion(t *testing.T) {
+func TestValidateWriteRecordRowsUsesServerManagedMetadata(t *testing.T) {
 	validator := NewValidator(recordVersionMetadata{})
 	row := &pb.RecordRow{Key: &pb.RecordKey{
-		SpaceId: "crypto", DatasetId: "news", RecordId: "news-1", Version: "opaque-version",
+		SpaceId: "crypto", DatasetId: "news", RecordId: "news-1",
 	}}
-	if err := validator.ValidateWriteRecordRows(context.Background(), []*pb.RecordRow{row}); err == nil || !strings.Contains(err.Error(), "RFC3339") {
-		t.Fatalf("opaque version error = %v, want RFC3339 validation", err)
-	}
-
-	row.Key.Version = "2026-07-10T12:00:00Z"
 	if err := validator.ValidateWriteRecordRows(context.Background(), []*pb.RecordRow{row}); err != nil {
-		t.Fatalf("timestamp version: %v", err)
+		t.Fatalf("server-managed metadata: %v", err)
 	}
 }
 
-func TestValidateRecordMutationAllowsPartialUpdateAndRejectsVersion(t *testing.T) {
+func TestValidateRecordMutationAllowsPartialUpdate(t *testing.T) {
 	validator := NewValidator(recordVersionMetadata{})
 	mutation := &pb.RecordMutation{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1"}}
 	if err := validator.ValidateRecordMutation(context.Background(), mutation, true); err != nil {
 		t.Fatalf("partial update: %v", err)
-	}
-	mutation.Key.Version = "legacy"
-	if err := validator.ValidateRecordMutation(context.Background(), mutation, true); err == nil || !strings.Contains(err.Error(), "not accepted") {
-		t.Fatalf("legacy version error = %v", err)
 	}
 }
 

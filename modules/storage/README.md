@@ -28,15 +28,16 @@ MooX Storage 是面向量化金融场景的统一数据存储服务。它在**�
 Storage 的事实主存统一按 `key + version` 定位一行数据，Access 对外拆成两套更贴近业务的接口：
 
 - **TimeSeries**：`TimeSeriesKey` 由 `space_id + dataset_id + subject_id + freq + dimensions + data_time` 组成，其中 `data_time` 就是版本时间，必须使用 RFC3339/RFC3339Nano。K 线、tick 等有固定 Subject 和固定频率的数据应使用这一类。
-- **Record**：`RecordKey` 由 `space_id + dataset_id + record_id + version` 组成。`version` 允许调用方传入；为空时由 Access 使用当前 UTC 时间生成默认版本，写入响应会返回最终 `RecordKey`。
-- **列级更新**：同一个 key+version 再次写入时，只更新本次携带的列；未携带列保留旧值。携带 `NULL` 值不会覆盖已有非空值，便于多批因子或资料字段逐步补齐。
+- **Record**：`RecordKey` 由 `space_id + dataset_id + record_id` 组成。调用方通过 `UpsertRecordRows(request_id, mutations)` 提交 patch，PrimaryStore 分配单调 `revision`、`updated_at` 和 `commit_seq`，并保留不可变历史。
+- **读取模式**：`ReadRecordRows` 默认读取 `CURRENT`；`HISTORY` 按数值 `revision` 和可选 `RevisionRange` 返回每次提交的完整行。CURRENT 只返回每个 record_id 一行。
+- **列级更新**：同一逻辑 key 的 mutation 合并当前快照后生成新 revision；未携带列保留旧值。`request_id` 提供重试幂等，`expected_revision` 提供可选乐观并发控制。
 - **绑定关系**：TimeSeries 写入不强制校验 `DatasetSubject`，Record 写入也不自动维护对象绑定；这些关系由应用层通过 Metadata 独立登记，便于管理台展示和治理。
 
 ### View 版本与切换
 
 View 是可从 PrimaryStore 重建的近期派生读模型。每个 View 只有确定性的 `a`、`b` 两个槽位：TimeSeries 槽位是一份独立 DuckDB 文件，Record 槽位是一个独立 Bleve 目录。`view_index` 是唯一可以打开、查询和删除这些文件的进程；`view_builder` 与 `view_query` 仅调用其 RPC。
 
-只要 View 定义或字段变化，`view_version` 就递增，旧构建声明立即失效。`view_builder` 先持久化 `PREPARING` 构建租约，再创建非活跃槽位，按页从 PrimaryStore 回扫 `retention_window`，保存游标并续租；追平增量后通过一次 `ActivateViewIndex` CAS 原子切换读取指针。旧槽位在引用排空及宽限期结束后整库删除，因此无需依赖 DuckDB 行删除或压缩回收空间。
+只要 View 定义或字段变化，`view_version` 就递增，旧构建声明立即失效。`view_builder` 先持久化 `PREPARING` 构建租约，再创建非活跃槽位；Record CURRENT/HISTORY 分别从稳定快照和固定 retention cutoff 回扫，并按 commit journal 连续追平，最后通过一次 `ActivateViewIndex` CAS 原子切换读取指针。旧槽位在引用排空及宽限期结束后整库删除，因此无需依赖 DuckDB 行删除或压缩回收空间。
 
 TimeSeries 槽位内只有固定表 `view_rows`，按 `ViewColumn` 展开为真实物理列。`QueryTimeSeriesRows` 将 key、时间范围、结构化过滤、排序、`limit` 和分页下推到 DuckDB。Bleve 同样在引擎内完成版本范围、排序和 `size+1` 分页，查询端不会先加载完整命中集。
 
@@ -575,7 +576,7 @@ Space、View（+ViewColumn）、DataSource、Subject（+SubjectSymbol）、Datas
 | RPC | 说明 |
 | --- | --- |
 | `WriteTimeSeriesRows` / `ReadTimeSeriesRows` | 写入/读取固定 `subject_id + freq` 下按 `data_time` 演进的时序数据 |
-| `WriteRecordRows` / `ReadRecordRows` | 写入/读取记录数据，按 `record_id + version` 定位 |
+| `UpsertRecordRows` / `ReadRecordRows` | 使用服务端 revision 写入并读取 CURRENT/HISTORY 记录 |
 
 ### DataView — 用户侧查询（端口 20103 / HTTP 20202）
 

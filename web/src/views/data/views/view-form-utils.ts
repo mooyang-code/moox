@@ -59,7 +59,7 @@ export function defaultViewGrainKeys(datasets: Dataset[], primaryDatasetId: stri
   if (isTimeSeriesDataKind(primary?.data_kind)) {
     return ["subject_id", "freq", "data_time"];
   }
-  return ["record_id", "version"];
+  return ["record_id"];
 }
 
 export function defaultViewEngine(datasets: Dataset[], primaryDatasetId: string) {

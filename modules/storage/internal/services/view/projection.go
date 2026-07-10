@@ -30,7 +30,6 @@ func BuildCurrentRecordMutation(item *pb.View, rowsByDataset map[string]*pb.Reco
 		return nil, nil
 	}
 	key := proto.Clone(primary.GetKey()).(*pb.RecordKey)
-	key.Version = ""
 	row := &pb.RecordRow{Key: key, Columns: ProjectRecordColumnsForView(item.GetPrimaryDatasetId(), item.GetColumns(), rowsByDataset), Attributes: CloneStringMap(primary.GetAttributes()), Revision: primary.GetRevision(), UpdatedAt: primary.GetUpdatedAt(), CommitSeq: primary.GetCommitSeq()}
 	return &pb.RecordIndexMutation{Row: row, OrderCommitSeq: projectionWatermark, SourceId: sourceID}, nil
 }
@@ -45,7 +44,6 @@ func BuildHistoryRecordMutation(item *pb.View, committed *pb.RecordRow, sourceID
 		return nil, errors.New("HISTORY mutation requires one dataset")
 	}
 	key := proto.Clone(committed.GetKey()).(*pb.RecordKey)
-	key.Version = ""
 	row := proto.Clone(committed).(*pb.RecordRow)
 	row.Key = key
 	return &pb.RecordIndexMutation{Row: row, OrderCommitSeq: committed.GetCommitSeq(), SourceId: sourceID}, nil
@@ -388,7 +386,7 @@ func RecordProjectionGrainKey(key *pb.RecordKey) string {
 	return strings.Join([]string{
 		key.GetSpaceId(),
 		key.GetRecordId(),
-		key.GetVersion(),
+		key.GetRecordId(),
 	}, "\x00")
 }
 

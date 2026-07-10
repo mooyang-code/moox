@@ -867,11 +867,6 @@ func (m *MaintenanceManager) processRecordPage(ctx context.Context, item *pb.Vie
 	if err != nil {
 		return 0, nil, err
 	}
-	for _, row := range rows {
-		if _, ok := parseIndexTime(row.GetKey().GetVersion()); !ok {
-			return 0, nil, fmt.Errorf("Record View %s/%s requires RFC3339 versions; got %q", item.GetSpaceId(), item.GetViewId(), row.GetKey().GetVersion())
-		}
-	}
 	projected, ok, err := RecordRowsForView(ctx, item, build.GetColumns(), rows, m.readRecordProjectionRows)
 	if err != nil {
 		return 0, nil, err

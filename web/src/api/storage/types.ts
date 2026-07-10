@@ -229,6 +229,7 @@ export interface View {
   grain_keys?: string[];
   filter_json?: string;
   engine?: string;
+  record_view_mode?: 'RECORD_VIEW_MODE_UNSPECIFIED' | 'RECORD_VIEW_MODE_CURRENT' | 'RECORD_VIEW_MODE_HISTORY' | string;
   retention_window?: string;
   active_index_id?: string;
   status: string;
@@ -355,11 +356,28 @@ export interface RecordKey {
   space_id: string;
   dataset_id: string;
   record_id: string;
-  version?: string;
+}
+
+export interface RevisionRange {
+  start_revision?: number | string;
+  end_revision?: number | string;
+}
+
+export type RecordReadMode = 'RECORD_READ_MODE_UNSPECIFIED' | 'RECORD_READ_MODE_CURRENT' | 'RECORD_READ_MODE_HISTORY';
+export type RecordViewMode = 'RECORD_VIEW_MODE_UNSPECIFIED' | 'RECORD_VIEW_MODE_CURRENT' | 'RECORD_VIEW_MODE_HISTORY';
+
+export interface RecordMutation {
+  key: RecordKey;
+  columns?: ColumnValue[];
+  attributes?: Record<string, string>;
+  expected_revision?: number | string;
 }
 
 export interface RecordRow {
   key: RecordKey;
   columns?: ColumnValue[];
   attributes?: Record<string, string>;
+  revision?: number | string;
+  updated_at?: string;
+  commit_seq?: number | string;
 }

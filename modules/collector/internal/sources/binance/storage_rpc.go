@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/rs/xid"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -35,11 +36,23 @@ func (w *storageWriter) WriteTimeSeriesRows(ctx context.Context, rows []*storage
 	return ensureStorageOK("write time-series rows", rsp.GetRetInfo())
 }
 
-func (w *storageWriter) WriteRecordRows(ctx context.Context, rows []*storagepb.RecordRow) error {
-	rsp, err := w.access.WriteRecordRows(ctx, &storagepb.WriteRecordRowsReq{
-		AuthInfo: w.authInfo,
-		Rows:     rows,
-	})
+func (w *storageWriter) UpsertRecordRows(ctx context.Context, rows []*storagepb.RecordRow, requestID string) error {
+	mutations := make([]*storagepb.RecordMutation, 0, len(rows))
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		key := row.GetKey()
+		if key == nil {
+			return fmt.Errorf("write record rows: row key is required")
+		}
+		key = &storagepb.RecordKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), RecordId: key.GetRecordId()}
+		mutations = append(mutations, &storagepb.RecordMutation{Key: key, Columns: row.GetColumns(), Attributes: row.GetAttributes()})
+	}
+	if requestID == "" {
+		requestID = xid.New().String()
+	}
+	rsp, err := w.access.UpsertRecordRows(ctx, &storagepb.UpsertRecordRowsReq{AuthInfo: w.authInfo, RequestId: requestID, Mutations: mutations})
 	if err != nil {
 		return fmt.Errorf("write record rows: %w", err)
 	}

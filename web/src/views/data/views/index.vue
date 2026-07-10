@@ -91,6 +91,12 @@
             <a-option v-for="freq in primaryFreqOptions" :key="freq" :value="freq">{{ freq }}</a-option>
           </a-select>
         </a-form-item>
+        <a-form-item v-else field="record_view_mode" label="Record模式">
+          <a-select v-model="form.record_view_mode">
+            <a-option value="current">CURRENT：当前快照</a-option>
+            <a-option value="history">HISTORY：历史版本</a-option>
+          </a-select>
+        </a-form-item>
         <a-form-item field="dataset_ids" label="包含数据集">
           <a-select v-model="form.dataset_ids" multiple allow-search placeholder="选择视图包含的数据集">
             <a-option v-for="item in includedDatasetOptions" :key="item.dataset_id" :value="item.dataset_id">
@@ -327,6 +333,7 @@ const form = reactive<ViewForm>({
   view_freq: "",
   engine: "",
   retention_window: "",
+  record_view_mode: "current",
   status: "active",
   attributes: {}
 });
@@ -416,6 +423,7 @@ function resetForm() {
     view_freq: "",
     engine: "",
     retention_window: "",
+    record_view_mode: "current",
     status: "active",
     attributes: {}
   });
@@ -435,7 +443,8 @@ function openEdit(record: View) {
     dataset_ids: (record.dataset_ids || []).filter(datasetId => datasetId !== record.primary_dataset_id),
     grain_keys: record.grain_keys || [],
     filter_json: jsonText(record.filter_json),
-    view_freq: freqFromViewFilterJSON(record.filter_json)
+    view_freq: freqFromViewFilterJSON(record.filter_json),
+    record_view_mode: record.record_view_mode || "current",
   });
   syncViewFreq();
   draftColumns.value = [];
@@ -488,6 +497,7 @@ async function submit() {
     filter_json: filterJSON,
     engine: defaultViewEngine(datasets.value, form.primary_dataset_id),
     retention_window: form.retention_window,
+    record_view_mode: isTimeSeriesPrimaryDataset.value ? "RECORD_VIEW_MODE_UNSPECIFIED" : (form.record_view_mode === "history" ? "RECORD_VIEW_MODE_HISTORY" : "RECORD_VIEW_MODE_CURRENT"),
     status: form.status,
     attributes: mergeViewAttribution(form.attributes, {
       ownerModule: props.ownerModule,

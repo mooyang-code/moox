@@ -12,7 +12,7 @@
 - `metadata-cn-stock.seed.yaml`：A股交易空间示例，包含东方财富、AKShare、日线行情、股票资料、财务指标、字段、因子和 Dataset 默认主存路由。
 - `metadata-crypto.seed.yaml`：加密货币交易空间示例，包含 Binance 现货 K 线、交易对资料、字段、因子、Record 多数据集 Bleve View 和 Dataset 默认主存路由。
 - `metadata-crypto-binance-swap-kline.seed.yaml`：Binance U 本位永续合约 1H K 线示例，匹配 `coin-binance-swap-candle-csv-1h-*` CSV 表头，包含 swap 数据集、常用标的、字段、跨 swap/spot K 线的示例 View 和默认主存路由。
-- `data-crypto-record-symbol-profiles.json`：Record 多数据集 Bleve View 的演示数据，可直接投给 `AccessService.WriteRecordRows`，包含交易对状态和交易对画像两类记录。
+- `data-crypto-record-symbol-profiles.json`：Record 多数据集 Bleve View 的演示数据，使用 `AccessService.UpsertRecordRows` 的 `request_id + mutations` 契约，包含交易对状态和交易对画像两类记录。
 
 ## 默认存储拓扑
 

@@ -214,9 +214,6 @@ func validateRecordMutation(mutation *pb.RecordMutation) error {
 	if key.GetSpaceId() == "" || key.GetDatasetId() == "" || key.GetRecordId() == "" {
 		return errors.New("record mutation requires space_id, dataset_id and record_id")
 	}
-	if key.GetVersion() != "" {
-		return errors.New("record mutation key.version is not accepted")
-	}
 	return nil
 }
 

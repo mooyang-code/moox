@@ -19,6 +19,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/bench"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/rs/xid"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -784,11 +785,11 @@ func runMetadataReadyProbe(ctx context.Context, data pb.AccessClientProxy, timeS
 		}
 	}
 	if len(recordRows) > 0 {
-		rsp, err := data.WriteRecordRows(ctx, &pb.WriteRecordRowsReq{Rows: recordRows})
+		rsp, err := data.UpsertRecordRows(ctx, &pb.UpsertRecordRowsReq{RequestId: xid.New().String(), Mutations: recordMutations(recordRows)})
 		if err != nil {
 			return err
 		}
-		if err := retErr("WriteRecordRows metadata ready probe", rsp.GetRetInfo()); err != nil {
+		if err := retErr("UpsertRecordRows metadata ready probe", rsp.GetRetInfo()); err != nil {
 			return err
 		}
 	}
@@ -861,14 +862,14 @@ func writeRecords(ctx context.Context, data pb.AccessClientProxy, opts options) 
 		if end > len(rows) {
 			end = len(rows)
 		}
-		req := &pb.WriteRecordRowsReq{Rows: rows[start:end]}
+		req := &pb.UpsertRecordRowsReq{RequestId: xid.New().String(), Mutations: recordMutations(rows[start:end])}
 		begin := time.Now()
 		if err := retry(30*time.Second, time.Second, func() error {
-			rsp, err := data.WriteRecordRows(ctx, req)
+			rsp, err := data.UpsertRecordRows(ctx, req)
 			if err != nil {
 				return err
 			}
-			return retErr("WriteRecordRows", rsp.GetRetInfo())
+			return retErr("UpsertRecordRows", rsp.GetRetInfo())
 		}); err != nil {
 			return report, err
 		}
@@ -1152,7 +1153,7 @@ func markdownReport(report benchmarkReport) string {
 	fmt.Fprintf(&b, "\n")
 	appendMetadataReadySection(&b, report.MetadataReady)
 	appendWriteSection(&b, "## 时序 K 线写入性能", "场景: `WriteTimeSeriesRows`，K 线数据按 `subject_id + freq + data_time` 写入", report.Write)
-	appendWriteSection(&b, "## 非时序记录写入性能", fmt.Sprintf("场景: `WriteRecordRows`，合成记录数据写入 `%s`，按 `record_id + version` 定位", recordDatasetID), report.RecordWrite)
+	appendWriteSection(&b, "## 非时序记录写入性能", fmt.Sprintf("场景: `UpsertRecordRows`，合成记录数据写入 `%s`，按 `record_id` 定位", recordDatasetID), report.RecordWrite)
 	fmt.Fprintf(&b, "## Primary 主存读取性能\n\n- 场景: `ReadTimeSeriesRows` 首页读取，默认每次返回 `%d` 行\n- 请求数: `%d`\n- 并发数: `%d`\n- 返回行数: `%d`\n- 平均请求吞吐: `%.2f req/s`\n- 平均行吞吐: `%.2f rows/s`\n", report.PrimaryRead.PageSize, report.PrimaryRead.Requests, report.PrimaryRead.Concurrency, report.PrimaryRead.RowsReturned, report.PrimaryRead.RequestsPerSec, report.PrimaryRead.RowsPerSecond)
 	appendLatencyLines(&b, "读取", report.PrimaryRead.Latency)
 	fmt.Fprintf(&b, "\n")
@@ -1382,7 +1383,6 @@ func syntheticRecordRows(count int) []*pb.RecordRow {
 				SpaceId:   spaceID,
 				DatasetId: recordDatasetID,
 				RecordId:  recordID,
-				Version:   updatedAt,
 			},
 			Columns: []*pb.ColumnValue{
 				stringValue("title", fmt.Sprintf("synthetic record %06d", i)),
@@ -1391,6 +1391,21 @@ func syntheticRecordRows(count int) []*pb.RecordRow {
 				timeValue("updated_at", updatedAt),
 				jsonValue("payload_json", fmt.Sprintf(`{"bucket":%d,"rank":%d}`, i%10, i)),
 			},
+		})
+	}
+	return out
+}
+
+func recordMutations(rows []*pb.RecordRow) []*pb.RecordMutation {
+	out := make([]*pb.RecordMutation, 0, len(rows))
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		key := row.GetKey()
+		out = append(out, &pb.RecordMutation{
+			Key:     &pb.RecordKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), RecordId: key.GetRecordId()},
+			Columns: row.GetColumns(), Attributes: row.GetAttributes(),
 		})
 	}
 	return out

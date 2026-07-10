@@ -10,13 +10,11 @@ import (
 )
 
 type TimeSeriesRowsChangedHandler func(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error
-type RecordRowsChangedHandler func(ctx context.Context, event *pb.RecordRowsChangedEvent) error
 type RecordRowsCommittedHandler func(ctx context.Context, event *pb.RecordRowsCommittedEvent) error
 
 // Publisher publishes committed PrimaryStore changes.
 type Publisher interface {
 	PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error
-	PublishRecordRowsChanged(ctx context.Context, event *pb.RecordRowsChangedEvent) error
 	PublishRecordRowsCommitted(ctx context.Context, event *pb.RecordRowsCommittedEvent) error
 }
 
@@ -28,7 +26,6 @@ type Subscription interface {
 // Subscriber consumes PrimaryStore changes.
 type Subscriber interface {
 	SubscribeTimeSeriesRowsChanged(ctx context.Context, handler TimeSeriesRowsChangedHandler) (Subscription, error)
-	SubscribeRecordRowsChanged(ctx context.Context, handler RecordRowsChangedHandler) (Subscription, error)
 	SubscribeRecordRowsCommitted(ctx context.Context, handler RecordRowsCommittedHandler) (Subscription, error)
 }
 
@@ -45,7 +42,6 @@ type MemoryBus struct {
 	closeCond          *sync.Cond
 	nextID             uint64
 	timeSeriesHandlers map[uint64]TimeSeriesRowsChangedHandler
-	recordHandlers     map[uint64]RecordRowsChangedHandler
 	committedHandlers  map[uint64]RecordRowsCommittedHandler
 	inFlight           int
 	closed             bool
@@ -54,7 +50,6 @@ type MemoryBus struct {
 func NewMemoryBus() *MemoryBus {
 	bus := &MemoryBus{
 		timeSeriesHandlers: make(map[uint64]TimeSeriesRowsChangedHandler),
-		recordHandlers:     make(map[uint64]RecordRowsChangedHandler),
 		committedHandlers:  make(map[uint64]RecordRowsCommittedHandler),
 	}
 	bus.closeCond = sync.NewCond(&bus.mu)
@@ -98,26 +93,6 @@ func (b *MemoryBus) SubscribeTimeSeriesRowsChanged(ctx context.Context, handler 
 	return &memorySubscription{close: func() { b.deleteTimeSeriesHandler(id) }}, nil
 }
 
-func (b *MemoryBus) SubscribeRecordRowsChanged(ctx context.Context, handler RecordRowsChangedHandler) (Subscription, error) {
-	_ = ctx
-	if handler == nil {
-		return noopSubscription{}, nil
-	}
-	b.mu.Lock()
-	if b.closed {
-		b.mu.Unlock()
-		return nil, context.Canceled
-	}
-	if b.recordHandlers == nil {
-		b.recordHandlers = make(map[uint64]RecordRowsChangedHandler)
-	}
-	b.nextID++
-	id := b.nextID
-	b.recordHandlers[id] = handler
-	b.mu.Unlock()
-	return &memorySubscription{close: func() { b.deleteRecordHandler(id) }}, nil
-}
-
 func (b *MemoryBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
 	b.mu.Lock()
 	if b.closed {
@@ -134,26 +109,6 @@ func (b *MemoryBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.
 	var err error
 	for _, handler := range handlers {
 		err = errors.Join(err, handler(ctx, cloneTimeSeriesRowsChangedEvent(event)))
-	}
-	return err
-}
-
-func (b *MemoryBus) PublishRecordRowsChanged(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
-	b.mu.Lock()
-	if b.closed {
-		b.mu.Unlock()
-		return context.Canceled
-	}
-	handlers := make([]RecordRowsChangedHandler, 0, len(b.recordHandlers))
-	for _, handler := range b.recordHandlers {
-		handlers = append(handlers, handler)
-	}
-	b.inFlight++
-	b.mu.Unlock()
-	defer b.finishPublish()
-	var err error
-	for _, handler := range handlers {
-		err = errors.Join(err, handler(ctx, cloneRecordRowsChangedEvent(event)))
 	}
 	return err
 }
@@ -182,7 +137,6 @@ func (b *MemoryBus) Close() error {
 	b.mu.Lock()
 	b.closed = true
 	b.timeSeriesHandlers = nil
-	b.recordHandlers = nil
 	b.committedHandlers = nil
 	for b.inFlight > 0 {
 		b.closeCond.Wait()
@@ -206,12 +160,6 @@ func (b *MemoryBus) deleteTimeSeriesHandler(id uint64) {
 	b.mu.Unlock()
 }
 
-func (b *MemoryBus) deleteRecordHandler(id uint64) {
-	b.mu.Lock()
-	delete(b.recordHandlers, id)
-	b.mu.Unlock()
-}
-
 func (b *MemoryBus) deleteCommittedHandler(id uint64) {
 	b.mu.Lock()
 	delete(b.committedHandlers, id)
@@ -223,13 +171,6 @@ func cloneTimeSeriesRowsChangedEvent(event *pb.TimeSeriesRowsChangedEvent) *pb.T
 		return nil
 	}
 	return proto.Clone(event).(*pb.TimeSeriesRowsChangedEvent)
-}
-
-func cloneRecordRowsChangedEvent(event *pb.RecordRowsChangedEvent) *pb.RecordRowsChangedEvent {
-	if event == nil {
-		return nil
-	}
-	return proto.Clone(event).(*pb.RecordRowsChangedEvent)
 }
 
 func cloneRecordRowsCommittedEvent(event *pb.RecordRowsCommittedEvent) *pb.RecordRowsCommittedEvent {

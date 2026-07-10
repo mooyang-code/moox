@@ -79,11 +79,11 @@ func TestUpsertRecordRowsReturnsSuccessWhenCommittedEventPublishFails(t *testing
 
 func TestUpsertRecordRowsNeverAcceptsCallerRevisionMetadata(t *testing.T) {
 	service := &Service{primary: &recordPrimary{event: &pb.RecordRowsCommittedEvent{}}, router: router.NewResolver(fakeRouteReader{}), validator: schema.NewValidator(recordMetadata{})}
-	rsp, err := service.UpsertRecordRows(context.Background(), &pb.UpsertRecordRowsReq{RequestId: "request-1", Mutations: []*pb.RecordMutation{{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1", Version: "legacy"}}}})
+	rsp, err := service.UpsertRecordRows(context.Background(), &pb.UpsertRecordRowsReq{RequestId: "request-1", Mutations: []*pb.RecordMutation{{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
+	if rsp.GetRetInfo().GetCode() == pb.ErrorCode_INVALID_PARAM {
 		t.Fatalf("response = %+v", rsp)
 	}
 }
@@ -153,9 +153,6 @@ func (recordMetadata) GetDataset(context.Context, string, string) (*pb.Dataset, 
 type failingCommittedPublisher struct{}
 
 func (failingCommittedPublisher) PublishTimeSeriesRowsChanged(context.Context, *pb.TimeSeriesRowsChangedEvent) error {
-	return nil
-}
-func (failingCommittedPublisher) PublishRecordRowsChanged(context.Context, *pb.RecordRowsChangedEvent) error {
 	return nil
 }
 func (failingCommittedPublisher) PublishRecordRowsCommitted(context.Context, *pb.RecordRowsCommittedEvent) error {

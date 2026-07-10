@@ -92,7 +92,6 @@ func runRecordBuildingWriteTest(t *testing.T, view *pb.View) map[string]int {
 		SpaceId:   view.GetSpaceId(),
 		DatasetId: view.GetPrimaryDatasetId(),
 		RecordId:  "news-1",
-		Version:   "2026-07-09T01:00:00Z",
 	}
 	indexer := newRecordingViewIndexEngine("bleve")
 	service := &Service{

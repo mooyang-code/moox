@@ -186,6 +186,9 @@
         </section>
 
         <section v-else-if="mode === 'record'" class="result-pane">
+          <div class="result-toolbar">
+            <a-tag>{{ activeView?.record_view_mode === 'RECORD_VIEW_MODE_HISTORY' ? '历史修订' : '当前快照' }}</a-tag>
+          </div>
           <a-table
             row-key="id"
             size="small"
@@ -205,7 +208,7 @@
                 <template #title><span class="sortable-title">记录ID<span class="sort-arrows"><button :class="sortArrowClass('record_id', 'asc')" @click.stop="setSort('record_id', 'asc')">▲</button><button :class="sortArrowClass('record_id', 'desc')" @click.stop="setSort('record_id', 'desc')">▼</button></span></span></template>
               </a-table-column>
               <a-table-column data-index="version" :width="230">
-                <template #title><span class="sortable-title">版本<span class="sort-arrows"><button :class="sortArrowClass('version', 'asc')" @click.stop="setSort('version', 'asc')">▲</button><button :class="sortArrowClass('version', 'desc')" @click.stop="setSort('version', 'desc')">▼</button></span></span></template>
+                <template #title><span class="sortable-title">修订号<span class="sort-arrows"><button :class="sortArrowClass('version', 'asc')" @click.stop="setSort('version', 'asc')">▲</button><button :class="sortArrowClass('version', 'desc')" @click.stop="setSort('version', 'desc')">▼</button></span></span></template>
               </a-table-column>
               <a-table-column
                 v-for="column in tableColumnNames"
@@ -244,7 +247,8 @@
       <div v-if="detailRow" class="detail-body">
         <a-descriptions :column="2" bordered>
           <a-descriptions-item :label="mode === 'time_series' ? '数据ID' : '记录ID'">{{ detailRow.key }}</a-descriptions-item>
-          <a-descriptions-item :label="mode === 'time_series' ? '时间' : '版本'">{{ detailRow.version }}</a-descriptions-item>
+          <a-descriptions-item :label="mode === 'time_series' ? '时间' : '修订号'">{{ detailRow.version }}</a-descriptions-item>
+          <a-descriptions-item v-if="mode === 'record'" label="更新时间">{{ detailRow.updatedAt || '-' }}</a-descriptions-item>
         </a-descriptions>
         <a-table :data="detailColumns" :pagination="false" :bordered="{ cell: true }" size="small" class="detail-table">
           <template #columns>
@@ -770,6 +774,7 @@ async function loadRecordViewRows() {
       text_query: recordKeyword.value.trim(),
       filters: activeFilterExprs(),
       sorts: buildViewSorts(sortState),
+      record_view_mode: view.record_view_mode === 'RECORD_VIEW_MODE_HISTORY' ? 'RECORD_VIEW_MODE_HISTORY' : 'RECORD_VIEW_MODE_CURRENT',
       page: { page: pagination.current, size: pagination.pageSize },
     });
     const rows = rsp.rows || [];
@@ -1197,7 +1202,7 @@ function formatKlineNumber(value: number) {
 
 function rowToSyntheticRecord(row: ViewBrowseTableRow): RecordRow {
   return {
-    key: { space_id: '', dataset_id: '', record_id: row.key, version: row.version },
+    key: { space_id: '', dataset_id: '', record_id: row.key },
     columns: Object.keys(row.values).map((name) => ({
       column_name: name,
       value_type: 'FIELD_VALUE_TYPE_STRING',

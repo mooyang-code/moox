@@ -51,11 +51,8 @@ func TestBleveViewIndexEngineLifecycle(t *testing.T) {
 	if stats.EntryCount != 2 {
 		t.Fatalf("entry count = %d, want 2", stats.EntryCount)
 	}
-	if stats.MinVersion != "2026-07-09T01:00:00.000000000Z" {
-		t.Fatalf("min version = %q, want normalized timestamp", stats.MinVersion)
-	}
-	if stats.MaxVersion != "2026-07-09T01:01:00.000000000Z" {
-		t.Fatalf("max version = %q, want normalized timestamp", stats.MaxVersion)
+	if stats.MinVersion != "" || stats.MaxVersion != "" {
+		t.Fatalf("record stats = %+v, want revision metadata without string versions", stats)
 	}
 	if stats.ViewVersion != 3 || stats.SchemaHash != "schema-1" || stats.PhysicalBytes == 0 {
 		t.Fatalf("stats = %+v, want schema and physical bytes", stats)
@@ -197,8 +194,8 @@ func searchTestRecordRow(recordID string, version string) *pb.RecordRow {
 			SpaceId:   "crypto",
 			DatasetId: "news",
 			RecordId:  recordID,
-			Version:   version,
 		},
+		Revision: uint64(len(version)),
 		Columns: []*pb.ColumnValue{{
 			ColumnName: "title",
 			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_STRING,

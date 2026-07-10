@@ -162,7 +162,7 @@ func TestSearchRecordRowsActiveSchemaRejectsNewColumnBeforeSwitch(t *testing.T) 
 		SpaceId:     "crypto",
 		ViewId:      "spot_view",
 		ColumnNames: []string{"sentiment"},
-		Keys:        []*pb.RecordKey{{SpaceId: "crypto", DatasetId: "ds1", RecordId: "record-1", Version: "2026-07-09T01:00:00Z"}},
+		Keys:        []*pb.RecordKey{{SpaceId: "crypto", DatasetId: "ds1", RecordId: "record-1"}},
 	})
 	if err != nil {
 		t.Fatalf("SearchRecordRows rpc error: %v", err)
@@ -194,7 +194,7 @@ func TestSearchRecordRowsActiveSchemaAllowsExistingColumnDuringBuild(t *testing.
 		SpaceId:     "crypto",
 		ViewId:      "spot_view",
 		ColumnNames: []string{"title"},
-		Keys:        []*pb.RecordKey{{SpaceId: "crypto", DatasetId: "ds1", RecordId: "record-1", Version: "2026-07-09T01:00:00Z"}},
+		Keys:        []*pb.RecordKey{{SpaceId: "crypto", DatasetId: "ds1", RecordId: "record-1"}},
 	})
 	if err != nil {
 		t.Fatalf("SearchRecordRows rpc error: %v", err)
@@ -314,7 +314,6 @@ func activeSchemaRecordRow(columns ...*pb.ColumnValue) *pb.RecordRow {
 			SpaceId:   "crypto",
 			DatasetId: "ds1",
 			RecordId:  "record-1",
-			Version:   "2026-07-09T01:00:00Z",
 		},
 		Columns: columns,
 	}

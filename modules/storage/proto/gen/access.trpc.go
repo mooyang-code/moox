@@ -23,9 +23,7 @@ type AccessService interface {
 	WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq) (*WriteTimeSeriesRowsRsp, error)
 	// ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
-	// WriteRecordRows WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
-	WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq) (*WriteRecordRowsRsp, error)
-	// ReadRecordRows ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
+	// ReadRecordRows ReadRecordRows 按记录 ID 读取当前或历史修订。
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error)
 
 	UpsertRecordRows(ctx context.Context, req *UpsertRecordRowsReq) (*UpsertRecordRowsRsp, error)
@@ -57,24 +55,6 @@ func AccessService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context.Conte
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(AccessService).ReadTimeSeriesRows(ctx, reqbody.(*ReadTimeSeriesRowsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func AccessService_WriteRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &WriteRecordRowsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AccessService).WriteRecordRows(ctx, reqbody.(*WriteRecordRowsReq))
 	}
 
 	var rsp interface{}
@@ -133,10 +113,6 @@ var AccessServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.Access/ReadTimeSeriesRows",
 			Func: AccessService_ReadTimeSeriesRows_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Access/WriteRecordRows",
-			Func: AccessService_WriteRecordRows_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.Access/ReadRecordRows",
@@ -405,12 +381,7 @@ func (s *UnimplementedAccess) ReadTimeSeriesRows(ctx context.Context, req *ReadT
 	return nil, errors.New("rpc ReadTimeSeriesRows of service Access is not implemented")
 }
 
-// WriteRecordRows WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
-func (s *UnimplementedAccess) WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq) (*WriteRecordRowsRsp, error) {
-	return nil, errors.New("rpc WriteRecordRows of service Access is not implemented")
-}
-
-// ReadRecordRows ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
+// ReadRecordRows ReadRecordRows 按记录 ID 读取当前或历史修订。
 func (s *UnimplementedAccess) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
 	return nil, errors.New("rpc ReadRecordRows of service Access is not implemented")
 }
@@ -463,9 +434,7 @@ type AccessClientProxy interface {
 	WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq, opts ...client.Option) (rsp *WriteTimeSeriesRowsRsp, err error)
 	// ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
-	// WriteRecordRows WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
-	WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq, opts ...client.Option) (rsp *WriteRecordRowsRsp, err error)
-	// ReadRecordRows ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
+	// ReadRecordRows ReadRecordRows 按记录 ID 读取当前或历史修订。
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (rsp *ReadRecordRowsRsp, err error)
 
 	UpsertRecordRows(ctx context.Context, req *UpsertRecordRowsReq, opts ...client.Option) (rsp *UpsertRecordRowsRsp, err error)
@@ -514,26 +483,6 @@ func (c *AccessClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, req *Rea
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReadTimeSeriesRowsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *AccessClientProxyImpl) WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq, opts ...client.Option) (*WriteRecordRowsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Access/WriteRecordRows")
-	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Access")
-	msg.WithCalleeMethod("WriteRecordRows")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &WriteRecordRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

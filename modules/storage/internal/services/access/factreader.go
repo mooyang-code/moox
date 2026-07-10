@@ -54,14 +54,12 @@ func (s *Service) scanTimeSeriesRows(ctx context.Context, spaceID string, datase
 
 func (s *Service) scanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
 	req := &pb.ReadRecordRowsReq{
-		Keys:         []*pb.RecordKey{{SpaceId: spaceID, DatasetId: datasetID}},
-		VersionRange: versionRange,
-		ColumnNames:  columnNames,
-		Page:         page,
+		Keys:        []*pb.RecordKey{{SpaceId: spaceID, DatasetId: datasetID}},
+		Mode:        pb.RecordReadMode_RECORD_READ_MODE_HISTORY,
+		ColumnNames: columnNames,
+		Page:        page,
 	}
-	if isRecordDatasetScan(req) {
-		return s.scanRecordDatasetPageRows(ctx, req)
-	}
+	_ = versionRange
 	rsp, err := s.ReadRecordRows(ctx, req)
 	if err != nil {
 		return nil, nil, err

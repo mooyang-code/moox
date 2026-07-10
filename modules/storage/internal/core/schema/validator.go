@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
@@ -43,9 +42,6 @@ func (v *Validator) ValidateWriteRecordRows(ctx context.Context, rows []*pb.Reco
 		if key == nil {
 			return fmt.Errorf("key is required")
 		}
-		if _, err := factkey.NormalizeTimeVersion(key.GetVersion()); err != nil {
-			return fmt.Errorf("record version must be RFC3339: %w", err)
-		}
 		if err := validateDatasetColumns(ctx, v.metadata, key.GetSpaceId(), key.GetDatasetId(), pb.DataKind_DATA_KIND_RECORD, row.GetColumns()); err != nil {
 			return err
 		}
@@ -63,9 +59,6 @@ func (v *Validator) ValidateRecordMutation(ctx context.Context, mutation *pb.Rec
 	key := mutation.GetKey()
 	if strings.TrimSpace(key.GetSpaceId()) == "" || strings.TrimSpace(key.GetDatasetId()) == "" || strings.TrimSpace(key.GetRecordId()) == "" {
 		return fmt.Errorf("space_id, dataset_id and record_id are required")
-	}
-	if strings.TrimSpace(key.GetVersion()) != "" {
-		return fmt.Errorf("record mutation key.version is not accepted")
 	}
 	if err := validateDatasetColumns(ctx, v.metadata, key.GetSpaceId(), key.GetDatasetId(), pb.DataKind_DATA_KIND_RECORD, mutation.GetColumns()); err != nil {
 		return err

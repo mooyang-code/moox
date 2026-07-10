@@ -79,23 +79,6 @@ func timeSeriesPerKeyPageCap(req *pb.ReadTimeSeriesRowsReq) uint32 {
 }
 
 func recordPerKeyPageCap(req *pb.ReadRecordRowsReq) uint32 {
-	versionRange := req.GetVersionRange()
-	if versionRange == nil {
-		for _, key := range req.GetKeys() {
-			if strings.TrimSpace(key.GetVersion()) == "" {
-				return 0
-			}
-		}
-		return 1
-	}
-	if strings.TrimSpace(versionRange.GetStartVersion()) == "" || strings.TrimSpace(versionRange.GetEndVersion()) == "" {
-		return 0
-	}
-	start := factkey.NormalizeVersion(versionRange.GetStartVersion())
-	end := factkey.NormalizeVersion(versionRange.GetEndVersion())
-	if start != "" && start == end {
-		return 1
-	}
 	return 0
 }
 
@@ -306,7 +289,7 @@ func recordKeyToPrimaryStoreKey(key *pb.RecordKey, requireRecordID bool) (*pb.Pr
 		DatasetId: key.GetDatasetId(),
 		DataKind:  pb.DataKind_DATA_KIND_RECORD,
 		Key:       recordKey,
-		Version:   factkey.NormalizeVersion(key.GetVersion()),
+		Version:   "",
 	}, nil
 }
 
@@ -325,19 +308,11 @@ func primaryStoreRowToRecordRow(row *pb.PrimaryStoreRow, template *pb.RecordKey)
 	if key.GetRecordId() == "" {
 		key.RecordId = factkey.ParseRecordDataKey(storeKey.GetKey())
 	}
-	key.Version = publicRecordVersion(storeKey.GetVersion(), template)
 	return &pb.RecordRow{
 		Key:        key,
 		Columns:    cloneColumns(row.GetColumns()),
 		Attributes: cloneStringMap(row.GetAttributes()),
 	}
-}
-
-func publicRecordVersion(version string, template *pb.RecordKey) string {
-	if version == factkey.EmptyVersion && (template == nil || strings.TrimSpace(template.GetVersion()) == "") {
-		return ""
-	}
-	return version
 }
 
 func validateRecordKeyTemplate(key *pb.RecordKey) error {
@@ -408,7 +383,7 @@ func sortRecordRows(rows []*pb.RecordRow) {
 		if rows[i].GetRevision() != 0 || rows[j].GetRevision() != 0 {
 			return rows[i].GetRevision() < rows[j].GetRevision()
 		}
-		return factkey.NormalizeVersion(left.GetVersion()) < factkey.NormalizeVersion(right.GetVersion())
+		return rows[i].GetUpdatedAt() < rows[j].GetUpdatedAt()
 	})
 }
 

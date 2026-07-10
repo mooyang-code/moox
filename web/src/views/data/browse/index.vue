@@ -186,6 +186,10 @@
                 <strong>记录数据</strong>
                 <span>{{ datasetDisplayName(currentDataset) }}</span>
               </div>
+              <a-radio-group v-model="recordReadMode" type="button" @change="onRecordModeChange">
+                <a-radio value="RECORD_READ_MODE_CURRENT">当前</a-radio>
+                <a-radio value="RECORD_READ_MODE_HISTORY">历史</a-radio>
+              </a-radio-group>
               <a-button :loading="loading" @click="reloadRows">
                 <template #icon><icon-refresh /></template>
                 重新加载
@@ -221,7 +225,7 @@
                 <a-table-column data-index="version" :width="160">
                   <template #title>
                     <span class="sortable-title">
-                      版本
+                      修订号
                       <span class="sort-arrows">
                         <button :class="sortArrowClass('version', 'asc')" @click.stop="setSort('version', 'asc')">▲</button>
                         <button :class="sortArrowClass('version', 'desc')" @click.stop="setSort('version', 'desc')">▼</button>
@@ -293,7 +297,8 @@
       <div v-if="detailRow" class="detail-body">
         <a-descriptions :column="2" bordered>
           <a-descriptions-item :label="mode === 'time_series' ? '数据ID' : '记录ID'">{{ detailRow.key }}</a-descriptions-item>
-          <a-descriptions-item :label="mode === 'time_series' ? '时间' : '版本'">{{ detailRow.version }}</a-descriptions-item>
+        <a-descriptions-item :label="mode === 'time_series' ? '时间' : '修订号'">{{ detailRow.version }}</a-descriptions-item>
+        <a-descriptions-item v-if="mode === 'record'" label="更新时间">{{ detailRow.updatedAt || '-' }}</a-descriptions-item>
         </a-descriptions>
         <a-table :data="detailColumns" :pagination="false" :bordered="{ cell: true }" size="small" class="detail-table">
           <template #columns>
@@ -318,7 +323,7 @@ import {
   listSubjects
 } from "@/api/storage/metadata";
 import { readRecordRows, readTimeSeriesRows } from "@/api/storage/access";
-import type { Dataset, DatasetColumn, Factor, Field, PageResult, RecordRow, SortOrder } from "@/api/storage/types";
+import type { Dataset, DatasetColumn, Factor, Field, PageResult, RecordReadMode, RecordRow, SortOrder } from "@/api/storage/types";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import { datasetMatchesAttribution, type DatasetRole, type OwnerModule } from "@/views/data/shared/module-attribution";
 import { useSpaceStore } from "@/store/modules/space";
@@ -388,6 +393,7 @@ const loading = ref(false);
 const sortState = reactive<{ fieldName: string; direction: ViewSortDirection }>({ fieldName: "", direction: "" });
 const timeSeriesPageResult = ref<PageResult>();
 const recordPageResult = ref<PageResult>();
+const recordReadMode = ref<RecordReadMode>("RECORD_READ_MODE_CURRENT");
 const timeSeriesPreviewHasMore = ref(false);
 const recordPreviewHasMore = ref(false);
 
@@ -623,6 +629,7 @@ async function loadRecordRows() {
     const rsp = await readRecordRows({
       keys: [{ space_id, dataset_id, record_id: "" }],
       order: accessSortOrder("version"),
+      mode: recordReadMode.value,
       page: { page: pagination.current, size: pagination.pageSize }
     });
     const rows = rsp.rows || [];
@@ -638,6 +645,11 @@ async function loadRecordRows() {
   } finally {
     loading.value = false;
   }
+}
+
+async function onRecordModeChange() {
+  pagination.current = 1;
+  await reloadRows();
 }
 
 async function onPageChange(page: number) {
@@ -704,7 +716,7 @@ function openDetail(row: BrowseTableRow) {
 
 function rowToSyntheticRecord(row: BrowseTableRow): RecordRow {
   return {
-    key: { space_id: "", dataset_id: "", record_id: row.key, version: row.version },
+    key: { space_id: "", dataset_id: "", record_id: row.key },
     columns: Object.keys(row.values).map(name => ({
       column_name: name,
       value_type: "FIELD_VALUE_TYPE_STRING",

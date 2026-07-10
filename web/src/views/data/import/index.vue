@@ -75,11 +75,6 @@
                 <a-input v-model="form.record_id_column" placeholder="record_id" />
               </a-form-item>
             </a-col>
-            <a-col :xs="24" :md="8" :lg="6">
-              <a-form-item label="Version 列">
-                <a-input v-model="form.version_column" placeholder="可留空，服务端生成默认版本" />
-              </a-form-item>
-            </a-col>
           </a-row>
 
           <a-space>
@@ -130,7 +125,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { Message } from '@arco-design/web-vue';
-import { writeRecordRows, writeTimeSeriesRows } from '@/api/storage/access';
+import { upsertRecordRows, writeTimeSeriesRows } from '@/api/storage/access';
 import { listDatasetColumns, listDatasets } from '@/api/storage/metadata';
 import type { ColumnValue, Dataset, DatasetColumn, FieldValueType, RecordRow, TimeSeriesRow, TypedValue } from '@/api/storage/types';
 import { useSpaceStore } from '@/store/modules/space';
@@ -160,7 +155,6 @@ const form = reactive({
   time_column: 'data_time',
   dimensions: '{}',
   record_id_column: 'record_id',
-  version_column: 'version',
   batch_size: 500,
 });
 
@@ -271,7 +265,7 @@ function keyColumns() {
   if (isTimeSeriesDataset.value) {
     return new Set([form.time_column]);
   }
-  return new Set([form.record_id_column, form.version_column].filter(Boolean));
+  return new Set([form.record_id_column].filter(Boolean));
 }
 
 function validateHeaders() {
@@ -373,11 +367,13 @@ async function importRows() {
           space_id,
           dataset_id: form.dataset_id,
           record_id: row[form.record_id_column],
-          version: form.version_column ? row[form.version_column] : '',
         },
         columns: rowColumns(row),
       }));
-      await writeRecordRows(rows);
+      await upsertRecordRows({
+        request_id: crypto.randomUUID(),
+        mutations: rows.map(({ key, columns }) => ({ key, columns })),
+      });
     }
     Message.success(`导入完成：${parsedRows.value.length} 行`);
   } finally {

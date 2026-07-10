@@ -1,11 +1,11 @@
 {
-  "rows": [
+  "request_id": "018f-example-stable-request-id",
+  "mutations": [
     {
       "key": {
         "space_id": "crypto",
         "dataset_id": "binance_spot_symbols",
-        "record_id": "APT-USDT",
-        "version": "v1"
+        "record_id": "APT-USDT"
       },
       "columns": [
         {"column_name": "symbol", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "APT-USDT"}},
@@ -17,8 +17,7 @@
       "key": {
         "space_id": "crypto",
         "dataset_id": "binance_spot_symbols",
-        "record_id": "AR-USDT",
-        "version": "v1"
+        "record_id": "AR-USDT"
       },
       "columns": [
         {"column_name": "symbol", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "AR-USDT"}},
@@ -30,8 +29,7 @@
       "key": {
         "space_id": "crypto",
         "dataset_id": "binance_spot_symbols",
-        "record_id": "BTC-USDT",
-        "version": "v1"
+        "record_id": "BTC-USDT"
       },
       "columns": [
         {"column_name": "symbol", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "BTC-USDT"}},
@@ -43,8 +41,7 @@
       "key": {
         "space_id": "crypto",
         "dataset_id": "spot_symbol_profiles",
-        "record_id": "APT-USDT",
-        "version": "v1"
+        "record_id": "APT-USDT"
       },
       "columns": [
         {"column_name": "sector", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "layer1"}},
@@ -56,8 +53,7 @@
       "key": {
         "space_id": "crypto",
         "dataset_id": "spot_symbol_profiles",
-        "record_id": "AR-USDT",
-        "version": "v1"
+        "record_id": "AR-USDT"
       },
       "columns": [
         {"column_name": "sector", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "storage"}},
@@ -69,8 +65,7 @@
       "key": {
         "space_id": "crypto",
         "dataset_id": "spot_symbol_profiles",
-        "record_id": "BTC-USDT",
-        "version": "v1"
+        "record_id": "BTC-USDT"
       },
       "columns": [
         {"column_name": "sector", "value_type": "FIELD_VALUE_TYPE_STRING", "value": {"string_value": "store_of_value"}},

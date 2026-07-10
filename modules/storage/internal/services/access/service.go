@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
@@ -24,20 +23,18 @@ import (
 
 // Service 实现元数据、写入、权威读取和视图查询入口。
 type Service struct {
-	root              string
-	parquetPath       string
-	metadata          metadata.Store
-	metadataReader    metadata.Reader
-	metadataCache     *metacache.Store
-	validator         *schema.Validator
-	router            *router.Resolver
-	primary           primary.Client
-	events            eventbus.Publisher
-	report            ViewErrorReporter
-	recordVersionMu   sync.Mutex
-	lastRecordVersion time.Time
-	recordAccessMu    sync.Mutex
-	recordAccess      map[string]*recordAccessSnapshot
+	root           string
+	parquetPath    string
+	metadata       metadata.Store
+	metadataReader metadata.Reader
+	metadataCache  *metacache.Store
+	validator      *schema.Validator
+	router         *router.Resolver
+	primary        primary.Client
+	events         eventbus.Publisher
+	report         ViewErrorReporter
+	recordAccessMu sync.Mutex
+	recordAccess   map[string]*recordAccessSnapshot
 }
 
 var (

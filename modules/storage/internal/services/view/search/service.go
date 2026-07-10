@@ -50,7 +50,6 @@ type SearchRequest struct {
 	DatasetID      string
 	Keys           []*pb.RecordKey
 	TextQuery      string
-	VersionRange   *pb.VersionRange
 	Filters        []*pb.FilterExpr
 	Page           *pb.Page
 	Sorts          []*pb.SortSpec
@@ -288,7 +287,6 @@ func (s *Service) SearchRecordRows(ctx context.Context, req SearchRequest) ([]*p
 		DatasetID:      req.DatasetID,
 		Keys:           req.Keys,
 		TextQuery:      req.TextQuery,
-		VersionRange:   req.VersionRange,
 		Filters:        req.Filters,
 		Page:           req.Page,
 		Sorts:          req.Sorts,
@@ -301,15 +299,14 @@ func (s *Service) QueryRecordRows(ctx context.Context, indexID string, datasetID
 		return nil, nil, nil, errors.New("record query is required")
 	}
 	rows, page, err := s.SearchRecordRows(ctx, SearchRequest{
-		IndexID:      indexID,
-		SpaceID:      req.GetSpaceId(),
-		DatasetID:    datasetID,
-		Keys:         req.GetKeys(),
-		TextQuery:    req.GetTextQuery(),
-		VersionRange: req.GetVersionRange(),
-		Filters:      req.GetFilters(),
-		Page:         req.GetPage(),
-		Sorts:        req.GetSorts(),
+		IndexID:   indexID,
+		SpaceID:   req.GetSpaceId(),
+		DatasetID: datasetID,
+		Keys:      req.GetKeys(),
+		TextQuery: req.GetTextQuery(),
+		Filters:   req.GetFilters(),
+		Page:      req.GetPage(),
+		Sorts:     req.GetSorts(),
 	})
 	return nil, rows, page, err
 }

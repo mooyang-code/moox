@@ -53,7 +53,7 @@ const systemViewLabels: Record<string, string> = {
   record_id: '记录ID',
   freq: '频率',
   data_time: '时间',
-  version: '版本',
+  version: '修订号',
 };
 
 export function viewDisplayName(view?: Pick<View, 'view_id' | 'name'> | null) {

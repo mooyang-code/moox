@@ -74,12 +74,12 @@ message SearchRecordRowsReq {
   string space_id = 2;
   // view_id 是已登记的搜索入口。
   string view_id = 3;
-  // keys 是记录查询 key；范围读时 key.version 可为空，实际版本集合由 version_range 表达。
+  // keys 是记录查询 key；修订范围使用 revision_range。
   repeated RecordKey keys = 4;
   // text_query 是可选全文检索文本；为空时只按结构化条件搜索。
   string text_query = 5;
-  // version_range 是可选版本范围。
-  VersionRange version_range = 6;
+  reserved 6;
+  reserved "version_range";
   // filters 是结构化过滤条件列表。
   repeated FilterExpr filters = 7;
   // sorts 是排序条件列表。

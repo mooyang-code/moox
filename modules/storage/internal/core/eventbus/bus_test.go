@@ -47,34 +47,6 @@ func TestMemoryBusPublishesEveryCommittedRecordRevision(t *testing.T) {
 	}
 }
 
-func TestMemoryBusAppliesBackpressure(t *testing.T) {
-	bus := NewMemoryBus()
-	started := make(chan struct{})
-	release := make(chan struct{})
-	if _, err := bus.SubscribeRecordRowsChanged(context.Background(), func(context.Context, *pb.RecordRowsChangedEvent) error {
-		close(started)
-		<-release
-		return nil
-	}); err != nil {
-		t.Fatalf("SubscribeRecordRowsChanged: %v", err)
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		done <- bus.PublishRecordRowsChanged(context.Background(), &pb.RecordRowsChangedEvent{})
-	}()
-	<-started
-	select {
-	case err := <-done:
-		t.Fatalf("publish returned before subscriber completed: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("PublishRecordRowsChanged: %v", err)
-	}
-}
-
 func TestMemoryBusCloseWaitsForInFlightHandlers(t *testing.T) {
 	bus := NewMemoryBus()
 	started := make(chan struct{})

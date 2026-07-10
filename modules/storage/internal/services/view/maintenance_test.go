@@ -2,6 +2,7 @@ package view
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -223,30 +224,6 @@ func TestMaintenanceSwitchesCapacityWhenOldIndexCanShrinkToTarget(t *testing.T) 
 	}
 	if item.GetActiveIndexId() != viewindex.ViewIndexID("crypto", "market_view", viewindex.SlotB) {
 		t.Fatalf("active index = %q, want slot b", item.GetActiveIndexId())
-	}
-}
-
-func TestMaintenanceRejectsOpaqueRecordVersions(t *testing.T) {
-	ctx := context.Background()
-	metadata := openMaintenanceMetadata(t, ctx)
-	seedMaintenanceView(t, ctx, metadata, pb.DataKind_DATA_KIND_RECORD, "bleve", `{}`, "")
-	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	facts := &maintenanceFacts{recordRows: []*pb.RecordRow{{
-		Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "dataset", RecordId: "news-1", Version: "opaque-version"},
-	}}}
-	manager := NewMaintenanceManager(MaintenanceOptions{
-		Metadata: metadata, Engines: map[string]ManagedViewIndex{"bleve": newMaintenanceEngine("bleve")},
-		Facts: facts, Records: facts, Now: func() time.Time { return now }, Config: maintenanceTestConfig(),
-	})
-	if _, err := manager.MaintainViewIndexes(ctx, "crypto"); err == nil {
-		t.Fatal("MaintainViewIndexes error = nil, want opaque version rejection")
-	}
-	item, err := metadata.GetView(ctx, "crypto", "market_view")
-	if err != nil {
-		t.Fatalf("GetView: %v", err)
-	}
-	if item.GetActiveIndexId() != "" || item.GetIndexBuild().GetState() != pb.ViewIndexBuild_FAILED {
-		t.Fatalf("view after failed record build = %+v", item)
 	}
 }
 
@@ -572,9 +549,9 @@ func (e *maintenanceEngine) Write(_ context.Context, indexID string, batch viewi
 		}
 	}
 	for _, row := range batch.RecordRows {
-		key := row.GetKey().GetRecordId() + "|" + row.GetKey().GetVersion()
+		key := row.GetKey().GetRecordId() + "|" + fmt.Sprint(row.GetRevision())
 		keys[key] = true
-		version := row.GetKey().GetVersion()
+		version := row.GetUpdatedAt()
 		if stat.MinVersion == "" || version < stat.MinVersion {
 			stat.MinVersion = version
 		}

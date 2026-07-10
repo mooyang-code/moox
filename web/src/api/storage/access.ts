@@ -3,13 +3,14 @@ import type {
   Page,
   PageResult,
   RecordKey,
-  RecordRow,
   RetInfo,
   SortOrder,
   TimeRange,
   TimeSeriesKey,
   TimeSeriesRow,
-  VersionRange,
+  RevisionRange,
+  RecordMutation,
+  RecordReadMode,
 } from './types';
 
 export interface ReadTimeSeriesRowsReq {
@@ -22,10 +23,16 @@ export interface ReadTimeSeriesRowsReq {
 
 export interface ReadRecordRowsReq {
   keys: RecordKey[];
-  version_range?: VersionRange;
   order?: SortOrder;
   column_names?: string[];
   page?: Page;
+  mode?: RecordReadMode;
+  revision_range?: RevisionRange;
+}
+
+export interface UpsertRecordRowsReq {
+  request_id: string;
+  mutations: RecordMutation[];
 }
 
 export function writeTimeSeriesRows(rows: TimeSeriesRow[]) {
@@ -36,10 +43,10 @@ export function readTimeSeriesRows(req: ReadTimeSeriesRowsReq) {
   return callAccess<ReadTimeSeriesRowsReq, { ret_info: RetInfo; rows: TimeSeriesRow[]; page_result: PageResult }>('ReadTimeSeriesRows', req);
 }
 
-export function writeRecordRows(rows: RecordRow[]) {
-  return callAccess<{ rows: RecordRow[] }, { ret_info: RetInfo; keys: RecordKey[] }>('WriteRecordRows', { rows });
-}
-
 export function readRecordRows(req: ReadRecordRowsReq) {
   return callAccess<ReadRecordRowsReq, { ret_info: RetInfo; rows: RecordRow[]; page_result: PageResult }>('ReadRecordRows', req);
+}
+
+export function upsertRecordRows(req: UpsertRecordRowsReq) {
+  return callAccess<UpsertRecordRowsReq, { ret_info: RetInfo; rows: RecordRow[] }>('UpsertRecordRows', req);
 }

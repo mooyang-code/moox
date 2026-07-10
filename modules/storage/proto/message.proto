@@ -18,16 +18,3 @@ message TimeSeriesRowsChangedEvent {
   // attributes 是附加事件属性。
   map<string, string> attributes = 4;
 }
-
-// RecordRowsChangedEvent 表示记录事实数据行变更事件。
-// 派生消费者应通过 Access 回读最新完整行，不应理解 PrimaryStore 分片和路由。
-message RecordRowsChangedEvent {
-  // event_id 是事件 ID。
-  string event_id = 1;
-  // event_time 是事件产生时间。
-  string event_time = 2;
-  // keys 是本次变更涉及的记录业务 key。
-  repeated RecordKey keys = 3;
-  // attributes 是附加事件属性。
-  map<string, string> attributes = 4;
-}

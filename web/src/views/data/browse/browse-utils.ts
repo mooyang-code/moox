@@ -22,6 +22,8 @@ export interface BrowseTableRow {
   id: string;
   key: string;
   version: string;
+  revision?: string;
+  updatedAt?: string;
   values: Record<string, string>;
 }
 
@@ -180,9 +182,11 @@ export function timeSeriesRowsToTableRows(rows: TimeSeriesRow[]): BrowseTableRow
 
 export function recordRowsToTableRows(rows: RecordRow[]): BrowseTableRow[] {
   return rows.map((row, index) => ({
-    id: `record-${index}-${row.key?.record_id || ''}-${row.key?.version || ''}`,
+    id: `record-${index}-${row.key?.record_id || ''}-${row.revision || ''}`,
     key: row.key?.record_id || '-',
-    version: row.key?.version || '-',
+    version: row.revision !== undefined ? String(row.revision) : '-',
+    revision: row.revision !== undefined ? String(row.revision) : '-',
+    updatedAt: row.updated_at || '-',
     values: columnsToValueMap(row.columns || []),
   }));
 }

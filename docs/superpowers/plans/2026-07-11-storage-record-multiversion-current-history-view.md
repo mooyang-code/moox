@@ -12,6 +12,13 @@
 
 ## Status And Supersession
 
+Implementation status (2026-07-11): Tasks 1-11 are implemented, including the
+server-managed Record contract, Pebble revision/journal storage, CURRENT and
+HISTORY Bleve views, snapshot/journal rotation, caller migration, old
+`WriteRecordRows`/string-version/event contract removal, documentation, and
+guarded reset tooling. Task 12 verification is in progress; the independent
+code review and Task 13 remote publish/reset/rebuild remain release gates.
+
 - This plan supersedes the Record-specific version, retention, and readiness decisions in `docs/superpowers/plans/2026-07-10-storage-view-index-dual-database-switch.md`.
 - The TimeSeries model remains unchanged: `TimeSeriesKey.data_time` is still RFC3339/RFC3339Nano, and DuckDB Views still use time windows.
 - Do not add readers, writers, aliases, migrations, or fallbacks for the old string `RecordKey.version` model. The remote project data will be backed up and then reset.

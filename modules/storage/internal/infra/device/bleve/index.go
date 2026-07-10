@@ -43,7 +43,6 @@ type SearchRequest struct {
 	DatasetID      string
 	Keys           []*pb.RecordKey
 	TextQuery      string
-	VersionRange   *pb.VersionRange
 	Filters        []*pb.FilterExpr
 	Page           *pb.Page
 	Sorts          []*pb.SortSpec
@@ -187,7 +186,7 @@ func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexed
 			return err
 		}
 		key := row.GetKey()
-		version := factkey.NormalizeVersion(key.GetVersion())
+		version := ""
 		doc := map[string]any{
 			"_doc_type":  "row",
 			"space_id":   key.GetSpaceId(),
@@ -420,16 +419,6 @@ func buildBooleanQuery(req SearchRequest) (blevequery.Query, error) {
 		textQuery.SetField(allTextField)
 		musts = append(musts, textQuery)
 	}
-	if versionRange := req.VersionRange; versionRange != nil {
-		minVersion := normalizedVersionBound(versionRange.GetStartVersion())
-		maxVersion := normalizedVersionBound(versionRange.GetEndVersion())
-		if minVersion != "" || maxVersion != "" {
-			inclusive := true
-			rangeQuery := blevequery.NewTermRangeInclusiveQuery(minVersion, maxVersion, &inclusive, &inclusive)
-			rangeQuery.SetField("version")
-			musts = append(musts, rangeQuery)
-		}
-	}
 	if revisionRange := req.RevisionRange; revisionRange != nil {
 		minRevision, maxRevision := float64(revisionRange.GetStartRevision()), float64(revisionRange.GetEndRevision())
 		var minPtr, maxPtr *float64
@@ -456,13 +445,6 @@ func buildBooleanQuery(req SearchRequest) (blevequery.Query, error) {
 	return blevelib.NewConjunctionQuery(musts...), nil
 }
 
-func normalizedVersionBound(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return ""
-	}
-	return factkey.NormalizeVersion(value)
-}
-
 func buildRecordKeysQuery(keys []*pb.RecordKey) blevequery.Query {
 	disjuncts := make([]blevequery.Query, 0, len(keys))
 	for _, key := range keys {
@@ -470,9 +452,6 @@ func buildRecordKeysQuery(keys []*pb.RecordKey) blevequery.Query {
 			continue
 		}
 		musts := []blevequery.Query{scopeFieldQuery(strings.TrimSpace(key.GetRecordId()), "record_id")}
-		if version := strings.TrimSpace(key.GetVersion()); version != "" {
-			musts = append(musts, termQuery(factkey.NormalizeVersion(version), "version"))
-		}
 		disjuncts = append(disjuncts, blevelib.NewConjunctionQuery(musts...))
 	}
 	if len(disjuncts) == 0 {
@@ -753,7 +732,7 @@ func documentID(row *pb.RecordRow) string {
 		key.GetSpaceId(),
 		key.GetDatasetId(),
 		key.GetRecordId(),
-		key.GetVersion(),
+		fmt.Sprintf("%020d", row.GetRevision()),
 	}, "/")
 }
 
