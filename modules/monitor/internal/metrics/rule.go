@@ -23,21 +23,29 @@ var (
 // ValidateMetricRule validates the flat rule language. There is deliberately
 // no expression parser: a rule is only a bounded list of conditions and one
 // connector.
-func ValidateMetricRule(rule *monitorpb.MetricRule) error { return validateMetricRule(rule, nil) }
+func ValidateMetricRule(rule *monitorpb.MetricRule) error {
+	return validateMetricRule(rule, nil, false)
+}
+
+// ValidateMetricRuleForPreview keeps structural validation while allowing an
+// unsaved rule without a rule ID or webhook bindings.
+func ValidateMetricRuleForPreview(rule *monitorpb.MetricRule) error {
+	return validateMetricRule(rule, nil, true)
+}
 func ValidateMetricRuleWithWebhooks(rule *monitorpb.MetricRule, enabled func(context.Context, string, string) (bool, error), ctx context.Context) error {
 	if enabled == nil {
 		return ValidateMetricRule(rule)
 	}
-	return validateMetricRule(rule, func(id string) (bool, error) { return enabled(ctx, rule.GetSpaceId(), id) })
+	return validateMetricRule(rule, func(id string) (bool, error) { return enabled(ctx, rule.GetSpaceId(), id) }, false)
 }
-func validateMetricRule(rule *monitorpb.MetricRule, webhook func(string) (bool, error)) error {
+func validateMetricRule(rule *monitorpb.MetricRule, webhook func(string) (bool, error), preview bool) error {
 	if rule == nil {
 		return errors.New("rule is required")
 	}
 	if strings.TrimSpace(rule.GetSpaceId()) == "" {
 		return errors.New("space_id is required")
 	}
-	if strings.TrimSpace(rule.GetRuleId()) == "" {
+	if !preview && strings.TrimSpace(rule.GetRuleId()) == "" {
 		return errors.New("rule_id is required")
 	}
 	if strings.TrimSpace(rule.GetName()) == "" {
@@ -55,7 +63,7 @@ func validateMetricRule(rule *monitorpb.MetricRule, webhook func(string) (bool, 
 	if rule.GetEvaluationIntervalSeconds() == 0 {
 		return errors.New("evaluation_interval_seconds must be positive")
 	}
-	if len(rule.GetWebhookIds()) == 0 {
+	if !preview && len(rule.GetWebhookIds()) == 0 {
 		return errors.New("at least one webhook_id is required")
 	}
 	seenWebhook := map[string]struct{}{}
@@ -105,20 +113,31 @@ func validateMetricRule(rule *monitorpb.MetricRule, webhook func(string) (bool, 
 		if strings.TrimSpace(selector.GetServiceName()) == "" || strings.TrimSpace(selector.GetMetricName()) == "" {
 			return fmt.Errorf("condition %s service_name and metric_name are required", id)
 		}
-		if query.GetTimeReducer() == monitorpb.TimeReducer_TIME_REDUCER_UNSPECIFIED || query.GetSeriesReducer() == monitorpb.SeriesReducer_SERIES_REDUCER_UNSPECIFIED {
-			return fmt.Errorf("condition %s reducers are required", id)
+		switch query.GetTimeReducer() {
+		case monitorpb.TimeReducer_TIME_REDUCER_CURRENT, monitorpb.TimeReducer_TIME_REDUCER_AVG, monitorpb.TimeReducer_TIME_REDUCER_MIN, monitorpb.TimeReducer_TIME_REDUCER_MAX, monitorpb.TimeReducer_TIME_REDUCER_SUM, monitorpb.TimeReducer_TIME_REDUCER_RATE, monitorpb.TimeReducer_TIME_REDUCER_INCREASE:
+		default:
+			return fmt.Errorf("condition %s has unknown time reducer %d", id, query.GetTimeReducer())
+		}
+		switch query.GetSeriesReducer() {
+		case monitorpb.SeriesReducer_SERIES_REDUCER_AVG, monitorpb.SeriesReducer_SERIES_REDUCER_MIN, monitorpb.SeriesReducer_SERIES_REDUCER_MAX, monitorpb.SeriesReducer_SERIES_REDUCER_SUM:
+		default:
+			return fmt.Errorf("condition %s has unknown series reducer %d", id, query.GetSeriesReducer())
 		}
 		if query.GetTimeReducer() != monitorpb.TimeReducer_TIME_REDUCER_CURRENT && query.GetWindowSeconds() == 0 {
 			return fmt.Errorf("condition %s window_seconds must be positive", id)
 		}
-		if condition.GetCompare() == monitorpb.CompareOperator_COMPARE_OPERATOR_UNSPECIFIED {
-			return fmt.Errorf("condition %s compare operator is required", id)
+		switch condition.GetCompare() {
+		case monitorpb.CompareOperator_COMPARE_OPERATOR_GT, monitorpb.CompareOperator_COMPARE_OPERATOR_GTE, monitorpb.CompareOperator_COMPARE_OPERATOR_LT, monitorpb.CompareOperator_COMPARE_OPERATOR_LTE, monitorpb.CompareOperator_COMPARE_OPERATOR_EQ, monitorpb.CompareOperator_COMPARE_OPERATOR_NEQ:
+		default:
+			return fmt.Errorf("condition %s has unknown compare operator %d", id, condition.GetCompare())
 		}
 		if math.IsNaN(condition.GetThreshold()) || math.IsInf(condition.GetThreshold(), 0) {
 			return fmt.Errorf("condition %s threshold must be finite", id)
 		}
-		if condition.GetNoDataPolicy() == monitorpb.NoDataPolicy_NO_DATA_POLICY_UNSPECIFIED {
-			return fmt.Errorf("condition %s no_data_policy is required", id)
+		switch condition.GetNoDataPolicy() {
+		case monitorpb.NoDataPolicy_NO_DATA_POLICY_KEEP_STATE, monitorpb.NoDataPolicy_NO_DATA_POLICY_OK, monitorpb.NoDataPolicy_NO_DATA_POLICY_FIRING:
+		default:
+			return fmt.Errorf("condition %s has unknown no_data_policy %d", id, condition.GetNoDataPolicy())
 		}
 		matchers := map[string]struct{}{}
 		for _, matcher := range selector.GetMatchers() {
@@ -273,7 +292,7 @@ func (r *RuleRepository) ListEnabled(ctx context.Context, spaceID string) ([]*mo
 }
 
 func (r *RuleRepository) UpsertState(ctx context.Context, state *MetricRuleStateRow) error {
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_rule_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_status", "c_trigger_count", "c_recovery_count", "c_owner_instance_id", "c_last_evaluated_at", "c_last_triggered_at", "c_last_recovered_at", "c_mtime"})}).Create(state).Error
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_rule_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_status", "c_trigger_count", "c_recovery_count", "c_owner_instance_id", "c_last_evaluated_at", "c_last_triggered_at", "c_last_recovered_at", "c_notification_event", "c_notification_key", "c_notification_status", "c_notification_error", "c_notification_attempts", "c_last_notification_at", "c_mtime"})}).Create(state).Error
 }
 func (r *RuleRepository) GetState(ctx context.Context, spaceID, ruleID string) (*MetricRuleStateRow, error) {
 	var row MetricRuleStateRow

@@ -265,6 +265,9 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 	if msg.GetContentType() != MetricContentType && msg.GetContentType() != "application/x-protobuf" {
 		return permanent(fmt.Errorf("unsupported metric content type %q", msg.GetContentType()))
 	}
+	if msg.GetSpaceId() != "" && msg.GetSpaceId() != InternalMetricSpaceID {
+		return permanent(fmt.Errorf("unsupported metric space %q", msg.GetSpaceId()))
+	}
 	if msg.GetProducer() == nil {
 		return permanent(errors.New("metric producer is missing"))
 	}

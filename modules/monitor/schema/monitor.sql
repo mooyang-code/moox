@@ -296,6 +296,12 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_rule_states (
   c_last_evaluated_at DATETIME,
   c_last_triggered_at DATETIME,
   c_last_recovered_at DATETIME,
+  c_notification_event TEXT NOT NULL DEFAULT '',
+  c_notification_key TEXT NOT NULL DEFAULT '',
+  c_notification_status TEXT NOT NULL DEFAULT '',
+  c_notification_error TEXT NOT NULL DEFAULT '',
+  c_notification_attempts INTEGER NOT NULL DEFAULT 0,
+  c_last_notification_at DATETIME,
   c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

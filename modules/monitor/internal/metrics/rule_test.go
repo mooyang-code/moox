@@ -32,6 +32,39 @@ func TestValidateMetricRuleRejectsNestedOrAmbiguousRules(t *testing.T) {
 	}
 }
 
+func TestValidateMetricRuleRejectsUnknownEnumNumbers(t *testing.T) {
+	checks := []struct {
+		name string
+		set  func(*monitorpb.MetricRule)
+	}{
+		{"time reducer", func(r *monitorpb.MetricRule) { r.Conditions[0].Query.TimeReducer = monitorpb.TimeReducer(99) }},
+		{"series reducer", func(r *monitorpb.MetricRule) { r.Conditions[0].Query.SeriesReducer = monitorpb.SeriesReducer(99) }},
+		{"compare", func(r *monitorpb.MetricRule) { r.Conditions[0].Compare = monitorpb.CompareOperator(99) }},
+		{"no data", func(r *monitorpb.MetricRule) { r.Conditions[0].NoDataPolicy = monitorpb.NoDataPolicy(99) }},
+	}
+	for _, tc := range checks {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := validRule()
+			tc.set(rule)
+			if err := ValidateMetricRule(rule); err == nil {
+				t.Fatalf("unknown %s enum accepted", tc.name)
+			}
+		})
+	}
+}
+
+func TestValidateMetricRuleForPreviewAllowsUnsavedRule(t *testing.T) {
+	rule := validRule()
+	rule.RuleId = ""
+	rule.WebhookIds = nil
+	if err := ValidateMetricRuleForPreview(rule); err != nil {
+		t.Fatalf("unsaved preview rejected: %v", err)
+	}
+	if err := ValidateMetricRule(rule); err == nil {
+		t.Fatal("persisted validation accepted unsaved rule")
+	}
+}
+
 func TestReduceTimeSeriesCounterResetAndBoundaries(t *testing.T) {
 	base := time.Unix(100, 0)
 	values := []TimedValue{{At: base, Value: 90}, {At: base.Add(time.Second), Value: 95}, {At: base.Add(2 * time.Second), Value: 3}, {At: base.Add(3 * time.Second), Value: 8}}

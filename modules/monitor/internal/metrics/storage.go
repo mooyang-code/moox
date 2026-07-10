@@ -106,6 +106,9 @@ func (a *StorageAdapter) validateSchema(ctx context.Context) error {
 	if strings.TrimSpace(a.cfg.SpaceID) == "" || strings.TrimSpace(a.cfg.DatasetID) == "" || strings.TrimSpace(a.cfg.Frequency) == "" {
 		return errors.New("metrics storage space, dataset, and frequency are required")
 	}
+	if err := ValidateMetricSpace(a.cfg.SpaceID); err != nil {
+		return err
+	}
 	spaceRsp, err := a.metadata.GetSpace(ctx, &storagepb.GetSpaceReq{SpaceId: a.cfg.SpaceID})
 	if err != nil {
 		return fmt.Errorf("get metrics space: %w", err)

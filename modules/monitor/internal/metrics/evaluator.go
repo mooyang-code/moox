@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
 
@@ -190,7 +191,32 @@ func NewMetricEvaluator(opts EvaluatorOptions) *MetricEvaluator {
 }
 
 func (e *MetricEvaluator) Evaluate(ctx context.Context, rule *monitorpb.MetricRule, preview bool) (*RuleEvaluation, error) {
-	if err := ValidateMetricRule(rule); err != nil {
+	return e.evaluate(ctx, rule, preview, 500)
+}
+
+// Preview evaluates an unsaved rule with a caller-supplied bounded series and
+// history limit. It never persists state, evaluations, or notifications.
+func (e *MetricEvaluator) Preview(ctx context.Context, rule *monitorpb.MetricRule, limit int) (*RuleEvaluation, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	return e.evaluate(ctx, rule, true, limit)
+}
+
+func (e *MetricEvaluator) evaluate(ctx context.Context, rule *monitorpb.MetricRule, preview bool, limit int) (*RuleEvaluation, error) {
+	if preview {
+		if err := ValidateMetricRuleForPreview(rule); err != nil {
+			return nil, err
+		}
+		// Do not mutate the request object while assigning a stable synthetic ID.
+		rule = proto.Clone(rule).(*monitorpb.MetricRule)
+		if rule.GetRuleId() == "" {
+			rule.RuleId = "preview"
+		}
+	} else if err := ValidateMetricRule(rule); err != nil {
 		return nil, err
 	}
 	if e == nil || e.catalog == nil || e.storage == nil {
@@ -199,7 +225,7 @@ func (e *MetricEvaluator) Evaluate(ctx context.Context, rule *monitorpb.MetricRu
 	now := e.now()
 	result := &RuleEvaluation{EvaluationID: fmt.Sprintf("%s-%d", rule.GetRuleId(), now.UnixNano()), SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: now, Status: domain.AlertStatusOK}
 	for _, condition := range rule.GetConditions() {
-		cr, err := e.evaluateCondition(ctx, condition, now)
+		cr, err := e.evaluateCondition(ctx, condition, now, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -252,7 +278,7 @@ func noDataResult(reason string, conditions []*monitorpb.MetricCondition, id str
 			case monitorpb.NoDataPolicy_NO_DATA_POLICY_FIRING:
 				return true
 			case monitorpb.NoDataPolicy_NO_DATA_POLICY_OK:
-				return true
+				return false
 			default:
 				return false
 			}
@@ -260,10 +286,13 @@ func noDataResult(reason string, conditions []*monitorpb.MetricCondition, id str
 	}
 	return reason == "firing"
 }
-func (e *MetricEvaluator) evaluateCondition(ctx context.Context, condition *monitorpb.MetricCondition, now time.Time) (ConditionResult, error) {
+func (e *MetricEvaluator) evaluateCondition(ctx context.Context, condition *monitorpb.MetricCondition, now time.Time, limit int) (ConditionResult, error) {
 	out := ConditionResult{ConditionID: condition.GetConditionId(), Threshold: condition.GetThreshold()}
 	selector := condition.GetQuery().GetSelector()
-	series, err := e.catalog.FindSeries(ctx, "", selector.GetMetricName(), "", "", 500)
+	// Filter service_name in SQL before applying label matchers. Filtering the
+	// first 500 rows in memory can hide the requested service when another
+	// service has high-cardinality series.
+	series, err := e.catalog.FindSeries(ctx, "", selector.GetServiceName(), selector.GetMetricName(), "", limit)
 	if err != nil {
 		return out, err
 	}
@@ -286,14 +315,21 @@ func (e *MetricEvaluator) evaluateCondition(ctx context.Context, condition *moni
 		start := time.Time{}
 		if condition.GetQuery().GetTimeReducer() != monitorpb.TimeReducer_TIME_REDUCER_CURRENT {
 			start = now.Add(-time.Duration(condition.GetQuery().GetWindowSeconds()) * time.Second)
+		} else {
+			// CURRENT is still a freshness-sensitive query. Do not treat an old
+			// latest value as a healthy sample after the reporter went silent.
+			start = now.Add(-e.catalog.NoDataAfter())
 		}
-		points, err := e.storage.QueryHistorySelectors(ctx, []HistorySelector{HistorySelectorForSeries(s)}, start, now, false, 500)
+		points, err := e.storage.QueryHistorySelectors(ctx, []HistorySelector{HistorySelectorForSeries(s)}, start, now, false, limit)
 		if err != nil {
 			return out, err
 		}
 		tv := make([]TimedValue, 0, len(points))
 		for _, p := range points {
 			tv = append(tv, TimedValue{At: p.ObservedAt, Value: p.Value})
+		}
+		if condition.GetQuery().GetTimeReducer() == monitorpb.TimeReducer_TIME_REDUCER_CURRENT && (len(tv) == 0 || now.Sub(tv[len(tv)-1].At) > e.catalog.NoDataAfter()) {
+			continue
 		}
 		v, ok := ReduceTimeSeries(condition.GetQuery().GetTimeReducer(), tv)
 		if ok {
@@ -354,6 +390,13 @@ func (e *MetricEvaluator) applyState(ctx context.Context, rule *monitorpb.Metric
 	if state == nil || errors.Is(err, gorm.ErrRecordNotFound) {
 		state = &MetricRuleStateRow{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), Status: domain.AlertStatusOK}
 	}
+	if evaluation.KeepState {
+		// A KEEP_STATE no-data result is observational only. In particular it
+		// must not advance trigger/recovery counters or refresh ownership state.
+		evaluation.Status = state.Status
+		evalJSON, _ := json.Marshal(evaluation)
+		return e.repo.InsertEvaluation(ctx, &MetricRuleEvaluationRow{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: evaluation.EvaluatedAt, Status: state.Status, ResultJSON: string(evalJSON)})
+	}
 	state.OwnerInstanceID = e.instance
 	state.LastEvaluatedAt = &evaluation.EvaluatedAt
 	var transition string
@@ -376,13 +419,24 @@ func (e *MetricEvaluator) applyState(ctx context.Context, rule *monitorpb.Metric
 			state.Status = domain.AlertStatusOK
 		}
 	}
+	notificationEvent := transition
+	if notificationEvent != "" {
+		state.NotificationEvent = notificationEvent
+		state.NotificationKey = metricNotificationKey(rule, state, notificationEvent)
+		state.NotificationStatus = "pending"
+		state.NotificationError = ""
+		state.NotificationAttempts++
+	} else if (state.NotificationStatus == "failed" || state.NotificationStatus == "pending") && state.NotificationEvent != "" && state.NotificationKey != "" {
+		// A failed webhook must remain retryable even though the state transition
+		// itself was already committed before delivery was attempted.
+		notificationEvent = state.NotificationEvent
+		state.NotificationStatus = "pending"
+		state.NotificationError = ""
+		state.NotificationAttempts++
+	}
 	evaluation.Status = state.Status
 	raw, _ := json.Marshal(evaluation)
 	evaluation.ResultJSON = string(raw)
-	if evaluation.KeepState {
-		evalJSON, _ := json.Marshal(evaluation)
-		return e.repo.InsertEvaluation(ctx, &MetricRuleEvaluationRow{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: evaluation.EvaluatedAt, Status: state.Status, ResultJSON: string(evalJSON)})
-	}
 	if err := e.repo.UpsertState(ctx, state); err != nil {
 		return err
 	}
@@ -390,13 +444,32 @@ func (e *MetricEvaluator) applyState(ctx context.Context, rule *monitorpb.Metric
 	if err := e.repo.InsertEvaluation(ctx, &MetricRuleEvaluationRow{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: evaluation.EvaluatedAt, Status: state.Status, ResultJSON: string(evalJSON)}); err != nil {
 		return err
 	}
-	if transition != "" && !stringsEqual(state.Status, domain.AlertStatusOK) {
-		return e.notify(ctx, rule, evaluation, transition)
+	if notificationEvent != "" && !stringsEqual(state.Status, domain.AlertStatusOK) {
+		if err := e.notify(ctx, rule, evaluation, notificationEvent, state.NotificationKey); err != nil {
+			state.NotificationStatus = "failed"
+			state.NotificationError = err.Error()
+			state.LastNotificationAt = &evaluation.EvaluatedAt
+			_ = e.repo.UpsertState(ctx, state)
+			return err
+		}
+		state.NotificationStatus = "sent"
+		state.NotificationError = ""
+		state.LastNotificationAt = &evaluation.EvaluatedAt
+		if err := e.repo.UpsertState(ctx, state); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 func stringsEqual(a, b string) bool { return a == b }
-func (e *MetricEvaluator) notify(ctx context.Context, rule *monitorpb.MetricRule, evaluation *RuleEvaluation, eventType string) error {
+func metricNotificationKey(rule *monitorpb.MetricRule, state *MetricRuleStateRow, eventType string) string {
+	triggeredAt := time.Time{}
+	if state != nil && state.LastTriggeredAt != nil {
+		triggeredAt = state.LastTriggeredAt.UTC()
+	}
+	return fmt.Sprintf("%s:%s:%s:%d", rule.GetSpaceId(), rule.GetRuleId(), eventType, triggeredAt.UnixNano())
+}
+func (e *MetricEvaluator) notify(ctx context.Context, rule *monitorpb.MetricRule, evaluation *RuleEvaluation, eventType, dedupeKey string) error {
 	if e.notifier == nil || e.webhooks == nil {
 		return nil
 	}
@@ -408,7 +481,7 @@ func (e *MetricEvaluator) notify(ctx context.Context, rule *monitorpb.MetricRule
 		if wh == nil || !wh.Enabled {
 			continue
 		}
-		if err := e.notifier.SendMetric(ctx, *wh, MetricEvent{EventType: eventType, Rule: rule, Evaluation: evaluation, OwnerInstanceID: e.instance}); err != nil {
+		if err := e.notifier.SendMetric(ctx, *wh, MetricEvent{EventType: eventType, DedupeKey: dedupeKey, Rule: rule, Evaluation: evaluation, OwnerInstanceID: e.instance}); err != nil {
 			return err
 		}
 	}

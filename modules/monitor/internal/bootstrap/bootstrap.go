@@ -49,6 +49,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 monitor schema 失败: %v", err)
 		return nil, err
 	}
+	if err := schema.EnsureMetricRuleStateColumns(mgr.DB()); err != nil {
+		_ = mgr.Close()
+		log.ErrorContextf(ctx, "升级 monitor metric rule state schema 失败: %v", err)
+		return nil, err
+	}
 	defaultManager = mgr
 	var metricsStorage *monmetrics.StorageAdapter
 	var metricsQuery *monmetrics.QueryService
@@ -58,6 +63,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		metricsStorage = monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
 		metricsRepo := monmetrics.NewRepository(mgr.DB())
 		metricsQuery = monmetrics.NewQueryService(metricsRepo, metricsStorage)
+		if interval, err := time.ParseDuration(cfg.Metrics.Storage.Frequency); err == nil {
+			metricsQuery.Catalog().SetNoDataAfter(time.Duration(maxInt(cfg.Metrics.NoDataIntervals, 1)) * interval)
+		}
 		metricRules = monmetrics.NewRuleRepository(mgr.DB())
 		metricEvaluator = monmetrics.NewMetricEvaluator(monmetrics.EvaluatorOptions{
 			Repository: metricRules,
@@ -87,6 +95,13 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func startMetricsConsumer(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager, storage *monmetrics.StorageAdapter) {

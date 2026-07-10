@@ -10,9 +10,25 @@ import (
 
 // MetricCatalog provides bounded reads over the SQLite catalog. It never
 // queries Storage without first resolving a finite set of series IDs.
-type MetricCatalog struct{ repo *Repository }
+type MetricCatalog struct {
+	repo        *Repository
+	noDataAfter time.Duration
+}
 
-func NewCatalog(repo *Repository) *MetricCatalog { return &MetricCatalog{repo: repo} }
+func NewCatalog(repo *Repository) *MetricCatalog {
+	return &MetricCatalog{repo: repo, noDataAfter: 2 * time.Minute}
+}
+func (c *MetricCatalog) SetNoDataAfter(d time.Duration) {
+	if c != nil && d > 0 {
+		c.noDataAfter = d
+	}
+}
+func (c *MetricCatalog) NoDataAfter() time.Duration {
+	if c == nil || c.noDataAfter <= 0 {
+		return 2 * time.Minute
+	}
+	return c.noDataAfter
+}
 
 func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset, limit int) ([]MetricService, int64, error) {
 	if c == nil || c.repo == nil || c.repo.db == nil {
@@ -31,7 +47,17 @@ func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset
 	if err := q.Order("c_service_name ASC, c_instance_id ASC, c_boot_id ASC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
+	c.markServicesStale(rows)
 	return rows, total, nil
+}
+
+func (c *MetricCatalog) markServicesStale(rows []MetricService) {
+	cutoff := time.Now().UTC().Add(-c.noDataAfter)
+	for i := range rows {
+		if !rows[i].LastSeenAt.IsZero() && rows[i].LastSeenAt.Before(cutoff) {
+			rows[i].IsStale = true
+		}
+	}
 }
 
 func (c *MetricCatalog) ListNames(ctx context.Context, serviceName string, offset, limit int) ([]MetricName, int64, error) {
@@ -98,7 +124,17 @@ func (c *MetricCatalog) ListSeries(ctx context.Context, serviceName, metricName,
 	if err := q.Order("c_metric_name ASC, c_series_id ASC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
+	c.markSeriesStale(rows)
 	return rows, total, nil
+}
+
+func (c *MetricCatalog) markSeriesStale(rows []MetricSeries) {
+	cutoff := time.Now().UTC().Add(-c.noDataAfter)
+	for i := range rows {
+		if !rows[i].LastSeenAt.IsZero() && rows[i].LastSeenAt.Before(cutoff) {
+			rows[i].IsStale = true
+		}
+	}
 }
 
 func (c *MetricCatalog) FindSeries(ctx context.Context, seriesID, serviceName, metricName, labelsJSON string, limit int) ([]MetricSeries, error) {
@@ -122,6 +158,7 @@ func (c *MetricCatalog) FindSeries(ctx context.Context, seriesID, serviceName, m
 	if err := q.Order("c_series_id ASC").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	c.markSeriesStale(rows)
 	return rows, nil
 }
 

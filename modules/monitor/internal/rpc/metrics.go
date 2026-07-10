@@ -13,6 +13,9 @@ import (
 )
 
 func (s *Service) ListMetricServices(ctx context.Context, req *monitorpb.ListMetricServicesReq) (*monitorpb.ListMetricServicesRsp, error) {
+	if err := monmetrics.ValidateMetricSpace(req.GetSpaceId()); err != nil {
+		return &monitorpb.ListMetricServicesRsp{RetInfo: invalid(err)}, nil
+	}
 	if s.metricsQuery == nil {
 		return &monitorpb.ListMetricServicesRsp{RetInfo: inner(errors.New("metrics catalog is unavailable"))}, nil
 	}
@@ -28,6 +31,9 @@ func (s *Service) ListMetricServices(ctx context.Context, req *monitorpb.ListMet
 	return &monitorpb.ListMetricServicesRsp{RetInfo: success(), Services: out, PageResult: metricPageResult(o, l, total)}, nil
 }
 func (s *Service) ListMetricNames(ctx context.Context, req *monitorpb.ListMetricNamesReq) (*monitorpb.ListMetricNamesRsp, error) {
+	if err := monmetrics.ValidateMetricSpace(req.GetSpaceId()); err != nil {
+		return &monitorpb.ListMetricNamesRsp{RetInfo: invalid(err)}, nil
+	}
 	if s.metricsQuery == nil {
 		return &monitorpb.ListMetricNamesRsp{RetInfo: inner(errors.New("metrics catalog is unavailable"))}, nil
 	}
@@ -43,6 +49,9 @@ func (s *Service) ListMetricNames(ctx context.Context, req *monitorpb.ListMetric
 	return &monitorpb.ListMetricNamesRsp{RetInfo: success(), Names: out, PageResult: metricPageResult(o, l, total)}, nil
 }
 func (s *Service) ListMetricSeries(ctx context.Context, req *monitorpb.ListMetricSeriesReq) (*monitorpb.ListMetricSeriesRsp, error) {
+	if err := monmetrics.ValidateMetricSpace(req.GetSpaceId()); err != nil {
+		return &monitorpb.ListMetricSeriesRsp{RetInfo: invalid(err)}, nil
+	}
 	if s.metricsQuery == nil {
 		return &monitorpb.ListMetricSeriesRsp{RetInfo: inner(errors.New("metrics catalog is unavailable"))}, nil
 	}
@@ -58,6 +67,9 @@ func (s *Service) ListMetricSeries(ctx context.Context, req *monitorpb.ListMetri
 	return &monitorpb.ListMetricSeriesRsp{RetInfo: success(), Series: out, PageResult: metricPageResult(o, l, total)}, nil
 }
 func (s *Service) GetMetricLatest(ctx context.Context, req *monitorpb.GetMetricLatestReq) (*monitorpb.GetMetricLatestRsp, error) {
+	if err := monmetrics.ValidateMetricSpace(req.GetSpaceId()); err != nil {
+		return &monitorpb.GetMetricLatestRsp{RetInfo: invalid(err)}, nil
+	}
 	if s.metricsQuery == nil {
 		return &monitorpb.GetMetricLatestRsp{RetInfo: inner(errors.New("metrics query is unavailable"))}, nil
 	}
@@ -74,6 +86,9 @@ func (s *Service) GetMetricLatest(ctx context.Context, req *monitorpb.GetMetricL
 	return &monitorpb.GetMetricLatestRsp{RetInfo: success(), Latest: latestToPB(*row)}, nil
 }
 func (s *Service) QueryMetricHistory(ctx context.Context, req *monitorpb.QueryMetricHistoryReq) (*monitorpb.QueryMetricHistoryRsp, error) {
+	if err := monmetrics.ValidateMetricSpace(req.GetSpaceId()); err != nil {
+		return &monitorpb.QueryMetricHistoryRsp{RetInfo: invalid(err)}, nil
+	}
 	if s.metricsQuery == nil {
 		return &monitorpb.QueryMetricHistoryRsp{RetInfo: inner(errors.New("metrics query is unavailable"))}, nil
 	}
@@ -105,6 +120,9 @@ func (s *Service) QueryMetricHistory(ctx context.Context, req *monitorpb.QueryMe
 }
 
 func (s *Service) ListMetricRules(ctx context.Context, req *monitorpb.ListMetricRulesReq) (*monitorpb.ListMetricRulesRsp, error) {
+	if err := monmetrics.ValidateMetricSpace(req.GetSpaceId()); err != nil {
+		return &monitorpb.ListMetricRulesRsp{RetInfo: invalid(err)}, nil
+	}
 	if s.metricRules == nil {
 		return &monitorpb.ListMetricRulesRsp{RetInfo: inner(errors.New("metric rules are unavailable"))}, nil
 	}
@@ -116,6 +134,9 @@ func (s *Service) ListMetricRules(ctx context.Context, req *monitorpb.ListMetric
 	return &monitorpb.ListMetricRulesRsp{RetInfo: success(), Rules: rules, PageResult: metricPageResult(o, l, total)}, nil
 }
 func (s *Service) GetMetricRule(ctx context.Context, req *monitorpb.GetMetricRuleReq) (*monitorpb.GetMetricRuleRsp, error) {
+	if err := monmetrics.ValidateMetricSpace(req.GetSpaceId()); err != nil {
+		return &monitorpb.GetMetricRuleRsp{RetInfo: invalid(err)}, nil
+	}
 	if s.metricRules == nil {
 		return &monitorpb.GetMetricRuleRsp{RetInfo: inner(errors.New("metric rules are unavailable"))}, nil
 	}
@@ -136,6 +157,9 @@ func (s *Service) CreateMetricRule(ctx context.Context, req *monitorpb.CreateMet
 	if rule == nil {
 		return &monitorpb.CreateMetricRuleRsp{RetInfo: invalid(errors.New("rule is required"))}, nil
 	}
+	if err := monmetrics.ValidateMetricSpace(rule.GetSpaceId()); err != nil {
+		return &monitorpb.CreateMetricRuleRsp{RetInfo: invalid(err)}, nil
+	}
 	if rule.GetRuleId() == "" {
 		rule.RuleId = newID("metric-rule")
 	}
@@ -147,6 +171,12 @@ func (s *Service) CreateMetricRule(ctx context.Context, req *monitorpb.CreateMet
 func (s *Service) UpdateMetricRule(ctx context.Context, req *monitorpb.UpdateMetricRuleReq) (*monitorpb.UpdateMetricRuleRsp, error) {
 	if s.metricRules == nil {
 		return &monitorpb.UpdateMetricRuleRsp{RetInfo: inner(errors.New("metric rules are unavailable"))}, nil
+	}
+	if req.GetRule() == nil {
+		return &monitorpb.UpdateMetricRuleRsp{RetInfo: invalid(errors.New("rule is required"))}, nil
+	}
+	if err := monmetrics.ValidateMetricSpace(req.GetRule().GetSpaceId()); err != nil {
+		return &monitorpb.UpdateMetricRuleRsp{RetInfo: invalid(err)}, nil
 	}
 	if err := s.metricRules.UpdateRule(ctx, req.GetRule(), s.webhookEnabled); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -161,6 +191,9 @@ func (s *Service) UpdateMetricRule(ctx context.Context, req *monitorpb.UpdateMet
 	return &monitorpb.UpdateMetricRuleRsp{RetInfo: success(), Rule: rule}, nil
 }
 func (s *Service) DeleteMetricRule(ctx context.Context, req *monitorpb.DeleteMetricRuleReq) (*monitorpb.DeleteMetricRuleRsp, error) {
+	if err := monmetrics.ValidateMetricSpace(req.GetSpaceId()); err != nil {
+		return &monitorpb.DeleteMetricRuleRsp{RetInfo: invalid(err)}, nil
+	}
 	if s.metricRules == nil {
 		return &monitorpb.DeleteMetricRuleRsp{RetInfo: inner(errors.New("metric rules are unavailable"))}, nil
 	}
@@ -176,13 +209,22 @@ func (s *Service) PreviewMetricRule(ctx context.Context, req *monitorpb.PreviewM
 	if s.metricEvaluator == nil {
 		return &monitorpb.PreviewMetricRuleRsp{RetInfo: inner(errors.New("metric evaluator is unavailable"))}, nil
 	}
-	eval, err := s.metricEvaluator.Evaluate(ctx, req.GetRule(), true)
+	if req.GetRule() == nil {
+		return &monitorpb.PreviewMetricRuleRsp{RetInfo: invalid(errors.New("rule is required"))}, nil
+	}
+	if err := monmetrics.ValidateMetricSpace(req.GetRule().GetSpaceId()); err != nil {
+		return &monitorpb.PreviewMetricRuleRsp{RetInfo: invalid(err)}, nil
+	}
+	eval, err := s.metricEvaluator.Preview(ctx, req.GetRule(), int(req.GetLimit()))
 	if err != nil {
 		return &monitorpb.PreviewMetricRuleRsp{RetInfo: invalid(err)}, nil
 	}
 	return &monitorpb.PreviewMetricRuleRsp{RetInfo: success(), Evaluation: evaluationToPB(eval)}, nil
 }
 func (s *Service) ListMetricRuleEvaluations(ctx context.Context, req *monitorpb.ListMetricRuleEvaluationsReq) (*monitorpb.ListMetricRuleEvaluationsRsp, error) {
+	if err := monmetrics.ValidateMetricSpace(req.GetSpaceId()); err != nil {
+		return &monitorpb.ListMetricRuleEvaluationsRsp{RetInfo: invalid(err)}, nil
+	}
 	if s.metricRules == nil {
 		return &monitorpb.ListMetricRuleEvaluationsRsp{RetInfo: inner(errors.New("metric rules are unavailable"))}, nil
 	}
@@ -198,6 +240,9 @@ func (s *Service) ListMetricRuleEvaluations(ctx context.Context, req *monitorpb.
 	return &monitorpb.ListMetricRuleEvaluationsRsp{RetInfo: success(), Evaluations: out, PageResult: metricPageResult(o, l, total)}, nil
 }
 func (s *Service) GetMetricRuleState(ctx context.Context, req *monitorpb.GetMetricRuleStateReq) (*monitorpb.GetMetricRuleStateRsp, error) {
+	if err := monmetrics.ValidateMetricSpace(req.GetSpaceId()); err != nil {
+		return &monitorpb.GetMetricRuleStateRsp{RetInfo: invalid(err)}, nil
+	}
 	if s.metricRules == nil {
 		return &monitorpb.GetMetricRuleStateRsp{RetInfo: inner(errors.New("metric rules are unavailable"))}, nil
 	}

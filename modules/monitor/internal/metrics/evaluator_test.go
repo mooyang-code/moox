@@ -6,11 +6,24 @@ import (
 	"testing"
 	"time"
 
+	"errors"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 )
+
+type retryMetricNotifier struct {
+	attempts int
+}
+
+func (n *retryMetricNotifier) SendMetric(context.Context, domain.WebhookChannel, MetricEvent) error {
+	n.attempts++
+	if n.attempts == 1 {
+		return errors.New("temporary webhook failure")
+	}
+	return nil
+}
 
 func TestCompareTruthTable(t *testing.T) {
 	for _, tc := range []struct {
@@ -24,6 +37,13 @@ func TestCompareTruthTable(t *testing.T) {
 		if got := Compare(tc.op, 10, 10); got != tc.want {
 			t.Errorf("%v got %v want %v", tc.op, got, tc.want)
 		}
+	}
+}
+
+func TestNoDataPolicyOKDoesNotFire(t *testing.T) {
+	rule := validRule()
+	if got := noDataResult("ok", rule.GetConditions(), "A"); got {
+		t.Fatal("no-data OK policy fired")
 	}
 }
 
@@ -71,5 +91,39 @@ func TestMetricRuleStateTransitionsAndKeepState(t *testing.T) {
 	state, _ = repo.GetState(ctx, "space", "rule")
 	if state.RecoveryCount != 1 || state.TriggerCount != 0 {
 		t.Fatalf("keep-state advanced counters=%+v", state)
+	}
+}
+
+func TestMetricNotificationFailureIsPersistedAndRetried(t *testing.T) {
+	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	if err := mgr.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &retryMetricNotifier{}
+	now := time.Unix(900, 0).UTC()
+	rule := validRule()
+	rule.ConsecutiveTriggerCount = 1
+	eval := NewMetricEvaluator(EvaluatorOptions{Repository: NewRuleRepository(mgr.DB()), InstanceID: "m1", Now: func() time.Time { return now }, Notifier: notifier, Webhook: func(context.Context, string, string) (*domain.WebhookChannel, error) {
+		return &domain.WebhookChannel{WebhookID: "ops", Enabled: true}, nil
+	}})
+	ctx := context.Background()
+	if err := eval.applyState(ctx, rule, &RuleEvaluation{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: now, Result: true}); err == nil {
+		t.Fatal("first notification failure was swallowed")
+	}
+	state, err := eval.repo.GetState(ctx, rule.GetSpaceId(), rule.GetRuleId())
+	if err != nil || state.NotificationStatus != "failed" || state.NotificationKey == "" {
+		t.Fatalf("failed notification state=%+v err=%v", state, err)
+	}
+	now = now.Add(time.Second)
+	if err := eval.applyState(ctx, rule, &RuleEvaluation{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: now, Result: true}); err != nil {
+		t.Fatal(err)
+	}
+	state, _ = eval.repo.GetState(ctx, rule.GetSpaceId(), rule.GetRuleId())
+	if notifier.attempts != 2 || state.NotificationStatus != "sent" {
+		t.Fatalf("retry attempts=%d state=%+v", notifier.attempts, state)
 	}
 }

@@ -90,18 +90,24 @@ type MetricRuleChannelRow struct {
 func (MetricRuleChannelRow) TableName() string { return "t_monitor_metric_rule_channels" }
 
 type MetricRuleStateRow struct {
-	ID              uint64     `gorm:"column:c_id;primaryKey"`
-	SpaceID         string     `gorm:"column:c_space_id"`
-	RuleID          string     `gorm:"column:c_rule_id"`
-	Status          string     `gorm:"column:c_status"`
-	TriggerCount    int        `gorm:"column:c_trigger_count"`
-	RecoveryCount   int        `gorm:"column:c_recovery_count"`
-	OwnerInstanceID string     `gorm:"column:c_owner_instance_id"`
-	LastEvaluatedAt *time.Time `gorm:"column:c_last_evaluated_at"`
-	LastTriggeredAt *time.Time `gorm:"column:c_last_triggered_at"`
-	LastRecoveredAt *time.Time `gorm:"column:c_last_recovered_at"`
-	CreatedAt       time.Time  `gorm:"column:c_ctime"`
-	UpdatedAt       time.Time  `gorm:"column:c_mtime"`
+	ID                   uint64     `gorm:"column:c_id;primaryKey"`
+	SpaceID              string     `gorm:"column:c_space_id"`
+	RuleID               string     `gorm:"column:c_rule_id"`
+	Status               string     `gorm:"column:c_status"`
+	TriggerCount         int        `gorm:"column:c_trigger_count"`
+	RecoveryCount        int        `gorm:"column:c_recovery_count"`
+	OwnerInstanceID      string     `gorm:"column:c_owner_instance_id"`
+	LastEvaluatedAt      *time.Time `gorm:"column:c_last_evaluated_at"`
+	LastTriggeredAt      *time.Time `gorm:"column:c_last_triggered_at"`
+	LastRecoveredAt      *time.Time `gorm:"column:c_last_recovered_at"`
+	NotificationEvent    string     `gorm:"column:c_notification_event"`
+	NotificationKey      string     `gorm:"column:c_notification_key"`
+	NotificationStatus   string     `gorm:"column:c_notification_status"`
+	NotificationError    string     `gorm:"column:c_notification_error"`
+	NotificationAttempts int        `gorm:"column:c_notification_attempts"`
+	LastNotificationAt   *time.Time `gorm:"column:c_last_notification_at"`
+	CreatedAt            time.Time  `gorm:"column:c_ctime"`
+	UpdatedAt            time.Time  `gorm:"column:c_mtime"`
 }
 
 func (MetricRuleStateRow) TableName() string { return "t_monitor_metric_rule_states" }
