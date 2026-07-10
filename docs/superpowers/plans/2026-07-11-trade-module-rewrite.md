@@ -45,8 +45,8 @@ modules/trade/
   internal/application/{command,query,consumer,reconciliation}/
   internal/algorithm/{split,pricing,execution,rebalance}/
   internal/exchange/{binance,okx}/
-  internal/infra/{persistence,messaging,clock}/
-  schema/{core,ledger,execution,messaging,rebalance}.sql
+  internal/infra/{store,bus,clock}/
+  schema/{core,ledger,execution,bus,rebalance}.sql
   proto/trade_service.proto
 ```
 
@@ -110,7 +110,7 @@ Tests live beside each package. Cross-component tests live in `modules/trade/int
 - Replace: `modules/trade/schema/sync.sql`
 - Create: `modules/trade/schema/ledger.sql`
 - Create: `modules/trade/schema/execution.sql`
-- Create: `modules/trade/schema/messaging.sql`
+- Create: `modules/trade/schema/bus.sql`
 - Create: `modules/trade/schema/rebalance.sql`
 - Modify: `modules/trade/schema/schema.go`
 - Modify: `modules/trade/schema/schema_test.go`
@@ -126,21 +126,21 @@ Tests live beside each package. Cross-component tests live in `modules/trade/int
 ### Task 5: Build Storage-Neutral Unit Of Work, Repositories, Inbox And Outbox
 
 **Files:**
-- Create: `modules/trade/internal/infra/persistence/unit_of_work.go`
-- Create: `modules/trade/internal/infra/persistence/order_repository.go`
-- Create: `modules/trade/internal/infra/persistence/execution_repository.go`
-- Create: `modules/trade/internal/infra/persistence/ledger_repository.go`
-- Create: `modules/trade/internal/infra/persistence/messaging_repository.go`
-- Create: `modules/trade/internal/infra/persistence/repository_test.go`
+- Create: `modules/trade/internal/infra/store/unit_of_work.go`
+- Create: `modules/trade/internal/infra/store/order_repository.go`
+- Create: `modules/trade/internal/infra/store/execution_repository.go`
+- Create: `modules/trade/internal/infra/store/ledger_repository.go`
+- Create: `modules/trade/internal/infra/store/bus_repository.go`
+- Create: `modules/trade/internal/infra/store/repository_test.go`
 
 - [ ] Write rollback tests proving aggregate state, ledger entries and Outbox messages commit or roll back together.
 - [ ] Write unique-key tests for command idempotency, Fill idempotency and Inbox `message_id` idempotency.
 - [ ] Implement repositories with compare-and-swap aggregate versions.
 - [ ] Implement Outbox claiming with leases so a crashed relay does not lose or permanently lock messages.
 - [ ] Verify concurrent updates produce one winner and a typed conflict for the loser.
-- [ ] Keep database-driver types private to `infra/persistence`; domain and application contracts expose only UnitOfWork and repository interfaces.
-- [ ] Run `go test -count=1 ./modules/trade/internal/infra/persistence`.
-- [ ] Commit as `feat(trade): add transactional persistence`.
+- [ ] Keep database-driver types private to `infra/store`; domain and application contracts expose only UnitOfWork and repository interfaces.
+- [ ] Run `go test -count=1 ./modules/trade/internal/infra/store`.
+- [ ] Commit as `feat(trade): add transactional store`.
 
 ### Task 6: Implement The Double-Entry Ledger
 
@@ -244,9 +244,9 @@ Tests live beside each package. Cross-component tests live in `modules/trade/int
 **Files:**
 - Modify: `modules/eventbus/internal/registry/registry.go`
 - Modify: `modules/eventbus/config/app.yaml`
-- Create: `modules/trade/internal/infra/messaging/topics.go`
-- Create: `modules/trade/internal/infra/messaging/outbox_relay.go`
-- Create: `modules/trade/internal/infra/messaging/outbox_relay_test.go`
+- Create: `modules/trade/internal/infra/bus/topics.go`
+- Create: `modules/trade/internal/infra/bus/outbox_relay.go`
+- Create: `modules/trade/internal/infra/bus/outbox_relay_test.go`
 
 - [ ] Add exact Trade Topic contracts and a `MOOX_TRADE` Limits/File stream.
 - [ ] Declare durable consumers for execution, settlement and reconciliation workers.
@@ -259,7 +259,7 @@ Tests live beside each package. Cross-component tests live in `modules/trade/int
 ### Task 13: Add Idempotent Event Consumers
 
 **Files:**
-- Create: `modules/trade/internal/infra/messaging/consumer.go`
+- Create: `modules/trade/internal/infra/bus/consumer.go`
 - Create: `modules/trade/internal/application/consumer/router.go`
 - Create: `modules/trade/internal/application/consumer/router_test.go`
 
@@ -357,7 +357,7 @@ Tests live beside each package. Cross-component tests live in `modules/trade/int
 - [ ] Validate leverage brackets with a configured safety margin.
 - [ ] Validate available funds, reserve ratio, min notional, max slice amount and account usability.
 - [ ] Build a dependency DAG that executes close/reduce/sell before open/increase/buy.
-- [ ] Detect dependency cycles and reject an unexecutable plan before persistence.
+- [ ] Detect dependency cycles and reject an unexecutable plan before saving it.
 - [ ] Make required account transfers explicit Saga legs rather than hidden account-refresh side effects.
 - [ ] Commit as `feat(trade): validate and order rebalance legs`.
 
