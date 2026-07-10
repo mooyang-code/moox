@@ -27,10 +27,12 @@ func TestDeployEnablesCollectorScheduler(t *testing.T) {
 		filepath.Join(root, "modules", "admin", "config"),
 		filepath.Join(root, "modules", "collector", "config"),
 		filepath.Join(root, "modules", "collector", "configs"),
+		filepath.Join(root, "modules", "eventbus", "config"),
 		filepath.Join(root, "examples"),
 	)
 	mustWriteFile(t, filepath.Join(root, "scripts", "deploy-moox.sh"), script, 0o755)
 	for _, name := range []string{
+		"moox-eventbus",
 		"moox-admin",
 		"moox-admin-cli",
 		"moox-cli",
@@ -41,6 +43,7 @@ func TestDeployEnablesCollectorScheduler(t *testing.T) {
 		mustWriteFile(t, filepath.Join(root, "bin", name), []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755)
 	}
 	mustWriteFile(t, filepath.Join(root, "modules", "admin", "config", "app.yaml"), []byte("database:\n  path: ./data/admin.db\n"), 0o644)
+	mustWriteFile(t, filepath.Join(root, "modules", "eventbus", "config", "trpc_go.yaml"), []byte("server:\n  service: []\n"), 0o644)
 	mustWriteFile(t, filepath.Join(root, "modules", "admin", "config", "gateway.yaml"), []byte("badger:\n  data_dir: \"./data/badger\"\n"), 0o644)
 	mustWriteFile(t, filepath.Join(root, "modules", "collector", "config", "app.yaml"), []byte("database:\n  path: ./data/moox_collector.db\n"), 0o644)
 	mustWriteFile(t, filepath.Join(root, "modules", "collector", "config", "trpc_go.yaml"), []byte(`server:
@@ -151,6 +154,7 @@ func TestDeployStagesStorageViewMaintenanceScheduler(t *testing.T) {
 		filepath.Join(root, "modules", "admin", "config"),
 		filepath.Join(root, "modules", "storage", "config"),
 		filepath.Join(root, "modules", "storage", "schema"),
+		filepath.Join(root, "modules", "eventbus", "config"),
 		filepath.Join(root, "examples"),
 	)
 	mustWriteFile(t, filepath.Join(root, "scripts", "deploy-moox.sh"), script, 0o755)
@@ -160,6 +164,7 @@ func TestDeployStagesStorageViewMaintenanceScheduler(t *testing.T) {
 		0o755,
 	)
 	for _, name := range []string{
+		"moox-eventbus",
 		"moox-admin",
 		"moox-admin-cli",
 		"moox-cli",
@@ -169,6 +174,7 @@ func TestDeployStagesStorageViewMaintenanceScheduler(t *testing.T) {
 		mustWriteFile(t, filepath.Join(root, "bin", name), []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755)
 	}
 	mustWriteFile(t, filepath.Join(root, "modules", "admin", "config", "app.yaml"), []byte("database:\n  path: ./data/admin.db\n"), 0o644)
+	mustWriteFile(t, filepath.Join(root, "modules", "eventbus", "config", "trpc_go.yaml"), []byte("server:\n  service: []\n"), 0o644)
 	mustWriteFile(t, filepath.Join(root, "modules", "admin", "config", "gateway.yaml"), []byte("badger:\n  data_dir: \"./data/badger\"\n"), 0o644)
 	mustWriteFile(t, filepath.Join(root, "modules", "storage", "schema", "metadata.sql"), []byte("-- test schema\n"), 0o644)
 	for _, name := range []string{
@@ -190,9 +196,9 @@ func TestDeployStagesStorageViewMaintenanceScheduler(t *testing.T) {
     view_index_root: ./var/storage/view-indexes
     parquet_path: ./var/storage/archive
   eventbus:
-    type: memory
-    embedded:
-      enabled: false
+    type: jetstream
+    urls:
+      - nats://127.0.0.1:4222
 `), 0o644)
 	mustCopyFile(t,
 		filepath.Join(repoRoot, "modules", "storage", "config", "trpc_go.yaml"),
@@ -237,8 +243,8 @@ func TestDeployStagesStorageViewMaintenanceScheduler(t *testing.T) {
 		t.Fatal(err)
 	}
 	storageText := string(gotStorage)
-	if !strings.Contains(storageText, "type: nats") || !strings.Contains(storageText, "enabled: true") {
-		t.Fatalf("storage eventbus was not patched to embedded NATS in deployed config:\n%s", storageText)
+	if !strings.Contains(storageText, "type: jetstream") || strings.Contains(storageText, "embedded:") {
+		t.Fatalf("storage eventbus was not kept on the central EventBus in deployed config:\n%s", storageText)
 	}
 }
 

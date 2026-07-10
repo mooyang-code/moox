@@ -36,13 +36,14 @@ type Publisher interface {
 type Connector func(context.Context, Config) (Publisher, error)
 
 type Handler struct {
-	cfg       Config
-	gatherer  prometheus.Gatherer
-	connector Connector
-	mu        sync.Mutex
-	client    Publisher
-	sequence  atomic.Uint64
-	bootID    string
+	cfg        Config
+	gatherer   prometheus.Gatherer
+	connector  Connector
+	mu         sync.Mutex
+	client     Publisher
+	sequence   atomic.Uint64
+	errorCount atomic.Uint64
+	bootID     string
 }
 
 func NewHandler(cfg Config) (*Handler, error) {
@@ -56,7 +57,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 	if _, err := regexp.Compile(cfg.ExcludeRegex); err != nil {
 		return nil, fmt.Errorf("exclude regex: %w", err)
 	}
-	bootID := newID()
+	bootID := cfg.BootID
+	if bootID == "" {
+		bootID = newID()
+	}
 	return &Handler{cfg: cfg, gatherer: prometheus.DefaultGatherer, connector: connect, bootID: bootID}, nil
 }
 
@@ -80,7 +84,7 @@ func (h *Handler) Handle(ctx context.Context, _ string) error {
 	}
 	snapshot, err := h.BuildSnapshot()
 	if err != nil {
-		return err
+		return h.reportError(ctx, err)
 	}
 	seq := h.sequence.Add(1)
 	messageID := fmt.Sprintf("%s-%020d", h.bootID, seq)
@@ -97,17 +101,33 @@ func (h *Handler) Handle(ctx context.Context, _ string) error {
 		SpaceId:         h.cfg.SpaceID,
 		Sequence:        seq,
 		OccurredAt:      timestamppb.Now(),
+		PublishedAt:     timestamppb.Now(),
 		ContentType:     SnapshotContentType,
 		Payload:         payload,
 	}
 	client, err := h.publisher(ctx)
 	if err != nil {
-		return err
+		return h.reportError(ctx, err)
 	}
 	if _, err := client.Publish(ctx, msg, jetstream.WithOrderingKey(h.cfg.ServiceName+"/"+h.cfg.InstanceID)); err != nil {
-		return fmt.Errorf("publish metrics snapshot: %w", err)
+		return h.reportError(ctx, fmt.Errorf("publish metrics snapshot: %w", err))
 	}
 	return nil
+}
+
+func (h *Handler) reportError(ctx context.Context, err error) error {
+	if err != nil {
+		h.errorCount.Add(1)
+		log.WarnContextf(ctx, "metrics snapshot report failed for %s: %v", h.cfg.ServiceName, err)
+	}
+	return err
+}
+
+func (h *Handler) ErrorCount() uint64 {
+	if h == nil {
+		return 0
+	}
+	return h.errorCount.Load()
 }
 
 func (h *Handler) BuildSnapshot() (*metricspb.MetricSnapshot, error) {

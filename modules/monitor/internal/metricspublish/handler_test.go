@@ -119,6 +119,9 @@ func TestHandlePublishesMooxMessage(t *testing.T) {
 		t.Fatalf("published messages = %d", len(publisher.messages))
 	}
 	message := publisher.messages[0]
+	if err := jetstream.ValidateMessage(message, 16<<20); err != nil {
+		t.Fatalf("published message failed shared validation: %v", err)
+	}
 	if message.GetTopic() != DefaultTopic || message.GetContentType() != SnapshotContentType || message.GetKind() != messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT {
 		t.Fatalf("unexpected message metadata: %+v", message)
 	}

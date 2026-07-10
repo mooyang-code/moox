@@ -180,6 +180,8 @@ func registerStorageMetricsReporter(s *server.Server, storage storageconfig.Stor
 		serviceName, timerName = "moox-storage-view-builder", "trpc.moox.storage.view_builder.metrics.timer"
 	case storage.HasRole("view_query") && !storage.HasRole("access"):
 		serviceName, timerName = "moox-storage-view-query", "trpc.moox.storage.view_query.metrics.timer"
+	case storage.HasRole("view") && !storage.HasRole("access"):
+		serviceName, timerName = "moox-storage-view", "trpc.moox.storage.view.metrics.timer"
 	}
 	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig(serviceName))
 	if err != nil { log.Warnf("storage metrics reporter disabled: %v", err); return }

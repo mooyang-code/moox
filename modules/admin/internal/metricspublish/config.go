@@ -43,6 +43,7 @@ func DefaultConfig(serviceName string) Config {
 		ServiceName:          serviceName,
 		InstanceID:           firstEnv("MOOX_INSTANCE_ID", "HOSTNAME"),
 		NodeID:               firstEnv("MOOX_NODE_ID", "HOSTNAME"),
+		BootID:               firstEnv("MOOX_BOOT_ID"),
 		Version:              firstEnv("MOOX_VERSION", "MOOX_SERVICE_VERSION"),
 		EventBusURL:          firstEnv("MOOX_METRICS_EVENTBUS_URL", "MOOX_EVENTBUS_URL", "NATS_URL"),
 		Topic:                firstEnv("MOOX_METRICS_TOPIC"),
@@ -58,6 +59,20 @@ func DefaultConfig(serviceName string) Config {
 		GzipLevel:            1,
 		IncludeRegex:         `^.*$`,
 		ExcludeRegex:         `^(go_gc_.*debug.*)$`,
+	}
+	c.MaxUncompressedBytes = envInt("MOOX_METRICS_MAX_UNCOMPRESSED_BYTES", c.MaxUncompressedBytes)
+	c.MaxCompressedBytes = envInt("MOOX_METRICS_MAX_COMPRESSED_BYTES", c.MaxCompressedBytes)
+	c.MaxMetricFamilies = envInt("MOOX_METRICS_MAX_FAMILIES", c.MaxMetricFamilies)
+	c.MaxSamples = envInt("MOOX_METRICS_MAX_SAMPLES", c.MaxSamples)
+	c.MaxLabelsPerSample = envInt("MOOX_METRICS_MAX_LABELS_PER_SAMPLE", c.MaxLabelsPerSample)
+	c.MaxLabelNameBytes = envInt("MOOX_METRICS_MAX_LABEL_NAME_BYTES", c.MaxLabelNameBytes)
+	c.MaxLabelValueBytes = envInt("MOOX_METRICS_MAX_LABEL_VALUE_BYTES", c.MaxLabelValueBytes)
+	c.GzipLevel = envInt("MOOX_METRICS_GZIP_LEVEL", c.GzipLevel)
+	if value := firstEnv("MOOX_METRICS_INCLUDE_REGEX"); value != "" {
+		c.IncludeRegex = value
+	}
+	if value := firstEnv("MOOX_METRICS_EXCLUDE_REGEX"); value != "" {
+		c.ExcludeRegex = value
 	}
 	if c.InstanceID == "" {
 		c.InstanceID = serviceName + "-local"
@@ -84,6 +99,9 @@ func (c Config) withDefaults() Config {
 	d := DefaultConfig(c.ServiceName)
 	if c.InstanceID == "" {
 		c.InstanceID = d.InstanceID
+	}
+	if c.BootID == "" {
+		c.BootID = d.BootID
 	}
 	if c.NodeID == "" {
 		c.NodeID = d.NodeID
