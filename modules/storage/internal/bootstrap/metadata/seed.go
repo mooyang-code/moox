@@ -186,7 +186,8 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 			SpaceId: item.SpaceID, ViewId: item.ViewID, Name: item.Name, Description: item.Description,
 			PrimaryDatasetId: item.PrimaryDatasetID, DatasetIds: item.DatasetIDs, GrainKeys: item.GrainKeys,
 			FilterJson: item.FilterJSON, Engine: item.Engine, RetentionWindow: item.RetentionWindow,
-			Status: item.Status,
+			RecordViewMode: parseRecordViewMode(item.RecordViewMode),
+			Status:         item.Status,
 		}); err != nil {
 			return result, seedErr("view", item.ViewID, err)
 		}
@@ -445,7 +446,19 @@ type seedView struct {
 	FilterJSON       string   `yaml:"filter_json"`
 	Engine           string   `yaml:"engine"`
 	RetentionWindow  string   `yaml:"retention_window"`
+	RecordViewMode   string   `yaml:"record_view_mode"`
 	Status           string   `yaml:"status"`
+}
+
+func parseRecordViewMode(value string) pb.RecordViewMode {
+	switch value {
+	case "current":
+		return pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT
+	case "history":
+		return pb.RecordViewMode_RECORD_VIEW_MODE_HISTORY
+	default:
+		return pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED
+	}
 }
 
 // seedViewColumn 描述 View 中对外可查询的结果列。

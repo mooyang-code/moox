@@ -211,7 +211,21 @@ type seedView struct {
 	FilterJSON       string   `yaml:"filter_json"`
 	Engine           string   `yaml:"engine"`
 	RetentionWindow  string   `yaml:"retention_window"`
+	RecordViewMode   string   `yaml:"record_view_mode"`
 	seedCommon       `yaml:",inline"`
+}
+
+func parseRecordViewMode(value string) pb.RecordViewMode {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "unspecified":
+		return pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED
+	case "current":
+		return pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT
+	case "history":
+		return pb.RecordViewMode_RECORD_VIEW_MODE_HISTORY
+	default:
+		return pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED
+	}
 }
 
 // seedViewColumn 描述 CLI 可导入的 View 结果列元数据。
@@ -612,7 +626,7 @@ func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
 }
 
 func (s seedView) toPB() *pb.View {
-	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, PrimaryDatasetId: s.PrimaryDatasetID, DatasetIds: s.DatasetIDs, GrainKeys: s.GrainKeys, FilterJson: s.FilterJSON, Engine: s.Engine, RetentionWindow: s.RetentionWindow, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, PrimaryDatasetId: s.PrimaryDatasetID, DatasetIds: s.DatasetIDs, GrainKeys: s.GrainKeys, FilterJson: s.FilterJSON, Engine: s.Engine, RetentionWindow: s.RetentionWindow, RecordViewMode: parseRecordViewMode(s.RecordViewMode), Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedViewColumn) toPB() (*pb.ViewColumn, error) {

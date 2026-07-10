@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
@@ -153,10 +154,17 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 		return errors.New("space_id and primary_dataset_id are required")
 	}
 	datasetIDs := normalizeViewDatasetIDs(primaryDatasetID, view.GetDatasetIds())
+	reader := s.metadataReader
+	if reader == nil {
+		reader = s.metadata
+	}
+	if reader == nil {
+		return errors.New("metadata reader is required")
+	}
 	var primary *pb.Dataset
 	datasets := make([]*pb.Dataset, 0, len(datasetIDs))
 	for idx, datasetID := range datasetIDs {
-		dataset, err := s.metadata.GetDataset(ctx, spaceID, datasetID)
+		dataset, err := reader.GetDataset(ctx, spaceID, datasetID)
 		if err != nil {
 			return fmt.Errorf("view dataset %s not found: %w", datasetID, err)
 		}
@@ -182,12 +190,73 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 			}
 		}
 		view.FilterJson = normalizedFilterJSON
+		view.RecordViewMode = pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED
+	} else if primary.GetDataKind() == pb.DataKind_DATA_KIND_RECORD {
+		if err := validateRecordViewDefinition(view, len(datasetIDs)); err != nil {
+			return err
+		}
 	}
 	view.PrimaryDatasetId = primaryDatasetID
 	view.DatasetIds = datasetIDs
-	view.GrainKeys = defaultViewGrainKeys(primary.GetDataKind())
-	view.Engine = defaultViewEngine(primary.GetDataKind())
+	if primary.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES {
+		view.GrainKeys = defaultViewGrainKeys(primary.GetDataKind())
+		view.Engine = defaultViewEngine(primary.GetDataKind())
+	}
 	return nil
+}
+
+func validateRecordViewDefinition(view *pb.View, datasetCount int) error {
+	mode := view.GetRecordViewMode()
+	if mode == pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		mode = pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT
+		view.RecordViewMode = mode
+	}
+	if strings.TrimSpace(view.GetEngine()) != "" && strings.ToLower(strings.TrimSpace(view.GetEngine())) != "bleve" {
+		return errors.New("Record View engine must be bleve")
+	}
+	view.Engine = "bleve"
+	if filter := strings.TrimSpace(view.GetFilterJson()); filter != "" && filter != "{}" {
+		return errors.New("Record View filter_json is not supported")
+	}
+	switch mode {
+	case pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT:
+		if datasetCount < 1 {
+			return errors.New("CURRENT Record View requires a dataset")
+		}
+		view.GrainKeys = []string{"record_id"}
+		if strings.TrimSpace(view.GetRetentionWindow()) != "" {
+			return errors.New("CURRENT Record View does not support retention_window")
+		}
+	case pb.RecordViewMode_RECORD_VIEW_MODE_HISTORY:
+		if datasetCount != 1 {
+			return errors.New("HISTORY Record View requires exactly one dataset")
+		}
+		if !validRetentionWindow(view.GetRetentionWindow()) {
+			return errors.New("HISTORY Record View retention_window must be positive")
+		}
+		view.GrainKeys = []string{"record_id", "revision"}
+	default:
+		return errors.New("invalid Record View mode")
+	}
+	return nil
+}
+
+func validRetentionWindow(raw string) bool {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if len(raw) < 2 {
+		return false
+	}
+	unit := raw[len(raw)-1]
+	value, err := strconv.ParseInt(raw[:len(raw)-1], 10, 64)
+	if err != nil || value <= 0 {
+		return false
+	}
+	switch unit {
+	case 's', 'm', 'h', 'd', 'w':
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeTimeSeriesViewFilterJSON(raw string) (string, string, error) {

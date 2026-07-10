@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '2')
+VALUES ('schema_version', '3')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS t_views (
     c_grain_keys_json TEXT NOT NULL DEFAULT '[]',
     c_filter_json TEXT NOT NULL DEFAULT '{}',
     c_engine TEXT NOT NULL DEFAULT 'duckdb',
+    c_record_view_mode INTEGER NOT NULL DEFAULT 0,
     c_retention_window TEXT NOT NULL DEFAULT '',
     c_active_index_id TEXT NOT NULL DEFAULT '',
     c_view_version INTEGER NOT NULL DEFAULT 1,

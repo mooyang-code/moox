@@ -90,7 +90,7 @@ func (s *Store) InitSchema(ctx context.Context) error {
 	return err
 }
 
-const metadataSchemaVersion = "2"
+const metadataSchemaVersion = "3"
 
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	var schemaTableCount int
