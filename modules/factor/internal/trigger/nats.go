@@ -43,7 +43,7 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 	}
 	clientCfg := jetstream.ConfigFromEnv(urls, "moox-factor")
 	if c.cfg.CredentialFile != "" {
-		if err := clientCfg.ApplyCredentialFile(c.cfg.CredentialFile); err != nil {
+		if err := clientCfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(c.cfg.CredentialFile)); err != nil {
 			return err
 		}
 	}

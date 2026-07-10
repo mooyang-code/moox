@@ -24,7 +24,7 @@ func Connect(ctx context.Context, cfg config.JetStreamConfig) (*Runtime, error) 
 	}
 	clientCfg := jetstream.ConfigFromEnv(urls, "moox-cloudnode")
 	if cfg.CredentialFile != "" {
-		if err := clientCfg.ApplyCredentialFile(cfg.CredentialFile); err != nil {
+		if err := clientCfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.CredentialFile)); err != nil {
 			return nil, err
 		}
 	}

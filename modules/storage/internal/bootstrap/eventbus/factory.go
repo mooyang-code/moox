@@ -22,7 +22,7 @@ func NewRowsUpdatedBus(ctx context.Context, cfg storageconfig.StorageEventBus) (
 		}
 		clientCfg := jetstream.ConfigFromEnv(urls, "moox-storage")
 		if cfg.CredentialFile != "" {
-			if err := clientCfg.ApplyCredentialFile(cfg.CredentialFile); err != nil {
+			if err := clientCfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.CredentialFile)); err != nil {
 				return nil, err
 			}
 		}

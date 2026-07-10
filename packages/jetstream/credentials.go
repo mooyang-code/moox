@@ -2,9 +2,11 @@ package jetstream
 
 import (
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 type CredentialFile struct {
@@ -15,6 +17,18 @@ type CredentialFile struct {
 	EventBusToken        string `yaml:"eventbus_token"`
 	MonitorEventBusToken string `yaml:"monitor_eventbus_token"`
 	CAFile               string `yaml:"ca_file"`
+}
+
+// ExpandCredentialPath resolves environment variables and a leading ~/ so
+// role credential files can be configured consistently across deployments.
+func ExpandCredentialPath(path string) string {
+	path = os.ExpandEnv(path)
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
 }
 
 func LoadCredentialFile(path string) (CredentialFile, error) {
