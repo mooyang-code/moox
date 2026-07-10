@@ -130,6 +130,183 @@ message AlertEvent {
   string created_at = 10;
 }
 
+// Metrics catalog and history APIs. These APIs intentionally expose bounded
+// reads only; callers must provide a page or point limit.
+message MetricServiceInfo {
+  string service_name = 1;
+  string instance_id = 2;
+  string boot_id = 3;
+  string node_id = 4;
+  string version = 5;
+  string last_seen_at = 6;
+  bool stale = 7;
+}
+message MetricNameInfo {
+  string service_name = 1;
+  string metric_name = 2;
+  string metric_type = 3;
+  string help = 4;
+  uint32 series_count = 5;
+  string last_seen_at = 6;
+}
+message MetricSeriesInfo {
+  string series_id = 1;
+  string service_name = 2;
+  string instance_id = 3;
+  string metric_name = 4;
+  string metric_type = 5;
+  string labels_json = 6;
+  string last_seen_at = 7;
+  bool stale = 8;
+}
+enum MetricHistoryOrder {
+  METRIC_HISTORY_ORDER_UNSPECIFIED = 0;
+  METRIC_HISTORY_ORDER_ASC = 1;
+  METRIC_HISTORY_ORDER_DESC = 2;
+}
+message MetricLatestPoint {
+  string series_id = 1;
+  string service_name = 2;
+  string instance_id = 3;
+  string metric_name = 4;
+  string metric_type = 5;
+  string labels_json = 6;
+  double value = 7;
+  string observed_at = 8;
+  bool stale = 9;
+  string message_id = 10;
+}
+message MetricHistoryPoint {
+  string series_id = 1;
+  double value = 2;
+  string observed_at = 3;
+  string labels_json = 4;
+  string message_id = 5;
+}
+message ListMetricServicesReq { string space_id = 1; common.Page page = 2; }
+message ListMetricServicesRsp { common.RetInfo ret_info = 1; repeated MetricServiceInfo services = 2; common.PageResult page_result = 3; }
+message ListMetricNamesReq { string space_id = 1; string service_name = 2; common.Page page = 3; }
+message ListMetricNamesRsp { common.RetInfo ret_info = 1; repeated MetricNameInfo names = 2; common.PageResult page_result = 3; }
+message ListMetricSeriesReq { string space_id = 1; string service_name = 2; string metric_name = 3; string labels_json = 4; common.Page page = 5; }
+message ListMetricSeriesRsp { common.RetInfo ret_info = 1; repeated MetricSeriesInfo series = 2; common.PageResult page_result = 3; }
+message GetMetricLatestReq { string space_id = 1; string series_id = 2; }
+message GetMetricLatestRsp { common.RetInfo ret_info = 1; MetricLatestPoint latest = 2; }
+message QueryMetricHistoryReq {
+  string space_id = 1;
+  string series_id = 2;
+  string service_name = 3;
+  string metric_name = 4;
+  string start_at = 5;
+  string end_at = 6;
+  MetricHistoryOrder order = 7;
+  uint32 limit = 8;
+  string labels_json = 9;
+}
+message QueryMetricHistoryRsp { common.RetInfo ret_info = 1; repeated MetricHistoryPoint points = 2; }
+
+enum LogicalOperator {
+  LOGICAL_OPERATOR_UNSPECIFIED = 0;
+  LOGICAL_OPERATOR_AND = 1;
+  LOGICAL_OPERATOR_OR = 2;
+}
+enum CompareOperator {
+  COMPARE_OPERATOR_UNSPECIFIED = 0;
+  COMPARE_OPERATOR_GT = 1;
+  COMPARE_OPERATOR_GTE = 2;
+  COMPARE_OPERATOR_LT = 3;
+  COMPARE_OPERATOR_LTE = 4;
+  COMPARE_OPERATOR_EQ = 5;
+  COMPARE_OPERATOR_NEQ = 6;
+}
+enum TimeReducer {
+  TIME_REDUCER_UNSPECIFIED = 0;
+  TIME_REDUCER_CURRENT = 1;
+  TIME_REDUCER_AVG = 2;
+  TIME_REDUCER_MIN = 3;
+  TIME_REDUCER_MAX = 4;
+  TIME_REDUCER_SUM = 5;
+  TIME_REDUCER_RATE = 6;
+  TIME_REDUCER_INCREASE = 7;
+}
+enum SeriesReducer {
+  SERIES_REDUCER_UNSPECIFIED = 0;
+  SERIES_REDUCER_AVG = 1;
+  SERIES_REDUCER_MIN = 2;
+  SERIES_REDUCER_MAX = 3;
+  SERIES_REDUCER_SUM = 4;
+}
+enum NoDataPolicy {
+  NO_DATA_POLICY_UNSPECIFIED = 0;
+  NO_DATA_POLICY_KEEP_STATE = 1;
+  NO_DATA_POLICY_OK = 2;
+  NO_DATA_POLICY_FIRING = 3;
+}
+message LabelMatcher { string name = 1; string value = 2; bool negate = 3; }
+message MetricSelector { string service_name = 1; string metric_name = 2; repeated LabelMatcher matchers = 3; }
+message MetricQuery { MetricSelector selector = 1; TimeReducer time_reducer = 2; uint32 window_seconds = 3; SeriesReducer series_reducer = 4; }
+message MetricCondition { string condition_id = 1; MetricQuery query = 2; CompareOperator compare = 3; double threshold = 4; NoDataPolicy no_data_policy = 5; }
+message MetricRule {
+  string space_id = 1;
+  string rule_id = 2;
+  string name = 3;
+  repeated MetricCondition conditions = 4;
+  LogicalOperator connector = 5;
+  uint32 consecutive_trigger_count = 6;
+  uint32 consecutive_recovery_count = 7;
+  uint32 evaluation_interval_seconds = 8;
+  repeated string webhook_ids = 9;
+  bool enabled = 10;
+  string description = 11;
+  string created_at = 12;
+  string updated_at = 13;
+}
+message MetricConditionEvaluation {
+  string condition_id = 1;
+  uint32 selected_series_count = 2;
+  double value = 3;
+  double threshold = 4;
+  bool has_data = 5;
+  bool result = 6;
+  string no_data_reason = 7;
+}
+message MetricRuleEvaluation {
+  string evaluation_id = 1;
+  string space_id = 2;
+  string rule_id = 3;
+  string evaluated_at = 4;
+  AlertStatus status = 5;
+  bool result = 6;
+  repeated MetricConditionEvaluation conditions = 7;
+  string result_json = 8;
+}
+message MetricRuleState {
+  string space_id = 1;
+  string rule_id = 2;
+  AlertStatus status = 3;
+  uint32 trigger_count = 4;
+  uint32 recovery_count = 5;
+  string owner_instance_id = 6;
+  string last_evaluated_at = 7;
+  string last_triggered_at = 8;
+  string last_recovered_at = 9;
+}
+message ListMetricRulesReq { string space_id = 1; bool enabled_only = 2; common.Page page = 3; }
+message ListMetricRulesRsp { common.RetInfo ret_info = 1; repeated MetricRule rules = 2; common.PageResult page_result = 3; }
+message GetMetricRuleReq { string space_id = 1; string rule_id = 2; }
+message GetMetricRuleRsp { common.RetInfo ret_info = 1; MetricRule rule = 2; }
+message CreateMetricRuleReq { MetricRule rule = 1; }
+message CreateMetricRuleRsp { common.RetInfo ret_info = 1; MetricRule rule = 2; }
+message UpdateMetricRuleReq { MetricRule rule = 1; }
+message UpdateMetricRuleRsp { common.RetInfo ret_info = 1; MetricRule rule = 2; }
+message DeleteMetricRuleReq { string space_id = 1; string rule_id = 2; }
+message DeleteMetricRuleRsp { common.RetInfo ret_info = 1; }
+message PreviewMetricRuleReq { MetricRule rule = 1; uint32 limit = 2; }
+message PreviewMetricRuleRsp { common.RetInfo ret_info = 1; MetricRuleEvaluation evaluation = 2; }
+message ListMetricRuleEvaluationsReq { string space_id = 1; string rule_id = 2; common.Page page = 3; }
+message ListMetricRuleEvaluationsRsp { common.RetInfo ret_info = 1; repeated MetricRuleEvaluation evaluations = 2; common.PageResult page_result = 3; }
+message GetMetricRuleStateReq { string space_id = 1; string rule_id = 2; }
+message GetMetricRuleStateRsp { common.RetInfo ret_info = 1; MetricRuleState state = 2; }
+
 message MonitorInstance {
   string instance_id = 1;
   string base_url = 2;
@@ -232,4 +409,17 @@ service MonitorMgr {
   rpc ListAlertEvents(ListAlertEventsReq) returns (ListAlertEventsRsp);
   rpc ListMonitorInstances(ListMonitorInstancesReq) returns (ListMonitorInstancesRsp);
   rpc SyncSystemChecks(SyncSystemChecksReq) returns (SyncSystemChecksRsp);
+  rpc ListMetricServices(ListMetricServicesReq) returns (ListMetricServicesRsp);
+  rpc ListMetricNames(ListMetricNamesReq) returns (ListMetricNamesRsp);
+  rpc ListMetricSeries(ListMetricSeriesReq) returns (ListMetricSeriesRsp);
+  rpc GetMetricLatest(GetMetricLatestReq) returns (GetMetricLatestRsp);
+  rpc QueryMetricHistory(QueryMetricHistoryReq) returns (QueryMetricHistoryRsp);
+  rpc ListMetricRules(ListMetricRulesReq) returns (ListMetricRulesRsp);
+  rpc GetMetricRule(GetMetricRuleReq) returns (GetMetricRuleRsp);
+  rpc CreateMetricRule(CreateMetricRuleReq) returns (CreateMetricRuleRsp);
+  rpc UpdateMetricRule(UpdateMetricRuleReq) returns (UpdateMetricRuleRsp);
+  rpc DeleteMetricRule(DeleteMetricRuleReq) returns (DeleteMetricRuleRsp);
+  rpc PreviewMetricRule(PreviewMetricRuleReq) returns (PreviewMetricRuleRsp);
+  rpc ListMetricRuleEvaluations(ListMetricRuleEvaluationsReq) returns (ListMetricRuleEvaluationsRsp);
+  rpc GetMetricRuleState(GetMetricRuleStateReq) returns (GetMetricRuleStateRsp);
 }

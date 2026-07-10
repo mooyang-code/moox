@@ -25,9 +25,10 @@ import (
 )
 
 var (
-	monitorStartedAt = time.Now()
-	defaultManager   *monstorage.Manager
-	defaultScheduler *scheduler.Scheduler
+	monitorStartedAt       = time.Now()
+	defaultManager         *monstorage.Manager
+	defaultScheduler       *scheduler.Scheduler
+	defaultMetricScheduler *monmetrics.RuleScheduler
 )
 
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
@@ -50,17 +51,39 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	defaultManager = mgr
 	var metricsStorage *monmetrics.StorageAdapter
+	var metricsQuery *monmetrics.QueryService
+	var metricRules *monmetrics.RuleRepository
+	var metricEvaluator *monmetrics.MetricEvaluator
 	if cfg.Metrics.Enabled {
 		metricsStorage = monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
+		metricsRepo := monmetrics.NewRepository(mgr.DB())
+		metricsQuery = monmetrics.NewQueryService(metricsRepo, metricsStorage)
+		metricRules = monmetrics.NewRuleRepository(mgr.DB())
+		metricEvaluator = monmetrics.NewMetricEvaluator(monmetrics.EvaluatorOptions{
+			Repository: metricRules,
+			Catalog:    metricsQuery.Catalog(),
+			Storage:    metricsStorage,
+			InstanceID: cfg.Instance.InstanceID,
+			Webhook: func(ctx context.Context, spaceID, id string) (*domain.WebhookChannel, error) {
+				return repository.NewAlertRepository(mgr.DB()).GetWebhook(ctx, spaceID, id)
+			},
+			Notifier: monmetrics.WebhookMetricNotifier{},
+		})
 	}
 	startHealthServer(ctx, cfg, mgr, metricsStorage)
 	resultHook := monitorResultHook(cfg, mgr)
 	syncSystem := monitorSyncFunc(ctx, cfg, mgr)
-	registerMonitorService(s, cfg, mgr, resultHook, syncSystem)
+	registerMonitorService(s, cfg, mgr, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
 	startScheduler(ctx, cfg, mgr, resultHook)
 	startRetentionCleaner(ctx, cfg, mgr)
 	startPeerPuller(ctx, cfg, mgr)
 	startMetricsConsumer(ctx, cfg, mgr, metricsStorage)
+	if metricEvaluator != nil {
+		defaultMetricScheduler = monmetrics.NewRuleScheduler(monmetrics.SchedulerOptions{Evaluator: metricEvaluator, Rules: metricRules, InstanceID: cfg.Instance.InstanceID, ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second, ActiveInstances: func(ctx context.Context) ([]string, error) {
+			return activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, repository.NewPeerRepository(mgr.DB()), 3*time.Duration(cfg.Peer.TimeoutSeconds)*time.Second), nil
+		}})
+		defaultMetricScheduler.Start(ctx)
+	}
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
@@ -146,16 +169,19 @@ func startHealthServer(ctx context.Context, cfg *config.Config, mgr *monstorage.
 	}
 }
 
-func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorage.Manager, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error)) {
+func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorage.Manager, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.RuleRepository, metricEvaluator *monmetrics.MetricEvaluator) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
 		return
 	}
 	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(mgr.DB(), monitorrpc.Options{
-		InstanceID: cfg.Instance.InstanceID,
-		OnResult:   hook,
-		SyncSystem: syncSystem,
+		InstanceID:      cfg.Instance.InstanceID,
+		OnResult:        hook,
+		SyncSystem:      syncSystem,
+		MetricsQuery:    metricsQuery,
+		MetricRules:     metricRules,
+		MetricEvaluator: metricEvaluator,
 	}))
 }
 

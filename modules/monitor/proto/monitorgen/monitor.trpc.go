@@ -56,6 +56,32 @@ type MonitorMgrService interface {
 	ListMonitorInstances(ctx context.Context, req *ListMonitorInstancesReq) (*ListMonitorInstancesRsp, error)
 
 	SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq) (*SyncSystemChecksRsp, error)
+
+	ListMetricServices(ctx context.Context, req *ListMetricServicesReq) (*ListMetricServicesRsp, error)
+
+	ListMetricNames(ctx context.Context, req *ListMetricNamesReq) (*ListMetricNamesRsp, error)
+
+	ListMetricSeries(ctx context.Context, req *ListMetricSeriesReq) (*ListMetricSeriesRsp, error)
+
+	GetMetricLatest(ctx context.Context, req *GetMetricLatestReq) (*GetMetricLatestRsp, error)
+
+	QueryMetricHistory(ctx context.Context, req *QueryMetricHistoryReq) (*QueryMetricHistoryRsp, error)
+
+	ListMetricRules(ctx context.Context, req *ListMetricRulesReq) (*ListMetricRulesRsp, error)
+
+	GetMetricRule(ctx context.Context, req *GetMetricRuleReq) (*GetMetricRuleRsp, error)
+
+	CreateMetricRule(ctx context.Context, req *CreateMetricRuleReq) (*CreateMetricRuleRsp, error)
+
+	UpdateMetricRule(ctx context.Context, req *UpdateMetricRuleReq) (*UpdateMetricRuleRsp, error)
+
+	DeleteMetricRule(ctx context.Context, req *DeleteMetricRuleReq) (*DeleteMetricRuleRsp, error)
+
+	PreviewMetricRule(ctx context.Context, req *PreviewMetricRuleReq) (*PreviewMetricRuleRsp, error)
+
+	ListMetricRuleEvaluations(ctx context.Context, req *ListMetricRuleEvaluationsReq) (*ListMetricRuleEvaluationsRsp, error)
+
+	GetMetricRuleState(ctx context.Context, req *GetMetricRuleStateReq) (*GetMetricRuleStateRsp, error)
 }
 
 func MonitorMgrService_ListChecks_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -400,6 +426,240 @@ func MonitorMgrService_SyncSystemChecks_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
+func MonitorMgrService_ListMetricServices_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListMetricServicesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).ListMetricServices(ctx, reqbody.(*ListMetricServicesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_ListMetricNames_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListMetricNamesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).ListMetricNames(ctx, reqbody.(*ListMetricNamesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_ListMetricSeries_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListMetricSeriesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).ListMetricSeries(ctx, reqbody.(*ListMetricSeriesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_GetMetricLatest_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetMetricLatestReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).GetMetricLatest(ctx, reqbody.(*GetMetricLatestReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_QueryMetricHistory_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &QueryMetricHistoryReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).QueryMetricHistory(ctx, reqbody.(*QueryMetricHistoryReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_ListMetricRules_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListMetricRulesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).ListMetricRules(ctx, reqbody.(*ListMetricRulesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_GetMetricRule_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetMetricRuleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).GetMetricRule(ctx, reqbody.(*GetMetricRuleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_CreateMetricRule_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateMetricRuleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).CreateMetricRule(ctx, reqbody.(*CreateMetricRuleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_UpdateMetricRule_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateMetricRuleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).UpdateMetricRule(ctx, reqbody.(*UpdateMetricRuleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_DeleteMetricRule_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteMetricRuleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).DeleteMetricRule(ctx, reqbody.(*DeleteMetricRuleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_PreviewMetricRule_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PreviewMetricRuleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).PreviewMetricRule(ctx, reqbody.(*PreviewMetricRuleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_ListMetricRuleEvaluations_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListMetricRuleEvaluationsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).ListMetricRuleEvaluations(ctx, reqbody.(*ListMetricRuleEvaluationsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_GetMetricRuleState_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetMetricRuleStateReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).GetMetricRuleState(ctx, reqbody.(*GetMetricRuleStateReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // MonitorMgrServer_ServiceDesc descriptor for server.RegisterService.
 var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.monitor.MonitorMgr",
@@ -481,6 +741,58 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.monitor.MonitorMgr/SyncSystemChecks",
 			Func: MonitorMgrService_SyncSystemChecks_Handler,
 		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/ListMetricServices",
+			Func: MonitorMgrService_ListMetricServices_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/ListMetricNames",
+			Func: MonitorMgrService_ListMetricNames_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/ListMetricSeries",
+			Func: MonitorMgrService_ListMetricSeries_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/GetMetricLatest",
+			Func: MonitorMgrService_GetMetricLatest_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/QueryMetricHistory",
+			Func: MonitorMgrService_QueryMetricHistory_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/ListMetricRules",
+			Func: MonitorMgrService_ListMetricRules_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/GetMetricRule",
+			Func: MonitorMgrService_GetMetricRule_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/CreateMetricRule",
+			Func: MonitorMgrService_CreateMetricRule_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/UpdateMetricRule",
+			Func: MonitorMgrService_UpdateMetricRule_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/DeleteMetricRule",
+			Func: MonitorMgrService_DeleteMetricRule_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/PreviewMetricRule",
+			Func: MonitorMgrService_PreviewMetricRule_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/ListMetricRuleEvaluations",
+			Func: MonitorMgrService_ListMetricRuleEvaluations_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/GetMetricRuleState",
+			Func: MonitorMgrService_GetMetricRuleState_Handler,
+		},
 	},
 }
 
@@ -552,6 +864,45 @@ func (s *UnimplementedMonitorMgr) ListMonitorInstances(ctx context.Context, req 
 func (s *UnimplementedMonitorMgr) SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq) (*SyncSystemChecksRsp, error) {
 	return nil, errors.New("rpc SyncSystemChecks of service MonitorMgr is not implemented")
 }
+func (s *UnimplementedMonitorMgr) ListMetricServices(ctx context.Context, req *ListMetricServicesReq) (*ListMetricServicesRsp, error) {
+	return nil, errors.New("rpc ListMetricServices of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) ListMetricNames(ctx context.Context, req *ListMetricNamesReq) (*ListMetricNamesRsp, error) {
+	return nil, errors.New("rpc ListMetricNames of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) ListMetricSeries(ctx context.Context, req *ListMetricSeriesReq) (*ListMetricSeriesRsp, error) {
+	return nil, errors.New("rpc ListMetricSeries of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) GetMetricLatest(ctx context.Context, req *GetMetricLatestReq) (*GetMetricLatestRsp, error) {
+	return nil, errors.New("rpc GetMetricLatest of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) QueryMetricHistory(ctx context.Context, req *QueryMetricHistoryReq) (*QueryMetricHistoryRsp, error) {
+	return nil, errors.New("rpc QueryMetricHistory of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) ListMetricRules(ctx context.Context, req *ListMetricRulesReq) (*ListMetricRulesRsp, error) {
+	return nil, errors.New("rpc ListMetricRules of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) GetMetricRule(ctx context.Context, req *GetMetricRuleReq) (*GetMetricRuleRsp, error) {
+	return nil, errors.New("rpc GetMetricRule of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) CreateMetricRule(ctx context.Context, req *CreateMetricRuleReq) (*CreateMetricRuleRsp, error) {
+	return nil, errors.New("rpc CreateMetricRule of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) UpdateMetricRule(ctx context.Context, req *UpdateMetricRuleReq) (*UpdateMetricRuleRsp, error) {
+	return nil, errors.New("rpc UpdateMetricRule of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) DeleteMetricRule(ctx context.Context, req *DeleteMetricRuleReq) (*DeleteMetricRuleRsp, error) {
+	return nil, errors.New("rpc DeleteMetricRule of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) PreviewMetricRule(ctx context.Context, req *PreviewMetricRuleReq) (*PreviewMetricRuleRsp, error) {
+	return nil, errors.New("rpc PreviewMetricRule of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) ListMetricRuleEvaluations(ctx context.Context, req *ListMetricRuleEvaluationsReq) (*ListMetricRuleEvaluationsRsp, error) {
+	return nil, errors.New("rpc ListMetricRuleEvaluations of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) GetMetricRuleState(ctx context.Context, req *GetMetricRuleStateReq) (*GetMetricRuleStateRsp, error) {
+	return nil, errors.New("rpc GetMetricRuleState of service MonitorMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -598,6 +949,32 @@ type MonitorMgrClientProxy interface {
 	ListMonitorInstances(ctx context.Context, req *ListMonitorInstancesReq, opts ...client.Option) (rsp *ListMonitorInstancesRsp, err error)
 
 	SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq, opts ...client.Option) (rsp *SyncSystemChecksRsp, err error)
+
+	ListMetricServices(ctx context.Context, req *ListMetricServicesReq, opts ...client.Option) (rsp *ListMetricServicesRsp, err error)
+
+	ListMetricNames(ctx context.Context, req *ListMetricNamesReq, opts ...client.Option) (rsp *ListMetricNamesRsp, err error)
+
+	ListMetricSeries(ctx context.Context, req *ListMetricSeriesReq, opts ...client.Option) (rsp *ListMetricSeriesRsp, err error)
+
+	GetMetricLatest(ctx context.Context, req *GetMetricLatestReq, opts ...client.Option) (rsp *GetMetricLatestRsp, err error)
+
+	QueryMetricHistory(ctx context.Context, req *QueryMetricHistoryReq, opts ...client.Option) (rsp *QueryMetricHistoryRsp, err error)
+
+	ListMetricRules(ctx context.Context, req *ListMetricRulesReq, opts ...client.Option) (rsp *ListMetricRulesRsp, err error)
+
+	GetMetricRule(ctx context.Context, req *GetMetricRuleReq, opts ...client.Option) (rsp *GetMetricRuleRsp, err error)
+
+	CreateMetricRule(ctx context.Context, req *CreateMetricRuleReq, opts ...client.Option) (rsp *CreateMetricRuleRsp, err error)
+
+	UpdateMetricRule(ctx context.Context, req *UpdateMetricRuleReq, opts ...client.Option) (rsp *UpdateMetricRuleRsp, err error)
+
+	DeleteMetricRule(ctx context.Context, req *DeleteMetricRuleReq, opts ...client.Option) (rsp *DeleteMetricRuleRsp, err error)
+
+	PreviewMetricRule(ctx context.Context, req *PreviewMetricRuleReq, opts ...client.Option) (rsp *PreviewMetricRuleRsp, err error)
+
+	ListMetricRuleEvaluations(ctx context.Context, req *ListMetricRuleEvaluationsReq, opts ...client.Option) (rsp *ListMetricRuleEvaluationsRsp, err error)
+
+	GetMetricRuleState(ctx context.Context, req *GetMetricRuleStateReq, opts ...client.Option) (rsp *GetMetricRuleStateRsp, err error)
 }
 
 type MonitorMgrClientProxyImpl struct {
@@ -983,6 +1360,266 @@ func (c *MonitorMgrClientProxyImpl) SyncSystemChecks(ctx context.Context, req *S
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SyncSystemChecksRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) ListMetricServices(ctx context.Context, req *ListMetricServicesReq, opts ...client.Option) (*ListMetricServicesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/ListMetricServices")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("ListMetricServices")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListMetricServicesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) ListMetricNames(ctx context.Context, req *ListMetricNamesReq, opts ...client.Option) (*ListMetricNamesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/ListMetricNames")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("ListMetricNames")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListMetricNamesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) ListMetricSeries(ctx context.Context, req *ListMetricSeriesReq, opts ...client.Option) (*ListMetricSeriesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/ListMetricSeries")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("ListMetricSeries")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListMetricSeriesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) GetMetricLatest(ctx context.Context, req *GetMetricLatestReq, opts ...client.Option) (*GetMetricLatestRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetMetricLatest")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("GetMetricLatest")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetMetricLatestRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) QueryMetricHistory(ctx context.Context, req *QueryMetricHistoryReq, opts ...client.Option) (*QueryMetricHistoryRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/QueryMetricHistory")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("QueryMetricHistory")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &QueryMetricHistoryRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) ListMetricRules(ctx context.Context, req *ListMetricRulesReq, opts ...client.Option) (*ListMetricRulesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/ListMetricRules")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("ListMetricRules")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListMetricRulesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) GetMetricRule(ctx context.Context, req *GetMetricRuleReq, opts ...client.Option) (*GetMetricRuleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetMetricRule")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("GetMetricRule")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetMetricRuleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) CreateMetricRule(ctx context.Context, req *CreateMetricRuleReq, opts ...client.Option) (*CreateMetricRuleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/CreateMetricRule")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("CreateMetricRule")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CreateMetricRuleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) UpdateMetricRule(ctx context.Context, req *UpdateMetricRuleReq, opts ...client.Option) (*UpdateMetricRuleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/UpdateMetricRule")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("UpdateMetricRule")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpdateMetricRuleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) DeleteMetricRule(ctx context.Context, req *DeleteMetricRuleReq, opts ...client.Option) (*DeleteMetricRuleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/DeleteMetricRule")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("DeleteMetricRule")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteMetricRuleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) PreviewMetricRule(ctx context.Context, req *PreviewMetricRuleReq, opts ...client.Option) (*PreviewMetricRuleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/PreviewMetricRule")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("PreviewMetricRule")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PreviewMetricRuleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) ListMetricRuleEvaluations(ctx context.Context, req *ListMetricRuleEvaluationsReq, opts ...client.Option) (*ListMetricRuleEvaluationsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/ListMetricRuleEvaluations")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("ListMetricRuleEvaluations")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListMetricRuleEvaluationsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) GetMetricRuleState(ctx context.Context, req *GetMetricRuleStateReq, opts ...client.Option) (*GetMetricRuleStateRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetMetricRuleState")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("GetMetricRuleState")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetMetricRuleStateRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

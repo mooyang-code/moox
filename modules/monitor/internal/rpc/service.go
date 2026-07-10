@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -22,6 +23,9 @@ type Options struct {
 	Runner     probe.Runner
 	OnResult   func(context.Context, domain.Check, domain.CheckResult)
 	SyncSystem func(context.Context) (int, error)
+	MetricsQuery *monmetrics.QueryService
+	MetricRules *monmetrics.RuleRepository
+	MetricEvaluator *monmetrics.MetricEvaluator
 }
 
 type Service struct {
@@ -33,6 +37,9 @@ type Service struct {
 	runner     probe.Runner
 	onResult   func(context.Context, domain.Check, domain.CheckResult)
 	syncSystem func(context.Context) (int, error)
+	metricsQuery *monmetrics.QueryService
+	metricRules *monmetrics.RuleRepository
+	metricEvaluator *monmetrics.MetricEvaluator
 	instance   string
 }
 
@@ -54,6 +61,9 @@ func New(db *gorm.DB, opts Options) *Service {
 		runner:     runner,
 		onResult:   opts.OnResult,
 		syncSystem: opts.SyncSystem,
+		metricsQuery: opts.MetricsQuery,
+		metricRules: opts.MetricRules,
+		metricEvaluator: opts.MetricEvaluator,
 		instance:   instance,
 	}
 }
