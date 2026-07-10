@@ -6,10 +6,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/metricspublish"
 	monitorpeer "github.com/mooyang-code/moox/modules/monitor/internal/peer"
 	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
@@ -82,6 +84,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	resultHook := monitorResultHook(cfg, mgr)
 	syncSystem := monitorSyncFunc(ctx, cfg, mgr)
 	registerMonitorService(s, cfg, mgr, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
+	registerMetricsReporter(s)
 	startScheduler(ctx, cfg, mgr, resultHook)
 	startRetentionCleaner(ctx, cfg, mgr)
 	startPeerPuller(ctx, cfg, mgr)
@@ -95,6 +98,25 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
+}
+
+func registerMetricsReporter(s *server.Server) {
+	if s == nil {
+		return
+	}
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-monitor"))
+	if err != nil {
+		log.WarnContextf(context.Background(), "monitor metrics reporter disabled: %v", err)
+		return
+	}
+	service := s.Service("trpc.moox.monitor.metrics.timer")
+	if service == nil {
+		log.Warn("monitor metrics timer service is not configured, skip register")
+		return
+	}
+	// Deliberately no scheduler/startAtOnce: an unavailable EventBus must not
+	// block monitor startup, and every replica owns this local timer.
+	timer.RegisterHandlerService(service, h.Handle)
 }
 
 func maxInt(a, b int) int {

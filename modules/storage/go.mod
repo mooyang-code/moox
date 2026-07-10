@@ -9,6 +9,7 @@ replace (
 	github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 	github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 	github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
+	github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 )
 
 require (
@@ -23,8 +24,12 @@ require (
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/snapshotcache v0.1.1
 	github.com/parquet-go/parquet-go v0.25.1
+	github.com/prometheus/client_golang v1.20.4
+	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/common v0.67.5
 	github.com/rs/xid v1.6.0
 	golang.org/x/sys v0.39.0
 	google.golang.org/protobuf v1.36.11
@@ -32,6 +37,7 @@ require (
 	modernc.org/sqlite v1.45.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.3
+	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
 )
 
 require (
@@ -104,9 +110,6 @@ require (
 	github.com/panjf2000/ants/v2 v2.4.6 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/prometheus/client_golang v1.20.4 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/robfig/cron v1.2.0 // indirect

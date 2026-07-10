@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
+	"github.com/mooyang-code/moox/modules/collector/internal/metricspublish"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/healthz"
@@ -48,9 +49,19 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	collectsvc.SetDefaultService(svc)
 	registerCollectorSchedule(s)
+	registerMetricsReporter(s)
 
 	log.InfoContextf(ctx, "moox-collector 初始化完成")
 	return s, nil
+}
+
+func registerMetricsReporter(s *server.Server) {
+	if s == nil { return }
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-collector"))
+	if err != nil { log.Warnf("collector metrics reporter disabled: %v", err); return }
+	service := s.Service("trpc.moox.collector.metrics.timer")
+	if service == nil { log.Warn("collector metrics timer service is not configured, skip register"); return }
+	timer.RegisterHandlerService(service, h.Handle)
 }
 
 func startHealthServer(ctx context.Context, cfg *Config) {

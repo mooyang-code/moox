@@ -6,6 +6,7 @@ server:
   filter:
     - validation
     - cors
+    - prometheus
   timeout: 5000
   admin:
     ip: 127.0.0.1
@@ -73,8 +74,18 @@ server:
       network: "0 0 0 * * *?scheduler=monitorCleanupSchedule&disable=1&params="
       protocol: timer
       timeout: 60000
+    - name: trpc.moox.admin.metrics.timer
+      port: 11305
+      network: "*/30 * * * * *?params="
+      protocol: timer
+      timeout: 10000
 
 plugins:
+  prometheus:
+    ip: 127.0.0.1
+    port: 12900
+    path: /metrics
+    enablepush: false
   auth:
     cors:
       apply_to_all_path:

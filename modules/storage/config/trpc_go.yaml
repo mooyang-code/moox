@@ -6,6 +6,7 @@ server:
   filter:
     - validation
     - cors
+    - prometheus
   timeout: 5000
   admin:
     ip: 127.0.0.1
@@ -55,6 +56,11 @@ server:
       network: "0 0 * * * *?disable=1&scheduler=archiveSchedule&params=space_id=crypto;dataset_id=*"
       protocol: timer
       timeout: 60000
+    - name: trpc.moox.storage.access.metrics.timer
+      port: 20303
+      network: "*/30 * * * * *?params="
+      protocol: timer
+      timeout: 10000
 
     - name: trpc.moox.storage.Access.http
       #ip: 0.0.0.0
@@ -109,6 +115,11 @@ client:
       timeout: 30000
 
 plugins:
+  prometheus:
+    ip: 127.0.0.1
+    port: 12960
+    path: /metrics
+    enablepush: false
   auth:
     cors:
       apply_to_all_path:

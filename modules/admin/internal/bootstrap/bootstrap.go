@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
+	"github.com/mooyang-code/moox/modules/admin/internal/metricspublish"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/monitor"
 
@@ -49,7 +50,17 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	// 监控历史数据清理定时器（每天0点清理7天前数据）
 	timer.RegisterScheduler("monitorCleanupSchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service("trpc.monitor.cleanup.timer"), monitor.HandleMonitorCleanupSchedule)
+	registerMetricsReporter(s)
 
 	log.InfoContextf(ctx, "应用初始化完成")
 	return s, nil
+}
+
+func registerMetricsReporter(s *server.Server) {
+	if s == nil { return }
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-admin"))
+	if err != nil { log.Warnf("admin metrics reporter disabled: %v", err); return }
+	service := s.Service("trpc.moox.admin.metrics.timer")
+	if service == nil { log.Warn("admin metrics timer service is not configured, skip register"); return }
+	timer.RegisterHandlerService(service, h.Handle)
 }

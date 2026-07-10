@@ -7,6 +7,7 @@ server:
     - validation
     - cors
     - spacectx
+    - prometheus
   timeout: 10000
   admin:
     ip: 127.0.0.1
@@ -83,12 +84,22 @@ server:
       network: "0 */5 * * * *?scheduler=tradeSyncSchedule&startAtOnce=1&params=space_id=crypto;sections=balances,positions,orders,trades;window_hours=24;page_size=500;max_symbols=10"
       protocol: timer
       timeout: 60000
+    - name: trpc.moox.trade.metrics.timer
+      port: 11210
+      network: "*/30 * * * * *?params="
+      protocol: timer
+      timeout: 10000
 
 client:
   filter:
     - validation
 
 plugins:
+  prometheus:
+    ip: 127.0.0.1
+    port: 12920
+    path: /metrics
+    enablepush: false
   auth:
     cors:
       apply_to_all_path:

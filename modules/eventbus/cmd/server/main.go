@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/bootstrap"
+	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )

@@ -6,6 +6,7 @@ server:
   filter:
     - validation
     - cors
+    - prometheus
   timeout: 5000
   admin:
     ip: 127.0.0.1
@@ -18,6 +19,11 @@ server:
       network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params=op=maintain"
       protocol: timer
       timeout: 900000
+    - name: trpc.moox.storage.view_builder.metrics.timer
+      port: 20305
+      network: "*/30 * * * * *?params="
+      protocol: timer
+      timeout: 10000
 
 client:
   filter:
@@ -45,6 +51,11 @@ client:
       timeout: 30000
 
 plugins:
+  prometheus:
+    ip: 127.0.0.1
+    port: 12962
+    path: /metrics
+    enablepush: false
   auth:
     cors:
       apply_to_all_path:

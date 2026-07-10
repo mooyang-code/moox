@@ -5,6 +5,7 @@ global:
 server:
   filter:
     - validation
+    - prometheus
   timeout: 5000
   admin:
     ip: 127.0.0.1
@@ -22,8 +23,18 @@ server:
       network: "0 */10 * * * *?scheduler=factorReconcileSchedule&disable=1&params="
       protocol: timer
       timeout: 60000
+    - name: trpc.moox.factor.metrics.timer
+      port: 11414
+      network: "*/30 * * * * *?params="
+      protocol: timer
+      timeout: 10000
 
 plugins:
+  prometheus:
+    ip: 127.0.0.1
+    port: 12944
+    path: /metrics
+    enablepush: false
   auth:
     validation:
       enable_error_log: true

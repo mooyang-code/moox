@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
+	"github.com/mooyang-code/moox/modules/trade/internal/metricspublish"
 	_ "github.com/mooyang-code/moox/modules/trade/internal/exchange/all" // 注册 binance/okx 适配器
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
@@ -59,10 +60,20 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	rpc.RegisterAll(s, svc)
 	rpc.SetDefaultSyncService(svc)
 	registerTradeSyncSchedule(s)
+	registerMetricsReporter(s)
 	startHealthServer(ctx, appCfg)
 
 	log.InfoContextf(ctx, "moox-trade 初始化完成，已注册 9 个 RPC service 和定时同步 service")
 	return s, nil
+}
+
+func registerMetricsReporter(s *server.Server) {
+	if s == nil { return }
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-trade"))
+	if err != nil { log.Warnf("trade metrics reporter disabled: %v", err); return }
+	service := s.Service("trpc.moox.trade.metrics.timer")
+	if service == nil { log.Warn("trade metrics timer service is not configured, skip register"); return }
+	timer.RegisterHandlerService(service, h.Handle)
 }
 
 func startHealthServer(ctx context.Context, cfg *config.AppConfig) {

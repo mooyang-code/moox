@@ -3,6 +3,8 @@ global:
   env_name: dev
 
 server:
+  filter:
+    - prometheus
   timeout: 5000
   admin:
     ip: 127.0.0.1
@@ -15,7 +17,17 @@ server:
       network: tcp
       protocol: http
       timeout: 30000
+    - name: trpc.moox.eventbus.metrics.timer
+      port: 11421
+      network: "*/30 * * * * *?params="
+      protocol: timer
+      timeout: 10000
 plugins:
+  prometheus:
+    ip: 127.0.0.1
+    port: 12970
+    path: /metrics
+    enablepush: false
   log:
     default:
       - writer: console

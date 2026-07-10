@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
+	"github.com/mooyang-code/moox/modules/factor/internal/metricspublish"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
 	"github.com/mooyang-code/moox/modules/factor/internal/repository"
 	factorsvc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
@@ -108,6 +109,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		})
 	}
 	registerReconcileSchedule(s, sched)
+	registerMetricsReporter(s)
 
 	service := s.Service("trpc.moox.factor.FactorMgr")
 	if service == nil {
@@ -125,6 +127,15 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-factor 初始化完成")
 	return s, nil
+}
+
+func registerMetricsReporter(s *server.Server) {
+	if s == nil { return }
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-factor"))
+	if err != nil { log.Warnf("factor metrics reporter disabled: %v", err); return }
+	service := s.Service("trpc.moox.factor.metrics.timer")
+	if service == nil { log.Warn("factor metrics timer service is not configured, skip register"); return }
+	timer.RegisterHandlerService(service, h.Handle)
 }
 
 func startHealthServer(ctx context.Context, cfg *Config) {

@@ -21,6 +21,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	deviceduckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/services/access"
+	"github.com/mooyang-code/moox/modules/storage/internal/metricspublish"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/archive"
 	primarysvc "github.com/mooyang-code/moox/modules/storage/internal/services/primary"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
@@ -30,6 +31,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/healthz"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
+	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -158,12 +160,32 @@ func main() {
 		pb.RegisterPrimaryStoreService(s, primaryService)
 	}
 	startStorageHealthServer(trpc.BackgroundContext(), cfg.Storage)
+	registerStorageMetricsReporter(s, cfg.Storage)
 	// 启动trpc服务器
 	log.Infof("Storage roles %v serving", cfg.Storage.Roles)
 	if err := s.Serve(); err != nil {
 		log.Errorf("trpc服务器出错: %v", err)
 	}
 	log.Warnf("Storage roles %v stopped", cfg.Storage.Roles)
+}
+
+func registerStorageMetricsReporter(s *server.Server, storage storageconfig.StorageConfig) {
+	if s == nil { return }
+	serviceName := "moox-storage-access"
+	timerName := "trpc.moox.storage.access.metrics.timer"
+	switch {
+	case storage.HasRole("view_index") && !storage.HasRole("access"):
+		serviceName, timerName = "moox-storage-view-index", "trpc.moox.storage.view_index.metrics.timer"
+	case storage.HasRole("view_builder") && !storage.HasRole("access"):
+		serviceName, timerName = "moox-storage-view-builder", "trpc.moox.storage.view_builder.metrics.timer"
+	case storage.HasRole("view_query") && !storage.HasRole("access"):
+		serviceName, timerName = "moox-storage-view-query", "trpc.moox.storage.view_query.metrics.timer"
+	}
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig(serviceName))
+	if err != nil { log.Warnf("storage metrics reporter disabled: %v", err); return }
+	service := s.Service(timerName)
+	if service == nil { log.Warnf("storage metrics timer service %s is not configured, skip register", timerName); return }
+	timer.RegisterHandlerService(service, h.Handle)
 }
 
 func registerAccessScanService(s *server.Server, service pb.AccessScanService) {

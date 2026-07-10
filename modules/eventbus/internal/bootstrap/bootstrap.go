@@ -5,10 +5,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/broker"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/health"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/management"
+	"github.com/mooyang-code/moox/modules/eventbus/internal/metricspublish"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
 	eventbusgen "github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen"
 	"github.com/nats-io/nats.go"
@@ -84,6 +86,7 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 			log.Warn("EventBusMgr service is not configured, skip register")
 		}
 	}
+	registerMetricsReporter(s)
 	// 6. health/metrics; ready is set only after every previous stage succeeds.
 	hs := health.New(cfg.Health.Addr, b, reg, nc)
 	hs.SetReady(true)
@@ -95,6 +98,15 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 	rt := &Runtime{Config: cfg, Broker: b, Conn: nc, Registry: reg, Health: hs}
 	go func() { <-ctx.Done(); _ = rt.Shutdown(context.Background()) }()
 	return rt, nil
+}
+
+func registerMetricsReporter(s *server.Server) {
+	if s == nil { return }
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-eventbus"))
+	if err != nil { log.Warnf("eventbus metrics reporter disabled: %v", err); return }
+	service := s.Service("trpc.moox.eventbus.metrics.timer")
+	if service == nil { log.Warn("eventbus metrics timer service is not configured, skip register"); return }
+	timer.RegisterHandlerService(service, h.Handle)
 }
 
 func connect(ctx context.Context, rawURL string, cfg *config.Config) (*nats.Conn, error) {

@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/metricspublish"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
@@ -50,6 +51,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	})
 	cloudnoderpc.SetDefaultJobHistoryMaintainer(historyStore)
 	registerJobHistorySchedule(s)
+	registerMetricsReporter(s)
 
 	opts := []cloudnoderpc.Option{}
 	if cfg.Queue.Backend == "jetstream" && cfg.JetStream.Enabled {
@@ -101,6 +103,15 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-cloudnode 初始化完成")
 	return s, nil
+}
+
+func registerMetricsReporter(s *server.Server) {
+	if s == nil { return }
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-cloudnode"))
+	if err != nil { log.Warnf("cloudnode metrics reporter disabled: %v", err); return }
+	service := s.Service("trpc.moox.cloudnode.metrics.timer")
+	if service == nil { log.Warn("cloudnode metrics timer service is not configured, skip register"); return }
+	timer.RegisterHandlerService(service, h.Handle)
 }
 
 func startHealthServer(ctx context.Context, cfg *config.Config) {

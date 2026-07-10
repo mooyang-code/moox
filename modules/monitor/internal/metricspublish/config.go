@@ -1,0 +1,154 @@
+package metricspublish
+
+import (
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	DefaultTopic  = "moox.metrics.snapshot.reported.v1"
+	DefaultSpace  = "moox_system"
+	DefaultBusURL = "nats://127.0.0.1:4222"
+)
+
+// Config controls one process-local metrics reporter. The timer schedule is
+// owned by tRPC; this config only controls gathering and publication.
+type Config struct {
+	ServiceName string
+	InstanceID  string
+	NodeID      string
+	BootID      string
+	Version     string
+	EventBusURL string
+	Topic       string
+	SpaceID     string
+	Interval    time.Duration
+
+	MaxUncompressedBytes int
+	MaxCompressedBytes   int
+	MaxMetricFamilies    int
+	MaxSamples           int
+	MaxLabelsPerSample   int
+	MaxLabelNameBytes    int
+	MaxLabelValueBytes   int
+	GzipLevel            int
+	IncludeRegex         string
+	ExcludeRegex         string
+}
+
+func DefaultConfig(serviceName string) Config {
+	c := Config{
+		ServiceName:          serviceName,
+		InstanceID:           firstEnv("MOOX_INSTANCE_ID", "HOSTNAME"),
+		NodeID:               firstEnv("MOOX_NODE_ID", "HOSTNAME"),
+		Version:              firstEnv("MOOX_VERSION", "MOOX_SERVICE_VERSION"),
+		EventBusURL:          firstEnv("MOOX_METRICS_EVENTBUS_URL", "MOOX_EVENTBUS_URL", "NATS_URL"),
+		Topic:                firstEnv("MOOX_METRICS_TOPIC"),
+		SpaceID:              firstEnv("MOOX_METRICS_SPACE_ID"),
+		Interval:             30 * time.Second,
+		MaxUncompressedBytes: 4 * 1024 * 1024,
+		MaxCompressedBytes:   1 * 1024 * 1024,
+		MaxMetricFamilies:    2000,
+		MaxSamples:           20000,
+		MaxLabelsPerSample:   20,
+		MaxLabelNameBytes:    128,
+		MaxLabelValueBytes:   512,
+		GzipLevel:            1,
+		IncludeRegex:         `^.*$`,
+		ExcludeRegex:         `^(go_gc_.*debug.*)$`,
+	}
+	if c.InstanceID == "" {
+		c.InstanceID = serviceName + "-local"
+	}
+	if c.NodeID == "" {
+		c.NodeID = c.InstanceID
+	}
+	if c.EventBusURL == "" {
+		c.EventBusURL = DefaultBusURL
+	}
+	if c.Topic == "" {
+		c.Topic = DefaultTopic
+	}
+	if c.SpaceID == "" {
+		c.SpaceID = DefaultSpace
+	}
+	if c.Version == "" {
+		c.Version = "dev"
+	}
+	return c
+}
+
+func (c Config) withDefaults() Config {
+	d := DefaultConfig(c.ServiceName)
+	if c.InstanceID == "" {
+		c.InstanceID = d.InstanceID
+	}
+	if c.NodeID == "" {
+		c.NodeID = d.NodeID
+	}
+	if c.Version == "" {
+		c.Version = d.Version
+	}
+	if c.EventBusURL == "" {
+		c.EventBusURL = d.EventBusURL
+	}
+	if c.Topic == "" {
+		c.Topic = d.Topic
+	}
+	if c.SpaceID == "" {
+		c.SpaceID = d.SpaceID
+	}
+	if c.Interval <= 0 {
+		c.Interval = d.Interval
+	}
+	if c.MaxUncompressedBytes <= 0 {
+		c.MaxUncompressedBytes = d.MaxUncompressedBytes
+	}
+	if c.MaxCompressedBytes <= 0 {
+		c.MaxCompressedBytes = d.MaxCompressedBytes
+	}
+	if c.MaxMetricFamilies <= 0 {
+		c.MaxMetricFamilies = d.MaxMetricFamilies
+	}
+	if c.MaxSamples <= 0 {
+		c.MaxSamples = d.MaxSamples
+	}
+	if c.MaxLabelsPerSample <= 0 {
+		c.MaxLabelsPerSample = d.MaxLabelsPerSample
+	}
+	if c.MaxLabelNameBytes <= 0 {
+		c.MaxLabelNameBytes = d.MaxLabelNameBytes
+	}
+	if c.MaxLabelValueBytes <= 0 {
+		c.MaxLabelValueBytes = d.MaxLabelValueBytes
+	}
+	if c.GzipLevel == 0 {
+		c.GzipLevel = d.GzipLevel
+	}
+	if c.IncludeRegex == "" {
+		c.IncludeRegex = d.IncludeRegex
+	}
+	if c.ExcludeRegex == "" {
+		c.ExcludeRegex = d.ExcludeRegex
+	}
+	return c
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func envInt(name string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}

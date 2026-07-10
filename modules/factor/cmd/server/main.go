@@ -4,6 +4,7 @@ import (
 	control "github.com/mooyang-code/moox/modules/factor/internal/app/control"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	_ "trpc.group/trpc-go/trpc-log-cls"
+	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
