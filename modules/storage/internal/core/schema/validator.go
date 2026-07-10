@@ -3,6 +3,7 @@ package schema
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -47,6 +48,44 @@ func (v *Validator) ValidateWriteRecordRows(ctx context.Context, rows []*pb.Reco
 		}
 		if err := validateDatasetColumns(ctx, v.metadata, key.GetSpaceId(), key.GetDatasetId(), pb.DataKind_DATA_KIND_RECORD, row.GetColumns()); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// ValidateRecordMutation validates a server-managed revision patch. Required
+// columns are enforced only for creates; updates may omit them because the
+// PrimaryStore merges against the authoritative CURRENT row.
+func (v *Validator) ValidateRecordMutation(ctx context.Context, mutation *pb.RecordMutation, currentExists bool) error {
+	if mutation == nil || mutation.GetKey() == nil {
+		return fmt.Errorf("key is required")
+	}
+	key := mutation.GetKey()
+	if strings.TrimSpace(key.GetSpaceId()) == "" || strings.TrimSpace(key.GetDatasetId()) == "" || strings.TrimSpace(key.GetRecordId()) == "" {
+		return fmt.Errorf("space_id, dataset_id and record_id are required")
+	}
+	if strings.TrimSpace(key.GetVersion()) != "" {
+		return fmt.Errorf("record mutation key.version is not accepted")
+	}
+	if err := validateDatasetColumns(ctx, v.metadata, key.GetSpaceId(), key.GetDatasetId(), pb.DataKind_DATA_KIND_RECORD, mutation.GetColumns()); err != nil {
+		return err
+	}
+	if currentExists {
+		return nil
+	}
+	columns, _, err := v.metadata.ListDatasetColumns(ctx, key.GetSpaceId(), key.GetDatasetId(), nil)
+	if err != nil {
+		return err
+	}
+	present := make(map[string]struct{}, len(mutation.GetColumns()))
+	for _, column := range mutation.GetColumns() {
+		present[column.GetColumnName()] = struct{}{}
+	}
+	for _, column := range columns {
+		if column.GetRequired() && (column.GetStatus() == "" || column.GetStatus() == "active") {
+			if _, ok := present[column.GetColumnName()]; !ok {
+				return fmt.Errorf("required column %s is missing for create", column.GetColumnName())
+			}
 		}
 	}
 	return nil

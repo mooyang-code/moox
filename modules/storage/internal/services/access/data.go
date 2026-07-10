@@ -241,7 +241,114 @@ func (s *Service) nextRecordVersion() time.Time {
 	return now
 }
 
+// UpsertRecordRows is the server-managed Record write path. The request ID is
+// part of the idempotency contract and the owner assigns revision metadata.
+func (s *Service) UpsertRecordRows(ctx context.Context, req *pb.UpsertRecordRowsReq) (*pb.UpsertRecordRowsRsp, error) {
+	if strings.TrimSpace(req.GetRequestId()) == "" {
+		return &pb.UpsertRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("request_id is required"))}, nil
+	}
+	if len(req.GetMutations()) == 0 {
+		return &pb.UpsertRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("mutations are required"))}, nil
+	}
+	targets := make([]*pb.PrimaryStoreTarget, len(req.GetMutations()))
+	seen := make(map[string]struct{}, len(targets))
+	for index, mutation := range req.GetMutations() {
+		if mutation == nil || mutation.GetKey() == nil {
+			return &pb.UpsertRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("mutation key is required"))}, nil
+		}
+		key := mutation.GetKey()
+		identity := key.GetSpaceId() + "|" + key.GetDatasetId() + "|" + key.GetRecordId()
+		if _, exists := seen[identity]; exists {
+			return &pb.UpsertRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("duplicate record identity"))}, nil
+		}
+		seen[identity] = struct{}{}
+		target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), key.GetRecordId())
+		if err != nil {
+			return &pb.UpsertRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+		}
+		targets[index] = target
+	}
+	if _, err := requireSingleRecordCommitSource(targets); err != nil {
+		return &pb.UpsertRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_CROSS_DEVICE_UNSUPPORTED, err)}, nil
+	}
+	exists := make([]bool, len(req.GetMutations()))
+	if s.validator != nil {
+		var err error
+		exists, err = s.currentRecordMutationExistence(ctx, targets, req.GetMutations())
+		if err != nil {
+			return &pb.UpsertRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+		}
+	}
+	for index, mutation := range req.GetMutations() {
+		if s.validator != nil {
+			if err := s.validator.ValidateRecordMutation(ctx, mutation, exists[index]); err != nil {
+				return &pb.UpsertRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			}
+		}
+	}
+	event, err := s.primary.ApplyRecordMutations(ctx, targets[0], req.GetRequestId(), req.GetMutations())
+	if err != nil {
+		code := primaryErrorCode(err)
+		if strings.Contains(strings.ToLower(err.Error()), "revision conflict") {
+			code = pb.ErrorCode_REVISION_CONFLICT
+		}
+		return &pb.UpsertRecordRowsRsp{RetInfo: response.Error(code, err)}, nil
+	}
+	return &pb.UpsertRecordRowsRsp{RetInfo: response.Success("success"), Rows: event.GetRows()}, nil
+}
+
+func (s *Service) currentRecordMutationExistence(ctx context.Context, targets []*pb.PrimaryStoreTarget, mutations []*pb.RecordMutation) ([]bool, error) {
+	if len(targets) == 0 {
+		return nil, nil
+	}
+	snapshot, err := s.primary.OpenRecordSnapshot(ctx, &pb.OpenRecordSnapshotReq{SourceTarget: targets[0], Mode: pb.RecordReadMode_RECORD_READ_MODE_CURRENT})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = s.primary.CloseRecordSnapshot(ctx, &pb.CloseRecordSnapshotReq{SnapshotId: snapshot.GetSnapshotId()})
+	}()
+	exists := make([]bool, len(mutations))
+	for index, mutation := range mutations {
+		target := proto.Clone(targets[index]).(*pb.PrimaryStoreTarget)
+		target.DatasetId = mutation.GetKey().GetDatasetId()
+		rows, err := s.primary.ReadRecordSnapshot(ctx, &pb.ReadRecordSnapshotReq{SnapshotId: snapshot.GetSnapshotId(), Target: target, RecordIds: []string{mutation.GetKey().GetRecordId()}})
+		if err != nil {
+			return nil, err
+		}
+		exists[index] = len(rows.GetRows()) > 0
+	}
+	return exists, nil
+}
+
+func requireSingleRecordCommitSource(targets []*pb.PrimaryStoreTarget) (string, error) {
+	if len(targets) == 0 {
+		return "", errText("record route is empty")
+	}
+	identity := recordCommitSourceIdentity(targets[0])
+	for _, target := range targets[1:] {
+		if current := recordCommitSourceIdentity(target); current != identity {
+			return "", fmt.Errorf("record batch spans physical sources %q and %q", identity, current)
+		}
+	}
+	return identity, nil
+}
+
+func recordCommitSourceIdentity(target *pb.PrimaryStoreTarget) string {
+	if target == nil {
+		return "<nil>"
+	}
+	return strings.Join([]string{target.GetNodeId(), target.GetDeviceId(), target.GetEngine(), target.GetEndpoint()}, "|")
+}
+
 func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error) {
+	legacyVersionQuery := req.GetVersionRange() != nil
+	for _, key := range req.GetKeys() {
+		legacyVersionQuery = legacyVersionQuery || key.GetVersion() != ""
+	}
+	if req.GetMode() != pb.RecordReadMode_RECORD_READ_MODE_UNSPECIFIED || req.GetRevisionRange() != nil || (!legacyVersionQuery && len(req.GetKeys()) <= 1) {
+		return s.readRecordRowsRevision(ctx, req)
+	}
 	if isRecordDatasetScan(req) {
 		return s.scanRecordDataset(ctx, req)
 	}
@@ -301,6 +408,133 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 	}
 	out, pageResult := pageMergedRecordRows(out, mergePlan, sourceHasMore)
 	return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
+}
+
+func (s *Service) readRecordRowsRevision(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error) {
+	mode := req.GetMode()
+	if mode == pb.RecordReadMode_RECORD_READ_MODE_UNSPECIFIED {
+		mode = pb.RecordReadMode_RECORD_READ_MODE_CURRENT
+	}
+	if mode != pb.RecordReadMode_RECORD_READ_MODE_CURRENT && mode != pb.RecordReadMode_RECORD_READ_MODE_HISTORY {
+		return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("invalid record read mode"))}, nil
+	}
+	for _, key := range req.GetKeys() {
+		if err := validateRecordKey(key, false); err != nil {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		if key.GetVersion() != "" {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("record key.version is not accepted; use revision_range"))}, nil
+		}
+	}
+	if len(req.GetKeys()) == 1 && req.GetKeys()[0].GetRecordId() == "" {
+		return s.readRecordDatasetRevision(ctx, req, mode)
+	}
+	rows := make([]*pb.RecordRow, 0)
+	for _, key := range req.GetKeys() {
+		target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), key.GetRecordId())
+		if err != nil {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+		}
+		snapshot, err := s.primary.OpenRecordSnapshot(ctx, &pb.OpenRecordSnapshotReq{SourceTarget: target, Mode: mode})
+		if err != nil {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+		}
+		queryTarget := proto.Clone(target).(*pb.PrimaryStoreTarget)
+		queryTarget.DatasetId = key.GetDatasetId()
+		if mode == pb.RecordReadMode_RECORD_READ_MODE_CURRENT {
+			read, readErr := s.primary.ReadRecordSnapshot(ctx, &pb.ReadRecordSnapshotReq{SnapshotId: snapshot.GetSnapshotId(), Target: queryTarget, RecordIds: []string{key.GetRecordId()}})
+			_ = s.primary.CloseRecordSnapshot(ctx, &pb.CloseRecordSnapshotReq{SnapshotId: snapshot.GetSnapshotId()})
+			if readErr != nil {
+				return &pb.ReadRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(readErr), readErr)}, nil
+			}
+			for _, row := range read.GetRows() {
+				if revisionInRange(row.GetRevision(), req.GetRevisionRange()) {
+					rows = append(rows, row)
+				}
+			}
+			continue
+		}
+		history, scanErr := s.scanRecordSnapshotAll(ctx, snapshot.GetSnapshotId(), queryTarget)
+		_ = s.primary.CloseRecordSnapshot(ctx, &pb.CloseRecordSnapshotReq{SnapshotId: snapshot.GetSnapshotId()})
+		if scanErr != nil {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(scanErr), scanErr)}, nil
+		}
+		for _, row := range history {
+			if row.GetKey().GetRecordId() == key.GetRecordId() && revisionInRange(row.GetRevision(), req.GetRevisionRange()) {
+				rows = append(rows, row)
+			}
+		}
+	}
+	sortRecordRows(rows)
+	if req.GetOrder() == pb.SortOrder_SORT_ORDER_DESC {
+		reverseRecordRows(rows)
+	}
+	rows, page := pageRecordRows(rows, req.GetPage())
+	return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: rows, PageResult: page}, nil
+}
+
+func (s *Service) readRecordDatasetRevision(ctx context.Context, req *pb.ReadRecordRowsReq, mode pb.RecordReadMode) (*pb.ReadRecordRowsRsp, error) {
+	key := req.GetKeys()[0]
+	targets, err := s.router.ResolveDatasetTargets(ctx, key.GetSpaceId(), key.GetDatasetId())
+	if err != nil {
+		return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+	}
+	rows := make([]*pb.RecordRow, 0)
+	for _, target := range targets {
+		snapshot, err := s.primary.OpenRecordSnapshot(ctx, &pb.OpenRecordSnapshotReq{SourceTarget: target, Mode: mode})
+		if err != nil {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+		}
+		queryTarget := proto.Clone(target).(*pb.PrimaryStoreTarget)
+		queryTarget.DatasetId = key.GetDatasetId()
+		pageRows, scanErr := s.scanRecordSnapshotAll(ctx, snapshot.GetSnapshotId(), queryTarget)
+		_ = s.primary.CloseRecordSnapshot(ctx, &pb.CloseRecordSnapshotReq{SnapshotId: snapshot.GetSnapshotId()})
+		if scanErr != nil {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(scanErr), scanErr)}, nil
+		}
+		for _, row := range pageRows {
+			if revisionInRange(row.GetRevision(), req.GetRevisionRange()) {
+				rows = append(rows, primaryStoreRecordClone(row, key))
+			}
+		}
+	}
+	sortRecordRows(rows)
+	if req.GetOrder() == pb.SortOrder_SORT_ORDER_DESC {
+		reverseRecordRows(rows)
+	}
+	rows, page := pageRecordRows(rows, req.GetPage())
+	return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: rows, PageResult: page}, nil
+}
+
+func (s *Service) scanRecordSnapshotAll(ctx context.Context, snapshotID string, target *pb.PrimaryStoreTarget) ([]*pb.RecordRow, error) {
+	var rows []*pb.RecordRow
+	page := &pb.Page{Size: primaryDatasetScanPageSize}
+	for {
+		response, err := s.primary.ScanRecordSnapshot(ctx, &pb.ScanRecordSnapshotReq{SnapshotId: snapshotID, Target: target, Page: page})
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, response.GetRows()...)
+		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
+			return rows, nil
+		}
+		page = &pb.Page{Size: primaryDatasetScanPageSize, Cursor: response.GetPageResult().GetNextCursor()}
+	}
+}
+
+func revisionInRange(revision uint64, value *pb.RevisionRange) bool {
+	if value == nil {
+		return true
+	}
+	return (value.GetStartRevision() == 0 || revision >= value.GetStartRevision()) && (value.GetEndRevision() == 0 || revision <= value.GetEndRevision())
+}
+
+func primaryStoreRecordClone(row *pb.RecordRow, key *pb.RecordKey) *pb.RecordRow {
+	clone := proto.Clone(row).(*pb.RecordRow)
+	if clone.Key == nil {
+		clone.Key = proto.Clone(key).(*pb.RecordKey)
+	}
+	return clone
 }
 
 func isRecordDatasetScan(req *pb.ReadRecordRowsReq) bool {

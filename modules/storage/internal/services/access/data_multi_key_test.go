@@ -168,3 +168,28 @@ func (p *multiKeyPrimary) ReadRows(_ context.Context, _ *pb.PrimaryStoreTarget, 
 func (*multiKeyPrimary) ScanRows(context.Context, *pb.PrimaryStoreTarget, *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
+
+func (*multiKeyPrimary) ApplyRecordMutations(context.Context, *pb.PrimaryStoreTarget, string, []*pb.RecordMutation) (*pb.RecordRowsCommittedEvent, error) {
+	return nil, fmt.Errorf("record mutations not implemented in test primary")
+}
+func (*multiKeyPrimary) OpenRecordSnapshot(context.Context, *pb.OpenRecordSnapshotReq) (*pb.OpenRecordSnapshotRsp, error) {
+	return nil, fmt.Errorf("record snapshots not implemented in test primary")
+}
+func (*multiKeyPrimary) ReadRecordSnapshot(context.Context, *pb.ReadRecordSnapshotReq) (*pb.ReadRecordSnapshotRsp, error) {
+	return nil, fmt.Errorf("record snapshots not implemented in test primary")
+}
+func (*multiKeyPrimary) ScanRecordSnapshot(context.Context, *pb.ScanRecordSnapshotReq) (*pb.ScanRecordSnapshotRsp, error) {
+	return nil, fmt.Errorf("record snapshots not implemented in test primary")
+}
+func (*multiKeyPrimary) RenewRecordSnapshot(context.Context, *pb.RenewRecordSnapshotReq) error {
+	return fmt.Errorf("record snapshots not implemented in test primary")
+}
+func (*multiKeyPrimary) CloseRecordSnapshot(context.Context, *pb.CloseRecordSnapshotReq) error {
+	return fmt.Errorf("record snapshots not implemented in test primary")
+}
+func (*multiKeyPrimary) GetRecordWatermark(context.Context, *pb.PrimaryStoreTarget) (string, uint64, error) {
+	return "", 0, fmt.Errorf("record journal not implemented in test primary")
+}
+func (*multiKeyPrimary) ScanRecordJournal(context.Context, *pb.ScanRecordJournalReq) (*pb.ScanRecordJournalRsp, error) {
+	return nil, fmt.Errorf("record journal not implemented in test primary")
+}

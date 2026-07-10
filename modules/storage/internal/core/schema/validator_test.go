@@ -23,6 +23,18 @@ func TestValidateWriteRecordRowsRequiresTimestampVersion(t *testing.T) {
 	}
 }
 
+func TestValidateRecordMutationAllowsPartialUpdateAndRejectsVersion(t *testing.T) {
+	validator := NewValidator(recordVersionMetadata{})
+	mutation := &pb.RecordMutation{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1"}}
+	if err := validator.ValidateRecordMutation(context.Background(), mutation, true); err != nil {
+		t.Fatalf("partial update: %v", err)
+	}
+	mutation.Key.Version = "legacy"
+	if err := validator.ValidateRecordMutation(context.Background(), mutation, true); err == nil || !strings.Contains(err.Error(), "not accepted") {
+		t.Fatalf("legacy version error = %v", err)
+	}
+}
+
 type recordVersionMetadata struct{}
 
 func (recordVersionMetadata) GetDataset(context.Context, string, string) (*pb.Dataset, error) {

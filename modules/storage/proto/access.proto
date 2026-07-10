@@ -217,6 +217,7 @@ service Access {
   rpc WriteRecordRows(WriteRecordRowsReq) returns (WriteRecordRowsRsp);
   // ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
   rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
+  rpc UpsertRecordRows(UpsertRecordRowsReq) returns (UpsertRecordRowsRsp);
 }
 
 // AccessScan 是只提供给 ViewBuilder 的内部游标扫描服务。

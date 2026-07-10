@@ -27,6 +27,8 @@ type AccessService interface {
 	WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq) (*WriteRecordRowsRsp, error)
 	// ReadRecordRows ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error)
+
+	UpsertRecordRows(ctx context.Context, req *UpsertRecordRowsReq) (*UpsertRecordRowsRsp, error)
 }
 
 func AccessService_WriteTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -101,6 +103,24 @@ func AccessService_ReadRecordRows_Handler(svr interface{}, ctx context.Context, 
 	return rsp, nil
 }
 
+func AccessService_UpsertRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertRecordRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(AccessService).UpsertRecordRows(ctx, reqbody.(*UpsertRecordRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // AccessServer_ServiceDesc descriptor for server.RegisterService.
 var AccessServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.Access",
@@ -121,6 +141,10 @@ var AccessServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.Access/ReadRecordRows",
 			Func: AccessService_ReadRecordRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Access/UpsertRecordRows",
+			Func: AccessService_UpsertRecordRows_Handler,
 		},
 	},
 }
@@ -222,6 +246,9 @@ func (s *UnimplementedAccess) WriteRecordRows(ctx context.Context, req *WriteRec
 func (s *UnimplementedAccess) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
 	return nil, errors.New("rpc ReadRecordRows of service Access is not implemented")
 }
+func (s *UnimplementedAccess) UpsertRecordRows(ctx context.Context, req *UpsertRecordRowsReq) (*UpsertRecordRowsRsp, error) {
+	return nil, errors.New("rpc UpsertRecordRows of service Access is not implemented")
+}
 
 type UnimplementedAccessScan struct{}
 
@@ -251,6 +278,8 @@ type AccessClientProxy interface {
 	WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq, opts ...client.Option) (rsp *WriteRecordRowsRsp, err error)
 	// ReadRecordRows ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (rsp *ReadRecordRowsRsp, err error)
+
+	UpsertRecordRows(ctx context.Context, req *UpsertRecordRowsReq, opts ...client.Option) (rsp *UpsertRecordRowsRsp, err error)
 }
 
 type AccessClientProxyImpl struct {
@@ -336,6 +365,26 @@ func (c *AccessClientProxyImpl) ReadRecordRows(ctx context.Context, req *ReadRec
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReadRecordRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *AccessClientProxyImpl) UpsertRecordRows(ctx context.Context, req *UpsertRecordRowsReq, opts ...client.Option) (*UpsertRecordRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Access/UpsertRecordRows")
+	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Access")
+	msg.WithCalleeMethod("UpsertRecordRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpsertRecordRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

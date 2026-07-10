@@ -78,6 +78,31 @@ func (f fakePrimaryScanner) ScanRows(_ context.Context, _ *pb.PrimaryStoreTarget
 	}, nil
 }
 
+func (fakePrimaryScanner) ApplyRecordMutations(context.Context, *pb.PrimaryStoreTarget, string, []*pb.RecordMutation) (*pb.RecordRowsCommittedEvent, error) {
+	return nil, fmt.Errorf("record mutations not implemented in test primary")
+}
+func (fakePrimaryScanner) OpenRecordSnapshot(context.Context, *pb.OpenRecordSnapshotReq) (*pb.OpenRecordSnapshotRsp, error) {
+	return nil, fmt.Errorf("record snapshots not implemented in test primary")
+}
+func (fakePrimaryScanner) ReadRecordSnapshot(context.Context, *pb.ReadRecordSnapshotReq) (*pb.ReadRecordSnapshotRsp, error) {
+	return nil, fmt.Errorf("record snapshots not implemented in test primary")
+}
+func (fakePrimaryScanner) ScanRecordSnapshot(context.Context, *pb.ScanRecordSnapshotReq) (*pb.ScanRecordSnapshotRsp, error) {
+	return nil, fmt.Errorf("record snapshots not implemented in test primary")
+}
+func (fakePrimaryScanner) RenewRecordSnapshot(context.Context, *pb.RenewRecordSnapshotReq) error {
+	return fmt.Errorf("record snapshots not implemented in test primary")
+}
+func (fakePrimaryScanner) CloseRecordSnapshot(context.Context, *pb.CloseRecordSnapshotReq) error {
+	return fmt.Errorf("record snapshots not implemented in test primary")
+}
+func (fakePrimaryScanner) GetRecordWatermark(context.Context, *pb.PrimaryStoreTarget) (string, uint64, error) {
+	return "", 0, fmt.Errorf("record journal not implemented in test primary")
+}
+func (fakePrimaryScanner) ScanRecordJournal(context.Context, *pb.ScanRecordJournalReq) (*pb.ScanRecordJournalRsp, error) {
+	return nil, fmt.Errorf("record journal not implemented in test primary")
+}
+
 type fakeRouteReader struct{}
 
 func (fakeRouteReader) ListPrimaryStoreRoutes(context.Context, string, string, string, string, *pb.Page) ([]*pb.PrimaryStoreRoute, *pb.PageResult, error) {

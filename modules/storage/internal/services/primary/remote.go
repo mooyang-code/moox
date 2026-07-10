@@ -14,6 +14,7 @@ import (
 type RemoteClient struct {
 	serviceName string
 	proxies     sync.Map
+	snapshots   sync.Map
 }
 
 func NewRemoteClient(serviceName string) *RemoteClient {
@@ -73,6 +74,103 @@ func (c *RemoteClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarg
 		return nil, nil, err
 	}
 	return rsp.GetRows(), rsp.GetPageResult(), nil
+}
+
+func (c *RemoteClient) ApplyRecordMutations(ctx context.Context, target *pb.PrimaryStoreTarget, requestID string, mutations []*pb.RecordMutation) (*pb.RecordRowsCommittedEvent, error) {
+	rsp, err := c.proxyFor(target).ApplyPrimaryRecordMutations(ctx, &pb.ApplyPrimaryRecordMutationsReq{SourceTarget: target, RequestId: requestID, Mutations: mutations})
+	if err != nil {
+		return nil, err
+	}
+	if err := retInfoError(rsp.GetRetInfo()); err != nil {
+		return nil, err
+	}
+	return rsp.GetCommit(), nil
+}
+
+func (c *RemoteClient) OpenRecordSnapshot(ctx context.Context, req *pb.OpenRecordSnapshotReq) (*pb.OpenRecordSnapshotRsp, error) {
+	target := req.GetSourceTarget()
+	proxy := c.proxyFor(target)
+	rsp, err := proxy.OpenRecordSnapshot(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := retInfoError(rsp.GetRetInfo()); err != nil {
+		return nil, err
+	}
+	c.snapshots.Store(rsp.GetSnapshotId(), proxy)
+	return rsp, nil
+}
+
+func (c *RemoteClient) ReadRecordSnapshot(ctx context.Context, req *pb.ReadRecordSnapshotReq) (*pb.ReadRecordSnapshotRsp, error) {
+	rsp, err := c.proxyFor(req.GetTarget()).ReadRecordSnapshot(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := retInfoError(rsp.GetRetInfo()); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *RemoteClient) ScanRecordSnapshot(ctx context.Context, req *pb.ScanRecordSnapshotReq) (*pb.ScanRecordSnapshotRsp, error) {
+	rsp, err := c.proxyFor(req.GetTarget()).ScanRecordSnapshot(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := retInfoError(rsp.GetRetInfo()); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *RemoteClient) RenewRecordSnapshot(ctx context.Context, req *pb.RenewRecordSnapshotReq) error {
+	value, ok := c.snapshots.Load(req.GetSnapshotId())
+	if !ok {
+		return fmt.Errorf("record snapshot proxy not found")
+	}
+	rsp, err := value.(pb.PrimaryStoreClientProxy).RenewRecordSnapshot(ctx, req)
+	if err != nil {
+		return err
+	}
+	return retInfoError(rsp.GetRetInfo())
+}
+
+func (c *RemoteClient) CloseRecordSnapshot(ctx context.Context, req *pb.CloseRecordSnapshotReq) error {
+	value, ok := c.snapshots.Load(req.GetSnapshotId())
+	if !ok {
+		return fmt.Errorf("record snapshot proxy not found")
+	}
+	rsp, err := value.(pb.PrimaryStoreClientProxy).CloseRecordSnapshot(ctx, req)
+	if err != nil {
+		return err
+	}
+	if err := retInfoError(rsp.GetRetInfo()); err != nil {
+		return err
+	}
+	c.snapshots.Delete(req.GetSnapshotId())
+	return nil
+}
+
+func (c *RemoteClient) GetRecordWatermark(ctx context.Context, target *pb.PrimaryStoreTarget) (string, uint64, error) {
+	rsp, err := c.proxyFor(target).GetRecordWatermark(ctx, &pb.GetRecordWatermarkReq{Target: target})
+	if err != nil {
+		return "", 0, err
+	}
+	if err := retInfoError(rsp.GetRetInfo()); err != nil {
+		return "", 0, err
+	}
+	return rsp.GetSourceId(), rsp.GetCommitSeq(), nil
+}
+
+func (c *RemoteClient) ScanRecordJournal(ctx context.Context, req *pb.ScanRecordJournalReq) (*pb.ScanRecordJournalRsp, error) {
+	rsp, err := c.proxyFor(req.GetTarget()).ScanRecordJournal(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := retInfoError(rsp.GetRetInfo()); err != nil {
+		return nil, err
+	}
+	return rsp, nil
 }
 
 func (c *RemoteClient) proxyFor(target *pb.PrimaryStoreTarget) pb.PrimaryStoreClientProxy {

@@ -405,6 +405,9 @@ func sortRecordRows(rows []*pb.RecordRow) {
 		if left.GetRecordId() != right.GetRecordId() {
 			return left.GetRecordId() < right.GetRecordId()
 		}
+		if rows[i].GetRevision() != 0 || rows[j].GetRevision() != 0 {
+			return rows[i].GetRevision() < rows[j].GetRevision()
+		}
 		return factkey.NormalizeVersion(left.GetVersion()) < factkey.NormalizeVersion(right.GetVersion())
 	})
 }

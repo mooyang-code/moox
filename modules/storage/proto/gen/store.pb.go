@@ -1372,6 +1372,100 @@ func (x *CloseRecordSnapshotReq) GetSnapshotId() string {
 	return ""
 }
 
+type RenewRecordSnapshotRsp struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+}
+
+func (x *RenewRecordSnapshotRsp) Reset() {
+	*x = RenewRecordSnapshotRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_store_proto_msgTypes[19]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *RenewRecordSnapshotRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewRecordSnapshotRsp) ProtoMessage() {}
+
+func (x *RenewRecordSnapshotRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_store_proto_msgTypes[19]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewRecordSnapshotRsp.ProtoReflect.Descriptor instead.
+func (*RenewRecordSnapshotRsp) Descriptor() ([]byte, []int) {
+	return file_store_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *RenewRecordSnapshotRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
+type CloseRecordSnapshotRsp struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+}
+
+func (x *CloseRecordSnapshotRsp) Reset() {
+	*x = CloseRecordSnapshotRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_store_proto_msgTypes[20]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *CloseRecordSnapshotRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloseRecordSnapshotRsp) ProtoMessage() {}
+
+func (x *CloseRecordSnapshotRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_store_proto_msgTypes[20]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloseRecordSnapshotRsp.ProtoReflect.Descriptor instead.
+func (*CloseRecordSnapshotRsp) Descriptor() ([]byte, []int) {
+	return file_store_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *CloseRecordSnapshotRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
 type GetRecordWatermarkReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -1384,7 +1478,7 @@ type GetRecordWatermarkReq struct {
 func (x *GetRecordWatermarkReq) Reset() {
 	*x = GetRecordWatermarkReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_store_proto_msgTypes[19]
+		mi := &file_store_proto_msgTypes[21]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1397,7 +1491,7 @@ func (x *GetRecordWatermarkReq) String() string {
 func (*GetRecordWatermarkReq) ProtoMessage() {}
 
 func (x *GetRecordWatermarkReq) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[19]
+	mi := &file_store_proto_msgTypes[21]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1410,7 +1504,7 @@ func (x *GetRecordWatermarkReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRecordWatermarkReq.ProtoReflect.Descriptor instead.
 func (*GetRecordWatermarkReq) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{19}
+	return file_store_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetRecordWatermarkReq) GetAuthInfo() *commonpb.AuthInfo {
@@ -1440,7 +1534,7 @@ type GetRecordWatermarkRsp struct {
 func (x *GetRecordWatermarkRsp) Reset() {
 	*x = GetRecordWatermarkRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_store_proto_msgTypes[20]
+		mi := &file_store_proto_msgTypes[22]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1453,7 +1547,7 @@ func (x *GetRecordWatermarkRsp) String() string {
 func (*GetRecordWatermarkRsp) ProtoMessage() {}
 
 func (x *GetRecordWatermarkRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[20]
+	mi := &file_store_proto_msgTypes[22]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1466,7 +1560,7 @@ func (x *GetRecordWatermarkRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRecordWatermarkRsp.ProtoReflect.Descriptor instead.
 func (*GetRecordWatermarkRsp) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{20}
+	return file_store_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GetRecordWatermarkRsp) GetRetInfo() *commonpb.RetInfo {
@@ -1505,7 +1599,7 @@ type ScanRecordJournalReq struct {
 func (x *ScanRecordJournalReq) Reset() {
 	*x = ScanRecordJournalReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_store_proto_msgTypes[21]
+		mi := &file_store_proto_msgTypes[23]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1518,7 +1612,7 @@ func (x *ScanRecordJournalReq) String() string {
 func (*ScanRecordJournalReq) ProtoMessage() {}
 
 func (x *ScanRecordJournalReq) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[21]
+	mi := &file_store_proto_msgTypes[23]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1531,7 +1625,7 @@ func (x *ScanRecordJournalReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScanRecordJournalReq.ProtoReflect.Descriptor instead.
 func (*ScanRecordJournalReq) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{21}
+	return file_store_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ScanRecordJournalReq) GetAuthInfo() *commonpb.AuthInfo {
@@ -1583,7 +1677,7 @@ type ScanRecordJournalRsp struct {
 func (x *ScanRecordJournalRsp) Reset() {
 	*x = ScanRecordJournalRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_store_proto_msgTypes[22]
+		mi := &file_store_proto_msgTypes[24]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1596,7 +1690,7 @@ func (x *ScanRecordJournalRsp) String() string {
 func (*ScanRecordJournalRsp) ProtoMessage() {}
 
 func (x *ScanRecordJournalRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[22]
+	mi := &file_store_proto_msgTypes[24]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1609,7 +1703,7 @@ func (x *ScanRecordJournalRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScanRecordJournalRsp.ProtoReflect.Descriptor instead.
 func (*ScanRecordJournalRsp) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{22}
+	return file_store_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ScanRecordJournalRsp) GetRetInfo() *commonpb.RetInfo {
@@ -1900,7 +1994,17 @@ var file_store_proto_rawDesc = []byte{
 	0x6f, 0x6e, 0x2e, 0x41, 0x75, 0x74, 0x68, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x08, 0x61, 0x75, 0x74,
 	0x68, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x1f, 0x0a, 0x0b, 0x73, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f,
 	0x74, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x73, 0x6e, 0x61, 0x70,
-	0x73, 0x68, 0x6f, 0x74, 0x49, 0x64, 0x22, 0x8f, 0x01, 0x0a, 0x15, 0x47, 0x65, 0x74, 0x52, 0x65,
+	0x73, 0x68, 0x6f, 0x74, 0x49, 0x64, 0x22, 0x4e, 0x0a, 0x16, 0x52, 0x65, 0x6e, 0x65, 0x77, 0x52,
+	0x65, 0x63, 0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x73, 0x70,
+	0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01,
+	0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63,
+	0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72,
+	0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x22, 0x4e, 0x0a, 0x16, 0x43, 0x6c, 0x6f, 0x73, 0x65, 0x52,
+	0x65, 0x63, 0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x73, 0x70,
+	0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01,
+	0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63,
+	0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72,
+	0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x22, 0x8f, 0x01, 0x0a, 0x15, 0x47, 0x65, 0x74, 0x52, 0x65,
 	0x63, 0x6f, 0x72, 0x64, 0x57, 0x61, 0x74, 0x65, 0x72, 0x6d, 0x61, 0x72, 0x6b, 0x52, 0x65, 0x71,
 	0x12, 0x37, 0x0a, 0x09, 0x61, 0x75, 0x74, 0x68, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20,
 	0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
@@ -1952,7 +2056,7 @@ var file_store_proto_rawDesc = []byte{
 	0x67, 0x65, 0x5f, 0x72, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x18, 0x04, 0x20, 0x01, 0x28, 0x0b, 0x32,
 	0x1c, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d,
 	0x6f, 0x6e, 0x2e, 0x50, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x52, 0x0a, 0x70,
-	0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x32, 0xb4, 0x02, 0x0a, 0x0c, 0x50, 0x72,
+	0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x32, 0xa3, 0x09, 0x0a, 0x0c, 0x50, 0x72,
 	0x69, 0x6d, 0x61, 0x72, 0x79, 0x53, 0x74, 0x6f, 0x72, 0x65, 0x12, 0x62, 0x0a, 0x10, 0x57, 0x72,
 	0x69, 0x74, 0x65, 0x50, 0x72, 0x69, 0x6d, 0x61, 0x72, 0x79, 0x52, 0x6f, 0x77, 0x73, 0x12, 0x26,
 	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61,
@@ -1972,11 +2076,66 @@ var file_store_proto_rawDesc = []byte{
 	0x72, 0x79, 0x52, 0x6f, 0x77, 0x73, 0x52, 0x65, 0x71, 0x1a, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63,
 	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x53, 0x63,
 	0x61, 0x6e, 0x50, 0x72, 0x69, 0x6d, 0x61, 0x72, 0x79, 0x52, 0x6f, 0x77, 0x73, 0x52, 0x73, 0x70,
-	0x42, 0x42, 0x5a, 0x40, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d,
-	0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78,
-	0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65,
-	0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x67, 0x65, 0x6e, 0x3b, 0x73, 0x74, 0x6f, 0x72, 0x61,
-	0x67, 0x65, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x12, 0x83, 0x01, 0x0a, 0x1b, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x50, 0x72, 0x69, 0x6d, 0x61, 0x72,
+	0x79, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x4d, 0x75, 0x74, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x73,
+	0x12, 0x31, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f,
+	0x72, 0x61, 0x67, 0x65, 0x2e, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x50, 0x72, 0x69, 0x6d, 0x61, 0x72,
+	0x79, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x4d, 0x75, 0x74, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x73,
+	0x52, 0x65, 0x71, 0x1a, 0x31, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x50, 0x72, 0x69,
+	0x6d, 0x61, 0x72, 0x79, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x4d, 0x75, 0x74, 0x61, 0x74, 0x69,
+	0x6f, 0x6e, 0x73, 0x52, 0x73, 0x70, 0x12, 0x68, 0x0a, 0x12, 0x4f, 0x70, 0x65, 0x6e, 0x52, 0x65,
+	0x63, 0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12, 0x28, 0x2e, 0x74,
+	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65,
+	0x2e, 0x4f, 0x70, 0x65, 0x6e, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73,
+	0x68, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x1a, 0x28, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
+	0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x4f, 0x70, 0x65, 0x6e, 0x52,
+	0x65, 0x63, 0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x73, 0x70,
+	0x12, 0x68, 0x0a, 0x12, 0x52, 0x65, 0x61, 0x64, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x53, 0x6e,
+	0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12, 0x28, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
+	0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x52, 0x65, 0x61, 0x64, 0x52,
+	0x65, 0x63, 0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x71,
+	0x1a, 0x28, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f,
+	0x72, 0x61, 0x67, 0x65, 0x2e, 0x52, 0x65, 0x61, 0x64, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x53,
+	0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x73, 0x70, 0x12, 0x68, 0x0a, 0x12, 0x53, 0x63,
+	0x61, 0x6e, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74,
+	0x12, 0x28, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f,
+	0x72, 0x61, 0x67, 0x65, 0x2e, 0x53, 0x63, 0x61, 0x6e, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x53,
+	0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x1a, 0x28, 0x2e, 0x74, 0x72, 0x70,
+	0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x53,
+	0x63, 0x61, 0x6e, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f,
+	0x74, 0x52, 0x73, 0x70, 0x12, 0x6b, 0x0a, 0x13, 0x52, 0x65, 0x6e, 0x65, 0x77, 0x52, 0x65, 0x63,
+	0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12, 0x29, 0x2e, 0x74, 0x72,
+	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e,
+	0x52, 0x65, 0x6e, 0x65, 0x77, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73,
+	0x68, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x1a, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
+	0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x52, 0x65, 0x6e, 0x65, 0x77,
+	0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x73,
+	0x70, 0x12, 0x6b, 0x0a, 0x13, 0x43, 0x6c, 0x6f, 0x73, 0x65, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64,
+	0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e,
+	0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x43, 0x6c, 0x6f,
+	0x73, 0x65, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74,
+	0x52, 0x65, 0x71, 0x1a, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x43, 0x6c, 0x6f, 0x73, 0x65, 0x52, 0x65, 0x63,
+	0x6f, 0x72, 0x64, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x73, 0x70, 0x12, 0x68,
+	0x0a, 0x12, 0x47, 0x65, 0x74, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x57, 0x61, 0x74, 0x65, 0x72,
+	0x6d, 0x61, 0x72, 0x6b, 0x12, 0x28, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
+	0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x47, 0x65, 0x74, 0x52, 0x65, 0x63, 0x6f,
+	0x72, 0x64, 0x57, 0x61, 0x74, 0x65, 0x72, 0x6d, 0x61, 0x72, 0x6b, 0x52, 0x65, 0x71, 0x1a, 0x28,
+	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61,
+	0x67, 0x65, 0x2e, 0x47, 0x65, 0x74, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x57, 0x61, 0x74, 0x65,
+	0x72, 0x6d, 0x61, 0x72, 0x6b, 0x52, 0x73, 0x70, 0x12, 0x65, 0x0a, 0x11, 0x53, 0x63, 0x61, 0x6e,
+	0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x4a, 0x6f, 0x75, 0x72, 0x6e, 0x61, 0x6c, 0x12, 0x27, 0x2e,
+	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67,
+	0x65, 0x2e, 0x53, 0x63, 0x61, 0x6e, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x4a, 0x6f, 0x75, 0x72,
+	0x6e, 0x61, 0x6c, 0x52, 0x65, 0x71, 0x1a, 0x27, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
+	0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x53, 0x63, 0x61, 0x6e, 0x52,
+	0x65, 0x63, 0x6f, 0x72, 0x64, 0x4a, 0x6f, 0x75, 0x72, 0x6e, 0x61, 0x6c, 0x52, 0x73, 0x70, 0x42,
+	0x42, 0x5a, 0x40, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f,
+	0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f,
+	0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2f,
+	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x67, 0x65, 0x6e, 0x3b, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67,
+	0x65, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -1991,7 +2150,7 @@ func file_store_proto_rawDescGZIP() []byte {
 	return file_store_proto_rawDescData
 }
 
-var file_store_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_store_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_store_proto_goTypes = []interface{}{
 	(*PrimaryStoreKey)(nil),                // 0: trpc.moox.storage.PrimaryStoreKey
 	(*PrimaryStoreRow)(nil),                // 1: trpc.moox.storage.PrimaryStoreRow
@@ -2012,94 +2171,114 @@ var file_store_proto_goTypes = []interface{}{
 	(*ScanRecordSnapshotRsp)(nil),          // 16: trpc.moox.storage.ScanRecordSnapshotRsp
 	(*RenewRecordSnapshotReq)(nil),         // 17: trpc.moox.storage.RenewRecordSnapshotReq
 	(*CloseRecordSnapshotReq)(nil),         // 18: trpc.moox.storage.CloseRecordSnapshotReq
-	(*GetRecordWatermarkReq)(nil),          // 19: trpc.moox.storage.GetRecordWatermarkReq
-	(*GetRecordWatermarkRsp)(nil),          // 20: trpc.moox.storage.GetRecordWatermarkRsp
-	(*ScanRecordJournalReq)(nil),           // 21: trpc.moox.storage.ScanRecordJournalReq
-	(*ScanRecordJournalRsp)(nil),           // 22: trpc.moox.storage.ScanRecordJournalRsp
-	nil,                                    // 23: trpc.moox.storage.PrimaryStoreRow.AttributesEntry
-	(DataKind)(0),                          // 24: trpc.moox.storage.DataKind
-	(*ColumnValue)(nil),                    // 25: trpc.moox.storage.ColumnValue
-	(*commonpb.AuthInfo)(nil),              // 26: trpc.moox.common.AuthInfo
-	(*commonpb.RetInfo)(nil),               // 27: trpc.moox.common.RetInfo
-	(*VersionRange)(nil),                   // 28: trpc.moox.storage.VersionRange
-	(SortOrder)(0),                         // 29: trpc.moox.storage.SortOrder
-	(*commonpb.Page)(nil),                  // 30: trpc.moox.common.Page
-	(*commonpb.PageResult)(nil),            // 31: trpc.moox.common.PageResult
-	(*RecordMutation)(nil),                 // 32: trpc.moox.storage.RecordMutation
-	(*RecordRowsCommittedEvent)(nil),       // 33: trpc.moox.storage.RecordRowsCommittedEvent
-	(RecordReadMode)(0),                    // 34: trpc.moox.storage.RecordReadMode
-	(*TimeRange)(nil),                      // 35: trpc.moox.storage.TimeRange
-	(*RecordRow)(nil),                      // 36: trpc.moox.storage.RecordRow
+	(*RenewRecordSnapshotRsp)(nil),         // 19: trpc.moox.storage.RenewRecordSnapshotRsp
+	(*CloseRecordSnapshotRsp)(nil),         // 20: trpc.moox.storage.CloseRecordSnapshotRsp
+	(*GetRecordWatermarkReq)(nil),          // 21: trpc.moox.storage.GetRecordWatermarkReq
+	(*GetRecordWatermarkRsp)(nil),          // 22: trpc.moox.storage.GetRecordWatermarkRsp
+	(*ScanRecordJournalReq)(nil),           // 23: trpc.moox.storage.ScanRecordJournalReq
+	(*ScanRecordJournalRsp)(nil),           // 24: trpc.moox.storage.ScanRecordJournalRsp
+	nil,                                    // 25: trpc.moox.storage.PrimaryStoreRow.AttributesEntry
+	(DataKind)(0),                          // 26: trpc.moox.storage.DataKind
+	(*ColumnValue)(nil),                    // 27: trpc.moox.storage.ColumnValue
+	(*commonpb.AuthInfo)(nil),              // 28: trpc.moox.common.AuthInfo
+	(*commonpb.RetInfo)(nil),               // 29: trpc.moox.common.RetInfo
+	(*VersionRange)(nil),                   // 30: trpc.moox.storage.VersionRange
+	(SortOrder)(0),                         // 31: trpc.moox.storage.SortOrder
+	(*commonpb.Page)(nil),                  // 32: trpc.moox.common.Page
+	(*commonpb.PageResult)(nil),            // 33: trpc.moox.common.PageResult
+	(*RecordMutation)(nil),                 // 34: trpc.moox.storage.RecordMutation
+	(*RecordRowsCommittedEvent)(nil),       // 35: trpc.moox.storage.RecordRowsCommittedEvent
+	(RecordReadMode)(0),                    // 36: trpc.moox.storage.RecordReadMode
+	(*TimeRange)(nil),                      // 37: trpc.moox.storage.TimeRange
+	(*RecordRow)(nil),                      // 38: trpc.moox.storage.RecordRow
 }
 var file_store_proto_depIdxs = []int32{
-	24, // 0: trpc.moox.storage.PrimaryStoreKey.data_kind:type_name -> trpc.moox.storage.DataKind
+	26, // 0: trpc.moox.storage.PrimaryStoreKey.data_kind:type_name -> trpc.moox.storage.DataKind
 	0,  // 1: trpc.moox.storage.PrimaryStoreRow.key:type_name -> trpc.moox.storage.PrimaryStoreKey
-	25, // 2: trpc.moox.storage.PrimaryStoreRow.columns:type_name -> trpc.moox.storage.ColumnValue
-	23, // 3: trpc.moox.storage.PrimaryStoreRow.attributes:type_name -> trpc.moox.storage.PrimaryStoreRow.AttributesEntry
-	26, // 4: trpc.moox.storage.WritePrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	27, // 2: trpc.moox.storage.PrimaryStoreRow.columns:type_name -> trpc.moox.storage.ColumnValue
+	25, // 3: trpc.moox.storage.PrimaryStoreRow.attributes:type_name -> trpc.moox.storage.PrimaryStoreRow.AttributesEntry
+	28, // 4: trpc.moox.storage.WritePrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	2,  // 5: trpc.moox.storage.WritePrimaryRowsReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
 	1,  // 6: trpc.moox.storage.WritePrimaryRowsReq.rows:type_name -> trpc.moox.storage.PrimaryStoreRow
-	27, // 7: trpc.moox.storage.WritePrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	26, // 8: trpc.moox.storage.ReadPrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	29, // 7: trpc.moox.storage.WritePrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	28, // 8: trpc.moox.storage.ReadPrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	2,  // 9: trpc.moox.storage.ReadPrimaryRowsReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
 	0,  // 10: trpc.moox.storage.ReadPrimaryRowsReq.keys:type_name -> trpc.moox.storage.PrimaryStoreKey
-	28, // 11: trpc.moox.storage.ReadPrimaryRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
-	29, // 12: trpc.moox.storage.ReadPrimaryRowsReq.order:type_name -> trpc.moox.storage.SortOrder
-	30, // 13: trpc.moox.storage.ReadPrimaryRowsReq.page:type_name -> trpc.moox.common.Page
-	27, // 14: trpc.moox.storage.ReadPrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	30, // 11: trpc.moox.storage.ReadPrimaryRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
+	31, // 12: trpc.moox.storage.ReadPrimaryRowsReq.order:type_name -> trpc.moox.storage.SortOrder
+	32, // 13: trpc.moox.storage.ReadPrimaryRowsReq.page:type_name -> trpc.moox.common.Page
+	29, // 14: trpc.moox.storage.ReadPrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	1,  // 15: trpc.moox.storage.ReadPrimaryRowsRsp.rows:type_name -> trpc.moox.storage.PrimaryStoreRow
-	31, // 16: trpc.moox.storage.ReadPrimaryRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	26, // 17: trpc.moox.storage.ScanPrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	33, // 16: trpc.moox.storage.ReadPrimaryRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	28, // 17: trpc.moox.storage.ScanPrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	2,  // 18: trpc.moox.storage.ScanPrimaryRowsReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
-	24, // 19: trpc.moox.storage.ScanPrimaryRowsReq.data_kind:type_name -> trpc.moox.storage.DataKind
-	28, // 20: trpc.moox.storage.ScanPrimaryRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
-	29, // 21: trpc.moox.storage.ScanPrimaryRowsReq.order:type_name -> trpc.moox.storage.SortOrder
-	30, // 22: trpc.moox.storage.ScanPrimaryRowsReq.page:type_name -> trpc.moox.common.Page
-	27, // 23: trpc.moox.storage.ScanPrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	26, // 19: trpc.moox.storage.ScanPrimaryRowsReq.data_kind:type_name -> trpc.moox.storage.DataKind
+	30, // 20: trpc.moox.storage.ScanPrimaryRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
+	31, // 21: trpc.moox.storage.ScanPrimaryRowsReq.order:type_name -> trpc.moox.storage.SortOrder
+	32, // 22: trpc.moox.storage.ScanPrimaryRowsReq.page:type_name -> trpc.moox.common.Page
+	29, // 23: trpc.moox.storage.ScanPrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	1,  // 24: trpc.moox.storage.ScanPrimaryRowsRsp.rows:type_name -> trpc.moox.storage.PrimaryStoreRow
-	31, // 25: trpc.moox.storage.ScanPrimaryRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	26, // 26: trpc.moox.storage.ApplyPrimaryRecordMutationsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	33, // 25: trpc.moox.storage.ScanPrimaryRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	28, // 26: trpc.moox.storage.ApplyPrimaryRecordMutationsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	2,  // 27: trpc.moox.storage.ApplyPrimaryRecordMutationsReq.source_target:type_name -> trpc.moox.storage.PrimaryStoreTarget
-	32, // 28: trpc.moox.storage.ApplyPrimaryRecordMutationsReq.mutations:type_name -> trpc.moox.storage.RecordMutation
-	27, // 29: trpc.moox.storage.ApplyPrimaryRecordMutationsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	33, // 30: trpc.moox.storage.ApplyPrimaryRecordMutationsRsp.commit:type_name -> trpc.moox.storage.RecordRowsCommittedEvent
-	26, // 31: trpc.moox.storage.OpenRecordSnapshotReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	34, // 28: trpc.moox.storage.ApplyPrimaryRecordMutationsReq.mutations:type_name -> trpc.moox.storage.RecordMutation
+	29, // 29: trpc.moox.storage.ApplyPrimaryRecordMutationsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	35, // 30: trpc.moox.storage.ApplyPrimaryRecordMutationsRsp.commit:type_name -> trpc.moox.storage.RecordRowsCommittedEvent
+	28, // 31: trpc.moox.storage.OpenRecordSnapshotReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	2,  // 32: trpc.moox.storage.OpenRecordSnapshotReq.source_target:type_name -> trpc.moox.storage.PrimaryStoreTarget
-	34, // 33: trpc.moox.storage.OpenRecordSnapshotReq.mode:type_name -> trpc.moox.storage.RecordReadMode
-	35, // 34: trpc.moox.storage.OpenRecordSnapshotReq.updated_time_range:type_name -> trpc.moox.storage.TimeRange
-	27, // 35: trpc.moox.storage.OpenRecordSnapshotRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	26, // 36: trpc.moox.storage.ReadRecordSnapshotReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	36, // 33: trpc.moox.storage.OpenRecordSnapshotReq.mode:type_name -> trpc.moox.storage.RecordReadMode
+	37, // 34: trpc.moox.storage.OpenRecordSnapshotReq.updated_time_range:type_name -> trpc.moox.storage.TimeRange
+	29, // 35: trpc.moox.storage.OpenRecordSnapshotRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	28, // 36: trpc.moox.storage.ReadRecordSnapshotReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	2,  // 37: trpc.moox.storage.ReadRecordSnapshotReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
-	27, // 38: trpc.moox.storage.ReadRecordSnapshotRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	36, // 39: trpc.moox.storage.ReadRecordSnapshotRsp.rows:type_name -> trpc.moox.storage.RecordRow
-	26, // 40: trpc.moox.storage.ScanRecordSnapshotReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	29, // 38: trpc.moox.storage.ReadRecordSnapshotRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	38, // 39: trpc.moox.storage.ReadRecordSnapshotRsp.rows:type_name -> trpc.moox.storage.RecordRow
+	28, // 40: trpc.moox.storage.ScanRecordSnapshotReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	2,  // 41: trpc.moox.storage.ScanRecordSnapshotReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
-	30, // 42: trpc.moox.storage.ScanRecordSnapshotReq.page:type_name -> trpc.moox.common.Page
-	27, // 43: trpc.moox.storage.ScanRecordSnapshotRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	36, // 44: trpc.moox.storage.ScanRecordSnapshotRsp.rows:type_name -> trpc.moox.storage.RecordRow
-	31, // 45: trpc.moox.storage.ScanRecordSnapshotRsp.page_result:type_name -> trpc.moox.common.PageResult
-	26, // 46: trpc.moox.storage.RenewRecordSnapshotReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	26, // 47: trpc.moox.storage.CloseRecordSnapshotReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	26, // 48: trpc.moox.storage.GetRecordWatermarkReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	2,  // 49: trpc.moox.storage.GetRecordWatermarkReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
-	27, // 50: trpc.moox.storage.GetRecordWatermarkRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	26, // 51: trpc.moox.storage.ScanRecordJournalReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	2,  // 52: trpc.moox.storage.ScanRecordJournalReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
-	30, // 53: trpc.moox.storage.ScanRecordJournalReq.page:type_name -> trpc.moox.common.Page
-	27, // 54: trpc.moox.storage.ScanRecordJournalRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	33, // 55: trpc.moox.storage.ScanRecordJournalRsp.events:type_name -> trpc.moox.storage.RecordRowsCommittedEvent
-	31, // 56: trpc.moox.storage.ScanRecordJournalRsp.page_result:type_name -> trpc.moox.common.PageResult
-	3,  // 57: trpc.moox.storage.PrimaryStore.WritePrimaryRows:input_type -> trpc.moox.storage.WritePrimaryRowsReq
-	5,  // 58: trpc.moox.storage.PrimaryStore.ReadPrimaryRows:input_type -> trpc.moox.storage.ReadPrimaryRowsReq
-	7,  // 59: trpc.moox.storage.PrimaryStore.ScanPrimaryRows:input_type -> trpc.moox.storage.ScanPrimaryRowsReq
-	4,  // 60: trpc.moox.storage.PrimaryStore.WritePrimaryRows:output_type -> trpc.moox.storage.WritePrimaryRowsRsp
-	6,  // 61: trpc.moox.storage.PrimaryStore.ReadPrimaryRows:output_type -> trpc.moox.storage.ReadPrimaryRowsRsp
-	8,  // 62: trpc.moox.storage.PrimaryStore.ScanPrimaryRows:output_type -> trpc.moox.storage.ScanPrimaryRowsRsp
-	60, // [60:63] is the sub-list for method output_type
-	57, // [57:60] is the sub-list for method input_type
-	57, // [57:57] is the sub-list for extension type_name
-	57, // [57:57] is the sub-list for extension extendee
-	0,  // [0:57] is the sub-list for field type_name
+	32, // 42: trpc.moox.storage.ScanRecordSnapshotReq.page:type_name -> trpc.moox.common.Page
+	29, // 43: trpc.moox.storage.ScanRecordSnapshotRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	38, // 44: trpc.moox.storage.ScanRecordSnapshotRsp.rows:type_name -> trpc.moox.storage.RecordRow
+	33, // 45: trpc.moox.storage.ScanRecordSnapshotRsp.page_result:type_name -> trpc.moox.common.PageResult
+	28, // 46: trpc.moox.storage.RenewRecordSnapshotReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	28, // 47: trpc.moox.storage.CloseRecordSnapshotReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	29, // 48: trpc.moox.storage.RenewRecordSnapshotRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	29, // 49: trpc.moox.storage.CloseRecordSnapshotRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	28, // 50: trpc.moox.storage.GetRecordWatermarkReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	2,  // 51: trpc.moox.storage.GetRecordWatermarkReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
+	29, // 52: trpc.moox.storage.GetRecordWatermarkRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	28, // 53: trpc.moox.storage.ScanRecordJournalReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	2,  // 54: trpc.moox.storage.ScanRecordJournalReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
+	32, // 55: trpc.moox.storage.ScanRecordJournalReq.page:type_name -> trpc.moox.common.Page
+	29, // 56: trpc.moox.storage.ScanRecordJournalRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	35, // 57: trpc.moox.storage.ScanRecordJournalRsp.events:type_name -> trpc.moox.storage.RecordRowsCommittedEvent
+	33, // 58: trpc.moox.storage.ScanRecordJournalRsp.page_result:type_name -> trpc.moox.common.PageResult
+	3,  // 59: trpc.moox.storage.PrimaryStore.WritePrimaryRows:input_type -> trpc.moox.storage.WritePrimaryRowsReq
+	5,  // 60: trpc.moox.storage.PrimaryStore.ReadPrimaryRows:input_type -> trpc.moox.storage.ReadPrimaryRowsReq
+	7,  // 61: trpc.moox.storage.PrimaryStore.ScanPrimaryRows:input_type -> trpc.moox.storage.ScanPrimaryRowsReq
+	9,  // 62: trpc.moox.storage.PrimaryStore.ApplyPrimaryRecordMutations:input_type -> trpc.moox.storage.ApplyPrimaryRecordMutationsReq
+	11, // 63: trpc.moox.storage.PrimaryStore.OpenRecordSnapshot:input_type -> trpc.moox.storage.OpenRecordSnapshotReq
+	13, // 64: trpc.moox.storage.PrimaryStore.ReadRecordSnapshot:input_type -> trpc.moox.storage.ReadRecordSnapshotReq
+	15, // 65: trpc.moox.storage.PrimaryStore.ScanRecordSnapshot:input_type -> trpc.moox.storage.ScanRecordSnapshotReq
+	17, // 66: trpc.moox.storage.PrimaryStore.RenewRecordSnapshot:input_type -> trpc.moox.storage.RenewRecordSnapshotReq
+	18, // 67: trpc.moox.storage.PrimaryStore.CloseRecordSnapshot:input_type -> trpc.moox.storage.CloseRecordSnapshotReq
+	21, // 68: trpc.moox.storage.PrimaryStore.GetRecordWatermark:input_type -> trpc.moox.storage.GetRecordWatermarkReq
+	23, // 69: trpc.moox.storage.PrimaryStore.ScanRecordJournal:input_type -> trpc.moox.storage.ScanRecordJournalReq
+	4,  // 70: trpc.moox.storage.PrimaryStore.WritePrimaryRows:output_type -> trpc.moox.storage.WritePrimaryRowsRsp
+	6,  // 71: trpc.moox.storage.PrimaryStore.ReadPrimaryRows:output_type -> trpc.moox.storage.ReadPrimaryRowsRsp
+	8,  // 72: trpc.moox.storage.PrimaryStore.ScanPrimaryRows:output_type -> trpc.moox.storage.ScanPrimaryRowsRsp
+	10, // 73: trpc.moox.storage.PrimaryStore.ApplyPrimaryRecordMutations:output_type -> trpc.moox.storage.ApplyPrimaryRecordMutationsRsp
+	12, // 74: trpc.moox.storage.PrimaryStore.OpenRecordSnapshot:output_type -> trpc.moox.storage.OpenRecordSnapshotRsp
+	14, // 75: trpc.moox.storage.PrimaryStore.ReadRecordSnapshot:output_type -> trpc.moox.storage.ReadRecordSnapshotRsp
+	16, // 76: trpc.moox.storage.PrimaryStore.ScanRecordSnapshot:output_type -> trpc.moox.storage.ScanRecordSnapshotRsp
+	19, // 77: trpc.moox.storage.PrimaryStore.RenewRecordSnapshot:output_type -> trpc.moox.storage.RenewRecordSnapshotRsp
+	20, // 78: trpc.moox.storage.PrimaryStore.CloseRecordSnapshot:output_type -> trpc.moox.storage.CloseRecordSnapshotRsp
+	22, // 79: trpc.moox.storage.PrimaryStore.GetRecordWatermark:output_type -> trpc.moox.storage.GetRecordWatermarkRsp
+	24, // 80: trpc.moox.storage.PrimaryStore.ScanRecordJournal:output_type -> trpc.moox.storage.ScanRecordJournalRsp
+	70, // [70:81] is the sub-list for method output_type
+	59, // [59:70] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_store_proto_init() }
@@ -2340,7 +2519,7 @@ func file_store_proto_init() {
 			}
 		}
 		file_store_proto_msgTypes[19].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetRecordWatermarkReq); i {
+			switch v := v.(*RenewRecordSnapshotRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2352,7 +2531,7 @@ func file_store_proto_init() {
 			}
 		}
 		file_store_proto_msgTypes[20].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetRecordWatermarkRsp); i {
+			switch v := v.(*CloseRecordSnapshotRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2364,7 +2543,7 @@ func file_store_proto_init() {
 			}
 		}
 		file_store_proto_msgTypes[21].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ScanRecordJournalReq); i {
+			switch v := v.(*GetRecordWatermarkReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2376,6 +2555,30 @@ func file_store_proto_init() {
 			}
 		}
 		file_store_proto_msgTypes[22].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetRecordWatermarkRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_store_proto_msgTypes[23].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ScanRecordJournalReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_store_proto_msgTypes[24].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ScanRecordJournalRsp); i {
 			case 0:
 				return &v.state
@@ -2394,7 +2597,7 @@ func file_store_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_store_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   24,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

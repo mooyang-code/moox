@@ -25,6 +25,22 @@ type PrimaryStoreService interface {
 	ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq) (*ReadPrimaryRowsRsp, error)
 	// ScanPrimaryRows ScanPrimaryRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
 	ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq) (*ScanPrimaryRowsRsp, error)
+
+	ApplyPrimaryRecordMutations(ctx context.Context, req *ApplyPrimaryRecordMutationsReq) (*ApplyPrimaryRecordMutationsRsp, error)
+
+	OpenRecordSnapshot(ctx context.Context, req *OpenRecordSnapshotReq) (*OpenRecordSnapshotRsp, error)
+
+	ReadRecordSnapshot(ctx context.Context, req *ReadRecordSnapshotReq) (*ReadRecordSnapshotRsp, error)
+
+	ScanRecordSnapshot(ctx context.Context, req *ScanRecordSnapshotReq) (*ScanRecordSnapshotRsp, error)
+
+	RenewRecordSnapshot(ctx context.Context, req *RenewRecordSnapshotReq) (*RenewRecordSnapshotRsp, error)
+
+	CloseRecordSnapshot(ctx context.Context, req *CloseRecordSnapshotReq) (*CloseRecordSnapshotRsp, error)
+
+	GetRecordWatermark(ctx context.Context, req *GetRecordWatermarkReq) (*GetRecordWatermarkRsp, error)
+
+	ScanRecordJournal(ctx context.Context, req *ScanRecordJournalReq) (*ScanRecordJournalRsp, error)
 }
 
 func PrimaryStoreService_WritePrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -81,6 +97,150 @@ func PrimaryStoreService_ScanPrimaryRows_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
+func PrimaryStoreService_ApplyPrimaryRecordMutations_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ApplyPrimaryRecordMutationsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).ApplyPrimaryRecordMutations(ctx, reqbody.(*ApplyPrimaryRecordMutationsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_OpenRecordSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &OpenRecordSnapshotReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).OpenRecordSnapshot(ctx, reqbody.(*OpenRecordSnapshotReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_ReadRecordSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReadRecordSnapshotReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).ReadRecordSnapshot(ctx, reqbody.(*ReadRecordSnapshotReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_ScanRecordSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ScanRecordSnapshotReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).ScanRecordSnapshot(ctx, reqbody.(*ScanRecordSnapshotReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_RenewRecordSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RenewRecordSnapshotReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).RenewRecordSnapshot(ctx, reqbody.(*RenewRecordSnapshotReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_CloseRecordSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CloseRecordSnapshotReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).CloseRecordSnapshot(ctx, reqbody.(*CloseRecordSnapshotReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_GetRecordWatermark_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetRecordWatermarkReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).GetRecordWatermark(ctx, reqbody.(*GetRecordWatermarkReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_ScanRecordJournal_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ScanRecordJournalReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).ScanRecordJournal(ctx, reqbody.(*ScanRecordJournalReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // PrimaryStoreServer_ServiceDesc descriptor for server.RegisterService.
 var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.PrimaryStore",
@@ -97,6 +257,38 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.PrimaryStore/ScanPrimaryRows",
 			Func: PrimaryStoreService_ScanPrimaryRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/ApplyPrimaryRecordMutations",
+			Func: PrimaryStoreService_ApplyPrimaryRecordMutations_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/OpenRecordSnapshot",
+			Func: PrimaryStoreService_OpenRecordSnapshot_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/ReadRecordSnapshot",
+			Func: PrimaryStoreService_ReadRecordSnapshot_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/ScanRecordSnapshot",
+			Func: PrimaryStoreService_ScanRecordSnapshot_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/RenewRecordSnapshot",
+			Func: PrimaryStoreService_RenewRecordSnapshot_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/CloseRecordSnapshot",
+			Func: PrimaryStoreService_CloseRecordSnapshot_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/GetRecordWatermark",
+			Func: PrimaryStoreService_GetRecordWatermark_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/ScanRecordJournal",
+			Func: PrimaryStoreService_ScanRecordJournal_Handler,
 		},
 	},
 }
@@ -126,6 +318,30 @@ func (s *UnimplementedPrimaryStore) ReadPrimaryRows(ctx context.Context, req *Re
 func (s *UnimplementedPrimaryStore) ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq) (*ScanPrimaryRowsRsp, error) {
 	return nil, errors.New("rpc ScanPrimaryRows of service PrimaryStore is not implemented")
 }
+func (s *UnimplementedPrimaryStore) ApplyPrimaryRecordMutations(ctx context.Context, req *ApplyPrimaryRecordMutationsReq) (*ApplyPrimaryRecordMutationsRsp, error) {
+	return nil, errors.New("rpc ApplyPrimaryRecordMutations of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) OpenRecordSnapshot(ctx context.Context, req *OpenRecordSnapshotReq) (*OpenRecordSnapshotRsp, error) {
+	return nil, errors.New("rpc OpenRecordSnapshot of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) ReadRecordSnapshot(ctx context.Context, req *ReadRecordSnapshotReq) (*ReadRecordSnapshotRsp, error) {
+	return nil, errors.New("rpc ReadRecordSnapshot of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) ScanRecordSnapshot(ctx context.Context, req *ScanRecordSnapshotReq) (*ScanRecordSnapshotRsp, error) {
+	return nil, errors.New("rpc ScanRecordSnapshot of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) RenewRecordSnapshot(ctx context.Context, req *RenewRecordSnapshotReq) (*RenewRecordSnapshotRsp, error) {
+	return nil, errors.New("rpc RenewRecordSnapshot of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) CloseRecordSnapshot(ctx context.Context, req *CloseRecordSnapshotReq) (*CloseRecordSnapshotRsp, error) {
+	return nil, errors.New("rpc CloseRecordSnapshot of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) GetRecordWatermark(ctx context.Context, req *GetRecordWatermarkReq) (*GetRecordWatermarkRsp, error) {
+	return nil, errors.New("rpc GetRecordWatermark of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) ScanRecordJournal(ctx context.Context, req *ScanRecordJournalReq) (*ScanRecordJournalRsp, error) {
+	return nil, errors.New("rpc ScanRecordJournal of service PrimaryStore is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -141,6 +357,22 @@ type PrimaryStoreClientProxy interface {
 	ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq, opts ...client.Option) (rsp *ReadPrimaryRowsRsp, err error)
 	// ScanPrimaryRows ScanPrimaryRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
 	ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq, opts ...client.Option) (rsp *ScanPrimaryRowsRsp, err error)
+
+	ApplyPrimaryRecordMutations(ctx context.Context, req *ApplyPrimaryRecordMutationsReq, opts ...client.Option) (rsp *ApplyPrimaryRecordMutationsRsp, err error)
+
+	OpenRecordSnapshot(ctx context.Context, req *OpenRecordSnapshotReq, opts ...client.Option) (rsp *OpenRecordSnapshotRsp, err error)
+
+	ReadRecordSnapshot(ctx context.Context, req *ReadRecordSnapshotReq, opts ...client.Option) (rsp *ReadRecordSnapshotRsp, err error)
+
+	ScanRecordSnapshot(ctx context.Context, req *ScanRecordSnapshotReq, opts ...client.Option) (rsp *ScanRecordSnapshotRsp, err error)
+
+	RenewRecordSnapshot(ctx context.Context, req *RenewRecordSnapshotReq, opts ...client.Option) (rsp *RenewRecordSnapshotRsp, err error)
+
+	CloseRecordSnapshot(ctx context.Context, req *CloseRecordSnapshotReq, opts ...client.Option) (rsp *CloseRecordSnapshotRsp, err error)
+
+	GetRecordWatermark(ctx context.Context, req *GetRecordWatermarkReq, opts ...client.Option) (rsp *GetRecordWatermarkRsp, err error)
+
+	ScanRecordJournal(ctx context.Context, req *ScanRecordJournalReq, opts ...client.Option) (rsp *ScanRecordJournalRsp, err error)
 }
 
 type PrimaryStoreClientProxyImpl struct {
@@ -206,6 +438,166 @@ func (c *PrimaryStoreClientProxyImpl) ScanPrimaryRows(ctx context.Context, req *
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ScanPrimaryRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) ApplyPrimaryRecordMutations(ctx context.Context, req *ApplyPrimaryRecordMutationsReq, opts ...client.Option) (*ApplyPrimaryRecordMutationsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ApplyPrimaryRecordMutations")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("ApplyPrimaryRecordMutations")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ApplyPrimaryRecordMutationsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) OpenRecordSnapshot(ctx context.Context, req *OpenRecordSnapshotReq, opts ...client.Option) (*OpenRecordSnapshotRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/OpenRecordSnapshot")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("OpenRecordSnapshot")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &OpenRecordSnapshotRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) ReadRecordSnapshot(ctx context.Context, req *ReadRecordSnapshotReq, opts ...client.Option) (*ReadRecordSnapshotRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ReadRecordSnapshot")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("ReadRecordSnapshot")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReadRecordSnapshotRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) ScanRecordSnapshot(ctx context.Context, req *ScanRecordSnapshotReq, opts ...client.Option) (*ScanRecordSnapshotRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ScanRecordSnapshot")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("ScanRecordSnapshot")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ScanRecordSnapshotRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) RenewRecordSnapshot(ctx context.Context, req *RenewRecordSnapshotReq, opts ...client.Option) (*RenewRecordSnapshotRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/RenewRecordSnapshot")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("RenewRecordSnapshot")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RenewRecordSnapshotRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) CloseRecordSnapshot(ctx context.Context, req *CloseRecordSnapshotReq, opts ...client.Option) (*CloseRecordSnapshotRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/CloseRecordSnapshot")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("CloseRecordSnapshot")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CloseRecordSnapshotRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) GetRecordWatermark(ctx context.Context, req *GetRecordWatermarkReq, opts ...client.Option) (*GetRecordWatermarkRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/GetRecordWatermark")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("GetRecordWatermark")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetRecordWatermarkRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) ScanRecordJournal(ctx context.Context, req *ScanRecordJournalReq, opts ...client.Option) (*ScanRecordJournalRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ScanRecordJournal")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("ScanRecordJournal")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ScanRecordJournalRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

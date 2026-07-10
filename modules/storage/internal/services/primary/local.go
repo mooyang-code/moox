@@ -82,6 +82,109 @@ func (c *LocalClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarge
 	}
 }
 
+func (c *LocalClient) ApplyRecordMutations(ctx context.Context, target *pb.PrimaryStoreTarget, requestID string, mutations []*pb.RecordMutation) (*pb.RecordRowsCommittedEvent, error) {
+	if err := validatePebbleTarget(target); err != nil {
+		return nil, err
+	}
+	store, err := c.factStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.ApplyRecordMutations(ctx, requestID, mutations)
+}
+
+func (c *LocalClient) OpenRecordSnapshot(ctx context.Context, req *pb.OpenRecordSnapshotReq) (*pb.OpenRecordSnapshotRsp, error) {
+	if err := validatePebbleTarget(req.GetSourceTarget()); err != nil {
+		return nil, err
+	}
+	store, err := c.factStore()
+	if err != nil {
+		return nil, err
+	}
+	id, seq, err := store.OpenRecordSnapshot(ctx, req.GetMode(), req.GetUpdatedTimeRange())
+	if err != nil {
+		return nil, err
+	}
+	source, _, err := store.RecordWatermark(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.OpenRecordSnapshotRsp{SnapshotId: id, CommitSeq: seq, SourceId: source}, nil
+}
+
+func (c *LocalClient) ReadRecordSnapshot(ctx context.Context, req *pb.ReadRecordSnapshotReq) (*pb.ReadRecordSnapshotRsp, error) {
+	if err := validatePebbleTarget(req.GetTarget()); err != nil {
+		return nil, err
+	}
+	store, err := c.factStore()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := store.ReadRecordSnapshot(ctx, req.GetSnapshotId(), req.GetTarget(), req.GetRecordIds())
+	return &pb.ReadRecordSnapshotRsp{Rows: rows}, err
+}
+
+func (c *LocalClient) ScanRecordSnapshot(ctx context.Context, req *pb.ScanRecordSnapshotReq) (*pb.ScanRecordSnapshotRsp, error) {
+	if err := validatePebbleTarget(req.GetTarget()); err != nil {
+		return nil, err
+	}
+	store, err := c.factStore()
+	if err != nil {
+		return nil, err
+	}
+	rows, page, err := store.ScanRecordSnapshot(ctx, req.GetSnapshotId(), req.GetTarget(), req.GetPage())
+	return &pb.ScanRecordSnapshotRsp{Rows: rows, PageResult: page}, err
+}
+
+func (c *LocalClient) RenewRecordSnapshot(ctx context.Context, req *pb.RenewRecordSnapshotReq) error {
+	store, err := c.factStore()
+	if err != nil {
+		return err
+	}
+	return store.RenewRecordSnapshot(ctx, req.GetSnapshotId())
+}
+
+func (c *LocalClient) CloseRecordSnapshot(ctx context.Context, req *pb.CloseRecordSnapshotReq) error {
+	store, err := c.factStore()
+	if err != nil {
+		return err
+	}
+	return store.CloseRecordSnapshot(ctx, req.GetSnapshotId())
+}
+
+func (c *LocalClient) GetRecordWatermark(ctx context.Context, target *pb.PrimaryStoreTarget) (string, uint64, error) {
+	if err := validatePebbleTarget(target); err != nil {
+		return "", 0, err
+	}
+	store, err := c.factStore()
+	if err != nil {
+		return "", 0, err
+	}
+	return store.RecordWatermark(ctx)
+}
+
+func (c *LocalClient) ScanRecordJournal(ctx context.Context, req *pb.ScanRecordJournalReq) (*pb.ScanRecordJournalRsp, error) {
+	if err := validatePebbleTarget(req.GetTarget()); err != nil {
+		return nil, err
+	}
+	store, err := c.factStore()
+	if err != nil {
+		return nil, err
+	}
+	events, scanned, page, err := store.ScanRecordJournal(ctx, req.GetAfterCommitSeq(), req.GetThroughCommitSeq(), req.GetPage())
+	return &pb.ScanRecordJournalRsp{Events: events, ScannedThroughCommitSeq: scanned, PageResult: page}, err
+}
+
+func validatePebbleTarget(target *pb.PrimaryStoreTarget) error {
+	if target == nil {
+		return fmt.Errorf("primary store target is required")
+	}
+	if target.GetEngine() != "" && target.GetEngine() != "pebble" {
+		return fmt.Errorf("unsupported record engine %s", target.GetEngine())
+	}
+	return nil
+}
+
 func (c *LocalClient) factStore() (device.FactStore, error) {
 	if c.pebble != nil {
 		return c.pebble, nil

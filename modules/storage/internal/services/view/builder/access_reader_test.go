@@ -53,6 +53,10 @@ func (p *scanAccessProxy) ReadRecordRows(context.Context, *pb.ReadRecordRowsReq,
 	return nil, errors.New("not used")
 }
 
+func (p *scanAccessProxy) UpsertRecordRows(context.Context, *pb.UpsertRecordRowsReq, ...client.Option) (*pb.UpsertRecordRowsRsp, error) {
+	return nil, errors.New("not used")
+}
+
 func (p *scanAccessProxy) ScanTimeSeriesRows(_ context.Context, req *pb.ScanTimeSeriesRowsReq, _ ...client.Option) (*pb.ScanTimeSeriesRowsRsp, error) {
 	p.timeSeriesScan = req
 	return &pb.ScanTimeSeriesRowsRsp{

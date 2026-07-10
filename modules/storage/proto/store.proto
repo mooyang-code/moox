@@ -185,6 +185,14 @@ message CloseRecordSnapshotReq {
   string snapshot_id = 2;
 }
 
+message RenewRecordSnapshotRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message CloseRecordSnapshotRsp {
+  common.RetInfo ret_info = 1;
+}
+
 message GetRecordWatermarkReq {
   common.AuthInfo auth_info = 1;
   PrimaryStoreTarget target = 2;
@@ -219,4 +227,12 @@ service PrimaryStore {
   rpc ReadPrimaryRows(ReadPrimaryRowsReq) returns (ReadPrimaryRowsRsp);
   // ScanPrimaryRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
   rpc ScanPrimaryRows(ScanPrimaryRowsReq) returns (ScanPrimaryRowsRsp);
+  rpc ApplyPrimaryRecordMutations(ApplyPrimaryRecordMutationsReq) returns (ApplyPrimaryRecordMutationsRsp);
+  rpc OpenRecordSnapshot(OpenRecordSnapshotReq) returns (OpenRecordSnapshotRsp);
+  rpc ReadRecordSnapshot(ReadRecordSnapshotReq) returns (ReadRecordSnapshotRsp);
+  rpc ScanRecordSnapshot(ScanRecordSnapshotReq) returns (ScanRecordSnapshotRsp);
+  rpc RenewRecordSnapshot(RenewRecordSnapshotReq) returns (RenewRecordSnapshotRsp);
+  rpc CloseRecordSnapshot(CloseRecordSnapshotReq) returns (CloseRecordSnapshotRsp);
+  rpc GetRecordWatermark(GetRecordWatermarkReq) returns (GetRecordWatermarkRsp);
+  rpc ScanRecordJournal(ScanRecordJournalReq) returns (ScanRecordJournalRsp);
 }
