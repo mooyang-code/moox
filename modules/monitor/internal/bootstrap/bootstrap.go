@@ -3,11 +3,13 @@ package bootstrap
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorpeer "github.com/mooyang-code/moox/modules/monitor/internal/peer"
 	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
@@ -17,6 +19,7 @@ import (
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -53,9 +56,49 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	startScheduler(ctx, cfg, mgr, resultHook)
 	startRetentionCleaner(ctx, cfg, mgr)
 	startPeerPuller(ctx, cfg, mgr)
+	startMetricsConsumer(ctx, cfg, mgr)
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
+}
+
+func startMetricsConsumer(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) {
+	if cfg == nil || !cfg.Metrics.Enabled || mgr == nil || mgr.DB() == nil {
+		return
+	}
+	storage := monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
+	repo := monmetrics.NewRepository(mgr.DB())
+	go func() {
+		for {
+			if err := ctx.Err(); err != nil {
+				return
+			}
+			urls := strings.Split(cfg.Metrics.EventBusURL, ",")
+			js, err := jetstream.Connect(ctx, jetstream.Config{URLs: urls, Name: "moox-monitor-metrics"})
+			if err != nil {
+				log.WarnContextf(ctx, "metrics eventbus unavailable; ingestion degraded: %v", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(30 * time.Second):
+				}
+				continue
+			}
+			err = monmetrics.RunWhenReady(ctx, monmetrics.ConsumerOptions{Client: js, Storage: storage, Repository: repo, Authorizer: monmetrics.SysDeployAuthorizer{DB: mgr.DB()}, DLQ: monmetrics.JetStreamDLQ(js, "moox-monitor", cfg.Instance.InstanceID), Config: cfg.Metrics, ServiceName: "moox-monitor", InstanceID: cfg.Instance.InstanceID})
+			_ = js.Close()
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
+				log.WarnContextf(ctx, "metrics ingestion stopped; retrying: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(30 * time.Second):
+			}
+		}
+	}()
 }
 
 func Manager() *monstorage.Manager {

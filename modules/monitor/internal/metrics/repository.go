@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	messagepb "github.com/mooyang-code/moox/packages/messagepb"
@@ -20,6 +21,14 @@ func NewRepository(db *gorm.DB) *Repository {
 	return &Repository{db: db, DedupeRetention: 7 * 24 * time.Hour}
 }
 func (r *Repository) DB() *gorm.DB { return r.db }
+func (r *Repository) IsDuplicate(ctx context.Context, messageID string) (bool, error) {
+	if r == nil || r.db == nil || strings.TrimSpace(messageID) == "" {
+		return false, errors.New("message repository is not initialized or message_id is empty")
+	}
+	var count int64
+	err := r.db.WithContext(ctx).Model(&MetricIngestMessage{}).Where("c_message_id = ?", messageID).Count(&count).Error
+	return count > 0, err
+}
 
 // CommitIngest atomically records dedupe/catalog/latest state. Storage history
 // is deliberately written before this method and is independently idempotent.

@@ -42,6 +42,7 @@ alert:
 
 metrics:
   enabled: true
+  eventbus_url: nats://127.0.0.1:4222
   stream: MOOX_METRICS
   topic: moox.metrics.snapshot.reported.v1
   consumer: monitor_metrics_ingest_v1

@@ -1,0 +1,287 @@
+package metrics
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	messagepb "github.com/mooyang-code/moox/packages/messagepb"
+	metricspb "github.com/mooyang-code/moox/packages/metricspb"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
+)
+
+const (
+	MetricTopic       = "moox.metrics.snapshot.reported.v1"
+	MetricContentType = "application/vnd.moox.metrics.snapshot+protobuf"
+	MetricDLQTopic    = "moox.dlq.message.rejected.v1"
+)
+
+type ProducerAuthorizer interface {
+	IsRegistered(context.Context, string, string) (bool, error)
+}
+type SysDeployAuthorizer struct{ DB *gorm.DB }
+
+func (a SysDeployAuthorizer) IsRegistered(ctx context.Context, serviceName, _ string) (bool, error) {
+	if a.DB == nil {
+		return false, errors.New("sysdeploy registry database is nil")
+	}
+	var count int64
+	err := a.DB.WithContext(ctx).Table("t_monitor_checks").Where("c_check_id = ? AND c_source = ? AND c_enabled = 1 AND c_is_deleted = 0", serviceName, "sysdeploy").Count(&count).Error
+	return count > 0, err
+}
+
+type DLQPublisher interface {
+	Publish(context.Context, *messagepb.MooxMessage) error
+}
+type jetstreamDLQ struct {
+	client   *jetstream.Client
+	producer *messagepb.Producer
+}
+
+func JetStreamDLQ(client *jetstream.Client, service, instance string) DLQPublisher {
+	return jetstreamDLQ{client: client, producer: &messagepb.Producer{ServiceName: service, InstanceId: instance}}
+}
+
+func (p jetstreamDLQ) Publish(ctx context.Context, msg *messagepb.MooxMessage) error {
+	_, err := p.client.Publish(ctx, msg)
+	return err
+}
+
+type ConsumerOptions struct {
+	Client      *jetstream.Client
+	Storage     *StorageAdapter
+	Repository  *Repository
+	Authorizer  ProducerAuthorizer
+	DLQ         DLQPublisher
+	Config      monconfig.MetricsConfig
+	ServiceName string
+	InstanceID  string
+}
+type Consumer struct {
+	pull     *jetstream.PullConsumer
+	opts     ConsumerOptions
+	stopOnce sync.Once
+	wg       sync.WaitGroup
+}
+
+func NewConsumer(ctx context.Context, opts ConsumerOptions) (*Consumer, error) {
+	if opts.Client == nil {
+		return nil, errors.New("metrics eventbus client is nil")
+	}
+	if opts.Storage == nil || opts.Repository == nil {
+		return nil, errors.New("metrics storage and repository are required")
+	}
+	cfg := opts.Config
+	if cfg.Stream == "" {
+		cfg.Stream = "MOOX_METRICS"
+	}
+	if cfg.Topic == "" {
+		cfg.Topic = MetricTopic
+	}
+	if cfg.Consumer == "" {
+		cfg.Consumer = "monitor_metrics_ingest_v1"
+	}
+	if cfg.FetchBatchSize <= 0 {
+		cfg.FetchBatchSize = 64
+	}
+	if cfg.FetchMaxWait <= 0 {
+		cfg.FetchMaxWait = time.Second
+	}
+	if cfg.AckWait <= 0 {
+		cfg.AckWait = time.Minute
+	}
+	if cfg.MaxAckPending <= 0 {
+		cfg.MaxAckPending = 256
+	}
+	pull, err := opts.Client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: cfg.Stream, Durable: cfg.Consumer, FilterSubject: cfg.Topic, AckWait: cfg.AckWait, MaxDeliver: -1, MaxAckPending: cfg.MaxAckPending, FetchMaxWait: cfg.FetchMaxWait})
+	if err != nil {
+		return nil, err
+	}
+	opts.Config = cfg
+	return &Consumer{pull: pull, opts: opts}, nil
+}
+
+func (c *Consumer) Close() error {
+	if c == nil {
+		return nil
+	}
+	c.stopOnce.Do(func() {
+		if c.pull != nil {
+			_ = c.pull.Close()
+		}
+		c.wg.Wait()
+	})
+	return nil
+}
+func (c *Consumer) Run(ctx context.Context) error {
+	if c == nil || c.pull == nil {
+		return errors.New("metrics consumer is not initialized")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.wg.Add(1)
+	defer c.wg.Done()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
+		deliveries, err := c.pull.Fetch(ctx, c.opts.Config.FetchBatchSize)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil
+			}
+			if errors.Is(err, jetstream.ErrClosed) {
+				return nil
+			}
+			continue
+		}
+		for _, d := range deliveries {
+			_ = c.HandleDelivery(ctx, d)
+		}
+	}
+}
+
+// RunWhenReady keeps the monitor process alive while Storage metadata or the
+// central EventBus is being deployed. It binds the durable consumer only after
+// read-only schema validation succeeds, avoiding a NAK loop on fresh installs.
+func RunWhenReady(ctx context.Context, opts ConsumerOptions) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if opts.Storage == nil {
+		return errors.New("metrics storage is not initialized")
+	}
+	interval := opts.Config.Storage.MetadataValidationInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
+		if err := opts.Storage.ValidateSchema(ctx); err != nil {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(interval):
+			}
+			continue
+		}
+		consumer, err := NewConsumer(ctx, opts)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(interval):
+			}
+			continue
+		}
+		err = consumer.Run(ctx)
+		_ = consumer.Close()
+		if ctx.Err() != nil {
+			return nil
+		}
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(interval):
+			}
+		}
+	}
+}
+
+func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) error {
+	if d == nil || d.Message == nil {
+		return errors.New("empty metric delivery")
+	}
+	msg := d.Message
+	permanent := func(reason error) error {
+		if c.opts.DLQ == nil {
+			_ = d.Term(context.Background())
+			return reason
+		}
+		dlq := rejectionMessage(msg, reason.Error(), c.opts.ServiceName, c.opts.InstanceID)
+		if err := c.opts.DLQ.Publish(ctx, dlq); err != nil {
+			_ = d.Nak(context.Background(), time.Second)
+			return fmt.Errorf("publish metrics DLQ: %w", err)
+		}
+		if err := d.Term(context.Background()); err != nil {
+			return fmt.Errorf("term rejected metric: %w", err)
+		}
+		return reason
+	}
+	if msg.GetTopic() != c.opts.Config.Topic && msg.GetTopic() != MetricTopic {
+		return permanent(fmt.Errorf("unsupported metric topic %q", msg.GetTopic()))
+	}
+	if msg.GetKind() != messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT {
+		return permanent(fmt.Errorf("unsupported metric message kind %s", msg.GetKind()))
+	}
+	if msg.GetContentType() != MetricContentType && msg.GetContentType() != "application/x-protobuf" {
+		return permanent(fmt.Errorf("unsupported metric content type %q", msg.GetContentType()))
+	}
+	if msg.GetProducer() == nil {
+		return permanent(errors.New("metric producer is missing"))
+	}
+	if c.opts.Authorizer != nil {
+		ok, err := c.opts.Authorizer.IsRegistered(ctx, msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId())
+		if err != nil {
+			return c.retry(d, fmt.Errorf("authorize metric producer: %w", err))
+		}
+		if !ok {
+			return permanent(fmt.Errorf("unregistered metric producer %s/%s", msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId()))
+		}
+	}
+	duplicate, err := c.opts.Repository.IsDuplicate(ctx, msg.GetMessageId())
+	if err != nil {
+		return c.retry(d, err)
+	}
+	if duplicate {
+		return d.Ack(ctx)
+	}
+	snapshot := new(metricspb.MetricSnapshot)
+	if err := proto.Unmarshal(msg.GetPayload(), snapshot); err != nil {
+		return permanent(fmt.Errorf("decode metric snapshot: %w", err))
+	}
+	observed := time.Now().UTC()
+	if msg.GetOccurredAt() != nil {
+		observed = msg.GetOccurredAt().AsTime()
+	}
+	producer := msg.GetProducer()
+	samples, err := ParseSnapshot(snapshot, Envelope{ServiceName: producer.GetServiceName(), InstanceID: producer.GetInstanceId(), MessageID: msg.GetMessageId(), ProducerNodeID: producer.GetNodeId(), ProducerVersion: producer.GetVersion(), ObservedAt: observed}, DefaultLimits())
+	if err != nil {
+		return permanent(err)
+	}
+	if err := c.opts.Storage.WriteSamples(ctx, samples); err != nil {
+		return c.retry(d, err)
+	}
+	duplicate, err = c.opts.Repository.CommitIngest(ctx, msg, samples)
+	if err != nil {
+		return c.retry(d, err)
+	}
+	if duplicate {
+		return d.Ack(ctx)
+	}
+	return d.Ack(ctx)
+}
+func (c *Consumer) retry(d *jetstream.Delivery, err error) error {
+	if d == nil {
+		return err
+	}
+	if nakErr := d.Nak(context.Background(), time.Second); nakErr != nil {
+		return fmt.Errorf("%v; nak: %w", err, nakErr)
+	}
+	return err
+}
+func rejectionMessage(original *messagepb.MooxMessage, reason, service, instance string) *messagepb.MooxMessage {
+	payload, _ := proto.Marshal(original)
+	now := timestamppb.Now()
+	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: original.GetMessageId() + ".rejected", Topic: MetricDLQTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: service, InstanceId: instance}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf", Payload: payload, Attributes: map[string]string{"rejection_reason": reason, "original_topic": original.GetTopic()}}
+}
