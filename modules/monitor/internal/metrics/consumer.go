@@ -2,6 +2,8 @@ package metrics
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -47,6 +49,12 @@ type jetstreamDLQ struct {
 func JetStreamDLQ(client *jetstream.Client, service, instance string) DLQPublisher {
 	if client == nil {
 		return nil
+	}
+	if service == "" {
+		service = "moox-monitor"
+	}
+	if instance == "" {
+		instance = "unknown"
 	}
 	return jetstreamDLQ{client: client, producer: &messagepb.Producer{ServiceName: service, InstanceId: instance}}
 }
@@ -327,6 +335,17 @@ func malformedRejectionMessage(delivery *jetstream.Delivery, reason, service, in
 	if delivery != nil {
 		payload = append([]byte(nil), delivery.RawData...)
 		topic = delivery.Subject
+	}
+	if id == "invalid-envelope" {
+		hashInput := append([]byte(topic+"\x00"), payload...)
+		sum := sha256.Sum256(hashInput)
+		id += "-" + hex.EncodeToString(sum[:8])
+	}
+	if service == "" {
+		service = "moox-monitor"
+	}
+	if instance == "" {
+		instance = "unknown"
 	}
 	return &messagepb.MooxMessage{
 		ProtocolVersion: 1,
