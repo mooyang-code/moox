@@ -76,6 +76,8 @@ replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/pr
 
 replace github.com/mooyang-code/moox/modules/monitor/proto/monitorgen => ./proto/monitorgen
 
+replace github.com/mooyang-code/moox/modules/storage/proto/gen => ../storage/proto/gen
+
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz

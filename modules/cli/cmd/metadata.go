@@ -573,6 +573,11 @@ func runMetadataApply(ctx context.Context, metadataURL string, calls []metadataI
 		if err := postStorageRaw(ctx, metadataURL, metadataServiceName, probe.Method, probe.Request, probe.Response); err != nil {
 			return summary, err
 		}
+		if ret, ok := responseRetInfo(probe.Response); !ok || ret == nil {
+			return summary, fmt.Errorf("%s/%s failed: missing ret_info", metadataServiceName, probe.Method)
+		} else if ret.GetCode() != pb.ErrorCode_SUCCESS && !metadataNotFound(ret) {
+			return summary, fmt.Errorf("%s/%s failed: %s", metadataServiceName, probe.Method, ret.GetMsg())
+		}
 		found, actual := applyProbeResult(call.Resource, probe, call.Request)
 		if !found {
 			if err := postStorage(ctx, metadataURL, metadataServiceName, call.Method, call.Request, call.Response); err != nil {
