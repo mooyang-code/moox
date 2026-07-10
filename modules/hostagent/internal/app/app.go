@@ -65,19 +65,24 @@ func (a *Agent) Run(ctx context.Context) {
 	}
 	ticker := time.NewTicker(a.cfg.Interval)
 	defer ticker.Stop()
-	_, _ = a.runOnce(ctx)
+	_, _ = a.runOnceGuarded(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !a.running.CompareAndSwap(false, true) {
-				a.skipped.Add(1)
-				continue
-			}
-			go func() { defer a.running.Store(false); _, _ = a.runOnce(ctx) }()
+			go func() { _, _ = a.runOnceGuarded(ctx) }()
 		}
 	}
+}
+
+func (a *Agent) runOnceGuarded(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
+	if !a.running.CompareAndSwap(false, true) {
+		a.skipped.Add(1)
+		return &hostagentpb.RunOnceRsp{PublishError: "collection already running"}, fmt.Errorf("collection already running")
+	}
+	defer a.running.Store(false)
+	return a.runOnce(ctx)
 }
 
 func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
@@ -196,7 +201,7 @@ func (a *Agent) GetSnapshot(context.Context, *hostagentpb.GetSnapshotReq) (*host
 	return rsp, nil
 }
 func (a *Agent) RunOnce(ctx context.Context, _ *hostagentpb.RunOnceReq) (*hostagentpb.RunOnceRsp, error) {
-	return a.runOnce(ctx)
+	return a.runOnceGuarded(ctx)
 }
 
 func Register(s *server.Server, a *Agent) error {
