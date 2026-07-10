@@ -3,9 +3,6 @@ package bootstrap
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -26,7 +23,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -110,13 +106,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-type hostEventBusCredential struct {
-	Username     string `yaml:"username"`
-	Token        string `yaml:"token"`
-	MonitorToken string `yaml:"monitor_eventbus_token"`
-	CAFile       string `yaml:"ca_file"`
-}
-
 func startHostMetricsConsumer(ctx context.Context, cfg *config.Config, store *hostmetrics.Store) {
 	if cfg == nil || !cfg.Metrics.Enabled || store == nil {
 		return
@@ -126,9 +115,8 @@ func startHostMetricsConsumer(ctx context.Context, cfg *config.Config, store *ho
 			urls := strings.Split(cfg.Metrics.EventBusURL, ",")
 			jc := jetstream.ConfigFromEnv(urls, "moox-monitor-hostmetrics")
 			if path := strings.TrimSpace(cfg.Metrics.EventBusCredentialFile); path != "" {
-				path = expandHome(path)
-				if raw, err := readCredential(path); err == nil {
-					jc.Username, jc.Password, jc.TLSCAFile = raw.Username, raw.Token, raw.CAFile
+				if raw, err := jetstream.LoadCredentialFile(jetstream.ExpandCredentialPath(path)); err == nil {
+					jc.Username, jc.Password, jc.TLSCAFile = raw.Username, raw.Password, raw.CAFile
 				} else {
 					log.WarnContextf(ctx, "host metrics credential unavailable: %v", err)
 					waitHostMetrics(ctx)
@@ -141,7 +129,7 @@ func startHostMetricsConsumer(ctx context.Context, cfg *config.Config, store *ho
 				waitHostMetrics(ctx)
 				continue
 			}
-			consumer, err := hostmetrics.Bind(ctx, client, store)
+			consumer, err := hostmetrics.BindWithDLQ(ctx, client, store, hostmetrics.NewDLQPublisher(client))
 			if err != nil {
 				_ = client.Close()
 				log.WarnContextf(ctx, "host metrics durable unavailable: %v", err)
@@ -164,39 +152,6 @@ func waitHostMetrics(ctx context.Context) {
 	case <-time.After(15 * time.Second):
 	}
 }
-func expandHome(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, path[2:])
-		}
-	}
-	return os.ExpandEnv(path)
-}
-func readCredential(path string) (hostEventBusCredential, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return hostEventBusCredential{}, err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 || !info.Mode().IsRegular() {
-		return hostEventBusCredential{}, fmt.Errorf("credential file must be regular 0600")
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return hostEventBusCredential{}, err
-	}
-	var c hostEventBusCredential
-	if err := yaml.Unmarshal(raw, &c); err != nil {
-		return c, err
-	}
-	if c.Token == "" {
-		c.Token = c.MonitorToken
-	}
-	if c.Username == "" || c.Token == "" {
-		return c, fmt.Errorf("credential file requires username and token")
-	}
-	return c, nil
-}
-
 func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return

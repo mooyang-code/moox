@@ -9,7 +9,7 @@ import (
 )
 
 func TestValidateHostMetricContract(t *testing.T) {
-	payload, err := proto.Marshal(&hostmetricpb.HostMetric{Snapshot: &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{UsageAvailable: true, UsagePercent: 20}, Memory: &hostmetricpb.MemoryMetric{UsagePercent: 40}}})
+	payload, err := proto.Marshal(&hostmetricpb.HostMetric{Snapshot: &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{LogicalCores: 1, UsageAvailable: true, UsagePercent: 20}, Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 40, AvailableBytes: 60, UsagePercent: 40}}})
 	if err != nil {
 		t.Fatal(err)
 	}

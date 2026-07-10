@@ -1,0 +1,110 @@
+# Logical metadata for the global host-resource history written by Monitor.
+# This file is non-sensitive and is safe to ship in release archives.
+spaces:
+  - space_id: moox_system
+    name: MooX System
+    description: MooX internal platform data
+    owner: moox
+    status: active
+    attributes:
+      scope: internal
+      owner_module: monitor
+      managed_by: moox-cli
+
+data_sources:
+  - space_id: moox_system
+    data_source_id: moox_host_agent
+    name: MooX Host Agent
+    kind: internal
+    timezone: UTC
+    status: active
+
+datasets:
+  - {space_id: moox_system, dataset_id: host_resource_v1, data_source_id: moox_host_agent, name: Host CPU and memory, description: Per-minute host CPU and memory snapshots, data_kind: time_series, freqs: ["1m"], status: active}
+  - {space_id: moox_system, dataset_id: host_fs_v1, data_source_id: moox_host_agent, name: Host filesystems, description: Per-minute filesystem snapshots, data_kind: time_series, freqs: ["1m"], status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, data_source_id: moox_host_agent, name: Host disks, description: Per-minute disk counters and rates, data_kind: time_series, freqs: ["1m"], status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, data_source_id: moox_host_agent, name: Host networks, description: Per-minute network counters and rates, data_kind: time_series, freqs: ["1m"], status: active}
+
+fields:
+  - {space_id: moox_system, field_id: host_agent_id, name: Host agent ID, value_type: string, status: active}
+  - {space_id: moox_system, field_id: host_logical_cores, name: Logical CPU cores, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_cpu_usage_percent, name: CPU usage percent, value_type: double, status: active}
+  - {space_id: moox_system, field_id: host_cpu_usage_available, name: CPU usage available, value_type: bool, status: active}
+  - {space_id: moox_system, field_id: host_memory_total_bytes, name: Memory total bytes, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_memory_used_bytes, name: Memory used bytes, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_memory_available_bytes, name: Memory available bytes, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_memory_usage_percent, name: Memory usage percent, value_type: double, status: active}
+  - {space_id: moox_system, field_id: host_device, name: Device, value_type: string, status: active}
+  - {space_id: moox_system, field_id: host_mountpoint, name: Mountpoint, value_type: string, status: active}
+  - {space_id: moox_system, field_id: host_fs_type, name: Filesystem type, value_type: string, status: active}
+  - {space_id: moox_system, field_id: host_total_bytes, name: Total bytes, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_used_bytes, name: Used bytes, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_available_bytes, name: Available bytes, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_usage_percent, name: Usage percent, value_type: double, status: active}
+  - {space_id: moox_system, field_id: host_read_only, name: Read only, value_type: bool, status: active}
+  - {space_id: moox_system, field_id: host_read_bytes_total, name: Disk read bytes total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_write_bytes_total, name: Disk write bytes total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_read_ops_total, name: Disk read operations total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_write_ops_total, name: Disk write operations total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_io_time_ms_total, name: Disk IO time milliseconds total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_read_bytes_per_second, name: Disk read bytes per second, value_type: double, status: active}
+  - {space_id: moox_system, field_id: host_write_bytes_per_second, name: Disk write bytes per second, value_type: double, status: active}
+  - {space_id: moox_system, field_id: host_read_iops, name: Disk read IOPS, value_type: double, status: active}
+  - {space_id: moox_system, field_id: host_write_iops, name: Disk write IOPS, value_type: double, status: active}
+  - {space_id: moox_system, field_id: host_utilization_percent, name: Disk utilization percent, value_type: double, status: active}
+  - {space_id: moox_system, field_id: host_disk_rate_available, name: Disk rate available, value_type: bool, status: active}
+  - {space_id: moox_system, field_id: host_receive_bytes_total, name: Network receive bytes total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_transmit_bytes_total, name: Network transmit bytes total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_receive_packets_total, name: Network receive packets total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_transmit_packets_total, name: Network transmit packets total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_receive_errors_total, name: Network receive errors total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_transmit_errors_total, name: Network transmit errors total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_receive_dropped_total, name: Network receive dropped total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_transmit_dropped_total, name: Network transmit dropped total, value_type: int, status: active}
+  - {space_id: moox_system, field_id: host_receive_bytes_per_second, name: Network receive bytes per second, value_type: double, status: active}
+  - {space_id: moox_system, field_id: host_transmit_bytes_per_second, name: Network transmit bytes per second, value_type: double, status: active}
+  - {space_id: moox_system, field_id: host_operstate, name: Network operational state, value_type: string, status: active}
+  - {space_id: moox_system, field_id: host_net_rate_available, name: Network rate available, value_type: bool, status: active}
+
+dataset_columns:
+  - {space_id: moox_system, dataset_id: host_resource_v1, column_name: agent_id, origin_type: field, origin_id: host_agent_id, value_type: string, required: true, status: active}
+  - {space_id: moox_system, dataset_id: host_resource_v1, column_name: logical_cores, origin_type: field, origin_id: host_logical_cores, value_type: int, required: true, status: active}
+  - {space_id: moox_system, dataset_id: host_resource_v1, column_name: cpu_usage_percent, origin_type: field, origin_id: host_cpu_usage_percent, value_type: double, status: active}
+  - {space_id: moox_system, dataset_id: host_resource_v1, column_name: cpu_usage_available, origin_type: field, origin_id: host_cpu_usage_available, value_type: bool, required: true, status: active}
+  - {space_id: moox_system, dataset_id: host_resource_v1, column_name: memory_total_bytes, origin_type: field, origin_id: host_memory_total_bytes, value_type: int, required: true, status: active}
+  - {space_id: moox_system, dataset_id: host_resource_v1, column_name: memory_used_bytes, origin_type: field, origin_id: host_memory_used_bytes, value_type: int, required: true, status: active}
+  - {space_id: moox_system, dataset_id: host_resource_v1, column_name: memory_available_bytes, origin_type: field, origin_id: host_memory_available_bytes, value_type: int, required: true, status: active}
+  - {space_id: moox_system, dataset_id: host_resource_v1, column_name: memory_usage_percent, origin_type: field, origin_id: host_memory_usage_percent, value_type: double, required: true, status: active}
+  - {space_id: moox_system, dataset_id: host_fs_v1, column_name: device, origin_type: field, origin_id: host_device, value_type: string, required: true, status: active}
+  - {space_id: moox_system, dataset_id: host_fs_v1, column_name: mountpoint, origin_type: field, origin_id: host_mountpoint, value_type: string, required: true, status: active}
+  - {space_id: moox_system, dataset_id: host_fs_v1, column_name: fs_type, origin_type: field, origin_id: host_fs_type, value_type: string, status: active}
+  - {space_id: moox_system, dataset_id: host_fs_v1, column_name: total_bytes, origin_type: field, origin_id: host_total_bytes, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_fs_v1, column_name: used_bytes, origin_type: field, origin_id: host_used_bytes, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_fs_v1, column_name: available_bytes, origin_type: field, origin_id: host_available_bytes, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_fs_v1, column_name: usage_percent, origin_type: field, origin_id: host_usage_percent, value_type: double, status: active}
+  - {space_id: moox_system, dataset_id: host_fs_v1, column_name: read_only, origin_type: field, origin_id: host_read_only, value_type: bool, status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, column_name: device, origin_type: field, origin_id: host_device, value_type: string, required: true, status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, column_name: read_bytes_total, origin_type: field, origin_id: host_read_bytes_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, column_name: write_bytes_total, origin_type: field, origin_id: host_write_bytes_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, column_name: read_ops_total, origin_type: field, origin_id: host_read_ops_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, column_name: write_ops_total, origin_type: field, origin_id: host_write_ops_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, column_name: io_time_ms_total, origin_type: field, origin_id: host_io_time_ms_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, column_name: read_bytes_per_second, origin_type: field, origin_id: host_read_bytes_per_second, value_type: double, status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, column_name: write_bytes_per_second, origin_type: field, origin_id: host_write_bytes_per_second, value_type: double, status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, column_name: read_iops, origin_type: field, origin_id: host_read_iops, value_type: double, status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, column_name: write_iops, origin_type: field, origin_id: host_write_iops, value_type: double, status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, column_name: utilization_percent, origin_type: field, origin_id: host_utilization_percent, value_type: double, status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, column_name: rate_available, origin_type: field, origin_id: host_disk_rate_available, value_type: bool, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: device, origin_type: field, origin_id: host_device, value_type: string, required: true, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: operstate, origin_type: field, origin_id: host_operstate, value_type: string, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: receive_bytes_total, origin_type: field, origin_id: host_receive_bytes_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: transmit_bytes_total, origin_type: field, origin_id: host_transmit_bytes_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: receive_packets_total, origin_type: field, origin_id: host_receive_packets_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: transmit_packets_total, origin_type: field, origin_id: host_transmit_packets_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: receive_errors_total, origin_type: field, origin_id: host_receive_errors_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: transmit_errors_total, origin_type: field, origin_id: host_transmit_errors_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: receive_dropped_total, origin_type: field, origin_id: host_receive_dropped_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: transmit_dropped_total, origin_type: field, origin_id: host_transmit_dropped_total, value_type: int, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: receive_bytes_per_second, origin_type: field, origin_id: host_receive_bytes_per_second, value_type: double, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: transmit_bytes_per_second, origin_type: field, origin_id: host_transmit_bytes_per_second, value_type: double, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: rate_available, origin_type: field, origin_id: host_net_rate_available, value_type: bool, status: active}

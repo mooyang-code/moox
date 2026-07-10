@@ -25,12 +25,14 @@ build_web_assets() {
 build_web_assets
 TARGET_GOOS="${OS}" TARGET_GOARCH="${ARCH}" "${ROOT}/scripts/build.sh"
 
-validate_metrics_metadata_seeds() {
+validate_monitor_metadata_seeds() {
   local seed
   for seed in \
     "${ROOT}/examples/platform-local.seed.yaml" \
     "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" \
-    "${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml"; do
+    "${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml" \
+    "${ROOT}/examples/metadata-monitor-host.seed.yaml" \
+    "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml"; do
     [[ -s "${seed}" ]] || {
       echo "missing metadata seed: ${seed}" >&2
       exit 1
@@ -42,9 +44,11 @@ validate_metrics_metadata_seeds() {
   # Linux/arm64 and cannot be executed on the packaging workstation.
   (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --dry-run >/dev/null)
   (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml" --dry-run >/dev/null)
+  (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-host.seed.yaml" --dry-run >/dev/null)
+  (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml" --dry-run >/dev/null)
 }
 
-validate_metrics_metadata_seeds
+validate_monitor_metadata_seeds
 
 rm -rf "${RELEASE_ROOT}"
 mkdir -p \

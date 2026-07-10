@@ -19,6 +19,9 @@ grep -q 'apply_metrics_metadata' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'metadata-monitor-metrics.seed.yaml' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_METRICS_STORAGE_ROUTE_SEED' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_METRICS_STORAGE_METADATA_URL' "${ROOT}/scripts/deploy-moox.sh"
+grep -q 'apply_host_metadata' "${ROOT}/scripts/deploy-moox.sh"
+grep -q 'metadata-monitor-host.seed.yaml' "${ROOT}/scripts/deploy-moox.sh"
+grep -q 'MOOX_HOST_STORAGE_ROUTE_SEED' "${ROOT}/scripts/deploy-moox.sh"
 
 if ! awk '/start_eventbus\(\)/ { start=NR } /start_storage\(\)/ { storage=NR } END { exit !(start < storage) }' "${ROOT}/scripts/deploy-moox.sh"; then
   echo "eventbus must start before storage" >&2

@@ -18,6 +18,11 @@ BUILD_WEB_ASSETS=1
 RESET_DATA=0
 TARGET_GOOS=""
 TARGET_GOARCH=""
+METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
+METRICS_ROUTE_SEED="${MOOX_METRICS_STORAGE_ROUTE_SEED:-}"
+HOST_ROUTE_SEED="${MOOX_HOST_STORAGE_ROUTE_SEED:-}"
+EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-${MOOX_EVENTBUS_URL:-}}"
+METRICS_EVENTBUS_URL_ENV="${MOOX_METRICS_EVENTBUS_URL:-}"
 
 usage() {
   cat <<'EOF'
@@ -463,6 +468,7 @@ MONITOR_ENV=(
 
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
 METRICS_ROUTE_SEED="${MOOX_METRICS_STORAGE_ROUTE_SEED:-}"
+HOST_ROUTE_SEED="${MOOX_HOST_STORAGE_ROUTE_SEED:-}"
 EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-${MOOX_EVENTBUS_URL:-}}"
 METRICS_EVENTBUS_URL_ENV="${MOOX_METRICS_EVENTBUS_URL:-}"
 
@@ -580,6 +586,27 @@ apply_metrics_metadata() {
     "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/platform-local.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
   fi
   "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
+  "${ROOT}/bin/moox-cli" metadata apply --file "${route_seed}" --metadata-url "${METRICS_METADATA_URL}"
+}
+
+apply_host_metadata() {
+  if [[ "${WITH_MONITOR}" != "1" ]]; then
+    return 0
+  fi
+  local route_seed="${HOST_ROUTE_SEED}"
+  if [[ -z "${route_seed}" && "${WITH_STORAGE}" == "1" ]]; then
+    route_seed="${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml"
+  fi
+  if [[ -z "${route_seed}" ]]; then
+    echo "MOOX_HOST_STORAGE_ROUTE_SEED is required when Monitor uses external or clustered Storage" >&2
+    return 1
+  fi
+  if [[ ! -f "${route_seed}" ]]; then
+    echo "host metrics route seed not found: ${route_seed}" >&2
+    return 1
+  fi
+  wait_http_reachable "${METRICS_METADATA_URL}" "${MOOX_WAIT_STORAGE_METADATA_SECONDS:-60}"
+  "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-host.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
   "${ROOT}/bin/moox-cli" metadata apply --file "${route_seed}" --metadata-url "${METRICS_METADATA_URL}"
 }
 
@@ -747,6 +774,7 @@ start_monitor() {
     exit 2
   fi
   apply_metrics_metadata
+  apply_host_metadata
   init_monitor_schema
   start_service "monitor" "${ROOT}/monitor" \
     env "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
@@ -1376,7 +1404,7 @@ sync_remote_stage() {
   log "upload ${archive} to ${TARGET}:${remote_archive}"
   scp "${archive}" "${TARGET}:${remote_archive}"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_eventbus_url quoted_metrics_eventbus_url
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -1390,10 +1418,11 @@ sync_remote_stage() {
   quoted_reset_data="$(shell_quote "${RESET_DATA}")"
   quoted_metrics_metadata_url="$(shell_quote "${METRICS_METADATA_URL}")"
   quoted_metrics_route_seed="$(shell_quote "${METRICS_ROUTE_SEED}")"
+  quoted_host_route_seed="$(shell_quote "${HOST_ROUTE_SEED}")"
   quoted_eventbus_url="$(shell_quote "${EVENTBUS_URL_ENV}")"
   quoted_metrics_eventbus_url="$(shell_quote "${METRICS_EVENTBUS_URL_ENV}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_HOST_STORAGE_ROUTE_SEED=${quoted_host_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} bash -s" <<'EOF'
 set -euo pipefail
 
 if [[ "${DEPLOY_DIR}" == "~" ]]; then

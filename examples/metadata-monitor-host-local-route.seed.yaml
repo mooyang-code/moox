@@ -1,0 +1,6 @@
+# Local bundled-Storage routes for the four global host datasets.
+primary_store_routes:
+  - {space_id: moox_system, route_id: route-host-resource-local, dataset_id: host_resource_v1, subject_pattern: "*", hash_rule: subject_id, node_id: local, priority: 100, status: active}
+  - {space_id: moox_system, route_id: route-host-fs-local, dataset_id: host_fs_v1, subject_pattern: "*", hash_rule: subject_id, node_id: local, priority: 100, status: active}
+  - {space_id: moox_system, route_id: route-host-disk-local, dataset_id: host_disk_v1, subject_pattern: "*", hash_rule: subject_id, node_id: local, priority: 100, status: active}
+  - {space_id: moox_system, route_id: route-host-net-local, dataset_id: host_net_v1, subject_pattern: "*", hash_rule: subject_id, node_id: local, priority: 100, status: active}

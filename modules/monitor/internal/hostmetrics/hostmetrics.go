@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
 
@@ -24,6 +25,7 @@ const (
 	Stream      = "MOOX_METRICS"
 	Durable     = "monitor_hostmetrics_ingest_v1"
 	SpaceID     = "moox_system"
+	DLQTopic    = "moox.dlq.message.rejected.v1"
 )
 
 type Store struct{ db *gorm.DB }
@@ -52,6 +54,11 @@ func ValidateMessage(msg *messagepb.MooxMessage) (*hostmetricpb.HostMetric, erro
 	if msg.GetOccurredAt() == nil || msg.GetPublishedAt() == nil || !msg.GetOccurredAt().IsValid() || !msg.GetPublishedAt().IsValid() {
 		return nil, errors.New("host metric timestamps are invalid")
 	}
+	now := time.Now().UTC()
+	occurred := msg.GetOccurredAt().AsTime()
+	if occurred.Before(now.Add(-15*time.Minute)) || occurred.After(now.Add(2*time.Minute)) {
+		return nil, errors.New("host metric occurred_at is outside the accepted clock-skew window")
+	}
 	p := msg.GetProducer()
 	if p == nil || p.GetServiceName() != "moox-host-agent" || uuid.Validate(p.GetInstanceId()) != nil || strings.TrimSpace(p.GetNodeId()) == "" {
 		return nil, errors.New("host metric producer identity is invalid")
@@ -73,10 +80,16 @@ func validateSnapshot(s *hostmetricpb.HostSnapshot) error {
 	if s.GetCpu() == nil || s.GetMemory() == nil {
 		return errors.New("host metric cpu/memory are required")
 	}
+	if s.GetCpu().GetLogicalCores() == 0 {
+		return errors.New("logical_cores must be positive")
+	}
 	if err := percent(s.GetCpu().GetUsagePercent(), s.GetCpu().GetUsageAvailable()); err != nil {
 		return err
 	}
 	if err := percent(s.GetMemory().GetUsagePercent(), true); err != nil {
+		return err
+	}
+	if err := memoryBounds(s.GetMemory()); err != nil {
 		return err
 	}
 	seen := map[string]struct{}{}
@@ -111,6 +124,16 @@ func validateSnapshot(s *hostmetricpb.HostSnapshot) error {
 				return errors.New("disk counter exceeds int64")
 			}
 		}
+		if d.GetRateAvailable() {
+			for _, value := range []float64{d.GetReadBytesPerSecond(), d.GetWriteBytesPerSecond(), d.GetReadIops(), d.GetWriteIops(), d.GetUtilizationPercent()} {
+				if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+					return errors.New("disk rate is invalid")
+				}
+			}
+			if d.GetUtilizationPercent() > 100 {
+				return errors.New("disk utilization is invalid")
+			}
+		}
 	}
 	seen = map[string]struct{}{}
 	for _, n := range s.GetNetworks() {
@@ -126,6 +149,23 @@ func validateSnapshot(s *hostmetricpb.HostSnapshot) error {
 				return errors.New("network counter exceeds int64")
 			}
 		}
+		if n.GetRateAvailable() {
+			for _, value := range []float64{n.GetReceiveBytesPerSecond(), n.GetTransmitBytesPerSecond()} {
+				if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+					return errors.New("network rate is invalid")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func memoryBounds(m *hostmetricpb.MemoryMetric) error {
+	if m.GetTotalBytes() > math.MaxInt64 || m.GetUsedBytes() > math.MaxInt64 || m.GetAvailableBytes() > math.MaxInt64 {
+		return errors.New("memory counter exceeds int64")
+	}
+	if m.GetUsedBytes() > m.GetTotalBytes() || m.GetAvailableBytes() > m.GetTotalBytes() {
+		return errors.New("memory counters exceed total")
 	}
 	return nil
 }
@@ -255,9 +295,42 @@ func (s *Store) History(ctx context.Context, agentID string, start, end time.Tim
 type Consumer struct {
 	pull  *jetstream.PullConsumer
 	store *Store
+	dlq   DLQPublisher
+}
+
+// DLQPublisher receives poison host metric messages after validation fails.
+// It is deliberately optional so unit tests and local memory-only runs can
+// use the same consumer without a second EventBus client.
+type DLQPublisher interface {
+	Publish(context.Context, *messagepb.MooxMessage) error
+}
+
+type jetStreamDLQ struct{ client *jetstream.Client }
+
+func NewDLQPublisher(client *jetstream.Client) DLQPublisher {
+	if client == nil {
+		return nil
+	}
+	return jetStreamDLQ{client: client}
+}
+
+func (p jetStreamDLQ) Publish(ctx context.Context, msg *messagepb.MooxMessage) error {
+	if p.client == nil {
+		return errors.New("host metric DLQ client is nil")
+	}
+	_, err := p.client.Publish(ctx, msg)
+	return err
 }
 
 func Bind(ctx context.Context, client *jetstream.Client, store *Store) (*Consumer, error) {
+	return bind(ctx, client, store, nil)
+}
+
+func BindWithDLQ(ctx context.Context, client *jetstream.Client, store *Store, dlq DLQPublisher) (*Consumer, error) {
+	return bind(ctx, client, store, dlq)
+}
+
+func bind(ctx context.Context, client *jetstream.Client, store *Store, dlq DLQPublisher) (*Consumer, error) {
 	if client == nil || store == nil {
 		return nil, errors.New("host metrics client and store are required")
 	}
@@ -265,7 +338,7 @@ func Bind(ctx context.Context, client *jetstream.Client, store *Store) (*Consume
 	if err != nil {
 		return nil, err
 	}
-	return &Consumer{pull: pull, store: store}, nil
+	return &Consumer{pull: pull, store: store, dlq: dlq}, nil
 }
 func (c *Consumer) Close() error {
 	if c == nil || c.pull == nil {
@@ -278,6 +351,12 @@ func (c *Consumer) Run(ctx context.Context) error {
 		ds, err := c.pull.Fetch(ctx, 64)
 		for _, d := range ds {
 			if handleErr := c.store.Ingest(ctx, d); handleErr != nil {
+				if c.dlq != nil {
+					if err := c.dlq.Publish(context.Background(), rejectionMessage(d, handleErr.Error())); err != nil {
+						_ = d.Nak(context.Background(), time.Second)
+						continue
+					}
+				}
 				_ = d.Term(context.Background())
 			}
 		}
@@ -287,5 +366,38 @@ func (c *Consumer) Run(ctx context.Context) error {
 			}
 			return err
 		}
+	}
+}
+
+func rejectionMessage(delivery *jetstream.Delivery, reason string) *messagepb.MooxMessage {
+	now := timestamppb.Now()
+	id := "invalid-host-metric"
+	topic := ""
+	payload := []byte(nil)
+	if delivery != nil {
+		if delivery.RawMessageID != "" {
+			id = delivery.RawMessageID
+		}
+		topic = delivery.Subject
+		payload = append([]byte(nil), delivery.RawData...)
+		if delivery.Message != nil && delivery.Message.GetMessageId() != "" {
+			id = delivery.Message.GetMessageId()
+		}
+	}
+	return &messagepb.MooxMessage{
+		ProtocolVersion: 1,
+		MessageId:       id + ".rejected",
+		Topic:           DLQTopic,
+		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
+		Producer:        &messagepb.Producer{ServiceName: "moox-monitor", InstanceId: "hostmetrics"},
+		OccurredAt:      now,
+		PublishedAt:     now,
+		ContentType:     "application/octet-stream",
+		Payload:         payload,
+		Attributes: map[string]string{
+			"rejection_reason":    reason,
+			"original_topic":      topic,
+			"original_message_id": id,
+		},
 	}
 }
