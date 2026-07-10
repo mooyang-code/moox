@@ -102,6 +102,40 @@ func (b *ProducerBus) publish(ctx context.Context, topic, id, spaceID, datasetID
 	return err
 }
 
+// PublishEnvelope republishes an already persisted deterministic message. It
+// is used by the PrimaryStore relay so a retry never changes message_id.
+func (b *ProducerBus) PublishEnvelope(ctx context.Context, data []byte) error {
+	if b == nil || b.client == nil {
+		return errors.New("storage eventbus client is nil")
+	}
+	msg := &messagepb.MooxMessage{}
+	if err := proto.Unmarshal(data, msg); err != nil {
+		return err
+	}
+	_, err := b.client.Publish(ctx, msg)
+	return err
+}
+
+func (b *ProducerBus) PublishEnvelopes(ctx context.Context, data [][]byte) []error {
+	results := make([]error, len(data))
+	msgs := make([]*messagepb.MooxMessage, len(data))
+	for i, raw := range data {
+		msg := &messagepb.MooxMessage{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			results[i] = err
+		} else {
+			msgs[i] = msg
+		}
+	}
+	acks := b.client.PublishBatch(ctx, msgs)
+	for i := range results {
+		if results[i] == nil {
+			results[i] = acks[i].Err
+		}
+	}
+	return results
+}
+
 func (b *ProducerBus) Close() error {
 	if b == nil || b.client == nil {
 		return nil

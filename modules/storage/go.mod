@@ -5,23 +5,28 @@ go 1.24.0
 replace (
 	github.com/mooyang-code/moox/modules/storage => ./
 	github.com/mooyang-code/moox/modules/storage/proto/gen => ./proto/gen
+	github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 	github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
+	github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
+	github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
 )
 
 require (
 	github.com/blevesearch/bleve/v2 v2.5.5
+	github.com/blevesearch/bleve_index_api v1.3.11
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/marcboeker/go-duckdb/v2 v2.4.3
 	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
 	github.com/mooyang-code/moox/modules/storage/proto/gen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/snapshotcache v0.1.1
-	github.com/nats-io/nats-server/v2 v2.11.3
-	github.com/nats-io/nats.go v1.47.0
 	github.com/parquet-go/parquet-go v0.25.1
 	github.com/rs/xid v1.6.0
-	golang.org/x/sync v0.19.0
+	golang.org/x/sys v0.39.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v2 v2.4.0
 	modernc.org/sqlite v1.45.0
@@ -37,7 +42,6 @@ require (
 	github.com/apache/arrow-go/v18 v18.4.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.24.2 // indirect
-	github.com/blevesearch/bleve_index_api v1.3.11 // indirect
 	github.com/blevesearch/geo v0.2.5 // indirect
 	github.com/blevesearch/go-faiss v1.1.0 // indirect
 	github.com/blevesearch/go-porterstemmer v1.0.3 // indirect
@@ -88,13 +92,12 @@ require (
 	github.com/marcboeker/go-duckdb/arrowmapping v0.0.21 // indirect
 	github.com/marcboeker/go-duckdb/mapping v0.0.21 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/minio/highwayhash v1.0.3 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nats-io/jwt/v2 v2.7.4 // indirect
+	github.com/nats-io/nats.go v1.47.0 // indirect
 	github.com/nats-io/nkeys v0.4.11 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
@@ -123,7 +126,7 @@ require (
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/mod v0.30.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/telemetry v0.0.0-20251111182119-bc8e575c7b54 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	golang.org/x/time v0.14.0 // indirect

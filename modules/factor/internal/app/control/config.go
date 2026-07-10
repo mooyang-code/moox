@@ -42,10 +42,11 @@ type StorageConfig struct {
 
 // NATSConfig describes the Storage event stream subscription.
 type NATSConfig struct {
-	URL      string `yaml:"url"`
-	Stream   string `yaml:"stream"`
-	Consumer string `yaml:"consumer"`
-	Subject  string `yaml:"subject"`
+	URLs     []string `yaml:"urls"`
+	URL      string   `yaml:"url"`
+	Stream   string   `yaml:"stream"`
+	Consumer string   `yaml:"consumer"`
+	Subject  string   `yaml:"subject"`
 }
 
 // EngineConfig describes the local Python factor engine.
@@ -131,10 +132,11 @@ func Default() *Config {
 			AccessTarget:   "127.0.0.1:20102",
 		},
 		NATS: NATSConfig{
+			URLs:     []string{"nats://127.0.0.1:4222"},
 			URL:      "nats://127.0.0.1:4222",
 			Stream:   "MOOX_STORAGE",
 			Consumer: "factor_calc",
-			Subject:  "moox.storage.time_series.rows_changed.v1",
+			Subject:  "moox.storage.time_series.rows_updated.v1",
 		},
 		Engine: EngineConfig{
 			PythonBin:         "python3",
@@ -196,6 +198,9 @@ func (c *Config) applyDefaults() {
 	if c.NATS.URL == "" {
 		c.NATS.URL = "nats://127.0.0.1:4222"
 	}
+	if len(c.NATS.URLs) == 0 {
+		c.NATS.URLs = []string{c.NATS.URL}
+	}
 	if c.NATS.Stream == "" {
 		c.NATS.Stream = "MOOX_STORAGE"
 	}
@@ -203,7 +208,7 @@ func (c *Config) applyDefaults() {
 		c.NATS.Consumer = "factor_calc"
 	}
 	if c.NATS.Subject == "" {
-		c.NATS.Subject = "moox.storage.time_series.rows_changed.v1"
+		c.NATS.Subject = "moox.storage.time_series.rows_updated.v1"
 	}
 	if c.Engine.PythonBin == "" {
 		c.Engine.PythonBin = "python3"

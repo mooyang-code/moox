@@ -67,18 +67,7 @@ func main() {
 	}
 	var rowsChangedBus coreeventbus.Bus
 	if needsRowsUpdatedBus(cfg.Storage) {
-		embeddedEventBus, err := bootstrapeventbus.StartEmbeddedServer(cfg.Storage.EventBus)
-		if err != nil {
-			exitWithStartupError("启动内嵌 storage eventbus 失败", err)
-		}
-		if embeddedEventBus != nil {
-			defer func() {
-				if err := embeddedEventBus.Close(); err != nil {
-					log.Errorf("关闭内嵌 storage eventbus 失败: %v", err)
-				}
-			}()
-			log.Infof("Embedded storage eventbus initialized")
-		}
+		var err error
 		rowsChangedBus, err = bootstrapeventbus.NewRowsUpdatedBus(trpc.BackgroundContext(), cfg.Storage.EventBus)
 		if err != nil {
 			exitWithStartupError("初始化 storage eventbus 失败", err)
@@ -142,9 +131,24 @@ func main() {
 	}
 
 	if shouldCreatePrimaryService(cfg.Storage) {
+		var envelopePublisher primarysvc.EnvelopePublisher
+		if candidate, ok := rowsChangedBus.(primarysvc.EnvelopePublisher); ok {
+			envelopePublisher = candidate
+		}
 		primaryService := primarysvc.NewService(primarysvc.Options{
 			Root:       opts.Root,
 			PebblePath: opts.PebblePath,
+			Publisher:  envelopePublisher,
+			Outbox: primarysvc.OutboxConfig{
+				FlushBatchSize: cfg.Storage.Primary.Outbox.FlushBatchSize,
+				FlushMaxBytes:  cfg.Storage.Primary.Outbox.FlushMaxBytes,
+				FlushInterval:  time.Duration(cfg.Storage.Primary.Outbox.FlushIntervalMS) * time.Millisecond,
+				MaxRows:        cfg.Storage.Primary.Outbox.MaxRows,
+				MaxBytes:       cfg.Storage.Primary.Outbox.MaxBytes,
+				MaxAge:         time.Duration(cfg.Storage.Primary.Outbox.MaxAgeHours) * time.Hour,
+				BackoffBase:    time.Duration(cfg.Storage.Primary.Outbox.BackoffBaseMS) * time.Millisecond,
+				BackoffMax:     time.Duration(cfg.Storage.Primary.Outbox.BackoffMaxMS) * time.Millisecond,
+			},
 		})
 		defer func() {
 			if err := primaryService.Close(); err != nil {
@@ -543,7 +547,7 @@ func validateStorageDeployment(storage storageconfig.StorageConfig) error {
 }
 
 func needsRowsUpdatedBus(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("access") || shouldStartViewBuilderRole(storage) || storage.HasRole("archive")
+	return storage.HasRole("access") || storage.HasRole("primary") || shouldStartViewBuilderRole(storage) || storage.HasRole("archive")
 }
 
 func shouldRegisterViewQueryRole(storage storageconfig.StorageConfig) bool {

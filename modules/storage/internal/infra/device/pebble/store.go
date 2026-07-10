@@ -26,6 +26,7 @@ type Store struct {
 	writeOptions *cpebble.WriteOptions
 	lockMu       sync.Mutex
 	locks        map[string]*rowLock
+	outboxMu     sync.Mutex
 }
 
 // rowLock 保存同一行合并写入时使用的互斥锁。
@@ -93,6 +94,10 @@ func (s *Store) writeRows(ctx context.Context, rows []*pb.PrimaryStoreRow, entry
 
 	batch := s.db.NewBatch()
 	defer batch.Close()
+	if entry != nil {
+		s.outboxMu.Lock()
+		defer s.outboxMu.Unlock()
+	}
 	for key, row := range pending {
 		data, err := proto.Marshal(row)
 		if err != nil {

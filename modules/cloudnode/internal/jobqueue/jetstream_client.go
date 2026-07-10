@@ -2,171 +2,50 @@ package jobqueue
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
-	natsserver "github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
+	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
-// Runtime owns the CloudNode NATS connection and optional embedded server.
-type Runtime struct {
-	server *natsserver.Server
-	nc     *nats.Conn
-	js     nats.JetStreamContext
-}
+// Runtime owns a connection to the centrally managed moox-eventbus service.
+// It never creates Streams, consumers, or KV buckets.
+type Runtime struct{ client *jetstream.Client }
 
-// Connect connects to a CloudNode JetStream runtime, starting embedded NATS when configured.
 func Connect(ctx context.Context, cfg config.JetStreamConfig) (*Runtime, error) {
-	if cfg.Embedded.Enabled {
-		return StartEmbedded(ctx, cfg.Embedded)
+	urls := append([]string(nil), cfg.URLs...)
+	if len(urls) == 0 && strings.TrimSpace(cfg.NATSURL) != "" {
+		urls = []string{cfg.NATSURL}
 	}
-	return connectURL(ctx, cfg.NATSURL)
+	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: urls, Name: "moox-cloudnode"})
+	if err != nil {
+		return nil, err
+	}
+	return &Runtime{client: client}, nil
 }
 
-func connectURL(ctx context.Context, natsURL string) (*Runtime, error) {
-	natsURL = strings.TrimSpace(natsURL)
-	if natsURL == "" {
-		natsURL = nats.DefaultURL
-	}
-	timeout := 5 * time.Second
-	if deadline, ok := ctx.Deadline(); ok {
-		if until := time.Until(deadline); until > 0 && until < timeout {
-			timeout = until
-		}
-	}
-	nc, err := nats.Connect(
-		natsURL,
-		nats.Timeout(timeout),
-		nats.RetryOnFailedConnect(true),
-		nats.MaxReconnects(5),
-		nats.ReconnectWait(500*time.Millisecond),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("connect nats %s: %w", natsURL, err)
-	}
-	js, err := nc.JetStream()
-	if err != nil {
-		nc.Close()
-		return nil, fmt.Errorf("create jetstream context: %w", err)
-	}
-	return &Runtime{nc: nc, js: js}, nil
-}
-
-// JetStream returns the underlying JetStream context.
-func (r *Runtime) JetStream() nats.JetStreamContext {
+func (r *Runtime) Client() *jetstream.Client {
 	if r == nil {
 		return nil
 	}
-	return r.js
+	return r.client
 }
-
-// Conn returns the underlying NATS connection.
-func (r *Runtime) Conn() *nats.Conn {
-	if r == nil {
-		return nil
-	}
-	return r.nc
-}
-
-// EnsureStreams creates or updates CloudNode JetStream streams and active state KV bucket.
-func (r *Runtime) EnsureStreams(cfg config.JetStreamConfig, jobCfg config.JobItemConfig) error {
-	if r == nil || r.js == nil {
+func (r *Runtime) EnsureStreams(_ config.JetStreamConfig, _ config.JobItemConfig) error {
+	if r == nil || r.client == nil {
 		return fmt.Errorf("jetstream runtime is not initialized")
 	}
-	if cfg.SubjectPrefix == "" {
-		cfg.SubjectPrefix = DefaultSubjectPrefix
-	}
-	if err := ValidateNamingConfig(NamingConfig{SubjectPrefix: cfg.SubjectPrefix}); err != nil {
-		return err
-	}
-	if cfg.ExecStream == "" {
-		cfg.ExecStream = DefaultExecStream
-	}
-	if err := ensureStream(r.js, &nats.StreamConfig{
-		Name:      cfg.ExecStream,
-		Subjects:  []string{ExecStreamSubject(NamingConfig{SubjectPrefix: cfg.SubjectPrefix})},
-		Retention: nats.WorkQueuePolicy,
-		Storage:   nats.FileStorage,
-		Replicas:  1,
-		MaxAge:    72 * time.Hour,
-		Discard:   nats.DiscardOld,
-	}); err != nil {
-		return fmt.Errorf("ensure exec stream: %w", err)
-	}
-	if err := ensureActiveKVBucket(r.js, jobCfg); err != nil {
-		return err
-	}
 	return nil
 }
-
-func ensureActiveKVBucket(js nats.JetStreamContext, cfg config.JobItemConfig) error {
-	bucket := strings.TrimSpace(cfg.ActiveKVBucket)
-	if bucket == "" {
-		bucket = "MOOX_CLOUDNODE_JOB_ACTIVE"
+func (r *Runtime) KeyValue(bucket string) (jetstream.KeyValue, error) {
+	if r == nil || r.client == nil {
+		return nil, fmt.Errorf("jetstream runtime is not initialized")
 	}
-	ttl := time.Duration(cfg.ActiveTTLHours) * time.Hour
-	if ttl <= 0 {
-		ttl = 48 * time.Hour
-	}
-	if _, err := js.KeyValue(bucket); err != nil {
-		if !errors.Is(err, nats.ErrBucketNotFound) {
-			return fmt.Errorf("open active job kv bucket: %w", err)
-		}
-		if _, err := js.CreateKeyValue(&nats.KeyValueConfig{
-			Bucket:  bucket,
-			Storage: nats.FileStorage,
-			History: 1,
-			TTL:     ttl,
-		}); err != nil {
-			return fmt.Errorf("create active job kv bucket: %w", err)
-		}
-		return nil
-	}
-
-	info, err := js.StreamInfo("KV_" + bucket)
-	if err != nil {
-		return fmt.Errorf("inspect active job kv stream: %w", err)
-	}
-	if info.Config.MaxAge == ttl && info.Config.MaxMsgsPerSubject == 1 && info.Config.Storage == nats.FileStorage {
-		return nil
-	}
-	next := info.Config
-	next.MaxAge = ttl
-	next.MaxMsgsPerSubject = 1
-	next.Storage = nats.FileStorage
-	if _, err := js.UpdateStream(&next); err != nil {
-		return fmt.Errorf("update active job kv stream: %w", err)
-	}
-	return nil
+	return r.client.KeyValue(bucket)
 }
-
-func ensureStream(js nats.JetStreamContext, cfg *nats.StreamConfig) error {
-	if _, err := js.StreamInfo(cfg.Name); err != nil {
-		if errors.Is(err, nats.ErrStreamNotFound) {
-			_, addErr := js.AddStream(cfg)
-			return addErr
-		}
-		return err
-	}
-	_, err := js.UpdateStream(cfg)
-	return err
-}
-
-// Close closes the connection and embedded server when present.
 func (r *Runtime) Close() error {
-	if r == nil {
+	if r == nil || r.client == nil {
 		return nil
 	}
-	if r.nc != nil {
-		r.nc.Close()
-	}
-	if r.server != nil {
-		r.server.Shutdown()
-		r.server.WaitForShutdown()
-	}
-	return nil
+	return r.client.Close()
 }

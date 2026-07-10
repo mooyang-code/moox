@@ -50,6 +50,7 @@ type QueueConfig struct {
 // JetStreamConfig controls the CloudNode JetStream execution queue.
 type JetStreamConfig struct {
 	Enabled        bool                    `yaml:"enabled"`
+	URLs           []string                `yaml:"urls"`
 	NATSURL        string                  `yaml:"nats_url"`
 	SubjectPrefix  string                  `yaml:"subject_prefix"`
 	ExecStream     string                  `yaml:"exec_stream"`
@@ -129,19 +130,14 @@ func Default() *Config {
 		},
 		JetStream: JetStreamConfig{
 			Enabled:        true,
-			NATSURL:        "nats://127.0.0.1:4223",
+			URLs:           []string{"nats://127.0.0.1:4222"},
+			NATSURL:        "nats://127.0.0.1:4222",
 			SubjectPrefix:  "moox.cloudnode",
 			ExecStream:     "MOOX_CLOUDNODE_EXEC",
 			AckWaitMillis:  int64(2 * time.Minute / time.Millisecond),
 			MaxDeliver:     3,
 			FetchMaxWaitMs: 500,
-			Embedded: EmbeddedJetStreamConfig{
-				Enabled:          true,
-				Host:             "127.0.0.1",
-				Port:             4223,
-				StoreDir:         "../data/cloudnode/nats",
-				StartupTimeoutMS: 10000,
-			},
+			Embedded:       EmbeddedJetStreamConfig{},
 		},
 		JobItem: JobItemConfig{
 			DefaultLimit:         10,

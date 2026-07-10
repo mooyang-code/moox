@@ -77,16 +77,11 @@ func binding(factorID string, sourceDataset string, subjectMode string, subjects
 	}
 }
 
-func event(spaceID string, datasetID string, subjectID string, freq string, dataTime time.Time) *storagepb.TimeSeriesRowsChangedEvent {
-	return &storagepb.TimeSeriesRowsChangedEvent{
-		Keys: []*storagepb.TimeSeriesKey{
-			{
-				SpaceId:   spaceID,
-				DatasetId: datasetID,
-				SubjectId: subjectID,
-				Freq:      freq,
-				DataTime:  dataTime.Format(time.RFC3339),
-			},
-		},
+func event(spaceID string, datasetID string, subjectID string, freq string, dataTime time.Time) *storagepb.TimeSeriesRowsUpdated {
+	return &storagepb.TimeSeriesRowsUpdated{
+		Rows: []*storagepb.TimeSeriesRow{{Key: &storagepb.TimeSeriesKey{
+			SpaceId: spaceID, DatasetId: datasetID, SubjectId: subjectID,
+			Freq: freq, DataTime: dataTime.Format(time.RFC3339),
+		}}},
 	}
 }

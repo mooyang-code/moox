@@ -117,7 +117,19 @@ func (m StorageViewMaintenance) IsEnabled() bool {
 
 // StoragePrimary 保存主存服务访问配置。
 type StoragePrimary struct {
-	ServiceName string `yaml:"service_name"`
+	ServiceName string        `yaml:"service_name"`
+	Outbox      StorageOutbox `yaml:"outbox"`
+}
+
+type StorageOutbox struct {
+	FlushBatchSize  int `yaml:"flush_batch_size"`
+	FlushMaxBytes   int `yaml:"flush_max_bytes"`
+	FlushIntervalMS int `yaml:"flush_interval_ms"`
+	MaxRows         int `yaml:"max_rows"`
+	MaxBytes        int `yaml:"max_bytes"`
+	MaxAgeHours     int `yaml:"max_age_hours"`
+	BackoffBaseMS   int `yaml:"backoff_base_ms"`
+	BackoffMaxMS    int `yaml:"backoff_max_ms"`
 }
 
 // StorageHealth controls the lightweight HTTP health endpoint.
@@ -199,6 +211,30 @@ func (c *StorageConfig) ApplyDefaults() {
 		if c.EventBus.Embedded.StartupTimeoutMS <= 0 {
 			c.EventBus.Embedded.StartupTimeoutMS = 10000
 		}
+	}
+	if c.Primary.Outbox.FlushBatchSize <= 0 {
+		c.Primary.Outbox.FlushBatchSize = 100
+	}
+	if c.Primary.Outbox.FlushMaxBytes <= 0 {
+		c.Primary.Outbox.FlushMaxBytes = 1 << 20
+	}
+	if c.Primary.Outbox.FlushIntervalMS <= 0 {
+		c.Primary.Outbox.FlushIntervalMS = 200
+	}
+	if c.Primary.Outbox.MaxRows <= 0 {
+		c.Primary.Outbox.MaxRows = 100000
+	}
+	if c.Primary.Outbox.MaxBytes <= 0 {
+		c.Primary.Outbox.MaxBytes = 256 * 1024 * 1024
+	}
+	if c.Primary.Outbox.MaxAgeHours <= 0 {
+		c.Primary.Outbox.MaxAgeHours = 24
+	}
+	if c.Primary.Outbox.BackoffBaseMS <= 0 {
+		c.Primary.Outbox.BackoffBaseMS = 200
+	}
+	if c.Primary.Outbox.BackoffMaxMS <= 0 {
+		c.Primary.Outbox.BackoffMaxMS = 30000
 	}
 	if c.View.MetadataServiceName == "" {
 		c.View.MetadataServiceName = "trpc.moox.storage.Metadata"

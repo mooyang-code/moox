@@ -11,7 +11,7 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/nats-io/nats.go"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -42,14 +42,14 @@ type Store interface {
 }
 
 type KVStore struct {
-	kv                 nats.KeyValue
+	kv                 jetstream.KeyValue
 	clock              Clock
 	recoverAfterMillis int64
 	defaultMaxAttempts int
 	maxCASRetries      int
 }
 
-func NewKVStore(kv nats.KeyValue, opts Options) *KVStore {
+func NewKVStore(kv jetstream.KeyValue, opts Options) *KVStore {
 	maxAttempts := opts.DefaultMaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 3
@@ -98,7 +98,7 @@ func (s *KVStore) CreatePending(ctx context.Context, item *pb.JobItem, meta Queu
 		return nil, err
 	}
 	if _, err := s.kv.Create(JobKey(state.SpaceID, state.JobItemID), raw); err != nil {
-		if errors.Is(err, nats.ErrKeyExists) {
+		if errors.Is(err, jetstream.ErrKVKeyExists) {
 			if updated, changed, err := s.reopenEnqueueFailed(ctx, item, meta); err != nil {
 				return nil, err
 			} else if changed {
@@ -352,7 +352,7 @@ func (s *KVStore) List(_ context.Context, req *pb.ListJobItemsReq) ([]*pb.JobIte
 	}
 	keys, err := s.kv.Keys()
 	if err != nil {
-		if errors.Is(err, nats.ErrNoKeysFound) {
+		if errors.Is(err, jetstream.ErrKVNoKeys) {
 			return nil, pageResult(req.GetPage(), 0), nil
 		}
 		return nil, nil, mapKVError(err)
@@ -418,7 +418,7 @@ func (s *KVStore) ListCancelDirectives(_ context.Context, spaceID, nodeID string
 	}
 	keys, err := s.kv.Keys()
 	if err != nil {
-		if errors.Is(err, nats.ErrNoKeysFound) {
+		if errors.Is(err, jetstream.ErrKVNoKeys) {
 			return nil, nil
 		}
 		return nil, mapKVError(err)
@@ -477,7 +477,7 @@ func (s *KVStore) withStateCAS(_ context.Context, key string, mutate func(State)
 		}
 		if _, err := s.kv.Update(key, raw, entry.Revision()); err == nil {
 			return next, true, nil
-		} else if !errors.Is(err, nats.ErrKeyExists) {
+		} else if !errors.Is(err, jetstream.ErrKVKeyExists) {
 			return State{}, false, mapKVError(err)
 		}
 	}
@@ -504,9 +504,9 @@ func mapKVError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, nats.ErrKeyNotFound), errors.Is(err, nats.ErrKeyDeleted):
+	case errors.Is(err, jetstream.ErrKVKeyNotFound), errors.Is(err, jetstream.ErrKVKeyNotFound):
 		return ErrNotFound
-	case errors.Is(err, nats.ErrKeyExists):
+	case errors.Is(err, jetstream.ErrKVKeyExists):
 		return ErrConflict
 	default:
 		return err

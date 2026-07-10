@@ -13,18 +13,14 @@ queue:
 
 jetstream:
   enabled: true
-  nats_url: nats://127.0.0.1:4223
+  urls:
+    - nats://127.0.0.1:4222
+  nats_url: nats://127.0.0.1:4222
   subject_prefix: moox.cloudnode
   exec_stream: MOOX_CLOUDNODE_EXEC
   ack_wait_millis: 120000
   max_deliver: 3
   fetch_max_wait_ms: 500
-  embedded:
-    enabled: true
-    host: 127.0.0.1
-    port: 4223
-    store_dir: ../data/cloudnode/nats
-    startup_timeout_ms: 60000
 
 job_item:
   default_limit: 10

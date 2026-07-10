@@ -23,7 +23,7 @@ type Task struct {
 	FactorIDs     []string
 }
 
-// Debouncer merges Storage row-change events into per-symbol task requests.
+// Debouncer merges Storage row-update messages into per-symbol task requests.
 type Debouncer struct {
 	mu       sync.Mutex
 	window   time.Duration
@@ -58,10 +58,14 @@ func (d *Debouncer) SetBindings(bindings []domain.FactorBinding) {
 }
 
 // Ingest adds one Storage rows_changed event into debounce buckets.
-func (d *Debouncer) Ingest(event *storagepb.TimeSeriesRowsChangedEvent, now time.Time) {
+func (d *Debouncer) Ingest(event *storagepb.TimeSeriesRowsUpdated, now time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for _, key := range event.GetKeys() {
+	for _, row := range event.GetRows() {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		key := row.GetKey()
 		dataTime, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
 		if err != nil {
 			continue

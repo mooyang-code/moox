@@ -9,10 +9,10 @@ storage:
     pebble_path: ./var/storage/pebble
     view_index_root: ./var/storage/view-indexes
     parquet_path: ./var/storage/archive
-  primary:
-    service_name: ""
   eventbus:
-    type: memory
+    type: jetstream
+    urls:
+      - nats://127.0.0.1:4222
     nats_url: nats://127.0.0.1:4222
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
@@ -23,8 +23,17 @@ storage:
     max_in_flight: 128
     ack_wait_ms: 120000
     max_deliver: -1
-    embedded:
-      enabled: false
+  primary:
+    service_name: ""
+    outbox:
+      flush_batch_size: 100
+      flush_max_bytes: 1048576
+      flush_interval_ms: 200
+      max_rows: 100000
+      max_bytes: 268435456
+      max_age_hours: 24
+      backoff_base_ms: 200
+      backoff_max_ms: 30000
   view:
     metadata_service_name: trpc.moox.storage.Metadata
     access_service_name: trpc.moox.storage.Access

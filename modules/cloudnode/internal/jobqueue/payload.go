@@ -4,6 +4,7 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // JobItemMessage is the opaque CloudNode execution queue payload.
@@ -16,6 +17,21 @@ type JobItemMessage struct {
 	Params        map[string]any `json:"params"`
 	Priority      int32          `json:"priority"`
 	SubmittedAt   time.Time      `json:"submitted_at"`
+}
+
+func structToMap(st *structpb.Struct) map[string]any {
+	if st == nil {
+		return map[string]any{}
+	}
+	return st.AsMap()
+}
+
+func mapToStruct(values map[string]any) *structpb.Struct {
+	st, err := structpb.NewStruct(values)
+	if err != nil {
+		return &structpb.Struct{}
+	}
+	return st
 }
 
 // ToPolledJobItem converts a queue delivery into the RPC shape consumed by SCF runtimes.

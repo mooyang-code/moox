@@ -11,10 +11,12 @@ storage:
   access_target: "127.0.0.1:20102"
 
 nats:
+  urls:
+    - nats://127.0.0.1:4222
   url: nats://127.0.0.1:4222
   stream: MOOX_STORAGE
   consumer: factor_calc
-  subject: moox.storage.time_series.rows_changed.v1
+  subject: moox.storage.time_series.rows_updated.v1
 
 engine:
   python_bin: python3

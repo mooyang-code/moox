@@ -3,10 +3,14 @@ package primary
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -15,22 +19,39 @@ type Options struct {
 	Root       string
 	PebblePath string
 	Pebble     device.FactStore
+	Publisher  EnvelopePublisher
+	Outbox     OutboxConfig
+}
+
+type EnvelopePublisher interface {
+	PublishEnvelope(context.Context, []byte) error
 }
 
 // Service 实现主存分片上的事实行读写接口。
 type Service struct {
 	client *LocalClient
+	relay  *OutboxRelay
 }
 
 var _ pb.PrimaryStoreService = (*Service)(nil)
 
 func NewService(opts Options) *Service {
-	return &Service{client: NewLocalClient(LocalClientOptions(opts))}
+	svc := &Service{client: NewLocalClient(LocalClientOptions{Root: opts.Root, PebblePath: opts.PebblePath, Pebble: opts.Pebble, Outbox: opts.Outbox})}
+	if opts.Publisher != nil {
+		if store, err := svc.client.factStore(); err == nil {
+			svc.relay = NewOutboxRelay(store, opts.Publisher, opts.Outbox)
+			svc.relay.Start(context.Background())
+		}
+	}
+	return svc
 }
 
 func (s *Service) Close() error {
 	if s == nil || s.client == nil {
 		return nil
+	}
+	if s.relay != nil {
+		_ = s.relay.Close()
 	}
 	return s.client.Close()
 }
@@ -41,6 +62,9 @@ func (s *Service) WritePrimaryRows(ctx context.Context, req *pb.WritePrimaryRows
 	}
 	var err error
 	if len(req.GetOutboxMessage()) > 0 {
+		if err := validateOutboxMessage(req); err != nil {
+			return &pb.WritePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
 		err = s.client.WriteRowsWithMessage(ctx, req.GetTarget(), req.GetRows(), req.GetOutboxMessage())
 	} else {
 		err = s.client.WriteRows(ctx, req.GetTarget(), req.GetRows())
@@ -49,6 +73,26 @@ func (s *Service) WritePrimaryRows(ctx context.Context, req *pb.WritePrimaryRows
 		return &pb.WritePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	return &pb.WritePrimaryRowsRsp{RetInfo: response.Success("success")}, nil
+}
+
+func validateOutboxMessage(req *pb.WritePrimaryRowsReq) error {
+	msg := &messagepb.MooxMessage{}
+	if err := proto.Unmarshal(req.GetOutboxMessage(), msg); err != nil {
+		return fmt.Errorf("decode outbox message: %w", err)
+	}
+	if err := jetstream.ValidateMessage(msg, 16<<20); err != nil {
+		return err
+	}
+	if req.GetTarget() == nil || strings.TrimSpace(req.GetTarget().GetNodeId()) == "" {
+		return errors.New("target node_id is required for outbox writes")
+	}
+	if msg.GetProducer().GetInstanceId() != req.GetTarget().GetNodeId() {
+		return fmt.Errorf("outbox producer instance_id %q does not match target node_id %q", msg.GetProducer().GetInstanceId(), req.GetTarget().GetNodeId())
+	}
+	if len(msg.GetPayload()) == 0 {
+		return errors.New("outbox payload is required")
+	}
+	return nil
 }
 
 func (s *Service) ReadPrimaryRows(ctx context.Context, req *pb.ReadPrimaryRowsReq) (*pb.ReadPrimaryRowsRsp, error) {

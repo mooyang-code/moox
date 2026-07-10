@@ -86,6 +86,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.WarnContextf(ctx, "factor nats.url is empty, realtime trigger startup skipped")
 	} else {
 		consumer := trigger.NewNATSConsumer(trigger.NATSConfig{
+			URLs:     cfg.NATS.URLs,
 			URL:      cfg.NATS.URL,
 			Stream:   cfg.NATS.Stream,
 			Consumer: cfg.NATS.Consumer,

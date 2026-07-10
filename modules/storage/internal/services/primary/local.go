@@ -20,12 +20,14 @@ type LocalClientOptions struct {
 	Root       string
 	PebblePath string
 	Pebble     device.FactStore
+	Outbox     OutboxConfig
 }
 
 // LocalClient 在进程内直接调用 PrimaryStore 服务实现。
 type LocalClient struct {
 	pebblePath string
 	pebble     device.FactStore
+	outbox     OutboxConfig
 	opened     sync.Map
 }
 
@@ -41,7 +43,7 @@ var pebbleStores = struct {
 }{items: make(map[string]*sharedPebbleStore)}
 
 func NewLocalClient(opts LocalClientOptions) *LocalClient {
-	return &LocalClient{pebblePath: localPebblePath(opts.Root, opts.PebblePath), pebble: opts.Pebble}
+	return &LocalClient{pebblePath: localPebblePath(opts.Root, opts.PebblePath), pebble: opts.Pebble, outbox: opts.Outbox}
 }
 
 func (c *LocalClient) WriteRows(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow) error {
@@ -59,6 +61,11 @@ func (c *LocalClient) writeRows(ctx context.Context, target *pb.PrimaryStoreTarg
 		if err != nil {
 			return err
 		}
+		if len(message) > 0 {
+			if err := rejectOutboxBacklog(ctx, store, c.outbox); err != nil {
+				return err
+			}
+		}
 		if messageStore, ok := store.(interface {
 			WriteRowsWithOutbox(context.Context, []*pb.PrimaryStoreRow, *device.OutboxEntry) error
 		}); ok && len(message) > 0 {
@@ -68,6 +75,30 @@ func (c *LocalClient) writeRows(ctx context.Context, target *pb.PrimaryStoreTarg
 	default:
 		return fmt.Errorf("unsupported write engine %s", target.GetEngine())
 	}
+}
+
+func rejectOutboxBacklog(ctx context.Context, store device.FactStore, cfg OutboxConfig) error {
+	cfg = cfg.normalized()
+	entries, err := store.ListOutbox(ctx, 0, cfg.MaxRows+1, cfg.MaxBytes+1)
+	if err != nil {
+		return err
+	}
+	if len(entries) > cfg.MaxRows {
+		return fmt.Errorf("storage outbox row limit exceeded: %d", cfg.MaxRows)
+	}
+	var bytes int
+	for _, entry := range entries {
+		if entry != nil {
+			bytes += len(entry.Data)
+		}
+	}
+	if bytes >= cfg.MaxBytes {
+		return fmt.Errorf("storage outbox byte limit exceeded: %d", cfg.MaxBytes)
+	}
+	if len(entries) > 0 && cfg.MaxAge > 0 && time.Since(entries[0].CreatedAt) > cfg.MaxAge {
+		return fmt.Errorf("storage outbox oldest entry exceeds max age %s", cfg.MaxAge)
+	}
+	return nil
 }
 
 func (c *LocalClient) ReadRows(ctx context.Context, target *pb.PrimaryStoreTarget, req *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {

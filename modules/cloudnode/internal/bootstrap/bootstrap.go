@@ -63,7 +63,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			_ = rt.Close()
 			return nil, err
 		}
-		kv, err := rt.JetStream().KeyValue(cfg.JobItem.ActiveKVBucket)
+		kv, err := rt.KeyValue(cfg.JobItem.ActiveKVBucket)
 		if err != nil {
 			log.ErrorContextf(ctx, "打开 cloudnode JobItem active KV 失败: %v", err)
 			_ = rt.Close()

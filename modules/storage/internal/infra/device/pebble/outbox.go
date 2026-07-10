@@ -12,6 +12,7 @@ import (
 	cpebble "github.com/cockroachdb/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
 )
@@ -25,6 +26,20 @@ func (s *Store) WriteRowsWithOutbox(ctx context.Context, rows []*pb.PrimaryStore
 	if entry == nil || len(entry.Data) == 0 {
 		return errors.New("outbox entry is required")
 	}
+	msg := &messagepb.MooxMessage{}
+	if err := proto.Unmarshal(entry.Data, msg); err != nil {
+		return fmt.Errorf("decode outbox message: %w", err)
+	}
+	if err := jetstream.ValidateMessage(msg, 16<<20); err != nil {
+		return err
+	}
+	if entry.MessageID != "" && entry.MessageID != msg.GetMessageId() {
+		return errors.New("outbox message_id mismatch")
+	}
+	if entry.Topic != "" && entry.Topic != msg.GetTopic() {
+		return errors.New("outbox topic mismatch")
+	}
+	entry.MessageID, entry.Topic = msg.GetMessageId(), msg.GetTopic()
 	return s.writeRows(ctx, rows, entry)
 }
 

@@ -7,19 +7,13 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
-// RowsChangedEvent creates a Storage rows_changed event for a set of subjects.
-func RowsChangedEvent(spaceID, datasetID, freq string, barTime time.Time, subjects []string) *storagepb.TimeSeriesRowsChangedEvent {
-	keys := make([]*storagepb.TimeSeriesKey, 0, len(subjects))
+// RowsChangedEvent creates a Storage rows_updated event for a set of subjects.
+func RowsChangedEvent(spaceID, datasetID, freq string, barTime time.Time, subjects []string) *storagepb.TimeSeriesRowsUpdated {
+	rows := make([]*storagepb.TimeSeriesRow, 0, len(subjects))
 	for _, subject := range subjects {
-		keys = append(keys, &storagepb.TimeSeriesKey{
-			SpaceId:   spaceID,
-			DatasetId: datasetID,
-			SubjectId: subject,
-			Freq:      freq,
-			DataTime:  barTime.UTC().Format(time.RFC3339),
-		})
+		rows = append(rows, &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: freq, DataTime: barTime.UTC().Format(time.RFC3339)}})
 	}
-	return &storagepb.TimeSeriesRowsChangedEvent{Keys: keys}
+	return &storagepb.TimeSeriesRowsUpdated{SpaceId: spaceID, DatasetId: datasetID, Rows: rows}
 }
 
 // Symbols returns deterministic synthetic symbols.
