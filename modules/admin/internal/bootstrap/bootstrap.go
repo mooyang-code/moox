@@ -6,7 +6,6 @@ import (
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/admin/internal/metricspublish"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/monitor"
 
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -44,12 +43,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	// DNS探测定时器（合并终端+本地DNS并探测）
 	timer.RegisterScheduler("dnsProbeSchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service("trpc.dnsprobe.timer"), dnsproxy.HandleDNSProbeSchedule)
-	// 监控数据采集定时器
-	timer.RegisterScheduler("monitorSchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.monitor.timer"), monitor.HandleMonitorSchedule)
-	// 监控历史数据清理定时器（每天0点清理7天前数据）
-	timer.RegisterScheduler("monitorCleanupSchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.monitor.cleanup.timer"), monitor.HandleMonitorCleanupSchedule)
+	// 主机资源监控已迁移到 moox-monitor + moox-host-agent + EventBus。
+	// Admin 保留旧 Monitor RPC 仅用于兼容存量客户端，不再注册 SSH/node_exporter
+	// 采集和清理定时器，避免同一主机被两条链路重复抓取。
 	registerMetricsReporter(s)
 
 	log.InfoContextf(ctx, "应用初始化完成")

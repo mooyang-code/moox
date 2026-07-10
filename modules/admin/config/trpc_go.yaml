@@ -64,16 +64,6 @@ server:
       network: "0 */5 * * * *?scheduler=dnsProbeSchedule&disable=1&params="
       protocol: timer
       timeout: 60000
-    - name: trpc.monitor.timer
-      port: 11303
-      network: "0 */1 * * * *?scheduler=monitorSchedule&disable=1&params="
-      protocol: timer
-      timeout: 60000
-    - name: trpc.monitor.cleanup.timer
-      port: 11304
-      network: "0 0 0 * * *?scheduler=monitorCleanupSchedule&disable=1&params="
-      protocol: timer
-      timeout: 60000
     - name: trpc.moox.admin.metrics.timer
       port: 11305
       network: "*/30 * * * * *?params="
