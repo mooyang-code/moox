@@ -22,6 +22,7 @@ use (
 	./packages/commonpb
 	./packages/healthz
 	./packages/messagepb
+	./packages/metricspb
 	./packages/jetstream
 	./web-host
 )

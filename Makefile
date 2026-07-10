@@ -18,6 +18,7 @@ package-skill:
 proto:
 	$(MAKE) -C packages/commonpb all
 	$(MAKE) -C packages/messagepb all
+	$(MAKE) -C packages/metricspb all
 	$(MAKE) -C modules/storage proto
 	$(MAKE) -C modules/admin/proto all
 	$(MAKE) -C modules/trade/proto all

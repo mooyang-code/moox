@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package trpc.moox.metrics;
+
+option go_package = "github.com/mooyang-code/moox/packages/metricspb;metricspb";
+
+enum ExpositionFormat {
+  EXPOSITION_FORMAT_UNSPECIFIED = 0;
+  EXPOSITION_FORMAT_PROMETHEUS_TEXT = 1;
+}
+
+enum Compression {
+  COMPRESSION_UNSPECIFIED = 0;
+  COMPRESSION_NONE = 1;
+  COMPRESSION_GZIP = 2;
+}
+
+message MetricSnapshot {
+  uint32 schema_version = 1;
+  uint32 collection_interval_seconds = 2;
+  ExpositionFormat format = 3;
+  Compression compression = 4;
+  bytes data = 5;
+  uint32 metric_family_count = 6;
+  uint32 sample_count = 7;
+  bytes uncompressed_sha256 = 8;
+}
