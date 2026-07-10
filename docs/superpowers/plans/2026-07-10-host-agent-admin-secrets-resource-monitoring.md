@@ -10,6 +10,14 @@
 
 **Updated:** 2026-07-11。本版本替代文档原有的 bootstrap/acquire、HTTP 上报、Host Agent SQLite outbox、BYO NATS、`HostMetricEnvelope` 和逐 Agent 凭据设计。
 
+### 执行进度（2026-07-11）
+
+- 已完成：EventBus 服务、共享 JetStream client、固定 topic/consumer registry、TLS/ACL 配置、Admin `t_secrets` 凭据生成/导出/轮换，以及中央发布脚本接入。
+- 已完成：`modules/hostagent` Linux amd64/arm64 采集、稳定 identity、tRPC/health、best-effort HostMetric 发布和 rootless Skill 发布部署。
+- 已完成：Monitor HostMetric durable consumer、消息校验、SQLite inbox/agent/latest/history、全局主机 API、页面 API 迁移和 Host metadata seed/release/deploy gate。
+- 已完成：Admin 旧 node_exporter 采集定时器已停止注册；旧 Monitor RPC 仅作为兼容入口保留。
+- 待完成：Storage 四个 Host Dataset 的分钟 projector/history worker、bounded cleaner、资源告警规则/通知 outbox，以及页面的 rate-unavailable/non-zero 缺口状态展示。当前 Monitor history 查询读取本地 SQLite，尚未宣称 Storage 历史链路已上线。
+
 ---
 
 ## 1. 当前代码事实与前置依赖
