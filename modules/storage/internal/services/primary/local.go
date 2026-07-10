@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device"
 	devicepebble "github.com/mooyang-code/moox/modules/storage/internal/infra/device/pebble"
@@ -44,11 +45,24 @@ func NewLocalClient(opts LocalClientOptions) *LocalClient {
 }
 
 func (c *LocalClient) WriteRows(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow) error {
+	return c.writeRows(ctx, target, rows, nil)
+}
+
+func (c *LocalClient) WriteRowsWithMessage(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow, message []byte) error {
+	return c.writeRows(ctx, target, rows, message)
+}
+
+func (c *LocalClient) writeRows(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow, message []byte) error {
 	switch target.GetEngine() {
 	case "", "pebble":
 		store, err := c.factStore()
 		if err != nil {
 			return err
+		}
+		if messageStore, ok := store.(interface {
+			WriteRowsWithOutbox(context.Context, []*pb.PrimaryStoreRow, *device.OutboxEntry) error
+		}); ok && len(message) > 0 {
+			return messageStore.WriteRowsWithOutbox(ctx, rows, &device.OutboxEntry{MessageID: "", Data: append([]byte(nil), message...), CreatedAt: time.Now().UTC()})
 		}
 		return store.WriteRows(ctx, rows)
 	default:

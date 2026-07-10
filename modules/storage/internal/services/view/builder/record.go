@@ -21,8 +21,15 @@ func (s *Service) processRecordBatch(ctx context.Context, keys []*pb.RecordKey) 
 	if err != nil {
 		return err
 	}
+	return s.processRecordRowsBatch(ctx, rows)
+}
+
+func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordRow) error {
 	if len(rows) == 0 {
 		return nil
+	}
+	if s == nil || s.metadata == nil {
+		return errors.New("view builder record processor requires metadata client")
 	}
 	grouped := make(map[projectionDatasetKey][]*pb.RecordRow)
 	for _, row := range rows {

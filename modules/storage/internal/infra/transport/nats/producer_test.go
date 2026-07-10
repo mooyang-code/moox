@@ -65,7 +65,7 @@ func TestSubscribeDoesNotSerializeBlockedHandlers(t *testing.T) {
 
 	started := make(chan string, 2)
 	releaseFirst := make(chan struct{})
-	sub, err := subscriber.Subscribe(ctx, "moox.storage.test.rows_changed", func(_ context.Context, msg *transport.Message) error {
+	sub, err := subscriber.Subscribe(ctx, "moox.storage.test.rows_updated", func(_ context.Context, msg *transport.Message) error {
 		body := string(msg.Data)
 		started <- body
 		if body == "first" {
@@ -79,14 +79,14 @@ func TestSubscribeDoesNotSerializeBlockedHandlers(t *testing.T) {
 	defer sub.Close()
 	defer close(releaseFirst)
 
-	if err := producer.Send(ctx, &transport.Message{Subject: "moox.storage.test.rows_changed", Data: []byte("first")}); err != nil {
+	if err := producer.Send(ctx, &transport.Message{Subject: "moox.storage.test.rows_updated", Data: []byte("first")}); err != nil {
 		t.Fatalf("Send first: %v", err)
 	}
 	if got := waitStarted(t, started); got != "first" {
 		t.Fatalf("first handler started with %q", got)
 	}
 
-	if err := producer.Send(ctx, &transport.Message{Subject: "moox.storage.test.rows_changed", Data: []byte("second")}); err != nil {
+	if err := producer.Send(ctx, &transport.Message{Subject: "moox.storage.test.rows_updated", Data: []byte("second")}); err != nil {
 		t.Fatalf("Send second: %v", err)
 	}
 	select {
@@ -128,7 +128,7 @@ func TestSubscribeHonorsMaxInFlight(t *testing.T) {
 
 	started := make(chan string, 2)
 	releaseFirst := make(chan struct{})
-	sub, err := subscriber.Subscribe(ctx, "moox.storage.limit.rows_changed", func(_ context.Context, msg *transport.Message) error {
+	sub, err := subscriber.Subscribe(ctx, "moox.storage.limit.rows_updated", func(_ context.Context, msg *transport.Message) error {
 		body := string(msg.Data)
 		started <- body
 		if body == "first" {
@@ -142,13 +142,13 @@ func TestSubscribeHonorsMaxInFlight(t *testing.T) {
 	defer sub.Close()
 	defer close(releaseFirst)
 
-	if err := producer.Send(ctx, &transport.Message{Subject: "moox.storage.limit.rows_changed", Data: []byte("first")}); err != nil {
+	if err := producer.Send(ctx, &transport.Message{Subject: "moox.storage.limit.rows_updated", Data: []byte("first")}); err != nil {
 		t.Fatalf("Send first: %v", err)
 	}
 	if got := waitStarted(t, started); got != "first" {
 		t.Fatalf("first handler started with %q", got)
 	}
-	if err := producer.Send(ctx, &transport.Message{Subject: "moox.storage.limit.rows_changed", Data: []byte("second")}); err != nil {
+	if err := producer.Send(ctx, &transport.Message{Subject: "moox.storage.limit.rows_updated", Data: []byte("second")}); err != nil {
 		t.Fatalf("Send second: %v", err)
 	}
 
@@ -189,7 +189,7 @@ func TestSubscribeNaksFailedHandlerForRedelivery(t *testing.T) {
 
 	attempts := make(chan int, 2)
 	attempt := 0
-	sub, err := subscriber.Subscribe(ctx, "moox.storage.retry.rows_changed", func(context.Context, *transport.Message) error {
+	sub, err := subscriber.Subscribe(ctx, "moox.storage.retry.rows_updated", func(context.Context, *transport.Message) error {
 		attempt++
 		attempts <- attempt
 		if attempt == 1 {
@@ -201,7 +201,7 @@ func TestSubscribeNaksFailedHandlerForRedelivery(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Close()
-	if err := producer.Send(ctx, &transport.Message{Subject: "moox.storage.retry.rows_changed", Data: []byte("event")}); err != nil {
+	if err := producer.Send(ctx, &transport.Message{Subject: "moox.storage.retry.rows_updated", Data: []byte("event")}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -230,7 +230,7 @@ func TestSubscribeUpdatesExistingDurableConsumerConfig(t *testing.T) {
 
 	ctx := context.Background()
 	streamName := "MOOX_STORAGE_TEST_DRIFT"
-	subject := "moox.storage.drift.rows_changed"
+	subject := "moox.storage.drift.rows_updated"
 	consumerName := durableConsumerName("storage_view_drift_test", subject)
 
 	nc, err := nats.Connect(url)

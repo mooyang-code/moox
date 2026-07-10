@@ -21,8 +21,15 @@ func (s *Service) processTimeSeriesBatch(ctx context.Context, keys []*pb.TimeSer
 	if err != nil {
 		return err
 	}
+	return s.processTimeSeriesRowsBatch(ctx, rows)
+}
+
+func (s *Service) processTimeSeriesRowsBatch(ctx context.Context, rows []*pb.TimeSeriesRow) error {
 	if len(rows) == 0 {
 		return nil
+	}
+	if s == nil || s.metadata == nil {
+		return errors.New("view builder time-series processor requires metadata client")
 	}
 	grouped := make(map[projectionDatasetKey][]*pb.TimeSeriesRow)
 	for _, row := range rows {

@@ -58,6 +58,9 @@ message WritePrimaryRowsReq {
   PrimaryStoreTarget target = 2;
   // rows 是已完成路由的数据行。
   repeated PrimaryStoreRow rows = 3;
+  // outbox_message 是由 Access 构造的确定性 MooxMessage 二进制，
+  // PrimaryStore 将其与事实行在同一 Pebble batch 中持久化。
+  bytes outbox_message = 4;
 }
 
 // WritePrimaryRowsRsp 表示在线主存行写入结果。

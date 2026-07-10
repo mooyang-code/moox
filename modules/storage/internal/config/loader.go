@@ -46,18 +46,21 @@ type StorageDevices struct {
 
 // StorageEventBus 保存事件总线传输配置。
 type StorageEventBus struct {
-	Type          string                  `yaml:"type"`
-	NATSURL       string                  `yaml:"nats_url"`
-	StreamName    string                  `yaml:"stream_name"`
-	SubjectPrefix string                  `yaml:"subject_prefix"`
-	ConsumerName  string                  `yaml:"consumer_name"`
-	MaxAgeHours   int                     `yaml:"max_age_hours"`
-	MaxMsgs       int64                   `yaml:"max_msgs"`
-	MaxBytes      int64                   `yaml:"max_bytes"`
-	MaxInFlight   int                     `yaml:"max_in_flight"`
-	AckWaitMS     int                     `yaml:"ack_wait_ms"`
-	MaxDeliver    int                     `yaml:"max_deliver"`
-	Embedded      StorageEmbeddedEventBus `yaml:"embedded"`
+	Type          string   `yaml:"type"`
+	URLs          []string `yaml:"urls"`
+	NATSURL       string   `yaml:"nats_url"`
+	StreamName    string   `yaml:"stream_name"`
+	SubjectPrefix string   `yaml:"subject_prefix"`
+	ConsumerName  string   `yaml:"consumer_name"`
+	MaxAgeHours   int      `yaml:"max_age_hours"`
+	MaxMsgs       int64    `yaml:"max_msgs"`
+	MaxBytes      int64    `yaml:"max_bytes"`
+	MaxInFlight   int      `yaml:"max_in_flight"`
+	AckWaitMS     int      `yaml:"ack_wait_ms"`
+	MaxDeliver    int      `yaml:"max_deliver"`
+	// Embedded is retained for decoding old single-process test configurations.
+	// Production Storage never starts a broker; moox-eventbus owns JetStream.
+	Embedded StorageEmbeddedEventBus `yaml:"embedded"`
 }
 
 // StorageEmbeddedEventBus 保存本地内嵌事件总线服务配置。
@@ -146,10 +149,13 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.Devices.ParquetPath = filepath.Join(c.Root, "archive")
 	}
 	if c.EventBus.Type == "" {
-		c.EventBus.Type = "nats"
+		c.EventBus.Type = "jetstream"
 	}
 	if c.EventBus.NATSURL == "" {
 		c.EventBus.NATSURL = "nats://127.0.0.1:4222"
+	}
+	if len(c.EventBus.URLs) == 0 {
+		c.EventBus.URLs = []string{c.EventBus.NATSURL}
 	}
 	if c.EventBus.SubjectPrefix == "" {
 		c.EventBus.SubjectPrefix = "moox.storage"

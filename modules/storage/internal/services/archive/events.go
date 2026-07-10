@@ -10,19 +10,19 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-type RowsChangedHandler func(ctx context.Context, event any) error
+type RowsUpdatedHandler func(ctx context.Context, event any) error
 
 type EventConsumerOptions struct {
 	Events           eventbus.Subscriber
-	HandleTimeSeries eventbus.TimeSeriesRowsChangedHandler
-	HandleRecord     eventbus.RecordRowsChangedHandler
+	HandleTimeSeries eventbus.TimeSeriesRowsUpdatedHandler
+	HandleRecord     eventbus.RecordRowsUpdatedHandler
 }
 
 // EventConsumer subscribes the archive runtime to storage row-change events.
 type EventConsumer struct {
 	events           eventbus.Subscriber
-	handleTimeSeries eventbus.TimeSeriesRowsChangedHandler
-	handleRecord     eventbus.RecordRowsChangedHandler
+	handleTimeSeries eventbus.TimeSeriesRowsUpdatedHandler
+	handleRecord     eventbus.RecordRowsUpdatedHandler
 
 	mu            sync.Mutex
 	timeSeriesSub eventbus.Subscription
@@ -64,12 +64,12 @@ func (c *EventConsumer) Start(ctx context.Context) error {
 	c.started = true
 	c.mu.Unlock()
 
-	timeSeriesSub, err := c.events.SubscribeTimeSeriesRowsChanged(ctx, c.handleTimeSeries)
+	timeSeriesSub, err := c.events.SubscribeTimeSeriesRowsUpdated(ctx, c.handleTimeSeries)
 	if err != nil {
 		c.clearStartedState()
 		return err
 	}
-	recordSub, err := c.events.SubscribeRecordRowsChanged(ctx, c.handleRecord)
+	recordSub, err := c.events.SubscribeRecordRowsUpdated(ctx, c.handleRecord)
 	if err != nil {
 		_ = timeSeriesSub.Close()
 		c.clearStartedState()
@@ -120,12 +120,12 @@ func (c *EventConsumer) clearStartedState() {
 	c.mu.Unlock()
 }
 
-func noopTimeSeriesArchiveEvent(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
-	log.DebugContextf(ctx, "[Archive] received time-series rows changed event keys=%d", len(event.GetKeys()))
+func noopTimeSeriesArchiveEvent(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
+	log.DebugContextf(ctx, "[Archive] received time-series rows updated rows=%d", len(event.GetRows()))
 	return nil
 }
 
-func noopRecordArchiveEvent(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
-	log.DebugContextf(ctx, "[Archive] received record rows changed event keys=%d", len(event.GetKeys()))
+func noopRecordArchiveEvent(ctx context.Context, event *pb.RecordRowsUpdated) error {
+	log.DebugContextf(ctx, "[Archive] received record rows updated rows=%d", len(event.GetRows()))
 	return nil
 }

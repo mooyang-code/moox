@@ -21,9 +21,18 @@ func NewRemoteClient(serviceName string) *RemoteClient {
 }
 
 func (c *RemoteClient) WriteRows(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow) error {
+	return c.writeRows(ctx, target, rows, nil)
+}
+
+func (c *RemoteClient) WriteRowsWithMessage(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow, message []byte) error {
+	return c.writeRows(ctx, target, rows, message)
+}
+
+func (c *RemoteClient) writeRows(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow, message []byte) error {
 	rsp, err := c.proxyFor(target).WritePrimaryRows(ctx, &pb.WritePrimaryRowsReq{
-		Target: target,
-		Rows:   rows,
+		Target:        target,
+		Rows:          rows,
+		OutboxMessage: message,
 	})
 	if err != nil {
 		return err

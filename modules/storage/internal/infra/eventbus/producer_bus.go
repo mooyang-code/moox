@@ -3,35 +3,36 @@ package eventbus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/transport"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
-	"google.golang.org/protobuf/encoding/protojson"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/messagepb"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
-	DefaultSubjectPrefix                  = "moox.storage"
-	DefaultTimeSeriesRowsChangedSubject   = "moox.storage.time_series.rows_changed.v1"
-	DefaultRecordRowsChangedSubject       = "moox.storage.record.rows_changed.v1"
-	defaultTimeSeriesRowsChangedSuffix    = "time_series.rows_changed.v1"
-	defaultRecordRowsChangedSubjectSuffix = "record.rows_changed.v1"
+	DefaultSubjectPrefix                = "moox.storage"
+	DefaultTimeSeriesRowsUpdatedSubject = "moox.storage.time_series.rows_updated.v1"
+	DefaultRecordRowsUpdatedSubject     = "moox.storage.record.rows_updated.v1"
+	defaultTimeSeriesRowsUpdatedSuffix  = "time_series.rows_updated.v1"
+	defaultRecordRowsUpdatedSuffix      = "record.rows_updated.v1"
 )
 
-func TimeSeriesRowsChangedSubject(prefix string) string {
-	return normalizeSubjectPrefix(prefix) + "." + defaultTimeSeriesRowsChangedSuffix
+func TimeSeriesRowsUpdatedSubject(prefix string) string {
+	return normalizeSubjectPrefix(prefix) + "." + defaultTimeSeriesRowsUpdatedSuffix
 }
 
-func RecordRowsChangedSubject(prefix string) string {
-	return normalizeSubjectPrefix(prefix) + "." + defaultRecordRowsChangedSubjectSuffix
+func RecordRowsUpdatedSubject(prefix string) string {
+	return normalizeSubjectPrefix(prefix) + "." + defaultRecordRowsUpdatedSuffix
 }
 
-func SubjectPrefixWildcard(prefix string) string {
-	return normalizeSubjectPrefix(prefix) + ".>"
-}
+func SubjectPrefixWildcard(prefix string) string { return normalizeSubjectPrefix(prefix) + ".>" }
 
 func normalizeSubjectPrefix(prefix string) string {
 	prefix = strings.Trim(strings.TrimSpace(prefix), ".")
@@ -41,231 +42,249 @@ func normalizeSubjectPrefix(prefix string) string {
 	return prefix
 }
 
-// ProducerBus 将核心事件总线事件发布到外部传输。
+// ProducerBus adapts the shared JetStream package to Storage's domain event API.
 type ProducerBus struct {
-	producer          transport.Producer
+	client            *jetstream.Client
 	timeSeriesSubject string
 	recordSubject     string
+	producer          *messagepb.Producer
 }
 
-func NewProducerBus(producer transport.Producer, prefix string) *ProducerBus {
+func NewProducerBus(client *jetstream.Client, prefix string) *ProducerBus {
 	return &ProducerBus{
-		producer:          producer,
-		timeSeriesSubject: TimeSeriesRowsChangedSubject(prefix),
-		recordSubject:     RecordRowsChangedSubject(prefix),
+		client:            client,
+		timeSeriesSubject: TimeSeriesRowsUpdatedSubject(prefix),
+		recordSubject:     RecordRowsUpdatedSubject(prefix),
+		producer:          &messagepb.Producer{ServiceName: "moox-storage", InstanceId: "storage"},
 	}
 }
 
-func (b *ProducerBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
-	data, err := protojson.MarshalOptions{EmitUnpopulated: false}.Marshal(event)
-	if err != nil {
-		return err
+func (b *ProducerBus) PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
+	if event == nil {
+		return errors.New("time-series update is nil")
 	}
-	return b.producer.Send(ctx, &transport.Message{
-		Subject: b.timeSeriesSubject,
-		Data:    data,
-		ID:      event.GetEventId(),
-		Time:    time.Now(),
-	})
+	return b.publish(ctx, b.timeSeriesSubject, event.GetMessageId(), event.GetSpaceId(), event.GetDatasetId(), event)
 }
 
-func (b *ProducerBus) PublishRecordRowsChanged(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
-	data, err := protojson.MarshalOptions{EmitUnpopulated: false}.Marshal(event)
-	if err != nil {
-		return err
+func (b *ProducerBus) PublishRecordRowsUpdated(ctx context.Context, event *pb.RecordRowsUpdated) error {
+	if event == nil {
+		return errors.New("record update is nil")
 	}
-	return b.producer.Send(ctx, &transport.Message{
-		Subject: b.recordSubject,
-		Data:    data,
-		ID:      event.GetEventId(),
-		Time:    time.Now(),
-	})
+	return b.publish(ctx, b.recordSubject, event.GetMessageId(), event.GetSpaceId(), event.GetDatasetId(), event)
+}
+
+func (b *ProducerBus) publish(ctx context.Context, topic, id, spaceID, datasetID string, payload proto.Message) error {
+	if b == nil || b.client == nil {
+		return errors.New("storage eventbus client is nil")
+	}
+	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal storage update: %w", err)
+	}
+	if strings.TrimSpace(id) == "" {
+		return errors.New("storage update message_id is required")
+	}
+	now := timestamppb.Now()
+	msg := &messagepb.MooxMessage{
+		ProtocolVersion: jetstream.ProtocolVersion,
+		MessageId:       id,
+		Topic:           topic,
+		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
+		Producer:        b.producer,
+		SpaceId:         spaceID,
+		OccurredAt:      now,
+		PublishedAt:     now,
+		ContentType:     "application/protobuf",
+		Payload:         data,
+		Attributes:      map[string]string{"dataset_id": datasetID},
+	}
+	_, err = b.client.Publish(ctx, msg)
+	return err
 }
 
 func (b *ProducerBus) Close() error {
-	if b == nil || b.producer == nil {
+	if b == nil || b.client == nil {
 		return nil
 	}
-	return b.producer.Close()
+	return b.client.Close()
 }
 
-// PubSub 定义同时支持发布和订阅的事件传输接口。
-type PubSub interface {
-	transport.Producer
-	transport.Subscriber
-}
-
-// SubscriberBus 将外部传输订阅适配为核心事件总线订阅。
+// SubscriberBus fan-outs decoded shared messages to Storage consumers.
 type SubscriberBus struct {
 	*ProducerBus
-	subscriber             transport.Subscriber
-	mu                     sync.Mutex
-	nextID                 uint64
-	timeSeriesHandlers     map[uint64]coreeventbus.TimeSeriesRowsChangedHandler
-	recordHandlers         map[uint64]coreeventbus.RecordRowsChangedHandler
-	timeSeriesSubscription transport.Subscription
-	recordSubscription     transport.Subscription
-	subscribeClosed        bool
+	client             *jetstream.Client
+	mu                 sync.Mutex
+	nextID             uint64
+	timeSeriesHandlers map[uint64]coreeventbus.TimeSeriesRowsUpdatedHandler
+	recordHandlers     map[uint64]coreeventbus.RecordRowsUpdatedHandler
+	timeSeriesConsumer *jetstream.PullConsumer
+	recordConsumer     *jetstream.PullConsumer
+	consumeCancel      context.CancelFunc
+	subscribeClosed    bool
+	wg                 sync.WaitGroup
 }
 
-func NewSubscriberBus(pubsub PubSub, prefix string) *SubscriberBus {
-	base := NewProducerBus(pubsub, prefix)
+func NewSubscriberBus(client *jetstream.Client, prefix string) *SubscriberBus {
 	return &SubscriberBus{
-		ProducerBus:        base,
-		subscriber:         pubsub,
-		timeSeriesHandlers: make(map[uint64]coreeventbus.TimeSeriesRowsChangedHandler),
-		recordHandlers:     make(map[uint64]coreeventbus.RecordRowsChangedHandler),
+		ProducerBus:        NewProducerBus(client, prefix),
+		client:             client,
+		timeSeriesHandlers: make(map[uint64]coreeventbus.TimeSeriesRowsUpdatedHandler),
+		recordHandlers:     make(map[uint64]coreeventbus.RecordRowsUpdatedHandler),
 	}
 }
 
-func (b *SubscriberBus) SubscribeTimeSeriesRowsChanged(ctx context.Context, handler coreeventbus.TimeSeriesRowsChangedHandler) (coreeventbus.Subscription, error) {
+func (b *SubscriberBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, handler coreeventbus.TimeSeriesRowsUpdatedHandler) (coreeventbus.Subscription, error) {
 	if handler == nil {
 		return noopSubscription{}, nil
 	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.subscribeClosed {
-		b.mu.Unlock()
 		return nil, context.Canceled
 	}
-	if b.timeSeriesSubscription == nil {
-		subscription, err := b.subscriber.Subscribe(ctx, b.timeSeriesSubject, b.handleTimeSeriesMessage)
+	if b.timeSeriesConsumer == nil {
+		consumer, err := b.client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "storage_view_time_series", FilterSubject: b.timeSeriesSubject, AckWait: 2 * time.Minute, MaxDeliver: -1, MaxAckPending: 128})
 		if err != nil {
-			b.mu.Unlock()
 			return nil, err
 		}
-		b.timeSeriesSubscription = subscription
+		b.timeSeriesConsumer = consumer
+		b.startLoop(consumer, true)
 	}
 	b.nextID++
 	id := b.nextID
 	b.timeSeriesHandlers[id] = handler
-	b.mu.Unlock()
-	return &subscriberBusSubscription{close: func() error { return b.closeTimeSeriesSubscription(id) }}, nil
+	return &subscriberBusSubscription{close: func() error { return b.closeTimeSeries(id) }}, nil
 }
 
-func (b *SubscriberBus) SubscribeRecordRowsChanged(ctx context.Context, handler coreeventbus.RecordRowsChangedHandler) (coreeventbus.Subscription, error) {
+func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler coreeventbus.RecordRowsUpdatedHandler) (coreeventbus.Subscription, error) {
 	if handler == nil {
 		return noopSubscription{}, nil
 	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.subscribeClosed {
-		b.mu.Unlock()
 		return nil, context.Canceled
 	}
-	if b.recordSubscription == nil {
-		subscription, err := b.subscriber.Subscribe(ctx, b.recordSubject, b.handleRecordMessage)
+	if b.recordConsumer == nil {
+		consumer, err := b.client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "storage_view_record", FilterSubject: b.recordSubject, AckWait: 2 * time.Minute, MaxDeliver: -1, MaxAckPending: 128})
 		if err != nil {
-			b.mu.Unlock()
 			return nil, err
 		}
-		b.recordSubscription = subscription
+		b.recordConsumer = consumer
+		b.startLoop(consumer, false)
 	}
 	b.nextID++
 	id := b.nextID
 	b.recordHandlers[id] = handler
-	b.mu.Unlock()
-	return &subscriberBusSubscription{close: func() error { return b.closeRecordSubscription(id) }}, nil
+	return &subscriberBusSubscription{close: func() error { return b.closeRecord(id) }}, nil
 }
 
-func (b *SubscriberBus) handleTimeSeriesMessage(ctx context.Context, msg *transport.Message) error {
-	event := &pb.TimeSeriesRowsChangedEvent{}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(msg.Data, event); err != nil {
-		return err
+func (b *SubscriberBus) startLoop(consumer *jetstream.PullConsumer, timeSeries bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	if b.consumeCancel == nil {
+		b.consumeCancel = cancel
 	}
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			deliveries, err := consumer.Fetch(ctx, 32)
+			if err != nil && len(deliveries) == 0 {
+				if errors.Is(err, context.Canceled) || errors.Is(err, jetstream.ErrClosed) {
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			for _, delivery := range deliveries {
+				handlerErr := b.dispatch(ctx, delivery, timeSeries)
+				if handlerErr != nil {
+					_ = delivery.Nak(context.Background(), time.Second)
+					continue
+				}
+				_ = delivery.Ack(context.Background())
+			}
+		}
+	}()
+}
+
+func (b *SubscriberBus) dispatch(ctx context.Context, delivery *jetstream.Delivery, timeSeries bool) error {
+	if delivery == nil || delivery.Message == nil {
+		return errors.New("nil storage event delivery")
+	}
+	var err error
 	b.mu.Lock()
-	handlers := make([]coreeventbus.TimeSeriesRowsChangedHandler, 0, len(b.timeSeriesHandlers))
-	for _, handler := range b.timeSeriesHandlers {
-		handlers = append(handlers, handler)
+	if timeSeries {
+		var event pb.TimeSeriesRowsUpdated
+		err = proto.Unmarshal(delivery.Message.GetPayload(), &event)
+		handlers := make([]coreeventbus.TimeSeriesRowsUpdatedHandler, 0, len(b.timeSeriesHandlers))
+		for _, h := range b.timeSeriesHandlers {
+			handlers = append(handlers, h)
+		}
+		b.mu.Unlock()
+		if err == nil {
+			for _, h := range handlers {
+				err = errors.Join(err, h(ctx, &event))
+			}
+		}
+	} else {
+		var event pb.RecordRowsUpdated
+		err = proto.Unmarshal(delivery.Message.GetPayload(), &event)
+		handlers := make([]coreeventbus.RecordRowsUpdatedHandler, 0, len(b.recordHandlers))
+		for _, h := range b.recordHandlers {
+			handlers = append(handlers, h)
+		}
+		b.mu.Unlock()
+		if err == nil {
+			for _, h := range handlers {
+				err = errors.Join(err, h(ctx, &event))
+			}
+		}
 	}
-	b.mu.Unlock()
-	var handlerErr error
-	for _, handler := range handlers {
-		handlerErr = errors.Join(handlerErr, handler(ctx, event))
-	}
-	return handlerErr
+	return err
 }
 
-func (b *SubscriberBus) handleRecordMessage(ctx context.Context, msg *transport.Message) error {
-	event := &pb.RecordRowsChangedEvent{}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(msg.Data, event); err != nil {
-		return err
-	}
+func (b *SubscriberBus) closeTimeSeries(id uint64) error {
 	b.mu.Lock()
-	handlers := make([]coreeventbus.RecordRowsChangedHandler, 0, len(b.recordHandlers))
-	for _, handler := range b.recordHandlers {
-		handlers = append(handlers, handler)
-	}
-	b.mu.Unlock()
-	var handlerErr error
-	for _, handler := range handlers {
-		handlerErr = errors.Join(handlerErr, handler(ctx, event))
-	}
-	return handlerErr
+	defer b.mu.Unlock()
+	delete(b.timeSeriesHandlers, id)
+	return nil
 }
-
+func (b *SubscriberBus) closeRecord(id uint64) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.recordHandlers, id)
+	return nil
+}
 func (b *SubscriberBus) Close() error {
 	if b == nil {
 		return nil
 	}
 	b.mu.Lock()
-	timeSeriesSubscription := b.timeSeriesSubscription
-	recordSubscription := b.recordSubscription
-	b.timeSeriesSubscription = nil
-	b.recordSubscription = nil
 	b.subscribeClosed = true
-	b.timeSeriesHandlers = nil
-	b.recordHandlers = nil
+	cancel := b.consumeCancel
+	ts, rec := b.timeSeriesConsumer, b.recordConsumer
+	b.consumeCancel = nil
 	b.mu.Unlock()
-	var firstErr error
-	if timeSeriesSubscription != nil {
-		if err := timeSeriesSubscription.Close(); err != nil {
-			firstErr = err
-		}
+	if cancel != nil {
+		cancel()
 	}
-	if recordSubscription != nil {
-		if err := recordSubscription.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+	if ts != nil {
+		_ = ts.Close()
 	}
-	if err := b.ProducerBus.Close(); err != nil && firstErr == nil {
-		firstErr = err
+	if rec != nil {
+		_ = rec.Close()
 	}
-	return firstErr
+	b.wg.Wait()
+	return b.ProducerBus.Close()
 }
 
-func (b *SubscriberBus) closeTimeSeriesSubscription(id uint64) error {
-	b.mu.Lock()
-	delete(b.timeSeriesHandlers, id)
-	var subscription transport.Subscription
-	if len(b.timeSeriesHandlers) == 0 && b.timeSeriesSubscription != nil {
-		subscription = b.timeSeriesSubscription
-		b.timeSeriesSubscription = nil
-	}
-	b.mu.Unlock()
-	if subscription != nil {
-		return subscription.Close()
-	}
-	return nil
-}
-
-func (b *SubscriberBus) closeRecordSubscription(id uint64) error {
-	b.mu.Lock()
-	delete(b.recordHandlers, id)
-	var subscription transport.Subscription
-	if len(b.recordHandlers) == 0 && b.recordSubscription != nil {
-		subscription = b.recordSubscription
-		b.recordSubscription = nil
-	}
-	b.mu.Unlock()
-	if subscription != nil {
-		return subscription.Close()
-	}
-	return nil
-}
-
-// subscriberBusSubscription 表示 SubscriberBus 创建的复合订阅句柄。
-type subscriberBusSubscription struct {
-	close func() error
-}
+type subscriberBusSubscription struct{ close func() error }
 
 func (s *subscriberBusSubscription) Close() error {
 	if s == nil || s.close == nil {
@@ -274,7 +293,6 @@ func (s *subscriberBusSubscription) Close() error {
 	return s.close()
 }
 
-// noopSubscription 表示无需关闭动作的空订阅句柄。
 type noopSubscription struct{}
 
 func (noopSubscription) Close() error { return nil }

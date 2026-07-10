@@ -6,28 +6,23 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;stor
 
 import "access.proto";
 
-// TimeSeriesRowsChangedEvent 表示时序事实数据行变更事件。
-// 派生消费者应通过 Access 回读最新完整行，不应理解 PrimaryStore 分片和路由。
-message TimeSeriesRowsChangedEvent {
-  // event_id 是事件 ID。
-  string event_id = 1;
-  // event_time 是事件产生时间。
-  string event_time = 2;
-  // keys 是本次变更涉及的时序业务 key。
-  repeated TimeSeriesKey keys = 3;
-  // attributes 是附加事件属性。
-  map<string, string> attributes = 4;
+// TimeSeriesRowsUpdated 表示一次时序主存写入成功后的更新流水。
+// 派生消费者应使用 rows 直接物化，不应再按 key 回读 PrimaryStore。
+message TimeSeriesRowsUpdated {
+  string message_id = 1;
+  string written_at = 2;
+  string space_id = 3;
+  string dataset_id = 4;
+  repeated TimeSeriesRow rows = 5;
+  map<string, string> attributes = 6;
 }
 
-// RecordRowsChangedEvent 表示记录事实数据行变更事件。
-// 派生消费者应通过 Access 回读最新完整行，不应理解 PrimaryStore 分片和路由。
-message RecordRowsChangedEvent {
-  // event_id 是事件 ID。
-  string event_id = 1;
-  // event_time 是事件产生时间。
-  string event_time = 2;
-  // keys 是本次变更涉及的记录业务 key。
-  repeated RecordKey keys = 3;
-  // attributes 是附加事件属性。
-  map<string, string> attributes = 4;
+// RecordRowsUpdated 表示一次记录主存写入成功后的更新流水。
+message RecordRowsUpdated {
+  string message_id = 1;
+  string written_at = 2;
+  string space_id = 3;
+  string dataset_id = 4;
+  repeated RecordRow rows = 5;
+  map<string, string> attributes = 6;
 }

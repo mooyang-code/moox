@@ -2,6 +2,7 @@ package primary
 
 import (
 	"context"
+	"errors"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device"
@@ -35,7 +36,16 @@ func (s *Service) Close() error {
 }
 
 func (s *Service) WritePrimaryRows(ctx context.Context, req *pb.WritePrimaryRowsReq) (*pb.WritePrimaryRowsRsp, error) {
-	if err := s.client.WriteRows(ctx, req.GetTarget(), req.GetRows()); err != nil {
+	if req == nil {
+		return &pb.WritePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
+	}
+	var err error
+	if len(req.GetOutboxMessage()) > 0 {
+		err = s.client.WriteRowsWithMessage(ctx, req.GetTarget(), req.GetRows(), req.GetOutboxMessage())
+	} else {
+		err = s.client.WriteRows(ctx, req.GetTarget(), req.GetRows())
+	}
+	if err != nil {
 		return &pb.WritePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	return &pb.WritePrimaryRowsRsp{RetInfo: response.Success("success")}, nil

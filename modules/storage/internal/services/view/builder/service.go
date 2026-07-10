@@ -34,13 +34,11 @@ type Service struct {
 }
 
 type timeSeriesDeriveItem struct {
-	key  *pb.TimeSeriesKey
-	done chan error
+	row *pb.TimeSeriesRow
 }
 
 type recordDeriveItem struct {
-	key  *pb.RecordKey
-	done chan error
+	row *pb.RecordRow
 }
 
 // NewService creates a standalone view builder service.
@@ -133,12 +131,12 @@ func (s *Service) Start(ctx context.Context) error {
 		}()
 	}
 
-	timeSeriesSub, err := s.events.SubscribeTimeSeriesRowsChanged(ctx, s.enqueueTimeSeries)
+	timeSeriesSub, err := s.events.SubscribeTimeSeriesRowsUpdated(ctx, s.enqueueTimeSeries)
 	if err != nil {
 		s.clearStartedState(cancel)
 		return err
 	}
-	recordSub, err := s.events.SubscribeRecordRowsChanged(ctx, s.enqueueRecord)
+	recordSub, err := s.events.SubscribeRecordRowsUpdated(ctx, s.enqueueRecord)
 	if err != nil {
 		_ = timeSeriesSub.Close()
 		s.clearStartedState(cancel)
@@ -188,7 +186,7 @@ func (s *Service) Close() error {
 	return err
 }
 
-func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
+func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -205,24 +203,21 @@ func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRow
 	if addCtx == nil {
 		addCtx = ctx
 	}
-	var done []chan error
-	for _, key := range event.GetKeys() {
-		if key == nil {
+	for _, row := range event.GetRows() {
+		if row == nil {
 			continue
 		}
 		item := timeSeriesDeriveItem{
-			key:  proto.Clone(key).(*pb.TimeSeriesKey),
-			done: make(chan error, 1),
+			row: proto.Clone(row).(*pb.TimeSeriesRow),
 		}
 		if err := batcher.add(addCtx, item); err != nil {
 			return err
 		}
-		done = append(done, item.done)
 	}
-	return waitDeriveResults(ctx, done)
+	return nil
 }
 
-func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
+func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsUpdated) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -239,21 +234,18 @@ func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsChanged
 	if addCtx == nil {
 		addCtx = ctx
 	}
-	var done []chan error
-	for _, key := range event.GetKeys() {
-		if key == nil {
+	for _, row := range event.GetRows() {
+		if row == nil {
 			continue
 		}
 		item := recordDeriveItem{
-			key:  proto.Clone(key).(*pb.RecordKey),
-			done: make(chan error, 1),
+			row: proto.Clone(row).(*pb.RecordRow),
 		}
 		if err := batcher.add(addCtx, item); err != nil {
 			return err
 		}
-		done = append(done, item.done)
 	}
-	return waitDeriveResults(ctx, done)
+	return nil
 }
 
 func (s *Service) clearStartedState(cancel context.CancelFunc) {
@@ -268,29 +260,23 @@ func (s *Service) clearStartedState(cancel context.CancelFunc) {
 }
 
 func (s *Service) processTimeSeriesItemBatch(ctx context.Context, items []timeSeriesDeriveItem) {
-	keys := make([]*pb.TimeSeriesKey, 0, len(items))
+	rows := make([]*pb.TimeSeriesRow, 0, len(items))
 	for _, item := range items {
-		if item.key != nil {
-			keys = append(keys, item.key)
+		if item.row != nil {
+			rows = append(rows, item.row)
 		}
 	}
-	err := s.processTimeSeriesBatch(ctx, keys)
-	for _, item := range items {
-		completeDeriveItem(item.done, err)
-	}
+	_ = s.processTimeSeriesRowsBatch(ctx, rows)
 }
 
 func (s *Service) processRecordItemBatch(ctx context.Context, items []recordDeriveItem) {
-	keys := make([]*pb.RecordKey, 0, len(items))
+	rows := make([]*pb.RecordRow, 0, len(items))
 	for _, item := range items {
-		if item.key != nil {
-			keys = append(keys, item.key)
+		if item.row != nil {
+			rows = append(rows, item.row)
 		}
 	}
-	err := s.processRecordBatch(ctx, keys)
-	for _, item := range items {
-		completeDeriveItem(item.done, err)
-	}
+	_ = s.processRecordRowsBatch(ctx, rows)
 }
 
 func completeDeriveItem(done chan error, err error) {

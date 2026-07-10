@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	cpebble "github.com/cockroachdb/pebble"
+	"github.com/mooyang-code/moox/modules/storage/internal/infra/device"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
 )
@@ -56,6 +57,10 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) WriteRows(ctx context.Context, rows []*pb.PrimaryStoreRow) error {
+	return s.writeRows(ctx, rows, nil)
+}
+
+func (s *Store) writeRows(ctx context.Context, rows []*pb.PrimaryStoreRow, entry *device.OutboxEntry) error {
 	_ = ctx
 	if len(rows) == 0 {
 		return nil
@@ -94,6 +99,11 @@ func (s *Store) WriteRows(ctx context.Context, rows []*pb.PrimaryStoreRow) error
 			return err
 		}
 		if err := batch.Set([]byte(key), data, s.writeOptions); err != nil {
+			return err
+		}
+	}
+	if entry != nil {
+		if err := s.stageOutbox(batch, entry); err != nil {
 			return err
 		}
 	}

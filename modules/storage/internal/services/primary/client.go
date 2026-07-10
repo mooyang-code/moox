@@ -12,3 +12,10 @@ type Client interface {
 	ReadRows(ctx context.Context, device *pb.PrimaryStoreTarget, req *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error)
 	ScanRows(ctx context.Context, device *pb.PrimaryStoreTarget, req *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error)
 }
+
+// MessageWriter writes facts and the already encoded update message as one
+// durable operation. Implementations that do not provide the outbox (mostly
+// test fakes) continue to use Client.WriteRows.
+type MessageWriter interface {
+	WriteRowsWithMessage(ctx context.Context, device *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow, message []byte) error
+}

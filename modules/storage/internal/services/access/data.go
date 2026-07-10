@@ -2,6 +2,7 @@ package access
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,9 +10,13 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
+	"github.com/mooyang-code/moox/modules/storage/internal/services/primary"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/rs/xid"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const maxDatasetScanRows = 10000
@@ -26,19 +31,19 @@ func (s *Service) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeri
 	if err != nil {
 		return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
 	}
-	var written []*pb.TimeSeriesKey
 	for _, group := range groups {
-		if err := s.primary.WriteRows(ctx, group.target, group.rows); err != nil {
-			if publishErr := s.publishTimeSeriesRowsChanged(ctx, written); publishErr != nil {
-				s.reportViewError(ctx, "time_series_rows_changed_event", publishErr)
-			}
+		message, event, err := timeSeriesUpdateMessage(group)
+		if err != nil {
+			return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		if err := s.writeRoutedRows(ctx, group, message); err != nil {
 			return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
 		}
-		written = append(written, group.timeSeriesKeys...)
-	}
-	if err := s.publishTimeSeriesRowsChanged(ctx, written); err != nil {
-		s.reportViewError(ctx, "time_series_rows_changed_event", err)
-		return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("primary write committed but change event was not published: %w", err))}, nil
+		if event != nil && !s.hasMessageWriter() && s.events != nil {
+			if err := s.events.PublishTimeSeriesRowsUpdated(ctx, event); err != nil {
+				s.reportViewError(ctx, "time_series_rows_updated", err)
+			}
+		}
 	}
 	return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Success("success")}, nil
 }
@@ -194,19 +199,23 @@ func (s *Service) WriteRecordRows(ctx context.Context, req *pb.WriteRecordRowsRe
 	if err != nil {
 		return &pb.WriteRecordRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
 	}
-	var written []*pb.RecordKey
 	for _, group := range groups {
-		if err := s.primary.WriteRows(ctx, group.target, group.rows); err != nil {
-			if publishErr := s.publishRecordRowsChanged(ctx, written); publishErr != nil {
-				s.reportViewError(ctx, "record_rows_changed_event", publishErr)
-			}
+		message, event, err := recordUpdateMessage(group)
+		if err != nil {
+			return &pb.WriteRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		if err := s.writeRoutedRows(ctx, group, message); err != nil {
 			return &pb.WriteRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
 		}
-		written = append(written, group.recordKeys...)
+		if event != nil && !s.hasMessageWriter() && s.events != nil {
+			if err := s.events.PublishRecordRowsUpdated(ctx, event); err != nil {
+				s.reportViewError(ctx, "record_rows_updated", err)
+			}
+		}
 	}
-	if err := s.publishRecordRowsChanged(ctx, written); err != nil {
-		s.reportViewError(ctx, "record_rows_changed_event", err)
-		return &pb.WriteRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("primary write committed but change event was not published: %w", err)), Keys: cloneRecordKeys(written)}, nil
+	var written []*pb.RecordKey
+	for _, group := range groups {
+		written = append(written, group.recordKeys...)
 	}
 	return &pb.WriteRecordRowsRsp{RetInfo: response.Success("success"), Keys: cloneRecordKeys(written)}, nil
 }
@@ -478,6 +487,8 @@ func groupRowsErrorCode(err error) pb.ErrorCode {
 type routedRows struct {
 	target         *pb.PrimaryStoreTarget
 	rows           []*pb.PrimaryStoreRow
+	timeSeriesRows []*pb.TimeSeriesRow
+	recordRows     []*pb.RecordRow
 	timeSeriesKeys []*pb.TimeSeriesKey
 	recordKeys     []*pb.RecordKey
 }
@@ -510,6 +521,7 @@ func (s *Service) groupTimeSeriesRowsByPrimaryStoreTarget(ctx context.Context, r
 			order = append(order, groupKey)
 		}
 		group.rows = append(group.rows, converted)
+		group.timeSeriesRows = append(group.timeSeriesRows, proto.Clone(row).(*pb.TimeSeriesRow))
 		group.timeSeriesKeys = append(group.timeSeriesKeys, proto.Clone(key).(*pb.TimeSeriesKey))
 	}
 	out := make([]*routedRows, 0, len(groups))
@@ -547,6 +559,7 @@ func (s *Service) groupRecordRowsByPrimaryStoreTarget(ctx context.Context, rows 
 			order = append(order, groupKey)
 		}
 		group.rows = append(group.rows, converted)
+		group.recordRows = append(group.recordRows, proto.Clone(row).(*pb.RecordRow))
 		group.recordKeys = append(group.recordKeys, proto.Clone(key).(*pb.RecordKey))
 	}
 	out := make([]*routedRows, 0, len(groups))
@@ -556,26 +569,75 @@ func (s *Service) groupRecordRowsByPrimaryStoreTarget(ctx context.Context, rows 
 	return out, nil
 }
 
-func (s *Service) publishTimeSeriesRowsChanged(ctx context.Context, keys []*pb.TimeSeriesKey) error {
-	if len(keys) == 0 || s.events == nil {
-		return nil
+func (s *Service) hasMessageWriter() bool { _, ok := s.primary.(primary.MessageWriter); return ok }
+
+func (s *Service) writeRoutedRows(ctx context.Context, group *routedRows, message []byte) error {
+	if writer, ok := s.primary.(primary.MessageWriter); ok {
+		return writer.WriteRowsWithMessage(ctx, group.target, group.rows, message)
 	}
-	return s.events.PublishTimeSeriesRowsChanged(ctx, &pb.TimeSeriesRowsChangedEvent{
-		EventId:   xid.New().String(),
-		EventTime: time.Now().Format(time.RFC3339Nano),
-		Keys:      cloneTimeSeriesKeys(keys),
-	})
+	return s.primary.WriteRows(ctx, group.target, group.rows)
 }
 
-func (s *Service) publishRecordRowsChanged(ctx context.Context, keys []*pb.RecordKey) error {
-	if len(keys) == 0 || s.events == nil {
-		return nil
+func timeSeriesUpdateMessage(group *routedRows) ([]byte, *pb.TimeSeriesRowsUpdated, error) {
+	if group == nil || len(group.timeSeriesRows) == 0 {
+		return nil, nil, errors.New("time-series rows are required")
 	}
-	return s.events.PublishRecordRowsChanged(ctx, &pb.RecordRowsChangedEvent{
-		EventId:   xid.New().String(),
-		EventTime: time.Now().Format(time.RFC3339Nano),
-		Keys:      cloneRecordKeys(keys),
-	})
+	id := xid.New().String()
+	now := time.Now().UTC()
+	event := &pb.TimeSeriesRowsUpdated{MessageId: id, WrittenAt: now.Format(time.RFC3339Nano), SpaceId: group.target.GetSpaceId(), DatasetId: group.timeSeriesRows[0].GetKey().GetDatasetId(), Rows: cloneTimeSeriesRows(group.timeSeriesRows)}
+	raw, err := marshalUpdateMessage(id, "moox.storage.time_series.rows_updated.v1", event, group.target.GetSpaceId(), group.target.GetNodeId(), now)
+	return raw, event, err
+}
+
+func recordUpdateMessage(group *routedRows) ([]byte, *pb.RecordRowsUpdated, error) {
+	if group == nil || len(group.recordRows) == 0 {
+		return nil, nil, errors.New("record rows are required")
+	}
+	id := xid.New().String()
+	now := time.Now().UTC()
+	event := &pb.RecordRowsUpdated{MessageId: id, WrittenAt: now.Format(time.RFC3339Nano), SpaceId: group.target.GetSpaceId(), DatasetId: group.recordRows[0].GetKey().GetDatasetId(), Rows: cloneRecordRows(group.recordRows)}
+	raw, err := marshalUpdateMessage(id, "moox.storage.record.rows_updated.v1", event, group.target.GetSpaceId(), group.target.GetNodeId(), now)
+	return raw, event, err
+}
+
+func marshalUpdateMessage(id, topic string, payload proto.Message, spaceID, nodeID string, now time.Time) ([]byte, error) {
+	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	msg := &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: id, Topic: topic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "moox-storage", InstanceId: firstNonEmpty(nodeID, "storage")}, SpaceId: spaceID, OccurredAt: timestamppb.New(now), PublishedAt: timestamppb.New(now), ContentType: "application/protobuf", Payload: data}
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func cloneTimeSeriesRows(rows []*pb.TimeSeriesRow) []*pb.TimeSeriesRow {
+	out := make([]*pb.TimeSeriesRow, 0, len(rows))
+	for _, row := range rows {
+		if row != nil {
+			out = append(out, proto.Clone(row).(*pb.TimeSeriesRow))
+		}
+	}
+	return out
+}
+func cloneRecordRows(rows []*pb.RecordRow) []*pb.RecordRow {
+	out := make([]*pb.RecordRow, 0, len(rows))
+	for _, row := range rows {
+		if row != nil {
+			out = append(out, proto.Clone(row).(*pb.RecordRow))
+		}
+	}
+	return out
+}
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (s *Service) reportViewError(ctx context.Context, stage string, err error) {

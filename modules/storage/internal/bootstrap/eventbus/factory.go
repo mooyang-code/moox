@@ -4,46 +4,27 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	infraeventbus "github.com/mooyang-code/moox/modules/storage/internal/infra/eventbus"
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/transport"
-	_ "github.com/mooyang-code/moox/modules/storage/internal/infra/transport/nats"
+	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
-func NewRowsChangedBus(ctx context.Context, cfg storageconfig.StorageEventBus) (coreeventbus.Bus, error) {
+func NewRowsUpdatedBus(ctx context.Context, cfg storageconfig.StorageEventBus) (coreeventbus.Bus, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Type)) {
 	case "", "memory":
 		return coreeventbus.NewMemoryBus(), nil
-	case "nats":
-		streamSubject := infraeventbus.SubjectPrefixWildcard(cfg.SubjectPrefix)
-		producer, err := transport.NewProducer(transport.ProducerKindNATS, transport.ProducerOptions{
-			ServerURL:      cfg.NATSURL,
-			ConnectTimeout: 10 * time.Second,
-			StreamName:     cfg.StreamName,
-			StreamSubjects: []string{streamSubject},
-			ConsumerName:   cfg.ConsumerName,
-			MaxAge:         time.Duration(cfg.MaxAgeHours) * time.Hour,
-			MaxMsgs:        cfg.MaxMsgs,
-			MaxBytes:       cfg.MaxBytes,
-			MaxInFlight:    cfg.MaxInFlight,
-			AckWait:        time.Duration(cfg.AckWaitMS) * time.Millisecond,
-			MaxDeliver:     cfg.MaxDeliver,
-		})
+	case "nats", "jetstream":
+		urls := append([]string(nil), cfg.URLs...)
+		if len(urls) == 0 && strings.TrimSpace(cfg.NATSURL) != "" {
+			urls = []string{cfg.NATSURL}
+		}
+		client, err := jetstream.Connect(ctx, jetstream.Config{URLs: urls, Name: "moox-storage"})
 		if err != nil {
 			return nil, err
 		}
-		if err := producer.Connect(ctx); err != nil {
-			return nil, err
-		}
-		pubsub, ok := producer.(infraeventbus.PubSub)
-		if !ok {
-			_ = producer.Close()
-			return nil, fmt.Errorf("storage eventbus type %s does not support subscription", cfg.Type)
-		}
-		return infraeventbus.NewSubscriberBus(pubsub, cfg.SubjectPrefix), nil
+		return infraeventbus.NewSubscriberBus(client, cfg.SubjectPrefix), nil
 	default:
 		return nil, fmt.Errorf("unsupported storage eventbus type %s", cfg.Type)
 	}
