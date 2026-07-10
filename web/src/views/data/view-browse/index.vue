@@ -38,6 +38,9 @@
             {{ activeView?.active_index_id ? '已构建' : '未构建' }}
           </a-tag>
           <span v-if="activeView?.active_view_version">活跃版本 {{ activeView.active_view_version }}</span>
+          <span v-if="mode === 'time_series' && hasQueried">
+            已加载 {{ tableRows.length }} 条<span v-if="previewHasMore">+</span>
+          </span>
         </section>
 
         <a-alert v-if="queryError" class="query-alert" type="error" show-icon>{{ queryError }}</a-alert>
