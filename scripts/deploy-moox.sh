@@ -461,6 +461,9 @@ MONITOR_ENV=(
   "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-1800}"
 )
 
+METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
+METRICS_ROUTE_SEED="${MOOX_METRICS_STORAGE_ROUTE_SEED:-}"
+
 ensure_factor_python() {
   local venv="${ROOT}/data/factor/venv"
   local python_bin="${MOOX_FACTOR_ENGINE_PYTHON_BIN:-}"
@@ -535,6 +538,47 @@ wait_http() {
   done
   echo "${url} not ready after ${attempts}s" >&2
   return 1
+}
+
+wait_http_reachable() {
+  local url="$1"
+  local attempts="${2:-30}"
+  echo "waiting for metadata HTTP ${url}"
+  for _ in $(seq 1 "${attempts}"); do
+    # MetadataService does not expose a generic health route. Any HTTP
+    # response proves that the listener is ready; the apply command below is
+    # the read/write contract check.
+    if [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 2 "${url}" 2>/dev/null || true)" != "000" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "metadata HTTP ${url} not reachable after ${attempts}s" >&2
+  return 1
+}
+
+apply_metrics_metadata() {
+  if [[ "${WITH_MONITOR}" != "1" ]]; then
+    return 0
+  fi
+  local route_seed="${METRICS_ROUTE_SEED}"
+  if [[ -z "${route_seed}" && "${WITH_STORAGE}" == "1" ]]; then
+    route_seed="${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml"
+  fi
+  if [[ -z "${route_seed}" ]]; then
+    echo "MOOX_METRICS_STORAGE_ROUTE_SEED is required when Monitor uses external or clustered Storage" >&2
+    return 1
+  fi
+  if [[ ! -f "${route_seed}" ]]; then
+    echo "metrics route seed not found: ${route_seed}" >&2
+    return 1
+  fi
+  wait_http_reachable "${METRICS_METADATA_URL}" "${MOOX_WAIT_STORAGE_METADATA_SECONDS:-60}"
+  if [[ "${WITH_STORAGE}" == "1" ]]; then
+    "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/platform-local.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
+  fi
+  "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
+  "${ROOT}/bin/moox-cli" metadata apply --file "${route_seed}" --metadata-url "${METRICS_METADATA_URL}"
 }
 
 init_storage_schema() {
@@ -685,6 +729,7 @@ start_monitor() {
     echo "monitor is disabled in this deployment package" >&2
     exit 2
   fi
+  apply_metrics_metadata
   init_monitor_schema
   start_service "monitor" "${ROOT}/monitor" \
     env "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml

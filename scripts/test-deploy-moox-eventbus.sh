@@ -15,6 +15,10 @@ grep -q 'stop_service "eventbus"' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_WITH_EVENTBUS="\${WITH_EVENTBUS}".*stop.sh' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'data/eventbus/jetstream' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'logs/eventbus' "${ROOT}/scripts/deploy-moox.sh"
+grep -q 'apply_metrics_metadata' "${ROOT}/scripts/deploy-moox.sh"
+grep -q 'metadata-monitor-metrics.seed.yaml' "${ROOT}/scripts/deploy-moox.sh"
+grep -q 'MOOX_METRICS_STORAGE_ROUTE_SEED' "${ROOT}/scripts/deploy-moox.sh"
+grep -q 'MOOX_METRICS_STORAGE_METADATA_URL' "${ROOT}/scripts/deploy-moox.sh"
 
 if ! awk '/start_eventbus\(\)/ { start=NR } /start_storage\(\)/ { storage=NR } END { exit !(start < storage) }' "${ROOT}/scripts/deploy-moox.sh"; then
   echo "eventbus must start before storage" >&2
@@ -22,6 +26,10 @@ if ! awk '/start_eventbus\(\)/ { start=NR } /start_storage\(\)/ { storage=NR } E
 fi
 if ! awk '/stop_service "storage"/ { storage=NR } /stop_service "eventbus"/ { eventbus=NR } END { exit !(storage < eventbus) }' "${ROOT}/scripts/deploy-moox.sh"; then
   echo "eventbus must stop after storage" >&2
+  exit 1
+fi
+if ! awk '/^apply_metrics_metadata\(\)/ { metadata=NR } /^start_monitor\(\)/ { monitor=NR } END { exit !(metadata < monitor) }' "${ROOT}/scripts/deploy-moox.sh"; then
+  echo "metadata preflight must run before monitor" >&2
   exit 1
 fi
 

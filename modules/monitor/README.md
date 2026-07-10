@@ -2,6 +2,12 @@
 
 `moox-monitor` 是 MooX 独立服务可用性监控模块。V1 只覆盖 HTTP 和 TCP 探测，不迁移 Admin 内现有的主机资源监控。
 
+Monitor 还消费 `moox.metrics.snapshot.reported.v1`，将每个已注册 tRPC
+实例的有界 Prometheus snapshot 写入 Storage 时序历史，并提供 metric
+catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取服务的
+`/metrics`，也不依赖 Prometheus Server 或 Pushgateway；Storage 元数据由
+部署前的 `moox-cli metadata apply` 注册和校验。
+
 ## 端口
 
 - `:11410`: tRPC/HTTP 管理 API `trpc.moox.monitor.MonitorMgr`
@@ -59,3 +65,6 @@ SysDeploy 同步可手动触发 `SyncSystemChecks`；同步后的内置检查使
 ```text
 docs/superpowers/verification/2026-07-09-monitor-module.md
 ```
+
+指标监控的部署、限额、告警和故障处理见
+[`docs/运维/MooX指标监控.md`](../../docs/运维/MooX指标监控.md)。

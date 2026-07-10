@@ -16,6 +16,15 @@
 
 The `store_dir` is runtime state and is intentionally not included in release archives. Deployment rewrites it to `../data/eventbus/jetstream`.
 
+## Operations
+
+Start EventBus before Storage and Monitor. The generated deployment waits for
+`/readyz`, keeps JetStream data under `data/eventbus/jetstream`, and never
+packages that runtime directory. Stream/KV retention is owned by EventBus;
+clients only publish messages and bind durable consumers. See
+[`docs/运维/MooX-EventBus运维.md`](../../docs/运维/MooX-EventBus运维.md) for
+backup/restore, lag diagnosis, capacity, credentials, and clustered operation.
+
 ## Build
 
 ```bash

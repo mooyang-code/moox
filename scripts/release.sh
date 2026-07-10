@@ -25,6 +25,25 @@ build_web_assets() {
 build_web_assets
 TARGET_GOOS="${OS}" TARGET_GOARCH="${ARCH}" "${ROOT}/scripts/build.sh"
 
+validate_metrics_metadata_seeds() {
+  local seed
+  for seed in \
+    "${ROOT}/examples/platform-local.seed.yaml" \
+    "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" \
+    "${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml"; do
+    [[ -s "${seed}" ]] || {
+      echo "missing metadata seed: ${seed}" >&2
+      exit 1
+    }
+  done
+  # Validate the release contract without contacting Storage. Runtime startup
+  # performs the real create-or-verify apply after MetadataService is ready.
+  "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --dry-run >/dev/null
+  "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml" --dry-run >/dev/null
+}
+
+validate_metrics_metadata_seeds
+
 rm -rf "${RELEASE_ROOT}"
 mkdir -p \
   "${RELEASE_ROOT}/cli/bin" \

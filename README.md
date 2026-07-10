@@ -12,6 +12,21 @@
 
 Admin、CloudNode、Collector、Trade 的 SQLite schema 已内嵌进各自二进制，启动时自动应用；部署包只保留 Storage metadata 初始化所需的 `storage/schema/metadata.sql`。
 
+## EventBus 与指标监控
+
+`moox-eventbus` 是唯一的生产 NATS JetStream 所有者。Storage、CloudNode、Factor
+和各 tRPC 服务通过统一 `MooxMessage` 直接连接 EventBus；发布包不会携带
+JetStream 运行态数据。部署启动顺序为 EventBus -> Storage -> Metadata
+`metadata apply` 预检 -> Monitor -> 其他业务服务。
+
+每个服务的本地 timer 每 30 秒主动上报 Prometheus registry 快照到 EventBus，
+Monitor 消费后把历史写入 Storage 并提供 MooX 看板和结构化多指标阈值告警。
+系统不部署 Prometheus Server、Pushgateway，也不提供手工监控 target API。
+外部或多机 Storage 部署需要设置 `MOOX_METRICS_STORAGE_ROUTE_SEED`；单机部署
+默认使用 `examples/metadata-monitor-metrics-local-route.seed.yaml`。详见
+[`docs/运维/MooX-EventBus运维.md`](docs/运维/MooX-EventBus运维.md) 和
+[`docs/运维/MooX指标监控.md`](docs/运维/MooX指标监控.md)。
+
 ## 服务监控
 
 `moox-monitor` 是独立 HTTP/TCP 可用性监控模块，和 Admin 内原有主机资源监控并存。它通过 SysDeploy 同步内置 `moox-system` 检查，也支持手动检查、webhook 告警和多 monitor 实例 peer 去重。所有独立部署进程提供标准 `/healthz`，monitor 自身也提供 `/healthz` 与 peer snapshot API。
