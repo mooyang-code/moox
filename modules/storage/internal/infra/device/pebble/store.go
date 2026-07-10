@@ -25,6 +25,13 @@ type Store struct {
 	writeOptions *cpebble.WriteOptions
 	lockMu       sync.Mutex
 	locks        map[string]*rowLock
+	commitMu     sync.Mutex
+	recordMu     sync.Mutex
+	recordSource string
+	cursorKey    []byte
+	snapshotMu   sync.Mutex
+	snapshots    map[string]*recordSnapshot
+	commitHook   func() error
 }
 
 // rowLock 保存同一行合并写入时使用的互斥锁。
@@ -45,13 +52,24 @@ func Open(opts Options) (*Store, error) {
 	if opts.DisableSyncWrites {
 		writeOptions = cpebble.NoSync
 	}
-	return &Store{db: db, writeOptions: writeOptions, locks: make(map[string]*rowLock)}, nil
+	sourceID, cursorKey, err := loadRecordMetadata(db, writeOptions)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return &Store{db: db, writeOptions: writeOptions, locks: make(map[string]*rowLock), recordSource: sourceID, cursorKey: cursorKey, snapshots: make(map[string]*recordSnapshot)}, nil
 }
 
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	s.snapshotMu.Lock()
+	for id, snapshot := range s.snapshots {
+		snapshot.snapshot.Close()
+		delete(s.snapshots, id)
+	}
+	s.snapshotMu.Unlock()
 	return s.db.Close()
 }
 
