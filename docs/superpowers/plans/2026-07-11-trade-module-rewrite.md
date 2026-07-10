@@ -45,7 +45,7 @@ modules/trade/
   internal/application/{command,query,consumer,reconciliation}/
   internal/algorithm/{split,pricing,execution,rebalance}/
   internal/exchange/{binance,okx}/
-  internal/infrastructure/{sqlite,eventbus,clock}/
+  internal/infra/{persistence,messaging,clock}/
   schema/{core,ledger,execution,messaging,rebalance}.sql
   proto/trade_service.proto
 ```
@@ -98,7 +98,7 @@ Tests live beside each package. Cross-component tests live in `modules/trade/int
 - [ ] Define exchange-neutral place, cancel, amend, query, fill and private-stream contracts.
 - [ ] Define normalized error categories including `TRANSPORT_UNCERTAIN`, `TIME_SKEW` and `RATE_LIMITED`.
 - [ ] Define immutable Instrument Rules containing tick size, step size, minimum quantity, minimum notional, leverage brackets, STP and amend capabilities.
-- [ ] Add compile-time fake implementations proving algorithms and adapters do not depend on application or infrastructure packages.
+- [ ] Add compile-time fake implementations proving algorithms and adapters do not depend on application or infra packages.
 - [ ] Run domain and exchange contract tests.
 - [ ] Commit as `feat(trade): define execution and exchange contracts`.
 
@@ -123,22 +123,23 @@ Tests live beside each package. Cross-component tests live in `modules/trade/int
 - [ ] Run `go test -count=1 ./modules/trade/schema ./modules/trade/cmd/cli` against a fresh temporary database.
 - [ ] Commit as `feat(trade): replace trading schema`.
 
-### Task 5: Build Unit Of Work, Repositories, Inbox And Outbox
+### Task 5: Build Storage-Neutral Unit Of Work, Repositories, Inbox And Outbox
 
 **Files:**
-- Create: `modules/trade/internal/infrastructure/sqlite/unit_of_work.go`
-- Create: `modules/trade/internal/infrastructure/sqlite/order_repository.go`
-- Create: `modules/trade/internal/infrastructure/sqlite/execution_repository.go`
-- Create: `modules/trade/internal/infrastructure/sqlite/ledger_repository.go`
-- Create: `modules/trade/internal/infrastructure/sqlite/messaging_repository.go`
-- Create: `modules/trade/internal/infrastructure/sqlite/repository_test.go`
+- Create: `modules/trade/internal/infra/persistence/unit_of_work.go`
+- Create: `modules/trade/internal/infra/persistence/order_repository.go`
+- Create: `modules/trade/internal/infra/persistence/execution_repository.go`
+- Create: `modules/trade/internal/infra/persistence/ledger_repository.go`
+- Create: `modules/trade/internal/infra/persistence/messaging_repository.go`
+- Create: `modules/trade/internal/infra/persistence/repository_test.go`
 
 - [ ] Write rollback tests proving aggregate state, ledger entries and Outbox messages commit or roll back together.
 - [ ] Write unique-key tests for command idempotency, Fill idempotency and Inbox `message_id` idempotency.
 - [ ] Implement repositories with compare-and-swap aggregate versions.
 - [ ] Implement Outbox claiming with leases so a crashed relay does not lose or permanently lock messages.
 - [ ] Verify concurrent updates produce one winner and a typed conflict for the loser.
-- [ ] Run `go test -count=1 ./modules/trade/internal/infrastructure/sqlite`.
+- [ ] Keep database-driver types private to `infra/persistence`; domain and application contracts expose only UnitOfWork and repository interfaces.
+- [ ] Run `go test -count=1 ./modules/trade/internal/infra/persistence`.
 - [ ] Commit as `feat(trade): add transactional persistence`.
 
 ### Task 6: Implement The Double-Entry Ledger
@@ -238,17 +239,18 @@ Tests live beside each package. Cross-component tests live in `modules/trade/int
 - [ ] Test and expose `REPLACE_FAILED_AFTER_CANCEL`, cancel-unknown and replacement-submit-unknown states.
 - [ ] Commit as `feat(trade): add cancel and replace sagas`.
 
-### Task 12: Register Trade Topics And Build The Outbox Relay
+### Task 12: Register Trade Topics And Build The Public-Client-Based Outbox Relay
 
 **Files:**
 - Modify: `modules/eventbus/internal/registry/registry.go`
 - Modify: `modules/eventbus/config/app.yaml`
-- Create: `modules/trade/internal/infrastructure/eventbus/topics.go`
-- Create: `modules/trade/internal/infrastructure/eventbus/outbox_relay.go`
-- Create: `modules/trade/internal/infrastructure/eventbus/outbox_relay_test.go`
+- Create: `modules/trade/internal/infra/messaging/topics.go`
+- Create: `modules/trade/internal/infra/messaging/outbox_relay.go`
+- Create: `modules/trade/internal/infra/messaging/outbox_relay_test.go`
 
 - [ ] Add exact Trade Topic contracts and a `MOOX_TRADE` Limits/File stream.
 - [ ] Declare durable consumers for execution, settlement and reconciliation workers.
+- [ ] Reuse `packages/messagepb` and `packages/jetstream` directly; do not duplicate NATS connection, publish, consume, ACK, retry or message codec implementations in Trade.
 - [ ] Publish stable `MooxMessage.message_id` values through `packages/jetstream`.
 - [ ] Mark Outbox rows published only after PubAck; retry with the same message ID.
 - [ ] Test broker outage, process crash after PubAck and duplicate relay delivery.
@@ -257,7 +259,7 @@ Tests live beside each package. Cross-component tests live in `modules/trade/int
 ### Task 13: Add Idempotent Event Consumers
 
 **Files:**
-- Create: `modules/trade/internal/infrastructure/eventbus/consumer.go`
+- Create: `modules/trade/internal/infra/messaging/consumer.go`
 - Create: `modules/trade/internal/application/consumer/router.go`
 - Create: `modules/trade/internal/application/consumer/router_test.go`
 
@@ -275,7 +277,7 @@ Tests live beside each package. Cross-component tests live in `modules/trade/int
 - Replace: `modules/trade/internal/exchange/okx/*`
 - Create: `modules/trade/internal/exchange/binance/adapter_test.go`
 - Create: `modules/trade/internal/exchange/okx/adapter_test.go`
-- Create: `modules/trade/internal/infrastructure/clock/exchange_clock.go`
+- Create: `modules/trade/internal/infra/clock/exchange_clock.go`
 
 - [ ] Add signed REST fixture tests for place, cancel, query, rules and leverage endpoints.
 - [ ] Add error-classification fixtures for time skew, rate limits, insufficient balance, invalid rules and ambiguous transport failures.
