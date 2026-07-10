@@ -268,7 +268,7 @@ func (s *Service) validateWriteFence(ctx context.Context, indexID string, engine
 	if err != nil {
 		return err
 	}
-	if !stats.Exists || (stats.SchemaHash != "" && stats.SchemaHash != batch.SchemaHash) {
+	if !stats.Exists || stats.ViewVersion != batch.ViewVersion || stats.SchemaHash != batch.SchemaHash {
 		return errors.New("view index write does not match the prepared physical schema")
 	}
 	return nil
@@ -317,7 +317,7 @@ func statsToProto(stats coreviewindex.ViewIndexStats) *pb.ViewIndexStats {
 		count = uint64(stats.EntryCount)
 	}
 	return &pb.ViewIndexStats{
-		Exists: stats.Exists, EntryCount: count, MinVersion: stats.MinVersion, MaxVersion: stats.MaxVersion,
+		Exists: stats.Exists, ViewVersion: stats.ViewVersion, EntryCount: count, MinVersion: stats.MinVersion, MaxVersion: stats.MaxVersion,
 		SchemaHash: stats.SchemaHash, PhysicalBytes: stats.PhysicalBytes, UpdatedAt: stats.UpdatedAt, FreeDiskBytes: stats.FreeDiskBytes,
 	}
 }
@@ -331,7 +331,7 @@ func statsFromProto(stats *pb.ViewIndexStats) coreviewindex.ViewIndexStats {
 		count = math.MaxInt64
 	}
 	return coreviewindex.ViewIndexStats{
-		Exists: stats.GetExists(), EntryCount: int64(count), MinVersion: stats.GetMinVersion(), MaxVersion: stats.GetMaxVersion(),
+		Exists: stats.GetExists(), ViewVersion: stats.GetViewVersion(), EntryCount: int64(count), MinVersion: stats.GetMinVersion(), MaxVersion: stats.GetMaxVersion(),
 		SchemaHash: stats.GetSchemaHash(), PhysicalBytes: stats.GetPhysicalBytes(), UpdatedAt: stats.GetUpdatedAt(), FreeDiskBytes: stats.GetFreeDiskBytes(),
 	}
 }

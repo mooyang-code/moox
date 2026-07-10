@@ -73,6 +73,7 @@ type MaintenanceManager struct {
 	runMu       sync.Mutex
 	mu          sync.Mutex
 	orphanSince map[string]time.Time
+	lastViewKey string
 }
 
 func NewMaintenanceManager(opts MaintenanceOptions) *MaintenanceManager {
@@ -129,16 +130,14 @@ func (m *MaintenanceManager) MaintainViewIndexes(ctx context.Context, spaceID st
 	deadline := time.Now().Add(m.cfg.RunBudget)
 	changed := 0
 	var joined error
-	for processed, item := range views {
-		if processed >= m.cfg.MaxViewsPerRun {
-			break
-		}
+	for _, item := range m.viewsForRun(views) {
 		if err := ctx.Err(); err != nil {
 			return changed, errors.Join(joined, err)
 		}
 		if time.Now().After(deadline) {
 			break
 		}
+		m.lastViewKey = maintenanceViewKey(item)
 		activated, err := m.maintainView(ctx, item, deadline)
 		if err != nil {
 			joined = errors.Join(joined, fmt.Errorf("maintain View %s/%s: %w", item.GetSpaceId(), item.GetViewId(), err))
@@ -154,6 +153,41 @@ func (m *MaintenanceManager) MaintainViewIndexes(ctx context.Context, spaceID st
 		joined = errors.Join(joined, err)
 	}
 	return changed, joined
+}
+
+func (m *MaintenanceManager) viewsForRun(views []*pb.View) []*pb.View {
+	if len(views) == 0 || m.cfg.MaxViewsPerRun <= 0 {
+		return nil
+	}
+	limit := m.cfg.MaxViewsPerRun
+	if limit > len(views) {
+		limit = len(views)
+	}
+	start := 0
+	if m.lastViewKey != "" {
+		start = len(views)
+		for i, item := range views {
+			if maintenanceViewKey(item) > m.lastViewKey {
+				start = i
+				break
+			}
+		}
+		if start == len(views) {
+			start = 0
+		}
+	}
+	out := make([]*pb.View, 0, limit)
+	for offset := 0; offset < limit; offset++ {
+		out = append(out, views[(start+offset)%len(views)])
+	}
+	return out
+}
+
+func maintenanceViewKey(item *pb.View) string {
+	if item == nil {
+		return ""
+	}
+	return item.GetSpaceId() + "\x00" + item.GetViewId()
 }
 
 func (m *MaintenanceManager) maintainView(ctx context.Context, item *pb.View, deadline time.Time) (bool, error) {
@@ -248,7 +282,7 @@ func (m *MaintenanceManager) needsBuild(ctx context.Context, item *pb.View, engi
 	if err != nil {
 		return false, err
 	}
-	if !stats.Exists || (stats.SchemaHash != "" && stats.SchemaHash != wantHash) {
+	if !stats.Exists || stats.ViewVersion != item.GetActiveViewVersion() || stats.SchemaHash != wantHash {
 		return true, nil
 	}
 	window, err := m.retentionWindow(item)
@@ -546,7 +580,7 @@ func (m *MaintenanceManager) processRecordPage(ctx context.Context, item *pb.Vie
 }
 
 func (m *MaintenanceManager) buildReady(ctx context.Context, item *pb.View, build *pb.ViewIndexBuild, engine ManagedViewIndex, stats viewindex.ViewIndexStats) (bool, error) {
-	if !stats.Exists || stats.SchemaHash != build.GetSchemaHash() {
+	if !stats.Exists || stats.ViewVersion != build.GetTargetViewVersion() || stats.SchemaHash != build.GetSchemaHash() {
 		return false, nil
 	}
 	threshold := m.cfg.MinReadyEntries
@@ -691,12 +725,42 @@ func (m *MaintenanceManager) sweepOrphans(ctx context.Context, views []*pb.View)
 				since = now
 			}
 			if now.Sub(since) >= m.cfg.RemoveGrace {
+				// The initial metadata snapshot can race with a builder claiming this
+				// slot. Re-read the affected space immediately before deletion and
+				// fail closed when metadata is unavailable.
+				referencedNow, err := m.indexReferencedNow(ctx, engine.Engine(), indexID)
+				if err != nil || referencedNow {
+					if referencedNow {
+						delete(m.orphanSince, key)
+					}
+					continue
+				}
 				if engine.Remove(ctx, indexID) == nil {
 					delete(m.orphanSince, key)
 				}
 			}
 		}
 	}
+}
+
+func (m *MaintenanceManager) indexReferencedNow(ctx context.Context, engineName string, indexID string) (bool, error) {
+	ref, err := viewindex.ParseViewIndexID(indexID)
+	if err != nil {
+		return false, err
+	}
+	views, err := m.listViews(ctx, ref.SpaceID)
+	if err != nil {
+		return false, err
+	}
+	for _, item := range views {
+		if !strings.EqualFold(strings.TrimSpace(item.GetEngine()), strings.TrimSpace(engineName)) {
+			continue
+		}
+		if item.GetActiveIndexId() == indexID || item.GetIndexBuild().GetIndexId() == indexID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func engineIndexKey(engine string, indexID string) string {

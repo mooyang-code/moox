@@ -43,6 +43,11 @@ client:
       network: tcp
       protocol: http
       timeout: 3000
+    - name: trpc.moox.storage.AccessScan
+      target: ip://127.0.0.1:20105
+      network: tcp
+      protocol: trpc
+      timeout: 120000
     - name: trpc.moox.storage.Metadata
       target: ip://127.0.0.1:20200
       network: tcp

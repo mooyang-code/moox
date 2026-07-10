@@ -40,6 +40,8 @@ message ViewIndexStats {
   string updated_at = 7;
   // free_disk_bytes is the owner filesystem's currently available capacity.
   uint64 free_disk_bytes = 8;
+  // view_version is persisted with the physical index and survives owner restarts.
+  uint64 view_version = 9;
 }
 
 message ViewIndexDescriptor {

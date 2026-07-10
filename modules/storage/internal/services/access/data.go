@@ -50,7 +50,16 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	if isTimeSeriesDatasetScan(req) {
 		return s.scanTimeSeriesDataset(ctx, req)
 	}
+	var mergePlan *multiKeyPagePlan
+	if len(req.GetKeys()) > 1 {
+		var err error
+		mergePlan, err = newMultiKeyPagePlan(req.GetPage(), len(req.GetKeys()), timeSeriesPerKeyPageCap(req))
+		if err != nil {
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+	}
 	var out []*pb.TimeSeriesRow
+	var sourceHasMore bool
 	for _, key := range req.GetKeys() {
 		if err := validateTimeSeriesKeyTemplate(key); err != nil {
 			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -71,8 +80,8 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
 		}
 		page := req.GetPage()
-		if len(req.GetKeys()) > 1 {
-			page = nil
+		if mergePlan != nil {
+			page = &pb.Page{Page: 1, Size: mergePlan.fetchSize}
 		}
 		rows, pageResult, err := s.primary.ReadRows(ctx, target, &pb.ReadPrimaryRowsReq{
 			AuthInfo:     req.GetAuthInfo(),
@@ -86,6 +95,7 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		if err != nil {
 			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
 		}
+		sourceHasMore = sourceHasMore || pageResult.GetHasMore()
 		for _, row := range rows {
 			out = append(out, primaryStoreRowToTimeSeriesRow(row, key))
 		}
@@ -97,7 +107,7 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	if req.GetOrder() == pb.SortOrder_SORT_ORDER_DESC {
 		reverseTimeSeriesRows(out)
 	}
-	out, pageResult := pageTimeSeriesRows(out, req.GetPage())
+	out, pageResult := pageMergedTimeSeriesRows(out, mergePlan, sourceHasMore)
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 
@@ -235,7 +245,16 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 	if isRecordDatasetScan(req) {
 		return s.scanRecordDataset(ctx, req)
 	}
+	var mergePlan *multiKeyPagePlan
+	if len(req.GetKeys()) > 1 {
+		var err error
+		mergePlan, err = newMultiKeyPagePlan(req.GetPage(), len(req.GetKeys()), recordPerKeyPageCap(req))
+		if err != nil {
+			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+	}
 	var out []*pb.RecordRow
+	var sourceHasMore bool
 	for _, key := range req.GetKeys() {
 		if err := validateRecordKeyTemplate(key); err != nil {
 			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -248,13 +267,13 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 		if versionRange != nil {
 			storeKey.Version = ""
 		}
-		target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), "")
+		target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), key.GetRecordId())
 		if err != nil {
 			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
 		}
 		page := req.GetPage()
-		if len(req.GetKeys()) > 1 {
-			page = nil
+		if mergePlan != nil {
+			page = &pb.Page{Page: 1, Size: mergePlan.fetchSize}
 		}
 		rows, pageResult, err := s.primary.ReadRows(ctx, target, &pb.ReadPrimaryRowsReq{
 			AuthInfo:     req.GetAuthInfo(),
@@ -268,6 +287,7 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 		if err != nil {
 			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
 		}
+		sourceHasMore = sourceHasMore || pageResult.GetHasMore()
 		for _, row := range rows {
 			out = append(out, primaryStoreRowToRecordRow(row, key))
 		}
@@ -279,7 +299,7 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 	if req.GetOrder() == pb.SortOrder_SORT_ORDER_DESC {
 		reverseRecordRows(out)
 	}
-	out, pageResult := pageRecordRows(out, req.GetPage())
+	out, pageResult := pageMergedRecordRows(out, mergePlan, sourceHasMore)
 	return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 
@@ -509,11 +529,11 @@ func (s *Service) groupRecordRowsByPrimaryStoreTarget(ctx context.Context, rows 
 			return nil, err
 		}
 		key := row.GetKey()
-		routeKey := key.GetSpaceId() + "|" + key.GetDatasetId()
+		routeKey := key.GetSpaceId() + "|" + key.GetDatasetId() + "|" + key.GetRecordId()
 		target, ok := resolved[routeKey]
 		if !ok {
 			var err error
-			target, err = s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), "")
+			target, err = s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), key.GetRecordId())
 			if err != nil {
 				return nil, err
 			}

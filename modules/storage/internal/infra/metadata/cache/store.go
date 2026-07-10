@@ -176,8 +176,18 @@ func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string,
 }
 
 func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error) {
-	items, _, err := s.ListViews(ctx, spaceID, datasetID, "active", nil)
-	return items, err
+	const pageSize = uint32(1000)
+	var out []*pb.View
+	for pageNo := uint32(1); ; pageNo++ {
+		items, page, err := s.ListViews(ctx, spaceID, datasetID, "active", &pb.Page{Page: pageNo, Size: pageSize})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, items...)
+		if page == nil || !page.GetHasMore() || len(items) == 0 {
+			return out, nil
+		}
+	}
 }
 
 func (s *Store) ListViewColumns(ctx context.Context, spaceID string, viewID string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {

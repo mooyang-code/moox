@@ -40,6 +40,21 @@ func TestClientReturnsRetInfoErrors(t *testing.T) {
 	}
 }
 
+func TestLocalClientUsesOwnerWriteFence(t *testing.T) {
+	duck := &fakeManagedEngine{name: "duckdb"}
+	owner := NewService(Options{Engines: map[string]ManagedEngine{"duckdb": duck}})
+	local := NewLocalClient(owner, "duckdb")
+	indexID := coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)
+	if err := local.Prepare(context.Background(), indexID, coreviewindex.ViewIndexSchema{
+		SpaceID: "crypto", ViewID: "spot", ViewVersion: 2, Engine: "duckdb", SchemaHash: "schema-1",
+	}); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := local.Write(context.Background(), indexID, coreviewindex.ViewIndexBatch{ViewVersion: 1, SchemaHash: "schema-1"}); err == nil {
+		t.Fatal("local client bypassed owner write fence")
+	}
+}
+
 type fakeViewIndexProxy struct {
 	prepared *pb.PrepareViewIndexReq
 	fail     bool

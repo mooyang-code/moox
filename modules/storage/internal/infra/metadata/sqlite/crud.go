@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	coreviewindex "github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -122,11 +123,18 @@ func (s *Store) UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subjec
 		return nil, errors.New("space_id, subject_id and subject_type are required")
 	}
 	item.Status = defaultStatus(item.GetStatus())
-	raw, err := marshal(item)
-	if err != nil {
+	if err := upsertSubject(ctx, s.db, item); err != nil {
 		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx, `
+	return s.GetSubject(ctx, item.GetSpaceId(), item.GetSubjectId())
+}
+
+func upsertSubject(ctx context.Context, store execQueryRower, item *pb.Subject) error {
+	raw, err := marshal(item)
+	if err != nil {
+		return err
+	}
+	_, err = store.ExecContext(ctx, `
 		INSERT INTO t_subjects (c_space_id, c_subject_id, c_subject_type, c_name, c_market, c_currency, c_timezone, c_status, c_attrs_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_subject_id) DO UPDATE SET
@@ -138,10 +146,7 @@ func (s *Store) UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subjec
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json
 	`, item.GetSpaceId(), item.GetSubjectId(), item.GetSubjectType(), item.GetName(), item.GetMarket(), item.GetCurrency(), item.GetTimezone(), item.GetStatus(), raw)
-	if err != nil {
-		return nil, err
-	}
-	return s.GetSubject(ctx, item.GetSpaceId(), item.GetSubjectId())
+	return err
 }
 
 func (s *Store) GetSubject(ctx context.Context, spaceID string, subjectID string) (*pb.Subject, error) {
@@ -177,11 +182,18 @@ func (s *Store) UpsertSubjectSymbol(ctx context.Context, item *pb.SubjectSymbol)
 		return nil, errors.New("space_id, subject_id, data_source_id and external_symbol are required")
 	}
 	item.Status = defaultStatus(item.GetStatus())
-	raw, err := marshal(item)
-	if err != nil {
+	if err := upsertSubjectSymbol(ctx, s.db, item); err != nil {
 		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx, `
+	return item, nil
+}
+
+func upsertSubjectSymbol(ctx context.Context, store execQueryRower, item *pb.SubjectSymbol) error {
+	raw, err := marshal(item)
+	if err != nil {
+		return err
+	}
+	_, err = store.ExecContext(ctx, `
 		INSERT INTO t_subject_symbols (c_space_id, c_subject_id, c_data_source_id, c_external_symbol, c_status, c_attrs_json)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_data_source_id, c_external_symbol) DO UPDATE SET
@@ -189,10 +201,7 @@ func (s *Store) UpsertSubjectSymbol(ctx context.Context, item *pb.SubjectSymbol)
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json
 	`, item.GetSpaceId(), item.GetSubjectId(), item.GetDataSourceId(), item.GetExternalSymbol(), item.GetStatus(), raw)
-	if err != nil {
-		return nil, err
-	}
-	return item, nil
+	return err
 }
 
 func (s *Store) ListSubjectSymbols(ctx context.Context, spaceID string, subjectID string, dataSourceID string, externalSymbol string, page *pb.Page) ([]*pb.SubjectSymbol, *pb.PageResult, error) {
@@ -278,11 +287,18 @@ func (s *Store) BindDatasetSubject(ctx context.Context, item *pb.DatasetSubject)
 	if item.SubjectRole == "" {
 		item.SubjectRole = "normal"
 	}
-	raw, err := marshal(item)
-	if err != nil {
+	if err := bindDatasetSubject(ctx, s.db, item); err != nil {
 		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx, `
+	return item, nil
+}
+
+func bindDatasetSubject(ctx context.Context, store execQueryRower, item *pb.DatasetSubject) error {
+	raw, err := marshal(item)
+	if err != nil {
+		return err
+	}
+	_, err = store.ExecContext(ctx, `
 		INSERT INTO t_dataset_subjects (c_space_id, c_dataset_id, c_subject_id, c_subject_role, c_effective_start_time, c_effective_end_time, c_status, c_attrs_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_dataset_id, c_subject_id) DO UPDATE SET
@@ -292,7 +308,65 @@ func (s *Store) BindDatasetSubject(ctx context.Context, item *pb.DatasetSubject)
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json
 	`, item.GetSpaceId(), item.GetDatasetId(), item.GetSubjectId(), item.GetSubjectRole(), item.GetEffectiveStartTime(), item.GetEffectiveEndTime(), item.GetStatus(), raw)
-	return item, err
+	return err
+}
+
+// RegisterDataSubject commits the catalog aggregate as one transaction so a
+// subject can never be visible without its symbol and requested bindings.
+func (s *Store) RegisterDataSubject(ctx context.Context, subject *pb.Subject, symbol *pb.SubjectSymbol, bindings []*pb.DatasetSubject) (*pb.Subject, []*pb.DatasetSubject, error) {
+	if subject == nil || subject.GetSpaceId() == "" || subject.GetSubjectId() == "" || subject.GetSubjectType() == "" {
+		return nil, nil, errors.New("space_id, subject_id and subject_type are required")
+	}
+	if symbol == nil || symbol.GetSpaceId() != subject.GetSpaceId() || symbol.GetSubjectId() != subject.GetSubjectId() || symbol.GetDataSourceId() == "" || symbol.GetExternalSymbol() == "" {
+		return nil, nil, errors.New("subject symbol must match space_id and subject_id and include data_source_id and external_symbol")
+	}
+
+	subject = proto.Clone(subject).(*pb.Subject)
+	symbol = proto.Clone(symbol).(*pb.SubjectSymbol)
+	subject.Status = defaultStatus(subject.GetStatus())
+	symbol.Status = defaultStatus(symbol.GetStatus())
+	normalizedBindings := make([]*pb.DatasetSubject, 0, len(bindings))
+	for _, binding := range bindings {
+		if binding == nil || binding.GetSpaceId() != subject.GetSpaceId() || binding.GetSubjectId() != subject.GetSubjectId() || binding.GetDatasetId() == "" {
+			return nil, nil, errors.New("dataset binding must match space_id and subject_id and include dataset_id")
+		}
+		copied := proto.Clone(binding).(*pb.DatasetSubject)
+		copied.Status = defaultStatus(copied.GetStatus())
+		if copied.SubjectRole == "" {
+			copied.SubjectRole = "normal"
+		}
+		normalizedBindings = append(normalizedBindings, copied)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, binding := range normalizedBindings {
+		var found int
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`, binding.GetSpaceId(), binding.GetDatasetId()).Scan(&found); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, nil, fmt.Errorf("dataset %s/%s not found: %w", binding.GetSpaceId(), binding.GetDatasetId(), err)
+			}
+			return nil, nil, err
+		}
+	}
+	if err := upsertSubject(ctx, tx, subject); err != nil {
+		return nil, nil, err
+	}
+	if err := upsertSubjectSymbol(ctx, tx, symbol); err != nil {
+		return nil, nil, err
+	}
+	for _, binding := range normalizedBindings {
+		if err := bindDatasetSubject(ctx, tx, binding); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return subject, normalizedBindings, nil
 }
 
 func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
@@ -614,23 +688,23 @@ func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb
 }
 
 func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string, status string, page *pb.Page) ([]*pb.View, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_views
+	const where = `
+		FROM t_views
 		WHERE (? = '' OR c_space_id = ?)
 		  AND (? = '' OR c_status = ?)
-		ORDER BY c_space_id, c_view_id
-	`, []any{spaceID, spaceID, status, status}, func() *pb.View { return &pb.View{} })
+		  AND (? = '' OR c_primary_dataset_id = ? OR EXISTS (
+			  SELECT 1 FROM json_each(c_dataset_ids_json) AS dataset_ref WHERE dataset_ref.value = ?
+		  ))`
+	args := []any{spaceID, spaceID, status, status, datasetID, datasetID, datasetID}
+	items, pageResult, err := queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_view_id`,
+		`SELECT COUNT(1) `+where,
+		args,
+		page,
+		func() *pb.View { return &pb.View{} },
+	)
 	if err != nil {
 		return nil, nil, err
-	}
-	if datasetID != "" {
-		filtered := items[:0]
-		for _, item := range items {
-			if containsString(item.GetDatasetIds(), datasetID) || item.GetPrimaryDatasetId() == datasetID {
-				filtered = append(filtered, item)
-			}
-		}
-		items = filtered
 	}
 	for _, item := range items {
 		columns, _, err := s.ListViewColumns(ctx, item.GetSpaceId(), item.GetViewId(), nil)
@@ -644,7 +718,7 @@ func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string,
 		}
 		item.IndexBuild = build
 	}
-	return pageItems(items, page)
+	return items, pageResult, nil
 }
 
 func cloneViewColumns(columns []*pb.ViewColumn) []*pb.ViewColumn {
@@ -658,8 +732,18 @@ func cloneViewColumns(columns []*pb.ViewColumn) []*pb.ViewColumn {
 }
 
 func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error) {
-	items, _, err := s.ListViews(ctx, spaceID, datasetID, "active", nil)
-	return items, err
+	const pageSize = uint32(1000)
+	var out []*pb.View
+	for pageNo := uint32(1); ; pageNo++ {
+		items, page, err := s.ListViews(ctx, spaceID, datasetID, "active", &pb.Page{Page: pageNo, Size: pageSize})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, items...)
+		if page == nil || !page.GetHasMore() || len(items) == 0 {
+			return out, nil
+		}
+	}
 }
 
 func (s *Store) UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.ViewColumn, error) {
@@ -975,6 +1059,22 @@ func validateClaimViewIndexBuild(req *pb.ClaimViewIndexBuildReq) error {
 	if req == nil || req.GetSpaceId() == "" || req.GetViewId() == "" || req.GetBuildId() == "" || req.GetIndexId() == "" ||
 		req.GetEngine() == "" || req.GetTargetViewVersion() == 0 || req.GetOwnerId() == "" || req.GetSchemaHash() == "" {
 		return errors.New("space_id, view_id, build_id, index_id, engine, target_view_version, owner_id and schema_hash are required")
+	}
+	ref, err := coreviewindex.ParseViewIndexID(req.GetIndexId())
+	if err != nil {
+		return err
+	}
+	if ref.SpaceID != req.GetSpaceId() || ref.ViewID != req.GetViewId() {
+		return errors.New("index_id does not match space_id/view_id")
+	}
+	switch strings.ToLower(strings.TrimSpace(req.GetEngine())) {
+	case "duckdb", "bleve":
+	default:
+		return errors.New("unsupported view index engine " + req.GetEngine())
+	}
+	want := coreviewindex.InactiveViewIndexID(req.GetSpaceId(), req.GetViewId(), req.GetExpectedActiveIndexId())
+	if req.GetIndexId() != want {
+		return fmt.Errorf("index_id must be inactive slot %s", want)
 	}
 	return nil
 }

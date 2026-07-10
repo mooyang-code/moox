@@ -6,6 +6,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"google.golang.org/protobuf/proto"
 )
 
 // 本文件聚合数据源、主体、数据集、字段、因子及其列绑定相关的元数据 CRUD 入口。
@@ -88,44 +89,43 @@ func (s *Service) RegisterDataSubject(ctx context.Context, req *pb.RegisterDataS
 		if binding == nil || binding.GetDatasetId() == "" {
 			return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_bindings.dataset_id is required"))}, nil
 		}
-		if _, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), binding.GetDatasetId()); err != nil {
-			return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
-		}
 	}
+	item = proto.Clone(item).(*pb.Subject)
 	item.SpaceId = req.GetSpaceId()
 	if item.Status == "" {
 		item.Status = "active"
 	}
-	created, err := s.metadata.UpsertSubject(ctx, item)
-	if err != nil {
-		return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	if item.SubjectType == "" {
+		item.SubjectType = "custom"
 	}
-	_, err = s.metadata.UpsertSubjectSymbol(ctx, &pb.SubjectSymbol{
+	symbol := &pb.SubjectSymbol{
 		SpaceId:        req.GetSpaceId(),
-		SubjectId:      created.GetSubjectId(),
+		SubjectId:      item.GetSubjectId(),
 		DataSourceId:   req.GetDataSourceId(),
 		ExternalSymbol: req.GetExternalSymbol(),
 		Status:         "active",
-	})
-	if err != nil {
-		return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 
 	bindings := make([]*pb.DatasetSubject, 0, len(req.GetDatasetBindings()))
 	for _, binding := range req.GetDatasetBindings() {
-		binding.SpaceId = req.GetSpaceId()
-		binding.SubjectId = created.GetSubjectId()
-		if binding.SubjectRole == "" {
-			binding.SubjectRole = "normal"
+		copied := proto.Clone(binding).(*pb.DatasetSubject)
+		copied.SpaceId = req.GetSpaceId()
+		copied.SubjectId = item.GetSubjectId()
+		if copied.SubjectRole == "" {
+			copied.SubjectRole = "normal"
 		}
-		if binding.Status == "" {
-			binding.Status = "active"
+		if copied.Status == "" {
+			copied.Status = "active"
 		}
-		createdBinding, err := s.metadata.BindDatasetSubject(ctx, binding)
-		if err != nil {
-			return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		bindings = append(bindings, copied)
+	}
+	created, bindings, err := s.metadata.RegisterDataSubject(ctx, item, symbol, bindings)
+	if err != nil {
+		code := response.MetadataStoreCode(err)
+		if code == pb.ErrorCode_NOT_FOUND {
+			code = pb.ErrorCode_DATASET_NOT_FOUND
 		}
-		bindings = append(bindings, createdBinding)
+		return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(code, err)}, nil
 	}
 	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.RegisterDataSubjectRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil

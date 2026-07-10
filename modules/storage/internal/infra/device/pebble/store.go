@@ -231,7 +231,6 @@ func (s *Store) readRowsForSingleKeyPage(keys []*pb.PrimaryStoreKey, versionRang
 }
 
 func (s *Store) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, dataKind pb.DataKind, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
-	_ = ctx
 	if target == nil {
 		return nil, nil, errors.New("target is required")
 	}
@@ -244,33 +243,58 @@ func (s *Store) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, dat
 	if kindPrefix(dataKind) == "" {
 		return nil, nil, errors.New("data_kind is required")
 	}
+	if page == nil {
+		page = &pb.Page{}
+	}
 	prefix := []byte(encodeDatasetPrefix(dataKind, target.GetSpaceId(), target.GetDatasetId()))
-	if page.GetCursor() != "" && order != pb.SortOrder_SORT_ORDER_DESC {
+	if order != pb.SortOrder_SORT_ORDER_DESC {
 		return s.scanRowsForwardCursor(ctx, prefix, versionRange, columnNames, page)
 	}
-	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: nextPrefix(prefix)})
+	return s.scanRowsReverseCursor(ctx, prefix, versionRange, columnNames, page)
+}
+
+func (s *Store) scanRowsReverseCursor(ctx context.Context, prefix []byte, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	_ = ctx
+	upper := nextPrefix(prefix)
+	if cursor := page.GetCursor(); cursor != "" {
+		cursorBytes := []byte(cursor)
+		if bytes.Compare(cursorBytes, prefix) >= 0 && (len(upper) == 0 || bytes.Compare(cursorBytes, upper) < 0) {
+			upper = cursorBytes
+		}
+	}
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: upper})
 	if err != nil {
 		return nil, nil, err
 	}
 	defer iter.Close()
 
-	rows := make([]*pb.PrimaryStoreRow, 0)
-	for valid := iter.First(); valid; valid = iter.Next() {
+	size := pageSize(page)
+	rows := make([]*pb.PrimaryStoreRow, 0, size)
+	nextCursor := ""
+	hasMore := false
+	for valid := iter.Last(); valid; valid = iter.Prev() {
+		encoded := string(iter.Key())
+		if !versionRangeContains(encodedRowVersion(encoded), versionRange) {
+			continue
+		}
+		if uint32(len(rows)) >= size {
+			hasMore = true
+			break
+		}
 		row := &pb.PrimaryStoreRow{}
 		if err := proto.Unmarshal(iter.Value(), row); err != nil {
 			return nil, nil, err
 		}
-		if !versionRangeContains(row.GetKey().GetVersion(), versionRange) {
-			continue
-		}
 		rows = append(rows, filterRowColumns(row, columnNames))
+		nextCursor = encoded
 	}
 	if err := iter.Error(); err != nil {
 		return nil, nil, err
 	}
-	sortRows(rows, order)
-	paged, result := pageRows(rows, page, order)
-	return paged, result, nil
+	if !hasMore {
+		nextCursor = ""
+	}
+	return rows, &pb.PageResult{Size: size, HasMore: hasMore, NextCursor: nextCursor}, nil
 }
 
 func (s *Store) scanRowsForwardCursor(ctx context.Context, prefix []byte, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {

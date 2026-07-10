@@ -6,9 +6,13 @@ package router
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
+	"math"
 	"path"
 	"sort"
+	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
@@ -60,7 +64,92 @@ func (r *Resolver) Resolve(ctx context.Context, spaceID string, datasetID string
 		}
 		return candidates[i].route.GetPriority() < candidates[j].route.GetPriority()
 	})
-	return r.targetForRoute(ctx, spaceID, datasetID, candidates[0].route)
+	topRank := candidates[0].rank
+	topPriority := candidates[0].route.GetPriority()
+	pool := candidates[:0]
+	for _, candidate := range candidates {
+		if candidate.rank != topRank || candidate.route.GetPriority() != topPriority {
+			break
+		}
+		pool = append(pool, candidate)
+	}
+	selected, err := r.selectHashedRoute(ctx, spaceID, datasetID, subjectID, pool)
+	if err != nil {
+		return nil, err
+	}
+	return r.targetForRoute(ctx, spaceID, datasetID, selected)
+}
+
+func (r *Resolver) selectHashedRoute(ctx context.Context, spaceID string, datasetID string, partitionKey string, candidates []routeCandidate) (*pb.PrimaryStoreRoute, error) {
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("primary store route candidates are required")
+	}
+	if len(candidates) == 1 || strings.TrimSpace(partitionKey) == "" {
+		return candidates[0].route, nil
+	}
+	for _, candidate := range candidates {
+		if !supportedHashRule(candidate.route.GetHashRule()) {
+			return candidates[0].route, nil
+		}
+	}
+
+	type weightedRoute struct {
+		route  *pb.PrimaryStoreRoute
+		weight uint32
+	}
+	byNode := make(map[string]weightedRoute, len(candidates))
+	var choices []weightedRoute
+	for _, candidate := range candidates {
+		nodeID := candidate.route.GetNodeId()
+		if _, exists := byNode[nodeID]; exists {
+			continue
+		}
+		node, err := r.metadata.GetPrimaryStoreNode(ctx, nodeID)
+		if err != nil {
+			return nil, fmt.Errorf("storage node %s not found: %w", nodeID, err)
+		}
+		if node == nil || (node.GetStatus() != "" && node.GetStatus() != "active") {
+			continue
+		}
+		weight := node.GetWeight()
+		if weight == 0 {
+			weight = 1
+		}
+		choice := weightedRoute{route: candidate.route, weight: weight}
+		byNode[nodeID] = choice
+		choices = append(choices, choice)
+	}
+	if len(choices) == 0 {
+		return nil, fmt.Errorf("no active primary store nodes for %s/%s", spaceID, datasetID)
+	}
+
+	selected := choices[0]
+	bestScore := weightedRendezvousScore(spaceID, datasetID, partitionKey, selected.route.GetNodeId(), selected.weight)
+	for _, choice := range choices[1:] {
+		score := weightedRendezvousScore(spaceID, datasetID, partitionKey, choice.route.GetNodeId(), choice.weight)
+		if score < bestScore || (score == bestScore && choice.route.GetRouteId() < selected.route.GetRouteId()) {
+			selected = choice
+			bestScore = score
+		}
+	}
+	return selected.route, nil
+}
+
+func supportedHashRule(rule string) bool {
+	switch strings.ToLower(strings.TrimSpace(rule)) {
+	case "subject_id", "record_id", "key":
+		return true
+	default:
+		return false
+	}
+}
+
+func weightedRendezvousScore(spaceID string, datasetID string, partitionKey string, nodeID string, weight uint32) float64 {
+	sum := sha256.Sum256([]byte(spaceID + "\x00" + datasetID + "\x00" + partitionKey + "\x00" + nodeID))
+	// The high 53 bits map exactly to float64, avoiding platform-dependent rounding.
+	value := binary.BigEndian.Uint64(sum[:8]) >> 11
+	unit := (float64(value) + 1) / (float64(uint64(1)<<53) + 1)
+	return -math.Log(unit) / float64(weight)
 }
 
 // ResolveDatasetTargets 返回某个 Dataset 所有 active 主存目标。

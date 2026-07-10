@@ -54,11 +54,12 @@ const (
 )
 
 type indexStatsDocument struct {
-	EntryCount int64  `json:"entry_count"`
-	MinVersion string `json:"min_version"`
-	MaxVersion string `json:"max_version"`
-	SchemaHash string `json:"schema_hash"`
-	UpdatedAt  string `json:"updated_at"`
+	ViewVersion uint64 `json:"view_version"`
+	EntryCount  int64  `json:"entry_count"`
+	MinVersion  string `json:"min_version"`
+	MaxVersion  string `json:"max_version"`
+	SchemaHash  string `json:"schema_hash"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 func Open(opts Options) (*Index, error) {
@@ -127,7 +128,7 @@ func buildIndexMapping() mapping.IndexMapping {
 	return mapping
 }
 
-func (i *Index) SetSchema(ctx context.Context, schemaHash string) error {
+func (i *Index) SetSchema(ctx context.Context, viewVersion uint64, schemaHash string) error {
 	_ = ctx
 	i.writeMu.Lock()
 	defer i.writeMu.Unlock()
@@ -135,6 +136,7 @@ func (i *Index) SetSchema(ctx context.Context, schemaHash string) error {
 	if err != nil {
 		return err
 	}
+	stats.ViewVersion = viewVersion
 	stats.SchemaHash = schemaHash
 	stats.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	return i.index.Index(statsDocumentID, stats.toDocument())
@@ -224,12 +226,13 @@ func (i *Index) Stat(ctx context.Context) (viewindex.ViewIndexStats, error) {
 		return viewindex.ViewIndexStats{}, err
 	}
 	return viewindex.ViewIndexStats{
-		Exists:     true,
-		EntryCount: stats.EntryCount,
-		MinVersion: stats.MinVersion,
-		MaxVersion: stats.MaxVersion,
-		SchemaHash: stats.SchemaHash,
-		UpdatedAt:  stats.UpdatedAt,
+		Exists:      true,
+		ViewVersion: stats.ViewVersion,
+		EntryCount:  stats.EntryCount,
+		MinVersion:  stats.MinVersion,
+		MaxVersion:  stats.MaxVersion,
+		SchemaHash:  stats.SchemaHash,
+		UpdatedAt:   stats.UpdatedAt,
 	}, nil
 }
 

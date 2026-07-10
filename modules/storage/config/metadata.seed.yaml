@@ -530,7 +530,7 @@ primary_store_routes:
     route_id: route-binance-spot-symbols
     dataset_id: binance_spot_symbols
     subject_pattern: "*"
-    hash_rule: subject_id
+    hash_rule: record_id
     node_id: local
     priority: 100
     status: active
@@ -538,7 +538,7 @@ primary_store_routes:
     route_id: route-binance-swap-symbols
     dataset_id: binance_swap_symbols
     subject_pattern: "*"
-    hash_rule: subject_id
+    hash_rule: record_id
     node_id: local
     priority: 100
     status: active

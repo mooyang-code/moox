@@ -25,7 +25,7 @@ func TestBleveViewIndexEngineLifecycle(t *testing.T) {
 		t.Fatalf("engine = %q, want bleve", got)
 	}
 	if err := service.Prepare(ctx, indexID, viewindex.ViewIndexSchema{
-		SpaceID: "crypto", ViewID: "news_view", Engine: "bleve", SchemaHash: "schema-1", Columns: columns,
+		SpaceID: "crypto", ViewID: "news_view", ViewVersion: 3, Engine: "bleve", SchemaHash: "schema-1", Columns: columns,
 	}); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestBleveViewIndexEngineLifecycle(t *testing.T) {
 	if stats.MaxVersion != "2026-07-09T01:01:00.000000000Z" {
 		t.Fatalf("max version = %q, want normalized timestamp", stats.MaxVersion)
 	}
-	if stats.SchemaHash != "schema-1" || stats.PhysicalBytes == 0 {
+	if stats.ViewVersion != 3 || stats.SchemaHash != "schema-1" || stats.PhysicalBytes == 0 {
 		t.Fatalf("stats = %+v, want schema and physical bytes", stats)
 	}
 

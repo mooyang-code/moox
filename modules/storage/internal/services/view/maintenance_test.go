@@ -163,8 +163,12 @@ func TestMaintenanceDoesNotLoopWhenActiveCoverageAlreadyMatchesRetention(t *test
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	activeID := viewindex.ViewIndexID("crypto", "market_view", viewindex.SlotA)
 	seedMaintenanceView(t, ctx, metadata, pb.DataKind_DATA_KIND_TIME_SERIES, "duckdb", `{"freq":"1m"}`, activeID)
+	item, err := metadata.GetView(ctx, "crypto", "market_view")
+	if err != nil {
+		t.Fatalf("GetView: %v", err)
+	}
 	engine := newMaintenanceEngine("duckdb")
-	engine.stats[activeID] = viewindex.ViewIndexStats{Exists: true, EntryCount: 5000, PhysicalBytes: 1024}
+	engine.stats[activeID] = viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, EntryCount: 5000, PhysicalBytes: 1024, SchemaHash: item.GetActiveSchemaHash()}
 	cfg := maintenanceTestConfig()
 	cfg.MaxEntries = 1000
 	manager := NewMaintenanceManager(MaintenanceOptions{
@@ -186,9 +190,13 @@ func TestMaintenanceSwitchesCapacityWhenOldIndexCanShrinkToTarget(t *testing.T) 
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	activeID := viewindex.ViewIndexID("crypto", "market_view", viewindex.SlotA)
 	seedMaintenanceView(t, ctx, metadata, pb.DataKind_DATA_KIND_TIME_SERIES, "duckdb", `{"freq":"1m"}`, activeID)
+	item, err := metadata.GetView(ctx, "crypto", "market_view")
+	if err != nil {
+		t.Fatalf("GetView: %v", err)
+	}
 	engine := newMaintenanceEngine("duckdb")
 	engine.stats[activeID] = viewindex.ViewIndexStats{
-		Exists: true, EntryCount: 2000, PhysicalBytes: 1024,
+		Exists: true, ViewVersion: 1, EntryCount: 2000, PhysicalBytes: 1024, SchemaHash: item.GetActiveSchemaHash(),
 		MinVersion: now.Add(-48 * time.Hour).Format(time.RFC3339Nano),
 		MaxVersion: now.Format(time.RFC3339Nano),
 	}
@@ -209,7 +217,7 @@ func TestMaintenanceSwitchesCapacityWhenOldIndexCanShrinkToTarget(t *testing.T) 
 	if changed != 1 || len(engine.prepared) != 1 {
 		t.Fatalf("changed=%d prepared=%v, want one capacity switch", changed, engine.prepared)
 	}
-	item, err := metadata.GetView(ctx, "crypto", "market_view")
+	item, err = metadata.GetView(ctx, "crypto", "market_view")
 	if err != nil {
 		t.Fatalf("GetView: %v", err)
 	}
@@ -285,6 +293,38 @@ func TestMaintenanceBoundsViewsProcessedPerRun(t *testing.T) {
 	}
 }
 
+func TestMaintenanceRoundRobinsViewsAcrossRuns(t *testing.T) {
+	ctx := context.Background()
+	metadata := openMaintenanceMetadata(t, ctx)
+	for _, viewID := range []string{"first_view", "second_view", "third_view"} {
+		seedMaintenanceNamedView(t, ctx, metadata, pb.DataKind_DATA_KIND_TIME_SERIES, "duckdb", `{"freq":"1m"}`, "", viewID)
+	}
+	engine := newMaintenanceEngine("duckdb")
+	cfg := maintenanceTestConfig()
+	cfg.MaxViewsPerRun = 1
+	manager := NewMaintenanceManager(MaintenanceOptions{
+		Metadata: metadata, Engines: map[string]ManagedViewIndex{"duckdb": engine},
+		Facts: &maintenanceFacts{}, Records: &maintenanceFacts{}, Config: cfg,
+	})
+
+	for run := 0; run < 3; run++ {
+		if _, err := manager.MaintainViewIndexes(ctx, "crypto"); err != nil {
+			t.Fatalf("MaintainViewIndexes run %d: %v", run+1, err)
+		}
+	}
+	preparedViews := make(map[string]bool)
+	for _, indexID := range engine.prepared {
+		ref, err := viewindex.ParseViewIndexID(indexID)
+		if err != nil {
+			t.Fatalf("ParseViewIndexID(%q): %v", indexID, err)
+		}
+		preparedViews[ref.ViewID] = true
+	}
+	if len(preparedViews) != 3 {
+		t.Fatalf("prepared Views = %v, want all three Views across three runs", preparedViews)
+	}
+}
+
 func TestMaintenanceCatchUpKeepsOneDurableSourceEndAcrossPages(t *testing.T) {
 	ctx := context.Background()
 	metadata := openMaintenanceMetadata(t, ctx)
@@ -330,7 +370,7 @@ func TestMaintenanceRemovesUnreferencedIndexAfterGrace(t *testing.T) {
 		t.Fatalf("GetView: %v", err)
 	}
 	engine := newMaintenanceEngine("duckdb")
-	engine.stats[activeID] = viewindex.ViewIndexStats{Exists: true, SchemaHash: item.GetActiveSchemaHash()}
+	engine.stats[activeID] = viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, SchemaHash: item.GetActiveSchemaHash()}
 	engine.stats[orphanID] = viewindex.ViewIndexStats{Exists: true, SchemaHash: "orphan"}
 	engine.keys[activeID] = map[string]bool{}
 	engine.keys[orphanID] = map[string]bool{}
@@ -367,7 +407,7 @@ func TestMaintenanceRemovesIndexFromAnOldEngine(t *testing.T) {
 		t.Fatalf("GetView: %v", err)
 	}
 	duck := newMaintenanceEngine("duckdb")
-	duck.stats[activeID] = viewindex.ViewIndexStats{Exists: true, SchemaHash: item.GetActiveSchemaHash()}
+	duck.stats[activeID] = viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, SchemaHash: item.GetActiveSchemaHash()}
 	duck.keys[activeID] = map[string]bool{}
 	bleve := newMaintenanceEngine("bleve")
 	bleve.stats[activeID] = viewindex.ViewIndexStats{Exists: true, SchemaHash: "old-engine"}
@@ -509,7 +549,7 @@ func (e *maintenanceEngine) Engine() string { return e.name }
 
 func (e *maintenanceEngine) Prepare(_ context.Context, indexID string, schema viewindex.ViewIndexSchema) error {
 	e.prepared = append(e.prepared, indexID)
-	e.stats[indexID] = viewindex.ViewIndexStats{Exists: true, SchemaHash: schema.SchemaHash}
+	e.stats[indexID] = viewindex.ViewIndexStats{Exists: true, ViewVersion: schema.ViewVersion, SchemaHash: schema.SchemaHash}
 	e.keys[indexID] = make(map[string]bool)
 	return nil
 }

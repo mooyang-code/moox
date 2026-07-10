@@ -15,8 +15,9 @@ import (
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
-	"github.com/mooyang-code/moox/modules/storage/internal/bootstrap/eventbus"
+	bootstrapeventbus "github.com/mooyang-code/moox/modules/storage/internal/bootstrap/eventbus"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
+	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	deviceduckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/services/access"
@@ -64,8 +65,9 @@ func main() {
 	if err := validateStorageDeployment(cfg.Storage); err != nil {
 		exitWithStartupError("storage deployment config invalid", err)
 	}
+	var rowsChangedBus coreeventbus.Bus
 	if needsRowsChangedBus(cfg.Storage) {
-		embeddedEventBus, err := eventbus.StartEmbeddedServer(cfg.Storage.EventBus)
+		embeddedEventBus, err := bootstrapeventbus.StartEmbeddedServer(cfg.Storage.EventBus)
 		if err != nil {
 			exitWithStartupError("启动内嵌 storage eventbus 失败", err)
 		}
@@ -77,11 +79,16 @@ func main() {
 			}()
 			log.Infof("Embedded storage eventbus initialized")
 		}
-		events, err := eventbus.NewRowsChangedBus(trpc.BackgroundContext(), cfg.Storage.EventBus)
+		rowsChangedBus, err = bootstrapeventbus.NewRowsChangedBus(trpc.BackgroundContext(), cfg.Storage.EventBus)
 		if err != nil {
 			exitWithStartupError("初始化 storage eventbus 失败", err)
 		}
-		opts.Events = events
+		defer func() {
+			if err := rowsChangedBus.Close(); err != nil {
+				log.Errorf("关闭 storage eventbus 失败: %v", err)
+			}
+		}()
+		opts.Events = rowsChangedBus
 	}
 
 	var storageService *storagesvc.Service
@@ -101,10 +108,11 @@ func main() {
 		}
 		pb.RegisterMetadataService(s, storageService)
 		pb.RegisterAccessService(s, storageService)
+		registerAccessScanService(s, storageService)
 	}
 
 	if shouldRegisterViewQueryRole(cfg.Storage) || shouldStartViewBuilderRole(cfg.Storage) || shouldStartViewIndexRole(cfg.Storage) {
-		viewRuntime, err := registerViewRole(s, cfg.Storage, opts, storageService, accessReader)
+		viewRuntime, err := registerViewRole(s, cfg.Storage, rowsChangedBus, storageService, accessReader)
 		if err != nil {
 			exitWithStartupError("初始化 ViewService 失败", err)
 		}
@@ -119,7 +127,7 @@ func main() {
 	}
 
 	if shouldStartArchiveRole(cfg.Storage) {
-		archiveRuntime, err := registerArchiveRole(s, cfg.Storage, opts, storageService, accessReader)
+		archiveRuntime, err := registerArchiveRole(s, cfg.Storage, rowsChangedBus, storageService, accessReader)
 		if err != nil {
 			exitWithStartupError("初始化 ArchiveService 失败", err)
 		}
@@ -152,6 +160,19 @@ func main() {
 		log.Errorf("trpc服务器出错: %v", err)
 	}
 	log.Warnf("Storage roles %v stopped", cfg.Storage.Roles)
+}
+
+func registerAccessScanService(s *server.Server, service pb.AccessScanService) {
+	for _, name := range []string{
+		"trpc.moox.storage.AccessScan.trpc",
+		"trpc.moox.storage.AccessScan",
+	} {
+		if target := s.Service(name); target != nil {
+			pb.RegisterAccessScanService(target, service)
+			return
+		}
+	}
+	exitWithStartupError("access role requires the internal AccessScan tRPC service", nil)
 }
 
 func exitWithStartupError(message string, err error) {
@@ -259,7 +280,7 @@ func storageRoleSummary(storage storageconfig.StorageConfig) string {
 	return strings.Join(storage.Roles, ",")
 }
 
-func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, opts storagesvc.Options, storageService *storagesvc.Service, accessReader viewbuilder.AccessReader) (*viewRuntime, error) {
+func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, events coreeventbus.Subscriber, storageService *storagesvc.Service, accessReader viewbuilder.AccessReader) (*viewRuntime, error) {
 	runtime := &viewRuntime{}
 	var (
 		duckEngine      view.ManagedViewIndex
@@ -288,6 +309,12 @@ func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, opt
 			Records:    searchService,
 		})
 		pb.RegisterViewIndexService(s, ownerService)
+		duckClient := viewindexsvc.NewLocalClient(ownerService, "duckdb")
+		bleveClient := viewindexsvc.NewLocalClient(ownerService, "bleve")
+		duckEngine = duckClient
+		bleveEngine = bleveClient
+		timeSeriesQuery = duckClient
+		recordQuery = bleveClient
 	} else {
 		duckClient := viewindexsvc.NewRemoteClient(storage.View.IndexServiceName, "duckdb")
 		bleveClient := viewindexsvc.NewRemoteClient(storage.View.IndexServiceName, "bleve")
@@ -328,7 +355,7 @@ func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, opt
 		timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
 		registerTimerHandlerService("trpc.moox.storage.view.timer", s.Service("trpc.moox.storage.view.timer"), view.HandleSchedule)
 		var err error
-		builderService, err = startViewBuilderService(trpc.BackgroundContext(), storage, opts, viewMetadata, map[string]viewindex.ViewIndexEngine{
+		builderService, err = startViewBuilderService(trpc.BackgroundContext(), storage, events, viewMetadata, map[string]viewindex.ViewIndexEngine{
 			"duckdb": duckEngine,
 			"bleve":  bleveEngine,
 		}, accessReader)
@@ -343,7 +370,7 @@ func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, opt
 	return runtime, nil
 }
 
-func registerArchiveRole(s *server.Server, storage storageconfig.StorageConfig, opts storagesvc.Options, storageService *storagesvc.Service, accessReader archive.FactReader) (*archiveRuntime, error) {
+func registerArchiveRole(s *server.Server, storage storageconfig.StorageConfig, events coreeventbus.Subscriber, storageService *storagesvc.Service, accessReader archive.FactReader) (*archiveRuntime, error) {
 	archive.SetDefaultService(archive.NewService(archive.Options{
 		Metadata:    metadataForArchiveRuntime(storage, storageService),
 		Facts:       accessReader,
@@ -352,7 +379,7 @@ func registerArchiveRole(s *server.Server, storage storageconfig.StorageConfig, 
 	timer.RegisterScheduler("archiveSchedule", &timer.DefaultScheduler{})
 	registerTimerHandlerService("trpc.moox.storage.archive.timer", s.Service("trpc.moox.storage.archive.timer"), archive.HandleSchedule)
 
-	consumer := archive.NewEventConsumer(archive.EventConsumerOptions{Events: opts.Events})
+	consumer := archive.NewEventConsumer(archive.EventConsumerOptions{Events: events})
 	if err := consumer.Start(trpc.BackgroundContext()); err != nil {
 		archive.SetDefaultService(nil)
 		return nil, err
@@ -360,9 +387,9 @@ func registerArchiveRole(s *server.Server, storage storageconfig.StorageConfig, 
 	return &archiveRuntime{consumer: consumer}, nil
 }
 
-func startViewBuilderService(ctx context.Context, storage storageconfig.StorageConfig, opts storagesvc.Options, metadata view.Metadata, engines map[string]viewindex.ViewIndexEngine, accessReader viewbuilder.AccessReader) (*viewbuilder.Service, error) {
+func startViewBuilderService(ctx context.Context, storage storageconfig.StorageConfig, events coreeventbus.Subscriber, metadata view.Metadata, engines map[string]viewindex.ViewIndexEngine, accessReader viewbuilder.AccessReader) (*viewbuilder.Service, error) {
 	service := viewbuilder.NewService(viewbuilder.Options{
-		Events:     opts.Events,
+		Events:     events,
 		Reader:     accessReader,
 		Metadata:   metadata,
 		Engines:    engines,
@@ -549,11 +576,13 @@ func shouldStartArchiveRole(storage storageconfig.StorageConfig) bool {
 func accessReaderForRuntime(storage storageconfig.StorageConfig, storageService *storagesvc.Service) viewbuilder.AccessReader {
 	var local viewbuilder.AccessReader
 	accessServiceName := storage.View.AccessServiceName
+	scanServiceName := storage.View.AccessScanServiceName
 	if storageService != nil && storage.HasRole("access") {
-		local = storageService
+		local = storageService.FactReader()
 		accessServiceName = ""
+		scanServiceName = ""
 	}
-	return viewbuilder.NewAccessReader(local, accessServiceName)
+	return viewbuilder.NewAccessReader(local, accessServiceName, scanServiceName)
 }
 
 func shouldUseLocalAccessReader(storage storageconfig.StorageConfig) bool {

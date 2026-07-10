@@ -71,13 +71,14 @@ type StorageEmbeddedEventBus struct {
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	MetadataServiceName string                 `yaml:"metadata_service_name"`
-	AccessServiceName   string                 `yaml:"access_service_name"`
-	IndexServiceName    string                 `yaml:"index_service_name"`
-	BatchSize           int                    `yaml:"batch_size"`
-	BatchWaitMS         int                    `yaml:"batch_wait_ms"`
-	MaxWorkers          int                    `yaml:"max_workers"`
-	Maintenance         StorageViewMaintenance `yaml:"maintenance"`
+	MetadataServiceName   string                 `yaml:"metadata_service_name"`
+	AccessServiceName     string                 `yaml:"access_service_name"`
+	AccessScanServiceName string                 `yaml:"access_scan_service_name"`
+	IndexServiceName      string                 `yaml:"index_service_name"`
+	BatchSize             int                    `yaml:"batch_size"`
+	BatchWaitMS           int                    `yaml:"batch_wait_ms"`
+	MaxWorkers            int                    `yaml:"max_workers"`
+	Maintenance           StorageViewMaintenance `yaml:"maintenance"`
 }
 
 type StorageViewMaintenance struct {
@@ -175,7 +176,9 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.EventBus.AckWaitMS = 120000
 	}
 	if c.EventBus.MaxDeliver <= 0 {
-		c.EventBus.MaxDeliver = 10
+		// -1 means unlimited redelivery in JetStream. Projection events are
+		// idempotent and must not be dropped after transient owner failures.
+		c.EventBus.MaxDeliver = -1
 	}
 	if c.EventBus.Embedded.Enabled {
 		if c.EventBus.Embedded.Host == "" {
@@ -196,6 +199,9 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.View.AccessServiceName == "" {
 		c.View.AccessServiceName = "trpc.moox.storage.Access"
+	}
+	if c.View.AccessScanServiceName == "" {
+		c.View.AccessScanServiceName = "trpc.moox.storage.AccessScan"
 	}
 	if c.View.IndexServiceName == "" {
 		c.View.IndexServiceName = "trpc.moox.storage.ViewIndex"

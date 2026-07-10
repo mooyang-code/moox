@@ -52,6 +52,78 @@ func TestListSubjectSymbolsPagesInSQL(t *testing.T) {
 	}
 }
 
+func TestListViewsPagesBeforeEnrichment(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedSQLiteViewDataset(t, ctx, store, "crypto")
+	for _, viewID := range []string{"view-1", "view-2", "view-3"} {
+		if _, err := store.UpsertView(ctx, sqliteTestView("crypto", viewID)); err != nil {
+			t.Fatalf("UpsertView(%s): %v", viewID, err)
+		}
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE t_views SET c_attrs_json = '{bad json' WHERE c_view_id = 'view-3'`); err != nil {
+		t.Fatalf("corrupt third view: %v", err)
+	}
+
+	items, page, err := store.ListViews(ctx, "crypto", "dataset", "active", &pb.Page{Page: 1, Size: 2})
+	if err != nil {
+		t.Fatalf("ListViews page 1: %v", err)
+	}
+	if len(items) != 2 || page.GetTotal() != 3 || !page.GetHasMore() {
+		t.Fatalf("items=%d page=%+v, want two of three views", len(items), page)
+	}
+}
+
+func TestRegisterDataSubjectRollsBackAggregateOnBindingFailure(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedSpaceSourceDataset(t, ctx, store)
+	for _, datasetID := range []string{"dataset-a", "dataset-b"} {
+		if _, err := store.UpsertDataset(ctx, &pb.Dataset{
+			SpaceId: "space", DatasetId: datasetID, DataSourceId: "source", Name: datasetID,
+			DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+		}); err != nil {
+			t.Fatalf("UpsertDataset(%s): %v", datasetID, err)
+		}
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		CREATE TRIGGER reject_second_binding BEFORE INSERT ON t_dataset_subjects
+		WHEN NEW.c_dataset_id = 'dataset-b'
+		BEGIN SELECT RAISE(ABORT, 'blocked binding'); END
+	`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	_, _, err := store.RegisterDataSubject(ctx,
+		&pb.Subject{SpaceId: "space", SubjectId: "BTCUSDT", SubjectType: "instrument", Name: "BTC/USDT"},
+		&pb.SubjectSymbol{SpaceId: "space", SubjectId: "BTCUSDT", DataSourceId: "source", ExternalSymbol: "BTCUSDT"},
+		[]*pb.DatasetSubject{
+			{SpaceId: "space", DatasetId: "dataset-a", SubjectId: "BTCUSDT"},
+			{SpaceId: "space", DatasetId: "dataset-b", SubjectId: "BTCUSDT"},
+		},
+	)
+	if err == nil {
+		t.Fatal("RegisterDataSubject succeeded despite binding failure")
+	}
+	if _, err := store.GetSubject(ctx, "space", "BTCUSDT"); err == nil {
+		t.Fatal("subject remained after aggregate rollback")
+	}
+	symbols, _, listErr := store.ListSubjectSymbols(ctx, "space", "BTCUSDT", "source", "BTCUSDT", nil)
+	if listErr != nil {
+		t.Fatalf("ListSubjectSymbols: %v", listErr)
+	}
+	if len(symbols) != 0 {
+		t.Fatalf("symbols = %d, want rollback", len(symbols))
+	}
+	bindings, _, listErr := store.ListDatasetSubjects(ctx, "space", "", "BTCUSDT", nil)
+	if listErr != nil {
+		t.Fatalf("ListDatasetSubjects: %v", listErr)
+	}
+	if len(bindings) != 0 {
+		t.Fatalf("bindings = %d, want rollback", len(bindings))
+	}
+}
+
 func TestUpsertViewColumnBumpsVersionAndPreemptsBuild(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
@@ -65,6 +137,7 @@ func TestUpsertViewColumnBumpsVersionAndPreemptsBuild(t *testing.T) {
 	}
 	claim := claimBuildReq("owner-1", "build-1", 1)
 	claim.ExpectedActiveIndexId = testIndexA
+	claim.IndexId = testIndexB
 	if _, _, err := store.ClaimViewIndexBuild(ctx, claim); err != nil {
 		t.Fatalf("ClaimViewIndexBuild: %v", err)
 	}
@@ -223,8 +296,26 @@ func TestClaimViewIndexBuildFencesActivePointer(t *testing.T) {
 	}
 	right := claimBuildReq("owner-1", "build-1", 1)
 	right.ExpectedActiveIndexId = testIndexA
+	right.IndexId = testIndexB
 	if _, _, err := store.ClaimViewIndexBuild(ctx, right); err != nil {
 		t.Fatalf("claim with current active pointer: %v", err)
+	}
+}
+
+func TestClaimViewIndexBuildRejectsCurrentActiveSlot(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedSQLiteViewDataset(t, ctx, store, "crypto")
+	view := sqliteTestView("crypto", "spot_kline_1m_view")
+	view.ActiveIndexId = testIndexA
+	if _, err := store.UpsertView(ctx, view); err != nil {
+		t.Fatalf("UpsertView: %v", err)
+	}
+	req := claimBuildReq("owner-1", "build-1", 1)
+	req.ExpectedActiveIndexId = testIndexA
+	req.IndexId = testIndexA
+	if _, _, err := store.ClaimViewIndexBuild(ctx, req); err == nil {
+		t.Fatal("ClaimViewIndexBuild accepted current active slot")
 	}
 }
 
@@ -297,6 +388,7 @@ func TestUpdateAndActivateViewIndexUseCAS(t *testing.T) {
 
 	claim := claimBuildReq("owner-1", "build-1", 2)
 	claim.ExpectedActiveIndexId = testIndexA
+	claim.IndexId = testIndexB
 	if _, _, err := store.ClaimViewIndexBuild(ctx, claim); err != nil {
 		t.Fatalf("ClaimViewIndexBuild: %v", err)
 	}
@@ -442,7 +534,7 @@ func claimBuildReq(ownerID string, buildID string, version uint64) *pb.ClaimView
 		SpaceId:               "crypto",
 		ViewId:                "spot_kline_1m_view",
 		BuildId:               buildID,
-		IndexId:               testIndexB,
+		IndexId:               testIndexA,
 		Engine:                "duckdb",
 		TargetViewVersion:     version,
 		ExpectedActiveIndexId: "",

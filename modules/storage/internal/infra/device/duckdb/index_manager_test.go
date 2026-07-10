@@ -51,7 +51,7 @@ func TestIndexManagerKeepsViewSlotsInIndependentFiles(t *testing.T) {
 	if statA.EntryCount != 1 || statB.EntryCount != 0 {
 		t.Fatalf("slot counts = %d/%d, want 1/0", statA.EntryCount, statB.EntryCount)
 	}
-	if statA.SchemaHash != "schema-1" || statA.PhysicalBytes == 0 {
+	if statA.ViewVersion != 1 || statA.SchemaHash != "schema-1" || statA.PhysicalBytes == 0 {
 		t.Fatalf("slot a stats = %+v", statA)
 	}
 	for _, id := range []string{a, b} {
@@ -189,7 +189,7 @@ func TestIndexManagerReopensExistingSlot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexManager: %v", err)
 	}
-	if err := manager.Prepare(ctx, id, viewindex.ViewIndexSchema{Engine: "duckdb", SchemaHash: "schema-1"}); err != nil {
+	if err := manager.Prepare(ctx, id, viewindex.ViewIndexSchema{Engine: "duckdb", ViewVersion: 7, SchemaHash: "schema-1"}); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	if err := manager.Write(ctx, id, viewindex.ViewIndexBatch{TimeSeriesRows: []*pb.TimeSeriesRow{
@@ -207,7 +207,7 @@ func TestIndexManagerReopensExistingSlot(t *testing.T) {
 	}
 	defer reopened.Close()
 	stat, err := reopened.Stat(ctx, id)
-	if err != nil || stat.EntryCount != 1 || stat.SchemaHash != "schema-1" {
+	if err != nil || stat.ViewVersion != 7 || stat.EntryCount != 1 || stat.SchemaHash != "schema-1" {
 		t.Fatalf("reopened Stat = %+v err=%v", stat, err)
 	}
 }

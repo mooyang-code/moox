@@ -32,15 +32,16 @@ type Service struct {
 	validator         *schema.Validator
 	router            *router.Resolver
 	primary           primary.Client
-	events            eventbus.Bus
+	events            eventbus.Publisher
 	report            ViewErrorReporter
 	recordVersionMu   sync.Mutex
 	lastRecordVersion time.Time
 }
 
 var (
-	_ pb.MetadataService = (*Service)(nil)
-	_ pb.AccessService   = (*Service)(nil)
+	_ pb.MetadataService   = (*Service)(nil)
+	_ pb.AccessService     = (*Service)(nil)
+	_ pb.AccessScanService = (*Service)(nil)
 )
 
 func NewServiceWithOptions(opts Options) *Service {
@@ -113,14 +114,10 @@ func (s *Service) refreshMetadataCache(ctx context.Context) error {
 	return s.metadataCache.Refresh(ctx)
 }
 
-// Close releases dependencies owned by the access process.
+// Close releases dependencies owned by the access service. Event transport is
+// bootstrap-owned and is deliberately not closed here.
 func (s *Service) Close() error {
 	var firstErr error
-	if closer, ok := s.events.(interface{ Close() error }); ok {
-		if err := closer.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
 	if closer, ok := s.primary.(interface{ Close() error }); ok {
 		if err := closer.Close(); err != nil && firstErr == nil {
 			firstErr = err

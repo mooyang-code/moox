@@ -55,8 +55,11 @@ func TestStorageConfigAppliesEventBusOOMGuardDefaults(t *testing.T) {
 	if cfg.Storage.EventBus.AckWaitMS != 120000 {
 		t.Fatalf("EventBus.AckWaitMS = %d, want 120000", cfg.Storage.EventBus.AckWaitMS)
 	}
-	if cfg.Storage.EventBus.MaxDeliver != 10 {
-		t.Fatalf("EventBus.MaxDeliver = %d, want 10", cfg.Storage.EventBus.MaxDeliver)
+	if cfg.Storage.EventBus.MaxDeliver != -1 {
+		t.Fatalf("EventBus.MaxDeliver = %d, want -1", cfg.Storage.EventBus.MaxDeliver)
+	}
+	if cfg.Storage.View.AccessScanServiceName != "trpc.moox.storage.AccessScan" {
+		t.Fatalf("View.AccessScanServiceName = %q, want AccessScan service", cfg.Storage.View.AccessScanServiceName)
 	}
 }
 

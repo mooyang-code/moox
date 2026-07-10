@@ -13,14 +13,14 @@ import (
 type RowsChangedHandler func(ctx context.Context, event any) error
 
 type EventConsumerOptions struct {
-	Events           eventbus.Bus
+	Events           eventbus.Subscriber
 	HandleTimeSeries eventbus.TimeSeriesRowsChangedHandler
 	HandleRecord     eventbus.RecordRowsChangedHandler
 }
 
 // EventConsumer subscribes the archive runtime to storage row-change events.
 type EventConsumer struct {
-	events           eventbus.Bus
+	events           eventbus.Subscriber
 	handleTimeSeries eventbus.TimeSeriesRowsChangedHandler
 	handleRecord     eventbus.RecordRowsChangedHandler
 
@@ -53,8 +53,7 @@ func (c *EventConsumer) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	subscriber, ok := c.events.(eventbus.Subscriber)
-	if !ok {
+	if c.events == nil {
 		return errors.New("archive event consumer requires subscribable event bus")
 	}
 	c.mu.Lock()
@@ -65,12 +64,12 @@ func (c *EventConsumer) Start(ctx context.Context) error {
 	c.started = true
 	c.mu.Unlock()
 
-	timeSeriesSub, err := subscriber.SubscribeTimeSeriesRowsChanged(ctx, c.handleTimeSeries)
+	timeSeriesSub, err := c.events.SubscribeTimeSeriesRowsChanged(ctx, c.handleTimeSeries)
 	if err != nil {
 		c.clearStartedState()
 		return err
 	}
-	recordSub, err := subscriber.SubscribeRecordRowsChanged(ctx, c.handleRecord)
+	recordSub, err := c.events.SubscribeRecordRowsChanged(ctx, c.handleRecord)
 	if err != nil {
 		_ = timeSeriesSub.Close()
 		c.clearStartedState()

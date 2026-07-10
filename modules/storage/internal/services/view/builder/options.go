@@ -17,7 +17,7 @@ type MetadataReader interface {
 
 // Options controls the storage view builder service.
 type Options struct {
-	Events     eventbus.Bus
+	Events     eventbus.Subscriber
 	Reader     FactReader
 	Metadata   MetadataReader
 	Engines    map[string]viewindex.ViewIndexEngine

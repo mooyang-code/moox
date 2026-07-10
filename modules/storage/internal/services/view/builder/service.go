@@ -10,14 +10,13 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
-	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 const defaultMaxWorkers = 1
 
 // Service consumes storage row-change events and updates derived view stores.
 type Service struct {
-	events     eventbus.Bus
+	events     eventbus.Subscriber
 	reader     FactReader
 	metadata   MetadataReader
 	engines    map[string]viewindex.ViewIndexEngine
@@ -78,8 +77,7 @@ func (s *Service) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	subscriber, ok := s.events.(eventbus.Subscriber)
-	if !ok {
+	if s.events == nil {
 		return errors.New("view builder service requires subscribable event bus")
 	}
 	if s.reader == nil {
@@ -106,7 +104,7 @@ func (s *Service) Start(ctx context.Context) error {
 	s.recordBatcher = recordBatcher
 	timeSeriesOut := make(chan []timeSeriesDeriveItem, s.maxWorkers)
 	recordOut := make(chan []recordDeriveItem, s.maxWorkers)
-	processCtx := trpc.CloneContext(runCtx)
+	processCtx := runCtx
 	s.wg.Add(2 + 2*s.maxWorkers)
 	s.mu.Unlock()
 
@@ -135,12 +133,12 @@ func (s *Service) Start(ctx context.Context) error {
 		}()
 	}
 
-	timeSeriesSub, err := subscriber.SubscribeTimeSeriesRowsChanged(ctx, s.enqueueTimeSeries)
+	timeSeriesSub, err := s.events.SubscribeTimeSeriesRowsChanged(ctx, s.enqueueTimeSeries)
 	if err != nil {
 		s.clearStartedState(cancel)
 		return err
 	}
-	recordSub, err := subscriber.SubscribeRecordRowsChanged(ctx, s.enqueueRecord)
+	recordSub, err := s.events.SubscribeRecordRowsChanged(ctx, s.enqueueRecord)
 	if err != nil {
 		_ = timeSeriesSub.Close()
 		s.clearStartedState(cancel)

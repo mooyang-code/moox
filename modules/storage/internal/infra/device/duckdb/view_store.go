@@ -158,8 +158,8 @@ func (s *ViewStore) Prepare(ctx context.Context, indexID string, schema viewinde
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE moox_view_index_meta SET schema_hash = ?, updated_at = ? WHERE table_name = ?
-	`, schema.SchemaHash, time.Now().UTC().Format(time.RFC3339Nano), indexID)
+		UPDATE moox_view_index_meta SET view_version = ?, schema_hash = ?, updated_at = ? WHERE table_name = ?
+	`, schema.ViewVersion, schema.SchemaHash, time.Now().UTC().Format(time.RFC3339Nano), indexID)
 	return err
 }
 
@@ -180,12 +180,13 @@ func (s *ViewStore) Stat(ctx context.Context, indexID string) (viewindex.ViewInd
 		return viewindex.ViewIndexStats{}, err
 	}
 	return viewindex.ViewIndexStats{
-		Exists:     true,
-		EntryCount: stats.entryCount,
-		MinVersion: stats.minVersion,
-		MaxVersion: stats.maxVersion,
-		SchemaHash: stats.schemaHash,
-		UpdatedAt:  stats.updatedAt,
+		Exists:      true,
+		ViewVersion: stats.viewVersion,
+		EntryCount:  stats.entryCount,
+		MinVersion:  stats.minVersion,
+		MaxVersion:  stats.maxVersion,
+		SchemaHash:  stats.schemaHash,
+		UpdatedAt:   stats.updatedAt,
 	}, nil
 }
 
@@ -201,12 +202,14 @@ func (s *ViewStore) init(ctx context.Context) error {
 		);
 		CREATE TABLE IF NOT EXISTS moox_view_index_meta (
 			table_name VARCHAR PRIMARY KEY,
+			view_version UBIGINT NOT NULL DEFAULT 0,
 			entry_count BIGINT NOT NULL DEFAULT 0,
 			min_version VARCHAR NOT NULL DEFAULT '',
 			max_version VARCHAR NOT NULL DEFAULT '',
 			schema_hash VARCHAR NOT NULL DEFAULT '',
 			updated_at VARCHAR NOT NULL DEFAULT ''
 		);
+		ALTER TABLE moox_view_index_meta ADD COLUMN IF NOT EXISTS view_version UBIGINT DEFAULT 0;
 	`)
 	return err
 }
@@ -466,19 +469,20 @@ func (s *ViewStore) resultTableEmpty(ctx context.Context, quotedTableName string
 }
 
 type persistedIndexMeta struct {
-	entryCount int64
-	minVersion string
-	maxVersion string
-	schemaHash string
-	updatedAt  string
+	viewVersion uint64
+	entryCount  int64
+	minVersion  string
+	maxVersion  string
+	schemaHash  string
+	updatedAt   string
 }
 
 func (s *ViewStore) indexMeta(ctx context.Context, tableName string) (persistedIndexMeta, error) {
 	var meta persistedIndexMeta
 	err := s.db.QueryRowContext(ctx, `
-		SELECT entry_count, min_version, max_version, schema_hash, updated_at
+		SELECT view_version, entry_count, min_version, max_version, schema_hash, updated_at
 		FROM moox_view_index_meta WHERE table_name = ?
-	`, tableName).Scan(&meta.entryCount, &meta.minVersion, &meta.maxVersion, &meta.schemaHash, &meta.updatedAt)
+	`, tableName).Scan(&meta.viewVersion, &meta.entryCount, &meta.minVersion, &meta.maxVersion, &meta.schemaHash, &meta.updatedAt)
 	return meta, err
 }
 

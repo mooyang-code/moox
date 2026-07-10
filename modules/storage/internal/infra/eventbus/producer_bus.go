@@ -2,6 +2,7 @@ package eventbus
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -176,12 +177,11 @@ func (b *SubscriberBus) handleTimeSeriesMessage(ctx context.Context, msg *transp
 		handlers = append(handlers, handler)
 	}
 	b.mu.Unlock()
+	var handlerErr error
 	for _, handler := range handlers {
-		if err := handler(ctx, event); err != nil {
-			return err
-		}
+		handlerErr = errors.Join(handlerErr, handler(ctx, event))
 	}
-	return nil
+	return handlerErr
 }
 
 func (b *SubscriberBus) handleRecordMessage(ctx context.Context, msg *transport.Message) error {
@@ -195,12 +195,11 @@ func (b *SubscriberBus) handleRecordMessage(ctx context.Context, msg *transport.
 		handlers = append(handlers, handler)
 	}
 	b.mu.Unlock()
+	var handlerErr error
 	for _, handler := range handlers {
-		if err := handler(ctx, event); err != nil {
-			return err
-		}
+		handlerErr = errors.Join(handlerErr, handler(ctx, event))
 	}
-	return nil
+	return handlerErr
 }
 
 func (b *SubscriberBus) Close() error {

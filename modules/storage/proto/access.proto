@@ -145,6 +145,39 @@ message ReadRecordRowsRsp {
   common.PageResult page_result = 3;
 }
 
+// ScanTimeSeriesRowsReq 是 ViewBuilder 使用的内部游标扫描请求。
+// 它始终按 Dataset 扫描并且不会触发公开 Read 接口的全量保护逻辑。
+message ScanTimeSeriesRowsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  TimeRange time_range = 4;
+  repeated string column_names = 5;
+  common.Page page = 6;
+}
+
+message ScanTimeSeriesRowsRsp {
+  common.RetInfo ret_info = 1;
+  repeated TimeSeriesRow rows = 2;
+  common.PageResult page_result = 3;
+}
+
+// ScanRecordRowsReq 是 ViewBuilder 使用的内部游标扫描请求。
+message ScanRecordRowsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  VersionRange version_range = 4;
+  repeated string column_names = 5;
+  common.Page page = 6;
+}
+
+message ScanRecordRowsRsp {
+  common.RetInfo ret_info = 1;
+  repeated RecordRow rows = 2;
+  common.PageResult page_result = 3;
+}
+
 // Access 是用户侧事实数据读写入口。
 service Access {
   // WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
@@ -155,4 +188,13 @@ service Access {
   rpc WriteRecordRows(WriteRecordRowsReq) returns (WriteRecordRowsRsp);
   // ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
   rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
+}
+
+// AccessScan 是只提供给 ViewBuilder 的内部游标扫描服务。
+// 它只配置在 tRPC 入口，不暴露到 Access 的 HTTP 公共接口。
+service AccessScan {
+  // ScanTimeSeriesRows 为 ViewBuilder 提供有界游标扫描。
+  rpc ScanTimeSeriesRows(ScanTimeSeriesRowsReq) returns (ScanTimeSeriesRowsRsp);
+  // ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
+  rpc ScanRecordRows(ScanRecordRowsReq) returns (ScanRecordRowsRsp);
 }

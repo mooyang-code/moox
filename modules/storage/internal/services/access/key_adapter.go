@@ -3,6 +3,7 @@ package access
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,7 +16,88 @@ import (
 const (
 	reservedAttributePrefix       = "__moox_"
 	timeSeriesDimensionsAttribute = reservedAttributePrefix + "time_series_dimensions"
+	maxMultiKeyMergeRows          = 10000
 )
+
+type multiKeyPagePlan struct {
+	pageNo    uint32
+	size      uint32
+	start     int
+	fetchSize uint32
+}
+
+func newMultiKeyPagePlan(page *pb.Page, keyCount int, perKeyCap uint32) (*multiKeyPagePlan, error) {
+	pageNo := uint32(1)
+	size := uint32(1000)
+	start := uint64(0)
+	if page != nil {
+		if page.GetPage() > 0 {
+			pageNo = page.GetPage()
+		}
+		if page.GetSize() > 0 {
+			size = page.GetSize()
+		}
+		if page.GetCursor() != "" {
+			offset, err := strconv.ParseUint(page.GetCursor(), 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("invalid page cursor %q", page.GetCursor())
+			}
+			start = offset
+		}
+	}
+	if start == 0 {
+		start = uint64(pageNo-1) * uint64(size)
+	}
+	fetchSize := start + uint64(size) + 1
+	if perKeyCap > 0 && fetchSize > uint64(perKeyCap) {
+		fetchSize = uint64(perKeyCap)
+	}
+	mergeRows := fetchSize * uint64(keyCount)
+	if keyCount <= 0 || mergeRows > uint64(maxMultiKeyMergeRows) {
+		return nil, fmt.Errorf("multi-key page requires merging %d rows, limit is %d; reduce page, size, or key count", mergeRows, maxMultiKeyMergeRows)
+	}
+	return &multiKeyPagePlan{pageNo: pageNo, size: size, start: int(start), fetchSize: uint32(fetchSize)}, nil
+}
+
+func timeSeriesPerKeyPageCap(req *pb.ReadTimeSeriesRowsReq) uint32 {
+	versionRange, err := timeRangeToVersionRange(req.GetTimeRange())
+	if err != nil {
+		return 0
+	}
+	if versionRange != nil {
+		if versionRange.GetStartVersion() != "" && versionRange.GetStartVersion() == versionRange.GetEndVersion() {
+			return 1
+		}
+		return 0
+	}
+	for _, key := range req.GetKeys() {
+		if strings.TrimSpace(key.GetDataTime()) == "" {
+			return 0
+		}
+	}
+	return 1
+}
+
+func recordPerKeyPageCap(req *pb.ReadRecordRowsReq) uint32 {
+	versionRange := req.GetVersionRange()
+	if versionRange == nil {
+		for _, key := range req.GetKeys() {
+			if strings.TrimSpace(key.GetVersion()) == "" {
+				return 0
+			}
+		}
+		return 1
+	}
+	if strings.TrimSpace(versionRange.GetStartVersion()) == "" || strings.TrimSpace(versionRange.GetEndVersion()) == "" {
+		return 0
+	}
+	start := factkey.NormalizeVersion(versionRange.GetStartVersion())
+	end := factkey.NormalizeVersion(versionRange.GetEndVersion())
+	if start != "" && start == end {
+		return 1
+	}
+	return 0
+}
 
 func timeSeriesRowToPrimaryStoreRow(row *pb.TimeSeriesRow) (*pb.PrimaryStoreRow, error) {
 	if row == nil {
@@ -406,6 +488,36 @@ func pageRecordRows(rows []*pb.RecordRow, page *pb.Page) ([]*pb.RecordRow, *pb.P
 		Total:      uint32(len(rows)),
 		HasMore:    hasMore,
 		NextCursor: nextCursor,
+	}
+}
+
+func pageMergedTimeSeriesRows(rows []*pb.TimeSeriesRow, plan *multiKeyPagePlan, sourceHasMore bool) ([]*pb.TimeSeriesRow, *pb.PageResult) {
+	start, end, result := mergedPageBounds(len(rows), plan, sourceHasMore)
+	return rows[start:end], result
+}
+
+func pageMergedRecordRows(rows []*pb.RecordRow, plan *multiKeyPagePlan, sourceHasMore bool) ([]*pb.RecordRow, *pb.PageResult) {
+	start, end, result := mergedPageBounds(len(rows), plan, sourceHasMore)
+	return rows[start:end], result
+}
+
+func mergedPageBounds(rowCount int, plan *multiKeyPagePlan, sourceHasMore bool) (int, int, *pb.PageResult) {
+	if plan == nil {
+		plan = &multiKeyPagePlan{pageNo: 1, size: 1000}
+	}
+	start := min(plan.start, rowCount)
+	end := min(start+int(plan.size), rowCount)
+	hasMore := sourceHasMore || end < rowCount
+	nextCursor := ""
+	if hasMore {
+		nextCursor = strconv.Itoa(end)
+	}
+	return start, end, &pb.PageResult{
+		Page:       plan.pageNo,
+		Size:       plan.size,
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
+		TotalState: pb.TotalState_SKIPPED,
 	}
 }
 

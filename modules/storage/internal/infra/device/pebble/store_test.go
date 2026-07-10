@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
@@ -39,6 +40,41 @@ func TestReadRowsDescPageStopsAtRequestedWindow(t *testing.T) {
 	}
 	if page == nil || !page.GetHasMore() || page.GetTotal() != 0 || page.GetTotalState() != pb.TotalState_SKIPPED {
 		t.Fatalf("page = %+v, want skipped total with has_more", page)
+	}
+}
+
+func TestScanRowsFirstPageUsesBoundedCursor(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "primary")})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	for i := 0; i < 100; i++ {
+		version := time.Date(2026, 7, 9, 8, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Minute).Format(time.RFC3339Nano)
+		if err := store.WriteRows(ctx, []*pb.PrimaryStoreRow{testPrimaryTimeSeriesRow(version)}); err != nil {
+			t.Fatalf("WriteRows %s: %v", version, err)
+		}
+	}
+
+	rows, page, err := store.ScanRows(ctx, &pb.PrimaryStoreTarget{
+		SpaceId: "crypto", DatasetId: "binance_spot_kline",
+	}, pb.DataKind_DATA_KIND_TIME_SERIES, nil, pb.SortOrder_SORT_ORDER_ASC, nil, &pb.Page{Size: 2})
+	if err != nil {
+		t.Fatalf("ScanRows: %v", err)
+	}
+	if len(rows) != 2 || page == nil || !page.GetHasMore() || page.GetNextCursor() == "" {
+		t.Fatalf("rows=%d page=%+v, want bounded first page with cursor", len(rows), page)
+	}
+	rows, page, err = store.ScanRows(ctx, &pb.PrimaryStoreTarget{
+		SpaceId: "crypto", DatasetId: "binance_spot_kline",
+	}, pb.DataKind_DATA_KIND_TIME_SERIES, nil, pb.SortOrder_SORT_ORDER_ASC, nil, &pb.Page{Size: 2, Cursor: page.GetNextCursor()})
+	if err != nil {
+		t.Fatalf("ScanRows next page: %v", err)
+	}
+	if len(rows) != 2 || page == nil || page.GetNextCursor() == "" {
+		t.Fatalf("next rows=%d page=%+v, want another bounded page", len(rows), page)
 	}
 }
 

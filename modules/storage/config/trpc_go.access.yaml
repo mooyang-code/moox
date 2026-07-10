@@ -17,6 +17,11 @@ server:
       port: 20102
       network: tcp
       protocol: trpc
+    - name: trpc.moox.storage.AccessScan.trpc
+      port: 20105
+      network: tcp
+      protocol: trpc
+      timeout: 120000
     - name: trpc.moox.storage.PrimaryStore
       port: 20101
       network: tcp

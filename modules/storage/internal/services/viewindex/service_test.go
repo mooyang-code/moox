@@ -54,6 +54,35 @@ func TestServiceRoutesLifecycleByEngine(t *testing.T) {
 	}
 }
 
+func TestServiceRestartRejectsStaleViewVersionWithSameSchemaHash(t *testing.T) {
+	duck := &fakeManagedEngine{name: "duckdb"}
+	indexID := coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)
+	first := NewService(Options{Engines: map[string]ManagedEngine{"duckdb": duck}})
+	prepared, err := first.PrepareViewIndex(context.Background(), &pb.PrepareViewIndexReq{
+		IndexId: indexID,
+		Engine:  "duckdb",
+		Schema: &pb.ViewIndexSchema{
+			SpaceId: "crypto", ViewId: "spot", ViewVersion: 2, Engine: "duckdb", SchemaHash: "unchanged-shape",
+		},
+	})
+	if err != nil || prepared.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("PrepareViewIndex rsp=%+v err=%v", prepared, err)
+	}
+
+	restarted := NewService(Options{Engines: map[string]ManagedEngine{"duckdb": duck}})
+	stale, err := restarted.WriteViewIndex(context.Background(), &pb.WriteViewIndexReq{
+		IndexId: indexID,
+		Engine:  "duckdb",
+		Batch:   &pb.ViewIndexBatch{ViewVersion: 1, SchemaHash: "unchanged-shape"},
+	})
+	if err != nil {
+		t.Fatalf("WriteViewIndex transport error: %v", err)
+	}
+	if stale.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
+		t.Fatalf("stale write accepted after owner restart: %+v", stale)
+	}
+}
+
 func TestServiceRoutesTypedQueries(t *testing.T) {
 	duck := &fakeManagedEngine{name: "duckdb"}
 	bleve := &fakeManagedEngine{name: "bleve"}
@@ -117,12 +146,16 @@ type fakeManagedEngine struct {
 	timeSeriesQueries int
 	recordQueries     int
 	statCalls         int
+	viewVersion       uint64
+	schemaHash        string
 }
 
 func (e *fakeManagedEngine) Engine() string { return e.name }
 
-func (e *fakeManagedEngine) Prepare(_ context.Context, indexID string, _ coreviewindex.ViewIndexSchema) error {
+func (e *fakeManagedEngine) Prepare(_ context.Context, indexID string, schema coreviewindex.ViewIndexSchema) error {
 	e.prepared = indexID
+	e.viewVersion = schema.ViewVersion
+	e.schemaHash = schema.SchemaHash
 	return e.err
 }
 
@@ -132,7 +165,7 @@ func (e *fakeManagedEngine) Write(context.Context, string, coreviewindex.ViewInd
 
 func (e *fakeManagedEngine) Stat(context.Context, string) (coreviewindex.ViewIndexStats, error) {
 	e.statCalls++
-	return coreviewindex.ViewIndexStats{Exists: e.err == nil, EntryCount: 1}, e.err
+	return coreviewindex.ViewIndexStats{Exists: e.err == nil, ViewVersion: e.viewVersion, EntryCount: 1, SchemaHash: e.schemaHash}, e.err
 }
 
 func (e *fakeManagedEngine) Remove(context.Context, string) error { return e.err }

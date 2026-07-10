@@ -132,6 +132,73 @@ func RegisterAccessService(s server.Service, svr AccessService) {
 	}
 }
 
+// AccessScanService defines service.
+type AccessScanService interface {
+	// ScanTimeSeriesRows ScanTimeSeriesRows 为 ViewBuilder 提供有界游标扫描。
+	ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq) (*ScanTimeSeriesRowsRsp, error)
+	// ScanRecordRows ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
+	ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq) (*ScanRecordRowsRsp, error)
+}
+
+func AccessScanService_ScanTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ScanTimeSeriesRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(AccessScanService).ScanTimeSeriesRows(ctx, reqbody.(*ScanTimeSeriesRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func AccessScanService_ScanRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ScanRecordRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(AccessScanService).ScanRecordRows(ctx, reqbody.(*ScanRecordRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// AccessScanServer_ServiceDesc descriptor for server.RegisterService.
+var AccessScanServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.storage.AccessScan",
+	HandlerType: ((*AccessScanService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.storage.AccessScan/ScanTimeSeriesRows",
+			Func: AccessScanService_ScanTimeSeriesRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.AccessScan/ScanRecordRows",
+			Func: AccessScanService_ScanRecordRows_Handler,
+		},
+	},
+}
+
+// RegisterAccessScanService registers service.
+func RegisterAccessScanService(s server.Service, svr AccessScanService) {
+	if err := s.Register(&AccessScanServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("AccessScan register error:%v", err))
+	}
+}
+
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
 type UnimplementedAccess struct{}
@@ -154,6 +221,18 @@ func (s *UnimplementedAccess) WriteRecordRows(ctx context.Context, req *WriteRec
 // ReadRecordRows ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
 func (s *UnimplementedAccess) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
 	return nil, errors.New("rpc ReadRecordRows of service Access is not implemented")
+}
+
+type UnimplementedAccessScan struct{}
+
+// ScanTimeSeriesRows ScanTimeSeriesRows 为 ViewBuilder 提供有界游标扫描。
+func (s *UnimplementedAccessScan) ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq) (*ScanTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc ScanTimeSeriesRows of service AccessScan is not implemented")
+}
+
+// ScanRecordRows ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
+func (s *UnimplementedAccessScan) ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq) (*ScanRecordRowsRsp, error) {
+	return nil, errors.New("rpc ScanRecordRows of service AccessScan is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -257,6 +336,63 @@ func (c *AccessClientProxyImpl) ReadRecordRows(ctx context.Context, req *ReadRec
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReadRecordRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// AccessScanClientProxy defines service client proxy
+type AccessScanClientProxy interface {
+	// ScanTimeSeriesRows ScanTimeSeriesRows 为 ViewBuilder 提供有界游标扫描。
+	ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq, opts ...client.Option) (rsp *ScanTimeSeriesRowsRsp, err error)
+	// ScanRecordRows ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
+	ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq, opts ...client.Option) (rsp *ScanRecordRowsRsp, err error)
+}
+
+type AccessScanClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewAccessScanClientProxy = func(opts ...client.Option) AccessScanClientProxy {
+	return &AccessScanClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *AccessScanClientProxyImpl) ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq, opts ...client.Option) (*ScanTimeSeriesRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.AccessScan/ScanTimeSeriesRows")
+	msg.WithCalleeServiceName(AccessScanServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("AccessScan")
+	msg.WithCalleeMethod("ScanTimeSeriesRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ScanTimeSeriesRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *AccessScanClientProxyImpl) ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq, opts ...client.Option) (*ScanRecordRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.AccessScan/ScanRecordRows")
+	msg.WithCalleeServiceName(AccessScanServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("AccessScan")
+	msg.WithCalleeMethod("ScanRecordRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ScanRecordRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

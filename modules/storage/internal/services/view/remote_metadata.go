@@ -61,8 +61,18 @@ func (m *RemoteMetadata) ListViews(ctx context.Context, spaceID string, datasetI
 }
 
 func (m *RemoteMetadata) ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error) {
-	views, _, err := m.ListViews(ctx, spaceID, datasetID, "", &pb.Page{Page: 1, Size: 10000})
-	return views, err
+	const pageSize = uint32(1000)
+	var out []*pb.View
+	for pageNo := uint32(1); ; pageNo++ {
+		views, page, err := m.ListViews(ctx, spaceID, datasetID, "active", &pb.Page{Page: pageNo, Size: pageSize})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, views...)
+		if page == nil || !page.GetHasMore() || len(views) == 0 {
+			return out, nil
+		}
+	}
 }
 
 func (m *RemoteMetadata) ListViewColumns(ctx context.Context, spaceID string, viewID string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {

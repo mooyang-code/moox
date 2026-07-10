@@ -24,11 +24,16 @@ type AccessReader interface {
 
 // NewAccessReader returns a remote Access reader when serviceName is configured,
 // otherwise it uses the supplied local reader.
-func NewAccessReader(local AccessReader, serviceName string) AccessReader {
+func NewAccessReader(local AccessReader, serviceName string, scanServiceName string) AccessReader {
 	serviceName = strings.TrimSpace(serviceName)
 	if serviceName != "" {
+		scanServiceName = strings.TrimSpace(scanServiceName)
+		if scanServiceName == "" {
+			scanServiceName = "trpc.moox.storage.AccessScan"
+		}
 		return &remoteAccessReader{
-			proxy: pb.NewAccessClientProxy(client.WithServiceName(serviceName)),
+			proxy:     pb.NewAccessClientProxy(client.WithServiceName(serviceName)),
+			scanProxy: pb.NewAccessScanClientProxy(client.WithServiceName(scanServiceName)),
 		}
 	}
 	if local != nil {
@@ -38,7 +43,8 @@ func NewAccessReader(local AccessReader, serviceName string) AccessReader {
 }
 
 type remoteAccessReader struct {
-	proxy pb.AccessClientProxy
+	proxy     pb.AccessClientProxy
+	scanProxy pb.AccessScanClientProxy
 }
 
 func (r *remoteAccessReader) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
@@ -50,8 +56,9 @@ func (r *remoteAccessReader) ReadRecordRows(ctx context.Context, req *pb.ReadRec
 }
 
 func (r *remoteAccessReader) ScanTimeSeriesRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange, columnNames []string, page *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult, error) {
-	rsp, err := r.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
-		Keys:        []*pb.TimeSeriesKey{{SpaceId: spaceID, DatasetId: datasetID}},
+	rsp, err := r.scanProxy.ScanTimeSeriesRows(ctx, &pb.ScanTimeSeriesRowsReq{
+		SpaceId:     spaceID,
+		DatasetId:   datasetID,
 		TimeRange:   timeRange,
 		ColumnNames: columnNames,
 		Page:        page,
@@ -69,8 +76,9 @@ func (r *remoteAccessReader) ScanTimeSeriesRows(ctx context.Context, spaceID str
 }
 
 func (r *remoteAccessReader) ScanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
-	rsp, err := r.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{
-		Keys:         []*pb.RecordKey{{SpaceId: spaceID, DatasetId: datasetID}},
+	rsp, err := r.scanProxy.ScanRecordRows(ctx, &pb.ScanRecordRowsReq{
+		SpaceId:      spaceID,
+		DatasetId:    datasetID,
 		VersionRange: versionRange,
 		ColumnNames:  columnNames,
 		Page:         page,

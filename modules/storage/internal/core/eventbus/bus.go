@@ -2,6 +2,7 @@ package eventbus
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -11,8 +12,8 @@ import (
 type TimeSeriesRowsChangedHandler func(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error
 type RecordRowsChangedHandler func(ctx context.Context, event *pb.RecordRowsChangedEvent) error
 
-// Bus 是 storage 领域事件总线，负责发布主存行变更事件。
-type Bus interface {
+// Publisher publishes committed PrimaryStore changes.
+type Publisher interface {
 	PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error
 	PublishRecordRowsChanged(ctx context.Context, event *pb.RecordRowsChangedEvent) error
 }
@@ -22,32 +23,37 @@ type Subscription interface {
 	Close() error
 }
 
-// Subscriber 是可订阅行变更事件的总线扩展能力。实现该接口的总线支持异步派生消费者。
+// Subscriber consumes PrimaryStore changes.
 type Subscriber interface {
 	SubscribeTimeSeriesRowsChanged(ctx context.Context, handler TimeSeriesRowsChangedHandler) (Subscription, error)
 	SubscribeRecordRowsChanged(ctx context.Context, handler RecordRowsChangedHandler) (Subscription, error)
 }
 
+// Bus combines capabilities for bootstrap-owned transports.
+type Bus interface {
+	Publisher
+	Subscriber
+	Close() error
+}
+
 // MemoryBus 是进程内事件总线实现，用于测试和单进程部署。
 type MemoryBus struct {
 	mu                 sync.Mutex
-	timeSeriesEvents   []*pb.TimeSeriesRowsChangedEvent
-	recordEvents       []*pb.RecordRowsChangedEvent
+	closeCond          *sync.Cond
 	nextID             uint64
 	timeSeriesHandlers map[uint64]TimeSeriesRowsChangedHandler
 	recordHandlers     map[uint64]RecordRowsChangedHandler
 	inFlight           int
-	idle               chan struct{}
+	closed             bool
 }
 
 func NewMemoryBus() *MemoryBus {
-	idle := make(chan struct{})
-	close(idle)
-	return &MemoryBus{
+	bus := &MemoryBus{
 		timeSeriesHandlers: make(map[uint64]TimeSeriesRowsChangedHandler),
 		recordHandlers:     make(map[uint64]RecordRowsChangedHandler),
-		idle:               idle,
 	}
+	bus.closeCond = sync.NewCond(&bus.mu)
+	return bus
 }
 
 func (b *MemoryBus) SubscribeTimeSeriesRowsChanged(ctx context.Context, handler TimeSeriesRowsChangedHandler) (Subscription, error) {
@@ -56,6 +62,10 @@ func (b *MemoryBus) SubscribeTimeSeriesRowsChanged(ctx context.Context, handler 
 		return noopSubscription{}, nil
 	}
 	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return nil, context.Canceled
+	}
 	if b.timeSeriesHandlers == nil {
 		b.timeSeriesHandlers = make(map[uint64]TimeSeriesRowsChangedHandler)
 	}
@@ -72,6 +82,10 @@ func (b *MemoryBus) SubscribeRecordRowsChanged(ctx context.Context, handler Reco
 		return noopSubscription{}, nil
 	}
 	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return nil, context.Canceled
+	}
 	if b.recordHandlers == nil {
 		b.recordHandlers = make(map[uint64]RecordRowsChangedHandler)
 	}
@@ -83,86 +97,64 @@ func (b *MemoryBus) SubscribeRecordRowsChanged(ctx context.Context, handler Reco
 }
 
 func (b *MemoryBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
-	stored := cloneTimeSeriesRowsChangedEvent(event)
 	b.mu.Lock()
-	b.timeSeriesEvents = append(b.timeSeriesEvents, stored)
+	if b.closed {
+		b.mu.Unlock()
+		return context.Canceled
+	}
 	handlers := make([]TimeSeriesRowsChangedHandler, 0, len(b.timeSeriesHandlers))
 	for _, handler := range b.timeSeriesHandlers {
 		handlers = append(handlers, handler)
 	}
-	b.addInFlightLocked(len(handlers))
+	b.inFlight++
 	b.mu.Unlock()
+	defer b.finishPublish()
+	var err error
 	for _, handler := range handlers {
-		eventCopy := cloneTimeSeriesRowsChangedEvent(event)
-		// 内存总线不阻塞发布者；测试或单进程部署需要等待派生完成时显式调用 Wait。
-		go func(handler TimeSeriesRowsChangedHandler, event *pb.TimeSeriesRowsChangedEvent) {
-			defer b.finishHandler()
-			_ = handler(ctx, event)
-		}(handler, eventCopy)
+		err = errors.Join(err, handler(ctx, cloneTimeSeriesRowsChangedEvent(event)))
 	}
-	return nil
+	return err
 }
 
 func (b *MemoryBus) PublishRecordRowsChanged(ctx context.Context, event *pb.RecordRowsChangedEvent) error {
-	stored := cloneRecordRowsChangedEvent(event)
 	b.mu.Lock()
-	b.recordEvents = append(b.recordEvents, stored)
+	if b.closed {
+		b.mu.Unlock()
+		return context.Canceled
+	}
 	handlers := make([]RecordRowsChangedHandler, 0, len(b.recordHandlers))
 	for _, handler := range b.recordHandlers {
 		handlers = append(handlers, handler)
 	}
-	b.addInFlightLocked(len(handlers))
+	b.inFlight++
 	b.mu.Unlock()
+	defer b.finishPublish()
+	var err error
 	for _, handler := range handlers {
-		eventCopy := cloneRecordRowsChangedEvent(event)
-		// 内存总线不阻塞发布者；测试或单进程部署需要等待派生完成时显式调用 Wait。
-		go func(handler RecordRowsChangedHandler, event *pb.RecordRowsChangedEvent) {
-			defer b.finishHandler()
-			_ = handler(ctx, event)
-		}(handler, eventCopy)
+		err = errors.Join(err, handler(ctx, cloneRecordRowsChangedEvent(event)))
 	}
-	return nil
-}
-
-func (b *MemoryBus) Wait(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	b.mu.Lock()
-	b.ensureIdleLocked()
-	idle := b.idle
-	b.mu.Unlock()
-
-	select {
-	case <-idle:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return err
 }
 
 func (b *MemoryBus) Close() error {
-	return b.Wait(context.Background())
+	b.mu.Lock()
+	b.closed = true
+	b.timeSeriesHandlers = nil
+	b.recordHandlers = nil
+	for b.inFlight > 0 {
+		b.closeCond.Wait()
+	}
+	b.mu.Unlock()
+	return nil
 }
 
-func (b *MemoryBus) TimeSeriesEvents() []*pb.TimeSeriesRowsChangedEvent {
+func (b *MemoryBus) finishPublish() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := make([]*pb.TimeSeriesRowsChangedEvent, len(b.timeSeriesEvents))
-	for i, event := range b.timeSeriesEvents {
-		out[i] = cloneTimeSeriesRowsChangedEvent(event)
+	b.inFlight--
+	if b.inFlight == 0 {
+		b.closeCond.Broadcast()
 	}
-	return out
-}
-
-func (b *MemoryBus) RecordEvents() []*pb.RecordRowsChangedEvent {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := make([]*pb.RecordRowsChangedEvent, len(b.recordEvents))
-	for i, event := range b.recordEvents {
-		out[i] = cloneRecordRowsChangedEvent(event)
-	}
-	return out
+	b.mu.Unlock()
 }
 
 func (b *MemoryBus) deleteTimeSeriesHandler(id uint64) {
@@ -175,34 +167,6 @@ func (b *MemoryBus) deleteRecordHandler(id uint64) {
 	b.mu.Lock()
 	delete(b.recordHandlers, id)
 	b.mu.Unlock()
-}
-
-func (b *MemoryBus) addInFlightLocked(count int) {
-	if count == 0 {
-		return
-	}
-	b.ensureIdleLocked()
-	if b.inFlight == 0 {
-		b.idle = make(chan struct{})
-	}
-	b.inFlight += count
-}
-
-func (b *MemoryBus) finishHandler() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.inFlight--
-	if b.inFlight == 0 {
-		close(b.idle)
-	}
-}
-
-func (b *MemoryBus) ensureIdleLocked() {
-	if b.idle != nil {
-		return
-	}
-	b.idle = make(chan struct{})
-	close(b.idle)
 }
 
 func cloneTimeSeriesRowsChangedEvent(event *pb.TimeSeriesRowsChangedEvent) *pb.TimeSeriesRowsChangedEvent {

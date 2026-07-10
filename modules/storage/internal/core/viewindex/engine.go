@@ -38,6 +38,7 @@ type ViewIndexBatch struct {
 
 type ViewIndexStats struct {
 	Exists        bool
+	ViewVersion   uint64
 	EntryCount    int64
 	MinVersion    string
 	MaxVersion    string

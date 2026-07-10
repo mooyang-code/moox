@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/transport"
-	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 
 	"github.com/nats-io/nats.go"
@@ -47,7 +46,9 @@ func NewProducer(opts transport.ProducerOptions) (transport.Producer, error) {
 		opts.AckWait = 2 * time.Minute
 	}
 	if opts.MaxDeliver <= 0 {
-		opts.MaxDeliver = 10
+		// -1 means unlimited redelivery in JetStream. Projection events are
+		// idempotent and must not be dropped after transient owner failures.
+		opts.MaxDeliver = -1
 	}
 
 	return &NATSProducer{
@@ -212,7 +213,7 @@ func (p *NATSProducer) Subscribe(ctx context.Context, subject string, handler tr
 			}
 			// handler 返回值直接决定 JetStream Ack/Nak。上层 view/archive 事件消费者会等待本事件
 			// 对应的批处理完成后再返回，因此批处理失败可以通过 Nak 触发 redelivery。
-			if err := handler(trpc.BackgroundContext(), event); err != nil {
+			if err := handler(ctx, event); err != nil {
 				_ = msg.Nak()
 				log.Errorf("处理NATS消息失败: %v", err)
 				return

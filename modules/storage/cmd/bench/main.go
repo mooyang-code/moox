@@ -72,6 +72,7 @@ type serviceEnv struct {
 type servicePorts struct {
 	admin    int
 	data     int
+	scan     int
 	metadata int
 	query    int
 	primary  int
@@ -395,7 +396,7 @@ func localizedCommandError(err error) string {
 }
 
 func newServiceEnv(opts options) (*serviceEnv, error) {
-	ports, err := allocatePorts(7)
+	ports, err := allocatePorts(8)
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +409,7 @@ func newServiceEnv(opts options) (*serviceEnv, error) {
 		storageCfg: filepath.Join(workDir, "storage.yaml"),
 		logPath:    filepath.Join(workDir, "server.log"),
 		ports: servicePorts{
-			admin: ports[0], data: ports[1], metadata: ports[2], query: ports[3], primary: ports[4], index: ports[5], timer: ports[6],
+			admin: ports[0], data: ports[1], scan: ports[2], metadata: ports[3], query: ports[4], primary: ports[5], index: ports[6], timer: ports[7],
 		},
 	}, nil
 }
@@ -452,7 +453,7 @@ func (e *serviceEnv) Start(ctx context.Context, moduleDir string) error {
 		return err
 	}
 	e.cmd = cmd
-	if err := waitPorts([]int{e.ports.data, e.ports.metadata, e.ports.query, e.ports.primary, e.ports.index}, time.Minute); err != nil {
+	if err := waitPorts([]int{e.ports.data, e.ports.scan, e.ports.metadata, e.ports.query, e.ports.primary, e.ports.index}, time.Minute); err != nil {
 		_ = e.Stop()
 		return fmt.Errorf("%w\n----- server.log -----\n%s", err, e.tailLog())
 	}
@@ -512,7 +513,7 @@ func (e *serviceEnv) writeConfig() error {
 		return err
 	}
 	trpcCfg := fmt.Sprintf(trpcConfigTemplate,
-		e.ports.admin, e.ports.data, e.ports.query, e.ports.primary, e.ports.metadata, e.ports.index, e.ports.timer,
+		e.ports.admin, e.ports.data, e.ports.scan, e.ports.query, e.ports.primary, e.ports.metadata, e.ports.index, e.ports.timer,
 	)
 	return os.WriteFile(e.configPath, []byte(trpcCfg), 0o644)
 }
@@ -564,6 +565,12 @@ server:
       port: %d
       network: tcp
       protocol: trpc
+    - name: trpc.moox.storage.AccessScan.trpc
+      ip: 127.0.0.1
+      port: %d
+      network: tcp
+      protocol: trpc
+      timeout: 120000
     - name: trpc.moox.storage.DataView
       ip: 127.0.0.1
       port: %d

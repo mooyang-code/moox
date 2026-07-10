@@ -30,7 +30,7 @@ func TestScanTimeSeriesRowsPagesPrimaryStoreWithoutDatasetGuard(t *testing.T) {
 		router:  router.NewResolver(fakeRouteReader{}),
 	}
 
-	rows, page, err := svc.ScanTimeSeriesRows(context.Background(), "crypto", "kline",
+	rows, page, err := svc.FactReader().ScanTimeSeriesRows(context.Background(), "crypto", "kline",
 		&pb.TimeRange{StartTime: "2026-07-09T00:00:00Z"}, nil, &pb.Page{Size: 1000})
 	if err != nil {
 		t.Fatalf("ScanTimeSeriesRows() error = %v, want paged scan to bypass broad dataset guard", err)
