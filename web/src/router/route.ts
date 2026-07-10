@@ -185,6 +185,12 @@ export const staticRoutes = [
         meta: { title: "ops-service-monitor" }
       },
       {
+        path: "/ops/metric-monitor",
+        name: "ops-metric-monitor",
+        component: () => import("@/views/ops/metric-monitor/index.vue"),
+        meta: { title: "ops-metric-monitor" }
+      },
+      {
         path: "/ops/resource-monitor",
         name: "ops-resource-monitor",
         component: () => import("@/views/container/resource-monitor/resource-monitor.vue"),

@@ -52,6 +52,7 @@ export default {
     ["trading-orders"]: "交易明细",
     ["ops"]: "资源与运维",
     ["ops-service-monitor"]: "服务监控",
+    ["ops-metric-monitor"]: "应用指标",
     ["ops-resource-monitor"]: "资源监控",
     ["ops-ssh-hosts"]: "主机管理",
     ["ops-ssh-terminal"]: "SSH 终端",

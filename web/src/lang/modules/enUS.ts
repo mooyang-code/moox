@@ -52,6 +52,7 @@ export default {
     ["trading-orders"]: "orders",
     ["ops"]: "operations",
     ["ops-service-monitor"]: "service monitor",
+    ["ops-metric-monitor"]: "application metrics",
     ["ops-resource-monitor"]: "resource monitor",
     ["ops-ssh-hosts"]: "hosts",
     ["ops-ssh-terminal"]: "SSH terminal",
