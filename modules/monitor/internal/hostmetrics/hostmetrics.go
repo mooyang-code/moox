@@ -33,7 +33,7 @@ func (s *Store) EnsureSchema() error {
 	if s == nil || s.db == nil {
 		return errors.New("host metric database is nil")
 	}
-	return s.db.Exec(`CREATE TABLE IF NOT EXISTS t_monitor_host_agents (c_agent_id TEXT PRIMARY KEY, c_hostname TEXT NOT NULL DEFAULT '', c_boot_id TEXT NOT NULL DEFAULT '', c_first_seen_at DATETIME NOT NULL, c_last_seen_at DATETIME NOT NULL, c_is_archived INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS t_monitor_host_inbox (c_message_id TEXT PRIMARY KEY, c_agent_id TEXT NOT NULL, c_stream_sequence INTEGER NOT NULL DEFAULT 0, c_payload_sha256 TEXT NOT NULL, c_received_at DATETIME NOT NULL, c_status TEXT NOT NULL DEFAULT 'projected'); CREATE TABLE IF NOT EXISTS t_monitor_host_latest (c_agent_id TEXT PRIMARY KEY, c_occurred_at DATETIME NOT NULL, c_payload BLOB NOT NULL, c_updated_at DATETIME NOT NULL);`).Error
+	return s.db.Exec(`CREATE TABLE IF NOT EXISTS t_monitor_host_agents (c_agent_id TEXT PRIMARY KEY, c_hostname TEXT NOT NULL DEFAULT '', c_boot_id TEXT NOT NULL DEFAULT '', c_first_seen_at DATETIME NOT NULL, c_last_seen_at DATETIME NOT NULL, c_is_archived INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS t_monitor_host_inbox (c_message_id TEXT PRIMARY KEY, c_agent_id TEXT NOT NULL, c_stream_sequence INTEGER NOT NULL DEFAULT 0, c_payload_sha256 TEXT NOT NULL, c_received_at DATETIME NOT NULL, c_status TEXT NOT NULL DEFAULT 'projected'); CREATE TABLE IF NOT EXISTS t_monitor_host_latest (c_agent_id TEXT PRIMARY KEY, c_occurred_at DATETIME NOT NULL, c_payload BLOB NOT NULL, c_updated_at DATETIME NOT NULL); CREATE TABLE IF NOT EXISTS t_monitor_host_history (c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_agent_id TEXT NOT NULL, c_observed_at DATETIME NOT NULL, c_payload BLOB NOT NULL); CREATE INDEX IF NOT EXISTS idx_monitor_host_history_agent_time ON t_monitor_host_history(c_agent_id, c_observed_at DESC);`).Error
 }
 
 func ValidateMessage(msg *messagepb.MooxMessage) (*hostmetricpb.HostMetric, error) {
@@ -181,10 +181,75 @@ func (s *Store) Ingest(ctx context.Context, d *jetstream.Delivery) error {
 		tx.Rollback()
 		return err
 	}
+	if err := tx.Exec(`INSERT INTO t_monitor_host_history(c_agent_id,c_observed_at,c_payload) VALUES(?,?,?)`, p.GetInstanceId(), msg.GetOccurredAt().AsTime(), payload).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
 	if err := tx.Commit().Error; err != nil {
 		return err
 	}
 	return d.Ack(ctx)
+}
+
+type AgentView struct {
+	AgentID, Hostname, BootID, LastSeenAt string
+	Archived                              bool
+	Snapshot                              *hostmetricpb.HostSnapshot
+}
+
+type HistoryPoint struct {
+	AgentID, ObservedAt string
+	Snapshot            *hostmetricpb.HostSnapshot
+}
+
+func (s *Store) ListAgents(ctx context.Context) ([]AgentView, error) {
+	var rows []struct {
+		AgentID  string    `gorm:"column:c_agent_id"`
+		Hostname string    `gorm:"column:c_hostname"`
+		BootID   string    `gorm:"column:c_boot_id"`
+		LastSeen time.Time `gorm:"column:c_last_seen_at"`
+		Archived bool      `gorm:"column:c_is_archived"`
+		Payload  []byte    `gorm:"column:c_payload"`
+	}
+	if err := s.db.WithContext(ctx).Raw(`SELECT a.c_agent_id,a.c_hostname,a.c_boot_id,a.c_last_seen_at,a.c_is_archived,l.c_payload FROM t_monitor_host_agents a LEFT JOIN t_monitor_host_latest l ON l.c_agent_id=a.c_agent_id ORDER BY a.c_hostname,a.c_agent_id`).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]AgentView, 0, len(rows))
+	for _, row := range rows {
+		view := AgentView{AgentID: row.AgentID, Hostname: row.Hostname, BootID: row.BootID, LastSeenAt: row.LastSeen.UTC().Format(time.RFC3339Nano), Archived: row.Archived}
+		if len(row.Payload) > 0 {
+			metric := new(hostmetricpb.HostMetric)
+			if err := proto.Unmarshal(row.Payload, metric); err != nil {
+				return nil, err
+			}
+			view.Snapshot = metric.GetSnapshot()
+		}
+		out = append(out, view)
+	}
+	return out, nil
+}
+
+func (s *Store) History(ctx context.Context, agentID string, start, end time.Time, limit int) ([]HistoryPoint, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	var rows []struct {
+		AgentID  string    `gorm:"column:c_agent_id"`
+		Observed time.Time `gorm:"column:c_observed_at"`
+		Payload  []byte    `gorm:"column:c_payload"`
+	}
+	if err := s.db.WithContext(ctx).Raw(`SELECT c_agent_id,c_observed_at,c_payload FROM t_monitor_host_history WHERE c_agent_id=? AND c_observed_at>=? AND c_observed_at<=? ORDER BY c_observed_at ASC LIMIT ?`, agentID, start, end, limit).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]HistoryPoint, 0, len(rows))
+	for _, row := range rows {
+		metric := new(hostmetricpb.HostMetric)
+		if err := proto.Unmarshal(row.Payload, metric); err != nil {
+			return nil, err
+		}
+		out = append(out, HistoryPoint{AgentID: row.AgentID, ObservedAt: row.Observed.UTC().Format(time.RFC3339Nano), Snapshot: metric.GetSnapshot()})
+	}
+	return out, nil
 }
 
 type Consumer struct {

@@ -3,6 +3,7 @@ syntax = "proto3";
 package trpc.moox.monitor;
 
 import "moox_common.proto";
+import "host_metric.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen;monitorpb";
 
@@ -389,6 +390,24 @@ message ListMonitorInstancesRsp { common.RetInfo ret_info = 1; repeated MonitorI
 message SyncSystemChecksReq {}
 message SyncSystemChecksRsp { common.RetInfo ret_info = 1; int32 synced = 2; }
 
+message HostAgentInfo {
+  string agent_id = 1;
+  string hostname = 2;
+  string boot_id = 3;
+  string last_seen_at = 4;
+  bool archived = 5;
+  trpc.moox.hostagent.HostSnapshot snapshot = 6;
+}
+message ListHostAgentsReq {}
+message ListHostAgentsRsp { common.RetInfo ret_info = 1; repeated HostAgentInfo agents = 2; }
+message HostMetricHistoryPoint {
+  string agent_id = 1;
+  string observed_at = 2;
+  trpc.moox.hostagent.HostSnapshot snapshot = 3;
+}
+message QueryHostMetricHistoryReq { string agent_id = 1; string start_at = 2; string end_at = 3; uint32 limit = 4; }
+message QueryHostMetricHistoryRsp { common.RetInfo ret_info = 1; repeated HostMetricHistoryPoint points = 2; }
+
 service MonitorMgr {
   rpc ListChecks(ListChecksReq) returns (ListChecksRsp);
   rpc GetCheck(GetCheckReq) returns (GetCheckRsp);
@@ -409,6 +428,8 @@ service MonitorMgr {
   rpc ListAlertEvents(ListAlertEventsReq) returns (ListAlertEventsRsp);
   rpc ListMonitorInstances(ListMonitorInstancesReq) returns (ListMonitorInstancesRsp);
   rpc SyncSystemChecks(SyncSystemChecksReq) returns (SyncSystemChecksRsp);
+  rpc ListHostAgents(ListHostAgentsReq) returns (ListHostAgentsRsp);
+  rpc QueryHostMetricHistory(QueryHostMetricHistoryReq) returns (QueryHostMetricHistoryRsp);
   rpc ListMetricServices(ListMetricServicesReq) returns (ListMetricServicesRsp);
   rpc ListMetricNames(ListMetricNamesReq) returns (ListMetricNamesRsp);
   rpc ListMetricSeries(ListMetricSeriesReq) returns (ListMetricSeriesRsp);

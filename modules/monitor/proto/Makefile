@@ -1,6 +1,7 @@
 PROTO_FILES := monitor.proto
 OUTPUT_DIR := ./monitorgen
 COMMON_PROTO_DIR := ../../../packages/commonpb
+HOSTMETRIC_PROTO_DIR := ../../../packages/hostmetricpb
 
 .PHONY: all clean
 
@@ -12,6 +13,7 @@ all:
 			-p "./$$proto" \
 			--protodir . \
 			--protodir $(COMMON_PROTO_DIR) \
+			--protodir $(HOSTMETRIC_PROTO_DIR) \
 			--rpconly \
 			--nogomod \
 			--mock=false \

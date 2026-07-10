@@ -57,6 +57,10 @@ type MonitorMgrService interface {
 
 	SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq) (*SyncSystemChecksRsp, error)
 
+	ListHostAgents(ctx context.Context, req *ListHostAgentsReq) (*ListHostAgentsRsp, error)
+
+	QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq) (*QueryHostMetricHistoryRsp, error)
+
 	ListMetricServices(ctx context.Context, req *ListMetricServicesReq) (*ListMetricServicesRsp, error)
 
 	ListMetricNames(ctx context.Context, req *ListMetricNamesReq) (*ListMetricNamesRsp, error)
@@ -426,6 +430,42 @@ func MonitorMgrService_SyncSystemChecks_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
+func MonitorMgrService_ListHostAgents_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListHostAgentsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).ListHostAgents(ctx, reqbody.(*ListHostAgentsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_QueryHostMetricHistory_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &QueryHostMetricHistoryReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).QueryHostMetricHistory(ctx, reqbody.(*QueryHostMetricHistoryReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func MonitorMgrService_ListMetricServices_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ListMetricServicesReq{}
 	filters, err := f(req)
@@ -742,6 +782,14 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: MonitorMgrService_SyncSystemChecks_Handler,
 		},
 		{
+			Name: "/trpc.moox.monitor.MonitorMgr/ListHostAgents",
+			Func: MonitorMgrService_ListHostAgents_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/QueryHostMetricHistory",
+			Func: MonitorMgrService_QueryHostMetricHistory_Handler,
+		},
+		{
 			Name: "/trpc.moox.monitor.MonitorMgr/ListMetricServices",
 			Func: MonitorMgrService_ListMetricServices_Handler,
 		},
@@ -864,6 +912,12 @@ func (s *UnimplementedMonitorMgr) ListMonitorInstances(ctx context.Context, req 
 func (s *UnimplementedMonitorMgr) SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq) (*SyncSystemChecksRsp, error) {
 	return nil, errors.New("rpc SyncSystemChecks of service MonitorMgr is not implemented")
 }
+func (s *UnimplementedMonitorMgr) ListHostAgents(ctx context.Context, req *ListHostAgentsReq) (*ListHostAgentsRsp, error) {
+	return nil, errors.New("rpc ListHostAgents of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq) (*QueryHostMetricHistoryRsp, error) {
+	return nil, errors.New("rpc QueryHostMetricHistory of service MonitorMgr is not implemented")
+}
 func (s *UnimplementedMonitorMgr) ListMetricServices(ctx context.Context, req *ListMetricServicesReq) (*ListMetricServicesRsp, error) {
 	return nil, errors.New("rpc ListMetricServices of service MonitorMgr is not implemented")
 }
@@ -949,6 +1003,10 @@ type MonitorMgrClientProxy interface {
 	ListMonitorInstances(ctx context.Context, req *ListMonitorInstancesReq, opts ...client.Option) (rsp *ListMonitorInstancesRsp, err error)
 
 	SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq, opts ...client.Option) (rsp *SyncSystemChecksRsp, err error)
+
+	ListHostAgents(ctx context.Context, req *ListHostAgentsReq, opts ...client.Option) (rsp *ListHostAgentsRsp, err error)
+
+	QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq, opts ...client.Option) (rsp *QueryHostMetricHistoryRsp, err error)
 
 	ListMetricServices(ctx context.Context, req *ListMetricServicesReq, opts ...client.Option) (rsp *ListMetricServicesRsp, err error)
 
@@ -1360,6 +1418,46 @@ func (c *MonitorMgrClientProxyImpl) SyncSystemChecks(ctx context.Context, req *S
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SyncSystemChecksRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) ListHostAgents(ctx context.Context, req *ListHostAgentsReq, opts ...client.Option) (*ListHostAgentsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/ListHostAgents")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("ListHostAgents")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListHostAgentsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq, opts ...client.Option) (*QueryHostMetricHistoryRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/QueryHostMetricHistory")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("QueryHostMetricHistory")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &QueryHostMetricHistoryRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

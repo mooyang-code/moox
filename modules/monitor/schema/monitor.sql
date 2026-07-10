@@ -353,6 +353,13 @@ CREATE TABLE IF NOT EXISTS t_monitor_host_latest (
   c_payload BLOB NOT NULL,
   c_updated_at DATETIME NOT NULL
 );
+CREATE TABLE IF NOT EXISTS t_monitor_host_history (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_agent_id TEXT NOT NULL,
+  c_observed_at DATETIME NOT NULL,
+  c_payload BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_monitor_host_history_agent_time ON t_monitor_host_history(c_agent_id, c_observed_at DESC);
 CREATE TABLE IF NOT EXISTS t_monitor_host_history_outbox (
   c_id INTEGER PRIMARY KEY AUTOINCREMENT,
   c_agent_id TEXT NOT NULL,
