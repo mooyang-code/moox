@@ -90,6 +90,15 @@ message UpsertRecordRowsRsp {
   repeated RecordRow rows = 2;
 }
 
+// RecordRowsCommittedEvent 表示 PrimaryStore 已经原子提交的完整 Record 行。
+message RecordRowsCommittedEvent {
+  string event_id = 1;
+  string source_id = 2;
+  uint64 commit_seq = 3;
+  string committed_at = 4;
+  repeated RecordRow rows = 5;
+}
+
 // WriteTimeSeriesRowsReq 表示写入时序事实数据行。
 message WriteTimeSeriesRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -207,6 +216,94 @@ message ScanRecordRowsRsp {
   common.PageResult page_result = 3;
 }
 
+message RecordAccessScope {
+  string space_id = 1;
+  repeated string dataset_ids = 2;
+}
+
+message OpenRecordAccessSnapshotReq {
+  common.AuthInfo auth_info = 1;
+  RecordAccessScope scope = 2;
+  RecordReadMode mode = 3;
+  TimeRange updated_time_range = 4;
+}
+
+message OpenRecordAccessSnapshotRsp {
+  common.RetInfo ret_info = 1;
+  string snapshot_id = 2;
+  string source_id = 3;
+  uint64 snapshot_commit_seq = 4;
+}
+
+message ReadRecordAccessSnapshotReq {
+  common.AuthInfo auth_info = 1;
+  string snapshot_id = 2;
+  string dataset_id = 3;
+  repeated string record_ids = 4;
+}
+
+message ReadRecordAccessSnapshotRsp {
+  common.RetInfo ret_info = 1;
+  repeated RecordRow rows = 2;
+}
+
+message ScanRecordAccessSnapshotReq {
+  common.AuthInfo auth_info = 1;
+  string snapshot_id = 2;
+  string dataset_id = 3;
+  common.Page page = 4;
+}
+
+message ScanRecordAccessSnapshotRsp {
+  common.RetInfo ret_info = 1;
+  repeated RecordRow rows = 2;
+  common.PageResult page_result = 3;
+}
+
+message RenewRecordAccessSnapshotReq {
+  common.AuthInfo auth_info = 1;
+  string snapshot_id = 2;
+}
+
+message RenewRecordAccessSnapshotRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message CloseRecordAccessSnapshotReq {
+  common.AuthInfo auth_info = 1;
+  string snapshot_id = 2;
+}
+
+message CloseRecordAccessSnapshotRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message RecordAccessWatermarkReq {
+  common.AuthInfo auth_info = 1;
+  RecordAccessScope scope = 2;
+}
+
+message RecordAccessWatermarkRsp {
+  common.RetInfo ret_info = 1;
+  string source_id = 2;
+  uint64 commit_seq = 3;
+}
+
+message ScanRecordAccessJournalReq {
+  common.AuthInfo auth_info = 1;
+  RecordAccessScope scope = 2;
+  uint64 after_commit_seq = 3;
+  uint64 through_commit_seq = 4;
+  common.Page page = 5;
+}
+
+message ScanRecordAccessJournalRsp {
+  common.RetInfo ret_info = 1;
+  repeated RecordRowsCommittedEvent events = 2;
+  uint64 scanned_through_commit_seq = 3;
+  common.PageResult page_result = 4;
+}
+
 // Access 是用户侧事实数据读写入口。
 service Access {
   // WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
@@ -227,4 +324,11 @@ service AccessScan {
   rpc ScanTimeSeriesRows(ScanTimeSeriesRowsReq) returns (ScanTimeSeriesRowsRsp);
   // ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
   rpc ScanRecordRows(ScanRecordRowsReq) returns (ScanRecordRowsRsp);
+  rpc OpenRecordAccessSnapshot(OpenRecordAccessSnapshotReq) returns (OpenRecordAccessSnapshotRsp);
+  rpc ReadRecordAccessSnapshot(ReadRecordAccessSnapshotReq) returns (ReadRecordAccessSnapshotRsp);
+  rpc ScanRecordAccessSnapshot(ScanRecordAccessSnapshotReq) returns (ScanRecordAccessSnapshotRsp);
+  rpc RenewRecordAccessSnapshot(RenewRecordAccessSnapshotReq) returns (RenewRecordAccessSnapshotRsp);
+  rpc CloseRecordAccessSnapshot(CloseRecordAccessSnapshotReq) returns (CloseRecordAccessSnapshotRsp);
+  rpc RecordAccessWatermark(RecordAccessWatermarkReq) returns (RecordAccessWatermarkRsp);
+  rpc ScanRecordAccessJournal(ScanRecordAccessJournalReq) returns (ScanRecordAccessJournalRsp);
 }

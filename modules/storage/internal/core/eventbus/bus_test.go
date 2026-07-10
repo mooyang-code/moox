@@ -3,6 +3,8 @@ package eventbus
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -21,6 +23,27 @@ func TestMemoryBusReturnsSubscriberErrors(t *testing.T) {
 	err := bus.PublishTimeSeriesRowsChanged(context.Background(), &pb.TimeSeriesRowsChangedEvent{})
 	if !errors.Is(err, want) {
 		t.Fatalf("PublishTimeSeriesRowsChanged error = %v, want subscriber error", err)
+	}
+}
+
+func TestMemoryBusPublishesEveryCommittedRecordRevision(t *testing.T) {
+	bus := NewMemoryBus()
+	var revisions []uint64
+	if _, err := bus.SubscribeRecordRowsCommitted(context.Background(), func(_ context.Context, event *pb.RecordRowsCommittedEvent) error {
+		for _, row := range event.GetRows() {
+			revisions = append(revisions, row.GetRevision())
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for revision := uint64(1); revision <= 2; revision++ {
+		if err := bus.PublishRecordRowsCommitted(context.Background(), &pb.RecordRowsCommittedEvent{EventId: "source:" + fmt.Sprint(revision), Rows: []*pb.RecordRow{{Revision: revision}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !reflect.DeepEqual(revisions, []uint64{1, 2}) {
+		t.Fatalf("revisions = %v", revisions)
 	}
 }
 

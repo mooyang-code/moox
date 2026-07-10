@@ -17,8 +17,10 @@ const (
 	DefaultSubjectPrefix                  = "moox.storage"
 	DefaultTimeSeriesRowsChangedSubject   = "moox.storage.time_series.rows_changed.v1"
 	DefaultRecordRowsChangedSubject       = "moox.storage.record.rows_changed.v1"
+	DefaultRecordRowsCommittedSubject     = "moox.storage.record.rows_committed.v1"
 	defaultTimeSeriesRowsChangedSuffix    = "time_series.rows_changed.v1"
 	defaultRecordRowsChangedSubjectSuffix = "record.rows_changed.v1"
+	defaultRecordRowsCommittedSuffix      = "record.rows_committed.v1"
 )
 
 func TimeSeriesRowsChangedSubject(prefix string) string {
@@ -27,6 +29,10 @@ func TimeSeriesRowsChangedSubject(prefix string) string {
 
 func RecordRowsChangedSubject(prefix string) string {
 	return normalizeSubjectPrefix(prefix) + "." + defaultRecordRowsChangedSubjectSuffix
+}
+
+func RecordRowsCommittedSubject(prefix string) string {
+	return normalizeSubjectPrefix(prefix) + "." + defaultRecordRowsCommittedSuffix
 }
 
 func SubjectPrefixWildcard(prefix string) string {
@@ -46,6 +52,7 @@ type ProducerBus struct {
 	producer          transport.Producer
 	timeSeriesSubject string
 	recordSubject     string
+	committedSubject  string
 }
 
 func NewProducerBus(producer transport.Producer, prefix string) *ProducerBus {
@@ -53,7 +60,16 @@ func NewProducerBus(producer transport.Producer, prefix string) *ProducerBus {
 		producer:          producer,
 		timeSeriesSubject: TimeSeriesRowsChangedSubject(prefix),
 		recordSubject:     RecordRowsChangedSubject(prefix),
+		committedSubject:  RecordRowsCommittedSubject(prefix),
 	}
+}
+
+func (b *ProducerBus) PublishRecordRowsCommitted(ctx context.Context, event *pb.RecordRowsCommittedEvent) error {
+	data, err := protojson.MarshalOptions{EmitUnpopulated: false}.Marshal(event)
+	if err != nil {
+		return err
+	}
+	return b.producer.Send(ctx, &transport.Message{Subject: b.committedSubject, Data: data, ID: event.GetEventId(), Time: time.Now()})
 }
 
 func (b *ProducerBus) PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
@@ -103,8 +119,10 @@ type SubscriberBus struct {
 	nextID                 uint64
 	timeSeriesHandlers     map[uint64]coreeventbus.TimeSeriesRowsChangedHandler
 	recordHandlers         map[uint64]coreeventbus.RecordRowsChangedHandler
+	committedHandlers      map[uint64]coreeventbus.RecordRowsCommittedHandler
 	timeSeriesSubscription transport.Subscription
 	recordSubscription     transport.Subscription
+	committedSubscription  transport.Subscription
 	subscribeClosed        bool
 }
 
@@ -115,7 +133,32 @@ func NewSubscriberBus(pubsub PubSub, prefix string) *SubscriberBus {
 		subscriber:         pubsub,
 		timeSeriesHandlers: make(map[uint64]coreeventbus.TimeSeriesRowsChangedHandler),
 		recordHandlers:     make(map[uint64]coreeventbus.RecordRowsChangedHandler),
+		committedHandlers:  make(map[uint64]coreeventbus.RecordRowsCommittedHandler),
 	}
+}
+
+func (b *SubscriberBus) SubscribeRecordRowsCommitted(ctx context.Context, handler coreeventbus.RecordRowsCommittedHandler) (coreeventbus.Subscription, error) {
+	if handler == nil {
+		return noopSubscription{}, nil
+	}
+	b.mu.Lock()
+	if b.subscribeClosed {
+		b.mu.Unlock()
+		return nil, context.Canceled
+	}
+	if b.committedSubscription == nil {
+		subscription, err := b.subscriber.Subscribe(ctx, b.committedSubject, b.handleRecordCommittedMessage)
+		if err != nil {
+			b.mu.Unlock()
+			return nil, err
+		}
+		b.committedSubscription = subscription
+	}
+	b.nextID++
+	id := b.nextID
+	b.committedHandlers[id] = handler
+	b.mu.Unlock()
+	return &subscriberBusSubscription{close: func() error { return b.closeCommittedSubscription(id) }}, nil
 }
 
 func (b *SubscriberBus) SubscribeTimeSeriesRowsChanged(ctx context.Context, handler coreeventbus.TimeSeriesRowsChangedHandler) (coreeventbus.Subscription, error) {
@@ -202,6 +245,24 @@ func (b *SubscriberBus) handleRecordMessage(ctx context.Context, msg *transport.
 	return handlerErr
 }
 
+func (b *SubscriberBus) handleRecordCommittedMessage(ctx context.Context, msg *transport.Message) error {
+	event := &pb.RecordRowsCommittedEvent{}
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(msg.Data, event); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	handlers := make([]coreeventbus.RecordRowsCommittedHandler, 0, len(b.committedHandlers))
+	for _, handler := range b.committedHandlers {
+		handlers = append(handlers, handler)
+	}
+	b.mu.Unlock()
+	var handlerErr error
+	for _, handler := range handlers {
+		handlerErr = errors.Join(handlerErr, handler(ctx, event))
+	}
+	return handlerErr
+}
+
 func (b *SubscriberBus) Close() error {
 	if b == nil {
 		return nil
@@ -209,11 +270,14 @@ func (b *SubscriberBus) Close() error {
 	b.mu.Lock()
 	timeSeriesSubscription := b.timeSeriesSubscription
 	recordSubscription := b.recordSubscription
+	committedSubscription := b.committedSubscription
 	b.timeSeriesSubscription = nil
 	b.recordSubscription = nil
+	b.committedSubscription = nil
 	b.subscribeClosed = true
 	b.timeSeriesHandlers = nil
 	b.recordHandlers = nil
+	b.committedHandlers = nil
 	b.mu.Unlock()
 	var firstErr error
 	if timeSeriesSubscription != nil {
@@ -226,10 +290,30 @@ func (b *SubscriberBus) Close() error {
 			firstErr = err
 		}
 	}
+	if committedSubscription != nil {
+		if err := committedSubscription.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 	if err := b.ProducerBus.Close(); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	return firstErr
+}
+
+func (b *SubscriberBus) closeCommittedSubscription(id uint64) error {
+	b.mu.Lock()
+	delete(b.committedHandlers, id)
+	var subscription transport.Subscription
+	if len(b.committedHandlers) == 0 && b.committedSubscription != nil {
+		subscription = b.committedSubscription
+		b.committedSubscription = nil
+	}
+	b.mu.Unlock()
+	if subscription != nil {
+		return subscription.Close()
+	}
+	return nil
 }
 
 func (b *SubscriberBus) closeTimeSeriesSubscription(id uint64) error {

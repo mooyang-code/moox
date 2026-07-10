@@ -294,6 +294,11 @@ func (s *Service) UpsertRecordRows(ctx context.Context, req *pb.UpsertRecordRows
 		}
 		return &pb.UpsertRecordRowsRsp{RetInfo: response.Error(code, err)}, nil
 	}
+	if event != nil && s.events != nil {
+		if publishErr := s.events.PublishRecordRowsCommitted(ctx, event); publishErr != nil {
+			s.reportViewError(ctx, "record_rows_committed_event", publishErr)
+		}
+	}
 	return &pb.UpsertRecordRowsRsp{RetInfo: response.Success("success"), Rows: event.GetRows()}, nil
 }
 

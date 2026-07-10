@@ -11,11 +11,13 @@ import (
 
 type TimeSeriesRowsChangedHandler func(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error
 type RecordRowsChangedHandler func(ctx context.Context, event *pb.RecordRowsChangedEvent) error
+type RecordRowsCommittedHandler func(ctx context.Context, event *pb.RecordRowsCommittedEvent) error
 
 // Publisher publishes committed PrimaryStore changes.
 type Publisher interface {
 	PublishTimeSeriesRowsChanged(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error
 	PublishRecordRowsChanged(ctx context.Context, event *pb.RecordRowsChangedEvent) error
+	PublishRecordRowsCommitted(ctx context.Context, event *pb.RecordRowsCommittedEvent) error
 }
 
 // Subscription 表示一个已建立的事件订阅。
@@ -27,6 +29,7 @@ type Subscription interface {
 type Subscriber interface {
 	SubscribeTimeSeriesRowsChanged(ctx context.Context, handler TimeSeriesRowsChangedHandler) (Subscription, error)
 	SubscribeRecordRowsChanged(ctx context.Context, handler RecordRowsChangedHandler) (Subscription, error)
+	SubscribeRecordRowsCommitted(ctx context.Context, handler RecordRowsCommittedHandler) (Subscription, error)
 }
 
 // Bus combines capabilities for bootstrap-owned transports.
@@ -43,6 +46,7 @@ type MemoryBus struct {
 	nextID             uint64
 	timeSeriesHandlers map[uint64]TimeSeriesRowsChangedHandler
 	recordHandlers     map[uint64]RecordRowsChangedHandler
+	committedHandlers  map[uint64]RecordRowsCommittedHandler
 	inFlight           int
 	closed             bool
 }
@@ -51,9 +55,27 @@ func NewMemoryBus() *MemoryBus {
 	bus := &MemoryBus{
 		timeSeriesHandlers: make(map[uint64]TimeSeriesRowsChangedHandler),
 		recordHandlers:     make(map[uint64]RecordRowsChangedHandler),
+		committedHandlers:  make(map[uint64]RecordRowsCommittedHandler),
 	}
 	bus.closeCond = sync.NewCond(&bus.mu)
 	return bus
+}
+
+func (b *MemoryBus) SubscribeRecordRowsCommitted(ctx context.Context, handler RecordRowsCommittedHandler) (Subscription, error) {
+	_ = ctx
+	if handler == nil {
+		return noopSubscription{}, nil
+	}
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return nil, context.Canceled
+	}
+	b.nextID++
+	id := b.nextID
+	b.committedHandlers[id] = handler
+	b.mu.Unlock()
+	return &memorySubscription{close: func() { b.deleteCommittedHandler(id) }}, nil
 }
 
 func (b *MemoryBus) SubscribeTimeSeriesRowsChanged(ctx context.Context, handler TimeSeriesRowsChangedHandler) (Subscription, error) {
@@ -136,11 +158,32 @@ func (b *MemoryBus) PublishRecordRowsChanged(ctx context.Context, event *pb.Reco
 	return err
 }
 
+func (b *MemoryBus) PublishRecordRowsCommitted(ctx context.Context, event *pb.RecordRowsCommittedEvent) error {
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return context.Canceled
+	}
+	handlers := make([]RecordRowsCommittedHandler, 0, len(b.committedHandlers))
+	for _, handler := range b.committedHandlers {
+		handlers = append(handlers, handler)
+	}
+	b.inFlight++
+	b.mu.Unlock()
+	defer b.finishPublish()
+	var err error
+	for _, handler := range handlers {
+		err = errors.Join(err, handler(ctx, cloneRecordRowsCommittedEvent(event)))
+	}
+	return err
+}
+
 func (b *MemoryBus) Close() error {
 	b.mu.Lock()
 	b.closed = true
 	b.timeSeriesHandlers = nil
 	b.recordHandlers = nil
+	b.committedHandlers = nil
 	for b.inFlight > 0 {
 		b.closeCond.Wait()
 	}
@@ -169,6 +212,12 @@ func (b *MemoryBus) deleteRecordHandler(id uint64) {
 	b.mu.Unlock()
 }
 
+func (b *MemoryBus) deleteCommittedHandler(id uint64) {
+	b.mu.Lock()
+	delete(b.committedHandlers, id)
+	b.mu.Unlock()
+}
+
 func cloneTimeSeriesRowsChangedEvent(event *pb.TimeSeriesRowsChangedEvent) *pb.TimeSeriesRowsChangedEvent {
 	if event == nil {
 		return nil
@@ -181,6 +230,13 @@ func cloneRecordRowsChangedEvent(event *pb.RecordRowsChangedEvent) *pb.RecordRow
 		return nil
 	}
 	return proto.Clone(event).(*pb.RecordRowsChangedEvent)
+}
+
+func cloneRecordRowsCommittedEvent(event *pb.RecordRowsCommittedEvent) *pb.RecordRowsCommittedEvent {
+	if event == nil {
+		return nil
+	}
+	return proto.Clone(event).(*pb.RecordRowsCommittedEvent)
 }
 
 // memorySubscription 表示 MemoryBus 返回的订阅句柄。

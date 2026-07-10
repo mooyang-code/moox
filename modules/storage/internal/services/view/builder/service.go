@@ -23,14 +23,15 @@ type Service struct {
 	batchOpts  BatchOptions
 	maxWorkers int
 
-	mu                sync.Mutex
-	runCtx            context.Context
-	cancel            context.CancelFunc
-	timeSeriesSub     eventbus.Subscription
-	recordSub         eventbus.Subscription
-	timeSeriesBatcher *batcher[timeSeriesDeriveItem]
-	recordBatcher     *batcher[recordDeriveItem]
-	wg                sync.WaitGroup
+	mu                 sync.Mutex
+	runCtx             context.Context
+	cancel             context.CancelFunc
+	timeSeriesSub      eventbus.Subscription
+	recordSub          eventbus.Subscription
+	recordCommittedSub eventbus.Subscription
+	timeSeriesBatcher  *batcher[timeSeriesDeriveItem]
+	recordBatcher      *batcher[recordDeriveItem]
+	wg                 sync.WaitGroup
 }
 
 type timeSeriesDeriveItem struct {
@@ -144,10 +145,18 @@ func (s *Service) Start(ctx context.Context) error {
 		s.clearStartedState(cancel)
 		return err
 	}
+	recordCommittedSub, err := s.events.SubscribeRecordRowsCommitted(ctx, s.enqueueRecordCommitted)
+	if err != nil {
+		_ = timeSeriesSub.Close()
+		_ = recordSub.Close()
+		s.clearStartedState(cancel)
+		return err
+	}
 
 	s.mu.Lock()
 	s.timeSeriesSub = timeSeriesSub
 	s.recordSub = recordSub
+	s.recordCommittedSub = recordCommittedSub
 	s.mu.Unlock()
 	return nil
 }
@@ -161,6 +170,7 @@ func (s *Service) Close() error {
 	cancel := s.cancel
 	timeSeriesSub := s.timeSeriesSub
 	recordSub := s.recordSub
+	recordCommittedSub := s.recordCommittedSub
 	if cancel == nil {
 		s.mu.Unlock()
 		return nil
@@ -174,6 +184,9 @@ func (s *Service) Close() error {
 	if recordSub != nil {
 		err = errors.Join(err, recordSub.Close())
 	}
+	if recordCommittedSub != nil {
+		err = errors.Join(err, recordCommittedSub.Close())
+	}
 	cancel()
 	s.wg.Wait()
 
@@ -182,10 +195,24 @@ func (s *Service) Close() error {
 	s.runCtx = nil
 	s.timeSeriesSub = nil
 	s.recordSub = nil
+	s.recordCommittedSub = nil
 	s.timeSeriesBatcher = nil
 	s.recordBatcher = nil
 	s.mu.Unlock()
 	return err
+}
+
+func (s *Service) enqueueRecordCommitted(ctx context.Context, event *pb.RecordRowsCommittedEvent) error {
+	if event == nil {
+		return nil
+	}
+	keys := make([]*pb.RecordKey, 0, len(event.GetRows()))
+	for _, row := range event.GetRows() {
+		if row != nil && row.GetKey() != nil {
+			keys = append(keys, proto.Clone(row.GetKey()).(*pb.RecordKey))
+		}
+	}
+	return s.enqueueRecord(ctx, &pb.RecordRowsChangedEvent{Keys: keys, EventId: event.GetEventId(), EventTime: event.GetCommittedAt()})
 }
 
 func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {

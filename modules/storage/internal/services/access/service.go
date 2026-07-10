@@ -36,6 +36,8 @@ type Service struct {
 	report            ViewErrorReporter
 	recordVersionMu   sync.Mutex
 	lastRecordVersion time.Time
+	recordAccessMu    sync.Mutex
+	recordAccess      map[string]*recordAccessSnapshot
 }
 
 var (
@@ -89,6 +91,7 @@ func NewServiceWithOptions(opts Options) *Service {
 		primary:        primaryClient,
 		events:         events,
 		report:         reporter,
+		recordAccess:   make(map[string]*recordAccessSnapshot),
 	}
 	return svc
 }
@@ -117,7 +120,22 @@ func (s *Service) refreshMetadataCache(ctx context.Context) error {
 // Close releases dependencies owned by the access service. Event transport is
 // bootstrap-owned and is deliberately not closed here.
 func (s *Service) Close() error {
+	if s == nil {
+		return nil
+	}
 	var firstErr error
+	s.recordAccessMu.Lock()
+	snapshotIDs := make([]string, 0, len(s.recordAccess))
+	for snapshotID := range s.recordAccess {
+		snapshotIDs = append(snapshotIDs, snapshotID)
+	}
+	s.recordAccess = nil
+	s.recordAccessMu.Unlock()
+	for _, snapshotID := range snapshotIDs {
+		if err := s.primary.CloseRecordSnapshot(context.Background(), &pb.CloseRecordSnapshotReq{SnapshotId: snapshotID}); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 	if closer, ok := s.primary.(interface{ Close() error }); ok {
 		if err := closer.Close(); err != nil && firstErr == nil {
 			firstErr = err

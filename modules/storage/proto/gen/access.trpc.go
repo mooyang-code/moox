@@ -162,6 +162,20 @@ type AccessScanService interface {
 	ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq) (*ScanTimeSeriesRowsRsp, error)
 	// ScanRecordRows ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
 	ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq) (*ScanRecordRowsRsp, error)
+
+	OpenRecordAccessSnapshot(ctx context.Context, req *OpenRecordAccessSnapshotReq) (*OpenRecordAccessSnapshotRsp, error)
+
+	ReadRecordAccessSnapshot(ctx context.Context, req *ReadRecordAccessSnapshotReq) (*ReadRecordAccessSnapshotRsp, error)
+
+	ScanRecordAccessSnapshot(ctx context.Context, req *ScanRecordAccessSnapshotReq) (*ScanRecordAccessSnapshotRsp, error)
+
+	RenewRecordAccessSnapshot(ctx context.Context, req *RenewRecordAccessSnapshotReq) (*RenewRecordAccessSnapshotRsp, error)
+
+	CloseRecordAccessSnapshot(ctx context.Context, req *CloseRecordAccessSnapshotReq) (*CloseRecordAccessSnapshotRsp, error)
+
+	RecordAccessWatermark(ctx context.Context, req *RecordAccessWatermarkReq) (*RecordAccessWatermarkRsp, error)
+
+	ScanRecordAccessJournal(ctx context.Context, req *ScanRecordAccessJournalReq) (*ScanRecordAccessJournalRsp, error)
 }
 
 func AccessScanService_ScanTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -200,6 +214,132 @@ func AccessScanService_ScanRecordRows_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
+func AccessScanService_OpenRecordAccessSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &OpenRecordAccessSnapshotReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(AccessScanService).OpenRecordAccessSnapshot(ctx, reqbody.(*OpenRecordAccessSnapshotReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func AccessScanService_ReadRecordAccessSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReadRecordAccessSnapshotReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(AccessScanService).ReadRecordAccessSnapshot(ctx, reqbody.(*ReadRecordAccessSnapshotReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func AccessScanService_ScanRecordAccessSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ScanRecordAccessSnapshotReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(AccessScanService).ScanRecordAccessSnapshot(ctx, reqbody.(*ScanRecordAccessSnapshotReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func AccessScanService_RenewRecordAccessSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RenewRecordAccessSnapshotReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(AccessScanService).RenewRecordAccessSnapshot(ctx, reqbody.(*RenewRecordAccessSnapshotReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func AccessScanService_CloseRecordAccessSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CloseRecordAccessSnapshotReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(AccessScanService).CloseRecordAccessSnapshot(ctx, reqbody.(*CloseRecordAccessSnapshotReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func AccessScanService_RecordAccessWatermark_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RecordAccessWatermarkReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(AccessScanService).RecordAccessWatermark(ctx, reqbody.(*RecordAccessWatermarkReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func AccessScanService_ScanRecordAccessJournal_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ScanRecordAccessJournalReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(AccessScanService).ScanRecordAccessJournal(ctx, reqbody.(*ScanRecordAccessJournalReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // AccessScanServer_ServiceDesc descriptor for server.RegisterService.
 var AccessScanServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.AccessScan",
@@ -212,6 +352,34 @@ var AccessScanServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.AccessScan/ScanRecordRows",
 			Func: AccessScanService_ScanRecordRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.AccessScan/OpenRecordAccessSnapshot",
+			Func: AccessScanService_OpenRecordAccessSnapshot_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.AccessScan/ReadRecordAccessSnapshot",
+			Func: AccessScanService_ReadRecordAccessSnapshot_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.AccessScan/ScanRecordAccessSnapshot",
+			Func: AccessScanService_ScanRecordAccessSnapshot_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.AccessScan/RenewRecordAccessSnapshot",
+			Func: AccessScanService_RenewRecordAccessSnapshot_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.AccessScan/CloseRecordAccessSnapshot",
+			Func: AccessScanService_CloseRecordAccessSnapshot_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.AccessScan/RecordAccessWatermark",
+			Func: AccessScanService_RecordAccessWatermark_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.AccessScan/ScanRecordAccessJournal",
+			Func: AccessScanService_ScanRecordAccessJournal_Handler,
 		},
 	},
 }
@@ -260,6 +428,27 @@ func (s *UnimplementedAccessScan) ScanTimeSeriesRows(ctx context.Context, req *S
 // ScanRecordRows ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
 func (s *UnimplementedAccessScan) ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq) (*ScanRecordRowsRsp, error) {
 	return nil, errors.New("rpc ScanRecordRows of service AccessScan is not implemented")
+}
+func (s *UnimplementedAccessScan) OpenRecordAccessSnapshot(ctx context.Context, req *OpenRecordAccessSnapshotReq) (*OpenRecordAccessSnapshotRsp, error) {
+	return nil, errors.New("rpc OpenRecordAccessSnapshot of service AccessScan is not implemented")
+}
+func (s *UnimplementedAccessScan) ReadRecordAccessSnapshot(ctx context.Context, req *ReadRecordAccessSnapshotReq) (*ReadRecordAccessSnapshotRsp, error) {
+	return nil, errors.New("rpc ReadRecordAccessSnapshot of service AccessScan is not implemented")
+}
+func (s *UnimplementedAccessScan) ScanRecordAccessSnapshot(ctx context.Context, req *ScanRecordAccessSnapshotReq) (*ScanRecordAccessSnapshotRsp, error) {
+	return nil, errors.New("rpc ScanRecordAccessSnapshot of service AccessScan is not implemented")
+}
+func (s *UnimplementedAccessScan) RenewRecordAccessSnapshot(ctx context.Context, req *RenewRecordAccessSnapshotReq) (*RenewRecordAccessSnapshotRsp, error) {
+	return nil, errors.New("rpc RenewRecordAccessSnapshot of service AccessScan is not implemented")
+}
+func (s *UnimplementedAccessScan) CloseRecordAccessSnapshot(ctx context.Context, req *CloseRecordAccessSnapshotReq) (*CloseRecordAccessSnapshotRsp, error) {
+	return nil, errors.New("rpc CloseRecordAccessSnapshot of service AccessScan is not implemented")
+}
+func (s *UnimplementedAccessScan) RecordAccessWatermark(ctx context.Context, req *RecordAccessWatermarkReq) (*RecordAccessWatermarkRsp, error) {
+	return nil, errors.New("rpc RecordAccessWatermark of service AccessScan is not implemented")
+}
+func (s *UnimplementedAccessScan) ScanRecordAccessJournal(ctx context.Context, req *ScanRecordAccessJournalReq) (*ScanRecordAccessJournalRsp, error) {
+	return nil, errors.New("rpc ScanRecordAccessJournal of service AccessScan is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -397,6 +586,20 @@ type AccessScanClientProxy interface {
 	ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq, opts ...client.Option) (rsp *ScanTimeSeriesRowsRsp, err error)
 	// ScanRecordRows ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
 	ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq, opts ...client.Option) (rsp *ScanRecordRowsRsp, err error)
+
+	OpenRecordAccessSnapshot(ctx context.Context, req *OpenRecordAccessSnapshotReq, opts ...client.Option) (rsp *OpenRecordAccessSnapshotRsp, err error)
+
+	ReadRecordAccessSnapshot(ctx context.Context, req *ReadRecordAccessSnapshotReq, opts ...client.Option) (rsp *ReadRecordAccessSnapshotRsp, err error)
+
+	ScanRecordAccessSnapshot(ctx context.Context, req *ScanRecordAccessSnapshotReq, opts ...client.Option) (rsp *ScanRecordAccessSnapshotRsp, err error)
+
+	RenewRecordAccessSnapshot(ctx context.Context, req *RenewRecordAccessSnapshotReq, opts ...client.Option) (rsp *RenewRecordAccessSnapshotRsp, err error)
+
+	CloseRecordAccessSnapshot(ctx context.Context, req *CloseRecordAccessSnapshotReq, opts ...client.Option) (rsp *CloseRecordAccessSnapshotRsp, err error)
+
+	RecordAccessWatermark(ctx context.Context, req *RecordAccessWatermarkReq, opts ...client.Option) (rsp *RecordAccessWatermarkRsp, err error)
+
+	ScanRecordAccessJournal(ctx context.Context, req *ScanRecordAccessJournalReq, opts ...client.Option) (rsp *ScanRecordAccessJournalRsp, err error)
 }
 
 type AccessScanClientProxyImpl struct {
@@ -442,6 +645,146 @@ func (c *AccessScanClientProxyImpl) ScanRecordRows(ctx context.Context, req *Sca
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ScanRecordRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *AccessScanClientProxyImpl) OpenRecordAccessSnapshot(ctx context.Context, req *OpenRecordAccessSnapshotReq, opts ...client.Option) (*OpenRecordAccessSnapshotRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.AccessScan/OpenRecordAccessSnapshot")
+	msg.WithCalleeServiceName(AccessScanServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("AccessScan")
+	msg.WithCalleeMethod("OpenRecordAccessSnapshot")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &OpenRecordAccessSnapshotRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *AccessScanClientProxyImpl) ReadRecordAccessSnapshot(ctx context.Context, req *ReadRecordAccessSnapshotReq, opts ...client.Option) (*ReadRecordAccessSnapshotRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.AccessScan/ReadRecordAccessSnapshot")
+	msg.WithCalleeServiceName(AccessScanServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("AccessScan")
+	msg.WithCalleeMethod("ReadRecordAccessSnapshot")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReadRecordAccessSnapshotRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *AccessScanClientProxyImpl) ScanRecordAccessSnapshot(ctx context.Context, req *ScanRecordAccessSnapshotReq, opts ...client.Option) (*ScanRecordAccessSnapshotRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.AccessScan/ScanRecordAccessSnapshot")
+	msg.WithCalleeServiceName(AccessScanServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("AccessScan")
+	msg.WithCalleeMethod("ScanRecordAccessSnapshot")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ScanRecordAccessSnapshotRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *AccessScanClientProxyImpl) RenewRecordAccessSnapshot(ctx context.Context, req *RenewRecordAccessSnapshotReq, opts ...client.Option) (*RenewRecordAccessSnapshotRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.AccessScan/RenewRecordAccessSnapshot")
+	msg.WithCalleeServiceName(AccessScanServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("AccessScan")
+	msg.WithCalleeMethod("RenewRecordAccessSnapshot")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RenewRecordAccessSnapshotRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *AccessScanClientProxyImpl) CloseRecordAccessSnapshot(ctx context.Context, req *CloseRecordAccessSnapshotReq, opts ...client.Option) (*CloseRecordAccessSnapshotRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.AccessScan/CloseRecordAccessSnapshot")
+	msg.WithCalleeServiceName(AccessScanServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("AccessScan")
+	msg.WithCalleeMethod("CloseRecordAccessSnapshot")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CloseRecordAccessSnapshotRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *AccessScanClientProxyImpl) RecordAccessWatermark(ctx context.Context, req *RecordAccessWatermarkReq, opts ...client.Option) (*RecordAccessWatermarkRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.AccessScan/RecordAccessWatermark")
+	msg.WithCalleeServiceName(AccessScanServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("AccessScan")
+	msg.WithCalleeMethod("RecordAccessWatermark")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RecordAccessWatermarkRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *AccessScanClientProxyImpl) ScanRecordAccessJournal(ctx context.Context, req *ScanRecordAccessJournalReq, opts ...client.Option) (*ScanRecordAccessJournalRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.AccessScan/ScanRecordAccessJournal")
+	msg.WithCalleeServiceName(AccessScanServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("AccessScan")
+	msg.WithCalleeMethod("ScanRecordAccessJournal")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ScanRecordAccessJournalRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

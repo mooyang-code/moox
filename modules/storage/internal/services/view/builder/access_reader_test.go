@@ -69,3 +69,25 @@ func (p *scanAccessProxy) ScanTimeSeriesRows(_ context.Context, req *pb.ScanTime
 func (p *scanAccessProxy) ScanRecordRows(context.Context, *pb.ScanRecordRowsReq, ...client.Option) (*pb.ScanRecordRowsRsp, error) {
 	return nil, errors.New("not used")
 }
+
+func (p *scanAccessProxy) OpenRecordAccessSnapshot(context.Context, *pb.OpenRecordAccessSnapshotReq, ...client.Option) (*pb.OpenRecordAccessSnapshotRsp, error) {
+	return nil, errors.New("not used")
+}
+func (p *scanAccessProxy) ReadRecordAccessSnapshot(context.Context, *pb.ReadRecordAccessSnapshotReq, ...client.Option) (*pb.ReadRecordAccessSnapshotRsp, error) {
+	return nil, errors.New("not used")
+}
+func (p *scanAccessProxy) ScanRecordAccessSnapshot(context.Context, *pb.ScanRecordAccessSnapshotReq, ...client.Option) (*pb.ScanRecordAccessSnapshotRsp, error) {
+	return nil, errors.New("not used")
+}
+func (p *scanAccessProxy) RenewRecordAccessSnapshot(context.Context, *pb.RenewRecordAccessSnapshotReq, ...client.Option) (*pb.RenewRecordAccessSnapshotRsp, error) {
+	return nil, errors.New("not used")
+}
+func (p *scanAccessProxy) CloseRecordAccessSnapshot(context.Context, *pb.CloseRecordAccessSnapshotReq, ...client.Option) (*pb.CloseRecordAccessSnapshotRsp, error) {
+	return nil, errors.New("not used")
+}
+func (p *scanAccessProxy) RecordAccessWatermark(context.Context, *pb.RecordAccessWatermarkReq, ...client.Option) (*pb.RecordAccessWatermarkRsp, error) {
+	return nil, errors.New("not used")
+}
+func (p *scanAccessProxy) ScanRecordAccessJournal(context.Context, *pb.ScanRecordAccessJournalReq, ...client.Option) (*pb.ScanRecordAccessJournalRsp, error) {
+	return nil, errors.New("not used")
+}

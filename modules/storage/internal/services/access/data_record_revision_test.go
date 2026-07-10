@@ -52,6 +52,31 @@ func TestReadRecordRowsHistoryUsesNumericRevisionRange(t *testing.T) {
 	}
 }
 
+func TestRecordAccessSnapshotBindsDatasetScope(t *testing.T) {
+	primary := &recordPrimary{current: []*pb.RecordRow{{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1"}}}}
+	service := &Service{primary: primary, router: router.NewResolver(fakeRouteReader{})}
+	opened, err := service.OpenRecordAccessSnapshot(context.Background(), &pb.OpenRecordAccessSnapshotReq{Scope: &pb.RecordAccessScope{SpaceId: "crypto", DatasetIds: []string{"news"}}, Mode: pb.RecordReadMode_RECORD_READ_MODE_CURRENT})
+	if err != nil || opened.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("open = %+v err=%v", opened, err)
+	}
+	read, err := service.ReadRecordAccessSnapshot(context.Background(), &pb.ReadRecordAccessSnapshotReq{SnapshotId: opened.GetSnapshotId(), DatasetId: "other", RecordIds: []string{"news-1"}})
+	if err != nil || read.GetRetInfo().GetCode() != pb.ErrorCode_NOT_FOUND {
+		t.Fatalf("out-of-scope read = %+v err=%v", read, err)
+	}
+	if _, err := service.CloseRecordAccessSnapshot(context.Background(), &pb.CloseRecordAccessSnapshotReq{SnapshotId: opened.GetSnapshotId()}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpsertRecordRowsReturnsSuccessWhenCommittedEventPublishFails(t *testing.T) {
+	reported := false
+	service := &Service{primary: &recordPrimary{event: &pb.RecordRowsCommittedEvent{Rows: []*pb.RecordRow{{Revision: 1}}}}, router: router.NewResolver(fakeRouteReader{}), events: failingCommittedPublisher{}, report: func(context.Context, string, error) { reported = true }}
+	rsp, err := service.UpsertRecordRows(context.Background(), &pb.UpsertRecordRowsReq{RequestId: "request-1", Mutations: []*pb.RecordMutation{{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1"}}}})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || !reported {
+		t.Fatalf("response=%+v err=%v reported=%v", rsp, err, reported)
+	}
+}
+
 func TestUpsertRecordRowsNeverAcceptsCallerRevisionMetadata(t *testing.T) {
 	service := &Service{primary: &recordPrimary{event: &pb.RecordRowsCommittedEvent{}}, router: router.NewResolver(fakeRouteReader{}), validator: schema.NewValidator(recordMetadata{})}
 	rsp, err := service.UpsertRecordRows(context.Background(), &pb.UpsertRecordRowsReq{RequestId: "request-1", Mutations: []*pb.RecordMutation{{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1", Version: "legacy"}}}})
@@ -123,6 +148,18 @@ type recordMetadata struct{}
 
 func (recordMetadata) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
 	return &pb.Dataset{DatasetId: "news", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"}, nil
+}
+
+type failingCommittedPublisher struct{}
+
+func (failingCommittedPublisher) PublishTimeSeriesRowsChanged(context.Context, *pb.TimeSeriesRowsChangedEvent) error {
+	return nil
+}
+func (failingCommittedPublisher) PublishRecordRowsChanged(context.Context, *pb.RecordRowsChangedEvent) error {
+	return nil
+}
+func (failingCommittedPublisher) PublishRecordRowsCommitted(context.Context, *pb.RecordRowsCommittedEvent) error {
+	return fmt.Errorf("publish failed")
 }
 func (recordMetadata) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	return nil, &pb.PageResult{}, nil
