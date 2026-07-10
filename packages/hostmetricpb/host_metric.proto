@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package trpc.moox.hostagent;
+
+option go_package = "github.com/mooyang-code/moox/packages/hostmetricpb;hostmetricpb";
+
+message HostMetric { HostSnapshot snapshot = 1; }
+message HostSnapshot {
+  CpuMetric cpu = 1;
+  MemoryMetric memory = 2;
+  repeated FilesystemMetric filesystems = 3;
+  repeated DiskMetric disks = 4;
+  repeated NetworkMetric networks = 5;
+  repeated CollectorStatus collectors = 6;
+}
+message CpuMetric {
+  uint32 logical_cores = 1;
+  double usage_percent = 2;
+  bool usage_available = 3;
+}
+message MemoryMetric {
+  uint64 total_bytes = 1;
+  uint64 used_bytes = 2;
+  uint64 available_bytes = 3;
+  double usage_percent = 4;
+}
+message FilesystemMetric {
+  string device = 1;
+  string mountpoint = 2;
+  string fs_type = 3;
+  uint64 total_bytes = 4;
+  uint64 used_bytes = 5;
+  uint64 available_bytes = 6;
+  double usage_percent = 7;
+  bool read_only = 8;
+}
+message DiskMetric {
+  string device = 1;
+  uint64 read_bytes_total = 2;
+  uint64 write_bytes_total = 3;
+  uint64 read_ops_total = 4;
+  uint64 write_ops_total = 5;
+  uint64 io_time_ms_total = 6;
+  double read_bytes_per_second = 7;
+  double write_bytes_per_second = 8;
+  double read_iops = 9;
+  double write_iops = 10;
+  double utilization_percent = 11;
+  bool rate_available = 12;
+}
+message NetworkMetric {
+  string device = 1;
+  string operstate = 2;
+  uint64 receive_bytes_total = 3;
+  uint64 transmit_bytes_total = 4;
+  uint64 receive_errors_total = 5;
+  uint64 transmit_errors_total = 6;
+  uint64 receive_dropped_total = 7;
+  uint64 transmit_dropped_total = 8;
+  double receive_bytes_per_second = 9;
+  double transmit_bytes_per_second = 10;
+  bool rate_available = 11;
+}
+message CollectorStatus {
+  string collector = 1;
+  bool success = 2;
+  string error = 3;
+}

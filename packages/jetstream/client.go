@@ -3,6 +3,7 @@ package jetstream
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -29,8 +30,26 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("%w: %w", ErrConnection, err)
 	}
 	cfg = cfg.normalized()
+	if (cfg.Credentials != "") && (cfg.Username != "" || cfg.Password != "") {
+		return nil, fmt.Errorf("%w: configure either username/password or credentials, not both", ErrConnection)
+	}
+	if cfg.Password != "" && cfg.Username == "" {
+		return nil, fmt.Errorf("%w: username is required when password is configured", ErrConnection)
+	}
 	if len(cfg.URLs) == 0 || strings.TrimSpace(strings.Join(cfg.URLs, ",")) == "" {
 		return nil, fmt.Errorf("%w: at least one NATS URL is required", ErrConnection)
+	}
+	for _, rawURL := range cfg.URLs {
+		parsed, err := url.Parse(strings.TrimSpace(rawURL))
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return nil, fmt.Errorf("%w: invalid NATS URL %q", ErrConnection, rawURL)
+		}
+		if !isLoopbackHost(parsed.Hostname()) && parsed.Scheme != "tls" {
+			return nil, fmt.Errorf("%w: non-loopback NATS URL %q must use tls", ErrConnection, rawURL)
+		}
+		if !isLoopbackHost(parsed.Hostname()) && cfg.TLSCAFile == "" {
+			return nil, fmt.Errorf("%w: non-loopback NATS URL %q requires TLS CA", ErrConnection, rawURL)
+		}
 	}
 	opts := make([]nats.Option, 0, 12)
 	if cfg.Name != "" {
@@ -54,11 +73,16 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.TLSCAFile != "" || cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
 		opts = append(opts, nats.Secure())
 	}
+	reconnectBuffer := cfg.ReconnectBufferBytes
+	if reconnectBuffer == 0 {
+		reconnectBuffer = -1
+	}
 	opts = append(opts,
 		nats.Timeout(cfg.ConnectTimeout),
 		nats.RetryOnFailedConnect(true),
 		nats.ReconnectWait(cfg.ReconnectWait),
 		nats.MaxReconnects(cfg.MaxReconnects),
+		nats.ReconnectBufSize(reconnectBuffer),
 	)
 
 	connectCtx := ctx
@@ -112,6 +136,11 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("%w: create jetstream context: %w", ErrConnection, err)
 	}
 	return &Client{nc: res.nc, js: js, cfg: cfg}, nil
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(host)
+	return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
 }
 
 // Close closes the client connection. Durable consumers are intentionally not deleted.

@@ -85,7 +85,7 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 
 func TestTopicCoverageAndKVTTL(t *testing.T) {
 	c := config.Default()
-	if _, _, err := TopicStream(c, "moox.metrics.snapshot.reported.v1"); err != nil {
+	if _, _, err := TopicStream(c, "moox.metrics.host.reported.v1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Validate(); err != nil {
@@ -95,6 +95,44 @@ func TestTopicCoverageAndKVTTL(t *testing.T) {
 	c.Topics = append(c.Topics, config.TopicConfig{Topic: "moox.metrics.ambiguous.v1", Enabled: true, PayloadVersion: 1})
 	if err := c.Validate(); err == nil {
 		t.Fatal("ambiguous topic accepted")
+	}
+}
+
+func TestReconcileDeclaredConsumers(t *testing.T) {
+	c := config.Default()
+	for i := range c.Streams {
+		c.Streams[i].MaxBytes = 1 << 20
+	}
+	c.Broker.StoreDir = t.TempDir()
+	c.Broker.Port = freePort(t)
+	b, err := broker.New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := b.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Shutdown(context.Background())
+	nc, err := nats.Connect(b.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	js, _ := nc.JetStream()
+	r, _ := New(js, c)
+	if _, err := r.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range c.Consumers {
+		info, err := js.ConsumerInfo(spec.Stream, spec.Durable)
+		if err != nil {
+			t.Fatalf("consumer %s/%s: %v", spec.Stream, spec.Durable, err)
+		}
+		if info.Config.FilterSubject != spec.FilterSubject || info.Config.MaxDeliver != spec.MaxDeliver {
+			t.Fatalf("consumer %s/%s config=%+v", spec.Stream, spec.Durable, info.Config)
+		}
 	}
 }
 

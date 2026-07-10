@@ -330,3 +330,72 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_rule_channels_key ON t_monit
 CREATE TRIGGER IF NOT EXISTS trg_monitor_metric_services_mtime AFTER UPDATE ON t_monitor_metric_services FOR EACH ROW WHEN NEW.c_mtime = OLD.c_mtime BEGIN UPDATE t_monitor_metric_services SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id; END;
 CREATE TRIGGER IF NOT EXISTS trg_monitor_metric_series_mtime AFTER UPDATE ON t_monitor_metric_series FOR EACH ROW WHEN NEW.c_mtime = OLD.c_mtime BEGIN UPDATE t_monitor_metric_series SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id; END;
 CREATE TRIGGER IF NOT EXISTS trg_monitor_metric_latest_mtime AFTER UPDATE ON t_monitor_metric_latest FOR EACH ROW WHEN NEW.c_mtime = OLD.c_mtime BEGIN UPDATE t_monitor_metric_latest SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id; END;
+
+CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
+  c_agent_id TEXT PRIMARY KEY,
+  c_hostname TEXT NOT NULL DEFAULT '',
+  c_boot_id TEXT NOT NULL DEFAULT '',
+  c_first_seen_at DATETIME NOT NULL,
+  c_last_seen_at DATETIME NOT NULL,
+  c_is_archived INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS t_monitor_host_inbox (
+  c_message_id TEXT PRIMARY KEY,
+  c_agent_id TEXT NOT NULL,
+  c_stream_sequence INTEGER NOT NULL DEFAULT 0,
+  c_payload_sha256 TEXT NOT NULL,
+  c_received_at DATETIME NOT NULL,
+  c_status TEXT NOT NULL DEFAULT 'projected'
+);
+CREATE TABLE IF NOT EXISTS t_monitor_host_latest (
+  c_agent_id TEXT PRIMARY KEY,
+  c_occurred_at DATETIME NOT NULL,
+  c_payload BLOB NOT NULL,
+  c_updated_at DATETIME NOT NULL
+);
+CREATE TABLE IF NOT EXISTS t_monitor_host_history_outbox (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_agent_id TEXT NOT NULL,
+  c_dataset_id TEXT NOT NULL,
+  c_bucket_start DATETIME NOT NULL,
+  c_payload BLOB NOT NULL,
+  c_status TEXT NOT NULL DEFAULT 'pending',
+  c_attempts INTEGER NOT NULL DEFAULT 0,
+  c_next_attempt_at DATETIME NOT NULL,
+  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS t_monitor_host_alert_rules (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_rule_id TEXT NOT NULL,
+  c_metric TEXT NOT NULL,
+  c_threshold REAL NOT NULL,
+  c_enabled INTEGER NOT NULL DEFAULT 1,
+  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS t_monitor_host_alert_states (
+  c_agent_id TEXT NOT NULL,
+  c_rule_id TEXT NOT NULL,
+  c_status TEXT NOT NULL DEFAULT 'ok',
+  c_last_value REAL NOT NULL DEFAULT 0,
+  c_updated_at DATETIME NOT NULL,
+  PRIMARY KEY(c_agent_id, c_rule_id)
+);
+CREATE TABLE IF NOT EXISTS t_monitor_host_alert_events (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_agent_id TEXT NOT NULL,
+  c_rule_id TEXT NOT NULL,
+  c_status TEXT NOT NULL,
+  c_value REAL NOT NULL,
+  c_occurred_at DATETIME NOT NULL,
+  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS t_monitor_host_notification_outbox (
+  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  c_agent_id TEXT NOT NULL,
+  c_rule_id TEXT NOT NULL,
+  c_payload BLOB NOT NULL,
+  c_status TEXT NOT NULL DEFAULT 'pending',
+  c_attempts INTEGER NOT NULL DEFAULT 0,
+  c_next_attempt_at DATETIME NOT NULL,
+  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

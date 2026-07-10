@@ -19,6 +19,7 @@ proto:
 	$(MAKE) -C packages/commonpb all
 	$(MAKE) -C packages/messagepb all
 	$(MAKE) -C packages/metricspb all
+	$(MAKE) -C packages/hostmetricpb all
 	$(MAKE) -C modules/storage proto
 	$(MAKE) -C modules/admin/proto all
 	$(MAKE) -C modules/trade/proto all
@@ -27,6 +28,7 @@ proto:
 	$(MAKE) -C modules/cloudnode/proto all
 	$(MAKE) -C modules/monitor/proto all
 	$(MAKE) -C modules/eventbus/proto all
+	$(MAKE) -C modules/hostagent/proto all
 
 clean:
 	rm -rf bin release dist scripts/node_exporter/build

@@ -13,6 +13,7 @@ MooX 后端 Go 模块目录，由仓库根目录 `go.work` 统一管理。各模
 | [trade](./trade/) | `moox-trade` | 账户、订单、成交、持仓与交易所适配 |
 | [monitor](./monitor/) | `moox-monitor` | 独立 HTTP/TCP 服务可用性监控、告警和多实例协同 |
 | [eventbus](./eventbus/) | `moox-eventbus` | 统一 NATS JetStream broker、Stream/KV 拓扑与只读管理面 |
+| [hostagent](./hostagent/) | `moox-host-agent`、`moox-host-agent-cli` | Linux amd64/arm64 主机 CPU、内存、文件系统、磁盘和网络采集 |
 | [cli](./cli/) | `moox-cli` | 命令行工具（元数据导入、数据导入、运维辅助） |
 | [factor](./factor/) | `moox-factor` | 因子计算（占位，待扩展） |
 
@@ -58,6 +59,7 @@ make build
 ./scripts/build.sh factor
 ./scripts/build.sh monitor
 ./scripts/build.sh eventbus
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh hostagent
 
 # 本机/远端一键发布
 make deploy ARGS="--target localhost --dir ~/moox/dev"

@@ -1,0 +1,11 @@
+global:
+  namespace: Production
+  env_name: prod
+server:
+  timeout: 5000
+  service:
+    - name: trpc.moox.hostagent.HostAgentMgr
+      port: 11426
+      network: tcp
+      protocol: http
+      timeout: 30000

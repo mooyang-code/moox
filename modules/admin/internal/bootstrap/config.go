@@ -3,6 +3,8 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
@@ -30,6 +32,9 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 		return nil, err
 	}
 	config.SetGlobalConfig(appCfg) // 设置全局配置，供其他模块使用
+	if err := loadEncryptionKey(); err != nil {
+		return nil, err
+	}
 	log.Info("应用配置加载成功")
 
 	// 2. 加载认证配置
@@ -69,6 +74,29 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 		Gateway: gatewayCfg,
 	}
 	return cfg, nil
+}
+
+func loadEncryptionKey() error {
+	if strings.TrimSpace(os.Getenv("MOOX_ADMIN_ENCRYPTION_KEY")) != "" {
+		return nil
+	}
+	path := strings.TrimSpace(os.Getenv("MOOX_ADMIN_ENCRYPTION_KEY_FILE"))
+	if path == "" {
+		return fmt.Errorf("MOOX_ADMIN_ENCRYPTION_KEY_FILE is required in server mode")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("stat admin encryption key file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return fmt.Errorf("admin encryption key file must be a regular 0600 file")
+	}
+	raw, err := os.ReadFile(filepath.Clean(path))
+	if err != nil || strings.TrimSpace(string(raw)) == "" {
+		if err == nil { err = fmt.Errorf("file is empty") }
+		return fmt.Errorf("read admin encryption key file: %w", err)
+	}
+	return os.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", strings.TrimSpace(string(raw)))
 }
 
 func validateGatewayCORS(cfg *gateway.Config) error {

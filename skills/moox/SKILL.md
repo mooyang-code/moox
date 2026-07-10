@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo or operating moox-cli, including quant storage, collector cloud functions, deployment, Tencent Cloud Lighthouse firewall changes, or control-plane maintenance.
+description: Use when working in the MooX monorepo or operating moox-cli, including quant storage, collector cloud functions, Linux amd64/arm64 Host Agent server-resource monitoring, rootless deployment, EventBus credential provision/rotate, Tencent Cloud Lighthouse firewall changes, or control-plane maintenance.
 ---
 
 # MooX Quant Data System
@@ -20,6 +20,12 @@ Core concepts:
 - Field and Factor: Space-scoped reusable column definitions selected by DataSet columns.
 - View: a query-facing, asynchronously built wide view over one primary DataSet and selected columns from related DataSets.
 - StorageRoute: a policy that maps online primary facts to PrimaryStore nodes. DuckDB views, Bleve search, and Parquet archive are derived asynchronously from primary fact changes.
+
+Host Agent deployment:
+
+- Build `skills/moox/scripts/hostagent-release.sh` for Linux `amd64` or `arm64`.
+- Deploy with `skills/moox/scripts/hostagent-deploy.sh`; it uses a normal user and `systemctl --user`, never sudo.
+- Provision and rotate EventBus credentials only through `skills/moox/scripts/eventbus-credentials.sh`; release archives and checked-in YAML must remain credential-free.
 
 ## Repository Layout
 
@@ -125,3 +131,9 @@ When initializing a fresh MooX system, use a strict two-stage deployment flow. D
 
 7. SCF runtime address propagation.
    Do not inject storage/admin addresses while building SCF packages. The control plane keepalive probe must pass active `service_deployments` to SCF, and SCF should use `storage_access` directly for storage writes while using `/api/service/*` for backend gateway calls.
+Host Agent deployment and server-resource monitoring are supported for Linux
+amd64/arm64. Use `scripts/hostagent-release.sh` and
+`scripts/hostagent-deploy.sh` for rootless user-systemd deployment. EventBus
+credentials are provisioned, exported, and rotated only through Admin using
+`scripts/eventbus-credentials.sh`; do not put tokens or private keys in a
+release archive, command line, or checked-in config.

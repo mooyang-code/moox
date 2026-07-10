@@ -11,6 +11,18 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ConsumerRef identifies a predeclared durable consumer for bind-only clients.
+type ConsumerRef struct {
+	Stream        string
+	Durable       string
+	FilterSubject string
+	AckWait       time.Duration
+	MaxDeliver    int
+	MaxAckPending int
+	FetchMaxWait  time.Duration
+	DeliverPolicy nats.DeliverPolicy
+}
+
 type ConsumerConfig struct {
 	Stream        string
 	Durable       string
@@ -19,6 +31,7 @@ type ConsumerConfig struct {
 	MaxDeliver    int
 	MaxAckPending int
 	FetchMaxWait  time.Duration
+	DeliverPolicy nats.DeliverPolicy
 	// DeliverDecodeErrors returns poison deliveries to the caller so it can
 	// publish a domain-specific DLQ record. The default remains false for
 	// callers that only need the transport to terminate malformed messages.
@@ -35,6 +48,24 @@ type PullConsumer struct {
 }
 
 func (c *Client) NewPullConsumer(ctx context.Context, cfg ConsumerConfig) (*PullConsumer, error) {
+	return c.openPullConsumer(ctx, cfg, true)
+}
+
+// EnsurePullConsumer creates the declared durable when it is absent and binds it otherwise.
+func (c *Client) EnsurePullConsumer(ctx context.Context, cfg ConsumerConfig) (*PullConsumer, error) {
+	return c.openPullConsumer(ctx, cfg, true)
+}
+
+// BindPullConsumer only binds an existing durable. It never creates or updates it.
+func (c *Client) BindPullConsumer(ctx context.Context, ref ConsumerRef) (*PullConsumer, error) {
+	return c.openPullConsumer(ctx, ConsumerConfig{
+		Stream: ref.Stream, Durable: ref.Durable, FilterSubject: ref.FilterSubject,
+		AckWait: ref.AckWait, MaxDeliver: ref.MaxDeliver, MaxAckPending: ref.MaxAckPending,
+		FetchMaxWait: ref.FetchMaxWait, DeliverPolicy: ref.DeliverPolicy,
+	}, false)
+}
+
+func (c *Client) openPullConsumer(ctx context.Context, cfg ConsumerConfig, create bool) (*PullConsumer, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -71,6 +102,9 @@ func (c *Client) NewPullConsumer(ctx context.Context, cfg ConsumerConfig) (*Pull
 	if cfg.FetchMaxWait <= 0 {
 		cfg.FetchMaxWait = time.Second
 	}
+	if cfg.DeliverPolicy != nats.DeliverNewPolicy {
+		cfg.DeliverPolicy = nats.DeliverAllPolicy
+	}
 
 	consumerCfg := &nats.ConsumerConfig{
 		Name:          cfg.Durable,
@@ -80,7 +114,7 @@ func (c *Client) NewPullConsumer(ctx context.Context, cfg ConsumerConfig) (*Pull
 		AckWait:       cfg.AckWait,
 		MaxDeliver:    cfg.MaxDeliver,
 		MaxAckPending: cfg.MaxAckPending,
-		DeliverPolicy: nats.DeliverAllPolicy,
+		DeliverPolicy: cfg.DeliverPolicy,
 	}
 	info, err := c.js.ConsumerInfo(cfg.Stream, cfg.Durable, nats.Context(ctx))
 	if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
@@ -89,7 +123,7 @@ func (c *Client) NewPullConsumer(ctx context.Context, cfg ConsumerConfig) (*Pull
 	if err := contextErr(ctx, "after consumer inspection"); err != nil {
 		return nil, err
 	}
-	if errors.Is(err, nats.ErrConsumerNotFound) {
+	if errors.Is(err, nats.ErrConsumerNotFound) && create {
 		if _, addErr := c.js.AddConsumer(cfg.Stream, consumerCfg, nats.Context(ctx)); addErr != nil && !errors.Is(addErr, nats.ErrConsumerNameAlreadyInUse) {
 			return nil, classifyConsumerError("create consumer", addErr)
 		}
@@ -102,6 +136,9 @@ func (c *Client) NewPullConsumer(ctx context.Context, cfg ConsumerConfig) (*Pull
 		if err != nil {
 			return nil, classifyConsumerError("inspect created consumer", err)
 		}
+	}
+	if errors.Is(err, nats.ErrConsumerNotFound) && !create {
+		return nil, fmt.Errorf("%w: %s/%s", ErrConsumerNotFound, cfg.Stream, cfg.Durable)
 	}
 	if err := contextErr(ctx, "before consumer validation"); err != nil {
 		return nil, err
@@ -159,8 +196,8 @@ func validateConsumerConfig(info *nats.ConsumerInfo, cfg ConsumerConfig) error {
 		return fmt.Errorf("%w: max deliver mismatch: existing %d, requested %d", ErrInvalidConsumer, actual.MaxDeliver, cfg.MaxDeliver)
 	case actual.MaxAckPending != cfg.MaxAckPending:
 		return fmt.Errorf("%w: max ack pending mismatch: existing %d, requested %d", ErrInvalidConsumer, actual.MaxAckPending, cfg.MaxAckPending)
-	case actual.DeliverPolicy != nats.DeliverAllPolicy:
-		return fmt.Errorf("%w: deliver policy mismatch: existing %v", ErrInvalidConsumer, actual.DeliverPolicy)
+	case actual.DeliverPolicy != cfg.DeliverPolicy:
+		return fmt.Errorf("%w: deliver policy mismatch: existing %v, requested %v", ErrInvalidConsumer, actual.DeliverPolicy, cfg.DeliverPolicy)
 	}
 	return nil
 }
@@ -201,6 +238,9 @@ func (p *PullConsumer) Fetch(ctx context.Context, batch int) ([]*Delivery, error
 	var firstDecodeErr error
 	for _, msg := range msgs {
 		delivery, decodeErr := deliveryFromMessage(msg, p.cfg.Stream, p.cfg.Durable, p.client.cfg.MaxPayload)
+		if delivery != nil {
+			delivery.client = p.client
+		}
 		if decodeErr != nil {
 			if !p.cfg.DeliverDecodeErrors {
 				// Poison messages must be terminated even when the caller's fetch context

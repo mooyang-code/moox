@@ -280,6 +280,9 @@ CREATE INDEX IF NOT EXISTS idx_secrets_status ON t_secrets(c_status);
 CREATE INDEX IF NOT EXISTS idx_secrets_name ON t_secrets(c_name);
 CREATE INDEX IF NOT EXISTS idx_secrets_deleted ON t_secrets(c_is_deleted);
 CREATE INDEX IF NOT EXISTS idx_secrets_ctime ON t_secrets(c_ctime DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_eventbus_active_key
+    ON t_secrets(c_space_id, c_category, c_provider, c_key_id)
+    WHERE c_is_deleted = 0 AND c_status = 'active' AND c_category = 'eventbus';
 
 -- ************ 秘钥管理触发器 ************
 DROP TRIGGER IF EXISTS update_secrets_mtime;

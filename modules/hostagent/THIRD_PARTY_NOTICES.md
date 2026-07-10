@@ -1,0 +1,1 @@
+The collector semantics were informed by node_exporter (Apache-2.0, https://github.com/prometheus/node_exporter). MooX reimplements the small Linux ABI readers used here and does not vendor or copy node_exporter source or fixtures.

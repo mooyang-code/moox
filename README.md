@@ -5,7 +5,7 @@
 
 仓库有两个入口：
 
-- `make release`：生成二进制归档包，包含核心二进制、admin/eventbus/cloudnode/collector/storage 配置、Storage schema、docs 和 `examples/` 示例元数据；不包含源码开发脚本或 Agent skills。
+- `make release`：生成二进制归档包，包含核心二进制、admin/eventbus/cloudnode/collector/storage 配置、Storage schema、docs 和 `examples/` 示例元数据；Linux amd64/arm64 归档额外包含 hostagent 制品；不包含源码开发脚本或 Agent skills。
 - `make deploy`：通过 `scripts/deploy-moox.sh` 生成可运行部署目录并同步到本机或远端，包含 admin/cli/web-host/eventbus 以及按开关启用的 cloudnode/collector/storage，附带配置、Storage schema、`examples` 示例元数据，以及 `start.sh`、`stop.sh`、`status.sh`。
 
 `make release` 会打包 `cli/admin/web-host/eventbus/cloudnode/collector/collector-scf/factor/trade/monitor/storage` 二进制；配置目录随包包含 admin、eventbus、cloudnode、collector、factor、monitor、storage。`make deploy` 默认负责 admin、web-host、eventbus、cloudnode、collector、factor、monitor、storage 的可运行部署，可用 `--no-monitor`、`--no-eventbus` 等开关关闭独立模块。
@@ -30,6 +30,8 @@ Monitor 消费后把历史写入 Storage 并提供 MooX 看板和结构化多指
 ## 服务监控
 
 `moox-monitor` 是独立 HTTP/TCP 可用性监控模块，和 Admin 内原有主机资源监控并存。它通过 SysDeploy 同步内置 `moox-system` 检查，也支持手动检查、webhook 告警和多 monitor 实例 peer 去重。所有独立部署进程提供标准 `/healthz`，monitor 自身也提供 `/healthz` 与 peer snapshot API。
+
+`moox-host-agent` 是独立的 Linux amd64/arm64 用户进程，只读取 CPU、内存、文件系统、磁盘 I/O 和网络 ABI，通过私有 CA TLS 的 EventBus best-effort 上报到 Monitor；Agent 不持久化样本。发布和 rootless 部署入口位于 `skills/moox/scripts/hostagent-release.sh` 与 `hostagent-deploy.sh`，EventBus 凭据由 Admin `t_secrets` CLI 统一生成和轮换。
 
 本机发布并拉起：
 

@@ -3,6 +3,7 @@ package jetstream
 import (
 	"context"
 	"errors"
+	"github.com/nats-io/nats.go"
 	"sync"
 	"testing"
 	"time"
@@ -125,6 +126,31 @@ func TestNewPullConsumerRequiresFilterSubject(t *testing.T) {
 	if !errors.Is(err, ErrInvalidConsumer) {
 		t.Fatalf("NewPullConsumer() error = %v, want ErrInvalidConsumer", err)
 	}
+}
+
+func TestBindPullConsumerNeverCreates(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	_, err := client.BindPullConsumer(context.Background(), ConsumerRef{Stream: "TEST", Durable: "missing", FilterSubject: "moox.test.>"})
+	if !errors.Is(err, ErrConsumerNotFound) {
+		t.Fatalf("BindPullConsumer() error=%v, want not found", err)
+	}
+	if _, err := client.js.ConsumerInfo("TEST", "missing"); !errors.Is(err, nats.ErrConsumerNotFound) {
+		t.Fatalf("missing consumer was created: %v", err)
+	}
+	created, err := client.EnsurePullConsumer(context.Background(), ConsumerConfig{Stream: "TEST", Durable: "existing", FilterSubject: "moox.test.>", AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = created.Close()
+	bound, err := client.BindPullConsumer(context.Background(), ConsumerRef{Stream: "TEST", Durable: "existing", FilterSubject: "moox.test.>", AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = bound.Close()
 }
 
 func TestDeliveryOperationsRequireContext(t *testing.T) {

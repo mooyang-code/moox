@@ -3,6 +3,9 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
@@ -14,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
 	eventbusgen "github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen"
 	"github.com/nats-io/nats.go"
+	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -120,17 +124,64 @@ func registerMetricsReporter(s *server.Server) {
 }
 
 func connect(ctx context.Context, rawURL string, cfg *config.Config) (*nats.Conn, error) {
-	opts := []nats.Option{nats.Name("moox-eventbus-control"), nats.RetryOnFailedConnect(true), nats.MaxReconnects(-1), nats.Timeout(5 * time.Second)}
-	if cfg.Broker.Auth.Enabled {
-		opts = append(opts, nats.UserInfo(cfg.Broker.Auth.Username, cfg.Broker.Auth.Password))
+	opts := []nats.Option{nats.Name("moox-eventbus-control"), nats.RetryOnFailedConnect(true), nats.MaxReconnects(-1), nats.ReconnectBufSize(-1), nats.Timeout(5 * time.Second)}
+	username, password, caFile := cfg.Broker.Auth.Username, cfg.Broker.Auth.Password, cfg.Broker.TLS.CAFile
+	if cfg.InternalClient.TLSCAFile != "" {
+		caFile = cfg.InternalClient.TLSCAFile
+	}
+	if cfg.InternalClient.CredentialFile != "" {
+		credentials, err := readInternalCredentials(cfg.InternalClient.CredentialFile)
+		if err != nil {
+			return nil, err
+		}
+		username, password = credentials.Username, credentials.Password
+		if credentials.CAFile != "" {
+			caFile = credentials.CAFile
+		}
+	}
+	if username != "" || password != "" {
+		opts = append(opts, nats.UserInfo(username, password))
 	}
 	if cfg.Broker.TLS.Enabled {
-		if cfg.Broker.TLS.CAFile != "" {
-			opts = append(opts, nats.RootCAs(cfg.Broker.TLS.CAFile))
+		if caFile != "" {
+			opts = append(opts, nats.RootCAs(caFile))
 		}
-		opts = append(opts, nats.ClientCert(cfg.Broker.TLS.CertFile, cfg.Broker.TLS.KeyFile), nats.Secure())
+		opts = append(opts, nats.Secure())
 	}
 	return nats.Connect(rawURL, opts...)
+}
+
+type internalCredentials struct {
+	Username string `yaml:"username"`
+	Token    string `yaml:"token"`
+	Password string `yaml:"password"`
+	CAFile   string `yaml:"ca_file"`
+}
+
+func readInternalCredentials(path string) (internalCredentials, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return internalCredentials{}, fmt.Errorf("stat internal client credentials: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 || !info.Mode().IsRegular() {
+		return internalCredentials{}, fmt.Errorf("internal client credentials must be a regular 0600 file")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return internalCredentials{}, fmt.Errorf("read internal client credentials: %w", err)
+	}
+	var credentials internalCredentials
+	if err := yaml.Unmarshal(raw, &credentials); err != nil {
+		return internalCredentials{}, fmt.Errorf("parse internal client credentials: %w", err)
+	}
+	credentials.Username = strings.TrimSpace(credentials.Username)
+	if credentials.Password == "" {
+		credentials.Password = credentials.Token
+	}
+	if credentials.Username == "" || credentials.Password == "" {
+		return internalCredentials{}, fmt.Errorf("internal client credentials require username and token/password")
+	}
+	return credentials, nil
 }
 
 func (r *Runtime) Shutdown(ctx context.Context) error {

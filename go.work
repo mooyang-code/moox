@@ -8,12 +8,14 @@ use (
 	./modules/cloudnode/proto/cloudnodegen
 	./modules/collector
 	./modules/collector/proto/collectorgen
-	./modules/factor
-	./modules/factor/proto/factorgen
-	./modules/monitor
-	./modules/monitor/proto/monitorgen
 	./modules/eventbus
 	./modules/eventbus/proto/eventbusgen
+	./modules/factor
+	./modules/factor/proto/factorgen
+	./modules/hostagent
+	./modules/hostagent/proto/hostagentgen
+	./modules/monitor
+	./modules/monitor/proto/monitorgen
 	./modules/storage
 	./modules/storage/proto/gen
 	./modules/trade
@@ -21,8 +23,9 @@ use (
 	./packages/cloudruntime
 	./packages/commonpb
 	./packages/healthz
+	./packages/hostmetricpb
+	./packages/jetstream
 	./packages/messagepb
 	./packages/metricspb
-	./packages/jetstream
 	./web-host
 )

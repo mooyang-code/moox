@@ -1,0 +1,6 @@
+version: 1
+urls:
+  - tls://203.0.113.10:4222
+username: hostagent-publisher
+eventbus_token: ""
+ca_file: ~/.config/moox/hostagent/ca.pem

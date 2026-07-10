@@ -10,27 +10,35 @@ import (
 )
 
 type Delivery struct {
-	Message       *messagepb.MooxMessage
-	Subject       string
-	Stream        string
-	Consumer      string
-	StreamSeq     uint64
-	ConsumerSeq   uint64
-	DeliveryCount uint64
+	Message         *messagepb.MooxMessage
+	Subject         string
+	Stream          string
+	Consumer        string
+	StreamSeq       uint64
+	ConsumerSeq     uint64
+	DeliveryCount   uint64
+	PersistentToken string
 	// DecodeError and RawData are populated when a consumer opts into poison
 	// delivery. Message is nil in that case and the caller must Term or NAK it.
 	DecodeError  error
 	RawData      []byte
 	RawMessageID string
 
-	msg *nats.Msg
+	msg    *nats.Msg
+	client *Client
 }
 
 func (d *Delivery) Ack(ctx context.Context) error {
+	if d != nil && d.msg == nil && d.client != nil {
+		return d.client.AckToken(ctx, d.PersistentToken)
+	}
 	return d.withMessage(ctx, func(msg *nats.Msg, ctx context.Context) error { return msg.AckSync(nats.Context(ctx)) })
 }
 
 func (d *Delivery) Nak(ctx context.Context, delay time.Duration) error {
+	if d != nil && d.msg == nil && d.client != nil {
+		return d.client.NakToken(ctx, d.PersistentToken, delay)
+	}
 	return d.withMessage(ctx, func(msg *nats.Msg, ctx context.Context) error {
 		if delay > 0 {
 			return msg.NakWithDelay(delay, nats.Context(ctx))
@@ -40,10 +48,16 @@ func (d *Delivery) Nak(ctx context.Context, delay time.Duration) error {
 }
 
 func (d *Delivery) InProgress(ctx context.Context) error {
+	if d != nil && d.msg == nil && d.client != nil {
+		return d.client.InProgressToken(ctx, d.PersistentToken)
+	}
 	return d.withMessage(ctx, func(msg *nats.Msg, ctx context.Context) error { return msg.InProgress(nats.Context(ctx)) })
 }
 
 func (d *Delivery) Term(ctx context.Context) error {
+	if d != nil && d.msg == nil && d.client != nil {
+		return d.client.TermToken(ctx, d.PersistentToken)
+	}
 	return d.withMessage(ctx, func(msg *nats.Msg, ctx context.Context) error { return msg.Term(nats.Context(ctx)) })
 }
 
@@ -74,6 +88,10 @@ func deliveryFromMessage(msg *nats.Msg, stream, consumer string, maxPayload int)
 		RawData:      append([]byte(nil), msg.Data...),
 		RawMessageID: msg.Header.Get(nats.MsgIdHdr),
 		msg:          msg,
+	}
+	token, tokenErr := encodeDeliveryToken(stream, consumer, msg.Reply)
+	if tokenErr == nil {
+		delivery.PersistentToken = token
 	}
 	decoded, err := decodeNATSMessage(msg, maxPayload)
 	if err != nil {

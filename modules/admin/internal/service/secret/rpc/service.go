@@ -26,6 +26,7 @@ var validCategories = map[string]bool{
 	"exchange": true,
 	"database": true,
 	"jwt":      true,
+	"eventbus": true,
 	"other":    true,
 }
 

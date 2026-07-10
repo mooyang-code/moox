@@ -70,6 +70,9 @@ mkdir -p \
   "${RELEASE_ROOT}/storage/schema" \
   "${RELEASE_ROOT}/examples" \
   "${RELEASE_ROOT}/docs"
+if [[ "${OS}" == "linux" && ( "${ARCH}" == "amd64" || "${ARCH}" == "arm64" ) ]]; then
+  mkdir -p "${RELEASE_ROOT}/hostagent/bin" "${RELEASE_ROOT}/hostagent/config"
+fi
 
 copy_binary() {
   local name="$1"
@@ -95,6 +98,13 @@ copy_binary moox-monitor "${RELEASE_ROOT}/monitor/bin"
 copy_binary moox-monitor-cli "${RELEASE_ROOT}/monitor/bin"
 copy_binary moox-storage "${RELEASE_ROOT}/storage/bin"
 copy_binary moox-storage-cli "${RELEASE_ROOT}/storage/bin"
+if [[ -d "${RELEASE_ROOT}/hostagent" ]]; then
+  copy_binary moox-host-agent "${RELEASE_ROOT}/hostagent/bin"
+  copy_binary moox-host-agent-cli "${RELEASE_ROOT}/hostagent/bin"
+  cp "${ROOT}/modules/hostagent/config/app.yaml" "${RELEASE_ROOT}/hostagent/config/app.example.yaml"
+  cp "${ROOT}/modules/hostagent/config/eventbus.example.yaml" "${RELEASE_ROOT}/hostagent/config/eventbus.example.yaml"
+  cp "${ROOT}/modules/hostagent/config/trpc_go.yaml" "${RELEASE_ROOT}/hostagent/config/trpc_go.yaml"
+fi
 
 cp -R "${ROOT}/modules/admin/config/." "${RELEASE_ROOT}/admin/config/"
 cp -R "${ROOT}/modules/eventbus/config/." "${RELEASE_ROOT}/eventbus/config/"

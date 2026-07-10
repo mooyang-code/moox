@@ -16,6 +16,9 @@ make check-boundaries
 - `moox-storage`
 - `moox-collector`
 - `moox-collector-scf`
+- `moox-eventbus`
+- `moox-host-agent` (Linux amd64/arm64 builds only)
+- `moox-host-agent-cli` (Linux amd64/arm64 builds only)
 - `moox-factor`
 - `moox-trade`
 

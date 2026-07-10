@@ -54,7 +54,77 @@ func (r *Registry) Reconcile(ctx context.Context) (Result, error) {
 			return Result{}, err
 		}
 	}
+	for i := range r.cfg.Consumers {
+		if err := reconcileConsumer(ctx, r.js, &r.cfg.Consumers[i]); err != nil {
+			return Result{}, err
+		}
+	}
 	return Result{Streams: len(r.cfg.Streams), KV: len(r.cfg.KV), Topics: enabledTopics(r.cfg)}, nil
+}
+
+func reconcileConsumer(ctx context.Context, js nats.JetStreamContext, spec *config.ConsumerConfig) error {
+	want := consumerConfig(spec)
+	info, err := js.ConsumerInfo(spec.Stream, spec.Durable, nats.Context(ctx))
+	if errors.Is(err, nats.ErrConsumerNotFound) {
+		if _, err := js.AddConsumer(spec.Stream, want, nats.Context(ctx)); err != nil {
+			return fmt.Errorf("create consumer %q/%q: %w", spec.Stream, spec.Durable, err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect consumer %q/%q: %w", spec.Stream, spec.Durable, err)
+	}
+	if info == nil {
+		return fmt.Errorf("consumer %q/%q info is empty", spec.Stream, spec.Durable)
+	}
+	actual := info.Config
+	if actual.FilterSubject != want.FilterSubject || actual.AckPolicy != want.AckPolicy || actual.DeliverPolicy != want.DeliverPolicy || actual.ReplayPolicy != want.ReplayPolicy {
+		return fmt.Errorf("consumer %q/%q immutable configuration mismatch", spec.Stream, spec.Durable)
+	}
+	if actual.AckWait == want.AckWait && actual.MaxAckPending == want.MaxAckPending && actual.MaxDeliver == want.MaxDeliver {
+		return nil
+	}
+	next := actual
+	next.AckWait = want.AckWait
+	next.MaxAckPending = want.MaxAckPending
+	next.MaxDeliver = want.MaxDeliver
+	if _, err := js.UpdateConsumer(spec.Stream, &next, nats.Context(ctx)); err != nil {
+		return fmt.Errorf("update consumer %q/%q: %w", spec.Stream, spec.Durable, err)
+	}
+	return nil
+}
+
+func consumerConfig(spec *config.ConsumerConfig) *nats.ConsumerConfig {
+	return &nats.ConsumerConfig{
+		Name: spec.Durable, Durable: spec.Durable, FilterSubject: spec.FilterSubject,
+		AckPolicy: parseAckPolicy(spec.AckPolicy), DeliverPolicy: parseDeliverPolicy(spec.DeliverPolicy),
+		ReplayPolicy: parseReplayPolicy(spec.ReplayPolicy), AckWait: spec.AckWait,
+		MaxAckPending: spec.MaxAckPending, MaxDeliver: spec.MaxDeliver,
+	}
+}
+
+func parseAckPolicy(value string) nats.AckPolicy {
+	if strings.EqualFold(value, "none") {
+		return nats.AckNonePolicy
+	}
+	if strings.EqualFold(value, "all") {
+		return nats.AckAllPolicy
+	}
+	return nats.AckExplicitPolicy
+}
+
+func parseDeliverPolicy(value string) nats.DeliverPolicy {
+	if strings.EqualFold(value, "new") {
+		return nats.DeliverNewPolicy
+	}
+	return nats.DeliverAllPolicy
+}
+
+func parseReplayPolicy(value string) nats.ReplayPolicy {
+	if strings.EqualFold(value, "original") {
+		return nats.ReplayOriginalPolicy
+	}
+	return nats.ReplayInstantPolicy
 }
 
 func (r *Registry) rejectOverlappingUnmanagedStreams(ctx context.Context) error {

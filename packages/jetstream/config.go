@@ -2,6 +2,7 @@ package jetstream
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,6 +28,9 @@ type Config struct {
 	TLSKeyFile     string
 	ConnectTimeout time.Duration
 	ReconnectWait  time.Duration
+	// ReconnectBufferBytes controls messages held by nats.go while reconnecting.
+	// Zero disables the buffer, which is required for best-effort Host Agent publishing.
+	ReconnectBufferBytes int
 	// MaxReconnects defaults to -1 (unlimited) when zero, so a central broker restart is recoverable.
 	MaxReconnects int
 	MaxPayload    int
@@ -43,12 +47,13 @@ func ConfigFromEnv(urls []string, name string) Config {
 	}
 	return Config{
 		URLs: urls, Name: name,
-		Username:    firstEnv("MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_USERNAME"),
-		Password:    firstEnv("MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_EVENTBUS_PASSWORD"),
-		Credentials: firstEnv("MOOX_EVENTBUS_NATS_CREDENTIALS", "MOOX_EVENTBUS_CREDENTIALS"),
-		TLSCAFile:   firstEnv("MOOX_EVENTBUS_NATS_TLS_CA_FILE", "MOOX_EVENTBUS_TLS_CA"),
-		TLSCertFile: firstEnv("MOOX_EVENTBUS_NATS_TLS_CERT_FILE", "MOOX_EVENTBUS_TLS_CERT"),
-		TLSKeyFile:  firstEnv("MOOX_EVENTBUS_NATS_TLS_KEY_FILE", "MOOX_EVENTBUS_TLS_KEY"),
+		Username:             firstEnv("MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_USERNAME"),
+		Password:             firstEnv("MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_EVENTBUS_PASSWORD"),
+		Credentials:          firstEnv("MOOX_EVENTBUS_NATS_CREDENTIALS", "MOOX_EVENTBUS_CREDENTIALS"),
+		TLSCAFile:            firstEnv("MOOX_EVENTBUS_NATS_TLS_CA_FILE", "MOOX_EVENTBUS_TLS_CA"),
+		TLSCertFile:          firstEnv("MOOX_EVENTBUS_NATS_TLS_CERT_FILE", "MOOX_EVENTBUS_TLS_CERT"),
+		TLSKeyFile:           firstEnv("MOOX_EVENTBUS_NATS_TLS_KEY_FILE", "MOOX_EVENTBUS_TLS_KEY"),
+		ReconnectBufferBytes: envInt("MOOX_EVENTBUS_RECONNECT_BUFFER_BYTES", 0),
 	}
 }
 
@@ -59,6 +64,18 @@ func firstEnv(names ...string) string {
 		}
 	}
 	return ""
+}
+
+func envInt(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func (cfg Config) normalized() Config {

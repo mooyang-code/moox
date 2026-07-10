@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,16 +15,21 @@ import (
 )
 
 type Config struct {
-	Broker  BrokerConfig   `yaml:"broker"`
-	Health  HealthConfig   `yaml:"health"`
-	Streams []StreamConfig `yaml:"streams"`
-	Topics  []TopicConfig  `yaml:"topics"`
-	KV      []KVConfig     `yaml:"kv"`
+	Broker            BrokerConfig             `yaml:"broker"`
+	InternalClient    InternalClientConfig     `yaml:"internal_client"`
+	Health            HealthConfig             `yaml:"health"`
+	Streams           []StreamConfig           `yaml:"streams"`
+	Topics            []TopicConfig            `yaml:"topics"`
+	TopicFamilies     []TopicFamilyConfig      `yaml:"topic_families"`
+	Consumers         []ConsumerConfig         `yaml:"consumers"`
+	ConsumerTemplates []ConsumerTemplateConfig `yaml:"consumer_templates"`
+	KV                []KVConfig               `yaml:"kv"`
 }
 
 type BrokerConfig struct {
 	Host            string        `yaml:"host"`
 	Port            int           `yaml:"port"`
+	ClientAdvertise string        `yaml:"client_advertise"`
 	ServerName      string        `yaml:"server_name"`
 	StoreDir        string        `yaml:"store_dir"`
 	StartupTimeout  time.Duration `yaml:"startup_timeout"`
@@ -42,9 +48,15 @@ type ClusterConfig struct {
 }
 
 type AuthConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	Enabled   bool   `yaml:"enabled"`
+	Username  string `yaml:"username"`
+	Password  string `yaml:"password"`
+	UsersFile string `yaml:"users_file"`
+}
+
+type InternalClientConfig struct {
+	CredentialFile string `yaml:"credential_file"`
+	TLSCAFile      string `yaml:"tls_ca_file"`
 }
 
 type TLSConfig struct {
@@ -79,6 +91,39 @@ type TopicConfig struct {
 	Enabled            bool                  `yaml:"enabled"`
 }
 
+type TopicFamilyConfig struct {
+	Pattern            string                `yaml:"pattern"`
+	Stream             string                `yaml:"stream"`
+	Kind               messagepb.MessageKind `yaml:"kind"`
+	PayloadContentType string                `yaml:"payload_content_type"`
+	PayloadVersion     uint32                `yaml:"payload_version"`
+	Enabled            bool                  `yaml:"enabled"`
+}
+
+type ConsumerConfig struct {
+	Stream        string        `yaml:"stream"`
+	Durable       string        `yaml:"durable"`
+	FilterSubject string        `yaml:"filter_subject"`
+	AckPolicy     string        `yaml:"ack_policy"`
+	DeliverPolicy string        `yaml:"deliver_policy"`
+	ReplayPolicy  string        `yaml:"replay_policy"`
+	AckWait       time.Duration `yaml:"ack_wait"`
+	MaxAckPending int           `yaml:"max_ack_pending"`
+	MaxDeliver    int           `yaml:"max_deliver"`
+}
+
+type ConsumerTemplateConfig struct {
+	Stream        string        `yaml:"stream"`
+	DurablePrefix string        `yaml:"durable_prefix"`
+	FilterPattern string        `yaml:"filter_pattern"`
+	AckPolicy     string        `yaml:"ack_policy"`
+	DeliverPolicy string        `yaml:"deliver_policy"`
+	ReplayPolicy  string        `yaml:"replay_policy"`
+	AckWait       time.Duration `yaml:"ack_wait"`
+	MaxAckPending int           `yaml:"max_ack_pending"`
+	MaxDeliver    int           `yaml:"max_deliver"`
+}
+
 type KVConfig struct {
 	Bucket      string        `yaml:"bucket"`
 	MaxAge      time.Duration `yaml:"max_age"`
@@ -90,22 +135,29 @@ type KVConfig struct {
 
 func Default() *Config {
 	return &Config{
-		Broker: BrokerConfig{Host: "0.0.0.0", Port: 4222, ServerName: "eventbus-dev-1", StoreDir: "./data/eventbus/jetstream", StartupTimeout: 10 * time.Second, MaxPayloadBytes: 8 * 1024 * 1024, Cluster: ClusterConfig{Name: "MOOX_EVENTBUS", Host: "0.0.0.0", Port: 6222}},
-		Health: HealthConfig{Addr: ":11419"},
+		Broker: BrokerConfig{Host: "127.0.0.1", Port: 4222, ServerName: "eventbus-dev-1", StoreDir: "./data/eventbus/jetstream", StartupTimeout: 10 * time.Second, MaxPayloadBytes: 8 * 1024 * 1024, Cluster: ClusterConfig{Name: "MOOX_EVENTBUS", Host: "127.0.0.1", Port: 6222}},
+		Health: HealthConfig{Addr: "127.0.0.1:11419"},
 		Streams: []StreamConfig{
 			{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, MaxBytes: 21474836480},
 			{Name: "MOOX_METRICS", Subjects: []string{"moox.metrics.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 24 * time.Hour, MaxBytes: 10737418240},
-			{Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.job.requested.v1"}, Retention: "work_queue", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, MaxBytes: 10737418240},
+			{Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.exec.v1.>"}, Retention: "work_queue", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, MaxBytes: 10737418240},
 			{Name: "MOOX_DLQ", Subjects: []string{"moox.dlq.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 720 * time.Hour, MaxBytes: 2147483648},
 		},
 		Topics: []TopicConfig{
-			{Topic: "moox.storage.time_series.rows_updated.v1", Stream: "MOOX_STORAGE", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf", PayloadVersion: 1, Enabled: true},
-			{Topic: "moox.storage.record.rows_updated.v1", Stream: "MOOX_STORAGE", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf", PayloadVersion: 1, Enabled: true},
-			{Topic: "moox.metrics.snapshot.reported.v1", Stream: "MOOX_METRICS", Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, PayloadContentType: "application/x-protobuf", PayloadVersion: 1, Enabled: true},
-			{Topic: "moox.cloudnode.job.requested.v1", Stream: "MOOX_CLOUDNODE_EXEC", Kind: messagepb.MessageKind_MESSAGE_KIND_COMMAND, PayloadContentType: "application/x-protobuf", PayloadVersion: 1, Enabled: true},
-			{Topic: "moox.dlq.message.rejected.v1", Stream: "MOOX_DLQ", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf", PayloadVersion: 1, Enabled: true},
+			{Topic: "moox.storage.time_series.rows_updated.v1", Stream: "MOOX_STORAGE", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated", PayloadVersion: 1, Enabled: true},
+			{Topic: "moox.storage.record.rows_updated.v1", Stream: "MOOX_STORAGE", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.storage.RecordRowsUpdated", PayloadVersion: 1, Enabled: true},
+			{Topic: "moox.metrics.host.reported.v1", Stream: "MOOX_METRICS", Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, PayloadContentType: "application/x-protobuf; message=trpc.moox.hostagent.HostMetric", PayloadVersion: 1, Enabled: true},
+			{Topic: "moox.dlq.message.rejected.v1", Stream: "MOOX_DLQ", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.message.RejectedMessage", PayloadVersion: 1, Enabled: true},
 		},
-		KV: []KVConfig{{Bucket: "MOOX_CLOUDNODE_JOB_ACTIVE", MaxAge: 48 * time.Hour, History: 1, Storage: "file", Replicas: 1}},
+		TopicFamilies: []TopicFamilyConfig{{Pattern: "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*", Stream: "MOOX_CLOUDNODE_EXEC", Kind: messagepb.MessageKind_MESSAGE_KIND_COMMAND, PayloadContentType: "application/x-protobuf; message=trpc.moox.cloudnode.JobItem", PayloadVersion: 1, Enabled: true}},
+		Consumers: []ConsumerConfig{
+			{Stream: "MOOX_METRICS", Durable: "monitor_hostmetrics_ingest_v1", FilterSubject: "moox.metrics.host.reported.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
+			{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_time_series_rows_updated_v1", FilterSubject: "moox.storage.time_series.rows_updated.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 128, MaxDeliver: -1},
+			{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_record_rows_updated_v1", FilterSubject: "moox.storage.record.rows_updated.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 128, MaxDeliver: -1},
+			{Stream: "MOOX_STORAGE", Durable: "factor_calc", FilterSubject: "moox.storage.time_series.rows_updated.v1", AckPolicy: "explicit", DeliverPolicy: "new", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 1000, MaxDeliver: 5},
+		},
+		ConsumerTemplates: []ConsumerTemplateConfig{{Stream: "MOOX_CLOUDNODE_EXEC", DurablePrefix: "cn_exec_", FilterPattern: "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1}},
+		KV:                []KVConfig{{Bucket: "MOOX_CLOUDNODE_JOB_ACTIVE", MaxAge: 48 * time.Hour, History: 1, Storage: "file", Replicas: 1}},
 	}
 }
 
@@ -235,17 +287,33 @@ func (c *Config) Validate() error {
 	if c.Broker.Cluster.Enabled && c.Broker.ServerName == "eventbus-dev-1" {
 		return fmt.Errorf("broker.server_name must be unique when cluster is enabled")
 	}
+	if c.Broker.Cluster.Enabled && (len(c.Broker.Cluster.Routes) > 0 || !isLoopback(c.Broker.Cluster.Host)) {
+		return fmt.Errorf("non-loopback cluster routes are not supported in V1")
+	}
 	if c.Broker.MaxPayloadBytes <= 0 || c.Broker.MaxPayloadBytes > 64*1024*1024 {
 		return fmt.Errorf("broker.max_payload_bytes must be between 1 and 67108864")
 	}
 	if unsafeStoreDir(c.Broker.StoreDir) {
 		return fmt.Errorf("broker.store_dir %q is unsafe", c.Broker.StoreDir)
 	}
-	if c.Broker.Auth.Enabled && (strings.TrimSpace(c.Broker.Auth.Username) == "" || c.Broker.Auth.Password == "") {
-		return fmt.Errorf("broker.auth requires username and password")
+	if c.Broker.Auth.Enabled {
+		if strings.TrimSpace(c.Broker.Auth.UsersFile) == "" && (strings.TrimSpace(c.Broker.Auth.Username) == "" || c.Broker.Auth.Password == "") {
+			return fmt.Errorf("broker.auth requires users_file or username/password")
+		}
+		if c.Broker.Auth.UsersFile != "" && (c.Broker.Auth.Username != "" || c.Broker.Auth.Password != "") {
+			return fmt.Errorf("broker.auth users_file cannot be combined with single username/password")
+		}
+		if c.Broker.Auth.UsersFile != "" && strings.TrimSpace(c.InternalClient.CredentialFile) == "" {
+			return fmt.Errorf("internal_client.credential_file is required when broker.auth.users_file is enabled")
+		}
 	}
 	if c.Broker.TLS.Enabled && (strings.TrimSpace(c.Broker.TLS.CertFile) == "" || strings.TrimSpace(c.Broker.TLS.KeyFile) == "") {
 		return fmt.Errorf("broker.tls requires cert_file and key_file")
+	}
+	if publicHost(c.Broker.Host) || publicHost(strings.TrimSpace(c.Broker.ClientAdvertise)) {
+		if !c.Broker.Auth.Enabled || !c.Broker.TLS.Enabled || strings.TrimSpace(c.Broker.TLS.CAFile) == "" {
+			return fmt.Errorf("non-loopback broker requires authentication and TLS CA")
+		}
 	}
 	seenStreams := map[string]struct{}{}
 	for i := range c.Streams {
@@ -266,8 +334,8 @@ func (c *Config) Validate() error {
 		if s.Replicas < 1 {
 			return fmt.Errorf("stream %q replicas must be positive", s.Name)
 		}
-		if s.Replicas > 1 && (!c.Broker.Cluster.Enabled || s.Replicas > len(c.Broker.Cluster.Routes)+1) {
-			return fmt.Errorf("stream %q replicas=%d exceed reachable cluster size", s.Name, s.Replicas)
+		if s.Replicas > 1 {
+			return fmt.Errorf("stream %q replicas=%d are not supported in V1 standalone mode", s.Name, s.Replicas)
 		}
 		if len(s.Subjects) == 0 {
 			return fmt.Errorf("stream %q must have subjects", s.Name)
@@ -301,6 +369,9 @@ func (c *Config) Validate() error {
 		if t.PayloadVersion == 0 {
 			return fmt.Errorf("topic %q payload_version must be positive", t.Topic)
 		}
+		if !validPayloadContentType(t.PayloadContentType) {
+			return fmt.Errorf("topic %q payload_content_type must name a protobuf message", t.Topic)
+		}
 		if version, err := topicVersion(t.Topic); err != nil || version != t.PayloadVersion {
 			return fmt.Errorf("topic %q must end in .v<major> matching payload_version=%d", t.Topic, t.PayloadVersion)
 		}
@@ -329,6 +400,62 @@ func (c *Config) Validate() error {
 			t.Stream = matchedStream
 		}
 	}
+	seenFamilies := map[string]struct{}{}
+	for i := range c.TopicFamilies {
+		f := &c.TopicFamilies[i]
+		if !f.Enabled {
+			continue
+		}
+		if err := validateSubject(f.Pattern, true); err != nil {
+			return fmt.Errorf("topic_families[%d]: %w", i, err)
+		}
+		if strings.HasPrefix(f.Pattern, "moox.cloudnode.exec.v1.jobitem.") && !validCloudNodeFamily(f.Pattern) {
+			return fmt.Errorf("topic family %q has invalid CloudNode route shape", f.Pattern)
+		}
+		if f.PayloadVersion == 0 {
+			return fmt.Errorf("topic family %q payload_version must be positive", f.Pattern)
+		}
+		if !validPayloadContentType(f.PayloadContentType) {
+			return fmt.Errorf("topic family %q payload_content_type must name a protobuf message", f.Pattern)
+		}
+		if _, ok := seenFamilies[f.Pattern]; ok {
+			return fmt.Errorf("duplicate topic family %q", f.Pattern)
+		}
+		seenFamilies[f.Pattern] = struct{}{}
+		matches := 0
+		for _, s := range c.Streams {
+			for _, subject := range s.Subjects {
+				if patternsOverlap(subject, f.Pattern) {
+					matches++
+					if f.Stream != "" && f.Stream != s.Name {
+						return fmt.Errorf("topic family %q stream %q does not cover subject", f.Pattern, f.Stream)
+					}
+				}
+			}
+		}
+		if matches != 1 {
+			return fmt.Errorf("topic family %q must be covered by exactly one stream, got %d", f.Pattern, matches)
+		}
+	}
+	for i := range c.TopicFamilies {
+		for j := i + 1; j < len(c.TopicFamilies); j++ {
+			if c.TopicFamilies[i].Enabled && c.TopicFamilies[j].Enabled && patternsOverlap(c.TopicFamilies[i].Pattern, c.TopicFamilies[j].Pattern) {
+				return fmt.Errorf("topic families %q and %q overlap", c.TopicFamilies[i].Pattern, c.TopicFamilies[j].Pattern)
+			}
+		}
+	}
+	for i := range c.Consumers {
+		consumer := &c.Consumers[i]
+		if err := validateConsumer(consumer, c); err != nil {
+			return err
+		}
+	}
+	for i := range c.ConsumerTemplates {
+		template := &c.ConsumerTemplates[i]
+		if err := validateConsumerTemplate(template, c); err != nil {
+			return err
+		}
+	}
 	seenKV := map[string]struct{}{}
 	for i := range c.KV {
 		k := &c.KV[i]
@@ -342,11 +469,120 @@ func (c *Config) Validate() error {
 		if k.Replicas < 1 || k.History < 1 {
 			return fmt.Errorf("kv %q replicas/history must be positive", k.Bucket)
 		}
-		if k.Replicas > 1 && (!c.Broker.Cluster.Enabled || k.Replicas > len(c.Broker.Cluster.Routes)+1) {
-			return fmt.Errorf("kv %q replicas=%d exceed reachable cluster size", k.Bucket, k.Replicas)
+		if k.Replicas > 1 {
+			return fmt.Errorf("kv %q replicas=%d are not supported in V1 standalone mode", k.Bucket, k.Replicas)
 		}
 	}
 	return nil
+}
+
+func isLoopback(host string) bool {
+	host = strings.TrimSpace(host)
+	return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
+}
+
+func publicHost(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if strings.Contains(value, ":") && !strings.Contains(value, "]") {
+		if host, _, err := net.SplitHostPort(value); err == nil {
+			value = host
+		}
+	}
+	return value == "0.0.0.0" || value == "::" || !isLoopback(value)
+}
+
+func validateConsumer(c *ConsumerConfig, cfg *Config) error {
+	if strings.TrimSpace(c.Stream) == "" || strings.TrimSpace(c.Durable) == "" || strings.TrimSpace(c.FilterSubject) == "" {
+		return fmt.Errorf("consumer stream, durable, and filter_subject are required")
+	}
+	if c.AckPolicy == "" {
+		c.AckPolicy = "explicit"
+	}
+	if c.DeliverPolicy == "" {
+		c.DeliverPolicy = "all"
+	}
+	if c.ReplayPolicy == "" {
+		c.ReplayPolicy = "instant"
+	}
+	if c.AckPolicy != "explicit" || (c.DeliverPolicy != "all" && c.DeliverPolicy != "new") || c.ReplayPolicy != "instant" {
+		return fmt.Errorf("consumer %q has unsupported policy", c.Durable)
+	}
+	if c.AckWait <= 0 || c.MaxAckPending <= 0 || c.MaxDeliver == 0 {
+		return fmt.Errorf("consumer %q has invalid ack/max settings", c.Durable)
+	}
+	if _, ok := findStream(cfg, c.Stream); !ok {
+		return fmt.Errorf("consumer %q references unknown stream %q", c.Durable, c.Stream)
+	}
+	if err := validateSubject(c.FilterSubject, false); err != nil {
+		return fmt.Errorf("consumer %q filter: %w", c.Durable, err)
+	}
+	covered := false
+	for _, t := range cfg.Topics {
+		if t.Enabled && t.Topic == c.FilterSubject && t.Stream == c.Stream {
+			covered = true
+		}
+	}
+	if !covered {
+		for _, f := range cfg.TopicFamilies {
+			if f.Enabled && f.Pattern == c.FilterSubject && f.Stream == c.Stream {
+				covered = true
+			}
+		}
+	}
+	if !covered {
+		return fmt.Errorf("consumer %q filter %q is not registered", c.Durable, c.FilterSubject)
+	}
+	return nil
+}
+
+func validPayloadContentType(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.HasPrefix(value, "application/x-protobuf; message=") && len(strings.TrimPrefix(value, "application/x-protobuf; message=")) > 0
+}
+
+func validCloudNodeFamily(pattern string) bool {
+	parts := strings.Split(pattern, ".")
+	if len(parts) != 11 || parts[0] != "moox" || parts[1] != "cloudnode" || parts[2] != "exec" || parts[3] != "v1" || parts[4] != "jobitem" || parts[5] != "s" || parts[7] != "pkg" || parts[9] != "type" {
+		return false
+	}
+	return parts[6] == "*" && parts[8] == "*" && parts[10] == "*"
+}
+
+func validateConsumerTemplate(c *ConsumerTemplateConfig, cfg *Config) error {
+	if strings.TrimSpace(c.Stream) == "" || strings.TrimSpace(c.DurablePrefix) == "" || strings.TrimSpace(c.FilterPattern) == "" {
+		return fmt.Errorf("consumer template stream, durable_prefix, and filter_pattern are required")
+	}
+	if _, ok := findStream(cfg, c.Stream); !ok {
+		return fmt.Errorf("consumer template references unknown stream %q", c.Stream)
+	}
+	if err := validateSubject(c.FilterPattern, true); err != nil {
+		return fmt.Errorf("consumer template filter: %w", err)
+	}
+	if c.AckPolicy == "" {
+		c.AckPolicy = "explicit"
+	}
+	if c.DeliverPolicy == "" {
+		c.DeliverPolicy = "all"
+	}
+	if c.ReplayPolicy == "" {
+		c.ReplayPolicy = "instant"
+	}
+	if c.AckPolicy != "explicit" || c.DeliverPolicy != "all" || c.ReplayPolicy != "instant" || c.AckWait <= 0 || c.MaxAckPending <= 0 || c.MaxDeliver == 0 {
+		return fmt.Errorf("consumer template %q has invalid policy or limits", c.DurablePrefix)
+	}
+	return nil
+}
+
+func findStream(c *Config, name string) (StreamConfig, bool) {
+	for _, stream := range c.Streams {
+		if stream.Name == name {
+			return stream, true
+		}
+	}
+	return StreamConfig{}, false
 }
 
 func unsafeStoreDir(dir string) bool {

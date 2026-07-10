@@ -1,7 +1,8 @@
 # MooX EventBus owns the single embedded NATS JetStream runtime.
 broker:
-  host: 0.0.0.0
+  host: 127.0.0.1
   port: 4222
+  client_advertise: ""
   server_name: eventbus-dev-1
   store_dir: ./data/eventbus/jetstream
   startup_timeout: 10s
@@ -9,21 +10,26 @@ broker:
   cluster:
     enabled: false
     name: MOOX_EVENTBUS
-    host: 0.0.0.0
+    host: 127.0.0.1
     port: 6222
     routes: []
   auth:
     enabled: false
     username: ""
     password: ""
+    users_file: ""
   tls:
     enabled: false
     cert_file: ""
     key_file: ""
     ca_file: ""
 
+internal_client:
+  credential_file: ""
+  tls_ca_file: ""
+
 health:
-  addr: ":11419"
+  addr: "127.0.0.1:11419"
 
 streams:
   - name: MOOX_STORAGE
@@ -41,7 +47,7 @@ streams:
     max_age: 24h
     max_bytes: 10737418240
   - name: MOOX_CLOUDNODE_EXEC
-    subjects: ["moox.cloudnode.job.requested.v1"]
+    subjects: ["moox.cloudnode.exec.v1.>"]
     retention: work_queue
     storage: file
     replicas: 1
@@ -56,11 +62,67 @@ streams:
     max_bytes: 2147483648
 
 topics:
-  - {topic: moox.storage.time_series.rows_updated.v1, stream: MOOX_STORAGE, kind: 1, payload_content_type: application/x-protobuf, payload_version: 1, enabled: true}
-  - {topic: moox.storage.record.rows_updated.v1, stream: MOOX_STORAGE, kind: 1, payload_content_type: application/x-protobuf, payload_version: 1, enabled: true}
-  - {topic: moox.metrics.snapshot.reported.v1, stream: MOOX_METRICS, kind: 3, payload_content_type: application/x-protobuf, payload_version: 1, enabled: true}
-  - {topic: moox.cloudnode.job.requested.v1, stream: MOOX_CLOUDNODE_EXEC, kind: 2, payload_content_type: application/x-protobuf, payload_version: 1, enabled: true}
-  - {topic: moox.dlq.message.rejected.v1, stream: MOOX_DLQ, kind: 1, payload_content_type: application/x-protobuf, payload_version: 1, enabled: true}
+  - {topic: moox.storage.time_series.rows_updated.v1, stream: MOOX_STORAGE, kind: 1, payload_content_type: "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated", payload_version: 1, enabled: true}
+  - {topic: moox.storage.record.rows_updated.v1, stream: MOOX_STORAGE, kind: 1, payload_content_type: "application/x-protobuf; message=trpc.moox.storage.RecordRowsUpdated", payload_version: 1, enabled: true}
+  - {topic: moox.metrics.host.reported.v1, stream: MOOX_METRICS, kind: 3, payload_content_type: "application/x-protobuf; message=trpc.moox.hostagent.HostMetric", payload_version: 1, enabled: true}
+  - {topic: moox.dlq.message.rejected.v1, stream: MOOX_DLQ, kind: 1, payload_content_type: "application/x-protobuf; message=trpc.moox.message.RejectedMessage", payload_version: 1, enabled: true}
+
+topic_families:
+  - pattern: moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*
+    stream: MOOX_CLOUDNODE_EXEC
+    kind: 2
+    payload_content_type: "application/x-protobuf; message=trpc.moox.cloudnode.JobItem"
+    payload_version: 1
+    enabled: true
+
+consumers:
+  - stream: MOOX_METRICS
+    durable: monitor_hostmetrics_ingest_v1
+    filter_subject: moox.metrics.host.reported.v1
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 60s
+    max_ack_pending: 256
+    max_deliver: -1
+  - stream: MOOX_STORAGE
+    durable: storage_view_builder_time_series_rows_updated_v1
+    filter_subject: moox.storage.time_series.rows_updated.v1
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 120s
+    max_ack_pending: 128
+    max_deliver: -1
+  - stream: MOOX_STORAGE
+    durable: storage_view_builder_record_rows_updated_v1
+    filter_subject: moox.storage.record.rows_updated.v1
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 120s
+    max_ack_pending: 128
+    max_deliver: -1
+  - stream: MOOX_STORAGE
+    durable: factor_calc
+    filter_subject: moox.storage.time_series.rows_updated.v1
+    ack_policy: explicit
+    deliver_policy: new
+    replay_policy: instant
+    ack_wait: 60s
+    max_ack_pending: 1000
+    max_deliver: 5
+
+consumer_templates:
+  - stream: MOOX_CLOUDNODE_EXEC
+    durable_prefix: cn_exec_
+    filter_pattern: moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 60s
+    max_ack_pending: 256
+    max_deliver: -1
 
 kv:
   - bucket: MOOX_CLOUDNODE_JOB_ACTIVE

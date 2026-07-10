@@ -651,6 +651,13 @@ start_eventbus() {
     echo "eventbus is disabled in this deployment package" >&2
     exit 2
   fi
+  local credential_dir="${HOME}/.config/moox/eventbus"
+  if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" && -f "${credential_dir}/users.yaml" ]]; then
+    perl -0pi -e 's#enabled:\s*false\n    username:#enabled: true\n    username:#; s#users_file:\s*""#users_file: "'"${credential_dir}"'/users.yaml"#; s#enabled:\s*false\n    cert_file:#enabled: true\n    cert_file:#; s#cert_file:\s*""#cert_file: "'"${credential_dir}"'/server.pem"#; s#key_file:\s*""#key_file: "'"${credential_dir}"'/server-key.pem"#; s#ca_file:\s*""#ca_file: "'"${credential_dir}"'/ca.pem"#' \
+      "${ROOT}/eventbus/config/app.yaml"
+    perl -0pi -e 's#credential_file:\s*""#credential_file: "'"${credential_dir}"'/internal-admin.yaml"#; s#tls_ca_file:\s*""#tls_ca_file: "'"${credential_dir}"'/ca.pem"#' \
+      "${ROOT}/eventbus/config/app.yaml"
+  fi
   start_service "eventbus" "${ROOT}/eventbus" \
     "${ROOT}/bin/moox-eventbus" -conf=config/trpc_go.yaml
   wait_http http://127.0.0.1:11419/readyz "${MOOX_WAIT_EVENTBUS_SECONDS:-60}"
@@ -688,9 +695,17 @@ start_storage() {
 }
 
 start_admin() {
+  local encryption_key_file="${HOME}/.config/moox/credentials/admin-encryption-key"
+  [[ -f "${encryption_key_file}" ]] || { echo "missing Admin encryption key: ${encryption_key_file}" >&2; exit 1; }
   init_admin_schema
+  if [[ "${WITH_EVENTBUS}" == "1" && -x "${ROOT}/bin/moox-admin-cli" ]]; then
+    mkdir -p "${HOME}/.config/moox/eventbus"
+    "${ROOT}/bin/moox-admin-cli" eventbus-credentials ensure --db-path "${ROOT}/data/admin.db" --encryption-key-file "${encryption_key_file}" --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" >> "${ROOT}/logs/admin/stdout.log" 2>&1 || { echo "EventBus credential provisioning failed" >&2; exit 1; }
+    "${ROOT}/bin/moox-admin-cli" eventbus-credentials export --db-path "${ROOT}/data/admin.db" --encryption-key-file "${encryption_key_file}" --output-dir "${HOME}/.config/moox/eventbus" >> "${ROOT}/logs/admin/stdout.log" 2>&1 || { echo "EventBus credential export failed" >&2; exit 1; }
+  fi
   start_service "admin" "${ROOT}/admin" \
-    "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
+    env "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" \
+      "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
 }
 
 start_cloudnode() {
@@ -755,6 +770,7 @@ start_web_host() {
 SERVICE="${1:-}"
 case "${SERVICE}" in
   "")
+    start_admin
     if [[ "${WITH_EVENTBUS}" == "1" ]]; then
       start_eventbus
     fi
@@ -765,7 +781,6 @@ case "${SERVICE}" in
     if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
       start_cloudnode
     fi
-    start_admin
     if [[ "${WITH_MONITOR}" == "1" ]]; then
       start_monitor
     fi
@@ -1338,6 +1353,15 @@ sync_local_stage() {
   chmod +x "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh" "${deploy_dir}/bin/"*
   log "deployed to ${deploy_dir}"
 
+  mkdir -p "${HOME}/.config/moox/credentials"
+  local key_file="${HOME}/.config/moox/credentials/admin-encryption-key"
+  if [[ ! -f "${key_file}" ]]; then
+    if [[ -f "${deploy_dir}/data/admin.db" ]]; then
+      fail "Admin DB exists but ${key_file} is missing"
+    fi
+    umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n' > "${key_file}"; chmod 600 "${key_file}"
+  fi
+
   if [[ "${NO_START}" -eq 0 ]]; then
     "${deploy_dir}/start.sh"
   fi
@@ -1379,6 +1403,12 @@ elif [[ "${DEPLOY_DIR}" == "~/"* ]]; then
 fi
 
 mkdir -p "${DEPLOY_DIR}"
+mkdir -p "${HOME}/.config/moox/credentials"
+KEY_FILE="${HOME}/.config/moox/credentials/admin-encryption-key"
+if [[ ! -f "${KEY_FILE}" ]]; then
+  if [[ -f "${DEPLOY_DIR}/data/admin.db" ]]; then echo "Admin DB exists but encryption key is missing" >&2; exit 1; fi
+  umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n' > "${KEY_FILE}"; chmod 600 "${KEY_FILE}"
+fi
 if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
   if [[ "${WITH_STORAGE}" == "1" ]]; then
     MOOX_WITH_EVENTBUS="${WITH_EVENTBUS}" "${DEPLOY_DIR}/stop.sh" || true
