@@ -38,8 +38,10 @@ validate_metrics_metadata_seeds() {
   done
   # Validate the release contract without contacting Storage. Runtime startup
   # performs the real create-or-verify apply after MetadataService is ready.
-  "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --dry-run >/dev/null
-  "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml" --dry-run >/dev/null
+  # Use a host-built CLI here: the release binary may be cross-compiled for
+  # Linux/arm64 and cannot be executed on the packaging workstation.
+  (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --dry-run >/dev/null)
+  (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml" --dry-run >/dev/null)
 }
 
 validate_metrics_metadata_seeds
