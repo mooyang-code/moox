@@ -19,5 +19,7 @@ use (
 	./packages/cloudruntime
 	./packages/commonpb
 	./packages/healthz
+	./packages/messagepb
+	./packages/jetstream
 	./web-host
 )
