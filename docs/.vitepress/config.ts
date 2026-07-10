@@ -91,6 +91,14 @@ export default defineConfig({
           { text: '监控配置', link: '/监控配置' },
         ],
       },
+      {
+        text: '第五部分：交易系统',
+        collapsed: false,
+        items: [
+          { text: 'Trade 交易模块架构设计', link: '/交易模块架构设计' },
+          { text: 'Trade 模块重写执行计划', link: '/superpowers/plans/2026-07-11-trade-module-rewrite' },
+        ],
+      },
     ],
 
     socialLinks: [
