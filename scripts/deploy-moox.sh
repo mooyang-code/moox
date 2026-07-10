@@ -701,7 +701,7 @@ start_admin() {
   if [[ "${WITH_EVENTBUS}" == "1" && -x "${ROOT}/bin/moox-admin-cli" ]]; then
     mkdir -p "${HOME}/.config/moox/eventbus"
     "${ROOT}/bin/moox-admin-cli" eventbus-credentials ensure --db-path "${ROOT}/data/admin.db" --encryption-key-file "${encryption_key_file}" --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" >> "${ROOT}/logs/admin/stdout.log" 2>&1 || { echo "EventBus credential provisioning failed" >&2; exit 1; }
-    "${ROOT}/bin/moox-admin-cli" eventbus-credentials export --db-path "${ROOT}/data/admin.db" --encryption-key-file "${encryption_key_file}" --output-dir "${HOME}/.config/moox/eventbus" >> "${ROOT}/logs/admin/stdout.log" 2>&1 || { echo "EventBus credential export failed" >&2; exit 1; }
+    "${ROOT}/bin/moox-admin-cli" eventbus-credentials export --db-path "${ROOT}/data/admin.db" --encryption-key-file "${encryption_key_file}" --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" --output-dir "${HOME}/.config/moox/eventbus" >> "${ROOT}/logs/admin/stdout.log" 2>&1 || { echo "EventBus credential export failed" >&2; exit 1; }
   fi
   start_service "admin" "${ROOT}/admin" \
     env "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" \

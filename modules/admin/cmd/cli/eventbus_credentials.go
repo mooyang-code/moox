@@ -75,7 +75,7 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 		if outputDir == "" {
 			return errors.New("--output-dir is required")
 		}
-		return exportEventBus(secretDAO, outputDir, stdout)
+		return exportEventBus(secretDAO, outputDir, publicIP, stdout)
 	case "rotate":
 		return rotateEventBus(secretDAO, credential, confirm, stdout)
 	default:
@@ -188,7 +188,7 @@ func listEventbus(d *dao.SecretDAO, ctx context.Context) (map[string]model.Secre
 	return out, nil
 }
 
-func exportEventBus(d *dao.SecretDAO, dir string, out io.Writer) error {
+func exportEventBus(d *dao.SecretDAO, dir, publicIP string, out io.Writer) error {
 	ctx := context.Background()
 	rows, err := listEventbus(d, ctx)
 	if err != nil {
@@ -225,7 +225,11 @@ func exportEventBus(d *dao.SecretDAO, dir string, out io.Writer) error {
 		if role == "monitor-hostmetrics-consumer" {
 			field = "monitor_eventbus_token"
 		}
-		content := fmt.Sprintf("version: 1\nurls: []\nusername: %s\n%s: %s\nca_file: ca.pem\n", role, field, tokens[role])
+		url := "tls://127.0.0.1:4222"
+		if publicIP != "" {
+			url = "tls://" + publicIP + ":4222"
+		}
+		content := fmt.Sprintf("version: 1\nurls:\n  - %s\nusername: %s\n%s: %s\nca_file: ca.pem\n", url, role, field, tokens[role])
 		if err := atomicSecretFile(filepath.Join(dir, name), []byte(content)); err != nil {
 			return err
 		}
