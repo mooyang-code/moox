@@ -20,7 +20,13 @@ func NewRowsUpdatedBus(ctx context.Context, cfg storageconfig.StorageEventBus) (
 		if len(urls) == 0 && strings.TrimSpace(cfg.NATSURL) != "" {
 			urls = []string{cfg.NATSURL}
 		}
-		client, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv(urls, "moox-storage"))
+		clientCfg := jetstream.ConfigFromEnv(urls, "moox-storage")
+		if cfg.CredentialFile != "" {
+			if err := clientCfg.ApplyCredentialFile(cfg.CredentialFile); err != nil {
+				return nil, err
+			}
+		}
+		client, err := jetstream.Connect(ctx, clientCfg)
 		if err != nil {
 			return nil, err
 		}

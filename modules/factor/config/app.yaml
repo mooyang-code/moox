@@ -14,6 +14,7 @@ nats:
   urls:
     - nats://127.0.0.1:4222
   url: nats://127.0.0.1:4222
+  credential_file: ~/.config/moox/factor/eventbus.yaml
   stream: MOOX_STORAGE
   consumer: factor_calc
   subject: moox.storage.time_series.rows_updated.v1

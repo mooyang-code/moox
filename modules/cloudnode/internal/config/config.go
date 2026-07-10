@@ -52,6 +52,7 @@ type JetStreamConfig struct {
 	Enabled        bool                    `yaml:"enabled"`
 	URLs           []string                `yaml:"urls"`
 	NATSURL        string                  `yaml:"nats_url"`
+	CredentialFile string                  `yaml:"credential_file"`
 	SubjectPrefix  string                  `yaml:"subject_prefix"`
 	ExecStream     string                  `yaml:"exec_stream"`
 	Embedded       EmbeddedJetStreamConfig `yaml:"embedded"`

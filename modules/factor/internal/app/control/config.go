@@ -42,11 +42,12 @@ type StorageConfig struct {
 
 // NATSConfig describes the Storage event stream subscription.
 type NATSConfig struct {
-	URLs     []string `yaml:"urls"`
-	URL      string   `yaml:"url"`
-	Stream   string   `yaml:"stream"`
-	Consumer string   `yaml:"consumer"`
-	Subject  string   `yaml:"subject"`
+	URLs           []string `yaml:"urls"`
+	URL            string   `yaml:"url"`
+	Stream         string   `yaml:"stream"`
+	Consumer       string   `yaml:"consumer"`
+	Subject        string   `yaml:"subject"`
+	CredentialFile string   `yaml:"credential_file"`
 }
 
 // EngineConfig describes the local Python factor engine.

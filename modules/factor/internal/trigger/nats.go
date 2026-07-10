@@ -12,11 +12,12 @@ import (
 )
 
 type NATSConfig struct {
-	URLs     []string
-	URL      string
-	Stream   string
-	Consumer string
-	Subject  string
+	URLs           []string
+	URL            string
+	Stream         string
+	Consumer       string
+	Subject        string
+	CredentialFile string
 }
 
 type NATSConsumer struct {
@@ -40,7 +41,13 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 	if len(urls) == 0 && strings.TrimSpace(c.cfg.URL) != "" {
 		urls = []string{c.cfg.URL}
 	}
-	client, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv(urls, "moox-factor"))
+	clientCfg := jetstream.ConfigFromEnv(urls, "moox-factor")
+	if c.cfg.CredentialFile != "" {
+		if err := clientCfg.ApplyCredentialFile(c.cfg.CredentialFile); err != nil {
+			return err
+		}
+	}
+	client, err := jetstream.Connect(ctx, clientCfg)
 	if err != nil {
 		return err
 	}

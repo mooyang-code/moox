@@ -46,18 +46,19 @@ type StorageDevices struct {
 
 // StorageEventBus 保存事件总线传输配置。
 type StorageEventBus struct {
-	Type          string   `yaml:"type"`
-	URLs          []string `yaml:"urls"`
-	NATSURL       string   `yaml:"nats_url"`
-	StreamName    string   `yaml:"stream_name"`
-	SubjectPrefix string   `yaml:"subject_prefix"`
-	ConsumerName  string   `yaml:"consumer_name"`
-	MaxAgeHours   int      `yaml:"max_age_hours"`
-	MaxMsgs       int64    `yaml:"max_msgs"`
-	MaxBytes      int64    `yaml:"max_bytes"`
-	MaxInFlight   int      `yaml:"max_in_flight"`
-	AckWaitMS     int      `yaml:"ack_wait_ms"`
-	MaxDeliver    int      `yaml:"max_deliver"`
+	Type           string   `yaml:"type"`
+	URLs           []string `yaml:"urls"`
+	NATSURL        string   `yaml:"nats_url"`
+	CredentialFile string   `yaml:"credential_file"`
+	StreamName     string   `yaml:"stream_name"`
+	SubjectPrefix  string   `yaml:"subject_prefix"`
+	ConsumerName   string   `yaml:"consumer_name"`
+	MaxAgeHours    int      `yaml:"max_age_hours"`
+	MaxMsgs        int64    `yaml:"max_msgs"`
+	MaxBytes       int64    `yaml:"max_bytes"`
+	MaxInFlight    int      `yaml:"max_in_flight"`
+	AckWaitMS      int      `yaml:"ack_wait_ms"`
+	MaxDeliver     int      `yaml:"max_deliver"`
 	// Embedded is retained for decoding old single-process test configurations.
 	// Production Storage never starts a broker; moox-eventbus owns JetStream.
 	Embedded StorageEmbeddedEventBus `yaml:"embedded"`
