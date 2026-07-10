@@ -5,6 +5,7 @@ package trpc.moox.storage;
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
 
 import "moox_common.proto";
+import "common.proto";
 import "access.proto";
 import "metadata.proto";
 import "view.proto";
@@ -45,6 +46,7 @@ message ViewIndexBatch {
   string replay_source_id = 7;
   uint64 replay_from_commit_seq = 8;
   uint64 replay_through_commit_seq = 9;
+  RecordViewMode record_view_mode = 10;
 }
 
 // ViewIndexStats 是无需扫描完整索引即可读取的持久化统计信息。

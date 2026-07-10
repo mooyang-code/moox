@@ -124,13 +124,6 @@ message View {
   RecordViewMode record_view_mode = 24;
 }
 
-// RecordViewMode 表示 Record View 的物化模式。
-enum RecordViewMode {
-  RECORD_VIEW_MODE_UNSPECIFIED = 0;
-  RECORD_VIEW_MODE_CURRENT = 1;
-  RECORD_VIEW_MODE_HISTORY = 2;
-}
-
 // ViewColumn 定义 View 对用户暴露的一列。
 message ViewColumn {
   // space_id 是 ViewColumn 所属 Space。
@@ -1449,6 +1442,15 @@ message UpdateViewIndexBuildReq {
   string coverage_start = 11;
   string coverage_end = 12;
   uint64 entries_written = 13;
+  string snapshot_id = 14;
+  uint64 snapshot_commit_seq = 15;
+  uint64 replay_through_commit_seq = 16;
+  uint64 replayed_commit_seq = 17;
+  uint64 source_rows_seen = 18;
+  uint64 expected_visible_rows = 19;
+  uint64 accepted_mutations = 20;
+  string record_source_id = 21;
+  string retention_cutoff_at = 22;
 }
 
 message UpdateViewIndexBuildRsp {

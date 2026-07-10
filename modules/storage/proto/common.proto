@@ -50,6 +50,13 @@ enum RecordReadMode {
   RECORD_READ_MODE_HISTORY = 2;
 }
 
+// RecordViewMode 表示 Record View 的物化模式。
+enum RecordViewMode {
+  RECORD_VIEW_MODE_UNSPECIFIED = 0;
+  RECORD_VIEW_MODE_CURRENT = 1;
+  RECORD_VIEW_MODE_HISTORY = 2;
+}
+
 // ValueList 表示有序类型值列表。
 message ValueList {
   // values 是列表中的值。

@@ -16,6 +16,41 @@ type TimeSeriesProjectionReader func(context.Context, []*pb.TimeSeriesKey) ([]*p
 
 type RecordProjectionReader func(context.Context, []*pb.RecordKey) ([]*pb.RecordRow, error)
 
+// BuildCurrentRecordMutation builds one complete CURRENT document from rows
+// captured at the same source snapshot boundary.
+func BuildCurrentRecordMutation(item *pb.View, rowsByDataset map[string]*pb.RecordRow, sourceID string, projectionWatermark uint64) (*pb.RecordIndexMutation, error) {
+	if item == nil || item.GetPrimaryDatasetId() == "" {
+		return nil, errors.New("Record View and primary dataset are required")
+	}
+	if item.GetRecordViewMode() == pb.RecordViewMode_RECORD_VIEW_MODE_HISTORY {
+		return nil, errors.New("CURRENT mutation cannot use HISTORY Record View")
+	}
+	primary := rowsByDataset[item.GetPrimaryDatasetId()]
+	if primary == nil {
+		return nil, nil
+	}
+	key := proto.Clone(primary.GetKey()).(*pb.RecordKey)
+	key.Version = ""
+	row := &pb.RecordRow{Key: key, Columns: ProjectRecordColumnsForView(item.GetPrimaryDatasetId(), item.GetColumns(), rowsByDataset), Attributes: CloneStringMap(primary.GetAttributes()), Revision: primary.GetRevision(), UpdatedAt: primary.GetUpdatedAt(), CommitSeq: primary.GetCommitSeq()}
+	return &pb.RecordIndexMutation{Row: row, OrderCommitSeq: projectionWatermark, SourceId: sourceID}, nil
+}
+
+// BuildHistoryRecordMutation maps the committed immutable row directly. It
+// never rereads CURRENT, so every revision remains independently indexable.
+func BuildHistoryRecordMutation(item *pb.View, committed *pb.RecordRow, sourceID string) (*pb.RecordIndexMutation, error) {
+	if item == nil || item.GetPrimaryDatasetId() == "" || committed == nil || committed.GetKey() == nil {
+		return nil, errors.New("history Record mutation requires a committed primary row")
+	}
+	if item.GetRecordViewMode() == pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT || len(item.GetDatasetIds()) > 1 {
+		return nil, errors.New("HISTORY mutation requires one dataset")
+	}
+	key := proto.Clone(committed.GetKey()).(*pb.RecordKey)
+	key.Version = ""
+	row := proto.Clone(committed).(*pb.RecordRow)
+	row.Key = key
+	return &pb.RecordIndexMutation{Row: row, OrderCommitSeq: committed.GetCommitSeq(), SourceId: sourceID}, nil
+}
+
 // TimeSeriesRowsForView projects fact rows into the columns exposed by a view.
 func TimeSeriesRowsForView(
 	ctx context.Context,
@@ -195,6 +230,7 @@ func RecordRowsForView(
 			Key:        proto.Clone(primaryRow.GetKey()).(*pb.RecordKey),
 			Columns:    ProjectRecordColumnsForView(primaryDatasetID, columns, group.rowsByDataset),
 			Attributes: CloneStringMap(primaryRow.GetAttributes()),
+			Revision:   primaryRow.GetRevision(), UpdatedAt: primaryRow.GetUpdatedAt(), CommitSeq: primaryRow.GetCommitSeq(),
 		})
 	}
 	return out, true, nil

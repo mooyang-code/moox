@@ -855,7 +855,9 @@ const viewIndexBuildColumns = `
 	c_target_view_version, c_state, c_owner_id, c_lease_expires_at,
 	c_cursor_json, c_snapshot_end, c_coverage_start, c_coverage_end,
 	c_entries_written, c_schema_hash, c_columns_json, c_started_at,
-	c_updated_at, c_finished_at, c_error`
+	c_updated_at, c_finished_at, c_error, c_snapshot_id, c_snapshot_commit_seq,
+	c_replay_through_commit_seq, c_replayed_commit_seq, c_source_rows_seen,
+	c_expected_visible_rows, c_accepted_mutations, c_record_source_id, c_retention_cutoff_at`
 
 func (s *Store) GetViewIndexBuild(ctx context.Context, spaceID string, viewID string) (*pb.ViewIndexBuild, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+viewIndexBuildColumns+`
@@ -880,7 +882,7 @@ func (s *Store) ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewIndexB
 	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO t_view_index_builds (`+viewIndexBuildColumns+`)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, '', '', 0, ?, ?, ?, ?, '', ''
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, '', '', 0, ?, ?, ?, ?, '', '', '', 0, 0, 0, 0, 0, 0, '', ''
 		FROM t_views
 		WHERE c_space_id = ? AND c_view_id = ? AND c_view_version = ? AND c_active_index_id = ?
 		ON CONFLICT(c_space_id, c_view_id) DO UPDATE SET
@@ -902,6 +904,15 @@ func (s *Store) ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewIndexB
 			c_updated_at = excluded.c_updated_at,
 			c_finished_at = '',
 			c_error = ''
+			,c_snapshot_id = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_snapshot_id ELSE '' END
+			,c_snapshot_commit_seq = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_snapshot_commit_seq ELSE 0 END
+			,c_replay_through_commit_seq = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_replay_through_commit_seq ELSE 0 END
+			,c_replayed_commit_seq = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_replayed_commit_seq ELSE 0 END
+			,c_source_rows_seen = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_source_rows_seen ELSE 0 END
+			,c_expected_visible_rows = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_expected_visible_rows ELSE 0 END
+			,c_accepted_mutations = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_accepted_mutations ELSE 0 END
+			,c_record_source_id = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_record_source_id ELSE '' END
+			,c_retention_cutoff_at = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_retention_cutoff_at ELSE '' END
 		WHERE (t_view_index_builds.c_target_view_version < excluded.c_target_view_version)
 		   OR (t_view_index_builds.c_state = ?)
 		   OR (t_view_index_builds.c_build_id = excluded.c_build_id AND t_view_index_builds.c_lease_expires_at <= ?)
@@ -945,6 +956,15 @@ func (s *Store) UpdateViewIndexBuild(ctx context.Context, req *pb.UpdateViewInde
 			c_coverage_start = CASE WHEN ? <> '' THEN ? ELSE c_coverage_start END,
 			c_coverage_end = CASE WHEN ? <> '' THEN ? ELSE c_coverage_end END,
 			c_entries_written = CASE WHEN ? > 0 THEN ? ELSE c_entries_written END,
+			c_snapshot_id = CASE WHEN ? <> '' THEN ? ELSE c_snapshot_id END,
+			c_snapshot_commit_seq = CASE WHEN ? > 0 THEN ? ELSE c_snapshot_commit_seq END,
+			c_replay_through_commit_seq = CASE WHEN ? > 0 THEN ? ELSE c_replay_through_commit_seq END,
+			c_replayed_commit_seq = CASE WHEN ? > 0 THEN ? ELSE c_replayed_commit_seq END,
+			c_source_rows_seen = CASE WHEN ? > 0 THEN ? ELSE c_source_rows_seen END,
+			c_expected_visible_rows = CASE WHEN ? > 0 THEN ? ELSE c_expected_visible_rows END,
+			c_accepted_mutations = CASE WHEN ? > 0 THEN ? ELSE c_accepted_mutations END,
+			c_record_source_id = CASE WHEN ? <> '' THEN ? ELSE c_record_source_id END,
+			c_retention_cutoff_at = CASE WHEN ? <> '' THEN ? ELSE c_retention_cutoff_at END,
 			c_updated_at = ?,
 			c_finished_at = CASE WHEN ? <> '' THEN ? ELSE c_finished_at END
 		WHERE c_space_id = ? AND c_view_id = ? AND c_build_id = ? AND c_owner_id = ?
@@ -952,7 +972,11 @@ func (s *Store) UpdateViewIndexBuild(ctx context.Context, req *pb.UpdateViewInde
 	`, req.GetNextState(), leaseText,
 		req.GetCursorJson(), req.GetCursorJson(), req.GetSnapshotEnd(), req.GetSnapshotEnd(),
 		req.GetCoverageStart(), req.GetCoverageStart(), req.GetCoverageEnd(), req.GetCoverageEnd(),
-		req.GetEntriesWritten(), req.GetEntriesWritten(), nowText, finishedAt, finishedAt,
+		req.GetEntriesWritten(), req.GetEntriesWritten(), req.GetSnapshotId(), req.GetSnapshotId(),
+		req.GetSnapshotCommitSeq(), req.GetSnapshotCommitSeq(), req.GetReplayThroughCommitSeq(), req.GetReplayThroughCommitSeq(),
+		req.GetReplayedCommitSeq(), req.GetReplayedCommitSeq(), req.GetSourceRowsSeen(), req.GetSourceRowsSeen(),
+		req.GetExpectedVisibleRows(), req.GetExpectedVisibleRows(), req.GetAcceptedMutations(), req.GetAcceptedMutations(),
+		req.GetRecordSourceId(), req.GetRecordSourceId(), req.GetRetentionCutoffAt(), req.GetRetentionCutoffAt(), nowText, finishedAt, finishedAt,
 		req.GetSpaceId(), req.GetViewId(), req.GetBuildId(), req.GetOwnerId(), req.GetExpectedState(), nowText)
 	if err != nil {
 		return nil, err
@@ -1047,9 +1071,9 @@ func (s *Store) FailViewIndexBuild(ctx context.Context, req *pb.FailViewIndexBui
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE t_view_index_builds SET c_state = ?, c_error = ?, c_updated_at = ?, c_finished_at = ?
 		WHERE c_space_id = ? AND c_view_id = ? AND c_build_id = ? AND c_owner_id = ?
-		  AND c_state IN (?, ?, ?) AND c_lease_expires_at >= ?
+		  AND c_state IN (?, ?, ?, ?, ?) AND c_lease_expires_at >= ?
 	`, pb.ViewIndexBuild_FAILED, message, nowText, nowText, req.GetSpaceId(), req.GetViewId(), req.GetBuildId(), req.GetOwnerId(),
-		pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, nowText)
+		pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_BASELINING, pb.ViewIndexBuild_ACTIVATING, nowText)
 	if err != nil {
 		return nil, err
 	}
@@ -1101,6 +1125,10 @@ func validViewIndexBuildTransition(from pb.ViewIndexBuild_State, to pb.ViewIndex
 		return to == pb.ViewIndexBuild_BUILDING || to == pb.ViewIndexBuild_CATCHING_UP
 	case pb.ViewIndexBuild_CATCHING_UP:
 		return to == pb.ViewIndexBuild_CATCHING_UP || to == pb.ViewIndexBuild_READY
+	case pb.ViewIndexBuild_BASELINING:
+		return to == pb.ViewIndexBuild_BASELINING || to == pb.ViewIndexBuild_CATCHING_UP
+	case pb.ViewIndexBuild_ACTIVATING:
+		return to == pb.ViewIndexBuild_ACTIVATING || to == pb.ViewIndexBuild_READY
 	default:
 		return false
 	}
@@ -1134,6 +1162,8 @@ func scanViewIndexBuild(row rowScanner) (*pb.ViewIndexBuild, error) {
 		&build.CursorJson, &build.SnapshotEnd, &build.CoverageStart, &build.CoverageEnd,
 		&build.EntriesWritten, &build.SchemaHash, &columnsJSON, &build.StartedAt,
 		&build.UpdatedAt, &build.FinishedAt, &build.Error,
+		&build.SnapshotId, &build.SnapshotCommitSeq, &build.ReplayThroughCommitSeq, &build.ReplayedCommitSeq,
+		&build.SourceRowsSeen, &build.ExpectedVisibleRows, &build.AcceptedMutations, &build.RecordSourceId, &build.RetentionCutoffAt,
 	); err != nil {
 		return nil, err
 	}

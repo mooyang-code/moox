@@ -20,32 +20,53 @@ type ViewIndexEngine interface {
 }
 
 type ViewIndexSchema struct {
-	SpaceID     string
-	ViewID      string
-	ViewVersion uint64
-	Engine      string
-	Columns     []*pb.ViewColumn
-	SchemaHash  string
+	SpaceID          string
+	ViewID           string
+	ViewVersion      uint64
+	Engine           string
+	Columns          []*pb.ViewColumn
+	SchemaHash       string
+	RecordViewMode   pb.RecordViewMode
+	LayoutRevision   uint32
+	PrimaryDatasetID string
+	DatasetIDs       []string
+	GrainKeys        []string
+	FilterJSON       string
+	RecordSourceID   string
 }
 
+const RecordLayoutRevision uint32 = 2
+
 type ViewIndexBatch struct {
-	TimeSeriesRows []*pb.TimeSeriesRow
-	RecordRows     []*pb.RecordRow
-	Columns        []*pb.ViewColumn
-	ViewVersion    uint64
-	SchemaHash     string
+	TimeSeriesRows         []*pb.TimeSeriesRow
+	RecordRows             []*pb.RecordRow
+	Columns                []*pb.ViewColumn
+	ViewVersion            uint64
+	SchemaHash             string
+	RecordMutations        []*pb.RecordIndexMutation
+	ReplaySourceID         string
+	ReplayFromCommitSeq    uint64
+	ReplayThroughCommitSeq uint64
+	RecordViewMode         pb.RecordViewMode
 }
 
 type ViewIndexStats struct {
-	Exists        bool
-	ViewVersion   uint64
-	EntryCount    int64
-	MinVersion    string
-	MaxVersion    string
-	SchemaHash    string
-	PhysicalBytes uint64
-	UpdatedAt     string
-	FreeDiskBytes uint64
+	Exists                  bool
+	ViewVersion             uint64
+	EntryCount              int64
+	MinVersion              string
+	MaxVersion              string
+	SchemaHash              string
+	PhysicalBytes           uint64
+	UpdatedAt               string
+	FreeDiskBytes           uint64
+	MinRevision             uint64
+	MaxRevision             uint64
+	AppliedSourceID         string
+	AppliedThroughCommitSeq uint64
+	VisibleEntryCount       uint64
+	RecordViewMode          pb.RecordViewMode
+	LayoutRevision          uint32
 }
 
 func ViewIndexID(spaceID string, viewID string, slot Slot) string {
@@ -94,6 +115,10 @@ func BuildIndexWritable(view *pb.View) bool {
 	currentSchema := ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), Engine: view.GetEngine(), Columns: view.GetColumns(),
 	}
+	if view.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		currentSchema.PrimaryDatasetID, currentSchema.DatasetIDs, currentSchema.GrainKeys, currentSchema.FilterJSON, currentSchema.RecordViewMode = view.GetPrimaryDatasetId(), view.GetDatasetIds(), view.GetGrainKeys(), view.GetFilterJson(), view.GetRecordViewMode()
+		currentSchema.LayoutRevision = RecordLayoutRevision
+	}
 	wantHash := HashViewIndexSchema(currentSchema)
 	if build.GetSchemaHash() == "" || build.GetSchemaHash() != wantHash {
 		return false
@@ -132,14 +157,24 @@ func HashViewIndexSchema(schema ViewIndexSchema) string {
 		SortOrder  uint32 `json:"sort_order"`
 	}
 	shape := struct {
-		SpaceID string        `json:"space_id"`
-		ViewID  string        `json:"view_id"`
-		Engine  string        `json:"engine"`
-		Columns []columnShape `json:"columns"`
+		SpaceID          string        `json:"space_id"`
+		ViewID           string        `json:"view_id"`
+		Engine           string        `json:"engine"`
+		RecordViewMode   int32         `json:"record_view_mode"`
+		LayoutRevision   uint32        `json:"layout_revision"`
+		PrimaryDatasetID string        `json:"primary_dataset_id"`
+		DatasetIDs       []string      `json:"dataset_ids"`
+		GrainKeys        []string      `json:"grain_keys"`
+		FilterJSON       string        `json:"filter_json"`
+		RecordSourceID   string        `json:"record_source_id"`
+		Columns          []columnShape `json:"columns"`
 	}{
-		SpaceID: schema.SpaceID,
-		ViewID:  schema.ViewID,
-		Engine:  schema.Engine,
+		SpaceID:        schema.SpaceID,
+		ViewID:         schema.ViewID,
+		Engine:         schema.Engine,
+		RecordViewMode: int32(schema.RecordViewMode), LayoutRevision: schema.LayoutRevision,
+		PrimaryDatasetID: schema.PrimaryDatasetID, DatasetIDs: schema.DatasetIDs, GrainKeys: schema.GrainKeys,
+		FilterJSON: schema.FilterJSON, RecordSourceID: schema.RecordSourceID,
 	}
 	for _, column := range schema.Columns {
 		shape.Columns = append(shape.Columns, columnShape{

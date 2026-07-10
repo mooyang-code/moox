@@ -11,8 +11,12 @@ const (
 )
 
 type buildCursor struct {
-	Phase  string `json:"phase"`
-	Cursor string `json:"cursor,omitempty"`
+	Phase             string `json:"phase"`
+	Cursor            string `json:"cursor,omitempty"`
+	SnapshotID        string `json:"snapshot_id,omitempty"`
+	SnapshotCommitSeq uint64 `json:"snapshot_commit_seq,omitempty"`
+	SourceID          string `json:"source_id,omitempty"`
+	ReplayedCommitSeq uint64 `json:"replayed_commit_seq,omitempty"`
 }
 
 func encodeBuildCursor(cursor buildCursor) (string, error) {

@@ -45,15 +45,17 @@ type managedIndex struct {
 var _ viewindex.ViewIndexEngine = (*Service)(nil)
 
 type SearchRequest struct {
-	IndexID      string
-	SpaceID      string
-	DatasetID    string
-	Keys         []*pb.RecordKey
-	TextQuery    string
-	VersionRange *pb.VersionRange
-	Filters      []*pb.FilterExpr
-	Page         *pb.Page
-	Sorts        []*pb.SortSpec
+	IndexID        string
+	SpaceID        string
+	DatasetID      string
+	Keys           []*pb.RecordKey
+	TextQuery      string
+	VersionRange   *pb.VersionRange
+	Filters        []*pb.FilterExpr
+	Page           *pb.Page
+	Sorts          []*pb.SortSpec
+	RecordViewMode pb.RecordViewMode
+	RevisionRange  *pb.RevisionRange
 }
 
 func NewService(opts Options) *Service {
@@ -76,7 +78,7 @@ func (s *Service) Prepare(ctx context.Context, indexID string, schema viewindex.
 		return err
 	}
 	defer release()
-	return index.SetSchema(ctx, schema.ViewVersion, schema.SchemaHash)
+	return index.SetSchema(ctx, schema)
 }
 
 func (s *Service) Write(ctx context.Context, indexID string, batch viewindex.ViewIndexBatch) error {
@@ -94,6 +96,13 @@ func (s *Service) Write(ctx context.Context, indexID string, batch viewindex.Vie
 		return err
 	}
 	defer release()
+	if len(batch.RecordMutations) > 0 {
+		mode := batch.RecordViewMode
+		if batch.ReplaySourceID != "" {
+			return index.ApplyRecordReplay(ctx, batch.RecordMutations, indexed, mode, batch.ReplaySourceID, batch.ReplayFromCommitSeq, batch.ReplayThroughCommitSeq)
+		}
+		return index.ApplyRecordMutations(ctx, batch.RecordMutations, indexed, mode)
+	}
 	return index.IndexRows(ctx, batch.RecordRows, indexed)
 }
 
@@ -275,14 +284,15 @@ func (s *Service) SearchRecordRows(ctx context.Context, req SearchRequest) ([]*p
 	}
 	defer release()
 	return index.SearchRecordRows(ctx, devicebleve.SearchRequest{
-		SpaceID:      req.SpaceID,
-		DatasetID:    req.DatasetID,
-		Keys:         req.Keys,
-		TextQuery:    req.TextQuery,
-		VersionRange: req.VersionRange,
-		Filters:      req.Filters,
-		Page:         req.Page,
-		Sorts:        req.Sorts,
+		SpaceID:        req.SpaceID,
+		DatasetID:      req.DatasetID,
+		Keys:           req.Keys,
+		TextQuery:      req.TextQuery,
+		VersionRange:   req.VersionRange,
+		Filters:        req.Filters,
+		Page:           req.Page,
+		Sorts:          req.Sorts,
+		RecordViewMode: req.RecordViewMode, RevisionRange: req.RevisionRange,
 	})
 }
 

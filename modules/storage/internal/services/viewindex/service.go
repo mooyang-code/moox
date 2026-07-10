@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	coreviewindex "github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"google.golang.org/protobuf/proto"
 )
 
 type ManagedEngine interface {
@@ -187,7 +188,12 @@ func (s *Service) SearchRecordIndex(ctx context.Context, req *pb.SearchRecordInd
 	if err := validateQueryIndexID(req.GetIndexId(), req.GetQuery().GetSpaceId()); err != nil {
 		return &pb.SearchRecordIndexRsp{RetInfo: indexError(err)}, nil
 	}
-	columns, rows, page, err := s.records.QueryRecordRows(ctx, req.GetIndexId(), req.GetDatasetId(), req.GetQuery())
+	query := req.GetQuery()
+	if query != nil && req.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		query = proto.Clone(query).(*pb.SearchRecordRowsReq)
+		query.RecordViewMode = req.GetRecordViewMode()
+	}
+	columns, rows, page, err := s.records.QueryRecordRows(ctx, req.GetIndexId(), req.GetDatasetId(), query)
 	if err != nil {
 		return &pb.SearchRecordIndexRsp{RetInfo: indexError(err)}, nil
 	}
@@ -298,6 +304,9 @@ func schemaFromProto(schema *pb.ViewIndexSchema) coreviewindex.ViewIndexSchema {
 	return coreviewindex.ViewIndexSchema{
 		SpaceID: schema.GetSpaceId(), ViewID: schema.GetViewId(), ViewVersion: schema.GetViewVersion(),
 		Engine: schema.GetEngine(), Columns: schema.GetColumns(), SchemaHash: schema.GetSchemaHash(),
+		RecordViewMode: schema.GetRecordViewMode(), LayoutRevision: schema.GetLayoutRevision(),
+		PrimaryDatasetID: schema.GetPrimaryDatasetId(), DatasetIDs: schema.GetDatasetIds(), GrainKeys: schema.GetGrainKeys(),
+		FilterJSON: schema.GetFilterJson(), RecordSourceID: schema.GetRecordSourceId(),
 	}
 }
 
@@ -308,6 +317,9 @@ func batchFromProto(batch *pb.ViewIndexBatch) coreviewindex.ViewIndexBatch {
 	return coreviewindex.ViewIndexBatch{
 		TimeSeriesRows: batch.GetTimeSeriesRows(), RecordRows: batch.GetRecordRows(), Columns: batch.GetColumns(),
 		ViewVersion: batch.GetViewVersion(), SchemaHash: batch.GetSchemaHash(),
+		RecordMutations: batch.GetRecordMutations(), ReplaySourceID: batch.GetReplaySourceId(),
+		ReplayFromCommitSeq: batch.GetReplayFromCommitSeq(), ReplayThroughCommitSeq: batch.GetReplayThroughCommitSeq(),
+		RecordViewMode: batch.GetRecordViewMode(),
 	}
 }
 
@@ -319,6 +331,9 @@ func statsToProto(stats coreviewindex.ViewIndexStats) *pb.ViewIndexStats {
 	return &pb.ViewIndexStats{
 		Exists: stats.Exists, ViewVersion: stats.ViewVersion, EntryCount: count, MinVersion: stats.MinVersion, MaxVersion: stats.MaxVersion,
 		SchemaHash: stats.SchemaHash, PhysicalBytes: stats.PhysicalBytes, UpdatedAt: stats.UpdatedAt, FreeDiskBytes: stats.FreeDiskBytes,
+		MinRevision: stats.MinRevision, MaxRevision: stats.MaxRevision, AppliedSourceId: stats.AppliedSourceID,
+		AppliedThroughCommitSeq: stats.AppliedThroughCommitSeq, VisibleEntryCount: stats.VisibleEntryCount,
+		RecordViewMode: stats.RecordViewMode, LayoutRevision: stats.LayoutRevision,
 	}
 }
 
@@ -333,6 +348,9 @@ func statsFromProto(stats *pb.ViewIndexStats) coreviewindex.ViewIndexStats {
 	return coreviewindex.ViewIndexStats{
 		Exists: stats.GetExists(), ViewVersion: stats.GetViewVersion(), EntryCount: int64(count), MinVersion: stats.GetMinVersion(), MaxVersion: stats.GetMaxVersion(),
 		SchemaHash: stats.GetSchemaHash(), PhysicalBytes: stats.GetPhysicalBytes(), UpdatedAt: stats.GetUpdatedAt(), FreeDiskBytes: stats.GetFreeDiskBytes(),
+		MinRevision: stats.GetMinRevision(), MaxRevision: stats.GetMaxRevision(), AppliedSourceID: stats.GetAppliedSourceId(),
+		AppliedThroughCommitSeq: stats.GetAppliedThroughCommitSeq(), VisibleEntryCount: stats.GetVisibleEntryCount(),
+		RecordViewMode: stats.GetRecordViewMode(), LayoutRevision: stats.GetLayoutRevision(),
 	}
 }
 

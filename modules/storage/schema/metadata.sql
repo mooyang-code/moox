@@ -112,10 +112,19 @@ CREATE TABLE IF NOT EXISTS t_view_index_builds (
     c_updated_at TEXT NOT NULL,
     c_finished_at TEXT NOT NULL DEFAULT '',
     c_error TEXT NOT NULL DEFAULT '',
+    c_snapshot_id TEXT NOT NULL DEFAULT '',
+    c_snapshot_commit_seq INTEGER NOT NULL DEFAULT 0,
+    c_replay_through_commit_seq INTEGER NOT NULL DEFAULT 0,
+    c_replayed_commit_seq INTEGER NOT NULL DEFAULT 0,
+    c_source_rows_seen INTEGER NOT NULL DEFAULT 0,
+    c_expected_visible_rows INTEGER NOT NULL DEFAULT 0,
+    c_accepted_mutations INTEGER NOT NULL DEFAULT 0,
+    c_record_source_id TEXT NOT NULL DEFAULT '',
+    c_retention_cutoff_at TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (c_space_id, c_view_id),
     FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views (c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE,
     CHECK (c_engine IN ('duckdb', 'bleve')),
-    CHECK (c_state BETWEEN 1 AND 5)
+    CHECK (c_state BETWEEN 1 AND 7)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_view_index_builds_lease

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -38,14 +39,16 @@ type Index struct {
 
 // SearchRequest 描述一次 Bleve 复合检索请求。
 type SearchRequest struct {
-	SpaceID      string
-	DatasetID    string
-	Keys         []*pb.RecordKey
-	TextQuery    string
-	VersionRange *pb.VersionRange
-	Filters      []*pb.FilterExpr
-	Page         *pb.Page
-	Sorts        []*pb.SortSpec
+	SpaceID        string
+	DatasetID      string
+	Keys           []*pb.RecordKey
+	TextQuery      string
+	VersionRange   *pb.VersionRange
+	Filters        []*pb.FilterExpr
+	Page           *pb.Page
+	Sorts          []*pb.SortSpec
+	RecordViewMode pb.RecordViewMode
+	RevisionRange  *pb.RevisionRange
 }
 
 const (
@@ -54,12 +57,19 @@ const (
 )
 
 type indexStatsDocument struct {
-	ViewVersion uint64 `json:"view_version"`
-	EntryCount  int64  `json:"entry_count"`
-	MinVersion  string `json:"min_version"`
-	MaxVersion  string `json:"max_version"`
-	SchemaHash  string `json:"schema_hash"`
-	UpdatedAt   string `json:"updated_at"`
+	ViewVersion             uint64            `json:"view_version"`
+	EntryCount              int64             `json:"entry_count"`
+	MinVersion              string            `json:"min_version"`
+	MaxVersion              string            `json:"max_version"`
+	SchemaHash              string            `json:"schema_hash"`
+	UpdatedAt               string            `json:"updated_at"`
+	MinRevision             uint64            `json:"min_revision"`
+	MaxRevision             uint64            `json:"max_revision"`
+	AppliedSourceID         string            `json:"applied_source_id"`
+	AppliedThroughCommitSeq uint64            `json:"applied_through_commit_seq"`
+	VisibleEntryCount       uint64            `json:"visible_entry_count"`
+	RecordViewMode          pb.RecordViewMode `json:"record_view_mode"`
+	LayoutRevision          uint32            `json:"layout_revision"`
 }
 
 func Open(opts Options) (*Index, error) {
@@ -117,18 +127,24 @@ func buildIndexMapping() mapping.IndexMapping {
 	allTextMapping.Store = false
 	docMapping.AddFieldMappingsAt(allTextField, allTextMapping)
 
-	for _, field := range []string{"_doc_type", "space_id", "dataset_id", "record_id", "version"} {
+	for _, field := range []string{"_doc_type", "space_id", "dataset_id", "record_id", "version", "_record_mode", "_order_source_id", "_order_commit_seq_text"} {
 		kw := blevelib.NewKeywordFieldMapping()
-		kw.Store = false
+		kw.Store = field == "_order_commit_seq_text"
 		kw.Index = true
 		docMapping.AddFieldMappingsAt(field, kw)
+	}
+	for _, field := range []string{"_revision", "_order_commit_seq"} {
+		numeric := blevelib.NewNumericFieldMapping()
+		numeric.Store = false
+		numeric.Index = true
+		docMapping.AddFieldMappingsAt(field, numeric)
 	}
 
 	mapping.DefaultMapping = docMapping
 	return mapping
 }
 
-func (i *Index) SetSchema(ctx context.Context, viewVersion uint64, schemaHash string) error {
+func (i *Index) SetSchema(ctx context.Context, schema viewindex.ViewIndexSchema) error {
 	_ = ctx
 	i.writeMu.Lock()
 	defer i.writeMu.Unlock()
@@ -136,8 +152,11 @@ func (i *Index) SetSchema(ctx context.Context, viewVersion uint64, schemaHash st
 	if err != nil {
 		return err
 	}
-	stats.ViewVersion = viewVersion
-	stats.SchemaHash = schemaHash
+	stats.ViewVersion = schema.ViewVersion
+	stats.SchemaHash = schema.SchemaHash
+	stats.RecordViewMode = schema.RecordViewMode
+	stats.LayoutRevision = schema.LayoutRevision
+	stats.AppliedSourceID = schema.RecordSourceID
 	stats.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	return i.index.Index(statsDocumentID, stats.toDocument())
 }
@@ -219,6 +238,103 @@ func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexed
 	return i.index.Batch(batch)
 }
 
+func (i *Index) ApplyRecordMutations(ctx context.Context, mutations []*pb.RecordIndexMutation, textIndexedColumns map[string]bool, mode pb.RecordViewMode) error {
+	return i.applyRecordMutations(ctx, mutations, textIndexedColumns, mode, "", 0, 0)
+}
+
+func (i *Index) ApplyRecordReplay(ctx context.Context, mutations []*pb.RecordIndexMutation, textIndexedColumns map[string]bool, mode pb.RecordViewMode, sourceID string, from, through uint64) error {
+	return i.applyRecordMutations(ctx, mutations, textIndexedColumns, mode, sourceID, from, through)
+}
+
+func (i *Index) applyRecordMutations(ctx context.Context, mutations []*pb.RecordIndexMutation, textIndexedColumns map[string]bool, mode pb.RecordViewMode, replaySourceID string, replayFrom, replayThrough uint64) error {
+	_ = ctx
+	if len(mutations) == 0 && replaySourceID == "" {
+		return nil
+	}
+	i.writeMu.Lock()
+	defer i.writeMu.Unlock()
+	stats, err := i.readStats()
+	if err != nil {
+		return err
+	}
+	if mode == pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		mode = stats.RecordViewMode
+	}
+	if stats.RecordViewMode != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED && stats.RecordViewMode != mode {
+		return errors.New("record view mode does not match persisted schema")
+	}
+	if replaySourceID != "" {
+		if stats.AppliedSourceID != "" && stats.AppliedSourceID != replaySourceID {
+			return errors.New("record replay source mismatch")
+		}
+		if replayFrom != stats.AppliedThroughCommitSeq {
+			return errors.New("record replay cursor gap or overlap")
+		}
+		if replayThrough < replayFrom {
+			return errors.New("record replay through cursor is behind replay from cursor")
+		}
+	}
+	batch := i.index.NewBatch()
+	seen := make(map[string]bool, len(mutations))
+	for _, mutation := range mutations {
+		row := mutation.GetRow()
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		if stats.AppliedSourceID != "" && mutation.GetSourceId() != "" && stats.AppliedSourceID != mutation.GetSourceId() {
+			return errors.New("record mutation source does not match persisted schema")
+		}
+		docID := recordDocumentID(row, mode)
+		if seen[docID] {
+			continue
+		}
+		if existing, err := i.readOrderCommitSeq(docID); err != nil {
+			return err
+		} else if existing >= mutation.GetOrderCommitSeq() && existing != 0 {
+			continue
+		}
+		existed, err := i.documentExists(docID)
+		if err != nil {
+			return err
+		}
+		seen[docID] = true
+		doc, err := i.recordDocument(row, textIndexedColumns, mode, mutation.GetSourceId(), mutation.GetOrderCommitSeq())
+		if err != nil {
+			return err
+		}
+		if !existed {
+			stats.EntryCount++
+		}
+		if mode == pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT && !existed {
+			stats.VisibleEntryCount++
+		}
+		if row.GetRevision() > stats.MaxRevision || stats.MinRevision == 0 {
+			stats.MinRevision = row.GetRevision()
+		}
+		if row.GetRevision() > stats.MaxRevision {
+			stats.MaxRevision = row.GetRevision()
+		}
+		if mutation.GetSourceId() != "" {
+			stats.AppliedSourceID = mutation.GetSourceId()
+		}
+		if mutation.GetOrderCommitSeq() > stats.AppliedThroughCommitSeq {
+			stats.AppliedThroughCommitSeq = mutation.GetOrderCommitSeq()
+		}
+		if err := batch.Index(docID, doc); err != nil {
+			return err
+		}
+	}
+	stats.RecordViewMode = mode
+	if replaySourceID != "" {
+		stats.AppliedSourceID, stats.AppliedThroughCommitSeq = replaySourceID, replayThrough
+	}
+	stats.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := batch.Index(statsDocumentID, stats.toDocument()); err != nil {
+		return err
+	}
+	return i.index.Batch(batch)
+}
+
 func (i *Index) Stat(ctx context.Context) (viewindex.ViewIndexStats, error) {
 	_ = ctx
 	stats, err := i.readStats()
@@ -233,11 +349,21 @@ func (i *Index) Stat(ctx context.Context) (viewindex.ViewIndexStats, error) {
 		MaxVersion:  stats.MaxVersion,
 		SchemaHash:  stats.SchemaHash,
 		UpdatedAt:   stats.UpdatedAt,
+		MinRevision: stats.MinRevision, MaxRevision: stats.MaxRevision, AppliedSourceID: stats.AppliedSourceID,
+		AppliedThroughCommitSeq: stats.AppliedThroughCommitSeq, VisibleEntryCount: stats.VisibleEntryCount,
+		RecordViewMode: stats.RecordViewMode, LayoutRevision: stats.LayoutRevision,
 	}, nil
 }
 
 func (i *Index) SearchRecordRows(ctx context.Context, req SearchRequest) ([]*pb.RecordRow, *pb.PageResult, error) {
 	_ = ctx
+	stats, err := i.readStats()
+	if err != nil {
+		return nil, nil, err
+	}
+	if req.RecordViewMode != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED && stats.RecordViewMode != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED && req.RecordViewMode != stats.RecordViewMode {
+		return nil, nil, errors.New("record view mode does not match persisted schema")
+	}
 	query, err := buildBooleanQuery(req)
 	if err != nil {
 		return nil, nil, err
@@ -276,6 +402,10 @@ func (i *Index) SearchRecordRows(ctx context.Context, req SearchRequest) ([]*pb.
 
 func buildBooleanQuery(req SearchRequest) (blevequery.Query, error) {
 	musts := []blevequery.Query{termQuery("row", "_doc_type")}
+	mode := req.RecordViewMode
+	if mode != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		musts = append(musts, termQuery(mode.String(), "_record_mode"))
+	}
 	if space := strings.TrimSpace(req.SpaceID); space != "" {
 		musts = append(musts, scopeFieldQuery(space, "space_id"))
 	}
@@ -299,6 +429,20 @@ func buildBooleanQuery(req SearchRequest) (blevequery.Query, error) {
 			rangeQuery.SetField("version")
 			musts = append(musts, rangeQuery)
 		}
+	}
+	if revisionRange := req.RevisionRange; revisionRange != nil {
+		minRevision, maxRevision := float64(revisionRange.GetStartRevision()), float64(revisionRange.GetEndRevision())
+		var minPtr, maxPtr *float64
+		if minRevision > 0 {
+			minPtr = &minRevision
+		}
+		if maxRevision > 0 {
+			maxPtr = &maxRevision
+		}
+		inclusive := true
+		query := blevequery.NewNumericRangeInclusiveQuery(minPtr, maxPtr, &inclusive, &inclusive)
+		query.SetField("_revision")
+		musts = append(musts, query)
 	}
 	for _, filter := range req.Filters {
 		query, err := buildFilterQuery(filter)
@@ -359,7 +503,7 @@ func normalizeSearchPage(page *pb.Page) (uint32, uint32) {
 
 func bleveSortOrder(sorts []*pb.SortSpec) []string {
 	if len(sorts) == 0 {
-		return []string{"-version", "_id"}
+		return []string{"-_order_commit_seq", "-_revision", "_id"}
 	}
 	out := make([]string, 0, len(sorts)+1)
 	for _, sortSpec := range sorts {
@@ -611,6 +755,50 @@ func documentID(row *pb.RecordRow) string {
 		key.GetRecordId(),
 		key.GetVersion(),
 	}, "/")
+}
+
+func recordDocumentID(row *pb.RecordRow, mode pb.RecordViewMode) string {
+	key := row.GetKey()
+	if mode == pb.RecordViewMode_RECORD_VIEW_MODE_HISTORY {
+		return strings.Join([]string{key.GetSpaceId(), key.GetDatasetId(), key.GetRecordId(), fmt.Sprintf("%020d", row.GetRevision())}, "/")
+	}
+	return strings.Join([]string{key.GetSpaceId(), key.GetDatasetId(), key.GetRecordId()}, "/")
+}
+
+func (i *Index) recordDocument(row *pb.RecordRow, textIndexedColumns map[string]bool, mode pb.RecordViewMode, sourceID string, orderCommitSeq uint64) (map[string]any, error) {
+	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(row)
+	if err != nil {
+		return nil, err
+	}
+	key := row.GetKey()
+	doc := map[string]any{"_doc_type": "row", "space_id": key.GetSpaceId(), "dataset_id": key.GetDatasetId(), "record_id": key.GetRecordId(), "version": "", "_record_mode": mode.String(), "_order_source_id": sourceID, "_order_commit_seq_text": strconv.FormatUint(orderCommitSeq, 10), "_revision": float64(row.GetRevision()), "_order_commit_seq": float64(orderCommitSeq), "_row_json": string(raw)}
+	for _, column := range row.GetColumns() {
+		name := strings.TrimSpace(column.GetColumnName())
+		if !textIndexedColumns[name] || column.GetValue() == nil {
+			continue
+		}
+		doc[columnIndexField(name)] = bleveFieldValue(column.GetValue())
+		doc[columnExistsField(name)] = "1"
+		if text := factvalue.String(column.GetValue()); text != "" {
+			doc[columnNonEmptyField(name)] = "1"
+			doc[allTextField] = strings.TrimSpace(strings.TrimSpace(anyString(doc[allTextField])) + " " + text)
+		}
+	}
+	return doc, nil
+}
+
+func (i *Index) readOrderCommitSeq(docID string) (uint64, error) {
+	doc, err := i.index.Document(docID)
+	if err != nil || doc == nil {
+		return 0, err
+	}
+	var value string
+	doc.VisitFields(func(field index.Field) {
+		if field.Name() == "_order_commit_seq_text" {
+			value = string(field.Value())
+		}
+	})
+	return strconv.ParseUint(value, 10, 64)
 }
 
 func (i *Index) readStats() (indexStatsDocument, error) {

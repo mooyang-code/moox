@@ -120,6 +120,56 @@ func (RecordReadMode) EnumDescriptor() ([]byte, []int) {
 	return file_common_proto_rawDescGZIP(), []int{1}
 }
 
+// RecordViewMode 表示 Record View 的物化模式。
+type RecordViewMode int32
+
+const (
+	RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED RecordViewMode = 0
+	RecordViewMode_RECORD_VIEW_MODE_CURRENT     RecordViewMode = 1
+	RecordViewMode_RECORD_VIEW_MODE_HISTORY     RecordViewMode = 2
+)
+
+// Enum value maps for RecordViewMode.
+var (
+	RecordViewMode_name = map[int32]string{
+		0: "RECORD_VIEW_MODE_UNSPECIFIED",
+		1: "RECORD_VIEW_MODE_CURRENT",
+		2: "RECORD_VIEW_MODE_HISTORY",
+	}
+	RecordViewMode_value = map[string]int32{
+		"RECORD_VIEW_MODE_UNSPECIFIED": 0,
+		"RECORD_VIEW_MODE_CURRENT":     1,
+		"RECORD_VIEW_MODE_HISTORY":     2,
+	}
+)
+
+func (x RecordViewMode) Enum() *RecordViewMode {
+	p := new(RecordViewMode)
+	*p = x
+	return p
+}
+
+func (x RecordViewMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RecordViewMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_proto_enumTypes[2].Descriptor()
+}
+
+func (RecordViewMode) Type() protoreflect.EnumType {
+	return &file_common_proto_enumTypes[2]
+}
+
+func (x RecordViewMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RecordViewMode.Descriptor instead.
+func (RecordViewMode) EnumDescriptor() ([]byte, []int) {
+	return file_common_proto_rawDescGZIP(), []int{2}
+}
+
 // DataKind 表示 Dataset 的结构形态。
 type DataKind int32
 
@@ -173,11 +223,11 @@ func (x DataKind) String() string {
 }
 
 func (DataKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_proto_enumTypes[2].Descriptor()
+	return file_common_proto_enumTypes[3].Descriptor()
 }
 
 func (DataKind) Type() protoreflect.EnumType {
-	return &file_common_proto_enumTypes[2]
+	return &file_common_proto_enumTypes[3]
 }
 
 func (x DataKind) Number() protoreflect.EnumNumber {
@@ -186,7 +236,7 @@ func (x DataKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DataKind.Descriptor instead.
 func (DataKind) EnumDescriptor() ([]byte, []int) {
-	return file_common_proto_rawDescGZIP(), []int{2}
+	return file_common_proto_rawDescGZIP(), []int{3}
 }
 
 // FieldValueType 表示字段、因子和查询列的逻辑值类型。
@@ -246,11 +296,11 @@ func (x FieldValueType) String() string {
 }
 
 func (FieldValueType) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_proto_enumTypes[3].Descriptor()
+	return file_common_proto_enumTypes[4].Descriptor()
 }
 
 func (FieldValueType) Type() protoreflect.EnumType {
-	return &file_common_proto_enumTypes[3]
+	return &file_common_proto_enumTypes[4]
 }
 
 func (x FieldValueType) Number() protoreflect.EnumNumber {
@@ -259,7 +309,7 @@ func (x FieldValueType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use FieldValueType.Descriptor instead.
 func (FieldValueType) EnumDescriptor() ([]byte, []int) {
-	return file_common_proto_rawDescGZIP(), []int{3}
+	return file_common_proto_rawDescGZIP(), []int{4}
 }
 
 // DatasetColumnOriginType 表示 DatasetColumn 的来源。
@@ -303,11 +353,11 @@ func (x DatasetColumnOriginType) String() string {
 }
 
 func (DatasetColumnOriginType) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_proto_enumTypes[4].Descriptor()
+	return file_common_proto_enumTypes[5].Descriptor()
 }
 
 func (DatasetColumnOriginType) Type() protoreflect.EnumType {
-	return &file_common_proto_enumTypes[4]
+	return &file_common_proto_enumTypes[5]
 }
 
 func (x DatasetColumnOriginType) Number() protoreflect.EnumNumber {
@@ -316,7 +366,7 @@ func (x DatasetColumnOriginType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DatasetColumnOriginType.Descriptor instead.
 func (DatasetColumnOriginType) EnumDescriptor() ([]byte, []int) {
-	return file_common_proto_rawDescGZIP(), []int{4}
+	return file_common_proto_rawDescGZIP(), []int{5}
 }
 
 // ColumnOriginType 表示 ViewColumn 或查询结果列的来源。
@@ -360,11 +410,11 @@ func (x ColumnOriginType) String() string {
 }
 
 func (ColumnOriginType) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_proto_enumTypes[5].Descriptor()
+	return file_common_proto_enumTypes[6].Descriptor()
 }
 
 func (ColumnOriginType) Type() protoreflect.EnumType {
-	return &file_common_proto_enumTypes[5]
+	return &file_common_proto_enumTypes[6]
 }
 
 func (x ColumnOriginType) Number() protoreflect.EnumNumber {
@@ -373,7 +423,7 @@ func (x ColumnOriginType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ColumnOriginType.Descriptor instead.
 func (ColumnOriginType) EnumDescriptor() ([]byte, []int) {
-	return file_common_proto_rawDescGZIP(), []int{5}
+	return file_common_proto_rawDescGZIP(), []int{6}
 }
 
 // TimeRange 表示闭区间时间条件：[start_time, end_time]。
@@ -1163,6 +1213,13 @@ var file_common_proto_rawDesc = []byte{
 	0x5f, 0x52, 0x45, 0x41, 0x44, 0x5f, 0x4d, 0x4f, 0x44, 0x45, 0x5f, 0x43, 0x55, 0x52, 0x52, 0x45,
 	0x4e, 0x54, 0x10, 0x01, 0x12, 0x1c, 0x0a, 0x18, 0x52, 0x45, 0x43, 0x4f, 0x52, 0x44, 0x5f, 0x52,
 	0x45, 0x41, 0x44, 0x5f, 0x4d, 0x4f, 0x44, 0x45, 0x5f, 0x48, 0x49, 0x53, 0x54, 0x4f, 0x52, 0x59,
+	0x10, 0x02, 0x2a, 0x6e, 0x0a, 0x0e, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x56, 0x69, 0x65, 0x77,
+	0x4d, 0x6f, 0x64, 0x65, 0x12, 0x20, 0x0a, 0x1c, 0x52, 0x45, 0x43, 0x4f, 0x52, 0x44, 0x5f, 0x56,
+	0x49, 0x45, 0x57, 0x5f, 0x4d, 0x4f, 0x44, 0x45, 0x5f, 0x55, 0x4e, 0x53, 0x50, 0x45, 0x43, 0x49,
+	0x46, 0x49, 0x45, 0x44, 0x10, 0x00, 0x12, 0x1c, 0x0a, 0x18, 0x52, 0x45, 0x43, 0x4f, 0x52, 0x44,
+	0x5f, 0x56, 0x49, 0x45, 0x57, 0x5f, 0x4d, 0x4f, 0x44, 0x45, 0x5f, 0x43, 0x55, 0x52, 0x52, 0x45,
+	0x4e, 0x54, 0x10, 0x01, 0x12, 0x1c, 0x0a, 0x18, 0x52, 0x45, 0x43, 0x4f, 0x52, 0x44, 0x5f, 0x56,
+	0x49, 0x45, 0x57, 0x5f, 0x4d, 0x4f, 0x44, 0x45, 0x5f, 0x48, 0x49, 0x53, 0x54, 0x4f, 0x52, 0x59,
 	0x10, 0x02, 0x2a, 0xb0, 0x01, 0x0a, 0x08, 0x44, 0x61, 0x74, 0x61, 0x4b, 0x69, 0x6e, 0x64, 0x12,
 	0x19, 0x0a, 0x15, 0x44, 0x41, 0x54, 0x41, 0x5f, 0x4b, 0x49, 0x4e, 0x44, 0x5f, 0x55, 0x4e, 0x53,
 	0x50, 0x45, 0x43, 0x49, 0x46, 0x49, 0x45, 0x44, 0x10, 0x00, 0x12, 0x14, 0x0a, 0x10, 0x44, 0x41,
@@ -1231,35 +1288,36 @@ func file_common_proto_rawDescGZIP() []byte {
 	return file_common_proto_rawDescData
 }
 
-var file_common_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_common_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
 var file_common_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_common_proto_goTypes = []interface{}{
 	(SortOrder)(0),               // 0: trpc.moox.storage.SortOrder
 	(RecordReadMode)(0),          // 1: trpc.moox.storage.RecordReadMode
-	(DataKind)(0),                // 2: trpc.moox.storage.DataKind
-	(FieldValueType)(0),          // 3: trpc.moox.storage.FieldValueType
-	(DatasetColumnOriginType)(0), // 4: trpc.moox.storage.DatasetColumnOriginType
-	(ColumnOriginType)(0),        // 5: trpc.moox.storage.ColumnOriginType
-	(*TimeRange)(nil),            // 6: trpc.moox.storage.TimeRange
-	(*VersionRange)(nil),         // 7: trpc.moox.storage.VersionRange
-	(*RevisionRange)(nil),        // 8: trpc.moox.storage.RevisionRange
-	(*ValueList)(nil),            // 9: trpc.moox.storage.ValueList
-	(*TypedValue)(nil),           // 10: trpc.moox.storage.TypedValue
-	(*ColumnValue)(nil),          // 11: trpc.moox.storage.ColumnValue
-	(*DimensionValue)(nil),       // 12: trpc.moox.storage.DimensionValue
-	(*DimensionValues)(nil),      // 13: trpc.moox.storage.DimensionValues
-	(*SortSpec)(nil),             // 14: trpc.moox.storage.SortSpec
-	(*FilterExpr)(nil),           // 15: trpc.moox.storage.FilterExpr
-	nil,                          // 16: trpc.moox.storage.FilterExpr.ArgsEntry
+	(RecordViewMode)(0),          // 2: trpc.moox.storage.RecordViewMode
+	(DataKind)(0),                // 3: trpc.moox.storage.DataKind
+	(FieldValueType)(0),          // 4: trpc.moox.storage.FieldValueType
+	(DatasetColumnOriginType)(0), // 5: trpc.moox.storage.DatasetColumnOriginType
+	(ColumnOriginType)(0),        // 6: trpc.moox.storage.ColumnOriginType
+	(*TimeRange)(nil),            // 7: trpc.moox.storage.TimeRange
+	(*VersionRange)(nil),         // 8: trpc.moox.storage.VersionRange
+	(*RevisionRange)(nil),        // 9: trpc.moox.storage.RevisionRange
+	(*ValueList)(nil),            // 10: trpc.moox.storage.ValueList
+	(*TypedValue)(nil),           // 11: trpc.moox.storage.TypedValue
+	(*ColumnValue)(nil),          // 12: trpc.moox.storage.ColumnValue
+	(*DimensionValue)(nil),       // 13: trpc.moox.storage.DimensionValue
+	(*DimensionValues)(nil),      // 14: trpc.moox.storage.DimensionValues
+	(*SortSpec)(nil),             // 15: trpc.moox.storage.SortSpec
+	(*FilterExpr)(nil),           // 16: trpc.moox.storage.FilterExpr
+	nil,                          // 17: trpc.moox.storage.FilterExpr.ArgsEntry
 }
 var file_common_proto_depIdxs = []int32{
-	10, // 0: trpc.moox.storage.ValueList.values:type_name -> trpc.moox.storage.TypedValue
-	9,  // 1: trpc.moox.storage.TypedValue.list_value:type_name -> trpc.moox.storage.ValueList
-	3,  // 2: trpc.moox.storage.ColumnValue.value_type:type_name -> trpc.moox.storage.FieldValueType
-	10, // 3: trpc.moox.storage.ColumnValue.value:type_name -> trpc.moox.storage.TypedValue
-	12, // 4: trpc.moox.storage.DimensionValues.values:type_name -> trpc.moox.storage.DimensionValue
-	16, // 5: trpc.moox.storage.FilterExpr.args:type_name -> trpc.moox.storage.FilterExpr.ArgsEntry
-	10, // 6: trpc.moox.storage.FilterExpr.ArgsEntry.value:type_name -> trpc.moox.storage.TypedValue
+	11, // 0: trpc.moox.storage.ValueList.values:type_name -> trpc.moox.storage.TypedValue
+	10, // 1: trpc.moox.storage.TypedValue.list_value:type_name -> trpc.moox.storage.ValueList
+	4,  // 2: trpc.moox.storage.ColumnValue.value_type:type_name -> trpc.moox.storage.FieldValueType
+	11, // 3: trpc.moox.storage.ColumnValue.value:type_name -> trpc.moox.storage.TypedValue
+	13, // 4: trpc.moox.storage.DimensionValues.values:type_name -> trpc.moox.storage.DimensionValue
+	17, // 5: trpc.moox.storage.FilterExpr.args:type_name -> trpc.moox.storage.FilterExpr.ArgsEntry
+	11, // 6: trpc.moox.storage.FilterExpr.ArgsEntry.value:type_name -> trpc.moox.storage.TypedValue
 	7,  // [7:7] is the sub-list for method output_type
 	7,  // [7:7] is the sub-list for method input_type
 	7,  // [7:7] is the sub-list for extension type_name
@@ -1409,7 +1467,7 @@ func file_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_common_proto_rawDesc,
-			NumEnums:      6,
+			NumEnums:      7,
 			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,

@@ -89,6 +89,7 @@ message SearchRecordRowsReq {
   // page 是分页参数。
   common.Page page = 10;
   RevisionRange revision_range = 11;
+  RecordViewMode record_view_mode = 12;
 }
 
 // SearchRecordRowsRsp 表示记录 View 数据搜索结果。

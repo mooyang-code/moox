@@ -40,14 +40,28 @@ func viewIndexBatch(item *pb.View, columns []*pb.ViewColumn, timeRows []*pb.Time
 		schemaHash = item.GetIndexBuild().GetSchemaHash()
 	}
 	if schemaHash == "" {
-		schemaHash = viewindex.HashViewIndexSchema(viewindex.ViewIndexSchema{
-			SpaceID: item.GetSpaceId(), ViewID: item.GetViewId(), Engine: item.GetEngine(), Columns: columns,
-		})
+		schema := viewindex.ViewIndexSchema{SpaceID: item.GetSpaceId(), ViewID: item.GetViewId(), Engine: item.GetEngine(), Columns: columns}
+		if item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+			schema.PrimaryDatasetID, schema.DatasetIDs, schema.GrainKeys, schema.FilterJSON, schema.RecordViewMode = item.GetPrimaryDatasetId(), item.GetDatasetIds(), item.GetGrainKeys(), item.GetFilterJson(), item.GetRecordViewMode()
+			schema.LayoutRevision = viewindex.RecordLayoutRevision
+		}
+		schemaHash = viewindex.HashViewIndexSchema(schema)
 	}
-	return viewindex.ViewIndexBatch{
+	batch := viewindex.ViewIndexBatch{
 		TimeSeriesRows: timeRows, RecordRows: recordRows, Columns: columns,
 		ViewVersion: version, SchemaHash: schemaHash,
+		RecordViewMode: item.GetRecordViewMode(),
 	}
+	if item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		batch.RecordRows = nil
+		for _, row := range recordRows {
+			if row == nil {
+				continue
+			}
+			batch.RecordMutations = append(batch.RecordMutations, &pb.RecordIndexMutation{Row: row, OrderCommitSeq: row.GetCommitSeq()})
+		}
+	}
+	return batch
 }
 
 func normalizeBatchOptions(opts BatchOptions) BatchOptions {

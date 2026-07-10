@@ -48,6 +48,9 @@ func (c *Client) Prepare(ctx context.Context, indexID string, schema coreviewind
 		Schema: &pb.ViewIndexSchema{
 			SpaceId: schema.SpaceID, ViewId: schema.ViewID, ViewVersion: schema.ViewVersion,
 			Engine: c.engine, Columns: schema.Columns, SchemaHash: schema.SchemaHash,
+			RecordViewMode: schema.RecordViewMode, LayoutRevision: schema.LayoutRevision,
+			PrimaryDatasetId: schema.PrimaryDatasetID, DatasetIds: schema.DatasetIDs, GrainKeys: schema.GrainKeys,
+			FilterJson: schema.FilterJSON, RecordSourceId: schema.RecordSourceID,
 		},
 	})
 	if err != nil {
@@ -63,6 +66,9 @@ func (c *Client) Write(ctx context.Context, indexID string, batch coreviewindex.
 		Batch: &pb.ViewIndexBatch{
 			TimeSeriesRows: batch.TimeSeriesRows, RecordRows: batch.RecordRows, Columns: batch.Columns,
 			ViewVersion: batch.ViewVersion, SchemaHash: batch.SchemaHash,
+			RecordMutations: batch.RecordMutations, ReplaySourceId: batch.ReplaySourceID,
+			ReplayFromCommitSeq: batch.ReplayFromCommitSeq, ReplayThroughCommitSeq: batch.ReplayThroughCommitSeq,
+			RecordViewMode: batch.RecordViewMode,
 		},
 	})
 	if err != nil {

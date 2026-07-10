@@ -27,6 +27,15 @@ type RecordFactReader interface {
 	ScanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error)
 }
 
+type RecordReplayReader interface {
+	OpenRecordSnapshot(ctx context.Context, req *pb.OpenRecordAccessSnapshotReq) (*pb.OpenRecordAccessSnapshotRsp, error)
+	ReadRecordSnapshot(ctx context.Context, req *pb.ReadRecordAccessSnapshotReq) (*pb.ReadRecordAccessSnapshotRsp, error)
+	ScanRecordSnapshot(ctx context.Context, req *pb.ScanRecordAccessSnapshotReq) (*pb.ScanRecordAccessSnapshotRsp, error)
+	CloseRecordSnapshot(ctx context.Context, snapshotID string) error
+	RecordWatermark(ctx context.Context, scope *pb.RecordAccessScope) (sourceID string, commitSeq uint64, err error)
+	ScanRecordJournal(ctx context.Context, scope *pb.RecordAccessScope, after, through uint64, page *pb.Page) ([]*pb.RecordRowsCommittedEvent, uint64, *pb.PageResult, error)
+}
+
 type ManagedViewIndex interface {
 	viewindex.ViewIndexEngine
 	List(ctx context.Context) ([]string, error)
@@ -234,7 +243,7 @@ func (m *MaintenanceManager) maintainView(ctx context.Context, item *pb.View, de
 		)
 		switch build.GetState() {
 		case pb.ViewIndexBuild_PREPARING:
-			next, err = m.prepareBuild(ctx, build, engine)
+			next, err = m.prepareBuild(ctx, item, build, engine)
 		case pb.ViewIndexBuild_BUILDING:
 			next, activated, err = m.processBuildPage(ctx, item, build, engine, false)
 		case pb.ViewIndexBuild_CATCHING_UP:
@@ -273,7 +282,7 @@ func (m *MaintenanceManager) needsBuild(ctx context.Context, item *pb.View, engi
 	if err != nil {
 		return false, err
 	}
-	schema := viewindex.ViewIndexSchema{SpaceID: item.GetSpaceId(), ViewID: item.GetViewId(), Engine: item.GetEngine(), Columns: columns}
+	schema := schemaForView(item, columns)
 	wantHash := viewindex.HashViewIndexSchema(schema)
 	if item.GetActiveSchemaHash() != wantHash {
 		return true, nil
@@ -346,9 +355,9 @@ func (m *MaintenanceManager) startBuild(ctx context.Context, item *pb.View, engi
 			return item, nil, fmt.Errorf("view index owner free disk %d bytes is below required floor %d bytes", stats.FreeDiskBytes, m.cfg.MinFreeDiskBytes)
 		}
 	}
-	schema := viewindex.ViewIndexSchema{
-		SpaceID: item.GetSpaceId(), ViewID: item.GetViewId(), ViewVersion: item.GetViewVersion(), Engine: engineKey, Columns: columns,
-	}
+	schema := schemaForView(item, columns)
+	schema.ViewVersion = item.GetViewVersion()
+	schema.Engine = engineKey
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	buildID, err := newBuildID()
 	if err != nil {
@@ -390,22 +399,59 @@ func (m *MaintenanceManager) ensureLease(ctx context.Context, item *pb.View, bui
 	return true, nil
 }
 
-func (m *MaintenanceManager) prepareBuild(ctx context.Context, build *pb.ViewIndexBuild, engine ManagedViewIndex) (*pb.ViewIndexBuild, error) {
-	if err := engine.Prepare(ctx, build.GetIndexId(), viewindex.ViewIndexSchema{
+func (m *MaintenanceManager) prepareBuild(ctx context.Context, item *pb.View, build *pb.ViewIndexBuild, engine ManagedViewIndex) (*pb.ViewIndexBuild, error) {
+	preparedSchema := viewindex.ViewIndexSchema{
 		SpaceID: build.GetSpaceId(), ViewID: build.GetViewId(), ViewVersion: build.GetTargetViewVersion(),
 		Engine: build.GetEngine(), Columns: build.GetColumns(), SchemaHash: build.GetSchemaHash(),
-	}); err != nil {
+	}
+	if item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		preparedSchema.RecordViewMode = item.GetRecordViewMode()
+		preparedSchema.LayoutRevision = viewindex.RecordLayoutRevision
+		preparedSchema.PrimaryDatasetID = item.GetPrimaryDatasetId()
+		preparedSchema.DatasetIDs = item.GetDatasetIds()
+		preparedSchema.GrainKeys = item.GetGrainKeys()
+		preparedSchema.FilterJSON = item.GetFilterJson()
+	}
+	if err := engine.Prepare(ctx, build.GetIndexId(), preparedSchema); err != nil {
 		return nil, err
 	}
-	cursor, err := encodeBuildCursor(buildCursor{Phase: buildPhaseBackfill})
+	cursorState := buildCursor{Phase: buildPhaseBackfill}
+	update := &pb.UpdateViewIndexBuildReq{SpaceId: build.GetSpaceId(), ViewId: build.GetViewId(), BuildId: build.GetBuildId(), OwnerId: m.cfg.OwnerID,
+		ExpectedState: pb.ViewIndexBuild_PREPARING, NextState: pb.ViewIndexBuild_BUILDING,
+		LeaseTtlSeconds: durationSeconds(m.cfg.LeaseTTL)}
+	if item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		if replay, ok := m.records.(RecordReplayReader); ok {
+			datasets := append([]string(nil), item.GetDatasetIds()...)
+			if len(datasets) == 0 {
+				datasets = []string{item.GetPrimaryDatasetId()}
+			}
+			opened, openErr := replay.OpenRecordSnapshot(ctx, &pb.OpenRecordAccessSnapshotReq{Scope: &pb.RecordAccessScope{SpaceId: item.GetSpaceId(), DatasetIds: datasets}, Mode: pb.RecordReadMode(item.GetRecordViewMode())})
+			if openErr != nil {
+				return nil, openErr
+			}
+			cursorState.SnapshotID, cursorState.SnapshotCommitSeq, cursorState.SourceID = opened.GetSnapshotId(), opened.GetSnapshotCommitSeq(), opened.GetSourceId()
+			update.SnapshotId, update.SnapshotCommitSeq, update.RecordSourceId = cursorState.SnapshotID, cursorState.SnapshotCommitSeq, cursorState.SourceID
+		}
+	}
+	cursor, err := encodeBuildCursor(cursorState)
 	if err != nil {
 		return nil, err
 	}
-	return m.metadata.UpdateViewIndexBuild(ctx, &pb.UpdateViewIndexBuildReq{
-		SpaceId: build.GetSpaceId(), ViewId: build.GetViewId(), BuildId: build.GetBuildId(), OwnerId: m.cfg.OwnerID,
-		ExpectedState: pb.ViewIndexBuild_PREPARING, NextState: pb.ViewIndexBuild_BUILDING,
-		LeaseTtlSeconds: durationSeconds(m.cfg.LeaseTTL), CursorJson: cursor,
-	})
+	update.CursorJson = cursor
+	return m.metadata.UpdateViewIndexBuild(ctx, update)
+}
+
+func schemaForView(item *pb.View, columns []*pb.ViewColumn) viewindex.ViewIndexSchema {
+	schema := viewindex.ViewIndexSchema{SpaceID: item.GetSpaceId(), ViewID: item.GetViewId(), Engine: item.GetEngine(), Columns: columns}
+	if item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		schema.PrimaryDatasetID = item.GetPrimaryDatasetId()
+		schema.DatasetIDs = append([]string(nil), item.GetDatasetIds()...)
+		schema.GrainKeys = append([]string(nil), item.GetGrainKeys()...)
+		schema.FilterJSON = item.GetFilterJson()
+		schema.RecordViewMode = item.GetRecordViewMode()
+		schema.LayoutRevision = viewindex.RecordLayoutRevision
+	}
+	return schema
 }
 
 func (m *MaintenanceManager) processBuildPage(ctx context.Context, item *pb.View, build *pb.ViewIndexBuild, engine ManagedViewIndex, catchUp bool) (*pb.ViewIndexBuild, bool, error) {
@@ -440,12 +486,22 @@ func (m *MaintenanceManager) processBuildPage(ctx context.Context, item *pb.View
 	itemForBuild := proto.Clone(item).(*pb.View)
 	itemForBuild.Columns = cloneColumns(build.GetColumns())
 	var (
-		written  int
-		page     *pb.PageResult
-		nextPage string
+		written         int
+		page            *pb.PageResult
+		nextPage        string
+		replayedThrough = cursor.ReplayedCommitSeq
 	)
-	if strings.EqualFold(build.GetEngine(), "bleve") {
-		written, page, err = m.processRecordPage(ctx, itemForBuild, build, engine, cursor.Cursor, start, end)
+	if catchUp && item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		if replay, ok := m.records.(RecordReplayReader); ok {
+			build, err = m.ensureRecordReplayBoundary(ctx, item, build, replay)
+			if err == nil {
+				written, page, replayedThrough, err = m.processRecordJournalPage(ctx, itemForBuild, build, engine, cursor.Cursor, replayedThrough)
+			}
+		} else {
+			written, page, err = m.processRecordPage(ctx, itemForBuild, build, engine, cursor.Cursor, start, end, cursor.SnapshotID, cursor.SourceID, cursor.SnapshotCommitSeq)
+		}
+	} else if strings.EqualFold(build.GetEngine(), "bleve") {
+		written, page, err = m.processRecordPage(ctx, itemForBuild, build, engine, cursor.Cursor, start, end, cursor.SnapshotID, cursor.SourceID, cursor.SnapshotCommitSeq)
 	} else {
 		written, page, err = m.processTimeSeriesPage(ctx, itemForBuild, build, engine, cursor.Cursor, start, end)
 	}
@@ -454,33 +510,53 @@ func (m *MaintenanceManager) processBuildPage(ctx context.Context, item *pb.View
 	}
 	if page != nil && page.GetHasMore() && page.GetNextCursor() != "" {
 		nextPage = page.GetNextCursor()
-		nextCursor, err := encodeBuildCursor(buildCursor{Phase: wantPhase, Cursor: nextPage})
+		nextCursor, err := encodeBuildCursor(buildCursor{Phase: wantPhase, Cursor: nextPage, SnapshotID: cursor.SnapshotID, SnapshotCommitSeq: cursor.SnapshotCommitSeq, SourceID: cursor.SourceID, ReplayedCommitSeq: replayedThrough})
 		if err != nil {
 			return nil, false, err
 		}
-		next, err := m.metadata.UpdateViewIndexBuild(ctx, &pb.UpdateViewIndexBuildReq{
+		update := &pb.UpdateViewIndexBuildReq{
 			SpaceId: build.GetSpaceId(), ViewId: build.GetViewId(), BuildId: build.GetBuildId(), OwnerId: m.cfg.OwnerID,
 			ExpectedState: build.GetState(), NextState: build.GetState(), LeaseTtlSeconds: durationSeconds(m.cfg.LeaseTTL),
 			CursorJson: nextCursor, EntriesWritten: build.GetEntriesWritten() + uint64(written),
-		})
+		}
+		if catchUp && item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+			update.ReplayedCommitSeq = replayedThrough
+		}
+		next, err := m.metadata.UpdateViewIndexBuild(ctx, update)
 		return next, false, err
 	}
 	if !catchUp {
+		if cursor.SnapshotID != "" {
+			if replay, ok := m.records.(RecordReplayReader); ok {
+				_ = replay.CloseRecordSnapshot(ctx, cursor.SnapshotID)
+			}
+		}
 		catchUpEnd := m.now().UTC()
 		if catchUpEnd.Before(snapshotEnd) {
 			catchUpEnd = snapshotEnd
 		}
-		nextCursor, err := encodeBuildCursor(buildCursor{Phase: buildPhaseCatchUp})
+		replayedCommitSeq := uint64(0)
+		if item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+			replayedCommitSeq = cursor.SnapshotCommitSeq
+		}
+		nextCursor, err := encodeBuildCursor(buildCursor{Phase: buildPhaseCatchUp, ReplayedCommitSeq: replayedCommitSeq})
 		if err != nil {
 			return nil, false, err
 		}
-		next, err := m.metadata.UpdateViewIndexBuild(ctx, &pb.UpdateViewIndexBuildReq{
+		update := &pb.UpdateViewIndexBuildReq{
 			SpaceId: build.GetSpaceId(), ViewId: build.GetViewId(), BuildId: build.GetBuildId(), OwnerId: m.cfg.OwnerID,
 			ExpectedState: pb.ViewIndexBuild_BUILDING, NextState: pb.ViewIndexBuild_CATCHING_UP,
 			LeaseTtlSeconds: durationSeconds(m.cfg.LeaseTTL), CursorJson: nextCursor,
 			CoverageStart: start.Format(time.RFC3339Nano), CoverageEnd: catchUpEnd.Format(time.RFC3339Nano),
 			EntriesWritten: build.GetEntriesWritten() + uint64(written),
-		})
+		}
+		if item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+			update.ReplayedCommitSeq = replayedCommitSeq
+			update.SnapshotId = cursor.SnapshotID
+			update.SnapshotCommitSeq = cursor.SnapshotCommitSeq
+			update.RecordSourceId = cursor.SourceID
+		}
+		next, err := m.metadata.UpdateViewIndexBuild(ctx, update)
 		return next, false, err
 	}
 	stats, err := engine.Stat(ctx, build.GetIndexId())
@@ -491,13 +567,17 @@ func (m *MaintenanceManager) processBuildPage(ctx context.Context, item *pb.View
 	if err != nil || !ready {
 		return nil, false, err
 	}
-	readyBuild, err := m.metadata.UpdateViewIndexBuild(ctx, &pb.UpdateViewIndexBuildReq{
+	update := &pb.UpdateViewIndexBuildReq{
 		SpaceId: build.GetSpaceId(), ViewId: build.GetViewId(), BuildId: build.GetBuildId(), OwnerId: m.cfg.OwnerID,
 		ExpectedState: pb.ViewIndexBuild_CATCHING_UP, NextState: pb.ViewIndexBuild_READY,
 		LeaseTtlSeconds: durationSeconds(m.cfg.LeaseTTL),
 		CoverageStart:   snapshotEnd.Add(-window).Format(time.RFC3339Nano), CoverageEnd: end.Format(time.RFC3339Nano),
 		EntriesWritten: build.GetEntriesWritten() + uint64(written),
-	})
+	}
+	if item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		update.ReplayedCommitSeq = replayedThrough
+	}
+	readyBuild, err := m.metadata.UpdateViewIndexBuild(ctx, update)
 	if err != nil {
 		return nil, false, err
 	}
@@ -548,11 +628,239 @@ func (m *MaintenanceManager) processTimeSeriesPage(ctx context.Context, item *pb
 	return len(projected), page, nil
 }
 
-func (m *MaintenanceManager) processRecordPage(ctx context.Context, item *pb.View, build *pb.ViewIndexBuild, engine ManagedViewIndex, cursor string, start time.Time, end time.Time) (int, *pb.PageResult, error) {
+func recordViewScope(item *pb.View) *pb.RecordAccessScope {
+	datasetIDs := append([]string(nil), item.GetDatasetIds()...)
+	if len(datasetIDs) == 0 && item.GetPrimaryDatasetId() != "" {
+		datasetIDs = []string{item.GetPrimaryDatasetId()}
+	}
+	return &pb.RecordAccessScope{SpaceId: item.GetSpaceId(), DatasetIds: datasetIDs}
+}
+
+func (m *MaintenanceManager) ensureRecordReplayBoundary(ctx context.Context, item *pb.View, build *pb.ViewIndexBuild, replay RecordReplayReader) (*pb.ViewIndexBuild, error) {
+	if build.GetReplayThroughCommitSeq() > 0 && build.GetRecordSourceId() != "" {
+		return build, nil
+	}
+	sourceID, through, err := replay.RecordWatermark(ctx, recordViewScope(item))
+	if err != nil {
+		return nil, err
+	}
+	if build.GetSnapshotCommitSeq() > through {
+		return nil, fmt.Errorf("Record replay watermark %d is behind snapshot commit %d", through, build.GetSnapshotCommitSeq())
+	}
+	return m.metadata.UpdateViewIndexBuild(ctx, &pb.UpdateViewIndexBuildReq{
+		SpaceId: build.GetSpaceId(), ViewId: build.GetViewId(), BuildId: build.GetBuildId(), OwnerId: m.cfg.OwnerID,
+		ExpectedState: build.GetState(), NextState: build.GetState(), LeaseTtlSeconds: durationSeconds(m.cfg.LeaseTTL),
+		ReplayThroughCommitSeq: through, ReplayedCommitSeq: build.GetSnapshotCommitSeq(), RecordSourceId: sourceID,
+	})
+}
+
+func (m *MaintenanceManager) processRecordJournalPage(ctx context.Context, item *pb.View, build *pb.ViewIndexBuild, engine ManagedViewIndex, cursor string, after uint64) (int, *pb.PageResult, uint64, error) {
+	replay, ok := m.records.(RecordReplayReader)
+	if !ok {
+		return 0, nil, after, errors.New("Record replay reader is required for journal catch-up")
+	}
+	through := build.GetReplayThroughCommitSeq()
+	events, scannedThrough, page, err := replay.ScanRecordJournal(ctx, recordViewScope(item), after, through, &pb.Page{Size: m.cfg.PageSize, Cursor: cursor})
+	if err != nil {
+		return 0, nil, after, err
+	}
+	if scannedThrough < after || scannedThrough > through {
+		return 0, nil, after, fmt.Errorf("Record journal scanned cursor %d is outside (%d,%d]", scannedThrough, after, through)
+	}
+	mutations, err := m.recordJournalMutations(ctx, item, events, replay)
+	if err != nil {
+		return 0, nil, after, err
+	}
+	if len(mutations) > 0 || scannedThrough > after {
+		batch := viewindex.ViewIndexBatch{
+			RecordMutations: mutations, RecordViewMode: item.GetRecordViewMode(), Columns: item.GetColumns(),
+			ViewVersion: build.GetTargetViewVersion(), SchemaHash: build.GetSchemaHash(), ReplaySourceID: build.GetRecordSourceId(),
+			ReplayFromCommitSeq: after, ReplayThroughCommitSeq: scannedThrough,
+		}
+		if err := engine.Write(ctx, build.GetIndexId(), batch); err != nil {
+			return 0, nil, after, err
+		}
+	}
+	return len(mutations), page, scannedThrough, nil
+}
+
+func (m *MaintenanceManager) recordJournalMutations(ctx context.Context, item *pb.View, events []*pb.RecordRowsCommittedEvent, replay RecordReplayReader) ([]*pb.RecordIndexMutation, error) {
+	if item.GetRecordViewMode() == pb.RecordViewMode_RECORD_VIEW_MODE_HISTORY {
+		out := make([]*pb.RecordIndexMutation, 0)
+		for _, event := range events {
+			if event == nil {
+				continue
+			}
+			for _, row := range event.GetRows() {
+				if row == nil || row.GetKey() == nil || row.GetKey().GetDatasetId() != item.GetPrimaryDatasetId() {
+					continue
+				}
+				mutation, err := BuildHistoryRecordMutation(item, row, event.GetSourceId())
+				if err != nil {
+					return nil, err
+				}
+				mutation.OrderCommitSeq = event.GetCommitSeq()
+				out = append(out, mutation)
+			}
+		}
+		return out, nil
+	}
+	ids := make([]string, 0)
+	seenIDs := make(map[string]struct{})
+	for _, event := range events {
+		for _, row := range event.GetRows() {
+			if row == nil || row.GetKey() == nil || row.GetKey().GetDatasetId() != item.GetPrimaryDatasetId() {
+				continue
+			}
+			if _, seen := seenIDs[row.GetKey().GetRecordId()]; !seen {
+				seenIDs[row.GetKey().GetRecordId()] = struct{}{}
+				ids = append(ids, row.GetKey().GetRecordId())
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	opened, err := replay.OpenRecordSnapshot(ctx, &pb.OpenRecordAccessSnapshotReq{Scope: recordViewScope(item), Mode: pb.RecordReadMode_RECORD_READ_MODE_CURRENT})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = replay.CloseRecordSnapshot(ctx, opened.GetSnapshotId()) }()
+	rowsByDataset := make(map[string]map[string]*pb.RecordRow)
+	for _, datasetID := range ViewProjectionDatasets(item.GetPrimaryDatasetId(), item.GetColumns()) {
+		read, readErr := replay.ReadRecordSnapshot(ctx, &pb.ReadRecordAccessSnapshotReq{SnapshotId: opened.GetSnapshotId(), DatasetId: datasetID, RecordIds: ids})
+		if readErr != nil {
+			return nil, readErr
+		}
+		if read == nil || read.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			if read == nil || read.GetRetInfo() == nil {
+				return nil, errors.New("Record journal snapshot read returned an empty response")
+			}
+			return nil, errors.New(read.GetRetInfo().GetMsg())
+		}
+		byID := make(map[string]*pb.RecordRow, len(read.GetRows()))
+		for _, row := range read.GetRows() {
+			if row != nil && row.GetKey() != nil {
+				byID[row.GetKey().GetRecordId()] = row
+			}
+		}
+		rowsByDataset[datasetID] = byID
+	}
+	out := make([]*pb.RecordIndexMutation, 0, len(ids))
+	for _, recordID := range ids {
+		rows := make(map[string]*pb.RecordRow, len(rowsByDataset))
+		for datasetID, byID := range rowsByDataset {
+			if row := byID[recordID]; row != nil {
+				rows[datasetID] = row
+			}
+		}
+		mutation, err := BuildCurrentRecordMutation(item, rows, opened.GetSourceId(), opened.GetSnapshotCommitSeq())
+		if err != nil {
+			return nil, err
+		}
+		if mutation != nil {
+			out = append(out, mutation)
+		}
+	}
+	return out, nil
+}
+
+func (m *MaintenanceManager) processRecordPage(ctx context.Context, item *pb.View, build *pb.ViewIndexBuild, engine ManagedViewIndex, cursor string, start time.Time, end time.Time, snapshotID string, sourceID string, snapshotCommitSeq uint64) (int, *pb.PageResult, error) {
 	if m.records == nil {
 		return 0, nil, errors.New("Record View maintenance requires a RecordFactReader")
 	}
 	datasetID := item.GetPrimaryDatasetId()
+	if item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		if replay, ok := m.records.(RecordReplayReader); ok {
+			openedHere := false
+			if snapshotID == "" {
+				opened, err := replay.OpenRecordSnapshot(ctx, &pb.OpenRecordAccessSnapshotReq{Scope: &pb.RecordAccessScope{SpaceId: item.GetSpaceId(), DatasetIds: []string{datasetID}}, Mode: pb.RecordReadMode(item.GetRecordViewMode())})
+				if err != nil {
+					return 0, nil, err
+				}
+				snapshotID, sourceID, snapshotCommitSeq = opened.GetSnapshotId(), opened.GetSourceId(), opened.GetSnapshotCommitSeq()
+				openedHere = true
+			}
+			pageRsp, scanErr := replay.ScanRecordSnapshot(ctx, &pb.ScanRecordAccessSnapshotReq{SnapshotId: snapshotID, DatasetId: datasetID, Page: &pb.Page{Size: m.cfg.PageSize, Cursor: cursor}})
+			if openedHere {
+				_ = replay.CloseRecordSnapshot(ctx, snapshotID)
+			}
+			if scanErr != nil {
+				return 0, nil, scanErr
+			}
+			mutations := make([]*pb.RecordIndexMutation, 0, len(pageRsp.GetRows()))
+			secondaryRows := make(map[string]map[string]*pb.RecordRow)
+			if item.GetRecordViewMode() == pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT {
+				recordIDs := make([]string, 0, len(pageRsp.GetRows()))
+				seenRecordIDs := make(map[string]struct{}, len(pageRsp.GetRows()))
+				for _, row := range pageRsp.GetRows() {
+					if row == nil || row.GetKey() == nil || row.GetKey().GetRecordId() == "" {
+						continue
+					}
+					if _, seen := seenRecordIDs[row.GetKey().GetRecordId()]; !seen {
+						seenRecordIDs[row.GetKey().GetRecordId()] = struct{}{}
+						recordIDs = append(recordIDs, row.GetKey().GetRecordId())
+					}
+				}
+				for _, secondaryDatasetID := range ViewProjectionDatasets(datasetID, item.GetColumns()) {
+					if secondaryDatasetID == datasetID || len(recordIDs) == 0 {
+						continue
+					}
+					read, readErr := replay.ReadRecordSnapshot(ctx, &pb.ReadRecordAccessSnapshotReq{SnapshotId: snapshotID, DatasetId: secondaryDatasetID, RecordIds: recordIDs})
+					if readErr != nil {
+						return 0, nil, readErr
+					}
+					if read == nil || read.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+						if read == nil || read.GetRetInfo() == nil {
+							return 0, nil, errors.New("Record snapshot projection read returned an empty response")
+						}
+						return 0, nil, errors.New(read.GetRetInfo().GetMsg())
+					}
+					byRecordID := make(map[string]*pb.RecordRow, len(read.GetRows()))
+					for _, row := range read.GetRows() {
+						if row != nil && row.GetKey() != nil {
+							byRecordID[row.GetKey().GetRecordId()] = row
+						}
+					}
+					secondaryRows[secondaryDatasetID] = byRecordID
+				}
+			}
+			for _, row := range pageRsp.GetRows() {
+				var mutation *pb.RecordIndexMutation
+				var err error
+				if item.GetRecordViewMode() == pb.RecordViewMode_RECORD_VIEW_MODE_HISTORY {
+					mutation, err = BuildHistoryRecordMutation(item, row, sourceID)
+					if mutation != nil && snapshotCommitSeq > 0 {
+						// The backfill boundary, rather than an individual row's
+						// commit, is the replay fence for the whole snapshot.
+						mutation.OrderCommitSeq = snapshotCommitSeq
+					}
+				} else {
+					rowsByDataset := map[string]*pb.RecordRow{datasetID: row}
+					if row != nil && row.GetKey() != nil {
+						for secondaryDatasetID, rowsByRecordID := range secondaryRows {
+							if secondary := rowsByRecordID[row.GetKey().GetRecordId()]; secondary != nil {
+								rowsByDataset[secondaryDatasetID] = secondary
+							}
+						}
+					}
+					mutation, err = BuildCurrentRecordMutation(item, rowsByDataset, sourceID, snapshotCommitSeq)
+				}
+				if err != nil {
+					return 0, nil, err
+				}
+				if mutation != nil {
+					mutations = append(mutations, mutation)
+				}
+			}
+			if len(mutations) > 0 {
+				if err := engine.Write(ctx, build.GetIndexId(), viewindex.ViewIndexBatch{RecordMutations: mutations, RecordViewMode: item.GetRecordViewMode(), Columns: build.GetColumns(), ViewVersion: build.GetTargetViewVersion(), SchemaHash: build.GetSchemaHash()}); err != nil {
+					return 0, nil, err
+				}
+			}
+			return len(mutations), pageRsp.GetPageResult(), nil
+		}
+	}
 	rows, page, err := m.records.ScanRecordRows(ctx, item.GetSpaceId(), datasetID, &pb.VersionRange{
 		StartVersion: start.Format(time.RFC3339Nano), EndVersion: end.Format(time.RFC3339Nano),
 	}, sourceColumns(datasetID, build.GetColumns()), &pb.Page{Size: m.cfg.PageSize, Cursor: cursor})
