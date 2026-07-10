@@ -16,7 +16,7 @@
 - 已完成：`modules/hostagent` Linux amd64/arm64 采集、稳定 identity、tRPC/health、best-effort HostMetric 发布和 rootless Skill 发布部署。
 - 已完成：Monitor HostMetric durable consumer、消息校验、SQLite inbox/agent/latest/history、全局主机 API、页面 API 迁移和 Host metadata seed/release/deploy gate。
 - 已完成：Admin 旧 node_exporter 采集定时器已停止注册；旧 Monitor RPC 仅作为兼容入口保留。
-- 待完成：Storage 四个 Host Dataset 的分钟 projector/history worker、bounded cleaner、资源告警规则/通知 outbox，以及页面的 rate-unavailable/non-zero 缺口状态展示。当前 Monitor history 查询读取本地 SQLite，尚未宣称 Storage 历史链路已上线。
+- 待完成：Storage 四个 Host Dataset 的分钟 projector/history worker、bounded cleaner、资源告警规则/通知 outbox，以及页面的 rate-unavailable/non-zero 缺口状态展示。当前 Monitor history 查询读取本地 SQLite，尚未宣称 Storage 历史链路已上线。历史保留策略已锁定为最多 3 天，过期数据直接分批删除，允许出现历史缺口。
 
 ---
 
@@ -60,7 +60,7 @@
 | 凭据生成 | 发布制品永不生成或携带真实凭据；首次部署生成 Admin 根密钥、私有 CA、服务端证书和六个 role token。普通升级全部复用。 |
 | 轮换 | V1 不做双 token 并存。轮换前必须提示短暂中断和重新部署 Agent；失败期间样本允许丢失。 |
 | Monitor owner | V1 部署只运行一个 active host-metrics ingest owner，不实现 lease/fencing 或多 Monitor active-active；手工启动第二个 consumer 属于不支持配置。 |
-| 历史与 UI | Monitor 保存 inbox/latest/alert 状态，MooX Storage 保存分钟级历史；UI 保留 `/ops/resource-monitor` 并改读 Monitor。 |
+| 历史与 UI | Monitor 保存 inbox/latest/alert 状态，MooX Storage 保存分钟级历史；主机历史最多保留 3 天，过期数据直接丢弃；UI 保留 `/ops/resource-monitor` 并改读 Monitor。 |
 | Skill 入口 | Host Agent 发布部署、EventBus 凭据生成/导出/轮换脚本放在 `skills/moox/scripts`，并更新 `skills/moox/SKILL.md` 与 references。 |
 
 ## 3. 范围与非目标
@@ -457,14 +457,14 @@ SQLite 容量和清理策略固定如下：
 - `MOOX_METRICS.max_age=24h`；projected inbox 默认保留 `48h`，配置校验要求不得短于 Stream max age，使 durable reset/重投窗口内仍可按 `message_id` 去重。
 - cleaner 每小时运行，单次每张表最多删除 500 行并循环让出写锁；只删除 projected inbox，绝不删除 pending inbox。
 - inbox 默认上限为 200,000 行或 512 MiB bounded raw bytes。任一上限触发后，新的 inbox transaction 返回 overload 并 NAK，不继续扩大 SQLite；readiness/metrics 必须显示 backlog 和最老 pending age。消息最终可能因 Stream `24h` retention 过期而形成可见 gap，符合指标允许丢失的边界。
-- `t_monitor_host_alert_events` 默认保留 30 天并按 500 行批量清理。Agent registry 和 latest 不按时间自动删除；只能通过 archive/delete 运维动作处理。
-- history outbox 默认 `max_rows=100000`、`max_bytes=256 MiB`、`max_age=7d`；notification outbox 默认 `max_rows=10000`、`max_bytes=32 MiB`、`max_age=24h`，重试 backoff 最大 5 分钟。成功项立即删除。
+- `t_monitor_host_alert_events` 默认保留 3 天并按 500 行批量清理。Agent registry、latest 和告警规则不按时间自动删除；只能通过 archive/delete 运维动作处理。
+- history outbox 默认 `max_rows=100000`、`max_bytes=256 MiB`、`max_age=3d`；notification outbox 默认 `max_rows=10000`、`max_bytes=32 MiB`、`max_age=24h`，重试 backoff 最大 5 分钟。成功项立即删除。
 - outbox 到达 rows/bytes cap 时丢弃本次新 history candidate/notification request；超过 max age 时 cleaner 分批丢弃最老 pending 项。两种情况都写 structured warning 和固定低基数 label 的 Prometheus counter。projector 仍在同一 transaction 更新 latest/alert 并把 inbox 标为 projected，不能因中央 best-effort outbox 满而把压力转移到 pending inbox。
 
 ### 8.3 历史和告警
 
 - Monitor latest 和资源告警保持收到样本的粒度。
-- Storage 使用 UTC minute bucket，在 `bucket_end + 30s` 前保留该分钟最后收到的样本。
+- Storage 使用 UTC minute bucket，在 `bucket_end + 30s` 前保留该分钟最后收到的样本；Dataset 行和 Monitor 历史均由 cleaner 按 3 天 retention 分批删除，删除失败不影响实时 latest。
 - Dataset ID 保持显式外部版本：`host_resource_v1`、`host_fs_v1`、`host_disk_v1`、`host_net_v1`。
 - 四个 Dataset 都是 `DATA_KIND_TIME_SERIES`、`freq=1m`、`space_id=moox_system`、`subject_id=agent_id`，`data_time=bucket_start UTC`。同一 key 重写只更新该分钟最终样本。
 - 历史缺口是合法状态；Host Agent best-effort 不承诺连续时间序列。
