@@ -104,7 +104,7 @@ func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
 	}
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-monitor"))
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox_monitor"))
 	if err != nil {
 		log.WarnContextf(context.Background(), "monitor metrics reporter disabled: %v", err)
 		return

@@ -101,11 +101,21 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 }
 
 func registerMetricsReporter(s *server.Server) {
-	if s == nil { return }
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-eventbus"))
-	if err != nil { log.Warnf("eventbus metrics reporter disabled: %v", err); return }
+	if s == nil {
+		return
+	}
+	// The reporter identity must match the SysDeploy service name so Monitor
+	// can authorize snapshots without a second, manually maintained registry.
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("eventbus"))
+	if err != nil {
+		log.Warnf("eventbus metrics reporter disabled: %v", err)
+		return
+	}
 	service := s.Service("trpc.moox.eventbus.metrics.timer")
-	if service == nil { log.Warn("eventbus metrics timer service is not configured, skip register"); return }
+	if service == nil {
+		log.Warn("eventbus metrics timer service is not configured, skip register")
+		return
+	}
 	timer.RegisterHandlerService(service, h.Handle)
 }
 

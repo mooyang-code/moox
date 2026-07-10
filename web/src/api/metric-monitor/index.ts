@@ -19,6 +19,7 @@ import {
 
 // The admin gateway keeps the monitor deployment under this stable service id.
 export const METRIC_MONITOR_SERVICE = 'moox_monitor';
+export const METRIC_SPACE_ID = 'moox_system';
 
 function boundedPage(page: PageRequest | undefined, max: number): PageRequest | undefined {
   if (!page) return undefined;
@@ -36,6 +37,7 @@ export const metricMonitorApi = {
   listMetricServices(req: { space_id?: string; page?: PageRequest } = {}) {
     return callControl<typeof req, { services?: MetricServiceInfo[]; page_result?: PageResult }>(METRIC_MONITOR_SERVICE, 'ListMetricServices', {
       ...req,
+      space_id: req.space_id || METRIC_SPACE_ID,
       page: boundedPage(req.page, METRIC_SERIES_LIMIT),
     });
   },
@@ -43,6 +45,7 @@ export const metricMonitorApi = {
   listMetricNames(req: { space_id?: string; service_name?: string; page?: PageRequest } = {}) {
     return callControl<typeof req, { names?: MetricNameInfo[]; page_result?: PageResult }>(METRIC_MONITOR_SERVICE, 'ListMetricNames', {
       ...req,
+      space_id: req.space_id || METRIC_SPACE_ID,
       page: boundedPage(req.page, METRIC_SERIES_LIMIT),
     });
   },
@@ -50,12 +53,13 @@ export const metricMonitorApi = {
   listMetricSeries(req: { space_id?: string; service_name?: string; metric_name?: string; labels_json?: string; page?: PageRequest } = {}) {
     return callControl<typeof req, { series?: MetricSeriesInfo[]; page_result?: PageResult }>(METRIC_MONITOR_SERVICE, 'ListMetricSeries', {
       ...req,
+      space_id: req.space_id || METRIC_SPACE_ID,
       page: boundedPage(req.page, METRIC_SERIES_LIMIT),
     });
   },
 
   getMetricLatest(req: { space_id?: string; series_id: string }) {
-    return callControl<typeof req, { latest?: MetricLatestPoint }>(METRIC_MONITOR_SERVICE, 'GetMetricLatest', req);
+    return callControl<typeof req, { latest?: MetricLatestPoint }>(METRIC_MONITOR_SERVICE, 'GetMetricLatest', { ...req, space_id: req.space_id || METRIC_SPACE_ID });
   },
 
   queryMetricHistory(req: {
@@ -71,6 +75,7 @@ export const metricMonitorApi = {
   }) {
     return callControl<typeof req, { points?: MetricHistoryPoint[] }>(METRIC_MONITOR_SERVICE, 'QueryMetricHistory', {
       ...req,
+      space_id: req.space_id || METRIC_SPACE_ID,
       limit: boundedLimit(req.limit, METRIC_HISTORY_LIMIT, METRIC_HISTORY_LIMIT),
     });
   },
@@ -78,29 +83,30 @@ export const metricMonitorApi = {
   listMetricRules(req: { space_id?: string; enabled_only?: boolean; page?: PageRequest } = {}) {
     return callControl<typeof req, { rules?: MetricRule[]; page_result?: PageResult }>(METRIC_MONITOR_SERVICE, 'ListMetricRules', {
       ...req,
+      space_id: req.space_id || METRIC_SPACE_ID,
       page: boundedPage(req.page, METRIC_RULE_LIMIT),
     });
   },
 
   getMetricRule(req: { space_id?: string; rule_id: string }) {
-    return callControl<typeof req, { rule?: MetricRule }>(METRIC_MONITOR_SERVICE, 'GetMetricRule', req);
+    return callControl<typeof req, { rule?: MetricRule }>(METRIC_MONITOR_SERVICE, 'GetMetricRule', { ...req, space_id: req.space_id || METRIC_SPACE_ID });
   },
 
   createMetricRule(rule: MetricRule) {
-    return callControl<{ rule: MetricRule }, { rule?: MetricRule }>(METRIC_MONITOR_SERVICE, 'CreateMetricRule', { rule });
+    return callControl<{ rule: MetricRule }, { rule?: MetricRule }>(METRIC_MONITOR_SERVICE, 'CreateMetricRule', { rule: { ...rule, space_id: rule.space_id || METRIC_SPACE_ID } });
   },
 
   updateMetricRule(rule: MetricRule) {
-    return callControl<{ rule: MetricRule }, { rule?: MetricRule }>(METRIC_MONITOR_SERVICE, 'UpdateMetricRule', { rule });
+    return callControl<{ rule: MetricRule }, { rule?: MetricRule }>(METRIC_MONITOR_SERVICE, 'UpdateMetricRule', { rule: { ...rule, space_id: rule.space_id || METRIC_SPACE_ID } });
   },
 
   deleteMetricRule(req: { space_id?: string; rule_id: string }) {
-    return callControl<typeof req, Record<string, never>>(METRIC_MONITOR_SERVICE, 'DeleteMetricRule', req);
+    return callControl<typeof req, Record<string, never>>(METRIC_MONITOR_SERVICE, 'DeleteMetricRule', { ...req, space_id: req.space_id || METRIC_SPACE_ID });
   },
 
   previewMetricRule(rule: MetricRule, limit = METRIC_PREVIEW_LIMIT) {
     return callControl<{ rule: MetricRule; limit: number }, { evaluation?: MetricRuleEvaluation }>(METRIC_MONITOR_SERVICE, 'PreviewMetricRule', {
-      rule,
+      rule: { ...rule, space_id: rule.space_id || METRIC_SPACE_ID },
       limit: boundedLimit(limit, METRIC_PREVIEW_LIMIT, METRIC_PREVIEW_LIMIT),
     });
   },
@@ -108,16 +114,17 @@ export const metricMonitorApi = {
   listMetricRuleEvaluations(req: { space_id?: string; rule_id?: string; page?: PageRequest } = {}) {
     return callControl<typeof req, { evaluations?: MetricRuleEvaluation[]; page_result?: PageResult }>(METRIC_MONITOR_SERVICE, 'ListMetricRuleEvaluations', {
       ...req,
+      space_id: req.space_id || METRIC_SPACE_ID,
       page: boundedPage(req.page, METRIC_RULE_LIMIT),
     });
   },
 
   getMetricRuleState(req: { space_id?: string; rule_id: string }) {
-    return callControl<typeof req, { state?: MetricRuleState }>(METRIC_MONITOR_SERVICE, 'GetMetricRuleState', req);
+    return callControl<typeof req, { state?: MetricRuleState }>(METRIC_MONITOR_SERVICE, 'GetMetricRuleState', { ...req, space_id: req.space_id || METRIC_SPACE_ID });
   },
 
   listWebhookChannels(req: { space_id?: string } = {}) {
-    return callControl<typeof req, { channels?: WebhookChannel[] }>(METRIC_MONITOR_SERVICE, 'ListWebhookChannels', req);
+    return callControl<typeof req, { channels?: WebhookChannel[] }>(METRIC_MONITOR_SERVICE, 'ListWebhookChannels', { ...req, space_id: req.space_id || METRIC_SPACE_ID });
   },
 };
 

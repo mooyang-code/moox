@@ -20,8 +20,8 @@ import (
 	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	deviceduckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
-	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/services/access"
 	"github.com/mooyang-code/moox/modules/storage/internal/metricspublish"
+	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/services/access"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/archive"
 	primarysvc "github.com/mooyang-code/moox/modules/storage/internal/services/primary"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
@@ -31,10 +31,10 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/healthz"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
-	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
+	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
 
 var storageStartedAt = time.Now()
@@ -170,23 +170,33 @@ func main() {
 }
 
 func registerStorageMetricsReporter(s *server.Server, storage storageconfig.StorageConfig) {
-	if s == nil { return }
-	serviceName := "moox-storage-access"
+	if s == nil {
+		return
+	}
+	serviceName := "storage_access"
 	timerName := "trpc.moox.storage.access.metrics.timer"
 	switch {
+	case storage.HasRole("primary") && !storage.HasRole("access"):
+		serviceName = "storage_primary_trpc"
 	case storage.HasRole("view_index") && !storage.HasRole("access"):
-		serviceName, timerName = "moox-storage-view-index", "trpc.moox.storage.view_index.metrics.timer"
+		serviceName, timerName = "storage_view_index", "trpc.moox.storage.view_index.metrics.timer"
 	case storage.HasRole("view_builder") && !storage.HasRole("access"):
-		serviceName, timerName = "moox-storage-view-builder", "trpc.moox.storage.view_builder.metrics.timer"
+		serviceName, timerName = "storage_view_builder", "trpc.moox.storage.view_builder.metrics.timer"
 	case storage.HasRole("view_query") && !storage.HasRole("access"):
-		serviceName, timerName = "moox-storage-view-query", "trpc.moox.storage.view_query.metrics.timer"
+		serviceName, timerName = "storage_view_query", "trpc.moox.storage.view_query.metrics.timer"
 	case storage.HasRole("view") && !storage.HasRole("access"):
-		serviceName, timerName = "moox-storage-view", "trpc.moox.storage.view.metrics.timer"
+		serviceName, timerName = "storage_view", "trpc.moox.storage.view.metrics.timer"
 	}
 	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig(serviceName))
-	if err != nil { log.Warnf("storage metrics reporter disabled: %v", err); return }
+	if err != nil {
+		log.Warnf("storage metrics reporter disabled: %v", err)
+		return
+	}
 	service := s.Service(timerName)
-	if service == nil { log.Warnf("storage metrics timer service %s is not configured, skip register", timerName); return }
+	if service == nil {
+		log.Warnf("storage metrics timer service %s is not configured, skip register", timerName)
+		return
+	}
 	timer.RegisterHandlerService(service, h.Handle)
 }
 

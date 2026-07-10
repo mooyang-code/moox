@@ -8,8 +8,8 @@ import (
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
-	"github.com/mooyang-code/moox/modules/trade/internal/metricspublish"
 	_ "github.com/mooyang-code/moox/modules/trade/internal/exchange/all" // 注册 binance/okx 适配器
+	"github.com/mooyang-code/moox/modules/trade/internal/metricspublish"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
@@ -68,11 +68,19 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 }
 
 func registerMetricsReporter(s *server.Server) {
-	if s == nil { return }
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-trade"))
-	if err != nil { log.Warnf("trade metrics reporter disabled: %v", err); return }
+	if s == nil {
+		return
+	}
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("trade_account"))
+	if err != nil {
+		log.Warnf("trade metrics reporter disabled: %v", err)
+		return
+	}
 	service := s.Service("trpc.moox.trade.metrics.timer")
-	if service == nil { log.Warn("trade metrics timer service is not configured, skip register"); return }
+	if service == nil {
+		log.Warn("trade metrics timer service is not configured, skip register")
+		return
+	}
 	timer.RegisterHandlerService(service, h.Handle)
 }
 

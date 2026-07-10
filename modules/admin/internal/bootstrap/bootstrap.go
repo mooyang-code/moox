@@ -57,10 +57,18 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 }
 
 func registerMetricsReporter(s *server.Server) {
-	if s == nil { return }
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-admin"))
-	if err != nil { log.Warnf("admin metrics reporter disabled: %v", err); return }
+	if s == nil {
+		return
+	}
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("admin_gateway"))
+	if err != nil {
+		log.Warnf("admin metrics reporter disabled: %v", err)
+		return
+	}
 	service := s.Service("trpc.moox.admin.metrics.timer")
-	if service == nil { log.Warn("admin metrics timer service is not configured, skip register"); return }
+	if service == nil {
+		log.Warn("admin metrics timer service is not configured, skip register")
+		return
+	}
 	timer.RegisterHandlerService(service, h.Handle)
 }

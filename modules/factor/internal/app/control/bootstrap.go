@@ -130,11 +130,19 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 }
 
 func registerMetricsReporter(s *server.Server) {
-	if s == nil { return }
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-factor"))
-	if err != nil { log.Warnf("factor metrics reporter disabled: %v", err); return }
+	if s == nil {
+		return
+	}
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox_factor"))
+	if err != nil {
+		log.Warnf("factor metrics reporter disabled: %v", err)
+		return
+	}
 	service := s.Service("trpc.moox.factor.metrics.timer")
-	if service == nil { log.Warn("factor metrics timer service is not configured, skip register"); return }
+	if service == nil {
+		log.Warn("factor metrics timer service is not configured, skip register")
+		return
+	}
 	timer.RegisterHandlerService(service, h.Handle)
 }
 

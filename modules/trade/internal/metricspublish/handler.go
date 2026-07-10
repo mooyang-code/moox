@@ -90,7 +90,7 @@ func (h *Handler) Handle(ctx context.Context, _ string) error {
 	messageID := fmt.Sprintf("%s-%020d", h.bootID, seq)
 	payload, err := proto.Marshal(snapshot)
 	if err != nil {
-		return fmt.Errorf("marshal metric snapshot: %w", err)
+		return h.reportError(ctx, fmt.Errorf("marshal metric snapshot: %w", err))
 	}
 	msg := &messagepb.MooxMessage{
 		ProtocolVersion: jetstream.ProtocolVersion,

@@ -106,11 +106,19 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 }
 
 func registerMetricsReporter(s *server.Server) {
-	if s == nil { return }
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox-cloudnode"))
-	if err != nil { log.Warnf("cloudnode metrics reporter disabled: %v", err); return }
+	if s == nil {
+		return
+	}
+	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox_cloudnode"))
+	if err != nil {
+		log.Warnf("cloudnode metrics reporter disabled: %v", err)
+		return
+	}
 	service := s.Service("trpc.moox.cloudnode.metrics.timer")
-	if service == nil { log.Warn("cloudnode metrics timer service is not configured, skip register"); return }
+	if service == nil {
+		log.Warn("cloudnode metrics timer service is not configured, skip register")
+		return
+	}
 	timer.RegisterHandlerService(service, h.Handle)
 }
 

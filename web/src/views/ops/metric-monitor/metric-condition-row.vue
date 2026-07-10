@@ -13,21 +13,21 @@
       </div>
       <div class="matcher-list">
         <div v-for="(matcher, matcherIndex) in condition.query.selector.matchers || []" :key="`${condition.condition_id}-${matcherIndex}`" class="matcher-line">
-          <a-select v-model="matcher.negate" size="small" style="width: 90px"><a-option :value="false">等于</a-option><a-option :value="true">不等于</a-option></a-select>
-          <a-input v-model="matcher.name" size="small" placeholder="标签名" style="width: 150px" />
-          <a-input v-model="matcher.value" size="small" placeholder="标签值" style="width: 210px" />
+          <a-select :model-value="matcher.negate" size="small" style="width: 90px" @update:model-value="updateMatcher(matcherIndex, { negate: Boolean($event) })"><a-option :value="false">等于</a-option><a-option :value="true">不等于</a-option></a-select>
+          <a-input :model-value="matcher.name" size="small" placeholder="标签名" style="width: 150px" @update:model-value="updateMatcher(matcherIndex, { name: String($event) })" />
+          <a-input :model-value="matcher.value" size="small" placeholder="标签值" style="width: 210px" @update:model-value="updateMatcher(matcherIndex, { value: String($event) })" />
           <a-button size="small" type="text" status="danger" @click="removeMatcher(matcherIndex)"><icon-delete /></a-button>
         </div>
         <a-button size="small" type="text" @click="addMatcher"><icon-plus /> 标签条件</a-button>
       </div>
       <div class="reduce-line">
-        <a-select v-model="condition.query.time_reducer" style="width: 130px"><a-option v-for="item in timeReducerOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option></a-select>
-        <a-input-number v-model="condition.query.window_seconds" :min="condition.query.time_reducer === TimeReducer.CURRENT ? 0 : 1" :max="86400" style="width: 145px" />
+        <a-select :model-value="condition.query.time_reducer" style="width: 130px" @update:model-value="patch({ query: { time_reducer: Number($event) } })"><a-option v-for="item in timeReducerOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option></a-select>
+        <a-input-number :model-value="condition.query.window_seconds" :min="condition.query.time_reducer === TimeReducer.CURRENT ? 0 : 1" :max="86400" style="width: 145px" @update:model-value="patch({ query: { window_seconds: Number($event || 0) } })" />
         <span class="unit">秒窗口</span>
-        <a-select v-model="condition.query.series_reducer" style="width: 130px"><a-option v-for="item in seriesReducerOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option></a-select>
-        <a-select v-model="condition.compare" style="width: 100px"><a-option v-for="item in compareOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option></a-select>
-        <a-input-number v-model="condition.threshold" :precision="6" style="width: 140px" placeholder="阈值" />
-        <a-select v-model="condition.no_data_policy" style="width: 130px"><a-option v-for="item in noDataOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option></a-select>
+        <a-select :model-value="condition.query.series_reducer" style="width: 130px" @update:model-value="patch({ query: { series_reducer: Number($event) } })"><a-option v-for="item in seriesReducerOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option></a-select>
+        <a-select :model-value="condition.compare" style="width: 100px" @update:model-value="patch({ compare: Number($event) })"><a-option v-for="item in compareOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option></a-select>
+        <a-input-number :model-value="condition.threshold" :precision="6" style="width: 140px" placeholder="阈值" @update:model-value="patch({ threshold: Number($event || 0) })" />
+        <a-select :model-value="condition.no_data_policy" style="width: 130px" @update:model-value="patch({ no_data_policy: Number($event) })"><a-option v-for="item in noDataOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option></a-select>
       </div>
     </div>
   </div>
@@ -74,6 +74,9 @@ function patch(value: MetricConditionPatch) { emit('patch', value); }
 function onServiceChange(value: string) { patch({ query: { selector: { service_name: value, metric_name: '' } } }); emit('serviceChange', value); }
 function addMatcher() { patch({ query: { selector: { matchers: [...(props.condition.query.selector.matchers || []), { name: '', value: '', negate: false }] } } }); }
 function removeMatcher(index: number) { patch({ query: { selector: { matchers: (props.condition.query.selector.matchers || []).filter((_, matcherIndex) => matcherIndex !== index) } } }); }
+function updateMatcher(index: number, value: Partial<{ name: string; value: string; negate: boolean }>) {
+  patch({ query: { selector: { matchers: (props.condition.query.selector.matchers || []).map((matcher, matcherIndex) => matcherIndex === index ? { ...matcher, ...value } : matcher) } } });
+}
 </script>
 
 <style scoped lang="scss">
