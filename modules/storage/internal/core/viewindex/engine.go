@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -33,37 +32,94 @@ type ViewIndexBatch struct {
 	TimeSeriesRows []*pb.TimeSeriesRow
 	RecordRows     []*pb.RecordRow
 	Columns        []*pb.ViewColumn
+	ViewVersion    uint64
+	SchemaHash     string
 }
 
 type ViewIndexStats struct {
-	Exists     bool
-	EntryCount int64
-	MinVersion string
-	MaxVersion string
-	SchemaHash string
+	Exists        bool
+	EntryCount    int64
+	MinVersion    string
+	MaxVersion    string
+	SchemaHash    string
+	PhysicalBytes uint64
+	UpdatedAt     string
+	FreeDiskBytes uint64
 }
 
-func ViewIndexID(spaceID string, viewID string, slot string) string {
-	name := sanitizeResultTableName(fmt.Sprintf("view_%s_%s_%s", spaceID, viewID, slot))
-	if name == "" {
-		return "view_result_" + slot
-	}
-	return name
+func ViewIndexID(spaceID string, viewID string, slot Slot) string {
+	return fmt.Sprintf("view_s%s_v%s_%s", encodeIndexIDPart(spaceID), encodeIndexIDPart(viewID), normalizeSlot(slot))
 }
 
 func InactiveViewIndexID(spaceID string, viewID string, activeIndexID string) string {
-	slotA := ViewIndexID(spaceID, viewID, "a")
-	if activeIndexID == slotA {
-		return ViewIndexID(spaceID, viewID, "b")
+	ref, err := ParseViewIndexID(activeIndexID)
+	if err == nil && ref.SpaceID == spaceID && ref.ViewID == viewID && ref.Slot == SlotA {
+		return ViewIndexID(spaceID, viewID, SlotB)
 	}
-	return slotA
+	return ViewIndexID(spaceID, viewID, SlotA)
 }
 
-func BuildingIndexWritable(view *pb.View) bool {
-	return view != nil &&
-		view.GetBuildingResult() != "" &&
-		view.GetBuildingViewVersion() == view.GetViewVersion() &&
-		view.GetBuildStatus() == "building"
+func encodeIndexIDPart(value string) string {
+	encoded := hex.EncodeToString([]byte(value))
+	if encoded == "" {
+		return "00"
+	}
+	return encoded
+}
+
+func normalizeSlot(slot Slot) Slot {
+	switch Slot(strings.ToLower(strings.TrimSpace(string(slot)))) {
+	case SlotB:
+		return SlotB
+	default:
+		return SlotA
+	}
+}
+
+func BuildIndexWritable(view *pb.View) bool {
+	if view == nil || view.GetIndexBuild() == nil {
+		return false
+	}
+	build := view.GetIndexBuild()
+	if build.GetIndexId() == "" || build.GetTargetViewVersion() != view.GetViewVersion() ||
+		(build.GetState() != pb.ViewIndexBuild_BUILDING && build.GetState() != pb.ViewIndexBuild_CATCHING_UP) ||
+		!strings.EqualFold(strings.TrimSpace(build.GetEngine()), strings.TrimSpace(view.GetEngine())) {
+		return false
+	}
+	ref, err := ParseViewIndexID(build.GetIndexId())
+	if err != nil || ref.SpaceID != view.GetSpaceId() || ref.ViewID != view.GetViewId() {
+		return false
+	}
+	currentSchema := ViewIndexSchema{
+		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), Engine: view.GetEngine(), Columns: view.GetColumns(),
+	}
+	wantHash := HashViewIndexSchema(currentSchema)
+	if build.GetSchemaHash() == "" || build.GetSchemaHash() != wantHash {
+		return false
+	}
+	buildSchema := currentSchema
+	buildSchema.Columns = build.GetColumns()
+	return HashViewIndexSchema(buildSchema) == wantHash
+}
+
+// WritableIndexIDs returns the active index and, when its durable build is
+// current and write-safe, the warming index. Returned IDs are deduplicated.
+func WritableIndexIDs(view *pb.View) []string {
+	if view == nil {
+		return nil
+	}
+	out := make([]string, 0, 2)
+	active := strings.TrimSpace(view.GetActiveIndexId())
+	if active != "" {
+		out = append(out, active)
+	}
+	if BuildIndexWritable(view) {
+		buildID := strings.TrimSpace(view.GetIndexBuild().GetIndexId())
+		if buildID != "" && buildID != active {
+			out = append(out, buildID)
+		}
+	}
+	return out
 }
 
 func HashViewIndexSchema(schema ViewIndexSchema) string {
@@ -96,18 +152,4 @@ func HashViewIndexSchema(schema ViewIndexSchema) string {
 	raw, _ := json.Marshal(shape)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
-}
-
-var invalidTableChar = regexp.MustCompile(`[^A-Za-z0-9_]+`)
-
-func sanitizeResultTableName(raw string) string {
-	name := invalidTableChar.ReplaceAllString(raw, "_")
-	name = strings.Trim(name, "_")
-	if name == "" {
-		return ""
-	}
-	if first := name[0]; (first < 'A' || first > 'Z') && (first < 'a' || first > 'z') && first != '_' {
-		name = "view_result_" + name
-	}
-	return name
 }

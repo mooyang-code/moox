@@ -1,9 +1,16 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-      <a-tabs v-model:active-key="activeTab" type="rounded">
+      <PageTitleTabs
+        class="record-view-tabs"
+        :model-value="activeTab"
+        :items="tabs"
+        aria-label="订单与成交"
+        @change="switchTab"
+      />
+      <template v-if="activeTab === 'orders'">
         <!-- 订单列表 -->
-        <a-tab-pane key="orders" title="订单记录">
+        <section>
           <div v-if="accounts.length" class="account-tabs-block">
             <div
               class="record-account-tabs order-account-tabs"
@@ -114,10 +121,12 @@
               </a-table-column>
             </template>
           </a-table>
-        </a-tab-pane>
+        </section>
+      </template>
 
+      <template v-else>
         <!-- 成交明细 -->
-        <a-tab-pane key="trades" title="成交明细">
+        <section>
           <div v-if="accounts.length" class="account-tabs-block">
             <div
               class="record-account-tabs trade-account-tabs"
@@ -206,8 +215,8 @@
               </a-table-column>
             </template>
           </a-table>
-        </a-tab-pane>
-      </a-tabs>
+        </section>
+      </template>
 
       <!-- 订单成交明细弹窗 -->
       <a-modal v-model:visible="orderTradesVisible" width="900px" :title="`订单成交明细 - ${selectedOrder?.symbol || ''}`" :footer="false">
@@ -246,6 +255,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
 import { Message } from '@arco-design/web-vue';
+import PageTitleTabs from '@/components/page-title-tabs/index.vue';
 import {
   listAccounts, listOrders, syncOrders, listTrades, syncTrades, cancelOrder,
   accountTypeLabels,
@@ -258,10 +268,20 @@ import { defaultPagination, applyPageResult } from '@/views/data/shared/metadata
 
 defineOptions({ name: 'trade-record' });
 
-const activeTab = ref('orders');
+type TradeRecordTab = 'orders' | 'trades';
+
+const activeTab = ref<TradeRecordTab>('orders');
+const tabs = [
+  { key: 'orders', label: '订单记录' },
+  { key: 'trades', label: '成交明细' },
+] as const;
 const accounts = ref<Account[]>([]);
 const orderAccountTabsExpanded = ref(false);
 const tradeAccountTabsExpanded = ref(false);
+
+function switchTab(key: string) {
+  activeTab.value = key === 'trades' ? 'trades' : 'orders';
+}
 
 async function loadAccounts() {
   const rsp = await listAccounts({ page: { page: 1, size: 200 } });
@@ -484,6 +504,10 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.record-view-tabs {
+  margin-bottom: 16px;
+}
+
 .account-tabs-block {
   position: relative;
   padding-bottom: 12px;

@@ -423,21 +423,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.moox-page {
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  padding: 20px 20px 72px;
-  overflow-y: auto;
-}
-
-.moox-inner {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-}
-
 .moox-page :deep(.arco-spin) {
   display: block;
   width: 100%;

@@ -47,11 +47,3 @@ export function queryTimeSeriesRows(req: QueryTimeSeriesRowsReq) {
 export function searchRecordRows(req: SearchRecordRowsReq) {
   return callView<SearchRecordRowsReq, { ret_info: RetInfo; columns: ResultColumn[]; rows: RecordRow[]; page_result: PageResult }>('SearchRecordRows', req);
 }
-
-export function rebuildTimeSeriesView(req: { space_id: string; view_id: string }) {
-  return callView<typeof req, { ret_info: RetInfo; rebuild_id: string }>('RebuildTimeSeriesView', req);
-}
-
-export function rebuildRecordView(req: { space_id: string; view_id: string }) {
-  return callView<typeof req, { ret_info: RetInfo; rebuild_id: string }>('RebuildRecordView', req);
-}

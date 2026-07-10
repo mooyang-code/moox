@@ -38,6 +38,11 @@ client:
       network: tcp
       protocol: http
       timeout: 3000
+    - name: trpc.moox.storage.ViewIndex
+      target: ip://127.0.0.1:20104
+      network: tcp
+      protocol: trpc
+      timeout: 30000
 
 plugins:
   auth:

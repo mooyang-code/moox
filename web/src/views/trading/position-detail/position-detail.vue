@@ -26,7 +26,7 @@
           </div>
           <a-button
             class="account-tabs-toggle"
-            size="mini"
+            size="small"
             type="text"
             :aria-label="positionAccountTabsExpanded ? '收起账户' : '展开账户'"
             :title="positionAccountTabsExpanded ? '收起账户' : '展开账户'"
@@ -72,7 +72,7 @@
           <a-table
             v-if="selectedAccountBalances.length"
             row-key="currency"
-            size="mini"
+            size="small"
             :bordered="{ cell: true }"
             :data="selectedAccountBalances"
             :pagination="{ pageSize: 12, simple: true }"

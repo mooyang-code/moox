@@ -16,12 +16,19 @@ func (s *Service) primaryFactReader() *primaryFactReader {
 }
 
 func (s *Service) ScanTimeSeriesRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange, columnNames []string, page *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult, error) {
-	rsp, err := s.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+	req := &pb.ReadTimeSeriesRowsReq{
 		Keys:        []*pb.TimeSeriesKey{{SpaceId: spaceID, DatasetId: datasetID}},
 		TimeRange:   timeRange,
 		ColumnNames: columnNames,
 		Page:        page,
-	})
+	}
+	if err := validateTimeRange(req.GetTimeRange()); err != nil {
+		return nil, nil, err
+	}
+	if isTimeSeriesDatasetScan(req) {
+		return s.scanTimeSeriesDatasetPageRows(ctx, req)
+	}
+	rsp, err := s.ReadTimeSeriesRows(ctx, req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -32,12 +39,16 @@ func (s *Service) ScanTimeSeriesRows(ctx context.Context, spaceID string, datase
 }
 
 func (s *Service) ScanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
-	rsp, err := s.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{
+	req := &pb.ReadRecordRowsReq{
 		Keys:         []*pb.RecordKey{{SpaceId: spaceID, DatasetId: datasetID}},
 		VersionRange: versionRange,
 		ColumnNames:  columnNames,
 		Page:         page,
-	})
+	}
+	if isRecordDatasetScan(req) {
+		return s.scanRecordDatasetPageRows(ctx, req)
+	}
+	rsp, err := s.ReadRecordRows(ctx, req)
 	if err != nil {
 		return nil, nil, err
 	}

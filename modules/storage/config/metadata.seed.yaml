@@ -502,13 +502,13 @@ devices:
     node_id: local
     name: local-duckdb-view
     engine: duckdb
-    endpoint: ./var/storage/duckdb/views.duckdb
+    endpoint: ./var/storage/view-indexes/duckdb
     status: active
   - device_id: bleve-local
     node_id: local
     name: local-bleve-search
     engine: bleve
-    endpoint: ./var/storage/bleve
+    endpoint: ./var/storage/view-indexes/bleve
     status: active
   - device_id: parquet-local
     node_id: local

@@ -3,6 +3,7 @@ package access
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 )
 
 const maxDatasetScanRows = 10000
+
+const primaryDatasetScanPageSize = uint32(1000)
 
 func (s *Service) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeriesRowsReq) (*pb.WriteTimeSeriesRowsRsp, error) {
 	if err := s.validator.ValidateWriteTimeSeriesRows(ctx, req.GetRows()); err != nil {
@@ -35,6 +38,7 @@ func (s *Service) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeri
 	}
 	if err := s.publishTimeSeriesRowsChanged(ctx, written); err != nil {
 		s.reportViewError(ctx, "time_series_rows_changed_event", err)
+		return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("primary write committed but change event was not published: %w", err))}, nil
 	}
 	return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Success("success")}, nil
 }
@@ -147,6 +151,30 @@ func (s *Service) scanTimeSeriesDataset(ctx context.Context, req *pb.ReadTimeSer
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 
+func (s *Service) scanTimeSeriesDatasetPageRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) ([]*pb.TimeSeriesRow, *pb.PageResult, error) {
+	key := req.GetKeys()[0]
+	if strings.TrimSpace(key.GetSpaceId()) == "" || strings.TrimSpace(key.GetDatasetId()) == "" {
+		return nil, nil, errText("space_id and dataset_id are required")
+	}
+	versionRange, err := timeRangeToVersionRange(req.GetTimeRange())
+	if err != nil {
+		return nil, nil, err
+	}
+	targets, err := s.router.ResolveDatasetTargets(ctx, key.GetSpaceId(), key.GetDatasetId())
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, page, err := s.scanPrimaryRowsPage(ctx, req.GetAuthInfo(), targets, pb.DataKind_DATA_KIND_TIME_SERIES, versionRange, req.GetColumnNames(), req.GetPage())
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]*pb.TimeSeriesRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, primaryStoreRowToTimeSeriesRow(row, key))
+	}
+	return out, page, nil
+}
+
 func (s *Service) WriteRecordRows(ctx context.Context, req *pb.WriteRecordRowsReq) (*pb.WriteRecordRowsRsp, error) {
 	rows := s.normalizeWriteRecordRows(req.GetRows())
 	if err := s.validator.ValidateWriteRecordRows(ctx, rows); err != nil {
@@ -168,6 +196,7 @@ func (s *Service) WriteRecordRows(ctx context.Context, req *pb.WriteRecordRowsRe
 	}
 	if err := s.publishRecordRowsChanged(ctx, written); err != nil {
 		s.reportViewError(ctx, "record_rows_changed_event", err)
+		return &pb.WriteRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("primary write committed but change event was not published: %w", err)), Keys: cloneRecordKeys(written)}, nil
 	}
 	return &pb.WriteRecordRowsRsp{RetInfo: response.Success("success"), Keys: cloneRecordKeys(written)}, nil
 }
@@ -292,8 +321,27 @@ func (s *Service) scanRecordDataset(ctx context.Context, req *pb.ReadRecordRowsR
 	return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 
+func (s *Service) scanRecordDatasetPageRows(ctx context.Context, req *pb.ReadRecordRowsReq) ([]*pb.RecordRow, *pb.PageResult, error) {
+	key := req.GetKeys()[0]
+	if err := validateRecordKey(key, false); err != nil {
+		return nil, nil, err
+	}
+	targets, err := s.router.ResolveDatasetTargets(ctx, key.GetSpaceId(), key.GetDatasetId())
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, page, err := s.scanPrimaryRowsPage(ctx, req.GetAuthInfo(), targets, pb.DataKind_DATA_KIND_RECORD, req.GetVersionRange(), req.GetColumnNames(), req.GetPage())
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]*pb.RecordRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, primaryStoreRowToRecordRow(row, key))
+	}
+	return out, page, nil
+}
+
 func (s *Service) scanAllPrimaryRows(ctx context.Context, auth *pb.AuthInfo, target *pb.PrimaryStoreTarget, kind pb.DataKind, versionRange *pb.VersionRange, columnNames []string) ([]*pb.PrimaryStoreRow, error) {
-	const pageSize = uint32(1000)
 	var out []*pb.PrimaryStoreRow
 	cursor := ""
 	for {
@@ -303,7 +351,7 @@ func (s *Service) scanAllPrimaryRows(ctx context.Context, auth *pb.AuthInfo, tar
 			DataKind:     kind,
 			VersionRange: versionRange,
 			ColumnNames:  columnNames,
-			Page:         &pb.Page{Size: pageSize, Cursor: cursor},
+			Page:         &pb.Page{Size: primaryDatasetScanPageSize, Cursor: cursor},
 		})
 		if err != nil {
 			return nil, err
@@ -318,6 +366,68 @@ func (s *Service) scanAllPrimaryRows(ctx context.Context, auth *pb.AuthInfo, tar
 		cursor = page.GetNextCursor()
 	}
 	return out, nil
+}
+
+func (s *Service) scanPrimaryRowsPage(ctx context.Context, auth *pb.AuthInfo, targets []*pb.PrimaryStoreTarget, kind pb.DataKind, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	if len(targets) == 0 {
+		return nil, &pb.PageResult{}, nil
+	}
+	size := page.GetSize()
+	if size == 0 || size > primaryDatasetScanPageSize {
+		size = primaryDatasetScanPageSize
+	}
+	targetIndex, innerCursor, err := decodePrimaryScanCursor(page.GetCursor())
+	if err != nil {
+		return nil, nil, err
+	}
+	if targetIndex >= len(targets) {
+		return nil, &pb.PageResult{Page: page.GetPage(), Size: size}, nil
+	}
+	var out []*pb.PrimaryStoreRow
+	for targetIndex < len(targets) && uint32(len(out)) < size {
+		remaining := size - uint32(len(out))
+		rows, next, err := s.primary.ScanRows(ctx, targets[targetIndex], &pb.ScanPrimaryRowsReq{
+			AuthInfo:     auth,
+			Target:       targets[targetIndex],
+			DataKind:     kind,
+			VersionRange: versionRange,
+			ColumnNames:  columnNames,
+			Page:         &pb.Page{Size: remaining, Cursor: innerCursor},
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		out = append(out, rows...)
+		if next != nil && next.GetHasMore() && next.GetNextCursor() != "" {
+			return out, &pb.PageResult{Page: page.GetPage(), Size: size, HasMore: true, NextCursor: encodePrimaryScanCursor(targetIndex, next.GetNextCursor())}, nil
+		}
+		targetIndex++
+		innerCursor = ""
+	}
+	if targetIndex < len(targets) {
+		return out, &pb.PageResult{Page: page.GetPage(), Size: size, HasMore: true, NextCursor: encodePrimaryScanCursor(targetIndex, "")}, nil
+	}
+	return out, &pb.PageResult{Page: page.GetPage(), Size: size}, nil
+}
+
+func decodePrimaryScanCursor(raw string) (int, string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, "", nil
+	}
+	target, cursor, ok := strings.Cut(raw, "|")
+	if !ok {
+		return 0, raw, nil
+	}
+	idx, err := strconv.Atoi(target)
+	if err != nil || idx < 0 {
+		return 0, "", fmt.Errorf("invalid scan cursor %q", raw)
+	}
+	return idx, cursor, nil
+}
+
+func encodePrimaryScanCursor(targetIndex int, innerCursor string) string {
+	return fmt.Sprintf("%d|%s", targetIndex, innerCursor)
 }
 
 func primaryErrorCode(err error) pb.ErrorCode {
@@ -446,29 +556,6 @@ func (s *Service) publishRecordRowsChanged(ctx context.Context, keys []*pb.Recor
 		EventTime: time.Now().Format(time.RFC3339Nano),
 		Keys:      cloneRecordKeys(keys),
 	})
-}
-
-func (s *Service) currentTimeSeriesRows(ctx context.Context, keys []*pb.TimeSeriesKey) ([]*pb.TimeSeriesRow, error) {
-	if len(keys) == 0 {
-		return nil, nil
-	}
-	reader := s.timeSeriesFactReaderOrDefault()
-	var out []*pb.TimeSeriesRow
-	for _, key := range keys {
-		rsp, err := reader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{Keys: []*pb.TimeSeriesKey{key}})
-		if err != nil {
-			return nil, err
-		}
-		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			return nil, errText(rsp.GetRetInfo().GetMsg())
-		}
-		out = append(out, rsp.GetRows()...)
-	}
-	return out, nil
-}
-
-func (s *Service) waitForAsyncJobs() {
-	s.asyncWG.Wait()
 }
 
 func (s *Service) reportViewError(ctx context.Context, stage string, err error) {

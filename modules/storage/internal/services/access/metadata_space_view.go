@@ -9,7 +9,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
-	"google.golang.org/protobuf/proto"
 )
 
 // 本文件聚合 Space 与 View（含 ViewColumn）相关的元数据 CRUD 入口。
@@ -89,6 +88,7 @@ func (s *Service) CreateView(ctx context.Context, req *pb.CreateViewReq) (*pb.Cr
 	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
 		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
+	clearViewIndexRuntimeState(view)
 	created, err := s.metadata.UpsertView(ctx, view)
 	if err != nil {
 		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
@@ -103,17 +103,6 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 	view := req.GetView()
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
 		return &pb.UpdateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
-	}
-	existing, existingErr := s.metadata.GetView(ctx, view.GetSpaceId(), view.GetViewId())
-	if existingErr == nil && isViewBuildStateOnlyUpdate(existing, view) {
-		updated, err := s.metadata.UpsertView(ctx, view)
-		if err != nil {
-			return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
-		}
-		if err := s.refreshMetadataCache(ctx); err != nil {
-			return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
-		}
-		return &pb.UpdateViewRsp{RetInfo: response.Success("success"), View: updated}, nil
 	}
 	if view.Name == "" {
 		view.Name = view.GetViewId()
@@ -130,6 +119,7 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
 		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
+	clearViewIndexRuntimeState(view)
 	updated, err := s.metadata.UpsertView(ctx, view)
 	if err != nil {
 		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
@@ -140,26 +130,17 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 	return &pb.UpdateViewRsp{RetInfo: response.Success("success"), View: updated}, nil
 }
 
-func isViewBuildStateOnlyUpdate(existing *pb.View, next *pb.View) bool {
-	if existing == nil || next == nil {
-		return false
+func clearViewIndexRuntimeState(view *pb.View) {
+	if view == nil {
+		return
 	}
-	left := proto.Clone(existing).(*pb.View)
-	right := proto.Clone(next).(*pb.View)
-	clearViewBuildState(left)
-	clearViewBuildState(right)
-	return proto.Equal(left, right)
-}
-
-func clearViewBuildState(view *pb.View) {
-	view.ActiveResult = ""
-	view.BuildStatus = ""
+	view.ActiveIndexId = ""
 	view.ActiveViewVersion = 0
-	view.BuildingViewVersion = 0
-	view.BuildingResult = ""
-	view.BuildError = ""
-	view.BuildStartedAt = ""
-	view.BuildFinishedAt = ""
+	view.ActiveColumns = nil
+	view.ActiveSchemaHash = ""
+	view.ActiveCoverageStart = ""
+	view.ActiveCoverageEnd = ""
+	view.IndexBuild = nil
 }
 
 func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb.View) error {

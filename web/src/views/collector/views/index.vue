@@ -1,37 +1,41 @@
 <template>
   <div class="collector-workbench">
-    <a-tabs v-model:active-key="activeTab" type="rounded" size="medium" lazy-load destroy-on-hide @change="syncRoute">
-      <a-tab-pane key="definitions" title="视图定义">
-        <ViewDefinitions
-          owner-module="collector"
-          view-role="collection_browse"
-          managed-by="manual"
-          :filter-owner-modules="['collector']"
-          :filter-dataset-roles="['raw_collection', 'import']"
-          :filter-view-roles="['collection_browse', 'analysis']"
-          :include-unowned="true"
-          :excluded-primary-dataset-ids="excludedFactorDatasetIds"
-          :exclude-likely-factor-datasets="true"
-        />
-      </a-tab-pane>
-      <a-tab-pane key="browse" title="查看数据">
-        <ViewBrowse
-          page-title="数据视图"
-          empty-description="暂无数据视图"
-          :view-owner-modules="['collector']"
-          :view-roles="['collection_browse', 'analysis']"
-          :include-unowned="true"
-          :excluded-primary-dataset-ids="excludedFactorDatasetIds"
-          :exclude-likely-factor-datasets="true"
-        />
-      </a-tab-pane>
-    </a-tabs>
+    <ViewDefinitions
+      v-if="activeTab === 'definitions'"
+      owner-module="collector"
+      view-role="collection_browse"
+      managed-by="manual"
+      :filter-owner-modules="['collector']"
+      :filter-dataset-roles="['raw_collection', 'import']"
+      :filter-view-roles="['collection_browse', 'analysis']"
+      :include-unowned="true"
+      :excluded-primary-dataset-ids="excludedFactorDatasetIds"
+      :exclude-likely-factor-datasets="true"
+    >
+      <template #page-title>
+        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据视图" @change="syncRoute" />
+      </template>
+    </ViewDefinitions>
+    <ViewBrowse
+      v-else
+      empty-description="暂无数据视图"
+      :view-owner-modules="['collector']"
+      :view-roles="['collection_browse', 'analysis']"
+      :include-unowned="true"
+      :excluded-primary-dataset-ids="excludedFactorDatasetIds"
+      :exclude-likely-factor-datasets="true"
+    >
+      <template #page-title>
+        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据视图" @change="syncRoute" />
+      </template>
+    </ViewBrowse>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import PageTitleTabs from '@/components/page-title-tabs/index.vue';
 import { listFactorBindings } from '@/api/factor';
 import type { FactorBinding } from '@/api/factor/types';
 import { useSpaceStore } from '@/store/modules/space';
@@ -47,6 +51,12 @@ const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const activeTab = ref(tabFromRoute());
 const bindings = ref<FactorBinding[]>([]);
+type CollectorViewTab = 'definitions' | 'browse';
+
+const tabs = [
+  { key: 'definitions', label: '视图定义' },
+  { key: 'browse', label: '查看数据' },
+] as const;
 
 const normalizedQuery = computed(() => String(route.query.tab || ''));
 const excludedFactorDatasetIds = computed(() => factorBindingTargetDatasetIds(bindings.value));
@@ -56,7 +66,8 @@ function tabFromRoute() {
 }
 
 function syncRoute(key: string | number) {
-  const tab = key === 'browse' ? 'browse' : 'definitions';
+  const tab: CollectorViewTab = key === 'browse' ? 'browse' : 'definitions';
+  activeTab.value = tab;
   router.replace({ path: '/collector/views', query: tab === 'browse' ? { tab } : {} });
 }
 
@@ -104,30 +115,4 @@ onMounted(loadBindings);
   overflow: hidden;
 }
 
-.collector-workbench :deep(.arco-tabs) {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.collector-workbench :deep(.arco-tabs-content) {
-  flex: 1;
-  min-height: 0;
-  padding-top: 0;
-  overflow: hidden;
-}
-
-.collector-workbench :deep(.arco-tabs-content-list) {
-  height: 100%;
-  min-height: 0;
-  overflow: visible;
-}
-
-.collector-workbench :deep(.arco-tabs-pane) {
-  height: 100%;
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-}
 </style>

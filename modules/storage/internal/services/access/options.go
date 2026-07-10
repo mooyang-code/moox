@@ -18,8 +18,6 @@ type Options struct {
 	MetadataPath       string
 	InitSchemaPath     string
 	PebblePath         string
-	DuckDBPath         string
-	BlevePath          string
 	ParquetPath        string
 	PrimaryClient      primary.Client
 	PrimaryServiceName string

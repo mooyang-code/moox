@@ -1,8 +1,9 @@
 <template>
-  <div class="ssh-sessions-page">
-    <div class="page-content">
-      <a-card :bordered="false">
-        <template #title>
+  <div class="moox-page">
+    <div class="moox-inner">
+      <div class="page-head">
+        <div class="page-title">
+          <h2>在线会话</h2>
           <span>在线会话列表</span>
           <a-tag
             :color="autoRefresh ? 'green' : 'gray'"
@@ -15,25 +16,23 @@
             </template>
             {{ autoRefresh ? '自动刷新: 开启' : '自动刷新: 关闭' }}
           </a-tag>
-        </template>
-        <template #extra>
-          <a-space>
-            <a-button @click="loadSessions" :loading="loading">
-              <template #icon>
-                <icon-refresh />
-              </template>
-              刷新
-            </a-button>
-          </a-space>
-        </template>
+        </div>
+        <a-button @click="loadSessions" :loading="loading">
+          <template #icon>
+            <icon-refresh />
+          </template>
+          刷新
+        </a-button>
+      </div>
 
-        <a-table
-          row-key="session_id"
-          :loading="loading"
-          :data="sessions"
-          :pagination="false"
-          :bordered="false"
-        >
+      <a-table
+        row-key="session_id"
+        size="small"
+        :loading="loading"
+        :data="sessions"
+        :pagination="false"
+        :bordered="{ cell: true }"
+      >
           <template #columns>
             <a-table-column title="Session ID" data-index="session_id" :width="200">
               <template #cell="{ record }">
@@ -84,8 +83,7 @@
           <template #empty>
             <a-empty description="暂无在线会话" />
           </template>
-        </a-table>
-      </a-card>
+      </a-table>
     </div>
   </div>
 </template>
@@ -187,26 +185,38 @@ onBeforeUnmount(() => {
 </script>
 
 <style lang="scss" scoped>
-.ssh-sessions-page {
-  height: 100%;
-  box-sizing: border-box;
-  padding: 20px 20px 72px;
-  overflow-y: auto;
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
 
-  .page-content {
-    .session-id-cell {
-      display: inline-block;
-      max-width: 170px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      word-break: break-all;
-      cursor: default;
-    }
-  }
+.page-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
 
-  :deep(.arco-card) {
-    border-radius: 4px;
-  }
+.page-title h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.page-title > span {
+  color: var(--color-text-3);
+}
+
+.session-id-cell {
+  display: inline-block;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: break-all;
+  cursor: default;
 }
 </style>

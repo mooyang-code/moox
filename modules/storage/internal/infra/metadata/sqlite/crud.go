@@ -20,6 +20,15 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+type execQueryRower interface {
+	queryRower
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 var (
 	marshalOptions   = protojson.MarshalOptions{UseProtoNames: true}
 	unmarshalOptions = protojson.UnmarshalOptions{DiscardUnknown: true}
@@ -440,43 +449,49 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 	if item == nil || item.GetSpaceId() == "" || item.GetViewId() == "" || item.GetName() == "" || item.GetPrimaryDatasetId() == "" {
 		return nil, errors.New("space_id, view_id, name and primary_dataset_id are required")
 	}
-	existing, _ := getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), item.GetViewId()}, func() *pb.View { return &pb.View{} })
-	inputBuildStatus := item.GetBuildStatus()
-	item.Status = defaultStatus(item.GetStatus())
-	if strings.TrimSpace(item.Engine) == "" {
-		item.Engine = s.defaultViewEngine(ctx, item.GetSpaceId(), item.GetPrimaryDatasetId())
+	columns := item.GetColumns()
+	next := proto.Clone(item).(*pb.View)
+	next.Columns = nil
+	next.IndexBuild = nil
+	next.Status = defaultStatus(next.GetStatus())
+	if strings.TrimSpace(next.Engine) == "" {
+		next.Engine = s.defaultViewEngine(ctx, next.GetSpaceId(), next.GetPrimaryDatasetId())
 	} else {
-		item.Engine = strings.ToLower(strings.TrimSpace(item.Engine))
+		next.Engine = strings.ToLower(strings.TrimSpace(next.Engine))
 	}
-	if len(item.DatasetIds) == 0 {
-		item.DatasetIds = []string{item.GetPrimaryDatasetId()}
+	if len(next.DatasetIds) == 0 {
+		next.DatasetIds = []string{next.GetPrimaryDatasetId()}
 	}
-	shapeChanged := existing != nil && viewBuildShapeChanged(existing, item)
-	if inputBuildStatus == "" {
-		if existing == nil {
-			item.BuildStatus = "pending"
-		} else if shapeChanged {
-			item.BuildStatus = "pending"
-		} else {
-			item.BuildStatus = existing.GetBuildStatus()
-		}
-	}
-	mergeViewBuildState(existing, item, shapeChanged)
-	raw, err := marshal(item)
+	datasetIDs, err := marshalJSON(next.GetDatasetIds())
 	if err != nil {
 		return nil, err
 	}
-	datasetIDs, err := marshalJSON(item.GetDatasetIds())
+	grainKeys, err := marshalJSON(next.GetGrainKeys())
 	if err != nil {
 		return nil, err
 	}
-	grainKeys, err := marshalJSON(item.GetGrainKeys())
+	activeColumns, err := marshalJSON(next.GetActiveColumns())
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_primary_dataset_id, c_dataset_ids_json, c_grain_keys_json, c_filter_json, c_engine, c_query_window, c_active_result, c_build_status, c_view_version, c_active_view_version, c_building_view_version, c_building_result, c_build_error, c_build_started_at, c_build_finished_at, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	existing, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), item.GetViewId()}, func() *pb.View { return &pb.View{} })
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	shapeChanged := existing != nil && viewIndexShapeChanged(existing, next)
+	mergeViewIndexState(existing, next, shapeChanged)
+	raw, err := marshal(next)
+	if err != nil {
+		return nil, err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_primary_dataset_id, c_dataset_ids_json, c_grain_keys_json, c_filter_json, c_engine, c_retention_window, c_active_index_id, c_view_version, c_active_view_version, c_active_columns_json, c_active_schema_hash, c_active_coverage_start, c_active_coverage_end, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_view_id) DO UPDATE SET
 			c_name = excluded.c_name,
 			c_description = excluded.c_description,
@@ -485,32 +500,35 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 			c_grain_keys_json = excluded.c_grain_keys_json,
 			c_filter_json = excluded.c_filter_json,
 			c_engine = excluded.c_engine,
-			c_query_window = excluded.c_query_window,
-			c_active_result = excluded.c_active_result,
-			c_build_status = excluded.c_build_status,
+			c_retention_window = excluded.c_retention_window,
+			c_active_index_id = excluded.c_active_index_id,
 			c_view_version = excluded.c_view_version,
 			c_active_view_version = excluded.c_active_view_version,
-			c_building_view_version = excluded.c_building_view_version,
-			c_building_result = excluded.c_building_result,
-			c_build_error = excluded.c_build_error,
-			c_build_started_at = excluded.c_build_started_at,
-			c_build_finished_at = excluded.c_build_finished_at,
+			c_active_columns_json = excluded.c_active_columns_json,
+			c_active_schema_hash = excluded.c_active_schema_hash,
+			c_active_coverage_start = excluded.c_active_coverage_start,
+			c_active_coverage_end = excluded.c_active_coverage_end,
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetViewId(), item.GetName(), item.GetDescription(), item.GetPrimaryDatasetId(), datasetIDs, grainKeys, defaultJSON(item.GetFilterJson()), item.GetEngine(), item.GetQueryWindow(), item.GetActiveResult(), item.GetBuildStatus(), item.GetViewVersion(), item.GetActiveViewVersion(), item.GetBuildingViewVersion(), item.GetBuildingResult(), item.GetBuildError(), item.GetBuildStartedAt(), item.GetBuildFinishedAt(), item.GetStatus(), raw)
+	`, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetPrimaryDatasetId(), datasetIDs, grainKeys, defaultJSON(next.GetFilterJson()), next.GetEngine(), next.GetRetentionWindow(), next.GetActiveIndexId(), next.GetViewVersion(), next.GetActiveViewVersion(), activeColumns, next.GetActiveSchemaHash(), next.GetActiveCoverageStart(), next.GetActiveCoverageEnd(), next.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}
+	if shapeChanged {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM t_view_index_builds WHERE c_space_id = ? AND c_view_id = ?`, next.GetSpaceId(), next.GetViewId()); err != nil {
+			return nil, err
+		}
+	}
 	columnsChanged := false
-	for _, column := range item.GetColumns() {
+	for _, column := range columns {
 		if column.GetSpaceId() == "" {
-			column.SpaceId = item.GetSpaceId()
+			column.SpaceId = next.GetSpaceId()
 		}
 		if column.GetViewId() == "" {
-			column.ViewId = item.GetViewId()
+			column.ViewId = next.GetViewId()
 		}
 		if column.GetColumnName() != "" {
-			changed, err := s.upsertViewColumn(ctx, column)
+			changed, err := upsertViewColumn(ctx, tx, column)
 			if err != nil {
 				return nil, err
 			}
@@ -518,11 +536,14 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 		}
 	}
 	if existing != nil && columnsChanged && !shapeChanged {
-		if err := s.bumpViewVersion(ctx, item.GetSpaceId(), item.GetViewId()); err != nil {
+		if err := bumpViewVersion(ctx, tx, next.GetSpaceId(), next.GetViewId()); err != nil {
 			return nil, err
 		}
 	}
-	return s.GetView(ctx, item.GetSpaceId(), item.GetViewId())
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.GetView(ctx, next.GetSpaceId(), next.GetViewId())
 }
 
 func (s *Store) defaultViewEngine(ctx context.Context, spaceID string, datasetID string) string {
@@ -533,51 +554,29 @@ func (s *Store) defaultViewEngine(ctx context.Context, spaceID string, datasetID
 	return "duckdb"
 }
 
-func mergeViewBuildState(existing *pb.View, item *pb.View, shapeChanged bool) {
+func mergeViewIndexState(existing *pb.View, item *pb.View, shapeChanged bool) {
 	if existing == nil {
 		if item.ViewVersion == 0 {
 			item.ViewVersion = 1
 		}
 		return
 	}
-	if item.ActiveResult == "" {
-		item.ActiveResult = existing.GetActiveResult()
-	}
-	if item.ActiveViewVersion == 0 {
-		item.ActiveViewVersion = existing.GetActiveViewVersion()
-	}
-	if item.BuildingViewVersion == 0 {
-		item.BuildingViewVersion = existing.GetBuildingViewVersion()
-	}
-	if item.BuildingResult == "" {
-		item.BuildingResult = existing.GetBuildingResult()
-	}
-	if item.BuildError == "" {
-		item.BuildError = existing.GetBuildError()
-	}
-	if item.BuildStartedAt == "" {
-		item.BuildStartedAt = existing.GetBuildStartedAt()
-	}
-	if item.BuildFinishedAt == "" {
-		item.BuildFinishedAt = existing.GetBuildFinishedAt()
-	}
-	if item.ViewVersion == 0 {
-		item.ViewVersion = existing.GetViewVersion()
-	}
+	item.ActiveIndexId = existing.GetActiveIndexId()
+	item.ActiveViewVersion = existing.GetActiveViewVersion()
+	item.ActiveColumns = cloneViewColumns(existing.GetActiveColumns())
+	item.ActiveSchemaHash = existing.GetActiveSchemaHash()
+	item.ActiveCoverageStart = existing.GetActiveCoverageStart()
+	item.ActiveCoverageEnd = existing.GetActiveCoverageEnd()
+	item.ViewVersion = existing.GetViewVersion()
 	if item.ViewVersion == 0 {
 		item.ViewVersion = 1
 	}
 	if shapeChanged {
 		item.ViewVersion++
-		item.BuildingViewVersion = 0
-		item.BuildingResult = ""
-		item.BuildError = ""
-		item.BuildStartedAt = ""
-		item.BuildFinishedAt = ""
 	}
 }
 
-func viewBuildShapeChanged(existing *pb.View, next *pb.View) bool {
+func viewIndexShapeChanged(existing *pb.View, next *pb.View) bool {
 	if existing.GetPrimaryDatasetId() != next.GetPrimaryDatasetId() {
 		return true
 	}
@@ -593,7 +592,7 @@ func viewBuildShapeChanged(existing *pb.View, next *pb.View) bool {
 	if existing.GetEngine() != next.GetEngine() {
 		return true
 	}
-	return existing.GetQueryWindow() != next.GetQueryWindow()
+	return existing.GetRetentionWindow() != next.GetRetentionWindow()
 }
 
 func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
@@ -606,6 +605,11 @@ func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb
 		return nil, err
 	}
 	view.Columns = columns
+	build, err := s.GetViewIndexBuild(ctx, spaceID, viewID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	view.IndexBuild = build
 	return view, nil
 }
 
@@ -628,7 +632,29 @@ func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string,
 		}
 		items = filtered
 	}
+	for _, item := range items {
+		columns, _, err := s.ListViewColumns(ctx, item.GetSpaceId(), item.GetViewId(), nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		item.Columns = columns
+		build, err := s.GetViewIndexBuild(ctx, item.GetSpaceId(), item.GetViewId())
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, err
+		}
+		item.IndexBuild = build
+	}
 	return pageItems(items, page)
+}
+
+func cloneViewColumns(columns []*pb.ViewColumn) []*pb.ViewColumn {
+	out := make([]*pb.ViewColumn, 0, len(columns))
+	for _, column := range columns {
+		if column != nil {
+			out = append(out, proto.Clone(column).(*pb.ViewColumn))
+		}
+	}
+	return out
 }
 
 func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error) {
@@ -640,25 +666,36 @@ func (s *Store) UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.
 	if item == nil || item.GetSpaceId() == "" || item.GetViewId() == "" || item.GetColumnName() == "" {
 		return nil, errors.New("space_id, view_id and column_name are required")
 	}
-	changed, err := s.upsertViewColumn(ctx, item)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	changed, err := upsertViewColumn(ctx, tx, item)
 	if err != nil {
 		return nil, err
 	}
 	if changed {
-		if err := s.bumpViewVersion(ctx, item.GetSpaceId(), item.GetViewId()); err != nil {
+		if err := bumpViewVersion(ctx, tx, item.GetSpaceId(), item.GetViewId()); err != nil {
 			return nil, err
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return item, nil
 }
 
-func (s *Store) upsertViewColumn(ctx context.Context, item *pb.ViewColumn) (bool, error) {
-	existing, _ := getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ? AND c_column_name = ?`, []any{item.GetSpaceId(), item.GetViewId(), item.GetColumnName()}, func() *pb.ViewColumn { return &pb.ViewColumn{} })
+func upsertViewColumn(ctx context.Context, store execQueryRower, item *pb.ViewColumn) (bool, error) {
+	existing, err := getMessage(ctx, store, `SELECT c_attrs_json FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ? AND c_column_name = ?`, []any{item.GetSpaceId(), item.GetViewId(), item.GetColumnName()}, func() *pb.ViewColumn { return &pb.ViewColumn{} })
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
 	raw, err := marshal(item)
 	if err != nil {
 		return false, err
 	}
-	_, err = s.db.ExecContext(ctx, `
+	_, err = store.ExecContext(ctx, `
 		INSERT INTO t_view_columns (c_space_id, c_view_id, c_column_name, c_origin_type, c_origin_id, c_value_type, c_online_time, c_sort_order, c_attrs_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_view_id, c_column_name) DO UPDATE SET
@@ -694,8 +731,8 @@ func viewColumnShapeChanged(existing *pb.ViewColumn, next *pb.ViewColumn) bool {
 	return !mapsEqual(existing.GetAttributes(), next.GetAttributes())
 }
 
-func (s *Store) bumpViewVersion(ctx context.Context, spaceID string, viewID string) error {
-	view, err := getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{spaceID, viewID}, func() *pb.View { return &pb.View{} })
+func bumpViewVersion(ctx context.Context, tx *sql.Tx, spaceID string, viewID string) error {
+	view, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{spaceID, viewID}, func() *pb.View { return &pb.View{} })
 	if err != nil {
 		return err
 	}
@@ -703,145 +740,304 @@ func (s *Store) bumpViewVersion(ctx context.Context, spaceID string, viewID stri
 		view.ViewVersion = 1
 	}
 	view.ViewVersion++
-	view.BuildStatus = "pending"
-	view.BuildingViewVersion = 0
-	view.BuildingResult = ""
-	view.BuildError = ""
-	view.BuildStartedAt = ""
-	view.BuildFinishedAt = ""
+	view.Columns = nil
+	view.IndexBuild = nil
 	raw, err := marshal(view)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE t_views
-		SET c_view_version = ?,
-			c_build_status = ?,
-			c_building_view_version = ?,
-			c_building_result = ?,
-			c_build_error = ?,
-			c_build_started_at = ?,
-			c_build_finished_at = ?,
-			c_attrs_json = ?
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE t_views SET c_view_version = ?, c_attrs_json = ?
 		WHERE c_space_id = ? AND c_view_id = ?
-	`, view.GetViewVersion(), view.GetBuildStatus(), view.GetBuildingViewVersion(), view.GetBuildingResult(), view.GetBuildError(), view.GetBuildStartedAt(), view.GetBuildFinishedAt(), raw, spaceID, viewID)
-	return err
+	`, view.GetViewVersion(), raw, spaceID, viewID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM t_view_index_builds WHERE c_space_id = ? AND c_view_id = ?`, spaceID, viewID); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (s *Store) BeginViewBuild(ctx context.Context, spaceID string, viewID string, targetVersion uint64, resultName string) (*pb.View, error) {
-	if spaceID == "" || viewID == "" || targetVersion == 0 || resultName == "" {
-		return nil, errors.New("space_id, view_id, target_version and result_name are required")
+var ErrViewIndexBuildConflict = errors.New("view index build conflict")
+
+const sqliteBuildTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+const viewIndexBuildColumns = `
+	c_space_id, c_view_id, c_build_id, c_index_id, c_engine,
+	c_target_view_version, c_state, c_owner_id, c_lease_expires_at,
+	c_cursor_json, c_snapshot_end, c_coverage_start, c_coverage_end,
+	c_entries_written, c_schema_hash, c_columns_json, c_started_at,
+	c_updated_at, c_finished_at, c_error`
+
+func (s *Store) GetViewIndexBuild(ctx context.Context, spaceID string, viewID string) (*pb.ViewIndexBuild, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+viewIndexBuildColumns+`
+		FROM t_view_index_builds WHERE c_space_id = ? AND c_view_id = ?`, spaceID, viewID)
+	return scanViewIndexBuild(row)
+}
+
+func (s *Store) ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewIndexBuildReq) (*pb.ViewIndexBuild, bool, error) {
+	if err := validateClaimViewIndexBuild(req); err != nil {
+		return nil, false, err
 	}
-	view, err := getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{spaceID, viewID}, func() *pb.View { return &pb.View{} })
+	previous, previousErr := s.GetViewIndexBuild(ctx, req.GetSpaceId(), req.GetViewId())
+	if previousErr != nil && !errors.Is(previousErr, sql.ErrNoRows) {
+		return nil, false, previousErr
+	}
+	now := s.nowUTC()
+	nowText := now.Format(sqliteBuildTimestampLayout)
+	leaseText := now.Add(buildLeaseTTL(req.GetLeaseTtlSeconds())).Format(sqliteBuildTimestampLayout)
+	columnsJSON, err := marshalJSON(req.GetColumns())
 	if err != nil {
-		return nil, err
-	}
-	if view.GetViewVersion() < targetVersion {
-		return nil, fmt.Errorf("view %s/%s version %d is older than target %d", spaceID, viewID, view.GetViewVersion(), targetVersion)
-	}
-	view.BuildStatus = "building"
-	view.BuildingViewVersion = targetVersion
-	view.BuildingResult = resultName
-	view.BuildError = ""
-	view.BuildStartedAt = metadataNow()
-	view.BuildFinishedAt = ""
-	raw, err := marshal(view)
-	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE t_views
-		SET c_active_result = ?,
-			c_build_status = ?,
-			c_view_version = ?,
-			c_active_view_version = ?,
-			c_building_view_version = ?,
-			c_building_result = ?,
-			c_build_error = ?,
-			c_build_started_at = ?,
-			c_build_finished_at = ?,
-			c_attrs_json = ?
-		WHERE c_space_id = ? AND c_view_id = ?
-		  AND c_view_version >= ?
-		  AND NOT (
-			c_build_status = 'building'
-			AND c_building_result <> ''
-			AND c_building_view_version = ?
-			AND c_building_result <> ?
-		  )
-	`, view.GetActiveResult(), view.GetBuildStatus(), view.GetViewVersion(), view.GetActiveViewVersion(), view.GetBuildingViewVersion(), view.GetBuildingResult(), view.GetBuildError(), view.GetBuildStartedAt(), view.GetBuildFinishedAt(), raw, view.GetSpaceId(), view.GetViewId(), targetVersion, targetVersion, resultName)
+		INSERT INTO t_view_index_builds (`+viewIndexBuildColumns+`)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, '', '', 0, ?, ?, ?, ?, '', ''
+		FROM t_views
+		WHERE c_space_id = ? AND c_view_id = ? AND c_view_version = ? AND c_active_index_id = ?
+		ON CONFLICT(c_space_id, c_view_id) DO UPDATE SET
+			c_build_id = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_build_id ELSE excluded.c_build_id END,
+			c_index_id = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_index_id ELSE excluded.c_index_id END,
+			c_engine = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_engine ELSE excluded.c_engine END,
+			c_target_view_version = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_target_view_version ELSE excluded.c_target_view_version END,
+			c_state = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_state ELSE excluded.c_state END,
+			c_owner_id = excluded.c_owner_id,
+			c_lease_expires_at = excluded.c_lease_expires_at,
+			c_cursor_json = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_cursor_json ELSE '' END,
+			c_snapshot_end = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_snapshot_end ELSE excluded.c_snapshot_end END,
+			c_coverage_start = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_coverage_start ELSE '' END,
+			c_coverage_end = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_coverage_end ELSE '' END,
+			c_entries_written = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_entries_written ELSE 0 END,
+			c_schema_hash = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_schema_hash ELSE excluded.c_schema_hash END,
+			c_columns_json = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_columns_json ELSE excluded.c_columns_json END,
+			c_started_at = CASE WHEN t_view_index_builds.c_build_id = excluded.c_build_id THEN t_view_index_builds.c_started_at ELSE excluded.c_started_at END,
+			c_updated_at = excluded.c_updated_at,
+			c_finished_at = '',
+			c_error = ''
+		WHERE (t_view_index_builds.c_target_view_version < excluded.c_target_view_version)
+		   OR (t_view_index_builds.c_state = ?)
+		   OR (t_view_index_builds.c_build_id = excluded.c_build_id AND t_view_index_builds.c_lease_expires_at <= ?)
+	`, req.GetSpaceId(), req.GetViewId(), req.GetBuildId(), req.GetIndexId(), req.GetEngine(), req.GetTargetViewVersion(), pb.ViewIndexBuild_PREPARING,
+		req.GetOwnerId(), leaseText, req.GetSnapshotEnd(), req.GetSchemaHash(), columnsJSON, nowText, nowText,
+		req.GetSpaceId(), req.GetViewId(), req.GetTargetViewVersion(), req.GetExpectedActiveIndexId(), pb.ViewIndexBuild_FAILED, nowText)
+	if err != nil {
+		return nil, false, err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return nil, false, err
+	}
+	if rows == 0 {
+		return nil, false, ErrViewIndexBuildConflict
+	}
+	build, err := s.GetViewIndexBuild(ctx, req.GetSpaceId(), req.GetViewId())
+	if err != nil {
+		return nil, false, err
+	}
+	resumed := previous != nil && previous.GetBuildId() == req.GetBuildId()
+	return build, resumed, nil
+}
+
+func (s *Store) UpdateViewIndexBuild(ctx context.Context, req *pb.UpdateViewIndexBuildReq) (*pb.ViewIndexBuild, error) {
+	if err := validateUpdateViewIndexBuild(req); err != nil {
+		return nil, err
+	}
+	now := s.nowUTC()
+	nowText := now.Format(sqliteBuildTimestampLayout)
+	leaseText := now.Add(buildLeaseTTL(req.GetLeaseTtlSeconds())).Format(sqliteBuildTimestampLayout)
+	finishedAt := ""
+	if req.GetNextState() == pb.ViewIndexBuild_READY || req.GetNextState() == pb.ViewIndexBuild_FAILED {
+		finishedAt = nowText
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE t_view_index_builds SET
+			c_state = ?, c_lease_expires_at = ?,
+			c_cursor_json = CASE WHEN ? <> '' THEN ? ELSE c_cursor_json END,
+			c_snapshot_end = CASE WHEN ? <> '' THEN ? ELSE c_snapshot_end END,
+			c_coverage_start = CASE WHEN ? <> '' THEN ? ELSE c_coverage_start END,
+			c_coverage_end = CASE WHEN ? <> '' THEN ? ELSE c_coverage_end END,
+			c_entries_written = CASE WHEN ? > 0 THEN ? ELSE c_entries_written END,
+			c_updated_at = ?,
+			c_finished_at = CASE WHEN ? <> '' THEN ? ELSE c_finished_at END
+		WHERE c_space_id = ? AND c_view_id = ? AND c_build_id = ? AND c_owner_id = ?
+		  AND c_state = ? AND c_lease_expires_at >= ?
+	`, req.GetNextState(), leaseText,
+		req.GetCursorJson(), req.GetCursorJson(), req.GetSnapshotEnd(), req.GetSnapshotEnd(),
+		req.GetCoverageStart(), req.GetCoverageStart(), req.GetCoverageEnd(), req.GetCoverageEnd(),
+		req.GetEntriesWritten(), req.GetEntriesWritten(), nowText, finishedAt, finishedAt,
+		req.GetSpaceId(), req.GetViewId(), req.GetBuildId(), req.GetOwnerId(), req.GetExpectedState(), nowText)
 	if err != nil {
 		return nil, err
 	}
-	if rows, err := res.RowsAffected(); err == nil && rows == 0 {
-		return nil, fmt.Errorf("view %s/%s building target already claimed", spaceID, viewID)
+	if err := requireChangedRow(res); err != nil {
+		return nil, err
 	}
-	return s.GetView(ctx, spaceID, viewID)
+	return s.GetViewIndexBuild(ctx, req.GetSpaceId(), req.GetViewId())
 }
 
-func (s *Store) CompleteViewBuild(ctx context.Context, spaceID string, viewID string, targetVersion uint64, resultName string) error {
-	view, err := getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{spaceID, viewID}, func() *pb.View { return &pb.View{} })
+func (s *Store) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndexReq) (*pb.View, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetViewId() == "" || req.GetBuildId() == "" || req.GetOwnerId() == "" {
+		return nil, errors.New("space_id, view_id, build_id and owner_id are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if view.GetViewVersion() != targetVersion {
-		return fmt.Errorf("view %s/%s version changed from target %d to %d", spaceID, viewID, targetVersion, view.GetViewVersion())
+	defer func() { _ = tx.Rollback() }()
+	nowText := s.nowUTC().Format(sqliteBuildTimestampLayout)
+	build, err := scanViewIndexBuild(tx.QueryRowContext(ctx, `SELECT `+viewIndexBuildColumns+`
+		FROM t_view_index_builds
+		WHERE c_space_id = ? AND c_view_id = ? AND c_build_id = ? AND c_owner_id = ? AND c_state = ?
+		  AND c_lease_expires_at >= ?`,
+		req.GetSpaceId(), req.GetViewId(), req.GetBuildId(), req.GetOwnerId(), pb.ViewIndexBuild_READY, nowText))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrViewIndexBuildConflict
 	}
-	if view.GetBuildingViewVersion() != targetVersion || view.GetBuildingResult() != resultName {
-		return fmt.Errorf("view %s/%s building target changed", spaceID, viewID)
-	}
-	view.ActiveResult = resultName
-	view.ActiveViewVersion = targetVersion
-	view.BuildingViewVersion = 0
-	view.BuildingResult = ""
-	view.BuildStatus = "active"
-	view.BuildError = ""
-	view.BuildFinishedAt = metadataNow()
-	return s.updateViewBuildFields(ctx, view)
-}
-
-func (s *Store) FailViewBuild(ctx context.Context, spaceID string, viewID string, targetVersion uint64, resultName string, buildErr error) error {
-	view, err := getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{spaceID, viewID}, func() *pb.View { return &pb.View{} })
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if view.GetBuildingViewVersion() != targetVersion || view.GetBuildingResult() != resultName {
-		return fmt.Errorf("view %s/%s building target changed", spaceID, viewID)
+	view, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{req.GetSpaceId(), req.GetViewId()}, func() *pb.View { return &pb.View{} })
+	if err != nil {
+		return nil, err
 	}
-	view.BuildStatus = "failed"
-	if buildErr != nil {
-		view.BuildError = buildErr.Error()
-	} else {
-		view.BuildError = "build failed"
+	if view.GetViewVersion() != build.GetTargetViewVersion() {
+		return nil, ErrViewIndexBuildConflict
 	}
-	view.BuildFinishedAt = metadataNow()
-	return s.updateViewBuildFields(ctx, view)
-}
-
-func (s *Store) updateViewBuildFields(ctx context.Context, view *pb.View) error {
+	view.ActiveIndexId = build.GetIndexId()
+	view.ActiveViewVersion = build.GetTargetViewVersion()
+	view.ActiveColumns = cloneViewColumns(build.GetColumns())
+	view.ActiveSchemaHash = build.GetSchemaHash()
+	view.ActiveCoverageStart = build.GetCoverageStart()
+	view.ActiveCoverageEnd = build.GetCoverageEnd()
+	view.Columns = nil
+	view.IndexBuild = nil
 	raw, err := marshal(view)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE t_views
-		SET c_active_result = ?,
-			c_build_status = ?,
-			c_view_version = ?,
-			c_active_view_version = ?,
-			c_building_view_version = ?,
-			c_building_result = ?,
-			c_build_error = ?,
-			c_build_started_at = ?,
-			c_build_finished_at = ?,
-			c_attrs_json = ?
-		WHERE c_space_id = ? AND c_view_id = ?
-	`, view.GetActiveResult(), view.GetBuildStatus(), view.GetViewVersion(), view.GetActiveViewVersion(), view.GetBuildingViewVersion(), view.GetBuildingResult(), view.GetBuildError(), view.GetBuildStartedAt(), view.GetBuildFinishedAt(), raw, view.GetSpaceId(), view.GetViewId())
-	return err
+	activeColumns, err := marshalJSON(view.GetActiveColumns())
+	if err != nil {
+		return nil, err
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE t_views SET c_active_index_id = ?, c_active_view_version = ?,
+			c_active_columns_json = ?, c_active_schema_hash = ?,
+			c_active_coverage_start = ?, c_active_coverage_end = ?, c_attrs_json = ?
+		WHERE c_space_id = ? AND c_view_id = ? AND c_view_version = ?
+	`, view.GetActiveIndexId(), view.GetActiveViewVersion(), activeColumns, view.GetActiveSchemaHash(),
+		view.GetActiveCoverageStart(), view.GetActiveCoverageEnd(), raw, view.GetSpaceId(), view.GetViewId(), build.GetTargetViewVersion())
+	if err != nil {
+		return nil, err
+	}
+	if err := requireChangedRow(res); err != nil {
+		return nil, err
+	}
+	res, err = tx.ExecContext(ctx, `DELETE FROM t_view_index_builds
+		WHERE c_space_id = ? AND c_view_id = ? AND c_build_id = ? AND c_owner_id = ? AND c_state = ?`,
+		req.GetSpaceId(), req.GetViewId(), req.GetBuildId(), req.GetOwnerId(), pb.ViewIndexBuild_READY)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireChangedRow(res); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.GetView(ctx, req.GetSpaceId(), req.GetViewId())
 }
 
-func metadataNow() string {
-	return time.Now().UTC().Format(time.RFC3339Nano)
+func (s *Store) FailViewIndexBuild(ctx context.Context, req *pb.FailViewIndexBuildReq) (*pb.ViewIndexBuild, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetViewId() == "" || req.GetBuildId() == "" || req.GetOwnerId() == "" {
+		return nil, errors.New("space_id, view_id, build_id and owner_id are required")
+	}
+	nowText := s.nowUTC().Format(sqliteBuildTimestampLayout)
+	message := strings.TrimSpace(req.GetError())
+	if message == "" {
+		message = "view index build failed"
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE t_view_index_builds SET c_state = ?, c_error = ?, c_updated_at = ?, c_finished_at = ?
+		WHERE c_space_id = ? AND c_view_id = ? AND c_build_id = ? AND c_owner_id = ?
+		  AND c_state IN (?, ?, ?) AND c_lease_expires_at >= ?
+	`, pb.ViewIndexBuild_FAILED, message, nowText, nowText, req.GetSpaceId(), req.GetViewId(), req.GetBuildId(), req.GetOwnerId(),
+		pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, nowText)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireChangedRow(res); err != nil {
+		return nil, err
+	}
+	return s.GetViewIndexBuild(ctx, req.GetSpaceId(), req.GetViewId())
+}
+
+func validateClaimViewIndexBuild(req *pb.ClaimViewIndexBuildReq) error {
+	if req == nil || req.GetSpaceId() == "" || req.GetViewId() == "" || req.GetBuildId() == "" || req.GetIndexId() == "" ||
+		req.GetEngine() == "" || req.GetTargetViewVersion() == 0 || req.GetOwnerId() == "" || req.GetSchemaHash() == "" {
+		return errors.New("space_id, view_id, build_id, index_id, engine, target_view_version, owner_id and schema_hash are required")
+	}
+	return nil
+}
+
+func validateUpdateViewIndexBuild(req *pb.UpdateViewIndexBuildReq) error {
+	if req == nil || req.GetSpaceId() == "" || req.GetViewId() == "" || req.GetBuildId() == "" || req.GetOwnerId() == "" {
+		return errors.New("space_id, view_id, build_id and owner_id are required")
+	}
+	if !validViewIndexBuildTransition(req.GetExpectedState(), req.GetNextState()) {
+		return fmt.Errorf("invalid view index build transition %s -> %s", req.GetExpectedState(), req.GetNextState())
+	}
+	return nil
+}
+
+func validViewIndexBuildTransition(from pb.ViewIndexBuild_State, to pb.ViewIndexBuild_State) bool {
+	switch from {
+	case pb.ViewIndexBuild_PREPARING:
+		return to == pb.ViewIndexBuild_BUILDING
+	case pb.ViewIndexBuild_BUILDING:
+		return to == pb.ViewIndexBuild_BUILDING || to == pb.ViewIndexBuild_CATCHING_UP
+	case pb.ViewIndexBuild_CATCHING_UP:
+		return to == pb.ViewIndexBuild_CATCHING_UP || to == pb.ViewIndexBuild_READY
+	default:
+		return false
+	}
+}
+
+func buildLeaseTTL(seconds uint32) time.Duration {
+	if seconds == 0 {
+		seconds = 90
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func requireChangedRow(result sql.Result) error {
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrViewIndexBuildConflict
+	}
+	return nil
+}
+
+func scanViewIndexBuild(row rowScanner) (*pb.ViewIndexBuild, error) {
+	build := &pb.ViewIndexBuild{}
+	var state int32
+	var columnsJSON string
+	if err := row.Scan(
+		&build.SpaceId, &build.ViewId, &build.BuildId, &build.IndexId, &build.Engine,
+		&build.TargetViewVersion, &state, &build.OwnerId, &build.LeaseExpiresAt,
+		&build.CursorJson, &build.SnapshotEnd, &build.CoverageStart, &build.CoverageEnd,
+		&build.EntriesWritten, &build.SchemaHash, &columnsJSON, &build.StartedAt,
+		&build.UpdatedAt, &build.FinishedAt, &build.Error,
+	); err != nil {
+		return nil, err
+	}
+	build.State = pb.ViewIndexBuild_State(state)
+	if err := json.Unmarshal([]byte(columnsJSON), &build.Columns); err != nil {
+		return nil, err
+	}
+	return build, nil
 }
 
 func (s *Store) ListViewColumns(ctx context.Context, spaceID string, viewID string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {
@@ -1041,7 +1237,7 @@ func (s *Store) ListArchiveFiles(ctx context.Context, spaceID string, datasetID 
 	return pageItems(items, page)
 }
 
-func getMessage[T proto.Message](ctx context.Context, db *sql.DB, query string, args []any, newMessage func() T) (T, error) {
+func getMessage[T proto.Message](ctx context.Context, db queryRower, query string, args []any, newMessage func() T) (T, error) {
 	row := db.QueryRowContext(ctx, query, args...)
 	return scanMessage(row, newMessage)
 }

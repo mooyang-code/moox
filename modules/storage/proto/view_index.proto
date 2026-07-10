@@ -1,0 +1,145 @@
+syntax = "proto3";
+
+package trpc.moox.storage;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
+
+import "moox_common.proto";
+import "access.proto";
+import "metadata.proto";
+import "view.proto";
+
+// ViewIndexSchema 是 owner 创建物理索引时使用的完整列快照。
+message ViewIndexSchema {
+  string space_id = 1;
+  string view_id = 2;
+  uint64 view_version = 3;
+  string engine = 4;
+  repeated ViewColumn columns = 5;
+  string schema_hash = 6;
+}
+
+// ViewIndexBatch 是写入一个派生索引的同构批次。
+message ViewIndexBatch {
+  repeated TimeSeriesRow time_series_rows = 1;
+  repeated RecordRow record_rows = 2;
+  repeated ViewColumn columns = 3;
+  // view_version and schema_hash fence stale event consumers after a schema switch.
+  uint64 view_version = 4;
+  string schema_hash = 5;
+}
+
+// ViewIndexStats 是无需扫描完整索引即可读取的持久化统计信息。
+message ViewIndexStats {
+  bool exists = 1;
+  uint64 entry_count = 2;
+  string min_version = 3;
+  string max_version = 4;
+  string schema_hash = 5;
+  uint64 physical_bytes = 6;
+  string updated_at = 7;
+  // free_disk_bytes is the owner filesystem's currently available capacity.
+  uint64 free_disk_bytes = 8;
+}
+
+message ViewIndexDescriptor {
+  string index_id = 1;
+  string engine = 2;
+  ViewIndexStats stats = 3;
+}
+
+message PrepareViewIndexReq {
+  common.AuthInfo auth_info = 1;
+  string index_id = 2;
+  string engine = 3;
+  ViewIndexSchema schema = 4;
+}
+
+message PrepareViewIndexRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message WriteViewIndexReq {
+  common.AuthInfo auth_info = 1;
+  string index_id = 2;
+  string engine = 3;
+  ViewIndexBatch batch = 4;
+}
+
+message WriteViewIndexRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message StatViewIndexReq {
+  common.AuthInfo auth_info = 1;
+  string index_id = 2;
+  string engine = 3;
+}
+
+message StatViewIndexRsp {
+  common.RetInfo ret_info = 1;
+  ViewIndexStats stats = 2;
+}
+
+message RemoveViewIndexReq {
+  common.AuthInfo auth_info = 1;
+  string index_id = 2;
+  string engine = 3;
+}
+
+message RemoveViewIndexRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message ListViewIndexesReq {
+  common.AuthInfo auth_info = 1;
+  string engine = 2;
+  string space_id = 3;
+  string view_id = 4;
+  // include_stats opens each matching index to return its persisted stats.
+  // Maintenance leaves this false and lists physical identities only.
+  bool include_stats = 5;
+}
+
+message ListViewIndexesRsp {
+  common.RetInfo ret_info = 1;
+  repeated ViewIndexDescriptor indexes = 2;
+}
+
+message QueryTimeSeriesIndexReq {
+  common.AuthInfo auth_info = 1;
+  string index_id = 2;
+  QueryTimeSeriesRowsReq query = 3;
+}
+
+message QueryTimeSeriesIndexRsp {
+  common.RetInfo ret_info = 1;
+  repeated ResultColumn columns = 2;
+  repeated TimeSeriesRow rows = 3;
+  common.PageResult page_result = 4;
+}
+
+message SearchRecordIndexReq {
+  common.AuthInfo auth_info = 1;
+  string index_id = 2;
+  string dataset_id = 3;
+  SearchRecordRowsReq query = 4;
+}
+
+message SearchRecordIndexRsp {
+  common.RetInfo ret_info = 1;
+  repeated ResultColumn columns = 2;
+  repeated RecordRow rows = 3;
+  common.PageResult page_result = 4;
+}
+
+// ViewIndex 是 DuckDB/Bleve 物理索引的唯一进程所有者。
+service ViewIndex {
+  rpc PrepareViewIndex(PrepareViewIndexReq) returns (PrepareViewIndexRsp);
+  rpc WriteViewIndex(WriteViewIndexReq) returns (WriteViewIndexRsp);
+  rpc StatViewIndex(StatViewIndexReq) returns (StatViewIndexRsp);
+  rpc RemoveViewIndex(RemoveViewIndexReq) returns (RemoveViewIndexRsp);
+  rpc ListViewIndexes(ListViewIndexesReq) returns (ListViewIndexesRsp);
+  rpc QueryTimeSeriesIndex(QueryTimeSeriesIndexReq) returns (QueryTimeSeriesIndexRsp);
+  rpc SearchRecordIndex(SearchRecordIndexReq) returns (SearchRecordIndexRsp);
+}

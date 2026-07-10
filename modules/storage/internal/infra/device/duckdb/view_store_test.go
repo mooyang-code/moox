@@ -14,7 +14,7 @@ import (
 )
 
 func TestOpenUsesSingleConnectionToAvoidDuckDBFileLockContention(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestDuckDBDSNAddsResourceLimits(t *testing.T) {
 	t.Setenv(duckDBThreadsEnv, "1")
 	t.Setenv(duckDBMaxTempDirectorySizeEnv, "1GB")
 
-	dsn := duckDBDSN("views.duckdb?access_mode=read_only")
+	dsn := duckDBDSN("index.duckdb?access_mode=read_only")
 	for _, want := range []string{
 		"access_mode=read_only",
 		"memory_limit=256MB",
@@ -46,7 +46,7 @@ func TestDuckDBDSNAddsResourceLimits(t *testing.T) {
 func TestDuckDBDSNDoesNotOverrideExplicitResourceLimits(t *testing.T) {
 	t.Setenv(duckDBMemoryLimitEnv, "256MB")
 
-	dsn := duckDBDSN("views.duckdb?memory_limit=128MB")
+	dsn := duckDBDSN("index.duckdb?memory_limit=128MB")
 	if strings.Contains(dsn, "memory_limit=256MB") {
 		t.Fatalf("duckDBDSN() = %q, should keep explicit memory_limit", dsn)
 	}
@@ -57,7 +57,7 @@ func TestDuckDBDSNDoesNotOverrideExplicitResourceLimits(t *testing.T) {
 
 func TestDropResultTableWaitsForResultTableLock(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestDropResultTableWaitsForResultTableLock(t *testing.T) {
 
 func TestInsertRowsMergesExistingAndDuplicateBatchRows(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestInsertRowsMergesExistingAndDuplicateBatchRows(t *testing.T) {
 
 func TestDuckDBViewIndexPrepareWriteStatRemove(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestDuckDBViewIndexPrepareWriteStatRemove(t *testing.T) {
 
 func TestListResultTablesIncludesViewPrefix(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestListResultTablesIncludesViewPrefix(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertRows: %v", err)
 	}
-	if _, _, _, err := store.QueryTimeSeriesRows(ctx, tableName, latestPreviewRequest(1)); err != nil {
+	if _, _, _, err := store.QueryTimeSeriesRows(ctx, tableName, previewRequest(1)); err != nil {
 		t.Fatalf("QueryTimeSeriesRows latest: %v", err)
 	}
 
@@ -254,14 +254,11 @@ func TestListResultTablesIncludesViewPrefix(t *testing.T) {
 	if !hasString(tables, tableName) {
 		t.Fatalf("ListResultTables = %v, want %s", tables, tableName)
 	}
-	if hasString(tables, latestResultTableName(tableName)) {
-		t.Fatalf("ListResultTables = %v, should exclude latest helper", tables)
-	}
 }
 
 func TestInsertRowsWaitsForDatabaseWriteLock(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -320,8 +317,8 @@ func TestBuildTimeSeriesQueryPreviewLimitSkipsCount(t *testing.T) {
 	if plan.countSQL != "" {
 		t.Fatalf("countSQL = %q, want empty", plan.countSQL)
 	}
-	if !strings.Contains(plan.sqlText, "LIMIT 1001 OFFSET 0") {
-		t.Fatalf("sqlText = %q, want limit probe", plan.sqlText)
+	if !strings.Contains(plan.keySQL, "LIMIT 1001 OFFSET 0") {
+		t.Fatalf("keySQL = %q, want limit probe", plan.keySQL)
 	}
 	if plan.pageNo != 1 || plan.size != 1000 || !plan.preview {
 		t.Fatalf("plan page=%d size=%d preview=%v, want 1/1000/true", plan.pageNo, plan.size, plan.preview)
@@ -354,7 +351,35 @@ func TestBuildTimeSeriesQueryDoesNotSortWhenSortsAreEmpty(t *testing.T) {
 	}
 }
 
-func TestBuildTimeSeriesQueryAppliesLimitBeforePage(t *testing.T) {
+func TestBuildTimeSeriesQuerySortsPageKeysBeforeFetchingRows(t *testing.T) {
+	plan, err := buildTimeSeriesQuery("view_test", nil, &pb.QueryTimeSeriesRowsReq{
+		Limit:     1000,
+		Page:      &pb.Page{Page: 1, Size: 5},
+		TotalMode: pb.TotalMode_NONE,
+		Sorts:     []*pb.SortSpec{{FieldName: "data_time", Desc: true}},
+	})
+	if err != nil {
+		t.Fatalf("buildTimeSeriesQuery: %v", err)
+	}
+	if plan.keySQL == "" {
+		t.Fatalf("keySQL is empty, want ordered query to page row keys first")
+	}
+	for _, want := range []string{
+		"SELECT \"row_key\",\"data_time\" FROM view_test",
+		"ORDER BY \"data_time\" DESC",
+		"LIMIT 6) AS moox_limited_keys",
+		"LIMIT 6 OFFSET 0",
+	} {
+		if !strings.Contains(plan.keySQL, want) {
+			t.Fatalf("keySQL = %q, want %q", plan.keySQL, want)
+		}
+	}
+	if strings.Contains(plan.keySQL, "row_json") || strings.Contains(plan.keySQL, "attributes_json") {
+		t.Fatalf("keySQL = %q, should not carry wide row payload through ORDER BY", plan.keySQL)
+	}
+}
+
+func TestBuildTimeSeriesQueryCapsSkippedCountInnerLimitToCurrentPageWindow(t *testing.T) {
 	plan, err := buildTimeSeriesQuery("view_test", nil, &pb.QueryTimeSeriesRowsReq{
 		Limit:     1000,
 		Page:      &pb.Page{Page: 2, Size: 25},
@@ -368,7 +393,7 @@ func TestBuildTimeSeriesQueryAppliesLimitBeforePage(t *testing.T) {
 	}
 	for _, want := range []string{
 		"FROM (SELECT",
-		"LIMIT 1000) AS moox_limited",
+		"LIMIT 51) AS moox_limited",
 		"LIMIT 26 OFFSET 25",
 	} {
 		if !strings.Contains(plan.sqlText, want) {
@@ -390,6 +415,44 @@ func TestBuildTimeSeriesQueryAutoCountsBoundedQuery(t *testing.T) {
 	}
 	if plan.totalState != pb.TotalState_EXACT {
 		t.Fatalf("totalState = %v, want exact", plan.totalState)
+	}
+}
+
+func TestBuildTimeSeriesQueryLimitsExactCountForSortedPagedQuery(t *testing.T) {
+	plan, err := buildTimeSeriesQuery("view_test", nil, &pb.QueryTimeSeriesRowsReq{
+		Limit:     1000,
+		Page:      &pb.Page{Page: 1, Size: 25},
+		TotalMode: pb.TotalMode_FORCE_EXACT,
+		Sorts:     []*pb.SortSpec{{FieldName: "data_time", Desc: true}},
+	})
+	if err != nil {
+		t.Fatalf("buildTimeSeriesQuery: %v", err)
+	}
+	if !strings.Contains(plan.countSQL, "LIMIT 1000") {
+		t.Fatalf("countSQL = %q, want count bounded by request limit", plan.countSQL)
+	}
+}
+
+func TestBuildKeyPredicatesUsesRowKeyPrefixForCompleteKey(t *testing.T) {
+	where, args, err := buildKeyPredicates([]*pb.TimeSeriesKey{{
+		SpaceId:   "crypto",
+		DatasetId: "binance_spot_kline",
+		SubjectId: "BTC-USDT",
+		Freq:      "1m",
+	}})
+	if err != nil {
+		t.Fatalf("buildKeyPredicates: %v", err)
+	}
+	if !strings.Contains(where, "row_key LIKE ? ESCAPE '\\'") {
+		t.Fatalf("where = %q, want row_key prefix predicate", where)
+	}
+	for _, notWant := range []string{"dataset_id = ?", "subject_id = ?", "freq = ?"} {
+		if strings.Contains(where, notWant) {
+			t.Fatalf("where = %q, should avoid redundant %q predicates when row_key prefix is available", where, notWant)
+		}
+	}
+	if len(args) != 2 || args[0] != "crypto" || args[1] != `binance\_spot\_kline|BTC-USDT|1m|%` {
+		t.Fatalf("args = %#v, want space and row_key prefix", args)
 	}
 }
 
@@ -469,65 +532,108 @@ func TestCreateResultIndexStatementsIncludesDataTimeIndex(t *testing.T) {
 	}
 }
 
-func TestLatestHelperCandidateRequiresExplicitDataTimeDescPreview(t *testing.T) {
-	if !latestHelperCandidate(&pb.QueryTimeSeriesRowsReq{
-		Limit:     1000,
-		TotalMode: pb.TotalMode_NONE,
-		Sorts: []*pb.SortSpec{{
-			FieldName: "data_time",
-			Desc:      true,
-		}},
-	}) {
-		t.Fatal("latestHelperCandidate returned false for explicit data_time desc preview")
-	}
-	for name, req := range map[string]*pb.QueryTimeSeriesRowsReq{
-		"no sort": {
-			Limit: 1000,
-		},
-		"ascending": {
-			Limit: 1000,
-			Sorts: []*pb.SortSpec{{FieldName: "data_time"}},
-		},
-		"paged": {
-			Page:  &pb.Page{Page: 1, Size: 25},
-			Sorts: []*pb.SortSpec{{FieldName: "data_time", Desc: true}},
-		},
-		"force exact": {
-			Limit:     1000,
-			TotalMode: pb.TotalMode_FORCE_EXACT,
-			Sorts:     []*pb.SortSpec{{FieldName: "data_time", Desc: true}},
-		},
-		"subject filtered": {
-			Limit: 1000,
-			Keys:  []*pb.TimeSeriesKey{{SubjectId: "BTC-USDT"}},
-			Sorts: []*pb.SortSpec{{FieldName: "data_time", Desc: true}},
-		},
-		"field filtered": {
-			Limit:   1000,
-			Filters: []*pb.FilterExpr{{Expr: "close > $value"}},
-			Sorts:   []*pb.SortSpec{{FieldName: "data_time", Desc: true}},
-		},
-	} {
-		if latestHelperCandidate(req) {
-			t.Fatalf("latestHelperCandidate(%s) = true, want false", name)
-		}
-	}
-}
-
-func TestQueryTimeSeriesRowsCreatesLatestHelperForGlobalDataTimeDescPreview(t *testing.T) {
+func TestQueryTimeSeriesRowsDoesNotCreateIndexesOnRead(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer store.Close()
 
-	if err := store.CreateResultTable(ctx, "test_view_latest", []*pb.ViewColumn{
+	tableName := "test_view_no_read_index"
+	if err := store.CreateResultTable(ctx, tableName, []*pb.ViewColumn{
 		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}); err != nil {
 		t.Fatalf("CreateResultTable: %v", err)
 	}
-	if err := store.InsertRows(ctx, "test_view_latest", []*pb.TimeSeriesRow{
+	if err := store.InsertRows(ctx, tableName, []*pb.TimeSeriesRow{
+		duckDBTestRow("BTC-USDT", "2026-07-07T04:49:00Z", duckDBTestValue("close", 1)),
+	}); err != nil {
+		t.Fatalf("InsertRows: %v", err)
+	}
+	statements, err := dropResultIndexStatements(tableName, []resultColumnDef{{name: "close", valueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}})
+	if err != nil {
+		t.Fatalf("dropResultIndexStatements: %v", err)
+	}
+	for _, statement := range statements {
+		if _, err := store.db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("drop index %q: %v", statement, err)
+		}
+	}
+	store.indexedTables.Delete(tableName)
+
+	if _, _, _, err := store.QueryTimeSeriesRows(ctx, tableName, &pb.QueryTimeSeriesRowsReq{
+		Keys: []*pb.TimeSeriesKey{{SubjectId: "BTC-USDT", Freq: "1m"}},
+		Page: &pb.Page{Page: 1, Size: 1},
+	}); err != nil {
+		t.Fatalf("QueryTimeSeriesRows: %v", err)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM duckdb_indexes() WHERE table_name = ?`, tableName).Scan(&count); err != nil {
+		t.Fatalf("count indexes: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("read query recreated %d DuckDB index(es), want 0", count)
+	}
+}
+
+func TestQueryTimeSeriesRowsMatchesCompleteKeyWithEscapedRowKeyPrefix(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.CreateResultTable(ctx, "test_view_row_key_prefix", []*pb.ViewColumn{
+		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+	}); err != nil {
+		t.Fatalf("CreateResultTable: %v", err)
+	}
+	if err := store.InsertRows(ctx, "test_view_row_key_prefix", []*pb.TimeSeriesRow{
+		duckDBTestRow("BTC-USDT", "2026-07-07T04:49:00Z", duckDBTestValue("close", 1)),
+		duckDBTestRow("BTC-USDT", "2026-07-07T04:50:00Z", duckDBTestValue("close", 2)),
+		duckDBTestRow("ETH-USDT", "2026-07-07T04:51:00Z", duckDBTestValue("close", 3)),
+	}); err != nil {
+		t.Fatalf("InsertRows: %v", err)
+	}
+
+	_, rows, _, err := store.QueryTimeSeriesRows(ctx, "test_view_row_key_prefix", &pb.QueryTimeSeriesRowsReq{
+		ColumnNames: []string{"close"},
+		Keys: []*pb.TimeSeriesKey{{
+			SpaceId:   "crypto",
+			DatasetId: "binance_spot_kline",
+			SubjectId: "BTC-USDT",
+			Freq:      "1m",
+		}},
+		Page:      &pb.Page{Page: 1, Size: 1},
+		Limit:     1000,
+		TotalMode: pb.TotalMode_NONE,
+		Sorts:     []*pb.SortSpec{{FieldName: "data_time", Desc: true}},
+	})
+	if err != nil {
+		t.Fatalf("QueryTimeSeriesRows: %v", err)
+	}
+	if len(rows) != 1 || rows[0].GetKey().GetSubjectId() != "BTC-USDT" ||
+		rows[0].GetKey().GetDataTime() != "2026-07-07T04:50:00.000000000Z" {
+		t.Fatalf("rows = %+v, want latest BTC row", rows)
+	}
+}
+
+func TestQueryTimeSeriesRowsGlobalDataTimeDescPreview(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.CreateResultTable(ctx, "test_view_preview", []*pb.ViewColumn{
+		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+	}); err != nil {
+		t.Fatalf("CreateResultTable: %v", err)
+	}
+	if err := store.InsertRows(ctx, "test_view_preview", []*pb.TimeSeriesRow{
 		duckDBTestRow("BTC-USDT", "2026-07-07T04:49:00Z", duckDBTestValue("close", 1)),
 		duckDBTestRow("ETH-USDT", "2026-07-07T04:50:00Z", duckDBTestValue("close", 2)),
 		duckDBTestRow("SOL-USDT", "2026-07-07T04:51:00Z", duckDBTestValue("close", 3)),
@@ -535,7 +641,7 @@ func TestQueryTimeSeriesRowsCreatesLatestHelperForGlobalDataTimeDescPreview(t *t
 		t.Fatalf("InsertRows: %v", err)
 	}
 
-	_, rows, page, err := store.QueryTimeSeriesRows(ctx, "test_view_latest", &pb.QueryTimeSeriesRowsReq{
+	_, rows, page, err := store.QueryTimeSeriesRows(ctx, "test_view_preview", &pb.QueryTimeSeriesRowsReq{
 		ColumnNames: []string{"close"},
 		Limit:       2,
 		TotalMode:   pb.TotalMode_NONE,
@@ -550,41 +656,29 @@ func TestQueryTimeSeriesRowsCreatesLatestHelperForGlobalDataTimeDescPreview(t *t
 	if page == nil || !page.GetHasMore() || page.GetTotalState() != pb.TotalState_SKIPPED {
 		t.Fatalf("page = %+v, want skipped preview with has_more", page)
 	}
-	exists, err := store.tableExists(ctx, latestResultTableName("test_view_latest"))
-	if err != nil {
-		t.Fatalf("tableExists: %v", err)
-	}
-	if !exists {
-		t.Fatal("latest helper table was not created")
-	}
 }
 
-func TestQueryLatestTimeSeriesRowsReturnsLimitSizedPage(t *testing.T) {
+func TestQueryTimeSeriesRowsReturnsLimitSizedPage(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer store.Close()
 
-	if err := store.CreateResultTable(ctx, "test_view_latest_page", []*pb.ViewColumn{
+	if err := store.CreateResultTable(ctx, "test_view_page", []*pb.ViewColumn{
 		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}); err != nil {
 		t.Fatalf("CreateResultTable: %v", err)
 	}
-	if err := store.InsertRows(ctx, "test_view_latest_page", []*pb.TimeSeriesRow{
+	if err := store.InsertRows(ctx, "test_view_page", []*pb.TimeSeriesRow{
 		duckDBTestRow("BTC-USDT", "2026-07-07T04:49:00Z", duckDBTestValue("close", 1)),
 		duckDBTestRow("ETH-USDT", "2026-07-07T04:50:00Z", duckDBTestValue("close", 2)),
 		duckDBTestRow("SOL-USDT", "2026-07-07T04:51:00Z", duckDBTestValue("close", 3)),
 	}); err != nil {
 		t.Fatalf("InsertRows: %v", err)
 	}
-	columns, err := store.loadColumns(ctx, "test_view_latest_page")
-	if err != nil {
-		t.Fatalf("loadColumns: %v", err)
-	}
-
-	_, rows, page, ok, err := store.queryLatestTimeSeriesRows(ctx, "test_view_latest_page", columns, &pb.QueryTimeSeriesRowsReq{
+	_, rows, page, err := store.QueryTimeSeriesRows(ctx, "test_view_page", &pb.QueryTimeSeriesRowsReq{
 		ColumnNames: []string{"close"},
 		Limit:       2,
 		Page:        &pb.Page{Page: 1, Size: 2},
@@ -592,10 +686,7 @@ func TestQueryLatestTimeSeriesRowsReturnsLimitSizedPage(t *testing.T) {
 		Sorts:       []*pb.SortSpec{{FieldName: "data_time", Desc: true}},
 	})
 	if err != nil {
-		t.Fatalf("queryLatestTimeSeriesRows: %v", err)
-	}
-	if !ok {
-		t.Fatal("queryLatestTimeSeriesRows ok = false, want true for limit-sized page")
+		t.Fatalf("QueryTimeSeriesRows: %v", err)
 	}
 	if len(rows) != 2 || rows[0].GetKey().GetSubjectId() != "SOL-USDT" || rows[1].GetKey().GetSubjectId() != "ETH-USDT" {
 		t.Fatalf("rows = %+v, want latest SOL then ETH", rows)
@@ -605,59 +696,52 @@ func TestQueryLatestTimeSeriesRowsReturnsLimitSizedPage(t *testing.T) {
 	}
 }
 
-func TestQueryTimeSeriesRowsNoSortDoesNotCreateLatestHelper(t *testing.T) {
+func TestQueryTimeSeriesRowsNoSortPreview(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer store.Close()
 
-	if err := store.CreateResultTable(ctx, "test_view_no_latest", []*pb.ViewColumn{
+	if err := store.CreateResultTable(ctx, "test_view_no_sort", []*pb.ViewColumn{
 		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}); err != nil {
 		t.Fatalf("CreateResultTable: %v", err)
 	}
-	if err := store.InsertRows(ctx, "test_view_no_latest", []*pb.TimeSeriesRow{
+	if err := store.InsertRows(ctx, "test_view_no_sort", []*pb.TimeSeriesRow{
 		duckDBTestRow("BTC-USDT", "2026-07-07T04:49:00Z", duckDBTestValue("close", 1)),
 		duckDBTestRow("ETH-USDT", "2026-07-07T04:50:00Z", duckDBTestValue("close", 2)),
 	}); err != nil {
 		t.Fatalf("InsertRows: %v", err)
 	}
-	if _, _, _, err := store.QueryTimeSeriesRows(ctx, "test_view_no_latest", &pb.QueryTimeSeriesRowsReq{
+	if _, _, _, err := store.QueryTimeSeriesRows(ctx, "test_view_no_sort", &pb.QueryTimeSeriesRowsReq{
 		Limit:     2,
 		TotalMode: pb.TotalMode_NONE,
 	}); err != nil {
 		t.Fatalf("QueryTimeSeriesRows: %v", err)
 	}
-	exists, err := store.tableExists(ctx, latestResultTableName("test_view_no_latest"))
-	if err != nil {
-		t.Fatalf("tableExists: %v", err)
-	}
-	if exists {
-		t.Fatal("latest helper table was created for no-sort query")
-	}
 }
 
-func TestQueryTimeSeriesRowsRebuildsStaleLatestHelperAfterRestart(t *testing.T) {
+func TestQueryTimeSeriesRowsReadsNewRowsAfterRestart(t *testing.T) {
 	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "views.duckdb")
+	dbPath := filepath.Join(t.TempDir(), "index.duckdb")
 	store, err := Open(Options{Path: dbPath})
 	if err != nil {
 		t.Fatalf("Open initial: %v", err)
 	}
-	if err := store.CreateResultTable(ctx, "test_view_restart_latest", []*pb.ViewColumn{
+	if err := store.CreateResultTable(ctx, "test_view_restart", []*pb.ViewColumn{
 		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}); err != nil {
 		t.Fatalf("CreateResultTable: %v", err)
 	}
-	if err := store.InsertRows(ctx, "test_view_restart_latest", []*pb.TimeSeriesRow{
+	if err := store.InsertRows(ctx, "test_view_restart", []*pb.TimeSeriesRow{
 		duckDBTestRow("BTC-USDT", "2026-07-07T04:49:00Z", duckDBTestValue("close", 1)),
 	}); err != nil {
 		t.Fatalf("InsertRows initial: %v", err)
 	}
-	if _, _, _, err := store.QueryTimeSeriesRows(ctx, "test_view_restart_latest", latestPreviewRequest(1)); err != nil {
-		t.Fatalf("QueryTimeSeriesRows initial latest: %v", err)
+	if _, _, _, err := store.QueryTimeSeriesRows(ctx, "test_view_restart", previewRequest(1)); err != nil {
+		t.Fatalf("QueryTimeSeriesRows initial: %v", err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close initial: %v", err)
@@ -668,75 +752,45 @@ func TestQueryTimeSeriesRowsRebuildsStaleLatestHelperAfterRestart(t *testing.T) 
 		t.Fatalf("Open restarted: %v", err)
 	}
 	defer restarted.Close()
-	if err := restarted.InsertRows(ctx, "test_view_restart_latest", []*pb.TimeSeriesRow{
+	if err := restarted.InsertRows(ctx, "test_view_restart", []*pb.TimeSeriesRow{
 		duckDBTestRow("ETH-USDT", "2026-07-07T04:55:00Z", duckDBTestValue("close", 2)),
 	}); err != nil {
 		t.Fatalf("InsertRows after restart: %v", err)
 	}
 
-	_, rows, _, err := restarted.QueryTimeSeriesRows(ctx, "test_view_restart_latest", latestPreviewRequest(1))
+	_, rows, _, err := restarted.QueryTimeSeriesRows(ctx, "test_view_restart", previewRequest(1))
 	if err != nil {
 		t.Fatalf("QueryTimeSeriesRows after restart: %v", err)
 	}
 	if len(rows) != 1 || rows[0].GetKey().GetSubjectId() != "ETH-USDT" {
-		t.Fatalf("rows = %+v, want restarted helper rebuilt with ETH latest", rows)
+		t.Fatalf("rows = %+v, want ETH latest after restart", rows)
 	}
 }
 
-func TestLatestRowsNeedSyncSkipsRowsOlderThanFullHelperWindow(t *testing.T) {
-	stats := latestHelperStats{
-		rowCount:       latestHelperMaxRows,
-		cutoffDataTime: "2026-07-07T04:50:00Z",
-		existingKeys:   map[string]struct{}{},
-	}
-
-	if latestRowsNeedSync(stats, latestHelperMaxRows, []*pb.TimeSeriesRow{
-		duckDBTestRow("BTC-USDT", "2026-07-07T04:49:00Z", duckDBTestValue("close", 1)),
-	}) {
-		t.Fatal("latestRowsNeedSync = true, want false for row older than full latest helper window")
-	}
-	if !latestRowsNeedSync(stats, latestHelperMaxRows, []*pb.TimeSeriesRow{
-		duckDBTestRow("ETH-USDT", "2026-07-07T04:50:00Z", duckDBTestValue("close", 2)),
-	}) {
-		t.Fatal("latestRowsNeedSync = false, want true for row at latest helper cutoff")
-	}
-	if !latestRowsNeedSync(stats, latestHelperMaxRows, []*pb.TimeSeriesRow{
-		duckDBTestRow("SOL-USDT", "2026-07-07T04:51:00Z", duckDBTestValue("close", 3)),
-	}) {
-		t.Fatal("latestRowsNeedSync = false, want true for row newer than latest helper cutoff")
-	}
-
-	existing := duckDBTestRow("OLD-USDT", "2026-07-07T04:49:00Z", duckDBTestValue("close", 4))
-	stats.existingKeys[rowPrimaryKey(existing)] = struct{}{}
-	if !latestRowsNeedSync(stats, latestHelperMaxRows, []*pb.TimeSeriesRow{existing}) {
-		t.Fatal("latestRowsNeedSync = false, want true for row already present in latest helper")
-	}
-}
-
-func TestMergeRowsIntoTableReturnsMergedRowsForLatestSync(t *testing.T) {
+func TestMergeRowsIntoTableReturnsMergedRows(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb")})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer store.Close()
 
-	if err := store.CreateResultTable(ctx, "test_view_latest_merge", []*pb.ViewColumn{
+	if err := store.CreateResultTable(ctx, "test_view_merge", []*pb.ViewColumn{
 		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 		{ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}); err != nil {
 		t.Fatalf("CreateResultTable: %v", err)
 	}
-	if err := store.InsertRows(ctx, "test_view_latest_merge", []*pb.TimeSeriesRow{
+	if err := store.InsertRows(ctx, "test_view_merge", []*pb.TimeSeriesRow{
 		duckDBTestRow("BTC-USDT", "2026-07-07T04:49:00Z", duckDBTestValue("close", 1), duckDBTestValue("volume", 10)),
 	}); err != nil {
 		t.Fatalf("InsertRows: %v", err)
 	}
-	columns, err := store.loadColumns(ctx, "test_view_latest_merge")
+	columns, err := store.loadColumns(ctx, "test_view_merge")
 	if err != nil {
 		t.Fatalf("loadColumns: %v", err)
 	}
-	quoted, err := quoteTableName("test_view_latest_merge")
+	quoted, err := quoteTableName("test_view_merge")
 	if err != nil {
 		t.Fatalf("quoteTableName: %v", err)
 	}
@@ -772,7 +826,7 @@ func duckDBTestRow(subjectID string, dataTime string, columns ...*pb.ColumnValue
 	}
 }
 
-func latestPreviewRequest(limit uint32) *pb.QueryTimeSeriesRowsReq {
+func previewRequest(limit uint32) *pb.QueryTimeSeriesRowsReq {
 	return &pb.QueryTimeSeriesRowsReq{
 		ColumnNames: []string{"close"},
 		Limit:       limit,

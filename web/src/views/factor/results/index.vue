@@ -1,33 +1,37 @@
 <template>
   <div class="factor-results-workbench">
-    <a-tabs v-model:active-key="activeTab" type="rounded" size="medium" lazy-load destroy-on-hide @change="syncRoute">
-      <a-tab-pane key="definitions" title="结果视图">
-        <ViewDefinitions
-          owner-module="factor"
-          view-role="factor_result"
-          managed-by="factor"
-          :filter-owner-modules="['factor']"
-          :filter-dataset-roles="['factor_result']"
-          :filter-view-roles="['factor_result']"
-          :allowed-primary-dataset-ids="targetDatasetIds"
-        />
-      </a-tab-pane>
-      <a-tab-pane key="browse" title="查看结果">
-        <ViewBrowse
-          page-title="因子结果"
-          empty-description="暂无因子结果视图，请先在“结果视图”中创建一个结果视图"
-          :allowed-primary-dataset-ids="targetDatasetIds"
-          :view-owner-modules="['factor']"
-          :view-roles="['factor_result']"
-        />
-      </a-tab-pane>
-    </a-tabs>
+    <ViewDefinitions
+      v-if="activeTab === 'definitions'"
+      owner-module="factor"
+      view-role="factor_result"
+      managed-by="factor"
+      :filter-owner-modules="['factor']"
+      :filter-dataset-roles="['factor_result']"
+      :filter-view-roles="['factor_result']"
+      :allowed-primary-dataset-ids="targetDatasetIds"
+    >
+      <template #page-title>
+        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="因子结果" @change="syncRoute" />
+      </template>
+    </ViewDefinitions>
+    <ViewBrowse
+      v-else
+      empty-description="暂无因子结果视图，请先在“结果视图”中创建一个结果视图"
+      :allowed-primary-dataset-ids="targetDatasetIds"
+      :view-owner-modules="['factor']"
+      :view-roles="['factor_result']"
+    >
+      <template #page-title>
+        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="因子结果" @change="syncRoute" />
+      </template>
+    </ViewBrowse>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import PageTitleTabs from '@/components/page-title-tabs/index.vue';
 import { listFactorBindings } from '@/api/factor';
 import type { FactorBinding } from '@/api/factor/types';
 import { useSpaceStore } from '@/store/modules/space';
@@ -43,6 +47,12 @@ const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const bindings = ref<FactorBinding[]>([]);
 const activeTab = ref(tabFromRoute());
+type FactorResultTab = 'definitions' | 'browse';
+
+const tabs = [
+  { key: 'definitions', label: '结果视图' },
+  { key: 'browse', label: '查看结果' },
+] as const;
 const normalizedQuery = computed(() => String(route.query.tab || ''));
 
 const targetDatasetIds = computed(() => factorBindingTargetDatasetIds(bindings.value));
@@ -52,7 +62,8 @@ function tabFromRoute() {
 }
 
 function syncRoute(key: string | number) {
-  const tab = key === 'definitions' ? 'definitions' : 'browse';
+  const tab: FactorResultTab = key === 'definitions' ? 'definitions' : 'browse';
+  activeTab.value = tab;
   router.replace({ path: '/factor/results', query: tab === 'definitions' ? { tab } : {} });
 }
 
@@ -93,36 +104,6 @@ onMounted(loadBindings);
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  box-sizing: border-box;
-  padding-bottom: 72px;
-  overflow-x: hidden;
-  overflow-y: auto;
-}
-
-.factor-results-workbench :deep(.arco-tabs) {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.factor-results-workbench :deep(.arco-tabs-content) {
-  flex: 1;
-  min-height: 0;
-  padding-top: 0;
   overflow: hidden;
-}
-
-.factor-results-workbench :deep(.arco-tabs-content-list) {
-  height: 100%;
-  min-height: 0;
-  overflow: visible;
-}
-
-.factor-results-workbench :deep(.arco-tabs-pane) {
-  height: 100%;
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
 }
 </style>

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	viewsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
@@ -15,8 +14,8 @@ func (s *Service) processRecordBatch(ctx context.Context, keys []*pb.RecordKey) 
 	if len(keys) == 0 {
 		return nil
 	}
-	if s == nil || s.reader == nil || s.metadata == nil || s.search == nil {
-		return errors.New("view builder record processor requires reader, metadata client and record indexer")
+	if s == nil || s.reader == nil || s.metadata == nil {
+		return errors.New("view builder record processor requires reader and metadata client")
 	}
 	rows, err := s.currentRecordRows(ctx, keys)
 	if err != nil {
@@ -43,28 +42,45 @@ func (s *Service) processRecordBatch(ctx context.Context, keys []*pb.RecordKey) 
 			if !strings.EqualFold(item.GetEngine(), "bleve") {
 				continue
 			}
+			engine, err := s.engine(item.GetEngine())
+			if err != nil {
+				return err
+			}
 			columns, _, err := s.metadata.ListViewColumns(ctx, item.GetSpaceId(), item.GetViewId(), &pb.Page{Size: 10000})
 			if err != nil {
 				return err
 			}
-			projected, ok, err := viewsvc.RecordRowsForView(ctx, item, columns, datasetRows, s.readRecordProjectionRow)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				if err := markPending(ctx, s.metadata, item); err != nil {
+			writable := writableIndexSet(item)
+			if writable[item.GetActiveIndexId()] {
+				activeColumns := item.GetActiveColumns()
+				if len(activeColumns) == 0 {
+					return errors.New("view " + item.GetViewId() + " has an active index without an active schema")
+				}
+				projected, ok, err := viewsvc.RecordRowsForView(ctx, item, activeColumns, datasetRows, s.readRecordProjectionRows)
+				if err != nil {
 					return err
 				}
-				continue
-			}
-			if item.GetActiveResult() != "" {
-				if err := s.search.IndexRecordViewRows(ctx, item.GetActiveResult(), columns, projected); err != nil {
-					return err
+				if !ok {
+					return errors.New("view " + item.GetViewId() + " active schema is not projectable")
+				}
+				if len(projected) > 0 {
+					if err := engine.Write(ctx, item.GetActiveIndexId(), viewIndexBatch(item, activeColumns, nil, projected, false)); err != nil {
+						return err
+					}
 				}
 			}
-			if viewindex.BuildingIndexWritable(item) {
-				if err := s.search.IndexRecordViewRows(ctx, item.GetBuildingResult(), columns, projected); err != nil {
+			if writable[item.GetIndexBuild().GetIndexId()] && item.GetIndexBuild().GetIndexId() != item.GetActiveIndexId() {
+				projected, ok, err := viewsvc.RecordRowsForView(ctx, item, columns, datasetRows, s.readRecordProjectionRows)
+				if err != nil {
 					return err
+				}
+				if !ok {
+					return errors.New("view " + item.GetViewId() + " build schema is not projectable")
+				}
+				if len(projected) > 0 {
+					if err := engine.Write(ctx, item.GetIndexBuild().GetIndexId(), viewIndexBatch(item, columns, nil, projected, true)); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -96,13 +112,11 @@ func (s *Service) currentRecordRows(ctx context.Context, keys []*pb.RecordKey) (
 	return rsp.GetRows(), nil
 }
 
-func (s *Service) readRecordProjectionRow(ctx context.Context, base *pb.RecordKey, datasetID string) (*pb.RecordRow, error) {
-	if base == nil {
+func (s *Service) readRecordProjectionRows(ctx context.Context, keys []*pb.RecordKey) ([]*pb.RecordRow, error) {
+	if len(keys) == 0 {
 		return nil, nil
 	}
-	key := proto.Clone(base).(*pb.RecordKey)
-	key.DatasetId = datasetID
-	rsp, err := s.reader.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: []*pb.RecordKey{key}})
+	rsp, err := s.reader.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: keys})
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +126,5 @@ func (s *Service) readRecordProjectionRow(ctx context.Context, base *pb.RecordKe
 	if err := retInfoError(rsp.GetRetInfo()); err != nil {
 		return nil, err
 	}
-	if len(rsp.GetRows()) == 0 {
-		return nil, nil
-	}
-	return rsp.GetRows()[0], nil
+	return rsp.GetRows(), nil
 }

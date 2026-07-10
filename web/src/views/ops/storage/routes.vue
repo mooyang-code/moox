@@ -1,5 +1,6 @@
 <template>
-  <div class="ops-page">
+  <div class="moox-page">
+    <div class="moox-inner">
     <div class="page-head">
       <div>
         <h2>主存路由</h2>
@@ -50,6 +51,8 @@
         </a-table-column>
       </template>
     </a-table>
+
+    </div>
 
     <a-modal v-model:visible="visible" width="780px" :title="modalTitle" @ok="submit">
       <a-form :model="form" auto-label-width>
@@ -224,13 +227,6 @@ onMounted(load);
 </script>
 
 <style scoped>
-.ops-page {
-  height: 100%;
-  box-sizing: border-box;
-  padding: 20px 20px 72px;
-  overflow-y: auto;
-}
-
 .page-head {
   display: flex;
   align-items: center;

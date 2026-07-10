@@ -4,11 +4,20 @@
 -- 1. Space 是业务命名空间；DataSource、Subject、Dataset、Field、Factor 和 View 都归属 Space。
 -- 2. Dataset 描述可写事实数据集，并且只绑定一个 DataSource。
 -- 3. Subject 是 Space 内业务对象，不归属 DataSource；来源侧代码由 SubjectSymbol 管理。
--- 4. View 是查询入口，必须指定 primary_dataset_id，物化结果按 c_query_window 异步构建。
+-- 4. View 是查询入口，必须指定 primary_dataset_id，近期派生索引按 c_retention_window 构建。
 -- 5. PrimaryStoreRoute 只把在线事实主存路由到 PrimaryStoreNode，不直接绑定 Device。
 -- 6. DuckDB、Bleve 和 Parquet 均从 Pebble 主存变更异步派生。
 
 PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS t_schema_meta (
+    c_key TEXT NOT NULL PRIMARY KEY,
+    c_value TEXT NOT NULL
+);
+
+INSERT INTO t_schema_meta (c_key, c_value)
+VALUES ('schema_version', '2')
+ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
 CREATE TABLE IF NOT EXISTS t_spaces (
@@ -49,22 +58,19 @@ CREATE TABLE IF NOT EXISTS t_views (
     c_grain_keys_json TEXT NOT NULL DEFAULT '[]',
     c_filter_json TEXT NOT NULL DEFAULT '{}',
     c_engine TEXT NOT NULL DEFAULT 'duckdb',
-    c_query_window TEXT NOT NULL DEFAULT '',
-    c_active_result TEXT NOT NULL DEFAULT '',
-    c_build_status TEXT NOT NULL DEFAULT 'pending',
+    c_retention_window TEXT NOT NULL DEFAULT '',
+    c_active_index_id TEXT NOT NULL DEFAULT '',
     c_view_version INTEGER NOT NULL DEFAULT 1,
     c_active_view_version INTEGER NOT NULL DEFAULT 0,
-    c_building_view_version INTEGER NOT NULL DEFAULT 0,
-    c_building_result TEXT NOT NULL DEFAULT '',
-    c_build_error TEXT NOT NULL DEFAULT '',
-    c_build_started_at TEXT NOT NULL DEFAULT '',
-    c_build_finished_at TEXT NOT NULL DEFAULT '',
+    c_active_columns_json TEXT NOT NULL DEFAULT '[]',
+    c_active_schema_hash TEXT NOT NULL DEFAULT '',
+    c_active_coverage_start TEXT NOT NULL DEFAULT '',
+    c_active_coverage_end TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'active',
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_engine IN ('duckdb', 'bleve')),
-    CHECK (c_build_status IN ('pending', 'building', 'active', 'failed', 'disabled', 'archived', 'deleted')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (c_space_id, c_primary_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE RESTRICT ON UPDATE CASCADE,
@@ -74,7 +80,6 @@ CREATE TABLE IF NOT EXISTS t_views (
 
 CREATE INDEX IF NOT EXISTS idx_t_views_space ON t_views (c_space_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_t_views_primary_dataset ON t_views (c_space_id, c_primary_dataset_id, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_views_build_status ON t_views (c_space_id, c_build_status);
 CREATE INDEX IF NOT EXISTS idx_t_views_version_pending ON t_views (c_space_id, c_status, c_view_version, c_active_view_version);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_views_mtime
@@ -84,6 +89,36 @@ WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_views SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
+
+CREATE TABLE IF NOT EXISTS t_view_index_builds (
+    c_space_id TEXT NOT NULL,
+    c_view_id TEXT NOT NULL,
+    c_build_id TEXT NOT NULL UNIQUE,
+    c_index_id TEXT NOT NULL,
+    c_engine TEXT NOT NULL,
+    c_target_view_version INTEGER NOT NULL,
+    c_state INTEGER NOT NULL,
+    c_owner_id TEXT NOT NULL,
+    c_lease_expires_at TEXT NOT NULL,
+    c_cursor_json TEXT NOT NULL DEFAULT '',
+    c_snapshot_end TEXT NOT NULL DEFAULT '',
+    c_coverage_start TEXT NOT NULL DEFAULT '',
+    c_coverage_end TEXT NOT NULL DEFAULT '',
+    c_entries_written INTEGER NOT NULL DEFAULT 0,
+    c_schema_hash TEXT NOT NULL,
+    c_columns_json TEXT NOT NULL,
+    c_started_at TEXT NOT NULL,
+    c_updated_at TEXT NOT NULL,
+    c_finished_at TEXT NOT NULL DEFAULT '',
+    c_error TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (c_space_id, c_view_id),
+    FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views (c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (c_engine IN ('duckdb', 'bleve')),
+    CHECK (c_state BETWEEN 1 AND 5)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_view_index_builds_lease
+ON t_view_index_builds (c_lease_expires_at, c_state);
 
 CREATE TABLE IF NOT EXISTS t_view_columns (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,

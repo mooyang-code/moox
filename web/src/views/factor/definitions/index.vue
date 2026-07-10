@@ -1,5 +1,6 @@
 <template>
-  <div class="factor-page">
+  <div class="moox-page">
+    <div class="moox-inner">
     <div class="page-head">
       <div>
         <h2>因子计算</h2>
@@ -72,6 +73,8 @@
         </a-table-column>
       </template>
     </a-table>
+
+    </div>
 
     <a-modal
       v-model:visible="visible"
@@ -253,13 +256,6 @@ onMounted(load);
 </script>
 
 <style scoped>
-.factor-page {
-  height: 100%;
-  box-sizing: border-box;
-  padding: 20px 20px 72px;
-  overflow-y: auto;
-}
-
 .page-head {
   display: flex;
   align-items: center;

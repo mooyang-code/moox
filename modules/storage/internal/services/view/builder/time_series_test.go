@@ -5,65 +5,142 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestTimeSeriesBuildingVersionGuardWritesActiveOnlyForStaleBuilding(t *testing.T) {
 	writes := runTimeSeriesBuildingWriteTest(t, &pb.View{
-		SpaceId:             "crypto",
-		ViewId:              "spot_kline_1m_view",
-		PrimaryDatasetId:    "kline",
-		DatasetIds:          []string{"kline"},
-		Engine:              "duckdb",
-		Status:              "active",
-		BuildStatus:         "building",
-		ViewVersion:         2,
-		ActiveResult:        "a",
-		ActiveViewVersion:   1,
-		BuildingResult:      "b",
-		BuildingViewVersion: 1,
+		SpaceId:           "crypto",
+		ViewId:            "spot_kline_1m_view",
+		PrimaryDatasetId:  "kline",
+		DatasetIds:        []string{"kline"},
+		Engine:            "duckdb",
+		Status:            "active",
+		ViewVersion:       2,
+		ActiveIndexId:     builderIndexID("spot_kline_1m_view", viewindex.SlotA),
+		ActiveViewVersion: 1,
+		IndexBuild: &pb.ViewIndexBuild{
+			IndexId: builderIndexID("spot_kline_1m_view", viewindex.SlotB), TargetViewVersion: 1, State: pb.ViewIndexBuild_BUILDING,
+		},
 	})
 
-	assertWriteTargets(t, writes, map[string]int{"a": 1})
+	assertWriteTargets(t, writes, map[string]int{builderIndexID("spot_kline_1m_view", viewindex.SlotA): 1})
 }
 
 func TestTimeSeriesBuildingStatusGuardWritesActiveOnlyForFailedBuilding(t *testing.T) {
 	writes := runTimeSeriesBuildingWriteTest(t, &pb.View{
-		SpaceId:             "crypto",
-		ViewId:              "spot_kline_1m_view",
-		PrimaryDatasetId:    "kline",
-		DatasetIds:          []string{"kline"},
-		Engine:              "duckdb",
-		Status:              "active",
-		BuildStatus:         "failed",
-		ViewVersion:         2,
-		ActiveResult:        "a",
-		ActiveViewVersion:   1,
-		BuildingResult:      "b",
-		BuildingViewVersion: 2,
+		SpaceId:           "crypto",
+		ViewId:            "spot_kline_1m_view",
+		PrimaryDatasetId:  "kline",
+		DatasetIds:        []string{"kline"},
+		Engine:            "duckdb",
+		Status:            "active",
+		ViewVersion:       2,
+		ActiveIndexId:     builderIndexID("spot_kline_1m_view", viewindex.SlotA),
+		ActiveViewVersion: 1,
+		IndexBuild: &pb.ViewIndexBuild{
+			IndexId: builderIndexID("spot_kline_1m_view", viewindex.SlotB), TargetViewVersion: 2, State: pb.ViewIndexBuild_FAILED,
+		},
 	})
 
-	assertWriteTargets(t, writes, map[string]int{"a": 1})
+	assertWriteTargets(t, writes, map[string]int{builderIndexID("spot_kline_1m_view", viewindex.SlotA): 1})
 }
 
 func TestTimeSeriesCurrentBuildingWritesActiveAndBuilding(t *testing.T) {
 	writes := runTimeSeriesBuildingWriteTest(t, &pb.View{
-		SpaceId:             "crypto",
-		ViewId:              "spot_kline_1m_view",
-		PrimaryDatasetId:    "kline",
-		DatasetIds:          []string{"kline"},
-		Engine:              "duckdb",
-		Status:              "active",
-		BuildStatus:         "building",
-		ViewVersion:         2,
-		ActiveResult:        "a",
-		ActiveViewVersion:   1,
-		BuildingResult:      "b",
-		BuildingViewVersion: 2,
+		SpaceId:           "crypto",
+		ViewId:            "spot_kline_1m_view",
+		PrimaryDatasetId:  "kline",
+		DatasetIds:        []string{"kline"},
+		Engine:            "duckdb",
+		Status:            "active",
+		ViewVersion:       2,
+		ActiveIndexId:     builderIndexID("spot_kline_1m_view", viewindex.SlotA),
+		ActiveViewVersion: 1,
+		IndexBuild: &pb.ViewIndexBuild{
+			IndexId: builderIndexID("spot_kline_1m_view", viewindex.SlotB), TargetViewVersion: 2, State: pb.ViewIndexBuild_BUILDING,
+		},
 	})
 
-	assertWriteTargets(t, writes, map[string]int{"a": 1, "b": 1})
+	assertWriteTargets(t, writes, map[string]int{builderIndexID("spot_kline_1m_view", viewindex.SlotA): 1, builderIndexID("spot_kline_1m_view", viewindex.SlotB): 1})
+}
+
+func TestTimeSeriesCurrentCatchingUpWritesActiveAndBuilding(t *testing.T) {
+	writes := runTimeSeriesBuildingWriteTest(t, &pb.View{
+		SpaceId:           "crypto",
+		ViewId:            "spot_kline_1m_view",
+		PrimaryDatasetId:  "kline",
+		DatasetIds:        []string{"kline"},
+		Engine:            "duckdb",
+		Status:            "active",
+		ViewVersion:       2,
+		ActiveIndexId:     builderIndexID("spot_kline_1m_view", viewindex.SlotA),
+		ActiveViewVersion: 1,
+		IndexBuild: &pb.ViewIndexBuild{
+			IndexId: builderIndexID("spot_kline_1m_view", viewindex.SlotB), TargetViewVersion: 2, State: pb.ViewIndexBuild_CATCHING_UP,
+		},
+	})
+
+	assertWriteTargets(t, writes, map[string]int{builderIndexID("spot_kline_1m_view", viewindex.SlotA): 1, builderIndexID("spot_kline_1m_view", viewindex.SlotB): 1})
+}
+
+func TestTimeSeriesOwnerWriteFailurePropagates(t *testing.T) {
+	wantErr := errors.New("view index owner unavailable")
+	view := &pb.View{
+		SpaceId: "crypto", ViewId: "spot_kline_1m_view", PrimaryDatasetId: "kline", DatasetIds: []string{"kline"},
+		Engine: "duckdb", Status: "active", ViewVersion: 1,
+		ActiveIndexId: builderIndexID("spot_kline_1m_view", viewindex.SlotA),
+	}
+	key := &pb.TimeSeriesKey{
+		SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-09T01:00:00Z",
+	}
+	writer := newRecordingViewIndexEngine("duckdb")
+	writer.writeErr = wantErr
+	service := &Service{
+		reader:   &buildingGuardReader{timeSeriesRows: []*pb.TimeSeriesRow{testBuilderTimeSeriesRow(key)}},
+		metadata: newBuildingGuardMetadata(view),
+		engines:  map[string]viewindex.ViewIndexEngine{"duckdb": writer},
+	}
+
+	if err := service.processTimeSeriesBatch(context.Background(), []*pb.TimeSeriesKey{key}); !errors.Is(err, wantErr) {
+		t.Fatalf("processTimeSeriesBatch error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestTimeSeriesViewFilterSkipsMismatchedFreq(t *testing.T) {
+	ctx := context.Background()
+	view := &pb.View{
+		SpaceId:          "crypto",
+		ViewId:           "spot_kline_1m_view",
+		PrimaryDatasetId: "kline",
+		DatasetIds:       []string{"kline"},
+		Engine:           "duckdb",
+		Status:           "active",
+		ViewVersion:      1,
+		ActiveIndexId:    builderIndexID("spot_kline_1m_view", viewindex.SlotA),
+		FilterJson:       `{"freq":"1m"}`,
+	}
+	key := &pb.TimeSeriesKey{
+		SpaceId:   "crypto",
+		DatasetId: "kline",
+		SubjectId: "BTC-USDT",
+		Freq:      "1h",
+		DataTime:  "2026-07-09T01:00:00Z",
+	}
+	writer := newRecordingViewIndexEngine("duckdb")
+	service := &Service{
+		reader: &buildingGuardReader{
+			timeSeriesRows: []*pb.TimeSeriesRow{testBuilderTimeSeriesRow(key)},
+		},
+		metadata: newBuildingGuardMetadata(view),
+		engines:  map[string]viewindex.ViewIndexEngine{"duckdb": writer},
+	}
+	if err := service.processTimeSeriesBatch(ctx, []*pb.TimeSeriesKey{key}); err != nil {
+		t.Fatalf("processTimeSeriesBatch: %v", err)
+	}
+	assertWriteTargets(t, writer.writes, map[string]int{})
 }
 
 func runTimeSeriesBuildingWriteTest(t *testing.T, view *pb.View) map[string]int {
@@ -76,13 +153,13 @@ func runTimeSeriesBuildingWriteTest(t *testing.T, view *pb.View) map[string]int 
 		Freq:      "1m",
 		DataTime:  "2026-07-09T01:00:00Z",
 	}
-	writer := &recordingTimeSeriesWriter{writes: map[string]int{}}
+	writer := newRecordingViewIndexEngine("duckdb")
 	service := &Service{
 		reader: &buildingGuardReader{
 			timeSeriesRows: []*pb.TimeSeriesRow{testBuilderTimeSeriesRow(key)},
 		},
 		metadata: newBuildingGuardMetadata(view),
-		views:    writer,
+		engines:  map[string]viewindex.ViewIndexEngine{"duckdb": writer},
 	}
 	if err := service.processTimeSeriesBatch(ctx, []*pb.TimeSeriesKey{key}); err != nil {
 		t.Fatalf("processTimeSeriesBatch: %v", err)
@@ -105,21 +182,36 @@ func newBuildingGuardMetadata(views ...*pb.View) *buildingGuardMetadata {
 		}},
 	}
 	for _, view := range views {
-		out.views = append(out.views, proto.Clone(view).(*pb.View))
+		copied := proto.Clone(view).(*pb.View)
+		copied.Columns = cloneViewColumns(out.columns)
+		if copied.GetActiveIndexId() != "" && len(copied.GetActiveColumns()) == 0 {
+			copied.ActiveColumns = cloneViewColumns(out.columns)
+		}
+		if copied.GetIndexBuild() != nil {
+			copied.IndexBuild.Engine = copied.GetEngine()
+			copied.IndexBuild.Columns = cloneViewColumns(out.columns)
+			copied.IndexBuild.SchemaHash = viewindex.HashViewIndexSchema(viewindex.ViewIndexSchema{
+				SpaceID: copied.GetSpaceId(), ViewID: copied.GetViewId(), Engine: copied.GetEngine(), Columns: out.columns,
+			})
+		}
+		out.views = append(out.views, copied)
 	}
 	return out
 }
 
-func (m *buildingGuardMetadata) GetView(_ context.Context, spaceID string, viewID string) (*pb.View, error) {
-	for _, view := range m.views {
-		if view.GetSpaceId() == spaceID && view.GetViewId() == viewID {
-			return proto.Clone(view).(*pb.View), nil
-		}
-	}
-	return nil, errors.New("view not found")
+func builderIndexID(viewID string, slot viewindex.Slot) string {
+	return viewindex.ViewIndexID("crypto", viewID, slot)
 }
 
-func (m *buildingGuardMetadata) ListViews(_ context.Context, spaceID string, datasetID string, status string, _ *pb.Page) ([]*pb.View, *pb.PageResult, error) {
+func cloneViewColumns(columns []*pb.ViewColumn) []*pb.ViewColumn {
+	out := make([]*pb.ViewColumn, 0, len(columns))
+	for _, column := range columns {
+		out = append(out, proto.Clone(column).(*pb.ViewColumn))
+	}
+	return out
+}
+
+func (m *buildingGuardMetadata) ListViewsByDataset(_ context.Context, spaceID string, datasetID string) ([]*pb.View, error) {
 	var out []*pb.View
 	for _, view := range m.views {
 		if spaceID != "" && view.GetSpaceId() != spaceID {
@@ -128,57 +220,16 @@ func (m *buildingGuardMetadata) ListViews(_ context.Context, spaceID string, dat
 		if datasetID != "" && view.GetPrimaryDatasetId() != datasetID {
 			continue
 		}
-		if status != "" && view.GetStatus() != status {
+		if view.GetStatus() != "active" {
 			continue
 		}
 		out = append(out, proto.Clone(view).(*pb.View))
 	}
-	return out, &pb.PageResult{}, nil
-}
-
-func (m *buildingGuardMetadata) ListViewsByDataset(_ context.Context, spaceID string, datasetID string) ([]*pb.View, error) {
-	views, _, err := m.ListViews(context.Background(), spaceID, datasetID, "active", nil)
-	return views, err
+	return out, nil
 }
 
 func (m *buildingGuardMetadata) ListViewColumns(context.Context, string, string, *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {
-	out := make([]*pb.ViewColumn, 0, len(m.columns))
-	for _, column := range m.columns {
-		out = append(out, proto.Clone(column).(*pb.ViewColumn))
-	}
-	return out, &pb.PageResult{}, nil
-}
-
-func (m *buildingGuardMetadata) ListSpaces(context.Context, string, *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
-	return nil, &pb.PageResult{}, nil
-}
-
-func (m *buildingGuardMetadata) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
-	return &pb.Dataset{DataKind: pb.DataKind_DATA_KIND_TIME_SERIES}, nil
-}
-
-func (m *buildingGuardMetadata) UpsertView(_ context.Context, item *pb.View) (*pb.View, error) {
-	copied := proto.Clone(item).(*pb.View)
-	for i, view := range m.views {
-		if view.GetSpaceId() == copied.GetSpaceId() && view.GetViewId() == copied.GetViewId() {
-			m.views[i] = copied
-			return proto.Clone(copied).(*pb.View), nil
-		}
-	}
-	m.views = append(m.views, copied)
-	return proto.Clone(copied).(*pb.View), nil
-}
-
-func (m *buildingGuardMetadata) BeginViewBuild(context.Context, string, string, uint64, string) (*pb.View, error) {
-	return nil, nil
-}
-
-func (m *buildingGuardMetadata) CompleteViewBuild(context.Context, string, string, uint64, string) error {
-	return nil
-}
-
-func (m *buildingGuardMetadata) FailViewBuild(context.Context, string, string, uint64, string, error) error {
-	return nil
+	return cloneViewColumns(m.columns), &pb.PageResult{}, nil
 }
 
 type buildingGuardReader struct {
@@ -208,17 +259,38 @@ func (r *buildingGuardReader) ReadRecordRows(context.Context, *pb.ReadRecordRows
 	}, nil
 }
 
-type recordingTimeSeriesWriter struct {
-	writes map[string]int
+type recordingViewIndexEngine struct {
+	engine   string
+	writes   map[string]int
+	writeErr error
 }
 
-func (w *recordingTimeSeriesWriter) InsertRows(_ context.Context, tableName string, rows []*pb.TimeSeriesRow) error {
+func newRecordingViewIndexEngine(engine string) *recordingViewIndexEngine {
+	return &recordingViewIndexEngine{engine: engine, writes: map[string]int{}}
+}
+
+func (w *recordingViewIndexEngine) Engine() string { return w.engine }
+
+func (w *recordingViewIndexEngine) Prepare(context.Context, string, viewindex.ViewIndexSchema) error {
+	return nil
+}
+
+func (w *recordingViewIndexEngine) Write(_ context.Context, indexID string, batch viewindex.ViewIndexBatch) error {
+	if w.writeErr != nil {
+		return w.writeErr
+	}
 	if w.writes == nil {
 		w.writes = map[string]int{}
 	}
-	w.writes[tableName] += len(rows)
+	w.writes[indexID] += len(batch.TimeSeriesRows) + len(batch.RecordRows)
 	return nil
 }
+
+func (w *recordingViewIndexEngine) Stat(context.Context, string) (viewindex.ViewIndexStats, error) {
+	return viewindex.ViewIndexStats{}, nil
+}
+
+func (w *recordingViewIndexEngine) Remove(context.Context, string) error { return nil }
 
 func testBuilderTimeSeriesRow(key *pb.TimeSeriesKey) *pb.TimeSeriesRow {
 	return &pb.TimeSeriesRow{

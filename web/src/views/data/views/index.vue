@@ -1,7 +1,12 @@
 <template>
-  <div class="metadata-page">
+  <div class="moox-page">
+    <div class="moox-inner">
     <div class="page-head">
-      <h2>视图列表</h2>
+      <div class="page-head__title">
+        <slot name="page-title">
+          <h2>{{ props.pageTitle }}</h2>
+        </slot>
+      </div>
       <a-space>
         <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
           <template #icon><icon-plus /></template>
@@ -42,9 +47,9 @@
         <a-table-column title="活跃版本" :width="100">
           <template #cell="{ record }">{{ record.active_view_version || 0 }}</template>
         </a-table-column>
-        <a-table-column title="构建状态" :width="110">
+        <a-table-column title="切换状态" :width="120">
           <template #cell="{ record }">
-            <a-tag size="small" :color="statusColor(record.build_status)">{{ record.build_status || "-" }}</a-tag>
+            <a-tag size="small" :color="viewIndexStateColor(record)">{{ viewIndexStateLabel(record) }}</a-tag>
           </template>
         </a-table-column>
         <a-table-column title="更新时间" :width="180">
@@ -54,13 +59,14 @@
           <template #cell="{ record }">
             <a-space>
               <a-button size="mini" type="text" @click="openColumns(record)">列</a-button>
-              <a-button size="mini" type="text" @click="rebuild(record)">重建</a-button>
               <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
             </a-space>
           </template>
         </a-table-column>
       </template>
     </a-table>
+
+    </div>
 
     <a-modal v-model:visible="visible" width="820px" :title="modalTitle" @ok="submit">
       <a-form :model="form" auto-label-width>
@@ -103,7 +109,7 @@
             </div>
             <a-table
               row-key="column_name"
-              size="mini"
+              size="small"
               :bordered="{ cell: true }"
               :pagination="false"
               :loading="columnsLoading"
@@ -135,8 +141,8 @@
             </a-table>
           </div>
         </a-form-item>
-        <a-form-item field="query_window" label="查询窗口">
-          <a-input v-model="form.query_window" placeholder="例如 90d，可留空" />
+        <a-form-item field="retention_window" label="索引保留窗口">
+          <a-input v-model="form.retention_window" placeholder="例如 90d，可留空" />
         </a-form-item>
         <a-form-item field="filter_json" label="过滤JSON">
           <a-textarea v-model="form.filter_json" :auto-size="{ minRows: 4, maxRows: 8 }" />
@@ -160,7 +166,6 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createView, listDatasetColumns, listDatasets, listViews, updateView, upsertViewColumn } from "@/api/storage/metadata";
-import { rebuildRecordView, rebuildTimeSeriesView } from "@/api/storage/view";
 import type { Dataset, DatasetColumn, View, ViewColumn } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import ViewColumnPanel from "./components/view-column-panel.vue";
@@ -172,8 +177,6 @@ import {
   isTimeSeriesDataKind,
   jsonText,
   optionLabel,
-  resolveViewRebuildKind,
-  statusColor,
   statusOptions,
   validateChineseDisplayName,
   validateLowerSnakeId
@@ -203,6 +206,7 @@ import {
 defineOptions({ name: "DataViews" });
 
 const props = withDefaults(defineProps<{
+  pageTitle?: string;
   ownerModule?: OwnerModule;
   viewRole?: ViewRole;
   filterOwnerModules?: OwnerModule[];
@@ -214,6 +218,7 @@ const props = withDefaults(defineProps<{
   excludedPrimaryDatasetIds?: string[];
   excludeLikelyFactorDatasets?: boolean;
 }>(), {
+  pageTitle: "视图列表",
   ownerModule: undefined,
   viewRole: undefined,
   filterOwnerModules: undefined,
@@ -321,7 +326,7 @@ const form = reactive<ViewForm>({
   filter_json: "{}",
   view_freq: "",
   engine: "",
-  query_window: "",
+  retention_window: "",
   status: "active",
   attributes: {}
 });
@@ -410,7 +415,7 @@ function resetForm() {
     filter_json: "{}",
     view_freq: "",
     engine: "",
-    query_window: "",
+    retention_window: "",
     status: "active",
     attributes: {}
   });
@@ -482,7 +487,7 @@ async function submit() {
     grain_keys: defaultViewGrainKeys(datasets.value, form.primary_dataset_id),
     filter_json: filterJSON,
     engine: defaultViewEngine(datasets.value, form.primary_dataset_id),
-    query_window: form.query_window,
+    retention_window: form.retention_window,
     status: form.status,
     attributes: mergeViewAttribution(form.attributes, {
       ownerModule: props.ownerModule,
@@ -561,20 +566,35 @@ function viewFreqLabel(record: View) {
   return freqFromViewFilterJSON(record.filter_json) || "-";
 }
 
-async function rebuild(record: View) {
-  const spaceId = spaceStore.requireSpaceId();
-  const rebuildKind = resolveViewRebuildKind(datasets.value, record.primary_dataset_id);
-  if (rebuildKind === "missing") {
-    Message.warning(`主数据集 ${record.primary_dataset_id || ""} 未加载，无法判断视图类型`);
-    return;
-  }
-  if (rebuildKind === "time_series") {
-    await rebuildTimeSeriesView({ space_id: spaceId, view_id: record.view_id });
-  } else {
-    await rebuildRecordView({ space_id: spaceId, view_id: record.view_id });
-  }
-  Message.success("视图重建任务已提交");
-  await load();
+const viewIndexStateLabels: Record<string, string> = {
+  "1": "准备中",
+  "2": "构建中",
+  "3": "追平中",
+  "4": "待激活",
+  "5": "失败",
+  PREPARING: "准备中",
+  BUILDING: "构建中",
+  CATCHING_UP: "追平中",
+  READY: "待激活",
+  FAILED: "失败",
+};
+
+function normalizedViewIndexState(record: View) {
+  return String(record.index_build?.state ?? "").replace(/^VIEW_INDEX_BUILD_STATE_/, "").toUpperCase();
+}
+
+function viewIndexStateLabel(record: View) {
+  const state = normalizedViewIndexState(record);
+  if (state) return viewIndexStateLabels[state] || state;
+  return record.active_index_id ? "已激活" : "待构建";
+}
+
+function viewIndexStateColor(record: View) {
+  const state = normalizedViewIndexState(record);
+  if (state === "5" || state === "FAILED") return "red";
+  if (state === "1" || state === "PREPARING") return "orange";
+  if (state === "2" || state === "BUILDING" || state === "3" || state === "CATCHING_UP") return "arcoblue";
+  return record.active_index_id ? "green" : "orange";
 }
 
 function onPageChange(page: number) {
@@ -642,18 +662,17 @@ onMounted(load);
 </script>
 
 <style scoped>
-.metadata-page {
-  height: 100%;
-  box-sizing: border-box;
-  padding: 20px 20px 72px;
-  overflow-y: auto;
-}
-
 .page-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 16px;
+}
+
+.page-head__title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
 .page-head h2 {

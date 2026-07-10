@@ -202,6 +202,9 @@ func (s *Store) ReadRows(ctx context.Context, keys []*pb.PrimaryStoreKey, versio
 	if canReadExact(keys, versionRange, page) {
 		return s.readExactRows(keys, order, columnNames, page)
 	}
+	if rows, result, ok, err := s.readRowsForSingleKeyPage(keys, versionRange, order, columnNames, page); ok {
+		return rows, result, err
+	}
 	var rows []*pb.PrimaryStoreRow
 	for _, key := range keys {
 		readRows, err := s.readRowsForKey(key, versionRange, order, columnNames, page)
@@ -213,6 +216,18 @@ func (s *Store) ReadRows(ctx context.Context, keys []*pb.PrimaryStoreKey, versio
 	sortRows(rows, order)
 	paged, result := pageRows(rows, page, order)
 	return paged, result, nil
+}
+
+func (s *Store) readRowsForSingleKeyPage(keys []*pb.PrimaryStoreKey, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, bool, error) {
+	if len(keys) != 1 || order != pb.SortOrder_SORT_ORDER_DESC || page == nil || page.GetCursor() != "" {
+		return nil, nil, false, nil
+	}
+	key := keys[0]
+	if key.GetVersion() != "" {
+		return nil, nil, false, nil
+	}
+	rows, result, err := s.readRowsForKeyDescPage(key, versionRange, columnNames, page)
+	return rows, result, true, err
 }
 
 func (s *Store) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, dataKind pb.DataKind, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
@@ -380,6 +395,48 @@ func (s *Store) readRowsForKey(key *pb.PrimaryStoreKey, versionRange *pb.Version
 		return nil, err
 	}
 	return rows, nil
+}
+
+func (s *Store) readRowsForKeyDescPage(key *pb.PrimaryStoreKey, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	lower, upper := keyBounds(key, versionRange)
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer iter.Close()
+
+	pageNo := uint32(1)
+	if page.GetPage() > 0 {
+		pageNo = page.GetPage()
+	}
+	size := pageSize(page)
+	skip := int((pageNo - 1) * size)
+	rows := make([]*pb.PrimaryStoreRow, 0, size)
+	hasMore := false
+	for valid := iter.Last(); valid; valid = iter.Prev() {
+		if skip > 0 {
+			skip--
+			continue
+		}
+		if uint32(len(rows)) >= size {
+			hasMore = true
+			break
+		}
+		row := &pb.PrimaryStoreRow{}
+		if err := proto.Unmarshal(iter.Value(), row); err != nil {
+			return nil, nil, err
+		}
+		rows = append(rows, filterRowColumns(row, columnNames))
+	}
+	if err := iter.Error(); err != nil {
+		return nil, nil, err
+	}
+	return rows, &pb.PageResult{
+		Page:       pageNo,
+		Size:       size,
+		HasMore:    hasMore,
+		TotalState: pb.TotalState_SKIPPED,
+	}, nil
 }
 
 func validateRow(row *pb.PrimaryStoreRow) error {

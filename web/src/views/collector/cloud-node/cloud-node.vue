@@ -131,6 +131,7 @@
 
         <a-table
           row-key="node_id"
+          size="small"
           :data="cloudNodeList"
           :bordered="{ cell: true }"
           :loading="loading"
@@ -382,6 +383,7 @@
         <a-table
           row-key="regionCode"
           :data="batchPlanItems"
+          :bordered="{ cell: true }"
           :pagination="false"
           size="small"
         >
@@ -425,6 +427,8 @@
         <a-form-item label="选择代码包版本" required>
           <a-table
             row-key="package_id"
+            size="small"
+            :bordered="{ cell: true }"
             :data="availablePackages"
             :loading="packagesLoading"
             :pagination="packagesPagination"
@@ -433,7 +437,6 @@
             :selected-keys="batchDeployForm.selectedPackageId ? [batchDeployForm.selectedPackageId] : []"
             @select="onSelectPackage"
             @page-change="onPackagePageChange"
-            size="small"
           >
             <template #columns>
               <a-table-column title="代码包名称" data-index="package_name" :width="140"></a-table-column>
@@ -494,6 +497,8 @@
         <a-form-item label="选择代码包版本" required>
           <a-table
             row-key="package_id"
+            size="small"
+            :bordered="{ cell: true }"
             :data="singleDeployPackages"
             :loading="singleDeployPackagesLoading"
             :pagination="singleDeployPackagesPagination"
@@ -502,7 +507,6 @@
             :selected-keys="singleDeployForm.selectedPackageId ? [singleDeployForm.selectedPackageId] : []"
             @select="onSelectSingleDeployPackage"
             @page-change="onSingleDeployPackagePageChange"
-            size="small"
           >
             <template #columns>
               <a-table-column title="代码包名称" data-index="package_name" :width="140"></a-table-column>
@@ -2388,16 +2392,8 @@ const handleEditNodeOk = async () => {
 </script>
 
 <style scoped>
-.moox-page {
-  padding: 16px;
-  height: 100%;
-}
-
 .moox-inner {
-  height: 100%;
-  background: #fff;
-  padding: 16px;
-  border-radius: 4px;
+  min-height: 100%;
 }
 
 .moox-inner .a-row {

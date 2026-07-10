@@ -1,5 +1,6 @@
 <template>
-  <div class="admin-page">
+  <div class="moox-page">
+    <div class="moox-inner">
     <div class="page-head">
       <div>
         <h2>空间管理</h2>
@@ -79,6 +80,7 @@
         </a-form-item>
       </a-form>
     </a-modal>
+    </div>
   </div>
 </template>
 
@@ -186,13 +188,6 @@ onMounted(load);
 </script>
 
 <style scoped>
-.admin-page {
-  height: 100%;
-  box-sizing: border-box;
-  padding: 20px 20px 72px;
-  overflow-y: auto;
-}
-
 .page-head {
   display: flex;
   align-items: center;

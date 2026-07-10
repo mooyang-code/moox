@@ -42,6 +42,7 @@
 
         <a-table
           row-key="rule_id"
+          size="small"
           :data="taskList"
           :bordered="{ cell: true }"
           :loading="loading"
@@ -1281,16 +1282,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.moox-page {
-  padding: 16px;
-  height: 100%;
-}
-
 .moox-inner {
-  height: 100%;
-  background: #fff;
-  padding: 16px;
-  border-radius: 4px;
+  min-height: 100%;
 }
 
 .moox-inner .a-row {

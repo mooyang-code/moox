@@ -27,7 +27,7 @@ const (
 	spaceID                     = "crypto_bench"
 	dataSourceID                = "binance"
 	freq                        = "1h"
-	recordDatasetID             = "bench_synthetic_records"
+	recordDatasetID             = "bench_records"
 	metadataRefreshIntervalHint = "snapshotcache 默认 10s"
 )
 
@@ -75,6 +75,7 @@ type servicePorts struct {
 	metadata int
 	query    int
 	primary  int
+	index    int
 	timer    int
 }
 
@@ -258,7 +259,7 @@ func run(ctx context.Context) error {
 
 	datasets := make([]datasetInfo, 0, len(datasetRows))
 	for datasetID, rows := range datasetRows {
-		market := strings.TrimSuffix(strings.TrimPrefix(datasetID, "bench_binance_"), "_kline_1h")
+		market := trimBenchmarkDatasetID(datasetID)
 		datasets = append(datasets, datasetInfo{Market: market, DatasetID: datasetID, ViewID: viewID(market), Rows: rows})
 	}
 	sort.Slice(datasets, func(i, j int) bool { return datasets[i].DatasetID < datasets[j].DatasetID })
@@ -394,7 +395,7 @@ func localizedCommandError(err error) string {
 }
 
 func newServiceEnv(opts options) (*serviceEnv, error) {
-	ports, err := allocatePorts(6)
+	ports, err := allocatePorts(7)
 	if err != nil {
 		return nil, err
 	}
@@ -407,7 +408,7 @@ func newServiceEnv(opts options) (*serviceEnv, error) {
 		storageCfg: filepath.Join(workDir, "storage.yaml"),
 		logPath:    filepath.Join(workDir, "server.log"),
 		ports: servicePorts{
-			admin: ports[0], data: ports[1], metadata: ports[2], query: ports[3], primary: ports[4], timer: ports[5],
+			admin: ports[0], data: ports[1], metadata: ports[2], query: ports[3], primary: ports[4], index: ports[5], timer: ports[6],
 		},
 	}, nil
 }
@@ -451,7 +452,7 @@ func (e *serviceEnv) Start(ctx context.Context, moduleDir string) error {
 		return err
 	}
 	e.cmd = cmd
-	if err := waitPorts([]int{e.ports.data, e.ports.metadata, e.ports.query, e.ports.primary}, time.Minute); err != nil {
+	if err := waitPorts([]int{e.ports.data, e.ports.metadata, e.ports.query, e.ports.primary, e.ports.index}, time.Minute); err != nil {
 		_ = e.Stop()
 		return fmt.Errorf("%w\n----- server.log -----\n%s", err, e.tailLog())
 	}
@@ -504,15 +505,14 @@ func (e *serviceEnv) writeConfig() error {
 		storageRoot,
 		filepath.Join(storageRoot, "metadata", "metadata.db"),
 		filepath.Join(storageRoot, "pebble"),
-		filepath.Join(storageRoot, "duckdb", "views.duckdb"),
-		filepath.Join(storageRoot, "bleve"),
+		filepath.Join(storageRoot, "view-indexes"),
 		filepath.Join(storageRoot, "archive"),
 	)
 	if err := os.WriteFile(e.storageCfg, []byte(storageCfg), 0o644); err != nil {
 		return err
 	}
 	trpcCfg := fmt.Sprintf(trpcConfigTemplate,
-		e.ports.admin, e.ports.data, e.ports.query, e.ports.primary, e.ports.metadata, e.ports.timer,
+		e.ports.admin, e.ports.data, e.ports.query, e.ports.primary, e.ports.metadata, e.ports.index, e.ports.timer,
 	)
 	return os.WriteFile(e.configPath, []byte(trpcCfg), 0o644)
 }
@@ -531,12 +531,14 @@ func (e *serviceEnv) tailLog() string {
 const storageConfigTemplate = `
 storage:
   root: %s
+  roles:
+    - access
+    - view
   metadata:
     path: %s
   devices:
     pebble_path: %s
-    duckdb_path: %s
-    bleve_path: %s
+    view_index_root: %s
     parquet_path: %s
   primary:
     service_name: ""
@@ -577,9 +579,14 @@ server:
       port: %d
       network: tcp
       protocol: trpc
+    - name: trpc.moox.storage.ViewIndex
+      ip: 127.0.0.1
+      port: %d
+      network: tcp
+      protocol: trpc
     - name: trpc.moox.storage.view.timer
       port: %d
-      network: "*/5 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params="
+      network: "*/5 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params=op=maintain"
       protocol: timer
       timeout: 60000
 
@@ -901,10 +908,10 @@ func finishWriteReport(report *writeReport, recorder bench.LatencyRecorder, batc
 
 func createViews(ctx context.Context, meta pb.MetadataClientProxy, datasetRows map[string]int) error {
 	for datasetID := range datasetRows {
-		market := strings.TrimSuffix(strings.TrimPrefix(datasetID, "bench_binance_"), "_kline_1h")
+		market := trimBenchmarkDatasetID(datasetID)
 		viewID := viewID(market)
 		if err := call("CreateView:"+viewID, func() (*pb.RetInfo, error) {
-			rsp, err := meta.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{SpaceId: spaceID, ViewId: viewID, Name: benchViewName(market), PrimaryDatasetId: datasetID, DatasetIds: []string{datasetID}, QueryWindow: "4000d", Status: "active"}})
+			rsp, err := meta.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{SpaceId: spaceID, ViewId: viewID, Name: benchViewName(market), PrimaryDatasetId: datasetID, DatasetIds: []string{datasetID}, FilterJson: `{"freq":"1h"}`, RetentionWindow: "4000d", Status: "active"}})
 			return rsp.GetRetInfo(), err
 		}); err != nil {
 			return err
@@ -912,7 +919,8 @@ func createViews(ctx context.Context, meta pb.MetadataClientProxy, datasetRows m
 		for _, name := range []string{"close", "volume", "quote_volume", "trade_num"} {
 			name := name
 			if err := call("UpsertViewColumn:"+viewID+"."+name, func() (*pb.RetInfo, error) {
-				rsp, err := meta.UpsertViewColumn(ctx, &pb.UpsertViewColumnReq{Column: &pb.ViewColumn{SpaceId: spaceID, ViewId: viewID, ColumnName: name, OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: datasetID + "." + name, ValueType: valueTypeForColumn(name), Attributes: displayNameAttrs(name)}})
+				columnName := datasetID + "." + name
+				rsp, err := meta.UpsertViewColumn(ctx, &pb.UpsertViewColumnReq{Column: &pb.ViewColumn{SpaceId: spaceID, ViewId: viewID, ColumnName: columnName, OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: columnName, ValueType: valueTypeForColumn(name), Attributes: displayNameAttrs(name)}})
 				return rsp.GetRetInfo(), err
 			}); err != nil {
 				return err
@@ -926,8 +934,8 @@ func waitViews(ctx context.Context, query pb.DataViewClientProxy, datasetRows ma
 	out := make(map[string]uint64)
 	err := retry(timeout, 2*time.Second, func() error {
 		for datasetID, want := range datasetRows {
-			market := strings.TrimSuffix(strings.TrimPrefix(datasetID, "bench_binance_"), "_kline_1h")
-			rsp, err := query.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{SpaceId: spaceID, ViewId: viewID(market), Page: &pb.Page{Size: 1}})
+			market := trimBenchmarkDatasetID(datasetID)
+			rsp, err := query.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{SpaceId: spaceID, ViewId: viewID(market), Page: &pb.Page{Size: 1}, TotalMode: pb.TotalMode_FORCE_EXACT})
 			if err != nil {
 				return err
 			}
@@ -997,11 +1005,12 @@ func benchmarkPrimaryKlinePoint(ctx context.Context, data pb.AccessClientProxy, 
 func benchmarkViewReads(ctx context.Context, query pb.DataViewClientProxy, files []bench.KlineFile, opts options) (operationReport, error) {
 	return runConcurrentBenchmark(opts.viewRequests, opts.concurrency, func(worker int, request int) (int, error) {
 		file := files[(worker+request)%len(files)]
+		dataset := datasetID(file.Market)
 		rsp, err := query.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
 			SpaceId:     spaceID,
 			ViewId:      viewID(file.Market),
-			Keys:        []*pb.TimeSeriesKey{{SpaceId: spaceID, DatasetId: datasetID(file.Market), SubjectId: file.SubjectID, Freq: freq}},
-			ColumnNames: []string{"close", "volume"},
+			Keys:        []*pb.TimeSeriesKey{{SpaceId: spaceID, DatasetId: dataset, SubjectId: file.SubjectID, Freq: freq}},
+			ColumnNames: []string{dataset + ".close", dataset + ".volume"},
 			Page:        &pb.Page{Size: opts.pageSize},
 		})
 		if err != nil {
@@ -1340,7 +1349,11 @@ func isRequiredColumn(name string) bool {
 }
 
 func datasetID(market string) string {
-	return "bench_binance_" + market + "_kline_1h"
+	return "bench_" + market + "_1h"
+}
+
+func trimBenchmarkDatasetID(id string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(id, "bench_"), "_1h")
 }
 
 func viewID(market string) string {

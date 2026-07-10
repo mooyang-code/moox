@@ -14,6 +14,19 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type recordingTimeSeriesIndexQuery struct {
+	indexID string
+	req     *pb.QueryTimeSeriesRowsReq
+	rows    []*pb.TimeSeriesRow
+	page    *pb.PageResult
+}
+
+func (q *recordingTimeSeriesIndexQuery) QueryTimeSeriesRows(_ context.Context, indexID string, req *pb.QueryTimeSeriesRowsReq) ([]*pb.ResultColumn, []*pb.TimeSeriesRow, *pb.PageResult, error) {
+	q.indexID = indexID
+	q.req = proto.Clone(req).(*pb.QueryTimeSeriesRowsReq)
+	return []*pb.ResultColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}, q.rows, q.page, nil
+}
+
 type activeSchemaMetadata struct {
 	mu          sync.Mutex
 	view        *pb.View
@@ -60,16 +73,49 @@ func (m *activeSchemaMetadata) UpsertView(ctx context.Context, item *pb.View) (*
 	return nil, errors.New("not implemented")
 }
 
-func (m *activeSchemaMetadata) BeginViewBuild(ctx context.Context, spaceID string, viewID string, targetVersion uint64, resultName string) (*pb.View, error) {
-	return nil, errors.New("not implemented")
-}
+func TestQueryTimeSeriesRowsRoutesActiveIndexToOwner(t *testing.T) {
+	ctx := context.Background()
+	owner := &recordingTimeSeriesIndexQuery{
+		rows: []*pb.TimeSeriesRow{
+			activeSchemaTimeSeriesRow(activeSchemaValue("close", 1)),
+		},
+		page: &pb.PageResult{Page: 1, Size: 5, HasMore: true, TotalState: pb.TotalState_SKIPPED},
+	}
+	service := NewService(ServiceOptions{
+		Metadata:          activeSchemaTestMetadata(pb.DataKind_DATA_KIND_TIME_SERIES, []*pb.ViewColumn{activeSchemaColumn("close")}),
+		TimeSeriesIndexes: owner,
+	})
 
-func (m *activeSchemaMetadata) CompleteViewBuild(ctx context.Context, spaceID string, viewID string, targetVersion uint64, resultName string) error {
-	return errors.New("not implemented")
-}
-
-func (m *activeSchemaMetadata) FailViewBuild(ctx context.Context, spaceID string, viewID string, targetVersion uint64, resultName string, buildErr error) error {
-	return errors.New("not implemented")
+	rsp, err := service.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
+		SpaceId:     "crypto",
+		ViewId:      "spot_view",
+		ColumnNames: []string{"close"},
+		Keys: []*pb.TimeSeriesKey{{
+			SpaceId:   "crypto",
+			DatasetId: "ds1",
+			SubjectId: "BTC-USDT",
+			Freq:      "1m",
+		}},
+		Sorts:     []*pb.SortSpec{{FieldName: "data_time", Desc: true}},
+		Page:      &pb.Page{Page: 1, Size: 5},
+		Limit:     1000,
+		TotalMode: pb.TotalMode_NONE,
+	})
+	if err != nil {
+		t.Fatalf("QueryTimeSeriesRows rpc error: %v", err)
+	}
+	if ret := rsp.GetRetInfo(); ret.GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("ret_info = %#v, want success", ret)
+	}
+	if owner.indexID != activeSchemaActiveIndexID() || owner.req == nil || owner.req.GetPage().GetSize() != 5 {
+		t.Fatalf("owner call = index:%q request:%+v", owner.indexID, owner.req)
+	}
+	if len(rsp.GetRows()) != 1 {
+		t.Fatalf("rows = %+v, want owner rows", rsp.GetRows())
+	}
+	if rsp.GetPageResult().GetTotal() != 0 || rsp.GetPageResult().GetTotalState() != pb.TotalState_SKIPPED {
+		t.Fatalf("page_result = %+v, want skipped total", rsp.GetPageResult())
+	}
 }
 
 func TestQueryTimeSeriesRowsActiveSchemaRejectsNewColumnBeforeSwitch(t *testing.T) {
@@ -98,18 +144,19 @@ func TestSearchRecordRowsActiveSchemaRejectsNewColumnBeforeSwitch(t *testing.T) 
 	defer searchService.Close()
 
 	activeColumns := []*pb.ViewColumn{activeSchemaColumn("title")}
-	if err := searchService.Prepare(ctx, "view_crypto_news_a", activeSchemaViewIndexSchema(activeColumns)); err != nil {
+	indexID := activeSchemaActiveIndexID()
+	if err := searchService.Prepare(ctx, indexID, activeSchemaViewIndexSchema(activeColumns)); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if err := searchService.IndexRecordViewRows(ctx, "view_crypto_news_a", activeColumns, []*pb.RecordRow{
+	if err := searchService.Write(ctx, indexID, viewindex.ViewIndexBatch{Columns: activeColumns, RecordRows: []*pb.RecordRow{
 		activeSchemaRecordRow(activeSchemaStringValue("title", "market update")),
-	}); err != nil {
-		t.Fatalf("IndexRecordViewRows: %v", err)
+	}}); err != nil {
+		t.Fatalf("Write: %v", err)
 	}
 
 	service := NewService(ServiceOptions{
-		Metadata: activeSchemaTestMetadata(pb.DataKind_DATA_KIND_RECORD, activeColumns, activeSchemaColumn("sentiment")),
-		Search:   searchService,
+		Metadata:      activeSchemaTestMetadata(pb.DataKind_DATA_KIND_RECORD, activeColumns, activeSchemaColumn("sentiment")),
+		RecordIndexes: searchService,
 	})
 	rsp, err := service.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{
 		SpaceId:     "crypto",
@@ -129,18 +176,19 @@ func TestSearchRecordRowsActiveSchemaAllowsExistingColumnDuringBuild(t *testing.
 	defer searchService.Close()
 
 	activeColumns := []*pb.ViewColumn{activeSchemaColumn("title")}
-	if err := searchService.Prepare(ctx, "view_crypto_news_a", activeSchemaViewIndexSchema(activeColumns)); err != nil {
+	indexID := activeSchemaActiveIndexID()
+	if err := searchService.Prepare(ctx, indexID, activeSchemaViewIndexSchema(activeColumns)); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if err := searchService.IndexRecordViewRows(ctx, "view_crypto_news_a", activeColumns, []*pb.RecordRow{
+	if err := searchService.Write(ctx, indexID, viewindex.ViewIndexBatch{Columns: activeColumns, RecordRows: []*pb.RecordRow{
 		activeSchemaRecordRow(activeSchemaStringValue("title", "market update")),
-	}); err != nil {
-		t.Fatalf("IndexRecordViewRows: %v", err)
+	}}); err != nil {
+		t.Fatalf("Write: %v", err)
 	}
 
 	service := NewService(ServiceOptions{
-		Metadata: activeSchemaTestMetadata(pb.DataKind_DATA_KIND_RECORD, activeColumns, activeSchemaColumn("sentiment")),
-		Search:   searchService,
+		Metadata:      activeSchemaTestMetadata(pb.DataKind_DATA_KIND_RECORD, activeColumns, activeSchemaColumn("sentiment")),
+		RecordIndexes: searchService,
 	})
 	rsp, err := service.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{
 		SpaceId:     "crypto",
@@ -162,23 +210,50 @@ func TestSearchRecordRowsActiveSchemaAllowsExistingColumnDuringBuild(t *testing.
 	}
 }
 
+func TestSearchRecordRowsRejectsFilterOrSortOnFieldBeforeSwitch(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		filters []*pb.FilterExpr
+		sorts   []*pb.SortSpec
+	}{
+		{name: "filter", filters: []*pb.FilterExpr{{Expr: "sentiment == $value", Args: map[string]*pb.TypedValue{"value": &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "positive"}}}}}},
+		{name: "sort", sorts: []*pb.SortSpec{{FieldName: "sentiment", Desc: true}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := NewService(ServiceOptions{
+				Metadata:      activeSchemaTestMetadata(pb.DataKind_DATA_KIND_RECORD, []*pb.ViewColumn{activeSchemaColumn("title")}, activeSchemaColumn("sentiment")),
+				RecordIndexes: &activeSchemaRecordQuery{},
+			})
+			rsp, err := service.SearchRecordRows(context.Background(), &pb.SearchRecordRowsReq{
+				SpaceId: "crypto", ViewId: "spot_view", ColumnNames: []string{"title"}, Filters: test.filters, Sorts: test.sorts,
+			})
+			if err != nil {
+				t.Fatalf("SearchRecordRows: %v", err)
+			}
+			assertViewNotReady(t, rsp.GetRetInfo())
+		})
+	}
+}
+
+type activeSchemaRecordQuery struct{}
+
+func (*activeSchemaRecordQuery) QueryRecordRows(context.Context, string, string, *pb.SearchRecordRowsReq) ([]*pb.ResultColumn, []*pb.RecordRow, *pb.PageResult, error) {
+	return nil, nil, &pb.PageResult{}, nil
+}
+
 func activeSchemaTestMetadata(kind pb.DataKind, activeColumns []*pb.ViewColumn, newColumns ...*pb.ViewColumn) *activeSchemaMetadata {
 	allColumns := make([]*pb.ViewColumn, 0, len(activeColumns)+len(newColumns))
 	allColumns = append(allColumns, activeColumns...)
 	allColumns = append(allColumns, newColumns...)
 	return &activeSchemaMetadata{
 		view: &pb.View{
-			SpaceId:             "crypto",
-			ViewId:              "spot_view",
-			PrimaryDatasetId:    "ds1",
-			Engine:              activeSchemaEngine(kind),
-			ActiveResult:        activeSchemaActiveResult(kind),
-			BuildingResult:      "view_crypto_spot_b",
-			BuildStatus:         "building",
-			ViewVersion:         2,
-			ActiveViewVersion:   1,
-			BuildingViewVersion: 2,
-			Columns:             activeColumns,
+			SpaceId: "crypto", ViewId: "spot_view", PrimaryDatasetId: "ds1",
+			Engine: activeSchemaEngine(kind), ActiveIndexId: activeSchemaActiveIndexID(),
+			ViewVersion: 2, ActiveViewVersion: 1, ActiveColumns: activeColumns, Columns: allColumns,
+			IndexBuild: &pb.ViewIndexBuild{
+				BuildId: "build-2", IndexId: viewindex.ViewIndexID("crypto", "spot_view", viewindex.SlotB),
+				TargetViewVersion: 2, State: pb.ViewIndexBuild_BUILDING,
+			},
 		},
 		datasetKind: kind,
 		columns:     allColumns,
@@ -192,11 +267,8 @@ func activeSchemaEngine(kind pb.DataKind) string {
 	return "duckdb"
 }
 
-func activeSchemaActiveResult(kind pb.DataKind) string {
-	if kind == pb.DataKind_DATA_KIND_RECORD {
-		return "view_crypto_news_a"
-	}
-	return "view_crypto_spot_a"
+func activeSchemaActiveIndexID() string {
+	return viewindex.ViewIndexID("crypto", "spot_view", viewindex.SlotA)
 }
 
 func activeSchemaColumn(name string) *pb.ViewColumn {
@@ -204,7 +276,7 @@ func activeSchemaColumn(name string) *pb.ViewColumn {
 	if name == "title" || name == "sentiment" {
 		valueType = pb.FieldValueType_FIELD_VALUE_TYPE_STRING
 	}
-	return &pb.ViewColumn{SpaceId: "crypto", ViewId: "spot_view", ColumnName: name, OriginId: "ds1." + name, ValueType: valueType}
+	return &pb.ViewColumn{SpaceId: "crypto", ViewId: "spot_view", ColumnName: name, OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "ds1." + name, ValueType: valueType}
 }
 
 func activeSchemaValue(name string, value float64) *pb.ColumnValue {
@@ -249,7 +321,9 @@ func activeSchemaRecordRow(columns ...*pb.ColumnValue) *pb.RecordRow {
 }
 
 func activeSchemaViewIndexSchema(columns []*pb.ViewColumn) viewindex.ViewIndexSchema {
-	return viewindex.ViewIndexSchema{SpaceID: "crypto", ViewID: "spot_view", Engine: "bleve", Columns: columns}
+	schema := viewindex.ViewIndexSchema{SpaceID: "crypto", ViewID: "spot_view", Engine: "bleve", Columns: columns}
+	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
+	return schema
 }
 
 func assertViewNotReady(t *testing.T, ret *pb.RetInfo) {

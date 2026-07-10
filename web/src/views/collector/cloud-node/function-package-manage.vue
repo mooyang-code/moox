@@ -5,7 +5,7 @@
     @update:visible="handlePackageManageVisibleChange"
     @cancel="handleCancel"
   >
-    <div class="function-package-manage">
+    <div class="function-package-manage" :class="{ 'moox-inner': standalone }">
       <!-- 搜索区域 -->
       <div class="package-toolbar">
         <a-space class="package-filters" wrap>
@@ -52,6 +52,7 @@
 
       <a-table
         row-key="id"
+        size="small"
         :data="packageList"
         :bordered="{ cell: true }"
         :loading="loading"
@@ -404,7 +405,7 @@ const packageManageContainer = computed(() => standalone.value ? 'div' : Modal);
 const packageManageContainerProps = computed(() => {
   if (standalone.value) {
     return {
-      class: 'function-package-page'
+      class: 'moox-page function-package-page'
     };
   }
 
@@ -1045,9 +1046,7 @@ const formatTime = (time: string | undefined) => {
 
 <style scoped>
 .function-package-page {
-  padding: 16px;
   min-height: 100%;
-  background: #fff;
 }
 
 .function-package-manage {

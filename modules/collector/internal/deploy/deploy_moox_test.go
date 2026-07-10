@@ -133,7 +133,7 @@ func TestDeployRuntimeScriptsStopStaleServiceProcesses(t *testing.T) {
 	}
 }
 
-func TestDeployEnablesStorageFailedViewRetryScheduler(t *testing.T) {
+func TestDeployStagesStorageViewMaintenanceScheduler(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -154,6 +154,11 @@ func TestDeployEnablesStorageFailedViewRetryScheduler(t *testing.T) {
 		filepath.Join(root, "examples"),
 	)
 	mustWriteFile(t, filepath.Join(root, "scripts", "deploy-moox.sh"), script, 0o755)
+	mustCopyFile(t,
+		filepath.Join(repoRoot, "scripts", "reset-storage-view-indexes.sh"),
+		filepath.Join(root, "scripts", "reset-storage-view-indexes.sh"),
+		0o755,
+	)
 	for _, name := range []string{
 		"moox-admin",
 		"moox-admin-cli",
@@ -166,21 +171,34 @@ func TestDeployEnablesStorageFailedViewRetryScheduler(t *testing.T) {
 	mustWriteFile(t, filepath.Join(root, "modules", "admin", "config", "app.yaml"), []byte("database:\n  path: ./data/admin.db\n"), 0o644)
 	mustWriteFile(t, filepath.Join(root, "modules", "admin", "config", "gateway.yaml"), []byte("badger:\n  data_dir: \"./data/badger\"\n"), 0o644)
 	mustWriteFile(t, filepath.Join(root, "modules", "storage", "schema", "metadata.sql"), []byte("-- test schema\n"), 0o644)
+	for _, name := range []string{
+		"storage.access.yaml", "storage.view.yaml", "storage.view_builder.yaml", "storage.view_index.yaml", "storage.view_query.yaml",
+		"trpc_go.access.yaml", "trpc_go.view.yaml", "trpc_go.view_builder.yaml", "trpc_go.view_index.yaml", "trpc_go.view_query.yaml",
+	} {
+		mustCopyFile(t,
+			filepath.Join(repoRoot, "modules", "storage", "config", name),
+			filepath.Join(root, "modules", "storage", "config", name),
+			0o644,
+		)
+	}
 	mustWriteFile(t, filepath.Join(root, "modules", "storage", "config", "storage.yaml"), []byte(`storage:
   root: ./var/storage
   metadata:
     path: ./var/storage/metadata/storage_metadata.db
+  devices:
+    pebble_path: ./var/storage/pebble
+    view_index_root: ./var/storage/view-indexes
+    parquet_path: ./var/storage/archive
   eventbus:
     type: memory
     embedded:
       enabled: false
 `), 0o644)
-	mustWriteFile(t, filepath.Join(root, "modules", "storage", "config", "trpc_go.yaml"), []byte(`server:
-  service:
-    - name: trpc.moox.storage.view.retry_failed.timer
-      network: "0 */10 * * * *?disable=1&scheduler=viewBuilderSchedule&params=op=retry_failed"
-      protocol: timer
-`), 0o644)
+	mustCopyFile(t,
+		filepath.Join(repoRoot, "modules", "storage", "config", "trpc_go.yaml"),
+		filepath.Join(root, "modules", "storage", "config", "trpc_go.yaml"),
+		0o644,
+	)
 
 	deployDir := filepath.Join(root, "deploy")
 	stageDir := filepath.Join(root, "stage")
@@ -202,16 +220,16 @@ func TestDeployEnablesStorageFailedViewRetryScheduler(t *testing.T) {
 		t.Fatalf("deploy-moox.sh failed: %v\n%s", err, out)
 	}
 
-	got, err := os.ReadFile(filepath.Join(deployDir, "storage", "config", "trpc_go.yaml"))
+	got, err := os.ReadFile(filepath.Join(deployDir, "storage", "config", "trpc_go.view_builder.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(got)
-	if !strings.Contains(text, "disable=0&scheduler=viewBuilderSchedule&params=op=retry_failed") {
-		t.Fatalf("storage retry_failed scheduler was not enabled in deployed config:\n%s", text)
+	if !strings.Contains(text, "scheduler=viewBuilderSchedule") || !strings.Contains(text, "params=op=maintain") {
+		t.Fatalf("storage maintenance scheduler is missing from deployed config:\n%s", text)
 	}
-	if strings.Contains(text, "disable=1&scheduler=viewBuilderSchedule&params=op=retry_failed") {
-		t.Fatalf("storage retry_failed scheduler still disabled in deployed config:\n%s", text)
+	if strings.Contains(text, "retry_failed") {
+		t.Fatalf("legacy retry_failed scheduler remains in deployed config:\n%s", text)
 	}
 
 	gotStorage, err := os.ReadFile(filepath.Join(deployDir, "storage", "config", "storage.yaml"))
@@ -260,4 +278,13 @@ func mustWriteFile(t *testing.T, path string, data []byte, perm os.FileMode) {
 	if err := os.WriteFile(path, data, perm); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func mustCopyFile(t *testing.T, source string, destination string, perm os.FileMode) {
+	t.Helper()
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, destination, data, perm)
 }

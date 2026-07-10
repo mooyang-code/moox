@@ -16,7 +16,8 @@ type Metadata interface {
 	ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error)
 	GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error)
 	UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
-	BeginViewBuild(ctx context.Context, spaceID string, viewID string, targetVersion uint64, resultName string) (*pb.View, error)
-	CompleteViewBuild(ctx context.Context, spaceID string, viewID string, targetVersion uint64, resultName string) error
-	FailViewBuild(ctx context.Context, spaceID string, viewID string, targetVersion uint64, resultName string, buildErr error) error
+	ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewIndexBuildReq) (*pb.ViewIndexBuild, bool, error)
+	UpdateViewIndexBuild(ctx context.Context, req *pb.UpdateViewIndexBuildReq) (*pb.ViewIndexBuild, error)
+	ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndexReq) (*pb.View, error)
+	FailViewIndexBuild(ctx context.Context, req *pb.FailViewIndexBuildReq) (*pb.ViewIndexBuild, error)
 }

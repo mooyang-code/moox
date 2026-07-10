@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	viewsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
@@ -15,8 +14,8 @@ func (s *Service) processTimeSeriesBatch(ctx context.Context, keys []*pb.TimeSer
 	if len(keys) == 0 {
 		return nil
 	}
-	if s == nil || s.reader == nil || s.metadata == nil || s.views == nil {
-		return errors.New("view builder time-series processor requires reader, metadata client and view writer")
+	if s == nil || s.reader == nil || s.metadata == nil {
+		return errors.New("view builder time-series processor requires reader and metadata client")
 	}
 	rows, err := s.currentTimeSeriesRows(ctx, keys)
 	if err != nil {
@@ -43,31 +42,45 @@ func (s *Service) processTimeSeriesBatch(ctx context.Context, keys []*pb.TimeSer
 			if !strings.EqualFold(item.GetEngine(), "duckdb") {
 				continue
 			}
+			engine, err := s.engine(item.GetEngine())
+			if err != nil {
+				return err
+			}
 			columns, _, err := s.metadata.ListViewColumns(ctx, item.GetSpaceId(), item.GetViewId(), &pb.Page{Size: 10000})
 			if err != nil {
 				return err
 			}
-			mapped, ok, err := viewsvc.TimeSeriesRowsForView(ctx, item, columns, datasetRows, s.readTimeSeriesProjectionRow)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				if err := markPending(ctx, s.metadata, item); err != nil {
+			writable := writableIndexSet(item)
+			if writable[item.GetActiveIndexId()] {
+				activeColumns := item.GetActiveColumns()
+				if len(activeColumns) == 0 {
+					return errors.New("view " + item.GetViewId() + " has an active index without an active schema")
+				}
+				mapped, ok, err := viewsvc.FilteredTimeSeriesRowsForView(ctx, item, activeColumns, datasetRows, s.readTimeSeriesProjectionRows)
+				if err != nil {
 					return err
 				}
-				continue
-			}
-			if len(mapped) == 0 {
-				continue
-			}
-			if item.GetActiveResult() != "" {
-				if err := s.views.InsertRows(ctx, item.GetActiveResult(), mapped); err != nil {
-					return err
+				if !ok {
+					return errors.New("view " + item.GetViewId() + " active schema is not projectable")
+				}
+				if len(mapped) > 0 {
+					if err := engine.Write(ctx, item.GetActiveIndexId(), viewIndexBatch(item, activeColumns, mapped, nil, false)); err != nil {
+						return err
+					}
 				}
 			}
-			if viewindex.BuildingIndexWritable(item) {
-				if err := s.views.InsertRows(ctx, item.GetBuildingResult(), mapped); err != nil {
+			if writable[item.GetIndexBuild().GetIndexId()] && item.GetIndexBuild().GetIndexId() != item.GetActiveIndexId() {
+				mapped, ok, err := viewsvc.FilteredTimeSeriesRowsForView(ctx, item, columns, datasetRows, s.readTimeSeriesProjectionRows)
+				if err != nil {
 					return err
+				}
+				if !ok {
+					return errors.New("view " + item.GetViewId() + " build schema is not projectable")
+				}
+				if len(mapped) > 0 {
+					if err := engine.Write(ctx, item.GetIndexBuild().GetIndexId(), viewIndexBatch(item, columns, mapped, nil, true)); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -76,33 +89,21 @@ func (s *Service) processTimeSeriesBatch(ctx context.Context, keys []*pb.TimeSer
 }
 
 func (s *Service) currentTimeSeriesRows(ctx context.Context, keys []*pb.TimeSeriesKey) ([]*pb.TimeSeriesRow, error) {
-	var out []*pb.TimeSeriesRow
+	queryKeys := make([]*pb.TimeSeriesKey, 0, len(keys))
 	for _, key := range keys {
 		if key == nil {
 			continue
 		}
-		rsp, err := s.reader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{Keys: []*pb.TimeSeriesKey{proto.Clone(key).(*pb.TimeSeriesKey)}})
-		if err != nil {
-			return nil, err
-		}
-		if rsp == nil {
-			return nil, errors.New("read time-series rows returned nil response")
-		}
-		if err := retInfoError(rsp.GetRetInfo()); err != nil {
-			return nil, err
-		}
-		out = append(out, rsp.GetRows()...)
+		queryKeys = append(queryKeys, proto.Clone(key).(*pb.TimeSeriesKey))
 	}
-	return out, nil
+	return s.readTimeSeriesProjectionRows(ctx, queryKeys)
 }
 
-func (s *Service) readTimeSeriesProjectionRow(ctx context.Context, base *pb.TimeSeriesKey, datasetID string) (*pb.TimeSeriesRow, error) {
-	if base == nil {
+func (s *Service) readTimeSeriesProjectionRows(ctx context.Context, keys []*pb.TimeSeriesKey) ([]*pb.TimeSeriesRow, error) {
+	if len(keys) == 0 {
 		return nil, nil
 	}
-	key := proto.Clone(base).(*pb.TimeSeriesKey)
-	key.DatasetId = datasetID
-	rsp, err := s.reader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{Keys: []*pb.TimeSeriesKey{key}})
+	rsp, err := s.reader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{Keys: keys})
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +113,5 @@ func (s *Service) readTimeSeriesProjectionRow(ctx context.Context, base *pb.Time
 	if err := retInfoError(rsp.GetRetInfo()); err != nil {
 		return nil, err
 	}
-	if len(rsp.GetRows()) == 0 {
-		return nil, nil
-	}
-	return rsp.GetRows()[0], nil
+	return rsp.GetRows(), nil
 }

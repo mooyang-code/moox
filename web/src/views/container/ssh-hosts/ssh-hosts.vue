@@ -38,6 +38,7 @@
       <!-- 主机列表 -->
       <a-table
         row-key="id"
+        size="small"
         :loading="loading"
         :data="hostList"
         :bordered="{ cell: true }"
@@ -508,16 +509,10 @@ onMounted(() => {
 
 <style lang="scss" scoped>
 .moox-page {
-  padding: 16px;
-  height: 100%;
-
   .moox-inner {
-    background: #fff;
-    padding: 16px;
-    border-radius: 4px;
-    height: 100%;
     display: flex;
     flex-direction: column;
+    min-height: 100%;
 
     :deep(.arco-row) {
       margin-top: 2px;

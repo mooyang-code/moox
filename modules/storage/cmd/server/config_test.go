@@ -47,12 +47,14 @@ func TestStorageSplitViewRolePredicates(t *testing.T) {
 		roles       []string
 		wantQuery   bool
 		wantBuilder bool
+		wantIndex   bool
 	}{
-		{name: "legacy view", roles: []string{"view"}, wantQuery: true, wantBuilder: true},
+		{name: "bundled view", roles: []string{"view"}, wantQuery: true, wantBuilder: true, wantIndex: true},
 		{name: "query only", roles: []string{"view_query"}, wantQuery: true},
 		{name: "builder only", roles: []string{"view_builder"}, wantBuilder: true},
+		{name: "index owner only", roles: []string{"view_index"}, wantIndex: true},
 		{name: "access only", roles: []string{"access"}},
-		{name: "all", roles: []string{"all"}, wantQuery: true, wantBuilder: true},
+		{name: "all", roles: []string{"all"}, wantQuery: true, wantBuilder: true, wantIndex: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -63,6 +65,20 @@ func TestStorageSplitViewRolePredicates(t *testing.T) {
 			if got := shouldStartViewBuilderRole(cfg); got != tt.wantBuilder {
 				t.Fatalf("shouldStartViewBuilderRole = %v, want %v", got, tt.wantBuilder)
 			}
+			if got := shouldStartViewIndexRole(cfg); got != tt.wantIndex {
+				t.Fatalf("shouldStartViewIndexRole = %v, want %v", got, tt.wantIndex)
+			}
 		})
+	}
+}
+
+func TestMaintenanceOwnerIDUsesConfiguredValueOrUniqueStartupSuffix(t *testing.T) {
+	if got := maintenanceOwnerID("builder-fixed"); got != "builder-fixed" {
+		t.Fatalf("configured owner ID = %q", got)
+	}
+	left := maintenanceOwnerID("")
+	right := maintenanceOwnerID("")
+	if left == "" || right == "" || left == right {
+		t.Fatalf("generated owner IDs = %q/%q, want unique non-empty IDs", left, right)
 	}
 }

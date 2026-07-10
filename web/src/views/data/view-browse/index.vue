@@ -1,8 +1,11 @@
 <template>
-  <div class="view-browse-page">
+  <div class="moox-page view-browse-page">
+    <div class="moox-inner">
     <div class="page-head">
-      <div>
-        <h2>{{ props.pageTitle }}</h2>
+      <div class="page-head__title">
+        <slot name="page-title">
+          <h2>{{ props.pageTitle }}</h2>
+        </slot>
       </div>
       <a-space>
         <a-button :disabled="!selectedSpaceId" :loading="metaLoading || contextLoading" @click="loadMeta">
@@ -12,10 +15,6 @@
         <a-button :disabled="!activeView" :loading="loading" @click="reloadRows">
           <template #icon><icon-sync /></template>
           重新查询
-        </a-button>
-        <a-button :disabled="!activeView" :loading="rebuildLoading" @click="rebuildActiveView">
-          <template #icon><icon-refresh /></template>
-          重建视图
         </a-button>
       </a-space>
     </div>
@@ -35,13 +34,10 @@
         <section class="view-status-line">
           <span>{{ currentDatasetName }}</span>
           <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
-          <a-tag size="small" :color="activeView?.active_result ? 'green' : 'orange'">
-            {{ activeView?.active_result ? '已构建' : '未构建' }}
+          <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
+            {{ activeView?.active_index_id ? '已构建' : '未构建' }}
           </a-tag>
           <span v-if="activeView?.active_view_version">活跃版本 {{ activeView.active_view_version }}</span>
-          <span v-if="mode === 'time_series' && hasQueried">
-            已加载 {{ tableRows.length }} 条<span v-if="previewHasMore">+</span>
-          </span>
         </section>
 
         <a-alert v-if="queryError" class="query-alert" type="error" show-icon>{{ queryError }}</a-alert>
@@ -242,6 +238,8 @@
       </template>
     </a-spin>
 
+    </div>
+
     <a-modal v-model:visible="detailVisible" title="视图数据详情" width="820px" :footer="false">
       <div v-if="detailRow" class="detail-body">
         <a-descriptions :column="2" bordered>
@@ -316,7 +314,7 @@ import { Message } from '@arco-design/web-vue';
 import { TooltipShowRule, TooltipShowType, dispose as disposeKlineChartInstance, init as initKlineChart } from 'klinecharts';
 import type { Chart } from 'klinecharts';
 import { listDatasetColumns, listDatasets, listFactors, listFields, listViewColumns, listViews } from '@/api/storage/metadata';
-import { queryTimeSeriesRows, rebuildRecordView, rebuildTimeSeriesView, searchRecordRows } from '@/api/storage/view';
+import { queryTimeSeriesRows, searchRecordRows } from '@/api/storage/view';
 import type { Dataset, DatasetColumn, Factor, Field, FieldValueType, PageResult, RecordRow, TimeSeriesRow, View, ViewColumn } from '@/api/storage/types';
 import { useSpaceStore } from '@/store/modules/space';
 import {
@@ -427,7 +425,6 @@ const sortState = reactive<{ fieldName: string; direction: ViewSortDirection }>(
 const metaLoading = ref(false);
 const contextLoading = ref(false);
 const loading = ref(false);
-const rebuildLoading = ref(false);
 const queryError = ref('');
 const hasQueried = ref(false);
 const previewHasMore = ref(false);
@@ -792,28 +789,6 @@ async function loadRecordViewRows() {
     Message.error(queryError.value);
   } finally {
     loading.value = false;
-  }
-}
-
-async function rebuildActiveView() {
-  const view = activeView.value;
-  if (!view) return;
-  const space_id = spaceStore.requireSpaceId();
-  rebuildLoading.value = true;
-  try {
-    if (mode.value === 'time_series') {
-      await rebuildTimeSeriesView({ space_id, view_id: view.view_id });
-    } else if (mode.value === 'record') {
-      await rebuildRecordView({ space_id, view_id: view.view_id });
-    } else {
-      throw new Error('无法识别该视图的主数据集类型');
-    }
-    Message.success('视图重建任务已提交');
-    await loadMeta();
-  } catch (error) {
-    Message.error(error instanceof Error ? error.message : '重建视图失败');
-  } finally {
-    rebuildLoading.value = false;
   }
 }
 
@@ -1248,10 +1223,6 @@ watch(klineVisible, (visible) => {
   width: 100%;
   height: 100%;
   min-width: 0;
-  box-sizing: border-box;
-  padding: 20px 20px 72px;
-  padding-bottom: 72px;
-  overflow-y: auto;
 }
 
 .view-browse-page :deep(.arco-spin) {
@@ -1265,6 +1236,12 @@ watch(klineVisible, (visible) => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 16px;
+}
+
+.page-head__title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
 .page-head h2 {

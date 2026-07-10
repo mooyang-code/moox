@@ -2,12 +2,9 @@ package view
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
-	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -30,10 +27,6 @@ func metadataRetInfoError(ret *pb.RetInfo) error {
 	return fmt.Errorf("metadata rpc failed: code=%d msg=%s", ret.GetCode(), ret.GetMsg())
 }
 
-func remoteMetadataNow() string {
-	return time.Now().UTC().Format(time.RFC3339Nano)
-}
-
 func (m *RemoteMetadata) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
 	rsp, err := m.proxy.GetView(ctx, &pb.GetViewReq{SpaceId: spaceID, ViewId: viewID})
 	if err != nil {
@@ -43,6 +36,17 @@ func (m *RemoteMetadata) GetView(ctx context.Context, spaceID string, viewID str
 		return nil, err
 	}
 	return rsp.GetView(), nil
+}
+
+func (m *RemoteMetadata) GetViewIndexBuild(ctx context.Context, spaceID string, viewID string) (*pb.ViewIndexBuild, error) {
+	item, err := m.GetView(ctx, spaceID, viewID)
+	if err != nil {
+		return nil, err
+	}
+	if item.GetIndexBuild() == nil {
+		return nil, fmt.Errorf("view %s/%s has no index build", spaceID, viewID)
+	}
+	return item.GetIndexBuild(), nil
 }
 
 func (m *RemoteMetadata) ListViews(ctx context.Context, spaceID string, datasetID string, status string, page *pb.Page) ([]*pb.View, *pb.PageResult, error) {
@@ -105,66 +109,46 @@ func (m *RemoteMetadata) UpsertView(ctx context.Context, item *pb.View) (*pb.Vie
 	return rsp.GetView(), nil
 }
 
-func (m *RemoteMetadata) BeginViewBuild(ctx context.Context, spaceID string, viewID string, targetVersion uint64, resultName string) (*pb.View, error) {
-	if spaceID == "" || viewID == "" || targetVersion == 0 || resultName == "" {
-		return nil, errors.New("space_id, view_id, target_version and result_name are required")
+func (m *RemoteMetadata) ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewIndexBuildReq) (*pb.ViewIndexBuild, bool, error) {
+	rsp, err := m.proxy.ClaimViewIndexBuild(ctx, req)
+	if err != nil {
+		return nil, false, err
 	}
-	item, err := m.GetView(ctx, spaceID, viewID)
+	if err := metadataRetInfoError(rsp.GetRetInfo()); err != nil {
+		return nil, false, err
+	}
+	return rsp.GetBuild(), rsp.GetResumed(), nil
+}
+
+func (m *RemoteMetadata) UpdateViewIndexBuild(ctx context.Context, req *pb.UpdateViewIndexBuildReq) (*pb.ViewIndexBuild, error) {
+	rsp, err := m.proxy.UpdateViewIndexBuild(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	if item.GetViewVersion() < targetVersion {
-		return nil, fmt.Errorf("view %s/%s version %d is older than target %d", spaceID, viewID, item.GetViewVersion(), targetVersion)
+	if err := metadataRetInfoError(rsp.GetRetInfo()); err != nil {
+		return nil, err
 	}
-	copied := proto.Clone(item).(*pb.View)
-	copied.BuildStatus = "building"
-	copied.BuildingViewVersion = targetVersion
-	copied.BuildingResult = resultName
-	copied.BuildError = ""
-	copied.BuildStartedAt = remoteMetadataNow()
-	copied.BuildFinishedAt = ""
-	return m.UpsertView(ctx, copied)
+	return rsp.GetBuild(), nil
 }
 
-func (m *RemoteMetadata) CompleteViewBuild(ctx context.Context, spaceID string, viewID string, targetVersion uint64, resultName string) error {
-	item, err := m.GetView(ctx, spaceID, viewID)
+func (m *RemoteMetadata) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndexReq) (*pb.View, error) {
+	rsp, err := m.proxy.ActivateViewIndex(ctx, req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if item.GetViewVersion() != targetVersion {
-		return fmt.Errorf("view %s/%s version changed from target %d to %d", spaceID, viewID, targetVersion, item.GetViewVersion())
+	if err := metadataRetInfoError(rsp.GetRetInfo()); err != nil {
+		return nil, err
 	}
-	if item.GetBuildingViewVersion() != targetVersion || item.GetBuildingResult() != resultName {
-		return fmt.Errorf("view %s/%s building target changed", spaceID, viewID)
-	}
-	copied := proto.Clone(item).(*pb.View)
-	copied.ActiveResult = resultName
-	copied.ActiveViewVersion = targetVersion
-	copied.BuildingViewVersion = 0
-	copied.BuildingResult = ""
-	copied.BuildStatus = "active"
-	copied.BuildError = ""
-	copied.BuildFinishedAt = remoteMetadataNow()
-	_, err = m.UpsertView(ctx, copied)
-	return err
+	return rsp.GetView(), nil
 }
 
-func (m *RemoteMetadata) FailViewBuild(ctx context.Context, spaceID string, viewID string, targetVersion uint64, resultName string, buildErr error) error {
-	item, err := m.GetView(ctx, spaceID, viewID)
+func (m *RemoteMetadata) FailViewIndexBuild(ctx context.Context, req *pb.FailViewIndexBuildReq) (*pb.ViewIndexBuild, error) {
+	rsp, err := m.proxy.FailViewIndexBuild(ctx, req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if item.GetBuildingViewVersion() != targetVersion || item.GetBuildingResult() != resultName {
-		return fmt.Errorf("view %s/%s building target changed", spaceID, viewID)
+	if err := metadataRetInfoError(rsp.GetRetInfo()); err != nil {
+		return nil, err
 	}
-	copied := proto.Clone(item).(*pb.View)
-	copied.BuildStatus = "failed"
-	if buildErr != nil {
-		copied.BuildError = buildErr.Error()
-	} else {
-		copied.BuildError = "build failed"
-	}
-	copied.BuildFinishedAt = remoteMetadataNow()
-	_, err = m.UpsertView(ctx, copied)
-	return err
+	return rsp.GetBuild(), nil
 }

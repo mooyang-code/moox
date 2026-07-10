@@ -1,5 +1,6 @@
 <template>
-  <div class="sync-page">
+  <div class="moox-page">
+    <div class="moox-inner">
     <div class="page-head">
       <div>
         <h2>数据导入</h2>
@@ -122,6 +123,7 @@
         </a-table>
       </section>
     </template>
+    </div>
   </div>
 </template>
 
@@ -388,13 +390,6 @@ onMounted(loadDatasets);
 </script>
 
 <style scoped>
-.sync-page {
-  height: 100%;
-  box-sizing: border-box;
-  padding: 20px 20px 72px;
-  overflow-y: auto;
-}
-
 .page-head,
 .preview-head {
   display: flex;

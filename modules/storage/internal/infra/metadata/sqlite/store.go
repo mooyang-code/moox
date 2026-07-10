@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -21,6 +22,7 @@ type Options struct {
 type Store struct {
 	db         *sql.DB
 	schemaPath string
+	now        func() time.Time
 }
 
 func Open(ctx context.Context, opts Options) (*Store, error) {
@@ -49,7 +51,7 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db, schemaPath: opts.SchemaPath}, nil
+	return &Store{db: db, schemaPath: opts.SchemaPath, now: time.Now}, nil
 }
 
 func withPragmas(path string) string {
@@ -74,6 +76,9 @@ func (s *Store) InitSchema(ctx context.Context) error {
 	if s.schemaPath == "" {
 		return errors.New("metadata schema path is required for schema initialization")
 	}
+	if err := s.checkSchemaVersion(ctx); err != nil {
+		return err
+	}
 	schema, err := os.ReadFile(s.schemaPath)
 	if err != nil {
 		return err
@@ -83,6 +88,44 @@ func (s *Store) InitSchema(ctx context.Context) error {
 	}
 	_, err = s.db.ExecContext(ctx, string(schema))
 	return err
+}
+
+const metadataSchemaVersion = "2"
+
+func (s *Store) checkSchemaVersion(ctx context.Context) error {
+	var schemaTableCount int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM sqlite_master
+		WHERE type = 'table' AND name = 't_schema_meta'
+	`).Scan(&schemaTableCount); err != nil {
+		return err
+	}
+	if schemaTableCount == 0 {
+		var existingTables int
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT COUNT(1) FROM sqlite_master
+			WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+		`).Scan(&existingTables); err != nil {
+			return err
+		}
+		if existingTables > 0 {
+			return errors.New("incompatible storage metadata schema; reset metadata database")
+		}
+		return nil
+	}
+	var version string
+	err := s.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && version != metadataSchemaVersion) {
+		return errors.New("incompatible storage metadata schema; reset metadata database")
+	}
+	return err
+}
+
+func (s *Store) nowUTC() time.Time {
+	if s != nil && s.now != nil {
+		return s.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (s *Store) TableNames(ctx context.Context) ([]string, error) {

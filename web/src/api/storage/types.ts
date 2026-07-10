@@ -229,9 +229,8 @@ export interface View {
   grain_keys?: string[];
   filter_json?: string;
   engine?: string;
-  query_window?: string;
-  active_result?: string;
-  build_status?: string;
+  retention_window?: string;
+  active_index_id?: string;
   status: string;
   columns?: ViewColumn[];
   created_at?: string;
@@ -239,11 +238,34 @@ export interface View {
   attributes?: Record<string, string>;
   view_version?: number | string;
   active_view_version?: number | string;
-  building_view_version?: number | string;
-  building_result?: string;
-  build_error?: string;
-  build_started_at?: string;
-  build_finished_at?: string;
+  active_columns?: ViewColumn[];
+  active_schema_hash?: string;
+  active_coverage_start?: string;
+  active_coverage_end?: string;
+  index_build?: ViewIndexBuild;
+}
+
+export interface ViewIndexBuild {
+  space_id: string;
+  view_id: string;
+  build_id: string;
+  index_id: string;
+  engine: string;
+  target_view_version: number | string;
+  state: number | string;
+  owner_id?: string;
+  lease_expires_at?: string;
+  cursor_json?: string;
+  snapshot_end?: string;
+  coverage_start?: string;
+  coverage_end?: string;
+  entries_written?: number | string;
+  schema_hash?: string;
+  columns?: ViewColumn[];
+  started_at?: string;
+  updated_at?: string;
+  finished_at?: string;
+  error?: string;
 }
 
 export interface ViewColumn {

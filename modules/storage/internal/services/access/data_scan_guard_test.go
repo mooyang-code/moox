@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/core/router"
+	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
@@ -19,6 +21,25 @@ func TestScanAllPrimaryRowsStopsAtGuardLimit(t *testing.T) {
 	}
 	if got := err.Error(); got == "" || !containsAll(got, "dataset scan", fmt.Sprint(maxDatasetScanRows)) {
 		t.Fatalf("scanAllPrimaryRows() error = %q, want dataset scan guard with limit", got)
+	}
+}
+
+func TestScanTimeSeriesRowsPagesPrimaryStoreWithoutDatasetGuard(t *testing.T) {
+	svc := &Service{
+		primary: fakePrimaryScanner{rowsPerPage: 1000, pages: (maxDatasetScanRows / 1000) + 2},
+		router:  router.NewResolver(fakeRouteReader{}),
+	}
+
+	rows, page, err := svc.ScanTimeSeriesRows(context.Background(), "crypto", "kline",
+		&pb.TimeRange{StartTime: "2026-07-09T00:00:00Z"}, nil, &pb.Page{Size: 1000})
+	if err != nil {
+		t.Fatalf("ScanTimeSeriesRows() error = %v, want paged scan to bypass broad dataset guard", err)
+	}
+	if len(rows) != 1000 {
+		t.Fatalf("ScanTimeSeriesRows() rows = %d, want one page of 1000 rows", len(rows))
+	}
+	if page == nil || !page.GetHasMore() || page.GetNextCursor() == "" {
+		t.Fatalf("ScanTimeSeriesRows() page = %+v, want has_more with next cursor", page)
 	}
 }
 
@@ -46,8 +67,8 @@ func (f fakePrimaryScanner) ScanRows(_ context.Context, _ *pb.PrimaryStoreTarget
 			SpaceId:   "crypto",
 			DatasetId: "kline",
 			DataKind:  req.GetDataKind(),
-			Key:       fmt.Sprintf("row-%d-%d", pageNo, i),
-			Version:   fmt.Sprintf("%d", pageNo),
+			Key:       factkey.BuildTimeSeriesDataKey(fmt.Sprintf("sub-%d-%d", pageNo, i), "1m", nil),
+			Version:   fmt.Sprintf("2026-07-09T00:00:%02dZ", i%60),
 		}}
 	}
 	next := pageNo + 1
@@ -55,6 +76,27 @@ func (f fakePrimaryScanner) ScanRows(_ context.Context, _ *pb.PrimaryStoreTarget
 		HasMore:    int(pageNo) < f.pages,
 		NextCursor: fmt.Sprint(next),
 	}, nil
+}
+
+type fakeRouteReader struct{}
+
+func (fakeRouteReader) ListPrimaryStoreRoutes(context.Context, string, string, string, string, *pb.Page) ([]*pb.PrimaryStoreRoute, *pb.PageResult, error) {
+	return []*pb.PrimaryStoreRoute{{
+		SpaceId:        "crypto",
+		DatasetId:      "kline",
+		RouteId:        "route-1",
+		SubjectPattern: "*",
+		NodeId:         "node-1",
+		Status:         "active",
+	}}, &pb.PageResult{}, nil
+}
+
+func (fakeRouteReader) GetPrimaryStoreNode(context.Context, string) (*pb.PrimaryStoreNode, error) {
+	return &pb.PrimaryStoreNode{NodeId: "node-1", Status: "active"}, nil
+}
+
+func (fakeRouteReader) ListDevices(context.Context, string, string, *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
+	return []*pb.Device{{DeviceId: "dev-1", Engine: "pebble", Status: "active"}}, &pb.PageResult{}, nil
 }
 
 func containsAll(value string, parts ...string) bool {

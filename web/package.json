@@ -22,6 +22,8 @@
     "dev": "vite",
     "build:dev": "vue-tsc && vite build --mode development",
     "build:prod": "vue-tsc && vite build --mode production",
+    "check:data-browse": "node scripts/check-data-browse-parity.mjs",
+    "check:detail-pages": "node scripts/check-detail-page-style.mjs",
     "check:menu": "node scripts/check-menu-structure.mjs",
     "preview": "vite preview",
     "lint:eslint": "eslint --fix --ext .js,.ts,.vue ./src",

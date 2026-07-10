@@ -17,6 +17,7 @@
       
       <a-table
         row-key="account_id"
+        size="small"
         :data="accountList"
         :bordered="{ cell: true }"
         :loading="loading"

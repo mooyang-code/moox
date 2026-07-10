@@ -333,13 +333,26 @@ patch_configs() {
   fi
 
   [[ "${WITH_STORAGE}" -eq 1 ]] || return 0
-  perl -0pi -e 's#root:\s*\./var/storage#root: ../data/storage#g; s#path:\s*\./var/storage/metadata/storage_metadata\.db#path: ../data/storage/metadata/storage_metadata.db#g; s#pebble_path:\s*\./var/storage/pebble#pebble_path: ../data/storage/pebble#g; s#duckdb_path:\s*\./var/storage/duckdb/views\.duckdb#duckdb_path: ../data/storage/duckdb/views.duckdb#g; s#bleve_path:\s*\./var/storage/bleve#bleve_path: ../data/storage/bleve#g; s#parquet_path:\s*\./var/storage/archive#parquet_path: ../data/storage/archive#g' \
-    "${STAGE_DIR}/storage/config/storage.yaml"
-  # Production factor/view pipelines depend on Storage's embedded NATS/JetStream bus.
+  for conf in "${STAGE_DIR}"/storage/config/storage*.yaml; do
+    perl -0pi -e 's#root:\s*\./var/storage#root: ../data/storage#g; s#path:\s*\./var/storage/metadata/storage_metadata\.db#path: ../data/storage/metadata/storage_metadata.db#g; s#pebble_path:\s*\./var/storage/pebble#pebble_path: ../data/storage/pebble#g; s#view_index_root:\s*\./var/storage/view-indexes#view_index_root: ../data/storage/view-indexes#g; s#parquet_path:\s*\./var/storage/archive#parquet_path: ../data/storage/archive#g' \
+      "${conf}"
+  done
+  # The split access process owns the embedded NATS/JetStream bus used by writers and view builders.
   perl -0pi -e 's#type:\s*memory#type: nats#g; s#enabled:\s*false#enabled: true#g' \
-    "${STAGE_DIR}/storage/config/storage.yaml"
-  perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage#g; s#network:\s*"0 \*/10 \* \* \* \*\?disable=1&scheduler=viewBuilderSchedule&params=op=retry_failed"#network: "0 */10 * * * *?disable=0&scheduler=viewBuilderSchedule&params=op=retry_failed"#g' \
+    "${STAGE_DIR}/storage/config/storage.yaml" \
+    "${STAGE_DIR}/storage/config/storage.access.yaml"
+  perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage#g' \
     "${STAGE_DIR}/storage/config/trpc_go.yaml"
+  perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage-access#g' \
+    "${STAGE_DIR}/storage/config/trpc_go.access.yaml"
+  perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage-view#g' \
+    "${STAGE_DIR}/storage/config/trpc_go.view.yaml"
+  perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage-view-builder#g; s#^(\s*)timeout:\s*60000#$1timeout: 900000#mg' \
+    "${STAGE_DIR}/storage/config/trpc_go.view_builder.yaml"
+  perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage-view-query#g' \
+    "${STAGE_DIR}/storage/config/trpc_go.view_query.yaml"
+  perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage-view-index#g' \
+    "${STAGE_DIR}/storage/config/trpc_go.view_index.yaml"
 }
 
 write_runtime_scripts() {
@@ -355,7 +368,7 @@ WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
-mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/storage" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/monitor"
+mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/storage" "${ROOT}/logs/storage-access" "${ROOT}/logs/storage-view-index" "${ROOT}/logs/storage-view-builder" "${ROOT}/logs/storage-view-query" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/monitor"
 
 stop_if_running() {
   local name="$1"
@@ -405,9 +418,9 @@ start_service() {
   echo "${name} started pid=${pid}"
 }
 
-STORAGE_ENV=(
+STORAGE_SCHEMA_ENV=(
   "STORAGE_CONFIG_PATH=${ROOT}/storage/config"
-  "MOOX_STORAGE_CONFIG=${ROOT}/storage/config/storage.yaml"
+  "MOOX_STORAGE_CONFIG=${ROOT}/storage/config/storage.access.yaml"
   "MOOX_STORAGE_HOME=${ROOT}/data/storage"
   "STORAGE_SCHEMA_FILE=${ROOT}/storage/schema/metadata.sql"
 )
@@ -484,13 +497,42 @@ wait_factor_nats() {
   return 1
 }
 
+wait_tcp() {
+  local host="$1"
+  local port="$2"
+  local attempts="${3:-30}"
+  echo "waiting for ${host}:${port}"
+  for _ in $(seq 1 "${attempts}"); do
+    if bash -c ":</dev/tcp/${host}/${port}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "${host}:${port} not ready after ${attempts}s" >&2
+  return 1
+}
+
+wait_http() {
+  local url="$1"
+  local attempts="${2:-30}"
+  echo "waiting for ${url}"
+  for _ in $(seq 1 "${attempts}"); do
+    if curl --fail --silent --max-time 2 "${url}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "${url} not ready after ${attempts}s" >&2
+  return 1
+}
+
 init_storage_schema() {
   echo "initializing storage metadata schema"
   mkdir -p "${ROOT}/logs/storage"
   (
     cd "${ROOT}/storage"
-    env "${STORAGE_ENV[@]}" "${ROOT}/bin/moox-storage-cli" init \
-      --storage-conf=config/storage.yaml \
+    env "${STORAGE_SCHEMA_ENV[@]}" "${ROOT}/bin/moox-storage-cli" init \
+      --storage-conf=config/storage.access.yaml \
       --schema-path=schema/metadata.sql >> "${ROOT}/logs/storage/stdout.log" 2>&1
   )
 }
@@ -531,11 +573,51 @@ init_monitor_schema() {
   )
 }
 
+start_storage_process() {
+  local name="$1"
+  local binary="$2"
+  local trpc_conf="$3"
+  local storage_conf="$4"
+  start_service "${name}" "${ROOT}/storage" \
+    env \
+      "STORAGE_CONFIG_PATH=${ROOT}/storage/config" \
+      "MOOX_STORAGE_CONFIG=${ROOT}/storage/config/${storage_conf}" \
+      "MOOX_STORAGE_HOME=${ROOT}/data/storage" \
+      "STORAGE_SCHEMA_FILE=${ROOT}/storage/schema/metadata.sql" \
+      "${ROOT}/bin/${binary}" \
+      -conf="config/${trpc_conf}" \
+      -storage-conf="config/${storage_conf}"
+}
+
+start_storage_access() {
+  start_storage_process "storage-access" "moox-storage-access" "trpc_go.access.yaml" "storage.access.yaml"
+}
+
+start_storage_view_index() {
+  start_storage_process "storage-view-index" "moox-storage-view-index" "trpc_go.view_index.yaml" "storage.view_index.yaml"
+}
+
+start_storage_view_builder() {
+  start_storage_process "storage-view-builder" "moox-storage-view-builder" "trpc_go.view_builder.yaml" "storage.view_builder.yaml"
+}
+
+start_storage_view_query() {
+  start_storage_process "storage-view-query" "moox-storage-view-query" "trpc_go.view_query.yaml" "storage.view_query.yaml"
+}
+
 start_storage() {
-  start_service "storage" "${ROOT}/storage" \
-    env "${STORAGE_ENV[@]}" "${ROOT}/bin/moox-storage" \
-      -conf=config/trpc_go.yaml \
-      -storage-conf=config/storage.yaml
+  start_storage_access
+  wait_tcp 127.0.0.1 20201 "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
+  wait_tcp 127.0.0.1 4222 "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
+  wait_http http://127.0.0.1:20210/healthz "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
+  start_storage_view_index
+  wait_tcp 127.0.0.1 20104 "${MOOX_WAIT_STORAGE_VIEW_INDEX_SECONDS:-30}"
+  wait_http http://127.0.0.1:20213/healthz "${MOOX_WAIT_STORAGE_VIEW_INDEX_SECONDS:-30}"
+  start_storage_view_builder
+  wait_http http://127.0.0.1:20211/healthz "${MOOX_WAIT_STORAGE_VIEW_BUILDER_SECONDS:-30}"
+  start_storage_view_query
+  wait_tcp 127.0.0.1 20202 "${MOOX_WAIT_STORAGE_VIEW_QUERY_SECONDS:-30}"
+  wait_http http://127.0.0.1:20212/healthz "${MOOX_WAIT_STORAGE_VIEW_QUERY_SECONDS:-30}"
 }
 
 start_admin() {
@@ -634,6 +716,38 @@ case "${SERVICE}" in
     init_storage_schema
     start_storage
     ;;
+  storage-access)
+    if [[ "${WITH_STORAGE}" != "1" ]]; then
+      echo "storage is disabled in this deployment package" >&2
+      exit 2
+    fi
+    init_storage_schema
+    start_storage_access
+    ;;
+  storage-view-index)
+    if [[ "${WITH_STORAGE}" != "1" ]]; then
+      echo "storage is disabled in this deployment package" >&2
+      exit 2
+    fi
+    start_storage_view_index
+    ;;
+  storage-view-builder)
+    if [[ "${WITH_STORAGE}" != "1" ]]; then
+      echo "storage is disabled in this deployment package" >&2
+      exit 2
+    fi
+    wait_tcp 127.0.0.1 20104 "${MOOX_WAIT_STORAGE_VIEW_INDEX_SECONDS:-30}"
+    wait_tcp 127.0.0.1 4222 "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
+    start_storage_view_builder
+    ;;
+  storage-view-query)
+    if [[ "${WITH_STORAGE}" != "1" ]]; then
+      echo "storage is disabled in this deployment package" >&2
+      exit 2
+    fi
+    wait_tcp 127.0.0.1 20104 "${MOOX_WAIT_STORAGE_VIEW_INDEX_SECONDS:-30}"
+    start_storage_view_query
+    ;;
   cloudnode) start_cloudnode ;;
   collector) start_collector ;;
   factor) start_factor ;;
@@ -641,7 +755,7 @@ case "${SERVICE}" in
   admin) start_admin ;;
   web-host) start_web_host ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: storage cloudnode collector factor monitor admin web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor monitor admin web-host" >&2
     exit 2
     ;;
 esac
@@ -724,10 +838,25 @@ case "${SERVICE}" in
       stop_service "cloudnode"
     fi
     if [[ "${WITH_STORAGE}" == "1" ]]; then
+      stop_service "storage-view-query"
+      stop_service "storage-view-builder"
+      stop_service "storage-view-index"
+      stop_service "storage-access"
       stop_service "storage"
     fi
     ;;
   storage)
+    if [[ "${WITH_STORAGE}" != "1" ]]; then
+      echo "storage is disabled in this deployment package" >&2
+      exit 2
+    fi
+    stop_service "storage-view-query"
+    stop_service "storage-view-builder"
+    stop_service "storage-view-index"
+    stop_service "storage-access"
+    stop_service "storage"
+    ;;
+  storage-access|storage-view-index|storage-view-builder|storage-view-query)
     if [[ "${WITH_STORAGE}" != "1" ]]; then
       echo "storage is disabled in this deployment package" >&2
       exit 2
@@ -771,7 +900,7 @@ case "${SERVICE}" in
     stop_service "${SERVICE}"
     ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: storage cloudnode collector factor monitor admin web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor monitor admin web-host" >&2
     exit 2
     ;;
 esac
@@ -814,7 +943,7 @@ if [[ "${WITH_MONITOR}" == "1" ]]; then
   services=(monitor "${services[@]}")
 fi
 if [[ "${WITH_STORAGE}" == "1" ]]; then
-  services=(storage "${services[@]}")
+  services=(storage-access storage-view-index storage-view-builder storage-view-query "${services[@]}")
 fi
 if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
   services=(cloudnode "${services[@]}")
@@ -858,7 +987,7 @@ mkdir -p "${ROOT}/run" "$(dirname "${LOG_FILE}")"
 
 default_services=()
 if [[ "${WITH_STORAGE}" == "1" ]]; then
-  default_services+=(storage)
+  default_services+=(storage-access storage-view-index storage-view-builder storage-view-query)
 fi
 if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
   default_services+=(cloudnode)
@@ -967,6 +1096,10 @@ prepare_stage() {
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     copy_required_binary "moox-storage"
     copy_required_binary "moox-storage-cli"
+    cp "${STAGE_DIR}/bin/moox-storage" "${STAGE_DIR}/bin/moox-storage-access"
+    cp "${STAGE_DIR}/bin/moox-storage" "${STAGE_DIR}/bin/moox-storage-view-index"
+    cp "${STAGE_DIR}/bin/moox-storage" "${STAGE_DIR}/bin/moox-storage-view-builder"
+    cp "${STAGE_DIR}/bin/moox-storage" "${STAGE_DIR}/bin/moox-storage-view-query"
   fi
   copy_optional_web_host
 
@@ -993,10 +1126,16 @@ prepare_stage() {
     cp "${ROOT}/modules/storage/schema/metadata.sql" "${STAGE_DIR}/storage/schema/metadata.sql"
   fi
   cp -R "${ROOT}/examples/." "${STAGE_DIR}/examples/"
+  if [[ "${WITH_STORAGE}" -eq 1 ]]; then
+    cp "${ROOT}/scripts/reset-storage-view-indexes.sh" "${STAGE_DIR}/reset-storage-view-indexes.sh"
+  fi
 
   patch_configs
   write_runtime_scripts
   chmod +x "${STAGE_DIR}/bin/"*
+  if [[ "${WITH_STORAGE}" -eq 1 ]]; then
+    chmod +x "${STAGE_DIR}/reset-storage-view-indexes.sh"
+  fi
 }
 
 sync_local_stage() {
@@ -1034,7 +1173,7 @@ sync_local_stage() {
   if command -v rsync >/dev/null 2>&1; then
     local rsync_excludes=(--exclude '/data/' --exclude '/logs/' --exclude '/run/')
     if [[ "${WITH_STORAGE}" -eq 0 ]]; then
-      rsync_excludes+=(--exclude '/storage/' --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli')
+      rsync_excludes+=(--exclude '/storage/' --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli' --exclude '/bin/moox-storage-access' --exclude '/bin/moox-storage-view' --exclude '/bin/moox-storage-view-builder' --exclude '/bin/moox-storage-view-query')
     fi
     if [[ "${WITH_CLOUDNODE}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/cloudnode/' --exclude '/bin/moox-cloudnode' --exclude '/bin/moox-cloudnode-cli')
@@ -1080,7 +1219,11 @@ sync_local_stage() {
     fi
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/storage"
-      rm -f "${deploy_dir}/bin/moox-storage" "${deploy_dir}/bin/moox-storage-cli"
+      rm -f "${deploy_dir}/bin/moox-storage" "${deploy_dir}/bin/moox-storage-cli" \
+        "${deploy_dir}/bin/moox-storage-access" \
+        "${deploy_dir}/bin/moox-storage-view" \
+        "${deploy_dir}/bin/moox-storage-view-builder" \
+        "${deploy_dir}/bin/moox-storage-view-query"
     fi
     cp -R "${STAGE_DIR}/." "${deploy_dir}/"
   fi
@@ -1176,7 +1319,11 @@ if [[ "${WITH_FACTOR}" == "1" ]]; then
 fi
 if [[ "${WITH_STORAGE}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/storage"
-  rm -f "${DEPLOY_DIR}/bin/moox-storage" "${DEPLOY_DIR}/bin/moox-storage-cli"
+  rm -f "${DEPLOY_DIR}/bin/moox-storage" "${DEPLOY_DIR}/bin/moox-storage-cli" \
+    "${DEPLOY_DIR}/bin/moox-storage-access" \
+    "${DEPLOY_DIR}/bin/moox-storage-view" \
+    "${DEPLOY_DIR}/bin/moox-storage-view-builder" \
+    "${DEPLOY_DIR}/bin/moox-storage-view-query"
 fi
 tar -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 rm -f "${ARCHIVE}"

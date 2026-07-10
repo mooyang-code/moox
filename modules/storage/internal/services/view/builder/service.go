@@ -3,10 +3,11 @@ package builder
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
-	viewsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -18,9 +19,8 @@ const defaultMaxWorkers = 1
 type Service struct {
 	events     eventbus.Bus
 	reader     FactReader
-	metadata   viewsvc.Metadata
-	views      TimeSeriesViewWriter
-	search     RecordViewIndexer
+	metadata   MetadataReader
+	engines    map[string]viewindex.ViewIndexEngine
 	batchOpts  BatchOptions
 	maxWorkers int
 
@@ -54,12 +54,17 @@ func NewService(opts Options) *Service {
 	if maxWorkers <= 0 {
 		maxWorkers = defaultMaxWorkers
 	}
+	engines := make(map[string]viewindex.ViewIndexEngine, len(opts.Engines))
+	for name, engine := range opts.Engines {
+		if engine != nil {
+			engines[strings.ToLower(strings.TrimSpace(name))] = engine
+		}
+	}
 	return &Service{
 		events:     opts.Events,
 		reader:     opts.Reader,
 		metadata:   opts.Metadata,
-		views:      opts.Views,
-		search:     opts.Search,
+		engines:    engines,
 		batchOpts:  batchOpts,
 		maxWorkers: maxWorkers,
 	}
@@ -83,11 +88,8 @@ func (s *Service) Start(ctx context.Context) error {
 	if s.metadata == nil {
 		return errors.New("view builder service requires metadata client")
 	}
-	if s.views == nil {
-		return errors.New("view builder service requires time-series view writer")
-	}
-	if s.search == nil {
-		return errors.New("view builder service requires record view indexer")
+	if len(s.engines) == 0 {
+		return errors.New("view builder service requires view index engines")
 	}
 
 	s.mu.Lock()
@@ -329,15 +331,19 @@ func retInfoError(ret *pb.RetInfo) error {
 	return errors.New(ret.GetMsg())
 }
 
-func markPending(ctx context.Context, store viewsvc.Metadata, item *pb.View) error {
-	if store == nil || item == nil {
-		return nil
+func (s *Service) engine(name string) (viewindex.ViewIndexEngine, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	engine := s.engines[name]
+	if engine == nil {
+		return nil, errors.New("view builder has no index engine for " + name)
 	}
-	copied := proto.Clone(item).(*pb.View)
-	copied.BuildStatus = "pending"
-	if copied.Status == "" {
-		copied.Status = "active"
+	return engine, nil
+}
+
+func writableIndexSet(item *pb.View) map[string]bool {
+	out := make(map[string]bool, 2)
+	for _, indexID := range viewindex.WritableIndexIDs(item) {
+		out[indexID] = true
 	}
-	_, err := store.UpsertView(ctx, copied)
-	return err
+	return out
 }

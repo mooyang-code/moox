@@ -1,5 +1,6 @@
 <template>
-  <div class="ops-page">
+  <div class="moox-page">
+    <div class="moox-inner">
     <div class="page-head">
       <div>
         <h2>归档文件</h2>
@@ -71,6 +72,7 @@
         </a-table-column>
       </template>
     </a-table>
+    </div>
   </div>
 </template>
 
@@ -147,13 +149,6 @@ onMounted(load);
 </script>
 
 <style scoped>
-.ops-page {
-  height: 100%;
-  box-sizing: border-box;
-  padding: 20px 20px 72px;
-  overflow-y: auto;
-}
-
 .page-head {
   display: flex;
   align-items: center;

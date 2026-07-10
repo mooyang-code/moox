@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -13,7 +14,7 @@ import (
 func TestBleveViewIndexEngineLifecycle(t *testing.T) {
 	ctx := context.Background()
 	service := NewService(Options{Root: t.TempDir()})
-	indexID := "view_crypto_news_view_a"
+	indexID := viewindex.ViewIndexID("crypto", "news_view", viewindex.SlotA)
 	columns := []*pb.ViewColumn{{
 		ColumnName: "title",
 		OriginId:   "news.title",
@@ -23,7 +24,9 @@ func TestBleveViewIndexEngineLifecycle(t *testing.T) {
 	if got := service.Engine(); got != "bleve" {
 		t.Fatalf("engine = %q, want bleve", got)
 	}
-	if err := service.Prepare(ctx, indexID, viewindex.ViewIndexSchema{Columns: columns}); err != nil {
+	if err := service.Prepare(ctx, indexID, viewindex.ViewIndexSchema{
+		SpaceID: "crypto", ViewID: "news_view", Engine: "bleve", SchemaHash: "schema-1", Columns: columns,
+	}); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	if _, err := os.Stat(service.indexPath(indexID)); err != nil {
@@ -48,11 +51,14 @@ func TestBleveViewIndexEngineLifecycle(t *testing.T) {
 	if stats.EntryCount != 2 {
 		t.Fatalf("entry count = %d, want 2", stats.EntryCount)
 	}
-	if stats.MinVersion != "2026-07-09T01:00:00Z" {
-		t.Fatalf("min version = %q, want 2026-07-09T01:00:00Z", stats.MinVersion)
+	if stats.MinVersion != "2026-07-09T01:00:00.000000000Z" {
+		t.Fatalf("min version = %q, want normalized timestamp", stats.MinVersion)
 	}
-	if stats.MaxVersion != "2026-07-09T01:01:00Z" {
-		t.Fatalf("max version = %q, want 2026-07-09T01:01:00Z", stats.MaxVersion)
+	if stats.MaxVersion != "2026-07-09T01:01:00.000000000Z" {
+		t.Fatalf("max version = %q, want normalized timestamp", stats.MaxVersion)
+	}
+	if stats.SchemaHash != "schema-1" || stats.PhysicalBytes == 0 {
+		t.Fatalf("stats = %+v, want schema and physical bytes", stats)
 	}
 
 	if err := service.Remove(ctx, indexID); err != nil {
@@ -60,6 +66,121 @@ func TestBleveViewIndexEngineLifecycle(t *testing.T) {
 	}
 	if _, err := os.Stat(service.indexPath(indexID)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("removed index path stat err = %v, want not exist", err)
+	}
+}
+
+func TestBleveViewIndexListsPhysicalIndexes(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(Options{Root: t.TempDir()})
+	a := viewindex.ViewIndexID("crypto", "news_view", viewindex.SlotA)
+	b := viewindex.ViewIndexID("crypto", "news_view", viewindex.SlotB)
+	for _, indexID := range []string{a, b} {
+		if err := service.Prepare(ctx, indexID, viewindex.ViewIndexSchema{Engine: "bleve", SchemaHash: "schema-1"}); err != nil {
+			t.Fatalf("Prepare(%s): %v", indexID, err)
+		}
+	}
+
+	got, err := service.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	want := map[string]bool{a: true, b: true}
+	for _, indexID := range got {
+		delete(want, indexID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("List missing indexes: %v (got %v)", want, got)
+	}
+}
+
+func TestBleveViewIndexRemoveWaitsForReferences(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(Options{Root: t.TempDir()})
+	indexID := viewindex.ViewIndexID("crypto", "news_view", viewindex.SlotA)
+	if err := service.Prepare(ctx, indexID, viewindex.ViewIndexSchema{Engine: "bleve", SchemaHash: "schema-1"}); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	index, release, err := service.acquire(indexID, false)
+	if err != nil || index == nil {
+		t.Fatalf("acquire: index=%v err=%v", index, err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- service.Remove(ctx, indexID) }()
+	select {
+	case err := <-done:
+		t.Fatalf("Remove returned while reference held: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, _, err := service.acquire(indexID, false); !errors.Is(err, ErrIndexClosing) {
+		t.Fatalf("acquire while closing error = %v", err)
+	}
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Remove did not finish")
+	}
+}
+
+func TestBleveViewIndexConcurrentRemoveClosesOnce(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(Options{Root: t.TempDir()})
+	t.Cleanup(func() { _ = service.Close() })
+	indexID := viewindex.ViewIndexID("crypto", "news_view", viewindex.SlotA)
+	if err := service.Prepare(ctx, indexID, viewindex.ViewIndexSchema{Engine: "bleve", SchemaHash: "schema-1"}); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	_, release, err := service.acquire(indexID, false)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+
+	results := make(chan error, 2)
+	go func() { results <- service.Remove(ctx, indexID) }()
+	go func() { results <- service.Remove(ctx, indexID) }()
+	time.Sleep(100 * time.Millisecond)
+	release()
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("concurrent Remove %d: %v", i, err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("concurrent Remove did not finish")
+		}
+	}
+}
+
+func TestBleveViewIndexCloseWaitsForReferences(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(Options{Root: t.TempDir()})
+	indexID := viewindex.ViewIndexID("crypto", "news_view", viewindex.SlotA)
+	if err := service.Prepare(ctx, indexID, viewindex.ViewIndexSchema{Engine: "bleve", SchemaHash: "schema-1"}); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	_, release, err := service.acquire(indexID, false)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- service.Close() }()
+	select {
+	case err := <-done:
+		t.Fatalf("Close returned while reference held: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not finish after release")
 	}
 }
 

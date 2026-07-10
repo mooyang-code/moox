@@ -1,30 +1,35 @@
 <template>
   <div class="collector-workbench">
-    <a-tabs v-model:active-key="activeTab" type="rounded" size="medium" lazy-load destroy-on-hide @change="syncRoute">
-      <a-tab-pane key="definitions" title="集合定义">
-        <DatasetDefinitions
-          owner-module="collector"
-          dataset-role="raw_collection"
-          managed-by="manual"
-          :filter-owner-modules="['collector']"
-          :filter-dataset-roles="['raw_collection', 'import']"
-          :include-unowned="true"
-        />
-      </a-tab-pane>
-      <a-tab-pane key="browse" title="查看数据">
-        <DatasetBrowse
-          :dataset-owner-modules="['collector']"
-          :dataset-roles="['raw_collection', 'import']"
-          :include-unowned="true"
-        />
-      </a-tab-pane>
-    </a-tabs>
+    <DatasetDefinitions
+      v-if="activeTab === 'definitions'"
+      owner-module="collector"
+      dataset-role="raw_collection"
+      managed-by="manual"
+      :filter-owner-modules="['collector']"
+      :filter-dataset-roles="['raw_collection', 'import']"
+      :include-unowned="true"
+    >
+      <template #page-title>
+        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据集合" @change="syncRoute" />
+      </template>
+    </DatasetDefinitions>
+    <DatasetBrowse
+      v-else
+      :dataset-owner-modules="['collector']"
+      :dataset-roles="['raw_collection', 'import']"
+      :include-unowned="true"
+    >
+      <template #page-title>
+        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据集合" @change="syncRoute" />
+      </template>
+    </DatasetBrowse>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import PageTitleTabs from '@/components/page-title-tabs/index.vue';
 import DatasetDefinitions from '@/views/data/datasets/index.vue';
 import DatasetBrowse from '@/views/data/browse/index.vue';
 
@@ -33,6 +38,12 @@ defineOptions({ name: 'CollectorDatasets' });
 const route = useRoute();
 const router = useRouter();
 const activeTab = ref(tabFromRoute());
+type CollectorDatasetTab = 'definitions' | 'browse';
+
+const tabs = [
+  { key: 'definitions', label: '集合定义' },
+  { key: 'browse', label: '查看数据' },
+] as const;
 
 const normalizedQuery = computed(() => String(route.query.tab || ''));
 
@@ -41,7 +52,8 @@ function tabFromRoute() {
 }
 
 function syncRoute(key: string | number) {
-  const tab = key === 'browse' ? 'browse' : 'definitions';
+  const tab: CollectorDatasetTab = key === 'browse' ? 'browse' : 'definitions';
+  activeTab.value = tab;
   router.replace({ path: '/collector/datasets', query: tab === 'browse' ? { tab } : {} });
 }
 
@@ -57,32 +69,5 @@ watch(normalizedQuery, () => {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-}
-
-.collector-workbench :deep(.arco-tabs) {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.collector-workbench :deep(.arco-tabs-content) {
-  flex: 1;
-  min-height: 0;
-  padding-top: 0;
-  overflow: hidden;
-}
-
-.collector-workbench :deep(.arco-tabs-content-list) {
-  height: 100%;
-  min-height: 0;
-  overflow: visible;
-}
-
-.collector-workbench :deep(.arco-tabs-pane) {
-  height: 100%;
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
 }
 </style>

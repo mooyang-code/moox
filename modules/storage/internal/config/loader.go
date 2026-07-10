@@ -39,10 +39,9 @@ type StorageMetadata struct {
 
 // StorageDevices 保存底层存储设备路径配置。
 type StorageDevices struct {
-	PebblePath  string `yaml:"pebble_path"`
-	DuckDBPath  string `yaml:"duckdb_path"`
-	BlevePath   string `yaml:"bleve_path"`
-	ParquetPath string `yaml:"parquet_path"`
+	PebblePath    string `yaml:"pebble_path"`
+	ViewIndexRoot string `yaml:"view_index_root"`
+	ParquetPath   string `yaml:"parquet_path"`
 }
 
 // StorageEventBus 保存事件总线传输配置。
@@ -72,37 +71,44 @@ type StorageEmbeddedEventBus struct {
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	MetadataServiceName string              `yaml:"metadata_service_name"`
-	AccessServiceName   string              `yaml:"access_service_name"`
-	BatchSize           int                 `yaml:"batch_size"`
-	BatchWaitMS         int                 `yaml:"batch_wait_ms"`
-	MaxWorkers          int                 `yaml:"max_workers"`
-	Rotation            StorageViewRotation `yaml:"rotation"`
+	MetadataServiceName string                 `yaml:"metadata_service_name"`
+	AccessServiceName   string                 `yaml:"access_service_name"`
+	IndexServiceName    string                 `yaml:"index_service_name"`
+	BatchSize           int                    `yaml:"batch_size"`
+	BatchWaitMS         int                    `yaml:"batch_wait_ms"`
+	MaxWorkers          int                    `yaml:"max_workers"`
+	Maintenance         StorageViewMaintenance `yaml:"maintenance"`
 }
 
-type StorageViewRotation struct {
-	Enabled               *bool                         `yaml:"enabled"`
-	MaxEntries            int                           `yaml:"max_entries"`
-	MinReadyEntries       int                           `yaml:"min_ready_entries"`
-	OverlapWindow         string                        `yaml:"overlap_window"`
-	DefaultBackfillWindow string                        `yaml:"default_backfill_window"`
-	AllowedLag            string                        `yaml:"allowed_lag"`
-	RemoveGraceMS         int                           `yaml:"remove_grace_ms"`
-	TimeSeries            StorageTimeSeriesViewRotation `yaml:"time_series"`
-	Record                StorageRecordViewRotation     `yaml:"record"`
+type StorageViewMaintenance struct {
+	Enabled          *bool                        `yaml:"enabled"`
+	OwnerID          string                       `yaml:"owner_id"`
+	LeaseTTL         string                       `yaml:"lease_ttl"`
+	RunBudget        string                       `yaml:"run_budget"`
+	PageSize         int                          `yaml:"page_size"`
+	MaxEntries       int                          `yaml:"max_entries"`
+	TargetEntries    int                          `yaml:"target_entries"`
+	MaxPhysicalBytes int64                        `yaml:"max_physical_bytes"`
+	MinFreeDiskBytes int64                        `yaml:"min_free_disk_bytes"`
+	MinReadyEntries  int                          `yaml:"min_ready_entries"`
+	AllowedLag       string                       `yaml:"allowed_lag"`
+	OverlapWindow    string                       `yaml:"overlap_window"`
+	RemoveGrace      string                       `yaml:"remove_grace"`
+	TimeSeries       StorageTimeSeriesMaintenance `yaml:"time_series"`
+	Record           StorageRecordMaintenance     `yaml:"record"`
 }
 
-type StorageTimeSeriesViewRotation struct {
-	FreqBackfillWindow map[string]string `yaml:"freq_backfill_window"`
+type StorageTimeSeriesMaintenance struct {
+	DefaultRetentionWindow string            `yaml:"default_retention_window"`
+	RetentionByFreq        map[string]string `yaml:"retention_by_freq"`
 }
 
-type StorageRecordViewRotation struct {
-	DefaultVersionWindow string `yaml:"default_version_window"`
-	MaxBackfillEntries   int    `yaml:"max_backfill_entries"`
+type StorageRecordMaintenance struct {
+	RetentionWindow string `yaml:"retention_window"`
 }
 
-func (r StorageViewRotation) IsEnabled() bool {
-	return r.Enabled == nil || *r.Enabled
+func (m StorageViewMaintenance) IsEnabled() bool {
+	return m.Enabled == nil || *m.Enabled
 }
 
 // StoragePrimary 保存主存服务访问配置。
@@ -132,11 +138,8 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.Devices.PebblePath == "" {
 		c.Devices.PebblePath = filepath.Join(c.Root, "pebble")
 	}
-	if c.Devices.DuckDBPath == "" {
-		c.Devices.DuckDBPath = filepath.Join(c.Root, "duckdb", "views.duckdb")
-	}
-	if c.Devices.BlevePath == "" {
-		c.Devices.BlevePath = filepath.Join(c.Root, "bleve")
+	if c.Devices.ViewIndexRoot == "" {
+		c.Devices.ViewIndexRoot = filepath.Join(c.Root, "view-indexes")
 	}
 	if c.Devices.ParquetPath == "" {
 		c.Devices.ParquetPath = filepath.Join(c.Root, "archive")
@@ -194,6 +197,9 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.View.AccessServiceName == "" {
 		c.View.AccessServiceName = "trpc.moox.storage.Access"
 	}
+	if c.View.IndexServiceName == "" {
+		c.View.IndexServiceName = "trpc.moox.storage.ViewIndex"
+	}
 	if c.View.BatchSize <= 0 {
 		c.View.BatchSize = 500
 	}
@@ -201,47 +207,65 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.View.BatchWaitMS = 200
 	}
 	if c.View.MaxWorkers <= 0 {
-		c.View.MaxWorkers = 4
+		c.View.MaxWorkers = 2
 	}
-	if c.View.Rotation.Enabled == nil {
+	if c.View.Maintenance.Enabled == nil {
 		enabled := true
-		c.View.Rotation.Enabled = &enabled
+		c.View.Maintenance.Enabled = &enabled
 	}
-	if c.View.Rotation.MaxEntries <= 0 {
-		c.View.Rotation.MaxEntries = 200000
+	if c.View.Maintenance.LeaseTTL == "" {
+		c.View.Maintenance.LeaseTTL = "90s"
 	}
-	if c.View.Rotation.MinReadyEntries <= 0 {
-		c.View.Rotation.MinReadyEntries = 50000
+	if c.View.Maintenance.RunBudget == "" {
+		c.View.Maintenance.RunBudget = "20s"
 	}
-	if c.View.Rotation.OverlapWindow == "" {
-		c.View.Rotation.OverlapWindow = "30m"
+	if c.View.Maintenance.PageSize <= 0 {
+		c.View.Maintenance.PageSize = 500
 	}
-	if c.View.Rotation.DefaultBackfillWindow == "" {
-		c.View.Rotation.DefaultBackfillWindow = "1d"
+	if c.View.Maintenance.MaxEntries <= 0 {
+		c.View.Maintenance.MaxEntries = 200000
 	}
-	if c.View.Rotation.AllowedLag == "" {
-		c.View.Rotation.AllowedLag = "2m"
+	if c.View.Maintenance.TargetEntries <= 0 || c.View.Maintenance.TargetEntries >= c.View.Maintenance.MaxEntries {
+		c.View.Maintenance.TargetEntries = c.View.Maintenance.MaxEntries * 3 / 4
+		if c.View.Maintenance.TargetEntries <= 0 {
+			c.View.Maintenance.TargetEntries = 1
+		}
 	}
-	if c.View.Rotation.RemoveGraceMS <= 0 {
-		c.View.Rotation.RemoveGraceMS = 60000
+	if c.View.Maintenance.MaxPhysicalBytes <= 0 {
+		c.View.Maintenance.MaxPhysicalBytes = 512 * 1024 * 1024
 	}
-	if c.View.Rotation.TimeSeries.FreqBackfillWindow == nil {
-		c.View.Rotation.TimeSeries.FreqBackfillWindow = map[string]string{}
+	if c.View.Maintenance.MinFreeDiskBytes <= 0 {
+		c.View.Maintenance.MinFreeDiskBytes = 1024 * 1024 * 1024
 	}
-	if c.View.Rotation.TimeSeries.FreqBackfillWindow["1m"] == "" {
-		c.View.Rotation.TimeSeries.FreqBackfillWindow["1m"] = "6h"
+	if c.View.Maintenance.MinReadyEntries <= 0 {
+		c.View.Maintenance.MinReadyEntries = 1000
 	}
-	if c.View.Rotation.TimeSeries.FreqBackfillWindow["1h"] == "" {
-		c.View.Rotation.TimeSeries.FreqBackfillWindow["1h"] = "30d"
+	if c.View.Maintenance.AllowedLag == "" {
+		c.View.Maintenance.AllowedLag = "2m"
 	}
-	if c.View.Rotation.TimeSeries.FreqBackfillWindow["1d"] == "" {
-		c.View.Rotation.TimeSeries.FreqBackfillWindow["1d"] = "730d"
+	if c.View.Maintenance.OverlapWindow == "" {
+		c.View.Maintenance.OverlapWindow = "30m"
 	}
-	if c.View.Rotation.Record.DefaultVersionWindow == "" {
-		c.View.Rotation.Record.DefaultVersionWindow = "30d"
+	if c.View.Maintenance.RemoveGrace == "" {
+		c.View.Maintenance.RemoveGrace = "60s"
 	}
-	if c.View.Rotation.Record.MaxBackfillEntries <= 0 {
-		c.View.Rotation.Record.MaxBackfillEntries = 200000
+	if c.View.Maintenance.TimeSeries.DefaultRetentionWindow == "" {
+		c.View.Maintenance.TimeSeries.DefaultRetentionWindow = "7d"
+	}
+	if c.View.Maintenance.TimeSeries.RetentionByFreq == nil {
+		c.View.Maintenance.TimeSeries.RetentionByFreq = map[string]string{}
+	}
+	if c.View.Maintenance.TimeSeries.RetentionByFreq["1m"] == "" {
+		c.View.Maintenance.TimeSeries.RetentionByFreq["1m"] = "24h"
+	}
+	if c.View.Maintenance.TimeSeries.RetentionByFreq["1h"] == "" {
+		c.View.Maintenance.TimeSeries.RetentionByFreq["1h"] = "90d"
+	}
+	if c.View.Maintenance.TimeSeries.RetentionByFreq["1d"] == "" {
+		c.View.Maintenance.TimeSeries.RetentionByFreq["1d"] = "730d"
+	}
+	if c.View.Maintenance.Record.RetentionWindow == "" {
+		c.View.Maintenance.Record.RetentionWindow = "30d"
 	}
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":20210"
@@ -262,8 +286,7 @@ func (c *StorageConfig) ApplyHomeRoot(root string) {
 	c.Root = root
 	c.Metadata.Path = rebaseStoragePath(c.Metadata.Path, oldRoot, root, filepath.Join("metadata", "storage_metadata.db"))
 	c.Devices.PebblePath = rebaseStoragePath(c.Devices.PebblePath, oldRoot, root, "pebble")
-	c.Devices.DuckDBPath = rebaseStoragePath(c.Devices.DuckDBPath, oldRoot, root, filepath.Join("duckdb", "views.duckdb"))
-	c.Devices.BlevePath = rebaseStoragePath(c.Devices.BlevePath, oldRoot, root, "bleve")
+	c.Devices.ViewIndexRoot = rebaseStoragePath(c.Devices.ViewIndexRoot, oldRoot, root, "view-indexes")
 	c.Devices.ParquetPath = rebaseStoragePath(c.Devices.ParquetPath, oldRoot, root, "archive")
 	if c.EventBus.Embedded.StoreDir != "" {
 		c.EventBus.Embedded.StoreDir = rebaseStoragePath(c.EventBus.Embedded.StoreDir, oldRoot, root, "nats")

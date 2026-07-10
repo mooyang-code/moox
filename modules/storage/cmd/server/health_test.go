@@ -36,3 +36,12 @@ func TestStorageHealthSnapshotNamesSplitViewQueryRole(t *testing.T) {
 		t.Fatalf("role = %v, want view_query", rsp.Details["role"])
 	}
 }
+
+func TestStorageHealthSnapshotNamesViewIndexOwnerRole(t *testing.T) {
+	cfg := storageconfig.StorageConfig{Roles: []string{"view_index"}}
+	rsp := storageHealthSnapshot(cfg)(context.Background())
+
+	if rsp.Service != "storage-view-index" {
+		t.Fatalf("Service = %q, want storage-view-index", rsp.Service)
+	}
+}

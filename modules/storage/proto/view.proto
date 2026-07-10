@@ -105,7 +105,7 @@ message SearchRecordRowsRsp {
 // DataView 是用户侧 View 查询服务。
 // View 索引是可从 PrimaryStore 重建的有界派生结果，不是完整事实存储；
 // 完整历史以 PrimaryStore KV/Pebble 为准。索引生命周期统一由 view_builder
-// 角色的 op=rotate 调度驱动（schema 抢占重建、容量轮换、ready switch、
+// 角色的 op=maintain 调度驱动（schema 抢占重建、容量切换、ready switch、
 // 陈旧清理），不提供手动重建 RPC。
 service DataView {
   // QueryTimeSeriesRows 查询 DuckDB 中当前 active View 索引。

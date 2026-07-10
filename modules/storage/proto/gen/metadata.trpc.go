@@ -39,6 +39,14 @@ type MetadataService interface {
 	UpsertViewColumn(ctx context.Context, req *UpsertViewColumnReq) (*UpsertViewColumnRsp, error)
 	// ListViewColumns 列出视图列。
 	ListViewColumns(ctx context.Context, req *ListViewColumnsReq) (*ListViewColumnsRsp, error)
+	// ClaimViewIndexBuild 声明或接管 View 索引构建租约。
+	ClaimViewIndexBuild(ctx context.Context, req *ClaimViewIndexBuildReq) (*ClaimViewIndexBuildRsp, error)
+	// UpdateViewIndexBuild 续租并推进 View 索引构建状态。
+	UpdateViewIndexBuild(ctx context.Context, req *UpdateViewIndexBuildReq) (*UpdateViewIndexBuildRsp, error)
+	// ActivateViewIndex 原子激活已就绪的 View 索引。
+	ActivateViewIndex(ctx context.Context, req *ActivateViewIndexReq) (*ActivateViewIndexRsp, error)
+	// FailViewIndexBuild 记录 View 索引构建失败。
+	FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq) (*FailViewIndexBuildRsp, error)
 	// CreateDataSource 创建数据来源。
 	CreateDataSource(ctx context.Context, req *CreateDataSourceReq) (*CreateDataSourceRsp, error)
 	// UpdateDataSource 更新数据来源。
@@ -291,6 +299,78 @@ func MetadataService_ListViewColumns_Handler(svr interface{}, ctx context.Contex
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).ListViewColumns(ctx, reqbody.(*ListViewColumnsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_ClaimViewIndexBuild_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ClaimViewIndexBuildReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).ClaimViewIndexBuild(ctx, reqbody.(*ClaimViewIndexBuildReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_UpdateViewIndexBuild_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateViewIndexBuildReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).UpdateViewIndexBuild(ctx, reqbody.(*UpdateViewIndexBuildReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_ActivateViewIndex_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ActivateViewIndexReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).ActivateViewIndex(ctx, reqbody.(*ActivateViewIndexReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_FailViewIndexBuild_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &FailViewIndexBuildReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).FailViewIndexBuild(ctx, reqbody.(*FailViewIndexBuildReq))
 	}
 
 	var rsp interface{}
@@ -1067,6 +1147,22 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_ListViewColumns_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/ClaimViewIndexBuild",
+			Func: MetadataService_ClaimViewIndexBuild_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/UpdateViewIndexBuild",
+			Func: MetadataService_UpdateViewIndexBuild_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/ActivateViewIndex",
+			Func: MetadataService_ActivateViewIndex_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/FailViewIndexBuild",
+			Func: MetadataService_FailViewIndexBuild_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/CreateDataSource",
 			Func: MetadataService_CreateDataSource_Handler,
 		},
@@ -1288,6 +1384,26 @@ func (s *UnimplementedMetadata) UpsertViewColumn(ctx context.Context, req *Upser
 // ListViewColumns 列出视图列。
 func (s *UnimplementedMetadata) ListViewColumns(ctx context.Context, req *ListViewColumnsReq) (*ListViewColumnsRsp, error) {
 	return nil, errors.New("rpc ListViewColumns of service Metadata is not implemented")
+}
+
+// ClaimViewIndexBuild 声明或接管 View 索引构建租约。
+func (s *UnimplementedMetadata) ClaimViewIndexBuild(ctx context.Context, req *ClaimViewIndexBuildReq) (*ClaimViewIndexBuildRsp, error) {
+	return nil, errors.New("rpc ClaimViewIndexBuild of service Metadata is not implemented")
+}
+
+// UpdateViewIndexBuild 续租并推进 View 索引构建状态。
+func (s *UnimplementedMetadata) UpdateViewIndexBuild(ctx context.Context, req *UpdateViewIndexBuildReq) (*UpdateViewIndexBuildRsp, error) {
+	return nil, errors.New("rpc UpdateViewIndexBuild of service Metadata is not implemented")
+}
+
+// ActivateViewIndex 原子激活已就绪的 View 索引。
+func (s *UnimplementedMetadata) ActivateViewIndex(ctx context.Context, req *ActivateViewIndexReq) (*ActivateViewIndexRsp, error) {
+	return nil, errors.New("rpc ActivateViewIndex of service Metadata is not implemented")
+}
+
+// FailViewIndexBuild 记录 View 索引构建失败。
+func (s *UnimplementedMetadata) FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq) (*FailViewIndexBuildRsp, error) {
+	return nil, errors.New("rpc FailViewIndexBuild of service Metadata is not implemented")
 }
 
 // CreateDataSource 创建数据来源。
@@ -1518,6 +1634,14 @@ type MetadataClientProxy interface {
 	UpsertViewColumn(ctx context.Context, req *UpsertViewColumnReq, opts ...client.Option) (rsp *UpsertViewColumnRsp, err error)
 	// ListViewColumns 列出视图列。
 	ListViewColumns(ctx context.Context, req *ListViewColumnsReq, opts ...client.Option) (rsp *ListViewColumnsRsp, err error)
+	// ClaimViewIndexBuild 声明或接管 View 索引构建租约。
+	ClaimViewIndexBuild(ctx context.Context, req *ClaimViewIndexBuildReq, opts ...client.Option) (rsp *ClaimViewIndexBuildRsp, err error)
+	// UpdateViewIndexBuild 续租并推进 View 索引构建状态。
+	UpdateViewIndexBuild(ctx context.Context, req *UpdateViewIndexBuildReq, opts ...client.Option) (rsp *UpdateViewIndexBuildRsp, err error)
+	// ActivateViewIndex 原子激活已就绪的 View 索引。
+	ActivateViewIndex(ctx context.Context, req *ActivateViewIndexReq, opts ...client.Option) (rsp *ActivateViewIndexRsp, err error)
+	// FailViewIndexBuild 记录 View 索引构建失败。
+	FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq, opts ...client.Option) (rsp *FailViewIndexBuildRsp, err error)
 	// CreateDataSource 创建数据来源。
 	CreateDataSource(ctx context.Context, req *CreateDataSourceReq, opts ...client.Option) (rsp *CreateDataSourceRsp, err error)
 	// UpdateDataSource 更新数据来源。
@@ -1803,6 +1927,86 @@ func (c *MetadataClientProxyImpl) ListViewColumns(ctx context.Context, req *List
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListViewColumnsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) ClaimViewIndexBuild(ctx context.Context, req *ClaimViewIndexBuildReq, opts ...client.Option) (*ClaimViewIndexBuildRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ClaimViewIndexBuild")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("ClaimViewIndexBuild")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ClaimViewIndexBuildRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) UpdateViewIndexBuild(ctx context.Context, req *UpdateViewIndexBuildReq, opts ...client.Option) (*UpdateViewIndexBuildRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateViewIndexBuild")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("UpdateViewIndexBuild")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpdateViewIndexBuildRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) ActivateViewIndex(ctx context.Context, req *ActivateViewIndexReq, opts ...client.Option) (*ActivateViewIndexRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ActivateViewIndex")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("ActivateViewIndex")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ActivateViewIndexRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq, opts ...client.Option) (*FailViewIndexBuildRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/FailViewIndexBuild")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("FailViewIndexBuild")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &FailViewIndexBuildRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

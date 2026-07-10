@@ -3,11 +3,18 @@ package view
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
 )
+
+const projectionReadBatchSize = 500
+
+type TimeSeriesProjectionReader func(context.Context, []*pb.TimeSeriesKey) ([]*pb.TimeSeriesRow, error)
+
+type RecordProjectionReader func(context.Context, []*pb.RecordKey) ([]*pb.RecordRow, error)
 
 // TimeSeriesRowsForView projects fact rows into the columns exposed by a view.
 func TimeSeriesRowsForView(
@@ -15,48 +22,101 @@ func TimeSeriesRowsForView(
 	item *pb.View,
 	columns []*pb.ViewColumn,
 	rows []*pb.TimeSeriesRow,
-	readProjectionRow func(context.Context, *pb.TimeSeriesKey, string) (*pb.TimeSeriesRow, error),
+	readProjectionRows TimeSeriesProjectionReader,
 ) ([]*pb.TimeSeriesRow, bool, error) {
 	if item == nil || !IsProjectableTimeSeriesView(item, columns) {
 		return nil, false, nil
 	}
 	primaryDatasetID := item.GetPrimaryDatasetId()
 	datasetIDs := ViewProjectionDatasets(primaryDatasetID, columns)
-	out := make([]*pb.TimeSeriesRow, 0, len(rows))
-	seen := make(map[string]bool, len(rows))
+	type projectionGroup struct {
+		template      *pb.TimeSeriesKey
+		rowsByDataset map[string]*pb.TimeSeriesRow
+	}
+	groups := make(map[string]*projectionGroup, len(rows))
+	order := make([]string, 0, len(rows))
 	for _, row := range rows {
 		if row == nil || row.GetKey() == nil {
 			continue
 		}
 		grainKey := TimeSeriesProjectionGrainKey(row.GetKey())
-		if seen[grainKey] {
-			continue
+		group := groups[grainKey]
+		if group == nil {
+			group = &projectionGroup{template: row.GetKey(), rowsByDataset: make(map[string]*pb.TimeSeriesRow)}
+			groups[grainKey] = group
+			order = append(order, grainKey)
 		}
-		seen[grainKey] = true
-		rowsByDataset := map[string]*pb.TimeSeriesRow{row.GetKey().GetDatasetId(): row}
-		for _, datasetID := range datasetIDs {
-			if rowsByDataset[datasetID] != nil {
+		group.rowsByDataset[row.GetKey().GetDatasetId()] = row
+	}
+	for _, datasetID := range datasetIDs {
+		var missing []*pb.TimeSeriesKey
+		for _, grainKey := range order {
+			group := groups[grainKey]
+			if group.rowsByDataset[datasetID] != nil {
 				continue
 			}
-			read, err := readProjectionRow(ctx, row.GetKey(), datasetID)
+			key := proto.Clone(group.template).(*pb.TimeSeriesKey)
+			key.DatasetId = datasetID
+			missing = append(missing, key)
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		if readProjectionRows == nil {
+			continue
+		}
+		for start := 0; start < len(missing); start += projectionReadBatchSize {
+			end := min(start+projectionReadBatchSize, len(missing))
+			readRows, err := readProjectionRows(ctx, missing[start:end])
 			if err != nil {
 				return nil, true, err
 			}
-			if read != nil {
-				rowsByDataset[datasetID] = read
+			for _, read := range readRows {
+				if read == nil || read.GetKey() == nil {
+					continue
+				}
+				if read.GetKey().GetDatasetId() != datasetID {
+					return nil, true, errors.New("time-series projection batch returned a row from the wrong dataset")
+				}
+				if group := groups[TimeSeriesProjectionGrainKey(read.GetKey())]; group != nil {
+					group.rowsByDataset[datasetID] = read
+				}
 			}
 		}
-		primaryRow := rowsByDataset[primaryDatasetID]
+	}
+	out := make([]*pb.TimeSeriesRow, 0, len(order))
+	for _, grainKey := range order {
+		group := groups[grainKey]
+		primaryRow := group.rowsByDataset[primaryDatasetID]
 		if primaryRow == nil {
 			continue
 		}
 		out = append(out, &pb.TimeSeriesRow{
 			Key:        proto.Clone(primaryRow.GetKey()).(*pb.TimeSeriesKey),
-			Columns:    ProjectColumnsForView(primaryDatasetID, columns, rowsByDataset),
+			Columns:    ProjectColumnsForView(primaryDatasetID, columns, group.rowsByDataset),
 			Attributes: CloneStringMap(primaryRow.GetAttributes()),
 		})
 	}
 	return out, true, nil
+}
+
+// FilteredTimeSeriesRowsForView applies view.filter_json before projecting
+// fact rows into a TimeSeries view.
+func FilteredTimeSeriesRowsForView(
+	ctx context.Context,
+	item *pb.View,
+	columns []*pb.ViewColumn,
+	rows []*pb.TimeSeriesRow,
+	readProjectionRows TimeSeriesProjectionReader,
+) ([]*pb.TimeSeriesRow, bool, error) {
+	if item == nil || !IsProjectableTimeSeriesView(item, columns) {
+		return nil, false, nil
+	}
+	filtered, err := filterRowsByViewJSON(item, rows)
+	if err != nil {
+		return nil, true, err
+	}
+	return TimeSeriesRowsForView(ctx, item, columns, filtered, readProjectionRows)
 }
 
 // RecordRowsForView projects record rows into the columns exposed by a view.
@@ -65,44 +125,75 @@ func RecordRowsForView(
 	item *pb.View,
 	columns []*pb.ViewColumn,
 	rows []*pb.RecordRow,
-	readProjectionRow func(context.Context, *pb.RecordKey, string) (*pb.RecordRow, error),
+	readProjectionRows RecordProjectionReader,
 ) ([]*pb.RecordRow, bool, error) {
 	if item == nil || !IsProjectableRecordView(item, columns) {
 		return nil, false, nil
 	}
 	primaryDatasetID := item.GetPrimaryDatasetId()
 	datasetIDs := ViewProjectionDatasets(primaryDatasetID, columns)
-	out := make([]*pb.RecordRow, 0, len(rows))
-	seen := make(map[string]bool, len(rows))
+	type projectionGroup struct {
+		template      *pb.RecordKey
+		rowsByDataset map[string]*pb.RecordRow
+	}
+	groups := make(map[string]*projectionGroup, len(rows))
+	order := make([]string, 0, len(rows))
 	for _, row := range rows {
 		if row == nil || row.GetKey() == nil {
 			continue
 		}
 		grainKey := RecordProjectionGrainKey(row.GetKey())
-		if seen[grainKey] {
-			continue
+		group := groups[grainKey]
+		if group == nil {
+			group = &projectionGroup{template: row.GetKey(), rowsByDataset: make(map[string]*pb.RecordRow)}
+			groups[grainKey] = group
+			order = append(order, grainKey)
 		}
-		seen[grainKey] = true
-		rowsByDataset := map[string]*pb.RecordRow{row.GetKey().GetDatasetId(): row}
-		for _, datasetID := range datasetIDs {
-			if rowsByDataset[datasetID] != nil {
+		group.rowsByDataset[row.GetKey().GetDatasetId()] = row
+	}
+	for _, datasetID := range datasetIDs {
+		var missing []*pb.RecordKey
+		for _, grainKey := range order {
+			group := groups[grainKey]
+			if group.rowsByDataset[datasetID] != nil {
 				continue
 			}
-			read, err := readProjectionRow(ctx, row.GetKey(), datasetID)
+			key := proto.Clone(group.template).(*pb.RecordKey)
+			key.DatasetId = datasetID
+			missing = append(missing, key)
+		}
+		if len(missing) == 0 || readProjectionRows == nil {
+			continue
+		}
+		for start := 0; start < len(missing); start += projectionReadBatchSize {
+			end := min(start+projectionReadBatchSize, len(missing))
+			readRows, err := readProjectionRows(ctx, missing[start:end])
 			if err != nil {
 				return nil, true, err
 			}
-			if read != nil {
-				rowsByDataset[datasetID] = read
+			for _, read := range readRows {
+				if read == nil || read.GetKey() == nil {
+					continue
+				}
+				if read.GetKey().GetDatasetId() != datasetID {
+					return nil, true, errors.New("Record projection batch returned a row from the wrong dataset")
+				}
+				if group := groups[RecordProjectionGrainKey(read.GetKey())]; group != nil {
+					group.rowsByDataset[datasetID] = read
+				}
 			}
 		}
-		primaryRow := rowsByDataset[primaryDatasetID]
+	}
+	out := make([]*pb.RecordRow, 0, len(order))
+	for _, grainKey := range order {
+		group := groups[grainKey]
+		primaryRow := group.rowsByDataset[primaryDatasetID]
 		if primaryRow == nil {
 			continue
 		}
 		out = append(out, &pb.RecordRow{
 			Key:        proto.Clone(primaryRow.GetKey()).(*pb.RecordKey),
-			Columns:    ProjectRecordColumnsForView(primaryDatasetID, columns, rowsByDataset),
+			Columns:    ProjectRecordColumnsForView(primaryDatasetID, columns, group.rowsByDataset),
 			Attributes: CloneStringMap(primaryRow.GetAttributes()),
 		})
 	}

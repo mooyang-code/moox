@@ -15,9 +15,9 @@ server:
   service:
     - name: trpc.moox.storage.view.timer
       port: 20300
-      network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params=op=rotate"
+      network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params=op=maintain"
       protocol: timer
-      timeout: 60000
+      timeout: 900000
 
 client:
   filter:
@@ -33,6 +33,11 @@ client:
       network: tcp
       protocol: http
       timeout: 3000
+    - name: trpc.moox.storage.ViewIndex
+      target: ip://127.0.0.1:20104
+      network: tcp
+      protocol: trpc
+      timeout: 30000
 
 plugins:
   auth:

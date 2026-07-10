@@ -210,9 +210,7 @@ type seedView struct {
 	GrainKeys        []string `yaml:"grain_keys"`
 	FilterJSON       string   `yaml:"filter_json"`
 	Engine           string   `yaml:"engine"`
-	QueryWindow      string   `yaml:"query_window"`
-	ActiveResult     string   `yaml:"active_result"`
-	BuildStatus      string   `yaml:"build_status"`
+	RetentionWindow  string   `yaml:"retention_window"`
 	seedCommon       `yaml:",inline"`
 }
 
@@ -614,7 +612,7 @@ func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
 }
 
 func (s seedView) toPB() *pb.View {
-	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, PrimaryDatasetId: s.PrimaryDatasetID, DatasetIds: s.DatasetIDs, GrainKeys: s.GrainKeys, FilterJson: s.FilterJSON, Engine: s.Engine, QueryWindow: s.QueryWindow, ActiveResult: s.ActiveResult, BuildStatus: s.BuildStatus, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, PrimaryDatasetId: s.PrimaryDatasetID, DatasetIds: s.DatasetIDs, GrainKeys: s.GrainKeys, FilterJson: s.FilterJSON, Engine: s.Engine, RetentionWindow: s.RetentionWindow, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedViewColumn) toPB() (*pb.ViewColumn, error) {

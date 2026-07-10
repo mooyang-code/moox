@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v2"
@@ -18,10 +20,19 @@ func TestStorageConfigAppliesHealthDefault(t *testing.T) {
 func TestStorageConfigAllRoleMatchesConcreteRoles(t *testing.T) {
 	cfg := StorageConfig{Roles: []string{"all"}}
 
-	for _, role := range []string{"access", "view", "view_builder", "view_query", "archive", "primary"} {
+	for _, role := range []string{"access", "view", "view_builder", "view_query", "view_index", "archive", "primary"} {
 		if !cfg.HasRole(role) {
 			t.Fatalf("HasRole(%q) = false, want true for all role", role)
 		}
+	}
+}
+
+func TestStorageViewMaintenanceTargetStaysBelowCustomMaximum(t *testing.T) {
+	cfg := StorageConfig{View: StorageView{Maintenance: StorageViewMaintenance{MaxEntries: 100}}}
+	cfg.ApplyDefaults()
+
+	if cfg.View.Maintenance.TargetEntries != 75 {
+		t.Fatalf("TargetEntries = %d, want 75", cfg.View.Maintenance.TargetEntries)
 	}
 }
 
@@ -61,14 +72,11 @@ func TestStorageConfigApplyHomeRootRebasesDefaultPaths(t *testing.T) {
 	if cfg.Storage.Metadata.Path != "/data/moox/storage/metadata/storage_metadata.db" {
 		t.Fatalf("Metadata.Path = %q", cfg.Storage.Metadata.Path)
 	}
-	if cfg.Storage.Devices.DuckDBPath != "/data/moox/storage/duckdb/views.duckdb" {
-		t.Fatalf("Devices.DuckDBPath = %q", cfg.Storage.Devices.DuckDBPath)
+	if cfg.Storage.Devices.ViewIndexRoot != "/data/moox/storage/view-indexes" {
+		t.Fatalf("Devices.ViewIndexRoot = %q", cfg.Storage.Devices.ViewIndexRoot)
 	}
 	if cfg.Storage.Devices.PebblePath != "/data/moox/storage/pebble" {
 		t.Fatalf("Devices.PebblePath = %q", cfg.Storage.Devices.PebblePath)
-	}
-	if cfg.Storage.Devices.BlevePath != "/data/moox/storage/bleve" {
-		t.Fatalf("Devices.BlevePath = %q", cfg.Storage.Devices.BlevePath)
 	}
 	if cfg.Storage.Devices.ParquetPath != "/data/moox/storage/archive" {
 		t.Fatalf("Devices.ParquetPath = %q", cfg.Storage.Devices.ParquetPath)
@@ -82,7 +90,7 @@ func TestStorageConfigApplyHomeRootKeepsAbsoluteCustomPaths(t *testing.T) {
 			Path: "/custom/metadata.db",
 		},
 		Devices: StorageDevices{
-			DuckDBPath: "/custom/views.duckdb",
+			ViewIndexRoot: "/custom/view-indexes",
 		},
 	}
 
@@ -91,8 +99,8 @@ func TestStorageConfigApplyHomeRootKeepsAbsoluteCustomPaths(t *testing.T) {
 	if cfg.Metadata.Path != "/custom/metadata.db" {
 		t.Fatalf("Metadata.Path = %q, want /custom/metadata.db", cfg.Metadata.Path)
 	}
-	if cfg.Devices.DuckDBPath != "/custom/views.duckdb" {
-		t.Fatalf("Devices.DuckDBPath = %q, want /custom/views.duckdb", cfg.Devices.DuckDBPath)
+	if cfg.Devices.ViewIndexRoot != "/custom/view-indexes" {
+		t.Fatalf("Devices.ViewIndexRoot = %q, want /custom/view-indexes", cfg.Devices.ViewIndexRoot)
 	}
 }
 
@@ -103,10 +111,9 @@ func TestStorageConfigApplyHomeRootRebasesAbsolutePathsUnderOldRoot(t *testing.T
 			Path: "/old/storage/metadata/storage_metadata.db",
 		},
 		Devices: StorageDevices{
-			PebblePath:  "/old/storage/pebble",
-			DuckDBPath:  "/old/storage/duckdb/views.duckdb",
-			BlevePath:   "/old/storage/bleve",
-			ParquetPath: "/old/storage/archive",
+			PebblePath:    "/old/storage/pebble",
+			ViewIndexRoot: "/old/storage/view-indexes",
+			ParquetPath:   "/old/storage/archive",
 		},
 		EventBus: StorageEventBus{
 			Embedded: StorageEmbeddedEventBus{
@@ -120,14 +127,11 @@ func TestStorageConfigApplyHomeRootRebasesAbsolutePathsUnderOldRoot(t *testing.T
 	if cfg.Metadata.Path != "/new/storage/metadata/storage_metadata.db" {
 		t.Fatalf("Metadata.Path = %q", cfg.Metadata.Path)
 	}
-	if cfg.Devices.DuckDBPath != "/new/storage/duckdb/views.duckdb" {
-		t.Fatalf("Devices.DuckDBPath = %q", cfg.Devices.DuckDBPath)
+	if cfg.Devices.ViewIndexRoot != "/new/storage/view-indexes" {
+		t.Fatalf("Devices.ViewIndexRoot = %q", cfg.Devices.ViewIndexRoot)
 	}
 	if cfg.Devices.PebblePath != "/new/storage/pebble" {
 		t.Fatalf("Devices.PebblePath = %q", cfg.Devices.PebblePath)
-	}
-	if cfg.Devices.BlevePath != "/new/storage/bleve" {
-		t.Fatalf("Devices.BlevePath = %q", cfg.Devices.BlevePath)
 	}
 	if cfg.Devices.ParquetPath != "/new/storage/archive" {
 		t.Fatalf("Devices.ParquetPath = %q", cfg.Devices.ParquetPath)
@@ -146,6 +150,7 @@ func TestStorageSplitConfigFilesLoadRolesAndHealth(t *testing.T) {
 		{file: "storage.access.yaml", wantRole: "access", wantHealth: ":20210"},
 		{file: "storage.view_builder.yaml", wantRole: "view_builder", wantHealth: ":20211"},
 		{file: "storage.view_query.yaml", wantRole: "view_query", wantHealth: ":20212"},
+		{file: "storage.view_index.yaml", wantRole: "view_index", wantHealth: ":20213"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -163,50 +168,85 @@ func TestStorageSplitConfigFilesLoadRolesAndHealth(t *testing.T) {
 	}
 }
 
-func TestStorageViewRotationDefaults(t *testing.T) {
-	var cfg StorageConfig
-	cfg.ApplyDefaults()
-
-	rotation := cfg.View.Rotation
-	if !rotation.IsEnabled() {
-		t.Fatal("rotation enabled = false, want true")
+func TestStorageConfigsContainNoLegacyPathsOrRotationAndDependentsDoNotOwnIndexRoot(t *testing.T) {
+	files := []string{
+		"storage.yaml", "storage.access.yaml", "storage.view.yaml", "storage.view_builder.yaml", "storage.view_query.yaml", "storage.view_index.yaml",
 	}
-	if rotation.MaxEntries != 200000 {
-		t.Fatalf("max entries = %d, want 200000", rotation.MaxEntries)
-	}
-	if rotation.MinReadyEntries != 50000 {
-		t.Fatalf("min ready entries = %d, want 50000", rotation.MinReadyEntries)
-	}
-	if rotation.OverlapWindow != "30m" {
-		t.Fatalf("overlap window = %q, want 30m", rotation.OverlapWindow)
-	}
-	if rotation.TimeSeries.FreqBackfillWindow["1d"] != "730d" {
-		t.Fatalf("1d backfill window = %q, want 730d", rotation.TimeSeries.FreqBackfillWindow["1d"])
-	}
-	if rotation.Record.DefaultVersionWindow != "30d" {
-		t.Fatalf("record version window = %q, want 30d", rotation.Record.DefaultVersionWindow)
+	for _, file := range files {
+		raw, err := os.ReadFile("../../config/" + file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		text := string(raw)
+		for _, legacy := range []string{"duckdb_" + "path:", "bleve_" + "path:", "rota" + "tion:"} {
+			if strings.Contains(text, legacy) {
+				t.Fatalf("%s still contains legacy key %q", file, legacy)
+			}
+		}
+		if (file == "storage.view_builder.yaml" || file == "storage.view_query.yaml") && strings.Contains(text, "view_index_root:") {
+			t.Fatalf("%s must not own view_index_root", file)
+		}
 	}
 }
 
-func TestStorageViewRotationYAMLOverrides(t *testing.T) {
+func TestStorageViewMaintenanceDefaults(t *testing.T) {
+	var cfg StorageConfig
+	cfg.ApplyDefaults()
+
+	maintenance := cfg.View.Maintenance
+	if !maintenance.IsEnabled() {
+		t.Fatal("maintenance enabled = false, want true")
+	}
+	if cfg.Devices.ViewIndexRoot != "var/storage/view-indexes" {
+		t.Fatalf("view index root = %q, want var/storage/view-indexes", cfg.Devices.ViewIndexRoot)
+	}
+	if cfg.View.IndexServiceName != "trpc.moox.storage.ViewIndex" {
+		t.Fatalf("index service name = %q", cfg.View.IndexServiceName)
+	}
+	if maintenance.LeaseTTL != "90s" || maintenance.RunBudget != "20s" {
+		t.Fatalf("maintenance lease/run = %q/%q", maintenance.LeaseTTL, maintenance.RunBudget)
+	}
+	if maintenance.MaxEntries != 200000 || maintenance.TargetEntries != 150000 {
+		t.Fatalf("entry watermarks = %d/%d", maintenance.MaxEntries, maintenance.TargetEntries)
+	}
+	if maintenance.MaxPhysicalBytes != 512*1024*1024 || maintenance.MinFreeDiskBytes != 1024*1024*1024 {
+		t.Fatalf("byte watermarks = %d/%d", maintenance.MaxPhysicalBytes, maintenance.MinFreeDiskBytes)
+	}
+	if maintenance.TimeSeries.RetentionByFreq["1d"] != "730d" {
+		t.Fatalf("1d retention window = %q, want 730d", maintenance.TimeSeries.RetentionByFreq["1d"])
+	}
+	if maintenance.Record.RetentionWindow != "30d" {
+		t.Fatalf("record retention window = %q, want 30d", maintenance.Record.RetentionWindow)
+	}
+}
+
+func TestStorageViewMaintenanceYAMLOverrides(t *testing.T) {
 	raw := []byte(`
 storage:
+  devices:
+    view_index_root: /indexes
   view:
-    rotation:
+    index_service_name: custom.ViewIndex
+    maintenance:
       enabled: true
+      lease_ttl: 2m
+      run_budget: 30s
+      page_size: 750
       max_entries: 300000
-      min_ready_entries: 80000
+      target_entries: 220000
+      max_physical_bytes: 805306368
+      min_free_disk_bytes: 2147483648
+      min_ready_entries: 8000
       overlap_window: 45m
-      default_backfill_window: 2d
       allowed_lag: 5m
-      remove_grace_ms: 120000
+      remove_grace: 2m
       time_series:
-        freq_backfill_window:
+        default_retention_window: 14d
+        retention_by_freq:
           1h: 60d
           1d: 1095d
       record:
-        default_version_window: 45d
-        max_backfill_entries: 300000
+        retention_window: 45d
 `)
 	var cfg RuntimeConfig
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
@@ -214,23 +254,26 @@ storage:
 	}
 	cfg.ApplyDefaults()
 
-	rotation := cfg.Storage.View.Rotation
-	if rotation.MaxEntries != 300000 {
-		t.Fatalf("max entries = %d, want 300000", rotation.MaxEntries)
+	maintenance := cfg.Storage.View.Maintenance
+	if cfg.Storage.Devices.ViewIndexRoot != "/indexes" || cfg.Storage.View.IndexServiceName != "custom.ViewIndex" {
+		t.Fatalf("owner config = %q/%q", cfg.Storage.Devices.ViewIndexRoot, cfg.Storage.View.IndexServiceName)
 	}
-	if rotation.TimeSeries.FreqBackfillWindow["1h"] != "60d" {
-		t.Fatalf("1h window = %q, want 60d", rotation.TimeSeries.FreqBackfillWindow["1h"])
+	if maintenance.MaxEntries != 300000 || maintenance.TargetEntries != 220000 {
+		t.Fatalf("entry watermarks = %d/%d", maintenance.MaxEntries, maintenance.TargetEntries)
 	}
-	if rotation.Record.DefaultVersionWindow != "45d" {
-		t.Fatalf("record version window = %q, want 45d", rotation.Record.DefaultVersionWindow)
+	if maintenance.TimeSeries.RetentionByFreq["1h"] != "60d" {
+		t.Fatalf("1h window = %q, want 60d", maintenance.TimeSeries.RetentionByFreq["1h"])
+	}
+	if maintenance.Record.RetentionWindow != "45d" {
+		t.Fatalf("record retention window = %q, want 45d", maintenance.Record.RetentionWindow)
 	}
 }
 
-func TestStorageViewRotationYAMLDisableKillSwitch(t *testing.T) {
+func TestStorageViewMaintenanceYAMLDisableKillSwitch(t *testing.T) {
 	raw := []byte(`
 storage:
   view:
-    rotation:
+    maintenance:
       enabled: false
 `)
 	var cfg RuntimeConfig
@@ -238,7 +281,7 @@ storage:
 		t.Fatalf("unmarshal config: %v", err)
 	}
 	cfg.ApplyDefaults()
-	if cfg.Storage.View.Rotation.IsEnabled() {
-		t.Fatal("rotation enabled = true after explicit false, want false")
+	if cfg.Storage.View.Maintenance.IsEnabled() {
+		t.Fatal("maintenance enabled = true after explicit false, want false")
 	}
 }

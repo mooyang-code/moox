@@ -1,5 +1,6 @@
 <template>
-  <div class="metadata-page">
+  <div class="moox-page">
+    <div class="moox-inner">
     <div class="page-head">
       <h2>字段管理</h2>
       <a-space>
@@ -83,6 +84,7 @@
         </a-form-item>
       </a-form>
     </a-modal>
+    </div>
   </div>
 </template>
 
@@ -207,13 +209,6 @@ onMounted(load);
 </script>
 
 <style scoped>
-.metadata-page {
-  height: 100%;
-  box-sizing: border-box;
-  padding: 20px 20px 72px;
-  overflow-y: auto;
-}
-
 .page-head {
   display: flex;
   align-items: center;

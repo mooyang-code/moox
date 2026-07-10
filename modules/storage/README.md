@@ -8,8 +8,8 @@ MooX Storage 是面向量化金融场景的统一数据存储服务。它在**�
 
 - **统一写入与读取**：所有数据访问都经由 Access 入口；时序数据使用 `TimeSeriesKey + TimeRange`，记录数据使用 `RecordKey + VersionRange`，写入按事实键做列级更新。
 - **多形态数据**：时序（K 线/tick/快照）、记录（公司/交易对资料）、事件、文档、通用表格，以及参数化因子结果。
-- **Record 全文检索**：登记 Record View 后由 Bleve 维护 active/building 双索引，支持 `text_query` 与结构化过滤。
-- **TimeSeries 物化视图**：登记 TimeSeries View 后由 DuckDB 维护 active/building 双索引，`QueryTimeSeriesRows` 直接读取 active 版本。
+- **Record 全文检索**：登记 Record View 后由 Bleve 维护 a/b 双槽索引，支持 `text_query` 与结构化过滤。
+- **TimeSeries 物化视图**：登记 TimeSeries View 后由 DuckDB 维护 a/b 双库，`QueryTimeSeriesRows` 只读取已激活槽位。
 - **冷归档**：定时把在线主存数据归档为 Parquet 并登记归档文件。
 - **可水平扩展**：通过路由规则把事实数据分片到多个在线主存节点；主存可同进程内嵌，也可独立部署。
 
@@ -34,9 +34,11 @@ Storage 的事实主存统一按 `key + version` 定位一行数据，Access 对
 
 ### View 版本与切换
 
-View 是用户可查询的派生读模型：TimeSeries View 由 DuckDB 维护结果表，Record View 由 Bleve 维护索引目录。两者统一使用 active/building 双索引生命周期；只要 View 定义变化，例如新增查询列，`view_version` 就会递增，view_builder 通过 `op=rotate` 抢占式构建新 building 索引，成功后再把读取切到新 active 版本。
+View 是可从 PrimaryStore 重建的近期派生读模型。每个 View 只有确定性的 `a`、`b` 两个槽位：TimeSeries 槽位是一份独立 DuckDB 文件，Record 槽位是一个独立 Bleve 目录。`view_index` 是唯一可以打开、查询和删除这些文件的进程；`view_builder` 与 `view_query` 仅调用其 RPC。
 
-TimeSeries View 的 DuckDB 结果表按 `ViewColumn` 展开为真实物理列，不再以 `row_json` 作为查询主路径。物理表名以 `view_{view_id}` 开头；视图字段统一使用 `dataset_id.column_name`，并为 `(subject_id, freq, data_time)`、内部行键与每个视图字段创建索引；`QueryTimeSeriesRows` 会把 `subject_id`、`freq`、`time_range`、结构化 filter、sort 和分页尽量下推到 DuckDB SQL 执行。
+只要 View 定义或字段变化，`view_version` 就递增，旧构建声明立即失效。`view_builder` 先持久化 `PREPARING` 构建租约，再创建非活跃槽位，按页从 PrimaryStore 回扫 `retention_window`，保存游标并续租；追平增量后通过一次 `ActivateViewIndex` CAS 原子切换读取指针。旧槽位在引用排空及宽限期结束后整库删除，因此无需依赖 DuckDB 行删除或压缩回收空间。
+
+TimeSeries 槽位内只有固定表 `view_rows`，按 `ViewColumn` 展开为真实物理列。`QueryTimeSeriesRows` 将 key、时间范围、结构化过滤、排序、`limit` 和分页下推到 DuckDB。Bleve 同样在引擎内完成版本范围、排序和 `size+1` 分页，查询端不会先加载完整命中集。
 
 创建或更新 View 时，主数据集决定 View 的引擎和粒度：时序主数据集对应 DuckDB View，记录主数据集对应 Bleve View。包含数据集只要求已在同一空间注册，不能与主数据集重复；实际物化时是否能对齐取决于 View 字段能否按主数据集粒度聚合。`dataset_id` 必须是 lower_snake_case 且最长 20 字符，`view_id` 必须是 lower_snake_case 且最长 30 字符。
 
@@ -44,14 +46,12 @@ TimeSeries View 的 DuckDB 结果表按 `ViewColumn` 展开为真实物理列，
 | --- | --- |
 | `view_version` | 当前 View 定义版本，新增列或构建形态变化时递增 |
 | `active_view_version` | 当前线上读取的 View 版本 |
-| `active_result` | 当前线上读取的结果表 / 索引标识 |
-| `building_view_version` | 正在后台构建的目标版本 |
-| `building_result` | 正在后台构建的新结果标识 |
-| `build_status` | 构建状态：`pending` / `building` / `active` / `failed` |
-| `build_error` | 最近一次失败原因 |
-| `build_started_at` / `build_finished_at` | 最近一次构建开始 / 结束时间 |
+| `active_index_id` | 当前线上读取的 a/b 槽位标识 |
+| `active_columns` / `active_schema_hash` | 与读取指针同时激活的字段快照，即使索引为空也可校验查询字段 |
+| `active_coverage_start` / `active_coverage_end` | 当前索引的保留范围 |
+| `index_build` | 当前构建租约，含 `build_id`、目标版本、状态、owner、游标、范围、计数和错误 |
 
-构建期间的新增写入会先落 PrimaryStore，再由 View 消费者同步到 active 和合法 building 索引；重建从 PrimaryStore 回扫完整事实行，不从旧 DuckDB 表或旧 Bleve 索引复制。旧 active 会一直服务到 `CompleteViewBuild` 切换完成，因此没有读空窗；新字段只有在 building 切成 active 后才可查询。非 a/b slot 的旧派生索引可被 rotate 丢弃并重建；DuckDB `__latest` helper 仍保留，待后续性能复核后再删除。
+构建状态依次为 `PREPARING -> BUILDING -> CATCHING_UP -> READY`；失败进入 `FAILED`。增量事件只写当前活动槽位，以及版本和 schema 都匹配的 `BUILDING/CATCHING_UP` 槽位。活动指针在最终 CAS 成功前保持不变，因此切换期间没有读空窗；新增字段在新槽位激活前返回 `VIEW_NOT_READY`。
 
 ## 环境要求
 
@@ -102,8 +102,7 @@ storage:
     path: ./var/storage/metadata/storage_metadata.db   # 元数据 SQLite 文件
   devices:
     pebble_path:  ./var/storage/pebble                 # 在线主存目录
-    duckdb_path:  ./var/storage/duckdb/views.duckdb    # 视图物化库
-    bleve_path:   ./var/storage/bleve                  # 全文索引目录
+    view_index_root: ./var/storage/view-indexes        # 仅 view_index owner 使用
     parquet_path: ./var/storage/archive                # 归档目录
   primary:
     service_name: ""        # 留空=同进程内嵌主存；填服务名=走远程 PrimaryStore（分布式）
@@ -124,28 +123,35 @@ storage:
   view:
     metadata_service_name: trpc.moox.storage.Metadata
     access_service_name: trpc.moox.storage.Access  # 留空=同进程本地 Access reader
+    index_service_name: trpc.moox.storage.ViewIndex
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 2
-    rotation:
-      enabled: true       # false 是完整 kill switch，跳过整个 rotate pass
+    maintenance:
+      enabled: true
+      owner_id: ""        # 留空时自动生成 hostname:pid:随机后缀
+      lease_ttl: 90s
+      run_budget: 20s
+      page_size: 500
       max_entries: 200000
-      min_ready_entries: 50000
+      target_entries: 150000
+      max_physical_bytes: 536870912
+      min_free_disk_bytes: 1073741824
+      min_ready_entries: 1000
       overlap_window: 30m
-      default_backfill_window: 1d
       allowed_lag: 2m
-      remove_grace_ms: 60000
+      remove_grace: 60s
       time_series:
-        freq_backfill_window:
-          1m: 6h
-          1h: 30d
+        default_retention_window: 7d
+        retention_by_freq:
+          1m: 24h
+          1h: 90d
           1d: 730d
       record:
-        default_version_window: 30d
-        max_backfill_entries: 200000
+        retention_window: 30d
 ```
 
-DuckDB 视图库默认会在 DSN 上追加资源限制，避免浏览页无过滤查询触发 DuckDB 按物理内存比例预留过多缓存：`memory_limit=512MB`、`threads=1`、`max_temp_directory_size=2GB`。如需在大规格机器上调高，可通过 `MOOX_DUCKDB_MEMORY_LIMIT`、`MOOX_DUCKDB_THREADS`、`MOOX_DUCKDB_MAX_TEMP_DIRECTORY_SIZE` 覆盖；若 `duckdb_path` 自身已带同名 query 参数，则以显式参数为准。
+每个 DuckDB 槽位默认使用 `memory_limit=512MB`、`threads=1`、`max_temp_directory_size=2GB`。可通过 `MOOX_DUCKDB_MEMORY_LIMIT`、`MOOX_DUCKDB_THREADS`、`MOOX_DUCKDB_MAX_TEMP_DIRECTORY_SIZE` 覆盖。
 
 ### Runtime Roles
 
@@ -155,7 +161,10 @@ DuckDB 视图库默认会在 DSN 上追加资源限制，避免浏览页无过�
 | --- | --- |
 | `access` | 面向用户的写入和权威读取入口；校验列契约、解析路由、写 PrimaryStore，并发布行变更事件。 |
 | `primary` | 拥有 Pebble PrimaryStore RPC；可按路由和配置部署多个 primary 服务。 |
-| `view` | 消费行变更事件、批量聚合 key、通过 Access RPC 回读当前行；TimeSeries View 写入 DuckDB，Record View 写入 Bleve。 |
+| `view_index` | 唯一物理 owner；管理每个 View/槽位的 DuckDB 文件与 Bleve 目录，并提供内部生命周期和查询 RPC。 |
+| `view_builder` | 消费行变更事件，向 owner 双写活动/构建槽位，并执行有租约、可续跑的维护状态机。 |
+| `view_query` | 对外提供 DataView；读取元数据中的 `active_index_id` 并通过 owner 查询。 |
+| `view` | 开发模式组合角色，在一个进程内承载 owner、builder 和 query，但仍通过相同接口分层。 |
 | `archive` | 独立归档运行时；消费行变更事件，通过 Metadata/Access RPC 读取元数据与主存事实数据，后续将写入 Parquet 冷归档。 |
 
 默认运行角色是 `access + view`，不包含显式 `primary`。当 `access` 的 `primary.service_name` 为空时，进程会同时暴露本地 `PrimaryStore`，保持单进程/本地主存部署可用；当 `primary.service_name` 非空时，Access 走远程 PrimaryStore，除非显式加入 `primary` 角色。
@@ -165,7 +174,7 @@ DuckDB 视图库默认会在 DSN 上追加资源限制，避免浏览页无过�
 - `${prefix}.time_series.rows_changed.v1`
 - `${prefix}.record.rows_changed.v1`
 
-NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。实时事件消费者只处理启动后新产生的行变更；历史补仓、断档追数和读模型重建统一交给 view_builder 的 `op=rotate`。为了避免内嵌 JetStream 在小规格机器上无限堆积事件，`max_age_hours`、`max_msgs`、`max_bytes` 会限制 stream 保留窗口；消费者通过 `max_in_flight`、`ack_wait_ms`、`max_deliver` 控制并发、Ack 等待和重试上限。View 事件 handler 只有在派生写入成功后才返回 success；失败会向上传递错误，让 NATS `Nak` 并重试。View 批处理参数为 `view.metadata_service_name`、`view.access_service_name`、`view.batch_size`、`view.batch_wait_ms`、`view.max_workers`，生命周期参数位于 `view.rotation`。Archive 独立部署时也复用 `view.metadata_service_name` 和 `view.access_service_name` 连接 Metadata/Access RPC，并通过同一个 eventbus 订阅行变更事件；当前事件 handler 为占位 ack，Parquet 归档策略后续补齐。
+NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。实时事件处理失败会向上传递错误，由 JetStream `Nak` 并重试；历史补仓、断档追数和索引重建统一交给 view_builder 的 `op=maintain`。`max_age_hours`、`max_msgs`、`max_bytes` 限制 stream 保留，`max_in_flight`、`ack_wait_ms`、`max_deliver` 控制消费压力。维护参数位于 `view.maintenance`。
 
 ### `config/trpc_go.yaml` 默认服务端口
 
@@ -175,13 +184,14 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 | PrimaryStore | 20101 | - | 在线主存（内部服务） |
 | Access | 20102 | 20201 | 事实数据读写 |
 | DataView | 20103 | 20202 | 视图/检索查询 |
+| ViewIndex | 20104 | - | 内部物理索引 owner |
 | admin | 20000 | - | tRPC 管理端口（`/cmds`、`/debug/pprof/*`，仅绑定本机） |
 
 后台计时器（在 `config/trpc_go.yaml` 的 `service` 段，通过 cron 串里的 `?disable=1` 开关、`*/30 * * * * *` 调频）：
 
 | 计时器服务 | 作用 | 默认 |
 | --- | --- | --- |
-| `trpc.moox.storage.view.timer` | 统一 View 索引轮换：schema warming、容量轮换、ready switch、stale/orphan 清理；参数为 `op=rotate`，只在 view_builder 注册 | 开（每 30s） |
+| `trpc.moox.storage.view.timer` | 统一 View 索引维护：schema 抢占、容量/保留范围切换、追平、激活和 orphan 清理；参数为 `op=maintain`，只在 view_builder 注册 | 开（每 30s） |
 | `trpc.moox.storage.archive.timer` | Archive 角色的 Parquet 冷归档调度入口 | 关 |
 
 配置路径可被命令行参数或环境变量覆盖：
@@ -394,8 +404,7 @@ storage:
     path: ./var/storage/metadata/storage_metadata.db
   devices:
     pebble_path: ./var/storage/pebble
-    duckdb_path: ./var/storage/duckdb/views.duckdb
-    bleve_path: ./var/storage/bleve
+    view_index_root: ./var/storage/view-indexes
     parquet_path: ./var/storage/archive
   primary:
     service_name: ""
@@ -525,7 +534,7 @@ primary_store_routes:
 1. **进程/端口**：服务日志出现 tRPC 启动信息，且端口在监听：
 
 ```bash
-lsof -i :20100 -i :20101 -i :20102 -i :20103   # 各服务端口
+lsof -i :20100 -i :20101 -i :20102 -i :20103 -i :20104   # 各服务端口
 curl -s http://127.0.0.1:20000/cmds             # admin 管理端口，返回命令列表即存活
 curl -s http://127.0.0.1:20000/debug/pprof/heap > heap.pprof
 ```
@@ -544,7 +553,7 @@ curl -s -XPOST http://127.0.0.1:20200/trpc.moox.storage.Metadata/ListSpaces \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-3. **读写链路**：通过 Access 写一行再读回，必要时等待 `op=rotate` 完成 warming 后查询 DataView。
+3. **读写链路**：通过 Access 写一行再读回，等待 `op=maintain` 激活首个索引后查询 DataView。
 
 4. **分布式额外检查**：Access 节点日志无"primary store"连接错误；主存节点 `PrimaryStore` 端口可被 Access 节点 `telnet`/`nc` 通；NATS 上能看到 `moox.storage.time_series.rows_changed.v1` / `moox.storage.record.rows_changed.v1` 主题有消息。
 
@@ -575,7 +584,7 @@ Space、View（+ViewColumn）、DataSource、Subject（+SubjectSymbol）、Datas
 | `QueryTimeSeriesRows` | 查询 TimeSeries + DuckDB 派生 View；不存在返回 `VIEW_NOT_FOUND` |
 | `SearchRecordRows` | 搜索 Record + Bleve 派生 View，支持全文 + 结构化过滤 |
 
-View 索引生命周期（schema 抢占重建、容量轮换、ready switch、陈旧清理）统一由 `view_builder` 角色的 `op=rotate` 调度驱动，不再提供手动重建 RPC。`QueryTimeSeriesRows` / `SearchRecordRows` 始终读当前 active 索引；完整历史以 PrimaryStore KV/Pebble 为准。
+View 索引生命周期由 `view_builder` 角色的 `op=maintain` 调度驱动，不提供手动重建 RPC。`QueryTimeSeriesRows` / `SearchRecordRows` 始终通过 owner 读取 `active_index_id`；完整历史以 PrimaryStore KV/Pebble 为准。
 
 ### PrimaryStore — 在线主存（端口 20101，内部服务）
 

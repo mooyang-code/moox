@@ -1,7 +1,12 @@
 <template>
-  <div class="metadata-page">
+  <div class="moox-page">
+    <div class="moox-inner">
     <div class="page-head">
-      <h2>数据集</h2>
+      <div class="page-head__title">
+        <slot name="page-title">
+          <h2>{{ props.pageTitle }}</h2>
+        </slot>
+      </div>
       <a-space>
         <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
           <template #icon><icon-plus /></template>
@@ -56,6 +61,8 @@
         </a-table-column>
       </template>
     </a-table>
+
+    </div>
 
     <a-modal v-model:visible="visible" width="760px" :title="modalTitle" @ok="submit">
       <a-form :model="form" auto-label-width>
@@ -136,6 +143,7 @@ import {
 defineOptions({ name: 'DataDatasets' });
 
 const props = withDefaults(defineProps<{
+  pageTitle?: string;
   ownerModule?: OwnerModule;
   datasetRole?: DatasetRole;
   filterOwnerModules?: OwnerModule[];
@@ -143,6 +151,7 @@ const props = withDefaults(defineProps<{
   includeUnowned?: boolean;
   managedBy?: string;
 }>(), {
+  pageTitle: '数据集',
   ownerModule: undefined,
   datasetRole: undefined,
   filterOwnerModules: undefined,
@@ -336,18 +345,17 @@ onMounted(load);
 </script>
 
 <style scoped>
-.metadata-page {
-  height: 100%;
-  box-sizing: border-box;
-  padding: 20px 20px 72px;
-  overflow-y: auto;
-}
-
 .page-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 16px;
+}
+
+.page-head__title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
 .page-head h2 {

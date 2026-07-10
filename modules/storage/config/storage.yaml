@@ -7,8 +7,7 @@ storage:
     path: ./var/storage/metadata/storage_metadata.db
   devices:
     pebble_path: ./var/storage/pebble
-    duckdb_path: ./var/storage/duckdb/views.duckdb
-    bleve_path: ./var/storage/bleve
+    view_index_root: ./var/storage/view-indexes
     parquet_path: ./var/storage/archive
   primary:
     service_name: ""
@@ -29,24 +28,31 @@ storage:
   view:
     metadata_service_name: trpc.moox.storage.Metadata
     access_service_name: trpc.moox.storage.Access
+    index_service_name: trpc.moox.storage.ViewIndex
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 2
-    rotation:
+    maintenance:
       enabled: true
+      owner_id: ""
+      lease_ttl: 90s
+      run_budget: 20s
+      page_size: 500
       max_entries: 200000
-      min_ready_entries: 50000
+      target_entries: 150000
+      max_physical_bytes: 536870912
+      min_free_disk_bytes: 1073741824
+      min_ready_entries: 1000
       overlap_window: 30m
-      default_backfill_window: 1d
       allowed_lag: 2m
-      remove_grace_ms: 60000
+      remove_grace: 60s
       time_series:
-        freq_backfill_window:
-          1m: 6h
-          1h: 30d
+        default_retention_window: 7d
+        retention_by_freq:
+          1m: 24h
+          1h: 90d
           1d: 730d
       record:
-        default_version_window: 30d
-        max_backfill_entries: 200000
+        retention_window: 30d
   health:
     addr: ":20210"

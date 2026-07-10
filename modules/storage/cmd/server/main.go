@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,6 +25,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	viewbuilder "github.com/mooyang-code/moox/modules/storage/internal/services/view/builder"
 	searchsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view/search"
+	viewindexsvc "github.com/mooyang-code/moox/modules/storage/internal/services/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/healthz"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
@@ -58,14 +62,12 @@ func main() {
 	}
 	opts := storageOptionsFromConfig(cfg.Storage)
 	if err := validateStorageDeployment(cfg.Storage); err != nil {
-		log.Errorf("storage deployment config invalid: %v", err)
-		os.Exit(1)
+		exitWithStartupError("storage deployment config invalid", err)
 	}
 	if needsRowsChangedBus(cfg.Storage) {
 		embeddedEventBus, err := eventbus.StartEmbeddedServer(cfg.Storage.EventBus)
 		if err != nil {
-			log.Errorf("启动内嵌 storage eventbus 失败: %v", err)
-			os.Exit(1)
+			exitWithStartupError("启动内嵌 storage eventbus 失败", err)
 		}
 		if embeddedEventBus != nil {
 			defer func() {
@@ -77,8 +79,7 @@ func main() {
 		}
 		events, err := eventbus.NewRowsChangedBus(trpc.BackgroundContext(), cfg.Storage.EventBus)
 		if err != nil {
-			log.Errorf("初始化 storage eventbus 失败: %v", err)
-			os.Exit(1)
+			exitWithStartupError("初始化 storage eventbus 失败", err)
 		}
 		opts.Events = events
 	}
@@ -93,24 +94,19 @@ func main() {
 		}()
 	}
 	accessReader := accessReaderForRuntime(cfg.Storage, storageService)
-	if storageService != nil {
-		storageService.SetViewFactReader(accessReader)
-	}
 
 	if cfg.Storage.HasRole("access") {
 		if storageService == nil {
-			log.Errorf("access role requires storage service")
-			os.Exit(1)
+			exitWithStartupError("access role requires storage service", nil)
 		}
 		pb.RegisterMetadataService(s, storageService)
 		pb.RegisterAccessService(s, storageService)
 	}
 
-	if shouldRegisterViewQueryRole(cfg.Storage) || shouldStartViewBuilderRole(cfg.Storage) {
+	if shouldRegisterViewQueryRole(cfg.Storage) || shouldStartViewBuilderRole(cfg.Storage) || shouldStartViewIndexRole(cfg.Storage) {
 		viewRuntime, err := registerViewRole(s, cfg.Storage, opts, storageService, accessReader)
 		if err != nil {
-			log.Errorf("初始化 ViewService 失败: %v", err)
-			os.Exit(1)
+			exitWithStartupError("初始化 ViewService 失败", err)
 		}
 		log.Infof("View role initialized")
 		defer func() {
@@ -125,8 +121,7 @@ func main() {
 	if shouldStartArchiveRole(cfg.Storage) {
 		archiveRuntime, err := registerArchiveRole(s, cfg.Storage, opts, storageService, accessReader)
 		if err != nil {
-			log.Errorf("初始化 ArchiveService 失败: %v", err)
-			os.Exit(1)
+			exitWithStartupError("初始化 ArchiveService 失败", err)
 		}
 		log.Infof("Archive role initialized")
 		defer func() {
@@ -159,10 +154,21 @@ func main() {
 	log.Warnf("Storage roles %v stopped", cfg.Storage.Roles)
 }
 
+func exitWithStartupError(message string, err error) {
+	if err != nil {
+		log.Errorf("%s: %v", message, err)
+		_, _ = fmt.Fprintf(os.Stderr, "%s: %v\n", message, err)
+	} else {
+		log.Errorf("%s", message)
+		_, _ = fmt.Fprintln(os.Stderr, message)
+	}
+	os.Exit(1)
+}
+
 type viewRuntime struct {
 	service *view.Service
 	builder *viewbuilder.Service
-	views   *deviceduckdb.ViewStore
+	duck    *deviceduckdb.IndexManager
 	search  *searchsvc.Service
 }
 
@@ -177,11 +183,12 @@ func (r *viewRuntime) Close() error {
 	if r.service != nil {
 		err = errors.Join(err, r.service.Close())
 	}
+	view.SetDefaultMaintenance(nil)
 	if r.search != nil {
 		err = errors.Join(err, r.search.Close())
 	}
-	if r.views != nil {
-		err = errors.Join(err, r.views.Close())
+	if r.duck != nil {
+		err = errors.Join(err, r.duck.Close())
 	}
 	return err
 }
@@ -234,6 +241,8 @@ func storageServiceName(storage storageconfig.StorageConfig) string {
 		return "storage-view-query"
 	case "view_builder":
 		return "storage-view-builder"
+	case "view_index":
+		return "storage-view-index"
 	case "access":
 		return "storage-access"
 	case "access,view", "view":
@@ -251,56 +260,87 @@ func storageRoleSummary(storage storageconfig.StorageConfig) string {
 }
 
 func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, opts storagesvc.Options, storageService *storagesvc.Service, accessReader viewbuilder.AccessReader) (*viewRuntime, error) {
-	viewStore, err := openViewStore(storage)
-	if err != nil {
-		return nil, err
+	runtime := &viewRuntime{}
+	var (
+		duckEngine      view.ManagedViewIndex
+		bleveEngine     view.ManagedViewIndex
+		timeSeriesQuery view.TimeSeriesIndexQuery
+		recordQuery     view.RecordIndexQuery
+	)
+	if shouldStartViewIndexRole(storage) {
+		duckManager, err := deviceduckdb.OpenIndexManager(deviceduckdb.IndexManagerOptions{Root: storage.Devices.ViewIndexRoot})
+		if err != nil {
+			return nil, err
+		}
+		searchService := searchsvc.NewService(searchsvc.Options{Root: storage.Devices.ViewIndexRoot})
+		runtime.duck = duckManager
+		runtime.search = searchService
+		duckEngine = duckManager
+		bleveEngine = searchService
+		timeSeriesQuery = duckManager
+		recordQuery = searchService
+		ownerService := viewindexsvc.NewService(viewindexsvc.Options{
+			Engines: map[string]viewindexsvc.ManagedEngine{
+				"duckdb": duckManager,
+				"bleve":  searchService,
+			},
+			TimeSeries: duckManager,
+			Records:    searchService,
+		})
+		pb.RegisterViewIndexService(s, ownerService)
+	} else {
+		duckClient := viewindexsvc.NewRemoteClient(storage.View.IndexServiceName, "duckdb")
+		bleveClient := viewindexsvc.NewRemoteClient(storage.View.IndexServiceName, "bleve")
+		duckEngine = duckClient
+		bleveEngine = bleveClient
+		timeSeriesQuery = duckClient
+		recordQuery = bleveClient
 	}
-	viewMetadata := metadataForViewRuntime(storage, storageService)
-	searchService := searchsvc.NewService(searchsvc.Options{
-		Root:      storage.Root,
-		BlevePath: storage.Devices.BlevePath,
-		Metadata:  viewMetadata,
-	})
+
+	var viewMetadata view.Metadata
+	if shouldRegisterViewQueryRole(storage) || shouldStartViewBuilderRole(storage) {
+		viewMetadata = metadataForViewRuntime(storage, storageService)
+	}
 	var viewService *view.Service
 	if shouldRegisterViewQueryRole(storage) {
 		viewService = view.NewService(view.ServiceOptions{
-			Metadata: viewMetadata,
-			Views:    viewStore,
-			Search:   searchService,
-			Facts:    accessReader,
-			Records:  accessReader,
+			Metadata:          viewMetadata,
+			TimeSeriesIndexes: timeSeriesQuery,
+			RecordIndexes:     recordQuery,
 		})
+		runtime.service = viewService
 		pb.RegisterDataViewService(s, viewService)
 	}
 	var builderService *viewbuilder.Service
 	if shouldStartViewBuilderRole(storage) {
-		rotationManager := view.NewRotationManager(view.RotationOptions{
+		engines := map[string]view.ManagedViewIndex{
+			"duckdb": duckEngine,
+			"bleve":  bleveEngine,
+		}
+		maintenance := view.NewMaintenanceManager(view.MaintenanceOptions{
 			Metadata: viewMetadata,
-			Engines: map[string]viewindex.ViewIndexEngine{
-				"duckdb": viewStore,
-				"bleve":  searchService,
-			},
-			Config:  rotationConfigFromStorage(storage.View.Rotation),
-			Facts:   accessReader,
-			Records: accessReader,
+			Engines:  engines,
+			Config:   maintenanceConfigFromStorage(storage.View.Maintenance, storage.View.MaxWorkers),
+			Facts:    accessReader,
+			Records:  accessReader,
 		})
-		view.SetDefaultRotation(rotationManager)
+		view.SetDefaultMaintenance(maintenance)
 		timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
 		registerTimerHandlerService("trpc.moox.storage.view.timer", s.Service("trpc.moox.storage.view.timer"), view.HandleSchedule)
 		var err error
-		builderService, err = startViewBuilderService(trpc.BackgroundContext(), storage, opts, viewMetadata, viewStore, searchService, accessReader)
+		builderService, err = startViewBuilderService(trpc.BackgroundContext(), storage, opts, viewMetadata, map[string]viewindex.ViewIndexEngine{
+			"duckdb": duckEngine,
+			"bleve":  bleveEngine,
+		}, accessReader)
 		if err != nil {
-			if viewService != nil {
-				_ = viewService.Close()
-			}
-			_ = searchService.Close()
-			_ = viewStore.Close()
+			_ = runtime.Close()
 			return nil, err
 		}
+		runtime.builder = builderService
 	} else {
 		registerNoopViewTimers(s)
 	}
-	return &viewRuntime{service: viewService, builder: builderService, views: viewStore, search: searchService}, nil
+	return runtime, nil
 }
 
 func registerArchiveRole(s *server.Server, storage storageconfig.StorageConfig, opts storagesvc.Options, storageService *storagesvc.Service, accessReader archive.FactReader) (*archiveRuntime, error) {
@@ -320,13 +360,12 @@ func registerArchiveRole(s *server.Server, storage storageconfig.StorageConfig, 
 	return &archiveRuntime{consumer: consumer}, nil
 }
 
-func startViewBuilderService(ctx context.Context, storage storageconfig.StorageConfig, opts storagesvc.Options, metadata view.Metadata, views *deviceduckdb.ViewStore, search *searchsvc.Service, accessReader viewbuilder.AccessReader) (*viewbuilder.Service, error) {
+func startViewBuilderService(ctx context.Context, storage storageconfig.StorageConfig, opts storagesvc.Options, metadata view.Metadata, engines map[string]viewindex.ViewIndexEngine, accessReader viewbuilder.AccessReader) (*viewbuilder.Service, error) {
 	service := viewbuilder.NewService(viewbuilder.Options{
 		Events:     opts.Events,
 		Reader:     accessReader,
 		Metadata:   metadata,
-		Views:      views,
-		Search:     search,
+		Engines:    engines,
 		BatchSize:  storage.View.BatchSize,
 		BatchWait:  time.Duration(storage.View.BatchWaitMS) * time.Millisecond,
 		MaxWorkers: storage.View.MaxWorkers,
@@ -351,17 +390,6 @@ func metadataForArchiveRuntime(storage storageconfig.StorageConfig, storageServi
 	return archive.NewRemoteMetadata(storage.View.MetadataServiceName)
 }
 
-func openViewStore(storage storageconfig.StorageConfig) (*deviceduckdb.ViewStore, error) {
-	path := storage.Devices.DuckDBPath
-	if path == "" {
-		path = filepath.Join(storage.Root, "duckdb", "views.duckdb")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	return deviceduckdb.Open(deviceduckdb.Options{Path: path})
-}
-
 func archiveRootForRuntime(storage storageconfig.StorageConfig) string {
 	if storage.Devices.ParquetPath != "" {
 		return storage.Devices.ParquetPath
@@ -369,38 +397,64 @@ func archiveRootForRuntime(storage storageconfig.StorageConfig) string {
 	return filepath.Join(storage.Root, "archive")
 }
 
-// rotationConfigFromStorage converts the YAML rotation config (plain
-// strings/ints) into the parsed view.RotationConfig used by
-// RotateViewIndexes.
-func rotationConfigFromStorage(raw storageconfig.StorageViewRotation) view.RotationConfig {
-	cfg := view.RotationConfig{
-		Enabled:                  raw.IsEnabled(),
-		MaxEntries:               int64(raw.MaxEntries),
-		MinReadyEntries:          int64(raw.MinReadyEntries),
-		RemoveGrace:              time.Duration(raw.RemoveGraceMS) * time.Millisecond,
-		RecordMaxBackfillEntries: int64(raw.Record.MaxBackfillEntries),
+func maintenanceConfigFromStorage(raw storageconfig.StorageViewMaintenance, maxViewsPerRun int) view.MaintenanceConfig {
+	cfg := view.MaintenanceConfig{
+		Enabled:                   raw.IsEnabled(),
+		OwnerID:                   maintenanceOwnerID(raw.OwnerID),
+		PageSize:                  uint32(raw.PageSize),
+		MaxEntries:                int64(raw.MaxEntries),
+		TargetEntries:             int64(raw.TargetEntries),
+		MaxPhysicalBytes:          uint64(max(raw.MaxPhysicalBytes, 0)),
+		MinFreeDiskBytes:          uint64(max(raw.MinFreeDiskBytes, 0)),
+		MinReadyEntries:           int64(raw.MinReadyEntries),
+		MaxViewsPerRun:            maxViewsPerRun,
+		TimeSeriesRetentionByFreq: make(map[string]time.Duration, len(raw.TimeSeries.RetentionByFreq)),
+	}
+	if d, ok := parseStorageDuration(raw.LeaseTTL); ok {
+		cfg.LeaseTTL = d
+	}
+	if d, ok := parseStorageDuration(raw.RunBudget); ok {
+		cfg.RunBudget = d
 	}
 	if d, ok := parseStorageDuration(raw.OverlapWindow); ok {
 		cfg.OverlapWindow = d
 	}
-	if d, ok := parseStorageDuration(raw.DefaultBackfillWindow); ok {
-		cfg.DefaultBackfillWindow = d
-	}
 	if d, ok := parseStorageDuration(raw.AllowedLag); ok {
 		cfg.AllowedLag = d
 	}
-	if d, ok := parseStorageDuration(raw.Record.DefaultVersionWindow); ok {
-		cfg.RecordDefaultVersionWindow = d
+	if d, ok := parseStorageDuration(raw.RemoveGrace); ok {
+		cfg.RemoveGrace = d
 	}
-	if len(raw.TimeSeries.FreqBackfillWindow) > 0 {
-		cfg.TimeSeriesFreqBackfillWindow = make(map[string]time.Duration, len(raw.TimeSeries.FreqBackfillWindow))
-		for freq, window := range raw.TimeSeries.FreqBackfillWindow {
-			if d, ok := parseStorageDuration(window); ok {
-				cfg.TimeSeriesFreqBackfillWindow[freq] = d
-			}
+	if d, ok := parseStorageDuration(raw.TimeSeries.DefaultRetentionWindow); ok {
+		cfg.TimeSeriesDefaultRetention = d
+	}
+	for freq, window := range raw.TimeSeries.RetentionByFreq {
+		if d, ok := parseStorageDuration(window); ok {
+			cfg.TimeSeriesRetentionByFreq[freq] = d
 		}
 	}
+	if d, ok := parseStorageDuration(raw.Record.RetentionWindow); ok {
+		cfg.RecordRetention = d
+	}
 	return cfg
+}
+
+func maintenanceOwnerID(configured string) string {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured
+	}
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		host = "storage-view-builder"
+	}
+	raw := make([]byte, 6)
+	suffix := ""
+	if _, err := rand.Read(raw); err == nil {
+		suffix = hex.EncodeToString(raw)
+	} else {
+		suffix = strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return fmt.Sprintf("%s:%d:%s", host, os.Getpid(), suffix)
 }
 
 // parseStorageDuration parses durations from storage.yaml, which uses
@@ -471,6 +525,10 @@ func shouldRegisterViewQueryRole(storage storageconfig.StorageConfig) bool {
 
 func shouldStartViewBuilderRole(storage storageconfig.StorageConfig) bool {
 	return storage.HasRole("view") || storage.HasRole("view_builder")
+}
+
+func shouldStartViewIndexRole(storage storageconfig.StorageConfig) bool {
+	return storage.HasRole("view") || storage.HasRole("view_index")
 }
 
 func shouldCreateStorageService(storage storageconfig.StorageConfig) bool {
@@ -570,8 +628,6 @@ func storageOptionsFromConfig(storage storageconfig.StorageConfig) storagesvc.Op
 		Root:               storage.Root,
 		MetadataPath:       storage.Metadata.Path,
 		PebblePath:         storage.Devices.PebblePath,
-		DuckDBPath:         storage.Devices.DuckDBPath,
-		BlevePath:          storage.Devices.BlevePath,
 		ParquetPath:        storage.Devices.ParquetPath,
 		PrimaryServiceName: storage.Primary.ServiceName,
 	}

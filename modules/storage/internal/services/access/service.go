@@ -2,7 +2,6 @@ package access
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,12 +14,9 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/router"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/schema"
-	deviceduckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/cache"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/primary"
-	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
-	"github.com/mooyang-code/moox/modules/storage/internal/services/view/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -28,54 +24,24 @@ import (
 
 // Service 实现元数据、写入、权威读取和视图查询入口。
 type Service struct {
-	root                 string
-	duckDBPath           string
-	parquetPath          string
-	metadata             metadata.Store
-	metadataReader       metadata.Reader
-	metadataCache        *metacache.Store
-	validator            *schema.Validator
-	router               *router.Resolver
-	primary              primary.Client
-	search               *search.Service
-	factReader           factReadService
-	timeSeriesFactReader view.FactReader
-	viewFactReader       viewFactReadService
-	events               eventbus.Bus
-	report               ViewErrorReporter
-	asyncMu              sync.Mutex
-	asyncWG              sync.WaitGroup
-	closing              bool
-	viewDirtyMu          sync.Mutex
-	viewDirtyBuilds      map[string]*viewDirtyBuild
-	recordVersionMu      sync.Mutex
-	lastRecordVersion    time.Time
-	openedDuckDB         sync.Map
-	viewStoresMu         sync.Mutex
-	viewStores           map[string]*sharedViewStore
-}
-
-// factReadService 定义 Access 内部回读 Record 行所需的接口。
-type factReadService interface {
-	ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error)
-}
-
-// viewFactReadService 定义 View 查询/重建从 Access 读取事实行所需的接口。
-type viewFactReadService interface {
-	view.FactReader
-	ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error)
-	ScanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error)
+	root              string
+	parquetPath       string
+	metadata          metadata.Store
+	metadataReader    metadata.Reader
+	metadataCache     *metacache.Store
+	validator         *schema.Validator
+	router            *router.Resolver
+	primary           primary.Client
+	events            eventbus.Bus
+	report            ViewErrorReporter
+	recordVersionMu   sync.Mutex
+	lastRecordVersion time.Time
 }
 
 var (
 	_ pb.MetadataService = (*Service)(nil)
 	_ pb.AccessService   = (*Service)(nil)
-	_ pb.DataViewService = (*Service)(nil)
 )
-
-func newServiceViewStores() map[string]*sharedViewStore {
-	return make(map[string]*sharedViewStore)
-}
 
 func NewServiceWithOptions(opts Options) *Service {
 	root := storageRoot(opts.Root)
@@ -113,7 +79,6 @@ func NewServiceWithOptions(opts Options) *Service {
 	}
 	svc := &Service{
 		root:           root,
-		duckDBPath:     opts.DuckDBPath,
 		parquetPath:    opts.ParquetPath,
 		metadata:       meta,
 		metadataReader: reader,
@@ -121,57 +86,10 @@ func NewServiceWithOptions(opts Options) *Service {
 		validator:      schema.NewValidator(reader),
 		router:         router.NewResolver(reader),
 		primary:        primaryClient,
-		search: search.NewService(search.Options{
-			Root:      root,
-			BlevePath: opts.BlevePath,
-			Metadata:  reader,
-		}),
-		events:     events,
-		report:     reporter,
-		viewStores: newServiceViewStores(),
+		events:         events,
+		report:         reporter,
 	}
-	svc.factReader = svc
-	svc.timeSeriesFactReader = svc
-	svc.viewFactReader = svc
 	return svc
-}
-
-func (s *Service) SetViewFactReader(reader viewFactReadService) {
-	if s == nil || reader == nil {
-		return
-	}
-	s.factReader = reader
-	s.timeSeriesFactReader = reader
-	s.viewFactReader = reader
-}
-
-// sharedViewStore 保存 DuckDB ViewStore 及其引用计数。
-type sharedViewStore struct {
-	store *deviceduckdb.ViewStore
-	refs  int
-}
-
-func (s *Service) viewStore() (*deviceduckdb.ViewStore, error) {
-	path := s.duckDBPath
-	if path == "" {
-		path = filepath.Join(s.root, "duckdb", "views.duckdb")
-	}
-	if _, ok := s.openedDuckDB.Load(path); ok {
-		return s.getViewStore(path)
-	}
-	store, err := s.acquireViewStore(path)
-	if err != nil {
-		return nil, err
-	}
-	s.openedDuckDB.Store(path, struct{}{})
-	return store, nil
-}
-
-func (s *Service) ViewStore() (*deviceduckdb.ViewStore, error) {
-	if s == nil {
-		return nil, errors.New("storage service is nil")
-	}
-	return s.viewStore()
 }
 
 func (s *Service) MetadataStore() metadata.Store {
@@ -195,34 +113,9 @@ func (s *Service) refreshMetadataCache(ctx context.Context) error {
 	return s.metadataCache.Refresh(ctx)
 }
 
-func (s *Service) SearchService() *search.Service {
-	if s == nil {
-		return nil
-	}
-	return s.search
-}
-
-// Close 释放本 Service 持有的派生资源，等待异步重建任务完成，并回收其打开的 DuckDB 视图存储。
-// 用于优雅关闭，避免进程级全局缓存长期泄漏。
+// Close releases dependencies owned by the access process.
 func (s *Service) Close() error {
-	s.asyncMu.Lock()
-	s.closing = true
-	s.asyncMu.Unlock()
 	var firstErr error
-	s.waitForAsyncJobs()
-	s.openedDuckDB.Range(func(key, _ any) bool {
-		path, _ := key.(string)
-		if err := s.releaseViewStore(path); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		s.openedDuckDB.Delete(key)
-		return true
-	})
-	if s.search != nil {
-		if err := s.search.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
 	if closer, ok := s.events.(interface{ Close() error }); ok {
 		if err := closer.Close(); err != nil && firstErr == nil {
 			firstErr = err
@@ -244,63 +137,6 @@ func (s *Service) Close() error {
 		}
 	}
 	return firstErr
-}
-
-func (s *Service) acquireViewStore(path string) (*deviceduckdb.ViewStore, error) {
-	s.viewStoresMu.Lock()
-	if shared := s.viewStores[path]; shared != nil {
-		shared.refs++
-		store := shared.store
-		s.viewStoresMu.Unlock()
-		return store, nil
-	}
-	s.viewStoresMu.Unlock()
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	opened, err := deviceduckdb.Open(deviceduckdb.Options{Path: path})
-	if err != nil {
-		return nil, err
-	}
-
-	s.viewStoresMu.Lock()
-	defer s.viewStoresMu.Unlock()
-	if shared := s.viewStores[path]; shared != nil {
-		shared.refs++
-		_ = opened.Close()
-		return shared.store, nil
-	}
-	s.viewStores[path] = &sharedViewStore{store: opened, refs: 1}
-	return opened, nil
-}
-
-func (s *Service) getViewStore(path string) (*deviceduckdb.ViewStore, error) {
-	s.viewStoresMu.Lock()
-	if shared := s.viewStores[path]; shared != nil {
-		store := shared.store
-		s.viewStoresMu.Unlock()
-		return store, nil
-	}
-	s.viewStoresMu.Unlock()
-	return s.acquireViewStore(path)
-}
-
-func (s *Service) releaseViewStore(path string) error {
-	s.viewStoresMu.Lock()
-	shared := s.viewStores[path]
-	if shared == nil {
-		s.viewStoresMu.Unlock()
-		return nil
-	}
-	shared.refs--
-	if shared.refs > 0 {
-		s.viewStoresMu.Unlock()
-		return nil
-	}
-	delete(s.viewStores, path)
-	s.viewStoresMu.Unlock()
-	return shared.store.Close()
 }
 
 func openDefaultMetadataStores(ctx context.Context, root string, metadataPath string, initSchemaPath string) (metadata.Store, *metacache.Store, error) {

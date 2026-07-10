@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
@@ -40,6 +41,9 @@ func (v *Validator) ValidateWriteRecordRows(ctx context.Context, rows []*pb.Reco
 		key := row.GetKey()
 		if key == nil {
 			return fmt.Errorf("key is required")
+		}
+		if _, err := factkey.NormalizeTimeVersion(key.GetVersion()); err != nil {
+			return fmt.Errorf("record version must be RFC3339: %w", err)
 		}
 		if err := validateDatasetColumns(ctx, v.metadata, key.GetSpaceId(), key.GetDatasetId(), pb.DataKind_DATA_KIND_RECORD, row.GetColumns()); err != nil {
 			return err

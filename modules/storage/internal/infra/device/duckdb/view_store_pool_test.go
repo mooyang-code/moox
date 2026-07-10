@@ -13,7 +13,7 @@ import (
 )
 
 func TestQueryTimeSeriesRowsUsesExplicitSpareConnectionWhenOneConnectionIsBusy(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "views.duckdb"), MaxOpenConns: 2})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb"), MaxOpenConns: 2})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

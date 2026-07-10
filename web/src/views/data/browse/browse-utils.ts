@@ -25,6 +25,8 @@ export interface BrowseTableRow {
   values: Record<string, string>;
 }
 
+export type BrowseSortDirection = '' | 'asc' | 'desc';
+
 const minAdaptiveColumnWidth = 112;
 const maxAdaptiveColumnWidth = 320;
 
@@ -183,6 +185,22 @@ export function recordRowsToTableRows(rows: RecordRow[]): BrowseTableRow[] {
     version: row.key?.version || '-',
     values: columnsToValueMap(row.columns || []),
   }));
+}
+
+export function sortBrowseTableRows(rows: BrowseTableRow[], fieldName: string, direction: BrowseSortDirection) {
+  if (!fieldName || !direction) return rows;
+  return [...rows].sort((left, right) => {
+    const leftValue = browseSortValue(left, fieldName);
+    const rightValue = browseSortValue(right, fieldName);
+    const comparison = leftValue.localeCompare(rightValue, undefined, { numeric: true, sensitivity: 'base' });
+    return direction === 'desc' ? -comparison : comparison;
+  });
+}
+
+function browseSortValue(row: BrowseTableRow, fieldName: string) {
+  if (fieldName === 'subject_id' || fieldName === 'record_id') return row.key;
+  if (fieldName === 'data_time' || fieldName === 'version') return row.version;
+  return row.values[fieldName] || '';
 }
 
 function columnsToValueMap(columns: ColumnValue[]) {

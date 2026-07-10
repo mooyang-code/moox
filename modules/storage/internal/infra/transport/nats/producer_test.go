@@ -2,6 +2,7 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"testing"
@@ -160,6 +161,66 @@ func TestSubscribeHonorsMaxInFlight(t *testing.T) {
 	releaseFirst <- struct{}{}
 	if got := waitStarted(t, started); got != "second" {
 		t.Fatalf("second handler started with %q", got)
+	}
+}
+
+func TestSubscribeNaksFailedHandlerForRedelivery(t *testing.T) {
+	srv, url := startTestNATSServer(t)
+	defer srv.Shutdown()
+
+	ctx := context.Background()
+	producer, err := NewProducer(transport.ProducerOptions{
+		ServerURL:      url,
+		ConnectTimeout: time.Second,
+		StreamName:     "MOOX_STORAGE_TEST_RETRY",
+		StreamSubjects: []string{"moox.storage.retry.>"},
+		ConsumerName:   "storage_view_retry_test",
+		AckWait:        2 * time.Second,
+		MaxDeliver:     3,
+	})
+	if err != nil {
+		t.Fatalf("NewProducer: %v", err)
+	}
+	if err := producer.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer producer.Close()
+	subscriber := producer.(transport.Subscriber)
+
+	attempts := make(chan int, 2)
+	attempt := 0
+	sub, err := subscriber.Subscribe(ctx, "moox.storage.retry.rows_changed", func(context.Context, *transport.Message) error {
+		attempt++
+		attempts <- attempt
+		if attempt == 1 {
+			return errors.New("view index owner unavailable")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer sub.Close()
+	if err := producer.Send(ctx, &transport.Message{Subject: "moox.storage.retry.rows_changed", Data: []byte("event")}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if got := waitAttempt(t, attempts); got != 1 {
+		t.Fatalf("first attempt = %d", got)
+	}
+	if got := waitAttempt(t, attempts); got != 2 {
+		t.Fatalf("redelivery attempt = %d", got)
+	}
+}
+
+func waitAttempt(t *testing.T, attempts <-chan int) int {
+	t.Helper()
+	select {
+	case attempt := <-attempts:
+		return attempt
+	case <-time.After(3 * time.Second):
+		t.Fatal("message was not redelivered")
+		return 0
 	}
 }
 

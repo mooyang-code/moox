@@ -1,8 +1,10 @@
 # Storage View Index Blue-Green Rotation Implementation Plan
 
+> **SUPERSEDED (2026-07-10):** This document is historical and must not be executed. The active contract is [`2026-07-10-storage-view-index-dual-database-switch.md`](./2026-07-10-storage-view-index-dual-database-switch.md), which replaces shared-file ownership, old pointer fields, and the old scheduler with the independently deployable ViewIndex owner and durable dual-database switch state machine.
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **Status (2026-07-09):** Plan locked and implementation approved. Implement task-by-task from this document; do not revive deleted rebuild/cleanup/Rebuild* paths or `__latest` removal in v1.
+> **Historical status (2026-07-09):** This was the prior approved design; it is retained only for decision history.
 
 **Goal:** Unify TimeSeries DuckDB Views and Record/Bleve Views under one bounded, blue-green View index lifecycle so PrimaryStore remains the only complete fact store and all derived View indexes can rotate, rebuild, and switch safely.
 

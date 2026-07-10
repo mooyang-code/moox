@@ -27,7 +27,41 @@ message Space {
   map<string, string> attributes = 8;
 }
 
-// View 是 Space 内的用户查询入口，也是可异步构建的物化结果定义。
+// ViewIndexBuild 是一个 View 非活跃索引槽位的持久化构建状态。
+message ViewIndexBuild {
+  // State 表示双库切换构建所处的阶段。
+  enum State {
+    UNSPECIFIED = 0;
+    PREPARING = 1;
+    BUILDING = 2;
+    CATCHING_UP = 3;
+    READY = 4;
+    FAILED = 5;
+  }
+
+  string space_id = 1;
+  string view_id = 2;
+  string build_id = 3;
+  string index_id = 4;
+  string engine = 5;
+  uint64 target_view_version = 6;
+  State state = 7;
+  string owner_id = 8;
+  string lease_expires_at = 9;
+  string cursor_json = 10;
+  string snapshot_end = 11;
+  string coverage_start = 12;
+  string coverage_end = 13;
+  uint64 entries_written = 14;
+  string schema_hash = 15;
+  repeated ViewColumn columns = 16;
+  string started_at = 17;
+  string updated_at = 18;
+  string finished_at = 19;
+  string error = 20;
+}
+
+// View 是 Space 内的用户查询入口，也是可异步构建的近期派生索引定义。
 message View {
   // space_id 是 View 所属 Space。
   string space_id = 1;
@@ -47,36 +81,34 @@ message View {
   string filter_json = 8;
   // engine 是视图查询执行引擎标识，由控制面配置。
   string engine = 9;
-  // query_window 是视图物化结果保留和回扫的查询窗口，例如 30d。
-  string query_window = 10;
-  // active_result 是当前生效的物化结果标识，由后台构建任务维护。
-  string active_result = 11;
-  // build_status 表示物化结果构建状态，例如 pending、building、active 或 failed。
-  string build_status = 12;
+  // retention_window 是索引从 PrimaryStore 保留和回扫近期数据的窗口，例如 30d。
+  string retention_window = 10;
+  // active_index_id 是当前生效的 a/b 物理索引标识。
+  string active_index_id = 11;
   // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 13;
+  string status = 12;
   // columns 是视图对用户暴露的查询列。
-  repeated ViewColumn columns = 14;
+  repeated ViewColumn columns = 13;
   // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 15;
+  string created_at = 14;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 16;
+  string updated_at = 15;
   // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 17;
+  map<string, string> attributes = 16;
   // view_version 是 View 定义版本；新增字段或构建形态变化时递增。
-  uint64 view_version = 18;
+  uint64 view_version = 17;
   // active_view_version 是当前线上读取的 View 版本。
-  uint64 active_view_version = 19;
-  // building_view_version 是正在后台构建的目标 View 版本。
-  uint64 building_view_version = 20;
-  // building_result 是正在后台构建的新结果标识。
-  string building_result = 21;
-  // build_error 是最近一次构建失败原因。
-  string build_error = 22;
-  // build_started_at 是最近一次构建开始时间，使用项目统一时间字符串格式。
-  string build_started_at = 23;
-  // build_finished_at 是最近一次构建结束时间，使用项目统一时间字符串格式。
-  string build_finished_at = 24;
+  uint64 active_view_version = 18;
+  // active_columns 是与 active_index_id 同时激活的不可变列快照。
+  repeated ViewColumn active_columns = 19;
+  // active_schema_hash 是当前线上索引的列形态哈希。
+  string active_schema_hash = 20;
+  // active_coverage_start 是当前索引覆盖的最小版本或时间。
+  string active_coverage_start = 21;
+  // active_coverage_end 是当前索引覆盖的最大版本或时间。
+  string active_coverage_end = 22;
+  // index_build 是当前持久化构建状态的只读投影。
+  ViewIndexBuild index_build = 23;
 }
 
 // ViewColumn 定义 View 对用户暴露的一列。
@@ -1357,6 +1389,82 @@ message ListArchiveFilesRsp {
   common.PageResult page_result = 3;
 }
 
+// ClaimViewIndexBuildReq 尝试声明或接管一个 View 索引构建租约。
+message ClaimViewIndexBuildReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  string build_id = 4;
+  string index_id = 5;
+  string engine = 6;
+  uint64 target_view_version = 7;
+  string owner_id = 8;
+  uint32 lease_ttl_seconds = 9;
+  string schema_hash = 10;
+  repeated ViewColumn columns = 11;
+  string snapshot_end = 12;
+  // expected_active_index_id fences slot selection against a concurrent switch.
+  string expected_active_index_id = 13;
+}
+
+message ClaimViewIndexBuildRsp {
+  common.RetInfo ret_info = 1;
+  View view = 2;
+  ViewIndexBuild build = 3;
+  bool resumed = 4;
+}
+
+// UpdateViewIndexBuildReq 以 build_id、owner_id 和 expected_state 为 CAS 条件推进构建。
+message UpdateViewIndexBuildReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  string build_id = 4;
+  string owner_id = 5;
+  ViewIndexBuild.State expected_state = 6;
+  ViewIndexBuild.State next_state = 7;
+  uint32 lease_ttl_seconds = 8;
+  string cursor_json = 9;
+  string snapshot_end = 10;
+  string coverage_start = 11;
+  string coverage_end = 12;
+  uint64 entries_written = 13;
+}
+
+message UpdateViewIndexBuildRsp {
+  common.RetInfo ret_info = 1;
+  ViewIndexBuild build = 2;
+}
+
+// ActivateViewIndexReq 将 READY 构建原子切换为 View 的 active_index_id。
+message ActivateViewIndexReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  string build_id = 4;
+  string owner_id = 5;
+}
+
+message ActivateViewIndexRsp {
+  common.RetInfo ret_info = 1;
+  View view = 2;
+}
+
+// FailViewIndexBuildReq 以 CAS 方式记录当前构建失败。
+message FailViewIndexBuildReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  string build_id = 4;
+  string owner_id = 5;
+  string error = 6;
+}
+
+message FailViewIndexBuildRsp {
+  common.RetInfo ret_info = 1;
+  ViewIndexBuild build = 2;
+}
+
 // Metadata 管理量化存储系统的核心元数据。
 service Metadata {
   // 创建使用空间。
@@ -1380,6 +1488,14 @@ service Metadata {
   rpc UpsertViewColumn(UpsertViewColumnReq) returns (UpsertViewColumnRsp);
   // 列出视图列。
   rpc ListViewColumns(ListViewColumnsReq) returns (ListViewColumnsRsp);
+  // 声明或接管 View 索引构建租约。
+  rpc ClaimViewIndexBuild(ClaimViewIndexBuildReq) returns (ClaimViewIndexBuildRsp);
+  // 续租并推进 View 索引构建状态。
+  rpc UpdateViewIndexBuild(UpdateViewIndexBuildReq) returns (UpdateViewIndexBuildRsp);
+  // 原子激活已就绪的 View 索引。
+  rpc ActivateViewIndex(ActivateViewIndexReq) returns (ActivateViewIndexRsp);
+  // 记录 View 索引构建失败。
+  rpc FailViewIndexBuild(FailViewIndexBuildReq) returns (FailViewIndexBuildRsp);
 
   // 创建数据来源。
   rpc CreateDataSource(CreateDataSourceReq) returns (CreateDataSourceRsp);
