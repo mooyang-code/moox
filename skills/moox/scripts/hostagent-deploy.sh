@@ -16,7 +16,7 @@ done
 [[ -n "${TARGET}" && -n "${ARCHIVE}" ]] || { echo "usage: hostagent-deploy.sh user@host release.tar.gz [--eventbus-file path --ca-file path]" >&2; exit 2; }
 [[ -f "${ARCHIVE}" ]] || { echo "release archive not found: ${ARCHIVE}" >&2; exit 1; }
 ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" 'test "$(id -u)" -ne 0'
-VERSION_DIR="$(tar -tzf "${ARCHIVE}" | awk -F/ 'NF==2 {print $2; exit}')"
+VERSION_DIR="$(tar -tzf "${ARCHIVE}" | awk '{entry=$0; sub(/\/$/, "", entry); if (entry != "" && entry !~ /\//) {print entry; exit}}')"
 [[ -n "${VERSION_DIR}" ]] || { echo "invalid host-agent archive" >&2; exit 1; }
 REMOTE_TMP="$(ssh "${TARGET}" 'mktemp -d "${TMPDIR:-/tmp}/moox-hostagent.XXXXXX"')"
 trap 'ssh "${TARGET}" "rm -rf ${REMOTE_TMP}"' EXIT
