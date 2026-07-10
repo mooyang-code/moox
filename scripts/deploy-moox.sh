@@ -463,6 +463,8 @@ MONITOR_ENV=(
 
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
 METRICS_ROUTE_SEED="${MOOX_METRICS_STORAGE_ROUTE_SEED:-}"
+EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-${MOOX_EVENTBUS_URL:-}}"
+METRICS_EVENTBUS_URL_ENV="${MOOX_METRICS_EVENTBUS_URL:-}"
 
 ensure_factor_python() {
   local venv="${ROOT}/data/factor/venv"
@@ -1350,7 +1352,7 @@ sync_remote_stage() {
   log "upload ${archive} to ${TARGET}:${remote_archive}"
   scp "${archive}" "${TARGET}:${remote_archive}"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_reset_data
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_eventbus_url quoted_metrics_eventbus_url
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -1362,8 +1364,12 @@ sync_remote_stage() {
   quoted_with_monitor="$(shell_quote "${WITH_MONITOR}")"
   quoted_with_web_host="$(shell_quote "${WITH_WEB_HOST}")"
   quoted_reset_data="$(shell_quote "${RESET_DATA}")"
+  quoted_metrics_metadata_url="$(shell_quote "${METRICS_METADATA_URL}")"
+  quoted_metrics_route_seed="$(shell_quote "${METRICS_ROUTE_SEED}")"
+  quoted_eventbus_url="$(shell_quote "${EVENTBUS_URL_ENV}")"
+  quoted_metrics_eventbus_url="$(shell_quote "${METRICS_EVENTBUS_URL_ENV}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} RESET_DATA=${quoted_reset_data} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} bash -s" <<'EOF'
 set -euo pipefail
 
 if [[ "${DEPLOY_DIR}" == "~" ]]; then

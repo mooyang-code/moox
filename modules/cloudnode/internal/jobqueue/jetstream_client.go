@@ -22,7 +22,7 @@ func Connect(ctx context.Context, cfg config.JetStreamConfig) (*Runtime, error) 
 	if len(urls) == 0 && strings.TrimSpace(cfg.NATSURL) != "" {
 		urls = []string{cfg.NATSURL}
 	}
-	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: urls, Name: "moox-cloudnode"})
+	client, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv(urls, "moox-cloudnode"))
 	if err != nil {
 		return nil, err
 	}

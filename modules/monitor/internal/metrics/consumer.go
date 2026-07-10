@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	MetricTopic       = "moox.metrics.snapshot.reported.v1"
-	MetricContentType = "application/vnd.moox.metrics.snapshot+protobuf"
-	MetricDLQTopic    = "moox.dlq.message.rejected.v1"
+	MetricTopic                    = "moox.metrics.snapshot.reported.v1"
+	MetricContentType              = "application/vnd.moox.metrics.snapshot+protobuf"
+	MetricDLQTopic                 = "moox.dlq.message.rejected.v1"
+	unknownProducerGraceDeliveries = 120
 )
 
 type ProducerAuthorizer interface {
@@ -277,6 +278,12 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 			return c.retry(d, fmt.Errorf("authorize metric producer: %w", err))
 		}
 		if !ok {
+			// SysDeploy synchronization is asynchronous on Monitor startup. Keep
+			// a legitimate first snapshot long enough for the registry to converge;
+			// persistently unknown producers still go to the DLQ.
+			if d.DeliveryCount < unknownProducerGraceDeliveries {
+				return c.retry(d, fmt.Errorf("metric producer %s/%s is not registered yet", msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId()))
+			}
 			return permanent(fmt.Errorf("unregistered metric producer %s/%s", msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId()))
 		}
 	}

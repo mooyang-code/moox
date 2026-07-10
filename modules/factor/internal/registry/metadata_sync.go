@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"google.golang.org/protobuf/proto"
 )
 
 // MetadataClient is the Storage Metadata subset required by factor registry sync.
@@ -441,12 +442,12 @@ func (s *MetadataSync) updateFactorDatasetAttribution(ctx context.Context, datas
 			return nil
 		}
 	}
-	next := *dataset
+	next := proto.Clone(dataset).(*storagepb.Dataset)
 	next.Attributes = nextAttrs
 	next.Freqs = mergeDatasetFreq(dataset.GetFreqs(), freq)
 	rsp, err := s.client.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{
 		AuthInfo: s.auth,
-		Dataset:  &next,
+		Dataset:  next,
 	})
 	if err != nil {
 		return err

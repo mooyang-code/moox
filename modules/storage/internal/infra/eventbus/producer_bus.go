@@ -153,7 +153,8 @@ type SubscriberBus struct {
 	recordHandlers     map[uint64]coreeventbus.RecordRowsUpdatedHandler
 	timeSeriesConsumer *jetstream.PullConsumer
 	recordConsumer     *jetstream.PullConsumer
-	consumeCancel      context.CancelFunc
+	timeSeriesCancel   context.CancelFunc
+	recordCancel       context.CancelFunc
 	subscribeClosed    bool
 	wg                 sync.WaitGroup
 }
@@ -215,8 +216,10 @@ func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler 
 
 func (b *SubscriberBus) startLoop(consumer *jetstream.PullConsumer, timeSeries bool) {
 	ctx, cancel := context.WithCancel(context.Background())
-	if b.consumeCancel == nil {
-		b.consumeCancel = cancel
+	if timeSeries {
+		b.timeSeriesCancel = cancel
+	} else {
+		b.recordCancel = cancel
 	}
 	b.wg.Add(1)
 	go func() {
@@ -301,12 +304,15 @@ func (b *SubscriberBus) Close() error {
 	}
 	b.mu.Lock()
 	b.subscribeClosed = true
-	cancel := b.consumeCancel
+	timeSeriesCancel, recordCancel := b.timeSeriesCancel, b.recordCancel
 	ts, rec := b.timeSeriesConsumer, b.recordConsumer
-	b.consumeCancel = nil
+	b.timeSeriesCancel, b.recordCancel = nil, nil
 	b.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if timeSeriesCancel != nil {
+		timeSeriesCancel()
+	}
+	if recordCancel != nil {
+		recordCancel()
 	}
 	if ts != nil {
 		_ = ts.Close()

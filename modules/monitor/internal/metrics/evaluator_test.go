@@ -47,6 +47,28 @@ func TestNoDataPolicyOKDoesNotFire(t *testing.T) {
 	}
 }
 
+func TestORKeepStateDoesNotSuppressFiringCondition(t *testing.T) {
+	conditions := []*monitorpb.MetricCondition{{ConditionId: "A"}, {ConditionId: "B"}}
+	result, keep := combineConditionResults(monitorpb.LogicalOperator_LOGICAL_OPERATOR_OR, []ConditionResult{
+		{ConditionID: "A", NoDataReason: "keep_state"},
+		{ConditionID: "B", HasData: true, Result: true},
+	}, conditions)
+	if !result || keep {
+		t.Fatalf("OR result=%v keep_state=%v, want firing without freeze", result, keep)
+	}
+}
+
+func TestORFiringNoDataPolicyWinsOverKeepState(t *testing.T) {
+	conditions := []*monitorpb.MetricCondition{{ConditionId: "A"}, {ConditionId: "B"}}
+	result, keep := combineConditionResults(monitorpb.LogicalOperator_LOGICAL_OPERATOR_OR, []ConditionResult{
+		{ConditionID: "A", NoDataReason: "keep_state"},
+		{ConditionID: "B", NoDataReason: "firing"},
+	}, conditions)
+	if !result || keep {
+		t.Fatalf("OR result=%v keep_state=%v, want firing without freeze", result, keep)
+	}
+}
+
 func TestMetricRuleStateTransitionsAndKeepState(t *testing.T) {
 	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {

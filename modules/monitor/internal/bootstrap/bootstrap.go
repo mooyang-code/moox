@@ -141,7 +141,7 @@ func startMetricsConsumer(ctx context.Context, cfg *config.Config, mgr *monstora
 				return
 			}
 			urls := strings.Split(cfg.Metrics.EventBusURL, ",")
-			js, err := jetstream.Connect(ctx, jetstream.Config{URLs: urls, Name: "moox-monitor-metrics"})
+			js, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv(urls, "moox-monitor-metrics"))
 			if err != nil {
 				log.WarnContextf(ctx, "metrics eventbus unavailable; ingestion degraded: %v", err)
 				select {

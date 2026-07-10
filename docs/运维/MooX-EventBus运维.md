@@ -72,6 +72,8 @@ curl -s http://127.0.0.1:11419/metrics \
 
 认证/TLS 只在 `config/app.yaml` 中配置，发布方必须同步 `MOOX_EVENTBUS_NATS_URL` 及凭据。轮换凭据时先给 Broker 配置兼容的新账号，滚动重启发布方和消费者，确认连接恢复后再撤销旧账号。TLS 集群的 route 凭据和客户端凭据是两套连接语义，三节点部署要求每个节点唯一 `server_name`，Stream/KV 的 `replicas` 不得超过可达节点数。
 
+远程 `deploy-moox.sh` 只转发不敏感的 EventBus URL；`MOOX_EVENTBUS_NATS_USERNAME`、`MOOX_EVENTBUS_NATS_PASSWORD`、`MOOX_EVENTBUS_NATS_CREDENTIALS` 和 TLS 文件路径必须在目标机的 service manager/environment 中配置，脚本不会把凭据拼进 SSH 命令行。
+
 V1 不实现回调订阅。未来通知回调应作为独立 durable consumer/worker，具备重试、超时、幂等和 DLQ，不得改变当前发布方协议或阻塞发布确认。
 
 ## 验证

@@ -231,33 +231,7 @@ func (e *MetricEvaluator) evaluate(ctx context.Context, rule *monitorpb.MetricRu
 		}
 		result.Conditions = append(result.Conditions, cr)
 	}
-	for _, c := range result.Conditions {
-		if !c.HasData && c.NoDataReason == "keep_state" {
-			result.KeepState = true
-		}
-	}
-	if rule.GetConnector() == monitorpb.LogicalOperator_LOGICAL_OPERATOR_AND {
-		result.Result = true
-		for _, c := range result.Conditions {
-			if !c.HasData {
-				result.Result = noDataResult(c.NoDataReason, rule.GetConditions(), c.ConditionID)
-				break
-			}
-			if !c.Result {
-				result.Result = false
-			}
-		}
-	} else {
-		for _, c := range result.Conditions {
-			if c.HasData && c.Result {
-				result.Result = true
-				break
-			}
-			if !c.HasData && c.NoDataReason == "firing" {
-				result.Result = true
-			}
-		}
-	}
+	result.Result, result.KeepState = combineConditionResults(rule.GetConnector(), result.Conditions, rule.GetConditions())
 	result.Status = domain.AlertStatusOK
 	if result.Result {
 		result.Status = domain.AlertStatusFiring
@@ -271,6 +245,44 @@ func (e *MetricEvaluator) evaluate(ctx context.Context, rule *monitorpb.MetricRu
 	}
 	return result, nil
 }
+
+// combineConditionResults applies no-data policy per condition. For OR, a
+// KEEP_STATE condition must not suppress another condition that has data and
+// fires; it freezes the rule only when no condition can provide a result.
+func combineConditionResults(connector monitorpb.LogicalOperator, results []ConditionResult, conditions []*monitorpb.MetricCondition) (bool, bool) {
+	if connector == monitorpb.LogicalOperator_LOGICAL_OPERATOR_AND {
+		for _, c := range results {
+			if !c.HasData {
+				if c.NoDataReason == "keep_state" {
+					return false, true
+				}
+				return noDataResult(c.NoDataReason, conditions, c.ConditionID), false
+			}
+			if !c.Result {
+				return false, false
+			}
+		}
+		return true, false
+	}
+	result, hasData, keepState := false, false, false
+	for _, c := range results {
+		if c.HasData {
+			hasData = true
+			if c.Result {
+				result = true
+			}
+			continue
+		}
+		switch c.NoDataReason {
+		case "firing":
+			result = true
+		case "keep_state":
+			keepState = true
+		}
+	}
+	return result, keepState && !hasData && !result
+}
+
 func noDataResult(reason string, conditions []*monitorpb.MetricCondition, id string) bool {
 	for _, c := range conditions {
 		if c.GetConditionId() == id {

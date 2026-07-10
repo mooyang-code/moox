@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -98,7 +99,6 @@ type MetricsStorageConfig struct {
 	Frequency                  string        `yaml:"frequency"`
 	MetadataValidationInterval time.Duration `yaml:"metadata_validation_interval"`
 	WriteBatchSize             int           `yaml:"write_batch_size"`
-	HistoryRetentionDays       int           `yaml:"history_retention_days"`
 }
 
 func Load(path string) (*Config, error) {
@@ -157,7 +157,7 @@ func Default() *Config {
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
-		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000, HistoryRetentionDays: 30}},
+		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}},
 	}
 }
 
@@ -269,9 +269,6 @@ func (c *Config) applyDefaults() {
 	if c.Metrics.Storage.WriteBatchSize == 0 {
 		c.Metrics.Storage.WriteBatchSize = metricsDefaults.Storage.WriteBatchSize
 	}
-	if c.Metrics.Storage.HistoryRetentionDays == 0 {
-		c.Metrics.Storage.HistoryRetentionDays = metricsDefaults.Storage.HistoryRetentionDays
-	}
 }
 
 func (c *Config) applyEnv() {
@@ -293,7 +290,7 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_MONITOR_SYSDEPLOY_TARGET"); v != "" {
 		c.SysDeploy.Target = v
 	}
-	if v := os.Getenv("MOOX_EVENTBUS_URL"); v != "" {
+	if v := firstEnv("MOOX_METRICS_EVENTBUS_URL", "MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_URL"); v != "" {
 		c.Metrics.EventBusURL = v
 	}
 	if v := os.Getenv("MOOX_SERVICE_AUTH_VERSION"); v != "" {
@@ -333,4 +330,13 @@ func defaultInstanceID() string {
 		host = "monitor"
 	}
 	return fmt.Sprintf("%s-%d", host, os.Getpid())
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }

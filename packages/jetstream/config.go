@@ -1,6 +1,10 @@
 package jetstream
 
-import "time"
+import (
+	"os"
+	"strings"
+	"time"
+)
 
 const (
 	// ProtocolVersion is the current outer MooX Message protocol version.
@@ -28,6 +32,33 @@ type Config struct {
 	MaxPayload    int
 	// BatchConcurrency bounds the number of simultaneous PublishBatch calls.
 	BatchConcurrency int
+}
+
+// ConfigFromEnv applies the deployment-wide EventBus connection contract to a
+// module-owned URL/name pair. YAML still supplies the endpoint by default;
+// credentials and TLS material stay out of checked-in module configs.
+func ConfigFromEnv(urls []string, name string) Config {
+	if value := firstEnv("MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_URL", "NATS_URL"); value != "" {
+		urls = strings.Split(value, ",")
+	}
+	return Config{
+		URLs: urls, Name: name,
+		Username:    firstEnv("MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_USERNAME"),
+		Password:    firstEnv("MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_EVENTBUS_PASSWORD"),
+		Credentials: firstEnv("MOOX_EVENTBUS_NATS_CREDENTIALS", "MOOX_EVENTBUS_CREDENTIALS"),
+		TLSCAFile:   firstEnv("MOOX_EVENTBUS_NATS_TLS_CA_FILE", "MOOX_EVENTBUS_TLS_CA"),
+		TLSCertFile: firstEnv("MOOX_EVENTBUS_NATS_TLS_CERT_FILE", "MOOX_EVENTBUS_TLS_CERT"),
+		TLSKeyFile:  firstEnv("MOOX_EVENTBUS_NATS_TLS_KEY_FILE", "MOOX_EVENTBUS_TLS_KEY"),
+	}
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (cfg Config) normalized() Config {

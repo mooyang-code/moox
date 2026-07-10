@@ -40,7 +40,7 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 	if len(urls) == 0 && strings.TrimSpace(c.cfg.URL) != "" {
 		urls = []string{c.cfg.URL}
 	}
-	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: urls, Name: "moox-factor"})
+	client, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv(urls, "moox-factor"))
 	if err != nil {
 		return err
 	}

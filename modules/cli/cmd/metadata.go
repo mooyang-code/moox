@@ -307,6 +307,10 @@ type metadataImportCall struct {
 }
 
 func validateReservedInternalSpaces(seed metadataSeed) error {
+	// Route seeds are intentionally applied after the logical internal-space
+	// seed. They reference an already-verified reserved Space rather than
+	// redefining it, so keep this deployment-topology-only form valid.
+	allowExistingReserved := isReservedReferenceSeed(seed)
 	for _, item := range seed.Spaces {
 		if !strings.HasPrefix(item.SpaceID, "moox_") {
 			continue
@@ -317,7 +321,7 @@ func validateReservedInternalSpaces(seed metadataSeed) error {
 	}
 	check := func(resource, spaceID string) error {
 		spaceID = strings.TrimSpace(spaceID)
-		if strings.HasPrefix(spaceID, "moox_") && !hasInternalSpace(seed, spaceID) {
+		if strings.HasPrefix(spaceID, "moox_") && !hasInternalSpace(seed, spaceID) && !allowExistingReserved {
 			return fmt.Errorf("seed %s cannot claim reserved space %q", resource, spaceID)
 		}
 		return nil
@@ -379,6 +383,16 @@ func validateReservedInternalSpaces(seed metadataSeed) error {
 	}
 	return nil
 }
+
+func isReservedReferenceSeed(seed metadataSeed) bool {
+	return len(seed.Spaces) == 0 &&
+		len(seed.DataSources) == 0 && len(seed.Subjects) == 0 && len(seed.SubjectSymbols) == 0 &&
+		len(seed.Datasets) == 0 && len(seed.DatasetSubjects) == 0 && len(seed.Fields) == 0 &&
+		len(seed.Factors) == 0 && len(seed.DatasetColumns) == 0 && len(seed.Views) == 0 &&
+		len(seed.ViewColumns) == 0 && len(seed.PrimaryStoreNodes) == 0 && len(seed.Devices) == 0 &&
+		len(seed.PrimaryStoreRoutes) > 0
+}
+
 func hasInternalSpace(seed metadataSeed, id string) bool {
 	for _, s := range seed.Spaces {
 		if s.SpaceID == id && s.Attributes["scope"] == "internal" {

@@ -16,6 +16,7 @@ import (
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
 
@@ -518,9 +519,9 @@ func (c *recordingMetadataClient) UpdateDataset(_ context.Context, req *storagep
 	if c.storedDatasets == nil {
 		c.storedDatasets = map[string]*storagepb.Dataset{}
 	}
-	copied := *req.GetDataset()
+	copied := proto.Clone(req.GetDataset()).(*storagepb.Dataset)
 	copied.Attributes = cloneStringMap(req.GetDataset().GetAttributes())
-	c.storedDatasets[req.GetDataset().GetDatasetId()] = &copied
+	c.storedDatasets[req.GetDataset().GetDatasetId()] = copied
 	return &storagepb.UpdateDatasetRsp{RetInfo: ret, Dataset: req.GetDataset()}, nil
 }
 
@@ -539,10 +540,10 @@ func (c *recordingMetadataClient) ListDatasetSubjects(_ context.Context, req *st
 	if subjects := c.sourceSubjectItems[req.GetDatasetId()]; len(subjects) > 0 {
 		out := make([]*storagepb.DatasetSubject, 0, len(subjects))
 		for _, subject := range subjects {
-			item := *subject
+			item := proto.Clone(subject).(*storagepb.DatasetSubject)
 			item.SpaceId = req.GetSpaceId()
 			item.DatasetId = req.GetDatasetId()
-			out = append(out, &item)
+			out = append(out, item)
 		}
 		return &storagepb.ListDatasetSubjectsRsp{RetInfo: successRet(), DatasetSubjects: out}, nil
 	}
@@ -585,12 +586,12 @@ func (c *recordingMetadataClient) CreatePrimaryStoreRoute(_ context.Context, req
 
 func (c *recordingMetadataClient) GetDataset(_ context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
 	if dataset := c.storedDatasets[req.GetDatasetId()]; dataset != nil {
-		copied := *dataset
+		copied := proto.Clone(dataset).(*storagepb.Dataset)
 		if copied.SpaceId == "" {
 			copied.SpaceId = req.GetSpaceId()
 		}
 		copied.Attributes = cloneStringMap(dataset.GetAttributes())
-		return &storagepb.GetDatasetRsp{RetInfo: successRet(), Dataset: &copied}, nil
+		return &storagepb.GetDatasetRsp{RetInfo: successRet(), Dataset: copied}, nil
 	}
 	dataSourceID, ok := c.sourceDatasets[req.GetDatasetId()]
 	if !ok {

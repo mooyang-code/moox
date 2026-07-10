@@ -150,15 +150,22 @@ func (h *Handler) BuildSnapshot() (*metricspb.MetricSnapshot, error) {
 			return nil, fmt.Errorf("metric family limit exceeded: %d", h.cfg.MaxMetricFamilies)
 		}
 		for _, sample := range family.GetMetric() {
+			generatedLabels := 0
 			switch family.GetType() {
 			case io_prometheus_client.MetricType_HISTOGRAM:
 				sampleCount += 2 + len(sample.GetHistogram().GetBucket())
+				if len(sample.GetHistogram().GetBucket()) > 0 {
+					generatedLabels = 1
+				}
 			case io_prometheus_client.MetricType_SUMMARY:
 				sampleCount += 2 + len(sample.GetSummary().GetQuantile())
+				if len(sample.GetSummary().GetQuantile()) > 0 {
+					generatedLabels = 1
+				}
 			default:
 				sampleCount++
 			}
-			if len(sample.GetLabel()) > h.cfg.MaxLabelsPerSample {
+			if len(sample.GetLabel())+generatedLabels > h.cfg.MaxLabelsPerSample {
 				return nil, fmt.Errorf("label limit exceeded for %s", name)
 			}
 			for _, label := range sample.GetLabel() {
@@ -217,7 +224,7 @@ func (h *Handler) publisher(ctx context.Context) (Publisher, error) {
 }
 
 func connect(ctx context.Context, cfg Config) (Publisher, error) {
-	return jetstream.Connect(ctx, jetstream.Config{URLs: strings.Split(cfg.EventBusURL, ","), Name: "moox-" + cfg.ServiceName + "-metrics"})
+	return jetstream.Connect(ctx, jetstream.ConfigFromEnv(strings.Split(cfg.EventBusURL, ","), "moox-"+cfg.ServiceName+"-metrics"))
 }
 
 func newID() string {
