@@ -105,9 +105,6 @@ func DecodeSnapshot(snapshot *metricspb.MetricSnapshot, limits Limits) ([]byte, 
 		return nil, fmt.Errorf("unsupported metric snapshot schema_version %d", snapshot.GetSchemaVersion())
 	}
 	limits = limits.normalized()
-	if int64(len(snapshot.GetData())) > limits.MaxCompressedBytes {
-		return nil, fmt.Errorf("compressed snapshot exceeds %d bytes", limits.MaxCompressedBytes)
-	}
 	var raw []byte
 	switch snapshot.GetCompression() {
 	case metricspb.Compression_COMPRESSION_NONE:
@@ -116,6 +113,9 @@ func DecodeSnapshot(snapshot *metricspb.MetricSnapshot, limits Limits) ([]byte, 
 		}
 		raw = append([]byte(nil), snapshot.GetData()...)
 	case metricspb.Compression_COMPRESSION_GZIP:
+		if int64(len(snapshot.GetData())) > limits.MaxCompressedBytes {
+			return nil, fmt.Errorf("compressed snapshot exceeds %d bytes", limits.MaxCompressedBytes)
+		}
 		zr, err := gzip.NewReader(bytes.NewReader(snapshot.GetData()))
 		if err != nil {
 			return nil, fmt.Errorf("open gzip snapshot: %w", err)
@@ -164,6 +164,9 @@ func ParseSnapshot(snapshot *metricspb.MetricSnapshot, env Envelope, limits Limi
 	}
 	if len(families) > limits.MaxMetricFamilies {
 		return nil, fmt.Errorf("metric family limit exceeded: %d > %d", len(families), limits.MaxMetricFamilies)
+	}
+	if snapshot.GetMetricFamilyCount() != 0 && int(snapshot.GetMetricFamilyCount()) != len(families) {
+		return nil, fmt.Errorf("metric family count mismatch: declared %d got %d", snapshot.GetMetricFamilyCount(), len(families))
 	}
 	interval := time.Duration(snapshot.GetCollectionIntervalSeconds()) * time.Second
 	if env.ObservedAt.IsZero() {

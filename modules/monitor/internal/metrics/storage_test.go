@@ -31,13 +31,17 @@ func (f *fakeMetadata) ListPrimaryStoreRoutes(context.Context, *storagepb.ListPr
 	return &storagepb.ListPrimaryStoreRoutesRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, PrimaryStoreRoutes: f.routes}, nil
 }
 
-type fakeAccess struct{ writes []*storagepb.TimeSeriesRow }
+type fakeAccess struct {
+	writes  []*storagepb.TimeSeriesRow
+	readReq *storagepb.ReadTimeSeriesRowsReq
+}
 
 func (f *fakeAccess) WriteTimeSeriesRows(_ context.Context, req *storagepb.WriteTimeSeriesRowsReq, _ ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error) {
 	f.writes = append(f.writes, req.GetRows()...)
 	return &storagepb.WriteTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
-func (f *fakeAccess) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+func (f *fakeAccess) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+	f.readReq = req
 	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 
@@ -68,6 +72,27 @@ func TestStorageAdapterValidatesReadOnlySchemaAndWritesBoundedRows(t *testing.T)
 	}
 	if a.writes[0].GetKey().GetSubjectId() != "s1" {
 		t.Fatalf("subject id=%q", a.writes[0].GetKey().GetSubjectId())
+	}
+	if len(a.writes[0].GetKey().GetDimensions()) != 4 {
+		t.Fatalf("write dimensions=%v, want complete metric identity", a.writes[0].GetKey().GetDimensions())
+	}
+}
+
+func TestStorageAdapterQueryHistorySelectorsIncludeDimensions(t *testing.T) {
+	a := &fakeAccess{}
+	adapter := NewStorageAdapter(a, &fakeMetadata{}, metricsStorageConfig())
+	_, err := adapter.QueryHistorySelectors(context.Background(), []HistorySelector{{SeriesID: "series-1", Dimensions: map[string]string{
+		"service_name": "svc", "instance_id": "instance", "metric_name": "requests_total", "metric_type": "counter",
+	}}}, time.Time{}, time.Time{}, true, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.readReq.GetKeys()) != 1 {
+		t.Fatalf("keys=%d, want 1", len(a.readReq.GetKeys()))
+	}
+	key := a.readReq.GetKeys()[0]
+	if key.GetSubjectId() != "series-1" || key.GetDimensions()["metric_name"] != "requests_total" {
+		t.Fatalf("query key=%+v, want subject and dimensions", key)
 	}
 }
 func TestStorageAdapterRejectsMissingRoute(t *testing.T) {

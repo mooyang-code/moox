@@ -315,14 +315,66 @@ func validateReservedInternalSpaces(seed metadataSeed) error {
 			return fmt.Errorf("reserved internal space %q requires attributes scope=internal, owner_module, and managed_by", item.SpaceID)
 		}
 	}
+	check := func(resource, spaceID string) error {
+		spaceID = strings.TrimSpace(spaceID)
+		if strings.HasPrefix(spaceID, "moox_") && !hasInternalSpace(seed, spaceID) {
+			return fmt.Errorf("seed %s cannot claim reserved space %q", resource, spaceID)
+		}
+		return nil
+	}
 	for _, item := range seed.DataSources {
-		if strings.HasPrefix(item.SpaceID, "moox_") && !hasInternalSpace(seed, item.SpaceID) {
-			return fmt.Errorf("seed cannot claim reserved space %q", item.SpaceID)
+		if err := check("data_sources", item.SpaceID); err != nil {
+			return err
+		}
+	}
+	for _, item := range seed.Subjects {
+		if err := check("subjects", item.SpaceID); err != nil {
+			return err
+		}
+	}
+	for _, item := range seed.SubjectSymbols {
+		if err := check("subject_symbols", item.SpaceID); err != nil {
+			return err
 		}
 	}
 	for _, item := range seed.Datasets {
-		if strings.HasPrefix(item.SpaceID, "moox_") && !hasInternalSpace(seed, item.SpaceID) {
-			return fmt.Errorf("seed cannot claim reserved space %q", item.SpaceID)
+		if err := check("datasets", item.SpaceID); err != nil {
+			return err
+		}
+	}
+	for _, item := range seed.DatasetSubjects {
+		if err := check("dataset_subjects", item.SpaceID); err != nil {
+			return err
+		}
+	}
+	for _, item := range seed.Fields {
+		if err := check("fields", item.SpaceID); err != nil {
+			return err
+		}
+	}
+	for _, item := range seed.Factors {
+		if err := check("factors", item.SpaceID); err != nil {
+			return err
+		}
+	}
+	for _, item := range seed.DatasetColumns {
+		if err := check("dataset_columns", item.SpaceID); err != nil {
+			return err
+		}
+	}
+	for _, item := range seed.Views {
+		if err := check("views", item.SpaceID); err != nil {
+			return err
+		}
+	}
+	for _, item := range seed.ViewColumns {
+		if err := check("view_columns", item.SpaceID); err != nil {
+			return err
+		}
+	}
+	for _, item := range seed.PrimaryStoreRoutes {
+		if err := check("primary_store_routes", item.SpaceID); err != nil {
+			return err
 		}
 	}
 	return nil

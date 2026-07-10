@@ -166,6 +166,35 @@ func TestMalformedBodyIsRejected(t *testing.T) {
 	}
 }
 
+func TestFetchCanReturnMalformedDeliveryForDLQ(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	consumer, err := client.NewPullConsumer(context.Background(), ConsumerConfig{Stream: "TEST", Durable: "worker-malformed-dlq", FilterSubject: "moox.test.>", AckWait: time.Second, DeliverDecodeErrors: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+	msg := &nats.Msg{Subject: "moox.test.bad.v1", Data: []byte("not protobuf"), Header: nats.Header{}}
+	msg.Header.Set(nats.MsgIdHdr, "malformed-dlq")
+	msg.Header.Set("Content-Type", OuterContentType)
+	if err := client.nc.PublishMsg(msg); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := consumer.Fetch(context.Background(), 1)
+	if !errors.Is(err, ErrDecode) || len(deliveries) != 1 || deliveries[0].Message != nil || deliveries[0].RawMessageID != "malformed-dlq" {
+		t.Fatalf("Fetch() deliveries=%v err=%v, want malformed delivery for DLQ", deliveries, err)
+	}
+	if err := deliveries[0].Term(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFetchReturnsDecodedDeliveriesWhenLaterMessageIsMalformed(t *testing.T) {
 	srv, url := startTestServer(t)
 	defer srv.Shutdown()

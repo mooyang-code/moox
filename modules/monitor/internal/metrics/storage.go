@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
@@ -30,10 +31,12 @@ type StorageAdapter struct {
 	access   AccessClient
 	metadata MetadataClient
 	cfg      monconfig.MetricsStorageConfig
+	mu       sync.RWMutex
+	schema   SchemaStatus
 }
 
 func NewStorageAdapter(access AccessClient, metadata MetadataClient, cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	return &StorageAdapter{access: access, metadata: metadata, cfg: cfg}
+	return &StorageAdapter{access: access, metadata: metadata, cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}}
 }
 func NewStorageAdapterFromConfig(cfg monconfig.MetricsStorageConfig) *StorageAdapter {
 	return NewStorageAdapter(storagepb.NewAccessClientProxy(client.WithTarget(normalizeTarget(cfg.AccessTarget, "20102"))), storagepb.NewMetadataClientProxy(client.WithTarget(normalizeTarget(cfg.MetadataTarget, "20100"))), cfg)
@@ -72,6 +75,31 @@ type columnContract struct {
 }
 
 func (a *StorageAdapter) ValidateSchema(ctx context.Context) error {
+	err := a.validateSchema(ctx)
+	if a != nil {
+		a.mu.Lock()
+		a.schema = SchemaStatus{Valid: err == nil, CheckedAt: time.Now().UTC()}
+		if err != nil {
+			a.schema.Error = err.Error()
+		}
+		a.mu.Unlock()
+	}
+	return err
+}
+
+// SchemaStatus returns the last read-only metadata validation result. It is
+// intentionally separate from process health so metric ingestion can be
+// degraded without making existing monitor health checks fail.
+func (a *StorageAdapter) SchemaStatus() SchemaStatus {
+	if a == nil {
+		return SchemaStatus{Error: "metrics storage adapter is nil"}
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.schema
+}
+
+func (a *StorageAdapter) validateSchema(ctx context.Context) error {
 	if a == nil || a.metadata == nil {
 		return errors.New("metrics storage metadata client is not initialized")
 	}
@@ -178,6 +206,39 @@ type HistoryPoint struct {
 	MessageID  string
 }
 
+// HistorySelector carries the complete time-series identity needed by Storage
+// to resolve a fact key. Dimensions are part of the primary key, so callers
+// that have resolved a series from the catalog should pass them here rather
+// than relying on the subject hash alone.
+type HistorySelector struct {
+	SeriesID   string
+	Dimensions map[string]string
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+// HistorySelectorForSeries converts a catalog row into an exact Storage key.
+func HistorySelectorForSeries(series MetricSeries) HistorySelector {
+	return HistorySelector{
+		SeriesID: series.SeriesID,
+		Dimensions: map[string]string{
+			"service_name": series.ServiceName,
+			"instance_id":  series.InstanceID,
+			"metric_name":  series.MetricName,
+			"metric_type":  series.MetricType,
+		},
+	}
+}
+
 func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) error {
 	if a == nil || a.access == nil {
 		return errors.New("metrics storage access client is not initialized")
@@ -222,6 +283,18 @@ func sampleRow(cfg monconfig.MetricsStorageConfig, s Sample) *storagepb.TimeSeri
 }
 
 func (a *StorageAdapter) QueryHistory(ctx context.Context, seriesIDs []string, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
+	selectors := make([]HistorySelector, 0, len(seriesIDs))
+	for _, id := range seriesIDs {
+		selectors = append(selectors, HistorySelector{SeriesID: id})
+	}
+	return a.QueryHistorySelectors(ctx, selectors, start, end, desc, limit)
+}
+
+// QueryHistorySelectors reads exact keys including dimensions. The legacy
+// QueryHistory method remains for callers that use subject-only datasets; new
+// metric dashboard/rule code should resolve MetricSeries first and use this
+// method.
+func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []HistorySelector, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
 	if a == nil || a.access == nil {
 		return nil, errors.New("metrics storage access client is not initialized")
 	}
@@ -231,10 +304,14 @@ func (a *StorageAdapter) QueryHistory(ctx context.Context, seriesIDs []string, s
 	if limit > 500 {
 		limit = 500
 	}
-	keys := make([]*storagepb.TimeSeriesKey, 0, len(seriesIDs))
-	for _, id := range seriesIDs {
-		if id != "" {
-			keys = append(keys, &storagepb.TimeSeriesKey{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, SubjectId: id, Freq: a.cfg.Frequency})
+	keys := make([]*storagepb.TimeSeriesKey, 0, len(selectors))
+	for _, selector := range selectors {
+		if selector.SeriesID != "" {
+			key := &storagepb.TimeSeriesKey{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, SubjectId: selector.SeriesID, Freq: a.cfg.Frequency}
+			if len(selector.Dimensions) > 0 {
+				key.Dimensions = cloneStringMap(selector.Dimensions)
+			}
+			keys = append(keys, key)
 		}
 	}
 	if len(keys) == 0 {

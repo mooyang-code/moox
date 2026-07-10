@@ -49,25 +49,32 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	defaultManager = mgr
-	startHealthServer(ctx, cfg, mgr)
+	var metricsStorage *monmetrics.StorageAdapter
+	if cfg.Metrics.Enabled {
+		metricsStorage = monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
+	}
+	startHealthServer(ctx, cfg, mgr, metricsStorage)
 	resultHook := monitorResultHook(cfg, mgr)
 	syncSystem := monitorSyncFunc(ctx, cfg, mgr)
 	registerMonitorService(s, cfg, mgr, resultHook, syncSystem)
 	startScheduler(ctx, cfg, mgr, resultHook)
 	startRetentionCleaner(ctx, cfg, mgr)
 	startPeerPuller(ctx, cfg, mgr)
-	startMetricsConsumer(ctx, cfg, mgr)
+	startMetricsConsumer(ctx, cfg, mgr, metricsStorage)
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
 }
 
-func startMetricsConsumer(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) {
+func startMetricsConsumer(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager, storage *monmetrics.StorageAdapter) {
 	if cfg == nil || !cfg.Metrics.Enabled || mgr == nil || mgr.DB() == nil {
 		return
 	}
-	storage := monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
+	if storage == nil {
+		storage = monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
+	}
 	repo := monmetrics.NewRepository(mgr.DB())
+	startMetricsDedupeCleaner(ctx, repo)
 	go func() {
 		for {
 			if err := ctx.Err(); err != nil {
@@ -101,17 +108,37 @@ func startMetricsConsumer(ctx context.Context, cfg *config.Config, mgr *monstora
 	}()
 }
 
+func startMetricsDedupeCleaner(ctx context.Context, repo *monmetrics.Repository) {
+	if repo == nil {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			if _, err := repo.PruneDedupe(ctx, time.Now().UTC()); err != nil {
+				log.WarnContextf(ctx, "metrics dedupe prune failed: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
 func Manager() *monstorage.Manager {
 	return defaultManager
 }
 
-func startHealthServer(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) {
+func startHealthServer(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager, metricsStorage *monmetrics.StorageAdapter) {
 	if cfg == nil {
 		return
 	}
 	handler := monitorpeer.NewHTTPHandler(monitorpeer.HTTPOptions{
 		Token:    cfg.Peer.Token,
-		Health:   healthz.Handler(monitorHealthSnapshot(cfg, mgr)),
+		Health:   healthz.Handler(monitorHealthSnapshot(cfg, mgr, metricsStorage)),
 		Snapshot: monitorSnapshot(cfg),
 	})
 	if _, err := healthz.StartWithHandler(ctx, cfg.Health.Addr, handler); err != nil {
@@ -290,7 +317,7 @@ func monitorSnapshot(cfg *config.Config) func(context.Context) monitorpeer.Snaps
 	}
 }
 
-func monitorHealthSnapshot(cfg *config.Config, mgr *monstorage.Manager) healthz.SnapshotFunc {
+func monitorHealthSnapshot(cfg *config.Config, mgr *monstorage.Manager, metricsStorage *monmetrics.StorageAdapter) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		var activeChecks int64
 		var activePeers int64
@@ -308,6 +335,20 @@ func monitorHealthSnapshot(cfg *config.Config, mgr *monstorage.Manager) healthz.
 			"peer_enabled":      cfg.Peer.Enabled,
 			"sysdeploy_enabled": cfg.SysDeploy.Enabled,
 		}
+		metricsReady := !cfg.Metrics.Enabled
+		metricsReason := "metrics ingestion disabled"
+		if cfg.Metrics.Enabled {
+			metricsReason = "metrics schema has not been checked"
+			if metricsStorage != nil {
+				status := metricsStorage.SchemaStatus()
+				metricsReady = status.Valid
+				if status.Error != "" {
+					metricsReason = status.Error
+				}
+			}
+		}
+		rsp.Details["metrics_schema_ready"] = metricsReady
+		rsp.Details["metrics_schema_reason"] = metricsReason
 		return rsp
 	}
 }

@@ -17,6 +17,11 @@ type Delivery struct {
 	StreamSeq     uint64
 	ConsumerSeq   uint64
 	DeliveryCount uint64
+	// DecodeError and RawData are populated when a consumer opts into poison
+	// delivery. Message is nil in that case and the caller must Term or NAK it.
+	DecodeError  error
+	RawData      []byte
+	RawMessageID string
 
 	msg *nats.Msg
 }
@@ -59,22 +64,30 @@ func (d *Delivery) withMessage(ctx context.Context, fn func(*nats.Msg, context.C
 }
 
 func deliveryFromMessage(msg *nats.Msg, stream, consumer string, maxPayload int) (*Delivery, error) {
+	if msg == nil {
+		return nil, fmt.Errorf("%w: NATS message is nil", ErrDecode)
+	}
+	delivery := &Delivery{
+		Subject:      msg.Subject,
+		Stream:       stream,
+		Consumer:     consumer,
+		RawData:      append([]byte(nil), msg.Data...),
+		RawMessageID: msg.Header.Get(nats.MsgIdHdr),
+		msg:          msg,
+	}
 	decoded, err := decodeNATSMessage(msg, maxPayload)
 	if err != nil {
-		return nil, err
+		delivery.DecodeError = err
+		return delivery, err
 	}
 	metadata, err := msg.Metadata()
 	if err != nil {
-		return nil, fmt.Errorf("%w: metadata: %w", ErrDecode, err)
+		delivery.DecodeError = fmt.Errorf("%w: metadata: %w", ErrDecode, err)
+		return delivery, delivery.DecodeError
 	}
-	return &Delivery{
-		Message:       decoded,
-		Subject:       msg.Subject,
-		Stream:        stream,
-		Consumer:      consumer,
-		StreamSeq:     metadata.Sequence.Stream,
-		ConsumerSeq:   metadata.Sequence.Consumer,
-		DeliveryCount: metadata.NumDelivered,
-		msg:           msg,
-	}, nil
+	delivery.Message = decoded
+	delivery.StreamSeq = metadata.Sequence.Stream
+	delivery.ConsumerSeq = metadata.Sequence.Consumer
+	delivery.DeliveryCount = metadata.NumDelivered
+	return delivery, nil
 }

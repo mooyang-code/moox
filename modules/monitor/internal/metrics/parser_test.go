@@ -45,6 +45,25 @@ func TestDecodeSnapshotChecksumAndLimits(t *testing.T) {
 	}
 }
 
+func TestDecodeSnapshotNoneUsesUncompressedLimit(t *testing.T) {
+	raw := []byte("# TYPE x gauge\nx 1\n")
+	snapshot := &metricspb.MetricSnapshot{SchemaVersion: 1, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_NONE, Data: raw}
+	if _, err := DecodeSnapshot(snapshot, Limits{MaxCompressedBytes: 1, MaxUncompressedBytes: int64(len(raw))}); err != nil {
+		t.Fatalf("DecodeSnapshot() error = %v, want none-compressed payload to use uncompressed limit", err)
+	}
+}
+
+func TestParseSnapshotRejectsDeclaredFamilyCountMismatch(t *testing.T) {
+	snapshot, err := EncodeSnapshot([]byte("# TYPE x gauge\nx 1\n"), time.Second, gzip.BestSpeed, Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.MetricFamilyCount = 2
+	if _, err := ParseSnapshot(snapshot, Envelope{ServiceName: "svc", InstanceID: "i"}, Limits{}); err == nil {
+		t.Fatal("ParseSnapshot() error = nil, want family count mismatch")
+	}
+}
+
 func TestSeriesIDLengthPrefixes(t *testing.T) {
 	if SeriesID("ab", "c", "m", nil) == SeriesID("a", "bc", "m", nil) {
 		t.Fatal("length prefixes must disambiguate identity")

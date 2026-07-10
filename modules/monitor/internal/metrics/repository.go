@@ -74,7 +74,14 @@ func (r *Repository) CommitIngest(ctx context.Context, msg *messagepb.MooxMessag
 		}
 		for _, sample := range samples {
 			series := &MetricSeries{ServiceName: sample.ServiceName, InstanceID: sample.InstanceID, SeriesID: sample.SeriesID, MetricName: sample.MetricName, MetricType: sample.MetricType, LabelsJSON: sample.LabelsJSON, LastSeenAt: sample.ObservedAt, IsStale: false}
-			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_service_name"}, {Name: "c_instance_id"}, {Name: "c_series_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_metric_name", "c_metric_type", "c_labels_json", "c_last_seen_at", "c_is_stale", "c_mtime"})}).Create(series).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_service_name"}, {Name: "c_instance_id"}, {Name: "c_series_id"}}, DoUpdates: clause.Assignments(map[string]interface{}{
+				"c_metric_name":  gorm.Expr("excluded.c_metric_name"),
+				"c_metric_type":  gorm.Expr("excluded.c_metric_type"),
+				"c_labels_json":  gorm.Expr("excluded.c_labels_json"),
+				"c_last_seen_at": gorm.Expr("MAX(c_last_seen_at, excluded.c_last_seen_at)"),
+				"c_is_stale":     gorm.Expr("CASE WHEN excluded.c_last_seen_at > c_last_seen_at THEN excluded.c_is_stale ELSE c_is_stale END"),
+				"c_mtime":        gorm.Expr("CURRENT_TIMESTAMP"),
+			})}).Create(series).Error; err != nil {
 				return err
 			}
 			var latest MetricLatest
@@ -108,6 +115,9 @@ func (r *Repository) CommitIngest(ctx context.Context, msg *messagepb.MooxMessag
 }
 
 func (r *Repository) PruneDedupe(ctx context.Context, now time.Time) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("message repository is not initialized")
+	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}

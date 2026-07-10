@@ -19,6 +19,10 @@ type ConsumerConfig struct {
 	MaxDeliver    int
 	MaxAckPending int
 	FetchMaxWait  time.Duration
+	// DeliverDecodeErrors returns poison deliveries to the caller so it can
+	// publish a domain-specific DLQ record. The default remains false for
+	// callers that only need the transport to terminate malformed messages.
+	DeliverDecodeErrors bool
 }
 
 type PullConsumer struct {
@@ -198,11 +202,15 @@ func (p *PullConsumer) Fetch(ctx context.Context, batch int) ([]*Delivery, error
 	for _, msg := range msgs {
 		delivery, decodeErr := deliveryFromMessage(msg, p.cfg.Stream, p.cfg.Durable, p.client.cfg.MaxPayload)
 		if decodeErr != nil {
-			// Poison messages must be terminated even when the caller's fetch context
-			// has expired; otherwise they immediately redeliver forever.
-			termCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-			_ = msg.Term(nats.Context(termCtx))
-			cancel()
+			if !p.cfg.DeliverDecodeErrors {
+				// Poison messages must be terminated even when the caller's fetch context
+				// has expired; otherwise they immediately redeliver forever.
+				termCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+				_ = msg.Term(nats.Context(termCtx))
+				cancel()
+			} else if delivery != nil {
+				deliveries = append(deliveries, delivery)
+			}
 			if firstDecodeErr == nil {
 				firstDecodeErr = decodeErr
 			}

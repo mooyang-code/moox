@@ -45,10 +45,19 @@ type jetstreamDLQ struct {
 }
 
 func JetStreamDLQ(client *jetstream.Client, service, instance string) DLQPublisher {
+	if client == nil {
+		return nil
+	}
 	return jetstreamDLQ{client: client, producer: &messagepb.Producer{ServiceName: service, InstanceId: instance}}
 }
 
 func (p jetstreamDLQ) Publish(ctx context.Context, msg *messagepb.MooxMessage) error {
+	if p.client == nil {
+		return errors.New("metrics DLQ eventbus client is nil")
+	}
+	if msg == nil {
+		return errors.New("metrics DLQ message is nil")
+	}
 	_, err := p.client.Publish(ctx, msg)
 	return err
 }
@@ -99,7 +108,7 @@ func NewConsumer(ctx context.Context, opts ConsumerOptions) (*Consumer, error) {
 	if cfg.MaxAckPending <= 0 {
 		cfg.MaxAckPending = 256
 	}
-	pull, err := opts.Client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: cfg.Stream, Durable: cfg.Consumer, FilterSubject: cfg.Topic, AckWait: cfg.AckWait, MaxDeliver: -1, MaxAckPending: cfg.MaxAckPending, FetchMaxWait: cfg.FetchMaxWait})
+	pull, err := opts.Client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: cfg.Stream, Durable: cfg.Consumer, FilterSubject: cfg.Topic, AckWait: cfg.AckWait, MaxDeliver: -1, MaxAckPending: cfg.MaxAckPending, FetchMaxWait: cfg.FetchMaxWait, DeliverDecodeErrors: true})
 	if err != nil {
 		return nil, err
 	}
@@ -132,18 +141,20 @@ func (c *Consumer) Run(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
-		deliveries, err := c.pull.Fetch(ctx, c.opts.Config.FetchBatchSize)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return nil
-			}
-			if errors.Is(err, jetstream.ErrClosed) {
-				return nil
-			}
-			continue
-		}
+		deliveries, fetchErr := c.pull.Fetch(ctx, c.opts.Config.FetchBatchSize)
 		for _, d := range deliveries {
 			_ = c.HandleDelivery(ctx, d)
+		}
+		if fetchErr != nil {
+			if errors.Is(fetchErr, context.Canceled) || errors.Is(fetchErr, context.DeadlineExceeded) {
+				return nil
+			}
+			if errors.Is(fetchErr, jetstream.ErrClosed) {
+				return nil
+			}
+			// A decode error may accompany valid deliveries (and, when enabled,
+			// a poison delivery). Those are handled above; continue fetching.
+			continue
 		}
 	}
 }
@@ -199,8 +210,27 @@ func RunWhenReady(ctx context.Context, opts ConsumerOptions) error {
 }
 
 func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) error {
-	if d == nil || d.Message == nil {
+	if d == nil {
 		return errors.New("empty metric delivery")
+	}
+	if d.Message == nil {
+		if d.DecodeError == nil {
+			return errors.New("empty metric delivery")
+		}
+		reason := fmt.Errorf("decode metric envelope: %w", d.DecodeError)
+		if c.opts.DLQ == nil {
+			_ = d.Term(context.Background())
+			return reason
+		}
+		dlq := malformedRejectionMessage(d, reason.Error(), c.opts.ServiceName, c.opts.InstanceID)
+		if err := c.opts.DLQ.Publish(ctx, dlq); err != nil {
+			_ = d.Nak(context.Background(), time.Second)
+			return fmt.Errorf("publish metrics DLQ: %w", err)
+		}
+		if err := d.Term(context.Background()); err != nil {
+			return fmt.Errorf("term rejected metric: %w", err)
+		}
+		return reason
 	}
 	msg := d.Message
 	permanent := func(reason error) error {
@@ -284,4 +314,30 @@ func rejectionMessage(original *messagepb.MooxMessage, reason, service, instance
 	payload, _ := proto.Marshal(original)
 	now := timestamppb.Now()
 	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: original.GetMessageId() + ".rejected", Topic: MetricDLQTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: service, InstanceId: instance}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf", Payload: payload, Attributes: map[string]string{"rejection_reason": reason, "original_topic": original.GetTopic()}}
+}
+
+func malformedRejectionMessage(delivery *jetstream.Delivery, reason, service, instance string) *messagepb.MooxMessage {
+	now := timestamppb.Now()
+	id := "invalid-envelope"
+	if delivery != nil && delivery.RawMessageID != "" {
+		id = delivery.RawMessageID
+	}
+	var payload []byte
+	var topic string
+	if delivery != nil {
+		payload = append([]byte(nil), delivery.RawData...)
+		topic = delivery.Subject
+	}
+	return &messagepb.MooxMessage{
+		ProtocolVersion: 1,
+		MessageId:       id + ".rejected",
+		Topic:           MetricDLQTopic,
+		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
+		Producer:        &messagepb.Producer{ServiceName: service, InstanceId: instance},
+		OccurredAt:      now,
+		PublishedAt:     now,
+		ContentType:     "application/octet-stream",
+		Payload:         payload,
+		Attributes:      map[string]string{"rejection_reason": reason, "original_topic": topic, "original_message_id": id},
+	}
 }
