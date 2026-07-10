@@ -384,6 +384,10 @@ func rejectionMessage(delivery *jetstream.Delivery, reason string) *messagepb.Mo
 			id = delivery.Message.GetMessageId()
 		}
 	}
+	if id == "invalid-host-metric" {
+		sum := sha256.Sum256(append([]byte(topic+"\x00"), payload...))
+		id += "-" + hex.EncodeToString(sum[:8])
+	}
 	return &messagepb.MooxMessage{
 		ProtocolVersion: 1,
 		MessageId:       id + ".rejected",
