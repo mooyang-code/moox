@@ -2,6 +2,7 @@ package jobqueue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -22,13 +24,14 @@ const JobRequestedTopic = "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*"
 
 // JetStreamQueue implements ExecutionQueue on the centrally managed stream.
 type JetStreamQueue struct {
-	rt       *Runtime
-	client   *jetstream.Client
-	cfg      QueueConfig
-	mu       sync.Mutex
-	fetchMu  sync.Mutex
-	inflight map[string]*jetstream.Delivery
-	consumer *jetstream.PullConsumer
+	rt        *Runtime
+	client    *jetstream.Client
+	cfg       QueueConfig
+	mu        sync.Mutex
+	fetchMu   sync.Mutex
+	inflight  map[string]*jetstream.Delivery
+	consumers map[string]*jetstream.PullConsumer
+	closed    bool
 }
 
 func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
@@ -51,7 +54,7 @@ func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
 	if rt != nil {
 		client = rt.Client()
 	}
-	return &JetStreamQueue{rt: rt, client: client, cfg: cfg, inflight: make(map[string]*jetstream.Delivery)}
+	return &JetStreamQueue{rt: rt, client: client, cfg: cfg, inflight: make(map[string]*jetstream.Delivery), consumers: make(map[string]*jetstream.PullConsumer)}
 }
 
 func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*PublishResult, error) {
@@ -79,35 +82,45 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*Publis
 	return &PublishResult{Created: !ack.Duplicate, Duplicate: ack.Duplicate, Subject: topic, Stream: ack.Stream, Sequence: ack.Sequence}, nil
 }
 
-func (q *JetStreamQueue) ensureConsumer(_ context.Context) error {
-	if q.consumer != nil {
-		return nil
-	}
-	consumer, err := q.client.NewPullConsumer(context.Background(), jetstream.ConsumerConfig{Stream: q.cfg.ExecStream, Durable: "cn_exec_all", FilterSubject: JobRequestedTopic, AckWait: q.cfg.AckWait, MaxDeliver: q.cfg.MaxDeliver, MaxAckPending: q.cfg.DefaultMaxBatch, FetchMaxWait: q.cfg.FetchMaxWait})
-	if err != nil {
-		return err
-	}
-	q.consumer = consumer
-	return nil
-}
-
-func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Delivery, error) {
+func (q *JetStreamQueue) ensureConsumer(spaceID, codePackageID, jobType string) (*jetstream.PullConsumer, error) {
+	key := spaceID + "\x00" + codePackageID + "\x00" + jobType
 	q.mu.Lock()
-	err := q.ensureConsumer(ctx)
-	consumer := q.consumer
-	q.mu.Unlock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return nil, fmt.Errorf("execution queue is closed")
+	}
+	if consumer := q.consumers[key]; consumer != nil {
+		return consumer, nil
+	}
+	consumer, err := q.client.NewPullConsumer(context.Background(), jetstream.ConsumerConfig{Stream: q.cfg.ExecStream, Durable: ConsumerName(spaceID, codePackageID, jobType), FilterSubject: ExecFilterSubject(q.cfg.Naming, spaceID, codePackageID, jobType), AckWait: q.cfg.AckWait, MaxDeliver: q.cfg.MaxDeliver, MaxAckPending: q.cfg.DefaultMaxBatch, FetchMaxWait: q.cfg.FetchMaxWait})
 	if err != nil {
 		return nil, err
 	}
+	q.consumers[key] = consumer
+	return consumer, nil
+}
+
+func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Delivery, error) {
 	limit := req.Limit
 	if limit <= 0 || limit > q.cfg.DefaultMaxBatch {
 		limit = q.cfg.DefaultMaxBatch
 	}
 	q.fetchMu.Lock()
-	deliveries, err := consumer.Fetch(ctx, limit)
-	q.fetchMu.Unlock()
-	if err != nil && len(deliveries) == 0 {
-		return nil, err
+	defer q.fetchMu.Unlock()
+	var deliveries []*jetstream.Delivery
+	for _, jobType := range compactStrings(req.SupportedJobTypes) {
+		consumer, err := q.ensureConsumer(req.SpaceID, req.CodePackageID, jobType)
+		if err != nil {
+			return nil, err
+		}
+		batch, err := consumer.Fetch(ctx, limit-len(deliveries))
+		deliveries = append(deliveries, batch...)
+		if err != nil && len(batch) == 0 && !errors.Is(err, nats.ErrTimeout) && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			return nil, err
+		}
+		if len(deliveries) >= limit {
+			break
+		}
 	}
 	out := make([]Delivery, 0, len(deliveries))
 	for _, delivery := range deliveries {
@@ -135,7 +148,7 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 		q.mu.Unlock()
 		out = append(out, Delivery{Message: meta, AttemptNo: int(delivery.DeliveryCount), AckSubject: token, StreamSeq: delivery.StreamSeq, ConsumerSeq: delivery.ConsumerSeq})
 	}
-	return out, err
+	return out, nil
 }
 
 func (q *JetStreamQueue) take(token string) *jetstream.Delivery {
@@ -176,14 +189,35 @@ func (q *JetStreamQueue) InProgress(ctx context.Context, token string) error {
 	return d.InProgress(ctx)
 }
 func (q *JetStreamQueue) Close() error {
+	q.fetchMu.Lock()
+	defer q.fetchMu.Unlock()
 	q.mu.Lock()
-	consumer := q.consumer
-	q.consumer = nil
+	q.closed = true
+	consumers := q.consumers
+	q.consumers = nil
 	q.mu.Unlock()
-	if consumer != nil {
-		return consumer.Close()
+	var closeErr error
+	for _, consumer := range consumers {
+		closeErr = errors.Join(closeErr, consumer.Close())
 	}
-	return nil
+	return closeErr
+}
+
+func compactStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func contains(values []string, target string) bool {

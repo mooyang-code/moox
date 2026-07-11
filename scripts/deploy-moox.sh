@@ -631,6 +631,18 @@ apply_host_metadata() {
   "${ROOT}/bin/moox-cli" metadata apply --file "${route_seed}" --metadata-url "${METRICS_METADATA_URL}"
 }
 
+apply_market_metadata() {
+  local metadata_url="${MOOX_MARKET_STORAGE_METADATA_URL:-${METRICS_METADATA_URL}}"
+  wait_http_reachable "${metadata_url}" "${MOOX_WAIT_STORAGE_METADATA_SECONDS:-60}"
+  MOOX_COLLECTOR_MARKETS_DIR="${ROOT}/collector/config/markets" \
+    "${ROOT}/bin/moox-cli" init markets --markets all --metadata-url "${metadata_url}"
+  if [[ "${WITH_STORAGE}" == "1" ]]; then
+    "${ROOT}/bin/moox-cli" metadata apply \
+      --file "${ROOT}/examples/metadata-market-local-routes.seed.yaml" \
+      --metadata-url "${metadata_url}"
+  fi
+}
+
 init_storage_schema() {
   echo "initializing storage metadata schema"
   mkdir -p "${ROOT}/logs/storage"
@@ -783,6 +795,7 @@ start_collector() {
     echo "collector is disabled in this deployment package" >&2
     exit 2
   fi
+  apply_market_metadata
   init_collector_schema
   start_service "collector" "${ROOT}/collector" \
     env "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml

@@ -180,6 +180,27 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 	}
 }
 
+func TestBatchDeleteNodesDeletesHeartbeatOnlyCatalogNode(t *testing.T) {
+	ctx := context.Background()
+	db := newNodeSCFTestDB(t)
+	catalog := repository.NewCatalogRepository(db)
+	if err := catalog.UpsertNode(ctx, repository.CloudNode{SpaceID: "stock_cn", NodeID: "heartbeat-node", PackageID: "collector", NodeType: "worker", Status: "online"}); err != nil {
+		t.Fatalf("seed heartbeat node: %v", err)
+	}
+	svc := &Service{catalog: catalog}
+	rsp, err := svc.BatchDeleteNodes(spacecontext.WithSpaceID(ctx, "stock_cn"), &pb.BatchDeleteNodesReq{NodeIds: []string{"heartbeat-node"}})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || rsp.GetProcessedCount() != 1 {
+		t.Fatalf("BatchDeleteNodes() rsp=%+v err=%v", rsp, err)
+	}
+	node, err := catalog.GetNode(ctx, "stock_cn", "heartbeat-node")
+	if err != nil {
+		t.Fatalf("GetNode() error = %v", err)
+	}
+	if node != nil {
+		t.Fatalf("node still exists: %+v", node)
+	}
+}
+
 type fakeSCFClient struct {
 	getErr     error
 	getResults []fakeSCFGetResult

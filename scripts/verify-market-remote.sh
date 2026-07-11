@@ -42,7 +42,7 @@ query_market() {
 }
 
 before="$(query_market)"
-printf '%s' "${before}" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ret_info"].get("code",0) in ("SUCCESS",0); assert "coverage_status" in d; assert all(x.get("open") and x.get("close") and x.get("source_provider") for x in d.get("rows",[]))'
+printf '%s' "${before}" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ret_info"].get("code",0) in ("SUCCESS",0); assert "coverage_status" in d; assert d.get("rows"), "verification range returned no unified rows"; assert all(x.get("open") and x.get("close") and x.get("source_provider") for x in d.get("rows",[]))'
 if [[ "${MOOX_VERIFY_REQUIRE_GAP:-1}" == "1" ]]; then
   printf '%s' "${before}" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("coverage_status") == "incomplete" and d.get("missing_ranges"), "verification range must begin with a controlled gap"'
 fi
@@ -65,7 +65,7 @@ refresh_market | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["
 
 sleep "${MOOX_VERIFY_WAIT_SECONDS:-10}"
 after="$(query_market)"
-printf '%s' "${after}" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ret_info"].get("code",0) in ("SUCCESS",0); assert d.get("freshness") in ("fresh","stale","empty"); assert d.get("coverage_status") in ("complete","incomplete","unknown")'
+printf '%s' "${after}" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ret_info"].get("code",0) in ("SUCCESS",0); assert d.get("rows"), "verification range returned no unified rows after refresh"; assert d.get("freshness") in ("fresh","stale","empty"); assert d.get("coverage_status") in ("complete","incomplete","unknown")'
 if [[ "${MOOX_VERIFY_REQUIRE_GAP:-1}" == "1" ]]; then
   printf '%s' "${after}" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("coverage_status") == "complete" and not d.get("missing_ranges"), "controlled gap was not repaired"'
 fi

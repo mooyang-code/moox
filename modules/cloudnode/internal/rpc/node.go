@@ -134,6 +134,9 @@ func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodes
 		if node == nil {
 			continue
 		}
+		if strings.TrimSpace(node.CloudAccountID) == "" || strings.TrimSpace(node.FunctionName) == "" {
+			continue
+		}
 		account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
 		if err != nil || account == nil {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "cloud account unavailable for node "+nodeID)}, nil

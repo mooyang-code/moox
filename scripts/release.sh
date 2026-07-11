@@ -56,7 +56,17 @@ validate_monitor_metadata_seeds() {
   done
 }
 
+validate_market_metadata_seeds() {
+  local route_seed="${ROOT}/examples/metadata-market-local-routes.seed.yaml"
+  [[ -f "${route_seed}" ]] || { echo "missing metadata seed: ${route_seed}" >&2; return 1; }
+  for seed in "${ROOT}"/modules/collector/config/markets/*/metadata.seed.yaml; do
+    (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${seed}" --dry-run >/dev/null)
+  done
+  (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${route_seed}" --dry-run >/dev/null)
+}
+
 validate_monitor_metadata_seeds
+validate_market_metadata_seeds
 
 rm -rf "${RELEASE_ROOT}"
 mkdir -p \

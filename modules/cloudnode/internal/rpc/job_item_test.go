@@ -145,6 +145,55 @@ func TestJobItemRPCUsesActiveKVAndWritesHistory(t *testing.T) {
 	}
 }
 
+func TestPollJobItemsKeepsSpaceAndPackageDeliveriesIsolated(t *testing.T) {
+	ctx := context.Background()
+	db := newNodeSCFTestDB(t)
+	catalog := repository.NewCatalogRepository(db)
+	for _, node := range []repository.CloudNode{
+		{SpaceID: "space-a", NodeID: "node-a", PackageID: "package-a", NodeType: "scf-event", Status: "online"},
+		{SpaceID: "space-b", NodeID: "node-b", PackageID: "package-b", NodeType: "scf-event", Status: "online"},
+	} {
+		if err := catalog.UpsertNode(ctx, node); err != nil {
+			t.Fatalf("seed node %s: %v", node.NodeID, err)
+		}
+	}
+	rt, jsCfg := startRPCQueueRuntime(t)
+	kv, err := rt.JetStream().KeyValue(config.Default().JobItem.ActiveKVBucket)
+	if err != nil {
+		t.Fatalf("KeyValue() error = %v", err)
+	}
+	stateStore := jobstate.NewKVStore(kv, jobstate.Options{RecoverAfterMillis: int64(time.Minute / time.Millisecond), DefaultMaxAttempts: 3})
+	queue := jobqueue.NewJetStreamQueue(rt, jobqueue.QueueConfig{
+		Naming: jobqueue.NamingConfig{SubjectPrefix: jobqueue.DefaultSubjectPrefix}, ExecStream: jsCfg.ExecStream,
+		AckWait: 200 * time.Millisecond, MaxDeliver: 3, FetchMaxWait: 100 * time.Millisecond, DefaultMaxBatch: 10,
+	})
+	t.Cleanup(func() { _ = queue.Close() })
+	svc := &Service{catalog: catalog, executionQueue: queue, jobState: stateStore}
+	for _, item := range []*pb.JobItem{
+		{SpaceId: "space-a", JobId: "job-a", JobItemId: "item-a", JobType: "collect.kline", CodePackageId: "package-a"},
+		{SpaceId: "space-b", JobId: "job-b", JobItemId: "item-b", JobType: "collect.kline", CodePackageId: "package-b"},
+	} {
+		rsp, err := svc.SubmitJobItems(ctx, &pb.SubmitJobItemsReq{Items: []*pb.JobItem{item}})
+		if err != nil || rsp.GetCreated() != 1 {
+			t.Fatalf("submit %s: rsp=%+v err=%v", item.GetJobItemId(), rsp, err)
+		}
+	}
+	poll := func(spaceID, nodeID string) *pb.PollJobItemsRsp {
+		t.Helper()
+		rsp, err := svc.PollJobItems(ctx, &pb.PollJobItemsReq{SpaceId: spaceID, NodeId: nodeID, SupportedJobTypes: []string{"collect.kline"}, ProtocolVersion: supportedJobItemProtocolVersion, Limit: 1})
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			t.Fatalf("poll %s/%s: rsp=%+v err=%v", spaceID, nodeID, rsp, err)
+		}
+		return rsp
+	}
+	if got := poll("space-a", "node-a").GetItems(); len(got) != 1 || got[0].GetJobItemId() != "item-a" {
+		t.Fatalf("space-a poll = %+v, want only item-a", got)
+	}
+	if got := poll("space-b", "node-b").GetItems(); len(got) != 1 || got[0].GetJobItemId() != "item-b" {
+		t.Fatalf("space-b poll = %+v, want only item-b", got)
+	}
+}
+
 func TestCanceledRunningJobItemReportTerminatesQueueMessageWithActiveKV(t *testing.T) {
 	ctx := context.Background()
 	rt, _ := startRPCQueueRuntime(t)
