@@ -62,7 +62,8 @@ func (dm *Manager) Close() error {
 func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
 		"_pragma=journal_mode(WAL)",
-		"_pragma=synchronous(OFF)",
+		"_pragma=synchronous(NORMAL)",
+		"_pragma=foreign_keys(ON)",
 		"_pragma=busy_timeout(5000)",
 		"_pragma=temp_store(MEMORY)",
 		"_pragma=cache_size(-64000)",
