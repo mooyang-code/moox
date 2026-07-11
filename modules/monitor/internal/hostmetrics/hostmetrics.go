@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -399,12 +400,19 @@ func (c *Consumer) Run(ctx context.Context) error {
 			c.handleDelivery(ctx, d)
 		}
 		if err != nil {
+			if isIdleFetchError(err) {
+				continue
+			}
 			if errors.Is(err, context.Canceled) || errors.Is(err, jetstream.ErrClosed) {
 				return nil
 			}
 			return err
 		}
 	}
+}
+
+func isIdleFetchError(err error) bool {
+	return errors.Is(err, nats.ErrTimeout)
 }
 
 func (c *Consumer) handleDelivery(ctx context.Context, d *jetstream.Delivery) {

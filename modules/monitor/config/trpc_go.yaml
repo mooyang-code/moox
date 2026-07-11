@@ -24,12 +24,12 @@ server:
       timeout: 10000
 
 plugins:
-
-  prometheus:
-    ip: 127.0.0.1
-    port: 12950
-    path: /metrics
-    enablepush: false
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12950
+      path: /metrics
+      enablepush: false
   log:
     default:
       - writer: console

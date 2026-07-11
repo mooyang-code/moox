@@ -1,12 +1,23 @@
 package hostmetrics
 
 import (
+	"errors"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/messagepb"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"testing"
 )
+
+func TestIdleFetchTimeoutKeepsConsumerRunning(t *testing.T) {
+	if !isIdleFetchError(nats.ErrTimeout) {
+		t.Fatal("NATS idle fetch timeout must not restart the durable consumer")
+	}
+	if isIdleFetchError(errors.New("connection closed")) {
+		t.Fatal("non-timeout consumer errors must still be returned")
+	}
+}
 
 func TestValidateHostMetricContract(t *testing.T) {
 	payload, err := proto.Marshal(&hostmetricpb.HostMetric{Snapshot: &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{LogicalCores: 1, UsageAvailable: true, UsagePercent: 20}, Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 40, AvailableBytes: 60, UsagePercent: 40}}})
