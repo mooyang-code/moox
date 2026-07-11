@@ -196,6 +196,7 @@ message NodeCreateItem {
 
 message BatchCreateNodesReq {
   repeated NodeCreateItem nodes = 1;
+  string space_id = 2;
 }
 
 message BatchChangeResult {
@@ -206,6 +207,7 @@ message BatchChangeResult {
 
 message BatchDeleteNodesReq {
   repeated string node_ids = 1;
+  string space_id = 2;
 }
 
 message NodeDeployItem {
@@ -215,6 +217,7 @@ message NodeDeployItem {
 
 message BatchDeployNodesReq {
   repeated NodeDeployItem deployments = 1;
+  string space_id = 2;
 }
 
 message CloudAccountSummary {
