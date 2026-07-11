@@ -5,6 +5,8 @@ go 1.24.0
 toolchain go1.24.10
 
 require (
+	gitee.com/quant1x/exchange v0.5.12
+	gitee.com/quant1x/gotdx v1.22.23
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
@@ -55,6 +57,9 @@ replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metric
 replace github.com/mooyang-code/moox/packages/marketmanifest => ../../packages/marketmanifest
 
 require (
+	gitee.com/quant1x/gox v1.21.9 // indirect
+	gitee.com/quant1x/num v0.3.6 // indirect
+	gitee.com/quant1x/pkg v0.3.1 // indirect
 	github.com/BurntSushi/toml v1.3.2 // indirect
 	github.com/DataDog/zstd v1.4.5 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
@@ -66,15 +71,18 @@ require (
 	github.com/cockroachdb/pebble v1.1.5 // indirect
 	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
+	github.com/dlclark/regexp2 v1.11.4 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/fsnotify/fsnotify v1.4.9 // indirect
+	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/getsentry/sentry-go v0.27.0 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/go-playground/form/v4 v4.2.0 // indirect
+	github.com/go-sourcemap/sourcemap v2.1.4+incompatible // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
+	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect

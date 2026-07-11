@@ -9,6 +9,12 @@ exchange: {id: XSHG, name: Shanghai Stock Exchange}
 product_types: [equity, etf, index]
 instrument_types: [equity, etf, index]
 providers:
+  - id: tdx
+    capabilities: [kline, instrument]
+    endpoint: env:MOOX_TDX_ADDRESS
+    endpoint_class: tdx_tcp
+    quotas:
+      - {scope: ip, window_seconds: 60, limit: 120, weight: 1, reset_timezone: Asia/Shanghai}
   - id: ifeng
     capabilities: [kline]
     endpoint: https://api.finance.ifeng.com
@@ -22,11 +28,21 @@ providers:
     quotas:
       - {scope: ip, window_seconds: 60, limit: 120, weight: 1, reset_timezone: Asia/Shanghai}
 datasets:
+  - {id: tdx_kline, role: provider_data, feed: kline, provider_id: tdx}
+  - {id: tdx_instruments, role: provider_data, feed: instrument, provider_id: tdx}
   - {id: ifeng_kline, role: provider_data, feed: kline, provider_id: ifeng}
   - {id: tencent_kline, role: provider_data, feed: kline, provider_id: tencent}
   - {id: equity_kline, role: unified_data, feed: kline}
+  - {id: etf_kline, role: unified_data, feed: kline}
+  - {id: index_kline, role: unified_data, feed: kline}
+  - {id: instruments, role: unified_data, feed: instrument}
+  - {id: calendar, role: unified_data, feed: calendar}
+  - {id: market_coverage, role: coverage_state, feed: coverage}
+  - {id: kline_quality_event, role: quality_event, feed: quality_event}
 feeds:
-  - {id: equity_kline, dataset_id: equity_kline, frequencies: [5m, 1h, 1d], volume_unit: share, amount_unit: CNY, bucket_alignment: XSHG_session, instrument_type: equity}
+  - {id: equity_kline, dataset_id: equity_kline, frequencies: [1m, 5m, 15m, 30m, 1h, 1d], volume_unit: share, amount_unit: CNY, bucket_alignment: exchange_session, instrument_type: equity}
+  - {id: etf_kline, dataset_id: etf_kline, frequencies: [1m, 5m, 15m, 30m, 1h, 1d], volume_unit: share, amount_unit: CNY, bucket_alignment: exchange_session, instrument_type: etf}
+  - {id: index_kline, dataset_id: index_kline, frequencies: [1m, 5m, 15m, 30m, 1h, 1d], volume_unit: share, amount_unit: CNY, bucket_alignment: exchange_session, instrument_type: index}
 execution: {timeout_seconds: 60, job_budget_ms: 30000, report_reserve_ms: 10000}
 readiness: {status: not_ready, reason: "CN-1 provider evidence required", capability_enabled: false}
 routing: {policy: weighted_rendezvous}

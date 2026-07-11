@@ -13,6 +13,7 @@ import (
 	binanceprovider "github.com/mooyang-code/moox/modules/collector/internal/providers/binance"
 	ifengprovider "github.com/mooyang-code/moox/modules/collector/internal/providers/ifeng"
 	okxprovider "github.com/mooyang-code/moox/modules/collector/internal/providers/okx"
+	tdxprovider "github.com/mooyang-code/moox/modules/collector/internal/providers/tdx"
 	tencentprovider "github.com/mooyang-code/moox/modules/collector/internal/providers/tencent"
 	"github.com/mooyang-code/moox/packages/marketmanifest"
 )
@@ -29,7 +30,7 @@ func Default(calendarPath string) Catalog {
 			return nil, err
 		}
 		return stockcn.New(calendar), nil
-	}, "stock_us": func() (markets.Module, error) { return stockus.New(), nil }, "crypto_binance": func() (markets.Module, error) { return cryptomarket.New("crypto_binance", "BINANCE"), nil }, "crypto_okx": func() (markets.Module, error) { return cryptomarket.New("crypto_okx", "OKX"), nil }}, ProviderFactories: map[marketdata.ProviderID]func() providers.KlineProvider{"binance": func() providers.KlineProvider { return binanceprovider.New(binanceprovider.Config{}) }, "okx": func() providers.KlineProvider { return okxprovider.New(okxprovider.Config{}) }, "ifeng": func() providers.KlineProvider { return ifengprovider.New(ifengprovider.Config{}) }, "tencent": func() providers.KlineProvider { return tencentprovider.New(tencentprovider.Config{}) }}}
+	}, "stock_us": func() (markets.Module, error) { return stockus.New(), nil }, "crypto_binance": func() (markets.Module, error) { return cryptomarket.New("crypto_binance", "BINANCE"), nil }, "crypto_okx": func() (markets.Module, error) { return cryptomarket.New("crypto_okx", "OKX"), nil }}, ProviderFactories: map[marketdata.ProviderID]func() providers.KlineProvider{"binance": func() providers.KlineProvider { return binanceprovider.New(binanceprovider.Config{}) }, "okx": func() providers.KlineProvider { return okxprovider.New(okxprovider.Config{}) }, "ifeng": func() providers.KlineProvider { return ifengprovider.New(ifengprovider.Config{}) }, "tencent": func() providers.KlineProvider { return tencentprovider.New(tencentprovider.Config{}) }, "tdx": func() providers.KlineProvider { return tdxprovider.New(tdxprovider.Config{}) }}}
 }
 func (c Catalog) Provider(id marketdata.ProviderID) (providers.KlineProvider, error) {
 	factory := c.ProviderFactories[id]
