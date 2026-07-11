@@ -28,3 +28,22 @@ func TestFetchKlinesParsesConfirmedV5Candles(t *testing.T) {
 		t.Fatalf("rows=%+v", result.Rows)
 	}
 }
+
+func TestFetchInstrumentsNormalizesSpotUniverse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v5/public/instruments" || r.URL.Query().Get("instType") != "SPOT" {
+			t.Fatal(r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"code":"0","data":[{"instId":"BTC-USDT","baseCcy":"BTC","quoteCcy":"USDT","state":"live","listTime":"1783728000000","expTime":""}]}`))
+	}))
+	defer server.Close()
+	now := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	p := New(Config{BaseURL: server.URL, HTTPClient: server.Client(), Now: func() time.Time { return now }})
+	result, err := p.FetchInstruments(context.Background(), providers.StaticGate{Permit: providers.RequestPermit{Allowed: true}}, providers.FetchInstrumentsRequest{MarketID: "crypto_okx", ExchangeID: "OKX", SnapshotAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Instruments) != 1 || result.Instruments[0].ProviderSymbol != "BTC-USDT" || result.Instruments[0].Currency != "USDT" || !result.Complete {
+		t.Fatalf("result=%+v", result)
+	}
+}

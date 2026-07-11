@@ -28,3 +28,22 @@ func TestFetchKlinesNormalizesClosedSpotRows(t *testing.T) {
 		t.Fatalf("rows=%+v", result.Rows)
 	}
 }
+
+func TestFetchInstrumentsPagesExchangeInfo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/exchangeInfo" {
+			t.Fatal(r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"symbols":[{"symbol":"BTCUSDT","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT"},{"symbol":"ETHUSDT","status":"TRADING","baseAsset":"ETH","quoteAsset":"USDT"}]}`))
+	}))
+	defer server.Close()
+	now := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	p := New(Config{BaseURL: server.URL, HTTPClient: server.Client(), Now: func() time.Time { return now }})
+	result, err := p.FetchInstruments(context.Background(), providers.StaticGate{Permit: providers.RequestPermit{Allowed: true}}, providers.FetchInstrumentsRequest{MarketID: "crypto_binance", ExchangeID: "BINANCE", SnapshotAt: now, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Instruments) != 1 || result.Instruments[0].ProviderSymbol != "BTCUSDT" || result.NextCursor != "1" || result.Complete {
+		t.Fatalf("result=%+v", result)
+	}
+}

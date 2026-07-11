@@ -40,7 +40,68 @@ func New(cfg Config) *Provider {
 }
 func (*Provider) ID() marketdata.ProviderID { return "binance" }
 func (*Provider) Capabilities() []providers.Capability {
-	return []providers.Capability{{Feed: providers.FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyMinute}, {Feed: providers.FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyDay}}
+	return []providers.Capability{{Feed: providers.FeedInstrument, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot}, {Feed: providers.FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyMinute}, {Feed: providers.FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyDay}}
+}
+
+func (p *Provider) FetchInstruments(ctx context.Context, gate providers.RequestGate, req providers.FetchInstrumentsRequest) (providers.FetchInstrumentsResult, error) {
+	permit, err := gate.BeforeRequest(ctx, providers.RequestMeta{ProviderID: p.ID(), RequestIndex: 0, EndpointClass: "spot_exchange_info", RequestCost: 20})
+	if err != nil {
+		return providers.FetchInstrumentsResult{}, err
+	}
+	if !permit.Allowed {
+		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorRateLimited, permit.DenialReason, nil)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/v3/exchangeInfo", nil)
+	if err != nil {
+		return providers.FetchInstrumentsResult{}, err
+	}
+	rsp, err := p.client.Do(request)
+	if err != nil {
+		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorTemporarilyUnavailable, "binance exchange info", err)
+	}
+	defer rsp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(rsp.Body, 16<<20))
+	if err != nil {
+		return providers.FetchInstrumentsResult{}, err
+	}
+	if rsp.StatusCode == http.StatusTooManyRequests {
+		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorRateLimited, "binance rate limit", nil)
+	}
+	if rsp.StatusCode >= 400 {
+		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorTemporarilyUnavailable, fmt.Sprintf("binance status %d", rsp.StatusCode), nil)
+	}
+	var payload struct {
+		Symbols []struct{ Symbol, Status, BaseAsset, QuoteAsset string } `json:"symbols"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorParseFailed, "binance exchange info", err)
+	}
+	start := 0
+	if req.Cursor != "" {
+		start, err = strconv.Atoi(req.Cursor)
+		if err != nil || start < 0 {
+			return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorParseFailed, "invalid instrument cursor", err)
+		}
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = len(payload.Symbols)
+	}
+	end := start + limit
+	if end > len(payload.Symbols) {
+		end = len(payload.Symbols)
+	}
+	if start > end {
+		start = end
+	}
+	result := providers.FetchInstrumentsResult{Complete: end == len(payload.Symbols), RequestCount: 1}
+	for _, item := range payload.Symbols[start:end] {
+		result.Instruments = append(result.Instruments, providers.ProviderInstrument{ProviderID: p.ID(), ProviderSymbol: item.Symbol, ExchangeID: "BINANCE", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Name: item.BaseAsset + "/" + item.QuoteAsset, Currency: item.QuoteAsset, Status: strings.ToLower(item.Status), EffectiveAt: req.SnapshotAt.UTC(), FetchedAt: p.now().UTC(), RequestID: "binance:exchangeInfo:" + req.SnapshotAt.UTC().Format(time.RFC3339Nano)})
+	}
+	if !result.Complete {
+		result.NextCursor = strconv.Itoa(end)
+	}
+	return result, nil
 }
 func (p *Provider) FetchKlines(ctx context.Context, gate providers.RequestGate, req providers.FetchKlinesRequest) (providers.FetchKlinesResult, error) {
 	if req.ProductType != marketdata.ProductSpot {

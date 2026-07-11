@@ -25,6 +25,31 @@ func TestRegistryRejectsDuplicateAndFiltersCapability(t *testing.T) {
 	}
 }
 
+func TestRegistryExposesInstrumentCapabilityImplementedByProvider(t *testing.T) {
+	r := NewRegistry()
+	p := &multiFeedProvider{id: "multi", capabilities: []Capability{{Feed: FeedInstrument, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot}}}
+	if err := r.Register(p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Instrument("multi", CapabilityQuery{Feed: FeedInstrument, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type multiFeedProvider struct {
+	id           marketdata.ProviderID
+	capabilities []Capability
+}
+
+func (p *multiFeedProvider) ID() marketdata.ProviderID  { return p.id }
+func (p *multiFeedProvider) Capabilities() []Capability { return p.capabilities }
+func (*multiFeedProvider) FetchKlines(context.Context, RequestGate, FetchKlinesRequest) (FetchKlinesResult, error) {
+	return FetchKlinesResult{}, nil
+}
+func (*multiFeedProvider) FetchInstruments(context.Context, RequestGate, FetchInstrumentsRequest) (FetchInstrumentsResult, error) {
+	return FetchInstrumentsResult{}, nil
+}
+
 func TestFakeProviderDoesNotFetchWhenPermitIsDenied(t *testing.T) {
 	provider := &testProvider{id: "first", caps: []Capability{{Feed: FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyMinute}}}
 	gate := StaticGate{Permit: RequestPermit{Allowed: false, DenialReason: "quota"}}

@@ -40,7 +40,87 @@ func New(cfg Config) *Provider {
 }
 func (*Provider) ID() marketdata.ProviderID { return "okx" }
 func (*Provider) Capabilities() []providers.Capability {
-	return []providers.Capability{{Feed: providers.FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyMinute}, {Feed: providers.FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyDay}}
+	return []providers.Capability{{Feed: providers.FeedInstrument, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot}, {Feed: providers.FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyMinute}, {Feed: providers.FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyDay}}
+}
+
+func (p *Provider) FetchInstruments(ctx context.Context, gate providers.RequestGate, req providers.FetchInstrumentsRequest) (providers.FetchInstrumentsResult, error) {
+	permit, err := gate.BeforeRequest(ctx, providers.RequestMeta{ProviderID: p.ID(), RequestIndex: 0, EndpointClass: "public_instruments", RequestCost: 1})
+	if err != nil {
+		return providers.FetchInstrumentsResult{}, err
+	}
+	if !permit.Allowed {
+		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorRateLimited, permit.DenialReason, nil)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/v5/public/instruments?instType=SPOT", nil)
+	if err != nil {
+		return providers.FetchInstrumentsResult{}, err
+	}
+	rsp, err := p.client.Do(request)
+	if err != nil {
+		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorTemporarilyUnavailable, "okx instruments", err)
+	}
+	defer rsp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(rsp.Body, 16<<20))
+	if err != nil {
+		return providers.FetchInstrumentsResult{}, err
+	}
+	if rsp.StatusCode == http.StatusTooManyRequests {
+		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorRateLimited, "okx rate limit", nil)
+	}
+	if rsp.StatusCode >= 400 {
+		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorTemporarilyUnavailable, fmt.Sprintf("okx status %d", rsp.StatusCode), nil)
+	}
+	var payload struct {
+		Code, Msg string
+		Data      []struct {
+			InstID   string `json:"instId"`
+			BaseCcy  string `json:"baseCcy"`
+			QuoteCcy string `json:"quoteCcy"`
+			State    string `json:"state"`
+			ListTime string `json:"listTime"`
+			ExpTime  string `json:"expTime"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorParseFailed, "okx instruments", err)
+	}
+	if payload.Code != "0" {
+		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorTemporarilyUnavailable, payload.Msg, nil)
+	}
+	start := 0
+	if req.Cursor != "" {
+		start, err = strconv.Atoi(req.Cursor)
+		if err != nil || start < 0 {
+			return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorParseFailed, "invalid instrument cursor", err)
+		}
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = len(payload.Data)
+	}
+	end := start + limit
+	if end > len(payload.Data) {
+		end = len(payload.Data)
+	}
+	if start > end {
+		start = end
+	}
+	result := providers.FetchInstrumentsResult{Complete: end == len(payload.Data), RequestCount: 1}
+	for _, item := range payload.Data[start:end] {
+		result.Instruments = append(result.Instruments, providers.ProviderInstrument{ProviderID: p.ID(), ProviderSymbol: item.InstID, ExchangeID: "OKX", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Name: item.BaseCcy + "/" + item.QuoteCcy, Currency: item.QuoteCcy, ListingDate: millisDate(item.ListTime), DelistingDate: millisDate(item.ExpTime), Status: strings.ToLower(item.State), EffectiveAt: req.SnapshotAt.UTC(), FetchedAt: p.now().UTC(), RequestID: "okx:instruments:" + req.SnapshotAt.UTC().Format(time.RFC3339Nano)})
+	}
+	if !result.Complete {
+		result.NextCursor = strconv.Itoa(end)
+	}
+	return result, nil
+}
+
+func millisDate(value string) string {
+	milliseconds, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || milliseconds <= 0 {
+		return ""
+	}
+	return time.UnixMilli(milliseconds).UTC().Format("2006-01-02")
 }
 func (p *Provider) FetchKlines(ctx context.Context, gate providers.RequestGate, req providers.FetchKlinesRequest) (providers.FetchKlinesResult, error) {
 	if req.ProductType != marketdata.ProductSpot {
