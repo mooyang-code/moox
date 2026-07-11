@@ -41,6 +41,10 @@ func TestMarketPlannerCreatesLogicalTaskAndFencedRuntimeParams(t *testing.T) {
 	if len(params["source_dataset_ids"].([]any)) != 1 || params["source_datasets"].(map[string]any)["binance_rest"] != "binance_spot_kline" {
 		t.Fatalf("source candidates=%v", params)
 	}
+	binding := params["candidate_bindings"].(map[string]any)["binance_rest"].(map[string]any)
+	if binding["provider_symbol"] != "BTCUSDT" || binding["source_dataset_id"] != "binance_spot_kline" {
+		t.Fatalf("candidate binding=%v", binding)
+	}
 	request.CandidateChain[0].ProviderID = "other"
 	request.CandidateChain[0].SourceDatasetID = "other_source"
 	second, err := planner.PlanKline(context.Background(), request)

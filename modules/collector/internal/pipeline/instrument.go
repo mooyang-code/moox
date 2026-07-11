@@ -57,6 +57,7 @@ func (p InstrumentPipeline) Run(ctx context.Context, request providers.FetchInst
 	if p.Now != nil {
 		now = p.Now().UTC()
 	}
+	resolvedRows := make([]providers.ResolvedInstrument, 0, len(fetched.Instruments))
 	for _, source := range fetched.Instruments {
 		datasets := p.SourceDatasetIDs
 		if len(datasets) == 0 {
@@ -78,12 +79,13 @@ func (p InstrumentPipeline) Run(ctx context.Context, request providers.FetchInst
 		if err := p.Store.WriteUnifiedInstrument(ctx, p.UnifiedDatasetID, resolved); err != nil {
 			return result, err
 		}
-		if p.Registrar != nil {
-			if err := p.Registrar.RegisterInstruments(ctx, []providers.ResolvedInstrument{resolved}); err != nil {
-				return result, err
-			}
-		}
+		resolvedRows = append(resolvedRows, resolved)
 		result.UnifiedRows++
+	}
+	if p.Registrar != nil && len(resolvedRows) > 0 {
+		if err := p.Registrar.RegisterInstruments(ctx, resolvedRows); err != nil {
+			return result, err
+		}
 	}
 	return result, nil
 }

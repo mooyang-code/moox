@@ -102,13 +102,27 @@ func (p MarketPlanner) PlanKline(ctx context.Context, request MarketKlinePlanReq
 		"quota_lease_id": providerLeaseID, "lease_epoch": request.LeaseEpoch, "resolution_lease_id": resolutionLeaseID,
 		"resolution_lease_epoch": request.LeaseEpoch, "execution_nonce": owner, "quota_scope_key": selected.QuotaScopeKey,
 		"schedule_window": request.ScheduleWindow.UTC().Format(time.RFC3339), "schedule_interval": request.ScheduleInterval.String(),
-		"candidate_chain": providerIDs(request.CandidateChain), "provider_priority": providerIDs(request.CandidateChain), "source_dataset_ids": providerDatasetIDs(request.CandidateChain), "source_datasets": providerDatasetMap(request.CandidateChain), "quota_windows": windows,
+		"candidate_chain": providerIDs(request.CandidateChain), "candidate_bindings": providerBindingMap(request.CandidateChain), "provider_priority": providerIDs(request.CandidateChain), "source_dataset_ids": providerDatasetIDs(request.CandidateChain), "source_datasets": providerDatasetMap(request.CandidateChain), "quota_windows": windows,
 	}
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return domain.TaskInstance{}, err
 	}
 	return domain.TaskInstance{SpaceID: request.SpaceID, TaskID: taskID, RuleID: request.RuleID, Exchange: string(request.ExchangeID), Market: string(request.ProductType), DataType: "kline", DatasetID: request.UnifiedDatasetID, SubjectID: request.SubjectID, Symbol: selected.ProviderSymbol, Interval: string(request.Frequency), LastExecStatus: domain.InstanceStatusPending, TaskParams: string(raw), Result: "{}", CreateTime: now, ModifyTime: now}, nil
+}
+func providerBindingMap(values []KlinePlanProvider) map[string]any {
+	out := make(map[string]any, len(values))
+	for _, value := range values {
+		windows := append([]repository.QuotaWindow(nil), value.QuotaWindows...)
+		sort.Slice(windows, func(i, j int) bool { return windows[i].WindowSeconds < windows[j].WindowSeconds })
+		out[string(value.ProviderID)] = map[string]any{
+			"source_dataset_id": value.SourceDatasetID,
+			"provider_symbol":   value.ProviderSymbol,
+			"quota_scope_key":   value.QuotaScopeKey,
+			"quota_windows":     windows,
+		}
+	}
+	return out
 }
 
 func stablePlanID(kind, key string, suffix ...any) string {

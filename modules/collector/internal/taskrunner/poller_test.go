@@ -55,7 +55,7 @@ func TestTaskEventFromJobItemAllowsSymbolWithoutSymbolOrInterval(t *testing.T) {
 }
 
 func TestMarketFollowUpsGroupContinuationAndFallbackDeterministically(t *testing.T) {
-	item := nodeRuntime.JobItem{JobType: jobs.JobTypeCollectKline, Params: map[string]any{"provider_id": "primary", "candidate_chain": []any{"primary", "fallback"}, "subject_id": "BTC-USDT"}}
+	item := nodeRuntime.JobItem{JobType: jobs.JobTypeCollectKline, Params: map[string]any{"provider_id": "primary", "candidate_chain": []any{"primary", "fallback"}, "candidate_bindings": map[string]any{"fallback": map[string]any{"source_dataset_id": "fallback_kline", "provider_symbol": "BTC-USD", "quota_scope_key": "fallback-ip", "quota_windows": []any{map[string]any{"limit": float64(10)}}}}, "subject_id": "BTC-USDT"}}
 	continuation := marketFollowUps(item, map[string]any{"next_cursor": "page-2"}, nil)
 	if len(continuation) != 1 || continuation[0].GetKind() != "continuation" || continuation[0].GetPayload().AsMap()["cursor"] != "page-2" {
 		t.Fatalf("continuation=%+v", continuation)
@@ -63,5 +63,9 @@ func TestMarketFollowUpsGroupContinuationAndFallbackDeterministically(t *testing
 	fallback := marketFollowUps(item, map[string]any{}, errors.New("temporary"))
 	if len(fallback) != 1 || fallback[0].GetKind() != "fallback" || fallback[0].GetPayload().AsMap()["provider_id"] != "fallback" {
 		t.Fatalf("fallback=%+v", fallback)
+	}
+	payload := fallback[0].GetPayload().AsMap()
+	if payload["source_dataset_id"] != "fallback_kline" || payload["provider_symbol"] != "BTC-USD" || payload["quota_scope_key"] != "fallback-ip" {
+		t.Fatalf("fallback binding=%v", payload)
 	}
 }

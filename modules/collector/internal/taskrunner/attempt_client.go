@@ -95,7 +95,18 @@ func marketFollowUps(item nodeRuntime.JobItem, summary map[string]any, businessE
 		current := stringValue(item.Params, "provider_id")
 		for index, provider := range chain {
 			if provider == current && index+1 < len(chain) {
-				kind, payload["provider_id"], payload["candidate_index"] = "fallback", chain[index+1], index+1
+				next := chain[index+1]
+				kind, payload["provider_id"], payload["candidate_index"] = "fallback", next, index+1
+				if binding := nestedStringMap(item.Params["candidate_bindings"], next); binding != nil {
+					for _, key := range []string{"source_dataset_id", "provider_symbol", "quota_scope_key"} {
+						if value := binding[key]; value != nil {
+							payload[key] = value
+						}
+					}
+					if value := binding["quota_windows"]; value != nil {
+						payload["quota_windows"] = value
+					}
+				}
 				break
 			}
 		}
@@ -105,6 +116,14 @@ func marketFollowUps(item nodeRuntime.JobItem, summary map[string]any, businessE
 	}
 	value, _ := structpb.NewStruct(payload)
 	return []*pb.MarketAttemptOutbox{{Kind: kind, Payload: value}}
+}
+func nestedStringMap(value any, key string) map[string]any {
+	raw, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	result, _ := raw[key].(map[string]any)
+	return result
 }
 func cloneParams(values map[string]any) map[string]any {
 	out := make(map[string]any, len(values))

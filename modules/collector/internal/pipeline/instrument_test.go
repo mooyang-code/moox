@@ -26,12 +26,46 @@ func TestInstrumentPipelinePersistsSourceBeforeWholeInstrumentResolution(t *test
 	}
 }
 
-type instrumentProviderFake struct{ value providers.ProviderInstrument }
+func TestInstrumentPipelineRegistersResolvedPageAsOneBatch(t *testing.T) {
+	generation := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	first := providers.ProviderInstrument{SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", ExchangeID: "BINANCE", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, EffectiveAt: generation, FetchedAt: generation}
+	second := first
+	second.SubjectID, second.ProviderSymbol = "ETH-USDT", "ETHUSDT"
+	store, registrar := &instrumentStoreFake{}, &instrumentRegistrarFake{}
+	pipe := InstrumentPipeline{Provider: instrumentProviderFake{values: []providers.ProviderInstrument{first, second}}, Gate: providers.StaticGate{Permit: providers.RequestPermit{Allowed: true}}, Store: store, Registrar: registrar, SpaceID: "crypto_binance", SourceDatasetID: "binance_instruments", UnifiedDatasetID: "instruments", ProviderPriority: []marketdata.ProviderID{"binance"}, Generation: generation}
+	result, err := pipe.Run(context.Background(), providers.FetchInstrumentsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.UnifiedRows != 2 || registrar.calls != 1 || len(registrar.values) != 2 {
+		t.Fatalf("result=%+v registrar=%+v", result, registrar)
+	}
+}
+
+type instrumentProviderFake struct {
+	value  providers.ProviderInstrument
+	values []providers.ProviderInstrument
+}
 
 func (p instrumentProviderFake) ID() marketdata.ProviderID          { return p.value.ProviderID }
 func (instrumentProviderFake) Capabilities() []providers.Capability { return nil }
 func (p instrumentProviderFake) FetchInstruments(context.Context, providers.RequestGate, providers.FetchInstrumentsRequest) (providers.FetchInstrumentsResult, error) {
-	return providers.FetchInstrumentsResult{Instruments: []providers.ProviderInstrument{p.value}, Complete: true, RequestCount: 1}, nil
+	values := p.values
+	if len(values) == 0 {
+		values = []providers.ProviderInstrument{p.value}
+	}
+	return providers.FetchInstrumentsResult{Instruments: values, Complete: true, RequestCount: 1}, nil
+}
+
+type instrumentRegistrarFake struct {
+	calls  int
+	values []providers.ResolvedInstrument
+}
+
+func (r *instrumentRegistrarFake) RegisterInstruments(_ context.Context, values []providers.ResolvedInstrument) error {
+	r.calls++
+	r.values = append(r.values, values...)
+	return nil
 }
 
 type instrumentStoreFake struct {
