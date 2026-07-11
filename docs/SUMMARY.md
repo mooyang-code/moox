@@ -42,9 +42,12 @@
 ## 第四部分：因子与策略
 
 * [Python 计算运行时架构设计](Python计算运行时架构设计.md)
+* [Python 运行时详细执行计划](superpowers/plans/2026-07-11-python-runtime.md)
 * [因子计算模块设计](因子计算模块设计.md)
+* [因子计算模块修改执行计划](superpowers/plans/2026-07-11-factor-runtime-refactor.md)
 * [Strategy 交易策略模块架构设计](策略模块架构设计.md)
 * [Strategy Python 策略接入手册](策略模块Python策略接入手册.md)
+* [Strategy 交易策略模块执行计划](superpowers/plans/2026-07-11-strategy-module.md)
 
 ## 第五部分：交易系统
 

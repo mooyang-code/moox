@@ -499,6 +499,7 @@ R1 至 R3 应先于 Strategy worker 实现，避免把 Factor 的临时缺陷复
 
 ## 相关文档
 
+- [Python 运行时详细执行计划](superpowers/plans/2026-07-11-python-runtime.md)
 - [因子计算模块设计](因子计算模块设计.md)
 - [Strategy 交易策略模块架构设计](策略模块架构设计.md)
 - [Strategy Python 策略接入手册](策略模块Python策略接入手册.md)
