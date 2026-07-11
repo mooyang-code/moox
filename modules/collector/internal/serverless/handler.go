@@ -307,6 +307,7 @@ func (h *CloudFunctionHandler) handleKeepalive(ctx context.Context, event model.
 			defer cancel()
 			if err := pollJobItemsAfterHeartbeat(executeCtx); err != nil {
 				log.WarnContextf(ctx, "[handleKeepalive] CloudNode JobItem 拉取/执行失败: %v", err)
+				return h.errorResponse("job_poll_failed", err.Error()), nil
 			} else {
 				log.InfoContextf(ctx, "[handleKeepalive] CloudNode JobItem 拉取/执行完成")
 			}
