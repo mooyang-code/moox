@@ -80,6 +80,8 @@ mkdir -p \
   "${RELEASE_ROOT}/storage/bin" \
   "${RELEASE_ROOT}/storage/config" \
   "${RELEASE_ROOT}/storage/schema" \
+  "${RELEASE_ROOT}/archive/bin" \
+  "${RELEASE_ROOT}/archive/config" \
   "${RELEASE_ROOT}/examples" \
   "${RELEASE_ROOT}/docs"
 if [[ "${OS}" == "linux" && ( "${ARCH}" == "amd64" || "${ARCH}" == "arm64" ) ]]; then
@@ -110,6 +112,8 @@ copy_binary moox-monitor "${RELEASE_ROOT}/monitor/bin"
 copy_binary moox-monitor-cli "${RELEASE_ROOT}/monitor/bin"
 copy_binary moox-storage "${RELEASE_ROOT}/storage/bin"
 copy_binary moox-storage-cli "${RELEASE_ROOT}/storage/bin"
+copy_binary moox-archive "${RELEASE_ROOT}/archive/bin"
+copy_binary moox-archive-cli "${RELEASE_ROOT}/archive/bin"
 if [[ -d "${RELEASE_ROOT}/hostagent" ]]; then
   copy_binary moox-host-agent "${RELEASE_ROOT}/hostagent/bin"
   copy_binary moox-host-agent-cli "${RELEASE_ROOT}/hostagent/bin"
@@ -130,6 +134,7 @@ find "${RELEASE_ROOT}/factor/pyworker" -type d -name __pycache__ -prune -exec rm
 cp -R "${ROOT}/modules/storage/config/." "${RELEASE_ROOT}/storage/config/"
 cp -R "${ROOT}/modules/monitor/config/." "${RELEASE_ROOT}/monitor/config/"
 cp -R "${ROOT}/modules/storage/schema/." "${RELEASE_ROOT}/storage/schema/"
+cp -R "${ROOT}/modules/archive/config/." "${RELEASE_ROOT}/archive/config/"
 cp "${ROOT}/scripts/storage-start.sh" "${RELEASE_ROOT}/storage/start.sh"
 cp "${ROOT}/scripts/storage-stop.sh" "${RELEASE_ROOT}/storage/stop.sh"
 cp -R "${ROOT}/examples/." "${RELEASE_ROOT}/examples/"

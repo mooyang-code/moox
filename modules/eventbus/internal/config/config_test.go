@@ -17,6 +17,19 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	}
 }
 
+func TestDefaultIncludesArchiveConsumer(t *testing.T) {
+	cfg := Default()
+	for _, consumer := range cfg.Consumers {
+		if consumer.Stream == "MOOX_STORAGE" && consumer.Durable == "moox_archive_kline_v1" {
+			if consumer.FilterSubject != "moox.storage.time_series.rows_updated.v1" || consumer.DeliverPolicy != "all" || consumer.AckWait != 5*time.Minute || consumer.MaxDeliver != -1 {
+				t.Fatalf("archive consumer = %#v", consumer)
+			}
+			return
+		}
+	}
+	t.Fatal("archive durable consumer missing")
+}
+
 func TestRepositoryConfigLoads(t *testing.T) {
 	if _, err := Load("../../config/app.yaml"); err != nil {
 		t.Fatal(err)

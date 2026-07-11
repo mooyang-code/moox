@@ -51,11 +51,6 @@ server:
       network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params=op=maintain"
       protocol: timer
       timeout: 900000
-    - name: trpc.moox.storage.archive.timer
-      port: 20302
-      network: "0 0 * * * *?disable=1&scheduler=archiveSchedule&params=space_id=crypto;dataset_id=*"
-      protocol: timer
-      timeout: 60000
     - name: trpc.moox.storage.access.metrics.timer
       port: 20303
       network: "*/30 * * * * *?params="

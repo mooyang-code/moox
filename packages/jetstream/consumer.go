@@ -13,14 +13,15 @@ import (
 
 // ConsumerRef identifies a predeclared durable consumer for bind-only clients.
 type ConsumerRef struct {
-	Stream        string
-	Durable       string
-	FilterSubject string
-	AckWait       time.Duration
-	MaxDeliver    int
-	MaxAckPending int
-	FetchMaxWait  time.Duration
-	DeliverPolicy nats.DeliverPolicy
+	Stream              string
+	Durable             string
+	FilterSubject       string
+	AckWait             time.Duration
+	MaxDeliver          int
+	MaxAckPending       int
+	FetchMaxWait        time.Duration
+	DeliverPolicy       nats.DeliverPolicy
+	DeliverDecodeErrors bool
 }
 
 type ConsumerConfig struct {
@@ -62,6 +63,7 @@ func (c *Client) BindPullConsumer(ctx context.Context, ref ConsumerRef) (*PullCo
 		Stream: ref.Stream, Durable: ref.Durable, FilterSubject: ref.FilterSubject,
 		AckWait: ref.AckWait, MaxDeliver: ref.MaxDeliver, MaxAckPending: ref.MaxAckPending,
 		FetchMaxWait: ref.FetchMaxWait, DeliverPolicy: ref.DeliverPolicy,
+		DeliverDecodeErrors: ref.DeliverDecodeErrors,
 	}, false)
 }
 

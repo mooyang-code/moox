@@ -16,6 +16,7 @@ use (
 	./modules/hostagent/proto/hostagentgen
 	./modules/monitor
 	./modules/monitor/proto/monitorgen
+	./modules/archive
 	./modules/storage
 	./modules/storage/proto/gen
 	./modules/trade

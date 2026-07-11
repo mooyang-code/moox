@@ -164,6 +164,15 @@ consumers:
     ack_wait: 60s
     max_ack_pending: 1000
     max_deliver: 5
+  - stream: MOOX_STORAGE
+    durable: moox_archive_kline_v1
+    filter_subject: moox.storage.time_series.rows_updated.v1
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 5m
+    max_ack_pending: 256
+    max_deliver: -1
 
 consumer_templates:
   - stream: MOOX_CLOUDNODE_EXEC

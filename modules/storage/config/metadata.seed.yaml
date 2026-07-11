@@ -512,9 +512,9 @@ devices:
     status: active
   - device_id: parquet-local
     node_id: local
-    name: local-parquet-archive
+    name: market-parquet-archive
     engine: parquet_archive
-    endpoint: ./var/storage/archive
+    endpoint: ../data/archive
     status: active
 
 primary_store_routes:

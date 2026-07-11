@@ -70,6 +70,11 @@ build_web_host() {
   )
 }
 
+build_archive() {
+  build_go modules/archive ./cmd/server moox-archive 0
+  build_go modules/archive ./cmd/cli moox-archive-cli 0
+}
+
 build_hostagent() {
   [[ "${TARGET_GOOS}" == "linux" ]] || { echo "moox-host-agent supports linux only" >&2; exit 1; }
   case "${TARGET_GOARCH}" in amd64|arm64) ;; *) echo "moox-host-agent supports amd64/arm64 only" >&2; exit 1 ;; esac
@@ -98,6 +103,7 @@ case "${TARGET_MODULE}" in
     if [[ "${TARGET_GOOS}" == "linux" ]]; then build_hostagent; fi
     build_storage
     build_storage_cli
+    build_archive
     ;;
   cli)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
@@ -146,6 +152,9 @@ case "${TARGET_MODULE}" in
     ;;
   storage-cli)
     build_storage_cli
+    ;;
+  archive)
+    build_archive
     ;;
   monitor)
     build_go modules/monitor ./cmd/server moox-monitor 0
