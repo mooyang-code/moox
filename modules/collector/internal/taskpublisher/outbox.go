@@ -23,8 +23,11 @@ type OutboxRepository interface {
 type OutboxPublisher struct {
 	Client     *Client
 	Repository OutboxRepository
-	Guard      interface{ RequireLeader(context.Context) error }
-	Now        func() time.Time
+	Preparer   interface {
+		Prepare(context.Context, domain.AttemptOutbox, time.Time) (domain.AttemptOutbox, error)
+	}
+	Guard interface{ RequireLeader(context.Context) error }
+	Now   func() time.Time
 }
 
 func (p OutboxPublisher) PublishPending(ctx context.Context, limit int) (int, error) {
@@ -46,6 +49,13 @@ func (p OutboxPublisher) PublishPending(ctx context.Context, limit int) (int, er
 	}
 	published := 0
 	for _, value := range values {
+		if p.Preparer != nil {
+			value, err = p.Preparer.Prepare(ctx, value, now)
+			if err != nil {
+				_ = p.Repository.DelayOutbox(ctx, value.OutboxID, now.Add(30*time.Second))
+				continue
+			}
+		}
 		jobItemID, err := p.Client.SubmitMarketOutbox(ctx, value)
 		if err != nil {
 			_ = p.Repository.DelayOutbox(ctx, value.OutboxID, now.Add(30*time.Second))

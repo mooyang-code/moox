@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -123,8 +124,15 @@ func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, er
 }
 
 func stringValue(payload map[string]any, key string) string {
-	if value, ok := payload[key].(string); ok {
+	switch value := payload[key].(type) {
+	case string:
 		return strings.TrimSpace(value)
+	case float64:
+		return strconv.FormatInt(int64(value), 10)
+	case int:
+		return strconv.Itoa(value)
+	case int64:
+		return strconv.FormatInt(value, 10)
 	}
 	return ""
 }
