@@ -47,6 +47,7 @@
 * [因子计算模块修改执行计划](superpowers/plans/2026-07-11-factor-runtime-refactor.md)
 * [Strategy 交易策略模块架构设计](策略模块架构设计.md)
 * [Strategy Python 策略接入手册](策略模块Python策略接入手册.md)
+* [策略前端管理台设计](策略前端管理台设计.md)
 * [Strategy 交易策略模块执行计划](superpowers/plans/2026-07-11-strategy-module.md)
 
 ## 第五部分：交易系统
