@@ -26,7 +26,7 @@ run_remote ": \"\${MOOX_CLOUD_ACCOUNT_ID:?}\"; : \"\${TENCENTCLOUD_REGION:?}\"; 
 run_remote "${REMOTE_CLI} collector function verify-markets --manifest-dir ./collector/config/markets --control-url '${CONTROL_URL}'" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d and all(x["status"] == "verified" and x["function_name"].endswith("-scf") for x in d)'
 
 init_once() {
-  run_remote "${REMOTE_CLI} init --manifest-dir ./collector/config/markets --markets all --metadata-url '${MOOX_REMOTE_METADATA_URL:-http://127.0.0.1:20200}'"
+  run_remote "MOOX_COLLECTOR_MARKETS_DIR=./collector/config/markets ${REMOTE_CLI} init markets --markets all --metadata-url '${MOOX_REMOTE_METADATA_URL:-http://127.0.0.1:20200}'"
 }
 
 init_once >/dev/null

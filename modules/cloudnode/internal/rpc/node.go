@@ -282,6 +282,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *repository.CloudN
 		}); err != nil {
 			return fmt.Errorf("update scf function configuration %s: %w", ref.FunctionName, err)
 		}
+		if err := waitSCFFunctionActive(ctx, client, ref, 90*time.Second); err != nil {
+			return err
+		}
 		return s.updateSCFFunctionCode(ctx, *node, *pkg)
 	}
 	if !isSCFNotFound(err) {
@@ -313,6 +316,27 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *repository.CloudN
 	}
 	mergeSCFFunctionMetadata(node, info)
 	return nil
+}
+
+func waitSCFFunctionActive(ctx context.Context, client scfProvisioner, ref tencentscf.FunctionRef, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		info, err := client.GetFunction(ctx, ref)
+		if err != nil {
+			return fmt.Errorf("wait for scf function %s: %w", ref.FunctionName, err)
+		}
+		if strings.EqualFold(info.Status, "active") {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("wait for scf function %s active timed out; status=%s", ref.FunctionName, info.Status)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func mergeSCFFunctionMetadata(node *repository.CloudNode, info *tencentscf.FunctionInfo) {
