@@ -39,6 +39,8 @@ func PollAndExecuteJobItems(ctx context.Context) error {
 		NodeID:               nodeID,
 		SupportedJobTypes: []string{
 			jobs.JobTypeCollectKline,
+			jobs.JobTypeCollectInstrument,
+			jobs.JobTypeCollectCalendar,
 			jobs.JobTypeCollectSymbol,
 		},
 		// A Market JobItem owns one logical shard and its quota/resolve leases.
@@ -56,6 +58,8 @@ func PollAndExecuteJobItems(ctx context.Context) error {
 func registerCollectorHandlers() {
 	registerHandlersOnce.Do(func() {
 		nodeRuntime.Register(jobs.JobTypeCollectKline, nodeRuntime.HandlerFunc(executeCollectorJobItem))
+		nodeRuntime.Register(jobs.JobTypeCollectInstrument, nodeRuntime.HandlerFunc(executeCollectorJobItem))
+		nodeRuntime.Register(jobs.JobTypeCollectCalendar, nodeRuntime.HandlerFunc(executeCollectorJobItem))
 		nodeRuntime.Register(jobs.JobTypeCollectSymbol, nodeRuntime.HandlerFunc(executeCollectorJobItem))
 	})
 }
@@ -66,7 +70,14 @@ func runtimeSpaceID() string {
 
 func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nodeRuntime.Result, error) {
 	if strings.TrimSpace(stringValue(item.Params, "market_id")) != "" {
-		return executeMarketKlineJobItem(ctx, item)
+		switch item.JobType {
+		case jobs.JobTypeCollectInstrument:
+			return executeMarketInstrumentJobItem(ctx, item)
+		case jobs.JobTypeCollectCalendar:
+			return executeMarketCalendarJobItem(ctx, item)
+		default:
+			return executeMarketKlineJobItem(ctx, item)
+		}
 	}
 	taskEvent, err := taskEventFromJobItem(item)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -77,7 +78,7 @@ func NewMarketControlRepository(db *gorm.DB) *MarketControlRepository {
 	return &MarketControlRepository{db: db}
 }
 func MigrateMarketControl(db *gorm.DB) error {
-	return db.AutoMigrate(&MarketLease{}, &quotaRow{}, &permitRow{})
+	return db.AutoMigrate(&MarketLease{}, &quotaRow{}, &permitRow{}, &domain.MarketAttempt{}, &domain.AttemptSubject{}, &domain.AttemptOutbox{}, &domain.ProviderRuntime{}, &domain.MarketGeneration{}, &domain.ControlLeader{})
 }
 func (r *MarketControlRepository) PutLease(ctx context.Context, lease MarketLease) error {
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(&lease).Error

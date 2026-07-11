@@ -100,3 +100,42 @@ CREATE TABLE IF NOT EXISTS t_collector_provider_permits (
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY(c_execution_nonce, c_request_index)
 );
+
+CREATE TABLE IF NOT EXISTS t_collector_task_attempts (
+    c_job_item_id TEXT NOT NULL, c_attempt_no INTEGER NOT NULL, c_plan_id TEXT NOT NULL DEFAULT '',
+    c_market_id TEXT NOT NULL DEFAULT '', c_space_id TEXT NOT NULL DEFAULT '', c_provider_id TEXT NOT NULL DEFAULT '',
+    c_feed TEXT NOT NULL DEFAULT '', c_phase TEXT NOT NULL DEFAULT '', c_window_start DATETIME, c_window_end DATETIME,
+    c_cursor TEXT NOT NULL DEFAULT '', c_status TEXT NOT NULL DEFAULT '', c_summary TEXT NOT NULL DEFAULT '{}',
+    c_error_class TEXT NOT NULL DEFAULT '', c_finalized INTEGER NOT NULL DEFAULT 0, c_finalized_at DATETIME,
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(c_job_item_id, c_attempt_no)
+);
+CREATE INDEX IF NOT EXISTS idx_market_attempt_space_status ON t_collector_task_attempts(c_space_id, c_status, c_mtime);
+
+CREATE TABLE IF NOT EXISTS t_collector_attempt_subjects (
+    c_job_item_id TEXT NOT NULL, c_attempt_no INTEGER NOT NULL, c_task_id TEXT NOT NULL, c_subject_id TEXT NOT NULL DEFAULT '',
+    c_status TEXT NOT NULL DEFAULT '', c_next_candidate_index INTEGER NOT NULL DEFAULT 0, c_rows INTEGER NOT NULL DEFAULT 0,
+    c_error_class TEXT NOT NULL DEFAULT '', PRIMARY KEY(c_job_item_id, c_attempt_no, c_task_id)
+);
+
+CREATE TABLE IF NOT EXISTS t_collector_attempt_outbox (
+    c_outbox_id TEXT NOT NULL PRIMARY KEY, c_parent_job_item_id TEXT NOT NULL, c_parent_attempt_no INTEGER NOT NULL,
+    c_kind TEXT NOT NULL, c_payload TEXT NOT NULL DEFAULT '{}', c_status TEXT NOT NULL DEFAULT 'pending',
+    c_next_attempt_at DATETIME NOT NULL, c_published_job_item_id TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP, c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_market_outbox_pending ON t_collector_attempt_outbox(c_status, c_next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS t_collector_provider_runtime (
+    c_provider_id TEXT NOT NULL, c_scope_key TEXT NOT NULL, c_circuit_state TEXT NOT NULL DEFAULT 'closed',
+    c_consecutive_errors INTEGER NOT NULL DEFAULT 0, c_opened_at DATETIME, c_probe_in_flight INTEGER NOT NULL DEFAULT 0,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(c_provider_id, c_scope_key)
+);
+CREATE TABLE IF NOT EXISTS t_collector_market_generations (
+    c_generation_key TEXT NOT NULL PRIMARY KEY, c_epoch INTEGER NOT NULL, c_generation DATETIME NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'active', c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS t_collector_control_leader (
+    c_name TEXT NOT NULL PRIMARY KEY, c_owner_id TEXT NOT NULL, c_epoch INTEGER NOT NULL,
+    c_expires_at DATETIME NOT NULL, c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+);

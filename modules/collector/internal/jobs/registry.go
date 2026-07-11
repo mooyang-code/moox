@@ -13,8 +13,11 @@ import (
 )
 
 const (
-	JobTypeCollectKline  = "collect.kline"
-	JobTypeCollectSymbol = "collect.symbol"
+	JobTypeCollectKline      = "collect.kline"
+	JobTypeCollectSymbol     = "collect.symbol"
+	JobTypeCollectInstrument = "collect.instrument"
+	JobTypeCollectCalendar   = "collect.calendar"
+	JobTypeCoverageReconcile = "coverage.reconcile"
 )
 
 // Definition describes one collector data type.
