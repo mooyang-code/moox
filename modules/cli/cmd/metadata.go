@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
@@ -693,6 +695,13 @@ var marketColumnDisplayNames = map[string]string{
 }
 
 func marketColumnDisplayName(fieldID, configured string) string {
+	if utf8.RuneCountInString(configured) <= 10 {
+		for _, r := range configured {
+			if unicode.Is(unicode.Han, r) {
+				return configured
+			}
+		}
+	}
 	if value := marketColumnDisplayNames[fieldID]; value != "" {
 		return value
 	}
@@ -836,7 +845,7 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 		return fmt.Errorf("unsupported apply resource request %T", request)
 	}
 	if !metadataContractsEqual(resource, expected, actual) {
-		return fmt.Errorf("metadata %s exists but contract differs", resource)
+		return fmt.Errorf("metadata %s exists but contract differs: expected=%v actual=%v", resource, expected, actual)
 	}
 	return nil
 }
