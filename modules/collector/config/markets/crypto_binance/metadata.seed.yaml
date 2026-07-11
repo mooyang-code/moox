@@ -48,6 +48,17 @@ fields:
   - {space_id: crypto_binance, field_id: session_status, name: Session status, value_type: string, status: active}
   - {space_id: crypto_binance, field_id: sessions_json, name: Sessions JSON, value_type: string, status: active}
   - {space_id: crypto_binance, field_id: open_time, name: Open time, value_type: time, status: active}
+  - {space_id: crypto_binance, field_id: unified_dataset_id, name: Unified dataset ID, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: frequency, name: Frequency, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: partition_id, name: Coverage partition, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: range_start, name: Range start, value_type: time, status: active}
+  - {space_id: crypto_binance, field_id: range_end, name: Range end, value_type: time, status: active}
+  - {space_id: crypto_binance, field_id: expected_count, name: Expected count, value_type: int, status: active}
+  - {space_id: crypto_binance, field_id: present_count, name: Present count, value_type: int, status: active}
+  - {space_id: crypto_binance, field_id: missing_count, name: Missing count, value_type: int, status: active}
+  - {space_id: crypto_binance, field_id: missing_ranges, name: Missing ranges, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: coverage_status, name: Coverage status, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: checked_at, name: Checked at, value_type: time, status: active}
 datasets:
   - {space_id: crypto_binance, dataset_id: binance_kline, data_source_id: binance, name: Binance Kline source, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
   - {space_id: crypto_binance, dataset_id: binance_instruments, data_source_id: binance, name: Binance instruments source, data_kind: record, status: active, attributes: {dataset_role: provider_data, feed: instrument}}
@@ -146,3 +157,15 @@ dataset_columns:
   - {space_id: crypto_binance, dataset_id: calendar, column_name: open_time, origin_type: field, origin_id: open_time, value_type: time, required: true, status: active}
   - {space_id: crypto_binance, dataset_id: calendar, column_name: close_time, origin_type: field, origin_id: close_time, value_type: time, required: true, status: active}
   - {space_id: crypto_binance, dataset_id: calendar, column_name: generation, origin_type: field, origin_id: generation, value_type: time, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: market_coverage, column_name: unified_dataset_id, origin_type: field, origin_id: unified_dataset_id, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: market_coverage, column_name: subject_id, origin_type: field, origin_id: subject_id, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: market_coverage, column_name: frequency, origin_type: field, origin_id: frequency, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: market_coverage, column_name: partition_id, origin_type: field, origin_id: partition_id, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: market_coverage, column_name: range_start, origin_type: field, origin_id: range_start, value_type: time, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: market_coverage, column_name: range_end, origin_type: field, origin_id: range_end, value_type: time, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: market_coverage, column_name: expected_count, origin_type: field, origin_id: expected_count, value_type: int, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: market_coverage, column_name: present_count, origin_type: field, origin_id: present_count, value_type: int, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: market_coverage, column_name: missing_count, origin_type: field, origin_id: missing_count, value_type: int, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: market_coverage, column_name: missing_ranges, origin_type: field, origin_id: missing_ranges, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: market_coverage, column_name: coverage_status, origin_type: field, origin_id: coverage_status, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: market_coverage, column_name: checked_at, origin_type: field, origin_id: checked_at, value_type: time, required: true, status: active}

@@ -2,9 +2,12 @@ package test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/coverage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	cryptomarket "github.com/mooyang-code/moox/modules/collector/internal/markets/crypto"
 	"github.com/mooyang-code/moox/modules/collector/internal/pipeline"
@@ -99,6 +102,40 @@ func TestCalendarPipelineE2E_MaterializesPolicyIntoPebble(t *testing.T) {
 	}
 }
 
+func TestCoverageReconcilerE2E_DetectsPebbleGapAndPersistsRepairState(t *testing.T) {
+	base := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	access, err := testkit.Open(t.TempDir(), []testkit.DatasetSchema{marketDatasetSchema("crypto_binance", "spot_kline", true), coverageDatasetSchema("crypto_binance", "market_coverage")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = access.Close() })
+	store := storageio.NewClientWithAccess(access, nil, []storageio.Binding{{SpaceID: "crypto_binance", DatasetID: "spot_kline", Role: storageio.RoleUnifiedData, Feed: "kline", RequiredVolume: true, RequiredAmount: true, VolumeUnit: "base", AmountUnit: "quote"}, {SpaceID: "crypto_binance", DatasetID: "market_coverage", Role: storageio.RoleCoverageState, Feed: "coverage"}})
+	for _, offset := range []time.Duration{0, 2 * time.Minute} {
+		row := e2EKline("binance", "10")
+		row.Frequency = marketdata.FrequencyMinute
+		row.DataTime = base.Add(offset)
+		row.CloseTime = row.DataTime.Add(time.Minute)
+		row.TradeDate = "2026-07-11"
+		if err := store.WriteUnifiedKline(context.Background(), "spot_kline", marketdata.ResolvedKline{ProviderKline: row, SourceDatasetID: "binance_kline", QualityStatus: "accepted", Revision: 1, ResolvedAt: row.CloseTime}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repairs := &e2ERepairSink{}
+	reconciler := coverage.Reconciler{Reader: store, States: store, Repairs: repairs, Now: func() time.Time { return base.Add(time.Hour) }}
+	state, err := reconciler.Reconcile(context.Background(), coverage.Request{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC-USDT", PartitionID: "2026-07-11T00:00", Frequency: marketdata.FrequencyMinute, Start: base, End: base.Add(3 * time.Minute), Sessions: []coverage.Session{{TradeDate: "2026-07-11", Open: base, Close: base.Add(3 * time.Minute), DailyAnchor: base}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Missing != 1 || len(repairs.values) != 1 || !repairs.values[0].Start.Equal(base.Add(time.Minute)) {
+		t.Fatalf("state=%+v repairs=%+v", state, repairs.values)
+	}
+	keyHash := sha256.Sum256([]byte("spot_kline|BTC-USDT|1m|2026-07-11T00:00"))
+	rsp, err := access.ReadRecordRows(context.Background(), &storagepb.ReadRecordRowsReq{Keys: []*storagepb.RecordKey{{SpaceId: "crypto_binance", DatasetId: "market_coverage", RecordId: hex.EncodeToString(keyHash[:]), Version: base.Format(time.RFC3339Nano)}}})
+	if err != nil || len(rsp.GetRows()) != 1 {
+		t.Fatalf("rsp=%+v err=%v", rsp, err)
+	}
+}
+
 func readUnified(t *testing.T, store *storageio.Client) *marketdata.ResolvedKline {
 	t.Helper()
 	value, err := store.Unified(context.Background(), "crypto_binance", "spot_kline", "BTC-USDT", marketdata.FrequencyHour, fixedE2ETime.Add(-time.Hour))
@@ -156,6 +193,20 @@ func calendarDatasetSchema(spaceID, datasetID string) testkit.DatasetSchema {
 	return testkit.DatasetSchema{SpaceID: spaceID, DatasetID: datasetID, Columns: columns}
 }
 
+func coverageDatasetSchema(spaceID, datasetID string) testkit.DatasetSchema {
+	columns := map[string]storagepb.FieldValueType{}
+	for _, name := range []string{"unified_dataset_id", "subject_id", "frequency", "partition_id", "missing_ranges", "coverage_status"} {
+		columns[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING
+	}
+	for _, name := range []string{"range_start", "range_end", "checked_at"} {
+		columns[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME
+	}
+	for _, name := range []string{"expected_count", "present_count", "missing_count"} {
+		columns[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_INT
+	}
+	return testkit.DatasetSchema{SpaceID: spaceID, DatasetID: datasetID, Columns: columns}
+}
+
 var fixedE2ETime = time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC)
 
 func e2EKline(id, close string) marketdata.ProviderKline {
@@ -171,6 +222,12 @@ type e2EProvider struct {
 }
 
 type e2EInstrumentProvider struct{ value providers.ProviderInstrument }
+type e2ERepairSink struct{ values []coverage.RepairRequest }
+
+func (s *e2ERepairSink) EnqueueRepair(_ context.Context, value coverage.RepairRequest) error {
+	s.values = append(s.values, value)
+	return nil
+}
 
 func (p e2EInstrumentProvider) ID() marketdata.ProviderID          { return p.value.ProviderID }
 func (e2EInstrumentProvider) Capabilities() []providers.Capability { return nil }

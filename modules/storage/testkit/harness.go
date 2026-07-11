@@ -84,12 +84,33 @@ func (h *Harness) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		if _, ok := h.schemas[datasetKey(key.GetSpaceId(), key.GetDatasetId())]; !ok {
 			return &pb.ReadTimeSeriesRowsRsp{RetInfo: failure("unknown dataset")}, nil
 		}
-		version, err := factkey.NormalizeTimeVersion(key.GetDataTime())
-		if err != nil {
-			return &pb.ReadTimeSeriesRowsRsp{RetInfo: failure("exact reads require data_time")}, nil
+		version := ""
+		var versionRange *pb.VersionRange
+		if key.GetDataTime() != "" {
+			normalized, err := factkey.NormalizeTimeVersion(key.GetDataTime())
+			if err != nil {
+				return &pb.ReadTimeSeriesRowsRsp{RetInfo: failure("invalid data_time")}, nil
+			}
+			version = normalized
+		} else if req.GetTimeRange() != nil {
+			start, err := factkey.NormalizeTimeVersion(req.GetTimeRange().GetStartTime())
+			if err != nil {
+				return &pb.ReadTimeSeriesRowsRsp{RetInfo: failure("invalid start_time")}, nil
+			}
+			end, err := factkey.NormalizeTimeVersion(req.GetTimeRange().GetEndTime())
+			if err != nil {
+				return &pb.ReadTimeSeriesRowsRsp{RetInfo: failure("invalid end_time")}, nil
+			}
+			versionRange = &pb.VersionRange{StartVersion: start, EndVersion: end}
+		} else {
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: failure("data_time or time_range is required")}, nil
 		}
 		primaryKey := &pb.PrimaryStoreKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: factkey.BuildTimeSeriesDataKey(key.GetSubjectId(), key.GetFreq(), key.GetDimensions()), Version: version}
-		rows, _, err := h.store.ReadRows(ctx, []*pb.PrimaryStoreKey{primaryKey}, nil, req.GetOrder(), req.GetColumnNames(), &pb.Page{Page: 1, Size: 1})
+		page := req.GetPage()
+		if page == nil {
+			page = &pb.Page{Page: 1, Size: 1000}
+		}
+		rows, _, err := h.store.ReadRows(ctx, []*pb.PrimaryStoreKey{primaryKey}, versionRange, req.GetOrder(), req.GetColumnNames(), page)
 		if err != nil {
 			return nil, err
 		}
