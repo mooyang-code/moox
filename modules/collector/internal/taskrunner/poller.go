@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/executor"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -30,8 +29,7 @@ func PollAndExecuteJobItems(ctx context.Context) error {
 	}
 	spaceID := runtimeSpaceID()
 	if spaceID == "" {
-		log.DebugContextf(ctx, "[CloudRuntime] skip poll job items: space_id is empty")
-		return nil
+		return fmt.Errorf("MOOX_SPACE_ID is required for collector SCF runtime")
 	}
 	auth := runtimeapp.GetServiceAuthConfig()
 	registerCollectorHandlers()
@@ -43,7 +41,9 @@ func PollAndExecuteJobItems(ctx context.Context) error {
 			jobs.JobTypeCollectKline,
 			jobs.JobTypeCollectSymbol,
 		},
-		Limit: 8,
+		// A Market JobItem owns one logical shard and its quota/resolve leases.
+		// Processing more than one in one SCF invocation violates that boundary.
+		Limit: 1,
 		Auth: nodeRuntime.AuthConfig{
 			Version:   auth.Version,
 			AccessKey: auth.AccessKey,
@@ -61,14 +61,7 @@ func registerCollectorHandlers() {
 }
 
 func runtimeSpaceID() string {
-	if value := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")); value != "" {
-		return value
-	}
-	binding, err := binance.ResolveStorageBinding(binance.InstTypeSPOT)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(binding.SpaceID)
+	return strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
 }
 
 func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nodeRuntime.Result, error) {
