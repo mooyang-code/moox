@@ -5,18 +5,18 @@ data_sources:
 fields:
   - {space_id: stock_us, field_id: exchange_id, name: Exchange ID, value_type: string, status: active}
   - {space_id: stock_us, field_id: trade_date, name: Trade date, value_type: string, status: active}
-  - {space_id: stock_us, field_id: calendar_timezone, name: Calendar timezone, value_type: string, status: active}
+  - {space_id: stock_us, field_id: calendar_timezone, name: 交易日历 timezone, value_type: string, status: active}
   - {space_id: stock_us, field_id: session_status, name: Session status, value_type: string, status: active}
   - {space_id: stock_us, field_id: sessions_json, name: Sessions JSON, value_type: string, status: active}
   - {space_id: stock_us, field_id: open_time, name: Open time, value_type: time, status: active}
   - {space_id: stock_us, field_id: close_time, name: Close time, value_type: time, status: active}
   - {space_id: stock_us, field_id: generation, name: Generation, value_type: time, status: active}
 datasets:
-  - {space_id: stock_us, dataset_id: equity_kline, data_source_id: internal, name: Equity Kline, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline}}
-  - {space_id: stock_us, dataset_id: instruments, data_source_id: internal, name: Instruments, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: instrument}}
-  - {space_id: stock_us, dataset_id: calendar, data_source_id: internal, name: Calendar, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: calendar, kind: internal}}
-  - {space_id: stock_us, dataset_id: market_coverage, data_source_id: internal, name: Coverage, data_kind: record, status: active, attributes: {dataset_role: coverage_state, feed: coverage}}
-  - {space_id: stock_us, dataset_id: kline_quality_event, data_source_id: internal, name: Quality event, data_kind: record, status: active, attributes: {dataset_role: quality_event, feed: quality_event}}
+  - {space_id: stock_us, dataset_id: equity_kline, data_source_id: internal, name: 股票K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline}}
+  - {space_id: stock_us, dataset_id: instruments, data_source_id: internal, name: 标的列表, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: instrument}}
+  - {space_id: stock_us, dataset_id: calendar, data_source_id: internal, name: 交易日历, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: calendar, kind: internal}}
+  - {space_id: stock_us, dataset_id: market_coverage, data_source_id: internal, name: 覆盖状态, data_kind: record, status: active, attributes: {dataset_role: coverage_state, feed: coverage}}
+  - {space_id: stock_us, dataset_id: kline_quality_event, data_source_id: internal, name: 质量事件, data_kind: record, status: active, attributes: {dataset_role: quality_event, feed: quality_event}}
 dataset_columns:
   - {space_id: stock_us, dataset_id: calendar, column_name: exchange_id, origin_type: field, origin_id: exchange_id, value_type: string, required: true, status: active}
   - {space_id: stock_us, dataset_id: calendar, column_name: trade_date, origin_type: field, origin_id: trade_date, value_type: string, required: true, status: active}
