@@ -26,6 +26,7 @@ type JetStreamQueue struct {
 	client   *jetstream.Client
 	cfg      QueueConfig
 	mu       sync.Mutex
+	fetchMu  sync.Mutex
 	inflight map[string]*jetstream.Delivery
 	consumer *jetstream.PullConsumer
 }
@@ -102,7 +103,9 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 	if limit <= 0 || limit > q.cfg.DefaultMaxBatch {
 		limit = q.cfg.DefaultMaxBatch
 	}
+	q.fetchMu.Lock()
 	deliveries, err := consumer.Fetch(ctx, limit)
+	q.fetchMu.Unlock()
 	if err != nil && len(deliveries) == 0 {
 		return nil, err
 	}
