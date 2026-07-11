@@ -28,7 +28,7 @@ def run(context, data, params, state):
 ```text
 StrategyInput
   -> strategy.py:run(...)
-  -> decision + TargetPortfolio + next_state
+  -> decision + TargetWeights + next_state
 ```
 
 Go 框架完成其余工作：
@@ -254,14 +254,14 @@ Python 输出的 `instrument_id`、`symbol` 和 `market_type` 必须沿用输入
     "decision": "rebalance",
     "targets": targets_df,
     "next_state": next_state,
-    "diagnostics": {
+    "debug_info": {
         "message": "selected top 5",
         "metrics": {"candidate_count": 182},
     },
 }
 ```
 
-必填字段是 `decision`、`targets` 和 `next_state`。`diagnostics` 可省略。
+必填字段是 `decision`、`targets` 和 `next_state`。`debug_info` 可省略。
 
 ### `decision`
 
@@ -282,7 +282,7 @@ V1 支持两种决策：
 
 `hold` 不是停止执行。如果账户尚未到达上一次目标，Go 仍会让执行层继续向该目标收敛。首次运行尚无旧目标时，`hold` 等价于继续空仓。
 
-### `TargetPortfolio`
+### `TargetWeights`
 
 `targets` 是完整的策略级目标组合 DataFrame：
 
@@ -344,12 +344,12 @@ next_state = {
 
 这套顺序把“策略已经做出什么决定”和“账户是否已经到达目标”分开。Trade 负责后者的收敛与对账。
 
-### `diagnostics`
+### `debug_info`
 
-`diagnostics` 只用于日志、调试和回测报告。它必须能被 JSON 编码，不能参与 Go 的执行决策。
+`debug_info` 是可选调试信息，只用于日志、排查和回测报告。它必须能被 JSON 编码，不能参与 Go 的执行决策。
 
 ```python
-"diagnostics": {
+"debug_info": {
     "message": "not enough candidates",
     "metrics": {
         "input_rows": 12000,
@@ -358,7 +358,7 @@ next_state = {
 }
 ```
 
-不要把大表、逐 Bar 序列或敏感信息放进 `diagnostics`。
+不要把大表、逐 Bar 序列或敏感信息放进 `debug_info`。
 
 ## 完整最小示例
 
@@ -395,7 +395,7 @@ def run(context, data, params, state):
             "decision": "hold",
             "targets": empty_targets(),
             "next_state": state,
-            "diagnostics": {
+            "debug_info": {
                 "message": "not enough candidates",
                 "metrics": {"candidate_count": len(latest)},
             },
@@ -417,7 +417,7 @@ def run(context, data, params, state):
         "decision": "rebalance",
         "targets": targets,
         "next_state": {},
-        "diagnostics": {
+        "debug_info": {
             "message": f"selected top {top_n}",
             "metrics": {"candidate_count": len(latest)},
         },
@@ -438,7 +438,7 @@ def run(context, data, params, state):
     # 根据当前闭合 Bar、输入因子和旧状态更新 held/cooldowns。
     # 省略具体选股规则。
 
-    targets = build_full_target_portfolio(held)
+    targets = build_target_weights(held)
     return {
         "decision": "rebalance",
         "targets": targets,
@@ -462,7 +462,7 @@ def run(context, data, params, state):
 | 输入准备 | Go 查询截至 `data_cutoff` 当时可见的历史窗口 | Go 查询截至 `data_cutoff` 的同口径窗口 |
 | Python 调用 | 同一个 `strategy.py:run` | 同一个 `strategy.py:run` |
 | 状态推进 | 每个 Bar 保存隔离的回测状态 | 每个 Bar 保存绑定实例状态 |
-| 策略输出 | 同一个完整 `TargetPortfolio` | 同一个完整 `TargetPortfolio` |
+| 策略输出 | 同一个完整 `TargetWeights` | 同一个完整 `TargetWeights` |
 | 最后执行 | `BacktestExecution` 模拟成交 | `PaperExecution` 或 `LiveTradeExecution` |
 
 给定相同的 `context`、`data`、`params` 和 `state`，Python 必须返回相同结果。运行模式只能改变 Go 的最后执行端口，不能改变策略计算。
