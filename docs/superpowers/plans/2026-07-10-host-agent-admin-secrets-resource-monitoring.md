@@ -17,7 +17,7 @@
 - 已完成：Monitor HostMetric durable consumer、消息校验、SQLite inbox/agent/latest/history、全局主机 API、页面 API 迁移和 Host metadata seed/release/deploy gate。
 - 已完成：Admin 旧 node_exporter 采集定时器已停止注册；旧 Monitor RPC 仅作为兼容入口保留。
 - 待完成：Storage 四个 Host Dataset 的分钟 projector/history worker、bounded cleaner、资源告警规则/通知 outbox，以及页面的 rate-unavailable/non-zero 缺口状态展示。当前 Monitor history 查询读取本地 SQLite，尚未宣称 Storage 历史链路已上线。历史保留策略已锁定为最多 3 天，过期数据直接分批删除，允许出现历史缺口。
-- 告警规则决策已补充：Monitor 启动时加载 enabled Host rules 到可复用的 `go-commlib/dbcache` SnapshotCache，消费链路只读内存缓存；规则新增/修改/删除不主动刷缓存，统一定时刷新，失败时保留上一份有效快照。
+- 告警规则决策已补充：Monitor 启动时加载 enabled Host rules 到现有 `github.com/mooyang-code/snapshotcache`，消费链路只读内存缓存；规则新增/修改/删除不主动刷缓存，统一定时刷新，失败时保留上一份有效快照。旧 `go-commlib/dbcache` 仅作为设计参考，不继续兼容扩展。
 
 ---
 
@@ -62,7 +62,7 @@
 | 轮换 | V1 不做双 token 并存。轮换前必须提示短暂中断和重新部署 Agent；失败期间样本允许丢失。 |
 | Monitor owner | V1 部署只运行一个 active host-metrics ingest owner，不实现 lease/fencing 或多 Monitor active-active；手工启动第二个 consumer 属于不支持配置。 |
 | 历史与 UI | Monitor 保存 inbox/latest/alert 状态，MooX Storage 保存分钟级历史；主机历史最多保留 3 天，过期数据直接丢弃；UI 保留 `/ops/resource-monitor` 并改读 Monitor。 |
-| 告警规则缓存 | Host 告警消费路径禁止逐条查询 SQLite；使用 `go-commlib/dbcache` SnapshotCache 缓存规则快照，配置变更不主动失效，统一后台周期刷新，失败时保留上一份快照。 |
+| 告警规则缓存 | Host 告警消费路径禁止逐条查询 SQLite；使用已有 `github.com/mooyang-code/snapshotcache` 缓存规则快照，配置变更不主动失效，统一后台周期刷新，失败时保留上一份快照。 |
 | Skill 入口 | Host Agent 发布部署、EventBus 凭据生成/导出/轮换脚本放在 `skills/moox/scripts`，并更新 `skills/moox/SKILL.md` 与 references。 |
 
 ## 3. 范围与非目标

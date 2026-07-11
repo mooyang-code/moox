@@ -23,7 +23,7 @@
 - `ListHostAgents` 返回 Monitor 内存中的最近 agent；Monitor 重启后下一条合法样本到达时重新注册。
 - `QueryHostMetricHistory` 扫描 Storage 四个 Dataset，按 `data_time` 合并成 HostSnapshot；Storage 不可用时返回明确错误，不返回伪造零值。
 - 告警在 Monitor 消费 HostMetric 时计算，Storage `rows_updated` 不作为唯一告警触发器。
-- 告警规则启动时加载到可复用的 `go-commlib/dbcache` 快照缓存；消费路径只读内存缓存，禁止每条 HostMetric 查询 SQLite。
+- 告警规则启动时加载到现有的 `github.com/mooyang-code/snapshotcache` 快照缓存；消费路径只读内存缓存，禁止每条 HostMetric 查询 SQLite。
 - 规则新增、修改、删除只写 SQLite，不主动刷缓存；统一由定时刷新发现变更。刷新失败保留上一份有效快照。
 
 ## 2. 文件边界
@@ -35,12 +35,11 @@
 - Create: `modules/monitor/internal/hostmetrics/storage_writer.go`：HostSnapshot 到四类 `storagepb.TimeSeriesRow` 的转换和批量 RPC。
 - Create: `modules/monitor/internal/hostmetrics/storage_reader.go`：Storage scan、分页、四类 row 合并和历史转换。
 - Create: `modules/monitor/internal/hostmetrics/alerts.go`：Host 阈值计算、firing/resolved 和告警去重。
-- Create: `modules/monitor/internal/hostmetrics/rule_cache.go`：基于 `go-commlib/dbcache` 的 Host 规则快照和刷新统计。
+- Create: `modules/monitor/internal/hostmetrics/rule_cache.go`：基于 `github.com/mooyang-code/snapshotcache` 的 Host 规则快照和刷新统计。
 - Create: `modules/monitor/internal/hostmetrics/storage_writer_test.go`、`storage_reader_test.go`、`alerts_test.go`。
 - Modify: `modules/monitor/internal/bootstrap/bootstrap.go`、`modules/monitor/internal/rpc/host.go`。
 - Modify: `modules/monitor/schema/monitor.sql`：不再创建 Host sample inbox/latest/history/outbox 表，保留告警控制表。
-- Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/go-commlib/dbcache`：在保持旧 API 兼容的前提下增加无 DB 依赖的通用 SnapshotCache。
-- Modify: `modules/monitor/go.mod`、`modules/monitor/go.sum`：引入新版 `go-commlib/dbcache`。
+- Modify: `modules/monitor/go.mod`、`modules/monitor/go.sum`：引入已经被 Storage 使用的 `github.com/mooyang-code/snapshotcache`。
 - Modify/Regenerate: `modules/monitor/proto/monitor.proto`、`modules/monitor/proto/monitorgen/*`：增加 `storage_available`、`data_gap`、`rate_available` 状态。
 
 ### Storage
@@ -114,15 +113,15 @@
 **Files:** `/Users/mooyang/Documents/go/src/github.com/mooyang-code/go-commlib/dbcache/snapshot.go`、`snapshot_test.go`、`modules/monitor/internal/hostmetrics/alerts.go`、`alerts_test.go`、`rule_cache.go`、`rule_cache_test.go`、existing alert repository、Host RPC/proto、`modules/monitor/go.mod`、`modules/monitor/go.sum`。
 
 - [ ] 规则固定 `space_id=moox_system`，rule key 为 `host:<agent_id>:<metric>`；支持 CPU、memory、filesystem usage、disk utilization、network errors；无 baseline 时为 unavailable。
-- [ ] 先评估旧 `dbcache`：借鉴表注册、首次全量加载、mtime 增量刷新、过滤器、组合索引和回源查询；禁止复用其旧 GORM v1/MySQL/连接发现耦合、永久 goroutine、全局 logger、反射字段写入和逐条可变更新。
-- [ ] 在 `go-commlib/dbcache` 增加兼容旧 API 的 `SnapshotCache`：source 为 `func(context.Context) (interface{}, error)`，内部使用 `atomic.Value` 发布不可变快照，提供 `Start(ctx)`、`Stop()`、`Refresh(ctx)`、`Get()` 和刷新状态；核心包不依赖任何 ORM/数据库。
+- [ ] 评估旧 `/Users/mooyang/Documents/go/src/github.com/mooyang-code/go-commlib/dbcache`：只借鉴表注册、首次加载、周期刷新、过滤器和索引的思路；不继续维护其 GORM v1/MySQL/连接发现耦合、永久 goroutine、全局 logger、反射字段写入和逐条可变更新。暂不在该模块继续堆兼容 API。
+- [ ] 复用已有 `github.com/mooyang-code/snapshotcache`：它已被 Storage 使用，提供泛型 `Cache[T]`、Source、索引、原子快照发布、刷新并发保护、`Start/Stop` 生命周期、刷新状态和失败保留旧快照能力。
 - [ ] `RuleCache` 在 Monitor bootstrap 首次加载 enabled Host rules；消费路径只执行 `cache.Get`，不允许调用 repository/SQLite。缓存值使用不可变深拷贝，避免消费 goroutine 修改共享切片。
-- [ ] 统一由后台 refresh timer（建议 30 秒）调用 `SnapshotCache.Refresh`；刷新成功原子替换快照，失败保留上一份有效快照并增加低基数失败计数。规则 CRUD 成功后不得调用 Refresh/Invalidate，最迟一个刷新周期生效。
+- [ ] 统一由 `snapshotcache` 的 `RefreshInterval=30s` 调用 source；刷新成功原子替换快照，失败保留上一份有效快照并增加低基数失败计数。规则 CRUD 成功后不得调用 Refresh/Invalidate，最迟一个刷新周期生效。
 - [ ] 启动首次加载失败时告警 evaluator degraded，但不得阻塞 HostMetric 写 Storage/ACK；没有成功快照时只跳过告警计算，不伪造 resolved。
 - [ ] 测试 threshold firing、连续样本恢复、重复 message redelivery、rate unavailable、offline 状态、`message_id + rule_id` 去重，以及连续多条样本只产生一次 DB load；额外测试 SnapshotCache 的并发 Get、刷新失败保留旧快照和 Stop 不泄漏 goroutine。
 - [ ] Storage 成功后从缓存读取规则并执行 evaluator，firing/resolved 写现有 Monitor SQLite alert state/event；通知失败不回滚 Storage/ACK。
 - [ ] Host alert API 忽略请求 Space 并固定 `moox_system`，普通业务监控 API 保持原隔离。
-- [ ] 运行 `cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/go-commlib/dbcache && go test -race -count=1 ./...`，再运行 `go test -race -count=1 ./modules/monitor/internal/hostmetrics ./modules/monitor/internal/repository ./modules/monitor/internal/rpc`，提交 `feat(monitor): cache host alert rules during ingest`。
+- [ ] 运行 `go test -race -count=1 ./modules/storage/internal/infra/metadata/cache ./modules/monitor/internal/hostmetrics ./modules/monitor/internal/repository ./modules/monitor/internal/rpc`，提交 `feat(monitor): cache host alert rules during ingest`。
 
 ### Task 7: Storage raw time-series 3 天 retention
 
