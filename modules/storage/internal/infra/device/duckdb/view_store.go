@@ -943,15 +943,6 @@ func (s *ViewStore) DropResultTable(ctx context.Context, tableName string) error
 		_ = tx.Rollback()
 		return err
 	}
-	latestQuoted, err := quoteTableName(latestResultTableName(tableName))
-	if err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, latestQuoted)); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM moox_view_columns WHERE table_name = ?`, tableName); err != nil {
 		_ = tx.Rollback()
 		return err

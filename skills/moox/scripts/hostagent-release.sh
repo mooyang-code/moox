@@ -11,6 +11,7 @@ mkdir -p "${OUT}/bin" "${OUT}/config" "${OUT}/systemd/user"
 TARGET_GOOS=linux TARGET_GOARCH="${ARCH}" "${ROOT}/scripts/build.sh" hostagent
 cp "${ROOT}/bin/moox-host-agent" "${OUT}/bin/"
 cp "${ROOT}/bin/moox-host-agent-cli" "${OUT}/bin/"
+cp "${ROOT}/modules/hostagent/config/app.yaml" "${OUT}/config/app.yaml"
 cp "${ROOT}/modules/hostagent/config/app.yaml" "${OUT}/config/app.example.yaml"
 cp "${ROOT}/modules/hostagent/config/eventbus.example.yaml" "${OUT}/config/eventbus.example.yaml"
 cp "${ROOT}/modules/hostagent/config/trpc_go.yaml" "${OUT}/config/trpc_go.yaml"
