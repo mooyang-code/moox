@@ -12,7 +12,16 @@ message StrategyState { string binding_id = 1; int64 revision = 2; string state_
 message StrategyRun { string run_id = 1; string binding_id = 2; string trigger_bar_time = 3; string data_revision = 4; string action = 5; string status = 6; string output_json = 7; }
 message CreateStrategyReq { StrategyDef strategy = 1; }
 message CreateStrategyRsp { common.RetInfo ret_info = 1; StrategyDef strategy = 2; }
-message RunOnceReq { string binding_id = 1; string trigger_bar_time = 2; bool commit = 3; }
+message RunOnceReq {
+  string binding_id = 1;
+  string trigger_bar_time = 2;
+  bool commit = 3;
+  // Optional point-in-time rows encoded as a JSON array of objects. The
+  // strategy worker never fetches data itself; callers provide the snapshot.
+  string data_json = 4;
+  string data_revision = 5;
+  string namespace = 6;
+}
 message RunOnceRsp { common.RetInfo ret_info = 1; StrategyRun run = 2; }
 message GetEngineStatusReq {}
 message GetEngineStatusRsp { common.RetInfo ret_info = 1; int32 workers = 2; int32 ready_workers = 3; }

@@ -751,6 +751,17 @@ git commit -m "test(strategy): verify backtest and live execution parity"
 - 回测只读 point-in-time 数据，相同配置重复运行的 decision/fill/NAV hash 一致。
 - Strategy 不 import Storage/Trade internal，所有跨模块交互经生成 proto 或稳定 EventBus protobuf。
 - live 默认关闭，且只在 Trade 归因、查询、幂等、偏差对账和紧急 observe 演练验收后开启。
+
+## 本轮执行结果（2026-07-11）
+
+本轮已执行并验证的范围：
+
+- `modules/strategy` 已创建并接入 `packages/pyruntime`，支持 `strategy.yaml` + `strategy.py`、严格 manifest/source hash、常驻 worker、`validate`/`run-once`、RunOnce Observe/Commit、状态 CAS、幂等键、Outbox/Inbox、Paper、风险校验、确定性 Replay、readiness gate 和 SQLite schema。
+- `packages/pyruntime` 已提供统一帧协议、HELLO/LOAD/RUN、Supervisor/Pool、Arrow IPC stream/file、只读 mmap 快照、源码版本发布、Python SDK 及 Go/Python 互操作测试。
+- `modules/factor` 已迁移服务启动路径到共享运行时，支持源码版本路径、Arrow/mmap 共享快照、按成本分批、100 因子共享输入、严格结果校验和失败不写回；根目录 `test/` 已有真实 Python 进程 E2E。
+- `modules/strategy/test` 已有真实 Python 策略执行并提交状态/outbox 的 E2E；`packages/pyruntime/test` 已有 Arrow/mmap E2E。
+
+以下任务依赖其他模块或生产基础设施，未在本轮伪造完成，部署前必须继续执行：Storage point-in-time RPC/NATS durable consumer、Trade live 提交与查询对账、Admin/发布产物、完整 NAV/Parquet 回测产物、生产指标与健康聚合。这些能力在“当前实现状态与边界”中明确标为待接入，不能作为已上线能力使用。
 # 实施状态（2026-07-11）
 
 已完成首版：新增 `modules/strategy`，提供 Python 策略 SDK、manifest 校验、hash 不可变发布、常驻运行时、策略输出校验、状态 CAS、按 `(binding, strategy_version, trigger_bar_time, namespace)` 幂等键落库、outbox/inbox、调度器、回测决策哈希、风险校验以及 Paper/Observe 执行端口；`modules/strategy/test` 已用真实 Python 策略跑通状态和 outbox 提交。

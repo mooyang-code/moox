@@ -8,6 +8,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/repository"
 	"gopkg.in/yaml.v3"
+	"io"
+	"strings"
 )
 
 var ErrImmutableVersion = errors.New("strategy: immutable version")
@@ -23,7 +25,16 @@ type Service struct{ Repo *repository.Repository }
 
 func Parse(raw string) (Manifest, error) {
 	var m Manifest
-	if err := yaml.Unmarshal([]byte(raw), &m); err != nil {
+	dec := yaml.NewDecoder(strings.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&m); err != nil {
+		return m, err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return m, errors.New("strategy manifest must contain one YAML document")
+		}
 		return m, err
 	}
 	if m.ID == "" || m.Version == "" || m.API == "" || m.Entrypoint == "" {
@@ -32,19 +43,50 @@ func Parse(raw string) (Manifest, error) {
 	return m, nil
 }
 func (s *Service) Publish(ctx context.Context, manifest, source string) (domain.StrategyDefinition, error) {
+	d, err := s.Prepare(manifest, source)
+	if err != nil {
+		return domain.StrategyDefinition{}, err
+	}
+	if err := s.Save(ctx, d); err != nil {
+		return domain.StrategyDefinition{}, err
+	}
+	return d, nil
+}
+
+// Prepare validates and hashes a package without persisting it. Callers that
+// have a runtime can LOAD the materialized source before Save, preventing the
+// registry from acknowledging code the worker cannot import.
+func (s *Service) Prepare(manifest, source string) (domain.StrategyDefinition, error) {
 	m, err := Parse(manifest)
 	if err != nil {
 		return domain.StrategyDefinition{}, err
 	}
 	sum := sha256.Sum256([]byte(source))
 	d := domain.StrategyDefinition{StrategyID: m.ID, Version: m.Version, API: m.API, ManifestYAML: manifest, SourceCode: source, SourceHash: hex.EncodeToString(sum[:]), StateSchemaVersion: m.StateSchemaVersion, Status: "draft"}
-	if s.Repo != nil {
-		if err := s.Repo.SaveDefinition(ctx, d); err != nil {
-			old, getErr := s.Repo.GetDefinition(ctx, m.ID, m.Version)
-			if getErr != nil || old.SourceHash != d.SourceHash {
-				return domain.StrategyDefinition{}, ErrImmutableVersion
+	return d, nil
+}
+
+func (s *Service) Save(ctx context.Context, d domain.StrategyDefinition) error {
+	if s.Repo == nil {
+		return nil
+	}
+	if err := s.Repo.SaveDefinition(ctx, d); err != nil {
+		old, getErr := s.Repo.GetDefinition(ctx, d.StrategyID, d.Version)
+		if getErr != nil {
+			return err
+		}
+		if old.SourceHash != d.SourceHash || old.ManifestYAML != d.ManifestYAML || old.API != d.API || old.StateSchemaVersion != d.StateSchemaVersion {
+			return ErrImmutableVersion
+		}
+		if old.Status != d.Status {
+			// Validation is the only forward lifecycle transition performed by
+			// this service: a successfully loaded draft may become enabled, but
+			// an enabled version can never be downgraded by a retry.
+			if old.Status == "draft" && d.Status == "enabled" {
+				return s.Repo.DB.WithContext(ctx).Model(&domain.StrategyDefinition{}).Where("c_strategy_id=? AND c_version=?", d.StrategyID, d.Version).Update("c_status", "enabled").Error
 			}
+			return ErrImmutableVersion
 		}
 	}
-	return d, nil
+	return nil
 }

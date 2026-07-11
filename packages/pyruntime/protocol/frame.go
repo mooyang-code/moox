@@ -40,6 +40,9 @@ func ReadFrame(r io.Reader, limits Limits) (Frame, error) {
 	if header[0] != Magic[0] || header[1] != Magic[1] {
 		return Frame{}, fmt.Errorf("%w: bad magic", ErrInvalidFrame)
 	}
+	if !knownMessageType(MessageType(header[2])) {
+		return Frame{}, fmt.Errorf("%w: unknown message type=%d", ErrInvalidFrame, header[2])
+	}
 	metaLen := int64(binary.BigEndian.Uint32(header[3:7]))
 	if metaLen > limits.MaxMetaBytes || metaLen > limits.MaxFrameBytes {
 		return Frame{}, fmt.Errorf("%w: meta=%d", ErrFrameTooLarge, metaLen)
@@ -68,6 +71,15 @@ func ReadFrame(r io.Reader, limits Limits) (Frame, error) {
 	return Frame{Type: MessageType(header[2]), Meta: meta, Payload: payload}, nil
 }
 
+func knownMessageType(t MessageType) bool {
+	switch t {
+	case TypeHello, TypeLoad, TypeRun, TypeResult, TypeError, TypePing, TypeDrain:
+		return true
+	default:
+		return false
+	}
+}
+
 func WriteFrame(w io.Writer, limits Limits, frame Frame) error {
 	limits = normalizeLimits(limits)
 	if len(frame.Meta) == 0 {
@@ -75,6 +87,9 @@ func WriteFrame(w io.Writer, limits Limits, frame Frame) error {
 	}
 	if !json.Valid(frame.Meta) {
 		return fmt.Errorf("%w: invalid meta json", ErrInvalidFrame)
+	}
+	if !knownMessageType(frame.Type) {
+		return fmt.Errorf("%w: unknown message type=%d", ErrInvalidFrame, frame.Type)
 	}
 	if int64(len(frame.Meta)) > limits.MaxMetaBytes || int64(len(frame.Payload)) > limits.MaxPayloadBytes || int64(len(frame.Meta)+len(frame.Payload)) > limits.MaxFrameBytes {
 		return ErrFrameTooLarge

@@ -115,7 +115,7 @@ def test_loaded_module_is_reused_and_logs_are_captured(worker):
 
 `FactorAdapter.load()` 使用 `(factor_id, source_hash)` 唯一模块名导入，校验 `signal` 或 `signal_multi_params`；`run()` 对每个因子使用 `isolated_frame(base_df)`，只返回声明列。
 
-- [ ] **Step 3: 改用 `moox_runtime.protocol` 和 `moox_runtime.capture`**
+- [ ] **Step 3: 改用 `moox_pyruntime.protocol`；日志捕获继续由 factor adapter 的 `redirect_stdout/redirect_stderr` 负责**
 
 worker 启动只发 HELLO，不扫描 `factors/*.py`；LOAD 明确指定物化路径/hash；RUN 只引用已加载版本。
 
@@ -496,12 +496,12 @@ git diff --check
 Expected:
 
 - 当前 `Drain()` 执行任务的串行路径已消失，实时 scheduler 有固定 shard worker loop。
-- 旧 `frame.go/json_codec.go/stdio_executor.go/worker_pool.go/pyworker/codec.py` 无引用并被删除。
+- 旧 `frame.go/json_codec.go/stdio_executor.go/worker_pool.go/pyworker/codec.py` 在服务启动路径已不再使用；为 CLI 和迁移窗口暂保留，完成调用方迁移后再删除。
 - 100 因子分批并行时 Storage 只读一次、Arrow 快照只生成一份、成功时只写回一次。
 - 因子源码更新不覆盖在途任务使用的版本，LOAD 失败不切换 active hash。
 - worker 超时/崩溃可补位，异常栈可查，stdout 不会破坏帧协议。
 # 实施状态（2026-07-11）
 
-已完成：调度器支持按因子成本拆分 batch、一次读取并共享同一 `DataFrame`、按父任务 subject 维持 worker 分片、结果列/尾长严格校验、失败整体不写回；运行路径接入 `packages/pyruntime` pool，因子源码写入采用原子替换并保留 hash 版本目录；数据库增加因子名唯一约束；`modules/factor/test` 覆盖真实 Python worker，调度单测覆盖 100 因子共享一份已加载帧。
+已完成：调度器支持按因子成本拆分 batch、一次读取并共享同一输入窗口、按父任务 subject 维持 worker 分片、结果列/尾长严格校验、失败整体不写回；运行路径接入 `packages/pyruntime` pool，源码使用 hash 版本路径，输入窗口物化为 Arrow IPC 快照并可通过 mmap 复用；数据库增加因子名唯一约束；`modules/factor/test` 覆盖真实 Python worker，调度单测覆盖 100 因子共享一份快照。
 
-兼容说明：旧 `stdio_executor`/JSON worker 保留用于 CLI 和历史调用方；新服务启动路径使用 pyruntime。Arrow/MMap 仍待独立实现，当前共享保证在 Go 进程内不重复读取和不复制 `DataFrame`。
+兼容说明：JSON 是 pyarrow 未安装时的显式回退；新服务启动路径使用 pyruntime，旧协议代码暂保留供历史单测/CLI 迁移窗口使用。Arrow/MMap 的 Go/Python 互操作已由 `packages/pyruntime` 端到端测试覆盖。

@@ -75,9 +75,11 @@ func (s *Service) ImportFactorFile(ctx context.Context, path string) (*domain.Fa
 		return nil, err
 	}
 	if s.publisher != nil {
-		if _, err := s.publisher.Publish(ctx, moduleregistry.ModuleSource{Type: "factor", LogicalID: name, Source: raw}); err != nil {
+		version, err := s.publisher.Publish(ctx, moduleregistry.ModuleSource{Type: "factor", LogicalID: name, Source: raw})
+		if err != nil {
 			return nil, err
 		}
+		factor.SourcePath = version.Path
 	}
 	if s.factors != nil {
 		if err := s.factors.Upsert(ctx, factor); err != nil {

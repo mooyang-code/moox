@@ -52,14 +52,17 @@ type NATSConfig struct {
 
 // EngineConfig describes the local Python factor engine.
 type EngineConfig struct {
-	PythonBin         string `yaml:"python_bin"`
-	FactorsDir        string `yaml:"factors_dir"`
-	SectionsDir       string `yaml:"sections_dir"`
-	Workers           int    `yaml:"workers"`
-	TaskTimeoutMS     int    `yaml:"task_timeout_ms"`
-	Encoding          string `yaml:"encoding"`
-	ArrowRowThreshold int    `yaml:"arrow_row_threshold"`
-	ShmDir            string `yaml:"shm_dir"`
+	PythonBin           string `yaml:"python_bin"`
+	FactorsDir          string `yaml:"factors_dir"`
+	SectionsDir         string `yaml:"sections_dir"`
+	Workers             int    `yaml:"workers"`
+	TaskTimeoutMS       int    `yaml:"task_timeout_ms"`
+	Encoding            string `yaml:"encoding"`
+	ArrowRowThreshold   int    `yaml:"arrow_row_threshold"`
+	ShmDir              string `yaml:"shm_dir"`
+	MaxBatchParallelism int    `yaml:"max_batch_parallelism"`
+	BatchMinEstimatedMS int64  `yaml:"batch_min_estimated_ms"`
+	SnapshotTTLSeconds  int    `yaml:"snapshot_ttl_seconds"`
 }
 
 // SchedulerConfig describes runtime scheduling behavior.
@@ -140,13 +143,16 @@ func Default() *Config {
 			Subject:  "moox.storage.time_series.rows_updated.v1",
 		},
 		Engine: EngineConfig{
-			PythonBin:         "python3",
-			FactorsDir:        "./factors",
-			SectionsDir:       "./sections",
-			Workers:           workers,
-			TaskTimeoutMS:     30000,
-			Encoding:          "auto",
-			ArrowRowThreshold: 50000,
+			PythonBin:           "python3",
+			FactorsDir:          "./factors",
+			SectionsDir:         "./sections",
+			Workers:             workers,
+			TaskTimeoutMS:       30000,
+			Encoding:            "auto",
+			ArrowRowThreshold:   50000,
+			MaxBatchParallelism: workers,
+			BatchMinEstimatedMS: 50,
+			SnapshotTTLSeconds:  300,
 		},
 		Scheduler: SchedulerConfig{
 			DebounceWindowMS:     2000,
@@ -232,6 +238,15 @@ func (c *Config) applyDefaults() {
 	if c.Engine.ArrowRowThreshold == 0 {
 		c.Engine.ArrowRowThreshold = 50000
 	}
+	if c.Engine.MaxBatchParallelism <= 0 {
+		c.Engine.MaxBatchParallelism = c.Engine.Workers
+	}
+	if c.Engine.BatchMinEstimatedMS <= 0 {
+		c.Engine.BatchMinEstimatedMS = 50
+	}
+	if c.Engine.SnapshotTTLSeconds <= 0 {
+		c.Engine.SnapshotTTLSeconds = 300
+	}
 	if c.Scheduler.DebounceWindowMS == 0 {
 		c.Scheduler.DebounceWindowMS = 2000
 	}
@@ -314,6 +329,9 @@ func (c *Config) applyEnv() {
 }
 
 func (c *Config) validateStorageTargets() error {
+	if c.Engine.MaxBatchParallelism > c.Engine.Workers {
+		return fmt.Errorf("engine.max_batch_parallelism=%d exceeds workers=%d", c.Engine.MaxBatchParallelism, c.Engine.Workers)
+	}
 	if !isTRPCTarget(c.Storage.MetadataTarget) {
 		return fmt.Errorf("storage.metadata_target must be a tRPC target, got %q", c.Storage.MetadataTarget)
 	}

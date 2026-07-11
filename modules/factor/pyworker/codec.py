@@ -27,7 +27,7 @@ def _read_exact(stream, n):
     return data
 
 
-def read_frame(stream):
+def _read_frame_legacy(stream):
     magic = _read_exact(stream, 2)
     if magic != MAGIC:
         raise ValueError("invalid frame magic")
@@ -43,7 +43,7 @@ def read_frame(stream):
     return frame_type, meta, payload
 
 
-def write_frame(stream, frame_type, meta, payload=b""):
+def _write_frame_legacy(stream, frame_type, meta, payload=b""):
     meta_bytes = json.dumps(meta, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     stream.write(MAGIC)
     stream.write(bytes([frame_type]))
@@ -53,6 +53,12 @@ def write_frame(stream, frame_type, meta, payload=b""):
     if payload:
         stream.write(payload)
     stream.flush()
+
+try:
+    from moox_pyruntime.protocol import read_frame as read_frame, write_frame as write_frame
+except ImportError:
+    read_frame = _read_frame_legacy
+    write_frame = _write_frame_legacy
 
 
 def decode_json_df(meta):
@@ -71,12 +77,12 @@ def decode_json_df(meta):
     return df
 
 
-def encode_json_results(task_id, results, tail, per_factor_ms, elapsed_ms, result_tails=None):
+def encode_json_results(task_id, results, tail, per_factor_ms, elapsed_ms, result_tails=None, logs=None):
     encoded = {}
     for name, values in results.items():
         item_tail = int((result_tails or {}).get(name, tail))
         encoded[name] = {"tail": item_tail, "values": [_json_value(v) for v in list(values)[-item_tail:]]}
-    return {
+    response = {
         "id": task_id,
         "ok": True,
         "encoding": "json",
@@ -84,6 +90,9 @@ def encode_json_results(task_id, results, tail, per_factor_ms, elapsed_ms, resul
         "per_factor_ms": per_factor_ms,
         "elapsed_ms": elapsed_ms,
     }
+    if logs:
+        response["logs"] = logs
+    return response
 
 
 def _json_value(value):

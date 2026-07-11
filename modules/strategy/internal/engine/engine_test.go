@@ -10,3 +10,9 @@ func TestValidateOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestValidateOutputRequiresDecimalWeights(t *testing.T) {
+	if err := Validate(domain.Output{Action: domain.ActionRebalance, Targets: []domain.TargetWeight{{InstrumentID: "BTC", TargetWeight: "1/2"}}, NextState: map[string]any{}}); err == nil {
+		t.Fatal("fractional syntax must not bypass decimal contract")
+	}
+}

@@ -1,8 +1,17 @@
 package transport
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
+	"reflect"
+	"time"
+
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 type Encoding string
@@ -25,4 +34,411 @@ func DecodeJSON(b []byte) (Table, error) {
 		return Table{}, fmt.Errorf("decode table: %w", err)
 	}
 	return t, nil
+}
+
+// EncodeArrowStream encodes one or more Arrow record batches in IPC stream
+// format. Table is deliberately small and dependency-free at the API boundary;
+// the runtime converts its rows to a typed Arrow schema before writing.
+func EncodeArrowStream(t Table) ([]byte, error) {
+	record, schema, release, err := tableRecord(t)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	var buf bytes.Buffer
+	w := ipc.NewWriter(&buf, ipc.WithSchema(schema), ipc.WithAllocator(memory.DefaultAllocator))
+	if err := w.Write(record); err != nil {
+		_ = w.Close()
+		return nil, fmt.Errorf("encode arrow stream: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("close arrow stream: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// DecodeArrowStream decodes Arrow IPC stream bytes into the transport Table
+// representation. Multiple record batches are concatenated in order.
+func DecodeArrowStream(b []byte) (Table, error) {
+	r, err := ipc.NewReader(bytes.NewReader(b), ipc.WithAllocator(memory.DefaultAllocator))
+	if err != nil {
+		return Table{}, fmt.Errorf("open arrow stream: %w", err)
+	}
+	defer r.Release()
+	var out Table
+	for r.Next() {
+		record := r.RecordBatch()
+		if record == nil {
+			continue
+		}
+		part, err := recordTable(record)
+		if err != nil {
+			return Table{}, err
+		}
+		if out.Columns == nil {
+			out.Columns = part.Columns
+		}
+		if !reflect.DeepEqual(out.Columns, part.Columns) {
+			return Table{}, fmt.Errorf("arrow stream schema changed between batches")
+		}
+		out.Rows = append(out.Rows, part.Rows...)
+	}
+	if err := r.Err(); err != nil {
+		return Table{}, fmt.Errorf("read arrow stream: %w", err)
+	}
+	return out, nil
+}
+
+// EncodeArrowFile writes Arrow IPC file bytes. Unlike a stream, the file has a
+// footer and can be opened with ipc.NewMappedFileReader for shared read-only
+// access by multiple workers.
+func EncodeArrowFile(t Table) ([]byte, error) {
+	record, schema, release, err := tableRecord(t)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	var buf bytes.Buffer
+	w, err := ipc.NewFileWriter(&buf, ipc.WithSchema(schema), ipc.WithAllocator(memory.DefaultAllocator))
+	if err != nil {
+		return nil, fmt.Errorf("create arrow file writer: %w", err)
+	}
+	if err := w.Write(record); err != nil {
+		_ = w.Close()
+		return nil, fmt.Errorf("encode arrow file: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("close arrow file: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// DecodeArrowFile decodes an Arrow IPC file from memory. It is useful for
+// tests and small snapshots; large snapshots should use snapshot.Store.Open.
+func DecodeArrowFile(b []byte) (Table, error) {
+	r, err := ipc.NewMappedFileReader(b, ipc.WithAllocator(memory.DefaultAllocator))
+	if err != nil {
+		return Table{}, fmt.Errorf("open arrow file: %w", err)
+	}
+	defer r.Close()
+	var out Table
+	for i := 0; i < r.NumRecords(); i++ {
+		record, err := r.RecordBatchAt(i)
+		if err != nil {
+			return Table{}, fmt.Errorf("read arrow file record %d: %w", i, err)
+		}
+		part, err := recordTable(record)
+		record.Release()
+		if err != nil {
+			return Table{}, err
+		}
+		if out.Columns == nil {
+			out.Columns = part.Columns
+		} else if !reflect.DeepEqual(out.Columns, part.Columns) {
+			return Table{}, fmt.Errorf("arrow file schema changed between batches")
+		}
+		out.Rows = append(out.Rows, part.Rows...)
+	}
+	return out, nil
+}
+
+type columnKind uint8
+
+const (
+	kindNull columnKind = iota
+	kindInt64
+	kindFloat64
+	kindBool
+	kindString
+	kindTimestamp
+)
+
+func tableRecord(t Table) (arrow.RecordBatch, *arrow.Schema, func(), error) {
+	if len(t.Columns) == 0 {
+		if len(t.Rows) != 0 {
+			return nil, nil, nil, fmt.Errorf("table has rows but no columns")
+		}
+		return array.NewRecordBatch(arrow.NewSchema(nil, nil), nil, 0), arrow.NewSchema(nil, nil), func() {}, nil
+	}
+	for i, row := range t.Rows {
+		if len(row) != len(t.Columns) {
+			return nil, nil, nil, fmt.Errorf("row %d has %d values, want %d", i, len(row), len(t.Columns))
+		}
+	}
+	kinds := make([]columnKind, len(t.Columns))
+	fields := make([]arrow.Field, len(t.Columns))
+	cols := make([]arrow.Array, len(t.Columns))
+	for col := range t.Columns {
+		kind, err := inferKind(t.Rows, col)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("column %q: %w", t.Columns[col], err)
+		}
+		kinds[col] = kind
+		fields[col] = arrow.Field{Name: t.Columns[col], Type: kindType(kind), Nullable: true}
+		arr, err := buildColumn(t.Rows, col, kind)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("column %q: %w", t.Columns[col], err)
+		}
+		cols[col] = arr
+	}
+	schema := arrow.NewSchema(fields, nil)
+	record := array.NewRecordBatch(schema, cols, int64(len(t.Rows)))
+	for _, col := range cols {
+		col.Release()
+	}
+	return record, schema, record.Release, nil
+}
+
+func inferKind(rows [][]any, col int) (columnKind, error) {
+	kind := kindNull
+	for _, row := range rows {
+		if row[col] == nil {
+			continue
+		}
+		valueKind := valueKindOf(row[col])
+		if valueKind == kindNull {
+			return kindNull, fmt.Errorf("unsupported value type %T", row[col])
+		}
+		if kind == kindNull {
+			kind = valueKind
+			continue
+		}
+		if kind == valueKind {
+			continue
+		}
+		if (kind == kindInt64 && valueKind == kindFloat64) || (kind == kindFloat64 && valueKind == kindInt64) {
+			kind = kindFloat64
+			continue
+		}
+		return kindNull, fmt.Errorf("mixed types %T and %s", row[col], kindName(kind))
+	}
+	return kind, nil
+}
+
+func valueKindOf(v any) columnKind {
+	switch value := v.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return kindInt64
+	case json.Number:
+		if _, err := value.Int64(); err == nil {
+			return kindInt64
+		}
+		if _, err := value.Float64(); err == nil {
+			return kindFloat64
+		}
+		return kindNull
+	case float32, float64:
+		return kindFloat64
+	case bool:
+		return kindBool
+	case string:
+		return kindString
+	case time.Time:
+		return kindTimestamp
+	default:
+		return kindNull
+	}
+}
+
+func kindType(kind columnKind) arrow.DataType {
+	switch kind {
+	case kindInt64:
+		return arrow.PrimitiveTypes.Int64
+	case kindFloat64:
+		return arrow.PrimitiveTypes.Float64
+	case kindBool:
+		return arrow.FixedWidthTypes.Boolean
+	case kindTimestamp:
+		return &arrow.TimestampType{Unit: arrow.Millisecond, TimeZone: "UTC"}
+	case kindNull:
+		return arrow.Null
+	default:
+		return arrow.BinaryTypes.String
+	}
+}
+
+func kindName(kind columnKind) string {
+	switch kind {
+	case kindInt64:
+		return "int64"
+	case kindFloat64:
+		return "float64"
+	case kindBool:
+		return "bool"
+	case kindString:
+		return "string"
+	case kindTimestamp:
+		return "timestamp"
+	default:
+		return "null"
+	}
+}
+
+func buildColumn(rows [][]any, col int, kind columnKind) (arrow.Array, error) {
+	switch kind {
+	case kindNull:
+		return array.NewNull(len(rows)), nil
+	case kindInt64:
+		b := array.NewInt64Builder(memory.DefaultAllocator)
+		defer b.Release()
+		for _, row := range rows {
+			if row[col] == nil {
+				b.AppendNull()
+				continue
+			}
+			v, ok := toInt64(row[col])
+			if !ok {
+				return nil, fmt.Errorf("%T is not an integer", row[col])
+			}
+			b.Append(v)
+		}
+		return b.NewArray(), nil
+	case kindFloat64:
+		b := array.NewFloat64Builder(memory.DefaultAllocator)
+		defer b.Release()
+		for _, row := range rows {
+			if row[col] == nil {
+				b.AppendNull()
+				continue
+			}
+			v, ok := toFloat64(row[col])
+			if !ok || math.IsNaN(v) || math.IsInf(v, 0) {
+				return nil, fmt.Errorf("%T is not a finite number", row[col])
+			}
+			b.Append(v)
+		}
+		return b.NewArray(), nil
+	case kindBool:
+		b := array.NewBooleanBuilder(memory.DefaultAllocator)
+		defer b.Release()
+		for _, row := range rows {
+			if row[col] == nil {
+				b.AppendNull()
+				continue
+			}
+			v, ok := row[col].(bool)
+			if !ok {
+				return nil, fmt.Errorf("%T is not bool", row[col])
+			}
+			b.Append(v)
+		}
+		return b.NewArray(), nil
+	case kindString:
+		b := array.NewStringBuilder(memory.DefaultAllocator)
+		defer b.Release()
+		for _, row := range rows {
+			if row[col] == nil {
+				b.AppendNull()
+				continue
+			}
+			v, ok := row[col].(string)
+			if !ok {
+				return nil, fmt.Errorf("%T is not string", row[col])
+			}
+			b.Append(v)
+		}
+		return b.NewArray(), nil
+	case kindTimestamp:
+		b := array.NewTimestampBuilder(memory.DefaultAllocator, &arrow.TimestampType{Unit: arrow.Millisecond, TimeZone: "UTC"})
+		defer b.Release()
+		for _, row := range rows {
+			if row[col] == nil {
+				b.AppendNull()
+				continue
+			}
+			v, ok := row[col].(time.Time)
+			if !ok {
+				return nil, fmt.Errorf("%T is not time.Time", row[col])
+			}
+			b.Append(arrow.Timestamp(v.UnixMilli()))
+		}
+		return b.NewArray(), nil
+	default:
+		return nil, fmt.Errorf("unsupported column kind %d", kind)
+	}
+}
+
+func toInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int8:
+		return int64(n), true
+	case int16:
+		return int64(n), true
+	case int32:
+		return int64(n), true
+	case int64:
+		return n, true
+	case uint:
+		if uint64(n) > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(n), true
+	case uint8:
+		return int64(n), true
+	case uint16:
+		return int64(n), true
+	case uint32:
+		return int64(n), true
+	case uint64:
+		if n > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return i, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func toFloat64(v any) (float64, bool) {
+	if i, ok := toInt64(v); ok {
+		return float64(i), true
+	}
+	switch n := v.(type) {
+	case float32:
+		return float64(n), true
+	case float64:
+		return n, true
+	case json.Number:
+		number, err := n.Float64()
+		return number, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func recordTable(record arrow.RecordBatch) (Table, error) {
+	columns := make([]string, record.NumCols())
+	for i := range columns {
+		columns[i] = record.ColumnName(i)
+	}
+	rows := make([][]any, record.NumRows())
+	for row := range rows {
+		rows[row] = make([]any, record.NumCols())
+		for col := range columns {
+			values := record.Column(col)
+			if values.IsNull(row) {
+				continue
+			}
+			value := values.GetOneForMarshal(row)
+			if _, isTimestamp := record.Schema().Field(col).Type.(*arrow.TimestampType); isTimestamp {
+				switch ts := value.(type) {
+				case arrow.Timestamp:
+					value = int64(ts)
+				case string:
+					parsed, err := time.Parse(time.RFC3339Nano, ts)
+					if err != nil {
+						return Table{}, fmt.Errorf("decode timestamp column %q: %w", columns[col], err)
+					}
+					value = parsed.UnixMilli()
+				}
+			}
+			rows[row][col] = value
+		}
+	}
+	return Table{Columns: columns, Rows: rows}, nil
 }

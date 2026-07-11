@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/pyruntime/moduleregistry"
 	"gorm.io/gorm"
 )
 
@@ -63,6 +64,7 @@ type Service struct {
 	scheduler  schedulerRuntime
 	engine     engineStatusProvider
 	factorsDir string
+	publisher  *moduleregistry.SourcePublisher
 	meta       *registry.MetadataSync
 	recalcMu   sync.Mutex
 	recalc     map[string]*recalcState
@@ -87,6 +89,7 @@ func NewWithRuntime(db *gorm.DB, sched schedulerRuntime, eng engineStatusProvide
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.publisher = moduleregistry.NewSourcePublisher(filepath.Join(s.factorsDir, ".versions"))
 	return s
 }
 
@@ -98,7 +101,7 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 	if existing, err := s.factors.GetByName(ctx, factor.Name); err == nil && existing.FactorID != factor.FactorID {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(fmt.Errorf("factor name %q already exists", factor.Name))}, nil
 	}
-	if err := s.writeFactorSource(factor); err != nil {
+	if err := s.publishFactorSource(ctx, &factor); err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: inner(err)}, nil
 	}
 	if err := s.factors.Upsert(ctx, factor); err != nil {
@@ -120,7 +123,7 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 	if err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := s.writeFactorSource(factor); err != nil {
+	if err := s.publishFactorSource(ctx, &factor); err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
 	}
 	if err := s.factors.Upsert(ctx, factor); err != nil {
@@ -131,6 +134,21 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 	}
 	got, _ := s.factors.Get(ctx, factor.FactorID)
 	return &factorpb.UpdateFactorRsp{RetInfo: success(), Factor: factorToPB(*got)}, nil
+}
+
+func (s *Service) publishFactorSource(ctx context.Context, factor *domain.FactorDef) error {
+	if factor == nil {
+		return fmt.Errorf("factor is required")
+	}
+	if s.publisher != nil {
+		version, err := s.publisher.Publish(ctx, moduleregistry.ModuleSource{Type: "factor", LogicalID: factor.Name, Source: []byte(factor.SourceCode)})
+		if err != nil {
+			return err
+		}
+		factor.SourceHash = version.SourceHash
+		factor.SourcePath = version.Path
+	}
+	return s.writeFactorSource(*factor)
 }
 
 func (s *Service) GetFactor(ctx context.Context, req *factorpb.GetFactorReq) (*factorpb.GetFactorRsp, error) {

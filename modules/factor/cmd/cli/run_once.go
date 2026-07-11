@@ -106,6 +106,7 @@ func buildTask(cfg cliConfig, factors []domain.FactorDef) *engine.FactorTask {
 			Name:          factor.Name,
 			SourceHash:    factor.SourceHash,
 			SourcePath:    filepath.Join(cfg.FactorsDir, factor.Name+".py"),
+			EstimatedMS:   int64(factor.AvgRuntimeMS),
 			Params:        params,
 			WritebackBars: factor.WritebackBars,
 			ExtraColumns:  registry.ExtraColumnsFromFactors([]domain.FactorDef{factor}),

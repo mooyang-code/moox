@@ -7,11 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
 	"github.com/mooyang-code/moox/packages/pyruntime/moduleregistry"
 	"github.com/mooyang-code/moox/packages/pyruntime/pool"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
@@ -24,6 +29,8 @@ type Engine struct {
 	mu        sync.RWMutex
 	versions  map[string]process.LoadRequest
 }
+
+var decimalWeight = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
 
 func New(ctx context.Context, python, workerPath string) (*Engine, error) {
 	root := filepath.Join(os.TempDir(), "moox-strategy")
@@ -40,11 +47,25 @@ func (e *Engine) Load(ctx context.Context, d domain.StrategyDefinition) error {
 	if e == nil || e.pool == nil {
 		return errors.New("strategy engine unavailable")
 	}
+	if d.StrategyID == "" || d.Version == "" || d.SourceCode == "" {
+		return errors.New("strategy id, version and source are required")
+	}
 	v, err := e.publisher.Publish(ctx, moduleregistry.ModuleSource{Type: "strategy", LogicalID: d.StrategyID + "-" + d.Version, Source: []byte(d.SourceCode)})
 	if err != nil {
 		return err
 	}
-	req := process.LoadRequest{LogicalID: d.StrategyID + "/" + d.Version, SourceHash: v.SourceHash, Path: v.Path, ModuleType: "strategy"}
+	if d.SourceHash != "" && d.SourceHash != v.SourceHash {
+		return fmt.Errorf("strategy source hash mismatch: expected=%s actual=%s", d.SourceHash, v.SourceHash)
+	}
+	entrypoint := "run"
+	if d.ManifestYAML != "" {
+		manifest, err := registry.Parse(d.ManifestYAML)
+		if err != nil {
+			return err
+		}
+		entrypoint = manifest.Entrypoint
+	}
+	req := process.LoadRequest{LogicalID: d.StrategyID + "/" + d.Version, SourceHash: v.SourceHash, Path: v.Path, ModuleType: "strategy", EntryPoint: entrypoint}
 	if err := e.pool.BroadcastLoad(ctx, req); err != nil {
 		return err
 	}
@@ -67,7 +88,26 @@ func (e *Engine) Run(ctx context.Context, t domain.Task, d domain.StrategyDefini
 			return domain.Output{}, "", fmt.Errorf("decode state: %w", err)
 		}
 	}
-	raw, err := json.Marshal(map[string]any{"context": map[string]any{"api_version": "moox.strategy/v1", "trigger_bar_time": t.TriggerBarTime, "data_revision": t.DataRevision, "previous_targets": t.PreviousTargets}, "data": t.Data, "params": t.Params, "state": state})
+	stateRevision := t.PreviousState.Revision
+	runTime := time.Now().UTC().Format(time.RFC3339Nano)
+	contextMeta := map[string]any{
+		"api_version":      d.API,
+		"strategy_id":      t.StrategyID,
+		"strategy_version": d.Version,
+		"run_id":           t.RunID,
+		"state_revision":   stateRevision,
+		"trigger_bar_time": t.TriggerBarTime,
+		"trigger_bar_end":  t.TriggerBarTime,
+		"run_time":         runTime,
+		"data_cutoff":      runTime,
+		"data_revision":    t.DataRevision,
+		"freq":             t.Freq,
+		"data_start":       "",
+		"data_end":         "",
+		"random_seed":      int64(0),
+		"previous_targets": t.PreviousTargets,
+	}
+	raw, err := json.Marshal(map[string]any{"context": contextMeta, "data": t.Data, "params": t.Params, "state": state})
 	if err != nil {
 		return domain.Output{}, "", fmt.Errorf("encode strategy input: %w", err)
 	}
@@ -96,6 +136,15 @@ func Validate(o domain.Output) error {
 	for _, target := range o.Targets {
 		if target.InstrumentID == "" || seen[target.InstrumentID] {
 			return errors.New("duplicate or empty instrument")
+		}
+		if target.TargetWeight == "" {
+			return errors.New("target weight is required")
+		}
+		if strings.TrimSpace(target.TargetWeight) != target.TargetWeight || !decimalWeight.MatchString(target.TargetWeight) {
+			return fmt.Errorf("invalid target weight %q", target.TargetWeight)
+		}
+		if _, ok := new(big.Rat).SetString(target.TargetWeight); !ok {
+			return fmt.Errorf("invalid target weight %q", target.TargetWeight)
 		}
 		seen[target.InstrumentID] = true
 	}

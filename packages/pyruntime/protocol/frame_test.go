@@ -37,3 +37,13 @@ func TestReadFrameRejectsOversizeBeforeAllocation(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestFrameRejectsUnknownMessageType(t *testing.T) {
+	var buf bytes.Buffer
+	buf.Write([]byte{'M', 'X', 0xff, 0, 2, 0, 0})
+	buf.WriteString(`{}`)
+	_, err := ReadFrame(&buf, DefaultLimits())
+	if !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("err=%v", err)
+	}
+}

@@ -25,6 +25,7 @@ const (
 type LoadRequest struct {
 	LogicalID, SourceHash, Path string
 	ModuleType                  string
+	EntryPoint                  string
 }
 type RunRequest struct {
 	RequestID, ModuleType, LogicalID, SourceHash string
@@ -127,7 +128,7 @@ func NewStdioWorker(ctx context.Context, cfg Config) (*StdioWorker, error) {
 }
 
 func (w *StdioWorker) Load(ctx context.Context, req LoadRequest) error {
-	return w.control(ctx, protocol.TypeLoad, map[string]any{"logical_id": req.LogicalID, "source_hash": req.SourceHash, "path": req.Path, "module_type": req.ModuleType})
+	return w.control(ctx, protocol.TypeLoad, map[string]any{"logical_id": req.LogicalID, "source_hash": req.SourceHash, "path": req.Path, "module_type": req.ModuleType, "entrypoint": req.EntryPoint})
 }
 func (w *StdioWorker) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	w.mu.Lock()

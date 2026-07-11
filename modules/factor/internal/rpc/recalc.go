@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -138,10 +139,14 @@ func (s *Service) recalcTask(req *factorpb.RecalcFactorReq, barTime time.Time, t
 	ids := make([]string, 0, len(factors))
 	lookback := 0
 	for _, factor := range factors {
+		sourcePath := filepath.Join(s.factorsDir, ".versions", "factor", factor.Name, factor.SourceHash, "module.py")
 		specs = append(specs, engine.FactorSpec{
 			FactorID:      factor.FactorID,
 			Name:          factor.Name,
+			SourceHash:    factor.SourceHash,
+			SourcePath:    sourcePath,
 			Params:        recalcParams(factor.ParamsJSON),
+			EstimatedMS:   int64(factor.AvgRuntimeMS),
 			WritebackBars: factor.WritebackBars,
 			ExtraColumns:  registry.ExtraColumnsFromFactors([]domain.FactorDef{factor}),
 		})

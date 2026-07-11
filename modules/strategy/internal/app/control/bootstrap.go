@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/glebarez/sqlite"
@@ -20,6 +21,12 @@ import (
 // Initialize opens the control-plane database, prepares the Python engine and
 // registers the StrategyMgr service before the tRPC server starts listening.
 func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Server, func() error, error) {
+	if _, err := os.Stat(cfg.WorkerPath); err != nil {
+		return nil, nil, fmt.Errorf("strategy worker path: %w", err)
+	}
+	if _, err := exec.LookPath(cfg.PythonBin); err != nil {
+		return nil, nil, fmt.Errorf("strategy python executable: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(cfg.Database), 0o755); err != nil {
 		return nil, nil, err
 	}
@@ -31,15 +38,25 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil, nil, fmt.Errorf("apply strategy schema: %w", err)
 	}
 	repo := repository.New(db)
-	eng, err := engine.New(ctx, cfg.PythonBin, cfg.WorkerPath)
-	if err != nil {
-		return nil, nil, err
+	var eng *engine.Engine
+	if cfg.WorkerPath != "" {
+		eng, err = engine.New(ctx, cfg.PythonBin, cfg.WorkerPath)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else if cfg.LiveEnabled {
+		return nil, nil, fmt.Errorf("worker_path is required when live is enabled")
 	}
-	service := &rpc.Service{Repo: repo, Registry: &registry.Service{Repo: repo}, Engine: eng, Workers: cfg.Workers, ReadyWorkers: cfg.Workers}
+	// pyruntime workers are started lazily on the first LOAD. Do not report
+	// them as ready before a real handshake has completed.
+	service := &rpc.Service{Repo: repo, Registry: &registry.Service{Repo: repo}, Engine: eng, Workers: cfg.Workers, ReadyWorkers: 0}
 	strategypb.RegisterStrategyMgrService(s, service)
 	closeFn := func() error {
 		if sqlDB, err := db.DB(); err == nil {
 			defer sqlDB.Close()
+		}
+		if eng == nil {
+			return nil
 		}
 		return eng.Close()
 	}

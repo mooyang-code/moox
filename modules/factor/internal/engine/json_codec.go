@@ -1,6 +1,8 @@
 package engine
 
-import "fmt"
+import (
+	"fmt"
+)
 
 // EncodeJSONRequestMeta converts a task and frame into the pyworker JSON v1 meta.
 func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, error) {
@@ -10,21 +12,27 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 	if frame == nil {
 		return nil, fmt.Errorf("data frame is required")
 	}
-	columns := make(map[string][]any, len(frame.Columns))
-	for colIdx, name := range frame.Columns {
-		values := make([]any, 0, len(frame.Rows))
-		for _, row := range frame.Rows {
-			if colIdx < len(row) {
-				values = append(values, row[colIdx])
-			} else {
-				values = append(values, nil)
+	columns := map[string][]any{}
+	indexMS := []int64{}
+	// Arrow/mmap workers read the immutable snapshot directly. Do not build a
+	// second full JSON copy for every factor batch on that path.
+	if task.SnapshotPath == "" {
+		columns = make(map[string][]any, len(frame.Columns))
+		for colIdx, name := range frame.Columns {
+			values := make([]any, 0, len(frame.Rows))
+			for _, row := range frame.Rows {
+				if colIdx < len(row) {
+					values = append(values, row[colIdx])
+				} else {
+					values = append(values, nil)
+				}
 			}
+			columns[name] = values
 		}
-		columns[name] = values
-	}
-	indexMS := make([]int64, 0, len(frame.DataTimes))
-	for _, t := range frame.DataTimes {
-		indexMS = append(indexMS, t.UTC().UnixMilli())
+		indexMS = make([]int64, 0, len(frame.DataTimes))
+		for _, t := range frame.DataTimes {
+			indexMS = append(indexMS, t.UTC().UnixMilli())
+		}
 	}
 	factors := make([]map[string]any, 0, len(task.Factors))
 	for _, factor := range task.Factors {
@@ -37,10 +45,17 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 			"writeback_bars": factor.WritebackBars,
 		})
 	}
+	encoding := "json"
+	if task.SnapshotPath != "" {
+		encoding = "arrow_mmap"
+	}
 	return map[string]any{
 		"id":             task.TaskID,
+		"snapshot_id":    task.SnapshotID,
+		"snapshot_hash":  task.SnapshotHash,
+		"snapshot_path":  task.SnapshotPath,
 		"kind":           task.Kind,
-		"encoding":       "json",
+		"encoding":       encoding,
 		"space_id":       task.SpaceID,
 		"source_dataset": task.SourceDataset,
 		"target_dataset": task.TargetDataset,

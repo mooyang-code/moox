@@ -64,8 +64,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	sched := scheduler.NewService(scheduler.Config{
-		Workers:  cfg.Engine.Workers,
-		MaxRetry: cfg.Scheduler.MaxRetry,
+		Workers:             cfg.Engine.Workers,
+		MaxRetry:            cfg.Scheduler.MaxRetry,
+		BatchMinEstimatedMS: cfg.Engine.BatchMinEstimatedMS,
+		SnapshotDir:         snapshotDir(cfg),
 	}, storage, runtimeExec)
 	if err := sched.Start(ctx); err != nil {
 		_ = runtimeExec.Close()
@@ -125,6 +127,13 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-factor 初始化完成")
 	return s, nil
+}
+
+func snapshotDir(cfg *Config) string {
+	if cfg.Engine.ShmDir != "" {
+		return cfg.Engine.ShmDir
+	}
+	return filepath.Join(filepath.Dir(cfg.Database.Path), "snapshots")
 }
 
 func registerMetricsReporter(s *server.Server) {
@@ -328,11 +337,16 @@ func buildSchedulerTask(ctx context.Context, repo *repository.FactorRepository, 
 		if err != nil {
 			return scheduler.Task{}, fmt.Errorf("parse params for factor %s: %w", factor.FactorID, err)
 		}
+		sourcePath := factor.SourcePath
+		if sourcePath == "" {
+			sourcePath = filepath.Join(factorsDir, ".versions", "factor", factor.Name, factor.SourceHash, "module.py")
+		}
 		specs = append(specs, engine.FactorSpec{
 			FactorID:      factor.FactorID,
 			Name:          factor.Name,
 			SourceHash:    factor.SourceHash,
-			SourcePath:    filepath.Join(factorsDir, factor.Name+".py"),
+			SourcePath:    sourcePath,
+			EstimatedMS:   int64(factor.AvgRuntimeMS),
 			Params:        params,
 			WritebackBars: factor.WritebackBars,
 			ExtraColumns:  registry.ExtraColumnsFromFactors([]domain.FactorDef{*factor}),

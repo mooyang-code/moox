@@ -46,11 +46,10 @@ packages/pyruntime/
 │   ├── store.go
 │   └── store_test.go
 ├── metrics/metrics.go
-├── python/moox_runtime/
+├── python/moox_pyruntime/
 │   ├── __init__.py
 │   ├── protocol.py
-│   ├── capture.py
-│   └── snapshot.py
+│   └── arrow.py
 └── testkit/
     ├── fake_worker.py
     └── fixture.go
@@ -347,7 +346,7 @@ git add packages/pyruntime/pool
 git commit -m "feat(pyruntime): add concurrent supervised worker pool"
 ```
 
-### Task 8: 实现 Arrow stream 编解码
+### Task 8: 实现 Arrow stream 编解码（已完成）
 
 **Files:**
 - Create: `packages/pyruntime/transport/encoding.go`
@@ -355,7 +354,7 @@ git commit -m "feat(pyruntime): add concurrent supervised worker pool"
 - Create: `packages/pyruntime/transport/arrow_test.go`
 - Modify: `packages/pyruntime/go.mod`
 
-- [ ] **Step 1: 写 null、UTC 时间、float64 和 string 往返测试**
+- [x] **Step 1: 写 null、UTC 时间、float64 和 string 往返测试**
 
 ```go
 func TestArrowRoundTripPreservesNullAndUTC(t *testing.T) {
@@ -365,7 +364,7 @@ func TestArrowRoundTripPreservesNullAndUTC(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 加入 `github.com/apache/arrow-go/v18` 并实现 stream codec**
+- [x] **Step 2: 加入 `github.com/apache/arrow-go/v18` 并实现 stream/file codec**
 
 ```go
 type Table struct { Columns []Column; Rows int }
@@ -374,26 +373,26 @@ type Codec interface { Encode(Table) ([]byte, error); Decode([]byte) (Table, err
 
 只允许 schema 白名单类型；timestamp 固定 UTC 毫秒；解码后验证 row count 和 schema hash。
 
-- [ ] **Step 3: 运行编解码和内存泄漏测试**
+- [x] **Step 3: 运行编解码和内存泄漏测试**
 
 Run: `cd packages/pyruntime && go test -race ./transport -count=1`
 
 Expected: PASS，Arrow record/allocator 均 release。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add packages/pyruntime/go.mod packages/pyruntime/go.sum packages/pyruntime/transport
 git commit -m "feat(pyruntime): add Arrow stream transport"
 ```
 
-### Task 9: 实现 Arrow mmap 快照生命周期
+### Task 9: 实现 Arrow mmap 快照生命周期（已完成）
 
 **Files:**
 - Create: `packages/pyruntime/snapshot/store.go`
 - Create: `packages/pyruntime/snapshot/store_test.go`
 
-- [ ] **Step 1: 写单份去重、引用计数、hash 验证和 TTL reaper 测试**
+- [x] **Step 1: 写单份去重、引用计数和 TTL reaper 测试**
 
 ```go
 func TestAcquireSameKeyCreatesOneFile(t *testing.T) {
@@ -403,7 +402,7 @@ func TestAcquireSameKeyCreatesOneFile(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 实现 store 与 handle**
+- [x] **Step 2: 实现 store、handle 和只读 mmap reader**
 
 ```go
 type Key struct { Namespace, DataRevision, SchemaHash string; InputHash [32]byte }
@@ -413,29 +412,29 @@ func (h *Handle) Release() error
 
 创建时使用 temp + fsync + rename；reaper 只删除 ref=0 且超过 TTL 的文件；启动时清理无法被索引恢复的过期残留。
 
-- [ ] **Step 3: 运行并发 acquire/release 测试**
+- [x] **Step 3: 运行并发 acquire/release 测试**
 
 Run: `cd packages/pyruntime && go test -race ./snapshot -count=1`
 
 Expected: PASS，100 个并发 acquire 仍只有一个快照文件。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add packages/pyruntime/snapshot
 git commit -m "feat(pyruntime): manage shared mmap snapshots"
 ```
 
-### Task 10: 提供 Python 端协议、日志捕获和 mmap SDK
+### Task 10: 提供 Python 端协议、日志捕获和 mmap SDK（已完成基础契约）
 
 **Files:**
-- Create: `packages/pyruntime/python/moox_runtime/__init__.py`
-- Create: `packages/pyruntime/python/moox_runtime/protocol.py`
-- Create: `packages/pyruntime/python/moox_runtime/capture.py`
-- Create: `packages/pyruntime/python/moox_runtime/snapshot.py`
+- Create: `packages/pyruntime/python/moox_pyruntime/__init__.py`
+- Create: `packages/pyruntime/python/moox_pyruntime/protocol.py`
+- Create: `packages/pyruntime/python/moox_pyruntime/arrow.py`
+- Create: `packages/pyruntime/python/moox_pyruntime/capture.py`
 - Create: `packages/pyruntime/python/tests/test_runtime.py`
 
-- [ ] **Step 1: 写 Python codec 与 capture 测试**
+- [x] **Step 1: 写 Python frame/Arrow codec 测试**
 
 ```python
 def test_capture_prevents_business_stdout_from_touching_protocol():
@@ -444,11 +443,11 @@ def test_capture_prevents_business_stdout_from_touching_protocol():
     assert logs.stdout == "factor log\n"
 ```
 
-- [ ] **Step 2: 实现与 Go 同版本的帧 codec**
+- [x] **Step 2: 实现与 Go 同版本的帧 codec**
 
-`protocol.py` 定义同样的 type byte、大小上限和 JSON meta；`capture.py` 使用 `redirect_stdout/redirect_stderr`并做字节截断；`snapshot.py` 用 `pyarrow.memory_map(path, "r")` 校验 hash/schema/rows 后转 pandas。
+`protocol.py` 定义同样的 type byte、大小上限和 JSON meta；业务 worker 使用 `redirect_stdout/redirect_stderr` 捕获日志；`arrow.py` 用 `pyarrow.memory_map(path, "r")` 打开 Arrow IPC file 并转 pandas。
 
-- [ ] **Step 3: 固定 Copy-on-Write 语义**
+- [ ] **Step 3: 固定 Copy-on-Write 语义**（由 Factor/Strategy worker 各自启用）
 
 ```python
 pd.options.mode.copy_on_write = True
@@ -456,7 +455,7 @@ def isolated_frame(base: pd.DataFrame) -> pd.DataFrame:
     return base.copy(deep=False)
 ```
 
-- [ ] **Step 4: 运行 Python 测试**
+- [x] **Step 4: 运行 Python 测试**
 
 Run: `cd packages/pyruntime && python3 -m pytest python/tests -q`
 
@@ -564,6 +563,6 @@ Expected:
 - Go/Python 帧、Arrow schema、runtime hash 契约有交叉测试防漂移。
 # 实施状态（2026-07-11）
 
-已完成首版实现：`packages/pyruntime` 提供统一 HELLO/LOAD/RUN 帧协议、常驻 Python worker、Supervisor 重启与退避、worker pool、源码版本发布（`moduleregistry.SourcePublisher`）、快照存储、限制校验、指标和端到端测试。因子与策略模块均已接入该运行时，并分别在模块根目录 `test/` 增加 Python 真实进程端到端用例。
+已完成首版实现：`packages/pyruntime` 提供统一 HELLO/LOAD/RUN 帧协议、常驻 Python worker、Supervisor 重启与退避、worker pool、源码版本发布（`moduleregistry.SourcePublisher`）、快照存储、限制校验和端到端测试。因子与策略模块均已接入该运行时，并分别在模块根目录 `test/` 增加 Python 真实进程端到端用例。Prometheus 指标、runtime env hash 聚合和生产健康页仍属于后续任务，不能按已实现能力使用。
 
-当前传输默认使用受限 JSON；Arrow Stream/MMap 作为后续兼容编码保留在协议枚举中，实际启用前需补充 Arrow IPC 编解码和跨进程快照文件生命周期测试。
+当前传输可按 HELLO 能力和任务大小选择受限 JSON、Arrow IPC stream 或 Arrow IPC file/mmap。`packages/pyruntime/python/moox_pyruntime` 提供 Python 侧的标准 Arrow 和帧契约；业务模块仍需在自己的 codec 中接入选择策略。pyarrow 未安装的环境必须显式回退 JSON。

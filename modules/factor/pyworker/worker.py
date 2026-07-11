@@ -4,8 +4,17 @@ import importlib.util
 import sys
 import time
 import traceback
+from contextlib import redirect_stdout, redirect_stderr
+from io import StringIO
 from pathlib import Path
+import os
 import pandas as pd
+
+runtime_python = os.environ.get("MOOX_PYTHON_RUNTIME_PATH")
+if runtime_python:
+    sys.path.insert(0, runtime_python)
+else:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "packages" / "pyruntime" / "python"))
 
 from codec import (
     FRAME_ERROR,
@@ -39,6 +48,12 @@ class FactorWorker:
         self.sections = self._load_modules_from(self.sections_dir)
 
     def ready_meta(self):
+        encodings = ["json"]
+        try:
+            import pyarrow  # noqa: F401
+            encodings.append("arrow_mmap")
+        except ImportError:
+            pass
         return {
             "status": "ready",
             "protocol_version": "moox.py/v1",
@@ -46,7 +61,7 @@ class FactorWorker:
             "python_version": sys.version.split()[0],
             "runtime_env_hash": "",
             "encoding": self.encoding,
-            "encodings": ["json"],
+            "encodings": encodings,
             "factors": sorted(self.factors.keys()),
             "sections": sorted(self.sections.keys()),
             "load_errors": self.load_errors,
@@ -54,35 +69,49 @@ class FactorWorker:
 
     def execute_request(self, meta):
         started = time.perf_counter()
-        df = decode_json_df(meta)
+        df = self.decode_frame(meta)
         results = {}
         result_tails = {}
         per_factor_ms = {}
         max_tail = 1
         modules = self.sections if meta.get("kind") == "cross_section" else self.factors
 
-        for factor in meta.get("factors", []):
-            name = factor["name"]
-            params = factor.get("params", [])
-            tail = int(factor.get("writeback_bars") or meta.get("tail") or 1)
-            max_tail = max(max_tail, tail)
-            mod = modules[name]
-            factor_started = time.perf_counter()
-            if hasattr(mod, "signal_multi_params"):
-                out = mod.signal_multi_params(df.copy(deep=False), params)
-                for param, series in out.items():
-                    results[f"{name}_{param}"] = _tail_values(series, tail)
-                    result_tails[f"{name}_{param}"] = tail
-            else:
-                for param in params:
-                    column = f"{name}_{param}"
-                    out_df = mod.signal(df.copy(deep=False), param, column)
-                    results[column] = _tail_values(out_df[column], tail)
-                    result_tails[column] = tail
-            per_factor_ms[name] = int((time.perf_counter() - factor_started) * 1000)
+        stdout, stderr = StringIO(), StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            for factor in meta.get("factors", []):
+                name = factor["name"]
+                params = factor.get("params", [])
+                tail = int(factor.get("writeback_bars") or meta.get("tail") or 1)
+                max_tail = max(max_tail, tail)
+                mod = modules[name]
+                factor_started = time.perf_counter()
+                if hasattr(mod, "signal_multi_params"):
+                    out = mod.signal_multi_params(df.copy(deep=False), params)
+                    for param, series in out.items():
+                        results[f"{name}_{param}"] = _tail_values(series, tail)
+                        result_tails[f"{name}_{param}"] = tail
+                else:
+                    for param in params:
+                        column = f"{name}_{param}"
+                        out_df = mod.signal(df.copy(deep=False), param, column)
+                        results[column] = _tail_values(out_df[column], tail)
+                        result_tails[column] = tail
+                per_factor_ms[name] = int((time.perf_counter() - factor_started) * 1000)
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        return encode_json_results(meta.get("id", ""), results, max_tail, per_factor_ms, elapsed_ms, result_tails)
+        return encode_json_results(meta.get("id", ""), results, max_tail, per_factor_ms, elapsed_ms, result_tails, {"stdout": stdout.getvalue(), "stderr": stderr.getvalue()})
+
+    def decode_frame(self, meta):
+        if meta.get("encoding") == "arrow_mmap" and meta.get("snapshot_path"):
+            try:
+                from moox_pyruntime.arrow import open_mmap
+                with open_mmap(meta["snapshot_path"]) as reader:
+                    return reader.read_all().to_pandas()
+            except Exception:
+                # JSON remains a compatibility fallback for environments that
+                # have not installed the optional pyarrow dependency.
+                pass
+        return decode_json_df(meta)
 
     def load_one(self, meta):
         name = meta.get("logical_id") or meta.get("name")

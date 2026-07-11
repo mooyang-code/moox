@@ -6,11 +6,13 @@ import (
 	"github.com/mooyang-code/moox/packages/pyruntime/pool"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"github.com/mooyang-code/moox/packages/pyruntime/protocol"
+	"os/exec"
 )
 
 type RuntimePoolExecutor struct {
 	workers int
 	pool    *pool.Pool
+	arrow   bool
 }
 
 func NewRuntimePoolExecutor(ctx context.Context, workers int, cfg process.Config) (*RuntimePoolExecutor, error) {
@@ -19,10 +21,20 @@ func NewRuntimePoolExecutor(ctx context.Context, workers int, cfg process.Config
 		workers = 1
 	}
 	p := pool.New(workers, func(start context.Context) (process.Worker, error) { return process.NewStdioWorker(start, cfg) })
-	return &RuntimePoolExecutor{workers: workers, pool: p}, nil
+	arrow := false
+	if cfg.PythonBin != "" {
+		arrow = exec.Command(cfg.PythonBin, "-c", "import pyarrow").Run() == nil
+	}
+	return &RuntimePoolExecutor{workers: workers, pool: p, arrow: arrow}, nil
 }
 func (e *RuntimePoolExecutor) Execute(ctx context.Context, task *FactorTask, frame *DataFrame) (*FactorResult, error) {
-	meta, err := EncodeJSONRequestMeta(task, frame)
+	prepared := *task
+	if !e.arrow {
+		// A worker without pyarrow cannot open the mmap snapshot. Keep the
+		// documented JSON fallback explicit and include the frame payload.
+		prepared.SnapshotID, prepared.SnapshotHash, prepared.SnapshotPath = "", "", ""
+	}
+	meta, err := EncodeJSONRequestMeta(&prepared, frame)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +43,10 @@ func (e *RuntimePoolExecutor) Execute(ctx context.Context, task *FactorTask, fra
 		return nil, err
 	}
 	run := process.RunRequest{RequestID: task.TaskID, ModuleType: "factor", LogicalID: task.Kind, Encoding: protocol.EncodingJSON, Meta: raw}
-	if len(task.Factors) > 0 && task.Factors[0].SourcePath != "" {
+	if prepared.SnapshotPath != "" {
+		run.Encoding = protocol.EncodingArrowMMap
+	}
+	if hasSourcePath(prepared.Factors) {
 		loads := make([]process.LoadRequest, 0, len(task.Factors))
 		for _, factor := range task.Factors {
 			if factor.SourcePath == "" {
@@ -39,7 +54,7 @@ func (e *RuntimePoolExecutor) Execute(ctx context.Context, task *FactorTask, fra
 			}
 			loads = append(loads, process.LoadRequest{LogicalID: factor.Name, SourceHash: factor.SourceHash, Path: factor.SourcePath, ModuleType: "factor"})
 		}
-		resp, err := e.pool.RunLoadedMany(ctx, task.SubjectID, loads, run)
+		resp, err := e.pool.RunLoadedMany(ctx, prepared.SubjectID, loads, run)
 		if err != nil {
 			return nil, err
 		}
@@ -49,7 +64,7 @@ func (e *RuntimePoolExecutor) Execute(ctx context.Context, task *FactorTask, fra
 		}
 		return DecodeJSONResponse(out)
 	}
-	resp, err := e.pool.Run(ctx, pool.Request{ShardKey: task.SubjectID, Run: run})
+	resp, err := e.pool.Run(ctx, pool.Request{ShardKey: prepared.SubjectID, Run: run})
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +73,15 @@ func (e *RuntimePoolExecutor) Execute(ctx context.Context, task *FactorTask, fra
 		return nil, err
 	}
 	return DecodeJSONResponse(out)
+}
+
+func hasSourcePath(specs []FactorSpec) bool {
+	for _, spec := range specs {
+		if spec.SourcePath != "" {
+			return true
+		}
+	}
+	return false
 }
 func (e *RuntimePoolExecutor) Status() WorkerPoolStatus {
 	if e == nil {

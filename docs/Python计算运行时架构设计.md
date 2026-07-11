@@ -24,19 +24,17 @@ V1 使用本机 worker 池。远程 Python worker、容器沙箱和多租户资�
 
 ## 当前实现状态
 
-本文同时描述“当前代码”和“目标架构”，不能把规划能力当作已经实现。
+共享运行时已经落在 `packages/pyruntime`，Factor 和 Strategy 通过 Go API 接入。
+当前能力包括：
 
-当前 `modules/factor` 已有 stdio worker 和二进制帧协议，但存在以下差距：
+1. `process` 提供常驻 worker、任务超时、状态检查和 supervisor 重建；`pool` 提供并行 worker 选择。
+2. `protocol` 固定 `moox.py/v1` 帧、大小上限和 HELLO 能力协商。
+3. `transport` 提供 JSON、标准 Arrow IPC stream 和 Arrow IPC file 编解码；Arrow 类型白名单覆盖数值、bool、string、UTC 毫秒时间和 null。
+4. `snapshot.Store.AcquireArrow` 使用临时文件、fsync、原子 rename 和引用计数；`Store.Open` 通过只读 mmap + `ipc.NewMappedFileReader` 打开共享快照。
+5. `python/moox_pyruntime` 提供 Python 侧 frame、Arrow stream 和 mmap helper；pyarrow 未安装时仍可运行 JSON-only worker。
+6. `moduleregistry` 负责源码 hash 和版本化物化。Factor/Strategy 的业务 codec、调度和事务语义仍由各自模块负责。
 
-1. scheduler 的 `Drain()` 同步逐项执行，配置多个 worker 仍没有真正并行计算任务。
-2. worker 超时后会被 kill，但 WorkerPool 不会替换已经死亡的进程。
-3. worker 每个任务都会重新加载全部因子文件，常驻模块缓存没有生效。
-4. 因子 `print()` 会写入协议 stdout，可能破坏帧；Go 目前丢弃 worker stderr。
-5. READY 帧没有协议、Python、依赖环境和源码 hash 校验。
-6. 配置已有 `auto/arrow/shm` 字段，但数据面目前始终使用 JSON，Arrow payload 尚未实现。
-7. 因子源码直接覆盖 `<name>.py`，数据库、文件和在途任务没有原子版本边界。
-
-Strategy 模块尚未实现。Strategy 开发应直接使用本文目标运行时，不再复制 Factor 当前的临时实现。
+当前明确的边界：Arrow/mmap 已在共享运行时和端到端测试中可用，但业务模块需要在 worker HELLO 协商通过后才选择 Arrow；未协商或小数据任务应使用 JSON。快照句柄必须在所有 mmap reader 关闭后再 Release。
 
 ## 目标与非目标
 
@@ -258,7 +256,7 @@ stream: stdout / stderr
 
 适合小型时序窗口和本地调试。数据按列编码，时间使用 epoch 毫秒，NaN 使用 `null`。
 
-JSON 只在总估算大小低于阈值时使用。`encoding=auto` 必须根据 worker HELLO 能力和任务大小做真实选择；如果 Arrow 尚未实现，应拒绝 `arrow/auto` 或明确报告实际使用 JSON，不能留下无效配置。
+JSON 只在总估算大小低于阈值或 worker HELLO 未声明对应 Arrow 能力时使用。`encoding=auto` 必须根据 HELLO 能力和任务大小做真实选择；如果 pyarrow 未安装，应明确记录实际回退到 JSON，不能伪装成 Arrow。
 
 ### Arrow IPC stream
 

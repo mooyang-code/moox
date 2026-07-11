@@ -7,9 +7,11 @@ import (
 )
 
 type Policy struct {
-	MaxGross  string
-	MaxNet    string
-	MaxSingle string
+	MaxGross   string
+	MaxNet     string
+	MaxSingle  string
+	MaxTargets int
+	AllowShort bool
 }
 
 func Validate(targets []domain.TargetWeight, p Policy) error {
@@ -20,6 +22,9 @@ func Validate(targets []domain.TargetWeight, p Policy) error {
 		if !ok {
 			return fmt.Errorf("invalid target weight %q", t.TargetWeight)
 		}
+		if !p.AllowShort && v.Sign() < 0 {
+			return fmt.Errorf("short target is disabled")
+		}
 		abs := new(big.Rat).Abs(v)
 		gross.Add(gross, abs)
 		net.Add(net, v)
@@ -29,6 +34,9 @@ func Validate(targets []domain.TargetWeight, p Policy) error {
 				return fmt.Errorf("single target exceeds limit")
 			}
 		}
+	}
+	if p.MaxTargets > 0 && len(targets) > p.MaxTargets {
+		return fmt.Errorf("target count exceeds limit")
 	}
 	if p.MaxGross != "" {
 		m, _ := new(big.Rat).SetString(p.MaxGross)

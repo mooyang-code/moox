@@ -28,7 +28,7 @@ func TestFactorSchedulerRunsPythonFactor(t *testing.T) {
 	}
 	defer pool.Close()
 	storage := &storageFake{}
-	s := scheduler.NewService(scheduler.Config{Workers: 1}, storage, pool)
+	s := scheduler.NewService(scheduler.Config{Workers: 1, SnapshotDir: t.TempDir()}, storage, pool)
 	if err := s.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}

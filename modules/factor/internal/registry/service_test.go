@@ -54,6 +54,40 @@ func TestImportFactorFileDefaults(t *testing.T) {
 	}
 }
 
+func TestImportFactorFilePublishesImmutableSourcePath(t *testing.T) {
+	dir := t.TempDir()
+	db := openRegistryTestDB(t)
+	svc := NewService(repository.NewFactorRepository(db), nil, Options{FactorsDir: dir})
+	path := filepath.Join(dir, "Bias.py")
+	if err := os.WriteFile(path, []byte("def signal(*args): return args[0]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, err := svc.ImportFactorFile(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.SourcePath == "" {
+		t.Fatal("expected immutable source path")
+	}
+	old, err := os.ReadFile(first.SourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("def signal(*args): return args[0] * 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.ImportFactorFile(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.SourcePath == second.SourcePath {
+		t.Fatal("source versions were overwritten")
+	}
+	if got, _ := os.ReadFile(first.SourcePath); string(got) != string(old) {
+		t.Fatal("old source version changed")
+	}
+}
+
 func TestDefaultLookback(t *testing.T) {
 	tests := []struct {
 		params []int

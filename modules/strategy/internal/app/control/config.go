@@ -29,8 +29,8 @@ func Load(path string) (Config, error) {
 	if c.Workers < 1 {
 		c.Workers = 1
 	}
-	if c.LiveEnabled && c.WorkerPath == "" {
-		return Config{}, fmt.Errorf("worker_path is required when live is enabled")
+	if c.WorkerPath == "" {
+		return Config{}, fmt.Errorf("worker_path is required for strategy execution")
 	}
 	return c, nil
 }

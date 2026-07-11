@@ -1,10 +1,12 @@
-# Strategy Python 策略接入手册（设计稿）
+# Strategy Python 策略接入手册
 
-> 本文定义 `modules/strategy` 面向 Python 策略开发者的目标接口。Strategy 模块尚未实现，文中的目录、协议和命令是待实现契约，当前不能直接运行。
+> 本文定义 `modules/strategy` 面向 Python 策略开发者的实际接入接口。Go 框架负责数据快照、调度、状态和执行端口；策略包只负责纯 Python 计算。
 >
 > 模块边界、运行链路、数据模型和一致性设计见 [Strategy 交易策略模块架构设计](策略模块架构设计.md)。
 
 ## 先看结论
+
+当前可用命令：`strategy validate <strategy.yaml> <strategy.py>` 和 `strategy run-once [--trigger ...] [--state ...] <strategy.yaml> <strategy.py>`。运行时默认使用 `packages/pyruntime` 的常驻 Python worker。
 
 策略开发者只负责策略规则，不负责数据查询、调度、状态落库、账户换算或交易执行。
 
@@ -66,7 +68,7 @@ Storage/View 查询
 
 ```yaml
 api_version: moox.strategy/v1
-strategy_id: momentum_top_n
+id: momentum_top_n
 name: 动量多因子 Top N
 version: 1.0.0
 entrypoint: strategy.py:run
@@ -98,7 +100,7 @@ state_schema_version: 1
 | 字段 | 规则 |
 | --- | --- |
 | `api_version` | V1 固定为 `moox.strategy/v1`。 |
-| `strategy_id` | 稳定唯一标识，只能使用小写字母、数字和下划线。 |
+| `id` | 稳定唯一标识，只能使用小写字母、数字和下划线。 |
 | `version` | 使用 SemVer。同一版本的源码和清单不可修改。 |
 | `entrypoint` | 固定格式为 `<文件>:<函数>`。V1 只支持 Python 文件。 |
 | `lookback_bars` | Go 为每个标的准备的最大历史 Bar 数。 |
@@ -305,19 +307,19 @@ V1 支持两种决策：
 - `action="rebalance"` 且空 `targets`：完整目标为空，全部平仓。
 - `action="rebalance"` 且有 `targets`：未出现的旧标的目标权重变为 `0`。
 
-`hold` 时 `targets` 必须是具有标准列的空 DataFrame。策略不得返回 `None` 表示无操作。
+`hold` 时 `targets` 必须是空数组。策略不得返回 `None` 表示无操作。
 
 `hold` 不是停止执行。如果账户尚未到达上一次目标，Go 仍会让执行层继续向该目标收敛。首次运行尚无旧目标时，`hold` 等价于继续空仓。
 
 ### `TargetWeights`
 
-`targets` 是完整的策略级目标组合 DataFrame：
+`targets` 是完整的策略级目标组合 JSON 数组（策略内部可以先用 DataFrame 计算，再用 `to_dict("records")` 转成该数组）：
 
 | 列 | 必填 | 说明 |
 | --- | --- | --- |
 | `instrument_id` | 是 | 输入中的 MooX 唯一合约身份。 |
-| `symbol` | 是 | 输入中的 MooX 规范化标的。 |
-| `market_type` | 是 | `spot`、`margin`、`swap` 或 `futures`。 |
+| `symbol` | 否 | 可选审计字段；执行端以 `instrument_id` 为唯一身份。 |
+| `market_type` | 否 | 可选审计字段；真实交易市场由 Go 绑定和 Trade 校验。 |
 | `target_weight` | 是 | 相对于该策略资金预算的有符号目标权重。 |
 | `score` | 否 | 策略排名或评分，仅用于审计。 |
 | `reason` | 否 | 简短的人类可读原因，仅用于审计。 |
@@ -334,7 +336,7 @@ V1 支持两种决策：
 - 零权重行应省略。需要全平时返回空目标组合。
 - 行顺序不影响组合语义；Go 会按 `instrument_id` 规范化排序后计算结果 hash。
 
-Go 会在接受结果前检查允许的市场、标的范围、单标的权重、总敞口和净敞口。任何一项不合法都会使本次运行按失败处理，不会截断或偷偷修正权重。
+Go 会在接受结果前检查 `instrument_id`、权重格式、单标的权重、总敞口和净敞口。`symbol`/`market_type` 作为后续 Trade 归因扩展字段，不参与当前 V1 的身份解析；任何一项已实现的约束不合法都会使本次运行按失败处理，不会截断或偷偷修正权重。
 
 ### `next_state`
 
@@ -405,7 +407,7 @@ TARGET_COLUMNS = [
 
 
 def empty_targets():
-    return pd.DataFrame(columns=TARGET_COLUMNS)
+    return []
 
 
 def run(context, data, params, state):
@@ -441,7 +443,7 @@ def run(context, data, params, state):
     targets = selected[TARGET_COLUMNS].reset_index(drop=True)
     return {
         "action": "rebalance",
-        "targets": targets,
+        "targets": targets.to_dict("records"),
         "next_state": {},
         "debug_info": {
             "message": f"selected top {top_n}",
@@ -549,7 +551,7 @@ V1 每个策略绑定在一个逻辑调度点只接受一次决策。晚到数�
 
 ## 计划提供的本地工具
 
-Strategy 模块实现后应提供以下 CLI。当前仓库尚无这些命令。
+Strategy 首版当前提供 `validate` 和 `run-once`；`backtest`、`inspect-run`、`inspect-execution` 等管理命令属于后续管理面扩展。
 
 ```bash
 # 校验清单、入口函数、参数 schema 和依赖列
@@ -575,7 +577,7 @@ go run ./cmd/cli import \
 
 ## 上线前检查清单
 
-- [ ] `strategy.yaml` 使用稳定 `strategy_id` 和新的 SemVer 版本。
+- [ ] `strategy.yaml` 使用稳定 `id` 和新的 SemVer 版本。
 - [ ] `required_columns` 包含 Python 实际读取的所有行情与因子列。
 - [ ] `lookback_bars` 足以覆盖最长滚动窗口。
 - [ ] Python 只实现 `run(context, data, params, state)`。

@@ -27,6 +27,9 @@ engine:
   task_timeout_ms: 30000
   encoding: auto
   arrow_row_threshold: 50000
+  max_batch_parallelism: 8
+  batch_min_estimated_ms: 50
+  snapshot_ttl_seconds: 300
   shm_dir: ""
 
 scheduler:

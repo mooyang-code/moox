@@ -21,6 +21,9 @@ type DataFrame struct {
 // FactorTask is the self-contained scheduler-to-engine task shape.
 type FactorTask struct {
 	TaskID        string
+	SnapshotID    string
+	SnapshotHash  string
+	SnapshotPath  string
 	Kind          string
 	SpaceID       string
 	SourceDataset string
@@ -38,6 +41,7 @@ type FactorSpec struct {
 	Name          string
 	SourceHash    string
 	SourcePath    string
+	EstimatedMS   int64
 	Params        []int
 	WritebackBars int
 	ExtraColumns  []string

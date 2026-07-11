@@ -28,6 +28,7 @@ func (c *Client) WriteFactorPatch(ctx context.Context, task *engine.FactorTask, 
 		start = 0
 	}
 	rows := make([]*storagepb.TimeSeriesRow, 0, len(frame.DataTimes)-start)
+	computedAt := SnapshotComputedAt()
 	for rowIdx := start; rowIdx < len(frame.DataTimes); rowIdx++ {
 		row := &storagepb.TimeSeriesRow{
 			Key: &storagepb.TimeSeriesKey{
@@ -36,6 +37,11 @@ func (c *Client) WriteFactorPatch(ctx context.Context, task *engine.FactorTask, 
 				SubjectId: task.SubjectID,
 				Freq:      task.Freq,
 				DataTime:  frame.DataTimes[rowIdx].UTC().Format(time.RFC3339),
+			},
+			Attributes: map[string]string{
+				"factor.parent_task_id": task.TaskID,
+				"factor.snapshot_hash":  task.SnapshotHash,
+				"factor.computed_at":    computedAt,
 			},
 		}
 		for columnName, col := range result.Columns {

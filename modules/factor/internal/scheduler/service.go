@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,8 +17,10 @@ import (
 
 // Config controls scheduler execution.
 type Config struct {
-	Workers  int
-	MaxRetry int
+	Workers             int
+	MaxRetry            int
+	BatchMinEstimatedMS int64
+	SnapshotDir         string
 }
 
 // StorageIO is the storage dependency used by the scheduler.
@@ -44,6 +47,7 @@ type Service struct {
 	pending           map[taskKey]Task
 	supersedeCount    atomic.Int64
 	writebackFailures atomic.Int64
+	snapshotStore     *storageio.SnapshotStore
 	running           atomic.Int64
 	started           atomic.Bool
 	workerCtx         context.Context
@@ -71,6 +75,9 @@ func NewService(cfg Config, storage StorageIO, exec engine.Executor) *Service {
 		queues:  make([][]queueItem, cfg.Workers),
 		pending: map[taskKey]Task{},
 		wake:    make([]chan struct{}, cfg.Workers),
+	}
+	if cfg.SnapshotDir != "" {
+		svc.snapshotStore = storageio.NewSnapshotStore(cfg.SnapshotDir)
 	}
 	for i := range svc.wake {
 		svc.wake[i] = make(chan struct{}, 1)
@@ -326,6 +333,16 @@ func (s *Service) executeOnce(ctx context.Context, task Task) (int64, error) {
 	if err != nil {
 		return 0, engine.RetryableError{Err: err}
 	}
+	if s.snapshotStore != nil {
+		handle, snapshotErr := s.snapshotStore.AcquireFrame(ctx, task.FactorTask, frame)
+		if snapshotErr != nil {
+			return 0, engine.NonRetryableError{Err: snapshotErr}
+		}
+		if handle != nil {
+			defer handle.Release()
+			task.SnapshotID, task.SnapshotHash, task.SnapshotPath = handle.ID, handle.Hash, handle.Path
+		}
+	}
 	result, err := s.executeFactorBatches(ctx, task.FactorTask, frame)
 	if err != nil {
 		return 0, err
@@ -343,9 +360,16 @@ func (s *Service) executeOnce(ctx context.Context, task Task) (int64, error) {
 func (s *Service) executeFactorBatches(ctx context.Context, task engine.FactorTask, frame *engine.DataFrame) (*engine.FactorResult, error) {
 	cost := make(map[string]int64, len(task.Factors))
 	for _, spec := range task.Factors {
-		cost[spec.FactorID] = 1
+		cost[spec.FactorID] = spec.EstimatedMS
+		if cost[spec.FactorID] <= 0 {
+			cost[spec.FactorID] = 1
+		}
 	}
-	batches := Partition(task.Factors, cost, s.cfg.Workers, 50)
+	threshold := s.cfg.BatchMinEstimatedMS
+	if threshold <= 0 {
+		threshold = 50
+	}
+	batches := Partition(task.Factors, cost, s.cfg.Workers, threshold)
 	if len(batches) == 1 {
 		result, err := s.exec.Execute(ctx, &task, frame)
 		if err != nil {
@@ -425,8 +449,26 @@ func validateFactorResult(specs []engine.FactorSpec, result *engine.FactorResult
 		if col.Tail <= 0 || len(col.Values) != col.Tail {
 			return fmt.Errorf("factor column %s tail=%d values=%d mismatch", name, col.Tail, len(col.Values))
 		}
+		for i, value := range col.Values {
+			if !finiteFactorValue(value) {
+				return fmt.Errorf("factor column %s value[%d] is not finite numeric", name, i)
+			}
+		}
 	}
 	return nil
+}
+
+func finiteFactorValue(value any) bool {
+	switch n := value.(type) {
+	case float64:
+		return !math.IsNaN(n) && !math.IsInf(n, 0)
+	case float32:
+		return !math.IsNaN(float64(n)) && !math.IsInf(float64(n), 0)
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return true
+	default:
+		return false
+	}
 }
 
 func inputColumns(specs []engine.FactorSpec) []string {
