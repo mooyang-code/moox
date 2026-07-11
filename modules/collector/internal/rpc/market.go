@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/repository"
+	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
@@ -197,12 +199,72 @@ func (s *Service) RefreshMarketKlines(ctx context.Context, req *pb.RefreshMarket
 	if !manifest.RuntimeEnabled || !manifest.Readiness.CapabilityEnabled {
 		return &pb.RefreshMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "market is not runtime ready")}, nil
 	}
-	ids := make([]string, 0, len(req.GetSubjectIds()))
+	start, startErr := time.Parse(time.RFC3339, req.GetStartTime())
+	end, endErr := time.Parse(time.RFC3339, req.GetEndTime())
+	if startErr != nil || endErr != nil || !end.After(start) || req.GetFrequency() == "" || len(req.GetSubjectIds()) == 0 {
+		return &pb.RefreshMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "subjects, frequency and valid range are required")}, nil
+	}
+	wantedDatasets := map[string]bool{}
+	wantedTypes := normalizedStrings(req.GetInstrumentTypes())
+	if len(wantedTypes) == 0 {
+		wantedTypes = normalizedStrings(manifest.InstrumentTypes)
+	}
+	for _, feed := range manifest.Feeds {
+		if containsString(wantedTypes, strings.ToLower(feed.InstrumentType)) && containsString(feed.Frequencies, req.GetFrequency()) {
+			wantedDatasets[feed.DatasetID] = true
+		}
+	}
+	instances := make([]domain.TaskInstance, 0, len(req.GetSubjectIds()))
+	now := s.now().UTC()
+	preparer := taskpublisher.OutboxLeasePreparer{Leases: s.marketControl}
 	for _, subject := range normalizedSubjectIDs(req.GetSubjectIds()) {
-		sum := sha256.Sum256([]byte(strings.Join([]string{manifest.MarketID, subject, req.GetFrequency(), req.GetStartTime(), req.GetEndTime()}, "|")))
-		ids = append(ids, hex.EncodeToString(sum[:]))
+		values, _, err := s.instanceRepo.List(ctx, repository.TaskInstanceFilter{SpaceID: manifest.SpaceID, SubjectID: subject, Interval: req.GetFrequency(), DataType: "kline", PageSize: 1000})
+		if err != nil {
+			return &pb.RefreshMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
+		matched := false
+		for _, instance := range values {
+			if !wantedDatasets[instance.DatasetID] {
+				continue
+			}
+			params := map[string]any{}
+			if err := json.Unmarshal([]byte(instance.TaskParams), &params); err != nil {
+				return &pb.RefreshMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+			}
+			params["start_time"], params["end_time"] = start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano)
+			params["schedule_window"] = "refresh:" + now.Format(time.RFC3339Nano)
+			raw, _ := json.Marshal(params)
+			outboxID := refreshExecutionID(instance.TaskID, string(raw))
+			prepared, err := preparer.Prepare(ctx, domain.AttemptOutbox{OutboxID: outboxID, Payload: string(raw)}, now)
+			if err != nil {
+				return &pb.RefreshMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+			}
+			instance.TaskParams = prepared.Payload
+			instances = append(instances, instance)
+			matched = true
+		}
+		if !matched {
+			return &pb.RefreshMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "no planned logical task for subject "+subject)}, nil
+		}
+	}
+	jobIDs, err := s.cloudJobs.SubmitCollectorJobItems(ctx, instances)
+	if err != nil {
+		return &pb.RefreshMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	if err := s.instanceRepo.UpdateCloudJobItemIDs(ctx, manifest.SpaceID, jobIDs); err != nil {
+		return &pb.RefreshMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	_, _ = s.cloudJobs.WakeCollectorNodes(ctx, taskpublisher.WakeOptions{SpaceID: manifest.SpaceID, JobTypes: []string{"kline"}})
+	ids := make([]string, 0, len(instances))
+	for _, instance := range instances {
+		ids = append(ids, instance.TaskID)
 	}
 	return &pb.RefreshMarketKlinesRsp{RetInfo: retOK(), TaskIds: ids}, nil
+}
+
+func refreshExecutionID(taskID, payload string) string {
+	sum := sha256.Sum256([]byte(taskID + "|" + payload))
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *Service) ListTaskAttempts(ctx context.Context, req *pb.ListTaskAttemptsReq) (*pb.ListTaskAttemptsRsp, error) {

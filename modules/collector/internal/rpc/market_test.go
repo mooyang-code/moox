@@ -2,15 +2,24 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/glebarez/sqlite"
+	cloudpb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/repository"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
+	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/storage/testkit"
 	"github.com/mooyang-code/moox/packages/marketmanifest"
+	"google.golang.org/protobuf/encoding/protojson"
 	"gorm.io/gorm"
 )
 
@@ -46,6 +55,49 @@ func TestQueryMarketKlinesUsesLogicalMarketAndCompositeCursor(t *testing.T) {
 	second, err := service.QueryMarketKlines(context.Background(), req)
 	if err != nil || second.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(second.GetRows()) != 1 || second.GetRows()[0].GetSubjectId() == first.GetRows()[0].GetSubjectId() {
 		t.Fatalf("second=%+v err=%v", second, err)
+	}
+}
+
+func TestRefreshMarketKlinesPublishesExistingLogicalTask(t *testing.T) {
+	now := time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC)
+	submitted := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		switch r.URL.Path {
+		case "/api/service/cloudnode/SubmitJobItems":
+			var req cloudpb.SubmitJobItemsReq
+			if err := protojson.Unmarshal(body, &req); err != nil {
+				t.Fatal(err)
+			}
+			submitted += len(req.GetItems())
+			acks := []*cloudpb.JobItemAck{{JobItemId: req.GetItems()[0].GetJobItemId(), Status: cloudpb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED}}
+			writeRPCProto(t, w, &cloudpb.SubmitJobItemsRsp{RetInfo: &cloudpb.RetInfo{Code: cloudpb.ErrorCode_SUCCESS}, Acks: acks})
+		case "/api/service/cloudnode/GetNodeList":
+			writeRPCProto(t, w, &cloudpb.GetNodeListRsp{RetInfo: &cloudpb.RetInfo{Code: cloudpb.ErrorCode_SUCCESS}})
+		default:
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	db, _ := gorm.Open(sqlite.Open("file:market-refresh?mode=memory&cache=shared"), &gorm.Config{})
+	if err := db.AutoMigrate(&domain.TaskInstance{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.MigrateMarketControl(db); err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]any{"job_type": "collect.kline", "market_id": "crypto_binance", "space_id": "crypto_binance", "provider_id": "binance", "provider_symbol": "BTCUSDT", "source_dataset_id": "binance_kline", "unified_dataset_id": "spot_kline", "subject_id": "BTC-USDT", "frequency": "1m", "start_time": now.Add(-time.Hour).Format(time.RFC3339), "end_time": now.Format(time.RFC3339), "quota_scope_key": "ip", "quota_windows": []any{map[string]any{"window_seconds": 60, "limit": 6000}}}
+	raw, _ := json.Marshal(params)
+	instance := domain.TaskInstance{SpaceID: "crypto_binance", TaskID: "logical-task", RuleID: "rule", DataType: "kline", DatasetID: "spot_kline", SubjectID: "BTC-USDT", Interval: "1m", TaskParams: string(raw), Result: "{}", CreateTime: now, ModifyTime: now}
+	if err := db.Create(&instance).Error; err != nil {
+		t.Fatal(err)
+	}
+	manifest := marketmanifest.Manifest{MarketID: "crypto_binance", SpaceID: "crypto_binance", RuntimeEnabled: true, Readiness: marketmanifest.Readiness{CapabilityEnabled: true}, InstrumentTypes: []string{"spot"}, Feeds: []marketmanifest.Feed{{DatasetID: "spot_kline", InstrumentType: "spot", Frequencies: []string{"1m"}}}}
+	service := New(db, Dependencies{ServiceGatewayTarget: server.URL, ServiceAuth: taskpublisher.AuthConfig{AccessKey: "ak", SecretKey: "sk"}, MarketManifests: []marketmanifest.Manifest{manifest}})
+	service.now = func() time.Time { return now }
+	rsp, err := service.RefreshMarketKlines(context.Background(), &pb.RefreshMarketKlinesReq{MarketId: "crypto_binance", InstrumentTypes: []string{"spot"}, SubjectIds: []string{"BTC-USDT"}, Frequency: "1m", StartTime: now.Add(-2 * time.Hour).Format(time.RFC3339), EndTime: now.Format(time.RFC3339)})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || submitted != 1 || len(rsp.GetTaskIds()) != 1 || rsp.GetTaskIds()[0] != "logical-task" {
+		t.Fatalf("rsp=%+v submitted=%d err=%v", rsp, submitted, err)
 	}
 }
 
