@@ -119,6 +119,25 @@ func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodes
 	if len(nodeIDs) == 0 {
 		return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_ids is required")}, nil
 	}
+	for _, nodeID := range nodeIDs {
+		node, err := s.catalog.GetNode(ctx, spaceID, nodeID)
+		if err != nil {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
+		if node == nil {
+			continue
+		}
+		account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
+		if err != nil || account == nil {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "cloud account unavailable for node "+nodeID)}, nil
+		}
+		err = s.scfClient(*account).DeleteFunction(ctx, tencentscf.FunctionRef{
+			Region: node.Region, FunctionName: firstString(node.FunctionName, node.NodeID), Namespace: firstString(node.Namespace, "default"),
+		})
+		if err != nil && !isSCFNotFound(err) {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "delete scf function "+nodeID+": "+err.Error())}, nil
+		}
+	}
 	if err := s.catalog.DeleteNodes(ctx, spaceID, nodeIDs); err != nil {
 		return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}

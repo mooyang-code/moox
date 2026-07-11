@@ -213,6 +213,8 @@ func (f *fakeSCFClient) CreateFunction(_ context.Context, req tencentscf.CreateF
 	return &tencentscf.CreateFunctionResponse{RequestID: "create-req"}, nil
 }
 
+func (f *fakeSCFClient) DeleteFunction(context.Context, tencentscf.FunctionRef) error { return nil }
+
 func (f *fakeSCFClient) UpdateFunctionCode(_ context.Context, req tencentscf.UpdateFunctionCodeRequest) (*tencentscf.UpdateFunctionCodeResponse, error) {
 	f.updated = append(f.updated, req)
 	return &tencentscf.UpdateFunctionCodeResponse{RequestID: "update-req"}, nil
