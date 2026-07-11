@@ -31,7 +31,12 @@ func executeMarketWithReceipt(ctx context.Context, item nodeRuntime.JobItem) (no
 	if existing.GetFound() && existing.GetReceipt().GetFinalized() {
 		return nodeRuntime.Result{Summary: existing.GetReceipt().GetSummary().AsMap()}, nil
 	}
-	result, businessErr := executeMarketFeed(ctx, item)
+	workCtx, cancel, err := marketExecutionContext(ctx, time.Now().UTC())
+	if err != nil {
+		return nodeRuntime.Result{}, nodeRuntime.Retryable(err, "MARKET_BUDGET_EXHAUSTED")
+	}
+	result, businessErr := executeMarketFeed(workCtx, item)
+	cancel()
 	status, errorClass := "success", ""
 	subjectStatus := "success"
 	if businessErr != nil {
@@ -52,6 +57,26 @@ func executeMarketWithReceipt(ctx context.Context, item nodeRuntime.JobItem) (no
 		return result, nodeRuntime.Retryable(fmt.Errorf("finalize market attempt: %s", finalized.GetRetInfo().GetMsg()), "ATTEMPT_FINALIZE_FAILED")
 	}
 	return nodeRuntime.Result{Summary: finalized.GetReceipt().GetSummary().AsMap()}, nil
+}
+
+const (
+	marketJobBudget     = 30 * time.Second
+	marketReportReserve = 10 * time.Second
+)
+
+func marketExecutionContext(parent context.Context, now time.Time) (context.Context, context.CancelFunc, error) {
+	deadline := now.Add(marketJobBudget - marketReportReserve)
+	if parentDeadline, ok := parent.Deadline(); ok {
+		reserved := parentDeadline.Add(-marketReportReserve)
+		if reserved.Before(deadline) {
+			deadline = reserved
+		}
+	}
+	if !deadline.After(now) {
+		return nil, nil, fmt.Errorf("market execution budget is exhausted")
+	}
+	ctx, cancel := context.WithDeadline(parent, deadline)
+	return ctx, cancel, nil
 }
 
 func executeMarketFeed(ctx context.Context, item nodeRuntime.JobItem) (nodeRuntime.Result, error) {

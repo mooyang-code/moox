@@ -1,8 +1,10 @@
 package taskrunner
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
@@ -30,6 +32,30 @@ func TestTaskEventFromJobItemUsesStableTaskIDFromParams(t *testing.T) {
 	}
 	if event.Symbol != "BTCUSDT" || len(event.Intervals) != 1 || event.Intervals[0] != "1m" {
 		t.Fatalf("unexpected task event: %#v", event)
+	}
+}
+
+func TestMarketExecutionContextReservesFinalizeWindow(t *testing.T) {
+	now := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	ctx, cancel, err := marketExecutionContext(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok || !deadline.Equal(now.Add(20*time.Second)) {
+		t.Fatalf("deadline=%s", deadline)
+	}
+	parent, parentCancel := context.WithDeadline(context.Background(), now.Add(15*time.Second))
+	defer parentCancel()
+	short, shortCancel, err := marketExecutionContext(parent, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shortCancel()
+	shortDeadline, _ := short.Deadline()
+	if !shortDeadline.Equal(now.Add(5 * time.Second)) {
+		t.Fatalf("short deadline=%s", shortDeadline)
 	}
 }
 
