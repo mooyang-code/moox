@@ -47,6 +47,16 @@ type CollectMgrService interface {
 	GetMarketAttemptReceipt(ctx context.Context, req *GetMarketAttemptReceiptReq) (*GetMarketAttemptReceiptRsp, error)
 
 	FinalizeMarketAttempt(ctx context.Context, req *FinalizeMarketAttemptReq) (*FinalizeMarketAttemptRsp, error)
+
+	ListMarketModules(ctx context.Context, req *ListMarketModulesReq) (*ListMarketModulesRsp, error)
+
+	GetMarketStatus(ctx context.Context, req *GetMarketStatusReq) (*GetMarketStatusRsp, error)
+
+	QueryMarketKlines(ctx context.Context, req *QueryMarketKlinesReq) (*QueryMarketKlinesRsp, error)
+
+	RefreshMarketKlines(ctx context.Context, req *RefreshMarketKlinesReq) (*RefreshMarketKlinesRsp, error)
+
+	ListTaskAttempts(ctx context.Context, req *ListTaskAttemptsReq) (*ListTaskAttemptsRsp, error)
 }
 
 func CollectMgrService_GetTaskRuleList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -301,6 +311,96 @@ func CollectMgrService_FinalizeMarketAttempt_Handler(svr interface{}, ctx contex
 	return rsp, nil
 }
 
+func CollectMgrService_ListMarketModules_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListMarketModulesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ListMarketModules(ctx, reqbody.(*ListMarketModulesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_GetMarketStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetMarketStatusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).GetMarketStatus(ctx, reqbody.(*GetMarketStatusReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_QueryMarketKlines_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &QueryMarketKlinesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).QueryMarketKlines(ctx, reqbody.(*QueryMarketKlinesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_RefreshMarketKlines_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RefreshMarketKlinesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).RefreshMarketKlines(ctx, reqbody.(*RefreshMarketKlinesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ListTaskAttempts_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListTaskAttemptsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ListTaskAttempts(ctx, reqbody.(*ListTaskAttemptsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -361,6 +461,26 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.collector.CollectMgr/FinalizeMarketAttempt",
 			Func: CollectMgrService_FinalizeMarketAttempt_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ListMarketModules",
+			Func: CollectMgrService_ListMarketModules_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/GetMarketStatus",
+			Func: CollectMgrService_GetMarketStatus_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/QueryMarketKlines",
+			Func: CollectMgrService_QueryMarketKlines_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/RefreshMarketKlines",
+			Func: CollectMgrService_RefreshMarketKlines_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ListTaskAttempts",
+			Func: CollectMgrService_ListTaskAttempts_Handler,
 		},
 	},
 }
@@ -427,6 +547,21 @@ func (s *UnimplementedCollectMgr) GetMarketAttemptReceipt(ctx context.Context, r
 func (s *UnimplementedCollectMgr) FinalizeMarketAttempt(ctx context.Context, req *FinalizeMarketAttemptReq) (*FinalizeMarketAttemptRsp, error) {
 	return nil, errors.New("rpc FinalizeMarketAttempt of service CollectMgr is not implemented")
 }
+func (s *UnimplementedCollectMgr) ListMarketModules(ctx context.Context, req *ListMarketModulesReq) (*ListMarketModulesRsp, error) {
+	return nil, errors.New("rpc ListMarketModules of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) GetMarketStatus(ctx context.Context, req *GetMarketStatusReq) (*GetMarketStatusRsp, error) {
+	return nil, errors.New("rpc GetMarketStatus of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) QueryMarketKlines(ctx context.Context, req *QueryMarketKlinesReq) (*QueryMarketKlinesRsp, error) {
+	return nil, errors.New("rpc QueryMarketKlines of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) RefreshMarketKlines(ctx context.Context, req *RefreshMarketKlinesReq) (*RefreshMarketKlinesRsp, error) {
+	return nil, errors.New("rpc RefreshMarketKlines of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) ListTaskAttempts(ctx context.Context, req *ListTaskAttemptsReq) (*ListTaskAttemptsRsp, error) {
+	return nil, errors.New("rpc ListTaskAttempts of service CollectMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -464,6 +599,16 @@ type CollectMgrClientProxy interface {
 	GetMarketAttemptReceipt(ctx context.Context, req *GetMarketAttemptReceiptReq, opts ...client.Option) (rsp *GetMarketAttemptReceiptRsp, err error)
 
 	FinalizeMarketAttempt(ctx context.Context, req *FinalizeMarketAttemptReq, opts ...client.Option) (rsp *FinalizeMarketAttemptRsp, err error)
+
+	ListMarketModules(ctx context.Context, req *ListMarketModulesReq, opts ...client.Option) (rsp *ListMarketModulesRsp, err error)
+
+	GetMarketStatus(ctx context.Context, req *GetMarketStatusReq, opts ...client.Option) (rsp *GetMarketStatusRsp, err error)
+
+	QueryMarketKlines(ctx context.Context, req *QueryMarketKlinesReq, opts ...client.Option) (rsp *QueryMarketKlinesRsp, err error)
+
+	RefreshMarketKlines(ctx context.Context, req *RefreshMarketKlinesReq, opts ...client.Option) (rsp *RefreshMarketKlinesRsp, err error)
+
+	ListTaskAttempts(ctx context.Context, req *ListTaskAttemptsReq, opts ...client.Option) (rsp *ListTaskAttemptsRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -749,6 +894,106 @@ func (c *CollectMgrClientProxyImpl) FinalizeMarketAttempt(ctx context.Context, r
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &FinalizeMarketAttemptRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ListMarketModules(ctx context.Context, req *ListMarketModulesReq, opts ...client.Option) (*ListMarketModulesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ListMarketModules")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ListMarketModules")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListMarketModulesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) GetMarketStatus(ctx context.Context, req *GetMarketStatusReq, opts ...client.Option) (*GetMarketStatusRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetMarketStatus")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("GetMarketStatus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetMarketStatusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) QueryMarketKlines(ctx context.Context, req *QueryMarketKlinesReq, opts ...client.Option) (*QueryMarketKlinesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/QueryMarketKlines")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("QueryMarketKlines")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &QueryMarketKlinesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) RefreshMarketKlines(ctx context.Context, req *RefreshMarketKlinesReq, opts ...client.Option) (*RefreshMarketKlinesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/RefreshMarketKlines")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("RefreshMarketKlines")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RefreshMarketKlinesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ListTaskAttempts(ctx context.Context, req *ListTaskAttemptsReq, opts ...client.Option) (*ListTaskAttemptsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ListTaskAttempts")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ListTaskAttempts")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListTaskAttemptsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

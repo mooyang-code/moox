@@ -310,6 +310,74 @@ message FinalizeMarketAttemptReq {
 }
 message FinalizeMarketAttemptRsp { common.RetInfo ret_info = 1; MarketAttemptReceipt receipt = 2; bool already_finalized = 3; }
 
+message MarketModule {
+  string market_id = 1;
+  string space_id = 2;
+  string readiness_status = 3;
+  bool runtime_enabled = 4;
+  repeated string instrument_types = 5;
+}
+message ListMarketModulesReq {}
+message ListMarketModulesRsp { common.RetInfo ret_info = 1; repeated MarketModule modules = 2; }
+
+message GetMarketStatusReq { string market_id = 1; }
+message GetMarketStatusRsp {
+  common.RetInfo ret_info = 1;
+  MarketModule module = 2;
+  int32 runtime_provider_count = 3;
+}
+
+message MarketKline {
+  string market_id = 1;
+  string instrument_type = 2;
+  string subject_id = 3;
+  string frequency = 4;
+  string data_time = 5;
+  string open = 6;
+  string high = 7;
+  string low = 8;
+  string close = 9;
+  string volume = 10;
+  string amount = 11;
+  string source_provider = 12;
+  string quality_status = 13;
+  int64 revision = 14;
+  string resolved_at = 15;
+}
+message QueryMarketKlinesReq {
+  string market_id = 1;
+  repeated string instrument_types = 2;
+  repeated string subject_ids = 3;
+  string frequency = 4;
+  string start_time = 5;
+  string end_time = 6;
+  string order = 7;
+  int32 page_size = 8;
+  string cursor = 9;
+}
+message QueryMarketKlinesRsp {
+  common.RetInfo ret_info = 1;
+  repeated MarketKline rows = 2;
+  string next_cursor = 3;
+  string query_as_of = 4;
+  string freshness = 5;
+  string coverage_status = 6;
+  repeated string missing_ranges = 7;
+}
+
+message RefreshMarketKlinesReq {
+  string market_id = 1;
+  repeated string instrument_types = 2;
+  repeated string subject_ids = 3;
+  string frequency = 4;
+  string start_time = 5;
+  string end_time = 6;
+}
+message RefreshMarketKlinesRsp { common.RetInfo ret_info = 1; repeated string task_ids = 2; }
+
+message ListTaskAttemptsReq { string task_id = 1; string cursor = 2; int32 page_size = 3; }
+message ListTaskAttemptsRsp { common.RetInfo ret_info = 1; repeated MarketAttemptReceipt attempts = 2; string next_cursor = 3; }
+
 service CollectMgr {
   // ----- 任务规则 -----
   rpc GetTaskRuleList(GetTaskRuleListReq) returns (GetTaskRuleListRsp);
@@ -334,4 +402,9 @@ service CollectMgr {
   rpc ValidateMarketLease(ValidateMarketLeaseReq) returns (ValidateMarketLeaseRsp);
   rpc GetMarketAttemptReceipt(GetMarketAttemptReceiptReq) returns (GetMarketAttemptReceiptRsp);
   rpc FinalizeMarketAttempt(FinalizeMarketAttemptReq) returns (FinalizeMarketAttemptRsp);
+  rpc ListMarketModules(ListMarketModulesReq) returns (ListMarketModulesRsp);
+  rpc GetMarketStatus(GetMarketStatusReq) returns (GetMarketStatusRsp);
+  rpc QueryMarketKlines(QueryMarketKlinesReq) returns (QueryMarketKlinesRsp);
+  rpc RefreshMarketKlines(RefreshMarketKlinesReq) returns (RefreshMarketKlinesRsp);
+  rpc ListTaskAttempts(ListTaskAttemptsReq) returns (ListTaskAttemptsRsp);
 }
