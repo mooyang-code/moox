@@ -39,6 +39,7 @@ type Service struct {
 	datasetSrc    *storagesource.DatasetSource
 	cloudJobs     *taskpublisher.Client
 	marketControl *repository.MarketControlRepository
+	attempts      *repository.MarketAttemptRepository
 }
 
 // New creates a collector management service.
@@ -47,6 +48,7 @@ func New(db *gorm.DB, deps Dependencies) *Service {
 		ruleRepo:      repository.NewTaskRuleRepository(db),
 		instanceRepo:  repository.NewTaskInstanceRepository(db),
 		marketControl: repository.NewMarketControlRepository(db),
+		attempts:      repository.NewMarketAttemptRepository(db),
 		builder:       planner.NewTaskBuilder(),
 		datasetSrc:    storagesource.NewDatasetSource(deps.StorageMetadataTarget),
 		cloudJobs: taskpublisher.New(taskpublisher.Config{

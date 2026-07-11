@@ -1,8 +1,10 @@
 package taskrunner
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
 )
 
@@ -49,5 +51,17 @@ func TestTaskEventFromJobItemAllowsSymbolWithoutSymbolOrInterval(t *testing.T) {
 	}
 	if len(got.Intervals) != 1 || got.Intervals[0] != "" {
 		t.Fatalf("Intervals = %#v, want one empty interval marker", got.Intervals)
+	}
+}
+
+func TestMarketFollowUpsGroupContinuationAndFallbackDeterministically(t *testing.T) {
+	item := nodeRuntime.JobItem{JobType: jobs.JobTypeCollectKline, Params: map[string]any{"provider_id": "primary", "candidate_chain": []any{"primary", "fallback"}, "subject_id": "BTC-USDT"}}
+	continuation := marketFollowUps(item, map[string]any{"next_cursor": "page-2"}, nil)
+	if len(continuation) != 1 || continuation[0].GetKind() != "continuation" || continuation[0].GetPayload().AsMap()["cursor"] != "page-2" {
+		t.Fatalf("continuation=%+v", continuation)
+	}
+	fallback := marketFollowUps(item, map[string]any{}, errors.New("temporary"))
+	if len(fallback) != 1 || fallback[0].GetKind() != "fallback" || fallback[0].GetPayload().AsMap()["provider_id"] != "fallback" {
+		t.Fatalf("fallback=%+v", fallback)
 	}
 }

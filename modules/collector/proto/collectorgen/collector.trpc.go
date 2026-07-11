@@ -43,6 +43,10 @@ type CollectMgrService interface {
 	AcquireProviderPermit(ctx context.Context, req *AcquireProviderPermitReq) (*AcquireProviderPermitRsp, error)
 
 	ValidateMarketLease(ctx context.Context, req *ValidateMarketLeaseReq) (*ValidateMarketLeaseRsp, error)
+
+	GetMarketAttemptReceipt(ctx context.Context, req *GetMarketAttemptReceiptReq) (*GetMarketAttemptReceiptRsp, error)
+
+	FinalizeMarketAttempt(ctx context.Context, req *FinalizeMarketAttemptReq) (*FinalizeMarketAttemptRsp, error)
 }
 
 func CollectMgrService_GetTaskRuleList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -261,6 +265,42 @@ func CollectMgrService_ValidateMarketLease_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
+func CollectMgrService_GetMarketAttemptReceipt_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetMarketAttemptReceiptReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).GetMarketAttemptReceipt(ctx, reqbody.(*GetMarketAttemptReceiptReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_FinalizeMarketAttempt_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &FinalizeMarketAttemptReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).FinalizeMarketAttempt(ctx, reqbody.(*FinalizeMarketAttemptReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -313,6 +353,14 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.collector.CollectMgr/ValidateMarketLease",
 			Func: CollectMgrService_ValidateMarketLease_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/GetMarketAttemptReceipt",
+			Func: CollectMgrService_GetMarketAttemptReceipt_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/FinalizeMarketAttempt",
+			Func: CollectMgrService_FinalizeMarketAttempt_Handler,
 		},
 	},
 }
@@ -373,6 +421,12 @@ func (s *UnimplementedCollectMgr) AcquireProviderPermit(ctx context.Context, req
 func (s *UnimplementedCollectMgr) ValidateMarketLease(ctx context.Context, req *ValidateMarketLeaseReq) (*ValidateMarketLeaseRsp, error) {
 	return nil, errors.New("rpc ValidateMarketLease of service CollectMgr is not implemented")
 }
+func (s *UnimplementedCollectMgr) GetMarketAttemptReceipt(ctx context.Context, req *GetMarketAttemptReceiptReq) (*GetMarketAttemptReceiptRsp, error) {
+	return nil, errors.New("rpc GetMarketAttemptReceipt of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) FinalizeMarketAttempt(ctx context.Context, req *FinalizeMarketAttemptReq) (*FinalizeMarketAttemptRsp, error) {
+	return nil, errors.New("rpc FinalizeMarketAttempt of service CollectMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -406,6 +460,10 @@ type CollectMgrClientProxy interface {
 	AcquireProviderPermit(ctx context.Context, req *AcquireProviderPermitReq, opts ...client.Option) (rsp *AcquireProviderPermitRsp, err error)
 
 	ValidateMarketLease(ctx context.Context, req *ValidateMarketLeaseReq, opts ...client.Option) (rsp *ValidateMarketLeaseRsp, err error)
+
+	GetMarketAttemptReceipt(ctx context.Context, req *GetMarketAttemptReceiptReq, opts ...client.Option) (rsp *GetMarketAttemptReceiptRsp, err error)
+
+	FinalizeMarketAttempt(ctx context.Context, req *FinalizeMarketAttemptReq, opts ...client.Option) (rsp *FinalizeMarketAttemptRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -651,6 +709,46 @@ func (c *CollectMgrClientProxyImpl) ValidateMarketLease(ctx context.Context, req
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ValidateMarketLeaseRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) GetMarketAttemptReceipt(ctx context.Context, req *GetMarketAttemptReceiptReq, opts ...client.Option) (*GetMarketAttemptReceiptRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetMarketAttemptReceipt")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("GetMarketAttemptReceipt")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetMarketAttemptReceiptRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) FinalizeMarketAttempt(ctx context.Context, req *FinalizeMarketAttemptReq, opts ...client.Option) (*FinalizeMarketAttemptRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/FinalizeMarketAttempt")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("FinalizeMarketAttempt")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &FinalizeMarketAttemptRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

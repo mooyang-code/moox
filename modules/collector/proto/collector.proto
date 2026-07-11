@@ -261,6 +261,46 @@ message ValidateMarketLeaseRsp {
   bool valid = 2;
 }
 
+message MarketAttemptSubject {
+  string task_id = 1;
+  string subject_id = 2;
+  string status = 3;
+  int32 next_candidate_index = 4;
+  int64 rows = 5;
+  string error_class = 6;
+}
+
+message MarketAttemptOutbox {
+  string kind = 1;
+  google.protobuf.Struct payload = 2;
+}
+
+message MarketAttemptReceipt {
+  string job_item_id = 1;
+  int32 attempt_no = 2;
+  string market_id = 3;
+  string space_id = 4;
+  string provider_id = 5;
+  string feed = 6;
+  string phase = 7;
+  string status = 8;
+  google.protobuf.Struct summary = 9;
+  string error_class = 10;
+  bool finalized = 11;
+  string finalized_at = 12;
+  repeated MarketAttemptSubject subjects = 13;
+}
+
+message GetMarketAttemptReceiptReq { string job_item_id = 1; int32 attempt_no = 2; }
+message GetMarketAttemptReceiptRsp { common.RetInfo ret_info = 1; MarketAttemptReceipt receipt = 2; bool found = 3; }
+message FinalizeMarketAttemptReq {
+  string job_item_id = 1; int32 attempt_no = 2; string plan_id = 3; string market_id = 4; string space_id = 5;
+  string provider_id = 6; string feed = 7; string phase = 8; string window_start = 9; string window_end = 10;
+  string cursor = 11; string status = 12; google.protobuf.Struct summary = 13; string error_class = 14;
+  repeated MarketAttemptSubject subjects = 15; repeated MarketAttemptOutbox outbox = 16;
+}
+message FinalizeMarketAttemptRsp { common.RetInfo ret_info = 1; MarketAttemptReceipt receipt = 2; bool already_finalized = 3; }
+
 service CollectMgr {
   // ----- 任务规则 -----
   rpc GetTaskRuleList(GetTaskRuleListReq) returns (GetTaskRuleListRsp);
@@ -283,4 +323,6 @@ service CollectMgr {
   // ----- Market execution coordination -----
   rpc AcquireProviderPermit(AcquireProviderPermitReq) returns (AcquireProviderPermitRsp);
   rpc ValidateMarketLease(ValidateMarketLeaseReq) returns (ValidateMarketLeaseRsp);
+  rpc GetMarketAttemptReceipt(GetMarketAttemptReceiptReq) returns (GetMarketAttemptReceiptRsp);
+  rpc FinalizeMarketAttempt(FinalizeMarketAttemptReq) returns (FinalizeMarketAttemptRsp);
 }

@@ -70,14 +70,7 @@ func runtimeSpaceID() string {
 
 func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nodeRuntime.Result, error) {
 	if strings.TrimSpace(stringValue(item.Params, "market_id")) != "" {
-		switch item.JobType {
-		case jobs.JobTypeCollectInstrument:
-			return executeMarketInstrumentJobItem(ctx, item)
-		case jobs.JobTypeCollectCalendar:
-			return executeMarketCalendarJobItem(ctx, item)
-		default:
-			return executeMarketKlineJobItem(ctx, item)
-		}
+		return executeMarketWithReceipt(ctx, item)
 	}
 	taskEvent, err := taskEventFromJobItem(item)
 	if err != nil {
