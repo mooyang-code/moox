@@ -34,6 +34,7 @@
 
 * [MooX EventBus 运维](运维/MooX-EventBus运维.md)
 * [MooX 指标监控](运维/MooX指标监控.md)
+* [MooX Trade 运维](运维/MooX-Trade运维.md)
 
 ## 第四部分：因子计算
 
@@ -41,6 +42,7 @@
 
 ## 第五部分：交易系统
 
+* [Trade 交易模块功能说明](交易模块功能说明.md)
 * [Trade 交易模块架构设计](交易模块架构设计.md)
 * [Trade 模块重写执行计划](superpowers/plans/2026-07-11-trade-module-rewrite.md)
 
