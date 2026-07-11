@@ -678,6 +678,9 @@ func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb
 	if err != nil {
 		return nil, err
 	}
+	if err := s.hydrateViewRecordMode(ctx, view); err != nil {
+		return nil, err
+	}
 	columns, _, err := s.ListViewColumns(ctx, spaceID, viewID, nil)
 	if err != nil {
 		return nil, err
@@ -711,6 +714,9 @@ func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string,
 		return nil, nil, err
 	}
 	for _, item := range items {
+		if err := s.hydrateViewRecordMode(ctx, item); err != nil {
+			return nil, nil, err
+		}
 		columns, _, err := s.ListViewColumns(ctx, item.GetSpaceId(), item.GetViewId(), nil)
 		if err != nil {
 			return nil, nil, err
@@ -723,6 +729,22 @@ func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string,
 		item.IndexBuild = build
 	}
 	return items, pageResult, nil
+}
+
+// c_record_view_mode is persisted as a dedicated column so it remains
+// queryable even when the protojson attribute payload omits a non-default
+// enum field. Hydrate it on every read; otherwise HISTORY views silently
+// degrade to CURRENT in the query and builder paths.
+func (s *Store) hydrateViewRecordMode(ctx context.Context, view *pb.View) error {
+	if view == nil {
+		return nil
+	}
+	var mode int32
+	if err := s.db.QueryRowContext(ctx, `SELECT c_record_view_mode FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, view.GetSpaceId(), view.GetViewId()).Scan(&mode); err != nil {
+		return err
+	}
+	view.RecordViewMode = pb.RecordViewMode(mode)
+	return nil
 }
 
 func cloneViewColumns(columns []*pb.ViewColumn) []*pb.ViewColumn {

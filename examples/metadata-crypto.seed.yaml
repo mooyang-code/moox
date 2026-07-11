@@ -695,7 +695,6 @@ views:
     primary_dataset_id: binance_spot_symbols
     dataset_ids: ["binance_spot_symbols", "spot_symbol_profiles"]
     grain_keys: ["record_id"]
-    record_view_mode: current
     filter_json: ''
     engine: bleve
     status: active

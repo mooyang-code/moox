@@ -37,7 +37,7 @@ func postStorage(ctx context.Context, storageURL string, service string, method 
 }
 
 func postStorageRaw(ctx context.Context, storageURL string, service string, method string, req proto.Message, rsp proto.Message) error {
-	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(req)
+	raw, err := protojson.MarshalOptions{UseProtoNames: true, UseEnumNumbers: true}.Marshal(req)
 	if err != nil {
 		return err
 	}
