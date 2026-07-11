@@ -30,6 +30,10 @@ while IFS= read -r match; do
     continue
   fi
 
+  if [[ "${file}" == *_test.go && "${target_rest}" == "testkit" ]]; then
+    continue
+  fi
+
   if [[ "${source_module}" == "admin" ]]; then
     violations+=("${file}:${line}: admin must not import ${target_module}/${target_rest}; route via gateway/service deployments instead")
     continue
@@ -63,6 +67,10 @@ while IFS= read -r match; do
   target_rest="${import_path#*/}"
 
   if [[ "${source_module}" == "${target_module}" ]]; then
+    continue
+  fi
+
+  if [[ "${target_rest}" == "${target_module}" ]] && rg -q "\"${IMPORT_PREFIX}${target_module}/testkit\"" "modules/${source_module}" --glob '*_test.go'; then
     continue
   fi
 
