@@ -211,7 +211,7 @@ func TestPublishRejectsChangingExistingVersion(t *testing.T) {
 
 必填 api_version、id、version、entrypoint、data columns/lookback、params schema、state schema version；拒绝未知根字段和重复列。
 
-- [ ] **Step 3: 使用 pyruntime Materializer 发布源码**
+- [ ] **Step 3: 使用 pyruntime `SourcePublisher` 发布源码**
 
 发布顺序是 parse manifest、重算 hash、物化、LOAD 验证 `run`、写 DB；不把 draft 文件目录当运行版本。
 

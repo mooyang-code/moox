@@ -152,7 +152,7 @@ func TestPublishNewSourceDoesNotOverwriteActiveVersion(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 用 `modulecache.Materializer` 取代 `<name>.py` 原地覆盖**
+- [ ] **Step 2: 用 `moduleregistry.SourcePublisher` 取代 `<name>.py` 原地覆盖**
 
 RPC/CLI 提交源码时，服务端重算 SHA-256，先物化并 LOAD 验证，再事务性切换 `c_source_hash`。LOAD 失败时 DB active hash 不变。
 

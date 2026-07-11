@@ -35,9 +35,9 @@ packages/pyruntime/
 ├── pool/
 │   ├── pool.go
 │   └── pool_test.go
-├── modulecache/
-│   ├── materializer.go
-│   └── materializer_test.go
+├── moduleregistry/
+│   ├── publisher.go
+│   └── publisher_test.go
 ├── transport/
 │   ├── encoding.go
 │   ├── arrow.go
@@ -269,18 +269,18 @@ git add packages/pyruntime/process
 git commit -m "feat(pyruntime): supervise and rebuild workers"
 ```
 
-### Task 6: 实现 source hash 不可变物化与 LOAD
+### Task 6: 实现 source hash 不可变版本发布与 LOAD
 
 **Files:**
-- Create: `packages/pyruntime/modulecache/materializer.go`
-- Create: `packages/pyruntime/modulecache/materializer_test.go`
+- Create: `packages/pyruntime/moduleregistry/publisher.go`
+- Create: `packages/pyruntime/moduleregistry/publisher_test.go`
 - Modify: `packages/pyruntime/process/worker.go`
 
 - [ ] **Step 1: 写 hash 重算、原子发布、同名版本隔离和路径穿越测试**
 
 ```go
 func TestMaterializeRejectsLogicalIDTraversal(t *testing.T) {
-	_, err := NewMaterializer(t.TempDir()).Put(context.Background(), ModuleSource{Type: "factor", LogicalID: "../x", Source: []byte("x=1")})
+	_, err := NewSourcePublisher(t.TempDir()).Publish(context.Background(), ModuleSource{Type: "factor", LogicalID: "../x", Source: []byte("x=1")})
 	if !errors.Is(err, ErrInvalidLogicalID) { t.Fatalf("err=%v", err) }
 }
 ```
@@ -290,21 +290,21 @@ func TestMaterializeRejectsLogicalIDTraversal(t *testing.T) {
 ```go
 type ModuleSource struct { Type, LogicalID string; Source []byte }
 type ModuleVersion struct { Type, LogicalID, SourceHash, Path string }
-func (m *Materializer) Put(ctx context.Context, src ModuleSource) (ModuleVersion, error)
+func (p *SourcePublisher) Publish(ctx context.Context, src ModuleSource) (ModuleVersion, error)
 ```
 
 路径固定为 `<root>/<type>/<logical_id>/<sha256>/module.py`，先写 temp dir、fsync、rename；已存在 hash 直接复用，不覆盖。
 
 - [ ] **Step 3: 让 Worker.Load 核对 Python 返回的 source hash 和入口清单**
 
-Run: `cd packages/pyruntime && go test ./modulecache ./process -count=1`
+Run: `cd packages/pyruntime && go test ./moduleregistry ./process -count=1`
 
 Expected: PASS。
 
 - [ ] **Step 4: 提交**
 
 ```bash
-git add packages/pyruntime/modulecache packages/pyruntime/process
+git add packages/pyruntime/moduleregistry packages/pyruntime/process
 git commit -m "feat(pyruntime): materialize immutable Python modules"
 ```
 

@@ -66,7 +66,7 @@ packages/pyruntime/
 ├── protocol/       # 帧、消息类型、版本协商和大小限制
 ├── supervisor/     # 进程启动、终止、重建、轮换和状态机
 ├── transport/      # JSON、Arrow IPC、mmap snapshot
-├── modulecache/    # source hash、LOAD 和已加载清单
+├── moduleregistry/ # 源码版本、source hash、LOAD 和版本清单
 ├── logging/        # stdout/stderr 捕获和结构化日志
 ├── metrics/        # worker、任务、传输和资源指标
 └── testkit/        # fake worker、崩溃/超时/污染测试工具
