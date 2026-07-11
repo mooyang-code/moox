@@ -38,7 +38,7 @@ data_sources:
       provider_id: eastmoney
   - {space_id: stock_cn, data_source_id: ifeng, name: 凤凰行情, kind: vendor_api, market: CN, timezone: Asia/Shanghai, status: active, attributes: {provider_id: ifeng}}
   - {space_id: stock_cn, data_source_id: tencent, name: 腾讯行情, kind: vendor_api, market: CN, timezone: Asia/Shanghai, status: active, attributes: {provider_id: tencent}}
-  - {space_id: stock_cn, data_source_id: tdx, name: 通达信行情, kind: vendor_tcp, market: CN, timezone: Asia/Shanghai, status: active, attributes: {provider_id: tdx}}
+  - {space_id: stock_cn, data_source_id: tdx, name: 通达信行情, kind: vendor_api, market: CN, timezone: Asia/Shanghai, status: active, attributes: {provider_id: tdx}}
 fields:
   - {space_id: stock_cn, field_id: open, name: 开盘价, value_type: double, status: active}
   - {space_id: stock_cn, field_id: high, name: 最高价, value_type: double, status: active}
