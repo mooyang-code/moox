@@ -149,6 +149,12 @@ export const staticRoutes = [
         meta: { title: "collector-packages" }
       },
       {
+        path: "/collector/markets",
+        name: "collector-markets",
+        component: () => import("@/views/collector/market-status/market-status.vue"),
+        meta: { title: "collector-markets" }
+      },
+      {
         path: "/collector/rules",
         name: "collector-rules",
         component: () => import("@/views/collector/collector-rules/collector-rules.vue"),

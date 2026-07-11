@@ -47,6 +47,7 @@ export default {
     ["collector-packages"]: "code packages",
     ["collector-rules"]: "collection rules",
     ["collector-tasks"]: "task instances",
+    ["collector-markets"]: "market status",
     ["trading-accounts"]: "accounts",
     ["trading-positions"]: "positions",
     ["trading-orders"]: "orders",

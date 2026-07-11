@@ -47,6 +47,7 @@ export default {
     ["collector-packages"]: "代码包",
     ["collector-rules"]: "采集规则",
     ["collector-tasks"]: "任务实例",
+    ["collector-markets"]: "市场状态",
     ["trading-accounts"]: "账户总览",
     ["trading-positions"]: "持仓详情",
     ["trading-orders"]: "交易明细",
