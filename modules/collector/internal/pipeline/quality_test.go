@@ -26,8 +26,8 @@ func TestResolveKlineChoosesOneWholeProviderRowAndRevisionsOnlyOnBusinessChange(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unchanged.Row.Revision != existing.Revision {
-		t.Fatalf("retry changed revision: %d", unchanged.Row.Revision)
+	if unchanged.Row != nil || len(unchanged.Events) != 0 || unchanged.NoWriteReason != "unchanged" {
+		t.Fatalf("unchanged retry produced a write: %+v", unchanged)
 	}
 	changed := pipelineKline("primary", "12")
 	revised, err := resolver.Resolve([]marketdata.ProviderKline{changed}, &existing)

@@ -87,6 +87,7 @@ func (p *Provider) FetchKlines(ctx context.Context, gate providers.RequestGate, 
 		startOffset = uint16(parsed)
 	}
 	for index, subject := range req.Subjects {
+		coveredStart := req.StartTime.IsZero()
 		permit, err := gate.BeforeRequest(ctx, providers.RequestMeta{ProviderID: p.ID(), RequestIndex: index, EndpointClass: "security_bars", RequestCost: 1})
 		if err != nil {
 			return result, err
@@ -112,13 +113,16 @@ func (p *Provider) FetchKlines(ctx context.Context, gate providers.RequestGate, 
 			if err != nil {
 				return result, err
 			}
+			if !req.StartTime.IsZero() && !row.DataTime.After(req.StartTime.UTC()) {
+				coveredStart = true
+			}
 			if !req.StartTime.IsZero() && row.DataTime.Before(req.StartTime.UTC()) || !req.EndTime.IsZero() && row.DataTime.After(req.EndTime.UTC()) {
 				continue
 			}
 			result.Rows = append(result.Rows, row)
 		}
 		result.RequestCount++
-		if len(values) == count {
+		if len(values) == count && !coveredStart {
 			result.Complete = false
 			result.NextCursor = strconv.Itoa(int(startOffset) + len(values))
 		}

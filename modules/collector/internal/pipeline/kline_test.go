@@ -32,6 +32,17 @@ func TestKlinePipelineDoesNotResolveWhenSourceWriteFails(t *testing.T) {
 	}
 }
 
+func TestKlinePipelinePreservesProviderContinuationCursor(t *testing.T) {
+	p := KlinePipeline{Provider: &pipelineProvider{row: pipelineKline("binance", "10"), nextCursor: "page-2"}, Gate: providers.StaticGate{Permit: providers.RequestPermit{Allowed: true}}, Store: &pipelineStore{}, Resolver: QualityResolver{Policy: QualityPolicy{AuthoritativeSingleSource: true}}, SourceDatasetID: "binance_kline", UnifiedDatasetID: "spot_kline"}
+	result, err := p.Run(context.Background(), providers.FetchKlinesRequest{Frequency: marketdata.FrequencyMinute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Complete || result.NextCursor != "page-2" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestKlinePipelineWritesQualityEventAfterUnifiedRow(t *testing.T) {
 	store := &pipelineStore{}
 	p := KlinePipeline{Provider: &pipelineProvider{row: pipelineKline("binance", "10")}, Gate: providers.StaticGate{Permit: providers.RequestPermit{Allowed: true}}, Store: store, Resolver: QualityResolver{Policy: QualityPolicy{AuthoritativeSingleSource: true}}, SourceDatasetID: "binance_kline", UnifiedDatasetID: "spot_kline", QualityDatasetID: "kline_quality_event"}
@@ -43,12 +54,15 @@ func TestKlinePipelineWritesQualityEventAfterUnifiedRow(t *testing.T) {
 	}
 }
 
-type pipelineProvider struct{ row marketdata.ProviderKline }
+type pipelineProvider struct {
+	row        marketdata.ProviderKline
+	nextCursor string
+}
 
 func (p *pipelineProvider) ID() marketdata.ProviderID            { return p.row.ProviderID }
 func (p *pipelineProvider) Capabilities() []providers.Capability { return nil }
 func (p *pipelineProvider) FetchKlines(context.Context, providers.RequestGate, providers.FetchKlinesRequest) (providers.FetchKlinesResult, error) {
-	return providers.FetchKlinesResult{Rows: []marketdata.ProviderKline{p.row}, Complete: true, RequestCount: 1}, nil
+	return providers.FetchKlinesResult{Rows: []marketdata.ProviderKline{p.row}, Complete: p.nextCursor == "", NextCursor: p.nextCursor, RequestCount: 1}, nil
 }
 
 type pipelineStore struct {

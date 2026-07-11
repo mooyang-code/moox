@@ -39,6 +39,7 @@ type KlinePipelineResult struct {
 	UnifiedRows  int
 	RequestCount int
 	Complete     bool
+	NextCursor   string
 }
 
 func (p KlinePipeline) Run(ctx context.Context, request providers.FetchKlinesRequest) (KlinePipelineResult, error) {
@@ -55,7 +56,7 @@ func (p KlinePipeline) Run(ctx context.Context, request providers.FetchKlinesReq
 			closed = append(closed, row)
 		}
 	}
-	result := KlinePipelineResult{FetchedRows: len(fetched.Rows), RequestCount: fetched.RequestCount, Complete: fetched.Complete}
+	result := KlinePipelineResult{FetchedRows: len(fetched.Rows), RequestCount: fetched.RequestCount, Complete: fetched.Complete, NextCursor: fetched.NextCursor}
 	if len(closed) == 0 {
 		return result, nil
 	}

@@ -59,6 +59,23 @@ func TestFetchKlinesDoesNotDialWhenGateDenies(t *testing.T) {
 	}
 }
 
+func TestFetchKlinesStopsPagingWhenPageCoversRequestedStart(t *testing.T) {
+	location, _ := time.LoadLocation("Asia/Shanghai")
+	values := make([]RawKline, 800)
+	for index := range values {
+		values[index] = RawKline{Time: time.Date(2026, 7, 9, 0, 0, 0, 0, location), Open: 10, High: 11, Low: 9, Close: 10, Volume: 1, Amount: 10}
+	}
+	values[len(values)-1].Time = time.Date(2026, 7, 10, 0, 0, 0, 0, location)
+	p := New(Config{Address: "127.0.0.1:7709", Dialer: &fakeDialer{client: &fakeClient{klines: values}}, Now: func() time.Time { return time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC) }})
+	result, err := p.FetchKlines(context.Background(), providers.StaticGate{Permit: providers.RequestPermit{Allowed: true}}, providers.FetchKlinesRequest{ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity, Frequency: marketdata.FrequencyDay, Subjects: []providers.ProviderSubject{{SubjectID: "600000.XSHG", ProviderSymbol: "600000"}}, StartTime: time.Date(2026, 7, 10, 0, 0, 0, 0, location), EndTime: time.Date(2026, 7, 10, 23, 59, 59, 0, location), Limit: 800})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Complete || result.NextCursor != "" || len(result.Rows) != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestFetchInstrumentsClassifiesExchangeScopedCodes(t *testing.T) {
 	now := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
 	client := &fakeClient{securities: []RawSecurity{{Market: exchange.MarketIdShangHai, Code: "000001", Name: "上证指数"}, {Market: exchange.MarketIdShangHai, Code: "510300", Name: "沪深300ETF"}, {Market: exchange.MarketIdShangHai, Code: "600000", Name: "浦发银行"}}}

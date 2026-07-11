@@ -81,7 +81,7 @@ func (r QualityResolver) Resolve(candidates []marketdata.ProviderKline, existing
 	if existing != nil {
 		revision = existing.Revision
 		if sameBusinessRow(existing.ProviderKline, winner) && existing.QualityStatus == status {
-			resolvedAt = existing.ResolvedAt
+			return QualityDecision{NoWriteReason: "unchanged"}, nil
 		} else {
 			revision++
 		}
