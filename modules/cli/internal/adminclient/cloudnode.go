@@ -87,6 +87,18 @@ type BatchChangeResponse struct {
 	ProcessedCount int
 }
 
+type CloudNode struct {
+	SpaceID string `json:"space_id"`
+	NodeID  string `json:"node_id"`
+	Status  int    `json:"status"`
+}
+
+type JobItem struct {
+	SpaceID   string `json:"space_id"`
+	JobItemID string `json:"job_item_id"`
+	Status    int    `json:"status"`
+}
+
 // ListCloudAccounts 调 cloudnode/ListCloudAccounts，返回脱敏账户列表。
 func (c *Client) ListCloudAccounts(ctx context.Context, provider string) ([]CloudAccount, error) {
 	body := map[string]string{}
@@ -181,6 +193,78 @@ func (c *Client) BatchDeployNodes(ctx context.Context, deployments []NodeDeployI
 		return nil, err
 	}
 	return parseBatchChangeResponse(raw, "BatchDeployNodes")
+}
+
+func (c *Client) ListNodes(ctx context.Context, page, size int) ([]CloudNode, bool, error) {
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeList", map[string]any{
+		"page": map[string]int{"page": page, "size": size},
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	var resp struct {
+		RetInfo *retInfo    `json:"ret_info"`
+		Items   []CloudNode `json:"items"`
+		Page    struct {
+			HasMore bool `json:"has_more"`
+		} `json:"page"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, false, err
+	}
+	if resp.RetInfo != nil && !isRetInfoSuccess(resp.RetInfo.Code) {
+		return nil, false, fmt.Errorf("GetNodeList: code %d: %s", resp.RetInfo.Code, resp.RetInfo.Msg)
+	}
+	return resp.Items, resp.Page.HasMore, nil
+}
+
+func (c *Client) BatchDeleteNodes(ctx context.Context, nodeIDs []string) (*BatchChangeResponse, error) {
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/BatchDeleteNodes", map[string]any{"node_ids": nodeIDs})
+	if err != nil {
+		return nil, err
+	}
+	return parseBatchChangeResponse(raw, "BatchDeleteNodes")
+}
+
+func (c *Client) ListJobItems(ctx context.Context, status, page, size int) ([]JobItem, bool, error) {
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/ListJobItems", map[string]any{
+		"status": status,
+		"page":   map[string]int{"page": page, "size": size},
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	var resp struct {
+		RetInfo *retInfo  `json:"ret_info"`
+		Items   []JobItem `json:"items"`
+		Page    struct {
+			HasMore bool `json:"has_more"`
+		} `json:"page"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, false, err
+	}
+	if resp.RetInfo != nil && !isRetInfoSuccess(resp.RetInfo.Code) {
+		return nil, false, fmt.Errorf("ListJobItems: code %d: %s", resp.RetInfo.Code, resp.RetInfo.Msg)
+	}
+	return resp.Items, resp.Page.HasMore, nil
+}
+
+func (c *Client) CancelJobItem(ctx context.Context, jobItemID string) error {
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/CancelJobItem", map[string]string{"job_item_id": jobItemID})
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		RetInfo *retInfo `json:"ret_info"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return err
+	}
+	if resp.RetInfo != nil && !isRetInfoSuccess(resp.RetInfo.Code) {
+		return fmt.Errorf("CancelJobItem: code %d: %s", resp.RetInfo.Code, resp.RetInfo.Msg)
+	}
+	return nil
 }
 
 func parseBatchChangeResponse(raw []byte, method string) (*BatchChangeResponse, error) {

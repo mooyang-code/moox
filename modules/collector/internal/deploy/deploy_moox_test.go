@@ -276,6 +276,42 @@ func TestDeployStartScriptWaitsForFactorNATS(t *testing.T) {
 	}
 }
 
+func TestMarketV2CutoverPreflightsBeforeStoppingAndPreservesStorage(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
+	raw, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "deploy-moox.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(raw)
+
+	for _, want := range []string{
+		`MARKET_V2_CUTOVER="${MOOX_COLLECTOR_MARKET_V2_CUTOVER:-0}"`,
+		`legacy-cutover --mode preflight --legacy-space crypto`,
+		`legacy-cutover --mode drain --legacy-space crypto`,
+		`.market-v2.backup`,
+		`moox_collector_market_v2.db`,
+		`Market V2 cutover forbids --reset-data`,
+		`must have mode 600`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("Market V2 cutover contract is missing %q", want)
+		}
+	}
+	preflight := strings.Index(script, `legacy-cutover --mode preflight --legacy-space crypto`)
+	stop := strings.Index(script[preflight:], `"${DEPLOY_DIR}/stop.sh"`)
+	if preflight < 0 || stop < 0 {
+		t.Fatal("remote cutover must preflight before stopping services")
+	}
+	cutoverGuard := script[strings.Index(script, `if [[ "${MARKET_V2_CUTOVER}" == "1" ]]`):]
+	if strings.Contains(cutoverGuard[:strings.Index(cutoverGuard, "sync_local_stage()")], `rm -rf "${deploy_dir}/data"`) {
+		t.Fatal("Market V2 preflight deletes Storage data")
+	}
+}
+
 func mustMkdir(t *testing.T, paths ...string) {
 	t.Helper()
 	for _, path := range paths {

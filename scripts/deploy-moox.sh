@@ -17,6 +17,7 @@ WITH_FACTOR=1
 WITH_MONITOR=1
 BUILD_WEB_ASSETS=1
 RESET_DATA=0
+MARKET_V2_CUTOVER="${MOOX_COLLECTOR_MARKET_V2_CUTOVER:-0}"
 TARGET_GOOS=""
 TARGET_GOARCH=""
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
@@ -153,6 +154,10 @@ done
 
 [[ -n "${TARGET}" ]] || fail "--target cannot be empty"
 [[ -n "${DEPLOY_DIR}" ]] || fail "--dir cannot be empty"
+if [[ "${MARKET_V2_CUTOVER}" == "1" ]]; then
+  [[ "${RESET_DATA}" -eq 0 ]] || fail "Market V2 cutover forbids --reset-data"
+  [[ "${WITH_COLLECTOR}" -eq 1 && "${WITH_CLOUDNODE}" -eq 1 ]] || fail "Market V2 cutover requires Collector and CloudNode"
+fi
 
 is_local_target() {
   [[ "${TARGET}" == "localhost" || "${TARGET}" == "127.0.0.1" || "${TARGET}" == "::1" ]]
@@ -1327,10 +1332,47 @@ prepare_stage() {
   fi
 }
 
+market_v2_local_preflight() {
+  local deploy_dir="$1"
+  local env_file="${deploy_dir}/env.sh"
+  [[ -f "${env_file}" ]] || fail "Market V2 cutover requires ${env_file}"
+  local env_mode
+  env_mode="$(stat -f '%Lp' "${env_file}" 2>/dev/null || stat -c '%a' "${env_file}")"
+  [[ "${env_mode}" == "600" ]] || fail "${env_file} must have mode 600 (got ${env_mode})"
+
+  set -a
+  # shellcheck disable=SC1090
+  . "${env_file}"
+  set +a
+  : "${MOOX_SERVICE_AUTH_ACCESS_KEY:?Market V2 cutover requires service auth access key}"
+  : "${MOOX_SERVICE_AUTH_SECRET_KEY:?Market V2 cutover requires service auth secret key}"
+  : "${MOOX_CLOUD_ACCOUNT_ID:?Market V2 cutover requires cloud account id}"
+  : "${TENCENTCLOUD_REGION:?Market V2 cutover requires Tencent Cloud region}"
+
+  "${STAGE_DIR}/bin/moox-cli" collector legacy-cutover --mode preflight --legacy-space crypto --control-url "${MOOX_CONTROL_URL:-http://127.0.0.1:11000}" >/dev/null
+  "${STAGE_DIR}/bin/moox-cli" collector legacy-cutover --mode drain --legacy-space crypto --control-url "${MOOX_CONTROL_URL:-http://127.0.0.1:11000}" >/dev/null
+
+  mkdir -p "${deploy_dir}/data/collector"
+  local legacy_db="${deploy_dir}/data/collector/moox_collector.db"
+  local legacy_backup="${legacy_db}.market-v2.backup"
+  if [[ -f "${legacy_db}" && ! -f "${legacy_backup}" ]]; then
+    cp -p "${legacy_db}" "${legacy_backup}"
+  fi
+  local v2_db="${deploy_dir}/data/collector/moox_collector_market_v2.db"
+  if [[ -f "${v2_db}" ]]; then
+    [[ "$(head -c 16 "${v2_db}")" == "SQLite format 3 " ]] || fail "incompatible Market V2 database: ${v2_db}"
+  fi
+  "${STAGE_DIR}/bin/moox-collector-cli" init --db-path "${v2_db}"
+}
+
 sync_local_stage() {
   local deploy_dir
   deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
   mkdir -p "${deploy_dir}"
+
+  if [[ "${MARKET_V2_CUTOVER}" == "1" ]]; then
+    market_v2_local_preflight "${deploy_dir}"
+  fi
 
   if [[ -x "${deploy_dir}/stop.sh" && "${NO_START}" -eq 0 ]]; then
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
@@ -1463,7 +1505,7 @@ sync_remote_stage() {
   log "upload ${archive} to ${TARGET}:${remote_archive}"
   scp "${archive}" "${TARGET}:${remote_archive}"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_reset_data quoted_market_v2_cutover quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -1476,13 +1518,14 @@ sync_remote_stage() {
   quoted_with_monitor="$(shell_quote "${WITH_MONITOR}")"
   quoted_with_web_host="$(shell_quote "${WITH_WEB_HOST}")"
   quoted_reset_data="$(shell_quote "${RESET_DATA}")"
+  quoted_market_v2_cutover="$(shell_quote "${MARKET_V2_CUTOVER}")"
   quoted_metrics_metadata_url="$(shell_quote "${METRICS_METADATA_URL}")"
   quoted_metrics_route_seed="$(shell_quote "${METRICS_ROUTE_SEED}")"
   quoted_host_route_seed="$(shell_quote "${HOST_ROUTE_SEED}")"
   quoted_eventbus_url="$(shell_quote "${EVENTBUS_URL_ENV}")"
   quoted_metrics_eventbus_url="$(shell_quote "${METRICS_EVENTBUS_URL_ENV}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_HOST_STORAGE_ROUTE_SEED=${quoted_host_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} RESET_DATA=${quoted_reset_data} MARKET_V2_CUTOVER=${quoted_market_v2_cutover} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_HOST_STORAGE_ROUTE_SEED=${quoted_host_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} bash -s" <<'EOF'
 set -euo pipefail
 
 if [[ "${DEPLOY_DIR}" == "~" ]]; then
@@ -1492,6 +1535,55 @@ elif [[ "${DEPLOY_DIR}" == "~/"* ]]; then
 fi
 
 mkdir -p "${DEPLOY_DIR}"
+
+ROLLBACK_ARCHIVE=""
+rollback_market_v2_cutover() {
+  local exit_code="$?"
+  trap - ERR
+  if [[ -n "${ROLLBACK_ARCHIVE}" && -f "${ROLLBACK_ARCHIVE}" ]]; then
+    echo "Market V2 deployment failed; restoring previous Collector runtime" >&2
+    tar -C "${DEPLOY_DIR}" -xzf "${ROLLBACK_ARCHIVE}" || true
+    if [[ -x "${DEPLOY_DIR}/bin/moox-cli" && -r "${DEPLOY_DIR}/env.sh" ]]; then
+      set -a; . "${DEPLOY_DIR}/env.sh"; set +a
+      "${DEPLOY_DIR}/bin/moox-cli" collector legacy-cutover --mode rollback --legacy-space crypto --control-url "${MOOX_CONTROL_URL:-http://127.0.0.1:11000}" >/dev/null 2>&1 || true
+    fi
+    [[ "${NO_START}" == "1" || ! -x "${DEPLOY_DIR}/start.sh" ]] || "${DEPLOY_DIR}/start.sh" || true
+  fi
+  exit "${exit_code}"
+}
+
+if [[ "${MARKET_V2_CUTOVER}" == "1" ]]; then
+  ENV_FILE="${DEPLOY_DIR}/env.sh"
+  [[ -f "${ENV_FILE}" ]] || { echo "Market V2 cutover requires ${ENV_FILE}" >&2; exit 1; }
+  ENV_MODE="$(stat -c '%a' "${ENV_FILE}" 2>/dev/null || stat -f '%Lp' "${ENV_FILE}")"
+  [[ "${ENV_MODE}" == "600" ]] || { echo "${ENV_FILE} must have mode 600 (got ${ENV_MODE})" >&2; exit 1; }
+  set -a; . "${ENV_FILE}"; set +a
+  : "${MOOX_SERVICE_AUTH_ACCESS_KEY:?Market V2 cutover requires service auth access key}"
+  : "${MOOX_SERVICE_AUTH_SECRET_KEY:?Market V2 cutover requires service auth secret key}"
+  : "${MOOX_CLOUD_ACCOUNT_ID:?Market V2 cutover requires cloud account id}"
+  : "${TENCENTCLOUD_REGION:?Market V2 cutover requires Tencent Cloud region}"
+  CUTOVER_TMP="$(mktemp -d)"
+  tar -C "${CUTOVER_TMP}" -xzf "${ARCHIVE}" ./bin/moox-cli ./bin/moox-collector-cli
+  "${CUTOVER_TMP}/bin/moox-cli" collector legacy-cutover --mode preflight --legacy-space crypto --control-url "${MOOX_CONTROL_URL:-http://127.0.0.1:11000}" >/dev/null
+  "${CUTOVER_TMP}/bin/moox-cli" collector legacy-cutover --mode drain --legacy-space crypto --control-url "${MOOX_CONTROL_URL:-http://127.0.0.1:11000}" >/dev/null
+  mkdir -p "${DEPLOY_DIR}/data/collector"
+  LEGACY_DB="${DEPLOY_DIR}/data/collector/moox_collector.db"
+  LEGACY_BACKUP="${LEGACY_DB}.market-v2.backup"
+  if [[ -f "${LEGACY_DB}" && ! -f "${LEGACY_BACKUP}" ]]; then cp -p "${LEGACY_DB}" "${LEGACY_BACKUP}"; fi
+  V2_DB="${DEPLOY_DIR}/data/collector/moox_collector_market_v2.db"
+  if [[ -f "${V2_DB}" ]]; then
+    [[ "$(head -c 16 "${V2_DB}")" == "SQLite format 3 " ]] || { echo "incompatible Market V2 database: ${V2_DB}" >&2; exit 1; }
+  fi
+  "${CUTOVER_TMP}/bin/moox-collector-cli" init --db-path "${V2_DB}"
+  rm -rf "${CUTOVER_TMP}"
+  ROLLBACK_ARCHIVE="${DEPLOY_DIR}/.collector-market-v2-rollback.tar.gz"
+  rollback_paths=()
+  for path in collector bin/moox-collector bin/moox-collector-cli bin/moox-collector-scf bin/moox-cli start.sh stop.sh restart.sh status.sh healthcheck.sh; do
+    [[ -e "${DEPLOY_DIR}/${path}" ]] && rollback_paths+=("${path}")
+  done
+  if [[ "${#rollback_paths[@]}" -gt 0 ]]; then tar -C "${DEPLOY_DIR}" -czf "${ROLLBACK_ARCHIVE}" "${rollback_paths[@]}"; fi
+  trap rollback_market_v2_cutover ERR
+fi
 mkdir -p "${HOME}/.config/moox/credentials"
 KEY_FILE="${HOME}/.config/moox/credentials/admin-encryption-key"
 if [[ ! -f "${KEY_FILE}" ]]; then
@@ -1574,6 +1666,8 @@ chmod +x "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/status.
 if [[ "${NO_START}" -eq 0 ]]; then
   "${DEPLOY_DIR}/start.sh"
 fi
+trap - ERR
+[[ -z "${ROLLBACK_ARCHIVE}" ]] || rm -f "${ROLLBACK_ARCHIVE}"
 EOF
   log "deployed to ${TARGET}:${DEPLOY_DIR}"
 }
