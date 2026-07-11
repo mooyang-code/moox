@@ -115,10 +115,10 @@ Go 先应用 `params_schema` 中的 `default`，再校验 `required` 和其他�
 - 参数实际值
 - 回测区间或实时触发配置
 - 策略资金预算和多策略分配比例
-- 账户、通道和交易模式
+- 执行账户、通道、资金倍率、交易模式和执行策略
 - 最大总敞口、净敞口、单标的权重和杠杆限制
 
-同一个策略包可以绑定到多个数据范围、参数组合和账户。Python 无需为每个部署复制代码。
+同一个策略包可以绑定到多个数据范围和参数组合；同一个策略组合也可以绑定多个执行账户。Python 无需为每个部署或账户复制代码。
 
 ### `strategy.py`
 
@@ -136,6 +136,19 @@ def run(
 
 V1 运行环境只保证提供 Python 标准库、`pandas` 和 `numpy`。策略不得依赖未声明的本机包。
 
+### Python 如何运行
+
+Strategy 不会把 `strategy.py` 当命令执行，也不会为每个 Bar 启动一次 Python。Go 启动固定数量的常驻 worker，由 worker：
+
+1. 与 Go 完成协议、Python、SDK 和依赖环境版本握手。
+2. 按 `source_hash` 使用唯一模块名加载不可变策略版本。
+3. 收到任务后调用 `run(context, data, params, state)`。
+4. 捕获策略日志，校验并返回结构化结果。
+
+`if __name__ == "__main__"` 不会成为线上入口。模块加载后会被重复调用，因此不得在 import 阶段启动线程、访问网络或创建可变业务状态。
+
+框架计划提供可选的 `moox_strategy` SDK，用于构造标准空目标、结构化日志和本地协议校验。SDK 不提供 Storage、Trade、账户或网络客户端；不使用 SDK 也可以直接返回本文规定的字典。
+
 ## 输入协议
 
 ### `context`
@@ -151,28 +164,37 @@ V1 运行环境只保证提供 Python 标准库、`pandas` 和 `numpy`。策略�
     "state_revision": 17,
     "trigger_bar_time": "2026-07-11T08:00:00Z",
     "trigger_bar_end": "2026-07-11T09:00:00Z",
-    "decision_time": "2026-07-11T09:00:02Z",
+    "run_time": "2026-07-11T09:00:02Z",
     "data_cutoff": "2026-07-11T09:00:02Z",
     "data_revision": "view_42:00001873",
     "freq": "1h",
     "data_start": "2026-07-11T08:00:00Z",
     "data_end": "2026-07-11T08:00:00Z",
     "random_seed": 1734958331,
+    "previous_targets": [
+        {
+            "instrument_id": "binance:spot:BTC-USDT",
+            "symbol": "BTC-USDT",
+            "market_type": "spot",
+            "target_weight": 0.2,
+        }
+    ],
 }
 ```
 
 关键语义：
 
 - `trigger_bar_time` 是触发本次决策的 Bar 开始时间，`trigger_bar_end` 是其右开区间结束时间。
-- `decision_time` 是本次决策允许发生的时间，不早于 `trigger_bar_end`。
-- `data_cutoff` 是输入数据的可见性截止时间，必须满足 `data_cutoff <= decision_time`。Go 只传入 `available_at <= data_cutoff` 的数据。
+- `run_time` 是本次策略运行允许发生的时间，不早于 `trigger_bar_end`。
+- `data_cutoff` 是输入数据的可见性截止时间，必须满足 `data_cutoff <= run_time`。Go 只传入 `available_at <= data_cutoff` 的数据。
 - `data_revision` 固定本次输入使用的 View、行情和因子版本。
 - `state_revision` 标识本次输入基于哪一版策略状态。过期响应不能覆盖新状态。
 - 同一策略、版本和逻辑调度点重试时，`run_id`、`state_revision` 与 `random_seed` 保持稳定。
-- `context` 不提供 `backtest`、`paper` 或 `live` 标识。
+- `context` 不提供 `observe`、`backtest`、`paper` 或 `live` 标识。
 - `context` 不提供账户、交易通道和交易所密钥。
+- `previous_targets` 是该 Binding 上一次已接受的完整理论目标，首次运行或上一目标为空时是空列表；它不是账户实际持仓。
 
-策略不得使用 `datetime.now()`、`time.time()` 或系统时区判断交易时点。需要当前决策时间时，只使用 `context["decision_time"]`。
+策略不得使用 `datetime.now()`、`time.time()` 或系统时区判断交易时点。需要当前运行时间时，只使用 `context["run_time"]`。
 
 ### `data`
 
@@ -207,7 +229,7 @@ latest = data.loc[data["candle_begin_time"] == trigger_bar_time].copy()
 
 Python 输出的 `instrument_id`、`symbol` 和 `market_type` 必须沿用输入值。交易所代码映射由 Go 和 Trade 完成。
 
-如果策略观察了 `[08:00, 09:00)` 的完整 Bar，最早成交时间必须满足 `execution_time >= decision_time + execution_latency`，并且市场当时可交易。任何执行器都不能使用策略已经观察过的 Bar 收盘价，也不能使用决策尚未产生时的价格。`execution_latency` 由 Go 部署配置统一管理，不传给 Python。
+如果策略观察了 `[08:00, 09:00)` 的完整 Bar，最早成交时间必须满足 `execution_time >= run_time + execution_latency`，并且市场当时可交易。任何执行器都不能使用策略已经观察过的 Bar 收盘价，也不能使用策略结果尚未产生时的价格。`execution_latency` 由 Go 部署配置统一管理，不传给 Python。
 
 ### `params`
 
@@ -229,7 +251,7 @@ Python 输出的 `instrument_id`、`symbol` 和 `market_type` 必须沿用输入
 
 状态适合保存：
 
-- 已选标的和入场时间
+- 入场时间等无法从上一目标直接恢复的策略记忆
 - 连续持有 Bar 数
 - 卖出后的冷却计数
 - 移动止损参考价
@@ -242,6 +264,7 @@ Python 输出的 `instrument_id`、`symbol` 和 `market_type` 必须沿用输入
 - 账户真实仓位、余额、订单和成交
 - 可从 `data` 重新计算的大型中间结果
 - 文件路径、连接对象或 Python 自定义对象
+- `previous_targets` 已经提供的完整理论目标副本
 
 `next_state` 必须能被标准 JSON 编码，默认最大为 64 KiB。禁止返回 pickle、DataFrame、NumPy 数值对象或字节串。
 
@@ -317,10 +340,9 @@ Go 会在接受结果前检查允许的市场、标的范围、单标的权重�
 
 ```python
 next_state = {
-    "held": {
+    "holding_meta": {
         "binance:spot:BTC-USDT": {
-            "symbol": "BTC-USDT",
-            "entry_time": context["decision_time"],
+            "entry_time": context["run_time"],
             "hold_bars": 1,
         }
     },
@@ -434,18 +456,22 @@ entry/exit、最长持仓期和冷却期属于策略规则，可以使用 `state
 
 ```python
 def run(context, data, params, state):
-    held = dict(state.get("held", {}))
+    previous_targets = {
+        row["instrument_id"]: row
+        for row in context["previous_targets"]
+    }
+    holding_meta = dict(state.get("holding_meta", {}))
     cooldowns = dict(state.get("cooldowns", {}))
 
-    # 根据当前闭合 Bar、输入因子和旧状态更新 held/cooldowns。
+    # 根据当前闭合 Bar、上一理论目标和旧状态更新目标与 holding_meta/cooldowns。
     # 省略具体选股规则。
 
-    targets = build_target_weights(held)
+    targets = build_target_weights(previous_targets, holding_meta, cooldowns, data)
     return {
         "action": "rebalance",
         "targets": targets,
         "next_state": {
-            "held": held,
+            "holding_meta": holding_meta,
             "cooldowns": cooldowns,
             "last_processed_bar": context["trigger_bar_time"],
         },
@@ -480,6 +506,9 @@ Python worker 是常驻进程，同一模块可能被多次调用。策略必须
 - 不使用无种子的随机数。需要随机行为时使用 `context["random_seed"]`。
 - 不根据 `run_id` 或其他偶然标识偷偷分支。
 - 相同输入可以安全重试。
+- 不依赖 import 次数、调用次数或其他 Binding 留在 worker 中的对象。
+
+Go 会让每个 worker 同时只执行一个任务，通过多个 worker 提供并行度。worker 会按任务数、内存阈值和异常状态定期轮换；策略不能把 worker 生命周期当成业务生命周期。
 
 Go 会设置执行超时和响应大小限制。超时、进程退出或协议错误都会使本次运行失败，不产生执行意图。
 
@@ -511,6 +540,8 @@ V1 每个策略绑定在一个逻辑调度点只接受一次决策。晚到数�
 5. `next_state` 能被 JSON 编码，并在下一次运行中正确恢复。
 6. 缺失因子、`NaN`、重复标的和极端参数得到明确结果。
 7. 输出不包含未来 Bar 或账户执行状态。
+8. `previous_targets` 为空、有旧目标和全平后为空时均得到正确结果。
+9. 在同一 warm worker 中穿插其他输入后重复运行，输出仍保持一致。
 
 内置策略合入仓库时必须包含测试。通过管理面上传的个人策略至少要通过框架的清单校验和确定性冒烟测试。
 
@@ -550,7 +581,9 @@ go run ./cmd/cli import \
 - [ ] `hold` 与空组合全平的语义经过测试。
 - [ ] 权重按策略资金预算表达，未依赖账户权益。
 - [ ] `next_state` 小于限制且可被标准 JSON 编码。
+- [ ] 可从 `context["previous_targets"]` 读取上一版理论目标，没有在 state 中复制目标组合。
 - [ ] 策略不访问时间、网络、文件、交易所或账户。
+- [ ] 策略没有可变模块级全局变量、后台线程或 import 副作用。
 - [ ] 相同输入重复执行得到相同目标和状态。
 - [ ] 回测、模拟和实盘使用同一策略版本与参数。
 
