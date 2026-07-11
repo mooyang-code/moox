@@ -184,7 +184,7 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 }
 
 func (c *Client) BatchCreateNodes(ctx context.Context, nodes []NodeCreateItem) (*BatchChangeResponse, error) {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/BatchCreateNodes", map[string]any{"nodes": nodes})
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/BatchCreateNodes", map[string]any{"space_id": c.SpaceID, "nodes": nodes})
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +192,7 @@ func (c *Client) BatchCreateNodes(ctx context.Context, nodes []NodeCreateItem) (
 }
 
 func (c *Client) BatchDeployNodes(ctx context.Context, deployments []NodeDeployItem) (*BatchChangeResponse, error) {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/BatchDeployNodes", map[string]any{"deployments": deployments})
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/BatchDeployNodes", map[string]any{"space_id": c.SpaceID, "deployments": deployments})
 	if err != nil {
 		return nil, err
 	}
@@ -205,8 +205,9 @@ func (c *Client) ListNodes(ctx context.Context, page, size int) ([]CloudNode, bo
 
 func (c *Client) ListNodesWithTag(ctx context.Context, page, size int, tag string) ([]CloudNode, bool, error) {
 	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeList", map[string]any{
-		"page": map[string]int{"page": page, "size": size},
-		"tag":  tag,
+		"space_id": c.SpaceID,
+		"page":     map[string]int{"page": page, "size": size},
+		"tag":      tag,
 	})
 	if err != nil {
 		return nil, false, err
@@ -228,7 +229,7 @@ func (c *Client) ListNodesWithTag(ctx context.Context, page, size int, tag strin
 }
 
 func (c *Client) BatchDeleteNodes(ctx context.Context, nodeIDs []string) (*BatchChangeResponse, error) {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/BatchDeleteNodes", map[string]any{"node_ids": nodeIDs})
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/BatchDeleteNodes", map[string]any{"space_id": c.SpaceID, "node_ids": nodeIDs})
 	if err != nil {
 		return nil, err
 	}
@@ -237,8 +238,9 @@ func (c *Client) BatchDeleteNodes(ctx context.Context, nodeIDs []string) (*Batch
 
 func (c *Client) ListJobItems(ctx context.Context, status, page, size int) ([]JobItem, bool, error) {
 	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/ListJobItems", map[string]any{
-		"status": status,
-		"page":   map[string]int{"page": page, "size": size},
+		"space_id": c.SpaceID,
+		"status":   status,
+		"page":     map[string]int{"page": page, "size": size},
 	})
 	if err != nil {
 		return nil, false, err
@@ -260,7 +262,7 @@ func (c *Client) ListJobItems(ctx context.Context, status, page, size int) ([]Jo
 }
 
 func (c *Client) CancelJobItem(ctx context.Context, jobItemID string) error {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/CancelJobItem", map[string]string{"job_item_id": jobItemID})
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/CancelJobItem", map[string]string{"space_id": c.SpaceID, "job_item_id": jobItemID})
 	if err != nil {
 		return err
 	}
