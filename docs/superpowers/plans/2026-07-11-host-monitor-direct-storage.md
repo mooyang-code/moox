@@ -23,6 +23,8 @@
 - `ListHostAgents` 返回 Monitor 内存中的最近 agent；Monitor 重启后下一条合法样本到达时重新注册。
 - `QueryHostMetricHistory` 扫描 Storage 四个 Dataset，按 `data_time` 合并成 HostSnapshot；Storage 不可用时返回明确错误，不返回伪造零值。
 - 告警在 Monitor 消费 HostMetric 时计算，Storage `rows_updated` 不作为唯一告警触发器。
+- 告警规则启动时加载到 `trpc.group/trpc-go/trpc-database/localcache`；消费路径只读内存缓存，禁止每条 HostMetric 查询 SQLite。
+- 规则变更先写 SQLite，再主动失效并刷新缓存；后台按固定周期刷新，刷新失败保留上一份有效快照。
 
 ## 2. 文件边界
 
@@ -33,9 +35,11 @@
 - Create: `modules/monitor/internal/hostmetrics/storage_writer.go`：HostSnapshot 到四类 `storagepb.TimeSeriesRow` 的转换和批量 RPC。
 - Create: `modules/monitor/internal/hostmetrics/storage_reader.go`：Storage scan、分页、四类 row 合并和历史转换。
 - Create: `modules/monitor/internal/hostmetrics/alerts.go`：Host 阈值计算、firing/resolved 和告警去重。
+- Create: `modules/monitor/internal/hostmetrics/rule_cache.go`：基于 `localcache.Cache` 的规则快照、刷新、失效和统计。
 - Create: `modules/monitor/internal/hostmetrics/storage_writer_test.go`、`storage_reader_test.go`、`alerts_test.go`。
 - Modify: `modules/monitor/internal/bootstrap/bootstrap.go`、`modules/monitor/internal/rpc/host.go`。
 - Modify: `modules/monitor/schema/monitor.sql`：不再创建 Host sample inbox/latest/history/outbox 表，保留告警控制表。
+- Modify: `modules/monitor/go.mod`、`modules/monitor/go.sum`：引入 `trpc.group/trpc-go/trpc-database/localcache`。
 - Modify/Regenerate: `modules/monitor/proto/monitor.proto`、`modules/monitor/proto/monitorgen/*`：增加 `storage_available`、`data_gap`、`rate_available` 状态。
 
 ### Storage
@@ -106,13 +110,17 @@
 
 ### Task 6: 在消费链路实现 Host 告警
 
-**Files:** `modules/monitor/internal/hostmetrics/alerts.go`、`alerts_test.go`、existing alert repository、Host RPC/proto。
+**Files:** `modules/monitor/internal/hostmetrics/alerts.go`、`alerts_test.go`、`rule_cache.go`、`rule_cache_test.go`、existing alert repository、Host RPC/proto、`modules/monitor/go.mod`、`modules/monitor/go.sum`。
 
 - [ ] 规则固定 `space_id=moox_system`，rule key 为 `host:<agent_id>:<metric>`；支持 CPU、memory、filesystem usage、disk utilization、network errors；无 baseline 时为 unavailable。
-- [ ] 测试 threshold firing、连续样本恢复、重复 message redelivery、rate unavailable、offline 状态和 `message_id + rule_id` 去重。
-- [ ] Storage 成功后执行 evaluator，firing/resolved 写现有 Monitor SQLite alert state/event；通知失败不回滚 Storage/ACK。
+- [ ] 新增 `RuleCache`：Monitor bootstrap 首次加载 enabled host rules；消费路径只执行 `cache.Get`，不允许调用 repository/SQLite。缓存值使用不可变深拷贝，避免消费 goroutine 修改共享切片。
+- [ ] 使用 `localcache.New(localcache.WithCapacity(...), localcache.WithExpiration(...))`；缓存 key 固定为 `host-alert-rules:moox_system`，TTL 作为外部 DB 变更的兜底发现窗口，建议 60 秒。
+- [ ] 增加后台 refresh timer（建议 30 秒）：刷新成功原子替换快照，失败保留上一份有效快照并增加低基数失败计数；启动首次加载失败时告警 evaluator degraded，但不得阻塞 HostMetric 写 Storage/ACK。
+- [ ] 告警规则 Create/Update/Delete 的 DB transaction 成功后主动 `Del`/refresh cache；刷新失败不能回滚已提交配置，下一周期继续刷新。
+- [ ] 测试 threshold firing、连续样本恢复、重复 message redelivery、rate unavailable、offline 状态、`message_id + rule_id` 去重，以及连续多条样本只产生一次 DB rule load。
+- [ ] Storage 成功后从缓存读取规则并执行 evaluator，firing/resolved 写现有 Monitor SQLite alert state/event；通知失败不回滚 Storage/ACK。
 - [ ] Host alert API 忽略请求 Space 并固定 `moox_system`，普通业务监控 API 保持原隔离。
-- [ ] 运行 `go test -race -count=1 ./modules/monitor/internal/hostmetrics ./modules/monitor/internal/repository ./modules/monitor/internal/rpc`，提交 `feat(monitor): evaluate host alerts during ingest`。
+- [ ] 运行 `go test -race -count=1 ./modules/monitor/internal/hostmetrics ./modules/monitor/internal/repository ./modules/monitor/internal/rpc`，提交 `feat(monitor): cache host alert rules during ingest`。
 
 ### Task 7: Storage raw time-series 3 天 retention
 
