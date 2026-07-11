@@ -64,3 +64,31 @@ func TestMarketControlRejectsExpiredOrWrongEpochLease(t *testing.T) {
 		t.Fatal("expired lease accepted")
 	}
 }
+
+func TestTryAcquireLeaseGroupDoesNotStealActiveLeaseOrPartiallyWrite(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "leases.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateMarketControl(db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewMarketControlRepository(db)
+	now := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	active := MarketLease{LeaseID: "resolution", LeaseType: "resolution", LeaseKey: "scope", Epoch: 1, OwnerID: "active", ExpiresAt: now.Add(time.Minute)}
+	if err := repo.TryAcquireLeaseGroup(context.Background(), []MarketLease{active}, now); err != nil {
+		t.Fatal(err)
+	}
+	err = repo.TryAcquireLeaseGroup(context.Background(), []MarketLease{{LeaseID: "provider", LeaseType: "provider", LeaseKey: "provider", Epoch: 2, OwnerID: "fallback", ExpiresAt: now.Add(time.Minute)}, {LeaseID: "resolution", LeaseType: "resolution", LeaseKey: "scope", Epoch: 2, OwnerID: "fallback", ExpiresAt: now.Add(time.Minute)}}, now)
+	if _, ok := err.(*LeaseBusyError); !ok {
+		t.Fatalf("error=%T %v", err, err)
+	}
+	var count int64
+	if err := db.Model(&MarketLease{}).Where("c_lease_id = ?", "provider").Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("partial provider lease count=%d err=%v", count, err)
+	}
+	var stored MarketLease
+	if err := db.Where("c_lease_id = ?", "resolution").Take(&stored).Error; err != nil || stored.OwnerID != "active" || stored.Epoch != 1 {
+		t.Fatalf("stored=%+v err=%v", stored, err)
+	}
+}

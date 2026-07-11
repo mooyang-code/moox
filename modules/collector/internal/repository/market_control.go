@@ -74,6 +74,12 @@ func (permitRow) TableName() string { return "t_collector_provider_permits" }
 
 type MarketControlRepository struct{ db *gorm.DB }
 
+type LeaseBusyError struct{ AvailableAt time.Time }
+
+func (e *LeaseBusyError) Error() string {
+	return fmt.Sprintf("market lease group is busy until %s", e.AvailableAt.UTC().Format(time.RFC3339Nano))
+}
+
 func NewMarketControlRepository(db *gorm.DB) *MarketControlRepository {
 	return &MarketControlRepository{db: db}
 }
@@ -82,6 +88,41 @@ func MigrateMarketControl(db *gorm.DB) error {
 }
 func (r *MarketControlRepository) PutLease(ctx context.Context, lease MarketLease) error {
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(&lease).Error
+}
+
+// TryAcquireLeaseGroup atomically acquires all requested leases. An active
+// lease owned by another JobItem is never overwritten.
+func (r *MarketControlRepository) TryAcquireLeaseGroup(ctx context.Context, leases []MarketLease, now time.Time) error {
+	if len(leases) == 0 {
+		return fmt.Errorf("lease group is required")
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, requested := range leases {
+			if requested.LeaseID == "" || requested.LeaseType == "" || requested.LeaseKey == "" || requested.OwnerID == "" || requested.Epoch <= 0 || !requested.ExpiresAt.After(now) {
+				return fmt.Errorf("invalid lease group member")
+			}
+			var current MarketLease
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("c_lease_id = ?", requested.LeaseID).Take(&current).Error
+			if err != nil && err != gorm.ErrRecordNotFound {
+				return err
+			}
+			if err == nil && current.OwnerID != requested.OwnerID {
+				busyUntil := current.ExpiresAt
+				if current.QuarantineUntil != nil && current.QuarantineUntil.After(busyUntil) {
+					busyUntil = *current.QuarantineUntil
+				}
+				if busyUntil.After(now) {
+					return &LeaseBusyError{AvailableAt: busyUntil}
+				}
+			}
+		}
+		for _, requested := range leases {
+			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_lease_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_lease_type", "c_lease_key", "c_epoch", "c_owner_id", "c_expires_at", "c_quarantine_until"})}).Create(&requested).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 func (r *MarketControlRepository) ValidateLease(ctx context.Context, id, kind string, epoch int64, now time.Time) error {
 	var lease MarketLease

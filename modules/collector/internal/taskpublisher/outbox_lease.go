@@ -15,7 +15,7 @@ import (
 )
 
 type LeaseWriter interface {
-	PutLease(context.Context, repository.MarketLease) error
+	TryAcquireLeaseGroup(context.Context, []repository.MarketLease, time.Time) error
 }
 
 type OutboxLeasePreparer struct {
@@ -49,13 +49,12 @@ func (p OutboxLeasePreparer) Prepare(ctx context.Context, value domain.AttemptOu
 	providerKey := strings.Join([]string{marketID, providerID, fixedWindow}, "|")
 	resolutionKey := strings.Join([]string{marketID, unifiedDatasetID, subjectID, frequency, fixedWindow}, "|")
 	providerLeaseID, resolutionLeaseID := outboxLeaseID("provider", providerKey), outboxLeaseID("resolution", resolutionKey)
-	for _, lease := range []repository.MarketLease{
+	leases := []repository.MarketLease{
 		{LeaseID: providerLeaseID, LeaseType: "provider", LeaseKey: providerKey, Epoch: epoch, OwnerID: value.OutboxID, ExpiresAt: now.UTC().Add(ttl)},
 		{LeaseID: resolutionLeaseID, LeaseType: "resolution", LeaseKey: resolutionKey, Epoch: epoch, OwnerID: value.OutboxID, ExpiresAt: now.UTC().Add(ttl)},
-	} {
-		if err := p.Leases.PutLease(ctx, lease); err != nil {
-			return value, err
-		}
+	}
+	if err := p.Leases.TryAcquireLeaseGroup(ctx, leases, now.UTC()); err != nil {
+		return value, err
 	}
 	params["quota_lease_id"] = providerLeaseID
 	params["lease_epoch"] = strconv.FormatInt(epoch, 10)

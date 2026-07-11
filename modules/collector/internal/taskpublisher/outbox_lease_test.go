@@ -12,8 +12,8 @@ import (
 
 type outboxLeaseRecorder struct{ values []repository.MarketLease }
 
-func (r *outboxLeaseRecorder) PutLease(_ context.Context, value repository.MarketLease) error {
-	r.values = append(r.values, value)
+func (r *outboxLeaseRecorder) TryAcquireLeaseGroup(_ context.Context, values []repository.MarketLease, _ time.Time) error {
+	r.values = append(r.values, values...)
 	return nil
 }
 
