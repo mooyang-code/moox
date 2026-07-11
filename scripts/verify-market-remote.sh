@@ -47,7 +47,21 @@ if [[ "${MOOX_VERIFY_REQUIRE_GAP:-1}" == "1" ]]; then
   printf '%s' "${before}" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("coverage_status") == "incomplete" and d.get("missing_ranges"), "verification range must begin with a controlled gap"'
 fi
 
-run_remote "${REMOTE_CLI} market kline refresh --control-url '${MARKET_CONTROL_URL}' --market '${MOOX_VERIFY_MARKET_ID}' --subjects '${MOOX_VERIFY_SUBJECT_ID}' --frequency '${MOOX_VERIFY_FREQUENCY}' --start '${MOOX_VERIFY_START}' --end '${MOOX_VERIFY_END}'" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ret_info"].get("code",0) in ("SUCCESS",0); assert d.get("task_ids")'
+refresh_market() {
+  local output
+  for _ in $(seq 1 12); do
+    output="$(run_remote "${REMOTE_CLI} market kline refresh --control-url '${MARKET_CONTROL_URL}' --market '${MOOX_VERIFY_MARKET_ID}' --subjects '${MOOX_VERIFY_SUBJECT_ID}' --frequency '${MOOX_VERIFY_FREQUENCY}' --start '${MOOX_VERIFY_START}' --end '${MOOX_VERIFY_END}'")"
+    if printf '%s' "${output}" | python3 -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d["ret_info"].get("code",0) in ("SUCCESS",0) and d.get("task_ids") else 1)'; then
+      printf '%s' "${output}"
+      return 0
+    fi
+    printf '%s' "${output}" | python3 -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if "busy until" in d.get("ret_info",{}).get("msg","") else 1)' || return 1
+    sleep 10
+  done
+  return 1
+}
+
+refresh_market | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ret_info"].get("code",0) in ("SUCCESS",0); assert d.get("task_ids")'
 
 sleep "${MOOX_VERIFY_WAIT_SECONDS:-10}"
 after="$(query_market)"
