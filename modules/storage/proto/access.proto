@@ -103,6 +103,21 @@ message ReadTimeSeriesRowsRsp {
   common.PageResult page_result = 3;
 }
 
+// DeleteTimeSeriesRowsReq is an internal retention operation.
+message DeleteTimeSeriesRowsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  TimeRange time_range = 4;
+  common.Page page = 5;
+}
+
+message DeleteTimeSeriesRowsRsp {
+  common.RetInfo ret_info = 1;
+  uint32 deleted = 2;
+  common.PageResult page_result = 3;
+}
+
 // WriteRecordRowsReq 表示写入记录事实数据行。
 message WriteRecordRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -184,6 +199,7 @@ service Access {
   rpc WriteTimeSeriesRows(WriteTimeSeriesRowsReq) returns (WriteTimeSeriesRowsRsp);
   // ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
+  rpc DeleteTimeSeriesRows(DeleteTimeSeriesRowsReq) returns (DeleteTimeSeriesRowsRsp);
   // WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
   rpc WriteRecordRows(WriteRecordRowsReq) returns (WriteRecordRowsRsp);
   // ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。

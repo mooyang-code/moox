@@ -78,6 +78,30 @@ func TestScanRowsFirstPageUsesBoundedCursor(t *testing.T) {
 	}
 }
 
+func TestDeleteRowsRemovesExactPrimaryKeys(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "primary")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	old := testPrimaryTimeSeriesRow("2026-07-09T08:10:00.000000000Z")
+	newer := testPrimaryTimeSeriesRow("2026-07-09T08:11:00.000000000Z")
+	if err := store.WriteRows(ctx, []*pb.PrimaryStoreRow{old, newer}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteRows(ctx, []*pb.PrimaryStoreKey{old.GetKey()}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := store.ReadRows(ctx, []*pb.PrimaryStoreKey{testPrimaryTimeSeriesKey("")}, nil, pb.SortOrder_SORT_ORDER_ASC, nil, &pb.Page{Size: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].GetKey().GetVersion() != newer.GetKey().GetVersion() {
+		t.Fatalf("rows after delete=%v", primaryVersions(rows))
+	}
+}
+
 func testPrimaryTimeSeriesRow(version string) *pb.PrimaryStoreRow {
 	return &pb.PrimaryStoreRow{Key: testPrimaryTimeSeriesKey(version)}
 }

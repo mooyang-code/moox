@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
@@ -19,28 +20,34 @@ import (
 )
 
 type Options struct {
-	InstanceID string
-	Runner     probe.Runner
-	OnResult   func(context.Context, domain.Check, domain.CheckResult)
-	SyncSystem func(context.Context) (int, error)
-	MetricsQuery *monmetrics.QueryService
-	MetricRules *monmetrics.RuleRepository
-	MetricEvaluator *monmetrics.MetricEvaluator
+	InstanceID       string
+	Runner           probe.Runner
+	OnResult         func(context.Context, domain.Check, domain.CheckResult)
+	SyncSystem       func(context.Context) (int, error)
+	MetricsQuery     *monmetrics.QueryService
+	MetricRules      *monmetrics.RuleRepository
+	MetricEvaluator  *monmetrics.MetricEvaluator
+	HostStore        *hostmetrics.Store
+	HostReader       *hostmetrics.StorageReader
+	HostStorageReady func() bool
 }
 
 type Service struct {
-	checks     *repository.CheckRepository
-	results    *repository.ResultRepository
-	alerts     *repository.AlertRepository
-	peers      *repository.PeerRepository
-	db         *gorm.DB
-	runner     probe.Runner
-	onResult   func(context.Context, domain.Check, domain.CheckResult)
-	syncSystem func(context.Context) (int, error)
-	metricsQuery *monmetrics.QueryService
-	metricRules *monmetrics.RuleRepository
-	metricEvaluator *monmetrics.MetricEvaluator
-	instance   string
+	checks           *repository.CheckRepository
+	results          *repository.ResultRepository
+	alerts           *repository.AlertRepository
+	peers            *repository.PeerRepository
+	db               *gorm.DB
+	runner           probe.Runner
+	onResult         func(context.Context, domain.Check, domain.CheckResult)
+	syncSystem       func(context.Context) (int, error)
+	metricsQuery     *monmetrics.QueryService
+	metricRules      *monmetrics.RuleRepository
+	metricEvaluator  *monmetrics.MetricEvaluator
+	hostStore        *hostmetrics.Store
+	hostReader       *hostmetrics.StorageReader
+	hostStorageReady func() bool
+	instance         string
 }
 
 func New(db *gorm.DB, opts Options) *Service {
@@ -53,18 +60,21 @@ func New(db *gorm.DB, opts Options) *Service {
 		runner = probe.DefaultRunner()
 	}
 	return &Service{
-		checks:     repository.NewCheckRepository(db),
-		results:    repository.NewResultRepository(db),
-		alerts:     repository.NewAlertRepository(db),
-		peers:      repository.NewPeerRepository(db),
-		db:         db,
-		runner:     runner,
-		onResult:   opts.OnResult,
-		syncSystem: opts.SyncSystem,
-		metricsQuery: opts.MetricsQuery,
-		metricRules: opts.MetricRules,
-		metricEvaluator: opts.MetricEvaluator,
-		instance:   instance,
+		checks:           repository.NewCheckRepository(db),
+		results:          repository.NewResultRepository(db),
+		alerts:           repository.NewAlertRepository(db),
+		peers:            repository.NewPeerRepository(db),
+		db:               db,
+		runner:           runner,
+		onResult:         opts.OnResult,
+		syncSystem:       opts.SyncSystem,
+		metricsQuery:     opts.MetricsQuery,
+		metricRules:      opts.MetricRules,
+		metricEvaluator:  opts.MetricEvaluator,
+		hostStore:        opts.HostStore,
+		hostReader:       opts.HostReader,
+		hostStorageReady: opts.HostStorageReady,
+		instance:         instance,
 	}
 }
 

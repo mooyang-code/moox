@@ -13,6 +13,10 @@ type Client interface {
 	ScanRows(ctx context.Context, device *pb.PrimaryStoreTarget, req *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error)
 }
 
+type Deleter interface {
+	DeleteRows(context.Context, *pb.PrimaryStoreTarget, []*pb.PrimaryStoreKey) error
+}
+
 // MessageWriter writes facts and the already encoded update message as one
 // durable operation. Implementations that do not provide the outbox (mostly
 // test fakes) continue to use Client.WriteRows.

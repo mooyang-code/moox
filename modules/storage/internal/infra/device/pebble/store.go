@@ -61,6 +61,26 @@ func (s *Store) WriteRows(ctx context.Context, rows []*pb.PrimaryStoreRow) error
 	return s.writeRows(ctx, rows, nil)
 }
 
+func (s *Store) DeleteRows(ctx context.Context, keys []*pb.PrimaryStoreKey) error {
+	if s == nil || s.db == nil {
+		return errors.New("pebble store is closed")
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if key == nil {
+			continue
+		}
+		if err := batch.Delete([]byte(encodePrimaryStoreKey(key)), s.writeOptions); err != nil {
+			return err
+		}
+	}
+	return batch.Commit(s.writeOptions)
+}
+
 func (s *Store) writeRows(ctx context.Context, rows []*pb.PrimaryStoreRow, entry *device.OutboxEntry) error {
 	_ = ctx
 	if len(rows) == 0 {

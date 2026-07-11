@@ -60,3 +60,18 @@ metrics:
     frequency: 30s
     metadata_validation_interval: 30s
     write_batch_size: 1000
+  host_storage:
+    enabled: true
+    access_target: ip://127.0.0.1:20102
+    metadata_target: ip://127.0.0.1:20100
+    space_id: moox_system
+    frequency: 1m
+    retention: 72h
+    write_timeout: 5s
+    read_limit: 500
+    metadata_refresh_interval: 1m
+    rule_refresh_interval: 30s
+    resource_dataset_id: host_resource_v1
+    filesystem_dataset_id: host_fs_v1
+    disk_dataset_id: host_disk_v1
+    network_dataset_id: host_net_v1

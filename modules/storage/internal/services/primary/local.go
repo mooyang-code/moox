@@ -114,6 +114,21 @@ func (c *LocalClient) ReadRows(ctx context.Context, target *pb.PrimaryStoreTarge
 	}
 }
 
+func (c *LocalClient) DeleteRows(ctx context.Context, target *pb.PrimaryStoreTarget, keys []*pb.PrimaryStoreKey) error {
+	if target.GetEngine() != "" && target.GetEngine() != "pebble" {
+		return fmt.Errorf("unsupported delete engine %s", target.GetEngine())
+	}
+	store, err := c.factStore()
+	if err != nil {
+		return err
+	}
+	deleter, ok := store.(device.FactDeleter)
+	if !ok {
+		return fmt.Errorf("primary store does not support row deletion")
+	}
+	return deleter.DeleteRows(ctx, keys)
+}
+
 func (c *LocalClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, req *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
 	switch target.GetEngine() {
 	case "", "pebble":

@@ -91,6 +91,7 @@ type MetricsConfig struct {
 	MaxAckPending          int                  `yaml:"max_ack_pending"`
 	NoDataIntervals        int                  `yaml:"no_data_intervals"`
 	Storage                MetricsStorageConfig `yaml:"storage"`
+	HostStorage            HostStorageConfig    `yaml:"host_storage"`
 }
 type MetricsStorageConfig struct {
 	AccessTarget               string        `yaml:"access_target"`
@@ -100,6 +101,25 @@ type MetricsStorageConfig struct {
 	Frequency                  string        `yaml:"frequency"`
 	MetadataValidationInterval time.Duration `yaml:"metadata_validation_interval"`
 	WriteBatchSize             int           `yaml:"write_batch_size"`
+}
+
+// HostStorageConfig controls the direct Storage path for host snapshots.
+// Host samples are intentionally best-effort and have a short retention.
+type HostStorageConfig struct {
+	Enabled                 bool          `yaml:"enabled"`
+	AccessTarget            string        `yaml:"access_target"`
+	MetadataTarget          string        `yaml:"metadata_target"`
+	SpaceID                 string        `yaml:"space_id"`
+	Frequency               string        `yaml:"frequency"`
+	Retention               time.Duration `yaml:"retention"`
+	WriteTimeout            time.Duration `yaml:"write_timeout"`
+	ReadLimit               int           `yaml:"read_limit"`
+	MetadataRefreshInterval time.Duration `yaml:"metadata_refresh_interval"`
+	RuleRefreshInterval     time.Duration `yaml:"rule_refresh_interval"`
+	ResourceDatasetID       string        `yaml:"resource_dataset_id"`
+	FilesystemDatasetID     string        `yaml:"filesystem_dataset_id"`
+	DiskDatasetID           string        `yaml:"disk_dataset_id"`
+	NetworkDatasetID        string        `yaml:"network_dataset_id"`
 }
 
 func Load(path string) (*Config, error) {
@@ -158,7 +178,7 @@ func Default() *Config {
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
-		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}},
+		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100", SpaceID: "moox_system", Frequency: "1m", Retention: 72 * time.Hour, WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
 }
 
@@ -270,6 +290,45 @@ func (c *Config) applyDefaults() {
 	if c.Metrics.Storage.WriteBatchSize == 0 {
 		c.Metrics.Storage.WriteBatchSize = metricsDefaults.Storage.WriteBatchSize
 	}
+	if c.Metrics.HostStorage.AccessTarget == "" {
+		c.Metrics.HostStorage.AccessTarget = metricsDefaults.HostStorage.AccessTarget
+	}
+	if c.Metrics.HostStorage.MetadataTarget == "" {
+		c.Metrics.HostStorage.MetadataTarget = metricsDefaults.HostStorage.MetadataTarget
+	}
+	if c.Metrics.HostStorage.SpaceID == "" {
+		c.Metrics.HostStorage.SpaceID = metricsDefaults.HostStorage.SpaceID
+	}
+	if c.Metrics.HostStorage.Frequency == "" {
+		c.Metrics.HostStorage.Frequency = metricsDefaults.HostStorage.Frequency
+	}
+	if c.Metrics.HostStorage.Retention == 0 {
+		c.Metrics.HostStorage.Retention = metricsDefaults.HostStorage.Retention
+	}
+	if c.Metrics.HostStorage.WriteTimeout == 0 {
+		c.Metrics.HostStorage.WriteTimeout = metricsDefaults.HostStorage.WriteTimeout
+	}
+	if c.Metrics.HostStorage.ReadLimit == 0 {
+		c.Metrics.HostStorage.ReadLimit = metricsDefaults.HostStorage.ReadLimit
+	}
+	if c.Metrics.HostStorage.MetadataRefreshInterval == 0 {
+		c.Metrics.HostStorage.MetadataRefreshInterval = metricsDefaults.HostStorage.MetadataRefreshInterval
+	}
+	if c.Metrics.HostStorage.RuleRefreshInterval == 0 {
+		c.Metrics.HostStorage.RuleRefreshInterval = metricsDefaults.HostStorage.RuleRefreshInterval
+	}
+	if c.Metrics.HostStorage.ResourceDatasetID == "" {
+		c.Metrics.HostStorage.ResourceDatasetID = metricsDefaults.HostStorage.ResourceDatasetID
+	}
+	if c.Metrics.HostStorage.FilesystemDatasetID == "" {
+		c.Metrics.HostStorage.FilesystemDatasetID = metricsDefaults.HostStorage.FilesystemDatasetID
+	}
+	if c.Metrics.HostStorage.DiskDatasetID == "" {
+		c.Metrics.HostStorage.DiskDatasetID = metricsDefaults.HostStorage.DiskDatasetID
+	}
+	if c.Metrics.HostStorage.NetworkDatasetID == "" {
+		c.Metrics.HostStorage.NetworkDatasetID = metricsDefaults.HostStorage.NetworkDatasetID
+	}
 }
 
 func (c *Config) applyEnv() {
@@ -316,6 +375,26 @@ func (c *Config) Validate() error {
 	}
 	if c.Instance.BaseURL == "" {
 		return fmt.Errorf("instance.base_url must not be empty")
+	}
+	if c.Metrics.HostStorage.Enabled {
+		h := c.Metrics.HostStorage
+		if h.SpaceID != "moox_system" {
+			return fmt.Errorf("metrics.host_storage.space_id must be moox_system")
+		}
+		if h.Frequency != "1m" {
+			return fmt.Errorf("metrics.host_storage.frequency must be 1m")
+		}
+		if h.Retention < time.Hour || h.Retention > 72*time.Hour {
+			return fmt.Errorf("metrics.host_storage.retention must be between 1h and 72h")
+		}
+		if h.ReadLimit <= 0 || h.ReadLimit > 500 {
+			return fmt.Errorf("metrics.host_storage.read_limit must be between 1 and 500")
+		}
+		for name, value := range map[string]string{"resource_dataset_id": h.ResourceDatasetID, "filesystem_dataset_id": h.FilesystemDatasetID, "disk_dataset_id": h.DiskDatasetID, "network_dataset_id": h.NetworkDatasetID} {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("metrics.host_storage.%s must not be empty", name)
+			}
+		}
 	}
 	for i, peer := range c.Peer.Peers {
 		if peer.InstanceID == "" || peer.BaseURL == "" || peer.Token == "" {

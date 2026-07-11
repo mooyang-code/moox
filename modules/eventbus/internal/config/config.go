@@ -151,7 +151,7 @@ func Default() *Config {
 		},
 		TopicFamilies: []TopicFamilyConfig{{Pattern: "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*", Stream: "MOOX_CLOUDNODE_EXEC", Kind: messagepb.MessageKind_MESSAGE_KIND_COMMAND, PayloadContentType: "application/x-protobuf; message=trpc.moox.cloudnode.JobItem", PayloadVersion: 1, Enabled: true}},
 		Consumers: []ConsumerConfig{
-			{Stream: "MOOX_METRICS", Durable: "monitor_hostmetrics_ingest_v1", FilterSubject: "moox.metrics.host.reported.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
+			{Stream: "MOOX_METRICS", Durable: "monitor_hostmetrics_ingest_v1", FilterSubject: "moox.metrics.host.reported.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
 			{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_time_series_rows_updated_v1", FilterSubject: "moox.storage.time_series.rows_updated.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 128, MaxDeliver: -1},
 			{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_record_rows_updated_v1", FilterSubject: "moox.storage.record.rows_updated.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 128, MaxDeliver: -1},
 			{Stream: "MOOX_STORAGE", Durable: "factor_calc", FilterSubject: "moox.storage.time_series.rows_updated.v1", AckPolicy: "explicit", DeliverPolicy: "new", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 1000, MaxDeliver: 5},

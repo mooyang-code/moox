@@ -51,4 +51,9 @@ func TestMonitorSchemaCreatesTablesAndIndexes(t *testing.T) {
 			t.Fatalf("index %s count = %d", index, count)
 		}
 	}
+	for _, table := range []string{"t_monitor_host_agents", "t_monitor_host_inbox", "t_monitor_host_latest", "t_monitor_host_history", "t_monitor_host_history_outbox", "t_monitor_host_alert_rules", "t_monitor_host_alert_states", "t_monitor_host_alert_events", "t_monitor_host_notification_outbox"} {
+		if mgr.DB().Migrator().HasTable(table) {
+			t.Fatalf("legacy host sample table %s must not be created", table)
+		}
+	}
 }

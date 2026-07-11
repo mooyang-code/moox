@@ -5,24 +5,27 @@ import (
 	"errors"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 )
 
 func (s *Service) ListHostAgents(ctx context.Context, _ *monitorpb.ListHostAgentsReq) (*monitorpb.ListHostAgentsRsp, error) {
-	store := hostmetrics.NewStore(s.db)
+	store := s.hostStore
+	if store == nil {
+		return &monitorpb.ListHostAgentsRsp{RetInfo: inner(errors.New("host monitor is unavailable")), StorageAvailable: false}, nil
+	}
 	if err := store.EnsureSchema(); err != nil {
-		return &monitorpb.ListHostAgentsRsp{RetInfo: inner(err)}, nil
+		return &monitorpb.ListHostAgentsRsp{RetInfo: inner(err), StorageAvailable: false}, nil
 	}
 	rows, err := store.ListAgents(ctx)
 	if err != nil {
-		return &monitorpb.ListHostAgentsRsp{RetInfo: inner(err)}, nil
+		return &monitorpb.ListHostAgentsRsp{RetInfo: inner(err), StorageAvailable: false}, nil
 	}
 	out := make([]*monitorpb.HostAgentInfo, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, &monitorpb.HostAgentInfo{AgentId: row.AgentID, Hostname: row.Hostname, BootId: row.BootID, LastSeenAt: row.LastSeenAt, Archived: row.Archived, Snapshot: row.Snapshot})
 	}
-	return &monitorpb.ListHostAgentsRsp{RetInfo: success(), Agents: out}, nil
+	available := s.hostStorageReady == nil || s.hostStorageReady()
+	return &monitorpb.ListHostAgentsRsp{RetInfo: success(), Agents: out, StorageAvailable: available, DataGap: !available}, nil
 }
 
 func (s *Service) QueryHostMetricHistory(ctx context.Context, req *monitorpb.QueryHostMetricHistoryReq) (*monitorpb.QueryHostMetricHistoryRsp, error) {
@@ -47,17 +50,21 @@ func (s *Service) QueryHostMetricHistory(ctx context.Context, req *monitorpb.Que
 	if end.Before(start) {
 		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: invalid(errors.New("end_at must not precede start_at"))}, nil
 	}
-	store := hostmetrics.NewStore(s.db)
-	if err := store.EnsureSchema(); err != nil {
-		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: inner(err)}, nil
+	truncated := end.Sub(start) > 72*time.Hour
+	if end.Sub(start) > 72*time.Hour {
+		start = end.Add(-72 * time.Hour)
 	}
-	rows, err := store.History(ctx, req.GetAgentId(), start, end, int(req.GetLimit()))
+	if s.hostReader == nil {
+		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: inner(errors.New("host history storage is unavailable")), StorageAvailable: false}, nil
+	}
+	rows, err := s.hostReader.History(ctx, req.GetAgentId(), start, end, int(req.GetLimit()))
 	if err != nil {
-		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: inner(err)}, nil
+		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: inner(err), StorageAvailable: false}, nil
 	}
 	out := make([]*monitorpb.HostMetricHistoryPoint, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, &monitorpb.HostMetricHistoryPoint{AgentId: row.AgentID, ObservedAt: row.ObservedAt, Snapshot: row.Snapshot})
 	}
-	return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: success(), Points: out}, nil
+	available := s.hostStorageReady == nil || s.hostStorageReady()
+	return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: success(), Points: out, StorageAvailable: available, DataGap: !available || truncated || len(out) == 0}, nil
 }

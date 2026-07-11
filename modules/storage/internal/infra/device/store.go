@@ -26,3 +26,9 @@ type FactStore interface {
 	ReadRows(ctx context.Context, keys []*pb.PrimaryStoreKey, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error)
 	ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, dataKind pb.DataKind, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error)
 }
+
+// FactDeleter is optional so read/write-only test stores remain valid. The
+// Pebble implementation provides it for Storage retention maintenance.
+type FactDeleter interface {
+	DeleteRows(context.Context, []*pb.PrimaryStoreKey) error
+}

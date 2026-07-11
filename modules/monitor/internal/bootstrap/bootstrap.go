@@ -21,8 +21,10 @@ import (
 	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -57,7 +59,31 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "升级 monitor metric rule state schema 失败: %v", err)
 		return nil, err
 	}
-	hostStore := hostmetrics.NewStore(mgr.DB())
+	var hostStore *hostmetrics.Store
+	var hostReader *hostmetrics.StorageReader
+	var hostGate *hostmetrics.StorageGate
+	var hostRuleCache *hostmetrics.RuleCache
+	var hostAccess storagepb.AccessClientProxy
+	if cfg.Metrics.HostStorage.Enabled {
+		hostAccess = storagepb.NewAccessClientProxy(client.WithTarget(normalizeHostStorageTarget(cfg.Metrics.HostStorage.AccessTarget)))
+		hostMetadata := storagepb.NewMetadataClientProxy(client.WithTarget(normalizeHostStorageTarget(cfg.Metrics.HostStorage.MetadataTarget)))
+		hostWriter := hostmetrics.NewStorageWriter(hostAccess, cfg.Metrics.HostStorage)
+		hostReader = hostmetrics.NewStorageReader(hostAccess, cfg.Metrics.HostStorage)
+		hostGate = hostmetrics.NewStorageGate(hostMetadata, cfg.Metrics.HostStorage)
+		hostStore = hostmetrics.NewStoreWithWriterReader(hostWriter, hostReader)
+		hostStore.SetStorageReady(hostGate.Ready)
+		hostRuleCache, err = hostmetrics.NewRuleCache(hostmetrics.RuleCacheOptions{Repository: repository.NewAlertRepository(mgr.DB()), RefreshInterval: cfg.Metrics.HostStorage.RuleRefreshInterval})
+		if err != nil {
+			_ = mgr.Close()
+			return nil, err
+		}
+		if err := hostRuleCache.Start(ctx); err != nil {
+			log.WarnContextf(ctx, "host alert rule cache unavailable: %v", err)
+		}
+		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{Cache: hostRuleCache, Repository: repository.NewAlertRepository(mgr.DB()), InstanceID: cfg.Instance.InstanceID})
+	} else {
+		hostStore = hostmetrics.NewStoreWithWriter(nil)
+	}
 	if err := hostStore.EnsureSchema(); err != nil {
 		_ = mgr.Close()
 		return nil, err
@@ -89,12 +115,18 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	startHealthServer(ctx, cfg, mgr, metricsStorage)
 	resultHook := monitorResultHook(cfg, mgr)
 	syncSystem := monitorSyncFunc(ctx, cfg, mgr)
-	registerMonitorService(s, cfg, mgr, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
+	var hostReady func() bool
+	if hostGate != nil {
+		hostReady = hostGate.Ready
+	}
+	registerMonitorService(s, cfg, mgr, hostStore, hostReader, hostReady, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
 	registerMetricsReporter(s)
 	startScheduler(ctx, cfg, mgr, resultHook)
 	startRetentionCleaner(ctx, cfg, mgr)
 	startPeerPuller(ctx, cfg, mgr)
 	startHostMetricsConsumer(ctx, cfg, hostStore)
+	startHostStorageGate(ctx, cfg, hostGate)
+	startHostStorageRetention(ctx, cfg, hostAccess)
 	if metricEvaluator != nil {
 		defaultMetricScheduler = monmetrics.NewRuleScheduler(monmetrics.SchedulerOptions{Evaluator: metricEvaluator, Rules: metricRules, InstanceID: cfg.Instance.InstanceID, ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second, ActiveInstances: func(ctx context.Context) ([]string, error) {
 			return activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, repository.NewPeerRepository(mgr.DB()), 3*time.Duration(cfg.Peer.TimeoutSeconds)*time.Second), nil
@@ -106,8 +138,60 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
+func startHostStorageRetention(ctx context.Context, cfg *config.Config, access any) {
+	if cfg == nil || !cfg.Metrics.HostStorage.Enabled || access == nil {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			if deleted, err := hostmetrics.Prune(ctx, access, cfg.Metrics.HostStorage, time.Now().UTC()); err != nil {
+				log.WarnContextf(ctx, "host storage retention failed: %v", err)
+			} else if deleted > 0 {
+				log.InfoContextf(ctx, "host storage retention deleted %d rows", deleted)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func startHostStorageGate(ctx context.Context, cfg *config.Config, gate *hostmetrics.StorageGate) {
+	if cfg == nil || gate == nil || !cfg.Metrics.HostStorage.Enabled {
+		return
+	}
+	interval := cfg.Metrics.HostStorage.MetadataRefreshInterval
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	check := func() {
+		checkCtx, cancel := context.WithTimeout(ctx, interval)
+		defer cancel()
+		if err := gate.Validate(checkCtx); err != nil {
+			log.WarnContextf(ctx, "host storage schema check failed: %v", err)
+		}
+	}
+	go func() {
+		check()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			check()
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
 func startHostMetricsConsumer(ctx context.Context, cfg *config.Config, store *hostmetrics.Store) {
-	if cfg == nil || !cfg.Metrics.Enabled || store == nil {
+	if cfg == nil || !cfg.Metrics.Enabled || !cfg.Metrics.HostStorage.Enabled || store == nil {
 		return
 	}
 	go func() {
@@ -152,6 +236,18 @@ func waitHostMetrics(ctx context.Context) {
 	case <-time.After(15 * time.Second):
 	}
 }
+
+func normalizeHostStorageTarget(raw string) string {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return "ip://127.0.0.1:20102"
+	}
+	if strings.Contains(raw, "://") {
+		return raw
+	}
+	return "ip://" + raw
+}
+
 func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
@@ -258,19 +354,22 @@ func startHealthServer(ctx context.Context, cfg *config.Config, mgr *monstorage.
 	}
 }
 
-func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorage.Manager, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.RuleRepository, metricEvaluator *monmetrics.MetricEvaluator) {
+func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorage.Manager, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.RuleRepository, metricEvaluator *monmetrics.MetricEvaluator) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
 		return
 	}
 	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(mgr.DB(), monitorrpc.Options{
-		InstanceID:      cfg.Instance.InstanceID,
-		OnResult:        hook,
-		SyncSystem:      syncSystem,
-		MetricsQuery:    metricsQuery,
-		MetricRules:     metricRules,
-		MetricEvaluator: metricEvaluator,
+		InstanceID:       cfg.Instance.InstanceID,
+		OnResult:         hook,
+		SyncSystem:       syncSystem,
+		MetricsQuery:     metricsQuery,
+		MetricRules:      metricRules,
+		MetricEvaluator:  metricEvaluator,
+		HostStore:        hostStore,
+		HostReader:       hostReader,
+		HostStorageReady: hostReady,
 	}))
 }
 

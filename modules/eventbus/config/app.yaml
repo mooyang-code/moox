@@ -84,7 +84,7 @@ consumers:
     replay_policy: instant
     ack_wait: 60s
     max_ack_pending: 256
-    max_deliver: -1
+    max_deliver: 3
   - stream: MOOX_STORAGE
     durable: storage_view_builder_time_series_rows_updated_v1
     filter_subject: moox.storage.time_series.rows_updated.v1

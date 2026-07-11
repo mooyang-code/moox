@@ -399,14 +399,14 @@ message HostAgentInfo {
   trpc.moox.hostagent.HostSnapshot snapshot = 6;
 }
 message ListHostAgentsReq {}
-message ListHostAgentsRsp { common.RetInfo ret_info = 1; repeated HostAgentInfo agents = 2; }
+message ListHostAgentsRsp { common.RetInfo ret_info = 1; repeated HostAgentInfo agents = 2; bool storage_available = 3; bool data_gap = 4; }
 message HostMetricHistoryPoint {
   string agent_id = 1;
   string observed_at = 2;
   trpc.moox.hostagent.HostSnapshot snapshot = 3;
 }
 message QueryHostMetricHistoryReq { string agent_id = 1; string start_at = 2; string end_at = 3; uint32 limit = 4; }
-message QueryHostMetricHistoryRsp { common.RetInfo ret_info = 1; repeated HostMetricHistoryPoint points = 2; }
+message QueryHostMetricHistoryRsp { common.RetInfo ret_info = 1; repeated HostMetricHistoryPoint points = 2; bool storage_available = 3; bool data_gap = 4; }
 
 service MonitorMgr {
   rpc ListChecks(ListChecksReq) returns (ListChecksRsp);

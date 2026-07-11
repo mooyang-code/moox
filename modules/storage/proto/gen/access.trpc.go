@@ -23,6 +23,8 @@ type AccessService interface {
 	WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq) (*WriteTimeSeriesRowsRsp, error)
 	// ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
+
+	DeleteTimeSeriesRows(ctx context.Context, req *DeleteTimeSeriesRowsReq) (*DeleteTimeSeriesRowsRsp, error)
 	// WriteRecordRows WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
 	WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq) (*WriteRecordRowsRsp, error)
 	// ReadRecordRows ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
@@ -55,6 +57,24 @@ func AccessService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context.Conte
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(AccessService).ReadTimeSeriesRows(ctx, reqbody.(*ReadTimeSeriesRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func AccessService_DeleteTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteTimeSeriesRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(AccessService).DeleteTimeSeriesRows(ctx, reqbody.(*DeleteTimeSeriesRowsReq))
 	}
 
 	var rsp interface{}
@@ -113,6 +133,10 @@ var AccessServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.Access/ReadTimeSeriesRows",
 			Func: AccessService_ReadTimeSeriesRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Access/DeleteTimeSeriesRows",
+			Func: AccessService_DeleteTimeSeriesRows_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.Access/WriteRecordRows",
@@ -212,6 +236,9 @@ func (s *UnimplementedAccess) WriteTimeSeriesRows(ctx context.Context, req *Writ
 func (s *UnimplementedAccess) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
 	return nil, errors.New("rpc ReadTimeSeriesRows of service Access is not implemented")
 }
+func (s *UnimplementedAccess) DeleteTimeSeriesRows(ctx context.Context, req *DeleteTimeSeriesRowsReq) (*DeleteTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc DeleteTimeSeriesRows of service Access is not implemented")
+}
 
 // WriteRecordRows WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
 func (s *UnimplementedAccess) WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq) (*WriteRecordRowsRsp, error) {
@@ -247,6 +274,8 @@ type AccessClientProxy interface {
 	WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq, opts ...client.Option) (rsp *WriteTimeSeriesRowsRsp, err error)
 	// ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
+
+	DeleteTimeSeriesRows(ctx context.Context, req *DeleteTimeSeriesRowsReq, opts ...client.Option) (rsp *DeleteTimeSeriesRowsRsp, err error)
 	// WriteRecordRows WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
 	WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq, opts ...client.Option) (rsp *WriteRecordRowsRsp, err error)
 	// ReadRecordRows ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
@@ -296,6 +325,26 @@ func (c *AccessClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, req *Rea
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReadTimeSeriesRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *AccessClientProxyImpl) DeleteTimeSeriesRows(ctx context.Context, req *DeleteTimeSeriesRowsReq, opts ...client.Option) (*DeleteTimeSeriesRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Access/DeleteTimeSeriesRows")
+	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Access")
+	msg.WithCalleeMethod("DeleteTimeSeriesRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteTimeSeriesRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

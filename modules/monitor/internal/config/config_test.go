@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -40,6 +41,9 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	}
 	if cfg.Alert.SendTimeoutSeconds != 10 {
 		t.Fatalf("alert send timeout = %d", cfg.Alert.SendTimeoutSeconds)
+	}
+	if !cfg.Metrics.HostStorage.Enabled || cfg.Metrics.HostStorage.SpaceID != "moox_system" || cfg.Metrics.HostStorage.Frequency != "1m" || cfg.Metrics.HostStorage.Retention != 72*time.Hour {
+		t.Fatalf("host storage defaults = %+v", cfg.Metrics.HostStorage)
 	}
 }
 
@@ -104,6 +108,19 @@ peer:
 `)
 	if _, err := Load(path); err == nil {
 		t.Fatal("Load() error = nil, want invalid peer entry")
+	}
+}
+
+func TestMonitorConfigValidatesHostStorageContract(t *testing.T) {
+	cfg := Default()
+	cfg.Metrics.HostStorage.SpaceID = "crypto"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want reserved host space error")
+	}
+	cfg = Default()
+	cfg.Metrics.HostStorage.Retention = 73 * time.Hour
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want retention limit error")
 	}
 }
 

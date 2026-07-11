@@ -75,7 +75,7 @@ export const getCurrentMetrics = (hostIds?: number[]) => {
 /**
  * 获取历史监控数据
  * @param hostAddress 主机IP地址
- * @param duration 时间范围（如 "1h", "24h", "7d"）
+ * @param duration 时间范围（如 "1h", "24h", "3d"；历史最多保留 3 天）
  */
 export const getHistoryMetrics = (hostAddress: string, duration: string = '1h') => {
   const end = new Date();

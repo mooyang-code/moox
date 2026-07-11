@@ -45,6 +45,10 @@ func (p *scanAccessProxy) ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeries
 	return nil, errors.New("public read must not be used for internal scan")
 }
 
+func (p *scanAccessProxy) DeleteTimeSeriesRows(context.Context, *pb.DeleteTimeSeriesRowsReq, ...client.Option) (*pb.DeleteTimeSeriesRowsRsp, error) {
+	return nil, errors.New("not used")
+}
+
 func (p *scanAccessProxy) WriteRecordRows(context.Context, *pb.WriteRecordRowsReq, ...client.Option) (*pb.WriteRecordRowsRsp, error) {
 	return nil, errors.New("not used")
 }

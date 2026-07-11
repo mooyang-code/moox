@@ -48,6 +48,56 @@ func (s *Service) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeri
 	return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Success("success")}, nil
 }
 
+func (s *Service) DeleteTimeSeriesRows(ctx context.Context, req *pb.DeleteTimeSeriesRowsReq) (*pb.DeleteTimeSeriesRowsRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	if err := validateTimeRange(req.GetTimeRange()); err != nil || req.GetTimeRange().GetEndTime() == "" {
+		if err == nil {
+			err = errors.New("delete requires an end_time")
+		}
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	rangeValue, err := timeRangeToVersionRange(req.GetTimeRange())
+	if err != nil {
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	page := req.GetPage()
+	size := page.GetSize()
+	if size == 0 {
+		size = primaryDatasetScanPageSize
+	}
+	if size > primaryDatasetScanPageSize {
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("delete batch size must be <= 1000"))}, nil
+	}
+	targets, err := s.router.ResolveDatasetTargets(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+	}
+	deleted := uint32(0)
+	for _, target := range targets {
+		rows, _, scanErr := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{Target: target, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, VersionRange: rangeValue, Order: pb.SortOrder_SORT_ORDER_ASC, Page: &pb.Page{Page: 1, Size: size}})
+		if scanErr != nil {
+			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, scanErr)}, nil
+		}
+		keys := make([]*pb.PrimaryStoreKey, 0, len(rows))
+		for _, row := range rows {
+			if row != nil {
+				keys = append(keys, row.GetKey())
+			}
+		}
+		deleter, ok := s.primary.(primary.Deleter)
+		if !ok {
+			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("primary store deletion is unavailable"))}, nil
+		}
+		if err := deleter.DeleteRows(ctx, target, keys); err != nil {
+			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		deleted += uint32(len(keys))
+	}
+	return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Success("success"), Deleted: deleted}, nil
+}
+
 func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	if err := validateTimeRange(req.GetTimeRange()); err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil

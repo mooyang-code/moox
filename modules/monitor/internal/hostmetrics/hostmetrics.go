@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"gorm.io/gorm"
 )
 
 const (
@@ -28,15 +29,63 @@ const (
 	DLQTopic    = "moox.dlq.message.rejected.v1"
 )
 
-type Store struct{ db *gorm.DB }
+var ErrInvalidHostMetric = errors.New("invalid host metric")
 
-func NewStore(db *gorm.DB) *Store { return &Store{db: db} }
-func (s *Store) EnsureSchema() error {
-	if s == nil || s.db == nil {
-		return errors.New("host metric database is nil")
-	}
-	return s.db.Exec(`CREATE TABLE IF NOT EXISTS t_monitor_host_agents (c_agent_id TEXT PRIMARY KEY, c_hostname TEXT NOT NULL DEFAULT '', c_boot_id TEXT NOT NULL DEFAULT '', c_first_seen_at DATETIME NOT NULL, c_last_seen_at DATETIME NOT NULL, c_is_archived INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS t_monitor_host_inbox (c_message_id TEXT PRIMARY KEY, c_agent_id TEXT NOT NULL, c_stream_sequence INTEGER NOT NULL DEFAULT 0, c_payload_sha256 TEXT NOT NULL, c_received_at DATETIME NOT NULL, c_status TEXT NOT NULL DEFAULT 'projected'); CREATE TABLE IF NOT EXISTS t_monitor_host_latest (c_agent_id TEXT PRIMARY KEY, c_occurred_at DATETIME NOT NULL, c_payload BLOB NOT NULL, c_updated_at DATETIME NOT NULL); CREATE TABLE IF NOT EXISTS t_monitor_host_history (c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_agent_id TEXT NOT NULL, c_observed_at DATETIME NOT NULL, c_payload BLOB NOT NULL); CREATE INDEX IF NOT EXISTS idx_monitor_host_history_agent_time ON t_monitor_host_history(c_agent_id, c_observed_at DESC);`).Error
+// SnapshotWriter is the only durable dependency of the host ingest path. The
+// monitor keeps no host samples in SQLite; Storage owns the short-lived
+// history and this registry only holds the latest in-memory view.
+type SnapshotWriter interface {
+	WriteSnapshot(context.Context, *hostmetricpb.HostSnapshot, string, time.Time, string) error
 }
+
+type HistoryReader interface {
+	History(context.Context, string, time.Time, time.Time, int) ([]HistoryPoint, error)
+}
+
+type Store struct {
+	writer SnapshotWriter
+	reader HistoryReader
+	alert  *AlertEvaluator
+	ready  func() bool
+	mu     sync.RWMutex
+	latest map[string]AgentView
+}
+
+// NewStore accepts an interface value to keep old bootstrap call sites
+// compiling while deployments migrate to NewStoreWithWriter. Non-writer
+// values (including the former *gorm.DB argument) are deliberately ignored.
+func NewStore(writer any) *Store {
+	var snapshotWriter SnapshotWriter
+	if w, ok := writer.(SnapshotWriter); ok {
+		snapshotWriter = w
+	}
+	return NewStoreWithWriter(snapshotWriter)
+}
+
+func NewStoreWithWriter(writer SnapshotWriter) *Store {
+	return NewStoreWithWriterReader(writer, nil)
+}
+
+func NewStoreWithWriterReader(writer SnapshotWriter, reader HistoryReader) *Store {
+	return &Store{writer: writer, reader: reader, latest: make(map[string]AgentView)}
+}
+
+func (s *Store) SetAlertEvaluator(evaluator *AlertEvaluator) {
+	if s != nil {
+		s.alert = evaluator
+	}
+}
+
+func (s *Store) SetStorageReady(ready func() bool) {
+	if s != nil {
+		s.ready = ready
+	}
+}
+func (s *Store) StorageReady() bool { return s != nil && (s.ready == nil || s.ready()) }
+
+// EnsureSchema is retained as a no-op during the deployment migration. Host
+// sample tables are no longer created or read.
+func (s *Store) EnsureSchema() error { return nil }
 
 func ValidateMessage(msg *messagepb.MooxMessage) (*hostmetricpb.HostMetric, error) {
 	if msg == nil {
@@ -180,55 +229,49 @@ func percent(v float64, available bool) error {
 }
 
 func (s *Store) Ingest(ctx context.Context, d *jetstream.Delivery) error {
-	if s == nil || s.db == nil || d == nil {
+	if s == nil || d == nil {
 		return errors.New("host metric store or delivery is nil")
 	}
 	metric, err := ValidateMessage(d.Message)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrInvalidHostMetric, err)
 	}
-	msg := d.Message
-	now := time.Now().UTC()
-	hash := sha256.Sum256(msg.GetPayload())
-	hashText := hex.EncodeToString(hash[:])
-	p := msg.GetProducer()
-	tx := s.db.WithContext(ctx).Begin()
-	if tx.Error != nil {
-		return tx.Error
-	}
-	var inbox struct {
-		MessageID string `gorm:"column:c_message_id"`
-	}
-	queryErr := tx.Raw("SELECT c_message_id FROM t_monitor_host_inbox WHERE c_message_id = ?", msg.GetMessageId()).Scan(&inbox).Error
-	if queryErr != nil {
-		tx.Rollback()
-		return queryErr
-	}
-	if inbox.MessageID != "" {
-		tx.Rollback()
-		return d.Ack(ctx)
-	}
-	if err := tx.Exec("INSERT INTO t_monitor_host_inbox(c_message_id,c_agent_id,c_stream_sequence,c_payload_sha256,c_received_at,c_status) VALUES(?,?,?,?,?,?)", msg.GetMessageId(), p.GetInstanceId(), d.StreamSeq, hashText, now, "projected").Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-	if err := tx.Exec(`INSERT INTO t_monitor_host_agents(c_agent_id,c_hostname,c_boot_id,c_first_seen_at,c_last_seen_at,c_is_archived) VALUES(?,?,?,?,?,0) ON CONFLICT(c_agent_id) DO UPDATE SET c_hostname=excluded.c_hostname,c_boot_id=excluded.c_boot_id,c_last_seen_at=excluded.c_last_seen_at`, p.GetInstanceId(), p.GetNodeId(), p.GetBootId(), now, now).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-	payload, _ := proto.Marshal(metric)
-	if err := tx.Exec(`INSERT INTO t_monitor_host_latest(c_agent_id,c_occurred_at,c_payload,c_updated_at) VALUES(?,?,?,?) ON CONFLICT(c_agent_id) DO UPDATE SET c_occurred_at=excluded.c_occurred_at,c_payload=excluded.c_payload,c_updated_at=excluded.c_updated_at`, p.GetInstanceId(), msg.GetOccurredAt().AsTime(), payload, now).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-	if err := tx.Exec(`INSERT INTO t_monitor_host_history(c_agent_id,c_observed_at,c_payload) VALUES(?,?,?)`, p.GetInstanceId(), msg.GetOccurredAt().AsTime(), payload).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-	if err := tx.Commit().Error; err != nil {
+	if err := s.persist(ctx, d, metric); err != nil {
 		return err
 	}
 	return d.Ack(ctx)
+}
+
+func (s *Store) persist(ctx context.Context, d *jetstream.Delivery, metric *hostmetricpb.HostMetric) error {
+	if s == nil {
+		return errors.New("host metric store is nil")
+	}
+	if !s.StorageReady() {
+		return errors.New("host storage schema is not ready")
+	}
+	if s == nil || s.writer == nil {
+		return errors.New("host metric storage writer is not configured")
+	}
+	if d == nil || d.Message == nil || metric == nil || d.Message.GetProducer() == nil {
+		return errors.New("host metric delivery is incomplete")
+	}
+	msg := d.Message
+	producer := msg.GetProducer()
+	if err := s.writer.WriteSnapshot(ctx, metric.GetSnapshot(), producer.GetInstanceId(), msg.GetOccurredAt().AsTime(), msg.GetMessageId()); err != nil {
+		return fmt.Errorf("write host metric snapshot: %w", err)
+	}
+	now := time.Now().UTC()
+	view := AgentView{AgentID: producer.GetInstanceId(), Hostname: producer.GetNodeId(), BootID: producer.GetBootId(), LastSeenAt: now.Format(time.RFC3339Nano), Snapshot: cloneSnapshot(metric.GetSnapshot())}
+	s.mu.Lock()
+	if s.latest == nil {
+		s.latest = make(map[string]AgentView)
+	}
+	s.latest[view.AgentID] = view
+	s.mu.Unlock()
+	if s.alert != nil {
+		_ = s.alert.Evaluate(ctx, producer.GetInstanceId(), msg.GetMessageId(), metric.GetSnapshot(), msg.GetOccurredAt().AsTime())
+	}
+	return nil
 }
 
 type AgentView struct {
@@ -243,53 +286,45 @@ type HistoryPoint struct {
 }
 
 func (s *Store) ListAgents(ctx context.Context) ([]AgentView, error) {
-	var rows []struct {
-		AgentID  string    `gorm:"column:c_agent_id"`
-		Hostname string    `gorm:"column:c_hostname"`
-		BootID   string    `gorm:"column:c_boot_id"`
-		LastSeen time.Time `gorm:"column:c_last_seen_at"`
-		Archived bool      `gorm:"column:c_is_archived"`
-		Payload  []byte    `gorm:"column:c_payload"`
-	}
-	if err := s.db.WithContext(ctx).Raw(`SELECT a.c_agent_id,a.c_hostname,a.c_boot_id,a.c_last_seen_at,a.c_is_archived,l.c_payload FROM t_monitor_host_agents a LEFT JOIN t_monitor_host_latest l ON l.c_agent_id=a.c_agent_id ORDER BY a.c_hostname,a.c_agent_id`).Scan(&rows).Error; err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out := make([]AgentView, 0, len(rows))
-	for _, row := range rows {
-		view := AgentView{AgentID: row.AgentID, Hostname: row.Hostname, BootID: row.BootID, LastSeenAt: row.LastSeen.UTC().Format(time.RFC3339Nano), Archived: row.Archived}
-		if len(row.Payload) > 0 {
-			metric := new(hostmetricpb.HostMetric)
-			if err := proto.Unmarshal(row.Payload, metric); err != nil {
-				return nil, err
-			}
-			view.Snapshot = metric.GetSnapshot()
-		}
+	if s == nil {
+		return nil, errors.New("host metric store is nil")
+	}
+	s.mu.RLock()
+	out := make([]AgentView, 0, len(s.latest))
+	for _, view := range s.latest {
+		view.Snapshot = cloneSnapshot(view.Snapshot)
 		out = append(out, view)
 	}
+	s.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Hostname != out[j].Hostname {
+			return out[i].Hostname < out[j].Hostname
+		}
+		return out[i].AgentID < out[j].AgentID
+	})
 	return out, nil
 }
 
 func (s *Store) History(ctx context.Context, agentID string, start, end time.Time, limit int) ([]HistoryPoint, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 500
-	}
-	var rows []struct {
-		AgentID  string    `gorm:"column:c_agent_id"`
-		Observed time.Time `gorm:"column:c_observed_at"`
-		Payload  []byte    `gorm:"column:c_payload"`
-	}
-	if err := s.db.WithContext(ctx).Raw(`SELECT c_agent_id,c_observed_at,c_payload FROM t_monitor_host_history WHERE c_agent_id=? AND c_observed_at>=? AND c_observed_at<=? ORDER BY c_observed_at ASC LIMIT ?`, agentID, start, end, limit).Scan(&rows).Error; err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out := make([]HistoryPoint, 0, len(rows))
-	for _, row := range rows {
-		metric := new(hostmetricpb.HostMetric)
-		if err := proto.Unmarshal(row.Payload, metric); err != nil {
-			return nil, err
-		}
-		out = append(out, HistoryPoint{AgentID: row.AgentID, ObservedAt: row.Observed.UTC().Format(time.RFC3339Nano), Snapshot: metric.GetSnapshot()})
+	if s != nil && s.reader != nil {
+		return s.reader.History(ctx, agentID, start, end, limit)
 	}
-	return out, nil
+	// History now belongs to Storage. A missing reader is a degraded startup
+	// state; return an empty result rather than reading removed SQLite tables.
+	return []HistoryPoint{}, nil
+}
+
+func cloneSnapshot(snapshot *hostmetricpb.HostSnapshot) *hostmetricpb.HostSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	return proto.Clone(snapshot).(*hostmetricpb.HostSnapshot)
 }
 
 type Consumer struct {
@@ -334,7 +369,7 @@ func bind(ctx context.Context, client *jetstream.Client, store *Store, dlq DLQPu
 	if client == nil || store == nil {
 		return nil, errors.New("host metrics client and store are required")
 	}
-	pull, err := client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: Stream, Durable: Durable, FilterSubject: Topic, AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 256, FetchMaxWait: time.Second})
+	pull, err := client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: Stream, Durable: Durable, FilterSubject: Topic, AckWait: 60 * time.Second, MaxDeliver: 3, MaxAckPending: 256, FetchMaxWait: time.Second})
 	if err != nil {
 		return nil, err
 	}
@@ -347,18 +382,21 @@ func (c *Consumer) Close() error {
 	return c.pull.Close()
 }
 func (c *Consumer) Run(ctx context.Context) error {
+	if c == nil || c.pull == nil || c.store == nil {
+		return errors.New("host metrics consumer is not initialized")
+	}
 	for {
+		if !c.store.StorageReady() {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(time.Second):
+			}
+			continue
+		}
 		ds, err := c.pull.Fetch(ctx, 64)
 		for _, d := range ds {
-			if handleErr := c.store.Ingest(ctx, d); handleErr != nil {
-				if c.dlq != nil {
-					if err := c.dlq.Publish(context.Background(), rejectionMessage(d, handleErr.Error())); err != nil {
-						_ = d.Nak(context.Background(), time.Second)
-						continue
-					}
-				}
-				_ = d.Term(context.Background())
-			}
+			c.handleDelivery(ctx, d)
 		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, jetstream.ErrClosed) {
@@ -366,6 +404,41 @@ func (c *Consumer) Run(ctx context.Context) error {
 			}
 			return err
 		}
+	}
+}
+
+func (c *Consumer) handleDelivery(ctx context.Context, d *jetstream.Delivery) {
+	if d == nil {
+		return
+	}
+	metric, err := ValidateMessage(d.Message)
+	if err != nil {
+		if c.dlq != nil {
+			if publishErr := c.dlq.Publish(ctx, rejectionMessage(d, err.Error())); publishErr != nil {
+				_ = d.Nak(ctx, retryDelay(d.DeliveryCount))
+				return
+			}
+		}
+		_ = d.Term(ctx)
+		return
+	}
+	if err := c.store.persist(ctx, d, metric); err != nil {
+		// Storage is transient from the consumer's perspective. NAK lets
+		// JetStream redeliver up to the durable consumer's MaxDeliver=3.
+		_ = d.Nak(ctx, retryDelay(d.DeliveryCount))
+		return
+	}
+	_ = d.Ack(ctx)
+}
+
+func retryDelay(deliveryCount uint64) time.Duration {
+	switch {
+	case deliveryCount <= 1:
+		return time.Second
+	case deliveryCount == 2:
+		return 5 * time.Second
+	default:
+		return 15 * time.Second
 	}
 }
 
