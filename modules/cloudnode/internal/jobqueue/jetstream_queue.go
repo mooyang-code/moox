@@ -24,14 +24,16 @@ const JobRequestedTopic = "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*"
 
 // JetStreamQueue implements ExecutionQueue on the centrally managed stream.
 type JetStreamQueue struct {
-	rt        *Runtime
-	client    *jetstream.Client
-	cfg       QueueConfig
-	mu        sync.Mutex
-	fetchMu   sync.Mutex
-	inflight  map[string]*jetstream.Delivery
-	consumers map[string]*jetstream.PullConsumer
-	closed    bool
+	rt                *Runtime
+	client            *jetstream.Client
+	cfg               QueueConfig
+	mu                sync.Mutex
+	fetchMu           sync.Mutex
+	inflight          map[string]*jetstream.Delivery
+	consumers         map[string]*jetstream.PullConsumer
+	closed            bool
+	legacyCleanupOnce sync.Once
+	legacyCleanupErr  error
 }
 
 func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
@@ -83,6 +85,12 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*Publis
 }
 
 func (q *JetStreamQueue) ensureConsumer(spaceID, codePackageID, jobType string) (*jetstream.PullConsumer, error) {
+	q.legacyCleanupOnce.Do(func() {
+		q.legacyCleanupErr = q.client.DeleteConsumer(context.Background(), q.cfg.ExecStream, "cn_exec_all")
+	})
+	if q.legacyCleanupErr != nil {
+		return nil, fmt.Errorf("remove legacy wildcard execution consumer: %w", q.legacyCleanupErr)
+	}
 	key := spaceID + "\x00" + codePackageID + "\x00" + jobType
 	q.mu.Lock()
 	defer q.mu.Unlock()

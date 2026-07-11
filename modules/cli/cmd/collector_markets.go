@@ -57,8 +57,9 @@ var collectorFunctionVerifyMarketsCmd = &cobra.Command{
 			for _, node := range nodes {
 				if node.NodeID == manifest.SCF.FunctionName && node.FunctionName == manifest.SCF.FunctionName {
 					actual, ok := node.Metadata["actual_scf"].(map[string]any)
-					if !ok || fmt.Sprint(actual["runtime"]) != "Go1" || fmt.Sprint(actual["handler"]) != "main" || int64Value(actual["timeout"]) != manifest.SCF.TimeoutSeconds || nestedString(actual, "environment", "MOOX_SPACE_ID") != manifest.SpaceID || !strings.EqualFold(fmt.Sprint(actual["status"]), "Active") {
-						return fmt.Errorf("market %s SCF actual configuration does not match manifest", manifest.MarketID)
+					spaceMatches := ok && nestedString(actual, "environment", "MOOX_SPACE_ID") == manifest.SpaceID
+					if !ok || fmt.Sprint(actual["runtime"]) != "Go1" || fmt.Sprint(actual["handler"]) != "main" || int64Value(actual["timeout"]) != manifest.SCF.TimeoutSeconds || !spaceMatches || !strings.EqualFold(fmt.Sprint(actual["status"]), "Active") {
+						return fmt.Errorf("market %s SCF actual configuration does not match manifest: runtime=%q handler=%q timeout=%d status=%q space_matches=%t", manifest.MarketID, fmt.Sprint(actual["runtime"]), fmt.Sprint(actual["handler"]), int64Value(actual["timeout"]), fmt.Sprint(actual["status"]), spaceMatches)
 					}
 					found = true
 					break

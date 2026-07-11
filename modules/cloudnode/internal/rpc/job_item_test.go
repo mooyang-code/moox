@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
 )
@@ -53,6 +54,14 @@ func TestJobItemRPCUsesActiveKVAndWritesHistory(t *testing.T) {
 	}
 
 	rt, jsCfg := startRPCQueueRuntime(t)
+	legacy, err := rt.Client().NewPullConsumer(ctx, jetstream.ConsumerConfig{
+		Stream: jsCfg.ExecStream, Durable: "cn_exec_all", FilterSubject: jobqueue.JobRequestedTopic,
+		AckWait: 200 * time.Millisecond, MaxDeliver: 3, MaxAckPending: 10, FetchMaxWait: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("seed legacy wildcard consumer: %v", err)
+	}
+	t.Cleanup(func() { _ = legacy.Close() })
 	kv, err := rt.JetStream().KeyValue(config.Default().JobItem.ActiveKVBucket)
 	if err != nil {
 		t.Fatalf("KeyValue() error = %v", err)
