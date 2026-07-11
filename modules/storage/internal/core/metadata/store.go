@@ -55,6 +55,7 @@ type Writer interface {
 	UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subject, error)
 	UpsertSubjectSymbol(ctx context.Context, item *pb.SubjectSymbol) (*pb.SubjectSymbol, error)
 	RegisterDataSubject(ctx context.Context, subject *pb.Subject, symbol *pb.SubjectSymbol, bindings []*pb.DatasetSubject) (*pb.Subject, []*pb.DatasetSubject, error)
+	BatchRegisterDataSubjects(ctx context.Context, registrations []DataSubjectRegistration) ([]DataSubjectRegistration, error)
 	UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error)
 	BindDatasetSubject(ctx context.Context, item *pb.DatasetSubject) (*pb.DatasetSubject, error)
 	UpsertField(ctx context.Context, item *pb.Field) (*pb.Field, error)
@@ -64,6 +65,12 @@ type Writer interface {
 	UpsertDevice(ctx context.Context, item *pb.Device) (*pb.Device, error)
 	UpsertPrimaryStoreRoute(ctx context.Context, item *pb.PrimaryStoreRoute) (*pb.PrimaryStoreRoute, error)
 	RegisterArchiveFile(ctx context.Context, item *pb.ArchiveFile) (*pb.ArchiveFile, error)
+}
+
+type DataSubjectRegistration struct {
+	Subject  *pb.Subject
+	Symbol   *pb.SubjectSymbol
+	Bindings []*pb.DatasetSubject
 }
 
 // Store 组合元数据读写能力与生命周期管理能力。

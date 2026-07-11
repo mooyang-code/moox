@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
@@ -28,6 +29,22 @@ func TestListDatasetSubjectsPagesInSQL(t *testing.T) {
 	}
 	if page.GetTotal() != 3 || !page.GetHasMore() {
 		t.Fatalf("page = %+v, want total=3 has_more=true", page)
+	}
+}
+
+func TestBatchRegisterDataSubjectsRollsBackWholePage(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedSpaceSourceDataset(t, ctx, store)
+	registration := func(subjectID, datasetID string) coremetadata.DataSubjectRegistration {
+		return coremetadata.DataSubjectRegistration{Subject: &pb.Subject{SpaceId: "space", SubjectId: subjectID, SubjectType: "instrument", Name: subjectID}, Symbol: &pb.SubjectSymbol{SpaceId: "space", SubjectId: subjectID, DataSourceId: "source", ExternalSymbol: subjectID}, Bindings: []*pb.DatasetSubject{{SpaceId: "space", DatasetId: datasetID, SubjectId: subjectID}}}
+	}
+	_, err := store.BatchRegisterDataSubjects(ctx, []coremetadata.DataSubjectRegistration{registration("valid", "dataset"), registration("invalid", "missing")})
+	if err == nil {
+		t.Fatal("batch with missing dataset succeeded")
+	}
+	if _, err := store.GetSubject(ctx, "space", "valid"); err == nil {
+		t.Fatal("first batch item survived rollback")
 	}
 }
 

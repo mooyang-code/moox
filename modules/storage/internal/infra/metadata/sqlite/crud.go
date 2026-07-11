@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	coreviewindex "github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -314,11 +315,59 @@ func bindDatasetSubject(ctx context.Context, store execQueryRower, item *pb.Data
 // RegisterDataSubject commits the catalog aggregate as one transaction so a
 // subject can never be visible without its symbol and requested bindings.
 func (s *Store) RegisterDataSubject(ctx context.Context, subject *pb.Subject, symbol *pb.SubjectSymbol, bindings []*pb.DatasetSubject) (*pb.Subject, []*pb.DatasetSubject, error) {
+	registration, err := normalizeDataSubjectRegistration(coremetadata.DataSubjectRegistration{Subject: subject, Symbol: symbol, Bindings: bindings})
+	if err != nil {
+		return nil, nil, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := registerDataSubjectTx(ctx, tx, registration); err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return registration.Subject, registration.Bindings, nil
+}
+
+func (s *Store) BatchRegisterDataSubjects(ctx context.Context, registrations []coremetadata.DataSubjectRegistration) ([]coremetadata.DataSubjectRegistration, error) {
+	if len(registrations) == 0 {
+		return nil, errors.New("registrations are required")
+	}
+	normalized := make([]coremetadata.DataSubjectRegistration, 0, len(registrations))
+	for _, registration := range registrations {
+		value, err := normalizeDataSubjectRegistration(registration)
+		if err != nil {
+			return nil, err
+		}
+		normalized = append(normalized, value)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, registration := range normalized {
+		if err := registerDataSubjectTx(ctx, tx, registration); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
+func normalizeDataSubjectRegistration(registration coremetadata.DataSubjectRegistration) (coremetadata.DataSubjectRegistration, error) {
+	subject, symbol, bindings := registration.Subject, registration.Symbol, registration.Bindings
 	if subject == nil || subject.GetSpaceId() == "" || subject.GetSubjectId() == "" || subject.GetSubjectType() == "" {
-		return nil, nil, errors.New("space_id, subject_id and subject_type are required")
+		return coremetadata.DataSubjectRegistration{}, errors.New("space_id, subject_id and subject_type are required")
 	}
 	if symbol == nil || symbol.GetSpaceId() != subject.GetSpaceId() || symbol.GetSubjectId() != subject.GetSubjectId() || symbol.GetDataSourceId() == "" || symbol.GetExternalSymbol() == "" {
-		return nil, nil, errors.New("subject symbol must match space_id and subject_id and include data_source_id and external_symbol")
+		return coremetadata.DataSubjectRegistration{}, errors.New("subject symbol must match space_id and subject_id and include data_source_id and external_symbol")
 	}
 
 	subject = proto.Clone(subject).(*pb.Subject)
@@ -328,7 +377,7 @@ func (s *Store) RegisterDataSubject(ctx context.Context, subject *pb.Subject, sy
 	normalizedBindings := make([]*pb.DatasetSubject, 0, len(bindings))
 	for _, binding := range bindings {
 		if binding == nil || binding.GetSpaceId() != subject.GetSpaceId() || binding.GetSubjectId() != subject.GetSubjectId() || binding.GetDatasetId() == "" {
-			return nil, nil, errors.New("dataset binding must match space_id and subject_id and include dataset_id")
+			return coremetadata.DataSubjectRegistration{}, errors.New("dataset binding must match space_id and subject_id and include dataset_id")
 		}
 		copied := proto.Clone(binding).(*pb.DatasetSubject)
 		copied.Status = defaultStatus(copied.GetStatus())
@@ -337,36 +386,31 @@ func (s *Store) RegisterDataSubject(ctx context.Context, subject *pb.Subject, sy
 		}
 		normalizedBindings = append(normalizedBindings, copied)
 	}
+	return coremetadata.DataSubjectRegistration{Subject: subject, Symbol: symbol, Bindings: normalizedBindings}, nil
+}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	for _, binding := range normalizedBindings {
+func registerDataSubjectTx(ctx context.Context, tx *sql.Tx, registration coremetadata.DataSubjectRegistration) error {
+	for _, binding := range registration.Bindings {
 		var found int
 		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`, binding.GetSpaceId(), binding.GetDatasetId()).Scan(&found); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return nil, nil, fmt.Errorf("dataset %s/%s not found: %w", binding.GetSpaceId(), binding.GetDatasetId(), err)
+				return fmt.Errorf("dataset %s/%s not found: %w", binding.GetSpaceId(), binding.GetDatasetId(), err)
 			}
-			return nil, nil, err
+			return err
 		}
 	}
-	if err := upsertSubject(ctx, tx, subject); err != nil {
-		return nil, nil, err
+	if err := upsertSubject(ctx, tx, registration.Subject); err != nil {
+		return err
 	}
-	if err := upsertSubjectSymbol(ctx, tx, symbol); err != nil {
-		return nil, nil, err
+	if err := upsertSubjectSymbol(ctx, tx, registration.Symbol); err != nil {
+		return err
 	}
-	for _, binding := range normalizedBindings {
+	for _, binding := range registration.Bindings {
 		if err := bindDatasetSubject(ctx, tx, binding); err != nil {
-			return nil, nil, err
+			return err
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, nil, err
-	}
-	return subject, normalizedBindings, nil
+	return nil
 }
 
 func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {

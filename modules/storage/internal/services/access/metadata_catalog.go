@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
@@ -140,23 +141,55 @@ func (s *Service) BatchRegisterDataSubjects(ctx context.Context, req *pb.BatchRe
 	if len(req.GetItems()) > 500 {
 		return &pb.BatchRegisterDataSubjectsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("batch size must be <= 500"))}, nil
 	}
-	results := make([]*pb.RegisterDataSubjectRsp, 0, len(req.GetItems()))
+	registrations := make([]coremetadata.DataSubjectRegistration, 0, len(req.GetItems()))
 	for _, item := range req.GetItems() {
 		if item == nil {
 			return &pb.BatchRegisterDataSubjectsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("batch item is required"))}, nil
 		}
-		if item.AuthInfo == nil {
-			item = proto.Clone(item).(*pb.RegisterDataSubjectReq)
-			item.AuthInfo = req.GetAuthInfo()
+		if item.GetSpaceId() == "" || item.GetDataSourceId() == "" || item.GetExternalSymbol() == "" || item.GetSubject() == nil || item.GetSubject().GetSubjectId() == "" {
+			return &pb.BatchRegisterDataSubjectsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, data_source_id, external_symbol and subject.subject_id are required"))}, nil
 		}
-		result, err := s.RegisterDataSubject(ctx, item)
-		if err != nil {
-			return nil, err
+		subject := proto.Clone(item.GetSubject()).(*pb.Subject)
+		subject.SpaceId = item.GetSpaceId()
+		if subject.Status == "" {
+			subject.Status = "active"
 		}
-		if result.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			return &pb.BatchRegisterDataSubjectsRsp{RetInfo: result.GetRetInfo(), Results: results}, nil
+		if subject.SubjectType == "" {
+			subject.SubjectType = "custom"
 		}
-		results = append(results, result)
+		symbol := &pb.SubjectSymbol{SpaceId: item.GetSpaceId(), SubjectId: subject.GetSubjectId(), DataSourceId: item.GetDataSourceId(), ExternalSymbol: item.GetExternalSymbol(), Status: "active"}
+		bindings := make([]*pb.DatasetSubject, 0, len(item.GetDatasetBindings()))
+		for _, binding := range item.GetDatasetBindings() {
+			if binding == nil || binding.GetDatasetId() == "" {
+				return &pb.BatchRegisterDataSubjectsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_bindings.dataset_id is required"))}, nil
+			}
+			copied := proto.Clone(binding).(*pb.DatasetSubject)
+			copied.SpaceId = item.GetSpaceId()
+			copied.SubjectId = subject.GetSubjectId()
+			if copied.SubjectRole == "" {
+				copied.SubjectRole = "normal"
+			}
+			if copied.Status == "" {
+				copied.Status = "active"
+			}
+			bindings = append(bindings, copied)
+		}
+		registrations = append(registrations, coremetadata.DataSubjectRegistration{Subject: subject, Symbol: symbol, Bindings: bindings})
+	}
+	created, err := s.metadata.BatchRegisterDataSubjects(ctx, registrations)
+	if err != nil {
+		code := response.MetadataStoreCode(err)
+		if code == pb.ErrorCode_NOT_FOUND {
+			code = pb.ErrorCode_DATASET_NOT_FOUND
+		}
+		return &pb.BatchRegisterDataSubjectsRsp{RetInfo: response.Error(code, err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.BatchRegisterDataSubjectsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	results := make([]*pb.RegisterDataSubjectRsp, 0, len(created))
+	for _, value := range created {
+		results = append(results, &pb.RegisterDataSubjectRsp{RetInfo: response.Success("success"), Subject: value.Subject, DatasetBindings: value.Bindings})
 	}
 	return &pb.BatchRegisterDataSubjectsRsp{RetInfo: response.Success("success"), Results: results}, nil
 }
