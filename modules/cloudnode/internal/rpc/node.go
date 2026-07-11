@@ -38,8 +38,15 @@ func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.
 				return &pb.GetNodeListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "SCF verification failed: "+probeErr.Error())}, nil
 			}
 			metadata := value.GetMetadata().AsMap()
-			metadata["actual_scf"] = map[string]any{"runtime": info.Runtime, "handler": info.Handler, "memory_size": info.MemorySize, "timeout": info.Timeout, "environment": info.Environment, "status": info.Status, "code_size": info.CodeSize, "mod_time": info.ModTime}
-			value.Metadata, _ = structpb.NewStruct(metadata)
+			environment := make(map[string]any, len(info.Environment))
+			for key, item := range info.Environment {
+				environment[key] = item
+			}
+			metadata["actual_scf"] = map[string]any{"runtime": info.Runtime, "handler": info.Handler, "memory_size": info.MemorySize, "timeout": info.Timeout, "environment": environment, "status": info.Status, "code_size": info.CodeSize, "mod_time": info.ModTime}
+			value.Metadata, err = structpb.NewStruct(metadata)
+			if err != nil {
+				return &pb.GetNodeListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "SCF verification metadata failed: "+err.Error())}, nil
+			}
 		}
 		out = append(out, value)
 	}
