@@ -474,13 +474,12 @@ func seedMaintenanceNamedView(t *testing.T, ctx context.Context, store *metasqli
 }
 
 type maintenanceFacts struct {
-	timeRows     []*pb.TimeSeriesRow
-	recordRows   []*pb.RecordRow
-	timeRanges   []*pb.TimeRange
-	recordRanges []*pb.VersionRange
-	timePages    []*pb.PageResult
-	onTimeScan   func(int)
-	timeScans    int
+	timeRows   []*pb.TimeSeriesRow
+	recordRows []*pb.RecordRow
+	timeRanges []*pb.TimeRange
+	timePages  []*pb.PageResult
+	onTimeScan func(int)
+	timeScans  int
 }
 
 func (f *maintenanceFacts) ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
@@ -504,8 +503,7 @@ func (f *maintenanceFacts) ReadRecordRows(context.Context, *pb.ReadRecordRowsReq
 	return &pb.ReadRecordRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
 
-func (f *maintenanceFacts) ScanRecordRows(_ context.Context, _ string, _ string, versionRange *pb.VersionRange, _ []string, _ *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
-	f.recordRanges = append(f.recordRanges, versionRange)
+func (f *maintenanceFacts) ScanRecordRows(_ context.Context, _ string, _ string, _ []string, _ *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
 	return f.recordRows, &pb.PageResult{Page: 1, Size: 100}, nil
 }
 

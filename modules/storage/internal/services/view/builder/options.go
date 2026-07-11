@@ -2,6 +2,7 @@ package builder
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
@@ -47,12 +48,16 @@ func viewIndexBatch(item *pb.View, columns []*pb.ViewColumn, timeRows []*pb.Time
 		}
 		schemaHash = viewindex.HashViewIndexSchema(schema)
 	}
+	mode := item.GetRecordViewMode()
+	if mode == pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED && strings.EqualFold(item.GetEngine(), "bleve") {
+		mode = pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT
+	}
 	batch := viewindex.ViewIndexBatch{
 		TimeSeriesRows: timeRows, RecordRows: recordRows, Columns: columns,
 		ViewVersion: version, SchemaHash: schemaHash,
-		RecordViewMode: item.GetRecordViewMode(),
+		RecordViewMode: mode,
 	}
-	if item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+	if mode != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
 		batch.RecordRows = nil
 		for _, row := range recordRows {
 			if row == nil {

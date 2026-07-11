@@ -7,16 +7,6 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
-func TestValidateWriteRecordRowsUsesServerManagedMetadata(t *testing.T) {
-	validator := NewValidator(recordVersionMetadata{})
-	row := &pb.RecordRow{Key: &pb.RecordKey{
-		SpaceId: "crypto", DatasetId: "news", RecordId: "news-1",
-	}}
-	if err := validator.ValidateWriteRecordRows(context.Background(), []*pb.RecordRow{row}); err != nil {
-		t.Fatalf("server-managed metadata: %v", err)
-	}
-}
-
 func TestValidateRecordMutationAllowsPartialUpdate(t *testing.T) {
 	validator := NewValidator(recordVersionMetadata{})
 	mutation := &pb.RecordMutation{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1"}}

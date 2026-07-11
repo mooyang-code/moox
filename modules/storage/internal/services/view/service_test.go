@@ -148,9 +148,7 @@ func TestSearchRecordRowsActiveSchemaRejectsNewColumnBeforeSwitch(t *testing.T) 
 	if err := searchService.Prepare(ctx, indexID, activeSchemaViewIndexSchema(activeColumns)); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if err := searchService.Write(ctx, indexID, viewindex.ViewIndexBatch{Columns: activeColumns, RecordRows: []*pb.RecordRow{
-		activeSchemaRecordRow(activeSchemaStringValue("title", "market update")),
-	}}); err != nil {
+	if err := searchService.Write(ctx, indexID, viewindex.ViewIndexBatch{Columns: activeColumns, RecordViewMode: pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT, RecordMutations: []*pb.RecordIndexMutation{{Row: activeSchemaRecordRow(activeSchemaStringValue("title", "market update")), OrderCommitSeq: 1}}}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -180,9 +178,7 @@ func TestSearchRecordRowsActiveSchemaAllowsExistingColumnDuringBuild(t *testing.
 	if err := searchService.Prepare(ctx, indexID, activeSchemaViewIndexSchema(activeColumns)); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if err := searchService.Write(ctx, indexID, viewindex.ViewIndexBatch{Columns: activeColumns, RecordRows: []*pb.RecordRow{
-		activeSchemaRecordRow(activeSchemaStringValue("title", "market update")),
-	}}); err != nil {
+	if err := searchService.Write(ctx, indexID, viewindex.ViewIndexBatch{Columns: activeColumns, RecordViewMode: pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT, RecordMutations: []*pb.RecordIndexMutation{{Row: activeSchemaRecordRow(activeSchemaStringValue("title", "market update")), OrderCommitSeq: 1}}}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -249,6 +245,12 @@ func activeSchemaTestMetadata(kind pb.DataKind, activeColumns []*pb.ViewColumn, 
 		view: &pb.View{
 			SpaceId: "crypto", ViewId: "spot_view", PrimaryDatasetId: "ds1",
 			Engine: activeSchemaEngine(kind), ActiveIndexId: activeSchemaActiveIndexID(),
+			RecordViewMode: func() pb.RecordViewMode {
+				if kind == pb.DataKind_DATA_KIND_RECORD {
+					return pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT
+				}
+				return pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED
+			}(),
 			ViewVersion: 2, ActiveViewVersion: 1, ActiveColumns: activeColumns, Columns: allColumns,
 			IndexBuild: &pb.ViewIndexBuild{
 				BuildId: "build-2", IndexId: viewindex.ViewIndexID("crypto", "spot_view", viewindex.SlotB),
@@ -320,7 +322,7 @@ func activeSchemaRecordRow(columns ...*pb.ColumnValue) *pb.RecordRow {
 }
 
 func activeSchemaViewIndexSchema(columns []*pb.ViewColumn) viewindex.ViewIndexSchema {
-	schema := viewindex.ViewIndexSchema{SpaceID: "crypto", ViewID: "spot_view", Engine: "bleve", Columns: columns}
+	schema := viewindex.ViewIndexSchema{SpaceID: "crypto", ViewID: "spot_view", Engine: "bleve", Columns: columns, RecordViewMode: pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT, LayoutRevision: viewindex.RecordLayoutRevision, PrimaryDatasetID: "ds1", DatasetIDs: []string{"ds1"}}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	return schema
 }

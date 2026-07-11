@@ -186,7 +186,8 @@ message ScanRecordRowsReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
   string dataset_id = 3;
-  VersionRange version_range = 4;
+  reserved 4;
+  reserved "version_range";
   repeated string column_names = 5;
   common.Page page = 6;
 }

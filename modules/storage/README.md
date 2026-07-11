@@ -6,7 +6,7 @@ MooX Storage 是面向量化金融场景的统一数据存储服务。它在**�
 
 ## 能力一览
 
-- **统一写入与读取**：所有数据访问都经由 Access 入口；时序数据使用 `TimeSeriesKey + TimeRange`，记录数据使用 `RecordKey + VersionRange`，写入按事实键做列级更新。
+- **统一写入与读取**：所有数据访问都经由 Access 入口；时序数据使用 `TimeSeriesKey + TimeRange`，记录数据使用 `UpsertRecordRows` 与 CURRENT/HISTORY 读取，写入按逻辑 key 做列级 patch。
 - **多形态数据**：时序（K 线/tick/快照）、记录（公司/交易对资料）、事件、文档、通用表格，以及参数化因子结果。
 - **Record 全文检索**：登记 Record View 后由 Bleve 维护 a/b 双槽索引，支持 `text_query` 与结构化过滤。
 - **TimeSeries 物化视图**：登记 TimeSeries View 后由 DuckDB 维护 a/b 双库，`QueryTimeSeriesRows` 只读取已激活槽位。
@@ -173,7 +173,7 @@ storage:
 仓库默认事件总线是 `memory`，适合单进程开发和个人部署；它仍然异步投递事件，不提供写后立即可查派生结果的契约。分布式部署或希望持久化事件时，把 `eventbus.type` 改为 `nats`，可连接独立 NATS，也可显式开启 `eventbus.embedded.enabled` 使用内嵌 JetStream。NATS 行变更 subject 使用 `eventbus.subject_prefix` 拼接：
 
 - `${prefix}.time_series.rows_changed.v1`
-- `${prefix}.record.rows_changed.v1`
+- `${prefix}.record.rows_committed.v1`
 
 NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。实时事件处理失败会向上传递错误，由 JetStream `Nak` 并重试；历史补仓、断档追数和索引重建统一交给 view_builder 的 `op=maintain`。`max_age_hours`、`max_msgs`、`max_bytes` 限制 stream 保留，`max_in_flight`、`ack_wait_ms`、`max_deliver` 控制消费压力。维护参数位于 `view.maintenance`。
 
@@ -556,7 +556,7 @@ curl -s -XPOST http://127.0.0.1:20200/trpc.moox.storage.Metadata/ListSpaces \
 
 3. **读写链路**：通过 Access 写一行再读回，等待 `op=maintain` 激活首个索引后查询 DataView。
 
-4. **分布式额外检查**：Access 节点日志无"primary store"连接错误；主存节点 `PrimaryStore` 端口可被 Access 节点 `telnet`/`nc` 通；NATS 上能看到 `moox.storage.time_series.rows_changed.v1` / `moox.storage.record.rows_changed.v1` 主题有消息。
+4. **分布式额外检查**：Access 节点日志无"primary store"连接错误；主存节点 `PrimaryStore` 端口可被 Access 节点 `telnet`/`nc` 通；NATS 上能看到 `moox.storage.time_series.rows_changed.v1` / `moox.storage.record.rows_committed.v1` 主题有消息。
 
 5. **远程 View 验证**：线上或远程发布后通过 admin gateway `11000` 调用 `/api/admin/storage_view/QueryTimeSeriesRows` 或 `/api/admin/storage_view/SearchRecordRows`，请求必须使用小 `limit` / 小分页并跳过精确总数（例如 `total_mode=NONE`），不要做无界生产扫描。
 

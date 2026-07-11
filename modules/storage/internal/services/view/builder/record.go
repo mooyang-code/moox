@@ -88,6 +88,66 @@ func (s *Service) processRecordBatch(ctx context.Context, keys []*pb.RecordKey) 
 	return nil
 }
 
+// processHistoryRecordBatch consumes the committed payload directly. It must
+// never reread CURRENT: a later mutation may already have replaced it.
+func (s *Service) processHistoryRecordBatch(ctx context.Context, rows []*pb.RecordRow, sourceID string) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	grouped := make(map[projectionDatasetKey][]*pb.RecordRow)
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		key := row.GetKey()
+		grouped[projectionDatasetKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}] = append(grouped[projectionDatasetKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}], row)
+	}
+	for key, committedRows := range grouped {
+		views, err := s.metadata.ListViewsByDataset(ctx, key.spaceID, key.datasetID)
+		if err != nil {
+			return err
+		}
+		for _, item := range views {
+			if !strings.EqualFold(item.GetEngine(), "bleve") || item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_HISTORY {
+				continue
+			}
+			engine, err := s.engine(item.GetEngine())
+			if err != nil {
+				return err
+			}
+			columns, _, err := s.metadata.ListViewColumns(ctx, item.GetSpaceId(), item.GetViewId(), &pb.Page{Size: 10000})
+			if err != nil {
+				return err
+			}
+			mutations := make([]*pb.RecordIndexMutation, 0, len(committedRows))
+			for _, row := range committedRows {
+				mutation, mutationErr := viewsvc.BuildHistoryRecordMutation(item, row, sourceID)
+				if mutationErr != nil {
+					return mutationErr
+				}
+				mutations = append(mutations, mutation)
+			}
+			batch := viewIndexBatch(item, columns, nil, nil, false)
+			batch.RecordMutations = mutations
+			batch.RecordRows = nil
+			if item.GetActiveIndexId() != "" && writableIndexSet(item)[item.GetActiveIndexId()] {
+				if err := engine.Write(ctx, item.GetActiveIndexId(), batch); err != nil {
+					return err
+				}
+			}
+			if buildID := item.GetIndexBuild().GetIndexId(); buildID != "" && writableIndexSet(item)[buildID] && buildID != item.GetActiveIndexId() {
+				warming := viewIndexBatch(item, columns, nil, nil, true)
+				warming.RecordMutations = mutations
+				warming.RecordRows = nil
+				if err := engine.Write(ctx, buildID, warming); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Service) currentRecordRows(ctx context.Context, keys []*pb.RecordKey) ([]*pb.RecordRow, error) {
 	queryKeys := make([]*pb.RecordKey, 0, len(keys))
 	for _, key := range keys {

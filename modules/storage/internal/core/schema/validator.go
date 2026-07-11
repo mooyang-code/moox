@@ -36,19 +36,6 @@ func (v *Validator) ValidateWriteTimeSeriesRows(ctx context.Context, rows []*pb.
 	return nil
 }
 
-func (v *Validator) ValidateWriteRecordRows(ctx context.Context, rows []*pb.RecordRow) error {
-	for _, row := range rows {
-		key := row.GetKey()
-		if key == nil {
-			return fmt.Errorf("key is required")
-		}
-		if err := validateDatasetColumns(ctx, v.metadata, key.GetSpaceId(), key.GetDatasetId(), pb.DataKind_DATA_KIND_RECORD, row.GetColumns()); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // ValidateRecordMutation validates a server-managed revision patch. Required
 // columns are enforced only for creates; updates may omit them because the
 // PrimaryStore merges against the authoritative CURRENT row.

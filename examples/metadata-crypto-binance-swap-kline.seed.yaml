@@ -243,7 +243,7 @@ views:
     grain_keys: ["subject_id", "freq", "data_time"]
     filter_json: '{"freq":"1h"}'
     engine: duckdb
-    query_window: 30d
+    retention_window: 30d
     build_status: pending
     status: active
 

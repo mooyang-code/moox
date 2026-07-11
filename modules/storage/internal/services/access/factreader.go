@@ -52,14 +52,13 @@ func (s *Service) scanTimeSeriesRows(ctx context.Context, spaceID string, datase
 	return rsp.GetRows(), rsp.GetPageResult(), nil
 }
 
-func (s *Service) scanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
+func (s *Service) scanRecordRows(ctx context.Context, spaceID string, datasetID string, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
 	req := &pb.ReadRecordRowsReq{
 		Keys:        []*pb.RecordKey{{SpaceId: spaceID, DatasetId: datasetID}},
 		Mode:        pb.RecordReadMode_RECORD_READ_MODE_HISTORY,
 		ColumnNames: columnNames,
 		Page:        page,
 	}
-	_ = versionRange
 	rsp, err := s.ReadRecordRows(ctx, req)
 	if err != nil {
 		return nil, nil, err
@@ -88,7 +87,7 @@ func (s *Service) ScanRecordRows(ctx context.Context, req *pb.ScanRecordRowsReq)
 	if req.GetSpaceId() == "" || req.GetDatasetId() == "" {
 		return &pb.ScanRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("space_id and dataset_id are required"))}, nil
 	}
-	rows, page, err := s.scanRecordRows(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetVersionRange(), req.GetColumnNames(), req.GetPage())
+	rows, page, err := s.scanRecordRows(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetColumnNames(), req.GetPage())
 	if err != nil {
 		return &pb.ScanRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
 	}
@@ -107,8 +106,8 @@ func (r *primaryFactReader) ReadRecordRows(ctx context.Context, req *pb.ReadReco
 	return r.service.ReadRecordRows(ctx, req)
 }
 
-func (r *primaryFactReader) ScanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
-	return r.service.scanRecordRows(ctx, spaceID, datasetID, versionRange, columnNames, page)
+func (r *primaryFactReader) ScanRecordRows(ctx context.Context, spaceID string, datasetID string, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
+	return r.service.scanRecordRows(ctx, spaceID, datasetID, columnNames, page)
 }
 
 func (r *primaryFactReader) OpenRecordSnapshot(ctx context.Context, req *pb.OpenRecordAccessSnapshotReq) (*pb.OpenRecordAccessSnapshotRsp, error) {

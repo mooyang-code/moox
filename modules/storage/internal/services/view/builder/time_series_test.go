@@ -282,7 +282,7 @@ func (w *recordingViewIndexEngine) Write(_ context.Context, indexID string, batc
 	if w.writes == nil {
 		w.writes = map[string]int{}
 	}
-	w.writes[indexID] += len(batch.TimeSeriesRows) + len(batch.RecordRows)
+	w.writes[indexID] += len(batch.TimeSeriesRows) + len(batch.RecordRows) + len(batch.RecordMutations)
 	return nil
 }
 

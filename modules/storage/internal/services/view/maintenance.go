@@ -24,7 +24,7 @@ type FactReader interface {
 
 type RecordFactReader interface {
 	ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error)
-	ScanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error)
+	ScanRecordRows(ctx context.Context, spaceID string, datasetID string, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error)
 }
 
 type RecordReplayReader interface {
@@ -200,6 +200,10 @@ func maintenanceViewKey(item *pb.View) string {
 }
 
 func (m *MaintenanceManager) maintainView(ctx context.Context, item *pb.View, deadline time.Time) (bool, error) {
+	if item != nil && strings.EqualFold(item.GetEngine(), "bleve") && item.GetRecordViewMode() == pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
+		item = proto.Clone(item).(*pb.View)
+		item.RecordViewMode = pb.RecordViewMode_RECORD_VIEW_MODE_CURRENT
+	}
 	engineKey := strings.ToLower(strings.TrimSpace(item.GetEngine()))
 	engine := m.engines[engineKey]
 	if engine == nil {
@@ -305,6 +309,9 @@ func (m *MaintenanceManager) needsBuild(ctx context.Context, item *pb.View, engi
 	entryPressure := m.cfg.MaxEntries > 0 && stats.EntryCount > m.cfg.MaxEntries
 	bytePressure := m.cfg.MaxPhysicalBytes > 0 && stats.PhysicalBytes > m.cfg.MaxPhysicalBytes
 	if entryPressure || bytePressure {
+		if item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED || strings.EqualFold(item.GetEngine(), "bleve") {
+			return true, nil
+		}
 		return m.pressureCanShrink(stats, window, entryPressure), nil
 	}
 	return false, nil
@@ -425,7 +432,18 @@ func (m *MaintenanceManager) prepareBuild(ctx context.Context, item *pb.View, bu
 			if len(datasets) == 0 {
 				datasets = []string{item.GetPrimaryDatasetId()}
 			}
-			opened, openErr := replay.OpenRecordSnapshot(ctx, &pb.OpenRecordAccessSnapshotReq{Scope: &pb.RecordAccessScope{SpaceId: item.GetSpaceId(), DatasetIds: datasets}, Mode: pb.RecordReadMode(item.GetRecordViewMode())})
+			openReq := &pb.OpenRecordAccessSnapshotReq{Scope: &pb.RecordAccessScope{SpaceId: item.GetSpaceId(), DatasetIds: datasets}, Mode: pb.RecordReadMode(item.GetRecordViewMode())}
+			if item.GetRecordViewMode() == pb.RecordViewMode_RECORD_VIEW_MODE_HISTORY {
+				window, windowErr := m.retentionWindow(item)
+				if windowErr != nil {
+					return nil, windowErr
+				}
+				if snapshotEnd, parseOK := parseIndexTime(build.GetSnapshotEnd()); parseOK {
+					openReq.UpdatedTimeRange = &pb.TimeRange{StartTime: snapshotEnd.Add(-window).Format(time.RFC3339Nano), EndTime: snapshotEnd.Format(time.RFC3339Nano)}
+					update.RetentionCutoffAt = openReq.UpdatedTimeRange.GetStartTime()
+				}
+			}
+			opened, openErr := replay.OpenRecordSnapshot(ctx, openReq)
 			if openErr != nil {
 				return nil, openErr
 			}
@@ -772,19 +790,19 @@ func (m *MaintenanceManager) processRecordPage(ctx context.Context, item *pb.Vie
 	datasetID := item.GetPrimaryDatasetId()
 	if item.GetRecordViewMode() != pb.RecordViewMode_RECORD_VIEW_MODE_UNSPECIFIED {
 		if replay, ok := m.records.(RecordReplayReader); ok {
-			openedHere := false
 			if snapshotID == "" {
-				opened, err := replay.OpenRecordSnapshot(ctx, &pb.OpenRecordAccessSnapshotReq{Scope: &pb.RecordAccessScope{SpaceId: item.GetSpaceId(), DatasetIds: []string{datasetID}}, Mode: pb.RecordReadMode(item.GetRecordViewMode())})
+				openReq := &pb.OpenRecordAccessSnapshotReq{Scope: &pb.RecordAccessScope{SpaceId: item.GetSpaceId(), DatasetIds: []string{datasetID}}, Mode: pb.RecordReadMode(item.GetRecordViewMode())}
+				if item.GetRecordViewMode() == pb.RecordViewMode_RECORD_VIEW_MODE_HISTORY {
+					openReq.UpdatedTimeRange = &pb.TimeRange{StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano)}
+				}
+				opened, err := replay.OpenRecordSnapshot(ctx, openReq)
 				if err != nil {
 					return 0, nil, err
 				}
 				snapshotID, sourceID, snapshotCommitSeq = opened.GetSnapshotId(), opened.GetSourceId(), opened.GetSnapshotCommitSeq()
-				openedHere = true
+				defer func() { _ = replay.CloseRecordSnapshot(ctx, snapshotID) }()
 			}
 			pageRsp, scanErr := replay.ScanRecordSnapshot(ctx, &pb.ScanRecordAccessSnapshotReq{SnapshotId: snapshotID, DatasetId: datasetID, Page: &pb.Page{Size: m.cfg.PageSize, Cursor: cursor}})
-			if openedHere {
-				_ = replay.CloseRecordSnapshot(ctx, snapshotID)
-			}
 			if scanErr != nil {
 				return 0, nil, scanErr
 			}
@@ -861,9 +879,7 @@ func (m *MaintenanceManager) processRecordPage(ctx context.Context, item *pb.Vie
 			return len(mutations), pageRsp.GetPageResult(), nil
 		}
 	}
-	rows, page, err := m.records.ScanRecordRows(ctx, item.GetSpaceId(), datasetID, &pb.VersionRange{
-		StartVersion: start.Format(time.RFC3339Nano), EndVersion: end.Format(time.RFC3339Nano),
-	}, sourceColumns(datasetID, build.GetColumns()), &pb.Page{Size: m.cfg.PageSize, Cursor: cursor})
+	rows, page, err := m.records.ScanRecordRows(ctx, item.GetSpaceId(), datasetID, sourceColumns(datasetID, build.GetColumns()), &pb.Page{Size: m.cfg.PageSize, Cursor: cursor})
 	if err != nil {
 		return 0, nil, err
 	}

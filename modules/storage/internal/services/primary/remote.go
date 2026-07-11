@@ -102,7 +102,11 @@ func (c *RemoteClient) OpenRecordSnapshot(ctx context.Context, req *pb.OpenRecor
 }
 
 func (c *RemoteClient) ReadRecordSnapshot(ctx context.Context, req *pb.ReadRecordSnapshotReq) (*pb.ReadRecordSnapshotRsp, error) {
-	rsp, err := c.proxyFor(req.GetTarget()).ReadRecordSnapshot(ctx, req)
+	value, ok := c.snapshots.Load(req.GetSnapshotId())
+	if !ok {
+		return nil, fmt.Errorf("record snapshot proxy not found")
+	}
+	rsp, err := value.(pb.PrimaryStoreClientProxy).ReadRecordSnapshot(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +117,11 @@ func (c *RemoteClient) ReadRecordSnapshot(ctx context.Context, req *pb.ReadRecor
 }
 
 func (c *RemoteClient) ScanRecordSnapshot(ctx context.Context, req *pb.ScanRecordSnapshotReq) (*pb.ScanRecordSnapshotRsp, error) {
-	rsp, err := c.proxyFor(req.GetTarget()).ScanRecordSnapshot(ctx, req)
+	value, ok := c.snapshots.Load(req.GetSnapshotId())
+	if !ok {
+		return nil, fmt.Errorf("record snapshot proxy not found")
+	}
+	rsp, err := value.(pb.PrimaryStoreClientProxy).ScanRecordSnapshot(ctx, req)
 	if err != nil {
 		return nil, err
 	}

@@ -243,6 +243,14 @@ func validateWriteIndexRequest(indexID string, engine ManagedEngine, batch corev
 			return errors.New("record row space_id does not match index_id")
 		}
 	}
+	for _, mutation := range batch.RecordMutations {
+		if mutation == nil || mutation.GetRow() == nil || mutation.GetRow().GetKey() == nil {
+			continue
+		}
+		if spaceID := mutation.GetRow().GetKey().GetSpaceId(); spaceID != "" && spaceID != ref.SpaceID {
+			return errors.New("record mutation space_id does not match index_id")
+		}
+	}
 	return nil
 }
 

@@ -39,8 +39,10 @@ type timeSeriesDeriveItem struct {
 }
 
 type recordDeriveItem struct {
-	key  *pb.RecordKey
-	done chan error
+	key      *pb.RecordKey
+	row      *pb.RecordRow
+	sourceID string
+	done     chan error
 }
 
 // NewService creates a standalone view builder service.
@@ -192,7 +194,7 @@ func (s *Service) enqueueRecordCommitted(ctx context.Context, event *pb.RecordRo
 	if event == nil {
 		return nil
 	}
-	return s.enqueueRecordKeys(ctx, event.GetRows())
+	return s.enqueueRecordKeys(ctx, event.GetRows(), event.GetSourceId())
 }
 
 func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsChangedEvent) error {
@@ -229,7 +231,7 @@ func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRow
 	return waitDeriveResults(ctx, done)
 }
 
-func (s *Service) enqueueRecordKeys(ctx context.Context, rows []*pb.RecordRow) error {
+func (s *Service) enqueueRecordKeys(ctx context.Context, rows []*pb.RecordRow, sourceID string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -252,8 +254,10 @@ func (s *Service) enqueueRecordKeys(ctx context.Context, rows []*pb.RecordRow) e
 			continue
 		}
 		item := recordDeriveItem{
-			key:  proto.Clone(row.GetKey()).(*pb.RecordKey),
-			done: make(chan error, 1),
+			key:      proto.Clone(row.GetKey()).(*pb.RecordKey),
+			row:      proto.Clone(row).(*pb.RecordRow),
+			sourceID: sourceID,
+			done:     make(chan error, 1),
 		}
 		if err := batcher.add(addCtx, item); err != nil {
 			return err
@@ -289,12 +293,26 @@ func (s *Service) processTimeSeriesItemBatch(ctx context.Context, items []timeSe
 
 func (s *Service) processRecordItemBatch(ctx context.Context, items []recordDeriveItem) {
 	keys := make([]*pb.RecordKey, 0, len(items))
+	rows := make([]*pb.RecordRow, 0, len(items))
+	sourceID := ""
 	for _, item := range items {
 		if item.key != nil {
 			keys = append(keys, item.key)
 		}
+		if item.row != nil {
+			rows = append(rows, item.row)
+		}
+		if sourceID == "" {
+			sourceID = item.sourceID
+		}
 	}
-	err := s.processRecordBatch(ctx, keys)
+	// Apply the committed history payload before refreshing CURRENT projections.
+	// CURRENT is a mutable read and may fail or observe a later revision; HISTORY
+	// must remain durable from the event payload itself.
+	err := s.processHistoryRecordBatch(ctx, rows, sourceID)
+	if err == nil {
+		err = s.processRecordBatch(ctx, keys)
+	}
 	for _, item := range items {
 		completeDeriveItem(item.done, err)
 	}

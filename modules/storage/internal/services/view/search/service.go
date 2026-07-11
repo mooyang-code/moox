@@ -306,7 +306,7 @@ func (s *Service) QueryRecordRows(ctx context.Context, indexID string, datasetID
 		TextQuery: req.GetTextQuery(),
 		Filters:   req.GetFilters(),
 		Page:      req.GetPage(),
-		Sorts:     req.GetSorts(),
+		Sorts:     req.GetSorts(), RecordViewMode: req.GetRecordViewMode(), RevisionRange: req.GetRevisionRange(),
 	})
 	return nil, rows, page, err
 }

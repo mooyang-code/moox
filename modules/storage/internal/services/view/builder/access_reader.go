@@ -19,7 +19,7 @@ type FactReader interface {
 type AccessReader interface {
 	FactReader
 	ScanTimeSeriesRows(ctx context.Context, spaceID string, datasetID string, timeRange *pb.TimeRange, columnNames []string, page *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult, error)
-	ScanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error)
+	ScanRecordRows(ctx context.Context, spaceID string, datasetID string, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error)
 }
 
 // RecordReplayReader exposes the stable Record snapshot and durable journal
@@ -131,11 +131,10 @@ func (r *remoteAccessReader) ScanTimeSeriesRows(ctx context.Context, spaceID str
 	return rsp.GetRows(), rsp.GetPageResult(), nil
 }
 
-func (r *remoteAccessReader) ScanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
+func (r *remoteAccessReader) ScanRecordRows(ctx context.Context, spaceID string, datasetID string, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
 	rsp, err := r.scanProxy.ScanRecordRows(ctx, &pb.ScanRecordRowsReq{
 		SpaceId:      spaceID,
 		DatasetId:    datasetID,
-		VersionRange: versionRange,
 		ColumnNames:  columnNames,
 		Page:         page,
 	})
@@ -165,7 +164,7 @@ func (missingAccessReader) ScanTimeSeriesRows(context.Context, string, string, *
 	return nil, nil, errMissingAccessReader
 }
 
-func (missingAccessReader) ScanRecordRows(context.Context, string, string, *pb.VersionRange, []string, *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
+func (missingAccessReader) ScanRecordRows(context.Context, string, string, []string, *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
 	return nil, nil, errMissingAccessReader
 }
 

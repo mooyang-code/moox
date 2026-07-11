@@ -29,17 +29,16 @@ func (s *Store) ScanRecordJournal(ctx context.Context, after, through uint64, pa
 	if page == nil {
 		page = &pb.Page{}
 	}
-	rangeAfter := after
-	rangeThrough := through
+	var decoded *recordJournalCursor
 	if cursor := page.GetCursor(); cursor != "" {
-		decoded, err := s.decodeRecordJournalCursor(cursor)
+		value, err := s.decodeRecordJournalCursor(cursor)
 		if err != nil {
 			return nil, after, nil, err
 		}
-		if decoded.After != rangeAfter || decoded.Through != rangeThrough {
-			return nil, after, nil, errors.New("record journal cursor bounds mismatch")
+		decoded = &value
+		if through == 0 {
+			through = value.Through
 		}
-		after = decoded.Last
 	}
 	_, watermark, err := s.RecordWatermark(ctx)
 	if err != nil {
@@ -47,6 +46,14 @@ func (s *Store) ScanRecordJournal(ctx context.Context, after, through uint64, pa
 	}
 	if through == 0 || through > watermark {
 		through = watermark
+	}
+	rangeAfter := after
+	rangeThrough := through
+	if decoded != nil {
+		if decoded.After != rangeAfter || decoded.Through != rangeThrough {
+			return nil, after, nil, errors.New("record journal cursor bounds mismatch")
+		}
+		after = decoded.Last
 	}
 	if after >= through {
 		return nil, after, &pb.PageResult{Size: pageSize(page), HasMore: false}, nil
@@ -65,6 +72,9 @@ func (s *Store) ScanRecordJournal(ctx context.Context, after, through uint64, pa
 		seq := parseUint(string(iter.Key()[len(recordJournalPrefix):]))
 		if seq == 0 {
 			return nil, last, nil, fmt.Errorf("invalid journal key %q", iter.Key())
+		}
+		if seq != last+1 {
+			return nil, last, nil, fmt.Errorf("record journal sequence gap: got %d after %d", seq, last)
 		}
 		if uint32(len(events)) >= size {
 			return events, last, &pb.PageResult{Size: size, HasMore: true, NextCursor: s.encodeRecordJournalCursor(recordJournalCursor{Version: 1, SourceID: s.recordSource, After: rangeAfter, Through: rangeThrough, Last: last})}, nil

@@ -395,6 +395,9 @@ func (s *Service) scanRecordSnapshotAll(ctx context.Context, snapshotID string, 
 			return nil, err
 		}
 		rows = append(rows, response.GetRows()...)
+		if len(rows) > maxDatasetScanRows {
+			return nil, fmt.Errorf("Record history scan exceeds safe limit %d rows; narrow the record_ids or revision_range", maxDatasetScanRows)
+		}
 		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
 			return rows, nil
 		}
