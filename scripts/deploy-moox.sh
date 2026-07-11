@@ -1378,7 +1378,7 @@ market_v2_local_preflight() {
   fi
   local v2_db="${deploy_dir}/data/collector/moox_collector_market_v2.db"
   if [[ -f "${v2_db}" ]]; then
-    [[ "$(head -c 16 "${v2_db}")" == "SQLite format 3 " ]] || fail "incompatible Market V2 database: ${v2_db}"
+    [[ "$(od -An -tx1 -N16 "${v2_db}" | tr -d ' \n')" == "53514c69746520666f726d6174203300" ]] || fail "incompatible Market V2 database: ${v2_db}"
   fi
   "${STAGE_DIR}/bin/moox-collector-cli" init --db-path "${v2_db}"
 }
@@ -1590,7 +1590,7 @@ if [[ "${MARKET_V2_CUTOVER}" == "1" ]]; then
   if [[ -f "${LEGACY_DB}" && ! -f "${LEGACY_BACKUP}" ]]; then cp -p "${LEGACY_DB}" "${LEGACY_BACKUP}"; fi
   V2_DB="${DEPLOY_DIR}/data/collector/moox_collector_market_v2.db"
   if [[ -f "${V2_DB}" ]]; then
-    [[ "$(head -c 16 "${V2_DB}")" == "SQLite format 3 " ]] || { echo "incompatible Market V2 database: ${V2_DB}" >&2; exit 1; }
+    [[ "$(od -An -tx1 -N16 "${V2_DB}" | tr -d ' \n')" == "53514c69746520666f726d6174203300" ]] || { echo "incompatible Market V2 database: ${V2_DB}" >&2; exit 1; }
   fi
   "${CUTOVER_TMP}/bin/moox-collector-cli" init --db-path "${V2_DB}"
   rm -rf "${CUTOVER_TMP}"
