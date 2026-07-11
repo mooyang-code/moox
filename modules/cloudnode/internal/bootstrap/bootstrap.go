@@ -5,6 +5,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/pprof"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -83,29 +85,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			FetchMaxWait:    time.Duration(cfg.JetStream.FetchMaxWaitMs) * time.Millisecond,
 			DefaultMaxBatch: cfg.JobItem.MaxLimit,
 		})
-		legacyRemoved, err := execQueue.MigrateLegacyConsumer(ctx)
-		if err != nil {
+		if err := reconcileExecutionQueueMigration(ctx, cfg.Database.Path, execQueue, stateStore); err != nil {
 			_ = rt.Close()
 			return nil, err
-		}
-		if legacyRemoved {
-			pending, err := stateStore.PendingItems(ctx)
-			if err != nil {
-				_ = rt.Close()
-				return nil, err
-			}
-			for _, item := range pending {
-				published, err := execQueue.Publish(ctx, item)
-				if err != nil {
-					_ = rt.Close()
-					return nil, err
-				}
-				if err := stateStore.MarkPublished(ctx, item.GetSpaceId(), item.GetJobItemId(), jobstate.QueueMeta{Subject: published.Subject, Stream: published.Stream, StreamSeq: published.Sequence}); err != nil {
-					_ = rt.Close()
-					return nil, err
-				}
-			}
-			log.InfoContextf(ctx, "migrated legacy wildcard consumer and republished %d pending JobItems", len(pending))
 		}
 		catalog := repository.NewCatalogRepository(dbm.DB())
 		heartbeatSink := projection.NewHeartbeatBuffer(catalog, projection.HeartbeatBufferOptions{
@@ -127,6 +109,44 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-cloudnode 初始化完成")
 	return s, nil
+}
+
+func reconcileExecutionQueueMigration(ctx context.Context, databasePath string, queue *jobqueue.JetStreamQueue, stateStore *jobstate.KVStore) error {
+	removed, err := queue.MigrateLegacyConsumer(ctx)
+	if err != nil {
+		return err
+	}
+	checkpoint := filepath.Join(filepath.Dir(databasePath), ".exact-route-consumer-v1")
+	if _, err := os.Stat(checkpoint); err == nil && !removed {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	pending, err := stateStore.PendingItems(ctx)
+	if err != nil {
+		return err
+	}
+	for _, item := range pending {
+		published, err := queue.Publish(ctx, item)
+		if err != nil {
+			return err
+		}
+		if err := stateStore.MarkPublished(ctx, item.GetSpaceId(), item.GetJobItemId(), jobstate.QueueMeta{Subject: published.Subject, Stream: published.Stream, StreamSeq: published.Sequence}); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(checkpoint), 0o755); err != nil {
+		return err
+	}
+	temporary := checkpoint + ".tmp"
+	if err := os.WriteFile(temporary, []byte("complete\n"), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, checkpoint); err != nil {
+		return err
+	}
+	log.InfoContextf(ctx, "reconciled exact-route consumer migration and republished %d pending JobItems", len(pending))
+	return nil
 }
 
 func registerMetricsReporter(s *server.Server) {

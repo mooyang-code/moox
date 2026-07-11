@@ -424,10 +424,13 @@ func (s *KVStore) PendingItems(_ context.Context) ([]*pb.JobItem, error) {
 	for _, key := range keys {
 		entry, err := s.kv.Get(key)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("read pending JobItem %s: %w", key, mapKVError(err))
 		}
 		state, err := decodeState(entry.Value())
-		if err == nil && state.Status == StatusPending {
+		if err != nil {
+			return nil, fmt.Errorf("decode pending JobItem %s: %w", key, err)
+		}
+		if state.Status == StatusPending {
 			items = append(items, state.ToJobItem())
 		}
 	}

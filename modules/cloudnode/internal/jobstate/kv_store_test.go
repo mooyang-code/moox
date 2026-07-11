@@ -116,6 +116,16 @@ func TestKVStorePendingItemsRebuildsPublishableJobItems(t *testing.T) {
 	}
 }
 
+func TestKVStorePendingItemsFailsOnCorruptState(t *testing.T) {
+	store := newTestKVStore(t, 48*time.Hour)
+	if _, err := store.kv.Create(JobKey("stock_cn", "corrupt"), []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PendingItems(context.Background()); err == nil {
+		t.Fatal("corrupt pending state was silently skipped")
+	}
+}
+
 func TestKVStoreCancelDirectiveForRunningNode(t *testing.T) {
 	ctx := context.Background()
 	store := newTestKVStore(t, 48*time.Hour)

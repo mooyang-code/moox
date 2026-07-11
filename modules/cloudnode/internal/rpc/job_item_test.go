@@ -180,6 +180,7 @@ func TestPollJobItemsKeepsSpaceAndPackageDeliveriesIsolated(t *testing.T) {
 	svc := &Service{catalog: catalog, executionQueue: queue, jobState: stateStore}
 	for _, item := range []*pb.JobItem{
 		{SpaceId: "space-a", JobId: "job-a", JobItemId: "item-a", JobType: "collect.kline", CodePackageId: "package-a"},
+		{SpaceId: "space-a", JobId: "job-a", JobItemId: "item-a-2", JobType: "collect.kline", CodePackageId: "package-a"},
 		{SpaceId: "space-b", JobId: "job-b", JobItemId: "item-b", JobType: "collect.kline", CodePackageId: "package-b"},
 	} {
 		rsp, err := svc.SubmitJobItems(ctx, &pb.SubmitJobItemsReq{Items: []*pb.JobItem{item}})
@@ -187,18 +188,18 @@ func TestPollJobItemsKeepsSpaceAndPackageDeliveriesIsolated(t *testing.T) {
 			t.Fatalf("submit %s: rsp=%+v err=%v", item.GetJobItemId(), rsp, err)
 		}
 	}
-	poll := func(spaceID, nodeID string) *pb.PollJobItemsRsp {
+	poll := func(spaceID, nodeID string, limit int32) *pb.PollJobItemsRsp {
 		t.Helper()
-		rsp, err := svc.PollJobItems(ctx, &pb.PollJobItemsReq{SpaceId: spaceID, NodeId: nodeID, SupportedJobTypes: []string{"collect.kline"}, ProtocolVersion: supportedJobItemProtocolVersion, Limit: 1})
+		rsp, err := svc.PollJobItems(ctx, &pb.PollJobItemsReq{SpaceId: spaceID, NodeId: nodeID, SupportedJobTypes: []string{"collect.kline"}, ProtocolVersion: supportedJobItemProtocolVersion, Limit: limit})
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			t.Fatalf("poll %s/%s: rsp=%+v err=%v", spaceID, nodeID, rsp, err)
 		}
 		return rsp
 	}
-	if got := poll("space-a", "node-a").GetItems(); len(got) != 1 || got[0].GetJobItemId() != "item-a" {
-		t.Fatalf("space-a poll = %+v, want only item-a", got)
+	if got := poll("space-a", "node-a", 2).GetItems(); len(got) != 2 || got[0].GetJobItemId() == got[1].GetJobItemId() || got[0].GetJobId() != "job-a" || got[1].GetJobId() != "job-a" {
+		t.Fatalf("space-a poll = %+v, want both JobItems sharing job-a", got)
 	}
-	if got := poll("space-b", "node-b").GetItems(); len(got) != 1 || got[0].GetJobItemId() != "item-b" {
+	if got := poll("space-b", "node-b", 1).GetItems(); len(got) != 1 || got[0].GetJobItemId() != "item-b" {
 		t.Fatalf("space-b poll = %+v, want only item-b", got)
 	}
 }

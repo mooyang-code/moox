@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
 )
 
@@ -93,5 +94,12 @@ func TestMarketFollowUpsGroupContinuationAndFallbackDeterministically(t *testing
 	payload := fallback[0].GetPayload().AsMap()
 	if payload["source_dataset_id"] != "fallback_kline" || payload["provider_symbol"] != "BTC-USD" || payload["quota_scope_key"] != "fallback-ip" {
 		t.Fatalf("fallback binding=%v", payload)
+	}
+}
+
+func TestBuildFetchKlinesRequestCarriesContinuationCursor(t *testing.T) {
+	request := buildFetchKlinesRequest(map[string]any{"market_id": "stock_cn", "exchange_id": "XSHG", "cursor": "800", "limit": float64(800)}, marketdata.ProductEquity, marketdata.InstrumentEquity, marketdata.FrequencyDay, "600000.XSHG", "600000", time.Time{}, time.Time{})
+	if request.Cursor != "800" || request.Limit != 800 {
+		t.Fatalf("request = %+v", request)
 	}
 }
