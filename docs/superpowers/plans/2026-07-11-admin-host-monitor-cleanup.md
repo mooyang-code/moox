@@ -1,5 +1,7 @@
 # Admin Legacy Host Monitor Cleanup Implementation Plan
 
+> **状态：已完成。** 本计划已删除 Admin 旧主机监控并完成主机卡片墙；当前系统架构见 [主机监控架构设计](../../主机监控架构设计.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Remove Admin's retired Node Exporter host-monitoring path and turn `/ops/resource-monitor` into a compact host-card dashboard backed only by `moox-monitor`.

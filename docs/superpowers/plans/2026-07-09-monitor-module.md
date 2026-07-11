@@ -1,5 +1,7 @@
 # Monitor Module Implementation Plan
 
+> **状态：已完成，历史实施计划。** 文中“Admin 继续保留旧主机监控”只描述第一阶段边界；该实现随后已删除。当前主机监控架构见 [主机监控架构设计](../../主机监控架构设计.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build an independently deployable `moox-monitor` module that monitors MooX services and user-defined HTTP/TCP checks, sends webhook alerts, exposes its own health endpoint, and supports multiple monitor instances observing one another.

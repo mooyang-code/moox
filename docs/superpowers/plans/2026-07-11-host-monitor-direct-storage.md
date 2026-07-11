@@ -1,5 +1,7 @@
 # Host Monitor Direct Storage Implementation Plan
 
+> **状态：已完成。** 本计划定义的 direct-storage 链路已经成为当前实现；稳定架构说明见 [主机监控架构设计](../../主机监控架构设计.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 将主机监控历史样本从 Monitor SQLite 迁移到 MooX Storage 时序数据，Monitor 只负责消费、实时快照、告警和 API，主机历史最多保留 3 天。

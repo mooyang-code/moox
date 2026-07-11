@@ -1,5 +1,7 @@
 # Admin Legacy Host Monitor Cleanup Design
 
+> **状态：已实施。** Admin 旧主机监控已删除，当前系统架构见 [主机监控架构设计](../../主机监控架构设计.md)。
+
 ## Goal
 
 Remove the retired Admin host-monitoring implementation and improve the existing `/ops/resource-monitor` page for a fleet of at most ten hosts.

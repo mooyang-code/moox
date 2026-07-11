@@ -1,12 +1,14 @@
 # MooX Host Agent、EventBus 凭据与资源监控实施计划
 
+> **状态：已完成，历史实施计划。** 当前架构以 [主机监控架构设计](../../主机监控架构设计.md) 为准；后续 direct-storage 与 Admin 清理已经替代本文的阶段性 SQLite 和兼容入口描述。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在 MooX 中新增可独立部署的 Linux `moox-host-agent`，采集服务器 CPU、内存、文件系统、磁盘 I/O 和网络数据，通过统一 MooX EventBus 上报，由 `moox-monitor` 消费、展示、告警并保存历史。
 
-**Architecture:** Host Agent 每 15 秒读取 Linux `/proc`、`/sys` 和 `statfs`，构造只有 `HostSnapshot` 的 `HostMetric`，再包装成标准 `MooxMessage`，通过 `packages/jetstream` 向公网 EventBus 做一次 best-effort 发布。Host Agent 不使用 SQLite、不保存 outbox、不补发旧样本；消息获得 PubAck 后，由 EventBus 和 Monitor 承担 durable consumer、幂等投影、告警和历史存储。EventBus 使用私有 CA TLS、共享 Host Agent publisher token 和独立 Monitor consumer token，所有凭据由 Admin `t_secrets` 保存并在部署阶段生成。
+**Architecture:** Host Agent 每 15 秒读取 Linux `/proc`、`/sys` 和 `statfs`，构造 `HostMetric`，再包装成标准 `MooxMessage`，通过 `packages/jetstream` 向 EventBus 做一次 best-effort 发布。Host Agent 不使用 SQLite、不保存 outbox、不补发旧样本；Monitor 使用 durable consumer，将样本直接写入 Storage 并维护内存 latest。公网连接使用 NATS 用户名和共享 `eventbus_token`，凭据由部署流程生成并写入普通用户的 `0600` 文件。
 
-**Tech Stack:** Go 1.24、tRPC-Go、Protocol Buffers、`packages/messagepb`、`packages/jetstream`、NATS JetStream、`golang.org/x/sys/unix`、Monitor GORM + SQLite、MooX Storage、Vue 3、Arco Design、VChart、Linux user systemd。
+**Tech Stack:** Go 1.24、tRPC-Go、Protocol Buffers、`packages/messagepb`、`packages/jetstream`、NATS JetStream、`golang.org/x/sys/unix`、Monitor SQLite 控制面、MooX Storage 时序数据面、Vue 3、Arco Design、VChart、Linux user systemd。
 
 **Updated:** 2026-07-11。本版本替代文档原有的 bootstrap/acquire、HTTP 上报、Host Agent SQLite outbox、BYO NATS、`HostMetricEnvelope` 和逐 Agent 凭据设计。
 
@@ -14,14 +16,16 @@
 
 - 已完成：EventBus 服务、共享 JetStream client、固定 topic/consumer registry、TLS/ACL 配置、Admin `t_secrets` 凭据生成/导出/轮换，以及中央发布脚本接入。
 - 已完成：`modules/hostagent` Linux amd64/arm64 采集、稳定 identity、tRPC/health、best-effort HostMetric 发布和 rootless Skill 发布部署。
-- 已完成：Monitor HostMetric durable consumer、消息校验、SQLite inbox/agent/latest/history、全局主机 API、页面 API 迁移和 Host metadata seed/release/deploy gate。
-- 已完成：Admin 旧 node_exporter 采集定时器已停止注册；旧 Monitor RPC 仅作为兼容入口保留。
-- 待完成：Storage 四个 Host Dataset 的分钟 projector/history worker、bounded cleaner、资源告警规则/通知 outbox，以及页面的 rate-unavailable/non-zero 缺口状态展示。当前 Monitor history 查询读取本地 SQLite，尚未宣称 Storage 历史链路已上线。历史保留策略已锁定为最多 3 天，过期数据直接分批删除，允许出现历史缺口。
+- 已完成：Monitor HostMetric durable consumer、Storage 四 Dataset 直接写入、内存 latest、全局主机 API、页面 API 迁移和 metadata/release/deploy gate。
+- 已完成：Admin 旧 Node Exporter 采集、Monitor RPC、配置、Schema 和部署行已全部删除；Admin 只保留网关和 SysDeploy 路由。
+- 已完成：Storage 分钟级历史、72 小时 bounded retention、资源告警规则缓存，以及页面 unavailable、零值和历史缺口展示。
 - 告警规则决策已补充：Monitor 启动时加载 enabled Host rules 到现有 `github.com/mooyang-code/snapshotcache`，消费链路只读内存缓存；规则新增/修改/删除不主动刷缓存，统一定时刷新，失败时保留上一份有效快照。旧 `go-commlib/dbcache` 仅作为设计参考，不继续兼容扩展。
 
 ---
 
-## 1. 当前代码事实与前置依赖
+## 1. 实施前代码事实与前置依赖
+
+> 本节保留立项时的代码快照，用于解释实施动机，不代表当前仓库状态。
 
 - 当前仓库还没有 `modules/hostagent`、`modules/eventbus`、`packages/messagepb`、`packages/jetstream` 或 `packages/hostmetricpb`。
 - [MooX EventBus 服务执行计划](./2026-07-10-moox-eventbus-service.md) 负责 `MooxMessage`、共享 JetStream client、EventBus 服务、Stream/KV 和公共部署能力，但不是整份计划单向前置：固定顺序为 EventBus Tasks 1-6 -> 本计划 Tasks 2-3 -> EventBus Task 7 -> 本计划 Task 4；EventBus Tasks 8-12 再按其计划推进。
