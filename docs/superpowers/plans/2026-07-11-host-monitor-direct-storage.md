@@ -8,6 +8,8 @@
 
 **Tech Stack:** Go 1.24、tRPC-Go、Protocol Buffers、NATS JetStream、MooX Storage Access RPC、Pebble PrimaryStore、Monitor SQLite（仅控制面）、Vue 3、Arco Design。
 
+**Updated:** 2026-07-11。告警规则缓存改用现有 `github.com/mooyang-code/snapshotcache`；规则 CRUD 不主动刷新，统一由周期刷新发现变更。旧 `go-commlib/dbcache` 不作为运行时依赖。
+
 ---
 
 ## 1. 锁定决策
@@ -110,7 +112,7 @@
 
 ### Task 6: 抽象 DB 快照缓存并实现 Host 告警
 
-**Files:** `/Users/mooyang/Documents/go/src/github.com/mooyang-code/go-commlib/dbcache/snapshot.go`、`snapshot_test.go`、`modules/monitor/internal/hostmetrics/alerts.go`、`alerts_test.go`、`rule_cache.go`、`rule_cache_test.go`、existing alert repository、Host RPC/proto、`modules/monitor/go.mod`、`modules/monitor/go.sum`。
+**Files:** `modules/monitor/internal/hostmetrics/alerts.go`、`alerts_test.go`、`rule_cache.go`、`rule_cache_test.go`、existing alert repository、Host RPC/proto、`modules/monitor/go.mod`、`modules/monitor/go.sum`；复用外部模块 `github.com/mooyang-code/snapshotcache`，不修改旧 `go-commlib/dbcache`。
 
 - [ ] 规则固定 `space_id=moox_system`，rule key 为 `host:<agent_id>:<metric>`；支持 CPU、memory、filesystem usage、disk utilization、network errors；无 baseline 时为 unavailable。
 - [ ] 评估旧 `/Users/mooyang/Documents/go/src/github.com/mooyang-code/go-commlib/dbcache`：只借鉴表注册、首次加载、周期刷新、过滤器和索引的思路；不继续维护其 GORM v1/MySQL/连接发现耦合、永久 goroutine、全局 logger、反射字段写入和逐条可变更新。暂不在该模块继续堆兼容 API。
