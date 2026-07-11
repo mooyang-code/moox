@@ -29,6 +29,7 @@ type InstrumentPipeline struct {
 	Generation                                 time.Time
 	Now                                        func() time.Time
 	Registrar                                  InstrumentRegistrar
+	ResolutionGuard                            ResolutionLeaseGuard
 }
 
 type InstrumentPipelineResult struct {
@@ -76,6 +77,11 @@ func (p InstrumentPipeline) Run(ctx context.Context, request providers.FetchInst
 			sourceDataset = p.SourceDatasetID
 		}
 		resolved := providers.ResolvedInstrument{ProviderInstrument: *winner, SourceDatasetID: sourceDataset, QualityStatus: "accepted", Generation: p.Generation, ResolvedAt: now}
+		if p.ResolutionGuard != nil {
+			if err := p.ResolutionGuard.BeforeUnifiedWrite(ctx); err != nil {
+				return result, fmt.Errorf("validate instrument resolution lease: %w", err)
+			}
+		}
 		if err := p.Store.WriteUnifiedInstrument(ctx, p.UnifiedDatasetID, resolved); err != nil {
 			return result, err
 		}
@@ -83,6 +89,11 @@ func (p InstrumentPipeline) Run(ctx context.Context, request providers.FetchInst
 		result.UnifiedRows++
 	}
 	if p.Registrar != nil && len(resolvedRows) > 0 {
+		if p.ResolutionGuard != nil {
+			if err := p.ResolutionGuard.BeforeUnifiedWrite(ctx); err != nil {
+				return result, fmt.Errorf("validate instrument metadata lease: %w", err)
+			}
+		}
 		if err := p.Registrar.RegisterInstruments(ctx, resolvedRows); err != nil {
 			return result, err
 		}

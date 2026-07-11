@@ -28,7 +28,7 @@ func TestMarketSchedulePlansCalendarAndInstrumentFromManifest(t *testing.T) {
 	manifest := marketmanifest.Manifest{MarketID: "crypto_binance", SpaceID: "crypto_binance", Timezone: "UTC", Exchange: marketmanifest.Exchange{ID: "BINANCE"}, ProductTypes: []string{"spot"}, InstrumentTypes: []string{"spot"}, Providers: []marketmanifest.Provider{{ID: "binance", Quotas: []marketmanifest.Quota{{Scope: "ip", WindowSeconds: 60, Limit: 6000}}}}, Datasets: []marketmanifest.Dataset{{ID: "binance_instruments", Role: "provider_data", Feed: "instrument", ProviderID: "binance"}, {ID: "instruments", Role: "unified_data", Feed: "instrument"}, {ID: "spot_kline", Role: "unified_data", Feed: "kline"}, {ID: "calendar", Role: "unified_data", Feed: "calendar"}}}
 	service := &Service{db: db, marketControl: repository.NewMarketControlRepository(db), now: func() time.Time { return now }}
 	generation := domain.MarketGeneration{Epoch: 1, Generation: now}
-	calendar, err := service.planMarketCalendar(&domain.TaskRule{SpaceID: "crypto_binance", MarketID: "crypto_binance", Feed: "calendar", RuleID: "calendar"}, manifest, generation, time.Hour)
+	calendar, err := service.planMarketCalendar(context.Background(), &domain.TaskRule{SpaceID: "crypto_binance", MarketID: "crypto_binance", Feed: "calendar", RuleID: "calendar"}, manifest, generation, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

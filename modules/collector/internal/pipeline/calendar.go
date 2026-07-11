@@ -13,10 +13,11 @@ type CalendarStore interface {
 	WriteCalendarDays(context.Context, string, time.Time, []markets.CalendarDay) error
 }
 type CalendarPipeline struct {
-	Policy     markets.CalendarPolicy
-	Store      CalendarStore
-	DatasetID  string
-	Generation time.Time
+	Policy          markets.CalendarPolicy
+	Store           CalendarStore
+	DatasetID       string
+	Generation      time.Time
+	ResolutionGuard ResolutionLeaseGuard
 }
 type CalendarRequest struct {
 	Start, End time.Time
@@ -57,6 +58,11 @@ func (p CalendarPipeline) Materialize(ctx context.Context, request CalendarReque
 	}
 	page := days[start:end]
 	if len(page) > 0 {
+		if p.ResolutionGuard != nil {
+			if err := p.ResolutionGuard.BeforeUnifiedWrite(ctx); err != nil {
+				return CalendarPipelineResult{}, fmt.Errorf("validate calendar resolution lease: %w", err)
+			}
+		}
 		if err := p.Store.WriteCalendarDays(ctx, p.DatasetID, p.Generation, page); err != nil {
 			return CalendarPipelineResult{}, err
 		}

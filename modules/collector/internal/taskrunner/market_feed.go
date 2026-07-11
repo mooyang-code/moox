@@ -59,7 +59,12 @@ func executeMarketInstrumentJobItem(ctx context.Context, item nodeRuntime.JobIte
 	if gate.leaseID == "" || gate.leaseEpoch <= 0 || gate.executionNonce == "" || len(gate.windows) == 0 {
 		return nodeRuntime.Result{}, nodeRuntime.Permanent(fmt.Errorf("instrument quota lease is required"), "INVALID_LEASE")
 	}
-	pipe := pipeline.InstrumentPipeline{Provider: provider, Gate: gate, Store: store, Registrar: registrar, SpaceID: spaceID, SourceDatasetID: sourceID, SourceDatasetIDs: []string{sourceID}, SourceDatasets: map[marketdata.ProviderID]string{providerID: sourceID}, UnifiedDatasetID: unifiedID, ProviderPriority: []marketdata.ProviderID{providerID}, Generation: generation}
+	resolutionEpoch, _ := strconv.ParseInt(stringValue(params, "resolution_lease_epoch"), 10, 64)
+	resolutionGuard := controlLeaseGuard{gateway: runtimeapp.GetServiceGatewayTarget(), leaseID: stringValue(params, "resolution_lease_id"), leaseType: "resolution", leaseEpoch: resolutionEpoch}
+	if resolutionGuard.leaseID == "" || resolutionGuard.leaseEpoch <= 0 {
+		return nodeRuntime.Result{}, nodeRuntime.Permanent(fmt.Errorf("instrument resolution lease is required"), "INVALID_RESOLUTION_LEASE")
+	}
+	pipe := pipeline.InstrumentPipeline{Provider: provider, Gate: gate, Store: store, Registrar: registrar, ResolutionGuard: resolutionGuard, SpaceID: spaceID, SourceDatasetID: sourceID, SourceDatasetIDs: []string{sourceID}, SourceDatasets: map[marketdata.ProviderID]string{providerID: sourceID}, UnifiedDatasetID: unifiedID, ProviderPriority: []marketdata.ProviderID{providerID}, Generation: generation}
 	result, err := pipe.Run(ctx, providers.FetchInstrumentsRequest{MarketID: marketdata.MarketID(stringValue(params, "market_id")), ExchangeID: marketdata.ExchangeID(stringValue(params, "exchange_id")), InstrumentTypes: parseInstrumentTypes(stringValue(params, "instrument_types")), SnapshotAt: generation, Limit: intValue(params, "limit"), Cursor: stringValue(params, "cursor")})
 	summary := map[string]any{"market_id": stringValue(params, "market_id"), "provider_id": string(providerID), "fetched_rows": result.Fetched, "source_rows": result.SourceRows, "unified_rows": result.UnifiedRows, "request_count": result.RequestCount, "complete": result.Complete, "next_cursor": result.NextCursor}
 	if err != nil {
@@ -94,7 +99,12 @@ func executeMarketCalendarJobItem(ctx context.Context, item nodeRuntime.JobItem)
 		return nodeRuntime.Result{}, nodeRuntime.Retryable(fmt.Errorf("storage access target is required"), "STORAGE_UNAVAILABLE")
 	}
 	store := storageio.NewClientWithAccess(storagepb.NewAccessClientProxy(client.WithTarget(accessTarget)), nil, []storageio.Binding{{SpaceID: spaceID, DatasetID: datasetID, Role: storageio.RoleUnifiedData, Feed: "calendar"}})
-	result, err := (pipeline.CalendarPipeline{Policy: module.Calendar(), Store: store, DatasetID: datasetID, Generation: generation}).Materialize(ctx, pipeline.CalendarRequest{Start: start, End: end, Limit: intValue(params, "limit"), Cursor: stringValue(params, "cursor")})
+	resolutionEpoch, _ := strconv.ParseInt(stringValue(params, "resolution_lease_epoch"), 10, 64)
+	resolutionGuard := controlLeaseGuard{gateway: runtimeapp.GetServiceGatewayTarget(), leaseID: stringValue(params, "resolution_lease_id"), leaseType: "resolution", leaseEpoch: resolutionEpoch}
+	if resolutionGuard.leaseID == "" || resolutionGuard.leaseEpoch <= 0 {
+		return nodeRuntime.Result{}, nodeRuntime.Permanent(fmt.Errorf("calendar resolution lease is required"), "INVALID_RESOLUTION_LEASE")
+	}
+	result, err := (pipeline.CalendarPipeline{Policy: module.Calendar(), Store: store, DatasetID: datasetID, Generation: generation, ResolutionGuard: resolutionGuard}).Materialize(ctx, pipeline.CalendarRequest{Start: start, End: end, Limit: intValue(params, "limit"), Cursor: stringValue(params, "cursor")})
 	summary := map[string]any{"market_id": string(marketID), "rows": result.Rows, "complete": result.Complete, "next_cursor": result.NextCursor}
 	if err != nil {
 		return nodeRuntime.Result{Summary: summary}, nodeRuntime.Retryable(err, "CALENDAR_PIPELINE_FAILED")

@@ -32,14 +32,14 @@ func (s *Service) recalculateMarketRule(ctx context.Context, rule *domain.TaskRu
 		return 0, err
 	}
 	scheduleWindow := now.Truncate(scheduleInterval)
-	generation, err := repository.GetOrCreateGeneration(ctx, s.db, rule.MarketID+"|"+rule.Feed+"|"+scheduleWindow.Format(time.RFC3339), scheduleWindow)
+	generation, err := repository.AdvanceGeneration(ctx, s.db, rule.MarketID+"|"+rule.Feed, scheduleWindow)
 	if err != nil {
 		return 0, err
 	}
 	var instances []domain.TaskInstance
 	switch rule.Feed {
 	case "calendar":
-		instances, err = s.planMarketCalendar(rule, manifest, generation, scheduleInterval)
+		instances, err = s.planMarketCalendar(ctx, rule, manifest, generation, scheduleInterval)
 	case "instrument":
 		instances, err = s.planMarketInstrument(ctx, rule, manifest, generation, scheduleInterval)
 	case "kline":
@@ -64,12 +64,16 @@ func (s *Service) recalculateMarketRule(ctx context.Context, rule *domain.TaskRu
 	return len(instances), nil
 }
 
-func (s *Service) planMarketCalendar(rule *domain.TaskRule, manifest marketmanifest.Manifest, generation domain.MarketGeneration, interval time.Duration) ([]domain.TaskInstance, error) {
+func (s *Service) planMarketCalendar(ctx context.Context, rule *domain.TaskRule, manifest marketmanifest.Manifest, generation domain.MarketGeneration, interval time.Duration) ([]domain.TaskInstance, error) {
 	datasetID := manifestDataset(manifest, "unified_data", "calendar", "")
 	if datasetID == "" {
 		return nil, fmt.Errorf("calendar dataset is not bound")
 	}
-	params := map[string]any{"job_type": "collect.calendar", "phase": "materialize_policy", "market_id": rule.MarketID, "space_id": rule.SpaceID, "exchange_id": manifest.Exchange.ID, "unified_dataset_id": datasetID, "generation": generation.Generation.Format(time.RFC3339Nano), "start_time": generation.Generation.Format(time.RFC3339), "end_time": generation.Generation.AddDate(1, 0, 0).Format(time.RFC3339), "limit": 100, "schedule_window": generation.Generation.Format(time.RFC3339), "schedule_interval": interval.String()}
+	leaseID := stableScheduleID("resolution", rule.MarketID+"|calendar|"+datasetID)
+	if err := s.marketControl.PutLease(ctx, repository.MarketLease{LeaseID: leaseID, LeaseType: "resolution", LeaseKey: rule.MarketID + "|calendar|" + datasetID, Epoch: generation.Epoch, OwnerID: rule.RuleID, ExpiresAt: s.now().UTC().Add(2 * time.Minute)}); err != nil {
+		return nil, err
+	}
+	params := map[string]any{"job_type": "collect.calendar", "phase": "materialize_policy", "market_id": rule.MarketID, "space_id": rule.SpaceID, "exchange_id": manifest.Exchange.ID, "unified_dataset_id": datasetID, "generation": generation.Generation.Format(time.RFC3339Nano), "start_time": generation.Generation.Format(time.RFC3339), "end_time": generation.Generation.AddDate(1, 0, 0).Format(time.RFC3339), "limit": 100, "resolution_lease_id": leaseID, "resolution_lease_epoch": generation.Epoch, "schedule_window": generation.Generation.Format(time.RFC3339), "schedule_interval": interval.String()}
 	return []domain.TaskInstance{marketInstance(rule, domain.StableMarketCalendarTaskID(rule.MarketID, manifest.Exchange.ID, datasetID), datasetID, "", "", params, generation.Generation)}, nil
 }
 
@@ -89,7 +93,11 @@ func (s *Service) planMarketInstrument(ctx context.Context, rule *domain.TaskRul
 	if err := s.marketControl.PutLease(ctx, repository.MarketLease{LeaseID: leaseID, LeaseType: "provider", LeaseKey: leaseKey, Epoch: generation.Epoch, OwnerID: rule.RuleID, ExpiresAt: expiry}); err != nil {
 		return nil, err
 	}
-	params := map[string]any{"job_type": "collect.instrument", "phase": "fetch", "market_id": rule.MarketID, "space_id": rule.SpaceID, "exchange_id": manifest.Exchange.ID, "provider_id": provider.ID, "source_dataset_id": sourceID, "unified_dataset_id": unifiedID, "generation": generation.Generation.Format(time.RFC3339Nano), "instrument_types": strings.Join(jsonStrings(rule.InstrumentTypes), ","), "limit": 500, "quota_lease_id": leaseID, "lease_epoch": generation.Epoch, "execution_nonce": stableScheduleID("instrument", rule.RuleID, generation.Generation.Format(time.RFC3339Nano)), "quota_scope_key": providerQuotaScope(provider), "quota_windows": quotaWindowParams(provider.Quotas), "subject_dataset_ids": unifiedMarketDatasets(manifest), "timezone": manifest.Timezone, "schedule_window": generation.Generation.Format(time.RFC3339), "schedule_interval": interval.String()}
+	resolutionID := stableScheduleID("resolution", rule.MarketID+"|instrument|"+unifiedID)
+	if err := s.marketControl.PutLease(ctx, repository.MarketLease{LeaseID: resolutionID, LeaseType: "resolution", LeaseKey: rule.MarketID + "|instrument|" + unifiedID, Epoch: generation.Epoch, OwnerID: rule.RuleID, ExpiresAt: expiry}); err != nil {
+		return nil, err
+	}
+	params := map[string]any{"job_type": "collect.instrument", "phase": "fetch", "market_id": rule.MarketID, "space_id": rule.SpaceID, "exchange_id": manifest.Exchange.ID, "provider_id": provider.ID, "source_dataset_id": sourceID, "unified_dataset_id": unifiedID, "generation": generation.Generation.Format(time.RFC3339Nano), "instrument_types": strings.Join(jsonStrings(rule.InstrumentTypes), ","), "limit": 500, "quota_lease_id": leaseID, "lease_epoch": generation.Epoch, "resolution_lease_id": resolutionID, "resolution_lease_epoch": generation.Epoch, "execution_nonce": stableScheduleID("instrument", rule.RuleID, generation.Generation.Format(time.RFC3339Nano)), "quota_scope_key": providerQuotaScope(provider), "quota_windows": quotaWindowParams(provider.Quotas), "subject_dataset_ids": unifiedMarketDatasets(manifest), "timezone": manifest.Timezone, "schedule_window": generation.Generation.Format(time.RFC3339), "schedule_interval": interval.String()}
 	return []domain.TaskInstance{marketInstance(rule, domain.StableMarketInstrumentTaskID(rule.MarketID, manifest.Exchange.ID, firstString(manifest.ProductTypes...), unifiedID), unifiedID, "", "", params, generation.Generation)}, nil
 }
 
