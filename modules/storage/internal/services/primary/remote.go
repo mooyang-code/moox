@@ -73,6 +73,7 @@ func (c *RemoteClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarg
 		VersionRange: req.GetVersionRange(),
 		Order:        req.GetOrder(),
 		ColumnNames:  req.GetColumnNames(),
+		KeyPrefix:    req.GetKeyPrefix(),
 		Page:         req.GetPage(),
 	})
 	if err != nil {
@@ -82,6 +83,14 @@ func (c *RemoteClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarg
 		return nil, nil, err
 	}
 	return rsp.GetRows(), rsp.GetPageResult(), nil
+}
+
+func (c *RemoteClient) DeleteRows(ctx context.Context, target *pb.PrimaryStoreTarget, keys []*pb.PrimaryStoreKey) error {
+	rsp, err := c.proxyFor(target).DeletePrimaryRows(ctx, &pb.DeletePrimaryRowsReq{Target: target, Keys: keys})
+	if err != nil {
+		return err
+	}
+	return retInfoError(rsp.GetRetInfo())
 }
 
 func (c *RemoteClient) proxyFor(target *pb.PrimaryStoreTarget) pb.PrimaryStoreClientProxy {

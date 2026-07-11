@@ -100,6 +100,7 @@ func main() {
 		pb.RegisterMetadataService(s, storageService)
 		pb.RegisterAccessService(s, storageService)
 		registerAccessScanService(s, storageService)
+		startHostRetention(storageService, cfg.Storage.View.Maintenance)
 	}
 
 	if shouldRegisterViewQueryRole(cfg.Storage) || shouldStartViewBuilderRole(cfg.Storage) || shouldStartViewIndexRole(cfg.Storage) {
@@ -167,6 +168,38 @@ func main() {
 		log.Errorf("trpc服务器出错: %v", err)
 	}
 	log.Warnf("Storage roles %v stopped", cfg.Storage.Roles)
+}
+
+func startHostRetention(access *storagesvc.Service, maintenance storageconfig.StorageViewMaintenance) {
+	if access == nil || !maintenance.IsEnabled() {
+		return
+	}
+	retention, ok := parseStorageDuration(maintenance.HostRetention)
+	if !ok || retention <= 0 {
+		return
+	}
+	interval, ok := parseStorageDuration(maintenance.HostInterval)
+	if !ok || interval <= 0 {
+		interval = time.Hour
+	}
+	ctx, cancel := context.WithCancel(trpc.BackgroundContext())
+	go func() {
+		defer cancel()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			if deleted, err := access.PruneHostDatasets(ctx, "moox_system", maintenance.HostDatasetIDs, retention, time.Now().UTC()); err != nil {
+				log.Warnf("host dataset retention failed: %v", err)
+			} else if deleted > 0 {
+				log.Infof("host dataset retention deleted %d rows", deleted)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 }
 
 func registerStorageMetricsReporter(s *server.Server, storage storageconfig.StorageConfig) {

@@ -348,14 +348,18 @@ func (s *Service) UpdateAlertRule(ctx context.Context, req *monitorpb.UpdateAler
 }
 
 func (s *Service) ListAlertRules(ctx context.Context, req *monitorpb.ListAlertRulesReq) (*monitorpb.ListAlertRulesRsp, error) {
+	spaceID := req.GetSpaceId()
+	if _, _, ok := hostmetrics.ParseHostRuleKey(req.GetCheckId()); ok {
+		spaceID = hostmetrics.SpaceID
+	}
 	var (
 		rules []domain.AlertRule
 		err   error
 	)
 	if req.GetCheckId() != "" {
-		rules, err = s.alerts.ListRulesForCheck(ctx, req.GetSpaceId(), req.GetCheckId())
+		rules, err = s.alerts.ListRulesForCheck(ctx, spaceID, req.GetCheckId())
 	} else {
-		rules, err = s.alerts.ListRules(ctx, req.GetSpaceId())
+		rules, err = s.alerts.ListRules(ctx, spaceID)
 	}
 	if err != nil {
 		return &monitorpb.ListAlertRulesRsp{RetInfo: inner(err)}, nil
@@ -371,7 +375,15 @@ func (s *Service) DeleteAlertRule(ctx context.Context, req *monitorpb.DeleteAler
 	if req.GetRuleId() == "" {
 		return &monitorpb.DeleteAlertRuleRsp{RetInfo: invalid(fmt.Errorf("rule_id is required"))}, nil
 	}
-	if err := s.alerts.DeleteRule(ctx, req.GetSpaceId(), req.GetRuleId()); err != nil {
+	spaceID := req.GetSpaceId()
+	if rule, err := s.alerts.GetRuleByID(ctx, req.GetRuleId()); err == nil && rule != nil {
+		if rule.SpaceID == hostmetrics.SpaceID {
+			if _, _, ok := hostmetrics.ParseHostRuleKey(rule.CheckID); ok {
+				spaceID = hostmetrics.SpaceID
+			}
+		}
+	}
+	if err := s.alerts.DeleteRule(ctx, spaceID, req.GetRuleId()); err != nil {
 		return &monitorpb.DeleteAlertRuleRsp{RetInfo: inner(err)}, nil
 	}
 	return &monitorpb.DeleteAlertRuleRsp{RetInfo: success()}, nil
@@ -573,8 +585,12 @@ func normalizeRule(in *monitorpb.AlertRule, create bool) (*domain.AlertRule, err
 	if reminder > 0 && reminder < 300 {
 		return nil, fmt.Errorf("minimum_reminder_interval_seconds must be 0 or at least 300")
 	}
+	spaceID := in.GetSpaceId()
+	if _, _, ok := hostmetrics.ParseHostRuleKey(in.GetCheckId()); ok {
+		spaceID = hostmetrics.SpaceID
+	}
 	return &domain.AlertRule{
-		SpaceID:                        in.GetSpaceId(),
+		SpaceID:                        spaceID,
 		RuleID:                         ruleID,
 		CheckID:                        in.GetCheckId(),
 		WebhookID:                      in.GetWebhookId(),

@@ -113,6 +113,8 @@ message ScanPrimaryRowsReq {
   repeated string column_names = 6;
   // page 是分页参数，推荐使用 cursor 做大批量扫描。
   common.Page page = 7;
+  // key_prefix 是可选的时序 data_key 前缀，用于按 subject/freq 扫描而不遍历整个 Dataset。
+  string key_prefix = 8;
 }
 
 // ScanPrimaryRowsRsp 表示在线主存扫描结果。
@@ -125,6 +127,17 @@ message ScanPrimaryRowsRsp {
   common.PageResult page_result = 3;
 }
 
+message DeletePrimaryRowsReq {
+  common.AuthInfo auth_info = 1;
+  PrimaryStoreTarget target = 2;
+  repeated PrimaryStoreKey keys = 3;
+}
+
+message DeletePrimaryRowsRsp {
+  common.RetInfo ret_info = 1;
+  uint32 deleted = 2;
+}
+
 // PrimaryStore 是 Access 调用在线事实主存的内部执行服务。
 service PrimaryStore {
   // WritePrimaryRows 将已完成路由的数据行写入在线主存。
@@ -133,4 +146,5 @@ service PrimaryStore {
   rpc ReadPrimaryRows(ReadPrimaryRowsReq) returns (ReadPrimaryRowsRsp);
   // ScanPrimaryRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
   rpc ScanPrimaryRows(ScanPrimaryRowsReq) returns (ScanPrimaryRowsRsp);
+  rpc DeletePrimaryRows(DeletePrimaryRowsReq) returns (DeletePrimaryRowsRsp);
 }

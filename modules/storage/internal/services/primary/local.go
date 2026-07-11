@@ -136,6 +136,11 @@ func (c *LocalClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarge
 		if err != nil {
 			return nil, nil, err
 		}
+		if req.GetKeyPrefix() != "" {
+			if scanner, ok := store.(device.FactPrefixScanner); ok {
+				return scanner.ScanRowsWithPrefix(ctx, target, req.GetDataKind(), req.GetVersionRange(), req.GetOrder(), req.GetColumnNames(), req.GetPage(), req.GetKeyPrefix())
+			}
+		}
 		return store.ScanRows(ctx, target, req.GetDataKind(), req.GetVersionRange(), req.GetOrder(), req.GetColumnNames(), req.GetPage())
 	default:
 		return nil, nil, fmt.Errorf("unsupported scan engine %s", target.GetEngine())

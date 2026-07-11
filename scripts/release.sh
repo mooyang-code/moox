@@ -46,6 +46,14 @@ validate_monitor_metadata_seeds() {
   (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml" --dry-run >/dev/null)
   (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-host.seed.yaml" --dry-run >/dev/null)
   (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml" --dry-run >/dev/null)
+  grep -q 'host_storage:' "${ROOT}/modules/monitor/config/app.yaml"
+  grep -q 'retention: 72h' "${ROOT}/modules/monitor/config/app.yaml"
+  ! grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-host.seed.yaml"
+  grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml"
+  for dataset in host_resource_v1 host_fs_v1 host_disk_v1 host_net_v1; do
+    grep -q "dataset_id: ${dataset}" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
+    grep -q "dataset_id: ${dataset}" "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml"
+  done
 }
 
 validate_monitor_metadata_seeds

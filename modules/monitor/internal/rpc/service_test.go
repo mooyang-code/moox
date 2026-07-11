@@ -6,12 +6,26 @@ import (
 	"testing"
 	"time"
 
+	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
 )
+
+func TestQueryHostMetricHistoryOutsideRetentionReturnsGap(t *testing.T) {
+	svc := newTestService(t)
+	svc.hostReader = hostmetrics.NewStorageReader(nil, monconfig.Default().Metrics.HostStorage)
+	now := time.Now().UTC()
+	rsp, err := svc.QueryHostMetricHistory(context.Background(), &monitorpb.QueryHostMetricHistoryReq{
+		AgentId: "agent-1", StartAt: now.Add(-11 * 24 * time.Hour).Format(time.RFC3339Nano), EndAt: now.Add(-10 * 24 * time.Hour).Format(time.RFC3339Nano), Limit: 10,
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS || !rsp.GetDataGap() || len(rsp.GetPoints()) != 0 {
+		t.Fatalf("rsp=%+v err=%v, want successful empty gap", rsp, err)
+	}
+}
 
 func TestMonitorRPCValidation(t *testing.T) {
 	svc := newTestService(t)

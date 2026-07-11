@@ -25,6 +25,8 @@ type PrimaryStoreService interface {
 	ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq) (*ReadPrimaryRowsRsp, error)
 	// ScanPrimaryRows ScanPrimaryRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
 	ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq) (*ScanPrimaryRowsRsp, error)
+
+	DeletePrimaryRows(ctx context.Context, req *DeletePrimaryRowsReq) (*DeletePrimaryRowsRsp, error)
 }
 
 func PrimaryStoreService_WritePrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -81,6 +83,24 @@ func PrimaryStoreService_ScanPrimaryRows_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
+func PrimaryStoreService_DeletePrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeletePrimaryRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).DeletePrimaryRows(ctx, reqbody.(*DeletePrimaryRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // PrimaryStoreServer_ServiceDesc descriptor for server.RegisterService.
 var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.PrimaryStore",
@@ -97,6 +117,10 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.PrimaryStore/ScanPrimaryRows",
 			Func: PrimaryStoreService_ScanPrimaryRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/DeletePrimaryRows",
+			Func: PrimaryStoreService_DeletePrimaryRows_Handler,
 		},
 	},
 }
@@ -126,6 +150,9 @@ func (s *UnimplementedPrimaryStore) ReadPrimaryRows(ctx context.Context, req *Re
 func (s *UnimplementedPrimaryStore) ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq) (*ScanPrimaryRowsRsp, error) {
 	return nil, errors.New("rpc ScanPrimaryRows of service PrimaryStore is not implemented")
 }
+func (s *UnimplementedPrimaryStore) DeletePrimaryRows(ctx context.Context, req *DeletePrimaryRowsReq) (*DeletePrimaryRowsRsp, error) {
+	return nil, errors.New("rpc DeletePrimaryRows of service PrimaryStore is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -141,6 +168,8 @@ type PrimaryStoreClientProxy interface {
 	ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq, opts ...client.Option) (rsp *ReadPrimaryRowsRsp, err error)
 	// ScanPrimaryRows ScanPrimaryRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
 	ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq, opts ...client.Option) (rsp *ScanPrimaryRowsRsp, err error)
+
+	DeletePrimaryRows(ctx context.Context, req *DeletePrimaryRowsReq, opts ...client.Option) (rsp *DeletePrimaryRowsRsp, err error)
 }
 
 type PrimaryStoreClientProxyImpl struct {
@@ -206,6 +235,26 @@ func (c *PrimaryStoreClientProxyImpl) ScanPrimaryRows(ctx context.Context, req *
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ScanPrimaryRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) DeletePrimaryRows(ctx context.Context, req *DeletePrimaryRowsReq, opts ...client.Option) (*DeletePrimaryRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/DeletePrimaryRows")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("DeletePrimaryRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeletePrimaryRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

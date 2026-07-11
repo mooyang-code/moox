@@ -80,7 +80,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		if err := hostRuleCache.Start(ctx); err != nil {
 			log.WarnContextf(ctx, "host alert rule cache unavailable: %v", err)
 		}
-		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{Cache: hostRuleCache, Repository: repository.NewAlertRepository(mgr.DB()), InstanceID: cfg.Instance.InstanceID})
+		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{Cache: hostRuleCache, Repository: repository.NewAlertRepository(mgr.DB()), InstanceID: cfg.Instance.InstanceID, Notifier: alerting.WebhookNotifier{}, Webhook: func(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) { return repository.NewAlertRepository(mgr.DB()).GetWebhook(ctx, spaceID, webhookID) }})
 	} else {
 		hostStore = hostmetrics.NewStoreWithWriter(nil)
 	}
@@ -116,9 +116,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	resultHook := monitorResultHook(cfg, mgr)
 	syncSystem := monitorSyncFunc(ctx, cfg, mgr)
 	var hostReady func() bool
-	if hostGate != nil {
-		hostReady = hostGate.Ready
-	}
+	if hostGate != nil { hostReady = hostGate.Ready } else { hostReady = func() bool { return false } }
 	registerMonitorService(s, cfg, mgr, hostStore, hostReader, hostReady, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
 	registerMetricsReporter(s)
 	startScheduler(ctx, cfg, mgr, resultHook)
@@ -126,7 +124,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	startPeerPuller(ctx, cfg, mgr)
 	startHostMetricsConsumer(ctx, cfg, hostStore)
 	startHostStorageGate(ctx, cfg, hostGate)
-	startHostStorageRetention(ctx, cfg, hostAccess)
 	if metricEvaluator != nil {
 		defaultMetricScheduler = monmetrics.NewRuleScheduler(monmetrics.SchedulerOptions{Evaluator: metricEvaluator, Rules: metricRules, InstanceID: cfg.Instance.InstanceID, ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second, ActiveInstances: func(ctx context.Context) ([]string, error) {
 			return activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, repository.NewPeerRepository(mgr.DB()), 3*time.Duration(cfg.Peer.TimeoutSeconds)*time.Second), nil
@@ -136,28 +133,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
-}
-
-func startHostStorageRetention(ctx context.Context, cfg *config.Config, access any) {
-	if cfg == nil || !cfg.Metrics.HostStorage.Enabled || access == nil {
-		return
-	}
-	go func() {
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for {
-			if deleted, err := hostmetrics.Prune(ctx, access, cfg.Metrics.HostStorage, time.Now().UTC()); err != nil {
-				log.WarnContextf(ctx, "host storage retention failed: %v", err)
-			} else if deleted > 0 {
-				log.InfoContextf(ctx, "host storage retention deleted %d rows", deleted)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
 }
 
 func startHostStorageGate(ctx context.Context, cfg *config.Config, gate *hostmetrics.StorageGate) {

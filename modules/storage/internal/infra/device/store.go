@@ -32,3 +32,9 @@ type FactStore interface {
 type FactDeleter interface {
 	DeleteRows(context.Context, []*pb.PrimaryStoreKey) error
 }
+
+// FactPrefixScanner optionally narrows a time-series scan to one subject/freq
+// data-key prefix, avoiding a full dataset walk on large host datasets.
+type FactPrefixScanner interface {
+	ScanRowsWithPrefix(context.Context, *pb.PrimaryStoreTarget, pb.DataKind, *pb.VersionRange, pb.SortOrder, []string, *pb.Page, string) ([]*pb.PrimaryStoreRow, *pb.PageResult, error)
+}

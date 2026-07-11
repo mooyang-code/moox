@@ -115,6 +115,17 @@ func (r *AlertRepository) DeleteRule(ctx context.Context, spaceID, ruleID string
 		Updates(map[string]any{"c_is_deleted": true}).Error
 }
 
+func (r *AlertRepository) GetRuleByID(ctx context.Context, ruleID string) (*domain.AlertRule, error) {
+	var rule domain.AlertRule
+	err := r.db.WithContext(ctx).
+		Where("c_rule_id = ? AND c_is_deleted = 0", ruleID).
+		First(&rule).Error
+	if err != nil {
+		return nil, err
+	}
+	return &rule, nil
+}
+
 func (r *AlertRepository) UpsertState(ctx context.Context, state *domain.AlertState) error {
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{
@@ -149,6 +160,10 @@ func (r *AlertRepository) GetState(ctx context.Context, spaceID, ruleID, checkID
 
 func (r *AlertRepository) CreateEvent(ctx context.Context, event *domain.AlertEvent) error {
 	return r.db.WithContext(ctx).Create(event).Error
+}
+
+func (r *AlertRepository) CreateEventIdempotent(ctx context.Context, event *domain.AlertEvent) error {
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_event_id"}}, DoNothing: true}).Create(event).Error
 }
 
 func (r *AlertRepository) ListEvents(ctx context.Context, spaceID string, limit int) ([]domain.AlertEvent, error) {

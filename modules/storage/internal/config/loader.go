@@ -101,6 +101,9 @@ type StorageViewMaintenance struct {
 	RemoveGrace      string                       `yaml:"remove_grace"`
 	TimeSeries       StorageTimeSeriesMaintenance `yaml:"time_series"`
 	Record           StorageRecordMaintenance     `yaml:"record"`
+	HostDatasetIDs   []string                     `yaml:"host_dataset_ids"`
+	HostRetention    string                       `yaml:"host_retention"`
+	HostInterval     string                       `yaml:"host_interval"`
 }
 
 type StorageTimeSeriesMaintenance struct {
@@ -160,6 +163,15 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.Devices.ParquetPath == "" {
 		c.Devices.ParquetPath = filepath.Join(c.Root, "archive")
+	}
+	if len(c.View.Maintenance.HostDatasetIDs) == 0 {
+		c.View.Maintenance.HostDatasetIDs = []string{"host_resource_v1", "host_fs_v1", "host_disk_v1", "host_net_v1"}
+	}
+	if c.View.Maintenance.HostRetention == "" {
+		c.View.Maintenance.HostRetention = "72h"
+	}
+	if c.View.Maintenance.HostInterval == "" {
+		c.View.Maintenance.HostInterval = "1h"
 	}
 	if c.EventBus.Type == "" {
 		c.EventBus.Type = "jetstream"

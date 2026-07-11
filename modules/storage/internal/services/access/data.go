@@ -52,6 +52,16 @@ func (s *Service) DeleteTimeSeriesRows(ctx context.Context, req *pb.DeleteTimeSe
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
 		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
+	if s == nil || s.metadataReader == nil {
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("metadata reader is unavailable"))}, nil
+	}
+	dataset, err := s.metadataReader.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
+	}
+	if dataset == nil || dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset must be time_series"))}, nil
+	}
 	if err := validateTimeRange(req.GetTimeRange()); err != nil || req.GetTimeRange().GetEndTime() == "" {
 		if err == nil {
 			err = errors.New("delete requires an end_time")
@@ -86,6 +96,9 @@ func (s *Service) DeleteTimeSeriesRows(ctx context.Context, req *pb.DeleteTimeSe
 				keys = append(keys, row.GetKey())
 			}
 		}
+		if len(keys) == 0 {
+			continue
+		}
 		deleter, ok := s.primary.(primary.Deleter)
 		if !ok {
 			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("primary store deletion is unavailable"))}, nil
@@ -101,6 +114,9 @@ func (s *Service) DeleteTimeSeriesRows(ctx context.Context, req *pb.DeleteTimeSe
 func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	if err := validateTimeRange(req.GetTimeRange()); err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	if isTimeSeriesSubjectScan(req) {
+		return s.scanTimeSeriesSubject(ctx, req)
 	}
 	if isTimeSeriesDatasetScan(req) {
 		return s.scanTimeSeriesDataset(ctx, req)
@@ -177,6 +193,78 @@ func isTimeSeriesDatasetScan(req *pb.ReadTimeSeriesRowsReq) bool {
 		strings.TrimSpace(key.GetFreq()) == "" &&
 		strings.TrimSpace(key.GetDataTime()) == "" &&
 		len(key.GetDimensions()) == 0
+}
+
+func isTimeSeriesSubjectScan(req *pb.ReadTimeSeriesRowsReq) bool {
+	keys := req.GetKeys()
+	if len(keys) != 1 {
+		return false
+	}
+	key := keys[0]
+	return key != nil &&
+		strings.TrimSpace(key.GetSubjectId()) != "" &&
+		strings.TrimSpace(key.GetFreq()) != "" &&
+		strings.TrimSpace(key.GetDataTime()) == "" &&
+		len(key.GetDimensions()) == 0
+}
+
+func (s *Service) scanTimeSeriesSubject(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
+	key := req.GetKeys()[0]
+	if strings.TrimSpace(key.GetSpaceId()) == "" || strings.TrimSpace(key.GetDatasetId()) == "" {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("space_id and dataset_id are required"))}, nil
+	}
+	if err := validateTimeSeriesKeyTemplate(key); err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	versionRange, err := timeRangeToVersionRange(req.GetTimeRange())
+	if err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), key.GetSubjectId())
+	if err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+	}
+	page := req.GetPage()
+	size := page.GetSize()
+	if size == 0 || size > primaryDatasetScanPageSize {
+		size = primaryDatasetScanPageSize
+	}
+	cursor := page.GetCursor()
+	rows := make([]*pb.TimeSeriesRow, 0, size)
+	var hasMore bool
+	var nextCursor string
+	for len(rows) < int(size) {
+		primaryRows, primaryPage, scanErr := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{
+			AuthInfo: req.GetAuthInfo(), Target: target, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+			VersionRange: versionRange, ColumnNames: req.GetColumnNames(), Order: req.GetOrder(),
+			KeyPrefix: factkey.EscapePart(key.GetSubjectId()) + "%7C" + factkey.EscapePart(key.GetFreq()) + "%7C",
+			Page:      &pb.Page{Size: primaryDatasetScanPageSize, Cursor: cursor},
+		})
+		if scanErr != nil {
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(scanErr), scanErr)}, nil
+		}
+		for _, row := range primaryRows {
+			if row == nil || row.GetKey() == nil {
+				continue
+			}
+			subjectID, freq, _, parseErr := factkey.ParseTimeSeriesDataKey(row.GetKey().GetKey())
+			if parseErr != nil || subjectID != key.GetSubjectId() || freq != key.GetFreq() {
+				continue
+			}
+			rows = append(rows, primaryStoreRowToTimeSeriesRow(row, key))
+			if len(rows) == int(size) {
+				break
+			}
+		}
+		if primaryPage == nil || !primaryPage.GetHasMore() || primaryPage.GetNextCursor() == "" {
+			break
+		}
+		hasMore = true
+		nextCursor = primaryPage.GetNextCursor()
+		cursor = nextCursor
+	}
+	result := &pb.PageResult{Page: page.GetPage(), Size: size, HasMore: hasMore, NextCursor: nextCursor}
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: rows, PageResult: result}, nil
 }
 
 func (s *Service) scanTimeSeriesDataset(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {

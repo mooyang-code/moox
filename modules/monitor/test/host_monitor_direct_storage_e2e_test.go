@@ -10,6 +10,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -31,7 +32,13 @@ func (f *fakeStorage) DeleteTimeSeriesRows(_ context.Context, req *storagepb.Del
 }
 
 func (f *fakeStorage) WriteTimeSeriesRows(_ context.Context, req *storagepb.WriteTimeSeriesRowsReq, _ ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error) {
-	f.rows = append(f.rows, req.GetRows()...)
+	for _, incoming := range req.GetRows() {
+		replaced := false
+		for i, existing := range f.rows {
+			if proto.Equal(existing.GetKey(), incoming.GetKey()) { f.rows[i] = incoming; replaced = true; break }
+		}
+		if !replaced { f.rows = append(f.rows, incoming) }
+	}
 	return &storagepb.WriteTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 func (f *fakeStorage) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
@@ -63,15 +70,19 @@ func TestHostMetricDirectStorageRoundTrip(t *testing.T) {
 	if len(fake.rows) != 4 {
 		t.Fatalf("stored rows=%d, want four datasets", len(fake.rows))
 	}
+	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed.Add(2*time.Minute), "message-2"); err != nil { t.Fatal(err) }
+	if len(fake.rows) != 8 { t.Fatalf("different minute should add four rows, got %d", len(fake.rows)) }
+	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed, "message-duplicate"); err != nil { t.Fatal(err) }
+	if len(fake.rows) != 8 { t.Fatalf("same minute duplicate changed row count: %d", len(fake.rows)) }
 	reader := hostmetrics.NewStorageReader(fake, cfg)
 	points, err := reader.History(context.Background(), "agent-1", observed.Add(-time.Minute), observed.Add(time.Minute), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(points) != 1 || points[0].Snapshot.GetCpu().GetLogicalCores() != 4 || len(points[0].Snapshot.GetFilesystems()) != 1 || len(points[0].Snapshot.GetDisks()) != 1 || len(points[0].Snapshot.GetNetworks()) != 1 {
+	if len(points) != 2 || points[0].Snapshot.GetCpu().GetLogicalCores() != 4 || len(points[0].Snapshot.GetFilesystems()) != 1 || len(points[0].Snapshot.GetDisks()) != 1 || len(points[0].Snapshot.GetNetworks()) != 1 {
 		t.Fatalf("round-trip points=%+v", points)
 	}
-	if deleted, err := hostmetrics.Prune(context.Background(), fake, cfg, observed.Add(73*time.Hour)); err != nil || deleted != 4 {
+	if deleted, err := hostmetrics.Prune(context.Background(), fake, cfg, observed.Add(73*time.Hour)); err != nil || deleted != 8 {
 		t.Fatalf("retention deleted=%d err=%v", deleted, err)
 	}
 }

@@ -45,12 +45,27 @@ func (r *StorageReader) History(ctx context.Context, agentID string, start, end 
 	if end.Before(start) {
 		return nil, fmt.Errorf("history end precedes start")
 	}
-	if end.Sub(start) > 72*time.Hour {
+	requestedStart, requestedEnd := start, end
+	now := time.Now().UTC()
+	windowStart := now.Add(-72 * time.Hour)
+	if end.After(now) {
+		end = now
+	}
+	if start.Before(windowStart) {
+		start = windowStart
+	}
+	if end.Before(start) {
+		return []HistoryPoint{}, nil
+	}
+	if requestedEnd.Sub(requestedStart) > 72*time.Hour {
 		start = end.Add(-72 * time.Hour)
+		if start.Before(windowStart) {
+			start = windowStart
+		}
 	}
 	points := make(map[string]*HistoryPoint)
 	for _, dataset := range []string{r.cfg.ResourceDatasetID, r.cfg.FilesystemDatasetID, r.cfg.DiskDatasetID, r.cfg.NetworkDatasetID} {
-		rows, err := r.scan(ctx, dataset, start, end, limit)
+		rows, err := r.scan(ctx, dataset, agentID, start, end, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -84,7 +99,7 @@ func (r *StorageReader) History(ctx context.Context, agentID string, start, end 
 	return out, nil
 }
 
-func (r *StorageReader) scan(ctx context.Context, dataset string, start, end time.Time, limit int) ([]*storagepb.TimeSeriesRow, error) {
+func (r *StorageReader) scan(ctx context.Context, dataset, agentID string, start, end time.Time, limit int) ([]*storagepb.TimeSeriesRow, error) {
 	if dataset == "" {
 		return nil, nil
 	}
@@ -92,7 +107,7 @@ func (r *StorageReader) scan(ctx context.Context, dataset string, start, end tim
 	cursor := ""
 	for pageNo := 1; pageNo <= 100; pageNo++ {
 		rsp, err := r.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-			Keys:      []*storagepb.TimeSeriesKey{{SpaceId: r.cfg.SpaceID, DatasetId: dataset}},
+			Keys:      []*storagepb.TimeSeriesKey{{SpaceId: r.cfg.SpaceID, DatasetId: dataset, SubjectId: agentID, Freq: r.cfg.Frequency}},
 			TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)},
 			Order:     storagepb.SortOrder_SORT_ORDER_ASC,
 			Page:      &commonpb.Page{Page: 1, Size: uint32(limit), Cursor: cursor},

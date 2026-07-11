@@ -2,12 +2,16 @@ package hostmetrics
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
@@ -21,6 +25,8 @@ type AlertEvaluator struct {
 	Repository *repository.AlertRepository
 	InstanceID string
 	Now        func() time.Time
+	Webhook    func(context.Context, string, string) (*domain.WebhookChannel, error)
+	Notifier   alerting.Notifier
 	mu         sync.Mutex
 	seen       map[string]struct{}
 }
@@ -42,7 +48,7 @@ func (e *AlertEvaluator) Evaluate(ctx context.Context, agentID, messageID string
 			if !value.available {
 				continue
 			}
-			if err := e.transition(ctx, rule, agentID, value.value >= threshold, recovery, now, value.value); err != nil {
+			if err := e.transition(ctx, rule, agentID, messageID, value.value >= threshold, recovery, now, value.value); err != nil {
 				return err
 			}
 			e.remember(messageID, rule.RuleID)
@@ -134,7 +140,7 @@ func hostThresholds(rule domain.AlertRule, metric string) (float64, float64) {
 	return threshold, recovery
 }
 
-func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, agentID string, failing bool, recovery float64, now time.Time, value float64) error {
+func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, agentID, messageID string, failing bool, recovery float64, now time.Time, value float64) error {
 	state, err := e.Repository.GetState(ctx, SpaceID, rule.RuleID, rule.CheckID)
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return err
@@ -148,7 +154,7 @@ func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, 
 		if state.Status != domain.AlertStatusFiring && state.FailureCount >= positive(rule.FailureThreshold) {
 			state.Status = domain.AlertStatusFiring
 			state.TriggeredAt = &now
-			return e.record(ctx, rule, agentID, state, value, domain.AlertEventTriggered, now)
+			return e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventTriggered, now)
 		}
 	} else {
 		state.SuccessCount++
@@ -156,7 +162,7 @@ func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, 
 		if state.Status == domain.AlertStatusFiring && state.SuccessCount >= positive(rule.SuccessThreshold) && value <= recovery {
 			state.Status = domain.AlertStatusResolved
 			state.ResolvedAt = &now
-			if err := e.record(ctx, rule, agentID, state, value, domain.AlertEventResolved, now); err != nil {
+			if err := e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventResolved, now); err != nil {
 				return err
 			}
 		}
@@ -164,12 +170,32 @@ func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, 
 	return e.Repository.UpsertState(ctx, state)
 }
 
-func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, agentID string, state *domain.AlertState, value float64, eventType string, now time.Time) error {
+func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, agentID, messageID string, state *domain.AlertState, value float64, eventType string, now time.Time) error {
+	payload, _ := json.Marshal(map[string]any{"agent_id": agentID, "value": value, "metric": strings.TrimPrefix(rule.CheckID, HostRulePrefix)})
+	if err := e.Repository.CreateEventIdempotent(ctx, &domain.AlertEvent{EventID: deterministicEventID(messageID, rule.RuleID, eventType), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, OwnerInstanceID: e.InstanceID, Payload: string(payload), CreatedAt: now}); err != nil {
+		return err
+	}
 	if err := e.Repository.UpsertState(ctx, state); err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{"agent_id": agentID, "value": value, "metric": strings.TrimPrefix(rule.CheckID, HostRulePrefix)})
-	return e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, OwnerInstanceID: e.InstanceID, Payload: string(payload), CreatedAt: now})
+	if e.Webhook == nil || e.Notifier == nil || rule.WebhookID == "" {
+		return nil
+	}
+	webhook, err := e.Webhook(ctx, SpaceID, rule.WebhookID)
+	if err != nil || webhook == nil {
+		return nil
+	}
+	event := alerting.Event{EventID: uuid.NewString(), EventType: eventType, Status: state.Status, OwnerInstanceID: e.InstanceID, Message: fmt.Sprintf("%s host metric %s=%v", agentID, strings.TrimPrefix(rule.CheckID, HostRulePrefix), value), Check: domain.Check{SpaceID: SpaceID, CheckID: rule.CheckID, Name: "Host metric"}, Result: domain.CheckResult{SpaceID: SpaceID, CheckID: rule.CheckID, Success: state.Status != domain.AlertStatusFiring, ErrorMessage: fmt.Sprintf("value=%v", value), CheckedAt: now}, Rule: rule, DedupeKey: rule.RuleID + ":" + rule.CheckID}
+	if err := e.Notifier.Send(ctx, *webhook, event); err != nil {
+		// Notification failure is recorded best-effort and never rolls back the sample.
+		_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, OwnerInstanceID: e.InstanceID, Message: err.Error(), CreatedAt: now})
+	}
+	return nil
+}
+
+func deterministicEventID(messageID, ruleID, eventType string) string {
+	sum := sha256.Sum256([]byte(messageID + "\x00" + ruleID + "\x00" + eventType))
+	return "host-alert-" + hex.EncodeToString(sum[:16])
 }
 
 func positive(value int) int {

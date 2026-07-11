@@ -24,9 +24,9 @@
           <a-card :bordered="false" class="overview-card">
             <a-statistic
               title="平均CPU使用率"
-              :value="averageCpuUsage"
+              :value="averageCpuUsage === null ? '--' : averageCpuUsage"
               suffix="%"
-              :value-style="{ color: averageCpuUsage > 80 ? '#f53f3f' : '#0fbf60' }"
+              :value-style="{ color: (averageCpuUsage ?? 0) > 80 ? '#f53f3f' : '#0fbf60' }"
             />
           </a-card>
         </a-col>
@@ -34,9 +34,9 @@
           <a-card :bordered="false" class="overview-card">
             <a-statistic
               title="平均内存使用率"
-              :value="averageMemoryUsage"
+              :value="averageMemoryUsage === null ? '--' : averageMemoryUsage"
               suffix="%"
-              :value-style="{ color: averageMemoryUsage > 80 ? '#f53f3f' : '#0fbf60' }"
+              :value-style="{ color: (averageMemoryUsage ?? 0) > 80 ? '#f53f3f' : '#0fbf60' }"
             />
           </a-card>
         </a-col>
@@ -44,9 +44,9 @@
           <a-card :bordered="false" class="overview-card">
             <a-statistic
               title="平均磁盘使用率"
-              :value="averageDiskUsage"
+              :value="averageDiskUsage === null ? '--' : averageDiskUsage"
               suffix="%"
-              :value-style="{ color: averageDiskUsage > 80 ? '#f53f3f' : '#0fbf60' }"
+              :value-style="{ color: (averageDiskUsage ?? 0) > 80 ? '#f53f3f' : '#0fbf60' }"
             />
           </a-card>
         </a-col>
@@ -97,12 +97,12 @@
                         <div class="metric-label">CPU使用率</div>
                         <div class="metric-value">
                           <a-progress
-                            :percent="container.cpuUsage / 100"
+                            :percent="container.cpuAvailable ? container.cpuUsage / 100 : 0"
                             :color="getProgressColor(container.cpuUsage)"
                             :show-text="false"
                             size="small"
                           />
-                          <span class="metric-text">{{ container.cpuUsage }}%</span>
+                          <span class="metric-text">{{ container.cpuAvailable ? `${container.cpuUsage}%` : '--' }}</span>
                         </div>
                       </div>
 
@@ -111,12 +111,12 @@
                         <div class="metric-label">内存使用率</div>
                         <div class="metric-value">
                           <a-progress
-                            :percent="container.memoryUsage / 100"
+                            :percent="container.memoryAvailable ? container.memoryUsage / 100 : 0"
                             :color="getProgressColor(container.memoryUsage)"
                             :show-text="false"
                             size="small"
                           />
-                          <span class="metric-text">{{ container.memoryUsage }}%</span>
+                          <span class="metric-text">{{ container.memoryAvailable ? `${container.memoryUsage}%` : '--' }}</span>
                         </div>
                       </div>
 
@@ -125,12 +125,12 @@
                         <div class="metric-label">磁盘使用率</div>
                         <div class="metric-value">
                           <a-progress
-                            :percent="container.diskUsage / 100"
+                            :percent="container.diskAvailable ? container.diskUsage / 100 : 0"
                             :color="getProgressColor(container.diskUsage)"
                             :show-text="false"
                             size="small"
                           />
-                          <span class="metric-text">{{ container.diskUsage }}%</span>
+                          <span class="metric-text">{{ container.diskAvailable ? `${container.diskUsage}%` : '--' }}</span>
                         </div>
                       </div>
 
@@ -163,15 +163,15 @@
                       <h4>资源使用趋势</h4>
                       <a-space>
                         <a-select
-                          v-model="selectedHostAddress"
+                          v-model="selectedHostID"
                           placeholder="选择主机"
                           style="width: 200px;"
                           @change="loadHistory"
                         >
                           <a-option
                             v-for="c in containers"
-                            :key="c.address"
-                            :value="c.address"
+                            :key="c.host_id"
+                            :value="c.host_id"
                           >
                             {{ c.name }} ({{ c.address }})
                           </a-option>
@@ -184,10 +184,11 @@
                       </a-space>
                     </div>
                     <div class="chart-container" ref="trendChartRef">
+                      <div v-if="historyNotice" class="chart-placeholder">{{ historyNotice }}</div>
                       <div v-if="historyLoading" class="chart-placeholder">
                         <a-spin />
                       </div>
-                      <div v-else-if="historyData.length === 0" class="chart-placeholder">
+                      <div v-else-if="!historyNotice && historyData.length === 0" class="chart-placeholder">
                         <icon-bar-chart style="font-size: 48px; color: var(--color-text-3);" />
                         <p>暂无历史数据</p>
                       </div>
@@ -224,9 +225,10 @@ let refreshTimer: NodeJS.Timeout | null = null;
 const hostMetrics = ref<HostMetrics[]>([]);
 
 // 历史趋势图
-const selectedHostAddress = ref('');
+const selectedHostID = ref('');
 const historyDuration = ref('1h');
 const historyData = ref<HistoryPoint[]>([]);
+const historyNotice = ref('');
 const historyLoading = ref(false);
 const trendChartRef = ref<HTMLElement>();
 let trendChart: VChart | null = null;
@@ -234,26 +236,31 @@ let trendChart: VChart | null = null;
 // 将主机监控数据转换为显示格式
 const containers = computed(() => {
   return hostMetrics.value.map(host => {
-    const networkIn = host.networks && host.networks.length > 0
+    const networkIn = host.networks && host.networks.length > 0 && host.networks[0].rate_available
       ? formatBytesPerSecond(host.networks[0].rx_speed)
-      : '0 B/s';
-    const networkOut = host.networks && host.networks.length > 0
+      : '--';
+    const networkOut = host.networks && host.networks.length > 0 && host.networks[0].rate_available
       ? formatBytesPerSecond(host.networks[0].tx_speed)
-      : '0 B/s';
+      : '--';
 
     // 取第一个磁盘分区的使用率
-    const diskUsage = host.disks && host.disks.length > 0
-      ? Math.round(host.disks[0].percent)
-      : 0;
+    const diskAvailable = !!(host.disks && host.disks.length > 0 && host.disks[0].percent_available);
+    const diskUsage = diskAvailable ? Math.round(host.disks[0].percent) : 0;
+    const cpuAvailable = host.cpu.usage_available;
+    const memoryAvailable = host.memory.percent_available;
 
     return {
       id: `host-${host.host_id}`,
+      host_id: host.host_id,
       name: host.host_name,
       address: host.address,
       status: host.status === 'online' ? 'running' : host.status === 'offline' ? 'stopped' : 'error',
       cpuUsage: Math.round(host.cpu?.usage || 0),
+      cpuAvailable,
       memoryUsage: Math.round(host.memory?.percent || 0),
+      memoryAvailable,
       diskUsage,
+      diskAvailable,
       networkIn,
       networkOut,
     };
@@ -266,19 +273,19 @@ const onlineHosts = computed(() =>
   hostMetrics.value.filter(h => h.status === 'online').length
 );
 const averageCpuUsage = computed(() => {
-  const list = hostMetrics.value.filter(h => h.status === 'online');
-  if (list.length === 0) return 0;
-  return Math.round(list.reduce((sum, h) => sum + (h.cpu?.usage || 0), 0) / list.length);
+  const list = hostMetrics.value.filter(h => h.status === 'online' && h.cpu?.usage_available);
+  if (list.length === 0) return null;
+  return Math.round(list.reduce((sum, h) => sum + h.cpu.usage, 0) / list.length);
 });
 const averageMemoryUsage = computed(() => {
-  const list = hostMetrics.value.filter(h => h.status === 'online');
-  if (list.length === 0) return 0;
-  return Math.round(list.reduce((sum, h) => sum + (h.memory?.percent || 0), 0) / list.length);
+  const list = hostMetrics.value.filter(h => h.status === 'online' && h.memory?.percent_available);
+  if (list.length === 0) return null;
+  return Math.round(list.reduce((sum, h) => sum + h.memory.percent, 0) / list.length);
 });
 const averageDiskUsage = computed(() => {
-  const list = hostMetrics.value.filter(h => h.status === 'online' && h.disks && h.disks.length > 0);
-  if (list.length === 0) return 0;
-  return Math.round(list.reduce((sum, h) => sum + (h.disks[0]?.percent || 0), 0) / list.length);
+  const list = hostMetrics.value.filter(h => h.status === 'online' && h.disks?.some(d => d.percent_available));
+  if (list.length === 0) return null;
+  return Math.round(list.reduce((sum, h) => sum + (h.disks.find(d => d.percent_available)?.percent || 0), 0) / list.length);
 });
 
 // 获取状态颜色
@@ -357,12 +364,13 @@ const toggleAutoRefresh = (enabled: boolean) => {
 // ========== 历史趋势图 ==========
 
 const loadHistory = async () => {
-  if (!selectedHostAddress.value) return;
+  if (!selectedHostID.value) return;
 
   historyLoading.value = true;
   try {
-    const res = await getHistoryMetrics(selectedHostAddress.value, historyDuration.value);
+    const res = await getHistoryMetrics(selectedHostID.value, historyDuration.value);
     historyData.value = res.history || [];
+    historyNotice.value = !res.storage_available ? '历史存储暂不可用' : res.data_gap ? '历史数据存在缺口' : '';
     await nextTick();
     renderTrendChart();
   } catch (error) {
@@ -385,9 +393,9 @@ const renderTrendChart = () => {
   const chartData: { time: string; value: number; type: string }[] = [];
   for (const point of historyData.value) {
     const time = new Date(point.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    chartData.push({ time, value: Math.round(point.cpu_usage * 100) / 100, type: 'CPU' });
-    chartData.push({ time, value: Math.round(point.memory_percent * 100) / 100, type: '内存' });
-    chartData.push({ time, value: Math.round(point.disk_percent * 100) / 100, type: '磁盘' });
+    if (point.cpu_available) chartData.push({ time, value: Math.round(point.cpu_usage * 100) / 100, type: 'CPU' });
+    if (point.memory_available) chartData.push({ time, value: Math.round(point.memory_percent * 100) / 100, type: '内存' });
+    if (point.disk_available) chartData.push({ time, value: Math.round(point.disk_percent * 100) / 100, type: '磁盘' });
   }
 
   const spec = {
@@ -432,8 +440,8 @@ const renderTrendChart = () => {
 
 // 首个主机加载后自动选中并加载历史
 watch(containers, (val) => {
-  if (val.length > 0 && !selectedHostAddress.value) {
-    selectedHostAddress.value = val[0].address;
+  if (val.length > 0 && !selectedHostID.value) {
+    selectedHostID.value = val[0].host_id;
     loadHistory();
   }
 });

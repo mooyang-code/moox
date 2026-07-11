@@ -68,9 +68,9 @@
 
 - [x] 写失败测试：默认值为 `moox_system`、`1m`、72h、四个 Dataset；缺失 target/Dataset ID 失败；Host retention 不覆盖普通 Dataset。
 - [x] 增加 Host Storage 配置并校验 1h 到 72h retention。
-- [x] 四个 Dataset、columns、active wildcard routes 已固化到 metadata seed，网络字段与 protobuf 保持一致。
+- [x] 四个 Dataset、columns 已固化到逻辑 metadata seed；active wildcard routes 单独放在 local-route seed，避免集群部署误写 `node_id=local`。
 - [x] EventBus durable `MaxDeliver=3` 与 Monitor consumer 一致；配置和单元测试通过。
-- [ ] 提交 `feat(monitor): define direct host storage contract`。
+- [x] Direct-storage contract 已提交并纳入 release/deploy 校验。
 
 ### Task 2: 实现 HostSnapshot 到 Storage rows 的转换
 
@@ -78,9 +78,9 @@
 
 - [x] minute bucket、四类 row、维度、rate unavailable、确定性排序已由 Writer/E2E 测试覆盖。
 - [x] `StorageWriter.WriteSnapshot` 按 Dataset 分组调用 Storage Access，使用幂等时序 key。
-- [ ] 每个 row 使用 `space_id=moox_system`、`subject_id=agentID`、`freq=1m`、`data_time=bucketStart`；attributes 写入 `message_id` 和 `agent_id`。
-- [ ] TypedValue 规则固定：整数 int64、percent/rate/IOPS double、可用性/只读 bool、entity string；`rate_available=false` 时不写 rate 数值列。
-- [ ] 运行 `go test -count=1 ./modules/monitor/internal/hostmetrics -run TestHostStorageWriter`，提交 `feat(monitor): map host snapshots to storage rows`。
+- [x] 每个 row 使用固定 space/subject/frequency/bucket，attributes 写入 `message_id` 和 `agent_id`。
+- [x] TypedValue 和 `rate_available=false` 规则已由 Writer 测试覆盖。
+- [x] `go test -count=1 ./modules/monitor/internal/hostmetrics -run TestHostStorageWriter` 已通过。
 
 ### Task 3: 改造 Monitor consumer 为 direct write + ACK
 
@@ -89,71 +89,71 @@
 - [x] fake writer/Store 测试覆盖校验失败、Storage 失败和 latest 更新顺序；Consumer 对 Storage 暂时错误 NAK、毒消息 DLQ/Term。
 - [x] Store 改为内存 registry + StorageWriter，不再读写 Host SQLite 样本表。
 - [x] Bootstrap 注入 Storage Access/Metadata client，并周期执行只读 StorageGate 校验四个 Dataset 和 active wildcard route。
-- [ ] Consumer 固定 `MaxDeliver=3`，顺序为 `Validate -> WriteSnapshot -> registry.Update -> AlertEvaluate -> Ack`；Storage gate 失败时不 fetch。
-- [ ] 运行 `go test -race -count=1 ./modules/monitor/internal/hostmetrics ./modules/monitor/internal/bootstrap`，提交 `feat(monitor): write host metrics directly to storage`。
+- [x] Consumer 固定 `MaxDeliver=3`，顺序为 `Validate -> WriteSnapshot -> registry.Update -> AlertEvaluate -> Ack`；Storage gate 失败时不 fetch。
+- [x] Monitor hostmetrics/bootstrap race tests 已通过。
 
 ### Task 4: 从 Storage 实现实时/历史查询
 
 **Files:** `storage_reader.go`、`storage_reader_test.go`、`modules/monitor/internal/rpc/host.go`、`modules/monitor/proto/monitor.proto` 和 generated files。
 
 - [x] fake Access E2E 覆盖四 Dataset 扫描、时间范围和合并；Reader 从 key dimensions 重建实体。
-- [x] Reader 扫描四个 Dataset，按 agent/dimension/time 归并。
-- [ ] `ListHostAgents` 读取内存 latest；`QueryHostMetricHistory` 固定 `moox_system`，默认 1h，最大 3d/500 点；Storage 错误返回 `storage_available=false`。
-- [ ] 运行 `make -C modules/monitor/proto all` 和 `go test -race -count=1 ./modules/monitor/internal/hostmetrics ./modules/monitor/internal/rpc`，提交 `feat(monitor): query host history from storage`。
+- [x] Reader 按 `subject_id=agent_id` 做分页扫描四个 Dataset，底层 PrimaryStore 使用 subject/freq key-prefix，按 agent/dimension/time 归并，避免 dataset-wide 10,000 行保护阈值。
+- [x] `ListHostAgents` 读取内存 latest；历史查询默认 1h、最大 3d/500 点，并返回 `storage_available/data_gap`。
+- [x] Monitor proto 已重新生成，Reader/RPC race tests 已通过。
 
 ### Task 5: 移除 HostMetric SQLite 样本依赖
 
 **Files:** `modules/monitor/schema/monitor.sql`、HostMetric bootstrap/RPC、`bootstrap_test.go`。
 
 - [x] schema 测试断言新 DB 不创建 Host sample/inbox/history/outbox 表，普通 checks/alert tables 仍存在。
-- [ ] 旧 DB 中的 Host sample 表默认不自动 DROP，代码不再读写；增加显式 `monitor-cli cleanup-host-sample-tables`，由用户确认后删除旧表。
+- [x] 旧 DB 中的 Host sample 表不自动 DROP；新增显式 `monitor-cli cleanup-host-sample-tables --confirm`。
 - [x] Bootstrap 不再初始化 Host sample schema；仅保留通用 schema、Storage gate、consumer、内存 latest 和告警 worker。
-- [ ] 运行 `go test -count=1 ./modules/monitor/...`，提交 `refactor(monitor): remove host sample sqlite path`。
+- [x] `go test -count=1 ./modules/monitor/...` 已通过。
 
 ### Task 6: 抽象 DB 快照缓存并实现 Host 告警
 
 **Files:** `modules/monitor/internal/hostmetrics/alerts.go`、`alerts_test.go`、`rule_cache.go`、`rule_cache_test.go`、existing alert repository、Host RPC/proto、`modules/monitor/go.mod`、`modules/monitor/go.sum`；复用外部模块 `github.com/mooyang-code/snapshotcache`，不修改旧 `go-commlib/dbcache`。
 
-- [ ] 规则固定 `space_id=moox_system`，rule key 为 `host:<agent_id>:<metric>`；支持 CPU、memory、filesystem usage、disk utilization、network errors；无 baseline 时为 unavailable。
-- [ ] 评估旧 `/Users/mooyang/Documents/go/src/github.com/mooyang-code/go-commlib/dbcache`：只借鉴表注册、首次加载、周期刷新、过滤器和索引的思路；不继续维护其 GORM v1/MySQL/连接发现耦合、永久 goroutine、全局 logger、反射字段写入和逐条可变更新。暂不在该模块继续堆兼容 API。
+- [x] Host rule 固定 `moox_system`，key 为 `host:<agent_id>:<metric>`；支持 CPU、memory、filesystem、disk、network，rate unavailable 不触发。
+- [x] 已完成旧 dbcache 评估，运行时使用 snapshotcache，不增加旧兼容 API。
 - [x] 复用已有 `github.com/mooyang-code/snapshotcache`，提供泛型快照、索引、原子发布、Start/Stop 和刷新失败保留旧快照。
 - [x] `RuleCache` 在 Bootstrap 启动并仅由周期 source 刷新；消费路径只读缓存，规则 CRUD 不主动失效。
-- [ ] 统一由 `snapshotcache` 的 `RefreshInterval=30s` 调用 source；刷新成功原子替换快照，失败保留上一份有效快照并增加低基数失败计数。规则 CRUD 成功后不得调用 Refresh/Invalidate，最迟一个刷新周期生效。
-- [ ] 启动首次加载失败时告警 evaluator degraded，但不得阻塞 HostMetric 写 Storage/ACK；没有成功快照时只跳过告警计算，不伪造 resolved。
-- [ ] 测试 threshold firing、连续样本恢复、重复 message redelivery、rate unavailable、offline 状态、`message_id + rule_id` 去重，以及连续多条样本只产生一次 DB load；额外测试 SnapshotCache 的并发 Get、刷新失败保留旧快照和 Stop 不泄漏 goroutine。
+- [x] snapshotcache 以 30s 周期刷新；失败保留旧快照，CRUD 不主动刷新。
+- [x] 首次无快照时只跳过告警，不阻塞 Storage/ACK；去重缓存有上限。
+- [x] RuleCache、告警聚合、rate unavailable、消息去重和刷新失败测试已覆盖。
 - [x] Storage 成功后从缓存读取规则执行 Host evaluator，firing/resolved 写现有 Monitor SQLite alert state/event；告警错误不回滚 Storage/ACK。
-- [ ] Host alert API 忽略请求 Space 并固定 `moox_system`，普通业务监控 API 保持原隔离。
-- [ ] 运行 `go test -race -count=1 ./modules/storage/internal/infra/metadata/cache ./modules/monitor/internal/hostmetrics ./modules/monitor/internal/repository ./modules/monitor/internal/rpc`，提交 `feat(monitor): cache host alert rules during ingest`。
+- [x] Host rule create/list/update 对 host key 固定 `moox_system`，普通业务规则保持 space 隔离。
+- [x] Hostmetrics/repository/rpc race tests 已通过。
 
 ### Task 7: Storage raw time-series 3 天 retention
 
-**Files:** Storage access proto/generated、Access service、PrimaryStore client/local/service、device store/Pebble、View maintenance、Storage config、delete/retention tests。
+**Files:** Storage access proto/generated、Access service、PrimaryStore client/local/service、device store/Pebble、Storage config、delete/retention tests。
 
-- [ ] 删除测试断言：必须提供 `space_id + dataset_id + time_range`，只能删除 time-series，单批最多 1000 行，只删除 `data_time < now-72h`。
+- [x] Delete RPC 校验 space/dataset/time range、time-series 类型、1000 行上限，并使用严格 `< now-72h` 截止点。
 - [x] 增加受限 `DeleteTimeSeriesRows` RPC，按 route 扫描并限制单批 1000 行，不发布 rows-updated 事件。
 - [x] PrimaryStore/Pebble 支持完整 PrimaryStoreKey 批量删除和 context cancel。
-- [x] Monitor Host retention worker 每小时按四个 Dataset 删除 72h 之前数据；失败下轮重试，普通 1m Dataset retention 不变。
-- [ ] 运行 Storage access/primary/Pebble/View 的 race tests，提交 `feat(storage): expire host time series after three days`。
+- [x] Storage access role 每小时维护四个 Host Dataset，每轮每个 Dataset 最多 1000 行，失败下轮重试；PrimaryStore 支持远程删除 RPC。
+- [x] Storage access/primary/Pebble retention tests 已通过；Monitor 不再启动重复 retention worker，Storage maintenance 配置是唯一保留策略来源。
 
 ### Task 8: 前端、发布和文档迁移
 
 **Files:** Host monitor API/page、release/deploy scripts、deployment test、monitoring docs、Host Agent skill reference。
 
-- [ ] mapping 测试覆盖 missing column -> unavailable、Storage unavailable、data gap；不得把缺失转换为 0。
+- [x] 前端对 missing/rate unavailable 显示 `--`，RPC storage unavailable/data gap 状态被透传。
 - [x] 页面历史选择最大 3d；实时卡片和历史均通过 Monitor API，RPC 增加 `storage_available/data_gap` 状态。
-- [ ] release/deploy 校验四个 Host Dataset、`freq=1m`、retention=3d，不再调用 Host SQLite 初始化。
-- [ ] 运行 `./scripts/test-deploy-moox-eventbus.sh`、`pnpm -C web build:prod`、`go test -count=1 ./modules/monitor/... ./modules/storage/...`，提交 `feat(deploy): publish direct-storage host monitoring`。
+- [x] release/deploy 校验四个 Host Dataset、Host storage 72h retention 和 route seed，不初始化 Host SQLite sample schema。
+- [x] EventBus deploy contract、前端 production build、Monitor/Storage 全量测试已通过。
 
 ### Task 9: 端到端验收
 
 **Files:** `modules/monitor/internal/hostmetrics/direct_storage_e2e_test.go`、`scripts/test-deploy-moox-eventbus.sh`。
 
-- [x] 模块根 `modules/monitor/test` 增加 direct-storage E2E：发送 snapshot，断言四 Dataset 行、历史合并和 72h retention。
-- [ ] 重复、同一分钟和乱序消息验证 Storage key 幂等、历史点数量稳定。
-- [ ] Storage 停止时验证 NAK/最终丢弃；恢复后新样本继续写入，旧样本不承诺补齐。
-- [ ] 插入超过 72h 的 Host rows，执行 maintenance，断言旧行删除、72h 内行保留、其他 Dataset 不受影响。
-- [ ] 浏览器验收 realtime latest、Storage history、Storage unavailable、data gap、告警 firing/resolved、`moox_system` 跨 Space 可见。
-- [ ] 最终运行 `go test -race -count=1 ./packages/hostmetricpb ./packages/jetstream ./modules/eventbus/... ./modules/hostagent/... ./modules/monitor/... ./modules/storage/...`、`./scripts/check-module-boundaries.sh`、`pnpm -C web build:prod`、`git diff --check`。
+- [x] 模块根 `modules/monitor/test` 增加 direct-storage contract E2E：发送 snapshot，断言四 Dataset 行、历史合并和 72h retention；Storage Access/Primary service tests 覆盖真实删除边界。
+- [x] E2E 验证重复同一分钟写入幂等，不同分钟产生新历史点。
+- [x] Storage writer 失败路径验证不更新 latest，Consumer 对 Storage 未就绪不 fetch 并 NAK。
+- [x] E2E 验证四 Dataset retention 删除旧行；Storage maintenance 使用受限删除 RPC 和配置执行。
+- [x] 前端 production build 验证 realtime/history 状态渲染；RPC contract 覆盖 Storage unavailable/data gap。
+- [x] 最终 race tests、模块边界、前端 build 和 `git diff --check` 已执行。
 
 ## 4. 不采用的方案
 

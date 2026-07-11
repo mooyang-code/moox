@@ -113,6 +113,16 @@ func (s *Service) ScanPrimaryRows(ctx context.Context, req *pb.ScanPrimaryRowsRe
 	return &pb.ScanPrimaryRowsRsp{RetInfo: response.Success("success"), Rows: rows, PageResult: page}, nil
 }
 
+func (s *Service) DeletePrimaryRows(ctx context.Context, req *pb.DeletePrimaryRowsReq) (*pb.DeletePrimaryRowsRsp, error) {
+	if req == nil || req.GetTarget() == nil || len(req.GetKeys()) == 0 {
+		return &pb.DeletePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("target and keys are required"))}, nil
+	}
+	if err := s.client.DeleteRows(ctx, req.GetTarget(), req.GetKeys()); err != nil {
+		return &pb.DeletePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	return &pb.DeletePrimaryRowsRsp{RetInfo: response.Success("success"), Deleted: uint32(len(req.GetKeys()))}, nil
+}
+
 func normalizeReadPrimaryRowsReq(req *pb.ReadPrimaryRowsReq) *pb.ReadPrimaryRowsReq {
 	if req == nil {
 		return &pb.ReadPrimaryRowsReq{}

@@ -25,12 +25,6 @@ datasets:
   - {space_id: moox_system, dataset_id: host_disk_v1, data_source_id: moox_host_agent, name: Host disks, description: Per-minute disk counters and rates, data_kind: time_series, freqs: ["1m"], status: active}
   - {space_id: moox_system, dataset_id: host_net_v1, data_source_id: moox_host_agent, name: Host networks, description: Per-minute network counters and rates, data_kind: time_series, freqs: ["1m"], status: active}
 
-primary_store_routes:
-  - {space_id: moox_system, route_id: route-host-resource-local, dataset_id: host_resource_v1, subject_pattern: "*", hash_rule: subject_id, node_id: local, priority: 100, status: active}
-  - {space_id: moox_system, route_id: route-host-fs-local, dataset_id: host_fs_v1, subject_pattern: "*", hash_rule: subject_id, node_id: local, priority: 100, status: active}
-  - {space_id: moox_system, route_id: route-host-disk-local, dataset_id: host_disk_v1, subject_pattern: "*", hash_rule: subject_id, node_id: local, priority: 100, status: active}
-  - {space_id: moox_system, route_id: route-host-net-local, dataset_id: host_net_v1, subject_pattern: "*", hash_rule: subject_id, node_id: local, priority: 100, status: active}
-
 fields:
   - {space_id: moox_system, field_id: host_agent_id, name: Host agent ID, value_type: string, status: active}
   - {space_id: moox_system, field_id: host_logical_cores, name: Logical CPU cores, value_type: int, status: active}

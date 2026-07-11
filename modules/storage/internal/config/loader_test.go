@@ -221,6 +221,9 @@ func TestStorageViewMaintenanceDefaults(t *testing.T) {
 	if maintenance.Record.RetentionWindow != "30d" {
 		t.Fatalf("record retention window = %q, want 30d", maintenance.Record.RetentionWindow)
 	}
+	if maintenance.HostRetention != "72h" || maintenance.HostInterval != "1h" || len(maintenance.HostDatasetIDs) != 4 {
+		t.Fatalf("host retention defaults = %+v", maintenance)
+	}
 }
 
 func TestStorageViewMaintenanceYAMLOverrides(t *testing.T) {

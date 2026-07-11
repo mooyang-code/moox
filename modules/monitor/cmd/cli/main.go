@@ -19,6 +19,8 @@ func run(args []string) error {
 	switch args[0] {
 	case "init":
 		return runInit(args[1:])
+	case "cleanup-host-sample-tables":
+		return runCleanupHostSampleTables(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}

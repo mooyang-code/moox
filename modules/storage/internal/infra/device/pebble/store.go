@@ -288,6 +288,23 @@ func (s *Store) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, dat
 	return s.scanRowsReverseCursor(ctx, prefix, versionRange, columnNames, page)
 }
 
+func (s *Store) ScanRowsWithPrefix(ctx context.Context, target *pb.PrimaryStoreTarget, dataKind pb.DataKind, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page, keyPrefix string) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	if target == nil || target.GetSpaceId() == "" || target.GetDatasetId() == "" {
+		return nil, nil, errors.New("target space_id and dataset_id are required")
+	}
+	if kindPrefix(dataKind) == "" || keyPrefix == "" {
+		return nil, nil, errors.New("data_kind and key_prefix are required")
+	}
+	if page == nil {
+		page = &pb.Page{}
+	}
+	prefix := []byte(encodeDatasetPrefix(dataKind, target.GetSpaceId(), target.GetDatasetId()) + keyPrefix)
+	if order != pb.SortOrder_SORT_ORDER_DESC {
+		return s.scanRowsForwardCursor(ctx, prefix, versionRange, columnNames, page)
+	}
+	return s.scanRowsReverseCursor(ctx, prefix, versionRange, columnNames, page)
+}
+
 func (s *Store) scanRowsReverseCursor(ctx context.Context, prefix []byte, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
 	_ = ctx
 	upper := nextPrefix(prefix)

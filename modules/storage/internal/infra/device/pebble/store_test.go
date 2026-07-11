@@ -102,6 +102,30 @@ func TestDeleteRowsRemovesExactPrimaryKeys(t *testing.T) {
 	}
 }
 
+func TestScanRowsWithPrefixNarrowsSubjectAndFrequency(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "primary")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rows := []*pb.PrimaryStoreRow{
+		{Key: &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: "agent-1|1m|_", Version: "2026-07-11T00:00:00.000000000Z"}},
+		{Key: &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: "agent-2|1m|_", Version: "2026-07-11T00:00:00.000000000Z"}},
+	}
+	if err := store.WriteRows(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	prefix := escape("agent-1") + "%7C" + escape("1m") + "%7C"
+	got, _, err := store.ScanRowsWithPrefix(ctx, &pb.PrimaryStoreTarget{SpaceId: "crypto", DatasetId: "kline"}, pb.DataKind_DATA_KIND_TIME_SERIES, nil, pb.SortOrder_SORT_ORDER_ASC, nil, &pb.Page{Size: 10}, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].GetKey().GetKey() != "agent-1|1m|_" {
+		t.Fatalf("rows=%v, want only agent-1", got)
+	}
+}
+
 func testPrimaryTimeSeriesRow(version string) *pb.PrimaryStoreRow {
 	return &pb.PrimaryStoreRow{Key: testPrimaryTimeSeriesKey(version)}
 }

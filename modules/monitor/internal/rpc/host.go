@@ -50,12 +50,25 @@ func (s *Service) QueryHostMetricHistory(ctx context.Context, req *monitorpb.Que
 	if end.Before(start) {
 		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: invalid(errors.New("end_at must not precede start_at"))}, nil
 	}
-	truncated := end.Sub(start) > 72*time.Hour
+	requestedStart, requestedEnd := start, end
+	now := time.Now().UTC()
+	windowStart := now.Add(-72 * time.Hour)
+	truncated := requestedEnd.Sub(requestedStart) > 72*time.Hour || requestedStart.Before(windowStart) || requestedEnd.After(now)
+	if end.After(now) {
+		end = now
+	}
+	if start.Before(windowStart) {
+		start = windowStart
+	}
 	if end.Sub(start) > 72*time.Hour {
 		start = end.Add(-72 * time.Hour)
 	}
 	if s.hostReader == nil {
 		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: inner(errors.New("host history storage is unavailable")), StorageAvailable: false}, nil
+	}
+	if end.Before(start) {
+		available := s.hostStorageReady == nil || s.hostStorageReady()
+		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: success(), StorageAvailable: available, DataGap: true}, nil
 	}
 	rows, err := s.hostReader.History(ctx, req.GetAgentId(), start, end, int(req.GetLimit()))
 	if err != nil {

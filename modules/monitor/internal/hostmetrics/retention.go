@@ -22,7 +22,7 @@ func Prune(ctx context.Context, rawAccess any, cfg monconfig.HostStorageConfig, 
 	if !ok || access == nil {
 		return 0, fmt.Errorf("host retention access client is nil")
 	}
-	cutoff := now.UTC().Add(-cfg.Retention).Format(time.RFC3339Nano)
+	cutoff := now.UTC().Add(-cfg.Retention).Add(-time.Nanosecond).Format(time.RFC3339Nano)
 	var total uint32
 	for _, dataset := range []string{cfg.ResourceDatasetID, cfg.FilesystemDatasetID, cfg.DiskDatasetID, cfg.NetworkDatasetID} {
 		rsp, err := access.DeleteTimeSeriesRows(ctx, &storagepb.DeleteTimeSeriesRowsReq{SpaceId: cfg.SpaceID, DatasetId: dataset, TimeRange: &storagepb.TimeRange{EndTime: cutoff}, Page: &commonpb.Page{Page: 1, Size: 1000}})

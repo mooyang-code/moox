@@ -75,7 +75,7 @@ func (g *StorageGate) Validate(ctx context.Context) error {
 		if callErr != nil {
 			return g.setStatus(fmt.Errorf("list host columns %q: %w", dataset, callErr))
 		}
-		if err := checkRet(columns.GetRetInfo()); err != nil || !hasHostColumns(dataset, columns.GetColumns()) {
+		if err := checkRet(columns.GetRetInfo()); err != nil || !hasHostColumns(dataset, g.cfg, columns.GetColumns()) {
 			if err == nil {
 				err = fmt.Errorf("dataset %q is missing writer columns", dataset)
 			}
@@ -102,28 +102,40 @@ func (g *StorageGate) Validate(ctx context.Context) error {
 	return g.setStatus(nil)
 }
 
-func hasHostColumns(dataset string, columns []*storagepb.DatasetColumn) bool {
-	want := map[string]struct{}{}
-	switch dataset {
-	case "host_resource_v1":
-		for _, name := range []string{"agent_id", "logical_cores", "cpu_usage_available", "memory_total_bytes", "memory_used_bytes", "memory_available_bytes", "memory_usage_percent"} {
-			want[name] = struct{}{}
-		}
-	case "host_fs_v1":
-		for _, name := range []string{"device", "mountpoint", "fs_type", "total_bytes", "used_bytes", "available_bytes", "usage_percent", "read_only"} {
-			want[name] = struct{}{}
-		}
-	case "host_disk_v1":
-		for _, name := range []string{"device", "read_bytes_total", "write_bytes_total", "read_ops_total", "write_ops_total", "io_time_ms_total", "rate_available"} {
-			want[name] = struct{}{}
-		}
-	case "host_net_v1":
-		for _, name := range []string{"device", "operstate", "receive_bytes_total", "transmit_bytes_total", "receive_errors_total", "transmit_errors_total", "receive_dropped_total", "transmit_dropped_total", "rate_available"} {
-			want[name] = struct{}{}
+func hasHostColumns(dataset string, cfg monconfig.HostStorageConfig, columns []*storagepb.DatasetColumn) bool {
+	want := map[string]storagepb.FieldValueType{}
+	add := func(names []string, valueType storagepb.FieldValueType) {
+		for _, name := range names {
+			want[name] = valueType
 		}
 	}
+	switch dataset {
+	case cfg.ResourceDatasetID:
+		add([]string{"agent_id"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING)
+		add([]string{"logical_cores", "memory_total_bytes", "memory_used_bytes", "memory_available_bytes"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_INT)
+		add([]string{"cpu_usage_available"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL)
+		add([]string{"memory_usage_percent"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE)
+	case cfg.FilesystemDatasetID:
+		add([]string{"device", "mountpoint", "fs_type"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING)
+		add([]string{"total_bytes", "used_bytes", "available_bytes"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_INT)
+		add([]string{"usage_percent"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE)
+		add([]string{"read_only"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL)
+	case cfg.DiskDatasetID:
+		add([]string{"device"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING)
+		add([]string{"read_bytes_total", "write_bytes_total", "read_ops_total", "write_ops_total", "io_time_ms_total"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_INT)
+		add([]string{"rate_available"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL)
+	case cfg.NetworkDatasetID:
+		add([]string{"device", "operstate"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING)
+		add([]string{"receive_bytes_total", "transmit_bytes_total", "receive_errors_total", "transmit_errors_total", "receive_dropped_total", "transmit_dropped_total"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_INT)
+		add([]string{"rate_available"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL)
+	}
 	for _, column := range columns {
-		delete(want, column.GetColumnName())
+		if column == nil || !strings.EqualFold(column.GetStatus(), "active") {
+			continue
+		}
+		if expected, ok := want[column.GetColumnName()]; ok && column.GetValueType() == expected {
+			delete(want, column.GetColumnName())
+		}
 	}
 	return len(want) == 0
 }

@@ -35,3 +35,40 @@ func TestInitSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestCleanupHostSampleTablesRequiresConfirmation(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "monitor.db")
+	if err := run([]string{"init", "--db-path", dbPath}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"cleanup-host-sample-tables", "--db-path", dbPath}); err == nil {
+		t.Fatal("cleanup without confirmation unexpectedly succeeded")
+	}
+}
+
+func TestCleanupHostSampleTablesWithConfirmation(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "monitor.db")
+	if err := run([]string{"init", "--db-path", dbPath}); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := monstorage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.DB().Exec("CREATE TABLE t_monitor_host_history(c_id INTEGER)").Error; err != nil {
+		mgr.Close()
+		t.Fatal(err)
+	}
+	_ = mgr.Close()
+	if err := run([]string{"cleanup-host-sample-tables", "--db-path", dbPath, "--confirm"}); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err = monstorage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	if mgr.DB().Migrator().HasTable("t_monitor_host_history") {
+		t.Fatal("legacy table still exists")
+	}
+}
