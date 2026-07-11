@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -40,5 +41,18 @@ func TestBuiltinMarketIDsRejectUnknownAndDuplicate(t *testing.T) {
 	}
 	if _, err := parseBuiltinMarketIDs("unknown"); err == nil {
 		t.Fatal("unknown market accepted")
+	}
+}
+
+func TestCheckedInBuiltinMarketSeedsAreStrictlyValid(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate test")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "collector", "config", "markets"))
+	for _, id := range builtinMarketIDs {
+		if _, err := loadMetadataSeed(filepath.Join(root, id, "metadata.seed.yaml")); err != nil {
+			t.Fatalf("%s seed: %v", id, err)
+		}
 	}
 }
