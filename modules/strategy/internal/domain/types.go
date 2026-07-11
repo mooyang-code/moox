@@ -65,13 +65,31 @@ type StrategyRun struct {
 func (StrategyRun) TableName() string { return "t_strategy_runs" }
 
 type TargetWeight struct {
-	InstrumentID string `json:"instrument_id"`
-	Symbol       string `json:"symbol,omitempty"`
-	MarketType   string `json:"market_type,omitempty"`
-	Score        any    `json:"score,omitempty"`
-	Reason       string `json:"reason,omitempty"`
-	TargetWeight string `json:"target_weight"`
+	InstrumentID    string `json:"instrument_id"`
+	Symbol          string `json:"symbol,omitempty"`
+	MarketType      string `json:"market_type,omitempty"`
+	Score           any    `json:"score,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	TargetWeight    string `json:"target_weight"`
+	PortfolioTarget string `json:"portfolio_target,omitempty"`
+	ActualPosition  string `json:"actual_position,omitempty"`
+	Deviation       string `json:"deviation,omitempty"`
+	SourceTime      string `json:"source_time,omitempty"`
+	DataRevision    string `json:"data_revision,omitempty"`
 }
+
+type TargetComparison struct {
+	RunID           string    `gorm:"column:c_run_id;primaryKey"`
+	InstrumentID    string    `gorm:"column:c_instrument_id;primaryKey"`
+	PortfolioTarget string    `gorm:"column:c_portfolio_target"`
+	ActualPosition  string    `gorm:"column:c_actual_position"`
+	Deviation       string    `gorm:"column:c_deviation"`
+	SourceTime      time.Time `gorm:"column:c_source_time"`
+	DataRevision    string    `gorm:"column:c_data_revision"`
+}
+
+func (TargetComparison) TableName() string { return "t_strategy_target_comparisons" }
+
 type Output struct {
 	Action    string         `json:"action"`
 	Targets   []TargetWeight `json:"targets"`

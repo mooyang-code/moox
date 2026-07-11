@@ -80,6 +80,11 @@ export interface TargetWeight {
   target_weight: string;
   symbol?: string;
   market_type?: string;
+  portfolio_target?: string;
+  actual_position?: string;
+  deviation?: string;
+  source_time?: string;
+  data_revision?: string;
 }
 
 export interface PerformancePoint {

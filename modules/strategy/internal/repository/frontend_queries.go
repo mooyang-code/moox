@@ -176,6 +176,23 @@ func (r *Repository) ListTargets(ctx context.Context, runID string, page Page) (
 		return nil, 0, err
 	}
 	total := int64(len(output.Targets))
+	var comparisons []domain.TargetComparison
+	if err := r.DB.WithContext(ctx).Where("c_run_id=?", runID).Find(&comparisons).Error; err != nil {
+		return nil, 0, err
+	}
+	comparisonByInstrument := make(map[string]domain.TargetComparison, len(comparisons))
+	for _, comparison := range comparisons {
+		comparisonByInstrument[comparison.InstrumentID] = comparison
+	}
+	for i := range output.Targets {
+		if comparison, ok := comparisonByInstrument[output.Targets[i].InstrumentID]; ok {
+			output.Targets[i].PortfolioTarget = comparison.PortfolioTarget
+			output.Targets[i].ActualPosition = comparison.ActualPosition
+			output.Targets[i].Deviation = comparison.Deviation
+			output.Targets[i].SourceTime = formatComparisonTime(comparison.SourceTime)
+			output.Targets[i].DataRevision = comparison.DataRevision
+		}
+	}
 	start := (p.Number - 1) * p.Size
 	if start >= len(output.Targets) {
 		return []domain.TargetWeight{}, total, nil
@@ -186,6 +203,13 @@ func (r *Repository) ListTargets(ctx context.Context, runID string, page Page) (
 	}
 	targets = append(targets, output.Targets[start:end]...)
 	return targets, total, nil
+}
+
+func formatComparisonTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }
 
 func (r *Repository) ListPerformancePoints(ctx context.Context, filter PerformanceFilter) ([]domain.PerformancePoint, error) {

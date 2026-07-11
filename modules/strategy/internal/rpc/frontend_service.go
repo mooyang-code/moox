@@ -139,7 +139,7 @@ func (s *Service) ListStrategyTargets(ctx context.Context, req *strategypb.ListS
 	}
 	items := make([]*strategypb.TargetWeight, 0, len(targets))
 	for _, target := range targets {
-		items = append(items, &strategypb.TargetWeight{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight})
+		items = append(items, &strategypb.TargetWeight{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, PortfolioTarget: target.PortfolioTarget, ActualPosition: target.ActualPosition, Deviation: target.Deviation, SourceTime: target.SourceTime, DataRevision: target.DataRevision})
 	}
 	page := pageFromProto(req.GetPage())
 	return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: items, Total: total, Page: int32(page.Number), PageSize: int32(page.Size)}, nil
