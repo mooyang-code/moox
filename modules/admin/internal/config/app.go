@@ -20,7 +20,6 @@ var (
 // AppConfig 应用配置（总配置）
 type AppConfig struct {
 	Database DatabaseConfig `yaml:"database"`
-	Monitor  MonitorConfig  `yaml:"monitor"`
 }
 
 // DatabaseConfig 数据库配置
@@ -32,13 +31,6 @@ type DatabaseConfig struct {
 	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"` // 连接最大空闲时间
 }
 
-// MonitorConfig 监控配置
-type MonitorConfig struct {
-	NodeExporterPort int `yaml:"node_exporter_port"` // Node Exporter 端口，默认 9100
-	CollectTimeout   int `yaml:"collect_timeout"`    // 采集超时时间（秒），默认 10
-	ConcurrentLimit  int `yaml:"concurrent_limit"`   // 并发采集限制，默认 20
-}
-
 // DefaultConfig 返回默认配置
 func DefaultConfig() *AppConfig {
 	return &AppConfig{
@@ -48,11 +40,6 @@ func DefaultConfig() *AppConfig {
 			MaxOpenConns:    100,
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
-		},
-		Monitor: MonitorConfig{
-			NodeExporterPort: 9100, // Node Exporter 默认端口
-			CollectTimeout:   10,   // 10秒超时
-			ConcurrentLimit:  20,   // 最多 20 个并发
 		},
 	}
 }
@@ -95,16 +82,6 @@ func (c *AppConfig) applyEnv() {
 		c.Database.Path = v
 	}
 
-	// Monitor
-	if v := os.Getenv("NODE_EXPORTER_PORT"); v != "" {
-		fmt.Sscanf(v, "%d", &c.Monitor.NodeExporterPort)
-	}
-	if v := os.Getenv("MONITOR_COLLECT_TIMEOUT"); v != "" {
-		fmt.Sscanf(v, "%d", &c.Monitor.CollectTimeout)
-	}
-	if v := os.Getenv("MONITOR_CONCURRENT_LIMIT"); v != "" {
-		fmt.Sscanf(v, "%d", &c.Monitor.ConcurrentLimit)
-	}
 }
 
 // Validate 验证配置
@@ -135,18 +112,4 @@ func GetGlobalConfig() *AppConfig {
 	configMutex.RLock()
 	defer configMutex.RUnlock()
 	return globalConfig
-}
-
-// GetMonitorConfig 获取监控配置
-func GetMonitorConfig() MonitorConfig {
-	cfg := GetGlobalConfig()
-	if cfg == nil {
-		// 返回默认配置
-		return MonitorConfig{
-			NodeExporterPort: 9100,
-			CollectTimeout:   10,
-			ConcurrentLimit:  20,
-		}
-	}
-	return cfg.Monitor
 }

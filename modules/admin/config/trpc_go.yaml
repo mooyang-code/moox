@@ -29,11 +29,6 @@ server:
       network: tcp
       protocol: http
       timeout: 10000
-    - name: trpc.moox.ops.Monitor
-      port: 11103
-      network: tcp
-      protocol: http
-      timeout: 10000
     - name: trpc.moox.ops.Ssh
       port: 11106
       network: tcp

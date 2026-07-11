@@ -21,6 +21,7 @@
 - Modify/regenerate `modules/admin/proto/ops_service.proto`, `modules/admin/proto/admingen/ops_service.pb.go`, `modules/admin/proto/admingen/ops_service.trpc.go`: remove HostMetrics messages and Monitor service.
 - Modify `modules/admin/config/trpc_go.yaml`: remove `trpc.moox.ops.Monitor`.
 - Modify `modules/admin/internal/service/sysdeploy/defaults.go`, `defaults_test.go`: remove the old Admin deployment row and keep `moox_monitor`.
+- Modify `modules/admin/internal/service/sysdeploy/service.go`: route the public `monitor` gateway alias to `moox_monitor`.
 - Modify `modules/admin/README.md`, `docs/监控配置.md`: describe the independent Host Agent/Monitor/Storage path only.
 - Modify `web/src/api/modules/host-monitor.ts`: expose pure mapping helpers and aggregate card data correctly.
 - Modify `web/src/views/container/resource-monitor/resource-monitor.vue`: implement the compact card wall, selected-host details, device tables, and stable refresh behavior.
@@ -33,7 +34,7 @@
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
 - Create: `modules/admin/test/admin_host_monitor_cleanup_e2e_test.go`
 
-- [ ] **Step 1: Add a schema assertion that the legacy table is absent**
+- [x] **Step 1: Add a schema assertion that the legacy table is absent**
 
 Add a test that opens a fresh Admin database, applies `schema.SQL()`, queries `sqlite_master`, and fails when `t_host_monitor_history` exists:
 
@@ -47,7 +48,7 @@ func TestAdminSchemaExcludesLegacyHostMonitorHistory(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Change the SysDeploy expectation**
+- [x] **Step 2: Change the SysDeploy expectation**
 
 Replace the assertion that `monitor` exists with:
 
@@ -60,7 +61,7 @@ if _, ok := byName["moox_monitor"]; !ok {
 }
 ```
 
-- [ ] **Step 3: Add the module-root contract test**
+- [x] **Step 3: Add the module-root contract test**
 
 Create `modules/admin/test/admin_host_monitor_cleanup_e2e_test.go` in package `test`. Read the authoritative source files and assert:
 
@@ -74,7 +75,7 @@ func TestAdminHasNoLegacyHostMonitorSurface(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4: Run the tests and confirm failure**
+- [x] **Step 4: Run the tests and confirm failure**
 
 Run:
 
@@ -92,7 +93,7 @@ Expected: FAIL because the legacy table, deployment row, RPC service, and config
 - Modify: `modules/admin/internal/bootstrap/trpc.go`
 - Modify: `modules/admin/internal/bootstrap/bootstrap.go`
 
-- [ ] **Step 1: Remove Monitor from the service container**
+- [x] **Step 1: Remove Monitor from the service container**
 
 Delete the monitor import, `Services.Monitor`, construction, and global initialization. The resulting service construction must end with:
 
@@ -106,7 +107,7 @@ services := &Services{
 }
 ```
 
-- [ ] **Step 2: Remove tRPC registration**
+- [x] **Step 2: Remove tRPC registration**
 
 Delete the `monitorrpc` import and these lines:
 
@@ -115,7 +116,7 @@ monitorSvc := monitorrpc.NewService(services.Monitor)
 adminpb.RegisterMonitorService(s.Service("trpc.moox.ops.Monitor"), monitorSvc)
 ```
 
-- [ ] **Step 3: Delete the package**
+- [x] **Step 3: Delete the package**
 
 Delete every file under `modules/admin/internal/service/monitor`. Confirm no runtime reference remains:
 
@@ -125,7 +126,7 @@ rg -n 'internal/service/monitor|InitMonitorInstance|HandleMonitorSchedule|Handle
 
 Expected: no matches.
 
-- [ ] **Step 4: Run Admin Go tests**
+- [x] **Step 4: Run Admin Go tests**
 
 Run:
 
@@ -146,11 +147,11 @@ Expected: compile failures only from the still-present proto/config/schema contr
 - Modify: `modules/admin/schema/admin.sql`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 
-- [ ] **Step 1: Remove the Monitor proto surface**
+- [x] **Step 1: Remove the Monitor proto surface**
 
 Delete `CPUMetrics`, `MemoryMetrics`, `DiskMetrics`, `NetworkSpeed`, `LoadMetrics`, `HostMetrics`, `HistoryPoint`, all Monitor request/response messages, and `service Monitor` from `ops_service.proto`.
 
-- [ ] **Step 2: Regenerate Admin protobuf code**
+- [x] **Step 2: Regenerate Admin protobuf code**
 
 Run:
 
@@ -160,11 +161,11 @@ make -C modules/admin/proto all
 
 Expected: generated files contain no `MonitorService`, `GetCurrentMetrics`, or `GetHistoryMetrics`.
 
-- [ ] **Step 3: Remove the dedicated tRPC service entry**
+- [x] **Step 3: Remove the dedicated tRPC service entry**
 
 Delete the `trpc.moox.ops.Monitor` service block from `modules/admin/config/trpc_go.yaml`. Keep the independent `moox_monitor` deployment and gateway route untouched.
 
-- [ ] **Step 4: Remove MonitorConfig**
+- [x] **Step 4: Remove MonitorConfig**
 
 Change `AppConfig` to:
 
@@ -176,7 +177,7 @@ type AppConfig struct {
 
 Delete `MonitorConfig`, monitor defaults, environment overrides, and `GetMonitorConfig`. Remove the `monitor:` block from `modules/admin/config/app.yaml`.
 
-- [ ] **Step 5: Remove the legacy schema and deployment row**
+- [x] **Step 5: Remove the legacy schema and deployment row**
 
 Delete the `t_host_monitor_history` table and all three indexes from `admin.sql`. Delete:
 
@@ -184,7 +185,7 @@ Delete the `t_host_monitor_history` table and all three indexes from `admin.sql`
 deployment("monitor", "admin_rpc", "http", "127.0.0.1", 11103, "trpc.moox.ops.Monitor", "internal", "资源监控 RPC 服务"),
 ```
 
-- [ ] **Step 6: Run contract tests**
+- [x] **Step 6: Run contract tests**
 
 Run:
 
@@ -201,11 +202,11 @@ Expected: PASS.
 - Modify: `docs/监控配置.md`
 - Search: repository runtime and release files
 
-- [ ] **Step 1: Remove the retired Admin module from README**
+- [x] **Step 1: Remove the retired Admin module from README**
 
 Delete the `monitor/ | trpc.moox.ops.Monitor` row. Add one sentence stating that host monitoring belongs to `moox-host-agent`, EventBus, `moox-monitor`, and Storage.
 
-- [ ] **Step 2: Replace Node Exporter documentation**
+- [x] **Step 2: Replace Node Exporter documentation**
 
 Keep only the current configuration and deployment flow:
 
@@ -215,7 +216,7 @@ moox-host-agent -> EventBus -> moox-monitor -> Storage
 
 Document `ListHostAgents`, `QueryHostMetricHistory`, 72-hour retention, unavailable values, and the Host Agent deployment skill. Remove Node Exporter download, systemd, Admin environment variables, and tuning examples.
 
-- [ ] **Step 3: Verify repository cleanliness**
+- [x] **Step 3: Verify repository cleanliness**
 
 Run:
 
@@ -232,7 +233,7 @@ Expected: no matches.
 - Create: `web/scripts/check-host-monitor-contract.mjs`
 - Modify: `web/package.json`
 
-- [ ] **Step 1: Extract deterministic card helpers**
+- [x] **Step 1: Extract deterministic card helpers**
 
 Export helpers with stable input/output types:
 
@@ -249,11 +250,11 @@ export const aggregateNetworkRate = (items: NetworkSpeed[]) => {
 };
 ```
 
-- [ ] **Step 2: Preserve detailed device data**
+- [x] **Step 2: Preserve detailed device data**
 
 Map filesystems, disks, and networks without discarding rows. Add explicit `last_seen_at`, `storage_available`, and availability flags to the UI model. Keep `host_id` as the history selection key.
 
-- [ ] **Step 3: Add a static contract check**
+- [x] **Step 3: Add a static contract check**
 
 Create `web/scripts/check-host-monitor-contract.mjs` that reads the API and Vue files and fails unless it finds `host_id`, `maxAvailableFilesystemUsage`, `aggregateNetworkRate`, `storage_available`, `data_gap`, and the `3d` selector. Add:
 
@@ -261,7 +262,7 @@ Create `web/scripts/check-host-monitor-contract.mjs` that reads the API and Vue 
 "check:host-monitor": "node scripts/check-host-monitor-contract.mjs"
 ```
 
-- [ ] **Step 4: Run the mapping/build checks**
+- [x] **Step 4: Run the mapping/build checks**
 
 Run:
 
@@ -277,11 +278,11 @@ Expected: PASS.
 **Files:**
 - Modify: `web/src/views/container/resource-monitor/resource-monitor.vue`
 
-- [ ] **Step 1: Replace oversized summary cards**
+- [x] **Step 1: Replace oversized summary cards**
 
 Use one compact header row with online count, attention count, Storage status, last refresh, refresh button, and auto-refresh switch. Do not nest cards inside a page card.
 
-- [ ] **Step 2: Implement the responsive card grid**
+- [x] **Step 2: Implement the responsive card grid**
 
 Use stable CSS grid tracks:
 
@@ -297,15 +298,15 @@ Use stable CSS grid tracks:
 
 Each card shows host identity, freshness, CPU, memory, maximum filesystem usage, and aggregate network rates. Clicking a card sets `selectedHostID`.
 
-- [ ] **Step 3: Add selected-host detail tables**
+- [x] **Step 3: Add selected-host detail tables**
 
 Render unframed filesystem, disk, and network tables next to the trend chart. Use `--` for unavailable rate values and preserve long device or mount names with wrapping or ellipsis tooltips.
 
-- [ ] **Step 4: Stabilize refresh behavior**
+- [x] **Step 4: Stabilize refresh behavior**
 
 `refreshData(true)` updates cards only. `loadHistory()` runs only after selecting a host, changing `historyDuration`, or manual refresh. Preserve the last successful card data when a refresh fails.
 
-- [ ] **Step 5: Verify production rendering**
+- [x] **Step 5: Verify production rendering**
 
 Run the dev server, capture desktop and mobile screenshots, and verify no overlap, blank chart, clipped labels, or unstable card dimensions.
 
@@ -315,7 +316,7 @@ Run the dev server, capture desktop and mobile screenshots, and verify no overla
 - Test: `modules/admin/test/admin_host_monitor_cleanup_e2e_test.go`
 - Test: `web/scripts/check-host-monitor-contract.mjs`
 
-- [ ] **Step 1: Run the module-root end-to-end test**
+- [x] **Step 1: Run the module-root end-to-end test**
 
 Run:
 
@@ -325,7 +326,7 @@ go test -count=1 ./modules/admin/test
 
 Expected: PASS and proof that Admin exposes no legacy monitor schema, service, config, or deployment row.
 
-- [ ] **Step 2: Run all affected tests**
+- [x] **Step 2: Run all affected tests**
 
 Run:
 
@@ -339,11 +340,11 @@ git diff --check
 
 Expected: all commands pass.
 
-- [ ] **Step 3: Start an independent review agent**
+- [x] **Step 3: Start an independent review agent**
 
 Ask the agent to review deletion completeness, Admin gateway regressions, frontend identity handling, unavailable states, responsive layout, and missing tests. Fix every P0/P1 finding and rerun Step 2.
 
-- [ ] **Step 4: Commit the implementation**
+- [x] **Step 4: Commit the implementation**
 
 ```bash
 git add modules/admin web/src web/scripts web/package.json docs/监控配置.md docs/superpowers/plans/2026-07-11-admin-host-monitor-cleanup.md

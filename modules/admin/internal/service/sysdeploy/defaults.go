@@ -21,7 +21,6 @@ func DefaultDeployments() []Deployment {
 		deployment("storage_view_trpc", "storage_rpc", "trpc", defaultPublicHost, 20103, "trpc.moox.storage.DataView", "public", "moox-storage DataView tRPC 服务"),
 		deployment("admin_auth", "admin_rpc", "http", "127.0.0.1", 11100, "trpc.moox.infra.Auth", "internal", "认证 RPC 服务"),
 		deployment("dnsproxy", "admin_rpc", "http", "127.0.0.1", 11101, "trpc.moox.infra.Dns", "internal", "DNS 代理 RPC 服务"),
-		deployment("monitor", "admin_rpc", "http", "127.0.0.1", 11103, "trpc.moox.ops.Monitor", "internal", "资源监控 RPC 服务"),
 		withExtra(deployment("moox_monitor", "monitor", "http", "127.0.0.1", 11410, "trpc.moox.monitor.MonitorMgr", "internal", "独立服务监控模块，承载 HTTP/TCP 探测、告警和多实例协同"), `{"health_url":"http://127.0.0.1:11409/healthz","monitor_enabled":true}`),
 		withExtra(deployment("eventbus", "eventbus", "http", "127.0.0.1", 11420, "trpc.moox.eventbus.EventBusMgr", "internal", "MooX 统一 NATS JetStream EventBus 服务"), `{"health_url":"http://127.0.0.1:11419/healthz","monitor_enabled":true}`),
 		withExtra(deployment("moox_collector", "collector", "http", "127.0.0.1", 11402, "trpc.moox.collector.CollectMgr", "internal", "独立采集管理服务，承载采集规则、任务实例和 planner"), `{"health_url":"http://127.0.0.1:11412/healthz","monitor_enabled":true}`),

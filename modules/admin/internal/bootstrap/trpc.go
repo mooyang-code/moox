@@ -4,7 +4,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	authsvr "github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	dnsproxyrpc "github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy/rpc"
-	monitorrpc "github.com/mooyang-code/moox/modules/admin/internal/service/monitor/rpc"
 	secretrpc "github.com/mooyang-code/moox/modules/admin/internal/service/secret/rpc"
 	sshrpc "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/rpc"
 	sysdeployrpc "github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy/rpc"
@@ -50,10 +49,6 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	gateway.RegisterRawHandler("ssh", "WsConnect", gateway.RawHandler(sshrpc.WebSocketConnectHandler(services.SSHService)))
 	gateway.RegisterRawHandler("ssh", "SftpDownload", gateway.RawHandler(sshrpc.SftpDownloadHandler(services.SSHService)))
 	gateway.RegisterRawHandler("ssh", "SftpUpload", gateway.RawHandler(sshrpc.SftpUploadHandler(services.SSHService)))
-
-	// 3.6 监控服务
-	monitorSvc := monitorrpc.NewService(services.Monitor)
-	adminpb.RegisterMonitorService(s.Service("trpc.moox.ops.Monitor"), monitorSvc)
 
 	// 3.7 秘钥管理服务
 	secretSvc := secretrpc.NewService(services.SecretService)

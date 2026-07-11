@@ -43,9 +43,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	// DNS探测定时器（合并终端+本地DNS并探测）
 	timer.RegisterScheduler("dnsProbeSchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service("trpc.dnsprobe.timer"), dnsproxy.HandleDNSProbeSchedule)
-	// 主机资源监控已迁移到 moox-monitor + moox-host-agent + EventBus。
-	// Admin 保留旧 Monitor RPC 仅用于兼容存量客户端，不再注册 SSH/node_exporter
-	// 采集和清理定时器，避免同一主机被两条链路重复抓取。
 	registerMetricsReporter(s)
 
 	log.InfoContextf(ctx, "应用初始化完成")

@@ -145,6 +145,9 @@ func (d *DAO) ListActive(ctx context.Context) ([]Deployment, error) {
 }
 
 func (d *DAO) SeedDefaults(ctx context.Context, rows []Deployment) error {
+	if err := d.retireLegacyAdminMonitor(ctx); err != nil {
+		return err
+	}
 	for i := range rows {
 		item := rows[i]
 		normalizeDeployment(&item)
@@ -166,6 +169,24 @@ func (d *DAO) SeedDefaults(ctx context.Context, rows []Deployment) error {
 		}
 	}
 	return nil
+}
+
+func (d *DAO) retireLegacyAdminMonitor(ctx context.Context) error {
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		const where = "c_service_name = ? AND c_service_kind = ? AND c_gateway_path = ? AND c_port = ?"
+		args := []interface{}{"monitor", "admin_rpc", "trpc.moox.ops.Monitor", 11103}
+		if err := tx.Where(where, args...).Where("c_is_deleted = ?", common.IsDeletedTrue).Delete(&Deployment{}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&Deployment{}).
+			Where(where, args...).
+			Where("c_is_deleted = ?", common.IsDeletedFalse).
+			Updates(map[string]interface{}{
+				"c_status":     "retired",
+				"c_is_deleted": common.IsDeletedTrue,
+				"c_mtime":      time.Now(),
+			}).Error
+	})
 }
 
 func (d *DAO) backfillDefaultExtraConfig(ctx context.Context, item *Deployment) error {

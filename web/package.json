@@ -25,6 +25,7 @@
     "check:data-browse": "node scripts/check-data-browse-parity.mjs",
     "check:detail-pages": "node scripts/check-detail-page-style.mjs",
     "check:menu": "node scripts/check-menu-structure.mjs",
+    "check:host-monitor": "node scripts/check-host-monitor-contract.mjs",
     "preview": "vite preview",
     "lint:eslint": "eslint --fix --ext .js,.ts,.vue ./src",
     "lint:prettier": "prettier --write \"src/**/*.{js,ts,json,tsx,css,less,scss,vue,html,md}\"",

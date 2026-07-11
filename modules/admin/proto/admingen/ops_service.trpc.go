@@ -348,73 +348,6 @@ func RegisterSshService(s server.Service, svr SshService) {
 	}
 }
 
-// MonitorService defines service.
-type MonitorService interface {
-	// GetCurrentMetrics 获取当前监控指标
-	GetCurrentMetrics(ctx context.Context, req *GetCurrentMetricsReq) (*GetCurrentMetricsRsp, error)
-	// GetHistoryMetrics 获取历史监控数据
-	GetHistoryMetrics(ctx context.Context, req *GetHistoryMetricsReq) (*GetHistoryMetricsRsp, error)
-}
-
-func MonitorService_GetCurrentMetrics_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetCurrentMetricsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MonitorService).GetCurrentMetrics(ctx, reqbody.(*GetCurrentMetricsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MonitorService_GetHistoryMetrics_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetHistoryMetricsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MonitorService).GetHistoryMetrics(ctx, reqbody.(*GetHistoryMetricsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-// MonitorServer_ServiceDesc descriptor for server.RegisterService.
-var MonitorServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.moox.ops.Monitor",
-	HandlerType: ((*MonitorService)(nil)),
-	Methods: []server.Method{
-		{
-			Name: "/trpc.moox.ops.Monitor/GetCurrentMetrics",
-			Func: MonitorService_GetCurrentMetrics_Handler,
-		},
-		{
-			Name: "/trpc.moox.ops.Monitor/GetHistoryMetrics",
-			Func: MonitorService_GetHistoryMetrics_Handler,
-		},
-	},
-}
-
-// RegisterMonitorService registers service.
-func RegisterMonitorService(s server.Service, svr MonitorService) {
-	if err := s.Register(&MonitorServer_ServiceDesc, svr); err != nil {
-		panic(fmt.Sprintf("Monitor register error:%v", err))
-	}
-}
-
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
 type UnimplementedSsh struct{}
@@ -464,18 +397,6 @@ func (s *UnimplementedSsh) GetOnlineSessions(ctx context.Context, req *GetOnline
 }
 func (s *UnimplementedSsh) ForceDisconnect(ctx context.Context, req *ForceDisconnectReq) (*ForceDisconnectRsp, error) {
 	return nil, errors.New("rpc ForceDisconnect of service Ssh is not implemented")
-}
-
-type UnimplementedMonitor struct{}
-
-// GetCurrentMetrics 获取当前监控指标
-func (s *UnimplementedMonitor) GetCurrentMetrics(ctx context.Context, req *GetCurrentMetricsReq) (*GetCurrentMetricsRsp, error) {
-	return nil, errors.New("rpc GetCurrentMetrics of service Monitor is not implemented")
-}
-
-// GetHistoryMetrics 获取历史监控数据
-func (s *UnimplementedMonitor) GetHistoryMetrics(ctx context.Context, req *GetHistoryMetricsReq) (*GetHistoryMetricsRsp, error) {
-	return nil, errors.New("rpc GetHistoryMetrics of service Monitor is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -777,63 +698,6 @@ func (c *SshClientProxyImpl) ForceDisconnect(ctx context.Context, req *ForceDisc
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ForceDisconnectRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-// MonitorClientProxy defines service client proxy
-type MonitorClientProxy interface {
-	// GetCurrentMetrics 获取当前监控指标
-	GetCurrentMetrics(ctx context.Context, req *GetCurrentMetricsReq, opts ...client.Option) (rsp *GetCurrentMetricsRsp, err error)
-	// GetHistoryMetrics 获取历史监控数据
-	GetHistoryMetrics(ctx context.Context, req *GetHistoryMetricsReq, opts ...client.Option) (rsp *GetHistoryMetricsRsp, err error)
-}
-
-type MonitorClientProxyImpl struct {
-	client client.Client
-	opts   []client.Option
-}
-
-var NewMonitorClientProxy = func(opts ...client.Option) MonitorClientProxy {
-	return &MonitorClientProxyImpl{client: client.DefaultClient, opts: opts}
-}
-
-func (c *MonitorClientProxyImpl) GetCurrentMetrics(ctx context.Context, req *GetCurrentMetricsReq, opts ...client.Option) (*GetCurrentMetricsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Monitor/GetCurrentMetrics")
-	msg.WithCalleeServiceName(MonitorServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Monitor")
-	msg.WithCalleeMethod("GetCurrentMetrics")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetCurrentMetricsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MonitorClientProxyImpl) GetHistoryMetrics(ctx context.Context, req *GetHistoryMetricsReq, opts ...client.Option) (*GetHistoryMetricsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Monitor/GetHistoryMetrics")
-	msg.WithCalleeServiceName(MonitorServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Monitor")
-	msg.WithCalleeMethod("GetHistoryMetrics")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetHistoryMetricsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

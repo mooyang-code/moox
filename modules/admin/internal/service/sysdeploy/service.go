@@ -175,6 +175,8 @@ func gatewayDeploymentName(serviceID string) string {
 		return "moox_cloudnode"
 	case "factor", "factormgr":
 		return "moox_factor"
+	case "monitor":
+		return "moox_monitor"
 	default:
 		return serviceID
 	}
