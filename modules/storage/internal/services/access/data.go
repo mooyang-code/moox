@@ -31,6 +31,13 @@ func (s *Service) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeri
 	if err != nil {
 		return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
 	}
+	if req.GetWriteMode() == pb.RowWriteMode_ROW_WRITE_MODE_REPLACE {
+		for _, group := range groups {
+			for _, row := range group.rows {
+				row.WriteMode = pb.RowWriteMode_ROW_WRITE_MODE_REPLACE
+			}
+		}
+	}
 	for _, group := range groups {
 		message, event, err := timeSeriesUpdateMessage(group)
 		if err != nil {
@@ -336,6 +343,13 @@ func (s *Service) WriteRecordRows(ctx context.Context, req *pb.WriteRecordRowsRe
 	groups, err := s.groupRecordRowsByPrimaryStoreTarget(ctx, rows)
 	if err != nil {
 		return &pb.WriteRecordRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
+	}
+	if req.GetWriteMode() == pb.RowWriteMode_ROW_WRITE_MODE_REPLACE {
+		for _, group := range groups {
+			for _, row := range group.rows {
+				row.WriteMode = pb.RowWriteMode_ROW_WRITE_MODE_REPLACE
+			}
+		}
 	}
 	for _, group := range groups {
 		message, event, err := recordUpdateMessage(group)

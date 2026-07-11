@@ -120,6 +120,9 @@ type PrimaryStoreRow struct {
 	Columns []*ColumnValue `protobuf:"bytes,2,rep,name=columns,proto3" json:"columns,omitempty"`
 	// attributes 是附加属性，更新时按 key 覆盖。
 	Attributes map[string]string `protobuf:"bytes,3,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// write_mode is propagated from Access and consumed by the physical store.
+	// It is not a user-facing fact column.
+	WriteMode RowWriteMode `protobuf:"varint,4,opt,name=write_mode,json=writeMode,proto3,enum=trpc.moox.storage.RowWriteMode" json:"write_mode,omitempty"`
 }
 
 func (x *PrimaryStoreRow) Reset() {
@@ -173,6 +176,13 @@ func (x *PrimaryStoreRow) GetAttributes() map[string]string {
 		return x.Attributes
 	}
 	return nil
+}
+
+func (x *PrimaryStoreRow) GetWriteMode() RowWriteMode {
+	if x != nil {
+		return x.WriteMode
+	}
+	return RowWriteMode_ROW_WRITE_MODE_MERGE
 }
 
 // PrimaryStoreTarget 是 Access 根据 PrimaryStoreRoute 解析后的主存执行目标。
@@ -889,7 +899,7 @@ var file_store_proto_rawDesc = []byte{
 	0x08, 0x64, 0x61, 0x74, 0x61, 0x4b, 0x69, 0x6e, 0x64, 0x12, 0x10, 0x0a, 0x03, 0x6b, 0x65, 0x79,
 	0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x6b, 0x65, 0x79, 0x12, 0x18, 0x0a, 0x07, 0x76,
 	0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x76, 0x65,
-	0x72, 0x73, 0x69, 0x6f, 0x6e, 0x22, 0x94, 0x02, 0x0a, 0x0f, 0x50, 0x72, 0x69, 0x6d, 0x61, 0x72,
+	0x72, 0x73, 0x69, 0x6f, 0x6e, 0x22, 0xd4, 0x02, 0x0a, 0x0f, 0x50, 0x72, 0x69, 0x6d, 0x61, 0x72,
 	0x79, 0x53, 0x74, 0x6f, 0x72, 0x65, 0x52, 0x6f, 0x77, 0x12, 0x34, 0x0a, 0x03, 0x6b, 0x65, 0x79,
 	0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x22, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
 	0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x50, 0x72, 0x69, 0x6d, 0x61,
@@ -902,7 +912,11 @@ var file_store_proto_rawDesc = []byte{
 	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67,
 	0x65, 0x2e, 0x50, 0x72, 0x69, 0x6d, 0x61, 0x72, 0x79, 0x53, 0x74, 0x6f, 0x72, 0x65, 0x52, 0x6f,
 	0x77, 0x2e, 0x41, 0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x73, 0x45, 0x6e, 0x74, 0x72,
-	0x79, 0x52, 0x0a, 0x61, 0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x73, 0x1a, 0x3d, 0x0a,
+	0x79, 0x52, 0x0a, 0x61, 0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x73, 0x12, 0x3e, 0x0a,
+	0x0a, 0x77, 0x72, 0x69, 0x74, 0x65, 0x5f, 0x6d, 0x6f, 0x64, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28,
+	0x0e, 0x32, 0x1f, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74,
+	0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x52, 0x6f, 0x77, 0x57, 0x72, 0x69, 0x74, 0x65, 0x4d, 0x6f,
+	0x64, 0x65, 0x52, 0x09, 0x77, 0x72, 0x69, 0x74, 0x65, 0x4d, 0x6f, 0x64, 0x65, 0x1a, 0x3d, 0x0a,
 	0x0f, 0x41, 0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x73, 0x45, 0x6e, 0x74, 0x72, 0x79,
 	0x12, 0x10, 0x0a, 0x03, 0x6b, 0x65, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x6b,
 	0x65, 0x79, 0x12, 0x14, 0x0a, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28,
@@ -1097,57 +1111,59 @@ var file_store_proto_goTypes = []interface{}{
 	nil,                          // 11: trpc.moox.storage.PrimaryStoreRow.AttributesEntry
 	(DataKind)(0),                // 12: trpc.moox.storage.DataKind
 	(*ColumnValue)(nil),          // 13: trpc.moox.storage.ColumnValue
-	(*commonpb.AuthInfo)(nil),    // 14: trpc.moox.common.AuthInfo
-	(*commonpb.RetInfo)(nil),     // 15: trpc.moox.common.RetInfo
-	(*VersionRange)(nil),         // 16: trpc.moox.storage.VersionRange
-	(SortOrder)(0),               // 17: trpc.moox.storage.SortOrder
-	(*commonpb.Page)(nil),        // 18: trpc.moox.common.Page
-	(*commonpb.PageResult)(nil),  // 19: trpc.moox.common.PageResult
+	(RowWriteMode)(0),            // 14: trpc.moox.storage.RowWriteMode
+	(*commonpb.AuthInfo)(nil),    // 15: trpc.moox.common.AuthInfo
+	(*commonpb.RetInfo)(nil),     // 16: trpc.moox.common.RetInfo
+	(*VersionRange)(nil),         // 17: trpc.moox.storage.VersionRange
+	(SortOrder)(0),               // 18: trpc.moox.storage.SortOrder
+	(*commonpb.Page)(nil),        // 19: trpc.moox.common.Page
+	(*commonpb.PageResult)(nil),  // 20: trpc.moox.common.PageResult
 }
 var file_store_proto_depIdxs = []int32{
 	12, // 0: trpc.moox.storage.PrimaryStoreKey.data_kind:type_name -> trpc.moox.storage.DataKind
 	0,  // 1: trpc.moox.storage.PrimaryStoreRow.key:type_name -> trpc.moox.storage.PrimaryStoreKey
 	13, // 2: trpc.moox.storage.PrimaryStoreRow.columns:type_name -> trpc.moox.storage.ColumnValue
 	11, // 3: trpc.moox.storage.PrimaryStoreRow.attributes:type_name -> trpc.moox.storage.PrimaryStoreRow.AttributesEntry
-	14, // 4: trpc.moox.storage.WritePrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	2,  // 5: trpc.moox.storage.WritePrimaryRowsReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
-	1,  // 6: trpc.moox.storage.WritePrimaryRowsReq.rows:type_name -> trpc.moox.storage.PrimaryStoreRow
-	15, // 7: trpc.moox.storage.WritePrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	14, // 8: trpc.moox.storage.ReadPrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	2,  // 9: trpc.moox.storage.ReadPrimaryRowsReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
-	0,  // 10: trpc.moox.storage.ReadPrimaryRowsReq.keys:type_name -> trpc.moox.storage.PrimaryStoreKey
-	16, // 11: trpc.moox.storage.ReadPrimaryRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
-	17, // 12: trpc.moox.storage.ReadPrimaryRowsReq.order:type_name -> trpc.moox.storage.SortOrder
-	18, // 13: trpc.moox.storage.ReadPrimaryRowsReq.page:type_name -> trpc.moox.common.Page
-	15, // 14: trpc.moox.storage.ReadPrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	1,  // 15: trpc.moox.storage.ReadPrimaryRowsRsp.rows:type_name -> trpc.moox.storage.PrimaryStoreRow
-	19, // 16: trpc.moox.storage.ReadPrimaryRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	14, // 17: trpc.moox.storage.ScanPrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	2,  // 18: trpc.moox.storage.ScanPrimaryRowsReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
-	12, // 19: trpc.moox.storage.ScanPrimaryRowsReq.data_kind:type_name -> trpc.moox.storage.DataKind
-	16, // 20: trpc.moox.storage.ScanPrimaryRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
-	17, // 21: trpc.moox.storage.ScanPrimaryRowsReq.order:type_name -> trpc.moox.storage.SortOrder
-	18, // 22: trpc.moox.storage.ScanPrimaryRowsReq.page:type_name -> trpc.moox.common.Page
-	15, // 23: trpc.moox.storage.ScanPrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	1,  // 24: trpc.moox.storage.ScanPrimaryRowsRsp.rows:type_name -> trpc.moox.storage.PrimaryStoreRow
-	19, // 25: trpc.moox.storage.ScanPrimaryRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	14, // 26: trpc.moox.storage.DeletePrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	2,  // 27: trpc.moox.storage.DeletePrimaryRowsReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
-	0,  // 28: trpc.moox.storage.DeletePrimaryRowsReq.keys:type_name -> trpc.moox.storage.PrimaryStoreKey
-	15, // 29: trpc.moox.storage.DeletePrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,  // 30: trpc.moox.storage.PrimaryStore.WritePrimaryRows:input_type -> trpc.moox.storage.WritePrimaryRowsReq
-	5,  // 31: trpc.moox.storage.PrimaryStore.ReadPrimaryRows:input_type -> trpc.moox.storage.ReadPrimaryRowsReq
-	7,  // 32: trpc.moox.storage.PrimaryStore.ScanPrimaryRows:input_type -> trpc.moox.storage.ScanPrimaryRowsReq
-	9,  // 33: trpc.moox.storage.PrimaryStore.DeletePrimaryRows:input_type -> trpc.moox.storage.DeletePrimaryRowsReq
-	4,  // 34: trpc.moox.storage.PrimaryStore.WritePrimaryRows:output_type -> trpc.moox.storage.WritePrimaryRowsRsp
-	6,  // 35: trpc.moox.storage.PrimaryStore.ReadPrimaryRows:output_type -> trpc.moox.storage.ReadPrimaryRowsRsp
-	8,  // 36: trpc.moox.storage.PrimaryStore.ScanPrimaryRows:output_type -> trpc.moox.storage.ScanPrimaryRowsRsp
-	10, // 37: trpc.moox.storage.PrimaryStore.DeletePrimaryRows:output_type -> trpc.moox.storage.DeletePrimaryRowsRsp
-	34, // [34:38] is the sub-list for method output_type
-	30, // [30:34] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	14, // 4: trpc.moox.storage.PrimaryStoreRow.write_mode:type_name -> trpc.moox.storage.RowWriteMode
+	15, // 5: trpc.moox.storage.WritePrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	2,  // 6: trpc.moox.storage.WritePrimaryRowsReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
+	1,  // 7: trpc.moox.storage.WritePrimaryRowsReq.rows:type_name -> trpc.moox.storage.PrimaryStoreRow
+	16, // 8: trpc.moox.storage.WritePrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	15, // 9: trpc.moox.storage.ReadPrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	2,  // 10: trpc.moox.storage.ReadPrimaryRowsReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
+	0,  // 11: trpc.moox.storage.ReadPrimaryRowsReq.keys:type_name -> trpc.moox.storage.PrimaryStoreKey
+	17, // 12: trpc.moox.storage.ReadPrimaryRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
+	18, // 13: trpc.moox.storage.ReadPrimaryRowsReq.order:type_name -> trpc.moox.storage.SortOrder
+	19, // 14: trpc.moox.storage.ReadPrimaryRowsReq.page:type_name -> trpc.moox.common.Page
+	16, // 15: trpc.moox.storage.ReadPrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	1,  // 16: trpc.moox.storage.ReadPrimaryRowsRsp.rows:type_name -> trpc.moox.storage.PrimaryStoreRow
+	20, // 17: trpc.moox.storage.ReadPrimaryRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	15, // 18: trpc.moox.storage.ScanPrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	2,  // 19: trpc.moox.storage.ScanPrimaryRowsReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
+	12, // 20: trpc.moox.storage.ScanPrimaryRowsReq.data_kind:type_name -> trpc.moox.storage.DataKind
+	17, // 21: trpc.moox.storage.ScanPrimaryRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
+	18, // 22: trpc.moox.storage.ScanPrimaryRowsReq.order:type_name -> trpc.moox.storage.SortOrder
+	19, // 23: trpc.moox.storage.ScanPrimaryRowsReq.page:type_name -> trpc.moox.common.Page
+	16, // 24: trpc.moox.storage.ScanPrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	1,  // 25: trpc.moox.storage.ScanPrimaryRowsRsp.rows:type_name -> trpc.moox.storage.PrimaryStoreRow
+	20, // 26: trpc.moox.storage.ScanPrimaryRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	15, // 27: trpc.moox.storage.DeletePrimaryRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	2,  // 28: trpc.moox.storage.DeletePrimaryRowsReq.target:type_name -> trpc.moox.storage.PrimaryStoreTarget
+	0,  // 29: trpc.moox.storage.DeletePrimaryRowsReq.keys:type_name -> trpc.moox.storage.PrimaryStoreKey
+	16, // 30: trpc.moox.storage.DeletePrimaryRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	3,  // 31: trpc.moox.storage.PrimaryStore.WritePrimaryRows:input_type -> trpc.moox.storage.WritePrimaryRowsReq
+	5,  // 32: trpc.moox.storage.PrimaryStore.ReadPrimaryRows:input_type -> trpc.moox.storage.ReadPrimaryRowsReq
+	7,  // 33: trpc.moox.storage.PrimaryStore.ScanPrimaryRows:input_type -> trpc.moox.storage.ScanPrimaryRowsReq
+	9,  // 34: trpc.moox.storage.PrimaryStore.DeletePrimaryRows:input_type -> trpc.moox.storage.DeletePrimaryRowsReq
+	4,  // 35: trpc.moox.storage.PrimaryStore.WritePrimaryRows:output_type -> trpc.moox.storage.WritePrimaryRowsRsp
+	6,  // 36: trpc.moox.storage.PrimaryStore.ReadPrimaryRows:output_type -> trpc.moox.storage.ReadPrimaryRowsRsp
+	8,  // 37: trpc.moox.storage.PrimaryStore.ScanPrimaryRows:output_type -> trpc.moox.storage.ScanPrimaryRowsRsp
+	10, // 38: trpc.moox.storage.PrimaryStore.DeletePrimaryRows:output_type -> trpc.moox.storage.DeletePrimaryRowsRsp
+	35, // [35:39] is the sub-list for method output_type
+	31, // [31:35] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_store_proto_init() }

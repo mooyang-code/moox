@@ -1,0 +1,16 @@
+schema_version: 1
+market_id: stock_us
+space_id: stock_us
+register_metadata: true
+runtime_enabled: false
+asset_class: stock
+timezone: America/New_York
+exchange: {id: XNYS, name: United States equities}
+product_types: [equity, etf, index]
+instrument_types: [equity, etf, index]
+execution: {timeout_seconds: 60, job_budget_ms: 30000, report_reserve_ms: 10000}
+readiness: {status: not_ready, reason: "US-1 qualification and addendum required", capability_enabled: false}
+routing: {policy: weighted_rendezvous}
+quality: {policy: source_first_whole_candle}
+coverage: {policy: exchange_calendar}
+scf: {function_name: moox-collector-stock-us, timeout_seconds: 60}

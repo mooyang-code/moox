@@ -188,6 +188,9 @@ func (s *Store) getRow(key string) (*pb.PrimaryStoreRow, error) {
 }
 
 func mergeRow(base *pb.PrimaryStoreRow, patch *pb.PrimaryStoreRow) *pb.PrimaryStoreRow {
+	if patch.GetWriteMode() == pb.RowWriteMode_ROW_WRITE_MODE_REPLACE {
+		return proto.Clone(patch).(*pb.PrimaryStoreRow)
+	}
 	if base == nil {
 		return proto.Clone(patch).(*pb.PrimaryStoreRow)
 	}

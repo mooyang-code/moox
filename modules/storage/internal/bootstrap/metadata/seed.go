@@ -86,7 +86,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 	for _, item := range seed.Spaces {
 		if _, err := store.UpsertSpace(ctx, &pb.Space{
 			SpaceId: item.SpaceID, Name: item.Name, Description: item.Description,
-			Owner: item.Owner, Status: item.Status,
+			Owner: item.Owner, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("space", item.SpaceID, err)
 		}
@@ -97,7 +97,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		if _, err := store.UpsertDataSource(ctx, &pb.DataSource{
 			SpaceId: item.SpaceID, DataSourceId: item.DataSourceID, Name: item.Name,
 			Kind: item.Kind, Market: item.Market, Timezone: item.Timezone,
-			ConfigJson: item.ConfigJSON, Status: item.Status,
+			ConfigJson: item.ConfigJSON, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("data_source", item.DataSourceID, err)
 		}
@@ -108,7 +108,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		if _, err := store.UpsertSubject(ctx, &pb.Subject{
 			SpaceId: item.SpaceID, SubjectId: item.SubjectID, SubjectType: item.SubjectType,
 			Name: item.Name, Market: item.Market, Currency: item.Currency,
-			Timezone: item.Timezone, Status: item.Status,
+			Timezone: item.Timezone, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("subject", item.SubjectID, err)
 		}
@@ -118,7 +118,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 	for _, item := range seed.SubjectSymbols {
 		if _, err := store.UpsertSubjectSymbol(ctx, &pb.SubjectSymbol{
 			SpaceId: item.SpaceID, SubjectId: item.SubjectID, DataSourceId: item.DataSourceID,
-			ExternalSymbol: item.ExternalSymbol, Status: item.Status,
+			ExternalSymbol: item.ExternalSymbol, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("subject_symbol", item.SubjectID, err)
 		}
@@ -129,7 +129,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		if _, err := store.UpsertDataset(ctx, &pb.Dataset{
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, DataSourceId: item.DataSourceID,
 			Name: item.Name, Description: item.Description, DataKind: parseDataKind(item.DataKind),
-			Freqs: item.Freqs, Status: item.Status,
+			Freqs: item.Freqs, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("dataset", item.DatasetID, err)
 		}
@@ -140,7 +140,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		if _, err := store.BindDatasetSubject(ctx, &pb.DatasetSubject{
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, SubjectId: item.SubjectID,
 			SubjectRole: item.SubjectRole, EffectiveStartTime: item.EffectiveStartTime,
-			EffectiveEndTime: item.EffectiveEndTime, Status: item.Status,
+			EffectiveEndTime: item.EffectiveEndTime, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("dataset_subject", item.DatasetID+"/"+item.SubjectID, err)
 		}
@@ -151,7 +151,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		if _, err := store.UpsertField(ctx, &pb.Field{
 			SpaceId: item.SpaceID, FieldId: item.FieldID, Name: item.Name, Description: item.Description,
 			ValueType: parseValueType(item.ValueType), Unit: item.Unit,
-			ValidationRuleJson: item.ValidationRuleJSON, WriteExample: item.WriteExample, Status: item.Status,
+			ValidationRuleJson: item.ValidationRuleJSON, WriteExample: item.WriteExample, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("field", item.FieldID, err)
 		}
@@ -162,7 +162,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		if _, err := store.UpsertFactor(ctx, &pb.Factor{
 			SpaceId: item.SpaceID, FactorId: item.FactorID, Name: item.Name, Description: item.Description,
 			Algorithm: item.Algorithm, ParamsJson: item.ParamsJSON,
-			ValueType: parseValueType(item.ValueType), Status: item.Status,
+			ValueType: parseValueType(item.ValueType), Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("factor", item.FactorID, err)
 		}
@@ -186,7 +186,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 			SpaceId: item.SpaceID, ViewId: item.ViewID, Name: item.Name, Description: item.Description,
 			PrimaryDatasetId: item.PrimaryDatasetID, DatasetIds: item.DatasetIDs, GrainKeys: item.GrainKeys,
 			FilterJson: item.FilterJSON, Engine: item.Engine, RetentionWindow: item.RetentionWindow,
-			Status: item.Status,
+			Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("view", item.ViewID, err)
 		}
@@ -197,7 +197,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		if _, err := store.UpsertViewColumn(ctx, &pb.ViewColumn{
 			SpaceId: item.SpaceID, ViewId: item.ViewID, ColumnName: item.ColumnName,
 			OriginType: parseColumnOriginType(item.OriginType), OriginId: item.OriginID,
-			ValueType: parseValueType(item.ValueType), OnlineTime: item.OnlineTime, SortOrder: item.SortOrder,
+			ValueType: parseValueType(item.ValueType), OnlineTime: item.OnlineTime, SortOrder: item.SortOrder, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("view_column", item.ViewID+"."+item.ColumnName, err)
 		}
@@ -207,7 +207,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 	for _, item := range seed.PrimaryStoreNodes {
 		if _, err := store.UpsertPrimaryStoreNode(ctx, &pb.PrimaryStoreNode{
 			NodeId: item.NodeID, Name: item.Name, Endpoint: item.Endpoint, Weight: item.Weight,
-			Status: item.Status, ConfigJson: item.ConfigJSON,
+			Status: item.Status, ConfigJson: item.ConfigJSON, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("storage_node", item.NodeID, err)
 		}
@@ -217,7 +217,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 	for _, item := range seed.Devices {
 		if _, err := store.UpsertDevice(ctx, &pb.Device{
 			DeviceId: item.DeviceID, NodeId: item.NodeID, Name: item.Name, Engine: item.Engine,
-			Endpoint: item.Endpoint, ConfigJson: item.ConfigJSON, Status: item.Status,
+			Endpoint: item.Endpoint, ConfigJson: item.ConfigJSON, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("device", item.DeviceID, err)
 		}
@@ -228,7 +228,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		if _, err := store.UpsertPrimaryStoreRoute(ctx, &pb.PrimaryStoreRoute{
 			SpaceId: item.SpaceID, RouteId: item.RouteID, DatasetId: item.DatasetID,
 			SubjectId: item.SubjectID, SubjectPattern: item.SubjectPattern, HashRule: item.HashRule,
-			NodeId: item.NodeID, Priority: item.Priority, Status: item.Status,
+			NodeId: item.NodeID, Priority: item.Priority, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("storage_route", item.RouteID, err)
 		}
@@ -330,92 +330,100 @@ type seedFile struct {
 
 // seedSpace 描述待初始化的 Space 元数据。
 type seedSpace struct {
-	SpaceID     string `yaml:"space_id"`
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Owner       string `yaml:"owner"`
-	Status      string `yaml:"status"`
+	SpaceID     string            `yaml:"space_id"`
+	Name        string            `yaml:"name"`
+	Description string            `yaml:"description"`
+	Owner       string            `yaml:"owner"`
+	Status      string            `yaml:"status"`
+	Attributes  map[string]string `yaml:"attributes"`
 }
 
 // seedDataSource 描述待初始化的数据源元数据。
 type seedDataSource struct {
-	SpaceID      string `yaml:"space_id"`
-	DataSourceID string `yaml:"data_source_id"`
-	Name         string `yaml:"name"`
-	Kind         string `yaml:"kind"`
-	Market       string `yaml:"market"`
-	Timezone     string `yaml:"timezone"`
-	ConfigJSON   string `yaml:"config_json"`
-	Status       string `yaml:"status"`
+	SpaceID      string            `yaml:"space_id"`
+	DataSourceID string            `yaml:"data_source_id"`
+	Name         string            `yaml:"name"`
+	Kind         string            `yaml:"kind"`
+	Market       string            `yaml:"market"`
+	Timezone     string            `yaml:"timezone"`
+	ConfigJSON   string            `yaml:"config_json"`
+	Status       string            `yaml:"status"`
+	Attributes   map[string]string `yaml:"attributes"`
 }
 
 // seedSubject 描述待初始化的 Subject 元数据。
 type seedSubject struct {
-	SpaceID     string `yaml:"space_id"`
-	SubjectID   string `yaml:"subject_id"`
-	SubjectType string `yaml:"subject_type"`
-	Name        string `yaml:"name"`
-	Market      string `yaml:"market"`
-	Currency    string `yaml:"currency"`
-	Timezone    string `yaml:"timezone"`
-	Status      string `yaml:"status"`
+	SpaceID     string            `yaml:"space_id"`
+	SubjectID   string            `yaml:"subject_id"`
+	SubjectType string            `yaml:"subject_type"`
+	Name        string            `yaml:"name"`
+	Market      string            `yaml:"market"`
+	Currency    string            `yaml:"currency"`
+	Timezone    string            `yaml:"timezone"`
+	Status      string            `yaml:"status"`
+	Attributes  map[string]string `yaml:"attributes"`
 }
 
 // seedSubjectSymbol 描述 Subject 与外部数据源符号的映射。
 type seedSubjectSymbol struct {
-	SpaceID        string `yaml:"space_id"`
-	SubjectID      string `yaml:"subject_id"`
-	DataSourceID   string `yaml:"data_source_id"`
-	ExternalSymbol string `yaml:"external_symbol"`
-	Status         string `yaml:"status"`
+	SpaceID        string            `yaml:"space_id"`
+	SubjectID      string            `yaml:"subject_id"`
+	DataSourceID   string            `yaml:"data_source_id"`
+	ExternalSymbol string            `yaml:"external_symbol"`
+	Status         string            `yaml:"status"`
+	Attributes     map[string]string `yaml:"attributes"`
 }
 
 // seedDataset 描述待初始化的 Dataset 元数据。
 type seedDataset struct {
-	SpaceID      string   `yaml:"space_id"`
-	DatasetID    string   `yaml:"dataset_id"`
-	DataSourceID string   `yaml:"data_source_id"`
-	Name         string   `yaml:"name"`
-	Description  string   `yaml:"description"`
-	DataKind     string   `yaml:"data_kind"`
-	Freqs        []string `yaml:"freqs"`
-	Status       string   `yaml:"status"`
+	SpaceID      string            `yaml:"space_id"`
+	DatasetID    string            `yaml:"dataset_id"`
+	DataSourceID string            `yaml:"data_source_id"`
+	Name         string            `yaml:"name"`
+	Description  string            `yaml:"description"`
+	DataKind     string            `yaml:"data_kind"`
+	Freqs        []string          `yaml:"freqs"`
+	Status       string            `yaml:"status"`
+	Attributes   map[string]string `yaml:"attributes"`
 }
 
 // seedDatasetSubject 描述 Dataset 与 Subject 的绑定关系。
 type seedDatasetSubject struct {
-	SpaceID            string `yaml:"space_id"`
-	DatasetID          string `yaml:"dataset_id"`
-	SubjectID          string `yaml:"subject_id"`
-	SubjectRole        string `yaml:"subject_role"`
-	EffectiveStartTime string `yaml:"effective_start_time"`
-	EffectiveEndTime   string `yaml:"effective_end_time"`
-	Status             string `yaml:"status"`
+	SpaceID            string            `yaml:"space_id"`
+	DatasetID          string            `yaml:"dataset_id"`
+	SubjectID          string            `yaml:"subject_id"`
+	SubjectRole        string            `yaml:"subject_role"`
+	EffectiveStartTime string            `yaml:"effective_start_time"`
+	EffectiveEndTime   string            `yaml:"effective_end_time"`
+	Status             string            `yaml:"status"`
+	Attributes         map[string]string `yaml:"attributes"`
 }
 
 // seedField 描述待初始化的字段定义。
 type seedField struct {
-	SpaceID            string `yaml:"space_id"`
-	FieldID            string `yaml:"field_id"`
-	Name               string `yaml:"name"`
-	Description        string `yaml:"description"`
-	ValueType          string `yaml:"value_type"`
-	Unit               string `yaml:"unit"`
-	ValidationRuleJSON string `yaml:"validation_rule_json"`
-	WriteExample       string `yaml:"write_example"`
-	Status             string `yaml:"status"`
+	SpaceID            string            `yaml:"space_id"`
+	FieldID            string            `yaml:"field_id"`
+	Name               string            `yaml:"name"`
+	Description        string            `yaml:"description"`
+	ValueType          string            `yaml:"value_type"`
+	Unit               string            `yaml:"unit"`
+	ValidationRuleJSON string            `yaml:"validation_rule_json"`
+	WriteExample       string            `yaml:"write_example"`
+	Status             string            `yaml:"status"`
+	Attributes         map[string]string `yaml:"attributes"`
 }
 
 // seedFactor 描述待初始化的因子定义。
 type seedFactor struct {
-	SpaceID     string `yaml:"space_id"`
-	FactorID    string `yaml:"factor_id"`
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Algorithm   string `yaml:"algorithm"`
-	ParamsJSON  string `yaml:"params_json"`
-	ValueType   string `yaml:"value_type"`
-	Status      string `yaml:"status"`
+	SpaceID     string            `yaml:"space_id"`
+	FactorID    string            `yaml:"factor_id"`
+	Name        string            `yaml:"name"`
+	Description string            `yaml:"description"`
+	Algorithm   string            `yaml:"algorithm"`
+	ParamsJSON  string            `yaml:"params_json"`
+	ValueType   string            `yaml:"value_type"`
+	Status      string            `yaml:"status"`
+	Attributes  map[string]string `yaml:"attributes"`
 }
 
 // seedDatasetColumn 描述 Dataset 中可写入的列定义。
@@ -435,61 +443,66 @@ type seedDatasetColumn struct {
 
 // seedView 描述待初始化的 View 定义。
 type seedView struct {
-	SpaceID          string   `yaml:"space_id"`
-	ViewID           string   `yaml:"view_id"`
-	Name             string   `yaml:"name"`
-	Description      string   `yaml:"description"`
-	PrimaryDatasetID string   `yaml:"primary_dataset_id"`
-	DatasetIDs       []string `yaml:"dataset_ids"`
-	GrainKeys        []string `yaml:"grain_keys"`
-	FilterJSON       string   `yaml:"filter_json"`
-	Engine           string   `yaml:"engine"`
-	RetentionWindow  string   `yaml:"retention_window"`
-	Status           string   `yaml:"status"`
+	SpaceID          string            `yaml:"space_id"`
+	ViewID           string            `yaml:"view_id"`
+	Name             string            `yaml:"name"`
+	Description      string            `yaml:"description"`
+	PrimaryDatasetID string            `yaml:"primary_dataset_id"`
+	DatasetIDs       []string          `yaml:"dataset_ids"`
+	GrainKeys        []string          `yaml:"grain_keys"`
+	FilterJSON       string            `yaml:"filter_json"`
+	Engine           string            `yaml:"engine"`
+	RetentionWindow  string            `yaml:"retention_window"`
+	Status           string            `yaml:"status"`
+	Attributes       map[string]string `yaml:"attributes"`
 }
 
 // seedViewColumn 描述 View 中对外可查询的结果列。
 type seedViewColumn struct {
-	SpaceID    string `yaml:"space_id"`
-	ViewID     string `yaml:"view_id"`
-	ColumnName string `yaml:"column_name"`
-	OriginType string `yaml:"origin_type"`
-	OriginID   string `yaml:"origin_id"`
-	ValueType  string `yaml:"value_type"`
-	OnlineTime string `yaml:"online_time"`
-	SortOrder  uint32 `yaml:"sort_order"`
+	SpaceID    string            `yaml:"space_id"`
+	ViewID     string            `yaml:"view_id"`
+	ColumnName string            `yaml:"column_name"`
+	OriginType string            `yaml:"origin_type"`
+	OriginID   string            `yaml:"origin_id"`
+	ValueType  string            `yaml:"value_type"`
+	OnlineTime string            `yaml:"online_time"`
+	SortOrder  uint32            `yaml:"sort_order"`
+	Attributes map[string]string `yaml:"attributes"`
 }
 
 // seedPrimaryStoreNode 描述待初始化的主存节点。
 type seedPrimaryStoreNode struct {
-	NodeID     string `yaml:"node_id"`
-	Name       string `yaml:"name"`
-	Endpoint   string `yaml:"endpoint"`
-	Weight     uint32 `yaml:"weight"`
-	ConfigJSON string `yaml:"config_json"`
-	Status     string `yaml:"status"`
+	NodeID     string            `yaml:"node_id"`
+	Name       string            `yaml:"name"`
+	Endpoint   string            `yaml:"endpoint"`
+	Weight     uint32            `yaml:"weight"`
+	ConfigJSON string            `yaml:"config_json"`
+	Status     string            `yaml:"status"`
+	Attributes map[string]string `yaml:"attributes"`
 }
 
 // seedDevice 描述待初始化的物理存储设备。
 type seedDevice struct {
-	DeviceID   string `yaml:"device_id"`
-	NodeID     string `yaml:"node_id"`
-	Name       string `yaml:"name"`
-	Engine     string `yaml:"engine"`
-	Endpoint   string `yaml:"endpoint"`
-	ConfigJSON string `yaml:"config_json"`
-	Status     string `yaml:"status"`
+	DeviceID   string            `yaml:"device_id"`
+	NodeID     string            `yaml:"node_id"`
+	Name       string            `yaml:"name"`
+	Engine     string            `yaml:"engine"`
+	Endpoint   string            `yaml:"endpoint"`
+	ConfigJSON string            `yaml:"config_json"`
+	Status     string            `yaml:"status"`
+	Attributes map[string]string `yaml:"attributes"`
 }
 
 // seedPrimaryStoreRoute 描述待初始化的主存路由。
 type seedPrimaryStoreRoute struct {
-	SpaceID        string `yaml:"space_id"`
-	RouteID        string `yaml:"route_id"`
-	DatasetID      string `yaml:"dataset_id"`
-	SubjectID      string `yaml:"subject_id"`
-	SubjectPattern string `yaml:"subject_pattern"`
-	HashRule       string `yaml:"hash_rule"`
-	NodeID         string `yaml:"node_id"`
-	Priority       uint32 `yaml:"priority"`
-	Status         string `yaml:"status"`
+	SpaceID        string            `yaml:"space_id"`
+	RouteID        string            `yaml:"route_id"`
+	DatasetID      string            `yaml:"dataset_id"`
+	SubjectID      string            `yaml:"subject_id"`
+	SubjectPattern string            `yaml:"subject_pattern"`
+	HashRule       string            `yaml:"hash_rule"`
+	NodeID         string            `yaml:"node_id"`
+	Priority       uint32            `yaml:"priority"`
+	Status         string            `yaml:"status"`
+	Attributes     map[string]string `yaml:"attributes"`
 }

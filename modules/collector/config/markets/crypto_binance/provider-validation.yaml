@@ -1,0 +1,15 @@
+schema_version: 1
+provider_id: binance
+probed_at: ""
+valid_until: ""
+environment: pending
+endpoint_fingerprint: pending
+endpoint_class: public_http
+frequencies: []
+limits: {batch: 0, point: 0}
+quota_scopes: []
+network: {reachable: false, detail: "live validation pending"}
+adjustment_semantics: none
+evidence_summary: activation is fail-closed until live validation
+gate_ids: [SCF-1]
+capability_enabled: false

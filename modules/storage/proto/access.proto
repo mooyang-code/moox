@@ -69,6 +69,7 @@ message WriteTimeSeriesRowsReq {
   common.AuthInfo auth_info = 1;
   // rows 是待写入的时序数据行。
   repeated TimeSeriesRow rows = 2;
+  RowWriteMode write_mode = 3;
 }
 
 // WriteTimeSeriesRowsRsp 表示时序事实数据写入结果。
@@ -124,6 +125,7 @@ message WriteRecordRowsReq {
   common.AuthInfo auth_info = 1;
   // rows 是待写入的记录数据行。
   repeated RecordRow rows = 2;
+  RowWriteMode write_mode = 3;
 }
 
 // WriteRecordRowsRsp 表示记录事实数据写入结果。

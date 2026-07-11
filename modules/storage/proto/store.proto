@@ -30,6 +30,9 @@ message PrimaryStoreRow {
   repeated ColumnValue columns = 2;
   // attributes 是附加属性，更新时按 key 覆盖。
   map<string, string> attributes = 3;
+  // write_mode is propagated from Access and consumed by the physical store.
+  // It is not a user-facing fact column.
+  RowWriteMode write_mode = 4;
 }
 
 // PrimaryStoreTarget 是 Access 根据 PrimaryStoreRoute 解析后的主存执行目标。

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"reflect"
-	"slices"
 	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -427,10 +425,82 @@ func loadMetadataSeed(path string) (metadataSeed, error) {
 		return metadataSeed{}, fmt.Errorf("读取 metadata seed 失败 %s: %w", path, err)
 	}
 	var seed metadataSeed
-	if err := yaml.Unmarshal(raw, &seed); err != nil {
+	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&seed); err != nil {
 		return metadataSeed{}, fmt.Errorf("解析 metadata seed 失败 %s: %w", path, err)
 	}
+	if err := validateMarketSeed(seed); err != nil {
+		return metadataSeed{}, fmt.Errorf("校验 metadata seed 失败 %s: %w", path, err)
+	}
 	return seed, nil
+}
+
+// validateMarketSeed validates the parts of a seed that are shared by the
+// built-in market manifests. Generic platform seeds remain valid and are
+// intentionally not subject to the market dataset-role rules.
+func validateMarketSeed(seed metadataSeed) error {
+	if len(seed.Spaces) == 0 {
+		return nil
+	}
+	markets := map[string]bool{"stock_cn": true, "stock_us": true, "crypto_binance": true, "crypto_okx": true}
+	for _, space := range seed.Spaces {
+		if !markets[space.SpaceID] {
+			continue
+		}
+		for _, item := range seed.Datasets {
+			if item.SpaceID != space.SpaceID {
+				continue
+			}
+			if len(item.DatasetID) == 0 || len(item.DatasetID) > 20 || !lowerSnakeID(item.DatasetID) {
+				return fmt.Errorf("dataset %q must be lower_snake_case and <=20 characters", item.DatasetID)
+			}
+			role := item.Attributes["dataset_role"]
+			feed := item.Attributes["feed"]
+			if role == "" || feed == "" {
+				return fmt.Errorf("dataset %s/%s requires attributes dataset_role and feed", item.SpaceID, item.DatasetID)
+			}
+			if err := validateMarketDatasetRole(item, role, feed); err != nil {
+				return err
+			}
+		}
+		if len(seed.Subjects) > 0 || len(seed.SubjectSymbols) > 0 || len(seed.DatasetSubjects) > 0 || len(seed.PrimaryStoreNodes) > 0 || len(seed.Devices) > 0 || len(seed.PrimaryStoreRoutes) > 0 {
+			return fmt.Errorf("market seed %s must not contain subjects, bindings or storage topology", space.SpaceID)
+		}
+	}
+	return nil
+}
+
+func validateMarketDatasetRole(item seedDataset, role, feed string) error {
+	kind := normalizeEnum(item.DataKind)
+	if feed == "kline" && kind != "TIME_SERIES" {
+		return fmt.Errorf("kline dataset %s must use time_series", item.DatasetID)
+	}
+	if feed == "instrument" || feed == "quality_event" || feed == "coverage" || feed == "calendar" {
+		if kind != "RECORD" {
+			return fmt.Errorf("%s dataset %s must use record", feed, item.DatasetID)
+		}
+	}
+	if role != "provider_data" && role != "unified_data" && role != "quality_event" && role != "coverage_state" {
+		return fmt.Errorf("dataset %s has unsupported dataset_role %q", item.DatasetID, role)
+	}
+	if role == "quality_event" && feed != "quality_event" || role == "coverage_state" && feed != "coverage" {
+		return fmt.Errorf("dataset %s has unsupported role/feed combination", item.DatasetID)
+	}
+	return nil
+}
+
+func lowerSnakeID(id string) bool {
+	if id == "" || id[0] == '_' || id[len(id)-1] == '_' {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
@@ -739,31 +809,43 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 }
 
 func metadataContractsEqual(resource string, a, b proto.Message) bool {
-	if resource == "spaces" {
-		x, y := a.(*pb.Space), b.(*pb.Space)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetName() == y.GetName() && x.GetDescription() == y.GetDescription() && x.GetOwner() == y.GetOwner() && x.GetStatus() == y.GetStatus() && reflect.DeepEqual(x.GetAttributes(), y.GetAttributes())
+	left, right := proto.Clone(a), proto.Clone(b)
+	clearMetadataTimestamps(left)
+	clearMetadataTimestamps(right)
+	return proto.Equal(left, right)
+}
+
+func clearMetadataTimestamps(msg proto.Message) {
+	switch item := msg.(type) {
+	case *pb.Space:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.DataSource:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.Subject:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.SubjectSymbol:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.Dataset:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.DatasetSubject:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.Field:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.Factor:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.DatasetColumn:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.View:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.ViewColumn:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.PrimaryStoreNode:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.Device:
+		item.CreatedAt, item.UpdatedAt = "", ""
+	case *pb.PrimaryStoreRoute:
+		item.CreatedAt, item.UpdatedAt = "", ""
 	}
-	if resource == "data_sources" {
-		x, y := a.(*pb.DataSource), b.(*pb.DataSource)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetDataSourceId() == y.GetDataSourceId() && x.GetName() == y.GetName() && x.GetKind() == y.GetKind() && x.GetTimezone() == y.GetTimezone() && x.GetStatus() == y.GetStatus() && reflect.DeepEqual(x.GetAttributes(), y.GetAttributes())
-	}
-	if resource == "datasets" {
-		x, y := a.(*pb.Dataset), b.(*pb.Dataset)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetDatasetId() == y.GetDatasetId() && x.GetDataSourceId() == y.GetDataSourceId() && x.GetDataKind() == y.GetDataKind() && slices.Equal(x.GetFreqs(), y.GetFreqs()) && x.GetStatus() == y.GetStatus()
-	}
-	if resource == "fields" {
-		x, y := a.(*pb.Field), b.(*pb.Field)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetFieldId() == y.GetFieldId() && x.GetValueType() == y.GetValueType() && x.GetStatus() == y.GetStatus()
-	}
-	if resource == "dataset_columns" {
-		x, y := a.(*pb.DatasetColumn), b.(*pb.DatasetColumn)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetDatasetId() == y.GetDatasetId() && x.GetColumnName() == y.GetColumnName() && x.GetOriginType() == y.GetOriginType() && x.GetOriginId() == y.GetOriginId() && x.GetValueType() == y.GetValueType() && x.GetRequired() == y.GetRequired() && x.GetStatus() == y.GetStatus()
-	}
-	if resource == "primary_store_routes" {
-		x, y := a.(*pb.PrimaryStoreRoute), b.(*pb.PrimaryStoreRoute)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetRouteId() == y.GetRouteId() && x.GetDatasetId() == y.GetDatasetId() && x.GetSubjectPattern() == y.GetSubjectPattern() && x.GetHashRule() == y.GetHashRule() && x.GetNodeId() == y.GetNodeId() && x.GetPriority() == y.GetPriority() && x.GetStatus() == y.GetStatus()
-	}
-	return proto.Equal(a, b)
 }
 
 func metadataResourceExists(ctx context.Context, metadataURL string, probe *metadataExistsProbe) (bool, error) {

@@ -1,0 +1,15 @@
+schema_version: 1
+provider_id: tdx
+probed_at: ""
+valid_until: ""
+environment: pending
+endpoint_fingerprint: pending
+endpoint_class: tcp
+frequencies: []
+limits: {batch: 0, point: 0}
+quota_scopes: []
+network: {reachable: false, detail: "CN-1/CN-2 not yet validated"}
+adjustment_semantics: none
+evidence_summary: pending validation
+gate_ids: [CN-1, CN-2]
+capability_enabled: false

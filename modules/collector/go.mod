@@ -17,6 +17,7 @@ require (
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/marketmanifest v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.20.4
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.67.5
@@ -47,6 +48,8 @@ replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstr
 replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
+
+replace github.com/mooyang-code/moox/packages/marketmanifest => ../../packages/marketmanifest
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect

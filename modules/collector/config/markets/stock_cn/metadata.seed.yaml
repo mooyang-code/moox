@@ -1,0 +1,86 @@
+spaces:
+  - space_id: stock_cn
+    name: 中国股票
+    description: 中国股票内置行情空间
+    owner: collector
+    status: active
+    attributes:
+      scope: builtin
+      owner_module: collector
+      managed_by: moox-cli
+      register_metadata: "true"
+      runtime_enabled: "false"
+data_sources:
+  - space_id: stock_cn
+    data_source_id: internal
+    name: 内部统一
+    kind: internal
+    market: CN
+    timezone: Asia/Shanghai
+    status: active
+  - space_id: stock_cn
+    data_source_id: sina
+    name: 新浪行情
+    kind: vendor_api
+    market: CN
+    timezone: Asia/Shanghai
+    status: active
+    attributes:
+      provider_id: sina
+  - space_id: stock_cn
+    data_source_id: eastmoney
+    name: 东方财富
+    kind: vendor_api
+    market: CN
+    timezone: Asia/Shanghai
+    status: active
+    attributes:
+      provider_id: eastmoney
+fields:
+  - {space_id: stock_cn, field_id: open, name: 开盘价, value_type: double, status: active}
+  - {space_id: stock_cn, field_id: high, name: 最高价, value_type: double, status: active}
+  - {space_id: stock_cn, field_id: low, name: 最低价, value_type: double, status: active}
+  - {space_id: stock_cn, field_id: close, name: 收盘价, value_type: double, status: active}
+  - {space_id: stock_cn, field_id: volume, name: 成交量, value_type: double, status: active}
+  - {space_id: stock_cn, field_id: amount, name: 成交额, value_type: double, status: active}
+  - {space_id: stock_cn, field_id: open_exact, name: 开盘原值, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: high_exact, name: 最高原值, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: low_exact, name: 最低原值, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: close_exact, name: 收盘原值, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: volume_exact, name: 成交量原值, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: amount_exact, name: 成交额原值, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: trade_date, name: 交易日期, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: feed_scope, name: 行情范围, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: revision, name: 修订版本, value_type: int, status: active}
+  - {space_id: stock_cn, field_id: close_time, name: 收盘时间, value_type: time, status: active}
+  - {space_id: stock_cn, field_id: provider_timestamp, name: 来源时间, value_type: time, status: active}
+  - {space_id: stock_cn, field_id: fetched_at, name: 抓取时间, value_type: time, status: active}
+  - {space_id: stock_cn, field_id: source_fetched_at, name: 来源抓取时间, value_type: time, status: active}
+  - {space_id: stock_cn, field_id: resolved_at, name: 统一时间, value_type: time, status: active}
+  - {space_id: stock_cn, field_id: is_closed, name: 已收盘, value_type: bool, status: active}
+  - {space_id: stock_cn, field_id: quality_reason, name: 质量原因, value_type: json, status: active}
+  - {space_id: stock_cn, field_id: volume_unit, name: 成交量单位, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: amount_unit, name: 成交额单位, value_type: string, status: active}
+datasets:
+  - {space_id: stock_cn, dataset_id: sina_kline, data_source_id: sina, name: 新浪K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
+  - {space_id: stock_cn, dataset_id: eastmoney_kline, data_source_id: eastmoney, name: 东方财富K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
+  - {space_id: stock_cn, dataset_id: equity_kline, data_source_id: internal, name: 股票统一K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline, instrument_type: equity}}
+  - {space_id: stock_cn, dataset_id: etf_kline, data_source_id: internal, name: ETF统一K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline, instrument_type: etf}}
+  - {space_id: stock_cn, dataset_id: index_kline, data_source_id: internal, name: 指数统一K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline, instrument_type: index}}
+  - {space_id: stock_cn, dataset_id: instruments, data_source_id: internal, name: 统一标的, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: instrument}}
+  - {space_id: stock_cn, dataset_id: calendar, data_source_id: internal, name: 交易日历, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: calendar, kind: internal}}
+  - {space_id: stock_cn, dataset_id: market_coverage, data_source_id: internal, name: 行情覆盖, data_kind: record, status: active, attributes: {dataset_role: coverage_state, feed: coverage}}
+  - {space_id: stock_cn, dataset_id: kline_quality_event, data_source_id: internal, name: K线质量事件, data_kind: record, status: active, attributes: {dataset_role: quality_event, feed: quality_event}}
+dataset_columns:
+  - {space_id: stock_cn, dataset_id: sina_kline, column_name: open, origin_type: field, origin_id: open, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: sina_kline, column_name: high, origin_type: field, origin_id: high, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: sina_kline, column_name: low, origin_type: field, origin_id: low, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: sina_kline, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: sina_kline, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active}
+  - {space_id: stock_cn, dataset_id: sina_kline, column_name: amount, origin_type: field, origin_id: amount, value_type: double, status: active}
+  - {space_id: stock_cn, dataset_id: equity_kline, column_name: open, origin_type: field, origin_id: open, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: equity_kline, column_name: high, origin_type: field, origin_id: high, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: equity_kline, column_name: low, origin_type: field, origin_id: low, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: equity_kline, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: equity_kline, column_name: volume, origin_type: field, origin_id: volume, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: equity_kline, column_name: amount, origin_type: field, origin_id: amount, value_type: double, required: true, status: active}

@@ -28,5 +28,6 @@ use (
 	./packages/jetstream
 	./packages/messagepb
 	./packages/metricspb
+	./packages/marketmanifest
 	./web-host
 )

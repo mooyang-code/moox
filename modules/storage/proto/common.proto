@@ -4,6 +4,13 @@ package trpc.moox.storage;
 
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
 
+// RowWriteMode controls whether a write merges supplied columns or atomically
+// replaces the complete row for the same business key and version.
+enum RowWriteMode {
+  ROW_WRITE_MODE_MERGE = 0;
+  ROW_WRITE_MODE_REPLACE = 1;
+}
+
 // SortOrder 表示范围读取的返回顺序。
 enum SortOrder {
   // SORT_ORDER_ASC 表示按 version/time 从小到大返回。

@@ -1,0 +1,16 @@
+schema_version: 1
+market_id: crypto_binance
+space_id: crypto_binance
+register_metadata: true
+runtime_enabled: false
+asset_class: crypto
+timezone: UTC
+exchange: {id: BINANCE, name: Binance}
+product_types: [spot, swap]
+instrument_types: [spot, swap]
+execution: {timeout_seconds: 60, job_budget_ms: 30000, report_reserve_ms: 10000}
+readiness: {status: not_ready, reason: "provider validation required before activation", capability_enabled: false}
+routing: {policy: weighted_rendezvous}
+quality: {policy: source_first_whole_candle}
+coverage: {policy: twenty_four_seven}
+scf: {function_name: moox-collector-crypto-binance, timeout_seconds: 60}

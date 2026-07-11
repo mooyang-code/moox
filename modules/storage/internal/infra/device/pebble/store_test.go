@@ -126,6 +126,33 @@ func TestScanRowsWithPrefixNarrowsSubjectAndFrequency(t *testing.T) {
 	}
 }
 
+func TestWriteRowsReplaceDropsColumnsNotPresentInReplacement(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "primary")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	key := testPrimaryTimeSeriesKey("2026-07-09T08:10:00.000000000Z")
+	if err := store.WriteRows(ctx, []*pb.PrimaryStoreRow{{Key: key, Columns: []*pb.ColumnValue{stringColumn("open", "1"), stringColumn("stale", "old")}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteRows(ctx, []*pb.PrimaryStoreRow{{Key: key, Columns: []*pb.ColumnValue{stringColumn("open", "2")}, WriteMode: pb.RowWriteMode_ROW_WRITE_MODE_REPLACE}}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := store.ReadRows(ctx, []*pb.PrimaryStoreKey{key}, nil, pb.SortOrder_SORT_ORDER_ASC, nil, &pb.Page{Size: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || len(rows[0].GetColumns()) != 1 || rows[0].GetColumns()[0].GetColumnName() != "open" {
+		t.Fatalf("replace retained stale columns: %+v", rows)
+	}
+}
+
+func stringColumn(name, value string) *pb.ColumnValue {
+	return &pb.ColumnValue{ColumnName: name, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}}}
+}
+
 func testPrimaryTimeSeriesRow(version string) *pb.PrimaryStoreRow {
 	return &pb.PrimaryStoreRow{Key: testPrimaryTimeSeriesKey(version)}
 }

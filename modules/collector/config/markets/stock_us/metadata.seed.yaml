@@ -1,0 +1,10 @@
+spaces:
+  - {space_id: stock_us, name: US Stocks, description: Built-in US market space, owner: collector, status: active, attributes: {scope: builtin, owner_module: collector, register_metadata: "true", runtime_enabled: "false"}}
+data_sources:
+  - {space_id: stock_us, data_source_id: internal, name: Unified data, kind: internal, market: US, timezone: America/New_York, status: active}
+datasets:
+  - {space_id: stock_us, dataset_id: equity_kline, data_source_id: internal, name: Equity Kline, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline}}
+  - {space_id: stock_us, dataset_id: instruments, data_source_id: internal, name: Instruments, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: instrument}}
+  - {space_id: stock_us, dataset_id: calendar, data_source_id: internal, name: Calendar, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: calendar, kind: internal}}
+  - {space_id: stock_us, dataset_id: market_coverage, data_source_id: internal, name: Coverage, data_kind: record, status: active, attributes: {dataset_role: coverage_state, feed: coverage}}
+  - {space_id: stock_us, dataset_id: kline_quality_event, data_source_id: internal, name: Quality event, data_kind: record, status: active, attributes: {dataset_role: quality_event, feed: quality_event}}
