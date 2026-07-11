@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/coverage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -31,6 +32,26 @@ func TestProviderAndUnifiedWritersEnforceDatasetRoles(t *testing.T) {
 	}
 }
 
+func TestCoverageStoreReadsUnifiedRangeAndWritesDeterministicState(t *testing.T) {
+	base := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	access := &fakeAccess{readRows: []*storagepb.TimeSeriesRow{{Key: &storagepb.TimeSeriesKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: base.Format(time.RFC3339)}}}}
+	c := NewClientWithAccess(access, nil, []Binding{{SpaceID: "crypto_binance", DatasetID: "spot_kline", Role: RoleUnifiedData, Feed: "kline"}, {SpaceID: "crypto_binance", DatasetID: "market_coverage", Role: RoleCoverageState, Feed: "coverage"}})
+	buckets, err := c.PresentBuckets(context.Background(), "crypto_binance", "spot_kline", "BTC-USDT", marketdata.FrequencyMinute, base, base.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(buckets) != 1 || access.readReq.GetKeys()[0].GetDataTime() != "" || access.readReq.GetTimeRange() == nil {
+		t.Fatalf("buckets=%v request=%+v", buckets, access.readReq)
+	}
+	state := coverage.State{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC-USDT", PartitionID: "2026-07-11", Frequency: marketdata.FrequencyMinute, Start: base, End: base.Add(time.Hour), Expected: 60, Present: 59, Missing: 1, MissingRanges: []coverage.Range{{Start: base.Add(time.Minute), End: base.Add(time.Minute), Buckets: 1}}, Status: "incomplete", CheckedAt: base.Add(time.Hour)}
+	if err := c.WriteCoverageState(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if access.recordReq.GetWriteMode() != storagepb.RowWriteMode_ROW_WRITE_MODE_REPLACE || access.recordReq.GetRows()[0].GetKey().GetVersion() != base.Format(time.RFC3339Nano) {
+		t.Fatalf("coverage request=%+v", access.recordReq)
+	}
+}
+
 func TestReadCandidatesUsesExactKeys(t *testing.T) {
 	access := &fakeAccess{readRows: []*storagepb.TimeSeriesRow{{Key: &storagepb.TimeSeriesKey{SpaceId: "crypto_binance", DatasetId: "binance_kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-11T00:00:00Z"}}}}
 	c := NewClientWithAccess(access, nil, []Binding{{SpaceID: "crypto_binance", DatasetID: "binance_kline", Role: RoleProviderData, Feed: "kline"}})
@@ -49,9 +70,10 @@ func testKline() marketdata.ProviderKline {
 func decimalPtr(v marketdata.Decimal) *marketdata.Decimal { return &v }
 
 type fakeAccess struct {
-	timeReq  *storagepb.WriteTimeSeriesRowsReq
-	readReq  *storagepb.ReadTimeSeriesRowsReq
-	readRows []*storagepb.TimeSeriesRow
+	timeReq   *storagepb.WriteTimeSeriesRowsReq
+	readReq   *storagepb.ReadTimeSeriesRowsReq
+	recordReq *storagepb.WriteRecordRowsReq
+	readRows  []*storagepb.TimeSeriesRow
 }
 
 func (f *fakeAccess) WriteTimeSeriesRows(_ context.Context, req *storagepb.WriteTimeSeriesRowsReq, _ ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error) {
@@ -62,7 +84,8 @@ func (f *fakeAccess) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTi
 	f.readReq = req
 	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Rows: f.readRows}, nil
 }
-func (f *fakeAccess) WriteRecordRows(context.Context, *storagepb.WriteRecordRowsReq, ...client.Option) (*storagepb.WriteRecordRowsRsp, error) {
+func (f *fakeAccess) WriteRecordRows(_ context.Context, req *storagepb.WriteRecordRowsReq, _ ...client.Option) (*storagepb.WriteRecordRowsRsp, error) {
+	f.recordReq = req
 	return &storagepb.WriteRecordRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 func (f *fakeAccess) ReadRecordRows(context.Context, *storagepb.ReadRecordRowsReq, ...client.Option) (*storagepb.ReadRecordRowsRsp, error) {
