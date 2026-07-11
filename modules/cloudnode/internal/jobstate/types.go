@@ -146,6 +146,13 @@ func (s State) ToDetail() *pb.JobItemDetail {
 	}
 }
 
+func (s State) ToJobItem() *pb.JobItem {
+	return &pb.JobItem{
+		SpaceId: s.SpaceID, JobId: s.JobID, JobItemId: s.JobItemID, JobType: s.JobType,
+		CodePackageId: s.CodePackageID, Params: mapToStruct(s.Params), Priority: s.Priority,
+	}
+}
+
 func (a Attempt) ToProto() *pb.JobItemAttempt {
 	return &pb.JobItemAttempt{
 		AttemptNo:     int32(a.AttemptNo),

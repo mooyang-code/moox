@@ -53,21 +53,21 @@ func (c *Client) NewPullConsumer(ctx context.Context, cfg ConsumerConfig) (*Pull
 }
 
 // DeleteConsumer removes a durable consumer while leaving its stream messages intact.
-func (c *Client) DeleteConsumer(ctx context.Context, stream, durable string) error {
+func (c *Client) DeleteConsumer(ctx context.Context, stream, durable string) (bool, error) {
 	if c == nil {
-		return ErrConnection
+		return false, ErrConnection
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	err := c.js.DeleteConsumer(strings.TrimSpace(stream), strings.TrimSpace(durable), nats.Context(ctx))
 	if errors.Is(err, nats.ErrConsumerNotFound) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return classifyConsumerError("delete consumer", err)
+		return false, classifyConsumerError("delete consumer", err)
 	}
-	return nil
+	return true, nil
 }
 
 // EnsurePullConsumer creates the declared durable when it is absent and binds it otherwise.

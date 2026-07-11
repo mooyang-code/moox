@@ -33,6 +33,7 @@ type JetStreamQueue struct {
 	consumers         map[string]*jetstream.PullConsumer
 	closed            bool
 	legacyCleanupOnce sync.Once
+	legacyRemoved     bool
 	legacyCleanupErr  error
 }
 
@@ -60,6 +61,9 @@ func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
 }
 
 func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*PublishResult, error) {
+	if _, err := q.MigrateLegacyConsumer(ctx); err != nil {
+		return nil, err
+	}
 	if item == nil {
 		return nil, fmt.Errorf("job item is required")
 	}
@@ -85,11 +89,8 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*Publis
 }
 
 func (q *JetStreamQueue) ensureConsumer(spaceID, codePackageID, jobType string) (*jetstream.PullConsumer, error) {
-	q.legacyCleanupOnce.Do(func() {
-		q.legacyCleanupErr = q.client.DeleteConsumer(context.Background(), q.cfg.ExecStream, "cn_exec_all")
-	})
-	if q.legacyCleanupErr != nil {
-		return nil, fmt.Errorf("remove legacy wildcard execution consumer: %w", q.legacyCleanupErr)
+	if _, err := q.MigrateLegacyConsumer(context.Background()); err != nil {
+		return nil, err
 	}
 	key := spaceID + "\x00" + codePackageID + "\x00" + jobType
 	q.mu.Lock()
@@ -106,6 +107,22 @@ func (q *JetStreamQueue) ensureConsumer(spaceID, codePackageID, jobType string) 
 	}
 	q.consumers[key] = consumer
 	return consumer, nil
+}
+
+// MigrateLegacyConsumer removes the old cross-route durable before exact
+// per-space consumers are created. When removed is true, pending KV states
+// must be republished because WorkQueue retention may discard owned messages.
+func (q *JetStreamQueue) MigrateLegacyConsumer(ctx context.Context) (bool, error) {
+	if q == nil || q.client == nil {
+		return false, fmt.Errorf("execution queue is not initialized")
+	}
+	q.legacyCleanupOnce.Do(func() {
+		q.legacyRemoved, q.legacyCleanupErr = q.client.DeleteConsumer(ctx, q.cfg.ExecStream, "cn_exec_all")
+	})
+	if q.legacyCleanupErr != nil {
+		return false, fmt.Errorf("remove legacy wildcard execution consumer: %w", q.legacyCleanupErr)
+	}
+	return q.legacyRemoved, nil
 }
 
 func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Delivery, error) {

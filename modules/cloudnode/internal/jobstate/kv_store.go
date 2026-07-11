@@ -409,6 +409,31 @@ func (s *KVStore) ListAttempts(ctx context.Context, req *pb.ListJobItemAttemptsR
 	return out, nil
 }
 
+func (s *KVStore) PendingItems(_ context.Context) ([]*pb.JobItem, error) {
+	if s == nil || s.kv == nil {
+		return nil, ErrInvalid
+	}
+	keys, err := s.kv.Keys()
+	if errors.Is(err, jetstream.ErrKVNoKeys) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, mapKVError(err)
+	}
+	items := make([]*pb.JobItem, 0)
+	for _, key := range keys {
+		entry, err := s.kv.Get(key)
+		if err != nil {
+			continue
+		}
+		state, err := decodeState(entry.Value())
+		if err == nil && state.Status == StatusPending {
+			items = append(items, state.ToJobItem())
+		}
+	}
+	return items, nil
+}
+
 func (s *KVStore) ListCancelDirectives(_ context.Context, spaceID, nodeID string, limit int) ([]*pb.ControlDirective, error) {
 	if s == nil || s.kv == nil {
 		return nil, ErrInvalid

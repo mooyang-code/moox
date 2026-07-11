@@ -90,6 +90,32 @@ func TestKVStoreRetryableFailureReturnsPending(t *testing.T) {
 	}
 }
 
+func TestKVStorePendingItemsRebuildsPublishableJobItems(t *testing.T) {
+	ctx := context.Background()
+	store := newTestKVStore(t, 48*time.Hour)
+	pending := testJobItem(t, "stock_cn", "pending-item")
+	terminal := testJobItem(t, "stock_cn", "terminal-item")
+	if _, err := store.CreatePending(ctx, pending, QueueMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreatePending(ctx, terminal, QueueMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := store.TryMarkRunning(ctx, RunningRequest{SpaceID: "stock_cn", JobItemID: "terminal-item", NodeID: "node", AckSubject: "ack"}); err != nil || !ok {
+		t.Fatalf("TryMarkRunning ok=%v err=%v", ok, err)
+	}
+	if _, err := store.MarkReported(ctx, ReportEvent{SpaceID: "stock_cn", JobItemID: "terminal-item", NodeID: "node", AttemptNo: 1, Status: StatusSuccess, Time: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.PendingItems(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].GetJobItemId() != pending.GetJobItemId() || items[0].GetParams().GetFields()["symbol"].GetStringValue() != "BTC/USDT" {
+		t.Fatalf("pending items = %+v", items)
+	}
+}
+
 func TestKVStoreCancelDirectiveForRunningNode(t *testing.T) {
 	ctx := context.Background()
 	store := newTestKVStore(t, 48*time.Hour)

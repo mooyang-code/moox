@@ -83,6 +83,30 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			FetchMaxWait:    time.Duration(cfg.JetStream.FetchMaxWaitMs) * time.Millisecond,
 			DefaultMaxBatch: cfg.JobItem.MaxLimit,
 		})
+		legacyRemoved, err := execQueue.MigrateLegacyConsumer(ctx)
+		if err != nil {
+			_ = rt.Close()
+			return nil, err
+		}
+		if legacyRemoved {
+			pending, err := stateStore.PendingItems(ctx)
+			if err != nil {
+				_ = rt.Close()
+				return nil, err
+			}
+			for _, item := range pending {
+				published, err := execQueue.Publish(ctx, item)
+				if err != nil {
+					_ = rt.Close()
+					return nil, err
+				}
+				if err := stateStore.MarkPublished(ctx, item.GetSpaceId(), item.GetJobItemId(), jobstate.QueueMeta{Subject: published.Subject, Stream: published.Stream, StreamSeq: published.Sequence}); err != nil {
+					_ = rt.Close()
+					return nil, err
+				}
+			}
+			log.InfoContextf(ctx, "migrated legacy wildcard consumer and republished %d pending JobItems", len(pending))
+		}
 		catalog := repository.NewCatalogRepository(dbm.DB())
 		heartbeatSink := projection.NewHeartbeatBuffer(catalog, projection.HeartbeatBufferOptions{
 			MaxKeys:       2048,
