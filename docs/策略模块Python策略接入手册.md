@@ -30,7 +30,7 @@ def run(context, data, params, state):
 ```text
 StrategyInput
   -> strategy.py:run(...)
-  -> decision + TargetWeights + next_state
+  -> action + TargetWeights + next_state
 ```
 
 Go 框架完成其余工作：
@@ -253,7 +253,7 @@ Python 输出的 `instrument_id`、`symbol` 和 `market_type` 必须沿用输入
 
 ```python
 {
-    "decision": "rebalance",
+    "action": "rebalance",
     "targets": targets_df,
     "next_state": next_state,
     "debug_info": {
@@ -263,9 +263,9 @@ Python 输出的 `instrument_id`、`symbol` 和 `market_type` 必须沿用输入
 }
 ```
 
-必填字段是 `decision`、`targets` 和 `next_state`。`debug_info` 可省略。
+必填字段是 `action`、`targets` 和 `next_state`。`debug_info` 可省略。
 
-### `decision`
+### `action`
 
 V1 支持两种决策：
 
@@ -276,9 +276,9 @@ V1 支持两种决策：
 
 这两个值解决“空结果”歧义：
 
-- `decision="hold"` 且空 `targets`：保持原目标，不产生新的调仓决策。
-- `decision="rebalance"` 且空 `targets`：完整目标为空，全部平仓。
-- `decision="rebalance"` 且有 `targets`：未出现的旧标的目标权重变为 `0`。
+- `action="hold"` 且空 `targets`：保持原目标，不产生新的调仓操作。
+- `action="rebalance"` 且空 `targets`：完整目标为空，全部平仓。
+- `action="rebalance"` 且有 `targets`：未出现的旧标的目标权重变为 `0`。
 
 `hold` 时 `targets` 必须是具有标准列的空 DataFrame。策略不得返回 `None` 表示无操作。
 
@@ -338,7 +338,7 @@ next_state = {
 
 状态提交规则：
 
-1. Python 成功返回后，Go 先校验 `decision`、`targets` 和 `next_state`。
+1. Python 成功返回后，Go 先校验 `action`、`targets` 和 `next_state`。
 2. `rebalance` 在一个本地事务中保存运行结果、新的完整目标、`next_state` 和执行 Outbox。
 3. `hold` 只保存运行结果和 `next_state`，继续引用上一个目标，不创建新的执行 Outbox。
 4. 执行失败不会回滚策略状态；Go 使用已保存目标继续恢复执行，不会再次调用 Python 推进同一 Bar。
@@ -394,7 +394,7 @@ def run(context, data, params, state):
 
     if len(latest) < top_n:
         return {
-            "decision": "hold",
+            "action": "hold",
             "targets": empty_targets(),
             "next_state": state,
             "debug_info": {
@@ -416,7 +416,7 @@ def run(context, data, params, state):
 
     targets = selected[TARGET_COLUMNS].reset_index(drop=True)
     return {
-        "decision": "rebalance",
+        "action": "rebalance",
         "targets": targets,
         "next_state": {},
         "debug_info": {
@@ -442,7 +442,7 @@ def run(context, data, params, state):
 
     targets = build_target_weights(held)
     return {
-        "decision": "rebalance",
+        "action": "rebalance",
         "targets": targets,
         "next_state": {
             "held": held,
@@ -530,7 +530,7 @@ go run ./cmd/cli run-once \
   --view binance_spot_factor_view \
   --freq 1h \
   --trigger-bar-time 2026-07-11T08:00:00Z \
-  --decision-time 2026-07-11T09:00:02Z \
+  --run-time 2026-07-11T09:00:02Z \
   --params '{"top_n":5}'
 
 # 将通过校验的策略包登记到本地 Strategy 仓库
