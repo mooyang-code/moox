@@ -23,16 +23,36 @@ var defaultSchedule = struct {
 	sync.RWMutex
 	service scheduleService
 }{}
+var defaultCoverage = struct {
+	sync.RWMutex
+	service interface {
+		ReconcileMarketCoverage(context.Context, int) (int, error)
+	}
+}{}
 
 // SetDefaultService registers the CollectMgr service used by the timer handler.
 func SetDefaultService(service *Service) {
 	setDefaultScheduleService(service)
+	defaultCoverage.Lock()
+	defaultCoverage.service = service
+	defaultCoverage.Unlock()
 }
 
 func setDefaultScheduleService(service scheduleService) {
 	defaultSchedule.Lock()
 	defer defaultSchedule.Unlock()
 	defaultSchedule.service = service
+}
+
+func HandleCoverageSchedule(ctx context.Context, _ string) error {
+	defaultCoverage.RLock()
+	service := defaultCoverage.service
+	defaultCoverage.RUnlock()
+	if service == nil {
+		return nil
+	}
+	_, err := service.ReconcileMarketCoverage(ctx, 100)
+	return err
 }
 
 func getDefaultScheduleService() scheduleService {

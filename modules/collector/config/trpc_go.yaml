@@ -33,6 +33,11 @@ server:
       network: "*/5 * * * * *?params="
       protocol: timer
       timeout: 10000
+    - name: trpc.moox.collector.coverage.timer
+      port: 11414
+      network: "0 */5 * * * *?params="
+      protocol: timer
+      timeout: 30000
 
 plugins:
   prometheus:

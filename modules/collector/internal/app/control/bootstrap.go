@@ -69,11 +69,21 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	collectsvc.SetDefaultService(svc)
 	registerCollectorSchedule(s)
+	registerCoverageSchedule(s)
 	registerOutboxPublisher(s)
 	registerMetricsReporter(s)
 
 	log.InfoContextf(ctx, "moox-collector 初始化完成")
 	return s, nil
+}
+
+func registerCoverageSchedule(s *server.Server) {
+	service := s.Service("trpc.moox.collector.coverage.timer")
+	if service == nil {
+		log.Warn("collector coverage timer service is not configured, skip register")
+		return
+	}
+	timer.RegisterHandlerService(service, collectsvc.HandleCoverageSchedule)
 }
 
 func registerOutboxPublisher(s *server.Server) {

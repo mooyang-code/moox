@@ -14,11 +14,14 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/repository"
+	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/marketmanifest"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -36,17 +39,19 @@ type Dependencies struct {
 // Service implements the independent CollectMgr RPC service.
 type Service struct {
 	pb.UnimplementedCollectMgr
-	ruleRepo      *repository.TaskRuleRepository
-	instanceRepo  *repository.TaskInstanceRepository
-	builder       *planner.TaskBuilder
-	datasetSrc    *storagesource.DatasetSource
-	cloudJobs     *taskpublisher.Client
-	marketControl *repository.MarketControlRepository
-	attempts      *repository.MarketAttemptRepository
-	mutationGuard interface{ RequireLeader(context.Context) error }
-	db            *gorm.DB
-	manifests     map[string]marketmanifest.Manifest
-	now           func() time.Time
+	ruleRepo            *repository.TaskRuleRepository
+	instanceRepo        *repository.TaskInstanceRepository
+	builder             *planner.TaskBuilder
+	datasetSrc          *storagesource.DatasetSource
+	cloudJobs           *taskpublisher.Client
+	marketControl       *repository.MarketControlRepository
+	attempts            *repository.MarketAttemptRepository
+	mutationGuard       interface{ RequireLeader(context.Context) error }
+	db                  *gorm.DB
+	manifests           map[string]marketmanifest.Manifest
+	now                 func() time.Time
+	storageAccessTarget string
+	storageAccess       storageio.AccessClient
 }
 
 // New creates a collector management service.
@@ -56,16 +61,18 @@ func New(db *gorm.DB, deps Dependencies) *Service {
 		manifestMap[manifest.MarketID] = manifest
 	}
 	return &Service{
-		db:            db,
-		manifests:     manifestMap,
-		now:           time.Now,
-		ruleRepo:      repository.NewTaskRuleRepository(db),
-		instanceRepo:  repository.NewTaskInstanceRepository(db),
-		marketControl: repository.NewMarketControlRepository(db),
-		attempts:      repository.NewMarketAttemptRepository(db),
-		mutationGuard: deps.MutationGuard,
-		builder:       planner.NewTaskBuilder(),
-		datasetSrc:    storagesource.NewDatasetSource(deps.StorageMetadataTarget),
+		db:                  db,
+		manifests:           manifestMap,
+		now:                 time.Now,
+		storageAccessTarget: deps.StorageAccessTarget,
+		storageAccess:       storagepb.NewAccessClientProxy(client.WithTarget(deps.StorageAccessTarget)),
+		ruleRepo:            repository.NewTaskRuleRepository(db),
+		instanceRepo:        repository.NewTaskInstanceRepository(db),
+		marketControl:       repository.NewMarketControlRepository(db),
+		attempts:            repository.NewMarketAttemptRepository(db),
+		mutationGuard:       deps.MutationGuard,
+		builder:             planner.NewTaskBuilder(),
+		datasetSrc:          storagesource.NewDatasetSource(deps.StorageMetadataTarget),
 		cloudJobs: taskpublisher.New(taskpublisher.Config{
 			ServiceGatewayTarget:  deps.ServiceGatewayTarget,
 			GatewayURL:            deps.AdminGatewayURL,
