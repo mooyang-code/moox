@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/mux"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"trpc.group/trpc-go/trpc-go"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -124,6 +125,9 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 	// 这里取出透传给下游 trade 等需要按用户隔离的服务。
 	if uid, ok := ctx.Value(authmodel.CtxUserID).(string); ok && uid != "" {
 		headers["user_id"] = uid
+	}
+	if role := string(trpc.GetMetaData(ctx, authmodel.CtxUserRole)); role != "" {
+		headers["user_role"] = role
 	}
 
 	// 裸 HTTP 处理器分派（用于 multipart/流式等不适合 PB RPC 的场景）。

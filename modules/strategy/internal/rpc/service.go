@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 	"github.com/mooyang-code/moox/modules/strategy/internal/action"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
@@ -101,9 +102,11 @@ func (s *Service) RunOnce(ctx context.Context, req *strategypb.RunOnceReq) (*str
 	}
 	if req.GetCommit() {
 		if err := (&action.Service{Repo: s.Repo, Engine: s.Engine}).Commit(ctx, task, out, inputHash); err != nil {
+			_ = s.Repo.UpsertHealth(ctx, domain.BindingHealth{BindingID: binding.BindingID, Status: "failed", Mode: "observe", LastRunID: runID, LastErrorType: "commit", LastErrorMessage: err.Error(), LastDataRevision: task.DataRevision, ObservedAt: time.Now().UTC()})
 			return &strategypb.RunOnceRsp{RetInfo: invalid(err)}, nil
 		}
 	}
+	_ = s.Repo.UpsertHealth(ctx, domain.BindingHealth{BindingID: binding.BindingID, Status: "running", Mode: "observe", LastRunID: runID, LastSuccessAt: time.Now().UTC(), LastDataRevision: task.DataRevision, WorkerStatus: "ready", ObservedAt: time.Now().UTC()})
 	raw, _ := json.Marshal(out)
 	return &strategypb.RunOnceRsp{RetInfo: success(), Run: &strategypb.StrategyRun{RunId: runID, BindingId: binding.BindingID, TriggerBarTime: req.GetTriggerBarTime(), Action: out.Action, Status: map[bool]string{true: "accepted", false: "observed"}[req.GetCommit()], OutputJson: string(raw)}}, nil
 }

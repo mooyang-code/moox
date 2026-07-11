@@ -74,6 +74,7 @@ func buildForwardHeaders(headers map[string]string) *thttp.ClientReqHeader {
 	addIfPresent(reqHead, headers, "access_token", "X-Access-Token")
 	addIfPresent(reqHead, headers, "space_id", spacecontext.SpaceIDHeader)
 	addIfPresent(reqHead, headers, "user_id", "X-User-Id")
+	addIfPresent(reqHead, headers, "user_role", "X-User-Role")
 	addIfPresent(reqHead, headers, "service_auth", "X-Moox-Service-Auth")
 	return reqHead
 }

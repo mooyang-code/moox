@@ -69,12 +69,16 @@ export const systemMenu = [
   menu("024002", "0240", "/factor/bindings", "factor-bindings", "factor-bindings", "factor/bindings/index", 2),
   menu("024004", "0240", "/factor/results", "factor-results", "factor-results", "factor/results/index", 3),
 
-  directory("05", "0", "/trading/accounts", "trading", "trading", 5, { svgIcon: "balance-inquiry", icon: "" }),
+  directory("0250", "0", "/strategy/overview", "strategy", "strategy", 5, { svgIcon: "balance-inquiry", icon: "" }),
+  menu("025001", "0250", "/strategy/overview", "strategy-overview", "strategy-overview", "strategy/overview/index", 1),
+  menu("025002", "0250", "/strategy/running", "strategy-running", "strategy-running", "strategy/running/index", 2),
+
+  directory("05", "0", "/trading/accounts", "trading", "trading", 6, { svgIcon: "balance-inquiry", icon: "" }),
   menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-overview/account-overview", 1),
   menu("0502", "05", "/trading/positions", "trading-positions", "trading-positions", "trading/position-detail/position-detail", 2),
   menu("0503", "05", "/trading/orders", "trading-orders", "trading-orders", "trading/trade-record/trade-record", 3),
 
-  directory("06", "0", "/ops/service-monitor", "ops", "ops", 6, { svgIcon: "defend", icon: "" }),
+  directory("06", "0", "/ops/service-monitor", "ops", "ops", 7, { svgIcon: "defend", icon: "" }),
   menu("0600", "06", "/ops/service-monitor", "ops-service-monitor", "ops-service-monitor", "ops/service-monitor/index", 1),
   menu("0607", "06", "/ops/metric-monitor", "ops-metric-monitor", "ops-metric-monitor", "ops/metric-monitor/index", 2),
   menu("0601", "06", "/ops/resource-monitor", "ops-resource-monitor", "ops-resource-monitor", "container/resource-monitor/resource-monitor", 3),
@@ -86,7 +90,7 @@ export const systemMenu = [
   menu("060602", "0606", "/ops/storage/routes", "ops-storage-routes", "ops-storage-routes", "ops/storage/routes", 2),
   menu("060603", "0606", "/ops/storage/archive", "ops-storage-archive", "ops-storage-archive", "ops/storage/archive", 3),
 
-  directory("07", "0", "/settings/spaces", "settings", "settings", 7, { svgIcon: "set", icon: "" }),
+  directory("07", "0", "/settings/spaces", "settings", "settings", 8, { svgIcon: "set", icon: "" }),
   menu("0701", "07", "/settings/spaces", "settings-spaces", "settings-spaces", "settings/spaces/index", 1),
   menu("0702", "07", "/settings/secrets", "settings-secrets", "settings-secrets", "settings/secrets/index", 2),
   menu("0703", "07", "/settings/service-deployments", "settings-service-deployments", "settings-service-deployments", "settings/service-deployments/index", 3)

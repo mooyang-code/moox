@@ -89,6 +89,24 @@ export const staticRoutes = [
         meta: { title: "factor-results" }
       },
       {
+        path: "/strategy/overview",
+        name: "strategy-overview",
+        component: () => import("@/views/strategy/overview/index.vue"),
+        meta: { title: "strategy-overview" }
+      },
+      {
+        path: "/strategy/running",
+        name: "strategy-running",
+        component: () => import("@/views/strategy/running/index.vue"),
+        meta: { title: "strategy-running" }
+      },
+      {
+        path: "/strategy/detail/:bindingId",
+        name: "strategy-detail",
+        component: () => import("@/views/strategy/detail/index.vue"),
+        meta: { title: "strategy-detail", hide: true }
+      },
+      {
         path: "/data/views",
         redirect: { path: "/collector/views", query: { tab: "definitions" } },
         meta: { title: "collector-views", hide: true }

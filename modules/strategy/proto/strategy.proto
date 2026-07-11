@@ -25,4 +25,46 @@ message RunOnceReq {
 message RunOnceRsp { common.RetInfo ret_info = 1; StrategyRun run = 2; }
 message GetEngineStatusReq {}
 message GetEngineStatusRsp { common.RetInfo ret_info = 1; int32 workers = 2; int32 ready_workers = 3; }
-service StrategyMgr { rpc CreateStrategy(CreateStrategyReq) returns (CreateStrategyRsp); rpc RunOnce(RunOnceReq) returns (RunOnceRsp); rpc GetEngineStatus(GetEngineStatusReq) returns (GetEngineStatusRsp); }
+
+message PageReq { int32 page = 1; int32 page_size = 2; }
+message TimeRange { string from = 1; string to = 2; }
+message ListRunningStrategiesReq { PageReq page = 1; string space_id = 2; string status = 3; string mode = 4; string strategy_id = 5; }
+message StrategyHealth { string status = 1; string mode = 2; string last_run_id = 3; string last_success_at = 4; string last_error_type = 5; string last_error_message = 6; string last_data_revision = 7; string data_cutoff = 8; string worker_status = 9; int64 outbox_lag_seconds = 10; string observed_at = 11; bool stale = 12; }
+message RunningStrategySummary { string strategy_id = 1; string version = 2; string binding_id = 3; string space_id = 4; string view_id = 5; string freq = 6; string mode = 7; string status = 8; string source_hash = 9; string last_run_id = 10; string last_run_at = 11; string last_data_revision = 12; int64 last_duration_ms = 13; StrategyHealth health = 14; }
+message ListRunningStrategiesRsp { common.RetInfo ret_info = 1; repeated RunningStrategySummary items = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
+message GetStrategyOverviewReq { string binding_id = 1; }
+message GetStrategyOverviewRsp { common.RetInfo ret_info = 1; RunningStrategySummary summary = 2; StrategyBinding binding = 3; StrategyDef definition = 4; StrategyState state = 5; StrategyHealth health = 6; }
+message ListStrategyRunsReq { PageReq page = 1; string binding_id = 2; TimeRange range = 3; }
+message ListStrategyRunsRsp { common.RetInfo ret_info = 1; repeated StrategyRun items = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
+message GetStrategyRunReq { string run_id = 1; }
+message GetStrategyRunRsp { common.RetInfo ret_info = 1; StrategyRun run = 2; string metrics_json = 3; }
+message ListStrategyTargetsReq { PageReq page = 1; string run_id = 2; string binding_id = 3; }
+message ListStrategyTargetsRsp { common.RetInfo ret_info = 1; repeated TargetWeight targets = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
+message GetStrategyStateSummaryReq { string binding_id = 1; }
+message GetStrategyStateSummaryRsp { common.RetInfo ret_info = 1; StrategyState state = 2; int64 size_bytes = 3; string snapshot_hash = 4; string data_revision = 5; string data_cutoff = 6; }
+message GetStrategyHealthReq { string binding_id = 1; }
+message GetStrategyHealthRsp { common.RetInfo ret_info = 1; StrategyHealth health = 2; }
+message PerformancePoint { string point_time = 1; string nav = 2; string cumulative_return = 3; string drawdown = 4; string gross_exposure = 5; string net_exposure = 6; string turnover = 7; string fees = 8; string data_revision = 9; }
+message PerformanceSummary { string nav = 1; string return_value = 2; string max_drawdown = 3; string turnover = 4; string fees = 5; string volatility = 6; string win_rate = 7; string as_of = 8; string status = 9; }
+message GetStrategyPerformanceReq { string binding_id = 1; string performance_source = 2; TimeRange range = 3; string interval = 4; }
+message GetStrategyPerformanceRsp { common.RetInfo ret_info = 1; string performance_source = 2; PerformanceSummary summary = 3; repeated PerformancePoint points = 4; string data_revision = 5; string as_of = 6; }
+message BindingOperationReq { string binding_id = 1; string reason = 2; string operation_id = 3; }
+message SetExecutionModeReq { string binding_id = 1; string mode = 2; string reason = 3; string operation_id = 4; }
+message BindingOperationRsp { common.RetInfo ret_info = 1; string operation_id = 2; string status = 3; }
+
+service StrategyMgr {
+  rpc CreateStrategy(CreateStrategyReq) returns (CreateStrategyRsp);
+  rpc RunOnce(RunOnceReq) returns (RunOnceRsp);
+  rpc GetEngineStatus(GetEngineStatusReq) returns (GetEngineStatusRsp);
+  rpc ListRunningStrategies(ListRunningStrategiesReq) returns (ListRunningStrategiesRsp);
+  rpc GetStrategyOverview(GetStrategyOverviewReq) returns (GetStrategyOverviewRsp);
+  rpc ListStrategyRuns(ListStrategyRunsReq) returns (ListStrategyRunsRsp);
+  rpc GetStrategyRun(GetStrategyRunReq) returns (GetStrategyRunRsp);
+  rpc ListStrategyTargets(ListStrategyTargetsReq) returns (ListStrategyTargetsRsp);
+  rpc GetStrategyStateSummary(GetStrategyStateSummaryReq) returns (GetStrategyStateSummaryRsp);
+  rpc GetStrategyHealth(GetStrategyHealthReq) returns (GetStrategyHealthRsp);
+  rpc GetStrategyPerformance(GetStrategyPerformanceReq) returns (GetStrategyPerformanceRsp);
+  rpc PauseBinding(BindingOperationReq) returns (BindingOperationRsp);
+  rpc ResumeBinding(BindingOperationReq) returns (BindingOperationRsp);
+  rpc SetExecutionMode(SetExecutionModeReq) returns (BindingOperationRsp);
+}

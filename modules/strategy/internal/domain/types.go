@@ -47,6 +47,23 @@ type State struct {
 
 func (State) TableName() string { return "t_strategy_states" }
 
+type StrategyRun struct {
+	RunID                 string    `gorm:"column:c_run_id;primaryKey" json:"run_id"`
+	BindingID             string    `gorm:"column:c_binding_id" json:"binding_id"`
+	StrategyVersion       string    `gorm:"column:c_strategy_version" json:"strategy_version"`
+	Namespace             string    `gorm:"column:c_namespace" json:"namespace"`
+	TriggerBarTime        string    `gorm:"column:c_trigger_bar_time" json:"trigger_bar_time"`
+	DataRevision          string    `gorm:"column:c_data_revision" json:"data_revision"`
+	InputHash             string    `gorm:"column:c_input_hash" json:"input_hash"`
+	PreviousStateRevision int64     `gorm:"column:c_previous_state_revision" json:"previous_state_revision"`
+	Status                string    `gorm:"column:c_status" json:"status"`
+	Action                string    `gorm:"column:c_action" json:"action"`
+	OutputJSON            string    `gorm:"column:c_output_json" json:"output_json"`
+	CreateTime            time.Time `gorm:"column:c_ctime" json:"create_time"`
+}
+
+func (StrategyRun) TableName() string { return "t_strategy_runs" }
+
 type TargetWeight struct {
 	InstrumentID string `json:"instrument_id"`
 	Symbol       string `json:"symbol,omitempty"`
