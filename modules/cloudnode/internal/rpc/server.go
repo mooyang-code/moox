@@ -31,6 +31,7 @@ type scfProvisioner interface {
 	GetFunction(context.Context, tencentscf.FunctionRef) (*tencentscf.FunctionInfo, error)
 	CreateFunction(context.Context, tencentscf.CreateFunctionRequest) (*tencentscf.CreateFunctionResponse, error)
 	UpdateFunctionCode(context.Context, tencentscf.UpdateFunctionCodeRequest) (*tencentscf.UpdateFunctionCodeResponse, error)
+	UpdateFunctionConfiguration(context.Context, tencentscf.UpdateFunctionConfigurationRequest) (*tencentscf.UpdateFunctionConfigurationResponse, error)
 }
 
 type Option func(*Service)

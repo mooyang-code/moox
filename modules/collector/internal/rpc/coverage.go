@@ -28,9 +28,16 @@ func (s *Service) ReconcileMarketCoverage(ctx context.Context, limit int) (int, 
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	instances, _, err := s.instanceRepo.List(ctx, repository.TaskInstanceFilter{DataType: "kline", IncludeDeleted: false, Page: 1, PageSize: limit})
-	if err != nil {
-		return 0, err
+	instances := []domain.TaskInstance{}
+	for page := 1; ; page++ {
+		values, total, err := s.instanceRepo.List(ctx, repository.TaskInstanceFilter{DataType: "kline", IncludeDeleted: false, Page: page, PageSize: limit})
+		if err != nil {
+			return 0, err
+		}
+		instances = append(instances, values...)
+		if len(values) == 0 || len(instances) >= int(total) {
+			break
+		}
 	}
 	var repairs []domain.TaskInstance
 	for _, instance := range instances {
@@ -48,7 +55,13 @@ func (s *Service) ReconcileMarketCoverage(ctx context.Context, limit int) (int, 
 		return 0, err
 	}
 	_ = ids
-	_, _ = s.cloudJobs.WakeCollectorNodes(ctx, taskpublisher.WakeOptions{SpaceID: repairs[0].SpaceID, JobTypes: []string{"collect.kline"}})
+	spaces := map[string]bool{}
+	for _, repair := range repairs {
+		spaces[repair.SpaceID] = true
+	}
+	for spaceID := range spaces {
+		_, _ = s.cloudJobs.WakeCollectorNodes(ctx, taskpublisher.WakeOptions{SpaceID: spaceID, JobTypes: []string{"collect.kline"}})
+	}
 	return len(repairs), nil
 }
 

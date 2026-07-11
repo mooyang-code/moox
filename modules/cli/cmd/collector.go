@@ -275,6 +275,8 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 		PackageID:      packageID,
 		Metadata: map[string]any{
 			"function_name_prefix": packageName,
+			"function_name":        packageName,
+			"node_id":              packageName,
 			"biz_type":             bizType,
 			"supported_workloads":  []string{"collect.kline", "collect.symbol"},
 		},

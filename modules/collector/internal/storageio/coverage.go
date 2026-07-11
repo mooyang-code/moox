@@ -21,20 +21,25 @@ func (c *Client) PresentBuckets(ctx context.Context, spaceID, datasetID, subject
 	if binding.SpaceID != spaceID || binding.Feed != "kline" {
 		return nil, fmt.Errorf("dataset %q is not the requested unified kline dataset", datasetID)
 	}
-	rsp, err := c.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{AuthInfo: c.auth, Keys: []*storagepb.TimeSeriesKey{{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subjectID, Freq: string(frequency)}}, TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)}, ColumnNames: []string{"close"}, Page: &storagepb.Page{Page: 1, Size: 1000}})
-	if err != nil {
-		return nil, err
-	}
-	if err := ensureOK("read unified coverage", rsp.GetRetInfo()); err != nil {
-		return nil, err
-	}
-	result := make([]time.Time, 0, len(rsp.GetRows()))
-	for _, row := range rsp.GetRows() {
-		value, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+	result := []time.Time{}
+	for page := uint32(1); ; page++ {
+		rsp, err := c.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{AuthInfo: c.auth, Keys: []*storagepb.TimeSeriesKey{{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subjectID, Freq: string(frequency)}}, TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)}, ColumnNames: []string{"close"}, Page: &storagepb.Page{Page: page, Size: 1000}})
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, value.UTC())
+		if err := ensureOK("read unified coverage", rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		for _, row := range rsp.GetRows() {
+			value, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, value.UTC())
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+			break
+		}
 	}
 	return result, nil
 }

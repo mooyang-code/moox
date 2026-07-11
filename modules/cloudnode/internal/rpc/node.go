@@ -229,6 +229,15 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *repository.CloudN
 	info, err := client.GetFunction(ctx, ref)
 	if err == nil {
 		mergeSCFFunctionMetadata(node, info)
+		if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
+			FunctionRef: ref,
+			Handler:     firstString(item.GetHandler(), metadataString(metadata, "handler"), "main"),
+			MemorySize:  configInt64(config, "memory_size", 256),
+			Timeout:     configInt64(config, "timeout", 60),
+			Environment: copyStringMap(item.GetEnvironment()),
+		}); err != nil {
+			return fmt.Errorf("update scf function configuration %s: %w", ref.FunctionName, err)
+		}
 		return s.updateSCFFunctionCode(ctx, *node, *pkg)
 	}
 	if !isSCFNotFound(err) {

@@ -39,6 +39,9 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.Metadata["function_name_prefix"] != "moox-collector" {
 		t.Fatalf("function_name_prefix = %#v", item.Metadata["function_name_prefix"])
 	}
+	if item.Metadata["function_name"] != "moox-collector" || item.Metadata["node_id"] != "moox-collector" {
+		t.Fatalf("exact function identity = %#v", item.Metadata)
+	}
 	if item.Metadata["biz_type"] != "data_collector" {
 		t.Fatalf("biz_type = %#v", item.Metadata["biz_type"])
 	}

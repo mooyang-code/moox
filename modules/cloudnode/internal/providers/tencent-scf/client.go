@@ -75,6 +75,16 @@ type UpdateFunctionCodeResponse struct {
 	RequestID string
 }
 
+type UpdateFunctionConfigurationRequest struct {
+	FunctionRef
+	Handler     string
+	MemorySize  int64
+	Timeout     int64
+	Environment map[string]string
+}
+
+type UpdateFunctionConfigurationResponse struct{ RequestID string }
+
 // InvokeFunctionRequest describes a SCF invocation.
 type InvokeFunctionRequest struct {
 	Region       string
@@ -167,6 +177,34 @@ func (c *Client) UpdateFunctionCode(ctx context.Context, req UpdateFunctionCodeR
 		return nil, err
 	}
 	out := &UpdateFunctionCodeResponse{}
+	if response.Response != nil {
+		out.RequestID = deref(response.Response.RequestId)
+	}
+	return out, nil
+}
+
+func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunctionConfigurationRequest) (*UpdateFunctionConfigurationResponse, error) {
+	scfClient, err := c.newClient(req.Region)
+	if err != nil {
+		return nil, err
+	}
+	request := scf.NewUpdateFunctionConfigurationRequest()
+	request.FunctionName = common.StringPtr(req.FunctionName)
+	request.Namespace = common.StringPtr(req.Namespace)
+	if req.MemorySize > 0 {
+		request.MemorySize = common.Int64Ptr(req.MemorySize)
+	}
+	if req.Timeout > 0 {
+		request.Timeout = common.Int64Ptr(req.Timeout)
+	}
+	if len(req.Environment) > 0 {
+		request.Environment = &scf.Environment{Variables: environmentVariables(req.Environment)}
+	}
+	response, err := scfClient.UpdateFunctionConfiguration(request)
+	if err != nil {
+		return nil, err
+	}
+	out := &UpdateFunctionConfigurationResponse{}
 	if response.Response != nil {
 		out.RequestID = deref(response.Response.RequestId)
 	}

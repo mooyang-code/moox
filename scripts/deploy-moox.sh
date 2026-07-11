@@ -350,7 +350,7 @@ patch_configs() {
     perl -0pi -e 's#path:\s*\./data/moox_collector_market_v2\.db#path: ../data/collector/moox_collector_market_v2.db#g' \
       "${STAGE_DIR}/collector/config/app.yaml"
     # Local collector config disables the timer for dev runs; deployments need it on.
-    perl -0pi -e 's#scheduler=collectorSchedule&disable=1&params=[^"]*#scheduler=collectorSchedule&disable=0&params=space_id=crypto#g; s#scheduler=collectorSchedule&disable=0&params=(?=")#scheduler=collectorSchedule&disable=0&params=space_id=crypto#g' \
+    perl -0pi -e 's#scheduler=collectorSchedule&disable=1&params=[^"]*#scheduler=collectorSchedule&disable=0&params=#g; s#scheduler=collectorSchedule&disable=0&params=[^"]*#scheduler=collectorSchedule&disable=0&params=#g' \
       "${STAGE_DIR}/collector/config/trpc_go.yaml"
   fi
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then

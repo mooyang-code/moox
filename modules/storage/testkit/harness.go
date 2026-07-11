@@ -110,7 +110,7 @@ func (h *Harness) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		if page == nil {
 			page = &pb.Page{Page: 1, Size: 1000}
 		}
-		rows, _, err := h.store.ReadRows(ctx, []*pb.PrimaryStoreKey{primaryKey}, versionRange, req.GetOrder(), req.GetColumnNames(), page)
+		rows, pageResult, err := h.store.ReadRows(ctx, []*pb.PrimaryStoreKey{primaryKey}, versionRange, req.GetOrder(), req.GetColumnNames(), page)
 		if err != nil {
 			return nil, err
 		}
@@ -119,6 +119,7 @@ func (h *Harness) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 			copiedKey.DataTime = row.GetKey().GetVersion()
 			out = append(out, &pb.TimeSeriesRow{Key: copiedKey, Columns: cloneColumns(row.GetColumns()), Attributes: cloneMap(row.GetAttributes())})
 		}
+		_ = pageResult
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].GetKey().GetDataTime() < out[j].GetKey().GetDataTime() })
 	if req.GetOrder() == pb.SortOrder_SORT_ORDER_DESC {
@@ -126,7 +127,11 @@ func (h *Harness) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 			out[left], out[right] = out[right], out[left]
 		}
 	}
-	return &pb.ReadTimeSeriesRowsRsp{RetInfo: success(), Rows: out, PageResult: &pb.PageResult{Page: 1, Size: uint32(len(out))}}, nil
+	page := req.GetPage()
+	if page == nil {
+		page = &pb.Page{Page: 1, Size: 1000}
+	}
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: success(), Rows: out, PageResult: &pb.PageResult{Page: page.GetPage(), Size: page.GetSize(), HasMore: len(out) == int(page.GetSize())}}, nil
 }
 
 func (h *Harness) writeRecordRows(ctx context.Context, req *pb.WriteRecordRowsReq) (*pb.WriteRecordRowsRsp, error) {

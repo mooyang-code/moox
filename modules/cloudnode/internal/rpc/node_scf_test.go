@@ -115,6 +115,15 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 	if len(listRsp.GetItems()) != 1 || listRsp.GetItems()[0].GetClsTopicId() != "topic-created" {
 		t.Fatalf("list cls_topic_id = %#v", listRsp.GetItems())
 	}
+	// Publishing the same exact node reconciles runtime configuration as well as code.
+	_, err = svc.BatchCreateNodes(spacecontext.WithSpaceID(context.Background(), "crypto"), &pb.BatchCreateNodesReq{Nodes: []*pb.NodeCreateItem{{CloudAccountId: "account-a", NodeType: "scf-event", Runtime: "CustomRuntime", Handler: "main", Config: map[string]string{"timeout": "45", "memory_size": "512"}, Environment: map[string]string{"MOOX_SPACE_ID": "crypto"}, Region: "ap-guangzhou", Namespace: "collector", PackageId: "moox-collector_dev", Metadata: metadata}}})
+	if err != nil || len(fake.configured) != 1 {
+		t.Fatalf("reconcile config calls=%d err=%v", len(fake.configured), err)
+	}
+	configured := fake.configured[0]
+	if configured.FunctionName != "moox-collector-ap-guangzhou-0" || configured.Timeout != 45 || configured.MemorySize != 512 || configured.Environment["MOOX_SPACE_ID"] != "crypto" {
+		t.Fatalf("configured = %#v", configured)
+	}
 }
 
 func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) {
@@ -176,6 +185,7 @@ type fakeSCFClient struct {
 	getResults []fakeSCFGetResult
 	created    []tencentscf.CreateFunctionRequest
 	updated    []tencentscf.UpdateFunctionCodeRequest
+	configured []tencentscf.UpdateFunctionConfigurationRequest
 }
 
 type fakeSCFGetResult struct {
@@ -206,6 +216,11 @@ func (f *fakeSCFClient) CreateFunction(_ context.Context, req tencentscf.CreateF
 func (f *fakeSCFClient) UpdateFunctionCode(_ context.Context, req tencentscf.UpdateFunctionCodeRequest) (*tencentscf.UpdateFunctionCodeResponse, error) {
 	f.updated = append(f.updated, req)
 	return &tencentscf.UpdateFunctionCodeResponse{RequestID: "update-req"}, nil
+}
+
+func (f *fakeSCFClient) UpdateFunctionConfiguration(_ context.Context, req tencentscf.UpdateFunctionConfigurationRequest) (*tencentscf.UpdateFunctionConfigurationResponse, error) {
+	f.configured = append(f.configured, req)
+	return &tencentscf.UpdateFunctionConfigurationResponse{RequestID: "configure-req"}, nil
 }
 
 func newNodeSCFTestDB(t *testing.T) *gorm.DB {

@@ -81,15 +81,14 @@ func TestDeployEnablesCollectorScheduler(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(got)
-	if !strings.Contains(text, "scheduler=collectorSchedule&disable=0&params=space_id=crypto") {
-		t.Fatalf("collector scheduler was not enabled with the production space in deployed config:\n%s", text)
+	if !strings.Contains(text, "scheduler=collectorSchedule&disable=0&params=\"") {
+		t.Fatalf("collector scheduler was not enabled for all built-in markets in deployed config:\n%s", text)
 	}
 	if strings.Contains(text, "scheduler=collectorSchedule&disable=1&params=") {
 		t.Fatalf("collector scheduler still disabled in deployed config:\n%s", text)
 	}
-	if strings.Contains(text, "scheduler=collectorSchedule&disable=0&params=\"") ||
-		strings.Contains(text, "scheduler=collectorSchedule&disable=0&params=\n") {
-		t.Fatalf("collector scheduler params are empty in deployed config:\n%s", text)
+	if strings.Contains(text, "params=space_id=crypto") {
+		t.Fatalf("collector scheduler remains pinned to the legacy crypto space:\n%s", text)
 	}
 }
 

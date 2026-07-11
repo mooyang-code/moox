@@ -10,12 +10,33 @@ import (
 type fakeScheduleService struct {
 	calls   int
 	spaceID string
+	spaces  []string
 }
 
 func (f *fakeScheduleService) RecalculateAllTaskInstances(ctx context.Context, req *pb.RecalculateAllTaskInstancesReq) (*pb.RecalculateAllTaskInstancesRsp, error) {
 	f.calls++
 	f.spaceID = req.GetSpaceId()
+	f.spaces = append(f.spaces, req.GetSpaceId())
 	return &pb.RecalculateAllTaskInstancesRsp{RetInfo: retOK()}, nil
+}
+
+func TestHandleScheduleWithoutSpaceScansBuiltInMarkets(t *testing.T) {
+	fake := &fakeScheduleService{}
+	setDefaultScheduleService(fake)
+	defer setDefaultScheduleService(nil)
+
+	if err := HandleSchedule(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"stock_cn", "stock_us", "crypto_binance", "crypto_okx"}
+	if len(fake.spaces) != len(want) {
+		t.Fatalf("spaces = %#v", fake.spaces)
+	}
+	for index := range want {
+		if fake.spaces[index] != want[index] {
+			t.Fatalf("spaces = %#v, want %#v", fake.spaces, want)
+		}
+	}
 }
 
 func TestParseScheduleParamsSupportsSpaceID(t *testing.T) {

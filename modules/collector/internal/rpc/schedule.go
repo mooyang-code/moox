@@ -64,22 +64,25 @@ func getDefaultScheduleService() scheduleService {
 // HandleSchedule recalculates collector task instances for the configured space.
 func HandleSchedule(ctx context.Context, rawParams string) error {
 	params := parseScheduleParams(rawParams)
-	if params.SpaceID == "" {
-		return fmt.Errorf("space_id is required")
-	}
 	service := getDefaultScheduleService()
 	if service == nil {
 		log.WarnContextf(ctx, "[Collector] schedule skipped: CollectMgr service is not ready")
 		return nil
 	}
-	rsp, err := service.RecalculateAllTaskInstances(ctx, &pb.RecalculateAllTaskInstancesReq{SpaceId: params.SpaceID})
-	if err != nil {
-		return err
+	spaces := []string{params.SpaceID}
+	if params.SpaceID == "" {
+		spaces = []string{"stock_cn", "stock_us", "crypto_binance", "crypto_okx"}
 	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		return fmt.Errorf("recalculate collector tasks: %s", rsp.GetRetInfo().GetMsg())
+	for _, spaceID := range spaces {
+		rsp, err := service.RecalculateAllTaskInstances(ctx, &pb.RecalculateAllTaskInstancesReq{SpaceId: spaceID})
+		if err != nil {
+			return err
+		}
+		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return fmt.Errorf("recalculate collector tasks for %s: %s", spaceID, rsp.GetRetInfo().GetMsg())
+		}
+		log.InfoContextf(ctx, "[Collector] schedule recalculated task instances space_id=%s", spaceID)
 	}
-	log.InfoContextf(ctx, "[Collector] schedule recalculated task instances space_id=%s", params.SpaceID)
 	return nil
 }
 

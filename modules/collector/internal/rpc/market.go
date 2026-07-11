@@ -63,6 +63,7 @@ type marketQueryScope struct {
 type queriedKline struct {
 	row        *pb.MarketKline
 	datasetID  string
+	cursorKey  string
 	dimensions map[string]string
 }
 
@@ -103,8 +104,18 @@ func (s *Service) QueryMarketKlines(ctx context.Context, req *pb.QueryMarketKlin
 		if err != nil || cursor.QueryHash != hash {
 			return &pb.QueryMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "cursor does not match query")}, nil
 		}
+		if err := s.validateMarketCursorBoundary(ctx, manifest.SpaceID, cursor); err != nil {
+			return &pb.QueryMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "data_changed_restart_query")}, nil
+		}
 	}
-	rows, err := s.readLogicalMarketKlines(ctx, manifest.SpaceID, manifest.Feeds, instrumentTypes, subjects, req.GetFrequency(), start.UTC(), end.UTC())
+	pageSize := int(req.GetPageSize())
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+	if pageSize > 1000 {
+		pageSize = 1000
+	}
+	rows, nextOffsets, hasMore, err := s.readLogicalMarketKlinePage(ctx, manifest.SpaceID, manifest.Feeds, instrumentTypes, subjects, req.GetFrequency(), start.UTC(), end.UTC(), order, pageSize, cursor.DatasetOffsets)
 	if err != nil {
 		return &pb.QueryMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -116,18 +127,6 @@ func (s *Service) QueryMarketKlines(ctx context.Context, req *pb.QueryMarketKlin
 		return left < right
 	})
 	rows = dedupeQueriedKlines(rows)
-	if cursor.BoundaryKey != "" {
-		found := false
-		for index, row := range rows {
-			if marketRowTuple(row) == cursor.BoundaryKey {
-				found = marketRowDigest(row) == cursor.BoundaryDigest && prefixDigest(rows[:index+1]) == cursor.PrefixDigest
-				break
-			}
-		}
-		if !found {
-			return &pb.QueryMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "data_changed_restart_query")}, nil
-		}
-	}
 	queryAsOf, _ := time.Parse(time.RFC3339Nano, cursor.QueryAsOf)
 	if req.GetCursor() != "" {
 		for _, row := range rows {
@@ -137,29 +136,24 @@ func (s *Service) QueryMarketKlines(ctx context.Context, req *pb.QueryMarketKlin
 			}
 		}
 	}
-	if cursor.Offset > len(rows) {
-		return &pb.QueryMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "data_changed_restart_query")}, nil
-	}
-	pageSize := int(req.GetPageSize())
-	if pageSize <= 0 {
-		pageSize = 100
-	}
-	if pageSize > 1000 {
-		pageSize = 1000
-	}
-	finish := cursor.Offset + pageSize
+	finish := pageSize
 	if finish > len(rows) {
 		finish = len(rows)
 	}
-	pageRows := rows[cursor.Offset:finish]
+	pageRows := rows[:finish]
 	result := make([]*pb.MarketKline, 0, len(pageRows))
 	for _, row := range pageRows {
 		result = append(result, row.row)
 	}
 	next := ""
-	if finish < len(rows) && len(pageRows) > 0 {
+	if hasMore && len(pageRows) > 0 {
 		last := pageRows[len(pageRows)-1]
-		cursor.Offset, cursor.BoundaryKey, cursor.BoundaryDigest, cursor.PrefixDigest = finish, marketRowTuple(last), marketRowDigest(last), prefixDigest(rows[:finish])
+		cursor.Offset += finish
+		cursor.BoundaryKey, cursor.BoundaryDigest = marketRowTuple(last), marketRowDigest(last)
+		cursor.DatasetOffsets = nextOffsets
+		cursor.BoundaryDataset, cursor.BoundaryInstrument = last.datasetID, last.row.GetInstrumentType()
+		cursor.BoundarySubject, cursor.BoundaryFrequency, cursor.BoundaryDataTime = last.row.GetSubjectId(), last.row.GetFrequency(), last.row.GetDataTime()
+		cursor.BoundaryDimensions = last.dimensions
 		next, _ = encodeMarketCursor(cursor)
 	}
 	coverageStatus, missingRanges, err := s.readMarketCoverage(ctx, manifest, instrumentTypes, subjects, req.GetFrequency(), start.UTC())
@@ -167,6 +161,23 @@ func (s *Service) QueryMarketKlines(ctx context.Context, req *pb.QueryMarketKlin
 		return &pb.QueryMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	return &pb.QueryMarketKlinesRsp{RetInfo: retOK(), Rows: result, NextCursor: next, QueryAsOf: cursor.QueryAsOf, Freshness: marketFreshness(rows, cursor.QueryAsOf), CoverageStatus: coverageStatus, MissingRanges: missingRanges}, nil
+}
+
+func (s *Service) validateMarketCursorBoundary(ctx context.Context, spaceID string, cursor marketCursor) error {
+	if cursor.BoundaryDataset == "" {
+		return nil
+	}
+	rsp, err := s.storageAccess.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{Keys: []*storagepb.TimeSeriesKey{{SpaceId: spaceID, DatasetId: cursor.BoundaryDataset, SubjectId: cursor.BoundarySubject, Freq: cursor.BoundaryFrequency, Dimensions: cursor.BoundaryDimensions, DataTime: cursor.BoundaryDataTime}}, Page: &commonpb.Page{Page: 1, Size: 1}})
+	if err != nil || !storageRetOK(rsp.GetRetInfo()) || len(rsp.GetRows()) != 1 {
+		return fmt.Errorf("boundary not found")
+	}
+	source := rsp.GetRows()[0]
+	columns := columnMap(source.GetColumns())
+	value := queriedKline{datasetID: cursor.BoundaryDataset, dimensions: source.GetKey().GetDimensions(), row: &pb.MarketKline{MarketId: spaceID, InstrumentType: cursor.BoundaryInstrument, SubjectId: source.GetKey().GetSubjectId(), Frequency: source.GetKey().GetFreq(), DataTime: source.GetKey().GetDataTime(), Open: stringValueColumn(columns, "open_exact"), High: stringValueColumn(columns, "high_exact"), Low: stringValueColumn(columns, "low_exact"), Close: stringValueColumn(columns, "close_exact"), Volume: stringValueColumn(columns, "volume_exact"), Amount: stringValueColumn(columns, "amount_exact"), SourceProvider: stringValueColumn(columns, "source_provider"), QualityStatus: stringValueColumn(columns, "quality_status"), Revision: intValueColumn(columns, "revision"), ResolvedAt: timeValueColumn(columns, "resolved_at")}}
+	if marketRowDigest(value) != cursor.BoundaryDigest {
+		return fmt.Errorf("boundary changed")
+	}
+	return nil
 }
 
 func (s *Service) readMarketCoverage(ctx context.Context, manifest marketmanifest.Manifest, instrumentTypes, subjects []string, frequency string, start time.Time) (string, []string, error) {
@@ -239,47 +250,84 @@ func marketFreshness(rows []queriedKline, queryAsOf string) string {
 	return "stale"
 }
 
-func (s *Service) readLogicalMarketKlines(ctx context.Context, spaceID string, feeds []marketmanifest.Feed, instrumentTypes, subjects []string, frequency string, start, end time.Time) ([]queriedKline, error) {
+func (s *Service) readLogicalMarketKlinePage(ctx context.Context, spaceID string, feeds []marketmanifest.Feed, instrumentTypes, subjects []string, frequency string, start, end time.Time, order string, pageSize int, offsets map[string]int) ([]queriedKline, map[string]int, bool, error) {
 	allowedTypes := map[string]bool{}
 	for _, value := range instrumentTypes {
 		allowedTypes[value] = true
 	}
 	result := []queriedKline{}
+	storageHasMore := false
 	for _, feed := range feeds {
 		if feed.DatasetID == "" || !allowedTypes[strings.ToLower(feed.InstrumentType)] || !containsString(feed.Frequencies, frequency) {
 			continue
 		}
-		keys := make([]*storagepb.TimeSeriesKey, 0, len(subjects))
 		for _, subject := range subjects {
-			keys = append(keys, &storagepb.TimeSeriesKey{SpaceId: spaceID, DatasetId: feed.DatasetID, SubjectId: subject, Freq: frequency})
-		}
-		var sources []*storagepb.TimeSeriesRow
-		for page := uint32(1); ; page++ {
-			if page > 1000 {
-				return nil, fmt.Errorf("market query exceeds bounded storage pages")
+			cursorKey := feed.DatasetID + "\x00" + subject
+			offset := offsets[cursorKey]
+			storagePageSize := pageSize
+			page := offset/storagePageSize + 1
+			within := offset % storagePageSize
+			var sources []*storagepb.TimeSeriesRow
+			for len(sources) < pageSize+1 {
+				rsp, err := s.storageAccess.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{Keys: []*storagepb.TimeSeriesKey{{SpaceId: spaceID, DatasetId: feed.DatasetID, SubjectId: subject, Freq: frequency}}, TimeRange: &storagepb.TimeRange{StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano)}, Order: mapMarketStorageOrder(order), Page: &commonpb.Page{Page: uint32(page), Size: uint32(storagePageSize)}})
+				if err != nil {
+					return nil, nil, false, err
+				}
+				if !storageRetOK(rsp.GetRetInfo()) {
+					return nil, nil, false, fmt.Errorf("read market dataset %s: %s", feed.DatasetID, rsp.GetRetInfo().GetMsg())
+				}
+				pageRows := rsp.GetRows()
+				if within > len(pageRows) {
+					return nil, nil, false, fmt.Errorf("market dataset %s changed during pagination", feed.DatasetID)
+				}
+				pageRows = pageRows[within:]
+				sources = append(sources, pageRows...)
+				within = 0
+				if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+					break
+				}
+				storageHasMore = true
+				page++
 			}
-			rsp, err := s.storageAccess.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{Keys: keys, TimeRange: &storagepb.TimeRange{StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano)}, Page: &commonpb.Page{Page: page, Size: 1000}})
-			if err != nil {
-				return nil, err
+			if len(sources) > pageSize+1 {
+				sources = sources[:pageSize+1]
 			}
-			if !storageRetOK(rsp.GetRetInfo()) {
-				return nil, fmt.Errorf("read market dataset %s: %s", feed.DatasetID, rsp.GetRetInfo().GetMsg())
+			for _, source := range sources {
+				columns := columnMap(source.GetColumns())
+				result = append(result, queriedKline{datasetID: feed.DatasetID, cursorKey: cursorKey, dimensions: source.GetKey().GetDimensions(), row: &pb.MarketKline{
+					MarketId: spaceID, InstrumentType: feed.InstrumentType, SubjectId: source.GetKey().GetSubjectId(), Frequency: source.GetKey().GetFreq(), DataTime: source.GetKey().GetDataTime(),
+					Open: stringValueColumn(columns, "open_exact"), High: stringValueColumn(columns, "high_exact"), Low: stringValueColumn(columns, "low_exact"), Close: stringValueColumn(columns, "close_exact"), Volume: stringValueColumn(columns, "volume_exact"), Amount: stringValueColumn(columns, "amount_exact"),
+					SourceProvider: stringValueColumn(columns, "source_provider"), QualityStatus: stringValueColumn(columns, "quality_status"), Revision: intValueColumn(columns, "revision"), ResolvedAt: timeValueColumn(columns, "resolved_at"),
+				}})
 			}
-			sources = append(sources, rsp.GetRows()...)
-			if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
-				break
-			}
-		}
-		for _, source := range sources {
-			columns := columnMap(source.GetColumns())
-			result = append(result, queriedKline{datasetID: feed.DatasetID, dimensions: source.GetKey().GetDimensions(), row: &pb.MarketKline{
-				MarketId: spaceID, InstrumentType: feed.InstrumentType, SubjectId: source.GetKey().GetSubjectId(), Frequency: source.GetKey().GetFreq(), DataTime: source.GetKey().GetDataTime(),
-				Open: stringValueColumn(columns, "open_exact"), High: stringValueColumn(columns, "high_exact"), Low: stringValueColumn(columns, "low_exact"), Close: stringValueColumn(columns, "close_exact"), Volume: stringValueColumn(columns, "volume_exact"), Amount: stringValueColumn(columns, "amount_exact"),
-				SourceProvider: stringValueColumn(columns, "source_provider"), QualityStatus: stringValueColumn(columns, "quality_status"), Revision: intValueColumn(columns, "revision"), ResolvedAt: timeValueColumn(columns, "resolved_at"),
-			}})
 		}
 	}
-	return result, nil
+	sort.Slice(result, func(i, j int) bool {
+		if order == "desc" {
+			return marketRowTuple(result[i]) > marketRowTuple(result[j])
+		}
+		return marketRowTuple(result[i]) < marketRowTuple(result[j])
+	})
+	result = dedupeQueriedKlines(result)
+	nextOffsets := make(map[string]int, len(offsets)+len(feeds))
+	for key, value := range offsets {
+		nextOffsets[key] = value
+	}
+	consume := pageSize
+	if consume > len(result) {
+		consume = len(result)
+	}
+	for _, row := range result[:consume] {
+		nextOffsets[row.cursorKey]++
+	}
+	return result, nextOffsets, storageHasMore || len(result) > pageSize, nil
+}
+
+func mapMarketStorageOrder(order string) storagepb.SortOrder {
+	if order == "desc" {
+		return storagepb.SortOrder_SORT_ORDER_DESC
+	}
+	return storagepb.SortOrder_SORT_ORDER_ASC
 }
 
 func (s *Service) RefreshMarketKlines(ctx context.Context, req *pb.RefreshMarketKlinesReq) (*pb.RefreshMarketKlinesRsp, error) {
@@ -415,7 +463,20 @@ func normalizedSubjectIDs(values []string) []string {
 
 func marketRowTuple(value queriedKline) string {
 	row := value.row
-	return strings.Join([]string{row.GetDataTime(), row.GetInstrumentType(), row.GetSubjectId(), row.GetFrequency(), value.datasetID}, "|")
+	return strings.Join([]string{row.GetDataTime(), row.GetInstrumentType(), row.GetSubjectId(), row.GetFrequency(), canonicalDimensions(value.dimensions), value.datasetID}, "|")
+}
+
+func canonicalDimensions(values map[string]string) string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+values[key])
+	}
+	return strings.Join(parts, "&")
 }
 
 func marketRowDigest(value queriedKline) string {
