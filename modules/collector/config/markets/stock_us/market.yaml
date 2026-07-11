@@ -13,4 +13,4 @@ readiness: {status: not_ready, reason: "US-1 qualification and addendum required
 routing: {policy: weighted_rendezvous}
 quality: {policy: source_first_whole_candle}
 coverage: {policy: exchange_calendar}
-scf: {function_name: moox-collector-stock-us, timeout_seconds: 60}
+scf: {function_name: moox-collector-stock-us-scf, timeout_seconds: 60}

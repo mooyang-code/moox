@@ -32,4 +32,4 @@ readiness: {status: not_ready, reason: "CN-1 provider evidence required", capabi
 routing: {policy: weighted_rendezvous}
 quality: {policy: source_first_whole_candle}
 coverage: {policy: exchange_calendar}
-scf: {function_name: moox-collector-stock-cn, timeout_seconds: 60}
+scf: {function_name: moox-collector-stock-cn-scf, timeout_seconds: 60}

@@ -27,4 +27,4 @@ readiness: {status: not_ready, reason: "provider validation required before acti
 routing: {policy: weighted_rendezvous}
 quality: {policy: source_first_whole_candle}
 coverage: {policy: twenty_four_seven}
-scf: {function_name: moox-collector-crypto-okx, timeout_seconds: 60}
+scf: {function_name: moox-collector-crypto-okx-scf, timeout_seconds: 60}
