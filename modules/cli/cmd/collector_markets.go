@@ -58,7 +58,7 @@ var collectorFunctionVerifyMarketsCmd = &cobra.Command{
 				if node.NodeID == manifest.SCF.FunctionName && node.FunctionName == manifest.SCF.FunctionName {
 					actual, ok := node.Metadata["actual_scf"].(map[string]any)
 					if !ok || fmt.Sprint(actual["runtime"]) != "Go1" || fmt.Sprint(actual["handler"]) != "main" || int64Value(actual["timeout"]) != manifest.SCF.TimeoutSeconds || nestedString(actual, "environment", "MOOX_SPACE_ID") != manifest.SpaceID || !strings.EqualFold(fmt.Sprint(actual["status"]), "Active") {
-						return fmt.Errorf("market %s SCF actual configuration does not match manifest: actual=%v", manifest.MarketID, actual)
+						return fmt.Errorf("market %s SCF actual configuration does not match manifest", manifest.MarketID)
 					}
 					found = true
 					break

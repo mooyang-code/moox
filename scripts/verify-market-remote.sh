@@ -24,7 +24,18 @@ run_remote "test -f ./data/collector/moox_collector.db.market-v2.backup || test 
 run_remote "${REMOTE_CLI} collector legacy-cutover --mode preflight --legacy-space crypto --control-url '${CONTROL_URL}'" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert not d.get("running_job_items"); assert d.get("pending_canceled",0) == 0'
 
 run_remote ": \"\${MOOX_CLOUD_ACCOUNT_ID:?}\"; : \"\${TENCENTCLOUD_REGION:?}\"; ${REMOTE_CLI} collector function publish-markets --manifest-dir ./collector/config/markets --environment development --zip ./collector/moox-collector-market.zip --control-url '${CONTROL_URL}' --cloud-account-id \"\${MOOX_CLOUD_ACCOUNT_ID}\" --region \"\${TENCENTCLOUD_REGION}\"" >/dev/null
-run_remote "${REMOTE_CLI} collector function verify-markets --manifest-dir ./collector/config/markets --control-url '${CONTROL_URL}'" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d and all(x["status"] == "verified" and x["function_name"].endswith("-scf") for x in d)'
+verify_functions() {
+  local output
+  for _ in $(seq 1 24); do
+    if output="$(run_remote "${REMOTE_CLI} collector function verify-markets --manifest-dir ./collector/config/markets --control-url '${CONTROL_URL}'")"; then
+      printf '%s' "${output}"
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+verify_functions | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d and all(x["status"] == "verified" and x["function_name"].endswith("-scf") for x in d)'
 
 init_once() {
   run_remote "MOOX_COLLECTOR_MARKETS_DIR=./collector/config/markets ${REMOTE_CLI} init markets --markets all --metadata-url '${MOOX_REMOTE_METADATA_URL:-http://127.0.0.1:20200}'"
