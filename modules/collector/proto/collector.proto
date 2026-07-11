@@ -40,6 +40,15 @@ message TaskRule {
   string creator = 11;
   string create_time = 12;     // RFC3339
   string modify_time = 13;     // RFC3339
+  string market_id = 14;
+  string feed = 15;
+  repeated string instrument_types = 16;
+  repeated string frequencies = 17;
+  string history_start = 18;
+  string history_end = 19;
+  repeated string subject_filters = 20;
+  repeated string exchange_filters = 21;
+  google.protobuf.Struct schedule_spec = 22;
 }
 
 message GetTaskRuleListReq {

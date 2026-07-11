@@ -17,10 +17,11 @@ const (
 
 // DatasetSubject is a storage dataset subject projected into Collector.
 type DatasetSubject struct {
-	SubjectID      string
-	SubjectName    string
-	ExternalSymbol string
-	Status         string
+	SubjectID       string
+	SubjectName     string
+	ExternalSymbol  string
+	Status          string
+	ProviderSymbols map[string]string
 }
 
 // TaskSpec is an adapter output before persistence fields are added.

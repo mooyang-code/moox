@@ -45,12 +45,21 @@ func executeMarketInstrumentJobItem(ctx context.Context, item nodeRuntime.JobIte
 		return nodeRuntime.Result{}, nodeRuntime.Retryable(fmt.Errorf("storage access target is required"), "STORAGE_UNAVAILABLE")
 	}
 	store := storageio.NewClientWithAccess(storagepb.NewAccessClientProxy(client.WithTarget(accessTarget)), nil, []storageio.Binding{{SpaceID: spaceID, DatasetID: sourceID, Role: storageio.RoleProviderData, Feed: "instrument", ProviderID: providerID}, {SpaceID: spaceID, DatasetID: unifiedID, Role: storageio.RoleUnifiedData, Feed: "instrument"}})
+	metadataTarget := runtimeapp.GetStorageMetadataTarget()
+	if metadataTarget == "" {
+		return nodeRuntime.Result{}, nodeRuntime.Retryable(fmt.Errorf("storage metadata target is required"), "STORAGE_UNAVAILABLE")
+	}
+	datasetIDs := stringSlice(params["subject_dataset_ids"])
+	if len(datasetIDs) == 0 {
+		datasetIDs = []string{unifiedID}
+	}
+	registrar := storageio.NewInstrumentMetadataRegistrar(storagepb.NewMetadataClientProxy(client.WithTarget(metadataTarget)), nil, spaceID, string(providerID), firstString(stringValue(params, "timezone"), "UTC"), datasetIDs)
 	leaseEpoch, _ := strconv.ParseInt(stringValue(params, "lease_epoch"), 10, 64)
 	gate := controlRequestGate{gateway: runtimeapp.GetServiceGatewayTarget(), leaseID: stringValue(params, "quota_lease_id"), leaseEpoch: leaseEpoch, executionNonce: stringValue(params, "execution_nonce"), scopeKey: stringValue(params, "quota_scope_key"), windows: quotaWindows(params)}
 	if gate.leaseID == "" || gate.leaseEpoch <= 0 || gate.executionNonce == "" || len(gate.windows) == 0 {
 		return nodeRuntime.Result{}, nodeRuntime.Permanent(fmt.Errorf("instrument quota lease is required"), "INVALID_LEASE")
 	}
-	pipe := pipeline.InstrumentPipeline{Provider: provider, Gate: gate, Store: store, SpaceID: spaceID, SourceDatasetID: sourceID, SourceDatasetIDs: []string{sourceID}, SourceDatasets: map[marketdata.ProviderID]string{providerID: sourceID}, UnifiedDatasetID: unifiedID, ProviderPriority: []marketdata.ProviderID{providerID}, Generation: generation}
+	pipe := pipeline.InstrumentPipeline{Provider: provider, Gate: gate, Store: store, Registrar: registrar, SpaceID: spaceID, SourceDatasetID: sourceID, SourceDatasetIDs: []string{sourceID}, SourceDatasets: map[marketdata.ProviderID]string{providerID: sourceID}, UnifiedDatasetID: unifiedID, ProviderPriority: []marketdata.ProviderID{providerID}, Generation: generation}
 	result, err := pipe.Run(ctx, providers.FetchInstrumentsRequest{MarketID: marketdata.MarketID(stringValue(params, "market_id")), ExchangeID: marketdata.ExchangeID(stringValue(params, "exchange_id")), InstrumentTypes: parseInstrumentTypes(stringValue(params, "instrument_types")), SnapshotAt: generation, Limit: intValue(params, "limit"), Cursor: stringValue(params, "cursor")})
 	summary := map[string]any{"market_id": stringValue(params, "market_id"), "provider_id": string(providerID), "fetched_rows": result.Fetched, "source_rows": result.SourceRows, "unified_rows": result.UnifiedRows, "request_count": result.RequestCount, "complete": result.Complete, "next_cursor": result.NextCursor}
 	if err != nil {

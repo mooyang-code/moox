@@ -80,17 +80,26 @@ func (r *TaskRuleRepository) Create(ctx context.Context, rule domain.TaskRule) e
 // UpdateByRuleID updates an existing collector rule.
 func (r *TaskRuleRepository) UpdateByRuleID(ctx context.Context, spaceID string, ruleID string, rule domain.TaskRule) (*domain.TaskRule, error) {
 	updates := map[string]any{
-		"c_space_id":        rule.SpaceID,
-		"c_data_type":       rule.DataType,
-		"c_exchange":        rule.Exchange,
-		"c_collect_params":  rule.CollectParams,
-		"c_assignment_type": rule.AssignmentType,
-		"c_assigned_nodes":  rule.AssignedNodes,
-		"c_node_pattern":    rule.NodePattern,
-		"c_node_tags":       rule.NodeTags,
-		"c_enabled":         rule.Enabled,
-		"c_creator":         rule.Creator,
-		"c_mtime":           time.Now().UTC(),
+		"c_space_id":         rule.SpaceID,
+		"c_data_type":        rule.DataType,
+		"c_exchange":         rule.Exchange,
+		"c_market_id":        rule.MarketID,
+		"c_feed":             rule.Feed,
+		"c_instrument_types": rule.InstrumentTypes,
+		"c_frequencies":      rule.Frequencies,
+		"c_history_start":    rule.HistoryStart,
+		"c_history_end":      rule.HistoryEnd,
+		"c_subject_filters":  rule.SubjectFilters,
+		"c_exchange_filters": rule.ExchangeFilters,
+		"c_schedule_spec":    rule.ScheduleSpec,
+		"c_collect_params":   rule.CollectParams,
+		"c_assignment_type":  rule.AssignmentType,
+		"c_assigned_nodes":   rule.AssignedNodes,
+		"c_node_pattern":     rule.NodePattern,
+		"c_node_tags":        rule.NodeTags,
+		"c_enabled":          rule.Enabled,
+		"c_creator":          rule.Creator,
+		"c_mtime":            time.Now().UTC(),
 	}
 	q := r.db.WithContext(ctx).Model(&domain.TaskRule{}).Where("c_rule_id = ?", ruleID)
 	if strings.TrimSpace(spaceID) != "" {

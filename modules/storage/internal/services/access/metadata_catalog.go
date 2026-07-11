@@ -133,6 +133,34 @@ func (s *Service) RegisterDataSubject(ctx context.Context, req *pb.RegisterDataS
 	return &pb.RegisterDataSubjectRsp{RetInfo: response.Success("success"), Subject: created, DatasetBindings: bindings}, nil
 }
 
+func (s *Service) BatchRegisterDataSubjects(ctx context.Context, req *pb.BatchRegisterDataSubjectsReq) (*pb.BatchRegisterDataSubjectsRsp, error) {
+	if req == nil || len(req.GetItems()) == 0 {
+		return &pb.BatchRegisterDataSubjectsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("items are required"))}, nil
+	}
+	if len(req.GetItems()) > 500 {
+		return &pb.BatchRegisterDataSubjectsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("batch size must be <= 500"))}, nil
+	}
+	results := make([]*pb.RegisterDataSubjectRsp, 0, len(req.GetItems()))
+	for _, item := range req.GetItems() {
+		if item == nil {
+			return &pb.BatchRegisterDataSubjectsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("batch item is required"))}, nil
+		}
+		if item.AuthInfo == nil {
+			item = proto.Clone(item).(*pb.RegisterDataSubjectReq)
+			item.AuthInfo = req.GetAuthInfo()
+		}
+		result, err := s.RegisterDataSubject(ctx, item)
+		if err != nil {
+			return nil, err
+		}
+		if result.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return &pb.BatchRegisterDataSubjectsRsp{RetInfo: result.GetRetInfo(), Results: results}, nil
+		}
+		results = append(results, result)
+	}
+	return &pb.BatchRegisterDataSubjectsRsp{RetInfo: response.Success("success"), Results: results}, nil
+}
+
 func (s *Service) GetSubject(ctx context.Context, req *pb.GetSubjectReq) (*pb.GetSubjectRsp, error) {
 	item, err := s.metadata.GetSubject(ctx, req.GetSpaceId(), req.GetSubjectId())
 	if err != nil {

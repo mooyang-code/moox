@@ -51,6 +51,34 @@ func (s *DatasetSource) ListSubjects(ctx context.Context, spaceID string, datase
 	return mergeDatasetSubjects(bindings, symbols), nil
 }
 
+func (s *DatasetSource) ListSubjectsForProviders(ctx context.Context, spaceID, datasetID string, providerIDs []string) ([]domain.DatasetSubject, error) {
+	bindings, err := s.listDatasetBindings(ctx, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	all := make(map[string]map[string]string)
+	for _, providerID := range providerIDs {
+		symbols, err := s.listSubjectSymbols(ctx, spaceID, providerID)
+		if err != nil {
+			return nil, err
+		}
+		for subjectID, symbol := range symbols {
+			if all[subjectID] == nil {
+				all[subjectID] = map[string]string{}
+			}
+			all[subjectID][providerID] = symbol
+		}
+	}
+	result := mergeDatasetSubjects(bindings, nil)
+	for index := range result {
+		result[index].ProviderSymbols = all[result[index].SubjectID]
+		if result[index].ProviderSymbols == nil {
+			result[index].ProviderSymbols = map[string]string{}
+		}
+	}
+	return result, nil
+}
+
 func (s *DatasetSource) listDatasetBindings(ctx context.Context, spaceID string, datasetID string) ([]*storagepb.DatasetSubject, error) {
 	var all []*storagepb.DatasetSubject
 	for page := uint32(1); ; page++ {

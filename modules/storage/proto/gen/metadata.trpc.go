@@ -61,6 +61,8 @@ type MetadataService interface {
 	UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq) (*UpsertSubjectSymbolRsp, error)
 	// RegisterDataSubject 注册数据对象、来源侧代码映射和数据集绑定。
 	RegisterDataSubject(ctx context.Context, req *RegisterDataSubjectReq) (*RegisterDataSubjectRsp, error)
+
+	BatchRegisterDataSubjects(ctx context.Context, req *BatchRegisterDataSubjectsReq) (*BatchRegisterDataSubjectsRsp, error)
 	// GetSubject 按 ID 获取数据对象。
 	GetSubject(ctx context.Context, req *GetSubjectReq) (*GetSubjectRsp, error)
 	// ListSubjects 列出数据对象。
@@ -497,6 +499,24 @@ func MetadataService_RegisterDataSubject_Handler(svr interface{}, ctx context.Co
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).RegisterDataSubject(ctx, reqbody.(*RegisterDataSubjectReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_BatchRegisterDataSubjects_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &BatchRegisterDataSubjectsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).BatchRegisterDataSubjects(ctx, reqbody.(*BatchRegisterDataSubjectsReq))
 	}
 
 	var rsp interface{}
@@ -1191,6 +1211,10 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_RegisterDataSubject_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/BatchRegisterDataSubjects",
+			Func: MetadataService_BatchRegisterDataSubjects_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/GetSubject",
 			Func: MetadataService_GetSubject_Handler,
 		},
@@ -1440,6 +1464,9 @@ func (s *UnimplementedMetadata) UpsertSubjectSymbol(ctx context.Context, req *Up
 func (s *UnimplementedMetadata) RegisterDataSubject(ctx context.Context, req *RegisterDataSubjectReq) (*RegisterDataSubjectRsp, error) {
 	return nil, errors.New("rpc RegisterDataSubject of service Metadata is not implemented")
 }
+func (s *UnimplementedMetadata) BatchRegisterDataSubjects(ctx context.Context, req *BatchRegisterDataSubjectsReq) (*BatchRegisterDataSubjectsRsp, error) {
+	return nil, errors.New("rpc BatchRegisterDataSubjects of service Metadata is not implemented")
+}
 
 // GetSubject 按 ID 获取数据对象。
 func (s *UnimplementedMetadata) GetSubject(ctx context.Context, req *GetSubjectReq) (*GetSubjectRsp, error) {
@@ -1656,6 +1683,8 @@ type MetadataClientProxy interface {
 	UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq, opts ...client.Option) (rsp *UpsertSubjectSymbolRsp, err error)
 	// RegisterDataSubject 注册数据对象、来源侧代码映射和数据集绑定。
 	RegisterDataSubject(ctx context.Context, req *RegisterDataSubjectReq, opts ...client.Option) (rsp *RegisterDataSubjectRsp, err error)
+
+	BatchRegisterDataSubjects(ctx context.Context, req *BatchRegisterDataSubjectsReq, opts ...client.Option) (rsp *BatchRegisterDataSubjectsRsp, err error)
 	// GetSubject 按 ID 获取数据对象。
 	GetSubject(ctx context.Context, req *GetSubjectReq, opts ...client.Option) (rsp *GetSubjectRsp, err error)
 	// ListSubjects 列出数据对象。
@@ -2147,6 +2176,26 @@ func (c *MetadataClientProxyImpl) RegisterDataSubject(ctx context.Context, req *
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &RegisterDataSubjectRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) BatchRegisterDataSubjects(ctx context.Context, req *BatchRegisterDataSubjectsReq, opts ...client.Option) (*BatchRegisterDataSubjectsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/BatchRegisterDataSubjects")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("BatchRegisterDataSubjects")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &BatchRegisterDataSubjectsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

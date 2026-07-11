@@ -14,6 +14,9 @@ type InstrumentStore interface {
 	InstrumentCandidates(context.Context, string, []string, string, time.Time) ([]providers.ProviderInstrument, error)
 	WriteUnifiedInstrument(context.Context, string, providers.ResolvedInstrument) error
 }
+type InstrumentRegistrar interface {
+	RegisterInstruments(context.Context, []providers.ResolvedInstrument) error
+}
 
 type InstrumentPipeline struct {
 	Provider                                   providers.InstrumentProvider
@@ -25,6 +28,7 @@ type InstrumentPipeline struct {
 	ProviderPriority                           []marketdata.ProviderID
 	Generation                                 time.Time
 	Now                                        func() time.Time
+	Registrar                                  InstrumentRegistrar
 }
 
 type InstrumentPipelineResult struct {
@@ -70,8 +74,14 @@ func (p InstrumentPipeline) Run(ctx context.Context, request providers.FetchInst
 		if sourceDataset == "" {
 			sourceDataset = p.SourceDatasetID
 		}
-		if err := p.Store.WriteUnifiedInstrument(ctx, p.UnifiedDatasetID, providers.ResolvedInstrument{ProviderInstrument: *winner, SourceDatasetID: sourceDataset, QualityStatus: "accepted", Generation: p.Generation, ResolvedAt: now}); err != nil {
+		resolved := providers.ResolvedInstrument{ProviderInstrument: *winner, SourceDatasetID: sourceDataset, QualityStatus: "accepted", Generation: p.Generation, ResolvedAt: now}
+		if err := p.Store.WriteUnifiedInstrument(ctx, p.UnifiedDatasetID, resolved); err != nil {
 			return result, err
+		}
+		if p.Registrar != nil {
+			if err := p.Registrar.RegisterInstruments(ctx, []providers.ResolvedInstrument{resolved}); err != nil {
+				return result, err
+			}
 		}
 		result.UnifiedRows++
 	}

@@ -430,6 +430,21 @@ func normalizeTaskRule(rule domain.TaskRule) domain.TaskRule {
 	if strings.TrimSpace(rule.CollectParams) == "" {
 		rule.CollectParams = "{}"
 	}
+	if strings.TrimSpace(rule.InstrumentTypes) == "" {
+		rule.InstrumentTypes = "[]"
+	}
+	if strings.TrimSpace(rule.Frequencies) == "" {
+		rule.Frequencies = "[]"
+	}
+	if strings.TrimSpace(rule.SubjectFilters) == "" {
+		rule.SubjectFilters = "[]"
+	}
+	if strings.TrimSpace(rule.ExchangeFilters) == "" {
+		rule.ExchangeFilters = "[]"
+	}
+	if strings.TrimSpace(rule.ScheduleSpec) == "" {
+		rule.ScheduleSpec = "{}"
+	}
 	return rule
 }
 
@@ -439,6 +454,18 @@ func validateTaskRule(rule domain.TaskRule) error {
 	}
 	if strings.TrimSpace(rule.SpaceID) == "" {
 		return fmt.Errorf("space_id is required")
+	}
+	if strings.TrimSpace(rule.MarketID) != "" {
+		if rule.SpaceID != rule.MarketID {
+			return fmt.Errorf("market_id and space_id must match")
+		}
+		if strings.TrimSpace(rule.Feed) == "" {
+			return fmt.Errorf("feed is required")
+		}
+		if rule.Feed == "kline" && len(stringsFromJSONString(rule.Frequencies)) == 0 {
+			return fmt.Errorf("frequencies are required for kline")
+		}
+		return nil
 	}
 	if strings.TrimSpace(rule.DataType) == "" {
 		return fmt.Errorf("data_type is required")
