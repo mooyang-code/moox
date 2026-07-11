@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -14,10 +15,14 @@ import (
 )
 
 type Engine struct {
-	Store   *store.Store
-	Adapter exchange.TradingAdapter
+	Store    *store.Store
+	Adapter  exchange.TradingAdapter
+	Resolver exchange.AdapterResolver
 }
-type PlaceInput struct{ SpaceID, OrderID, ClientOrderID, AccountID, Symbol, Side, Quantity, Price string }
+type PlaceInput struct {
+	SpaceID, OrderID, ClientOrderID, AccountID, ChannelID, Symbol, MarketType, BaseAsset, QuoteAsset, Side, Quantity, Price string
+	ReduceOnly                                                                                                              bool
+}
 
 func (e *Engine) Place(ctx context.Context, in PlaceInput) (store.OrderRecord, error) {
 	if old, err := e.Store.GetOrderByClientID(ctx, in.SpaceID, in.ClientOrderID); err == nil {
@@ -29,6 +34,24 @@ func (e *Engine) Place(ctx context.Context, in PlaceInput) (store.OrderRecord, e
 	if err != nil {
 		return store.OrderRecord{}, err
 	}
+	if e.Resolver != nil {
+		a, resolveErr := e.Resolver.Resolve(ctx, in.SpaceID, in.ChannelID)
+		if resolveErr != nil {
+			return store.OrderRecord{}, resolveErr
+		}
+		if provider, ok := a.(interface{ MarketType() string }); ok {
+			in.MarketType = provider.MarketType()
+		}
+		if in.BaseAsset == "" || in.QuoteAsset == "" {
+			rules, rulesErr := a.Rules(ctx, in.Symbol)
+			if rulesErr != nil {
+				return store.OrderRecord{}, rulesErr
+			}
+			in.BaseAsset, in.QuoteAsset = rules.BaseAsset, rules.QuoteAsset
+		}
+	} else if in.BaseAsset == "" || in.QuoteAsset == "" {
+		return store.OrderRecord{}, errors.New("trade: instrument assets required")
+	}
 	o, _, err := order.New(shared.OrderID(in.OrderID), in.ClientOrderID, qty)
 	if err != nil {
 		return store.OrderRecord{}, err
@@ -36,6 +59,32 @@ func (e *Engine) Place(ctx context.Context, in PlaceInput) (store.OrderRecord, e
 	o.MarkReady()
 	r := record(in, o, "")
 	err = e.Store.Transaction(ctx, func(tx *store.Tx) error {
+		price, parseErr := shared.ParseDecimal(in.Price)
+		if parseErr != nil {
+			return parseErr
+		}
+		asset, amount := in.BaseAsset, qty
+		if in.MarketType != "" && in.MarketType != "spot" {
+			asset = in.QuoteAsset
+			amount = qty.Mul(price)
+			if in.ReduceOnly {
+				amount = shared.Zero()
+			}
+		} else if in.Side == "BUY" {
+			asset = in.QuoteAsset
+			amount = qty.Mul(price)
+		} else if in.Side != "SELL" {
+			return errors.New("trade: invalid side")
+		}
+		r.ReservedAsset = asset
+		r.ReservedAmount = amount.String()
+		r.ConsumedReserved = "0"
+		if !amount.IsZero() {
+			freeze := ledger.Transaction{ID: shared.LedgerTransactionID("freeze:" + in.OrderID), BizType: "freeze", RefType: "order", RefID: in.OrderID, Entries: []ledger.Entry{{AccountID: in.AccountID, Asset: asset, Bucket: "available", Amount: amount.Neg()}, {AccountID: in.AccountID, Asset: asset, Bucket: "frozen", Amount: amount}}}
+			if err := tx.PostLedger(in.SpaceID, freeze); err != nil {
+				return err
+			}
+		}
 		if err := tx.CreateOrder(&r); err != nil {
 			return err
 		}
@@ -77,7 +126,11 @@ func (e *Engine) Submit(ctx context.Context, space, orderID, priceRaw string) (s
 	if err != nil {
 		return r, err
 	}
-	result, callErr := e.Adapter.Place(ctx, exchange.PlaceRequest{ClientOrderID: r.ClientOrderID, Symbol: r.Symbol, Side: r.Side, Type: "LIMIT", TimeInForce: "IOC", Quantity: o.Quantity, Price: price})
+	adapter, err := e.adapter(ctx, r)
+	if err != nil {
+		return r, err
+	}
+	result, callErr := adapter.Place(ctx, exchange.PlaceRequest{ClientOrderID: r.ClientOrderID, Symbol: r.Symbol, Side: r.Side, Type: "LIMIT", TimeInForce: "IOC", Quantity: o.Quantity, Price: price, ReduceOnly: r.ReduceOnly})
 	latest, _ := e.Store.GetOrder(ctx, space, orderID)
 	o, _ = aggregate(latest)
 	expected = o.Version
@@ -102,6 +155,11 @@ func (e *Engine) Submit(ctx context.Context, space, orderID, priceRaw string) (s
 		if err := tx.UpdateOrder(latest, expected); err != nil {
 			return err
 		}
+		if o.State == order.Rejected {
+			if err := ReleaseReservation(tx, latest); err != nil {
+				return err
+			}
+		}
 		return outbox(tx, fmt.Sprintf("%s:%d", orderID, o.Version), event, latest)
 	})
 	return latest, err
@@ -115,8 +173,27 @@ func (e *Engine) ResolveUnknown(ctx context.Context, space, orderID string) (sto
 	if r.State != string(order.SubmitUnknown) {
 		return r, nil
 	}
-	result, err := e.Adapter.QueryByClientOrderID(ctx, r.Symbol, r.ClientOrderID)
+	adapter, err := e.adapter(ctx, r)
 	if err != nil {
+		return r, err
+	}
+	result, err := adapter.QueryByClientOrderID(ctx, r.Symbol, r.ClientOrderID)
+	if err != nil {
+		if exchange.IsCategory(err, exchange.ErrorOrderNotFound) {
+			o, aggregateErr := aggregate(r)
+			if aggregateErr != nil {
+				return r, aggregateErr
+			}
+			expected := o.Version
+			if _, aggregateErr = o.RetryAfterNotFound(); aggregateErr != nil {
+				return r, aggregateErr
+			}
+			r = recordFrom(r, o)
+			if aggregateErr = e.Store.Transaction(ctx, func(tx *store.Tx) error { return tx.UpdateOrder(r, expected) }); aggregateErr != nil {
+				return r, aggregateErr
+			}
+			return e.Submit(ctx, space, orderID, r.Price)
+		}
 		return r, err
 	}
 	o, err := aggregate(r)
@@ -124,16 +201,19 @@ func (e *Engine) ResolveUnknown(ctx context.Context, space, orderID string) (sto
 		return r, err
 	}
 	expected := o.Version
+	r.ExchangeOrderID = result.ExchangeOrderID
 	switch result.Status {
 	case "FILLED":
-		if result.FilledQuantity.Cmp(shared.Zero()) <= 0 {
-			result.FilledQuantity = o.Quantity
-		}
-		_, err = o.ApplyFill(result.FilledQuantity)
+		// A query response is not a settlement fact. Keep the order open until
+		// exchange trade records arrive through the idempotent FillHandler.
+		_, err = o.Acknowledge()
 	case "CANCELED":
-		if _, err = o.BeginCancel(); err == nil {
-			_, err = o.ConfirmCancel()
+		// The fill reconciliation worker must ingest all exchange fills before
+		// making a canceled order terminal and releasing its reservation.
+		if err := e.Store.Transaction(ctx, func(tx *store.Tx) error { return tx.UpdateOrder(r, expected) }); err != nil {
+			return r, err
 		}
+		return r, nil
 	case "REJECTED":
 		_, err = o.Reject()
 	default:
@@ -144,8 +224,38 @@ func (e *Engine) ResolveUnknown(ctx context.Context, space, orderID string) (sto
 	}
 	r = recordFrom(r, o)
 	r.ExchangeOrderID = result.ExchangeOrderID
-	err = e.Store.Transaction(ctx, func(tx *store.Tx) error { return tx.UpdateOrder(r, expected) })
+	err = e.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.UpdateOrder(r, expected); err != nil {
+			return err
+		}
+		if o.State == order.Rejected || o.State == order.Canceled || o.State == order.PartiallyCanceled {
+			return ReleaseReservation(tx, r)
+		}
+		return nil
+	})
 	return r, err
+}
+func (e *Engine) RecoverSubmitting(ctx context.Context, space, orderID string) (store.OrderRecord, error) {
+	r, err := e.Store.GetOrder(ctx, space, orderID)
+	if err != nil {
+		return r, err
+	}
+	if r.State != string(order.Submitting) {
+		return r, nil
+	}
+	o, err := aggregate(r)
+	if err != nil {
+		return r, err
+	}
+	expected := o.Version
+	if _, err = o.RecoverSubmitting(); err != nil {
+		return r, err
+	}
+	r = recordFrom(r, o)
+	if err = e.Store.Transaction(ctx, func(tx *store.Tx) error { return tx.UpdateOrder(r, expected) }); err != nil {
+		return r, err
+	}
+	return e.ResolveUnknown(ctx, space, orderID)
 }
 
 func aggregate(r store.OrderRecord) (*order.Order, error) {
@@ -160,7 +270,7 @@ func aggregate(r store.OrderRecord) (*order.Order, error) {
 	return &order.Order{ID: shared.OrderID(r.OrderID), ClientOrderID: r.ClientOrderID, Quantity: q, FilledQuantity: f, State: order.State(r.State), Version: r.Version}, nil
 }
 func record(in PlaceInput, o *order.Order, exchangeID string) store.OrderRecord {
-	return store.OrderRecord{SpaceID: in.SpaceID, OrderID: in.OrderID, ClientOrderID: in.ClientOrderID, Symbol: in.Symbol, Side: in.Side, Quantity: o.Quantity.String(), Price: in.Price, FilledQuantity: o.FilledQuantity.String(), State: string(o.State), ExchangeOrderID: exchangeID, Version: o.Version}
+	return store.OrderRecord{SpaceID: in.SpaceID, OrderID: in.OrderID, ClientOrderID: in.ClientOrderID, AccountID: in.AccountID, ChannelID: in.ChannelID, Symbol: in.Symbol, MarketType: in.MarketType, BaseAsset: in.BaseAsset, QuoteAsset: in.QuoteAsset, Side: in.Side, Quantity: o.Quantity.String(), Price: in.Price, ReduceOnly: in.ReduceOnly, FilledQuantity: o.FilledQuantity.String(), State: string(o.State), ExchangeOrderID: exchangeID, Version: o.Version}
 }
 func recordFrom(r store.OrderRecord, o *order.Order) store.OrderRecord {
 	r.FilledQuantity = o.FilledQuantity.String()
@@ -174,4 +284,16 @@ func outbox(tx *store.Tx, id, topic string, v any) error {
 		return e
 	}
 	return tx.AddOutbox(id, topic, b)
+}
+func (e *Engine) adapter(ctx context.Context, r store.OrderRecord) (exchange.TradingAdapter, error) {
+	if e.Resolver != nil {
+		return e.Resolver.Resolve(ctx, r.SpaceID, r.ChannelID)
+	}
+	if e.Adapter == nil {
+		return nil, errors.New("trade: exchange adapter unavailable")
+	}
+	return e.Adapter, nil
+}
+func (e *Engine) AdapterFor(ctx context.Context, r store.OrderRecord) (exchange.TradingAdapter, error) {
+	return e.adapter(ctx, r)
 }

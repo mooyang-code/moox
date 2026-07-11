@@ -16,6 +16,7 @@ const (
 	SagaReplacementSubmitted     SagaState = "REPLACEMENT_SUBMITTED"
 	SagaReplaceFailedAfterCancel SagaState = "REPLACE_FAILED_AFTER_CANCEL"
 	SagaCancelUnknown            SagaState = "CANCEL_UNKNOWN"
+	SagaCancelFailed             SagaState = "CANCEL_FAILED"
 	SagaReplacementSubmitUnknown SagaState = "REPLACEMENT_SUBMIT_UNKNOWN"
 )
 

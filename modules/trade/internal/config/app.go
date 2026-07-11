@@ -28,6 +28,7 @@ type AppConfig struct {
 	Sync           SyncConfig           `yaml:"sync"`
 	Log            LogConfig            `yaml:"log"`
 	Health         HealthConfig         `yaml:"health"`
+	EventBus       EventBusConfig       `yaml:"eventbus"`
 }
 
 // DatabaseConfig 数据库配置（当前仅支持 sqlite）。
@@ -84,6 +85,14 @@ type LogConfig struct {
 type HealthConfig struct {
 	Addr string `yaml:"addr"`
 }
+type EventBusConfig struct {
+	Enabled          bool     `yaml:"enabled"`
+	URLs             []string `yaml:"urls"`
+	Stream           string   `yaml:"stream"`
+	ExecutionDurable string   `yaml:"execution_durable"`
+	RebalanceDurable string   `yaml:"rebalance_durable"`
+	ProgressDurable  string   `yaml:"progress_durable"`
+}
 
 // DefaultConfig 返回默认配置。
 func DefaultConfig() *AppConfig {
@@ -128,6 +137,7 @@ func DefaultConfig() *AppConfig {
 		Health: HealthConfig{
 			Addr: ":11210",
 		},
+		EventBus: EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, Stream: "MOOX_TRADE", ExecutionDurable: "trade_execution_v1", RebalanceDurable: "trade_rebalance_v1", ProgressDurable: "trade_progress_v1"},
 	}
 }
 
@@ -199,6 +209,14 @@ func (c *AppConfig) Validate() error {
 	}
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":11210"
+	}
+	if c.EventBus.Enabled {
+		if len(c.EventBus.URLs) == 0 {
+			return fmt.Errorf("eventbus urls are required")
+		}
+		if c.EventBus.Stream == "" || c.EventBus.ExecutionDurable == "" || c.EventBus.RebalanceDurable == "" || c.EventBus.ProgressDurable == "" {
+			return fmt.Errorf("eventbus stream and durable are required")
+		}
 	}
 	return nil
 }

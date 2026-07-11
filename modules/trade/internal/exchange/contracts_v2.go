@@ -20,6 +20,7 @@ const (
 	ErrorTransportUncertain  ErrorCategory = "TRANSPORT_UNCERTAIN"
 	ErrorTransient           ErrorCategory = "TRANSIENT_UNAVAILABLE"
 	ErrorPermanent           ErrorCategory = "PERMANENT_FAILURE"
+	ErrorOrderNotFound       ErrorCategory = "ORDER_NOT_FOUND"
 )
 
 type ClassifiedError struct {
@@ -55,5 +56,9 @@ type TradingAdapter interface {
 	Cancel(context.Context, string, string) (ExchangeOrderResult, error)
 	QueryByClientOrderID(context.Context, string, string) (ExchangeOrderResult, error)
 	Rules(context.Context, string) (instrument.Rules, error)
+	ListFills(context.Context, string, string) ([]FillEvent, error)
 	SubscribePrivate(context.Context, PrivateEventHandler) error
+}
+type AdapterResolver interface {
+	Resolve(context.Context, string, string) (TradingAdapter, error)
 }

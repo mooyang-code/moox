@@ -48,15 +48,30 @@ func (o *Order) transition(to State, allowed ...State) ([]Event, error) {
 	return o.emit("OrderStateChanged"), nil
 }
 
-func (o *Order) MarkReady() ([]Event, error)   { return o.transition(Ready, Draft) }
-func (o *Order) BeginSubmit() ([]Event, error) { return o.transition(Submitting, Ready, SubmitUnknown) }
-func (o *Order) MarkUnknown() ([]Event, error) { return o.transition(SubmitUnknown, Submitting) }
-func (o *Order) Acknowledge() ([]Event, error) { return o.transition(Open, Submitting, SubmitUnknown) }
+func (o *Order) MarkReady() ([]Event, error)          { return o.transition(Ready, Draft) }
+func (o *Order) BeginSubmit() ([]Event, error)        { return o.transition(Submitting, Ready, SubmitUnknown) }
+func (o *Order) MarkUnknown() ([]Event, error)        { return o.transition(SubmitUnknown, Submitting) }
+func (o *Order) RecoverSubmitting() ([]Event, error)  { return o.transition(SubmitUnknown, Submitting) }
+func (o *Order) RetryAfterNotFound() ([]Event, error) { return o.transition(Ready, SubmitUnknown) }
+func (o *Order) Acknowledge() ([]Event, error)        { return o.transition(Open, Submitting, SubmitUnknown) }
 func (o *Order) Reject() ([]Event, error) {
-	return o.transition(Rejected, Submitting, SubmitUnknown, Ready)
+	return o.transition(Rejected, Submitting, SubmitUnknown, Ready, Open, PartiallyFilled)
+}
+func (o *Order) Expire() ([]Event, error) {
+	return o.transition(Expired, Submitting, SubmitUnknown, Open, PartiallyFilled, Canceling, CancelUnknown)
 }
 func (o *Order) BeginCancel() ([]Event, error) {
 	return o.transition(Canceling, Open, PartiallyFilled, SubmitUnknown)
+}
+func (o *Order) MarkCancelUnknown() ([]Event, error) { return o.transition(CancelUnknown, Canceling) }
+func (o *Order) RecoverCanceling() ([]Event, error)  { return o.transition(CancelUnknown, Canceling) }
+func (o *Order) CancelStillOpen() ([]Event, error)   { return o.transition(Open, CancelUnknown) }
+func (o *Order) CancelFailed() ([]Event, error) {
+	to := Open
+	if !o.FilledQuantity.IsZero() {
+		to = PartiallyFilled
+	}
+	return o.transition(to, Canceling)
 }
 
 func (o *Order) ApplyFill(qty shared.Decimal) ([]Event, error) {
@@ -81,7 +96,7 @@ func (o *Order) ConfirmCancel() ([]Event, error) {
 	if !o.FilledQuantity.IsZero() {
 		to = PartiallyCanceled
 	}
-	return o.transition(to, Canceling)
+	return o.transition(to, Canceling, CancelUnknown)
 }
 
 func (o *Order) emit(kind string) []Event {

@@ -947,6 +947,72 @@ func RegisterPositionSvcService(s server.Service, svr PositionSvcService) {
 	}
 }
 
+// RebalanceSvcService defines service.
+type RebalanceSvcService interface {
+	CreateRebalance(ctx context.Context, req *CreateRebalanceReq) (*CreateRebalanceRsp, error)
+
+	AdvanceRebalance(ctx context.Context, req *AdvanceRebalanceReq) (*AdvanceRebalanceRsp, error)
+}
+
+func RebalanceSvcService_CreateRebalance_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateRebalanceReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(RebalanceSvcService).CreateRebalance(ctx, reqbody.(*CreateRebalanceReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func RebalanceSvcService_AdvanceRebalance_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &AdvanceRebalanceReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(RebalanceSvcService).AdvanceRebalance(ctx, reqbody.(*AdvanceRebalanceReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// RebalanceSvcServer_ServiceDesc descriptor for server.RegisterService.
+var RebalanceSvcServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.trade.RebalanceSvc",
+	HandlerType: ((*RebalanceSvcService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.trade.RebalanceSvc/CreateRebalance",
+			Func: RebalanceSvcService_CreateRebalance_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.RebalanceSvc/AdvanceRebalance",
+			Func: RebalanceSvcService_AdvanceRebalance_Handler,
+		},
+	},
+}
+
+// RegisterRebalanceSvcService registers service.
+func RegisterRebalanceSvcService(s server.Service, svr RebalanceSvcService) {
+	if err := s.Register(&RebalanceSvcServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("RebalanceSvc register error:%v", err))
+	}
+}
+
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
 type UnimplementedAccountSvc struct{}
@@ -1070,6 +1136,15 @@ func (s *UnimplementedPositionSvc) ListPositions(ctx context.Context, req *ListP
 }
 func (s *UnimplementedPositionSvc) SyncPositions(ctx context.Context, req *SyncPositionsReq) (*SyncPositionsRsp, error) {
 	return nil, errors.New("rpc SyncPositions of service PositionSvc is not implemented")
+}
+
+type UnimplementedRebalanceSvc struct{}
+
+func (s *UnimplementedRebalanceSvc) CreateRebalance(ctx context.Context, req *CreateRebalanceReq) (*CreateRebalanceRsp, error) {
+	return nil, errors.New("rpc CreateRebalance of service RebalanceSvc is not implemented")
+}
+func (s *UnimplementedRebalanceSvc) AdvanceRebalance(ctx context.Context, req *AdvanceRebalanceReq) (*AdvanceRebalanceRsp, error) {
+	return nil, errors.New("rpc AdvanceRebalance of service RebalanceSvc is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -1884,6 +1959,62 @@ func (c *PositionSvcClientProxyImpl) SyncPositions(ctx context.Context, req *Syn
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SyncPositionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// RebalanceSvcClientProxy defines service client proxy
+type RebalanceSvcClientProxy interface {
+	CreateRebalance(ctx context.Context, req *CreateRebalanceReq, opts ...client.Option) (rsp *CreateRebalanceRsp, err error)
+
+	AdvanceRebalance(ctx context.Context, req *AdvanceRebalanceReq, opts ...client.Option) (rsp *AdvanceRebalanceRsp, err error)
+}
+
+type RebalanceSvcClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewRebalanceSvcClientProxy = func(opts ...client.Option) RebalanceSvcClientProxy {
+	return &RebalanceSvcClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *RebalanceSvcClientProxyImpl) CreateRebalance(ctx context.Context, req *CreateRebalanceReq, opts ...client.Option) (*CreateRebalanceRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.RebalanceSvc/CreateRebalance")
+	msg.WithCalleeServiceName(RebalanceSvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("RebalanceSvc")
+	msg.WithCalleeMethod("CreateRebalance")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CreateRebalanceRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *RebalanceSvcClientProxyImpl) AdvanceRebalance(ctx context.Context, req *AdvanceRebalanceReq, opts ...client.Option) (*AdvanceRebalanceRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.RebalanceSvc/AdvanceRebalance")
+	msg.WithCalleeServiceName(RebalanceSvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("RebalanceSvc")
+	msg.WithCalleeMethod("AdvanceRebalance")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &AdvanceRebalanceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

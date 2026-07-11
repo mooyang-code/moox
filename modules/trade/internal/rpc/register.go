@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	mooxpb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 
@@ -18,11 +19,12 @@ const (
 	OrderSvcName      = "trpc.moox.trade.OrderSvc"
 	TradeQuerySvcName = "trpc.moox.trade.TradeQuerySvc"
 	PositionSvcName   = "trpc.moox.trade.PositionSvc"
+	RebalanceSvcName  = "trpc.moox.trade.RebalanceSvc"
 )
 
 // RegisterAll 把 9 个 service 注册到 trpc server。
-func RegisterAll(s *server.Server, svc *service.Service) {
-	h := New(svc)
+func RegisterAll(s *server.Server, svc *service.Service, kernel ...*command.Engine) {
+	h := New(svc, kernel...)
 	mooxpb.RegisterAccountSvcService(s.Service(AccountSvcName), h)
 	mooxpb.RegisterBalanceSvcService(s.Service(BalanceSvcName), h)
 	mooxpb.RegisterFundSvcService(s.Service(FundSvcName), h)
@@ -32,4 +34,5 @@ func RegisterAll(s *server.Server, svc *service.Service) {
 	mooxpb.RegisterOrderSvcService(s.Service(OrderSvcName), h)
 	mooxpb.RegisterTradeQuerySvcService(s.Service(TradeQuerySvcName), h)
 	mooxpb.RegisterPositionSvcService(s.Service(PositionSvcName), h)
+	mooxpb.RegisterRebalanceSvcService(s.Service(RebalanceSvcName), h)
 }

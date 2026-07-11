@@ -1,6 +1,9 @@
 CREATE TABLE IF NOT EXISTS t_trade_order_aggregates (
  c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_space_id TEXT NOT NULL, c_order_id TEXT NOT NULL, c_client_order_id TEXT NOT NULL,
- c_symbol TEXT NOT NULL, c_side TEXT NOT NULL, c_quantity TEXT NOT NULL, c_price TEXT NOT NULL, c_filled_quantity TEXT NOT NULL DEFAULT '0',
+ c_account_id TEXT NOT NULL, c_channel_id TEXT NOT NULL, c_symbol TEXT NOT NULL, c_market_type TEXT NOT NULL, c_base_asset TEXT NOT NULL, c_quote_asset TEXT NOT NULL,
+ c_side TEXT NOT NULL, c_quantity TEXT NOT NULL, c_price TEXT NOT NULL, c_filled_quantity TEXT NOT NULL DEFAULT '0',
+ c_reduce_only INTEGER NOT NULL DEFAULT 0, c_reserved_asset TEXT NOT NULL, c_reserved_amount TEXT NOT NULL,
+ c_consumed_reserved TEXT NOT NULL DEFAULT '0',
  c_state TEXT NOT NULL, c_exchange_order_id TEXT NOT NULL DEFAULT '', c_version INTEGER NOT NULL DEFAULT 1,
  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
  UNIQUE(c_space_id,c_order_id), UNIQUE(c_space_id,c_client_order_id)
@@ -28,6 +31,6 @@ CREATE TABLE IF NOT EXISTS t_execution_slices (
 CREATE TABLE IF NOT EXISTS t_trade_sagas (
  c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_space_id TEXT NOT NULL, c_saga_id TEXT NOT NULL, c_type TEXT NOT NULL,
  c_state TEXT NOT NULL, c_order_id TEXT NOT NULL, c_replacement_order_id TEXT NOT NULL DEFAULT '', c_version INTEGER NOT NULL DEFAULT 1,
- c_last_error TEXT NOT NULL DEFAULT '', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ c_payload TEXT NOT NULL DEFAULT '{}', c_last_error TEXT NOT NULL DEFAULT '', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
  UNIQUE(c_space_id,c_saga_id)
 );

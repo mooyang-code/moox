@@ -110,6 +110,24 @@ consumers:
     ack_wait: 60s
     max_ack_pending: 64
     max_deliver: -1
+  - stream: MOOX_TRADE
+    durable: trade_rebalance_v1
+    filter_subject: moox.trade.rebalance.requested.v1
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 60s
+    max_ack_pending: 64
+    max_deliver: -1
+  - stream: MOOX_TRADE
+    durable: trade_progress_v1
+    filter_subject: moox.trade.fill.received.v1
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 60s
+    max_ack_pending: 64
+    max_deliver: -1
   - stream: MOOX_METRICS
     durable: monitor_hostmetrics_ingest_v1
     filter_subject: moox.metrics.host.reported.v1

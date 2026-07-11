@@ -10,6 +10,7 @@ const (
 	Open              State = "OPEN"
 	PartiallyFilled   State = "PARTIALLY_FILLED"
 	Canceling         State = "CANCELING"
+	CancelUnknown     State = "CANCEL_UNKNOWN"
 	Filled            State = "FILLED"
 	Canceled          State = "CANCELED"
 	PartiallyCanceled State = "PARTIALLY_CANCELED"

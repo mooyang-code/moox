@@ -3,7 +3,14 @@ package rpc
 import (
 	"context"
 
+	gonanoid "github.com/matoous/go-nanoid/v2"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
+	rebalanceapp "github.com/mooyang-code/moox/modules/trade/internal/application/rebalance"
+	domainorder "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
+	domainrebalance "github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	mooxpb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
@@ -11,11 +18,18 @@ import (
 // Server 实现 trade 模块全部 9 个 tRPC service 接口，委托 service.Service。
 // 一个 Server 实例同时满足 AccountSvcService/BalanceSvcService/.../PositionSvcService。
 type Server struct {
-	svc *service.Service
+	svc    *service.Service
+	kernel *command.Engine
 }
 
 // New 创建 RPC handler。
-func New(svc *service.Service) *Server { return &Server{svc: svc} }
+func New(svc *service.Service, kernel ...*command.Engine) *Server {
+	h := &Server{svc: svc}
+	if len(kernel) > 0 {
+		h.kernel = kernel[0]
+	}
+	return h
+}
 
 // 编译期断言：Server 实现各 service 接口。
 var _ mooxpb.AccountSvcService = (*Server)(nil)
@@ -27,6 +41,54 @@ var _ mooxpb.TradeOpSvcService = (*Server)(nil)
 var _ mooxpb.OrderSvcService = (*Server)(nil)
 var _ mooxpb.TradeQuerySvcService = (*Server)(nil)
 var _ mooxpb.PositionSvcService = (*Server)(nil)
+var _ mooxpb.RebalanceSvcService = (*Server)(nil)
+
+func (h *Server) CreateRebalance(ctx context.Context, req *mooxpb.CreateRebalanceReq) (*mooxpb.CreateRebalanceRsp, error) {
+	if h.kernel == nil {
+		return &mooxpb.CreateRebalanceRsp{RetInfo: retInfo(mooxpb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
+	}
+	sid := spaceID(ctx)
+	targets := make([]domainrebalance.Target, 0, len(req.GetTargets()))
+	for _, v := range req.GetTargets() {
+		q, e := shared.ParseDecimal(v.GetQuantity())
+		if e != nil {
+			return &mooxpb.CreateRebalanceRsp{RetInfo: errToRetInfo(e)}, nil
+		}
+		targets = append(targets, domainrebalance.Target{Symbol: v.GetSymbol(), Quantity: q})
+	}
+	currents := make([]domainrebalance.Current, 0, len(req.GetCurrents()))
+	for _, v := range req.GetCurrents() {
+		q, e := shared.ParseDecimal(v.GetQuantity())
+		if e != nil {
+			return &mooxpb.CreateRebalanceRsp{RetInfo: errToRetInfo(e)}, nil
+		}
+		currents = append(currents, domainrebalance.Current{Symbol: v.GetSymbol(), Quantity: q})
+	}
+	markets := map[string]rebalanceapp.Market{}
+	for _, v := range req.GetMarkets() {
+		markets[v.GetSymbol()] = rebalanceapp.Market{MarketType: v.GetMarketType(), BaseAsset: v.GetBaseAsset(), QuoteAsset: v.GetQuoteAsset(), Price: v.GetPrice()}
+	}
+	mode := domainrebalance.TargetMode(req.GetTargetMode())
+	if mode == "" {
+		mode = domainrebalance.FullTarget
+	}
+	svc := rebalanceapp.Service{Store: h.kernel.Store, Engine: h.kernel}
+	e := svc.Create(ctx, rebalanceapp.CreateInput{SpaceID: sid, RunID: req.GetRunId(), IdempotencyKey: req.GetIdempotencyKey(), AccountID: req.GetAccountId(), ChannelID: req.GetChannelId(), MarketSnapshotID: req.GetMarketSnapshotId(), PositionSnapshotID: req.GetPositionSnapshotId(), RulesVersion: req.GetRulesVersion(), Mode: mode, Targets: targets, Currents: currents, Markets: markets})
+	if e != nil {
+		return &mooxpb.CreateRebalanceRsp{RetInfo: errToRetInfo(e)}, nil
+	}
+	return &mooxpb.CreateRebalanceRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), RunId: req.GetRunId(), Status: "PLANNED"}, nil
+}
+func (h *Server) AdvanceRebalance(ctx context.Context, req *mooxpb.AdvanceRebalanceReq) (*mooxpb.AdvanceRebalanceRsp, error) {
+	if h.kernel == nil {
+		return &mooxpb.AdvanceRebalanceRsp{RetInfo: retInfo(mooxpb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
+	}
+	status, e := (rebalanceapp.Service{Store: h.kernel.Store, Engine: h.kernel}).Advance(ctx, spaceID(ctx), req.GetRunId(), req.GetAccountId(), req.GetChannelId())
+	if e != nil {
+		return &mooxpb.AdvanceRebalanceRsp{RetInfo: errToRetInfo(e)}, nil
+	}
+	return &mooxpb.AdvanceRebalanceRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), RunId: req.GetRunId(), Status: status}, nil
+}
 
 // ===== AccountSvc =====
 
@@ -111,6 +173,29 @@ func (h *Server) SyncExchangeAccounts(ctx context.Context, req *mooxpb.SyncExcha
 	if err != nil {
 		return &mooxpb.SyncExchangeAccountsRsp{RetInfo: errToRetInfo(err)}, nil
 	}
+	if h.kernel != nil {
+		for _, account := range list {
+			bs, balanceErr := h.svc.Account.GetBalances(ctx, sid, account.AccountID, nil)
+			if balanceErr != nil {
+				return &mooxpb.SyncExchangeAccountsRsp{RetInfo: errToRetInfo(balanceErr)}, nil
+			}
+			desired := map[string]map[string]shared.Decimal{}
+			for _, b := range bs {
+				available, e := shared.ParseDecimal(b.Available)
+				if e != nil {
+					return &mooxpb.SyncExchangeAccountsRsp{RetInfo: errToRetInfo(e)}, nil
+				}
+				frozen, e := shared.ParseDecimal(b.Frozen)
+				if e != nil {
+					return &mooxpb.SyncExchangeAccountsRsp{RetInfo: errToRetInfo(e)}, nil
+				}
+				desired[b.Currency] = map[string]shared.Decimal{"available": available, "frozen": frozen}
+			}
+			if balanceErr = h.kernel.Store.ReconcileBalances(ctx, sid, account.AccountID, desired); balanceErr != nil {
+				return &mooxpb.SyncExchangeAccountsRsp{RetInfo: errToRetInfo(balanceErr)}, nil
+			}
+		}
+	}
 	out := make([]*mooxpb.Account, 0, len(list))
 	for _, a := range list {
 		out = append(out, accountToPB(a))
@@ -122,6 +207,35 @@ func (h *Server) SyncExchangeAccounts(ctx context.Context, req *mooxpb.SyncExcha
 
 func (h *Server) GetBalances(ctx context.Context, req *mooxpb.GetBalancesReq) (*mooxpb.GetBalancesRsp, error) {
 	sid := spaceID(ctx)
+	if h.kernel != nil {
+		rows, err := h.kernel.Store.ListBalances(ctx, sid, req.GetAccountId())
+		if err != nil {
+			return &mooxpb.GetBalancesRsp{RetInfo: errToRetInfo(err)}, nil
+		}
+		type pair struct{ available, frozen, margin shared.Decimal }
+		m := map[string]pair{}
+		for _, r := range rows {
+			p := m[r.Asset]
+			v, e := shared.ParseDecimal(r.Amount)
+			if e != nil {
+				return &mooxpb.GetBalancesRsp{RetInfo: errToRetInfo(e)}, nil
+			}
+			if r.Bucket == "available" {
+				p.available = v
+			} else if r.Bucket == "frozen" {
+				p.frozen = v
+			} else if r.Bucket == "margin" {
+				p.margin = v
+			}
+			m[r.Asset] = p
+		}
+		out := make([]*mooxpb.Balance, 0, len(m))
+		for asset, p := range m {
+			locked := p.frozen.Add(p.margin)
+			out = append(out, &mooxpb.Balance{AccountId: req.GetAccountId(), Currency: asset, Available: p.available.String(), Frozen: locked.String(), Total: p.available.Add(locked).String()})
+		}
+		return &mooxpb.GetBalancesRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Balances: out}, nil
+	}
 	bs, err := h.svc.Account.GetBalances(ctx, sid, req.GetAccountId(), req.GetCurrencies())
 	if err != nil {
 		return &mooxpb.GetBalancesRsp{RetInfo: errToRetInfo(err)}, nil
@@ -138,6 +252,23 @@ func (h *Server) SyncBalances(ctx context.Context, req *mooxpb.SyncBalancesReq) 
 	bs, err := h.svc.Account.SyncBalances(ctx, sid, req.GetAccountId())
 	if err != nil {
 		return &mooxpb.SyncBalancesRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	if h.kernel != nil {
+		desired := map[string]map[string]shared.Decimal{}
+		for _, b := range bs {
+			available, e := shared.ParseDecimal(b.Available)
+			if e != nil {
+				return &mooxpb.SyncBalancesRsp{RetInfo: errToRetInfo(e)}, nil
+			}
+			frozen, e := shared.ParseDecimal(b.Frozen)
+			if e != nil {
+				return &mooxpb.SyncBalancesRsp{RetInfo: errToRetInfo(e)}, nil
+			}
+			desired[b.Currency] = map[string]shared.Decimal{"available": available, "frozen": frozen}
+		}
+		if err = h.kernel.Store.ReconcileBalances(ctx, sid, req.GetAccountId(), desired); err != nil {
+			return &mooxpb.SyncBalancesRsp{RetInfo: errToRetInfo(err)}, nil
+		}
 	}
 	out := make([]*mooxpb.Balance, 0, len(bs))
 	for _, b := range bs {
@@ -307,6 +438,22 @@ func (h *Server) ListInstruments(ctx context.Context, req *mooxpb.ListInstrument
 
 func (h *Server) PlaceOrder(ctx context.Context, req *mooxpb.PlaceOrderReq) (*mooxpb.PlaceOrderRsp, error) {
 	sid := spaceID(ctx)
+	if h.kernel != nil {
+		orderID, _ := gonanoid.New()
+		clientID := req.GetClientOrderId()
+		if clientID == "" {
+			clientID = orderID
+		}
+		side := "BUY"
+		if req.GetSide() == mooxpb.OrderSide_ORDER_SIDE_SELL {
+			side = "SELL"
+		}
+		o, err := h.kernel.Place(ctx, command.PlaceInput{SpaceID: sid, OrderID: orderID, ClientOrderID: clientID, AccountID: req.GetAccountId(), ChannelID: req.GetChannelId(), Symbol: req.GetSymbol(), MarketType: marketTypeToDomain(req.GetMarketType()), Side: side, Quantity: req.GetQuantity(), Price: req.GetPrice(), ReduceOnly: req.GetReduceOnly()})
+		if err != nil {
+			return &mooxpb.PlaceOrderRsp{RetInfo: errToRetInfo(err)}, nil
+		}
+		return &mooxpb.PlaceOrderRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), OrderId: o.OrderID, ExchangeOrderId: o.ExchangeOrderID, Status: kernelStatusToPB(domainorder.State(o.State))}, nil
+	}
 	ctx = service.WithOperator(ctx, userID(ctx))
 	xreq := &exchange.PlaceOrderReq{
 		Market:        exchange.MarketType(marketTypeToDomain(req.GetMarketType())),
@@ -329,8 +476,43 @@ func (h *Server) PlaceOrder(ctx context.Context, req *mooxpb.PlaceOrderReq) (*mo
 	return &mooxpb.PlaceOrderRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), OrderId: o.OrderID, ExchangeOrderId: o.ExchangeOrderID, Status: orderStatusToPB(o.Status)}, nil
 }
 
+func kernelStatusToPB(s domainorder.State) mooxpb.OrderStatus {
+	switch s {
+	case domainorder.Open, domainorder.Submitting, domainorder.SubmitUnknown, domainorder.Canceling, domainorder.CancelUnknown:
+		return mooxpb.OrderStatus_ORDER_STATUS_SUBMITTED
+	case domainorder.PartiallyFilled:
+		return mooxpb.OrderStatus_ORDER_STATUS_PARTIALLY_FILLED
+	case domainorder.Filled:
+		return mooxpb.OrderStatus_ORDER_STATUS_FILLED
+	case domainorder.Canceled:
+		return mooxpb.OrderStatus_ORDER_STATUS_CANCELED
+	case domainorder.PartiallyCanceled:
+		return mooxpb.OrderStatus_ORDER_STATUS_PARTIAL_CANCELED
+	case domainorder.Rejected:
+		return mooxpb.OrderStatus_ORDER_STATUS_REJECTED
+	case domainorder.Expired:
+		return mooxpb.OrderStatus_ORDER_STATUS_EXPIRED
+	default:
+		return mooxpb.OrderStatus_ORDER_STATUS_PENDING
+	}
+}
+func kernelOrderToPB(o store.OrderRecord) *mooxpb.Order {
+	side := mooxpb.OrderSide_ORDER_SIDE_BUY
+	if o.Side == "SELL" {
+		side = mooxpb.OrderSide_ORDER_SIDE_SELL
+	}
+	return &mooxpb.Order{OrderId: o.OrderID, ClientOrderId: o.ClientOrderID, ExchangeOrderId: o.ExchangeOrderID, AccountId: o.AccountID, ChannelId: o.ChannelID, Symbol: o.Symbol, Side: side, OrderType: mooxpb.OrderType_ORDER_TYPE_LIMIT, TimeInForce: "IOC", Price: o.Price, Quantity: o.Quantity, FilledQty: o.FilledQuantity, Status: kernelStatusToPB(domainorder.State(o.State)), ReduceOnly: o.ReduceOnly}
+}
+
 func (h *Server) CancelOrder(ctx context.Context, req *mooxpb.CancelOrderReq) (*mooxpb.CancelOrderRsp, error) {
 	sid := spaceID(ctx)
+	if h.kernel != nil {
+		o, err := h.kernel.Cancel(ctx, sid, req.GetOrderId())
+		if err != nil {
+			return &mooxpb.CancelOrderRsp{RetInfo: errToRetInfo(err)}, nil
+		}
+		return &mooxpb.CancelOrderRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Status: kernelStatusToPB(domainorder.State(o.State))}, nil
+	}
 	ctx = service.WithOperator(ctx, userID(ctx))
 	xreq := &exchange.CancelOrderReq{
 		OrderID:       req.GetOrderId(),
@@ -345,6 +527,20 @@ func (h *Server) CancelOrder(ctx context.Context, req *mooxpb.CancelOrderReq) (*
 
 func (h *Server) CancelAllOrders(ctx context.Context, req *mooxpb.CancelAllOrdersReq) (*mooxpb.CancelAllOrdersRsp, error) {
 	sid := spaceID(ctx)
+	if h.kernel != nil {
+		orders, err := h.kernel.Store.ListOrders(ctx, sid, "", req.GetChannelId(), req.GetSymbol(), true)
+		if err != nil {
+			return &mooxpb.CancelAllOrdersRsp{RetInfo: errToRetInfo(err)}, nil
+		}
+		var n int32
+		for _, o := range orders {
+			if _, err = h.kernel.Cancel(ctx, sid, o.OrderID); err != nil {
+				return &mooxpb.CancelAllOrdersRsp{RetInfo: errToRetInfo(err), CanceledCount: n}, nil
+			}
+			n++
+		}
+		return &mooxpb.CancelAllOrdersRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), CanceledCount: n}, nil
+	}
 	n, err := h.svc.Order.CancelAllOrders(ctx, sid, req.GetChannelId(), req.GetSymbol())
 	if err != nil {
 		return &mooxpb.CancelAllOrdersRsp{RetInfo: errToRetInfo(err)}, nil
@@ -354,6 +550,28 @@ func (h *Server) CancelAllOrders(ctx context.Context, req *mooxpb.CancelAllOrder
 
 func (h *Server) AmendOrder(ctx context.Context, req *mooxpb.AmendOrderReq) (*mooxpb.AmendOrderRsp, error) {
 	sid := spaceID(ctx)
+	if h.kernel != nil {
+		old, err := h.kernel.Store.GetOrder(ctx, sid, req.GetOrderId())
+		if err != nil {
+			return &mooxpb.AmendOrderRsp{RetInfo: errToRetInfo(err)}, nil
+		}
+		price, qty := req.GetNewPrice(), req.GetNewQuantity()
+		if price == "" {
+			price = old.Price
+		}
+		if qty == "" {
+			qty = old.Quantity
+		}
+		replacementID, _ := gonanoid.New()
+		clientID, _ := gonanoid.New()
+		sagaID, _ := gonanoid.New()
+		saga, err := h.kernel.Replace(ctx, sagaID, old.OrderID, command.PlaceInput{SpaceID: sid, OrderID: replacementID, ClientOrderID: clientID, AccountID: old.AccountID, ChannelID: old.ChannelID, Symbol: old.Symbol, MarketType: old.MarketType, BaseAsset: old.BaseAsset, QuoteAsset: old.QuoteAsset, Side: old.Side, Quantity: qty, Price: price, ReduceOnly: old.ReduceOnly})
+		if err != nil {
+			return &mooxpb.AmendOrderRsp{RetInfo: errToRetInfo(err)}, nil
+		}
+		_ = saga
+		return &mooxpb.AmendOrderRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Status: mooxpb.OrderStatus_ORDER_STATUS_PENDING}, nil
+	}
 	ctx = service.WithOperator(ctx, userID(ctx))
 	xreq := &exchange.AmendOrderReq{
 		OrderID:     req.GetOrderId(),
@@ -405,6 +623,16 @@ func (h *Server) ConvertDust(ctx context.Context, req *mooxpb.ConvertDustReq) (*
 
 func (h *Server) GetOrder(ctx context.Context, req *mooxpb.GetOrderReq) (*mooxpb.GetOrderRsp, error) {
 	sid := spaceID(ctx)
+	if h.kernel != nil {
+		o, err := h.kernel.Store.GetOrder(ctx, sid, req.GetOrderId())
+		if err != nil && req.GetClientOrderId() != "" {
+			o, err = h.kernel.Store.GetOrderByClientID(ctx, sid, req.GetClientOrderId())
+		}
+		if err != nil {
+			return &mooxpb.GetOrderRsp{RetInfo: errToRetInfo(err)}, nil
+		}
+		return &mooxpb.GetOrderRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Order: kernelOrderToPB(o)}, nil
+	}
 	o, err := h.svc.Order.GetOrder(ctx, sid, req.GetOrderId(), req.GetClientOrderId())
 	if err != nil {
 		return &mooxpb.GetOrderRsp{RetInfo: errToRetInfo(err)}, nil
@@ -414,6 +642,18 @@ func (h *Server) GetOrder(ctx context.Context, req *mooxpb.GetOrderReq) (*mooxpb
 
 func (h *Server) ListOrders(ctx context.Context, req *mooxpb.ListOrdersReq) (*mooxpb.ListOrdersRsp, error) {
 	sid := spaceID(ctx)
+	if h.kernel != nil {
+		rows, err := h.kernel.Store.ListOrders(ctx, sid, req.GetAccountId(), req.GetChannelId(), req.GetSymbol(), req.GetOnlyOpen())
+		if err != nil {
+			return &mooxpb.ListOrdersRsp{RetInfo: errToRetInfo(err)}, nil
+		}
+		out := make([]*mooxpb.Order, len(rows))
+		for i, r := range rows {
+			out[i] = kernelOrderToPB(r)
+		}
+		page := pageFromPB(req.GetPage()).Normalize()
+		return &mooxpb.ListOrdersRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Orders: out, PageResult: pageResult(page, len(out))}, nil
+	}
 	f := service.OrderFilter{
 		AccountID: req.GetAccountId(),
 		ChannelID: req.GetChannelId(),
@@ -453,6 +693,18 @@ func (h *Server) SyncOrders(ctx context.Context, req *mooxpb.SyncOrdersReq) (*mo
 
 func (h *Server) ListTrades(ctx context.Context, req *mooxpb.ListTradesReq) (*mooxpb.ListTradesRsp, error) {
 	sid := spaceID(ctx)
+	if h.kernel != nil {
+		rows, err := h.kernel.Store.ListFills(ctx, sid, req.GetOrderId())
+		if err != nil {
+			return &mooxpb.ListTradesRsp{RetInfo: errToRetInfo(err)}, nil
+		}
+		out := make([]*mooxpb.Trade, len(rows))
+		for i, r := range rows {
+			out[i] = &mooxpb.Trade{TradeId: r.FillID, ExchangeTradeId: r.ExchangeTradeID, OrderId: r.OrderID, Price: r.Price, Quantity: r.Quantity, Fee: r.Fee, FeeCurrency: r.FeeAsset}
+		}
+		page := pageFromPB(req.GetPage()).Normalize()
+		return &mooxpb.ListTradesRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Trades: out, PageResult: pageResult(page, len(out))}, nil
+	}
 	f := service.TradeFilter{
 		AccountID: req.GetAccountId(),
 		OrderID:   req.GetOrderId(),
@@ -490,6 +742,17 @@ func (h *Server) SyncTrades(ctx context.Context, req *mooxpb.SyncTradesReq) (*mo
 
 func (h *Server) ListPositions(ctx context.Context, req *mooxpb.ListPositionsReq) (*mooxpb.ListPositionsRsp, error) {
 	sid := spaceID(ctx)
+	if h.kernel != nil {
+		rows, err := h.kernel.Store.ListPositions(ctx, sid, req.GetAccountId(), req.GetSymbol())
+		if err != nil {
+			return &mooxpb.ListPositionsRsp{RetInfo: errToRetInfo(err)}, nil
+		}
+		out := make([]*mooxpb.Position, len(rows))
+		for i, r := range rows {
+			out[i] = &mooxpb.Position{AccountId: r.AccountID, Symbol: r.Symbol, Quantity: r.Quantity, AvgPrice: r.AveragePrice, RealizedPnl: r.RealizedPnL}
+		}
+		return &mooxpb.ListPositionsRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), Positions: out}, nil
+	}
 	list, err := h.svc.Order.ListPositions(ctx, sid, req.GetAccountId(), req.GetSymbol())
 	if err != nil {
 		return &mooxpb.ListPositionsRsp{RetInfo: errToRetInfo(err)}, nil

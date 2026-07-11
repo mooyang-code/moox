@@ -18,6 +18,9 @@ func (w SubmissionWorker) Handle(ctx context.Context, space, orderID string) (st
 	if r.State == string(order.SubmitUnknown) {
 		return w.Engine.ResolveUnknown(ctx, space, orderID)
 	}
+	if r.State == string(order.Submitting) {
+		return w.Engine.RecoverSubmitting(ctx, space, orderID)
+	}
 	if r.State != string(order.Ready) {
 		return r, nil
 	}

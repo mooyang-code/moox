@@ -10,6 +10,8 @@ type LeverageBracket struct {
 type Rules struct {
 	Version             string
 	Symbol              string
+	BaseAsset           string
+	QuoteAsset          string
 	TickSize            shared.Decimal
 	StepSize            shared.Decimal
 	MinQuantity         shared.Decimal

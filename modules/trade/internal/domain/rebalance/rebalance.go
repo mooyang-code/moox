@@ -30,6 +30,7 @@ type Leg struct {
 	Sequence   int
 	Symbol     string
 	Action     Action
+	Side       string
 	Quantity   shared.Decimal
 	ReduceOnly bool
 	DependsOn  []int
@@ -89,14 +90,25 @@ func (Planner) BuildMode(mode TargetMode, targets []Target, currents []Current) 
 			a = Close
 			reduce = true
 		} else if cur.IsNegative() != tgt.IsNegative() {
-			first = append(first, Leg{Symbol: s, Action: Close, Quantity: cur.Abs(), ReduceOnly: true})
-			second = append(second, Leg{Symbol: s, Action: Open, Quantity: tgt.Abs(), ReduceOnly: false})
+			closeSide, openSide := "SELL", "BUY"
+			if cur.IsNegative() {
+				closeSide = "BUY"
+			}
+			if tgt.IsNegative() {
+				openSide = "SELL"
+			}
+			first = append(first, Leg{Symbol: s, Action: Close, Side: closeSide, Quantity: cur.Abs(), ReduceOnly: true})
+			second = append(second, Leg{Symbol: s, Action: Open, Side: openSide, Quantity: tgt.Abs(), ReduceOnly: false})
 			continue
 		} else if tgt.Abs().Cmp(cur.Abs()) < 0 {
 			a = Reduce
 			reduce = true
 		}
-		l := Leg{Symbol: s, Action: a, Quantity: delta.Abs(), ReduceOnly: reduce}
+		side := "BUY"
+		if delta.IsNegative() {
+			side = "SELL"
+		}
+		l := Leg{Symbol: s, Action: a, Side: side, Quantity: delta.Abs(), ReduceOnly: reduce}
 		if reduce {
 			first = append(first, l)
 		} else {
