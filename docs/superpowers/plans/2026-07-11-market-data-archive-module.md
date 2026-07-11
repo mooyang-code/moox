@@ -4,7 +4,7 @@
 
 **Goal:** 在 MooX 中新增纯 Go、单实例运行的行情数据归档模块，可靠消费 Storage 的已闭合 K 线事件，并按市场、数据集、频率、标的和 UTC 月份永久物化为本地宽表 Parquet 文件，可选同步 COS。
 
-**Architecture:** `modules/archive` 先将通过校验的 NATS JetStream 事件以同步 Pebble batch 写入 journal，ACK 与 Parquet/COS 解耦；后台物化器以 partition 高水位读取 pending patch，合并既有文件后通过同目录临时文件、校验、原子 rename 和目录 fsync 提交新 generation。Storage Metadata RPC 只登记已提交的本地文件，COS 只复制稳定 generation；本地 Parquet 和尚未物化的 journal 永不由部署或维护命令删除。
+**Architecture:** `modules/archive` 先将通过校验的 NATS JetStream 事件以同步 Pebble batch 写入 journal，ACK 与 Parquet/COS 解耦；后台归档写入器以 partition 高水位读取 pending patch，合并既有文件后通过同目录临时文件、校验、原子 rename 和目录 fsync 提交新 generation。Storage Metadata RPC 只登记已提交的本地文件，COS 只复制稳定 generation；本地 Parquet 和尚未物化的 journal 永不由部署或维护命令删除。
 
 **Tech Stack:** Go 1.24、NATS JetStream、`packages/jetstream`、Pebble v1.1.5、`parquet-go` v0.25.1、ZSTD、Storage protobuf/tRPC、腾讯云 COS Go SDK v0.7.70、Prometheus、YAML v3
 
@@ -149,7 +149,7 @@ type PartitionState struct {
 }
 ```
 
-物化器调用 `BeginMaterialization` 固定 `MaterializingSeq=HighWaterSeq`。提交完成后只删除 `seq <= MaterializingSeq` 的 pending key；物化期间写入的更高序号保留，partition 回到 `dirty`，因此不会因并发到达的修订而丢失。
+归档写入器调用 `BeginMaterialization` 固定 `MaterializingSeq=HighWaterSeq`。提交完成后只删除 `seq <= MaterializingSeq` 的 pending key；物化期间写入的更高序号保留，partition 回到 `dirty`，因此不会因并发到达的修订而丢失。
 
 ### 2.3 物理提交状态
 
@@ -198,21 +198,21 @@ modules/archive/
   internal/parquetio/schema.go
   internal/parquetio/codec.go
   internal/parquetio/codec_test.go
-  internal/materializer/materializer.go
-  internal/materializer/materializer_test.go
-  internal/materializer/recovery.go
-  internal/materializer/recovery_test.go
-  internal/materializer/scheduler.go
-  internal/materializer/scheduler_test.go
+  internal/writer/writer.go
+  internal/writer/writer_test.go
+  internal/writer/recovery.go
+  internal/writer/recovery_test.go
+  internal/writer/scheduler.go
+  internal/writer/scheduler_test.go
   internal/registry/client.go
   internal/registry/client_test.go
-  internal/reconcile/backfill.go
-  internal/reconcile/backfill_test.go
+  internal/backfill/backfill.go
+  internal/backfill/backfill_test.go
   internal/cosstore/client.go
   internal/cosstore/client_test.go
-  internal/observability/state.go
-  internal/observability/server.go
-  internal/observability/server_test.go
+  internal/health/state.go
+  internal/health/server.go
+  internal/health/server_test.go
   internal/bootstrap/app.go
   internal/bootstrap/app_test.go
   test/archive_e2e_test.go
@@ -1018,15 +1018,15 @@ git add modules/archive/internal/parquetio
 git commit -m "feat(archive): add wide parquet codec"
 ```
 
-### Task 7: 实现 copy-on-write 物化、部分更新与崩溃恢复
+### Task 7: 实现 Archive Writer 的 copy-on-write、部分更新与崩溃恢复
 
 **Files:**
-- Create: `modules/archive/internal/materializer/materializer.go`
-- Create: `modules/archive/internal/materializer/materializer_test.go`
-- Create: `modules/archive/internal/materializer/recovery.go`
-- Create: `modules/archive/internal/materializer/recovery_test.go`
-- Create: `modules/archive/internal/materializer/scheduler.go`
-- Create: `modules/archive/internal/materializer/scheduler_test.go`
+- Create: `modules/archive/internal/writer/writer.go`
+- Create: `modules/archive/internal/writer/writer_test.go`
+- Create: `modules/archive/internal/writer/recovery.go`
+- Create: `modules/archive/internal/writer/recovery_test.go`
+- Create: `modules/archive/internal/writer/scheduler.go`
+- Create: `modules/archive/internal/writer/scheduler_test.go`
 - Modify: `modules/archive/internal/consumer/handler.go`
 - Modify: `modules/archive/internal/consumer/handler_test.go`
 
@@ -1040,23 +1040,23 @@ git commit -m "feat(archive): add wide parquet codec"
 
 - [ ] **Step 3: 运行测试，确认失败**
 
-Run: `cd modules/archive && go test -count=1 ./internal/materializer`
+Run: `cd modules/archive && go test -count=1 ./internal/writer`
 
-Expected: FAIL，Materializer 尚未定义。
+Expected: FAIL，Writer 尚未定义。
 
 - [ ] **Step 4: 实现单 partition 物化算法**
 
 ```go
-func (m *Materializer) Materialize(ctx context.Context, key domain.PartitionKey) (domain.Manifest, error) {
-	attempt, err := m.journal.BeginMaterialization(ctx, key)
+func (w *Writer) WritePartition(ctx context.Context, key domain.PartitionKey) (domain.Manifest, error) {
+	attempt, err := w.journal.BeginMaterialization(ctx, key)
 	if err != nil {
 		return domain.Manifest{}, err
 	}
-	base, err := m.readExisting(key)
+	base, err := w.readExisting(key)
 	if err != nil {
 		return domain.Manifest{}, err
 	}
-	pending, err := m.journal.Pending(ctx, key, attempt.ThroughSeq)
+	pending, err := w.journal.Pending(ctx, key, attempt.ThroughSeq)
 	if err != nil {
 		return domain.Manifest{}, err
 	}
@@ -1064,11 +1064,11 @@ func (m *Materializer) Materialize(ctx context.Context, key domain.PartitionKey)
 	if err != nil {
 		return domain.Manifest{}, err
 	}
-	manifest, err := m.atomicWrite(ctx, key, attempt, rows)
+	manifest, err := w.atomicWrite(ctx, key, attempt, rows)
 	if err != nil {
 		return domain.Manifest{}, err
 	}
-	if err := m.journal.MarkLocalCommitted(ctx, key, manifest); err != nil {
+	if err := w.journal.MarkLocalCommitted(ctx, key, manifest); err != nil {
 		return domain.Manifest{}, err
 	}
 	return manifest, nil
@@ -1079,14 +1079,14 @@ func (m *Materializer) Materialize(ctx context.Context, key domain.PartitionKey)
 
 - [ ] **Step 5: 实现 partition lock、有界 worker 和全部触发条件**
 
-`MaterializeDirty(ctx, limit)` 从 journal 取 dirty partition，以 `workers` 个 goroutine 处理；同一 partition 的 timer、CLI、recovery 共用 `sync.Map` 中的 mutex。错误保留 phase/pending 并记录 last error，不删除目标旧文件。
+`WriteDirty(ctx, limit)` 从 journal 取 dirty partition，以 `workers` 个 goroutine 处理；同一 partition 的 timer、CLI、recovery 共用 `sync.Map` 中的 mutex。错误保留 phase/pending 并记录 last error，不删除目标旧文件。
 
 `Scheduler` 接收 Consumer AppendResult 的 partition 通知；pending 数达到阈值立即入队，否则由 interval ticker 扫描。UTC month 改变时调用 `SealClosedMonths`：对上月 clean manifest 直接更新 state/ArchiveFile 为 sealed 并加入 COS 队列，对 dirty partition 先完成物化再 sealed。迟到 patch 到达 sealed partition 时保持 `Sealed=true`、设置 dirty、清除 COS synced generation，重新物化后仍为 sealed。`Flush(ctx)` 用于 SIGTERM，在 timeout 内处理当前全部 dirty partition。
 
 ```go
 type Scheduler struct {
 	journal      Journal
-	materializer *Materializer
+	writer       *Writer
 	interval     time.Duration
 	pendingRows  uint64
 	now          func() time.Time
@@ -1105,29 +1105,29 @@ func (s *Scheduler) Flush(ctx context.Context) error
 故障点固定为：写临时文件前、file Sync 后、rename 后、journal local commit 后、Metadata register 后。每个故障点都关闭并重开 journal，调用 `Recover` 两次；断言结果幂等、目标文件恰好一份、行数不重复、pending 最终只清理到 captured high water。
 
 ```go
-func (m *Materializer) Recover(ctx context.Context) error {
-	states, err := m.journal.IncompleteMaterializations(ctx)
+func (w *Writer) Recover(ctx context.Context) error {
+	states, err := w.journal.IncompleteMaterializations(ctx)
 	if err != nil {
 		return err
 	}
 	for _, state := range states {
-		if err := m.recoverPartition(ctx, state); err != nil {
+		if err := w.recoverPartition(ctx, state); err != nil {
 			return fmt.Errorf("recover %s: %w", domain.PartitionID(state.Key), err)
 		}
 	}
-	return m.removeUnownedTempFiles(ctx)
+	return w.removeUnownedTempFiles(ctx)
 }
 ```
 
 - [ ] **Step 7: 验证并提交**
 
-Run: `cd modules/archive && go test -count=1 ./internal/materializer`
+Run: `cd modules/archive && go test -count=1 ./internal/writer`
 
 Expected: PASS。
 
 ```bash
-git add modules/archive/internal/materializer
-git commit -m "feat(archive): materialize atomic parquet generations"
+git add modules/archive/internal/writer
+git commit -m "feat(archive): write atomic parquet generations"
 ```
 
 ### Task 8: 登记 Storage ArchiveFile 元数据
@@ -1135,8 +1135,8 @@ git commit -m "feat(archive): materialize atomic parquet generations"
 **Files:**
 - Create: `modules/archive/internal/registry/client.go`
 - Create: `modules/archive/internal/registry/client_test.go`
-- Modify: `modules/archive/internal/materializer/materializer.go`
-- Modify: `modules/archive/internal/materializer/materializer_test.go`
+- Modify: `modules/archive/internal/writer/writer.go`
+- Modify: `modules/archive/internal/writer/writer_test.go`
 
 - [ ] **Step 1: 写稳定 ID 和字段映射测试**
 
@@ -1182,20 +1182,20 @@ stable ID 输入严格为 `space + "\n" + dataset + "\n" + freq + "\n" + subject
 
 - [ ] **Step 5: 验证并提交**
 
-Run: `cd modules/archive && go test -count=1 ./internal/registry ./internal/materializer`
+Run: `cd modules/archive && go test -count=1 ./internal/registry ./internal/writer`
 
 Expected: PASS，registry 重试测试断言 Parquet writer 只调用一次。
 
 ```bash
-git add modules/archive/internal/registry modules/archive/internal/materializer
+git add modules/archive/internal/registry modules/archive/internal/writer
 git commit -m "feat(archive): register materialized archive files"
 ```
 
 ### Task 9: 实现 Storage 回填与维护 CLI
 
 **Files:**
-- Create: `modules/archive/internal/reconcile/backfill.go`
-- Create: `modules/archive/internal/reconcile/backfill_test.go`
+- Create: `modules/archive/internal/backfill/backfill.go`
+- Create: `modules/archive/internal/backfill/backfill_test.go`
 - Create: `modules/archive/cmd/cli/main.go`
 - Create: `modules/archive/cmd/cli/main_test.go`
 
@@ -1205,11 +1205,11 @@ git commit -m "feat(archive): register materialized archive files"
 
 - [ ] **Step 2: 写分页读取和 journal 复用测试**
 
-fake Access 连续返回两页 `ReadTimeSeriesRowsRsp`；断言每页 rows 先转换为与 NATS 相同的 `EventBatch` 再调用 `journal.Append`，message ID 格式为 `backfill/<space>/<dataset>/<subject>/<freq>/<page>/<range-hash>`，最终调用 materializer。
+fake Access 连续返回两页 `ReadTimeSeriesRowsRsp`；断言每页 rows 先转换为与 NATS 相同的 `EventBatch` 再调用 `journal.Append`，message ID 格式为 `backfill/<space>/<dataset>/<subject>/<freq>/<page>/<range-hash>`，最终调用 writer。
 
 - [ ] **Step 3: 运行测试，确认失败**
 
-Run: `cd modules/archive && go test -count=1 ./internal/reconcile ./cmd/cli`
+Run: `cd modules/archive && go test -count=1 ./internal/backfill ./cmd/cli`
 
 Expected: FAIL，backfill 和 CLI 尚未定义。
 
@@ -1255,12 +1255,12 @@ moox-archive-cli status --config config/app.yaml
 
 - [ ] **Step 6: 验证并提交**
 
-Run: `cd modules/archive && go test -count=1 ./internal/reconcile ./cmd/cli`
+Run: `cd modules/archive && go test -count=1 ./internal/backfill ./cmd/cli`
 
 Expected: PASS。
 
 ```bash
-git add modules/archive/internal/reconcile modules/archive/cmd/cli
+git add modules/archive/internal/backfill modules/archive/cmd/cli
 git commit -m "feat(archive): add backfill and maintenance cli"
 ```
 
@@ -1337,24 +1337,24 @@ git commit -m "feat(archive): add optional cos replication"
 ### Task 11: 组装 Server 生命周期、健康检查与指标
 
 **Files:**
-- Create: `modules/archive/internal/observability/state.go`
-- Create: `modules/archive/internal/observability/server.go`
-- Create: `modules/archive/internal/observability/server_test.go`
+- Create: `modules/archive/internal/health/state.go`
+- Create: `modules/archive/internal/health/server.go`
+- Create: `modules/archive/internal/health/server_test.go`
 - Create: `modules/archive/internal/bootstrap/app.go`
 - Create: `modules/archive/internal/bootstrap/app_test.go`
 - Create: `modules/archive/cmd/server/main.go`
 
 - [ ] **Step 1: 写启动顺序和 readiness 测试**
 
-fake 依赖记录调用顺序，断言严格为 `journal.open -> materializer.recover -> materializer.drain -> jetstream.connect -> consumer.bind -> workers.start -> ready`。任一前置步骤失败时 ready=false 且后续步骤不启动。
+fake 依赖记录调用顺序，断言严格为 `journal.open -> writer.recover -> writer.drain -> jetstream.connect -> consumer.bind -> workers.start -> ready`。任一前置步骤失败时 ready=false 且后续步骤不启动。
 
 - [ ] **Step 2: 写 shutdown 顺序测试**
 
-取消 context 后断言 `consumer.stop -> inflight.wait -> materializer.flush -> cos.stop -> jetstream.close -> journal.close`。物化超过 shutdown timeout 时允许退出，但 journal close 前 pending 必须仍可重启读取。
+取消 context 后断言 `consumer.stop -> inflight.wait -> writer.flush -> cos.stop -> jetstream.close -> journal.close`。物化超过 shutdown timeout 时允许退出，但 journal close 前 pending 必须仍可重启读取。
 
 - [ ] **Step 3: 运行测试，确认失败**
 
-Run: `cd modules/archive && go test -count=1 ./internal/bootstrap ./internal/observability`
+Run: `cd modules/archive && go test -count=1 ./internal/bootstrap ./internal/health`
 
 Expected: FAIL，App 和 health server 尚未定义。
 
@@ -1379,19 +1379,21 @@ func (s *State) Snapshot(ctx context.Context) healthz.Response {
 
 HTTP mux 固定暴露 `/healthz` 和 `/metrics`。指标名以 `moox_archive_` 开头，至少包含 deliveries、ack、nak、redelivery、quarantine、pending rows、dirty partitions、materialization seconds/rows/bytes/failures、archive lag、COS pending/upload bytes/verification failures、磁盘 available bytes 和按当前增长率估算的 disk exhaustion seconds。
 
+本目录 package 名为 `health`。引用公共健康协议时固定使用 `healthz "github.com/mooyang-code/moox/packages/healthz"`，bootstrap 引用本目录时使用 `archivehealth` alias，避免两个 health 名称混淆。
+
 - [ ] **Step 5: 实现 App.Run、内部维护循环与 main**
 
 main 接受 `-config config/app.yaml`，使用 `signal.NotifyContext` 处理 SIGINT/SIGTERM，ldflags 字段固定为 `Version`、`BuildTime`、`GitCommit`。App 使用 `jetstream.ConfigFromEnv` 连接，并调用 `BindPullConsumer`，绝不由 archive 自行创建 durable。内部维护循环每天调用一次 `PruneMessageReceipts(now-dedupeRetention)`，每个 COS interval 重试 dirty generation，并按 materialize interval 更新 pending/lag/磁盘指标；这些清理只作用于幂等 receipt 和临时文件，不得删除归档逻辑行或 Parquet。
 
 - [ ] **Step 6: 验证并提交**
 
-Run: `cd modules/archive && go test -count=1 ./internal/bootstrap ./internal/observability ./cmd/server`
+Run: `cd modules/archive && go test -count=1 ./internal/bootstrap ./internal/health ./cmd/server`
 
 Expected: PASS，health test 在未 ready 时返回 503，ready 后返回 200。
 
 ```bash
-git add modules/archive/internal/bootstrap modules/archive/internal/observability modules/archive/cmd/server
-git commit -m "feat(archive): add service lifecycle and observability"
+git add modules/archive/internal/bootstrap modules/archive/internal/health modules/archive/cmd/server
+git commit -m "feat(archive): add service lifecycle and health endpoints"
 ```
 
 ### Task 12: 声明 EventBus durable consumer
