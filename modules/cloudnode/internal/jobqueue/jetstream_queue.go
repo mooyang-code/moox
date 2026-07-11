@@ -79,11 +79,11 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*Publis
 	return &PublishResult{Created: !ack.Duplicate, Duplicate: ack.Duplicate, Subject: topic, Stream: ack.Stream, Sequence: ack.Sequence}, nil
 }
 
-func (q *JetStreamQueue) ensureConsumer(ctx context.Context) error {
+func (q *JetStreamQueue) ensureConsumer(_ context.Context) error {
 	if q.consumer != nil {
 		return nil
 	}
-	consumer, err := q.client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: q.cfg.ExecStream, Durable: "cn_exec_all", FilterSubject: JobRequestedTopic, AckWait: q.cfg.AckWait, MaxDeliver: q.cfg.MaxDeliver, MaxAckPending: q.cfg.DefaultMaxBatch, FetchMaxWait: q.cfg.FetchMaxWait})
+	consumer, err := q.client.NewPullConsumer(context.Background(), jetstream.ConsumerConfig{Stream: q.cfg.ExecStream, Durable: "cn_exec_all", FilterSubject: JobRequestedTopic, AckWait: q.cfg.AckWait, MaxDeliver: q.cfg.MaxDeliver, MaxAckPending: q.cfg.DefaultMaxBatch, FetchMaxWait: q.cfg.FetchMaxWait})
 	if err != nil {
 		return err
 	}
