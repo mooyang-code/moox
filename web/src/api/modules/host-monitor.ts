@@ -6,7 +6,7 @@ import {
   memoryUsageAvailable,
 } from './host-monitor-mapping';
 
-export { aggregateNetworkRate, maxAvailableFilesystemUsage } from './host-monitor-mapping';
+export { aggregateNetworkRate, historyHasRenderableData, maxAvailableFilesystemUsage, metricValueAvailable } from './host-monitor-mapping';
 
 export interface CPUMetrics {
   usage: number;
@@ -104,9 +104,10 @@ interface HostHistoryPoint {
 }
 
 export const getCurrentMetrics = () => {
-  return callControl<Record<string, never>, { agents?: HostAgent[]; storage_available?: boolean }>('monitor', 'ListHostAgents', {}).then((response) => ({
+  return callControl<Record<string, never>, { agents?: HostAgent[]; storage_available?: boolean; data_gap?: boolean }>('monitor', 'ListHostAgents', {}).then((response) => ({
     metrics: (response.agents ?? []).map((agent) => toHostMetrics(agent, response.storage_available !== false)),
     storage_available: response.storage_available !== false,
+    data_gap: response.data_gap === true,
   }));
 };
 
@@ -135,7 +136,7 @@ export const toHostMetrics = (agent: HostAgent, storageAvailable = true): HostMe
   return {
     host_id: agent.agent_id ?? '',
     host_name: agent.hostname ?? agent.agent_id ?? 'unknown',
-    address: agent.hostname ?? agent.agent_id ?? '',
+    address: agent.agent_id ?? '',
     status: agent.archived ? 'offline' : isFresh(agent.last_seen_at) ? 'online' : 'offline',
     timestamp: agent.last_seen_at ?? '',
     cpu: {

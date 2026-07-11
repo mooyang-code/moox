@@ -12,7 +12,7 @@
             <template #icon><icon-refresh /></template>
           </a-button>
         </a-tooltip>
-        <a-switch v-model="autoRefresh" size="small" @change="toggleAutoRefresh" />
+        <a-switch v-model="autoRefresh" size="small" aria-label="自动刷新" @change="toggleAutoRefresh" />
       </div>
     </header>
 
@@ -21,7 +21,9 @@
       <div class="summary-item"><span>需关注</span><strong :class="{ danger: attentionHosts > 0 }">{{ attentionHosts }}</strong></div>
       <div class="summary-item">
         <span>历史存储</span>
-        <strong :class="storageAvailable ? 'healthy' : 'danger'">{{ storageAvailable ? '正常' : '不可用' }}</strong>
+        <strong :class="storageAvailable && !currentDataGap ? 'healthy' : 'danger'">
+          {{ !storageAvailable ? '不可用' : currentDataGap ? '存在缺口' : '正常' }}
+        </strong>
       </div>
       <div class="summary-item"><span>刷新模式</span><strong>{{ autoRefresh ? '自动 · 5秒' : '手动' }}</strong></div>
     </section>
@@ -29,16 +31,15 @@
     <a-alert v-if="refreshError" type="warning" :show-icon="true" class="page-alert">{{ refreshError }}</a-alert>
 
     <section v-if="hostCards.length" class="host-grid" aria-label="主机列表">
-      <article
+      <button
         v-for="host in hostCards"
         :key="host.host_id"
+        type="button"
         class="host-card"
         :class="{ selected: selectedHostID === host.host_id, warning: host.attention, offline: host.status !== 'online' }"
-        role="button"
-        tabindex="0"
+        :aria-pressed="selectedHostID === host.host_id"
+        :aria-label="`查看主机 ${host.host_name}`"
         @click="selectHost(host.host_id)"
-        @keydown.enter="selectHost(host.host_id)"
-        @keydown.space.prevent="selectHost(host.host_id)"
       >
         <div class="host-card-header">
           <div class="host-identity">
@@ -54,17 +55,17 @@
         <div class="metric-list">
           <div class="metric-row">
             <span>CPU</span>
-            <a-progress :percent="host.cpuAvailable ? host.cpuUsage / 100 : 0" :show-text="false" size="small" :color="progressColor(host.cpuUsage)" />
+            <a-progress :percent="host.cpuAvailable ? host.cpuUsage / 100 : 0" :show-text="false" size="small" :color="progressColor(host.cpuUsage)" aria-hidden="true" />
             <strong>{{ host.cpuAvailable ? `${host.cpuUsage}%` : '--' }}</strong>
           </div>
           <div class="metric-row">
             <span>内存</span>
-            <a-progress :percent="host.memoryAvailable ? host.memoryUsage / 100 : 0" :show-text="false" size="small" :color="progressColor(host.memoryUsage)" />
+            <a-progress :percent="host.memoryAvailable ? host.memoryUsage / 100 : 0" :show-text="false" size="small" :color="progressColor(host.memoryUsage)" aria-hidden="true" />
             <strong>{{ host.memoryAvailable ? `${host.memoryUsage}%` : '--' }}</strong>
           </div>
           <div class="metric-row">
             <span>文件系统</span>
-            <a-progress :percent="host.filesystemUsage !== null ? host.filesystemUsage / 100 : 0" :show-text="false" size="small" :color="progressColor(host.filesystemUsage ?? 0)" />
+            <a-progress :percent="host.filesystemUsage !== null ? host.filesystemUsage / 100 : 0" :show-text="false" size="small" :color="progressColor(host.filesystemUsage ?? 0)" aria-hidden="true" />
             <strong>{{ host.filesystemUsage !== null ? `${host.filesystemUsage}%` : '--' }}</strong>
           </div>
         </div>
@@ -73,7 +74,7 @@
           <span><icon-arrow-down />{{ host.networkRate ? formatBytesPerSecond(host.networkRate.rx) : '--' }}</span>
           <span><icon-arrow-up />{{ host.networkRate ? formatBytesPerSecond(host.networkRate.tx) : '--' }}</span>
         </div>
-      </article>
+      </button>
     </section>
 
     <a-empty v-else-if="!loading" description="暂无主机上报" class="empty-state" />
@@ -93,13 +94,16 @@
       </div>
 
       <a-alert v-if="historyNotice" type="warning" :show-icon="true" class="history-alert">{{ historyNotice }}</a-alert>
+      <a-alert v-if="selectedHost.status !== 'online'" type="info" :show-icon="true" class="history-alert">
+        主机当前离线，设备明细来自最后一次成功上报。
+      </a-alert>
 
       <div class="detail-grid">
         <section class="trend-section">
           <h4>资源趋势</h4>
           <div ref="trendChartRef" class="chart-container">
             <div v-if="historyLoading" class="chart-overlay"><a-spin /></div>
-            <div v-else-if="historyData.length === 0" class="chart-overlay empty-chart">
+            <div v-else-if="!historyHasRenderableData(historyData)" class="chart-overlay empty-chart">
               <icon-bar-chart /><span>暂无历史数据</span>
             </div>
           </div>
@@ -187,7 +191,9 @@ import {
   formatBytesPerSecond,
   getCurrentMetrics,
   getHistoryMetrics,
+  historyHasRenderableData,
   maxAvailableFilesystemUsage,
+  metricValueAvailable,
   type HistoryPoint,
   type HostMetrics,
 } from '@/api/modules/host-monitor';
@@ -197,6 +203,7 @@ const historyLoading = ref(false);
 const autoRefresh = ref(true);
 const hostMetrics = ref<HostMetrics[]>([]);
 const storageAvailable = ref(true);
+const currentDataGap = ref(false);
 const refreshError = ref('');
 const lastRefreshAt = ref('');
 const selectedHostID = ref('');
@@ -206,6 +213,7 @@ const historyNotice = ref('');
 const trendChartRef = ref<HTMLElement>();
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let trendChart: VChart | null = null;
+let currentRequestID = 0;
 let historyRequestID = 0;
 
 const hostCards = computed(() => hostMetrics.value.map((host) => {
@@ -213,15 +221,18 @@ const hostCards = computed(() => hostMetrics.value.map((host) => {
   const networkRate = aggregateNetworkRate(host.networks);
   const cpuUsage = Math.round(host.cpu.usage);
   const memoryUsage = Math.round(host.memory.percent);
-  const attention = host.status === 'online' && [host.cpu.usage_available ? cpuUsage : 0, host.memory.percent_available ? memoryUsage : 0, filesystemUsage ?? 0].some((value) => value >= 80);
+  const cpuAvailable = metricValueAvailable(host.status, host.cpu.usage_available);
+  const memoryAvailable = metricValueAvailable(host.status, host.memory.percent_available);
+  const filesystemAvailable = metricValueAvailable(host.status, filesystemUsage !== null);
+  const attention = [cpuAvailable ? cpuUsage : 0, memoryAvailable ? memoryUsage : 0, filesystemAvailable ? filesystemUsage ?? 0 : 0].some((value) => value >= 80);
   return {
     ...host,
     cpuUsage,
     memoryUsage,
-    cpuAvailable: host.cpu.usage_available,
-    memoryAvailable: host.memory.percent_available,
-    filesystemUsage: filesystemUsage === null ? null : Math.round(filesystemUsage),
-    networkRate,
+    cpuAvailable,
+    memoryAvailable,
+    filesystemUsage: filesystemAvailable && filesystemUsage !== null ? Math.round(filesystemUsage) : null,
+    networkRate: metricValueAvailable(host.status, networkRate !== null) ? networkRate : null,
     attention,
   };
 }));
@@ -231,19 +242,23 @@ const onlineHosts = computed(() => hostMetrics.value.filter((host) => host.statu
 const attentionHosts = computed(() => hostCards.value.filter((host) => host.attention || host.status !== 'online').length);
 
 const refreshData = async (silent = false) => {
+  const requestID = ++currentRequestID;
   loading.value = true;
   try {
     const response = await getCurrentMetrics();
+    if (requestID !== currentRequestID) return;
     hostMetrics.value = response.metrics;
     storageAvailable.value = response.storage_available;
+    currentDataGap.value = response.data_gap;
     lastRefreshAt.value = new Date().toISOString();
     refreshError.value = '';
     if (!silent) Message.success('主机数据已刷新');
   } catch {
-    refreshError.value = '实时数据刷新失败，当前仍显示上一次成功结果';
+    if (requestID !== currentRequestID) return;
+    refreshError.value = '实时数据刷新失败，当前仍显示上一次成功结果。请检查 Monitor 服务后重试。';
     if (!silent) Message.error('主机数据刷新失败');
   } finally {
-    loading.value = false;
+    if (requestID === currentRequestID) loading.value = false;
   }
 };
 
@@ -295,7 +310,7 @@ const toggleAutoRefresh = (enabled: boolean) => enabled ? startAutoRefresh() : s
 const renderTrendChart = () => {
   trendChart?.release();
   trendChart = null;
-  if (!trendChartRef.value || historyData.value.length === 0) return;
+  if (!trendChartRef.value || !historyHasRenderableData(historyData.value)) return;
   const values: Array<{ time: string; value: number; type: string }> = [];
   for (const point of historyData.value) {
     const time = new Date(point.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -364,8 +379,9 @@ onUnmounted(() => {
 .danger { color:#dc2626 !important; }
 .page-alert, .history-alert { margin-bottom:16px; }
 .host-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
-.host-card { appearance:none; width:100%; min-height:252px; padding:16px; text-align:left; color:inherit; background:var(--color-bg-2); border:1px solid var(--color-border-2); border-radius:8px; cursor:pointer; transition:border-color .15s ease, box-shadow .15s ease; }
+.host-card { appearance:none; width:100%; min-height:252px; padding:16px; text-align:left; color:inherit; font:inherit; background:var(--color-bg-2); border:1px solid var(--color-border-2); border-radius:8px; cursor:pointer; touch-action:manipulation; transition:border-color .15s ease, box-shadow .15s ease; }
 .host-card:hover { border-color:rgb(var(--primary-5)); }
+.host-card:focus-visible { outline:2px solid rgb(var(--primary-6)); outline-offset:2px; }
 .host-card.selected { border-color:rgb(var(--primary-6)); box-shadow:0 0 0 2px rgba(var(--primary-6),.12); }
 .host-card.warning { border-left:3px solid #f59e0b; }
 .host-card.offline { opacity:.76; }
@@ -404,11 +420,12 @@ onUnmounted(() => {
 table { width:100%; min-width:440px; border-collapse:collapse; font-size:12px; }
 th, td { padding:10px 8px; text-align:left; border-bottom:1px solid var(--color-border-2); white-space:nowrap; }
 th { color:var(--color-text-3); font-weight:500; }
-td { max-width:150px; overflow:hidden; text-overflow:ellipsis; }
+td { max-width:150px; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
 .table-empty { text-align:center; color:var(--color-text-3); }
 .operstate { color:var(--color-text-3); }.operstate.up { color:#16a34a; }
 .empty-state, .loading-state { display:flex; align-items:center; justify-content:center; min-height:260px; }
 @media (max-width:1200px) { .host-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .tables-grid { grid-template-columns:1fr; } }
 @media (max-width:820px) { .resource-monitor-page { padding:12px; } .page-header, .detail-heading { align-items:flex-start; flex-direction:column; } .host-grid, .detail-grid { grid-template-columns:minmax(0,1fr); } .summary-band { gap:12px 20px; } .summary-item { min-width:110px; } }
 @media (max-width:560px) { .host-grid { grid-template-columns:minmax(0,1fr); } .refresh-time { display:none; } .network-summary { flex-direction:column; } }
+@media (prefers-reduced-motion:reduce) { .host-card { transition:none; } }
 </style>

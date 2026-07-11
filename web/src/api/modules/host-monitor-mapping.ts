@@ -9,6 +9,12 @@ export interface NetworkRateValue {
   rate_available: boolean;
 }
 
+export interface HistoryAvailabilityValue {
+  cpu_available: boolean;
+  memory_available: boolean;
+  disk_available: boolean;
+}
+
 export const maxAvailableFilesystemUsage = (items: FilesystemUsageValue[]): number | null => {
   const values = items.filter((item) => item.percent_available).map((item) => item.percent);
   return values.length ? Math.max(...values) : null;
@@ -26,3 +32,9 @@ export const aggregateNetworkRate = (items: NetworkRateValue[]): { rx: number; t
 export const memoryUsageAvailable = (totalBytes: number | undefined, metricPresent: boolean): boolean => metricPresent && (totalBytes ?? 0) > 0;
 
 export const filesystemUsageAvailable = (device: string | undefined, mountpoint: string | undefined, totalBytes: number | undefined): boolean => Boolean(device || mountpoint || (totalBytes ?? 0) > 0);
+
+export const metricValueAvailable = (status: string, available: boolean): boolean => status === 'online' && available;
+
+export const historyHasRenderableData = (points: HistoryAvailabilityValue[]): boolean => points.some(
+  (point) => point.cpu_available || point.memory_available || point.disk_available,
+);

@@ -19,6 +19,11 @@ const required = [
   'selectedHostID',
   'filesystems',
   'rate_available',
+  'data_gap',
+  'aria-pressed',
+  'aria-label="自动刷新"',
+  'currentRequestID',
+  'historyHasRenderableData',
 ];
 
 const missing = required.filter((token) => !sources.includes(token));
@@ -44,6 +49,18 @@ const rate = mapping.aggregateNetworkRate([
 ]);
 if (!rate || rate.rx !== 17 || rate.tx !== 8) {
   throw new Error('network rates must aggregate across available interfaces');
+}
+if (mapping.metricValueAvailable('offline', true)) {
+  throw new Error('offline hosts must not present stale values as current metrics');
+}
+if (!mapping.metricValueAvailable('online', true)) {
+  throw new Error('online available metrics must remain visible');
+}
+if (mapping.historyHasRenderableData([{ cpu_available: false, memory_available: false, disk_available: false }])) {
+  throw new Error('history without available percentage metrics must render the empty state');
+}
+if (!mapping.historyHasRenderableData([{ cpu_available: false, memory_available: true, disk_available: false }])) {
+  throw new Error('history with one available percentage metric must render a chart');
 }
 
 console.log('host monitor frontend contract passed');
