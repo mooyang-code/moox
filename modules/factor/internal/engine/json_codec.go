@@ -31,6 +31,8 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 		factors = append(factors, map[string]any{
 			"factor_id":      factor.FactorID,
 			"name":           factor.Name,
+			"source_hash":    factor.SourceHash,
+			"source_path":    factor.SourcePath,
 			"params":         factor.Params,
 			"writeback_bars": factor.WritebackBars,
 		})
@@ -54,7 +56,10 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 }
 
 func DecodeJSONResponse(meta map[string]any) (*FactorResult, error) {
-	resultsRaw, _ := meta["results"].(map[string]any)
+	resultsRaw, ok := meta["results"].(map[string]any)
+	if !ok || len(resultsRaw) == 0 {
+		return nil, fmt.Errorf("factor response contains no results")
+	}
 	out := &FactorResult{
 		Columns:     make(map[string]FactorColumnResult, len(resultsRaw)),
 		PerFactorMS: decodeInt64Map(meta["per_factor_ms"]),
@@ -65,9 +70,16 @@ func DecodeJSONResponse(meta map[string]any) (*FactorResult, error) {
 		if !ok {
 			return nil, fmt.Errorf("invalid result for column %s", name)
 		}
-		values, _ := resultMap["values"].([]any)
+		values, ok := resultMap["values"].([]any)
+		if !ok {
+			return nil, fmt.Errorf("factor column %s values must be an array", name)
+		}
+		tail := int(numberToInt64(resultMap["tail"]))
+		if tail <= 0 || len(values) != tail {
+			return nil, fmt.Errorf("factor column %s tail=%d values=%d mismatch", name, tail, len(values))
+		}
 		out.Columns[name] = FactorColumnResult{
-			Tail:   int(numberToInt64(resultMap["tail"])),
+			Tail:   tail,
 			Values: values,
 		}
 	}

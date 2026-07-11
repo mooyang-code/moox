@@ -54,6 +54,14 @@ func (r *FactorRepository) Get(ctx context.Context, factorID string) (*domain.Fa
 	return &factor, nil
 }
 
+func (r *FactorRepository) GetByName(ctx context.Context, name string) (*domain.FactorDef, error) {
+	var factor domain.FactorDef
+	if err := r.db.WithContext(ctx).Where("c_name = ?", strings.TrimSpace(name)).First(&factor).Error; err != nil {
+		return nil, err
+	}
+	return &factor, nil
+}
+
 // ListEnabledTimeseries returns enabled V1 time-series factor definitions.
 func (r *FactorRepository) ListEnabledTimeseries(ctx context.Context) ([]domain.FactorDef, error) {
 	var rows []domain.FactorDef

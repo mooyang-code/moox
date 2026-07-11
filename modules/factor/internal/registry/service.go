@@ -13,6 +13,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/repository"
+	"github.com/mooyang-code/moox/packages/pyruntime/moduleregistry"
 )
 
 var factorFilePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\.py$`)
@@ -25,9 +26,10 @@ type Options struct {
 
 // Service manages local factor definitions.
 type Service struct {
-	factors *repository.FactorRepository
-	meta    *MetadataSync
-	opts    Options
+	factors   *repository.FactorRepository
+	meta      *MetadataSync
+	opts      Options
+	publisher *moduleregistry.SourcePublisher
 }
 
 // NewService creates a registry service.
@@ -38,7 +40,7 @@ func NewService(factors *repository.FactorRepository, meta *MetadataSync, opts O
 	if len(opts.DefaultParams) == 0 {
 		opts.DefaultParams = []int{20}
 	}
-	return &Service{factors: factors, meta: meta, opts: opts}
+	return &Service{factors: factors, meta: meta, opts: opts, publisher: moduleregistry.NewSourcePublisher(filepath.Join(opts.FactorsDir, ".versions"))}
 }
 
 // ImportFactorFile imports one trusted Python factor source file into SQLite.
@@ -69,14 +71,18 @@ func (s *Service) ImportFactorFile(ctx context.Context, path string) (*domain.Fa
 		DependsJSON:   DependsJSONFromSource(string(raw)),
 		Status:        domain.FactorStatusEnabled,
 	}
-	if s.factors == nil {
-		return &factor, nil
-	}
-	if err := s.factors.Upsert(ctx, factor); err != nil {
-		return nil, err
-	}
 	if err := s.writeSourceBack(name, raw); err != nil {
 		return nil, err
+	}
+	if s.publisher != nil {
+		if _, err := s.publisher.Publish(ctx, moduleregistry.ModuleSource{Type: "factor", LogicalID: name, Source: raw}); err != nil {
+			return nil, err
+		}
+	}
+	if s.factors != nil {
+		if err := s.factors.Upsert(ctx, factor); err != nil {
+			return nil, err
+		}
 	}
 	return &factor, nil
 }
@@ -89,8 +95,23 @@ func (s *Service) writeSourceBack(name string, raw []byte) error {
 		return fmt.Errorf("create factors dir: %w", err)
 	}
 	target := filepath.Join(s.opts.FactorsDir, name+".py")
-	if err := os.WriteFile(target, raw, 0o644); err != nil {
+	tmp, err := os.CreateTemp(s.opts.FactorsDir, ".factor-*.py")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(raw); err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		return fmt.Errorf("write factor source %s: %w", target, err)
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
+		return fmt.Errorf("publish factor source %s: %w", target, err)
 	}
 	return nil
 }

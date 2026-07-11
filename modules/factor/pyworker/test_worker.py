@@ -120,6 +120,31 @@ def test_signal_path_uses_copy_per_param_and_only_returns_factor_columns(tmp_pat
     assert response["results"]["Cci_3"]["values"] == [6.0, 7.0]
 
 
+def test_each_factor_keeps_its_own_writeback_tail(tmp_path: Path):
+    factors_dir = tmp_path / "factors"
+    factors_dir.mkdir()
+    (factors_dir / "Fast.py").write_text(
+        "def signal(df, n, factor_name):\n"
+        "    df[factor_name] = df['close'] + n\n"
+        "    return df\n", encoding="utf-8"
+    )
+    (factors_dir / "Slow.py").write_text(
+        "def signal(df, n, factor_name):\n"
+        "    df[factor_name] = df['close'] + n\n"
+        "    return df\n", encoding="utf-8"
+    )
+    worker = FactorWorker(factors_dir=factors_dir, sections_dir=tmp_path / "sections", encoding="json")
+    worker.load_modules()
+    meta = request_meta(name="Fast", params=[1], writeback_bars=1)
+    meta["factors"] = [
+        {"name": "Fast", "params": [1], "writeback_bars": 1},
+        {"name": "Slow", "params": [1], "writeback_bars": 3},
+    ]
+    response = worker.execute_request(meta)
+    assert response["results"]["Fast_1"]["tail"] == 1
+    assert response["results"]["Slow_1"]["tail"] == 3
+
+
 def test_decode_json_df_converts_null_to_nan_and_time_to_utc():
     df = decode_json_df(
         {

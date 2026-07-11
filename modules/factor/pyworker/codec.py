@@ -5,10 +5,15 @@ import pandas as pd
 
 
 MAGIC = b"MX"
+MAX_META_BYTES = 4 * 1024 * 1024
+MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
 FRAME_READY = 0x01
 FRAME_REQUEST = 0x02
 FRAME_RESPONSE = 0x03
-FRAME_ERROR = 0x04
+FRAME_LOAD = 0x02
+FRAME_RUN = 0x03
+FRAME_RESULT = 0x04
+FRAME_ERROR = 0x05
 FRAME_PING = 0x05
 FRAME_RELOAD = 0x06
 
@@ -28,8 +33,12 @@ def read_frame(stream):
         raise ValueError("invalid frame magic")
     frame_type = _read_exact(stream, 1)[0]
     meta_len = struct.unpack(">I", _read_exact(stream, 4))[0]
+    if meta_len > MAX_META_BYTES:
+        raise ValueError("frame meta too large")
     meta = json.loads(_read_exact(stream, meta_len).decode("utf-8"))
     payload_len = struct.unpack(">Q", _read_exact(stream, 8))[0]
+    if payload_len > MAX_PAYLOAD_BYTES:
+        raise ValueError("frame payload too large")
     payload = _read_exact(stream, payload_len) if payload_len else b""
     return frame_type, meta, payload
 
@@ -62,10 +71,11 @@ def decode_json_df(meta):
     return df
 
 
-def encode_json_results(task_id, results, tail, per_factor_ms, elapsed_ms):
+def encode_json_results(task_id, results, tail, per_factor_ms, elapsed_ms, result_tails=None):
     encoded = {}
     for name, values in results.items():
-        encoded[name] = {"tail": tail, "values": [_json_value(v) for v in list(values)[-tail:]]}
+        item_tail = int((result_tails or {}).get(name, tail))
+        encoded[name] = {"tail": item_tail, "values": [_json_value(v) for v in list(values)[-item_tail:]]}
     return {
         "id": task_id,
         "ok": True,

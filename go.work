@@ -19,6 +19,7 @@ use (
 	./modules/archive
 	./modules/storage
 	./modules/storage/proto/gen
+	./modules/strategy
 	./modules/trade
 	./modules/trade/proto/tradegen
 	./packages/cloudruntime
@@ -28,5 +29,6 @@ use (
 	./packages/jetstream
 	./packages/messagepb
 	./packages/metricspb
+	./packages/pyruntime
 	./web-host
 )

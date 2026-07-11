@@ -562,3 +562,8 @@ Expected:
 - worker 超时/崩溃后自动补位，health 不会把 dead worker 计为 ready。
 - 同 snapshot key 被多 worker 使用时只有一个 Arrow file，引用归零后可回收。
 - Go/Python 帧、Arrow schema、runtime hash 契约有交叉测试防漂移。
+# 实施状态（2026-07-11）
+
+已完成首版实现：`packages/pyruntime` 提供统一 HELLO/LOAD/RUN 帧协议、常驻 Python worker、Supervisor 重启与退避、worker pool、源码版本发布（`moduleregistry.SourcePublisher`）、快照存储、限制校验、指标和端到端测试。因子与策略模块均已接入该运行时，并分别在模块根目录 `test/` 增加 Python 真实进程端到端用例。
+
+当前传输默认使用受限 JSON；Arrow Stream/MMap 作为后续兼容编码保留在协议枚举中，实际启用前需补充 Arrow IPC 编解码和跨进程快照文件生命周期测试。

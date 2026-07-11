@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
@@ -21,6 +22,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -56,17 +58,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	_ = registry.NewService(factorRepo, meta, registry.Options{FactorsDir: cfg.Engine.FactorsDir})
 
 	storage := storageio.NewClient(cfg.Storage.AccessTarget, authInfo)
-	pool, err := engine.NewWorkerPool(engine.WorkerPoolConfig{
-		Workers: cfg.Engine.Workers,
-		Stdio: engine.StdioConfig{
-			PythonBin:   cfg.Engine.PythonBin,
-			WorkerPath:  "./pyworker/worker.py",
-			FactorsDir:  cfg.Engine.FactorsDir,
-			SectionsDir: cfg.Engine.SectionsDir,
-			Encoding:    cfg.Engine.Encoding,
-			TaskTimeout: time.Duration(cfg.Engine.TaskTimeoutMS) * time.Millisecond,
-		},
-	})
+	runtimeExec, err := engine.NewRuntimePoolExecutor(ctx, cfg.Engine.Workers, process.Config{PythonBin: cfg.Engine.PythonBin, WorkerPath: "./pyworker/worker.py", Args: []string{"--factors-dir", cfg.Engine.FactorsDir, "--sections-dir", cfg.Engine.SectionsDir, "--encoding", cfg.Engine.Encoding}, TaskTimeout: time.Duration(cfg.Engine.TaskTimeoutMS) * time.Millisecond, Limits: process.DefaultLimits()})
 	if err != nil {
 		log.ErrorContextf(ctx, "启动 factor Python worker 失败: %v", err)
 		return nil, err
@@ -74,11 +66,15 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	sched := scheduler.NewService(scheduler.Config{
 		Workers:  cfg.Engine.Workers,
 		MaxRetry: cfg.Scheduler.MaxRetry,
-	}, storage, pool)
+	}, storage, runtimeExec)
+	if err := sched.Start(ctx); err != nil {
+		_ = runtimeExec.Close()
+		return nil, fmt.Errorf("start factor scheduler: %w", err)
+	}
 
 	bindings, err := listEnabledBindings(ctx, dbm.DB())
 	if err != nil {
-		_ = pool.Close()
+		_ = runtimeExec.Close()
 		log.ErrorContextf(ctx, "加载 factor binding 快照失败: %v", err)
 		return nil, err
 	}
@@ -95,7 +91,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			CredentialFile: cfg.NATS.CredentialFile,
 		}, debounce)
 		if err := consumer.Start(ctx); err != nil {
-			_ = pool.Close()
+			_ = runtimeExec.Close()
 			log.ErrorContextf(ctx, "启动 factor NATS trigger 失败: %v", err)
 			return nil, err
 		}
@@ -106,6 +102,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			factors:        factorRepo,
 			meta:           meta,
 			db:             dbm.DB(),
+			factorsDir:     cfg.Engine.FactorsDir,
 			debounceWindow: time.Duration(cfg.Scheduler.DebounceWindowMS) * time.Millisecond,
 		})
 	}
@@ -119,7 +116,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		factorpb.RegisterFactorMgrService(service, factorsvc.NewWithRuntime(
 			dbm.DB(),
 			sched,
-			pool,
+			runtimeExec,
 			factorsvc.WithFactorsDir(cfg.Engine.FactorsDir),
 			factorsvc.WithMetadataSync(meta),
 		))
@@ -249,6 +246,7 @@ type realtimeLoopDeps struct {
 	meta           *registry.MetadataSync
 	db             *gorm.DB
 	debounceWindow time.Duration
+	factorsDir     string
 }
 
 func factorAuthInfo(cfg *Config) *commonpb.AuthInfo {
@@ -305,7 +303,7 @@ func startRealtimeLoop(ctx context.Context, deps realtimeLoopDeps) {
 
 func drainDebounced(ctx context.Context, deps realtimeLoopDeps) {
 	for _, task := range deps.debounce.Flush(time.Now()) {
-		schedTask, err := buildSchedulerTask(ctx, deps.factors, task)
+		schedTask, err := buildSchedulerTask(ctx, deps.factors, deps.factorsDir, task)
 		if err != nil {
 			log.WarnContextf(ctx, "构造 factor 调度任务失败: %v", err)
 			continue
@@ -316,12 +314,9 @@ func drainDebounced(ctx context.Context, deps realtimeLoopDeps) {
 		}
 		deps.scheduler.Enqueue(ctx, schedTask)
 	}
-	if err := deps.scheduler.Drain(ctx); err != nil {
-		log.WarnContextf(ctx, "drain factor scheduler failed: %v", err)
-	}
 }
 
-func buildSchedulerTask(ctx context.Context, repo *repository.FactorRepository, task trigger.Task) (scheduler.Task, error) {
+func buildSchedulerTask(ctx context.Context, repo *repository.FactorRepository, factorsDir string, task trigger.Task) (scheduler.Task, error) {
 	specs := make([]engine.FactorSpec, 0, len(task.FactorIDs))
 	lookback := 0
 	for _, factorID := range task.FactorIDs {
@@ -336,6 +331,8 @@ func buildSchedulerTask(ctx context.Context, repo *repository.FactorRepository, 
 		specs = append(specs, engine.FactorSpec{
 			FactorID:      factor.FactorID,
 			Name:          factor.Name,
+			SourceHash:    factor.SourceHash,
+			SourcePath:    filepath.Join(factorsDir, factor.Name+".py"),
 			Params:        params,
 			WritebackBars: factor.WritebackBars,
 			ExtraColumns:  registry.ExtraColumnsFromFactors([]domain.FactorDef{*factor}),

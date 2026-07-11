@@ -44,6 +44,12 @@ type Service struct {
 	pending           map[taskKey]Task
 	supersedeCount    atomic.Int64
 	writebackFailures atomic.Int64
+	running           atomic.Int64
+	started           atomic.Bool
+	workerCtx         context.Context
+	workerCancel      context.CancelFunc
+	workerWG          sync.WaitGroup
+	wake              []chan struct{}
 }
 
 var logRun = func(ctx context.Context, line string) {
@@ -58,13 +64,18 @@ func NewService(cfg Config, storage StorageIO, exec engine.Executor) *Service {
 	if cfg.MaxRetry <= 0 {
 		cfg.MaxRetry = 3
 	}
-	return &Service{
+	svc := &Service{
 		cfg:     cfg,
 		storage: storage,
 		exec:    exec,
 		queues:  make([][]queueItem, cfg.Workers),
 		pending: map[taskKey]Task{},
+		wake:    make([]chan struct{}, cfg.Workers),
 	}
+	for i := range svc.wake {
+		svc.wake[i] = make(chan struct{}, 1)
+	}
+	return svc
 }
 
 // Enqueue adds a task, replacing older pending work for the same subject scope.
@@ -79,6 +90,11 @@ func (s *Service) Enqueue(ctx context.Context, task Task) {
 			s.pending[key] = task
 			shard := HashSubject(task.SubjectID, s.cfg.Workers)
 			s.queues[shard] = append(s.queues[shard], queueItem{task: task})
+			signal := s.wake[shard]
+			select {
+			case signal <- struct{}{}:
+			default:
+			}
 			return
 		}
 		s.supersedeCount.Add(1)
@@ -88,11 +104,116 @@ func (s *Service) Enqueue(ctx context.Context, task Task) {
 	s.pending[key] = task
 	shard := HashSubject(task.SubjectID, s.cfg.Workers)
 	s.queues[shard] = append(s.queues[shard], queueItem{task: task})
+	signal := s.wake[shard]
+	select {
+	case signal <- struct{}{}:
+	default:
+	}
+}
+
+// Start launches one FIFO consumer for each subject shard. Drain remains the
+// deterministic CLI/test path; production uses these consumers.
+func (s *Service) Start(ctx context.Context) error {
+	if s == nil {
+		return errors.New("scheduler is nil")
+	}
+	if s.started.Swap(true) {
+		return nil
+	}
+	s.workerCtx, s.workerCancel = context.WithCancel(ctx)
+	for shard := range s.queues {
+		s.workerWG.Add(1)
+		go s.runShard(shard)
+	}
+	return nil
+}
+
+func (s *Service) runShard(shard int) {
+	defer s.workerWG.Done()
+	for {
+		select {
+		case <-s.workerCtx.Done():
+			return
+		case <-s.wake[shard]:
+		}
+		for {
+			item, ok := s.popShard(shard)
+			if !ok {
+				break
+			}
+			s.running.Add(1)
+			_ = s.executeWithRetry(s.workerCtx, item.task)
+			s.running.Add(-1)
+		}
+	}
+}
+
+func (s *Service) popShard(shard int) (queueItem, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if shard < 0 || shard >= len(s.queues) || len(s.queues[shard]) == 0 {
+		return queueItem{}, false
+	}
+	item := s.queues[shard][0]
+	s.queues[shard] = s.queues[shard][1:]
+	key := keyOf(item.task)
+	current, ok := s.pending[key]
+	if !ok || current.TaskID != item.task.TaskID || !current.BarTime.Equal(item.task.BarTime) {
+		return s.popShardLocked(shard)
+	}
+	delete(s.pending, key)
+	return item, true
+}
+
+func (s *Service) popShardLocked(shard int) (queueItem, bool) {
+	for len(s.queues[shard]) > 0 {
+		item := s.queues[shard][0]
+		s.queues[shard] = s.queues[shard][1:]
+		key := keyOf(item.task)
+		current, ok := s.pending[key]
+		if ok && current.TaskID == item.task.TaskID && current.BarTime.Equal(item.task.BarTime) {
+			delete(s.pending, key)
+			return item, true
+		}
+	}
+	return queueItem{}, false
+}
+
+func (s *Service) WaitIdle(ctx context.Context) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if s.Status().QueueDepth == 0 && s.running.Load() == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Service) Stop() error {
+	if s == nil || !s.started.Load() {
+		return nil
+	}
+	if s.workerCancel != nil {
+		s.workerCancel()
+	}
+	s.workerWG.Wait()
+	s.started.Store(false)
+	return nil
 }
 
 // Drain synchronously drains all currently queued tasks. Production startup uses
 // worker goroutines; tests and run-once use this deterministic path.
 func (s *Service) Drain(ctx context.Context) error {
+	if s.started.Load() {
+		// A started scheduler owns queue consumption. Do not let timer/CLI
+		// callers pop the same queue concurrently; wait for its workers instead.
+		return s.WaitIdle(ctx)
+	}
 	if err := s.lockDrain(ctx); err != nil {
 		return err
 	}
@@ -205,7 +326,7 @@ func (s *Service) executeOnce(ctx context.Context, task Task) (int64, error) {
 	if err != nil {
 		return 0, engine.RetryableError{Err: err}
 	}
-	result, err := s.exec.Execute(ctx, &task.FactorTask, frame)
+	result, err := s.executeFactorBatches(ctx, task.FactorTask, frame)
 	if err != nil {
 		return 0, err
 	}
@@ -217,6 +338,95 @@ func (s *Service) executeOnce(ctx context.Context, task Task) (int64, error) {
 		return result.ElapsedMS, nil
 	}
 	return time.Since(started).Milliseconds(), nil
+}
+
+func (s *Service) executeFactorBatches(ctx context.Context, task engine.FactorTask, frame *engine.DataFrame) (*engine.FactorResult, error) {
+	cost := make(map[string]int64, len(task.Factors))
+	for _, spec := range task.Factors {
+		cost[spec.FactorID] = 1
+	}
+	batches := Partition(task.Factors, cost, s.cfg.Workers, 50)
+	if len(batches) == 1 {
+		result, err := s.exec.Execute(ctx, &task, frame)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateFactorResult(task.Factors, result); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+	type item struct {
+		result *engine.FactorResult
+		err    error
+	}
+	results := make(chan item, len(batches))
+	var wg sync.WaitGroup
+	for _, batch := range batches {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sub := task
+			sub.Factors = batch.Factors
+			sub.TaskID = task.TaskID
+			result, err := s.exec.Execute(ctx, &sub, frame)
+			if err == nil {
+				err = validateFactorResult(batch.Factors, result)
+			}
+			results <- item{result, err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+	aggregated := &engine.FactorResult{Columns: map[string]engine.FactorColumnResult{}, PerFactorMS: map[string]int64{}}
+	for item := range results {
+		if item.err != nil {
+			return nil, item.err
+		}
+		if item.result == nil {
+			return nil, errors.New("nil factor batch result")
+		}
+		for name, column := range item.result.Columns {
+			if _, exists := aggregated.Columns[name]; exists {
+				return nil, fmt.Errorf("duplicate factor output column %s", name)
+			}
+			aggregated.Columns[name] = column
+		}
+		for name, ms := range item.result.PerFactorMS {
+			aggregated.PerFactorMS[name] = ms
+		}
+		if item.result.ElapsedMS > aggregated.ElapsedMS {
+			aggregated.ElapsedMS = item.result.ElapsedMS
+		}
+	}
+	return aggregated, nil
+}
+
+func validateFactorResult(specs []engine.FactorSpec, result *engine.FactorResult) error {
+	if result == nil {
+		return errors.New("nil factor result")
+	}
+	expected := make(map[string]struct{})
+	for _, spec := range specs {
+		for _, param := range spec.Params {
+			expected[fmt.Sprintf("%s_%d", spec.Name, param)] = struct{}{}
+		}
+	}
+	if len(expected) == 0 {
+		return nil
+	}
+	if len(result.Columns) != len(expected) {
+		return fmt.Errorf("factor result columns=%d expected=%d", len(result.Columns), len(expected))
+	}
+	for name, col := range result.Columns {
+		if _, ok := expected[name]; !ok {
+			return fmt.Errorf("unexpected factor output column %s", name)
+		}
+		if col.Tail <= 0 || len(col.Values) != col.Tail {
+			return fmt.Errorf("factor column %s tail=%d values=%d mismatch", name, col.Tail, len(col.Values))
+		}
+	}
+	return nil
 }
 
 func inputColumns(specs []engine.FactorSpec) []string {

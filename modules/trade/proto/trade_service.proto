@@ -624,7 +624,7 @@ message SyncPositionsRsp {
 }
 
 // ========== 目标仓位调仓（RebalanceSvc）==========
-message TargetPosition { string symbol = 1; string quantity = 2; }
+message TargetPosition { string symbol = 1; string quantity = 2; string instrument_id = 3; string market_type = 4; }
 message CurrentPosition { string symbol = 1; string quantity = 2; }
 message RebalanceMarket { string symbol = 1; string base_asset = 2; string quote_asset = 3; string price = 4; string market_type = 5; }
 message CreateRebalanceReq {
@@ -639,6 +639,10 @@ message CreateRebalanceReq {
   repeated TargetPosition targets = 9;
   repeated CurrentPosition currents = 10;
   repeated RebalanceMarket markets = 11;
+  string source = 12;
+  string strategy_group_id = 13;
+  string strategy_execution_id = 14;
+  int64 group_target_revision = 15;
 }
 message CreateRebalanceRsp { common.RetInfo ret_info = 1; string run_id = 2; string status = 3; }
 message AdvanceRebalanceReq { string run_id = 1; string account_id = 2; string channel_id = 3; }

@@ -36,6 +36,8 @@ type FactorTask struct {
 type FactorSpec struct {
 	FactorID      string
 	Name          string
+	SourceHash    string
+	SourcePath    string
 	Params        []int
 	WritebackBars int
 	ExtraColumns  []string

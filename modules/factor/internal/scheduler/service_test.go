@@ -223,7 +223,7 @@ func (f *fakeExecutor) Execute(context.Context, *engine.FactorTask, *engine.Data
 		f.retryFailures--
 		return nil, engine.RetryableError{Err: errors.New("worker crashed")}
 	}
-	return &engine.FactorResult{ElapsedMS: 7, Columns: map[string]engine.FactorColumnResult{}}, nil
+	return &engine.FactorResult{ElapsedMS: 7, Columns: map[string]engine.FactorColumnResult{"Bias_20": {Tail: 1, Values: []any{1.0}}}}, nil
 }
 
 func (f *fakeExecutor) Close() error { return nil }
@@ -237,7 +237,7 @@ func (f *cancelOnFirstExecutor) Execute(context.Context, *engine.FactorTask, *en
 	if f.calls.Add(1) == 1 {
 		f.cancel()
 	}
-	return &engine.FactorResult{ElapsedMS: 7, Columns: map[string]engine.FactorColumnResult{}}, nil
+	return &engine.FactorResult{ElapsedMS: 7, Columns: map[string]engine.FactorColumnResult{"Bias_20": {Tail: 1, Values: []any{1.0}}}}, nil
 }
 
 func (f *cancelOnFirstExecutor) Close() error { return nil }
@@ -256,7 +256,7 @@ func (f *blockingExecutor) Execute(ctx context.Context, task *engine.FactorTask,
 	}
 	select {
 	case <-f.release:
-		return &engine.FactorResult{ElapsedMS: 7, Columns: map[string]engine.FactorColumnResult{}}, nil
+		return &engine.FactorResult{ElapsedMS: 7, Columns: map[string]engine.FactorColumnResult{"Bias_20": {Tail: 1, Values: []any{1.0}}}}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}

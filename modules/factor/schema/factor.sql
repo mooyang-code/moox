@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS t_factor_defs (
 CREATE INDEX IF NOT EXISTS idx_factor_defs_kind_status
 ON t_factor_defs(c_kind, c_status);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_factor_defs_name_unique
+ON t_factor_defs(c_name);
+
 CREATE TABLE IF NOT EXISTS t_factor_bindings (
     c_binding_id TEXT PRIMARY KEY,
     c_factor_id TEXT NOT NULL REFERENCES t_factor_defs(c_factor_id),

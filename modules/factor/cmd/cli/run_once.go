@@ -104,6 +104,8 @@ func buildTask(cfg cliConfig, factors []domain.FactorDef) *engine.FactorTask {
 		specs = append(specs, engine.FactorSpec{
 			FactorID:      factor.FactorID,
 			Name:          factor.Name,
+			SourceHash:    factor.SourceHash,
+			SourcePath:    filepath.Join(cfg.FactorsDir, factor.Name+".py"),
 			Params:        params,
 			WritebackBars: factor.WritebackBars,
 			ExtraColumns:  registry.ExtraColumnsFromFactors([]domain.FactorDef{factor}),

@@ -1,0 +1,5 @@
+python_bin: python3
+worker_path: ./pyworker/worker.py
+database: ./data/strategy.sqlite
+live_enabled: false
+workers: 4

@@ -751,3 +751,8 @@ git commit -m "test(strategy): verify backtest and live execution parity"
 - 回测只读 point-in-time 数据，相同配置重复运行的 decision/fill/NAV hash 一致。
 - Strategy 不 import Storage/Trade internal，所有跨模块交互经生成 proto 或稳定 EventBus protobuf。
 - live 默认关闭，且只在 Trade 归因、查询、幂等、偏差对账和紧急 observe 演练验收后开启。
+# 实施状态（2026-07-11）
+
+已完成首版：新增 `modules/strategy`，提供 Python 策略 SDK、manifest 校验、hash 不可变发布、常驻运行时、策略输出校验、状态 CAS、按 `(binding, strategy_version, trigger_bar_time, namespace)` 幂等键落库、outbox/inbox、调度器、回测决策哈希、风险校验以及 Paper/Observe 执行端口；`modules/strategy/test` 已用真实 Python 策略跑通状态和 outbox 提交。
+
+运行约定：回测与实时共用策略输入、输出和执行内核，只有最后的执行端口不同。当前首版 RPC/服务启动 wiring 仍需接入现有 tRPC 控制面和 Storage/Trade 真实客户端后再用于生产部署。

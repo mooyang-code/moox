@@ -69,6 +69,22 @@ func TestFactorRepositoryUpsertAndListEnabledTimeseries(t *testing.T) {
 	}
 }
 
+func TestFactorRepositoryRejectsDuplicateName(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	repo := NewFactorRepository(db)
+	first := domain.FactorDef{FactorID: "factor-a", Name: "SameName", Kind: domain.FactorKindTimeseries, SourceCode: "x", SourceHash: "hash-a", ParamsJSON: "[20]", LookbackBars: 200, WritebackBars: 5, DependsJSON: "[]", Status: domain.FactorStatusEnabled}
+	second := first
+	second.FactorID = "factor-b"
+	second.SourceHash = "hash-b"
+	if err := repo.Upsert(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Upsert(ctx, second); err == nil {
+		t.Fatal("expected duplicate factor name error")
+	}
+}
+
 func TestBindingRepositoryUpsertByNaturalKeyAndFilterBySource(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
@@ -178,7 +194,7 @@ func seedFactor(t *testing.T, db *gorm.DB, factorID string) {
 
 	factor := domain.FactorDef{
 		FactorID:      factorID,
-		Name:          "Bias",
+		Name:          "Factor-" + factorID,
 		Kind:          domain.FactorKindTimeseries,
 		SourceCode:    "x",
 		SourceHash:    "hash",

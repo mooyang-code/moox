@@ -500,3 +500,8 @@ Expected:
 - 100 因子分批并行时 Storage 只读一次、Arrow 快照只生成一份、成功时只写回一次。
 - 因子源码更新不覆盖在途任务使用的版本，LOAD 失败不切换 active hash。
 - worker 超时/崩溃可补位，异常栈可查，stdout 不会破坏帧协议。
+# 实施状态（2026-07-11）
+
+已完成：调度器支持按因子成本拆分 batch、一次读取并共享同一 `DataFrame`、按父任务 subject 维持 worker 分片、结果列/尾长严格校验、失败整体不写回；运行路径接入 `packages/pyruntime` pool，因子源码写入采用原子替换并保留 hash 版本目录；数据库增加因子名唯一约束；`modules/factor/test` 覆盖真实 Python worker，调度单测覆盖 100 因子共享一份已加载帧。
+
+兼容说明：旧 `stdio_executor`/JSON worker 保留用于 CLI 和历史调用方；新服务启动路径使用 pyruntime。Arrow/MMap 仍待独立实现，当前共享保证在 Go 进程内不重复读取和不复制 `DataFrame`。

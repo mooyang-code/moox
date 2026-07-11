@@ -12,7 +12,8 @@ require (
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
-	github.com/prometheus/client_golang v1.20.4
+	github.com/mooyang-code/moox/packages/pyruntime v0.0.0-00010101000000-000000000000
+	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.67.5
 	google.golang.org/protobuf v1.36.11
@@ -35,6 +36,8 @@ replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstr
 replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
+
+replace github.com/mooyang-code/moox/packages/pyruntime => ../../packages/pyruntime
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
@@ -68,7 +71,7 @@ require (
 	github.com/panjf2000/ants/v2 v2.4.6 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/prometheus/procfs v0.15.1 // indirect
+	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/smartystreets/goconvey v1.7.2 // indirect
@@ -85,7 +88,7 @@ require (
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

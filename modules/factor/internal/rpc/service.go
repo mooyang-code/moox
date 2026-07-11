@@ -95,10 +95,13 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 	if err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := s.factors.Upsert(ctx, factor); err != nil {
-		return &factorpb.CreateFactorRsp{RetInfo: inner(err)}, nil
+	if existing, err := s.factors.GetByName(ctx, factor.Name); err == nil && existing.FactorID != factor.FactorID {
+		return &factorpb.CreateFactorRsp{RetInfo: invalid(fmt.Errorf("factor name %q already exists", factor.Name))}, nil
 	}
 	if err := s.writeFactorSource(factor); err != nil {
+		return &factorpb.CreateFactorRsp{RetInfo: inner(err)}, nil
+	}
+	if err := s.factors.Upsert(ctx, factor); err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: inner(err)}, nil
 	}
 	if err := s.syncFactorBindings(ctx, factor.FactorID); err != nil {
@@ -117,10 +120,10 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 	if err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := s.factors.Upsert(ctx, factor); err != nil {
+	if err := s.writeFactorSource(factor); err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
 	}
-	if err := s.writeFactorSource(factor); err != nil {
+	if err := s.factors.Upsert(ctx, factor); err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
 	}
 	if err := s.syncFactorBindings(ctx, factor.FactorID); err != nil {
@@ -338,7 +341,22 @@ func (s *Service) writeFactorSource(factor domain.FactorDef) error {
 		return err
 	}
 	path := filepath.Join(s.factorsDir, factor.Name+".py")
-	return os.WriteFile(path, []byte(factor.SourceCode), 0o644)
+	tmp, err := os.CreateTemp(s.factorsDir, ".factor-*.py")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err = tmp.Write([]byte(factor.SourceCode)); err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func (s *Service) syncFactorBindings(ctx context.Context, factorID string) error {

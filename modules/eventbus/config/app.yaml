@@ -67,6 +67,13 @@ streams:
     replicas: 1
     max_age: 168h
     max_bytes: 10737418240
+  - name: MOOX_STRATEGY
+    subjects: ["moox.strategy.>"]
+    retention: limits
+    storage: file
+    replicas: 1
+    max_age: 168h
+    max_bytes: 10737418240
 
 topics:
   - {topic: moox.storage.time_series.rows_updated.v1, stream: MOOX_STORAGE, kind: 1, payload_content_type: "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated", payload_version: 1, enabled: true}
@@ -82,6 +89,9 @@ topics:
   - {topic: moox.trade.reconciliation.requested.v1, stream: MOOX_TRADE, kind: 2, payload_content_type: "application/x-protobuf; message=google.protobuf.BytesValue", payload_version: 1, enabled: true}
   - {topic: moox.trade.rebalance.requested.v1, stream: MOOX_TRADE, kind: 2, payload_content_type: "application/x-protobuf; message=google.protobuf.BytesValue", payload_version: 1, enabled: true}
   - {topic: moox.trade.rebalance.completed.v1, stream: MOOX_TRADE, kind: 1, payload_content_type: "application/x-protobuf; message=google.protobuf.BytesValue", payload_version: 1, enabled: true}
+  - {topic: moox.strategy.action.accepted.v1, stream: MOOX_STRATEGY, kind: 1, payload_content_type: "application/json", payload_version: 1, enabled: true}
+  - {topic: moox.strategy.group_target.ready.v1, stream: MOOX_STRATEGY, kind: 1, payload_content_type: "application/json", payload_version: 1, enabled: true}
+  - {topic: moox.strategy.execution.requested.v1, stream: MOOX_STRATEGY, kind: 1, payload_content_type: "application/json", payload_version: 1, enabled: true}
 
 topic_families:
   - pattern: moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*
