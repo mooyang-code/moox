@@ -27,7 +27,21 @@ func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.
 	}
 	out := make([]*pb.CloudNode, 0, len(nodes))
 	for _, node := range nodes {
-		out = append(out, toPBNode(node))
+		value := toPBNode(node)
+		if req.GetTag() == "__verify_scf__" {
+			account, accountErr := s.catalog.GetAccount(ctx, node.CloudAccountID)
+			if accountErr != nil || account == nil {
+				return &pb.GetNodeListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "SCF verification cloud account unavailable")}, nil
+			}
+			info, probeErr := s.scfClient(*account).GetFunction(ctx, tencentscf.FunctionRef{Region: node.Region, FunctionName: node.FunctionName, Namespace: firstString(node.Namespace, "default")})
+			if probeErr != nil {
+				return &pb.GetNodeListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "SCF verification failed: "+probeErr.Error())}, nil
+			}
+			metadata := value.GetMetadata().AsMap()
+			metadata["actual_scf"] = map[string]any{"runtime": info.Runtime, "handler": info.Handler, "memory_size": info.MemorySize, "timeout": info.Timeout, "environment": info.Environment, "status": info.Status, "code_size": info.CodeSize, "mod_time": info.ModTime}
+			value.Metadata, _ = structpb.NewStruct(metadata)
+		}
+		out = append(out, value)
 	}
 	page, size := pageFromCommon(req.GetPage())
 	return &pb.GetNodeListRsp{
@@ -228,11 +242,14 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *repository.CloudN
 	}
 	info, err := client.GetFunction(ctx, ref)
 	if err == nil {
+		desiredRuntime := firstString(item.GetRuntime(), pkg.Runtime, metadataString(metadata, "runtime"))
+		if info.Runtime != "" && desiredRuntime != "" && info.Runtime != desiredRuntime {
+			return fmt.Errorf("scf function %s runtime is %s, want %s; recreate is required", ref.FunctionName, info.Runtime, desiredRuntime)
+		}
 		mergeSCFFunctionMetadata(node, info)
 		if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
 			FunctionRef: ref,
 			Handler:     firstString(item.GetHandler(), metadataString(metadata, "handler"), "main"),
-			Runtime:     firstString(item.GetRuntime(), pkg.Runtime, metadataString(metadata, "runtime")),
 			MemorySize:  configInt64(config, "memory_size", 256),
 			Timeout:     configInt64(config, "timeout", 60),
 			Environment: copyStringMap(item.GetEnvironment()),

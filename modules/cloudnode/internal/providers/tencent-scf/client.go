@@ -36,6 +36,10 @@ type FunctionInfo struct {
 	CodeSize    int64
 	ClsLogsetID string
 	ClsTopicID  string
+	Handler     string
+	MemorySize  int64
+	Timeout     int64
+	Environment map[string]string
 }
 
 // CreateFunctionRequest creates a Tencent SCF function from a COS package.
@@ -78,7 +82,6 @@ type UpdateFunctionCodeResponse struct {
 type UpdateFunctionConfigurationRequest struct {
 	FunctionRef
 	Handler     string
-	Runtime     string
 	MemorySize  int64
 	Timeout     int64
 	Environment map[string]string
@@ -136,6 +139,21 @@ func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInf
 	out.ModTime = deref(response.Response.ModTime)
 	out.ClsLogsetID = deref(response.Response.ClsLogsetId)
 	out.ClsTopicID = deref(response.Response.ClsTopicId)
+	out.Handler = deref(response.Response.Handler)
+	if response.Response.MemorySize != nil {
+		out.MemorySize = *response.Response.MemorySize
+	}
+	if response.Response.Timeout != nil {
+		out.Timeout = *response.Response.Timeout
+	}
+	if response.Response.Environment != nil {
+		out.Environment = map[string]string{}
+		for _, variable := range response.Response.Environment.Variables {
+			if variable != nil && variable.Key != nil && variable.Value != nil {
+				out.Environment[*variable.Key] = *variable.Value
+			}
+		}
+	}
 	if response.Response.CodeSize != nil {
 		out.CodeSize = int64(*response.Response.CodeSize)
 	}
@@ -192,9 +210,6 @@ func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunc
 	request := scf.NewUpdateFunctionConfigurationRequest()
 	request.FunctionName = common.StringPtr(req.FunctionName)
 	request.Namespace = common.StringPtr(req.Namespace)
-	if req.Runtime != "" {
-		request.Runtime = common.StringPtr(req.Runtime)
-	}
 	if req.MemorySize > 0 {
 		request.MemorySize = common.Int64Ptr(req.MemorySize)
 	}

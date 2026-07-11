@@ -1,15 +1,16 @@
 schema_version: 1
 provider_id: tdx
-probed_at: ""
-valid_until: ""
-environment: pending
-endpoint_fingerprint: pending
+probed_at: "2026-07-11T10:43:33Z"
+valid_until: "2026-07-18T10:43:33Z"
+environment: development
+endpoint_fingerprint: 87213a07ece217c1cc64492847d19fd560c872e0e09382f46eecd3d820a68574
 endpoint_class: tcp
-frequencies: []
-limits: {batch: 0, point: 0}
-quota_scopes: []
-network: {reachable: false, detail: "CN-1/CN-2 not yet validated"}
+frequencies: [1m, 1d]
+limits: {batch: 20, point: 5}
+quota_scopes:
+  - {scope: ip, window_seconds: 60, weight: 1, reset_timezone: Asia/Shanghai}
+network: {reachable: true, detail: "target host 106.53.107.122 reached 123.125.108.14:7709; live instrument, 1m and 1d probes passed"}
 adjustment_semantics: none
-evidence_summary: pending validation
+evidence_summary: "CN-1/CN-2 target-host live probe passed with real TDX protocol decoding; SCF publish/invoke remains a release gate"
 gate_ids: [CN-1, CN-2]
-capability_enabled: false
+capability_enabled: true

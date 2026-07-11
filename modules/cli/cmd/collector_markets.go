@@ -48,13 +48,17 @@ var collectorFunctionVerifyMarketsCmd = &cobra.Command{
 				continue
 			}
 			client := newControlClient(collectorMarketsVerifyFlags.ControlURL, "", os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"), os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"), manifest.SpaceID)
-			nodes, _, err := client.ListNodes(cmd.Context(), 1, 200)
+			nodes, _, err := client.ListNodesWithTag(cmd.Context(), 1, 200, "__verify_scf__")
 			if err != nil {
 				return err
 			}
 			found := false
 			for _, node := range nodes {
 				if node.NodeID == manifest.SCF.FunctionName && node.FunctionName == manifest.SCF.FunctionName {
+					actual, ok := node.Metadata["actual_scf"].(map[string]any)
+					if !ok || fmt.Sprint(actual["runtime"]) != "Go1" || fmt.Sprint(actual["handler"]) != "main" || int64Value(actual["timeout"]) != manifest.SCF.TimeoutSeconds || nestedString(actual, "environment", "MOOX_SPACE_ID") != manifest.SpaceID || fmt.Sprint(actual["status"]) == "" {
+						return fmt.Errorf("market %s SCF actual configuration does not match manifest", manifest.MarketID)
+					}
 					found = true
 					break
 				}
@@ -69,6 +73,23 @@ var collectorFunctionVerifyMarketsCmd = &cobra.Command{
 		}
 		return writeJSON(cmd, results)
 	},
+}
+
+func int64Value(value any) int64 {
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed)
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	}
+	return 0
+}
+
+func nestedString(values map[string]any, object, key string) string {
+	nested, _ := values[object].(map[string]any)
+	return fmt.Sprint(nested[key])
 }
 
 func publishCollectorMarkets(cmd *cobra.Command, manifestDir, environment string) ([]collectorMarketPublishResult, error) {
@@ -100,6 +121,9 @@ func publishCollectorMarkets(cmd *cobra.Command, manifestDir, environment string
 			Runtime: "Go1", Handler: "main", PackageType: "data_collector", BizType: "data_collector", NodeType: "scf-event",
 			ServiceAccessKey: os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"), ServiceSecretKey: os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"),
 			Env: []string{"MOOX_SPACE_ID=" + manifest.SpaceID}, Config: []string{fmt.Sprintf("timeout=%d", manifest.SCF.TimeoutSeconds), "memory_size=256"},
+		}
+		if manifest.MarketID == "stock_cn" && os.Getenv("MOOX_TDX_ADDRESS") != "" {
+			opts.Env = append(opts.Env, "MOOX_TDX_ADDRESS="+os.Getenv("MOOX_TDX_ADDRESS"))
 		}
 		summary, err := publishCollectorFunction(cmd.Context(), opts)
 		if err != nil {

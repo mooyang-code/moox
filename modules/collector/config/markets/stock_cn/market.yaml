@@ -2,7 +2,7 @@ schema_version: 1
 market_id: stock_cn
 space_id: stock_cn
 register_metadata: true
-runtime_enabled: false
+runtime_enabled: true
 asset_class: stock
 timezone: Asia/Shanghai
 exchange: {id: XSHG, name: Shanghai Stock Exchange}
@@ -44,7 +44,7 @@ feeds:
   - {id: etf_kline, dataset_id: etf_kline, frequencies: [1m, 5m, 15m, 30m, 1h, 1d], volume_unit: share, amount_unit: CNY, bucket_alignment: exchange_session, instrument_type: etf}
   - {id: index_kline, dataset_id: index_kline, frequencies: [1m, 5m, 15m, 30m, 1h, 1d], volume_unit: share, amount_unit: CNY, bucket_alignment: exchange_session, instrument_type: index}
 execution: {timeout_seconds: 60, job_budget_ms: 30000, report_reserve_ms: 10000}
-readiness: {status: not_ready, reason: "CN-1 provider evidence required", capability_enabled: false}
+readiness: {status: ready, reason: "CN-1/CN-2 target-host live probes passed", capability_enabled: true}
 routing: {policy: weighted_rendezvous}
 quality: {policy: source_first_whole_candle}
 coverage: {policy: exchange_calendar}

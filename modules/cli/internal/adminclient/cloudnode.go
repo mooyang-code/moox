@@ -200,8 +200,13 @@ func (c *Client) BatchDeployNodes(ctx context.Context, deployments []NodeDeployI
 }
 
 func (c *Client) ListNodes(ctx context.Context, page, size int) ([]CloudNode, bool, error) {
+	return c.ListNodesWithTag(ctx, page, size, "")
+}
+
+func (c *Client) ListNodesWithTag(ctx context.Context, page, size int, tag string) ([]CloudNode, bool, error) {
 	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeList", map[string]any{
 		"page": map[string]int{"page": page, "size": size},
+		"tag":  tag,
 	})
 	if err != nil {
 		return nil, false, err
