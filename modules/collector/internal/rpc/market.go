@@ -115,16 +115,26 @@ func (s *Service) QueryMarketKlines(ctx context.Context, req *pb.QueryMarketKlin
 		}
 		return left < right
 	})
+	rows = dedupeQueriedKlines(rows)
 	if cursor.BoundaryKey != "" {
 		found := false
-		for _, row := range rows {
+		for index, row := range rows {
 			if marketRowTuple(row) == cursor.BoundaryKey {
-				found = marketRowDigest(row) == cursor.BoundaryDigest && row.row.GetResolvedAt() <= cursor.QueryAsOf
+				found = marketRowDigest(row) == cursor.BoundaryDigest && prefixDigest(rows[:index+1]) == cursor.PrefixDigest
 				break
 			}
 		}
 		if !found {
 			return &pb.QueryMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "data_changed_restart_query")}, nil
+		}
+	}
+	queryAsOf, _ := time.Parse(time.RFC3339Nano, cursor.QueryAsOf)
+	if req.GetCursor() != "" {
+		for _, row := range rows {
+			resolvedAt, err := time.Parse(time.RFC3339Nano, row.row.GetResolvedAt())
+			if err == nil && resolvedAt.After(queryAsOf) {
+				return &pb.QueryMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "data_changed_restart_query")}, nil
+			}
 		}
 	}
 	if cursor.Offset > len(rows) {
@@ -149,10 +159,84 @@ func (s *Service) QueryMarketKlines(ctx context.Context, req *pb.QueryMarketKlin
 	next := ""
 	if finish < len(rows) && len(pageRows) > 0 {
 		last := pageRows[len(pageRows)-1]
-		cursor.Offset, cursor.BoundaryKey, cursor.BoundaryDigest = finish, marketRowTuple(last), marketRowDigest(last)
+		cursor.Offset, cursor.BoundaryKey, cursor.BoundaryDigest, cursor.PrefixDigest = finish, marketRowTuple(last), marketRowDigest(last), prefixDigest(rows[:finish])
 		next, _ = encodeMarketCursor(cursor)
 	}
-	return &pb.QueryMarketKlinesRsp{RetInfo: retOK(), Rows: result, NextCursor: next, QueryAsOf: cursor.QueryAsOf, Freshness: "stored", CoverageStatus: "unknown"}, nil
+	coverageStatus, missingRanges, err := s.readMarketCoverage(ctx, manifest, instrumentTypes, subjects, req.GetFrequency(), start.UTC())
+	if err != nil {
+		return &pb.QueryMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	return &pb.QueryMarketKlinesRsp{RetInfo: retOK(), Rows: result, NextCursor: next, QueryAsOf: cursor.QueryAsOf, Freshness: marketFreshness(rows, cursor.QueryAsOf), CoverageStatus: coverageStatus, MissingRanges: missingRanges}, nil
+}
+
+func (s *Service) readMarketCoverage(ctx context.Context, manifest marketmanifest.Manifest, instrumentTypes, subjects []string, frequency string, start time.Time) (string, []string, error) {
+	coverageDataset := ""
+	for _, dataset := range manifest.Datasets {
+		if dataset.Role == "coverage_state" && dataset.Feed == "coverage" {
+			coverageDataset = dataset.ID
+			break
+		}
+	}
+	if coverageDataset == "" {
+		return "unknown", nil, nil
+	}
+	keys := []*storagepb.RecordKey{}
+	for _, feed := range manifest.Feeds {
+		if !containsString(instrumentTypes, strings.ToLower(feed.InstrumentType)) || !containsString(feed.Frequencies, frequency) {
+			continue
+		}
+		for _, subject := range subjects {
+			sum := sha256.Sum256([]byte(feed.DatasetID + "|" + subject + "|" + frequency + "|" + start.Format("2006-01-02")))
+			keys = append(keys, &storagepb.RecordKey{SpaceId: manifest.SpaceID, DatasetId: coverageDataset, RecordId: hex.EncodeToString(sum[:])})
+		}
+	}
+	if len(keys) == 0 {
+		return "unknown", nil, nil
+	}
+	rsp, err := s.storageAccess.ReadRecordRows(ctx, &storagepb.ReadRecordRowsReq{Keys: keys, Order: storagepb.SortOrder_SORT_ORDER_DESC, Page: &commonpb.Page{Page: 1, Size: uint32(len(keys))}})
+	if err != nil {
+		return "", nil, err
+	}
+	if !storageRetOK(rsp.GetRetInfo()) {
+		return "", nil, fmt.Errorf("read market coverage: %s", rsp.GetRetInfo().GetMsg())
+	}
+	status, missing := "complete", []string{}
+	seen := map[string]bool{}
+	for _, row := range rsp.GetRows() {
+		if seen[row.GetKey().GetRecordId()] {
+			continue
+		}
+		seen[row.GetKey().GetRecordId()] = true
+		columns := columnMap(row.GetColumns())
+		value := stringValueColumn(columns, "coverage_status")
+		if value != "complete" {
+			status = firstString(value, "unknown")
+		}
+		if raw := stringValueColumn(columns, "missing_ranges"); raw != "" && raw != "[]" {
+			missing = append(missing, raw)
+		}
+	}
+	if len(seen) < len(keys) && status == "complete" {
+		status = "unknown"
+	}
+	return status, missing, nil
+}
+
+func marketFreshness(rows []queriedKline, queryAsOf string) string {
+	if len(rows) == 0 {
+		return "empty"
+	}
+	latest := time.Time{}
+	for _, row := range rows {
+		if value, err := time.Parse(time.RFC3339Nano, row.row.GetResolvedAt()); err == nil && value.After(latest) {
+			latest = value
+		}
+	}
+	asOf, _ := time.Parse(time.RFC3339Nano, queryAsOf)
+	if !latest.IsZero() && asOf.Sub(latest) <= 24*time.Hour {
+		return "fresh"
+	}
+	return "stale"
 }
 
 func (s *Service) readLogicalMarketKlines(ctx context.Context, spaceID string, feeds []marketmanifest.Feed, instrumentTypes, subjects []string, frequency string, start, end time.Time) ([]queriedKline, error) {
@@ -169,14 +253,24 @@ func (s *Service) readLogicalMarketKlines(ctx context.Context, spaceID string, f
 		for _, subject := range subjects {
 			keys = append(keys, &storagepb.TimeSeriesKey{SpaceId: spaceID, DatasetId: feed.DatasetID, SubjectId: subject, Freq: frequency})
 		}
-		rsp, err := s.storageAccess.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{Keys: keys, TimeRange: &storagepb.TimeRange{StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano)}, Page: &commonpb.Page{Page: 1, Size: 1000}})
-		if err != nil {
-			return nil, err
+		var sources []*storagepb.TimeSeriesRow
+		for page := uint32(1); ; page++ {
+			if page > 1000 {
+				return nil, fmt.Errorf("market query exceeds bounded storage pages")
+			}
+			rsp, err := s.storageAccess.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{Keys: keys, TimeRange: &storagepb.TimeRange{StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano)}, Page: &commonpb.Page{Page: page, Size: 1000}})
+			if err != nil {
+				return nil, err
+			}
+			if !storageRetOK(rsp.GetRetInfo()) {
+				return nil, fmt.Errorf("read market dataset %s: %s", feed.DatasetID, rsp.GetRetInfo().GetMsg())
+			}
+			sources = append(sources, rsp.GetRows()...)
+			if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+				break
+			}
 		}
-		if !storageRetOK(rsp.GetRetInfo()) {
-			return nil, fmt.Errorf("read market dataset %s: %s", feed.DatasetID, rsp.GetRetInfo().GetMsg())
-		}
-		for _, source := range rsp.GetRows() {
+		for _, source := range sources {
 			columns := columnMap(source.GetColumns())
 			result = append(result, queriedKline{datasetID: feed.DatasetID, dimensions: source.GetKey().GetDimensions(), row: &pb.MarketKline{
 				MarketId: spaceID, InstrumentType: feed.InstrumentType, SubjectId: source.GetKey().GetSubjectId(), Frequency: source.GetKey().GetFreq(), DataTime: source.GetKey().GetDataTime(),
@@ -328,6 +422,34 @@ func marketRowDigest(value queriedKline) string {
 	row := value.row
 	sum := sha256.Sum256([]byte(strings.Join([]string{marketRowTuple(value), strconv.FormatInt(row.GetRevision(), 10), row.GetResolvedAt(), row.GetSourceProvider(), row.GetOpen(), row.GetHigh(), row.GetLow(), row.GetClose(), row.GetVolume(), row.GetAmount()}, "|")))
 	return hex.EncodeToString(sum[:])
+}
+
+func prefixDigest(values []queriedKline) string {
+	hash := sha256.New()
+	for _, value := range values {
+		_, _ = hash.Write([]byte(marketRowTuple(value)))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(marketRowDigest(value)))
+		_, _ = hash.Write([]byte{0})
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func dedupeQueriedKlines(values []queriedKline) []queriedKline {
+	if len(values) < 2 {
+		return values
+	}
+	out := values[:0]
+	last := ""
+	for _, value := range values {
+		key := marketRowTuple(value)
+		if key == last {
+			continue
+		}
+		last = key
+		out = append(out, value)
+	}
+	return out
 }
 
 func columnMap(columns []*storagepb.ColumnValue) map[string]*storagepb.TypedValue {

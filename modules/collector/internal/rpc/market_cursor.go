@@ -14,6 +14,7 @@ type marketCursor struct {
 	Offset         int    `json:"offset"`
 	BoundaryKey    string `json:"boundary_key,omitempty"`
 	BoundaryDigest string `json:"boundary_digest,omitempty"`
+	PrefixDigest   string `json:"prefix_digest,omitempty"`
 }
 
 func encodeMarketCursor(value marketCursor) (string, error) {
