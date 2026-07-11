@@ -1,15 +1,15 @@
 schema_version: 1
-provider_id: pending
+provider_id: alpaca_sip
 probed_at: ""
 valid_until: ""
 environment: pending
-endpoint_fingerprint: pending
-endpoint_class: pending
+endpoint_fingerprint: pending-live-probe:data.alpaca.markets
+endpoint_class: historical_bars
 frequencies: []
 limits: {batch: 0, point: 0}
 quota_scopes: []
 network: {reachable: false, detail: "US-1 not validated"}
-adjustment_semantics: pending
-evidence_summary: provider qualification pending
+adjustment_semantics: "candidate contract requires unadjusted; live split/dividend samples pending"
+evidence_summary: "US-1 no-go: Alpaca SIP primary and Massive SIP fallback require account entitlement, license approval, index coverage and target-SCF probes"
 gate_ids: [US-1]
 capability_enabled: false
