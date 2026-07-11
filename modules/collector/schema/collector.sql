@@ -61,3 +61,42 @@ CREATE TRIGGER IF NOT EXISTS update_collector_rules_mtime AFTER UPDATE ON t_coll
     UPDATE t_collector_task_rules SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
 CREATE TRIGGER IF NOT EXISTS update_collector_instances_mtime AFTER UPDATE ON t_collector_task_instances BEGIN
     UPDATE t_collector_task_instances SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+
+CREATE TABLE IF NOT EXISTS t_collector_market_leases (
+    c_lease_id TEXT NOT NULL PRIMARY KEY,
+    c_lease_type TEXT NOT NULL,
+    c_lease_key TEXT NOT NULL,
+    c_epoch INTEGER NOT NULL,
+    c_owner_id TEXT NOT NULL,
+    c_expires_at DATETIME NOT NULL,
+    c_quarantine_until DATETIME,
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_market_lease_key ON t_collector_market_leases(c_lease_type, c_lease_key);
+
+CREATE TABLE IF NOT EXISTS t_collector_provider_quota_windows (
+    c_provider_id TEXT NOT NULL,
+    c_scope_key TEXT NOT NULL,
+    c_endpoint_class TEXT NOT NULL,
+    c_window_seconds INTEGER NOT NULL,
+    c_window_start DATETIME NOT NULL,
+    c_consumed INTEGER NOT NULL DEFAULT 0,
+    c_limit_value INTEGER NOT NULL,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(c_provider_id, c_scope_key, c_endpoint_class, c_window_seconds, c_window_start)
+);
+
+CREATE TABLE IF NOT EXISTS t_collector_provider_permits (
+    c_execution_nonce TEXT NOT NULL,
+    c_request_index INTEGER NOT NULL,
+    c_provider_id TEXT NOT NULL,
+    c_permit_id TEXT NOT NULL,
+    c_lease_epoch INTEGER NOT NULL,
+    c_allowed INTEGER NOT NULL,
+    c_not_before DATETIME,
+    c_expires_at DATETIME NOT NULL,
+    c_denial_reason TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(c_execution_nonce, c_request_index)
+);

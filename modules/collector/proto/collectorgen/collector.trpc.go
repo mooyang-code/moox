@@ -39,6 +39,10 @@ type CollectMgrService interface {
 	GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq) (*GetDataTypeConfigWithFieldsRsp, error)
 	// RecalculateAllTaskInstances ----- 任务规划器 -----
 	RecalculateAllTaskInstances(ctx context.Context, req *RecalculateAllTaskInstancesReq) (*RecalculateAllTaskInstancesRsp, error)
+	// AcquireProviderPermit ----- Market execution coordination -----
+	AcquireProviderPermit(ctx context.Context, req *AcquireProviderPermitReq) (*AcquireProviderPermitRsp, error)
+
+	ValidateMarketLease(ctx context.Context, req *ValidateMarketLeaseReq) (*ValidateMarketLeaseRsp, error)
 }
 
 func CollectMgrService_GetTaskRuleList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -221,6 +225,42 @@ func CollectMgrService_RecalculateAllTaskInstances_Handler(svr interface{}, ctx 
 	return rsp, nil
 }
 
+func CollectMgrService_AcquireProviderPermit_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &AcquireProviderPermitReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).AcquireProviderPermit(ctx, reqbody.(*AcquireProviderPermitReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ValidateMarketLease_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ValidateMarketLeaseReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ValidateMarketLease(ctx, reqbody.(*ValidateMarketLeaseReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -265,6 +305,14 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.collector.CollectMgr/RecalculateAllTaskInstances",
 			Func: CollectMgrService_RecalculateAllTaskInstances_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/AcquireProviderPermit",
+			Func: CollectMgrService_AcquireProviderPermit_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ValidateMarketLease",
+			Func: CollectMgrService_ValidateMarketLease_Handler,
 		},
 	},
 }
@@ -318,6 +366,14 @@ func (s *UnimplementedCollectMgr) RecalculateAllTaskInstances(ctx context.Contex
 	return nil, errors.New("rpc RecalculateAllTaskInstances of service CollectMgr is not implemented")
 }
 
+// AcquireProviderPermit ----- Market execution coordination -----
+func (s *UnimplementedCollectMgr) AcquireProviderPermit(ctx context.Context, req *AcquireProviderPermitReq) (*AcquireProviderPermitRsp, error) {
+	return nil, errors.New("rpc AcquireProviderPermit of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) ValidateMarketLease(ctx context.Context, req *ValidateMarketLeaseReq) (*ValidateMarketLeaseRsp, error) {
+	return nil, errors.New("rpc ValidateMarketLease of service CollectMgr is not implemented")
+}
+
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
@@ -346,6 +402,10 @@ type CollectMgrClientProxy interface {
 	GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq, opts ...client.Option) (rsp *GetDataTypeConfigWithFieldsRsp, err error)
 	// RecalculateAllTaskInstances ----- 任务规划器 -----
 	RecalculateAllTaskInstances(ctx context.Context, req *RecalculateAllTaskInstancesReq, opts ...client.Option) (rsp *RecalculateAllTaskInstancesRsp, err error)
+	// AcquireProviderPermit ----- Market execution coordination -----
+	AcquireProviderPermit(ctx context.Context, req *AcquireProviderPermitReq, opts ...client.Option) (rsp *AcquireProviderPermitRsp, err error)
+
+	ValidateMarketLease(ctx context.Context, req *ValidateMarketLeaseReq, opts ...client.Option) (rsp *ValidateMarketLeaseRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -551,6 +611,46 @@ func (c *CollectMgrClientProxyImpl) RecalculateAllTaskInstances(ctx context.Cont
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &RecalculateAllTaskInstancesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) AcquireProviderPermit(ctx context.Context, req *AcquireProviderPermitReq, opts ...client.Option) (*AcquireProviderPermitRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/AcquireProviderPermit")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("AcquireProviderPermit")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &AcquireProviderPermitRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ValidateMarketLease(ctx context.Context, req *ValidateMarketLeaseReq, opts ...client.Option) (*ValidateMarketLeaseRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ValidateMarketLease")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ValidateMarketLease")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ValidateMarketLeaseRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

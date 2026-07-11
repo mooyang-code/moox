@@ -33,20 +33,22 @@ type Dependencies struct {
 // Service implements the independent CollectMgr RPC service.
 type Service struct {
 	pb.UnimplementedCollectMgr
-	ruleRepo     *repository.TaskRuleRepository
-	instanceRepo *repository.TaskInstanceRepository
-	builder      *planner.TaskBuilder
-	datasetSrc   *storagesource.DatasetSource
-	cloudJobs    *taskpublisher.Client
+	ruleRepo      *repository.TaskRuleRepository
+	instanceRepo  *repository.TaskInstanceRepository
+	builder       *planner.TaskBuilder
+	datasetSrc    *storagesource.DatasetSource
+	cloudJobs     *taskpublisher.Client
+	marketControl *repository.MarketControlRepository
 }
 
 // New creates a collector management service.
 func New(db *gorm.DB, deps Dependencies) *Service {
 	return &Service{
-		ruleRepo:     repository.NewTaskRuleRepository(db),
-		instanceRepo: repository.NewTaskInstanceRepository(db),
-		builder:      planner.NewTaskBuilder(),
-		datasetSrc:   storagesource.NewDatasetSource(deps.StorageMetadataTarget),
+		ruleRepo:      repository.NewTaskRuleRepository(db),
+		instanceRepo:  repository.NewTaskInstanceRepository(db),
+		marketControl: repository.NewMarketControlRepository(db),
+		builder:       planner.NewTaskBuilder(),
+		datasetSrc:    storagesource.NewDatasetSource(deps.StorageMetadataTarget),
 		cloudJobs: taskpublisher.New(taskpublisher.Config{
 			ServiceGatewayTarget:  deps.ServiceGatewayTarget,
 			GatewayURL:            deps.AdminGatewayURL,

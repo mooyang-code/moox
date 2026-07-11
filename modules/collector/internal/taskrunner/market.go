@@ -14,6 +14,7 @@ import (
 	binanceprovider "github.com/mooyang-code/moox/modules/collector/internal/providers/binance"
 	okxprovider "github.com/mooyang-code/moox/modules/collector/internal/providers/okx"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
+	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -52,9 +53,14 @@ func executeMarketKlineJobItem(ctx context.Context, item nodeRuntime.JobItem) (n
 	bindings := []storageio.Binding{{SpaceID: spaceID, DatasetID: sourceDatasetID, Role: storageio.RoleProviderData, Feed: "kline", ProviderID: providerID}, {SpaceID: spaceID, DatasetID: unifiedDatasetID, Role: storageio.RoleUnifiedData, Feed: "kline"}}
 	store := storageio.NewClientWithAccess(access, nil, bindings)
 	leaseEpoch, _ := strconv.ParseInt(stringValue(params, "lease_epoch"), 10, 64)
-	gate := jobRequestGate{leaseID: stringValue(params, "quota_lease_id"), leaseEpoch: leaseEpoch, jobItemID: item.JobItemID}
-	if gate.leaseID == "" || gate.leaseEpoch <= 0 {
-		return nodeRuntime.Result{}, nodeRuntime.Permanent(fmt.Errorf("quota_lease_id and positive lease_epoch are required"), "INVALID_LEASE")
+	gate := controlRequestGate{gateway: runtimeapp.GetServiceGatewayTarget(), leaseID: stringValue(params, "quota_lease_id"), leaseEpoch: leaseEpoch, executionNonce: stringValue(params, "execution_nonce"), scopeKey: stringValue(params, "quota_scope_key"), windows: quotaWindows(params)}
+	if gate.leaseID == "" || gate.leaseEpoch <= 0 || gate.executionNonce == "" || len(gate.windows) == 0 {
+		return nodeRuntime.Result{}, nodeRuntime.Permanent(fmt.Errorf("quota lease, execution nonce and quota windows are required"), "INVALID_LEASE")
+	}
+	resolutionEpoch, _ := strconv.ParseInt(stringValue(params, "resolution_lease_epoch"), 10, 64)
+	resolutionGuard := controlLeaseGuard{gateway: runtimeapp.GetServiceGatewayTarget(), leaseID: stringValue(params, "resolution_lease_id"), leaseType: "resolution", leaseEpoch: resolutionEpoch}
+	if resolutionGuard.leaseID == "" || resolutionGuard.leaseEpoch <= 0 {
+		return nodeRuntime.Result{}, nodeRuntime.Permanent(fmt.Errorf("resolution lease is required"), "INVALID_RESOLUTION_LEASE")
 	}
 	start, err := parseJobTime(params, "start_time")
 	if err != nil {
@@ -66,7 +72,8 @@ func executeMarketKlineJobItem(ctx context.Context, item nodeRuntime.JobItem) (n
 	}
 	product := marketdata.ProductType(strings.ToLower(stringValue(params, "product_type")))
 	instrument := marketdata.InstrumentType(strings.ToLower(stringValue(params, "instrument_type")))
-	pipe := pipeline.KlinePipeline{Provider: provider, Gate: gate, Store: store, SpaceID: spaceID, SourceDatasetID: sourceDatasetID, SourceDatasetIDs: []string{sourceDatasetID}, SourceDatasets: map[marketdata.ProviderID]string{providerID: sourceDatasetID}, UnifiedDatasetID: unifiedDatasetID, Resolver: pipeline.QualityResolver{Policy: pipeline.QualityPolicy{ProviderPriority: []marketdata.ProviderID{providerID}, AuthoritativeSingleSource: true}}}
+	providerGuard := controlLeaseGuard{gateway: runtimeapp.GetServiceGatewayTarget(), leaseID: gate.leaseID, leaseType: "provider", leaseEpoch: gate.leaseEpoch}
+	pipe := pipeline.KlinePipeline{Provider: provider, Gate: gate, Store: store, SpaceID: spaceID, ProviderGuard: providerGuard, ResolutionGuard: resolutionGuard, SourceDatasetID: sourceDatasetID, SourceDatasetIDs: []string{sourceDatasetID}, SourceDatasets: map[marketdata.ProviderID]string{providerID: sourceDatasetID}, UnifiedDatasetID: unifiedDatasetID, Resolver: pipeline.QualityResolver{Policy: pipeline.QualityPolicy{ProviderPriority: []marketdata.ProviderID{providerID}, AuthoritativeSingleSource: true}}}
 	summary, err := pipe.Run(ctx, providers.FetchKlinesRequest{MarketID: marketdata.MarketID(stringValue(params, "market_id")), ExchangeID: marketdata.ExchangeID(stringValue(params, "exchange_id")), ProductType: product, InstrumentType: instrument, Frequency: frequency, Subjects: []providers.ProviderSubject{{SubjectID: subjectID, ProviderSymbol: providerSymbol}}, StartTime: start, EndTime: end, Limit: intValue(params, "limit")})
 	result := nodeRuntime.Result{Summary: map[string]any{"market_id": stringValue(params, "market_id"), "provider_id": string(providerID), "fetched_rows": summary.FetchedRows, "source_rows": summary.SourceRows, "unified_rows": summary.UnifiedRows, "request_count": summary.RequestCount, "complete": summary.Complete}}
 	if err != nil {
@@ -86,18 +93,6 @@ func marketProvider(id marketdata.ProviderID) (providers.KlineProvider, error) {
 	}
 }
 
-type jobRequestGate struct {
-	leaseID    string
-	leaseEpoch int64
-	jobItemID  string
-}
-
-func (g jobRequestGate) BeforeRequest(_ context.Context, meta providers.RequestMeta) (providers.RequestPermit, error) {
-	if meta.RequestCost <= 0 {
-		return providers.RequestPermit{}, fmt.Errorf("request cost must be positive")
-	}
-	return providers.RequestPermit{PermitID: fmt.Sprintf("%s:%d", g.leaseID, meta.RequestIndex), LeaseEpoch: g.leaseEpoch, Allowed: true, ExpiresAt: time.Now().UTC().Add(90 * time.Second)}, nil
-}
 func parseJobTime(params map[string]any, key string) (time.Time, error) {
 	raw := stringValue(params, key)
 	if raw == "" {
@@ -117,6 +112,33 @@ func intValue(params map[string]any, key string) int {
 		return value
 	case string:
 		parsed, _ := strconv.Atoi(value)
+		return parsed
+	}
+	return 0
+}
+func quotaWindows(params map[string]any) []*pb.ProviderQuotaWindow {
+	raw, ok := params["quota_windows"].([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]*pb.ProviderQuotaWindow, 0, len(raw))
+	for _, item := range raw {
+		values, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		result = append(result, &pb.ProviderQuotaWindow{WindowSeconds: int64(numberValue(values["window_seconds"])), Limit: int64(numberValue(values["limit"]))})
+	}
+	return result
+}
+func numberValue(value any) int {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed)
+	case int:
+		return typed
+	case string:
+		parsed, _ := strconv.Atoi(typed)
 		return parsed
 	}
 	return 0

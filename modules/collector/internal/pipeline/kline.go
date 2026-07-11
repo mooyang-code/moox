@@ -15,6 +15,7 @@ type KlineStore interface {
 	Unified(context.Context, string, string, string, marketdata.Frequency, time.Time) (*marketdata.ResolvedKline, error)
 	WriteUnifiedKline(context.Context, string, marketdata.ResolvedKline) error
 }
+type ResolutionLeaseGuard interface{ BeforeUnifiedWrite(context.Context) error }
 type KlinePipeline struct {
 	Provider         providers.KlineProvider
 	Gate             providers.RequestGate
@@ -24,6 +25,8 @@ type KlinePipeline struct {
 	SourceDatasetIDs []string
 	SourceDatasets   map[marketdata.ProviderID]string
 	SpaceID          string
+	ResolutionGuard  ResolutionLeaseGuard
+	ProviderGuard    ResolutionLeaseGuard
 	UnifiedDatasetID string
 }
 type KlinePipelineResult struct {
@@ -52,6 +55,11 @@ func (p KlinePipeline) Run(ctx context.Context, request providers.FetchKlinesReq
 	if len(closed) == 0 {
 		return result, nil
 	}
+	if p.ProviderGuard != nil {
+		if err := p.ProviderGuard.BeforeUnifiedWrite(ctx); err != nil {
+			return result, fmt.Errorf("validate provider lease before source write: %w", err)
+		}
+	}
 	if err := p.Store.WriteProviderKlines(ctx, p.SourceDatasetID, closed); err != nil {
 		return result, fmt.Errorf("persist provider source: %w", err)
 	}
@@ -75,6 +83,11 @@ func (p KlinePipeline) Run(ctx context.Context, request providers.FetchKlinesReq
 		}
 		if decision.Row == nil {
 			continue
+		}
+		if p.ResolutionGuard != nil {
+			if err := p.ResolutionGuard.BeforeUnifiedWrite(ctx); err != nil {
+				return result, fmt.Errorf("validate resolution lease: %w", err)
+			}
 		}
 		decision.Row.SourceDatasetID = p.SourceDatasetID
 		if datasetID := p.SourceDatasets[decision.Row.ProviderID]; datasetID != "" {

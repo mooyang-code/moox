@@ -223,6 +223,44 @@ message RecalculateAllTaskInstancesRsp {
   common.RetInfo ret_info = 1;
 }
 
+message ProviderQuotaWindow {
+  int64 window_seconds = 1;
+  int64 limit = 2;
+}
+
+message AcquireProviderPermitReq {
+  string provider_id = 1;
+  string scope_key = 2;
+  string endpoint_class = 3;
+  int64 request_cost = 4;
+  string quota_lease_id = 5;
+  int64 lease_epoch = 6;
+  string execution_nonce = 7;
+  int32 request_index = 8;
+  repeated ProviderQuotaWindow windows = 9;
+}
+
+message AcquireProviderPermitRsp {
+  common.RetInfo ret_info = 1;
+  string permit_id = 2;
+  int64 lease_epoch = 3;
+  bool allowed = 4;
+  string not_before = 5;
+  string expires_at = 6;
+  string denial_reason = 7;
+}
+
+message ValidateMarketLeaseReq {
+  string lease_id = 1;
+  string lease_type = 2;
+  int64 lease_epoch = 3;
+}
+
+message ValidateMarketLeaseRsp {
+  common.RetInfo ret_info = 1;
+  bool valid = 2;
+}
+
 service CollectMgr {
   // ----- 任务规则 -----
   rpc GetTaskRuleList(GetTaskRuleListReq) returns (GetTaskRuleListRsp);
@@ -241,4 +279,8 @@ service CollectMgr {
 
   // ----- 任务规划器 -----
   rpc RecalculateAllTaskInstances(RecalculateAllTaskInstancesReq) returns (RecalculateAllTaskInstancesRsp);
+
+  // ----- Market execution coordination -----
+  rpc AcquireProviderPermit(AcquireProviderPermitReq) returns (AcquireProviderPermitRsp);
+  rpc ValidateMarketLease(ValidateMarketLeaseReq) returns (ValidateMarketLeaseRsp);
 }

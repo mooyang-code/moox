@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/collector/internal/metricspublish"
+	"github.com/mooyang-code/moox/modules/collector/internal/repository"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
@@ -31,6 +32,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	dbm := NewManager()
 	if err := dbm.Initialize(&cfg.Database); err != nil {
 		log.ErrorContextf(ctx, "初始化 collector 数据库失败: %v", err)
+		return nil, err
+	}
+	if err := repository.MigrateMarketControl(dbm.DB()); err != nil {
 		return nil, err
 	}
 	startHealthServer(ctx, cfg)
