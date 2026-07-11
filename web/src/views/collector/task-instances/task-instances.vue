@@ -66,6 +66,10 @@
                   <a-tag color="arcoblue" size="small">{{ record.Symbol }}</a-tag>
                 </template>
               </a-table-column>
+              <a-table-column title="市场" data-index="Market" :width="150" />
+              <a-table-column title="工具类型" data-index="InstrumentType" :width="110" />
+              <a-table-column title="统一数据集" data-index="DatasetID" :width="150" />
+              <a-table-column title="周期" data-index="Interval" :width="90" />
               <a-table-column title="计划节点" data-index="PlannedExecNode" :width="160">
                 <template #cell="{ record }">
                   <a-tooltip :content="record.PlannedExecNode">
@@ -128,8 +132,8 @@
       <a-descriptions :column="2" bordered>
         <a-descriptions-item label="任务ID">{{ detailData.TaskID }}</a-descriptions-item>
         <a-descriptions-item label="规则ID">{{ detailData.RuleID }}</a-descriptions-item>
-        <a-descriptions-item label="交易所">{{ detailData.Exchange || "-" }}</a-descriptions-item>
         <a-descriptions-item label="市场">{{ detailData.Market || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="工具类型">{{ detailData.InstrumentType || "-" }}</a-descriptions-item>
         <a-descriptions-item label="数据类型">{{ detailData.DataType || "-" }}</a-descriptions-item>
         <a-descriptions-item label="周期">{{ detailData.Interval || "-" }}</a-descriptions-item>
         <a-descriptions-item label="数据集">{{ detailData.DatasetID || "-" }}</a-descriptions-item>
@@ -185,6 +189,7 @@ interface TaskInstance {
   SubjectID: string;
   Symbol: string;
   Interval: string;
+  InstrumentType: string;
   PlannedExecNode: string; // v2.0: 计划执行节点
   LastExecNode: string; // v2.0: 最后执行节点
   LastExecStatus: number; // v2.0: 最后执行状态
@@ -270,20 +275,22 @@ const getLastExecNode = (record: TaskInstanceRecord) => {
 
 const normalizeTaskInstance = (raw: RawTaskInstance): TaskInstance => {
   const lastExecStatus = raw.LastExecStatus ?? raw.last_exec_status ?? 0;
+  const params = normalizeObject(raw.TaskParams ?? raw.task_params);
   return {
     TaskID: raw.TaskID ?? raw.task_id ?? "",
     RuleID: raw.RuleID ?? raw.rule_id ?? "",
     Exchange: raw.Exchange ?? raw.exchange ?? "",
-    Market: raw.Market ?? raw.market ?? "",
+    Market: raw.Market ?? raw.market ?? params.market_id ?? "",
     DataType: raw.DataType ?? raw.data_type ?? "",
-    DatasetID: raw.DatasetID ?? raw.dataset_id ?? "",
+    DatasetID: raw.DatasetID ?? raw.dataset_id ?? params.unified_dataset_id ?? "",
     SubjectID: raw.SubjectID ?? raw.subject_id ?? "",
     Symbol: raw.Symbol ?? raw.symbol ?? "",
-    Interval: raw.Interval ?? raw.interval ?? "",
+    Interval: raw.Interval ?? raw.interval ?? params.frequency ?? "",
+    InstrumentType: raw.InstrumentType ?? raw.instrument_type ?? params.instrument_type ?? "",
     PlannedExecNode: raw.PlannedExecNode ?? raw.planned_exec_node ?? "",
     LastExecNode: raw.LastExecNode ?? raw.last_exec_node ?? "",
     LastExecStatus: Number(lastExecStatus),
-    TaskParams: normalizeObject(raw.TaskParams ?? raw.task_params),
+    TaskParams: params,
     LastExecTime: raw.LastExecTime ?? raw.last_exec_time ?? null,
     Result: normalizeObject(raw.Result ?? raw.result),
     IsDeleted: Boolean(raw.IsDeleted ?? raw.is_deleted ?? false),

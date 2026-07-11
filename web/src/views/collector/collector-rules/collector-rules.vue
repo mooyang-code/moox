@@ -61,8 +61,8 @@
                 <a-link @click="onViewDetails(record)">{{ record.rule_id }}</a-link>
               </template>
             </a-table-column>
-            <a-table-column title="数据类型" data-index="data_type" :width="120"></a-table-column>
-            <a-table-column title="数据源" data-index="data_source" :width="120"></a-table-column>
+            <a-table-column title="Feed" data-index="data_type" :width="120"></a-table-column>
+            <a-table-column title="市场" data-index="data_source" :width="150"></a-table-column>
             <a-table-column title="云节点匹配规则" data-index="assignment_type" :width="120">
               <template #cell="{ record }">
                 <a-tag bordered size="small" :color="getAssignmentColor(record.assignment_type)">
@@ -111,7 +111,7 @@
       <template #title> {{ title }} </template>
       <div>
         <a-form ref="formRef" auto-label-width :rules="rules" :model="addForm" :layout="'vertical'">
-          <a-row :gutter="16">
+          <a-row v-if="!isBuiltinMarketRule" :gutter="16">
             <a-col v-if="title === '修改采集规则'" :span="12">
               <a-form-item field="rule_id" label="规则ID" validate-trigger="blur">
                 <a-input v-model="addForm.rule_id" placeholder="留空自动生成" allow-clear :disabled="true" />
@@ -134,7 +134,7 @@
             </a-col>
           </a-row>
           
-          <a-form-item field="data_source" label="数据源" validate-trigger="blur">
+          <a-form-item v-if="!isBuiltinMarketRule" field="data_source" label="数据源" validate-trigger="blur">
             <a-select 
               v-model="addForm.data_source" 
               placeholder="请选择数据源"
@@ -148,6 +148,39 @@
               </a-option>
             </a-select>
           </a-form-item>
+
+          <template v-else>
+            <a-form-item label="市场">
+              <a-input :model-value="addForm.market_id" disabled />
+            </a-form-item>
+            <a-form-item label="Feed" required>
+              <a-select v-model="addForm.feed">
+                <a-option value="instrument">标的</a-option>
+                <a-option value="calendar">交易日历</a-option>
+                <a-option value="kline">K 线</a-option>
+              </a-select>
+            </a-form-item>
+            <a-form-item label="工具类型" required>
+              <a-select v-model="addForm.instrument_types" multiple allow-clear>
+                <a-option v-for="item in marketInstrumentOptions" :key="item" :value="item">{{ item }}</a-option>
+              </a-select>
+            </a-form-item>
+            <a-form-item v-if="addForm.feed === 'kline'" label="周期" required>
+              <a-select v-model="addForm.frequencies" multiple allow-clear>
+                <a-option v-for="item in INTERVAL_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+              </a-select>
+            </a-form-item>
+            <a-row :gutter="16">
+              <a-col :span="12"><a-form-item label="历史开始"><a-input v-model="addForm.history_start" placeholder="RFC3339，可留空" /></a-form-item></a-col>
+              <a-col :span="12"><a-form-item label="历史结束"><a-input v-model="addForm.history_end" placeholder="RFC3339，可留空" /></a-form-item></a-col>
+            </a-row>
+            <a-form-item label="标的过滤">
+              <a-select v-model="addForm.subject_filters" multiple allow-create allow-clear placeholder="留空表示全部标的" />
+            </a-form-item>
+            <a-form-item label="交易所过滤">
+              <a-select v-model="addForm.exchange_filters" multiple allow-create allow-clear placeholder="可选" />
+            </a-form-item>
+          </template>
 
           <a-divider>任务分配配置</a-divider>
           
@@ -187,7 +220,7 @@
         <!-- 采集参数配置 - 完全独立于表单 -->
         <a-divider>采集参数配置</a-divider>
 
-        <template v-if="addForm.data_type">
+        <template v-if="addForm.data_type && !isBuiltinMarketRule">
           <!-- 产品类型选择 (inst_type) - 仅K线、逐笔交易、行情、订单簿显示 -->
           <div v-if="hasField('inst_type')" class="custom-form-item">
             <div class="custom-form-label">产品类型</div>
@@ -358,6 +391,14 @@ interface TaskConfig {
   creator: string;
   create_time: string;
   modify_time: string;
+  market_id?: string;
+  feed?: string;
+  instrument_types?: string[];
+  frequencies?: string[];
+  history_start?: string;
+  history_end?: string;
+  subject_filters?: string[];
+  exchange_filters?: string[];
 }
 
 interface DataTypeConfig {
@@ -491,7 +532,23 @@ const addForm = ref({
   node_tags: '[]',
   collect_params: '{}',
   enabled: 'true',
-  creator: ''
+  creator: '',
+  market_id: '',
+  feed: 'kline',
+  instrument_types: [] as string[],
+  frequencies: [] as string[],
+  history_start: '',
+  history_end: '',
+  subject_filters: [] as string[],
+  exchange_filters: [] as string[]
+});
+
+const BUILTIN_MARKETS = ['stock_cn', 'stock_us', 'crypto_binance', 'crypto_okx'];
+const isBuiltinMarketRule = computed(() => BUILTIN_MARKETS.includes(addForm.value.market_id || addForm.value.space_id || selectedSpaceId.value || ''));
+const marketInstrumentOptions = computed(() => {
+  const market = addForm.value.market_id || addForm.value.space_id;
+  if (market === 'stock_cn' || market === 'stock_us') return ['equity', 'etf', 'index'];
+  return ['spot', 'perpetual', 'future'];
 });
 
 const rules = {
@@ -711,8 +768,8 @@ const normalizeTaskConfig = (raw: any): TaskConfig => ({
   id: raw.id,
   rule_id: raw.rule_id || '',
   space_id: raw.space_id || '',
-  data_type: raw.data_type || '',
-  data_source: raw.exchange || raw.data_source || '',
+  data_type: raw.feed || raw.data_type || '',
+  data_source: raw.market_id || raw.exchange || raw.data_source || '',
   assignment_type: raw.assignment_type || 'auto',
   assigned_nodes: JSON.stringify(normalizeArray(raw.assigned_nodes)),
   node_pattern: raw.node_pattern || '',
@@ -721,7 +778,15 @@ const normalizeTaskConfig = (raw: any): TaskConfig => ({
   enabled: (raw.enabled ?? true) ? 'true' : 'false',
   creator: raw.creator || '',
   create_time: raw.create_time || '',
-  modify_time: raw.modify_time || ''
+  modify_time: raw.modify_time || '',
+  market_id: raw.market_id || '',
+  feed: raw.feed || '',
+  instrument_types: normalizeArray(raw.instrument_types),
+  frequencies: normalizeArray(raw.frequencies),
+  history_start: raw.history_start || '',
+  history_end: raw.history_end || '',
+  subject_filters: normalizeArray(raw.subject_filters),
+  exchange_filters: normalizeArray(raw.exchange_filters)
 });
 
 const dataSourceOptionsFromConfig = (value: any) => {
@@ -998,10 +1063,11 @@ const resetDynamicFields = () => {
 
 const onAdd = () => {
   title.value = '新建采集规则';
+  const marketID = BUILTIN_MARKETS.includes(selectedSpaceId.value || '') ? selectedSpaceId.value || '' : '';
   addForm.value = {
     rule_id: '',
     space_id: selectedSpaceId.value || '',
-    data_type: '',
+    data_type: marketID ? 'kline' : '',
     data_source: '',
     assignment_type: 'auto',
     assigned_nodes: '[]',
@@ -1009,7 +1075,15 @@ const onAdd = () => {
     node_tags: '[]',
     collect_params: '{}',
     enabled: 'true',
-    creator: account.value.user.userName || ''
+    creator: account.value.user.userName || '',
+    market_id: marketID,
+    feed: 'kline',
+    instrument_types: marketID.startsWith('stock_') ? ['equity'] : ['spot'],
+    frequencies: ['1d'],
+    history_start: '',
+    history_end: '',
+    subject_filters: [],
+    exchange_filters: []
   };
   assignedNodesList.value = [];
   nodeTagsList.value = [];
@@ -1022,7 +1096,17 @@ const onAdd = () => {
 
 const onUpdate = (record: TaskConfig) => {
   title.value = '修改采集规则';
-  addForm.value = { ...record };
+  addForm.value = {
+    ...record,
+    market_id: record.market_id || '',
+    feed: record.feed || record.data_type || 'kline',
+    instrument_types: record.instrument_types || [],
+    frequencies: record.frequencies || [],
+    history_start: record.history_start || '',
+    history_end: record.history_end || '',
+    subject_filters: record.subject_filters || [],
+    exchange_filters: record.exchange_filters || []
+  };
   activeDataType.value = record.data_type;
 
   // 解析 assigned_nodes
@@ -1145,7 +1229,7 @@ const handleOk = async (): Promise<boolean> => {
       return false;
     }
 
-    if (!addForm.value.data_source) {
+    if (!isBuiltinMarketRule.value && !addForm.value.data_source) {
       Message.error('请选择数据源');
       return false;
     }
@@ -1156,8 +1240,13 @@ const handleOk = async (): Promise<boolean> => {
     }
 
     // 验证交易标的（当数据类型需要 objects 字段时）
-    if (hasField('objects') && (!objectsValue.value || objectsValue.value.length === 0)) {
+    if (!isBuiltinMarketRule.value && hasField('objects') && (!objectsValue.value || objectsValue.value.length === 0)) {
       Message.error('请输入交易标的');
+      return false;
+    }
+
+    if (isBuiltinMarketRule.value && (!addForm.value.feed || addForm.value.instrument_types.length === 0 || (addForm.value.feed === 'kline' && addForm.value.frequencies.length === 0))) {
+      Message.error('请完整选择 Feed、工具类型和周期');
       return false;
     }
 
@@ -1169,7 +1258,7 @@ const handleOk = async (): Promise<boolean> => {
       addForm.value.node_tags = JSON.stringify(nodeTagsList.value || []);
     }
 
-    addForm.value.collect_params = JSON.stringify(buildStandardCollectParams());
+    addForm.value.collect_params = isBuiltinMarketRule.value ? '{}' : JSON.stringify(buildStandardCollectParams());
     const collectParams = normalizeObject(addForm.value.collect_params);
 
     // 准备请求数据
@@ -1185,6 +1274,21 @@ const handleOk = async (): Promise<boolean> => {
       enabled: addForm.value.enabled !== 'false',
       creator: addForm.value.creator || account.value.user?.userName || ''
     };
+    if (isBuiltinMarketRule.value) {
+      Object.assign(requestData, {
+        data_type: '',
+        exchange: '',
+        market_id: addForm.value.market_id || spaceId,
+        feed: addForm.value.feed,
+        instrument_types: addForm.value.instrument_types,
+        frequencies: addForm.value.feed === 'kline' ? addForm.value.frequencies : [],
+        history_start: addForm.value.history_start,
+        history_end: addForm.value.history_end,
+        subject_filters: addForm.value.subject_filters,
+        exchange_filters: addForm.value.exchange_filters,
+        schedule_spec: { interval: '30m', timezone: (addForm.value.market_id || spaceId).startsWith('stock_') ? 'Asia/Shanghai' : 'UTC' }
+      });
+    }
 
     // 如果是修改操作，添加rule_id
     if (title.value.includes('修改') && addForm.value.rule_id) {
@@ -1240,7 +1344,15 @@ const handleEnableChange = async (record: TaskConfig, value: boolean) => {
       node_tags: normalizeArray(record.node_tags),
       collect_params: normalizeObject(record.collect_params),
       enabled: value,
-      creator: record.creator || account.value.user?.userName || ''
+      creator: record.creator || account.value.user?.userName || '',
+      market_id: record.market_id || '',
+      feed: record.feed || '',
+      instrument_types: record.instrument_types || [],
+      frequencies: record.frequencies || [],
+      history_start: record.history_start || '',
+      history_end: record.history_end || '',
+      subject_filters: record.subject_filters || [],
+      exchange_filters: record.exchange_filters || []
     };
     await callControl<Record<string, any>, Record<string, never>>('collectmgr', 'UpdateTaskRule', {
       space_id: spaceId,
