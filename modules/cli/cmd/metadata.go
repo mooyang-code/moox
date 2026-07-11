@@ -595,7 +595,7 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 	}
 	fieldDisplayNames := make(map[string]string, len(seed.Fields))
 	for _, field := range seed.Fields {
-		fieldDisplayNames[field.SpaceID+"\x00"+field.FieldID] = field.Name
+		fieldDisplayNames[field.SpaceID+"\x00"+field.FieldID] = marketColumnDisplayName(field.FieldID, field.Name)
 	}
 	for _, item := range seed.DatasetColumns {
 		column, err := item.toPB()
@@ -674,6 +674,29 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 		calls = append(calls, metadataImportCall{Resource: "view_columns", Method: "UpsertViewColumn", Request: &pb.UpsertViewColumnReq{Column: column}, Response: &pb.UpsertViewColumnRsp{}})
 	}
 	return calls, nil
+}
+
+var marketColumnDisplayNames = map[string]string{
+	"amount": "成交额", "amount_exact": "精确成交额", "amount_unit": "成交额单位",
+	"calendar_timezone": "日历时区", "checked_at": "检查时间", "close": "收盘价", "close_exact": "精确收盘价", "close_time": "收盘时间",
+	"coverage_status": "覆盖状态", "currency": "币种", "data_time": "数据时间", "delisting_date": "退市日期", "effective_at": "生效时间",
+	"event_type": "事件类型", "exchange_id": "交易所", "expected_count": "预期数量", "feed_scope": "数据范围", "fetched_at": "抓取时间",
+	"frequency": "频率", "generation": "代次", "high": "最高价", "high_exact": "精确最高价", "instrument_name": "标的名称",
+	"instrument_status": "标的状态", "instrument_type": "标的类型", "is_closed": "是否收市", "listing_date": "上市日期", "low": "最低价",
+	"low_exact": "精确最低价", "missing_count": "缺失数量", "missing_ranges": "缺失区间", "name": "名称", "open": "开盘价",
+	"open_exact": "精确开盘价", "open_time": "开盘时间", "partition_id": "覆盖分区", "present_count": "已有数量", "product_type": "产品类型",
+	"provider_id": "数据源", "provider_ids": "数据源列表", "provider_symbol": "数据源代码", "provider_timestamp": "数据源时间", "quality_status": "质量状态",
+	"range_end": "区间结束", "range_start": "区间开始", "reason": "原因", "request_id": "请求ID", "resolved_at": "解决时间",
+	"revision": "修订号", "selected_provider": "选中数据源", "session_status": "交易时段状态", "sessions_json": "交易时段", "source_dataset_id": "来源数据集",
+	"source_fetched_at": "来源抓取时间", "source_provider": "来源数据源", "status": "状态", "subject_id": "标的ID", "timezone": "时区",
+	"trade_date": "交易日期", "unified_dataset_id": "统一数据集", "volume": "成交量", "volume_exact": "精确成交量", "volume_unit": "成交量单位",
+}
+
+func marketColumnDisplayName(fieldID, configured string) string {
+	if value := marketColumnDisplayNames[fieldID]; value != "" {
+		return value
+	}
+	return configured
 }
 
 func runMetadataImport(ctx context.Context, metadataURL string, calls []metadataImportCall, ifNotExists bool) (metadataImportSummary, error) {
