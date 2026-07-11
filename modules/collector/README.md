@@ -96,11 +96,16 @@ admin 网关
 
 `configs/config.yaml` 是 `moox-collector-scf` 打包进代码包的默认配置。控制面唤醒 SCF 时会在 keepalive event 中下发真实的 `service_gateway_target`、`storage_metadata_target`、`storage_access_target` 等地址；本地默认值只用于开发调试。
 
+目标市场架构把 SCF 定位为无状态、有界、可重试的执行器。所有 Market Module 复用同一代码包，但按 Space 分别部署 `stock_cn`、`stock_us`、`crypto_binance`、`crypto_okx` 函数，并以 `MOOX_SPACE_ID` 固定执行范围。Provider 路由、全局限频和缺口规划留在 `moox-collector` 控制面；SCF 达到时间、页数或行数预算时返回 `continuation_cursor`，由控制面创建后续 JobItem。
+
+当前 keepalive 执行窗口为 45 秒。目标 JobItem 应在 20 到 30 秒内完成，并至少预留 10 秒用于来源数据集、统一数据集的幂等写入和任务状态上报。查询接口和 `moox-cli init` 不在 SCF 中执行。
+
 关键字段：
 
 - `system.storage_metadata_target` / `system.storage_access_target` — Storage tRPC 直连地址。
 - `system.service_auth` — SCF 调 `/api/service/*` 所需 HMAC 签名配置。
 - `sources.market` — 运行时加载的数据源采集器配置，例如 Binance。
+- `MOOX_SPACE_ID` — 目标架构中固定该 SCF 函数负责的内置 Space。
 
 ## 相关文档
 
