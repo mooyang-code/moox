@@ -32,6 +32,17 @@ func TestKlinePipelineDoesNotResolveWhenSourceWriteFails(t *testing.T) {
 	}
 }
 
+func TestKlinePipelineWritesQualityEventAfterUnifiedRow(t *testing.T) {
+	store := &pipelineStore{}
+	p := KlinePipeline{Provider: &pipelineProvider{row: pipelineKline("binance", "10")}, Gate: providers.StaticGate{Permit: providers.RequestPermit{Allowed: true}}, Store: store, Resolver: QualityResolver{Policy: QualityPolicy{AuthoritativeSingleSource: true}}, SourceDatasetID: "binance_kline", UnifiedDatasetID: "spot_kline", QualityDatasetID: "kline_quality_event"}
+	if _, err := p.Run(context.Background(), providers.FetchKlinesRequest{Frequency: marketdata.FrequencyMinute}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.events; len(got) != 3 || got[0] != "source" || got[1] != "unified" || got[2] != "quality" {
+		t.Fatalf("write order=%v", got)
+	}
+}
+
 type pipelineProvider struct{ row marketdata.ProviderKline }
 
 func (p *pipelineProvider) ID() marketdata.ProviderID            { return p.row.ProviderID }
@@ -62,5 +73,9 @@ func (s *pipelineStore) Unified(context.Context, string, string, string, marketd
 }
 func (s *pipelineStore) WriteUnifiedKline(context.Context, string, marketdata.ResolvedKline) error {
 	s.events = append(s.events, "unified")
+	return nil
+}
+func (s *pipelineStore) WriteQualityEvents(context.Context, string, marketdata.ResolvedKline, []QualityEvent) error {
+	s.events = append(s.events, "quality")
 	return nil
 }

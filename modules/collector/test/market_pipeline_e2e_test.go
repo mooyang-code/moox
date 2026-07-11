@@ -25,6 +25,7 @@ func TestMarketPipelineE2E_SourceFirstFallbackAndIdempotentRetry(t *testing.T) {
 		marketDatasetSchema("crypto_binance", "primary_kline", false),
 		marketDatasetSchema("crypto_binance", "fallback_kline", false),
 		marketDatasetSchema("crypto_binance", "spot_kline", true),
+		qualityDatasetSchema("crypto_binance", "kline_quality_event"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -34,9 +35,10 @@ func TestMarketPipelineE2E_SourceFirstFallbackAndIdempotentRetry(t *testing.T) {
 		{SpaceID: "crypto_binance", DatasetID: "primary_kline", Role: storageio.RoleProviderData, Feed: "kline", ProviderID: "primary", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, RequiredVolume: true, VolumeUnit: "base", AmountUnit: "quote"},
 		{SpaceID: "crypto_binance", DatasetID: "fallback_kline", Role: storageio.RoleProviderData, Feed: "kline", ProviderID: "fallback", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, RequiredVolume: true, VolumeUnit: "base", AmountUnit: "quote"},
 		{SpaceID: "crypto_binance", DatasetID: "spot_kline", Role: storageio.RoleUnifiedData, Feed: "kline", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, RequiredVolume: true, RequiredAmount: true, VolumeUnit: "base", AmountUnit: "quote"},
+		{SpaceID: "crypto_binance", DatasetID: "kline_quality_event", Role: storageio.RoleQualityEvent, Feed: "quality_event"},
 	})
 	primary := &e2EProvider{id: "primary", rows: []marketdata.ProviderKline{e2EKline("primary", "10")}}
-	pipe := pipeline.KlinePipeline{Provider: primary, Gate: providers.StaticGate{Permit: providers.RequestPermit{Allowed: true}}, Store: store, SpaceID: "crypto_binance", SourceDatasetID: "primary_kline", SourceDatasetIDs: []string{"primary_kline", "fallback_kline"}, SourceDatasets: map[marketdata.ProviderID]string{"primary": "primary_kline", "fallback": "fallback_kline"}, UnifiedDatasetID: "spot_kline", Resolver: pipeline.QualityResolver{Policy: pipeline.QualityPolicy{ProviderPriority: []marketdata.ProviderID{"primary", "fallback"}, AuthoritativeSingleSource: true}, Now: func() time.Time { return fixedE2ETime }}}
+	pipe := pipeline.KlinePipeline{Provider: primary, Gate: providers.StaticGate{Permit: providers.RequestPermit{Allowed: true}}, Store: store, SpaceID: "crypto_binance", SourceDatasetID: "primary_kline", SourceDatasetIDs: []string{"primary_kline", "fallback_kline"}, SourceDatasets: map[marketdata.ProviderID]string{"primary": "primary_kline", "fallback": "fallback_kline"}, UnifiedDatasetID: "spot_kline", QualityDatasetID: "kline_quality_event", Resolver: pipeline.QualityResolver{Policy: pipeline.QualityPolicy{ProviderPriority: []marketdata.ProviderID{"primary", "fallback"}, AuthoritativeSingleSource: true}, Now: func() time.Time { return fixedE2ETime }}}
 	req := providers.FetchKlinesRequest{MarketID: "crypto_binance", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyHour, Subjects: []providers.ProviderSubject{{SubjectID: "BTC-USDT", ProviderSymbol: "BTCUSDT"}}}
 	if summary, err := pipe.Run(context.Background(), req); err != nil || summary.SourceRows != 1 || summary.UnifiedRows != 1 {
 		t.Fatalf("first run summary=%+v err=%v", summary, err)
@@ -203,6 +205,17 @@ func coverageDatasetSchema(spaceID, datasetID string) testkit.DatasetSchema {
 	}
 	for _, name := range []string{"expected_count", "present_count", "missing_count"} {
 		columns[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_INT
+	}
+	return testkit.DatasetSchema{SpaceID: spaceID, DatasetID: datasetID, Columns: columns}
+}
+
+func qualityDatasetSchema(spaceID, datasetID string) testkit.DatasetSchema {
+	columns := map[string]storagepb.FieldValueType{
+		"subject_id": storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "frequency": storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING,
+		"data_time": storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME, "event_type": storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING,
+		"provider_ids": storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "reason": storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING,
+		"selected_provider": storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "source_dataset_id": storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING,
+		"revision": storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "resolved_at": storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME,
 	}
 	return testkit.DatasetSchema{SpaceID: spaceID, DatasetID: datasetID, Columns: columns}
 }

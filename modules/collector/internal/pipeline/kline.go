@@ -15,6 +15,9 @@ type KlineStore interface {
 	Unified(context.Context, string, string, string, marketdata.Frequency, time.Time) (*marketdata.ResolvedKline, error)
 	WriteUnifiedKline(context.Context, string, marketdata.ResolvedKline) error
 }
+type QualityEventStore interface {
+	WriteQualityEvents(context.Context, string, marketdata.ResolvedKline, []QualityEvent) error
+}
 type ResolutionLeaseGuard interface{ BeforeUnifiedWrite(context.Context) error }
 type KlinePipeline struct {
 	Provider         providers.KlineProvider
@@ -28,6 +31,7 @@ type KlinePipeline struct {
 	ResolutionGuard  ResolutionLeaseGuard
 	ProviderGuard    ResolutionLeaseGuard
 	UnifiedDatasetID string
+	QualityDatasetID string
 }
 type KlinePipelineResult struct {
 	FetchedRows  int
@@ -95,6 +99,15 @@ func (p KlinePipeline) Run(ctx context.Context, request providers.FetchKlinesReq
 		}
 		if err := p.Store.WriteUnifiedKline(ctx, p.UnifiedDatasetID, *decision.Row); err != nil {
 			return result, fmt.Errorf("persist unified kline: %w", err)
+		}
+		if len(decision.Events) > 0 && p.QualityDatasetID != "" {
+			writer, ok := p.Store.(QualityEventStore)
+			if !ok {
+				return result, fmt.Errorf("quality event store is required")
+			}
+			if err := writer.WriteQualityEvents(ctx, p.QualityDatasetID, *decision.Row, decision.Events); err != nil {
+				return result, fmt.Errorf("persist quality event: %w", err)
+			}
 		}
 		result.UnifiedRows++
 	}

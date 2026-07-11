@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/coverage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
+	"github.com/mooyang-code/moox/modules/collector/internal/pipeline"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -30,6 +31,27 @@ func TestProviderAndUnifiedWritersEnforceDatasetRoles(t *testing.T) {
 	}
 	if len(access.timeReq.GetRows()[0].GetColumns()) < 12 {
 		t.Fatalf("exact and numeric columns missing: %+v", access.timeReq.GetRows()[0])
+	}
+}
+
+func TestQualityEventWriterUsesDeterministicRevisionKey(t *testing.T) {
+	access := &fakeAccess{}
+	c := NewClientWithAccess(access, nil, []Binding{{SpaceID: "crypto_binance", DatasetID: "kline_quality_event", Role: RoleQualityEvent, Feed: "quality_event"}})
+	row := marketdata.ResolvedKline{ProviderKline: testKline(), SourceDatasetID: "binance_kline", Revision: 2, ResolvedAt: time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC)}
+	events := []pipeline.QualityEvent{{Type: "kline_resolved", ProviderIDs: []marketdata.ProviderID{"binance", "okx"}, Reason: "confirmed"}}
+	if err := c.WriteQualityEvents(context.Background(), "kline_quality_event", row, events); err != nil {
+		t.Fatal(err)
+	}
+	first := access.recordReq.GetRows()[0].GetKey()
+	if first.GetVersion() != "2" || first.GetRecordId() == "" || access.recordReq.GetWriteMode() != storagepb.RowWriteMode_ROW_WRITE_MODE_REPLACE {
+		t.Fatalf("event key=%+v", first)
+	}
+	firstID := first.GetRecordId()
+	if err := c.WriteQualityEvents(context.Background(), "kline_quality_event", row, events); err != nil {
+		t.Fatal(err)
+	}
+	if access.recordReq.GetRows()[0].GetKey().GetRecordId() != firstID {
+		t.Fatal("retry changed deterministic quality event key")
 	}
 }
 

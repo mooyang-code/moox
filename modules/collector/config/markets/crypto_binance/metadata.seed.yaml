@@ -59,6 +59,11 @@ fields:
   - {space_id: crypto_binance, field_id: missing_ranges, name: Missing ranges, value_type: string, status: active}
   - {space_id: crypto_binance, field_id: coverage_status, name: Coverage status, value_type: string, status: active}
   - {space_id: crypto_binance, field_id: checked_at, name: Checked at, value_type: time, status: active}
+  - {space_id: crypto_binance, field_id: data_time, name: Data time, value_type: time, status: active}
+  - {space_id: crypto_binance, field_id: event_type, name: Event type, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: provider_ids, name: Provider IDs, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: reason, name: Reason, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: selected_provider, name: Selected provider, value_type: string, status: active}
 datasets:
   - {space_id: crypto_binance, dataset_id: binance_kline, data_source_id: binance, name: Binance Kline source, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
   - {space_id: crypto_binance, dataset_id: binance_instruments, data_source_id: binance, name: Binance instruments source, data_kind: record, status: active, attributes: {dataset_role: provider_data, feed: instrument}}
@@ -169,3 +174,13 @@ dataset_columns:
   - {space_id: crypto_binance, dataset_id: market_coverage, column_name: missing_ranges, origin_type: field, origin_id: missing_ranges, value_type: string, required: true, status: active}
   - {space_id: crypto_binance, dataset_id: market_coverage, column_name: coverage_status, origin_type: field, origin_id: coverage_status, value_type: string, required: true, status: active}
   - {space_id: crypto_binance, dataset_id: market_coverage, column_name: checked_at, origin_type: field, origin_id: checked_at, value_type: time, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: subject_id, origin_type: field, origin_id: subject_id, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: frequency, origin_type: field, origin_id: frequency, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: data_time, origin_type: field, origin_id: data_time, value_type: time, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: event_type, origin_type: field, origin_id: event_type, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: provider_ids, origin_type: field, origin_id: provider_ids, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: reason, origin_type: field, origin_id: reason, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: selected_provider, origin_type: field, origin_id: selected_provider, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: source_dataset_id, origin_type: field, origin_id: source_dataset_id, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: revision, origin_type: field, origin_id: revision, value_type: int, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: resolved_at, origin_type: field, origin_id: resolved_at, value_type: time, required: true, status: active}

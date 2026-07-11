@@ -96,7 +96,7 @@ func (p MarketPlanner) PlanKline(ctx context.Context, request MarketKlinePlanReq
 	params := map[string]any{
 		"job_type": "collect.kline", "phase": "fetch", "market_id": string(request.MarketID), "space_id": request.SpaceID,
 		"exchange_id": string(request.ExchangeID), "product_type": string(request.ProductType), "instrument_type": string(request.InstrumentType),
-		"unified_dataset_id": request.UnifiedDatasetID, "source_dataset_id": selected.SourceDatasetID, "subject_id": request.SubjectID,
+		"unified_dataset_id": request.UnifiedDatasetID, "quality_dataset_id": "kline_quality_event", "source_dataset_id": selected.SourceDatasetID, "subject_id": request.SubjectID,
 		"provider_id": string(selected.ProviderID), "provider_symbol": selected.ProviderSymbol, "frequency": string(request.Frequency),
 		"start_time": request.StartTime.UTC().Format(time.RFC3339), "end_time": request.EndTime.UTC().Format(time.RFC3339), "limit": request.Limit,
 		"quota_lease_id": providerLeaseID, "lease_epoch": request.LeaseEpoch, "resolution_lease_id": resolutionLeaseID,

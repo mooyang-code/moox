@@ -73,6 +73,23 @@ fields:
   - {space_id: stock_cn, field_id: sessions_json, name: 交易时段, value_type: string, status: active}
   - {space_id: stock_cn, field_id: open_time, name: 开市时间, value_type: time, status: active}
   - {space_id: stock_cn, field_id: generation, name: 日历代次, value_type: time, status: active}
+  - {space_id: stock_cn, field_id: subject_id, name: 标的ID, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: unified_dataset_id, name: 统一数据集, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: frequency, name: 周期, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: partition_id, name: 覆盖分区, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: range_start, name: 范围开始, value_type: time, status: active}
+  - {space_id: stock_cn, field_id: range_end, name: 范围结束, value_type: time, status: active}
+  - {space_id: stock_cn, field_id: expected_count, name: 预期数量, value_type: int, status: active}
+  - {space_id: stock_cn, field_id: present_count, name: 已有数量, value_type: int, status: active}
+  - {space_id: stock_cn, field_id: missing_count, name: 缺失数量, value_type: int, status: active}
+  - {space_id: stock_cn, field_id: missing_ranges, name: 缺失范围, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: coverage_status, name: 覆盖状态, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: checked_at, name: 检查时间, value_type: time, status: active}
+  - {space_id: stock_cn, field_id: data_time, name: 数据时间, value_type: time, status: active}
+  - {space_id: stock_cn, field_id: event_type, name: 事件类型, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: provider_ids, name: Provider列表, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: reason, name: 原因, value_type: string, status: active}
+  - {space_id: stock_cn, field_id: selected_provider, name: 选中Provider, value_type: string, status: active}
 datasets:
   - {space_id: stock_cn, dataset_id: sina_kline, data_source_id: sina, name: 新浪K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
   - {space_id: stock_cn, dataset_id: eastmoney_kline, data_source_id: eastmoney, name: 东方财富K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
@@ -167,3 +184,25 @@ dataset_columns:
   - {space_id: stock_cn, dataset_id: tencent_kline, column_name: fetched_at, origin_type: field, origin_id: fetched_at, value_type: time, required: true, status: active}
   - {space_id: stock_cn, dataset_id: tencent_kline, column_name: request_id, origin_type: field, origin_id: request_id, value_type: string, required: true, status: active}
   - {space_id: stock_cn, dataset_id: tencent_kline, column_name: is_closed, origin_type: field, origin_id: is_closed, value_type: bool, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: market_coverage, column_name: unified_dataset_id, origin_type: field, origin_id: unified_dataset_id, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: market_coverage, column_name: subject_id, origin_type: field, origin_id: subject_id, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: market_coverage, column_name: frequency, origin_type: field, origin_id: frequency, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: market_coverage, column_name: partition_id, origin_type: field, origin_id: partition_id, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: market_coverage, column_name: range_start, origin_type: field, origin_id: range_start, value_type: time, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: market_coverage, column_name: range_end, origin_type: field, origin_id: range_end, value_type: time, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: market_coverage, column_name: expected_count, origin_type: field, origin_id: expected_count, value_type: int, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: market_coverage, column_name: present_count, origin_type: field, origin_id: present_count, value_type: int, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: market_coverage, column_name: missing_count, origin_type: field, origin_id: missing_count, value_type: int, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: market_coverage, column_name: missing_ranges, origin_type: field, origin_id: missing_ranges, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: market_coverage, column_name: coverage_status, origin_type: field, origin_id: coverage_status, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: market_coverage, column_name: checked_at, origin_type: field, origin_id: checked_at, value_type: time, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: kline_quality_event, column_name: subject_id, origin_type: field, origin_id: subject_id, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: kline_quality_event, column_name: frequency, origin_type: field, origin_id: frequency, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: kline_quality_event, column_name: data_time, origin_type: field, origin_id: data_time, value_type: time, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: kline_quality_event, column_name: event_type, origin_type: field, origin_id: event_type, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: kline_quality_event, column_name: provider_ids, origin_type: field, origin_id: provider_ids, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: kline_quality_event, column_name: reason, origin_type: field, origin_id: reason, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: kline_quality_event, column_name: selected_provider, origin_type: field, origin_id: selected_provider, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: kline_quality_event, column_name: source_dataset_id, origin_type: field, origin_id: source_dataset_id, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: kline_quality_event, column_name: revision, origin_type: field, origin_id: revision, value_type: int, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: kline_quality_event, column_name: resolved_at, origin_type: field, origin_id: resolved_at, value_type: time, required: true, status: active}
