@@ -145,6 +145,8 @@ Strategy 不会把 `strategy.py` 当命令执行，也不会为每个 Bar 启动
 3. 收到任务后调用 `run(context, data, params, state)`。
 4. 捕获策略日志，校验并返回结构化结果。
 
+这些进程由 Go 侧共享 Python 运行时管理。其 supervisor、重启、日志、Arrow/mmap 和环境版本约束见 [Python 计算运行时架构设计](Python计算运行时架构设计.md)。策略开发者无需创建进程、处理帧或管理 DataFrame 共享。
+
 `if __name__ == "__main__"` 不会成为线上入口。模块加载后会被重复调用，因此不得在 import 阶段启动线程、访问网络或创建可变业务状态。
 
 框架计划提供可选的 `moox_strategy` SDK，用于构造标准空目标、结构化日志和本地协议校验。SDK 不提供 Storage、Trade、账户或网络客户端；不使用 SDK 也可以直接返回本文规定的字典。
