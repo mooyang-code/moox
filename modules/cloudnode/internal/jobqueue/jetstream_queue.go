@@ -75,8 +75,8 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*Publis
 		return nil, err
 	}
 	now := timestamppb.Now()
-	messageID := item.GetJobItemId()
 	topic := ExecSubject(q.cfg.Naming, item.GetSpaceId(), item.GetCodePackageId(), item.GetJobType())
+	messageID := topic + "|" + item.GetJobItemId()
 	msg := &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: messageID, Topic: topic, Kind: messagepb.MessageKind_MESSAGE_KIND_COMMAND, Producer: &messagepb.Producer{ServiceName: "moox-cloudnode", InstanceId: "cloudnode"}, SpaceId: item.GetSpaceId(), OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.cloudnode.JobItem", Payload: data}
 	ack, err := q.client.Publish(ctx, msg)
 	if err != nil {
