@@ -36,6 +36,9 @@ echo "==> generate market readiness lock"
   go run ./cmd/cli readiness-lock --markets-dir ./config/markets --output "${BUILD_DIR}/package/market-readiness-lock.json"
 )
 
+mkdir -p "${BUILD_DIR}/package/config/markets/stock_cn"
+cp "${ROOT}/modules/collector/config/markets/stock_cn/calendar.yaml" "${BUILD_DIR}/package/config/markets/stock_cn/calendar.yaml"
+
 echo "==> package ${OUT_PATH}"
 (
   cd "${BUILD_DIR}/package"

@@ -9,7 +9,7 @@ import (
 
 func TestResolveKlineChoosesOneWholeProviderRowAndRevisionsOnlyOnBusinessChange(t *testing.T) {
 	primary := pipelineKline("primary", "10")
-	fallback := pipelineKline("fallback", "11")
+	fallback := pipelineKline("fallback", "10")
 	resolver := QualityResolver{Policy: QualityPolicy{ProviderPriority: []marketdata.ProviderID{"primary", "fallback"}, AuthoritativeSingleSource: true}}
 	decision, err := resolver.Resolve([]marketdata.ProviderKline{fallback, primary}, nil)
 	if err != nil {
@@ -36,6 +36,17 @@ func TestResolveKlineChoosesOneWholeProviderRowAndRevisionsOnlyOnBusinessChange(
 	}
 	if revised.Row.Revision != 2 {
 		t.Fatalf("business change revision=%d", revised.Row.Revision)
+	}
+}
+
+func TestResolveKlineMarksDisagreeingProvidersAsConflict(t *testing.T) {
+	resolver := QualityResolver{Policy: QualityPolicy{ProviderPriority: []marketdata.ProviderID{"primary", "fallback"}, AuthoritativeSingleSource: true}}
+	decision, err := resolver.Resolve([]marketdata.ProviderKline{pipelineKline("primary", "10"), pipelineKline("fallback", "11")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Row == nil || decision.Row.QualityStatus != "conflict" || decision.Row.ProviderID != "primary" {
+		t.Fatalf("decision=%+v", decision.Row)
 	}
 }
 

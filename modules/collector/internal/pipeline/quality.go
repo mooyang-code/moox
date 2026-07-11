@@ -61,8 +61,17 @@ func (r QualityResolver) Resolve(candidates []marketdata.ProviderKline, existing
 	})
 	winner := valid[0]
 	status := "provisional"
-	if r.Policy.AuthoritativeSingleSource || len(valid) > 1 {
+	consistent := true
+	for _, candidate := range valid[1:] {
+		if !sameCandleValues(winner, candidate) {
+			consistent = false
+			break
+		}
+	}
+	if r.Policy.AuthoritativeSingleSource && len(valid) == 1 || len(valid) > 1 && consistent {
 		status = "confirmed"
+	} else if len(valid) > 1 {
+		status = "conflict"
 	}
 	revision := int64(1)
 	resolvedAt := r.now()
@@ -79,6 +88,9 @@ func (r QualityResolver) Resolve(candidates []marketdata.ProviderKline, existing
 	}
 	row := &marketdata.ResolvedKline{ProviderKline: winner, QualityStatus: status, Revision: revision, ResolvedAt: resolvedAt}
 	return QualityDecision{Row: row, Events: []QualityEvent{{Type: "kline_resolved", ProviderIDs: providerIDs(valid), Reason: status}}}, nil
+}
+func sameCandleValues(left, right marketdata.ProviderKline) bool {
+	return left.SubjectID == right.SubjectID && left.Frequency == right.Frequency && left.DataTime.Equal(right.DataTime) && left.Open.Cmp(right.Open) == 0 && left.High.Cmp(right.High) == 0 && left.Low.Cmp(right.Low) == 0 && left.Close.Cmp(right.Close) == 0 && decimalEqual(left.Volume, right.Volume) && decimalEqual(left.Amount, right.Amount) && left.VolumeUnit == right.VolumeUnit && left.AmountUnit == right.AmountUnit
 }
 func (r QualityResolver) now() time.Time {
 	if r.Now != nil {

@@ -97,7 +97,7 @@ func executeMarketKlineJobItem(ctx context.Context, item nodeRuntime.JobItem) (n
 	if len(datasetMap) == 0 {
 		datasetMap[providerID] = sourceDatasetID
 	}
-	pipe := pipeline.KlinePipeline{Provider: provider, Gate: gate, Store: store, SpaceID: spaceID, ProviderGuard: providerGuard, ResolutionGuard: resolutionGuard, SourceDatasetID: sourceDatasetID, SourceDatasetIDs: sourceDatasetIDs, SourceDatasets: datasetMap, UnifiedDatasetID: unifiedDatasetID, QualityDatasetID: qualityDatasetID, Resolver: pipeline.QualityResolver{Policy: pipeline.QualityPolicy{ProviderPriority: providerPriority, AuthoritativeSingleSource: true}}}
+	pipe := pipeline.KlinePipeline{Provider: provider, Gate: gate, Store: store, SpaceID: spaceID, ProviderGuard: providerGuard, ResolutionGuard: resolutionGuard, SourceDatasetID: sourceDatasetID, SourceDatasetIDs: sourceDatasetIDs, SourceDatasets: datasetMap, UnifiedDatasetID: unifiedDatasetID, QualityDatasetID: qualityDatasetID, Resolver: pipeline.QualityResolver{Policy: pipeline.QualityPolicy{ProviderPriority: providerPriority, AuthoritativeSingleSource: boolValue(params, "authoritative_single_source")}}}
 	summary, err := pipe.Run(ctx, providers.FetchKlinesRequest{MarketID: marketdata.MarketID(stringValue(params, "market_id")), ExchangeID: marketdata.ExchangeID(stringValue(params, "exchange_id")), ProductType: product, InstrumentType: instrument, Frequency: frequency, Subjects: []providers.ProviderSubject{{SubjectID: subjectID, ProviderSymbol: providerSymbol}}, StartTime: start, EndTime: end, Limit: intValue(params, "limit")})
 	result := nodeRuntime.Result{Summary: map[string]any{"market_id": stringValue(params, "market_id"), "provider_id": string(providerID), "fetched_rows": summary.FetchedRows, "source_rows": summary.SourceRows, "unified_rows": summary.UnifiedRows, "request_count": summary.RequestCount, "complete": summary.Complete}}
 	if err != nil {
@@ -132,6 +132,16 @@ func intValue(params map[string]any, key string) int {
 		return parsed
 	}
 	return 0
+}
+func boolValue(params map[string]any, key string) bool {
+	switch value := params[key].(type) {
+	case bool:
+		return value
+	case string:
+		parsed, _ := strconv.ParseBool(value)
+		return parsed
+	}
+	return false
 }
 func quotaWindows(params map[string]any) []*pb.ProviderQuotaWindow {
 	raw, ok := params["quota_windows"].([]any)
