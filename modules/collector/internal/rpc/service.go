@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner"
@@ -56,6 +57,8 @@ type Service struct {
 
 // New creates a collector management service.
 func New(db *gorm.DB, deps Dependencies) *Service {
+	deps.StorageMetadataTarget = runtimeapp.NormalizeStorageTRPCTarget(deps.StorageMetadataTarget)
+	deps.StorageAccessTarget = runtimeapp.NormalizeStorageTRPCTarget(deps.StorageAccessTarget)
 	manifestMap := make(map[string]marketmanifest.Manifest, len(deps.MarketManifests))
 	for _, manifest := range deps.MarketManifests {
 		manifestMap[manifest.MarketID] = manifest

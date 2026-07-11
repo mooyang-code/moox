@@ -2,6 +2,12 @@ package runtime
 
 import "testing"
 
+func TestNormalizeStorageTRPCTargetAddsDirectScheme(t *testing.T) {
+	if got := NormalizeStorageTRPCTarget("storage.example.com:20102"); got != "ip://storage.example.com:20102" {
+		t.Fatalf("NormalizeStorageTRPCTarget() = %q", got)
+	}
+}
+
 func TestStorageTargetsUseEnvironmentBeforeLocalConfig(t *testing.T) {
 	resetStorageTargetState(t)
 	t.Setenv("MOOX_STORAGE_METADATA_TARGET", "ip://metadata.example.com:20100/")

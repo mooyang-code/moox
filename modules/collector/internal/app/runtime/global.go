@@ -271,5 +271,14 @@ func IsStorageTRPCTarget(raw string) bool {
 }
 
 func trimTarget(raw string) string {
-	return strings.TrimRight(strings.TrimSpace(raw), "/")
+	return NormalizeStorageTRPCTarget(raw)
+}
+
+// NormalizeStorageTRPCTarget converts a bare host:port into a valid direct tRPC target.
+func NormalizeStorageTRPCTarget(raw string) string {
+	target := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if target != "" && !strings.Contains(target, "://") {
+		target = "ip://" + target
+	}
+	return target
 }
