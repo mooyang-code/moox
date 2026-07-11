@@ -56,3 +56,23 @@ func TestValidateMarketSeedRequiresRoleAndFeed(t *testing.T) {
 		t.Fatal("market dataset without role/feed was accepted")
 	}
 }
+
+func TestBuildMetadataImportCallsDerivesDatasetColumnDisplayName(t *testing.T) {
+	seed := metadataSeed{
+		Fields:         []seedField{{SpaceID: "stock_cn", FieldID: "open", Name: "开盘价", ValueType: "double"}},
+		DatasetColumns: []seedDatasetColumn{{SpaceID: "stock_cn", DatasetID: "equity_kline", ColumnName: "open", OriginType: "field", OriginID: "open", ValueType: "double"}},
+	}
+	calls, err := buildMetadataImportCalls(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range calls {
+		if req, ok := call.Request.(*pb.UpsertDatasetColumnReq); ok {
+			if got := req.GetColumn().GetAttributes()["display_name"]; got != "开盘价" {
+				t.Fatalf("display_name = %q, want 开盘价", got)
+			}
+			return
+		}
+	}
+	t.Fatal("dataset column call not found")
+}

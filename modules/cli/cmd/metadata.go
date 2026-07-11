@@ -593,10 +593,20 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 			},
 		})
 	}
+	fieldDisplayNames := make(map[string]string, len(seed.Fields))
+	for _, field := range seed.Fields {
+		fieldDisplayNames[field.SpaceID+"\x00"+field.FieldID] = field.Name
+	}
 	for _, item := range seed.DatasetColumns {
 		column, err := item.toPB()
 		if err != nil {
 			return nil, err
+		}
+		if column.Attributes == nil {
+			column.Attributes = make(map[string]string)
+		}
+		if column.Attributes["display_name"] == "" {
+			column.Attributes["display_name"] = fieldDisplayNames[column.SpaceId+"\x00"+column.OriginId]
 		}
 		calls = append(calls, metadataImportCall{Resource: "dataset_columns", Method: "UpsertDatasetColumn", Request: &pb.UpsertDatasetColumnReq{Column: column}, Response: &pb.UpsertDatasetColumnRsp{}})
 	}
