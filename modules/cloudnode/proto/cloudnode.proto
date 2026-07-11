@@ -141,6 +141,7 @@ message GetNodeListReq {
   NodeStatusCode status = 8;
   string keyword = 9;
   common.Page page = 10;
+  string space_id = 11;
 }
 
 message GetNodeListRsp {
