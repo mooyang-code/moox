@@ -13,6 +13,10 @@ printf '%s\n' "${command}" >> "${FAKE_SSH_LOG}"
 if [[ "${command}" == *"market status"* ]]; then
   market="$(printf '%s' "${command}" | sed -n "s/.*--market '\([^']*\)'.*/\1/p")"
   printf '{"ret_info":{"code":"SUCCESS"},"module":{"market_id":"%s"}}\n' "${market}"
+elif [[ "${command}" == *"function verify-markets"* ]]; then
+  printf '%s\n' '[{"market_id":"crypto_binance","space_id":"crypto_binance","function_name":"moox-collector-crypto-binance-scf","status":"verified"}]'
+elif [[ "${command}" == *"function publish-markets"* ]]; then
+  printf '%s\n' '[{"market_id":"crypto_binance","status":"published"}]'
 elif [[ "${command}" == *"legacy-cutover"* ]]; then
   printf '%s\n' '{"mode":"preflight","legacy_space":"crypto","pending_canceled":0,"running_job_items":[]}'
 elif [[ "${command}" == *" init "* ]]; then

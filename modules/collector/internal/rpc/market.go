@@ -107,6 +107,9 @@ func (s *Service) QueryMarketKlines(ctx context.Context, req *pb.QueryMarketKlin
 		if err := s.validateMarketCursorBoundary(ctx, manifest.SpaceID, cursor); err != nil {
 			return &pb.QueryMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "data_changed_restart_query")}, nil
 		}
+		if err := s.validateMarketCursorPrefixes(ctx, manifest, req.GetFrequency(), start.UTC(), end.UTC(), order, cursor); err != nil {
+			return &pb.QueryMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "data_changed_restart_query")}, nil
+		}
 	}
 	pageSize := int(req.GetPageSize())
 	if pageSize <= 0 {
@@ -151,16 +154,67 @@ func (s *Service) QueryMarketKlines(ctx context.Context, req *pb.QueryMarketKlin
 		cursor.Offset += finish
 		cursor.BoundaryKey, cursor.BoundaryDigest = marketRowTuple(last), marketRowDigest(last)
 		cursor.DatasetOffsets = nextOffsets
+		if cursor.StreamPrefixDigests == nil {
+			cursor.StreamPrefixDigests = map[string]string{}
+		}
+		for _, row := range pageRows {
+			cursor.StreamPrefixDigests[row.cursorKey] = chainStreamDigest(cursor.StreamPrefixDigests[row.cursorKey], marketRowDigest(row))
+		}
 		cursor.BoundaryDataset, cursor.BoundaryInstrument = last.datasetID, last.row.GetInstrumentType()
 		cursor.BoundarySubject, cursor.BoundaryFrequency, cursor.BoundaryDataTime = last.row.GetSubjectId(), last.row.GetFrequency(), last.row.GetDataTime()
 		cursor.BoundaryDimensions = last.dimensions
 		next, _ = encodeMarketCursor(cursor)
 	}
-	coverageStatus, missingRanges, err := s.readMarketCoverage(ctx, manifest, instrumentTypes, subjects, req.GetFrequency(), start.UTC())
+	coverageStatus, missingRanges, err := s.readMarketCoverage(ctx, manifest, instrumentTypes, subjects, req.GetFrequency(), start.UTC(), end.UTC())
 	if err != nil {
 		return &pb.QueryMarketKlinesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	return &pb.QueryMarketKlinesRsp{RetInfo: retOK(), Rows: result, NextCursor: next, QueryAsOf: cursor.QueryAsOf, Freshness: marketFreshness(rows, cursor.QueryAsOf), CoverageStatus: coverageStatus, MissingRanges: missingRanges}, nil
+}
+
+func (s *Service) validateMarketCursorPrefixes(ctx context.Context, manifest marketmanifest.Manifest, frequency string, start, end time.Time, order string, cursor marketCursor) error {
+	feeds := map[string]marketmanifest.Feed{}
+	for _, feed := range manifest.Feeds {
+		feeds[feed.DatasetID] = feed
+	}
+	for cursorKey, offset := range cursor.DatasetOffsets {
+		if offset == 0 {
+			continue
+		}
+		parts := strings.SplitN(cursorKey, "\x00", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid stream cursor")
+		}
+		feed, ok := feeds[parts[0]]
+		if !ok {
+			return fmt.Errorf("unknown stream dataset")
+		}
+		digest, seen := "", 0
+		for page := uint32(1); seen < offset; page++ {
+			rsp, err := s.storageAccess.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{Keys: []*storagepb.TimeSeriesKey{{SpaceId: manifest.SpaceID, DatasetId: parts[0], SubjectId: parts[1], Freq: frequency}}, TimeRange: &storagepb.TimeRange{StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano)}, Order: mapMarketStorageOrder(order), Page: &commonpb.Page{Page: page, Size: 1000}})
+			if err != nil || !storageRetOK(rsp.GetRetInfo()) || len(rsp.GetRows()) == 0 {
+				return fmt.Errorf("stream prefix unavailable")
+			}
+			for _, source := range rsp.GetRows() {
+				if seen >= offset {
+					break
+				}
+				columns := columnMap(source.GetColumns())
+				value := queriedKline{datasetID: parts[0], dimensions: source.GetKey().GetDimensions(), row: &pb.MarketKline{MarketId: manifest.SpaceID, InstrumentType: feed.InstrumentType, SubjectId: source.GetKey().GetSubjectId(), Frequency: source.GetKey().GetFreq(), DataTime: source.GetKey().GetDataTime(), Open: stringValueColumn(columns, "open_exact"), High: stringValueColumn(columns, "high_exact"), Low: stringValueColumn(columns, "low_exact"), Close: stringValueColumn(columns, "close_exact"), Volume: stringValueColumn(columns, "volume_exact"), Amount: stringValueColumn(columns, "amount_exact"), SourceProvider: stringValueColumn(columns, "source_provider"), QualityStatus: stringValueColumn(columns, "quality_status"), Revision: intValueColumn(columns, "revision"), ResolvedAt: timeValueColumn(columns, "resolved_at")}}
+				digest = chainStreamDigest(digest, marketRowDigest(value))
+				seen++
+			}
+		}
+		if seen != offset || digest != cursor.StreamPrefixDigests[cursorKey] {
+			return fmt.Errorf("stream prefix changed")
+		}
+	}
+	return nil
+}
+
+func chainStreamDigest(previous, rowDigest string) string {
+	sum := sha256.Sum256([]byte(previous + "|" + rowDigest))
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *Service) validateMarketCursorBoundary(ctx context.Context, spaceID string, cursor marketCursor) error {
@@ -180,7 +234,7 @@ func (s *Service) validateMarketCursorBoundary(ctx context.Context, spaceID stri
 	return nil
 }
 
-func (s *Service) readMarketCoverage(ctx context.Context, manifest marketmanifest.Manifest, instrumentTypes, subjects []string, frequency string, start time.Time) (string, []string, error) {
+func (s *Service) readMarketCoverage(ctx context.Context, manifest marketmanifest.Manifest, instrumentTypes, subjects []string, frequency string, start, end time.Time) (string, []string, error) {
 	coverageDataset := ""
 	for _, dataset := range manifest.Datasets {
 		if dataset.Role == "coverage_state" && dataset.Feed == "coverage" {
@@ -197,8 +251,11 @@ func (s *Service) readMarketCoverage(ctx context.Context, manifest marketmanifes
 			continue
 		}
 		for _, subject := range subjects {
-			sum := sha256.Sum256([]byte(feed.DatasetID + "|" + subject + "|" + frequency + "|" + start.Format("2006-01-02")))
-			keys = append(keys, &storagepb.RecordKey{SpaceId: manifest.SpaceID, DatasetId: coverageDataset, RecordId: hex.EncodeToString(sum[:])})
+			for day := start.UTC().Truncate(24 * time.Hour); !day.After(end.UTC()); day = day.Add(24 * time.Hour) {
+				partitionID := day.Format("2006-01-02")
+				sum := sha256.Sum256([]byte(feed.DatasetID + "|" + subject + "|" + frequency + "|" + partitionID))
+				keys = append(keys, &storagepb.RecordKey{SpaceId: manifest.SpaceID, DatasetId: coverageDataset, RecordId: hex.EncodeToString(sum[:])})
+			}
 		}
 	}
 	if len(keys) == 0 {
@@ -295,7 +352,7 @@ func (s *Service) readLogicalMarketKlinePage(ctx context.Context, spaceID string
 			for _, source := range sources {
 				columns := columnMap(source.GetColumns())
 				result = append(result, queriedKline{datasetID: feed.DatasetID, cursorKey: cursorKey, dimensions: source.GetKey().GetDimensions(), row: &pb.MarketKline{
-					MarketId: spaceID, InstrumentType: feed.InstrumentType, SubjectId: source.GetKey().GetSubjectId(), Frequency: source.GetKey().GetFreq(), DataTime: source.GetKey().GetDataTime(),
+					MarketId: spaceID, InstrumentType: feed.InstrumentType, SubjectId: source.GetKey().GetSubjectId(), Frequency: source.GetKey().GetFreq(), DataTime: source.GetKey().GetDataTime(), CanonicalDimensions: source.GetKey().GetDimensions(),
 					Open: stringValueColumn(columns, "open_exact"), High: stringValueColumn(columns, "high_exact"), Low: stringValueColumn(columns, "low_exact"), Close: stringValueColumn(columns, "close_exact"), Volume: stringValueColumn(columns, "volume_exact"), Amount: stringValueColumn(columns, "amount_exact"),
 					SourceProvider: stringValueColumn(columns, "source_provider"), QualityStatus: stringValueColumn(columns, "quality_status"), Revision: intValueColumn(columns, "revision"), ResolvedAt: timeValueColumn(columns, "resolved_at"),
 				}})
@@ -463,7 +520,7 @@ func normalizedSubjectIDs(values []string) []string {
 
 func marketRowTuple(value queriedKline) string {
 	row := value.row
-	return strings.Join([]string{row.GetDataTime(), row.GetInstrumentType(), row.GetSubjectId(), row.GetFrequency(), canonicalDimensions(value.dimensions), value.datasetID}, "|")
+	return strings.Join([]string{row.GetDataTime(), row.GetInstrumentType(), row.GetSubjectId(), row.GetFrequency(), canonicalDimensions(value.dimensions)}, "|")
 }
 
 func canonicalDimensions(values map[string]string) string {

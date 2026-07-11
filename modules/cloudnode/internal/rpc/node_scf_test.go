@@ -121,7 +121,7 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 		t.Fatalf("reconcile config calls=%d err=%v", len(fake.configured), err)
 	}
 	configured := fake.configured[0]
-	if configured.FunctionName != "moox-collector-ap-guangzhou-0" || configured.Timeout != 45 || configured.MemorySize != 512 || configured.Environment["MOOX_SPACE_ID"] != "crypto" {
+	if configured.FunctionName != "moox-collector-ap-guangzhou-0" || configured.Runtime != "CustomRuntime" || configured.Timeout != 45 || configured.MemorySize != 512 || configured.Environment["MOOX_SPACE_ID"] != "crypto" {
 		t.Fatalf("configured = %#v", configured)
 	}
 }

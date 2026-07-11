@@ -32,6 +32,45 @@ var collectorFunctionPublishMarketsCmd = &cobra.Command{
 	},
 }
 
+var collectorMarketsVerifyFlags struct{ ManifestDir, ControlURL string }
+
+var collectorFunctionVerifyMarketsCmd = &cobra.Command{
+	Use:   "verify-markets",
+	Short: "Verify exact runtime-enabled Market SCF identities",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		manifests, err := marketmanifest.LoadDir(collectorMarketsVerifyFlags.ManifestDir)
+		if err != nil {
+			return err
+		}
+		results := []map[string]any{}
+		for _, manifest := range manifests {
+			if !manifest.RuntimeEnabled {
+				continue
+			}
+			client := newControlClient(collectorMarketsVerifyFlags.ControlURL, "", os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"), os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"), manifest.SpaceID)
+			nodes, _, err := client.ListNodes(cmd.Context(), 1, 200)
+			if err != nil {
+				return err
+			}
+			found := false
+			for _, node := range nodes {
+				if node.NodeID == manifest.SCF.FunctionName && node.FunctionName == manifest.SCF.FunctionName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("market %s exact SCF %s is not registered in space %s", manifest.MarketID, manifest.SCF.FunctionName, manifest.SpaceID)
+			}
+			results = append(results, map[string]any{"market_id": manifest.MarketID, "space_id": manifest.SpaceID, "function_name": manifest.SCF.FunctionName, "status": "verified"})
+		}
+		if len(results) == 0 {
+			return fmt.Errorf("no runtime-enabled market SCF to verify")
+		}
+		return writeJSON(cmd, results)
+	},
+}
+
 func publishCollectorMarkets(cmd *cobra.Command, manifestDir, environment string) ([]collectorMarketPublishResult, error) {
 	if manifestDir == "" || environment == "" || collectorMarketsFlags.ControlURL == "" || collectorMarketsFlags.CloudAccountID == "" || collectorMarketsFlags.Region == "" || collectorMarketsFlags.ZipPath == "" {
 		return nil, fmt.Errorf("--manifest-dir, --environment, --control-url, --cloud-account-id, --region and --zip are required")
@@ -72,7 +111,7 @@ func publishCollectorMarkets(cmd *cobra.Command, manifestDir, environment string
 }
 
 func init() {
-	collectorFunctionCmd.AddCommand(collectorFunctionPublishMarketsCmd)
+	collectorFunctionCmd.AddCommand(collectorFunctionPublishMarketsCmd, collectorFunctionVerifyMarketsCmd)
 	f := collectorFunctionPublishMarketsCmd.Flags()
 	f.StringVar(&collectorMarketsFlags.ManifestDir, "manifest-dir", "", "market manifest directory")
 	f.StringVar(&collectorMarketsFlags.Environment, "environment", "", "validation environment")
@@ -81,4 +120,9 @@ func init() {
 	f.StringVar(&collectorMarketsFlags.Region, "region", "", "cloud region")
 	f.StringVar(&collectorMarketsFlags.ZipPath, "zip", "", "prebuilt SCF zip")
 	f.StringVar(&collectorMarketsFlags.Version, "version", "dev", "package version")
+	v := collectorFunctionVerifyMarketsCmd.Flags()
+	v.StringVar(&collectorMarketsVerifyFlags.ManifestDir, "manifest-dir", "", "market manifest directory")
+	v.StringVar(&collectorMarketsVerifyFlags.ControlURL, "control-url", "", "Control service base URL")
+	_ = collectorFunctionVerifyMarketsCmd.MarkFlagRequired("manifest-dir")
+	_ = collectorFunctionVerifyMarketsCmd.MarkFlagRequired("control-url")
 }

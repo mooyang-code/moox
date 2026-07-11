@@ -343,6 +343,7 @@ message MarketKline {
   string quality_status = 13;
   int64 revision = 14;
   string resolved_at = 15;
+  map<string, string> canonical_dimensions = 16;
 }
 message QueryMarketKlinesReq {
   string market_id = 1;

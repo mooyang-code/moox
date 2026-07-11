@@ -232,6 +232,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *repository.CloudN
 		if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
 			FunctionRef: ref,
 			Handler:     firstString(item.GetHandler(), metadataString(metadata, "handler"), "main"),
+			Runtime:     firstString(item.GetRuntime(), pkg.Runtime, metadataString(metadata, "runtime")),
 			MemorySize:  configInt64(config, "memory_size", 256),
 			Timeout:     configInt64(config, "timeout", 60),
 			Environment: copyStringMap(item.GetEnvironment()),

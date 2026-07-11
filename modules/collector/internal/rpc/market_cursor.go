@@ -9,19 +9,20 @@ import (
 )
 
 type marketCursor struct {
-	QueryHash          string            `json:"query_hash"`
-	QueryAsOf          string            `json:"query_as_of"`
-	Offset             int               `json:"offset"`
-	BoundaryKey        string            `json:"boundary_key,omitempty"`
-	BoundaryDigest     string            `json:"boundary_digest,omitempty"`
-	PrefixDigest       string            `json:"prefix_digest,omitempty"`
-	DatasetOffsets     map[string]int    `json:"dataset_offsets,omitempty"`
-	BoundaryDataset    string            `json:"boundary_dataset,omitempty"`
-	BoundaryInstrument string            `json:"boundary_instrument,omitempty"`
-	BoundarySubject    string            `json:"boundary_subject,omitempty"`
-	BoundaryFrequency  string            `json:"boundary_frequency,omitempty"`
-	BoundaryDataTime   string            `json:"boundary_data_time,omitempty"`
-	BoundaryDimensions map[string]string `json:"boundary_dimensions,omitempty"`
+	QueryHash           string            `json:"query_hash"`
+	QueryAsOf           string            `json:"query_as_of"`
+	Offset              int               `json:"offset"`
+	BoundaryKey         string            `json:"boundary_key,omitempty"`
+	BoundaryDigest      string            `json:"boundary_digest,omitempty"`
+	PrefixDigest        string            `json:"prefix_digest,omitempty"`
+	DatasetOffsets      map[string]int    `json:"dataset_offsets,omitempty"`
+	BoundaryDataset     string            `json:"boundary_dataset,omitempty"`
+	BoundaryInstrument  string            `json:"boundary_instrument,omitempty"`
+	BoundarySubject     string            `json:"boundary_subject,omitempty"`
+	BoundaryFrequency   string            `json:"boundary_frequency,omitempty"`
+	BoundaryDataTime    string            `json:"boundary_data_time,omitempty"`
+	BoundaryDimensions  map[string]string `json:"boundary_dimensions,omitempty"`
+	StreamPrefixDigests map[string]string `json:"stream_prefix_digests,omitempty"`
 }
 
 func encodeMarketCursor(value marketCursor) (string, error) {

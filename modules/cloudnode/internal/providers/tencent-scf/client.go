@@ -78,6 +78,7 @@ type UpdateFunctionCodeResponse struct {
 type UpdateFunctionConfigurationRequest struct {
 	FunctionRef
 	Handler     string
+	Runtime     string
 	MemorySize  int64
 	Timeout     int64
 	Environment map[string]string
@@ -191,6 +192,9 @@ func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunc
 	request := scf.NewUpdateFunctionConfigurationRequest()
 	request.FunctionName = common.StringPtr(req.FunctionName)
 	request.Namespace = common.StringPtr(req.Namespace)
+	if req.Runtime != "" {
+		request.Runtime = common.StringPtr(req.Runtime)
+	}
 	if req.MemorySize > 0 {
 		request.MemorySize = common.Int64Ptr(req.MemorySize)
 	}

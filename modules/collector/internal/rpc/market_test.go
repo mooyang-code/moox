@@ -137,3 +137,37 @@ func TestQueryMarketKlinesRejectsChangedBoundary(t *testing.T) {
 		t.Fatalf("changed=%+v", changed)
 	}
 }
+
+func TestQueryMarketKlinesRejectsInsertionBeforeBoundary(t *testing.T) {
+	base := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	access, err := testkit.Open(t.TempDir(), []testkit.DatasetSchema{rpcKlineSchema("crypto_binance", "spot_kline")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer access.Close()
+	store := storageio.NewClientWithAccess(access, nil, []storageio.Binding{{SpaceID: "crypto_binance", DatasetID: "spot_kline", Role: storageio.RoleUnifiedData, Feed: "kline", RequiredVolume: true, RequiredAmount: true}})
+	writeAt := func(at time.Time) {
+		row := rpcKline(at)
+		row.DataTime, row.CloseTime = at, at.Add(time.Minute)
+		if err := store.WriteUnifiedKline(context.Background(), "spot_kline", marketdata.ResolvedKline{ProviderKline: row, SourceDatasetID: "binance_kline", QualityStatus: "confirmed", Revision: 1, ResolvedAt: at.Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeAt(base.Add(time.Minute))
+	writeAt(base.Add(2 * time.Minute))
+	db, _ := gorm.Open(sqlite.Open("file:market-query-insert?mode=memory&cache=shared"), &gorm.Config{})
+	manifest := marketmanifest.Manifest{MarketID: "crypto_binance", SpaceID: "crypto_binance", InstrumentTypes: []string{"spot"}, Feeds: []marketmanifest.Feed{{DatasetID: "spot_kline", InstrumentType: "spot", Frequencies: []string{"1m"}}}}
+	service := New(db, Dependencies{MarketManifests: []marketmanifest.Manifest{manifest}})
+	service.storageAccess, service.now = access, func() time.Time { return base.Add(time.Hour) }
+	req := &pb.QueryMarketKlinesReq{MarketId: "crypto_binance", SubjectIds: []string{"BTC-USDT"}, InstrumentTypes: []string{"spot"}, Frequency: "1m", StartTime: base.Format(time.RFC3339), EndTime: base.Add(2 * time.Minute).Format(time.RFC3339), PageSize: 1}
+	first, _ := service.QueryMarketKlines(context.Background(), req)
+	if first.GetNextCursor() == "" {
+		t.Fatal("expected cursor")
+	}
+	writeAt(base)
+	req.Cursor = first.GetNextCursor()
+	changed, _ := service.QueryMarketKlines(context.Background(), req)
+	if changed.GetRetInfo().GetMsg() != "data_changed_restart_query" {
+		t.Fatalf("changed=%+v", changed)
+	}
+}

@@ -88,9 +88,13 @@ type BatchChangeResponse struct {
 }
 
 type CloudNode struct {
-	SpaceID string `json:"space_id"`
-	NodeID  string `json:"node_id"`
-	Status  int    `json:"status"`
+	SpaceID      string         `json:"space_id"`
+	NodeID       string         `json:"node_id"`
+	FunctionName string         `json:"function_name"`
+	Runtime      string         `json:"runtime"`
+	Handler      string         `json:"handler"`
+	Metadata     map[string]any `json:"metadata"`
+	Status       int            `json:"status"`
 }
 
 type JobItem struct {
