@@ -56,6 +56,8 @@ func TestProviderKlineValidate(t *testing.T) {
 	}
 }
 
+func TestProviderKlineAllowsCapabilityDefinedSessionAnchor(t *testing.T){value:=ProviderKline{SubjectID:"600000.XSHG",ProviderID:"ifeng",ProviderSymbol:"sh600000",Frequency:FrequencyHour,DataTime:time.Date(2026,7,11,1,30,0,0,time.UTC),CloseTime:time.Date(2026,7,11,2,30,0,0,time.UTC),TradeDate:"2026-07-11",FeedScope:"equity",VolumeUnit:"share",AmountUnit:"CNY",Open:MustDecimal("10"),High:MustDecimal("11"),Low:MustDecimal("9"),Close:MustDecimal("10"),ProviderTimestamp:time.Date(2026,7,11,2,30,0,0,time.UTC),FetchedAt:time.Date(2026,7,11,2,31,0,0,time.UTC),RequestID:"r",Closed:true};if err:=value.Validate();err!=nil{t.Fatalf("session anchored bucket rejected: %v",err)}}
+
 func validWith(value ProviderKline, mutate func(*ProviderKline)) ProviderKline {
 	mutate(&value)
 	return value

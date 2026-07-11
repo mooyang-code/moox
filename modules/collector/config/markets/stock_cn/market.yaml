@@ -8,6 +8,18 @@ timezone: Asia/Shanghai
 exchange: {id: XSHG, name: Shanghai Stock Exchange}
 product_types: [equity, etf, index]
 instrument_types: [equity, etf, index]
+providers:
+  - id: ifeng
+    capabilities: [kline]
+    endpoint: https://api.finance.ifeng.com
+    endpoint_class: public_http
+    quotas:
+      - {scope: ip, window_seconds: 60, limit: 60, weight: 1, reset_timezone: Asia/Shanghai}
+datasets:
+  - {id: ifeng_kline, role: provider_data, feed: kline, provider_id: ifeng}
+  - {id: equity_kline, role: unified_data, feed: kline}
+feeds:
+  - {id: equity_kline, dataset_id: equity_kline, frequencies: [5m, 1h, 1d], volume_unit: share, amount_unit: CNY, bucket_alignment: XSHG_session, instrument_type: equity}
 execution: {timeout_seconds: 60, job_budget_ms: 30000, report_reserve_ms: 10000}
 readiness: {status: not_ready, reason: "CN-1 provider evidence required", capability_enabled: false}
 routing: {policy: weighted_rendezvous}

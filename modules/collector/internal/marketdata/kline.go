@@ -98,12 +98,5 @@ func (k ProviderKline) Validate() error {
 }
 
 func isBucketAligned(value time.Time, frequency Frequency) bool {
-	minutes := frequency.DurationMinutes()
-	if minutes == 0 || value.Second() != 0 || value.Nanosecond() != 0 {
-		return false
-	}
-	if minutes >= 1440 {
-		return value.Hour() == 0 && value.Minute() == 0
-	}
-	return value.Minute() == 0 && value.Hour()*60%minutes == 0
+	return frequency.DurationMinutes() > 0 && value.Second() == 0 && value.Nanosecond() == 0
 }

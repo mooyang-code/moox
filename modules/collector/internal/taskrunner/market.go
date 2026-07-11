@@ -8,11 +8,10 @@ import (
 	"time"
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
+	"github.com/mooyang-code/moox/modules/collector/internal/builtin"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/collector/internal/providers"
-	binanceprovider "github.com/mooyang-code/moox/modules/collector/internal/providers/binance"
-	okxprovider "github.com/mooyang-code/moox/modules/collector/internal/providers/okx"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
@@ -50,7 +49,8 @@ func executeMarketKlineJobItem(ctx context.Context, item nodeRuntime.JobItem) (n
 		return nodeRuntime.Result{}, nodeRuntime.Retryable(fmt.Errorf("storage access target is required"), "STORAGE_UNAVAILABLE")
 	}
 	access := storagepb.NewAccessClientProxy(client.WithTarget(accessTarget))
-	bindings := []storageio.Binding{{SpaceID: spaceID, DatasetID: sourceDatasetID, Role: storageio.RoleProviderData, Feed: "kline", ProviderID: providerID}, {SpaceID: spaceID, DatasetID: unifiedDatasetID, Role: storageio.RoleUnifiedData, Feed: "kline"}}
+	requiresTradingValues := stringValue(params, "instrument_type") != "index"
+	bindings := []storageio.Binding{{SpaceID: spaceID, DatasetID: sourceDatasetID, Role: storageio.RoleProviderData, Feed: "kline", ProviderID: providerID}, {SpaceID: spaceID, DatasetID: unifiedDatasetID, Role: storageio.RoleUnifiedData, Feed: "kline", RequiredVolume: requiresTradingValues, RequiredAmount: requiresTradingValues}}
 	store := storageio.NewClientWithAccess(access, nil, bindings)
 	leaseEpoch, _ := strconv.ParseInt(stringValue(params, "lease_epoch"), 10, 64)
 	gate := controlRequestGate{gateway: runtimeapp.GetServiceGatewayTarget(), leaseID: stringValue(params, "quota_lease_id"), leaseEpoch: leaseEpoch, executionNonce: stringValue(params, "execution_nonce"), scopeKey: stringValue(params, "quota_scope_key"), windows: quotaWindows(params)}
@@ -83,14 +83,7 @@ func executeMarketKlineJobItem(ctx context.Context, item nodeRuntime.JobItem) (n
 }
 
 func marketProvider(id marketdata.ProviderID) (providers.KlineProvider, error) {
-	switch id {
-	case "binance":
-		return binanceprovider.New(binanceprovider.Config{}), nil
-	case "okx":
-		return okxprovider.New(okxprovider.Config{}), nil
-	default:
-		return nil, fmt.Errorf("provider %q is not built in", id)
-	}
+	return builtin.Default("config/markets/stock_cn/calendar.yaml").Provider(id)
 }
 
 func parseJobTime(params map[string]any, key string) (time.Time, error) {

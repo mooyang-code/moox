@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
+	"github.com/mooyang-code/moox/modules/collector/internal/builtin"
 	"github.com/mooyang-code/moox/modules/collector/internal/metricspublish"
 	"github.com/mooyang-code/moox/modules/collector/internal/repository"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/marketmanifest"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -28,6 +30,13 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	SetGlobalConfig(cfg)
+	manifests, err := marketmanifest.LoadDir("./config/markets")
+	if err != nil {
+		return nil, err
+	}
+	if err := builtin.Default("./config/markets/stock_cn/calendar.yaml").ValidateManifests(manifests); err != nil {
+		return nil, err
+	}
 
 	dbm := NewManager()
 	if err := dbm.Initialize(&cfg.Database); err != nil {

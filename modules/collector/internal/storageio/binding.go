@@ -21,6 +21,7 @@ type Binding struct {
 	ProductType    marketdata.ProductType
 	InstrumentType marketdata.InstrumentType
 	RequiredVolume bool
+	RequiredAmount bool
 	VolumeUnit     string
 	AmountUnit     string
 	SchemaVersion  int64

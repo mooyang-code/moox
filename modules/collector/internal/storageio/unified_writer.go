@@ -20,6 +20,12 @@ func (c *Client) WriteUnifiedKline(ctx context.Context, datasetID string, row ma
 	if err := row.ProviderKline.Validate(); err != nil {
 		return err
 	}
+	if binding.RequiredVolume && row.Volume == nil {
+		return fmt.Errorf("dataset %q requires volume", datasetID)
+	}
+	if binding.RequiredAmount && row.Amount == nil {
+		return fmt.Errorf("dataset %q requires amount", datasetID)
+	}
 	columns, err := klineColumns(row.ProviderKline)
 	if err != nil {
 		return err
