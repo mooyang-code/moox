@@ -21,6 +21,7 @@ type legacyCutoverSummary struct {
 	Mode             string   `json:"mode"`
 	LegacySpace      string   `json:"legacy_space"`
 	PendingCanceled  int      `json:"pending_canceled"`
+	NodesDeleted     int      `json:"nodes_deleted"`
 	RunningJobItems  []string `json:"running_job_items"`
 	RetainedNodeIDs  []string `json:"retained_node_ids"`
 	RollbackRequired bool     `json:"rollback_required"`
@@ -40,8 +41,8 @@ var collectorLegacyCutoverCmd = &cobra.Command{
 
 func runLegacyCutover(cmd *cobra.Command, mode, legacySpace, controlURL string) (legacyCutoverSummary, error) {
 	summary := legacyCutoverSummary{Mode: mode, LegacySpace: legacySpace}
-	if mode != "preflight" && mode != "drain" && mode != "rollback" {
-		return summary, fmt.Errorf("--mode must be preflight, drain or rollback")
+	if mode != "preflight" && mode != "drain" && mode != "finalize" && mode != "rollback" {
+		return summary, fmt.Errorf("--mode must be preflight, drain, finalize or rollback")
 	}
 	if legacySpace == "" || controlURL == "" {
 		return summary, fmt.Errorf("--legacy-space and --control-url are required")
@@ -81,6 +82,22 @@ func runLegacyCutover(cmd *cobra.Command, mode, legacySpace, controlURL string) 
 	}
 	if len(summary.RunningJobItems) > 0 {
 		return summary, fmt.Errorf("legacy space %s still has %d running job items", legacySpace, len(summary.RunningJobItems))
+	}
+	if mode == "finalize" {
+		if len(pending) > 0 {
+			return summary, fmt.Errorf("legacy space %s still has %d pending job items; run drain first", legacySpace, len(pending))
+		}
+		for start := 0; start < len(nodes); start += 20 {
+			end := min(start+20, len(nodes))
+			ids := make([]string, 0, end-start)
+			for _, node := range nodes[start:end] {
+				ids = append(ids, node.NodeID)
+			}
+			if _, err := client.BatchDeleteNodes(cmd.Context(), ids); err != nil {
+				return summary, fmt.Errorf("delete legacy nodes: %w", err)
+			}
+			summary.NodesDeleted += len(ids)
+		}
 	}
 	return summary, nil
 }
