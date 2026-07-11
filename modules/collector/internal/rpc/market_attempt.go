@@ -27,6 +27,9 @@ func (s *Service) GetMarketAttemptReceipt(ctx context.Context, req *pb.GetMarket
 }
 
 func (s *Service) FinalizeMarketAttempt(ctx context.Context, req *pb.FinalizeMarketAttemptReq) (*pb.FinalizeMarketAttemptRsp, error) {
+	if err := s.requireLeader(ctx); err != nil {
+		return &pb.FinalizeMarketAttemptRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
 	if req.GetJobItemId() == "" || req.GetAttemptNo() <= 0 || req.GetSpaceId() == "" {
 		return &pb.FinalizeMarketAttemptRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "job_item_id, attempt_no and space_id are required")}, nil
 	}

@@ -129,3 +129,25 @@ func stableOutboxID(jobItemID string, attemptNo int32, kind, payload string) str
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%s|%s", jobItemID, attemptNo, kind, payload)))
 	return hex.EncodeToString(sum[:])
 }
+
+func (r *MarketAttemptRepository) ListPendingOutbox(ctx context.Context, now time.Time, limit int) ([]domain.AttemptOutbox, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	var values []domain.AttemptOutbox
+	err := r.db.WithContext(ctx).Where("c_status=? AND c_next_attempt_at<=?", "pending", now.UTC()).Order("c_next_attempt_at,c_outbox_id").Limit(limit).Find(&values).Error
+	return values, err
+}
+func (r *MarketAttemptRepository) MarkOutboxPublished(ctx context.Context, outboxID, jobItemID string, now time.Time) error {
+	result := r.db.WithContext(ctx).Model(&domain.AttemptOutbox{}).Where("c_outbox_id=? AND c_status=?", outboxID, "pending").Updates(map[string]any{"c_status": "published", "c_published_job_item_id": jobItemID, "c_mtime": now.UTC()})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+func (r *MarketAttemptRepository) DelayOutbox(ctx context.Context, outboxID string, next time.Time) error {
+	return r.db.WithContext(ctx).Model(&domain.AttemptOutbox{}).Where("c_outbox_id=? AND c_status=?", outboxID, "pending").Updates(map[string]any{"c_next_attempt_at": next.UTC(), "c_mtime": time.Now().UTC()}).Error
+}

@@ -28,6 +28,7 @@ type Dependencies struct {
 	ServiceAuth           taskpublisher.AuthConfig
 	StorageMetadataTarget string
 	StorageAccessTarget   string
+	MutationGuard         interface{ RequireLeader(context.Context) error }
 }
 
 // Service implements the independent CollectMgr RPC service.
@@ -40,6 +41,7 @@ type Service struct {
 	cloudJobs     *taskpublisher.Client
 	marketControl *repository.MarketControlRepository
 	attempts      *repository.MarketAttemptRepository
+	mutationGuard interface{ RequireLeader(context.Context) error }
 }
 
 // New creates a collector management service.
@@ -49,6 +51,7 @@ func New(db *gorm.DB, deps Dependencies) *Service {
 		instanceRepo:  repository.NewTaskInstanceRepository(db),
 		marketControl: repository.NewMarketControlRepository(db),
 		attempts:      repository.NewMarketAttemptRepository(db),
+		mutationGuard: deps.MutationGuard,
 		builder:       planner.NewTaskBuilder(),
 		datasetSrc:    storagesource.NewDatasetSource(deps.StorageMetadataTarget),
 		cloudJobs: taskpublisher.New(taskpublisher.Config{
@@ -59,6 +62,13 @@ func New(db *gorm.DB, deps Dependencies) *Service {
 			Auth:                  deps.ServiceAuth,
 		}),
 	}
+}
+
+func (s *Service) requireLeader(ctx context.Context) error {
+	if s.mutationGuard == nil {
+		return nil
+	}
+	return s.mutationGuard.RequireLeader(ctx)
 }
 
 func retOK() *pb.RetInfo {
@@ -284,6 +294,9 @@ func (s *Service) ReportTaskStatus(ctx context.Context, req *pb.ReportInstanceSt
 
 // RecalculateAllTaskInstances rebuilds task instances for all enabled rules in one space.
 func (s *Service) RecalculateAllTaskInstances(ctx context.Context, req *pb.RecalculateAllTaskInstancesReq) (*pb.RecalculateAllTaskInstancesRsp, error) {
+	if err := s.requireLeader(ctx); err != nil {
+		return &pb.RecalculateAllTaskInstancesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
 	spaceID := strings.TrimSpace(req.GetSpaceId())
 	if spaceID == "" {
 		return &pb.RecalculateAllTaskInstancesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil

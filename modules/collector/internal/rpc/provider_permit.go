@@ -10,6 +10,9 @@ import (
 )
 
 func (s *Service) AcquireProviderPermit(ctx context.Context, req *pb.AcquireProviderPermitReq) (*pb.AcquireProviderPermitRsp, error) {
+	if err := s.requireLeader(ctx); err != nil {
+		return &pb.AcquireProviderPermitRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
 	if s.marketControl == nil || strings.TrimSpace(req.GetProviderId()) == "" || strings.TrimSpace(req.GetQuotaLeaseId()) == "" || strings.TrimSpace(req.GetExecutionNonce()) == "" || req.GetRequestCost() <= 0 {
 		return &pb.AcquireProviderPermitRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "provider, lease, execution nonce and positive cost are required")}, nil
 	}

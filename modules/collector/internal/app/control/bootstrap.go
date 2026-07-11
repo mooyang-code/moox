@@ -46,7 +46,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := repository.MigrateMarketControl(dbm.DB()); err != nil {
 		return nil, err
 	}
-	startHealthServer(ctx, cfg)
+	leader := NewLeader(dbm.DB(), "")
+	if err := leader.Start(ctx); err != nil {
+		return nil, err
+	}
+	startHealthServer(ctx, cfg, leader)
 	deps, err := Resolve(ctx, cfg)
 	if err != nil {
 		log.WarnContextf(ctx, "[Collector] resolve dependencies from sysdeploy failed, use local defaults: %v", err)
@@ -58,14 +62,26 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		ServiceAuth:           taskpublisherAuth(deps.ServiceAuth),
 		StorageMetadataTarget: deps.StorageMetadataTarget,
 		StorageAccessTarget:   deps.StorageAccessTarget,
+		MutationGuard:         leader,
 	})
+	taskpublisher.SetDefaultOutboxPublisher(&taskpublisher.OutboxPublisher{Client: taskpublisher.New(taskpublisher.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, StorageMetadataTarget: deps.StorageMetadataTarget, StorageAccessTarget: deps.StorageAccessTarget, Auth: taskpublisherAuth(deps.ServiceAuth)}), Repository: repository.NewMarketAttemptRepository(dbm.DB()), Guard: leader})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	collectsvc.SetDefaultService(svc)
 	registerCollectorSchedule(s)
+	registerOutboxPublisher(s)
 	registerMetricsReporter(s)
 
 	log.InfoContextf(ctx, "moox-collector 初始化完成")
 	return s, nil
+}
+
+func registerOutboxPublisher(s *server.Server) {
+	service := s.Service("trpc.moox.collector.outbox.timer")
+	if service == nil {
+		log.Warn("collector outbox timer service is not configured, skip register")
+		return
+	}
+	timer.RegisterHandlerService(service, taskpublisher.HandleOutbox)
 }
 
 func registerMetricsReporter(s *server.Server) {
@@ -85,23 +101,28 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func startHealthServer(ctx context.Context, cfg *Config) {
+func startHealthServer(ctx context.Context, cfg *Config, leaders ...*Leader) {
 	if cfg == nil {
 		return
 	}
-	if _, err := healthz.Start(ctx, cfg.Health.Addr, collectorHealthSnapshot(cfg)); err != nil {
+	if _, err := healthz.Start(ctx, cfg.Health.Addr, collectorHealthSnapshot(cfg, leaders...)); err != nil {
 		log.ErrorContextf(ctx, "collector health server failed to start: %v", err)
 	}
 }
 
-func collectorHealthSnapshot(cfg *Config) healthz.SnapshotFunc {
+func collectorHealthSnapshot(cfg *Config, leaders ...*Leader) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
-		rsp := healthz.Base("collector", "collector", "", "", collectorStartedAt, true)
+		ready, leadership := true, "active"
+		if len(leaders) > 0 && leaders[0] != nil && !leaders[0].Active() {
+			ready, leadership = false, "standby"
+		}
+		rsp := healthz.Base("collector", "collector", "", "", collectorStartedAt, ready)
 		rsp.Details = map[string]any{
 			"database":                "ok",
 			"cloudnode_address":       cfg.CloudNode.Address,
 			"storage_metadata_target": cfg.Storage.MetadataTarget,
 			"storage_access_target":   cfg.Storage.AccessTarget,
+			"control_leadership":      leadership,
 		}
 		return rsp
 	}
