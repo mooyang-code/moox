@@ -11,8 +11,8 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	for _, row := range rows {
 		byName[row.ServiceName] = row
 	}
-	if _, ok := byName["monitor"]; !ok {
-		t.Fatal("existing resource monitor deployment row missing")
+	if _, ok := byName["monitor"]; ok {
+		t.Fatal("legacy admin monitor deployment row still exists")
 	}
 	eventbus, ok := byName["eventbus"]
 	if !ok {
@@ -57,6 +57,12 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	}
 	if healthURL(byName["trade_account"].ExtraConfig) != "" {
 		t.Fatalf("trade_account should not default to local health_url: %s", byName["trade_account"].ExtraConfig)
+	}
+}
+
+func TestGatewayRoutesMonitorAliasToIndependentService(t *testing.T) {
+	if got := gatewayDeploymentName("monitor"); got != "moox_monitor" {
+		t.Fatalf("gatewayDeploymentName(monitor) = %q, want moox_monitor", got)
 	}
 }
 

@@ -199,99 +199,6 @@ message ForceDisconnectRsp {
   common.RetInfo ret_info = 1;
 }
 
-// ========== 监控指标（Monitor）==========
-
-// CPUMetrics CPU 指标。
-message CPUMetrics {
-  double usage = 1;  // 使用率 0-100
-  int32 cores = 2;   // CPU 核心数
-}
-
-// MemoryMetrics 内存指标。
-message MemoryMetrics {
-  int64 total = 1;     // 总内存 bytes
-  int64 available = 2; // 可用内存
-  int64 used = 3;      // 已用内存
-  int64 free = 4;      // 空闲内存
-  int64 buffers = 5;   // 缓冲区
-  int64 cached = 6;    // 缓存
-  double percent = 7;  // 使用率
-}
-
-// DiskMetrics 磁盘指标。
-message DiskMetrics {
-  string device = 1;     // /dev/sda1
-  string mountpoint = 2; // /
-  string fstype = 3;     // ext4
-  int64 total = 4;       // 总容量 bytes
-  int64 used = 5;        // 已用空间
-  int64 available = 6;   // 可用空间
-  double percent = 7;    // 使用率
-}
-
-// NetworkSpeed 网络速率。
-message NetworkSpeed {
-  string device = 1;   // eth0
-  int64 rx_speed = 2;  // 接收速率 bytes/s
-  int64 tx_speed = 3;  // 发送速率 bytes/s
-}
-
-// LoadMetrics 系统负载。
-message LoadMetrics {
-  double load1 = 1;   // 1分钟负载
-  double load5 = 2;   // 5分钟负载
-  double load15 = 3;  // 15分钟负载
-}
-
-// HostMetrics 主机完整监控指标。
-message HostMetrics {
-  int32 host_id = 1;
-  string host_name = 2;
-  string address = 3;
-  string status = 4;     // online/offline/error
-  string timestamp = 5;  // RFC3339
-  string error_msg = 6;
-  CPUMetrics cpu = 7;
-  MemoryMetrics memory = 8;
-  repeated DiskMetrics disks = 9;
-  repeated NetworkSpeed networks = 10;
-  LoadMetrics load = 11;
-}
-
-// HistoryPoint 历史数据点（用于前端图表）。
-message HistoryPoint {
-  string timestamp = 1;       // RFC3339
-  double cpu_usage = 2;
-  double memory_percent = 3;
-  double disk_percent = 4;
-  int64 network_rx_speed = 5;
-  int64 network_tx_speed = 6;
-}
-
-// GetCurrentMetricsReq 获取当前监控指标请求。
-// host_ids 为空时返回所有启用监控的主机；非空时为逗号分隔的 ID 字符串。
-message GetCurrentMetricsReq {
-  string host_ids = 1;
-}
-
-// GetCurrentMetricsRsp 获取当前监控指标响应。
-message GetCurrentMetricsRsp {
-  common.RetInfo ret_info = 1;
-  repeated HostMetrics metrics = 2;
-}
-
-// GetHistoryMetricsReq 获取历史监控数据请求。
-message GetHistoryMetricsReq {
-  string host_address = 1;
-  string duration = 2;  // 时间范围（如 "1h", "24h", "7d"）
-}
-
-// GetHistoryMetricsRsp 获取历史监控数据响应。
-message GetHistoryMetricsRsp {
-  common.RetInfo ret_info = 1;
-  repeated HistoryPoint history = 2;
-}
-
 // ========== Services ==========
 
 service Ssh {
@@ -315,11 +222,4 @@ service Ssh {
   // 会话管理
   rpc GetOnlineSessions(GetOnlineSessionsReq) returns (GetOnlineSessionsRsp);
   rpc ForceDisconnect(ForceDisconnectReq) returns (ForceDisconnectRsp);
-}
-
-service Monitor {
-  // 获取当前监控指标
-  rpc GetCurrentMetrics(GetCurrentMetricsReq) returns (GetCurrentMetricsRsp);
-  // 获取历史监控数据
-  rpc GetHistoryMetrics(GetHistoryMetricsReq) returns (GetHistoryMetricsRsp);
 }

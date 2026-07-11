@@ -7,7 +7,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/monitor"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/space"
@@ -34,9 +33,6 @@ type Services struct {
 
 	// 系统服务部署信息
 	SysDeploy sysdeploy.Service
-
-	// 监控服务
-	Monitor monitor.Service
 }
 
 // StartBackgroundServices 启动 admin 本地基础服务。
@@ -112,11 +108,6 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 	secretDAO := secretdao.NewSecretDAO(db)
 	secretService := secret.NewService(secretDAO)
 
-	// 创建监控服务
-	log.Info("[Bootstrap] 正在创建监控服务...")
-	monitorService := monitor.NewService(dbManager)
-	monitor.InitMonitorInstance(dbManager)
-
 	log.Info("[Bootstrap] 核心服务创建完成")
 	services := &Services{
 		DBManager:     dbManager,
@@ -124,7 +115,6 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 		SSHService:    sshService,
 		SecretService: secretService,
 		SysDeploy:     sysDeployService,
-		Monitor:       monitorService,
 	}
 
 	return services, nil

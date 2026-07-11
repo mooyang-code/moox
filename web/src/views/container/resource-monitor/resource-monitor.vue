@@ -1,614 +1,414 @@
 <template>
   <div class="moox-page resource-monitor-page">
-    <div class="page-header">
-      <h2>主机监控</h2>
-      <p>实时监控主机资源使用情况</p>
-    </div>
-    <div class="page-content">
-      <a-row :gutter="20">
-        <!-- 总览卡片 -->
-        <a-col :span="6">
-          <a-card :bordered="false" class="overview-card">
-            <a-statistic
-              title="在线主机"
-              :value="onlineHosts"
-              :value-style="{ color: '#0fbf60' }"
-            >
-              <template #suffix>
-                <span>/ {{ totalContainers }}</span>
-              </template>
-            </a-statistic>
-          </a-card>
-        </a-col>
-        <a-col :span="6">
-          <a-card :bordered="false" class="overview-card">
-            <a-statistic
-              title="平均CPU使用率"
-              :value="averageCpuUsage === null ? '--' : averageCpuUsage"
-              suffix="%"
-              :value-style="{ color: (averageCpuUsage ?? 0) > 80 ? '#f53f3f' : '#0fbf60' }"
-            />
-          </a-card>
-        </a-col>
-        <a-col :span="6">
-          <a-card :bordered="false" class="overview-card">
-            <a-statistic
-              title="平均内存使用率"
-              :value="averageMemoryUsage === null ? '--' : averageMemoryUsage"
-              suffix="%"
-              :value-style="{ color: (averageMemoryUsage ?? 0) > 80 ? '#f53f3f' : '#0fbf60' }"
-            />
-          </a-card>
-        </a-col>
-        <a-col :span="6">
-          <a-card :bordered="false" class="overview-card">
-            <a-statistic
-              title="平均磁盘使用率"
-              :value="averageDiskUsage === null ? '--' : averageDiskUsage"
-              suffix="%"
-              :value-style="{ color: (averageDiskUsage ?? 0) > 80 ? '#f53f3f' : '#0fbf60' }"
-            />
-          </a-card>
-        </a-col>
+    <header class="page-header">
+      <div>
+        <h2>主机监控</h2>
+        <p>CPU、内存、文件系统、磁盘与网络状态</p>
+      </div>
+      <div class="refresh-controls">
+        <span v-if="lastRefreshAt" class="refresh-time">更新于 {{ formatAge(lastRefreshAt) }}</span>
+        <a-tooltip content="刷新实时与历史数据">
+          <a-button type="text" shape="circle" :loading="loading" aria-label="刷新" @click="manualRefresh">
+            <template #icon><icon-refresh /></template>
+          </a-button>
+        </a-tooltip>
+        <a-switch v-model="autoRefresh" size="small" @change="toggleAutoRefresh" />
+      </div>
+    </header>
 
-        <!-- 主要内容区域 -->
-        <a-col :span="24">
-          <a-card :bordered="false">
-            <div class="tab-content">
-              <div class="tab-header">
-                <span class="auto-refresh-hint" v-if="autoRefresh">
-                  <icon-sync :spin="true" /> 每 5 秒自动刷新
-                </span>
-                <a-space>
-                  <a-button @click="manualRefresh" :loading="loading">
-                    <template #icon>
-                      <icon-refresh />
-                    </template>
-                    刷新
-                  </a-button>
-                  <a-switch v-model="autoRefresh" @change="toggleAutoRefresh">
-                    <template #checked>自动</template>
-                    <template #unchecked>手动</template>
-                  </a-switch>
-                </a-space>
-              </div>
+    <section class="summary-band" aria-label="主机状态总览">
+      <div class="summary-item"><span>在线</span><strong>{{ onlineHosts }} / {{ hostMetrics.length }}</strong></div>
+      <div class="summary-item"><span>需关注</span><strong :class="{ danger: attentionHosts > 0 }">{{ attentionHosts }}</strong></div>
+      <div class="summary-item">
+        <span>历史存储</span>
+        <strong :class="storageAvailable ? 'healthy' : 'danger'">{{ storageAvailable ? '正常' : '不可用' }}</strong>
+      </div>
+      <div class="summary-item"><span>刷新模式</span><strong>{{ autoRefresh ? '自动 · 5秒' : '手动' }}</strong></div>
+    </section>
 
-              <a-row :gutter="20">
-                <a-col
-                  v-for="container in containers"
-                  :key="container.id"
-                  :span="8"
-                  class="container-card-col"
-                >
-                  <div class="container-resource-card">
-                    <div class="card-header">
-                      <div>
-                        <h4>{{ container.name }}</h4>
-                        <span class="host-address">{{ container.address }}</span>
-                      </div>
-                      <a-tag :color="getStatusColor(container.status)">
-                        {{ getStatusText(container.status) }}
-                      </a-tag>
-                    </div>
+    <a-alert v-if="refreshError" type="warning" :show-icon="true" class="page-alert">{{ refreshError }}</a-alert>
 
-                    <div class="resource-metrics">
-                      <!-- CPU使用率 -->
-                      <div class="metric-item">
-                        <div class="metric-label">CPU使用率</div>
-                        <div class="metric-value">
-                          <a-progress
-                            :percent="container.cpuAvailable ? container.cpuUsage / 100 : 0"
-                            :color="getProgressColor(container.cpuUsage)"
-                            :show-text="false"
-                            size="small"
-                          />
-                          <span class="metric-text">{{ container.cpuAvailable ? `${container.cpuUsage}%` : '--' }}</span>
-                        </div>
-                      </div>
+    <section v-if="hostCards.length" class="host-grid" aria-label="主机列表">
+      <article
+        v-for="host in hostCards"
+        :key="host.host_id"
+        class="host-card"
+        :class="{ selected: selectedHostID === host.host_id, warning: host.attention, offline: host.status !== 'online' }"
+        role="button"
+        tabindex="0"
+        @click="selectHost(host.host_id)"
+        @keydown.enter="selectHost(host.host_id)"
+        @keydown.space.prevent="selectHost(host.host_id)"
+      >
+        <div class="host-card-header">
+          <div class="host-identity">
+            <strong>{{ host.host_name }}</strong>
+            <span>{{ host.address }}</span>
+          </div>
+          <span class="host-status" :class="host.status">
+            <i />{{ statusText(host.status) }}
+          </span>
+        </div>
+        <div class="last-seen">{{ host.timestamp ? `${formatAge(host.timestamp)}上报` : '尚未上报' }}</div>
 
-                      <!-- 内存使用率 -->
-                      <div class="metric-item">
-                        <div class="metric-label">内存使用率</div>
-                        <div class="metric-value">
-                          <a-progress
-                            :percent="container.memoryAvailable ? container.memoryUsage / 100 : 0"
-                            :color="getProgressColor(container.memoryUsage)"
-                            :show-text="false"
-                            size="small"
-                          />
-                          <span class="metric-text">{{ container.memoryAvailable ? `${container.memoryUsage}%` : '--' }}</span>
-                        </div>
-                      </div>
+        <div class="metric-list">
+          <div class="metric-row">
+            <span>CPU</span>
+            <a-progress :percent="host.cpuAvailable ? host.cpuUsage / 100 : 0" :show-text="false" size="small" :color="progressColor(host.cpuUsage)" />
+            <strong>{{ host.cpuAvailable ? `${host.cpuUsage}%` : '--' }}</strong>
+          </div>
+          <div class="metric-row">
+            <span>内存</span>
+            <a-progress :percent="host.memoryAvailable ? host.memoryUsage / 100 : 0" :show-text="false" size="small" :color="progressColor(host.memoryUsage)" />
+            <strong>{{ host.memoryAvailable ? `${host.memoryUsage}%` : '--' }}</strong>
+          </div>
+          <div class="metric-row">
+            <span>文件系统</span>
+            <a-progress :percent="host.filesystemUsage !== null ? host.filesystemUsage / 100 : 0" :show-text="false" size="small" :color="progressColor(host.filesystemUsage ?? 0)" />
+            <strong>{{ host.filesystemUsage !== null ? `${host.filesystemUsage}%` : '--' }}</strong>
+          </div>
+        </div>
 
-                      <!-- 磁盘使用率 -->
-                      <div class="metric-item">
-                        <div class="metric-label">磁盘使用率</div>
-                        <div class="metric-value">
-                          <a-progress
-                            :percent="container.diskAvailable ? container.diskUsage / 100 : 0"
-                            :color="getProgressColor(container.diskUsage)"
-                            :show-text="false"
-                            size="small"
-                          />
-                          <span class="metric-text">{{ container.diskAvailable ? `${container.diskUsage}%` : '--' }}</span>
-                        </div>
-                      </div>
+        <div class="network-summary">
+          <span><icon-arrow-down />{{ host.networkRate ? formatBytesPerSecond(host.networkRate.rx) : '--' }}</span>
+          <span><icon-arrow-up />{{ host.networkRate ? formatBytesPerSecond(host.networkRate.tx) : '--' }}</span>
+        </div>
+      </article>
+    </section>
 
-                      <!-- 网络I/O -->
-                      <div class="metric-item">
-                        <div class="metric-label">网络I/O</div>
-                        <div class="metric-value">
-                          <div class="network-io">
-                            <span class="io-item">
-                              <icon-arrow-up style="color: #0fbf60;" />
-                              {{ container.networkIn }}
-                            </span>
-                            <span class="io-item">
-                              <icon-arrow-down style="color: #f53f3f;" />
-                              {{ container.networkOut }}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </a-col>
-              </a-row>
+    <a-empty v-else-if="!loading" description="暂无主机上报" class="empty-state" />
+    <div v-else class="loading-state"><a-spin /></div>
 
-              <!-- 历史趋势图 -->
-              <a-row :gutter="20" style="margin-top: 20px;" v-if="containers.length > 0">
-                <a-col :span="24">
-                  <div class="chart-section">
-                    <div class="chart-section-header">
-                      <h4>资源使用趋势</h4>
-                      <a-space>
-                        <a-select
-                          v-model="selectedHostID"
-                          placeholder="选择主机"
-                          style="width: 200px;"
-                          @change="loadHistory"
-                        >
-                          <a-option
-                            v-for="c in containers"
-                            :key="c.host_id"
-                            :value="c.host_id"
-                          >
-                            {{ c.name }} ({{ c.address }})
-                          </a-option>
-                        </a-select>
-                        <a-radio-group v-model="historyDuration" type="button" size="small" @change="loadHistory">
-                          <a-radio value="1h">1小时</a-radio>
-                          <a-radio value="24h">24小时</a-radio>
-                          <a-radio value="3d">3天</a-radio>
-                        </a-radio-group>
-                      </a-space>
-                    </div>
-                    <div class="chart-container" ref="trendChartRef">
-                      <div v-if="historyNotice" class="chart-placeholder">{{ historyNotice }}</div>
-                      <div v-if="historyLoading" class="chart-placeholder">
-                        <a-spin />
-                      </div>
-                      <div v-else-if="!historyNotice && historyData.length === 0" class="chart-placeholder">
-                        <icon-bar-chart style="font-size: 48px; color: var(--color-text-3);" />
-                        <p>暂无历史数据</p>
-                      </div>
-                    </div>
-                  </div>
-                </a-col>
-              </a-row>
+    <section v-if="selectedHost" class="detail-area">
+      <div class="detail-heading">
+        <div>
+          <span class="eyebrow">当前主机</span>
+          <h3>{{ selectedHost.host_name }}</h3>
+        </div>
+        <a-radio-group v-model="historyDuration" type="button" size="small" @change="loadHistory">
+          <a-radio value="1h">1小时</a-radio>
+          <a-radio value="24h">24小时</a-radio>
+          <a-radio value="3d">3天</a-radio>
+        </a-radio-group>
+      </div>
+
+      <a-alert v-if="historyNotice" type="warning" :show-icon="true" class="history-alert">{{ historyNotice }}</a-alert>
+
+      <div class="detail-grid">
+        <section class="trend-section">
+          <h4>资源趋势</h4>
+          <div ref="trendChartRef" class="chart-container">
+            <div v-if="historyLoading" class="chart-overlay"><a-spin /></div>
+            <div v-else-if="historyData.length === 0" class="chart-overlay empty-chart">
+              <icon-bar-chart /><span>暂无历史数据</span>
             </div>
-          </a-card>
-        </a-col>
-      </a-row>
-    </div>
+          </div>
+        </section>
+
+        <section class="device-section">
+          <h4>设备概览</h4>
+          <dl class="device-summary">
+            <div><dt>CPU 核心</dt><dd>{{ selectedHost.cpu.cores || '--' }}</dd></div>
+            <div><dt>内存</dt><dd>{{ formatBytes(selectedHost.memory.total) }}</dd></div>
+            <div><dt>文件系统</dt><dd>{{ selectedHost.filesystems.length }}</dd></div>
+            <div><dt>磁盘 / 网卡</dt><dd>{{ selectedHost.disks.length }} / {{ selectedHost.networks.length }}</dd></div>
+          </dl>
+        </section>
+      </div>
+
+      <div class="tables-grid">
+        <section class="data-section">
+          <h4>文件系统</h4>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>挂载点</th><th>设备</th><th>类型</th><th>使用率</th><th>容量</th></tr></thead>
+              <tbody>
+                <tr v-for="item in selectedHost.filesystems" :key="`${item.device}:${item.mountpoint}`">
+                  <td :title="item.mountpoint">{{ item.mountpoint || '--' }}</td>
+                  <td :title="item.device">{{ item.device || '--' }}</td>
+                  <td>{{ item.fs_type || '--' }}</td>
+                  <td>{{ item.percent_available ? `${item.percent.toFixed(1)}%` : '--' }}</td>
+                  <td>{{ formatBytes(item.total) }}</td>
+                </tr>
+                <tr v-if="!selectedHost.filesystems.length"><td colspan="5" class="table-empty">暂无文件系统数据</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="data-section">
+          <h4>磁盘 I/O</h4>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>设备</th><th>读取</th><th>写入</th><th>利用率</th></tr></thead>
+              <tbody>
+                <tr v-for="item in selectedHost.disks" :key="item.device">
+                  <td>{{ item.device || '--' }}</td>
+                  <td>{{ item.rate_available ? formatBytesPerSecond(item.read_bytes_per_second) : '--' }}</td>
+                  <td>{{ item.rate_available ? formatBytesPerSecond(item.write_bytes_per_second) : '--' }}</td>
+                  <td>{{ item.rate_available ? `${item.utilization_percent.toFixed(1)}%` : '--' }}</td>
+                </tr>
+                <tr v-if="!selectedHost.disks.length"><td colspan="4" class="table-empty">暂无磁盘数据</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="data-section">
+          <h4>网络接口</h4>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>接口</th><th>状态</th><th>接收</th><th>发送</th><th>错误</th></tr></thead>
+              <tbody>
+                <tr v-for="item in selectedHost.networks" :key="item.device">
+                  <td>{{ item.device || '--' }}</td>
+                  <td><span class="operstate" :class="item.operstate">{{ item.operstate }}</span></td>
+                  <td>{{ item.rate_available ? formatBytesPerSecond(item.rx_speed) : '--' }}</td>
+                  <td>{{ item.rate_available ? formatBytesPerSecond(item.tx_speed) : '--' }}</td>
+                  <td>{{ item.receive_errors_total + item.transmit_errors_total }}</td>
+                </tr>
+                <tr v-if="!selectedHost.networks.length"><td colspan="5" class="table-empty">暂无网络数据</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { default as VChart } from '@visactor/vchart';
 import {
+  aggregateNetworkRate,
+  formatBytes,
+  formatBytesPerSecond,
   getCurrentMetrics,
   getHistoryMetrics,
-  type HostMetrics,
+  maxAvailableFilesystemUsage,
   type HistoryPoint,
-  formatBytesPerSecond
+  type HostMetrics,
 } from '@/api/modules/host-monitor';
 
-// 状态管理
 const loading = ref(false);
+const historyLoading = ref(false);
 const autoRefresh = ref(true);
-let refreshTimer: NodeJS.Timeout | null = null;
-
-// 主机监控数据
 const hostMetrics = ref<HostMetrics[]>([]);
-
-// 历史趋势图
+const storageAvailable = ref(true);
+const refreshError = ref('');
+const lastRefreshAt = ref('');
 const selectedHostID = ref('');
 const historyDuration = ref('1h');
 const historyData = ref<HistoryPoint[]>([]);
 const historyNotice = ref('');
-const historyLoading = ref(false);
 const trendChartRef = ref<HTMLElement>();
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let trendChart: VChart | null = null;
+let historyRequestID = 0;
 
-// 将主机监控数据转换为显示格式
-const containers = computed(() => {
-  return hostMetrics.value.map(host => {
-    const networkIn = host.networks && host.networks.length > 0 && host.networks[0].rate_available
-      ? formatBytesPerSecond(host.networks[0].rx_speed)
-      : '--';
-    const networkOut = host.networks && host.networks.length > 0 && host.networks[0].rate_available
-      ? formatBytesPerSecond(host.networks[0].tx_speed)
-      : '--';
+const hostCards = computed(() => hostMetrics.value.map((host) => {
+  const filesystemUsage = maxAvailableFilesystemUsage(host.filesystems);
+  const networkRate = aggregateNetworkRate(host.networks);
+  const cpuUsage = Math.round(host.cpu.usage);
+  const memoryUsage = Math.round(host.memory.percent);
+  const attention = host.status === 'online' && [host.cpu.usage_available ? cpuUsage : 0, host.memory.percent_available ? memoryUsage : 0, filesystemUsage ?? 0].some((value) => value >= 80);
+  return {
+    ...host,
+    cpuUsage,
+    memoryUsage,
+    cpuAvailable: host.cpu.usage_available,
+    memoryAvailable: host.memory.percent_available,
+    filesystemUsage: filesystemUsage === null ? null : Math.round(filesystemUsage),
+    networkRate,
+    attention,
+  };
+}));
 
-    // 取第一个磁盘分区的使用率
-    const diskAvailable = !!(host.disks && host.disks.length > 0 && host.disks[0].percent_available);
-    const diskUsage = diskAvailable ? Math.round(host.disks[0].percent) : 0;
-    const cpuAvailable = host.cpu.usage_available;
-    const memoryAvailable = host.memory.percent_available;
+const selectedHost = computed(() => hostMetrics.value.find((host) => host.host_id === selectedHostID.value) ?? null);
+const onlineHosts = computed(() => hostMetrics.value.filter((host) => host.status === 'online').length);
+const attentionHosts = computed(() => hostCards.value.filter((host) => host.attention || host.status !== 'online').length);
 
-    return {
-      id: `host-${host.host_id}`,
-      host_id: host.host_id,
-      name: host.host_name,
-      address: host.address,
-      status: host.status === 'online' ? 'running' : host.status === 'offline' ? 'stopped' : 'error',
-      cpuUsage: Math.round(host.cpu?.usage || 0),
-      cpuAvailable,
-      memoryUsage: Math.round(host.memory?.percent || 0),
-      memoryAvailable,
-      diskUsage,
-      diskAvailable,
-      networkIn,
-      networkOut,
-    };
-  });
-});
-
-// 计算总览数据
-const totalContainers = computed(() => containers.value.length);
-const onlineHosts = computed(() =>
-  hostMetrics.value.filter(h => h.status === 'online').length
-);
-const averageCpuUsage = computed(() => {
-  const list = hostMetrics.value.filter(h => h.status === 'online' && h.cpu?.usage_available);
-  if (list.length === 0) return null;
-  return Math.round(list.reduce((sum, h) => sum + h.cpu.usage, 0) / list.length);
-});
-const averageMemoryUsage = computed(() => {
-  const list = hostMetrics.value.filter(h => h.status === 'online' && h.memory?.percent_available);
-  if (list.length === 0) return null;
-  return Math.round(list.reduce((sum, h) => sum + h.memory.percent, 0) / list.length);
-});
-const averageDiskUsage = computed(() => {
-  const list = hostMetrics.value.filter(h => h.status === 'online' && h.disks?.some(d => d.percent_available));
-  if (list.length === 0) return null;
-  return Math.round(list.reduce((sum, h) => sum + (h.disks.find(d => d.percent_available)?.percent || 0), 0) / list.length);
-});
-
-// 获取状态颜色
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case 'running': return 'green';
-    case 'stopped': return 'red';
-    default: return 'gray';
-  }
-};
-
-// 获取状态文本
-const getStatusText = (status: string) => {
-  switch (status) {
-    case 'running': return '运行中';
-    case 'stopped': return '已停止';
-    default: return '未知';
-  }
-};
-
-// 获取进度条颜色
-const getProgressColor = (value: number) => {
-  if (value > 80) return '#f53f3f';
-  if (value > 60) return '#ff7d00';
-  return '#0fbf60';
-};
-
-// 静默刷新（自动刷新时不弹 Message）
 const refreshData = async (silent = false) => {
   loading.value = true;
   try {
-    const res = await getCurrentMetrics();
-    hostMetrics.value = res.metrics || [];
-    if (!silent) {
-      Message.success('资源数据已刷新');
-    }
-  } catch (error) {
-    console.error('获取监控数据失败:', error);
-    if (!silent) {
-      Message.error('刷新失败，请检查网络连接');
-    }
+    const response = await getCurrentMetrics();
+    hostMetrics.value = response.metrics;
+    storageAvailable.value = response.storage_available;
+    lastRefreshAt.value = new Date().toISOString();
+    refreshError.value = '';
+    if (!silent) Message.success('主机数据已刷新');
+  } catch {
+    refreshError.value = '实时数据刷新失败，当前仍显示上一次成功结果';
+    if (!silent) Message.error('主机数据刷新失败');
   } finally {
     loading.value = false;
   }
 };
 
-// 手动刷新（带提示）
-const manualRefresh = () => {
-  refreshData(false);
+const loadHistory = async () => {
+  if (!selectedHostID.value) return;
+  const requestID = ++historyRequestID;
+  const agentID = selectedHostID.value;
+  const duration = historyDuration.value;
+  historyLoading.value = true;
+  try {
+    const response = await getHistoryMetrics(agentID, duration);
+    if (requestID !== historyRequestID || agentID !== selectedHostID.value || duration !== historyDuration.value) return;
+    historyData.value = response.history;
+    historyNotice.value = !response.storage_available ? '历史存储暂不可用' : response.data_gap ? '当前时间范围存在历史数据缺口' : '';
+    await nextTick();
+    renderTrendChart();
+  } catch {
+    if (requestID !== historyRequestID) return;
+    historyNotice.value = '历史数据加载失败';
+  } finally {
+    if (requestID === historyRequestID) historyLoading.value = false;
+  }
+};
+
+const selectHost = (hostID: string) => {
+  if (selectedHostID.value === hostID) return;
+  selectedHostID.value = hostID;
   loadHistory();
 };
 
-// 自动刷新控制
+const manualRefresh = async () => {
+  await refreshData(false);
+  await loadHistory();
+};
+
 const startAutoRefresh = () => {
   if (refreshTimer) clearInterval(refreshTimer);
-  refreshTimer = setInterval(() => {
-    refreshData(true);
-  }, 5000);
+  refreshTimer = setInterval(() => refreshData(true), 5_000);
 };
 
 const stopAutoRefresh = () => {
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
-  }
+  if (!refreshTimer) return;
+  clearInterval(refreshTimer);
+  refreshTimer = null;
 };
 
-const toggleAutoRefresh = (enabled: boolean) => {
-  if (enabled) {
-    startAutoRefresh();
-  } else {
-    stopAutoRefresh();
-  }
-};
-
-// ========== 历史趋势图 ==========
-
-const loadHistory = async () => {
-  if (!selectedHostID.value) return;
-
-  historyLoading.value = true;
-  try {
-    const res = await getHistoryMetrics(selectedHostID.value, historyDuration.value);
-    historyData.value = res.history || [];
-    historyNotice.value = !res.storage_available ? '历史存储暂不可用' : res.data_gap ? '历史数据存在缺口' : '';
-    await nextTick();
-    renderTrendChart();
-  } catch (error) {
-    console.error('获取历史数据失败:', error);
-  } finally {
-    historyLoading.value = false;
-  }
-};
+const toggleAutoRefresh = (enabled: boolean) => enabled ? startAutoRefresh() : stopAutoRefresh();
 
 const renderTrendChart = () => {
+  trendChart?.release();
+  trendChart = null;
   if (!trendChartRef.value || historyData.value.length === 0) return;
-
-  // 销毁旧图表
-  if (trendChart) {
-    trendChart.release();
-    trendChart = null;
-  }
-
-  // 转换数据：每个指标一条线
-  const chartData: { time: string; value: number; type: string }[] = [];
+  const values: Array<{ time: string; value: number; type: string }> = [];
   for (const point of historyData.value) {
-    const time = new Date(point.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    if (point.cpu_available) chartData.push({ time, value: Math.round(point.cpu_usage * 100) / 100, type: 'CPU' });
-    if (point.memory_available) chartData.push({ time, value: Math.round(point.memory_percent * 100) / 100, type: '内存' });
-    if (point.disk_available) chartData.push({ time, value: Math.round(point.disk_percent * 100) / 100, type: '磁盘' });
+    const time = new Date(point.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    if (point.cpu_available) values.push({ time, value: point.cpu_usage, type: 'CPU' });
+    if (point.memory_available) values.push({ time, value: point.memory_percent, type: '内存' });
+    if (point.disk_available) values.push({ time, value: point.disk_percent, type: '文件系统' });
   }
-
-  const spec = {
-    type: 'line' as const,
-    data: [{ id: 'trend', values: chartData }],
-    xField: 'time',
-    yField: 'value',
-    seriesField: 'type',
-    line: { style: { lineWidth: 2, curveType: 'monotone' } },
-    point: { visible: false },
-    legends: { visible: true, orient: 'top' as const },
-    axes: [
-      {
-        orient: 'left' as const,
-        title: { visible: true, text: '使用率 (%)' },
-        min: 0,
-        max: 100,
-      },
-      {
-        orient: 'bottom' as const,
-        sampling: true,
-        label: { style: { fontSize: 10 } },
-      },
-    ],
-    tooltip: {
-      mark: {
-        content: [
-          {
-            key: (datum: any) => datum.type,
-            value: (datum: any) => datum.value + '%',
-          },
-        ],
-      },
-    },
-    color: ['#3491FA', '#6BC76D', '#FF7D00'],
+  trendChart = new VChart({
+    type: 'line', data: [{ id: 'trend', values }], xField: 'time', yField: 'value', seriesField: 'type',
+    color: ['#2563eb', '#16a34a', '#f59e0b'],
+    line: { style: { lineWidth: 2, curveType: 'monotone' } }, point: { visible: false },
+    legends: { visible: true, orient: 'top' },
+    axes: [{ orient: 'left', min: 0, max: 100 }, { orient: 'bottom', sampling: true }],
+    tooltip: { mark: { content: [{ key: (datum: any) => datum.type, value: (datum: any) => `${datum.value.toFixed(1)}%` }] } },
     crosshair: { xField: { visible: true } },
-  };
-
-  trendChart = new VChart(spec as any, { dom: trendChartRef.value });
+  } as any, { dom: trendChartRef.value });
   trendChart.renderSync();
 };
 
-// 首个主机加载后自动选中并加载历史
-watch(containers, (val) => {
-  if (val.length > 0 && !selectedHostID.value) {
-    selectedHostID.value = val[0].host_id;
+const progressColor = (value: number) => value >= 80 ? '#dc2626' : value >= 60 ? '#f59e0b' : '#16a34a';
+const statusText = (status: HostMetrics['status']) => status === 'online' ? '在线' : status === 'offline' ? '离线' : '异常';
+const formatAge = (value: string) => {
+  const age = Date.now() - Date.parse(value);
+  if (!Number.isFinite(age) || age < 0) return '刚刚';
+  if (age < 60_000) return `${Math.max(1, Math.floor(age / 1_000))}秒前`;
+  if (age < 3_600_000) return `${Math.floor(age / 60_000)}分钟前`;
+  return `${Math.floor(age / 3_600_000)}小时前`;
+};
+
+watch(hostCards, (hosts) => {
+  if (!hosts.length) {
+    historyRequestID++;
+    selectedHostID.value = '';
+    historyData.value = [];
+    return;
+  }
+  if (!hosts.some((host) => host.host_id === selectedHostID.value)) {
+    selectedHostID.value = hosts[0].host_id;
     loadHistory();
   }
 });
 
-onMounted(() => {
-  refreshData(true);
+onMounted(async () => {
+  await refreshData(true);
   startAutoRefresh();
 });
 
 onUnmounted(() => {
   stopAutoRefresh();
-  if (trendChart) {
-    trendChart.release();
-    trendChart = null;
-  }
+  trendChart?.release();
 });
 </script>
 
 <style lang="scss" scoped>
-.resource-monitor-page {
-  padding: 20px;
-
-  .page-header {
-    margin-bottom: 20px;
-
-    h2 {
-      margin: 0 0 8px 0;
-      font-size: 24px;
-      font-weight: 600;
-    }
-
-    p {
-      margin: 0;
-      color: var(--color-text-2);
-    }
-  }
-
-  .overview-card {
-    margin-bottom: 20px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  }
-
-  .tab-content {
-    .tab-header {
-      margin-bottom: 20px;
-      display: flex;
-      justify-content: flex-end;
-      align-items: center;
-      gap: 16px;
-
-      .auto-refresh-hint {
-        font-size: 12px;
-        color: var(--color-text-3);
-        display: flex;
-        align-items: center;
-        gap: 4px;
-      }
-    }
-  }
-
-  .container-card-col {
-    margin-bottom: 20px;
-  }
-
-  .container-resource-card {
-    background: var(--color-bg-2);
-    border: 1px solid var(--color-border-2);
-    border-radius: 8px;
-    padding: 16px;
-    height: 100%;
-
-    .card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 16px;
-
-      h4 {
-        margin: 0;
-        font-size: 16px;
-        font-weight: 600;
-      }
-
-      .host-address {
-        font-size: 12px;
-        color: var(--color-text-3);
-      }
-    }
-
-    .resource-metrics {
-      .metric-item {
-        margin-bottom: 12px;
-
-        .metric-label {
-          font-size: 12px;
-          color: var(--color-text-2);
-          margin-bottom: 4px;
-        }
-
-        .metric-value {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-
-          :deep(.arco-progress) {
-            flex: 1;
-          }
-
-          .metric-text {
-            font-size: 12px;
-            font-weight: 500;
-            min-width: 35px;
-            text-align: right;
-          }
-        }
-
-        .network-io {
-          display: flex;
-          gap: 12px;
-
-          .io-item {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            font-size: 12px;
-          }
-        }
-      }
-    }
-  }
-
-  .chart-section {
-    .chart-section-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 16px;
-
-      h4 {
-        margin: 0;
-        font-size: 16px;
-        font-weight: 600;
-      }
-    }
-  }
-
-  .chart-container {
-    height: 320px;
-
-    .chart-placeholder {
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      color: var(--color-text-2);
-      border: 1px dashed var(--color-border-2);
-      border-radius: 4px;
-
-      p {
-        margin: 8px 0;
-      }
-    }
-  }
-
-  :deep(.arco-tabs-content) {
-    padding-top: 20px;
-  }
-}
+.resource-monitor-page { padding: 20px; }
+.page-header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:16px; }
+.page-header h2 { margin:0; font-size:24px; font-weight:600; }
+.page-header p { margin:6px 0 0; color:var(--color-text-2); }
+.refresh-controls { display:flex; align-items:center; gap:10px; min-height:32px; }
+.refresh-time { color:var(--color-text-3); font-size:12px; }
+.summary-band { display:flex; flex-wrap:wrap; gap:28px; padding:14px 0; border-top:1px solid var(--color-border-2); border-bottom:1px solid var(--color-border-2); margin-bottom:18px; }
+.summary-item { display:flex; align-items:baseline; gap:8px; min-width:130px; }
+.summary-item span { color:var(--color-text-2); font-size:13px; }
+.summary-item strong { color:var(--color-text-1); font-size:16px; }
+.healthy { color:#16a34a !important; }
+.danger { color:#dc2626 !important; }
+.page-alert, .history-alert { margin-bottom:16px; }
+.host-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+.host-card { appearance:none; width:100%; min-height:252px; padding:16px; text-align:left; color:inherit; background:var(--color-bg-2); border:1px solid var(--color-border-2); border-radius:8px; cursor:pointer; transition:border-color .15s ease, box-shadow .15s ease; }
+.host-card:hover { border-color:rgb(var(--primary-5)); }
+.host-card.selected { border-color:rgb(var(--primary-6)); box-shadow:0 0 0 2px rgba(var(--primary-6),.12); }
+.host-card.warning { border-left:3px solid #f59e0b; }
+.host-card.offline { opacity:.76; }
+.host-card-header { display:flex; justify-content:space-between; gap:12px; }
+.host-identity { min-width:0; }
+.host-identity strong, .host-identity span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.host-identity strong { font-size:16px; }
+.host-identity span, .last-seen { color:var(--color-text-3); font-size:12px; }
+.last-seen { margin-top:4px; }
+.host-status { display:flex; align-items:center; gap:6px; flex:none; font-size:12px; }
+.host-status i { width:7px; height:7px; border-radius:50%; background:#94a3b8; }
+.host-status.online { color:#16a34a; }.host-status.online i { background:#16a34a; }
+.host-status.offline, .host-status.error { color:#dc2626; }.host-status.offline i, .host-status.error i { background:#dc2626; }
+.metric-list { display:grid; gap:12px; margin-top:20px; }
+.metric-row { display:grid; grid-template-columns:58px minmax(0,1fr) 44px; align-items:center; gap:10px; font-size:13px; }
+.metric-row strong { text-align:right; font-variant-numeric:tabular-nums; }
+.network-summary { display:flex; justify-content:space-between; gap:12px; padding-top:14px; margin-top:16px; border-top:1px solid var(--color-border-2); color:var(--color-text-2); font-size:12px; }
+.network-summary span { display:flex; align-items:center; gap:4px; min-width:0; }
+.detail-area { margin-top:28px; }
+.detail-heading { display:flex; align-items:end; justify-content:space-between; gap:16px; margin-bottom:14px; }
+.detail-heading h3 { margin:2px 0 0; font-size:20px; }
+.eyebrow { color:var(--color-text-3); font-size:12px; }
+.detail-grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(260px,1fr); gap:20px; }
+.trend-section, .device-section, .data-section { min-width:0; }
+.trend-section h4, .device-section h4, .data-section h4 { margin:0 0 12px; font-size:14px; }
+.chart-container { position:relative; height:280px; border-top:1px solid var(--color-border-2); }
+.chart-overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; z-index:2; background:var(--color-bg-1); }
+.empty-chart { flex-direction:column; gap:8px; color:var(--color-text-3); font-size:28px; }
+.empty-chart span { font-size:13px; }
+.device-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; margin:0; background:var(--color-border-2); border:1px solid var(--color-border-2); }
+.device-summary div { padding:16px; background:var(--color-bg-2); }
+.device-summary dt { color:var(--color-text-3); font-size:12px; }
+.device-summary dd { margin:6px 0 0; font-size:16px; font-weight:600; }
+.tables-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px; margin-top:24px; }
+.table-scroll { overflow:auto; border-top:1px solid var(--color-border-2); }
+table { width:100%; min-width:440px; border-collapse:collapse; font-size:12px; }
+th, td { padding:10px 8px; text-align:left; border-bottom:1px solid var(--color-border-2); white-space:nowrap; }
+th { color:var(--color-text-3); font-weight:500; }
+td { max-width:150px; overflow:hidden; text-overflow:ellipsis; }
+.table-empty { text-align:center; color:var(--color-text-3); }
+.operstate { color:var(--color-text-3); }.operstate.up { color:#16a34a; }
+.empty-state, .loading-state { display:flex; align-items:center; justify-content:center; min-height:260px; }
+@media (max-width:1200px) { .host-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .tables-grid { grid-template-columns:1fr; } }
+@media (max-width:820px) { .resource-monitor-page { padding:12px; } .page-header, .detail-heading { align-items:flex-start; flex-direction:column; } .host-grid, .detail-grid { grid-template-columns:minmax(0,1fr); } .summary-band { gap:12px 20px; } .summary-item { min-width:110px; } }
+@media (max-width:560px) { .host-grid { grid-template-columns:minmax(0,1fr); } .refresh-time { display:none; } .network-summary { flex-direction:column; } }
 </style>

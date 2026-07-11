@@ -7,9 +7,9 @@ MooX 管理入口：统一 HTTP 网关 + 认证、Space、运维等**本地基�
 | 类别 | 内容 |
 |------|------|
 | 网关 | JWT 鉴权、限流、CORS、`/api/admin/*` 与 `/api/service/*` 路由转发 |
-| 本进程服务 | Auth、SpaceMgr、Dns、Monitor、Ssh、SecretMgr、SysDeploy |
+| 本进程服务 | Auth、SpaceMgr、Dns、Ssh、SecretMgr、SysDeploy |
 | 转发目标 | collectmgr、cloudnode、storage、trade 等独立进程 |
-| 定时任务 | DNS 代理/探测、监控采集与历史清理 |
+| 定时任务 | DNS 代理/探测、Admin 自身指标上报 |
 
 ## 目录结构
 
@@ -54,7 +54,6 @@ make deploy SERVER=user@host   # 等价于 deploy-moox.sh --no-storage --no-web-
 | 11000 | HTTP 网关 | `/api/admin/*` |
 | 11100 | Auth | `/api/admin/auth/*` |
 | 11101 | Dns | `/api/admin/dnsproxy/*` |
-| 11103 | Monitor | `/api/admin/monitor/*` |
 | 11106 | Ssh | `/api/admin/ssh/*`（WebSocket/SFTP 走 rawhandler） |
 | 11107 | SpaceMgr | `/api/admin/space/*` |
 | 11108 | SecretMgr | `/api/admin/secret/*` |
@@ -64,7 +63,7 @@ make deploy SERVER=user@host   # 等价于 deploy-moox.sh --no-storage --no-web-
 | 20200-20202 | moox-storage（转发） | `/api/admin/storage_*/*` |
 | 11200-11208、11211-11212 | moox-trade（转发） | `/api/admin/trade_*/*` |
 | 11001 | `trpc.moox.api.stdhttp` | 保留 HTTP service，当前不作为主网关入口 |
-| 11300 / 11301 / 11304 / 11305 | 定时器 | dnsproxy / dnsprobe / monitor / monitor cleanup |
+| 11301 / 11302 / 11305 | 定时器 | dnsproxy / dnsprobe / Admin metrics |
 
 转发映射以 `t_service_deployments` 中的 active 部署记录为准，`config/gateway.yaml` 不再维护服务地址。
 
@@ -90,13 +89,14 @@ go run ./cmd/server -conf=config/trpc_go.yaml
 | `auth/` | `trpc.moox.infra.Auth` | 注册、登录、JWT、改密、用户信息 |
 | `space/` | `trpc.moox.admin.SpaceMgr` | Space 元数据管理 |
 | `dnsproxy/` | `trpc.moox.infra.Dns` | 交易所 DNS 代理与探测 |
-| `monitor/` | `trpc.moox.ops.Monitor` | 主机监控采集与指标查询 |
 | `ssh/` | `trpc.moox.ops.Ssh` | SSH 主机、会话、WebSocket 终端、SFTP |
 | `secret/` | `trpc.moox.ops.SecretMgr` | 密钥/凭证管理 |
 | `sysdeploy/` | `trpc.moox.ops.SysDeploy` | 各服务部署信息与网关解析 |
 | `database/` | — | 共享 SQLite + GORM 初始化 |
 
 各业务包通常包含 `service.go` / `impl*.go`、`dao/`、`model/`、`rpc/`（部分服务）、`config/`（auth）。注册入口：`internal/bootstrap/trpc.go` → `RegisterTRPCServices`。
+
+主机资源监控由 `moox-host-agent`、EventBus、`moox-monitor` 和 MooX Storage 提供。Admin 只通过统一网关转发 Monitor API，不采集或保存主机指标。
 
 **认证要点**：客户端用「盐值 + 时间戳」派生 AES 密钥加密密码后提交；用户信息存 SQLite，盐值与登录尝试等存 BadgerDB。`/api/admin/auth/Register`、`GetLoginSalt`、`Login` 等路径免 JWT（见 `gateway.yaml` 的 `no_auth_methods`）。API 形态以 `proto/infra_service.proto` 为准。
 

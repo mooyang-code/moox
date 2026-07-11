@@ -30,3 +30,9 @@ func TestAdminSchemaDropsLegacyUserActionsTable(t *testing.T) {
 		t.Fatal("admin schema must drop legacy t_user_actions")
 	}
 }
+
+func TestAdminSchemaExcludesLegacyHostMonitorHistory(t *testing.T) {
+	if strings.Contains(AdminSQL(), "t_host_monitor_history") {
+		t.Fatal("admin schema must not create the legacy host monitor history table")
+	}
+}
