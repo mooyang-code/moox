@@ -68,6 +68,7 @@ datasets:
   - {space_id: crypto_binance, dataset_id: binance_kline, data_source_id: binance, name: Binance Kline source, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
   - {space_id: crypto_binance, dataset_id: binance_instruments, data_source_id: binance, name: Binance instruments source, data_kind: record, status: active, attributes: {dataset_role: provider_data, feed: instrument}}
   - {space_id: crypto_binance, dataset_id: spot_kline, data_source_id: internal, name: Spot Kline, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline}}
+  - {space_id: crypto_binance, dataset_id: swap_kline, data_source_id: internal, name: Swap Kline, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline}}
   - {space_id: crypto_binance, dataset_id: instruments, data_source_id: internal, name: Instruments, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: instrument}}
   - {space_id: crypto_binance, dataset_id: calendar, data_source_id: internal, name: Calendar, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: calendar, kind: internal}}
   - {space_id: crypto_binance, dataset_id: market_coverage, data_source_id: internal, name: Coverage, data_kind: record, status: active, attributes: {dataset_role: coverage_state, feed: coverage}}
@@ -184,3 +185,30 @@ dataset_columns:
   - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: source_dataset_id, origin_type: field, origin_id: source_dataset_id, value_type: string, required: true, status: active}
   - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: revision, origin_type: field, origin_id: revision, value_type: int, required: true, status: active}
   - {space_id: crypto_binance, dataset_id: kline_quality_event, column_name: resolved_at, origin_type: field, origin_id: resolved_at, value_type: time, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: open, origin_type: field, origin_id: open, value_type: double, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: high, origin_type: field, origin_id: high, value_type: double, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: low, origin_type: field, origin_id: low, value_type: double, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: volume, origin_type: field, origin_id: volume, value_type: double, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: amount, origin_type: field, origin_id: amount, value_type: double, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: open_exact, origin_type: field, origin_id: open_exact, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: high_exact, origin_type: field, origin_id: high_exact, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: low_exact, origin_type: field, origin_id: low_exact, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: close_exact, origin_type: field, origin_id: close_exact, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: volume_exact, origin_type: field, origin_id: volume_exact, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: amount_exact, origin_type: field, origin_id: amount_exact, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: trade_date, origin_type: field, origin_id: trade_date, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: close_time, origin_type: field, origin_id: close_time, value_type: time, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: feed_scope, origin_type: field, origin_id: feed_scope, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: volume_unit, origin_type: field, origin_id: volume_unit, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: amount_unit, origin_type: field, origin_id: amount_unit, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: provider_timestamp, origin_type: field, origin_id: provider_timestamp, value_type: time, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: fetched_at, origin_type: field, origin_id: fetched_at, value_type: time, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: request_id, origin_type: field, origin_id: request_id, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: is_closed, origin_type: field, origin_id: is_closed, value_type: bool, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: source_provider, origin_type: field, origin_id: source_provider, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: source_dataset_id, origin_type: field, origin_id: source_dataset_id, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: source_fetched_at, origin_type: field, origin_id: source_fetched_at, value_type: time, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: quality_status, origin_type: field, origin_id: quality_status, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: revision, origin_type: field, origin_id: revision, value_type: int, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: swap_kline, column_name: resolved_at, origin_type: field, origin_id: resolved_at, value_type: time, required: true, status: active}

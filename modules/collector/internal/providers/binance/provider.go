@@ -16,14 +16,16 @@ import (
 )
 
 type Config struct {
-	BaseURL    string
-	HTTPClient *http.Client
-	Now        func() time.Time
+	BaseURL        string
+	FuturesBaseURL string
+	HTTPClient     *http.Client
+	Now            func() time.Time
 }
 type Provider struct {
-	baseURL string
-	client  *http.Client
-	now     func() time.Time
+	baseURL        string
+	futuresBaseURL string
+	client         *http.Client
+	now            func() time.Time
 }
 
 func New(cfg Config) *Provider {
@@ -33,25 +35,44 @@ func New(cfg Config) *Provider {
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = http.DefaultClient
 	}
+	if cfg.FuturesBaseURL == "" {
+		cfg.FuturesBaseURL = "https://fapi.binance.com"
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now}
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), futuresBaseURL: strings.TrimRight(cfg.FuturesBaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now}
 }
 func (*Provider) ID() marketdata.ProviderID { return "binance" }
 func (*Provider) Capabilities() []providers.Capability {
-	return []providers.Capability{{Feed: providers.FeedInstrument, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot}, {Feed: providers.FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyMinute}, {Feed: providers.FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyDay}}
+	return []providers.Capability{{Feed: providers.FeedInstrument, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot}, {Feed: providers.FeedInstrument, ProductType: marketdata.ProductSwap, InstrumentType: marketdata.InstrumentSwap}, {Feed: providers.FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyMinute}, {Feed: providers.FeedKline, ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Frequency: marketdata.FrequencyDay}, {Feed: providers.FeedKline, ProductType: marketdata.ProductSwap, InstrumentType: marketdata.InstrumentSwap, Frequency: marketdata.FrequencyMinute}, {Feed: providers.FeedKline, ProductType: marketdata.ProductSwap, InstrumentType: marketdata.InstrumentSwap, Frequency: marketdata.FrequencyDay}}
 }
 
 func (p *Provider) FetchInstruments(ctx context.Context, gate providers.RequestGate, req providers.FetchInstrumentsRequest) (providers.FetchInstrumentsResult, error) {
-	permit, err := gate.BeforeRequest(ctx, providers.RequestMeta{ProviderID: p.ID(), RequestIndex: 0, EndpointClass: "spot_exchange_info", RequestCost: 20})
+	types := req.InstrumentTypes
+	if len(types) == 0 {
+		types = []marketdata.InstrumentType{marketdata.InstrumentSpot}
+	}
+	typeIndex, start, err := instrumentCursor(req.Cursor, len(types))
+	if err != nil {
+		return providers.FetchInstrumentsResult{}, err
+	}
+	if typeIndex >= len(types) {
+		return providers.FetchInstrumentsResult{Complete: true}, nil
+	}
+	swap := types[typeIndex] == marketdata.InstrumentSwap
+	endpointClass, baseURL, path, cost := "spot_exchange_info", p.baseURL, "/api/v3/exchangeInfo", 20
+	if swap {
+		endpointClass, baseURL, path, cost = "futures_exchange_info", p.futuresBaseURL, "/fapi/v1/exchangeInfo", 1
+	}
+	permit, err := gate.BeforeRequest(ctx, providers.RequestMeta{ProviderID: p.ID(), RequestIndex: typeIndex, EndpointClass: endpointClass, RequestCost: int64(cost)})
 	if err != nil {
 		return providers.FetchInstrumentsResult{}, err
 	}
 	if !permit.Allowed {
 		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorRateLimited, permit.DenialReason, nil)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/v3/exchangeInfo", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
 	if err != nil {
 		return providers.FetchInstrumentsResult{}, err
 	}
@@ -76,13 +97,6 @@ func (p *Provider) FetchInstruments(ctx context.Context, gate providers.RequestG
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorParseFailed, "binance exchange info", err)
 	}
-	start := 0
-	if req.Cursor != "" {
-		start, err = strconv.Atoi(req.Cursor)
-		if err != nil || start < 0 {
-			return providers.FetchInstrumentsResult{}, providers.NewError(providers.ErrorParseFailed, "invalid instrument cursor", err)
-		}
-	}
 	limit := req.Limit
 	if limit <= 0 {
 		limit = len(payload.Symbols)
@@ -94,23 +108,34 @@ func (p *Provider) FetchInstruments(ctx context.Context, gate providers.RequestG
 	if start > end {
 		start = end
 	}
-	result := providers.FetchInstrumentsResult{Complete: end == len(payload.Symbols), RequestCount: 1}
+	pageComplete := end == len(payload.Symbols)
+	result := providers.FetchInstrumentsResult{Complete: pageComplete && typeIndex+1 == len(types), RequestCount: 1}
 	for _, item := range payload.Symbols[start:end] {
-		result.Instruments = append(result.Instruments, providers.ProviderInstrument{SubjectID: strings.ToUpper(item.BaseAsset + "-" + item.QuoteAsset), ProviderID: p.ID(), ProviderSymbol: item.Symbol, ExchangeID: "BINANCE", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Name: item.BaseAsset + "/" + item.QuoteAsset, Currency: item.QuoteAsset, Status: strings.ToLower(item.Status), EffectiveAt: req.SnapshotAt.UTC(), FetchedAt: p.now().UTC(), RequestID: "binance:exchangeInfo:" + req.SnapshotAt.UTC().Format(time.RFC3339Nano)})
+		product, instrument, suffix := marketdata.ProductSpot, marketdata.InstrumentSpot, ""
+		if swap {
+			product, instrument, suffix = marketdata.ProductSwap, marketdata.InstrumentSwap, "-SWAP"
+		}
+		result.Instruments = append(result.Instruments, providers.ProviderInstrument{SubjectID: strings.ToUpper(item.BaseAsset + "-" + item.QuoteAsset + suffix), ProviderID: p.ID(), ProviderSymbol: item.Symbol, ExchangeID: "BINANCE", ProductType: product, InstrumentType: instrument, Name: item.BaseAsset + "/" + item.QuoteAsset + suffix, Currency: item.QuoteAsset, Status: strings.ToLower(item.Status), EffectiveAt: req.SnapshotAt.UTC(), FetchedAt: p.now().UTC(), RequestID: "binance:" + endpointClass + ":" + req.SnapshotAt.UTC().Format(time.RFC3339Nano)})
 	}
-	if !result.Complete {
-		result.NextCursor = strconv.Itoa(end)
+	if !pageComplete {
+		result.NextCursor = formatInstrumentCursor(typeIndex, end, len(types))
+	} else if typeIndex+1 < len(types) {
+		result.NextCursor = formatInstrumentCursor(typeIndex+1, 0, len(types))
 	}
 	return result, nil
 }
 func (p *Provider) FetchKlines(ctx context.Context, gate providers.RequestGate, req providers.FetchKlinesRequest) (providers.FetchKlinesResult, error) {
-	if req.ProductType != marketdata.ProductSpot {
-		return providers.FetchKlinesResult{}, providers.NewError(providers.ErrorUnsupported, "only spot is enabled", nil)
+	if req.ProductType != marketdata.ProductSpot && req.ProductType != marketdata.ProductSwap {
+		return providers.FetchKlinesResult{}, providers.NewError(providers.ErrorUnsupported, "unsupported Binance product", nil)
 	}
 	start := p.now()
 	result := providers.FetchKlinesResult{Complete: true}
 	for index, subject := range req.Subjects {
-		permit, err := gate.BeforeRequest(ctx, providers.RequestMeta{ProviderID: p.ID(), RequestIndex: index, EndpointClass: "spot_klines", RequestCost: 1})
+		endpointClass := "spot_klines"
+		if req.ProductType == marketdata.ProductSwap {
+			endpointClass = "futures_klines"
+		}
+		permit, err := gate.BeforeRequest(ctx, providers.RequestMeta{ProviderID: p.ID(), RequestIndex: index, EndpointClass: endpointClass, RequestCost: 1})
 		if err != nil {
 			return result, err
 		}
@@ -135,7 +160,11 @@ func (p *Provider) fetchSubject(ctx context.Context, subject providers.ProviderS
 	if req.Limit > 0 {
 		query.Set("limit", strconv.Itoa(req.Limit))
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/v3/klines?"+query.Encode(), nil)
+	baseURL, path := p.baseURL, "/api/v3/klines"
+	if req.ProductType == marketdata.ProductSwap {
+		baseURL, path = p.futuresBaseURL, "/fapi/v1/klines"
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path+"?"+query.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +260,35 @@ func (p *Provider) fetchSubject(ctx context.Context, subject providers.ProviderS
 		}
 		dataTime := time.UnixMilli(startMS).UTC()
 		closeTime := time.UnixMilli(endMS).UTC().Add(time.Millisecond)
-		rows = append(rows, marketdata.ProviderKline{SubjectID: subject.SubjectID, ProviderID: p.ID(), ProviderSymbol: subject.ProviderSymbol, Frequency: req.Frequency, DataTime: dataTime, CloseTime: closeTime, TradeDate: dataTime.Format("2006-01-02"), FeedScope: "spot", VolumeUnit: "base", AmountUnit: "quote", Open: open, High: high, Low: low, Close: closeValue, Volume: &volume, Amount: &amount, ProviderTimestamp: closeTime, FetchedAt: p.now().UTC(), RequestID: "binance:" + dataTime.Format(time.RFC3339Nano), Closed: !closeTime.After(p.now().UTC())})
+		rows = append(rows, marketdata.ProviderKline{SubjectID: subject.SubjectID, ProviderID: p.ID(), ProviderSymbol: subject.ProviderSymbol, Frequency: req.Frequency, DataTime: dataTime, CloseTime: closeTime, TradeDate: dataTime.Format("2006-01-02"), FeedScope: string(req.ProductType), VolumeUnit: "base", AmountUnit: "quote", Open: open, High: high, Low: low, Close: closeValue, Volume: &volume, Amount: &amount, ProviderTimestamp: closeTime, FetchedAt: p.now().UTC(), RequestID: "binance:" + string(req.ProductType) + ":" + dataTime.Format(time.RFC3339Nano), Closed: !closeTime.After(p.now().UTC())})
 	}
 	return rows, nil
+}
+func instrumentCursor(raw string, typeCount int) (int, int, error) {
+	if raw == "" {
+		return 0, 0, nil
+	}
+	if typeCount == 1 {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return 0, 0, providers.NewError(providers.ErrorParseFailed, "invalid instrument cursor", err)
+		}
+		return 0, value, nil
+	}
+	parts := strings.Split(raw, ":")
+	if len(parts) != 2 {
+		return 0, 0, providers.NewError(providers.ErrorParseFailed, "invalid instrument cursor", nil)
+	}
+	typeIndex, err1 := strconv.Atoi(parts[0])
+	offset, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil || typeIndex < 0 || offset < 0 {
+		return 0, 0, providers.NewError(providers.ErrorParseFailed, "invalid instrument cursor", nil)
+	}
+	return typeIndex, offset, nil
+}
+func formatInstrumentCursor(typeIndex, offset, typeCount int) string {
+	if typeCount == 1 {
+		return strconv.Itoa(offset)
+	}
+	return fmt.Sprintf("%d:%d", typeIndex, offset)
 }
