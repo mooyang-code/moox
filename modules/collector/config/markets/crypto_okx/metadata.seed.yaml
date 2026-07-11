@@ -44,6 +44,10 @@ fields:
   - {space_id: crypto_okx, field_id: instrument_status, name: Instrument status, value_type: string, status: active}
   - {space_id: crypto_okx, field_id: effective_at, name: Effective at, value_type: time, status: active}
   - {space_id: crypto_okx, field_id: generation, name: Generation, value_type: time, status: active}
+  - {space_id: crypto_okx, field_id: calendar_timezone, name: Calendar timezone, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: session_status, name: Session status, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: sessions_json, name: Sessions JSON, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: open_time, name: Open time, value_type: time, status: active}
 datasets:
   - {space_id: crypto_okx, dataset_id: okx_kline, data_source_id: okx, name: OKX Kline source, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
   - {space_id: crypto_okx, dataset_id: okx_instruments, data_source_id: okx, name: OKX instruments source, data_kind: record, status: active, attributes: {dataset_role: provider_data, feed: instrument}}
@@ -134,3 +138,11 @@ dataset_columns:
   - {space_id: crypto_okx, dataset_id: instruments, column_name: quality_status, origin_type: field, origin_id: quality_status, value_type: string, required: true, status: active}
   - {space_id: crypto_okx, dataset_id: instruments, column_name: generation, origin_type: field, origin_id: generation, value_type: time, required: true, status: active}
   - {space_id: crypto_okx, dataset_id: instruments, column_name: resolved_at, origin_type: field, origin_id: resolved_at, value_type: time, required: true, status: active}
+  - {space_id: crypto_okx, dataset_id: calendar, column_name: exchange_id, origin_type: field, origin_id: exchange_id, value_type: string, required: true, status: active}
+  - {space_id: crypto_okx, dataset_id: calendar, column_name: trade_date, origin_type: field, origin_id: trade_date, value_type: string, required: true, status: active}
+  - {space_id: crypto_okx, dataset_id: calendar, column_name: timezone, origin_type: field, origin_id: calendar_timezone, value_type: string, required: true, status: active}
+  - {space_id: crypto_okx, dataset_id: calendar, column_name: session_status, origin_type: field, origin_id: session_status, value_type: string, required: true, status: active}
+  - {space_id: crypto_okx, dataset_id: calendar, column_name: sessions_json, origin_type: field, origin_id: sessions_json, value_type: string, required: true, status: active}
+  - {space_id: crypto_okx, dataset_id: calendar, column_name: open_time, origin_type: field, origin_id: open_time, value_type: time, required: true, status: active}
+  - {space_id: crypto_okx, dataset_id: calendar, column_name: close_time, origin_type: field, origin_id: close_time, value_type: time, required: true, status: active}
+  - {space_id: crypto_okx, dataset_id: calendar, column_name: generation, origin_type: field, origin_id: generation, value_type: time, required: true, status: active}

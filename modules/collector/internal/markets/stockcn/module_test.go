@@ -35,3 +35,23 @@ func TestCalendarHonorsMiddayHolidayAndHorizon(t *testing.T) {
 		t.Fatal("midday break open")
 	}
 }
+
+func TestCalendarTradingDaysMaterializesTwoSessionsAndSkipsHoliday(t *testing.T) {
+	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, _ := time.LoadLocation("Asia/Shanghai")
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, location)
+	end := start.AddDate(0, 0, 3)
+	days, err := calendar.TradingDays(start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(days) != 1 || days[0].TradeDate != "2026-01-02" || len(days[0].Sessions) != 2 {
+		t.Fatalf("days=%+v", days)
+	}
+	if got := days[0].Sessions[0].Open.In(location).Format("15:04"); got != "09:30" {
+		t.Fatalf("first open=%s", got)
+	}
+}

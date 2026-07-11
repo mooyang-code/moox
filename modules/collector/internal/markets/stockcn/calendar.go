@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"gopkg.in/yaml.v3"
 )
 
@@ -87,4 +88,39 @@ func (c *Calendar) ValidateHorizon(now time.Time, minDays int) error {
 		return fmt.Errorf("calendar coverage ends before required horizon")
 	}
 	return nil
+}
+
+func (c *Calendar) TradingDays(start, end time.Time) ([]markets.CalendarDay, error) {
+	if c == nil || c.location == nil {
+		return nil, fmt.Errorf("calendar is not initialized")
+	}
+	if !end.After(start) {
+		return nil, fmt.Errorf("end must be after start")
+	}
+	day := time.Date(start.In(c.location).Year(), start.In(c.location).Month(), start.In(c.location).Day(), 0, 0, 0, 0, c.location)
+	last := end.In(c.location)
+	result := make([]markets.CalendarDay, 0)
+	for day.Before(last) {
+		date := day.Format("2006-01-02")
+		_, forcedOpen := c.open[date]
+		_, forcedClosed := c.closed[date]
+		weekdayOpen := day.Weekday() != time.Saturday && day.Weekday() != time.Sunday
+		if !day.Before(c.start) && !day.After(c.end) && !forcedClosed && (weekdayOpen || forcedOpen) {
+			sessions := make([]markets.CalendarSession, 0, len(c.sessions))
+			for _, value := range c.sessions {
+				openTime, err := time.ParseInLocation("2006-01-02 15:04", date+" "+value.Start, c.location)
+				if err != nil {
+					return nil, err
+				}
+				closeTime, err := time.ParseInLocation("2006-01-02 15:04", date+" "+value.End, c.location)
+				if err != nil {
+					return nil, err
+				}
+				sessions = append(sessions, markets.CalendarSession{Open: openTime.UTC(), Close: closeTime.UTC()})
+			}
+			result = append(result, markets.CalendarDay{ExchangeID: "SSE", TradeDate: date, Timezone: c.location.String(), Status: "open", Sessions: sessions})
+		}
+		day = day.AddDate(0, 0, 1)
+	}
+	return result, nil
 }

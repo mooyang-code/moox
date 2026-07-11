@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	cryptomarket "github.com/mooyang-code/moox/modules/collector/internal/markets/crypto"
 	"github.com/mooyang-code/moox/modules/collector/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/collector/internal/providers"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
@@ -79,6 +80,25 @@ func TestInstrumentPipelineE2E_SourceAndUnifiedRecordsUseStableGeneration(t *tes
 	}
 }
 
+func TestCalendarPipelineE2E_MaterializesPolicyIntoPebble(t *testing.T) {
+	generation := fixedE2ETime
+	access, err := testkit.Open(t.TempDir(), []testkit.DatasetSchema{calendarDatasetSchema("crypto_binance", "calendar")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = access.Close() })
+	store := storageio.NewClientWithAccess(access, nil, []storageio.Binding{{SpaceID: "crypto_binance", DatasetID: "calendar", Role: storageio.RoleUnifiedData, Feed: "calendar"}})
+	pipe := pipeline.CalendarPipeline{Policy: cryptomarket.CalendarPolicy{TwentyFourSeven: true, ExchangeID: "BINANCE"}, Store: store, DatasetID: "calendar", Generation: generation}
+	result, err := pipe.Materialize(context.Background(), pipeline.CalendarRequest{Start: generation, End: generation.Add(24 * time.Hour), Limit: 10})
+	if err != nil || result.Rows != 2 || !result.Complete {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	rsp, err := access.ReadRecordRows(context.Background(), &storagepb.ReadRecordRowsReq{Keys: []*storagepb.RecordKey{{SpaceId: "crypto_binance", DatasetId: "calendar", RecordId: "BINANCE|2026-07-11", Version: generation.Format(time.RFC3339Nano)}}})
+	if err != nil || len(rsp.GetRows()) != 1 {
+		t.Fatalf("rsp=%+v err=%v", rsp, err)
+	}
+}
+
 func readUnified(t *testing.T, store *storageio.Client) *marketdata.ResolvedKline {
 	t.Helper()
 	value, err := store.Unified(context.Background(), "crypto_binance", "spot_kline", "BTC-USDT", marketdata.FrequencyHour, fixedE2ETime.Add(-time.Hour))
@@ -128,6 +148,11 @@ func instrumentDatasetSchema(spaceID, datasetID string, unified bool) testkit.Da
 			columns[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME
 		}
 	}
+	return testkit.DatasetSchema{SpaceID: spaceID, DatasetID: datasetID, Columns: columns}
+}
+
+func calendarDatasetSchema(spaceID, datasetID string) testkit.DatasetSchema {
+	columns := map[string]storagepb.FieldValueType{"exchange_id": storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "trade_date": storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "timezone": storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "session_status": storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "sessions_json": storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "open_time": storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME, "close_time": storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME, "generation": storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME}
 	return testkit.DatasetSchema{SpaceID: spaceID, DatasetID: datasetID, Columns: columns}
 }
 

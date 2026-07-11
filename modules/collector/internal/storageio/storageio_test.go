@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/coverage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -29,6 +30,20 @@ func TestProviderAndUnifiedWritersEnforceDatasetRoles(t *testing.T) {
 	}
 	if len(access.timeReq.GetRows()[0].GetColumns()) < 12 {
 		t.Fatalf("exact and numeric columns missing: %+v", access.timeReq.GetRows()[0])
+	}
+}
+
+func TestCalendarWriterUsesGenerationAsStableRecordVersion(t *testing.T) {
+	generation := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	access := &fakeAccess{}
+	c := NewClientWithAccess(access, nil, []Binding{{SpaceID: "crypto_binance", DatasetID: "calendar", Role: RoleUnifiedData, Feed: "calendar"}})
+	day := markets.CalendarDay{ExchangeID: "BINANCE", TradeDate: "2026-07-11", Timezone: "UTC", Status: "open", Sessions: []markets.CalendarSession{{Open: generation, Close: generation.Add(24 * time.Hour)}}}
+	if err := c.WriteCalendarDays(context.Background(), "calendar", generation, []markets.CalendarDay{day}); err != nil {
+		t.Fatal(err)
+	}
+	row := access.recordReq.GetRows()[0]
+	if row.GetKey().GetRecordId() != "BINANCE|2026-07-11" || row.GetKey().GetVersion() != generation.Format(time.RFC3339Nano) || access.recordReq.GetWriteMode() != storagepb.RowWriteMode_ROW_WRITE_MODE_REPLACE {
+		t.Fatalf("row=%+v", row)
 	}
 }
 

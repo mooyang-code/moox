@@ -3,6 +3,7 @@ package markets
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/packages/marketmanifest"
@@ -21,7 +22,17 @@ type Descriptor struct {
 // The policy interfaces are intentionally narrow. Individual market packages own
 // their concrete policies; the registry only needs stable identity and lifecycle.
 type UniversePolicy interface{}
-type CalendarPolicy interface{}
+type CalendarSession struct{ Open, Close time.Time }
+type CalendarDay struct {
+	ExchangeID marketdata.ExchangeID
+	TradeDate  string
+	Timezone   string
+	Status     string
+	Sessions   []CalendarSession
+}
+type CalendarPolicy interface {
+	TradingDays(time.Time, time.Time) ([]CalendarDay, error)
+}
 type SymbolPolicy interface{}
 type RoutingPolicy interface{}
 type QualityPolicy interface{}
