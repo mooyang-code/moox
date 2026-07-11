@@ -72,6 +72,13 @@ func TestBuildJobItemUsesWindowedJobItemIDAndStableTaskID(t *testing.T) {
 	}
 }
 
+func TestBuildJobItemPreservesPlannerScheduleWindow(t *testing.T) {
+	item := buildJobItem(domain.TaskInstance{SpaceID: "crypto_binance", RuleID: "rule", TaskID: "task", TaskParams: `{"job_type":"collect.calendar","schedule_window":"2026-07-11T02:00:00Z","schedule_interval":"1h"}`})
+	if item.GetJobItemId() != "task:2026-07-11T02:00:00Z" || item.GetParams().AsMap()["schedule_window"] != "2026-07-11T02:00:00Z" {
+		t.Fatalf("item=%+v", item)
+	}
+}
+
 func TestBuildJobItemDefaultsRoutingFromDataType(t *testing.T) {
 	item := buildJobItem(domain.TaskInstance{
 		SpaceID:    "space-a",

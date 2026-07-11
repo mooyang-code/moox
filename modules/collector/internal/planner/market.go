@@ -80,8 +80,8 @@ func (p MarketPlanner) PlanKline(ctx context.Context, request MarketKlinePlanReq
 	taskID := domain.StableMarketKlineTaskID(string(request.MarketID), request.UnifiedDatasetID, request.SubjectID, string(request.Frequency))
 	providerLeaseKey := string(request.MarketID) + "|" + string(selected.ProviderID) + "|" + fixedWindow
 	resolutionLeaseKey := string(request.MarketID) + "|" + request.UnifiedDatasetID + "|" + request.SubjectID + "|" + string(request.Frequency) + "|" + fixedWindow
-	providerLeaseID := stablePlanID("provider", providerLeaseKey, request.LeaseEpoch)
-	resolutionLeaseID := stablePlanID("resolution", resolutionLeaseKey, request.LeaseEpoch)
+	providerLeaseID := stablePlanID("provider", providerLeaseKey)
+	resolutionLeaseID := stablePlanID("resolution", resolutionLeaseKey)
 	owner := stablePlanID("attempt", taskID, request.ScheduleWindow.UTC().Unix())
 	for _, lease := range []repository.MarketLease{
 		{LeaseID: providerLeaseID, LeaseType: "provider", LeaseKey: providerLeaseKey, Epoch: request.LeaseEpoch, OwnerID: owner, ExpiresAt: expiresAt},
@@ -111,8 +111,12 @@ func (p MarketPlanner) PlanKline(ctx context.Context, request MarketKlinePlanReq
 	return domain.TaskInstance{SpaceID: request.SpaceID, TaskID: taskID, RuleID: request.RuleID, Exchange: string(request.ExchangeID), Market: string(request.ProductType), DataType: "kline", DatasetID: request.UnifiedDatasetID, SubjectID: request.SubjectID, Symbol: selected.ProviderSymbol, Interval: string(request.Frequency), LastExecStatus: domain.InstanceStatusPending, TaskParams: string(raw), Result: "{}", CreateTime: now, ModifyTime: now}, nil
 }
 
-func stablePlanID(kind, key string, epoch any) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%v", kind, key, epoch)))
+func stablePlanID(kind, key string, suffix ...any) string {
+	value := fmt.Sprintf("%s|%s", kind, key)
+	for _, item := range suffix {
+		value += fmt.Sprintf("|%v", item)
+	}
+	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
 

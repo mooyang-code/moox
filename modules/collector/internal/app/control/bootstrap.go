@@ -63,6 +63,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		StorageMetadataTarget: deps.StorageMetadataTarget,
 		StorageAccessTarget:   deps.StorageAccessTarget,
 		MutationGuard:         leader,
+		MarketManifests:       manifests,
 	})
 	taskpublisher.SetDefaultOutboxPublisher(&taskpublisher.OutboxPublisher{Client: taskpublisher.New(taskpublisher.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, StorageMetadataTarget: deps.StorageMetadataTarget, StorageAccessTarget: deps.StorageAccessTarget, Auth: taskpublisherAuth(deps.ServiceAuth)}), Repository: repository.NewMarketAttemptRepository(dbm.DB()), Guard: leader})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)

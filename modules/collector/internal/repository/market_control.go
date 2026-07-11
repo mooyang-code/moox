@@ -25,8 +25,8 @@ type MarketLease struct {
 func (MarketLease) TableName() string { return "t_collector_market_leases" }
 
 type QuotaWindow struct {
-	WindowSeconds int64
-	Limit         int64
+	WindowSeconds int64 `json:"window_seconds"`
+	Limit         int64 `json:"limit"`
 }
 type PermitRequest struct {
 	ProviderID, ScopeKey, EndpointClass string

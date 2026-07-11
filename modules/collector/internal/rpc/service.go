@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/repository"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	"github.com/mooyang-code/moox/packages/marketmanifest"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -29,6 +30,7 @@ type Dependencies struct {
 	StorageMetadataTarget string
 	StorageAccessTarget   string
 	MutationGuard         interface{ RequireLeader(context.Context) error }
+	MarketManifests       []marketmanifest.Manifest
 }
 
 // Service implements the independent CollectMgr RPC service.
@@ -42,11 +44,21 @@ type Service struct {
 	marketControl *repository.MarketControlRepository
 	attempts      *repository.MarketAttemptRepository
 	mutationGuard interface{ RequireLeader(context.Context) error }
+	db            *gorm.DB
+	manifests     map[string]marketmanifest.Manifest
+	now           func() time.Time
 }
 
 // New creates a collector management service.
 func New(db *gorm.DB, deps Dependencies) *Service {
+	manifestMap := make(map[string]marketmanifest.Manifest, len(deps.MarketManifests))
+	for _, manifest := range deps.MarketManifests {
+		manifestMap[manifest.MarketID] = manifest
+	}
 	return &Service{
+		db:            db,
+		manifests:     manifestMap,
+		now:           time.Now,
 		ruleRepo:      repository.NewTaskRuleRepository(db),
 		instanceRepo:  repository.NewTaskInstanceRepository(db),
 		marketControl: repository.NewMarketControlRepository(db),
@@ -320,6 +332,9 @@ func (s *Service) RecalculateAllTaskInstances(ctx context.Context, req *pb.Recal
 }
 
 func (s *Service) recalculateRule(ctx context.Context, rule *domain.TaskRule) (int, error) {
+	if strings.TrimSpace(rule.MarketID) != "" {
+		return s.recalculateMarketRule(ctx, rule)
+	}
 	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Exchange, rule.DataType)
 	if err != nil {
 		return 0, fmt.Errorf("parse rule %s params: %w", rule.RuleID, err)

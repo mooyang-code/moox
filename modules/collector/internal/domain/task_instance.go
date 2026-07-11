@@ -89,3 +89,13 @@ func StableMarketKlineTaskID(marketID, unifiedDatasetID, subjectID, frequency st
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])[:32]
 }
+func StableMarketInstrumentTaskID(marketID, exchangeID, productType, datasetID string) string {
+	return stableLogicalTaskID(marketID, "instrument", exchangeID, productType, datasetID)
+}
+func StableMarketCalendarTaskID(marketID, exchangeID, datasetID string) string {
+	return stableLogicalTaskID(marketID, "calendar", exchangeID, datasetID)
+}
+func stableLogicalTaskID(parts ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return hex.EncodeToString(sum[:])[:32]
+}

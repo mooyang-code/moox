@@ -314,7 +314,10 @@ func buildJobItem(instance domain.TaskInstance) *pb.JobItem {
 	payload := parsePayload(instance.TaskParams)
 	payload["space_id"] = instance.SpaceID
 	payload["task_id"] = instance.TaskID
-	window := scheduleWindow(time.Now().UTC(), valueString(payload, "schedule_interval", "30m"))
+	window := valueString(payload, "schedule_window", "")
+	if window == "" {
+		window = scheduleWindow(time.Now().UTC(), valueString(payload, "schedule_interval", "30m"))
+	}
 	payload["schedule_window"] = window
 	payloadStruct, _ := structpb.NewStruct(payload)
 	return &pb.JobItem{
