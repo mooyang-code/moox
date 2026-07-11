@@ -8,14 +8,17 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/builtin"
 	"github.com/mooyang-code/moox/packages/marketmanifest"
 )
 
 type Lock struct {
-	Version int               `json:"version"`
-	Markets map[string]Market `json:"markets"`
+	Version       int               `json:"version"`
+	Markets       map[string]Market `json:"markets"`
+	FactorySHA256 string            `json:"factory_sha256"`
 }
 type Market struct {
 	ManifestSHA256 string `json:"manifest_sha256"`
@@ -28,7 +31,9 @@ func Generate(root string) (Lock, error) {
 	if err != nil {
 		return Lock{}, err
 	}
-	lock := Lock{Version: 1, Markets: make(map[string]Market, len(manifests))}
+	catalog := builtin.Default(filepath.Join(root, "stock_cn", "calendar.yaml"))
+	factoryIdentity := strings.Join(catalog.MarketIDs(), ",") + "|" + strings.Join(catalog.ProviderIDs(), ",")
+	lock := Lock{Version: 1, Markets: make(map[string]Market, len(manifests)), FactorySHA256: digest([]byte(factoryIdentity))}
 	for _, manifest := range manifests {
 		dir := filepath.Join(root, manifest.MarketID)
 		manifestBytes, err := os.ReadFile(filepath.Join(dir, "market.yaml"))
@@ -61,6 +66,9 @@ func (l Lock) Validate(root string) error {
 	}
 	if l.Version != expected.Version {
 		return fmt.Errorf("readiness lock version mismatch")
+	}
+	if l.FactorySHA256 != expected.FactorySHA256 {
+		return fmt.Errorf("readiness lock factory catalog mismatch")
 	}
 	if len(l.Markets) != len(expected.Markets) {
 		return fmt.Errorf("readiness lock market count mismatch")

@@ -54,6 +54,14 @@ func (c Catalog) ProviderIDs() []string {
 	sort.Strings(ids)
 	return ids
 }
+func (c Catalog) MarketIDs() []string {
+	ids := make([]string, 0, len(c.MarketFactories))
+	for id := range c.MarketFactories {
+		ids = append(ids, string(id))
+	}
+	sort.Strings(ids)
+	return ids
+}
 func (c Catalog) ValidateManifests(manifests []marketmanifest.Manifest) error {
 	for _, manifest := range manifests {
 		if c.MarketFactories[marketdata.MarketID(manifest.MarketID)] == nil {
