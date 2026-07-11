@@ -32,10 +32,12 @@ SQLite       JetStream       Binance / OKX
 1. `PlaceOrder` 校验 Decimal 和账户资金，在一个事务中创建订单、冻结资金并写入 Outbox。
 2. Outbox Relay 发布 `moox.trade.execution.slice_ready.v1`。
 3. durable consumer 在调用交易所前把订单推进到 `SUBMITTING`；明确拒绝、成功和结果未知分别落不同状态。
-4. 成交回报或对账结果按交易所成交号幂等入库，并在同一事务内更新订单、账本余额和仓位。
+4. Binance/OKX 鉴权私有 WebSocket 将成交标准化；成交回报或 REST 缺口修复结果按交易所成交号幂等入库，并在同一事务内更新订单、账本余额和仓位。
 5. 服务在 `SUBMITTING`、`SUBMIT_UNKNOWN`、`CANCELING` 或 `CANCEL_UNKNOWN` 重启时先查询交易所，再决定后续动作，禁止盲目重复下单。
 
 定时循环只用于修复中断、补齐私有回报缺口和对账，不是订单或调仓的主触发方式。
+
+私有流由生产 supervisor 按 Space+Channel 去重维护，连接退出后重试。Binance 维护 listen key；OKX 完成 login、orders channel 订阅和 ping/pong 保活。WebSocket 不是事实源，断线后的交易所 REST 对账仍是强制兜底。
 
 ## 资金与合约
 

@@ -82,6 +82,11 @@ server:
       network: tcp
       protocol: http
       timeout: 15000
+    - name: trpc.moox.trade.TradeOpsSvc
+      port: 11212
+      network: tcp
+      protocol: http
+      timeout: 15000
 
     - name: trpc.moox.trade.metrics.timer
       port: 11210

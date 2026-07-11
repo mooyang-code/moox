@@ -44,7 +44,8 @@ type bound struct {
 	market     legacy.MarketType
 }
 
-func (b *bound) MarketType() string { return string(b.market) }
+func (b *bound) MarketType() string   { return string(b.market) }
+func (b *bound) ExchangeName() string { return b.adapter.Name() }
 
 func (b *bound) Place(ctx context.Context, r legacy.PlaceRequest) (legacy.ExchangeOrderResult, error) {
 	out, err := b.adapter.PlaceOrder(ctx, b.credential, &legacy.PlaceOrderReq{Market: b.market, Symbol: r.Symbol, Side: legacy.OrderSide(strings.ToLower(r.Side)), Type: legacy.OrderType(strings.ToLower(r.Type)), TimeInForce: r.TimeInForce, Price: r.Price.String(), Quantity: r.Quantity.String(), ClientOrderID: r.ClientOrderID, ReduceOnly: r.ReduceOnly})
@@ -99,8 +100,56 @@ func (b *bound) Rules(ctx context.Context, symbol string) (instrument.Rules, err
 	}
 	return instrument.Rules{}, errors.New("trade: instrument not found")
 }
-func (b *bound) SubscribePrivate(context.Context, legacy.PrivateEventHandler) error {
-	return errors.New("trade: private stream not available for adapter")
+func (b *bound) SubscribePrivate(ctx context.Context, handler legacy.PrivateEventHandler) error {
+	stream, ok := b.adapter.(legacy.PrivateStreamAdapter)
+	if !ok {
+		return errors.New("trade: private stream not available for adapter")
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	ph := &privateHandler{ctx: streamCtx, handler: handler, cancel: cancel}
+	err := stream.SubscribePrivate(streamCtx, b.credential, b.market, ph)
+	if ph.err != nil {
+		return ph.err
+	}
+	return err
+}
+
+type privateHandler struct {
+	ctx     context.Context
+	handler legacy.PrivateEventHandler
+	cancel  context.CancelFunc
+	err     error
+}
+
+func (h *privateHandler) OnOrderUpdate(*legacy.OrderEvent)       {}
+func (h *privateHandler) OnPositionUpdate(*legacy.PositionEvent) {}
+func (h *privateHandler) OnBalanceUpdate(*legacy.BalanceEvent)   {}
+func (h *privateHandler) OnError(error)                          {}
+func (h *privateHandler) OnTrade(event *legacy.TradeEvent) {
+	if event == nil || h.handler == nil {
+		return
+	}
+	trade := event.Trade
+	quantity, err := shared.ParseDecimal(trade.Quantity)
+	if err != nil {
+		return
+	}
+	price, err := shared.ParseDecimal(trade.Price)
+	if err != nil {
+		return
+	}
+	fee := shared.Zero()
+	if trade.Fee != "" {
+		fee, err = shared.ParseDecimal(trade.Fee)
+		if err != nil {
+			return
+		}
+	}
+	err = h.handler(h.ctx, legacy.FillEvent{ExchangeTradeID: trade.ExchangeTradeID, ExchangeOrderID: trade.OrderID, ClientOrderID: trade.ClientOrderID, Symbol: trade.Symbol, Side: strings.ToUpper(string(trade.Side)), Quantity: quantity, Price: price, Fee: fee, FeeCurrency: trade.FeeCurrency})
+	if err != nil {
+		h.err = err
+		h.cancel()
+	}
 }
 func (b *bound) ListFills(ctx context.Context, symbol, orderID string) ([]legacy.FillEvent, error) {
 	rows, err := b.adapter.ListTrades(ctx, b.credential, &legacy.ListTradesReq{Market: b.market, Symbol: symbol, OrderID: orderID, Limit: 500})

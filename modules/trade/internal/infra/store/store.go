@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/position"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/observability"
 	"github.com/mooyang-code/moox/modules/trade/schema"
 	"gorm.io/gorm"
 )
@@ -20,12 +21,16 @@ import (
 var ErrConflict = errors.New("trade: store conflict")
 
 type Store struct{ db *gorm.DB }
-type Tx struct{ db *gorm.DB }
+type Tx struct {
+	db  *gorm.DB
+	ctx context.Context
+}
 type OutboxRecord struct {
-	ID               int64
-	MessageID, Topic string
-	Payload          []byte
-	Attempts         int
+	ID                 int64
+	MessageID, Topic   string
+	Payload            []byte
+	Attempts           int
+	TraceID, RequestID string
 }
 type SagaRecord struct {
 	SpaceID, SagaID, Type, State, OrderID, ReplacementOrderID, Payload, LastError string
@@ -40,6 +45,15 @@ type RebalanceLegRecord struct {
 	ReduceOnly                                                                                                      bool
 	Sequence                                                                                                        int
 	DependsOn                                                                                                       []int
+}
+type ControlRecord struct {
+	TargetType, TargetID string
+	Paused               bool
+	Reason               string
+}
+type HealthStats struct {
+	OpenOrders, UnknownOrders, PendingOutbox int64
+	OldestOutbox                             time.Time
 }
 type BalanceRecord struct {
 	AccountID, Asset, Bucket, Amount string
@@ -77,7 +91,7 @@ func (s *Store) Close() error {
 	return db.Close()
 }
 func (s *Store) Transaction(ctx context.Context, fn func(*Tx) error) error {
-	return s.db.WithContext(ctx).Transaction(func(db *gorm.DB) error { return fn(&Tx{db: db}) })
+	return s.db.WithContext(ctx).Transaction(func(db *gorm.DB) error { return fn(&Tx{db: db, ctx: ctx}) })
 }
 func (s *Store) DBForTest() *gorm.DB { return s.db }
 
@@ -168,6 +182,52 @@ func (s *Store) GetOrder(ctx context.Context, space, id string) (OrderRecord, er
 func (s *Store) GetOrderByClientID(ctx context.Context, space, id string) (OrderRecord, error) {
 	return getOrder(s.db.WithContext(ctx), "c_client_order_id", space, id)
 }
+func (s *Store) GetOrderByExchangeID(ctx context.Context, space, id string) (OrderRecord, error) {
+	return getOrder(s.db.WithContext(ctx), "c_exchange_order_id", space, id)
+}
+func (s *Store) GetOrderForPrivateFill(ctx context.Context, space, channel, symbol, exchangeID string) (OrderRecord, error) {
+	var id string
+	err := s.db.WithContext(ctx).Raw("SELECT c_order_id FROM t_trade_order_aggregates WHERE c_space_id=? AND c_channel_id=? AND c_symbol=? AND c_exchange_order_id=? LIMIT 1", space, channel, symbol, exchangeID).Scan(&id).Error
+	if err != nil {
+		return OrderRecord{}, err
+	}
+	if id == "" {
+		return OrderRecord{}, gorm.ErrRecordNotFound
+	}
+	return s.GetOrder(ctx, space, id)
+}
+func (s *Store) SetControl(ctx context.Context, space string, control ControlRecord) error {
+	return s.db.WithContext(ctx).Exec("INSERT INTO t_trade_controls(c_space_id,c_target_type,c_target_id,c_paused,c_reason,c_mtime) VALUES(?,?,?,?,?,?) ON CONFLICT(c_space_id,c_target_type,c_target_id) DO UPDATE SET c_paused=excluded.c_paused,c_reason=excluded.c_reason,c_mtime=excluded.c_mtime", space, control.TargetType, control.TargetID, control.Paused, control.Reason, time.Now().UTC()).Error
+}
+func (s *Store) IsPaused(ctx context.Context, space, accountID, channelID string) (bool, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_trade_controls WHERE c_space_id=? AND c_paused=1 AND ((c_target_type='account' AND c_target_id=?) OR (c_target_type='channel' AND c_target_id=?))", space, accountID, channelID).Scan(&count).Error
+	return count > 0, err
+}
+func (s *Store) Health(ctx context.Context) (HealthStats, error) {
+	var stats HealthStats
+	if err := s.db.WithContext(ctx).Exec("SELECT 1").Error; err != nil {
+		return stats, err
+	}
+	if err := s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_trade_order_aggregates WHERE c_state IN ('OPEN','PARTIALLY_FILLED','SUBMITTING','SUBMIT_UNKNOWN','CANCELING','CANCEL_UNKNOWN')").Scan(&stats.OpenOrders).Error; err != nil {
+		return stats, err
+	}
+	if err := s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_trade_order_aggregates WHERE c_state IN ('SUBMIT_UNKNOWN','CANCEL_UNKNOWN')").Scan(&stats.UnknownOrders).Error; err != nil {
+		return stats, err
+	}
+	var outbox struct {
+		Count  int64      `gorm:"column:c_count"`
+		Oldest *time.Time `gorm:"column:c_oldest"`
+	}
+	if err := s.db.WithContext(ctx).Raw("SELECT COUNT(1) c_count, MIN(c_ctime) c_oldest FROM t_trade_outbox WHERE c_published_at IS NULL").Scan(&outbox).Error; err != nil {
+		return stats, err
+	}
+	stats.PendingOutbox = outbox.Count
+	if outbox.Oldest != nil {
+		stats.OldestOutbox = outbox.Oldest.UTC()
+	}
+	return stats, nil
+}
 func (s *Store) ListRecoverableOrders(ctx context.Context, limit int) ([]OrderRecord, error) {
 	if limit <= 0 {
 		limit = 100
@@ -190,6 +250,9 @@ func (s *Store) ListRecoverableOrders(ctx context.Context, limit int) ([]OrderRe
 	return out, nil
 }
 func (s *Store) ListOpenOrders(ctx context.Context, limit int) ([]OrderRecord, error) {
+	return s.ListOpenOrdersScoped(ctx, "", "", "", limit)
+}
+func (s *Store) ListOpenOrdersScoped(ctx context.Context, space, account, channel string, limit int) ([]OrderRecord, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -197,7 +260,23 @@ func (s *Store) ListOpenOrders(ctx context.Context, limit int) ([]OrderRecord, e
 		SpaceID string `gorm:"column:c_space_id"`
 		OrderID string `gorm:"column:c_order_id"`
 	}
-	if err := s.db.WithContext(ctx).Raw("SELECT c_space_id,c_order_id FROM t_trade_order_aggregates WHERE c_state IN ('OPEN','PARTIALLY_FILLED','SUBMIT_UNKNOWN','CANCELING','CANCEL_UNKNOWN') ORDER BY c_mtime LIMIT ?", limit).Scan(&refs).Error; err != nil {
+	query := "SELECT c_space_id,c_order_id FROM t_trade_order_aggregates WHERE c_state IN ('OPEN','PARTIALLY_FILLED','SUBMIT_UNKNOWN','CANCELING','CANCEL_UNKNOWN')"
+	args := []any{}
+	if space != "" {
+		query += " AND c_space_id=?"
+		args = append(args, space)
+	}
+	if account != "" {
+		query += " AND c_account_id=?"
+		args = append(args, account)
+	}
+	if channel != "" {
+		query += " AND c_channel_id=?"
+		args = append(args, channel)
+	}
+	query += " ORDER BY c_mtime LIMIT ?"
+	args = append(args, limit)
+	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&refs).Error; err != nil {
 		return nil, err
 	}
 	out := make([]OrderRecord, 0, len(refs))
@@ -410,7 +489,11 @@ func (s *Store) RecordInbox(ctx context.Context, consumer, id, topic string) (bo
 	return fresh, err
 }
 func (t *Tx) AddOutbox(id, topic string, payload []byte) error {
-	return t.db.Exec("INSERT INTO t_trade_outbox(c_message_id,c_topic,c_payload) VALUES(?,?,?)", id, topic, payload).Error
+	trace := observability.TraceFromContext(t.ctx)
+	return t.db.Exec("INSERT INTO t_trade_outbox(c_message_id,c_topic,c_payload,c_trace_id,c_request_id) VALUES(?,?,?,?,?)", id, topic, payload, trace.TraceID, trace.RequestID).Error
+}
+func (s *Store) EnqueueOutbox(ctx context.Context, id, topic string, payload []byte) error {
+	return s.Transaction(ctx, func(tx *Tx) error { return tx.AddOutbox(id, topic, payload) })
 }
 func (t *Tx) CreateSaga(s SagaRecord) error {
 	return t.db.Exec("INSERT INTO t_trade_sagas(c_space_id,c_saga_id,c_type,c_state,c_order_id,c_replacement_order_id,c_payload,c_version,c_last_error) VALUES(?,?,?,?,?,?,?,?,?)", s.SpaceID, s.SagaID, s.Type, s.State, s.OrderID, s.ReplacementOrderID, s.Payload, s.Version, s.LastError).Error
@@ -428,6 +511,9 @@ func (s *Store) GetSaga(ctx context.Context, space, id string) (SagaRecord, erro
 		LastError          string `gorm:"column:c_last_error"`
 	}
 	e := s.db.WithContext(ctx).Raw("SELECT c_space_id,c_saga_id,c_type,c_state,c_order_id,c_replacement_order_id,c_payload,c_version,c_last_error FROM t_trade_sagas WHERE c_space_id=? AND c_saga_id=?", space, id).Scan(&r).Error
+	if e == nil && r.SagaID == "" {
+		e = gorm.ErrRecordNotFound
+	}
 	return SagaRecord{r.SpaceID, r.SagaID, r.Type, r.State, r.OrderID, r.ReplacementOrderID, r.Payload, r.LastError, r.Version}, e
 }
 func (s *Store) GetSagaByReplacementOrder(ctx context.Context, space, orderID string) (SagaRecord, error) {
@@ -544,6 +630,8 @@ func (s *Store) ClaimOutbox(ctx context.Context, limit int, lease time.Duration)
 		Topic     string `gorm:"column:c_topic"`
 		Payload   []byte `gorm:"column:c_payload"`
 		Attempts  int    `gorm:"column:c_attempts"`
+		TraceID   string `gorm:"column:c_trace_id"`
+		RequestID string `gorm:"column:c_request_id"`
 	}
 	token := fmt.Sprintf("%d-%d", time.Now().UnixNano(), claimSequence.Add(1))
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -551,11 +639,11 @@ func (s *Store) ClaimOutbox(ctx context.Context, limit int, lease time.Duration)
 		if e := tx.Exec("UPDATE t_trade_outbox SET c_lease_until=?,c_attempts=c_attempts+1,c_claim_token=? WHERE c_id IN (SELECT c_id FROM t_trade_outbox WHERE c_status='PENDING' AND (c_lease_until IS NULL OR c_lease_until<?) ORDER BY c_id LIMIT ?)", now.Add(lease), token, now, limit).Error; e != nil {
 			return e
 		}
-		return tx.Raw("SELECT c_id,c_message_id,c_topic,c_payload,c_attempts FROM t_trade_outbox WHERE c_claim_token=? ORDER BY c_id", token).Scan(&rows).Error
+		return tx.Raw("SELECT c_id,c_message_id,c_topic,c_payload,c_attempts,c_trace_id,c_request_id FROM t_trade_outbox WHERE c_claim_token=? ORDER BY c_id", token).Scan(&rows).Error
 	})
 	out := make([]OutboxRecord, len(rows))
 	for i, r := range rows {
-		out[i] = OutboxRecord{ID: r.ID, MessageID: r.MessageID, Topic: r.Topic, Payload: r.Payload, Attempts: r.Attempts + 1}
+		out[i] = OutboxRecord{ID: r.ID, MessageID: r.MessageID, Topic: r.Topic, Payload: r.Payload, Attempts: r.Attempts + 1, TraceID: r.TraceID, RequestID: r.RequestID}
 	}
 	return out, err
 }
@@ -565,8 +653,8 @@ func (s *Store) MarkOutboxPublished(ctx context.Context, id int64) error {
 func (s *Store) ReleaseOutbox(ctx context.Context, id int64, msg string) error {
 	return s.db.WithContext(ctx).Exec("UPDATE t_trade_outbox SET c_lease_until=NULL,c_claim_token='',c_last_error=? WHERE c_id=?", msg, id).Error
 }
-func (t *Tx) InsertFill(space, fillID, exchangeID, orderID, qty, price, fee, feeAsset string) (bool, error) {
-	res := t.db.Exec("INSERT OR IGNORE INTO t_trade_fill_events(c_space_id,c_fill_id,c_exchange_trade_id,c_order_id,c_quantity,c_price,c_fee,c_fee_asset) VALUES(?,?,?,?,?,?,?,?)", space, fillID, exchangeID, orderID, qty, price, fee, feeAsset)
+func (t *Tx) InsertFill(space, fillID, exchangeID, account, channel, symbol, orderID, qty, price, fee, feeAsset string) (bool, error) {
+	res := t.db.Exec("INSERT OR IGNORE INTO t_trade_fill_events(c_space_id,c_fill_id,c_exchange_trade_id,c_account_id,c_channel_id,c_symbol,c_order_id,c_quantity,c_price,c_fee,c_fee_asset) VALUES(?,?,?,?,?,?,?,?,?,?,?)", space, fillID, exchangeID, account, channel, symbol, orderID, qty, price, fee, feeAsset)
 	return res.RowsAffected == 1, res.Error
 }
 func (t *Tx) PostLedger(space string, posting ledger.Transaction) error {

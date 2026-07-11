@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
@@ -35,7 +36,7 @@ func (x *scriptedExchange) Place(_ context.Context, r exchange.PlaceRequest) (ex
 		x.uncertain = false
 		return exchange.ExchangeOrderResult{}, &exchange.ClassifiedError{Category: exchange.ErrorTransportUncertain, Err: errors.New("timeout after write")}
 	}
-	return exchange.ExchangeOrderResult{ExchangeOrderID: "ex-1", ClientOrderID: r.ClientOrderID, Status: "OPEN", FilledQuantity: shared.Zero()}, nil
+	return exchange.ExchangeOrderResult{ExchangeOrderID: "ex-" + r.ClientOrderID, ClientOrderID: r.ClientOrderID, Status: "OPEN", FilledQuantity: shared.Zero()}, nil
 }
 func (x *scriptedExchange) Cancel(context.Context, string, string) (exchange.ExchangeOrderResult, error) {
 	return exchange.ExchangeOrderResult{Status: "CANCELED"}, nil
@@ -355,6 +356,48 @@ func TestContractSellPriceImprovementUsesReservedMargin(t *testing.T) {
 	}
 	assertScalar(t, s, "SELECT c_amount FROM t_trade_balance_projections WHERE c_space_id='space' AND c_account_id='account' AND c_asset='USDT' AND c_bucket='frozen'", "0")
 	assertScalar(t, s, "SELECT c_amount FROM t_trade_balance_projections WHERE c_space_id='space' AND c_account_id='account' AND c_asset='USDT' AND c_bucket='margin'", "10")
+}
+
+func TestOperationalPauseFailsClosedAndCanResume(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.ReconcileBalances(ctx, "space", "account", map[string]map[string]shared.Decimal{"USDT": {"available": shared.MustDecimal("20")}}); err != nil {
+		t.Fatal(err)
+	}
+	engine := &command.Engine{Store: s, Adapter: &scriptedExchange{}}
+	if err = s.SetControl(ctx, "space", store.ControlRecord{TargetType: "account", TargetID: "account", Paused: true, Reason: "risk review"}); err != nil {
+		t.Fatal(err)
+	}
+	input := command.PlaceInput{SpaceID: "space", OrderID: "paused", ClientOrderID: "paused-client", AccountID: "account", ChannelID: "channel", Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Side: "BUY", Quantity: "1", Price: "10"}
+	if _, err = engine.Place(ctx, input); err == nil {
+		t.Fatal("paused account accepted an order")
+	}
+	if err = s.SetControl(ctx, "space", store.ControlRecord{TargetType: "account", TargetID: "account", Paused: false}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = engine.Place(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReconcileNowCommandUsesOutbox(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.EnqueueOutbox(ctx, "reconcile-1", "moox.trade.reconciliation.requested.v1", []byte(`{"space_id":"space"}`)); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ClaimOutbox(ctx, 10, time.Minute)
+	if err != nil || len(rows) != 1 || rows[0].Topic != "moox.trade.reconciliation.requested.v1" {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
 }
 
 func assertScalar(t *testing.T, s *store.Store, query, want string) {

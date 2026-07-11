@@ -62,7 +62,7 @@ make deploy SERVER=user@host   # 等价于 deploy-moox.sh --no-storage --no-web-
 | 11401 | moox-cloudnode（转发） | `/api/admin/cloudnode/*` |
 | 11402 | moox-collector（转发） | `/api/admin/collectmgr/*` |
 | 20200-20202 | moox-storage（转发） | `/api/admin/storage_*/*` |
-| 11200-11208、11211 | moox-trade（转发） | `/api/admin/trade_*/*` |
+| 11200-11208、11211-11212 | moox-trade（转发） | `/api/admin/trade_*/*` |
 | 11001 | `trpc.moox.api.stdhttp` | 保留 HTTP service，当前不作为主网关入口 |
 | 11300 / 11301 / 11304 / 11305 | 定时器 | dnsproxy / dnsprobe / monitor / monitor cleanup |
 

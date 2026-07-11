@@ -48,11 +48,11 @@ func TestInboxAndFillIdempotency(t *testing.T) {
 		if e != nil || b {
 			t.Fatal("duplicate inbox applied")
 		}
-		a, e = tx.InsertFill("s", "f", "ef", "o", "1", "1", "0", "")
+		a, e = tx.InsertFill("s", "f", "ef", "a", "c", "BTCUSDT", "o", "1", "1", "0", "")
 		if e != nil || !a {
 			return e
 		}
-		b, e = tx.InsertFill("s", "f2", "ef", "o", "1", "1", "0", "")
+		b, e = tx.InsertFill("s", "f2", "ef", "a", "c", "BTCUSDT", "o", "1", "1", "0", "")
 		if e != nil || b {
 			t.Fatal("duplicate exchange fill applied")
 		}

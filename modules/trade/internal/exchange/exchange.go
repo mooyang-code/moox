@@ -61,6 +61,14 @@ type PrivateStream interface {
 	Close() error
 }
 
+// PrivateStreamAdapter is implemented by exchange adapters that provide an
+// authenticated account stream. SubscribePrivate blocks until the context is
+// canceled or the connection fails, allowing the bootstrap supervisor to
+// reconnect with bounded backoff.
+type PrivateStreamAdapter interface {
+	SubscribePrivate(ctx context.Context, cred Credential, market MarketType, handler StreamHandler) error
+}
+
 // StreamHandler 处理私有频道推送事件。
 type StreamHandler interface {
 	OnOrderUpdate(evt *OrderEvent)

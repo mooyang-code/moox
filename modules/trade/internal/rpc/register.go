@@ -20,6 +20,7 @@ const (
 	TradeQuerySvcName = "trpc.moox.trade.TradeQuerySvc"
 	PositionSvcName   = "trpc.moox.trade.PositionSvc"
 	RebalanceSvcName  = "trpc.moox.trade.RebalanceSvc"
+	TradeOpsSvcName   = "trpc.moox.trade.TradeOpsSvc"
 )
 
 // RegisterAll 把 9 个 service 注册到 trpc server。
@@ -35,4 +36,5 @@ func RegisterAll(s *server.Server, svc *service.Service, kernel ...*command.Engi
 	mooxpb.RegisterTradeQuerySvcService(s.Service(TradeQuerySvcName), h)
 	mooxpb.RegisterPositionSvcService(s.Service(PositionSvcName), h)
 	mooxpb.RegisterRebalanceSvcService(s.Service(RebalanceSvcName), h)
+	mooxpb.RegisterTradeOpsSvcService(s.Service(TradeOpsSvcName), h)
 }

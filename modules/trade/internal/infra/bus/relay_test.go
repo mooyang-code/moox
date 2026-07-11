@@ -3,6 +3,7 @@ package bus
 import (
 	"context"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/observability"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"path/filepath"
@@ -21,7 +22,8 @@ func TestRelayUsesStablePublicMessageContract(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	if e = s.Transaction(context.Background(), func(tx *store.Tx) error {
+	ctx := observability.WithTrace(context.Background(), observability.Trace{TraceID: "trace-1", RequestID: "request-1"})
+	if e = s.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.AddOutbox("m1", "moox.trade.order.state_changed.v1", []byte(`{"x":1}`))
 	}); e != nil {
 		t.Fatal(e)
@@ -31,7 +33,7 @@ func TestRelayUsesStablePublicMessageContract(t *testing.T) {
 	if e = r.RunOnce(context.Background(), 10); e != nil {
 		t.Fatal(e)
 	}
-	if len(p.msgs) != 1 || p.msgs[0].MessageId != "m1" || p.msgs[0].ProtocolVersion != 1 {
+	if len(p.msgs) != 1 || p.msgs[0].MessageId != "m1" || p.msgs[0].ProtocolVersion != 1 || p.msgs[0].GetTrace().GetTraceId() != "trace-1" || p.msgs[0].GetTrace().GetRequestId() != "request-1" {
 		t.Fatalf("%+v", p.msgs)
 	}
 }

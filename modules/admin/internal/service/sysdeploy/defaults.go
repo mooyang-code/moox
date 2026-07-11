@@ -41,6 +41,7 @@ func DefaultDeployments() []Deployment {
 		deployment("trade_tradeq", "trade", "http", "127.0.0.1", 11207, "trpc.moox.trade.TradeQuerySvc", "internal", "交易查询服务"),
 		deployment("trade_position", "trade", "http", "127.0.0.1", 11208, "trpc.moox.trade.PositionSvc", "internal", "持仓服务"),
 		deployment("trade_rebalance", "trade", "http", "127.0.0.1", 11211, "trpc.moox.trade.RebalanceSvc", "internal", "目标仓位调仓服务"),
+		deployment("trade_ops", "trade", "http", "127.0.0.1", 11212, "trpc.moox.trade.TradeOpsSvc", "internal", "交易暂停、对账与 Saga 运维服务"),
 	}
 	return rows
 }

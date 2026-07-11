@@ -7,6 +7,17 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
 
+type privateStateKey struct{}
+
+func WithPrivateStreamState(ctx context.Context, notify func(bool)) context.Context {
+	return context.WithValue(ctx, privateStateKey{}, notify)
+}
+func NotifyPrivateStreamState(ctx context.Context, ready bool) {
+	if fn, ok := ctx.Value(privateStateKey{}).(func(bool)); ok {
+		fn(ready)
+	}
+}
+
 type ErrorCategory string
 
 const (

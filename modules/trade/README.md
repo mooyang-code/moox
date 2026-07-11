@@ -19,7 +19,9 @@ test/                     跨组件端到端测试
 
 ## 服务
 
-账户、余额、资金、API 凭证、通道、交易操作、订单、成交、仓位服务使用端口 `11200-11208`；目标仓位调仓服务使用 `11211`。Admin 网关通过 `trade_*` deployment 转发。
+账户、余额、资金、API 凭证、通道、交易操作、订单、成交、仓位服务使用端口 `11200-11208`；目标仓位调仓服务使用 `11211`，运维控制服务使用 `11212`。Admin 网关通过 `trade_*` deployment 转发。
+
+生产启动器会为存在活动订单的通道维护 Binance/OKX 鉴权私有 WebSocket。私有流负责实时成交，REST `ListFills` 只负责断线缺口修复。两条路径使用相同的交易所成交号和 `FillHandler`，因此重复回报不会重复结算。
 
 ## 配置
 
@@ -28,6 +30,17 @@ test/                     跨组件端到端测试
 - `eventbus.execution_durable`：订单执行 consumer。
 - `eventbus.rebalance_durable`：调仓请求 consumer。
 - `eventbus.progress_durable`：成交后推进调仓依赖 legs 的 consumer。
+- `eventbus.reconciliation_durable`：立即对账命令 consumer。
+
+## 运维控制
+
+`TradeOpsSvc` 提供：
+
+- `SetPause`：按 Space 暂停或恢复账户、通道；暂停后新单安全拒绝。
+- `ReconcileNow`：通过 Outbox/EventBus 发起有界订单与成交对账。
+- `InspectSaga`：读取撤单换单 Saga 的状态、版本和最后错误。
+
+健康检查验证 Store 可写、EventBus 连接、Outbox 延迟、未知订单数量和活动订单的私有流监督状态。Prometheus 指标以 `moox_trade_` 为前缀，标签仅使用有限枚举，不包含订单号、通道号或 Symbol。
 - `security.encryption_key`：交易所凭证 AES-GCM 密钥。
 
 ## 构建与验证

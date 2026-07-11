@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
@@ -11,8 +12,10 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/observability"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	mooxpb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 // Server 实现 trade 模块全部 9 个 tRPC service 接口，委托 service.Service。
@@ -42,8 +45,61 @@ var _ mooxpb.OrderSvcService = (*Server)(nil)
 var _ mooxpb.TradeQuerySvcService = (*Server)(nil)
 var _ mooxpb.PositionSvcService = (*Server)(nil)
 var _ mooxpb.RebalanceSvcService = (*Server)(nil)
+var _ mooxpb.TradeOpsSvcService = (*Server)(nil)
+
+func withRPCTrace(ctx context.Context) context.Context {
+	return observability.WithTrace(ctx, observability.Trace{TraceID: string(trpc.GetMetaData(ctx, "trace_id")), RequestID: string(trpc.GetMetaData(ctx, "request_id"))})
+}
+
+func (h *Server) SetPause(ctx context.Context, req *mooxpb.SetTradePauseReq) (*mooxpb.SetTradePauseRsp, error) {
+	if h.kernel == nil {
+		return &mooxpb.SetTradePauseRsp{RetInfo: retInfo(mooxpb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
+	}
+	if req.GetTargetType() != "account" && req.GetTargetType() != "channel" {
+		return &mooxpb.SetTradePauseRsp{RetInfo: retInfo(mooxpb.ErrorCode_INVALID_PARAM, "target_type must be account or channel")}, nil
+	}
+	if req.GetTargetId() == "" {
+		return &mooxpb.SetTradePauseRsp{RetInfo: retInfo(mooxpb.ErrorCode_INVALID_PARAM, "target_id is required")}, nil
+	}
+	err := h.kernel.Store.SetControl(ctx, spaceID(ctx), store.ControlRecord{TargetType: req.GetTargetType(), TargetID: req.GetTargetId(), Paused: req.GetPaused(), Reason: req.GetReason()})
+	if err != nil {
+		return &mooxpb.SetTradePauseRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	return &mooxpb.SetTradePauseRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, "")}, nil
+}
+
+func (h *Server) ReconcileNow(ctx context.Context, req *mooxpb.ReconcileNowReq) (*mooxpb.ReconcileNowRsp, error) {
+	ctx = withRPCTrace(ctx)
+	if h.kernel == nil {
+		return &mooxpb.ReconcileNowRsp{RetInfo: retInfo(mooxpb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
+	}
+	id, err := gonanoid.New()
+	if err != nil {
+		return &mooxpb.ReconcileNowRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	payload, err := json.Marshal(map[string]string{"space_id": spaceID(ctx), "account_id": req.GetAccountId(), "channel_id": req.GetChannelId()})
+	if err == nil {
+		err = h.kernel.Store.EnqueueOutbox(ctx, id, "moox.trade.reconciliation.requested.v1", payload)
+	}
+	if err != nil {
+		return &mooxpb.ReconcileNowRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	return &mooxpb.ReconcileNowRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), MessageId: id}, nil
+}
+
+func (h *Server) InspectSaga(ctx context.Context, req *mooxpb.InspectSagaReq) (*mooxpb.InspectSagaRsp, error) {
+	if h.kernel == nil {
+		return &mooxpb.InspectSagaRsp{RetInfo: retInfo(mooxpb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
+	}
+	saga, err := h.kernel.Store.GetSaga(ctx, spaceID(ctx), req.GetSagaId())
+	if err != nil {
+		return &mooxpb.InspectSagaRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	return &mooxpb.InspectSagaRsp{RetInfo: retInfo(mooxpb.ErrorCode_SUCCESS, ""), SagaId: saga.SagaID, State: saga.State, OrderId: saga.OrderID, ReplacementOrderId: saga.ReplacementOrderID, LastError: saga.LastError, Version: saga.Version}, nil
+}
 
 func (h *Server) CreateRebalance(ctx context.Context, req *mooxpb.CreateRebalanceReq) (*mooxpb.CreateRebalanceRsp, error) {
+	ctx = withRPCTrace(ctx)
 	if h.kernel == nil {
 		return &mooxpb.CreateRebalanceRsp{RetInfo: retInfo(mooxpb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
 	}
@@ -437,6 +493,7 @@ func (h *Server) ListInstruments(ctx context.Context, req *mooxpb.ListInstrument
 // ===== TradeOpSvc =====
 
 func (h *Server) PlaceOrder(ctx context.Context, req *mooxpb.PlaceOrderReq) (*mooxpb.PlaceOrderRsp, error) {
+	ctx = withRPCTrace(ctx)
 	sid := spaceID(ctx)
 	if h.kernel != nil {
 		orderID, _ := gonanoid.New()
@@ -505,6 +562,7 @@ func kernelOrderToPB(o store.OrderRecord) *mooxpb.Order {
 }
 
 func (h *Server) CancelOrder(ctx context.Context, req *mooxpb.CancelOrderReq) (*mooxpb.CancelOrderRsp, error) {
+	ctx = withRPCTrace(ctx)
 	sid := spaceID(ctx)
 	if h.kernel != nil {
 		o, err := h.kernel.Cancel(ctx, sid, req.GetOrderId())
@@ -549,6 +607,7 @@ func (h *Server) CancelAllOrders(ctx context.Context, req *mooxpb.CancelAllOrder
 }
 
 func (h *Server) AmendOrder(ctx context.Context, req *mooxpb.AmendOrderReq) (*mooxpb.AmendOrderRsp, error) {
+	ctx = withRPCTrace(ctx)
 	sid := spaceID(ctx)
 	if h.kernel != nil {
 		old, err := h.kernel.Store.GetOrder(ctx, sid, req.GetOrderId())

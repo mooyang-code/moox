@@ -11,20 +11,28 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/observability"
 )
 
 type FillHandler struct{ Store *store.Store }
 
 func (h FillHandler) Handle(ctx context.Context, space, account, orderID, fillID string, f exchange.FillEvent) error {
-	return h.Store.Transaction(ctx, func(tx *store.Tx) error {
-		fresh, err := tx.InsertFill(space, fillID, f.ExchangeTradeID, orderID, f.Quantity.String(), f.Price.String(), f.Fee.String(), f.FeeCurrency)
-		if err != nil || !fresh {
-			return err
-		}
+	_, err := h.HandleSource(ctx, space, account, orderID, fillID, f, "consumer")
+	return err
+}
+func (h FillHandler) HandleSource(ctx context.Context, space, account, orderID, fillID string, f exchange.FillEvent, source string) (bool, error) {
+	applied := false
+	err := h.Store.Transaction(ctx, func(tx *store.Tx) error {
 		r, err := tx.GetOrder(ctx, space, orderID)
 		if err != nil {
 			return err
 		}
+		canonicalID := account + ":" + r.ChannelID + ":" + r.Symbol + ":" + f.ExchangeTradeID
+		fresh, err := tx.InsertFill(space, canonicalID, f.ExchangeTradeID, account, r.ChannelID, r.Symbol, orderID, f.Quantity.String(), f.Price.String(), f.Fee.String(), f.FeeCurrency)
+		if err != nil || !fresh {
+			return err
+		}
+		applied = true
 		q, parseErr := shared.ParseDecimal(r.Quantity)
 		if parseErr != nil {
 			return parseErr
@@ -102,6 +110,15 @@ func (h FillHandler) Handle(ctx context.Context, space, account, orderID, fillID
 				return err
 			}
 		}
-		return tx.AddOutbox(fmt.Sprintf("%s:fill:%s", orderID, fillID), "moox.trade.fill.received.v1", []byte(fillID))
+		return tx.AddOutbox(fmt.Sprintf("%s:fill:%s", orderID, canonicalID), "moox.trade.fill.received.v1", []byte(canonicalID))
 	})
+	result := "applied"
+	if !applied {
+		result = "duplicate"
+	}
+	if err != nil {
+		result = "error"
+	}
+	observability.Fills.WithLabelValues(source, result).Inc()
+	return applied, err
 }

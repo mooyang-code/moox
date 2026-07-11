@@ -21,6 +21,15 @@ type Client struct {
 	closed bool
 }
 
+func (c *Client) Ready() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return !c.closed && c.nc != nil && c.nc.IsConnected()
+}
+
 // Connect establishes a NATS connection and creates a JetStream context.
 func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if ctx == nil {
