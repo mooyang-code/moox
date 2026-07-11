@@ -80,3 +80,11 @@ func StableTaskID(spaceID string, ruleID string, spec TaskSpec) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])[:32]
 }
+
+// StableMarketKlineTaskID identifies logical K-line demand independently of
+// the rule and physical Provider that happens to execute an attempt.
+func StableMarketKlineTaskID(marketID, unifiedDatasetID, subjectID, frequency string) string {
+	parts := []string{marketID, "kline", unifiedDatasetID, subjectID, frequency}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return hex.EncodeToString(sum[:])[:32]
+}
