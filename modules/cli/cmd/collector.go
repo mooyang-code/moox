@@ -37,6 +37,7 @@ type collectorPublishOptions struct {
 	Region           string
 	ZipPath          string
 	PackageName      string
+	FunctionName     string
 	PackageType      string
 	BizType          string
 	NodeType         string
@@ -263,6 +264,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 
 func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string) adminclient.NodeCreateItem {
 	packageName := defaultFlag(opts.PackageName, "moox-collector")
+	functionName := defaultFlag(opts.FunctionName, packageName)
 	bizType := defaultFlag(opts.BizType, "data_collector")
 	return adminclient.NodeCreateItem{
 		CloudAccountID: opts.CloudAccountID,
@@ -274,9 +276,9 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 		Region:         opts.Region,
 		PackageID:      packageID,
 		Metadata: map[string]any{
-			"function_name_prefix": packageName,
-			"function_name":        packageName,
-			"node_id":              packageName,
+			"function_name_prefix": functionName,
+			"function_name":        functionName,
+			"node_id":              functionName,
 			"biz_type":             bizType,
 			"supported_workloads":  []string{"collect.kline", "collect.symbol", "collect.instrument", "collect.calendar", "coverage.reconcile"},
 		},

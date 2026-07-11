@@ -117,7 +117,7 @@ func publishCollectorMarkets(cmd *cobra.Command, manifestDir, environment string
 		opts := collectorPublishOptions{
 			collectorPackageOptions: collectorPackageOptions{Version: collectorMarketsFlags.Version},
 			ControlURL:              collectorMarketsFlags.ControlURL, CloudAccountID: collectorMarketsFlags.CloudAccountID, Region: collectorMarketsFlags.Region,
-			ZipPath: collectorMarketsFlags.ZipPath, SpaceID: manifest.SpaceID, PackageName: manifest.SCF.FunctionName,
+			ZipPath: collectorMarketsFlags.ZipPath, SpaceID: manifest.SpaceID, PackageName: "moox-collector", FunctionName: manifest.SCF.FunctionName,
 			Runtime: "Go1", Handler: "main", PackageType: "data_collector", BizType: "data_collector", NodeType: "scf-event",
 			ServiceAccessKey: os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"), ServiceSecretKey: os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"),
 			Env: []string{"MOOX_SPACE_ID=" + manifest.SpaceID}, Config: []string{fmt.Sprintf("timeout=%d", manifest.SCF.TimeoutSeconds), "memory_size=256"},
