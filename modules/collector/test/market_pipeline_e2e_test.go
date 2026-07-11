@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -12,10 +14,37 @@ import (
 	cryptomarket "github.com/mooyang-code/moox/modules/collector/internal/markets/crypto"
 	"github.com/mooyang-code/moox/modules/collector/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/collector/internal/providers"
+	binanceprovider "github.com/mooyang-code/moox/modules/collector/internal/providers/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/modules/storage/testkit"
 )
+
+func TestCryptoSwapPipelineE2E_ProviderToPebble(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/fapi/v1/klines" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`[[1783728000000,"1","2","0.5","1.5","3",1783728059999,"4",1,"0","0","0"]]`))
+	}))
+	defer server.Close()
+	access, err := testkit.Open(t.TempDir(), []testkit.DatasetSchema{marketDatasetSchema("crypto_binance", "binance_kline", false), marketDatasetSchema("crypto_binance", "swap_kline", true), qualityDatasetSchema("crypto_binance", "kline_quality_event")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer access.Close()
+	store := storageio.NewClientWithAccess(access, nil, []storageio.Binding{{SpaceID: "crypto_binance", DatasetID: "binance_kline", Role: storageio.RoleProviderData, Feed: "kline", ProviderID: "binance"}, {SpaceID: "crypto_binance", DatasetID: "swap_kline", Role: storageio.RoleUnifiedData, Feed: "kline", RequiredVolume: true, RequiredAmount: true}, {SpaceID: "crypto_binance", DatasetID: "kline_quality_event", Role: storageio.RoleQualityEvent, Feed: "quality_event"}})
+	provider := binanceprovider.New(binanceprovider.Config{BaseURL: server.URL, FuturesBaseURL: server.URL, HTTPClient: server.Client(), Now: func() time.Time { return fixedE2ETime.Add(time.Hour) }})
+	pipe := pipeline.KlinePipeline{Provider: provider, Gate: providers.StaticGate{Permit: providers.RequestPermit{Allowed: true}}, Store: store, SpaceID: "crypto_binance", SourceDatasetID: "binance_kline", SourceDatasetIDs: []string{"binance_kline"}, SourceDatasets: map[marketdata.ProviderID]string{"binance": "binance_kline"}, UnifiedDatasetID: "swap_kline", QualityDatasetID: "kline_quality_event", Resolver: pipeline.QualityResolver{Policy: pipeline.QualityPolicy{ProviderPriority: []marketdata.ProviderID{"binance"}, AuthoritativeSingleSource: true}, Now: func() time.Time { return fixedE2ETime }}}
+	result, err := pipe.Run(context.Background(), providers.FetchKlinesRequest{MarketID: "crypto_binance", ProductType: marketdata.ProductSwap, InstrumentType: marketdata.InstrumentSwap, Frequency: marketdata.FrequencyMinute, Subjects: []providers.ProviderSubject{{SubjectID: "BTC-USDT-SWAP", ProviderSymbol: "BTCUSDT"}}})
+	if err != nil || result.SourceRows != 1 || result.UnifiedRows != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	row, err := store.Unified(context.Background(), "crypto_binance", "swap_kline", "BTC-USDT-SWAP", marketdata.FrequencyMinute, time.UnixMilli(1783728000000).UTC())
+	if err != nil || row == nil || row.ProviderID != "binance" || row.FeedScope != "swap" || row.Close.String() != "1.5" {
+		t.Fatalf("row=%+v err=%v", row, err)
+	}
+}
 
 // This is a module-level E2E test: a Provider result travels through the same
 // source-first Pipeline and whole-candle resolver used by an SCF JobItem, while
