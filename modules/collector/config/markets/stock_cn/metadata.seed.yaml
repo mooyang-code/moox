@@ -37,6 +37,7 @@ data_sources:
     attributes:
       provider_id: eastmoney
   - {space_id: stock_cn, data_source_id: ifeng, name: 凤凰行情, kind: vendor_api, market: CN, timezone: Asia/Shanghai, status: active, attributes: {provider_id: ifeng}}
+  - {space_id: stock_cn, data_source_id: tencent, name: 腾讯行情, kind: vendor_api, market: CN, timezone: Asia/Shanghai, status: active, attributes: {provider_id: tencent}}
 fields:
   - {space_id: stock_cn, field_id: open, name: 开盘价, value_type: double, status: active}
   - {space_id: stock_cn, field_id: high, name: 最高价, value_type: double, status: active}
@@ -76,6 +77,7 @@ datasets:
   - {space_id: stock_cn, dataset_id: sina_kline, data_source_id: sina, name: 新浪K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
   - {space_id: stock_cn, dataset_id: eastmoney_kline, data_source_id: eastmoney, name: 东方财富K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
   - {space_id: stock_cn, dataset_id: ifeng_kline, data_source_id: ifeng, name: 凤凰K线, data_kind: time_series, freqs: [5m, 15m, 30m, 1h, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
+  - {space_id: stock_cn, dataset_id: tencent_kline, data_source_id: tencent, name: 腾讯K线, data_kind: time_series, freqs: [5m, 15m, 30m, 1h, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
   - {space_id: stock_cn, dataset_id: equity_kline, data_source_id: internal, name: 股票统一K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline, instrument_type: equity}}
   - {space_id: stock_cn, dataset_id: etf_kline, data_source_id: internal, name: ETF统一K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline, instrument_type: etf}}
   - {space_id: stock_cn, dataset_id: index_kline, data_source_id: internal, name: 指数统一K线, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline, instrument_type: index}}
@@ -144,3 +146,24 @@ dataset_columns:
   - {space_id: stock_cn, dataset_id: calendar, column_name: open_time, origin_type: field, origin_id: open_time, value_type: time, required: true, status: active}
   - {space_id: stock_cn, dataset_id: calendar, column_name: close_time, origin_type: field, origin_id: close_time, value_type: time, required: true, status: active}
   - {space_id: stock_cn, dataset_id: calendar, column_name: generation, origin_type: field, origin_id: generation, value_type: time, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: open, origin_type: field, origin_id: open, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: high, origin_type: field, origin_id: high, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: low, origin_type: field, origin_id: low, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: amount, origin_type: field, origin_id: amount, value_type: double, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: open_exact, origin_type: field, origin_id: open_exact, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: high_exact, origin_type: field, origin_id: high_exact, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: low_exact, origin_type: field, origin_id: low_exact, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: close_exact, origin_type: field, origin_id: close_exact, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: volume_exact, origin_type: field, origin_id: volume_exact, value_type: string, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: amount_exact, origin_type: field, origin_id: amount_exact, value_type: string, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: trade_date, origin_type: field, origin_id: trade_date, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: close_time, origin_type: field, origin_id: close_time, value_type: time, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: feed_scope, origin_type: field, origin_id: feed_scope, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: volume_unit, origin_type: field, origin_id: volume_unit, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: amount_unit, origin_type: field, origin_id: amount_unit, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: provider_timestamp, origin_type: field, origin_id: provider_timestamp, value_type: time, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: fetched_at, origin_type: field, origin_id: fetched_at, value_type: time, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: request_id, origin_type: field, origin_id: request_id, value_type: string, required: true, status: active}
+  - {space_id: stock_cn, dataset_id: tencent_kline, column_name: is_closed, origin_type: field, origin_id: is_closed, value_type: bool, required: true, status: active}

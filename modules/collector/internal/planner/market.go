@@ -102,7 +102,7 @@ func (p MarketPlanner) PlanKline(ctx context.Context, request MarketKlinePlanReq
 		"quota_lease_id": providerLeaseID, "lease_epoch": request.LeaseEpoch, "resolution_lease_id": resolutionLeaseID,
 		"resolution_lease_epoch": request.LeaseEpoch, "execution_nonce": owner, "quota_scope_key": selected.QuotaScopeKey,
 		"schedule_window": request.ScheduleWindow.UTC().Format(time.RFC3339), "schedule_interval": request.ScheduleInterval.String(),
-		"candidate_chain": providerIDs(request.CandidateChain), "quota_windows": windows,
+		"candidate_chain": providerIDs(request.CandidateChain), "provider_priority": providerIDs(request.CandidateChain), "source_dataset_ids": providerDatasetIDs(request.CandidateChain), "source_datasets": providerDatasetMap(request.CandidateChain), "quota_windows": windows,
 	}
 	raw, err := json.Marshal(params)
 	if err != nil {
@@ -124,6 +124,24 @@ func providerIDs(values []KlinePlanProvider) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
 		out = append(out, string(value.ProviderID))
+	}
+	return out
+}
+func providerDatasetIDs(values []KlinePlanProvider) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		if value.SourceDatasetID != "" && !seen[value.SourceDatasetID] {
+			seen[value.SourceDatasetID] = true
+			out = append(out, value.SourceDatasetID)
+		}
+	}
+	return out
+}
+func providerDatasetMap(values []KlinePlanProvider) map[string]string {
+	out := make(map[string]string, len(values))
+	for _, value := range values {
+		out[string(value.ProviderID)] = value.SourceDatasetID
 	}
 	return out
 }

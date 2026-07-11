@@ -50,7 +50,19 @@ func executeMarketKlineJobItem(ctx context.Context, item nodeRuntime.JobItem) (n
 	}
 	access := storagepb.NewAccessClientProxy(client.WithTarget(accessTarget))
 	requiresTradingValues := stringValue(params, "instrument_type") != "index"
-	bindings := []storageio.Binding{{SpaceID: spaceID, DatasetID: sourceDatasetID, Role: storageio.RoleProviderData, Feed: "kline", ProviderID: providerID}, {SpaceID: spaceID, DatasetID: unifiedDatasetID, Role: storageio.RoleUnifiedData, Feed: "kline", RequiredVolume: requiresTradingValues, RequiredAmount: requiresTradingValues}}
+	sourceDatasets := stringMap(params["source_datasets"])
+	sourceDatasetIDs := stringSlice(params["source_dataset_ids"])
+	if len(sourceDatasetIDs) == 0 {
+		sourceDatasetIDs = []string{sourceDatasetID}
+	}
+	bindings := make([]storageio.Binding, 0, len(sourceDatasetIDs)+1)
+	for candidateID, datasetID := range sourceDatasets {
+		bindings = append(bindings, storageio.Binding{SpaceID: spaceID, DatasetID: datasetID, Role: storageio.RoleProviderData, Feed: "kline", ProviderID: marketdata.ProviderID(candidateID)})
+	}
+	if len(sourceDatasets) == 0 {
+		bindings = append(bindings, storageio.Binding{SpaceID: spaceID, DatasetID: sourceDatasetID, Role: storageio.RoleProviderData, Feed: "kline", ProviderID: providerID})
+	}
+	bindings = append(bindings, storageio.Binding{SpaceID: spaceID, DatasetID: unifiedDatasetID, Role: storageio.RoleUnifiedData, Feed: "kline", RequiredVolume: requiresTradingValues, RequiredAmount: requiresTradingValues})
 	store := storageio.NewClientWithAccess(access, nil, bindings)
 	leaseEpoch, _ := strconv.ParseInt(stringValue(params, "lease_epoch"), 10, 64)
 	gate := controlRequestGate{gateway: runtimeapp.GetServiceGatewayTarget(), leaseID: stringValue(params, "quota_lease_id"), leaseEpoch: leaseEpoch, executionNonce: stringValue(params, "execution_nonce"), scopeKey: stringValue(params, "quota_scope_key"), windows: quotaWindows(params)}
@@ -73,7 +85,18 @@ func executeMarketKlineJobItem(ctx context.Context, item nodeRuntime.JobItem) (n
 	product := marketdata.ProductType(strings.ToLower(stringValue(params, "product_type")))
 	instrument := marketdata.InstrumentType(strings.ToLower(stringValue(params, "instrument_type")))
 	providerGuard := controlLeaseGuard{gateway: runtimeapp.GetServiceGatewayTarget(), leaseID: gate.leaseID, leaseType: "provider", leaseEpoch: gate.leaseEpoch}
-	pipe := pipeline.KlinePipeline{Provider: provider, Gate: gate, Store: store, SpaceID: spaceID, ProviderGuard: providerGuard, ResolutionGuard: resolutionGuard, SourceDatasetID: sourceDatasetID, SourceDatasetIDs: []string{sourceDatasetID}, SourceDatasets: map[marketdata.ProviderID]string{providerID: sourceDatasetID}, UnifiedDatasetID: unifiedDatasetID, Resolver: pipeline.QualityResolver{Policy: pipeline.QualityPolicy{ProviderPriority: []marketdata.ProviderID{providerID}, AuthoritativeSingleSource: true}}}
+	providerPriority := providerIDSlice(params["provider_priority"])
+	if len(providerPriority) == 0 {
+		providerPriority = []marketdata.ProviderID{providerID}
+	}
+	datasetMap := map[marketdata.ProviderID]string{}
+	for id, datasetID := range sourceDatasets {
+		datasetMap[marketdata.ProviderID(id)] = datasetID
+	}
+	if len(datasetMap) == 0 {
+		datasetMap[providerID] = sourceDatasetID
+	}
+	pipe := pipeline.KlinePipeline{Provider: provider, Gate: gate, Store: store, SpaceID: spaceID, ProviderGuard: providerGuard, ResolutionGuard: resolutionGuard, SourceDatasetID: sourceDatasetID, SourceDatasetIDs: sourceDatasetIDs, SourceDatasets: datasetMap, UnifiedDatasetID: unifiedDatasetID, Resolver: pipeline.QualityResolver{Policy: pipeline.QualityPolicy{ProviderPriority: providerPriority, AuthoritativeSingleSource: true}}}
 	summary, err := pipe.Run(ctx, providers.FetchKlinesRequest{MarketID: marketdata.MarketID(stringValue(params, "market_id")), ExchangeID: marketdata.ExchangeID(stringValue(params, "exchange_id")), ProductType: product, InstrumentType: instrument, Frequency: frequency, Subjects: []providers.ProviderSubject{{SubjectID: subjectID, ProviderSymbol: providerSymbol}}, StartTime: start, EndTime: end, Limit: intValue(params, "limit")})
 	result := nodeRuntime.Result{Summary: map[string]any{"market_id": stringValue(params, "market_id"), "provider_id": string(providerID), "fetched_rows": summary.FetchedRows, "source_rows": summary.SourceRows, "unified_rows": summary.UnifiedRows, "request_count": summary.RequestCount, "complete": summary.Complete}}
 	if err != nil {

@@ -15,8 +15,15 @@ providers:
     endpoint_class: public_http
     quotas:
       - {scope: ip, window_seconds: 60, limit: 60, weight: 1, reset_timezone: Asia/Shanghai}
+  - id: tencent
+    capabilities: [kline]
+    endpoint: https://web.ifzq.gtimg.cn
+    endpoint_class: public_http
+    quotas:
+      - {scope: ip, window_seconds: 60, limit: 120, weight: 1, reset_timezone: Asia/Shanghai}
 datasets:
   - {id: ifeng_kline, role: provider_data, feed: kline, provider_id: ifeng}
+  - {id: tencent_kline, role: provider_data, feed: kline, provider_id: tencent}
   - {id: equity_kline, role: unified_data, feed: kline}
 feeds:
   - {id: equity_kline, dataset_id: equity_kline, frequencies: [5m, 1h, 1d], volume_unit: share, amount_unit: CNY, bucket_alignment: XSHG_session, instrument_type: equity}

@@ -38,6 +38,9 @@ func TestMarketPlannerCreatesLogicalTaskAndFencedRuntimeParams(t *testing.T) {
 			t.Fatalf("missing runtime param %q in %v", key, params)
 		}
 	}
+	if len(params["source_dataset_ids"].([]any)) != 1 || params["source_datasets"].(map[string]any)["binance_rest"] != "binance_spot_kline" {
+		t.Fatalf("source candidates=%v", params)
+	}
 	request.CandidateChain[0].ProviderID = "other"
 	request.CandidateChain[0].SourceDatasetID = "other_source"
 	second, err := planner.PlanKline(context.Background(), request)

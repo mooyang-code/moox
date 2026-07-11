@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -122,6 +123,27 @@ func stringSlice(value any) []string {
 		if text, ok := item.(string); ok && text != "" {
 			out = append(out, text)
 		}
+	}
+	return out
+}
+func stringMap(value any) map[string]string {
+	raw, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := map[string]string{}
+	for key, item := range raw {
+		if text, ok := item.(string); ok && text != "" {
+			out[key] = text
+		}
+	}
+	return out
+}
+func providerIDSlice(value any) []marketdata.ProviderID {
+	values := stringSlice(value)
+	out := make([]marketdata.ProviderID, 0, len(values))
+	for _, item := range values {
+		out = append(out, marketdata.ProviderID(item))
 	}
 	return out
 }
