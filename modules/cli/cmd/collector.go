@@ -278,7 +278,7 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 			"function_name":        packageName,
 			"node_id":              packageName,
 			"biz_type":             bizType,
-			"supported_workloads":  []string{"collect.kline", "collect.symbol"},
+			"supported_workloads":  []string{"collect.kline", "collect.symbol", "collect.instrument", "collect.calendar", "coverage.reconcile"},
 		},
 	}
 }

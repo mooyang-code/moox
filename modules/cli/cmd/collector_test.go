@@ -49,7 +49,7 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if !ok {
 		t.Fatalf("supported_workloads type = %T", item.Metadata["supported_workloads"])
 	}
-	if len(workloads) != 2 || workloads[0] != "collect.kline" || workloads[1] != "collect.symbol" {
+	if len(workloads) != 5 || workloads[0] != "collect.kline" || workloads[1] != "collect.symbol" || workloads[2] != "collect.instrument" || workloads[3] != "collect.calendar" || workloads[4] != "coverage.reconcile" {
 		t.Fatalf("supported_workloads = %#v", workloads)
 	}
 }
