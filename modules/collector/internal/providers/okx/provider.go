@@ -66,6 +66,15 @@ func (p *Provider) FetchKlines(ctx context.Context, gate providers.RequestGate, 
 }
 func (p *Provider) fetch(ctx context.Context, subject providers.ProviderSubject, req providers.FetchKlinesRequest) ([]marketdata.ProviderKline, error) {
 	query := url.Values{"instId": {subject.ProviderSymbol}, "bar": {okxBar(req.Frequency)}}
+	if !req.StartTime.IsZero() {
+		query.Set("before", strconv.FormatInt(req.StartTime.UTC().UnixMilli(), 10))
+	}
+	if !req.EndTime.IsZero() {
+		query.Set("after", strconv.FormatInt(req.EndTime.UTC().UnixMilli(), 10))
+	}
+	if req.Cursor != "" {
+		query.Set("after", req.Cursor)
+	}
 	if req.Limit > 0 {
 		query.Set("limit", strconv.Itoa(req.Limit))
 	}
@@ -133,6 +142,12 @@ func (p *Provider) fetch(ctx context.Context, subject providers.ProviderSubject,
 			return nil, err
 		}
 		dataTime := time.UnixMilli(startMS).UTC()
+		if !req.StartTime.IsZero() && dataTime.Before(req.StartTime.UTC()) {
+			continue
+		}
+		if !req.EndTime.IsZero() && dataTime.After(req.EndTime.UTC()) {
+			continue
+		}
 		closeTime := dataTime.Add(frequencyDuration(req.Frequency))
 		rows = append(rows, marketdata.ProviderKline{SubjectID: subject.SubjectID, ProviderID: p.ID(), ProviderSymbol: subject.ProviderSymbol, Frequency: req.Frequency, DataTime: dataTime, CloseTime: closeTime, TradeDate: dataTime.Format("2006-01-02"), FeedScope: "spot", VolumeUnit: "base", AmountUnit: "quote", Open: open, High: high, Low: low, Close: closeValue, Volume: &volume, Amount: &amount, ProviderTimestamp: closeTime, FetchedAt: p.now().UTC(), RequestID: "okx:" + dataTime.Format(time.RFC3339Nano), Closed: item[8] == "1"})
 	}

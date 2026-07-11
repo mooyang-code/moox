@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const defaultInitDBPath = "./data/moox_collector.db"
+const defaultInitDBPath = "./data/moox_collector_market_v2.db"
 
 type initResult struct {
 	Module string `json:"module"`

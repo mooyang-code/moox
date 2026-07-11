@@ -65,6 +65,9 @@ func runtimeSpaceID() string {
 }
 
 func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nodeRuntime.Result, error) {
+	if strings.TrimSpace(stringValue(item.Params, "market_id")) != "" {
+		return executeMarketKlineJobItem(ctx, item)
+	}
 	taskEvent, err := taskEventFromJobItem(item)
 	if err != nil {
 		return nodeRuntime.Result{}, nodeRuntime.Permanent(err, "INVALID_JOB_ITEM")

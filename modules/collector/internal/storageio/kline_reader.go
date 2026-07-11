@@ -11,8 +11,8 @@ import (
 
 // Candidates is the Pipeline-facing exact source read. It never performs a
 // dataset scan: every enabled provider dataset contributes one exact key.
-func (c *Client) Candidates(ctx context.Context, subjectID string, frequency marketdata.Frequency, dataTime time.Time) ([]marketdata.ProviderKline, error) {
-	rows, err := c.ReadCandidates(ctx, subjectID, frequency, dataTime)
+func (c *Client) Candidates(ctx context.Context, spaceID string, datasetIDs []string, subjectID string, frequency marketdata.Frequency, dataTime time.Time) ([]marketdata.ProviderKline, error) {
+	rows, err := c.ReadCandidates(ctx, spaceID, datasetIDs, subjectID, frequency, dataTime)
 	if err != nil {
 		return nil, err
 	}
@@ -27,18 +27,13 @@ func (c *Client) Candidates(ctx context.Context, subjectID string, frequency mar
 	return result, nil
 }
 
-func (c *Client) Unified(ctx context.Context, subjectID string, frequency marketdata.Frequency, dataTime time.Time) (*marketdata.ResolvedKline, error) {
-	var binding Binding
-	found := false
-	for _, candidate := range c.bindings {
-		if candidate.Role == RoleUnifiedData && candidate.Feed == "kline" {
-			binding = candidate
-			found = true
-			break
-		}
+func (c *Client) Unified(ctx context.Context, spaceID, datasetID, subjectID string, frequency marketdata.Frequency, dataTime time.Time) (*marketdata.ResolvedKline, error) {
+	binding, err := c.binding(datasetID, RoleUnifiedData)
+	if err != nil {
+		return nil, err
 	}
-	if !found {
-		return nil, nil
+	if binding.SpaceID != spaceID {
+		return nil, fmt.Errorf("dataset %q belongs to space %q, not %q", datasetID, binding.SpaceID, spaceID)
 	}
 	timestamp := dataTime.UTC().Format(time.RFC3339)
 	rsp, err := c.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{AuthInfo: c.auth, Keys: []*storagepb.TimeSeriesKey{{SpaceId: binding.SpaceID, DatasetId: binding.DatasetID, SubjectId: subjectID, Freq: string(frequency), DataTime: timestamp}}, TimeRange: &storagepb.TimeRange{StartTime: timestamp, EndTime: timestamp}})
@@ -136,7 +131,10 @@ func columnString(column *storagepb.ColumnValue) string {
 	if column == nil || column.GetValue() == nil {
 		return ""
 	}
-	return column.GetValue().GetStringValue()
+	if value := column.GetValue().GetStringValue(); value != "" {
+		return value
+	}
+	return column.GetValue().GetTimeValue()
 }
 func columnBool(column *storagepb.ColumnValue) bool {
 	if column == nil || column.GetValue() == nil {

@@ -2,8 +2,11 @@ package runtimeboot
 
 import (
 	"context"
+	"os"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
+	"github.com/mooyang-code/moox/modules/collector/internal/readiness"
 	_ "github.com/mooyang-code/moox/modules/collector/internal/sources/binance" // 注册 binance 采集器
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -14,6 +17,15 @@ type Services struct{}
 // StartBackgroundServices 启动所有后台服务
 func StartBackgroundServices(ctx context.Context) (*Services, error) {
 	log.Info("正在启动后台服务...")
+	if spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")); spaceID != "" {
+		lockPath := strings.TrimSpace(os.Getenv("MOOX_MARKET_READINESS_LOCK"))
+		if lockPath == "" {
+			lockPath = "market-readiness-lock.json"
+		}
+		if err := readiness.ValidateRuntime(lockPath, spaceID); err != nil {
+			return nil, err
+		}
+	}
 
 	// 1. 初始化任务实例内存存储（已在config包的init中自动初始化）
 	log.Info("任务实例存储已初始化，将通过心跳回包自动更新")

@@ -24,7 +24,7 @@ func NewManager() *Manager {
 
 // Initialize opens SQLite. Schema creation is handled before service startup.
 func (m *Manager) Initialize(dbCfg *DatabaseConfig) error {
-	dbPath := "./data/moox_collector.db"
+	dbPath := "./data/moox_collector_market_v2.db"
 	if dbCfg != nil && dbCfg.Path != "" {
 		dbPath = dbCfg.Path
 	}

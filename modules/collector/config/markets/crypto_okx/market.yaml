@@ -8,6 +8,18 @@ timezone: UTC
 exchange: {id: OKX, name: OKX}
 product_types: [spot, swap]
 instrument_types: [spot, swap]
+providers:
+  - id: okx
+    capabilities: [kline, instrument]
+    endpoint: https://www.okx.com
+    endpoint_class: public_http
+    quotas:
+      - {scope: ip, window_seconds: 2, limit: 40, weight: 1, reset_timezone: UTC}
+datasets:
+  - {id: okx_kline, role: provider_data, feed: kline, provider_id: okx}
+  - {id: spot_kline, role: unified_data, feed: kline}
+feeds:
+  - {id: spot_kline, dataset_id: spot_kline, frequencies: [1m, 1d], volume_unit: base, amount_unit: quote, bucket_alignment: UTC, instrument_type: spot}
 execution: {timeout_seconds: 60, job_budget_ms: 30000, report_reserve_ms: 10000}
 readiness: {status: not_ready, reason: "provider validation required before activation", capability_enabled: false}
 routing: {policy: weighted_rendezvous}

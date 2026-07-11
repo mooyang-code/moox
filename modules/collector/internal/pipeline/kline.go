@@ -11,8 +11,8 @@ import (
 
 type KlineStore interface {
 	WriteProviderKlines(context.Context, string, []marketdata.ProviderKline) error
-	Candidates(context.Context, string, marketdata.Frequency, time.Time) ([]marketdata.ProviderKline, error)
-	Unified(context.Context, string, marketdata.Frequency, time.Time) (*marketdata.ResolvedKline, error)
+	Candidates(context.Context, string, []string, string, marketdata.Frequency, time.Time) ([]marketdata.ProviderKline, error)
+	Unified(context.Context, string, string, string, marketdata.Frequency, time.Time) (*marketdata.ResolvedKline, error)
 	WriteUnifiedKline(context.Context, string, marketdata.ResolvedKline) error
 }
 type KlinePipeline struct {
@@ -21,6 +21,9 @@ type KlinePipeline struct {
 	Store            KlineStore
 	Resolver         QualityResolver
 	SourceDatasetID  string
+	SourceDatasetIDs []string
+	SourceDatasets   map[marketdata.ProviderID]string
+	SpaceID          string
 	UnifiedDatasetID string
 }
 type KlinePipelineResult struct {
@@ -54,11 +57,15 @@ func (p KlinePipeline) Run(ctx context.Context, request providers.FetchKlinesReq
 	}
 	result.SourceRows = len(closed)
 	for _, source := range closed {
-		candidates, err := p.Store.Candidates(ctx, source.SubjectID, source.Frequency, source.DataTime)
+		candidateDatasets := p.SourceDatasetIDs
+		if len(candidateDatasets) == 0 {
+			candidateDatasets = []string{p.SourceDatasetID}
+		}
+		candidates, err := p.Store.Candidates(ctx, p.SpaceID, candidateDatasets, source.SubjectID, source.Frequency, source.DataTime)
 		if err != nil {
 			return result, err
 		}
-		existing, err := p.Store.Unified(ctx, source.SubjectID, source.Frequency, source.DataTime)
+		existing, err := p.Store.Unified(ctx, p.SpaceID, p.UnifiedDatasetID, source.SubjectID, source.Frequency, source.DataTime)
 		if err != nil {
 			return result, err
 		}
@@ -70,6 +77,9 @@ func (p KlinePipeline) Run(ctx context.Context, request providers.FetchKlinesReq
 			continue
 		}
 		decision.Row.SourceDatasetID = p.SourceDatasetID
+		if datasetID := p.SourceDatasets[decision.Row.ProviderID]; datasetID != "" {
+			decision.Row.SourceDatasetID = datasetID
+		}
 		if err := p.Store.WriteUnifiedKline(ctx, p.UnifiedDatasetID, *decision.Row); err != nil {
 			return result, fmt.Errorf("persist unified kline: %w", err)
 		}

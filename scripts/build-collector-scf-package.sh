@@ -30,6 +30,12 @@ if [[ -f "${BUILD_DIR}/package/example_trpc_go.yaml" ]]; then
   rm -f "${BUILD_DIR}/package/example_trpc_go.yaml"
 fi
 
+echo "==> generate market readiness lock"
+(
+  cd "${ROOT}/modules/collector"
+  go run ./cmd/cli readiness-lock --markets-dir ./config/markets --output "${BUILD_DIR}/package/market-readiness-lock.json"
+)
+
 echo "==> package ${OUT_PATH}"
 (
   cd "${BUILD_DIR}/package"

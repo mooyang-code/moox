@@ -9,11 +9,15 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
 
-func (c *Client) ReadCandidates(ctx context.Context, subjectID string, frequency marketdata.Frequency, dataTime time.Time) ([]*storagepb.TimeSeriesRow, error) {
-	keys := make([]*storagepb.TimeSeriesKey, 0)
-	for _, binding := range c.bindings {
-		if binding.Role != RoleProviderData || binding.Feed != "kline" {
-			continue
+func (c *Client) ReadCandidates(ctx context.Context, spaceID string, datasetIDs []string, subjectID string, frequency marketdata.Frequency, dataTime time.Time) ([]*storagepb.TimeSeriesRow, error) {
+	keys := make([]*storagepb.TimeSeriesKey, 0, len(datasetIDs))
+	for _, datasetID := range datasetIDs {
+		binding, err := c.binding(datasetID, RoleProviderData)
+		if err != nil {
+			return nil, err
+		}
+		if binding.SpaceID != spaceID {
+			return nil, fmt.Errorf("dataset %q belongs to space %q, not %q", datasetID, binding.SpaceID, spaceID)
 		}
 		keys = append(keys, &storagepb.TimeSeriesKey{SpaceId: binding.SpaceID, DatasetId: binding.DatasetID, SubjectId: subjectID, Freq: string(frequency), DataTime: dataTime.UTC().Format(time.RFC3339)})
 	}

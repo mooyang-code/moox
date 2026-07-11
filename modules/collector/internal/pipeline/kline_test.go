@@ -54,10 +54,10 @@ func (s *pipelineStore) WriteProviderKlines(_ context.Context, _ string, rows []
 	s.rows = append(s.rows, rows...)
 	return nil
 }
-func (s *pipelineStore) Candidates(context.Context, string, marketdata.Frequency, time.Time) ([]marketdata.ProviderKline, error) {
+func (s *pipelineStore) Candidates(context.Context, string, []string, string, marketdata.Frequency, time.Time) ([]marketdata.ProviderKline, error) {
 	return s.rows, nil
 }
-func (s *pipelineStore) Unified(context.Context, string, marketdata.Frequency, time.Time) (*marketdata.ResolvedKline, error) {
+func (s *pipelineStore) Unified(context.Context, string, string, string, marketdata.Frequency, time.Time) (*marketdata.ResolvedKline, error) {
 	return nil, nil
 }
 func (s *pipelineStore) WriteUnifiedKline(context.Context, string, marketdata.ResolvedKline) error {

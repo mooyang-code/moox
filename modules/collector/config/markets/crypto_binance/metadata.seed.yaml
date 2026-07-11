@@ -3,6 +3,34 @@ spaces:
 data_sources:
   - {space_id: crypto_binance, data_source_id: internal, name: Unified data, kind: internal, market: CRYPTO, timezone: UTC, status: active}
   - {space_id: crypto_binance, data_source_id: binance, name: Binance, kind: vendor_api, market: CRYPTO, timezone: UTC, status: active, attributes: {provider_id: binance}}
+fields:
+  - {space_id: crypto_binance, field_id: open, name: Open, value_type: double, status: active}
+  - {space_id: crypto_binance, field_id: high, name: High, value_type: double, status: active}
+  - {space_id: crypto_binance, field_id: low, name: Low, value_type: double, status: active}
+  - {space_id: crypto_binance, field_id: close, name: Close, value_type: double, status: active}
+  - {space_id: crypto_binance, field_id: volume, name: Volume, value_type: double, status: active}
+  - {space_id: crypto_binance, field_id: amount, name: Amount, value_type: double, status: active}
+  - {space_id: crypto_binance, field_id: open_exact, name: Open exact, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: high_exact, name: High exact, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: low_exact, name: Low exact, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: close_exact, name: Close exact, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: volume_exact, name: Volume exact, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: amount_exact, name: Amount exact, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: trade_date, name: Trade date, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: close_time, name: Close time, value_type: time, status: active}
+  - {space_id: crypto_binance, field_id: feed_scope, name: Feed scope, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: volume_unit, name: Volume unit, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: amount_unit, name: Amount unit, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: provider_timestamp, name: Provider timestamp, value_type: time, status: active}
+  - {space_id: crypto_binance, field_id: fetched_at, name: Fetched at, value_type: time, status: active}
+  - {space_id: crypto_binance, field_id: request_id, name: Request ID, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: is_closed, name: Closed, value_type: bool, status: active}
+  - {space_id: crypto_binance, field_id: source_provider, name: Source provider, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: source_dataset_id, name: Source dataset, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: source_fetched_at, name: Source fetched at, value_type: time, status: active}
+  - {space_id: crypto_binance, field_id: quality_status, name: Quality status, value_type: string, status: active}
+  - {space_id: crypto_binance, field_id: revision, name: Revision, value_type: int, status: active}
+  - {space_id: crypto_binance, field_id: resolved_at, name: Resolved at, value_type: time, status: active}
 datasets:
   - {space_id: crypto_binance, dataset_id: binance_kline, data_source_id: binance, name: Binance Kline source, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
   - {space_id: crypto_binance, dataset_id: spot_kline, data_source_id: internal, name: Spot Kline, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline}}
@@ -10,3 +38,52 @@ datasets:
   - {space_id: crypto_binance, dataset_id: calendar, data_source_id: internal, name: Calendar, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: calendar, kind: internal}}
   - {space_id: crypto_binance, dataset_id: market_coverage, data_source_id: internal, name: Coverage, data_kind: record, status: active, attributes: {dataset_role: coverage_state, feed: coverage}}
   - {space_id: crypto_binance, dataset_id: kline_quality_event, data_source_id: internal, name: Quality event, data_kind: record, status: active, attributes: {dataset_role: quality_event, feed: quality_event}}
+dataset_columns:
+  - &b_open {space_id: crypto_binance, dataset_id: binance_kline, column_name: open, origin_type: field, origin_id: open, value_type: double, required: true, status: active}
+  - &b_high {space_id: crypto_binance, dataset_id: binance_kline, column_name: high, origin_type: field, origin_id: high, value_type: double, required: true, status: active}
+  - &b_low {space_id: crypto_binance, dataset_id: binance_kline, column_name: low, origin_type: field, origin_id: low, value_type: double, required: true, status: active}
+  - &b_close {space_id: crypto_binance, dataset_id: binance_kline, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active}
+  - &b_volume {space_id: crypto_binance, dataset_id: binance_kline, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active}
+  - &b_amount {space_id: crypto_binance, dataset_id: binance_kline, column_name: amount, origin_type: field, origin_id: amount, value_type: double, status: active}
+  - &b_open_exact {space_id: crypto_binance, dataset_id: binance_kline, column_name: open_exact, origin_type: field, origin_id: open_exact, value_type: string, required: true, status: active}
+  - &b_high_exact {space_id: crypto_binance, dataset_id: binance_kline, column_name: high_exact, origin_type: field, origin_id: high_exact, value_type: string, required: true, status: active}
+  - &b_low_exact {space_id: crypto_binance, dataset_id: binance_kline, column_name: low_exact, origin_type: field, origin_id: low_exact, value_type: string, required: true, status: active}
+  - &b_close_exact {space_id: crypto_binance, dataset_id: binance_kline, column_name: close_exact, origin_type: field, origin_id: close_exact, value_type: string, required: true, status: active}
+  - &b_volume_exact {space_id: crypto_binance, dataset_id: binance_kline, column_name: volume_exact, origin_type: field, origin_id: volume_exact, value_type: string, status: active}
+  - &b_amount_exact {space_id: crypto_binance, dataset_id: binance_kline, column_name: amount_exact, origin_type: field, origin_id: amount_exact, value_type: string, status: active}
+  - &b_trade_date {space_id: crypto_binance, dataset_id: binance_kline, column_name: trade_date, origin_type: field, origin_id: trade_date, value_type: string, required: true, status: active}
+  - &b_close_time {space_id: crypto_binance, dataset_id: binance_kline, column_name: close_time, origin_type: field, origin_id: close_time, value_type: time, required: true, status: active}
+  - &b_feed_scope {space_id: crypto_binance, dataset_id: binance_kline, column_name: feed_scope, origin_type: field, origin_id: feed_scope, value_type: string, required: true, status: active}
+  - &b_volume_unit {space_id: crypto_binance, dataset_id: binance_kline, column_name: volume_unit, origin_type: field, origin_id: volume_unit, value_type: string, required: true, status: active}
+  - &b_amount_unit {space_id: crypto_binance, dataset_id: binance_kline, column_name: amount_unit, origin_type: field, origin_id: amount_unit, value_type: string, required: true, status: active}
+  - &b_provider_timestamp {space_id: crypto_binance, dataset_id: binance_kline, column_name: provider_timestamp, origin_type: field, origin_id: provider_timestamp, value_type: time, required: true, status: active}
+  - &b_fetched_at {space_id: crypto_binance, dataset_id: binance_kline, column_name: fetched_at, origin_type: field, origin_id: fetched_at, value_type: time, required: true, status: active}
+  - &b_request_id {space_id: crypto_binance, dataset_id: binance_kline, column_name: request_id, origin_type: field, origin_id: request_id, value_type: string, required: true, status: active}
+  - &b_is_closed {space_id: crypto_binance, dataset_id: binance_kline, column_name: is_closed, origin_type: field, origin_id: is_closed, value_type: bool, required: true, status: active}
+  - {<<: *b_open, dataset_id: spot_kline}
+  - {<<: *b_high, dataset_id: spot_kline}
+  - {<<: *b_low, dataset_id: spot_kline}
+  - {<<: *b_close, dataset_id: spot_kline}
+  - {<<: *b_volume, dataset_id: spot_kline}
+  - {<<: *b_amount, dataset_id: spot_kline}
+  - {<<: *b_open_exact, dataset_id: spot_kline}
+  - {<<: *b_high_exact, dataset_id: spot_kline}
+  - {<<: *b_low_exact, dataset_id: spot_kline}
+  - {<<: *b_close_exact, dataset_id: spot_kline}
+  - {<<: *b_volume_exact, dataset_id: spot_kline}
+  - {<<: *b_amount_exact, dataset_id: spot_kline}
+  - {<<: *b_trade_date, dataset_id: spot_kline}
+  - {<<: *b_close_time, dataset_id: spot_kline}
+  - {<<: *b_feed_scope, dataset_id: spot_kline}
+  - {<<: *b_volume_unit, dataset_id: spot_kline}
+  - {<<: *b_amount_unit, dataset_id: spot_kline}
+  - {<<: *b_provider_timestamp, dataset_id: spot_kline}
+  - {<<: *b_fetched_at, dataset_id: spot_kline}
+  - {<<: *b_request_id, dataset_id: spot_kline}
+  - {<<: *b_is_closed, dataset_id: spot_kline}
+  - {space_id: crypto_binance, dataset_id: spot_kline, column_name: source_provider, origin_type: field, origin_id: source_provider, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: spot_kline, column_name: source_dataset_id, origin_type: field, origin_id: source_dataset_id, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: spot_kline, column_name: source_fetched_at, origin_type: field, origin_id: source_fetched_at, value_type: time, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: spot_kline, column_name: quality_status, origin_type: field, origin_id: quality_status, value_type: string, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: spot_kline, column_name: revision, origin_type: field, origin_id: revision, value_type: int, required: true, status: active}
+  - {space_id: crypto_binance, dataset_id: spot_kline, column_name: resolved_at, origin_type: field, origin_id: resolved_at, value_type: time, required: true, status: active}

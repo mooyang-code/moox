@@ -342,7 +342,7 @@ patch_configs() {
       "${STAGE_DIR}/cloudnode/config/app.yaml"
   fi
   if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
-    perl -0pi -e 's#path:\s*\./data/moox_collector\.db#path: ../data/collector/moox_collector.db#g' \
+    perl -0pi -e 's#path:\s*\./data/moox_collector_market_v2\.db#path: ../data/collector/moox_collector_market_v2.db#g' \
       "${STAGE_DIR}/collector/config/app.yaml"
     # Local collector config disables the timer for dev runs; deployments need it on.
     perl -0pi -e 's#scheduler=collectorSchedule&disable=1&params=[^"]*#scheduler=collectorSchedule&disable=0&params=space_id=crypto#g; s#scheduler=collectorSchedule&disable=0&params=(?=")#scheduler=collectorSchedule&disable=0&params=space_id=crypto#g' \
@@ -655,7 +655,7 @@ init_collector_schema() {
   mkdir -p "${ROOT}/logs/collector"
   (
     cd "${ROOT}/collector"
-    "${ROOT}/bin/moox-collector-cli" init --db-path ../data/collector/moox_collector.db >> "${ROOT}/logs/collector/stdout.log" 2>&1
+    "${ROOT}/bin/moox-collector-cli" init --db-path ../data/collector/moox_collector_market_v2.db >> "${ROOT}/logs/collector/stdout.log" 2>&1
   )
 }
 

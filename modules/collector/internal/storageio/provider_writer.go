@@ -65,7 +65,7 @@ func klineColumns(row marketdata.ProviderKline) ([]*storagepb.ColumnValue, error
 		}
 		columns = append(columns, pair...)
 	}
-	columns = append(columns, stringColumn("trade_date", row.TradeDate), stringColumn("close_time", row.CloseTime.Format(time.RFC3339)), stringColumn("feed_scope", row.FeedScope), stringColumn("volume_unit", row.VolumeUnit), stringColumn("amount_unit", row.AmountUnit), stringColumn("provider_timestamp", row.ProviderTimestamp.Format(time.RFC3339)), stringColumn("fetched_at", row.FetchedAt.Format(time.RFC3339)), stringColumn("request_id", row.RequestID), boolColumn("is_closed", row.Closed))
+	columns = append(columns, stringColumn("trade_date", row.TradeDate), timeColumn("close_time", row.CloseTime), stringColumn("feed_scope", row.FeedScope), stringColumn("volume_unit", row.VolumeUnit), stringColumn("amount_unit", row.AmountUnit), timeColumn("provider_timestamp", row.ProviderTimestamp), timeColumn("fetched_at", row.FetchedAt), stringColumn("request_id", row.RequestID), boolColumn("is_closed", row.Closed))
 	if row.Volume != nil {
 		pair, err := decimalColumns("volume", *row.Volume)
 		if err != nil {
@@ -91,6 +91,9 @@ func decimalColumns(name string, value marketdata.Decimal) ([]*storagepb.ColumnV
 }
 func stringColumn(name, value string) *storagepb.ColumnValue {
 	return &storagepb.ColumnValue{ColumnName: name, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: value}}}
+}
+func timeColumn(name string, value time.Time) *storagepb.ColumnValue {
+	return &storagepb.ColumnValue{ColumnName: name, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_TimeValue{TimeValue: value.UTC().Format(time.RFC3339Nano)}}}
 }
 func boolColumn(name string, value bool) *storagepb.ColumnValue {
 	return &storagepb.ColumnValue{ColumnName: name, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_BoolValue{BoolValue: value}}}

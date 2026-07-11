@@ -34,7 +34,7 @@ func TestProviderAndUnifiedWritersEnforceDatasetRoles(t *testing.T) {
 func TestReadCandidatesUsesExactKeys(t *testing.T) {
 	access := &fakeAccess{readRows: []*storagepb.TimeSeriesRow{{Key: &storagepb.TimeSeriesKey{SpaceId: "crypto_binance", DatasetId: "binance_kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-11T00:00:00Z"}}}}
 	c := NewClientWithAccess(access, nil, []Binding{{SpaceID: "crypto_binance", DatasetID: "binance_kline", Role: RoleProviderData, Feed: "kline"}})
-	_, err := c.ReadCandidates(context.Background(), "BTC-USDT", marketdata.FrequencyMinute, time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC))
+	_, err := c.ReadCandidates(context.Background(), "crypto_binance", []string{"binance_kline"}, "BTC-USDT", marketdata.FrequencyMinute, time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}

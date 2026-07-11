@@ -2,7 +2,7 @@
 
 database:
   type: sqlite
-  path: ./data/moox_collector.db
+  path: ./data/moox_collector_market_v2.db
   max_idle_conns: 10
   max_open_conns: 50
   conn_max_lifetime: 1h
