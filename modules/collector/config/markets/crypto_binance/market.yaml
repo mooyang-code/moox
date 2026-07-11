@@ -17,7 +17,9 @@ providers:
       - {scope: ip, window_seconds: 60, limit: 6000, weight: 1, reset_timezone: UTC}
 datasets:
   - {id: binance_kline, role: provider_data, feed: kline, provider_id: binance}
+  - {id: binance_instruments, role: provider_data, feed: instrument, provider_id: binance}
   - {id: spot_kline, role: unified_data, feed: kline}
+  - {id: instruments, role: unified_data, feed: instrument}
 feeds:
   - {id: spot_kline, dataset_id: spot_kline, frequencies: [1m, 1d], volume_unit: base, amount_unit: quote, bucket_alignment: UTC, instrument_type: spot}
 execution: {timeout_seconds: 60, job_budget_ms: 30000, report_reserve_ms: 10000}

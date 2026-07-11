@@ -96,7 +96,7 @@ func (p *Provider) FetchInstruments(ctx context.Context, gate providers.RequestG
 	}
 	result := providers.FetchInstrumentsResult{Complete: end == len(payload.Symbols), RequestCount: 1}
 	for _, item := range payload.Symbols[start:end] {
-		result.Instruments = append(result.Instruments, providers.ProviderInstrument{ProviderID: p.ID(), ProviderSymbol: item.Symbol, ExchangeID: "BINANCE", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Name: item.BaseAsset + "/" + item.QuoteAsset, Currency: item.QuoteAsset, Status: strings.ToLower(item.Status), EffectiveAt: req.SnapshotAt.UTC(), FetchedAt: p.now().UTC(), RequestID: "binance:exchangeInfo:" + req.SnapshotAt.UTC().Format(time.RFC3339Nano)})
+		result.Instruments = append(result.Instruments, providers.ProviderInstrument{SubjectID: strings.ToUpper(item.BaseAsset + "-" + item.QuoteAsset), ProviderID: p.ID(), ProviderSymbol: item.Symbol, ExchangeID: "BINANCE", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Name: item.BaseAsset + "/" + item.QuoteAsset, Currency: item.QuoteAsset, Status: strings.ToLower(item.Status), EffectiveAt: req.SnapshotAt.UTC(), FetchedAt: p.now().UTC(), RequestID: "binance:exchangeInfo:" + req.SnapshotAt.UTC().Format(time.RFC3339Nano)})
 	}
 	if !result.Complete {
 		result.NextCursor = strconv.Itoa(end)

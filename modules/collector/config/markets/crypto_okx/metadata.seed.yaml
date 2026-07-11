@@ -31,8 +31,22 @@ fields:
   - {space_id: crypto_okx, field_id: quality_status, name: Quality status, value_type: string, status: active}
   - {space_id: crypto_okx, field_id: revision, name: Revision, value_type: int, status: active}
   - {space_id: crypto_okx, field_id: resolved_at, name: Resolved at, value_type: time, status: active}
+  - {space_id: crypto_okx, field_id: subject_id, name: Subject ID, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: provider_id, name: Provider ID, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: provider_symbol, name: Provider symbol, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: exchange_id, name: Exchange ID, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: product_type, name: Product type, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: instrument_type, name: Instrument type, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: instrument_name, name: Instrument name, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: currency, name: Currency, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: listing_date, name: Listing date, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: delisting_date, name: Delisting date, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: instrument_status, name: Instrument status, value_type: string, status: active}
+  - {space_id: crypto_okx, field_id: effective_at, name: Effective at, value_type: time, status: active}
+  - {space_id: crypto_okx, field_id: generation, name: Generation, value_type: time, status: active}
 datasets:
   - {space_id: crypto_okx, dataset_id: okx_kline, data_source_id: okx, name: OKX Kline source, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: provider_data, feed: kline}}
+  - {space_id: crypto_okx, dataset_id: okx_instruments, data_source_id: okx, name: OKX instruments source, data_kind: record, status: active, attributes: {dataset_role: provider_data, feed: instrument}}
   - {space_id: crypto_okx, dataset_id: spot_kline, data_source_id: internal, name: Spot Kline, data_kind: time_series, freqs: [1m, 1d], status: active, attributes: {dataset_role: unified_data, feed: kline}}
   - {space_id: crypto_okx, dataset_id: instruments, data_source_id: internal, name: Instruments, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: instrument}}
   - {space_id: crypto_okx, dataset_id: calendar, data_source_id: internal, name: Calendar, data_kind: record, status: active, attributes: {dataset_role: unified_data, feed: calendar, kind: internal}}
@@ -87,3 +101,36 @@ dataset_columns:
   - {space_id: crypto_okx, dataset_id: spot_kline, column_name: quality_status, origin_type: field, origin_id: quality_status, value_type: string, required: true, status: active}
   - {space_id: crypto_okx, dataset_id: spot_kline, column_name: revision, origin_type: field, origin_id: revision, value_type: int, required: true, status: active}
   - {space_id: crypto_okx, dataset_id: spot_kline, column_name: resolved_at, origin_type: field, origin_id: resolved_at, value_type: time, required: true, status: active}
+  - &oi_subject {space_id: crypto_okx, dataset_id: okx_instruments, column_name: subject_id, origin_type: field, origin_id: subject_id, value_type: string, required: true, status: active}
+  - &oi_provider {space_id: crypto_okx, dataset_id: okx_instruments, column_name: provider_id, origin_type: field, origin_id: provider_id, value_type: string, required: true, status: active}
+  - &oi_symbol {space_id: crypto_okx, dataset_id: okx_instruments, column_name: provider_symbol, origin_type: field, origin_id: provider_symbol, value_type: string, required: true, status: active}
+  - &oi_exchange {space_id: crypto_okx, dataset_id: okx_instruments, column_name: exchange_id, origin_type: field, origin_id: exchange_id, value_type: string, required: true, status: active}
+  - &oi_product {space_id: crypto_okx, dataset_id: okx_instruments, column_name: product_type, origin_type: field, origin_id: product_type, value_type: string, required: true, status: active}
+  - &oi_type {space_id: crypto_okx, dataset_id: okx_instruments, column_name: instrument_type, origin_type: field, origin_id: instrument_type, value_type: string, required: true, status: active}
+  - &oi_name {space_id: crypto_okx, dataset_id: okx_instruments, column_name: name, origin_type: field, origin_id: instrument_name, value_type: string, status: active}
+  - &oi_currency {space_id: crypto_okx, dataset_id: okx_instruments, column_name: currency, origin_type: field, origin_id: currency, value_type: string, status: active}
+  - &oi_listing {space_id: crypto_okx, dataset_id: okx_instruments, column_name: listing_date, origin_type: field, origin_id: listing_date, value_type: string, status: active}
+  - &oi_delisting {space_id: crypto_okx, dataset_id: okx_instruments, column_name: delisting_date, origin_type: field, origin_id: delisting_date, value_type: string, status: active}
+  - &oi_status {space_id: crypto_okx, dataset_id: okx_instruments, column_name: status, origin_type: field, origin_id: instrument_status, value_type: string, required: true, status: active}
+  - &oi_effective {space_id: crypto_okx, dataset_id: okx_instruments, column_name: effective_at, origin_type: field, origin_id: effective_at, value_type: time, required: true, status: active}
+  - &oi_fetched {space_id: crypto_okx, dataset_id: okx_instruments, column_name: fetched_at, origin_type: field, origin_id: fetched_at, value_type: time, required: true, status: active}
+  - &oi_request {space_id: crypto_okx, dataset_id: okx_instruments, column_name: request_id, origin_type: field, origin_id: request_id, value_type: string, required: true, status: active}
+  - {<<: *oi_subject, dataset_id: instruments}
+  - {<<: *oi_provider, dataset_id: instruments}
+  - {<<: *oi_symbol, dataset_id: instruments}
+  - {<<: *oi_exchange, dataset_id: instruments}
+  - {<<: *oi_product, dataset_id: instruments}
+  - {<<: *oi_type, dataset_id: instruments}
+  - {<<: *oi_name, dataset_id: instruments}
+  - {<<: *oi_currency, dataset_id: instruments}
+  - {<<: *oi_listing, dataset_id: instruments}
+  - {<<: *oi_delisting, dataset_id: instruments}
+  - {<<: *oi_status, dataset_id: instruments}
+  - {<<: *oi_effective, dataset_id: instruments}
+  - {<<: *oi_fetched, dataset_id: instruments}
+  - {<<: *oi_request, dataset_id: instruments}
+  - {space_id: crypto_okx, dataset_id: instruments, column_name: source_provider, origin_type: field, origin_id: source_provider, value_type: string, required: true, status: active}
+  - {space_id: crypto_okx, dataset_id: instruments, column_name: source_dataset_id, origin_type: field, origin_id: source_dataset_id, value_type: string, required: true, status: active}
+  - {space_id: crypto_okx, dataset_id: instruments, column_name: quality_status, origin_type: field, origin_id: quality_status, value_type: string, required: true, status: active}
+  - {space_id: crypto_okx, dataset_id: instruments, column_name: generation, origin_type: field, origin_id: generation, value_type: time, required: true, status: active}
+  - {space_id: crypto_okx, dataset_id: instruments, column_name: resolved_at, origin_type: field, origin_id: resolved_at, value_type: time, required: true, status: active}

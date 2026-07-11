@@ -82,6 +82,7 @@ type FetchInstrumentsRequest struct {
 	Cursor          string
 }
 type ProviderInstrument struct {
+	SubjectID      string
 	ProviderID     marketdata.ProviderID
 	ProviderSymbol string
 	ExchangeID     marketdata.ExchangeID
@@ -95,6 +96,13 @@ type ProviderInstrument struct {
 	EffectiveAt    time.Time
 	FetchedAt      time.Time
 	RequestID      string
+}
+type ResolvedInstrument struct {
+	ProviderInstrument
+	SourceDatasetID string
+	QualityStatus   string
+	Generation      time.Time
+	ResolvedAt      time.Time
 }
 type FetchInstrumentsResult struct {
 	Instruments  []ProviderInstrument

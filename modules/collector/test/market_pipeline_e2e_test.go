@@ -57,6 +57,28 @@ func TestMarketPipelineE2E_SourceFirstFallbackAndIdempotentRetry(t *testing.T) {
 	}
 }
 
+func TestInstrumentPipelineE2E_SourceAndUnifiedRecordsUseStableGeneration(t *testing.T) {
+	generation := fixedE2ETime
+	access, err := testkit.Open(t.TempDir(), []testkit.DatasetSchema{instrumentDatasetSchema("crypto_binance", "binance_instruments", false), instrumentDatasetSchema("crypto_binance", "instruments", true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = access.Close() })
+	store := storageio.NewClientWithAccess(access, nil, []storageio.Binding{{SpaceID: "crypto_binance", DatasetID: "binance_instruments", Role: storageio.RoleProviderData, Feed: "instrument", ProviderID: "binance"}, {SpaceID: "crypto_binance", DatasetID: "instruments", Role: storageio.RoleUnifiedData, Feed: "instrument"}})
+	value := providers.ProviderInstrument{SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", ExchangeID: "BINANCE", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Name: "BTC/USDT", Currency: "USDT", Status: "trading", EffectiveAt: generation, FetchedAt: generation, RequestID: "exchange-info"}
+	pipe := pipeline.InstrumentPipeline{Provider: e2EInstrumentProvider{value: value}, Gate: providers.StaticGate{Permit: providers.RequestPermit{Allowed: true}}, Store: store, SpaceID: "crypto_binance", SourceDatasetID: "binance_instruments", SourceDatasetIDs: []string{"binance_instruments"}, SourceDatasets: map[marketdata.ProviderID]string{"binance": "binance_instruments"}, UnifiedDatasetID: "instruments", ProviderPriority: []marketdata.ProviderID{"binance"}, Generation: generation, Now: func() time.Time { return generation.Add(time.Second) }}
+	for run := 0; run < 2; run++ {
+		summary, err := pipe.Run(context.Background(), providers.FetchInstrumentsRequest{MarketID: "crypto_binance", ExchangeID: "BINANCE", SnapshotAt: generation})
+		if err != nil || summary.SourceRows != 1 || summary.UnifiedRows != 1 {
+			t.Fatalf("run=%d summary=%+v err=%v", run, summary, err)
+		}
+	}
+	rsp, err := access.ReadRecordRows(context.Background(), &storagepb.ReadRecordRowsReq{Keys: []*storagepb.RecordKey{{SpaceId: "crypto_binance", DatasetId: "instruments", RecordId: "BTC-USDT", Version: generation.Format(time.RFC3339Nano)}}})
+	if err != nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 {
+		t.Fatalf("read unified instrument rsp=%+v err=%v", rsp, err)
+	}
+}
+
 func readUnified(t *testing.T, store *storageio.Client) *marketdata.ResolvedKline {
 	t.Helper()
 	value, err := store.Unified(context.Background(), "crypto_binance", "spot_kline", "BTC-USDT", marketdata.FrequencyHour, fixedE2ETime.Add(-time.Hour))
@@ -90,6 +112,25 @@ func marketDatasetSchema(spaceID, datasetID string, unified bool) testkit.Datase
 	return testkit.DatasetSchema{SpaceID: spaceID, DatasetID: datasetID, Columns: columns}
 }
 
+func instrumentDatasetSchema(spaceID, datasetID string, unified bool) testkit.DatasetSchema {
+	columns := map[string]storagepb.FieldValueType{}
+	for _, name := range []string{"subject_id", "provider_id", "provider_symbol", "exchange_id", "product_type", "instrument_type", "name", "currency", "listing_date", "delisting_date", "status", "request_id"} {
+		columns[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING
+	}
+	for _, name := range []string{"effective_at", "fetched_at"} {
+		columns[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME
+	}
+	if unified {
+		for _, name := range []string{"source_provider", "source_dataset_id", "quality_status"} {
+			columns[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING
+		}
+		for _, name := range []string{"generation", "resolved_at"} {
+			columns[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME
+		}
+	}
+	return testkit.DatasetSchema{SpaceID: spaceID, DatasetID: datasetID, Columns: columns}
+}
+
 var fixedE2ETime = time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC)
 
 func e2EKline(id, close string) marketdata.ProviderKline {
@@ -102,6 +143,14 @@ func e2EKline(id, close string) marketdata.ProviderKline {
 type e2EProvider struct {
 	id   marketdata.ProviderID
 	rows []marketdata.ProviderKline
+}
+
+type e2EInstrumentProvider struct{ value providers.ProviderInstrument }
+
+func (p e2EInstrumentProvider) ID() marketdata.ProviderID          { return p.value.ProviderID }
+func (e2EInstrumentProvider) Capabilities() []providers.Capability { return nil }
+func (p e2EInstrumentProvider) FetchInstruments(context.Context, providers.RequestGate, providers.FetchInstrumentsRequest) (providers.FetchInstrumentsResult, error) {
+	return providers.FetchInstrumentsResult{Instruments: []providers.ProviderInstrument{p.value}, Complete: true, RequestCount: 1}, nil
 }
 
 func (p *e2EProvider) ID() marketdata.ProviderID          { return p.id }

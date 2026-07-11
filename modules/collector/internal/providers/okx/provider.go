@@ -107,7 +107,7 @@ func (p *Provider) FetchInstruments(ctx context.Context, gate providers.RequestG
 	}
 	result := providers.FetchInstrumentsResult{Complete: end == len(payload.Data), RequestCount: 1}
 	for _, item := range payload.Data[start:end] {
-		result.Instruments = append(result.Instruments, providers.ProviderInstrument{ProviderID: p.ID(), ProviderSymbol: item.InstID, ExchangeID: "OKX", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Name: item.BaseCcy + "/" + item.QuoteCcy, Currency: item.QuoteCcy, ListingDate: millisDate(item.ListTime), DelistingDate: millisDate(item.ExpTime), Status: strings.ToLower(item.State), EffectiveAt: req.SnapshotAt.UTC(), FetchedAt: p.now().UTC(), RequestID: "okx:instruments:" + req.SnapshotAt.UTC().Format(time.RFC3339Nano)})
+		result.Instruments = append(result.Instruments, providers.ProviderInstrument{SubjectID: strings.ToUpper(item.InstID), ProviderID: p.ID(), ProviderSymbol: item.InstID, ExchangeID: "OKX", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, Name: item.BaseCcy + "/" + item.QuoteCcy, Currency: item.QuoteCcy, ListingDate: millisDate(item.ListTime), DelistingDate: millisDate(item.ExpTime), Status: strings.ToLower(item.State), EffectiveAt: req.SnapshotAt.UTC(), FetchedAt: p.now().UTC(), RequestID: "okx:instruments:" + req.SnapshotAt.UTC().Format(time.RFC3339Nano)})
 	}
 	if !result.Complete {
 		result.NextCursor = strconv.Itoa(end)

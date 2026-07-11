@@ -108,12 +108,69 @@ func (h *Harness) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: success(), Rows: out, PageResult: &pb.PageResult{Page: 1, Size: uint32(len(out))}}, nil
 }
 
-func (h *Harness) WriteRecordRows(context.Context, *pb.WriteRecordRowsReq, ...client.Option) (*pb.WriteRecordRowsRsp, error) {
-	return &pb.WriteRecordRowsRsp{RetInfo: failure("record rows are not configured in this harness")}, nil
+func (h *Harness) writeRecordRows(ctx context.Context, req *pb.WriteRecordRowsReq) (*pb.WriteRecordRowsRsp, error) {
+	if req == nil || len(req.GetRows()) == 0 {
+		return &pb.WriteRecordRowsRsp{RetInfo: failure("rows are required")}, nil
+	}
+	rows := make([]*pb.PrimaryStoreRow, 0, len(req.GetRows()))
+	keys := make([]*pb.RecordKey, 0, len(req.GetRows()))
+	for _, row := range req.GetRows() {
+		if row == nil || row.GetKey() == nil {
+			return &pb.WriteRecordRowsRsp{RetInfo: failure("row key is required")}, nil
+		}
+		key := row.GetKey()
+		schema, ok := h.schemas[datasetKey(key.GetSpaceId(), key.GetDatasetId())]
+		if !ok {
+			return &pb.WriteRecordRowsRsp{RetInfo: failure("unknown dataset")}, nil
+		}
+		if strings.TrimSpace(key.GetRecordId()) == "" || strings.TrimSpace(key.GetVersion()) == "" {
+			return &pb.WriteRecordRowsRsp{RetInfo: failure("record_id and version are required")}, nil
+		}
+		if err := validateColumns(schema, row.GetColumns()); err != nil {
+			return &pb.WriteRecordRowsRsp{RetInfo: failure(err.Error())}, nil
+		}
+		dataKey, err := factkey.BuildRecordDataKey(key.GetRecordId())
+		if err != nil {
+			return &pb.WriteRecordRowsRsp{RetInfo: failure(err.Error())}, nil
+		}
+		rows = append(rows, &pb.PrimaryStoreRow{Key: &pb.PrimaryStoreKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), DataKind: pb.DataKind_DATA_KIND_RECORD, Key: dataKey, Version: factkey.NormalizeVersion(key.GetVersion())}, Columns: cloneColumns(row.GetColumns()), Attributes: cloneMap(row.GetAttributes()), WriteMode: req.GetWriteMode()})
+		keys = append(keys, proto.Clone(key).(*pb.RecordKey))
+	}
+	if err := h.store.WriteRows(ctx, rows); err != nil {
+		return nil, err
+	}
+	return &pb.WriteRecordRowsRsp{RetInfo: success(), Keys: keys}, nil
 }
 
-func (h *Harness) ReadRecordRows(context.Context, *pb.ReadRecordRowsReq, ...client.Option) (*pb.ReadRecordRowsRsp, error) {
-	return &pb.ReadRecordRowsRsp{RetInfo: failure("record rows are not configured in this harness")}, nil
+func (h *Harness) WriteRecordRows(ctx context.Context, req *pb.WriteRecordRowsReq, _ ...client.Option) (*pb.WriteRecordRowsRsp, error) {
+	return h.writeRecordRows(ctx, req)
+}
+
+func (h *Harness) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq, _ ...client.Option) (*pb.ReadRecordRowsRsp, error) {
+	if req == nil || len(req.GetKeys()) == 0 {
+		return &pb.ReadRecordRowsRsp{RetInfo: failure("keys are required")}, nil
+	}
+	out := make([]*pb.RecordRow, 0, len(req.GetKeys()))
+	for _, key := range req.GetKeys() {
+		if _, ok := h.schemas[datasetKey(key.GetSpaceId(), key.GetDatasetId())]; !ok {
+			return &pb.ReadRecordRowsRsp{RetInfo: failure("unknown dataset")}, nil
+		}
+		dataKey, err := factkey.BuildRecordDataKey(key.GetRecordId())
+		if err != nil {
+			return &pb.ReadRecordRowsRsp{RetInfo: failure(err.Error())}, nil
+		}
+		primaryKey := &pb.PrimaryStoreKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), DataKind: pb.DataKind_DATA_KIND_RECORD, Key: dataKey, Version: factkey.NormalizeVersion(key.GetVersion())}
+		rows, _, err := h.store.ReadRows(ctx, []*pb.PrimaryStoreKey{primaryKey}, nil, req.GetOrder(), req.GetColumnNames(), &pb.Page{Page: 1, Size: 1})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			copied := proto.Clone(key).(*pb.RecordKey)
+			copied.Version = row.GetKey().GetVersion()
+			out = append(out, &pb.RecordRow{Key: copied, Columns: cloneColumns(row.GetColumns()), Attributes: cloneMap(row.GetAttributes())})
+		}
+	}
+	return &pb.ReadRecordRowsRsp{RetInfo: success(), Rows: out, PageResult: &pb.PageResult{Page: 1, Size: uint32(len(out))}}, nil
 }
 
 func (h *Harness) validateTimeSeriesRow(row *pb.TimeSeriesRow) error {
@@ -128,8 +185,12 @@ func (h *Harness) validateTimeSeriesRow(row *pb.TimeSeriesRow) error {
 	if strings.TrimSpace(key.GetSubjectId()) == "" || strings.TrimSpace(key.GetFreq()) == "" {
 		return fmt.Errorf("subject_id and freq are required")
 	}
-	seen := make(map[string]bool, len(row.GetColumns()))
-	for _, column := range row.GetColumns() {
+	return validateColumns(schema, row.GetColumns())
+}
+
+func validateColumns(schema DatasetSchema, columns []*pb.ColumnValue) error {
+	seen := make(map[string]bool, len(columns))
+	for _, column := range columns {
 		expected, exists := schema.Columns[column.GetColumnName()]
 		if !exists {
 			return fmt.Errorf("column %q is not registered", column.GetColumnName())
