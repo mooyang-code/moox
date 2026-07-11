@@ -39,6 +39,8 @@ func TestDeployEnablesCollectorScheduler(t *testing.T) {
 		"moox-collector",
 		"moox-collector-cli",
 		"moox-collector-scf",
+		"moox-archive",
+		"moox-archive-cli",
 	} {
 		mustWriteFile(t, filepath.Join(root, "bin", name), []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755)
 	}
@@ -62,6 +64,7 @@ func TestDeployEnablesCollectorScheduler(t *testing.T) {
 		"--skip-build",
 		"--no-start",
 		"--no-storage",
+		"--no-archive",
 		"--no-cloudnode",
 		"--no-factor",
 		"--no-monitor",
@@ -170,6 +173,8 @@ func TestDeployStagesStorageViewMaintenanceScheduler(t *testing.T) {
 		"moox-cli",
 		"moox-storage",
 		"moox-storage-cli",
+		"moox-archive",
+		"moox-archive-cli",
 	} {
 		mustWriteFile(t, filepath.Join(root, "bin", name), []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755)
 	}
@@ -216,6 +221,7 @@ func TestDeployStagesStorageViewMaintenanceScheduler(t *testing.T) {
 		"--no-start",
 		"--no-cloudnode",
 		"--no-collector",
+		"--no-archive",
 		"--no-factor",
 		"--no-monitor",
 		"--no-web-host",
