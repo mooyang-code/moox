@@ -143,6 +143,7 @@ type Trade struct {
 	TradeID         string
 	ExchangeTradeID string
 	OrderID         string
+	ClientOrderID   string
 	Symbol          string
 	Side            OrderSide
 	Price           string

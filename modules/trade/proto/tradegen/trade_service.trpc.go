@@ -947,6 +947,162 @@ func RegisterPositionSvcService(s server.Service, svr PositionSvcService) {
 	}
 }
 
+// RebalanceSvcService defines service.
+type RebalanceSvcService interface {
+	CreateRebalance(ctx context.Context, req *CreateRebalanceReq) (*CreateRebalanceRsp, error)
+
+	AdvanceRebalance(ctx context.Context, req *AdvanceRebalanceReq) (*AdvanceRebalanceRsp, error)
+}
+
+func RebalanceSvcService_CreateRebalance_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateRebalanceReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(RebalanceSvcService).CreateRebalance(ctx, reqbody.(*CreateRebalanceReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func RebalanceSvcService_AdvanceRebalance_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &AdvanceRebalanceReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(RebalanceSvcService).AdvanceRebalance(ctx, reqbody.(*AdvanceRebalanceReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// RebalanceSvcServer_ServiceDesc descriptor for server.RegisterService.
+var RebalanceSvcServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.trade.RebalanceSvc",
+	HandlerType: ((*RebalanceSvcService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.trade.RebalanceSvc/CreateRebalance",
+			Func: RebalanceSvcService_CreateRebalance_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.RebalanceSvc/AdvanceRebalance",
+			Func: RebalanceSvcService_AdvanceRebalance_Handler,
+		},
+	},
+}
+
+// RegisterRebalanceSvcService registers service.
+func RegisterRebalanceSvcService(s server.Service, svr RebalanceSvcService) {
+	if err := s.Register(&RebalanceSvcServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("RebalanceSvc register error:%v", err))
+	}
+}
+
+// TradeOpsSvcService defines service.
+type TradeOpsSvcService interface {
+	SetPause(ctx context.Context, req *SetTradePauseReq) (*SetTradePauseRsp, error)
+
+	ReconcileNow(ctx context.Context, req *ReconcileNowReq) (*ReconcileNowRsp, error)
+
+	InspectSaga(ctx context.Context, req *InspectSagaReq) (*InspectSagaRsp, error)
+}
+
+func TradeOpsSvcService_SetPause_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetTradePauseReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeOpsSvcService).SetPause(ctx, reqbody.(*SetTradePauseReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeOpsSvcService_ReconcileNow_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReconcileNowReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeOpsSvcService).ReconcileNow(ctx, reqbody.(*ReconcileNowReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeOpsSvcService_InspectSaga_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &InspectSagaReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeOpsSvcService).InspectSaga(ctx, reqbody.(*InspectSagaReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// TradeOpsSvcServer_ServiceDesc descriptor for server.RegisterService.
+var TradeOpsSvcServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.trade.TradeOpsSvc",
+	HandlerType: ((*TradeOpsSvcService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.trade.TradeOpsSvc/SetPause",
+			Func: TradeOpsSvcService_SetPause_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeOpsSvc/ReconcileNow",
+			Func: TradeOpsSvcService_ReconcileNow_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeOpsSvc/InspectSaga",
+			Func: TradeOpsSvcService_InspectSaga_Handler,
+		},
+	},
+}
+
+// RegisterTradeOpsSvcService registers service.
+func RegisterTradeOpsSvcService(s server.Service, svr TradeOpsSvcService) {
+	if err := s.Register(&TradeOpsSvcServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("TradeOpsSvc register error:%v", err))
+	}
+}
+
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
 type UnimplementedAccountSvc struct{}
@@ -1070,6 +1226,27 @@ func (s *UnimplementedPositionSvc) ListPositions(ctx context.Context, req *ListP
 }
 func (s *UnimplementedPositionSvc) SyncPositions(ctx context.Context, req *SyncPositionsReq) (*SyncPositionsRsp, error) {
 	return nil, errors.New("rpc SyncPositions of service PositionSvc is not implemented")
+}
+
+type UnimplementedRebalanceSvc struct{}
+
+func (s *UnimplementedRebalanceSvc) CreateRebalance(ctx context.Context, req *CreateRebalanceReq) (*CreateRebalanceRsp, error) {
+	return nil, errors.New("rpc CreateRebalance of service RebalanceSvc is not implemented")
+}
+func (s *UnimplementedRebalanceSvc) AdvanceRebalance(ctx context.Context, req *AdvanceRebalanceReq) (*AdvanceRebalanceRsp, error) {
+	return nil, errors.New("rpc AdvanceRebalance of service RebalanceSvc is not implemented")
+}
+
+type UnimplementedTradeOpsSvc struct{}
+
+func (s *UnimplementedTradeOpsSvc) SetPause(ctx context.Context, req *SetTradePauseReq) (*SetTradePauseRsp, error) {
+	return nil, errors.New("rpc SetPause of service TradeOpsSvc is not implemented")
+}
+func (s *UnimplementedTradeOpsSvc) ReconcileNow(ctx context.Context, req *ReconcileNowReq) (*ReconcileNowRsp, error) {
+	return nil, errors.New("rpc ReconcileNow of service TradeOpsSvc is not implemented")
+}
+func (s *UnimplementedTradeOpsSvc) InspectSaga(ctx context.Context, req *InspectSagaReq) (*InspectSagaRsp, error) {
+	return nil, errors.New("rpc InspectSaga of service TradeOpsSvc is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -1884,6 +2061,140 @@ func (c *PositionSvcClientProxyImpl) SyncPositions(ctx context.Context, req *Syn
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SyncPositionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// RebalanceSvcClientProxy defines service client proxy
+type RebalanceSvcClientProxy interface {
+	CreateRebalance(ctx context.Context, req *CreateRebalanceReq, opts ...client.Option) (rsp *CreateRebalanceRsp, err error)
+
+	AdvanceRebalance(ctx context.Context, req *AdvanceRebalanceReq, opts ...client.Option) (rsp *AdvanceRebalanceRsp, err error)
+}
+
+type RebalanceSvcClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewRebalanceSvcClientProxy = func(opts ...client.Option) RebalanceSvcClientProxy {
+	return &RebalanceSvcClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *RebalanceSvcClientProxyImpl) CreateRebalance(ctx context.Context, req *CreateRebalanceReq, opts ...client.Option) (*CreateRebalanceRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.RebalanceSvc/CreateRebalance")
+	msg.WithCalleeServiceName(RebalanceSvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("RebalanceSvc")
+	msg.WithCalleeMethod("CreateRebalance")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CreateRebalanceRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *RebalanceSvcClientProxyImpl) AdvanceRebalance(ctx context.Context, req *AdvanceRebalanceReq, opts ...client.Option) (*AdvanceRebalanceRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.RebalanceSvc/AdvanceRebalance")
+	msg.WithCalleeServiceName(RebalanceSvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("RebalanceSvc")
+	msg.WithCalleeMethod("AdvanceRebalance")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &AdvanceRebalanceRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// TradeOpsSvcClientProxy defines service client proxy
+type TradeOpsSvcClientProxy interface {
+	SetPause(ctx context.Context, req *SetTradePauseReq, opts ...client.Option) (rsp *SetTradePauseRsp, err error)
+
+	ReconcileNow(ctx context.Context, req *ReconcileNowReq, opts ...client.Option) (rsp *ReconcileNowRsp, err error)
+
+	InspectSaga(ctx context.Context, req *InspectSagaReq, opts ...client.Option) (rsp *InspectSagaRsp, err error)
+}
+
+type TradeOpsSvcClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewTradeOpsSvcClientProxy = func(opts ...client.Option) TradeOpsSvcClientProxy {
+	return &TradeOpsSvcClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *TradeOpsSvcClientProxyImpl) SetPause(ctx context.Context, req *SetTradePauseReq, opts ...client.Option) (*SetTradePauseRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeOpsSvc/SetPause")
+	msg.WithCalleeServiceName(TradeOpsSvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeOpsSvc")
+	msg.WithCalleeMethod("SetPause")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SetTradePauseRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeOpsSvcClientProxyImpl) ReconcileNow(ctx context.Context, req *ReconcileNowReq, opts ...client.Option) (*ReconcileNowRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeOpsSvc/ReconcileNow")
+	msg.WithCalleeServiceName(TradeOpsSvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeOpsSvc")
+	msg.WithCalleeMethod("ReconcileNow")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReconcileNowRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeOpsSvcClientProxyImpl) InspectSaga(ctx context.Context, req *InspectSagaReq, opts ...client.Option) (*InspectSagaRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeOpsSvc/InspectSaga")
+	msg.WithCalleeServiceName(TradeOpsSvcServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeOpsSvc")
+	msg.WithCalleeMethod("InspectSaga")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &InspectSagaRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

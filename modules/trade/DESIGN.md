@@ -1,163 +1,71 @@
-# Trade 模块设计（Account + Order 合并微服务）
+# Trade 事件驱动交易内核设计
 
-`trade` 模块以**单一微服务**（`moox-trade`）统一承载两条交易链路：
+## 设计目标
 
-- **账户域（account）**：用户资金账户、余额、资金流水、交易所 API 凭证。
-- **交易域（order）**：交易通道、订单、成交、持仓、账户交易操作。
+Trade 是 MooX 内部的交易事实源。模块以独立数据库保存订单、成交、执行计划、Saga、双式账本、余额、持仓、调仓计划、Inbox 与 Outbox。Storage 只提供行情，不保存或投影交易事实。
 
-> 合并理由：order 的每一步几乎都要读写 account（下单冻结余额、成交回填流水、持仓盈亏），
-> 强一致需求高，放在同一进程同一本地事务最简单可靠。当前两域规模尚小，无需过早拆分为两个微服务。
-> 后续若交易执行与账务的伸缩/合规诉求拉开，可再从本模块拆出账户域（schema 已按域分文件，成本低）。
+本项目尚未上线，因此新内核不包含旧表兼容、双写或迁移逻辑。底层数据库实现只在 `internal/infra/store` 内可见，上层依赖 Store 接口与领域模型。
 
-风格与现有 `admin` 模块（`schema/admin.sql`、`proto/*.proto`）保持一致。
+## 分层
 
-## 设计约定（与现有模块对齐）
-
-- **表名** `t_xxx`，**列名** `c_xxx`。
-- **多空间隔离**：业务表含 `c_space_id`，唯一索引一般为 `(c_space_id, c_xxx_id)`。
-- **软删除**：`c_is_deleted`（`false`/`0`=有效，`true`/`1`=已删除），流水/成交等不可变表不带软删除。
-- **时间**：`c_ctime` / `c_mtime`，可变表配 `update_xxx_mtime` 触发器自动刷新 `c_mtime`。
-- **金额/数量**：统一用 `TEXT` 存 decimal 字符串（proto 中为 `string`），避免浮点精度丢失。
-- **接口响应**：每个 Rsp 首字段为 `common.RetInfo`，`code=SUCCESS(0)` 成功；分页用 `common.Page` / `common.PageResult`。
-- **鉴权**：网关 authorize filter 校验 JWT，注入 `user_id` / `space_id` 到 ctx metadata。
-
-## 产物文件
-
-```
-modules/trade/
-  go.mod
-  cmd/server/main.go                  # 微服务入口
-  cmd/cli/main.go                     # 模块 CLI（init）
-  internal/service/service.go         # 服务骨架（Health）
-  schema/account.sql                  # 账户域表（4 张）
-  schema/order.sql                    # 交易域表（5 张）
-  schema/sync.sql                     # 定时同步游标表
-  schema/schema.go                    # 内嵌 AccountSQL()/OrderSQL()/AllSQL()
-  proto/trade_service.proto           # package trpc.moox.trade，含 9 个 service
-  DESIGN.md                           # 本文档
+```text
+RPC / EventBus consumer
+        |
+application command / consumer / rebalance
+        |
+domain order / execution / ledger / position / rebalance
+        |
+infra store / bus / exchangebridge
+        |
+SQLite       JetStream       Binance / OKX
 ```
 
----
+- `domain`：精确 Decimal、订单状态机、执行计划、账本、仓位和目标仓位规划，不依赖基础设施。
+- `algorithm`：按 `(name, version)` 注册拆单、定价和执行策略；计划生成后完整持久化，不受后续注册表变化影响。
+- `application`：原子创建交易意图，推进提交、成交结算、撤单换单 Saga 和调仓。
+- `infra/store`：唯一事务边界，订单、账本投影与 Outbox 同事务提交。
+- `infra/bus`：使用公共 `packages/messagepb` 和 `packages/jetstream`，不自行封装 NATS 协议。
+- `infra/exchangebridge`：把账户通道解析与旧交易所 REST 适配器隔离在基础设施层。
 
-## 一、账户域（account.sql）
+## 主链路
 
-| 表 | 说明 |
-| --- | --- |
-| `t_accounts` | 交易/资金账户，关联 `t_users.c_user_id`，可绑定交易通道 `c_channel_id` |
-| `t_account_balances` | 账户按币种的余额快照（available/frozen/total），带乐观锁 `c_version` |
-| `t_account_fund_flows` | 资金流水账本（只追加），余额表为其物化结果 |
-| `t_account_api_keys` | 对接交易所的 API 凭证，敏感字段加密存储 |
+1. `PlaceOrder` 校验 Decimal 和账户资金，在一个事务中创建订单、冻结资金并写入 Outbox。
+2. Outbox Relay 发布 `moox.trade.execution.slice_ready.v1`。
+3. durable consumer 在调用交易所前把订单推进到 `SUBMITTING`；明确拒绝、成功和结果未知分别落不同状态。
+4. Binance/OKX 鉴权私有 WebSocket 将成交标准化；成交回报或 REST 缺口修复结果按交易所成交号幂等入库，并在同一事务内更新订单、账本余额和仓位。
+5. 服务在 `SUBMITTING`、`SUBMIT_UNKNOWN`、`CANCELING` 或 `CANCEL_UNKNOWN` 重启时先查询交易所，再决定后续动作，禁止盲目重复下单。
 
-关键设计点：
+定时循环只用于修复中断、补齐私有回报缺口和对账，不是订单或调仓的主触发方式。
 
-- **余额 = 流水**：`t_account_fund_flows` 是权威账本（充值/提现/划转/成交结算/手续费/资金费/调整），
-  `t_account_balances` 是可重建的物化结果，扣减用 `c_version` 乐观锁防并发超扣。
-- **账户 ↔ 通道 ↔ 凭证 解耦**：一个账户可持有多套 API Key（不同权限/子账户），交易通道引用账户与某一凭证。
+私有流由生产 supervisor 按 Space+Channel 去重维护，连接退出后重试。Binance 维护 listen key；OKX 完成 login、orders channel 订阅和 ping/pong 保活。WebSocket 不是事实源，断线后的交易所 REST 对账仍是强制兜底。
 
-接口（service）：
+## 资金与合约
 
-| Service | 方法 | 说明 |
-| --- | --- | --- |
-| `AccountSvc` | Create/Update/Delete/Get/ListAccounts | 账户 CRUD |
-| `BalanceSvc` | GetBalances / SyncBalances | 查询余额、从交易所同步刷新 |
-| `FundSvc` | ListFundFlows / Transfer | 资金流水查询、账户间内部划转（成对流水） |
-| `ApiKeySvc` | Create/Delete/ListApiKeys | API 凭证管理（列表脱敏） |
+- 现货买入冻结报价资产，卖出冻结基础资产。
+- 合约开仓冻结报价资产名义金额，成交后转入 `margin` bucket。
+- 合约 `reduce_only` 不冻结基础资产，避免把合约仓位错误建模为现货余额。
+- 余额同步以交易所总额为锚，同时保留本地未完成订单的 `frozen` 和 `margin`，防止同步覆盖在途预留。
+- 每一笔账本事务必须借贷平衡；业务引用和成交引用均有幂等键。
 
-HTTP 转发路径：`/api/trade/{account|balance|fund|apikey}/{method}`。
+## 撤单换单
 
----
+改单统一建模为持久化 Saga：
 
-## 二、交易域（order.sql）
-
-| 表 | 说明 |
-| --- | --- |
-| `t_trade_channels` | 交易通道：到交易所的下单链路，绑定账户 + API 凭证，支持实盘/模拟 |
-| `t_orders` | 订单全生命周期；`c_client_order_id` 幂等键、`c_exchange_order_id` 交易所单号 |
-| `t_trades` | 成交明细（fill），一笔订单对应多笔成交，不可变 |
-| `t_positions` | 合约/杠杆持仓快照（数量/均价/杠杆/保证金/盈亏） |
-| `t_order_operations` | 账户交易操作审计（下单/撤单/改单/全撤/查询/调杠杆）含请求、响应、耗时 |
-| `t_trade_sync_cursors` | 定时同步游标，记录每个账户/交易对的订单与成交增量同步进度 |
-
-关键设计点：
-
-- **订单状态机** `c_status`：0待提交→1已提交→2部分成交→3完全成交 / 4已撤销 / 5部分成交后撤销 / 6拒绝 / 7过期。
-- **幂等**：`(c_space_id, c_client_order_id, c_is_deleted)` 唯一，重复下单可幂等返回。
-- **操作审计** `t_order_operations`：记录每次对通道的调用与结果（含 `c_latency_ms`、`c_error_code`），便于排障。
-
-接口（service）：
-
-| Service | 方法 | 说明 |
-| --- | --- | --- |
-| `ChannelSvc` | Create/Update/Delete/List/TestChannel | 交易通道管理 + 连通性测试 |
-| `TradeOpSvc` | PlaceOrder/CancelOrder/CancelAllOrders/AmendOrder/SetLeverage | 账户交易操作（下单/撤单/改单/调杠杆） |
-| `OrderSvc` | GetOrder / ListOrders | 订单查询（支持 only_open、时间范围） |
-| `TradeQuerySvc` | ListTrades | 成交明细查询 |
-| `PositionSvc` | ListPositions | 持仓查询 |
-
-HTTP 转发路径：`/api/trade/{channel|order|trade|position}/{method}`。
-
-> 注：proto 中成交查询 service 命名为 `TradeQuerySvc`（与消息类型 `Trade` 区分），避免歧义。
-
----
-
-## 三、交易写路径
-
-MooX 交易 API 是用户和后台服务发起交易的主写路径。管理台和后台服务应调用 MooX API，不应绕过 MooX 直接调用交易所 API。
-
-执行顺序：
-
-1. 创建本地订单意图和操作审计。
-2. 保留 `client_order_id` 作为业务幂等键。
-3. 现货下单按需预冻结余额。
-4. 通过交易所 adapter 调用交易所 API。
-5. 立即更新本地订单状态、交易所订单号、拒绝原因和操作结果。
-6. 定时同步随后对账交易所最终状态。
-
-定时同步不能替代交易主链路。它只负责修复漂移和补齐最终状态，尤其是成交、最终订单状态、余额和持仓。
-
----
-
-## 四、定时同步
-
-`moox-trade` 通过 tRPC timer 注册 `trpc.moox.trade.sync.timer`。
-
-定时任务周期性同步：
-
-1. 账户余额快照到 `t_account_balances`。
-2. 合约/永续持仓快照到 `t_positions`。
-3. 订单快照到 `t_orders`。
-4. 成交明细到 `t_trades`。
-5. 每个账户/交易对的同步游标到 `t_trade_sync_cursors`。
-
-第一版不把 `t_account_fund_flows` 当作完整交易所账本同步。充值、提现、资金费、划转等流水的交易所 API 差异较大，应单独做领域映射。
-
----
-
-## 五、模块内/外关系
-
-```
-t_users (admin)
-   └─ t_accounts (trade/account域)        一个用户多个账户
-        ├─ t_account_balances              账户余额
-        ├─ t_account_fund_flows            资金流水
-        ├─ t_account_api_keys ───┐         交易所凭证
-        └─ t_trade_channels (trade/order域) ◄─┘  通道绑定账户+凭证
-             └─ t_orders                   下单
-                  ├─ t_trades              成交明细
-                  ├─ t_positions           持仓
-                  └─ t_order_operations    操作审计
-        └─ t_trade_sync_cursors            定时同步进度
+```text
+CANCEL_REQUESTED -> CANCEL_CONFIRMED -> REPLACEMENT_CREATED -> REPLACEMENT_SUBMITTED
 ```
 
-跨模块仅通过 `c_user_id` 等字符串引用，不做物理外键（与 collector 跨域引用风格一致）。
-模块内账户域与交易域同库，可在同一 SQLite 事务内完成「下单→冻结→成交→结算→刷新余额」。
+若交易所结果未知则进入 `CANCEL_UNKNOWN` 或 `REPLACEMENT_SUBMIT_UNKNOWN`。恢复器先查询交易所事实。原单确认撤销后才创建替代单，避免双重敞口。
 
----
+## 目标仓位调仓
 
-## 六、后续落地建议
+调仓规划支持 `FULL` 与 `PATCH`，确定性地产生带依赖关系的 legs。反向仓位拆为先平仓、后开仓；leg 的 `market_type`、`reduce_only`、价格快照和规则版本被持久化。
 
-1. 生成 PB：参照 `modules/admin/proto/Makefile` 增加 `modules/trade/proto/Makefile`。
-2. DAO 层：API Key/Secret/Passphrase 落库前加密（参考 admin 的 SSH 凭证加解密）。
-3. Schema 初始化：服务启动前由专门初始化流程创建/更新表结构；`database.Manager.Initialize(&cfg.Database)` 只负责打开 SQLite 连接并设置连接参数。
-4. 成交回填：交易所成交推送 → 写 `t_trades` → 更新 `t_orders` 累计成交 → 生成 `t_account_fund_flows`
-   → 刷新 `t_account_balances`，全部置于同一本地事务保证强一致。
+创建调仓在事务中写入 `moox.trade.rebalance.requested.v1`，专用 durable consumer 推进可执行 legs；恢复循环仅兜底。每个 leg 复用普通下单内核，因此共享幂等、风控、账本、成交和恢复语义。
+
+## 一致性边界
+
+- Space 是共享边界，不区分管理员与普通成员。
+- Trade 数据库是命令与交易事实的唯一权威源。
+- 数据库事务保证本地强一致；Inbox/Outbox 保证跨进程至少一次传递下的业务幂等。
+- 模拟交易没有专用适配器前必须拒绝，不能回退到实盘或伪造成功。

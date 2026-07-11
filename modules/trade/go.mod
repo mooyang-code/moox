@@ -14,6 +14,7 @@ require (
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
+	github.com/nats-io/nats-server/v2 v2.11.3
 	github.com/prometheus/client_golang v1.20.4
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.67.5

@@ -4,24 +4,46 @@ package bootstrap
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	_ "github.com/mooyang-code/moox/modules/trade/internal/exchange/all" // 注册 binance/okx 适配器
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/exchangebridge"
+	kernelstore "github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/metricspublish"
+	"github.com/mooyang-code/moox/modules/trade/internal/observability"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"github.com/mooyang-code/moox/modules/trade/internal/service/dao"
 	"github.com/mooyang-code/moox/modules/trade/internal/service/database"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/jetstream"
 
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
 var tradeStartedAt = time.Now()
+var kernelEventBus struct {
+	sync.RWMutex
+	client *jetstream.Client
+}
+
+func setKernelEventBusClient(client *jetstream.Client) {
+	kernelEventBus.Lock()
+	kernelEventBus.client = client
+	kernelEventBus.Unlock()
+}
+func kernelEventBusReady() bool {
+	kernelEventBus.RLock()
+	defer kernelEventBus.RUnlock()
+	return kernelEventBus.client != nil && kernelEventBus.client.Ready()
+}
 
 // Initialize 初始化 moox-trade 进程：配置 + 持久化 + 服务注册。
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
@@ -43,6 +65,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	store := dao.New(dm.GetDB(), appCfg.Security.EncryptionKey)
+	tradeStore, err := kernelstore.Open(appCfg.Database.Path)
+	if err != nil {
+		return nil, err
+	}
+	kernel := &command.Engine{Store: tradeStore, Resolver: exchangebridge.Resolver{Store: store, Factory: exchange.New}}
 
 	// 3. 装配领域服务
 	secretSource := secretclient.New(secretclient.Config{
@@ -57,13 +84,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	svc := service.New("trade", service.WithStore(store), service.WithExchangeSecretSource(secretSource))
 
 	// 4. 注册 9 个 tRPC service
-	rpc.RegisterAll(s, svc)
-	rpc.SetDefaultSyncService(svc)
-	registerTradeSyncSchedule(s)
+	rpc.RegisterAll(s, svc, kernel)
+	if err := startKernelWorkers(ctx, appCfg.EventBus, tradeStore, kernel); err != nil {
+		return nil, err
+	}
 	registerMetricsReporter(s)
-	startHealthServer(ctx, appCfg)
+	startHealthServer(ctx, appCfg, tradeStore)
 
-	log.InfoContextf(ctx, "moox-trade 初始化完成，已注册 9 个 RPC service 和定时同步 service")
+	log.InfoContextf(ctx, "moox-trade 初始化完成，交易主链路使用 EventBus，定时轮询同步已停用")
 	return s, nil
 }
 
@@ -84,36 +112,38 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func startHealthServer(ctx context.Context, cfg *config.AppConfig) {
+func startHealthServer(ctx context.Context, cfg *config.AppConfig, store *kernelstore.Store) {
 	if cfg == nil {
 		return
 	}
-	if _, err := healthz.Start(ctx, cfg.Health.Addr, tradeHealthSnapshot(cfg)); err != nil {
+	if _, err := healthz.Start(ctx, cfg.Health.Addr, tradeHealthSnapshot(store)); err != nil {
 		log.ErrorContextf(ctx, "trade health server failed to start: %v", err)
 	}
 }
 
-func tradeHealthSnapshot(cfg *config.AppConfig) healthz.SnapshotFunc {
+func tradeHealthSnapshot(store *kernelstore.Store) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
-		rsp := healthz.Base("trade", "trade", "", "", tradeStartedAt, true)
+		stats, err := store.Health(ctx)
+		busReady := kernelEventBusReady()
+		outboxLag := time.Duration(0)
+		if !stats.OldestOutbox.IsZero() {
+			outboxLag = time.Since(stats.OldestOutbox)
+		}
+		privateReady := stats.OpenOrders == 0 || observability.PrivateStreamsReady()
+		ready := err == nil && busReady && outboxLag <= time.Minute && privateReady
+		observability.UnknownOrders.Set(float64(stats.UnknownOrders))
+		observability.OutboxLag.Set(outboxLag.Seconds())
+		rsp := healthz.Base("trade", "trade", "", "", tradeStartedAt, ready)
 		rsp.Details = map[string]any{
-			"database":        "ok",
-			"sync_enabled":    cfg.Sync.Enabled,
-			"control_gateway": cfg.ControlGateway.BaseURL,
-			"orders_sync":     cfg.Sync.SyncOrders,
-			"positions_sync":  cfg.Sync.SyncPositions,
-			"max_symbols_run": cfg.Sync.MaxSymbolsPerRun,
+			"database_ready":             err == nil,
+			"eventbus_ready":             busReady,
+			"outbox_pending":             stats.PendingOutbox,
+			"outbox_lag_seconds":         outboxLag.Seconds(),
+			"unknown_orders":             stats.UnknownOrders,
+			"open_orders":                stats.OpenOrders,
+			"private_stream_ready":       privateReady,
+			"private_stream_connections": observability.PrivateConnectedCount(),
 		}
 		return rsp
 	}
-}
-
-func registerTradeSyncSchedule(s *server.Server) {
-	timer.RegisterScheduler("tradeSyncSchedule", &timer.DefaultScheduler{})
-	service := s.Service("trpc.moox.trade.sync.timer")
-	if service == nil {
-		log.Warn("trade sync timer service is not configured, skip register")
-		return
-	}
-	timer.RegisterHandlerService(service, rpc.HandleSyncSchedule)
 }

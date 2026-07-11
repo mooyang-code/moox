@@ -19,6 +19,18 @@ var orderSQL string
 //go:embed sync.sql
 var syncSQL string
 
+//go:embed ledger.sql
+var ledgerSQL string
+
+//go:embed execution.sql
+var executionSQL string
+
+//go:embed bus.sql
+var busSQL string
+
+//go:embed rebalance.sql
+var rebalanceSQL string
+
 // AccountSQL 返回账户域（账户/余额/流水/凭证）的 SQLite schema。
 func AccountSQL() string {
 	return accountSQL
@@ -31,5 +43,5 @@ func OrderSQL() string {
 
 // AllSQL 返回 Trade 模块全部 schema（账户域 + 交易域）。
 func AllSQL() string {
-	return accountSQL + "\n" + orderSQL + "\n" + syncSQL
+	return accountSQL + "\n" + orderSQL + "\n" + syncSQL + "\n" + ledgerSQL + "\n" + executionSQL + "\n" + busSQL + "\n" + rebalanceSQL
 }

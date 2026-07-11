@@ -1,98 +1,55 @@
 # moox-trade
 
-交易域独立 tRPC 服务：账户、余额、资金流水、API 凭证、交易通道、订单、成交、持仓与下单编排。账户域与交易域共用同一 SQLite 文件，便于在同一事务内完成「下单 → 冻结 → 成交 → 结算 → 刷新余额」。
+MooX 的事件驱动交易内核，提供账户与通道管理、订单执行、成交结算、账本余额、仓位查询、撤单换单和目标仓位调仓。
 
-## 架构
+## 目录
 
 ```text
-cmd/server/main.go              服务入口
-cmd/cli/main.go                 模块 CLI（init）
-internal/bootstrap/             配置 → DB/DAO → service → 注册 9 个 tRPC service
-internal/config/                app.yaml
-internal/spacecontext/          X-Space-Id 注入 + spacectx filter
-internal/service/               AccountService / OrderService 编排
-  order_exec.go                 下单冻结、成交回填、撤单解冻
-  dao/                          GORM Store（SQLite）
-  database/                     连接与 schema
-internal/exchange/              交易所适配（binance / okx）
-internal/rpc/                   9 个 tRPC handler
-proto/                          trade_service.proto + tradegen/
-schema/account.sql              账户、余额、资金流水、API 凭证表
-schema/order.sql                交易通道、订单、成交、持仓、操作日志表
-config/                         app.yaml + trpc_go.yaml
+internal/domain/          订单、执行、账本、仓位、调仓领域模型
+internal/algorithm/       可替换且版本化的拆单、定价、执行算法
+internal/application/     命令、消费者、对账与调仓编排
+internal/infra/store/     交易存储和事务边界
+internal/infra/bus/       Inbox/Outbox 与公共 JetStream 客户端
+internal/infra/exchangebridge/ 交易所适配桥
+internal/bootstrap/       生产装配与后台 worker
+test/                     跨组件端到端测试
 ```
 
-## tRPC 服务（端口 11200–11208）
+架构细节见 [DESIGN.md](./DESIGN.md)。
 
-| 服务 | tRPC 名 | 端口 | 网关 service 键 |
-|------|---------|------|-----------------|
-| 账户 | `trpc.moox.trade.AccountSvc` | 11200 | `trade_account` |
-| 余额 | `trpc.moox.trade.BalanceSvc` | 11201 | `trade_balance` |
-| 资金流水 | `trpc.moox.trade.FundSvc` | 11202 | `trade_fund` |
-| API 凭证 | `trpc.moox.trade.ApiKeySvc` | 11203 | `trade_apikey` |
-| 交易通道 | `trpc.moox.trade.ChannelSvc` | 11204 | `trade_channel` |
-| 交易操作 | `trpc.moox.trade.TradeOpSvc` | 11205 | `trade_tradeop` |
-| 订单 | `trpc.moox.trade.OrderSvc` | 11206 | `trade_order` |
-| 成交查询 | `trpc.moox.trade.TradeQuerySvc` | 11207 | `trade_tradeq` |
-| 持仓 | `trpc.moox.trade.PositionSvc` | 11208 | `trade_position` |
+## 服务
 
-协议均为 HTTP，经 `moox-admin` 网关 `:11000` 以 `/api/admin/trade_*/*` 透传；转发目标来自 `t_service_deployments` active 部署记录。
+账户、余额、资金、API 凭证、通道、交易操作、订单、成交、仓位服务使用端口 `11200-11208`；目标仓位调仓服务使用 `11211`，运维控制服务使用 `11212`。Admin 网关通过 `trade_*` deployment 转发。
 
-全局 server filter：`validation` / `cors` / `spacectx`。
+生产启动器会为存在活动订单的通道维护 Binance/OKX 鉴权私有 WebSocket。私有流负责实时成交，REST `ListFills` 只负责断线缺口修复。两条路径使用相同的交易所成交号和 `FillHandler`，因此重复回报不会重复结算。
 
 ## 配置
 
-`config/app.yaml`：
+- `database.path`：Trade 数据库路径，底层实现不暴露给应用层。
+- `eventbus.urls` / `eventbus.stream`：JetStream 地址与 `MOOX_TRADE` stream。
+- `eventbus.execution_durable`：订单执行 consumer。
+- `eventbus.rebalance_durable`：调仓请求 consumer。
+- `eventbus.progress_durable`：成交后推进调仓依赖 legs 的 consumer。
+- `eventbus.reconciliation_durable`：立即对账命令 consumer。
 
-- `database.path` — SQLite 路径（默认 `./data/moox_trade.db`）
-- `security.encryption_key` — API 凭证 AES-GCM 密钥
-- `log.*` — 日志
+## 运维控制
 
-环境变量：
+`TradeOpsSvc` 提供：
 
-- `MOOX_TRADE_DB_PATH` — 覆盖 Trade SQLite 路径
-- `MOOX_TRADE_ENCRYPTION_KEY` — 覆盖 API 凭证加解密密钥
+- `SetPause`：按 Space 暂停或恢复账户、通道；暂停后新单安全拒绝。
+- `ReconcileNow`：通过 Outbox/EventBus 发起有界订单与成交对账。
+- `InspectSaga`：读取撤单换单 Saga 的状态、版本和最后错误。
 
-`config/trpc_go.yaml` — 9 个 service 监听端口。
+健康检查验证 Store 可写、EventBus 连接、Outbox 延迟、未知订单数量和活动订单的私有流监督状态。Prometheus 指标以 `moox_trade_` 为前缀，标签仅使用有限枚举，不包含订单号、通道号或 Symbol。
+- `security.encryption_key`：交易所凭证 AES-GCM 密钥。
 
-## 构建与运行
+## 构建与验证
 
 ```bash
-make -C proto all                 # proto 变更后
+make -C proto all
 go build -o bin/moox-trade ./cmd/server
-go build -o bin/moox-trade-cli ./cmd/cli
-
-mkdir -p data log
-./bin/moox-trade-cli init --db-path ./data/moox_trade.db
-./bin/moox-trade -conf=config/trpc_go.yaml
+go test -count=1 ./...
+go test -count=1 ./test -v
 ```
 
-仓库根目录：
-
-```bash
-./scripts/build.sh trade
-```
-
-`modules/trade` 当前没有独立 Makefile。
-
-## 交易执行（OrderService）
-
-- **下单**：计算冻结 → `AdjustFrozen` → 落库 PENDING → 适配层下单 → 回填或 REJECTED + 解冻
-- **成交** `ApplyFills`：逐笔解冻、入账、手续费流水、更新订单状态
-- **撤单**：适配层撤单 → 解冻剩余 → CANCELED
-- **改单**：Binance 现货退化为撤单+重下；OKX 走 amend API
-
-冻结额按 `qty - filled_qty` 重算，不单独落冻结表。
-
-## 交易所适配
-
-| 交易所 | 包路径 | 说明 |
-|--------|--------|------|
-| Binance | `internal/exchange/binance` | 现货 `/api`、U 本位 `/fapi`，HMAC-SHA256 |
-| OKX | `internal/exchange/okx` | V5 API，HMAC-SHA256 + base64 |
-
-真实 REST 端到端需有效 API 凭证；本地以签名逻辑与网关链路验证为主。私有 WebSocket 回报为后续扩展点。
-
-## 相关文档
-
-- [docs/架构总览.md](../../docs/架构总览.md) — 模块在整体中的位置
+`test/eventbus_e2e_test.go` 会启动进程内 NATS Server，验证真实 JetStream 发布、NAK 重投、Inbox 幂等和单次交易所提交；`test/trade_e2e_test.go` 验证重启恢复、未知提交、成交结算、资金保护、撤单与调仓。

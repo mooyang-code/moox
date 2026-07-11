@@ -77,13 +77,17 @@ server:
       network: tcp
       protocol: http
       timeout: 5000
+    - name: trpc.moox.trade.RebalanceSvc
+      port: 11211
+      network: tcp
+      protocol: http
+      timeout: 15000
+    - name: trpc.moox.trade.TradeOpsSvc
+      port: 11212
+      network: tcp
+      protocol: http
+      timeout: 15000
 
-      ######## 定时同步服务：余额/持仓/订单/成交增量同步 ########
-    - name: trpc.moox.trade.sync.timer
-      port: 11209
-      network: "0 */5 * * * *?scheduler=tradeSyncSchedule&startAtOnce=1&params=space_id=crypto;sections=balances,positions,orders,trades;window_hours=24;page_size=500;max_symbols=10"
-      protocol: timer
-      timeout: 60000
     - name: trpc.moox.trade.metrics.timer
       port: 11210
       network: "*/30 * * * * *?params="
