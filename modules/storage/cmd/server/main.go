@@ -145,7 +145,9 @@ func main() {
 		}()
 		pb.RegisterPrimaryStoreService(s, primaryService)
 	}
-	startStorageHealthServer(trpc.BackgroundContext(), s, cfg.Storage)
+	if err := registerStorageHealth(s, cfg.Storage); err != nil {
+		exitWithStartupError("register storage health service", err)
+	}
 	registerStorageMetricsReporter(s, cfg.Storage)
 	// 启动trpc服务器
 	log.Infof("Storage roles %v serving", cfg.Storage.Roles)
@@ -270,25 +272,29 @@ func (r *viewRuntime) Close() error {
 	return err
 }
 
-func startStorageHealthServer(ctx context.Context, s *server.Server, storage storageconfig.StorageConfig) {
+func registerStorageHealth(s *server.Server, storage storageconfig.StorageConfig) error {
 	serviceName := storageServiceName(storage)
 	state := health.New("storage", serviceName, "", "")
-	state.SetReady(true)
-	state.SnapshotFunc = storageHealthSnapshot(storage)
+	state.SnapshotFunc = storageHealthSnapshot(storage, state)
 	if s == nil {
-		log.Warn("storage health service is unavailable")
-		return
+		return fmt.Errorf("storage health service is unavailable")
 	}
 	if err := health.Register(s.Service("trpc.moox.storage.Health"), state); err != nil {
-		log.Errorf("storage health server failed to start: %v", err)
+		return fmt.Errorf("storage health server failed to start: %w", err)
 	}
+	return nil
 }
 
-func storageHealthSnapshot(storage storageconfig.StorageConfig) healthz.SnapshotFunc {
+func storageHealthSnapshot(storage storageconfig.StorageConfig, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		serviceName := storageServiceName(storage)
 		roleSummary := storageRoleSummary(storage)
-		rsp := healthz.Base("storage", serviceName, "", "", storageStartedAt, true)
+		rootReady := storage.Root != "" && pathExists(storage.Root)
+		metadataRequired := roleSummary != "view_index"
+		metadataReady := !metadataRequired || (storage.Metadata.Path != "" && pathExists(storage.Metadata.Path))
+		ready := rootReady && metadataReady
+		state.SetReady(ready)
+		rsp := healthz.Base("storage", serviceName, "", "", storageStartedAt, ready)
 		rsp.Service = serviceName
 		rsp.Details = map[string]any{
 			"service":          serviceName,
@@ -299,9 +305,16 @@ func storageHealthSnapshot(storage storageconfig.StorageConfig) healthz.Snapshot
 			"metadata_path":    storage.Metadata.Path,
 			"view_max_workers": storage.View.MaxWorkers,
 			"primary_service":  storage.Primary.ServiceName,
+			"root_ready":       rootReady,
+			"metadata_ready":   metadataReady,
 		}
 		return rsp
 	}
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func storageServiceName(storage storageconfig.StorageConfig) string {

@@ -18,7 +18,7 @@
 - MooX should not copy Gatus UI or its large provider matrix. V1 internalizes the behavior into MooX style: independent module, tRPC API, SQLite schema, Admin gateway forwarding, and Arco-based operations pages.
 - The existing Admin `monitor` service is host resource monitoring based on Node Exporter. It remains in Admin for now and is not migrated in this plan.
 - Existing independently deployable modules follow the same broad shape: `cmd/server`, `cmd/cli`, `config/app.yaml`, `config/trpc_go.yaml`, embedded schema, generated proto package, `scripts/build.sh` target, SysDeploy defaults, release/deploy packaging.
-- Current health coverage is inconsistent: Admin has `/api/admin/health`, Trade has an internal `Health()` model but no standard public endpoint, Web Host can add raw HTTP health easily, and the other tRPC modules need a lightweight raw health server or a standardized endpoint.
+- Current health coverage is inconsistent: Admin has `/api/admin/health`, Trade has an internal `Health()` model but no standard public endpoint, and the other tRPC modules need a standardized `http_no_protocol` health service.
 
 ## Scope
 
@@ -60,12 +60,12 @@
 
 - `modules/monitor` owns service availability monitoring. Existing Admin host resource monitoring remains at `/ops/resource-monitor` and keeps its current APIs.
 - Admin defaults keep the existing internal `monitor` row for host resource monitoring, and add a new `moox_monitor` row for the independent service monitor module. The frontend route for the new page is `/ops/service-monitor`.
-- `GET /healthz` is the common process-level health endpoint. tRPC services that cannot attach raw routes to their service port start a small raw HTTP health server on `health.addr`.
+- `GET /healthz` is the common process-level liveness endpoint and `GET /readyz` is the dependency readiness endpoint. All tRPC services register these routes through `http_no_protocol` and `thttp.RegisterNoProtocolServiceMux`; no independent health listener is created.
 - `t_service_deployments.c_extra_config` carries health metadata instead of adding new Admin schema columns. Expected JSON keys are `health_url`, `health_kind`, and `monitor_enabled`.
 - Built-in system checks use `space_id = ""`, `source = "sysdeploy"`, and group `moox-system`.
 - User-defined checks are space-scoped and use `source = "manual"`.
 - All monitor instances run all enabled checks locally. Alert sending is deduplicated by deterministic ownership: sort active instance IDs, hash `check_id + ":" + alert_rule_id`, and choose `hash % len(active_instances)`.
-- Peer exchange is pull-based over monitor's raw HTTP endpoint with a shared token in config. Peer API does not go through Admin gateway.
+- Peer exchange is pull-based over Monitor's tRPC `http_no_protocol` endpoint with a required shared token. Peer API does not go through Admin gateway.
 - When no peer is reachable, the local monitor owns all alert rules and continues probing.
 
 ## Target File Map
@@ -288,8 +288,8 @@ Web Host:
 
 For CloudNode, Collector, Factor, Trade, and Storage, add config tests that prove:
 
-- a `health.addr` field loads from config;
-- empty `health.addr` disables the raw health listener;
+- the tRPC `trpc.moox.monitor.Health` service is configured in `config/trpc_go.yaml`;
+- health registration failure aborts startup;
 - default dev config uses non-conflicting local addresses:
 
 ```text
@@ -313,7 +313,7 @@ Expected: FAIL until config structs include `health`.
 In each module bootstrap:
 
 - add a `HealthConfig` with `Addr string`;
-- call `healthz.Start(ctx, cfg.Health.Addr, snapshotFunc)`;
+- call `healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.monitor.Health"), handler)`;
 - include module-specific details:
   - CloudNode: `db_ok`, `queue_backend`, `jetstream_enabled`.
   - Collector: `db_ok`, `scheduler_configured`.
@@ -360,7 +360,7 @@ Create tests for:
 
 - default database path is `./data/monitor/monitor.db`;
 - default RPC port in `trpc_go.yaml` is `11410`;
-- default raw HTTP `health_addr` is `:11409`;
+- default tRPC health service port is `11409`;
 - `MOOX_MONITOR_DB_PATH` overrides `database.path`;
 - `instance.instance_id` must not be empty;
 - peer entries require `instance_id`, `base_url`, and `token`.
@@ -394,7 +394,7 @@ Required defaults:
 | Field | Value |
 | --- | --- |
 | `database.path` | `./data/monitor/monitor.db` |
-| `health.addr` | `:11409` |
+| `trpc.moox.monitor.Health` | `11409` |
 | `instance.instance_id` | hostname plus pid fallback, overridable |
 | `instance.base_url` | `http://127.0.0.1:11409` |
 | `scheduler.reload_interval_seconds` | `30` |
@@ -1047,7 +1047,7 @@ Use stable sorting and FNV-1a or SHA-256 hash. Empty active list returns empty s
 
 - [ ] **Step 3: Write peer API tests**
 
-Test raw HTTP endpoints:
+Test the tRPC standard HTTP endpoints:
 
 - `GET /healthz` includes `peer_count` and `active_peer_count`;
 - `GET /internal/monitor/v1/snapshot` rejects missing token;
@@ -1064,7 +1064,7 @@ Expected: FAIL until peer package exists.
 
 - [ ] **Step 4: Implement peer API**
 
-Implement raw HTTP endpoints on monitor's `health.addr` server:
+Implement monitor health and peer routes on the tRPC `http_no_protocol` service:
 
 ```text
 GET /healthz
@@ -1505,7 +1505,7 @@ Create a failing HTTP check with `failure_threshold=1`, point webhook to the rec
 
 - [ ] **Step 8: Verify peer ownership**
 
-Start two monitor instances with different `instance_id` and `health.addr` values, configure them as peers, create the same check/rule, and confirm:
+Start two monitor instances with different `instance_id` and tRPC health service ports, configure them as peers, create the same check/rule, and confirm:
 
 - both instances probe;
 - only owner sends webhook;

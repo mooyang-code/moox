@@ -2,12 +2,20 @@ package control
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/health"
 )
 
 func TestCollectorHealthSnapshot(t *testing.T) {
 	cfg := Default()
-	rsp := collectorHealthSnapshot(cfg)(context.Background())
+	dbm := NewManager()
+	if err := dbm.Initialize(&DatabaseConfig{Path: filepath.Join(t.TempDir(), "collector.db")}); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	state := health.New("collector", "collector", "", "")
+	rsp := collectorHealthSnapshot(cfg, dbm, state)(context.Background())
 
 	if rsp.Module != "collector" || !rsp.Ready || rsp.Status != "ok" {
 		t.Fatalf("health response = %+v", rsp)

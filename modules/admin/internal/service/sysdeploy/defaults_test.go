@@ -18,48 +18,48 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if !ok {
 		t.Fatal("eventbus deployment row missing")
 	}
-	if eventbus.GatewayPath != "trpc.moox.eventbus.EventBusMgr" || eventbus.Port != 11420 || healthURL(eventbus.ExtraConfig) != "http://127.0.0.1:11419/healthz" {
+	if eventbus.GatewayPath != "trpc.moox.eventbus.EventBusMgr" || eventbus.Port != 11420 || healthURL(eventbus.ExtraConfig) != "http://127.0.0.1:11419/readyz" {
 		t.Fatalf("eventbus deployment = %#v", eventbus)
 	}
 	monitor, ok := byName["moox_monitor"]
 	if !ok {
 		t.Fatal("moox_monitor deployment row missing")
 	}
-	if healthURL(monitor.ExtraConfig) != "http://127.0.0.1:11409/healthz" {
+	if healthURL(monitor.ExtraConfig) != "http://127.0.0.1:11409/readyz" {
 		t.Fatalf("moox_monitor extra_config = %s", monitor.ExtraConfig)
 	}
-	if healthURL(byName["moox_cloudnode"].ExtraConfig) != "http://127.0.0.1:11411/healthz" {
+	if healthURL(byName["moox_cloudnode"].ExtraConfig) != "http://127.0.0.1:11411/readyz" {
 		t.Fatalf("cloudnode extra_config = %s", byName["moox_cloudnode"].ExtraConfig)
 	}
 	for name, want := range map[string]string{
-		"moox_strategy":  "http://127.0.0.1:11431/healthz",
-		"moox_archive":   "http://127.0.0.1:11416/healthz",
-		"moox_hostagent": "http://127.0.0.1:11425/healthz",
-		"moox_trade":     "http://127.0.0.1:11210/healthz",
+		"moox_strategy":  "http://127.0.0.1:11431/readyz",
+		"moox_archive":   "http://127.0.0.1:11416/readyz",
+		"moox_hostagent": "http://127.0.0.1:11425/readyz",
+		"moox_trade":     "http://127.0.0.1:11210/readyz",
 	} {
 		if healthURL(byName[name].ExtraConfig) != want {
 			t.Fatalf("%s health URL = %s, want %s", name, healthURL(byName[name].ExtraConfig), want)
 		}
 	}
-	if healthURL(byName["storage_metadata"].ExtraConfig) != "http://127.0.0.1:20210/healthz" {
+	if healthURL(byName["storage_metadata"].ExtraConfig) != "http://127.0.0.1:20210/readyz" {
 		t.Fatalf("storage_metadata extra_config = %s", byName["storage_metadata"].ExtraConfig)
 	}
-	if healthURL(byName["storage_access"].ExtraConfig) != "http://127.0.0.1:20210/healthz" {
+	if healthURL(byName["storage_access"].ExtraConfig) != "http://127.0.0.1:20210/readyz" {
 		t.Fatalf("storage_access extra_config = %s", byName["storage_access"].ExtraConfig)
 	}
-	if healthURL(byName["storage_view"].ExtraConfig) != "http://127.0.0.1:20212/healthz" {
+	if healthURL(byName["storage_view"].ExtraConfig) != "http://127.0.0.1:20212/readyz" {
 		t.Fatalf("storage_view extra_config = %s", byName["storage_view"].ExtraConfig)
 	}
-	if healthURL(byName["storage_view_builder"].ExtraConfig) != "http://127.0.0.1:20211/healthz" {
+	if healthURL(byName["storage_view_builder"].ExtraConfig) != "http://127.0.0.1:20211/readyz" {
 		t.Fatalf("storage_view_builder extra_config = %s", byName["storage_view_builder"].ExtraConfig)
 	}
-	if healthURL(byName["storage_view_query"].ExtraConfig) != "http://127.0.0.1:20212/healthz" {
+	if healthURL(byName["storage_view_query"].ExtraConfig) != "http://127.0.0.1:20212/readyz" {
 		t.Fatalf("storage_view_query extra_config = %s", byName["storage_view_query"].ExtraConfig)
 	}
 	if byName["storage_view_query"].Port != 20202 {
 		t.Fatalf("storage_view_query port = %d, want DataView HTTP 20202", byName["storage_view_query"].Port)
 	}
-	if healthURL(byName["storage_view_index"].ExtraConfig) != "http://127.0.0.1:20213/healthz" {
+	if healthURL(byName["storage_view_index"].ExtraConfig) != "http://127.0.0.1:20213/readyz" {
 		t.Fatalf("storage_view_index extra_config = %s", byName["storage_view_index"].ExtraConfig)
 	}
 	if byName["storage_view_index"].Port != 20104 || byName["storage_view_index"].Protocol != "trpc" {
@@ -98,6 +98,23 @@ func TestMergeDefaultExtraConfigBackfillsMissingFields(t *testing.T) {
 	}
 	if extra["owner"] != "ops" {
 		t.Fatalf("existing owner lost: %s", merged)
+	}
+}
+
+func TestMergeDefaultExtraConfigMigratesLegacyHealthzToReadiness(t *testing.T) {
+	merged, changed := mergeDefaultExtraConfig(
+		`{"health_url":"http://127.0.0.1:11411/healthz","monitor_enabled":true}`,
+		`{"health_url":"http://127.0.0.1:11411/readyz","health_kind":"readiness","monitor_enabled":true}`,
+	)
+	if !changed {
+		t.Fatal("changed = false, want legacy health migration")
+	}
+	var extra map[string]interface{}
+	if err := json.Unmarshal([]byte(merged), &extra); err != nil {
+		t.Fatalf("unmarshal merged: %v", err)
+	}
+	if extra["health_url"] != "http://127.0.0.1:11411/readyz" || extra["health_kind"] != "readiness" {
+		t.Fatalf("health metadata = %v", extra)
 	}
 }
 

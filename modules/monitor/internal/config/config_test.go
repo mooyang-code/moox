@@ -83,6 +83,8 @@ func TestMonitorConfigEnvOverride(t *testing.T) {
 	cfg, err := Load(writeConfig(t, `
 instance:
   instance_id: monitor-test
+peer:
+  enabled: false
 `))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -111,6 +113,16 @@ peer:
 `)
 	if _, err := Load(path); err == nil {
 		t.Fatal("Load() error = nil, want invalid peer entry")
+	}
+}
+
+func TestMonitorConfigRequiresPeerTokenWhenEnabled(t *testing.T) {
+	cfg := Default()
+	cfg.Instance.InstanceID = "monitor-test"
+	cfg.Peer.Enabled = true
+	cfg.Peer.Token = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want peer token error")
 	}
 }
 

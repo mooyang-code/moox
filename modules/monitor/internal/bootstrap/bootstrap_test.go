@@ -7,11 +7,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
+	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 )
+
+func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
+	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	if err := mgr.ApplySchema(schema.SQL()); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	db := mgr.DB()
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close manager: %v", err)
+	}
+	previous := defaultScheduler
+	defaultScheduler = scheduler.New(db, scheduler.Options{})
+	t.Cleanup(func() { defaultScheduler = previous })
+
+	cfg := config.Default()
+	cfg.Instance.InstanceID = "monitor-test"
+	cfg.Metrics.Enabled = false
+	rsp := monitorHealthSnapshot(cfg, mgr, nil)(context.Background())
+	if rsp.Ready {
+		t.Fatalf("health response = %+v, want not ready", rsp)
+	}
+}
 
 func TestActiveMonitorInstanceIDsIncludesLocalAndActivePeers(t *testing.T) {
 	ctx := context.Background()

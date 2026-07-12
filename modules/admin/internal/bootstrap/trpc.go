@@ -27,7 +27,9 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 
 	// 2. 初始化网关服务
 	log.Info("正在初始化网关服务...")
-	gateway.InitGatewayServices(s)
+	if err := gateway.InitGatewayServices(s); err != nil {
+		return err
+	}
 
 	// 3. 注册各模块 RPC 服务（本进程有协议 http，经统一网关透传 /api/admin/{service}/{method}）
 	// 3.0 Space 管理服务

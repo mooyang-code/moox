@@ -2,14 +2,21 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
+	"github.com/mooyang-code/moox/modules/storage/internal/health"
 )
 
 func TestStorageHealthSnapshot(t *testing.T) {
-	cfg := storageconfig.StorageConfig{Roles: []string{"access", "view"}}
-	rsp := storageHealthSnapshot(cfg)(context.Background())
+	cfg := storageconfig.StorageConfig{Root: t.TempDir(), Metadata: storageconfig.StorageMetadata{Path: filepath.Join(t.TempDir(), "metadata.db")}, Roles: []string{"access", "view"}}
+	if err := os.WriteFile(cfg.Metadata.Path, nil, 0o644); err != nil {
+		t.Fatalf("create metadata file: %v", err)
+	}
+	state := health.New("storage", "storage", "", "")
+	rsp := storageHealthSnapshot(cfg, state)(context.Background())
 
 	if rsp.Module != "storage" || !rsp.Ready || rsp.Status != "ok" {
 		t.Fatalf("health response = %+v", rsp)
@@ -23,8 +30,12 @@ func TestStorageHealthSnapshot(t *testing.T) {
 }
 
 func TestStorageHealthSnapshotNamesSplitViewQueryRole(t *testing.T) {
-	cfg := storageconfig.StorageConfig{Roles: []string{"view_query"}}
-	rsp := storageHealthSnapshot(cfg)(context.Background())
+	cfg := storageconfig.StorageConfig{Root: t.TempDir(), Metadata: storageconfig.StorageMetadata{Path: filepath.Join(t.TempDir(), "metadata.db")}, Roles: []string{"view_query"}}
+	if err := os.WriteFile(cfg.Metadata.Path, nil, 0o644); err != nil {
+		t.Fatalf("create metadata file: %v", err)
+	}
+	state := health.New("storage", "storage", "", "")
+	rsp := storageHealthSnapshot(cfg, state)(context.Background())
 
 	if rsp.Service != "storage-view-query" {
 		t.Fatalf("Service = %q, want storage-view-query", rsp.Service)
@@ -38,10 +49,23 @@ func TestStorageHealthSnapshotNamesSplitViewQueryRole(t *testing.T) {
 }
 
 func TestStorageHealthSnapshotNamesViewIndexOwnerRole(t *testing.T) {
-	cfg := storageconfig.StorageConfig{Roles: []string{"view_index"}}
-	rsp := storageHealthSnapshot(cfg)(context.Background())
+	cfg := storageconfig.StorageConfig{Root: t.TempDir(), Metadata: storageconfig.StorageMetadata{Path: filepath.Join(t.TempDir(), "metadata.db")}, Roles: []string{"view_index"}}
+	if err := os.WriteFile(cfg.Metadata.Path, nil, 0o644); err != nil {
+		t.Fatalf("create metadata file: %v", err)
+	}
+	state := health.New("storage", "storage", "", "")
+	rsp := storageHealthSnapshot(cfg, state)(context.Background())
 
 	if rsp.Service != "storage-view-index" {
 		t.Fatalf("Service = %q, want storage-view-index", rsp.Service)
+	}
+}
+
+func TestStorageHealthSnapshotReportsMissingDependencies(t *testing.T) {
+	cfg := storageconfig.StorageConfig{Roles: []string{"access"}}
+	state := health.New("storage", "storage", "", "")
+	rsp := storageHealthSnapshot(cfg, state)(context.Background())
+	if rsp.Ready {
+		t.Fatalf("health response = %+v, want not ready", rsp)
 	}
 }

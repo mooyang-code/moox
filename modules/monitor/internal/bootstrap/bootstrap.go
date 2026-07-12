@@ -3,6 +3,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -115,7 +116,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			Notifier: monmetrics.WebhookMetricNotifier{},
 		})
 	}
-	startHealthServer(ctx, s, cfg, mgr, metricsStorage)
+	if err := registerHealth(s, cfg, mgr, metricsStorage); err != nil {
+		_ = mgr.Close()
+		return nil, err
+	}
 	resultHook := monitorResultHook(cfg, mgr)
 	syncSystem := monitorSyncFunc(ctx, cfg, mgr)
 	var hostReady func() bool
@@ -322,9 +326,9 @@ func Manager() *monstorage.Manager {
 	return defaultManager
 }
 
-func startHealthServer(ctx context.Context, s *server.Server, cfg *config.Config, mgr *monstorage.Manager, metricsStorage *monmetrics.StorageAdapter) {
+func registerHealth(s *server.Server, cfg *config.Config, mgr *monstorage.Manager, metricsStorage *monmetrics.StorageAdapter) error {
 	if cfg == nil {
-		return
+		return nil
 	}
 	state := health.New("monitor", cfg.Instance.InstanceID, "", "")
 	state.SetReady(true)
@@ -336,12 +340,12 @@ func startHealthServer(ctx context.Context, s *server.Server, cfg *config.Config
 		Snapshot: monitorSnapshot(cfg),
 	})
 	if s == nil {
-		log.Warn("monitor health service is unavailable")
-		return
+		return fmt.Errorf("monitor health service is unavailable")
 	}
 	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.monitor.Health"), handler); err != nil {
-		log.ErrorContextf(ctx, "monitor health server failed to start: %v", err)
+		return fmt.Errorf("monitor health server failed to start: %w", err)
 	}
+	return nil
 }
 
 func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorage.Manager, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.RuleRepository, metricEvaluator *monmetrics.MetricEvaluator) {
@@ -525,13 +529,17 @@ func monitorHealthSnapshot(cfg *config.Config, mgr *monstorage.Manager, metricsS
 	return func(ctx context.Context) healthz.Response {
 		var activeChecks int64
 		var activePeers int64
+		var checksErr error
+		var peersErr error
 		if mgr != nil && mgr.DB() != nil {
-			_ = mgr.DB().WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_checks WHERE c_is_deleted = 0 AND c_enabled = 1").Scan(&activeChecks).Error
-			_ = mgr.DB().WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_instances WHERE c_status = ?", domain.InstanceStatusActive).Scan(&activePeers).Error
+			checksErr = mgr.DB().WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_checks WHERE c_is_deleted = 0 AND c_enabled = 1").Scan(&activeChecks).Error
+			peersErr = mgr.DB().WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_instances WHERE c_status = ?", domain.InstanceStatusActive).Scan(&activePeers).Error
 		}
-		rsp := healthz.Base("monitor", cfg.Instance.InstanceID, "", "", monitorStartedAt, true)
+		databaseReady := mgr != nil && mgr.DB() != nil && checksErr == nil && peersErr == nil
+		ready := databaseReady && defaultScheduler != nil
+		rsp := healthz.Base("monitor", cfg.Instance.InstanceID, "", "", monitorStartedAt, ready)
 		rsp.Details = map[string]any{
-			"database":          "ok",
+			"database":          map[bool]string{true: "ok", false: "error"}[databaseReady],
 			"scheduler_ok":      defaultScheduler != nil,
 			"active_checks":     activeChecks,
 			"peer_count":        len(cfg.Peer.Peers),
@@ -553,8 +561,7 @@ func monitorHealthSnapshot(cfg *config.Config, mgr *monstorage.Manager, metricsS
 		}
 		rsp.Details["metrics_schema_ready"] = metricsReady
 		rsp.Details["metrics_schema_reason"] = metricsReason
-		databaseReady := mgr != nil && mgr.DB() != nil
-		ready := databaseReady && defaultScheduler != nil && metricsReady
+		ready = databaseReady && defaultScheduler != nil && metricsReady
 		rsp.Ready = ready
 		if ready {
 			rsp.Status = "ok"
@@ -562,6 +569,12 @@ func monitorHealthSnapshot(cfg *config.Config, mgr *monstorage.Manager, metricsS
 			rsp.Status = "degraded"
 		}
 		rsp.Details["database_ready"] = databaseReady
+		if checksErr != nil {
+			rsp.Details["database_checks_error"] = checksErr.Error()
+		}
+		if peersErr != nil {
+			rsp.Details["database_peers_error"] = peersErr.Error()
+		}
 		rsp.Details["scheduler_ready"] = defaultScheduler != nil
 		return rsp
 	}

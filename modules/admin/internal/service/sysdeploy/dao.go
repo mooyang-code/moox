@@ -220,6 +220,7 @@ func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 	if existingRaw != "" {
 		_ = json.Unmarshal([]byte(existingRaw), &existing)
 	}
+	_, originalKindConfigured := existing["health_kind"]
 	changed := false
 	for key, value := range defaults {
 		if _, ok := existing[key]; ok {
@@ -227,6 +228,14 @@ func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 		}
 		existing[key] = value
 		changed = true
+	}
+	if existingURL, ok := existing["health_url"].(string); ok {
+		defaultURL, defaultOK := defaults["health_url"].(string)
+		if defaultOK && !originalKindConfigured && strings.HasSuffix(strings.TrimRight(existingURL, "/"), "/healthz") && strings.HasSuffix(strings.TrimRight(defaultURL, "/"), "/readyz") {
+			existing["health_url"] = defaultURL
+			existing["health_kind"] = "readiness"
+			changed = true
+		}
 	}
 	if !changed {
 		return existingRaw, false

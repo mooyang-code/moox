@@ -19,15 +19,14 @@ import (
 type Server struct {
 	broker   *broker.Server
 	registry *registry.Registry
-	addr     string
 	ready    atomic.Bool
 	conn     *nats.Conn
 	advisory atomic.Uint64
 	sub      *nats.Subscription
 }
 
-func New(addr string, b *broker.Server, r *registry.Registry, conn ...*nats.Conn) *Server {
-	s := &Server{addr: addr, broker: b, registry: r}
+func New(b *broker.Server, r *registry.Registry, conn ...*nats.Conn) *Server {
+	s := &Server{broker: b, registry: r}
 	if len(conn) > 0 {
 		s.conn = conn[0]
 	}

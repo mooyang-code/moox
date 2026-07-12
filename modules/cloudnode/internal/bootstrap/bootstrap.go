@@ -3,6 +3,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/pprof"
 	"strings"
@@ -99,7 +100,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	svc := cloudnoderpc.New(dbm, opts...)
 	cloudnodepb.RegisterCloudNodeMgrService(s.Service("trpc.moox.cloudnode.CloudNodeMgr"), svc)
-	startHealthServer(ctx, s, cfg)
+	if err := registerHealth(s, cfg, dbm); err != nil {
+		return nil, err
+	}
 
 	log.InfoContextf(ctx, "moox-cloudnode 初始化完成")
 	return s, nil
@@ -122,27 +125,28 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func startHealthServer(ctx context.Context, s *server.Server, cfg *config.Config) {
+func registerHealth(s *server.Server, cfg *config.Config, dbm *storage.Manager) error {
 	if cfg == nil {
-		return
+		return nil
 	}
 	state := health.New("cloudnode", "cloudnode", "", "")
-	state.SetReady(true)
-	state.SnapshotFunc = cloudnodeHealthSnapshot(cfg)
+	state.SnapshotFunc = cloudnodeHealthSnapshot(cfg, dbm, state)
 	if s == nil {
-		log.Warn("cloudnode health service is unavailable")
-		return
+		return fmt.Errorf("cloudnode health service is unavailable")
 	}
 	if err := health.Register(s.Service("trpc.moox.cloudnode.Health"), state); err != nil {
-		log.ErrorContextf(ctx, "cloudnode health server failed to start: %v", err)
+		return fmt.Errorf("cloudnode health server failed to start: %w", err)
 	}
+	return nil
 }
 
-func cloudnodeHealthSnapshot(cfg *config.Config) healthz.SnapshotFunc {
+func cloudnodeHealthSnapshot(cfg *config.Config, dbm *storage.Manager, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
-		rsp := healthz.Base("cloudnode", "cloudnode", "", "", cloudnodeStartedAt, true)
+		databaseReady := dbm != nil && dbm.DB() != nil && dbm.DB().WithContext(ctx).Exec("SELECT 1").Error == nil
+		state.SetReady(databaseReady)
+		rsp := healthz.Base("cloudnode", "cloudnode", "", "", cloudnodeStartedAt, databaseReady)
 		rsp.Details = map[string]any{
-			"database":          "ok",
+			"database":          databaseReady,
 			"queue_backend":     cfg.Queue.Backend,
 			"jetstream_enabled": cfg.JetStream.Enabled,
 		}
@@ -165,8 +169,9 @@ func startDebugServer(ctx context.Context, addr string) {
 	if addr == "" {
 		return
 	}
-	mux := http.NewServeMux()
+	mux := healthz.NewMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandlePrefix("/debug/pprof/", http.HandlerFunc(pprof.Index))
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)

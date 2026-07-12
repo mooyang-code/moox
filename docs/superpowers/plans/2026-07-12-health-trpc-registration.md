@@ -34,8 +34,8 @@
 
 Monitor 为每个 SysDeploy 服务读取 `health_url`：
 
-- HTTP 探测 `/healthz`，避免依赖故障触发进程重启。
-- HTTP 探测 `/readyz`，生成未就绪告警。
+- 默认 HTTP 探测 `/readyz`，只有依赖全部可用时才判定服务正常。
+- `health_kind: liveness` 的自定义地址只检查进程存活，不校验 `ready` 字段。
 - 定时采集 `/metrics`，统计连接、队列积压、处理延迟、错误数和业务吞吐。
 
 ## 已迁移服务
@@ -47,4 +47,5 @@ Archive、Admin Gateway、CloudNode、Collector、EventBus、Factor、HostAgent�
 1. 所有 Health 服务只通过 tRPC Server 启动，不再调用独立 `ListenAndServe`。
 2. 端口占用由 `server.Serve()` 返回启动错误。
 3. 依赖未就绪时 `/healthz` 仍为 200，`/readyz` 为 503。
-4. Monitor 可通过 `health_url` 和 `/metrics` 统一检查、统计。
+4. SysDeploy 默认检查 `/readyz`，Monitor 可通过 `health_kind` 显式选择 liveness/readiness。
+5. Monitor 可通过 `health_url` 和 `/metrics` 统一检查、统计。

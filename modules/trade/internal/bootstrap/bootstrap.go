@@ -4,6 +4,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -90,7 +91,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	registerMetricsReporter(s)
-	startHealthServer(ctx, s, appCfg, tradeStore)
+	if err := registerHealth(s, appCfg, tradeStore); err != nil {
+		return nil, err
+	}
 
 	log.InfoContextf(ctx, "moox-trade 初始化完成，交易主链路使用 EventBus，定时轮询同步已停用")
 	return s, nil
@@ -113,19 +116,19 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func startHealthServer(ctx context.Context, s *server.Server, cfg *config.AppConfig, store *kernelstore.Store) {
+func registerHealth(s *server.Server, cfg *config.AppConfig, store *kernelstore.Store) error {
 	if cfg == nil {
-		return
+		return nil
 	}
 	state := health.New("trade", "trade", "", "")
 	state.SnapshotFunc = tradeHealthSnapshot(store, state)
 	if s == nil {
-		log.Warn("trade health service is unavailable")
-		return
+		return fmt.Errorf("trade health service is unavailable")
 	}
 	if err := health.Register(s.Service("trpc.moox.trade.Health"), state); err != nil {
-		log.ErrorContextf(ctx, "trade health server failed to start: %v", err)
+		return fmt.Errorf("trade health server failed to start: %w", err)
 	}
+	return nil
 }
 
 func tradeHealthSnapshot(store *kernelstore.Store, state *health.State) healthz.SnapshotFunc {

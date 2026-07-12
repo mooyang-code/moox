@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -38,7 +39,7 @@ type HTTPOptions struct {
 }
 
 func NewHTTPHandler(opts HTTPOptions) http.Handler {
-	mux := http.NewServeMux()
+	mux := healthz.NewMux()
 	if opts.Health != nil {
 		liveness := opts.Liveness
 		if liveness == nil {
@@ -49,7 +50,7 @@ func NewHTTPHandler(opts HTTPOptions) http.Handler {
 	}
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/internal/monitor/v1/snapshot", func(w http.ResponseWriter, r *http.Request) {
-		if opts.Token != "" && r.Header.Get(PeerTokenHeader) != opts.Token {
+		if opts.Token == "" || r.Header.Get(PeerTokenHeader) != opts.Token {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

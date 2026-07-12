@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	thttp "trpc.group/trpc-go/trpc-go/http"
@@ -27,6 +29,116 @@ type Response struct {
 
 // SnapshotFunc returns a health snapshot for the current request.
 type SnapshotFunc func(context.Context) Response
+
+// State contains the shared process health state used by module wrappers.
+type State struct {
+	Module       string
+	InstanceID   string
+	Version      string
+	GitCommit    string
+	StartedAt    time.Time
+	ReadyFlag    atomic.Bool
+	SnapshotFunc SnapshotFunc
+}
+
+// NewState creates a shared health state.
+func NewState(module, instance, version, commit string) *State {
+	return &State{Module: module, InstanceID: instance, Version: version, GitCommit: commit, StartedAt: time.Now().UTC()}
+}
+
+// Ready reports the current readiness flag.
+func (s *State) Ready() bool { return s != nil && s.ReadyFlag.Load() }
+
+// SetReady updates the current readiness flag.
+func (s *State) SetReady(value bool) {
+	if s != nil {
+		s.ReadyFlag.Store(value)
+	}
+}
+
+// Snapshot returns the current state and prevents a custom snapshot from
+// reporting ready before the module has explicitly completed initialization.
+func (s *State) Snapshot(ctx context.Context) Response {
+	if s != nil && s.SnapshotFunc != nil {
+		rsp := s.SnapshotFunc(ctx)
+		if !s.Ready() {
+			rsp.Ready = false
+			if rsp.Status == "ok" {
+				rsp.Status = "degraded"
+			}
+		}
+		return rsp
+	}
+	if s == nil {
+		return Response{Ready: false, Status: "error", Time: time.Now()}
+	}
+	return Base(s.Module, s.InstanceID, s.Version, s.GitCommit, s.StartedAt, s.Ready())
+}
+
+// Mux is the exact-path router used by MooX standard HTTP services.
+// tRPC's http_no_protocol registration accepts a net/http.Handler, while the
+// service lifecycle remains owned by thttp.RegisterNoProtocolServiceMux.
+type Mux struct {
+	routes   map[string]http.Handler
+	prefixes []muxPrefix
+}
+
+type muxPrefix struct {
+	path    string
+	handler http.Handler
+}
+
+// NewMux creates an exact-path HTTP router for a tRPC standard service.
+func NewMux() *Mux {
+	return &Mux{routes: make(map[string]http.Handler)}
+}
+
+// Handle registers an exact URL path.
+func (m *Mux) Handle(path string, handler http.Handler) {
+	if m == nil || path == "" || handler == nil {
+		return
+	}
+	if m.routes == nil {
+		m.routes = make(map[string]http.Handler)
+	}
+	m.routes[path] = handler
+}
+
+// HandleFunc registers an exact URL path handler.
+func (m *Mux) HandleFunc(path string, handler http.HandlerFunc) {
+	m.Handle(path, handler)
+}
+
+// HandlePrefix registers a longest-prefix route for diagnostic endpoints such
+// as /debug/pprof/. Exact routes still take precedence.
+func (m *Mux) HandlePrefix(path string, handler http.Handler) {
+	if m == nil || path == "" || handler == nil {
+		return
+	}
+	m.prefixes = append(m.prefixes, muxPrefix{path: path, handler: handler})
+}
+
+// ServeHTTP dispatches the exact path or returns 404.
+func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if m != nil {
+		if handler, ok := m.routes[r.URL.Path]; ok {
+			handler.ServeHTTP(w, r)
+			return
+		}
+		var matched *muxPrefix
+		for i := range m.prefixes {
+			candidate := &m.prefixes[i]
+			if strings.HasPrefix(r.URL.Path, candidate.path) && (matched == nil || len(candidate.path) > len(matched.path)) {
+				matched = candidate
+			}
+		}
+		if matched != nil {
+			matched.handler.ServeHTTP(w, r)
+			return
+		}
+	}
+	http.NotFound(w, r)
+}
 
 // Base constructs a standard health payload with stable fields populated.
 func Base(module, instanceID, version, gitCommit string, start time.Time, ready bool) Response {
@@ -114,7 +226,7 @@ func RegisterNoProtocolServiceMux(service server.Service, mux http.Handler) erro
 
 // StandardMux builds the monitor-facing health and metrics routes.
 func StandardMux(snapshot SnapshotFunc, metrics http.Handler) http.Handler {
-	mux := http.NewServeMux()
+	mux := NewMux()
 	mux.Handle("/healthz", LivenessHandler(snapshot))
 	mux.Handle("/readyz", ReadinessHandler(snapshot))
 	if metrics != nil {

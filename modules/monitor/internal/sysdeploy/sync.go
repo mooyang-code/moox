@@ -127,7 +127,17 @@ func checkFromDeployment(deployment *adminpb.ServiceDeployment) (*domain.Check, 
 	if strings.TrimSpace(extra.HealthURL) != "" {
 		check.Kind = domain.CheckKindHTTP
 		check.URL = strings.TrimSpace(extra.HealthURL)
-		check.BodyContains = `"ready":true`
+		kind := strings.ToLower(strings.TrimSpace(extra.HealthKind))
+		if kind == "" {
+			if strings.HasSuffix(strings.TrimRight(check.URL, "/"), "/healthz") {
+				kind = "liveness"
+			} else {
+				kind = "readiness"
+			}
+		}
+		if kind == "readiness" || kind == "ready" {
+			check.BodyContains = `"ready":true`
+		}
 		return check, true
 	}
 	if deployment.GetProtocol() == "http" && deployment.GetHost() != "" && deployment.GetPort() > 0 {

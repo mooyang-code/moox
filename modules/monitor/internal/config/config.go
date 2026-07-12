@@ -376,6 +376,9 @@ func (c *Config) Validate() error {
 	if c.Instance.BaseURL == "" {
 		return fmt.Errorf("instance.base_url must not be empty")
 	}
+	if c.Peer.Enabled && strings.TrimSpace(c.Peer.Token) == "" {
+		return fmt.Errorf("peer.token must not be empty when peer monitoring is enabled")
+	}
 	if c.Metrics.HostStorage.Enabled {
 		h := c.Metrics.HostStorage
 		if h.SpaceID != "moox_system" {

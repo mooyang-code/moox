@@ -133,11 +133,41 @@ func TestStandardMuxSeparatesLivenessAndReadiness(t *testing.T) {
 }
 
 func TestRegisterNoProtocolServiceMuxRejectsMissingInputs(t *testing.T) {
-	if err := RegisterNoProtocolServiceMux(nil, http.NewServeMux()); err == nil {
+	if err := RegisterNoProtocolServiceMux(nil, NewMux()); err == nil {
 		t.Fatal("nil service should be rejected")
 	}
 	if err := RegisterNoProtocolServiceMux(nil, nil); err == nil {
 		t.Fatal("nil service and handler should be rejected")
+	}
+}
+
+func TestStateSnapshotGatesReadiness(t *testing.T) {
+	state := NewState("test", "instance", "", "")
+	state.SnapshotFunc = func(context.Context) Response {
+		return Base("test", "instance", "", "", state.StartedAt, true)
+	}
+	rsp := state.Snapshot(context.Background())
+	if rsp.Ready || rsp.Status != "degraded" {
+		t.Fatalf("snapshot = %+v, want degraded and not ready", rsp)
+	}
+}
+
+func TestMuxDispatchesExactAndPrefixRoutes(t *testing.T) {
+	mux := NewMux()
+	mux.HandleFunc("/exact", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("exact")) })
+	mux.HandlePrefix("/debug/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("prefix")) }))
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{path: "/exact", want: "exact"},
+		{path: "/debug/pprof/heap", want: "prefix"},
+	} {
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if rr.Code != http.StatusOK || rr.Body.String() != tc.want {
+			t.Fatalf("%s response = %d/%q, want 200/%q", tc.path, rr.Code, rr.Body.String(), tc.want)
+		}
 	}
 }
 

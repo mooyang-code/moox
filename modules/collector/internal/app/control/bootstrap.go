@@ -3,6 +3,7 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
@@ -48,7 +49,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	collectsvc.SetDefaultService(svc)
-	startHealthServer(ctx, s, cfg)
+	if err := registerHealth(s, cfg, dbm); err != nil {
+		return nil, err
+	}
 	registerCollectorSchedule(s)
 	registerMetricsReporter(s)
 
@@ -73,27 +76,28 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func startHealthServer(ctx context.Context, s *server.Server, cfg *Config) {
+func registerHealth(s *server.Server, cfg *Config, dbm *Manager) error {
 	if cfg == nil {
-		return
+		return nil
 	}
 	state := health.New("collector", "collector", "", "")
-	state.SetReady(true)
-	state.SnapshotFunc = collectorHealthSnapshot(cfg)
+	state.SnapshotFunc = collectorHealthSnapshot(cfg, dbm, state)
 	if s == nil {
-		log.Warn("collector health service is unavailable")
-		return
+		return fmt.Errorf("collector health service is unavailable")
 	}
 	if err := health.Register(s.Service("trpc.moox.collector.Health"), state); err != nil {
-		log.ErrorContextf(ctx, "collector health server failed to start: %v", err)
+		return fmt.Errorf("collector health server failed to start: %w", err)
 	}
+	return nil
 }
 
-func collectorHealthSnapshot(cfg *Config) healthz.SnapshotFunc {
+func collectorHealthSnapshot(cfg *Config, dbm *Manager, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
-		rsp := healthz.Base("collector", "collector", "", "", collectorStartedAt, true)
+		databaseReady := dbm != nil && dbm.DB() != nil && dbm.DB().WithContext(ctx).Exec("SELECT 1").Error == nil
+		state.SetReady(databaseReady)
+		rsp := healthz.Base("collector", "collector", "", "", collectorStartedAt, databaseReady)
 		rsp.Details = map[string]any{
-			"database":                "ok",
+			"database":                databaseReady,
 			"cloudnode_address":       cfg.CloudNode.Address,
 			"storage_metadata_target": cfg.Storage.MetadataTarget,
 			"storage_access_target":   cfg.Storage.AccessTarget,

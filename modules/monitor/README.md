@@ -11,7 +11,7 @@ catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取�
 ## 端口
 
 - `:11410`: tRPC/HTTP 管理 API `trpc.moox.monitor.MonitorMgr`
-- `:11409`: 原生 HTTP `/healthz` 与 peer snapshot API
+- `:11409`: tRPC `http_no_protocol` 健康接口（`/healthz`、`/readyz`、`/metrics`）与 peer snapshot API
 
 ## 配置
 
@@ -44,7 +44,7 @@ peer:
 
 Admin 只作为网关和 SysDeploy 注册中心。Monitor 会周期性读取 SysDeploy active 部署，生成 `moox-system` 内置检查；探测时不依赖 Admin。
 
-所有独立部署进程都提供 `/healthz`，monitor 自己也提供，可用于多实例互相监控。
+所有独立部署进程都通过 tRPC `http_no_protocol` 提供 `/healthz` 与 `/readyz`；Monitor 默认探测 `/readyz`，多实例 peer snapshot 需要共享 Token。
 
 ## 管理接口
 

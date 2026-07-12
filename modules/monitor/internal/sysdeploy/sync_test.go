@@ -19,7 +19,7 @@ func TestSyncDeploymentsCreatesSystemChecks(t *testing.T) {
 	syncer := NewSyncer(checks, nil)
 
 	n, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{
-		{ServiceName: "moox_cloudnode", Protocol: "http", Host: "127.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:11411/healthz","monitor_enabled":true}`},
+		{ServiceName: "moox_cloudnode", Protocol: "http", Host: "127.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:11411/readyz","health_kind":"readiness","monitor_enabled":true}`},
 		{ServiceName: "moox_collector", Protocol: "http", Host: "127.0.0.1", Port: 11402, Status: "active", ExtraConfig: `{}`},
 		{ServiceName: "inactive", Protocol: "http", Host: "127.0.0.1", Port: 1, Status: "inactive", ExtraConfig: `{}`},
 	})
@@ -33,7 +33,7 @@ func TestSyncDeploymentsCreatesSystemChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get cloudnode check: %v", err)
 	}
-	if httpCheck.Kind != domain.CheckKindHTTP || httpCheck.URL != "http://127.0.0.1:11411/healthz" || httpCheck.BodyContains != `"ready":true` {
+	if httpCheck.Kind != domain.CheckKindHTTP || httpCheck.URL != "http://127.0.0.1:11411/readyz" || httpCheck.BodyContains != `"ready":true` {
 		t.Fatalf("http check = %+v", httpCheck)
 	}
 	tcpCheck, err := checks.Get(ctx, "", "moox_collector")
@@ -42,6 +42,21 @@ func TestSyncDeploymentsCreatesSystemChecks(t *testing.T) {
 	}
 	if tcpCheck.Kind != domain.CheckKindTCP || tcpCheck.TCPHost != "127.0.0.1" || tcpCheck.TCPPort != 11402 {
 		t.Fatalf("tcp check = %+v", tcpCheck)
+	}
+}
+
+func TestCheckFromDeploymentDoesNotAssertReadinessForLiveness(t *testing.T) {
+	check, ok := checkFromDeployment(&adminpb.ServiceDeployment{
+		ServiceName: "web",
+		Protocol:    "http",
+		Status:      "active",
+		ExtraConfig: `{"health_url":"http://127.0.0.1:8080/healthz","health_kind":"liveness"}`,
+	})
+	if !ok {
+		t.Fatal("checkFromDeployment returned ok=false")
+	}
+	if check.BodyContains != "" {
+		t.Fatalf("liveness check body matcher = %q, want empty", check.BodyContains)
 	}
 }
 

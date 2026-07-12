@@ -11,9 +11,9 @@ import (
 	"github.com/gorilla/mux"
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go"
-	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -64,16 +64,16 @@ func NewHTTPRouter(gateway *GatewayHandle) *HTTPRouter {
 }
 
 // RegisterGatewayHTTPHandlers 注册网关HTTP接口
-func RegisterGatewayHTTPHandlers(s *server.Server) {
+func RegisterGatewayHTTPHandlers(s *server.Server) error {
 	gateway := GetGatewayHandleInstance()
 	router := NewHTTPRouter(gateway)
-	router.setupRoutes(s)
+	return router.setupRoutes(s)
 }
 
 // setupRoutes 设置路由
-func (hr *HTTPRouter) setupRoutes(s *server.Server) {
+func (hr *HTTPRouter) setupRoutes(s *server.Server) error {
 	router := hr.buildRouter()
-	thttp.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.stdhttp"), router)
+	return healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.stdhttp"), router)
 }
 
 func (hr *HTTPRouter) buildRouter() *mux.Router {

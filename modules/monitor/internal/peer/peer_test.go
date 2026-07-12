@@ -48,6 +48,17 @@ func TestHTTPHandlerSnapshotAuth(t *testing.T) {
 	}
 }
 
+func TestHTTPHandlerRejectsSnapshotWhenTokenIsNotConfigured(t *testing.T) {
+	handler := NewHTTPHandler(HTTPOptions{
+		Snapshot: func(context.Context) Snapshot { return Snapshot{InstanceID: "monitor-a"} },
+	})
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/internal/monitor/v1/snapshot", nil))
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("snapshot status = %d, want %d", rr.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestPullerStoresSnapshotsAndMarksStale(t *testing.T) {
 	ctx := context.Background()
 	mgr := openPeerDB(t)
@@ -107,6 +118,7 @@ func TestPullerContinuesAfterPeerFailure(t *testing.T) {
 	}))
 	defer bad.Close()
 	good := httptest.NewServer(NewHTTPHandler(HTTPOptions{
+		Token: "secret",
 		Snapshot: func(ctx context.Context) Snapshot {
 			return Snapshot{InstanceID: "monitor-good", BaseURL: "http://monitor-good", ObservedAt: time.Now()}
 		},
@@ -116,7 +128,7 @@ func TestPullerContinuesAfterPeerFailure(t *testing.T) {
 	puller := NewPuller(repo, PullerOptions{
 		Peers: []Remote{
 			{InstanceID: "monitor-bad", BaseURL: bad.URL},
-			{InstanceID: "monitor-good", BaseURL: good.URL},
+			{InstanceID: "monitor-good", BaseURL: good.URL, Token: "secret"},
 		},
 		Timeout: 100 * time.Millisecond,
 	})

@@ -124,7 +124,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			factorsvc.WithMetadataSync(meta),
 		))
 	}
-	startHealthServer(ctx, s, cfg)
+	if err := registerHealth(s, cfg, dbm, sched, runtimeExec); err != nil {
+		return nil, err
+	}
 
 	log.InfoContextf(ctx, "moox-factor 初始化完成")
 	return s, nil
@@ -154,31 +156,37 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func startHealthServer(ctx context.Context, s *server.Server, cfg *Config) {
+func registerHealth(s *server.Server, cfg *Config, dbm *Manager, sched *scheduler.Service, runtimeExec *engine.RuntimePoolExecutor) error {
 	if cfg == nil {
-		return
+		return nil
 	}
 	state := health.New("factor", cfg.Instance.InstanceID, "", "")
-	state.SetReady(true)
-	state.SnapshotFunc = factorHealthSnapshot(cfg)
+	state.SnapshotFunc = factorHealthSnapshot(cfg, dbm, sched, runtimeExec, state)
 	if s == nil {
-		log.Warn("factor health service is unavailable")
-		return
+		return fmt.Errorf("factor health service is unavailable")
 	}
 	if err := health.Register(s.Service("trpc.moox.factor.Health"), state); err != nil {
-		log.ErrorContextf(ctx, "factor health server failed to start: %v", err)
+		return fmt.Errorf("factor health server failed to start: %w", err)
 	}
+	return nil
 }
 
-func factorHealthSnapshot(cfg *Config) healthz.SnapshotFunc {
+func factorHealthSnapshot(cfg *Config, dbm *Manager, sched *scheduler.Service, runtimeExec *engine.RuntimePoolExecutor, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
-		rsp := healthz.Base("factor", cfg.Instance.InstanceID, "", "", factorStartedAt, true)
+		databaseReady := dbm != nil && dbm.DB() != nil && dbm.DB().WithContext(ctx).Exec("SELECT 1").Error == nil
+		workerReady := runtimeExec != nil && runtimeExec.Status().Workers > 0
+		schedulerReady := sched != nil
+		ready := databaseReady && workerReady && schedulerReady
+		state.SetReady(ready)
+		rsp := healthz.Base("factor", cfg.Instance.InstanceID, "", "", factorStartedAt, ready)
 		rsp.Details = map[string]any{
-			"database":       "ok",
-			"role":           cfg.Instance.Role,
-			"worker_count":   cfg.Engine.Workers,
-			"nats_enabled":   cfg.NATS.URL != "",
-			"storage_access": cfg.Storage.AccessTarget,
+			"database":        databaseReady,
+			"worker_ready":    workerReady,
+			"scheduler_ready": schedulerReady,
+			"role":            cfg.Instance.Role,
+			"worker_count":    cfg.Engine.Workers,
+			"nats_enabled":    cfg.NATS.URL != "",
+			"storage_access":  cfg.Storage.AccessTarget,
 		}
 		return rsp
 	}

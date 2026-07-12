@@ -205,10 +205,12 @@ func shouldCompress(r *http.Request, path string) bool {
 }
 
 func newHTTPHandler(statikFS http.FileSystem) http.Handler {
-	mux := http.NewServeMux()
-	mux.Handle("/healthz", healthz.Handler(func(ctx context.Context) healthz.Response {
+	mux := healthz.NewMux()
+	snapshot := func(ctx context.Context) healthz.Response {
 		return healthz.Base("web-host", "web-host", "", "", webHostStartedAt, true)
-	}))
+	}
+	mux.Handle("/healthz", healthz.LivenessHandler(snapshot))
+	mux.Handle("/readyz", healthz.ReadinessHandler(snapshot))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if isAPIRequest(r.URL.Path) {
 			log.Printf("拒绝 API 请求: %s（web-host 仅提供静态资源）", r.URL.Path)
