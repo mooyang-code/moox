@@ -16,6 +16,8 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
 )
@@ -35,6 +37,95 @@ func TestPollJobItemsRequiresSupportedProtocolVersion(t *testing.T) {
 		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
 			t.Fatalf("protocol_version %q ret code = %v, want INVALID_PARAM", protocolVersion, rsp.GetRetInfo().GetCode())
 		}
+	}
+}
+
+func TestGetJobItemRequiresParams(t *testing.T) {
+	svc := &Service{}
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		req  *pb.GetJobItemReq
+	}{
+		{name: "missing space", req: &pb.GetJobItemReq{JobItemId: "ji-1"}},
+		{name: "missing job item", req: &pb.GetJobItemReq{SpaceId: "crypto"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rsp, err := svc.GetJobItem(ctx, tc.req)
+			require.NoError(t, err)
+			assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+		})
+	}
+}
+
+func TestGetJobItemWithoutStateStore_ShouldReturnConfigError(t *testing.T) {
+	rsp, err := (&Service{}).GetJobItem(context.Background(), &pb.GetJobItemReq{
+		SpaceId: "crypto", JobItemId: "ji-1",
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+}
+
+func TestListJobItemsRequiresSpaceID(t *testing.T) {
+	rsp, err := (&Service{}).ListJobItems(context.Background(), &pb.ListJobItemsReq{})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+}
+
+func TestListJobItemsWithoutStateStore_ShouldReturnConfigError(t *testing.T) {
+	rsp, err := (&Service{}).ListJobItems(context.Background(), &pb.ListJobItemsReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	assert.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+}
+
+func TestListJobItemAttemptsRequiresParams(t *testing.T) {
+	svc := &Service{}
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		req  *pb.ListJobItemAttemptsReq
+	}{
+		{name: "missing space", req: &pb.ListJobItemAttemptsReq{JobItemId: "ji-1"}},
+		{name: "missing job item", req: &pb.ListJobItemAttemptsReq{SpaceId: "crypto"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rsp, err := svc.ListJobItemAttempts(ctx, tc.req)
+			require.NoError(t, err)
+			assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+		})
+	}
+}
+
+func TestSubmitJobItemsWithoutStateStore_ShouldReturnConfigError(t *testing.T) {
+	rsp, err := (&Service{}).SubmitJobItems(context.Background(), &pb.SubmitJobItemsReq{})
+	require.NoError(t, err)
+	assert.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+}
+
+func TestReportJobItemStatusRequiresParams(t *testing.T) {
+	svc := &Service{}
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		req  *pb.ReportJobItemStatusReq
+	}{
+		{name: "missing space", req: &pb.ReportJobItemStatusReq{NodeId: "n1", JobItemId: "ji-1", AttemptNo: 1}},
+		{name: "missing node", req: &pb.ReportJobItemStatusReq{SpaceId: "crypto", JobItemId: "ji-1", AttemptNo: 1}},
+		{name: "missing job item", req: &pb.ReportJobItemStatusReq{SpaceId: "crypto", NodeId: "n1", AttemptNo: 1}},
+		{name: "missing attempt", req: &pb.ReportJobItemStatusReq{SpaceId: "crypto", NodeId: "n1", JobItemId: "ji-1"}},
+		{name: "failed needs error kind", req: &pb.ReportJobItemStatusReq{
+			SpaceId: "crypto", NodeId: "n1", JobItemId: "ji-1", AttemptNo: 1,
+			Status: pb.JobItemReportStatus_JOB_ITEM_REPORT_STATUS_FAILED,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rsp, err := svc.ReportJobItemStatus(ctx, tc.req)
+			require.NoError(t, err)
+			assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+		})
 	}
 }
 

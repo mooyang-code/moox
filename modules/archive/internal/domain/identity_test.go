@@ -34,3 +34,25 @@ func TestMonthUsesUTC(t *testing.T) {
 		t.Fatalf("MonthOf() = %s, want 202606", got)
 	}
 }
+
+func TestParseFileName_RoundTripsPartitionKey(t *testing.T) {
+	key := PartitionKey{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", Month: "202601"}
+	name, err := key.FileName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseFileName(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != key {
+		t.Fatalf("ParseFileName() = %+v, want %+v", got, key)
+	}
+}
+
+func TestPartitionKeyValidate_RejectsInvalidMonth(t *testing.T) {
+	key := PartitionKey{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", Month: "bad"}
+	if err := key.Validate(); err == nil {
+		t.Fatal("expected invalid month")
+	}
+}

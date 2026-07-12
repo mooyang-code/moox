@@ -68,3 +68,56 @@ func TestParseRunOnceArgs(t *testing.T) {
 		t.Fatalf("factor ids = %#v", cfg.FactorIDs)
 	}
 }
+
+func TestFilterFactorsKeepsOnlyRequestedIDs(t *testing.T) {
+	factors := []domain.FactorDef{
+		{FactorID: "bias"},
+		{FactorID: "cci"},
+		{FactorID: "macd"},
+	}
+	got := filterFactors(factors, []string{"cci"})
+	if len(got) != 1 || got[0].FactorID != "cci" {
+		t.Fatalf("filterFactors() = %+v", got)
+	}
+}
+
+func TestFilterFactorsReturnsAllWhenNoFilter(t *testing.T) {
+	factors := []domain.FactorDef{{FactorID: "bias"}, {FactorID: "cci"}}
+	got := filterFactors(factors, nil)
+	if len(got) != 2 {
+		t.Fatalf("filterFactors() = %+v", got)
+	}
+}
+
+func TestMustParseParamsDefaultsToEmptySlice(t *testing.T) {
+	if got := mustParseParams(""); len(got) != 0 {
+		t.Fatalf("mustParseParams() = %#v", got)
+	}
+	if got := mustParseParams(`[1,2,3]`); !reflect.DeepEqual(got, []int{1, 2, 3}) {
+		t.Fatalf("mustParseParams() = %#v", got)
+	}
+}
+
+func TestBuildTaskUsesMaxLookbackAndSourcePaths(t *testing.T) {
+	cfg := cliConfig{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", FactorsDir: "/tmp/factors", BarTime: time.Unix(0, 0).UTC()}
+	factors := []domain.FactorDef{
+		{FactorID: "bias", Name: "bias", ParamsJSON: `[5]`, LookbackBars: 20, WritebackBars: 1},
+		{FactorID: "cci", Name: "cci", ParamsJSON: `[14]`, LookbackBars: 96},
+	}
+	task := buildTask(cfg, factors)
+	if task.LookbackBars != 96 || len(task.Factors) != 2 || task.Factors[0].SourcePath != "/tmp/factors/bias.py" {
+		t.Fatalf("buildTask() = %+v", task)
+	}
+}
+
+func TestInputColumnsDedupesExtraColumns(t *testing.T) {
+	specs := []engine.FactorSpec{
+		{ExtraColumns: []string{"close", "volume"}},
+		{ExtraColumns: []string{"volume", "open_interest"}},
+	}
+	got := inputColumns(specs)
+	want := append([]string(nil), "open", "high", "low", "close", "volume", "quote_volume", "trade_num", "open_interest")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("inputColumns() = %#v, want %#v", got, want)
+	}
+}

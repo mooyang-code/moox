@@ -1,0 +1,251 @@
+package hostmetrics
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/client"
+)
+
+type gateMetadataFake struct {
+	spaceErr    error
+	space       *storagepb.Space
+	datasetErr  error
+	dataset     *storagepb.Dataset
+	columnsErr  error
+	columns     []*storagepb.DatasetColumn
+	routesErr   error
+	routes      []*storagepb.PrimaryStoreRoute
+	spaceRet    *commonpb.RetInfo
+	datasetRet  *commonpb.RetInfo
+	columnsRet  *commonpb.RetInfo
+	routesRet   *commonpb.RetInfo
+}
+
+func (f *gateMetadataFake) GetSpace(_ context.Context, _ *storagepb.GetSpaceReq, _ ...client.Option) (*storagepb.GetSpaceRsp, error) {
+	if f.spaceErr != nil {
+		return nil, f.spaceErr
+	}
+	ret := f.spaceRet
+	if ret == nil {
+		ret = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+	}
+	return &storagepb.GetSpaceRsp{RetInfo: ret, Space: f.space}, nil
+}
+
+func (f *gateMetadataFake) GetDataset(_ context.Context, _ *storagepb.GetDatasetReq, _ ...client.Option) (*storagepb.GetDatasetRsp, error) {
+	if f.datasetErr != nil {
+		return nil, f.datasetErr
+	}
+	ret := f.datasetRet
+	if ret == nil {
+		ret = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+	}
+	return &storagepb.GetDatasetRsp{RetInfo: ret, Dataset: f.dataset}, nil
+}
+
+func (f *gateMetadataFake) ListDatasetColumns(_ context.Context, _ *storagepb.ListDatasetColumnsReq, _ ...client.Option) (*storagepb.ListDatasetColumnsRsp, error) {
+	if f.columnsErr != nil {
+		return nil, f.columnsErr
+	}
+	ret := f.columnsRet
+	if ret == nil {
+		ret = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+	}
+	return &storagepb.ListDatasetColumnsRsp{RetInfo: ret, Columns: f.columns}, nil
+}
+
+func (f *gateMetadataFake) ListPrimaryStoreRoutes(_ context.Context, _ *storagepb.ListPrimaryStoreRoutesReq, _ ...client.Option) (*storagepb.ListPrimaryStoreRoutesRsp, error) {
+	if f.routesErr != nil {
+		return nil, f.routesErr
+	}
+	ret := f.routesRet
+	if ret == nil {
+		ret = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+	}
+	return &storagepb.ListPrimaryStoreRoutesRsp{RetInfo: ret, PrimaryStoreRoutes: f.routes}, nil
+}
+
+func hostGateCfg() monconfig.HostStorageConfig {
+	return monconfig.Default().Metrics.HostStorage
+}
+
+func activeColumn(name string, vt storagepb.FieldValueType) *storagepb.DatasetColumn {
+	return &storagepb.DatasetColumn{ColumnName: name, ValueType: vt, Status: "active"}
+}
+
+func resourceColumns(cfg monconfig.HostStorageConfig) []*storagepb.DatasetColumn {
+	_ = cfg
+	return []*storagepb.DatasetColumn{
+		activeColumn("agent_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING),
+		activeColumn("logical_cores", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("memory_total_bytes", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("memory_used_bytes", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("memory_available_bytes", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("cpu_usage_available", storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL),
+		activeColumn("memory_usage_percent", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
+	}
+}
+
+func filesystemColumns() []*storagepb.DatasetColumn {
+	return []*storagepb.DatasetColumn{
+		activeColumn("device", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING),
+		activeColumn("mountpoint", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING),
+		activeColumn("fs_type", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING),
+		activeColumn("total_bytes", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("used_bytes", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("available_bytes", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("usage_percent", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
+		activeColumn("read_only", storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL),
+	}
+}
+
+func diskColumns() []*storagepb.DatasetColumn {
+	return []*storagepb.DatasetColumn{
+		activeColumn("device", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING),
+		activeColumn("read_bytes_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("write_bytes_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("read_ops_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("write_ops_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("io_time_ms_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("rate_available", storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL),
+	}
+}
+
+func networkColumns() []*storagepb.DatasetColumn {
+	return []*storagepb.DatasetColumn{
+		activeColumn("device", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING),
+		activeColumn("operstate", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING),
+		activeColumn("receive_bytes_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("transmit_bytes_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("receive_errors_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("transmit_errors_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("receive_dropped_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("transmit_dropped_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
+		activeColumn("rate_available", storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL),
+	}
+}
+
+func validGateFake(cfg monconfig.HostStorageConfig) *gateMetadataFake {
+	cols := map[string][]*storagepb.DatasetColumn{
+		cfg.ResourceDatasetID:   resourceColumns(cfg),
+		cfg.FilesystemDatasetID: filesystemColumns(),
+		cfg.DiskDatasetID:       diskColumns(),
+		cfg.NetworkDatasetID:    networkColumns(),
+	}
+	routes := make([]*storagepb.PrimaryStoreRoute, 0, 4)
+	for _, dataset := range []string{cfg.ResourceDatasetID, cfg.FilesystemDatasetID, cfg.DiskDatasetID, cfg.NetworkDatasetID} {
+		routes = append(routes, &storagepb.PrimaryStoreRoute{DatasetId: dataset, SubjectPattern: "*", Status: "active"})
+	}
+	return &gateMetadataFake{
+		space:   &storagepb.Space{SpaceId: cfg.SpaceID, Status: "active"},
+		dataset: &storagepb.Dataset{Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}},
+		columns: append(append(append(cols[cfg.ResourceDatasetID], cols[cfg.FilesystemDatasetID]...), cols[cfg.DiskDatasetID]...), cols[cfg.NetworkDatasetID]...),
+		routes:  routes,
+	}
+}
+
+// columnsFor returns the column set for the dataset currently being validated.
+// Validate walks datasets in order; the fake returns the full union so hasHostColumns
+// still succeeds for each dataset (extra columns are ignored).
+func TestStorageGateValidateSuccess(t *testing.T) {
+	cfg := hostGateCfg()
+	fake := validGateFake(cfg)
+	gate := NewStorageGate(fake, cfg)
+	require.NoError(t, gate.Validate(context.Background()))
+	assert.True(t, gate.Ready())
+	status := gate.Status()
+	assert.True(t, status.Valid)
+	assert.Empty(t, status.Error)
+	assert.False(t, status.CheckedAt.IsZero())
+}
+
+func TestStorageGateNilAndContractErrors(t *testing.T) {
+	assert.Error(t, (*StorageGate)(nil).Validate(context.Background()))
+	assert.False(t, (*StorageGate)(nil).Ready())
+	assert.Contains(t, (*StorageGate)(nil).Status().Error, "nil")
+
+	cfg := hostGateCfg()
+	gate := NewStorageGate(nil, cfg)
+	assert.Error(t, gate.Validate(context.Background()))
+	assert.False(t, gate.Ready())
+
+	bad := cfg
+	bad.SpaceID = "crypto"
+	gate = NewStorageGate(&gateMetadataFake{}, bad)
+	err := gate.Validate(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "space")
+	assert.False(t, gate.Ready())
+}
+
+func TestStorageGatePropagatesMetadataFailures(t *testing.T) {
+	cfg := hostGateCfg()
+	ctx := context.Background()
+
+	t.Run("get_space_error", func(t *testing.T) {
+		fake := validGateFake(cfg)
+		fake.spaceErr = errors.New("space down")
+		gate := NewStorageGate(fake, cfg)
+		require.Error(t, gate.Validate(ctx))
+		assert.False(t, gate.Ready())
+	})
+	t.Run("inactive_space", func(t *testing.T) {
+		fake := validGateFake(cfg)
+		fake.space = &storagepb.Space{SpaceId: cfg.SpaceID, Status: "disabled"}
+		gate := NewStorageGate(fake, cfg)
+		require.Error(t, gate.Validate(ctx))
+	})
+	t.Run("get_dataset_error", func(t *testing.T) {
+		fake := validGateFake(cfg)
+		fake.datasetErr = errors.New("dataset down")
+		gate := NewStorageGate(fake, cfg)
+		require.Error(t, gate.Validate(ctx))
+	})
+	t.Run("bad_freq", func(t *testing.T) {
+		fake := validGateFake(cfg)
+		fake.dataset = &storagepb.Dataset{Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"5m"}}
+		gate := NewStorageGate(fake, cfg)
+		require.Error(t, gate.Validate(ctx))
+	})
+	t.Run("missing_columns", func(t *testing.T) {
+		fake := validGateFake(cfg)
+		fake.columns = nil
+		gate := NewStorageGate(fake, cfg)
+		require.Error(t, gate.Validate(ctx))
+	})
+	t.Run("routes_error", func(t *testing.T) {
+		fake := validGateFake(cfg)
+		fake.routesErr = errors.New("routes down")
+		gate := NewStorageGate(fake, cfg)
+		require.Error(t, gate.Validate(ctx))
+	})
+	t.Run("no_wildcard_route", func(t *testing.T) {
+		fake := validGateFake(cfg)
+		fake.routes = []*storagepb.PrimaryStoreRoute{{DatasetId: cfg.ResourceDatasetID, SubjectPattern: "agent-*", Status: "active"}}
+		gate := NewStorageGate(fake, cfg)
+		require.Error(t, gate.Validate(ctx))
+	})
+}
+
+func TestCheckRetAndContainsFreq(t *testing.T) {
+	assert.Error(t, checkRet(nil))
+	assert.Error(t, checkRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "boom"}))
+	assert.NoError(t, checkRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}))
+	assert.True(t, containsFreq([]string{"1m", "5m"}, "1m"))
+	assert.False(t, containsFreq([]string{"5m"}, "1m"))
+}
+
+func TestHasHostColumnsIgnoresInactive(t *testing.T) {
+	cfg := hostGateCfg()
+	cols := resourceColumns(cfg)
+	cols = append(cols, &storagepb.DatasetColumn{ColumnName: "logical_cores", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, Status: "disabled"})
+	assert.True(t, hasHostColumns(cfg.ResourceDatasetID, cfg, cols))
+	assert.False(t, hasHostColumns(cfg.ResourceDatasetID, cfg, cols[:2]))
+}

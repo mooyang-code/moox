@@ -1,6 +1,11 @@
 package collector
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 func TestParsers(t *testing.T) {
 	cpu, err := ParseCPUStat([]byte("cpu  10 2 3 4 1 0 0 0\n"))
@@ -15,4 +20,22 @@ func TestParsers(t *testing.T) {
 	if err != nil || len(disks) != 1 || disks[0].Name != "sda" || disks[0].ReadSectors != 2 {
 		t.Fatalf("disks=%+v err=%v", disks, err)
 	}
+}
+
+func TestParseNetworkStats_ValidLine_ShouldParseDevice(t *testing.T) {
+	data := []byte(`Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+  eth0: 1000 10 1 2 0 0 0 0 2000 20 3 4 0 0 0 0
+`)
+	stats, err := ParseNetworkStats(data)
+	require.NoError(t, err)
+	require.Len(t, stats, 1)
+	assert.Equal(t, "eth0", stats[0].Name)
+	assert.Equal(t, uint64(1000), stats[0].ReceiveBytes)
+	assert.Equal(t, uint64(2000), stats[0].TransmitBytes)
+}
+
+func TestParseCPUStat_MissingAggregateLine_ShouldReturnError(t *testing.T) {
+	_, err := ParseCPUStat([]byte("cpu0 1 2 3 4\n"))
+	assert.Error(t, err)
 }

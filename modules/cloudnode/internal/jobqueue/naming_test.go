@@ -3,6 +3,8 @@ package jobqueue
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestExecSubjectUsesCloudNodePrefix(t *testing.T) {
@@ -38,4 +40,16 @@ func TestValidateNamingRejectsStoragePrefix(t *testing.T) {
 	if err := ValidateNamingConfig(NamingConfig{SubjectPrefix: "moox.storage"}); err == nil {
 		t.Fatalf("ValidateNamingConfig(moox.storage) error = nil, want failure")
 	}
+}
+
+func TestNamingHelpers_ShouldBuildSubjectsAndConsumers(t *testing.T) {
+	cfg := NamingConfig{SubjectPrefix: "moox.cloudnode"}
+	filter := ExecFilterSubject(cfg, "crypto", "pkg-a", "collect.kline")
+	assert.Contains(t, filter, "moox.cloudnode.exec.v1.jobitem.s.")
+	assert.Contains(t, filter, "collect_kline")
+	stream := ExecStreamSubject(cfg)
+	assert.Equal(t, "moox.cloudnode.exec.v1.>", stream)
+	name := ConsumerName("crypto", "pkg-a", "collect.kline")
+	assert.Contains(t, name, "cn_exec_")
+	assert.Contains(t, name, "collect_kline")
 }

@@ -197,6 +197,8 @@ github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO
 github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
+github.com/tencent/goom v1.0.6 h1:85Xut3O0BYej70v5ve40QKL6wlWGQp0xA96fZi1LvtM=
+github.com/tencent/goom v1.0.6/go.mod h1:BgAGw07SaVHKJywk+9MkKRQ7SJrJyE0ta/GgCTjeA/0=
 github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed h1:fAAkGa0jncXK1VezWQ4vrn8HOfJcxEvUZS4L8yFuebI=
 github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed/go.mod h1:/TcQ9bTgVYkRkMLyGdjdjjAfpUW1LbklvSAvZorIYAM=
 github.com/valyala/bytebufferpool v1.0.0 h1:GqA5TC/0021Y/b9FG4Oi9Mr3q7XYx6KllzawFIhcdPw=

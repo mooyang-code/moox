@@ -4,6 +4,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHealthHandlerSeparatesLivenessAndReadiness(t *testing.T) {
@@ -21,4 +26,20 @@ func TestHealthHandlerSeparatesLivenessAndReadiness(t *testing.T) {
 			t.Fatalf("%s status = %d, want %d", tc.path, rr.Code, tc.want)
 		}
 	}
+}
+
+func TestHealthHandler_ReadyAgent_ShouldReturnOK(t *testing.T) {
+	a := testAgent(t)
+	a.client = &jetstream.Client{}
+	a.lastCollect = time.Now().UTC()
+	handler := healthHandler(a)
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	assert.Equal(t, http.StatusOK, rr.Code)
+}
+
+func TestRegisterHealth_NilService_ShouldReturnError(t *testing.T) {
+	err := RegisterHealth(nil, testAgent(t))
+	require.Error(t, err)
 }

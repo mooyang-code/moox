@@ -91,3 +91,21 @@ func TestActiveMonitorInstanceIDsSkipsStaleAndDisabledPeers(t *testing.T) {
 		t.Fatalf("active ids with peers disabled = %v", got)
 	}
 }
+
+func TestNormalizeHostStorageTarget(t *testing.T) {
+	if got := normalizeHostStorageTarget(""); got != "ip://127.0.0.1:20102" {
+		t.Fatalf("empty target = %q", got)
+	}
+	if got := normalizeHostStorageTarget("127.0.0.1:20102/"); got != "ip://127.0.0.1:20102" {
+		t.Fatalf("host target = %q", got)
+	}
+	if got := normalizeHostStorageTarget("http://storage:20102"); got != "http://storage:20102" {
+		t.Fatalf("scheme target = %q", got)
+	}
+}
+
+func TestMaxInt(t *testing.T) {
+	if maxInt(3, 7) != 7 || maxInt(9, 2) != 9 {
+		t.Fatal("maxInt returned wrong value")
+	}
+}

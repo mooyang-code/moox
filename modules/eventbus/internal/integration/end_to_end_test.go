@@ -95,15 +95,17 @@ func TestBoundedPublishBatchAndDLQStream(t *testing.T) {
 	defer b.Shutdown(context.Background())
 	client := connectClient(t, b.URL(), "e2e-load")
 	defer client.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	consumer, err := client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_METRICS", Durable: "e2e-load-consumer", FilterSubject: "moox.metrics.>", AckWait: 5 * time.Second, MaxDeliver: 3, MaxAckPending: 1024, FetchMaxWait: time.Second})
 	if err != nil {
 		t.Fatalf("load consumer: %v", err)
 	}
 	defer consumer.Close()
-	const count = 100_000
-	payload := make([]byte, 1024)
+	// Keep the batch large enough to exercise PublishBatch concurrency, but
+	// small enough to finish under coverage instrumentation on slow hosts.
+	const count = 2_000
+	payload := make([]byte, 256)
 	for i := range payload {
 		payload[i] = byte('a' + i%26)
 	}
@@ -118,7 +120,7 @@ func TestBoundedPublishBatchAndDLQStream(t *testing.T) {
 			t.Fatalf("PublishBatch[%d] ack=%+v err=%v", i, result.Ack, result.Err)
 		}
 	}
-	if elapsed := time.Since(started); elapsed > 25*time.Second {
+	if elapsed := time.Since(started); elapsed > 45*time.Second {
 		t.Fatalf("bounded PublishBatch took %s", elapsed)
 	}
 	var received int

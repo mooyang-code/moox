@@ -1,12 +1,31 @@
 package snapshot
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+)
 
 func TestNormalizeStableHash(t *testing.T) {
 	a, ha, _ := Normalize(Input{Data: []map[string]any{{"close": 1}}, Revision: "r", Cutoff: "t"})
 	b, hb, _ := Normalize(Input{Data: []map[string]any{{"close": 1}}, Revision: "r", Cutoff: "t"})
 	if len(a) != len(b) || ha != hb {
 		t.Fatal()
+	}
+}
+
+func TestValidateOutput_RejectsIncompletePayload(t *testing.T) {
+	if err := ValidateOutput(domain.Output{}); err == nil {
+		t.Fatal("expected validation error")
+	}
+	if err := ValidateOutput(domain.Output{Action: "hold", NextState: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCapture_RejectsMissingRevision(t *testing.T) {
+	if _, err := Capture(Input{Data: []map[string]any{{"close": 1}}}); err == nil {
+		t.Fatal("revision is required")
 	}
 }
 

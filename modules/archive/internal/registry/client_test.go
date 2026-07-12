@@ -19,3 +19,14 @@ func TestArchiveFileUsesStableIdentity(t *testing.T) {
 		t.Fatalf("unexpected ArchiveFile: %#v", first)
 	}
 }
+
+func TestStableArchiveFileIDAndPartitionKeyFromPath(t *testing.T) {
+	key := domain.PartitionKey{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", Month: "202601"}
+	id := StableArchiveFileID(key)
+	if id == "" {
+		t.Fatal("stable archive file id is empty")
+	}
+	if got := PartitionKeyFromPath(`data/archive/file.parquet`); got != "data/archive/file.parquet" {
+		t.Fatalf("PartitionKeyFromPath = %q", got)
+	}
+}

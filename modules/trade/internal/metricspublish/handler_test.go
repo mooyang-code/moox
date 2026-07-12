@@ -3,6 +3,7 @@ package metricspublish
 import (
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -15,9 +16,13 @@ import (
 
 type fakePublisher struct {
 	messages []*messagepb.MooxMessage
+	err      error
 }
 
 func (f *fakePublisher) Publish(_ context.Context, message *messagepb.MooxMessage, _ ...jetstream.PublishOption) (*jetstream.PublishAck, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	f.messages = append(f.messages, message)
 	return &jetstream.PublishAck{Stream: "MOOX_METRICS", Sequence: uint64(len(f.messages))}, nil
 }
@@ -124,5 +129,105 @@ func TestHandlePublishesMooxMessage(t *testing.T) {
 	}
 	if message.GetProducer().GetServiceName() != "moox-monitor" || message.GetProducer().GetInstanceId() != "instance-a" || message.GetSequence() != 1 {
 		t.Fatalf("unexpected producer metadata: %+v", message.GetProducer())
+	}
+}
+
+func TestHandler_ReportErrorAndErrorCount(t *testing.T) {
+	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor"}, nil, prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.ErrorCount() != 0 {
+		t.Fatalf("initial ErrorCount=%d, want 0", h.ErrorCount())
+	}
+	if err := h.reportError(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if h.ErrorCount() != 0 {
+		t.Fatalf("nil report ErrorCount=%d, want 0", h.ErrorCount())
+	}
+	wantErr := errors.New("publish failed")
+	if got := h.reportError(context.Background(), wantErr); !errors.Is(got, wantErr) {
+		t.Fatalf("reportError=%v, want %v", got, wantErr)
+	}
+	if h.ErrorCount() != 1 {
+		t.Fatalf("ErrorCount=%d, want 1", h.ErrorCount())
+	}
+	var nilHandler *Handler
+	if nilHandler.ErrorCount() != 0 {
+		t.Fatalf("nil handler ErrorCount=%d, want 0", nilHandler.ErrorCount())
+	}
+}
+
+func TestHandler_PublisherConnectsOnceAndCaches(t *testing.T) {
+	publisher := &fakePublisher{}
+	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor"}, nil, prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	h.connector = func(context.Context, Config) (Publisher, error) {
+		calls++
+		return publisher, nil
+	}
+
+	first, err := h.publisher(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.publisher(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != publisher || second != publisher || calls != 1 {
+		t.Fatalf("publisher cache failed: first=%p second=%p calls=%d", first, second, calls)
+	}
+}
+
+func TestHandler_PublisherConnectorErrorIncrementsErrorCount(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "moox_reporter_connector_error", Help: "connector error"})
+	if err := registry.Register(gauge); err != nil {
+		t.Fatal(err)
+	}
+	gauge.Set(1)
+	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor"}, nil, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.connector = func(context.Context, Config) (Publisher, error) {
+		return nil, errors.New("eventbus unavailable")
+	}
+
+	err = h.Handle(context.Background(), "")
+
+	if err == nil || !strings.Contains(err.Error(), "eventbus unavailable") {
+		t.Fatalf("err=%v, want connector error", err)
+	}
+	if h.ErrorCount() != 1 {
+		t.Fatalf("ErrorCount=%d, want 1", h.ErrorCount())
+	}
+}
+
+func TestHandler_HandlePublishErrorIncrementsErrorCount(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "moox_reporter_publish_error", Help: "publish error"})
+	if err := registry.Register(gauge); err != nil {
+		t.Fatal(err)
+	}
+	gauge.Set(1)
+	publisher := &fakePublisher{err: errors.New("nats publish failed")}
+	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor"}, publisher, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = h.Handle(nil, "")
+
+	if err == nil || !strings.Contains(err.Error(), "publish metrics snapshot") {
+		t.Fatalf("err=%v, want publish metrics snapshot", err)
+	}
+	if h.ErrorCount() != 1 {
+		t.Fatalf("ErrorCount=%d, want 1", h.ErrorCount())
 	}
 }

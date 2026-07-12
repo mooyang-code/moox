@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -310,6 +311,56 @@ func TestWakeCollectorNodesContinuesAfterFailedNode(t *testing.T) {
 	}
 	if count != 1 || strings.Join(invoked, ",") != "bad-node,good-node" {
 		t.Fatalf("count=%d invoked=%v, want both attempted with one success", count, invoked)
+	}
+}
+
+func TestScheduleWindowParsesDurationAndDayIntervals(t *testing.T) {
+	now := time.Date(2026, 7, 12, 10, 17, 42, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		interval string
+		want     string
+		ok       bool
+	}{
+		{name: "duration", interval: "15m", want: now.Truncate(15 * time.Minute).Format(time.RFC3339), ok: true},
+		{name: "single day", interval: "d", want: now.Truncate(24 * time.Hour).Format(time.RFC3339), ok: true},
+		{name: "multi day", interval: "2d", want: now.Truncate(48 * time.Hour).Format(time.RFC3339), ok: true},
+		{name: "invalid falls back", interval: "bad", want: now.Truncate(30 * time.Minute).Format(time.RFC3339), ok: false},
+		{name: "empty falls back", interval: "", want: now.Truncate(30 * time.Minute).Format(time.RFC3339), ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := parseScheduleDuration(tt.interval)
+			if ok != tt.ok {
+				t.Fatalf("parseScheduleDuration ok=%v, want %v", ok, tt.ok)
+			}
+			if got := scheduleWindow(now, tt.interval); got != tt.want {
+				t.Fatalf("scheduleWindow=%q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPayloadAndJobItemHelpersCoverFallbacks(t *testing.T) {
+	if payload := parsePayload("{bad"); len(payload) != 0 {
+		t.Fatalf("parsePayload invalid = %#v, want empty", payload)
+	}
+	if got := valueString(map[string]any{"name": "  "}, "name", "fallback"); got != "fallback" {
+		t.Fatalf("valueString blank = %q, want fallback", got)
+	}
+	if got := taskIDFromJobItem(&cloudnodepb.JobItem{JobItemId: " item-1 "}); got != "item-1" {
+		t.Fatalf("taskIDFromJobItem fallback = %q, want item-1", got)
+	}
+	if got := windowedJobItemID("", "window"); got != "" {
+		t.Fatalf("windowed empty task = %q, want empty", got)
+	}
+	if !supportsAnyJobType([]string{"collect.kline"}, []string{" kline "}) {
+		t.Fatal("supportsAnyJobType should normalize collect prefix")
+	}
+	if supportsAnyJobType([]string{"symbol"}, []string{"kline"}) {
+		t.Fatal("supportsAnyJobType should reject missing job type")
 	}
 }
 

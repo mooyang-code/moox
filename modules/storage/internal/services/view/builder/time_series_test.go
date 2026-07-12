@@ -259,6 +259,14 @@ func (r *buildingGuardReader) ReadRecordRows(context.Context, *pb.ReadRecordRows
 	}, nil
 }
 
+func (r *buildingGuardReader) ScanTimeSeriesRows(context.Context, string, string, *pb.TimeRange, []string, *pb.Page) ([]*pb.TimeSeriesRow, *pb.PageResult, error) {
+	return r.timeSeriesRows, &pb.PageResult{}, nil
+}
+
+func (r *buildingGuardReader) ScanRecordRows(context.Context, string, string, *pb.VersionRange, []string, *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
+	return r.recordRows, &pb.PageResult{}, nil
+}
+
 type recordingViewIndexEngine struct {
 	engine   string
 	writes   map[string]int

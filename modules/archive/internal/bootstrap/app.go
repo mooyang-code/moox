@@ -104,19 +104,56 @@ func (a *App) Run(ctx context.Context) error {
 			}
 		}()
 	}
+	drainWorkers := func(runnerDone, schedulerDone bool, first error) error {
+		state.ReadyFlag.Store(false)
+		wait := a.Config.Archive.Materialize.ShutdownTimeout
+		if wait <= 0 {
+			wait = 2 * time.Minute
+		}
+		// Nil the timer after the first fire so we never return early while
+		// workers are still touching the journal (avoids pebble: closed races).
+		timeout := time.After(wait + time.Second)
+		var retErr error
+		if first != nil && !errors.Is(first, context.Canceled) {
+			retErr = first
+		}
+		for !runnerDone || !schedulerDone {
+			select {
+			case err := <-runnerErr:
+				runnerDone = true
+				if retErr == nil && err != nil && !errors.Is(err, context.Canceled) {
+					retErr = err
+				}
+			case err := <-schedulerErr:
+				schedulerDone = true
+				if retErr == nil && err != nil && !errors.Is(err, context.Canceled) {
+					retErr = err
+				}
+			case err := <-cosErr:
+				if retErr == nil && err != nil {
+					retErr = err
+				}
+			case <-timeout:
+				timeout = nil
+				if retErr == nil {
+					retErr = fmt.Errorf("archive shutdown drain exceeded %s", wait+time.Second)
+				}
+			}
+		}
+		return retErr
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			state.ReadyFlag.Store(false)
-			return nil
+			// Drain background workers before deferred store.Close().
+			return drainWorkers(false, false, nil)
 		case err := <-runnerErr:
-			if errors.Is(err, context.Canceled) {
-				return nil
-			}
-			return err
+			// Runner may win the select over ctx.Done(); always drain scheduler
+			// before deferred store.Close() to avoid pebble: closed races.
+			return drainWorkers(true, false, err)
 		case err := <-schedulerErr:
 			if err != nil && !errors.Is(err, context.Canceled) {
-				return err
+				return drainWorkers(false, true, err)
 			}
 			if status, err := store.Status(ctx); err == nil {
 				state.PendingRows.Store(status.PendingRows)

@@ -9,6 +9,8 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -89,6 +91,49 @@ func TestWriteFactorPatchMapsTailAndOmitsNilValues(t *testing.T) {
 	}
 }
 
+func TestTypedValueToAnyCoversValueTypesAndFallbacks(t *testing.T) {
+	tests := []struct {
+		name string
+		col  *storagepb.ColumnValue
+		want any
+	}{
+		{name: "nil column", col: nil, want: nil},
+		{name: "nil value", col: &storagepb.ColumnValue{}, want: nil},
+		{name: "int", col: intField("n", 7), want: int64(7)},
+		{name: "double", col: doubleField("n", 1.5), want: 1.5},
+		{name: "string", col: columnValue(storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "x"}}), want: "x"},
+		{name: "bool", col: columnValue(storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL, &storagepb.TypedValue{Value: &storagepb.TypedValue_BoolValue{BoolValue: true}}), want: true},
+		{name: "time", col: columnValue(storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME, &storagepb.TypedValue{Value: &storagepb.TypedValue_TimeValue{TimeValue: "2026-07-12T00:00:00Z"}}), want: "2026-07-12T00:00:00Z"},
+		{name: "json", col: columnValue(storagepb.FieldValueType_FIELD_VALUE_TYPE_JSON, &storagepb.TypedValue{Value: &storagepb.TypedValue_JsonValue{JsonValue: `{"a":1}`}}), want: `{"a":1}`},
+		{name: "fallback string", col: columnValue(storagepb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED, &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "fallback"}}), want: "fallback"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, typedValueToAny(tt.col))
+		})
+	}
+}
+
+func TestValueForFrameRowAndAsFloat64CoverEdges(t *testing.T) {
+	value, ok := valueForFrameRow(2, 3, engine.FactorColumnResult{Tail: 2, Values: []any{1, 2}})
+	require.True(t, ok)
+	assert.Equal(t, 2, value)
+
+	_, ok = valueForFrameRow(0, 3, engine.FactorColumnResult{Tail: 2, Values: []any{1, 2}})
+	assert.False(t, ok)
+	_, ok = valueForFrameRow(2, 3, engine.FactorColumnResult{Tail: 1, Values: nil})
+	assert.False(t, ok)
+
+	for _, input := range []any{float64(1), float32(2), int(3), int64(4), int32(5)} {
+		got, ok := asFloat64(input)
+		require.True(t, ok)
+		assert.NotZero(t, got)
+	}
+	_, ok = asFloat64("bad")
+	assert.False(t, ok)
+}
+
 type fakeAccessClient struct {
 	writeReqs []*storagepb.WriteTimeSeriesRowsReq
 }
@@ -121,4 +166,12 @@ func klineRow(t time.Time, columns map[string]*storagepb.ColumnValue) *storagepb
 
 func successRet() *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS, Msg: "success"}
+}
+
+func columnValue(valueType storagepb.FieldValueType, value *storagepb.TypedValue) *storagepb.ColumnValue {
+	return &storagepb.ColumnValue{
+		ColumnName: "n",
+		ValueType:  valueType,
+		Value:      value,
+	}
 }

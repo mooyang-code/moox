@@ -71,6 +71,50 @@ func TestReadOnlyManagementPaginationAndStableOrdering(t *testing.T) {
 	}
 }
 
+func TestGetOverviewAndListConsumers(t *testing.T) {
+	c := config.Default()
+	for i := range c.Streams {
+		c.Streams[i].MaxBytes = 1 << 20
+	}
+	c.Broker.StoreDir = t.TempDir()
+	c.Broker.Port = freePort(t)
+	b, err := broker.New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := b.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Shutdown(context.Background())
+	nc, err := nats.Connect(b.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := registry.New(js, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(js, c, Options{Ready: func() bool { return true }, Connections: b.Connections})
+	overview, err := svc.GetOverview(ctx, &eventbuspb.GetOverviewReq{})
+	if err != nil || overview.RetInfo.GetCode() != commonpb.ErrorCode_SUCCESS || overview.Overview.GetStreams() == 0 {
+		t.Fatalf("overview=%#v err=%v", overview, err)
+	}
+	consumers, err := svc.ListConsumers(ctx, &eventbuspb.ListConsumersReq{})
+	if err != nil || consumers.RetInfo.GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("consumers=%#v err=%v", consumers, err)
+	}
+}
+
 func freePort(t *testing.T) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

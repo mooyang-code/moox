@@ -9,6 +9,21 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
+func TestNewAccessReaderReturnsLocalWhenServiceNameEmpty(t *testing.T) {
+	local := &buildingGuardReader{}
+	got := NewAccessReader(local, "", "")
+	if got != local {
+		t.Fatal("expected local reader when service name is empty")
+	}
+}
+
+func TestNewAccessReaderReturnsMissingReaderWhenUnset(t *testing.T) {
+	got := NewAccessReader(nil, "", "")
+	if _, ok := got.(missingAccessReader); !ok {
+		t.Fatalf("reader type = %T, want missingAccessReader", got)
+	}
+}
+
 func TestRemoteAccessReaderUsesCursorScanRPC(t *testing.T) {
 	proxy := &scanAccessProxy{}
 	reader := &remoteAccessReader{proxy: proxy, scanProxy: proxy}
@@ -33,7 +48,9 @@ func TestRemoteAccessReaderUsesCursorScanRPC(t *testing.T) {
 
 type scanAccessProxy struct {
 	readTimeSeriesCalled bool
+	readRecordCalled     bool
 	timeSeriesScan       *pb.ScanTimeSeriesRowsReq
+	recordScan           *pb.ScanRecordRowsReq
 }
 
 func (p *scanAccessProxy) WriteTimeSeriesRows(context.Context, *pb.WriteTimeSeriesRowsReq, ...client.Option) (*pb.WriteTimeSeriesRowsRsp, error) {
@@ -54,7 +71,8 @@ func (p *scanAccessProxy) WriteRecordRows(context.Context, *pb.WriteRecordRowsRe
 }
 
 func (p *scanAccessProxy) ReadRecordRows(context.Context, *pb.ReadRecordRowsReq, ...client.Option) (*pb.ReadRecordRowsRsp, error) {
-	return nil, errors.New("not used")
+	p.readRecordCalled = true
+	return nil, errors.New("public read must not be used for internal scan")
 }
 
 func (p *scanAccessProxy) ScanTimeSeriesRows(_ context.Context, req *pb.ScanTimeSeriesRowsReq, _ ...client.Option) (*pb.ScanTimeSeriesRowsRsp, error) {
@@ -66,6 +84,30 @@ func (p *scanAccessProxy) ScanTimeSeriesRows(_ context.Context, req *pb.ScanTime
 	}, nil
 }
 
-func (p *scanAccessProxy) ScanRecordRows(context.Context, *pb.ScanRecordRowsReq, ...client.Option) (*pb.ScanRecordRowsRsp, error) {
-	return nil, errors.New("not used")
+func (p *scanAccessProxy) ScanRecordRows(_ context.Context, req *pb.ScanRecordRowsReq, _ ...client.Option) (*pb.ScanRecordRowsRsp, error) {
+	p.recordScan = req
+	return &pb.ScanRecordRowsRsp{
+		RetInfo:    &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
+		Rows:       []*pb.RecordRow{{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1"}}},
+		PageResult: &pb.PageResult{Size: 500, HasMore: true, NextCursor: "cursor-2"},
+	}, nil
+}
+
+func TestRemoteAccessReaderScanRecordRowsUsesCursor(t *testing.T) {
+	proxy := &scanAccessProxy{}
+	reader := &remoteAccessReader{proxy: proxy, scanProxy: proxy}
+
+	rows, page, err := reader.ScanRecordRows(context.Background(), "crypto", "news", nil, []string{"title"}, &pb.Page{Cursor: "c1"})
+	if err != nil {
+		t.Fatalf("ScanRecordRows: %v", err)
+	}
+	if proxy.readRecordCalled {
+		t.Fatal("remote scan called public ReadRecordRows")
+	}
+	if proxy.recordScan == nil || proxy.recordScan.GetPage().GetCursor() != "c1" {
+		t.Fatalf("scan request = %+v", proxy.recordScan)
+	}
+	if len(rows) != 1 || page.GetNextCursor() != "cursor-2" {
+		t.Fatalf("rows=%d page=%+v", len(rows), page)
+	}
 }

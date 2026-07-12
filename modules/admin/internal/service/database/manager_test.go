@@ -5,7 +5,15 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
+	"github.com/stretchr/testify/assert"
 )
+
+func TestMinInt(t *testing.T) {
+	assert.Equal(t, 1, minInt(1, 2))
+	assert.Equal(t, 1, minInt(2, 1))
+	assert.Equal(t, -3, minInt(-3, 0))
+	assert.Equal(t, 5, minInt(5, 5))
+}
 
 func TestInitializeDoesNotCreateSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "admin.db")

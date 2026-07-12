@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -23,6 +25,45 @@ func TestRunInitCommandAppliesTradeSchema(t *testing.T) {
 		t.Fatalf("runInitCommand() wrote empty stdout")
 	}
 }
+
+func TestIsInitCommand_ShouldDetectOnlyInitSubcommand(t *testing.T) {
+	if !isInitCommand([]string{"trade", "init"}) {
+		t.Fatal("expected init command to be detected")
+	}
+	if isInitCommand([]string{"trade", "serve"}) {
+		t.Fatal("serve must not be detected as init")
+	}
+	if isInitCommand([]string{"trade"}) {
+		t.Fatal("short args must not be detected as init")
+	}
+}
+
+func TestRunInitCommand_InvalidArgs_ShouldReturnError(t *testing.T) {
+	if err := runInitCommand([]string{"serve"}, nil, nil); err == nil {
+		t.Fatal("expected command mismatch error")
+	}
+	var stderr bytes.Buffer
+	err := runInitCommand([]string{"init", "extra"}, nil, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "unexpected init arguments") {
+		t.Fatalf("err=%v, want unexpected args", err)
+	}
+}
+
+func TestPrintInitError_ShouldWriteJSON(t *testing.T) {
+	var stderr bytes.Buffer
+	printInitError(&stderr, assertErr("boom"))
+	var got map[string]string
+	if err := json.Unmarshal(stderr.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["error"] != "init_failed" || got["message"] != "boom" {
+		t.Fatalf("payload=%v", got)
+	}
+}
+
+type assertErr string
+
+func (e assertErr) Error() string { return string(e) }
 
 func assertTableExists(t *testing.T, dbPath string, tableName string) {
 	t.Helper()

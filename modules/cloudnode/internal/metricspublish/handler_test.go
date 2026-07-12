@@ -3,6 +3,7 @@ package metricspublish
 import (
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -11,6 +12,8 @@ import (
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type fakePublisher struct {
@@ -125,4 +128,33 @@ func TestHandlePublishesMooxMessage(t *testing.T) {
 	if message.GetProducer().GetServiceName() != "moox-monitor" || message.GetProducer().GetInstanceId() != "instance-a" || message.GetSequence() != 1 {
 		t.Fatalf("unexpected producer metadata: %+v", message.GetProducer())
 	}
+}
+
+func TestReportErrorIncrementsErrorCount(t *testing.T) {
+	h := &Handler{cfg: Config{ServiceName: "monitor"}}
+
+	err := h.reportError(context.Background(), errors.New("publish failed"))
+	require.Error(t, err)
+	assert.Equal(t, uint64(1), h.ErrorCount())
+
+	require.NoError(t, h.reportError(context.Background(), nil))
+	assert.Equal(t, uint64(1), h.ErrorCount())
+
+	var nilHandler *Handler
+	assert.Equal(t, uint64(0), nilHandler.ErrorCount())
+}
+
+func TestHandleReportsPublisherError(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor", BootID: "boot"}, nil, registry)
+	require.NoError(t, err)
+	h.connector = func(context.Context, Config) (Publisher, error) {
+		return nil, errors.New("eventbus down")
+	}
+
+	err = h.Handle(context.Background(), "")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "eventbus down")
+	assert.Equal(t, uint64(1), h.ErrorCount())
 }

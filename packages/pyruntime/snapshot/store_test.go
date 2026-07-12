@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/pyruntime/transport"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestAcquireSharesContentAddressedFile(t *testing.T) {
@@ -106,4 +107,10 @@ func TestAcquireArrowAndOpenMapped(t *testing.T) {
 	if _, err := os.Stat(h.Path); !os.IsNotExist(err) {
 		t.Fatalf("snapshot should be removed after mapped close: %v", err)
 	}
+}
+
+func TestMappedSchemaNilReceiver_ShouldReturnNil(t *testing.T) {
+	var mapped *Mapped
+	assert.Nil(t, mapped.Schema())
+	assert.Nil(t, mapped.Reader())
 }

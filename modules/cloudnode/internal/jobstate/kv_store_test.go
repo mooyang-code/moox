@@ -11,6 +11,9 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"google.golang.org/protobuf/types/known/structpb"
+	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestKVStoreCreatePendingDeduplicates(t *testing.T) {
@@ -121,6 +124,52 @@ func TestKVStoreCancelDirectiveForRunningNode(t *testing.T) {
 	if len(directives) != 0 {
 		t.Fatalf("directives after clear = %+v", directives)
 	}
+}
+
+func TestKVStoreListAndListAttempts(t *testing.T) {
+	ctx := context.Background()
+	store := newTestKVStore(t, 48*time.Hour)
+
+	for _, id := range []string{"ji-list-1", "ji-list-2"} {
+		_, err := store.CreatePending(ctx, testJobItem(t, "crypto", id), QueueMeta{})
+		require.NoError(t, err)
+	}
+
+	items, page, err := store.List(ctx, &pb.ListJobItemsReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, uint32(2), page.GetTotal())
+	assert.False(t, page.GetHasMore())
+
+	filtered, page, err := store.List(ctx, &pb.ListJobItemsReq{
+		SpaceId: "crypto",
+		JobId:   "job-1",
+		Page:    &commonpb.Page{Page: 1, Size: 1},
+	})
+	require.NoError(t, err)
+	require.Len(t, filtered, 1)
+	assert.True(t, page.GetHasMore())
+
+	_, _, err = store.TryMarkRunning(ctx, RunningRequest{
+		SpaceID: "crypto", JobItemID: "ji-list-1", NodeID: "node-1", AckSubject: "ack",
+	})
+	require.NoError(t, err)
+	attempts, err := store.ListAttempts(ctx, &pb.ListJobItemAttemptsReq{
+		SpaceId: "crypto", JobItemId: "ji-list-1",
+	})
+	require.NoError(t, err)
+	require.Len(t, attempts, 1)
+	assert.Equal(t, int32(1), attempts[0].GetAttemptNo())
+}
+
+func TestKVStoreListEmptyBucket(t *testing.T) {
+	ctx := context.Background()
+	store := newTestKVStore(t, 48*time.Hour)
+
+	items, page, err := store.List(ctx, &pb.ListJobItemsReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	assert.Empty(t, items)
+	assert.Equal(t, uint32(0), page.GetTotal())
 }
 
 func newTestKVStore(t *testing.T, ttl time.Duration) *KVStore {

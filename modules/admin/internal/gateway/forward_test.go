@@ -3,11 +3,16 @@ package gateway
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/errs"
 )
 
 func TestWriteForwardResponseGzipsLargeJSONWhenAccepted(t *testing.T) {
@@ -64,4 +69,63 @@ func TestWriteForwardResponseKeepsSmallOrUnsupportedResponsesPlain(t *testing.T)
 			}
 		})
 	}
+}
+
+func TestBuildForwardHeaders_WithHeaders_ShouldMapToHTTPHeaders(t *testing.T) {
+	reqHead := buildForwardHeaders(map[string]string{
+		"client_ip":    "10.0.0.1",
+		"trace_id":     "trace-1",
+		"access_token": "token-1",
+		"space_id":     "space-1",
+	})
+	require.NotNil(t, reqHead)
+	assert.Equal(t, "10.0.0.1", reqHead.Header.Get("X-Client-Ip"))
+	assert.Equal(t, "trace-1", reqHead.Header.Get("X-Trace-Id"))
+	assert.Equal(t, "token-1", reqHead.Header.Get("X-Access-Token"))
+}
+
+func TestWriteForwardError_ShouldWriteRetInfo(t *testing.T) {
+	rr := httptest.NewRecorder()
+	writeForwardError(context.Background(), rr, errs.New(10001, "forward failed"), map[string]string{"origin": "https://app.example.com"})
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "ret_info")
+	assert.Equal(t, "10001", rr.Header().Get("trpc-ret"))
+}
+
+func TestForwardHTTP_NilConfig_ShouldError(t *testing.T) {
+	SetConfig(nil)
+	_, err := forwardHTTP(context.Background(), "auth", "Login", []byte(`{}`), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "网关配置未初始化")
+}
+
+func TestForwardHTTP_MissingResolver_ShouldError(t *testing.T) {
+	SetConfig(&Config{JWT: JWTConfig{SecretKey: "secret"}})
+	SetServiceDetailResolver(nil)
+	_, err := forwardHTTP(context.Background(), "auth", "Login", []byte(`{}`), nil)
+	require.Error(t, err)
+}
+
+func TestForwardHTTP_EmptyAddress_ShouldError(t *testing.T) {
+	SetConfig(&Config{JWT: JWTConfig{SecretKey: "secret"}})
+	SetServiceDetailResolver(func(ctx context.Context, serviceID string) (ServiceDetail, bool) {
+		return ServiceDetail{Address: "", Path: "trpc.moox.infra.Auth"}, true
+	})
+	_, err := forwardHTTP(context.Background(), "auth", "Login", []byte(`{}`), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "配置缺失")
+}
+
+func TestAddVaryHeader_ExistingValue_ShouldAppend(t *testing.T) {
+	rr := httptest.NewRecorder()
+	rr.Header().Set("Vary", "Origin")
+	addVaryHeader(rr, "Accept-Encoding")
+	assert.Equal(t, "Origin, Accept-Encoding", rr.Header().Get("Vary"))
+}
+
+func TestAddVaryHeader_DuplicateValue_ShouldKeepSingle(t *testing.T) {
+	rr := httptest.NewRecorder()
+	rr.Header().Set("Vary", "Accept-Encoding")
+	addVaryHeader(rr, "Accept-Encoding")
+	assert.Equal(t, "Accept-Encoding", rr.Header().Get("Vary"))
 }

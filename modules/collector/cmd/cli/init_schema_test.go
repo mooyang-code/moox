@@ -2,12 +2,28 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"gorm.io/gorm"
 )
+
+func TestIsInitCommand(t *testing.T) {
+	assert.False(t, isInitCommand(nil))
+	assert.False(t, isInitCommand([]string{"moox-collector"}))
+	assert.True(t, isInitCommand([]string{"moox-collector", "init"}))
+}
+
+func TestPrintInitError(t *testing.T) {
+	var buf bytes.Buffer
+	printInitError(&buf, errors.New("schema failed"))
+	assert.Contains(t, buf.String(), "init_failed")
+	assert.Contains(t, buf.String(), "schema failed")
+	printInitError(nil, errors.New("ignored"))
+}
 
 func TestRunInitCommandAppliesCollectorSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")

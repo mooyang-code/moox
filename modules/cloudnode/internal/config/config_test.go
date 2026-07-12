@@ -1,6 +1,13 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 func TestLoadAppliesPprofAddrFromEnv(t *testing.T) {
 	t.Setenv("MOOX_CLOUDNODE_PPROF_ADDR", "127.0.0.1:16001")
@@ -42,4 +49,41 @@ func TestDefaultJobItemActiveKVAndHistoryConfig(t *testing.T) {
 	if cfg.JobItem.HistoryRetentionDays != 2 {
 		t.Fatalf("HistoryRetentionDays = %d, want 2", cfg.JobItem.HistoryRetentionDays)
 	}
+}
+
+func TestLoadReadsYAMLAndAppliesEnvOverrides(t *testing.T) {
+	t.Setenv("MOOX_CLOUDNODE_DB_PATH", "./override/cloudnode.db")
+	t.Setenv("MOOX_CLOUDNODE_HEALTH_ADDR", "127.0.0.1:16011")
+
+	path := writeCloudnodeConfig(t, `
+database:
+  path: ./original/cloudnode.db
+health:
+  addr: :9999
+`)
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "./override/cloudnode.db", cfg.Database.Path)
+	assert.Equal(t, "127.0.0.1:16011", cfg.Health.Addr)
+}
+
+func TestLoadRejectsMissingFile(t *testing.T) {
+	_, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read config")
+}
+
+func TestLoadRejectsInvalidYAML(t *testing.T) {
+	path := writeCloudnodeConfig(t, "database:\n  max_idle_conns: not-a-number\n")
+	_, err := Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse config")
+}
+
+func writeCloudnodeConfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	return path
 }

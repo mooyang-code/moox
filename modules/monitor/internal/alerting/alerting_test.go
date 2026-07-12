@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -223,4 +225,42 @@ func openAlertDB(t *testing.T) *store.Store {
 		t.Fatalf("apply schema: %v", err)
 	}
 	return mgr
+}
+
+func TestParseHeadersAndEventTarget(t *testing.T) {
+	if got := parseHeaders(`{"X-Token":"abc"}`); got["X-Token"] != "abc" {
+		t.Fatalf("parseHeaders = %#v", got)
+	}
+	if parseHeaders("bad-json") != nil {
+		t.Fatal("invalid headers should return nil")
+	}
+	check := domain.Check{Kind: domain.CheckKindTCP, TCPHost: "127.0.0.1", TCPPort: 8080}
+	if eventTarget(check) != "127.0.0.1:8080" {
+		t.Fatalf("tcp target = %q", eventTarget(check))
+	}
+	check = domain.Check{Kind: domain.CheckKindHTTP, URL: "https://example.com"}
+	if eventTarget(check) != "https://example.com" {
+		t.Fatalf("http target = %q", eventTarget(check))
+	}
+}
+
+func TestJsonStringValueEscapesQuotes(t *testing.T) {
+	if got := jsonStringValue(`say "hi"`); got != `say \"hi\"` {
+		t.Fatalf("jsonStringValue = %q", got)
+	}
+}
+
+func TestWebhookNotifierSendUsesDefaultClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	notifier := WebhookNotifier{}
+	err := notifier.Send(context.Background(), domain.WebhookChannel{URL: server.URL}, Event{
+		Check: testCheck(), Status: domain.AlertStatusFiring, EventType: domain.AlertEventTriggered,
+		Result: failedResult(testCheck()),
+	})
+	if err != nil {
+		t.Fatalf("Send returned %v", err)
+	}
 }

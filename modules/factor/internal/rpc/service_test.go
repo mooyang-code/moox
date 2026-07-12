@@ -202,10 +202,7 @@ func TestRecalcFactorEnqueuesSchedulerTask(t *testing.T) {
 	if got := task.Factors[0].ExtraColumns; len(got) != 1 || got[0] != "circulating_supply" {
 		t.Fatalf("extra columns = %#v", got)
 	}
-	progress, err := svc.GetRecalcProgress(ctx, &factorpb.GetRecalcProgressReq{RecalcId: rsp.GetRecalcId()})
-	if err != nil {
-		t.Fatalf("GetRecalcProgress() error = %v", err)
-	}
+	progress := waitRecalcProgress(t, ctx, svc, rsp.GetRecalcId())
 	if progress.GetStatus() != "succeeded" || progress.GetTotal() != 1 || progress.GetFinished() != 1 {
 		t.Fatalf("progress = %+v", progress)
 	}
