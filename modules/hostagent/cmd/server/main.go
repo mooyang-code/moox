@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/mooyang-code/moox/modules/hostagent/internal/app"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
+	"github.com/mooyang-code/moox/modules/hostagent/internal/rpc"
 	"os"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -23,7 +24,7 @@ func main() {
 		os.Exit(1)
 	}
 	s := trpc.NewServer()
-	if err := app.Register(s, a); err != nil {
+	if err := rpc.Register(s, a); err != nil {
 		log.Errorf("host-agent register failed: %v", err)
 		os.Exit(1)
 	}

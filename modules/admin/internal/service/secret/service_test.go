@@ -2,12 +2,14 @@ package secret
 
 import (
 	"context"
-	"testing"
-
+	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
+	"github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+	"testing"
 )
 
 func TestServiceImpl_CreateSecret_DelegatesToDAO(t *testing.T) {
@@ -81,4 +83,13 @@ func TestServiceImpl_GetSecret_NotFound_ShouldError(t *testing.T) {
 
 	_, err := svc.GetSecret(context.Background(), "missing")
 	require.Error(t, err)
+}
+
+func setupSecretTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
+	return db
 }

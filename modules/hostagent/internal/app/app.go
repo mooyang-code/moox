@@ -20,7 +20,6 @@ import (
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"trpc.group/trpc-go/trpc-go/server"
 )
 
 const hostTopic = "moox.metrics.host.reported.v1"
@@ -203,17 +202,3 @@ func (a *Agent) GetSnapshot(context.Context, *hostagentpb.GetSnapshotReq) (*host
 func (a *Agent) RunOnce(ctx context.Context, _ *hostagentpb.RunOnceReq) (*hostagentpb.RunOnceRsp, error) {
 	return a.runOnceGuarded(ctx)
 }
-
-func Register(s *server.Server, a *Agent) error {
-	if s == nil || a == nil {
-		return fmt.Errorf("server and agent are required")
-	}
-	svc := s.Service("trpc.moox.hostagent.HostAgentMgr")
-	if svc == nil {
-		return fmt.Errorf("hostagent service is not configured")
-	}
-	hostagentpb.RegisterHostAgentMgrService(svc, a)
-	return nil
-}
-
-var _ hostagentpb.HostAgentMgrService = (*Agent)(nil)

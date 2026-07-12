@@ -3,13 +3,13 @@ package consumer
 import (
 	"context"
 	"errors"
-	"reflect"
-	"testing"
-	"time"
-
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/packages/messagepb"
+	"github.com/stretchr/testify/assert"
+	"reflect"
+	"testing"
+	"time"
 )
 
 func TestHandlerAcknowledgesOnlyAfterJournalSync(t *testing.T) {
@@ -96,3 +96,14 @@ func (f *fakeDelivery) Ack(context.Context) error {
 func (f *fakeDelivery) Nak(context.Context, time.Duration) error { return nil }
 func (f *fakeDelivery) InProgress(context.Context) error         { return nil }
 func (f *fakeDelivery) Term(context.Context) error               { f.terminated = true; return nil }
+
+func TestRetryDelay(t *testing.T) {
+	assert.Equal(t, time.Second, retryDelay(0))
+	assert.Equal(t, 2*time.Second, retryDelay(2))
+	assert.Equal(t, 30*time.Second, retryDelay(100))
+}
+
+func TestRetryScheduledError(t *testing.T) {
+	err := &RetryScheduledError{Delay: 2 * time.Second}
+	assert.Contains(t, err.Error(), "2s")
+}

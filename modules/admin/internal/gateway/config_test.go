@@ -1,13 +1,14 @@
 package gateway
 
 import (
+	"encoding/json"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestSetConfig_GetConfig_RoundTrip_ShouldWork(t *testing.T) {
@@ -70,4 +71,44 @@ func TestLoadConfig_MissingFile_ShouldError(t *testing.T) {
 
 	_, err = LoadConfig()
 	require.Error(t, err)
+}
+
+func TestGatewayHealthzRoutesUseSharedPayload(t *testing.T) {
+	router := NewHTTPRouter(NewGatewayHandle()).buildRouter()
+
+	for _, path := range []string{"/api/admin/health", "/healthz"} {
+		t.Run(path, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+			}
+			if got := rr.Header().Get("Content-Type"); got != "application/json" {
+				t.Fatalf("Content-Type = %q, want application/json", got)
+			}
+
+			var rsp struct {
+				Module string `json:"module"`
+				Ready  bool   `json:"ready"`
+				Status string `json:"status"`
+				Time   string `json:"time"`
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &rsp); err != nil {
+				t.Fatalf("decode health response: %v", err)
+			}
+			if rsp.Module != "admin" {
+				t.Fatalf("module = %q, want admin", rsp.Module)
+			}
+			if !rsp.Ready {
+				t.Fatal("ready = false, want true")
+			}
+			if rsp.Status != "ok" {
+				t.Fatalf("status = %q, want ok", rsp.Status)
+			}
+			if rsp.Time == "" {
+				t.Fatal("time is empty")
+			}
+		})
+	}
 }

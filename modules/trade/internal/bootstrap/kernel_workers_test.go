@@ -3,12 +3,9 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
-	"testing"
-
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
-	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	rebalanceapp "github.com/mooyang-code/moox/modules/trade/internal/application/rebalance"
+	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/instrument"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
@@ -21,6 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+	"path/filepath"
+	"testing"
 )
 
 type workerStubAdapter struct {
@@ -115,10 +114,10 @@ func TestAdvanceActiveRebalances_ActiveRun_ShouldAdvance(t *testing.T) {
 	require.NoError(t, svc.Create(ctx, rebalanceapp.CreateInput{
 		SpaceID: "space", RunID: "run-1", IdempotencyKey: "idem", AccountID: "acct", ChannelID: "chan",
 		MarketSnapshotID: "m1", PositionSnapshotID: "p1", RulesVersion: "r1",
-		Mode: rebalance.FullTarget,
-		Targets: []rebalance.Target{{Symbol: "BTCUSDT", Quantity: shared.Zero()}},
+		Mode:     rebalance.FullTarget,
+		Targets:  []rebalance.Target{{Symbol: "BTCUSDT", Quantity: shared.Zero()}},
 		Currents: []rebalance.Current{{Symbol: "BTCUSDT", Quantity: shared.MustDecimal("1")}},
-		Markets: map[string]rebalanceapp.Market{"BTCUSDT": {BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
+		Markets:  map[string]rebalanceapp.Market{"BTCUSDT": {BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
 	}))
 	require.NoError(t, advanceActiveRebalances(ctx, s, engine))
 	legs, err := s.ListRebalanceLegs(ctx, "space", "run-1")
@@ -169,9 +168,9 @@ func TestHandleRebalanceDelivery_ActiveRun_ShouldAdvance(t *testing.T) {
 	require.NoError(t, svc.Create(ctx, rebalanceapp.CreateInput{
 		SpaceID: "space", RunID: "run-2", IdempotencyKey: "idem2", AccountID: "acct", ChannelID: "chan",
 		MarketSnapshotID: "m1", PositionSnapshotID: "p1", RulesVersion: "r1", Mode: rebalance.FullTarget,
-		Targets: []rebalance.Target{{Symbol: "BTCUSDT", Quantity: shared.Zero()}},
+		Targets:  []rebalance.Target{{Symbol: "BTCUSDT", Quantity: shared.Zero()}},
 		Currents: []rebalance.Current{{Symbol: "BTCUSDT", Quantity: shared.MustDecimal("1")}},
-		Markets: map[string]rebalanceapp.Market{"BTCUSDT": {BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
+		Markets:  map[string]rebalanceapp.Market{"BTCUSDT": {BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
 	}))
 	runRows, err := s.ListActiveRebalanceRuns(ctx, 10)
 	require.NoError(t, err)
@@ -188,4 +187,29 @@ func TestHandleRebalanceDelivery_ActiveRun_ShouldAdvance(t *testing.T) {
 func TestStartKernelWorkers_Disabled_ShouldNoop(t *testing.T) {
 	err := startKernelWorkers(context.Background(), config.EventBusConfig{Enabled: false}, nil, nil)
 	assert.NoError(t, err)
+}
+
+func TestDeliveryTraceContext_WithTrace_ShouldInjectTelemetry(t *testing.T) {
+	delivery := &jetstream.Delivery{
+		Message: &messagepb.MooxMessage{
+			Trace: &messagepb.TraceContext{TraceId: "trace-1", RequestId: "req-1"},
+		},
+	}
+	ctx := deliveryTraceContext(context.Background(), delivery)
+	// Context should differ when trace is present.
+	assert.NotEqual(t, context.Background(), ctx)
+}
+
+func TestDeliveryTraceContext_NilDelivery_ShouldReturnOriginal(t *testing.T) {
+	ctx := context.Background()
+	assert.Equal(t, ctx, deliveryTraceContext(ctx, nil))
+}
+
+func TestKernelEventBusReady_WithNilClient_ShouldReturnFalse(t *testing.T) {
+	setKernelEventBusClient(nil)
+	assert.False(t, kernelEventBusReady())
+}
+
+func TestRegisterMetricsReporter_NilServer_ShouldNoop(t *testing.T) {
+	registerMetricsReporter(nil)
 }

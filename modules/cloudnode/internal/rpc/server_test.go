@@ -3,10 +3,6 @@ package rpc
 import (
 	"context"
 	"errors"
-	"path/filepath"
-	"testing"
-	"time"
-
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
@@ -18,6 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"path/filepath"
+	"testing"
+	"time"
 )
 
 func TestRetHelpers_ShouldMapCodes(t *testing.T) {
@@ -99,11 +98,11 @@ func (f *fakeExecutionQueue) Publish(context.Context, *pb.JobItem) (*jobqueue.Pu
 func (f *fakeExecutionQueue) Fetch(context.Context, jobqueue.FetchRequest) ([]jobqueue.Delivery, error) {
 	return nil, nil
 }
-func (f *fakeExecutionQueue) Ack(context.Context, string) error      { return nil }
+func (f *fakeExecutionQueue) Ack(context.Context, string) error                { return nil }
 func (f *fakeExecutionQueue) Nak(context.Context, string, time.Duration) error { return nil }
-func (f *fakeExecutionQueue) Term(context.Context, string) error   { return nil }
-func (f *fakeExecutionQueue) InProgress(context.Context, string) error { return nil }
-func (f *fakeExecutionQueue) Close() error                           { return nil }
+func (f *fakeExecutionQueue) Term(context.Context, string) error               { return nil }
+func (f *fakeExecutionQueue) InProgress(context.Context, string) error         { return nil }
+func (f *fakeExecutionQueue) Close() error                                     { return nil }
 
 type fakeJobStateStore struct{}
 
@@ -113,7 +112,9 @@ func (f *fakeJobStateStore) CreatePending(context.Context, *pb.JobItem, jobstate
 func (f *fakeJobStateStore) MarkPublished(context.Context, string, string, jobstate.QueueMeta) error {
 	return nil
 }
-func (f *fakeJobStateStore) MarkEnqueueFailed(context.Context, string, string, string) error { return nil }
+func (f *fakeJobStateStore) MarkEnqueueFailed(context.Context, string, string, string) error {
+	return nil
+}
 func (f *fakeJobStateStore) Get(context.Context, string, string) (*jobstate.State, error) {
 	return nil, nil
 }
@@ -136,4 +137,22 @@ func (f *fakeJobStateStore) ListAttempts(context.Context, *pb.ListJobItemAttempt
 }
 func (f *fakeJobStateStore) ListCancelDirectives(context.Context, string, string, int) ([]*pb.ControlDirective, error) {
 	return nil, nil
+}
+
+func TestCloudNodeProtoContractIncludesQueueDirectives(t *testing.T) {
+	if pb.JobItemStatus_JOB_ITEM_STATUS_ENQUEUE_FAILED.Number() == 0 {
+		t.Fatalf("JOB_ITEM_STATUS_ENQUEUE_FAILED must be non-zero")
+	}
+	if pb.JobItemReportStatus_JOB_ITEM_REPORT_STATUS_CANCELED.Number() == 0 {
+		t.Fatalf("JOB_ITEM_REPORT_STATUS_CANCELED must be non-zero")
+	}
+	rsp := &pb.ReportHeartbeatRsp{Directives: []*pb.ControlDirective{{
+		Type:      pb.ControlDirectiveType_CONTROL_DIRECTIVE_CANCEL,
+		JobItemId: "ji-1",
+		AttemptNo: 1,
+		Reason:    "test",
+	}}}
+	if len(rsp.GetDirectives()) != 1 || rsp.GetDirectives()[0].GetType() != pb.ControlDirectiveType_CONTROL_DIRECTIVE_CANCEL {
+		t.Fatalf("heartbeat directives not available: %+v", rsp)
+	}
 }

@@ -397,7 +397,7 @@ git commit -m "feat(factor): aggregate batches before unified writeback"
 - Modify: `modules/factor/proto/factor.proto`
 - Modify: `modules/factor/internal/rpc/service.go`
 - Create: `modules/factor/internal/observability/metrics.go`
-- Modify: `modules/factor/internal/metricspublish/handler.go`
+- Modify: `modules/factor/internal/report/handler.go`
 
 - [ ] **Step 1: 写配置默认值和非法组合测试**
 
@@ -433,7 +433,7 @@ engine:
 
 - [ ] **Step 5: 运行生成与测试并提交**
 
-Run: `cd modules/factor/proto && make && cd .. && go test ./internal/app/control ./internal/rpc ./internal/observability ./internal/metricspublish -count=1`
+Run: `cd modules/factor/proto && make && cd .. && go test ./internal/app/control ./internal/rpc ./internal/observability ./internal/report -count=1`
 
 Expected: PASS，生成代码与 proto 一起提交。
 

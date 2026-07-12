@@ -2,11 +2,11 @@ package metrics
 
 import (
 	"context"
-	"testing"
-
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	messagepb "github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
 func TestMetricMessageStoreNilGuards(t *testing.T) {
@@ -27,4 +27,22 @@ func TestMetricMessageStoreNilGuards(t *testing.T) {
 	_, err = empty.CommitIngest(context.Background(), &messagepb.MooxMessage{}, nil)
 	require.Error(t, err)
 	assert.Equal(t, empty.DedupeRetention.Hours(), float64(7*24))
+}
+
+func metricMessageStoreForTest(t *testing.T, db *store.Store) *MetricMessageStore {
+	t.Helper()
+	result, err := store.WithDatabase(db, NewMetricMessageStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func metricRuleStoreForTest(t *testing.T, db *store.Store) *MetricRuleStore {
+	t.Helper()
+	result, err := store.WithDatabase(db, NewMetricRuleStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }

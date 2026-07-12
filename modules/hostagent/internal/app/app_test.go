@@ -20,7 +20,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	mocker "github.com/tencent/goom"
-	"trpc.group/trpc-go/trpc-go"
 )
 
 func writeEventBusConfig(t *testing.T, dir string) string {
@@ -226,23 +225,6 @@ func TestAgent_Run_CancelledContext_ShouldExit(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not exit after context cancellation")
 	}
-}
-
-func TestRegister_InvalidInputs_ShouldReturnError(t *testing.T) {
-	a := testAgent(t)
-	assert.Error(t, Register(nil, a))
-	assert.Error(t, Register(nil, nil))
-}
-
-func TestRegister_ConfiguredService_ShouldSucceed(t *testing.T) {
-	wd, err := os.Getwd()
-	require.NoError(t, err)
-	configDir := filepath.Join(wd, "..", "..", "config")
-	require.NoError(t, os.Chdir(configDir))
-	t.Cleanup(func() { _ = os.Chdir(wd) })
-
-	a := testAgent(t)
-	require.NoError(t, Register(trpc.NewServer(), a))
 }
 
 func TestAgent_RunOnce_NilAgent_ShouldReturnError(t *testing.T) {

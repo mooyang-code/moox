@@ -2,16 +2,17 @@ package rpc
 
 import (
 	"context"
-	"path/filepath"
-	"testing"
-
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
+	"github.com/mooyang-code/moox/modules/collector/internal/jobs/symbol"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	"github.com/mooyang-code/moox/modules/collector/schema"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
+	"path/filepath"
+	"testing"
 )
 
 func newCollectorRPCService(t *testing.T) *Service {
@@ -153,3 +154,57 @@ func TestCollectorService_TaskInstanceFlow(t *testing.T) {
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+func TestGetDataTypeConfigWithFieldsNormalizesDataType(t *testing.T) {
+	svc := &Service{}
+
+	rsp, err := svc.GetDataTypeConfigWithFields(context.Background(), &pb.GetDataTypeConfigWithFieldsReq{
+		DataType: " KLINE ",
+	})
+	if err != nil {
+		t.Fatalf("GetDataTypeConfigWithFields() error = %v", err)
+	}
+	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("ret code = %v, want SUCCESS, msg=%s", rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	}
+	if rsp.GetDetail().GetConfig().GetDataType() != "kline" {
+		t.Fatalf("data_type = %q, want kline", rsp.GetDetail().GetConfig().GetDataType())
+	}
+	if len(rsp.GetDetail().GetFields()) != 3 {
+		t.Fatalf("len(fields) = %d, want 3", len(rsp.GetDetail().GetFields()))
+	}
+}
+
+func TestJobTypesFromInstances_DedupesAndDerivesJobType(t *testing.T) {
+	got := jobTypesFromInstances([]domain.TaskInstance{
+		{TaskParams: `{"job_type":"collect.symbol"}`},
+		{TaskParams: `{"job_type":"collect.symbol"}`},
+		{TaskParams: `{"data_type":"kline"}`},
+	})
+	assert.Equal(t, []string{"collect.symbol", "collect.kline"}, got)
+	assert.Empty(t, jobTypesFromInstances([]domain.TaskInstance{{TaskParams: `{"data_type":""}`}}))
+}
+
+func TestDataTypeConfigFromDefinition(t *testing.T) {
+	def := symbol.Definition(jobs.JobTypeCollectSymbol)
+	cfg := dataTypeConfigFromDefinition(def)
+	assert.Equal(t, "symbol", cfg.GetDataType())
+	assert.Equal(t, "标的", cfg.GetTypeName())
+	fields := dataTypeFieldsFromDefinition(def)
+	require.NotEmpty(t, fields)
+	assert.NotEmpty(t, fields[0].GetFieldName())
+}
+
+func TestStructFromAnyAndValueFromAny(t *testing.T) {
+	st := structFromAny(map[string]any{"k": "v"})
+	assert.Equal(t, "v", st.GetFields()["k"].GetStringValue())
+	assert.Empty(t, structFromAny(make(chan int)).GetFields())
+
+	val := valueFromAny("hello")
+	assert.Equal(t, "hello", val.GetStringValue())
+	assert.Equal(t, "", valueFromAny(make(chan int)).GetStringValue())
+}
+
+func TestJobsListDefinitionsNotEmpty(t *testing.T) {
+	assert.NotEmpty(t, jobs.ListDefinitions())
+}

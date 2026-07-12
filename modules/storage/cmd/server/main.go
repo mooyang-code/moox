@@ -21,7 +21,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	"github.com/mooyang-code/moox/modules/storage/internal/health"
 	deviceduckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
-	"github.com/mooyang-code/moox/modules/storage/internal/metricspublish"
+	"github.com/mooyang-code/moox/modules/storage/internal/report"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/services/access"
 	primarysvc "github.com/mooyang-code/moox/modules/storage/internal/services/primary"
 	"github.com/mooyang-code/moox/modules/storage/internal/services/view"
@@ -207,7 +207,7 @@ func registerStorageMetricsReporter(s *server.Server, storage storageconfig.Stor
 	case storage.HasRole("view") && !storage.HasRole("access"):
 		serviceName, timerName = "storage_view", "trpc.moox.storage.view.metrics.timer"
 	}
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig(serviceName))
+	h, err := report.NewHandler(report.DefaultConfig(serviceName))
 	if err != nil {
 		log.Warnf("storage metrics reporter disabled: %v", err)
 		return

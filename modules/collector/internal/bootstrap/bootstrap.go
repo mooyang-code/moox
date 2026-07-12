@@ -8,7 +8,7 @@ import (
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
-	"github.com/mooyang-code/moox/modules/collector/internal/metricspublish"
+	"github.com/mooyang-code/moox/modules/collector/internal/report"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
@@ -89,7 +89,7 @@ func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
 	}
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox_collector"))
+	h, err := report.NewHandler(report.DefaultConfig("moox_collector"))
 	if err != nil {
 		log.Warnf("collector metrics reporter disabled: %v", err)
 		return

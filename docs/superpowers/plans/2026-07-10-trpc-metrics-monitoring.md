@@ -40,7 +40,7 @@ Tests in this plan may start a test-only NATS server, but production code must c
 | D2 | `/metrics` remains available for local debugging and compatibility. Prometheus server and Pushgateway are not deployed. |
 | D3 | Scheduling is provided by each service's tRPC timer configuration. Do not create `packages/metricreporter` or an additional ticker/scheduler abstraction. |
 | D4 | Every replica runs the timer. Metric timers do not contain `scheduler`, `startAtOnce`, or `disable=1`. |
-| D5 | The only shared metrics package is the payload contract `packages/metricspb`. Each service owns its small `internal/metricspublish` timer handler. |
+| D5 | The only shared metrics package is the payload contract `packages/metricspb`. Each service owns its small `internal/report` timer handler. |
 | D6 | Snapshots contain absolute Counter, Gauge, Histogram, and Summary state. Monitor derives rate/increase from historical values. |
 | D7 | Services are authorized from Monitor's SysDeploy-synchronized registry. There is no UI or API for manually adding scrape/report targets. |
 | D8 | High-volume history lives in MooX Storage. Monitor SQLite stores the service/series catalog, latest value, dedupe records, rules, and rule state. |
@@ -269,7 +269,7 @@ V1 validation requires 1-8 conditions named `A` through `H`, one connector for t
 
 ### Service Reporters
 
-- Create one `internal/metricspublish` package in EventBus, Admin, Collector, CloudNode, Factor, Monitor, Trade, and Storage.
+- Create one `internal/report` package in EventBus, Admin, Collector, CloudNode, Factor, Monitor, Trade, and Storage.
 - Modify each module's bootstrap/main, `go.mod`, `trpc_go.yaml`, and application configuration as listed in Task 9.
 - Keep scheduling in tRPC timer services; do not create a common reporter package.
 
@@ -691,9 +691,9 @@ git commit -m "feat(monitor): evaluate multi-metric alert rules"
 ### Task 9: Add A Reference Local Reporter To `moox-monitor`
 
 **Files:**
-- Create: `modules/monitor/internal/metricspublish/config.go`
-- Create: `modules/monitor/internal/metricspublish/handler.go`
-- Create: `modules/monitor/internal/metricspublish/handler_test.go`
+- Create: `modules/monitor/internal/report/config.go`
+- Create: `modules/monitor/internal/report/handler.go`
+- Create: `modules/monitor/internal/report/handler_test.go`
 - Modify: `modules/monitor/internal/bootstrap/bootstrap.go`
 - Modify: `modules/monitor/cmd/server/main.go`
 - Modify: `modules/monitor/config/trpc_go.yaml`
@@ -743,7 +743,7 @@ Resolve the timer service, warn and skip when absent in tests, then call `timer.
 - [ ] **Step 5: Run and commit**
 
 ```bash
-go test -count=1 ./modules/monitor/internal/metricspublish ./modules/monitor/internal/bootstrap
+go test -count=1 ./modules/monitor/internal/report ./modules/monitor/internal/bootstrap
 git add modules/monitor
 git commit -m "feat(monitor): report local prometheus snapshots"
 ```
@@ -753,27 +753,27 @@ git commit -m "feat(monitor): report local prometheus snapshots"
 ### Task 10: Roll The Local Reporter Out To Every tRPC Process
 
 **Files:**
-- Create: `modules/eventbus/internal/metricspublish/config.go`
-- Create: `modules/eventbus/internal/metricspublish/handler.go`
-- Create: `modules/eventbus/internal/metricspublish/handler_test.go`
-- Create: `modules/admin/internal/metricspublish/config.go`
-- Create: `modules/admin/internal/metricspublish/handler.go`
-- Create: `modules/admin/internal/metricspublish/handler_test.go`
-- Create: `modules/collector/internal/metricspublish/config.go`
-- Create: `modules/collector/internal/metricspublish/handler.go`
-- Create: `modules/collector/internal/metricspublish/handler_test.go`
-- Create: `modules/cloudnode/internal/metricspublish/config.go`
-- Create: `modules/cloudnode/internal/metricspublish/handler.go`
-- Create: `modules/cloudnode/internal/metricspublish/handler_test.go`
-- Create: `modules/factor/internal/metricspublish/config.go`
-- Create: `modules/factor/internal/metricspublish/handler.go`
-- Create: `modules/factor/internal/metricspublish/handler_test.go`
-- Create: `modules/trade/internal/metricspublish/config.go`
-- Create: `modules/trade/internal/metricspublish/handler.go`
-- Create: `modules/trade/internal/metricspublish/handler_test.go`
-- Create: `modules/storage/internal/metricspublish/config.go`
-- Create: `modules/storage/internal/metricspublish/handler.go`
-- Create: `modules/storage/internal/metricspublish/handler_test.go`
+- Create: `modules/eventbus/internal/report/config.go`
+- Create: `modules/eventbus/internal/report/handler.go`
+- Create: `modules/eventbus/internal/report/handler_test.go`
+- Create: `modules/admin/internal/report/config.go`
+- Create: `modules/admin/internal/report/handler.go`
+- Create: `modules/admin/internal/report/handler_test.go`
+- Create: `modules/collector/internal/report/config.go`
+- Create: `modules/collector/internal/report/handler.go`
+- Create: `modules/collector/internal/report/handler_test.go`
+- Create: `modules/cloudnode/internal/report/config.go`
+- Create: `modules/cloudnode/internal/report/handler.go`
+- Create: `modules/cloudnode/internal/report/handler_test.go`
+- Create: `modules/factor/internal/report/config.go`
+- Create: `modules/factor/internal/report/handler.go`
+- Create: `modules/factor/internal/report/handler_test.go`
+- Create: `modules/trade/internal/report/config.go`
+- Create: `modules/trade/internal/report/handler.go`
+- Create: `modules/trade/internal/report/handler_test.go`
+- Create: `modules/storage/internal/report/config.go`
+- Create: `modules/storage/internal/report/handler.go`
+- Create: `modules/storage/internal/report/handler_test.go`
 - Modify: `modules/eventbus/cmd/server/main.go`
 - Modify: `modules/eventbus/internal/bootstrap/bootstrap.go`
 - Modify: `modules/eventbus/config/trpc_go.yaml`
@@ -838,7 +838,7 @@ Parse every `trpc_go*.yaml` and assert unique ports on a shared host, enabled lo
 - [ ] **Step 5: Run module tests and commit**
 
 ```bash
-go test -count=1 ./modules/eventbus/internal/metricspublish ./modules/admin/internal/metricspublish ./modules/collector/internal/metricspublish ./modules/cloudnode/internal/metricspublish ./modules/factor/internal/metricspublish ./modules/trade/internal/metricspublish ./modules/storage/internal/metricspublish
+go test -count=1 ./modules/eventbus/internal/report ./modules/admin/internal/report ./modules/collector/internal/report ./modules/cloudnode/internal/report ./modules/factor/internal/report ./modules/trade/internal/report ./modules/storage/internal/report
 git add modules
 git commit -m "feat(metrics): report every trpc service through eventbus"
 ```
@@ -927,7 +927,7 @@ git commit -m "feat(web): add structured metric alert rules"
 ### Task 13: End-To-End, Failure, Cardinality, And Deployment Verification
 
 **Files:**
-- Create: `modules/monitor/internal/metrics/end_to_end_test.go`
+- Create: `modules/monitor/test/metrics_eventbus_e2e_test.go`
 - Create: `docs/运维/MooX指标监控.md`
 - Modify: `modules/monitor/README.md`
 - Modify: root `README.md`

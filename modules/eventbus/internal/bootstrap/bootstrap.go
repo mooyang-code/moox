@@ -12,9 +12,9 @@ import (
 	"github.com/mooyang-code/moox/modules/eventbus/internal/broker"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/health"
-	"github.com/mooyang-code/moox/modules/eventbus/internal/management"
-	"github.com/mooyang-code/moox/modules/eventbus/internal/metricspublish"
+	"github.com/mooyang-code/moox/modules/eventbus/internal/report"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
+	"github.com/mooyang-code/moox/modules/eventbus/internal/rpc"
 	eventbusgen "github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen"
 	"github.com/nats-io/nats.go"
 	"gopkg.in/yaml.v3"
@@ -80,8 +80,8 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 		_ = b.Shutdown(context.Background())
 		return nil, err
 	}
-	// 5. read-only management RPC
-	mgr := management.New(js, cfg, management.Options{Ready: b.Ready, Connections: b.Connections})
+	// 5. read-only status RPC
+	mgr := rpc.New(js, cfg, rpc.Options{Ready: b.Ready, Connections: b.Connections})
 	if s != nil {
 		svc := s.Service("trpc.moox.eventbus.EventBusMgr")
 		if svc != nil {
@@ -112,7 +112,7 @@ func registerMetricsReporter(s *server.Server) {
 	}
 	// The reporter identity must match the SysDeploy service name so Monitor
 	// can authorize snapshots without a second, manually maintained registry.
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("eventbus"))
+	h, err := report.NewHandler(report.DefaultConfig("eventbus"))
 	if err != nil {
 		log.Warnf("eventbus metrics reporter disabled: %v", err)
 		return

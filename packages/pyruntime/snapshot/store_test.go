@@ -2,14 +2,13 @@ package snapshot
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/pyruntime/transport"
+	"github.com/stretchr/testify/assert"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/mooyang-code/moox/packages/pyruntime/transport"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestAcquireSharesContentAddressedFile(t *testing.T) {
@@ -113,4 +112,14 @@ func TestMappedSchemaNilReceiver_ShouldReturnNil(t *testing.T) {
 	var mapped *Mapped
 	assert.Nil(t, mapped.Schema())
 	assert.Nil(t, mapped.Reader())
+}
+
+func TestHandleAndMappedNilGuards(t *testing.T) {
+	var h *Handle
+	assert.NoError(t, h.Release())
+
+	var m *Mapped
+	assert.Nil(t, m.Reader())
+	assert.Nil(t, m.Schema())
+	assert.NoError(t, m.Close())
 }

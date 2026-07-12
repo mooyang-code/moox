@@ -15,7 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/metricspublish"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/report"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
@@ -176,7 +176,7 @@ func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
 	}
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox_cloudnode"))
+	h, err := report.NewHandler(report.DefaultConfig("moox_cloudnode"))
 	if err != nil {
 		log.Warnf("cloudnode metrics reporter disabled: %v", err)
 		return

@@ -671,8 +671,8 @@ git commit -m "feat(eventbus): reconcile stream and topic registry"
 ### Task 6: Add Management RPC, Health, And Metrics
 
 **Files:**
-- Create: `modules/eventbus/internal/management/service.go`
-- Create: `modules/eventbus/internal/management/service_test.go`
+- Create: `modules/eventbus/internal/rpc/service.go`
+- Create: `modules/eventbus/internal/rpc/service_test.go`
 - Create: `modules/eventbus/internal/health/server.go`
 - Create: `modules/eventbus/internal/health/server_test.go`
 - Create: `modules/eventbus/internal/bootstrap/bootstrap.go`
@@ -988,7 +988,7 @@ git commit -m "refactor(eventbus): remove module-private nats runtimes"
 ### Task 12: End-To-End Failure, Load, And Deployment Verification
 
 **Files:**
-- Create: `modules/eventbus/internal/integration/end_to_end_test.go`
+- Create: `modules/eventbus/test/eventbus_e2e_test.go`
 - Create: `docs/运维/MooX-EventBus运维.md`
 - Modify: `modules/eventbus/README.md`
 - Modify: `README.md`

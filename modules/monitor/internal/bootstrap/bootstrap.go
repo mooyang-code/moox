@@ -15,7 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/health"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/metricspublish"
+	"github.com/mooyang-code/moox/modules/monitor/internal/report"
 	monitorpeer "github.com/mooyang-code/moox/modules/monitor/internal/peer"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
@@ -301,7 +301,7 @@ func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
 	}
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox_monitor"))
+	h, err := report.NewHandler(report.DefaultConfig("moox_monitor"))
 	if err != nil {
 		log.WarnContextf(context.Background(), "monitor metrics reporter disabled: %v", err)
 		return

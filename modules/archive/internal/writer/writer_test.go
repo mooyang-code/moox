@@ -2,13 +2,13 @@ package writer
 
 import (
 	"context"
-	"testing"
-	"time"
-
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/parquetio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/stretchr/testify/assert"
+	"testing"
+	"time"
 )
 
 func TestWriterMergesPartialUpdateWithoutAddingDuplicateRow(t *testing.T) {
@@ -46,4 +46,11 @@ func TestWriterMergesPartialUpdateWithoutAddingDuplicateRow(t *testing.T) {
 	if len(rows) != 1 || rows[0].Columns["open"].Double == nil || *rows[0].Columns["open"].Double != open || *rows[0].Columns["close"].Double != newClose || rows[0].Attributes["provider"] != "binance" || rows[0].Attributes["revision"] != "2" {
 		t.Fatalf("rows = %#v", rows)
 	}
+}
+
+func TestTempFileHelpers(t *testing.T) {
+	assert.True(t, isTempFile(".part.tmp-123.parquet"))
+	assert.False(t, isTempFile("202601.parquet"))
+	assert.True(t, containsTempMarker("dir/.tmp-123"))
+	assert.False(t, containsTempMarker("clean.parquet"))
 }

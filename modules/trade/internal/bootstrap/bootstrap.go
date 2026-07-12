@@ -16,7 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/exchangebridge"
 	kernelstore "github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/metricspublish"
+	"github.com/mooyang-code/moox/modules/trade/internal/report"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
@@ -103,7 +103,7 @@ func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
 	}
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("trade_account"))
+	h, err := report.NewHandler(report.DefaultConfig("trade_account"))
 	if err != nil {
 		log.Warnf("trade metrics reporter disabled: %v", err)
 		return

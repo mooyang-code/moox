@@ -12,7 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/health"
-	"github.com/mooyang-code/moox/modules/factor/internal/metricspublish"
+	"github.com/mooyang-code/moox/modules/factor/internal/report"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
 	factorsvc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
@@ -189,7 +189,7 @@ func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
 	}
-	h, err := metricspublish.NewHandler(metricspublish.DefaultConfig("moox_factor"))
+	h, err := report.NewHandler(report.DefaultConfig("moox_factor"))
 	if err != nil {
 		log.Warnf("factor metrics reporter disabled: %v", err)
 		return

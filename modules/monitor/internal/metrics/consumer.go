@@ -127,6 +127,14 @@ func NewConsumer(ctx context.Context, opts ConsumerOptions) (*Consumer, error) {
 	return &Consumer{pull: pull, opts: opts}, nil
 }
 
+// Fetch pulls up to batch deliveries for tests and operational drain paths.
+func (c *Consumer) Fetch(ctx context.Context, batch int) ([]*jetstream.Delivery, error) {
+	if c == nil || c.pull == nil {
+		return nil, errors.New("metrics consumer is nil")
+	}
+	return c.pull.Fetch(ctx, batch)
+}
+
 func (c *Consumer) Close() error {
 	if c == nil {
 		return nil
