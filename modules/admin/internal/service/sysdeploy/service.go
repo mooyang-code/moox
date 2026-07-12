@@ -179,6 +179,12 @@ func gatewayDeploymentName(serviceID string) string {
 		return "moox_strategy"
 	case "monitor":
 		return "moox_monitor"
+	case "archive":
+		return "moox_archive"
+	case "hostagent", "host-agent":
+		return "moox_hostagent"
+	case "trade":
+		return "moox_trade"
 	default:
 		return serviceID
 	}

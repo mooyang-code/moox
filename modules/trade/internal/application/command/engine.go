@@ -12,7 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/observability"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"gorm.io/gorm"
 )
 
@@ -29,7 +29,7 @@ type PlaceInput struct {
 func (e *Engine) Place(ctx context.Context, in PlaceInput) (store.OrderRecord, error) {
 	started := time.Now()
 	defer func() {
-		observability.OperationLatency.WithLabelValues("place_command").Observe(time.Since(started).Seconds())
+		telemetry.OperationLatency.WithLabelValues("place_command").Observe(time.Since(started).Seconds())
 	}()
 	paused, pauseErr := e.Store.IsPaused(ctx, in.SpaceID, in.AccountID, in.ChannelID)
 	if pauseErr != nil {
@@ -45,7 +45,7 @@ func (e *Engine) Place(ctx context.Context, in PlaceInput) (store.OrderRecord, e
 	}
 	qty, err := shared.ParseDecimal(in.Quantity)
 	if err != nil {
-		observability.Commands.WithLabelValues("place", "rejected").Inc()
+		telemetry.Commands.WithLabelValues("place", "rejected").Inc()
 		return store.OrderRecord{}, err
 	}
 	if e.Resolver != nil {
@@ -113,7 +113,7 @@ func (e *Engine) Place(ctx context.Context, in PlaceInput) (store.OrderRecord, e
 		}
 		return store.OrderRecord{}, err
 	}
-	observability.Commands.WithLabelValues("place", "accepted").Inc()
+	telemetry.Commands.WithLabelValues("place", "accepted").Inc()
 	return r, nil
 }
 
@@ -147,11 +147,11 @@ func (e *Engine) Submit(ctx context.Context, space, orderID, priceRaw string) (s
 	}
 	result, callErr := adapter.Place(ctx, exchange.PlaceRequest{ClientOrderID: r.ClientOrderID, Symbol: r.Symbol, Side: r.Side, Type: "LIMIT", TimeInForce: "IOC", Quantity: o.Quantity, Price: price, ReduceOnly: r.ReduceOnly})
 	if callErr == nil {
-		observability.Submissions.WithLabelValues("acknowledged").Inc()
+		telemetry.Submissions.WithLabelValues("acknowledged").Inc()
 	} else if exchange.IsCategory(callErr, exchange.ErrorTransportUncertain) {
-		observability.Submissions.WithLabelValues("unknown").Inc()
+		telemetry.Submissions.WithLabelValues("unknown").Inc()
 	} else {
-		observability.Submissions.WithLabelValues("rejected").Inc()
+		telemetry.Submissions.WithLabelValues("rejected").Inc()
 	}
 	latest, _ := e.Store.GetOrder(ctx, space, orderID)
 	o, _ = aggregate(latest)

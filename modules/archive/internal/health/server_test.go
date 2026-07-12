@@ -7,7 +7,7 @@ import (
 
 func TestHealthHandlerReturnsNotReadyUntilStateReady(t *testing.T) {
 	state := New("archive", "test", "dev", "local")
-	req := httptest.NewRequest("GET", "/healthz", nil)
+	req := httptest.NewRequest("GET", "/readyz", nil)
 	rec := httptest.NewRecorder()
 	Handler(state).ServeHTTP(rec, req)
 	if rec.Code != 503 {
@@ -18,5 +18,10 @@ func TestHealthHandlerReturnsNotReadyUntilStateReady(t *testing.T) {
 	Handler(state).ServeHTTP(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("ready status=%d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	Handler(state).ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != 200 {
+		t.Fatalf("liveness status=%d", rec.Code)
 	}
 }

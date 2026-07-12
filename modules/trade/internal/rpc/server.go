@@ -12,7 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/observability"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	mooxpb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -48,7 +48,7 @@ var _ mooxpb.RebalanceSvcService = (*Server)(nil)
 var _ mooxpb.TradeOpsSvcService = (*Server)(nil)
 
 func withRPCTrace(ctx context.Context) context.Context {
-	return observability.WithTrace(ctx, observability.Trace{TraceID: string(trpc.GetMetaData(ctx, "trace_id")), RequestID: string(trpc.GetMetaData(ctx, "request_id"))})
+	return telemetry.WithTrace(ctx, telemetry.Trace{TraceID: string(trpc.GetMetaData(ctx, "trace_id")), RequestID: string(trpc.GetMetaData(ctx, "request_id"))})
 }
 
 func (h *Server) SetPause(ctx context.Context, req *mooxpb.SetTradePauseReq) (*mooxpb.SetTradePauseRsp, error) {

@@ -18,6 +18,11 @@ server:
       network: tcp
       protocol: http
       timeout: 30000
+    - name: trpc.moox.factor.Health
+      port: 11414
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
     - name: trpc.moox.factor.reconcile.timer
       port: 11405
       network: "0 */10 * * * *?scheduler=factorReconcileSchedule&disable=1&params="

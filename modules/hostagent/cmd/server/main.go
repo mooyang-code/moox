@@ -27,7 +27,10 @@ func main() {
 		log.Errorf("host-agent register failed: %v", err)
 		os.Exit(1)
 	}
-	_, _ = app.StartHealth(ctx, a, cfg.HealthAddr)
+	if err := app.RegisterHealth(s.Service("trpc.moox.hostagent.Health"), a); err != nil {
+		log.Errorf("host-agent health register failed: %v", err)
+		os.Exit(1)
+	}
 	go a.Run(ctx)
 	if err := s.Serve(); err != nil {
 		log.Errorf("host-agent server failed: %v", err)

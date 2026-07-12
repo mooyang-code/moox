@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -14,7 +15,8 @@ func TestTradeHealthSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	rsp := tradeHealthSnapshot(db)(context.Background())
+	state := health.New("trade", "trade", "", "")
+	rsp := tradeHealthSnapshot(db, state)(context.Background())
 
 	if rsp.Module != "trade" || rsp.Ready || rsp.Status != "degraded" {
 		t.Fatalf("health response = %+v", rsp)

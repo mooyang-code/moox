@@ -1,0 +1,12 @@
+global:
+  namespace: Production
+  env_name: prod
+
+server:
+  timeout: 5000
+  service:
+    - name: trpc.moox.archive.Health
+      port: 11416
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000

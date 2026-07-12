@@ -13,7 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/position"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/observability"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/modules/trade/schema"
 	"gorm.io/gorm"
 )
@@ -489,7 +489,7 @@ func (s *Store) RecordInbox(ctx context.Context, consumer, id, topic string) (bo
 	return fresh, err
 }
 func (t *Tx) AddOutbox(id, topic string, payload []byte) error {
-	trace := observability.TraceFromContext(t.ctx)
+	trace := telemetry.TraceFromContext(t.ctx)
 	return t.db.Exec("INSERT INTO t_trade_outbox(c_message_id,c_topic,c_payload,c_trace_id,c_request_id) VALUES(?,?,?,?,?)", id, topic, payload, trace.TraceID, trace.RequestID).Error
 }
 func (s *Store) EnqueueOutbox(ctx context.Context, id, topic string, payload []byte) error {

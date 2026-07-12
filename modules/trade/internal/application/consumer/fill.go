@@ -11,7 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/observability"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 )
 
 type FillHandler struct{ Store *store.Store }
@@ -119,6 +119,6 @@ func (h FillHandler) HandleSource(ctx context.Context, space, account, orderID, 
 	if err != nil {
 		result = "error"
 	}
-	observability.Fills.WithLabelValues(source, result).Inc()
+	telemetry.Fills.WithLabelValues(source, result).Inc()
 	return applied, err
 }

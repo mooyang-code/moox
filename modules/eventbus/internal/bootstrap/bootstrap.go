@@ -94,10 +94,12 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 	// 6. health/metrics; ready is set only after every previous stage succeeds.
 	hs := health.New(cfg.Health.Addr, b, reg, nc)
 	hs.SetReady(true)
-	if err := hs.Start(ctx); err != nil {
-		nc.Close()
-		_ = b.Shutdown(context.Background())
-		return nil, err
+	if s != nil {
+		if err := hs.Register(s.Service("trpc.moox.eventbus.Health")); err != nil {
+			nc.Close()
+			_ = b.Shutdown(context.Background())
+			return nil, err
+		}
 	}
 	rt := &Runtime{Config: cfg, Broker: b, Conn: nc, Registry: reg, Health: hs}
 	go func() { <-ctx.Done(); _ = rt.Shutdown(context.Background()) }()

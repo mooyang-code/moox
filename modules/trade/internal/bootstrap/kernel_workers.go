@@ -14,7 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	tradebus "github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/observability"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
@@ -81,13 +81,13 @@ func runPrivateStreamSupervisor(ctx context.Context, s *store.Store, e *command.
 			for _, row := range orders {
 				expected[row.SpaceID+":"+row.ChannelID] = true
 			}
-			observability.SetPrivateExpected(expected)
+			telemetry.SetPrivateExpected(expected)
 			mu.Lock()
 			for key, entry := range active {
 				if !expected[key] {
 					entry.cancel()
 					delete(active, key)
-					observability.SetPrivateConnected(key, false)
+					telemetry.SetPrivateConnected(key, false)
 				}
 			}
 			mu.Unlock()
@@ -109,7 +109,7 @@ func runPrivateStreamSupervisor(ctx context.Context, s *store.Store, e *command.
 						mu.Lock()
 						if current, ok := active[key]; ok && current.generation == myGeneration {
 							delete(active, key)
-							observability.SetPrivateConnected(key, false)
+							telemetry.SetPrivateConnected(key, false)
 						}
 						mu.Unlock()
 					}()
@@ -122,7 +122,7 @@ func runPrivateStreamSupervisor(ctx context.Context, s *store.Store, e *command.
 						mu.Lock()
 						current, ok := active[key]
 						if ok && current.generation == myGeneration {
-							observability.SetPrivateConnected(key, ready)
+							telemetry.SetPrivateConnected(key, ready)
 						}
 						mu.Unlock()
 					})
@@ -136,7 +136,7 @@ func runPrivateStreamSupervisor(ctx context.Context, s *store.Store, e *command.
 							return lookupErr
 						}
 						fill.BaseAsset, fill.QuoteAsset = orderRow.BaseAsset, orderRow.QuoteAsset
-						observability.MarkPrivateEvent(exchangeLabel, time.Now())
+						telemetry.MarkPrivateEvent(exchangeLabel, time.Now())
 						_, handleErr := (consumer.FillHandler{Store: s}).HandleSource(eventCtx, orderRow.SpaceID, orderRow.AccountID, orderRow.OrderID, fill.ExchangeTradeID, fill, "private_stream")
 						return handleErr
 					})
@@ -238,7 +238,7 @@ func runReconciliationConsumer(ctx context.Context, client *jetstream.Client, cf
 			if err == nil {
 				err = reconcileOrdersOnce(deliveryCtx, s, e, scope.SpaceID, scope.AccountID, scope.ChannelID)
 			}
-			observability.OperationLatency.WithLabelValues("reconcile").Observe(time.Since(started).Seconds())
+			telemetry.OperationLatency.WithLabelValues("reconcile").Observe(time.Since(started).Seconds())
 			if err != nil {
 				_ = delivery.Nak(ctx, time.Second)
 				continue
@@ -468,5 +468,5 @@ func deliveryTraceContext(ctx context.Context, delivery *jetstream.Delivery) con
 	if delivery == nil || delivery.Message == nil || delivery.Message.Trace == nil {
 		return ctx
 	}
-	return observability.WithTrace(ctx, observability.Trace{TraceID: delivery.Message.Trace.TraceId, RequestID: delivery.Message.Trace.RequestId})
+	return telemetry.WithTrace(ctx, telemetry.Trace{TraceID: delivery.Message.Trace.TraceId, RequestID: delivery.Message.Trace.RequestId})
 }

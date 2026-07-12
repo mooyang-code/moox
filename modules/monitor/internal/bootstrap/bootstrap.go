@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/health"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/metricspublish"
@@ -80,7 +81,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		if err := hostRuleCache.Start(ctx); err != nil {
 			log.WarnContextf(ctx, "host alert rule cache unavailable: %v", err)
 		}
-		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{Cache: hostRuleCache, Repository: repository.NewAlertRepository(mgr.DB()), InstanceID: cfg.Instance.InstanceID, Notifier: alerting.WebhookNotifier{}, Webhook: func(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) { return repository.NewAlertRepository(mgr.DB()).GetWebhook(ctx, spaceID, webhookID) }})
+		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{Cache: hostRuleCache, Repository: repository.NewAlertRepository(mgr.DB()), InstanceID: cfg.Instance.InstanceID, Notifier: alerting.WebhookNotifier{}, Webhook: func(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) {
+			return repository.NewAlertRepository(mgr.DB()).GetWebhook(ctx, spaceID, webhookID)
+		}})
 	} else {
 		hostStore = hostmetrics.NewStoreWithWriter(nil)
 	}
@@ -112,11 +115,15 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			Notifier: monmetrics.WebhookMetricNotifier{},
 		})
 	}
-	startHealthServer(ctx, cfg, mgr, metricsStorage)
+	startHealthServer(ctx, s, cfg, mgr, metricsStorage)
 	resultHook := monitorResultHook(cfg, mgr)
 	syncSystem := monitorSyncFunc(ctx, cfg, mgr)
 	var hostReady func() bool
-	if hostGate != nil { hostReady = hostGate.Ready } else { hostReady = func() bool { return false } }
+	if hostGate != nil {
+		hostReady = hostGate.Ready
+	} else {
+		hostReady = func() bool { return false }
+	}
 	registerMonitorService(s, cfg, mgr, hostStore, hostReader, hostReady, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
 	registerMetricsReporter(s)
 	startScheduler(ctx, cfg, mgr, resultHook)
@@ -315,16 +322,24 @@ func Manager() *monstorage.Manager {
 	return defaultManager
 }
 
-func startHealthServer(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager, metricsStorage *monmetrics.StorageAdapter) {
+func startHealthServer(ctx context.Context, s *server.Server, cfg *config.Config, mgr *monstorage.Manager, metricsStorage *monmetrics.StorageAdapter) {
 	if cfg == nil {
 		return
 	}
+	state := health.New("monitor", cfg.Instance.InstanceID, "", "")
+	state.SetReady(true)
+	state.SnapshotFunc = monitorHealthSnapshot(cfg, mgr, metricsStorage)
 	handler := monitorpeer.NewHTTPHandler(monitorpeer.HTTPOptions{
 		Token:    cfg.Peer.Token,
-		Health:   healthz.Handler(monitorHealthSnapshot(cfg, mgr, metricsStorage)),
+		Health:   healthz.ReadinessHandler(state.Snapshot),
+		Liveness: healthz.LivenessHandler(state.Snapshot),
 		Snapshot: monitorSnapshot(cfg),
 	})
-	if _, err := healthz.StartWithHandler(ctx, cfg.Health.Addr, handler); err != nil {
+	if s == nil {
+		log.Warn("monitor health service is unavailable")
+		return
+	}
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.monitor.Health"), handler); err != nil {
 		log.ErrorContextf(ctx, "monitor health server failed to start: %v", err)
 	}
 }
@@ -538,6 +553,16 @@ func monitorHealthSnapshot(cfg *config.Config, mgr *monstorage.Manager, metricsS
 		}
 		rsp.Details["metrics_schema_ready"] = metricsReady
 		rsp.Details["metrics_schema_reason"] = metricsReason
+		databaseReady := mgr != nil && mgr.DB() != nil
+		ready := databaseReady && defaultScheduler != nil && metricsReady
+		rsp.Ready = ready
+		if ready {
+			rsp.Status = "ok"
+		} else {
+			rsp.Status = "degraded"
+		}
+		rsp.Details["database_ready"] = databaseReady
+		rsp.Details["scheduler_ready"] = defaultScheduler != nil
 		return rsp
 	}
 }

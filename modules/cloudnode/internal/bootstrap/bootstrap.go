@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/health"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
@@ -43,8 +44,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 cloudnode 数据库失败: %v", err)
 		return nil, err
 	}
-	startHealthServer(ctx, cfg)
-
 	historyStore := jobhistory.NewStore(jobhistory.StoreOptions{
 		Dir:           cfg.JobItem.HistoryDir,
 		RetentionDays: cfg.JobItem.HistoryRetentionDays,
@@ -100,6 +99,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	svc := cloudnoderpc.New(dbm, opts...)
 	cloudnodepb.RegisterCloudNodeMgrService(s.Service("trpc.moox.cloudnode.CloudNodeMgr"), svc)
+	startHealthServer(ctx, s, cfg)
 
 	log.InfoContextf(ctx, "moox-cloudnode 初始化完成")
 	return s, nil
@@ -122,11 +122,18 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func startHealthServer(ctx context.Context, cfg *config.Config) {
+func startHealthServer(ctx context.Context, s *server.Server, cfg *config.Config) {
 	if cfg == nil {
 		return
 	}
-	if _, err := healthz.Start(ctx, cfg.Health.Addr, cloudnodeHealthSnapshot(cfg)); err != nil {
+	state := health.New("cloudnode", "cloudnode", "", "")
+	state.SetReady(true)
+	state.SnapshotFunc = cloudnodeHealthSnapshot(cfg)
+	if s == nil {
+		log.Warn("cloudnode health service is unavailable")
+		return
+	}
+	if err := health.Register(s.Service("trpc.moox.cloudnode.Health"), state); err != nil {
 		log.ErrorContextf(ctx, "cloudnode health server failed to start: %v", err)
 	}
 }

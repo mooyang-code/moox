@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,8 +9,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
-	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -94,6 +94,8 @@ func (hr *HTTPRouter) buildRouter() *mux.Router {
 	// 健康检查接口
 	router.HandleFunc("/api/admin/health", hr.handleHealthCheck).Methods("GET")
 	router.HandleFunc("/healthz", hr.handleHealthCheck).Methods("GET")
+	router.HandleFunc("/readyz", hr.handleHealthCheck).Methods("GET")
+	router.Handle("/metrics", promhttp.Handler()).Methods("GET")
 	return router
 }
 
@@ -167,9 +169,7 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 
 // handleHealthCheck 处理健康检查请求
 func (hr *HTTPRouter) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
-	healthz.Handler(func(ctx context.Context) healthz.Response {
-		return healthz.Base("admin", "admin-gateway", "", "", gatewayStartedAt, true)
-	}).ServeHTTP(w, r)
+	adminhealth.Handler(gatewayStartedAt).ServeHTTP(w, r)
 }
 
 // ============================================================================

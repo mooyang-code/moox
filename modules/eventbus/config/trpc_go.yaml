@@ -17,6 +17,11 @@ server:
       network: tcp
       protocol: http
       timeout: 30000
+    - name: trpc.moox.eventbus.Health
+      port: 11419
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
     - name: trpc.moox.eventbus.metrics.timer
       port: 11421
       network: "*/30 * * * * *?params="

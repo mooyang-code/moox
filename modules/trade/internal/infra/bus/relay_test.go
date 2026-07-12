@@ -3,7 +3,7 @@ package bus
 import (
 	"context"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/observability"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"path/filepath"
@@ -22,7 +22,7 @@ func TestRelayUsesStablePublicMessageContract(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	ctx := observability.WithTrace(context.Background(), observability.Trace{TraceID: "trace-1", RequestID: "request-1"})
+	ctx := telemetry.WithTrace(context.Background(), telemetry.Trace{TraceID: "trace-1", RequestID: "request-1"})
 	if e = s.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.AddOutbox("m1", "moox.trade.order.state_changed.v1", []byte(`{"x":1}`))
 	}); e != nil {

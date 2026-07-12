@@ -96,6 +96,51 @@ func TestHealthzHandlerReturns503WhenNotReady(t *testing.T) {
 	}
 }
 
+func TestLivenessHandlerReturns200WhenDependenciesAreNotReady(t *testing.T) {
+	handler := LivenessHandler(func(context.Context) Response {
+		return Response{Module: "storage", Ready: false, Status: "degraded"}
+	})
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	var rsp Response
+	if err := json.Unmarshal(rr.Body.Bytes(), &rsp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !rsp.Ready || rsp.Status != "ok" {
+		t.Fatalf("liveness response = %+v", rsp)
+	}
+}
+
+func TestStandardMuxSeparatesLivenessAndReadiness(t *testing.T) {
+	state := func(context.Context) Response { return Response{Module: "test", Ready: false} }
+	handler := StandardMux(state, nil)
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{path: "/healthz", want: http.StatusOK},
+		{path: "/readyz", want: http.StatusServiceUnavailable},
+	} {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if rr.Code != tc.want {
+			t.Fatalf("%s status = %d, want %d", tc.path, rr.Code, tc.want)
+		}
+	}
+}
+
+func TestRegisterNoProtocolServiceMuxRejectsMissingInputs(t *testing.T) {
+	if err := RegisterNoProtocolServiceMux(nil, http.NewServeMux()); err == nil {
+		t.Fatal("nil service should be rejected")
+	}
+	if err := RegisterNoProtocolServiceMux(nil, nil); err == nil {
+		t.Fatal("nil service and handler should be rejected")
+	}
+}
+
 func TestHealthzHandlerPreservesDetails(t *testing.T) {
 	handler := Handler(func(context.Context) Response {
 		return Response{

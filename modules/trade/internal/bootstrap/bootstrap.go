@@ -12,15 +12,16 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	_ "github.com/mooyang-code/moox/modules/trade/internal/exchange/all" // 注册 binance/okx 适配器
+	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/exchangebridge"
 	kernelstore "github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/metricspublish"
-	"github.com/mooyang-code/moox/modules/trade/internal/observability"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"github.com/mooyang-code/moox/modules/trade/internal/service/dao"
 	"github.com/mooyang-code/moox/modules/trade/internal/service/database"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 
@@ -89,7 +90,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	registerMetricsReporter(s)
-	startHealthServer(ctx, appCfg, tradeStore)
+	startHealthServer(ctx, s, appCfg, tradeStore)
 
 	log.InfoContextf(ctx, "moox-trade 初始化完成，交易主链路使用 EventBus，定时轮询同步已停用")
 	return s, nil
@@ -112,16 +113,22 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func startHealthServer(ctx context.Context, cfg *config.AppConfig, store *kernelstore.Store) {
+func startHealthServer(ctx context.Context, s *server.Server, cfg *config.AppConfig, store *kernelstore.Store) {
 	if cfg == nil {
 		return
 	}
-	if _, err := healthz.Start(ctx, cfg.Health.Addr, tradeHealthSnapshot(store)); err != nil {
+	state := health.New("trade", "trade", "", "")
+	state.SnapshotFunc = tradeHealthSnapshot(store, state)
+	if s == nil {
+		log.Warn("trade health service is unavailable")
+		return
+	}
+	if err := health.Register(s.Service("trpc.moox.trade.Health"), state); err != nil {
 		log.ErrorContextf(ctx, "trade health server failed to start: %v", err)
 	}
 }
 
-func tradeHealthSnapshot(store *kernelstore.Store) healthz.SnapshotFunc {
+func tradeHealthSnapshot(store *kernelstore.Store, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		stats, err := store.Health(ctx)
 		busReady := kernelEventBusReady()
@@ -129,10 +136,11 @@ func tradeHealthSnapshot(store *kernelstore.Store) healthz.SnapshotFunc {
 		if !stats.OldestOutbox.IsZero() {
 			outboxLag = time.Since(stats.OldestOutbox)
 		}
-		privateReady := stats.OpenOrders == 0 || observability.PrivateStreamsReady()
+		privateReady := stats.OpenOrders == 0 || telemetry.PrivateStreamsReady()
 		ready := err == nil && busReady && outboxLag <= time.Minute && privateReady
-		observability.UnknownOrders.Set(float64(stats.UnknownOrders))
-		observability.OutboxLag.Set(outboxLag.Seconds())
+		state.SetReady(ready)
+		telemetry.UnknownOrders.Set(float64(stats.UnknownOrders))
+		telemetry.OutboxLag.Set(outboxLag.Seconds())
 		rsp := healthz.Base("trade", "trade", "", "", tradeStartedAt, ready)
 		rsp.Details = map[string]any{
 			"database_ready":             err == nil,
@@ -142,7 +150,7 @@ func tradeHealthSnapshot(store *kernelstore.Store) healthz.SnapshotFunc {
 			"unknown_orders":             stats.UnknownOrders,
 			"open_orders":                stats.OpenOrders,
 			"private_stream_ready":       privateReady,
-			"private_stream_connections": observability.PrivateConnectedCount(),
+			"private_stream_connections": telemetry.PrivateConnectedCount(),
 		}
 		return rsp
 	}

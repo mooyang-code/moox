@@ -31,6 +31,16 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if healthURL(byName["moox_cloudnode"].ExtraConfig) != "http://127.0.0.1:11411/healthz" {
 		t.Fatalf("cloudnode extra_config = %s", byName["moox_cloudnode"].ExtraConfig)
 	}
+	for name, want := range map[string]string{
+		"moox_strategy":  "http://127.0.0.1:11431/healthz",
+		"moox_archive":   "http://127.0.0.1:11416/healthz",
+		"moox_hostagent": "http://127.0.0.1:11425/healthz",
+		"moox_trade":     "http://127.0.0.1:11210/healthz",
+	} {
+		if healthURL(byName[name].ExtraConfig) != want {
+			t.Fatalf("%s health URL = %s, want %s", name, healthURL(byName[name].ExtraConfig), want)
+		}
+	}
 	if healthURL(byName["storage_metadata"].ExtraConfig) != "http://127.0.0.1:20210/healthz" {
 		t.Fatalf("storage_metadata extra_config = %s", byName["storage_metadata"].ExtraConfig)
 	}
@@ -63,6 +73,11 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 func TestGatewayRoutesMonitorAliasToIndependentService(t *testing.T) {
 	if got := gatewayDeploymentName("monitor"); got != "moox_monitor" {
 		t.Fatalf("gatewayDeploymentName(monitor) = %q, want moox_monitor", got)
+	}
+	for input, want := range map[string]string{"archive": "moox_archive", "hostagent": "moox_hostagent", "trade": "moox_trade"} {
+		if got := gatewayDeploymentName(input); got != want {
+			t.Fatalf("gatewayDeploymentName(%s) = %q, want %q", input, got, want)
+		}
 	}
 }
 

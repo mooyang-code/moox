@@ -150,12 +150,12 @@ func Default() *Config {
 			{Topic: "moox.dlq.message.rejected.v1", Stream: "MOOX_DLQ", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.message.RejectedMessage", PayloadVersion: 1, Enabled: true},
 		},
 		TopicFamilies: []TopicFamilyConfig{{Pattern: "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*", Stream: "MOOX_CLOUDNODE_EXEC", Kind: messagepb.MessageKind_MESSAGE_KIND_COMMAND, PayloadContentType: "application/x-protobuf; message=trpc.moox.cloudnode.JobItem", PayloadVersion: 1, Enabled: true}},
-			Consumers: []ConsumerConfig{
+		Consumers: []ConsumerConfig{
 			{Stream: "MOOX_METRICS", Durable: "monitor_hostmetrics_ingest_v1", FilterSubject: "moox.metrics.host.reported.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
 			{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_time_series_rows_updated_v1", FilterSubject: "moox.storage.time_series.rows_updated.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 128, MaxDeliver: -1},
 			{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_record_rows_updated_v1", FilterSubject: "moox.storage.record.rows_updated.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 128, MaxDeliver: -1},
-				{Stream: "MOOX_STORAGE", Durable: "factor_calc", FilterSubject: "moox.storage.time_series.rows_updated.v1", AckPolicy: "explicit", DeliverPolicy: "new", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 1000, MaxDeliver: 5},
-				{Stream: "MOOX_STORAGE", Durable: "moox_archive_kline_v1", FilterSubject: "moox.storage.time_series.rows_updated.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 5 * time.Minute, MaxAckPending: 256, MaxDeliver: -1},
+			{Stream: "MOOX_STORAGE", Durable: "factor_calc", FilterSubject: "moox.storage.time_series.rows_updated.v1", AckPolicy: "explicit", DeliverPolicy: "new", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 1000, MaxDeliver: 5},
+			{Stream: "MOOX_STORAGE", Durable: "moox_archive_kline_v1", FilterSubject: "moox.storage.time_series.rows_updated.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 5 * time.Minute, MaxAckPending: 256, MaxDeliver: -1},
 		},
 		ConsumerTemplates: []ConsumerTemplateConfig{{Stream: "MOOX_CLOUDNODE_EXEC", DurablePrefix: "cn_exec_", FilterPattern: "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1}},
 		KV:                []KVConfig{{Bucket: "MOOX_CLOUDNODE_JOB_ACTIVE", MaxAge: 48 * time.Hour, History: 1, Storage: "file", Replicas: 1}},
@@ -371,7 +371,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("topic %q payload_version must be positive", t.Topic)
 		}
 		if !validPayloadContentType(t.PayloadContentType) {
-			return fmt.Errorf("topic %q payload_content_type must name a protobuf message", t.Topic)
+			return fmt.Errorf("topic %q payload_content_type must be application/json or a protobuf message", t.Topic)
 		}
 		if version, err := topicVersion(t.Topic); err != nil || version != t.PayloadVersion {
 			return fmt.Errorf("topic %q must end in .v<major> matching payload_version=%d", t.Topic, t.PayloadVersion)
@@ -417,7 +417,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("topic family %q payload_version must be positive", f.Pattern)
 		}
 		if !validPayloadContentType(f.PayloadContentType) {
-			return fmt.Errorf("topic family %q payload_content_type must name a protobuf message", f.Pattern)
+			return fmt.Errorf("topic family %q payload_content_type must be application/json or a protobuf message", f.Pattern)
 		}
 		if _, ok := seenFamilies[f.Pattern]; ok {
 			return fmt.Errorf("duplicate topic family %q", f.Pattern)
@@ -541,6 +541,9 @@ func validateConsumer(c *ConsumerConfig, cfg *Config) error {
 
 func validPayloadContentType(value string) bool {
 	value = strings.TrimSpace(value)
+	if value == "application/json" {
+		return true
+	}
 	return strings.HasPrefix(value, "application/x-protobuf; message=") && len(strings.TrimPrefix(value, "application/x-protobuf; message=")) > 0
 }
 

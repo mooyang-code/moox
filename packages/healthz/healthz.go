@@ -3,8 +3,12 @@ package healthz
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
+
+	thttp "trpc.group/trpc-go/trpc-go/http"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
 // Response is the shared process-level health payload exposed by MooX services.
@@ -43,8 +47,34 @@ func Base(module, instanceID, version, gitCommit string, start time.Time, ready 
 	}
 }
 
-// Handler converts a SnapshotFunc into a JSON /healthz HTTP handler.
+// Handler converts a SnapshotFunc into a readiness JSON HTTP handler.
 func Handler(snapshot SnapshotFunc) http.Handler {
+	return readinessHandler(snapshot)
+}
+
+// LivenessHandler returns HTTP 200 when the process can execute the handler.
+// Dependency state is intentionally kept in Details, while readiness is
+// reported by ReadinessHandler on /readyz.
+func LivenessHandler(snapshot SnapshotFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		rsp := safeSnapshot(r.Context(), snapshot)
+		rsp.Ready = true
+		rsp.Status = "ok"
+		if rsp.Time.IsZero() {
+			rsp.Time = time.Now()
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(rsp)
+	})
+}
+
+// ReadinessHandler returns HTTP 503 until the snapshot reports Ready=true.
+func ReadinessHandler(snapshot SnapshotFunc) http.Handler {
+	return readinessHandler(snapshot)
+}
+
+func readinessHandler(snapshot SnapshotFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		rsp := safeSnapshot(r.Context(), snapshot)
@@ -67,31 +97,30 @@ func Handler(snapshot SnapshotFunc) http.Handler {
 	})
 }
 
-// Start serves the shared health handler on addr. An empty addr disables it.
-func Start(ctx context.Context, addr string, snapshot SnapshotFunc) (*http.Server, error) {
-	return StartWithHandler(ctx, addr, Handler(snapshot))
+// RegisterNoProtocolServiceMux exposes health endpoints through a tRPC
+// http_no_protocol service. This keeps health traffic on the tRPC server's
+// lifecycle, filters, timeout and monitoring pipeline instead of opening a
+// second net/http listener.
+func RegisterNoProtocolServiceMux(service server.Service, mux http.Handler) error {
+	if service == nil {
+		return errors.New("health service is not configured")
+	}
+	if mux == nil {
+		return errors.New("health handler is required")
+	}
+	thttp.RegisterNoProtocolServiceMux(service, mux)
+	return nil
 }
 
-func StartWithHandler(ctx context.Context, addr string, handler http.Handler) (*http.Server, error) {
-	if addr == "" {
-		return nil, nil
+// StandardMux builds the monitor-facing health and metrics routes.
+func StandardMux(snapshot SnapshotFunc, metrics http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/healthz", LivenessHandler(snapshot))
+	mux.Handle("/readyz", ReadinessHandler(snapshot))
+	if metrics != nil {
+		mux.Handle("/metrics", metrics)
 	}
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: handler,
-	}
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			_ = srv.Close()
-		}
-	}()
-	return srv, nil
+	return mux
 }
 
 func safeSnapshot(ctx context.Context, snapshot SnapshotFunc) (rsp Response) {

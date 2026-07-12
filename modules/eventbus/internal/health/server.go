@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/nats-io/nats.go"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
 type Server struct {
@@ -21,7 +21,6 @@ type Server struct {
 	registry *registry.Registry
 	addr     string
 	ready    atomic.Bool
-	http     *http.Server
 	conn     *nats.Conn
 	advisory atomic.Uint64
 	sub      *nats.Subscription
@@ -40,61 +39,53 @@ func (s *Server) SetReady(value bool) {
 	}
 }
 func (s *Server) Ready() bool { return s != nil && s.ready.Load() }
-func (s *Server) Start(ctx context.Context) error {
-	if s == nil || s.addr == "" {
-		return nil
+
+func (s *Server) Handler() http.Handler {
+	return healthz.StandardMux(s.snapshot, http.HandlerFunc(s.metrics))
+}
+
+func (s *Server) Register(service server.Service) error {
+	if s == nil {
+		return fmt.Errorf("eventbus health server is nil")
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", s.healthz)
-	mux.HandleFunc("/readyz", s.readyz)
-	mux.HandleFunc("/metrics", s.metrics)
-	s.http = &http.Server{Addr: s.addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	listener, err := net.Listen("tcp", s.addr)
-	if err != nil {
-		return err
-	}
-	if s.conn != nil {
-		s.sub, err = s.conn.Subscribe("$JS.EVENT.ADVISORY.API", func(_ *nats.Msg) { s.advisory.Add(1) })
+	if s.conn != nil && s.sub == nil {
+		sub, err := s.conn.Subscribe("$JS.EVENT.ADVISORY.API", func(_ *nats.Msg) { s.advisory.Add(1) })
 		if err != nil {
-			_ = listener.Close()
 			return err
 		}
+		s.sub = sub
 	}
-	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.http.Shutdown(shutdown)
-	}()
-	go func() { _ = s.http.Serve(listener) }()
-	return nil
+	return healthz.RegisterNoProtocolServiceMux(service, s.Handler())
 }
+
+func (s *Server) snapshot(context.Context) healthz.Response {
+	brokerReady := s != nil && s.broker != nil && s.broker.Ready()
+	ready := s != nil && s.Ready() && brokerReady
+	rsp := healthz.Base("eventbus", "eventbus", "", "", time.Time{}, ready)
+	rsp.Details = map[string]any{"broker_ready": brokerReady, "reconciled": s != nil && s.Ready()}
+	return rsp
+}
+
 func (s *Server) Shutdown(ctx context.Context) error {
-	if s == nil || s.http == nil {
+	if s == nil {
 		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	if s.sub != nil {
 		_ = s.sub.Unsubscribe()
+		s.sub = nil
 	}
-	return s.http.Shutdown(ctx)
+	return nil
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
-	ready := s.broker != nil && s.broker.Ready()
-	rsp := healthz.Base("eventbus", "", "dev", "", time.Time{}, ready)
-	rsp.Details = map[string]any{"broker_ready": ready}
-	writeHealth(w, rsp, ready)
+	rsp := s.snapshot(r.Context())
+	rsp.Ready = true
+	rsp.Status = "ok"
+	writeHealth(w, rsp, true)
 }
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
-	ready := s.Ready() && s.broker != nil && s.broker.Ready()
-	rsp := healthz.Base("eventbus", "", "dev", "", time.Time{}, ready)
-	rsp.Details = map[string]any{"broker_ready": s.broker != nil && s.broker.Ready(), "reconciled": s.Ready()}
+	rsp := s.snapshot(r.Context())
+	ready := rsp.Ready
 	writeHealth(w, rsp, ready)
 }
 func writeHealth(w http.ResponseWriter, rsp healthz.Response, ready bool) {

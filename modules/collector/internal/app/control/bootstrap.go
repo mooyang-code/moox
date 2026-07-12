@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
+	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/metricspublish"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
@@ -33,7 +34,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 collector 数据库失败: %v", err)
 		return nil, err
 	}
-	startHealthServer(ctx, cfg)
 	deps, err := Resolve(ctx, cfg)
 	if err != nil {
 		log.WarnContextf(ctx, "[Collector] resolve dependencies from sysdeploy failed, use local defaults: %v", err)
@@ -48,6 +48,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	collectsvc.SetDefaultService(svc)
+	startHealthServer(ctx, s, cfg)
 	registerCollectorSchedule(s)
 	registerMetricsReporter(s)
 
@@ -72,11 +73,18 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func startHealthServer(ctx context.Context, cfg *Config) {
+func startHealthServer(ctx context.Context, s *server.Server, cfg *Config) {
 	if cfg == nil {
 		return
 	}
-	if _, err := healthz.Start(ctx, cfg.Health.Addr, collectorHealthSnapshot(cfg)); err != nil {
+	state := health.New("collector", "collector", "", "")
+	state.SetReady(true)
+	state.SnapshotFunc = collectorHealthSnapshot(cfg)
+	if s == nil {
+		log.Warn("collector health service is unavailable")
+		return
+	}
+	if err := health.Register(s.Service("trpc.moox.collector.Health"), state); err != nil {
 		log.ErrorContextf(ctx, "collector health server failed to start: %v", err)
 	}
 }

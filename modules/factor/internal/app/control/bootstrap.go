@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
+	"github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/metricspublish"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
 	"github.com/mooyang-code/moox/modules/factor/internal/repository"
@@ -123,7 +124,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			factorsvc.WithMetadataSync(meta),
 		))
 	}
-	startHealthServer(ctx, cfg)
+	startHealthServer(ctx, s, cfg)
 
 	log.InfoContextf(ctx, "moox-factor 初始化完成")
 	return s, nil
@@ -153,11 +154,18 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func startHealthServer(ctx context.Context, cfg *Config) {
+func startHealthServer(ctx context.Context, s *server.Server, cfg *Config) {
 	if cfg == nil {
 		return
 	}
-	if _, err := healthz.Start(ctx, cfg.Health.Addr, factorHealthSnapshot(cfg)); err != nil {
+	state := health.New("factor", cfg.Instance.InstanceID, "", "")
+	state.SetReady(true)
+	state.SnapshotFunc = factorHealthSnapshot(cfg)
+	if s == nil {
+		log.Warn("factor health service is unavailable")
+		return
+	}
+	if err := health.Register(s.Service("trpc.moox.factor.Health"), state); err != nil {
 		log.ErrorContextf(ctx, "factor health server failed to start: %v", err)
 	}
 }

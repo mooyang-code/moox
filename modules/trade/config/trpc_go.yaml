@@ -15,6 +15,11 @@ server:
     read_timeout: 3000
     write_timeout: 60000
   service:
+    - name: trpc.moox.trade.Health
+      port: 11210
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
       ######## 账户域 RPC 服务（http 协议，经 admin 网关透传 /api/trade/account/{method}） ########
     - name: trpc.moox.trade.AccountSvc
       port: 11200

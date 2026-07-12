@@ -13,6 +13,11 @@ server:
     read_timeout: 3000
     write_timeout: 60000
   service:
+    - name: trpc.moox.storage.Health
+      port: 20213
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
     - name: trpc.moox.storage.ViewIndex
       port: 20104
       network: tcp

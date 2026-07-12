@@ -18,6 +18,8 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/nats-io/nats.go"
+	"trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
 type App struct {
@@ -42,13 +44,6 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	a.State = state
 	state.CosEnabled = a.Config.Archive.COS.Enabled
-	healthCtx, healthCancel := context.WithCancel(ctx)
-	defer healthCancel()
-	healthServer, err := health.Start(healthCtx, a.Config.Health.Addr, state)
-	if err != nil {
-		return err
-	}
-	_ = healthServer
 	store, err := journal.Open(a.Config.Archive.StateDir)
 	if err != nil {
 		return err
@@ -134,6 +129,17 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 }
+
+// RegisterHealth registers the monitor-facing endpoints on the tRPC server.
+func (a *App) RegisterHealth(s *server.Server) error {
+	if a == nil || a.Config == nil {
+		return fmt.Errorf("archive config is required")
+	}
+	if a.State == nil {
+		a.State = health.New("archive", "archive", a.Version, a.GitCommit)
+	}
+	return health.Register(s.Service("trpc.moox.archive.Health"), a.State)
+}
 func sourceLists(cfg *config.Config) map[string][]string {
 	out := map[string][]string{}
 	for space, source := range cfg.Archive.Sources {
@@ -142,11 +148,33 @@ func sourceLists(cfg *config.Config) map[string][]string {
 	return out
 }
 func RunFromConfig(ctx context.Context, path, version, commit string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cfg, err := config.Load(path)
 	if err != nil {
 		return err
 	}
-	return (&App{Config: cfg, Version: version, GitCommit: commit}).Run(ctx)
+	s := trpc.NewServer()
+	app := &App{Config: cfg, Version: version, GitCommit: commit}
+	if err := app.RegisterHealth(s); err != nil {
+		return err
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	appErr := make(chan error, 1)
+	serveErr := make(chan error, 1)
+	go func() { appErr <- app.Run(runCtx) }()
+	go func() { serveErr <- s.Serve() }()
+	select {
+	case err := <-serveErr:
+		cancel()
+		return err
+	case err := <-appErr:
+		cancel()
+		_ = s.Close(nil)
+		return err
+	}
 }
 
 func mainContext() context.Context {

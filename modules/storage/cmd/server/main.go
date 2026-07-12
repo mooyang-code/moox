@@ -19,6 +19,7 @@ import (
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
+	"github.com/mooyang-code/moox/modules/storage/internal/health"
 	deviceduckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
 	"github.com/mooyang-code/moox/modules/storage/internal/metricspublish"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/services/access"
@@ -144,7 +145,7 @@ func main() {
 		}()
 		pb.RegisterPrimaryStoreService(s, primaryService)
 	}
-	startStorageHealthServer(trpc.BackgroundContext(), cfg.Storage)
+	startStorageHealthServer(trpc.BackgroundContext(), s, cfg.Storage)
 	registerStorageMetricsReporter(s, cfg.Storage)
 	// 启动trpc服务器
 	log.Infof("Storage roles %v serving", cfg.Storage.Roles)
@@ -269,8 +270,16 @@ func (r *viewRuntime) Close() error {
 	return err
 }
 
-func startStorageHealthServer(ctx context.Context, storage storageconfig.StorageConfig) {
-	if _, err := healthz.Start(ctx, storage.Health.Addr, storageHealthSnapshot(storage)); err != nil {
+func startStorageHealthServer(ctx context.Context, s *server.Server, storage storageconfig.StorageConfig) {
+	serviceName := storageServiceName(storage)
+	state := health.New("storage", serviceName, "", "")
+	state.SetReady(true)
+	state.SnapshotFunc = storageHealthSnapshot(storage)
+	if s == nil {
+		log.Warn("storage health service is unavailable")
+		return
+	}
+	if err := health.Register(s.Service("trpc.moox.storage.Health"), state); err != nil {
 		log.Errorf("storage health server failed to start: %v", err)
 	}
 }

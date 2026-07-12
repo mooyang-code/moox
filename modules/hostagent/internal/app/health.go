@@ -2,35 +2,50 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func StartHealth(ctx context.Context, agent *Agent, addr string) (*http.Server, error) {
-	if addr == "" {
-		addr = "127.0.0.1:11425"
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		status, _ := agent.GetStatus(r.Context(), nil)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(status)
-	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+var agentStartedAt = time.Now().UTC()
+
+func RegisterHealth(service server.Service, agent *Agent) error {
+	return healthz.RegisterNoProtocolServiceMux(service, healthHandler(agent))
+}
+
+func healthHandler(agent *Agent) http.Handler {
+	snapshot := func(ctx context.Context) healthz.Response {
+		rsp := healthz.Base("hostagent", "hostagent", "", "", agentStartedAt, false)
 		if agent == nil {
-			http.Error(w, "not ready", http.StatusServiceUnavailable)
-			return
+			rsp.Details = map[string]any{"agent_ready": false}
+			return rsp
 		}
-		w.WriteHeader(http.StatusOK)
-	})
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 3 * time.Second}
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-	go func() { _ = srv.ListenAndServe() }()
-	return srv, nil
+		status, err := agent.GetStatus(ctx, nil)
+		if err != nil {
+			rsp.Details = map[string]any{"agent_ready": false, "error": err.Error()}
+			return rsp
+		}
+		ready := status.GetEventbusConnected() && status.GetLastError() == ""
+		rsp.Ready = ready
+		if ready {
+			rsp.Status = "ok"
+		}
+		rsp.Details = map[string]any{
+			"agent_id":           status.GetAgentId(),
+			"eventbus_connected": status.GetEventbusConnected(),
+			"last_collect_at":    status.GetLastCollectAt(),
+			"last_publish_at":    status.GetLastPublishAt(),
+			"last_error":         status.GetLastError(),
+			"collected_total":    status.GetCollected(),
+			"published_total":    status.GetPublished(),
+			"dropped_total":      status.GetDropped(),
+			"skipped_total":      status.GetSkipped(),
+		}
+		return rsp
+	}
+	mux := healthz.StandardMux(snapshot, promhttp.Handler())
+	return mux
 }

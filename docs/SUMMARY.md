@@ -38,6 +38,7 @@
 * [MooX EventBus 运维](运维/MooX-EventBus运维.md)
 * [MooX 指标监控](运维/MooX指标监控.md)
 * [MooX Trade 运维](运维/MooX-Trade运维.md)
+* [子服务健康检查 tRPC 注册改造](superpowers/plans/2026-07-12-health-trpc-registration.md)
 
 ## 第四部分：因子与策略
 
