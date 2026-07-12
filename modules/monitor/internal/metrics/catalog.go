@@ -11,12 +11,12 @@ import (
 // MetricCatalog provides bounded reads over the SQLite catalog. It never
 // queries Storage without first resolving a finite set of series IDs.
 type MetricCatalog struct {
-	repo        *Repository
-	noDataAfter time.Duration
+	messageStore *MetricMessageStore
+	noDataAfter  time.Duration
 }
 
-func NewCatalog(repo *Repository) *MetricCatalog {
-	return &MetricCatalog{repo: repo, noDataAfter: 2 * time.Minute}
+func NewCatalog(messageStore *MetricMessageStore) *MetricCatalog {
+	return &MetricCatalog{messageStore: messageStore, noDataAfter: 2 * time.Minute}
 }
 func (c *MetricCatalog) SetNoDataAfter(d time.Duration) {
 	if c != nil && d > 0 {
@@ -31,12 +31,12 @@ func (c *MetricCatalog) NoDataAfter() time.Duration {
 }
 
 func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset, limit int) ([]MetricService, int64, error) {
-	if c == nil || c.repo == nil || c.repo.db == nil {
-		return nil, 0, ErrMetricsRepositoryUnavailable
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, 0, ErrMetricsStoreUnavailable
 	}
 	offset, limit = boundedPage(offset, limit)
 	var rows []MetricService
-	q := c.repo.db.WithContext(ctx).Model(&MetricService{})
+	q := c.messageStore.db.WithContext(ctx).Model(&MetricService{})
 	if strings.TrimSpace(spaceID) != "" {
 		q = q.Where("c_service_name <> ''")
 	}
@@ -61,8 +61,8 @@ func (c *MetricCatalog) markServicesStale(rows []MetricService) {
 }
 
 func (c *MetricCatalog) ListNames(ctx context.Context, serviceName string, offset, limit int) ([]MetricName, int64, error) {
-	if c == nil || c.repo == nil || c.repo.db == nil {
-		return nil, 0, ErrMetricsRepositoryUnavailable
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, 0, ErrMetricsStoreUnavailable
 	}
 	offset, limit = boundedPage(offset, limit)
 	type nameRow struct {
@@ -73,12 +73,12 @@ func (c *MetricCatalog) ListNames(ctx context.Context, serviceName string, offse
 		LastSeen    time.Time `gorm:"column:last_seen"`
 	}
 	var rows []MetricName
-	q := c.repo.db.WithContext(ctx).Table("t_monitor_metric_series").Select("c_service_name AS service_name, c_metric_name AS metric_name, MAX(c_metric_type) AS metric_type, COUNT(*) AS series_count, MAX(c_last_seen_at) AS last_seen").Group("c_service_name, c_metric_name")
+	q := c.messageStore.db.WithContext(ctx).Table("t_monitor_metric_series").Select("c_service_name AS service_name, c_metric_name AS metric_name, MAX(c_metric_type) AS metric_type, COUNT(*) AS series_count, MAX(c_last_seen_at) AS last_seen").Group("c_service_name, c_metric_name")
 	if serviceName != "" {
 		q = q.Where("c_service_name = ?", serviceName)
 	}
 	var total int64
-	countQ := c.repo.db.WithContext(ctx).Table("t_monitor_metric_series").Select("COUNT(DISTINCT c_service_name || ':' || c_metric_name)")
+	countQ := c.messageStore.db.WithContext(ctx).Table("t_monitor_metric_series").Select("COUNT(DISTINCT c_service_name || ':' || c_metric_name)")
 	if serviceName != "" {
 		countQ = countQ.Where("c_service_name = ?", serviceName)
 	}
@@ -102,11 +102,11 @@ type MetricName struct {
 }
 
 func (c *MetricCatalog) ListSeries(ctx context.Context, serviceName, metricName, labelsJSON string, offset, limit int) ([]MetricSeries, int64, error) {
-	if c == nil || c.repo == nil || c.repo.db == nil {
-		return nil, 0, ErrMetricsRepositoryUnavailable
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, 0, ErrMetricsStoreUnavailable
 	}
 	offset, limit = boundedPage(offset, limit)
-	q := c.repo.db.WithContext(ctx).Model(&MetricSeries{})
+	q := c.messageStore.db.WithContext(ctx).Model(&MetricSeries{})
 	if serviceName != "" {
 		q = q.Where("c_service_name = ?", serviceName)
 	}
@@ -141,7 +141,7 @@ func (c *MetricCatalog) FindSeries(ctx context.Context, seriesID, serviceName, m
 	if limit <= 0 || limit > 500 {
 		limit = 500
 	}
-	q := c.repo.db.WithContext(ctx).Model(&MetricSeries{})
+	q := c.messageStore.db.WithContext(ctx).Model(&MetricSeries{})
 	if seriesID != "" {
 		q = q.Where("c_series_id = ?", seriesID)
 	}

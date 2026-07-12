@@ -72,8 +72,8 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	access := &metricsE2EAccess{}
 	storageCfg := monconfig.MetricsStorageConfig{SpaceID: InternalMetricSpaceID, DatasetID: "moox_service_metrics", Frequency: "30s", WriteBatchSize: 20}
 	storage := NewStorageAdapter(access, nil, storageCfg)
-	repository := NewRepository(mgr.DB())
-	consumer, err := NewConsumer(ctx, ConsumerOptions{Client: eventClient, Storage: storage, Repository: repository, ServiceName: "moox-monitor", InstanceID: "monitor-e2e", Config: monconfig.MetricsConfig{Stream: "MOOX_METRICS", Topic: MetricTopic, Consumer: "monitor-e2e-ingest", FetchBatchSize: 4, FetchMaxWait: time.Second, AckWait: time.Second, MaxAckPending: 8}})
+	messageStore := metricMessageStoreForTest(t, mgr)
+	consumer, err := NewConsumer(ctx, ConsumerOptions{Client: eventClient, Storage: storage, MessageStore: messageStore, ServiceName: "moox-monitor", InstanceID: "monitor-e2e", Config: monconfig.MetricsConfig{Stream: "MOOX_METRICS", Topic: MetricTopic, Consumer: "monitor-e2e-ingest", FetchBatchSize: 4, FetchMaxWait: time.Second, AckWait: time.Second, MaxAckPending: 8}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,14 +98,14 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	if err := consumer.HandleDelivery(ctx, deliveries[0]); err != nil {
 		t.Fatal(err)
 	}
-	series, err := repository.ListSeries(ctx, "fixture-service", "moox_e2e_requests", 10)
+	series, err := messageStore.ListSeries(ctx, "fixture-service", "moox_e2e_requests", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(series) != 1 {
 		t.Fatalf("catalog series=%d, want one discovered series", len(series))
 	}
-	latest, err := repository.GetLatest(ctx, series[0].SeriesID)
+	latest, err := messageStore.GetLatest(ctx, series[0].SeriesID)
 	if err != nil {
 		t.Fatal(err)
 	}

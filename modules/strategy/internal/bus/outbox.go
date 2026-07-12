@@ -3,7 +3,7 @@ package bus
 import (
 	"context"
 	"fmt"
-	"gorm.io/gorm"
+	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"sync"
 	"time"
 )
@@ -14,14 +14,20 @@ type Publisher interface {
 type IdempotentPublisher interface {
 	PublishWithID(context.Context, string, string, []byte) error
 }
+type OutboxStore interface {
+	ListPendingOutbox(context.Context, int, time.Time) ([]domain.OutboxMessage, error)
+	ClaimOutbox(context.Context, string, string, time.Time, time.Duration) (bool, error)
+	ReleaseOutbox(context.Context, string, string) error
+	MarkOutboxPublished(context.Context, string, string) error
+}
 type Relay struct {
-	DB        *gorm.DB
+	Store     OutboxStore
 	Publisher Publisher
 	mu        sync.Mutex
 }
 
 func (r *Relay) PublishPending(ctx context.Context, limit int) error {
-	if r == nil || r.DB == nil || r.Publisher == nil {
+	if r == nil || r.Store == nil || r.Publisher == nil {
 		return fmt.Errorf("strategy outbox relay dependencies are required")
 	}
 	if limit <= 0 {
@@ -29,35 +35,31 @@ func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var rows []struct {
-		MessageID string `gorm:"column:c_message_id"`
-		Topic     string `gorm:"column:c_topic"`
-		Payload   []byte `gorm:"column:c_payload"`
-	}
 	now := time.Now().UTC()
-	if err := r.DB.WithContext(ctx).Table("t_strategy_outbox").Where("c_published=0 AND (c_claimed_until IS NULL OR c_claimed_until < ?)", now).Order("c_ctime").Limit(limit).Find(&rows).Error; err != nil {
+	rows, err := r.Store.ListPendingOutbox(ctx, limit, now)
+	if err != nil {
 		return err
 	}
 	for _, row := range rows {
 		token := fmt.Sprintf("relay-%d", time.Now().UnixNano())
-		claimed := r.DB.WithContext(ctx).Table("t_strategy_outbox").Where("c_message_id=? AND c_published=0 AND (c_claimed_until IS NULL OR c_claimed_until < ?)", row.MessageID, now).Updates(map[string]any{"c_claimed_until": now.Add(30 * time.Second), "c_claim_token": token})
-		if claimed.Error != nil {
-			return claimed.Error
+		claimed, claimErr := r.Store.ClaimOutbox(ctx, row.MessageID, token, now, 30*time.Second)
+		if claimErr != nil {
+			return claimErr
 		}
-		if claimed.RowsAffected != 1 {
+		if !claimed {
 			continue
 		}
-		var err error
+		var publishErr error
 		if p, ok := r.Publisher.(IdempotentPublisher); ok {
-			err = p.PublishWithID(ctx, row.MessageID, row.Topic, row.Payload)
+			publishErr = p.PublishWithID(ctx, row.MessageID, row.Topic, row.Payload)
 		} else {
-			err = r.Publisher.Publish(ctx, row.Topic, row.Payload)
+			publishErr = r.Publisher.Publish(ctx, row.Topic, row.Payload)
 		}
-		if err != nil {
-			_ = r.DB.WithContext(ctx).Table("t_strategy_outbox").Where("c_message_id=? AND c_claim_token=?", row.MessageID, token).Updates(map[string]any{"c_claimed_until": nil, "c_claim_token": ""}).Error
-			return err
+		if publishErr != nil {
+			_ = r.Store.ReleaseOutbox(ctx, row.MessageID, token)
+			return publishErr
 		}
-		if err := r.DB.WithContext(ctx).Table("t_strategy_outbox").Where("c_message_id=? AND c_claim_token=?", row.MessageID, token).Updates(map[string]any{"c_published": 1, "c_claimed_until": nil, "c_claim_token": ""}).Error; err != nil {
+		if err := r.Store.MarkOutboxPublished(ctx, row.MessageID, token); err != nil {
 			return err
 		}
 	}

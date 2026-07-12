@@ -8,6 +8,11 @@ catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取�
 `/metrics`，也不依赖 Prometheus Server 或 Pushgateway；Storage 元数据由
 部署前的 `moox-cli metadata apply` 注册和校验。
 
+## 持久化边界
+
+`internal/store` 负责 Monitor 控制面数据（检查、结果、告警和实例）。
+`internal/metrics` 是独立的指标持久化 bounded context，负责指标目录、去重、最新值和规则状态；两者共享同一个 SQLite 文件，但通过明确的 Store 类型隔离职责。
+
 ## 端口
 
 - `:11410`: tRPC/HTTP 管理 API `trpc.moox.monitor.MonitorMgr`

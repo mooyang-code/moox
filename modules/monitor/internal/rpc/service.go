@@ -25,7 +25,7 @@ type Options struct {
 	OnResult         func(context.Context, domain.Check, domain.CheckResult)
 	SyncSystem       func(context.Context) (int, error)
 	MetricsQuery     *monmetrics.QueryService
-	MetricRules      *monmetrics.RuleRepository
+	MetricRules      *monmetrics.MetricRuleStore
 	MetricEvaluator  *monmetrics.MetricEvaluator
 	HostStore        *hostmetrics.Store
 	HostReader       *hostmetrics.StorageReader
@@ -41,7 +41,7 @@ type Service struct {
 	onResult         func(context.Context, domain.Check, domain.CheckResult)
 	syncSystem       func(context.Context) (int, error)
 	metricsQuery     *monmetrics.QueryService
-	metricRules      *monmetrics.RuleRepository
+	metricRules      *monmetrics.MetricRuleStore
 	metricEvaluator  *monmetrics.MetricEvaluator
 	hostStore        *hostmetrics.Store
 	hostReader       *hostmetrics.StorageReader
@@ -49,7 +49,7 @@ type Service struct {
 	instance         string
 }
 
-func New(db *gorm.DB, opts Options) *Service {
+func New(repos *store.Repositories, opts Options) *Service {
 	instance := opts.InstanceID
 	if instance == "" {
 		instance = "monitor"
@@ -58,11 +58,14 @@ func New(db *gorm.DB, opts Options) *Service {
 	if runner == nil {
 		runner = probe.DefaultRunner()
 	}
+	if repos == nil {
+		repos = store.NewRepositories(nil)
+	}
 	return &Service{
-		checks:           store.NewCheckRepository(db),
-		results:          store.NewResultRepository(db),
-		alerts:           store.NewAlertRepository(db),
-		peers:            store.NewPeerRepository(db),
+		checks:           repos.Checks,
+		results:          repos.Results,
+		alerts:           repos.Alerts,
+		peers:            repos.Peers,
 		runner:           runner,
 		onResult:         opts.OnResult,
 		syncSystem:       opts.SyncSystem,

@@ -35,9 +35,15 @@ func (f *fakeStorage) WriteTimeSeriesRows(_ context.Context, req *storagepb.Writ
 	for _, incoming := range req.GetRows() {
 		replaced := false
 		for i, existing := range f.rows {
-			if proto.Equal(existing.GetKey(), incoming.GetKey()) { f.rows[i] = incoming; replaced = true; break }
+			if proto.Equal(existing.GetKey(), incoming.GetKey()) {
+				f.rows[i] = incoming
+				replaced = true
+				break
+			}
 		}
-		if !replaced { f.rows = append(f.rows, incoming) }
+		if !replaced {
+			f.rows = append(f.rows, incoming)
+		}
 	}
 	return &storagepb.WriteTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
@@ -70,10 +76,18 @@ func TestHostMetricDirectStorageRoundTrip(t *testing.T) {
 	if len(fake.rows) != 4 {
 		t.Fatalf("stored rows=%d, want four datasets", len(fake.rows))
 	}
-	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed.Add(2*time.Minute), "message-2"); err != nil { t.Fatal(err) }
-	if len(fake.rows) != 8 { t.Fatalf("different minute should add four rows, got %d", len(fake.rows)) }
-	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed, "message-duplicate"); err != nil { t.Fatal(err) }
-	if len(fake.rows) != 8 { t.Fatalf("same minute duplicate changed row count: %d", len(fake.rows)) }
+	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed.Add(2*time.Minute), "message-2"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.rows) != 8 {
+		t.Fatalf("different minute should add four rows, got %d", len(fake.rows))
+	}
+	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed, "message-duplicate"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.rows) != 8 {
+		t.Fatalf("same minute duplicate changed row count: %d", len(fake.rows))
+	}
 	reader := hostmetrics.NewStorageReader(fake, cfg)
 	points, err := reader.History(context.Background(), "agent-1", observed.Add(-time.Minute), observed.Add(time.Minute), 10)
 	if err != nil {

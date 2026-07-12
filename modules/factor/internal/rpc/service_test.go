@@ -9,12 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"gorm.io/gorm"
 )
 
 func TestCreateFactorValidationReturnsInvalidParam(t *testing.T) {
@@ -137,12 +136,13 @@ func TestListFactorRunsReturnsEmptyPageWithoutPersistentRunStore(t *testing.T) {
 	}
 }
 
-func openEmptyRPCTestDB(t *testing.T) *gorm.DB {
+func openEmptyRPCTestDB(t *testing.T) *store.Store {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "factor.db")})
 	if err != nil {
-		t.Fatalf("open empty db: %v", err)
+		t.Fatalf("open empty store: %v", err)
 	}
+	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
@@ -404,15 +404,15 @@ func waitRecalcProgress(t *testing.T, ctx context.Context, svc *Service, recalcI
 	}
 }
 
-func openRPCTestDB(t *testing.T) *gorm.DB {
+func openRPCTestDB(t *testing.T) *store.Store {
 	t.Helper()
-
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "factor.db")})
 	if err != nil {
-		t.Fatalf("open db: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
-	if err := db.Exec(factorschema.AllSQL()).Error; err != nil {
+	if err := db.ApplySchema(factorschema.AllSQL()); err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}
+	t.Cleanup(func() { _ = db.Close() })
 	return db
 }

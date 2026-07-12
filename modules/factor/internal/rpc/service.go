@@ -20,7 +20,6 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/pyruntime/moduleregistry"
-	"gorm.io/gorm"
 )
 
 var _ factorpb.FactorMgrService = (*Service)(nil)
@@ -58,7 +57,6 @@ func WithMetadataSync(syncer *registry.MetadataSync) Option {
 
 // Service implements FactorMgr.
 type Service struct {
-	db         *gorm.DB
 	factors    *store.FactorRepository
 	bindings   *store.BindingRepository
 	scheduler  schedulerRuntime
@@ -71,16 +69,15 @@ type Service struct {
 }
 
 // New creates a FactorMgr service.
-func New(db *gorm.DB) *Service {
-	return NewWithRuntime(db, nil, nil)
+func New(persistence *store.Store) *Service {
+	return NewWithRuntime(persistence, nil, nil)
 }
 
 // NewWithRuntime creates a FactorMgr service with optional runtime status providers.
-func NewWithRuntime(db *gorm.DB, sched schedulerRuntime, eng engineStatusProvider, opts ...Option) *Service {
+func NewWithRuntime(persistence *store.Store, sched schedulerRuntime, eng engineStatusProvider, opts ...Option) *Service {
 	s := &Service{
-		db:         db,
-		factors:    store.NewFactorRepository(db),
-		bindings:   store.NewBindingRepository(db),
+		factors:    persistence.Factors(),
+		bindings:   persistence.Bindings(),
 		scheduler:  sched,
 		engine:     eng,
 		factorsDir: "./factors",
@@ -163,20 +160,9 @@ func (s *Service) GetFactor(ctx context.Context, req *factorpb.GetFactorReq) (*f
 }
 
 func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq) (*factorpb.ListFactorsRsp, error) {
-	q := s.db.WithContext(ctx).Model(&domain.FactorDef{})
-	if req.GetKind() != "" {
-		q = q.Where("c_kind = ?", req.GetKind())
-	}
-	if req.GetStatus() != "" {
-		q = q.Where("c_status = ?", req.GetStatus())
-	}
-	var total int64
-	if err := q.Count(&total).Error; err != nil {
-		return &factorpb.ListFactorsRsp{RetInfo: inner(err)}, nil
-	}
 	page, size := pageParams(req.GetPage())
-	var rows []domain.FactorDef
-	if err := q.Order("c_mtime DESC").Offset(int((page - 1) * size)).Limit(int(size)).Find(&rows).Error; err != nil {
+	rows, total, err := s.factors.List(ctx, store.FactorFilter{Kind: req.GetKind(), Status: req.GetStatus(), Page: store.Page{Page: int(page), PageSize: int(size)}})
+	if err != nil {
 		return &factorpb.ListFactorsRsp{RetInfo: inner(err)}, nil
 	}
 	out := make([]*factorpb.FactorDef, 0, len(rows))
@@ -190,10 +176,7 @@ func (s *Service) SetFactorStatus(ctx context.Context, req *factorpb.SetFactorSt
 	if req.GetFactorId() == "" || req.GetStatus() == "" {
 		return &factorpb.SetFactorStatusRsp{RetInfo: invalid(fmt.Errorf("factor_id and status are required"))}, nil
 	}
-	if err := s.db.WithContext(ctx).Model(&domain.FactorDef{}).Where("c_factor_id = ?", req.GetFactorId()).Updates(map[string]any{
-		"c_status": req.GetStatus(),
-		"c_mtime":  time.Now().UTC(),
-	}).Error; err != nil {
+	if err := s.factors.SetStatus(ctx, req.GetFactorId(), req.GetStatus()); err != nil {
 		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
 	}
 	got, err := s.factors.Get(ctx, req.GetFactorId())
@@ -221,26 +204,9 @@ func (s *Service) UpsertBinding(ctx context.Context, req *factorpb.UpsertBinding
 }
 
 func (s *Service) ListBindings(ctx context.Context, req *factorpb.ListBindingsReq) (*factorpb.ListBindingsRsp, error) {
-	q := s.db.WithContext(ctx).Model(&domain.FactorBinding{})
-	if req.GetSpaceId() != "" {
-		q = q.Where("c_space_id = ?", req.GetSpaceId())
-	}
-	if req.GetSourceDataset() != "" {
-		q = q.Where("c_source_dataset = ?", req.GetSourceDataset())
-	}
-	if req.GetFreq() != "" {
-		q = q.Where("c_freq = ?", req.GetFreq())
-	}
-	if req.GetStatus() != "" {
-		q = q.Where("c_status = ?", req.GetStatus())
-	}
-	var total int64
-	if err := q.Count(&total).Error; err != nil {
-		return &factorpb.ListBindingsRsp{RetInfo: inner(err)}, nil
-	}
 	page, size := pageParams(req.GetPage())
-	var rows []domain.FactorBinding
-	if err := q.Order("c_mtime DESC").Offset(int((page - 1) * size)).Limit(int(size)).Find(&rows).Error; err != nil {
+	rows, total, err := s.bindings.List(ctx, store.BindingFilter{SpaceID: req.GetSpaceId(), SourceDataset: req.GetSourceDataset(), Freq: req.GetFreq(), Status: req.GetStatus(), Page: store.Page{Page: int(page), PageSize: int(size)}})
+	if err != nil {
 		return &factorpb.ListBindingsRsp{RetInfo: inner(err)}, nil
 	}
 	out := make([]*factorpb.FactorBinding, 0, len(rows))
@@ -254,7 +220,7 @@ func (s *Service) DeleteBinding(ctx context.Context, req *factorpb.DeleteBinding
 	if req.GetBindingId() == "" {
 		return &factorpb.DeleteBindingRsp{RetInfo: invalid(fmt.Errorf("binding_id is required"))}, nil
 	}
-	if err := s.db.WithContext(ctx).Where("c_binding_id = ?", req.GetBindingId()).Delete(&domain.FactorBinding{}).Error; err != nil {
+	if err := s.bindings.Delete(ctx, req.GetBindingId()); err != nil {
 		return &factorpb.DeleteBindingRsp{RetInfo: inner(err)}, nil
 	}
 	return &factorpb.DeleteBindingRsp{RetInfo: success()}, nil
@@ -388,10 +354,8 @@ func (s *Service) syncFactorBindings(ctx context.Context, factorID string) error
 	if factor.Status != domain.FactorStatusEnabled {
 		return nil
 	}
-	var bindings []domain.FactorBinding
-	if err := s.db.WithContext(ctx).
-		Where("c_factor_id = ? AND c_status = ?", factorID, domain.BindingStatusEnabled).
-		Find(&bindings).Error; err != nil {
+	bindings, err := s.bindings.ListEnabledByFactor(ctx, factorID)
+	if err != nil {
 		return err
 	}
 	for _, binding := range bindings {

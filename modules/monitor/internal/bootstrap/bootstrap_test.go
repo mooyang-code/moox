@@ -22,18 +22,16 @@ func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}
-	db := mgr.DB()
 	if err := mgr.Close(); err != nil {
 		t.Fatalf("close manager: %v", err)
 	}
-	previous := defaultScheduler
-	defaultScheduler = scheduler.New(db, scheduler.Options{})
-	t.Cleanup(func() { defaultScheduler = previous })
+	repos := mgr.Repositories()
+	runtime := &Runtime{StartedAt: time.Now(), Store: mgr, Repositories: repos, Scheduler: scheduler.New(repos, scheduler.Options{})}
 
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-test"
 	cfg.Metrics.Enabled = false
-	rsp := monitorHealthSnapshot(cfg, mgr, nil)(context.Background())
+	rsp := monitorHealthSnapshot(cfg, runtime, nil)(context.Background())
 	if rsp.Ready {
 		t.Fatalf("health response = %+v, want not ready", rsp)
 	}
@@ -49,7 +47,7 @@ func TestActiveMonitorInstanceIDsIncludesLocalAndActivePeers(t *testing.T) {
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}
-	repo := store.NewPeerRepository(mgr.DB())
+	repo := mgr.Repositories().Peers
 	now := time.Now()
 	for _, instance := range []*domain.MonitorInstance{
 		{InstanceID: "monitor-b", Status: domain.InstanceStatusActive, LastSeenAt: &now},
@@ -77,7 +75,7 @@ func TestActiveMonitorInstanceIDsSkipsStaleAndDisabledPeers(t *testing.T) {
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}
-	repo := store.NewPeerRepository(mgr.DB())
+	repo := mgr.Repositories().Peers
 	stale := time.Now().Add(-time.Hour)
 	if err := repo.UpsertInstance(ctx, &domain.MonitorInstance{
 		InstanceID: "monitor-stale",

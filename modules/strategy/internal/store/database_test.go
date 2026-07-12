@@ -15,7 +15,7 @@ func TestOpenApplySchemaAndClose(t *testing.T) {
 	if err := mgr.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatalf("ApplySchema() error = %v", err)
 	}
-	if mgr.DB() == nil {
+	if mgr.db == nil {
 		t.Fatal("DB() returned nil")
 	}
 	if err := mgr.Close(); err != nil {

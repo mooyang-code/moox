@@ -24,11 +24,11 @@ config/                   moox-collector 服务配置
 configs/                  SCF 运行时本地默认配置
 schema/                   collector SQLite schema
 internal/
-  app/control/            独立服务启动、配置、数据库和依赖发现
+  bootstrap/              独立服务启动、配置、数据库和依赖发现
   app/runtime/            SCF runtime 配置、后台服务鉴权和 URL helper
-  app/runtimeboot/        SCF runtime 启动装配与定时器注册
+  serverless/bootstrap/   SCF runtime 启动装配与定时器注册
   domain/                 采集业务领域模型
-  repository/             Collector SQLite 持久化
+  store/                  Collector SQLite 持久化
   rpc/                    CollectMgr RPC 实现
   jobs/                   JobItem job_type 与任务 payload 定义
   executor/               采集任务即时执行编排

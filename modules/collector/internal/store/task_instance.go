@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -14,6 +15,9 @@ const (
 	defaultPageSize = 50
 	maxPageSize     = 1000
 )
+
+// ErrTaskInstanceNotFound indicates that a task instance does not exist.
+var ErrTaskInstanceNotFound = errors.New("task instance not found")
 
 // TaskInstanceFilter describes task instance list filters.
 type TaskInstanceFilter struct {
@@ -136,7 +140,7 @@ func (r *TaskInstanceRepository) UpdateStatus(ctx context.Context, spaceID strin
 		return tx.Error
 	}
 	if tx.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
+		return ErrTaskInstanceNotFound
 	}
 	return nil
 }

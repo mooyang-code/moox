@@ -15,15 +15,12 @@ import (
 )
 
 func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
-	db, err := openFactorDB(cfg.DBPath)
+	db, err := store.Open(&store.Options{Path: cfg.DBPath})
 	if err != nil {
 		return err
 	}
-	sqlDB, err := db.DB()
-	if err == nil {
-		defer sqlDB.Close()
-	}
-	if err := db.Exec(factorschema.AllSQL()).Error; err != nil {
+	defer db.Close()
+	if err := db.ApplySchema(factorschema.AllSQL()); err != nil {
 		return fmt.Errorf("apply factor schema: %w", err)
 	}
 	entries, err := os.ReadDir(cfg.FactorsDir)
@@ -31,7 +28,7 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return fmt.Errorf("read factors dir: %w", err)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	svc := registry.NewService(store.NewFactorRepository(db), nil, registry.Options{
+	svc := registry.NewService(db.Factors(), nil, registry.Options{
 		FactorsDir:    cfg.FactorsDir,
 		DefaultParams: cfg.DefaultParams,
 	})

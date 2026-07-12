@@ -114,6 +114,20 @@ func (r *CheckRepository) CountEnabled(ctx context.Context) (int64, error) {
 	return total, err
 }
 
+// IsSysDeployRegistered reports whether a service has an enabled check managed
+// by the system deployment controller. Metrics ingestion uses this as its
+// producer authorization source instead of issuing raw SQL from the consumer.
+func (r *CheckRepository) IsSysDeployRegistered(ctx context.Context, serviceName string) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, gorm.ErrInvalidDB
+	}
+	var count int64
+	err := r.db.WithContext(ctx).Model(&domain.Check{}).
+		Where("c_check_id = ? AND c_source = ? AND c_enabled = 1 AND c_is_deleted = 0", serviceName, domain.CheckSourceSysDeploy).
+		Count(&count).Error
+	return count > 0, err
+}
+
 func (r *CheckRepository) applyFilters(q *gorm.DB, opts ListChecksOptions) *gorm.DB {
 	q = q.Where("c_is_deleted = 0")
 	if opts.SpaceID != "" {

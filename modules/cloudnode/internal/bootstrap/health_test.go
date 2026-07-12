@@ -12,8 +12,8 @@ import (
 
 func TestCloudNodeHealthSnapshot(t *testing.T) {
 	cfg := config.Default()
-	dbm := store.NewManager()
-	if err := dbm.Initialize(&config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "cloudnode.db")}); err != nil {
+	dbm, err := store.Open(&config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "cloudnode.db")})
+	if err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
 	t.Cleanup(func() { _ = dbm.Close() })

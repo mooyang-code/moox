@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,9 +14,11 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Manager owns the collector SQLite connection.
-type Manager struct {
-	db *gorm.DB
+// Store owns the Collector SQLite connection and repositories.
+type Store struct {
+	db        *gorm.DB
+	taskRules *TaskRuleRepository
+	taskItems *TaskInstanceRepository
 }
 
 // Options configures the Collector SQLite store.
@@ -27,44 +30,68 @@ type Options struct {
 	ConnMaxIdleTime time.Duration
 }
 
-// NewManager creates a persistence manager.
-func NewManager() *Manager {
-	return &Manager{}
-}
-
-// Initialize opens SQLite. Schema creation is handled before service startup.
-func (m *Manager) Initialize(opts *Options) error {
+// Open opens the Collector SQLite store. Schema creation is handled by bootstrap.
+func Open(opts *Options) (*Store, error) {
 	dbPath := "./data/moox_collector.db"
 	if opts != nil && opts.Path != "" {
 		dbPath = opts.Path
 	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return fmt.Errorf("create database directory: %w", err)
+		return nil, fmt.Errorf("create database directory: %w", err)
 	}
 	db, err := gorm.Open(sqlite.Open(buildSQLiteDSN(dbPath)), &gorm.Config{})
 	if err != nil {
-		return fmt.Errorf("open database: %w", err)
+		return nil, fmt.Errorf("open database: %w", err)
 	}
-	m.db = db
-	applySQLitePoolConfig(m.db, opts)
+	s := &Store{db: db}
+	s.taskRules = NewTaskRuleRepository(db)
+	s.taskItems = NewTaskInstanceRepository(db)
+	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
-	return nil
+	return s, nil
 }
 
-// DB returns the raw gorm connection.
-func (m *Manager) DB() *gorm.DB {
-	if m == nil {
+// TaskRules returns the task rule repository.
+func (s *Store) TaskRules() *TaskRuleRepository {
+	if s == nil {
 		return nil
 	}
-	return m.db
+	return s.taskRules
+}
+
+// TaskInstances returns the task instance repository.
+func (s *Store) TaskInstances() *TaskInstanceRepository {
+	if s == nil {
+		return nil
+	}
+	return s.taskItems
+}
+
+// ApplySchema applies schema SQL during service startup.
+func (s *Store) ApplySchema(sql string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("collector database is not open")
+	}
+	if strings.TrimSpace(sql) == "" {
+		return fmt.Errorf("collector schema sql is empty")
+	}
+	return s.db.Exec(sql).Error
+}
+
+// Ping verifies that the database is available.
+func (s *Store) Ping(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("collector database is not open")
+	}
+	return s.db.WithContext(ctx).Exec("SELECT 1").Error
 }
 
 // Close releases the underlying SQL connection.
-func (m *Manager) Close() error {
-	if m == nil || m.db == nil {
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
 		return nil
 	}
-	sqlDB, err := m.db.DB()
+	sqlDB, err := s.db.DB()
 	if err != nil {
 		return err
 	}

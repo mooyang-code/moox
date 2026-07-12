@@ -87,8 +87,6 @@ type HealthConfig struct {
 	Addr string `yaml:"addr"`
 }
 
-var globalConfig *Config
-
 // Load reads YAML config from path.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
@@ -160,17 +158,4 @@ func Default() *Config {
 			Addr: ":11411",
 		},
 	}
-}
-
-// SetGlobalConfig stores the process-wide config.
-func SetGlobalConfig(cfg *Config) {
-	globalConfig = cfg
-}
-
-// Global returns the process-wide config.
-func Global() *Config {
-	if globalConfig == nil {
-		globalConfig = Default()
-	}
-	return globalConfig
 }

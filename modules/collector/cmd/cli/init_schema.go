@@ -5,13 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
-	"gorm.io/gorm"
 )
 
 const defaultInitDBPath = "./data/moox_collector.db"
@@ -72,36 +69,13 @@ func applySchema(dbPath string, rawSQL string) error {
 	if dbPath == "" {
 		return fmt.Errorf("db path is required")
 	}
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return fmt.Errorf("create database directory: %w", err)
-	}
-	db, err := gorm.Open(sqlite.Open(initSQLiteDSN(dbPath)), &gorm.Config{})
+	db, err := store.Open(&store.Options{Path: dbPath})
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return fmt.Errorf("get sql db: %w", err)
-	}
-	defer sqlDB.Close()
-	if err := db.Exec(rawSQL).Error; err != nil {
+	defer db.Close()
+	if err := db.ApplySchema(rawSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
 	return nil
-}
-
-func initSQLiteDSN(dbPath string) string {
-	pragmas := []string{
-		"_pragma=journal_mode(WAL)",
-		"_pragma=synchronous(OFF)",
-		"_pragma=busy_timeout(5000)",
-		"_pragma=temp_store(MEMORY)",
-		"_pragma=cache_size(-64000)",
-		"_pragma=wal_autocheckpoint(1000)",
-	}
-	sep := "?"
-	if strings.Contains(dbPath, "?") {
-		sep = "&"
-	}
-	return dbPath + sep + strings.Join(pragmas, "&")
 }

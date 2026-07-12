@@ -7,17 +7,17 @@ import (
 
 func TestInitializeDoesNotCreateSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
-	mgr := NewManager()
-	if err := mgr.Initialize(&Options{Path: dbPath}); err != nil {
-		t.Fatalf("Initialize() error = %v", err)
+	mgr, err := Open(&Options{Path: dbPath})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
 	}
 	t.Cleanup(func() { _ = mgr.Close() })
-	if _, err := mgr.DB().DB(); err != nil {
+	if _, err := mgr.db.DB(); err != nil {
 		t.Fatalf("DB() error = %v", err)
 	}
 
 	var count int64
-	if err := mgr.DB().Raw(`
+	if err := mgr.db.Raw(`
 SELECT count(*)
 FROM sqlite_master
 WHERE type = 'table'

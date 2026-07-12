@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
@@ -30,14 +31,62 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-var (
-	monitorStartedAt       = time.Now()
-	defaultManager         *store.Manager
-	defaultScheduler       *scheduler.Scheduler
-	defaultMetricScheduler *monmetrics.RuleScheduler
-)
+// Runtime owns monitor's process-scoped resources. Keeping these handles
+// together avoids package globals and gives shutdown one explicit lifecycle.
+type Runtime struct {
+	StartedAt       time.Time
+	cancel          context.CancelFunc
+	workers         sync.WaitGroup
+	closeOnce       sync.Once
+	closeErr        error
+	Store           *store.Store
+	Repositories    *store.Repositories
+	MetricStores    *monmetrics.Stores
+	HostRuleCache   *hostmetrics.RuleCache
+	Scheduler       *scheduler.Scheduler
+	MetricScheduler *monmetrics.RuleScheduler
+}
+
+func (r *Runtime) Close() error {
+	if r == nil {
+		return nil
+	}
+	r.closeOnce.Do(func() {
+		if r.cancel != nil {
+			r.cancel()
+		}
+		if r.Scheduler != nil {
+			r.Scheduler.Stop()
+		}
+		if r.HostRuleCache != nil {
+			_ = r.HostRuleCache.Stop(context.Background())
+		}
+		if r.MetricScheduler != nil {
+			r.MetricScheduler.Stop()
+		}
+		r.workers.Wait()
+		if r.Store != nil {
+			r.closeErr = r.Store.Close()
+		}
+	})
+	return r.closeErr
+}
+
+func (r *Runtime) Go(fn func()) {
+	if r == nil || fn == nil {
+		return
+	}
+	r.workers.Add(1)
+	go func() {
+		defer r.workers.Done()
+		fn()
+	}()
+}
 
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	log.InfoContextf(ctx, "开始初始化 moox-monitor...")
 
 	cfg, err := config.Load("./config/app.yaml")
@@ -55,11 +104,13 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 monitor schema 失败: %v", err)
 		return nil, err
 	}
-	if err := schema.EnsureMetricRuleStateColumns(mgr.DB()); err != nil {
+	if err := mgr.EnsureMetricRuleStateColumns(); err != nil {
 		_ = mgr.Close()
 		log.ErrorContextf(ctx, "升级 monitor metric rule state schema 失败: %v", err)
 		return nil, err
 	}
+	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
+	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
 	var hostStore *hostmetrics.Store
 	var hostReader *hostmetrics.StorageReader
 	var hostGate *hostmetrics.StorageGate
@@ -73,79 +124,92 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		hostGate = hostmetrics.NewStorageGate(hostMetadata, cfg.Metrics.HostStorage)
 		hostStore = hostmetrics.NewStoreWithWriterReader(hostWriter, hostReader)
 		hostStore.SetStorageReady(hostGate.Ready)
-		hostRuleCache, err = hostmetrics.NewRuleCache(hostmetrics.RuleCacheOptions{Repository: store.NewAlertRepository(mgr.DB()), RefreshInterval: cfg.Metrics.HostStorage.RuleRefreshInterval})
+		hostRuleCache, err = hostmetrics.NewRuleCache(hostmetrics.RuleCacheOptions{Repository: runtime.Repositories.Alerts, RefreshInterval: cfg.Metrics.HostStorage.RuleRefreshInterval})
 		if err != nil {
-			_ = mgr.Close()
+			_ = runtime.Close()
 			return nil, err
 		}
-		if err := hostRuleCache.Start(ctx); err != nil {
+		runtime.HostRuleCache = hostRuleCache
+		if err := hostRuleCache.Start(runtimeCtx); err != nil {
 			log.WarnContextf(ctx, "host alert rule cache unavailable: %v", err)
 		}
-		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{Cache: hostRuleCache, Repository: store.NewAlertRepository(mgr.DB()), InstanceID: cfg.Instance.InstanceID, Notifier: alerting.WebhookNotifier{}, Webhook: func(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) {
-			return store.NewAlertRepository(mgr.DB()).GetWebhook(ctx, spaceID, webhookID)
+		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{Cache: hostRuleCache, Repository: runtime.Repositories.Alerts, InstanceID: cfg.Instance.InstanceID, Notifier: alerting.WebhookNotifier{}, Webhook: func(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) {
+			return runtime.Repositories.Alerts.GetWebhook(ctx, spaceID, webhookID)
 		}})
 	} else {
 		hostStore = hostmetrics.NewStoreWithWriter(nil)
 	}
 	if err := hostStore.EnsureSchema(); err != nil {
-		_ = mgr.Close()
+		_ = runtime.Close()
 		return nil, err
 	}
-	defaultManager = mgr
 	var metricsStorage *monmetrics.StorageAdapter
 	var metricsQuery *monmetrics.QueryService
-	var metricRules *monmetrics.RuleRepository
+	var metricRules *monmetrics.MetricRuleStore
+	var metricStores *monmetrics.Stores
 	var metricEvaluator *monmetrics.MetricEvaluator
 	if cfg.Metrics.Enabled {
 		metricsStorage = monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
-		metricsRepo := monmetrics.NewRepository(mgr.DB())
-		metricsQuery = monmetrics.NewQueryService(metricsRepo, metricsStorage)
+		metricStores, err = store.WithDatabase(mgr, monmetrics.NewStores)
+		if err != nil {
+			_ = runtime.Close()
+			return nil, err
+		}
+		runtime.MetricStores = metricStores
+		metricsQuery = monmetrics.NewQueryService(metricStores.Messages, metricsStorage)
 		if interval, err := time.ParseDuration(cfg.Metrics.Storage.Frequency); err == nil {
 			metricsQuery.Catalog().SetNoDataAfter(time.Duration(maxInt(cfg.Metrics.NoDataIntervals, 1)) * interval)
 		}
-		metricRules = monmetrics.NewRuleRepository(mgr.DB())
+		metricRules = metricStores.Rules
 		metricEvaluator = monmetrics.NewMetricEvaluator(monmetrics.EvaluatorOptions{
-			Repository: metricRules,
+			RuleStore:  metricRules,
 			Catalog:    metricsQuery.Catalog(),
 			Storage:    metricsStorage,
 			InstanceID: cfg.Instance.InstanceID,
 			Webhook: func(ctx context.Context, spaceID, id string) (*domain.WebhookChannel, error) {
-				return store.NewAlertRepository(mgr.DB()).GetWebhook(ctx, spaceID, id)
+				return runtime.Repositories.Alerts.GetWebhook(ctx, spaceID, id)
 			},
 			Notifier: monmetrics.WebhookMetricNotifier{},
 		})
 	}
-	if err := registerHealth(s, cfg, mgr, metricsStorage); err != nil {
-		_ = mgr.Close()
+	if err := registerHealth(s, cfg, runtime, metricsStorage); err != nil {
+		_ = runtime.Close()
 		return nil, err
 	}
-	resultHook := monitorResultHook(cfg, mgr)
-	syncSystem := monitorSyncFunc(ctx, cfg, mgr)
+	resultHook := monitorResultHook(cfg, runtime)
+	syncSystem := monitorSyncFunc(runtimeCtx, cfg, runtime)
 	var hostReady func() bool
 	if hostGate != nil {
 		hostReady = hostGate.Ready
 	} else {
 		hostReady = func() bool { return false }
 	}
-	registerMonitorService(s, cfg, mgr, hostStore, hostReader, hostReady, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
+	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
 	registerMetricsReporter(s)
-	startScheduler(ctx, cfg, mgr, resultHook)
-	startRetentionCleaner(ctx, cfg, mgr)
-	startPeerPuller(ctx, cfg, mgr)
-	startHostMetricsConsumer(ctx, cfg, hostStore)
-	startHostStorageGate(ctx, cfg, hostGate)
+	runtime.Scheduler = startScheduler(runtimeCtx, cfg, runtime, resultHook)
+	startRetentionCleaner(runtimeCtx, cfg, runtime)
+	startPeerPuller(runtimeCtx, cfg, runtime)
+	startHostMetricsConsumer(runtimeCtx, cfg, runtime, hostStore)
+	startHostStorageGate(runtimeCtx, cfg, runtime, hostGate)
+	startMetricsConsumer(runtimeCtx, cfg, runtime, metricsStorage)
 	if metricEvaluator != nil {
-		defaultMetricScheduler = monmetrics.NewRuleScheduler(monmetrics.SchedulerOptions{Evaluator: metricEvaluator, Rules: metricRules, InstanceID: cfg.Instance.InstanceID, ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second, ActiveInstances: func(ctx context.Context) ([]string, error) {
-			return activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, store.NewPeerRepository(mgr.DB()), 3*time.Duration(cfg.Peer.TimeoutSeconds)*time.Second), nil
+		runtime.MetricScheduler = monmetrics.NewRuleScheduler(monmetrics.SchedulerOptions{Evaluator: metricEvaluator, Rules: metricRules, InstanceID: cfg.Instance.InstanceID, ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second, ActiveInstances: func(ctx context.Context) ([]string, error) {
+			return activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, runtime.Repositories.Peers, 3*time.Duration(cfg.Peer.TimeoutSeconds)*time.Second), nil
 		}})
-		defaultMetricScheduler.Start(ctx)
+		runtime.MetricScheduler.Start(runtimeCtx)
+	}
+	if done := ctx.Done(); done != nil {
+		go func() {
+			<-done
+			_ = runtime.Close()
+		}()
 	}
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
 }
 
-func startHostStorageGate(ctx context.Context, cfg *config.Config, gate *hostmetrics.StorageGate) {
+func startHostStorageGate(ctx context.Context, cfg *config.Config, runtime *Runtime, gate *hostmetrics.StorageGate) {
 	if cfg == nil || gate == nil || !cfg.Metrics.HostStorage.Enabled {
 		return
 	}
@@ -160,7 +224,7 @@ func startHostStorageGate(ctx context.Context, cfg *config.Config, gate *hostmet
 			log.WarnContextf(ctx, "host storage schema check failed: %v", err)
 		}
 	}
-	go func() {
+	runtime.Go(func() {
 		check()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -172,14 +236,14 @@ func startHostStorageGate(ctx context.Context, cfg *config.Config, gate *hostmet
 			case <-ticker.C:
 			}
 		}
-	}()
+	})
 }
 
-func startHostMetricsConsumer(ctx context.Context, cfg *config.Config, store *hostmetrics.Store) {
+func startHostMetricsConsumer(ctx context.Context, cfg *config.Config, runtime *Runtime, store *hostmetrics.Store) {
 	if cfg == nil || !cfg.Metrics.Enabled || !cfg.Metrics.HostStorage.Enabled || store == nil {
 		return
 	}
-	go func() {
+	runtime.Go(func() {
 		for ctx.Err() == nil {
 			urls := strings.Split(cfg.Metrics.EventBusURL, ",")
 			jc := jetstream.ConfigFromEnv(urls, "moox-monitor-hostmetrics")
@@ -213,7 +277,7 @@ func startHostMetricsConsumer(ctx context.Context, cfg *config.Config, store *ho
 				waitHostMetrics(ctx)
 			}
 		}
-	}()
+	})
 }
 func waitHostMetrics(ctx context.Context) {
 	select {
@@ -259,16 +323,16 @@ func maxInt(a, b int) int {
 	return b
 }
 
-func startMetricsConsumer(ctx context.Context, cfg *config.Config, mgr *store.Manager, storage *monmetrics.StorageAdapter) {
-	if cfg == nil || !cfg.Metrics.Enabled || mgr == nil || mgr.DB() == nil {
+func startMetricsConsumer(ctx context.Context, cfg *config.Config, runtime *Runtime, storage *monmetrics.StorageAdapter) {
+	if cfg == nil || !cfg.Metrics.Enabled || runtime == nil || runtime.Store == nil || runtime.Store.Ping(ctx) != nil || runtime.MetricStores == nil {
 		return
 	}
 	if storage == nil {
 		storage = monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
 	}
-	repo := monmetrics.NewRepository(mgr.DB())
-	startMetricsDedupeCleaner(ctx, repo)
-	go func() {
+	repo := runtime.MetricStores.Messages
+	startMetricsDedupeCleaner(ctx, runtime, repo)
+	runtime.Go(func() {
 		for {
 			if err := ctx.Err(); err != nil {
 				return
@@ -284,7 +348,7 @@ func startMetricsConsumer(ctx context.Context, cfg *config.Config, mgr *store.Ma
 				}
 				continue
 			}
-			err = monmetrics.RunWhenReady(ctx, monmetrics.ConsumerOptions{Client: js, Storage: storage, Repository: repo, Authorizer: monmetrics.SysDeployAuthorizer{DB: mgr.DB()}, DLQ: monmetrics.JetStreamDLQ(js, "moox-monitor", cfg.Instance.InstanceID), Config: cfg.Metrics, ServiceName: "moox-monitor", InstanceID: cfg.Instance.InstanceID})
+			err = monmetrics.RunWhenReady(ctx, monmetrics.ConsumerOptions{Client: js, Storage: storage, MessageStore: repo, Authorizer: monmetrics.CheckProducerAuthorizer{Checks: runtime.Repositories.Checks}, DLQ: monmetrics.JetStreamDLQ(js, "moox-monitor", cfg.Instance.InstanceID), Config: cfg.Metrics, ServiceName: "moox-monitor", InstanceID: cfg.Instance.InstanceID})
 			_ = js.Close()
 			if ctx.Err() != nil {
 				return
@@ -298,14 +362,14 @@ func startMetricsConsumer(ctx context.Context, cfg *config.Config, mgr *store.Ma
 			case <-time.After(30 * time.Second):
 			}
 		}
-	}()
+	})
 }
 
-func startMetricsDedupeCleaner(ctx context.Context, repo *monmetrics.Repository) {
+func startMetricsDedupeCleaner(ctx context.Context, runtime *Runtime, repo *monmetrics.MetricMessageStore) {
 	if repo == nil {
 		return
 	}
-	go func() {
+	runtime.Go(func() {
 		ticker := time.NewTicker(6 * time.Hour)
 		defer ticker.Stop()
 		for {
@@ -318,20 +382,16 @@ func startMetricsDedupeCleaner(ctx context.Context, repo *monmetrics.Repository)
 			case <-ticker.C:
 			}
 		}
-	}()
+	})
 }
 
-func Manager() *store.Manager {
-	return defaultManager
-}
-
-func registerHealth(s *server.Server, cfg *config.Config, mgr *store.Manager, metricsStorage *monmetrics.StorageAdapter) error {
+func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, metricsStorage *monmetrics.StorageAdapter) error {
 	if cfg == nil {
 		return nil
 	}
 	state := health.New("monitor", cfg.Instance.InstanceID, "", "")
 	state.SetReady(true)
-	state.SnapshotFunc = monitorHealthSnapshot(cfg, mgr, metricsStorage)
+	state.SnapshotFunc = monitorHealthSnapshot(cfg, runtime, metricsStorage)
 	handler := monitorpeer.NewHTTPHandler(monitorpeer.HTTPOptions{
 		Token:    cfg.Peer.Token,
 		Health:   healthz.ReadinessHandler(state.Snapshot),
@@ -347,13 +407,13 @@ func registerHealth(s *server.Server, cfg *config.Config, mgr *store.Manager, me
 	return nil
 }
 
-func registerMonitorService(s *server.Server, cfg *config.Config, mgr *store.Manager, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.RuleRepository, metricEvaluator *monmetrics.MetricEvaluator) {
+func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.MetricRuleStore, metricEvaluator *monmetrics.MetricEvaluator) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
 		return
 	}
-	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(mgr.DB(), monitorrpc.Options{
+	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(runtime.Repositories, monitorrpc.Options{
 		InstanceID:       cfg.Instance.InstanceID,
 		OnResult:         hook,
 		SyncSystem:       syncSystem,
@@ -366,19 +426,20 @@ func registerMonitorService(s *server.Server, cfg *config.Config, mgr *store.Man
 	}))
 }
 
-func startScheduler(ctx context.Context, cfg *config.Config, mgr *store.Manager, hook func(context.Context, domain.Check, domain.CheckResult)) {
-	defaultScheduler = scheduler.New(mgr.DB(), scheduler.Options{
+func startScheduler(ctx context.Context, cfg *config.Config, runtime *Runtime, hook func(context.Context, domain.Check, domain.CheckResult)) *scheduler.Scheduler {
+	s := scheduler.New(runtime.Repositories, scheduler.Options{
 		InstanceID:     cfg.Instance.InstanceID,
 		ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second,
 		MaxConcurrency: cfg.Scheduler.MaxConcurrency,
 		OnResult:       hook,
 	})
-	defaultScheduler.Start(ctx)
+	s.Start(ctx)
+	return s
 }
 
-func monitorResultHook(cfg *config.Config, mgr *store.Manager) func(context.Context, domain.Check, domain.CheckResult) {
-	evaluator := alerting.NewEvaluator(mgr.DB(), alerting.Options{InstanceID: cfg.Instance.InstanceID})
-	peers := store.NewPeerRepository(mgr.DB())
+func monitorResultHook(cfg *config.Config, runtime *Runtime) func(context.Context, domain.Check, domain.CheckResult) {
+	evaluator := alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{InstanceID: cfg.Instance.InstanceID})
+	peers := runtime.Repositories.Peers
 	maxPeerAge := time.Duration(0)
 	if cfg.Peer.Enabled && len(cfg.Peer.Peers) > 0 {
 		maxPeerAge = 3 * time.Duration(cfg.Peer.TimeoutSeconds) * time.Second
@@ -422,16 +483,16 @@ func activeMonitorInstanceIDs(ctx context.Context, localID string, peers *store.
 	return ids
 }
 
-func startRetentionCleaner(ctx context.Context, cfg *config.Config, mgr *store.Manager) {
+func startRetentionCleaner(ctx context.Context, cfg *config.Config, runtime *Runtime) {
 	retention := time.Duration(cfg.Scheduler.ResultRetentionDays) * 24 * time.Hour
 	if retention <= 0 {
 		return
 	}
-	go func() {
+	runtime.Go(func() {
 		ticker := time.NewTicker(6 * time.Hour)
 		defer ticker.Stop()
 		for {
-			if err := pruneMonitorHistory(ctx, mgr, retention); err != nil {
+			if err := pruneMonitorHistory(ctx, runtime, retention); err != nil {
 				log.WarnContextf(ctx, "monitor retention prune failed: %v", err)
 			}
 			select {
@@ -440,29 +501,29 @@ func startRetentionCleaner(ctx context.Context, cfg *config.Config, mgr *store.M
 			case <-ticker.C:
 			}
 		}
-	}()
+	})
 }
 
-func pruneMonitorHistory(ctx context.Context, mgr *store.Manager, retention time.Duration) error {
-	if mgr == nil || mgr.DB() == nil || retention <= 0 {
+func pruneMonitorHistory(ctx context.Context, runtime *Runtime, retention time.Duration) error {
+	if runtime == nil || runtime.Store == nil || runtime.Store.Ping(ctx) != nil || retention <= 0 {
 		return nil
 	}
 	cutoff := time.Now().UTC().Add(-retention)
-	if _, err := store.NewResultRepository(mgr.DB()).DeleteOlderThan(ctx, cutoff); err != nil {
+	if _, err := runtime.Repositories.Results.DeleteOlderThan(ctx, cutoff); err != nil {
 		return err
 	}
-	if _, err := store.NewAlertRepository(mgr.DB()).DeleteEventsOlderThan(ctx, cutoff); err != nil {
+	if _, err := runtime.Repositories.Alerts.DeleteEventsOlderThan(ctx, cutoff); err != nil {
 		return err
 	}
 	return nil
 }
 
-func monitorSyncFunc(ctx context.Context, cfg *config.Config, mgr *store.Manager) func(context.Context) (int, error) {
+func monitorSyncFunc(ctx context.Context, cfg *config.Config, runtime *Runtime) func(context.Context) (int, error) {
 	if !cfg.SysDeploy.Enabled {
 		return nil
 	}
-	syncer := monitorsysdeploy.NewSyncer(store.NewCheckRepository(mgr.DB()), monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target))
-	go func() {
+	syncer := monitorsysdeploy.NewSyncer(runtime.Repositories.Checks, monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target))
+	runtime.Go(func() {
 		ticker := time.NewTicker(time.Duration(cfg.SysDeploy.SyncIntervalSeconds) * time.Second)
 		defer ticker.Stop()
 		for {
@@ -477,11 +538,11 @@ func monitorSyncFunc(ctx context.Context, cfg *config.Config, mgr *store.Manager
 			case <-ticker.C:
 			}
 		}
-	}()
+	})
 	return syncer.Sync
 }
 
-func startPeerPuller(ctx context.Context, cfg *config.Config, mgr *store.Manager) {
+func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) {
 	if !cfg.Peer.Enabled {
 		return
 	}
@@ -493,11 +554,11 @@ func startPeerPuller(ctx context.Context, cfg *config.Config, mgr *store.Manager
 			Token:      item.Token,
 		})
 	}
-	puller := monitorpeer.NewPuller(store.NewPeerRepository(mgr.DB()), monitorpeer.PullerOptions{
+	puller := monitorpeer.NewPuller(runtime.Repositories.Peers, monitorpeer.PullerOptions{
 		Peers:   remotes,
 		Timeout: time.Duration(cfg.Peer.TimeoutSeconds) * time.Second,
 	})
-	go func() {
+	runtime.Go(func() {
 		ticker := time.NewTicker(time.Duration(cfg.Peer.PullIntervalSeconds) * time.Second)
 		defer ticker.Stop()
 		for {
@@ -511,7 +572,7 @@ func startPeerPuller(ctx context.Context, cfg *config.Config, mgr *store.Manager
 			case <-ticker.C:
 			}
 		}
-	}()
+	})
 }
 
 func monitorSnapshot(cfg *config.Config) func(context.Context) monitorpeer.Snapshot {
@@ -524,20 +585,25 @@ func monitorSnapshot(cfg *config.Config) func(context.Context) monitorpeer.Snaps
 	}
 }
 
-func monitorHealthSnapshot(cfg *config.Config, mgr *store.Manager, metricsStorage *monmetrics.StorageAdapter) healthz.SnapshotFunc {
+func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage *monmetrics.StorageAdapter) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		var activeChecks, activePeers int64
 		var checksErr, peersErr error
-		if mgr != nil && mgr.DB() != nil {
-			activeChecks, checksErr = store.NewCheckRepository(mgr.DB()).CountEnabled(ctx)
-			activeChecks, peersErr = store.NewPeerRepository(mgr.DB()).CountActive(ctx)
+		if runtime != nil && runtime.Store != nil && runtime.Store.Ping(ctx) == nil && runtime.Repositories != nil {
+			activeChecks, checksErr = runtime.Repositories.Checks.CountEnabled(ctx)
+			activePeers, peersErr = runtime.Repositories.Peers.CountActive(ctx)
 		}
-		databaseReady := mgr != nil && mgr.DB() != nil && checksErr == nil && peersErr == nil
-		ready := databaseReady && defaultScheduler != nil
-		rsp := healthz.Base("monitor", cfg.Instance.InstanceID, "", "", monitorStartedAt, ready)
+		databaseReady := runtime != nil && runtime.Store != nil && runtime.Store.Ping(ctx) == nil && runtime.Repositories != nil && checksErr == nil && peersErr == nil
+		schedulerReady := runtime != nil && runtime.Scheduler != nil
+		ready := databaseReady && schedulerReady
+		startedAt := time.Time{}
+		if runtime != nil {
+			startedAt = runtime.StartedAt
+		}
+		rsp := healthz.Base("monitor", cfg.Instance.InstanceID, "", "", startedAt, ready)
 		rsp.Details = map[string]any{
 			"database":          map[bool]string{true: "ok", false: "error"}[databaseReady],
-			"scheduler_ok":      defaultScheduler != nil,
+			"scheduler_ok":      schedulerReady,
 			"active_checks":     activeChecks,
 			"peer_count":        len(cfg.Peer.Peers),
 			"active_peer_count": activePeers,
@@ -558,7 +624,7 @@ func monitorHealthSnapshot(cfg *config.Config, mgr *store.Manager, metricsStorag
 		}
 		rsp.Details["metrics_schema_ready"] = metricsReady
 		rsp.Details["metrics_schema_reason"] = metricsReason
-		ready = databaseReady && defaultScheduler != nil && metricsReady
+		ready = databaseReady && schedulerReady && metricsReady
 		rsp.Ready = ready
 		if ready {
 			rsp.Status = "ok"
@@ -572,7 +638,7 @@ func monitorHealthSnapshot(cfg *config.Config, mgr *store.Manager, metricsStorag
 		if peersErr != nil {
 			rsp.Details["database_peers_error"] = peersErr.Error()
 		}
-		rsp.Details["scheduler_ready"] = defaultScheduler != nil
+		rsp.Details["scheduler_ready"] = schedulerReady
 		return rsp
 	}
 }

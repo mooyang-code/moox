@@ -65,6 +65,7 @@ func TestDeployEnablesCollectorScheduler(t *testing.T) {
 		"--no-cloudnode",
 		"--no-factor",
 		"--no-monitor",
+		"--no-archive",
 		"--no-web-host",
 	)
 	cmd.Dir = root
@@ -218,6 +219,7 @@ func TestDeployStagesStorageViewMaintenanceScheduler(t *testing.T) {
 		"--no-collector",
 		"--no-factor",
 		"--no-monitor",
+		"--no-archive",
 		"--no-web-host",
 	)
 	cmd.Dir = root

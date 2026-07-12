@@ -61,7 +61,7 @@ func TestHTTPHandlerRejectsSnapshotWhenTokenIsNotConfigured(t *testing.T) {
 func TestPullerStoresSnapshotsAndMarksStale(t *testing.T) {
 	ctx := context.Background()
 	mgr := openPeerDB(t)
-	repo := store.NewPeerRepository(mgr.DB())
+	repo := mgr.Repositories().Peers
 	handler := NewHTTPHandler(HTTPOptions{
 		Token: "secret",
 		Snapshot: func(ctx context.Context) Snapshot {
@@ -111,7 +111,7 @@ func TestPullerStoresSnapshotsAndMarksStale(t *testing.T) {
 func TestPullerContinuesAfterPeerFailure(t *testing.T) {
 	ctx := context.Background()
 	mgr := openPeerDB(t)
-	repo := store.NewPeerRepository(mgr.DB())
+	repo := mgr.Repositories().Peers
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "down", http.StatusServiceUnavailable)
 	}))
@@ -150,7 +150,7 @@ func statusOf(rsp *http.Response) int {
 	return rsp.StatusCode
 }
 
-func openPeerDB(t *testing.T) *store.Manager {
+func openPeerDB(t *testing.T) *store.Store {
 	t.Helper()
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {

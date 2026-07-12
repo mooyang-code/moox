@@ -20,15 +20,57 @@ import (
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/modules/cloudnode/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-var cloudnodeStartedAt = time.Now()
+// Runtime owns CloudNode process resources and their shutdown order.
+type Runtime struct {
+	StartedAt       time.Time
+	Store           *store.Store
+	JetStream       *jobqueue.Runtime
+	HeartbeatBuffer *projection.HeartbeatBuffer
+	DebugServer     *http.Server
+}
+
+func (r *Runtime) Close(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var firstErr error
+	if r.HeartbeatBuffer != nil {
+		if err := r.HeartbeatBuffer.Close(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if r.JetStream != nil {
+		if err := r.JetStream.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if r.DebugServer != nil {
+		if err := r.DebugServer.Shutdown(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if r.Store != nil {
+		if err := r.Store.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
 
 // Initialize loads config, initializes persistence, and registers tRPC services.
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	log.InfoContextf(ctx, "开始初始化 moox-cloudnode...")
 
 	cfg, err := config.Load("./config/app.yaml")
@@ -36,20 +78,27 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "加载 cloudnode 配置失败: %v", err)
 		return nil, err
 	}
-	config.SetGlobalConfig(cfg)
-	startDebugServer(ctx, cfg.Debug.PprofAddr)
+	runtime := &Runtime{StartedAt: time.Now()}
 
-	dbm := store.NewManager()
-	if err := dbm.Initialize(&cfg.Database); err != nil {
+	dbm, err := store.Open(&cfg.Database)
+	if err != nil {
 		log.ErrorContextf(ctx, "初始化 cloudnode 数据库失败: %v", err)
 		return nil, err
 	}
-	keepDB := false
+	runtime.Store = dbm
+	runtime.DebugServer = startDebugServer(ctx, cfg.Debug.PprofAddr)
+	keepResources := false
 	defer func() {
-		if !keepDB {
-			_ = dbm.Close()
+		if !keepResources {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = runtime.Close(closeCtx)
 		}
 	}()
+	if err := dbm.ApplySchema(schema.AllSQL()); err != nil {
+		log.ErrorContextf(ctx, "初始化 cloudnode schema 失败: %v", err)
+		return nil, err
+	}
 	historyStore := jobhistory.NewStore(jobhistory.StoreOptions{
 		Dir:           cfg.JobItem.HistoryDir,
 		RetentionDays: cfg.JobItem.HistoryRetentionDays,
@@ -70,10 +119,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			_ = rt.Close()
 			return nil, err
 		}
+		runtime.JetStream = rt
 		kv, err := rt.KeyValue(cfg.JobItem.ActiveKVBucket)
 		if err != nil {
 			log.ErrorContextf(ctx, "打开 cloudnode JobItem active KV 失败: %v", err)
-			_ = rt.Close()
 			return nil, err
 		}
 		stateStore := jobstate.NewKVStore(kv, jobstate.Options{
@@ -88,11 +137,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			FetchMaxWait:    time.Duration(cfg.JetStream.FetchMaxWaitMs) * time.Millisecond,
 			DefaultMaxBatch: cfg.JobItem.MaxLimit,
 		})
-		catalog := store.NewCatalogRepository(dbm.DB())
+		catalog := dbm.Catalog()
 		heartbeatSink := projection.NewHeartbeatBuffer(catalog, projection.HeartbeatBufferOptions{
 			MaxKeys:       2048,
 			FlushInterval: time.Second,
 		})
+		runtime.HeartbeatBuffer = heartbeatSink
 		opts = append(opts,
 			cloudnoderpc.WithExecutionQueue(execQueue),
 			cloudnoderpc.WithJobStateStore(stateStore),
@@ -109,7 +159,15 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 
-	keepDB = true
+	keepResources = true
+	if done := ctx.Done(); done != nil {
+		go func() {
+			<-done
+			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = runtime.Close(closeCtx)
+		}()
+	}
 	log.InfoContextf(ctx, "moox-cloudnode 初始化完成")
 	return s, nil
 }
@@ -131,7 +189,7 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func registerHealth(s *server.Server, cfg *config.Config, dbm *store.Manager) error {
+func registerHealth(s *server.Server, cfg *config.Config, dbm *store.Store) error {
 	if cfg == nil {
 		return nil
 	}
@@ -146,11 +204,11 @@ func registerHealth(s *server.Server, cfg *config.Config, dbm *store.Manager) er
 	return nil
 }
 
-func cloudnodeHealthSnapshot(cfg *config.Config, dbm *store.Manager, state *health.State) healthz.SnapshotFunc {
+func cloudnodeHealthSnapshot(cfg *config.Config, dbm *store.Store, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
-		databaseReady := dbm != nil && dbm.DB() != nil && dbm.DB().WithContext(ctx).Exec("SELECT 1").Error == nil
+		databaseReady := dbm != nil && dbm.Ping(ctx) == nil
 		state.SetReady(databaseReady)
-		rsp := healthz.Base("cloudnode", "cloudnode", "", "", cloudnodeStartedAt, databaseReady)
+		rsp := healthz.Base("cloudnode", "cloudnode", "", "", state.StartedAt, databaseReady)
 		rsp.Details = map[string]any{
 			"database":          databaseReady,
 			"queue_backend":     cfg.Queue.Backend,
@@ -170,10 +228,10 @@ func registerJobHistorySchedule(s *server.Server) {
 	timer.RegisterHandlerService(service, cloudnoderpc.HandleJobHistorySchedule)
 }
 
-func startDebugServer(ctx context.Context, addr string) {
+func startDebugServer(ctx context.Context, addr string) *http.Server {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
-		return
+		return nil
 	}
 	mux := healthz.NewMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -196,4 +254,5 @@ func startDebugServer(ctx context.Context, addr string) {
 			log.ErrorContextf(ctx, "cloudnode pprof server failed: %v", err)
 		}
 	}()
+	return server
 }

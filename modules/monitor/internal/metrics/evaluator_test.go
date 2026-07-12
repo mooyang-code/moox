@@ -79,14 +79,14 @@ func TestMetricRuleStateTransitionsAndKeepState(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Unix(500, 0).UTC()
-	repo := NewRuleRepository(mgr.DB())
-	eval := NewMetricEvaluator(EvaluatorOptions{Repository: repo, InstanceID: "m1", Now: func() time.Time { return now }})
+	ruleStore := metricRuleStoreForTest(t, mgr)
+	eval := NewMetricEvaluator(EvaluatorOptions{RuleStore: ruleStore, InstanceID: "m1", Now: func() time.Time { return now }})
 	rule := validRule()
 	ctx := context.Background()
 	if err := eval.applyState(ctx, rule, &RuleEvaluation{SpaceID: "space", RuleID: "rule", EvaluatedAt: now, Result: true}); err != nil {
 		t.Fatal(err)
 	}
-	state, _ := repo.GetState(ctx, "space", "rule")
+	state, _ := ruleStore.GetState(ctx, "space", "rule")
 	if state.TriggerCount != 1 || state.Status != domain.AlertStatusOK {
 		t.Fatalf("state after one trigger=%+v", state)
 	}
@@ -94,7 +94,7 @@ func TestMetricRuleStateTransitionsAndKeepState(t *testing.T) {
 	if err := eval.applyState(ctx, rule, &RuleEvaluation{SpaceID: "space", RuleID: "rule", EvaluatedAt: now, Result: true}); err != nil {
 		t.Fatal(err)
 	}
-	state, _ = repo.GetState(ctx, "space", "rule")
+	state, _ = ruleStore.GetState(ctx, "space", "rule")
 	if state.Status != domain.AlertStatusFiring {
 		t.Fatalf("state did not fire=%+v", state)
 	}
@@ -102,7 +102,7 @@ func TestMetricRuleStateTransitionsAndKeepState(t *testing.T) {
 	if err := eval.applyState(ctx, rule, &RuleEvaluation{SpaceID: "space", RuleID: "rule", EvaluatedAt: now, Result: false}); err != nil {
 		t.Fatal(err)
 	}
-	state, _ = repo.GetState(ctx, "space", "rule")
+	state, _ = ruleStore.GetState(ctx, "space", "rule")
 	if state.RecoveryCount != 1 || state.Status != domain.AlertStatusFiring {
 		t.Fatalf("state after first recovery=%+v", state)
 	}
@@ -110,7 +110,7 @@ func TestMetricRuleStateTransitionsAndKeepState(t *testing.T) {
 	if err := eval.applyState(ctx, rule, keep); err != nil {
 		t.Fatal(err)
 	}
-	state, _ = repo.GetState(ctx, "space", "rule")
+	state, _ = ruleStore.GetState(ctx, "space", "rule")
 	if state.RecoveryCount != 1 || state.TriggerCount != 0 {
 		t.Fatalf("keep-state advanced counters=%+v", state)
 	}
@@ -129,14 +129,14 @@ func TestMetricNotificationFailureIsPersistedAndRetried(t *testing.T) {
 	now := time.Unix(900, 0).UTC()
 	rule := validRule()
 	rule.ConsecutiveTriggerCount = 1
-	eval := NewMetricEvaluator(EvaluatorOptions{Repository: NewRuleRepository(mgr.DB()), InstanceID: "m1", Now: func() time.Time { return now }, Notifier: notifier, Webhook: func(context.Context, string, string) (*domain.WebhookChannel, error) {
+	eval := NewMetricEvaluator(EvaluatorOptions{RuleStore: metricRuleStoreForTest(t, mgr), InstanceID: "m1", Now: func() time.Time { return now }, Notifier: notifier, Webhook: func(context.Context, string, string) (*domain.WebhookChannel, error) {
 		return &domain.WebhookChannel{WebhookID: "ops", Enabled: true}, nil
 	}})
 	ctx := context.Background()
 	if err := eval.applyState(ctx, rule, &RuleEvaluation{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: now, Result: true}); err == nil {
 		t.Fatal("first notification failure was swallowed")
 	}
-	state, err := eval.repo.GetState(ctx, rule.GetSpaceId(), rule.GetRuleId())
+	state, err := eval.rules.GetState(ctx, rule.GetSpaceId(), rule.GetRuleId())
 	if err != nil || state.NotificationStatus != "failed" || state.NotificationKey == "" {
 		t.Fatalf("failed notification state=%+v err=%v", state, err)
 	}
@@ -144,7 +144,7 @@ func TestMetricNotificationFailureIsPersistedAndRetried(t *testing.T) {
 	if err := eval.applyState(ctx, rule, &RuleEvaluation{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: now, Result: true}); err != nil {
 		t.Fatal(err)
 	}
-	state, _ = eval.repo.GetState(ctx, rule.GetSpaceId(), rule.GetRuleId())
+	state, _ = eval.rules.GetState(ctx, rule.GetSpaceId(), rule.GetRuleId())
 	if notifier.attempts != 2 || state.NotificationStatus != "sent" {
 		t.Fatalf("retry attempts=%d state=%+v", notifier.attempts, state)
 	}

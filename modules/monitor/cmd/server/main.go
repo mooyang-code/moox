@@ -4,9 +4,9 @@ import (
 	"os"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/bootstrap"
-	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
+	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
 
 func main() {

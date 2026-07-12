@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,11 +14,11 @@ import (
 	"gorm.io/gorm"
 )
 
-type Manager struct {
+type Store struct {
 	db *gorm.DB
 }
 
-func Open(path string) (*Manager, error) {
+func Open(path string) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("database path is required")
 	}
@@ -43,10 +44,10 @@ func Open(path string) (*Manager, error) {
 	if err := db.Exec("PRAGMA busy_timeout=5000").Error; err != nil {
 		return nil, fmt.Errorf("set busy timeout: %w", err)
 	}
-	return &Manager{db: db}, nil
+	return &Store{db: db}, nil
 }
 
-func OpenFromConfig(cfg config.DatabaseConfig) (*Manager, error) {
+func OpenFromConfig(cfg config.DatabaseConfig) (*Store, error) {
 	mgr, err := Open(cfg.Path)
 	if err != nil {
 		return nil, err
@@ -71,14 +72,37 @@ func OpenFromConfig(cfg config.DatabaseConfig) (*Manager, error) {
 	return mgr, nil
 }
 
-func (m *Manager) DB() *gorm.DB {
+// Repositories builds the monitor control-plane repository graph.
+func (m *Store) Repositories() *Repositories {
 	if m == nil {
 		return nil
 	}
-	return m.db
+	return NewRepositories(m.db)
 }
 
-func (m *Manager) ApplySchema(sql string) error {
+// WithDatabase runs a short-lived construction callback against the private
+// database handle. Production callers should prefer Repositories or domain
+// methods; this escape hatch is reserved for bounded-context adapters.
+func WithDatabase[T any](m *Store, fn func(*gorm.DB) T) (T, error) {
+	var zero T
+	if m == nil || m.db == nil {
+		return zero, fmt.Errorf("monitor database is not open")
+	}
+	if fn == nil {
+		return zero, fmt.Errorf("database callback is nil")
+	}
+	return fn(m.db), nil
+}
+
+// Ping verifies that the database is available.
+func (m *Store) Ping(ctx context.Context) error {
+	if m == nil || m.db == nil {
+		return fmt.Errorf("monitor database is not open")
+	}
+	return m.db.WithContext(ctx).Exec("SELECT 1").Error
+}
+
+func (m *Store) ApplySchema(sql string) error {
 	if m == nil || m.db == nil {
 		return fmt.Errorf("monitor database is not open")
 	}
@@ -88,7 +112,7 @@ func (m *Manager) ApplySchema(sql string) error {
 	return m.db.Exec(sql).Error
 }
 
-func (m *Manager) Close() error {
+func (m *Store) Close() error {
 	if m == nil || m.db == nil {
 		return nil
 	}

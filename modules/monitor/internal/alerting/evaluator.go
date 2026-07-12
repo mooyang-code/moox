@@ -39,7 +39,7 @@ type Evaluator struct {
 	now      func() time.Time
 }
 
-func NewEvaluator(db *gorm.DB, opts Options) *Evaluator {
+func NewEvaluator(alerts *store.AlertRepository, opts Options) *Evaluator {
 	instance := opts.InstanceID
 	if instance == "" {
 		instance = "monitor"
@@ -53,7 +53,7 @@ func NewEvaluator(db *gorm.DB, opts Options) *Evaluator {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Evaluator{
-		alerts:   store.NewAlertRepository(db),
+		alerts:   alerts,
 		instance: instance,
 		notifier: notifier,
 		now:      now,

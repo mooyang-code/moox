@@ -16,7 +16,7 @@ import (
 func TestAlertEvaluatorThresholdReminderAndResolve(t *testing.T) {
 	ctx := context.Background()
 	mgr := openAlertDB(t)
-	alerts := store.NewAlertRepository(mgr.DB())
+	alerts := mgr.Repositories().Alerts
 	check := testCheck()
 	createAlertFixture(t, alerts, domain.AlertRule{
 		SpaceID:                        "space-a",
@@ -32,7 +32,7 @@ func TestAlertEvaluatorThresholdReminderAndResolve(t *testing.T) {
 
 	now := time.Now()
 	notifier := &recordingNotifier{}
-	evaluator := NewEvaluator(mgr.DB(), Options{
+	evaluator := NewEvaluator(mgr.Repositories().Alerts, Options{
 		InstanceID: "monitor-a",
 		Notifier:   notifier,
 		Now:        func() time.Time { return now },
@@ -84,7 +84,7 @@ func TestAlertEvaluatorThresholdReminderAndResolve(t *testing.T) {
 func TestAlertEvaluatorSendOnResolvedFalseAndSendFailure(t *testing.T) {
 	ctx := context.Background()
 	mgr := openAlertDB(t)
-	alerts := store.NewAlertRepository(mgr.DB())
+	alerts := mgr.Repositories().Alerts
 	check := testCheck()
 	createAlertFixture(t, alerts, domain.AlertRule{
 		SpaceID:          "space-a",
@@ -98,7 +98,7 @@ func TestAlertEvaluatorSendOnResolvedFalseAndSendFailure(t *testing.T) {
 	})
 
 	notifier := &recordingNotifier{fail: true}
-	evaluator := NewEvaluator(mgr.DB(), Options{
+	evaluator := NewEvaluator(mgr.Repositories().Alerts, Options{
 		InstanceID: "monitor-a",
 		Notifier:   notifier,
 	})
@@ -212,7 +212,7 @@ func okResult(check domain.Check) domain.CheckResult {
 	return domain.CheckResult{SpaceID: check.SpaceID, CheckID: check.CheckID, Success: true, Status: domain.CheckStatusOK, CheckedAt: time.Now()}
 }
 
-func openAlertDB(t *testing.T) *store.Manager {
+func openAlertDB(t *testing.T) *store.Store {
 	t.Helper()
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {

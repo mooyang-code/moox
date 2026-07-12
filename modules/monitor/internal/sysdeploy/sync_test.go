@@ -14,7 +14,7 @@ import (
 func TestSyncDeploymentsCreatesSystemChecks(t *testing.T) {
 	ctx := context.Background()
 	mgr := openSyncDB(t)
-	checks := store.NewCheckRepository(mgr.DB())
+	checks := mgr.Repositories().Checks
 	syncer := NewSyncer(checks, nil)
 
 	n, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{
@@ -62,7 +62,7 @@ func TestCheckFromDeploymentDoesNotAssertReadinessForLiveness(t *testing.T) {
 func TestSyncDeploymentsDoesNotTouchManualCheck(t *testing.T) {
 	ctx := context.Background()
 	mgr := openSyncDB(t)
-	checks := store.NewCheckRepository(mgr.DB())
+	checks := mgr.Repositories().Checks
 	if err := checks.Create(ctx, &domain.Check{
 		SpaceID:         "",
 		CheckID:         "moox_cloudnode",
@@ -100,7 +100,7 @@ func TestSyncDeploymentsDoesNotTouchManualCheck(t *testing.T) {
 func TestSyncDeploymentsDisablesRemovedSystemChecks(t *testing.T) {
 	ctx := context.Background()
 	mgr := openSyncDB(t)
-	checks := store.NewCheckRepository(mgr.DB())
+	checks := mgr.Repositories().Checks
 	syncer := NewSyncer(checks, nil)
 	if _, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{
 		{ServiceName: "moox_cloudnode", Protocol: "http", Host: "127.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:11411/healthz","monitor_enabled":true}`},
@@ -131,7 +131,7 @@ func TestSyncDeploymentsDisablesRemovedSystemChecks(t *testing.T) {
 func TestSyncKeepsExistingChecksWhenAdminFails(t *testing.T) {
 	ctx := context.Background()
 	mgr := openSyncDB(t)
-	checks := store.NewCheckRepository(mgr.DB())
+	checks := mgr.Repositories().Checks
 	syncer := NewSyncer(checks, failingSource{})
 	if _, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{
 		{ServiceName: "moox_cloudnode", Protocol: "http", Host: "127.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:11411/healthz"}`},
@@ -156,7 +156,7 @@ func (failingSource) ActiveDeployments(context.Context) ([]*adminpb.ServiceDeplo
 	return nil, errAdminUnavailable
 }
 
-func openSyncDB(t *testing.T) *store.Manager {
+func openSyncDB(t *testing.T) *store.Store {
 	t.Helper()
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {

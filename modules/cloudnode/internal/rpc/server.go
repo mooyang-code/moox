@@ -17,7 +17,6 @@ import (
 // Service is the independent cloudnode service implementation.
 type Service struct {
 	pb.UnimplementedCloudNodeMgr
-	dbm              *store.Manager
 	jobState         jobstate.Store
 	history          *jobhistory.Store
 	executionQueue   jobqueue.ExecutionQueue
@@ -51,10 +50,9 @@ func WithHeartbeatSink(sink projection.HeartbeatSink) Option {
 }
 
 // New creates a cloudnode RPC service.
-func New(dbm *store.Manager, opts ...Option) *Service {
+func New(dbm *store.Store, opts ...Option) *Service {
 	svc := &Service{
-		dbm:              dbm,
-		catalog:          store.NewCatalogRepository(dbm.DB()),
+		catalog:          dbm.Catalog(),
 		scfClientFactory: defaultSCFClientFactory,
 	}
 	for _, opt := range opts {

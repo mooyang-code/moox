@@ -28,14 +28,14 @@ func TestHandleKeepaliveRunsPollWithServiceGatewayTarget(t *testing.T) {
 	}
 
 	ctx := functioncontext.NewContext(context.Background(), &functioncontext.FunctionContext{
-		RequestID:              "test-request",
-		FunctionName:           "moox-collector-ap-guangzhou-0",
-		FunctionVersion:        "$LATEST",
-		Namespace:              "default",
-		TencentcloudRegion:     "ap-guangzhou",
-		InvokedFunctionUnique:  "moox-collector-ap-guangzhou-0",
-		TencentcloudAppID:      "test-app",
-		TencentcloudUin:        "test-uin",
+		RequestID:             "test-request",
+		FunctionName:          "moox-collector-ap-guangzhou-0",
+		FunctionVersion:       "$LATEST",
+		Namespace:             "default",
+		TencentcloudRegion:    "ap-guangzhou",
+		InvokedFunctionUnique: "moox-collector-ap-guangzhou-0",
+		TencentcloudAppID:     "test-app",
+		TencentcloudUin:       "test-uin",
 	})
 	rsp, err := NewCloudFunctionHandler().handleKeepalive(ctx, model.CloudFunctionEvent{
 		Action:               model.EventActionKeepalive,

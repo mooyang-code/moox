@@ -1,4 +1,4 @@
-// Package repository contains Collector persistence adapters.
+// Package store contains Collector persistence adapters.
 package store
 
 import (

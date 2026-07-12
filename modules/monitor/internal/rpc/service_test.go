@@ -249,7 +249,7 @@ func newTestService(t *testing.T) *Service {
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}
-	return New(mgr.DB(), Options{
+	return New(mgr.Repositories(), Options{
 		InstanceID: "monitor-test",
 		Runner: runnerFunc(func(ctx context.Context, check domain.Check) domain.CheckResult {
 			return domain.CheckResult{

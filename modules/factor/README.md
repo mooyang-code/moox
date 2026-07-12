@@ -23,7 +23,7 @@ go run ./cmd/cli run-once --space crypto --dataset binance_spot_kline --subject 
 cmd/server/main.go
 config/app.yaml
 config/trpc_go.yaml
-internal/app/control/
+internal/bootstrap/
 internal/engine/
 internal/registry/
 internal/store/

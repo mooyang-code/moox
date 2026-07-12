@@ -11,14 +11,14 @@ import (
 
 func TestInitializeDoesNotCreateSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "cloudnode.db")
-	mgr := NewManager()
-	if err := mgr.Initialize(&config.DatabaseConfig{Path: dbPath}); err != nil {
-		t.Fatalf("Initialize() error = %v", err)
+	mgr, err := Open(&config.DatabaseConfig{Path: dbPath})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
 	}
 	defer mgr.Close()
 
 	var count int64
-	if err := mgr.DB().Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 't_cloud_%'").Scan(&count).Error; err != nil {
+	if err := mgr.db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 't_cloud_%'").Scan(&count).Error; err != nil {
 		t.Fatalf("query table count: %v", err)
 	}
 	if count != 0 {
@@ -47,13 +47,13 @@ CREATE TABLE t_cloud_job_items (
 	sqlDB, _ := db.DB()
 	_ = sqlDB.Close()
 
-	mgr := NewManager()
-	if err := mgr.Initialize(&config.DatabaseConfig{Path: dbPath}); err != nil {
-		t.Fatalf("Initialize() error = %v", err)
+	mgr, err := Open(&config.DatabaseConfig{Path: dbPath})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
 	}
 	defer mgr.Close()
 	for _, column := range []string{"c_queue_subject", "c_enqueue_status", "c_cancel_reason"} {
-		if mgr.DB().Migrator().HasColumn("t_cloud_job_items", column) {
+		if mgr.db.Migrator().HasColumn("t_cloud_job_items", column) {
 			t.Fatalf("Initialize() added column %s, want schema unchanged", column)
 		}
 	}
@@ -61,17 +61,17 @@ CREATE TABLE t_cloud_job_items (
 
 func TestInitializeCapsSQLitePoolToSingleConnection(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "cloudnode.db")
-	mgr := NewManager()
-	if err := mgr.Initialize(&config.DatabaseConfig{
+	mgr, err := Open(&config.DatabaseConfig{
 		Path:         dbPath,
 		MaxOpenConns: 50,
 		MaxIdleConns: 10,
-	}); err != nil {
-		t.Fatalf("Initialize() error = %v", err)
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
 	}
 	defer mgr.Close()
 
-	sqlDB, err := mgr.DB().DB()
+	sqlDB, err := mgr.db.DB()
 	if err != nil {
 		t.Fatalf("DB() error = %v", err)
 	}

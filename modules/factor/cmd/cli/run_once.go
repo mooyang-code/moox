@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	control "github.com/mooyang-code/moox/modules/factor/internal/app/control"
+	"github.com/mooyang-code/moox/modules/factor/internal/bootstrap"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
@@ -25,19 +25,16 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	if cfg.SpaceID == "" || cfg.DatasetID == "" || cfg.SubjectID == "" || cfg.Freq == "" || cfg.BarTime.IsZero() {
 		return fmt.Errorf("--space, --dataset, --subject, --freq and --bar-time are required")
 	}
-	db, err := openFactorDB(cfg.DBPath)
+	db, err := store.Open(&store.Options{Path: cfg.DBPath})
 	if err != nil {
 		return err
 	}
-	sqlDB, err := db.DB()
-	if err == nil {
-		defer sqlDB.Close()
-	}
-	if err := db.Exec(factorschema.AllSQL()).Error; err != nil {
+	defer db.Close()
+	if err := db.ApplySchema(factorschema.AllSQL()); err != nil {
 		return fmt.Errorf("apply factor schema: %w", err)
 	}
 
-	factorRepo := store.NewFactorRepository(db)
+	factorRepo := db.Factors()
 	factors, err := factorRepo.ListEnabledTimeseries(ctx)
 	if err != nil {
 		return err
@@ -47,7 +44,7 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return fmt.Errorf("no enabled factors selected")
 	}
 
-	appCfg := control.Default()
+	appCfg := bootstrap.Default()
 	auth := serviceAuth(appCfg)
 	metaProxy := storagepb.NewMetadataClientProxy(client.WithTarget(storageio.NormalizeStorageTarget(appCfg.Storage.MetadataTarget, "20100")))
 	syncer := registry.NewMetadataSync(metadataAdapter{proxy: metaProxy}, auth)
@@ -186,7 +183,7 @@ func runOncePayload(task *engine.FactorTask, status string, factorCount int, ela
 	}
 }
 
-func serviceAuth(cfg *control.Config) *commonpb.AuthInfo {
+func serviceAuth(cfg *bootstrap.Config) *commonpb.AuthInfo {
 	return &commonpb.AuthInfo{
 		AppId:     cfg.SysDeploy.ServiceAuth.AccessKey,
 		AppKey:    cfg.SysDeploy.ServiceAuth.SecretKey,

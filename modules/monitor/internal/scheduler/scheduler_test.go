@@ -16,14 +16,14 @@ import (
 func TestSchedulerRunDueOnce(t *testing.T) {
 	ctx := context.Background()
 	mgr := openSchedulerDB(t)
-	checkRepo := store.NewCheckRepository(mgr.DB())
-	resultRepo := store.NewResultRepository(mgr.DB())
+	checkRepo := mgr.Repositories().Checks
+	resultRepo := mgr.Repositories().Results
 	dueAt := time.Now().Add(-time.Second)
 
 	createCheck(t, checkRepo, domain.Check{CheckID: "enabled", Enabled: true, NextCheckAt: &dueAt})
 	createCheck(t, checkRepo, domain.Check{CheckID: "disabled", Enabled: false, NextCheckAt: &dueAt})
 
-	s := New(mgr.DB(), Options{
+	s := New(mgr.Repositories(), Options{
 		InstanceID:     "monitor-a",
 		MaxConcurrency: 2,
 		Runner: runnerFunc(func(ctx context.Context, check domain.Check) domain.CheckResult {
@@ -57,7 +57,7 @@ func TestSchedulerRunDueOnce(t *testing.T) {
 func TestSchedulerConcurrencyCap(t *testing.T) {
 	ctx := context.Background()
 	mgr := openSchedulerDB(t)
-	checkRepo := store.NewCheckRepository(mgr.DB())
+	checkRepo := mgr.Repositories().Checks
 	dueAt := time.Now().Add(-time.Second)
 	for i := 0; i < 6; i++ {
 		createCheck(t, checkRepo, domain.Check{CheckID: fmt.Sprintf("check-%d", i), Enabled: true, NextCheckAt: &dueAt})
@@ -65,7 +65,7 @@ func TestSchedulerConcurrencyCap(t *testing.T) {
 
 	var current int32
 	var maxSeen int32
-	s := New(mgr.DB(), Options{
+	s := New(mgr.Repositories(), Options{
 		InstanceID:     "monitor-a",
 		MaxConcurrency: 2,
 		Runner: runnerFunc(func(ctx context.Context, check domain.Check) domain.CheckResult {
@@ -94,10 +94,10 @@ func TestRunCheckOncePersistsWithoutChangingSchedule(t *testing.T) {
 	mgr := openSchedulerDB(t)
 	next := time.Now().Add(time.Hour)
 	check := domain.Check{SpaceID: "space-a", CheckID: "manual", Kind: domain.CheckKindHTTP, Enabled: true, IntervalSeconds: 60, TimeoutMS: 1000, NextCheckAt: &next}
-	checkRepo := store.NewCheckRepository(mgr.DB())
+	checkRepo := mgr.Repositories().Checks
 	createCheck(t, checkRepo, check)
 
-	s := New(mgr.DB(), Options{
+	s := New(mgr.Repositories(), Options{
 		InstanceID: "monitor-a",
 		Runner: runnerFunc(func(ctx context.Context, check domain.Check) domain.CheckResult {
 			return okResult(check)
@@ -110,7 +110,7 @@ func TestRunCheckOncePersistsWithoutChangingSchedule(t *testing.T) {
 	if !result.Success || result.InstanceID != "monitor-a" {
 		t.Fatalf("result = %+v", result)
 	}
-	results, _ := store.NewResultRepository(mgr.DB()).Recent(ctx, "space-a", "manual", 10)
+	results, _ := mgr.Repositories().Results.Recent(ctx, "space-a", "manual", 10)
 	if len(results) != 1 {
 		t.Fatalf("results len = %d", len(results))
 	}
@@ -173,7 +173,7 @@ func createCheck(t *testing.T, repo *store.CheckRepository, check domain.Check) 
 	}
 }
 
-func openSchedulerDB(t *testing.T) *store.Manager {
+func openSchedulerDB(t *testing.T) *store.Store {
 	t.Helper()
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {

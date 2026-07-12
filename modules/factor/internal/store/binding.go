@@ -16,6 +16,15 @@ type BindingRepository struct {
 	db *gorm.DB
 }
 
+// BindingFilter describes a paginated binding query.
+type BindingFilter struct {
+	SpaceID       string
+	SourceDataset string
+	Freq          string
+	Status        string
+	Page          Page
+}
+
 // NewBindingRepository creates a binding repository.
 func NewBindingRepository(db *gorm.DB) *BindingRepository {
 	return &BindingRepository{db: db}
@@ -82,6 +91,65 @@ func (r *BindingRepository) ListEnabledBySource(ctx context.Context, spaceID str
 		Order("c_factor_id ASC").
 		Find(&rows).Error
 	return rows, err
+}
+
+// ListEnabled returns all enabled bindings used by the realtime trigger.
+func (r *BindingRepository) ListEnabled(ctx context.Context) ([]domain.FactorBinding, error) {
+	var rows []domain.FactorBinding
+	err := r.db.WithContext(ctx).
+		Where("c_status = ?", domain.BindingStatusEnabled).
+		Order("c_space_id ASC, c_source_dataset ASC, c_freq ASC, c_factor_id ASC").
+		Find(&rows).Error
+	return rows, err
+}
+
+// ListEnabledByFactor returns enabled bindings for one factor.
+func (r *BindingRepository) ListEnabledByFactor(ctx context.Context, factorID string) ([]domain.FactorBinding, error) {
+	var rows []domain.FactorBinding
+	err := r.db.WithContext(ctx).
+		Where("c_factor_id = ? AND c_status = ?", strings.TrimSpace(factorID), domain.BindingStatusEnabled).
+		Order("c_space_id ASC, c_source_dataset ASC, c_freq ASC").
+		Find(&rows).Error
+	return rows, err
+}
+
+// List returns bindings matching the filter.
+func (r *BindingRepository) List(ctx context.Context, filter BindingFilter) ([]domain.FactorBinding, int64, error) {
+	page, size := normalizePage(filter.Page)
+	q := r.db.WithContext(ctx).Model(&domain.FactorBinding{})
+	if v := strings.TrimSpace(filter.SpaceID); v != "" {
+		q = q.Where("c_space_id = ?", v)
+	}
+	if v := strings.TrimSpace(filter.SourceDataset); v != "" {
+		q = q.Where("c_source_dataset = ?", v)
+	}
+	if v := strings.TrimSpace(filter.Freq); v != "" {
+		q = q.Where("c_freq = ?", v)
+	}
+	if v := strings.TrimSpace(filter.Status); v != "" {
+		q = q.Where("c_status = ?", v)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []domain.FactorBinding
+	if err := q.Order("c_mtime DESC").Offset((page - 1) * size).Limit(size).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+// Delete removes a binding by ID.
+func (r *BindingRepository) Delete(ctx context.Context, bindingID string) error {
+	result := r.db.WithContext(ctx).Where("c_binding_id = ?", strings.TrimSpace(bindingID)).Delete(&domain.FactorBinding{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func normalizeBinding(binding *domain.FactorBinding) {

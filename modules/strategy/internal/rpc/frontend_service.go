@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
-	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go"
 )
 
@@ -102,8 +101,8 @@ func (s *Service) GetStrategyRun(ctx context.Context, req *strategypb.GetStrateg
 	if req == nil || req.GetRunId() == "" {
 		return &strategypb.GetStrategyRunRsp{RetInfo: invalid(errors.New("run_id is required"))}, nil
 	}
-	var run domain.StrategyRun
-	if err := s.Repo.DB().WithContext(ctx).Where("c_run_id=?", req.GetRunId()).First(&run).Error; err != nil {
+	run, err := s.Repo.GetRun(ctx, req.GetRunId())
+	if err != nil {
 		return &strategypb.GetStrategyRunRsp{RetInfo: invalid(err)}, nil
 	}
 	if binding, err := s.Repo.GetBinding(ctx, run.BindingID); err != nil {
@@ -113,7 +112,7 @@ func (s *Service) GetStrategyRun(ctx context.Context, req *strategypb.GetStrateg
 	}
 	var metrics domain.RunMetrics
 	metricsJSON := "{}"
-	if err := s.Repo.DB().WithContext(ctx).Where("c_run_id=?", run.RunID).First(&metrics).Error; err == nil {
+	if metrics, err = s.Repo.GetRunMetrics(ctx, run.RunID); err == nil {
 		b, _ := json.Marshal(metrics)
 		metricsJSON = string(b)
 	}
@@ -124,8 +123,8 @@ func (s *Service) ListStrategyTargets(ctx context.Context, req *strategypb.ListS
 	if req == nil || req.GetRunId() == "" {
 		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(errors.New("run_id is required"))}, nil
 	}
-	var targetRun domain.StrategyRun
-	if err := s.Repo.DB().WithContext(ctx).Where("c_run_id=?", req.GetRunId()).First(&targetRun).Error; err != nil {
+	targetRun, err := s.Repo.GetRun(ctx, req.GetRunId())
+	if err != nil {
 		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
 	}
 	if binding, err := s.Repo.GetBinding(ctx, targetRun.BindingID); err != nil {
@@ -265,18 +264,7 @@ func (s *Service) SetExecutionMode(ctx context.Context, req *strategypb.SetExecu
 	if err != nil {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
 	}
-	err = s.Repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var existing struct {
-			Mode string `gorm:"column:c_mode"`
-		}
-		if err := tx.Table("t_strategy_execution_bindings").Select("c_mode").Where("c_group_id=?", binding.GroupID).First(&existing).Error; err != nil {
-			return err
-		}
-		if err := tx.Table("t_strategy_execution_bindings").Where("c_group_id=?", binding.GroupID).Update("c_mode", req.GetMode()).Error; err != nil {
-			return err
-		}
-		return tx.Create(&domain.OperationAudit{OperationID: req.GetOperationId(), Operator: "admin", Action: "set_mode", BindingID: binding.BindingID, OldValue: existing.Mode, NewValue: req.GetMode(), Reason: req.GetReason(), RequestID: req.GetOperationId()}).Error
-	})
+	err = s.Repo.SetExecutionMode(ctx, binding, req.GetMode(), domain.OperationAudit{OperationID: req.GetOperationId(), Operator: "admin", Action: "set_mode", BindingID: binding.BindingID, Reason: req.GetReason(), RequestID: req.GetOperationId()})
 	if err != nil {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
 	}
@@ -297,29 +285,20 @@ func (s *Service) changeBindingStatus(ctx context.Context, req *strategypb.Bindi
 	if err != nil {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
 	}
-	err = s.Repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&domain.Binding{}).Where("c_binding_id=?", binding.BindingID).Update("c_status", status).Error; err != nil {
-			return err
-		}
-		audit := domain.OperationAudit{OperationID: req.GetOperationId(), Operator: "admin", Action: action, BindingID: binding.BindingID, OldValue: binding.Status, NewValue: status, Reason: req.GetReason(), RequestID: req.GetOperationId()}
-		return tx.Create(&audit).Error
-	})
+	err = s.Repo.SetBindingStatus(ctx, binding, status, domain.OperationAudit{OperationID: req.GetOperationId(), Operator: "admin", Action: action, BindingID: binding.BindingID, Reason: req.GetReason(), RequestID: req.GetOperationId()})
 	if err != nil {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
 	}
 	return &strategypb.BindingOperationRsp{RetInfo: success(), OperationId: req.GetOperationId(), Status: status}, nil
 }
 
-func (s *Service) writeAudit(ctx context.Context, operationID, action, bindingID, oldValue, newValue, reason string) error {
-	return s.Repo.DB().WithContext(ctx).Create(&domain.OperationAudit{OperationID: operationID, Operator: "admin", Action: action, BindingID: bindingID, OldValue: oldValue, NewValue: newValue, Reason: reason, RequestID: operationID}).Error
-}
-
 func (s *Service) findAudit(ctx context.Context, operationID string) (domain.OperationAudit, bool) {
 	var audit domain.OperationAudit
-	if operationID == "" || s == nil || s.Repo == nil || s.Repo.DB() == nil {
+	if operationID == "" || s == nil || s.Repo == nil {
 		return audit, false
 	}
-	if err := s.Repo.DB().WithContext(ctx).Where("c_operation_id=?", operationID).First(&audit).Error; err != nil {
+	audit, err := s.Repo.FindAudit(ctx, operationID)
+	if err != nil {
 		return domain.OperationAudit{}, false
 	}
 	return audit, true

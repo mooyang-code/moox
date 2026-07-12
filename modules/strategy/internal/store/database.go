@@ -1,7 +1,7 @@
-// Package store owns Strategy's SQLite connection and persistence repositories.
 package store
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,13 +11,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// Manager owns the Strategy SQLite connection.
-type Manager struct {
-	db *gorm.DB
-}
-
 // Open opens the Strategy SQLite database and configures its single-writer pool.
-func Open(path string) (*Manager, error) {
+func Open(path string) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("strategy database path is required")
 	}
@@ -34,19 +29,19 @@ func Open(path string) (*Manager, error) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
-	return &Manager{db: db}, nil
+	return &Store{db: db}, nil
 }
 
-// DB returns the underlying GORM connection.
-func (m *Manager) DB() *gorm.DB {
-	if m == nil {
-		return nil
+// Ping verifies that the database is available.
+func (m *Store) Ping(ctx context.Context) error {
+	if m == nil || m.db == nil {
+		return fmt.Errorf("strategy database is not open")
 	}
-	return m.db
+	return m.db.WithContext(ctx).Exec("SELECT 1").Error
 }
 
 // ApplySchema applies the supplied schema SQL.
-func (m *Manager) ApplySchema(sql string) error {
+func (m *Store) ApplySchema(sql string) error {
 	if m == nil || m.db == nil {
 		return fmt.Errorf("strategy database is not open")
 	}
@@ -57,7 +52,7 @@ func (m *Manager) ApplySchema(sql string) error {
 }
 
 // Close releases the underlying SQL connection.
-func (m *Manager) Close() error {
+func (m *Store) Close() error {
 	if m == nil || m.db == nil {
 		return nil
 	}

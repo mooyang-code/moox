@@ -3,28 +3,10 @@ package bus
 import (
 	"context"
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"gorm.io/gorm"
 	"testing"
 )
-
-type p struct{ n int }
-
-func (x *p) Publish(context.Context, string, []byte) error { x.n++; return nil }
-func TestAcceptOnce(t *testing.T) {
-	db, _ := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
-	db.Exec("create table t_strategy_inbox(c_consumer text,c_message_id text,unique(c_consumer,c_message_id))")
-	calls := 0
-	f := func(tx *gorm.DB) error { calls++; return nil }
-	if err := AcceptOnce(context.Background(), db, "c", "m", f); err != nil {
-		t.Fatal(err)
-	}
-	if err := AcceptOnce(context.Background(), db, "c", "m", f); err != nil {
-		t.Fatal(err)
-	}
-	if calls != 1 {
-		t.Fatal(calls)
-	}
-}
 
 type idempotentPublisher struct{ ids []string }
 
@@ -54,7 +36,7 @@ func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &idempotentPublisher{}
-	if err := (&Relay{DB: db, Publisher: p}).PublishPending(context.Background(), 10); err != nil {
+	if err := (&Relay{Store: store.New(db), Publisher: p}).PublishPending(context.Background(), 10); err != nil {
 		t.Fatal(err)
 	}
 	if len(p.ids) != 1 || p.ids[0] != "run-1" {

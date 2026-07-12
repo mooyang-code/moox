@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
-	"gorm.io/gorm"
 )
 
 type ResultHook func(context.Context, domain.Check, domain.CheckResult)
@@ -34,9 +33,11 @@ type Scheduler struct {
 	runner      probe.Runner
 	onResult    ResultHook
 	dueBatch    int
+	cancel      context.CancelFunc
+	loopWG      sync.WaitGroup
 }
 
-func New(db *gorm.DB, opts Options) *Scheduler {
+func New(repos *store.Repositories, opts Options) *Scheduler {
 	reloadEvery := opts.ReloadInterval
 	if reloadEvery <= 0 {
 		reloadEvery = 30 * time.Second
@@ -57,9 +58,12 @@ func New(db *gorm.DB, opts Options) *Scheduler {
 	if dueBatch <= 0 {
 		dueBatch = 500
 	}
+	if repos == nil {
+		repos = store.NewRepositories(nil)
+	}
 	return &Scheduler{
-		checks:      store.NewCheckRepository(db),
-		results:     store.NewResultRepository(db),
+		checks:      repos.Checks,
+		results:     repos.Results,
 		instanceID:  instanceID,
 		reloadEvery: reloadEvery,
 		maxConc:     maxConc,
@@ -70,18 +74,36 @@ func New(db *gorm.DB, opts Options) *Scheduler {
 }
 
 func (s *Scheduler) Start(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	s.loopWG.Add(1)
 	go func() {
+		defer s.loopWG.Done()
 		ticker := time.NewTicker(s.reloadEvery)
 		defer ticker.Stop()
 		for {
-			_, _ = s.RunDueOnce(ctx)
+			_, _ = s.RunDueOnce(loopCtx)
 			select {
-			case <-ctx.Done():
+			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
 			}
 		}
 	}()
+}
+
+// Stop cancels the periodic loop and waits for any in-flight scheduled run.
+func (s *Scheduler) Stop() {
+	if s == nil {
+		return
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.loopWG.Wait()
 }
 
 func (s *Scheduler) RunDueOnce(ctx context.Context) (int, error) {

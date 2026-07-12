@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"gorm.io/gorm"
 )
 
 func TestInitSchema(t *testing.T) {
@@ -20,19 +21,25 @@ func TestInitSchema(t *testing.T) {
 	}
 	defer mgr.Close()
 
-	for _, table := range []string{
-		"t_monitor_checks",
-		"t_monitor_check_results",
-		"t_monitor_webhooks",
-		"t_monitor_alert_rules",
-		"t_monitor_alert_states",
-		"t_monitor_alert_events",
-		"t_monitor_instances",
-		"t_monitor_peer_snapshots",
-	} {
-		if !mgr.DB().Migrator().HasTable(table) {
-			t.Fatalf("table %s does not exist", table)
+	_, err = store.WithDatabase(mgr, func(db *gorm.DB) struct{} {
+		for _, table := range []string{
+			"t_monitor_checks",
+			"t_monitor_check_results",
+			"t_monitor_webhooks",
+			"t_monitor_alert_rules",
+			"t_monitor_alert_states",
+			"t_monitor_alert_events",
+			"t_monitor_instances",
+			"t_monitor_peer_snapshots",
+		} {
+			if !db.Migrator().HasTable(table) {
+				t.Fatalf("table %s does not exist", table)
+			}
 		}
+		return struct{}{}
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -55,9 +62,17 @@ func TestCleanupHostSampleTablesWithConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.DB().Exec("CREATE TABLE t_monitor_host_history(c_id INTEGER)").Error; err != nil {
+	var execErr error
+	if _, err := store.WithDatabase(mgr, func(db *gorm.DB) struct{} {
+		execErr = db.Exec("CREATE TABLE t_monitor_host_history(c_id INTEGER)").Error
+		return struct{}{}
+	}); err != nil {
 		mgr.Close()
 		t.Fatal(err)
+	}
+	if execErr != nil {
+		mgr.Close()
+		t.Fatal(execErr)
 	}
 	_ = mgr.Close()
 	if err := run([]string{"cleanup-host-sample-tables", "--db-path", dbPath, "--confirm"}); err != nil {
@@ -68,7 +83,14 @@ func TestCleanupHostSampleTablesWithConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mgr.Close()
-	if mgr.DB().Migrator().HasTable("t_monitor_host_history") {
+	var exists bool
+	if _, err := store.WithDatabase(mgr, func(db *gorm.DB) struct{} {
+		exists = db.Migrator().HasTable("t_monitor_host_history")
+		return struct{}{}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if exists {
 		t.Fatal("legacy table still exists")
 	}
 }

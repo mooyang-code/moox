@@ -164,7 +164,7 @@ type RuleEvaluation struct {
 }
 
 type MetricEvaluator struct {
-	repo     *RuleRepository
+	rules    *MetricRuleStore
 	catalog  *MetricCatalog
 	storage  *StorageAdapter
 	notifier MetricNotifier
@@ -173,7 +173,7 @@ type MetricEvaluator struct {
 	now      func() time.Time
 }
 type EvaluatorOptions struct {
-	Repository *RuleRepository
+	RuleStore  *MetricRuleStore
 	Catalog    *MetricCatalog
 	Storage    *StorageAdapter
 	Notifier   MetricNotifier
@@ -187,7 +187,7 @@ func NewMetricEvaluator(opts EvaluatorOptions) *MetricEvaluator {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &MetricEvaluator{repo: opts.Repository, catalog: opts.Catalog, storage: opts.Storage, notifier: opts.Notifier, webhooks: opts.Webhook, instance: opts.InstanceID, now: now}
+	return &MetricEvaluator{rules: opts.RuleStore, catalog: opts.Catalog, storage: opts.Storage, notifier: opts.Notifier, webhooks: opts.Webhook, instance: opts.InstanceID, now: now}
 }
 
 func (e *MetricEvaluator) Evaluate(ctx context.Context, rule *monitorpb.MetricRule, preview bool) (*RuleEvaluation, error) {
@@ -220,7 +220,7 @@ func (e *MetricEvaluator) evaluate(ctx context.Context, rule *monitorpb.MetricRu
 		return nil, err
 	}
 	if e == nil || e.catalog == nil || e.storage == nil {
-		return nil, ErrMetricsRepositoryUnavailable
+		return nil, ErrMetricsStoreUnavailable
 	}
 	now := e.now()
 	result := &RuleEvaluation{EvaluationID: fmt.Sprintf("%s-%d", rule.GetRuleId(), now.UnixNano()), SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: now, Status: domain.AlertStatusOK}
@@ -392,10 +392,10 @@ func labelsMatch(raw string, matchers []*monitorpb.LabelMatcher) bool {
 }
 
 func (e *MetricEvaluator) applyState(ctx context.Context, rule *monitorpb.MetricRule, evaluation *RuleEvaluation) error {
-	if e.repo == nil {
-		return errors.New("metric rule repository is required")
+	if e.rules == nil {
+		return errors.New("metric rule store is required")
 	}
-	state, err := e.repo.GetState(ctx, rule.GetSpaceId(), rule.GetRuleId())
+	state, err := e.rules.GetState(ctx, rule.GetSpaceId(), rule.GetRuleId())
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
@@ -407,7 +407,7 @@ func (e *MetricEvaluator) applyState(ctx context.Context, rule *monitorpb.Metric
 		// must not advance trigger/recovery counters or refresh ownership state.
 		evaluation.Status = state.Status
 		evalJSON, _ := json.Marshal(evaluation)
-		return e.repo.InsertEvaluation(ctx, &MetricRuleEvaluationRow{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: evaluation.EvaluatedAt, Status: state.Status, ResultJSON: string(evalJSON)})
+		return e.rules.InsertEvaluation(ctx, &MetricRuleEvaluationRow{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: evaluation.EvaluatedAt, Status: state.Status, ResultJSON: string(evalJSON)})
 	}
 	state.OwnerInstanceID = e.instance
 	state.LastEvaluatedAt = &evaluation.EvaluatedAt
@@ -449,11 +449,11 @@ func (e *MetricEvaluator) applyState(ctx context.Context, rule *monitorpb.Metric
 	evaluation.Status = state.Status
 	raw, _ := json.Marshal(evaluation)
 	evaluation.ResultJSON = string(raw)
-	if err := e.repo.UpsertState(ctx, state); err != nil {
+	if err := e.rules.UpsertState(ctx, state); err != nil {
 		return err
 	}
 	evalJSON, _ := json.Marshal(evaluation)
-	if err := e.repo.InsertEvaluation(ctx, &MetricRuleEvaluationRow{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: evaluation.EvaluatedAt, Status: state.Status, ResultJSON: string(evalJSON)}); err != nil {
+	if err := e.rules.InsertEvaluation(ctx, &MetricRuleEvaluationRow{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: evaluation.EvaluatedAt, Status: state.Status, ResultJSON: string(evalJSON)}); err != nil {
 		return err
 	}
 	if notificationEvent != "" && !stringsEqual(state.Status, domain.AlertStatusOK) {
@@ -461,13 +461,13 @@ func (e *MetricEvaluator) applyState(ctx context.Context, rule *monitorpb.Metric
 			state.NotificationStatus = "failed"
 			state.NotificationError = err.Error()
 			state.LastNotificationAt = &evaluation.EvaluatedAt
-			_ = e.repo.UpsertState(ctx, state)
+			_ = e.rules.UpsertState(ctx, state)
 			return err
 		}
 		state.NotificationStatus = "sent"
 		state.NotificationError = ""
 		state.LastNotificationAt = &evaluation.EvaluatedAt
-		if err := e.repo.UpsertState(ctx, state); err != nil {
+		if err := e.rules.UpsertState(ctx, state); err != nil {
 			return err
 		}
 	}

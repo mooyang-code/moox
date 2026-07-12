@@ -17,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"google.golang.org/protobuf/types/known/structpb"
-	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -41,10 +40,10 @@ type Service struct {
 }
 
 // New creates a collector management service.
-func New(db *gorm.DB, deps Dependencies) *Service {
+func New(persistence *store.Store, deps Dependencies) *Service {
 	return &Service{
-		ruleRepo:     store.NewTaskRuleRepository(db),
-		instanceRepo: store.NewTaskInstanceRepository(db),
+		ruleRepo:     persistence.TaskRules(),
+		instanceRepo: persistence.TaskInstances(),
 		builder:      planner.NewTaskBuilder(),
 		datasetSrc:   storagesource.NewDatasetSource(deps.StorageMetadataTarget),
 		cloudJobs: taskpublisher.New(taskpublisher.Config{
@@ -268,7 +267,7 @@ func (s *Service) ReportTaskStatus(ctx context.Context, req *pb.ReportInstanceSt
 	result := jsonStringFromStruct(req.GetResult())
 	if err := s.instanceRepo.UpdateStatus(ctx, spaceID, taskID, nodeID, status, result); err != nil {
 		log.ErrorContextf(ctx, "[Collector] update task status failed: %v", err)
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, store.ErrTaskInstanceNotFound) {
 			return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "task instance not found")}, nil
 		}
 		return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil

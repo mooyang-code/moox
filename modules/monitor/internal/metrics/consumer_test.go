@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	messagepb "github.com/mooyang-code/moox/packages/messagepb"
+	"gorm.io/gorm"
 )
 
 func TestCommitIngestDeduplicatesAndKeepsNewestLatest(t *testing.T) {
@@ -20,7 +21,7 @@ func TestCommitIngestDeduplicatesAndKeepsNewestLatest(t *testing.T) {
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		t.Fatal(err)
 	}
-	r := NewRepository(mgr.DB())
+	r := metricMessageStoreForTest(t, mgr)
 	at := time.Unix(10, 0).UTC()
 	msg := &messagepb.MooxMessage{MessageId: "m1", Producer: &messagepb.Producer{ServiceName: "svc", InstanceId: "i", BootId: "b"}, OccurredAt: nil}
 	s := Sample{SeriesID: "series", ServiceName: "svc", InstanceID: "i", MetricName: "g", MetricType: "gauge", Value: 1, ObservedAt: at, MessageID: "m1"}
@@ -50,7 +51,7 @@ func TestCommitIngestDoesNotMoveSeriesLastSeenBackwards(t *testing.T) {
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		t.Fatal(err)
 	}
-	r := NewRepository(mgr.DB())
+	r := metricMessageStoreForTest(t, mgr)
 	producer := &messagepb.Producer{ServiceName: "svc", InstanceId: "i", BootId: "b"}
 	newMessage := func(id string) *messagepb.MooxMessage {
 		return &messagepb.MooxMessage{MessageId: id, Producer: producer}
@@ -66,8 +67,16 @@ func TestCommitIngestDoesNotMoveSeriesLastSeenBackwards(t *testing.T) {
 		t.Fatal(err)
 	}
 	var series MetricSeries
-	if err := mgr.DB().Where("c_series_id = ?", "series").First(&series).Error; err != nil {
+	var queryErr error
+	_, err = store.WithDatabase(mgr, func(db *gorm.DB) struct{} {
+		queryErr = db.Where("c_series_id = ?", "series").First(&series).Error
+		return struct{}{}
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if queryErr != nil {
+		t.Fatal(queryErr)
 	}
 	if !series.LastSeenAt.Equal(newest) {
 		t.Fatalf("series last_seen_at=%s, want %s", series.LastSeenAt, newest)

@@ -10,12 +10,12 @@ import (
 	"time"
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	messagepb "github.com/mooyang-code/moox/packages/messagepb"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"gorm.io/gorm"
 )
 
 const (
@@ -28,15 +28,17 @@ const (
 type ProducerAuthorizer interface {
 	IsRegistered(context.Context, string, string) (bool, error)
 }
-type SysDeployAuthorizer struct{ DB *gorm.DB }
 
-func (a SysDeployAuthorizer) IsRegistered(ctx context.Context, serviceName, _ string) (bool, error) {
-	if a.DB == nil {
-		return false, errors.New("sysdeploy registry database is nil")
+// CheckProducerAuthorizer authorizes metric producers against monitor checks.
+// The persistence implementation lives in store; the consumer only depends
+// on the narrow capability it needs.
+type CheckProducerAuthorizer struct{ Checks *store.CheckRepository }
+
+func (a CheckProducerAuthorizer) IsRegistered(ctx context.Context, serviceName, _ string) (bool, error) {
+	if a.Checks == nil {
+		return false, errors.New("check producer authorizer is not initialized")
 	}
-	var count int64
-	err := a.DB.WithContext(ctx).Table("t_monitor_checks").Where("c_check_id = ? AND c_source = ? AND c_enabled = 1 AND c_is_deleted = 0", serviceName, "sysdeploy").Count(&count).Error
-	return count > 0, err
+	return a.Checks.IsSysDeployRegistered(ctx, serviceName)
 }
 
 type DLQPublisher interface {
@@ -72,14 +74,14 @@ func (p jetstreamDLQ) Publish(ctx context.Context, msg *messagepb.MooxMessage) e
 }
 
 type ConsumerOptions struct {
-	Client      *jetstream.Client
-	Storage     *StorageAdapter
-	Repository  *Repository
-	Authorizer  ProducerAuthorizer
-	DLQ         DLQPublisher
-	Config      monconfig.MetricsConfig
-	ServiceName string
-	InstanceID  string
+	Client       *jetstream.Client
+	Storage      *StorageAdapter
+	MessageStore *MetricMessageStore
+	Authorizer   ProducerAuthorizer
+	DLQ          DLQPublisher
+	Config       monconfig.MetricsConfig
+	ServiceName  string
+	InstanceID   string
 }
 type Consumer struct {
 	pull     *jetstream.PullConsumer
@@ -92,8 +94,8 @@ func NewConsumer(ctx context.Context, opts ConsumerOptions) (*Consumer, error) {
 	if opts.Client == nil {
 		return nil, errors.New("metrics eventbus client is nil")
 	}
-	if opts.Storage == nil || opts.Repository == nil {
-		return nil, errors.New("metrics storage and repository are required")
+	if opts.Storage == nil || opts.MessageStore == nil {
+		return nil, errors.New("metrics storage and message store are required")
 	}
 	cfg := opts.Config
 	if cfg.Stream == "" {
@@ -287,7 +289,7 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 			return permanent(fmt.Errorf("unregistered metric producer %s/%s", msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId()))
 		}
 	}
-	duplicate, err := c.opts.Repository.IsDuplicate(ctx, msg.GetMessageId())
+	duplicate, err := c.opts.MessageStore.IsDuplicate(ctx, msg.GetMessageId())
 	if err != nil {
 		return c.retry(d, err)
 	}
@@ -310,7 +312,7 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 	if err := c.opts.Storage.WriteSamples(ctx, samples); err != nil {
 		return c.retry(d, err)
 	}
-	duplicate, err = c.opts.Repository.CommitIngest(ctx, msg, samples)
+	duplicate, err = c.opts.MessageStore.CommitIngest(ctx, msg, samples)
 	if err != nil {
 		return c.retry(d, err)
 	}

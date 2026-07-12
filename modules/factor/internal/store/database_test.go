@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-func TestManagerInitializeAndClose(t *testing.T) {
-	mgr := NewManager()
-	if err := mgr.Initialize(&Options{Path: filepath.Join(t.TempDir(), "factor.db")}); err != nil {
-		t.Fatalf("Initialize() error = %v", err)
+func TestOpenAndClose(t *testing.T) {
+	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "factor.db")})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
 	}
-	if mgr.DB() == nil {
-		t.Fatal("DB() returned nil")
+	if mgr.db == nil {
+		t.Fatal("database returned nil")
 	}
 	if err := mgr.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)

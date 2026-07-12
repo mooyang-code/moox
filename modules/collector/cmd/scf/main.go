@@ -10,8 +10,8 @@ import (
 	"time"
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
-	runtimeboot "github.com/mooyang-code/moox/modules/collector/internal/app/runtimeboot"
 	"github.com/mooyang-code/moox/modules/collector/internal/serverless"
+	runtimebootstrap "github.com/mooyang-code/moox/modules/collector/internal/serverless/bootstrap"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskrunner"
 	"trpc.group/trpc-go/trpc-go/log"
 	_ "trpc.group/trpc-go/trpc-log-cls"
@@ -72,11 +72,11 @@ func initializeRuntime(ctx context.Context, cfg *runtimeapp.AppConfig, startTRPC
 	if _, err := runtimeapp.LoadConfigs(cfg); err != nil {
 		return err
 	}
-	if _, err := runtimeboot.StartBackgroundServices(ctx); err != nil {
+	if _, err := runtimebootstrap.StartBackgroundServices(ctx); err != nil {
 		return err
 	}
 	if startTRPC {
-		return runtimeboot.RegisterTRPCServices()
+		return runtimebootstrap.RegisterTRPCServices()
 	}
 	return nil
 }

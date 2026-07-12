@@ -12,7 +12,7 @@ import (
 
 type RuleScheduler struct {
 	evaluator *MetricEvaluator
-	rules     *RuleRepository
+	rules     *MetricRuleStore
 	instance  string
 	peers     func(context.Context) ([]string, error)
 	interval  time.Duration
@@ -23,7 +23,7 @@ type RuleScheduler struct {
 }
 type SchedulerOptions struct {
 	Evaluator       *MetricEvaluator
-	Rules           *RuleRepository
+	Rules           *MetricRuleStore
 	InstanceID      string
 	ReloadInterval  time.Duration
 	ActiveInstances func(context.Context) ([]string, error)

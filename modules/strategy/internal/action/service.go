@@ -8,7 +8,7 @@ import (
 )
 
 type Service struct {
-	Repo   *store.Repository
+	Repo   *store.Store
 	Engine *engine.Engine
 }
 

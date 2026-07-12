@@ -15,6 +15,13 @@ type FactorRepository struct {
 	db *gorm.DB
 }
 
+// FactorFilter describes a paginated factor query.
+type FactorFilter struct {
+	Kind   string
+	Status string
+	Page   Page
+}
+
 // NewFactorRepository creates a factor repository.
 func NewFactorRepository(db *gorm.DB) *FactorRepository {
 	return &FactorRepository{db: db}
@@ -62,6 +69,41 @@ func (r *FactorRepository) GetByName(ctx context.Context, name string) (*domain.
 		return nil, err
 	}
 	return &factor, nil
+}
+
+// List returns factor definitions matching the filter.
+func (r *FactorRepository) List(ctx context.Context, filter FactorFilter) ([]domain.FactorDef, int64, error) {
+	page, size := normalizePage(filter.Page)
+	q := r.db.WithContext(ctx).Model(&domain.FactorDef{})
+	if strings.TrimSpace(filter.Kind) != "" {
+		q = q.Where("c_kind = ?", strings.TrimSpace(filter.Kind))
+	}
+	if strings.TrimSpace(filter.Status) != "" {
+		q = q.Where("c_status = ?", strings.TrimSpace(filter.Status))
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []domain.FactorDef
+	if err := q.Order("c_mtime DESC").Offset((page - 1) * size).Limit(size).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+// SetStatus updates one factor's lifecycle status.
+func (r *FactorRepository) SetStatus(ctx context.Context, factorID, status string) error {
+	result := r.db.WithContext(ctx).Model(&domain.FactorDef{}).
+		Where("c_factor_id = ?", strings.TrimSpace(factorID)).
+		Updates(map[string]any{"c_status": strings.TrimSpace(status), "c_mtime": time.Now().UTC()})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // ListEnabledTimeseries returns enabled V1 time-series factor definitions.

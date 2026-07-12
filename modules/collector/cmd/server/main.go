@@ -1,7 +1,7 @@
 package main
 
 import (
-	control "github.com/mooyang-code/moox/modules/collector/internal/app/control"
+	"github.com/mooyang-code/moox/modules/collector/internal/bootstrap"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
@@ -14,7 +14,7 @@ func main() {
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer()
 
-	server, err := control.Initialize(ctx, s)
+	server, err := bootstrap.Initialize(ctx, s)
 	if err != nil {
 		log.Fatalf("moox-collector 初始化失败: %v", err)
 	}

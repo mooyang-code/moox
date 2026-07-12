@@ -18,7 +18,7 @@ import (
 )
 
 type Service struct {
-	Repo         *store.Repository
+	Repo         *store.Store
 	Registry     *registry.Service
 	Workers      int
 	ReadyWorkers int
