@@ -1,4 +1,4 @@
-package repository
+package store
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 )
 
@@ -216,10 +215,10 @@ func TestRepositoriesRoundTrip(t *testing.T) {
 	}
 }
 
-func openTestDB(t *testing.T) *monstorage.Manager {
+func openTestDB(t *testing.T) *Manager {
 	t.Helper()
 
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

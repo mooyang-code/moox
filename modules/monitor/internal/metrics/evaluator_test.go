@@ -8,7 +8,7 @@ import (
 
 	"errors"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 )
@@ -70,7 +70,7 @@ func TestORFiringNoDataPolicyWinsOverKeepState(t *testing.T) {
 }
 
 func TestMetricRuleStateTransitionsAndKeepState(t *testing.T) {
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestMetricRuleStateTransitionsAndKeepState(t *testing.T) {
 }
 
 func TestMetricNotificationFailureIsPersistedAndRetried(t *testing.T) {
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

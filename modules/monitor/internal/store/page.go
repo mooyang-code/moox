@@ -1,4 +1,4 @@
-package repository
+package store
 
 type Page struct {
 	Page     int

@@ -9,7 +9,7 @@ import (
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -44,11 +44,11 @@ func (s *ClientSource) ActiveDeployments(ctx context.Context) ([]*adminpb.Servic
 }
 
 type Syncer struct {
-	checks *repository.CheckRepository
+	checks *store.CheckRepository
 	source Source
 }
 
-func NewSyncer(checks *repository.CheckRepository, source Source) *Syncer {
+func NewSyncer(checks *store.CheckRepository, source Source) *Syncer {
 	return &Syncer{checks: checks, source: source}
 }
 

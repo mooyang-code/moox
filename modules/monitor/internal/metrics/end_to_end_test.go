@@ -8,7 +8,7 @@ import (
 	"time"
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -61,7 +61,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eventClient.Close()
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

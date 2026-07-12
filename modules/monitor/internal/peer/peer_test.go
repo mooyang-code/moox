@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
 )
@@ -62,7 +61,7 @@ func TestHTTPHandlerRejectsSnapshotWhenTokenIsNotConfigured(t *testing.T) {
 func TestPullerStoresSnapshotsAndMarksStale(t *testing.T) {
 	ctx := context.Background()
 	mgr := openPeerDB(t)
-	repo := repository.NewPeerRepository(mgr.DB())
+	repo := store.NewPeerRepository(mgr.DB())
 	handler := NewHTTPHandler(HTTPOptions{
 		Token: "secret",
 		Snapshot: func(ctx context.Context) Snapshot {
@@ -112,7 +111,7 @@ func TestPullerStoresSnapshotsAndMarksStale(t *testing.T) {
 func TestPullerContinuesAfterPeerFailure(t *testing.T) {
 	ctx := context.Background()
 	mgr := openPeerDB(t)
-	repo := repository.NewPeerRepository(mgr.DB())
+	repo := store.NewPeerRepository(mgr.DB())
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "down", http.StatusServiceUnavailable)
 	}))
@@ -151,9 +150,9 @@ func statusOf(rsp *http.Response) int {
 	return rsp.StatusCode
 }
 
-func openPeerDB(t *testing.T) *monstorage.Manager {
+func openPeerDB(t *testing.T) *store.Manager {
 	t.Helper()
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

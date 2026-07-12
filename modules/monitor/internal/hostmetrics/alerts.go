@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"gorm.io/gorm"
 )
@@ -22,7 +22,7 @@ import (
 // Alert failures never participate in the EventBus ACK decision.
 type AlertEvaluator struct {
 	Cache      *RuleCache
-	Repository *repository.AlertRepository
+	Repository *store.AlertRepository
 	InstanceID string
 	Now        func() time.Time
 	Webhook    func(context.Context, string, string) (*domain.WebhookChannel, error)

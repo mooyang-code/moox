@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 )
 
@@ -15,7 +15,7 @@ func runInit(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	mgr, err := monstorage.Open(*dbPath)
+	mgr, err := store.Open(*dbPath)
 	if err != nil {
 		return err
 	}

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 )
@@ -83,7 +83,7 @@ func TestReduceTimeSeriesCounterResetAndBoundaries(t *testing.T) {
 }
 
 func TestRuleRepositoryCanonicalRoundTripAndPagination(t *testing.T) {
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

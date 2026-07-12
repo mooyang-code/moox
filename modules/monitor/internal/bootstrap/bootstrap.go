@@ -16,10 +16,9 @@ import (
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/metricspublish"
 	monitorpeer "github.com/mooyang-code/moox/modules/monitor/internal/peer"
-	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -33,7 +32,7 @@ import (
 
 var (
 	monitorStartedAt       = time.Now()
-	defaultManager         *monstorage.Manager
+	defaultManager         *store.Manager
 	defaultScheduler       *scheduler.Scheduler
 	defaultMetricScheduler *monmetrics.RuleScheduler
 )
@@ -46,7 +45,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "加载 monitor 配置失败: %v", err)
 		return nil, err
 	}
-	mgr, err := monstorage.OpenFromConfig(cfg.Database)
+	mgr, err := store.OpenFromConfig(cfg.Database)
 	if err != nil {
 		log.ErrorContextf(ctx, "初始化 monitor 数据库失败: %v", err)
 		return nil, err
@@ -74,7 +73,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		hostGate = hostmetrics.NewStorageGate(hostMetadata, cfg.Metrics.HostStorage)
 		hostStore = hostmetrics.NewStoreWithWriterReader(hostWriter, hostReader)
 		hostStore.SetStorageReady(hostGate.Ready)
-		hostRuleCache, err = hostmetrics.NewRuleCache(hostmetrics.RuleCacheOptions{Repository: repository.NewAlertRepository(mgr.DB()), RefreshInterval: cfg.Metrics.HostStorage.RuleRefreshInterval})
+		hostRuleCache, err = hostmetrics.NewRuleCache(hostmetrics.RuleCacheOptions{Repository: store.NewAlertRepository(mgr.DB()), RefreshInterval: cfg.Metrics.HostStorage.RuleRefreshInterval})
 		if err != nil {
 			_ = mgr.Close()
 			return nil, err
@@ -82,8 +81,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		if err := hostRuleCache.Start(ctx); err != nil {
 			log.WarnContextf(ctx, "host alert rule cache unavailable: %v", err)
 		}
-		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{Cache: hostRuleCache, Repository: repository.NewAlertRepository(mgr.DB()), InstanceID: cfg.Instance.InstanceID, Notifier: alerting.WebhookNotifier{}, Webhook: func(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) {
-			return repository.NewAlertRepository(mgr.DB()).GetWebhook(ctx, spaceID, webhookID)
+		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{Cache: hostRuleCache, Repository: store.NewAlertRepository(mgr.DB()), InstanceID: cfg.Instance.InstanceID, Notifier: alerting.WebhookNotifier{}, Webhook: func(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) {
+			return store.NewAlertRepository(mgr.DB()).GetWebhook(ctx, spaceID, webhookID)
 		}})
 	} else {
 		hostStore = hostmetrics.NewStoreWithWriter(nil)
@@ -111,7 +110,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			Storage:    metricsStorage,
 			InstanceID: cfg.Instance.InstanceID,
 			Webhook: func(ctx context.Context, spaceID, id string) (*domain.WebhookChannel, error) {
-				return repository.NewAlertRepository(mgr.DB()).GetWebhook(ctx, spaceID, id)
+				return store.NewAlertRepository(mgr.DB()).GetWebhook(ctx, spaceID, id)
 			},
 			Notifier: monmetrics.WebhookMetricNotifier{},
 		})
@@ -137,7 +136,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	startHostStorageGate(ctx, cfg, hostGate)
 	if metricEvaluator != nil {
 		defaultMetricScheduler = monmetrics.NewRuleScheduler(monmetrics.SchedulerOptions{Evaluator: metricEvaluator, Rules: metricRules, InstanceID: cfg.Instance.InstanceID, ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second, ActiveInstances: func(ctx context.Context) ([]string, error) {
-			return activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, repository.NewPeerRepository(mgr.DB()), 3*time.Duration(cfg.Peer.TimeoutSeconds)*time.Second), nil
+			return activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, store.NewPeerRepository(mgr.DB()), 3*time.Duration(cfg.Peer.TimeoutSeconds)*time.Second), nil
 		}})
 		defaultMetricScheduler.Start(ctx)
 	}
@@ -260,7 +259,7 @@ func maxInt(a, b int) int {
 	return b
 }
 
-func startMetricsConsumer(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager, storage *monmetrics.StorageAdapter) {
+func startMetricsConsumer(ctx context.Context, cfg *config.Config, mgr *store.Manager, storage *monmetrics.StorageAdapter) {
 	if cfg == nil || !cfg.Metrics.Enabled || mgr == nil || mgr.DB() == nil {
 		return
 	}
@@ -322,11 +321,11 @@ func startMetricsDedupeCleaner(ctx context.Context, repo *monmetrics.Repository)
 	}()
 }
 
-func Manager() *monstorage.Manager {
+func Manager() *store.Manager {
 	return defaultManager
 }
 
-func registerHealth(s *server.Server, cfg *config.Config, mgr *monstorage.Manager, metricsStorage *monmetrics.StorageAdapter) error {
+func registerHealth(s *server.Server, cfg *config.Config, mgr *store.Manager, metricsStorage *monmetrics.StorageAdapter) error {
 	if cfg == nil {
 		return nil
 	}
@@ -348,7 +347,7 @@ func registerHealth(s *server.Server, cfg *config.Config, mgr *monstorage.Manage
 	return nil
 }
 
-func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorage.Manager, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.RuleRepository, metricEvaluator *monmetrics.MetricEvaluator) {
+func registerMonitorService(s *server.Server, cfg *config.Config, mgr *store.Manager, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.RuleRepository, metricEvaluator *monmetrics.MetricEvaluator) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
@@ -367,7 +366,7 @@ func registerMonitorService(s *server.Server, cfg *config.Config, mgr *monstorag
 	}))
 }
 
-func startScheduler(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager, hook func(context.Context, domain.Check, domain.CheckResult)) {
+func startScheduler(ctx context.Context, cfg *config.Config, mgr *store.Manager, hook func(context.Context, domain.Check, domain.CheckResult)) {
 	defaultScheduler = scheduler.New(mgr.DB(), scheduler.Options{
 		InstanceID:     cfg.Instance.InstanceID,
 		ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second,
@@ -377,9 +376,9 @@ func startScheduler(ctx context.Context, cfg *config.Config, mgr *monstorage.Man
 	defaultScheduler.Start(ctx)
 }
 
-func monitorResultHook(cfg *config.Config, mgr *monstorage.Manager) func(context.Context, domain.Check, domain.CheckResult) {
+func monitorResultHook(cfg *config.Config, mgr *store.Manager) func(context.Context, domain.Check, domain.CheckResult) {
 	evaluator := alerting.NewEvaluator(mgr.DB(), alerting.Options{InstanceID: cfg.Instance.InstanceID})
-	peers := repository.NewPeerRepository(mgr.DB())
+	peers := store.NewPeerRepository(mgr.DB())
 	maxPeerAge := time.Duration(0)
 	if cfg.Peer.Enabled && len(cfg.Peer.Peers) > 0 {
 		maxPeerAge = 3 * time.Duration(cfg.Peer.TimeoutSeconds) * time.Second
@@ -392,7 +391,7 @@ func monitorResultHook(cfg *config.Config, mgr *monstorage.Manager) func(context
 	}
 }
 
-func activeMonitorInstanceIDs(ctx context.Context, localID string, peers *repository.PeerRepository, maxPeerAge time.Duration) []string {
+func activeMonitorInstanceIDs(ctx context.Context, localID string, peers *store.PeerRepository, maxPeerAge time.Duration) []string {
 	seen := map[string]struct{}{}
 	var ids []string
 	if localID != "" {
@@ -423,7 +422,7 @@ func activeMonitorInstanceIDs(ctx context.Context, localID string, peers *reposi
 	return ids
 }
 
-func startRetentionCleaner(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) {
+func startRetentionCleaner(ctx context.Context, cfg *config.Config, mgr *store.Manager) {
 	retention := time.Duration(cfg.Scheduler.ResultRetentionDays) * 24 * time.Hour
 	if retention <= 0 {
 		return
@@ -444,25 +443,25 @@ func startRetentionCleaner(ctx context.Context, cfg *config.Config, mgr *monstor
 	}()
 }
 
-func pruneMonitorHistory(ctx context.Context, mgr *monstorage.Manager, retention time.Duration) error {
+func pruneMonitorHistory(ctx context.Context, mgr *store.Manager, retention time.Duration) error {
 	if mgr == nil || mgr.DB() == nil || retention <= 0 {
 		return nil
 	}
 	cutoff := time.Now().UTC().Add(-retention)
-	if _, err := repository.NewResultRepository(mgr.DB()).DeleteOlderThan(ctx, cutoff); err != nil {
+	if _, err := store.NewResultRepository(mgr.DB()).DeleteOlderThan(ctx, cutoff); err != nil {
 		return err
 	}
-	if _, err := repository.NewAlertRepository(mgr.DB()).DeleteEventsOlderThan(ctx, cutoff); err != nil {
+	if _, err := store.NewAlertRepository(mgr.DB()).DeleteEventsOlderThan(ctx, cutoff); err != nil {
 		return err
 	}
 	return nil
 }
 
-func monitorSyncFunc(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) func(context.Context) (int, error) {
+func monitorSyncFunc(ctx context.Context, cfg *config.Config, mgr *store.Manager) func(context.Context) (int, error) {
 	if !cfg.SysDeploy.Enabled {
 		return nil
 	}
-	syncer := monitorsysdeploy.NewSyncer(repository.NewCheckRepository(mgr.DB()), monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target))
+	syncer := monitorsysdeploy.NewSyncer(store.NewCheckRepository(mgr.DB()), monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target))
 	go func() {
 		ticker := time.NewTicker(time.Duration(cfg.SysDeploy.SyncIntervalSeconds) * time.Second)
 		defer ticker.Stop()
@@ -482,7 +481,7 @@ func monitorSyncFunc(ctx context.Context, cfg *config.Config, mgr *monstorage.Ma
 	return syncer.Sync
 }
 
-func startPeerPuller(ctx context.Context, cfg *config.Config, mgr *monstorage.Manager) {
+func startPeerPuller(ctx context.Context, cfg *config.Config, mgr *store.Manager) {
 	if !cfg.Peer.Enabled {
 		return
 	}
@@ -494,7 +493,7 @@ func startPeerPuller(ctx context.Context, cfg *config.Config, mgr *monstorage.Ma
 			Token:      item.Token,
 		})
 	}
-	puller := monitorpeer.NewPuller(repository.NewPeerRepository(mgr.DB()), monitorpeer.PullerOptions{
+	puller := monitorpeer.NewPuller(store.NewPeerRepository(mgr.DB()), monitorpeer.PullerOptions{
 		Peers:   remotes,
 		Timeout: time.Duration(cfg.Peer.TimeoutSeconds) * time.Second,
 	})
@@ -525,7 +524,7 @@ func monitorSnapshot(cfg *config.Config) func(context.Context) monitorpeer.Snaps
 	}
 }
 
-func monitorHealthSnapshot(cfg *config.Config, mgr *monstorage.Manager, metricsStorage *monmetrics.StorageAdapter) healthz.SnapshotFunc {
+func monitorHealthSnapshot(cfg *config.Config, mgr *store.Manager, metricsStorage *monmetrics.StorageAdapter) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		var activeChecks int64
 		var activePeers int64

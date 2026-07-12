@@ -10,7 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
-	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"gorm.io/gorm"
 )
 
@@ -26,8 +26,8 @@ type Options struct {
 }
 
 type Scheduler struct {
-	checks      *repository.CheckRepository
-	results     *repository.ResultRepository
+	checks      *store.CheckRepository
+	results     *store.ResultRepository
 	instanceID  string
 	reloadEvery time.Duration
 	maxConc     int
@@ -58,8 +58,8 @@ func New(db *gorm.DB, opts Options) *Scheduler {
 		dueBatch = 500
 	}
 	return &Scheduler{
-		checks:      repository.NewCheckRepository(db),
-		results:     repository.NewResultRepository(db),
+		checks:      store.NewCheckRepository(db),
+		results:     store.NewResultRepository(db),
 		instanceID:  instanceID,
 		reloadEvery: reloadEvery,
 		maxConc:     maxConc,

@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 )
 
 var legacyHostSampleTables = []string{
@@ -26,7 +26,7 @@ func runCleanupHostSampleTables(args []string) error {
 	if !*confirm {
 		return errors.New("refusing to remove legacy host sample tables without --confirm")
 	}
-	mgr, err := monstorage.Open(*dbPath)
+	mgr, err := store.Open(*dbPath)
 	if err != nil {
 		return err
 	}

@@ -13,7 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
-	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"gorm.io/gorm"
@@ -33,10 +33,10 @@ type Options struct {
 }
 
 type Service struct {
-	checks           *repository.CheckRepository
-	results          *repository.ResultRepository
-	alerts           *repository.AlertRepository
-	peers            *repository.PeerRepository
+	checks           *store.CheckRepository
+	results          *store.ResultRepository
+	alerts           *store.AlertRepository
+	peers            *store.PeerRepository
 	db               *gorm.DB
 	runner           probe.Runner
 	onResult         func(context.Context, domain.Check, domain.CheckResult)
@@ -60,10 +60,10 @@ func New(db *gorm.DB, opts Options) *Service {
 		runner = probe.DefaultRunner()
 	}
 	return &Service{
-		checks:           repository.NewCheckRepository(db),
-		results:          repository.NewResultRepository(db),
-		alerts:           repository.NewAlertRepository(db),
-		peers:            repository.NewPeerRepository(db),
+		checks:           store.NewCheckRepository(db),
+		results:          store.NewResultRepository(db),
+		alerts:           store.NewAlertRepository(db),
+		peers:            store.NewPeerRepository(db),
 		db:               db,
 		runner:           runner,
 		onResult:         opts.OnResult,
@@ -120,7 +120,7 @@ func (s *Service) GetCheck(ctx context.Context, req *monitorpb.GetCheckReq) (*mo
 
 func (s *Service) ListChecks(ctx context.Context, req *monitorpb.ListChecksReq) (*monitorpb.ListChecksRsp, error) {
 	page := pageFromPB(req.GetPage())
-	opts := repository.ListChecksOptions{
+	opts := store.ListChecksOptions{
 		SpaceID:   req.GetSpaceId(),
 		GroupName: req.GetGroupName(),
 		Source:    req.GetSource(),
@@ -190,7 +190,7 @@ func (s *Service) ListResults(ctx context.Context, req *monitorpb.ListResultsReq
 }
 
 func (s *Service) GetOverview(ctx context.Context, req *monitorpb.GetOverviewReq) (*monitorpb.GetOverviewRsp, error) {
-	checks, err := s.checks.List(ctx, repository.ListChecksOptions{SpaceID: req.GetSpaceId(), Page: repository.Page{PageSize: 500}})
+	checks, err := s.checks.List(ctx, store.ListChecksOptions{SpaceID: req.GetSpaceId(), Page: store.Page{PageSize: 500}})
 	if err != nil {
 		return &monitorpb.GetOverviewRsp{RetInfo: inner(err)}, nil
 	}
@@ -603,14 +603,14 @@ func normalizeRule(in *monitorpb.AlertRule, create bool) (*domain.AlertRule, err
 	}, nil
 }
 
-func pageFromPB(in *commonpb.Page) repository.Page {
+func pageFromPB(in *commonpb.Page) store.Page {
 	if in == nil {
-		return repository.Page{Page: 1, PageSize: 50}
+		return store.Page{Page: 1, PageSize: 50}
 	}
-	return repository.Page{Page: int(in.GetPage()), PageSize: int(in.GetSize())}
+	return store.Page{Page: int(in.GetPage()), PageSize: int(in.GetSize())}
 }
 
-func pageResult(page repository.Page, n int) *commonpb.PageResult {
+func pageResult(page store.Page, n int) *commonpb.PageResult {
 	return &commonpb.PageResult{
 		Page:    uint32(max(page.Page, 1)),
 		Size:    uint32(page.Limit()),

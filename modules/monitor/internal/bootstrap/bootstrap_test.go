@@ -9,14 +9,13 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 )
 
 func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
@@ -42,7 +41,7 @@ func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 
 func TestActiveMonitorInstanceIDsIncludesLocalAndActivePeers(t *testing.T) {
 	ctx := context.Background()
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
@@ -50,7 +49,7 @@ func TestActiveMonitorInstanceIDsIncludesLocalAndActivePeers(t *testing.T) {
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}
-	repo := repository.NewPeerRepository(mgr.DB())
+	repo := store.NewPeerRepository(mgr.DB())
 	now := time.Now()
 	for _, instance := range []*domain.MonitorInstance{
 		{InstanceID: "monitor-b", Status: domain.InstanceStatusActive, LastSeenAt: &now},
@@ -70,7 +69,7 @@ func TestActiveMonitorInstanceIDsIncludesLocalAndActivePeers(t *testing.T) {
 
 func TestActiveMonitorInstanceIDsSkipsStaleAndDisabledPeers(t *testing.T) {
 	ctx := context.Background()
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
@@ -78,7 +77,7 @@ func TestActiveMonitorInstanceIDsSkipsStaleAndDisabledPeers(t *testing.T) {
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}
-	repo := repository.NewPeerRepository(mgr.DB())
+	repo := store.NewPeerRepository(mgr.DB())
 	stale := time.Now().Add(-time.Hour)
 	if err := repo.UpsertInstance(ctx, &domain.MonitorInstance{
 		InstanceID: "monitor-stale",

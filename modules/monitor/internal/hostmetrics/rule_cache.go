@@ -54,7 +54,7 @@ func isHostMetric(metric string) bool {
 }
 
 // HostRuleSource is the small repository surface needed by the periodic
-// cache.  repository.AlertRepository satisfies it without coupling this
+// cache.  store.AlertRepository satisfies it without coupling this
 // package to GORM or to the concrete repository implementation.
 type HostRuleSource interface {
 	ListRules(context.Context, string) ([]domain.AlertRule, error)

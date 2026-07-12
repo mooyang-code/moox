@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"gorm.io/gorm"
 )
 
@@ -33,7 +33,7 @@ type Options struct {
 }
 
 type Evaluator struct {
-	alerts   *repository.AlertRepository
+	alerts   *store.AlertRepository
 	instance string
 	notifier Notifier
 	now      func() time.Time
@@ -53,7 +53,7 @@ func NewEvaluator(db *gorm.DB, opts Options) *Evaluator {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Evaluator{
-		alerts:   repository.NewAlertRepository(db),
+		alerts:   store.NewAlertRepository(db),
 		instance: instance,
 		notifier: notifier,
 		now:      now,

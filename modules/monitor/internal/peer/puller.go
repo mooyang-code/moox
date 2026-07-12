@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 )
 
 type Remote struct {
@@ -26,13 +26,13 @@ type PullerOptions struct {
 }
 
 type Puller struct {
-	repo    *repository.PeerRepository
+	repo    *store.PeerRepository
 	peers   []Remote
 	timeout time.Duration
 	client  *http.Client
 }
 
-func NewPuller(repo *repository.PeerRepository, opts PullerOptions) *Puller {
+func NewPuller(repo *store.PeerRepository, opts PullerOptions) *Puller {
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = 5 * time.Second

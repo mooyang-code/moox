@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 )
 
 func TestInitSchema(t *testing.T) {
@@ -14,7 +14,7 @@ func TestInitSchema(t *testing.T) {
 		t.Fatalf("run init: %v", err)
 	}
 
-	mgr, err := monstorage.Open(dbPath)
+	mgr, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestCleanupHostSampleTablesWithConfirmation(t *testing.T) {
 	if err := run([]string{"init", "--db-path", dbPath}); err != nil {
 		t.Fatal(err)
 	}
-	mgr, err := monstorage.Open(dbPath)
+	mgr, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestCleanupHostSampleTablesWithConfirmation(t *testing.T) {
 	if err := run([]string{"cleanup-host-sample-tables", "--db-path", dbPath, "--confirm"}); err != nil {
 		t.Fatal(err)
 	}
-	mgr, err = monstorage.Open(dbPath)
+	mgr, err = store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}

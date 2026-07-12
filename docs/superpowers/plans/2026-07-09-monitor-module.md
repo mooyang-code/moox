@@ -103,7 +103,7 @@
 - Create: `modules/monitor/cmd/cli/init_schema_test.go`
 - Create: `modules/monitor/internal/config/config.go`
 - Create: `modules/monitor/internal/config/config_test.go`
-- Create: `modules/monitor/internal/storage/database.go`
+- Create: `modules/monitor/internal/store/database.go`
 - Create: `modules/monitor/internal/bootstrap/bootstrap.go`
 - Create: `modules/monitor/schema/monitor.sql`
 - Create: `modules/monitor/schema/schema.go`
@@ -122,11 +122,11 @@
 - Create: `modules/monitor/internal/domain/result.go`
 - Create: `modules/monitor/internal/domain/alert.go`
 - Create: `modules/monitor/internal/domain/peer.go`
-- Create: `modules/monitor/internal/repository/check.go`
-- Create: `modules/monitor/internal/repository/result.go`
-- Create: `modules/monitor/internal/repository/alert.go`
-- Create: `modules/monitor/internal/repository/peer.go`
-- Create: `modules/monitor/internal/repository/page.go`
+- Create: `modules/monitor/internal/store/check.go`
+- Create: `modules/monitor/internal/store/result.go`
+- Create: `modules/monitor/internal/store/alert.go`
+- Create: `modules/monitor/internal/store/peer.go`
+- Create: `modules/monitor/internal/store/page.go`
 - Create: `modules/monitor/internal/probe/probe.go`
 - Create: `modules/monitor/internal/probe/http.go`
 - Create: `modules/monitor/internal/probe/tcp.go`
@@ -346,7 +346,7 @@ git commit -m "feat: expose healthz for deployable modules"
 - Create: `modules/monitor/config/trpc_go.yaml`
 - Create: `modules/monitor/internal/config/config.go`
 - Create: `modules/monitor/internal/config/config_test.go`
-- Create: `modules/monitor/internal/storage/database.go`
+- Create: `modules/monitor/internal/store/database.go`
 - Create: `modules/monitor/internal/bootstrap/bootstrap.go`
 - Create: `modules/monitor/cmd/server/main.go`
 - Create: `modules/monitor/cmd/cli/main.go`
@@ -427,7 +427,7 @@ Implement:
 - `cmd/server/main.go` matching other modules' `trpc.NewServer()` pattern.
 - `cmd/cli/main.go` with `init` subcommand.
 - `internal/bootstrap.Initialize(ctx, s)` that loads config, opens SQLite, applies schema, registers healthz, and later registers RPC services.
-- `internal/storage.Manager` using `github.com/glebarez/sqlite`, WAL, busy timeout, and single-writer pool settings.
+- `internal/store.Manager` using `github.com/glebarez/sqlite`, WAL, busy timeout, and single-writer pool settings.
 
 - [ ] **Step 5: Add go.work entry**
 
@@ -462,12 +462,12 @@ git commit -m "feat: scaffold monitor module"
 - Create: `modules/monitor/internal/domain/result.go`
 - Create: `modules/monitor/internal/domain/alert.go`
 - Create: `modules/monitor/internal/domain/peer.go`
-- Create: `modules/monitor/internal/repository/check.go`
-- Create: `modules/monitor/internal/repository/result.go`
-- Create: `modules/monitor/internal/repository/alert.go`
-- Create: `modules/monitor/internal/repository/peer.go`
-- Create: `modules/monitor/internal/repository/page.go`
-- Create: `modules/monitor/internal/repository/repository_test.go`
+- Create: `modules/monitor/internal/store/check.go`
+- Create: `modules/monitor/internal/store/result.go`
+- Create: `modules/monitor/internal/store/alert.go`
+- Create: `modules/monitor/internal/store/peer.go`
+- Create: `modules/monitor/internal/store/page.go`
+- Create: `modules/monitor/internal/store/repository_test.go`
 
 - [ ] **Step 1: Write schema tests**
 
@@ -555,19 +555,19 @@ Test:
 Run:
 
 ```bash
-go test ./modules/monitor/internal/repository -count=1
+go test ./modules/monitor/internal/store -count=1
 ```
 
 Expected: FAIL until repositories exist.
 
 - [ ] **Step 4: Implement domain and repositories**
 
-Use GORM models in `internal/domain` and repository methods in `internal/repository`. Keep conversion to proto out of repositories.
+Use GORM models in `internal/domain` and repository methods in `internal/store`. Keep conversion to proto out of repositories.
 
 - [ ] **Step 5: Run tests**
 
 ```bash
-go test ./modules/monitor/schema ./modules/monitor/internal/repository -count=1
+go test ./modules/monitor/schema ./modules/monitor/internal/store -count=1
 ```
 
 Expected: PASS.
@@ -575,7 +575,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add modules/monitor/schema modules/monitor/internal/domain modules/monitor/internal/repository
+git add modules/monitor/schema modules/monitor/internal/domain modules/monitor/internal/store
 git commit -m "feat: add monitor persistence"
 ```
 
@@ -1015,7 +1015,7 @@ git commit -m "feat: sync monitor checks from sysdeploy"
 - Create: `modules/monitor/internal/peer/puller.go`
 - Create: `modules/monitor/internal/peer/peer_test.go`
 - Modify: `modules/monitor/internal/bootstrap/bootstrap.go`
-- Modify: `modules/monitor/internal/repository/peer.go`
+- Modify: `modules/monitor/internal/store/peer.go`
 - Modify: `modules/monitor/internal/rpc/service.go`
 
 - [ ] **Step 1: Write alert owner tests**
@@ -1116,7 +1116,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add modules/monitor/internal/alerting modules/monitor/internal/peer modules/monitor/internal/repository/peer.go modules/monitor/internal/bootstrap modules/monitor/internal/rpc
+git add modules/monitor/internal/alerting modules/monitor/internal/peer modules/monitor/internal/store/peer.go modules/monitor/internal/bootstrap modules/monitor/internal/rpc
 git commit -m "feat: coordinate monitor peers"
 ```
 
@@ -1125,9 +1125,9 @@ git commit -m "feat: coordinate monitor peers"
 **Files:**
 - Modify: `modules/monitor/internal/rpc/service.go`
 - Modify: `modules/monitor/internal/rpc/convert.go`
-- Modify: `modules/monitor/internal/repository/check.go`
-- Modify: `modules/monitor/internal/repository/result.go`
-- Modify: `modules/monitor/internal/repository/alert.go`
+- Modify: `modules/monitor/internal/store/check.go`
+- Modify: `modules/monitor/internal/store/result.go`
+- Modify: `modules/monitor/internal/store/alert.go`
 - Test: `modules/monitor/internal/rpc/service_test.go`
 
 - [ ] **Step 1: Write overview tests**
@@ -1172,7 +1172,7 @@ Use `common.Page` and `common.PageResult` where applicable.
 - [ ] **Step 4: Run tests**
 
 ```bash
-go test ./modules/monitor/internal/rpc ./modules/monitor/internal/repository -count=1
+go test ./modules/monitor/internal/rpc ./modules/monitor/internal/store -count=1
 ```
 
 Expected: PASS.
@@ -1180,7 +1180,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add modules/monitor/internal/rpc modules/monitor/internal/repository
+git add modules/monitor/internal/rpc modules/monitor/internal/store
 git commit -m "feat: add monitor overview queries"
 ```
 

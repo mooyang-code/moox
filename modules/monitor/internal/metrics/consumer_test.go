@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	messagepb "github.com/mooyang-code/moox/packages/messagepb"
 )
 
 func TestCommitIngestDeduplicatesAndKeepsNewestLatest(t *testing.T) {
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestCommitIngestDeduplicatesAndKeepsNewestLatest(t *testing.T) {
 }
 
 func TestCommitIngestDoesNotMoveSeriesLastSeenBackwards(t *testing.T) {
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

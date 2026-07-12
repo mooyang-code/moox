@@ -4,11 +4,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 )
 
 func TestMonitorSchemaCreatesTablesAndIndexes(t *testing.T) {
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

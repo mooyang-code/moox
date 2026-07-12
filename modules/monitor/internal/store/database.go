@@ -1,4 +1,5 @@
-package storage
+// Package store owns monitor's SQLite connection and persistence repositories.
+package store
 
 import (
 	"fmt"

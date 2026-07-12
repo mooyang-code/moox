@@ -9,15 +9,14 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 )
 
 func TestAlertEvaluatorThresholdReminderAndResolve(t *testing.T) {
 	ctx := context.Background()
 	mgr := openAlertDB(t)
-	alerts := repository.NewAlertRepository(mgr.DB())
+	alerts := store.NewAlertRepository(mgr.DB())
 	check := testCheck()
 	createAlertFixture(t, alerts, domain.AlertRule{
 		SpaceID:                        "space-a",
@@ -85,7 +84,7 @@ func TestAlertEvaluatorThresholdReminderAndResolve(t *testing.T) {
 func TestAlertEvaluatorSendOnResolvedFalseAndSendFailure(t *testing.T) {
 	ctx := context.Background()
 	mgr := openAlertDB(t)
-	alerts := repository.NewAlertRepository(mgr.DB())
+	alerts := store.NewAlertRepository(mgr.DB())
 	check := testCheck()
 	createAlertFixture(t, alerts, domain.AlertRule{
 		SpaceID:          "space-a",
@@ -175,7 +174,7 @@ func (n *recordingNotifier) Events() []string {
 	return append([]string(nil), n.events...)
 }
 
-func createAlertFixture(t *testing.T, alerts *repository.AlertRepository, rule domain.AlertRule) {
+func createAlertFixture(t *testing.T, alerts *store.AlertRepository, rule domain.AlertRule) {
 	t.Helper()
 	ctx := context.Background()
 	if err := alerts.CreateWebhook(ctx, &domain.WebhookChannel{
@@ -213,9 +212,9 @@ func okResult(check domain.Check) domain.CheckResult {
 	return domain.CheckResult{SpaceID: check.SpaceID, CheckID: check.CheckID, Success: true, Status: domain.CheckStatusOK, CheckedAt: time.Now()}
 }
 
-func openAlertDB(t *testing.T) *monstorage.Manager {
+func openAlertDB(t *testing.T) *store.Manager {
 	t.Helper()
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

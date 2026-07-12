@@ -9,16 +9,15 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/repository"
-	monstorage "github.com/mooyang-code/moox/modules/monitor/internal/storage"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 )
 
 func TestSchedulerRunDueOnce(t *testing.T) {
 	ctx := context.Background()
 	mgr := openSchedulerDB(t)
-	checkRepo := repository.NewCheckRepository(mgr.DB())
-	resultRepo := repository.NewResultRepository(mgr.DB())
+	checkRepo := store.NewCheckRepository(mgr.DB())
+	resultRepo := store.NewResultRepository(mgr.DB())
 	dueAt := time.Now().Add(-time.Second)
 
 	createCheck(t, checkRepo, domain.Check{CheckID: "enabled", Enabled: true, NextCheckAt: &dueAt})
@@ -58,7 +57,7 @@ func TestSchedulerRunDueOnce(t *testing.T) {
 func TestSchedulerConcurrencyCap(t *testing.T) {
 	ctx := context.Background()
 	mgr := openSchedulerDB(t)
-	checkRepo := repository.NewCheckRepository(mgr.DB())
+	checkRepo := store.NewCheckRepository(mgr.DB())
 	dueAt := time.Now().Add(-time.Second)
 	for i := 0; i < 6; i++ {
 		createCheck(t, checkRepo, domain.Check{CheckID: fmt.Sprintf("check-%d", i), Enabled: true, NextCheckAt: &dueAt})
@@ -95,7 +94,7 @@ func TestRunCheckOncePersistsWithoutChangingSchedule(t *testing.T) {
 	mgr := openSchedulerDB(t)
 	next := time.Now().Add(time.Hour)
 	check := domain.Check{SpaceID: "space-a", CheckID: "manual", Kind: domain.CheckKindHTTP, Enabled: true, IntervalSeconds: 60, TimeoutMS: 1000, NextCheckAt: &next}
-	checkRepo := repository.NewCheckRepository(mgr.DB())
+	checkRepo := store.NewCheckRepository(mgr.DB())
 	createCheck(t, checkRepo, check)
 
 	s := New(mgr.DB(), Options{
@@ -111,7 +110,7 @@ func TestRunCheckOncePersistsWithoutChangingSchedule(t *testing.T) {
 	if !result.Success || result.InstanceID != "monitor-a" {
 		t.Fatalf("result = %+v", result)
 	}
-	results, _ := repository.NewResultRepository(mgr.DB()).Recent(ctx, "space-a", "manual", 10)
+	results, _ := store.NewResultRepository(mgr.DB()).Recent(ctx, "space-a", "manual", 10)
 	if len(results) != 1 {
 		t.Fatalf("results len = %d", len(results))
 	}
@@ -140,7 +139,7 @@ func okResult(check domain.Check) domain.CheckResult {
 	}
 }
 
-func createCheck(t *testing.T, repo *repository.CheckRepository, check domain.Check) {
+func createCheck(t *testing.T, repo *store.CheckRepository, check domain.Check) {
 	t.Helper()
 	if check.Name == "" {
 		check.Name = check.CheckID
@@ -174,9 +173,9 @@ func createCheck(t *testing.T, repo *repository.CheckRepository, check domain.Ch
 	}
 }
 
-func openSchedulerDB(t *testing.T) *monstorage.Manager {
+func openSchedulerDB(t *testing.T) *store.Manager {
 	t.Helper()
-	mgr, err := monstorage.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
