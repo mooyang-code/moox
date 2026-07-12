@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/stretchr/testify/assert"

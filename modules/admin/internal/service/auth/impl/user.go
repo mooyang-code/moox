@@ -3,10 +3,11 @@ package impl
 import (
 	"context"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/common/crypto"
+	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	authutils "github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -44,10 +45,12 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 		}, nil
 	}
 
-	// 3. 生成用户ID和密码盐值
-	userID := crypto.GenerateUserID()
-	passwordSalt := crypto.GenerateSalt()
-	passwordHash := crypto.HashPassword(req.Password, passwordSalt)
+	// 3. 生成用户ID和密码哈希
+	userID := uuid.New().String()
+	passwordHash, err := mooxcrypto.HashPassword(req.Password)
+	if err != nil {
+		return &pb.RegisterRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "用户注册失败"}}, nil
+	}
 
 	// 4. 创建用户对象
 	user := &model.User{
@@ -56,7 +59,6 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*p
 		Nickname:     req.Nickname,
 		Email:        req.Email,
 		PasswordHash: passwordHash,
-		Salt:         passwordSalt,
 		Status:       int32(pb.UserStatus_USER_STATUS_ACTIVE), // 默认激活状态
 		Role:         int32(pb.UserRole_USER_ROLE_ADMIN),      // 默认管理员角色
 	}
@@ -158,14 +160,20 @@ func (s *AuthServiceImpl) getUserInfoCaller(ctx context.Context, req *pb.GetUser
 	if s == nil || s.cfg == nil || s.cfg.JWT.SecretKey == "" {
 		return "", "", 0, err
 	}
-	claims, tokenErr := crypto.ValidateAccessToken(req.GetAccessToken(), s.cfg.JWT.SecretKey)
+	claims, tokenErr := mooxcrypto.ParseToken(req.GetAccessToken(), s.cfg.JWT.SecretKey)
 	if tokenErr != nil {
 		return "", "", 0, tokenErr
 	}
-	if claims.UserID == "" {
+	if claims["iss"] != "moox-admin" || claims["token_type"] != "access" {
 		return "", "", 0, err
 	}
-	return claims.UserID, claims.Username, claims.Role, nil
+	claimUserID, ok := claims["user_id"].(string)
+	if !ok || claimUserID == "" {
+		return "", "", 0, err
+	}
+	claimUsername, _ := claims["username"].(string)
+	claimRole, _ := claims["role"].(float64)
+	return claimUserID, claimUsername, int32(claimRole), nil
 }
 
 // UpdateUserInfo 更新用户信息

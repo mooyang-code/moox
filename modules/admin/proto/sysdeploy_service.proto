@@ -4,7 +4,7 @@ package trpc.moox.ops;
 
 import "moox_common.proto";
 
-option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;mooxpb";
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
 // SysDeploy 管理系统服务部署信息。
 // 管理台通过 /api/admin/sysdeploy/{method} 访问；后台/SCF 运行时通过 keepalive payload 获取 active 部署信息。

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"google.golang.org/protobuf/proto"
 )

@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/common/crypto"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	authutils "github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -26,7 +26,10 @@ func (s *AuthServiceImpl) GetChangePasswordSalt(ctx context.Context, req *pb.Get
 	}
 
 	// 生成随机盐值和时间戳
-	salt := crypto.GenerateSalt()
+	salt, err := mooxcrypto.NewSalt()
+	if err != nil {
+		return &pb.GetChangePasswordSaltRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "获取修改密码盐值失败"}}, nil
+	}
 	timestamp := time.Now().Unix()
 
 	// 创建盐值对象
@@ -95,7 +98,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	}
 
 	// 验证旧密码
-	if !crypto.ValidateEncryptedPassword(ctx, user.PasswordHash, user.Salt, req.Salt, req.Timestamp, req.OldPasswordHash) {
+	if !validateEncryptedPassword(ctx, user.PasswordHash, req.Salt, req.Timestamp, req.OldPasswordHash) {
 		return &pb.ChangePasswordRsp{
 			RetInfo: &pb.RetInfo{
 				Code: pb.ErrorCode_NO_AUTH,
@@ -105,7 +108,7 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	}
 
 	// 解密新密码
-	newPassword, err := crypto.DecryptPassword(req.NewPasswordHash, req.Salt, req.Timestamp)
+	newPassword, err := decryptPassword(req.NewPasswordHash, req.Salt, req.Timestamp)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Auth] 解密新密码失败: %v", err)
 		return &pb.ChangePasswordRsp{
@@ -117,11 +120,13 @@ func (s *AuthServiceImpl) ChangePassword(ctx context.Context, req *pb.ChangePass
 	}
 
 	// 生成新密码哈希
-	newSalt := crypto.GenerateSalt()
-	newPasswordHash := crypto.HashPassword(newPassword, newSalt)
+	newPasswordHash, err := mooxcrypto.HashPassword(newPassword)
+	if err != nil {
+		return &pb.ChangePasswordRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "新密码处理失败"}}, nil
+	}
 
 	// 更新密码
-	err = s.userDAO.UpdateUserPassword(ctx, user.UserID, newPasswordHash, newSalt)
+	err = s.userDAO.UpdateUserPassword(ctx, user.UserID, newPasswordHash)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Auth] 更新密码失败: %v", err)
 		return &pb.ChangePasswordRsp{

@@ -79,7 +79,6 @@ CREATE TABLE IF NOT EXISTS t_users (
     c_user_id TEXT NOT NULL,                                   -- 用户UUID (对应代码中的string类型)
     c_username TEXT NOT NULL,                                  -- 用户名
     c_password_hash TEXT NOT NULL,                             -- 密码哈希
-    c_salt TEXT NOT NULL,                                      -- 密码盐值 
     c_nickname TEXT DEFAULT '',                                -- 昵称 
     c_email TEXT DEFAULT '',                                   -- 邮箱 
     c_avatar TEXT DEFAULT '',                                  -- 头像URL 

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package trpc.moox.admin;
 
-option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;mooxpb";
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
 import "moox_common.proto";
 

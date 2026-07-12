@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 // String 返回 TypedValue 的字符串形式，用于文本比较与索引。

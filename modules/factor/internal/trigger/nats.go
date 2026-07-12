@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/proto"
 )

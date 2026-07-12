@@ -3,7 +3,7 @@ package metadata
 import (
 	"context"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 // Reader 定义元数据存储的只读查询接口。

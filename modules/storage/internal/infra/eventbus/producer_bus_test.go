@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"

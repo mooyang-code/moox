@@ -10,7 +10,7 @@ import (
 
 	cpebble "github.com/cockroachdb/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
 )
 

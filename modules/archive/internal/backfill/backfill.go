@@ -9,7 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"trpc.group/trpc-go/trpc-go/client"
 )

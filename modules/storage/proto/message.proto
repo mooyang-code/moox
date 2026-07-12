@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package trpc.moox.storage;
 
-option go_package = "github.com/mooyang-code/moox/modules/storage/proto/gen;storagepb";
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storagegen;storagepb";
 
 import "access.proto";
 

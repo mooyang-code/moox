@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/common/crypto"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
+	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 	"gorm.io/gorm"
 )
 
@@ -18,13 +18,17 @@ func (g *GormStore) CreateAPIKey(ctx context.Context, spaceID string, k *service
 	if g.encryptionKey == "" {
 		return errNoEncryptionKey
 	}
-	encSecret, err := crypto.AESEncrypt(k.APISecret, g.encryptionKey)
+	encKey, err := mooxcrypto.Encrypt(k.APIKey, g.encryptionKey)
+	if err != nil {
+		return err
+	}
+	encSecret, err := mooxcrypto.Encrypt(k.APISecret, g.encryptionKey)
 	if err != nil {
 		return err
 	}
 	encPass := ""
 	if k.Passphrase != "" {
-		encPass, err = crypto.AESEncrypt(k.Passphrase, g.encryptionKey)
+		encPass, err = mooxcrypto.Encrypt(k.Passphrase, g.encryptionKey)
 		if err != nil {
 			return err
 		}
@@ -39,7 +43,7 @@ func (g *GormStore) CreateAPIKey(ctx context.Context, spaceID string, k *service
 		APIKeyID:    k.APIKeyID,
 		AccountID:   k.AccountID,
 		Exchange:    k.Exchange,
-		APIKey:      k.APIKey,
+		APIKey:      encKey,
 		APISecret:   encSecret,
 		Passphrase:  encPass,
 		Permissions: string(permJSON),
@@ -65,6 +69,9 @@ func (g *GormStore) DeleteAPIKey(ctx context.Context, spaceID, apiKeyID string) 
 
 // ListAPIKeys 查询账户的 API 凭证（脱敏：api_key 截断，secret/passphrase 置空）。
 func (g *GormStore) ListAPIKeys(ctx context.Context, spaceID, accountID string) ([]*service.APIKey, error) {
+	if g.encryptionKey == "" {
+		return nil, errNoEncryptionKey
+	}
 	var rows []*service.APIKey
 	if err := g.db.WithContext(ctx).
 		Where("c_space_id = ? AND c_account_id = ? AND "+notDeleted(), spaceID, accountID).
@@ -72,7 +79,11 @@ func (g *GormStore) ListAPIKeys(ctx context.Context, spaceID, accountID string) 
 		return nil, err
 	}
 	for _, k := range rows {
-		k.APIKey = crypto.MaskAPIKey(k.APIKey)
+		apiKey, err := mooxcrypto.Decrypt(k.APIKey, g.encryptionKey)
+		if err != nil {
+			return nil, err
+		}
+		k.APIKey = mooxcrypto.MaskSecret(apiKey, 4, 4)
 		k.APISecret = ""
 		k.Passphrase = ""
 		k.PermissionsRaw = parsePermissions(k.Permissions)
@@ -82,6 +93,9 @@ func (g *GormStore) ListAPIKeys(ctx context.Context, spaceID, accountID string) 
 
 // GetAPIKey 查询单个凭证并解密（供适配层下单使用，返回明文）。
 func (g *GormStore) GetAPIKey(ctx context.Context, spaceID, apiKeyID string) (*service.APIKey, error) {
+	if g.encryptionKey == "" {
+		return nil, errNoEncryptionKey
+	}
 	var k service.APIKey
 	if err := g.db.WithContext(ctx).
 		Where("c_space_id = ? AND c_api_key_id = ? AND "+notDeleted(), spaceID, apiKeyID).
@@ -91,19 +105,22 @@ func (g *GormStore) GetAPIKey(ctx context.Context, spaceID, apiKeyID string) (*s
 		}
 		return nil, err
 	}
-	if g.encryptionKey != "" {
-		secret, err := crypto.AESDecrypt(k.APISecret, g.encryptionKey)
+	apiKey, err := mooxcrypto.Decrypt(k.APIKey, g.encryptionKey)
+	if err != nil {
+		return nil, err
+	}
+	k.APIKey = apiKey
+	secret, err := mooxcrypto.Decrypt(k.APISecret, g.encryptionKey)
+	if err != nil {
+		return nil, err
+	}
+	k.APISecret = secret
+	if k.Passphrase != "" {
+		pass, err := mooxcrypto.Decrypt(k.Passphrase, g.encryptionKey)
 		if err != nil {
 			return nil, err
 		}
-		k.APISecret = secret
-		if k.Passphrase != "" {
-			pass, err := crypto.AESDecrypt(k.Passphrase, g.encryptionKey)
-			if err != nil {
-				return nil, err
-			}
-			k.Passphrase = pass
-		}
+		k.Passphrase = pass
 	}
 	k.PermissionsRaw = parsePermissions(k.Permissions)
 	return &k, nil

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/common/crypto"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	authutils "github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -65,7 +65,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	log.InfoContextf(ctx, "[Auth] user loaded: user_id=%s username=%s", user.UserID, user.Username)
 
 	// 4. 验证密码哈希
-	if !crypto.ValidateEncryptedPassword(ctx, user.PasswordHash, user.Salt, req.Salt, req.Timestamp, req.PasswordHash) {
+	if !validateEncryptedPassword(ctx, user.PasswordHash, req.Salt, req.Timestamp, req.PasswordHash) {
 		s.recordLoginAttempt(ctx, req.Username, req.ClientIp, false)
 		return &pb.LoginRsp{
 			RetInfo: &pb.RetInfo{
@@ -85,13 +85,12 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	s.recordLoginHistory(ctx, user, req, model.LoginResultSuccess, "")
 
 	// 生成API访问令牌
-	accessToken, err := crypto.GenerateAccessToken(
-		user.UserID,
-		user.Username,
-		user.Role,
-		s.cfg.JWT.SecretKey,
-		s.cfg.JWT.AccessExpired,
-	)
+	accessToken, err := mooxcrypto.SignToken(map[string]any{
+		"user_id":    user.UserID,
+		"username":   user.Username,
+		"role":       user.Role,
+		"token_type": "access",
+	}, s.cfg.JWT.SecretKey, "moox-admin", s.cfg.JWT.AccessExpired)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Auth] 生成JWT令牌失败: %v", err)
 		return &pb.LoginRsp{
@@ -144,7 +143,10 @@ func (s *AuthServiceImpl) GetLoginSalt(ctx context.Context, req *pb.GetLoginSalt
 	}
 
 	// 生成新的随机盐值和时间戳
-	salt := crypto.GenerateSalt()
+	salt, err := mooxcrypto.NewSalt()
+	if err != nil {
+		return &pb.GetLoginSaltRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "获取登录盐值失败"}}, nil
+	}
 	timestamp := time.Now().Unix()
 
 	// 创建盐值对象
@@ -193,8 +195,9 @@ func (s *AuthServiceImpl) validateCredentialFormat(username, passwordHash string
 		return fmt.Errorf("密码不能为空")
 	}
 
-	// 密码哈希长度检查（通常SHA256哈希是64个字符）
-	if len(passwordHash) < 32 || len(passwordHash) > 128 {
+	// AES-GCM 密文至少包含 nonce、认证标签和一个明文字节。
+	// 不设置上限，避免把合法的长密码限制在密文编码长度之外。
+	if len(passwordHash) < 32 {
 		return fmt.Errorf("密码格式无效")
 	}
 	return nil

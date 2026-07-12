@@ -15,7 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"strings"
 	"github.com/glebarez/sqlite"
-	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencent-scf"
+	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	cloudnodeschema "github.com/mooyang-code/moox/modules/cloudnode/schema"
 	"gorm.io/gorm"
 )

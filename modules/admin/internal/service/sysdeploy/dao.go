@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/common"
+	"github.com/mooyang-code/moox/modules/admin/internal/softdelete"
 	"gorm.io/gorm"
 )
 
@@ -53,7 +53,7 @@ func (d *DAO) Update(ctx context.Context, serviceName string, item *Deployment) 
 	item.ServiceName = serviceName
 	normalizeDeployment(item)
 	result := d.db.WithContext(ctx).Model(&Deployment{}).
-		Where("c_service_name = ? AND c_is_deleted = ?", serviceName, common.IsDeletedFalse).
+		Where("c_service_name = ? AND c_is_deleted = ?", serviceName, softdelete.IsDeletedFalse).
 		Updates(map[string]interface{}{
 			"c_service_kind": item.ServiceKind,
 			"c_protocol":     item.Protocol,
@@ -83,9 +83,9 @@ func (d *DAO) Delete(ctx context.Context, serviceName string) error {
 		return fmt.Errorf("service_name is required")
 	}
 	result := d.db.WithContext(ctx).Model(&Deployment{}).
-		Where("c_service_name = ? AND c_is_deleted = ?", serviceName, common.IsDeletedFalse).
+		Where("c_service_name = ? AND c_is_deleted = ?", serviceName, softdelete.IsDeletedFalse).
 		Updates(map[string]interface{}{
-			"c_is_deleted": common.IsDeletedTrue,
+			"c_is_deleted": softdelete.IsDeletedTrue,
 			"c_mtime":      time.Now(),
 		})
 	if result.Error != nil {
@@ -103,7 +103,7 @@ func (d *DAO) Get(ctx context.Context, serviceName string) (*Deployment, error) 
 		return nil, fmt.Errorf("service_name is required")
 	}
 	var row Deployment
-	err := d.db.WithContext(ctx).Where("c_service_name = ? AND c_is_deleted = ?", serviceName, common.IsDeletedFalse).First(&row).Error
+	err := d.db.WithContext(ctx).Where("c_service_name = ? AND c_is_deleted = ?", serviceName, softdelete.IsDeletedFalse).First(&row).Error
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (d *DAO) Get(ctx context.Context, serviceName string) (*Deployment, error) 
 }
 
 func (d *DAO) List(ctx context.Context, filter ListFilter, offset int, limit int) ([]Deployment, int64, error) {
-	query := d.db.WithContext(ctx).Model(&Deployment{}).Where("c_is_deleted = ?", common.IsDeletedFalse)
+	query := d.db.WithContext(ctx).Model(&Deployment{}).Where("c_is_deleted = ?", softdelete.IsDeletedFalse)
 	if filter.ServiceName != "" {
 		query = query.Where("c_service_name LIKE ?", "%"+filter.ServiceName+"%")
 	}
@@ -138,7 +138,7 @@ func (d *DAO) List(ctx context.Context, filter ListFilter, offset int, limit int
 func (d *DAO) ListActive(ctx context.Context) ([]Deployment, error) {
 	var rows []Deployment
 	err := d.db.WithContext(ctx).
-		Where("c_is_deleted = ? AND c_status = ?", common.IsDeletedFalse, "active").
+		Where("c_is_deleted = ? AND c_status = ?", softdelete.IsDeletedFalse, "active").
 		Order("c_scope DESC, c_service_kind ASC, c_service_name ASC").
 		Find(&rows).Error
 	return rows, err
@@ -175,15 +175,15 @@ func (d *DAO) retireLegacyAdminMonitor(ctx context.Context) error {
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		const where = "c_service_name = ? AND c_service_kind = ? AND c_gateway_path = ? AND c_port = ?"
 		args := []interface{}{"monitor", "admin_rpc", "trpc.moox.ops.Monitor", 11103}
-		if err := tx.Where(where, args...).Where("c_is_deleted = ?", common.IsDeletedTrue).Delete(&Deployment{}).Error; err != nil {
+		if err := tx.Where(where, args...).Where("c_is_deleted = ?", softdelete.IsDeletedTrue).Delete(&Deployment{}).Error; err != nil {
 			return err
 		}
 		return tx.Model(&Deployment{}).
 			Where(where, args...).
-			Where("c_is_deleted = ?", common.IsDeletedFalse).
+			Where("c_is_deleted = ?", softdelete.IsDeletedFalse).
 			Updates(map[string]interface{}{
 				"c_status":     "retired",
-				"c_is_deleted": common.IsDeletedTrue,
+				"c_is_deleted": softdelete.IsDeletedTrue,
 				"c_mtime":      time.Now(),
 			}).Error
 	})
@@ -199,7 +199,7 @@ func (d *DAO) backfillDefaultExtraConfig(ctx context.Context, item *Deployment) 
 		return nil
 	}
 	return d.db.WithContext(ctx).Model(&Deployment{}).
-		Where("c_service_name = ? AND c_is_deleted = ?", item.ServiceName, common.IsDeletedFalse).
+		Where("c_service_name = ? AND c_is_deleted = ?", item.ServiceName, softdelete.IsDeletedFalse).
 		Updates(map[string]interface{}{
 			"c_extra_config": next,
 			"c_mtime":        time.Now(),
@@ -250,7 +250,7 @@ func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 func (d *DAO) exists(ctx context.Context, serviceName string) (bool, error) {
 	var count int64
 	err := d.db.WithContext(ctx).Model(&Deployment{}).
-		Where("c_service_name = ? AND c_is_deleted = ?", serviceName, common.IsDeletedFalse).
+		Where("c_service_name = ? AND c_is_deleted = ?", serviceName, softdelete.IsDeletedFalse).
 		Count(&count).Error
 	return count > 0, err
 }

@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/common/crypto"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/filter"
@@ -128,7 +128,13 @@ func getAccessTokenFromRequest(ctx context.Context, header *thttp.Header, req in
 }
 
 // validateAccessToken 验证访问令牌并返回用户信息
-func validateAccessToken(ctx context.Context, accessToken string) (*crypto.UnifiedClaims, bool) {
+type accessClaims struct {
+	UserID   string
+	Username string
+	Role     int32
+}
+
+func validateAccessToken(ctx context.Context, accessToken string) (*accessClaims, bool) {
 	// 获取JWT密钥（带缓存）
 	secretKey := getJWTSecretKey()
 	if secretKey == "" {
@@ -137,13 +143,21 @@ func validateAccessToken(ctx context.Context, accessToken string) (*crypto.Unifi
 	}
 
 	// 验证API访问令牌
-	claims, err := crypto.ValidateAccessToken(accessToken, secretKey)
+	claims, err := mooxcrypto.ParseToken(accessToken, secretKey)
 	if err != nil {
 		log.ErrorContextf(ctx, "JWT令牌验证失败: %v", err)
 		return nil, false
 	}
-
-	return claims, true
+	if claims["iss"] != "moox-admin" || claims["token_type"] != "access" {
+		return nil, false
+	}
+	userID, ok := claims["user_id"].(string)
+	if !ok || userID == "" {
+		return nil, false
+	}
+	username, _ := claims["username"].(string)
+	role, _ := claims["role"].(float64)
+	return &accessClaims{UserID: userID, Username: username, Role: int32(role)}, true
 }
 
 // createAuthFailResponse 创建鉴权失败响应

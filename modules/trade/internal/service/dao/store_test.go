@@ -39,6 +39,10 @@ func TestAPIKeyCRUD_ShouldPersist(t *testing.T) {
 	}))
 	key := &service.APIKey{APIKeyID: "key_1", AccountID: "acc_1", Exchange: "binance", APIKey: "k", APISecret: "secret", Status: 1}
 	require.NoError(t, store.CreateAPIKey(ctx, "crypto", key))
+	var stored service.APIKey
+	require.NoError(t, store.db.Where("c_api_key_id = ?", "key_1").First(&stored).Error)
+	assert.NotEqual(t, key.APIKey, stored.APIKey)
+	assert.NotEqual(t, key.APISecret, stored.APISecret)
 	got, err := store.GetAPIKey(ctx, "crypto", "key_1")
 	require.NoError(t, err)
 	assert.Equal(t, "binance", got.Exchange)

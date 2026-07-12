@@ -3,8 +3,8 @@ package pebble
 import (
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/factkey"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 const (

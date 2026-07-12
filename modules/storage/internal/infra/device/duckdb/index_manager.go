@@ -15,7 +15,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	deviceinfra "github.com/mooyang-code/moox/modules/storage/internal/infra/device"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 const indexTableName = "view_rows"

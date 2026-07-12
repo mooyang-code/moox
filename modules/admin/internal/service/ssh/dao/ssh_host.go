@@ -3,8 +3,9 @@ package dao
 import (
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/common/crypto"
+	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
+	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -106,23 +107,25 @@ func (d *SSHHostDAO) Search(keyword string, offset, limit int) ([]model.SSHHost,
 
 // encryptSensitiveFields 加密敏感字段
 func (d *SSHHostDAO) encryptSensitiveFields(host *model.SSHHost) error {
-	key := crypto.GetEncryptionKey()
-	var err error
+	key, err := adminsecurity.GetEncryptionKey()
+	if err != nil {
+		return err
+	}
 
 	if host.Password != "" {
-		host.Password, err = crypto.AESEncrypt(host.Password, key)
+		host.Password, err = mooxcrypto.Encrypt(host.Password, key)
 		if err != nil {
 			return err
 		}
 	}
 	if host.CertData != "" {
-		host.CertData, err = crypto.AESEncrypt(host.CertData, key)
+		host.CertData, err = mooxcrypto.Encrypt(host.CertData, key)
 		if err != nil {
 			return err
 		}
 	}
 	if host.CertPwd != "" {
-		host.CertPwd, err = crypto.AESEncrypt(host.CertPwd, key)
+		host.CertPwd, err = mooxcrypto.Encrypt(host.CertPwd, key)
 		if err != nil {
 			return err
 		}
@@ -132,23 +135,25 @@ func (d *SSHHostDAO) encryptSensitiveFields(host *model.SSHHost) error {
 
 // decryptSensitiveFields 解密敏感字段
 func (d *SSHHostDAO) decryptSensitiveFields(host *model.SSHHost) error {
-	key := crypto.GetEncryptionKey()
-	var err error
+	key, err := adminsecurity.GetEncryptionKey()
+	if err != nil {
+		return err
+	}
 
 	if host.Password != "" {
-		host.Password, err = crypto.AESDecrypt(host.Password, key)
+		host.Password, err = mooxcrypto.Decrypt(host.Password, key)
 		if err != nil {
 			return err
 		}
 	}
 	if host.CertData != "" {
-		host.CertData, err = crypto.AESDecrypt(host.CertData, key)
+		host.CertData, err = mooxcrypto.Decrypt(host.CertData, key)
 		if err != nil {
 			return err
 		}
 	}
 	if host.CertPwd != "" {
-		host.CertPwd, err = crypto.AESDecrypt(host.CertPwd, key)
+		host.CertPwd, err = mooxcrypto.Decrypt(host.CertPwd, key)
 		if err != nil {
 			return err
 		}

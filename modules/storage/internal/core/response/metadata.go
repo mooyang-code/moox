@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 // MetadataStoreCode maps metadata store errors to RPC error codes.

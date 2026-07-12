@@ -13,7 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
-	mooxpb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
@@ -39,36 +39,36 @@ func userID(ctx context.Context) string {
 
 // ===== RetInfo / Page =====
 
-func retInfo(code mooxpb.ErrorCode, msg string) *mooxpb.RetInfo {
-	return &mooxpb.RetInfo{Code: code, Msg: msg}
+func retInfo(code tradepb.ErrorCode, msg string) *tradepb.RetInfo {
+	return &tradepb.RetInfo{Code: code, Msg: msg}
 }
 
 // errToRetInfo 把 service 错误映射为 ErrorCode。
-func errToRetInfo(err error) *mooxpb.RetInfo {
+func errToRetInfo(err error) *tradepb.RetInfo {
 	if err == nil {
-		return retInfo(mooxpb.ErrorCode_SUCCESS, "")
+		return retInfo(tradepb.ErrorCode_SUCCESS, "")
 	}
 	switch err {
 	case service.ErrInvalidParam:
-		return retInfo(mooxpb.ErrorCode_INVALID_PARAM, err.Error())
+		return retInfo(tradepb.ErrorCode_INVALID_PARAM, err.Error())
 	case service.ErrNotFound:
-		return retInfo(mooxpb.ErrorCode_NOT_FOUND, err.Error())
+		return retInfo(tradepb.ErrorCode_NOT_FOUND, err.Error())
 	case service.ErrConflict, service.ErrInsufficient:
-		return retInfo(mooxpb.ErrorCode_INVALID_PARAM, err.Error())
+		return retInfo(tradepb.ErrorCode_INVALID_PARAM, err.Error())
 	default:
-		return retInfo(mooxpb.ErrorCode_INNER_ERR, err.Error())
+		return retInfo(tradepb.ErrorCode_INNER_ERR, err.Error())
 	}
 }
 
-func pageFromPB(p *mooxpb.Page) service.Page {
+func pageFromPB(p *tradepb.Page) service.Page {
 	if p == nil {
 		return service.Page{}
 	}
 	return service.Page{PageNo: int(p.GetPage()), PageSize: int(p.GetSize())}
 }
 
-func pageResult(page service.Page, total int) *mooxpb.PageResult {
-	return &mooxpb.PageResult{
+func pageResult(page service.Page, total int) *tradepb.PageResult {
+	return &tradepb.PageResult{
 		Page:    uint32(page.PageNo),
 		Size:    uint32(page.PageSize),
 		Total:   uint32(total),
@@ -86,108 +86,108 @@ func unixOrZero(t time.Time) int64 {
 
 // ===== 枚举映射 =====
 
-func accountTypeToDomain(t mooxpb.AccountType) service.AccountType {
+func accountTypeToDomain(t tradepb.AccountType) service.AccountType {
 	switch t {
-	case mooxpb.AccountType_ACCOUNT_TYPE_MARGIN:
+	case tradepb.AccountType_ACCOUNT_TYPE_MARGIN:
 		return service.AccountMargin
-	case mooxpb.AccountType_ACCOUNT_TYPE_SWAP:
+	case tradepb.AccountType_ACCOUNT_TYPE_SWAP:
 		return service.AccountSwap
-	case mooxpb.AccountType_ACCOUNT_TYPE_SIM:
+	case tradepb.AccountType_ACCOUNT_TYPE_SIM:
 		return service.AccountSim
 	default:
 		return service.AccountSpot
 	}
 }
 
-func accountTypeToPB(t service.AccountType) mooxpb.AccountType {
+func accountTypeToPB(t service.AccountType) tradepb.AccountType {
 	switch t {
 	case service.AccountMargin:
-		return mooxpb.AccountType_ACCOUNT_TYPE_MARGIN
+		return tradepb.AccountType_ACCOUNT_TYPE_MARGIN
 	case service.AccountSwap:
-		return mooxpb.AccountType_ACCOUNT_TYPE_SWAP
+		return tradepb.AccountType_ACCOUNT_TYPE_SWAP
 	case service.AccountSim:
-		return mooxpb.AccountType_ACCOUNT_TYPE_SIM
+		return tradepb.AccountType_ACCOUNT_TYPE_SIM
 	default:
-		return mooxpb.AccountType_ACCOUNT_TYPE_SPOT
+		return tradepb.AccountType_ACCOUNT_TYPE_SPOT
 	}
 }
 
-func accountStatusToPB(s service.AccountStatus) mooxpb.AccountStatus {
+func accountStatusToPB(s service.AccountStatus) tradepb.AccountStatus {
 	switch s {
 	case service.AccountDisabled:
-		return mooxpb.AccountStatus_ACCOUNT_STATUS_DISABLED
+		return tradepb.AccountStatus_ACCOUNT_STATUS_DISABLED
 	case service.AccountFrozen:
-		return mooxpb.AccountStatus_ACCOUNT_STATUS_FROZEN
+		return tradepb.AccountStatus_ACCOUNT_STATUS_FROZEN
 	case service.AccountReadonly:
-		return mooxpb.AccountStatus_ACCOUNT_STATUS_READONLY
+		return tradepb.AccountStatus_ACCOUNT_STATUS_READONLY
 	default:
-		return mooxpb.AccountStatus_ACCOUNT_STATUS_NORMAL
+		return tradepb.AccountStatus_ACCOUNT_STATUS_NORMAL
 	}
 }
 
-func marketTypeToDomain(m mooxpb.MarketType) string {
+func marketTypeToDomain(m tradepb.MarketType) string {
 	switch m {
-	case mooxpb.MarketType_MARKET_TYPE_MARGIN:
+	case tradepb.MarketType_MARKET_TYPE_MARGIN:
 		return "margin"
-	case mooxpb.MarketType_MARKET_TYPE_SWAP:
+	case tradepb.MarketType_MARKET_TYPE_SWAP:
 		return "swap"
-	case mooxpb.MarketType_MARKET_TYPE_FUTURES:
+	case tradepb.MarketType_MARKET_TYPE_FUTURES:
 		return "futures"
 	default:
 		return "spot"
 	}
 }
 
-func marketTypeToPB(s string) mooxpb.MarketType {
+func marketTypeToPB(s string) tradepb.MarketType {
 	switch s {
 	case "margin":
-		return mooxpb.MarketType_MARKET_TYPE_MARGIN
+		return tradepb.MarketType_MARKET_TYPE_MARGIN
 	case "swap":
-		return mooxpb.MarketType_MARKET_TYPE_SWAP
+		return tradepb.MarketType_MARKET_TYPE_SWAP
 	case "futures":
-		return mooxpb.MarketType_MARKET_TYPE_FUTURES
+		return tradepb.MarketType_MARKET_TYPE_FUTURES
 	default:
-		return mooxpb.MarketType_MARKET_TYPE_SPOT
+		return tradepb.MarketType_MARKET_TYPE_SPOT
 	}
 }
 
-func orderSideToDomain(s mooxpb.OrderSide) string {
-	if s == mooxpb.OrderSide_ORDER_SIDE_SELL {
+func orderSideToDomain(s tradepb.OrderSide) string {
+	if s == tradepb.OrderSide_ORDER_SIDE_SELL {
 		return "sell"
 	}
 	return "buy"
 }
 
-func orderTypeToDomain(t mooxpb.OrderType) string {
+func orderTypeToDomain(t tradepb.OrderType) string {
 	switch t {
-	case mooxpb.OrderType_ORDER_TYPE_MARKET:
+	case tradepb.OrderType_ORDER_TYPE_MARKET:
 		return "market"
-	case mooxpb.OrderType_ORDER_TYPE_STOP:
+	case tradepb.OrderType_ORDER_TYPE_STOP:
 		return "stop"
-	case mooxpb.OrderType_ORDER_TYPE_STOP_LIMIT:
+	case tradepb.OrderType_ORDER_TYPE_STOP_LIMIT:
 		return "stop_limit"
-	case mooxpb.OrderType_ORDER_TYPE_POST_ONLY:
+	case tradepb.OrderType_ORDER_TYPE_POST_ONLY:
 		return "post_only"
-	case mooxpb.OrderType_ORDER_TYPE_IOC:
+	case tradepb.OrderType_ORDER_TYPE_IOC:
 		return "ioc"
-	case mooxpb.OrderType_ORDER_TYPE_FOK:
+	case tradepb.OrderType_ORDER_TYPE_FOK:
 		return "fok"
 	default:
 		return "limit"
 	}
 }
 
-func orderStatusToPB(s int) mooxpb.OrderStatus { return mooxpb.OrderStatus(s) }
+func orderStatusToPB(s int) tradepb.OrderStatus { return tradepb.OrderStatus(s) }
 
-func channelStatusToPB(s int) mooxpb.ChannelStatus { return mooxpb.ChannelStatus(s) }
+func channelStatusToPB(s int) tradepb.ChannelStatus { return tradepb.ChannelStatus(s) }
 
 // ===== 模型 -> PB =====
 
-func accountToPB(a *service.Account) *mooxpb.Account {
+func accountToPB(a *service.Account) *tradepb.Account {
 	if a == nil {
 		return nil
 	}
-	return &mooxpb.Account{
+	return &tradepb.Account{
 		AccountId:    a.AccountID,
 		UserId:       a.UserID,
 		AccountName:  a.AccountName,
@@ -202,11 +202,11 @@ func accountToPB(a *service.Account) *mooxpb.Account {
 	}
 }
 
-func balanceToPB(b *service.Balance) *mooxpb.Balance {
+func balanceToPB(b *service.Balance) *tradepb.Balance {
 	if b == nil {
 		return nil
 	}
-	return &mooxpb.Balance{
+	return &tradepb.Balance{
 		AccountId: b.AccountID,
 		Currency:  b.Currency,
 		Available: b.Available,
@@ -215,11 +215,11 @@ func balanceToPB(b *service.Balance) *mooxpb.Balance {
 	}
 }
 
-func fundFlowToPB(f *service.FundFlow) *mooxpb.FundFlow {
+func fundFlowToPB(f *service.FundFlow) *tradepb.FundFlow {
 	if f == nil {
 		return nil
 	}
-	return &mooxpb.FundFlow{
+	return &tradepb.FundFlow{
 		FlowId:       f.FlowID,
 		AccountId:    f.AccountID,
 		Currency:     f.Currency,
@@ -234,11 +234,11 @@ func fundFlowToPB(f *service.FundFlow) *mooxpb.FundFlow {
 	}
 }
 
-func apiKeyToPB(k *service.APIKey) *mooxpb.ApiKey {
+func apiKeyToPB(k *service.APIKey) *tradepb.ApiKey {
 	if k == nil {
 		return nil
 	}
-	return &mooxpb.ApiKey{
+	return &tradepb.ApiKey{
 		ApiKeyId:    k.APIKeyID,
 		AccountId:   k.AccountID,
 		Exchange:    k.Exchange,
@@ -249,11 +249,11 @@ func apiKeyToPB(k *service.APIKey) *mooxpb.ApiKey {
 	}
 }
 
-func channelToPB(c *service.TradeChannel) *mooxpb.TradeChannel {
+func channelToPB(c *service.TradeChannel) *tradepb.TradeChannel {
 	if c == nil {
 		return nil
 	}
-	return &mooxpb.TradeChannel{
+	return &tradepb.TradeChannel{
 		ChannelId:     c.ChannelID,
 		ChannelName:   c.ChannelName,
 		Exchange:      c.Exchange,
@@ -270,8 +270,8 @@ func channelToPB(c *service.TradeChannel) *mooxpb.TradeChannel {
 	}
 }
 
-func instrumentToPB(ins exchange.Instrument) *mooxpb.Instrument {
-	return &mooxpb.Instrument{
+func instrumentToPB(ins exchange.Instrument) *tradepb.Instrument {
+	return &tradepb.Instrument{
 		Symbol:      ins.Symbol,
 		MarketType:  marketTypeToPB(string(ins.Market)),
 		BaseCcy:     ins.BaseCcy,
@@ -285,8 +285,8 @@ func instrumentToPB(ins exchange.Instrument) *mooxpb.Instrument {
 	}
 }
 
-func dustTransferItemToPB(item exchange.DustTransferItem) *mooxpb.DustTransferItem {
-	return &mooxpb.DustTransferItem{
+func dustTransferItemToPB(item exchange.DustTransferItem) *tradepb.DustTransferItem {
+	return &tradepb.DustTransferItem{
 		Asset:               item.Asset,
 		Amount:              item.Amount,
 		OperateTime:         item.OperateTime,
@@ -296,18 +296,18 @@ func dustTransferItemToPB(item exchange.DustTransferItem) *mooxpb.DustTransferIt
 	}
 }
 
-func dustTransferSkippedItemToPB(item exchange.DustTransferSkippedItem) *mooxpb.DustTransferSkippedItem {
-	return &mooxpb.DustTransferSkippedItem{
+func dustTransferSkippedItemToPB(item exchange.DustTransferSkippedItem) *tradepb.DustTransferSkippedItem {
+	return &tradepb.DustTransferSkippedItem{
 		Asset:  item.Asset,
 		Reason: item.Reason,
 	}
 }
 
-func orderToPB(o *service.Order) *mooxpb.Order {
+func orderToPB(o *service.Order) *tradepb.Order {
 	if o == nil {
 		return nil
 	}
-	return &mooxpb.Order{
+	return &tradepb.Order{
 		OrderId:         o.OrderID,
 		ClientOrderId:   o.ClientOrderID,
 		ExchangeOrderId: o.ExchangeOrderID,
@@ -316,9 +316,9 @@ func orderToPB(o *service.Order) *mooxpb.Order {
 		Exchange:        o.Exchange,
 		Symbol:          o.Symbol,
 		MarketType:      marketTypeToPB(o.MarketType),
-		Side:            mooxpb.OrderSide(orderSidePB(o.Side)),
+		Side:            tradepb.OrderSide(orderSidePB(o.Side)),
 		PosSide:         o.PosSide,
-		OrderType:       mooxpb.OrderType(orderTypePB(o.OrderType)),
+		OrderType:       tradepb.OrderType(orderTypePB(o.OrderType)),
 		TimeInForce:     o.TimeInForce,
 		Price:           o.Price,
 		Quantity:        o.Quantity,
@@ -343,35 +343,35 @@ func orderToPB(o *service.Order) *mooxpb.Order {
 
 func orderSidePB(s string) int32 {
 	if s == "sell" {
-		return int32(mooxpb.OrderSide_ORDER_SIDE_SELL)
+		return int32(tradepb.OrderSide_ORDER_SIDE_SELL)
 	}
-	return int32(mooxpb.OrderSide_ORDER_SIDE_BUY)
+	return int32(tradepb.OrderSide_ORDER_SIDE_BUY)
 }
 
 func orderTypePB(s string) int32 {
 	switch s {
 	case "market":
-		return int32(mooxpb.OrderType_ORDER_TYPE_MARKET)
+		return int32(tradepb.OrderType_ORDER_TYPE_MARKET)
 	case "stop":
-		return int32(mooxpb.OrderType_ORDER_TYPE_STOP)
+		return int32(tradepb.OrderType_ORDER_TYPE_STOP)
 	case "stop_limit":
-		return int32(mooxpb.OrderType_ORDER_TYPE_STOP_LIMIT)
+		return int32(tradepb.OrderType_ORDER_TYPE_STOP_LIMIT)
 	case "post_only":
-		return int32(mooxpb.OrderType_ORDER_TYPE_POST_ONLY)
+		return int32(tradepb.OrderType_ORDER_TYPE_POST_ONLY)
 	case "ioc":
-		return int32(mooxpb.OrderType_ORDER_TYPE_IOC)
+		return int32(tradepb.OrderType_ORDER_TYPE_IOC)
 	case "fok":
-		return int32(mooxpb.OrderType_ORDER_TYPE_FOK)
+		return int32(tradepb.OrderType_ORDER_TYPE_FOK)
 	default:
-		return int32(mooxpb.OrderType_ORDER_TYPE_LIMIT)
+		return int32(tradepb.OrderType_ORDER_TYPE_LIMIT)
 	}
 }
 
-func tradeToPB(t *service.Trade) *mooxpb.Trade {
+func tradeToPB(t *service.Trade) *tradepb.Trade {
 	if t == nil {
 		return nil
 	}
-	return &mooxpb.Trade{
+	return &tradepb.Trade{
 		TradeId:         t.TradeID,
 		ExchangeTradeId: t.ExchangeTradeID,
 		OrderId:         t.OrderID,
@@ -380,7 +380,7 @@ func tradeToPB(t *service.Trade) *mooxpb.Trade {
 		ChannelId:       t.ChannelID,
 		Exchange:        t.Exchange,
 		Symbol:          t.Symbol,
-		Side:            mooxpb.OrderSide(orderSidePB(t.Side)),
+		Side:            tradepb.OrderSide(orderSidePB(t.Side)),
 		Price:           t.Price,
 		Quantity:        t.Quantity,
 		Amount:          t.Amount,
@@ -391,11 +391,11 @@ func tradeToPB(t *service.Trade) *mooxpb.Trade {
 	}
 }
 
-func positionToPB(p *service.Position) *mooxpb.Position {
+func positionToPB(p *service.Position) *tradepb.Position {
 	if p == nil {
 		return nil
 	}
-	return &mooxpb.Position{
+	return &tradepb.Position{
 		PositionId:    p.PositionID,
 		AccountId:     p.AccountID,
 		ChannelId:     p.ChannelID,

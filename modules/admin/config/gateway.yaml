@@ -7,9 +7,8 @@ cache:
 
 # JWT配置（认证服务使用）
 jwt:
-  # JWT 密钥。生产环境请直接修改为强随机值（>=32 字节）。
-  # 以下为开发占位符，请勿用于生产；更换密钥后已签发的 token 将失效，需重新登录。
-  secret_key: "dev-only-change-me"
+  # JWT 密钥由 MOOX_ADMIN_JWT_SECRET_KEY 注入，至少 32 个字符。
+  secret_key: ""
   access_expired: "24h"       # 访问令牌过期时间
 
 # 安全配置（认证服务使用）

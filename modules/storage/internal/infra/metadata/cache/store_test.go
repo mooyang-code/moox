@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

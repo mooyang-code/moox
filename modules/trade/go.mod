@@ -29,6 +29,12 @@ require (
 )
 
 require (
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+)
+
+require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -54,6 +60,8 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/crypto v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/jwt/v2 v2.7.4 // indirect
 	github.com/nats-io/nkeys v0.4.11 // indirect
@@ -66,8 +74,8 @@ require (
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/smartystreets/goconvey v1.7.2 // indirect
 	github.com/spf13/cast v1.3.1 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/tencent/goom v1.0.6 // indirect
+	github.com/stretchr/testify v1.11.1
+	github.com/tencent/goom v1.0.6
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.43.0 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
@@ -100,3 +108,7 @@ replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstr
 replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
+
+replace github.com/mooyang-code/moox/packages/crypto => ../../packages/crypto
+
+replace github.com/mooyang-code/moox/packages/report => ../../packages/report

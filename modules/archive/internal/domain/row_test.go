@@ -1,7 +1,7 @@
 package domain
 
 import (
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"strings"

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"trpc.group/trpc-go/trpc-go/client"
 )

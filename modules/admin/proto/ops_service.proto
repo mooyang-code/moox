@@ -4,7 +4,7 @@ package trpc.moox.ops;
 
 import "moox_common.proto";
 
-option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;mooxpb";
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
 // Ops 域合并 SSH 管理（Ssh）与监控（Monitor）。
 // 纯 RPC 服务，由统一 HTTP 转发层（/api/admin/ssh/{method}、/api/admin/monitor/{method}）调度。

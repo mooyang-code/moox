@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 func TestDebouncerDropsNonBoundAndResultDatasets(t *testing.T) {

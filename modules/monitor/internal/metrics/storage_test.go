@@ -3,7 +3,7 @@ package metrics
 import (
 	"context"
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

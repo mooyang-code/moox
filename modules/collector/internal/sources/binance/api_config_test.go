@@ -6,7 +6,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/model/common"
-	exchange "github.com/mooyang-code/moox/modules/collector/internal/sources/exchangetypes"
+	exchange "github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -3,7 +3,7 @@ package viewindex
 import (
 	"testing"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 func TestViewIndexIDAlternatesBetweenSlots(t *testing.T) {

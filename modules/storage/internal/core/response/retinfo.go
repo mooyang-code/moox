@@ -1,6 +1,6 @@
 package response
 
-import pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+import pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 
 func Success(msg string) *pb.RetInfo {
 	if msg == "" {

@@ -12,8 +12,8 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchangetypes"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 

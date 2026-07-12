@@ -2,13 +2,13 @@ module github.com/mooyang-code/moox/modules/cli
 
 go 1.24.0
 
-replace github.com/mooyang-code/moox/modules/storage/proto/gen => ../storage/proto/gen
+replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../storage/proto/storagegen
 
 replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/proto/admingen
 
 require (
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/modules/storage/proto/gen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/spf13/cobra v1.9.1
 	golang.org/x/term v0.38.0
 	google.golang.org/protobuf v1.36.11

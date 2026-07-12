@@ -15,7 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/client"

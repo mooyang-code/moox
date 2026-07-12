@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	admincrypto "github.com/mooyang-code/moox/modules/admin/internal/common/crypto"
 	authconfig "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
+	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -29,12 +29,12 @@ func newAuthServiceForPasswordTest(t *testing.T) (*AuthServiceImpl, *model.User)
 	t.Cleanup(func() { _ = cache.Close() })
 
 	password := "old-pass"
-	userSalt := admincrypto.GenerateSalt()
+	passwordHash, err := mooxcrypto.HashPassword(password)
+	require.NoError(t, err)
 	user := &model.User{
 		UserID:       "user-pwd-1",
 		Username:     "alice",
-		PasswordHash: admincrypto.HashPassword(password, userSalt),
-		Salt:         userSalt,
+		PasswordHash: passwordHash,
 		Role:         int32(pb.UserRole_USER_ROLE_ADMIN),
 		Status:       int32(pb.UserStatus_USER_STATUS_ACTIVE),
 		CreatedAt:    time.Now(),

@@ -10,7 +10,6 @@ type User struct {
 	UserID             string     `gorm:"column:c_user_id;uniqueIndex;not null" json:"user_id"`
 	Username           string     `gorm:"column:c_username;uniqueIndex;not null" json:"username"`
 	PasswordHash       string     `gorm:"column:c_password_hash;not null" json:"-"`
-	Salt               string     `gorm:"column:c_salt;not null" json:"-"`
 	Nickname           string     `gorm:"column:c_nickname;default:''" json:"nickname"`
 	Email              string     `gorm:"column:c_email;uniqueIndex;default:''" json:"email"`
 	Avatar             string     `gorm:"column:c_avatar;default:''" json:"avatar"`

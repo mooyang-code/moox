@@ -1,8 +1,9 @@
 /**
- * 安全加密工具模块
- * 优先使用 Web Crypto API，HTTP 环境下降级为 node-forge
+ * 安全加密工具模块。
+ *
+ * 密码传输统一使用 Web Crypto AES-256-GCM。后端使用相同的
+ * SHA-256(salt + timestamp) 密钥派生和 nonce + ciphertext + tag 布局。
  */
-import forge from 'node-forge';
 import { gatewayURL } from '@/api/gateway';
 import { getAppInfo } from '@/api/storage/auth';
 
@@ -41,9 +42,14 @@ export function generateDeviceId(): string {
    * 检查 Web Crypto API 是否可用
    */
   function isWebCryptoAvailable(): boolean {
-    return typeof crypto !== 'undefined' && 
-           typeof crypto.subtle !== 'undefined' && 
-           typeof crypto.getRandomValues !== 'undefined';
+    if (typeof crypto === 'undefined' || typeof crypto.subtle === 'undefined' || typeof crypto.getRandomValues === 'undefined') {
+      return false;
+    }
+    if (typeof window === 'undefined') {
+      return true;
+    }
+    const localDevelopmentHost = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
+    return window.isSecureContext || localDevelopmentHost;
   }
 
   /**
@@ -77,90 +83,19 @@ export function generateDeviceId(): string {
   }
   
 
-  /**
-   * node-forge 降级加密实现（真正的 AES-GCM）
-   */
-  function encryptPasswordWithForge(password: string, salt: string, timestamp: number): string {
-    try {
-      // 1. 密钥派生：与 Go 后端完全一致
-      const keyMaterial = salt + timestamp.toString();
-      
-      // 2. SHA256 生成 32 字节密钥
-      const md = forge.md.sha256.create();
-      md.update(keyMaterial);
-      const keyBytes = md.digest().getBytes();
-      
-      // 3. 生成 12 字节随机 IV（GCM 标准）
-      const iv = forge.random.getBytesSync(12);
-      
-      // 4. 创建 AES-GCM 加密器
-      const cipher = forge.cipher.createCipher('AES-GCM', keyBytes);
-      cipher.start({
-        iv: iv,
-        tagLength: 128 // 16 字节认证标签
-      });
-      
-      // 5. 加密数据
-      cipher.update(forge.util.createBuffer(password));
-      cipher.finish();
-      
-      const encrypted = cipher.output.getBytes();
-      const tag = cipher.mode.tag.getBytes();
-      
-      // 6. 按照 Go AES-GCM 格式组合：iv + ciphertext + tag
-      const combined = iv + encrypted + tag;
-      
-      // 7. Base64 编码
-      const result = forge.util.encode64(combined);
-      
-      return result;
-      
-    } catch (error) {
-      console.error('❌ node-forge 加密失败:', error);
-      throw new Error('AES-GCM 加密失败: ' + error);
-    }
-  }
-
-  /**
-   * 使用 AES-GCM 加密密码（与后端协议一致）。
-   */
   export async function encryptPassword(password: string, salt: string, timestamp: number): Promise<string> {
     try {
-      if (isWebCryptoAvailable()) {
-        // 使用 Web Crypto API
-        const key = await deriveEncryptionKey(salt, timestamp);
-        const encoder = new TextEncoder();
-        const data = encoder.encode(password);
-        
-        // 生成随机 IV（12字节用于 GCM）
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        
-        // 使用 AES-GCM 加密
-        const encrypted = await crypto.subtle.encrypt(
-          {
-            name: 'AES-GCM',
-            iv: iv
-          },
-          key,
-          data
-        );
-        
-        // 组合 IV + 密文
-        const combined = new Uint8Array(iv.length + encrypted.byteLength);
-        combined.set(iv);
-        combined.set(new Uint8Array(encrypted), iv.length);
-        
-        // Base64 编码
-        const result = btoa(String.fromCharCode(...combined));
-        
-        return result;
-      } else {
-        // 降级使用 node-forge (真正的 AES-GCM)
-        return encryptPasswordWithForge(password, salt, timestamp);
-      }
+      const key = await deriveEncryptionKey(salt, timestamp);
+      const data = new TextEncoder().encode(password);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
+      const combined = new Uint8Array(iv.length + encrypted.byteLength);
+      combined.set(iv);
+      combined.set(new Uint8Array(encrypted), iv.length);
+      return btoa(String.fromCharCode(...combined));
     } catch (error) {
-      console.error('❌ AES-GCM加密失败:', error);
-      throw new Error('密码加密失败');
+      console.error('AES-GCM加密失败:', error);
+      throw new Error('密码加密失败', { cause: error });
     }
   }
   

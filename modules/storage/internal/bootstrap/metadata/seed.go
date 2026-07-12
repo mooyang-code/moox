@@ -9,7 +9,7 @@ import (
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"gopkg.in/yaml.v2"
 )
 

@@ -3,7 +3,7 @@ package rpc
 import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
-	mooxpb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -26,15 +26,15 @@ const (
 // RegisterAll 把 9 个 service 注册到 trpc server。
 func RegisterAll(s *server.Server, svc *service.Service, kernel ...*command.Engine) {
 	h := New(svc, kernel...)
-	mooxpb.RegisterAccountSvcService(s.Service(AccountSvcName), h)
-	mooxpb.RegisterBalanceSvcService(s.Service(BalanceSvcName), h)
-	mooxpb.RegisterFundSvcService(s.Service(FundSvcName), h)
-	mooxpb.RegisterApiKeySvcService(s.Service(ApiKeySvcName), h)
-	mooxpb.RegisterChannelSvcService(s.Service(ChannelSvcName), h)
-	mooxpb.RegisterTradeOpSvcService(s.Service(TradeOpSvcName), h)
-	mooxpb.RegisterOrderSvcService(s.Service(OrderSvcName), h)
-	mooxpb.RegisterTradeQuerySvcService(s.Service(TradeQuerySvcName), h)
-	mooxpb.RegisterPositionSvcService(s.Service(PositionSvcName), h)
-	mooxpb.RegisterRebalanceSvcService(s.Service(RebalanceSvcName), h)
-	mooxpb.RegisterTradeOpsSvcService(s.Service(TradeOpsSvcName), h)
+	tradepb.RegisterAccountSvcService(s.Service(AccountSvcName), h)
+	tradepb.RegisterBalanceSvcService(s.Service(BalanceSvcName), h)
+	tradepb.RegisterFundSvcService(s.Service(FundSvcName), h)
+	tradepb.RegisterApiKeySvcService(s.Service(ApiKeySvcName), h)
+	tradepb.RegisterChannelSvcService(s.Service(ChannelSvcName), h)
+	tradepb.RegisterTradeOpSvcService(s.Service(TradeOpSvcName), h)
+	tradepb.RegisterOrderSvcService(s.Service(OrderSvcName), h)
+	tradepb.RegisterTradeQuerySvcService(s.Service(TradeQuerySvcName), h)
+	tradepb.RegisterPositionSvcService(s.Service(PositionSvcName), h)
+	tradepb.RegisterRebalanceSvcService(s.Service(RebalanceSvcName), h)
+	tradepb.RegisterTradeOpsSvcService(s.Service(TradeOpsSvcName), h)
 }

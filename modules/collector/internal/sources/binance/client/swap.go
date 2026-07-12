@@ -9,7 +9,7 @@ import (
 
 	"github.com/avast/retry-go"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchangetypes"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 

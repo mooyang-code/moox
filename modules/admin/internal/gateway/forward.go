@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway/spacecontext"
+	"github.com/mooyang-code/moox/modules/admin/internal/spacecontext"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/log"

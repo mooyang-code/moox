@@ -4,7 +4,7 @@ package trpc.moox.trade;
 
 import "moox_common.proto";
 
-option go_package = "github.com/mooyang-code/moox/modules/trade/proto/tradegen;mooxpb";
+option go_package = "github.com/mooyang-code/moox/modules/trade/proto/tradegen;tradepb";
 
 // Trade 模块统一承载「账户域」与「交易域」两条链路，部署为单一微服务 moox-trade。
 // 纯 RPC 服务，由统一 HTTP 转发层调度：

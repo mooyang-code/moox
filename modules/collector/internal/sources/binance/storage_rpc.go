@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 

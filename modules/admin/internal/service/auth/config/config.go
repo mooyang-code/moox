@@ -47,5 +47,8 @@ func LoadConfig() (*Config, error) {
 	if err := yaml.Unmarshal(yamlFile, &config); err != nil {
 		return nil, fmt.Errorf("解析YAML失败: %+v", err)
 	}
+	if secret := os.Getenv("MOOX_ADMIN_JWT_SECRET_KEY"); secret != "" {
+		config.JWT.SecretKey = secret
+	}
 	return &config, nil
 }

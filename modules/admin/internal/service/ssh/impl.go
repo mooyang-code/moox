@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/common"
+	"github.com/mooyang-code/moox/modules/admin/internal/idgen"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/conn"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
@@ -76,7 +76,7 @@ func (s *ServiceImpl) CreateSession(ctx context.Context, hostID int, clientIP st
 		return "", fmt.Errorf("主机不存在: %w", err)
 	}
 
-	sessionID := common.GenerateID(16)
+	sessionID := idgen.GenerateID(16)
 	sshConn := &conn.SSHConn{
 		Host:      host,
 		SessionID: sessionID,

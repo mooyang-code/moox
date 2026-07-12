@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 type Scalar struct {

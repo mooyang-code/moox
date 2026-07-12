@@ -10,7 +10,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 )
 
 func TestOpenUsesSingleConnectionToAvoidDuckDBFileLockContention(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 type ViewIndexEngine interface {

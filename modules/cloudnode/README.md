@@ -30,7 +30,7 @@ internal/
   projection/             节点心跳批处理
   rpc/                    CloudNodeMgr RPC 实现，按 node/account/package/job_item/invocation 拆分
   repository/             节点、账户、代码包和 invocation 持久化
-  providers/tencent-scf/  腾讯云 SCF 客户端
+  providers/tencentscf/  腾讯云 SCF 客户端
   storage/                SQLite 连接
 schema/                   cloudnode.sql
 ../../packages/cloudruntime/ 通用 SCF JobItem runtime 共享逻辑

@@ -12,7 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/parquetio"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	server "github.com/nats-io/nats-server/v2/server"

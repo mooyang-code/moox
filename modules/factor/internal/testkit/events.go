@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 // RowsChangedEvent creates a Storage rows_updated event for a set of subjects.

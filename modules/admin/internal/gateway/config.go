@@ -34,9 +34,9 @@ type JWTConfig struct {
 
 // GatewayConfig 网关配置
 type GatewayConfig struct {
-	Debug         bool                     `yaml:"debug"`           // 是否开启调试模式
-	NoAuthMethods []string                 `yaml:"no_auth_methods"` // 不需要鉴权的接口列表
-	ServiceAuth   ServiceAuthConfig        `yaml:"service_auth"`    // 后台服务请求签名鉴权配置
+	Debug         bool              `yaml:"debug"`           // 是否开启调试模式
+	NoAuthMethods []string          `yaml:"no_auth_methods"` // 不需要鉴权的接口列表
+	ServiceAuth   ServiceAuthConfig `yaml:"service_auth"`    // 后台服务请求签名鉴权配置
 }
 
 // ServiceAuthConfig 后台服务请求签名鉴权配置。
@@ -98,6 +98,9 @@ func LoadConfig() (*Config, error) {
 	var config Config
 	if err := yaml.Unmarshal(yamlFile, &config); err != nil {
 		return nil, fmt.Errorf("解析YAML失败: %+v", err)
+	}
+	if secret := os.Getenv("MOOX_ADMIN_JWT_SECRET_KEY"); secret != "" {
+		config.JWT.SecretKey = secret
 	}
 	return &config, nil
 }

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/factkey"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 // MetadataReader 定义写入 Schema 校验所需的元数据读取接口。

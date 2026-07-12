@@ -18,17 +18,19 @@ use (
 	./modules/monitor/proto/monitorgen
 	./modules/archive
 	./modules/storage
-	./modules/storage/proto/gen
+	./modules/storage/proto/storagegen
 	./modules/strategy
 	./modules/trade
 	./modules/trade/proto/tradegen
 	./packages/cloudruntime
 	./packages/commonpb
+	./packages/crypto
 	./packages/healthz
 	./packages/hostmetricpb
 	./packages/jetstream
 	./packages/messagepb
 	./packages/metricspb
 	./packages/pyruntime
+	./packages/report
 	./web-host
 )

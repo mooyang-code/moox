@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway/spacecontext"
+	"github.com/mooyang-code/moox/modules/admin/internal/spacecontext"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )

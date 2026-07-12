@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencent-scf"
+	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"

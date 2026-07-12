@@ -561,7 +561,7 @@ curl -s -XPOST http://127.0.0.1:20200/trpc.moox.storage.Metadata/ListSpaces \
 
 ## 提供的接口
 
-均为 tRPC 服务（同时提供 HTTP 端口），协议定义见 `proto/`，生成代码见 `proto/gen/`。
+均为 tRPC 服务（同时提供 HTTP 端口），协议定义见 `proto/`，生成代码见 `proto/storagegen/`。
 
 ### Metadata — 元数据控制面（端口 20100 / HTTP 20200）
 

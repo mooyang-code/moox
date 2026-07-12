@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 // WriteFactorPatch writes returned factor tail values as Storage column patches.

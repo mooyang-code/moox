@@ -2,16 +2,17 @@ package impl
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/glebarez/sqlite"
-	admincrypto "github.com/mooyang-code/moox/modules/admin/internal/common/crypto"
 	authconfig "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
+	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -29,13 +30,12 @@ func newAuthServiceForLoginTest(t *testing.T) (*AuthServiceImpl, string, string)
 
 	secretKey := "test-secret-for-login"
 	password := "secret123"
-	userSalt := admincrypto.GenerateSalt()
-	passwordHash := admincrypto.HashPassword(password, userSalt)
+	passwordHash, err := mooxcrypto.HashPassword(password)
+	require.NoError(t, err)
 	user := &model.User{
 		UserID:       "user-login-1",
 		Username:     "admin",
 		PasswordHash: passwordHash,
-		Salt:         userSalt,
 		Role:         int32(pb.UserRole_USER_ROLE_ADMIN),
 		Status:       int32(pb.UserStatus_USER_STATUS_ACTIVE),
 		CreatedAt:    time.Now(),
@@ -59,10 +59,16 @@ func newAuthServiceForLoginTest(t *testing.T) (*AuthServiceImpl, string, string)
 
 func encryptLoginPassword(t *testing.T, password, loginSalt string, timestamp int64) string {
 	t.Helper()
-	key := admincrypto.DeriveEncryptionKey(loginSalt, timestamp)
-	cipher, err := admincrypto.AESEncrypt(password, string(key))
+	cipher, err := mooxcrypto.Encrypt(password, loginSalt+strconv.FormatInt(timestamp, 10))
 	require.NoError(t, err)
 	return cipher
+}
+
+func newTestSalt(t *testing.T) string {
+	t.Helper()
+	salt, err := mooxcrypto.NewSalt()
+	require.NoError(t, err)
+	return salt
 }
 
 func TestLogin_InvalidCredentialFormat_ShouldReturnInvalidParam(t *testing.T) {
@@ -74,7 +80,7 @@ func TestLogin_InvalidCredentialFormat_ShouldReturnInvalidParam(t *testing.T) {
 
 func TestLogin_InvalidSalt_ShouldReturnInvalidParam(t *testing.T) {
 	svc, password, _ := newAuthServiceForLoginTest(t)
-	loginSalt := admincrypto.GenerateSalt()
+	loginSalt := newTestSalt(t)
 	timestamp := time.Now().Unix()
 	rsp, err := svc.Login(context.Background(), &pb.LoginReq{
 		Username:     "admin",
@@ -105,9 +111,9 @@ func TestLogin_ValidCredentials_ShouldReturnAccessToken(t *testing.T) {
 	assert.Equal(t, pb.ErrorCode_SUCCESS, loginRsp.GetRetInfo().GetCode())
 	assert.NotEmpty(t, loginRsp.GetAccessToken())
 
-	claims, err := admincrypto.ValidateAccessToken(loginRsp.GetAccessToken(), secretKey)
+	claims, err := mooxcrypto.ParseToken(loginRsp.GetAccessToken(), secretKey)
 	require.NoError(t, err)
-	assert.Equal(t, "user-login-1", claims.UserID)
+	assert.Equal(t, "user-login-1", claims["user_id"])
 }
 
 func TestGetLoginSalt_ExistingValidSalt_ShouldReuse(t *testing.T) {

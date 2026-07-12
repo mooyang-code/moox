@@ -7,7 +7,6 @@ toolchain go1.24.1
 require (
 	github.com/dgraph-io/badger/v4 v4.7.0
 	github.com/glebarez/sqlite v1.11.0
-	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/matoous/go-nanoid/v2 v2.1.0
@@ -15,17 +14,11 @@ require (
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
 	github.com/prometheus/client_golang v1.20.4
-	github.com/prometheus/client_model v0.6.2
-	github.com/prometheus/common v0.67.5
 	golang.org/x/crypto v0.46.0
 	golang.org/x/net v0.48.0
 	golang.org/x/time v0.14.0
-	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
@@ -34,6 +27,18 @@ require (
 	trpc.group/trpc-go/trpc-go v1.0.3
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
+)
+
+require (
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
+	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/prometheus/client_model v0.6.2 // indirect
+	github.com/prometheus/common v0.67.5 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )
 
 replace (
@@ -75,6 +80,8 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/crypto v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/nats.go v1.47.0 // indirect
 	github.com/nats-io/nkeys v0.4.11 // indirect
@@ -88,8 +95,8 @@ require (
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/smartystreets/goconvey v1.7.2 // indirect
 	github.com/spf13/cast v1.3.1 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/tencent/goom v1.0.6 // indirect
+	github.com/stretchr/testify v1.11.1
+	github.com/tencent/goom v1.0.6
 	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.43.0 // indirect
@@ -113,3 +120,7 @@ require (
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
+
+replace github.com/mooyang-code/moox/packages/crypto => ../../packages/crypto
+
+replace github.com/mooyang-code/moox/packages/report => ../../packages/report

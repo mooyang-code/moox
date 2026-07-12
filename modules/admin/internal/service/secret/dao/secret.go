@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mooyang-code/moox/modules/admin/internal/common"
-	"github.com/mooyang-code/moox/modules/admin/internal/common/crypto"
+	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/softdelete"
+	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -47,7 +48,7 @@ func (d *SecretDAO) Update(ctx context.Context, secret *model.Secret) error {
 		return err
 	}
 	secret.ModifyTime = time.Now()
-	result := d.db.WithContext(ctx).Model(secret).Where("c_secret_id = ? AND c_is_deleted = ?", secret.SecretID, common.IsDeletedFalse).
+	result := d.db.WithContext(ctx).Model(secret).Where("c_secret_id = ? AND c_is_deleted = ?", secret.SecretID, softdelete.IsDeletedFalse).
 		Select("*").Omit("c_id", "c_ctime", "c_secret_id", "c_space_id").Updates(secret)
 	if result.Error != nil {
 		return result.Error
@@ -61,8 +62,8 @@ func (d *SecretDAO) Update(ctx context.Context, secret *model.Secret) error {
 // Delete 软删除秘钥
 func (d *SecretDAO) Delete(ctx context.Context, secretID string) error {
 	result := d.db.WithContext(ctx).Model(&model.Secret{}).
-		Where("c_secret_id = ? AND c_is_deleted = ?", secretID, common.IsDeletedFalse).
-		Update("c_is_deleted", common.IsDeletedTrue)
+		Where("c_secret_id = ? AND c_is_deleted = ?", secretID, softdelete.IsDeletedFalse).
+		Update("c_is_deleted", softdelete.IsDeletedTrue)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -75,7 +76,7 @@ func (d *SecretDAO) Delete(ctx context.Context, secretID string) error {
 // FindByID 根据唯一标识查询
 func (d *SecretDAO) FindByID(ctx context.Context, secretID string) (*model.Secret, error) {
 	var secret model.Secret
-	err := d.db.WithContext(ctx).Where("c_secret_id = ? AND c_is_deleted = ?", secretID, common.IsDeletedFalse).First(&secret).Error
+	err := d.db.WithContext(ctx).Where("c_secret_id = ? AND c_is_deleted = ?", secretID, softdelete.IsDeletedFalse).First(&secret).Error
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +91,7 @@ func (d *SecretDAO) List(ctx context.Context, offset, limit int, filters *Secret
 	var secrets []model.Secret
 	var total int64
 
-	db := d.db.WithContext(ctx).Model(&model.Secret{}).Where("c_is_deleted = ?", common.IsDeletedFalse)
+	db := d.db.WithContext(ctx).Model(&model.Secret{}).Where("c_is_deleted = ?", softdelete.IsDeletedFalse)
 	db = d.applyFilters(db, filters)
 
 	if err := db.Count(&total).Error; err != nil {
@@ -141,7 +142,7 @@ func (d *SecretDAO) applyFilters(db *gorm.DB, f *SecretFilters) *gorm.DB {
 // UpdateStatus 更新秘钥状态
 func (d *SecretDAO) UpdateStatus(ctx context.Context, secretID, status string) error {
 	result := d.db.WithContext(ctx).Model(&model.Secret{}).
-		Where("c_secret_id = ? AND c_is_deleted = ?", secretID, common.IsDeletedFalse).
+		Where("c_secret_id = ? AND c_is_deleted = ?", secretID, softdelete.IsDeletedFalse).
 		Update("c_status", status)
 	if result.Error != nil {
 		return result.Error
@@ -155,7 +156,7 @@ func (d *SecretDAO) UpdateStatus(ctx context.Context, secretID, status string) e
 // UpdateLastUsed 更新最后使用信息
 func (d *SecretDAO) UpdateLastUsed(ctx context.Context, secretID, usedBy string) error {
 	result := d.db.WithContext(ctx).Model(&model.Secret{}).
-		Where("c_secret_id = ? AND c_is_deleted = ?", secretID, common.IsDeletedFalse).
+		Where("c_secret_id = ? AND c_is_deleted = ?", secretID, softdelete.IsDeletedFalse).
 		Updates(map[string]interface{}{
 			"c_last_used_at": time.Now(),
 			"c_last_used_by": usedBy,
@@ -179,8 +180,11 @@ func (d *SecretDAO) encryptSensitiveFields(secret *model.Secret) error {
 	if strings.Contains(secret.SecretValue, "•") {
 		return ErrMaskedValue
 	}
-	key := crypto.GetEncryptionKey()
-	encrypted, err := crypto.AESEncrypt(secret.SecretValue, key)
+	key, err := adminsecurity.GetEncryptionKey()
+	if err != nil {
+		return err
+	}
+	encrypted, err := mooxcrypto.Encrypt(secret.SecretValue, key)
 	if err != nil {
 		return err
 	}
@@ -190,9 +194,12 @@ func (d *SecretDAO) encryptSensitiveFields(secret *model.Secret) error {
 
 // decryptSensitiveFields 解密敏感字段
 func (d *SecretDAO) decryptSensitiveFields(secret *model.Secret) error {
-	key := crypto.GetEncryptionKey()
+	key, err := adminsecurity.GetEncryptionKey()
+	if err != nil {
+		return err
+	}
 	if secret.SecretValue != "" {
-		decrypted, err := crypto.AESDecrypt(secret.SecretValue, key)
+		decrypted, err := mooxcrypto.Decrypt(secret.SecretValue, key)
 		if err != nil {
 			return err
 		}

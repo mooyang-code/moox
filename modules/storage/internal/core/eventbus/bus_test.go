@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 func TestMemoryBusReturnsSubscriberErrors(t *testing.T) {

@@ -90,7 +90,7 @@ func setupBootstrapConfigDir(t *testing.T) string {
   path: ./data/admin.db
 `), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "gateway.yaml"), []byte(`jwt:
-  secret_key: test-secret-key-32bytes-long!!
+  secret_key: test-secret-key-32bytes-long-123456
 gateway:
   debug: true
 cors:
@@ -117,7 +117,7 @@ func TestLoadConfigs_ValidFiles_ShouldLoadAllModules(t *testing.T) {
 	assert.NotNil(t, cfg.App)
 	assert.NotNil(t, cfg.Auth)
 	assert.NotNil(t, cfg.Gateway)
-	assert.Equal(t, "test-secret-key-32bytes-long!!", cfg.Gateway.JWT.SecretKey)
+	assert.Equal(t, "test-secret-key-32bytes-long-123456", cfg.Gateway.JWT.SecretKey)
 }
 
 func TestLoadConfigs_EmptyJWTSecret_ShouldError(t *testing.T) {

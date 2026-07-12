@@ -4,7 +4,7 @@ go 1.24.0
 
 replace (
 	github.com/mooyang-code/moox/modules/storage => ./
-	github.com/mooyang-code/moox/modules/storage/proto/gen => ./proto/gen
+	github.com/mooyang-code/moox/modules/storage/proto/storagegen => ./proto/storagegen
 	github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 	github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 	github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
@@ -19,8 +19,7 @@ require (
 	github.com/marcboeker/go-duckdb/v2 v2.4.3
 	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
-	github.com/mooyang-code/moox/modules/storage/proto/gen v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
@@ -38,6 +37,12 @@ require (
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.3
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
+)
+
+require (
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 )
 
 require (
@@ -101,6 +106,7 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/nats.go v1.47.0 // indirect
@@ -116,7 +122,7 @@ require (
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/smartystreets/goconvey v1.7.2 // indirect
 	github.com/spf13/cast v1.3.1 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
+	github.com/stretchr/testify v1.11.1
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.43.0 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect
@@ -143,3 +149,5 @@ require (
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
+
+replace github.com/mooyang-code/moox/packages/report => ../../packages/report

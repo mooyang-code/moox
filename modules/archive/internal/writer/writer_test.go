@@ -5,7 +5,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/parquetio"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"

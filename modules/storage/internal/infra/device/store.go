@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 // OutboxEntry is the immutable message persisted beside fact rows.

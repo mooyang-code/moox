@@ -7,7 +7,7 @@ import (
 	"errors"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 // Options 保存 DuckDB 视图存储打开配置。

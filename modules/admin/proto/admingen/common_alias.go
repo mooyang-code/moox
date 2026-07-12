@@ -1,4 +1,4 @@
-package mooxpb
+package adminpb
 
 import commonpb "github.com/mooyang-code/moox/packages/commonpb"
 

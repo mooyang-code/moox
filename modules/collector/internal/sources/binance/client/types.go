@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/model/common"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchangetypes"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 )
 
 // CandleStick 币安K线原始数据

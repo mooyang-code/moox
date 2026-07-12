@@ -7,7 +7,7 @@ import (
 	"errors"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 var ErrIndexClosing = errors.New("view index is closing")

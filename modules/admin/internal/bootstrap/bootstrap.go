@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
-	"github.com/mooyang-code/moox/modules/admin/internal/report"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
+	"github.com/mooyang-code/moox/packages/report"
 
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"

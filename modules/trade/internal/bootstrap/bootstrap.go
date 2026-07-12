@@ -16,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/exchangebridge"
 	kernelstore "github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/report"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
@@ -25,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/report"
 
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"

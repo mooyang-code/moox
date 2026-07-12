@@ -9,7 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
-	mooxpb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
@@ -58,9 +58,9 @@ func TestServer_SyncBalances_ServiceOnly_ShouldReturnBalances(t *testing.T) {
 	svc, h := newDustRPCService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedLinkedAccountChannel(t, svc, h, ctx)
-	rsp, err := h.SyncBalances(ctx, &mooxpb.SyncBalancesReq{AccountId: accountID})
+	rsp, err := h.SyncBalances(ctx, &tradepb.SyncBalancesReq{AccountId: accountID})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	require.Len(t, rsp.Balances, 1)
 	assert.Equal(t, "500", rsp.Balances[0].Available)
 }
@@ -73,20 +73,20 @@ func TestServer_SyncBalances_WithKernel_ShouldReconcileProjections(t *testing.T)
 	h := New(svc, &command.Engine{Store: ks})
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedLinkedAccountChannel(t, svc, h, ctx)
-	rsp, err := h.SyncBalances(ctx, &mooxpb.SyncBalancesReq{AccountId: accountID})
+	rsp, err := h.SyncBalances(ctx, &tradepb.SyncBalancesReq{AccountId: accountID})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_ConvertDust_WithEligibleAssets_ShouldSucceed(t *testing.T) {
 	svc, h := newDustRPCService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, channelID := seedLinkedAccountChannel(t, svc, h, ctx)
-	rsp, err := h.ConvertDust(ctx, &mooxpb.ConvertDustReq{
+	rsp, err := h.ConvertDust(ctx, &tradepb.ConvertDustReq{
 		ChannelId: channelID, AccountId: accountID, Assets: []string{"GALA"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.Equal(t, "0.01", rsp.TotalTransfered)
 	require.Len(t, rsp.Results, 1)
 }
@@ -95,11 +95,11 @@ func TestServer_SetLeverage_ValidChannel_ShouldSucceed(t *testing.T) {
 	svc, h := newDustRPCService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	_, channelID := seedLinkedAccountChannel(t, svc, h, ctx)
-	rsp, err := h.SetLeverage(ctx, &mooxpb.SetLeverageReq{
+	rsp, err := h.SetLeverage(ctx, &tradepb.SetLeverageReq{
 		ChannelId: channelID, Symbol: "BTCUSDT", Leverage: "10",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_AmendOrder_ServicePath_ShouldUpdatePrice(t *testing.T) {
@@ -109,33 +109,33 @@ func TestServer_AmendOrder_ServicePath_ShouldUpdatePrice(t *testing.T) {
 	require.NoError(t, svc.Account.UpsertBalances(ctx, "crypto", []*service.Balance{{
 		AccountID: accountID, Currency: "USDT", Available: "1000", Total: "1000",
 	}}))
-	placeRsp, err := h.PlaceOrder(ctx, &mooxpb.PlaceOrderReq{
+	placeRsp, err := h.PlaceOrder(ctx, &tradepb.PlaceOrderReq{
 		AccountId: accountID, ChannelId: channelID, Symbol: "BTCUSDT",
-		Side: mooxpb.OrderSide_ORDER_SIDE_BUY, OrderType: mooxpb.OrderType_ORDER_TYPE_LIMIT,
+		Side: tradepb.OrderSide_ORDER_SIDE_BUY, OrderType: tradepb.OrderType_ORDER_TYPE_LIMIT,
 		Quantity: "1", Price: "100",
 	})
 	require.NoError(t, err)
-	require.Equal(t, mooxpb.ErrorCode_SUCCESS, placeRsp.RetInfo.Code)
-	rsp, err := h.AmendOrder(ctx, &mooxpb.AmendOrderReq{
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, placeRsp.RetInfo.Code)
+	rsp, err := h.AmendOrder(ctx, &tradepb.AmendOrderReq{
 		ChannelId: channelID, OrderId: placeRsp.OrderId, NewPrice: "110",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_Transfer_BetweenAccounts_ShouldSucceed(t *testing.T) {
 	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	fromRsp, err := h.CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "from"})
+	fromRsp, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "from"})
 	require.NoError(t, err)
-	toRsp, err := h.CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "to"})
+	toRsp, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "to"})
 	require.NoError(t, err)
-	rsp, err := h.Transfer(ctx, &mooxpb.TransferReq{
+	rsp, err := h.Transfer(ctx, &tradepb.TransferReq{
 		FromAccountId: fromRsp.AccountId, ToAccountId: toRsp.AccountId,
 		Currency: "USDT", Amount: "10", Remark: "move",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.NotEmpty(t, rsp.OutFlowId)
 	assert.NotEmpty(t, rsp.InFlowId)
 }
@@ -157,11 +157,11 @@ func TestServer_AmendOrder_KernelPath_OpenOrder_ShouldReplace(t *testing.T) {
 	_, err = engine.Submit(ctx, "crypto", placed.OrderID, "")
 	require.NoError(t, err)
 	h := New(nil, engine)
-	rsp, err := h.AmendOrder(ctx, &mooxpb.AmendOrderReq{
+	rsp, err := h.AmendOrder(ctx, &tradepb.AmendOrderReq{
 		ChannelId: "chan-1", OrderId: placed.OrderID, NewPrice: "99",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 type amendStubAdapter struct{}
@@ -213,9 +213,9 @@ func newPingRPCService(t *testing.T, latency int64, pingErr error) (*Server, str
 func TestServer_TestChannel_Reachable_ShouldReturnLatency(t *testing.T) {
 	h, channelID := newPingRPCService(t, 42, nil)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.TestChannel(ctx, &mooxpb.TestChannelReq{ChannelId: channelID})
+	rsp, err := h.TestChannel(ctx, &tradepb.TestChannelReq{ChannelId: channelID})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.True(t, rsp.Reachable)
 	assert.Equal(t, int32(42), rsp.LatencyMs)
 }
@@ -223,20 +223,20 @@ func TestServer_TestChannel_Reachable_ShouldReturnLatency(t *testing.T) {
 func TestServer_TestChannel_MissingChannel_ShouldReturnError(t *testing.T) {
 	h, _ := newPingRPCService(t, 0, nil)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.TestChannel(ctx, &mooxpb.TestChannelReq{ChannelId: "missing"})
+	rsp, err := h.TestChannel(ctx, &tradepb.TestChannelReq{ChannelId: "missing"})
 	require.NoError(t, err)
-	assert.NotEqual(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.NotEqual(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_ListChannels_WithFilters_ShouldReturnChannel(t *testing.T) {
 	svc, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, channelID := seedLinkedAccountChannel(t, svc, h, ctx)
-	rsp, err := h.ListChannels(ctx, &mooxpb.ListChannelsReq{
-		AccountId: accountID, Exchange: "binance", Page: &mooxpb.Page{Page: 1, Size: 10},
+	rsp, err := h.ListChannels(ctx, &tradepb.ListChannelsReq{
+		AccountId: accountID, Exchange: "binance", Page: &tradepb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	require.NotEmpty(t, rsp.Channels)
 	assert.Equal(t, channelID, rsp.Channels[0].ChannelId)
 }
@@ -250,11 +250,11 @@ func TestServer_ListFundFlows_WithStoredFlows_ShouldReturnItems(t *testing.T) {
 		FlowID: "flow-db", AccountID: accountID, Currency: "USDT", BizType: "transfer",
 		Direction: 1, Amount: "5", BalanceAfter: "95",
 	}}))
-	rsp, err := h.ListFundFlows(ctx, &mooxpb.ListFundFlowsReq{
-		AccountId: accountID, Page: &mooxpb.Page{Page: 1, Size: 10},
+	rsp, err := h.ListFundFlows(ctx, &tradepb.ListFundFlowsReq{
+		AccountId: accountID, Page: &tradepb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	require.Len(t, rsp.Flows, 1)
 	assert.Equal(t, "flow-db", rsp.Flows[0].FlowId)
 }
@@ -263,16 +263,16 @@ func TestServer_Transfer_ValidAccounts_ShouldCreateFlows(t *testing.T) {
 	svc, _ := newRPCTestService(t)
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	fromRsp, err := h.CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "from"})
+	fromRsp, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "from"})
 	require.NoError(t, err)
-	toRsp, err := h.CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "to"})
+	toRsp, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "to"})
 	require.NoError(t, err)
-	rsp, err := h.Transfer(ctx, &mooxpb.TransferReq{
+	rsp, err := h.Transfer(ctx, &tradepb.TransferReq{
 		FromAccountId: fromRsp.AccountId, ToAccountId: toRsp.AccountId,
 		Currency: "USDT", Amount: "10", Remark: "move",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.NotEmpty(t, rsp.OutFlowId)
 	assert.NotEmpty(t, rsp.InFlowId)
 }
@@ -281,9 +281,9 @@ func TestServer_ListFundFlows_EmptyAccount_ShouldReject(t *testing.T) {
 	svc, _ := newRPCTestService(t)
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.ListFundFlows(ctx, &mooxpb.ListFundFlowsReq{Page: &mooxpb.Page{Page: 1, Size: 10}})
+	rsp, err := h.ListFundFlows(ctx, &tradepb.ListFundFlowsReq{Page: &tradepb.Page{Page: 1, Size: 10}})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
 }
 
 type kernelTradeAdapter struct{}
@@ -333,9 +333,9 @@ func TestServer_GetOrder_KernelAfterSubmit_ShouldReturnOrder(t *testing.T) {
 	h, engine := newKernelTradeServer(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	seedKernelOpenOrder(t, engine, "ord-get")
-	getRsp, err := h.GetOrder(ctx, &mooxpb.GetOrderReq{OrderId: "ord-get"})
+	getRsp, err := h.GetOrder(ctx, &tradepb.GetOrderReq{OrderId: "ord-get"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, getRsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, getRsp.RetInfo.Code)
 	assert.Equal(t, "ord-get", getRsp.Order.OrderId)
 }
 
@@ -343,20 +343,20 @@ func TestServer_CancelOrder_KernelOpenOrder_ShouldCancel(t *testing.T) {
 	h, engine := newKernelTradeServer(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	seedKernelOpenOrder(t, engine, "ord-cancel")
-	rsp, err := h.CancelOrder(ctx, &mooxpb.CancelOrderReq{ChannelId: "chan-1", OrderId: "ord-cancel"})
+	rsp, err := h.CancelOrder(ctx, &tradepb.CancelOrderReq{ChannelId: "chan-1", OrderId: "ord-cancel"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_ListOrders_Kernel_ShouldReturnOpenOrder(t *testing.T) {
 	h, engine := newKernelTradeServer(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	seedKernelOpenOrder(t, engine, "ord-list")
-	rsp, err := h.ListOrders(ctx, &mooxpb.ListOrdersReq{
-		AccountId: "acct-1", OnlyOpen: true, Page: &mooxpb.Page{Page: 1, Size: 10},
+	rsp, err := h.ListOrders(ctx, &tradepb.ListOrdersReq{
+		AccountId: "acct-1", OnlyOpen: true, Page: &tradepb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.NotEmpty(t, rsp.Orders)
 }
 
@@ -364,11 +364,11 @@ func TestServer_ListTrades_KernelEmpty_ShouldSucceed(t *testing.T) {
 	h, engine := newKernelTradeServer(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	seedKernelOpenOrder(t, engine, "ord-trades")
-	rsp, err := h.ListTrades(ctx, &mooxpb.ListTradesReq{
-		AccountId: "acct-1", Page: &mooxpb.Page{Page: 1, Size: 10},
+	rsp, err := h.ListTrades(ctx, &tradepb.ListTradesReq{
+		AccountId: "acct-1", Page: &tradepb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	_ = engine
 }
 
@@ -383,18 +383,18 @@ func openKernelStore(t *testing.T) *store.Store {
 func TestServer_SetPause_InvalidTargetType_ShouldReject(t *testing.T) {
 	h := New(nil, &command.Engine{Store: openKernelStore(t)})
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-	rsp, err := h.SetPause(ctx, &mooxpb.SetTradePauseReq{TargetType: "invalid", TargetId: "x"})
+	rsp, err := h.SetPause(ctx, &tradepb.SetTradePauseReq{TargetType: "invalid", TargetId: "x"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
 }
 
 func TestServer_SetPause_ValidAccount_ShouldPersist(t *testing.T) {
 	ks := openKernelStore(t)
 	h := New(nil, &command.Engine{Store: ks})
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-	rsp, err := h.SetPause(ctx, &mooxpb.SetTradePauseReq{TargetType: "account", TargetId: "acc-1", Paused: true, Reason: "test"})
+	rsp, err := h.SetPause(ctx, &tradepb.SetTradePauseReq{TargetType: "account", TargetId: "acc-1", Paused: true, Reason: "test"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	paused, err := ks.IsPaused(ctx, "space-1", "acc-1", "")
 	require.NoError(t, err)
 	assert.True(t, paused)
@@ -404,26 +404,26 @@ func TestServer_ReconcileNow_WithKernel_ShouldEnqueueOutbox(t *testing.T) {
 	ks := openKernelStore(t)
 	h := New(nil, &command.Engine{Store: ks})
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-	rsp, err := h.ReconcileNow(ctx, &mooxpb.ReconcileNowReq{AccountId: "acc-1", ChannelId: "ch-1"})
+	rsp, err := h.ReconcileNow(ctx, &tradepb.ReconcileNowReq{AccountId: "acc-1", ChannelId: "ch-1"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.NotEmpty(t, rsp.MessageId)
 }
 
 func TestServer_InspectSaga_MissingSaga_ShouldReturnNotFound(t *testing.T) {
 	h := New(nil, &command.Engine{Store: openKernelStore(t)})
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-	rsp, err := h.InspectSaga(ctx, &mooxpb.InspectSagaReq{SagaId: "missing"})
+	rsp, err := h.InspectSaga(ctx, &tradepb.InspectSagaReq{SagaId: "missing"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 }
 
 func TestServer_KernelNil_ShouldReturnInnerError(t *testing.T) {
 	h := New(nil)
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-	rsp, err := h.SetPause(ctx, &mooxpb.SetTradePauseReq{TargetType: "account", TargetId: "a"})
+	rsp, err := h.SetPause(ctx, &tradepb.SetTradePauseReq{TargetType: "account", TargetId: "a"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 }
 
 func seedKernelBalance(t *testing.T, s *store.Store) {
@@ -446,13 +446,13 @@ func TestServer_PlaceOrder_WithKernel_MissingAssets_ShouldReject(t *testing.T) {
 	seedKernelBalance(t, ks)
 	h := New(nil, &command.Engine{Store: ks})
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.PlaceOrder(ctx, &mooxpb.PlaceOrderReq{
+	rsp, err := h.PlaceOrder(ctx, &tradepb.PlaceOrderReq{
 		AccountId: "acct-1", ChannelId: "chan-1", Symbol: "BTC-USDT",
-		Side: mooxpb.OrderSide_ORDER_SIDE_BUY, Quantity: "1", Price: "100",
-		MarketType: mooxpb.MarketType_MARKET_TYPE_SPOT,
+		Side: tradepb.OrderSide_ORDER_SIDE_BUY, Quantity: "1", Price: "100",
+		MarketType: tradepb.MarketType_MARKET_TYPE_SPOT,
 	})
 	require.NoError(t, err)
-	assert.NotEqual(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.NotEqual(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.Contains(t, rsp.RetInfo.Msg, "instrument assets required")
 }
 
@@ -463,9 +463,9 @@ func TestServer_CancelAllOrders_WithKernel_NoOpenOrders_ShouldReturnZero(t *test
 	engine := &command.Engine{Store: ks}
 	h := New(nil, engine)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.CancelAllOrders(ctx, &mooxpb.CancelAllOrdersReq{ChannelId: "chan-1"})
+	rsp, err := h.CancelAllOrders(ctx, &tradepb.CancelAllOrdersReq{ChannelId: "chan-1"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.Equal(t, int32(0), rsp.CanceledCount)
 }
 
@@ -476,9 +476,9 @@ func TestServer_GetBalances_WithKernel_ShouldReadProjections(t *testing.T) {
 	seedKernelBalance(t, ks)
 	h := New(nil, &command.Engine{Store: ks})
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.GetBalances(ctx, &mooxpb.GetBalancesReq{AccountId: "acct-1"})
+	rsp, err := h.GetBalances(ctx, &tradepb.GetBalancesReq{AccountId: "acct-1"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	require.Len(t, rsp.Balances, 1)
 	assert.Equal(t, "1000", rsp.Balances[0].Available)
 }
@@ -490,14 +490,14 @@ func TestServer_SyncBalances_WithKernel_ShouldDelegateService(t *testing.T) {
 	t.Cleanup(func() { _ = ks.Close() })
 	h := New(svc, &command.Engine{Store: ks})
 	ctx := rpcCtx(t, "crypto", "user-1")
-	acc, err := h.CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "sync-bal"})
+	acc, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "sync-bal"})
 	require.NoError(t, err)
 	require.NoError(t, storeDAO.UpsertBalances(ctx, "crypto", []*service.Balance{{
 		AccountID: acc.AccountId, Currency: "USDT", Available: "10", Frozen: "0", Total: "10",
 	}}))
-	rsp, err := h.SyncBalances(ctx, &mooxpb.SyncBalancesReq{AccountId: acc.AccountId})
+	rsp, err := h.SyncBalances(ctx, &tradepb.SyncBalancesReq{AccountId: acc.AccountId})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 type rpcStubAdapter struct {
@@ -582,44 +582,44 @@ func TestServer_PlaceOrder_InvalidChannel_ShouldReject(t *testing.T) {
 	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedAccountChannel(t, h, ctx)
-	rsp, err := h.PlaceOrder(ctx, &mooxpb.PlaceOrderReq{
+	rsp, err := h.PlaceOrder(ctx, &tradepb.PlaceOrderReq{
 		AccountId: accountID, ChannelId: "missing-ch", Symbol: "BTCUSDT",
-		Side: mooxpb.OrderSide_ORDER_SIDE_BUY, OrderType: mooxpb.OrderType_ORDER_TYPE_LIMIT,
+		Side: tradepb.OrderSide_ORDER_SIDE_BUY, OrderType: tradepb.OrderType_ORDER_TYPE_LIMIT,
 		Quantity: "1", Price: "100",
 	})
 	require.NoError(t, err)
-	assert.NotEqual(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.NotEqual(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_PlaceOrder_ValidRequest_ShouldSucceed(t *testing.T) {
 	svc, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	accRsp, err := h.CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "trade-acc"})
+	accRsp, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "trade-acc"})
 	require.NoError(t, err)
-	require.Equal(t, mooxpb.ErrorCode_SUCCESS, accRsp.RetInfo.Code)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, accRsp.RetInfo.Code)
 	accountID := accRsp.AccountId
 	require.NoError(t, svc.Account.UpsertBalances(ctx, "crypto", []*service.Balance{{
 		AccountID: accountID, Currency: "USDT", Available: "1000", Total: "1000",
 	}}))
-	apiRsp, err := h.CreateApiKey(ctx, &mooxpb.CreateApiKeyReq{
+	apiRsp, err := h.CreateApiKey(ctx, &tradepb.CreateApiKeyReq{
 		AccountId: accountID, Exchange: "binance", ApiKey: "k", ApiSecret: "secret12",
 	})
 	require.NoError(t, err)
-	require.Equal(t, mooxpb.ErrorCode_SUCCESS, apiRsp.RetInfo.Code)
-	chRsp, err := h.CreateChannel(ctx, &mooxpb.CreateChannelReq{
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, apiRsp.RetInfo.Code)
+	chRsp, err := h.CreateChannel(ctx, &tradepb.CreateChannelReq{
 		ChannelName: "linked", Exchange: "binance", AccountId: accountID, ApiKeyId: apiRsp.ApiKeyId,
 	})
 	require.NoError(t, err)
-	require.Equal(t, mooxpb.ErrorCode_SUCCESS, chRsp.RetInfo.Code)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, chRsp.RetInfo.Code)
 	channelID := chRsp.ChannelId
 
-	rsp, err := h.PlaceOrder(ctx, &mooxpb.PlaceOrderReq{
+	rsp, err := h.PlaceOrder(ctx, &tradepb.PlaceOrderReq{
 		AccountId: accountID, ChannelId: channelID, Symbol: "BTCUSDT",
-		Side: mooxpb.OrderSide_ORDER_SIDE_BUY, OrderType: mooxpb.OrderType_ORDER_TYPE_LIMIT,
+		Side: tradepb.OrderSide_ORDER_SIDE_BUY, OrderType: tradepb.OrderType_ORDER_TYPE_LIMIT,
 		Quantity: "1", Price: "100", ClientOrderId: "rpc-cli-1",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.NotEmpty(t, rsp.OrderId)
 }
 
@@ -627,40 +627,40 @@ func TestServer_CancelOrder_MissingOrder_ShouldFail(t *testing.T) {
 	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	_, channelID := seedAccountChannel(t, h, ctx)
-	rsp, err := h.CancelOrder(ctx, &mooxpb.CancelOrderReq{
+	rsp, err := h.CancelOrder(ctx, &tradepb.CancelOrderReq{
 		ChannelId: channelID, OrderId: "missing",
 	})
 	require.NoError(t, err)
-	assert.NotEqual(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.NotEqual(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_AmendOrder_InvalidParams_ShouldReject(t *testing.T) {
 	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.AmendOrder(ctx, &mooxpb.AmendOrderReq{})
+	rsp, err := h.AmendOrder(ctx, &tradepb.AmendOrderReq{})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
 }
 
 func TestServer_CancelAllOrders_ValidChannel_ShouldReturnCount(t *testing.T) {
 	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	_, channelID := seedAccountChannel(t, h, ctx)
-	rsp, err := h.CancelAllOrders(ctx, &mooxpb.CancelAllOrdersReq{ChannelId: channelID})
+	rsp, err := h.CancelAllOrders(ctx, &tradepb.CancelAllOrdersReq{ChannelId: channelID})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func seedAccountChannel(t *testing.T, h *Server, ctx context.Context) (accountID, channelID string) {
 	t.Helper()
-	acc, err := h.CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "seed"})
+	acc, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "seed"})
 	require.NoError(t, err)
-	require.Equal(t, mooxpb.ErrorCode_SUCCESS, acc.RetInfo.Code)
-	ch, err := h.CreateChannel(ctx, &mooxpb.CreateChannelReq{
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, acc.RetInfo.Code)
+	ch, err := h.CreateChannel(ctx, &tradepb.CreateChannelReq{
 		ChannelName: "seed-ch", Exchange: "binance", AccountId: acc.AccountId,
 	})
 	require.NoError(t, err)
-	require.Equal(t, mooxpb.ErrorCode_SUCCESS, ch.RetInfo.Code)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, ch.RetInfo.Code)
 	return acc.AccountId, ch.ChannelId
 }
 
@@ -669,9 +669,9 @@ func TestServer_ListFundFlows_ShouldReturnEmpty(t *testing.T) {
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedAccountChannel(t, h, ctx)
-	rsp, err := h.ListFundFlows(ctx, &mooxpb.ListFundFlowsReq{AccountId: accountID, Page: &mooxpb.Page{Page: 1, Size: 10}})
+	rsp, err := h.ListFundFlows(ctx, &tradepb.ListFundFlowsReq{AccountId: accountID, Page: &tradepb.Page{Page: 1, Size: 10}})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.Empty(t, rsp.Flows)
 }
 
@@ -680,12 +680,12 @@ func TestServer_ListApiKeys_AfterCreate_ShouldReturnMaskedKey(t *testing.T) {
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedAccountChannel(t, h, ctx)
-	createRsp, err := h.CreateApiKey(ctx, &mooxpb.CreateApiKeyReq{
+	createRsp, err := h.CreateApiKey(ctx, &tradepb.CreateApiKeyReq{
 		AccountId: accountID, Exchange: "binance", ApiKey: "plain-key", ApiSecret: "plain-secret",
 	})
 	require.NoError(t, err)
-	require.Equal(t, mooxpb.ErrorCode_SUCCESS, createRsp.RetInfo.Code)
-	listRsp, err := h.ListApiKeys(ctx, &mooxpb.ListApiKeysReq{AccountId: accountID})
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, createRsp.RetInfo.Code)
+	listRsp, err := h.ListApiKeys(ctx, &tradepb.ListApiKeysReq{AccountId: accountID})
 	require.NoError(t, err)
 	require.Len(t, listRsp.ApiKeys, 1)
 	assert.NotEqual(t, "plain-key", listRsp.ApiKeys[0].ApiKey)
@@ -696,7 +696,7 @@ func TestServer_ListChannels_ShouldReturnCreatedChannel(t *testing.T) {
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	_, channelID := seedAccountChannel(t, h, ctx)
-	rsp, err := h.ListChannels(ctx, &mooxpb.ListChannelsReq{Page: &mooxpb.Page{Page: 1, Size: 10}})
+	rsp, err := h.ListChannels(ctx, &tradepb.ListChannelsReq{Page: &tradepb.Page{Page: 1, Size: 10}})
 	require.NoError(t, err)
 	require.NotEmpty(t, rsp.Channels)
 	assert.Equal(t, channelID, rsp.Channels[0].ChannelId)
@@ -711,9 +711,9 @@ func TestServer_ListOrders_AfterSave_ShouldReturnOrder(t *testing.T) {
 		OrderID: "ord-1", ClientOrderID: "client-1", AccountID: accountID, ChannelID: channelID,
 		Exchange: "binance", Symbol: "BTCUSDT", MarketType: "spot", Side: "buy", OrderType: "limit", Status: 1,
 	}))
-	rsp, err := h.ListOrders(ctx, &mooxpb.ListOrdersReq{AccountId: accountID, Page: &mooxpb.Page{Page: 1, Size: 10}})
+	rsp, err := h.ListOrders(ctx, &tradepb.ListOrdersReq{AccountId: accountID, Page: &tradepb.Page{Page: 1, Size: 10}})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	require.Len(t, rsp.Orders, 1)
 	assert.Equal(t, "ord-1", rsp.Orders[0].OrderId)
 }
@@ -727,9 +727,9 @@ func TestServer_GetOrder_ShouldReturnSavedOrder(t *testing.T) {
 		OrderID: "ord-2", ClientOrderID: "client-2", AccountID: accountID, ChannelID: channelID,
 		Exchange: "binance", Symbol: "ETHUSDT", MarketType: "spot", Side: "sell", OrderType: "market", Status: 3,
 	}))
-	rsp, err := h.GetOrder(ctx, &mooxpb.GetOrderReq{OrderId: "ord-2"})
+	rsp, err := h.GetOrder(ctx, &tradepb.GetOrderReq{OrderId: "ord-2"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.Equal(t, "ETHUSDT", rsp.Order.Symbol)
 }
 
@@ -741,9 +741,9 @@ func TestServer_ListPositions_AfterUpsert_ShouldReturnPosition(t *testing.T) {
 	require.NoError(t, store.UpsertPositions(ctx, "crypto", []*service.Position{{
 		PositionID: "pos-1", AccountID: accountID, Symbol: "BTCUSDT", Quantity: "2", AvgPrice: "60000",
 	}}))
-	rsp, err := h.ListPositions(ctx, &mooxpb.ListPositionsReq{AccountId: accountID})
+	rsp, err := h.ListPositions(ctx, &tradepb.ListPositionsReq{AccountId: accountID})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	require.Len(t, rsp.Positions, 1)
 }
 
@@ -751,9 +751,9 @@ func TestServer_Transfer_InvalidParams_ShouldReject(t *testing.T) {
 	svc, _ := newRPCTestService(t)
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.Transfer(ctx, &mooxpb.TransferReq{FromAccountId: "", ToAccountId: "b", Currency: "USDT", Amount: "1"})
+	rsp, err := h.Transfer(ctx, &tradepb.TransferReq{FromAccountId: "", ToAccountId: "b", Currency: "USDT", Amount: "1"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
 }
 
 func TestServer_DeleteApiKey_ShouldSucceed(t *testing.T) {
@@ -761,13 +761,13 @@ func TestServer_DeleteApiKey_ShouldSucceed(t *testing.T) {
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedAccountChannel(t, h, ctx)
-	createRsp, err := h.CreateApiKey(ctx, &mooxpb.CreateApiKeyReq{
+	createRsp, err := h.CreateApiKey(ctx, &tradepb.CreateApiKeyReq{
 		AccountId: accountID, Exchange: "binance", ApiKey: "k", ApiSecret: "s",
 	})
 	require.NoError(t, err)
-	delRsp, err := h.DeleteApiKey(ctx, &mooxpb.DeleteApiKeyReq{ApiKeyId: createRsp.ApiKeyId})
+	delRsp, err := h.DeleteApiKey(ctx, &tradepb.DeleteApiKeyReq{ApiKeyId: createRsp.ApiKeyId})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, delRsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, delRsp.RetInfo.Code)
 }
 
 type rebalanceStubAdapter struct{}
@@ -812,34 +812,34 @@ func seedRebalanceKernel(t *testing.T) (*store.Store, *command.Engine, *Server) 
 func TestServer_CreateRebalance_ValidPlan_ShouldSucceed(t *testing.T) {
 	_, _, h := seedRebalanceKernel(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.CreateRebalance(ctx, &mooxpb.CreateRebalanceReq{
+	rsp, err := h.CreateRebalance(ctx, &tradepb.CreateRebalanceReq{
 		RunId: "run-1", IdempotencyKey: "idem-1", AccountId: "acct-1", ChannelId: "chan-1",
 		MarketSnapshotId: "m1", PositionSnapshotId: "p1", RulesVersion: "r1",
-		Targets: []*mooxpb.TargetPosition{{Symbol: "BTCUSDT", Quantity: "0"}},
-		Currents: []*mooxpb.CurrentPosition{{Symbol: "BTCUSDT", Quantity: "2"}},
-		Markets: []*mooxpb.RebalanceMarket{{Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
+		Targets: []*tradepb.TargetPosition{{Symbol: "BTCUSDT", Quantity: "0"}},
+		Currents: []*tradepb.CurrentPosition{{Symbol: "BTCUSDT", Quantity: "2"}},
+		Markets: []*tradepb.RebalanceMarket{{Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.Equal(t, "PLANNED", rsp.Status)
 }
 
 func TestServer_AdvanceRebalance_PlannedRun_ShouldExecute(t *testing.T) {
 	ks, engine, h := seedRebalanceKernel(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	_, err := h.CreateRebalance(ctx, &mooxpb.CreateRebalanceReq{
+	_, err := h.CreateRebalance(ctx, &tradepb.CreateRebalanceReq{
 		RunId: "run-adv", IdempotencyKey: "idem-adv", AccountId: "acct-1", ChannelId: "chan-1",
 		MarketSnapshotId: "m1", PositionSnapshotId: "p1", RulesVersion: "r1",
-		Targets: []*mooxpb.TargetPosition{{Symbol: "BTCUSDT", Quantity: "0"}},
-		Currents: []*mooxpb.CurrentPosition{{Symbol: "BTCUSDT", Quantity: "2"}},
-		Markets: []*mooxpb.RebalanceMarket{{Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
+		Targets: []*tradepb.TargetPosition{{Symbol: "BTCUSDT", Quantity: "0"}},
+		Currents: []*tradepb.CurrentPosition{{Symbol: "BTCUSDT", Quantity: "2"}},
+		Markets: []*tradepb.RebalanceMarket{{Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
 	})
 	require.NoError(t, err)
-	rsp, err := h.AdvanceRebalance(ctx, &mooxpb.AdvanceRebalanceReq{
+	rsp, err := h.AdvanceRebalance(ctx, &tradepb.AdvanceRebalanceReq{
 		RunId: "run-adv", AccountId: "acct-1", ChannelId: "chan-1",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.Equal(t, "EXECUTING", rsp.Status)
 	legs, err := ks.ListRebalanceLegs(ctx, "crypto", "run-adv")
 	require.NoError(t, err)
@@ -871,12 +871,12 @@ func TestServer_CreateAndGetAccount_ShouldRoundTrip(t *testing.T) {
 	svc, _ := newRPCTestService(t)
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	createRsp, err := h.CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "main", BaseCurrency: "USDT"})
+	createRsp, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "main", BaseCurrency: "USDT"})
 	require.NoError(t, err)
-	require.Equal(t, mooxpb.ErrorCode_SUCCESS, createRsp.RetInfo.Code)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, createRsp.RetInfo.Code)
 	assert.NotEmpty(t, createRsp.AccountId)
 
-	getRsp, err := h.GetAccount(ctx, &mooxpb.GetAccountReq{AccountId: createRsp.AccountId})
+	getRsp, err := h.GetAccount(ctx, &tradepb.GetAccountReq{AccountId: createRsp.AccountId})
 	require.NoError(t, err)
 	assert.Equal(t, "main", getRsp.Account.AccountName)
 }
@@ -885,11 +885,11 @@ func TestServer_ListAccounts_ShouldReturnCreatedAccount(t *testing.T) {
 	svc, _ := newRPCTestService(t)
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	_, err := h.CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "list-me"})
+	_, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "list-me"})
 	require.NoError(t, err)
-	rsp, err := h.ListAccounts(ctx, &mooxpb.ListAccountsReq{UserId: "user-1", Page: &mooxpb.Page{Page: 1, Size: 10}})
+	rsp, err := h.ListAccounts(ctx, &tradepb.ListAccountsReq{UserId: "user-1", Page: &tradepb.Page{Page: 1, Size: 10}})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.GreaterOrEqual(t, len(rsp.Accounts), 1)
 }
 
@@ -897,28 +897,28 @@ func TestServer_UpdateAndDeleteAccount_ShouldSucceed(t *testing.T) {
 	svc, _ := newRPCTestService(t)
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	createRsp, err := h.CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "before"})
+	createRsp, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "before"})
 	require.NoError(t, err)
-	_, err = h.UpdateAccount(ctx, &mooxpb.UpdateAccountReq{AccountId: createRsp.AccountId, AccountName: "after"})
+	_, err = h.UpdateAccount(ctx, &tradepb.UpdateAccountReq{AccountId: createRsp.AccountId, AccountName: "after"})
 	require.NoError(t, err)
-	_, err = h.DeleteAccount(ctx, &mooxpb.DeleteAccountReq{AccountId: createRsp.AccountId})
+	_, err = h.DeleteAccount(ctx, &tradepb.DeleteAccountReq{AccountId: createRsp.AccountId})
 	require.NoError(t, err)
-	getRsp, err := h.GetAccount(ctx, &mooxpb.GetAccountReq{AccountId: createRsp.AccountId})
+	getRsp, err := h.GetAccount(ctx, &tradepb.GetAccountReq{AccountId: createRsp.AccountId})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_NOT_FOUND, getRsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_NOT_FOUND, getRsp.RetInfo.Code)
 }
 
 func TestServer_CreateChannel_ShouldPersist(t *testing.T) {
 	svc, _ := newRPCTestService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	createAcc, err := New(svc).CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "acc"})
+	createAcc, err := New(svc).CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "acc"})
 	require.NoError(t, err)
 	h := New(svc)
-	rsp, err := h.CreateChannel(ctx, &mooxpb.CreateChannelReq{
+	rsp, err := h.CreateChannel(ctx, &tradepb.CreateChannelReq{
 		ChannelName: "binance-spot", Exchange: "binance", AccountId: createAcc.AccountId,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.NotEmpty(t, rsp.ChannelId)
 }
 
@@ -926,14 +926,14 @@ func TestServer_GetBalances_NoKernel_ShouldUseServiceStore(t *testing.T) {
 	svc, _ := newRPCTestService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	h := New(svc)
-	acc, err := h.CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "bal"})
+	acc, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "bal"})
 	require.NoError(t, err)
 	require.NoError(t, svc.Account.UpsertBalances(ctx, "crypto", []*service.Balance{{
 		AccountID: acc.AccountId, Currency: "USDT", Available: "50", Frozen: "5", Total: "55",
 	}}))
-	rsp, err := h.GetBalances(ctx, &mooxpb.GetBalancesReq{AccountId: acc.AccountId})
+	rsp, err := h.GetBalances(ctx, &tradepb.GetBalancesReq{AccountId: acc.AccountId})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	require.Len(t, rsp.Balances, 1)
 	assert.Equal(t, "50", rsp.Balances[0].Available)
 }
@@ -950,9 +950,9 @@ func TestServer_CreateAccount_NoUserID_ShouldReject(t *testing.T) {
 	svc, _ := newRPCTestService(t)
 	h := New(svc)
 	ctx := spacecontext.WithSpaceID(context.Background(), "crypto")
-	rsp, err := h.CreateAccount(ctx, &mooxpb.CreateAccountReq{AccountName: "x"})
+	rsp, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "x"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
 }
 
 type rpcPingAdapter struct {
@@ -971,9 +971,9 @@ func TestServer_ListTrades_Empty_ShouldSucceed(t *testing.T) {
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedAccountChannel(t, h, ctx)
-	rsp, err := h.ListTrades(ctx, &mooxpb.ListTradesReq{AccountId: accountID, Page: &mooxpb.Page{Page: 1, Size: 10}})
+	rsp, err := h.ListTrades(ctx, &tradepb.ListTradesReq{AccountId: accountID, Page: &tradepb.Page{Page: 1, Size: 10}})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_UpdateChannel_ShouldPersist(t *testing.T) {
@@ -981,11 +981,11 @@ func TestServer_UpdateChannel_ShouldPersist(t *testing.T) {
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	_, channelID := seedAccountChannel(t, h, ctx)
-	rsp, err := h.UpdateChannel(ctx, &mooxpb.UpdateChannelReq{
+	rsp, err := h.UpdateChannel(ctx, &tradepb.UpdateChannelReq{
 		ChannelId: channelID, ChannelName: "updated",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_DeleteChannel_ShouldSucceed(t *testing.T) {
@@ -993,27 +993,27 @@ func TestServer_DeleteChannel_ShouldSucceed(t *testing.T) {
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	_, channelID := seedAccountChannel(t, h, ctx)
-	rsp, err := h.DeleteChannel(ctx, &mooxpb.DeleteChannelReq{ChannelId: channelID})
+	rsp, err := h.DeleteChannel(ctx, &tradepb.DeleteChannelReq{ChannelId: channelID})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_SyncOrders_EmptyAccount_ShouldReject(t *testing.T) {
 	svc, _ := newRPCTestService(t)
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.SyncOrders(ctx, &mooxpb.SyncOrdersReq{AccountId: ""})
+	rsp, err := h.SyncOrders(ctx, &tradepb.SyncOrdersReq{AccountId: ""})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
 }
 
 func TestServer_AdvanceRebalance_NoKernel_ShouldReturnInnerError(t *testing.T) {
 	svc, _ := newRPCTestService(t)
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.AdvanceRebalance(ctx, &mooxpb.AdvanceRebalanceReq{RunId: "run-1"})
+	rsp, err := h.AdvanceRebalance(ctx, &tradepb.AdvanceRebalanceReq{RunId: "run-1"})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 }
 
 func TestServer_CreateRebalance_InvalidQuantity_ShouldReject(t *testing.T) {
@@ -1022,12 +1022,12 @@ func TestServer_CreateRebalance_InvalidQuantity_ShouldReject(t *testing.T) {
 	t.Cleanup(func() { _ = ks.Close() })
 	h := New(nil, &command.Engine{Store: ks})
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.CreateRebalance(ctx, &mooxpb.CreateRebalanceReq{
+	rsp, err := h.CreateRebalance(ctx, &tradepb.CreateRebalanceReq{
 		RunId: "run-1", AccountId: "acct-1", ChannelId: "ch-1",
-		Targets: []*mooxpb.TargetPosition{{Symbol: "BTCUSDT", Quantity: "bad"}},
+		Targets: []*tradepb.TargetPosition{{Symbol: "BTCUSDT", Quantity: "bad"}},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 }
 
 func TestServer_ListInstruments_WithoutAPIKey_ShouldFail(t *testing.T) {
@@ -1035,9 +1035,9 @@ func TestServer_ListInstruments_WithoutAPIKey_ShouldFail(t *testing.T) {
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	_, channelID := seedAccountChannel(t, h, ctx)
-	rsp, err := h.ListInstruments(ctx, &mooxpb.ListInstrumentsReq{ChannelId: channelID})
+	rsp, err := h.ListInstruments(ctx, &tradepb.ListInstrumentsReq{ChannelId: channelID})
 	require.NoError(t, err)
-	assert.NotEqual(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.NotEqual(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_TestChannel_WithInjectedAdapter_ShouldReturnReachability(t *testing.T) {
@@ -1049,10 +1049,10 @@ func TestServer_TestChannel_WithInjectedAdapter_ShouldReturnReachability(t *test
 	ctx := rpcCtx(t, "crypto", "user-1")
 	_, channelID := seedAccountChannel(t, h, ctx)
 
-	rsp, err := h.TestChannel(ctx, &mooxpb.TestChannelReq{ChannelId: channelID})
+	rsp, err := h.TestChannel(ctx, &tradepb.TestChannelReq{ChannelId: channelID})
 
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	assert.True(t, rsp.Reachable)
 	assert.Equal(t, int32(42), rsp.LatencyMs)
 }
@@ -1066,24 +1066,24 @@ func TestServer_TestChannel_AdapterError_ShouldReturnRetInfo(t *testing.T) {
 	ctx := rpcCtx(t, "crypto", "user-1")
 	_, channelID := seedAccountChannel(t, h, ctx)
 
-	rsp, err := h.TestChannel(ctx, &mooxpb.TestChannelReq{ChannelId: channelID})
+	rsp, err := h.TestChannel(ctx, &tradepb.TestChannelReq{ChannelId: channelID})
 
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 	assert.False(t, rsp.Reachable)
 }
 
 func seedLinkedAccountChannel(t *testing.T, svc *service.Service, h *Server, ctx context.Context) (accountID, channelID string) {
 	t.Helper()
 	accountID, channelID = seedAccountChannel(t, h, ctx)
-	apiRsp, err := h.CreateApiKey(ctx, &mooxpb.CreateApiKeyReq{
+	apiRsp, err := h.CreateApiKey(ctx, &tradepb.CreateApiKeyReq{
 		AccountId: accountID, Exchange: "binance", ApiKey: "k", ApiSecret: "secret12",
 	})
 	require.NoError(t, err)
-	require.Equal(t, mooxpb.ErrorCode_SUCCESS, apiRsp.RetInfo.Code)
-	_, err = h.DeleteChannel(ctx, &mooxpb.DeleteChannelReq{ChannelId: channelID})
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, apiRsp.RetInfo.Code)
+	_, err = h.DeleteChannel(ctx, &tradepb.DeleteChannelReq{ChannelId: channelID})
 	require.NoError(t, err)
-	chRsp, err := h.CreateChannel(ctx, &mooxpb.CreateChannelReq{
+	chRsp, err := h.CreateChannel(ctx, &tradepb.CreateChannelReq{
 		ChannelName: "sync-ch", Exchange: "binance", AccountId: accountID, ApiKeyId: apiRsp.ApiKeyId,
 	})
 	require.NoError(t, err)
@@ -1101,57 +1101,57 @@ func TestServer_SyncOrders_WithStubAdapter_ShouldReturnOrders(t *testing.T) {
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedLinkedAccountChannel(t, svc, h, ctx)
 
-	rsp, err := h.SyncOrders(ctx, &mooxpb.SyncOrdersReq{
-		AccountId: accountID, Page: &mooxpb.Page{Page: 1, Size: 10},
+	rsp, err := h.SyncOrders(ctx, &tradepb.SyncOrdersReq{
+		AccountId: accountID, Page: &tradepb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_SyncTrades_WithStubAdapter_ShouldSucceed(t *testing.T) {
 	svc, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedLinkedAccountChannel(t, svc, h, ctx)
-	rsp, err := h.SyncTrades(ctx, &mooxpb.SyncTradesReq{
-		AccountId: accountID, Page: &mooxpb.Page{Page: 1, Size: 10},
+	rsp, err := h.SyncTrades(ctx, &tradepb.SyncTradesReq{
+		AccountId: accountID, Page: &tradepb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_SyncPositions_WithStubAdapter_ShouldSucceed(t *testing.T) {
 	svc, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedLinkedAccountChannel(t, svc, h, ctx)
-	rsp, err := h.SyncPositions(ctx, &mooxpb.SyncPositionsReq{AccountId: accountID})
+	rsp, err := h.SyncPositions(ctx, &tradepb.SyncPositionsReq{AccountId: accountID})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_ListOrders_Empty_ShouldSucceed(t *testing.T) {
 	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedAccountChannel(t, h, ctx)
-	rsp, err := h.ListOrders(ctx, &mooxpb.ListOrdersReq{
-		AccountId: accountID, Page: &mooxpb.Page{Page: 1, Size: 10},
+	rsp, err := h.ListOrders(ctx, &tradepb.ListOrdersReq{
+		AccountId: accountID, Page: &tradepb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_ListPositions_Empty_ShouldSucceed(t *testing.T) {
 	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedAccountChannel(t, h, ctx)
-	rsp, err := h.ListPositions(ctx, &mooxpb.ListPositionsReq{AccountId: accountID})
+	rsp, err := h.ListPositions(ctx, &tradepb.ListPositionsReq{AccountId: accountID})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
 func TestServer_SyncExchangeAccounts_WithoutSecretSource_ShouldReject(t *testing.T) {
 	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	rsp, err := h.SyncExchangeAccounts(ctx, &mooxpb.SyncExchangeAccountsReq{})
+	rsp, err := h.SyncExchangeAccounts(ctx, &tradepb.SyncExchangeAccountsReq{})
 	require.NoError(t, err)
-	assert.Equal(t, mooxpb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
 }

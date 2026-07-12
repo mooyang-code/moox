@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	admincrypto "github.com/mooyang-code/moox/modules/admin/internal/common/crypto"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	thttp "trpc.group/trpc-go/trpc-go/http"
@@ -40,13 +40,33 @@ func TestGetTokenFromHeader_ExistingHeader_ShouldReturnValue(t *testing.T) {
 func TestValidateAccessToken_ValidToken_ShouldReturnClaims(t *testing.T) {
 	secret := "test-secret-key-for-gateway"
 	SetConfig(&Config{JWT: JWTConfig{SecretKey: secret}})
-	token, err := admincrypto.GenerateAccessToken("user-1", "admin", int32(pb.UserRole_USER_ROLE_ADMIN), secret, time.Hour)
+	token, err := mooxcrypto.SignToken(map[string]any{
+		"user_id":    "user-1",
+		"username":   "admin",
+		"role":       int32(pb.UserRole_USER_ROLE_ADMIN),
+		"token_type": "access",
+	}, secret, "moox-admin", time.Hour)
 	require.NoError(t, err)
 
 	claims, ok := validateAccessToken(context.Background(), token)
 	assert.True(t, ok)
 	require.NotNil(t, claims)
 	assert.Equal(t, "user-1", claims.UserID)
+}
+
+func TestValidateAccessToken_WrongIssuer_ShouldReject(t *testing.T) {
+	secret := "test-secret-key-for-gateway"
+	SetConfig(&Config{JWT: JWTConfig{SecretKey: secret}})
+	token, err := mooxcrypto.SignToken(map[string]any{
+		"user_id":    "user-1",
+		"username":   "admin",
+		"role":       int32(pb.UserRole_USER_ROLE_ADMIN),
+		"token_type": "access",
+	}, secret, "other-service", time.Hour)
+	require.NoError(t, err)
+
+	_, ok := validateAccessToken(context.Background(), token)
+	assert.False(t, ok)
 }
 
 func TestValidateAccessToken_EmptySecret_ShouldReturnFalse(t *testing.T) {

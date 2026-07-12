@@ -3,7 +3,7 @@ Copyright © 2025 MooX Team
 */
 package main
 
-import "github.com/mooyang-code/moox/modules/cli/cmd"
+import "github.com/mooyang-code/moox/modules/cli/internal/command"
 
 // 版本信息变量，由构建时通过ldflags设置
 var (
@@ -13,10 +13,10 @@ var (
 )
 
 func main() {
-	// 将版本信息传递给cmd包
-	cmd.Version = Version
-	cmd.BuildTime = BuildTime
-	cmd.GitCommit = GitCommit
+	// 将版本信息传递给命令包
+	command.Version = Version
+	command.BuildTime = BuildTime
+	command.GitCommit = GitCommit
 
-	cmd.Execute()
+	command.Execute()
 }

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"trpc.group/trpc-go/trpc-go/client"
 )

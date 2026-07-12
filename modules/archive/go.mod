@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/cockroachdb/pebble v1.1.5
-	github.com/mooyang-code/moox/modules/storage/proto/gen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
@@ -82,7 +82,7 @@ require (
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
 
-replace github.com/mooyang-code/moox/modules/storage/proto/gen => ../storage/proto/gen
+replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../storage/proto/storagegen
 
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 

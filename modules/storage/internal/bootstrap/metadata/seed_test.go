@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"os"

@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	admincrypto "github.com/mooyang-code/moox/modules/admin/internal/common/crypto"
 	authconfig "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
+	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 	"gorm.io/gorm"
 )
 
@@ -30,7 +30,12 @@ func TestGetUserInfoAcceptsRequestAccessTokenWhenContextMetadataMissing(t *testi
 		LastPasswordChange: time.Now(),
 	}
 	svc := newAuthServiceForUserTest(t, secretKey, user)
-	accessToken, err := admincrypto.GenerateAccessToken(user.UserID, user.Username, user.Role, secretKey, time.Hour)
+	accessToken, err := mooxcrypto.SignToken(map[string]any{
+		"user_id":    user.UserID,
+		"username":   user.Username,
+		"role":       user.Role,
+		"token_type": "access",
+	}, secretKey, "moox-admin", time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateAccessToken() error = %v", err)
 	}

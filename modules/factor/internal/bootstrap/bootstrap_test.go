@@ -11,7 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"path/filepath"

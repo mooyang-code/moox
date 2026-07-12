@@ -8,13 +8,13 @@ import (
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
-	"github.com/mooyang-code/moox/modules/collector/internal/report"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )

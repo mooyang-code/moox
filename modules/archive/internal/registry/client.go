@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 

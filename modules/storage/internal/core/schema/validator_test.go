@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 func TestValidateWriteRecordRowsRequiresTimestampVersion(t *testing.T) {

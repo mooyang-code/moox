@@ -50,8 +50,8 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 		return nil, err
 	}
 	gateway.SetConfig(gatewayCfg)
-	if strings.TrimSpace(gatewayCfg.JWT.SecretKey) == "" {
-		return nil, fmt.Errorf("jwt.secret_key must not be empty")
+	if len(strings.TrimSpace(gatewayCfg.JWT.SecretKey)) < 32 {
+		return nil, fmt.Errorf("jwt.secret_key must contain at least 32 characters")
 	}
 	if err := validateGatewayCORS(gatewayCfg); err != nil {
 		return nil, err
@@ -93,7 +93,9 @@ func loadEncryptionKey() error {
 	}
 	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil || strings.TrimSpace(string(raw)) == "" {
-		if err == nil { err = fmt.Errorf("file is empty") }
+		if err == nil {
+			err = fmt.Errorf("file is empty")
+		}
 		return fmt.Errorf("read admin encryption key file: %w", err)
 	}
 	return os.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", strings.TrimSpace(string(raw)))

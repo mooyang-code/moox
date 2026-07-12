@@ -33,7 +33,6 @@ func TestUserDAO_CreateUser_AutoID_ShouldPersist(t *testing.T) {
 	user := &model.User{
 		Username:     "alice",
 		PasswordHash: "hash",
-		Salt:         "salt",
 	}
 	require.NoError(t, d.CreateUser(context.Background(), user))
 	assert.NotEmpty(t, user.UserID)
@@ -55,21 +54,20 @@ func TestUserDAO_UpdateUserPassword_ValidUser_ShouldUpdate(t *testing.T) {
 	db, cache := setupUserTestDB(t)
 	d := NewUserDAO(db, cache)
 
-	user := &model.User{Username: "bob", PasswordHash: "old", Salt: "s1"}
+	user := &model.User{Username: "bob", PasswordHash: "old"}
 	require.NoError(t, d.CreateUser(context.Background(), user))
 
-	require.NoError(t, d.UpdateUserPassword(context.Background(), user.UserID, "newhash", "s2"))
+	require.NoError(t, d.UpdateUserPassword(context.Background(), user.UserID, "newhash"))
 	got, err := d.GetUserByID(context.Background(), user.UserID)
 	require.NoError(t, err)
 	assert.Equal(t, "newhash", got.PasswordHash)
-	assert.Equal(t, "s2", got.Salt)
 }
 
 func TestUserDAO_UpdateUserLoginInfo_ValidUser_ShouldUpdate(t *testing.T) {
 	db, cache := setupUserTestDB(t)
 	d := NewUserDAO(db, cache)
 
-	user := &model.User{Username: "carol", PasswordHash: "h", Salt: "s"}
+	user := &model.User{Username: "carol", PasswordHash: "h"}
 	require.NoError(t, d.CreateUser(context.Background(), user))
 	require.NoError(t, d.UpdateUserLoginInfo(context.Background(), user.UserID, "10.0.0.1"))
 
@@ -83,7 +81,7 @@ func TestUserDAO_CreateLoginHistory_ValidRecord_ShouldPersist(t *testing.T) {
 	db, cache := setupUserTestDB(t)
 	d := NewUserDAO(db, cache)
 
-	user := &model.User{Username: "alice", PasswordHash: "h", Salt: "s"}
+	user := &model.User{Username: "alice", PasswordHash: "h"}
 	require.NoError(t, d.CreateUser(context.Background(), user))
 
 	history := &model.LoginHistory{

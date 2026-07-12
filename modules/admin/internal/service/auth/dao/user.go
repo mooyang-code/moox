@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/common"
+	"github.com/mooyang-code/moox/modules/admin/internal/softdelete"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 
 	"github.com/google/uuid"
@@ -44,7 +44,7 @@ func (d *UserDAO) CreateUser(ctx context.Context, user *model.User) error {
 func (d *UserDAO) GetUserByID(ctx context.Context, userID string) (*model.User, error) {
 	var user model.User
 	err := d.db.WithContext(ctx).
-		Where("c_user_id = ? AND c_is_deleted = ?", userID, common.IsDeletedFalse).
+		Where("c_user_id = ? AND c_is_deleted = ?", userID, softdelete.IsDeletedFalse).
 		First(&user).Error
 
 	if err != nil {
@@ -58,7 +58,7 @@ func (d *UserDAO) GetUserByID(ctx context.Context, userID string) (*model.User, 
 func (d *UserDAO) GetUserByUsername(ctx context.Context, username string) (*model.User, error) {
 	var user model.User
 	if err := d.db.WithContext(ctx).
-		Where("c_username = ? AND c_is_deleted = ?", username, common.IsDeletedFalse).
+		Where("c_username = ? AND c_is_deleted = ?", username, softdelete.IsDeletedFalse).
 		First(&user).Error; err != nil {
 		return nil, err
 	}
@@ -71,22 +71,21 @@ func (d *UserDAO) UpdateUser(ctx context.Context, userID string, updates map[str
 
 	return d.db.WithContext(ctx).
 		Model(&model.User{}).
-		Where("c_user_id = ? AND c_is_deleted = ?", userID, common.IsDeletedFalse).
+		Where("c_user_id = ? AND c_is_deleted = ?", userID, softdelete.IsDeletedFalse).
 		Updates(updates).Error
 }
 
 // UpdateUserPassword 更新用户密码
-func (d *UserDAO) UpdateUserPassword(ctx context.Context, userID, passwordHash, salt string) error {
+func (d *UserDAO) UpdateUserPassword(ctx context.Context, userID, passwordHash string) error {
 	updates := map[string]interface{}{
 		"c_password_hash":        passwordHash,
-		"c_salt":                 salt,
 		"c_last_password_change": time.Now(),
 		"c_mtime":                time.Now(),
 	}
 
 	return d.db.WithContext(ctx).
 		Model(&model.User{}).
-		Where("c_user_id = ? AND c_is_deleted = ?", userID, common.IsDeletedFalse).
+		Where("c_user_id = ? AND c_is_deleted = ?", userID, softdelete.IsDeletedFalse).
 		Updates(updates).Error
 }
 
@@ -101,7 +100,7 @@ func (d *UserDAO) UpdateUserLoginInfo(ctx context.Context, userID, clientIP stri
 
 	return d.db.WithContext(ctx).
 		Model(&model.User{}).
-		Where("c_user_id = ? AND c_is_deleted = ?", userID, common.IsDeletedFalse).
+		Where("c_user_id = ? AND c_is_deleted = ?", userID, softdelete.IsDeletedFalse).
 		Updates(updates).Error
 }
 

@@ -1,0 +1,93 @@
+package sqlite
+
+import (
+	"context"
+	"errors"
+
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+)
+
+// rowScanner 抽象 sql.Row 和 sql.Rows 的扫描能力。
+
+func (s *Store) UpsertSpace(ctx context.Context, item *pb.Space) (*pb.Space, error) {
+	if item == nil || item.GetSpaceId() == "" || item.GetName() == "" {
+		return nil, errors.New("space_id and name are required")
+	}
+	item.Status = defaultStatus(item.GetStatus())
+	raw, err := marshal(item)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO t_spaces (c_space_id, c_name, c_description, c_owner, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(c_space_id) DO UPDATE SET
+			c_name = excluded.c_name,
+			c_description = excluded.c_description,
+			c_owner = excluded.c_owner,
+			c_status = excluded.c_status,
+			c_attrs_json = excluded.c_attrs_json
+	`, item.GetSpaceId(), item.GetName(), item.GetDescription(), item.GetOwner(), item.GetStatus(), raw)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetSpace(ctx, item.GetSpaceId())
+}
+
+func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error) {
+	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_spaces WHERE c_space_id = ?`, []any{spaceID}, func() *pb.Space { return &pb.Space{} })
+}
+
+func (s *Store) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
+	query := `SELECT c_attrs_json FROM t_spaces WHERE (? = '' OR c_owner = ?) ORDER BY c_space_id`
+	items, err := queryMessages(ctx, s.db, query, []any{owner, owner}, func() *pb.Space { return &pb.Space{} })
+	if err != nil {
+		return nil, nil, err
+	}
+	return pageItems(items, page)
+}
+
+func (s *Store) UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error) {
+	if item == nil || item.GetSpaceId() == "" || item.GetDataSourceId() == "" || item.GetName() == "" || item.GetKind() == "" {
+		return nil, errors.New("space_id, data_source_id, name and kind are required")
+	}
+	item.Status = defaultStatus(item.GetStatus())
+	raw, err := marshal(item)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO t_data_sources (c_space_id, c_data_source_id, c_name, c_kind, c_market, c_timezone, c_config_json, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(c_space_id, c_data_source_id) DO UPDATE SET
+			c_name = excluded.c_name,
+			c_kind = excluded.c_kind,
+			c_market = excluded.c_market,
+			c_timezone = excluded.c_timezone,
+			c_config_json = excluded.c_config_json,
+			c_status = excluded.c_status,
+			c_attrs_json = excluded.c_attrs_json
+	`, item.GetSpaceId(), item.GetDataSourceId(), item.GetName(), item.GetKind(), item.GetMarket(), item.GetTimezone(), defaultJSON(item.GetConfigJson()), item.GetStatus(), raw)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetDataSource(ctx, item.GetSpaceId(), item.GetDataSourceId())
+}
+
+func (s *Store) GetDataSource(ctx context.Context, spaceID string, dataSourceID string) (*pb.DataSource, error) {
+	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_data_sources WHERE c_space_id = ? AND c_data_source_id = ?`, []any{spaceID, dataSourceID}, func() *pb.DataSource { return &pb.DataSource{} })
+}
+
+func (s *Store) ListDataSources(ctx context.Context, spaceID string, kind string, market string, page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
+	items, err := queryMessages(ctx, s.db, `
+		SELECT c_attrs_json FROM t_data_sources
+		WHERE (? = '' OR c_space_id = ?)
+		  AND (? = '' OR c_kind = ?)
+		  AND (? = '' OR c_market = ?)
+		ORDER BY c_space_id, c_data_source_id
+	`, []any{spaceID, spaceID, kind, kind, market, market}, func() *pb.DataSource { return &pb.DataSource{} })
+	if err != nil {
+		return nil, nil, err
+	}
+	return pageItems(items, page)
+}

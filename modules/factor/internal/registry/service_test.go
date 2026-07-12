@@ -14,7 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"

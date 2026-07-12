@@ -140,7 +140,7 @@ config/cli.yaml         默认配置
 
 ## 依赖关系
 
-- Storage 元数据/写入：`modules/storage/proto/gen`
+- Storage 元数据/写入：`modules/storage/proto/storagegen`
 - Admin 认证：`modules/admin/proto/admingen`
 - 采集打包：CLI 内部 `internal/collectorpackager` 生成 collector SCF zip，不直接依赖 `modules/collector` 实现包
 

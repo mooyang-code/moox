@@ -4,7 +4,7 @@ package trpc.moox.infra;
 
 import "moox_common.proto";
 
-option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;mooxpb";
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
 // Infra 域合并认证（Auth）与 DNS 代理（Dns）。
 // 纯 RPC 服务，由统一 HTTP 转发层（/api/admin/{auth|dnsproxy}/{method}）调度。

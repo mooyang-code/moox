@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 // KLineColumns is the canonical V1 OHLCV input order.

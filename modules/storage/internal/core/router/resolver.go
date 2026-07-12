@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 // RouteReader 定义路由解析所需的元数据读取接口。
